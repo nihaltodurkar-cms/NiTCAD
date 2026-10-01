@@ -1,11 +1,11 @@
 # NiTCAD — Architecture
 
-**PROPOSAL, accepted as the current proposal. Decisions recorded (section 14). Verification V1–V3 was run on 2026-10-02 (section 14.4); its findings need owner decisions (Q6–Q9) before Unit 1.**
+**PROPOSAL, accepted as the current proposal. Decisions D1–D6, D8, R1–R5 and Q6–Q9 are recorded (section 14). Unit 1 has not started and waits for the owner to name it and settle the open questions in 14.5.**
 
 The owner accepted this architecture as the current proposal and recorded decisions D1–D6, D8 and R1–R5.
 Section 14 classifies each as decided, provisionally decided, deferred or blocking verification. It is still a
 proposal: no source files, directories or build files exist, no unit has started, and Unit 1 does not start until
-the owner has decided Q6–Q9 and approved the V1–V3 results. The document must be rewritten to describe what actually exists as units land.
+the owner names it and settles the questions marked "Unit 1" in 14.5. The document must be rewritten to describe what actually exists as units land.
 
 Naming: **NiTCAD** is this project. **NT-SemTCAD** is the legacy reference repository
 (`C:\Users\disha\OneDrive\Desktop\NT-SemTCAD-claude-zealous-ritchie-kuuwr9\NT-SemTCAD`), used only as a
@@ -331,24 +331,41 @@ reproducible CI dependency and cache strategy. That strategy is a design item to
 
 ## 9. Build, test and warnings
 
-- **Build system:** CMake. The C++23 requirement is enforced by the build, not trusted to defaults: set
-  `CMAKE_CXX_STANDARD 23`, `CXX_STANDARD_REQUIRED ON`, `CXX_EXTENSIONS OFF`, and fail at configure time if the
-  compiler cannot compile a probe using the C++23 features the code actually uses (for example `<expected>`).
-- **Toolchain (D1, provisional):** MSVC, with a specific toolset version pinned. Verified on this machine
-  (V1, 2026-10-02): Visual Studio 18 Community, MSVC toolset directory `14.51.36231`, compiler 19.51.36260
-  (`_MSC_FULL_VER` 195136260). **There is no stable `/std:c++23` switch in this toolset:** `cl` lists only
-  `c++14|c++17|c++20|latest`, and `/std:c++23` is accepted with warning D9002 ("ignoring unknown option") and
-  silently falls back to C++14 (`_MSVC_LANG` = 201402). `/std:c++23preview` gives `_MSVC_LANG` 202302 and
-  `/std:c++latest` gives 202400. CMake 4.3.1 maps `CXX_STANDARD 23` to `-std:c++latest`. Which of the two modes to
-  pin is open (Q6).
-- **Dependencies (D8, provisional):** CMake with vcpkg in manifest mode: a pinned vcpkg baseline, explicit
-  version constraints and overrides where required, and a reproducible CI dependency and cache strategy.
-  Verified locally (V2): a manifest with `builtin-baseline`, `version>=` and `overrides` resolved and built Eigen
-  and Catch2 v3 with the Visual Studio-bundled vcpkg, and an Eigen SparseLU test plus a Catch2 test passed under
-  `-std:c++latest`. The CI cache strategy is not specified (Q9).
-- **Warning policy** (defined here, specific flags set at Unit 1 after V1): first-party code is compiled at a high
-  warning level with warnings treated as errors; third-party headers are included as system headers so their
-  warnings do not fail the build.
+- **Build system:** CMake. The C++23 requirement is enforced by the build, not trusted to defaults. The language
+  mode flag is passed explicitly (see Toolchain below), and configuration fails if a probe using the C++23 features
+  the code actually uses (for example `<expected>`) does not compile in that mode.
+- **Toolchain (D1, Q6, Q9: decided):** MSVC. The language mode is **`/std:c++23preview`, set explicitly**.
+  `/std:c++latest` is not used, and `CMAKE_CXX_STANDARD 23` is not relied on, because CMake 4.3.1 maps it to
+  `-std:c++latest` (rolling, `_MSVC_LANG` 202400). The build must:
+  1. pass `/std:c++23preview` explicitly;
+  2. fail configuration unless `_MSVC_LANG == 202302L` and the feature macros the code needs are defined
+     (`__cpp_lib_expected`, `__cpp_lib_jthread`, and others as units adopt them). Verified in a scratch
+     CMake project (V4);
+  3. fail configuration if the compiler silently ignores or rejects the C++23 flag. **Verified here:** an
+     unknown `/std:` value produces only warning D9002 and the build continues; `/WX` and `/we9002` do **not**
+     turn it into an error. `/options:strict` does (error D8043). So the requirement is met by `/options:strict` plus
+     the `_MSVC_LANG` check, not by `/WX` alone.
+- **Toolset pin (Q9, decided):** the verified reference toolset is **MSVC 14.51** (toolset directory
+  `14.51.36231`, compiler 19.51.36260), with Windows SDK `10.0.26100.0`, CMake `4.3.1-msvc1` and Ninja `1.13.2`
+  as found on this machine. CI pins exact MSVC toolset, Windows SDK, CMake and Ninja versions, uses Visual Studio
+  **Build Tools** rather than the full IDE, and must reproduce these versions (not yet verified, Q10). Local
+  Visual Studio Community may be used for individual development subject to Microsoft's licence terms.
+  The owner's earlier Q9 target of **14.50 LTS** was **not adopted**: 14.50 is not installed here and was not
+  tested, so it is not recorded as supported. 14.51 is a regular release with a shorter support window (section 12), so
+  moving to an LTS toolset is a planned later step (Q11).
+- **Dependencies (D8, Q7, Q8: decided):** CMake with vcpkg in manifest mode, a pinned baseline, explicit version
+  constraints and overrides where required.
+  - Baseline: the full commit `fbb0f7bb200b07a9eb9081c7a3cf51d1aa1c51a1`, the one tested in V2. vcpkg HEAD is not
+    tracked. The baseline changes only through an explicit dependency-update change followed by full validation.
+  - Eigen **5.0.1** and Catch2 **3.16.0** come from that baseline. Both built and passed a probe test with
+    `/std:c++23preview` (V4).
+  - Triplet: **`x64-windows-static-md`** for development, CI and release, unless a concrete requirement justifies
+    another.
+  - Verified locally (V2): a manifest with `builtin-baseline`, `version>=` and `overrides` resolved with the Visual
+    Studio-bundled vcpkg. The CI cache strategy is not specified (Q10).
+- **Warning policy** (defined here, specific flags set at Unit 1): first-party code is compiled at a high warning
+  level with warnings treated as errors; third-party headers are included as system headers so their warnings do
+  not fail the build. `/options:strict` is part of the policy (see above).
 - **Test levels** per component, from the legacy practice: analytic and limiting cases → published-value
   regression → Jacobian vs finite differences → dimensional-reduction identity → convergence and mesh
   independence → benchmark. A compile-only check is never the sole gate for a numerical unit.
@@ -428,14 +445,27 @@ Unit 10 is deferred until sequenced. Nothing in this table is started.
   3.4.0 with a `version>=` constraint on Catch2 also resolved (Eigen 3.4.0, Catch2 3.16.0). Both builds passed the
   probe test under `-std:c++latest`. Catch2 was consumed as the `Catch2::Catch2WithMain` target.
 
+- **V4 (run 2026-10-02):** a scratch CMake project with the explicit `/std:c++23preview` flag, a configure-time
+  `try_compile` gate checking `_MSVC_LANG == 202302L`, `__cpp_lib_expected` and `__cpp_lib_jthread`, Eigen 5.0.1 and
+  Catch2 3.16.0 from the pinned baseline: configured, built with `/W4`, and the Eigen SparseLU and Catch2 test passed.
+  `/WX` and `/we9002` leave an ignored `/std:c++23` as a built executable; `/options:strict` yields error D8043.
+- **MSVC support lifecycle** (Microsoft C++ blog, "New Release Cadence and Support Lifecycle for MSVC Build Tools",
+  fetched 2026-10-02 [verified: the page's stated policy]): a new MSVC release every six months (May and
+  November) with 9 months of support; each second November release is LTS with 3 years of support. 14.50
+  (November 2025) is the LTS release; 14.51 (May 2026) is a regular release; 14.52 (November 2026) is the next LTS.
+  The page gives no end dates. The end dates used in this document (about February 2027 for 14.51, about
+  November 2028 for 14.50) are **[derived]** from those periods.
+
 **Derived here, not a legacy assertion**
 - V_T(300 K) = 0.0258519998 V; n_i(300 K) = 1.06738e10 cm⁻³ (inputs in section 10).
 
 **Unverified: do not rely on these**
 - That the constants file corresponds to CODATA 2018 (edition not named in the file).
 - The exact normalization of the 5e-5 Jacobian gate; the unit of `D0_REF`; where `tol_residual` is used.
-- clang-cl and MinGW claims about C++23 (not tested; only MSVC was probed). Behaviour of other MSVC toolsets or
-  a CI runner's Visual Studio version.
+- clang-cl and MinGW claims about C++23 (not tested; only MSVC 14.51 was probed). **Anything about MSVC 14.50**
+  (not installed here, not tested), including its C++23 feature support. A search result states that 14.52 will
+  include a `/std:c++23` switch and be C++23 complete; this was not verified and 14.52 is not released.
+  A CI runner's Visual Studio Build Tools version, and whether CI can reproduce the pinned toolset.
 - Fortran toolchain claims: that MSVC has no Fortran compiler; which Fortran compilers (Intel ifx, LLVM Flang,
   gfortran) can interoperate with which C++ ABI on Windows; CMake generator support for each.
 - The MKL licence terms. Whether a CI runner can reproduce the local vcpkg build (cache behaviour).
@@ -443,10 +473,10 @@ Unit 10 is deferred until sequenced. Nothing in this table is started.
 
 ## 13. Risks
 
-1. **C++23 on Windows.** Compiler mode and library support are unverified (section 12). Verified: no stable
-   `/std:c++23` exists in the pinned toolset family, and an unknown `/std` value silently falls back to C++14.
-   Mitigation: an explicit mode choice (Q6), a configure-time check of `_MSVC_LANG` and the feature macros, and
-   treating D9002 as an error.
+1. **C++23 on Windows.** Verified: this toolset has no stable `/std:c++23`, and an unknown `/std` value silently
+   falls back to C++14 with only a warning that `/WX` does not promote. Mitigation (decided, Q6): explicit
+   `/std:c++23preview`, `/options:strict`, and a configure-time check of `_MSVC_LANG` and the feature macros.
+   Residual risk: the preview mode may change between toolsets, and 14.51 has a short support window (Q11).
 2. **Fortran coupling to the C++ toolchain.** If Fortran is ever used, its compiler and runtime must be
    ABI-compatible with the C++ compiler, which constrains D1. Mitigation: D6 defers Fortran, and any later
    Fortran sits behind a C ABI in a separate library.
@@ -473,14 +503,18 @@ withdrawn; numbering is otherwise kept stable. This proposal lives on `architect
 | D5 | Root namespace `NiTCAD`. Layers: `base`, `linalg`, `mesh`, `physics`, `device`, `assemble`, `solve`, `results`, `analysis`, `render`, `app`. (Namespace nesting and include-root casing: provisional, Q1.) |
 | R1 | `std::expected` for recoverable errors; exceptions only for exceptional or programmer-error cases; no exceptions in hot numerical kernels or Newton iterations (6.7). |
 | R4 | Boltzmann carrier statistics initially; Fermi–Dirac and other statistics deferred until requested (section 5, item 7). |
+| D1 | MSVC is the Windows C++23 toolchain (C++ compiler only; Fortran is D6). Toolset pin per Q9. |
+| Q6 | `/std:c++23preview` set explicitly; `/std:c++latest` not used. The build verifies `_MSVC_LANG` and the C++23 feature macros and fails configuration if the C++23 flag is ignored or invalid (9). |
+| Q7 | The exact full vcpkg baseline commit tested in V2 (`fbb0f7bb200b07a9eb9081c7a3cf51d1aa1c51a1`); vcpkg HEAD is not tracked. Eigen 5.0.1. The baseline changes only through an explicit dependency-update change followed by full validation. |
+| Q8 | `x64-windows-static-md` is the initial and standard triplet for development, CI and release unless a concrete requirement justifies another. |
+| Q9 | Verified reference toolset MSVC 14.51 (`14.51.36231`), with exact MSVC toolset, Windows SDK, CMake and Ninja versions pinned for CI, Visual Studio Build Tools on CI, and local Community use subject to Microsoft's licence terms. The 14.50 LTS target was not adopted (untested); an LTS move is Q11. |
+| D8 | CMake + vcpkg manifest mode with a pinned baseline, explicit version constraints/overrides, and a reproducible CI dependency/cache strategy. Baseline, Eigen version and triplet are decided (Q7, Q8); the CI cache strategy is open (Q10). |
 
 ### 14.2 Provisionally decided (stand unless verification or Unit work disproves them)
 
 | # | Decision | Provisional because |
 |---|---|---|
-| D1 | MSVC is the Windows C++23 toolchain, with one specific toolset pinned. C++ compiler only. | V1 is done, but it found no stable C++23 mode in this toolset (Q6, Q9). |
 | D3 | Eigen SparseLU is the initial sparse direct solver behind a backend-neutral interface that allows PARDISO and iterative backends later without redesign (6.10). | The exact interface shape is settled at Unit 3. |
-| D8 | CMake + vcpkg manifest mode, pinned baseline, explicit version constraints/overrides where required, reproducible CI dependency/cache strategy. | V2 is done for a local build; the baseline choice (Q7), triplet (Q8) and CI cache strategy (Q9) are open. |
 | D5 (part) | `NiTCAD::<layer>` nesting; `include/NiTCAD/<layer>/`. | Owner named the root namespace and layers only (Q1). |
 
 ### 14.3 Deferred
@@ -497,8 +531,9 @@ withdrawn; numbering is otherwise kept stable. This proposal lives on `architect
 
 | # | Result | Status |
 |---|---|---|
-| V1 | Toolset: VS 18 Community, MSVC dir `14.51.36231`, compiler 19.51.36260. Required features are present (`std::expected`, `std::mdspan`, explicit object parameters, multidimensional subscript, `std::println`, `<stop_token>`/`jthread`) under `/std:c++23preview` and `/std:c++latest`. **No stable `/std:c++23`**; it is silently ignored (D9002, falls back to C++14). CMake 4.3.1 emits `-std:c++latest` for `CXX_STANDARD 23`. Details in section 12. | Verified. **Finding needs an owner decision (Q6).** |
-| V2 | The Visual Studio-bundled vcpkg works in manifest mode with a pinned baseline, `version>=` constraints and overrides. Eigen (5.0.1 at the test baseline, 3.4.0 by override) and Catch2 3.16.0 built and passed a probe test under `-std:c++latest`. Not verified: CI reproduction and cache behaviour, a standalone vcpkg checkout, whether the redirect of vcpkg's build/download/package directories out of Program Files was necessary (done as a precaution). | Verified locally. **Open items: Q7, Q8, Q9.** |
+| V1 | Toolset: VS 18 Community, MSVC dir `14.51.36231`, compiler 19.51.36260. Required features are present (`std::expected`, `std::mdspan`, explicit object parameters, multidimensional subscript, `std::println`, `<stop_token>`/`jthread`) under `/std:c++23preview` and `/std:c++latest`. **No stable `/std:c++23`**; it is silently ignored (D9002, falls back to C++14). CMake 4.3.1 emits `-std:c++latest` for `CXX_STANDARD 23`. Details in section 12. | Verified. Q6 decided. |
+| V2 | The Visual Studio-bundled vcpkg works in manifest mode with a pinned baseline, `version>=` constraints and overrides. Eigen (5.0.1 at the test baseline, 3.4.0 by override) and Catch2 3.16.0 built and passed a probe test under `-std:c++latest`. Not verified: CI reproduction and cache behaviour, a standalone vcpkg checkout, whether the redirect of vcpkg's build/download/package directories out of Program Files was necessary (done as a precaution). | Verified locally. Q7, Q8 decided. CI reproduction open (Q10). |
+| V4 | Re-check under the decided mode: Eigen 5.0.1 and Catch2 3.16.0 from the pinned baseline build and pass under explicit `/std:c++23preview` with a configure-time `_MSVC_LANG` gate (passed). `/WX` and `/we9002` do not stop an ignored `/std:c++23`; `/options:strict` does (D8043). MSVC 14.50 was **not** tested (not installed). | Verified on 14.51 only. |
 | V3 | Scaling definitions, scaled variables and Newton tolerances read from `inputs.cpp` and `device1d.cpp` and recorded in 6.1. One open question remains for Unit 8 (convergence criterion on the clipped correction). | Verified |
 
 Verifications due at their own unit, not blocking Unit 1: CODATA edition of the constants (Unit 2), the exact
@@ -513,10 +548,11 @@ normalization of the 5e-5 Jacobian gate (Unit 7), the `_diode()` fixture paramet
 | Q3 | Whether to use the Visual Studio-bundled vcpkg (verified working, V2) or a pinned standalone checkout (untested), and whether `CMakePresets.json` and a CI workflow are part of Unit 1 | Unit 1 |
 | Q4 | Final `Error` category list (6.7) | Unit 2 |
 | Q5 | Whether Unit 3 includes a test-only second backend to prove backend neutrality | Unit 3 |
-| Q6 | Which MSVC mode enforces C++23: `/std:c++23preview` (`_MSVC_LANG` 202302) or `/std:c++latest` (202400, rolling, what CMake emits by default). Either way the build should set the flag explicitly and fail configuration if `_MSVC_LANG` or the feature macros do not match. Candidate: `/std:c++23preview`, revisited when a stable `/std:c++23` exists | Unit 1 |
-| Q7 | vcpkg baseline commit and update policy; Eigen major version (the baseline tested gives 5.0.1; the legacy Eigen version was not checked, and an override to 3.4.0 also worked) | Unit 1 |
-| Q8 | vcpkg triplet (the probe used `x64-windows-static-md`, chosen by me for the test only) | Unit 1 |
-| Q9 | How the toolset is pinned (VS version, toolset `14.51.36231`, edition and licence of Visual Studio Community, how CI provisions the same toolset) and the CI vcpkg binary-cache strategy | Unit 1 |
+| Q10 | The CI design: how Visual Studio Build Tools provisions the exact pinned toolset, Windows SDK, CMake and Ninja versions (not verified that they can be reproduced), and the vcpkg binary-cache strategy | Unit 1, or when CI is created |
+| Q11 | When to move from the 14.51 reference toolset to an LTS toolset (14.52 is expected in November 2026; its C++23 claims are unverified). Re-evaluate on release, with the V1/V4 probes re-run | 14.51 support end (about February 2027, derived) |
 
-**Approval workflow:** the owner names each unit. No unit starts before Q6–Q9 are decided and the owner
-approves the V1–V3 results.
+Q6–Q9 were open in the previous revision and are now decided (14.1). Questions marked "Unit 1" must be settled
+before Unit 1 starts; the rest can wait for their unit.
+
+**Approval workflow:** the owner names each unit. Unit 1 starts only when the owner names it and the "Unit 1"
+questions in 14.5 are settled.
