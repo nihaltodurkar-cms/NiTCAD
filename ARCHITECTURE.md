@@ -326,23 +326,26 @@ component, behind a stable boundary (a C ABI), and the primary architecture stay
 be toolchain-compatible with D1 (MSVC); no Fortran compiler is chosen now. The legacy has no Fortran or C
 source [verified: no `.f90/.c/.h` files in the legacy tree listing].
 
-## 8. Proposed repository layout (nothing is created)
+## 8. Repository layout
 
 ```text
 ARCHITECTURE.md
-CMakeLists.txt              top-level build; enforces C++23                 (Unit 1)
-vcpkg.json                  vcpkg manifest with pinned baseline (D8)        (Unit 1)
-include/NiTCAD/<layer>/...  public headers per layer                        (created per unit)
-src/<layer>/...             implementations                                 (created per unit)
-tests/<layer>/...           Catch2 tests mirroring src/                     (created per unit)
-app/                        Win32 entry point                               (created at L8 only)
+DECISIONS.md
+CMakeLists.txt              build; toolchain gate; vcpkg pin check           (Unit 1, exists)
+CMakePresets.json           debug and release presets (Q3)                   (Unit 1, exists)
+vcpkg.json                  manifest: baseline and version overrides (D8)    (Unit 1, exists)
+.gitignore                  ignores build/                                   (Unit 1, exists)
+tests/scaffold_test.cpp     Unit 1 scaffold test                             (Unit 1, exists)
+include/NiTCAD/<layer>/...  public headers per layer                         (created per unit)
+src/<layer>/...             implementations                                  (created per unit)
+tests/<layer>/...           Catch2 tests mirroring src/                      (created per unit)
+app/                        Win32 entry point                                (created at L8 only)
 ```
 
-The layer names are decided (D5). The casing of the include root and the namespace nesting are provisional (Q1).
-Not part of the structure until the owner approves them in a unit request: `CMakePresets.json`, `cmake/`
-(toolchain modules), `benchmarks/` (measured performance cases) and CI configuration. D8 requires a
-reproducible CI dependency and cache strategy. That strategy is a design item to specify before CI exists
-(V2); it is not implemented here. A unit adds its headers, sources and tests together.
+The layer names are decided (D5) and the namespace and include root are decided (Q1). Not part of the structure until
+the owner approves them in a unit request: `cmake/` (toolchain modules), `benchmarks/` (measured performance cases)
+and CI configuration (its own unit; design direction in Q10). A unit adds its headers, sources and tests together.
+`tests/scaffold_test.cpp` sits outside `tests/<layer>/` because Unit 1 has no layer.
 
 ## 9. Build, test and warnings
 
@@ -378,9 +381,15 @@ reproducible CI dependency and cache strategy. That strategy is a design item to
     another.
   - Verified locally (V2): a manifest with `builtin-baseline`, `version>=` and `overrides` resolved with the Visual
     Studio-bundled vcpkg. The CI cache strategy is not specified (Q10).
-- **Warning policy** (defined here, specific flags set at Unit 1): first-party code is compiled at a high warning
-  level with warnings treated as errors; third-party headers are included as system headers so their warnings do
-  not fail the build. `/options:strict` is part of the policy (see above).
+- **Flags in effect (Unit 1, `CMakeLists.txt`):** `/std:c++23preview /options:strict /EHsc /utf-8 /permissive-
+  /fp:precise /W4 /WX /external:W0`, definitions `UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN`, and the dynamic
+  CRT (`MultiThreaded` or `MultiThreadedDebug` + `DLL`). CMake's default `/W3` is removed so it does not conflict. No
+  `/arch:` flag, so no AVX2 assumption. N1–N4 (14.2) are provisional defaults.
+- **Warning policy:** first-party code is compiled at `/W4` with warnings treated as errors (`/WX`); imported
+  headers are system headers whose warnings are silenced (`/external:W0`). `/options:strict` is part of the policy.
+- **Vcpkg tool pin (Q3):** `CMakeLists.txt` requires `VCPKG_ROOT` to be a git checkout whose `HEAD` equals the
+  manifest's `builtin-baseline`, so the tool and the port versions cannot drift apart. Eigen 5.0.1 and Catch2 3.16.0 are
+  pinned by `overrides` in `vcpkg.json`.
 - **Test levels** per component, from the legacy practice: analytic and limiting cases → published-value
   regression → Jacobian vs finite differences → dimensional-reduction identity → convergence and mesh
   independence → benchmark. A compile-only check is never the sole gate for a numerical unit.
@@ -504,6 +513,9 @@ Unit 10 is deferred until sequenced. Nothing in this table is started.
 5. **Unvalidated legacy physics.** Hydrodynamic, MC implant, TED and self-heating are simplifications with
    gaps disclosed in the audit. They stay deferred.
 6. **Direct3D 12 verbosity.** Large and low-level, but isolated at L7/L8 and built last.
+7. **Working tree under OneDrive.** The repository is under `OneDrive\Desktop`, so build output in `build/` is inside a
+   synced folder. Not measured; Unit 1's first configure (vcpkg install) took about two minutes. If sync causes locks
+   or slowness, `binaryDir` in `CMakePresets.json` can move out of the repository.
 
 ## 14. Decisions
 
@@ -560,6 +572,7 @@ withdrawn; numbering is otherwise kept stable. This proposal lives on `architect
 | V1 | Toolset: VS 18 Community, MSVC dir `14.51.36231`, compiler 19.51.36260. Required features are present (`std::expected`, `std::mdspan`, explicit object parameters, multidimensional subscript, `std::println`, `<stop_token>`/`jthread`) under `/std:c++23preview` and `/std:c++latest`. **No stable `/std:c++23`**; it is silently ignored (D9002, falls back to C++14). CMake 4.3.1 emits `-std:c++latest` for `CXX_STANDARD 23`. Details in section 12. | Verified. Q6 decided. |
 | V2 | The Visual Studio-bundled vcpkg works in manifest mode with a pinned baseline, `version>=` constraints and overrides. Eigen (5.0.1 at the test baseline, 3.4.0 by override) and Catch2 3.16.0 built and passed a probe test under `-std:c++latest` (superseded by V4, which uses the decided `/std:c++23preview`). Not verified: CI reproduction and cache behaviour, a standalone vcpkg checkout, whether the redirect of vcpkg's build/download/package directories out of Program Files was necessary (done as a precaution). | Verified locally. Q7, Q8 decided. CI reproduction open (Q10). |
 | V4 | Re-check under the decided mode: Eigen 5.0.1 and Catch2 3.16.0 from the pinned baseline build and pass under explicit `/std:c++23preview` with a configure-time `_MSVC_LANG` gate (passed). `/WX` and `/we9002` do not stop an ignored `/std:c++23`; `/options:strict` does (D8043). MSVC 14.50 was **not** tested (not installed). | Verified on 14.51 only. |
+| V5 | Q3 prerequisite and Unit 1 run: a standalone vcpkg checkout at the baseline commit (partial clone, `--filter=blob:none`, in `C:\Users\disha\vcpkg`, bootstrapped; tool release 2026-09-26) resolved the manifest with the Eigen 5.0.1 and Catch2 3.16.0 overrides. The Unit 1 configure, build and test passed in Debug and Release. Negative checks: `/std:c++20` fails the gate (`#error`, C1189); an ignored `/std:c++23` fails it (D8043); a `VCPKG_ROOT` that is not a git checkout at the pinned commit fails configuration. **Not tested:** an unset `VCPKG_ROOT`, CI, any other machine. | Verified locally. |
 | V3 | Scaling definitions, scaled variables and Newton tolerances read from `inputs.cpp` and `device1d.cpp` and recorded in 6.1. One open question remains for Unit 8 (convergence criterion on the clipped correction). | Verified |
 
 Verifications due at their own unit, not blocking Unit 1: CODATA edition of the constants (Unit 2), the exact

@@ -1,0 +1,10 @@
+{
+  "name": "nitcad",
+  "version": "0.0.0",
+  "builtin-baseline": "fbb0f7bb200b07a9eb9081c7a3cf51d1aa1c51a1",
+  "dependencies": [ "eigen3", "catch2" ],
+  "overrides": [
+    { "name": "eigen3", "version": "5.0.1" },
+    { "name": "catch2", "version": "3.16.0" }
+  ]
+}
