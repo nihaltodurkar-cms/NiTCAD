@@ -4,9 +4,10 @@
 # presets. Toolset, Windows SDK, CMake and Ninja versions are asserted, not assumed:
 # a hosted runner image can change under us, and the job must fail loudly when it does.
 #
-# NOT YET VERIFIED ON A RUNNER (needs the first push): that the image carries MSVC
-# 14.51.36231 (compiler 19.51.36260), that `vcvarsall.bat -vcvars_ver=14.51` selects
-# it, that the Windows SDK is 10.0.26100.0, and the vcpkg binary-cache behaviour.
+# Verified on the first run (windows-2025, Visual Studio 2026 Enterprise 18.10.2):
+# `vcvarsall.bat x64 -vcvars_ver=14.51` selects compiler 19.51.36260, the SDK is
+# 10.0.26100.0, and the pinned CMake 4.3.1 and Ninja 1.13.2 are found. Still unverified:
+# vcpkg binary-cache behaviour (restore on a second run).
 name: CI
 
 on:
@@ -75,7 +76,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'vcpkg checkout failed' }
           & "$root\bootstrap-vcpkg.bat" -disableMetrics
           if ($LASTEXITCODE -ne 0) { throw 'vcpkg bootstrap failed' }
-          Add-Content $env:GITHUB_ENV "VCPKG_ROOT=$root"
+          Add-Content $env:GITHUB_ENV "NITCAD_VCPKG_ROOT=$root"
 
       - name: Restore vcpkg binary cache
         uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
@@ -94,6 +95,9 @@ jobs:
           echo Visual Studio: %VSROOT%
           call "%VSROOT%\VC\Auxiliary\Build\vcvarsall.bat" x64 -vcvars_ver=14.51
           if errorlevel 1 (echo ::error::vcvarsall could not select toolset 14.51 & exit /b 1)
+          rem The Visual Studio developer environment overwrites VCPKG_ROOT with its bundled vcpkg.
+          rem Restore the pinned checkout (CMakeLists.txt rejects anything else).
+          set "VCPKG_ROOT=%NITCAD_VCPKG_ROOT%"
 
           echo --- version assertions
           cl 2>&1 | findstr /C:"Version 19.51.36260"
