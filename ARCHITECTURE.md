@@ -1,11 +1,11 @@
 # NiTCAD — Architecture
 
-**PROPOSAL, accepted as the current proposal. Decisions recorded (section 14). Implementation is blocked on verification items V1–V3.**
+**PROPOSAL, accepted as the current proposal. Decisions recorded (section 14). Verification V1–V3 was run on 2026-10-02 (section 14.4); its findings need owner decisions (Q6–Q9) before Unit 1.**
 
 The owner accepted this architecture as the current proposal and recorded decisions D1–D6, D8 and R1–R5.
 Section 14 classifies each as decided, provisionally decided, deferred or blocking verification. It is still a
 proposal: no source files, directories or build files exist, no unit has started, and Unit 1 does not start until
-V1–V3 are resolved. The document must be rewritten to describe what actually exists as units land.
+the owner has decided Q6–Q9 and approved the V1–V3 results. The document must be rewritten to describe what actually exists as units land.
 
 Naming: **NiTCAD** is this project. **NT-SemTCAD** is the legacy reference repository
 (`C:\Users\disha\OneDrive\Desktop\NT-SemTCAD-claude-zealous-ritchie-kuuwr9\NT-SemTCAD`), used only as a
@@ -137,10 +137,52 @@ maximum |doping| of whatever array it was built with, so two devices covering di
 disagreed on units until an `Ns_override` was added (`CLAUDE.md`, "Physics/model conventions" [verified]).
 
 Proposal: scaling is an explicit `assemble` input derived once per problem, never recomputed per slice
-or hidden inside a device. Exact definitions of `LD`, `J0`, `R0`, the scaled variable forms and the role of
-`eps` are not asserted here. **Blocking verification V3 (R5):** they must be read from
-`core/src/device1d/device1d.cpp` and `core/src/device1d/inputs.cpp` and recorded in this section before
-Unit 1 starts.
+or hidden inside a device.
+
+**Legacy scaling definitions (V3, read from `core/src/device1d/inputs.cpp:41-65` and
+`core/src/device1d/device1d.cpp:175-192`, 29 [verified]):**
+
+| Quantity | Definition |
+|---|---|
+| V_T | k·T/q |
+| ε | ε_r(node 0) · ε₀, in F/cm (other nodes enter through the relative permittivity `et`, below) |
+| Ns (concentration scale) | the override if one is given (> 0), else max(max over nodes of \|doping\|, n_i), with n_i of node 0's material at T |
+| L_D (length scale) | sqrt(ε · V_T / (q · Ns)) |
+| D0_REF | 1.0 (`kD0Ref`, commented "kernels.D0_REF"); its unit is not stated in the file |
+| J0 (current scale) | q · D0_REF · Ns / L_D |
+| R0 (rate scale) | D0_REF · Ns / L_D² |
+
+Scaled quantities (same files):
+
+- Coordinates `xs = x / L_D`; edge length `h[k] = xs[k+1] − xs[k]`; node control volume
+  `dV[i] = (h[i−1] + h[i]) / 2`, with `dV[0] = h[0]/2` and `dV[N−1] = h[N−2]/2`.
+- Doping `C = doping / Ns`; per-node `nie_s = nie / Ns`, where `nie` includes band-gap narrowing when enabled.
+- Unknowns per node, in this interleaved order: ψ (in units of V_T, so ψ = φ/V_T), n/Ns, p/Ns
+  (`F[3i]`, `F[3i+1]`, `F[3i+2]` at `device1d.cpp:1129,1144,1164`).
+- Equilibrium carriers `n = nie_s · exp(ψ + s)`, `p = nie_s · exp(−ψ − s)` (`s` is a band-offset gauge shift, zero for
+  a single material). Ohmic contact: `n0 − p0 = C`, `n0·p0 = nie_s²`, `psi0 = V/V_T + ln(n0/nie_s) − s`
+  (`device1d.cpp:322-340`).
+- Poisson row: `et[e]·(ψ[i+1] − ψ[i])/h[e] − et[e−1]·(ψ[i] − ψ[i−1])/h[e−1] − dV[i]·(n − p − C) = 0`
+  (`device1d.cpp:597-599`), with `et` the harmonic mean of the relative permittivity ratio ε_i/ε_0 on edges
+  (`inputs.cpp:152-153`); `et = 1` for one material.
+- Continuity rows: edge diffusivity `dn_edge = hmean(μ_n0) · V_T / D0_REF`, flux
+  `Jn = (dn_edge/h) · (n[k+1]·B(δ) − n[k]·B(−δ))` with `B` the Bernoulli function, and the row
+  `Jn[eR] − Jn[eL] − R_s · dV = 0`, with `R_s = R / R0` (`device1d.cpp:1007,1031,1095,1144`).
+- Scaled currents are converted with `J0` (for example `device1d.cpp:1222-1223`).
+
+**Findings relevant to later units:**
+
+- The Newton update cap and tolerance are in scaled ψ: `max_dpsi = 5.0`, `tol_update = 1e-8`. In the
+  equilibrium Boltzmann loop the correction is clipped to ±`max_dpsi` and the convergence test
+  `max|Δψ| < tol_update` is then measured on the clipped value (`device1d.cpp:613-627`). The legacy lesson that
+  convergence must be judged on the full correction, not the damped one, is recorded in the legacy
+  `ARCHITECTURE.md` (M34) for the stiff paths [verified, quoted]; whether this equilibrium loop is exposed to it
+  is not analysed here. Unit 8 must decide the criterion explicitly.
+- `tol_residual = 1e-10` is declared in the options (`device.py`); where the C++ solver uses it was not read.
+- The legacy `Device3D` scales from whatever array it was built with (described earlier in this section); the explicit
+  `Ns` input of the new design is the fix.
+- The constants used by the C++ core (`core/include/tcad/physics/materials.hpp`: `kQ = 1.602176634e-19`,
+  `kKB = 1.380649e-23`, `kEPS0 = 8.8541878128e-14`) are the same values as `pytcad/constants.py`.
 
 ### 6.2 Scaled Newton variables and tolerances
 
@@ -292,13 +334,18 @@ reproducible CI dependency and cache strategy. That strategy is a design item to
 - **Build system:** CMake. The C++23 requirement is enforced by the build, not trusted to defaults: set
   `CMAKE_CXX_STANDARD 23`, `CXX_STANDARD_REQUIRED ON`, `CXX_EXTENSIONS OFF`, and fail at configure time if the
   compiler cannot compile a probe using the C++23 features the code actually uses (for example `<expected>`).
-- **Toolchain (D1, provisional):** MSVC, with a specific toolset version pinned. The pinned toolset, the
-  switch that selects C++23 in it, and the language and library features the code needs must be verified before
-  Unit 1 (V1). Nothing about MSVC's C++23 support is asserted in this document.
+- **Toolchain (D1, provisional):** MSVC, with a specific toolset version pinned. Verified on this machine
+  (V1, 2026-10-02): Visual Studio 18 Community, MSVC toolset directory `14.51.36231`, compiler 19.51.36260
+  (`_MSC_FULL_VER` 195136260). **There is no stable `/std:c++23` switch in this toolset:** `cl` lists only
+  `c++14|c++17|c++20|latest`, and `/std:c++23` is accepted with warning D9002 ("ignoring unknown option") and
+  silently falls back to C++14 (`_MSVC_LANG` = 201402). `/std:c++23preview` gives `_MSVC_LANG` 202302 and
+  `/std:c++latest` gives 202400. CMake 4.3.1 maps `CXX_STANDARD 23` to `-std:c++latest`. Which of the two modes to
+  pin is open (Q6).
 - **Dependencies (D8, provisional):** CMake with vcpkg in manifest mode: a pinned vcpkg baseline, explicit
   version constraints and overrides where required, and a reproducible CI dependency and cache strategy.
-  Eigen (D3) and Catch2 v3 (D2) come through the manifest. Port availability at the pinned baseline, their
-  behaviour under the pinned toolset in C++23 mode, and the vcpkg bootstrap source are to be verified (V2, Q3).
+  Verified locally (V2): a manifest with `builtin-baseline`, `version>=` and `overrides` resolved and built Eigen
+  and Catch2 v3 with the Visual Studio-bundled vcpkg, and an Eigen SparseLU test plus a Catch2 test passed under
+  `-std:c++latest`. The CI cache strategy is not specified (Q9).
 - **Warning policy** (defined here, specific flags set at Unit 1 after V1): first-party code is compiled at a high
   warning level with warnings treated as errors; third-party headers are included as system headers so their
   warnings do not fail the build.
@@ -368,24 +415,38 @@ Unit 10 is deferred until sequenced. Nothing in this table is started.
 - `RecombinationResult{R, dRdn, dRdp}` in `core/include/tcad/physics/kernels.hpp` (value plus exact partials).
 - Every test criterion in section 10 marked [verified].
 
+- **V3 scaling:** the definitions and scaled-variable forms in 6.1 were read from `inputs.cpp` and `device1d.cpp`.
+- **V1 (MSVC, run here 2026-10-02):** toolset and `/std` behaviour as in section 9; with `/std:c++23preview` and
+  `/std:c++latest` the probe defines `__cpp_lib_expected` 202211, `__cpp_lib_mdspan` 202207, `__cpp_lib_print` 202406,
+  `__cpp_lib_jthread` 201911, `__cpp_multidimensional_subscript` 202211, `__cpp_explicit_this_parameter` 202110,
+  and compiles and runs a program using `std::expected`, `std::mdspan`, explicit object parameters, `std::println`
+  and `m[i, j]`. With `/std:c++20` the same program fails (no `<expected>` contents, no explicit object parameters).
+  `<stop_token>`/`std::jthread` is available in C++20 mode.
+- **V2 (vcpkg, run here):** Visual Studio-bundled vcpkg (`2026-07-27-98d7cb0…`) with `VCPKG_ROOT` pointed at it;
+  a manifest pinned to baseline `fbb0f7bb200b07a9eb9081c7a3cf51d1aa1c51a1` (the head of microsoft/vcpkg on
+  2026-10-02, used for the test, not chosen) resolved `catch2` 3.16.0 and `eigen3` 5.0.1. An override to `eigen3`
+  3.4.0 with a `version>=` constraint on Catch2 also resolved (Eigen 3.4.0, Catch2 3.16.0). Both builds passed the
+  probe test under `-std:c++latest`. Catch2 was consumed as the `Catch2::Catch2WithMain` target.
+
 **Derived here, not a legacy assertion**
 - V_T(300 K) = 0.0258519998 V; n_i(300 K) = 1.06738e10 cm⁻³ (inputs in section 10).
 
 **Unverified: do not rely on these**
 - That the constants file corresponds to CODATA 2018 (edition not named in the file).
-- The exact definitions of `LD`, `J0`, `R0` (V3), and the exact normalization of the 5e-5 Jacobian gate.
-- Any MSVC/clang/MinGW claim about C++23 mode (V1), library feature support (`std::expected`, `std::mdspan`,
-  explicit object parameters), multidimensional subscript support, or Eigen compatibility with the C++23 flag.
+- The exact normalization of the 5e-5 Jacobian gate; the unit of `D0_REF`; where `tol_residual` is used.
+- clang-cl and MinGW claims about C++23 (not tested; only MSVC was probed). Behaviour of other MSVC toolsets or
+  a CI runner's Visual Studio version.
 - Fortran toolchain claims: that MSVC has no Fortran compiler; which Fortran compilers (Intel ifx, LLVM Flang,
   gfortran) can interoperate with which C++ ABI on Windows; CMake generator support for each.
-- Catch2 v3 and Eigen availability and behaviour as vcpkg ports under MSVC C++23 (V2), Catch2 v3 packaging
-  (compiled library vs header-only), and the MKL licence terms.
+- The MKL licence terms. Whether a CI runner can reproduce the local vcpkg build (cache behaviour).
 - Whether Direct3D 12 / Direct2D headers work under a MinGW toolchain.
 
 ## 13. Risks
 
-1. **C++23 on Windows.** Compiler mode and library support are unverified (section 12). Mitigation: V1 must be
-   resolved before Unit 1 (D1 is provisional until then); the configure-time probe fails loudly.
+1. **C++23 on Windows.** Compiler mode and library support are unverified (section 12). Verified: no stable
+   `/std:c++23` exists in the pinned toolset family, and an unknown `/std` value silently falls back to C++14.
+   Mitigation: an explicit mode choice (Q6), a configure-time check of `_MSVC_LANG` and the feature macros, and
+   treating D9002 as an error.
 2. **Fortran coupling to the C++ toolchain.** If Fortran is ever used, its compiler and runtime must be
    ABI-compatible with the C++ compiler, which constrains D1. Mitigation: D6 defers Fortran, and any later
    Fortran sits behind a C ABI in a separate library.
@@ -417,9 +478,9 @@ withdrawn; numbering is otherwise kept stable. This proposal lives on `architect
 
 | # | Decision | Provisional because |
 |---|---|---|
-| D1 | MSVC is the Windows C++23 toolchain, with one specific toolset pinned. C++ compiler only. | The toolset, C++23 mode and required features are unverified (V1). |
+| D1 | MSVC is the Windows C++23 toolchain, with one specific toolset pinned. C++ compiler only. | V1 is done, but it found no stable C++23 mode in this toolset (Q6, Q9). |
 | D3 | Eigen SparseLU is the initial sparse direct solver behind a backend-neutral interface that allows PARDISO and iterative backends later without redesign (6.10). | The exact interface shape is settled at Unit 3. |
-| D8 | CMake + vcpkg manifest mode, pinned baseline, explicit version constraints/overrides where required, reproducible CI dependency/cache strategy. | Baseline choice, port availability and the CI cache strategy are unverified or unspecified (V2). |
+| D8 | CMake + vcpkg manifest mode, pinned baseline, explicit version constraints/overrides where required, reproducible CI dependency/cache strategy. | V2 is done for a local build; the baseline choice (Q7), triplet (Q8) and CI cache strategy (Q9) are open. |
 | D5 (part) | `NiTCAD::<layer>` nesting; `include/NiTCAD/<layer>/`. | Owner named the root namespace and layers only (Q1). |
 
 ### 14.3 Deferred
@@ -432,15 +493,13 @@ withdrawn; numbering is otherwise kept stable. This proposal lives on `architect
 | — | Fermi–Dirac and other statistics | Requested (R4). |
 | — | PARDISO and iterative solver backends | Requested; the interface already accommodates them (6.10). |
 
-### 14.4 Blocking verification
+### 14.4 Verification results (run 2026-10-02; probes were built outside the repository)
 
-Nothing in this table has been done. Unit 1 does not start until V1–V3 are resolved.
-
-| # | What must be verified | Blocks |
+| # | Result | Status |
 |---|---|---|
-| V1 | The exact MSVC toolset to pin; how that toolset enables C++23 and whether it is a stable or preview mode; which language and library features the code needs, including `<expected>` (R1) and `<stop_token>` (6.9); that Eigen and Catch2 compile in that mode. | D1; Unit 1 |
-| V2 | vcpkg: the pinned baseline; that Eigen and Catch2 v3 ports exist at the pinned versions; manifest mode with the chosen CMake generator; where version overrides are needed; where vcpkg itself comes from (Q3); the CI dependency/cache strategy. | D8; Unit 1 |
-| V3 | R5: the exact scaling definitions (`Ns`, `LD`, `J0`, `R0`, `eps`, the scaled variable forms) read from legacy `device1d.cpp` and `inputs.cpp`, then recorded in 6.1. | R5; Unit 1 (per owner), consumed at Unit 7 |
+| V1 | Toolset: VS 18 Community, MSVC dir `14.51.36231`, compiler 19.51.36260. Required features are present (`std::expected`, `std::mdspan`, explicit object parameters, multidimensional subscript, `std::println`, `<stop_token>`/`jthread`) under `/std:c++23preview` and `/std:c++latest`. **No stable `/std:c++23`**; it is silently ignored (D9002, falls back to C++14). CMake 4.3.1 emits `-std:c++latest` for `CXX_STANDARD 23`. Details in section 12. | Verified. **Finding needs an owner decision (Q6).** |
+| V2 | The Visual Studio-bundled vcpkg works in manifest mode with a pinned baseline, `version>=` constraints and overrides. Eigen (5.0.1 at the test baseline, 3.4.0 by override) and Catch2 3.16.0 built and passed a probe test under `-std:c++latest`. Not verified: CI reproduction and cache behaviour, a standalone vcpkg checkout, whether the redirect of vcpkg's build/download/package directories out of Program Files was necessary (done as a precaution). | Verified locally. **Open items: Q7, Q8, Q9.** |
+| V3 | Scaling definitions, scaled variables and Newton tolerances read from `inputs.cpp` and `device1d.cpp` and recorded in 6.1. One open question remains for Unit 8 (convergence criterion on the clipped correction). | Verified |
 
 Verifications due at their own unit, not blocking Unit 1: CODATA edition of the constants (Unit 2), the exact
 normalization of the 5e-5 Jacobian gate (Unit 7), the `_diode()` fixture parameters (Unit 9).
@@ -451,9 +510,13 @@ normalization of the 5e-5 Jacobian gate (Unit 7), the `_diode()` fixture paramet
 |---|---|---|
 | Q1 | Namespace nesting (`NiTCAD::<layer>` vs one flat namespace) and include-root casing (`include/NiTCAD/` vs lowercase) | Unit 1 |
 | Q2 | Mechanism for programmer-error preconditions: exception, assertion or terminate (6.7) | Unit 2 |
-| Q3 | Where vcpkg comes from (the copy bundled with Visual Studio vs a pinned standalone checkout), and whether `CMakePresets.json` and a CI workflow are part of Unit 1 | Unit 1 |
+| Q3 | Whether to use the Visual Studio-bundled vcpkg (verified working, V2) or a pinned standalone checkout (untested), and whether `CMakePresets.json` and a CI workflow are part of Unit 1 | Unit 1 |
 | Q4 | Final `Error` category list (6.7) | Unit 2 |
 | Q5 | Whether Unit 3 includes a test-only second backend to prove backend neutrality | Unit 3 |
+| Q6 | Which MSVC mode enforces C++23: `/std:c++23preview` (`_MSVC_LANG` 202302) or `/std:c++latest` (202400, rolling, what CMake emits by default). Either way the build should set the flag explicitly and fail configuration if `_MSVC_LANG` or the feature macros do not match. Candidate: `/std:c++23preview`, revisited when a stable `/std:c++23` exists | Unit 1 |
+| Q7 | vcpkg baseline commit and update policy; Eigen major version (the baseline tested gives 5.0.1; the legacy Eigen version was not checked, and an override to 3.4.0 also worked) | Unit 1 |
+| Q8 | vcpkg triplet (the probe used `x64-windows-static-md`, chosen by me for the test only) | Unit 1 |
+| Q9 | How the toolset is pinned (VS version, toolset `14.51.36231`, edition and licence of Visual Studio Community, how CI provisions the same toolset) and the CI vcpkg binary-cache strategy | Unit 1 |
 
-**Approval workflow:** the owner names each unit. No unit starts before V1–V3 are resolved and the owner
-approves the result.
+**Approval workflow:** the owner names each unit. No unit starts before Q6–Q9 are decided and the owner
+approves the V1–V3 results.
