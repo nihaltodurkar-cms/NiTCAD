@@ -1,11 +1,11 @@
 # NiTCAD — Architecture
 
-**PROPOSAL, accepted as the current proposal. Decisions D1–D6, D8, R1–R5 and Q6–Q9 are recorded (section 14). Unit 1 has not started and waits for the owner to name it and settle the open questions in 14.5.**
+**PROPOSAL, accepted as the current proposal. The architectural questions needed for Unit 1 are decided (section 14). The owner named Unit 1 (build scaffold) on 2026-10-02.**
 
 The owner accepted this architecture as the current proposal and recorded decisions D1–D6, D8 and R1–R5.
-Section 14 classifies each as decided, provisionally decided, deferred or blocking verification. It is still a
-proposal: no source files, directories or build files exist, no unit has started, and Unit 1 does not start until
-the owner names it and settles the questions marked "Unit 1" in 14.5. The document must be rewritten to describe what actually exists as units land.
+Section 14 classifies each as decided, provisionally decided, deferred or blocking verification. On 2026-10-02 the owner
+accepted the advisor recommendations in `DECISIONS.md` for Q1–Q5, Q10 and Q11 (14.1). It is still a proposal: no
+unit is complete, and the document must be rewritten to describe what actually exists as units land.
 
 Naming: **NiTCAD** is this project. **NT-SemTCAD** is the legacy reference repository
 (`C:\Users\disha\OneDrive\Desktop\NT-SemTCAD-claude-zealous-ritchie-kuuwr9\NT-SemTCAD`), used only as a
@@ -237,7 +237,17 @@ An on-disk result format is **deferred** (R2), under the same independence rule 
   design keeps its categories as values, not as exception types. Two legacy rules are kept: a clamp used
   during Newton overshoot must not be applied to the final converged value, and a linear solve whose relative
   residual exceeds a threshold is an error (legacy: 1e-6 for PARDISO [verified, `CLAUDE.md`]).
-- `std::expected` needs `<expected>` in the pinned MSVC toolset; this is part of V1.
+- `std::expected` needs `<expected>` in the pinned MSVC toolset; verified in V1.
+- **Precondition macro (Q2, decided):** one project macro, `NITCAD_EXPECTS(cond)`, always on in debug and release. On
+  violation it logs file, line and condition, then fails fast (`std::abort` or `__fastfail`). It never throws.
+  Preconditions are tested by testing the predicates, since Catch2 has no death tests. `__fastfail` vs `abort`
+  behaviour under a debugger is not tested. Keep the macro thin: C++26 contracts may replace it.
+- **Error shape (Q4, decided):** `enum class ErrorCode : std::uint8_t { invalid_input, degenerate_mesh,
+  singular_system, inaccurate_solve, non_convergence, cancelled, resource_exhausted }` and
+  `struct Error { ErrorCode code; std::string message; std::optional<ErrorContext> context; }`, where `ErrorContext`
+  holds an optional index (node, edge, row or bias step) and an optional numeric value (residual or tolerance).
+  There is no "internal error" code; internal bugs go through `NITCAD_EXPECTS`. The `std::string` allocates only on
+  the error path, never on the success path.
 
 ### 6.8 Determinism and reproducibility
 
@@ -275,13 +285,18 @@ iterative backends are deferred. The interface must be shaped so adding them nee
 2. Pattern analysis, numeric factorization and solve are separate steps, so a backend can reuse symbolic
    analysis across Newton iterations. The legacy `DirectSession` keeps its symbolic analysis across Newton
    iterations (`CLAUDE.md` [verified]). A backend that cannot reuse it simply repeats the analysis.
-3. Backend choice and options (tolerance, iteration limit, preconditioner, thread count) are explicit
+3. Backend choice and options (tolerance, iteration limit, preconditioner) are explicit
    configuration values, not environment variables. The legacy used environment variables such as
    `PYTCAD_LINSOLVE_BACKEND` (`CLAUDE.md` [verified]); they are not carried over.
 4. Every solve returns `std::expected` with diagnostics (relative residual, and iteration count where it
    applies). Direct and iterative backends share one result shape. A residual above the threshold is an error even
    if the backend itself reported success (legacy: PARDISO perturbs tiny pivots instead of failing [verified]).
 5. Thread count is part of backend configuration and defaults to 1 (6.8).
+
+**Neutrality check (Q5, decided):** Unit 3 adds no second backend. Neutrality is proved mechanically and behaviourally:
+a build test compiles the public `linalg` headers in a translation unit with no Eigen include path, so an Eigen type
+leaking into the interface fails the build; and all Unit 3 tests are written against the interface only. Whether one
+interface fits both direct and iterative backends stays unproven until one is requested.
 
 ### 6.11 Mesh generality (R3: unstructured meshes deferred, no later rewrite)
 
@@ -388,7 +403,8 @@ These are the acceptance criteria the new units should meet. Source and verifica
 
 ## 11. Proposed build order (each unit = one branch)
 
-Unit 1 does not start until V1, V2 and V3 (section 14) are resolved. The order is by dependency, so each unit is
+Unit 1 was named by the owner on 2026-10-02 and has no open prerequisites (V1–V4 are done; V3 is consumed at Unit 7). The
+order is by dependency, so each unit is
 testable on arrival. Units 4–9 are dimension-generic from the start (D4) and use no tensor-grid assumptions (6.11).
 
 | # | Unit | Layer | Legacy reference | Gate |
@@ -500,8 +516,15 @@ withdrawn; numbering is otherwise kept stable. This proposal lives on `architect
 |---|---|
 | D2 | Catch2 v3 is the C++ test framework. Its availability through vcpkg is checked under V2; the decision stands. |
 | D4 | Dimension-generic architecture for 1D, 2D and 3D. |
-| D5 | Root namespace `NiTCAD`. Layers: `base`, `linalg`, `mesh`, `physics`, `device`, `assemble`, `solve`, `results`, `analysis`, `render`, `app`. (Namespace nesting and include-root casing: provisional, Q1.) |
+| D5 | Root namespace `NiTCAD`. Layers: `base`, `linalg`, `mesh`, `physics`, `device`, `assemble`, `solve`, `results`, `analysis`, `render`, `app`. Nesting and include root: Q1. |
 | R1 | `std::expected` for recoverable errors; exceptions only for exceptional or programmer-error cases; no exceptions in hot numerical kernels or Newton iterations (6.7). |
+| Q1 | Layers are nested namespaces `NiTCAD::<layer>`; the include root is `include/NiTCAD/<layer>/`, spelled exactly like the namespace. Settle casing before any file exists, because Git `core.ignorecase` can hide case-only renames. |
+| Q2 | `NITCAD_EXPECTS(cond)` fail-fast precondition macro (6.7). |
+| Q3 | A standalone vcpkg tool checkout pinned to a recorded commit (not the Visual Studio-bundled copy); `CMakePresets.json` is part of Unit 1; the CI workflow is not part of Unit 1 and gets its own owner-named unit. |
+| Q4 | `ErrorCode` enum (seven values) plus `Error` struct (6.7). |
+| Q5 | No second backend in Unit 3; neutrality proved by a header-boundary build check and interface-only tests (6.10). |
+| Q10 | CI design direction: a GitHub-hosted Windows runner, toolset selected with `vcvarsall.bat x64 -vcvars_ver=14.51`, exact versions asserted (compiler 19.51.36260, SDK 10.0.26100.0, CMake 4.3.1, Ninja 1.13.2), vcpkg `files` binary cache saved with `actions/cache` and keyed on baseline, triplet, toolset and manifest hash. **Design only, not verified:** runner contents, `vcvars_ver` selection on a runner and the cache behaviour were not run. Implemented in the CI unit, not Unit 1. |
+| Q11 | Move to an LTS toolset when MSVC 14.52 LTS is released (expected November 2026), no later than 60 days after, and before 14.51 support ends (about February 2027, derived). Re-run V1 and V4, run the full suite, update the CI assertions and cache key, on one dedicated branch. |
 | R4 | Boltzmann carrier statistics initially; Fermi–Dirac and other statistics deferred until requested (section 5, item 7). |
 | D1 | MSVC is the Windows C++23 toolchain (C++ compiler only; Fortran is D6). Toolset pin per Q9. |
 | Q6 | `/std:c++23preview` set explicitly; `/std:c++latest` not used. The build verifies `_MSVC_LANG` and the C++23 feature macros and fails configuration if the C++23 flag is ignored or invalid (9). |
@@ -515,7 +538,10 @@ withdrawn; numbering is otherwise kept stable. This proposal lives on `architect
 | # | Decision | Provisional because |
 |---|---|---|
 | D3 | Eigen SparseLU is the initial sparse direct solver behind a backend-neutral interface that allows PARDISO and iterative backends later without redesign (6.10). | The exact interface shape is settled at Unit 3. |
-| D5 (part) | `NiTCAD::<layer>` nesting; `include/NiTCAD/<layer>/`. | Owner named the root namespace and layers only (Q1). |
+| N1 | Dynamic CRT: `CMAKE_MSVC_RUNTIME_LIBRARY` = `MultiThreaded$<$<CONFIG:Debug>:Debug>DLL`, matching `x64-windows-static-md`. | Advisor suggestion; the owner has not ruled on N1–N4 explicitly. |
+| N2 | `/fp:precise` and no `/arch:` flag (no AVX2 assumption). | A neutral default chosen by me for Unit 1; the advisor gave no recommendation. Affects tolerance-based reproducibility (6.8). |
+| N3 | `/EHsc` (Eigen and the standard library can throw). | Advisor suggestion. |
+| N4 | `UNICODE`, `_UNICODE`, `NOMINMAX`, `WIN32_LEAN_AND_MEAN` defined and `/utf-8` set. | Advisor suggestion. |
 
 ### 14.3 Deferred
 
@@ -532,7 +558,7 @@ withdrawn; numbering is otherwise kept stable. This proposal lives on `architect
 | # | Result | Status |
 |---|---|---|
 | V1 | Toolset: VS 18 Community, MSVC dir `14.51.36231`, compiler 19.51.36260. Required features are present (`std::expected`, `std::mdspan`, explicit object parameters, multidimensional subscript, `std::println`, `<stop_token>`/`jthread`) under `/std:c++23preview` and `/std:c++latest`. **No stable `/std:c++23`**; it is silently ignored (D9002, falls back to C++14). CMake 4.3.1 emits `-std:c++latest` for `CXX_STANDARD 23`. Details in section 12. | Verified. Q6 decided. |
-| V2 | The Visual Studio-bundled vcpkg works in manifest mode with a pinned baseline, `version>=` constraints and overrides. Eigen (5.0.1 at the test baseline, 3.4.0 by override) and Catch2 3.16.0 built and passed a probe test under `-std:c++latest`. Not verified: CI reproduction and cache behaviour, a standalone vcpkg checkout, whether the redirect of vcpkg's build/download/package directories out of Program Files was necessary (done as a precaution). | Verified locally. Q7, Q8 decided. CI reproduction open (Q10). |
+| V2 | The Visual Studio-bundled vcpkg works in manifest mode with a pinned baseline, `version>=` constraints and overrides. Eigen (5.0.1 at the test baseline, 3.4.0 by override) and Catch2 3.16.0 built and passed a probe test under `-std:c++latest` (superseded by V4, which uses the decided `/std:c++23preview`). Not verified: CI reproduction and cache behaviour, a standalone vcpkg checkout, whether the redirect of vcpkg's build/download/package directories out of Program Files was necessary (done as a precaution). | Verified locally. Q7, Q8 decided. CI reproduction open (Q10). |
 | V4 | Re-check under the decided mode: Eigen 5.0.1 and Catch2 3.16.0 from the pinned baseline build and pass under explicit `/std:c++23preview` with a configure-time `_MSVC_LANG` gate (passed). `/WX` and `/we9002` do not stop an ignored `/std:c++23`; `/options:strict` does (D8043). MSVC 14.50 was **not** tested (not installed). | Verified on 14.51 only. |
 | V3 | Scaling definitions, scaled variables and Newton tolerances read from `inputs.cpp` and `device1d.cpp` and recorded in 6.1. One open question remains for Unit 8 (convergence criterion on the clipped correction). | Verified |
 
@@ -543,16 +569,11 @@ normalization of the 5e-5 Jacobian gate (Unit 7), the `_diode()` fixture paramet
 
 | # | Question | Needed by |
 |---|---|---|
-| Q1 | Namespace nesting (`NiTCAD::<layer>` vs one flat namespace) and include-root casing (`include/NiTCAD/` vs lowercase) | Unit 1 |
-| Q2 | Mechanism for programmer-error preconditions: exception, assertion or terminate (6.7) | Unit 2 |
-| Q3 | Whether to use the Visual Studio-bundled vcpkg (verified working, V2) or a pinned standalone checkout (untested), and whether `CMakePresets.json` and a CI workflow are part of Unit 1 | Unit 1 |
-| Q4 | Final `Error` category list (6.7) | Unit 2 |
-| Q5 | Whether Unit 3 includes a test-only second backend to prove backend neutrality | Unit 3 |
-| Q10 | The CI design: how Visual Studio Build Tools provisions the exact pinned toolset, Windows SDK, CMake and Ninja versions (not verified that they can be reproduced), and the vcpkg binary-cache strategy | Unit 1, or when CI is created |
-| Q11 | When to move from the 14.51 reference toolset to an LTS toolset (14.52 is expected in November 2026; its C++23 claims are unverified). Re-evaluate on release, with the V1/V4 probes re-run | 14.51 support end (about February 2027, derived) |
+| N5 | Whether both Debug and Release builds run the tests in CI | CI unit |
+| N6 | Licence of NiTCAD. Eigen is MPL-2.0, which affects static linking of release binaries. The repository `LICENSE` file was not checked | before release |
+| N7 | Whether clang-format, `/analyze` or clang-tidy are wanted at all (feature freeze) | owner |
 
-Q6–Q9 were open in the previous revision and are now decided (14.1). Questions marked "Unit 1" must be settled
-before Unit 1 starts; the rest can wait for their unit.
+Nothing in this table blocks Unit 1 or Unit 2.
 
-**Approval workflow:** the owner names each unit. Unit 1 starts only when the owner names it and the "Unit 1"
-questions in 14.5 are settled.
+**Approval workflow:** the owner names each unit. Each unit is built on its own branch, tested, committed and reported, and is
+not merged without the owner's instruction.

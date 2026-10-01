@@ -1,8 +1,8 @@
 # NiTCAD — Decisions awaiting review
 
-**Status: RECOMMENDATIONS ONLY. Nothing here is decided.** These are advisor recommendations for the open
-questions in `ARCHITECTURE.md` section 14.5. Each has a blank owner decision line. When you decide, the
-result should be copied into `ARCHITECTURE.md` section 14.1 and this file updated.
+**Status: Q1–Q5, Q10 and Q11 ACCEPTED by the owner on 2026-10-02** ("I like opus decision go ahead and start") and
+recorded in `ARCHITECTURE.md` section 14.1. The new questions N1–N7 and the inconsistency list below were **not**
+explicitly ruled on: N1–N4 are applied as provisional Unit 1 defaults (14.2), N5–N7 stay open (14.5).
 
 Source: an Opus subagent (medium effort, read-only) was given `ARCHITECTURE.md` and the questions on 2026-10-02.
 I (Claude Sonnet 5.5) have not independently verified its factual claims beyond what is marked. Claims that came from
@@ -35,7 +35,7 @@ Already decided and not repeated here: D1–D6, D8, R1, R4, Q6–Q9 (see `ARCHIT
 - **Rejected:** a flat `NiTCAD` namespace (loses the layer boundary); lowercase `include/nitcad/` (a second spelling with no benefit on Windows).
 - **Risks:** Git `core.ignorecase=true` can hide case-only renames, so settle the casing before any file exists.
 - **Needed before:** Unit 1.
-- **Owner decision:** [ ] accept  [ ] change: ______  [ ] defer
+- **Owner decision:** [x] accept (2026-10-02)  [ ] change  [ ] defer
 
 ## Q2 — Enforcing programmer-error preconditions
 
@@ -48,7 +48,7 @@ Already decided and not repeated here: D1–D6, D8, R1, R4, Q6–Q9 (see `ARCHIT
 - **Rejected:** exceptions (contradict R1, blur bug vs error); `assert` (disabled by `NDEBUG`); bare `std::terminate` (loses the diagnostic).
 - **Risks:** C++26 contracts may later replace the macro, so keep it thin. `__fastfail` vs `abort` under a debugger **[unverified]**: not tested.
 - **Needed before:** Unit 2.
-- **Owner decision:** [ ] accept  [ ] change: ______  [ ] defer
+- **Owner decision:** [x] accept (2026-10-02)  [ ] change  [ ] defer
 
 ## Q3 — vcpkg source; `CMakePresets.json` and CI in Unit 1
 
@@ -60,7 +60,7 @@ Already decided and not repeated here: D1–D6, D8, R1, R4, Q6–Q9 (see `ARCHIT
 - **Rejected:** bundled vcpkg only (drifts, not reproducible on CI); vcpkg as a git submodule (adds a full vcpkg tree to the owner-controlled file tree).
 - **Risks:** the standalone checkout is **[unverified]**. V2 only tested the Visual Studio-bundled one, so V2 must be re-run with a standalone checkout before Unit 1.
 - **Needed before:** Unit 1 (vcpkg choice, presets). CI later.
-- **Owner decision:** [ ] accept  [ ] change: ______  [ ] defer
+- **Owner decision:** [x] accept (2026-10-02)  [ ] change  [ ] defer
 
 ## Q4 — `Error` categories and shape
 
@@ -80,7 +80,7 @@ Already decided and not repeated here: D1–D6, D8, R1, R4, Q6–Q9 (see `ARCHIT
 - **Rejected:** `std::error_code` and categories (more machinery, string-centric); splitting `invalid_input` per layer (premature).
 - **Risks:** `std::string` allocates on the error path. Acceptable because it never runs on the success path, but say so in the document.
 - **Needed before:** Unit 2.
-- **Owner decision:** [ ] accept  [ ] change: ______  [ ] defer
+- **Owner decision:** [x] accept (2026-10-02)  [ ] change  [ ] defer
 
 ## Q5 — Test-only second backend in Unit 3
 
@@ -92,7 +92,7 @@ Already decided and not repeated here: D1–D6, D8, R1, R4, Q6–Q9 (see `ARCHIT
 - **Rejected:** a test-only dense or mock backend.
 - **Risks:** whether one interface fits both direct and iterative backends stays unproven until one is requested.
 - **Needed before:** Unit 3.
-- **Owner decision:** [ ] accept  [ ] change: ______  [ ] defer
+- **Owner decision:** [x] accept (2026-10-02)  [ ] change  [ ] defer
 
 ## Q10 — CI toolset provisioning and vcpkg binary cache
 
@@ -107,7 +107,7 @@ Already decided and not repeated here: D1–D6, D8, R1, R4, Q6–Q9 (see `ARCHIT
   - **Not checked:** whether that image contains MSVC 14.51.36231 exactly, SDK 26100, CMake 4.3.1 or Ninja 1.13.2. The bundled CMake probably differs, so CMake and Ninja would be pinned separately (checksummed download or a pinned action).
   - `-vcvars_ver=14.51` selection on a runner has not been run. Hosted images update weekly, so the patch level may move.
 - **Needed before:** the CI unit (not Unit 1).
-- **Owner decision:** [ ] accept  [ ] change: ______  [ ] defer
+- **Owner decision:** [x] accept (2026-10-02)  [ ] change  [ ] defer
 
 ## Q11 — Moving to an LTS toolset
 
@@ -124,7 +124,7 @@ Already decided and not repeated here: D1–D6, D8, R1, R4, Q6–Q9 (see `ARCHIT
 - **Rejected:** moving to 14.50 now (untested); staying on 14.51 past end of support.
 - **Risks:** the 14.52 release date and its C++23 completeness are **[unverified]**. `_MSVC_LANG` under a stable flag may differ from 202302L, so the gate must accept the new value deliberately.
 - **Needed before:** 14.52 release, and before 14.51 end of support.
-- **Owner decision:** [ ] accept  [ ] change: ______  [ ] defer
+- **Owner decision:** [x] accept (2026-10-02)  [ ] change  [ ] defer
 
 ---
 
