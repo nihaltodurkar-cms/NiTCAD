@@ -1,0 +1,112 @@
+# NiTCAD CI. Design: ARCHITECTURE.md decision Q10 (DECISIONS.md).
+#
+# Every branch push and every pull request builds and tests the Debug and Release
+# presets. Toolset, Windows SDK, CMake and Ninja versions are asserted, not assumed:
+# a hosted runner image can change under us, and the job must fail loudly when it does.
+#
+# NOT YET VERIFIED ON A RUNNER (needs the first push): that the image carries MSVC
+# 14.51.36231 (compiler 19.51.36260), that `vcvarsall.bat -vcvars_ver=14.51` selects
+# it, that the Windows SDK is 10.0.26100.0, and the vcpkg binary-cache behaviour.
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  VCPKG_DISABLE_METRICS: "1"
+  VCPKG_BINARY_SOURCES: "clear;files,${{ github.workspace }}\\.vcpkg-binary-cache,readwrite"
+
+jobs:
+  build-test:
+    name: ${{ matrix.preset }}
+    runs-on: windows-2025
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        preset: [debug, release]
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+
+      # CMake 4.3.1 and Ninja 1.13.2, downloaded and checked against pinned SHA-256 values.
+      # The CMake value is the one Kitware publishes (cmake-4.3.1-SHA-256.txt). The Ninja
+      # release publishes no checksum file; its value was computed locally from the v1.13.2 asset.
+      - name: Install pinned CMake and Ninja
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $tools = Join-Path $env:RUNNER_TEMP 'tools'
+          New-Item -ItemType Directory -Force $tools | Out-Null
+          function Get-Pinned([string]$Url, [string]$Sha256, [string]$Out) {
+            Invoke-WebRequest -Uri $Url -OutFile $Out
+            $actual = (Get-FileHash $Out -Algorithm SHA256).Hash
+            if ($actual -ne $Sha256.ToUpperInvariant()) { throw "SHA-256 mismatch for ${Url}: $actual" }
+          }
+          Get-Pinned 'https://github.com/Kitware/CMake/releases/download/v4.3.1/cmake-4.3.1-windows-x86_64.zip' `
+            '03a610be931546474e46a442d171ef10532f4fc847de9cf76b7a8065bbef6a23' "$tools\cmake.zip"
+          Get-Pinned 'https://github.com/ninja-build/ninja/releases/download/v1.13.2/ninja-win.zip' `
+            '07fc8261b42b20e71d1720b39068c2e14ffcee6396b76fb7a795fb460b78dc65' "$tools\ninja.zip"
+          Expand-Archive "$tools\cmake.zip" -DestinationPath $tools
+          Expand-Archive "$tools\ninja.zip" -DestinationPath "$tools\ninja"
+          Add-Content $env:GITHUB_PATH "$tools\cmake-4.3.1-windows-x86_64\bin"
+          Add-Content $env:GITHUB_PATH "$tools\ninja"
+
+      # The vcpkg tool is checked out at the commit named by vcpkg.json's builtin-baseline,
+      # the same rule CMakeLists.txt enforces (Q3).
+      - name: Check out pinned vcpkg
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $commit = (Get-Content vcpkg.json -Raw | ConvertFrom-Json).'builtin-baseline'
+          $root = Join-Path $env:RUNNER_TEMP 'vcpkg'
+          git clone --filter=blob:none --no-checkout https://github.com/microsoft/vcpkg.git $root
+          if ($LASTEXITCODE -ne 0) { throw 'vcpkg clone failed' }
+          git -C $root checkout --quiet $commit
+          if ($LASTEXITCODE -ne 0) { throw 'vcpkg checkout failed' }
+          & "$root\bootstrap-vcpkg.bat" -disableMetrics
+          if ($LASTEXITCODE -ne 0) { throw 'vcpkg bootstrap failed' }
+          Add-Content $env:GITHUB_ENV "VCPKG_ROOT=$root"
+
+      - name: Restore vcpkg binary cache
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: ${{ github.workspace }}\.vcpkg-binary-cache
+          key: vcpkg-bin-x64-windows-static-md-msvc14.51-${{ hashFiles('vcpkg.json') }}
+          restore-keys: |
+            vcpkg-bin-x64-windows-static-md-msvc14.51-
+
+      - name: Configure, build, test (${{ matrix.preset }})
+        shell: cmd
+        env:
+          PRESET: ${{ matrix.preset }}
+        run: |
+          for /f "usebackq delims=" %%i in (`"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -property installationPath`) do set "VSROOT=%%i"
+          echo Visual Studio: %VSROOT%
+          call "%VSROOT%\VC\Auxiliary\Build\vcvarsall.bat" x64 -vcvars_ver=14.51
+          if errorlevel 1 (echo ::error::vcvarsall could not select toolset 14.51 & exit /b 1)
+
+          echo --- version assertions
+          cl 2>&1 | findstr /C:"Version 19.51.36260"
+          if errorlevel 1 (echo ::error::cl is not 19.51.36260 & cl 2>&1 & exit /b 1)
+          if not "%WindowsSDKVersion%"=="10.0.26100.0\" (echo ::error::Windows SDK is %WindowsSDKVersion%, expected 10.0.26100.0\ & exit /b 1)
+          cmake --version | findstr /B /C:"cmake version 4.3.1"
+          if errorlevel 1 (echo ::error::cmake is not 4.3.1 & cmake --version & exit /b 1)
+          ninja --version | findstr /X /C:"1.13.2"
+          if errorlevel 1 (echo ::error::ninja is not 1.13.2 & ninja --version & exit /b 1)
+
+          cmake --preset %PRESET%
+          if errorlevel 1 exit /b 1
+          cmake --build --preset %PRESET%
+          if errorlevel 1 exit /b 1
+          ctest --preset %PRESET%
+          if errorlevel 1 exit /b 1

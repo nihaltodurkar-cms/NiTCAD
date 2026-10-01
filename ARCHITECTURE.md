@@ -336,6 +336,7 @@ CMakePresets.json           debug and release presets (Q3)                   (Un
 vcpkg.json                  manifest: baseline and version overrides (D8)    (Unit 1, exists)
 .gitignore                  ignores build/                                   (Unit 1, exists)
 tests/scaffold_test.cpp     Unit 1 scaffold test                             (Unit 1, exists)
+.github/workflows/ci.yml    CI: build and test Debug and Release per branch  (CI unit, exists)
 include/NiTCAD/<layer>/...  public headers per layer                         (created per unit)
 src/<layer>/...             implementations                                  (created per unit)
 tests/<layer>/...           Catch2 tests mirroring src/                      (created per unit)
@@ -343,8 +344,7 @@ app/                        Win32 entry point                                (cr
 ```
 
 The layer names are decided (D5) and the namespace and include root are decided (Q1). Not part of the structure until
-the owner approves them in a unit request: `cmake/` (toolchain modules), `benchmarks/` (measured performance cases)
-and CI configuration (its own unit; design direction in Q10). A unit adds its headers, sources and tests together.
+the owner approves them in a unit request: `cmake/` (toolchain modules), `benchmarks/` (measured performance cases). A unit adds its headers, sources and tests together.
 `tests/scaffold_test.cpp` sits outside `tests/<layer>/` because Unit 1 has no layer.
 
 ## 9. Build, test and warnings
@@ -390,6 +390,15 @@ and CI configuration (its own unit; design direction in Q10). A unit adds its he
 - **Vcpkg tool pin (Q3):** `CMakeLists.txt` requires `VCPKG_ROOT` to be a git checkout whose `HEAD` equals the
   manifest's `builtin-baseline`, so the tool and the port versions cannot drift apart. Eigen 5.0.1 and Catch2 3.16.0 are
   pinned by `overrides` in `vcpkg.json`.
+- **CI (Q10, `.github/workflows/ci.yml`):** runs on every branch push, every pull request and on demand; one
+  job per preset (Debug and Release) on `windows-2025`. It checks out the vcpkg tool at the manifest baseline,
+  installs CMake 4.3.1 and Ninja 1.13.2 from downloads checked against pinned SHA-256 values, selects the toolset with
+  `vcvarsall.bat x64 -vcvars_ver=14.51`, and **fails** unless `cl` is 19.51.36260, the Windows SDK is 10.0.26100.0,
+  CMake is 4.3.1 and Ninja is 1.13.2. Actions are pinned by commit (`actions/checkout` v5.1.0, `actions/cache` v5.1.0).
+  vcpkg binaries use the `files` source in a directory saved with `actions/cache`, keyed on triplet, toolset and
+  `vcpkg.json`. The CMake checksum is the one Kitware publishes (verified); Ninja publishes none, so its value was
+  computed locally from the v1.13.2 asset. **Not yet verified:** that the hosted image carries toolset 14.51.36231, that
+  `-vcvars_ver=14.51` selects it, the SDK version, and cache behaviour. The first run will show; a mismatch fails the job by design.
 - **Test levels** per component, from the legacy practice: analytic and limiting cases → published-value
   regression → Jacobian vs finite differences → dimensional-reduction identity → convergence and mesh
   independence → benchmark. A compile-only check is never the sole gate for a numerical unit.
@@ -535,7 +544,7 @@ withdrawn; numbering is otherwise kept stable. This proposal lives on `architect
 | Q3 | A standalone vcpkg tool checkout pinned to a recorded commit (not the Visual Studio-bundled copy); `CMakePresets.json` is part of Unit 1; the CI workflow is not part of Unit 1 and gets its own owner-named unit. |
 | Q4 | `ErrorCode` enum (seven values) plus `Error` struct (6.7). |
 | Q5 | No second backend in Unit 3; neutrality proved by a header-boundary build check and interface-only tests (6.10). |
-| Q10 | CI design direction: a GitHub-hosted Windows runner, toolset selected with `vcvarsall.bat x64 -vcvars_ver=14.51`, exact versions asserted (compiler 19.51.36260, SDK 10.0.26100.0, CMake 4.3.1, Ninja 1.13.2), vcpkg `files` binary cache saved with `actions/cache` and keyed on baseline, triplet, toolset and manifest hash. **Design only, not verified:** runner contents, `vcvars_ver` selection on a runner and the cache behaviour were not run. Implemented in the CI unit, not Unit 1. |
+| Q10 | CI design direction: a GitHub-hosted Windows runner, toolset selected with `vcvarsall.bat x64 -vcvars_ver=14.51`, exact versions asserted (compiler 19.51.36260, SDK 10.0.26100.0, CMake 4.3.1, Ninja 1.13.2), vcpkg `files` binary cache saved with `actions/cache` and keyed on baseline, triplet, toolset and manifest hash. **Design only, not verified:** runner contents, `vcvars_ver` selection on a runner and the cache behaviour were not run. Implemented in `.github/workflows/ci.yml` on branch `architecture/ci-workflow` (the CI unit, not Unit 1); **not yet run on a runner**, because pushing is not yet permitted (see section 9). |
 | Q11 | Move to an LTS toolset when MSVC 14.52 LTS is released (expected November 2026), no later than 60 days after, and before 14.51 support ends (about February 2027, derived). Re-run V1 and V4, run the full suite, update the CI assertions and cache key, on one dedicated branch. |
 | R4 | Boltzmann carrier statistics initially; Fermi–Dirac and other statistics deferred until requested (section 5, item 7). |
 | D1 | MSVC is the Windows C++23 toolchain (C++ compiler only; Fortran is D6). Toolset pin per Q9. |
@@ -554,6 +563,7 @@ withdrawn; numbering is otherwise kept stable. This proposal lives on `architect
 | N2 | `/fp:precise` and no `/arch:` flag (no AVX2 assumption). | A neutral default chosen by me for Unit 1; the advisor gave no recommendation. Affects tolerance-based reproducibility (6.8). |
 | N3 | `/EHsc` (Eigen and the standard library can throw). | Advisor suggestion. |
 | N4 | `UNICODE`, `_UNICODE`, `NOMINMAX`, `WIN32_LEAN_AND_MEAN` defined and `/utf-8` set. | Advisor suggestion. |
+| N5 | CI builds and tests both Debug and Release on every branch push and every pull request. | My default for the CI unit; the owner asked for CI on every feature branch but has not ruled on the configurations. |
 
 ### 14.3 Deferred
 
@@ -573,6 +583,7 @@ withdrawn; numbering is otherwise kept stable. This proposal lives on `architect
 | V2 | The Visual Studio-bundled vcpkg works in manifest mode with a pinned baseline, `version>=` constraints and overrides. Eigen (5.0.1 at the test baseline, 3.4.0 by override) and Catch2 3.16.0 built and passed a probe test under `-std:c++latest` (superseded by V4, which uses the decided `/std:c++23preview`). Not verified: CI reproduction and cache behaviour, a standalone vcpkg checkout, whether the redirect of vcpkg's build/download/package directories out of Program Files was necessary (done as a precaution). | Verified locally. Q7, Q8 decided. CI reproduction open (Q10). |
 | V4 | Re-check under the decided mode: Eigen 5.0.1 and Catch2 3.16.0 from the pinned baseline build and pass under explicit `/std:c++23preview` with a configure-time `_MSVC_LANG` gate (passed). `/WX` and `/we9002` do not stop an ignored `/std:c++23`; `/options:strict` does (D8043). MSVC 14.50 was **not** tested (not installed). | Verified on 14.51 only. |
 | V5 | Q3 prerequisite and Unit 1 run: a standalone vcpkg checkout at the baseline commit (partial clone, `--filter=blob:none`, in `C:\Users\disha\vcpkg`, bootstrapped; tool release 2026-09-26) resolved the manifest with the Eigen 5.0.1 and Catch2 3.16.0 overrides. The Unit 1 configure, build and test passed in Debug and Release. Negative checks: `/std:c++20` fails the gate (`#error`, C1189); an ignored `/std:c++23` fails it (D8043); a `VCPKG_ROOT` that is not a git checkout at the pinned commit fails configuration. **Not tested:** an unset `VCPKG_ROOT`, CI, any other machine. | Verified locally. |
+| V6 | CI workflow: the YAML parses and defines the intended triggers, matrix and steps; the pinned CMake download matches Kitware's published SHA-256 and Ninja runs as 1.13.2 locally. **Not run:** the workflow itself, because pushing is not permitted yet. `actionlint` and `act` are not installed. | Partly verified. |
 | V3 | Scaling definitions, scaled variables and Newton tolerances read from `inputs.cpp` and `device1d.cpp` and recorded in 6.1. One open question remains for Unit 8 (convergence criterion on the clipped correction). | Verified |
 
 Verifications due at their own unit, not blocking Unit 1: CODATA edition of the constants (Unit 2), the exact
@@ -582,7 +593,6 @@ normalization of the 5e-5 Jacobian gate (Unit 7), the `_diode()` fixture paramet
 
 | # | Question | Needed by |
 |---|---|---|
-| N5 | Whether both Debug and Release builds run the tests in CI | CI unit |
 | N6 | Licence of NiTCAD. Eigen is MPL-2.0, which affects static linking of release binaries. The repository `LICENSE` file was not checked | before release |
 | N7 | Whether clang-format, `/analyze` or clang-tidy are wanted at all (feature freeze) | owner |
 
