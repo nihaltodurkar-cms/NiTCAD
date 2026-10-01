@@ -1,10 +1,11 @@
 # NiTCAD — Architecture
 
-**PROPOSAL, awaiting decisions.**
+**PROPOSAL, accepted as the current proposal. Decisions recorded (section 14). Implementation is blocked on verification items V1–V3.**
 
-This document is a proposal. No source files, directories or build files exist yet. Nothing in it is
-final until the owner approves the architecture and decisions D1–D6 and D8 (section 14). It must be
-rewritten to describe what actually exists as units land.
+The owner accepted this architecture as the current proposal and recorded decisions D1–D6, D8 and R1–R5.
+Section 14 classifies each as decided, provisionally decided, deferred or blocking verification. It is still a
+proposal: no source files, directories or build files exist, no unit has started, and Unit 1 does not start until
+V1–V3 are resolved. The document must be rewritten to describe what actually exists as units land.
 
 Naming: **NiTCAD** is this project. **NT-SemTCAD** is the legacy reference repository
 (`C:\Users\disha\OneDrive\Desktop\NT-SemTCAD-claude-zealous-ritchie-kuuwr9\NT-SemTCAD`), used only as a
@@ -80,13 +81,16 @@ Allowed dependencies (everything not listed is forbidden):
 `results` sits below `solve` so that `analysis`, `render` and `app` can read results without including any
 solver header.
 
+The layer names above are decided (D5). The root namespace is `NiTCAD`. Nesting each layer as
+`NiTCAD::<layer>` is the working assumption and is provisional (Q1).
+
 ## 4. Layer responsibilities
 
 | Layer | Owns | Does NOT own |
 |---|---|---|
 | base | physical constants, unit convention, error types | physics |
-| linalg | sparse matrix storage, baseline direct solve (D3), residual check | meshes, Newton |
-| mesh | node/edge/control-volume graph, per-edge length and coupling area, per-node volume; tensor-grid constructors for 1D/2D/3D | doping, materials, linear algebra |
+| linalg | sparse matrix storage, backend-neutral solver interface (6.10), Eigen SparseLU backend (D3), residual check | meshes, Newton |
+| mesh | node/edge/control-volume graph, per-edge length and coupling area, per-node volume; tensor-grid constructors for 1D/2D/3D; no tensor-grid indexing in its public interface (6.11) | doping, materials, linear algebra |
 | physics | material parameters, local models (mobility, recombination, …) | meshes, matrices, bias, contacts |
 | device | regions, doping, material assignment, contact definitions (data only) | solving, assembling |
 | results | field and terminal-quantity containers, run record, convergence history | solving |
@@ -116,6 +120,11 @@ thermionic emission through per-edge arrays in the `Inputs` struct, `core/includ
 5. **Nonlocal models** (path-integrated band-to-band tunnelling, nonlocal ionization) need paths across the
    mesh, so they live in `assemble`, not `physics`. They are deferred.
 6. The first physics unit contains only what the first diode needs (section 11).
+7. **Carrier statistics (R4):** Boltzmann statistics initially; Fermi–Dirac and others are deferred. Statistics
+   stay isolated inside `physics` so that adding Fermi–Dirac later is an addition, not a signature break for callers.
+   Evidence from the legacy: `recombination_fd()` additionally takes the equilibrium product `np_eq` and its
+   partials `dnpq_dn`, `dnpq_dp`, which `recombination_boltzmann()` does not
+   (`core/include/tcad/physics/kernels.hpp` [verified]). The Unit 5 signatures are to be designed with that in mind.
 
 ## 6. Cross-cutting design
 
@@ -128,8 +137,10 @@ maximum |doping| of whatever array it was built with, so two devices covering di
 disagreed on units until an `Ns_override` was added (`CLAUDE.md`, "Physics/model conventions" [verified]).
 
 Proposal: scaling is an explicit `assemble` input derived once per problem, never recomputed per slice
-or hidden inside a device. Exact definitions of `LD`, `J0` and `R0` are not asserted here. They will be read
-from `core/src/device1d/device1d.cpp` when the scaling unit is requested.
+or hidden inside a device. Exact definitions of `LD`, `J0`, `R0`, the scaled variable forms and the role of
+`eps` are not asserted here. **Blocking verification V3 (R5):** they must be read from
+`core/src/device1d/device1d.cpp` and `core/src/device1d/inputs.cpp` and recorded in this section before
+Unit 1 starts.
 
 ### 6.2 Scaled Newton variables and tolerances
 
@@ -156,23 +167,35 @@ is computed from fluxes in `assemble`/`solve`. It is not an `analysis` quantity.
 ### 6.5 Input representation
 
 The authoritative input is the in-memory C++ `device` description plus a solver-options struct. An
-on-disk input format is **not decided** (remaining decision R2). The legacy wire format was a Python JSON
-`DeviceSpec` and is not carried over.
+on-disk input format is **deferred** (R2) until concrete requirements exist. The input types must not depend on
+any file format: no serialization types or format concepts inside them, and any future reader or writer depends on
+them, never the reverse. The legacy wire format was a Python JSON `DeviceSpec` and is not carried over.
 
 ### 6.6 Result representation
 
 `results` holds fields indexed by mesh node, terminal quantities per bias point, and a run record
 (inputs hash/identity, options, per-iteration convergence history, converged flag). It is plain data.
-An on-disk result format is **not decided** (R2).
+An on-disk result format is **deferred** (R2), under the same independence rule as 6.5.
 
-### 6.7 Error policy
+### 6.7 Error policy (R1, decided)
 
-Proposal: one `tcad::Error` base type with typed subclasses (degenerate mesh, singular linear system,
-non-convergence, invalid input), failing loudly on invalid input instead of silently clamping. The
-mechanism (exceptions vs `std::expected`) is **not decided** (R1). The legacy uses a typed C++
-exception hierarchy in `core/include/tcad/base/errors.hpp` [verified]. Two legacy rules are kept: a
-clamp used during Newton overshoot must not be applied to the final converged value, and a linear solve whose relative
-residual exceeds a threshold is an error (legacy: 1e-6 for PARDISO [verified, `CLAUDE.md`]).
+- **Recoverable errors** are returned as `std::expected<T, NiTCAD::base::Error>`: invalid input, a degenerate
+  mesh, a singular or inaccurate linear solve, Newton non-convergence, cancellation. The caller decides what
+  to do. Loud failure on invalid input is kept: nothing is silently clamped.
+- **Exceptions** are used only for exceptional conditions and programmer errors (violated preconditions or
+  invariants, allocation failure). Which mechanism enforces programmer-error preconditions (exception,
+  assertion or terminate) is open (Q2).
+- **No exceptions in hot numerical kernels or Newton iterations.** Model evaluation, assembly loops, the
+  Newton loop and the linear-solver interface report failure by value. Where a dependency can throw, the
+  layer that calls it converts the exception to an error value at its boundary.
+- `Error` is a small typed value: a category (invalid input, degenerate mesh, singular system, inaccurate
+  solve, non-convergence, cancelled), a message, and optional context. The category list is a proposal, to be
+  confirmed at Unit 2.
+- The legacy uses a typed C++ exception hierarchy (`core/include/tcad/base/errors.hpp` [verified]); the new
+  design keeps its categories as values, not as exception types. Two legacy rules are kept: a clamp used
+  during Newton overshoot must not be applied to the final converged value, and a linear solve whose relative
+  residual exceeds a threshold is an error (legacy: 1e-6 for PARDISO [verified, `CLAUDE.md`]).
+- `std::expected` needs `<expected>` in the pinned MSVC toolset; this is part of V1.
 
 ### 6.8 Determinism and reproducibility
 
@@ -200,42 +223,85 @@ residual exceeds a threshold is an error (legacy: 1e-6 for PARDISO [verified, `C
   thread by posting a Win32 message.
 - This requires no extra layer: the token and observer types are defined in `solve`; the `app` layer owns the thread.
 
-## 7. Language placement
+### 6.10 Linear solver interface (D3)
+
+`linalg` exposes a small backend-neutral interface. Eigen SparseLU is the first backend. PARDISO and
+iterative backends are deferred. The interface must be shaped so adding them needs no redesign of callers:
+
+1. The input is a sparse matrix in a `linalg`-owned storage type plus right-hand sides. Eigen types are an
+   implementation detail of the Eigen backend and do not appear in the interface.
+2. Pattern analysis, numeric factorization and solve are separate steps, so a backend can reuse symbolic
+   analysis across Newton iterations. The legacy `DirectSession` keeps its symbolic analysis across Newton
+   iterations (`CLAUDE.md` [verified]). A backend that cannot reuse it simply repeats the analysis.
+3. Backend choice and options (tolerance, iteration limit, preconditioner, thread count) are explicit
+   configuration values, not environment variables. The legacy used environment variables such as
+   `PYTCAD_LINSOLVE_BACKEND` (`CLAUDE.md` [verified]); they are not carried over.
+4. Every solve returns `std::expected` with diagnostics (relative residual, and iteration count where it
+   applies). Direct and iterative backends share one result shape. A residual above the threshold is an error even
+   if the backend itself reported success (legacy: PARDISO perturbs tiny pivots instead of failing [verified]).
+5. Thread count is part of backend configuration and defaults to 1 (6.8).
+
+### 6.11 Mesh generality (R3: unstructured meshes deferred, no later rewrite)
+
+Unstructured meshes are not implemented initially. The mesh architecture must still not assume a tensor grid:
+
+1. The public mesh interface is the graph: nodes (coordinates, control volume), edges (endpoint nodes, length,
+   coupling measure) and boundary node sets. No layer above `mesh` uses (i, j, k) indexing, stride arithmetic
+   or axis-aligned stencils.
+2. Anything the legacy structured kernels compute per grid axis (for example `ii_grid.py` averages incident
+   edges per axis [verified]) must be computed from edge direction data supplied by the mesh, not from grid axes.
+3. Contacts and boundary conditions reference node (and, if needed, edge or face) sets by index, not index ranges.
+4. The tensor grid is one producer of this graph. An unstructured producer later adds a constructor and its
+   geometric-validity checks, nothing else. The legacy records one hazard to design against: its unstructured
+   stencil gave negative dual-cell areas for clockwise triangles, a quirk pinned by a test and not fixed (legacy
+   `ARCHITECTURE.md`, section 5.1, "OPEN DECISION from P2" [verified]).
+5. How the coupling measure is defined on general meshes (for example a dual-cell construction) is not decided here.
+
+## 7. Language placement (D6: C and Fortran deferred)
 
 | Component | Language | Reason |
 |---|---|---|
 | base, linalg, mesh, physics, device, results, assemble, solve, analysis, render, app | C++23 | primary language |
-| Any later low-level kernel | C or Fortran | only when the owner names the kernel and a benchmark justifies it |
+| Any later low-level kernel | C or Fortran | deferred; only for a measured, justified component named by the owner |
 
-Starting everything in C++23 is the recommendation (D6). The legacy has no Fortran or C source [verified:
-no `.f90/.c/.h` files in the legacy tree listing]. A language is not added merely to use all three.
+C and Fortran integration is deferred. If introduced later, it is used only for a measured and justified
+component, behind a stable boundary (a C ABI), and the primary architecture stays C++23. Such a component must
+be toolchain-compatible with D1 (MSVC); no Fortran compiler is chosen now. The legacy has no Fortran or C
+source [verified: no `.f90/.c/.h` files in the legacy tree listing].
 
 ## 8. Proposed repository layout (nothing is created)
 
 ```text
 ARCHITECTURE.md
-CMakeLists.txt        top-level build; enforces C++23              (Unit 1)
-include/<ns>/<layer>/...   public headers per layer                (created per unit)
-src/<layer>/...            implementations                         (created per unit)
-tests/<layer>/...          C++ tests mirroring src/                (created per unit)
-app/                       Win32 entry point                       (created at L8 only)
+CMakeLists.txt              top-level build; enforces C++23                 (Unit 1)
+vcpkg.json                  vcpkg manifest with pinned baseline (D8)        (Unit 1)
+include/NiTCAD/<layer>/...  public headers per layer                        (created per unit)
+src/<layer>/...             implementations                                 (created per unit)
+tests/<layer>/...           Catch2 tests mirroring src/                     (created per unit)
+app/                        Win32 entry point                               (created at L8 only)
 ```
 
-Not part of the proposed structure until actually required: `cmake/` (toolchain modules), `benchmarks/`
-(measured performance cases), CI configuration. The layer directory names and the namespace (`tcad` in the
-legacy) are suggestions pending D5. A unit adds its headers, sources and tests together.
+The layer names are decided (D5). The casing of the include root and the namespace nesting are provisional (Q1).
+Not part of the structure until the owner approves them in a unit request: `CMakePresets.json`, `cmake/`
+(toolchain modules), `benchmarks/` (measured performance cases) and CI configuration. D8 requires a
+reproducible CI dependency and cache strategy. That strategy is a design item to specify before CI exists
+(V2); it is not implemented here. A unit adds its headers, sources and tests together.
 
 ## 9. Build, test and warnings
 
-- **Build system:** CMake. The C++23 requirement is enforced by the build, not trusted to defaults:
-  set `CMAKE_CXX_STANDARD 23`, `CXX_STANDARD_REQUIRED ON`, `CXX_EXTENSIONS OFF`, and fail at configure time
-  if the compiler cannot compile a probe using the C++23 features the code actually uses. Whether the
-  chosen compiler's "C++23" mode is a stable mode or a preview/latest mode, and which library features it
-  supports, **requires verification** before D1 is approved (section 12).
-- **Warning policy** (defined here, specific flags depend on D1): first-party code is compiled at a high
-  warning level with warnings treated as errors; third-party headers are included as system headers so
-  their warnings do not fail the build.
-- **Compiler, test framework, solver, dependency mechanism:** see D1, D2, D3, D8.
+- **Build system:** CMake. The C++23 requirement is enforced by the build, not trusted to defaults: set
+  `CMAKE_CXX_STANDARD 23`, `CXX_STANDARD_REQUIRED ON`, `CXX_EXTENSIONS OFF`, and fail at configure time if the
+  compiler cannot compile a probe using the C++23 features the code actually uses (for example `<expected>`).
+- **Toolchain (D1, provisional):** MSVC, with a specific toolset version pinned. The pinned toolset, the
+  switch that selects C++23 in it, and the language and library features the code needs must be verified before
+  Unit 1 (V1). Nothing about MSVC's C++23 support is asserted in this document.
+- **Dependencies (D8, provisional):** CMake with vcpkg in manifest mode: a pinned vcpkg baseline, explicit
+  version constraints and overrides where required, and a reproducible CI dependency and cache strategy.
+  Eigen (D3) and Catch2 v3 (D2) come through the manifest. Port availability at the pinned baseline, their
+  behaviour under the pinned toolset in C++23 mode, and the vcpkg bootstrap source are to be verified (V2, Q3).
+- **Warning policy** (defined here, specific flags set at Unit 1 after V1): first-party code is compiled at a high
+  warning level with warnings treated as errors; third-party headers are included as system headers so their
+  warnings do not fail the build.
 - **Test levels** per component, from the legacy practice: analytic and limiting cases → published-value
   regression → Jacobian vs finite differences → dimensional-reduction identity → convergence and mesh
   independence → benchmark. A compile-only check is never the sole gate for a numerical unit.
@@ -258,23 +324,22 @@ These are the acceptance criteria the new units should meet. Source and verifica
 
 ## 11. Proposed build order (each unit = one branch)
 
-D3 and D8 (and D1/D2, which the scaffold needs) must be approved before Unit 1 starts or, at the latest, before
-the unit that uses them. The order is by dependency, so each unit is testable on arrival. Items 4–9 are
-dimension-generic from the start (D4).
+Unit 1 does not start until V1, V2 and V3 (section 14) are resolved. The order is by dependency, so each unit is
+testable on arrival. Units 4–9 are dimension-generic from the start (D4) and use no tensor-grid assumptions (6.11).
 
 | # | Unit | Layer | Legacy reference | Gate |
 |---|---|---|---|---|
-| 1 | Build scaffold: CMake, C++23 gate, test harness, dependency mechanism (D8) | — | `core/CMakeLists.txt` (reference for options only) | configure fails on a compiler without the needed C++23 features; one trivial test runs |
-| 2 | Constants, units, error base | base | `constants.py`, `core/include/tcad/base/errors.hpp` | CODATA 2018 values; V_T(300 K) = 0.025852 V |
-| 3 | Sparse matrix + baseline direct solve (D3) | linalg | `linsolve.py`, `core/src/solver/direct_lu.cpp` | known systems (e.g. analytic tridiagonal), relative residual check, singular system raises |
-| 4 | Generic node/edge/control-volume mesh; tensor-grid constructors for D = 1, 2, 3 | mesh | `mesh.py`, `mesh2d.py`, `mesh3d.py`, `core/include/tcad/mesh/stencil.hpp` | total volume matches domain (section 10); positive dual volumes; 1D/2D/3D give consistent edge geometry on a uniform grid |
-| 5 | Si material parameters, Caughey–Thomas mobility, SRH recombination (value + partials) | physics | `materials.py`, `core/include/tcad/physics/` | n_i(300 K) ≈ 1.0674e10; published mobility values (legacy `test_caughey_thomas_matches_published_silicon_values`); derivatives vs finite differences; SRH vanishes at equilibrium |
-| 6 | Device description and ohmic contact data | device | `core/include/tcad/device1d/inputs.hpp` (reference only) | construction and validation; invalid input raises |
-| 7 | Scaling, SG/Bernoulli flux, equilibrium Poisson residual + Jacobian, ohmic boundary | assemble | `core/src/device1d/device1d.cpp`, `core/src/device1d/inputs.cpp` | Bernoulli limits and symmetry; FD-Jacobian gate (section 10) |
-| 8 | Newton solver (scaled variables) and equilibrium solve | solve | `device.py` options, `device1d.cpp` | built-in potential within 2e-3 V; bulk neutrality; convergence |
+| 1 | Build scaffold: CMake, C++23 gate, vcpkg manifest with pinned baseline, Catch2 v3 harness | — | `core/CMakeLists.txt` (reference for options only) | configure fails on a toolset without the needed C++23 features; dependencies resolve from the pinned manifest; one trivial test runs |
+| 2 | Constants, units, `Error` type | base | `constants.py`, `core/include/tcad/base/errors.hpp` | CODATA 2018 values; V_T(300 K) = 0.025852 V |
+| 3 | Sparse matrix, backend-neutral solver interface (6.10), Eigen SparseLU backend | linalg | `linsolve.py`, `core/src/solver/direct_lu.cpp` | known systems (e.g. analytic tridiagonal); relative residual check; singular system returns an error; symbolic-reuse path exercised. A test-only second backend to prove neutrality is proposed, owner to confirm (Q5) |
+| 4 | Generic node/edge/control-volume mesh; tensor-grid constructors for D = 1, 2, 3 | mesh | `mesh.py`, `mesh2d.py`, `mesh3d.py`, `core/include/tcad/mesh/stencil.hpp` | total volume matches domain (section 10); positive dual volumes; consistent edge geometry across D = 1, 2, 3 on a uniform grid; public interface contains no (i, j, k) indexing |
+| 5 | Si material parameters, Caughey–Thomas mobility, SRH recombination, Boltzmann statistics (value + partials) | physics | `materials.py`, `core/include/tcad/physics/` | n_i(300 K) ≈ 1.0674e10; published mobility values (legacy `test_caughey_thomas_matches_published_silicon_values`); derivatives vs finite differences; SRH vanishes at equilibrium |
+| 6 | Device description and ohmic contact data | device | `core/include/tcad/device1d/inputs.hpp` (reference only) | construction and validation; invalid input returns an error |
+| 7 | Scaling (V3), SG/Bernoulli flux, equilibrium Poisson residual + Jacobian, ohmic boundary | assemble | `core/src/device1d/device1d.cpp`, `core/src/device1d/inputs.cpp` | Bernoulli limits and symmetry; FD-Jacobian gate (section 10) |
+| 8 | Newton solver (scaled variables) and equilibrium solve | solve | `device.py` options, `device1d.cpp` | built-in potential within 2e-3 V; bulk neutrality; convergence; non-convergence returns an error value |
 | 9 | Electron/hole continuity assembly and bias solve; first end-to-end gate | assemble, solve | `device1d.cpp`, `tests/test_validation.py`, `tests/test_device1d_native_gates.py` | J(0.5 V) = 1.280e-2 A/cm² ± 1%; ideal-diode law; current continuity; mesh independence; uniform 2D/3D reproduces 1D to a tolerance set at this unit |
 | 10 | Result representation, cancellation and progress | results, solve | — (new) | cancellation returns partial results; progress is monotonic |
-| 11+ | Everything else: Fermi–Dirac, Auger, band-gap narrowing, field mobility, heterojunctions, impact ionization, BTBT, transient, AC, thermal, process, analysis, render, app | deferred | per the audit | per unit, when the owner requests |
+| 11+ | Everything else: Fermi–Dirac, Auger, band-gap narrowing, field mobility, heterojunctions, impact ionization, BTBT, transient, AC, thermal, process, unstructured meshes, PARDISO/iterative backends, file formats, analysis, render, app | deferred | per the audit | per unit, when the owner requests |
 
 Units 1–9 are the smallest end-to-end vertical slice: a validated drift-diffusion diode. Everything past
 Unit 10 is deferred until sequenced. Nothing in this table is started.
@@ -308,18 +373,19 @@ Unit 10 is deferred until sequenced. Nothing in this table is started.
 
 **Unverified: do not rely on these**
 - That the constants file corresponds to CODATA 2018 (edition not named in the file).
-- The exact definitions of `LD`, `J0`, `R0`, and the exact normalization of the 5e-5 Jacobian gate.
-- Any MSVC/clang/MinGW claim about C++23 mode, library feature support (`std::expected`, `std::mdspan`,
+- The exact definitions of `LD`, `J0`, `R0` (V3), and the exact normalization of the 5e-5 Jacobian gate.
+- Any MSVC/clang/MinGW claim about C++23 mode (V1), library feature support (`std::expected`, `std::mdspan`,
   explicit object parameters), multidimensional subscript support, or Eigen compatibility with the C++23 flag.
 - Fortran toolchain claims: that MSVC has no Fortran compiler; which Fortran compilers (Intel ifx, LLVM Flang,
   gfortran) can interoperate with which C++ ABI on Windows; CMake generator support for each.
-- Catch2 v3 packaging (compiled library vs header-only), and the MKL licence terms.
+- Catch2 v3 and Eigen availability and behaviour as vcpkg ports under MSVC C++23 (V2), Catch2 v3 packaging
+  (compiled library vs header-only), and the MKL licence terms.
 - Whether Direct3D 12 / Direct2D headers work under a MinGW toolchain.
 
 ## 13. Risks
 
-1. **C++23 on Windows.** Compiler mode and library support are unverified (section 12). Mitigation: verify
-   before D1 is approved; the configure-time probe fails loudly.
+1. **C++23 on Windows.** Compiler mode and library support are unverified (section 12). Mitigation: V1 must be
+   resolved before Unit 1 (D1 is provisional until then); the configure-time probe fails loudly.
 2. **Fortran coupling to the C++ toolchain.** If Fortran is ever used, its compiler and runtime must be
    ABI-compatible with the C++ compiler, which constrains D1. Mitigation: D6 defers Fortran, and any later
    Fortran sits behind a C ABI in a separate library.
@@ -334,29 +400,60 @@ Unit 10 is deferred until sequenced. Nothing in this table is started.
 
 ## 14. Decisions
 
-D7 of the earlier draft (the branch name for this file) was not a decision and is withdrawn. It is a status
-item: this proposal lives on `architecture/architecture-proposal`. Numbering is otherwise kept stable.
+Recorded by the owner. D7 of an earlier draft (the branch name for this file) was not a decision and is
+withdrawn; numbering is otherwise kept stable. This proposal lives on `architecture/architecture-proposal`.
 
-| # | Decision | Options | Recommendation | Status |
-|---|---|---|---|---|
-| D1 | **Windows C++23 toolchain**: C++ compiler and version, standard library, build generator, and the C++23 gate (the configure-time probe). The C++ compiler only; Fortran is D6 | A. MSVC (VS Build Tools, minimum version to be verified) + Ninja or VS generator · B. clang-cl on the MSVC STL · C. MinGW-w64 g++ (the legacy toolchain) | A, **subject to verifying** the C++23 mode and the library features the code uses. B is a fallback if MSVC lacks one. C is not recommended: native Win32/D3D12/D2D headers under MinGW are unverified. | Open |
-| D2 | C++ test framework | Catch2 · doctest · GoogleTest · plain `ctest` with asserts | Catch2 (the legacy core planned it behind `TCAD_BUILD_TESTS`); verify its packaging under D8 | Open |
-| D3 | Baseline sparse direct linear solver (needed before the first Newton unit, which is Unit 8; Unit 3 delivers it) | Eigen SparseLU · MKL PARDISO · own implementation | Eigen SparseLU behind a small `linalg` interface, so PARDISO can be added later if a new-repo benchmark justifies it. Not decided for the owner. | Open, **must be approved before Unit 3** |
-| D4 | Dimensional strategy | A. dimension-generic node/edge graph (box method) from the first unit · B. per-dimension codebases | A. This document is written assuming A. Choosing B would change units 4–9. | Open |
-| D5 | Layer directory names and the C++ namespace | as in section 3 · owner's names | owner's naming | Open |
-| D6 | Fortran and C | defer entirely · name a first kernel now | Defer until a measured need exists. If adopted later: a Fortran compiler that is ABI-compatible with the D1 compiler, behind a C ABI. | Open |
-| D7 | withdrawn (see above) | — | — | Withdrawn |
-| D8 | **Dependency acquisition and management** (Catch2, Eigen, any later dependency) | A. vendored in the repo · B. a package manager (e.g. vcpkg, Conan) · C. CMake `FetchContent` · D. preinstalled/system dependency · E. another controlled mechanism | Not chosen here. Each option affects the owner-controlled file tree (A adds a third-party directory), reproducibility (D depends on the machine) and network use at configure time (B, C). The mechanism must pin versions. | Open, **must be approved before Unit 1** |
+### 14.1 Decided
 
-### Remaining architectural decisions (not part of D1–D8)
-
-| # | Question |
+| # | Decision |
 |---|---|
-| R1 | Error mechanism: exceptions, `std::expected`, or a mix (6.7) |
-| R2 | On-disk input and result formats (6.5, 6.6); none exist yet |
-| R3 | Whether unstructured meshes are in the initial scope or the mesh stays tensor-grid until requested |
-| R4 | Statistics scope of the first physics unit: Boltzmann only (as in the proposed Unit 5) or also Fermi–Dirac |
-| R5 | Exact scaling definitions to adopt (6.1), confirmed against `device1d.cpp` when requested |
+| D2 | Catch2 v3 is the C++ test framework. Its availability through vcpkg is checked under V2; the decision stands. |
+| D4 | Dimension-generic architecture for 1D, 2D and 3D. |
+| D5 | Root namespace `NiTCAD`. Layers: `base`, `linalg`, `mesh`, `physics`, `device`, `assemble`, `solve`, `results`, `analysis`, `render`, `app`. (Namespace nesting and include-root casing: provisional, Q1.) |
+| R1 | `std::expected` for recoverable errors; exceptions only for exceptional or programmer-error cases; no exceptions in hot numerical kernels or Newton iterations (6.7). |
+| R4 | Boltzmann carrier statistics initially; Fermi–Dirac and other statistics deferred until requested (section 5, item 7). |
 
-**Approval workflow:** this document stays marked "PROPOSAL, awaiting decisions" until the architecture and
-D1–D6 and D8 are approved. No unit starts before that, and the owner names each unit.
+### 14.2 Provisionally decided (stand unless verification or Unit work disproves them)
+
+| # | Decision | Provisional because |
+|---|---|---|
+| D1 | MSVC is the Windows C++23 toolchain, with one specific toolset pinned. C++ compiler only. | The toolset, C++23 mode and required features are unverified (V1). |
+| D3 | Eigen SparseLU is the initial sparse direct solver behind a backend-neutral interface that allows PARDISO and iterative backends later without redesign (6.10). | The exact interface shape is settled at Unit 3. |
+| D8 | CMake + vcpkg manifest mode, pinned baseline, explicit version constraints/overrides where required, reproducible CI dependency/cache strategy. | Baseline choice, port availability and the CI cache strategy are unverified or unspecified (V2). |
+| D5 (part) | `NiTCAD::<layer>` nesting; `include/NiTCAD/<layer>/`. | Owner named the root namespace and layers only (Q1). |
+
+### 14.3 Deferred
+
+| # | Item | Condition to revisit |
+|---|---|---|
+| D6 | C and Fortran integration | A measured, justified component is named by the owner. The primary architecture stays C++23. |
+| R2 | External input/output file formats | Concrete requirements exist. Internal input/result types stay independent of any format. |
+| R3 | Unstructured-mesh implementation | The owner requests it. The mesh design must already allow it without a rewrite (6.11). |
+| — | Fermi–Dirac and other statistics | Requested (R4). |
+| — | PARDISO and iterative solver backends | Requested; the interface already accommodates them (6.10). |
+
+### 14.4 Blocking verification
+
+Nothing in this table has been done. Unit 1 does not start until V1–V3 are resolved.
+
+| # | What must be verified | Blocks |
+|---|---|---|
+| V1 | The exact MSVC toolset to pin; how that toolset enables C++23 and whether it is a stable or preview mode; which language and library features the code needs, including `<expected>` (R1) and `<stop_token>` (6.9); that Eigen and Catch2 compile in that mode. | D1; Unit 1 |
+| V2 | vcpkg: the pinned baseline; that Eigen and Catch2 v3 ports exist at the pinned versions; manifest mode with the chosen CMake generator; where version overrides are needed; where vcpkg itself comes from (Q3); the CI dependency/cache strategy. | D8; Unit 1 |
+| V3 | R5: the exact scaling definitions (`Ns`, `LD`, `J0`, `R0`, `eps`, the scaled variable forms) read from legacy `device1d.cpp` and `inputs.cpp`, then recorded in 6.1. | R5; Unit 1 (per owner), consumed at Unit 7 |
+
+Verifications due at their own unit, not blocking Unit 1: CODATA edition of the constants (Unit 2), the exact
+normalization of the 5e-5 Jacobian gate (Unit 7), the `_diode()` fixture parameters (Unit 9).
+
+### 14.5 Remaining architectural questions
+
+| # | Question | Needed by |
+|---|---|---|
+| Q1 | Namespace nesting (`NiTCAD::<layer>` vs one flat namespace) and include-root casing (`include/NiTCAD/` vs lowercase) | Unit 1 |
+| Q2 | Mechanism for programmer-error preconditions: exception, assertion or terminate (6.7) | Unit 2 |
+| Q3 | Where vcpkg comes from (the copy bundled with Visual Studio vs a pinned standalone checkout), and whether `CMakePresets.json` and a CI workflow are part of Unit 1 | Unit 1 |
+| Q4 | Final `Error` category list (6.7) | Unit 2 |
+| Q5 | Whether Unit 3 includes a test-only second backend to prove backend neutrality | Unit 3 |
+
+**Approval workflow:** the owner names each unit. No unit starts before V1–V3 are resolved and the owner
+approves the result.
