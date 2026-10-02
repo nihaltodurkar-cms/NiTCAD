@@ -298,6 +298,25 @@ a build test compiles the public `linalg` headers in a translation unit with no 
 leaking into the interface fails the build; and all Unit 3 tests are written against the interface only. Whether one
 interface fits both direct and iterative backends stays unproven until one is requested.
 
+**As built (Unit 3, `include/NiTCAD/linalg/`):**
+- `SparseMatrix`: CSR with `std::int32_t` indices (Eigen's and LP64 PARDISO's index type), built from triplets.
+  Duplicates are summed in input order; explicit zeros stay in the pattern; values can be rewritten in place, the pattern
+  cannot. Bad dimensions or indices are `invalid_input`.
+- `LinearSolver::create(SolverConfig)` validates `backend`, `threads` (Eigen SparseLU: exactly 1) and
+  `max_relative_residual` (default 1e-6, the legacy PARDISO value, now applied to every backend).
+- `analyze`, `factorize` and `solve` are separate. `factorize` re-analyzes whenever the pattern differs from the analyzed
+  one, so a caller is always correct and the `analyses()` and `factorizations()` counters show the reuse. A failed analysis
+  or factorization keeps nothing, so the next call analyzes afresh (legacy behaviour).
+- Acceptance lives in `LinearSolver`, not in the backend: non-finite `x`, or `||Ax − b||₂/||b||₂` (absolute when b = 0)
+  above the threshold, is `inaccurate_solve`. Non-finite A or b is `invalid_input` and names the row. `std::bad_alloc` is
+  caught at this boundary and becomes `resource_exhausted`. Shape mismatches and overlapping b and x go through
+  `NITCAD_EXPECTS`.
+- Backend: Eigen SparseLU with COLAMD ordering, in `src/linalg/eigen_sparse_lu.*` (private), linked `PRIVATE`. It keeps a
+  column-compressed copy of the pattern and a CSR-to-CSC position map, so each factorization only scatters values.
+- Not carried from the legacy `ReusableLU`/`DirectSession`: the subset-scatter and union-pattern re-analysis (only the
+  deferred nonlocal models need them), the AMD ordering switch (measured pathological), and the size and instability
+  fallbacks to SciPy (no SciPy here).
+
 ### 6.11 Mesh generality (R3: unstructured meshes deferred, no later rewrite)
 
 Unstructured meshes are not implemented initially. The mesh architecture must still not assume a tensor grid:
@@ -339,6 +358,9 @@ tests/scaffold_test.cpp     Unit 1 scaffold test                             (Un
 include/NiTCAD/base/        constants.hpp, error.hpp, contract.hpp           (Unit 2, exists)
 src/base/contract.cpp       NITCAD_EXPECTS failure path                      (Unit 2, exists)
 tests/base/                 constants, error, contract tests and probe       (Unit 2, exists)
+include/NiTCAD/linalg/      sparse_matrix.hpp, linear_solver.hpp             (Unit 3, exists)
+src/linalg/                 sparse matrix, solver, private Eigen backend     (Unit 3, exists)
+tests/linalg/               matrix, solver and header-boundary tests         (Unit 3, exists)
 .github/workflows/ci.yml    CI: build and test Debug and Release per branch  (CI unit, exists)
 include/NiTCAD/<layer>/...  public headers per layer                         (created per unit)
 src/<layer>/...             implementations                                  (created per unit)
@@ -435,8 +457,8 @@ testable on arrival. Units 4–9 are dimension-generic from the start (D4) and u
 | # | Unit | Layer | Legacy reference | Gate |
 |---|---|---|---|---|
 | 1 | Build scaffold: CMake, C++23 gate, vcpkg manifest with pinned baseline, Catch2 v3 harness | — | `core/CMakeLists.txt` (reference for options only) | configure fails on a toolset without the needed C++23 features; dependencies resolve from the pinned manifest; one trivial test runs |
-| 2 | Constants, units, `Error` type, `NITCAD_EXPECTS` (**done on branch `core/base`**) | base | `constants.py`, `core/include/tcad/base/errors.hpp` | CODATA 2018 values; V_T(300 K) = 0.025852 V |
-| 3 | Sparse matrix, backend-neutral solver interface (6.10), Eigen SparseLU backend | linalg | `linsolve.py`, `core/src/solver/direct_lu.cpp` | known systems (e.g. analytic tridiagonal); relative residual check; singular system returns an error; symbolic-reuse path exercised. A test-only second backend to prove neutrality is proposed, owner to confirm (Q5) |
+| 2 | Constants, units, `Error` type, `NITCAD_EXPECTS` (**done, on `main`**) | base | `constants.py`, `core/include/tcad/base/errors.hpp` | CODATA 2018 values; V_T(300 K) = 0.025852 V |
+| 3 | Sparse matrix, backend-neutral solver interface (6.10), Eigen SparseLU backend (**done on branch `core/linalg`**) | linalg | `linsolve.py`, `core/src/solver/direct_lu.cpp` | known systems (e.g. analytic tridiagonal); relative residual check; singular system returns an error; symbolic-reuse path exercised; header-boundary check, no second backend (Q5) |
 | 4 | Generic node/edge/control-volume mesh; tensor-grid constructors for D = 1, 2, 3 | mesh | `mesh.py`, `mesh2d.py`, `mesh3d.py`, `core/include/tcad/mesh/stencil.hpp` | total volume matches domain (section 10); positive dual volumes; consistent edge geometry across D = 1, 2, 3 on a uniform grid; public interface contains no (i, j, k) indexing |
 | 5 | Si material parameters, Caughey–Thomas mobility, SRH recombination, Boltzmann statistics (value + partials) | physics | `materials.py`, `core/include/tcad/physics/` | n_i(300 K) ≈ 1.0674e10; published mobility values (legacy `test_caughey_thomas_matches_published_silicon_values`); derivatives vs finite differences; SRH vanishes at equilibrium |
 | 6 | Device description and ohmic contact data | device | `core/include/tcad/device1d/inputs.hpp` (reference only) | construction and validation; invalid input returns an error |
@@ -447,7 +469,7 @@ testable on arrival. Units 4–9 are dimension-generic from the start (D4) and u
 | 11+ | Everything else: Fermi–Dirac, Auger, band-gap narrowing, field mobility, heterojunctions, impact ionization, BTBT, transient, AC, thermal, process, unstructured meshes, PARDISO/iterative backends, file formats, analysis, render, app | deferred | per the audit | per unit, when the owner requests |
 
 Units 1–9 are the smallest end-to-end vertical slice: a validated drift-diffusion diode. Everything past
-Unit 10 is deferred until sequenced. Nothing in this table is started.
+Unit 10 is deferred until sequenced. Units 4 onward are not started.
 
 ## 12. Legacy facts: verified, derived and unverified
 
@@ -564,7 +586,7 @@ withdrawn; numbering is otherwise kept stable. This proposal lives on `architect
 
 | # | Decision | Provisional because |
 |---|---|---|
-| D3 | Eigen SparseLU is the initial sparse direct solver behind a backend-neutral interface that allows PARDISO and iterative backends later without redesign (6.10). | The exact interface shape is settled at Unit 3. |
+| D3 | Eigen SparseLU is the initial sparse direct solver behind a backend-neutral interface that allows PARDISO and iterative backends later without redesign (6.10). | The interface shape was built in Unit 3 (6.10, "As built") and awaits the owner's review of that unit. Fit for an iterative backend is unproven until one is requested. |
 | N1 | Dynamic CRT: `CMAKE_MSVC_RUNTIME_LIBRARY` = `MultiThreaded$<$<CONFIG:Debug>:Debug>DLL`, matching `x64-windows-static-md`. | Advisor suggestion; the owner has not ruled on N1–N4 explicitly. |
 | N2 | `/fp:precise` and no `/arch:` flag (no AVX2 assumption). | A neutral default chosen by me for Unit 1; the advisor gave no recommendation. Affects tolerance-based reproducibility (6.8). |
 | N3 | `/EHsc` (Eigen and the standard library can throw). | Advisor suggestion. |
@@ -591,6 +613,7 @@ withdrawn; numbering is otherwise kept stable. This proposal lives on `architect
 | V5 | Q3 prerequisite and Unit 1 run: a standalone vcpkg checkout at the baseline commit (partial clone, `--filter=blob:none`, in `C:\Users\disha\vcpkg`, bootstrapped; tool release 2026-09-26) resolved the manifest with the Eigen 5.0.1 and Catch2 3.16.0 overrides. The Unit 1 configure, build and test passed in Debug and Release. Negative checks: `/std:c++20` fails the gate (`#error`, C1189); an ignored `/std:c++23` fails it (D8043); a `VCPKG_ROOT` that is not a git checkout at the pinned commit fails configuration. **Not tested:** an unset `VCPKG_ROOT`, CI, any other machine. | Verified locally. |
 | V6 | CI workflow: the YAML parses and defines the intended triggers, matrix and steps; the pinned CMake download matches Kitware's published SHA-256 and Ninja runs as 1.13.2 locally. First CI run (push and pull request, run 36939739285): all version assertions passed; the job failed on the `VCPKG_ROOT` override described in section 9 (fixed in `a2b4b6a`). After the fix both Debug and Release passed on push and pull request, and the vcpkg binary cache restored on a re-run. | Verified on the hosted runner. |
 | V7 | Unit 2 (`core/base`): the legacy constants are the CODATA 2018 values: eps0 8.8541878128(13)e-12 F/m, m_e 9.1093837015(28)e-31 kg and the exact hbar, per NIST (`physics.nist.gov/cuu/pdf/wall_2018.pdf`; CODATA 2022 changed eps0 and m_e at about 1e-9, so pinning 2018 is what preserves legacy results). `FAST_FAIL_FATAL_APP_EXIT` = 7 in Windows SDK 10.0.26100.0 `winnt.h`. Debug and Release: 12 Catch2 test cases pass, no warnings. A wrong eps0 (CODATA 2022) fails the constants test. | Verified locally. |
+| V8 | Unit 3 (`core/linalg`): Debug and Release build with no warnings and pass 23 Catch2 test cases in `nitcad_linalg_test`. Neutrality check bites: a public header including `<Eigen/Core>` (C1083), including `<eigen3/Eigen/Core>` (C1189 on `EIGEN_WORLD_VERSION`) and Eigen linked `PUBLIC` (C1189 on `__has_include`) each fail the build; checked by temporary edits, then reverted. Eigen 5.0.1 SparseLU does not set `info()` when it cannot allocate its working memory but always sets `lastErrorMessage()`; the backend tests the message first. **Not tested:** `std::bad_alloc` and Eigen's out-of-memory path (`resource_exhausted`), more than 2³¹ − 1 nonzeros. | Verified locally. |
 | V3 | Scaling definitions, scaled variables and Newton tolerances read from `inputs.cpp` and `device1d.cpp` and recorded in 6.1. One open question remains for Unit 8 (convergence criterion on the clipped correction). | Verified |
 
 Verifications due at their own unit, not blocking Unit 1: the exact
@@ -603,7 +626,7 @@ normalization of the 5e-5 Jacobian gate (Unit 7), the `_diode()` fixture paramet
 | N6 | Licence of NiTCAD. Eigen is MPL-2.0, which affects static linking of release binaries. The repository `LICENSE` file was not checked | before release |
 | N7 | Whether clang-format, `/analyze` or clang-tidy are wanted at all (feature freeze) | owner |
 
-Nothing in this table blocks Unit 1 or Unit 2.
+Nothing in this table blocks Units 1–3.
 
 **Approval workflow:** the owner names each unit. Each unit is built on its own branch, tested, committed and reported, and is
 not merged without the owner's instruction.

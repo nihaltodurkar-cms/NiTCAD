@@ -79,6 +79,7 @@ add_compile_definitions(UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN)
 
 # --- Dependencies (from vcpkg.json) ------------------------------------------------
 find_package(Catch2 3 CONFIG REQUIRED)
+find_package(Eigen3 CONFIG REQUIRED)
 
 # --- Scaffold test -----------------------------------------------------------------
 enable_testing()
@@ -105,3 +106,21 @@ target_link_libraries(nitcad_contract_probe PRIVATE NiTCAD::base)
 add_dependencies(nitcad_base_test nitcad_contract_probe)
 target_compile_definitions(nitcad_base_test PRIVATE
   NITCAD_CONTRACT_PROBE_PATH="$<TARGET_FILE:nitcad_contract_probe>")
+
+# --- linalg layer (sparse matrix, backend-neutral solver, Eigen SparseLU backend) ---
+add_library(nitcad_linalg STATIC
+  src/linalg/sparse_matrix.cpp
+  src/linalg/linear_solver.cpp
+  src/linalg/eigen_sparse_lu.cpp)
+add_library(NiTCAD::linalg ALIAS nitcad_linalg)
+target_include_directories(nitcad_linalg PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
+# Eigen is PRIVATE so its include path never reaches linalg consumers (6.10, Q5);
+# tests/linalg/header_boundary_test.cpp fails to compile if it does.
+target_link_libraries(nitcad_linalg PUBLIC NiTCAD::base PRIVATE Eigen3::Eigen)
+
+add_executable(nitcad_linalg_test
+  tests/linalg/sparse_matrix_test.cpp
+  tests/linalg/linear_solver_test.cpp
+  tests/linalg/header_boundary_test.cpp)
+target_link_libraries(nitcad_linalg_test PRIVATE NiTCAD::linalg Catch2::Catch2WithMain)
+add_test(NAME linalg COMMAND nitcad_linalg_test)
