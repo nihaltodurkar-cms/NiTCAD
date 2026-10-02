@@ -256,6 +256,29 @@ equilibrium boundary value. Schottky, gate and oxide-coupled contacts are deferr
 conditions are residual and Jacobian rows, so contact handling lives in `assemble`, and terminal current
 is computed from fluxes in `assemble`/`solve`. It is not an `analysis` quantity.
 
+**As built (Unit 6, `include/NiTCAD/device/`, sections 6.3 and 6.4):**
+- `Device::create(DeviceDescription)` validates once and owns its parts: the mesh (moved in), a uniform lattice temperature
+  (in the device, as in the legacy `Device1D(x, doping, T, …)`), named regions each holding a validated
+  `physics::Semiconductor`, the region of every node, the donor and acceptor concentrations of every node, and the contacts.
+  Accessors return spans; `net_doping`, `total_impurity` and `material` give per-node values.
+- Doping is stored as N_D and N_A, not as net doping. Poisson needs N_D − N_A and the mobility and lifetime need N_D + N_A,
+  so a compensated region is described exactly. The legacy took the net doping plus an optional `Ntotal` defaulting to
+  |net| (`device.py`, `Device1D.__init__` [verified]); that default is the case where each node has one dopant type.
+- `Contact` is a name, `ContactKind::ohmic` and strictly increasing node ids. Each node must be on a mesh boundary patch (6.4:
+  boundary nodes) and in no other contact (two Dirichlet values for one node). The applied bias is not device data; it
+  belongs to the solve layer.
+- Every error is `invalid_input`, and the message and context index name the region, node or contact at fault: missing or
+  repeated region names; the temperature, through `physics::check_temperature` for each region's material (the message
+  names the region); per-node arrays of the wrong size, a region index out of range, a region with no nodes; doping not
+  finite and ≥ 0; contact name, node and boundary errors.
+- **Topology (the gate from 6.10):** every connected part of the mesh graph must contain a contact node, otherwise
+  `invalid_input` ("floating region") with the lowest node of that part. Ohmic contact rows are Dirichlet rows for all
+  three equations, so on an accepted device every connected part of every equation has one. Units 7 and 8 may then set
+  `min_pivot_ratio = 0` for device solves, provided their contact rows really are Dirichlet. One contact is enough.
+- Not carried from the legacy: `check_mesh` (it prints the worst spacing-to-Debye-length ratio and does not validate
+  anything), the warning for doping above 1e19 cm⁻³ under Boltzmann statistics (there is no warning channel; Fermi–Dirac is
+  deferred), and `graded_mesh` (not requested).
+
 ### 6.5 Input representation
 
 The authoritative input is the in-memory C++ `device` description plus a solver-options struct. An
@@ -411,7 +434,7 @@ interface fits both direct and iterative backends stays unproven until one is re
   should build the pattern once and assemble values in place; Newton tests should assert `analyses() == 1`.
 - The pivot-ratio check cannot tell a floating region from a weakly anchored one (see Singularity above). Gates for later
   units: Unit 6 checks topology (every connected region of each equation has a Dirichlet row or a zeroth-order term),
-  after which device solves may set `min_pivot_ratio = 0`; Unit 9 must show that reverse-biased diode Jacobians (one-sided
+  after which device solves may set `min_pivot_ratio = 0` (done: every connected part needs a contact, see 6.4 "As built"); Unit 9 must show that reverse-biased diode Jacobians (one-sided
   Scharfetter–Gummel links of order e^-40) are not flagged.
 - Untested failure paths: `std::bad_alloc`, Eigen's out-of-memory messages, the COLAMD size guard (it needs about 1e9
   nonzeros), and a refinement step that increases the backward error.
@@ -483,6 +506,9 @@ tests/mesh/                 graph validation and geometry gates              (Un
 include/NiTCAD/physics/     semiconductor, mobility, recombination, statistics (Unit 5, exists)
 src/physics/                parameter validation, band quantities, models    (Unit 5, exists)
 tests/physics/              published values, limits, FD derivative gates     (Unit 5, exists)
+include/NiTCAD/device/      device.hpp, contact.hpp                          (Unit 6, exists)
+src/device/                 description validation, topology check           (Unit 6, exists)
+tests/device/               construction, validation, floating regions       (Unit 6, exists)
 .github/workflows/ci.yml    CI: build and test Debug and Release per branch  (CI unit, exists)
 include/NiTCAD/<layer>/...  public headers per layer                         (created per unit)
 src/<layer>/...             implementations                                  (created per unit)
@@ -582,8 +608,8 @@ testable on arrival. Units 4–9 are dimension-generic from the start (D4) and u
 | 2 | Constants, units, `Error` type, `NITCAD_EXPECTS` (**done, on `main`**) | base | `constants.py`, `core/include/tcad/base/errors.hpp` | CODATA 2018 values; V_T(300 K) = 0.025852 V |
 | 3 | Sparse matrix, backend-neutral solver interface (6.10), Eigen SparseLU backend (**done, on `main`, with the hardening**) | linalg | `linsolve.py`, `core/src/solver/direct_lu.cpp` | known systems (e.g. analytic tridiagonal); accuracy check (backward error after hardening); singular system returns an error; symbolic-reuse path exercised; header-boundary check, no second backend (Q5) |
 | 4 | Generic node/edge/control-volume mesh; tensor-grid constructors for D = 1, 2, 3 (**done, on `main`**) | mesh | `mesh.py`, `mesh2d.py`, `mesh3d.py`, `core/include/tcad/mesh/stencil.hpp` | total volume matches domain (section 10); positive dual volumes; consistent edge geometry across D = 1, 2, 3 on a uniform grid; public interface contains no (i, j, k) indexing |
-| 5 | Si material parameters, Caughey–Thomas mobility, SRH recombination, Boltzmann statistics (value + partials) (**done on branch `physics/silicon-models`**) | physics | `materials.py`, `core/include/tcad/physics/` | n_i(300 K) ≈ 1.0674e10; published mobility values (legacy `test_caughey_thomas_matches_published_silicon_values`); derivatives vs finite differences; SRH vanishes at equilibrium |
-| 6 | Device description and ohmic contact data | device | `core/include/tcad/device1d/inputs.hpp` (reference only) | construction and validation; invalid input returns an error |
+| 5 | Si material parameters, Caughey–Thomas mobility, SRH recombination, Boltzmann statistics (value + partials) (**done, on `main`**) | physics | `materials.py`, `core/include/tcad/physics/` | n_i(300 K) ≈ 1.0674e10; published mobility values (legacy `test_caughey_thomas_matches_published_silicon_values`); derivatives vs finite differences; SRH vanishes at equilibrium |
+| 6 | Device description and ohmic contact data (**done on branch `device/device-description`**) | device | `core/include/tcad/device1d/inputs.hpp` (reference only) | construction and validation; invalid input returns an error |
 | 7 | Scaling (V3), SG/Bernoulli flux, equilibrium Poisson residual + Jacobian, ohmic boundary | assemble | `core/src/device1d/device1d.cpp`, `core/src/device1d/inputs.cpp` | Bernoulli limits and symmetry; FD-Jacobian gate (section 10) |
 | 8 | Newton solver (scaled variables) and equilibrium solve | solve | `device.py` options, `device1d.cpp` | built-in potential within 2e-3 V; bulk neutrality; convergence; non-convergence returns an error value |
 | 9 | Electron/hole continuity assembly and bias solve; first end-to-end gate | assemble, solve | `device1d.cpp`, `tests/test_validation.py`, `tests/test_device1d_native_gates.py` | J(0.5 V) = 1.280e-2 A/cm² ± 1%; ideal-diode law; current continuity; mesh independence; uniform 2D/3D reproduces 1D to a tolerance set at this unit |
@@ -591,7 +617,7 @@ testable on arrival. Units 4–9 are dimension-generic from the start (D4) and u
 | 11+ | Everything else: Fermi–Dirac, Auger, band-gap narrowing, field mobility, heterojunctions, impact ionization, BTBT, transient, AC, thermal, process, unstructured meshes, PARDISO/iterative backends, file formats, analysis, render, app | deferred | per the audit | per unit, when the owner requests |
 
 Units 1–9 are the smallest end-to-end vertical slice: a validated drift-diffusion diode. Everything past
-Unit 10 is deferred until sequenced. Units 6 onward are not started.
+Unit 10 is deferred until sequenced. Units 7 onward are not started.
 
 ## 12. Legacy facts: verified, derived and unverified
 
@@ -741,6 +767,7 @@ withdrawn; numbering is otherwise kept stable. This proposal lives on `architect
 | V10 | Follow-up review of the hardening (same branch): the pivot ratio read from Eigen equals the hand value (2/3 for diag(1, 3)); the singular index lies in the offending 4-node block at columns 3, 417 and 995, for both exact and rounding-level singularity; weakly anchored valid regions overlap the singular range (recorded in 6.10, pinned by a test); Eigen's COLAMD workspace is sized in 32 bits and its failure path writes out of bounds (`Eigen_Colamd.h:267`, `Ordering.h:140`), now guarded before the call; NaN pivots were ignored by the ratio scan, now `inaccurate_solve` (tested with an overflowing 2×2); refinement keeps the better iterate. Debug and Release: 39 test cases pass (0.45 s Release), no warnings; includes two solvers on two threads matching a serial run bit for bit. | Verified locally. |
 | V11 | Unit 4 (`core/mesh`): Debug and Release build with no warnings; `nitcad_mesh_test` has 16 test cases, all pass. Gates of section 11 on graded axes (1e3 spacing ratio): total volume equals the domain to 1e-14 relative in 1D and 2D and 1e-13 in 3D (legacy: 1e-14 2D, 1e-10 3D absolute); all volumes, lengths and areas positive; 2D and 3D grids reduce to the 1D one when grouped by x (node volumes and x-edge areas equal the 1D values times the transverse area, to 1e-14); the box method reproduces the discrete Gauss identity for linear fields in 1D, 2D and 3D to 1e-12, and that check detects a 1% error in a single coupling area; each boundary face's areas sum to the face's measure. The public interface has no grid indices: every test reads only the graph. | Verified locally. |
 | V12 | Unit 5 (`physics/silicon-models`): Debug and Release build with no warnings; `nitcad_physics_test` has 33 test cases, all pass. Gates of section 11: n_i(300 K) = 1.06738e10 (1e-4 gate; 1e-13 against a 40-digit reference computed independently from the legacy formulas); Caughey–Thomas passes the legacy published-value test (mu_n(0) = 1360, mu_n(1e18) = 263 within 25% of 300) and matches 40-digit values at 1e15–1e20 cm⁻³ and at 400 K to 1e-13; SRH is zero at equilibrium (exactly for an exactly representable np = n_ie², else at the rounding level of np) and gives dp/tau_p and dn/tau_n in low injection; dR/dn and dR/dp agree with central differences to 6.4e-11 worst (gate 1e-8), including the chain through a carrier-dependent equilibrium product. After the PR #9 review: `check_temperature` accepts silicon at 1–850 K and rejects T ≤ 0 or non-finite, Eg(T) ≤ 0 (including exactly 0) and mu_max(T) below mu_min (holes at 860 K, electrons at 1000 K) or infinite; neutral equilibrium stays finite and exact at |C| = DBL_MAX, with n_ie = 1e-170 (p = 1e-300 where the legacy gives 0) and where C / 2n_ie overflows; successful validation makes no heap allocation (counted through a replaced global operator new). Mutation checks, each failing exactly one test case: dropping the dE/dn term; alpha_n 0.91 → 0.90 (the legacy 25% mobility gate alone would not catch it; the pinned values do); each of the three legacy neutral-equilibrium forms; the old kT spelling (tested at temperatures where it rounds differently, 22–95.5 K); building the message on the success path; removing the mobility rule; accepting Eg = 0. | Verified locally. |
+| V13 | Unit 6 (`device/device-description`): Debug and Release build with no warnings; `nitcad_device_test` has 14 test cases, all pass. Valid 1D and 2D silicon diodes (contacts taken from the `x_min`/`x_max` patches), a compensated node and a two-region device are read back unchanged. Each validation rule rejects its case with `invalid_input` and the documented index. Topology: a device with no contact, either half of two interleaved disconnected chains, and an isolated node are rejected, with the lowest node of the floating part as the index; one contact per part, or one contact spanning both parts, is accepted. Mutation checks: removing the topology check, the boundary rule, the shared-node rule, the unused-region rule, or the temperature check each fails the suite. | Verified locally. |
 | V3 | Scaling definitions, scaled variables and Newton tolerances read from `inputs.cpp` and `device1d.cpp` and recorded in 6.1. One open question remains for Unit 8 (convergence criterion on the clipped correction). | Verified |
 
 Verifications due at their own unit, not blocking Unit 1: the exact
