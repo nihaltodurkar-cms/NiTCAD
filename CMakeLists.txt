@@ -85,3 +85,23 @@ enable_testing()
 add_executable(nitcad_scaffold_test tests/scaffold_test.cpp)
 target_link_libraries(nitcad_scaffold_test PRIVATE Catch2::Catch2WithMain)
 add_test(NAME scaffold COMMAND nitcad_scaffold_test)
+
+# --- base layer (constants, Error, NITCAD_EXPECTS) ---------------------------------
+add_library(nitcad_base STATIC src/base/contract.cpp)
+add_library(NiTCAD::base ALIAS nitcad_base)
+target_include_directories(nitcad_base PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
+
+add_executable(nitcad_base_test
+  tests/base/constants_test.cpp
+  tests/base/error_test.cpp
+  tests/base/contract_test.cpp)
+target_link_libraries(nitcad_base_test PRIVATE NiTCAD::base Catch2::Catch2WithMain)
+add_test(NAME base COMMAND nitcad_base_test)
+
+# A violated NITCAD_EXPECTS terminates the process, so contract_test.cpp runs this probe
+# executable as a child process and inspects its exit code and stderr.
+add_executable(nitcad_contract_probe tests/base/contract_probe.cpp)
+target_link_libraries(nitcad_contract_probe PRIVATE NiTCAD::base)
+add_dependencies(nitcad_base_test nitcad_contract_probe)
+target_compile_definitions(nitcad_base_test PRIVATE
+  NITCAD_CONTRACT_PROBE_PATH="$<TARGET_FILE:nitcad_contract_probe>")
