@@ -2,99 +2,44 @@
 
 #include <algorithm>
 #include <cmath>
-#include <optional>
-#include <string>
 #include <utility>
 
 #include "NiTCAD/assemble/ohmic.hpp"
-#include "NiTCAD/base/constants.hpp"
 #include "NiTCAD/base/contract.hpp"
-#include "NiTCAD/physics/semiconductor.hpp"
 #include "NiTCAD/physics/statistics.hpp"
+#include "scaled_device.hpp"
 
 namespace NiTCAD::assemble {
 
-namespace {
-
-base::Error invalid(std::string message, std::optional<std::size_t> index = std::nullopt) {
-    return {base::ErrorCode::invalid_input, std::move(message),
-            base::ErrorContext{.index = index, .value = std::nullopt}};
-}
-
-// Position of (row, col) in the CSR values; the entry must exist.
-std::size_t position(const linalg::SparseMatrix& m, std::size_t row, std::size_t col) {
-    const auto offsets = m.row_offsets();
-    const auto cols = m.col_indices();
-    for (auto k = static_cast<std::size_t>(offsets[row]);
-         k < static_cast<std::size_t>(offsets[row + 1]); ++k) {
-        if (static_cast<std::size_t>(cols[k]) == col) return k;
-    }
-    NITCAD_EXPECTS(false);
-    return 0;
-}
-
-}  // namespace
-
 std::expected<EquilibriumPoisson, base::Error> EquilibriumPoisson::create(
     const device::Device& device, const Scaling& scaling) {
-    if (scaling.temperature_K != device.temperature_K()) {
-        return std::unexpected(invalid("scaling temperature differs from the device's"));
-    }
-    const mesh::Mesh& m = device.mesh();
-    const auto regions = device.regions();
-    const auto node_region = device.node_region();
-    for (std::size_t e = 0; e < m.edges().size(); ++e) {
-        const mesh::Edge& edge = m.edges()[e];
-        const auto region_of = [&](mesh::NodeId v) {
-            return static_cast<std::size_t>(node_region[static_cast<std::size_t>(v)]);
-        };
-        const std::size_t ra = region_of(edge.first);
-        const std::size_t rb = region_of(edge.second);
-        if (ra != rb &&
-            !(regions[ra].material.parameters() == regions[rb].material.parameters())) {
-            return std::unexpected(invalid(
-                "heterojunction between regions '" + regions[ra].name + "' and '" +
-                    regions[rb].name + "': band offsets and permittivity steps are deferred",
-                e));
-        }
-    }
-
-    const std::size_t n = m.node_count();
-    const int D = m.dimension();
-    const double volume_scale = std::pow(scaling.L_D, D);
-    const double coupling_scale = std::pow(scaling.L_D, D - 2);
-    const double eps_r_ref = scaling.eps_F_per_cm / base::eps0_F_per_cm;
+    auto scaled = detail::make_scaled_device(device, scaling);
+    if (!scaled) return std::unexpected(std::move(scaled.error()));
+    const std::size_t n = scaled->volume.size();
 
     EquilibriumPoisson p;
-    p.volume_.resize(n);
-    p.doping_.resize(n);
-    p.n_ie_.resize(n);
+    p.volume_ = std::move(scaled->volume);
+    p.doping_ = std::move(scaled->doping);
+    p.n_ie_ = std::move(scaled->n_ie);
     p.psi0_.assign(n, 0.0);
     p.contact_.assign(n, 0);
     for (std::size_t i = 0; i < n; ++i) {
-        const auto node = static_cast<mesh::NodeId>(i);
-        p.volume_[i] = m.volumes()[i] / volume_scale;
-        p.doping_[i] = device.net_doping(node) / scaling.Ns;
-        p.n_ie_[i] = physics::intrinsic_density(device.material(node), scaling.temperature_K) /
-                     scaling.Ns;
-    }
-    for (const device::Contact& contact : device.contacts()) {
-        for (const mesh::NodeId v : contact.nodes) {
-            const auto i = static_cast<std::size_t>(v);
-            p.contact_[i] = 1;
-            p.psi0_[i] = ohmic_contact_value(p.doping_[i], p.n_ie_[i], 0.0).psi;
-        }
+        if (scaled->contact[i] < 0) continue;
+        p.contact_[i] = 1;
+        p.psi0_[i] = ohmic_contact_value(p.doping_[i], p.n_ie_[i], 0.0).psi;
     }
 
     std::vector<linalg::Triplet> triplets;
-    triplets.reserve(n + 2 * m.edges().size());
+    triplets.reserve(n + 2 * scaled->edges.size());
     for (std::size_t i = 0; i < n; ++i) {
         const auto k = static_cast<linalg::Index>(i);
         triplets.push_back({k, k, 0.0});
     }
-    for (const mesh::Edge& edge : m.edges()) {
-        triplets.push_back({edge.first, edge.second, 0.0});
-        triplets.push_back({edge.second, edge.first, 0.0});
+    for (const detail::ScaledEdge& e : scaled->edges) {
+        const auto i = static_cast<linalg::Index>(e.i);
+        const auto j = static_cast<linalg::Index>(e.j);
+        triplets.push_back({i, j, 0.0});
+        triplets.push_back({j, i, 0.0});
     }
     const auto size = static_cast<linalg::Index>(n);
     auto pattern = linalg::SparseMatrix::from_triplets(size, size, triplets);
@@ -102,16 +47,11 @@ std::expected<EquilibriumPoisson, base::Error> EquilibriumPoisson::create(
     p.pattern_ = std::move(*pattern);
 
     p.diag_.resize(n);
-    for (std::size_t i = 0; i < n; ++i) p.diag_[i] = position(p.pattern_, i, i);
-    p.edges_.reserve(m.edges().size());
-    for (const mesh::Edge& edge : m.edges()) {
-        const auto i = static_cast<std::size_t>(edge.first);
-        const auto j = static_cast<std::size_t>(edge.second);
-        // Both ends are in the same material (heterojunctions are rejected above); its permittivity
-        // relative to the reference one is the legacy et.
-        const double et = device.material(edge.first).parameters().eps_r / eps_r_ref;
-        p.edges_.push_back({i, j, et * edge.coupling_area / edge.length / coupling_scale,
-                            position(p.pattern_, i, j), position(p.pattern_, j, i)});
+    for (std::size_t i = 0; i < n; ++i) p.diag_[i] = detail::position(p.pattern_, i, i);
+    p.edges_.reserve(scaled->edges.size());
+    for (const detail::ScaledEdge& e : scaled->edges) {
+        p.edges_.push_back({e.i, e.j, e.et * e.geometry, detail::position(p.pattern_, e.i, e.j),
+                            detail::position(p.pattern_, e.j, e.i)});
     }
     return p;
 }

@@ -172,7 +172,9 @@ add_test(NAME device COMMAND nitcad_device_test)
 # --- assemble layer (scaling, Bernoulli/SG flux, ohmic values, equilibrium Poisson) --
 add_library(nitcad_assemble STATIC
   src/assemble/scaling.cpp
-  src/assemble/equilibrium_poisson.cpp)
+  src/assemble/scaled_device.cpp
+  src/assemble/equilibrium_poisson.cpp
+  src/assemble/drift_diffusion.cpp)
 add_library(NiTCAD::assemble ALIAS nitcad_assemble)
 target_include_directories(nitcad_assemble PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
 target_link_libraries(nitcad_assemble PUBLIC
@@ -180,12 +182,15 @@ target_link_libraries(nitcad_assemble PUBLIC
 
 add_executable(nitcad_assemble_test
   tests/assemble/flux_test.cpp
-  tests/assemble/poisson_test.cpp)
+  tests/assemble/poisson_test.cpp
+  tests/assemble/drift_diffusion_test.cpp)
 target_link_libraries(nitcad_assemble_test PRIVATE NiTCAD::assemble Catch2::Catch2WithMain)
 add_test(NAME assemble COMMAND nitcad_assemble_test)
 
 # --- solve layer (Newton, equilibrium solve) ---------------------------------------
-add_library(nitcad_solve STATIC src/solve/equilibrium.cpp)
+add_library(nitcad_solve STATIC
+  src/solve/equilibrium.cpp
+  src/solve/bias.cpp)
 add_library(NiTCAD::solve ALIAS nitcad_solve)
 target_include_directories(nitcad_solve PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
 target_link_libraries(nitcad_solve PUBLIC
@@ -193,6 +198,7 @@ target_link_libraries(nitcad_solve PUBLIC
 
 add_executable(nitcad_solve_test
   tests/solve/newton_test.cpp
-  tests/solve/equilibrium_test.cpp)
+  tests/solve/equilibrium_test.cpp
+  tests/solve/bias_test.cpp)
 target_link_libraries(nitcad_solve_test PRIVATE NiTCAD::solve Catch2::Catch2WithMain)
 add_test(NAME solve COMMAND nitcad_solve_test)

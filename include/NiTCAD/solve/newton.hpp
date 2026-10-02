@@ -10,6 +10,10 @@
 // residual tolerance (1e-10) and never uses it; there is none here, and the final residual is
 // reported instead.
 // The Jacobian pattern is fixed by the system, so the solver analyzes once per run.
+// A system may replace the measure and the update with its own hooks (assemble::DriftDiffusion
+// does, for relative density updates):
+//     double update_size(std::span<const double> x, std::span<const double> dx) const;
+//     void apply_update(std::span<double> x, std::span<const double> dx, double max_update) const;
 #pragma once
 
 #include <algorithm>
@@ -17,6 +21,7 @@
 #include <concepts>
 #include <cstddef>
 #include <expected>
+#include <optional>
 #include <span>
 #include <string>
 #include <utility>
@@ -38,6 +43,8 @@ struct NewtonReport {
     int iterations = 0;
     std::vector<double> updates;  // largest full correction of each iteration
     double final_residual = 0.0;  // largest |F| at the last evaluated x (before its correction)
+    // Smallest pivot ratio over the run's factorizations, when the backend reports one (6.10).
+    std::optional<double> smallest_pivot_ratio;
 };
 
 // A system Newton can drive: a fixed number of unknowns, a Jacobian pattern, and F and J at x.
@@ -101,16 +108,29 @@ template <NewtonSystem System>
             e.message = "Newton iteration " + std::to_string(iteration) + ": " + e.message;
             return std::unexpected(std::move(e));
         }
+        if (const auto ratio = factored->pivot_ratio) {
+            report.smallest_pivot_ratio =
+                std::min(report.smallest_pivot_ratio.value_or(*ratio), *ratio);
+        }
         auto solved = solver.solve(rhs, dx);
         if (!solved) {
             base::Error e = std::move(solved.error());
             e.message = "Newton iteration " + std::to_string(iteration) + ": " + e.message;
             return std::unexpected(std::move(e));
         }
+        const std::span<const double> step = dx;
         double update = 0.0;
-        for (std::size_t i = 0; i < n; ++i) {
-            update = std::max(update, std::abs(dx[i]));
-            x[i] += std::clamp(dx[i], -options.max_update, options.max_update);
+        if constexpr (requires { system.update_size(std::span<const double>(x), step); }) {
+            update = system.update_size(x, step);
+        } else {
+            for (std::size_t i = 0; i < n; ++i) update = std::max(update, std::abs(dx[i]));
+        }
+        if constexpr (requires { system.apply_update(x, step, options.max_update); }) {
+            system.apply_update(x, step, options.max_update);
+        } else {
+            for (std::size_t i = 0; i < n; ++i) {
+                x[i] += std::clamp(dx[i], -options.max_update, options.max_update);
+            }
         }
         report.iterations = iteration;
         report.updates.push_back(update);
