@@ -259,7 +259,7 @@ TEST_CASE("bias: zero bias is equilibrium") {
 TEST_CASE("bias: without recombination the electron current is the same on every edge") {
     const auto d = diode_1d(gate_mesh());
     const std::vector<double> bias{0.4, 0.0};
-    const auto s = solve::solve_bias(d, bias, {.models = {.srh = false}});
+    const auto s = solve::solve_bias(d, bias, {.models = {.srh = false, .auger = false}});
     REQUIRE(s.has_value());
     // Exact up to rounding. In the neutral n region the electron flux is a difference of one-sided
     // terms n2 B(delta) and n1 B(-delta) up to 2.7e9 times larger (measured: deviation 4.9e-6 of

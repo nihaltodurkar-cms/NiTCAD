@@ -13,7 +13,7 @@ std::expected<results::EquilibriumResult, base::Error> solve_equilibrium(
     const device::Device& device, const EquilibriumOptions& options, const RunControl& control) {
     auto scaling = assemble::make_scaling(device, options.Ns_override);
     if (!scaling) return std::unexpected(std::move(scaling.error()));
-    auto system = assemble::EquilibriumPoisson::create(device, *scaling);
+    auto system = assemble::EquilibriumPoisson::create(device, *scaling, options.models);
     if (!system) return std::unexpected(std::move(system.error()));
     auto solver = linalg::LinearSolver::create(options.linear);
     if (!solver) return std::unexpected(std::move(solver.error()));

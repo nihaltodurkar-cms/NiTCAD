@@ -16,6 +16,7 @@
 #include "NiTCAD/assemble/scaling.hpp"
 #include "NiTCAD/device/device.hpp"
 #include "NiTCAD/mesh/tensor_grid.hpp"
+#include "NiTCAD/physics/bandgap_narrowing.hpp"
 #include "NiTCAD/physics/mobility.hpp"
 #include "NiTCAD/physics/recombination.hpp"
 #include "NiTCAD/physics/semiconductor.hpp"
@@ -284,11 +285,13 @@ TEST_CASE("drift-diffusion: the recombination part of the Jacobian matches finit
 }
 
 TEST_CASE("drift-diffusion: the 1D residual is the legacy rows, written out") {
-    // Legacy device1d.cpp residual (baseline models) in scaled units, on an asymmetric diode so
-    // the edge diffusivity's harmonic mean matters at the junction:
+    // Legacy device1d.cpp residual (baseline models: doping mobility, SRH, Auger, band-gap
+    // narrowing) in scaled units, on an asymmetric diode so the edge diffusivity's harmonic mean
+    // matters at the junction and the 1e18 side has band-gap narrowing:
     //   an_k = hmean(mu_n) V_T / D0 / h_k, Jn_k = an_k (n[k+1] B(d_k) - n[k] B(-d_k)),
-    //   Jp_k = -ap_k (p[k+1] B(-d_k) - p[k] B(d_k)), d_k = psi[k+1] - psi[k],
-    //   R = recombination_boltzmann(n Ns, p Ns, ...) / R0,
+    //   Jp_k = -ap_k (p[k+1] B(-dp_k) - p[k] B(dp_k)),
+    //   d_k = psi[k+1] - psi[k] + ln(nie[k+1] / nie[k]), dp_k = psi[k+1] - psi[k] - ln(...),
+    //   R = recombination_boltzmann(n Ns, p Ns, nie, ..., auger) / R0,
     //   F_n = Jn[i] - Jn[i-1] - R dV,  F_p = Jp[i] - Jp[i-1] + R dV.
     const auto x = graded_axis(15);
     const auto d = diode(*mesh::make_tensor_grid(x), 1e18, 1e16);
@@ -310,31 +313,35 @@ TEST_CASE("drift-diffusion: the 1D residual is the legacy rows, written out") {
     const physics::Semiconductor si = physics::silicon();
     const double T = 300.0, VT = scaling.V_T, Ns = scaling.Ns;
     const std::size_t N = x.size();
-    std::vector<double> mun(N), mup(N), taun(N), taup(N);
+    std::vector<double> mun(N), mup(N), taun(N), taup(N), nie(N);
     for (std::size_t i = 0; i < N; ++i) {
         const double Nt = x[i] < 1e-4 ? 1e18 : 1e16;
+        nie[i] = physics::effective_intrinsic_density(si, Nt, T);
         mun[i] = physics::caughey_thomas_mobility(si, physics::Carrier::electron, Nt, T);
         mup[i] = physics::caughey_thomas_mobility(si, physics::Carrier::hole, Nt, T);
         taun[i] = physics::scharfetter_lifetime(si, physics::Carrier::electron, Nt);
         taup[i] = physics::scharfetter_lifetime(si, physics::Carrier::hole, Nt);
     }
-    const double nie = physics::intrinsic_density(si, T);
     std::vector<double> Jn(N - 1), Jp(N - 1), h(N - 1);
     for (std::size_t k = 0; k + 1 < N; ++k) {
         h[k] = (x[k + 1] - x[k]) / scaling.L_D;
-        const double dk = u[3 * (k + 1)] - u[3 * k];
+        const double dlnnie = std::log(nie[k + 1] / nie[k]);
+        const double dk = u[3 * (k + 1)] - u[3 * k] + dlnnie;
+        const double dpk = u[3 * (k + 1)] - u[3 * k] - dlnnie;
         const double an = 2 * mun[k] * mun[k + 1] / (mun[k] + mun[k + 1]) * VT / h[k];
         const double ap = 2 * mup[k] * mup[k + 1] / (mup[k] + mup[k + 1]) * VT / h[k];
         Jn[k] = an * (u[3 * (k + 1) + 1] * assemble::bernoulli(dk) -
                       u[3 * k + 1] * assemble::bernoulli(-dk));
-        Jp[k] = -ap * (u[3 * (k + 1) + 2] * assemble::bernoulli(-dk) -
-                       u[3 * k + 2] * assemble::bernoulli(dk));
+        Jp[k] = -ap * (u[3 * (k + 1) + 2] * assemble::bernoulli(-dpk) -
+                       u[3 * k + 2] * assemble::bernoulli(dpk));
     }
     for (std::size_t i = 1; i + 1 < N; ++i) {
         const double dV = 0.5 * (h[i - 1] + h[i]);
         const double n = u[3 * i + 1] * Ns, p = u[3 * i + 2] * Ns;
-        const double R = (n * p - nie * nie) / (taup[i] * (n + nie) + taun[i] * (p + nie)) /
-                         scaling.R0;
+        const double excess = n * p - nie[i] * nie[i];
+        const double srh = excess / (taup[i] * (n + nie[i]) + taun[i] * (p + nie[i]));
+        const double auger = (2.8e-31 * n + 9.9e-32 * p) * excess;
+        const double R = (srh + auger) / scaling.R0;
         const double expected_n = Jn[i] - Jn[i - 1] - R * dV;
         const double expected_p = Jp[i] - Jp[i - 1] + R * dV;
         const double scale_n = std::max({std::abs(Jn[i]), std::abs(Jn[i - 1]), std::abs(R * dV)});
@@ -343,4 +350,62 @@ TEST_CASE("drift-diffusion: the 1D residual is the legacy rows, written out") {
         REQUIRE(std::abs(f[3 * i + 1] - expected_n) <= 1e-12 * scale_n);
         REQUIRE(std::abs(f[3 * i + 2] - expected_p) <= 1e-12 * scale_p);
     }
+}
+
+TEST_CASE("drift-diffusion: the Auger part of the Jacobian matches finite differences") {
+    // As the recombination test above, for Auger: J(auger) - J(no auger) against finite
+    // differences of the residual difference, at a uniform state of 1e19 cm^-3 carriers where
+    // Auger dominates (n = p = 100 Ns).
+    const auto d = diode(*mesh::make_tensor_grid(uniform_axis(2e-4, 21)));
+    const auto scaling = *assemble::make_scaling(d);
+    auto with = *DriftDiffusion::create(d, scaling);
+    auto without = *DriftDiffusion::create(d, scaling, {.auger = false});
+    std::vector<double> x(with.unknowns());
+    for (std::size_t i = 0; i < with.node_count(); ++i) {
+        x[3 * i] = 0.1;
+        x[3 * i + 1] = 100.0;
+        x[3 * i + 2] = 100.0;
+    }
+    const std::size_t n = with.unknowns();
+    std::vector<double> f(n), g(n), up(n), down(n);
+    auto ja = with.make_jacobian(), jb = without.make_jacobian();
+    with.evaluate(x, f, ja);
+    without.evaluate(x, g, jb);
+    const auto a = dense(ja), b = dense(jb);
+    const auto difference = [&](const std::vector<double>& u, std::vector<double>& out) {
+        with.residual(u, f);
+        without.residual(u, g);
+        for (std::size_t r = 0; r < n; ++r) out[r] = f[r] - g[r];
+    };
+    double worst = 0.0, largest = 0.0;
+    for (std::size_t c = 0; c < n; ++c) {
+        const double base = x[c];
+        const double step = 1e-6 * std::max(std::abs(base), 1e-12);
+        x[c] = base + step;
+        const double hi = x[c];
+        difference(x, up);
+        x[c] = base - step;
+        const double lo = x[c];
+        difference(x, down);
+        x[c] = base;
+        double scale = 0.0, error = 0.0;
+        for (std::size_t r = 0; r < n; ++r) scale = std::max(scale, std::abs(a[r][c] - b[r][c]));
+        for (std::size_t r = 0; r < n; ++r) {
+            error = std::max(error, std::abs((up[r] - down[r]) / (hi - lo) - (a[r][c] - b[r][c])));
+        }
+        largest = std::max(largest, scale);
+        if (scale > 0.0) worst = std::max(worst, error / scale);
+    }
+    UNSCOPED_INFO("worst Auger column error " << worst);
+    REQUIRE(largest > 0.0);
+    REQUIRE(worst <= 1e-5);
+}
+
+TEST_CASE("drift-diffusion: FD-Jacobian gate on a heavily doped diode, all models on") {
+    // 1e19 / 1e18: band-gap narrowing on both sides (so ln n_ie varies), Auger significant.
+    const auto d = diode(*mesh::make_tensor_grid(graded_axis(30)), 1e19, 1e18);
+    const auto [system, x] = probe_state(d, 77);
+    const double e = fd_jacobian_error(system, x);
+    UNSCOPED_INFO("worst column error " << e);
+    REQUIRE(e <= 5e-5);
 }

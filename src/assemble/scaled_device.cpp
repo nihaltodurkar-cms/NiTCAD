@@ -7,6 +7,7 @@
 
 #include "NiTCAD/base/constants.hpp"
 #include "NiTCAD/base/contract.hpp"
+#include "NiTCAD/physics/bandgap_narrowing.hpp"
 #include "NiTCAD/physics/semiconductor.hpp"
 
 namespace NiTCAD::assemble::detail {
@@ -21,7 +22,8 @@ base::Error invalid(std::string message, std::optional<std::size_t> index = std:
 }  // namespace
 
 std::expected<ScaledDevice, base::Error> make_scaled_device(const device::Device& device,
-                                                            const Scaling& scaling) {
+                                                            const Scaling& scaling,
+                                                            const PhysicsModels& models) {
     if (scaling.temperature_K != device.temperature_K()) {
         return std::unexpected(invalid("scaling temperature differs from the device's"));
     }
@@ -58,8 +60,12 @@ std::expected<ScaledDevice, base::Error> make_scaled_device(const device::Device
         const auto node = static_cast<mesh::NodeId>(i);
         s.volume[i] = m.volumes()[i] / volume_scale;
         s.doping[i] = device.net_doping(node) / scaling.Ns;
-        s.n_ie[i] = physics::intrinsic_density(device.material(node), scaling.temperature_K) /
-                    scaling.Ns;
+        const physics::Semiconductor& material = device.material(node);
+        const double n_ie =
+            models.bgn ? physics::effective_intrinsic_density(
+                             material, device.total_impurity(node), scaling.temperature_K)
+                       : physics::intrinsic_density(material, scaling.temperature_K);
+        s.n_ie[i] = n_ie / scaling.Ns;
     }
     const auto contacts = device.contacts();
     for (std::size_t c = 0; c < contacts.size(); ++c) {

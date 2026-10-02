@@ -57,6 +57,8 @@ void material(Digest& d, const physics::SemiconductorParameters& p) {
         for (const double v : {ct.mu_min, ct.mu_max, ct.N_ref, ct.alpha, ct.T_exponent}) d.real(v);
     }
     for (const double v : {p.lifetime.tau_n0, p.lifetime.tau_p0, p.lifetime.N_ref}) d.real(v);
+    for (const double v : {p.auger.Cn, p.auger.Cp}) d.real(v);
+    for (const double v : {p.bandgap_narrowing.E0_eV, p.bandgap_narrowing.N0}) d.real(v);
 }
 
 std::vector<std::pair<std::string, double>> settings(const BiasOptions& o) {
@@ -72,6 +74,8 @@ std::vector<std::pair<std::string, double>> settings(const BiasOptions& o) {
         {"linear.min_pivot_ratio", o.linear.min_pivot_ratio},
         {"models.doping_mobility", o.models.doping_mobility ? 1.0 : 0.0},
         {"models.srh", o.models.srh ? 1.0 : 0.0},
+        {"models.auger", o.models.auger ? 1.0 : 0.0},
+        {"models.bgn", o.models.bgn ? 1.0 : 0.0},
     };
     if (o.Ns_override) s.emplace_back("scaling.Ns_override", *o.Ns_override);
     return s;

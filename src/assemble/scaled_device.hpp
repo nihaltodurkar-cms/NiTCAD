@@ -7,6 +7,7 @@
 #include <expected>
 #include <vector>
 
+#include "NiTCAD/assemble/models.hpp"
 #include "NiTCAD/assemble/scaling.hpp"
 #include "NiTCAD/base/error.hpp"
 #include "NiTCAD/device/device.hpp"
@@ -23,7 +24,7 @@ struct ScaledEdge {
 struct ScaledDevice {
     std::vector<double> volume;          // control volume / L_D^D
     std::vector<double> doping;          // (N_D - N_A) / Ns
-    std::vector<double> n_ie;            // n_ie / Ns
+    std::vector<double> n_ie;            // n_ie / Ns (effective n_ie with band-gap narrowing)
     std::vector<std::int32_t> contact;   // index into device.contacts(), or -1
     std::vector<ScaledEdge> edges;       // in mesh edge order
 };
@@ -32,7 +33,7 @@ struct ScaledDevice {
 // edge between regions whose material parameters differ; band offsets and permittivity steps are
 // deferred), with the edge as the context index.
 [[nodiscard]] std::expected<ScaledDevice, base::Error> make_scaled_device(
-    const device::Device& device, const Scaling& scaling);
+    const device::Device& device, const Scaling& scaling, const PhysicsModels& models);
 
 // Position of (row, col) in a CSR matrix's values; the entry must exist (NITCAD_EXPECTS).
 [[nodiscard]] std::size_t position(const linalg::SparseMatrix& m, std::size_t row,
