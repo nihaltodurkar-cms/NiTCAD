@@ -336,6 +336,9 @@ CMakePresets.json           debug and release presets (Q3)                   (Un
 vcpkg.json                  manifest: baseline and version overrides (D8)    (Unit 1, exists)
 .gitignore                  ignores build/                                   (Unit 1, exists)
 tests/scaffold_test.cpp     Unit 1 scaffold test                             (Unit 1, exists)
+include/NiTCAD/base/        constants.hpp, error.hpp, contract.hpp           (Unit 2, exists)
+src/base/contract.cpp       NITCAD_EXPECTS failure path                      (Unit 2, exists)
+tests/base/                 constants, error, contract tests and probe       (Unit 2, exists)
 .github/workflows/ci.yml    CI: build and test Debug and Release per branch  (CI unit, exists)
 include/NiTCAD/<layer>/...  public headers per layer                         (created per unit)
 src/<layer>/...             implementations                                  (created per unit)
@@ -413,7 +416,7 @@ These are the acceptance criteria the new units should meet. Source and verifica
 
 | Criterion | Value | Source / status |
 |---|---|---|
-| Constants | Values as in `pytcad/constants.py`: q = 1.602176634e-19 C, k = 1.380649e-23 J/K, ε₀ = 8.8541878128e-14 F/cm, ħ = 1.054571817e-34 J·s, m₀ = 9.1093837015e-31 kg | [verified] file contents. The file does not name the CODATA edition; these numbers are the CODATA 2018 values per the author's knowledge [unverified: edition]. The new base unit should pin CODATA 2018 explicitly. |
+| Constants | Values as in `pytcad/constants.py`: q = 1.602176634e-19 C, k = 1.380649e-23 J/K, ε₀ = 8.8541878128e-14 F/cm, ħ = 1.054571817e-34 J·s, m₀ = 9.1093837015e-31 kg | [verified] file contents. The file does not name the edition; the numbers are the CODATA 2018 values [verified against NIST, V7]. Unit 2 pins CODATA 2018 in `constants.hpp`. |
 | Thermal voltage | V_T(300 K) = 0.025852 V | [derived] 0.0258519998 V from the legacy k and q |
 | n_i(300 K), Si | ≈ 1.0674e10 cm⁻³ | [derived] hand-computed from legacy `materials.py` (Eg0 = 1.17 eV, α = 4.73e-4 eV/K, β = 636 K, Nc300 = 2.86e19, Nv300 = 3.10e19, k = 8.617333262e-5 eV/K): Eg(300) = 1.12452 eV, n_i = 1.06738e10. **Not a legacy test assertion.** The legacy test only requires 9e9 < n_i < 1.6e10 (`tests/test_model_benchmarks.py`, `test_ni_300k_within_accepted_band` [verified]). Proposed new gate: 1.0674e10 with relative tolerance 1e-4, which holds if the same parameters are used. |
 | Built-in potential | within 2e-3 V of V_T ln(Nd·Na/n_i²) | [verified] `tests/test_device1d_native_gates.py` (1e17/1e17 fixture) |
@@ -432,7 +435,7 @@ testable on arrival. Units 4–9 are dimension-generic from the start (D4) and u
 | # | Unit | Layer | Legacy reference | Gate |
 |---|---|---|---|---|
 | 1 | Build scaffold: CMake, C++23 gate, vcpkg manifest with pinned baseline, Catch2 v3 harness | — | `core/CMakeLists.txt` (reference for options only) | configure fails on a toolset without the needed C++23 features; dependencies resolve from the pinned manifest; one trivial test runs |
-| 2 | Constants, units, `Error` type | base | `constants.py`, `core/include/tcad/base/errors.hpp` | CODATA 2018 values; V_T(300 K) = 0.025852 V |
+| 2 | Constants, units, `Error` type, `NITCAD_EXPECTS` (**done on branch `core/base`**) | base | `constants.py`, `core/include/tcad/base/errors.hpp` | CODATA 2018 values; V_T(300 K) = 0.025852 V |
 | 3 | Sparse matrix, backend-neutral solver interface (6.10), Eigen SparseLU backend | linalg | `linsolve.py`, `core/src/solver/direct_lu.cpp` | known systems (e.g. analytic tridiagonal); relative residual check; singular system returns an error; symbolic-reuse path exercised. A test-only second backend to prove neutrality is proposed, owner to confirm (Q5) |
 | 4 | Generic node/edge/control-volume mesh; tensor-grid constructors for D = 1, 2, 3 | mesh | `mesh.py`, `mesh2d.py`, `mesh3d.py`, `core/include/tcad/mesh/stencil.hpp` | total volume matches domain (section 10); positive dual volumes; consistent edge geometry across D = 1, 2, 3 on a uniform grid; public interface contains no (i, j, k) indexing |
 | 5 | Si material parameters, Caughey–Thomas mobility, SRH recombination, Boltzmann statistics (value + partials) | physics | `materials.py`, `core/include/tcad/physics/` | n_i(300 K) ≈ 1.0674e10; published mobility values (legacy `test_caughey_thomas_matches_published_silicon_values`); derivatives vs finite differences; SRH vanishes at equilibrium |
@@ -498,7 +501,6 @@ Unit 10 is deferred until sequenced. Nothing in this table is started.
 - V_T(300 K) = 0.0258519998 V; n_i(300 K) = 1.06738e10 cm⁻³ (inputs in section 10).
 
 **Unverified: do not rely on these**
-- That the constants file corresponds to CODATA 2018 (edition not named in the file).
 - The exact normalization of the 5e-5 Jacobian gate; the unit of `D0_REF`; where `tol_residual` is used.
 - clang-cl and MinGW claims about C++23 (not tested; only MSVC 14.51 was probed). **Anything about MSVC 14.50**
   (not installed here, not tested), including its C++23 feature support. A search result states that 14.52 will
@@ -588,9 +590,10 @@ withdrawn; numbering is otherwise kept stable. This proposal lives on `architect
 | V4 | Re-check under the decided mode: Eigen 5.0.1 and Catch2 3.16.0 from the pinned baseline build and pass under explicit `/std:c++23preview` with a configure-time `_MSVC_LANG` gate (passed). `/WX` and `/we9002` do not stop an ignored `/std:c++23`; `/options:strict` does (D8043). MSVC 14.50 was **not** tested (not installed). | Verified on 14.51 only. |
 | V5 | Q3 prerequisite and Unit 1 run: a standalone vcpkg checkout at the baseline commit (partial clone, `--filter=blob:none`, in `C:\Users\disha\vcpkg`, bootstrapped; tool release 2026-09-26) resolved the manifest with the Eigen 5.0.1 and Catch2 3.16.0 overrides. The Unit 1 configure, build and test passed in Debug and Release. Negative checks: `/std:c++20` fails the gate (`#error`, C1189); an ignored `/std:c++23` fails it (D8043); a `VCPKG_ROOT` that is not a git checkout at the pinned commit fails configuration. **Not tested:** an unset `VCPKG_ROOT`, CI, any other machine. | Verified locally. |
 | V6 | CI workflow: the YAML parses and defines the intended triggers, matrix and steps; the pinned CMake download matches Kitware's published SHA-256 and Ninja runs as 1.13.2 locally. First CI run (push and pull request, run 36939739285): all version assertions passed; the job failed on the `VCPKG_ROOT` override described in section 9 (fixed in `a2b4b6a`). After the fix both Debug and Release passed on push and pull request, and the vcpkg binary cache restored on a re-run. | Verified on the hosted runner. |
+| V7 | Unit 2 (`core/base`): the legacy constants are the CODATA 2018 values: eps0 8.8541878128(13)e-12 F/m, m_e 9.1093837015(28)e-31 kg and the exact hbar, per NIST (`physics.nist.gov/cuu/pdf/wall_2018.pdf`; CODATA 2022 changed eps0 and m_e at about 1e-9, so pinning 2018 is what preserves legacy results). `FAST_FAIL_FATAL_APP_EXIT` = 7 in Windows SDK 10.0.26100.0 `winnt.h`. Debug and Release: 12 Catch2 test cases pass, no warnings. A wrong eps0 (CODATA 2022) fails the constants test. | Verified locally. |
 | V3 | Scaling definitions, scaled variables and Newton tolerances read from `inputs.cpp` and `device1d.cpp` and recorded in 6.1. One open question remains for Unit 8 (convergence criterion on the clipped correction). | Verified |
 
-Verifications due at their own unit, not blocking Unit 1: CODATA edition of the constants (Unit 2), the exact
+Verifications due at their own unit, not blocking Unit 1: the exact
 normalization of the 5e-5 Jacobian gate (Unit 7), the `_diode()` fixture parameters (Unit 9).
 
 ### 14.5 Remaining architectural questions
