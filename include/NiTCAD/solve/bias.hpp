@@ -51,11 +51,13 @@ struct BiasOptions {
 };
 
 // Solves each bias point in order. `points[k]` holds one bias in V per contact.
-// Errors, before anything is solved (invalid_input unless noted): no points; a point without one
-// finite value per contact; with equilibrium_poisson, a point with an ohmic contact not at 0 V; an
-// initial state without a finite potential and positive densities for every node; those of
-// assemble::make_scaling, assemble::DriftDiffusion::create (or EquilibriumPoisson::create) and
-// linalg::LinearSolver::create.
+// Errors, before anything is solved (invalid_input unless noted): no points; a point rejected by
+// assemble::check_contact_bias (one finite value per contact; with equilibrium_poisson, every
+// ohmic contact at 0 V), with the point as context index, the contact named in the message and its
+// bias as value; an initial state without a finite potential for every node, or, for
+// drift-diffusion, without positive densities (the quasi-static sweep reads only the potential);
+// those of assemble::make_scaling, assemble::DriftDiffusion::create (or
+// EquilibriumPoisson::create) and linalg::LinearSolver::create.
 // Once solving has started, nothing is an error: the Sweep holds the completed points and, if the
 // run stopped early, `stopped` (cancelled, non_convergence, singular_system, ...) and the stopped
 // point's convergence history in `unfinished` (empty if the starting equilibrium stopped).
@@ -69,8 +71,10 @@ struct BiasOptions {
     const device::Device& device, std::span<const double> bias_V, const BiasOptions& options = {},
     const results::NodeFields* initial = nullptr, const RunControl& control = {});
 
-// The run record of a sweep: the identity digest of every input (device, options, bias points,
-// initial state) and the options as named settings.
+// The run record of a sweep: the identity digest of every input the sweep reads (device, options,
+// bias points, initial state) and those options as named settings. Inputs the sweep ignores are
+// left out, so they do not change the identity: with equilibrium_poisson the mobility, SRH and
+// Auger switches and the initial densities; the work function of a polysilicon gate.
 [[nodiscard]] results::RunRecord make_run_record(const device::Device& device,
                                                  const BiasOptions& options,
                                                  std::span<const std::vector<double>> points,

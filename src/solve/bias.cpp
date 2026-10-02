@@ -5,10 +5,11 @@
 #include <string>
 #include <utility>
 
+#include "NiTCAD/assemble/contact_bias.hpp"
 #include "NiTCAD/assemble/equilibrium_poisson.hpp"
 #include "NiTCAD/assemble/scaling.hpp"
-#include "NiTCAD/base/constants.hpp"
 #include "NiTCAD/solve/equilibrium.hpp"
+#include "fields.hpp"
 
 namespace NiTCAD::solve {
 
@@ -19,10 +20,15 @@ base::Error invalid(std::string message, std::optional<std::size_t> index = std:
             base::ErrorContext{.index = index, .value = std::nullopt}};
 }
 
-bool valid_fields(const results::NodeFields& s, std::size_t n) {
-    if (s.potential_V.size() != n || s.n_cm3.size() != n || s.p_cm3.size() != n) return false;
+// A usable starting state; potential_only for the quasi-static sweep, which reads nothing else.
+bool valid_fields(const results::NodeFields& s, std::size_t n, bool potential_only) {
+    if (s.potential_V.size() != n) return false;
     for (std::size_t i = 0; i < n; ++i) {
         if (!std::isfinite(s.potential_V[i])) return false;
+    }
+    if (potential_only) return true;
+    if (s.n_cm3.size() != n || s.p_cm3.size() != n) return false;
+    for (std::size_t i = 0; i < n; ++i) {
         if (!(std::isfinite(s.n_cm3[i]) && s.n_cm3[i] > 0.0)) return false;
         if (!(std::isfinite(s.p_cm3[i]) && s.p_cm3[i] > 0.0)) return false;
     }
@@ -73,25 +79,29 @@ std::expected<results::Sweep, base::Error> sweep_bias(const device::Device& devi
     if (!equilibrium && options.equations != Equations::drift_diffusion) {
         return std::unexpected(invalid("unknown equation set"));
     }
+    // Every point is checked by the assemblers' own rule before anything is solved; the error
+    // names the point (context index) and the contact (message), with the contact's bias as value.
+    std::vector<device::ContactKind> kinds;
+    for (const device::Contact& c : contacts) kinds.push_back(c.kind);
     for (std::size_t k = 0; k < points.size(); ++k) {
-        if (points[k].size() != contacts.size()) {
-            return std::unexpected(invalid("a bias point needs one bias per contact", k));
+        auto ok = assemble::check_contact_bias(kinds, points[k], equilibrium);
+        if (ok) continue;
+        std::string where = "bias point " + std::to_string(k);
+        std::optional<double> value;
+        if (const auto& at = ok.error().context; at && at->index) {
+            where += ", contact '" + contacts[*at->index].name + "'";
+            value = at->value;
         }
-        for (std::size_t c = 0; c < contacts.size(); ++c) {
-            if (!std::isfinite(points[k][c])) {
-                return std::unexpected(invalid("a bias is not finite", k));
-            }
-            if (equilibrium && contacts[c].kind == device::ContactKind::ohmic &&
-                points[k][c] != 0.0) {
-                return std::unexpected(
-                    invalid("thermal equilibrium needs every ohmic contact at 0 V", k));
-            }
-        }
+        return std::unexpected(base::Error{base::ErrorCode::invalid_input,
+                                           where + ": " + ok.error().message,
+                                           base::ErrorContext{.index = k, .value = value}});
     }
     const std::size_t nodes = device.mesh().node_count();
-    if (initial != nullptr && !valid_fields(*initial, nodes)) {
+    if (initial != nullptr && !valid_fields(*initial, nodes, equilibrium)) {
         return std::unexpected(invalid(
-            "initial state needs a finite potential and positive densities for every node"));
+            equilibrium ? "initial state needs a finite potential for every node"
+                        : "initial state needs a finite potential and positive densities for "
+                          "every node"));
     }
     auto scaling = assemble::make_scaling(device, options.Ns_override);
     if (!scaling) return std::unexpected(std::move(scaling.error()));
@@ -100,7 +110,7 @@ std::expected<results::Sweep, base::Error> sweep_bias(const device::Device& devi
 
     const int D = device.mesh().dimension();
     const double current_scale = scaling->J0 * std::pow(scaling->L_D, D - 1);
-    const double charge_scale = base::q_C * scaling->Ns * std::pow(scaling->L_D, D);
+    const double charge_scale = detail::charge_scale(*scaling, D);
     const std::size_t edges = device.mesh().edges().size();
 
     if (equilibrium) {
@@ -117,20 +127,13 @@ std::expected<results::Sweep, base::Error> sweep_bias(const device::Device& devi
         run_points(points, control, sweep,
                    [&](std::size_t k, results::BiasPoint& point,
                        const IterationObserver& observe) -> std::expected<void, base::Error> {
-                       if (auto ok = system->set_bias(points[k]); !ok) return ok;  // validated
+                       if (auto ok = system->set_bias(points[k]); !ok) return ok;  // checked
                        if (auto ok = newton_solve(*system, psi, options.newton, *solver,
                                                   point.convergence, control.stop, observe);
                            !ok) {
                            return ok;
                        }
-                       point.fields = {std::vector<double>(nodes), std::vector<double>(nodes),
-                                       std::vector<double>(nodes)};
-                       system->carriers(psi, point.fields.n_cm3, point.fields.p_cm3);
-                       for (std::size_t i = 0; i < nodes; ++i) {
-                           point.fields.potential_V[i] = psi[i] * scaling->V_T;
-                           point.fields.n_cm3[i] *= scaling->Ns;
-                           point.fields.p_cm3[i] *= scaling->Ns;
-                       }
+                       point.fields = detail::equilibrium_fields(*system, psi, *scaling);
                        point.terminal_current.assign(contacts.size(), 0.0);
                        point.gate_charge = system->gate_charges(psi);
                        for (double& Q : point.gate_charge) Q *= charge_scale;
@@ -174,7 +177,7 @@ std::expected<results::Sweep, base::Error> sweep_bias(const device::Device& devi
     run_points(points, control, sweep,
                [&](std::size_t k, results::BiasPoint& point,
                    const IterationObserver& observe) -> std::expected<void, base::Error> {
-                   if (auto ok = system->set_bias(points[k]); !ok) return ok;  // validated
+                   if (auto ok = system->set_bias(points[k]); !ok) return ok;  // checked
                    system->stamp_contacts(x);
                    if (auto ok = newton_solve(*system, x, options.newton, *solver,
                                               point.convergence, control.stop, observe);

@@ -28,6 +28,7 @@
 #include "NiTCAD/physics/semiconductor.hpp"
 #include "NiTCAD/results/solution.hpp"
 #include "NiTCAD/solve/bias.hpp"
+#include "NiTCAD/solve/equilibrium.hpp"
 #include "legacy_moscap.hpp"
 
 using namespace NiTCAD;
@@ -146,12 +147,24 @@ std::optional<double> rising_crossing(const std::vector<double>& x, const std::v
     return std::nullopt;
 }
 
+// (k T / 2) ln(Nv / Nc), 1.04 mV at 300 K: NiTCAD measures the gate potential from the intrinsic
+// level, the legacy from midgap (assemble/gate.hpp), so NiTCAD's curve is the legacy one moved to
+// higher gate voltage by this much.
+double intrinsic_shift(double T = 300.0) {
+    const physics::Semiconductor si = physics::silicon();
+    return 0.5 * base::thermal_voltage(T) *
+           std::log(physics::valence_band_dos(si, T) / physics::conduction_band_dos(si, T));
+}
+
 }  // namespace
 
-TEST_CASE("mos: the gate contact reproduces the legacy MOS-C solve on its mesh") {
+TEST_CASE("mos: the gate contact reproduces the legacy MOS-C solve, moved by the intrinsic level") {
     const Curve& c = fixture_curve();
     const LegacyMOSCapacitor& m = legacy();
-    const LegacyCV ref = m.cv_sweep(c.Vg);
+    const double shift = intrinsic_shift();
+    std::vector<double> legacy_Vg;
+    for (const double v : c.Vg) legacy_Vg.push_back(v - shift);
+    const LegacyCV ref = m.cv_sweep(legacy_Vg);
     double phi_error = 0.0, q_error = 0.0, c_error = 0.0, psi_error = 0.0;
     for (std::size_t k = 0; k < c.Vg.size(); ++k) {
         phi_error = std::max(phi_error, std::abs(c.phi_s[k] - ref.phi_s[k]));
@@ -160,13 +173,13 @@ TEST_CASE("mos: the gate contact reproduces the legacy MOS-C solve on its mesh")
     }
     for (const double v : {-1.5, -0.5, 0.0, 0.5, 1.0, 2.0}) {
         const auto k = static_cast<std::size_t>(std::lround((v + 2.0) / 0.05));
-        const std::vector<double> psi = m.solve_psi(v);
+        const std::vector<double> psi = m.solve_psi(v - shift);
         const auto& potential = c.points[k].fields.potential_V;
         for (std::size_t i = 0; i < psi.size(); ++i) {
             psi_error = std::max(psi_error, std::abs(potential[i] - psi[i] * m.VT));
         }
     }
-    CAPTURE(phi_error, q_error, c_error, psi_error);
+    CAPTURE(shift, phi_error, q_error, c_error, psi_error);
     REQUIRE(phi_error < 1e-12);  // V
     REQUIRE(psi_error < 1e-12);  // V, every node at six biases
     REQUIRE(q_error < 1e-12);    // V (charge / C_ox)
@@ -228,10 +241,77 @@ TEST_CASE("mos: the quasi-static sweep keeps every ohmic contact at 0 V") {
     const auto sweep = solve::sweep_bias(d, points, quasi_static());
     REQUIRE_FALSE(sweep.has_value());
     REQUIRE(sweep.error().code == base::ErrorCode::invalid_input);
-    REQUIRE(sweep.error().context->index == 1);
+    REQUIRE(sweep.error().context->index == 1);  // the point
+    REQUIRE(sweep.error().context->value == 0.1);  // the contact's bias
+    REQUIRE(sweep.error().message.find("bias point 1, contact 'substrate'") != std::string::npos);
+    REQUIRE(sweep.error().message.find("ohmic contact at 0 V") != std::string::npos);
     // Drift-diffusion takes the same points.
     REQUIRE(solve::make_run_record(d, quasi_static(), points).input_identity !=
             solve::make_run_record(d, {}, points).input_identity);
+}
+
+TEST_CASE("mos: the quasi-static sweep starts from a potential alone") {
+    const device::Device d = moscap_1d();
+    const auto start = cv(d, {0.4});
+    results::NodeFields potential_only{start.points[0].fields.potential_V, {}, {}};
+    const std::vector<std::vector<double>> points{{0.45, 0.0}};
+    const auto warm = solve::sweep_bias(d, points, quasi_static(), &potential_only);
+    REQUIRE(warm.has_value());
+    REQUIRE_FALSE(warm->stopped.has_value());
+    const auto cold = cv(d, {0.45});
+    REQUIRE(std::abs(warm->points[0].gate_charge[0] - cold.Qg[0]) <= 1e-12 * std::abs(cold.Qg[0]));
+    // Drift-diffusion needs the densities too.
+    const auto dd = solve::sweep_bias(d, points, {}, &potential_only);
+    REQUIRE_FALSE(dd.has_value());
+    REQUIRE(dd.error().message.find("positive densities") != std::string::npos);
+}
+
+TEST_CASE("mos: the run identity leaves out what the quasi-static sweep ignores") {
+    const device::Device d = moscap_1d();
+    const std::vector<std::vector<double>> points{{0.5, 0.0}};
+    const auto id = [&](const device::Device& dev, const solve::BiasOptions& o,
+                        const results::NodeFields* initial = nullptr) {
+        return solve::make_run_record(dev, o, points, initial).input_identity;
+    };
+    solve::BiasOptions no_transport_models = quasi_static();
+    no_transport_models.models.srh = false;
+    no_transport_models.models.auger = false;
+    no_transport_models.models.doping_mobility = false;
+    REQUIRE(id(d, no_transport_models) == id(d, quasi_static()));
+    solve::BiasOptions no_bgn = quasi_static();
+    no_bgn.models.bgn = false;  // band-gap narrowing does enter the equilibrium
+    REQUIRE(id(d, no_bgn) != id(d, quasi_static()));
+    solve::BiasOptions dd_no_srh;
+    dd_no_srh.models.srh = false;
+    REQUIRE(id(d, dd_no_srh) != id(d, {}));
+    // Initial densities: ignored by the quasi-static sweep, read by drift-diffusion.
+    const auto state = cv(d, {0.4}).points[0].fields;
+    results::NodeFields other = state;
+    other.n_cm3[3] *= 2.0;
+    REQUIRE(id(d, quasi_static(), &other) == id(d, quasi_static(), &state));
+    REQUIRE(id(d, {}, &other) != id(d, {}, &state));
+    // The work function field of a polysilicon gate is not read; a metal gate's is.
+    device::GateStack poly = stack();
+    poly.work_function_eV = 4.7;
+    REQUIRE(id(moscap_1d(poly), quasi_static()) == id(d, quasi_static()));
+    REQUIRE(id(moscap_1d(stack(device::GateElectrode::metal, 0.0, 4.7)), quasi_static()) !=
+            id(moscap_1d(stack(device::GateElectrode::metal, 0.0, 4.6)), quasi_static()));
+}
+
+TEST_CASE("mos: the equilibrium solve reports the zero-bias gate charge") {
+    for (const double Qf : {0.0, 2e11}) {
+        CAPTURE(Qf);
+        const device::Device d = moscap_1d(stack(device::GateElectrode::n_poly, Qf));
+        const auto eq = solve::solve_equilibrium(d);
+        REQUIRE(eq.has_value());
+        REQUIRE(eq->gate_charge.size() == 2);
+        REQUIRE(eq->gate_charge[1] == 0.0);  // the substrate is ohmic
+        const auto qs = cv(d, {0.0});
+        REQUIRE(std::abs(eq->gate_charge[0] - qs.Qg[0]) <= 1e-12 * std::abs(qs.Qg[0]));
+        // n+ poly on p-type: 0 V is above flatband (V_FB about -1 V), so the surface is depleted
+        // and the electrode charged positively against it.
+        REQUIRE(eq->gate_charge[0] > 0.0);
+    }
 }
 
 TEST_CASE("mos: P1 the potential satisfies the legacy discrete Poisson rows") {
@@ -242,7 +322,7 @@ TEST_CASE("mos: P1 the potential satisfies the legacy discrete Poisson rows") {
         const auto k = static_cast<std::size_t>(std::lround((v + 2.0) / 0.05));
         std::vector<double> psi = c.points[k].fields.potential_V;
         for (double& p : psi) p /= m.VT;
-        const std::vector<double> F = m.residual(psi, v);
+        const std::vector<double> F = m.residual(psi, v - intrinsic_shift());
         for (const double f : F) worst = std::max(worst, std::abs(f));
     }
     CAPTURE(worst);

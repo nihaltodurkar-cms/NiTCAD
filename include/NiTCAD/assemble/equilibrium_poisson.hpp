@@ -21,7 +21,6 @@
 #pragma once
 
 #include <cstddef>
-#include <cstdint>
 #include <expected>
 #include <span>
 #include <vector>
@@ -47,10 +46,9 @@ public:
 
     [[nodiscard]] std::size_t unknowns() const noexcept { return volume_.size(); }
 
-    // Applied bias of each contact in V, in the order of device.contacts(). Errors (invalid_input):
-    // the size differs from the number of contacts, a value is not finite, or an ohmic contact's
-    // bias is not 0 (thermal equilibrium has one Fermi level, that of the ohmic contacts). Sets the
-    // electrode potential of the gates; initially every bias is 0.
+    // Applied bias of each contact in V, in the order of device.contacts(). Errors: those of
+    // check_contact_bias with thermal_equilibrium (an ohmic contact not at 0 V among them). Sets
+    // the electrode potential of the gates; initially every bias is 0.
     [[nodiscard]] std::expected<void, base::Error> set_bias(std::span<const double> bias_V);
 
     // A zero-valued matrix with the Jacobian's pattern, for evaluate() to fill.
@@ -99,11 +97,8 @@ private:
     std::vector<double> n_ie_;      // scaled n_ie
     std::vector<double> psi0_;      // Dirichlet value on contact nodes
     std::vector<char> contact_;     // 1 on ohmic contact nodes
-    std::vector<std::int32_t> gate_index_;  // gate contact index per node, or -1
-    std::vector<GateTerm> gate_;    // per node (zero off the gates)
-    std::vector<double> psi_gate_;  // per gate node: psi_G at the gate's bias
-    std::vector<char> ohmic_;       // per contact: 1 if ohmic
-    double V_T_ = 0.0;
+    GateNodes gates_;
+    std::vector<device::ContactKind> kinds_;  // per contact
     std::vector<EdgeTerm> edges_;
     std::vector<std::size_t> diag_; // position of (i, i) in the Jacobian values
     linalg::SparseMatrix pattern_;

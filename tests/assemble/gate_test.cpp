@@ -9,9 +9,11 @@
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <string>
 #include <utility>
 #include <vector>
 
+#include "NiTCAD/assemble/contact_bias.hpp"
 #include "NiTCAD/assemble/drift_diffusion.hpp"
 #include "NiTCAD/assemble/equilibrium_poisson.hpp"
 #include "NiTCAD/assemble/gate.hpp"
@@ -182,23 +184,41 @@ std::pair<DriftDiffusion, std::vector<double>> probe_state(const device::Device&
 
 }  // namespace
 
-TEST_CASE("gate: electrode work functions and the midgap offset") {
+// (k T / 2) ln(Nv / Nc): the intrinsic level above midgap (silicon at 300 K: 1.04 mV).
+double intrinsic_above_midgap(double T) {
+    const physics::Semiconductor si = physics::silicon();
+    return 0.5 * base::thermal_voltage(T) *
+           std::log(physics::valence_band_dos(si, T) / physics::conduction_band_dos(si, T));
+}
+
+TEST_CASE("gate: electrode work functions and the offset from the intrinsic level") {
     const physics::Semiconductor si = physics::silicon();
     const double Eg = physics::band_gap_eV(si, 300.0);
+    const double shift = intrinsic_above_midgap(300.0);
+    CAPTURE(shift);
+    REQUIRE(shift > 1.03e-3);  // ln(3.10 / 2.86) V_T / 2
+    REQUIRE(shift < 1.05e-3);
+    // Phi = phi_m - chi - (E_c - E_i), E_c - E_i = Eg / 2 - shift.
     device::GateStack g = stack("x_min");
     REQUIRE(assemble::gate_work_function_eV(g, si, 300.0) == 4.05);  // n+ poly: chi
-    REQUIRE(assemble::gate_midgap_offset_V(g, si, 300.0) == 4.05 - 4.05 - 0.5 * Eg);
+    REQUIRE(std::abs(assemble::gate_intrinsic_offset_V(g, si, 300.0) - (-0.5 * Eg + shift)) <
+            1e-15);
     g.electrode = device::GateElectrode::p_poly;  // chi + Eg
     REQUIRE(assemble::gate_work_function_eV(g, si, 300.0) == 4.05 + Eg);
-    REQUIRE(std::abs(assemble::gate_midgap_offset_V(g, si, 300.0) - 0.5 * Eg) < 1e-15);
+    REQUIRE(std::abs(assemble::gate_intrinsic_offset_V(g, si, 300.0) - (0.5 * Eg + shift)) <
+            1e-15);
     g.electrode = device::GateElectrode::metal;  // legacy "Al": 4.10 eV
     g.work_function_eV = 4.10;
     REQUIRE(assemble::gate_work_function_eV(g, si, 300.0) == 4.10);
-    REQUIRE(std::abs(assemble::gate_midgap_offset_V(g, si, 300.0) - (0.05 - 0.5 * Eg)) < 1e-15);
-    // The band gap follows the temperature (Varshni).
+    REQUIRE(std::abs(assemble::gate_intrinsic_offset_V(g, si, 300.0) -
+                     (0.05 - 0.5 * Eg + shift)) < 1e-15);
+    // The band gap and the shift follow the temperature.
     g.electrode = device::GateElectrode::p_poly;
     REQUIRE(assemble::gate_work_function_eV(g, si, 400.0) ==
             4.05 + physics::band_gap_eV(si, 400.0));
+    REQUIRE(std::abs(assemble::gate_intrinsic_offset_V(g, si, 400.0) -
+                     (0.5 * physics::band_gap_eV(si, 400.0) + intrinsic_above_midgap(400.0))) <
+            1e-15);
 }
 
 TEST_CASE("gate: the scaled coupling is the legacy kappa times the scaled face area") {
@@ -214,7 +234,7 @@ TEST_CASE("gate: the scaled coupling is the legacy kappa times the scaled face a
         const assemble::GateTerm t = assemble::gate_term(stack("x_min"), si, area, D, s);
         const double scaled_area = area / std::pow(s.L_D, D - 1);
         REQUIRE(std::abs(t.coupling - kappa * scaled_area) <= 1e-15 * kappa * scaled_area);
-        REQUIRE(t.offset == assemble::gate_midgap_offset_V(stack("x_min"), si, 300.0) / s.V_T);
+        REQUIRE(t.offset == assemble::gate_intrinsic_offset_V(stack("x_min"), si, 300.0) / s.V_T);
         // The fixed charge as the legacy has it: inside -V_FB, kappa q Q_f / (C_ox V_T) per area.
         const double legacy_charge = kappa * base::q_C * Q_f / (Cox * s.V_T) * scaled_area;
         REQUIRE(std::abs(t.sheet_charge - legacy_charge) <= 1e-14 * legacy_charge);
@@ -225,8 +245,9 @@ TEST_CASE("gate: the 1D rows are the legacy MOS-C rows written out by hand") {
     // moscap.MOSCapacitor.solve_psi, with V_FB from moscap.flatband_voltage (n+ poly, Q_f):
     //   F_0 = (psi_1 - psi_0) / h_0 + kappa (Vg - V_FB - (psi_0 - psi_b) V_T) / V_T - dV_0 rho_0
     //   F_i = (psi_{i+1} - psi_i) / h_i - (psi_i - psi_{i-1}) / h_{i-1} - dV_i rho_i
-    // with rho = n - p - C. The equilibrium system uses Boltzmann carriers; the drift-diffusion
-    // Poisson rows take the state's n and p.
+    // with rho = n - p - C, and V_FB raised by (k T / 2) ln(Nv / Nc): the legacy put the intrinsic
+    // level at midgap (gate.hpp). The equilibrium system uses Boltzmann carriers; the
+    // drift-diffusion Poisson rows take the state's n and p.
     const auto axis = moscap_axis(40);
     const auto d = moscap(*mesh::make_tensor_grid(axis));
     const auto s = *assemble::make_scaling(d);
@@ -238,7 +259,8 @@ TEST_CASE("gate: the 1D rows are the legacy MOS-C rows written out by hand") {
     const double eps_s = 11.7 * base::eps0_F_per_cm, eps_ox = 3.9 * base::eps0_F_per_cm;
     const double kappa = eps_ox * L_D / (eps_s * t_ox), Cox = eps_ox / t_ox;
     const double Eg = physics::band_gap_eV(si, 300.0), chi = 4.05;
-    const double Vfb = (chi - (chi + 0.5 * Eg - psi_b * VT)) - base::q_C * Q_f / Cox;
+    const double Vfb = (chi - (chi + 0.5 * Eg - psi_b * VT)) - base::q_C * Q_f / Cox +
+                       intrinsic_above_midgap(300.0);
     const double Vg = 0.7;
     const std::vector<double> bias{Vg, 0.0};
 
@@ -388,4 +410,24 @@ TEST_CASE("gate: the equilibrium system takes gate biases, not ohmic ones") {
     CAPTURE(coupling_sum, width);
     const double kappa = 3.9 * s.L_D / (11.7 * t_ox);
     REQUIRE(std::abs(coupling_sum - kappa * width / s.L_D) <= 1e-12 * coupling_sum);
+}
+
+TEST_CASE("gate: the contact bias rule") {
+    using device::ContactKind;
+    const std::vector<ContactKind> kinds{ContactKind::ohmic, ContactKind::gate, ContactKind::ohmic};
+    const auto check = [&](std::vector<double> bias, bool equilibrium) {
+        return assemble::check_contact_bias(kinds, bias, equilibrium);
+    };
+    REQUIRE(check({0.0, 1.0, 0.0}, true).has_value());
+    REQUIRE(check({0.3, 1.0, -0.2}, false).has_value());
+    REQUIRE(check({0.0, 1.0}, false).error().message.find("one bias per contact") !=
+            std::string::npos);
+    const auto nan = check({0.0, std::numeric_limits<double>::quiet_NaN(), 0.0}, false).error();
+    REQUIRE(nan.context->index == 1);
+    REQUIRE(nan.message.find("not finite") != std::string::npos);
+    const auto ohmic = check({0.0, 1.0, 0.25}, true).error();
+    REQUIRE(ohmic.code == base::ErrorCode::invalid_input);
+    REQUIRE(ohmic.context->index == 2);
+    REQUIRE(ohmic.context->value == 0.25);
+    REQUIRE(ohmic.message.find("ohmic") != std::string::npos);
 }

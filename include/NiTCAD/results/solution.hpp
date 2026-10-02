@@ -18,6 +18,8 @@ struct NodeFields {
 
 struct EquilibriumResult {
     NodeFields fields;
+    // Charge on each gate electrode at zero bias, as BiasPoint::gate_charge.
+    std::vector<double> gate_charge;
     ConvergenceRecord convergence;
 };
 

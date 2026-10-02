@@ -49,7 +49,6 @@ std::expected<ScaledDevice, base::Error> make_scaled_device(const device::Device
     const int D = m.dimension();
     const double volume_scale = std::pow(scaling.L_D, D);
     const double coupling_scale = std::pow(scaling.L_D, D - 2);
-    const double eps_r_ref = scaling.eps_F_per_cm / base::eps0_F_per_cm;
 
     ScaledDevice s;
     s.volume.resize(n);
@@ -67,11 +66,12 @@ std::expected<ScaledDevice, base::Error> make_scaled_device(const device::Device
                        : physics::intrinsic_density(material, scaling.temperature_K);
         s.n_ie[i] = n_ie / scaling.Ns;
     }
-    s.gate.assign(n, -1);
-    s.gate_term.assign(n, GateTerm{0.0, 0.0, 0.0});
+    std::vector<std::int32_t> gate(n, -1);
+    std::vector<GateTerm> gate_terms(n, GateTerm{0.0, 0.0, 0.0});
     const auto contacts = device.contacts();
     for (std::size_t c = 0; c < contacts.size(); ++c) {
         const device::Contact& contact = contacts[c];
+        s.kinds.push_back(contact.kind);
         if (contact.kind == device::ContactKind::ohmic) {
             for (const mesh::NodeId v : contact.nodes) {
                 s.contact[static_cast<std::size_t>(v)] = static_cast<std::int32_t>(c);
@@ -85,18 +85,20 @@ std::expected<ScaledDevice, base::Error> make_scaled_device(const device::Device
         for (const mesh::NodeId v : contact.nodes) {
             while (patch->nodes[k] < v) ++k;
             const auto i = static_cast<std::size_t>(v);
-            s.gate[i] = static_cast<std::int32_t>(c);
-            s.gate_term[i] =
+            gate[i] = static_cast<std::int32_t>(c);
+            gate_terms[i] =
                 gate_term(contact.gate, device.material(v), patch->areas[k], D, scaling);
         }
     }
+    s.gates = GateNodes(std::move(gate), std::move(gate_terms), scaling.V_T);
     s.edges.reserve(m.edges().size());
     for (const mesh::Edge& edge : m.edges()) {
         // Both ends are in the same material (heterojunctions are rejected above).
+        const double eps_r = device.material(edge.first).parameters().eps_r;
         s.edges.push_back({static_cast<std::size_t>(edge.first),
                            static_cast<std::size_t>(edge.second),
                            edge.coupling_area / edge.length / coupling_scale,
-                           device.material(edge.first).parameters().eps_r / eps_r_ref});
+                           permittivity_ratio(eps_r, scaling)});
     }
     return s;
 }

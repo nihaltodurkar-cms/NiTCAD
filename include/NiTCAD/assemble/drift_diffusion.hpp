@@ -58,9 +58,8 @@ public:
     [[nodiscard]] std::size_t contact_count() const noexcept { return contact_count_; }
 
     // Applied bias of each contact in V, in the order of device.contacts(); sets the Dirichlet
-    // values of the ohmic contacts and the electrode potential of the gates. Errors: invalid_input
-    // if the size differs from the number of contacts or a value is not finite. Initially every
-    // bias is 0.
+    // values of the ohmic contacts and the electrode potential of the gates. Errors: those of
+    // check_contact_bias (size, a value not finite). Initially every bias is 0.
     [[nodiscard]] std::expected<void, base::Error> set_bias(std::span<const double> bias_V);
 
     // Scaled state of every node in Boltzmann equilibrium at the scaled potential psi
@@ -113,9 +112,8 @@ private:
 
     std::vector<double> volume_, doping_, n_ie_, tau_n_, tau_p_, auger_n_, auger_p_;
     std::vector<std::int32_t> contact_;   // ohmic contact index per node, or -1
-    std::vector<std::int32_t> gate_;      // gate contact index per node, or -1
-    std::vector<GateTerm> gate_term_;     // per node (zero off the gates)
-    std::vector<double> psi_gate_;        // per gate node: psi_G at the gate's bias
+    GateNodes gates_;
+    std::vector<device::ContactKind> kinds_;  // per contact
     std::vector<double> psi0_, n0_, p0_;  // Dirichlet values per node (contact nodes only)
     std::vector<EdgeTerm> edges_;
     std::vector<std::size_t> block_;      // per node, 9 positions of its 3x3 diagonal block

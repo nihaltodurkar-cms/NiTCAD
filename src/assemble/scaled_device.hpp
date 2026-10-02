@@ -27,8 +27,8 @@ struct ScaledDevice {
     std::vector<double> doping;          // (N_D - N_A) / Ns
     std::vector<double> n_ie;            // n_ie / Ns (effective n_ie with band-gap narrowing)
     std::vector<std::int32_t> contact;   // index of the node's ohmic contact, or -1
-    std::vector<std::int32_t> gate;      // index of the node's gate contact, or -1
-    std::vector<GateTerm> gate_term;     // per node, all zero where gate is -1 (gate.hpp)
+    GateNodes gates;                     // the gate nodes (gate.hpp)
+    std::vector<device::ContactKind> kinds;  // per contact, in device.contacts() order
     std::vector<ScaledEdge> edges;       // in mesh edge order
 };
 
