@@ -138,3 +138,21 @@ add_executable(nitcad_mesh_test
   tests/mesh/tensor_grid_test.cpp)
 target_link_libraries(nitcad_mesh_test PRIVATE NiTCAD::mesh Catch2::Catch2WithMain)
 add_test(NAME mesh COMMAND nitcad_mesh_test)
+
+# --- physics layer (silicon parameters, Caughey-Thomas, SRH, Boltzmann statistics) --
+add_library(nitcad_physics STATIC
+  src/physics/semiconductor.cpp
+  src/physics/mobility.cpp
+  src/physics/recombination.cpp
+  src/physics/statistics.cpp)
+add_library(NiTCAD::physics ALIAS nitcad_physics)
+target_include_directories(nitcad_physics PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
+target_link_libraries(nitcad_physics PUBLIC NiTCAD::base)
+
+add_executable(nitcad_physics_test
+  tests/physics/semiconductor_test.cpp
+  tests/physics/mobility_test.cpp
+  tests/physics/recombination_test.cpp
+  tests/physics/statistics_test.cpp)
+target_link_libraries(nitcad_physics_test PRIVATE NiTCAD::physics Catch2::Catch2WithMain)
+add_test(NAME physics COMMAND nitcad_physics_test)
