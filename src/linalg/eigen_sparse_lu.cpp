@@ -1,12 +1,24 @@
 #include "eigen_sparse_lu.hpp"
 
 #include <algorithm>
+#include <charconv>
+#include <cmath>
 #include <cstddef>
+#include <limits>
 #include <string>
 #include <string_view>
+#include <type_traits>
 #include <vector>
 
 #include "NiTCAD/base/contract.hpp"
+
+// The failure handling below depends on Eigen 5.0.1 internals: the text of lastErrorMessage(),
+// info() being left unset when SparseLU cannot allocate its working memory, the supernodal storage
+// read for the pivots, and COLAMD failure being checked only by eigen_assert. A different Eigen
+// must be re-checked against these before this assertion is changed.
+static_assert(EIGEN_WORLD_VERSION == 3 && EIGEN_MAJOR_VERSION == 5 && EIGEN_MINOR_VERSION == 0 &&
+                  EIGEN_PATCH_VERSION == 1,
+              "eigen_sparse_lu.cpp was verified against Eigen 5.0.1 only");
 
 namespace NiTCAD::linalg::detail {
 
@@ -43,10 +55,30 @@ std::expected<void, base::Error> SparseLuBackend::analyze(const SparseMatrix& a)
 
     lu_.emplace();
     lu_->analyzePattern(csc_);
+
+    // Eigen checks COLAMD's result only with eigen_assert, which is compiled out in release
+    // builds, so verify here that the column ordering is a permutation.
+    const auto& perm = lu_->colsPermutation().indices();
+    factored_to_original_.assign(n, -1);
+    bool valid = static_cast<std::size_t>(perm.size()) == n;
+    for (std::size_t i = 0; valid && i < n; ++i) {
+        const Index j = perm(static_cast<Eigen::Index>(i));
+        valid = j >= 0 && static_cast<std::size_t>(j) < n &&
+                factored_to_original_[static_cast<std::size_t>(j)] < 0;
+        if (valid) {
+            factored_to_original_[static_cast<std::size_t>(j)] = static_cast<Index>(i);
+        }
+    }
+    if (!valid) {
+        lu_.reset();
+        return std::unexpected(base::Error{base::ErrorCode::resource_exhausted,
+                                           "COLAMD ordering failed", std::nullopt});
+    }
     return {};
 }
 
-std::expected<void, base::Error> SparseLuBackend::factorize(std::span<const double> csr_values) {
+std::expected<PivotRatio, base::Error> SparseLuBackend::factorize(
+    std::span<const double> csr_values) {
     NITCAD_EXPECTS(lu_.has_value());
     NITCAD_EXPECTS(csr_values.size() == csr_to_csc_.size());
     double* const values = csc_.valuePtr();
@@ -60,13 +92,49 @@ std::expected<void, base::Error> SparseLuBackend::factorize(std::span<const doub
     // a failure, so an empty message means this factorization did not fail; info() is read only
     // then.
     const std::string message = lu_->lastErrorMessage();
-    if (message.empty() && lu_->info() == Eigen::Success) {
-        return {};
+    if (!message.empty() || lu_->info() != Eigen::Success) {
+        if (std::string_view(message).starts_with("UNABLE TO")) {
+            return std::unexpected(base::Error{base::ErrorCode::resource_exhausted,
+                                               "Eigen SparseLU: " + message, std::nullopt});
+        }
+        // An exactly zero pivot. Eigen calls it "STRUCTURALLY SINGULAR ... ZERO COLUMN AT k",
+        // also when the cause is numerical; k is 1-based in factored column order.
+        std::optional<std::size_t> column;
+        constexpr std::string_view marker = "ZERO COLUMN AT ";
+        if (const auto at = message.find(marker); at != std::string::npos) {
+            std::size_t k = 0;
+            const char* first = message.data() + at + marker.size();
+            const auto [ptr, ec] = std::from_chars(first, message.data() + message.size(), k);
+            if (ec == std::errc{} && k >= 1 && k <= factored_to_original_.size()) {
+                column = static_cast<std::size_t>(factored_to_original_[k - 1]);
+            }
+        }
+        return std::unexpected(base::Error{base::ErrorCode::singular_system,
+                                           "zero pivot in LU factorization",
+                                           base::ErrorContext{.index = column, .value = 0.0}});
     }
-    const bool out_of_memory = std::string_view(message).starts_with("UNABLE TO");
-    return std::unexpected(base::Error{
-        out_of_memory ? base::ErrorCode::resource_exhausted : base::ErrorCode::singular_system,
-        "Eigen SparseLU factorization failed: " + message, std::nullopt});
+
+    // The pivots are the diagonal of U, stored in the diagonal blocks of the supernodal L (read the
+    // same way as Eigen's own logAbsDeterminant()).
+    const auto& l = lu_->matrixL().m_mapL;
+    using Supernodal = std::remove_cvref_t<decltype(l)>;
+    double smallest = std::numeric_limits<double>::infinity();
+    double largest = 0.0;
+    std::size_t smallest_at = 0;
+    for (Eigen::Index j = 0; j < l.cols(); ++j) {
+        for (typename Supernodal::InnerIterator it(l, j); it; ++it) {
+            if (it.index() == j) {
+                const double pivot = std::abs(it.value());
+                if (pivot < smallest) {
+                    smallest = pivot;
+                    smallest_at = static_cast<std::size_t>(j);
+                }
+                largest = std::max(largest, pivot);
+            }
+        }
+    }
+    return PivotRatio{.ratio = largest > 0.0 ? smallest / largest : 0.0,
+                      .column = static_cast<std::size_t>(factored_to_original_[smallest_at])};
 }
 
 void SparseLuBackend::solve(std::span<const double> b, std::span<double> x) {
