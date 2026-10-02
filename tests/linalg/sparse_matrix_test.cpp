@@ -1,6 +1,8 @@
 #include <catch2/catch_test_macros.hpp>
 
+#include <algorithm>
 #include <array>
+#include <complex>
 #include <vector>
 
 #include "NiTCAD/linalg/sparse_matrix.hpp"
@@ -114,4 +116,39 @@ TEST_CASE("sparse matrix: pattern comparison sees dimensions, offsets and column
     REQUIRE_FALSE(a->has_same_pattern(*SparseMatrix::from_triplets(2, 2, moved)));
     REQUIRE_FALSE(a->has_same_pattern(*SparseMatrix::from_triplets(2, 2, more)));
     REQUIRE_FALSE(a->has_same_pattern(*SparseMatrix::from_triplets(3, 3, diag)));
+}
+
+// --- complex scalar (decision A5: AC small-signal solves (J + i omega C) x = b) ---------------
+
+TEST_CASE("sparse matrix: the complex instantiation sums duplicates and multiplies") {
+    using C = std::complex<double>;
+    // [ 1+2i   0   ]   [ 1 ]   [ 1+2i ]
+    // [  3   -i+i  ] * [ i ] = [  3   ]   (the explicit-zero entry (1, 1) stays in the pattern)
+    const std::array<ComplexTriplet, 4> entries{{
+        {0, 0, C{1.0, 2.0}}, {1, 0, C{3.0, 0.0}}, {1, 1, C{0.0, -1.0}}, {1, 1, C{0.0, 1.0}},
+    }};
+    const auto m = ComplexSparseMatrix::from_triplets(2, 2, entries);
+    REQUIRE(m.has_value());
+    REQUIRE(m->nonzeros() == 3);
+    REQUIRE(m->values()[2] == C{0.0, 0.0});
+    const std::array<C, 2> x{C{1.0, 0.0}, C{0.0, 1.0}};
+    std::array<C, 2> y{};
+    m->multiply(x, y);
+    REQUIRE(y[0] == C{1.0, 2.0});
+    REQUIRE(y[1] == C{3.0, 0.0});
+}
+
+TEST_CASE("sparse matrix: J + i omega C shares the real pattern") {
+    // The AC matrix is built on the pattern of the real Jacobian, so a solver can reuse the
+    // symbolic analysis across frequencies.
+    const std::array<Triplet, 3> jt{{{0, 0, 2.0}, {0, 1, -1.0}, {1, 1, 4.0}}};
+    const auto j = SparseMatrix::from_triplets(2, 2, jt).value();
+    std::vector<ComplexTriplet> at;
+    for (const Triplet& t : jt) at.push_back({t.row, t.col, std::complex<double>{t.value, 0.0}});
+    auto ac = ComplexSparseMatrix::from_triplets(2, 2, at).value();
+    REQUIRE(std::ranges::equal(ac.row_offsets(), j.row_offsets()));
+    REQUIRE(std::ranges::equal(ac.col_indices(), j.col_indices()));
+    const double omega = 3.0;
+    ac.values()[0] += std::complex<double>{0.0, omega * 0.5};  // + i omega C_00
+    REQUIRE(ac.values()[0] == std::complex<double>{2.0, 1.5});
 }
