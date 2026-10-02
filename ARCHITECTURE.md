@@ -126,6 +126,43 @@ thermionic emission through per-edge arrays in the `Inputs` struct, `core/includ
    partials `dnpq_dn`, `dnpq_dp`, which `recombination_boltzmann()` does not
    (`core/include/tcad/physics/kernels.hpp` [verified]). The Unit 5 signatures are to be designed with that in mind.
 
+**As built (Unit 5, `include/NiTCAD/physics/`):**
+- `Semiconductor::create(SemiconductorParameters)` validates a parameter set once (`invalid_input` naming the parameter:
+  non-finite values; non-positive permittivity, Eg0, Nc300, Nv300, mu_max, N_ref, alpha or lifetime; negative Varshni
+  alpha/beta or mu_min; mu_min > mu_max), so the model functions rely on it. `silicon_parameters` holds the legacy `SILICON`
+  values that the first diode uses; electron affinity, saturation velocity, Auger, band-gap narrowing, effective masses and the
+  other legacy material sets come with the units that use them. `band_gap_eV`, `conduction_band_dos`, `valence_band_dos` and
+  `intrinsic_density` are the legacy Varshni, (T/300)^1.5 and sqrt(Nc Nv) exp(−Eg/2kT) formulas.
+- `caughey_thomas_mobility(m, carrier, N_total, T)` and `scharfetter_lifetime(m, carrier, N_total)` take the total ionised
+  impurity N_A + N_D. Both depend only on doping and temperature, so they return values without partials (item 2).
+- `srh_recombination(n, p, EquilibriumProduct, n_ie, tau_n, tau_p)` returns R, dR/dn and dR/dp. It is `constexpr` and
+  inline, as it runs per node and Newton iteration. The equilibrium product carries its own partials with respect to n and p,
+  so it is the legacy `recombination_fd` form; with the Boltzmann product (n_ie², partials zero) it is
+  `recombination_boltzmann` operation for operation. That is the R4 hook: Fermi–Dirac adds a producer of
+  `EquilibriumProduct`, and no caller changes.
+- `statistics.hpp` holds every place statistics enter: `boltzmann_density(n_ie, eta)` (density and d/deta from the reduced
+  potential), `boltzmann_equilibrium_product(n_ie)`, and `boltzmann_neutral_equilibrium(C, n_ie)` (n, p and eta of a
+  charge-neutral node, for ohmic contacts and the initial guess; majority carrier from the square root, minority from mass
+  action, eta = asinh(C/2n_ie), as in the legacy `contact_value` and initial guess). Assembly (Unit 7) must call these and not
+  write a statistics formula itself. All of them are homogeneous in the concentrations, so the assembler may pass values
+  already divided by Ns.
+- Errors and preconditions: parameter sets are user input (`std::expected`); temperature, doping and n_ie in the
+  once-per-problem functions are `NITCAD_EXPECTS` preconditions (the device or solve layer validates them first); the
+  per-iteration kernels (`srh_recombination`, `boltzmann_density`) have no checks.
+- Changed from the legacy (OLD / NEW / REASON):
+  - OLD `N = max(N, 1)` in mobility and lifetime. NEW: N ≥ 0 is a precondition, with no clamp. REASON: the clamp changed
+    mu(0) by about 1e-15 and silently accepted negative input (6.7).
+  - OLD: `bernoulli` and `clip_700` were in `kernels.hpp` beside the recombination. NEW: not in physics; `boltzmann_density`
+    does not clip. REASON: the Bernoulli function belongs to the Scharfetter–Gummel flux (Unit 7), and bounding a Newton
+    overshoot belongs to the solver (6.7). exp overflows above eta ≈ 709.78.
+  - OLD: kB in eV/K was the rounded 8.617333262e-5. NEW: `base::k_B_eV_per_K`, the exact ratio k_B/q. REASON: Unit 2
+    already pins it. Effect on n_i(300 K): about 4e-10 relative.
+- **For Unit 9:** the legacy J(0.5 V) fixture (`_build` in `tests/test_device1d_native_gates.py` [verified]) runs with
+  `auger=True` and band-gap narrowing on. BGN is exactly zero there, because the doping (1e17) is below `bgn_N0` = 1.3e17.
+  Auger is not in Unit 5. An estimate [derived, not run]: at 1e17, Auger adds about 0.3% to the bulk recombination rate, and
+  bulk recombination is a small part of this short-base diode's current, so Auger's effect on J should be far below the 1%
+  gate. Unit 9 must confirm this by measurement, or the owner must add Auger.
+
 ## 6. Cross-cutting design
 
 ### 6.1 de Mari scaling
@@ -430,6 +467,9 @@ tests/linalg/               matrix, solver and header-boundary tests         (Un
 include/NiTCAD/mesh/        mesh.hpp, tensor_grid.hpp                        (Unit 4, exists)
 src/mesh/                   graph validation, tensor-grid producer           (Unit 4, exists)
 tests/mesh/                 graph validation and geometry gates              (Unit 4, exists)
+include/NiTCAD/physics/     semiconductor, mobility, recombination, statistics (Unit 5, exists)
+src/physics/                parameter validation, band quantities, models    (Unit 5, exists)
+tests/physics/              published values, limits, FD derivative gates     (Unit 5, exists)
 .github/workflows/ci.yml    CI: build and test Debug and Release per branch  (CI unit, exists)
 include/NiTCAD/<layer>/...  public headers per layer                         (created per unit)
 src/<layer>/...             implementations                                  (created per unit)
@@ -527,9 +567,9 @@ testable on arrival. Units 4–9 are dimension-generic from the start (D4) and u
 |---|---|---|---|---|
 | 1 | Build scaffold: CMake, C++23 gate, vcpkg manifest with pinned baseline, Catch2 v3 harness | — | `core/CMakeLists.txt` (reference for options only) | configure fails on a toolset without the needed C++23 features; dependencies resolve from the pinned manifest; one trivial test runs |
 | 2 | Constants, units, `Error` type, `NITCAD_EXPECTS` (**done, on `main`**) | base | `constants.py`, `core/include/tcad/base/errors.hpp` | CODATA 2018 values; V_T(300 K) = 0.025852 V |
-| 3 | Sparse matrix, backend-neutral solver interface (6.10), Eigen SparseLU backend (**done, on `main`; hardening on branch `core/linalg-hardening`**) | linalg | `linsolve.py`, `core/src/solver/direct_lu.cpp` | known systems (e.g. analytic tridiagonal); accuracy check (backward error after hardening); singular system returns an error; symbolic-reuse path exercised; header-boundary check, no second backend (Q5) |
-| 4 | Generic node/edge/control-volume mesh; tensor-grid constructors for D = 1, 2, 3 (**done on branch `core/mesh`**) | mesh | `mesh.py`, `mesh2d.py`, `mesh3d.py`, `core/include/tcad/mesh/stencil.hpp` | total volume matches domain (section 10); positive dual volumes; consistent edge geometry across D = 1, 2, 3 on a uniform grid; public interface contains no (i, j, k) indexing |
-| 5 | Si material parameters, Caughey–Thomas mobility, SRH recombination, Boltzmann statistics (value + partials) | physics | `materials.py`, `core/include/tcad/physics/` | n_i(300 K) ≈ 1.0674e10; published mobility values (legacy `test_caughey_thomas_matches_published_silicon_values`); derivatives vs finite differences; SRH vanishes at equilibrium |
+| 3 | Sparse matrix, backend-neutral solver interface (6.10), Eigen SparseLU backend (**done, on `main`, with the hardening**) | linalg | `linsolve.py`, `core/src/solver/direct_lu.cpp` | known systems (e.g. analytic tridiagonal); accuracy check (backward error after hardening); singular system returns an error; symbolic-reuse path exercised; header-boundary check, no second backend (Q5) |
+| 4 | Generic node/edge/control-volume mesh; tensor-grid constructors for D = 1, 2, 3 (**done, on `main`**) | mesh | `mesh.py`, `mesh2d.py`, `mesh3d.py`, `core/include/tcad/mesh/stencil.hpp` | total volume matches domain (section 10); positive dual volumes; consistent edge geometry across D = 1, 2, 3 on a uniform grid; public interface contains no (i, j, k) indexing |
+| 5 | Si material parameters, Caughey–Thomas mobility, SRH recombination, Boltzmann statistics (value + partials) (**done on branch `physics/silicon-models`**) | physics | `materials.py`, `core/include/tcad/physics/` | n_i(300 K) ≈ 1.0674e10; published mobility values (legacy `test_caughey_thomas_matches_published_silicon_values`); derivatives vs finite differences; SRH vanishes at equilibrium |
 | 6 | Device description and ohmic contact data | device | `core/include/tcad/device1d/inputs.hpp` (reference only) | construction and validation; invalid input returns an error |
 | 7 | Scaling (V3), SG/Bernoulli flux, equilibrium Poisson residual + Jacobian, ohmic boundary | assemble | `core/src/device1d/device1d.cpp`, `core/src/device1d/inputs.cpp` | Bernoulli limits and symmetry; FD-Jacobian gate (section 10) |
 | 8 | Newton solver (scaled variables) and equilibrium solve | solve | `device.py` options, `device1d.cpp` | built-in potential within 2e-3 V; bulk neutrality; convergence; non-convergence returns an error value |
@@ -538,7 +578,7 @@ testable on arrival. Units 4–9 are dimension-generic from the start (D4) and u
 | 11+ | Everything else: Fermi–Dirac, Auger, band-gap narrowing, field mobility, heterojunctions, impact ionization, BTBT, transient, AC, thermal, process, unstructured meshes, PARDISO/iterative backends, file formats, analysis, render, app | deferred | per the audit | per unit, when the owner requests |
 
 Units 1–9 are the smallest end-to-end vertical slice: a validated drift-diffusion diode. Everything past
-Unit 10 is deferred until sequenced. Units 5 onward are not started.
+Unit 10 is deferred until sequenced. Units 6 onward are not started.
 
 ## 12. Legacy facts: verified, derived and unverified
 
@@ -687,6 +727,7 @@ withdrawn; numbering is otherwise kept stable. This proposal lives on `architect
 | V9 | linalg hardening (`core/linalg-hardening`): Debug and Release build with no warnings; `nitcad_linalg_test` has 35 test cases, all pass (0.45 s in Release). Regression tests reproduce each review finding: the n = 600,000 Laplacian is accepted (backward error ≤ 1e-15, ‖r‖/‖b‖ > 1e-6); the badly scaled coupled system is rejected without equilibration (backward error > 1e-6) and accepted with it (forward error ≤ 1e-10); floating regions are `singular_system` (pivot ratio < 1e-13), and the column reported for one floating region among contacted ones lies in it; a moved-from solver is neither analyzed nor factorized. Found while building: the Arioli–Demmel–Duff fallback with plain ‖x‖∞ fired on every row of a column-scaled system and hid a bad solve; it now uses column-equilibrated units. Pivot-ratio calibration and the cost of the checks are in 6.10. **Not tested:** `std::bad_alloc`, Eigen's out-of-memory path, a COLAMD failure. | Verified locally. |
 | V10 | Follow-up review of the hardening (same branch): the pivot ratio read from Eigen equals the hand value (2/3 for diag(1, 3)); the singular index lies in the offending 4-node block at columns 3, 417 and 995, for both exact and rounding-level singularity; weakly anchored valid regions overlap the singular range (recorded in 6.10, pinned by a test); Eigen's COLAMD workspace is sized in 32 bits and its failure path writes out of bounds (`Eigen_Colamd.h:267`, `Ordering.h:140`), now guarded before the call; NaN pivots were ignored by the ratio scan, now `inaccurate_solve` (tested with an overflowing 2×2); refinement keeps the better iterate. Debug and Release: 39 test cases pass (0.45 s Release), no warnings; includes two solvers on two threads matching a serial run bit for bit. | Verified locally. |
 | V11 | Unit 4 (`core/mesh`): Debug and Release build with no warnings; `nitcad_mesh_test` has 16 test cases, all pass. Gates of section 11 on graded axes (1e3 spacing ratio): total volume equals the domain to 1e-14 relative in 1D and 2D and 1e-13 in 3D (legacy: 1e-14 2D, 1e-10 3D absolute); all volumes, lengths and areas positive; 2D and 3D grids reduce to the 1D one when grouped by x (node volumes and x-edge areas equal the 1D values times the transverse area, to 1e-14); the box method reproduces the discrete Gauss identity for linear fields in 1D, 2D and 3D to 1e-12, and that check detects a 1% error in a single coupling area; each boundary face's areas sum to the face's measure. The public interface has no grid indices: every test reads only the graph. | Verified locally. |
+| V12 | Unit 5 (`physics/silicon-models`): Debug and Release build with no warnings; `nitcad_physics_test` has 24 test cases, all pass. Gates of section 11: n_i(300 K) = 1.06738e10 (1e-4 gate; 1e-13 against a 40-digit reference computed independently from the legacy formulas); Caughey–Thomas passes the legacy published-value test (mu_n(0) = 1360, mu_n(1e18) = 263 within 25% of 300) and matches 40-digit values at 1e15–1e20 cm⁻³ and at 400 K to 1e-13; SRH is zero at equilibrium (exactly for an exactly representable np = n_ie², else at the rounding level of np) and gives dp/tau_p and dn/tau_n in low injection; dR/dn and dR/dp agree with central differences to 6.4e-11 worst (gate 1e-8), including the chain through a carrier-dependent equilibrium product. Mutation checks: dropping the dE/dn term and changing alpha_n from 0.91 to 0.90 each fail the suite. The legacy 25% mobility gate alone would not catch the second change; the pinned values do. | Verified locally. |
 | V3 | Scaling definitions, scaled variables and Newton tolerances read from `inputs.cpp` and `device1d.cpp` and recorded in 6.1. One open question remains for Unit 8 (convergence criterion on the clipped correction). | Verified |
 
 Verifications due at their own unit, not blocking Unit 1: the exact
