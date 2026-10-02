@@ -48,6 +48,10 @@ public:
     // Residual only.
     void residual(std::span<const double> psi, std::span<double> residual) const;
 
+    // The scaled carrier densities slaved to psi, n = n_ie e^psi and p = n_ie e^-psi. Precondition
+    // (NITCAD_EXPECTS): all three spans have unknowns() entries.
+    void carriers(std::span<const double> psi, std::span<double> n, std::span<double> p) const;
+
     // The charge-neutral potential of every node, asinh(C / 2 n_ie) (contact nodes: their Dirichlet
     // value, which is the same at zero bias); the legacy initial guess.
     [[nodiscard]] std::vector<double> charge_neutral_potential() const;

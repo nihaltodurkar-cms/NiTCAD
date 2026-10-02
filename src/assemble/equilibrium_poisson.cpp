@@ -167,6 +167,15 @@ void EquilibriumPoisson::evaluate(std::span<const double> psi, std::span<double>
     }
 }
 
+void EquilibriumPoisson::carriers(std::span<const double> psi, std::span<double> n,
+                                  std::span<double> p) const {
+    NITCAD_EXPECTS(psi.size() == unknowns() && n.size() == unknowns() && p.size() == unknowns());
+    for (std::size_t i = 0; i < unknowns(); ++i) {
+        n[i] = physics::boltzmann_density(n_ie_[i], psi[i]).density;
+        p[i] = physics::boltzmann_density(n_ie_[i], -psi[i]).density;
+    }
+}
+
 std::vector<double> EquilibriumPoisson::charge_neutral_potential() const {
     std::vector<double> psi(unknowns());
     for (std::size_t i = 0; i < psi.size(); ++i) {
