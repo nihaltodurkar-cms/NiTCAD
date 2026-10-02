@@ -235,8 +235,9 @@ An on-disk result format is **deferred** (R2), under the same independence rule 
   confirmed at Unit 2.
 - The legacy uses a typed C++ exception hierarchy (`core/include/tcad/base/errors.hpp` [verified]); the new
   design keeps its categories as values, not as exception types. Two legacy rules are kept: a clamp used
-  during Newton overshoot must not be applied to the final converged value, and a linear solve whose relative
-  residual exceeds a threshold is an error (legacy: 1e-6 for PARDISO [verified, `CLAUDE.md`]).
+  during Newton overshoot must not be applied to the final converged value, and a linear solve whose accuracy
+  check fails is an error. The legacy check was relative residual above 1e-6, for PARDISO only [verified, `CLAUDE.md`];
+  the new one is the componentwise backward error, for every backend (6.10, "As built", and the review that motivated it).
 - `std::expected` needs `<expected>` in the pinned MSVC toolset; verified in V1.
 - **Precondition macro (Q2, decided):** one project macro, `NITCAD_EXPECTS(cond)`, always on in debug and release. On
   violation it logs file, line and condition, then fails fast (`std::abort` or `__fastfail`). It never throws.
@@ -288,9 +289,10 @@ iterative backends are deferred. The interface must be shaped so adding them nee
 3. Backend choice and options (tolerance, iteration limit, preconditioner) are explicit
    configuration values, not environment variables. The legacy used environment variables such as
    `PYTCAD_LINSOLVE_BACKEND` (`CLAUDE.md` [verified]); they are not carried over.
-4. Every solve returns `std::expected` with diagnostics (relative residual, and iteration count where it
-   applies). Direct and iterative backends share one result shape. A residual above the threshold is an error even
-   if the backend itself reported success (legacy: PARDISO perturbs tiny pivots instead of failing [verified]).
+4. Every solve returns `std::expected` with diagnostics (backward error, relative residual, refinement steps, and
+   iteration count where it applies). Direct and iterative backends share one result shape. A solve that fails the
+   accuracy check is an error even if the backend itself reported success (legacy: PARDISO perturbs tiny pivots
+   instead of failing [verified]).
 5. Thread count is part of backend configuration and defaults to 1 (6.8).
 
 **Neutrality check (Q5, decided):** Unit 3 adds no second backend. Neutrality is proved mechanically and behaviourally:
@@ -302,20 +304,66 @@ interface fits both direct and iterative backends stays unproven until one is re
 - `SparseMatrix`: CSR with `std::int32_t` indices (Eigen's and LP64 PARDISO's index type), built from triplets.
   Duplicates are summed in input order; explicit zeros stay in the pattern; values can be rewritten in place, the pattern
   cannot. Bad dimensions or indices are `invalid_input`.
-- `LinearSolver::create(SolverConfig)` validates `backend`, `threads` (Eigen SparseLU: exactly 1) and
-  `max_relative_residual` (default 1e-6, the legacy PARDISO value, now applied to every backend).
+- `LinearSolver::create(SolverConfig)` validates `backend`, `threads` (Eigen SparseLU: exactly 1), `equilibrate`
+  (default on), `max_backward_error` (default 1e-8), `max_refinement_steps` (default 1) and `min_pivot_ratio`
+  (default 1e-11; must be 0 when not equilibrating).
 - `analyze`, `factorize` and `solve` are separate. `factorize` re-analyzes whenever the pattern differs from the analyzed
   one, so a caller is always correct and the `analyses()` and `factorizations()` counters show the reuse. A failed analysis
-  or factorization keeps nothing, so the next call analyzes afresh (legacy behaviour).
-- Acceptance lives in `LinearSolver`, not in the backend: non-finite `x`, or `||Ax − b||₂/||b||₂` (absolute when b = 0)
-  above the threshold, is `inaccurate_solve`. Non-finite A or b is `invalid_input` and names the row. `std::bad_alloc` is
-  caught at this boundary and becomes `resource_exhausted`. Shape mismatches and overlapping b and x go through
-  `NITCAD_EXPECTS`.
+  or factorization keeps nothing, so the next call analyzes afresh (legacy behaviour). With Eigen SparseLU the reusable part
+  is only COLAMD and the elimination tree (2–6% of a 2D factorization, 0.1% of a 3D one, measured); the rest is redone
+  every time because row pivoting depends on the values.
+- Everything below lives in `LinearSolver`, so every backend gets it identically (linalg hardening, after the Unit 3 review):
+  - **Equilibration:** rows, then columns, scaled by powers of two (exact). On a coupled system with rows scaled 1e±20
+    and columns 1e±10 it took the forward error from 5.6e-4 to 4.3e-12.
+  - **Singularity:** an empty row or column (analysis), an all-zero row or column, an exactly zero pivot, or a
+    smallest-to-largest pivot ratio below `min_pivot_ratio` is `singular_system`, with the row or the original column as
+    the index. The ratio catches a floating region, whose last pivot is at rounding level rather than zero. It is a
+    heuristic. Measured on equilibrated systems: floating regions 1e-16 to 2.3e-14; well-anchored valid systems at
+    least 2.7e-8, including graded meshes up to a 1e8 spacing ratio. Weakly anchored valid systems overlap the singular
+    range: a region tied to the rest only by a zeroth-order term δ (relative to its couplings) gives about n·δ/2, and one
+    joined by a single weak link w about w/2. With n = 1000, δ = 1e-14 or w = 1e-12 is rejected, although both solve
+    with backward error 1e-16; an SRH-only floating body on a fine mesh can reach this range. A non-finite pivot
+    (overflow during elimination) is `inaccurate_solve`.
+  - **Acceptance:** the componentwise backward error max_i |b − Ax|_i / (|A||x| + |b|)_i (Oettli–Prager, with the
+    Arioli–Demmel–Duff denominator in column-equilibrated units where that one is at rounding level) must not exceed
+    `max_backward_error`, after up to `max_refinement_steps` of iterative refinement (stopping at the first step that
+    does not reduce it, keeping the better iterate). It replaced `||Ax − b||₂/||b||₂ ≤ 1e-6`,
+    which measured the condition number rather than the solve: it rejected a backward-stable 1D Laplacian with
+    n = 600,000 and accepted a solve with 0.06% forward error on a badly scaled system. `||Ax − b||∞/||b||∞` is still
+    reported.
+  - Non-finite A or b is `invalid_input` and names the row. `std::bad_alloc` is caught at this boundary and becomes
+    `resource_exhausted`. Shape mismatches, overlapping b and x, and use of a moved-from solver go through `NITCAD_EXPECTS`.
+  - Measured cost of these checks: 1–5% of an Eigen factorization (2D 30k–120k unknowns, 3D 24k), within timing noise.
 - Backend: Eigen SparseLU with COLAMD ordering, in `src/linalg/eigen_sparse_lu.*` (private), linked `PRIVATE`. It keeps a
-  column-compressed copy of the pattern and a CSR-to-CSC position map, so each factorization only scatters values.
+  column-compressed copy of the pattern and a CSR-to-CSC position map, so each factorization only scatters values. It
+  `static_assert`s Eigen 5.0.1, because its failure handling depends on that version's internals (message text, `info()`
+  unset on allocation failure, the supernodal pivot storage, COLAMD checked only by `eigen_assert`). Eigen sizes COLAMD's
+  workspace in 32-bit arithmetic and, when COLAMD fails, writes the permutation out of bounds before returning, so the
+  backend refuses matrices whose workspace (about 2.2·nnz + 11·n words, computed in 64 bits) exceeds `INT32_MAX`
+  (`resource_exhausted`; about 9.7e8 nonzeros) before calling it. It also checks the resulting ordering is a permutation,
+  as a last line of defence.
 - Not carried from the legacy `ReusableLU`/`DirectSession`: the subset-scatter and union-pattern re-analysis (only the
   deferred nonlocal models need them), the AMD ordering switch (measured pathological), and the size and instability
   fallbacks to SciPy (no SciPy here).
+
+**Known limits, recorded for later units (from the Unit 3 review):**
+- Eigen SparseLU does not scale to 3D: 81k unknowns (3D, 3 per node) took 70 s per factorization with 123× fill; 2D 270k
+  took 6.8 s. A faster backend (PARDISO first; iterative or MUMPS for 3D, per the legacy measurements) is needed before 3D
+  device work.
+- Eigen stores L and U offsets in the 32-bit index type; extrapolated, that overflows near 5e5 3D unknowns, where a
+  factorization would already take over 15 minutes. Fix with the next backend, or a 64-bit index in the private Eigen copy.
+- About four copies of A exist during a factorization (caller, solver, CSC copy, Eigen's own), small next to L and U.
+- The interface has one real right-hand side and an output-only `x`. Terminal admittances and sensitivities need several
+  right-hand sides; AC small-signal needs complex values or a real 2N formulation (decide before the AC unit); iterative
+  backends need an initial guess and the 3-unknowns-per-node block size.
+- Pattern stability is the assembler's job: skipping a zero entry changes the pattern and forces a re-analysis. Unit 7
+  should build the pattern once and assemble values in place; Newton tests should assert `analyses() == 1`.
+- The pivot-ratio check cannot tell a floating region from a weakly anchored one (see Singularity above). Gates for later
+  units: Unit 6 checks topology (every connected region of each equation has a Dirichlet row or a zeroth-order term),
+  after which device solves may set `min_pivot_ratio = 0`; Unit 9 must show that reverse-biased diode Jacobians (one-sided
+  Scharfetter–Gummel links of order e^-40) are not flagged.
+- Untested failure paths: `std::bad_alloc`, Eigen's out-of-memory messages, the COLAMD size guard (it needs about 1e9
+  nonzeros), and a refinement step that increases the backward error.
 
 ### 6.11 Mesh generality (R3: unstructured meshes deferred, no later rewrite)
 
@@ -458,7 +506,7 @@ testable on arrival. Units 4–9 are dimension-generic from the start (D4) and u
 |---|---|---|---|---|
 | 1 | Build scaffold: CMake, C++23 gate, vcpkg manifest with pinned baseline, Catch2 v3 harness | — | `core/CMakeLists.txt` (reference for options only) | configure fails on a toolset without the needed C++23 features; dependencies resolve from the pinned manifest; one trivial test runs |
 | 2 | Constants, units, `Error` type, `NITCAD_EXPECTS` (**done, on `main`**) | base | `constants.py`, `core/include/tcad/base/errors.hpp` | CODATA 2018 values; V_T(300 K) = 0.025852 V |
-| 3 | Sparse matrix, backend-neutral solver interface (6.10), Eigen SparseLU backend (**done on branch `core/linalg`**) | linalg | `linsolve.py`, `core/src/solver/direct_lu.cpp` | known systems (e.g. analytic tridiagonal); relative residual check; singular system returns an error; symbolic-reuse path exercised; header-boundary check, no second backend (Q5) |
+| 3 | Sparse matrix, backend-neutral solver interface (6.10), Eigen SparseLU backend (**done, on `main`; hardening on branch `core/linalg-hardening`**) | linalg | `linsolve.py`, `core/src/solver/direct_lu.cpp` | known systems (e.g. analytic tridiagonal); accuracy check (backward error after hardening); singular system returns an error; symbolic-reuse path exercised; header-boundary check, no second backend (Q5) |
 | 4 | Generic node/edge/control-volume mesh; tensor-grid constructors for D = 1, 2, 3 | mesh | `mesh.py`, `mesh2d.py`, `mesh3d.py`, `core/include/tcad/mesh/stencil.hpp` | total volume matches domain (section 10); positive dual volumes; consistent edge geometry across D = 1, 2, 3 on a uniform grid; public interface contains no (i, j, k) indexing |
 | 5 | Si material parameters, Caughey–Thomas mobility, SRH recombination, Boltzmann statistics (value + partials) | physics | `materials.py`, `core/include/tcad/physics/` | n_i(300 K) ≈ 1.0674e10; published mobility values (legacy `test_caughey_thomas_matches_published_silicon_values`); derivatives vs finite differences; SRH vanishes at equilibrium |
 | 6 | Device description and ohmic contact data | device | `core/include/tcad/device1d/inputs.hpp` (reference only) | construction and validation; invalid input returns an error |
@@ -614,6 +662,8 @@ withdrawn; numbering is otherwise kept stable. This proposal lives on `architect
 | V6 | CI workflow: the YAML parses and defines the intended triggers, matrix and steps; the pinned CMake download matches Kitware's published SHA-256 and Ninja runs as 1.13.2 locally. First CI run (push and pull request, run 36939739285): all version assertions passed; the job failed on the `VCPKG_ROOT` override described in section 9 (fixed in `a2b4b6a`). After the fix both Debug and Release passed on push and pull request, and the vcpkg binary cache restored on a re-run. | Verified on the hosted runner. |
 | V7 | Unit 2 (`core/base`): the legacy constants are the CODATA 2018 values: eps0 8.8541878128(13)e-12 F/m, m_e 9.1093837015(28)e-31 kg and the exact hbar, per NIST (`physics.nist.gov/cuu/pdf/wall_2018.pdf`; CODATA 2022 changed eps0 and m_e at about 1e-9, so pinning 2018 is what preserves legacy results). `FAST_FAIL_FATAL_APP_EXIT` = 7 in Windows SDK 10.0.26100.0 `winnt.h`. Debug and Release: 12 Catch2 test cases pass, no warnings. A wrong eps0 (CODATA 2022) fails the constants test. | Verified locally. |
 | V8 | Unit 3 (`core/linalg`): Debug and Release build with no warnings and pass 23 Catch2 test cases in `nitcad_linalg_test`. Neutrality check bites: a public header including `<Eigen/Core>` (C1083), including `<eigen3/Eigen/Core>` (C1189 on `EIGEN_WORLD_VERSION`) and Eigen linked `PUBLIC` (C1189 on `__has_include`) each fail the build; checked by temporary edits, then reverted. Eigen 5.0.1 SparseLU does not set `info()` when it cannot allocate its working memory but always sets `lastErrorMessage()`; the backend tests the message first. **Not tested:** `std::bad_alloc` and Eigen's out-of-memory path (`resource_exhausted`), more than 2³¹ − 1 nonzeros. | Verified locally. |
+| V9 | linalg hardening (`core/linalg-hardening`): Debug and Release build with no warnings; `nitcad_linalg_test` has 35 test cases, all pass (0.45 s in Release). Regression tests reproduce each review finding: the n = 600,000 Laplacian is accepted (backward error ≤ 1e-15, ‖r‖/‖b‖ > 1e-6); the badly scaled coupled system is rejected without equilibration (backward error > 1e-6) and accepted with it (forward error ≤ 1e-10); floating regions are `singular_system` (pivot ratio < 1e-13), and the column reported for one floating region among contacted ones lies in it; a moved-from solver is neither analyzed nor factorized. Found while building: the Arioli–Demmel–Duff fallback with plain ‖x‖∞ fired on every row of a column-scaled system and hid a bad solve; it now uses column-equilibrated units. Pivot-ratio calibration and the cost of the checks are in 6.10. **Not tested:** `std::bad_alloc`, Eigen's out-of-memory path, a COLAMD failure. | Verified locally. |
+| V10 | Follow-up review of the hardening (same branch): the pivot ratio read from Eigen equals the hand value (2/3 for diag(1, 3)); the singular index lies in the offending 4-node block at columns 3, 417 and 995, for both exact and rounding-level singularity; weakly anchored valid regions overlap the singular range (recorded in 6.10, pinned by a test); Eigen's COLAMD workspace is sized in 32 bits and its failure path writes out of bounds (`Eigen_Colamd.h:267`, `Ordering.h:140`), now guarded before the call; NaN pivots were ignored by the ratio scan, now `inaccurate_solve` (tested with an overflowing 2×2); refinement keeps the better iterate. Debug and Release: 39 test cases pass (0.45 s Release), no warnings; includes two solvers on two threads matching a serial run bit for bit. | Verified locally. |
 | V3 | Scaling definitions, scaled variables and Newton tolerances read from `inputs.cpp` and `device1d.cpp` and recorded in 6.1. One open question remains for Unit 8 (convergence criterion on the clipped correction). | Verified |
 
 Verifications due at their own unit, not blocking Unit 1: the exact
