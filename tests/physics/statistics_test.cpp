@@ -106,3 +106,47 @@ TEST_CASE("statistics: extreme doping does not overflow") {
     REQUIRE(close(e.p, 1e-300, eps));
     REQUIRE(std::isfinite(e.eta));
 }
+
+TEST_CASE("statistics: neutral equilibrium with |C| near DBL_MAX does not overflow") {
+    // The legacy 0.5 (C + sqrt(C^2 + 4 n_ie^2)) overflows here.
+    constexpr double big = std::numeric_limits<double>::max();
+    for (const double C : {big, -big, 1e308, -1e308}) {
+        CAPTURE(C);
+        const NeutralEquilibrium e = boltzmann_neutral_equilibrium(C, 1.0);
+        const double majority = C > 0.0 ? e.n : e.p;
+        const double minority = C > 0.0 ? e.p : e.n;
+        REQUIRE(majority == std::abs(C));
+        REQUIRE(minority > 0.0);
+        REQUIRE(close(minority, 1.0 / std::abs(C), 1e-14));  // subnormal, so 1e-14
+        REQUIRE(close(e.eta, std::copysign(std::log(std::abs(C)), C), 4.0 * eps));
+    }
+}
+
+TEST_CASE("statistics: eta when C / (2 n_ie) overflows") {
+    const NeutralEquilibrium e = boltzmann_neutral_equilibrium(1e300, 1e-10);
+    REQUIRE(e.n == 1e300);
+    REQUIRE(std::isfinite(e.eta));
+    REQUIRE(close(e.eta, std::log(1e300) - std::log(1e-10), 4.0 * eps));
+    REQUIRE(boltzmann_neutral_equilibrium(-1e300, 1e-10).eta == -e.eta);
+    // The fallback continues the asinh branch: where the quotient (5e306) is still finite, asinh
+    // gives the same value as ln|C| - ln n_ie.
+    const double C = 1e300;
+    const double ni = 1e-7;
+    REQUIRE(close(boltzmann_neutral_equilibrium(C, ni).eta, std::log(C) - std::log(ni), 4.0 * eps));
+}
+
+TEST_CASE("statistics: neutral equilibrium when n_ie^2 underflows") {
+    // n_ie = 1e-170: n_ie^2 is 0 in double, yet p = n_ie^2 / C = 1e-300 is representable.
+    // The legacy n_ie^2 / n returned p = 0.
+    const double ni = 1e-170;
+    REQUIRE(boltzmann_equilibrium_product(ni).value == 0.0);  // the documented limit
+    const NeutralEquilibrium e = boltzmann_neutral_equilibrium(1e-40, ni);
+    REQUIRE(e.n == 1e-40);
+    REQUIRE(close(e.p, 1e-300, 4.0 * eps));
+    REQUIRE(close((e.n / ni) * (e.p / ni), 1.0, 8.0 * eps));  // mass action in units of n_ie
+    REQUIRE(close(e.eta, std::log(1e-40 / ni), 4.0 * eps));
+    const NeutralEquilibrium h = boltzmann_neutral_equilibrium(-1e-40, ni);
+    REQUIRE(h.n == e.p);
+    REQUIRE(h.p == e.n);
+    REQUIRE(h.eta == -e.eta);
+}

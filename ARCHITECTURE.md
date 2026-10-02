@@ -132,7 +132,12 @@ thermionic emission through per-edge arrays in the `Inputs` struct, `core/includ
   alpha/beta or mu_min; mu_min > mu_max), so the model functions rely on it. `silicon_parameters` holds the legacy `SILICON`
   values that the first diode uses; electron affinity, saturation velocity, Auger, band-gap narrowing, effective masses and the
   other legacy material sets come with the units that use them. `band_gap_eV`, `conduction_band_dos`, `valence_band_dos` and
-  `intrinsic_density` are the legacy Varshni, (T/300)^1.5 and sqrt(Nc Nv) exp(−Eg/2kT) formulas.
+  `intrinsic_density` are the legacy Varshni, (T/300)^1.5 and sqrt(Nc Nv) exp(−Eg/2kT) formulas, with kT from
+  `base::thermal_voltage`. Successful validation does not allocate (messages are built only on failure).
+- `check_temperature(m, T)` returns `invalid_input` unless T is finite and positive, Eg(T) > 0, and for both carriers
+  mu_max(T) = mu_max (T/300)^T_exponent is finite and ≥ mu_min. Past either limit the formulas still evaluate but stop
+  meaning anything: n_i exceeds sqrt(Nc Nv), or mobility rises with doping (silicon: holes from about 857 K, electrons from
+  about 953 K; Eg reaches zero near 2998 K). The legacy checks neither. Unit 6 (or whichever layer takes T as input) calls it.
 - `caughey_thomas_mobility(m, carrier, N_total, T)` and `scharfetter_lifetime(m, carrier, N_total)` take the total ionised
   impurity N_A + N_D. Both depend only on doping and temperature, so they return values without partials (item 2).
 - `srh_recombination(n, p, EquilibriumProduct, n_ie, tau_n, tau_p)` returns R, dR/dn and dR/dp. It is `constexpr` and
@@ -143,12 +148,16 @@ thermionic emission through per-edge arrays in the `Inputs` struct, `core/includ
 - `statistics.hpp` holds every place statistics enter: `boltzmann_density(n_ie, eta)` (density and d/deta from the reduced
   potential), `boltzmann_equilibrium_product(n_ie)`, and `boltzmann_neutral_equilibrium(C, n_ie)` (n, p and eta of a
   charge-neutral node, for ohmic contacts and the initial guess; majority carrier from the square root, minority from mass
-  action, eta = asinh(C/2n_ie), as in the legacy `contact_value` and initial guess). Assembly (Unit 7) must call these and not
+  action, eta = asinh(C/2n_ie), as in the legacy `contact_value` and initial guess, but arranged so that no intermediate
+  overflows or underflows where the result is representable, see OLD / NEW below). Assembly (Unit 7) must call these and not
   write a statistics formula itself. All of them are homogeneous in the concentrations, so the assembler may pass values
   already divided by Ns.
-- Errors and preconditions: parameter sets are user input (`std::expected`); temperature, doping and n_ie in the
-  once-per-problem functions are `NITCAD_EXPECTS` preconditions (the device or solve layer validates them first); the
-  per-iteration kernels (`srh_recombination`, `boltzmann_density`) have no checks.
+- Errors and preconditions: parameter sets and the temperature range are user input (`std::expected`, `create` and
+  `check_temperature`); temperature, doping and n_ie in the once-per-problem functions are `NITCAD_EXPECTS` preconditions
+  (the device or solve layer validates them first; the temperature precondition lives in one private helper,
+  `src/physics/temperature.hpp`, beside the one mu_max(T) formula); the per-iteration kernels (`srh_recombination`,
+  `boltzmann_density`) have no checks. Limit: `boltzmann_equilibrium_product` returns n_ie², which underflows for n_ie below
+  about 1.5e-154 (cryogenic, or divided by Ns); Boltzmann results there are not meaningful anyway.
 - Changed from the legacy (OLD / NEW / REASON):
   - OLD `N = max(N, 1)` in mobility and lifetime. NEW: N ≥ 0 is a precondition, with no clamp. REASON: the clamp changed
     mu(0) by about 1e-15 and silently accepted negative input (6.7).
@@ -157,6 +166,10 @@ thermionic emission through per-edge arrays in the `Inputs` struct, `core/includ
     overshoot belongs to the solver (6.7). exp overflows above eta ≈ 709.78.
   - OLD: kB in eV/K was the rounded 8.617333262e-5. NEW: `base::k_B_eV_per_K`, the exact ratio k_B/q. REASON: Unit 2
     already pins it. Effect on n_i(300 K): about 4e-10 relative.
+  - OLD neutral equilibrium `0.5 (C + sqrt(C² + 4 n_ie²))`, `n_ie² / n`, `asinh(C / 2 n_ie)` (scaled units). NEW
+    `0.5 |C| + hypot(0.5 C, n_ie)`, `n_ie (n_ie / n)`, and ln|C| − ln n_ie when C / 2n_ie overflows. REASON (PR #9 review):
+    the old forms overflow for |C| near DBL_MAX and return p = 0 once n_ie² underflows. In the normal range the values
+    agree to rounding.
 - **For Unit 9:** the legacy J(0.5 V) fixture (`_build` in `tests/test_device1d_native_gates.py` [verified]) runs with
   `auger=True` and band-gap narrowing on. BGN is exactly zero there, because the doping (1e17) is below `bgn_N0` = 1.3e17.
   Auger is not in Unit 5. An estimate [derived, not run]: at 1e17, Auger adds about 0.3% to the bulk recombination rate, and
@@ -727,7 +740,7 @@ withdrawn; numbering is otherwise kept stable. This proposal lives on `architect
 | V9 | linalg hardening (`core/linalg-hardening`): Debug and Release build with no warnings; `nitcad_linalg_test` has 35 test cases, all pass (0.45 s in Release). Regression tests reproduce each review finding: the n = 600,000 Laplacian is accepted (backward error ≤ 1e-15, ‖r‖/‖b‖ > 1e-6); the badly scaled coupled system is rejected without equilibration (backward error > 1e-6) and accepted with it (forward error ≤ 1e-10); floating regions are `singular_system` (pivot ratio < 1e-13), and the column reported for one floating region among contacted ones lies in it; a moved-from solver is neither analyzed nor factorized. Found while building: the Arioli–Demmel–Duff fallback with plain ‖x‖∞ fired on every row of a column-scaled system and hid a bad solve; it now uses column-equilibrated units. Pivot-ratio calibration and the cost of the checks are in 6.10. **Not tested:** `std::bad_alloc`, Eigen's out-of-memory path, a COLAMD failure. | Verified locally. |
 | V10 | Follow-up review of the hardening (same branch): the pivot ratio read from Eigen equals the hand value (2/3 for diag(1, 3)); the singular index lies in the offending 4-node block at columns 3, 417 and 995, for both exact and rounding-level singularity; weakly anchored valid regions overlap the singular range (recorded in 6.10, pinned by a test); Eigen's COLAMD workspace is sized in 32 bits and its failure path writes out of bounds (`Eigen_Colamd.h:267`, `Ordering.h:140`), now guarded before the call; NaN pivots were ignored by the ratio scan, now `inaccurate_solve` (tested with an overflowing 2×2); refinement keeps the better iterate. Debug and Release: 39 test cases pass (0.45 s Release), no warnings; includes two solvers on two threads matching a serial run bit for bit. | Verified locally. |
 | V11 | Unit 4 (`core/mesh`): Debug and Release build with no warnings; `nitcad_mesh_test` has 16 test cases, all pass. Gates of section 11 on graded axes (1e3 spacing ratio): total volume equals the domain to 1e-14 relative in 1D and 2D and 1e-13 in 3D (legacy: 1e-14 2D, 1e-10 3D absolute); all volumes, lengths and areas positive; 2D and 3D grids reduce to the 1D one when grouped by x (node volumes and x-edge areas equal the 1D values times the transverse area, to 1e-14); the box method reproduces the discrete Gauss identity for linear fields in 1D, 2D and 3D to 1e-12, and that check detects a 1% error in a single coupling area; each boundary face's areas sum to the face's measure. The public interface has no grid indices: every test reads only the graph. | Verified locally. |
-| V12 | Unit 5 (`physics/silicon-models`): Debug and Release build with no warnings; `nitcad_physics_test` has 24 test cases, all pass. Gates of section 11: n_i(300 K) = 1.06738e10 (1e-4 gate; 1e-13 against a 40-digit reference computed independently from the legacy formulas); Caughey–Thomas passes the legacy published-value test (mu_n(0) = 1360, mu_n(1e18) = 263 within 25% of 300) and matches 40-digit values at 1e15–1e20 cm⁻³ and at 400 K to 1e-13; SRH is zero at equilibrium (exactly for an exactly representable np = n_ie², else at the rounding level of np) and gives dp/tau_p and dn/tau_n in low injection; dR/dn and dR/dp agree with central differences to 6.4e-11 worst (gate 1e-8), including the chain through a carrier-dependent equilibrium product. Mutation checks: dropping the dE/dn term and changing alpha_n from 0.91 to 0.90 each fail the suite. The legacy 25% mobility gate alone would not catch the second change; the pinned values do. | Verified locally. |
+| V12 | Unit 5 (`physics/silicon-models`): Debug and Release build with no warnings; `nitcad_physics_test` has 33 test cases, all pass. Gates of section 11: n_i(300 K) = 1.06738e10 (1e-4 gate; 1e-13 against a 40-digit reference computed independently from the legacy formulas); Caughey–Thomas passes the legacy published-value test (mu_n(0) = 1360, mu_n(1e18) = 263 within 25% of 300) and matches 40-digit values at 1e15–1e20 cm⁻³ and at 400 K to 1e-13; SRH is zero at equilibrium (exactly for an exactly representable np = n_ie², else at the rounding level of np) and gives dp/tau_p and dn/tau_n in low injection; dR/dn and dR/dp agree with central differences to 6.4e-11 worst (gate 1e-8), including the chain through a carrier-dependent equilibrium product. After the PR #9 review: `check_temperature` accepts silicon at 1–850 K and rejects T ≤ 0 or non-finite, Eg(T) ≤ 0 (including exactly 0) and mu_max(T) below mu_min (holes at 860 K, electrons at 1000 K) or infinite; neutral equilibrium stays finite and exact at |C| = DBL_MAX, with n_ie = 1e-170 (p = 1e-300 where the legacy gives 0) and where C / 2n_ie overflows; successful validation makes no heap allocation (counted through a replaced global operator new). Mutation checks, each failing exactly one test case: dropping the dE/dn term; alpha_n 0.91 → 0.90 (the legacy 25% mobility gate alone would not catch it; the pinned values do); each of the three legacy neutral-equilibrium forms; the old kT spelling (tested at temperatures where it rounds differently, 22–95.5 K); building the message on the success path; removing the mobility rule; accepting Eg = 0. | Verified locally. |
 | V3 | Scaling definitions, scaled variables and Newton tolerances read from `inputs.cpp` and `device1d.cpp` and recorded in 6.1. One open question remains for Unit 8 (convergence criterion on the clipped correction). | Verified |
 
 Verifications due at their own unit, not blocking Unit 1: the exact

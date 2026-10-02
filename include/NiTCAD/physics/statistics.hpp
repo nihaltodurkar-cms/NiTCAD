@@ -44,7 +44,8 @@ struct EquilibriumProduct {
     double d_dp;
 };
 
-// Boltzmann: n_eq p_eq = n_ie^2, independent of n and p.
+// Boltzmann: n_eq p_eq = n_ie^2, independent of n and p. n_ie^2 underflows (to subnormal, then 0)
+// for n_ie below about 1.5e-154; then SRH no longer vanishes at equilibrium to full precision.
 [[nodiscard]] constexpr EquilibriumProduct boltzmann_equilibrium_product(double n_ie) noexcept {
     return {n_ie * n_ie, 0.0, 0.0};
 }
@@ -57,9 +58,11 @@ struct NeutralEquilibrium {
 
 // Equilibrium densities of a charge-neutral node: n - p = net_doping (N_D - N_A) and
 // n p = n_ie^2. The majority carrier comes from 0.5 (|C| + sqrt(C^2 + 4 n_ie^2)) and the minority
-// from mass action, so neither cancels (legacy Device1D::contact_value); eta = asinh(C / (2 n_ie))
-// (the legacy initial guess). Preconditions (NITCAD_EXPECTS): net_doping is finite; n_ie is finite
-// and positive.
+// from mass action as n_ie (n_ie / majority), so neither cancels (legacy Device1D::contact_value,
+// which forms n_ie^2 / majority); eta = asinh(C / (2 n_ie)) (the legacy initial guess). No
+// intermediate overflows or underflows where the result is representable: n, p and eta are finite
+// whenever the majority density is, and p loses precision only near the subnormal range.
+// Preconditions (NITCAD_EXPECTS): net_doping is finite; n_ie is finite and positive.
 [[nodiscard]] NeutralEquilibrium boltzmann_neutral_equilibrium(double net_doping,
                                                                double n_ie);
 

@@ -86,9 +86,20 @@ private:
 // Semiconductor::create(silicon_parameters), which cannot fail.
 [[nodiscard]] Semiconductor silicon();
 
+// Whether the models of this material are usable at lattice temperature T. The device or solve
+// layer calls this when it validates its input; the model functions below only require T to be
+// finite and positive. Errors (invalid_input, the context value is the offending quantity):
+// - T not finite and positive;
+// - Eg(T) <= 0 (the Varshni fit has run past zero; n_i would exceed sqrt(Nc Nv));
+// - for either carrier, mu_max(T) = mu_max (T / 300)^T_exponent not finite or below mu_min, so
+//   the Caughey-Thomas mobility would rise with doping. Silicon: holes from about 857 K,
+//   electrons from about 953 K. Create() applies the same rule at 300 K.
+[[nodiscard]] std::expected<void, base::Error> check_temperature(const Semiconductor& m,
+                                                                 double temperature_K);
+
 // Temperature-dependent band quantities. Precondition (NITCAD_EXPECTS): temperature_K is finite
 // and positive. The Varshni fit is stated by the legacy to hold for silicon over 0-500 K; outside
-// that range the formulas are evaluated as written.
+// that range the formulas are evaluated as written (see check_temperature).
 [[nodiscard]] double band_gap_eV(const Semiconductor& m, double temperature_K);
 [[nodiscard]] double conduction_band_dos(const Semiconductor& m, double temperature_K);
 [[nodiscard]] double valence_band_dos(const Semiconductor& m, double temperature_K);
