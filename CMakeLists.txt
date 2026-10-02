@@ -168,3 +168,18 @@ add_executable(nitcad_device_test
   tests/device/topology_test.cpp)
 target_link_libraries(nitcad_device_test PRIVATE NiTCAD::device Catch2::Catch2WithMain)
 add_test(NAME device COMMAND nitcad_device_test)
+
+# --- assemble layer (scaling, Bernoulli/SG flux, ohmic values, equilibrium Poisson) --
+add_library(nitcad_assemble STATIC
+  src/assemble/scaling.cpp
+  src/assemble/equilibrium_poisson.cpp)
+add_library(NiTCAD::assemble ALIAS nitcad_assemble)
+target_include_directories(nitcad_assemble PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
+target_link_libraries(nitcad_assemble PUBLIC
+  NiTCAD::base NiTCAD::linalg NiTCAD::mesh NiTCAD::physics NiTCAD::device)
+
+add_executable(nitcad_assemble_test
+  tests/assemble/flux_test.cpp
+  tests/assemble/poisson_test.cpp)
+target_link_libraries(nitcad_assemble_test PRIVATE NiTCAD::assemble Catch2::Catch2WithMain)
+add_test(NAME assemble COMMAND nitcad_assemble_test)
