@@ -112,6 +112,7 @@ LinearSolver::LinearSolver(LinearSolver&& other) noexcept
       work_rhs_(std::move(other.work_rhs_)),
       work_x_(std::move(other.work_x_)),
       correction_(std::move(other.correction_)),
+      previous_x_(std::move(other.previous_x_)),
       analyzed_(std::exchange(other.analyzed_, false)),
       factorized_(std::exchange(other.factorized_, false)),
       analyses_(other.analyses_),
@@ -130,6 +131,7 @@ LinearSolver& LinearSolver::operator=(LinearSolver&& other) noexcept {
         work_rhs_ = std::move(other.work_rhs_);
         work_x_ = std::move(other.work_x_);
         correction_ = std::move(other.correction_);
+        previous_x_ = std::move(other.previous_x_);
         analyzed_ = std::exchange(other.analyzed_, false);
         factorized_ = std::exchange(other.factorized_, false);
         analyses_ = other.analyses_;
@@ -187,7 +189,7 @@ std::expected<void, base::Error> LinearSolver::analyze_unchecked(const SparseMat
     matrix_ = a;
     scaled_values_.resize(a.nonzeros());
     for (auto* v : {&row_scale_, &col_scale_, &weighted_row_max_, &residual_, &work_rhs_, &work_x_,
-                    &correction_}) {
+                    &correction_, &previous_x_}) {
         v->resize(n);
     }
     analyzed_ = true;
@@ -362,18 +364,25 @@ std::expected<SolveReport, base::Error> LinearSolver::solve(std::span<const doub
                                          "solution contains a non-finite value", k));
         }
         omega = backward_error(b, x);
-        while (!(omega <= config_.max_backward_error) &&
-               steps < static_cast<std::size_t>(config_.max_refinement_steps)) {
+        for (int attempt = 0;
+             !(omega <= config_.max_backward_error) && attempt < config_.max_refinement_steps;
+             ++attempt) {
             scaled_solve(residual_, correction_);
+            std::ranges::copy(x, previous_x_.begin());
             for (std::size_t i = 0; i < x.size(); ++i) {
                 x[i] += correction_[i];
             }
-            ++steps;
-            if (const std::size_t k = first_non_finite(x); k < x.size()) {
-                return std::unexpected(error(base::ErrorCode::inaccurate_solve,
-                                             "solution contains a non-finite value", k));
+            const double refined = first_non_finite(x) < x.size()
+                                       ? std::numeric_limits<double>::quiet_NaN()
+                                       : backward_error(b, x);
+            if (!(refined < omega)) {
+                // No progress: keep the better iterate, restore its residual, and stop.
+                std::ranges::copy(previous_x_, x.begin());
+                omega = backward_error(b, x);
+                break;
             }
-            omega = backward_error(b, x);
+            omega = refined;
+            ++steps;
         }
     } catch (const std::bad_alloc&) {
         return std::unexpected(out_of_memory());

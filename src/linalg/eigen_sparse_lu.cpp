@@ -4,6 +4,7 @@
 #include <charconv>
 #include <cmath>
 #include <cstddef>
+#include <cstdint>
 #include <limits>
 #include <string>
 #include <string_view>
@@ -53,11 +54,35 @@ std::expected<void, base::Error> SparseLuBackend::analyze(const SparseMatrix& a)
     }
     std::fill(csc_.valuePtr(), csc_.valuePtr() + a.nonzeros(), 0.0);
 
+    // Eigen sizes COLAMD's workspace in Index (32-bit) arithmetic (Colamd::recommended), and when
+    // COLAMD then fails, Ordering.h writes the permutation out of bounds before anything can
+    // check it. Refuse sizes whose workspace does not fit, using the same formula in 64 bits.
+    {
+        namespace colamd = Eigen::internal::Colamd;
+        const auto nnz = static_cast<std::int64_t>(a.nonzeros());
+        const auto cols = static_cast<std::int64_t>(n);
+        const auto words = [](std::int64_t count, std::size_t structure_bytes) {
+            return (count + 1) * static_cast<std::int64_t>(structure_bytes) /
+                   static_cast<std::int64_t>(sizeof(Index));
+        };
+        const std::int64_t workspace = 2 * nnz + words(cols, sizeof(colamd::ColStructure<Index>)) +
+                                       words(cols, sizeof(colamd::RowStructure<Index>)) + cols +
+                                       nnz / 5;
+        if (workspace > std::numeric_limits<Index>::max()) {
+            lu_.reset();
+            return std::unexpected(base::Error{
+                base::ErrorCode::resource_exhausted,
+                "matrix too large for Eigen's 32-bit COLAMD workspace",
+                base::ErrorContext{.index = std::nullopt, .value = static_cast<double>(workspace)}});
+        }
+    }
+
     lu_.emplace();
     lu_->analyzePattern(csc_);
 
     // Eigen checks COLAMD's result only with eigen_assert, which is compiled out in release
-    // builds, so verify here that the column ordering is a permutation.
+    // builds. With the size guard above COLAMD cannot run out of workspace; verify the column
+    // ordering is a permutation anyway, as a last line of defence.
     const auto& perm = lu_->colsPermutation().indices();
     factored_to_original_.assign(n, -1);
     bool valid = static_cast<std::size_t>(perm.size()) == n;
@@ -125,6 +150,17 @@ std::expected<PivotRatio, base::Error> SparseLuBackend::factorize(
         for (typename Supernodal::InnerIterator it(l, j); it; ++it) {
             if (it.index() == j) {
                 const double pivot = std::abs(it.value());
+                if (!std::isfinite(pivot)) {
+                    // Overflow during elimination; a NaN would otherwise be ignored by the
+                    // comparisons below and the factorization reported as usable.
+                    return std::unexpected(base::Error{
+                        base::ErrorCode::inaccurate_solve,
+                        "non-finite pivot (overflow in LU factorization)",
+                        base::ErrorContext{
+                            .index = static_cast<std::size_t>(
+                                factored_to_original_[static_cast<std::size_t>(j)]),
+                            .value = it.value()}});
+                }
                 if (pivot < smallest) {
                     smallest = pivot;
                     smallest_at = static_cast<std::size_t>(j);

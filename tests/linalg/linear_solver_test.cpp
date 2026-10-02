@@ -9,6 +9,7 @@
 #include <cstdint>
 #include <limits>
 #include <numbers>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -613,4 +614,119 @@ TEST_CASE("linear solver: a moved solver keeps its factorization; the source kee
     REQUIRE(third.is_factorized());
     REQUIRE_FALSE(second.is_factorized());  // NOLINT(bugprone-use-after-move)
     REQUIRE(third.solve(s.b, x).has_value());
+}
+
+// --- limits of the singularity checks (follow-up review of the hardening) -------------------
+
+namespace {
+
+// n-node chain with unit conductances, a zeroth-order term delta on every node, and (if w > 0)
+// edge (n/2 - 1, n/2) weakened to w and a Dirichlet row at node 0.
+SparseMatrix anchored_chain(Index n, double delta, double w) {
+    std::vector<Triplet> t;
+    for (Index i = 0; i + 1 < n; ++i) {
+        const double g = (w > 0.0 && i == n / 2 - 1) ? w : 1.0;
+        t.insert(t.end(), {{i, i, g}, {i + 1, i + 1, g}, {i, i + 1, -g}, {i + 1, i, -g}});
+    }
+    for (Index i = 0; i < n; ++i) t.push_back({i, i, delta});
+    if (w > 0.0) t.push_back({0, 0, 1.0});
+    return from(n, std::move(t));
+}
+
+}  // namespace
+
+TEST_CASE("linear solver: a weakly anchored region near min_pivot_ratio (known false positive)") {
+    // Both systems are nonsingular and solve with a backward error of about 1e-16, but the pivot
+    // ratio cannot tell them from a floating region: about n delta / 2 for a zeroth-order anchor
+    // and w / 2 for a weak link. These cases pin where the default threshold cuts.
+    LinearSolver solver = make_solver();
+    const auto zeroth_ok = solver.factorize(anchored_chain(1000, 1e-12, 0.0));
+    REQUIRE(zeroth_ok.has_value());
+    REQUIRE(*zeroth_ok->pivot_ratio > 4e-10);
+    REQUIRE(*zeroth_ok->pivot_ratio < 6e-10);
+    REQUIRE(solver.factorize(anchored_chain(1000, 1e-14, 0.0)).error().code ==
+            ErrorCode::singular_system);
+
+    const auto link_ok = solver.factorize(anchored_chain(1000, 0.0, 1e-9));
+    REQUIRE(link_ok.has_value());
+    REQUIRE(*link_ok->pivot_ratio > 4e-10);
+    REQUIRE(*link_ok->pivot_ratio < 6e-10);
+    REQUIRE(solver.factorize(anchored_chain(1000, 0.0, 1e-12)).error().code ==
+            ErrorCode::singular_system);
+
+    // With the check disabled the weak link is solved accurately.
+    LinearSolver unchecked = make_solver({.min_pivot_ratio = 0.0});
+    REQUIRE(unchecked.factorize(anchored_chain(1000, 0.0, 1e-12)).has_value());
+    std::vector<double> b(1000, 1.0), x(1000);
+    const auto report = unchecked.solve(b, x);
+    REQUIRE(report.has_value());
+    REQUIRE(report->backward_error <= 1e-15);
+}
+
+TEST_CASE("linear solver: the singular index points into the offending block") {
+    // A contacted 996-node chain plus a 4-node block at columns [lo, lo + 4) that is exactly
+    // singular (unit conductances: an exactly zero pivot) or floating (random conductances: a
+    // rounding-level pivot). The reported original column must lie in the block wherever it is.
+    for (const bool exact : {true, false}) {
+        for (const Index lo : {3, 417, 995}) {
+            std::vector<Triplet> t;
+            Index previous = -1;
+            for (Index i = 0; i < 1000; ++i) {
+                if (i >= lo && i < lo + 4) continue;
+                t.push_back({i, i, previous < 0 ? 3.0 : 2.0});
+                if (previous >= 0) t.insert(t.end(), {{i, previous, -1.0}, {previous, i, -1.0}});
+                previous = i;
+            }
+            const std::array<double, 3> g = exact ? std::array<double, 3>{1.0, 1.0, 1.0}
+                                                  : std::array<double, 3>{0.731, 1.377, 0.519};
+            for (Index e = 0; e < 3; ++e) {
+                const Index a = lo + e;
+                const double w = g[static_cast<std::size_t>(e)];
+                t.insert(t.end(), {{a, a, w}, {a + 1, a + 1, w}, {a, a + 1, -w}, {a + 1, a, -w}});
+            }
+            LinearSolver solver = make_solver();
+            const auto r = solver.factorize(from(1000, t));
+            REQUIRE(r.error().code == ErrorCode::singular_system);
+            const std::size_t index = *r.error().context->index;
+            REQUIRE(index >= static_cast<std::size_t>(lo));
+            REQUIRE(index < static_cast<std::size_t>(lo + 4));
+        }
+    }
+}
+
+TEST_CASE("linear solver: a pivot that overflows is inaccurate_solve at factorization") {
+    // Without equilibration, eliminating column 0 gives u_11 = -1e308 - 0.9 * 1.7e308 = -inf.
+    const SparseMatrix a = from(2, {{0, 0, 1.0}, {0, 1, 1.7e308}, {1, 0, 0.9}, {1, 1, -1e308}});
+    LinearSolver solver = make_solver({.equilibrate = false, .min_pivot_ratio = 0.0});
+    const auto r = solver.factorize(a);
+    REQUIRE_FALSE(r.has_value());
+    REQUIRE(r.error().code == ErrorCode::inaccurate_solve);
+    REQUIRE_FALSE(solver.is_factorized());
+
+    // Equilibrated, the same matrix is harmless.
+    REQUIRE(make_solver().factorize(a).has_value());
+}
+
+TEST_CASE("linear solver: independent solvers on separate threads match a serial run") {
+    const System s = badly_scaled_coupled(20);
+    const auto run = [&s](std::vector<double>& x) {
+        LinearSolver solver = make_solver();
+        x.assign(s.b.size(), 0.0);
+        return solver.factorize(s.a).has_value() && solver.solve(s.b, x).has_value();
+    };
+    std::vector<double> serial;
+    REQUIRE(run(serial));
+    std::vector<double> first, second;
+    bool ok_first = false;
+    bool ok_second = false;
+    {
+        std::jthread t1([&] { ok_first = run(first); });
+        std::jthread t2([&] { ok_second = run(second); });
+    }
+    REQUIRE(ok_first);
+    REQUIRE(ok_second);
+    for (std::size_t i = 0; i < serial.size(); ++i) {
+        REQUIRE(std::bit_cast<std::uint64_t>(first[i]) == std::bit_cast<std::uint64_t>(serial[i]));
+        REQUIRE(std::bit_cast<std::uint64_t>(second[i]) == std::bit_cast<std::uint64_t>(serial[i]));
+    }
 }

@@ -15,13 +15,17 @@
 // - Singularity checks: a row or column without a nonzero value, an exactly zero pivot, and a
 //   smallest-to-largest pivot ratio below min_pivot_ratio are singular_system. The last catches a
 //   floating region (a connected block without a Dirichlet row), which leaves one pivot at
-//   rounding level instead of exactly zero.
+//   rounding level instead of exactly zero. It is a heuristic: a valid region anchored only
+//   weakly (see min_pivot_ratio) is indistinguishable from a floating one and is rejected too.
+//   A non-finite pivot (overflow during elimination) is inaccurate_solve.
 // - Acceptance: a solve succeeds only if x is finite and its componentwise backward error, on the
 //   original unscaled system, is at most max_backward_error, even if the backend reported success.
 //   The componentwise backward error is max_i |b - A x|_i / (|A| |x| + |b|)_i (Oettli-Prager),
 //   with the Arioli-Demmel-Duff denominator for rows where that one is at rounding level. It is
 //   independent of row scaling, unlike ||b - A x|| / ||b||, which is reported for information.
-//   Up to max_refinement_steps steps of iterative refinement are tried before a solve is rejected.
+//   Up to max_refinement_steps steps of iterative refinement are tried before a solve is rejected;
+//   refinement stops at the first step that does not reduce the backward error, and the better
+//   iterate is kept.
 //
 // Failures are values (6.7): invalid_input (non-finite A or b, empty system, bad configuration),
 // singular_system, inaccurate_solve (backward error above the limit or non-finite x),
@@ -64,8 +68,14 @@ struct SolverConfig {
     int max_refinement_steps = 1;
     // A factorization with smallest |pivot| / largest |pivot| below this is singular_system;
     // 0 disables the check, and is required when equilibrate is false (raw pivots of a badly
-    // scaled matrix span many decades). Measured on equilibrated systems: floating regions gave 1e-16 to
-    // 2.3e-14, valid systems (graded meshes up to 1e8, scaled coupled systems) 2.7e-8 or more.
+    // scaled matrix span many decades). Measured on equilibrated systems:
+    // - floating regions (singular): 1e-16 to 2.3e-14, rising slowly with size;
+    // - well-anchored valid systems (graded meshes up to 1e8, scaled coupled systems): 2.7e-8 up;
+    // - weakly anchored valid systems overlap the singular range: a region tied to the rest only
+    //   by a zeroth-order term delta (relative to its couplings g) gives about n delta / (2 g), and
+    //   one joined by a single weak link w gives about w / 2. Such a region with n = 1000 is
+    //   rejected for delta / g = 1e-14 or w = 1e-12 (an SRH-only floating body on a fine mesh can
+    //   reach this). No threshold separates the two; topology checks belong to the device layer.
     double min_pivot_ratio = 1e-11;
 };
 
@@ -80,7 +90,7 @@ struct SolveReport {
     double backward_error;
     // ||b - A x||_inf / ||b||_inf, or ||b - A x||_inf when b = 0. For information only.
     double relative_residual;
-    // Iterative-refinement steps taken.
+    // Iterative-refinement steps kept (a step that did not reduce the backward error is undone).
     std::size_t refinement_steps;
     // Iterations used, for iterative backends only; empty for a direct backend.
     std::optional<std::size_t> iterations;
@@ -145,6 +155,7 @@ private:
     std::vector<double> work_rhs_;
     std::vector<double> work_x_;
     std::vector<double> correction_;
+    std::vector<double> previous_x_;
     bool analyzed_ = false;
     bool factorized_ = false;
     std::size_t analyses_ = 0;
