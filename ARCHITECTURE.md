@@ -382,6 +382,23 @@ Unstructured meshes are not implemented initially. The mesh architecture must st
    `ARCHITECTURE.md`, section 5.1, "OPEN DECISION from P2" [verified]).
 5. How the coupling measure is defined on general meshes (for example a dual-cell construction) is not decided here.
 
+**As built (Unit 4, `include/NiTCAD/mesh/`):**
+- `Mesh` is the graph only: `points()` (x, y, z in cm, zero beyond the dimension), `volumes()`, `edges()` (`first < second`,
+  `length`, `coupling_area`; a flux is area · (u_second − u_first) / length) and `boundary()` (named patches: strictly
+  increasing node ids with a boundary face area per node). Edge directions come from the coordinates (item 2). Node ids are
+  `std::int32_t`. In D dimensions volumes are in cm^D and areas in cm^(D−1) (1D per unit cross-section, 2D per unit depth).
+- `Mesh::from_parts` is the single entry for every producer and validates the graph: dimension 1–3; finite coordinates;
+  positive control volumes, edge lengths, coupling areas and boundary areas (`degenerate_mesh`, which also rejects the
+  legacy negative-dual-area hazard of item 4); edge length equal to the endpoints' distance (relative 1e-12); endpoints in
+  range, ordered, not repeated; patch names unique (`invalid_input`). The context index names the offending entry.
+- `make_tensor_grid(x[, y[, z]])` is the first producer, following the legacy box method (`mesh2d.control_volume_widths`,
+  `device2d.py:875–880`, `device3d.py:212–224`): widths are half of each adjacent spacing, a node's volume is the product of
+  its widths, an edge's coupling area is the product of the other axes' widths (1 in 1D), and patches `x_min` … `z_max` carry
+  the product of the face's widths. Node order (x fastest) is internal to the producer.
+- Not carried from the legacy mesh modules: `graded_mesh` and `merge_mesh` (node placement, to come with the device unit if
+  requested) and `check_mesh` (needs doping, so it belongs above `mesh`); the unstructured stencils (`stencil.cpp`) stay
+  deferred (R3).
+
 ## 7. Language placement (D6: C and Fortran deferred)
 
 | Component | Language | Reason |
@@ -410,6 +427,9 @@ tests/base/                 constants, error, contract tests and probe       (Un
 include/NiTCAD/linalg/      sparse_matrix.hpp, linear_solver.hpp             (Unit 3, exists)
 src/linalg/                 sparse matrix, solver, private Eigen backend     (Unit 3, exists)
 tests/linalg/               matrix, solver and header-boundary tests         (Unit 3, exists)
+include/NiTCAD/mesh/        mesh.hpp, tensor_grid.hpp                        (Unit 4, exists)
+src/mesh/                   graph validation, tensor-grid producer           (Unit 4, exists)
+tests/mesh/                 graph validation and geometry gates              (Unit 4, exists)
 .github/workflows/ci.yml    CI: build and test Debug and Release per branch  (CI unit, exists)
 include/NiTCAD/<layer>/...  public headers per layer                         (created per unit)
 src/<layer>/...             implementations                                  (created per unit)
@@ -508,7 +528,7 @@ testable on arrival. Units 4–9 are dimension-generic from the start (D4) and u
 | 1 | Build scaffold: CMake, C++23 gate, vcpkg manifest with pinned baseline, Catch2 v3 harness | — | `core/CMakeLists.txt` (reference for options only) | configure fails on a toolset without the needed C++23 features; dependencies resolve from the pinned manifest; one trivial test runs |
 | 2 | Constants, units, `Error` type, `NITCAD_EXPECTS` (**done, on `main`**) | base | `constants.py`, `core/include/tcad/base/errors.hpp` | CODATA 2018 values; V_T(300 K) = 0.025852 V |
 | 3 | Sparse matrix, backend-neutral solver interface (6.10), Eigen SparseLU backend (**done, on `main`; hardening on branch `core/linalg-hardening`**) | linalg | `linsolve.py`, `core/src/solver/direct_lu.cpp` | known systems (e.g. analytic tridiagonal); accuracy check (backward error after hardening); singular system returns an error; symbolic-reuse path exercised; header-boundary check, no second backend (Q5) |
-| 4 | Generic node/edge/control-volume mesh; tensor-grid constructors for D = 1, 2, 3 | mesh | `mesh.py`, `mesh2d.py`, `mesh3d.py`, `core/include/tcad/mesh/stencil.hpp` | total volume matches domain (section 10); positive dual volumes; consistent edge geometry across D = 1, 2, 3 on a uniform grid; public interface contains no (i, j, k) indexing |
+| 4 | Generic node/edge/control-volume mesh; tensor-grid constructors for D = 1, 2, 3 (**done on branch `core/mesh`**) | mesh | `mesh.py`, `mesh2d.py`, `mesh3d.py`, `core/include/tcad/mesh/stencil.hpp` | total volume matches domain (section 10); positive dual volumes; consistent edge geometry across D = 1, 2, 3 on a uniform grid; public interface contains no (i, j, k) indexing |
 | 5 | Si material parameters, Caughey–Thomas mobility, SRH recombination, Boltzmann statistics (value + partials) | physics | `materials.py`, `core/include/tcad/physics/` | n_i(300 K) ≈ 1.0674e10; published mobility values (legacy `test_caughey_thomas_matches_published_silicon_values`); derivatives vs finite differences; SRH vanishes at equilibrium |
 | 6 | Device description and ohmic contact data | device | `core/include/tcad/device1d/inputs.hpp` (reference only) | construction and validation; invalid input returns an error |
 | 7 | Scaling (V3), SG/Bernoulli flux, equilibrium Poisson residual + Jacobian, ohmic boundary | assemble | `core/src/device1d/device1d.cpp`, `core/src/device1d/inputs.cpp` | Bernoulli limits and symmetry; FD-Jacobian gate (section 10) |
@@ -518,7 +538,7 @@ testable on arrival. Units 4–9 are dimension-generic from the start (D4) and u
 | 11+ | Everything else: Fermi–Dirac, Auger, band-gap narrowing, field mobility, heterojunctions, impact ionization, BTBT, transient, AC, thermal, process, unstructured meshes, PARDISO/iterative backends, file formats, analysis, render, app | deferred | per the audit | per unit, when the owner requests |
 
 Units 1–9 are the smallest end-to-end vertical slice: a validated drift-diffusion diode. Everything past
-Unit 10 is deferred until sequenced. Units 4 onward are not started.
+Unit 10 is deferred until sequenced. Units 5 onward are not started.
 
 ## 12. Legacy facts: verified, derived and unverified
 
@@ -666,6 +686,7 @@ withdrawn; numbering is otherwise kept stable. This proposal lives on `architect
 | V8 | Unit 3 (`core/linalg`): Debug and Release build with no warnings and pass 23 Catch2 test cases in `nitcad_linalg_test`. Neutrality check bites: a public header including `<Eigen/Core>` (C1083), including `<eigen3/Eigen/Core>` (C1189 on `EIGEN_WORLD_VERSION`) and Eigen linked `PUBLIC` (C1189 on `__has_include`) each fail the build; checked by temporary edits, then reverted. Eigen 5.0.1 SparseLU does not set `info()` when it cannot allocate its working memory but always sets `lastErrorMessage()`; the backend tests the message first. **Not tested:** `std::bad_alloc` and Eigen's out-of-memory path (`resource_exhausted`), more than 2³¹ − 1 nonzeros. | Verified locally. |
 | V9 | linalg hardening (`core/linalg-hardening`): Debug and Release build with no warnings; `nitcad_linalg_test` has 35 test cases, all pass (0.45 s in Release). Regression tests reproduce each review finding: the n = 600,000 Laplacian is accepted (backward error ≤ 1e-15, ‖r‖/‖b‖ > 1e-6); the badly scaled coupled system is rejected without equilibration (backward error > 1e-6) and accepted with it (forward error ≤ 1e-10); floating regions are `singular_system` (pivot ratio < 1e-13), and the column reported for one floating region among contacted ones lies in it; a moved-from solver is neither analyzed nor factorized. Found while building: the Arioli–Demmel–Duff fallback with plain ‖x‖∞ fired on every row of a column-scaled system and hid a bad solve; it now uses column-equilibrated units. Pivot-ratio calibration and the cost of the checks are in 6.10. **Not tested:** `std::bad_alloc`, Eigen's out-of-memory path, a COLAMD failure. | Verified locally. |
 | V10 | Follow-up review of the hardening (same branch): the pivot ratio read from Eigen equals the hand value (2/3 for diag(1, 3)); the singular index lies in the offending 4-node block at columns 3, 417 and 995, for both exact and rounding-level singularity; weakly anchored valid regions overlap the singular range (recorded in 6.10, pinned by a test); Eigen's COLAMD workspace is sized in 32 bits and its failure path writes out of bounds (`Eigen_Colamd.h:267`, `Ordering.h:140`), now guarded before the call; NaN pivots were ignored by the ratio scan, now `inaccurate_solve` (tested with an overflowing 2×2); refinement keeps the better iterate. Debug and Release: 39 test cases pass (0.45 s Release), no warnings; includes two solvers on two threads matching a serial run bit for bit. | Verified locally. |
+| V11 | Unit 4 (`core/mesh`): Debug and Release build with no warnings; `nitcad_mesh_test` has 16 test cases, all pass. Gates of section 11 on graded axes (1e3 spacing ratio): total volume equals the domain to 1e-14 relative in 1D and 2D and 1e-13 in 3D (legacy: 1e-14 2D, 1e-10 3D absolute); all volumes, lengths and areas positive; 2D and 3D grids reduce to the 1D one when grouped by x (node volumes and x-edge areas equal the 1D values times the transverse area, to 1e-14); the box method reproduces the discrete Gauss identity for linear fields in 1D, 2D and 3D to 1e-12, and that check detects a 1% error in a single coupling area; each boundary face's areas sum to the face's measure. The public interface has no grid indices: every test reads only the graph. | Verified locally. |
 | V3 | Scaling definitions, scaled variables and Newton tolerances read from `inputs.cpp` and `device1d.cpp` and recorded in 6.1. One open question remains for Unit 8 (convergence criterion on the clipped correction). | Verified |
 
 Verifications due at their own unit, not blocking Unit 1: the exact
