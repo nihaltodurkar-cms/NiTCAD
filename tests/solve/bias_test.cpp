@@ -27,6 +27,7 @@
 #include "NiTCAD/mesh/tensor_grid.hpp"
 #include "NiTCAD/physics/mobility.hpp"
 #include "NiTCAD/physics/semiconductor.hpp"
+#include "NiTCAD/results/solution.hpp"
 #include "NiTCAD/solve/bias.hpp"
 #include "NiTCAD/solve/equilibrium.hpp"
 #include "NiTCAD/solve/newton.hpp"
@@ -79,13 +80,13 @@ device::Device diode_1d(const std::vector<double>& x) { return diode(*mesh::make
 std::vector<double> sweep(const device::Device& d, const std::vector<double>& volts,
                           const solve::BiasOptions& options = {}) {
     std::vector<double> J;
-    std::optional<solve::DeviceState> state;
+    std::optional<results::NodeFields> state;
     for (const double V : volts) {
         const std::vector<double> bias{V, 0.0};
         auto s = solve::solve_bias(d, bias, options, state ? &*state : nullptr);
         REQUIRE(s.has_value());
         J.push_back(s->terminal_current[0]);
-        state = std::move(s->state);
+        state = std::move(s->fields);
     }
     return J;
 }
@@ -114,7 +115,8 @@ TEST_CASE("bias: J(0.5 V) = 1.280e-2 A/cm^2 within 1% (section 10 gate)") {
     const auto s = solve::solve_bias(d, bias);
     REQUIRE(s.has_value());
     const double J = s->terminal_current[0];
-    UNSCOPED_INFO("J(0.5 V) = " << J << " A/cm^2, " << s->newton.iterations << " iterations");
+    UNSCOPED_INFO("J(0.5 V) = " << J << " A/cm^2, " << s->convergence.iterations.size()
+                                << " iterations");
     REQUIRE(std::abs(J - 1.280e-2) / 1.280e-2 < 1e-2);
     // Kirchhoff, and continuity: the total current is the same on every edge. Both hold to the
     // Newton tolerance (relative updates below 1e-8); the gate is the legacy spread, 1e-6.
@@ -145,7 +147,8 @@ TEST_CASE("bias: ideal-diode law (legacy test_ideal_diode_law)") {
     const physics::Semiconductor si = physics::silicon();
     const double Dn =
         physics::caughey_thomas_mobility(si, physics::Carrier::electron, 1e17, 300.0) * VT;
-    const double Dp = physics::caughey_thomas_mobility(si, physics::Carrier::hole, 1e17, 300.0) * VT;
+    const double Dp =
+        physics::caughey_thomas_mobility(si, physics::Carrier::hole, 1e17, 300.0) * VT;
     const double Js = base::q_C * ni * ni * (Dp / (Wn * 1e17) + Dn / (Wp * 1e17));
     const double ratio = J[10] / (Js * std::exp(V[10] / VT));  // V = 0.5
     UNSCOPED_INFO("J/J_ideal(0.5 V) = " << ratio);
@@ -214,14 +217,14 @@ TEST_CASE("bias: reverse leakage is generation-limited, and its Jacobians are no
     const std::vector<double> V{-0.5, -2.0, -8.0};
     std::vector<double> J;
     double smallest = 1.0;
-    std::optional<solve::DeviceState> state;
+    std::optional<results::NodeFields> state;
     for (const double v : V) {
         const std::vector<double> bias{v, 0.0};
         auto s = solve::solve_bias(d, bias, {}, state ? &*state : nullptr);
         REQUIRE(s.has_value());
         J.push_back(s->terminal_current[0]);
-        smallest = std::min(smallest, s->newton.smallest_pivot_ratio.value_or(1.0));
-        state = std::move(s->state);
+        smallest = std::min(smallest, s->convergence.smallest_pivot_ratio.value_or(1.0));
+        state = std::move(s->fields);
     }
     UNSCOPED_INFO("J " << J[0] << ", " << J[1] << ", " << J[2] << "; smallest pivot ratio "
                        << smallest);
@@ -246,11 +249,11 @@ TEST_CASE("bias: zero bias is equilibrium") {
     const auto s = solve::solve_bias(d, bias);
     REQUIRE(s.has_value());
     const auto eq = solve::solve_equilibrium(d);
-    for (std::size_t i = 0; i < eq->potential_V.size(); ++i) {
-        REQUIRE(std::abs(s->state.potential_V[i] - eq->potential_V[i]) <= 1e-12);
+    for (std::size_t i = 0; i < eq->fields.potential_V.size(); ++i) {
+        REQUIRE(std::abs(s->fields.potential_V[i] - eq->fields.potential_V[i]) <= 1e-12);
     }
     for (const double I : s->terminal_current) REQUIRE(std::abs(I) <= 1e-10);
-    REQUIRE(s->newton.iterations == 1);
+    REQUIRE(s->convergence.iterations.size() == 1);
 }
 
 TEST_CASE("bias: without recombination the electron current is the same on every edge") {
@@ -266,10 +269,10 @@ TEST_CASE("bias: without recombination the electron current is the same on every
     const double VT = base::thermal_voltage(300.0);
     const double Jn = s->edge_current_n.front();  // p side: minority electrons, no cancellation
     for (std::size_t k = 0; k < s->edge_current_n.size(); ++k) {
-        const double delta = (s->state.potential_V[k + 1] - s->state.potential_V[k]) / VT;
+        const double delta = (s->fields.potential_V[k + 1] - s->fields.potential_V[k]) / VT;
         const double one_sided = base::q_C * 1360.0 * VT / (x[k + 1] - x[k]) *
-                                 (s->state.n_cm3[k + 1] * assemble::bernoulli(delta) +
-                                  s->state.n_cm3[k] * assemble::bernoulli(-delta));
+                                 (s->fields.n_cm3[k + 1] * assemble::bernoulli(delta) +
+                                  s->fields.n_cm3[k] * assemble::bernoulli(-delta));
         CAPTURE(k);
         REQUIRE(std::abs(s->edge_current_n[k] - Jn) <= 64.0 * 2.2204460492503131e-16 * one_sided +
                                                            1e-9 * std::abs(Jn));
@@ -284,16 +287,17 @@ TEST_CASE("bias: Newton analyzes once, and converges to a quadratic finish") {
     const auto scaling = *assemble::make_scaling(d);
     auto system = *assemble::DriftDiffusion::create(d, scaling);
     const auto eq = *solve::solve_equilibrium(d);
-    std::vector<double> psi(eq.potential_V.size());
-    for (std::size_t i = 0; i < psi.size(); ++i) psi[i] = eq.potential_V[i] / scaling.V_T;
+    std::vector<double> psi(eq.fields.potential_V.size());
+    for (std::size_t i = 0; i < psi.size(); ++i) psi[i] = eq.fields.potential_V[i] / scaling.V_T;
     const std::vector<double> bias{0.5, 0.0};
     REQUIRE(system.set_bias(bias).has_value());
     auto x = system.state_from_potential(psi);
     auto solver = *linalg::LinearSolver::create({});
-    const auto report = solve::newton_solve(system, x, {}, solver);
-    REQUIRE(report.has_value());
+    results::ConvergenceRecord record;
+    REQUIRE(solve::newton_solve(system, x, {}, solver, record).has_value());
     REQUIRE(solver.analyses() == 1);
-    const auto& u = report->updates;
+    std::vector<double> u;
+    for (const auto& r : record.iterations) u.push_back(r.update);
     REQUIRE(u.back() < 1e-8);
     REQUIRE(u[u.size() - 1] <= 10.0 * u[u.size() - 2] * u[u.size() - 2]);
 }
@@ -305,7 +309,7 @@ TEST_CASE("bias: invalid input and non-convergence return errors") {
     const std::vector<double> bad{std::nan(""), 0.0};
     REQUIRE(solve::solve_bias(d, bad).error().code == ErrorCode::invalid_input);
     const std::vector<double> bias{0.5, 0.0};
-    solve::DeviceState empty;
+    results::NodeFields empty;
     REQUIRE(solve::solve_bias(d, bias, {}, &empty).error().code == ErrorCode::invalid_input);
     const auto few = solve::solve_bias(d, bias, {.newton = {.max_iterations = 2}});
     REQUIRE_FALSE(few.has_value());

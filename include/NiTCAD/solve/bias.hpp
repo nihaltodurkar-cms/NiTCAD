@@ -1,11 +1,13 @@
-// Steady-state bias solve (ARCHITECTURE.md section 11, Unit 9): Newton on the coupled
-// drift-diffusion system at given contact biases (legacy Device1D::solve_bias, baseline models).
+// Steady-state bias solves (ARCHITECTURE.md section 11, Units 9 and 10): Newton on the coupled
+// drift-diffusion system at given contact biases (legacy Device1D::solve_bias, baseline models),
+// for one bias point or a sweep.
 //
-// The start is either a given state (the previous bias point of a sweep) or, without one, the
-// equilibrium solution; its contact nodes are then set to the biased Dirichlet values, as in the
-// legacy. Results are in the public unit convention (V, cm^-3, A / cm^(3-D)).
-// DeviceState and BiasSolution are plain data defined here until the results layer exists
-// (Unit 10).
+// A sweep starts from the given state or, without one, from the equilibrium solution; each point
+// starts from the previous one with its contact nodes set to the new Dirichlet values (legacy). One
+// system and one linear solver serve the whole sweep, so the pattern is analyzed once.
+// Cancellation and progress follow control.hpp: the stop token is checked between points and before
+// every Newton iteration; progress events have Phase::equilibrium for the starting equilibrium and
+// Phase::bias with the point index. Results are plain data (results/), in V, cm^-3, A / cm^(3-D).
 #pragma once
 
 #include <expected>
@@ -14,10 +16,12 @@
 #include <vector>
 
 #include "NiTCAD/assemble/drift_diffusion.hpp"
-#include "NiTCAD/assemble/scaling.hpp"
 #include "NiTCAD/base/error.hpp"
 #include "NiTCAD/device/device.hpp"
 #include "NiTCAD/linalg/linear_solver.hpp"
+#include "NiTCAD/results/run.hpp"
+#include "NiTCAD/results/solution.hpp"
+#include "NiTCAD/solve/control.hpp"
 #include "NiTCAD/solve/newton.hpp"
 
 namespace NiTCAD::solve {
@@ -29,32 +33,29 @@ struct BiasOptions {
     assemble::DriftDiffusionModels models;
 };
 
-// Per node: electrostatic potential (referenced to the intrinsic level), carrier densities.
-struct DeviceState {
-    std::vector<double> potential_V;
-    std::vector<double> n_cm3;
-    std::vector<double> p_cm3;
-};
+// Solves each bias point in order. `points[k]` holds one bias in V per contact.
+// Errors, before anything is solved (invalid_input unless noted): no points; a point without one
+// finite value per contact; an initial state without a finite potential and positive densities for
+// every node; those of assemble::make_scaling, assemble::DriftDiffusion::create and
+// linalg::LinearSolver::create.
+// Once solving has started, nothing is an error: the Sweep holds the completed points and, if the
+// run stopped early, `stopped` (cancelled, non_convergence, singular_system, ...) and the stopped
+// point's convergence history in `unfinished` (empty if the starting equilibrium stopped).
+[[nodiscard]] std::expected<results::Sweep, base::Error> sweep_bias(
+    const device::Device& device, std::span<const std::vector<double>> points,
+    const BiasOptions& options = {}, const results::NodeFields* initial = nullptr,
+    const RunControl& control = {});
 
-struct BiasSolution {
-    assemble::Scaling scaling;
-    std::vector<double> bias_V;            // per contact, device.contacts() order
-    DeviceState state;
-    // Conventional current entering the device through each contact, in A / cm^(3-D):
-    // A/cm^2 in 1D, A/cm in 2D (per unit depth), A in 3D. They sum to zero (Kirchhoff).
-    std::vector<double> terminal_current;
-    // Electron and hole current through each mesh edge (along first -> second), same unit.
-    std::vector<double> edge_current_n;
-    std::vector<double> edge_current_p;
-    NewtonReport newton;
-};
-
-// Errors: invalid_input if bias_V does not have one finite value per contact or the initial state
-// does not have one positive density pair and a finite potential per node; those of
-// solve_equilibrium (when no initial state is given), assemble::DriftDiffusion::create,
-// linalg::LinearSolver::create and newton_solve (non_convergence among them).
-[[nodiscard]] std::expected<BiasSolution, base::Error> solve_bias(
+// One bias point: a sweep of one, with a stopped run returned as its error.
+[[nodiscard]] std::expected<results::BiasPoint, base::Error> solve_bias(
     const device::Device& device, std::span<const double> bias_V, const BiasOptions& options = {},
-    const DeviceState* initial = nullptr);
+    const results::NodeFields* initial = nullptr, const RunControl& control = {});
+
+// The run record of a sweep: the identity digest of every input (device, options, bias points,
+// initial state) and the options as named settings.
+[[nodiscard]] results::RunRecord make_run_record(const device::Device& device,
+                                                 const BiasOptions& options,
+                                                 std::span<const std::vector<double>> points,
+                                                 const results::NodeFields* initial = nullptr);
 
 }  // namespace NiTCAD::solve
