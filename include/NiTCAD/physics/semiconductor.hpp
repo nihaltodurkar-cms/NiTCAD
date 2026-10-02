@@ -28,6 +28,8 @@ struct CaugheyThomasParameters {
     double N_ref;       // [cm^-3]
     double alpha;       // exponent on N / N_ref
     double T_exponent;  // mu_max(T) = mu_max (T / 300)^T_exponent
+
+    bool operator==(const CaugheyThomasParameters&) const = default;
 };
 
 // Scharfetter doping-dependent SRH lifetimes: tau = tau0 / (1 + N / N_ref) (recombination.hpp).
@@ -35,6 +37,8 @@ struct ScharfetterLifetimeParameters {
     double tau_n0;  // [s]
     double tau_p0;  // [s]
     double N_ref;   // [cm^-3], shared by both carriers
+
+    bool operator==(const ScharfetterLifetimeParameters&) const = default;
 };
 
 struct SemiconductorParameters {
@@ -47,6 +51,8 @@ struct SemiconductorParameters {
     CaugheyThomasParameters electron_mobility;
     CaugheyThomasParameters hole_mobility;
     ScharfetterLifetimeParameters lifetime;
+
+    bool operator==(const SemiconductorParameters&) const = default;
 };
 
 // Silicon, the legacy defaults (materials.py SILICON): band and density-of-states values
