@@ -20,6 +20,7 @@
 #include "NiTCAD/linalg/linear_solver.hpp"
 #include "NiTCAD/mesh/tensor_grid.hpp"
 #include "NiTCAD/physics/semiconductor.hpp"
+#include "NiTCAD/results/convergence.hpp"
 #include "NiTCAD/solve/equilibrium.hpp"
 #include "NiTCAD/solve/newton.hpp"
 
@@ -89,7 +90,7 @@ TEST_CASE("equilibrium: built-in potential within 2e-3 V (legacy gate)") {
         const auto d = diode(*mesh::make_tensor_grid(x), 1e17, 1e17, T);
         const auto s = solve::solve_equilibrium(d);
         REQUIRE(s.has_value());
-        const double vbi = s->potential_V.back() - s->potential_V.front();
+        const double vbi = s->fields.potential_V.back() - s->fields.potential_V.front();
         CAPTURE(T, vbi);
         REQUIRE(std::abs(vbi - built_in(1e17, 1e17, T)) < 2e-3);
     }
@@ -101,13 +102,14 @@ TEST_CASE("equilibrium: converges quadratically, with one analysis") {
     const auto system = *assemble::EquilibriumPoisson::create(d, scaling);
     auto solver = *linalg::LinearSolver::create({});
     std::vector<double> psi = system.charge_neutral_potential();
-    const auto report = solve::newton_solve(system, psi, {}, solver);
-    REQUIRE(report.has_value());
-    UNSCOPED_INFO("iterations " << report->iterations);
-    REQUIRE(report->iterations <= 30);
+    results::ConvergenceRecord record;
+    REQUIRE(solve::newton_solve(system, psi, {}, solver, record).has_value());
+    UNSCOPED_INFO("iterations " << record.iterations.size());
+    REQUIRE(record.iterations.size() <= 30);
     REQUIRE(solver.analyses() == 1);
     // The last three corrections shrink quadratically.
-    const auto& u = report->updates;
+    std::vector<double> u;
+    for (const auto& r : record.iterations) u.push_back(r.update);
     REQUIRE(u.size() >= 3);
     for (std::size_t k = u.size() - 2; k < u.size(); ++k) {
         CAPTURE(k, u[k - 1], u[k]);
@@ -127,7 +129,7 @@ TEST_CASE("equilibrium: bulk and global neutrality") {
     double net = 0.0, depleted = 0.0;
     for (std::size_t i = 0; i < x.size(); ++i) {
         const double C = d.net_doping(static_cast<mesh::NodeId>(i));
-        const double rho = s.p_cm3[i] - s.n_cm3[i] + C;  // charge density / q
+        const double rho = s.fields.p_cm3[i] - s.fields.n_cm3[i] + C;  // charge density / q
         // More than 0.4 um from the junction (the depletion region is about 0.15 um wide).
         if (std::abs(x[i] - 1e-4) > 0.4e-4) {
             CAPTURE(x[i]);
@@ -140,9 +142,9 @@ TEST_CASE("equilibrium: bulk and global neutrality") {
     // The field vanishes at both neutral contacts, so the total charge is zero (Gauss).
     REQUIRE(std::abs(net) <= 1e-8 * depleted);
     // n p = n_i^2 everywhere (carriers are slaved to the potential at equilibrium).
-    const double ni = s.scaling.n_i;
+    const double ni = physics::intrinsic_density(physics::silicon(), 300.0);
     for (std::size_t i = 0; i < x.size(); ++i) {
-        REQUIRE(close(s.n_cm3[i] * s.p_cm3[i], ni * ni, 1e-13));
+        REQUIRE(close(s.fields.n_cm3[i] * s.fields.p_cm3[i], ni * ni, 1e-13));
     }
 }
 
@@ -165,7 +167,7 @@ TEST_CASE("equilibrium: peak field matches the depletion approximation") {
     const auto x = junction_axis();
     for (const double N : {1e16, 1e17, 1e18}) {
         const auto s = *solve::solve_equilibrium(diode(*mesh::make_tensor_grid(x), N, N));
-        const double peak = peak_field(x, s.potential_V);
+        const double peak = peak_field(x, s.fields.potential_V);
         const double vbi = built_in(N, N, 300.0);
         CAPTURE(N, peak);
         REQUIRE(close(peak, depletion(N, N, vbi - 2.0 * VT), 0.005));
@@ -176,7 +178,7 @@ TEST_CASE("equilibrium: peak field matches the depletion approximation") {
     // 3e11 cm^-2, and raise the field at the junction well above it (measured +39%).
     const auto s = *solve::solve_equilibrium(diode(*mesh::make_tensor_grid(x), 1e18, 1e16));
     const double approx = depletion(1e18, 1e16, built_in(1e18, 1e16, 300.0) - 2.0 * VT);
-    REQUIRE(peak_field(x, s.potential_V) > 1.2 * approx);
+    REQUIRE(peak_field(x, s.fields.potential_V) > 1.2 * approx);
 }
 
 TEST_CASE("equilibrium: a y-uniform 2D and 3D device reproduce 1D") {
@@ -187,11 +189,13 @@ TEST_CASE("equilibrium: a y-uniform 2D and 3D device reproduce 1D") {
     const auto s2 = *solve::solve_equilibrium(diode(*mesh::make_tensor_grid(x, y)));
     const auto s3 = *solve::solve_equilibrium(diode(*mesh::make_tensor_grid(x, y, z)));
     double worst2 = 0.0, worst3 = 0.0;
-    for (std::size_t k = 0; k < s2.potential_V.size(); ++k) {
-        worst2 = std::max(worst2, std::abs(s2.potential_V[k] - s1.potential_V[k % x.size()]));
+    for (std::size_t k = 0; k < s2.fields.potential_V.size(); ++k) {
+        const double diff = s2.fields.potential_V[k] - s1.fields.potential_V[k % x.size()];
+        worst2 = std::max(worst2, std::abs(diff));
     }
-    for (std::size_t k = 0; k < s3.potential_V.size(); ++k) {
-        worst3 = std::max(worst3, std::abs(s3.potential_V[k] - s1.potential_V[k % x.size()]));
+    for (std::size_t k = 0; k < s3.fields.potential_V.size(); ++k) {
+        const double diff = s3.fields.potential_V[k] - s1.fields.potential_V[k % x.size()];
+        worst3 = std::max(worst3, std::abs(diff));
     }
     UNSCOPED_INFO("2D " << worst2 << " V, 3D " << worst3 << " V");
     REQUIRE(worst2 <= 1e-9);  // legacy 2D gate: y-independent to atol 1e-9
@@ -201,8 +205,8 @@ TEST_CASE("equilibrium: a y-uniform 2D and 3D device reproduce 1D") {
 TEST_CASE("equilibrium: an undoped device has zero potential") {
     const auto s =
         *solve::solve_equilibrium(diode(*mesh::make_tensor_grid(junction_axis()), 0.0, 0.0));
-    for (const double v : s.potential_V) REQUIRE(v == 0.0);
-    REQUIRE(s.newton.iterations == 1);
+    for (const double v : s.fields.potential_V) REQUIRE(v == 0.0);
+    REQUIRE(s.convergence.iterations.size() == 1);
 }
 
 TEST_CASE("equilibrium: non-convergence and bad options return errors") {

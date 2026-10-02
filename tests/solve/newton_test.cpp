@@ -11,6 +11,7 @@
 
 #include "NiTCAD/linalg/linear_solver.hpp"
 #include "NiTCAD/linalg/sparse_matrix.hpp"
+#include "NiTCAD/results/convergence.hpp"
 #include "NiTCAD/solve/newton.hpp"
 
 using namespace NiTCAD;
@@ -44,38 +45,45 @@ linalg::LinearSolver solver() { return *linalg::LinearSolver::create({}); }
 TEST_CASE("newton: converges quadratically to the root") {
     std::vector<double> x{3.0};
     auto s = solver();
-    const auto report = solve::newton_solve(cube, x, {}, s);
-    REQUIRE(report.has_value());
+    results::ConvergenceRecord record;
+    REQUIRE(solve::newton_solve(cube, x, {}, s, record).has_value());
     REQUIRE(std::abs(x[0] - 2.0) <= 1e-15);
-    REQUIRE(report->updates.back() < 1e-8);
-    REQUIRE(report->iterations == static_cast<int>(report->updates.size()));
+    REQUIRE(record.converged);
+    const auto& it = record.iterations;
+    REQUIRE(it.back().update < 1e-8);
     // Quadratic: each update is at most a modest multiple of the previous one squared.
-    for (std::size_t k = 1; k < report->updates.size(); ++k) {
+    for (std::size_t k = 1; k < it.size(); ++k) {
         CAPTURE(k);
-        REQUIRE(report->updates[k] <= 2.0 * report->updates[k - 1] * report->updates[k - 1]);
+        REQUIRE(it[k].iteration == static_cast<int>(k) + 1);
+        REQUIRE(it[k].update <= 2.0 * it[k - 1].update * it[k - 1].update);
     }
+    REQUIRE(it.front().residual == 19.0);  // F(3) = 27 - 8
     REQUIRE(s.analyses() == 1);
-    REQUIRE(s.factorizations() == static_cast<std::size_t>(report->iterations));
+    REQUIRE(s.factorizations() == it.size());
 }
 
 TEST_CASE("newton: the step is clipped, the criterion uses the full correction") {
     // From x = 0.1: F = -7.999, J = 0.03, so the full correction is 266.6; it is clipped to 5.
     std::vector<double> x{0.1};
     auto s = solver();
-    const auto one = solve::newton_solve(cube, x, NewtonOptions{.max_iterations = 1}, s);
+    results::ConvergenceRecord record;
+    const auto one = solve::newton_solve(cube, x, NewtonOptions{.max_iterations = 1}, s, record);
     REQUIRE_FALSE(one.has_value());
     REQUIRE(one.error().code == ErrorCode::non_convergence);
     REQUIRE(one.error().context->index == 1);
     REQUIRE(std::abs(*one.error().context->value - 7.999 / 0.03) <= 1e-9);
     REQUIRE(x[0] == 0.1 + 5.0);  // the last iterate is kept
+    REQUIRE(record.iterations.size() == 1);  // and so is the history
+    REQUIRE_FALSE(record.converged);
     // A tolerance above the clipped step but below the full correction does not stop it.
     std::vector<double> y{0.1};
     const auto wide = solve::newton_solve(
-        cube, y, NewtonOptions{.max_iterations = 1, .tol_update = 6.0, .max_update = 5.0}, s);
+        cube, y, NewtonOptions{.max_iterations = 1, .tol_update = 6.0, .max_update = 5.0}, s,
+        record);
     REQUIRE_FALSE(wide.has_value());
     // Damped run still converges.
     std::vector<double> z{0.1};
-    const auto full = solve::newton_solve(cube, z, NewtonOptions{.max_update = 0.5}, s);
+    const auto full = solve::newton_solve(cube, z, NewtonOptions{.max_update = 0.5}, s, record);
     REQUIRE(full.has_value());
     REQUIRE(std::abs(z[0] - 2.0) <= 1e-15);
 }
@@ -88,7 +96,9 @@ TEST_CASE("newton: options are validated") {
                                    NewtonOptions{.tol_update = std::nan("")},
                                    NewtonOptions{.max_update = -1.0},
                                    NewtonOptions{.max_update = INFINITY}}) {
-        REQUIRE(solve::newton_solve(cube, x, o, s).error().code == ErrorCode::invalid_input);
+        results::ConvergenceRecord record;
+        REQUIRE(solve::newton_solve(cube, x, o, s, record).error().code ==
+                ErrorCode::invalid_input);
     }
     REQUIRE(x[0] == 3.0);
 }
@@ -98,7 +108,8 @@ TEST_CASE("newton: a non-finite residual is non-convergence, not a linear-solver
                           [](double x) { return std::exp(x); }};
     std::vector<double> x{800.0};
     auto s = solver();
-    const auto r = solve::newton_solve(overflow, x, {}, s);
+    results::ConvergenceRecord record;
+    const auto r = solve::newton_solve(overflow, x, {}, s, record);
     REQUIRE_FALSE(r.has_value());
     REQUIRE(r.error().code == ErrorCode::non_convergence);
     REQUIRE(r.error().message.find("not finite") != std::string::npos);
@@ -108,7 +119,8 @@ TEST_CASE("newton: a singular Jacobian is reported with the iteration") {
     const Scalar flat{[](double x) { return x * x + 1.0; }, [](double x) { return 2.0 * x; }};
     std::vector<double> x{0.0};
     auto s = solver();
-    const auto r = solve::newton_solve(flat, x, {}, s);
+    results::ConvergenceRecord record;
+    const auto r = solve::newton_solve(flat, x, {}, s, record);
     REQUIRE_FALSE(r.has_value());
     REQUIRE(r.error().code == ErrorCode::singular_system);
     REQUIRE(r.error().message.starts_with("Newton iteration 1: "));

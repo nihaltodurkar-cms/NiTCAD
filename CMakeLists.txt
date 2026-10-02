@@ -187,18 +187,26 @@ add_executable(nitcad_assemble_test
 target_link_libraries(nitcad_assemble_test PRIVATE NiTCAD::assemble Catch2::Catch2WithMain)
 add_test(NAME assemble COMMAND nitcad_assemble_test)
 
-# --- solve layer (Newton, equilibrium solve) ---------------------------------------
+# --- results layer (plain result data; header-only) --------------------------------
+add_library(nitcad_results INTERFACE)
+add_library(NiTCAD::results ALIAS nitcad_results)
+target_include_directories(nitcad_results INTERFACE "${CMAKE_CURRENT_SOURCE_DIR}/include")
+target_link_libraries(nitcad_results INTERFACE NiTCAD::base)
+
+# --- solve layer (Newton, equilibrium and bias solves, sweeps, cancellation, progress) ---
 add_library(nitcad_solve STATIC
   src/solve/equilibrium.cpp
-  src/solve/bias.cpp)
+  src/solve/bias.cpp
+  src/solve/run_record.cpp)
 add_library(NiTCAD::solve ALIAS nitcad_solve)
 target_include_directories(nitcad_solve PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
 target_link_libraries(nitcad_solve PUBLIC
-  NiTCAD::base NiTCAD::linalg NiTCAD::assemble NiTCAD::device)
+  NiTCAD::base NiTCAD::linalg NiTCAD::assemble NiTCAD::device NiTCAD::results)
 
 add_executable(nitcad_solve_test
   tests/solve/newton_test.cpp
   tests/solve/equilibrium_test.cpp
-  tests/solve/bias_test.cpp)
+  tests/solve/bias_test.cpp
+  tests/solve/sweep_test.cpp)
 target_link_libraries(nitcad_solve_test PRIVATE NiTCAD::solve Catch2::Catch2WithMain)
 add_test(NAME solve COMMAND nitcad_solve_test)

@@ -7,8 +7,8 @@
 // the largest component of the FULL correction dx, before clipping, is below tol_update. The legacy
 // measured the clipped correction; with a componentwise clip and tol_update < max_update the two
 // tests agree, but judging the full correction does not rely on that. The legacy 1D loop declares a
-// residual tolerance (1e-10) and never uses it; there is none here, and the final residual is
-// reported instead.
+// residual tolerance (1e-10) and never uses it; there is none here, and each iteration's residual
+// is recorded instead.
 // The Jacobian pattern is fixed by the system, so the solver analyzes once per run.
 // A system may replace the measure and the update with its own hooks (assemble::DriftDiffusion
 // does, for relative density updates):
@@ -21,8 +21,10 @@
 #include <concepts>
 #include <cstddef>
 #include <expected>
+#include <functional>
 #include <optional>
 #include <span>
+#include <stop_token>
 #include <string>
 #include <utility>
 #include <vector>
@@ -30,6 +32,7 @@
 #include "NiTCAD/base/error.hpp"
 #include "NiTCAD/linalg/linear_solver.hpp"
 #include "NiTCAD/linalg/sparse_matrix.hpp"
+#include "NiTCAD/results/convergence.hpp"
 
 namespace NiTCAD::solve {
 
@@ -39,13 +42,9 @@ struct NewtonOptions {
     double max_update = 5.0;   // componentwise damping cap on the scaled correction
 };
 
-struct NewtonReport {
-    int iterations = 0;
-    std::vector<double> updates;  // largest full correction of each iteration
-    double final_residual = 0.0;  // largest |F| at the last evaluated x (before its correction)
-    // Smallest pivot ratio over the run's factorizations, when the backend reports one (6.10).
-    std::optional<double> smallest_pivot_ratio;
-};
+// Called after every iteration with its record and whether it converged (see control.hpp for the
+// rules a callback must follow).
+using IterationObserver = std::function<void(const results::IterationRecord&, bool converged)>;
 
 // A system Newton can drive: a fixed number of unknowns, a Jacobian pattern, and F and J at x.
 template <class S>
@@ -56,8 +55,11 @@ concept NewtonSystem = requires(const S& s, std::span<const double> x, std::span
     s.evaluate(x, f, j);
 };
 
+// The convergence history goes into `record`, which is reset first and filled whatever the outcome.
 // Errors:
 // - invalid_input: max_iterations < 1, or tol_update or max_update not finite and positive;
+// - cancelled: the stop token was set before an iteration (context: the iteration it would have
+//   been); the token is checked before every iteration, the first included;
 // - non_convergence: no convergence within max_iterations (context: the iteration count and the
 //   last full correction), or a non-finite residual (context: the iteration);
 // - singular_system, inaccurate_solve, resource_exhausted: from the linear solver, with the
@@ -65,9 +67,11 @@ concept NewtonSystem = requires(const S& s, std::span<const double> x, std::span
 // x is updated in place; on error it holds the last iterate. Precondition (NITCAD_EXPECTS via the
 // system): x has system.unknowns() entries.
 template <NewtonSystem System>
-[[nodiscard]] std::expected<NewtonReport, base::Error> newton_solve(
+[[nodiscard]] std::expected<void, base::Error> newton_solve(
     const System& system, std::span<double> x, const NewtonOptions& options,
-    linalg::LinearSolver& solver) {
+    linalg::LinearSolver& solver, results::ConvergenceRecord& record,
+    const std::stop_token& stop = {}, const IterationObserver& observe = {}) {
+    record = {};
     const auto invalid = [](const char* message, double value) {
         return std::unexpected(base::Error{
             base::ErrorCode::invalid_input, message,
@@ -86,8 +90,14 @@ template <NewtonSystem System>
     const std::size_t n = system.unknowns();
     linalg::SparseMatrix jacobian = system.make_jacobian();
     std::vector<double> f(n), rhs(n), dx(n);
-    NewtonReport report;
     for (int iteration = 1; iteration <= options.max_iterations; ++iteration) {
+        if (stop.stop_requested()) {
+            return std::unexpected(base::Error{
+                base::ErrorCode::cancelled,
+                "cancelled before Newton iteration " + std::to_string(iteration),
+                base::ErrorContext{.index = static_cast<std::size_t>(iteration),
+                                   .value = std::nullopt}});
+        }
         system.evaluate(x, f, jacobian);
         double residual = 0.0;
         for (std::size_t i = 0; i < n; ++i) {
@@ -101,7 +111,6 @@ template <NewtonSystem System>
             residual = std::max(residual, std::abs(f[i]));
             rhs[i] = -f[i];
         }
-        report.final_residual = residual;
         auto factored = solver.factorize(jacobian);
         if (!factored) {
             base::Error e = std::move(factored.error());
@@ -109,8 +118,8 @@ template <NewtonSystem System>
             return std::unexpected(std::move(e));
         }
         if (const auto ratio = factored->pivot_ratio) {
-            report.smallest_pivot_ratio =
-                std::min(report.smallest_pivot_ratio.value_or(*ratio), *ratio);
+            record.smallest_pivot_ratio =
+                std::min(record.smallest_pivot_ratio.value_or(*ratio), *ratio);
         }
         auto solved = solver.solve(rhs, dx);
         if (!solved) {
@@ -132,15 +141,17 @@ template <NewtonSystem System>
                 x[i] += std::clamp(dx[i], -options.max_update, options.max_update);
             }
         }
-        report.iterations = iteration;
-        report.updates.push_back(update);
-        if (update < options.tol_update) return report;
+        record.iterations.push_back({iteration, update, residual});
+        const bool converged = update < options.tol_update;
+        record.converged = converged;
+        if (observe) observe(record.iterations.back(), converged);
+        if (converged) return {};
     }
     return std::unexpected(base::Error{
         base::ErrorCode::non_convergence,
         "Newton did not converge in " + std::to_string(options.max_iterations) + " iterations",
         base::ErrorContext{.index = static_cast<std::size_t>(options.max_iterations),
-                           .value = report.updates.back()}});
+                           .value = record.iterations.back().update}});
 }
 
 }  // namespace NiTCAD::solve

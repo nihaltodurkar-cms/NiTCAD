@@ -286,8 +286,8 @@ Whether the new solver reproduces these exact defaults is to be confirmed unit b
   last full correction); linear-solver errors pass through with the iteration prefixed to the message; bad options are
   `invalid_input`. x keeps the last iterate.
 - `solve_equilibrium(device, EquilibriumOptions)` builds the scaling and `EquilibriumPoisson`, starts from the
-  charge-neutral potential and returns `EquilibriumSolution` in V and cm⁻³ (6.2). `EquilibriumSolution` is plain data in
-  `solve` until the results layer exists (Unit 10). The linear solver keeps its default configuration, including the
+  charge-neutral potential and returns the result in V and cm⁻³ (6.2); since Unit 10 that is
+  `results::EquilibriumResult` (6.6). The linear solver keeps its default configuration, including the
   pivot-ratio check: every equilibrium Poisson row has a Dirichlet anchor or a strong charge term, so there is no reason to
   turn it off (6.10; Unit 9 revisits it for continuity rows). Cancellation and progress are Unit 10.
 - **Finding, built-in potential gate:** the legacy gate takes ψ(last) − ψ(first); both are Dirichlet contact values, so it
@@ -312,13 +312,14 @@ Whether the new solver reproduces these exact defaults is to be confirmed unit b
 - Newton hooks (`update_size`, `apply_update`):
   - ψ is clipped to ±`max_update`; n and p are clamped to [0.1, 10]× their current value (legacy).
   - Convergence is judged on the full correction: max(|dψ|, |dn|/n, |dp|/p). The legacy measured the clamped one.
-  - `NewtonReport` records the smallest pivot ratio.
+  - The convergence record (Unit 10: `results::ConvergenceRecord`) keeps the smallest pivot ratio.
 - `DriftDiffusionModels{doping_mobility, srh}` are the legacy `Models` flags of the baseline diode. OLD / NEW / REASON:
   with `doping_mobility` off, the legacy used `mu_max` at 300 K whatever the temperature; NEW uses Caughey–Thomas at N = 0,
   so μ_max(T); REASON: the same model at all temperatures (identical at 300 K).
 - `solve_bias(device, bias_V, options, initial)` starts from the given state (a sweep's previous point) or from the
-  equilibrium solution, sets the contact nodes to their biased values (legacy) and returns `BiasSolution`: potential and
-  densities, terminal currents, edge currents and the Newton report. These are plain data in `solve` until Unit 10.
+  equilibrium solution, sets the contact nodes to their biased values (legacy) and returns the potential and densities,
+  terminal currents, edge currents and the convergence history; since Unit 10 that is `results::BiasPoint` (6.6), and
+  `solve_bias` is a sweep of one point (6.9).
 - Not carried from the legacy solver: the line search and generation-strength stages (impact ionization and BTBT only),
   Robin contacts with surface recombination velocity, the energy-balance block, lagged field mobility, and the ln(n_ie)
   term in δ (band-gap narrowing is deferred, so n_ie is uniform within a material).
@@ -384,6 +385,20 @@ them, never the reverse. The legacy wire format was a Python JSON `DeviceSpec` a
 (inputs hash/identity, options, per-iteration convergence history, converged flag). It is plain data.
 An on-disk result format is **deferred** (R2), under the same independence rule as 6.5.
 
+**As built (Unit 10, `include/NiTCAD/results/`, header-only, depends on `base` only):**
+- `NodeFields`: potential, n and p per node.
+- `IterationRecord` and `ConvergenceRecord`: per iteration the full correction and the residual before it; the converged
+  flag; the smallest pivot ratio.
+- `EquilibriumResult`: fields and convergence.
+- `BiasPoint`: the bias per contact, fields, terminal currents, edge currents and convergence.
+- `RunRecord`:
+  - `input_identity`, a 64-bit FNV-1a digest of the mesh, device, options, bias points and initial state, hashing
+    doubles by their bit pattern. It identifies a run on one build; it is not a cross-machine checksum (6.8).
+  - `settings`, the options as (name, value) pairs. These are plain pairs because `results` may not depend on `solve`.
+- `Sweep`: the run record, the completed points, and `stopped` (the error that ended the run early, if any) with
+  `unfinished` (the convergence history of the point being solved then).
+- No file format (R2). `results` has no test directory of its own: it is plain data, exercised through the solve tests.
+
 ### 6.7 Error policy (R1, decided)
 
 - **Recoverable errors** are returned as `std::expected<T, NiTCAD::base::Error>`: invalid input, a degenerate
@@ -440,6 +455,27 @@ An on-disk result format is **deferred** (R2), under the same independence rule 
   residual norm, convergence flag). The solver never calls UI code. The worker forwards progress to the UI
   thread by posting a Win32 message.
 - This requires no extra layer: the token and observer types are defined in `solve`; the `app` layer owns the thread.
+
+**As built (Unit 10, `solve/control.hpp`, `solve/bias.hpp`):**
+- `RunControl{std::stop_token stop; std::function<void(const Progress&)> progress}`. It is accepted by `solve_equilibrium`,
+  `solve_bias` and `sweep_bias`.
+- **Safe points:** the token is checked before every Newton iteration, the first included, and between bias points.
+- **Progress:** an event after every Newton iteration, with phase (equilibrium or bias), point, point count, iteration,
+  update, residual and converged flag. Events are strictly increasing in (phase, point, iteration), and the bias events are
+  exactly the points' convergence records. The callback runs on the solving thread; it must not throw or re-enter the solve.
+- **`sweep_bias(device, points, options, initial, control)`:**
+  - It solves the points in order, each started from the previous one, with one system and one linear solver, so the
+    pattern is analyzed once.
+  - Invalid input is an `std::expected` error before anything runs.
+  - Once running, a cancelled or failed sweep is still a value: it keeps the completed points, with `stopped` (`cancelled`
+    and the point or iteration in the context, or `non_convergence`, `singular_system`, ...) and `unfinished`.
+  - `solve_bias` is a sweep of one point and returns a stopped run as its error. `newton_solve` fills a
+    `ConvergenceRecord` whatever the outcome, and takes the stop token and an iteration observer.
+- Not built here: the worker thread and the Win32 message posting belong to `app` (L8). A test runs a sweep on a
+  `std::jthread` and cancels it from the main thread deterministically (the worker pauses in a progress event until the
+  stop is requested).
+- Cancellation latency is at most one residual evaluation, factorization and solve, as stated above; the factorization
+  times measured in 6.10 (Known limits) bound it.
 
 ### 6.10 Linear solver interface (D3)
 
@@ -604,9 +640,11 @@ tests/device/               construction, validation, floating regions       (Un
 include/NiTCAD/assemble/    scaling, bernoulli, sg_flux, ohmic, equilibrium_poisson (Unit 7); drift_diffusion (Unit 9)
 src/assemble/               scaling, scaled device (private), equilibrium Poisson, drift-diffusion (Units 7, 9)
 tests/assemble/             Bernoulli/SG references, FD-Jacobian gate, reduction (Unit 7, exists)
-include/NiTCAD/solve/       newton.hpp, equilibrium.hpp (Unit 8); bias.hpp (Unit 9)
-src/solve/                  equilibrium and bias solves                      (Units 8, 9)
-tests/solve/                Newton contract, equilibrium and bias diode gates, legacy graded_mesh port (Units 8, 9)
+include/NiTCAD/solve/       newton.hpp, equilibrium.hpp (Unit 8); bias.hpp (Unit 9, sweeps Unit 10); control.hpp (Unit 10)
+src/solve/                  equilibrium and bias solves, sweeps, run record (Units 8-10)
+tests/solve/                Newton contract, equilibrium and bias diode gates, legacy graded_mesh port, sweeps,
+                            cancellation and progress (Units 8-10)
+include/NiTCAD/results/     convergence.hpp, solution.hpp, run.hpp (header-only plain data) (Unit 10, exists)
 .github/workflows/ci.yml    CI: build and test Debug and Release per branch  (CI unit, exists)
 include/NiTCAD/<layer>/...  public headers per layer                         (created per unit)
 src/<layer>/...             implementations                                  (created per unit)
@@ -710,12 +748,12 @@ testable on arrival. Units 4–9 are dimension-generic from the start (D4) and u
 | 6 | Device description and ohmic contact data (**done, on `main`**) | device | `core/include/tcad/device1d/inputs.hpp` (reference only) | construction and validation; invalid input returns an error |
 | 7 | Scaling (V3), SG/Bernoulli flux, equilibrium Poisson residual + Jacobian, ohmic boundary (**done, on `main`**) | assemble | `core/src/device1d/device1d.cpp`, `core/src/device1d/inputs.cpp` | Bernoulli limits and symmetry; FD-Jacobian gate (section 10) |
 | 8 | Newton solver (scaled variables) and equilibrium solve (**done, on `main`**) | solve | `device.py` options, `device1d.cpp` | built-in potential within 2e-3 V; bulk neutrality; convergence; non-convergence returns an error value |
-| 9 | Electron/hole continuity assembly and bias solve; first end-to-end gate (**done on branch `solve/bias-continuity`**) | assemble, solve | `device1d.cpp`, `tests/test_validation.py`, `tests/test_device1d_native_gates.py` | J(0.5 V) = 1.280e-2 A/cm² ± 1%; ideal-diode law; current continuity; mesh independence; uniform 2D/3D reproduces 1D to a tolerance set at this unit |
-| 10 | Result representation, cancellation and progress | results, solve | — (new) | cancellation returns partial results; progress is monotonic |
+| 9 | Electron/hole continuity assembly and bias solve; first end-to-end gate (**done, on `main`**) | assemble, solve | `device1d.cpp`, `tests/test_validation.py`, `tests/test_device1d_native_gates.py` | J(0.5 V) = 1.280e-2 A/cm² ± 1%; ideal-diode law; current continuity; mesh independence; uniform 2D/3D reproduces 1D to a tolerance set at this unit |
+| 10 | Result representation, cancellation and progress (**done on branch `solve/results-control`**) | results, solve | — (new) | cancellation returns partial results; progress is monotonic |
 | 11+ | Everything else: Fermi–Dirac, Auger, band-gap narrowing, field mobility, heterojunctions, impact ionization, BTBT, transient, AC, thermal, process, unstructured meshes, PARDISO/iterative backends, file formats, analysis, render, app | deferred | per the audit | per unit, when the owner requests |
 
 Units 1–9 are the smallest end-to-end vertical slice: a validated drift-diffusion diode. Everything past
-Unit 10 is deferred until sequenced. Units 10 onward are not started.
+Unit 10 is deferred until sequenced; nothing past Unit 10 is started.
 
 ## 12. Legacy facts: verified, derived and unverified
 
@@ -870,6 +908,7 @@ withdrawn; numbering is otherwise kept stable. This proposal lives on `architect
 | V14 | Unit 7 (`assemble/equilibrium-poisson`): Debug and Release build with no warnings; `nitcad_assemble_test` has 16 test cases, all pass. Scaling of a 1e17 silicon diode matches 50-digit values (L_D = 1.29288e-6 cm, J0 = 12392.28 A/cm², R0 = 5.98249e28 cm⁻³s⁻¹) to 1e-14. Bernoulli: within 4 ulp (B) and 1e-13 (B') of 50-digit references from −1000 to 709; B(−x) = B(x) + x and B'(x) + B'(−x) = −1 hold to rounding; continuous across the series switch; no clipping. SG fluxes vanish at equilibrium to 1e-13 of their one-sided terms, reduce to diffusion and to upwinded drift, change sign exactly under reversal, and their partials match finite differences to 1e-8. Equilibrium Poisson: section 10 FD-Jacobian gate on every column (91 in 1D, 364 in 2D, 348 in 3D) at a perturbed state, worst 2.7e-9 (gate 5e-5); the 1D residual equals the legacy row written out by hand to 1e-13; a y-uniform 2D residual equals the 1D one times the scaled transverse width to 1e-12; contact rows are exact Dirichlet rows; three Newton iterations reuse one analysis. Mutation checks: dropping the charge derivative, a coupling scale of L_D^(D−1), edge terms in contact rows, a flipped hole-flux sign, and no heterojunction check each fail the suite. | Verified locally. |
 | V15 | Unit 8 (`solve/equilibrium-newton`): Debug and Release build with no warnings; `nitcad_solve_test` has 12 test cases, all pass. Newton on one-unknown systems: quadratic convergence, one analysis per run, clipping with the last iterate kept, the full-correction criterion, option validation, non-finite residual and singular Jacobian errors. Equilibrium of a silicon diode on the legacy fixture mesh (spacing 1e-8 cm at the junction growing by 1.2 to 1e-6 cm, 241 nodes): converged in 7 iterations, the last corrections shrinking quadratically, final max|F| ≤ 1e-10, one analysis; V_bi within 2e-3 V at 300 K and 400 K; |p − n + C| ≤ 1e-6 |C| more than 0.4 µm from the junction; total charge ≤ 1e-8 of the depleted charge; n p = n_i² to 1e-13; peak field of symmetric junctions within 0.5% of the corrected depletion approximation (measured 0.01–0.17%); a y-uniform 2D and 3D device reproduce 1D to 1.1e-16 V (legacy gate 1e-9); an undoped device gives zero potential in one iteration; too few iterations, a bad Ns and a bad linear configuration return errors. Mutation checks: the clipped-correction criterion, no clipping, no finite-residual check and unscaled output potential each fail the suite. | Verified locally. |
 | V16 | Unit 9 (`solve/bias-continuity`): Debug and Release build with no warnings; `nitcad_assemble_test` has 22 test cases and `nitcad_solve_test` 23, all pass. Fixtures on the legacy meshes, from a test port of `graded_mesh` that matches the legacy output (250, 262 and 450 nodes; nodes to 1e-12). **J(0.5 V) = 1.28008e-2 A/cm²** (gate 1.280e-2 ± 1%; 0.006% off) in 10 iterations, without Auger; Kirchhoff to 8.8e-9 and the total current equal on every edge to 7.3e-8 (legacy spread 1e-6); ideal-diode law: J/J_ideal(0.5 V) = 0.969 (gate 0.85–1.15) and ideality within 0.02 of 1 for every step from 0.3 to 0.6 V; least-squares ideality over 0.3–0.7 V 1.004 (gate ±0.05); a 2× finer mesh moves J(0.5 V) by 0.005% (gate 3%); y-uniform 2D and 3D devices reproduce the 1D current to 1.3e-15; reverse bias: J < 0 at −0.5, −2, −8 V with exponent 0.85 (gate 0.5–1.5), smallest pivot ratio 2.1e-3 (not flagged); zero bias is the equilibrium solution in one iteration; one analysis per Newton run, quadratic finish. Coupled FD-Jacobian gate (legacy probe at +0.3 V, every column; 183 in 1D, plus 2D and 3D): worst 3.3e-9; recombination part on its own: 7.6e-7 (gate 1e-5); the 1D rows equal the legacy formulas written out on a 1e18/1e16 diode to 1e-12; a y-uniform 2D residual equals the 1D one times the scaled width to 1e-12. Auger measured with a temporary patch: 4.3e-7 of J(0.5 V). Mutation checks: dropping dR/dn from the Jacobian, flipping the recombination sign in the hole row, flipping the terminal-current sign, an arithmetic instead of harmonic mobility mean, and no density clamp each fail the suite (the first and fourth only after the two targeted tests were added). | Verified locally. |
+| V17 | Unit 10 (`solve/results-control`): Debug and Release build with no warnings; `nitcad_solve_test` has 32 test cases, all pass (the existing Unit 8 and 9 tests moved to the `results` types unchanged in substance). A 0–0.5 V sweep equals the chain of one-point solves to 1e-9 (the chain passes states through physical units) and ends at J(0.5 V) within the 1% gate; the run record carries the settings. Progress: strictly increasing in (phase, point, iteration), iterations counting from 1 per point, the converged event closing each point, the bias events equal to the convergence records. Cancellation keeps partial results: a stop after point 1 returns points 0–1 bit-identical to the full run (context: point 2, no unfinished point); a stop at iteration 2 of point 3 returns points 0–2 and the unfinished 2-iteration history (context: iteration 3); a stop requested before the start solves nothing and emits no event, and `solve_equilibrium` and `solve_bias` return `cancelled`; a sweep on a `std::jthread` cancelled from the main thread stops at the next safe point, deterministically. A point that does not converge (0.8 V with 8 iterations) stops the sweep with the earlier point kept. Invalid points or initial state are errors before any event. The run identity is equal for equal inputs and changes with the doping, an option, a bias point or an initial state. Mutation checks: removing the between-points or the Newton stop check, a wrong point index in progress events, and leaving the donors out of the digest each fail the suite. | Verified locally. |
 | V3 | Scaling definitions, scaled variables and Newton tolerances read from `inputs.cpp` and `device1d.cpp` and recorded in 6.1. One open question remains for Unit 8 (convergence criterion on the clipped correction). | Verified |
 
 Verifications due at their own unit: none left. The 5e-5 Jacobian gate's normalization was read at Unit 7 (section 10), and
