@@ -303,7 +303,8 @@ interface fits both direct and iterative backends stays unproven until one is re
 **As built (Unit 3, `include/NiTCAD/linalg/`):**
 - `SparseMatrix`: CSR with `std::int32_t` indices (Eigen's and LP64 PARDISO's index type), built from triplets.
   Duplicates are summed in input order; explicit zeros stay in the pattern; values can be rewritten in place, the pattern
-  cannot. Bad dimensions or indices are `invalid_input`.
+  cannot. Bad dimensions or indices are `invalid_input`. It is `BasicSparseMatrix<Scalar>` for `Scalar` = `double`
+  (`SparseMatrix`) or `std::complex<double>` (`ComplexSparseMatrix`), both compiled once in `sparse_matrix.cpp` (A5).
 - `LinearSolver::create(SolverConfig)` validates `backend`, `threads` (Eigen SparseLU: exactly 1), `equilibrate`
   (default on), `max_backward_error` (default 1e-8), `max_refinement_steps` (default 1) and `min_pivot_ratio`
   (default 1e-11; must be 0 when not equilibrating).
@@ -354,8 +355,8 @@ interface fits both direct and iterative backends stays unproven until one is re
   factorization would already take over 15 minutes. Fix with the next backend, or a 64-bit index in the private Eigen copy.
 - About four copies of A exist during a factorization (caller, solver, CSC copy, Eigen's own), small next to L and U.
 - The interface has one real right-hand side and an output-only `x`. Terminal admittances and sensitivities need several
-  right-hand sides; AC small-signal needs complex values or a real 2N formulation (decide before the AC unit); iterative
-  backends need an initial guess and the 3-unknowns-per-node block size.
+  right-hand sides; AC small-signal solves a complex system (A5: the matrix type exists, a complex `LinearSolver` comes with
+  the AC unit); iterative backends need an initial guess and the 3-unknowns-per-node block size.
 - Pattern stability is the assembler's job: skipping a zero entry changes the pattern and forces a re-analysis. Unit 7
   should build the pattern once and assemble values in place; Newton tests should assert `analyses() == 1`.
 - The pivot-ratio check cannot tell a floating region from a weakly anchored one (see Singularity above). Gates for later
@@ -629,6 +630,7 @@ withdrawn; numbering is otherwise kept stable. This proposal lives on `architect
 | Q8 | `x64-windows-static-md` is the initial and standard triplet for development, CI and release unless a concrete requirement justifies another. |
 | Q9 | Verified reference toolset MSVC 14.51 (`14.51.36231`), with exact MSVC toolset, Windows SDK, CMake and Ninja versions pinned for CI, Visual Studio Build Tools on CI, and local Community use subject to Microsoft's licence terms. The 14.50 LTS target was not adopted (untested); an LTS move is Q11. |
 | D8 | CMake + vcpkg manifest mode with a pinned baseline, explicit version constraints/overrides, and a reproducible CI dependency/cache strategy. Baseline, Eigen version and triplet are decided (Q7, Q8); the CI cache strategy is open (Q10). |
+| A5 | **AC representation and index width** (decided 2026-10-02, owner: "Do A5 now"). AC small-signal solves the complex system (J + iωC) x = b, as the legacy code does (`ac.py:187`, `ac2d.py:317`, `ac3d.py:256`: `spsolve(J0 + 1j*omega*Cmat, b)`); the real 2N block form is not used (4× the nonzeros and a departure from legacy). `SparseMatrix` is therefore `BasicSparseMatrix<Scalar>` with `Scalar` ∈ {`double`, `std::complex<double>`}, done while only linalg and its tests depend on it; `SparseMatrix` stays the name of the real matrix, so no caller changes. Assembly (Unit 7) should build J and, later, C on one shared pattern so the AC matrix reuses it. Complex solving (a complex `LinearSolver`, its acceptance check and backends) is part of the AC unit. Index width stays `std::int32_t`: it is the index of Eigen SparseLU and LP64 PARDISO and allows 2³¹ − 1 nonzeros in A, beyond the reach of a direct factorization; the backend-internal factor limits are in 6.10 "Known limits". |
 
 ### 14.2 Provisionally decided (stand unless verification or Unit work disproves them)
 
