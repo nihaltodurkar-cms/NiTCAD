@@ -85,6 +85,52 @@ std::optional<base::Error> check_nodes(const DeviceDescription& d) {
     return std::nullopt;
 }
 
+// The gate stack of a gate contact; the nodes are checked to be on its boundary patch.
+std::optional<base::Error> check_gate(const DeviceDescription& d, std::size_t c) {
+    const Contact& contact = d.contacts[c];
+    const GateStack& g = contact.gate;
+    const std::string where = "gate '" + contact.name + "': ";
+    const auto positive = [](double v) { return std::isfinite(v) && v > 0.0; };
+    if (!positive(g.oxide_thickness_cm)) {
+        return invalid(where + "oxide thickness is not finite and positive", c,
+                       g.oxide_thickness_cm);
+    }
+    if (!positive(g.oxide_relative_permittivity)) {
+        return invalid(where + "oxide permittivity is not finite and positive", c,
+                       g.oxide_relative_permittivity);
+    }
+    switch (g.electrode) {
+        case GateElectrode::n_poly:
+        case GateElectrode::p_poly:
+            break;
+        case GateElectrode::metal:
+            if (!positive(g.work_function_eV)) {
+                return invalid(where + "work function is not finite and positive", c,
+                               g.work_function_eV);
+            }
+            break;
+        default:
+            return invalid(where + "unknown gate electrode", c);
+    }
+    if (!std::isfinite(g.fixed_charge_cm2)) {
+        return invalid(where + "fixed oxide charge is not finite", c, g.fixed_charge_cm2);
+    }
+    const mesh::BoundaryPatch* patch = d.mesh.find_boundary(g.boundary);
+    if (patch == nullptr) {
+        return invalid(where + "no mesh boundary patch '" + g.boundary + "'", c);
+    }
+    // Both lists are strictly increasing.
+    auto it = patch->nodes.begin();
+    for (const mesh::NodeId v : contact.nodes) {
+        while (it != patch->nodes.end() && *it < v) ++it;
+        if (it == patch->nodes.end() || *it != v) {
+            return invalid(where + "node is not on boundary patch '" + g.boundary + "'", c,
+                           static_cast<double>(v));
+        }
+    }
+    return std::nullopt;
+}
+
 std::optional<base::Error> check_contacts(const DeviceDescription& d) {
     const std::size_t n = d.mesh.node_count();
     std::vector<bool> on_boundary(n, false);
@@ -98,7 +144,9 @@ std::optional<base::Error> check_contacts(const DeviceDescription& d) {
         if (contact.name.empty() || !names.insert(contact.name).second) {
             return invalid("contact name is empty or repeated", c);
         }
-        if (contact.kind != ContactKind::ohmic) return invalid("unknown contact kind", c);
+        if (contact.kind != ContactKind::ohmic && contact.kind != ContactKind::gate) {
+            return invalid("unknown contact kind", c);
+        }
         if (contact.nodes.empty()) return invalid("contact '" + contact.name + "' has no nodes", c);
         for (std::size_t k = 0; k < contact.nodes.size(); ++k) {
             const mesh::NodeId v = contact.nodes[k];
@@ -119,18 +167,23 @@ std::optional<base::Error> check_contacts(const DeviceDescription& d) {
             }
             in_contact[i] = true;
         }
+        if (contact.kind == ContactKind::gate) {
+            if (auto e = check_gate(d, c)) return e;
+        }
     }
     return std::nullopt;
 }
 
-// Every connected part of the mesh graph must contain a contact node (ARCHITECTURE.md 6.10, the
-// topology gate for Unit 6).
+// Every connected part of the mesh graph must contain an ohmic contact node (ARCHITECTURE.md 6.10,
+// the topology gate for Unit 6). A gate fixes no carrier density, so on its own it leaves the
+// continuity equations of its part singular.
 std::optional<base::Error> check_topology(const DeviceDescription& d) {
     const std::size_t n = d.mesh.node_count();
     Components parts(n);
     for (const mesh::Edge& e : d.mesh.edges()) parts.join(e.first, e.second);
     std::vector<bool> anchored(n, false);
     for (const Contact& contact : d.contacts) {
+        if (contact.kind != ContactKind::ohmic) continue;
         for (const mesh::NodeId v : contact.nodes) {
             anchored[static_cast<std::size_t>(parts.root(v))] = true;
         }
@@ -139,7 +192,8 @@ std::optional<base::Error> check_topology(const DeviceDescription& d) {
         // Nodes are visited in increasing order, so the first one found is the lowest node of a
         // floating part.
         if (!anchored[static_cast<std::size_t>(parts.root(static_cast<mesh::NodeId>(i)))]) {
-            return invalid("floating region: part of the mesh is connected to no contact", i);
+            return invalid("floating region: part of the mesh is connected to no ohmic contact",
+                           i);
         }
     }
     return std::nullopt;

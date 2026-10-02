@@ -50,7 +50,8 @@ private:
 
 void material(Digest& d, const physics::SemiconductorParameters& p) {
     for (const double v :
-         {p.eps_r, p.Eg0_eV, p.varshni_alpha_eV_per_K, p.varshni_beta_K, p.Nc300, p.Nv300}) {
+         {p.eps_r, p.Eg0_eV, p.varshni_alpha_eV_per_K, p.varshni_beta_K, p.Nc300, p.Nv300,
+          p.electron_affinity_eV}) {
         d.real(v);
     }
     for (const auto& ct : {p.electron_mobility, p.hole_mobility}) {
@@ -61,7 +62,10 @@ void material(Digest& d, const physics::SemiconductorParameters& p) {
     for (const double v : {p.bandgap_narrowing.E0_eV, p.bandgap_narrowing.N0}) d.real(v);
 }
 
+// The options the sweep reads: the quasi-static sweep has no continuity equations, so the
+// mobility, SRH and Auger switches do not apply to it and are left out (of the digest too).
 std::vector<std::pair<std::string, double>> settings(const BiasOptions& o) {
+    const bool transport = o.equations == Equations::drift_diffusion;
     std::vector<std::pair<std::string, double>> s{
         {"newton.max_iterations", static_cast<double>(o.newton.max_iterations)},
         {"newton.tol_update", o.newton.tol_update},
@@ -72,11 +76,14 @@ std::vector<std::pair<std::string, double>> settings(const BiasOptions& o) {
         {"linear.max_backward_error", o.linear.max_backward_error},
         {"linear.max_refinement_steps", static_cast<double>(o.linear.max_refinement_steps)},
         {"linear.min_pivot_ratio", o.linear.min_pivot_ratio},
-        {"models.doping_mobility", o.models.doping_mobility ? 1.0 : 0.0},
-        {"models.srh", o.models.srh ? 1.0 : 0.0},
-        {"models.auger", o.models.auger ? 1.0 : 0.0},
         {"models.bgn", o.models.bgn ? 1.0 : 0.0},
+        {"equations", static_cast<double>(o.equations)},
     };
+    if (transport) {
+        s.emplace_back("models.doping_mobility", o.models.doping_mobility ? 1.0 : 0.0);
+        s.emplace_back("models.srh", o.models.srh ? 1.0 : 0.0);
+        s.emplace_back("models.auger", o.models.auger ? 1.0 : 0.0);
+    }
     if (o.Ns_override) s.emplace_back("scaling.Ns_override", *o.Ns_override);
     return s;
 }
@@ -119,6 +126,16 @@ results::RunRecord make_run_record(const device::Device& device, const BiasOptio
         d.text(c.name);
         d.integer(static_cast<std::uint64_t>(c.kind));
         d.integers<mesh::NodeId>(c.nodes);
+        if (c.kind == device::ContactKind::gate) {
+            d.text(c.gate.boundary);
+            d.integer(static_cast<std::uint64_t>(c.gate.electrode));
+            for (const double v : {c.gate.oxide_thickness_cm, c.gate.oxide_relative_permittivity,
+                                   c.gate.fixed_charge_cm2}) {
+                d.real(v);
+            }
+            // A polysilicon electrode takes its work function from the semiconductor.
+            if (c.gate.electrode == device::GateElectrode::metal) d.real(c.gate.work_function_eV);
+        }
     }
     const auto named = settings(options);
     d.integer(named.size());
@@ -131,8 +148,10 @@ results::RunRecord make_run_record(const device::Device& device, const BiasOptio
     d.integer(initial != nullptr ? 1 : 0);
     if (initial != nullptr) {
         d.reals(initial->potential_V);
-        d.reals(initial->n_cm3);
-        d.reals(initial->p_cm3);
+        if (options.equations == Equations::drift_diffusion) {  // the quasi-static sweep reads
+            d.reals(initial->n_cm3);                            // only the potential
+            d.reals(initial->p_cm3);
+        }
     }
     return {d.value(), named};
 }

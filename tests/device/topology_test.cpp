@@ -1,5 +1,6 @@
 // The floating-region check (ARCHITECTURE.md 6.10, the topology gate assigned to Unit 6): every
-// connected part of the mesh graph must contain a contact node, or its potential is undetermined.
+// connected part of the mesh graph must contain an ohmic contact node, or its potential or carrier
+// densities are undetermined. A gate (Unit 12) does not anchor a part.
 #include <catch2/catch_test_macros.hpp>
 
 #include <cstddef>
@@ -38,12 +39,19 @@ Mesh graph(std::vector<double> x, const std::vector<std::pair<NodeId, NodeId>>& 
                              std::move(edges), std::move(boundary));
 }
 
+// Ohmic contacts on the given node sets, and a gate on each of the gate nodes (on its own patch).
 std::expected<Device, NiTCAD::base::Error> build(Mesh m,
-                                                 std::vector<std::vector<NodeId>> contacts) {
+                                                 std::vector<std::vector<NodeId>> contacts,
+                                                 const std::vector<NodeId>& gates = {}) {
     const std::size_t n = m.node_count();
     std::vector<Contact> list;
     for (std::size_t c = 0; c < contacts.size(); ++c) {
         list.push_back({"c" + std::to_string(c), ContactKind::ohmic, std::move(contacts[c])});
+    }
+    for (const NodeId g : gates) {
+        Contact gate{"g" + std::to_string(g), ContactKind::gate, {g}};
+        gate.gate = {.boundary = "n" + std::to_string(g), .oxide_thickness_cm = 1e-6};
+        list.push_back(std::move(gate));
     }
     return Device::create({.mesh = std::move(m),
                            .temperature_K = 300.0,
@@ -99,4 +107,14 @@ TEST_CASE("topology: an isolated node is a part of its own") {
     REQUIRE_FALSE(alone.has_value());
     REQUIRE(alone.error().context->index == 3);
     REQUIRE(build(m(), {{0}, {3}}).has_value());
+}
+
+TEST_CASE("topology: a gate does not anchor a part") {
+    // A gate fixes no carrier density: chain 1-3-5 with only a gate on node 3 floats.
+    const auto gated = build(two_chains(), {{4}}, {3});
+    REQUIRE_FALSE(gated.has_value());
+    REQUIRE(gated.error().message.find("ohmic") != std::string::npos);
+    REQUIRE(gated.error().context->index == 1);
+    // A gate alongside an ohmic contact on each chain is fine.
+    REQUIRE(build(two_chains(), {{4}, {5}}, {0, 3}).has_value());
 }

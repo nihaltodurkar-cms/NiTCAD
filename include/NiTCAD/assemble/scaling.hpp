@@ -17,6 +17,7 @@
 #include <expected>
 #include <optional>
 
+#include "NiTCAD/base/constants.hpp"
 #include "NiTCAD/base/error.hpp"
 #include "NiTCAD/device/device.hpp"
 
@@ -38,5 +39,11 @@ struct Scaling {
 // given and not finite and positive.
 [[nodiscard]] std::expected<Scaling, base::Error> make_scaling(
     const device::Device& device, std::optional<double> Ns_override = std::nullopt);
+
+// eps_r eps0 / eps: a relative permittivity over the scaling's reference permittivity (the legacy
+// et of a material's edges, eps_ox / eps of a gate oxide).
+[[nodiscard]] inline double permittivity_ratio(double eps_r, const Scaling& s) noexcept {
+    return eps_r * base::eps0_F_per_cm / s.eps_F_per_cm;
+}
 
 }  // namespace NiTCAD::assemble

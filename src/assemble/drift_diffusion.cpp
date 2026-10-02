@@ -6,6 +6,7 @@
 #include <optional>
 #include <string>
 
+#include "NiTCAD/assemble/contact_bias.hpp"
 #include "NiTCAD/assemble/ohmic.hpp"
 #include "NiTCAD/assemble/sg_flux.hpp"
 #include "NiTCAD/base/contract.hpp"
@@ -39,6 +40,8 @@ std::expected<DriftDiffusion, base::Error> DriftDiffusion::create(
     s.doping_ = std::move(scaled->doping);
     s.n_ie_ = std::move(scaled->n_ie);
     s.contact_ = std::move(scaled->contact);
+    s.gates_ = std::move(scaled->gates);
+    s.kinds_ = std::move(scaled->kinds);
     s.contact_count_ = device.contacts().size();
     s.rate_scale_ = scaling.Ns / scaling.R0;
     s.Ns_ = scaling.Ns;
@@ -119,17 +122,8 @@ std::expected<DriftDiffusion, base::Error> DriftDiffusion::create(
 }
 
 std::expected<void, base::Error> DriftDiffusion::set_bias(std::span<const double> bias_V) {
-    if (bias_V.size() != contact_count_) {
-        return std::unexpected(base::Error{base::ErrorCode::invalid_input,
-                                           "one bias per contact is required", std::nullopt});
-    }
-    for (std::size_t c = 0; c < bias_V.size(); ++c) {
-        if (!std::isfinite(bias_V[c])) {
-            return std::unexpected(base::Error{
-                base::ErrorCode::invalid_input, "contact bias is not finite",
-                base::ErrorContext{.index = c, .value = bias_V[c]}});
-        }
-    }
+    if (auto ok = check_contact_bias(kinds_, bias_V, false); !ok) return ok;
+    gates_.set_bias(bias_V);
     for (std::size_t i = 0; i < node_count(); ++i) {
         if (contact_[i] < 0) continue;
         const double bias = bias_V[static_cast<std::size_t>(contact_[i])] / V_T_;
@@ -188,6 +182,10 @@ void DriftDiffusion::assemble(std::span<const double> x, std::span<double> f,
         if (jacobian) {
             at(i, 0, 1) = -V;
             at(i, 0, 2) = V;
+        }
+        if (gates_.on_gate(i)) {
+            f[3 * i] += gates_.row_term(i, psi);
+            if (jacobian) at(i, 0, 0) -= gates_.term(i).coupling;
         }
         if (srh_) {
             const physics::RecombinationRate r = physics::srh_recombination(
@@ -327,6 +325,11 @@ std::vector<double> DriftDiffusion::terminal_currents(std::span<const double> x)
         if (cb >= 0) terminal[static_cast<std::size_t>(cb)] -= total;  // flows into contact b
     }
     return terminal;
+}
+
+std::vector<double> DriftDiffusion::gate_charges(std::span<const double> x) const {
+    NITCAD_EXPECTS(x.size() == unknowns());
+    return gates_.charges(x, 3, contact_count_);
 }
 
 }  // namespace NiTCAD::assemble

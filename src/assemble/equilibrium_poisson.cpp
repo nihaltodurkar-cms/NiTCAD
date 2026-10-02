@@ -4,6 +4,7 @@
 #include <cmath>
 #include <utility>
 
+#include "NiTCAD/assemble/contact_bias.hpp"
 #include "NiTCAD/assemble/ohmic.hpp"
 #include "NiTCAD/base/contract.hpp"
 #include "NiTCAD/physics/statistics.hpp"
@@ -23,6 +24,8 @@ std::expected<EquilibriumPoisson, base::Error> EquilibriumPoisson::create(
     p.n_ie_ = std::move(scaled->n_ie);
     p.psi0_.assign(n, 0.0);
     p.contact_.assign(n, 0);
+    p.gates_ = std::move(scaled->gates);
+    p.kinds_ = std::move(scaled->kinds);
     for (std::size_t i = 0; i < n; ++i) {
         if (scaled->contact[i] < 0) continue;
         p.contact_[i] = 1;
@@ -56,6 +59,17 @@ std::expected<EquilibriumPoisson, base::Error> EquilibriumPoisson::create(
     return p;
 }
 
+std::expected<void, base::Error> EquilibriumPoisson::set_bias(std::span<const double> bias_V) {
+    if (auto ok = check_contact_bias(kinds_, bias_V, true); !ok) return ok;
+    gates_.set_bias(bias_V);
+    return {};
+}
+
+std::vector<double> EquilibriumPoisson::gate_charges(std::span<const double> psi) const {
+    NITCAD_EXPECTS(psi.size() == unknowns());
+    return gates_.charges(psi, 1, kinds_.size());
+}
+
 linalg::SparseMatrix EquilibriumPoisson::make_jacobian() const { return pattern_; }
 
 void EquilibriumPoisson::residual_into(std::span<const double> psi, std::span<double> residual,
@@ -73,6 +87,10 @@ void EquilibriumPoisson::residual_into(std::span<const double> psi, std::span<do
         // d/dpsi of the charge term, onto the diagonal (n' = n, p' = -p).
         if (!jacobian_values.empty()) {
             jacobian_values[diag_[i]] = -volume_[i] * (carriers_n + carriers_p);
+        }
+        if (gates_.on_gate(i)) {
+            residual[i] += gates_.row_term(i, psi[i]);
+            if (!jacobian_values.empty()) jacobian_values[diag_[i]] -= gates_.term(i).coupling;
         }
     }
     for (const EdgeTerm& e : edges_) {

@@ -6,6 +6,7 @@
 
 #include "NiTCAD/assemble/equilibrium_poisson.hpp"
 #include "NiTCAD/assemble/scaling.hpp"
+#include "fields.hpp"
 
 namespace NiTCAD::solve {
 
@@ -32,14 +33,10 @@ std::expected<results::EquilibriumResult, base::Error> solve_equilibrium(
         return std::unexpected(std::move(ok.error()));
     }
 
-    const std::size_t n = system->unknowns();
-    result.fields = {std::vector<double>(n), std::vector<double>(n), std::vector<double>(n)};
-    system->carriers(psi, result.fields.n_cm3, result.fields.p_cm3);
-    for (std::size_t i = 0; i < n; ++i) {
-        result.fields.potential_V[i] = psi[i] * scaling->V_T;
-        result.fields.n_cm3[i] *= scaling->Ns;
-        result.fields.p_cm3[i] *= scaling->Ns;
-    }
+    result.fields = detail::equilibrium_fields(*system, psi, *scaling);
+    result.gate_charge = system->gate_charges(psi);
+    const double charge = detail::charge_scale(*scaling, device.mesh().dimension());
+    for (double& Q : result.gate_charge) Q *= charge;
     return result;
 }
 

@@ -206,3 +206,95 @@ TEST_CASE("device: contact nodes are strictly increasing, on the boundary and no
     REQUIRE(shared.context->index == 2);
     REQUIRE(shared.context->value == 0.0);
 }
+
+namespace {
+
+// A gate on part of the 2D diode's y_min face, between the contacts (nodes 5..15).
+Contact gate_contact() {
+    Contact g{"gate", ContactKind::gate, {}};
+    for (NodeId v = 5; v <= 15; ++v) g.nodes.push_back(v);
+    g.gate = {.boundary = "y_min", .oxide_thickness_cm = 5e-7};
+    return g;
+}
+
+NiTCAD::base::Error gate_rejected(const std::function<void(Contact&)>& spoil) {
+    return rejected(
+        [&](DeviceDescription& d) {
+            d.contacts.push_back(gate_contact());
+            spoil(d.contacts.back());
+        },
+        4);
+}
+
+}  // namespace
+
+TEST_CASE("device: a gate contact is accepted and read back") {
+    DeviceDescription desc = diode(4);
+    desc.contacts.push_back(gate_contact());
+    desc.contacts.back().gate.electrode = GateElectrode::metal;
+    desc.contacts.back().gate.work_function_eV = 4.1;
+    desc.contacts.back().gate.fixed_charge_cm2 = -1e11;  // a negative fixed charge is allowed
+    const auto d = Device::create(std::move(desc));
+    REQUIRE(d.has_value());
+    const Contact* g = d->find_contact("gate");
+    REQUIRE(g != nullptr);
+    REQUIRE(g->kind == ContactKind::gate);
+    REQUIRE(g->nodes.size() == 11);
+    REQUIRE(g->gate.boundary == "y_min");
+    REQUIRE(g->gate.oxide_thickness_cm == 5e-7);
+    REQUIRE(g->gate.oxide_relative_permittivity == 3.9);  // SiO2 default
+    REQUIRE(g->gate.work_function_eV == 4.1);
+    REQUIRE(g->gate.fixed_charge_cm2 == -1e11);
+    // The default stack of an ohmic contact is not read.
+    REQUIRE(d->find_contact("anode")->gate.oxide_thickness_cm == 0.0);
+}
+
+TEST_CASE("device: a gate stack is validated") {
+    for (const double t : {0.0, -5e-7, not_a_number, infinity}) {
+        CAPTURE(t);
+        const auto e = gate_rejected([t](Contact& g) { g.gate.oxide_thickness_cm = t; });
+        REQUIRE(mentions(e, "gate 'gate': oxide thickness"));
+        REQUIRE(e.context->index == 2);
+    }
+    for (const double eps : {0.0, -3.9, not_a_number}) {
+        CAPTURE(eps);
+        REQUIRE(mentions(
+            gate_rejected([eps](Contact& g) { g.gate.oxide_relative_permittivity = eps; }),
+            "oxide permittivity"));
+    }
+    REQUIRE(mentions(gate_rejected([](Contact& g) {
+                         g.gate.electrode = static_cast<GateElectrode>(9);
+                     }),
+                     "unknown gate electrode"));
+    for (const double phi : {0.0, -4.1, not_a_number}) {
+        CAPTURE(phi);
+        REQUIRE(mentions(gate_rejected([phi](Contact& g) {
+                             g.gate.electrode = GateElectrode::metal;
+                             g.gate.work_function_eV = phi;
+                         }),
+                         "work function"));
+    }
+    // A polysilicon electrode takes its work function from the semiconductor; the field is unused.
+    DeviceDescription poly = diode(4);
+    poly.contacts.push_back(gate_contact());
+    poly.contacts.back().gate.work_function_eV = not_a_number;
+    REQUIRE(Device::create(std::move(poly)).has_value());
+    for (const double q : {not_a_number, -infinity}) {
+        CAPTURE(q);
+        REQUIRE(mentions(gate_rejected([q](Contact& g) { g.gate.fixed_charge_cm2 = q; }),
+                         "fixed oxide charge"));
+    }
+}
+
+TEST_CASE("device: a gate lies on its boundary patch") {
+    const auto missing = gate_rejected([](Contact& g) { g.gate.boundary = "top"; });
+    REQUIRE(mentions(missing, "no mesh boundary patch 'top'"));
+    REQUIRE(missing.context->index == 2);
+    // Node 70 is on y_max (the last row starts at 63), not y_min.
+    const auto off = gate_rejected([](Contact& g) { g.nodes.push_back(70); });
+    REQUIRE(mentions(off, "not on boundary patch 'y_min'"));
+    REQUIRE(off.context->value == 70.0);
+    // A gate node is still a contact node: it may not be shared with an ohmic contact.
+    REQUIRE(mentions(gate_rejected([](Contact& g) { g.nodes.insert(g.nodes.begin(), 0); }),
+                     "another contact"));
+}

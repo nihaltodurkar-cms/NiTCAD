@@ -377,7 +377,7 @@ physics is deferred.
 ### 6.4 Contact description
 
 A contact is a named set of boundary nodes with a type. First unit: ohmic, with the charge-neutral
-equilibrium boundary value. Schottky, gate and oxide-coupled contacts are deferred. Contact boundary
+equilibrium boundary value. Gate (oxide-coupled) contacts came with Unit 12 (below); Schottky contacts are deferred. Contact boundary
 conditions are residual and Jacobian rows, so contact handling lives in `assemble`, and terminal current
 is computed from fluxes in `assemble`/`solve`. It is not an `analysis` quantity.
 
@@ -403,6 +403,69 @@ is computed from fluxes in `assemble`/`solve`. It is not an `analysis` quantity.
 - Not carried from the legacy: `check_mesh` (it prints the worst spacing-to-Debye-length ratio and does not validate
   anything), the warning for doping above 1e19 cm⁻³ under Boltzmann statistics (there is no warning channel; Fermi–Dirac is
   deferred), and `graded_mesh` (not requested).
+
+**As built (Unit 12, gate contacts and the MOS capacitor; owner request after Unit 11):**
+- The legacy never meshes the oxide. Every MOS structure in it (`moscap.MOSCapacitor`, `Device2D/3D.add_gate`,
+  `unstructured_dd3d`) treats the oxide as a lumped capacitor: a Robin condition on ψ at the silicon surface nodes. NiTCAD
+  does the same. Meshed insulator regions are not built: they would need per-cell regions and permittivities in the mesh
+  (the mesh has node regions only), and no legacy gate exercises them. They stay deferred.
+- `ContactKind::gate` with a `GateStack`: the boundary patch the gate lies on (its face areas are the gate areas), t_ox,
+  the oxide permittivity (3.9, the legacy `EPS_OX_R`), the electrode (n+ poly: φ_m = χ; p+ poly: χ + Eg(T); metal: a given
+  φ_m, as the legacy `gate` argument) and the fixed oxide charge Q_f. Validation: the stack's numbers, the patch exists, and
+  every node is on it. `SemiconductorParameters` gains `electron_affinity_eV` (silicon 4.05, legacy `chi`).
+- The topology check now needs an *ohmic* contact in every connected part: a gate fixes no carrier density.
+- `assemble/gate.hpp`: a gate node's Poisson row gains G_i(ψ_G,i − ψ_i) + S_i, with G_i the legacy κ times the node's
+  scaled face area, ψ_G = (V_G − Φ)/V_T, Φ = φ_m − χ − (E_c − E_i) with E_c − E_i = Eg/2 + (kT/2) ln(Nc/Nv), and S_i the
+  fixed charge on the face. The continuity rows keep zero boundary flux, and a gate carries no current. The gate charge
+  (the oxide flux) is reported per bias point (`BiasPoint::gate_charge`, C/cm^(3−D)) and at equilibrium
+  (`EquilibriumResult::gate_charge`).
+  - Both assemblers share `GateNodes` (gate.hpp: per node the gate, its term and ψ_G; the row term; the charges).
+  - Both assemblers' `set_bias` and the sweep's up-front check share `check_contact_bias` (contact_bias.hpp). The sweep's
+    error names the point (context index), the contact (message) and the bias (value).
+- OLD / NEW / REASON, intrinsic level (after the PR #16 review):
+  - OLD: the legacy V_FB uses φ_semi = χ + Eg/2 − ψ_b V_T, i.e. it puts the intrinsic level at midgap.
+  - NEW: ψ is referenced to the intrinsic level (n = n_ie e^ψ), which lies (kT/2) ln(Nv/Nc) above midgap. Φ includes
+    that term, so every NiTCAD C-V and Id-Vg curve is the legacy one moved to higher gate voltage by 1.04 mV for
+    silicon at 300 K. The legacy reproduction gate compares at V_G − 1.04 mV and still agrees to 1e-15.
+  - REASON: the midgap form is inconsistent with the ψ both codes use. The error grows with the Nc/Nv asymmetry, e.g.
+    about 39 mV for GaAs. Slotboom narrowing moves both band edges by half the narrowing, so it leaves E_i in place.
+- OLD / NEW / REASON, gate reference:
+  - OLD: the legacy row is κ(V_G − V_FB − (ψ_0 − ψ_b)). V_FB is computed for a substrate doping passed in separately,
+    and ψ_b is the neutral potential of the node's own doping (`Device2D`, `psi_b_local`).
+  - NEW: κ(V_G − Φ − ψ_0) plus the fixed charge. ψ_b cancels. Apart from the intrinsic-level term, the two forms are
+    identical wherever the doping under the gate equals the substrate doping (every legacy MOS-C gate). The hand-written
+    rows, with V_FB raised by the 1.04 mV, agree to 4.4e-16.
+  - REASON: the electrode's Fermi level does not depend on the doping under it. The legacy form shifted the gate potential
+    wherever the source and drain tails reach under the gate.
+- OLD / NEW / REASON, gate charge:
+  - OLD: the legacy `Qg` = C_ox(V_G − V_FB − φ_s) includes +qQ_f.
+  - NEW: `gate_charge` is the charge on the electrode itself (the oxide flux), so Q_G + qQ_f + Q_semiconductor = 0.
+  - REASON: it is the physical terminal charge. The capacitance dQ/dV is the same.
+- `solve::Equations::equilibrium_poisson`, a `BiasOptions` choice: each point is thermal equilibrium (Poisson alone, every
+  ohmic contact at 0 V, gates biased), as the legacy MOS-C solves it. That is the quasi-static C-V. `EquilibriumPoisson`
+  gains `set_bias` (ohmic contacts must be at 0 V) and `gate_charges`; the run record lists `equations`. The sweep reads
+  only the potential of an initial state, so it accepts one without densities.
+- The run identity digests only what the sweep reads. In the quasi-static sweep it leaves out the mobility, SRH and Auger
+  switches (and their settings) and the initial densities, and it never digests the work-function field of a
+  polysilicon gate. Material parameters are digested whole.
+- **Finding, a drift-diffusion MOS-C does not converge above threshold.** On the legacy MOS-C, Newton on (ψ, n, p) converges
+  through accumulation and depletion, then stalls at V_G = 0 V, just below threshold (V_th = 0.093 V). The largest
+  corrections sit on bulk minority electrons near the depletion edge (n ≈ 6e-14 scaled), and the residual of the surface
+  electron row stays at 1e-4 to 1e-9.
+  - Cause: the inversion layer has no ohmic contact of its own. Its electrons reach the substrate only through the depleted
+    region, where n is some 1e-14 of the inversion density, so the electron subsystem is beyond double precision.
+  - This is the physics of the low- versus high-frequency C-V, met as conditioning. The legacy never ran a MOS-C through
+    drift-diffusion; its `Device2D` floors the relative density update at 1e-10 (M11-S5), which would not reach this
+    (the corrections are 1e-3 relative on 1e-14 densities).
+  - The quasi-static solve is the supported path for a MOS-C. A MOSFET, whose channel connects to the source and drain,
+    converges through drift-diffusion in 5–7 iterations per point. A test records the stall so that a change is noticed.
+- **Finding, subthreshold swing of the legacy MOSFET:** the legacy test records about 59.6 mV/decade for its MOSFET (5 nm
+  oxide, N_A = 1e17). That is the thermal limit, with no body effect. NiTCAD gives 68.8 mV/decade on the same fixture,
+  which is V_T ln 10 (1 + C_dep/C_ox) with C_dep at φ_s ≈ 0.7 V (68.1–71.7 between 2φ_F and φ_F). The legacy value is not
+  consistent with its own parameters; the cause in the legacy code was not investigated (it cannot be run here). The
+  legacy band (55–120) is kept and the body-factor bracket added.
+- The MOSFET gates (about 9500 nodes, about 50 s in Release with Eigen SparseLU, 0.27 s per factorization) carry the hidden
+  Catch2 tag `[.mosfet]` and run as the `solve_mosfet` ctest entry, in the Release configuration only.
 
 ### 6.5 Input representation
 
@@ -663,20 +726,23 @@ tests/linalg/               matrix, solver and header-boundary tests         (Un
 include/NiTCAD/mesh/        mesh.hpp, tensor_grid.hpp                        (Unit 4, exists)
 src/mesh/                   graph validation, tensor-grid producer           (Unit 4, exists)
 tests/mesh/                 graph validation and geometry gates              (Unit 4, exists)
-include/NiTCAD/physics/     semiconductor, mobility, recombination, statistics (Unit 5); bandgap_narrowing (Unit 11)
+include/NiTCAD/physics/     semiconductor, mobility, recombination, statistics (Unit 5); bandgap_narrowing (Unit 11);
+                            electron affinity (Unit 12)
 src/physics/                parameter validation, band quantities, models    (Units 5, 11)
 tests/physics/              published values, limits, FD derivative gates; heavy doping (Units 5, 11)
-include/NiTCAD/device/      device.hpp, contact.hpp                          (Unit 6, exists)
+include/NiTCAD/device/      device.hpp, contact.hpp (Unit 6); gate contacts (Unit 12)
 src/device/                 description validation, topology check           (Unit 6, exists)
 tests/device/               construction, validation, floating regions       (Unit 6, exists)
 include/NiTCAD/assemble/    scaling, bernoulli, sg_flux, ohmic, equilibrium_poisson (Unit 7); drift_diffusion (Unit 9);
-                            models (Unit 11)
-src/assemble/               scaling, scaled device (private), equilibrium Poisson, drift-diffusion (Units 7, 9)
-tests/assemble/             Bernoulli/SG references, FD-Jacobian gate, reduction (Unit 7, exists)
+                            models (Unit 11); gate, contact_bias (Unit 12)
+src/assemble/               scaling, scaled device (private), equilibrium Poisson, drift-diffusion, gate, contact bias
+                            (Units 7, 9, 12)
+tests/assemble/             Bernoulli/SG references, FD-Jacobian gate, reduction (Unit 7); gate terms (Unit 12)
 include/NiTCAD/solve/       newton.hpp, equilibrium.hpp (Unit 8); bias.hpp (Unit 9, sweeps Unit 10); control.hpp (Unit 10)
-src/solve/                  equilibrium and bias solves, sweeps, run record (Units 8-10)
+src/solve/                  equilibrium and bias solves, sweeps, run record (Units 8-10); fields helper (private,
+                            Unit 12)
 tests/solve/                Newton contract, equilibrium and bias diode gates, legacy graded_mesh port, sweeps,
-                            cancellation and progress (Units 8-10)
+                            cancellation and progress (Units 8-10); MOS-C (legacy moscap port) and MOSFET (Unit 12)
 include/NiTCAD/results/     convergence.hpp, solution.hpp, run.hpp (header-only plain data) (Unit 10, exists)
 .github/workflows/ci.yml    CI: build and test Debug and Release per branch  (CI unit, exists)
 include/NiTCAD/<layer>/...  public headers per layer                         (created per unit)
@@ -783,11 +849,13 @@ testable on arrival. Units 4–9 are dimension-generic from the start (D4) and u
 | 8 | Newton solver (scaled variables) and equilibrium solve (**done, on `main`**) | solve | `device.py` options, `device1d.cpp` | built-in potential within 2e-3 V; bulk neutrality; convergence; non-convergence returns an error value |
 | 9 | Electron/hole continuity assembly and bias solve; first end-to-end gate (**done, on `main`**) | assemble, solve | `device1d.cpp`, `tests/test_validation.py`, `tests/test_device1d_native_gates.py` | J(0.5 V) = 1.280e-2 A/cm² ± 1%; ideal-diode law; current continuity; mesh independence; uniform 2D/3D reproduces 1D to a tolerance set at this unit |
 | 10 | Result representation, cancellation and progress (**done, on `main`**) | results, solve | — (new) | cancellation returns partial results; progress is monotonic |
-| 11 | Slotboom band-gap narrowing and Auger recombination (**done on branch `physics/bgn-auger`**) | physics, assemble | `materials.py` (`bandgap_narrowing_slotboom`, `nie_effective`, `recombination`), `device1d.cpp` (`delta`, `delta_p`) | legacy model benchmarks; Slotboom and n_ie against 40-digit values; Auger partials vs FD; zero equilibrium current with varying n_ie; diffusion current × exp(ΔEg/kT); FD-Jacobian gate on a 1e19/1e18 diode |
-| 12+ | Everything else: Fermi–Dirac, field mobility, heterojunctions, impact ionization, BTBT, transient, AC, thermal, process, unstructured meshes, PARDISO/iterative backends, file formats, analysis, render, app | deferred | per the audit | per unit, when the owner requests |
+| 11 | Slotboom band-gap narrowing and Auger recombination (**done, on `main`**) | physics, assemble | `materials.py` (`bandgap_narrowing_slotboom`, `nie_effective`, `recombination`), `device1d.cpp` (`delta`, `delta_p`) | legacy model benchmarks; Slotboom and n_ie against 40-digit values; Auger partials vs FD; zero equilibrium current with varying n_ie; diffusion current × exp(ΔEg/kT); FD-Jacobian gate on a 1e19/1e18 diode |
+| 12 | Gate contacts on a lumped oxide, quasi-static (equilibrium) sweeps, the MOS capacitor and MOSFET (**done on branch `device/mos`**) | physics, device, assemble, solve | `moscap.py` (`MOSCapacitor`, `flatband_voltage`), `device2d.py` (`GateBC`, `add_gate`), `mosfet.py` | legacy C-V physics checks P1–P9, temperature and fixed-charge checks; NiTCAD reproduces the ported legacy MOS-C solve; legacy MOSFET threshold, on/off, swing, monotonic and mesh-independence gates |
+| 13+ | Everything else: Fermi–Dirac, field mobility, heterojunctions, impact ionization, BTBT, transient, AC, thermal, process, unstructured meshes, PARDISO/iterative backends, file formats, analysis, render, app | deferred | per the audit | per unit, when the owner requests |
 
 Units 1–9 are the smallest end-to-end vertical slice: a validated drift-diffusion diode. Everything past
-Unit 10 is deferred until sequenced. Unit 11 was requested by the owner after Unit 10; nothing past it is started.
+Unit 10 is deferred until sequenced. Units 11 and 12 were requested by the owner after Unit 10; nothing past them is
+started.
 
 ## 12. Legacy facts: verified, derived and unverified
 
@@ -944,6 +1012,8 @@ withdrawn; numbering is otherwise kept stable. This proposal lives on `architect
 | V16 | Unit 9 (`solve/bias-continuity`): Debug and Release build with no warnings; `nitcad_assemble_test` has 22 test cases and `nitcad_solve_test` 23, all pass. Fixtures on the legacy meshes, from a test port of `graded_mesh` that matches the legacy output (250, 262 and 450 nodes; nodes to 1e-12). **J(0.5 V) = 1.28008e-2 A/cm²** (gate 1.280e-2 ± 1%; 0.006% off) in 10 iterations, without Auger; Kirchhoff to 8.8e-9 and the total current equal on every edge to 7.3e-8 (legacy spread 1e-6); ideal-diode law: J/J_ideal(0.5 V) = 0.969 (gate 0.85–1.15) and ideality within 0.02 of 1 for every step from 0.3 to 0.6 V; least-squares ideality over 0.3–0.7 V 1.004 (gate ±0.05); a 2× finer mesh moves J(0.5 V) by 0.005% (gate 3%); y-uniform 2D and 3D devices reproduce the 1D current to 1.3e-15; reverse bias: J < 0 at −0.5, −2, −8 V with exponent 0.85 (gate 0.5–1.5), smallest pivot ratio 2.1e-3 (not flagged); zero bias is the equilibrium solution in one iteration; one analysis per Newton run, quadratic finish. Coupled FD-Jacobian gate (legacy probe at +0.3 V, every column; 183 in 1D, plus 2D and 3D): worst 3.3e-9; recombination part on its own: 7.6e-7 (gate 1e-5); the 1D rows equal the legacy formulas written out on a 1e18/1e16 diode to 1e-12; a y-uniform 2D residual equals the 1D one times the scaled width to 1e-12. Auger measured with a temporary patch: 4.3e-7 of J(0.5 V). Mutation checks: dropping dR/dn from the Jacobian, flipping the recombination sign in the hole row, flipping the terminal-current sign, an arithmetic instead of harmonic mobility mean, and no density clamp each fail the suite (the first and fourth only after the two targeted tests were added). | Verified locally. |
 | V17 | Unit 10 (`solve/results-control`): Debug and Release build with no warnings; `nitcad_solve_test` has 32 test cases, all pass (the existing Unit 8 and 9 tests moved to the `results` types unchanged in substance). A 0–0.5 V sweep equals the chain of one-point solves to 1e-9 (the chain passes states through physical units) and ends at J(0.5 V) within the 1% gate; the run record carries the settings. Progress: strictly increasing in (phase, point, iteration), iterations counting from 1 per point, the converged event closing each point, the bias events equal to the convergence records. Cancellation keeps partial results: a stop after point 1 returns points 0–1 bit-identical to the full run (context: point 2, no unfinished point); a stop at iteration 2 of point 3 returns points 0–2 and the unfinished 2-iteration history (context: iteration 3); a stop requested before the start solves nothing and emits no event, and `solve_equilibrium` and `solve_bias` return `cancelled`; a sweep on a `std::jthread` cancelled from the main thread stops at the next safe point, deterministically. A point that does not converge (0.8 V with 8 iterations) stops the sweep with the earlier point kept. Invalid points or initial state are errors before any event. The run identity is equal for equal inputs and changes with the doping, an option, a bias point or an initial state. Mutation checks: removing the between-points or the Newton stop check, a wrong point index in progress events, and leaving the donors out of the digest each fail the suite. | Verified locally. |
 | V18 | Unit 11 (`physics/bgn-auger`): Debug and Release build with no warnings; `nitcad_physics_test` 38 test cases, `nitcad_assemble_test` 24, `nitcad_solve_test` 35, all pass. Slotboom ΔEg at 1e18/1e19/1e20 and the effective n_ie match 40-digit values to 1e-13 and 1e-12; zero at and below N0; the legacy benchmarks pass (BGN positive and monotonic; SRH + Auger more than doubles when the densities double). Auger: zero at equilibrium, exactly ×8 for doubled high-injection densities, partials vs FD to 1e-8 with and without a carrier-dependent equilibrium product; the Auger part of the assembled Jacobian on its own vs FD (gate 1e-5); the coupled FD-Jacobian gate on a 1e19/1e18 diode with all models. Device level: equilibrium edge currents of a 1e19/1e18 diode within 0.0095 of their rounding bound (without the ln n_ie term the junction edges would carry about 1e8 A/cm²), V_bi from the effective n_ie to 1e-12; the 1e19/1e19 diffusion current ratio 8.5908 against exp(ΔEg/kT) = 8.5932 (gate 0.5%); Auger on the legacy fixture +4.3e-7 with J(0.5 V) still within 1%. The legacy rows written out by hand now include BGN (Δln n_ie) and Auger, on a 1e18/1e16 diode, to 1e-12. Mutation checks: no Δln n_ie term, Auger dR/dn dropped from the Jacobian, and the BGN flag ignored each fail the suite. | Verified locally. |
+| V19 | Unit 12 (`device/mos`): Debug and Release build with no warnings; `nitcad_physics_test` 38 test cases, `nitcad_device_test` 18, `nitcad_assemble_test` 30, `nitcad_solve_test` 52 (+2 `[.mosfet]` cases, Release only), all pass. Gate terms: the scaled coupling equals the legacy κ times the scaled face area in 1D/2D/3D to 1e-15; the 1D rows of both assemblers equal the legacy MOS-C rows written out by hand (with V_FB and Q_f) to 4.4e-16; only the gate node's Poisson row changes and no carrier flux crosses the gate (bitwise); FD-Jacobian gate with gates, worst 6.7e-10 (1D), 2.2e-8 (2D), 3.3e-8 (3D), 2.1e-9 (equilibrium Poisson). MOS-C on the legacy fixture (1e17, 5 nm, n+ poly, 1200 nodes, −2 to 2 V): the quasi-static sweep reproduces a C++ port of the legacy solve to 5.6e-16 V in φ_s, 6.1e-16 V in ψ at every node, and 7.2e-15 C_ox in C; the legacy checks P1 (residual 4.9e-12, gate 1e-6), P2 (Gauss to 1.4e-14 relative, legacy 2%), P3 (1.1e-3 and 1.2e-2, gate 5%), P4, P5, P6 (C_min +10.1%, W_max −10.5%, gate 15%), P7 (flatband crossing 1.0 mV and 2φ_F crossing 0.35 mV from the landmarks, gate 50 mV), P8, P9 (a tighter Newton tolerance moves φ_s by 0) pass; C_min within 15% at 275, 300, 350 K; Q_f and the electrode work function shift the curve rigidly to 1e-16 V; y-uniform 2D and 3D reproduce 1D to 1e-12. Drift-diffusion equals the quasi-static state in accumulation and depletion (ψ to 1e-15 V, p to 2e-14) and stalls once inversion starts (recorded). MOSFET (legacy fixture, 9490 nodes, drift-diffusion): V_th by max g_m 0.151 V against the landmark 0.093 V (gate 0.1 V), on/off 2e11 (gate 1e6; the off current is at the 2e-12 A/cm rounding floor), swing 68.9 mV/decade (legacy band 55–120; body-factor bracket 68.1–71.7), monotonic from 0.3 to 1.5 V, Kirchhoff to 5e-12 A/cm, Id(1 V) on a 2× finer mesh within 0.055% (gate 10%). Mutation checks, each caught: the gate Jacobian term dropped (either assembler), the fixed-charge sign, an L_D^(D−2) area scale, p+ poly without Eg, the midgap offset without Eg/2, gates anchoring the topology, ohmic bias accepted at equilibrium, the gate bias ignored at equilibrium, the gate-charge sign, the patch check. | Verified locally. |
+| V19a | Unit 12 after the PR #16 review (all ten findings applied): `nitcad_assemble_test` 31 test cases, `nitcad_solve_test` 55 (+2 `[.mosfet]`), Debug and Release with no warnings, all pass. Φ is now referenced to the intrinsic level: the offset matches φ_m − χ − Eg/2 + (kT/2) ln(Nv/Nc) to 1e-15 at 300 and 400 K, with a shift of 1.0416 mV for silicon at 300 K. The legacy reproduction holds at V_G − 1.0416 mV: φ_s to 6.7e-16 V, ψ to 4.2e-16 V, C to 5.1e-15 C_ox. P1 gives 6.0e-12 at the shifted biases; the flatband and 2φ_F crossings move by +1.04 mV (measured 0.05 and 1.34 mV from the landmarks; gate 50 mV), C_min +10.2%; the MOSFET V_th is 0.152 V and the swing 68.8 mV/decade. The drift-diffusion gate diagonal is accumulated (`-=`). Both assemblers use `GateNodes` and `check_contact_bias`; the edges and the gate share `permittivity_ratio`; `solve_equilibrium` and the quasi-static sweep share one fields helper. New tests: the contact-bias rule; the sweep error names point, contact and bias; a quasi-static warm start from a potential alone (drift-diffusion still rejects it); the run identity ignores the transport switches and initial densities in the quasi-static sweep and a polysilicon gate's work-function field, but not BGN or a metal work function; `solve_equilibrium` reports the zero-bias gate charge, equal to a one-point quasi-static sweep to 1e-12. Mutation checks, each caught: the intrinsic-level term dropped, the gate diagonal dropped, ohmic bias accepted at equilibrium, densities required for a quasi-static start, the SRH switch digested in the quasi-static sweep, the poly work function digested, the equilibrium gate charge missing, the contact missing from the sweep error. | Verified locally. |
 | V3 | Scaling definitions, scaled variables and Newton tolerances read from `inputs.cpp` and `device1d.cpp` and recorded in 6.1. One open question remains for Unit 8 (convergence criterion on the clipped correction). | Verified |
 
 Verifications due at their own unit: none left. The 5e-5 Jacobian gate's normalization was read at Unit 7 (section 10), and

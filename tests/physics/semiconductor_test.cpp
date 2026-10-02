@@ -81,6 +81,7 @@ TEST_CASE("semiconductor: every parameter is validated and the error names it") 
         {"varshni_beta_K", [](P& p) { p.varshni_beta_K = not_a_number; }},
         {"Nc300", [](P& p) { p.Nc300 = 0.0; }},
         {"Nv300", [](P& p) { p.Nv300 = infinity; }},
+        {"electron_affinity_eV", [](P& p) { p.electron_affinity_eV = -0.1; }},
         {"electron_mobility.mu_min", [](P& p) { p.electron_mobility.mu_min = -1.0; }},
         {"electron_mobility.mu_max", [](P& p) { p.electron_mobility.mu_max = 0.0; }},
         {"electron_mobility.N_ref", [](P& p) { p.electron_mobility.N_ref = 0.0; }},

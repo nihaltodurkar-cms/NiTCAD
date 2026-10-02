@@ -80,6 +80,9 @@ std::expected<Semiconductor, base::Error> Semiconductor::create(
     }
     if (auto e = check("", "Nc300", p.Nc300, positive)) return std::unexpected(std::move(*e));
     if (auto e = check("", "Nv300", p.Nv300, positive)) return std::unexpected(std::move(*e));
+    if (auto e = check("", "electron_affinity_eV", p.electron_affinity_eV, non_negative)) {
+        return std::unexpected(std::move(*e));
+    }
     if (auto e = check_mobility("electron_mobility.", p.electron_mobility)) {
         return std::unexpected(std::move(*e));
     }
