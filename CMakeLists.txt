@@ -171,10 +171,11 @@ add_executable(nitcad_device_test
 target_link_libraries(nitcad_device_test PRIVATE NiTCAD::device Catch2::Catch2WithMain)
 add_test(NAME device COMMAND nitcad_device_test)
 
-# --- assemble layer (scaling, Bernoulli/SG flux, ohmic values, equilibrium Poisson) --
+# --- assemble layer (scaling, Bernoulli/SG flux, ohmic and gate terms, Poisson, DD) ---
 add_library(nitcad_assemble STATIC
   src/assemble/scaling.cpp
   src/assemble/scaled_device.cpp
+  src/assemble/gate.cpp
   src/assemble/equilibrium_poisson.cpp
   src/assemble/drift_diffusion.cpp)
 add_library(NiTCAD::assemble ALIAS nitcad_assemble)
@@ -185,7 +186,8 @@ target_link_libraries(nitcad_assemble PUBLIC
 add_executable(nitcad_assemble_test
   tests/assemble/flux_test.cpp
   tests/assemble/poisson_test.cpp
-  tests/assemble/drift_diffusion_test.cpp)
+  tests/assemble/drift_diffusion_test.cpp
+  tests/assemble/gate_test.cpp)
 target_link_libraries(nitcad_assemble_test PRIVATE NiTCAD::assemble Catch2::Catch2WithMain)
 add_test(NAME assemble COMMAND nitcad_assemble_test)
 
@@ -210,6 +212,13 @@ add_executable(nitcad_solve_test
   tests/solve/equilibrium_test.cpp
   tests/solve/bias_test.cpp
   tests/solve/sweep_test.cpp
-  tests/solve/heavy_doping_test.cpp)
+  tests/solve/heavy_doping_test.cpp
+  tests/solve/mos_test.cpp
+  tests/solve/mosfet_test.cpp)
 target_link_libraries(nitcad_solve_test PRIVATE NiTCAD::solve Catch2::Catch2WithMain)
 add_test(NAME solve COMMAND nitcad_solve_test)
+# The 2D MOSFET gates (tests/solve/mosfet_test.cpp, hidden tag [.mosfet]) take about a minute in
+# Release and far longer in Debug, so they run in the Release configuration only.
+if(CMAKE_BUILD_TYPE STREQUAL "Release")
+  add_test(NAME solve_mosfet COMMAND nitcad_solve_test "[mosfet]")
+endif()

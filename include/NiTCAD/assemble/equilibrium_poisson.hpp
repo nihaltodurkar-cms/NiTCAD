@@ -9,6 +9,11 @@
 // material (with band-gap narrowing when models.bgn is set). In 1D this is the legacy row
 // et (psi[i+1] - psi[i]) / h - ... - dV (n - p - C), with et = 1 for one material.
 // Contact row (ohmic, Dirichlet): F_i = psi_i - psi0_i, psi0 from ohmic_contact_value at zero bias.
+// A gate node keeps its box row and gains the oxide term of gate.hpp, G_i (psi_G,i - psi_i) + S_i,
+// at the gate's bias (0 unless set_bias says otherwise; legacy Device2D.solve_equilibrium). A gate
+// carries no current, so a biased gate keeps the device in thermal equilibrium as long as every
+// ohmic contact is at 0 V: the legacy MOS-C solve (moscap.MOSCapacitor.solve_psi), whose C-V is
+// the quasi-static one.
 //
 // The Jacobian pattern is built once (diagonal plus both directions of every edge; contact rows
 // keep their off-diagonal entries as explicit zeros), and evaluate() rewrites only the values, so a
@@ -16,10 +21,12 @@
 #pragma once
 
 #include <cstddef>
+#include <cstdint>
 #include <expected>
 #include <span>
 #include <vector>
 
+#include "NiTCAD/assemble/gate.hpp"
 #include "NiTCAD/assemble/models.hpp"
 #include "NiTCAD/assemble/scaling.hpp"
 #include "NiTCAD/base/error.hpp"
@@ -40,6 +47,12 @@ public:
 
     [[nodiscard]] std::size_t unknowns() const noexcept { return volume_.size(); }
 
+    // Applied bias of each contact in V, in the order of device.contacts(). Errors (invalid_input):
+    // the size differs from the number of contacts, a value is not finite, or an ohmic contact's
+    // bias is not 0 (thermal equilibrium has one Fermi level, that of the ohmic contacts). Sets the
+    // electrode potential of the gates; initially every bias is 0.
+    [[nodiscard]] std::expected<void, base::Error> set_bias(std::span<const double> bias_V);
+
     // A zero-valued matrix with the Jacobian's pattern, for evaluate() to fill.
     [[nodiscard]] linalg::SparseMatrix make_jacobian() const;
 
@@ -54,13 +67,18 @@ public:
     // (NITCAD_EXPECTS): all three spans have unknowns() entries.
     void carriers(std::span<const double> psi, std::span<double> n, std::span<double> p) const;
 
-    // The charge-neutral potential of every node, asinh(C / 2 n_ie) (contact nodes: their Dirichlet
-    // value, which is the same at zero bias); the legacy initial guess.
+    // The charge-neutral potential of every node, asinh(C / 2 n_ie) (ohmic contact nodes: their
+    // Dirichlet value, which is the same at zero bias); the legacy initial guess.
     [[nodiscard]] std::vector<double> charge_neutral_potential() const;
 
-    // Per node: the Dirichlet value psi0 on a contact node; not meaningful elsewhere.
+    // Per node: the Dirichlet value psi0 on an ohmic contact node; not meaningful elsewhere.
     [[nodiscard]] std::span<const double> contact_potential() const noexcept { return psi0_; }
+    // Per node: 1 on an ohmic contact node (a Dirichlet row), else 0; gate nodes are 0.
     [[nodiscard]] std::span<const char> is_contact() const noexcept { return contact_; }
+
+    // Scaled charge on each gate electrode, as DriftDiffusion::gate_charges (zero for an ohmic
+    // contact). Precondition (NITCAD_EXPECTS): psi has unknowns() entries.
+    [[nodiscard]] std::vector<double> gate_charges(std::span<const double> psi) const;
 
 private:
     EquilibriumPoisson() = default;
@@ -80,7 +98,12 @@ private:
     std::vector<double> doping_;    // scaled net doping C
     std::vector<double> n_ie_;      // scaled n_ie
     std::vector<double> psi0_;      // Dirichlet value on contact nodes
-    std::vector<char> contact_;     // 1 on contact nodes
+    std::vector<char> contact_;     // 1 on ohmic contact nodes
+    std::vector<std::int32_t> gate_index_;  // gate contact index per node, or -1
+    std::vector<GateTerm> gate_;    // per node (zero off the gates)
+    std::vector<double> psi_gate_;  // per gate node: psi_G at the gate's bias
+    std::vector<char> ohmic_;       // per contact: 1 if ohmic
+    double V_T_ = 0.0;
     std::vector<EdgeTerm> edges_;
     std::vector<std::size_t> diag_; // position of (i, i) in the Jacobian values
     linalg::SparseMatrix pattern_;

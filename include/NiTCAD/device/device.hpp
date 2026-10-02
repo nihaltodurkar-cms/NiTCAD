@@ -55,13 +55,17 @@ public:
     // - node_region, donors or acceptors not one per mesh node; a node's region out of range; a
     //   region with no nodes;
     // - a donor or acceptor concentration that is not finite and >= 0 (the value is in context);
-    // - a contact name empty or repeated; a contact with no nodes, nodes out of range or not
-    //   strictly increasing, a node on no mesh boundary patch, or a node shared with another
-    //   contact;
-    // - a floating region: a connected part of the mesh graph with no contact node. Its potential
-    //   would be undetermined (the Poisson and continuity matrices singular), the case the linear
-    //   solver's pivot-ratio heuristic otherwise has to catch (6.10). The index is the lowest node
-    //   of that part.
+    // - a contact name empty or repeated, or of unknown kind; a contact with no nodes, nodes out
+    //   of range or not strictly increasing, a node on no mesh boundary patch, or a node shared
+    //   with another contact;
+    // - a gate contact whose stack is invalid (contact.hpp: oxide thickness or permittivity not
+    //   finite and positive, an unknown electrode, a metal work function not finite and positive,
+    //   a fixed charge not finite), whose boundary patch does not exist, or with a node not on
+    //   that patch;
+    // - a floating region: a connected part of the mesh graph with no ohmic contact node. Its
+    //   potential or carrier densities would be undetermined (the Poisson or continuity matrices
+    //   singular), the case the linear solver's pivot-ratio heuristic otherwise has to catch
+    //   (6.10); a gate does not anchor the carriers. The index is the lowest node of that part.
     [[nodiscard]] static std::expected<Device, base::Error> create(DeviceDescription description);
 
     [[nodiscard]] const mesh::Mesh& mesh() const noexcept { return d_.mesh; }

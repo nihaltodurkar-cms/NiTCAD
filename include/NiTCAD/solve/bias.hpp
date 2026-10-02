@@ -7,9 +7,20 @@
 // system and one linear solver serve the whole sweep, so the pattern is analyzed once.
 // Cancellation and progress follow control.hpp: the stop token is checked between points and before
 // every Newton iteration; progress events have Phase::equilibrium for the starting equilibrium and
-// Phase::bias with the point index. Results are plain data (results/), in V, cm^-3, A / cm^(3-D).
+// Phase::bias with the point index. Results are plain data (results/), in V, cm^-3, A / cm^(3-D),
+// C / cm^(3-D).
+//
+// Equations::equilibrium_poisson (Unit 12) solves each point as thermal equilibrium instead:
+// Poisson alone (assemble::EquilibriumPoisson), every ohmic contact at 0 V, only gates biased. That
+// is the legacy MOS-C solve (moscap.MOSCapacitor.cv_sweep), the quasi-static C-V. A sweep starts
+// from the given state or the charge-neutral potential (no starting equilibrium), and reports zero
+// currents. Drift-diffusion cannot replace it on a MOS capacitor: an inversion layer with no ohmic
+// contact of its own reaches the substrate only through the depleted region, where the minority
+// density is some 1e-14 of the inversion layer's, and Newton stalls there above threshold
+// (ARCHITECTURE.md 6.4, Unit 12).
 #pragma once
 
+#include <cstdint>
 #include <expected>
 #include <optional>
 #include <span>
@@ -26,17 +37,24 @@
 
 namespace NiTCAD::solve {
 
+enum class Equations : std::uint8_t {
+    drift_diffusion,      // Poisson and both continuity equations
+    equilibrium_poisson,  // Poisson alone, carriers in thermal equilibrium (only gates biased)
+};
+
 struct BiasOptions {
     NewtonOptions newton;
     linalg::SolverConfig linear;
     std::optional<double> Ns_override;  // see assemble::make_scaling
-    assemble::PhysicsModels models;
+    assemble::PhysicsModels models;     // equilibrium_poisson: only bgn matters
+    Equations equations = Equations::drift_diffusion;
 };
 
 // Solves each bias point in order. `points[k]` holds one bias in V per contact.
 // Errors, before anything is solved (invalid_input unless noted): no points; a point without one
-// finite value per contact; an initial state without a finite potential and positive densities for
-// every node; those of assemble::make_scaling, assemble::DriftDiffusion::create and
+// finite value per contact; with equilibrium_poisson, a point with an ohmic contact not at 0 V; an
+// initial state without a finite potential and positive densities for every node; those of
+// assemble::make_scaling, assemble::DriftDiffusion::create (or EquilibriumPoisson::create) and
 // linalg::LinearSolver::create.
 // Once solving has started, nothing is an error: the Sweep holds the completed points and, if the
 // run stopped early, `stopped` (cancelled, non_convergence, singular_system, ...) and the stopped

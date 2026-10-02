@@ -15,10 +15,14 @@
 // delta_p = psi_b - psi_a - ln(n_ie,b / n_ie,a) for holes (legacy delta, delta_p): with band-gap
 // narrowing n_ie varies in space, and only these make the equilibrium carry no current.
 // Contact rows (ohmic): psi - psi0, n - n0, p - p0, from ohmic_contact_value at the contact's bias.
+// A gate node keeps its three box rows; its Poisson row gains the oxide term of gate.hpp at the
+// gate's bias, G_i (psi_G,i - psi_i) + S_i, and its continuity rows no boundary flux (legacy
+// Device2D GateBC: Robin on psi only).
 //
 // Jn and Jp are the electron and hole current densities in units of J0 (conventional current, along
-// the edge from a to b); their sum is divergence-free at every non-contact node, so the terminal
-// current of a contact is the total flux on the edges leaving it.
+// the edge from a to b); their sum is divergence-free at every node off the ohmic contacts (gate
+// nodes included), so the terminal current of an ohmic contact is the total flux on the edges
+// leaving it, and that of a gate is zero.
 //
 // Newton update (legacy Device1D::newton): psi is clipped to +-max_update; n and p are clamped to
 // [0.1, 10] times their current value, which keeps them positive. The convergence measure is the
@@ -33,6 +37,7 @@
 #include <utility>
 #include <vector>
 
+#include "NiTCAD/assemble/gate.hpp"
 #include "NiTCAD/assemble/models.hpp"
 #include "NiTCAD/assemble/scaling.hpp"
 #include "NiTCAD/base/error.hpp"
@@ -53,15 +58,16 @@ public:
     [[nodiscard]] std::size_t contact_count() const noexcept { return contact_count_; }
 
     // Applied bias of each contact in V, in the order of device.contacts(); sets the Dirichlet
-    // values. Errors: invalid_input if the size differs from the number of contacts or a value is
-    // not finite. Initially every bias is 0.
+    // values of the ohmic contacts and the electrode potential of the gates. Errors: invalid_input
+    // if the size differs from the number of contacts or a value is not finite. Initially every
+    // bias is 0.
     [[nodiscard]] std::expected<void, base::Error> set_bias(std::span<const double> bias_V);
 
     // Scaled state of every node in Boltzmann equilibrium at the scaled potential psi
-    // (n = n_ie e^psi, p = n_ie e^-psi), with the contact nodes set to their Dirichlet values.
-    // Precondition (NITCAD_EXPECTS): psi has node_count() entries.
+    // (n = n_ie e^psi, p = n_ie e^-psi), with the ohmic contact nodes set to their Dirichlet
+    // values. Precondition (NITCAD_EXPECTS): psi has node_count() entries.
     [[nodiscard]] std::vector<double> state_from_potential(std::span<const double> psi) const;
-    // Sets the contact nodes of a state to their Dirichlet values.
+    // Sets the ohmic contact nodes of a state to their Dirichlet values.
     void stamp_contacts(std::span<double> x) const;
 
     [[nodiscard]] linalg::SparseMatrix make_jacobian() const;
@@ -81,9 +87,13 @@ public:
     [[nodiscard]] std::vector<std::pair<double, double>> edge_currents(
         std::span<const double> x) const;
     // Scaled total current entering the device through each contact (conventional current from
-    // the contact into the device), in device.contacts() order. Physical value: times
-    // J0 L_D^(D-1), in A / cm^(3-D) (A/cm^2 in 1D, A/cm in 2D, A in 3D).
+    // the contact into the device), in device.contacts() order; zero for a gate. Physical value:
+    // times J0 L_D^(D-1), in A / cm^(3-D) (A/cm^2 in 1D, A/cm in 2D, A in 3D).
     [[nodiscard]] std::vector<double> terminal_currents(std::span<const double> x) const;
+    // Scaled charge on each gate electrode, the sum over its nodes of G_i (psi_G,i - psi_i)
+    // (gate.hpp), in device.contacts() order; zero for an ohmic contact. Physical value: times
+    // q Ns L_D^D, in C / cm^(3-D).
+    [[nodiscard]] std::vector<double> gate_charges(std::span<const double> x) const;
 
 private:
     DriftDiffusion() = default;
@@ -102,7 +112,10 @@ private:
                   std::span<double> values) const;
 
     std::vector<double> volume_, doping_, n_ie_, tau_n_, tau_p_, auger_n_, auger_p_;
-    std::vector<std::int32_t> contact_;   // contact index per node, or -1
+    std::vector<std::int32_t> contact_;   // ohmic contact index per node, or -1
+    std::vector<std::int32_t> gate_;      // gate contact index per node, or -1
+    std::vector<GateTerm> gate_term_;     // per node (zero off the gates)
+    std::vector<double> psi_gate_;        // per gate node: psi_G at the gate's bias
     std::vector<double> psi0_, n0_, p0_;  // Dirichlet values per node (contact nodes only)
     std::vector<EdgeTerm> edges_;
     std::vector<std::size_t> block_;      // per node, 9 positions of its 3x3 diagonal block

@@ -67,10 +67,27 @@ std::expected<ScaledDevice, base::Error> make_scaled_device(const device::Device
                        : physics::intrinsic_density(material, scaling.temperature_K);
         s.n_ie[i] = n_ie / scaling.Ns;
     }
+    s.gate.assign(n, -1);
+    s.gate_term.assign(n, GateTerm{0.0, 0.0, 0.0});
     const auto contacts = device.contacts();
     for (std::size_t c = 0; c < contacts.size(); ++c) {
-        for (const mesh::NodeId v : contacts[c].nodes) {
-            s.contact[static_cast<std::size_t>(v)] = static_cast<std::int32_t>(c);
+        const device::Contact& contact = contacts[c];
+        if (contact.kind == device::ContactKind::ohmic) {
+            for (const mesh::NodeId v : contact.nodes) {
+                s.contact[static_cast<std::size_t>(v)] = static_cast<std::int32_t>(c);
+            }
+            continue;
+        }
+        // A gate: the device has checked that every node is on the patch (both lists increase).
+        const mesh::BoundaryPatch* patch = m.find_boundary(contact.gate.boundary);
+        NITCAD_EXPECTS(patch != nullptr);
+        std::size_t k = 0;
+        for (const mesh::NodeId v : contact.nodes) {
+            while (patch->nodes[k] < v) ++k;
+            const auto i = static_cast<std::size_t>(v);
+            s.gate[i] = static_cast<std::int32_t>(c);
+            s.gate_term[i] =
+                gate_term(contact.gate, device.material(v), patch->areas[k], D, scaling);
         }
     }
     s.edges.reserve(m.edges().size());

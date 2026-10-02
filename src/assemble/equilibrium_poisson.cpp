@@ -23,7 +23,15 @@ std::expected<EquilibriumPoisson, base::Error> EquilibriumPoisson::create(
     p.n_ie_ = std::move(scaled->n_ie);
     p.psi0_.assign(n, 0.0);
     p.contact_.assign(n, 0);
+    p.gate_index_ = std::move(scaled->gate);
+    p.gate_ = std::move(scaled->gate_term);
+    p.psi_gate_.assign(n, 0.0);
+    p.V_T_ = scaling.V_T;
+    for (const device::Contact& c : device.contacts()) {
+        p.ohmic_.push_back(c.kind == device::ContactKind::ohmic ? 1 : 0);
+    }
     for (std::size_t i = 0; i < n; ++i) {
+        if (p.gate_index_[i] >= 0) p.psi_gate_[i] = -p.gate_[i].offset;  // zero bias
         if (scaled->contact[i] < 0) continue;
         p.contact_[i] = 1;
         p.psi0_[i] = ohmic_contact_value(p.doping_[i], p.n_ie_[i], 0.0).psi;
@@ -56,6 +64,42 @@ std::expected<EquilibriumPoisson, base::Error> EquilibriumPoisson::create(
     return p;
 }
 
+std::expected<void, base::Error> EquilibriumPoisson::set_bias(std::span<const double> bias_V) {
+    if (bias_V.size() != ohmic_.size()) {
+        return std::unexpected(base::Error{base::ErrorCode::invalid_input,
+                                           "one bias per contact is required", std::nullopt});
+    }
+    for (std::size_t c = 0; c < bias_V.size(); ++c) {
+        if (!std::isfinite(bias_V[c])) {
+            return std::unexpected(base::Error{
+                base::ErrorCode::invalid_input, "contact bias is not finite",
+                base::ErrorContext{.index = c, .value = bias_V[c]}});
+        }
+        if (ohmic_[c] != 0 && bias_V[c] != 0.0) {
+            return std::unexpected(base::Error{
+                base::ErrorCode::invalid_input,
+                "thermal equilibrium needs every ohmic contact at 0 V",
+                base::ErrorContext{.index = c, .value = bias_V[c]}});
+        }
+    }
+    for (std::size_t i = 0; i < unknowns(); ++i) {
+        if (gate_index_[i] < 0) continue;
+        psi_gate_[i] = bias_V[static_cast<std::size_t>(gate_index_[i])] / V_T_ - gate_[i].offset;
+    }
+    return {};
+}
+
+std::vector<double> EquilibriumPoisson::gate_charges(std::span<const double> psi) const {
+    NITCAD_EXPECTS(psi.size() == unknowns());
+    std::vector<double> charge(ohmic_.size(), 0.0);
+    for (std::size_t i = 0; i < unknowns(); ++i) {
+        if (gate_index_[i] < 0) continue;
+        charge[static_cast<std::size_t>(gate_index_[i])] +=
+            gate_[i].coupling * (psi_gate_[i] - psi[i]);
+    }
+    return charge;
+}
+
 linalg::SparseMatrix EquilibriumPoisson::make_jacobian() const { return pattern_; }
 
 void EquilibriumPoisson::residual_into(std::span<const double> psi, std::span<double> residual,
@@ -73,6 +117,11 @@ void EquilibriumPoisson::residual_into(std::span<const double> psi, std::span<do
         // d/dpsi of the charge term, onto the diagonal (n' = n, p' = -p).
         if (!jacobian_values.empty()) {
             jacobian_values[diag_[i]] = -volume_[i] * (carriers_n + carriers_p);
+        }
+        if (gate_index_[i] >= 0) {
+            const GateTerm& g = gate_[i];
+            residual[i] += g.coupling * (psi_gate_[i] - psi[i]) + g.sheet_charge;
+            if (!jacobian_values.empty()) jacobian_values[diag_[i]] -= g.coupling;
         }
     }
     for (const EdgeTerm& e : edges_) {

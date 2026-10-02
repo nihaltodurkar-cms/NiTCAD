@@ -7,6 +7,7 @@
 #include <expected>
 #include <vector>
 
+#include "NiTCAD/assemble/gate.hpp"
 #include "NiTCAD/assemble/models.hpp"
 #include "NiTCAD/assemble/scaling.hpp"
 #include "NiTCAD/base/error.hpp"
@@ -25,7 +26,9 @@ struct ScaledDevice {
     std::vector<double> volume;          // control volume / L_D^D
     std::vector<double> doping;          // (N_D - N_A) / Ns
     std::vector<double> n_ie;            // n_ie / Ns (effective n_ie with band-gap narrowing)
-    std::vector<std::int32_t> contact;   // index into device.contacts(), or -1
+    std::vector<std::int32_t> contact;   // index of the node's ohmic contact, or -1
+    std::vector<std::int32_t> gate;      // index of the node's gate contact, or -1
+    std::vector<GateTerm> gate_term;     // per node, all zero where gate is -1 (gate.hpp)
     std::vector<ScaledEdge> edges;       // in mesh edge order
 };
 

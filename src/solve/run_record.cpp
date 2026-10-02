@@ -50,7 +50,8 @@ private:
 
 void material(Digest& d, const physics::SemiconductorParameters& p) {
     for (const double v :
-         {p.eps_r, p.Eg0_eV, p.varshni_alpha_eV_per_K, p.varshni_beta_K, p.Nc300, p.Nv300}) {
+         {p.eps_r, p.Eg0_eV, p.varshni_alpha_eV_per_K, p.varshni_beta_K, p.Nc300, p.Nv300,
+          p.electron_affinity_eV}) {
         d.real(v);
     }
     for (const auto& ct : {p.electron_mobility, p.hole_mobility}) {
@@ -76,6 +77,7 @@ std::vector<std::pair<std::string, double>> settings(const BiasOptions& o) {
         {"models.srh", o.models.srh ? 1.0 : 0.0},
         {"models.auger", o.models.auger ? 1.0 : 0.0},
         {"models.bgn", o.models.bgn ? 1.0 : 0.0},
+        {"equations", static_cast<double>(o.equations)},
     };
     if (o.Ns_override) s.emplace_back("scaling.Ns_override", *o.Ns_override);
     return s;
@@ -119,6 +121,14 @@ results::RunRecord make_run_record(const device::Device& device, const BiasOptio
         d.text(c.name);
         d.integer(static_cast<std::uint64_t>(c.kind));
         d.integers<mesh::NodeId>(c.nodes);
+        if (c.kind == device::ContactKind::gate) {
+            d.text(c.gate.boundary);
+            d.integer(static_cast<std::uint64_t>(c.gate.electrode));
+            for (const double v : {c.gate.oxide_thickness_cm, c.gate.oxide_relative_permittivity,
+                                   c.gate.work_function_eV, c.gate.fixed_charge_cm2}) {
+                d.real(v);
+            }
+        }
     }
     const auto named = settings(options);
     d.integer(named.size());

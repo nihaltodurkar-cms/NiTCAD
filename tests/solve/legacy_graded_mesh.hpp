@@ -1,7 +1,9 @@
-// Test helper: a port of the legacy pytcad/mesh.py graded_mesh (one focus point), so the Unit 9
-// gates run on the legacy fixtures' own meshes. Checked against the legacy output in bias_test.cpp.
+// Test helper: a port of the legacy pytcad/mesh.py graded_mesh, so the Unit 9 and 12 gates run on
+// the legacy fixtures' own meshes. Checked against the legacy output in bias_test.cpp (one focus
+// point); Unit 12's MOSFET uses two (mosfet.build_mosfet).
 //
-// Spacing target s(x) = min(h_max, h_min + (ratio - 1) |x - x_focus|); nodes at equal increments of
+// Spacing target s(x) = min(h_max, h_min + (ratio - 1) dist(x, x_focus)), with x_focus clipped to
+// [0, L] and dist the distance to the nearest focus point; nodes at equal increments of
 // the arc length t(x) = integral dx / s(x) (trapezoid on a dense uniform sampling), then the cell
 // sizes are gradient-limited to `ratio` by repeated forward/backward cumulative minima in log space
 // and rescaled to span [0, L].
@@ -12,10 +14,16 @@
 #include <cstddef>
 #include <vector>
 
-inline std::vector<double> legacy_graded_mesh(double L, double x_focus, double h_min, double h_max,
-                                              double ratio = 1.15) {
+inline std::vector<double> legacy_graded_mesh(double L, std::vector<double> x_focus,
+                                              double h_min, double h_max, double ratio = 1.15) {
+    for (double& f : x_focus) f = std::clamp(f, 0.0, L);
     h_max = std::max(h_max, h_min);
     const double g = ratio - 1.0;
+    const auto spacing = [&](double x) {
+        double d = std::abs(x - x_focus.front());
+        for (const double f : x_focus) d = std::min(d, std::abs(x - f));
+        return std::min(h_max, h_min + g * d);
+    };
     const double m_uncapped = 50.0 * L / std::max(h_min, 1e-30);
     const auto m =
         static_cast<std::size_t>(std::min(2000001.0, std::max(2001.0, m_uncapped) + 1.0));
@@ -25,9 +33,9 @@ inline std::vector<double> legacy_graded_mesh(double L, double x_focus, double h
     std::vector<double> xs(m), t(m, 0.0);
     for (std::size_t i = 0; i < m; ++i) xs[i] = static_cast<double>(i) * step;
     xs[m - 1] = L;
-    double previous = 1.0 / std::min(h_max, h_min + g * std::abs(xs[0] - x_focus));
+    double previous = 1.0 / spacing(xs[0]);
     for (std::size_t i = 1; i < m; ++i) {
-        const double inv = 1.0 / std::min(h_max, h_min + g * std::abs(xs[i] - x_focus));
+        const double inv = 1.0 / spacing(xs[i]);
         t[i] = t[i - 1] + 0.5 * (inv + previous) * (xs[i] - xs[i - 1]);
         previous = inv;
     }
@@ -82,4 +90,9 @@ inline std::vector<double> legacy_graded_mesh(double L, double x_focus, double h
     for (std::size_t k = 0; k < cells; ++k) nodes[k + 1] = nodes[k] + h[k];
     nodes[cells] = L;
     return nodes;
+}
+
+inline std::vector<double> legacy_graded_mesh(double L, double x_focus, double h_min, double h_max,
+                                              double ratio = 1.15) {
+    return legacy_graded_mesh(L, std::vector<double>{x_focus}, h_min, h_max, ratio);
 }
