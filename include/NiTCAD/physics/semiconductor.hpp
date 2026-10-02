@@ -5,10 +5,9 @@
 //     Eg(T)  = Eg0 - alpha T^2 / (T + beta)        Varshni [eV]
 //     Nc(T)  = Nc300 (T / 300)^1.5                 [cm^-3], Nv likewise
 //     n_i(T) = sqrt(Nc Nv) exp(-Eg / (2 k T))      non-degenerate (Boltzmann) limit [cm^-3]
-// Only the parameters the first diode needs are carried (ARCHITECTURE.md section 11, Unit 5):
-// permittivity, band structure, Caughey-Thomas mobility and Scharfetter SRH lifetimes. Electron
-// affinity, saturation velocity, Auger, band-gap narrowing and effective masses come with the
-// units that use them.
+// Carried: permittivity, band structure, Caughey-Thomas mobility and Scharfetter SRH lifetimes
+// (Unit 5), Auger coefficients and Slotboom band-gap narrowing (Unit 11). Electron affinity,
+// saturation velocity and effective masses come with the units that use them.
 //
 // A Semiconductor is validated once, at construction, so the model functions can rely on it.
 #pragma once
@@ -41,6 +40,22 @@ struct ScharfetterLifetimeParameters {
     bool operator==(const ScharfetterLifetimeParameters&) const = default;
 };
 
+// Auger recombination coefficients (recombination.hpp).
+struct AugerParameters {
+    double Cn;  // [cm^6/s]
+    double Cp;  // [cm^6/s]
+
+    bool operator==(const AugerParameters&) const = default;
+};
+
+// Slotboom band-gap narrowing (bandgap_narrowing.hpp).
+struct SlotboomParameters {
+    double E0_eV;  // [eV]
+    double N0;     // [cm^-3]; no narrowing at or below N0
+
+    bool operator==(const SlotboomParameters&) const = default;
+};
+
 struct SemiconductorParameters {
     double eps_r;                   // relative permittivity
     double Eg0_eV;                  // band gap at 0 K
@@ -51,12 +66,15 @@ struct SemiconductorParameters {
     CaugheyThomasParameters electron_mobility;
     CaugheyThomasParameters hole_mobility;
     ScharfetterLifetimeParameters lifetime;
+    AugerParameters auger;
+    SlotboomParameters bandgap_narrowing;
 
     bool operator==(const SemiconductorParameters&) const = default;
 };
 
 // Silicon, the legacy defaults (materials.py SILICON): band and density-of-states values
-// measured / from band structure; mobility a Caughey-Thomas fit; lifetimes a Scharfetter fit.
+// measured / from band structure; mobility a Caughey-Thomas fit; lifetimes a Scharfetter fit;
+// Auger coefficients measured (Dziewior and Schmid); band-gap narrowing a Slotboom fit.
 inline constexpr SemiconductorParameters silicon_parameters{
     .eps_r = 11.7,
     .Eg0_eV = 1.17,
@@ -69,13 +87,16 @@ inline constexpr SemiconductorParameters silicon_parameters{
     .hole_mobility = {.mu_min = 47.7, .mu_max = 495.0, .N_ref = 6.3e16, .alpha = 0.76,
                       .T_exponent = -2.23},
     .lifetime = {.tau_n0 = 1.0e-5, .tau_p0 = 3.0e-6, .N_ref = 5.0e16},
+    .auger = {.Cn = 2.8e-31, .Cp = 9.9e-32},
+    .bandgap_narrowing = {.E0_eV = 6.92e-3, .N0 = 1.3e17},
 };
 
 class Semiconductor {
 public:
     // Errors: invalid_input if a parameter is not finite, or eps_r, Eg0, Nc300, Nv300, mu_max,
-    // N_ref, alpha or a lifetime is not positive, or varshni_alpha, varshni_beta or mu_min is
-    // negative, or mu_min > mu_max. The message names the parameter; the context value is it.
+    // N_ref, alpha, a lifetime or the band-gap-narrowing N0 is not positive, or varshni_alpha,
+    // varshni_beta, mu_min, an Auger coefficient or the band-gap-narrowing E0 is negative, or
+    // mu_min > mu_max. The message names the parameter; the context value is it.
     [[nodiscard]] static std::expected<Semiconductor, base::Error> create(
         const SemiconductorParameters& parameters);
 

@@ -12,8 +12,8 @@
 namespace NiTCAD::assemble {
 
 std::expected<EquilibriumPoisson, base::Error> EquilibriumPoisson::create(
-    const device::Device& device, const Scaling& scaling) {
-    auto scaled = detail::make_scaled_device(device, scaling);
+    const device::Device& device, const Scaling& scaling, const PhysicsModels& models) {
+    auto scaled = detail::make_scaled_device(device, scaling, models);
     if (!scaled) return std::unexpected(std::move(scaled.error()));
     const std::size_t n = scaled->volume.size();
 

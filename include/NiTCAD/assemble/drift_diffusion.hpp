@@ -8,8 +8,12 @@
 //     holes      sum  Jp_e                                        + V_i R_i
 // with c_e the scaled coupling (EquilibriumPoisson), Jn_e and Jp_e the Scharfetter-Gummel fluxes of
 // sg_flux.hpp with edge factor D_e c_e, D_e = hmean(mu_a, mu_b) V_T / D0 (harmonic mean of the
-// nodes' mobilities, legacy dn_edge), and R = R_SRH / R0 from physics::srh_recombination on scaled
-// densities (R scales with the densities, so R / R0 = R_SRH(n', p', ...) Ns / R0).
+// nodes' mobilities, legacy dn_edge), and R = (R_SRH + R_Auger) / R0. SRH is evaluated on scaled
+// densities (it is homogeneous of degree one, so R_SRH / R0 = R_SRH(n', p', ...) Ns / R0); Auger,
+// which is cubic, on physical ones.
+// The driving term of the fluxes is delta_n = psi_b - psi_a + ln(n_ie,b / n_ie,a) for electrons and
+// delta_p = psi_b - psi_a - ln(n_ie,b / n_ie,a) for holes (legacy delta, delta_p): with band-gap
+// narrowing n_ie varies in space, and only these make the equilibrium carry no current.
 // Contact rows (ohmic): psi - psi0, n - n0, p - p0, from ohmic_contact_value at the contact's bias.
 //
 // Jn and Jp are the electron and hole current densities in units of J0 (conventional current, along
@@ -29,6 +33,7 @@
 #include <utility>
 #include <vector>
 
+#include "NiTCAD/assemble/models.hpp"
 #include "NiTCAD/assemble/scaling.hpp"
 #include "NiTCAD/base/error.hpp"
 #include "NiTCAD/device/device.hpp"
@@ -36,20 +41,12 @@
 
 namespace NiTCAD::assemble {
 
-// The legacy Models flags of the baseline diode.
-struct DriftDiffusionModels {
-    // Caughey-Thomas mobility; false: the lattice mobility (Caughey-Thomas at N = 0).
-    bool doping_mobility = true;
-    // SRH recombination with Scharfetter lifetimes; false: no recombination.
-    bool srh = true;
-};
-
 class DriftDiffusion {
 public:
     // Errors: those of EquilibriumPoisson::create (scaling temperature, heterojunctions).
     [[nodiscard]] static std::expected<DriftDiffusion, base::Error> create(
         const device::Device& device, const Scaling& scaling,
-        const DriftDiffusionModels& models = {});
+        const PhysicsModels& models = {});
 
     [[nodiscard]] std::size_t unknowns() const noexcept { return 3 * node_count(); }
     [[nodiscard]] std::size_t node_count() const noexcept { return volume_.size(); }
@@ -95,6 +92,7 @@ private:
         std::size_t a, b;   // end nodes
         double c;           // et * scaled coupling, Poisson
         double an, ap;      // electron and hole SG edge factors
+        double dln;         // ln(n_ie,b / n_ie,a)
         // Positions in the Jacobian values: row a with columns of b, row b with columns of a,
         // in the order (psi, psi), (n, psi), (n, n), (p, psi), (p, p).
         std::size_t ab[5], ba[5];
@@ -103,15 +101,17 @@ private:
     void assemble(std::span<const double> x, std::span<double> residual,
                   std::span<double> values) const;
 
-    std::vector<double> volume_, doping_, n_ie_, tau_n_, tau_p_;
+    std::vector<double> volume_, doping_, n_ie_, tau_n_, tau_p_, auger_n_, auger_p_;
     std::vector<std::int32_t> contact_;   // contact index per node, or -1
     std::vector<double> psi0_, n0_, p0_;  // Dirichlet values per node (contact nodes only)
     std::vector<EdgeTerm> edges_;
     std::vector<std::size_t> block_;      // per node, 9 positions of its 3x3 diagonal block
     std::size_t contact_count_ = 0;
     double rate_scale_ = 0.0;             // Ns / R0: scaled SRH call to R / R0
+    double Ns_ = 0.0;
     double V_T_ = 0.0;
     bool srh_ = true;
+    bool auger_ = true;
     linalg::SparseMatrix pattern_;
 };
 

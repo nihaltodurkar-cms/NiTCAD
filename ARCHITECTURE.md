@@ -177,6 +177,37 @@ thermionic emission through per-edge arrays in the `Inputs` struct, `core/includ
   gate. Unit 9 must confirm this by measurement, or the owner must add Auger. (Measured at Unit 9: Auger moves J(0.5 V) by
   4.3e-7 relative, 6.2 "As built (Unit 9)".)
 
+**As built (Unit 11, band-gap narrowing and Auger; owner request after the Unit 10 review):**
+- `SemiconductorParameters` gains `auger{Cn, Cp}` and `bandgap_narrowing{E0_eV, N0}`, with the legacy silicon values
+  (2.8e-31 and 9.9e-32 cm⁶/s; 6.92 meV and 1.3e17 cm⁻³). Validation: the Auger coefficients and E0 must be ≥ 0, and N0 > 0.
+  Setting them to zero switches the model off through the material.
+- `bandgap_narrowing.hpp`: `bandgap_narrowing_eV(m, N_total)`, the legacy Slotboom form E0[ln(N/N0) + sqrt(ln²(N/N0) + ½) −
+  sqrt(½)] above N0 and 0 at or below it (so there is no step at N0); `effective_intrinsic_density(m, N_total, T)` =
+  n_i exp(ΔEg/2kT). OLD / NEW / REASON: the legacy clamped N to at least 1 cm⁻³; NEW requires N ≥ 0; REASON: as for
+  mobility (Unit 5).
+- `auger_recombination(n, p, EquilibriumProduct, Cn, Cp)` returns (Cn n + Cp p)(np − E) with exact partials through E (the
+  legacy form). It is cubic, so it is called with physical densities, not scaled ones.
+- `assemble::PhysicsModels{doping_mobility, srh, auger, bgn}` replaces `DriftDiffusionModels`; all four are on by default,
+  as in the legacy. Both assemblers take it:
+  - With `bgn`, every node's n_ie is the effective one. That changes the statistics, the SRH and Auger equilibrium
+    product, the ohmic contact values and the charge-neutral guess.
+  - The SG driving term becomes δn = Δψ + Δln n_ie for electrons and δp = Δψ − Δln n_ie for holes (the legacy `delta`,
+    `delta_p`), so equilibrium carries no current where n_ie varies.
+  - `EquilibriumOptions` gains `models` (only `bgn` matters there), and the run record lists `models.auger` and
+    `models.bgn`.
+- Effect on earlier gates: none at 1e17 (BGN is zero below 1.3e17, and Auger moves J(0.5 V) by 4.3e-7). The Unit 8
+  peak-field gate at 1e18 now uses V_bi from the effective n_ie of each side, and the Unit 9 "no recombination" check now
+  switches off both SRH and Auger.
+- **Finding, BGN regimes:** BGN multiplies the diffusion current by exp(ΔEg/kT), measured 8.5908 against 8.5932 for
+  1e19/1e19 at 0.5 V with SRH off. With SRH the low-bias current of such a junction is depletion-region recombination,
+  which scales with n_ie, not n_ie²: measured 3.14 at 0.3 V, against √8.59 = 2.93.
+- **Finding, current resolution in heavily doped devices:** extracted currents below about 1e-8 A/cm² are rounding noise
+  in a 1e19 device. The majority one-sided fluxes reach 5e6 A/cm² even on 1e-6 cm cells, and the total current varies by
+  5e-8 to 1e-7 A/cm² from edge to edge. This is the same cancellation as the Unit 9 electron-current floor and is
+  inherent to the (ψ, n, p) unknowns the legacy also uses. Low-current analyses of heavily doped devices (leakage,
+  sub-threshold) will need either a quasi-Fermi-potential formulation or current extraction from the minority side; this
+  is not done here.
+
 ## 6. Cross-cutting design
 
 ### 6.1 de Mari scaling
@@ -313,7 +344,8 @@ Whether the new solver reproduces these exact defaults is to be confirmed unit b
   - ψ is clipped to ±`max_update`; n and p are clamped to [0.1, 10]× their current value (legacy).
   - Convergence is judged on the full correction: max(|dψ|, |dn|/n, |dp|/p). The legacy measured the clamped one.
   - The convergence record (Unit 10: `results::ConvergenceRecord`) keeps the smallest pivot ratio.
-- `DriftDiffusionModels{doping_mobility, srh}` are the legacy `Models` flags of the baseline diode. OLD / NEW / REASON:
+- `DriftDiffusionModels{doping_mobility, srh}` (Unit 11: `PhysicsModels`, with `auger` and `bgn`) are the legacy `Models`
+  flags of the baseline diode. OLD / NEW / REASON:
   with `doping_mobility` off, the legacy used `mu_max` at 300 K whatever the temperature; NEW uses Caughey–Thomas at N = 0,
   so μ_max(T); REASON: the same model at all temperatures (identical at 300 K).
 - `solve_bias(device, bias_V, options, initial)` starts from the given state (a sweep's previous point) or from the
@@ -321,8 +353,8 @@ Whether the new solver reproduces these exact defaults is to be confirmed unit b
   terminal currents, edge currents and the convergence history; since Unit 10 that is `results::BiasPoint` (6.6), and
   `solve_bias` is a sweep of one point (6.9).
 - Not carried from the legacy solver: the line search and generation-strength stages (impact ionization and BTBT only),
-  Robin contacts with surface recombination velocity, the energy-balance block, lagged field mobility, and the ln(n_ie)
-  term in δ (band-gap narrowing is deferred, so n_ie is uniform within a material).
+  Robin contacts with surface recombination velocity, the energy-balance block, and lagged field mobility. (The ln(n_ie)
+  term in δ was added with band-gap narrowing at Unit 11, section 5.)
 - **Auger (the Unit 5 question): not needed.** Measured with a temporary local patch adding the legacy Auger term (removed
   afterwards): J(0.5 V) on the gate fixture goes from 1.280076828e-2 to 1.280077381e-2 A/cm², 4.3e-7 relative.
 - **Pivot ratio on reverse bias (the 6.10 gate): not flagged.** The smallest pivot ratio over −0.5, −2 and −8 V is 2.1e-3,
@@ -631,13 +663,14 @@ tests/linalg/               matrix, solver and header-boundary tests         (Un
 include/NiTCAD/mesh/        mesh.hpp, tensor_grid.hpp                        (Unit 4, exists)
 src/mesh/                   graph validation, tensor-grid producer           (Unit 4, exists)
 tests/mesh/                 graph validation and geometry gates              (Unit 4, exists)
-include/NiTCAD/physics/     semiconductor, mobility, recombination, statistics (Unit 5, exists)
-src/physics/                parameter validation, band quantities, models    (Unit 5, exists)
-tests/physics/              published values, limits, FD derivative gates     (Unit 5, exists)
+include/NiTCAD/physics/     semiconductor, mobility, recombination, statistics (Unit 5); bandgap_narrowing (Unit 11)
+src/physics/                parameter validation, band quantities, models    (Units 5, 11)
+tests/physics/              published values, limits, FD derivative gates; heavy doping (Units 5, 11)
 include/NiTCAD/device/      device.hpp, contact.hpp                          (Unit 6, exists)
 src/device/                 description validation, topology check           (Unit 6, exists)
 tests/device/               construction, validation, floating regions       (Unit 6, exists)
-include/NiTCAD/assemble/    scaling, bernoulli, sg_flux, ohmic, equilibrium_poisson (Unit 7); drift_diffusion (Unit 9)
+include/NiTCAD/assemble/    scaling, bernoulli, sg_flux, ohmic, equilibrium_poisson (Unit 7); drift_diffusion (Unit 9);
+                            models (Unit 11)
 src/assemble/               scaling, scaled device (private), equilibrium Poisson, drift-diffusion (Units 7, 9)
 tests/assemble/             Bernoulli/SG references, FD-Jacobian gate, reduction (Unit 7, exists)
 include/NiTCAD/solve/       newton.hpp, equilibrium.hpp (Unit 8); bias.hpp (Unit 9, sweeps Unit 10); control.hpp (Unit 10)
@@ -749,11 +782,12 @@ testable on arrival. Units 4–9 are dimension-generic from the start (D4) and u
 | 7 | Scaling (V3), SG/Bernoulli flux, equilibrium Poisson residual + Jacobian, ohmic boundary (**done, on `main`**) | assemble | `core/src/device1d/device1d.cpp`, `core/src/device1d/inputs.cpp` | Bernoulli limits and symmetry; FD-Jacobian gate (section 10) |
 | 8 | Newton solver (scaled variables) and equilibrium solve (**done, on `main`**) | solve | `device.py` options, `device1d.cpp` | built-in potential within 2e-3 V; bulk neutrality; convergence; non-convergence returns an error value |
 | 9 | Electron/hole continuity assembly and bias solve; first end-to-end gate (**done, on `main`**) | assemble, solve | `device1d.cpp`, `tests/test_validation.py`, `tests/test_device1d_native_gates.py` | J(0.5 V) = 1.280e-2 A/cm² ± 1%; ideal-diode law; current continuity; mesh independence; uniform 2D/3D reproduces 1D to a tolerance set at this unit |
-| 10 | Result representation, cancellation and progress (**done on branch `solve/results-control`**) | results, solve | — (new) | cancellation returns partial results; progress is monotonic |
-| 11+ | Everything else: Fermi–Dirac, Auger, band-gap narrowing, field mobility, heterojunctions, impact ionization, BTBT, transient, AC, thermal, process, unstructured meshes, PARDISO/iterative backends, file formats, analysis, render, app | deferred | per the audit | per unit, when the owner requests |
+| 10 | Result representation, cancellation and progress (**done, on `main`**) | results, solve | — (new) | cancellation returns partial results; progress is monotonic |
+| 11 | Slotboom band-gap narrowing and Auger recombination (**done on branch `physics/bgn-auger`**) | physics, assemble | `materials.py` (`bandgap_narrowing_slotboom`, `nie_effective`, `recombination`), `device1d.cpp` (`delta`, `delta_p`) | legacy model benchmarks; Slotboom and n_ie against 40-digit values; Auger partials vs FD; zero equilibrium current with varying n_ie; diffusion current × exp(ΔEg/kT); FD-Jacobian gate on a 1e19/1e18 diode |
+| 12+ | Everything else: Fermi–Dirac, field mobility, heterojunctions, impact ionization, BTBT, transient, AC, thermal, process, unstructured meshes, PARDISO/iterative backends, file formats, analysis, render, app | deferred | per the audit | per unit, when the owner requests |
 
 Units 1–9 are the smallest end-to-end vertical slice: a validated drift-diffusion diode. Everything past
-Unit 10 is deferred until sequenced; nothing past Unit 10 is started.
+Unit 10 is deferred until sequenced. Unit 11 was requested by the owner after Unit 10; nothing past it is started.
 
 ## 12. Legacy facts: verified, derived and unverified
 
@@ -909,6 +943,7 @@ withdrawn; numbering is otherwise kept stable. This proposal lives on `architect
 | V15 | Unit 8 (`solve/equilibrium-newton`): Debug and Release build with no warnings; `nitcad_solve_test` has 12 test cases, all pass. Newton on one-unknown systems: quadratic convergence, one analysis per run, clipping with the last iterate kept, the full-correction criterion, option validation, non-finite residual and singular Jacobian errors. Equilibrium of a silicon diode on the legacy fixture mesh (spacing 1e-8 cm at the junction growing by 1.2 to 1e-6 cm, 241 nodes): converged in 7 iterations, the last corrections shrinking quadratically, final max|F| ≤ 1e-10, one analysis; V_bi within 2e-3 V at 300 K and 400 K; |p − n + C| ≤ 1e-6 |C| more than 0.4 µm from the junction; total charge ≤ 1e-8 of the depleted charge; n p = n_i² to 1e-13; peak field of symmetric junctions within 0.5% of the corrected depletion approximation (measured 0.01–0.17%); a y-uniform 2D and 3D device reproduce 1D to 1.1e-16 V (legacy gate 1e-9); an undoped device gives zero potential in one iteration; too few iterations, a bad Ns and a bad linear configuration return errors. Mutation checks: the clipped-correction criterion, no clipping, no finite-residual check and unscaled output potential each fail the suite. | Verified locally. |
 | V16 | Unit 9 (`solve/bias-continuity`): Debug and Release build with no warnings; `nitcad_assemble_test` has 22 test cases and `nitcad_solve_test` 23, all pass. Fixtures on the legacy meshes, from a test port of `graded_mesh` that matches the legacy output (250, 262 and 450 nodes; nodes to 1e-12). **J(0.5 V) = 1.28008e-2 A/cm²** (gate 1.280e-2 ± 1%; 0.006% off) in 10 iterations, without Auger; Kirchhoff to 8.8e-9 and the total current equal on every edge to 7.3e-8 (legacy spread 1e-6); ideal-diode law: J/J_ideal(0.5 V) = 0.969 (gate 0.85–1.15) and ideality within 0.02 of 1 for every step from 0.3 to 0.6 V; least-squares ideality over 0.3–0.7 V 1.004 (gate ±0.05); a 2× finer mesh moves J(0.5 V) by 0.005% (gate 3%); y-uniform 2D and 3D devices reproduce the 1D current to 1.3e-15; reverse bias: J < 0 at −0.5, −2, −8 V with exponent 0.85 (gate 0.5–1.5), smallest pivot ratio 2.1e-3 (not flagged); zero bias is the equilibrium solution in one iteration; one analysis per Newton run, quadratic finish. Coupled FD-Jacobian gate (legacy probe at +0.3 V, every column; 183 in 1D, plus 2D and 3D): worst 3.3e-9; recombination part on its own: 7.6e-7 (gate 1e-5); the 1D rows equal the legacy formulas written out on a 1e18/1e16 diode to 1e-12; a y-uniform 2D residual equals the 1D one times the scaled width to 1e-12. Auger measured with a temporary patch: 4.3e-7 of J(0.5 V). Mutation checks: dropping dR/dn from the Jacobian, flipping the recombination sign in the hole row, flipping the terminal-current sign, an arithmetic instead of harmonic mobility mean, and no density clamp each fail the suite (the first and fourth only after the two targeted tests were added). | Verified locally. |
 | V17 | Unit 10 (`solve/results-control`): Debug and Release build with no warnings; `nitcad_solve_test` has 32 test cases, all pass (the existing Unit 8 and 9 tests moved to the `results` types unchanged in substance). A 0–0.5 V sweep equals the chain of one-point solves to 1e-9 (the chain passes states through physical units) and ends at J(0.5 V) within the 1% gate; the run record carries the settings. Progress: strictly increasing in (phase, point, iteration), iterations counting from 1 per point, the converged event closing each point, the bias events equal to the convergence records. Cancellation keeps partial results: a stop after point 1 returns points 0–1 bit-identical to the full run (context: point 2, no unfinished point); a stop at iteration 2 of point 3 returns points 0–2 and the unfinished 2-iteration history (context: iteration 3); a stop requested before the start solves nothing and emits no event, and `solve_equilibrium` and `solve_bias` return `cancelled`; a sweep on a `std::jthread` cancelled from the main thread stops at the next safe point, deterministically. A point that does not converge (0.8 V with 8 iterations) stops the sweep with the earlier point kept. Invalid points or initial state are errors before any event. The run identity is equal for equal inputs and changes with the doping, an option, a bias point or an initial state. Mutation checks: removing the between-points or the Newton stop check, a wrong point index in progress events, and leaving the donors out of the digest each fail the suite. | Verified locally. |
+| V18 | Unit 11 (`physics/bgn-auger`): Debug and Release build with no warnings; `nitcad_physics_test` 38 test cases, `nitcad_assemble_test` 24, `nitcad_solve_test` 35, all pass. Slotboom ΔEg at 1e18/1e19/1e20 and the effective n_ie match 40-digit values to 1e-13 and 1e-12; zero at and below N0; the legacy benchmarks pass (BGN positive and monotonic; SRH + Auger more than doubles when the densities double). Auger: zero at equilibrium, exactly ×8 for doubled high-injection densities, partials vs FD to 1e-8 with and without a carrier-dependent equilibrium product; the Auger part of the assembled Jacobian on its own vs FD (gate 1e-5); the coupled FD-Jacobian gate on a 1e19/1e18 diode with all models. Device level: equilibrium edge currents of a 1e19/1e18 diode within 0.0095 of their rounding bound (without the ln n_ie term the junction edges would carry about 1e8 A/cm²), V_bi from the effective n_ie to 1e-12; the 1e19/1e19 diffusion current ratio 8.5908 against exp(ΔEg/kT) = 8.5932 (gate 0.5%); Auger on the legacy fixture +4.3e-7 with J(0.5 V) still within 1%. The legacy rows written out by hand now include BGN (Δln n_ie) and Auger, on a 1e18/1e16 diode, to 1e-12. Mutation checks: no Δln n_ie term, Auger dR/dn dropped from the Jacobian, and the BGN flag ignored each fail the suite. | Verified locally. |
 | V3 | Scaling definitions, scaled variables and Newton tolerances read from `inputs.cpp` and `device1d.cpp` and recorded in 6.1. One open question remains for Unit 8 (convergence criterion on the clipped correction). | Verified |
 
 Verifications due at their own unit: none left. The 5e-5 Jacobian gate's normalization was read at Unit 7 (section 10), and

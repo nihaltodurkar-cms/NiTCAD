@@ -71,7 +71,7 @@ std::expected<results::Sweep, base::Error> sweep_bias(const device::Device& devi
         auto equilibrium = solve_equilibrium(
             device,
             {.newton = options.newton, .linear = options.linear,
-             .Ns_override = options.Ns_override},
+             .Ns_override = options.Ns_override, .models = options.models},
             control);
         if (!equilibrium) {
             sweep.stopped = std::move(equilibrium.error());

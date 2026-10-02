@@ -30,7 +30,7 @@ struct BiasOptions {
     NewtonOptions newton;
     linalg::SolverConfig linear;
     std::optional<double> Ns_override;  // see assemble::make_scaling
-    assemble::DriftDiffusionModels models;
+    assemble::PhysicsModels models;
 };
 
 // Solves each bias point in order. `points[k]` holds one bias in V per contact.

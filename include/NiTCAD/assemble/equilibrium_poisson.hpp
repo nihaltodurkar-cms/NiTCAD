@@ -6,8 +6,8 @@
 //     F_i = sum over edges e = (i, j):  c_e (psi_j - psi_i)  -  V_i (n_i - p_i - C_i)
 // with c_e = coupling area / length / L_D^(D-2), V_i = control volume / L_D^D, n = n_ie e^psi,
 // p = n_ie e^-psi (physics::boltzmann_density), C = (N_D - N_A) / Ns and n_ie / Ns from the node's
-// material. In 1D this is the legacy row et (psi[i+1] - psi[i]) / h - ... - dV (n - p - C), with
-// et = 1 for one material.
+// material (with band-gap narrowing when models.bgn is set). In 1D this is the legacy row
+// et (psi[i+1] - psi[i]) / h - ... - dV (n - p - C), with et = 1 for one material.
 // Contact row (ohmic, Dirichlet): F_i = psi_i - psi0_i, psi0 from ohmic_contact_value at zero bias.
 //
 // The Jacobian pattern is built once (diagonal plus both directions of every edge; contact rows
@@ -20,6 +20,7 @@
 #include <span>
 #include <vector>
 
+#include "NiTCAD/assemble/models.hpp"
 #include "NiTCAD/assemble/scaling.hpp"
 #include "NiTCAD/base/error.hpp"
 #include "NiTCAD/device/device.hpp"
@@ -33,8 +34,9 @@ public:
     // - scaling.temperature_K differs from the device's;
     // - a heterojunction: an edge between regions whose material parameters differ (band offsets
     //   and permittivity steps are deferred); the context index is the edge.
+    // Of the models only `bgn` matters here (the effective n_ie of every node).
     [[nodiscard]] static std::expected<EquilibriumPoisson, base::Error> create(
-        const device::Device& device, const Scaling& scaling);
+        const device::Device& device, const Scaling& scaling, const PhysicsModels& models = {});
 
     [[nodiscard]] std::size_t unknowns() const noexcept { return volume_.size(); }
 

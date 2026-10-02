@@ -14,7 +14,7 @@
 //
 // and likewise for p. With the Boltzmann E (partials zero) this is the legacy Boltzmann form
 // operation for operation; with a Fermi-Dirac E it is the legacy recombination_fd form.
-// Auger recombination is deferred (ARCHITECTURE.md section 11, Units 11+).
+// Auger recombination (Unit 11) is auger_recombination below; the assembler adds it to SRH.
 #pragma once
 
 #include "NiTCAD/physics/semiconductor.hpp"
@@ -50,6 +50,21 @@ struct RecombinationRate {
         ((p - np_eq.d_dn) * den - excess * tau_p) / (den * den),
         ((n - np_eq.d_dp) * den - excess * tau_n) / (den * den),
     };
+}
+
+// Auger recombination (legacy materials.recombination, auger branch):
+//
+//     R = (Cn n + Cp p) (n p - E),   dR/dn = Cn (n p - E) + (Cn n + Cp p) (p - dE/dn),
+//
+// and likewise for p, with E the equilibrium product (so R vanishes at equilibrium). Cubic in the
+// concentrations, not homogeneous of degree one like SRH: call it with physical densities
+// (cm^-3, and E in cm^-6) and the coefficients in cm^6/s; R is then in cm^-3 s^-1.
+[[nodiscard]] constexpr RecombinationRate auger_recombination(double n, double p,
+                                                              EquilibriumProduct np_eq,
+                                                              double Cn, double Cp) noexcept {
+    const double excess = n * p - np_eq.value;
+    const double C = Cn * n + Cp * p;
+    return {C * excess, Cn * excess + C * (p - np_eq.d_dn), Cp * excess + C * (n - np_eq.d_dp)};
 }
 
 }  // namespace NiTCAD::physics

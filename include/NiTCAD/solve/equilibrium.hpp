@@ -9,6 +9,7 @@
 #include <expected>
 #include <optional>
 
+#include "NiTCAD/assemble/models.hpp"
 #include "NiTCAD/base/error.hpp"
 #include "NiTCAD/device/device.hpp"
 #include "NiTCAD/linalg/linear_solver.hpp"
@@ -22,6 +23,7 @@ struct EquilibriumOptions {
     NewtonOptions newton;
     linalg::SolverConfig linear;
     std::optional<double> Ns_override;  // see assemble::make_scaling
+    assemble::PhysicsModels models;     // only bgn matters at equilibrium
 };
 
 // Errors: those of assemble::make_scaling, assemble::EquilibriumPoisson::create,

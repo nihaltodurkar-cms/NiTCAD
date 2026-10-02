@@ -95,6 +95,18 @@ std::expected<Semiconductor, base::Error> Semiconductor::create(
     if (auto e = check("lifetime.", "N_ref", p.lifetime.N_ref, positive)) {
         return std::unexpected(std::move(*e));
     }
+    if (auto e = check("auger.", "Cn", p.auger.Cn, non_negative)) {
+        return std::unexpected(std::move(*e));
+    }
+    if (auto e = check("auger.", "Cp", p.auger.Cp, non_negative)) {
+        return std::unexpected(std::move(*e));
+    }
+    if (auto e = check("bandgap_narrowing.", "E0_eV", p.bandgap_narrowing.E0_eV, non_negative)) {
+        return std::unexpected(std::move(*e));
+    }
+    if (auto e = check("bandgap_narrowing.", "N0", p.bandgap_narrowing.N0, positive)) {
+        return std::unexpected(std::move(*e));
+    }
     return Semiconductor{p};
 }
 

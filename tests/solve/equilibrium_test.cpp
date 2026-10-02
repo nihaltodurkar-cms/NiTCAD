@@ -19,6 +19,7 @@
 #include "NiTCAD/device/device.hpp"
 #include "NiTCAD/linalg/linear_solver.hpp"
 #include "NiTCAD/mesh/tensor_grid.hpp"
+#include "NiTCAD/physics/bandgap_narrowing.hpp"
 #include "NiTCAD/physics/semiconductor.hpp"
 #include "NiTCAD/results/convergence.hpp"
 #include "NiTCAD/solve/equilibrium.hpp"
@@ -77,9 +78,13 @@ device::Device diode(mesh::Mesh m, double NA = 1e17, double ND = 1e17, double T 
                       {"cathode", device::ContactKind::ohmic, std::move(cathode)}}});
 }
 
+// V_T ln(N_A N_D / (n_ie,p n_ie,n)), with the effective n_ie of each side (band-gap narrowing, on by
+// default; zero below 1.3e17).
 double built_in(double NA, double ND, double T) {
-    const double ni = physics::intrinsic_density(physics::silicon(), T);
-    return base::thermal_voltage(T) * std::log(NA * ND / (ni * ni));
+    const physics::Semiconductor si = physics::silicon();
+    const double nie_p = physics::effective_intrinsic_density(si, NA, T);
+    const double nie_n = physics::effective_intrinsic_density(si, ND, T);
+    return base::thermal_voltage(T) * std::log(NA * ND / (nie_p * nie_n));
 }
 
 }  // namespace
