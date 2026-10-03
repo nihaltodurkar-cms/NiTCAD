@@ -7,8 +7,8 @@
 //     n_i(T) = sqrt(Nc Nv) exp(-Eg / (2 k T))      non-degenerate (Boltzmann) limit [cm^-3]
 // Carried: permittivity, band structure, Caughey-Thomas mobility and Scharfetter SRH lifetimes
 // (Unit 5), Auger coefficients and Slotboom band-gap narrowing (Unit 11), electron affinity (Unit
-// 12, for gate work functions). Saturation velocity and effective masses come with the units that
-// use them.
+// 12, for gate work functions), Canali velocity saturation (Unit 13). Effective masses come with
+// the unit that uses them.
 //
 // A Semiconductor is validated once, at construction, so the model functions can rely on it.
 #pragma once
@@ -49,6 +49,14 @@ struct AugerParameters {
     bool operator==(const AugerParameters&) const = default;
 };
 
+// Canali velocity saturation for one carrier (field_mobility.hpp).
+struct CanaliParameters {
+    double v_sat_cm_s;  // saturation velocity [cm/s], temperature independent (legacy)
+    double beta;        // exponent
+
+    bool operator==(const CanaliParameters&) const = default;
+};
+
 // Slotboom band-gap narrowing (bandgap_narrowing.hpp).
 struct SlotboomParameters {
     double E0_eV;  // [eV]
@@ -70,6 +78,8 @@ struct SemiconductorParameters {
     ScharfetterLifetimeParameters lifetime;
     AugerParameters auger;
     SlotboomParameters bandgap_narrowing;
+    CanaliParameters electron_saturation;
+    CanaliParameters hole_saturation;
 
     bool operator==(const SemiconductorParameters&) const = default;
 };
@@ -77,7 +87,7 @@ struct SemiconductorParameters {
 // Silicon, the legacy defaults (materials.py SILICON): band and density-of-states values and the
 // electron affinity measured / from band structure; mobility a Caughey-Thomas fit; lifetimes a
 // Scharfetter fit; Auger coefficients measured (Dziewior and Schmid); band-gap narrowing a Slotboom
-// fit.
+// fit; velocity saturation the Canali fit.
 inline constexpr SemiconductorParameters silicon_parameters{
     .eps_r = 11.7,
     .Eg0_eV = 1.17,
@@ -93,6 +103,8 @@ inline constexpr SemiconductorParameters silicon_parameters{
     .lifetime = {.tau_n0 = 1.0e-5, .tau_p0 = 3.0e-6, .N_ref = 5.0e16},
     .auger = {.Cn = 2.8e-31, .Cp = 9.9e-32},
     .bandgap_narrowing = {.E0_eV = 6.92e-3, .N0 = 1.3e17},
+    .electron_saturation = {.v_sat_cm_s = 1.07e7, .beta = 2.0},
+    .hole_saturation = {.v_sat_cm_s = 8.37e6, .beta = 1.0},
 };
 
 class Semiconductor {
@@ -100,8 +112,8 @@ public:
     // Errors: invalid_input if a parameter is not finite, or eps_r, Eg0, Nc300, Nv300, mu_max,
     // N_ref, alpha, a lifetime or the band-gap-narrowing N0 is not positive, or varshni_alpha,
     // varshni_beta, the electron affinity, mu_min, an Auger coefficient or the band-gap-narrowing
-    // E0 is negative, or mu_min > mu_max. The message names the parameter; the context value is
-    // it.
+    // E0 is negative, or mu_min > mu_max, or a saturation velocity is not positive, or a Canali
+    // beta is below 1. The message names the parameter; the context value is it.
     [[nodiscard]] static std::expected<Semiconductor, base::Error> create(
         const SemiconductorParameters& parameters);
 

@@ -175,3 +175,41 @@ TEST_CASE("mosfet: the on current is mesh independent (legacy gate)", "[.mosfet]
     CAPTURE(a, b, (a - b) / b);
     REQUIRE(std::abs(a - b) / std::abs(b) < 0.10);
 }
+
+TEST_CASE("mosfet: field mobility lowers the drain current at high drain bias (Unit 13)",
+          "[.mosfet]") {
+    // The legacy fixture at V_G = 1 V, drain swept to 1 V in 0.1 V steps. At V_D = 0 no current
+    // flows, so that state does not depend on the mobility, and both sweeps start from the one
+    // constant-mobility solve there. With field mobility the first drain step diverges under the
+    // legacy damping cap of 5 V_T and converges under 1 V_T (ARCHITECTURE.md 6.2, Unit 13), so
+    // that sweep uses max_update = 1. At low drain bias the lateral field is small and field
+    // mobility changes little; towards 1 V the field near the drain reaches 1e4-1e5 V/cm and the
+    // current falls below the constant-mobility one.
+    const device::Device d = mosfet();
+    const std::vector<double> gate_on{0.0, 0.0, 0.0, 1.0};
+    const auto start = solve::solve_bias(d, gate_on);
+    REQUIRE(start.has_value());
+    std::vector<std::vector<double>> points;
+    for (int k = 1; k <= 10; ++k) points.push_back({0.0, 0.1 * k, 0.0, 1.0});
+    solve::BiasOptions field;
+    field.models.field_mobility = true;
+    field.newton.max_update = 1.0;
+    const auto on = solve::sweep_bias(d, points, field, &start->fields);
+    const auto off = solve::sweep_bias(d, points, {}, &start->fields);
+    REQUIRE(on.has_value());
+    REQUIRE(off.has_value());
+    REQUIRE_FALSE(on->stopped.has_value());
+    REQUIRE_FALSE(off->stopped.has_value());
+    std::vector<double> ratio;
+    std::vector<std::size_t> iterations;
+    for (std::size_t k = 0; k < points.size(); ++k) {
+        ratio.push_back(on->points[k].terminal_current[1] / off->points[k].terminal_current[1]);
+        iterations.push_back(on->points[k].convergence.iterations.size());
+    }
+    CAPTURE(ratio, iterations, on->points.back().terminal_current[1],
+            off->points.back().terminal_current[1]);
+    REQUIRE(ratio.front() > 0.95);
+    REQUIRE(ratio.front() < 1.0);
+    for (std::size_t k = 1; k < ratio.size(); ++k) REQUIRE(ratio[k] < ratio[k - 1]);
+    REQUIRE(ratio.back() < 0.9);
+}

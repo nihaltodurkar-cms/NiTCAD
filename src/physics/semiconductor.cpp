@@ -44,6 +44,15 @@ std::optional<base::Error> check(std::string_view group, std::string_view field,
     return std::nullopt;
 }
 
+// beta >= 1 keeps dmu/dE finite at E = 0 (the legacy only required beta > 0; its silicon values
+// are 2 and 1).
+std::optional<base::Error> check_saturation(std::string_view group, const CanaliParameters& c) {
+    if (auto e = check(group, "v_sat_cm_s", c.v_sat_cm_s, Bound::positive)) return e;
+    if (auto e = check(group, "beta", c.beta, Bound::finite)) return e;
+    if (c.beta < 1.0) return parameter_error(group, "beta", " must be at least 1", c.beta);
+    return std::nullopt;
+}
+
 std::optional<base::Error> check_mobility(std::string_view group,
                                           const CaugheyThomasParameters& ct) {
     if (auto e = check(group, "mu_min", ct.mu_min, Bound::non_negative)) return e;
@@ -108,6 +117,12 @@ std::expected<Semiconductor, base::Error> Semiconductor::create(
         return std::unexpected(std::move(*e));
     }
     if (auto e = check("bandgap_narrowing.", "N0", p.bandgap_narrowing.N0, positive)) {
+        return std::unexpected(std::move(*e));
+    }
+    if (auto e = check_saturation("electron_saturation.", p.electron_saturation)) {
+        return std::unexpected(std::move(*e));
+    }
+    if (auto e = check_saturation("hole_saturation.", p.hole_saturation)) {
         return std::unexpected(std::move(*e));
     }
     return Semiconductor{p};

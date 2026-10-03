@@ -97,7 +97,7 @@ std::expected<ScaledDevice, base::Error> make_scaled_device(const device::Device
         const double eps_r = device.material(edge.first).parameters().eps_r;
         s.edges.push_back({static_cast<std::size_t>(edge.first),
                            static_cast<std::size_t>(edge.second),
-                           edge.coupling_area / edge.length / coupling_scale,
+                           edge.coupling_area / edge.length / coupling_scale, edge.length,
                            permittivity_ratio(eps_r, scaling)});
     }
     return s;

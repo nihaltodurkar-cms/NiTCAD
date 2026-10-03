@@ -11,6 +11,12 @@
 // nodes' mobilities, legacy dn_edge), and R = (R_SRH + R_Auger) / R0. SRH is evaluated on scaled
 // densities (it is homogeneous of degree one, so R_SRH / R0 = R_SRH(n', p', ...) Ns / R0); Auger,
 // which is cubic, on physical ones.
+// With models.field_mobility the edge factor carries the Canali mobility of the edge's own field:
+// D_e = mu_C(mu0_e, E_e) V_T / D0, with mu0_e the harmonic mean above and
+// E_e = V_T |psi_b - psi_a| / length the electrostatic field along the edge (the field parallel to
+// the edge's current, as in the legacy). The Jacobian includes d D_e / d psi, so Newton stays
+// quadratic (OLD / NEW / REASON in ARCHITECTURE.md 6.2, Unit 13: the legacy averaged |E| to the
+// nodes, applied Canali per node, took the harmonic mean, and lagged it).
 // The driving term of the fluxes is delta_n = psi_b - psi_a + ln(n_ie,b / n_ie,a) for electrons and
 // delta_p = psi_b - psi_a - ln(n_ie,b / n_ie,a) for holes (legacy delta, delta_p): with band-gap
 // narrowing n_ie varies in space, and only these make the equilibrium carry no current.
@@ -39,10 +45,12 @@
 
 #include "NiTCAD/assemble/gate.hpp"
 #include "NiTCAD/assemble/models.hpp"
+#include "NiTCAD/assemble/sg_flux.hpp"
 #include "NiTCAD/assemble/scaling.hpp"
 #include "NiTCAD/base/error.hpp"
 #include "NiTCAD/device/device.hpp"
 #include "NiTCAD/linalg/sparse_matrix.hpp"
+#include "NiTCAD/physics/semiconductor.hpp"
 
 namespace NiTCAD::assemble {
 
@@ -100,7 +108,10 @@ private:
     struct EdgeTerm {
         std::size_t a, b;   // end nodes
         double c;           // et * scaled coupling, Poisson
-        double an, ap;      // electron and hole SG edge factors
+        double an, ap;      // electron and hole SG edge factors (low field)
+        double mu_n, mu_p;  // low-field edge mobilities (harmonic means) [cm^2/(V s)]
+        double field;       // [V/cm] per unit |psi_b - psi_a|: V_T / length
+        physics::CanaliParameters sat_n, sat_p;  // of the edge's material
         double dln;         // ln(n_ie,b / n_ie,a)
         // Positions in the Jacobian values: row a with columns of b, row b with columns of a,
         // in the order (psi, psi), (n, psi), (n, n), (p, psi), (p, p).
@@ -109,6 +120,11 @@ private:
 
     void assemble(std::span<const double> x, std::span<double> residual,
                   std::span<double> values) const;
+
+    // The electron and hole fluxes of an edge at state x, with field-dependent edge factors when
+    // the model is on.
+    [[nodiscard]] std::pair<EdgeFlux, EdgeFlux> edge_fluxes(
+        const EdgeTerm& e, std::span<const double> x) const;
 
     std::vector<double> volume_, doping_, n_ie_, tau_n_, tau_p_, auger_n_, auger_p_;
     std::vector<std::int32_t> contact_;   // ohmic contact index per node, or -1
@@ -123,6 +139,7 @@ private:
     double V_T_ = 0.0;
     bool srh_ = true;
     bool auger_ = true;
+    bool field_mobility_ = false;
     linalg::SparseMatrix pattern_;
 };
 

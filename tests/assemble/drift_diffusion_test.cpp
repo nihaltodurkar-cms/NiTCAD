@@ -17,6 +17,7 @@
 #include "NiTCAD/device/device.hpp"
 #include "NiTCAD/mesh/tensor_grid.hpp"
 #include "NiTCAD/physics/bandgap_narrowing.hpp"
+#include "NiTCAD/physics/field_mobility.hpp"
 #include "NiTCAD/physics/mobility.hpp"
 #include "NiTCAD/physics/recombination.hpp"
 #include "NiTCAD/physics/semiconductor.hpp"
@@ -93,10 +94,10 @@ std::vector<std::vector<double>> dense(const linalg::SparseMatrix& a) {
 
 // A biased system at the legacy probe's state: Boltzmann carriers at the charge-neutral potential
 // with the anode at +0.3 V, then psi + 0.02 noise and n, p times (1 + 0.01 noise).
-std::pair<DriftDiffusion, std::vector<double>> probe_state(const device::Device& d,
-                                                           std::uint64_t seed) {
+std::pair<DriftDiffusion, std::vector<double>> probe_state(
+    const device::Device& d, std::uint64_t seed, const assemble::PhysicsModels& models = {}) {
     const auto scaling = *assemble::make_scaling(d);
-    auto system = *DriftDiffusion::create(d, scaling);
+    auto system = *DriftDiffusion::create(d, scaling, models);
     const std::vector<double> bias{0.3, 0.0};
     REQUIRE(system.set_bias(bias).has_value());
     const auto poisson = *assemble::EquilibriumPoisson::create(d, scaling);
@@ -408,4 +409,108 @@ TEST_CASE("drift-diffusion: FD-Jacobian gate on a heavily doped diode, all model
     const double e = fd_jacobian_error(system, x);
     UNSCOPED_INFO("worst column error " << e);
     REQUIRE(e <= 5e-5);
+}
+
+// Unit 13: Canali field-dependent mobility of each edge.
+
+TEST_CASE("drift-diffusion: FD-Jacobian gate with field mobility in 1D, 2D and 3D") {
+    // The probe's psi noise (0.02) gives edge fields up to about 1e5 V/cm on the junction cells,
+    // where the Canali factor is far from 1.
+    const assemble::PhysicsModels fm{.field_mobility = true};
+    const auto x = graded_axis(30);
+    const auto xs = graded_axis(10);
+    const auto y = uniform_axis(1e-4, 3);
+    const auto [s1, x1] = probe_state(diode(*mesh::make_tensor_grid(x)), 42, fm);
+    const auto [s2, x2] = probe_state(diode(*mesh::make_tensor_grid(xs, y)), 43, fm);
+    const auto [s3, x3] = probe_state(diode(*mesh::make_tensor_grid(xs, y, y)), 44, fm);
+    const double e1 = fd_jacobian_error(s1, x1);
+    const double e2 = fd_jacobian_error(s2, x2);
+    const double e3 = fd_jacobian_error(s3, x3);
+    UNSCOPED_INFO("worst column errors: 1D " << e1 << ", 2D " << e2 << ", 3D " << e3);
+    REQUIRE(e1 <= 5e-5);
+    REQUIRE(e2 <= 5e-5);
+    REQUIRE(e3 <= 5e-5);
+}
+
+TEST_CASE("drift-diffusion: the field-mobility part of the Jacobian matches finite differences") {
+    // As for recombination, the column-normalized gate may hide a small term, so the part the
+    // field dependence adds is checked on its own: J(fm) - J(no fm) against finite differences of
+    // F(fm) - F(no fm), per column relative to that column's largest difference. Only the potential
+    // columns: the field factor depends on psi alone, and the fluxes are linear in the densities
+    // (their columns are the low-field partials times the factor, covered by the full gate; a
+    // minority density near 1e-14 is below what a difference of residuals resolves).
+    const auto d = diode(*mesh::make_tensor_grid(graded_axis(20)));
+    const auto [with, x0] = probe_state(d, 5, {.field_mobility = true});
+    const auto [without, unused] = probe_state(d, 5);
+    std::vector<double> x = x0;
+    const std::size_t n = with.unknowns();
+    std::vector<double> f(n), g(n);
+    auto ja = with.make_jacobian(), jb = without.make_jacobian();
+    with.evaluate(x, f, ja);
+    without.evaluate(x, g, jb);
+    const auto a = dense(ja), b = dense(jb);
+    const auto difference = [&](const std::vector<double>& u, std::vector<double>& out) {
+        with.residual(u, f);
+        without.residual(u, g);
+        for (std::size_t r = 0; r < n; ++r) out[r] = f[r] - g[r];
+    };
+    std::vector<double> up(n), down(n);
+    double worst = 0.0, largest = 0.0;
+    for (std::size_t c = 0; c < n; c += 3) {
+        const double base = x[c];
+        const double step = 1e-7 * std::max(std::abs(base), 1.0);
+        x[c] = base + step;
+        const double hi = x[c];
+        difference(x, up);
+        x[c] = base - step;
+        const double lo = x[c];
+        difference(x, down);
+        x[c] = base;
+        double scale = 1e-300, error = 0.0;
+        for (std::size_t r = 0; r < n; ++r) scale = std::max(scale, std::abs(a[r][c] - b[r][c]));
+        for (std::size_t r = 0; r < n; ++r) {
+            error = std::max(error, std::abs((up[r] - down[r]) / (hi - lo) - (a[r][c] - b[r][c])));
+        }
+        largest = std::max(largest, scale);
+        if (scale > 1e-300) worst = std::max(worst, error / scale);
+    }
+    UNSCOPED_INFO("worst field-mobility column error " << worst);
+    REQUIRE(largest > 0.0);
+    REQUIRE(worst <= 1e-5);
+}
+
+TEST_CASE("drift-diffusion: each edge's current is scaled by its Canali factor") {
+    // The edge factor is the low-field one times mu_C(mu0, E) / mu0, with mu0 the harmonic mean of
+    // the end nodes' Caughey-Thomas mobilities and E = V_T |psi_b - psi_a| / length.
+    const auto d = diode(*mesh::make_tensor_grid(graded_axis(15)), 1e18, 1e16);
+    const auto scaling = *assemble::make_scaling(d);
+    const auto [with, x] = probe_state(d, 9, {.field_mobility = true});
+    const auto [without, unused] = probe_state(d, 9);
+    const auto a = with.edge_currents(x), b = without.edge_currents(x);
+    const physics::Semiconductor si = physics::silicon();
+    const auto edges = d.mesh().edges();
+    double worst = 0.0, smallest_factor = 1.0;
+    for (std::size_t k = 0; k < edges.size(); ++k) {
+        const auto i = edges[k].first, j = edges[k].second;
+        const double E = scaling.V_T *
+                         std::abs(x[3 * static_cast<std::size_t>(j)] -
+                                  x[3 * static_cast<std::size_t>(i)]) /
+                         edges[k].length;
+        for (const auto carrier : {physics::Carrier::electron, physics::Carrier::hole}) {
+            const double mi =
+                physics::caughey_thomas_mobility(si, carrier, d.total_impurity(i), 300.0);
+            const double mj =
+                physics::caughey_thomas_mobility(si, carrier, d.total_impurity(j), 300.0);
+            const double mu0 = 2.0 * mi * mj / (mi + mj);
+            const double factor =
+                physics::canali_mobility(mu0, E, physics::saturation(si, carrier)).mobility / mu0;
+            smallest_factor = std::min(smallest_factor, factor);
+            const double ratio = carrier == physics::Carrier::electron ? a[k].first / b[k].first
+                                                                       : a[k].second / b[k].second;
+            worst = std::max(worst, std::abs(ratio / factor - 1.0));
+        }
+    }
+    CAPTURE(worst, smallest_factor);
+    REQUIRE(smallest_factor < 0.5);  // the probe reaches well into saturation
+    REQUIRE(worst <= 1e-13);
 }

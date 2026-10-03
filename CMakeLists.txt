@@ -145,7 +145,8 @@ add_library(nitcad_physics STATIC
   src/physics/mobility.cpp
   src/physics/recombination.cpp
   src/physics/statistics.cpp
-  src/physics/bandgap_narrowing.cpp)
+  src/physics/bandgap_narrowing.cpp
+  src/physics/field_mobility.cpp)
 add_library(NiTCAD::physics ALIAS nitcad_physics)
 target_include_directories(nitcad_physics PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
 target_link_libraries(nitcad_physics PUBLIC NiTCAD::base)
@@ -155,7 +156,8 @@ add_executable(nitcad_physics_test
   tests/physics/mobility_test.cpp
   tests/physics/recombination_test.cpp
   tests/physics/statistics_test.cpp
-  tests/physics/heavy_doping_test.cpp)
+  tests/physics/heavy_doping_test.cpp
+  tests/physics/field_mobility_test.cpp)
 target_link_libraries(nitcad_physics_test PRIVATE NiTCAD::physics Catch2::Catch2WithMain)
 add_test(NAME physics COMMAND nitcad_physics_test)
 
@@ -215,7 +217,8 @@ add_executable(nitcad_solve_test
   tests/solve/sweep_test.cpp
   tests/solve/heavy_doping_test.cpp
   tests/solve/mos_test.cpp
-  tests/solve/mosfet_test.cpp)
+  tests/solve/mosfet_test.cpp
+  tests/solve/field_mobility_test.cpp)
 target_link_libraries(nitcad_solve_test PRIVATE NiTCAD::solve Catch2::Catch2WithMain)
 add_test(NAME solve COMMAND nitcad_solve_test)
 # The 2D MOSFET gates (tests/solve/mosfet_test.cpp, hidden tag [.mosfet]) take about a minute in
