@@ -46,7 +46,7 @@ struct BiasOptions {
     NewtonOptions newton;
     linalg::SolverConfig linear;
     std::optional<double> Ns_override;  // see assemble::make_scaling
-    assemble::PhysicsModels models;     // equilibrium_poisson: only bgn matters
+    assemble::PhysicsModels models;     // equilibrium_poisson: only bgn and fermi_dirac matter
     Equations equations = Equations::drift_diffusion;
 };
 

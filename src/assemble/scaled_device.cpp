@@ -54,6 +54,8 @@ std::expected<ScaledDevice, base::Error> make_scaled_device(const device::Device
     s.volume.resize(n);
     s.doping.resize(n);
     s.n_ie.resize(n);
+    s.log_dos_n.resize(n);
+    s.log_dos_p.resize(n);
     s.contact.assign(n, -1);
     for (std::size_t i = 0; i < n; ++i) {
         const auto node = static_cast<mesh::NodeId>(i);
@@ -65,6 +67,9 @@ std::expected<ScaledDevice, base::Error> make_scaled_device(const device::Device
                              material, device.total_impurity(node), scaling.temperature_K)
                        : physics::intrinsic_density(material, scaling.temperature_K);
         s.n_ie[i] = n_ie / scaling.Ns;
+        const double T = scaling.temperature_K;
+        s.log_dos_n[i] = std::log(physics::conduction_band_dos(material, T) / n_ie);
+        s.log_dos_p[i] = std::log(physics::valence_band_dos(material, T) / n_ie);
     }
     std::vector<std::int32_t> gate(n, -1);
     std::vector<GateTerm> gate_terms(n, GateTerm{0.0, 0.0, 0.0});

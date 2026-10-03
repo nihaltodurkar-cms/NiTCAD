@@ -1,4 +1,4 @@
-// Boltzmann carrier statistics (ARCHITECTURE.md section 11, Unit 5; R4).
+// Boltzmann (ARCHITECTURE.md section 11, Unit 5; R4) and Fermi-Dirac (Unit 14) carrier statistics.
 #include <catch2/catch_test_macros.hpp>
 
 #include <algorithm>
@@ -6,6 +6,7 @@
 #include <limits>
 
 #include "NiTCAD/base/constants.hpp"
+#include "NiTCAD/physics/fermi_dirac.hpp"
 #include "NiTCAD/physics/semiconductor.hpp"
 #include "NiTCAD/physics/statistics.hpp"
 
@@ -149,4 +150,160 @@ TEST_CASE("statistics: neutral equilibrium when n_ie^2 underflows") {
     REQUIRE(h.n == e.p);
     REQUIRE(h.p == e.n);
     REQUIRE(h.eta == -e.eta);
+}
+
+// Unit 14: Fermi-Dirac statistics in the n_ie gauge.
+
+namespace {
+
+// Silicon at 300 K: n_i and g = ln(N / n_i) for both bands.
+struct Bands {
+    double ni, gn, gp;
+};
+
+Bands silicon_bands() {
+    const Semiconductor si = silicon();
+    const double ni = intrinsic_density(si, 300.0);
+    return {ni, std::log(conduction_band_dos(si, 300.0) / ni),
+            std::log(valence_band_dos(si, 300.0) / ni)};
+}
+
+}  // namespace
+
+TEST_CASE("statistics: the Fermi-Dirac density is N F_1/2(eta - g), Boltzmann when nondegenerate") {
+    const Bands b = silicon_bands();
+    const double Nc = b.ni * std::exp(b.gn);
+    for (const double eta : {-30.0, -5.0, 0.0, 10.0, 20.0, 21.0, 24.0, 30.0, 60.0}) {
+        CAPTURE(eta);
+        const DensityResult r = fermi_dirac_density(b.ni, b.gn, eta);
+        REQUIRE(close(r.density, Nc * fermi_half(eta - b.gn).value, 1e-13));
+        // Below the band edge the deviation from n_i e^eta is the series term e^(eta-g) / 2^(3/2),
+        // and nothing more than rounding.
+        const double boltzmann = boltzmann_density(b.ni, eta).density;
+        const double x = std::exp(eta - b.gn);
+        if (eta - b.gn < -10.0) {
+            REQUIRE(std::abs(r.density / boltzmann - 1.0) <= x / std::pow(2.0, 1.5) + 4.0 * eps);
+        }
+        REQUIRE(r.density <= boltzmann);
+        const double up = eta + 1e-4, down = eta - 1e-4;
+        const double fd = (fermi_dirac_density(b.ni, b.gn, up).density -
+                           fermi_dirac_density(b.ni, b.gn, down).density) /
+                          (up - down);
+        REQUIRE(close(r.d_eta, fd, 1e-8));
+    }
+}
+
+TEST_CASE("statistics: the degeneracy factor of a density, and its derivative") {
+    const Bands b = silicon_bands();
+    const double Nc = b.ni * std::exp(b.gn);
+    // From the density back to ln gamma at its reduced energy, through the series branch
+    // (density / Nc below 1e-6) and the inversion.
+    for (const double eta : {-10.0, 5.0, 7.8, 7.9, 15.0, 21.7, 25.0, 40.0, 70.0}) {
+        CAPTURE(eta);
+        const double n = fermi_dirac_density(b.ni, b.gn, eta).density;
+        const Degeneracy d = fermi_dirac_degeneracy(b.ni, b.gn, n);
+        REQUIRE(std::abs(d.log_gamma - log_degeneracy(eta - b.gn).value) <=
+                1e-14 * std::max(1.0, std::abs(d.log_gamma)) + 1e-18);
+        const double h = 1e-6 * n;
+        const double fd = (fermi_dirac_degeneracy(b.ni, b.gn, n + h).log_gamma -
+                           fermi_dirac_degeneracy(b.ni, b.gn, n - h).log_gamma) /
+                          (2.0 * h);
+        REQUIRE(close(d.d_density, fd, 1e-7));
+        REQUIRE(d.d_density <= 0.0);
+    }
+    // The series and the inversion meet at density / Nc = 1e-6.
+    const Degeneracy below = fermi_dirac_degeneracy(b.ni, b.gn, Nc * std::nextafter(1e-6, 0.0));
+    const Degeneracy above = fermi_dirac_degeneracy(b.ni, b.gn, Nc * std::nextafter(1e-6, 1.0));
+    REQUIRE(std::abs(below.log_gamma - above.log_gamma) <= 1e-18);
+    REQUIRE(close(below.d_density, above.d_density, 1e-6));
+    // A finite-difference probe may take a minority density through zero: still finite, and
+    // continuous there.
+    const Degeneracy zero = fermi_dirac_degeneracy(b.ni, b.gn, 0.0);
+    REQUIRE(zero.log_gamma == 0.0);
+    REQUIRE(close(zero.d_density, -1.0 / (std::pow(2.0, 1.5) * Nc), 1e-15));
+    const Degeneracy negative = fermi_dirac_degeneracy(b.ni, b.gn, -1e3);
+    REQUIRE(negative.log_gamma > 0.0);
+    REQUIRE(std::isfinite(negative.d_density));
+}
+
+TEST_CASE("statistics: generalized mass action under Fermi-Dirac statistics") {
+    // With a common Fermi level, n p = n_ie^2 gamma_n gamma_p (legacy G4(c)); the product's
+    // partials match finite differences of the product.
+    const Bands b = silicon_bands();
+    for (const double eta : {-24.0, -10.0, 0.0, 10.0, 20.0, 23.0, 26.0}) {
+        CAPTURE(eta);
+        const double n = fermi_dirac_density(b.ni, b.gn, eta).density;
+        const double p = fermi_dirac_density(b.ni, b.gp, -eta).density;
+        const Degeneracy dn = fermi_dirac_degeneracy(b.ni, b.gn, n);
+        const Degeneracy dp = fermi_dirac_degeneracy(b.ni, b.gp, p);
+        const EquilibriumProduct e = fermi_dirac_equilibrium_product(b.ni, dn, dp);
+        REQUIRE(close(e.value, n * p, 1e-13));
+        const double hn = 1e-6 * n, hp = 1e-6 * p;
+        const auto product = [&](double nn, double pp) {
+            return fermi_dirac_equilibrium_product(b.ni, fermi_dirac_degeneracy(b.ni, b.gn, nn),
+                                                   fermi_dirac_degeneracy(b.ni, b.gp, pp))
+                .value;
+        };
+        // Only where a 1e-6 step moves the product by more than rounding (judged on the
+        // difference, not on the partial under test): deep in the Boltzmann regime the partials
+        // are below what a difference resolves. Degenerate electrons (eta >= 20 here) always are.
+        const double fd_n = (product(n + hn, p) - product(n - hn, p)) / (2.0 * hn);
+        const double fd_p = (product(n, p + hp) - product(n, p - hp)) / (2.0 * hp);
+        if (std::abs(fd_n * hn) > 1e-9 * e.value) REQUIRE(close(e.d_dn, fd_n, 1e-6));
+        if (std::abs(fd_p * hp) > 1e-9 * e.value) REQUIRE(close(e.d_dp, fd_p, 1e-6));
+        if (eta >= 20.0) REQUIRE(std::abs(fd_n * hn) > 1e-9 * e.value);
+    }
+    // Nondegenerate: the Boltzmann n_ie^2 to the series term.
+    const Degeneracy light = fermi_dirac_degeneracy(b.ni, b.gn, 1e10);
+    REQUIRE(close(fermi_dirac_equilibrium_product(b.ni, light, light).value, b.ni * b.ni, 1e-9));
+}
+
+TEST_CASE("statistics: Fermi-Dirac neutral equilibrium against 40-digit roots") {
+    // Silicon, 300 K, no band-gap narrowing: the root of Nc F(eta - g_n) - Nv F(-eta - g_p) = C by
+    // 200-step bisection in 40-digit arithmetic (mpmath), with this code's n_i, Nc and Nv.
+    struct Root {
+        double C, eta, n, p;
+    };
+    constexpr Root roots[] = {
+        {1e20, 24.142062110644792886, 1e20, 0.34958572744568781884},
+        {-1e20, -24.05416724582482388, 0.38170332944338358495, 1e20},
+        {1e17, 16.054127071827567345, 100000000000001137.89, 1137.8873011477545844},
+        {1e19, 20.78108228663461974, 1e19, 10.074156302026300529},
+        {-3e19, -22.094316656215173357, 2.7094319300520569736, 3e19},
+        {0.0, 5.1077140447875337858e-12, 10673775146.461745676, 10673775146.461745676},
+    };
+    const Bands b = silicon_bands();
+    for (const Root& r : roots) {
+        CAPTURE(r.C);
+        const NeutralEquilibrium e = fermi_dirac_neutral_equilibrium(r.C, b.ni, b.gn, b.gp);
+        REQUIRE(std::abs(e.eta - r.eta) <= 1e-13 * std::max(1.0, std::abs(r.eta)));
+        REQUIRE(close(e.n, r.n, 1e-12));
+        REQUIRE(close(e.p, r.p, 1e-12));
+        REQUIRE(std::abs((e.n - e.p) - r.C) <= 4.0 * eps * std::max(e.n, e.p));
+        // Consistent with the density functions at its own eta.
+        REQUIRE(close(e.n, fermi_dirac_density(b.ni, b.gn, e.eta).density, 1e-13));
+        REQUIRE(close(e.p, fermi_dirac_density(b.ni, b.gp, -e.eta).density, 1e-13));
+    }
+    // 1e20 cm^-3 is degenerate: the Fermi level 2.4 kT above the band edge (legacy G7(a): > 2).
+    REQUIRE(fermi_dirac_neutral_equilibrium(1e20, b.ni, b.gn, b.gp).eta - b.gn > 2.0);
+}
+
+TEST_CASE("statistics: Fermi-Dirac neutral equilibrium is scale-free and Boltzmann when light") {
+    const Bands b = silicon_bands();
+    for (const double C : {1e12, -1e15, 3e17, -5e19, 2e21}) {
+        CAPTURE(C);
+        const NeutralEquilibrium e = fermi_dirac_neutral_equilibrium(C, b.ni, b.gn, b.gp);
+        const double s = 1e-18;
+        const NeutralEquilibrium scaled =
+            fermi_dirac_neutral_equilibrium(C * s, b.ni * s, b.gn, b.gp);
+        REQUIRE(std::abs(scaled.eta - e.eta) <= 1e-14 * std::abs(e.eta));
+        REQUIRE(close(scaled.n, e.n * s, 1e-13));
+        REQUIRE(close(scaled.p, e.p * s, 1e-13));
+        // FD needs a higher Fermi level than Boltzmann for the same majority density.
+        REQUIRE(std::abs(e.eta) >= std::abs(boltzmann_neutral_equilibrium(C, b.ni).eta));
+    }
+    // At 1e12 the series deviation of the majority is e^(eta-g) / 2^(3/2) ~ 1e-8 relative.
+    const NeutralEquilibrium light = fermi_dirac_neutral_equilibrium(1e12, b.ni, b.gn, b.gp);
+    const NeutralEquilibrium classic = boltzmann_neutral_equilibrium(1e12, b.ni);
+    REQUIRE(std::abs(light.eta - classic.eta) <= 1e-7);
 }

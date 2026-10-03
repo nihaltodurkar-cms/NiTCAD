@@ -7,7 +7,6 @@
 #include "NiTCAD/assemble/contact_bias.hpp"
 #include "NiTCAD/assemble/ohmic.hpp"
 #include "NiTCAD/base/contract.hpp"
-#include "NiTCAD/physics/statistics.hpp"
 #include "scaled_device.hpp"
 
 namespace NiTCAD::assemble {
@@ -22,6 +21,9 @@ std::expected<EquilibriumPoisson, base::Error> EquilibriumPoisson::create(
     p.volume_ = std::move(scaled->volume);
     p.doping_ = std::move(scaled->doping);
     p.n_ie_ = std::move(scaled->n_ie);
+    p.log_dos_n_ = std::move(scaled->log_dos_n);
+    p.log_dos_p_ = std::move(scaled->log_dos_p);
+    p.fermi_dirac_ = models.fermi_dirac;
     p.psi0_.assign(n, 0.0);
     p.contact_.assign(n, 0);
     p.gates_ = std::move(scaled->gates);
@@ -29,7 +31,9 @@ std::expected<EquilibriumPoisson, base::Error> EquilibriumPoisson::create(
     for (std::size_t i = 0; i < n; ++i) {
         if (scaled->contact[i] < 0) continue;
         p.contact_[i] = 1;
-        p.psi0_[i] = ohmic_contact_value(p.doping_[i], p.n_ie_[i], 0.0).psi;
+        const physics::NeutralEquilibrium e = detail::neutral_equilibrium(
+            p.fermi_dirac_, p.doping_[i], p.n_ie_[i], p.log_dos_n_[i], p.log_dos_p_[i]);
+        p.psi0_[i] = ohmic_contact_value(e, 0.0).psi;
     }
 
     std::vector<linalg::Triplet> triplets;
@@ -81,12 +85,15 @@ void EquilibriumPoisson::residual_into(std::span<const double> psi, std::span<do
             residual[i] = psi[i] - psi0_[i];
             continue;
         }
-        const double carriers_n = physics::boltzmann_density(n_ie_[i], psi[i]).density;
-        const double carriers_p = physics::boltzmann_density(n_ie_[i], -psi[i]).density;
-        residual[i] = -volume_[i] * (carriers_n - carriers_p - doping_[i]);
-        // d/dpsi of the charge term, onto the diagonal (n' = n, p' = -p).
+        const physics::DensityResult carriers_n =
+            detail::density(fermi_dirac_, n_ie_[i], log_dos_n_[i], psi[i]);
+        const physics::DensityResult carriers_p =
+            detail::density(fermi_dirac_, n_ie_[i], log_dos_p_[i], -psi[i]);
+        residual[i] = -volume_[i] * (carriers_n.density - carriers_p.density - doping_[i]);
+        // d/dpsi of the charge term, onto the diagonal (dn/dpsi = n.d_eta, dp/dpsi = -p.d_eta;
+        // Boltzmann: n and -p).
         if (!jacobian_values.empty()) {
-            jacobian_values[diag_[i]] = -volume_[i] * (carriers_n + carriers_p);
+            jacobian_values[diag_[i]] = -volume_[i] * (carriers_n.d_eta + carriers_p.d_eta);
         }
         if (gates_.on_gate(i)) {
             residual[i] += gates_.row_term(i, psi[i]);
@@ -129,8 +136,8 @@ void EquilibriumPoisson::carriers(std::span<const double> psi, std::span<double>
                                   std::span<double> p) const {
     NITCAD_EXPECTS(psi.size() == unknowns() && n.size() == unknowns() && p.size() == unknowns());
     for (std::size_t i = 0; i < unknowns(); ++i) {
-        n[i] = physics::boltzmann_density(n_ie_[i], psi[i]).density;
-        p[i] = physics::boltzmann_density(n_ie_[i], -psi[i]).density;
+        n[i] = detail::density(fermi_dirac_, n_ie_[i], log_dos_n_[i], psi[i]).density;
+        p[i] = detail::density(fermi_dirac_, n_ie_[i], log_dos_p_[i], -psi[i]).density;
     }
 }
 
@@ -139,7 +146,8 @@ std::vector<double> EquilibriumPoisson::charge_neutral_potential() const {
     for (std::size_t i = 0; i < psi.size(); ++i) {
         psi[i] = contact_[i] != 0
                      ? psi0_[i]
-                     : physics::boltzmann_neutral_equilibrium(doping_[i], n_ie_[i]).eta;
+                     : detail::neutral_equilibrium(fermi_dirac_, doping_[i], n_ie_[i],
+                                                   log_dos_n_[i], log_dos_p_[i]).eta;
     }
     return psi;
 }

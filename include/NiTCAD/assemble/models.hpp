@@ -17,6 +17,11 @@ struct PhysicsModels {
     // Canali velocity saturation of each edge's mobility in the edge's own field
     // (physics::canali_mobility; drift-diffusion only). Off by default, as in the legacy.
     bool field_mobility = false;
+    // Fermi-Dirac statistics for parabolic bands (physics::fermi_dirac_density and the rest of
+    // statistics.hpp): carrier densities, contacts and the charge-neutral guess, the degeneracy
+    // term of the Scharfetter-Gummel driving force, and the equilibrium product of SRH and Auger.
+    // Off by default (Boltzmann), as the legacy fd flag.
+    bool fermi_dirac = false;
 };
 
 }  // namespace NiTCAD::assemble

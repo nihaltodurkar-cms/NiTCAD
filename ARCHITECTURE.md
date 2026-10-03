@@ -197,8 +197,9 @@ thermionic emission through per-edge arrays in the `Inputs` struct, `core/includ
    create a device-specific nonlinear solver, duplicate contact handling, or duplicate linear-algebra infrastructure.
 8. The first physics unit contained only what the first diode needed; later units may extend the model library without
    changing existing callers.
-9. **Carrier statistics (R4):** Boltzmann statistics initially; Fermi–Dirac and others are deferred. Statistics
-   stay isolated inside `physics` so that adding Fermi–Dirac later is an addition, not a signature break for callers.
+9. **Carrier statistics (R4):** Boltzmann statistics initially; Fermi–Dirac for parabolic bands since Unit 14 (an
+   addition beside Boltzmann, below); others are deferred. Statistics stay isolated inside `physics`, so adding
+   Fermi–Dirac was an addition, not a signature break for callers.
    Evidence from the legacy: `recombination_fd()` additionally takes the equilibrium product `np_eq` and its
    partials `dnpq_dn`, `dnpq_dp`, which `recombination_boltzmann()` does not
    (`core/include/tcad/physics/kernels.hpp` [verified]). Unit 5 was designed with that in mind.
@@ -284,6 +285,69 @@ thermionic emission through per-edge arrays in the `Inputs` struct, `core/includ
   inherent to the (ψ, n, p) unknowns the legacy also uses. Low-current analyses of heavily doped devices (leakage,
   sub-threshold) will need either a quasi-Fermi-potential formulation or current extraction from the minority side; this
   is not done here.
+
+**As built (Unit 14, Fermi–Dirac statistics; owner request, roadmap item 14):**
+- `physics/fermi_dirac.hpp`: `fermi_half(η)` returns F₁/₂ and F₋₁/₂ = dF₁/₂/dη (normalised to e^η as η → −∞);
+  `log_degeneracy(η)` returns ln γ = ln F₁/₂ − η and its slope; `inverse_fermi_half(ν)`. Everything is evaluated
+  through ln γ, so nothing overflows or underflows where the result is representable:
+  - η ≤ −2: the exact series, summed for ln γ and its slope directly (no cancellation; at most 22 terms);
+  - −2 < η ≤ 40: quintic Hermite interpolation of ln γ on a table of step 0.025;
+  - η > 40: the Sommerfeld expansion with ten terms (residual 3.7e-18 at 40, falling like e^−η).
+  The table holds ln γ and its first two derivatives at 1681 nodes. They come from 32-point Gauss–Legendre quadratures of
+  F₁/₂, F₋₁/₂ and F₋₃/₂: t = s² on [0, 1], then panels of width ≤ 2 up to max(η, 0) + 40, summed with Neumaier
+  compensation (naive sums left 4e-15). It is built once per process, on first use, as a function-local static (C++
+  makes that initialisation thread-safe). It is immutable, a cached constant, and is the one exception to item 1's "no
+  global state". Measured against 40-digit mpmath references (polylogarithm for η < 0, edge-subdivided quadrature
+  above, checked against each other and against F₁/₂(0) = (1 − 2^−½) ζ(3/2)):
+  - F₁/₂ is within 1.5e-15 everywhere.
+  - F₋₁/₂ is within 1.3e-13 up to η = 15 and 3e-12 up to 40 (the slope F₋₁/₂/F₁/₂ falls to 0.04 there), and 1e-14
+    above.
+  F₋₁/₂ is the derivative of the function evaluated (the interpolant's own), so Jacobians built from it match finite
+  differences of the residual. The inverse is safeguarded Newton on ln F₁/₂ = ln ν (private `increasing_root.hpp`,
+  shared with the neutral equilibrium), 2–5 evaluations, and recovers η to 1e-14 relative from −700 to 1000.
+- `statistics.hpp` adds the Fermi–Dirac producers beside the Boltzmann ones (the R4 hook), in the same gauge: η is
+  measured from the intrinsic level, and with g = ln(N/n_ie) for the carrier's band,
+  n = N F₁/₂(η − g) = n_ie e^η γ(η − g), which tends to n_ie e^η. With band-gap narrowing n_ie is the effective one,
+  and g_n + g_p is the narrowed gap over kT. The producers:
+  - `fermi_dirac_density(n_ie, g, η)`: the density and dn/dη, from the correctly rounded e^η times γ.
+  - `Degeneracy` and `fermi_dirac_degeneracy(n_ie, g, density)`: ln γ at the density's own reduced energy, and
+    d ln γ / d density. This is the legacy L and w of `fd_node_factors`.
+  - `fermi_dirac_equilibrium_product(n_ie, Degeneracy_n, Degeneracy_p)`: n_ie² γ_n γ_p with its partials (legacy
+    `npq_args`).
+  - `fermi_dirac_neutral_equilibrium(C, n_ie, g_n, g_p)`: safeguarded Newton on ln(majority) = ln(|C| + minority),
+    from the Boltzmann root; the majority is then |C| + minority, so neutrality holds to rounding.
+  The degeneracy is a per-iteration kernel with no checks: a non-finite density gives NaN, so a diverging Newton
+  iterate surfaces as a non-finite residual (6.7). Against 40-digit roots for silicon at 300 K, the neutral equilibrium
+  is within 1e-13 in η and 1e-12 in n and p at ±1e20, 1e19, −3e19, 1e17 and 0. At 1e20 the Fermi level is 2.43 kT
+  inside the band (legacy G7(a): > 2).
+- OLD / NEW / REASON:
+  - OLD (`fermi.py`, `fermi.hpp`): cubic Hermite tables of ln F₁/₂ and ln F₋₁/₂ on [−10, 40], step 0.005, with
+    ln F₋₁/₂'s slope by an 8th-order finite difference, so F₋₁/₂ was not exactly the derivative of F₁/₂. Both
+    functions refused outside [−40, 40], and the equilibrium solve clamped η at 40.
+  - NEW: one quintic table of ln γ, with the series below it and Sommerfeld above it. Every η is valid; nothing is
+    clamped or refused.
+  - REASON: the derivative Newton uses is then exactly that of the residual; a parabolic band is an approximation
+    near 5e21 cm⁻³, not a wall; and the bound on Newton overshoot belongs to the solver (6.7).
+
+  - OLD (`fd_node_factors`): for η ≤ −30, L = w = 0 exactly, to keep `fd=True` bit-identical to Boltzmann there;
+    densities were clamped at 1e-300.
+  - NEW: no threshold. Below density/N = 1e-6, ln γ = −log1p(a v + b v²), with v = density/N, a = 2^−3/2 and
+    b = ¼ − 3^−3/2. This avoids an inversion, its error is below 1e-18, and it is analytic through v = 0, so it also
+    accepts a density at or just below zero (as a finite-difference probe of a minority density produces).
+  - REASON: the threshold made w jump from −0.35/N to 0. Boltzmann results stay bit-identical through
+    `models.fermi_dirac = false`, a separate path (6.2, Unit 14).
+
+  - OLD (`inputs.cpp:83-88`, `device2d.py`, `device1d.cpp:303-316` [verified]): the contact neutrality used
+    eg_kt = E_g/kT, the un-narrowed gap, while the bulk densities used ln_gn = ln(Nc/n_ie,eff). With band-gap
+    narrowing on, the contact's minority density did not satisfy the bulk relation at the contact potential.
+  - NEW: contact and bulk both use g_n and g_p.
+  - REASON: one statistics relation. The two forms are the same without narrowing.
+
+  - Not carried: incomplete ionization, which the legacy M13 phase 2 also had. It is independent of Fermi–Dirac,
+    hydrogenic, and invalid above the Mott transition near 4e18 cm⁻³; it is deferred until requested (14.3). Also not
+    carried: the legacy `ni_fd`, since ψ stays referenced to the Boltzmann intrinsic level, so n_ie keeps its meaning
+    and the Unit 12 gate offset is unchanged. The legacy `band_diagram` is not carried either, as there is no
+    band-diagram output.
 
 ## 6. Cross-cutting design
 
@@ -479,6 +543,70 @@ Whether the new solver reproduces these exact defaults is to be confirmed unit b
   off, is unchanged). The MOSFET drain current at V_G = 1 V falls to 0.968 of the constant-mobility value at V_D = 0.1 V
   and to 0.735 at 1 V.
 
+**As built (Unit 14, Fermi–Dirac statistics in the assemblers; section 5 for the physics):**
+- `PhysicsModels::fermi_dirac` is off by default, like the legacy `fd`. Both assemblers read it, and the run record
+  lists it for both equation sets.
+- `EquilibriumPoisson` takes n, p and dn/dψ from the selected statistics; its contact values and charge-neutral guess
+  are the Fermi–Dirac root. It is the legacy `solve_equilibrium_fd` without the η clamp.
+- `DriftDiffusion` uses the legacy ν-factor scheme (M13 plan 3.2bis). δ_n gains ln γ_n,b − ln γ_n,a and δ_p loses
+  ln γ_p,b − ln γ_p,a, each node's γ taken from its own density by `fermi_dirac_degeneracy`:
+  - Then n_b/n_a = e^δn at equilibrium, so the flux vanishes there.
+  - In the continuum limit the flux is μ n ∇φ_n: the generalized Einstein relation is implicit.
+  - The Jacobian's density columns gain d flux/dδ times d ln γ/d density.
+  - SRH and Auger drive n p towards n_ie² γ_n γ_p, with partials. Auger takes physical densities, so E = Ns² E′
+    and dE/dn = Ns dE′/dn′.
+  - `state_from_potential`, the contacts and the gate rows go through the same statistics. The gate's intrinsic-level
+    offset (6.4) is unchanged, because the gauge is.
+- **Boltzmann path bit-identical:** the same probe was built against `main` and against this unit (a scratch test, not
+  committed). It hashes every potential, density, current and Newton record of an equilibrium solve and a nine-point
+  sweep (0–0.8 V and −2 V) for four configurations: 1e17/1e17 with default models; 1e19/1e18; 1e18/1e16 with field
+  mobility; and 1e17/1e17 with every model off. All four hashes are equal.
+- Measured gates:
+  - FD-Jacobian:
+    - Poisson: 7.6e-10 / 6.9e-9 / 9.9e-9 in 1D / 2D / 3D on a 1e20/1e17 diode.
+    - Drift-diffusion with every model on: 2.5e-7 / 2.2e-6 / 5.3e-6.
+    - The degeneracy part alone (J(FD) − J(Boltzmann) against FD of the residual difference, majority columns):
+      1.5e-7.
+    - The Fermi–Dirac recombination part alone, at a near-equilibrium uniform 1e20 state where E's partials are
+      comparable to p: 2.2e-11.
+  - Detailed balance: every edge of the 1e20/1e17 junction, with band-gap narrowing, is within 1.3% of its rounding
+    bound at the equilibrium state.
+  - Legacy G7(a), uniform 1e20 in 1D and 2D: n = N_D and p = 0.3496, matching the 40-digit root to 1e-11. That is a
+    third of the Boltzmann minority density.
+  - Legacy G4(d), 1e20/1e17 without narrowing: V_bi = 1.03688 V, the root pair to 1e-13, and 28.3 mV above
+    Boltzmann.
+  - Legacy G4(c), generalized mass action at every node: 6e-15.
+  - Legacy G6(b), 1e16/1e16: densities deviate by 1.24e-4 = δ (gate 3δ); currents at 0.5 V by 1.1e-4 (gate 20δ).
+  - p+ 1e20 / n 1e17 forward sweep, all models: the electron current injected into the degenerate p+ side falls by its
+    hole degeneracy factor γ_p = 0.3350 (measured 0.33538–0.33545 at 0.2–0.7 V). The hole current into the n side is
+    unchanged to 7e-4, within that side's own δ = 1.2e-3. The diode current falls 1.7–2.4%; Newton takes 5–6
+    iterations per point.
+  - Legacy G7(d), the quasi-static MOS-C at N_A = 1e18 and 5 nm: C_max falls from 0.981 C_ox to 0.960 C_ox, −2.1%
+    (legacy band 2–30%, so near its lower edge).
+- **Finding, the zero-bias drift-diffusion step:** from the Fermi–Dirac equilibrium, the zero-bias solve takes one
+  Newton step of 1e-10 (relative) and stops.
+  - Cause: the equilibrium potential leaves a few ulp of charge per node, since ψ ≈ 22 resolves e^ψ only to 22 ε.
+  - The minority electrons of the 1e20 region absorb that step at up to 2e-11 relative. That is solver accuracy, not
+    the scheme, which is why detailed balance is gated at the equilibrium state itself.
+- **Finding, test design:**
+  - Relative-step differences cannot resolve the minority-density columns: rows that also carry majority fluxes of
+    order 1 change by less than their rounding (the Unit 13 finding). The degeneracy-part check therefore uses the
+    majority columns, and the full gate covers the rest with its absolute step.
+  - Neither the full gate nor the degeneracy-part check sees the equilibrium product's partials (the Unit 9 finding),
+    hence the separate near-equilibrium recombination check.
+  - A mutation that dropped those partials survived until that check was added; it also exposed a physics test that
+    skipped its comparison based on the analytic partial under test.
+- Mutation checks: each of the nine below fails at least one test.
+  - Dropping the electron density chain of the degeneracy term.
+  - Dropping ln γ from δ_n.
+  - The wrong sign of the hole degeneracy term.
+  - A Boltzmann charge derivative in the Fermi–Dirac Poisson Jacobian.
+  - The equilibrium product without its partials.
+  - The degeneracy derivative without its 1 + d ln γ factor.
+  - Boltzmann contacts under Fermi–Dirac.
+  - The table's curvature dropped.
+  - Sommerfeld cut to two terms.
+
 ### 6.3 Device description
 
 A `device` is plain data: regions (geometry in the mesh's coordinates), doping per node or region,
@@ -513,8 +641,8 @@ from fluxes in `assemble`/`solve`. It is not an `analysis` quantity.
   three equations, so on an accepted device every connected part of every equation has one. Units 7 and 8 may then set
   `min_pivot_ratio = 0` for device solves, provided their contact rows really are Dirichlet. One contact is enough.
 - Not carried from the legacy: `check_mesh` (it prints the worst spacing-to-Debye-length ratio and does not validate
-  anything), the warning for doping above 1e19 cm⁻³ under Boltzmann statistics (there is no warning channel; Fermi–Dirac is
-  deferred), and `graded_mesh` (not requested).
+  anything), the warning for doping above 1e19 cm⁻³ under Boltzmann statistics (there is no warning channel; Fermi–Dirac
+  statistics are available since Unit 14, `models.fermi_dirac`), and `graded_mesh` (not requested).
 
 **As built (Unit 12, gate contacts and the MOS capacitor; owner request after Unit 11):**
 - The legacy never meshes the oxide. Every MOS structure in it (`moscap.MOSCapacitor`, `Device2D/3D.add_gate`,
@@ -913,9 +1041,12 @@ include/NiTCAD/mesh/        mesh.hpp, tensor_grid.hpp                        (Un
 src/mesh/                   graph validation, tensor-grid producer           (Unit 4, exists)
 tests/mesh/                 graph validation and geometry gates              (Unit 4, exists)
 include/NiTCAD/physics/     semiconductor, mobility, recombination, statistics (Unit 5); bandgap_narrowing (Unit 11);
-                            electron affinity (Unit 12); field_mobility (Unit 13)
-src/physics/                parameter validation, band quantities, models    (Units 5, 11, 13)
-tests/physics/              published values, limits, FD derivative gates; heavy doping; Canali (Units 5, 11, 13)
+                            electron affinity (Unit 12); field_mobility (Unit 13); fermi_dirac, Fermi-Dirac
+                            statistics (Unit 14)
+src/physics/                parameter validation, band quantities, models; increasing_root (private) (Units 5, 11,
+                            13, 14)
+tests/physics/              published values, limits, FD derivative gates; heavy doping; Canali; Fermi integral and
+                            Fermi-Dirac statistics (Units 5, 11, 13, 14)
 include/NiTCAD/device/      device.hpp, contact.hpp (Unit 6); gate contacts (Unit 12)
 src/device/                 description validation, topology check           (Unit 6, exists)
 tests/device/               construction, validation, floating regions       (Unit 6, exists)
@@ -929,7 +1060,7 @@ src/solve/                  equilibrium and bias solves, sweeps, run record (Uni
                             Unit 12)
 tests/solve/                Newton contract, equilibrium and bias diode gates, legacy graded_mesh port, sweeps,
                             cancellation and progress (Units 8-10); MOS-C (legacy moscap port) and MOSFET (Unit 12);
-                            field mobility (Unit 13)
+                            field mobility (Unit 13); Fermi-Dirac (Unit 14)
 include/NiTCAD/results/     convergence.hpp, solution.hpp, run.hpp (header-only plain data) (Unit 10, exists)
 .github/workflows/ci.yml    CI: build and test Debug and Release per branch  (CI unit, exists)
 include/NiTCAD/<layer>/...  public headers per layer                         (created per unit)
@@ -1049,8 +1180,8 @@ oxide, belong to the heterojunction and interface track (15).
 
 | # | Unit / capability | Layer(s) | Status / purpose |
 |---|---|---|---|
-| 13 | Field-dependent mobility / velocity saturation | physics, assemble | **done on branch `physics/field-mobility`**: Canali per edge with exact Jacobian (6.2, Unit 13) |
-| 14 | Fermi–Dirac statistics and high-density carrier models | physics, assemble | target |
+| 13 | Field-dependent mobility / velocity saturation | physics, assemble | **done, on `main`** (`f8bda70`): Canali per edge with exact Jacobian (6.2, Unit 13) |
+| 14 | Fermi–Dirac statistics and high-density carrier models | physics, assemble | **done on branch `physics/fermi-dirac`**: parabolic-band Fermi–Dirac statistics, the legacy ν-factor scheme with an exact Jacobian (5 and 6.2, Unit 14); incomplete ionization deferred (14.3) |
 | 15 | Heterojunctions, band offsets and interface transport | device, assemble, physics | target |
 | 16 | Unstructured mesh | mesh, assemble | target |
 | 17 | Adaptive mesh refinement and state transfer | mesh, solve, results | target |
@@ -1066,8 +1197,8 @@ oxide, belong to the heterojunction and interface track (15).
 | 27 | Optimization / sensitivity / inverse-design workflows | analysis, solve | long-term target |
 
 Units 1–9 are the smallest end-to-end vertical slice: a validated drift-diffusion diode. Everything past
-Unit 10 is deferred until sequenced. Units 11, 12 and 13 were requested by the owner after Unit 10; nothing past them is
-started.
+Unit 10 is deferred until sequenced. Units 11, 12, 13 and 14 were requested by the owner after Unit 10; nothing past
+them is started.
 
 ### 11.1 Capability tracks may interleave
 
@@ -1211,7 +1342,7 @@ architecture; historical branch names remain only where they are useful to expla
 | Q5 | No second backend in Unit 3; neutrality proved by a header-boundary build check and interface-only tests (6.10). |
 | Q10 | CI design direction: a GitHub-hosted Windows runner, toolset selected with `vcvarsall.bat x64 -vcvars_ver=14.51`, exact versions asserted (compiler 19.51.36260, SDK 10.0.26100.0, CMake 4.3.1, Ninja 1.13.2), vcpkg `files` binary cache saved with `actions/cache` and keyed on baseline, triplet, toolset and manifest hash. **Design only, not verified:** runner contents, `vcvars_ver` selection on a runner and the cache behaviour were not run. Implemented in `.github/workflows/ci.yml` on branch `architecture/ci-workflow` (the CI unit, not Unit 1); **not yet run on a runner**, first run done, see section 9. |
 | Q11 | Move to an LTS toolset when MSVC 14.52 LTS is released (expected November 2026), no later than 60 days after, and before 14.51 support ends (about February 2027, derived). Re-run V1 and V4, run the full suite, update the CI assertions and cache key, on one dedicated branch. |
-| R4 | Boltzmann carrier statistics initially; Fermi–Dirac and other statistics deferred until requested (section 5, item 7). |
+| R4 | Boltzmann carrier statistics initially; Fermi–Dirac for parabolic bands added at Unit 14 on the owner's request (section 5, item 9); other statistics deferred until requested. |
 | D1 | MSVC is the Windows C++23 toolchain (C++ compiler only; Fortran is D6). Toolset pin per Q9. |
 | Q6 | `/std:c++23preview` set explicitly; `/std:c++latest` not used. The build verifies `_MSVC_LANG` and the C++23 feature macros and fails configuration if the C++23 flag is ignored or invalid (9). |
 | Q7 | The exact full vcpkg baseline commit tested in V2 (`fbb0f7bb200b07a9eb9081c7a3cf51d1aa1c51a1`); vcpkg HEAD is not tracked. Eigen 5.0.1. The baseline changes only through an explicit dependency-update change followed by full validation. |
@@ -1238,7 +1369,7 @@ architecture; historical branch names remain only where they are useful to expla
 | D6 | C and Fortran integration | A measured, justified component is named by the owner. The primary architecture stays C++23. |
 | R2 | External input/output file formats | Concrete requirements exist. Internal input/result types stay independent of any format. |
 | R3 | Unstructured-mesh implementation | The owner requests it. The mesh design must already allow it without a rewrite (6.11). |
-| — | Fermi–Dirac and other statistics | Requested (R4). |
+| — | Statistics beyond parabolic-band Fermi–Dirac (Unit 14); incomplete ionization | Requested (R4). |
 | — | PARDISO and iterative solver backends | Requested; the interface already accommodates them (6.10). |
 
 ### 14.4 Verification results (run 2026-10-02; probes were built outside the repository)
@@ -1265,6 +1396,7 @@ architecture; historical branch names remain only where they are useful to expla
 | V19 | Unit 12 (`device/mos`): Debug and Release build with no warnings; `nitcad_physics_test` 38 test cases, `nitcad_device_test` 18, `nitcad_assemble_test` 30, `nitcad_solve_test` 52 (+2 `[.mosfet]` cases, Release only), all pass. Gate terms: the scaled coupling equals the legacy κ times the scaled face area in 1D/2D/3D to 1e-15; the 1D rows of both assemblers equal the legacy MOS-C rows written out by hand (with V_FB and Q_f) to 4.4e-16; only the gate node's Poisson row changes and no carrier flux crosses the gate (bitwise); FD-Jacobian gate with gates, worst 6.7e-10 (1D), 2.2e-8 (2D), 3.3e-8 (3D), 2.1e-9 (equilibrium Poisson). MOS-C on the legacy fixture (1e17, 5 nm, n+ poly, 1200 nodes, −2 to 2 V): the quasi-static sweep reproduces a C++ port of the legacy solve to 5.6e-16 V in φ_s, 6.1e-16 V in ψ at every node, and 7.2e-15 C_ox in C; the legacy checks P1 (residual 4.9e-12, gate 1e-6), P2 (Gauss to 1.4e-14 relative, legacy 2%), P3 (1.1e-3 and 1.2e-2, gate 5%), P4, P5, P6 (C_min +10.1%, W_max −10.5%, gate 15%), P7 (flatband crossing 1.0 mV and 2φ_F crossing 0.35 mV from the landmarks, gate 50 mV), P8, P9 (a tighter Newton tolerance moves φ_s by 0) pass; C_min within 15% at 275, 300, 350 K; Q_f and the electrode work function shift the curve rigidly to 1e-16 V; y-uniform 2D and 3D reproduce 1D to 1e-12. Drift-diffusion equals the quasi-static state in accumulation and depletion (ψ to 1e-15 V, p to 2e-14) and stalls once inversion starts (recorded). MOSFET (legacy fixture, 9490 nodes, drift-diffusion): V_th by max g_m 0.151 V against the landmark 0.093 V (gate 0.1 V), on/off 2e11 (gate 1e6; the off current is at the 2e-12 A/cm rounding floor), swing 68.9 mV/decade (legacy band 55–120; body-factor bracket 68.1–71.7), monotonic from 0.3 to 1.5 V, Kirchhoff to 5e-12 A/cm, Id(1 V) on a 2× finer mesh within 0.055% (gate 10%). Mutation checks, each caught: the gate Jacobian term dropped (either assembler), the fixed-charge sign, an L_D^(D−2) area scale, p+ poly without Eg, the midgap offset without Eg/2, gates anchoring the topology, ohmic bias accepted at equilibrium, the gate bias ignored at equilibrium, the gate-charge sign, the patch check. | Verified locally. |
 | V19a | Unit 12 after the PR #16 review (all ten findings applied): `nitcad_assemble_test` 31 test cases, `nitcad_solve_test` 55 (+2 `[.mosfet]`), Debug and Release with no warnings, all pass. Φ is now referenced to the intrinsic level: the offset matches φ_m − χ − Eg/2 + (kT/2) ln(Nv/Nc) to 1e-15 at 300 and 400 K, with a shift of 1.0416 mV for silicon at 300 K. The legacy reproduction holds at V_G − 1.0416 mV: φ_s to 6.7e-16 V, ψ to 4.2e-16 V, C to 5.1e-15 C_ox. P1 gives 6.0e-12 at the shifted biases; the flatband and 2φ_F crossings move by +1.04 mV (measured 0.05 and 1.34 mV from the landmarks; gate 50 mV), C_min +10.2%; the MOSFET V_th is 0.152 V and the swing 68.8 mV/decade. The drift-diffusion gate diagonal is accumulated (`-=`). Both assemblers use `GateNodes` and `check_contact_bias`; the edges and the gate share `permittivity_ratio`; `solve_equilibrium` and the quasi-static sweep share one fields helper. New tests: the contact-bias rule; the sweep error names point, contact and bias; a quasi-static warm start from a potential alone (drift-diffusion still rejects it); the run identity ignores the transport switches and initial densities in the quasi-static sweep and a polysilicon gate's work-function field, but not BGN or a metal work function; `solve_equilibrium` reports the zero-bias gate charge, equal to a one-point quasi-static sweep to 1e-12. Mutation checks, each caught: the intrinsic-level term dropped, the gate diagonal dropped, ohmic bias accepted at equilibrium, densities required for a quasi-static start, the SRH switch digested in the quasi-static sweep, the poly work function digested, the equilibrium gate charge missing, the contact missing from the sweep error. | Verified locally. |
 | V20 | Unit 13 (`physics/field-mobility`): Debug and Release build with no warnings; `nitcad_physics_test` 44 test cases, `nitcad_assemble_test` 34, `nitcad_solve_test` 61 (+3 `[.mosfet]`, Release only), all pass. Canali: the legacy formula for β = 1, 2 and 1.5 to 1e-15; μ(0) = μ0, μ falling and μE rising monotonically to v_sat (within 1e-3 at 1e9 V/cm); the low-field expansion; dμ/dE against fourth-order differences to 4.2e-12 of μ/E; the right-hand derivative at E = 0; v_sat and β validated. Assembly: FD-Jacobian gate with field mobility 2.7e-9 (1D), 2.3e-9 (2D), 6.0e-9 (3D) (gate 5e-5); the field-mobility part on its own (ψ columns) 2.5e-7 (gate 1e-5); every edge's current scaled by exactly its Canali factor (2.2e-16; factors down to 0.063 at the probe). Device level: a uniform n- and p-type resistor (100 nm, 1e16, 0.1 V steps to 1e6 V/cm) matches q(nμ_n(E) + pμ_p(E))E to 5.8e-15; electrons reach 0.99996 v_sat and holes 0.9798 v_sat (x/(1 + x) for β = 1); y-uniform 2D and 3D reproduce 1D to 1e-12; at most 5 (electrons) or 7 (holes) Newton iterations per point against 2 with constant mobility; quadratic finish (2.8e-2 then 1.2e-8). Legacy diode: J(0.5 V) −0.77% with the model on, total current the same on every edge to 7.5e-8. MOSFET at V_G = 1 V (max_update 1): I_D ratio 0.968 at 0.1 V falling monotonically to 0.735 at 1 V. Mutation checks, each caught: the field-derivative term dropped, a wrong field scale, the Canali derivative without x^(β−1), the switch ignored, β < 1 accepted, the switch missing from the run record, the hole parameters taken from the electrons. | Verified locally. |
+| V21 | Unit 14 (`physics/fermi-dirac`): Debug and Release build with no warnings; `nitcad_physics_test` 56 test cases, `nitcad_assemble_test` 40, `nitcad_solve_test` 69 (+3 `[.mosfet]`, Release only), all pass. F₁/₂ within 1.5e-15 of 40-digit references from −700 to 1000; F₋₁/₂ within 1.3e-13 to η = 15 and 3e-12 to 40; the returned derivative matches central differences to 1e-8 across both joins; ln F₁/₂ increasing and concave to rounding on a 1e-3 grid over −50 to 100; the inverse to 1e-14; Boltzmann and Sommerfeld limits with their published correction terms. Statistics: densities, degeneracy factors and the equilibrium product against finite differences; generalized mass action to 1e-13; the neutral equilibrium against 40-digit roots to 1e-13 (η) and 1e-12 (n, p). Device gates and mutation checks in 6.2 "As built (Unit 14)". The Boltzmann path is bit-identical to `main` (probe hashes, 6.2). | Verified locally. |
 | V3 | Scaling definitions, scaled variables and Newton tolerances read from `inputs.cpp` and `device1d.cpp` and recorded in 6.1. One open question remains for Unit 8 (convergence criterion on the clipped correction). | Verified |
 
 Verifications due at their own unit: none left. The 5e-5 Jacobian gate's normalization was read at Unit 7 (section 10), and
