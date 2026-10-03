@@ -1,11 +1,16 @@
 # NiTCAD — Architecture
 
-**PROPOSAL, accepted as the current proposal. The architectural questions needed for Unit 1 are decided (section 14). The owner named Unit 1 (build scaffold) on 2026-10-02.**
+**CURRENT ARCHITECTURE, updated for Units 1–12.** Units 1–10 established the validated drift-diffusion foundation;
+Unit 11 added band-gap narrowing and Auger, and Unit 12 added gate contacts on a lumped oxide (the MOS capacitor and the
+MOSFET). Both are merged on `main` (Unit 12 as `1de5967`). The architecture below keeps the implemented layers and
+numerical contracts intact while adding a long-term north-star for a general multiphysics semiconductor equation engine.
+Sections distinguish implemented design from target architecture: the north-star material (2.1, 2.2, 6.12, 11.1, 11.2,
+14.6) is future target architecture, not a new layer and not a claim about the current implementation. The dependency
+architecture of sections 3 and 4 is authoritative.
 
-The owner accepted this architecture as the current proposal and recorded decisions D1–D6, D8 and R1–R5.
-Section 14 classifies each as decided, provisionally decided, deferred or blocking verification. On 2026-10-02 the owner
-accepted the advisor recommendations in `DECISIONS.md` for Q1–Q5, Q10 and Q11 (14.1). It is still a proposal: no
-unit is complete, and the document must be rewritten to describe what actually exists as units land.
+The owner accepted the original architectural decisions D1–D6, D8 and R1–R5. Section 14 records their status.
+This document must continue to be rewritten to describe what actually exists as units land; the north-star sections are
+design direction, not permission to build features without an owner-named unit.
 
 Naming: **NiTCAD** is this project. **NT-SemTCAD** is the legacy reference repository
 (`C:\Users\disha\OneDrive\Desktop\NT-SemTCAD-claude-zealous-ritchie-kuuwr9\NT-SemTCAD`), used only as a
@@ -20,10 +25,10 @@ Section 12 lists them.
 
 | Item | Decision |
 |---|---|
-| Platform | Windows only |
+| Platform | Windows only; x64 target |
 | Languages | C++23 (primary); C and Fortran only where technically justified |
 | C++ standard | C++23, enforced by the build system, not by compiler defaults |
-| Desktop layer | Win32 + Direct3D 12 + Direct2D. No Qt, VTK, Python GUI or other GUI framework |
+| Desktop layer | Native Windows desktop via Win32 API + Direct3D 12 + Direct2D; x64 target. No Qt, VTK, Python GUI or other GUI framework |
 | Runtime | No Python |
 | Tests | Written in C/C++ |
 | Git | One branch per architectural unit; no auto-merge; `main` stays clean |
@@ -43,6 +48,68 @@ Section 12 lists them.
 5. The solver core knows nothing about the UI. The UI knows nothing about physics. They meet only
    through plain data (device description in, results out).
 6. Architecture changes do not change physics. Tolerances, not bit-identity, define agreement (section 6.8).
+7. **NiTCAD is a general equation engine, not a collection of device-specific solvers.** A diode, MOS capacitor,
+   MOSFET, heterojunction device, power device or future multiphysics device must be assembled from the same
+   concepts: regions, interfaces, contacts, fields, equations, constitutive models and solver infrastructure.
+8. **Physics is composable.** Adding a model should add or activate equations/terms and their derivatives; it should
+   not require a new device solver or duplicate Newton, linear-algebra, mesh or result code.
+9. **Interfaces are first-class physical objects.** Region-to-region and region-to-contact interfaces carry their
+   own boundary conditions, displacement conditions, offsets, charge, recombination, transport or other interface
+   models as required by the requested physics.
+10. **Fields and equations are explicit concepts even when their current implementation is specialized.** The present
+    code may expose `n`, `p` and `psi` through specialized result/system types, but future units should move toward
+    reusable field and equation descriptors without breaking the existing numerical contracts.
+11. **Numerical robustness has priority over feature count.** Every new physical capability needs convergence,
+    conservation, Jacobian and dimensional/mesh gates appropriate to the equations it introduces.
+12. **The north-star is additive.** The target architecture may introduce equation graphs, adaptive meshes, automatic
+    differentiation and multiple nonlinear/linear solver strategies, but none is treated as implemented until an
+    owner-named unit builds and verifies it.
+
+### 2.1 North-star architecture: the equation graph
+
+The long-term abstraction is an **equation graph** spanning `device`, `physics` and `assemble`. It is a conceptual
+architecture, not a new dependency layer. The graph connects:
+
+```text
+Device description
+  Regions ───────────────┐
+  Interfaces ────────────┤
+  Contacts / boundaries ─┤
+                         ↓
+                     Fields
+          (unknown, fixed, derived)
+                         ↓
+                    Equations
+      ┌──────────────────┼──────────────────┐
+      ↓                  ↓                  ↓
+   local terms       edge terms       interface/boundary terms
+      └──────────────────┼──────────────────┘
+                         ↓
+                 Global F(x) and J(x)
+                         ↓
+                  Nonlinear solver
+                         ↓
+                   Linear solver
+```
+
+The key rule is that a new device type should normally be a new **composition of existing concepts**, not a new
+solver implementation.
+
+### 2.2 First-class concepts
+
+| Concept | Long-term role | Current status |
+|---|---|---|
+| Region | geometry, material, doping and applicable equations | Implemented in `device` |
+| Interface | shared boundary between regions with interface laws | Target; heterojunction edges are rejected, the Unit 12 gate is a lumped oxide on a boundary patch (no meshed Si/SiO₂ interface), full interface physics is deferred |
+| Contact / boundary | named boundary set plus physical boundary condition | Ohmic contacts and gate contacts on a lumped oxide implemented (Unit 12); Schottky contacts deferred |
+| Field | named physical quantity with location, units and applicability | Present as specialized solution/result data; generic field abstraction is target |
+| Equation | residual/Jacobian contribution associated with fields and domains | Present through specialized assembler systems; generic equation objects are target |
+| Model | pure constitutive law with exact derivatives | Implemented for current local physics |
+| Mesh | geometric graph supporting 1D/2D/3D and future unstructured producers | Implemented graph abstraction; unstructured/adaptive mesh deferred |
+| Solver | nonlinear/linear algorithms independent of device type | Newton + backend-neutral linear solve implemented; more strategies deferred |
+| Result | fields, terminals, convergence, provenance and diagnostics | Implemented plain-data results; richer scientific data model is target |
+
+This table is a design direction. It does not add code to the current dependency graph until a unit requests it.
 
 ## 3. Layers and dependency diagram
 
@@ -84,6 +151,10 @@ solver header.
 The layer names above are decided (D5). The root namespace is `NiTCAD`. Nesting each layer as
 `NiTCAD::<layer>` is the working assumption and is provisional (Q1).
 
+The **equation graph is not an additional layer**. It is a cross-layer design concept: `device` describes where
+equations apply, `physics` provides constitutive models and derivatives, and `assemble` turns the active equations
+and boundary/interface laws into the global residual and Jacobian. This preserves the existing one-way dependency graph.
+
 ## 4. Layer responsibilities
 
 | Layer | Owns | Does NOT own |
@@ -91,10 +162,10 @@ The layer names above are decided (D5). The root namespace is `NiTCAD`. Nesting 
 | base | physical constants, unit convention, error types | physics |
 | linalg | sparse matrix storage, backend-neutral solver interface (6.10), Eigen SparseLU backend (D3), residual check | meshes, Newton |
 | mesh | node/edge/control-volume graph, per-edge length and coupling area, per-node volume; tensor-grid constructors for 1D/2D/3D; no tensor-grid indexing in its public interface (6.11) | doping, materials, linear algebra |
-| physics | material parameters, local models (mobility, recombination, …) | meshes, matrices, bias, contacts |
-| device | regions, doping, material assignment, contact definitions (data only) | solving, assembling |
-| results | field and terminal-quantity containers, run record, convergence history | solving |
-| assemble | scaling, Scharfetter–Gummel flux (and its extensions), boundary/contact residuals, F(x) and J(x), gathering node/edge inputs for models | Newton iteration, UI |
+| physics | material parameters and constitutive models; node/edge/interface-local laws and exact derivatives | meshes, matrices, bias, solving |
+| device | regions, material assignment, doping, interfaces and contact/boundary descriptions (data only) | solving, assembling |
+| results | field/terminal data, convergence history, diagnostics and run record | solving |
+| assemble | equation contributions, scaling, Scharfetter–Gummel flux (and its extensions), contact/interface residuals, F(x) and J(x), gathering model inputs | Newton iteration, UI |
 | solve | Newton, damping, continuation, sweeps, cancellation, progress | assembly, rendering |
 | analysis | quantities derived from results | solving |
 | render / app | pixels, windows, user interaction | numerics |
@@ -117,14 +188,20 @@ thermionic emission through per-edge arrays in the `Inputs` struct, `core/includ
    ionization does exactly this: per node it averages the incident edges per axis
    (`pytcad/ii_grid.py` docstring [verified]). The assembler gathers inputs and scatters the chain rule; the
    model never sees the mesh.
-5. **Nonlocal models** (path-integrated band-to-band tunnelling, nonlocal ionization) need paths across the
+5. **Interface-local and boundary-local models** may consume values gathered from the adjacent regions or boundary
+   state, but they still return only their physical value and exact partial derivatives. The model does not own mesh
+   traversal or Newton iteration.
+6. **Nonlocal models** (path-integrated band-to-band tunnelling, nonlocal ionization) need paths across the
    mesh, so they live in `assemble`, not `physics`. They are deferred.
-6. The first physics unit contains only what the first diode needs (section 11).
-7. **Carrier statistics (R4):** Boltzmann statistics initially; Fermi–Dirac and others are deferred. Statistics
+7. A new physics feature must be expressible as one or more reusable models/equation contributions. It must not
+   create a device-specific nonlinear solver, duplicate contact handling, or duplicate linear-algebra infrastructure.
+8. The first physics unit contained only what the first diode needed; later units may extend the model library without
+   changing existing callers.
+9. **Carrier statistics (R4):** Boltzmann statistics initially; Fermi–Dirac and others are deferred. Statistics
    stay isolated inside `physics` so that adding Fermi–Dirac later is an addition, not a signature break for callers.
    Evidence from the legacy: `recombination_fd()` additionally takes the equilibrium product `np_eq` and its
    partials `dnpq_dn`, `dnpq_dp`, which `recombination_boltzmann()` does not
-   (`core/include/tcad/physics/kernels.hpp` [verified]). The Unit 5 signatures are to be designed with that in mind.
+   (`core/include/tcad/physics/kernels.hpp` [verified]). Unit 5 was designed with that in mind.
 
 **As built (Unit 5, `include/NiTCAD/physics/`):**
 - `Semiconductor::create(SemiconductorParameters)` validates a parameter set once (`invalid_input` naming the parameter:
@@ -376,10 +453,10 @@ physics is deferred.
 
 ### 6.4 Contact description
 
-A contact is a named set of boundary nodes with a type. First unit: ohmic, with the charge-neutral
-equilibrium boundary value. Gate (oxide-coupled) contacts came with Unit 12 (below); Schottky contacts are deferred. Contact boundary
-conditions are residual and Jacobian rows, so contact handling lives in `assemble`, and terminal current
-is computed from fluxes in `assemble`/`solve`. It is not an `analysis` quantity.
+A contact is a named set of boundary nodes with a type. First unit: ohmic, with the charge-neutral equilibrium boundary
+value. Gate contacts on a lumped oxide came with Unit 12 (below); Schottky contacts are deferred. Contact boundary
+conditions are residual and Jacobian rows, so contact handling lives in `assemble`, and terminal current is computed
+from fluxes in `assemble`/`solve`. It is not an `analysis` quantity.
 
 **As built (Unit 6, `include/NiTCAD/device/`, sections 6.3 and 6.4):**
 - `Device::create(DeviceDescription)` validates once and owns its parts: the mesh (moved in), a uniform lattice temperature
@@ -695,6 +772,80 @@ Unstructured meshes are not implemented initially. The mesh architecture must st
   requested) and `check_mesh` (needs doping, so it belongs above `mesh`); the unstructured stencils (`stencil.cpp`) stay
   deferred (R3).
 
+### 6.12 Long-term computational architecture
+
+The following are **target capabilities**, not currently implemented layers. They are recorded here so future units
+do not accidentally make the core device-specific.
+
+#### 6.12.1 Generic fields
+
+A future field abstraction should describe at least: name, units, location (node/edge/face/cell), scalar/vector/tensor
+shape, known versus unknown status, region applicability, and storage. Specialized `NodeFields` and solution types
+remain valid until a generic representation is actually needed.
+
+#### 6.12.2 Generic equations
+
+A future equation abstraction should identify its unknown fields, domain, residual contribution, Jacobian contribution,
+and any boundary/interface terms. The assembler may then activate a set of equations from the device/model description
+and build the same global `F(x)` and `J(x)` machinery used by the current drift-diffusion system.
+
+The intended consequence is that these are compositions rather than separate solvers:
+
+```text
+Diode     = Poisson + electron continuity + hole continuity
+MOS       = diode equations + oxide Poisson + gate/interface conditions
+MOSFET    = MOS equations + multiple contacts + transport + requested mobility/statistics models
+Thermal   = existing semiconductor equations + heat equation + thermal material/BC models
+Hydrodynamic = existing equations + carrier-energy equations + corresponding constitutive models
+```
+
+The exact equation sets remain deferred until their units are requested.
+
+#### 6.12.3 Automatic or assisted differentiation
+
+The current contract remains explicit value + exact partial derivatives. Long-term, NiTCAD may support automatic or
+symbolic differentiation for complex model composition while retaining hand-written kernels on measured hot paths.
+Any such mechanism must preserve the existing Jacobian accuracy contract and must not leak into the public layer
+dependencies unless a unit requires it.
+
+#### 6.12.4 Adaptive mesh refinement
+
+The existing graph-only mesh interface is the foundation for future unstructured and adaptive meshes. The target loop
+is:
+
+```text
+solve → estimate error / feature indicator → mark → refine/coarsen → transfer state → solve
+```
+
+Refinement should be able to concentrate resolution around junctions, interfaces, high-field regions, tunnelling
+regions, impact-ionization regions and other requested features without changing the physics or solver interfaces. Mesh
+transfer must preserve the physical units and the conservation/continuity gates appropriate to the active equations.
+
+#### 6.12.5 Solver hierarchy
+
+The current Newton and backend-neutral linear-solver contracts are the base. Future solver strategies may include damped
+Newton, line search, Gummel, pseudo-transient continuation, homotopy/continuation, iterative linear solvers, algebraic
+multigrid and block preconditioners. They are alternatives behind solver interfaces, not device-specific algorithms.
+
+#### 6.12.6 Verification and conservation
+
+A future verification layer should report more than `converged`: nonlinear residual, linear-solve accuracy, Jacobian
+consistency, current/charge conservation, relevant energy balance, mesh quality and other physics-specific invariants.
+It belongs above numerics conceptually and should consume results rather than modifying the solver.
+
+#### 6.12.7 Scientific results and provenance
+
+The current plain-data `results` design should grow toward a scientific data model containing fields, terminal
+quantities, sweeps, time/frequency axes when applicable, solver diagnostics, convergence history and provenance. On-disk
+formats remain decoupled from internal types (R2).
+
+#### 6.12.8 Device neutrality rule
+
+No future unit may introduce classes whose primary purpose is to hard-code a device family (for example `MOSFETSolver`
+or `HEMTSolver`) when the capability can be represented by the existing region/interface/field/equation/model concepts.
+A device family may have a convenience builder, example or analysis workflow, but the numerical engine must remain
+composable.
+
 ## 7. Language placement (D6: C and Fortran deferred)
 
 | Component | Language | Reason |
@@ -831,7 +982,11 @@ These are the acceptance criteria the new units should meet. Source and verifica
 | Dimensional reduction | a transversely uniform 2D solution is y-independent to atol 1e-9 | [verified] `tests/test_validation_2d.py`. Legacy also reports 1.11e-16 V for 3D → 2D (`examples/05_3d_reduces_to_2d.py`, quoted in legacy `ARCHITECTURE.md` [unverified: not re-run]). New tolerances are set per unit. |
 | Mesh geometry | total volume/length matches the domain to 1e-14 (2D) / 1e-10 (3D) | [verified] `tests/test_validation_2d.py`, `tests/test_validation_3d.py` |
 
-## 11. Proposed build order (each unit = one branch)
+## 11. Build order and long-term capability roadmap
+
+Each implemented unit is one branch, is independently tested, and is merged only on the owner's instruction. The table
+below records the completed foundation and the **target capability order** for future units. Future ordering is a design
+direction, not an automatic permission to implement every row.
 
 Unit 1 was named by the owner on 2026-10-02 and has no open prerequisites (V1–V4 are done; V3 is consumed at Unit 7). The
 order is by dependency, so each unit is
@@ -839,7 +994,7 @@ testable on arrival. Units 4–9 are dimension-generic from the start (D4) and u
 
 | # | Unit | Layer | Legacy reference | Gate |
 |---|---|---|---|---|
-| 1 | Build scaffold: CMake, C++23 gate, vcpkg manifest with pinned baseline, Catch2 v3 harness | — | `core/CMakeLists.txt` (reference for options only) | configure fails on a toolset without the needed C++23 features; dependencies resolve from the pinned manifest; one trivial test runs |
+| 1 | Build scaffold: CMake, C++23 gate, vcpkg manifest with pinned baseline, Catch2 v3 harness (**done, on `main`**) | — | `core/CMakeLists.txt` (reference for options only) | configure fails on a toolset without the needed C++23 features; dependencies resolve from the pinned manifest; one trivial test runs |
 | 2 | Constants, units, `Error` type, `NITCAD_EXPECTS` (**done, on `main`**) | base | `constants.py`, `core/include/tcad/base/errors.hpp` | CODATA 2018 values; V_T(300 K) = 0.025852 V |
 | 3 | Sparse matrix, backend-neutral solver interface (6.10), Eigen SparseLU backend (**done, on `main`, with the hardening**) | linalg | `linsolve.py`, `core/src/solver/direct_lu.cpp` | known systems (e.g. analytic tridiagonal); accuracy check (backward error after hardening); singular system returns an error; symbolic-reuse path exercised; header-boundary check, no second backend (Q5) |
 | 4 | Generic node/edge/control-volume mesh; tensor-grid constructors for D = 1, 2, 3 (**done, on `main`**) | mesh | `mesh.py`, `mesh2d.py`, `mesh3d.py`, `core/include/tcad/mesh/stencil.hpp` | total volume matches domain (section 10); positive dual volumes; consistent edge geometry across D = 1, 2, 3 on a uniform grid; public interface contains no (i, j, k) indexing |
@@ -850,12 +1005,70 @@ testable on arrival. Units 4–9 are dimension-generic from the start (D4) and u
 | 9 | Electron/hole continuity assembly and bias solve; first end-to-end gate (**done, on `main`**) | assemble, solve | `device1d.cpp`, `tests/test_validation.py`, `tests/test_device1d_native_gates.py` | J(0.5 V) = 1.280e-2 A/cm² ± 1%; ideal-diode law; current continuity; mesh independence; uniform 2D/3D reproduces 1D to a tolerance set at this unit |
 | 10 | Result representation, cancellation and progress (**done, on `main`**) | results, solve | — (new) | cancellation returns partial results; progress is monotonic |
 | 11 | Slotboom band-gap narrowing and Auger recombination (**done, on `main`**) | physics, assemble | `materials.py` (`bandgap_narrowing_slotboom`, `nie_effective`, `recombination`), `device1d.cpp` (`delta`, `delta_p`) | legacy model benchmarks; Slotboom and n_ie against 40-digit values; Auger partials vs FD; zero equilibrium current with varying n_ie; diffusion current × exp(ΔEg/kT); FD-Jacobian gate on a 1e19/1e18 diode |
-| 12 | Gate contacts on a lumped oxide, quasi-static (equilibrium) sweeps, the MOS capacitor and MOSFET (**done on branch `device/mos`**) | physics, device, assemble, solve | `moscap.py` (`MOSCapacitor`, `flatband_voltage`), `device2d.py` (`GateBC`, `add_gate`), `mosfet.py` | legacy C-V physics checks P1–P9, temperature and fixed-charge checks; NiTCAD reproduces the ported legacy MOS-C solve; legacy MOSFET threshold, on/off, swing, monotonic and mesh-independence gates |
-| 13+ | Everything else: Fermi–Dirac, field mobility, heterojunctions, impact ionization, BTBT, transient, AC, thermal, process, unstructured meshes, PARDISO/iterative backends, file formats, analysis, render, app | deferred | per the audit | per unit, when the owner requests |
+| 12 | Lumped-oxide MOS: gate contacts on a lumped oxide (no meshed oxide region), quasi-static (equilibrium) sweeps, the MOS capacitor and MOSFET (**done, on `main`**, `1de5967`) | physics, device, assemble, solve | `moscap.py` (`MOSCapacitor`, `flatband_voltage`), `device2d.py` (`GateBC`, `add_gate`), `mosfet.py` | legacy C-V physics checks P1–P9, temperature and fixed-charge checks; NiTCAD reproduces the ported legacy MOS-C solve; legacy MOSFET threshold, on/off, swing, monotonic and mesh-independence gates |
+
+**Target capabilities (Units 13–27).** Design direction, not permission to build: each needs an owner-named
+unit, and the order may change (11.1). Meshed oxide regions and a Si/SiO₂ interface, beyond Unit 12's lumped
+oxide, belong to the heterojunction and interface track (15).
+
+| # | Unit / capability | Layer(s) | Status / purpose |
+|---|---|---|---|
+| 13 | Field-dependent mobility / velocity saturation | physics, assemble | target |
+| 14 | Fermi–Dirac statistics and high-density carrier models | physics, assemble | target |
+| 15 | Heterojunctions, band offsets and interface transport | device, assemble, physics | target |
+| 16 | Unstructured mesh | mesh, assemble | target |
+| 17 | Adaptive mesh refinement and state transfer | mesh, solve, results | target |
+| 18 | Scalable linear-solver backends: PARDISO and/or iterative/AMG paths | linalg | target; must preserve backend-neutral interface |
+| 19 | Impact ionization and breakdown-oriented continuation | physics, assemble, solve | target |
+| 20 | Band-to-band tunnelling and nonlocal path machinery | assemble, physics, solve | target |
+| 21 | Transient simulation | solve, assemble, results | target |
+| 22 | AC small-signal analysis | linalg, assemble, solve, results | target; complex system already reserved by A5 |
+| 23 | Thermal / electrothermal coupling | physics, assemble, solve | target |
+| 24 | Analysis and extraction engine | analysis | target |
+| 25 | Scientific visualization / rendering | render | target |
+| 26 | Native Windows application and workflow | app | target; Win32 API, x64 target, Direct3D 12 / Direct2D |
+| 27 | Optimization / sensitivity / inverse-design workflows | analysis, solve | long-term target |
 
 Units 1–9 are the smallest end-to-end vertical slice: a validated drift-diffusion diode. Everything past
 Unit 10 is deferred until sequenced. Units 11 and 12 were requested by the owner after Unit 10; nothing past them is
 started.
+
+### 11.1 Capability tracks may interleave
+
+The numerical architecture should not be forced into one linear feature list. A future unit may be pulled forward when
+it unlocks a critical downstream capability, but it must preserve these priorities:
+
+1. strengthen the generic equation/field/interface abstractions before multiplying device-specific special cases;
+2. strengthen numerical robustness and performance before adding highly stiff physics;
+3. keep mesh, physics, solver and application dependencies one-way;
+4. require physics-specific verification rather than accepting convergence alone;
+5. maintain dimensional generality and avoid a separate 1D/2D/3D implementation path.
+
+### 11.2 North-star milestone
+
+A mature NiTCAD simulation should look conceptually like:
+
+```text
+Device = regions + interfaces + contacts + materials + parameters
+        ↓
+Fields = unknown + fixed + derived quantities
+        ↓
+Equations = selected physics + boundary/interface laws
+        ↓
+Mesh = structured or unstructured, optionally adaptive
+        ↓
+Assembly = residual + exact/automatic Jacobian
+        ↓
+Solve = nonlinear strategy + linear backend + continuation
+        ↓
+Verification = numerical + conservation + physical checks
+        ↓
+Results = fields + terminals + sweeps + diagnostics + provenance
+        ↓
+Analysis / visualization / optimization
+```
+
+No device family should require a second numerical architecture to participate in this flow.
 
 ## 12. Legacy facts: verified, derived and unverified
 
@@ -944,7 +1157,8 @@ started.
 ## 14. Decisions
 
 Recorded by the owner. D7 of an earlier draft (the branch name for this file) was not a decision and is
-withdrawn; numbering is otherwise kept stable. This proposal lives on `architecture/architecture-proposal`.
+withdrawn; numbering is otherwise kept stable. This document is maintained against the current `main`
+architecture; historical branch names remain only where they are useful to explain how a decision was reached.
 
 ### 14.1 Decided
 
@@ -1028,6 +1242,17 @@ Auger and BGN that do not matter, 6.2).
 | N7 | Whether clang-format, `/analyze` or clang-tidy are wanted at all (feature freeze) | owner |
 
 Nothing in this table blocks Units 1–3.
+
+### 14.6 North-star architectural rule
+
+The following is now the governing long-term design principle, subject to unit-by-unit verification:
+
+> **Build NiTCAD as one composable semiconductor multiphysics equation engine. Do not build a collection of
+> device-specific numerical solvers. Regions, interfaces, contacts, fields, equations, constitutive models, mesh,
+> nonlinear solving, linear solving, verification and results remain reusable across device families and dimensions.**
+
+This principle does not override the existing feature-freeze rule. An implementation change still requires an
+owner-named unit and must be validated against the gates in this document.
 
 **Approval workflow:** the owner names each unit. Each unit is built on its own branch, tested, committed and reported, and is
 not merged without the owner's instruction.
