@@ -19,6 +19,7 @@ namespace NiTCAD::assemble::detail {
 struct ScaledEdge {
     std::size_t i, j;  // end nodes (mesh Edge::first, Edge::second)
     double geometry;   // coupling area / length / L_D^(D-2)
+    double length_cm;  // physical edge length
     double et;         // relative permittivity over the reference one (legacy et)
 };
 

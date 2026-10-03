@@ -60,10 +60,15 @@ void material(Digest& d, const physics::SemiconductorParameters& p) {
     for (const double v : {p.lifetime.tau_n0, p.lifetime.tau_p0, p.lifetime.N_ref}) d.real(v);
     for (const double v : {p.auger.Cn, p.auger.Cp}) d.real(v);
     for (const double v : {p.bandgap_narrowing.E0_eV, p.bandgap_narrowing.N0}) d.real(v);
+    for (const auto& c : {p.electron_saturation, p.hole_saturation}) {
+        d.real(c.v_sat_cm_s);
+        d.real(c.beta);
+    }
 }
 
 // The options the sweep reads: the quasi-static sweep has no continuity equations, so the
-// mobility, SRH and Auger switches do not apply to it and are left out (of the digest too).
+// mobility, SRH, Auger and field-mobility switches do not apply to it and are left out (of the
+// digest too).
 std::vector<std::pair<std::string, double>> settings(const BiasOptions& o) {
     const bool transport = o.equations == Equations::drift_diffusion;
     std::vector<std::pair<std::string, double>> s{
@@ -83,6 +88,7 @@ std::vector<std::pair<std::string, double>> settings(const BiasOptions& o) {
         s.emplace_back("models.doping_mobility", o.models.doping_mobility ? 1.0 : 0.0);
         s.emplace_back("models.srh", o.models.srh ? 1.0 : 0.0);
         s.emplace_back("models.auger", o.models.auger ? 1.0 : 0.0);
+        s.emplace_back("models.field_mobility", o.models.field_mobility ? 1.0 : 0.0);
     }
     if (o.Ns_override) s.emplace_back("scaling.Ns_override", *o.Ns_override);
     return s;

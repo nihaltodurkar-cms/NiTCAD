@@ -10,6 +10,7 @@
 #include "NiTCAD/assemble/ohmic.hpp"
 #include "NiTCAD/assemble/sg_flux.hpp"
 #include "NiTCAD/base/contract.hpp"
+#include "NiTCAD/physics/field_mobility.hpp"
 #include "NiTCAD/physics/mobility.hpp"
 #include "NiTCAD/physics/recombination.hpp"
 #include "NiTCAD/physics/statistics.hpp"
@@ -48,6 +49,7 @@ std::expected<DriftDiffusion, base::Error> DriftDiffusion::create(
     s.auger_ = models.auger;
     s.V_T_ = scaling.V_T;
     s.srh_ = models.srh;
+    s.field_mobility_ = models.field_mobility;
     s.tau_n_.resize(n);
     s.tau_p_.resize(n);
     s.auger_n_.resize(n);
@@ -103,8 +105,14 @@ std::expected<DriftDiffusion, base::Error> DriftDiffusion::create(
         t.a = e.i;
         t.b = e.j;
         t.c = e.et * e.geometry;
-        t.an = harmonic_mean(mu_n[e.i], mu_n[e.j]) * scaling.V_T / scaling.D0 * e.geometry;
-        t.ap = harmonic_mean(mu_p[e.i], mu_p[e.j]) * scaling.V_T / scaling.D0 * e.geometry;
+        t.mu_n = harmonic_mean(mu_n[e.i], mu_n[e.j]);
+        t.mu_p = harmonic_mean(mu_p[e.i], mu_p[e.j]);
+        t.an = t.mu_n * scaling.V_T / scaling.D0 * e.geometry;
+        t.ap = t.mu_p * scaling.V_T / scaling.D0 * e.geometry;
+        t.field = scaling.V_T / e.length_cm;
+        const physics::Semiconductor& m = device.material(static_cast<mesh::NodeId>(e.i));
+        t.sat_n = physics::saturation(m, physics::Carrier::electron);
+        t.sat_p = physics::saturation(m, physics::Carrier::hole);
         t.dln = std::log(s.n_ie_[e.j] / s.n_ie_[e.i]);
         for (std::size_t k = 0; k < 5; ++k) {
             t.ab[k] = detail::position(s.pattern_, 3 * e.i + edge_rows[k], 3 * e.j + edge_cols[k]);
@@ -158,6 +166,33 @@ void DriftDiffusion::stamp_contacts(std::span<double> x) const {
 }
 
 linalg::SparseMatrix DriftDiffusion::make_jacobian() const { return pattern_; }
+
+std::pair<EdgeFlux, EdgeFlux> DriftDiffusion::edge_fluxes(const EdgeTerm& e,
+                                                          std::span<const double> x) const {
+    // The flux functions take the driving term as psi2 - psi1; its partials are those with
+    // respect to psi_a and psi_b, since ln(n_ie) does not depend on the state.
+    const double dpsi = x[3 * e.b] - x[3 * e.a];
+    const double na = x[3 * e.a + 1], nb = x[3 * e.b + 1];
+    const double pa = x[3 * e.a + 2], pb = x[3 * e.b + 2];
+    if (!field_mobility_) {
+        return {sg_electron_flux(e.an, 0.0, dpsi + e.dln, na, nb),
+                sg_hole_flux(e.ap, 0.0, dpsi - e.dln, pa, pb)};
+    }
+    // Edge factor a(E) = a0 mu_C(mu0, E) / mu0, E = field |dpsi|; the flux is linear in a, so
+    // d flux / d dpsi gains (flux / a) da/d dpsi.
+    const double E = e.field * std::abs(dpsi);
+    const double dE = dpsi > 0.0 ? e.field : dpsi < 0.0 ? -e.field : 0.0;  // dE / d dpsi
+    const auto scaled = [&](EdgeFlux unit, double a0, double mu0,
+                            const physics::CanaliParameters& sat) {
+        const physics::FieldMobility mu = physics::canali_mobility(mu0, E, sat);
+        const double a = a0 * (mu.mobility / mu0);
+        const double da = a0 * (mu.d_dE / mu0) * dE;
+        return EdgeFlux{a * unit.flux, a * unit.d_psi1 - unit.flux * da,
+                        a * unit.d_psi2 + unit.flux * da, a * unit.d_c1, a * unit.d_c2};
+    };
+    return {scaled(sg_electron_flux(1.0, 0.0, dpsi + e.dln, na, nb), e.an, e.mu_n, e.sat_n),
+            scaled(sg_hole_flux(1.0, 0.0, dpsi - e.dln, pa, pb), e.ap, e.mu_p, e.sat_p)};
+}
 
 void DriftDiffusion::assemble(std::span<const double> x, std::span<double> f,
                               std::span<double> values) const {
@@ -222,11 +257,7 @@ void DriftDiffusion::assemble(std::span<const double> x, std::span<double> f,
         const std::size_t a = e.a, b = e.b;
         const double psi_a = x[3 * a], psi_b = x[3 * b];
         const double poisson = e.c * (psi_b - psi_a);
-        // The flux functions take the driving term as psi2 - psi1; its partials are those
-        // with respect to psi_a and psi_b, since ln(n_ie) does not depend on the state.
-        const double dpsi = psi_b - psi_a;
-        const EdgeFlux fn = sg_electron_flux(e.an, 0.0, dpsi + e.dln, x[3 * a + 1], x[3 * b + 1]);
-        const EdgeFlux fp = sg_hole_flux(e.ap, 0.0, dpsi - e.dln, x[3 * a + 2], x[3 * b + 2]);
+        const auto [fn, fp] = edge_fluxes(e, x);
         if (contact_[a] < 0) {
             f[3 * a] += poisson;
             f[3 * a + 1] += fn.flux;
@@ -306,10 +337,8 @@ std::vector<std::pair<double, double>> DriftDiffusion::edge_currents(
     std::vector<std::pair<double, double>> currents;
     currents.reserve(edges_.size());
     for (const EdgeTerm& e : edges_) {
-        const double dpsi = x[3 * e.b] - x[3 * e.a];
-        currents.emplace_back(
-            sg_electron_flux(e.an, 0.0, dpsi + e.dln, x[3 * e.a + 1], x[3 * e.b + 1]).flux,
-            sg_hole_flux(e.ap, 0.0, dpsi - e.dln, x[3 * e.a + 2], x[3 * e.b + 2]).flux);
+        const auto [fn, fp] = edge_fluxes(e, x);
+        currents.emplace_back(fn.flux, fp.flux);
     }
     return currents;
 }
