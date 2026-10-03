@@ -10,7 +10,8 @@
 // sg_flux.hpp with edge factor D_e c_e, D_e = hmean(mu_a, mu_b) V_T / D0 (harmonic mean of the
 // nodes' mobilities, legacy dn_edge), and R = (R_SRH + R_Auger) / R0. SRH is evaluated on scaled
 // densities (it is homogeneous of degree one, so R_SRH / R0 = R_SRH(n', p', ...) Ns / R0); Auger,
-// which is cubic, on physical ones.
+// which is cubic, on physical ones. Both drive n p towards the equilibrium product of the selected
+// statistics (n_ie^2; Fermi-Dirac: n_ie^2 gamma_n gamma_p at the node's densities, with partials).
 // With models.field_mobility the edge factor carries the Canali mobility of the edge's own field:
 // D_e = mu_C(mu0_e, E_e) V_T / D0, with mu0_e the harmonic mean above and
 // E_e = V_T |psi_b - psi_a| / length the electrostatic field along the edge (the field parallel to
@@ -20,6 +21,13 @@
 // The driving term of the fluxes is delta_n = psi_b - psi_a + ln(n_ie,b / n_ie,a) for electrons and
 // delta_p = psi_b - psi_a - ln(n_ie,b / n_ie,a) for holes (legacy delta, delta_p): with band-gap
 // narrowing n_ie varies in space, and only these make the equilibrium carry no current.
+// With models.fermi_dirac (Unit 14, the legacy nu-factor scheme) delta_n gains
+// ln gamma_n,b - ln gamma_n,a and delta_p loses ln gamma_p,b - ln gamma_p,a, each node's degeneracy
+// factor taken from its own density (physics::fermi_dirac_degeneracy). Then n_b / n_a = e^delta_n
+// at equilibrium, so the flux again vanishes there, and in the continuum limit the flux is
+// mu n grad(phi_n): the generalized Einstein relation D / mu = (V_T n / (dn / d eta)) is implicit.
+// ln gamma depends on the density, so the Jacobian's density columns gain
+// d flux / d delta times d ln gamma / d density.
 // Contact rows (ohmic): psi - psi0, n - n0, p - p0, from ohmic_contact_value at the contact's bias.
 // A gate node keeps its three box rows; its Poisson row gains the oxide term of gate.hpp at the
 // gate's bias, G_i (psi_G,i - psi_i) + S_i, and its continuity rows no boundary flux (legacy
@@ -51,6 +59,7 @@
 #include "NiTCAD/device/device.hpp"
 #include "NiTCAD/linalg/sparse_matrix.hpp"
 #include "NiTCAD/physics/semiconductor.hpp"
+#include "NiTCAD/physics/statistics.hpp"
 
 namespace NiTCAD::assemble {
 
@@ -70,9 +79,9 @@ public:
     // check_contact_bias (size, a value not finite). Initially every bias is 0.
     [[nodiscard]] std::expected<void, base::Error> set_bias(std::span<const double> bias_V);
 
-    // Scaled state of every node in Boltzmann equilibrium at the scaled potential psi
-    // (n = n_ie e^psi, p = n_ie e^-psi), with the ohmic contact nodes set to their Dirichlet
-    // values. Precondition (NITCAD_EXPECTS): psi has node_count() entries.
+    // Scaled state of every node in equilibrium at the scaled potential psi under the selected
+    // statistics (Boltzmann: n = n_ie e^psi, p = n_ie e^-psi), with the ohmic contact nodes set to
+    // their Dirichlet values. Precondition (NITCAD_EXPECTS): psi has node_count() entries.
     [[nodiscard]] std::vector<double> state_from_potential(std::span<const double> psi) const;
     // Sets the ohmic contact nodes of a state to their Dirichlet values.
     void stamp_contacts(std::span<double> x) const;
@@ -118,15 +127,24 @@ private:
         std::size_t ab[5], ba[5];
     };
 
+    // The degeneracy factors of a node's electron and hole densities (Fermi-Dirac).
+    struct NodeDegeneracy {
+        physics::Degeneracy n, p;
+    };
+
     void assemble(std::span<const double> x, std::span<double> residual,
                   std::span<double> values) const;
 
+    // Per node at state x under Fermi-Dirac statistics; empty under Boltzmann.
+    [[nodiscard]] std::vector<NodeDegeneracy> degeneracies(std::span<const double> x) const;
+
     // The electron and hole fluxes of an edge at state x, with field-dependent edge factors when
-    // the model is on.
+    // the model is on and the degeneracy terms g (degeneracies(x)) when it is not empty.
     [[nodiscard]] std::pair<EdgeFlux, EdgeFlux> edge_fluxes(
-        const EdgeTerm& e, std::span<const double> x) const;
+        const EdgeTerm& e, std::span<const double> x, std::span<const NodeDegeneracy> g) const;
 
     std::vector<double> volume_, doping_, n_ie_, tau_n_, tau_p_, auger_n_, auger_p_;
+    std::vector<double> log_dos_n_, log_dos_p_;  // ln(Nc / n_ie), ln(Nv / n_ie)
     std::vector<std::int32_t> contact_;   // ohmic contact index per node, or -1
     GateNodes gates_;
     std::vector<device::ContactKind> kinds_;  // per contact
@@ -140,6 +158,7 @@ private:
     bool srh_ = true;
     bool auger_ = true;
     bool field_mobility_ = false;
+    bool fermi_dirac_ = false;
     linalg::SparseMatrix pattern_;
 };
 

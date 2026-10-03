@@ -17,6 +17,7 @@
 #include "NiTCAD/device/device.hpp"
 #include "NiTCAD/linalg/linear_solver.hpp"
 #include "NiTCAD/mesh/tensor_grid.hpp"
+#include "NiTCAD/physics/bandgap_narrowing.hpp"
 #include "NiTCAD/physics/semiconductor.hpp"
 #include "NiTCAD/physics/statistics.hpp"
 
@@ -315,4 +316,58 @@ TEST_CASE("poisson: heterojunctions and a mismatched scaling are rejected") {
     Scaling s = *assemble::make_scaling(d);
     s.temperature_K = 310.0;
     REQUIRE(EquilibriumPoisson::create(d, s).error().code == ErrorCode::invalid_input);
+}
+
+// Unit 14: Fermi-Dirac statistics.
+
+TEST_CASE("poisson: FD-Jacobian gate under Fermi-Dirac statistics on a degenerate diode") {
+    // 1e20 / 1e17 (legacy G5 fixture): the 1e20 side sits 2.3 kT inside the valence band.
+    const assemble::PhysicsModels fd{.fermi_dirac = true};
+    const auto x = graded_axis(45);
+    const auto y = uniform_axis(1e-4, 4);
+    const auto z = uniform_axis(5e-5, 3);
+    const auto xs = graded_axis(14);
+    const auto make = [&](mesh::Mesh m) {
+        const device::Device d = diode(std::move(m), 1e20, 1e17);
+        return *EquilibriumPoisson::create(d, *assemble::make_scaling(d), fd);
+    };
+    const double e1 = fd_jacobian_error(make(*mesh::make_tensor_grid(x)), 11);
+    const double e2 = fd_jacobian_error(make(*mesh::make_tensor_grid(x, y)), 12);
+    const double e3 = fd_jacobian_error(make(*mesh::make_tensor_grid(xs, y, z)), 13);
+    UNSCOPED_INFO("worst column errors: 1D " << e1 << ", 2D " << e2 << ", 3D " << e3);
+    REQUIRE(e1 <= 5e-5);
+    REQUIRE(e2 <= 5e-5);
+    REQUIRE(e3 <= 5e-5);
+}
+
+TEST_CASE("poisson: Fermi-Dirac contacts and neutral guess are the neutral Fermi-Dirac root") {
+    const device::Device d = diode(*mesh::make_tensor_grid(graded_axis(30)), 1e20, 1e17);
+    const Scaling s = *assemble::make_scaling(d);
+    const auto system = *EquilibriumPoisson::create(d, s, {.fermi_dirac = true});
+    const auto boltzmann = *EquilibriumPoisson::create(d, s, {.fermi_dirac = false});
+    const physics::Semiconductor si = physics::silicon();
+    const double T = 300.0;
+    // Band-gap narrowing is on by default: each side's n_ie is the effective one.
+    for (const auto& [node, N] : {std::pair<std::size_t, double>{0, -1e20},
+                                  std::pair<std::size_t, double>{60, 1e17}}) {
+        CAPTURE(node);
+        const double nie = physics::effective_intrinsic_density(si, std::abs(N), T);
+        const auto e = physics::fermi_dirac_neutral_equilibrium(
+            N / s.Ns, nie / s.Ns, std::log(physics::conduction_band_dos(si, T) / nie),
+            std::log(physics::valence_band_dos(si, T) / nie));
+        REQUIRE(system.contact_potential()[node] == e.eta);
+        REQUIRE(system.charge_neutral_potential()[node] == e.eta);
+        // The degenerate contact needs a deeper potential than Boltzmann statistics give.
+        REQUIRE(std::abs(system.contact_potential()[node]) >=
+                std::abs(boltzmann.contact_potential()[node]));
+    }
+    REQUIRE(system.contact_potential()[0] - boltzmann.contact_potential()[0] < -0.5);
+    // In the neutral bulk the guess leaves no charge: the residual is the (zero) flux balance.
+    const std::vector<double> psi = system.charge_neutral_potential();
+    std::vector<double> f(system.unknowns());
+    system.residual(psi, f);
+    std::vector<double> n(system.unknowns()), p(system.unknowns());
+    system.carriers(psi, n, p);
+    REQUIRE(close(n[3] - p[3], 0.0 - 1e20 / s.Ns, 1e-14));
+    REQUIRE(close(n[58] - p[58], 1e17 / s.Ns, 1e-13));
 }

@@ -514,3 +514,178 @@ TEST_CASE("drift-diffusion: each edge's current is scaled by its Canali factor")
     REQUIRE(smallest_factor < 0.5);  // the probe reaches well into saturation
     REQUIRE(worst <= 1e-13);
 }
+
+// Unit 14: Fermi-Dirac statistics.
+
+TEST_CASE("drift-diffusion: FD-Jacobian gate under Fermi-Dirac statistics in 1D, 2D and 3D") {
+    // 1e20 / 1e17 (legacy G5 fixture), every model on: band-gap narrowing, SRH, Auger, field
+    // mobility. The probe noise puts the 1e20 side's holes 2 kT inside the band.
+    const assemble::PhysicsModels all{.field_mobility = true, .fermi_dirac = true};
+    const auto x = graded_axis(30);
+    const auto xs = graded_axis(10);
+    const auto y = uniform_axis(1e-4, 3);
+    const auto [s1, x1] = probe_state(diode(*mesh::make_tensor_grid(x), 1e20, 1e17), 42, all);
+    const auto [s2, x2] = probe_state(diode(*mesh::make_tensor_grid(xs, y), 1e20, 1e17), 43, all);
+    const auto [s3, x3] =
+        probe_state(diode(*mesh::make_tensor_grid(xs, y, y), 1e20, 1e17), 44, all);
+    const double e1 = fd_jacobian_error(s1, x1);
+    const double e2 = fd_jacobian_error(s2, x2);
+    const double e3 = fd_jacobian_error(s3, x3);
+    UNSCOPED_INFO("worst column errors: 1D " << e1 << ", 2D " << e2 << ", 3D " << e3);
+    REQUIRE(s1.unknowns() >= 80);
+    REQUIRE(e1 <= 5e-5);
+    REQUIRE(e2 <= 5e-5);
+    REQUIRE(e3 <= 5e-5);
+    // And with Fermi-Dirac alone.
+    const auto [s4, x4] = probe_state(diode(*mesh::make_tensor_grid(x), 1e20, 1e17), 45,
+                                      {.fermi_dirac = true});
+    REQUIRE(fd_jacobian_error(s4, x4) <= 5e-5);
+}
+
+TEST_CASE("drift-diffusion: the Fermi-Dirac part of the Jacobian matches finite differences") {
+    // As for recombination and field mobility, checked on its own so that the column-normalized
+    // gate cannot hide it: J(FD) - J(Boltzmann) against finite differences of F(FD) - F(Boltzmann),
+    // per density column relative to that column's largest difference. Only the density columns
+    // carry the new terms (the degeneracy factors in the driving force and the equilibrium
+    // product), and only the majority ones are resolved: a minority density (1e-19 to 1e-17 here,
+    // in units of Ns = 1e20) changes rows that also hold majority fluxes of order 1 by less than
+    // their rounding (the Unit 13 finding). The full gate above covers those columns with its
+    // absolute step. The step here is relative to the density, 1e-6.
+    const auto d = diode(*mesh::make_tensor_grid(graded_axis(20)), 1e20, 1e17);
+    const auto [with, x0] = probe_state(d, 7, {.fermi_dirac = true});
+    const auto [without, unused] = probe_state(d, 7);
+    std::vector<double> x = x0;
+    const std::size_t n = with.unknowns();
+    std::vector<double> f(n), g(n);
+    auto ja = with.make_jacobian(), jb = without.make_jacobian();
+    with.evaluate(x, f, ja);
+    without.evaluate(x, g, jb);
+    const auto a = dense(ja), b = dense(jb);
+    const auto difference = [&](const std::vector<double>& u, std::vector<double>& out) {
+        with.residual(u, f);
+        without.residual(u, g);
+        for (std::size_t r = 0; r < n; ++r) out[r] = f[r] - g[r];
+    };
+    std::vector<double> up(n), down(n);
+    double worst = 0.0, largest = 0.0;
+    for (std::size_t c = 0; c < n; ++c) {
+        if (c % 3 == 0 || x[c] < 1e-4) continue;  // potentials (unchanged), minority densities
+        const double base = x[c];
+        const double step = 1e-6 * base;
+        x[c] = base + step;
+        const double hi = x[c];
+        difference(x, up);
+        x[c] = base - step;
+        const double lo = x[c];
+        difference(x, down);
+        x[c] = base;
+        double scale = 1e-300, error = 0.0;
+        for (std::size_t r = 0; r < n; ++r) scale = std::max(scale, std::abs(a[r][c] - b[r][c]));
+        for (std::size_t r = 0; r < n; ++r) {
+            error = std::max(error, std::abs((up[r] - down[r]) / (hi - lo) - (a[r][c] - b[r][c])));
+        }
+        largest = std::max(largest, scale);
+        if (scale > 1e-300) worst = std::max(worst, error / scale);
+    }
+    UNSCOPED_INFO("worst Fermi-Dirac column error " << worst);
+    REQUIRE(largest > 0.0);
+    REQUIRE(worst <= 1e-5);
+}
+
+TEST_CASE("drift-diffusion: Fermi-Dirac contacts, and the equilibrium state from a potential") {
+    const auto d = diode(*mesh::make_tensor_grid(graded_axis(15)), 1e20, 1e17);
+    const auto scaling = *assemble::make_scaling(d);
+    const assemble::PhysicsModels fd{.fermi_dirac = true};
+    auto system = *DriftDiffusion::create(d, scaling, fd);
+    const auto poisson = *assemble::EquilibriumPoisson::create(d, scaling, fd);
+    // At zero bias the contacts are the Poisson system's, and the state from a potential has the
+    // Poisson system's carriers. On a contact node the majority is |C| + minority (neutral to
+    // rounding), which the density at the root potential reproduces to a few ulp.
+    const std::vector<double> psi = poisson.charge_neutral_potential();
+    const std::vector<double> x = system.state_from_potential(psi);
+    std::vector<double> n(psi.size()), p(psi.size());
+    poisson.carriers(psi, n, p);
+    for (std::size_t i = 0; i < psi.size(); ++i) {
+        CAPTURE(i);
+        REQUIRE(x[3 * i] == psi[i]);
+        if (poisson.is_contact()[i] != 0) {
+            REQUIRE(std::abs(x[3 * i + 1] - n[i]) <= 1e-14 * std::max(n[i], p[i]));
+            REQUIRE(std::abs(x[3 * i + 2] - p[i]) <= 1e-14 * std::max(n[i], p[i]));
+            continue;
+        }
+        REQUIRE(x[3 * i + 1] == n[i]);
+        REQUIRE(x[3 * i + 2] == p[i]);
+    }
+    // Biased: the potential moves by the bias, the densities stay.
+    const std::vector<double> bias{0.4, 0.0};
+    REQUIRE(system.set_bias(bias).has_value());
+    std::vector<double> y = x;
+    system.stamp_contacts(y);
+    REQUIRE(std::abs(y[0] - (psi[0] + 0.4 / scaling.V_T)) <= 1e-14 * std::abs(y[0]));
+    REQUIRE(y[1] == x[1]);
+    REQUIRE(y[2] == x[2]);
+}
+
+TEST_CASE("drift-diffusion: the recombination part of the Jacobian under Fermi-Dirac statistics") {
+    // As the recombination test above, with Fermi-Dirac statistics on both sides of the difference,
+    // so it isolates SRH and Auger with the Fermi-Dirac equilibrium product and its partials
+    // (dE/dn = E d ln gamma_n / dn). A uniform 1e20 n-type state (electrons 2.4 kT inside the band,
+    // gamma_n = 0.34) at its neutral potential, with p raised 10% above equilibrium: every flux is
+    // zero, n p - E is small, and E's partials are comparable to p, so they are not lost in dR/dn.
+    mesh::Mesh m = *mesh::make_tensor_grid(uniform_axis(2e-4, 21));
+    const std::size_t nodes = m.node_count();
+    auto left = m.find_boundary("x_min")->nodes;
+    const device::Device d = *device::Device::create(
+        {.mesh = std::move(m),
+         .temperature_K = 300.0,
+         .regions = {{"silicon", physics::silicon()}},
+         .node_region = std::vector<device::RegionId>(nodes, 0),
+         .donors = std::vector<double>(nodes, 1e20),
+         .acceptors = std::vector<double>(nodes, 0.0),
+         .contacts = {{"left", device::ContactKind::ohmic, std::move(left)}}});
+    const auto scaling = *assemble::make_scaling(d);
+    const assemble::PhysicsModels fd{.fermi_dirac = true};
+    auto with = *DriftDiffusion::create(d, scaling, fd);
+    auto without = *DriftDiffusion::create(d, scaling, {.srh = false, .auger = false,
+                                                        .fermi_dirac = true});
+    const auto poisson = *assemble::EquilibriumPoisson::create(d, scaling, fd);
+    std::vector<double> x = with.state_from_potential(poisson.charge_neutral_potential());
+    const double n0 = x[3 * 2 + 1], p0 = x[3 * 2 + 2];  // a bulk node's equilibrium densities
+    for (std::size_t i = 0; i < nodes; ++i) {
+        x[3 * i + 1] = n0;
+        x[3 * i + 2] = 1.1 * p0;
+    }
+    const std::size_t n = with.unknowns();
+    std::vector<double> f(n), g(n), up(n), down(n);
+    auto ja = with.make_jacobian(), jb = without.make_jacobian();
+    with.evaluate(x, f, ja);
+    without.evaluate(x, g, jb);
+    const auto a = dense(ja), b = dense(jb);
+    const auto difference = [&](const std::vector<double>& u, std::vector<double>& out) {
+        with.residual(u, f);
+        without.residual(u, g);
+        for (std::size_t r = 0; r < n; ++r) out[r] = f[r] - g[r];
+    };
+    double worst = 0.0, largest = 0.0;
+    for (std::size_t c = 3; c < n; ++c) {  // node 0 is the contact
+        const double base = x[c];
+        const double step = 1e-6 * std::max(std::abs(base), 1e-30);
+        x[c] = base + step;
+        const double hi = x[c];
+        difference(x, up);
+        x[c] = base - step;
+        const double lo = x[c];
+        difference(x, down);
+        x[c] = base;
+        double scale = 0.0, error = 0.0;
+        for (std::size_t r = 0; r < n; ++r) scale = std::max(scale, std::abs(a[r][c] - b[r][c]));
+        for (std::size_t r = 0; r < n; ++r) {
+            error = std::max(error, std::abs((up[r] - down[r]) / (hi - lo) - (a[r][c] - b[r][c])));
+        }
+        largest = std::max(largest, scale);
+        if (scale > 0.0) worst = std::max(worst, error / scale);
+    }
+    UNSCOPED_INFO("worst Fermi-Dirac recombination column error " << worst);
+    REQUIRE(largest > 0.0);
+    REQUIRE(worst <= 1e-5);
+}

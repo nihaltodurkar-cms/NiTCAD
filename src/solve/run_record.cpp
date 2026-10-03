@@ -82,6 +82,7 @@ std::vector<std::pair<std::string, double>> settings(const BiasOptions& o) {
         {"linear.max_refinement_steps", static_cast<double>(o.linear.max_refinement_steps)},
         {"linear.min_pivot_ratio", o.linear.min_pivot_ratio},
         {"models.bgn", o.models.bgn ? 1.0 : 0.0},
+        {"models.fermi_dirac", o.models.fermi_dirac ? 1.0 : 0.0},
         {"equations", static_cast<double>(o.equations)},
     };
     if (transport) {

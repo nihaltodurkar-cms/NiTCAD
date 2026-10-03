@@ -1,12 +1,14 @@
 // Equilibrium Poisson system: residual F(psi) and Jacobian J(psi) for the scaled potential, one
-// unknown per mesh node, carriers slaved to psi by Boltzmann statistics (legacy
-// Device1D::solve_equilibrium_boltzmann, generalised from 1D to the mesh graph).
+// unknown per mesh node, carriers slaved to psi by Boltzmann or, with models.fermi_dirac,
+// Fermi-Dirac statistics (legacy Device1D::solve_equilibrium_boltzmann and
+// solve_equilibrium_fd, generalised from 1D to the mesh graph).
 //
 // Scaled box-method row of node i not on a contact:
 //     F_i = sum over edges e = (i, j):  c_e (psi_j - psi_i)  -  V_i (n_i - p_i - C_i)
 // with c_e = coupling area / length / L_D^(D-2), V_i = control volume / L_D^D, n = n_ie e^psi,
-// p = n_ie e^-psi (physics::boltzmann_density), C = (N_D - N_A) / Ns and n_ie / Ns from the node's
-// material (with band-gap narrowing when models.bgn is set). In 1D this is the legacy row
+// p = n_ie e^-psi (physics::boltzmann_density; Fermi-Dirac: physics::fermi_dirac_density with
+// eta = psi and -psi), C = (N_D - N_A) / Ns and n_ie / Ns from the node's material (with band-gap
+// narrowing when models.bgn is set). In 1D this is the legacy row
 // et (psi[i+1] - psi[i]) / h - ... - dV (n - p - C), with et = 1 for one material.
 // Contact row (ohmic, Dirichlet): F_i = psi_i - psi0_i, psi0 from ohmic_contact_value at zero bias.
 // A gate node keeps its box row and gains the oxide term of gate.hpp, G_i (psi_G,i - psi_i) + S_i,
@@ -40,7 +42,7 @@ public:
     // - scaling.temperature_K differs from the device's;
     // - a heterojunction: an edge between regions whose material parameters differ (band offsets
     //   and permittivity steps are deferred); the context index is the edge.
-    // Of the models only `bgn` matters here (the effective n_ie of every node).
+    // Of the models only `bgn` (the effective n_ie of every node) and `fermi_dirac` matter here.
     [[nodiscard]] static std::expected<EquilibriumPoisson, base::Error> create(
         const device::Device& device, const Scaling& scaling, const PhysicsModels& models = {});
 
@@ -61,12 +63,14 @@ public:
     // Residual only.
     void residual(std::span<const double> psi, std::span<double> residual) const;
 
-    // The scaled carrier densities slaved to psi, n = n_ie e^psi and p = n_ie e^-psi. Precondition
-    // (NITCAD_EXPECTS): all three spans have unknowns() entries.
+    // The scaled carrier densities slaved to psi (n = n_ie e^psi and p = n_ie e^-psi under
+    // Boltzmann statistics). Precondition (NITCAD_EXPECTS): all three spans have unknowns()
+    // entries.
     void carriers(std::span<const double> psi, std::span<double> n, std::span<double> p) const;
 
-    // The charge-neutral potential of every node, asinh(C / 2 n_ie) (ohmic contact nodes: their
-    // Dirichlet value, which is the same at zero bias); the legacy initial guess.
+    // The charge-neutral potential of every node, asinh(C / 2 n_ie) under Boltzmann statistics,
+    // the root of physics::fermi_dirac_neutral_equilibrium under Fermi-Dirac (ohmic contact nodes:
+    // their Dirichlet value, which is the same at zero bias); the legacy initial guess.
     [[nodiscard]] std::vector<double> charge_neutral_potential() const;
 
     // Per node: the Dirichlet value psi0 on an ohmic contact node; not meaningful elsewhere.
@@ -95,6 +99,8 @@ private:
     std::vector<double> volume_;    // scaled control volume
     std::vector<double> doping_;    // scaled net doping C
     std::vector<double> n_ie_;      // scaled n_ie
+    std::vector<double> log_dos_n_, log_dos_p_;  // ln(Nc / n_ie), ln(Nv / n_ie)
+    bool fermi_dirac_ = false;
     std::vector<double> psi0_;      // Dirichlet value on contact nodes
     std::vector<char> contact_;     // 1 on ohmic contact nodes
     GateNodes gates_;
