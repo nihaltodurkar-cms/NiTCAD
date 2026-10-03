@@ -73,8 +73,9 @@ struct BiasOptions {
 
 // The run record of a sweep: the identity digest of every input the sweep reads (device, options,
 // bias points, initial state) and those options as named settings. Inputs the sweep ignores are
-// left out, so they do not change the identity: with equilibrium_poisson the mobility, SRH, Auger
-// and field-mobility switches and the initial densities; the work function of a polysilicon gate.
+// left out, so they do not change the identity: with equilibrium_poisson the mobility, SRH, Auger,
+// field-mobility and thermionic-emission switches and the initial densities; the work function of
+// a polysilicon gate.
 [[nodiscard]] results::RunRecord make_run_record(const device::Device& device,
                                                  const BiasOptions& options,
                                                  std::span<const std::vector<double>> points,

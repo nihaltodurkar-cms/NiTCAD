@@ -10,8 +10,8 @@
 // N_D + N_A (mobility and lifetime). The legacy took the net doping and, by default, |net| as the
 // total; that is the case where each node carries one dopant type.
 //
-// Several regions with different materials are allowed by the data model; heterojunction physics
-// is deferred, so what an assembler does with them is its own decision.
+// Several regions with different materials are allowed by the data model; the assemblers treat an
+// edge between two materials as a heterointerface (Unit 15, assemble/scaled_device.hpp).
 #pragma once
 
 #include <cstdint>

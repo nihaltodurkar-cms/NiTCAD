@@ -23,6 +23,7 @@ std::expected<EquilibriumPoisson, base::Error> EquilibriumPoisson::create(
     p.n_ie_ = std::move(scaled->n_ie);
     p.log_dos_n_ = std::move(scaled->log_dos_n);
     p.log_dos_p_ = std::move(scaled->log_dos_p);
+    p.band_shift_ = std::move(scaled->band_shift);
     p.fermi_dirac_ = models.fermi_dirac;
     p.psi0_.assign(n, 0.0);
     p.contact_.assign(n, 0);
@@ -33,7 +34,7 @@ std::expected<EquilibriumPoisson, base::Error> EquilibriumPoisson::create(
         p.contact_[i] = 1;
         const physics::NeutralEquilibrium e = detail::neutral_equilibrium(
             p.fermi_dirac_, p.doping_[i], p.n_ie_[i], p.log_dos_n_[i], p.log_dos_p_[i]);
-        p.psi0_[i] = ohmic_contact_value(e, 0.0).psi;
+        p.psi0_[i] = ohmic_contact_value(e, 0.0).psi - p.band_shift_[i];
     }
 
     std::vector<linalg::Triplet> triplets;
@@ -85,10 +86,11 @@ void EquilibriumPoisson::residual_into(std::span<const double> psi, std::span<do
             residual[i] = psi[i] - psi0_[i];
             continue;
         }
+        const double eta = psi[i] + band_shift_[i];
         const physics::DensityResult carriers_n =
-            detail::density(fermi_dirac_, n_ie_[i], log_dos_n_[i], psi[i]);
+            detail::density(fermi_dirac_, n_ie_[i], log_dos_n_[i], eta);
         const physics::DensityResult carriers_p =
-            detail::density(fermi_dirac_, n_ie_[i], log_dos_p_[i], -psi[i]);
+            detail::density(fermi_dirac_, n_ie_[i], log_dos_p_[i], -eta);
         residual[i] = -volume_[i] * (carriers_n.density - carriers_p.density - doping_[i]);
         // d/dpsi of the charge term, onto the diagonal (dn/dpsi = n.d_eta, dp/dpsi = -p.d_eta;
         // Boltzmann: n and -p).
@@ -136,8 +138,9 @@ void EquilibriumPoisson::carriers(std::span<const double> psi, std::span<double>
                                   std::span<double> p) const {
     NITCAD_EXPECTS(psi.size() == unknowns() && n.size() == unknowns() && p.size() == unknowns());
     for (std::size_t i = 0; i < unknowns(); ++i) {
-        n[i] = detail::density(fermi_dirac_, n_ie_[i], log_dos_n_[i], psi[i]).density;
-        p[i] = detail::density(fermi_dirac_, n_ie_[i], log_dos_p_[i], -psi[i]).density;
+        const double eta = psi[i] + band_shift_[i];
+        n[i] = detail::density(fermi_dirac_, n_ie_[i], log_dos_n_[i], eta).density;
+        p[i] = detail::density(fermi_dirac_, n_ie_[i], log_dos_p_[i], -eta).density;
     }
 }
 
@@ -147,7 +150,8 @@ std::vector<double> EquilibriumPoisson::charge_neutral_potential() const {
         psi[i] = contact_[i] != 0
                      ? psi0_[i]
                      : detail::neutral_equilibrium(fermi_dirac_, doping_[i], n_ie_[i],
-                                                   log_dos_n_[i], log_dos_p_[i]).eta;
+                                                   log_dos_n_[i], log_dos_p_[i]).eta -
+                           band_shift_[i];
     }
     return psi;
 }

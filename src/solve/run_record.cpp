@@ -67,8 +67,8 @@ void material(Digest& d, const physics::SemiconductorParameters& p) {
 }
 
 // The options the sweep reads: the quasi-static sweep has no continuity equations, so the
-// mobility, SRH, Auger and field-mobility switches do not apply to it and are left out (of the
-// digest too).
+// mobility, SRH, Auger, field-mobility and thermionic-emission switches do not apply to it and are
+// left out (of the digest too).
 std::vector<std::pair<std::string, double>> settings(const BiasOptions& o) {
     const bool transport = o.equations == Equations::drift_diffusion;
     std::vector<std::pair<std::string, double>> s{
@@ -90,6 +90,7 @@ std::vector<std::pair<std::string, double>> settings(const BiasOptions& o) {
         s.emplace_back("models.srh", o.models.srh ? 1.0 : 0.0);
         s.emplace_back("models.auger", o.models.auger ? 1.0 : 0.0);
         s.emplace_back("models.field_mobility", o.models.field_mobility ? 1.0 : 0.0);
+        s.emplace_back("models.thermionic_emission", o.models.thermionic_emission ? 1.0 : 0.0);
     }
     if (o.Ns_override) s.emplace_back("scaling.Ns_override", *o.Ns_override);
     return s;

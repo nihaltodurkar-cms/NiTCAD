@@ -22,6 +22,11 @@ struct PhysicsModels {
     // term of the Scharfetter-Gummel driving force, and the equilibrium product of SRH and Auger.
     // Off by default (Boltzmann), as the legacy fd flag.
     bool fermi_dirac = false;
+    // Thermionic emission across heterointerfaces (assemble/thermionic_flux.hpp; drift-diffusion
+    // only): on every edge between two materials the Scharfetter-Gummel fluxes are replaced by the
+    // emission-limited ones. No effect on a device of one material. Off by default, as the legacy
+    // thermionic flag.
+    bool thermionic_emission = false;
 };
 
 }  // namespace NiTCAD::assemble

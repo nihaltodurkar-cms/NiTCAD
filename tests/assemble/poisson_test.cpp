@@ -288,7 +288,7 @@ TEST_CASE("poisson: the Jacobian pattern is fixed, so the solver analyzes once")
     REQUIRE(solver.factorizations() == 3);
 }
 
-TEST_CASE("poisson: heterojunctions and a mismatched scaling are rejected") {
+TEST_CASE("poisson: a heterojunction is accepted (Unit 15), a mismatched scaling is rejected") {
     auto m = *mesh::make_tensor_grid(graded_axis(10));
     const std::size_t n = m.node_count();
     physics::SemiconductorParameters other = physics::silicon_parameters;
@@ -306,11 +306,7 @@ TEST_CASE("poisson: heterojunctions and a mismatched scaling are rejected") {
          .acceptors = std::vector<double>(n, 0.0),
          .contacts = {{"anode", device::ContactKind::ohmic, std::move(anode)},
                       {"cathode", device::ContactKind::ohmic, std::move(cathode)}}});
-    const auto e = EquilibriumPoisson::create(hetero, *assemble::make_scaling(hetero));
-    REQUIRE_FALSE(e.has_value());
-    REQUIRE(e.error().code == ErrorCode::invalid_input);
-    REQUIRE(e.error().message.find("heterojunction") != std::string::npos);
-    REQUIRE(e.error().context->index == n / 2 - 1);  // the edge joining the two regions
+    REQUIRE(EquilibriumPoisson::create(hetero, *assemble::make_scaling(hetero)).has_value());
 
     const auto d = diode(*mesh::make_tensor_grid(graded_axis(10)));
     Scaling s = *assemble::make_scaling(d);

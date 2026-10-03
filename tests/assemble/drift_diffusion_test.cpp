@@ -206,6 +206,16 @@ TEST_CASE("drift-diffusion: update hooks measure the full correction and keep de
     // A non-positive density cannot converge.
     x[4] = 0.0;
     REQUIRE(system.update_size(x, dx) == std::numeric_limits<double>::infinity());
+    // Unit 15: a density below 1e-20 of the largest is measured against that floor (the linear
+    // solve does not resolve it relative to itself); above it, against itself.
+    std::vector<double> y(system.unknowns(), 1.0);
+    std::vector<double> dy(system.unknowns(), 0.0);
+    y[7] = 1e-30;
+    dy[7] = 1e-29;
+    REQUIRE(system.update_size(y, dy) == 1e-29 / 1e-20);
+    y[7] = 1e-15;
+    dy[7] = 1e-16;
+    REQUIRE(system.update_size(y, dy) == 1e-16 / 1e-15);
 }
 
 TEST_CASE("drift-diffusion: biases are validated and stamped on the contacts") {

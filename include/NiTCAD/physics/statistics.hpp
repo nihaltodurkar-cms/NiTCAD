@@ -15,7 +15,8 @@
 // eta_p = (phi_p - psi) / V_T for holes, with psi the electrostatic potential and phi_n, phi_p the
 // quasi-Fermi potentials, all referenced to the intrinsic level so that n = p = n_ie at
 // eta = 0. Legacy: n = nie exp(psi + s), p = nie exp(-psi - s) in scaled units
-// (device1d.cpp); its band-offset gauge shift s belongs to heterojunctions and is not carried.
+// (device1d.cpp); its band-offset shift s is the assembler's (Unit 15: eta = psi + s at
+// equilibrium, assemble/scaled_device.hpp), so these functions see only eta.
 //
 // Fermi-Dirac keeps that gauge. With N the band's effective density of states (Nc for electrons,
 // Nv for holes) and g = ln(N / n_ie) (the band edge sits g V_T from the reference level),

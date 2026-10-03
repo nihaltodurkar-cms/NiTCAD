@@ -9,10 +9,12 @@
 #include "NiTCAD/assemble/contact_bias.hpp"
 #include "NiTCAD/assemble/ohmic.hpp"
 #include "NiTCAD/assemble/sg_flux.hpp"
+#include "NiTCAD/assemble/thermionic_flux.hpp"
 #include "NiTCAD/base/contract.hpp"
 #include "NiTCAD/physics/field_mobility.hpp"
 #include "NiTCAD/physics/mobility.hpp"
 #include "NiTCAD/physics/recombination.hpp"
+#include "NiTCAD/physics/thermionic_emission.hpp"
 #include "scaled_device.hpp"
 
 namespace NiTCAD::assemble {
@@ -34,6 +36,16 @@ std::expected<DriftDiffusion, base::Error> DriftDiffusion::create(
     if (!scaled) return std::unexpected(std::move(scaled.error()));
     const std::size_t n = scaled->volume.size();
     const double T = scaling.temperature_K;
+    if (models.field_mobility) {
+        for (std::size_t k = 0; k < scaled->edges.size(); ++k) {
+            if (!scaled->edges[k].interface) continue;
+            return std::unexpected(base::Error{
+                base::ErrorCode::invalid_input,
+                "field mobility on a heterointerface edge is not defined (the two materials' "
+                "Canali parameters differ)",
+                base::ErrorContext{.index = k, .value = std::nullopt}});
+        }
+    }
 
     DriftDiffusion s;
     s.volume_ = std::move(scaled->volume);
@@ -41,6 +53,7 @@ std::expected<DriftDiffusion, base::Error> DriftDiffusion::create(
     s.n_ie_ = std::move(scaled->n_ie);
     s.log_dos_n_ = std::move(scaled->log_dos_n);
     s.log_dos_p_ = std::move(scaled->log_dos_p);
+    s.band_shift_ = std::move(scaled->band_shift);
     s.fermi_dirac_ = models.fermi_dirac;
     s.contact_ = std::move(scaled->contact);
     s.gates_ = std::move(scaled->gates);
@@ -115,7 +128,32 @@ std::expected<DriftDiffusion, base::Error> DriftDiffusion::create(
         const physics::Semiconductor& m = device.material(static_cast<mesh::NodeId>(e.i));
         t.sat_n = physics::saturation(m, physics::Carrier::electron);
         t.sat_p = physics::saturation(m, physics::Carrier::hole);
-        t.dln = std::log(s.n_ie_[e.j] / s.n_ie_[e.i]);
+        const double dln = std::log(s.n_ie_[e.j] / s.n_ie_[e.i]);
+        const double ds = s.band_shift_[e.j] - s.band_shift_[e.i];
+        t.shift_n = ds + dln;
+        t.shift_p = ds - dln;
+        t.thermionic = models.thermionic_emission && e.interface;
+        if (t.thermionic) {
+            // K = hmean(v_a, v_b) times the scaled interface area: coupling area / L_D^(D-1),
+            // which is geometry length / L_D; in units of D0 / L_D (the scaled flux of v n).
+            const physics::Semiconductor& ma = device.material(static_cast<mesh::NodeId>(e.i));
+            const physics::Semiconductor& mb = device.material(static_cast<mesh::NodeId>(e.j));
+            const double nca = physics::conduction_band_dos(ma, T);
+            const double ncb = physics::conduction_band_dos(mb, T);
+            const double nva = physics::valence_band_dos(ma, T);
+            const double nvb = physics::valence_band_dos(mb, T);
+            const double area = e.geometry * e.length_cm / scaling.D0;
+            t.te_kn = harmonic_mean(physics::emission_velocity_cm_s(nca, T),
+                                    physics::emission_velocity_cm_s(ncb, T)) *
+                      area;
+            t.te_kp = harmonic_mean(physics::emission_velocity_cm_s(nva, T),
+                                    physics::emission_velocity_cm_s(nvb, T)) *
+                      area;
+            t.te_log_nc = std::log(ncb / nca);
+            t.te_ratio_nc = nca / ncb;
+            t.te_log_nv = std::log(nvb / nva);
+            t.te_ratio_nv = nva / nvb;
+        }
         for (std::size_t k = 0; k < 5; ++k) {
             t.ab[k] = detail::position(s.pattern_, 3 * e.i + edge_rows[k], 3 * e.j + edge_cols[k]);
             t.ba[k] = detail::position(s.pattern_, 3 * e.j + edge_rows[k], 3 * e.i + edge_cols[k]);
@@ -141,7 +179,7 @@ std::expected<void, base::Error> DriftDiffusion::set_bias(std::span<const double
             detail::neutral_equilibrium(fermi_dirac_, doping_[i], n_ie_[i], log_dos_n_[i],
                                         log_dos_p_[i]),
             bias);
-        psi0_[i] = v.psi;
+        psi0_[i] = v.psi - band_shift_[i];
         n0_[i] = v.n;
         p0_[i] = v.p;
     }
@@ -152,9 +190,10 @@ std::vector<double> DriftDiffusion::state_from_potential(std::span<const double>
     NITCAD_EXPECTS(psi.size() == node_count());
     std::vector<double> x(unknowns());
     for (std::size_t i = 0; i < node_count(); ++i) {
+        const double eta = psi[i] + band_shift_[i];
         x[3 * i] = psi[i];
-        x[3 * i + 1] = detail::density(fermi_dirac_, n_ie_[i], log_dos_n_[i], psi[i]).density;
-        x[3 * i + 2] = detail::density(fermi_dirac_, n_ie_[i], log_dos_p_[i], -psi[i]).density;
+        x[3 * i + 1] = detail::density(fermi_dirac_, n_ie_[i], log_dos_n_[i], eta).density;
+        x[3 * i + 2] = detail::density(fermi_dirac_, n_ie_[i], log_dos_p_[i], -eta).density;
     }
     stamp_contacts(x);
     return x;
@@ -187,18 +226,23 @@ std::vector<DriftDiffusion::NodeDegeneracy> DriftDiffusion::degeneracies(
 std::pair<EdgeFlux, EdgeFlux> DriftDiffusion::edge_fluxes(
     const EdgeTerm& e, std::span<const double> x, std::span<const NodeDegeneracy> g) const {
     // The flux functions take the driving term as psi2 - psi1; its partials are those with
-    // respect to psi_a and psi_b, since ln(n_ie) does not depend on the state.
+    // respect to psi_a and psi_b, since ln(n_ie) and s do not depend on the state.
     const double dpsi = x[3 * e.b] - x[3 * e.a];
     const double na = x[3 * e.a + 1], nb = x[3 * e.b + 1];
     const double pa = x[3 * e.a + 2], pb = x[3 * e.b + 2];
-    double delta_n = dpsi + e.dln, delta_p = dpsi - e.dln;
+    double delta_n = dpsi + e.shift_n, delta_p = dpsi + e.shift_p;
     if (!g.empty()) {
         delta_n += g[e.b].n.log_gamma - g[e.a].n.log_gamma;
         delta_p -= g[e.b].p.log_gamma - g[e.a].p.log_gamma;
     }
-    // Unit edge factors when the Canali factor follows.
-    EdgeFlux fn = sg_electron_flux(field_mobility_ ? 1.0 : e.an, 0.0, delta_n, na, nb);
-    EdgeFlux fp = sg_hole_flux(field_mobility_ ? 1.0 : e.ap, 0.0, delta_p, pa, pb);
+    // Unit edge factors when the Canali factor follows (never on an interface edge).
+    EdgeFlux fn = e.thermionic ? thermionic_electron_flux(e.te_kn, delta_n, e.te_log_nc,
+                                                          e.te_ratio_nc, na, nb)
+                               : sg_electron_flux(field_mobility_ ? 1.0 : e.an, 0.0, delta_n,
+                                                  na, nb);
+    EdgeFlux fp = e.thermionic ? thermionic_hole_flux(e.te_kp, delta_p, e.te_log_nv,
+                                                      e.te_ratio_nv, pa, pb)
+                               : sg_hole_flux(field_mobility_ ? 1.0 : e.ap, 0.0, delta_p, pa, pb);
     if (!g.empty()) {
         // d flux / d delta is d_psi2; ln gamma_n,a enters delta_n with -, ln gamma_p,a delta_p
         // with +.
@@ -349,12 +393,20 @@ void DriftDiffusion::residual(std::span<const double> x, std::span<double> resid
 double DriftDiffusion::update_size(std::span<const double> x, std::span<const double> dx) const {
     NITCAD_EXPECTS(x.size() == unknowns() && dx.size() == unknowns());
     constexpr double infinity = std::numeric_limits<double>::infinity();
+    // A density correction is resolved by the linear solve only to about eps max|dx|, and near
+    // convergence max|dx| is itself about eps times the largest density: densities below about
+    // 1e-23 of the largest cannot reach a relative 1e-8. They are measured against this floor.
+    double largest = 0.0;
+    for (std::size_t i = 0; i < node_count(); ++i) {
+        largest = std::max({largest, x[3 * i + 1], x[3 * i + 2]});
+    }
+    const double floor = 1e-20 * largest;
     double size = 0.0;
     for (std::size_t i = 0; i < node_count(); ++i) {
         const double n = x[3 * i + 1], p = x[3 * i + 2];
         size = std::max({size, std::abs(dx[3 * i]),
-                         n > 0.0 ? std::abs(dx[3 * i + 1]) / n : infinity,
-                         p > 0.0 ? std::abs(dx[3 * i + 2]) / p : infinity});
+                         n > 0.0 ? std::abs(dx[3 * i + 1]) / std::max(n, floor) : infinity,
+                         p > 0.0 ? std::abs(dx[3 * i + 2]) / std::max(p, floor) : infinity});
     }
     return size;
 }

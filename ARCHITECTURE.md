@@ -100,7 +100,7 @@ solver implementation.
 | Concept | Long-term role | Current status |
 |---|---|---|
 | Region | geometry, material, doping and applicable equations | Implemented in `device` |
-| Interface | shared boundary between regions with interface laws | Target; heterojunction edges are rejected, the Unit 12 gate is a lumped oxide on a boundary patch (no meshed Si/SiO₂ interface), full interface physics is deferred |
+| Interface | shared boundary between regions with interface laws | Semiconductor heterointerfaces since Unit 15 (band offsets through the band shift, permittivity steps, thermionic emission); the Unit 12 gate is a lumped oxide on a boundary patch; meshed insulators, interface charge and traps are deferred (15b) |
 | Contact / boundary | named boundary set plus physical boundary condition | Ohmic contacts and gate contacts on a lumped oxide implemented (Unit 12); Schottky contacts deferred |
 | Field | named physical quantity with location, units and applicability | Present as specialized solution/result data; generic field abstraction is target |
 | Equation | residual/Jacobian contribution associated with fields and domains | Present through specialized assembler systems; generic equation objects are target |
@@ -349,6 +349,24 @@ thermionic emission through per-edge arrays in the `Inputs` struct, `core/includ
     and the Unit 12 gate offset is unchanged. The legacy `band_diagram` is not carried either, as there is no
     band-diagram output.
 
+**As built (Unit 15, materials and interface-local models; owner request, roadmap item 15):**
+- `semiconductor.hpp` adds the other legacy material sets: `germanium_parameters`, `gallium_arsenide_parameters`,
+  `indium_gallium_arsenide_parameters` (In0.53Ga0.47As), `silicon_carbide_4h_parameters`, and
+  `algaas_parameters(x)` for Al_x Ga_1−x As, valid for 0 ≤ x ≤ 0.45 (`invalid_input` outside, where the gap is
+  indirect). Every field a legacy set left at its dataclass default keeps the silicon value, as in the legacy:
+  lifetimes, Slotboom narrowing and, for AlGaAs, μ_min, Auger and saturation. All six sets validate; E_g, n_i and
+  the depth below match 40-digit values at 300 K to 1e-12–1e-14.
+- `intrinsic_level_depth_eV(m, T)` = χ + (E_c − E_i), with E_c − E_i = E_g/2 + (kT/2) ln(Nc/Nv). Its step between two
+  materials is the step of the potential at which each holds n = n_i, so it defines the band shift (6.3, Unit 15).
+- `thermionic_emission.hpp`: `emission_velocity_cm_s(N, T)` = (kT/h)(2/N)^(1/3). This is the legacy
+  sqrt(kT/(2π m)) with m recovered from N, simplified. Silicon's Nc gives the legacy 2.575e6 cm/s, matching 40
+  digits to 1e-14. The legacy records it as about a factor 1.92 below the tabulated Richardson constant for silicon,
+  because the density-of-states mass and the Richardson mass differ.
+- Findings in the legacy sets, ported unchanged:
+  - The 4H-SiC comment says E_g(300 K) ≈ 3.23 eV; its own Varshni numbers give 3.201 eV.
+  - The AlGaAs comment says the conduction band takes about 85% of the gap step; its χ and E_g0 slopes give
+    0.85/1.247 = 68%.
+
 ## 6. Cross-cutting design
 
 ### 6.1 de Mari scaling
@@ -430,8 +448,8 @@ Scaled quantities (same files):
     off-diagonal entries as explicit zeros. `evaluate` only rewrites values, so a `LinearSolver` analyzes once over a
     Newton run (tested: three iterations, `analyses() == 1`).
   - `charge_neutral_potential()` is the legacy initial guess.
-  - Heterojunctions (an edge between regions whose material parameters differ) are rejected as `invalid_input`: band
-    offsets and permittivity steps are deferred. Disconnected regions may differ.
+  - Heterojunctions (an edge between regions whose material parameters differ) were rejected as `invalid_input`
+    until Unit 15 (6.3), which added band offsets and permittivity steps. Disconnected regions could already differ.
 - Not in Unit 7: the Newton loop, its damping and `min_pivot_ratio` (Unit 8); continuity rows and bias (Unit 9). On an
   accepted device every connected part has a Dirichlet contact row (6.4, "As built"), so Unit 8 may set
   `min_pivot_ratio = 0` for this system.
@@ -607,12 +625,129 @@ Whether the new solver reproduces these exact defaults is to be confirmed unit b
   - The table's curvature dropped.
   - Sommerfeld cut to two terms.
 
+**As built (Unit 15, heterojunctions in the assemblers; 6.3 for the model):**
+- `make_scaled_device` no longer rejects heterojunctions. It adds the band shift per node, the harmonic-mean edge
+  permittivity, an interface flag per edge, and the shift in each gate node's offset.
+- `EquilibriumPoisson` and `DriftDiffusion` evaluate the statistics at ψ + s, and set contacts and the neutral guess
+  to η₀ − s. The SG driving terms are δ_n = Δψ + Δs + Δln n_ie (+ Δln γ_n) and δ_p = Δψ + Δs − Δln n_ie
+  (− Δln γ_p).
+- `PhysicsModels::thermionic_emission` is off by default and applies to drift-diffusion only. On an interface edge
+  the fluxes are those of `thermionic_flux.hpp` (legacy M33-S2):
+  - Jn = K(n₂g₂ − n₁g₁), with g₁ = min(1, e^u), g₂ = (Nc₁/Nc₂) min(1, e^−u), u = δ_n − ln(Nc₂/Nc₁); holes mirror
+    this.
+  - K is the harmonic mean of the ends' emission velocities times the scaled interface area.
+  - Detailed balance holds exactly for either step sign, and with Fermi–Dirac too, because δ carries Δln γ.
+  - The run record lists the switch for drift-diffusion.
+- `DriftDiffusion::create` refuses field mobility on a device with an interface edge.
+- **Newton measure floor (changes the Unit 9 criterion):**
+  - OLD (Unit 9): max(|dψ|, |dn|/n, |dp|/p).
+  - NEW: each density is measured against max(n, 10⁻²⁰ × the largest density of the state).
+  - REASON, measured:
+    - A GaAs/AlGaAs junction at 300 K has minority electrons of 2e-11 cm⁻³ in the AlGaAs, 2e-30 of the largest
+      density. Newton's residual converged (1e-13) while |dn|/n wandered between 0.01 and 0.1 for 100 iterations,
+      with every model combination, plain Boltzmann included.
+    - The linear solve resolves a density correction only to about ε max|dx|, and near convergence max|dx| ≈
+      ε n_max. So densities below about 5e-24 n_max cannot reach 1e-8 relative to themselves.
+    - With the floor, all five combinations converge through 0.6 V forward in 1–21 iterations per point.
+    - Silicon at 300 K stays near 1e-14 of its largest density, above the floor, so its iterates are unchanged
+      (6.3, bit-identity).
+- Measured gates:
+  - FD-Jacobian on a Si / Si(χ + 0.3, ε_r + 1.3, E_g0 + 0.1) p-n junction, every column, in 1D / 2D / 3D: 1.2e-9 /
+    3.3e-9 / 1.8e-9, also with thermionic emission, and 1.9e-9 / 2.5e-9 / 4.9e-9 with Fermi–Dirac as well.
+  - The same junction under Poisson alone: 1.9e-9.
+  - The thermionic part alone (J(TE) − J(SG) against FD of the residual difference): 2.0e-9.
+  - The thermionic edge current equals hmean(v) L_D/D0 × (g₂ − g₁) to 1e-13.
+  - The 1D Poisson row across a χ and ε step, written out, to 1e-12.
+  - Contacts and the neutral guess move by exactly the step, while the carriers at the guess equal the
+    homojunction's.
+- **Thermionic emission, measured:**
+  - On the legacy isotype fixture (n-Si / n-Si(χ), 1e17, 0.1 V), J(TE)/J(DD) is 1, 0.192 and 0.034 for steps of 0,
+    0.15 and 0.30 eV. The legacy S2 gates hold: emission limits the current, and the limit deepens with the step.
+  - At no step the two materials are one, so there is no interface and the ratio is exactly 1.
+- Mutation checks: each of the ten below fails at least one test.
+  - The band-shift sign flipped in Poisson.
+  - Drift-diffusion contacts without −s.
+  - The SG driving term without Δs.
+  - An arithmetic instead of harmonic edge permittivity.
+  - The thermionic g₂ without its Nc ratio.
+  - The thermionic slope of g₁ dropped.
+  - The gate offset without s.
+  - No density floor in the Newton measure.
+  - The emission velocity with (1/N)^(1/3).
+  - The field-mobility refusal removed.
+
 ### 6.3 Device description
 
 A `device` is plain data: regions (geometry in the mesh's coordinates), doping per node or region,
 material per region, and contacts (6.4). It contains no solver state and can be built without a solver
-present. Per-region materials are in scope from the start of the data model, although heterojunction
-physics is deferred.
+present. Per-region materials are in scope from the start of the data model; heterojunction physics came
+with Unit 15 (below).
+
+**As built (Unit 15, heterojunctions; owner request, scope chosen by the owner: semiconductor heterojunctions with
+thermionic emission, meshed insulators in a later unit):**
+- An edge whose two ends are in materials with different parameters is a heterointerface. The interface lies at the
+  edge's midpoint, so each node's control volume is of its own material (the legacy's node-material model). The
+  edge's permittivity is the harmonic mean of its ends', which is the series permittivity of the two half-edges, so
+  D is continuous (legacy `_eps_tilde_edge`).
+- **Band shift.** Each node carries s = (depth − depth₀)/V_T, with depth the `intrinsic_level_depth_eV` of the
+  node's material and depth₀ that of node 0's material.
+  - The carriers see ψ + s: n = n_ie e^(ψ+s) and p = n_ie e^−(ψ+s) under Boltzmann statistics, and η = ±(ψ + s)
+    under Fermi–Dirac.
+  - Contacts and the neutral guess are η₀ − s.
+  - The SG driving terms gain s_b − s_a.
+  - A gate's electrode potential becomes ψ_G − s at its nodes.
+  - ψ is then the electrostatic (vacuum-level) potential, continuous across the interface, and s carries the band
+    offsets.
+  - On a device of one material s ≡ 0, and every expression reduces to the previous one operation for operation.
+- The legacy M33 gates were ported, plus an analytic one. All measured:
+  - **Exact interface:** the first integral of Poisson's equation on each side of an abrupt Boltzmann
+    heterojunction, D² = 2qV_T ε (n_b(e^u − 1 − u) + p_b(e^−u − 1 + u)), with D continuous and the bulk potentials
+    from a common Fermi level. For n-GaAs/N-Al0.3Ga0.7As, p-GaAs/N-AlGaAs (V_bi 1.524 V), N-AlGaAs/n-GaAs and a
+    silicon χ+ε step:
+    - V_bi matches to 1e-12.
+    - The interface potential is within 1.4e-5 V.
+    - D is within 7.6e-4.
+  - **Legacy G1, detailed balance per carrier:** for χ steps of −0.3 to +0.3 eV and gap steps of ±0.2 eV, each with
+    thermionic emission off and on, every edge at the equilibrium state is within 64 ε of its one-sided terms, and
+    the legacy's 1e-7 A/cm² floor holds on the published zero-bias currents.
+  - **Legacy G2:** J(0.4 V) of the p-Si/n-Si(χ) diode falls monotonically from 2.74909e-4 to 2.64981e-4 A/cm² for χ
+    from 3.85 to 4.25 eV (legacy 2.749e-4 and 2.650e-4). The isotype barrier gives 6419.3, 4344.5 and 3114.4 A/cm²
+    at 0 and ∓0.2 eV (legacy 6.42e3, 4.34e3, 3.11e3). Without band-gap narrowing the band shift is algebraically
+    the legacy affinity gauge, so these are reproductions, not new numbers.
+  - **Gate on a heterostructure:** the gate sits on silicon while node 0 is silicon with χ + 0.3 eV. At the
+    silicon's flat-band voltage the gate charge is 3e-23 C/cm², where omitting the shift gives C_ox × 0.3 V =
+    2.1e-7.
+  - **Fermi–Dirac and band-gap narrowing:** n+ GaAs (1e19) / p-Al0.3Ga0.7As with thermionic emission. The electron
+    Fermi level is flat to 8.9e-16 V at equilibrium, and the forward sweep to 0.6 V converges.
+  - **Dimension:** a y-uniform 2D GaAs/AlGaAs diode reproduces 1D to 1e-9 at 1.2 V with thermionic emission.
+  - **Bit-identity:** the Unit 14 hash probe (four silicon configurations) gives `main`'s hashes with the Newton
+    floor (6.2, Unit 15) disabled. With it on, two hashes differ only in the recorded update values at −2 V. Every
+    field, current and iteration count is identical to 17 digits.
+- OLD / NEW / REASON:
+  - **The band gauge.**
+    - OLD: the default gauge was "nie", in which χ never reached the equations (a 0.5 eV step moved the solution by
+      exactly 0). A "band_offset='affinity'" option gave the physical band edges with
+      s = ln(Nc/n_ie,eff) + χ/V_T.
+    - NEW: one gauge, always physical, with s taken from the un-narrowed depth.
+    - REASON: the χ-blind gauge was kept only for legacy bit-identity. Built from the narrowed n_ie, the legacy
+      affinity shift put all of the band-gap narrowing into the valence band and changed homojunction physics with
+      the gauge. The un-narrowed depth keeps the narrowing split as in Unit 11, and it equals the legacy affinity
+      gauge when narrowing is off.
+  - **Compositions.**
+    - OLD: the affinity gauge refused Fermi–Dirac (and incomplete ionization).
+    - NEW: they compose.
+    - REASON: the shift only moves η, so every statistics function applies unchanged.
+  - **What counts as an interface.**
+    - OLD: thermionic emission keyed interfaces on the material object, needed the affinity gauge, and refused a
+      homojunction.
+    - NEW: an interface is a parameter difference, and the model does nothing on a device of one material.
+    - REASON: two equal parameter sets are one material; a model switch should not fail by device.
+  - Kept from the legacy: field mobility on a heterointerface edge is refused (`invalid_input`, the edge as index),
+    since the two materials' Canali parameters differ.
+- Not carried, or deferred:
+  - Meshed insulator regions with a Si/SiO₂ interface, interface charge and traps, and interface recombination:
+    track 15b, which the owner deferred.
+  - The legacy's velocity-scaling knob, which its test used for the K → ∞ limit (a test hack, not an API).
 
 ### 6.4 Contact description
 
@@ -1042,25 +1177,26 @@ src/mesh/                   graph validation, tensor-grid producer           (Un
 tests/mesh/                 graph validation and geometry gates              (Unit 4, exists)
 include/NiTCAD/physics/     semiconductor, mobility, recombination, statistics (Unit 5); bandgap_narrowing (Unit 11);
                             electron affinity (Unit 12); field_mobility (Unit 13); fermi_dirac, Fermi-Dirac
-                            statistics (Unit 14)
+                            statistics (Unit 14); material sets, thermionic_emission (Unit 15)
 src/physics/                parameter validation, band quantities, models; increasing_root (private) (Units 5, 11,
-                            13, 14)
+                            13, 14, 15)
 tests/physics/              published values, limits, FD derivative gates; heavy doping; Canali; Fermi integral and
-                            Fermi-Dirac statistics (Units 5, 11, 13, 14)
+                            Fermi-Dirac statistics; materials and emission velocity (Units 5, 11, 13, 14, 15)
 include/NiTCAD/device/      device.hpp, contact.hpp (Unit 6); gate contacts (Unit 12)
 src/device/                 description validation, topology check           (Unit 6, exists)
 tests/device/               construction, validation, floating regions       (Unit 6, exists)
 include/NiTCAD/assemble/    scaling, bernoulli, sg_flux, ohmic, equilibrium_poisson (Unit 7); drift_diffusion (Unit 9);
-                            models (Unit 11); gate, contact_bias (Unit 12)
+                            models (Unit 11); gate, contact_bias (Unit 12); thermionic_flux (Unit 15)
 src/assemble/               scaling, scaled device (private), equilibrium Poisson, drift-diffusion, gate, contact bias
                             (Units 7, 9, 12)
-tests/assemble/             Bernoulli/SG references, FD-Jacobian gate, reduction (Unit 7); gate terms (Unit 12)
+tests/assemble/             Bernoulli/SG references, FD-Jacobian gate, reduction (Unit 7); gate terms (Unit 12);
+                            heterojunctions (Unit 15)
 include/NiTCAD/solve/       newton.hpp, equilibrium.hpp (Unit 8); bias.hpp (Unit 9, sweeps Unit 10); control.hpp (Unit 10)
 src/solve/                  equilibrium and bias solves, sweeps, run record (Units 8-10); fields helper (private,
                             Unit 12)
 tests/solve/                Newton contract, equilibrium and bias diode gates, legacy graded_mesh port, sweeps,
                             cancellation and progress (Units 8-10); MOS-C (legacy moscap port) and MOSFET (Unit 12);
-                            field mobility (Unit 13); Fermi-Dirac (Unit 14)
+                            field mobility (Unit 13); Fermi-Dirac (Unit 14); heterojunctions (Unit 15)
 include/NiTCAD/results/     convergence.hpp, solution.hpp, run.hpp (header-only plain data) (Unit 10, exists)
 .github/workflows/ci.yml    CI: build and test Debug and Release per branch  (CI unit, exists)
 include/NiTCAD/<layer>/...  public headers per layer                         (created per unit)
@@ -1176,13 +1312,13 @@ testable on arrival. Units 4–9 are dimension-generic from the start (D4) and u
 
 **Target capabilities (Units 13–27).** Design direction, not permission to build: each needs an owner-named
 unit, and the order may change (11.1). Meshed oxide regions and a Si/SiO₂ interface, beyond Unit 12's lumped
-oxide, belong to the heterojunction and interface track (15).
+oxide, belong to the heterojunction and interface track (15); the owner split them into a later unit (15b).
 
 | # | Unit / capability | Layer(s) | Status / purpose |
 |---|---|---|---|
 | 13 | Field-dependent mobility / velocity saturation | physics, assemble | **done, on `main`** (`f8bda70`): Canali per edge with exact Jacobian (6.2, Unit 13) |
-| 14 | Fermi–Dirac statistics and high-density carrier models | physics, assemble | **done on branch `physics/fermi-dirac`**: parabolic-band Fermi–Dirac statistics, the legacy ν-factor scheme with an exact Jacobian (5 and 6.2, Unit 14); incomplete ionization deferred (14.3) |
-| 15 | Heterojunctions, band offsets and interface transport | device, assemble, physics | target |
+| 14 | Fermi–Dirac statistics and high-density carrier models | physics, assemble | **done, on `main`** (`8610d9a`): parabolic-band Fermi–Dirac statistics, the legacy ν-factor scheme with an exact Jacobian (5 and 6.2, Unit 14); incomplete ionization deferred (14.3) |
+| 15 | Heterojunctions, band offsets and interface transport | device, assemble, physics | **done on branch `device/heterojunctions`**: band offsets through a per-node band shift, permittivity steps, thermionic emission, the legacy material sets (6.3 and 6.2, Unit 15); meshed insulators, interface charge and traps are 15b |
 | 16 | Unstructured mesh | mesh, assemble | target |
 | 17 | Adaptive mesh refinement and state transfer | mesh, solve, results | target |
 | 18 | Scalable linear-solver backends: PARDISO and/or iterative/AMG paths | linalg | target; must preserve backend-neutral interface |
@@ -1197,8 +1333,8 @@ oxide, belong to the heterojunction and interface track (15).
 | 27 | Optimization / sensitivity / inverse-design workflows | analysis, solve | long-term target |
 
 Units 1–9 are the smallest end-to-end vertical slice: a validated drift-diffusion diode. Everything past
-Unit 10 is deferred until sequenced. Units 11, 12, 13 and 14 were requested by the owner after Unit 10; nothing past
-them is started.
+Unit 10 is deferred until sequenced. Units 11–15 were requested by the owner after Unit 10; nothing past them is
+started.
 
 ### 11.1 Capability tracks may interleave
 
@@ -1370,6 +1506,7 @@ architecture; historical branch names remain only where they are useful to expla
 | R2 | External input/output file formats | Concrete requirements exist. Internal input/result types stay independent of any format. |
 | R3 | Unstructured-mesh implementation | The owner requests it. The mesh design must already allow it without a rewrite (6.11). |
 | — | Statistics beyond parabolic-band Fermi–Dirac (Unit 14); incomplete ionization | Requested (R4). |
+| — | Meshed insulator regions (Si/SiO₂ interface), interface charge, traps and recombination | Requested (15b, split from Unit 15 by the owner). |
 | — | PARDISO and iterative solver backends | Requested; the interface already accommodates them (6.10). |
 
 ### 14.4 Verification results (run 2026-10-02; probes were built outside the repository)
@@ -1397,6 +1534,7 @@ architecture; historical branch names remain only where they are useful to expla
 | V19a | Unit 12 after the PR #16 review (all ten findings applied): `nitcad_assemble_test` 31 test cases, `nitcad_solve_test` 55 (+2 `[.mosfet]`), Debug and Release with no warnings, all pass. Φ is now referenced to the intrinsic level: the offset matches φ_m − χ − Eg/2 + (kT/2) ln(Nv/Nc) to 1e-15 at 300 and 400 K, with a shift of 1.0416 mV for silicon at 300 K. The legacy reproduction holds at V_G − 1.0416 mV: φ_s to 6.7e-16 V, ψ to 4.2e-16 V, C to 5.1e-15 C_ox. P1 gives 6.0e-12 at the shifted biases; the flatband and 2φ_F crossings move by +1.04 mV (measured 0.05 and 1.34 mV from the landmarks; gate 50 mV), C_min +10.2%; the MOSFET V_th is 0.152 V and the swing 68.8 mV/decade. The drift-diffusion gate diagonal is accumulated (`-=`). Both assemblers use `GateNodes` and `check_contact_bias`; the edges and the gate share `permittivity_ratio`; `solve_equilibrium` and the quasi-static sweep share one fields helper. New tests: the contact-bias rule; the sweep error names point, contact and bias; a quasi-static warm start from a potential alone (drift-diffusion still rejects it); the run identity ignores the transport switches and initial densities in the quasi-static sweep and a polysilicon gate's work-function field, but not BGN or a metal work function; `solve_equilibrium` reports the zero-bias gate charge, equal to a one-point quasi-static sweep to 1e-12. Mutation checks, each caught: the intrinsic-level term dropped, the gate diagonal dropped, ohmic bias accepted at equilibrium, densities required for a quasi-static start, the SRH switch digested in the quasi-static sweep, the poly work function digested, the equilibrium gate charge missing, the contact missing from the sweep error. | Verified locally. |
 | V20 | Unit 13 (`physics/field-mobility`): Debug and Release build with no warnings; `nitcad_physics_test` 44 test cases, `nitcad_assemble_test` 34, `nitcad_solve_test` 61 (+3 `[.mosfet]`, Release only), all pass. Canali: the legacy formula for β = 1, 2 and 1.5 to 1e-15; μ(0) = μ0, μ falling and μE rising monotonically to v_sat (within 1e-3 at 1e9 V/cm); the low-field expansion; dμ/dE against fourth-order differences to 4.2e-12 of μ/E; the right-hand derivative at E = 0; v_sat and β validated. Assembly: FD-Jacobian gate with field mobility 2.7e-9 (1D), 2.3e-9 (2D), 6.0e-9 (3D) (gate 5e-5); the field-mobility part on its own (ψ columns) 2.5e-7 (gate 1e-5); every edge's current scaled by exactly its Canali factor (2.2e-16; factors down to 0.063 at the probe). Device level: a uniform n- and p-type resistor (100 nm, 1e16, 0.1 V steps to 1e6 V/cm) matches q(nμ_n(E) + pμ_p(E))E to 5.8e-15; electrons reach 0.99996 v_sat and holes 0.9798 v_sat (x/(1 + x) for β = 1); y-uniform 2D and 3D reproduce 1D to 1e-12; at most 5 (electrons) or 7 (holes) Newton iterations per point against 2 with constant mobility; quadratic finish (2.8e-2 then 1.2e-8). Legacy diode: J(0.5 V) −0.77% with the model on, total current the same on every edge to 7.5e-8. MOSFET at V_G = 1 V (max_update 1): I_D ratio 0.968 at 0.1 V falling monotonically to 0.735 at 1 V. Mutation checks, each caught: the field-derivative term dropped, a wrong field scale, the Canali derivative without x^(β−1), the switch ignored, β < 1 accepted, the switch missing from the run record, the hole parameters taken from the electrons. | Verified locally. |
 | V21 | Unit 14 (`physics/fermi-dirac`): Debug and Release build with no warnings; `nitcad_physics_test` 56 test cases, `nitcad_assemble_test` 40, `nitcad_solve_test` 69 (+3 `[.mosfet]`, Release only), all pass. F₁/₂ within 1.5e-15 of 40-digit references from −700 to 1000; F₋₁/₂ within 1.3e-13 to η = 15 and 3e-12 to 40; the returned derivative matches central differences to 1e-8 across both joins; ln F₁/₂ increasing and concave to rounding on a 1e-3 grid over −50 to 100; the inverse to 1e-14; Boltzmann and Sommerfeld limits with their published correction terms. Statistics: densities, degeneracy factors and the equilibrium product against finite differences; generalized mass action to 1e-13; the neutral equilibrium against 40-digit roots to 1e-13 (η) and 1e-12 (n, p). Device gates and mutation checks in 6.2 "As built (Unit 14)". The Boltzmann path is bit-identical to `main` (probe hashes, 6.2). | Verified locally. |
+| V22 | Unit 15 (`device/heterojunctions`): Debug and Release build with no warnings; `nitcad_physics_test` 60 test cases, `nitcad_assemble_test` 47, `nitcad_solve_test` 77 (+3 `[.mosfet]`, Release only), all pass. Material sets, depths and the emission velocity against 40-digit values; the abrupt-heterojunction first integral (V_bi to 1e-12, interface potential within 1.4e-5 V, D within 7.6e-4); legacy M33 G1, G2 and S2 gates, with G2 currents reproduced to 4 digits; FD-Jacobian gates with interfaces, thermionic emission and Fermi–Dirac in 1D/2D/3D; the gate flat band on a heterostructure; 2D = 1D. Details, the Newton floor and the ten mutation checks in 6.2 and 6.3 "As built (Unit 15)". | Verified locally. |
 | V3 | Scaling definitions, scaled variables and Newton tolerances read from `inputs.cpp` and `device1d.cpp` and recorded in 6.1. One open question remains for Unit 8 (convergence criterion on the clipped correction). | Verified |
 
 Verifications due at their own unit: none left. The 5e-5 Jacobian gate's normalization was read at Unit 7 (section 10), and

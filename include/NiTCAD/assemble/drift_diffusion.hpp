@@ -18,9 +18,16 @@
 // the edge's current, as in the legacy). The Jacobian includes d D_e / d psi, so Newton stays
 // quadratic (OLD / NEW / REASON in ARCHITECTURE.md 6.2, Unit 13: the legacy averaged |E| to the
 // nodes, applied Canali per node, took the harmonic mean, and lagged it).
-// The driving term of the fluxes is delta_n = psi_b - psi_a + ln(n_ie,b / n_ie,a) for electrons and
-// delta_p = psi_b - psi_a - ln(n_ie,b / n_ie,a) for holes (legacy delta, delta_p): with band-gap
-// narrowing n_ie varies in space, and only these make the equilibrium carry no current.
+// The driving term of the fluxes is delta_n = psi_b - psi_a + s_b - s_a + ln(n_ie,b / n_ie,a) for
+// electrons and delta_p = psi_b - psi_a + s_b - s_a - ln(n_ie,b / n_ie,a) for holes (legacy delta,
+// delta_p): with band-gap narrowing n_ie varies in space, and across a heterointerface the band
+// shift s (EquilibriumPoisson; Unit 15) steps, and only these make the equilibrium carry no
+// current.
+// The edge mobility is the harmonic mean of the two nodes' also across an interface (legacy).
+// With models.thermionic_emission the fluxes of an edge between two materials are the
+// thermionic-emission ones of thermionic_flux.hpp instead, with the same driving terms, K the
+// harmonic mean of the ends' emission velocities times the scaled interface area, and
+// N the ends' Nc (electrons) or Nv (holes).
 // With models.fermi_dirac (Unit 14, the legacy nu-factor scheme) delta_n gains
 // ln gamma_n,b - ln gamma_n,a and delta_p loses ln gamma_p,b - ln gamma_p,a, each node's degeneracy
 // factor taken from its own density (physics::fermi_dirac_degeneracy). Then n_b / n_a = e^delta_n
@@ -28,7 +35,8 @@
 // mu n grad(phi_n): the generalized Einstein relation D / mu = (V_T n / (dn / d eta)) is implicit.
 // ln gamma depends on the density, so the Jacobian's density columns gain
 // d flux / d delta times d ln gamma / d density.
-// Contact rows (ohmic): psi - psi0, n - n0, p - p0, from ohmic_contact_value at the contact's bias.
+// Contact rows (ohmic): psi - psi0, n - n0, p - p0, from ohmic_contact_value at the contact's bias
+// (psi0 less s).
 // A gate node keeps its three box rows; its Poisson row gains the oxide term of gate.hpp at the
 // gate's bias, G_i (psi_G,i - psi_i) + S_i, and its continuity rows no boundary flux (legacy
 // Device2D GateBC: Robin on psi only).
@@ -65,7 +73,10 @@ namespace NiTCAD::assemble {
 
 class DriftDiffusion {
 public:
-    // Errors: those of EquilibriumPoisson::create (scaling temperature, heterojunctions).
+    // Errors (invalid_input): those of EquilibriumPoisson::create (scaling temperature);
+    // models.field_mobility on a device with a heterointerface (the Canali parameters of an edge
+    // between two materials are not defined; legacy Device1D refuses it too), with the first such
+    // edge as the context index.
     [[nodiscard]] static std::expected<DriftDiffusion, base::Error> create(
         const device::Device& device, const Scaling& scaling,
         const PhysicsModels& models = {});
@@ -80,8 +91,9 @@ public:
     [[nodiscard]] std::expected<void, base::Error> set_bias(std::span<const double> bias_V);
 
     // Scaled state of every node in equilibrium at the scaled potential psi under the selected
-    // statistics (Boltzmann: n = n_ie e^psi, p = n_ie e^-psi), with the ohmic contact nodes set to
-    // their Dirichlet values. Precondition (NITCAD_EXPECTS): psi has node_count() entries.
+    // statistics (Boltzmann: n = n_ie e^(psi + s), p = n_ie e^-(psi + s)), with the ohmic contact
+    // nodes set to their Dirichlet values. Precondition (NITCAD_EXPECTS): psi has node_count()
+    // entries.
     [[nodiscard]] std::vector<double> state_from_potential(std::span<const double> psi) const;
     // Sets the ohmic contact nodes of a state to their Dirichlet values.
     void stamp_contacts(std::span<double> x) const;
@@ -121,7 +133,12 @@ private:
         double mu_n, mu_p;  // low-field edge mobilities (harmonic means) [cm^2/(V s)]
         double field;       // [V/cm] per unit |psi_b - psi_a|: V_T / length
         physics::CanaliParameters sat_n, sat_p;  // of the edge's material
-        double dln;         // ln(n_ie,b / n_ie,a)
+        double shift_n;     // s_b - s_a + ln(n_ie,b / n_ie,a): delta_n = psi_b - psi_a + shift_n
+        double shift_p;     // s_b - s_a - ln(n_ie,b / n_ie,a)
+        // Thermionic emission (an interface edge with the model on): factors K and, per band,
+        // ln(N_b / N_a) and N_a / N_b.
+        bool thermionic;
+        double te_kn, te_kp, te_log_nc, te_ratio_nc, te_log_nv, te_ratio_nv;
         // Positions in the Jacobian values: row a with columns of b, row b with columns of a,
         // in the order (psi, psi), (n, psi), (n, n), (p, psi), (p, p).
         std::size_t ab[5], ba[5];
@@ -145,6 +162,7 @@ private:
 
     std::vector<double> volume_, doping_, n_ie_, tau_n_, tau_p_, auger_n_, auger_p_;
     std::vector<double> log_dos_n_, log_dos_p_;  // ln(Nc / n_ie), ln(Nv / n_ie)
+    std::vector<double> band_shift_;             // s
     std::vector<std::int32_t> contact_;   // ohmic contact index per node, or -1
     GateNodes gates_;
     std::vector<device::ContactKind> kinds_;  // per contact
