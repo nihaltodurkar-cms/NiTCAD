@@ -70,11 +70,27 @@
 // largest of |dpsi|, |dn| / n and |dp| / p of the FULL correction (6.2; the legacy measured the
 // damped one); an insulator node's densities stay 0 and are not measured. Only during iteration:
 // the converged state is never clamped (6.7).
+//
+// Time steps (Unit 21): a BDF step from earlier states to time t_new solves the rows above with
+// the storage term of each semiconductor node off the ohmic contacts,
+//     electrons  ... - V_i r (S_n,i - c_n,i),     holes  ... + V_i r (S_p,i - c_p,i),
+// with r = 1 / (beta h) (h in units of t0 = Ns / R0, the time scale of the scaled rates), c the
+// step's combination of the earlier storages and S the carriers a node stores: S_n = n and
+// S_p = p, or with incomplete ionization S_n = n - N_D+ and S_p = p - N_A- (the electrons and
+// holes bound to the dopants are stored too, so dopant ionization, instantaneous in the model,
+// keeps the charge balance). Poisson stays algebraic. The interface traps follow their own history
+// (interface_edges.hpp, TrapStep with weight t0 Ns / r), their electron and hole capture differing
+// by the trapped charge's change. Then the conduction current entering through the contacts is
+// the rate of change of the charge stored inside the device (carriers, bound carriers and traps)
+// for the same BDF difference, and Gauss's law makes the charges of the contacts
+// (contact_charges) balance that charge, so the total currents, conduction plus the BDF difference
+// of the contact charges, sum to zero.
 #pragma once
 
 #include <cstddef>
 #include <cstdint>
 #include <expected>
+#include <optional>
 #include <span>
 #include <utility>
 #include <vector>
@@ -126,6 +142,41 @@ public:
                   linalg::SparseMatrix& jacobian) const;
     void residual(std::span<const double> x, std::span<double> residual) const;
 
+    // A BDF time step (see the header comment): rate = 1 / (beta h), h in units of time_scale();
+    // storage holds c_n and c_p of every node (2 node_count() entries, node i at 2i and 2i + 1;
+    // read only off the contacts and insulators), traps c of every trap slot (trap_slots()
+    // entries).
+    struct TimeStep {
+        double rate;
+        std::span<const double> storage;
+        std::span<const double> traps;
+    };
+    // t0 = Ns / R0 [s].
+    [[nodiscard]] double time_scale() const noexcept { return rate_scale_; }
+    // Interface trap occupancies, one per (interface edge, level) (InterfaceEdges slots).
+    [[nodiscard]] std::size_t trap_slots() const noexcept { return interfaces_.slot_count(); }
+    // Preconditions (NITCAD_EXPECTS) as evaluate(), and step's spans of the sizes above.
+    void evaluate(std::span<const double> x, const TimeStep& step, std::span<double> residual,
+                  linalg::SparseMatrix& jacobian) const;
+    void residual(std::span<const double> x, const TimeStep& step,
+                  std::span<double> residual) const;
+    // (S_n, S_p) of every node at state x, scaled (0 on insulator nodes).
+    [[nodiscard]] std::vector<double> storage(std::span<const double> x) const;
+    // The occupancy f of every trap slot at state x: after `step`, or without one the steady
+    // state.
+    [[nodiscard]] std::vector<double> trap_occupancies(std::span<const double> x,
+                                                       const TimeStep* step = nullptr) const;
+    // Scaled charge of every contact at state x, in device.contacts() order: the displacement flux
+    // leaving its nodes along the edges to nodes outside it (a gate: as gate_charges). Unlike
+    // gate_charges it is not zero for an ohmic contact. Units as gate_charges.
+    [[nodiscard]] std::vector<double> contact_charges(std::span<const double> x,
+                                                      const TimeStep* step = nullptr) const;
+    // Scaled conduction current entering through each contact after `step`: terminal_currents
+    // plus, on an interface edge whose semiconductor node is on an ohmic contact, the current
+    // that charges its traps from the contact.
+    [[nodiscard]] std::vector<double> conduction_currents(std::span<const double> x,
+                                                          const TimeStep& step) const;
+
     // Newton hooks (see the header comment).
     [[nodiscard]] double update_size(std::span<const double> x,
                                      std::span<const double> dx) const;
@@ -153,11 +204,13 @@ public:
     // on each electrode, the displacement flux leaving its nodes along the edges to other nodes,
     // in device.contacts() order; zero for an ohmic contact. Physical value: times q Ns L_D^D, in
     // C / cm^(3-D).
-    [[nodiscard]] std::vector<double> gate_charges(std::span<const double> x) const;
+    [[nodiscard]] std::vector<double> gate_charges(std::span<const double> x,
+                                                   const TimeStep* step = nullptr) const;
     // Scaled trapped charge of each declared interface at state x (interface_edges.hpp, without the
     // fixed charge), in units of q Ns L_D^D. Precondition (NITCAD_EXPECTS): x has unknowns()
     // entries.
-    [[nodiscard]] std::vector<double> interface_trap_charges(std::span<const double> x) const;
+    [[nodiscard]] std::vector<double> interface_trap_charges(
+        std::span<const double> x, const TimeStep* step = nullptr) const;
 
 private:
     DriftDiffusion() = default;
@@ -193,7 +246,19 @@ private:
     };
 
     void assemble(std::span<const double> x, std::span<double> residual,
-                  std::span<double> values) const;
+                  std::span<double> values, const TimeStep* step) const;
+
+    // The storage of a semiconductor node and its derivatives d S_n / dn, d S_p / dp.
+    struct NodeStorage {
+        double n, d_n, p, d_p;
+    };
+    [[nodiscard]] NodeStorage node_storage(std::size_t i, std::span<const double> x,
+                                           std::span<const NodeDegeneracy> g) const;
+    // The trap step of interface edge k, or nullptr without a step.
+    [[nodiscard]] std::optional<TrapStep> trap_step(std::size_t k, const TimeStep* step) const;
+    // The interface of edge k at state x.
+    [[nodiscard]] InterfaceDrift interface_at(std::size_t k, std::span<const double> x,
+                                              const TimeStep* step) const;
 
     // Per node at state x under Fermi-Dirac statistics; empty under Boltzmann.
     [[nodiscard]] std::vector<NodeDegeneracy> degeneracies(std::span<const double> x) const;

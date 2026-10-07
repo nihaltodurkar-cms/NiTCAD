@@ -16,6 +16,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
+#include <cstdio>
 #include <utility>
 #include <vector>
 
@@ -26,6 +27,7 @@
 #include "NiTCAD/physics/insulator.hpp"
 #include "NiTCAD/physics/semiconductor.hpp"
 #include "NiTCAD/solve/bias.hpp"
+#include "NiTCAD/solve/transient.hpp"
 #include "legacy_graded_mesh.hpp"
 #include "legacy_moscap.hpp"
 
@@ -308,4 +310,43 @@ TEST_CASE("mosfet: a meshed oxide gives the lumped-oxide transfer curve (Unit 15
     // extraction floor of about 5e-12 A/cm (sign included), so they are not compared.
     REQUIRE(std::abs(vth_m - vth_l) < 2e-3);
     for (std::size_t k = 6; k < Vg.size(); ++k) REQUIRE(std::abs(ratio[k] - 1.0) < 0.01);
+}
+
+TEST_CASE("mosfet: a gate step settles to the steady drain current (Unit 21)", "[.mosfet]") {
+    // The meshed-oxide MOSFET at Vds = 0.1 V, the gate stepped from 0 to 1 V: the channel forms
+    // from the source and drain in picoseconds, and by 1 ns the drain current is the steady one
+    // (the Id-Vg sweep's). Every step the total currents of the four contacts sum to zero.
+    const device::Device d = meshed_mosfet(45, 25);
+    const double Vds = 0.1;
+    const auto Id = id_vg(d, linspace(0.0, 1.0, 11), Vds);
+    const std::vector<solve::Waveform> wf{solve::Waveform::constant(0.0),
+                                          solve::Waveform::constant(Vds),
+                                          solve::Waveform::constant(0.0),
+                                          *solve::Waveform::step(0.0, 1.0, 0.0)};
+    const auto run =
+        solve::solve_transient(d, wf, {.t_end_s = 1e-9, .dt_initial_s = 1e-15, .rtol = 1e-2});
+    REQUIRE(run.has_value());
+    if (run->stopped) {
+        CAPTURE(run->stopped->message, run->points.size());
+        FAIL("the transient stopped");
+    }
+    double scale = 0.0, worst = 0.0;
+    for (const auto& p : run->points) {
+        for (std::size_t c = 0; c < 4; ++c) {
+            scale = std::max({scale, std::abs(p.conduction_current[c]),
+                              std::abs(p.displacement_current[c])});
+        }
+    }
+    for (const auto& p : run->points) {
+        double sum = 0.0;
+        for (const double I : p.terminal_current) sum += I;
+        worst = std::max(worst, std::abs(sum) / scale);
+    }
+    const double I_end = run->points.back().terminal_current[1];
+    CAPTURE(run->points.size(), run->rejected_steps, worst, I_end, Id.back());
+    std::printf("mosfet transient: steps %zu rejected %zu worst sum %.3e I_end %.9e dc %.9e\n",
+                run->points.size(), run->rejected_steps, worst, I_end, Id.back());
+    REQUIRE(worst <= 1e-7);
+    REQUIRE(std::abs(I_end - Id.back()) <= 1e-6 * std::abs(Id.back()));
+    REQUIRE(run->points.back().displacement_current[3] < 1e-6 * std::abs(Id.back()));
 }

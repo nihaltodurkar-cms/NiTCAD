@@ -32,9 +32,22 @@
 // equation (implicit function), so the Jacobian is exact.
 // A Dirichlet end (an electrode or ohmic contact node) takes none of the edge's terms; the edge's
 // psi_I still depends on it.
+//
+// Trap dynamics (Unit 21): in a time step the occupancy of each level obeys
+//     df/dt = cn n_I (1 - f) - cn n1 f - cp p_I f + cp p1 (1 - f) = occ - f D
+// (occ = cn n_I + cp p1, D = cn (n_I + n1) + cp (p_I + p1), physical time and densities), and a
+// BDF step f - c = beta h (occ - f D) (c the combination of earlier occupancies) is linear in f:
+//     f = (c + k occ) / (1 + k D),   k = beta h Ns (scaled densities in occ and D),
+// a weighted mean of c and the steady occupancy occ / D, so f stays within [min(c, 0), max(c, 1)]
+// and Q within the bounds that follow (the bracket of the local solve). It is eliminated inside the
+// local solve, so the global system keeps its unknowns; as k grows it tends to the steady-state
+// occupancy. Electron and hole capture then differ by N df/dt: the electron row takes the net
+// electron capture cn (n_I (1 - f) - n1 f) and the hole row the net hole capture
+// cp (p_I f - p1 (1 - f)), each summed over N_k (InterfaceDrift::rate and rate_p).
 #pragma once
 
 #include <cstddef>
+#include <span>
 #include <vector>
 
 namespace NiTCAD::assemble {
@@ -69,14 +82,21 @@ struct InterfaceEquilibrium {
     double trapped;
 };
 
-// The drift-diffusion interface of an edge: as InterfaceEquilibrium with the recombination term r
-// (the semiconductor's continuity rows take -/+ r), all partials in (psi_insulator,
-// psi_semiconductor, n_semiconductor, p_semiconductor).
+// The drift-diffusion interface of an edge: as InterfaceEquilibrium with the recombination terms
+// (the semiconductor's electron row takes -rate, its hole row +rate_p; in steady state the two are
+// equal), all partials in (psi_insulator, psi_semiconductor, n_semiconductor, p_semiconductor).
 struct InterfaceDrift {
     double psi;
-    double flux_insulator, flux_semiconductor, rate;
-    double d_flux_insulator[4], d_flux_semiconductor[4], d_rate[4];
+    double flux_insulator, flux_semiconductor, rate, rate_p;
+    double d_flux_insulator[4], d_flux_semiconductor[4], d_rate[4], d_rate_p[4];
     double trapped;
+};
+
+// A time step's trap history for one edge (Unit 21): k = beta h Ns in the units of the levels'
+// cn and cp (s / cm^3 times cm^3/s), and c per level of the edge's interface, in level order.
+struct TrapStep {
+    double weight;
+    std::span<const double> history;
 };
 
 // The semiconductor node's statistics: Fermi-Dirac or Boltzmann, scaled n_ie, ln(Nc / n_ie) and
@@ -100,21 +120,44 @@ public:
     [[nodiscard]] InterfaceEquilibrium equilibrium(const InterfaceEdge& e, double psi_insulator,
                                                    double psi_semiconductor,
                                                    const InterfaceStatistics& s) const;
+    // With `step` the traps follow its history (see the header comment), else the steady state.
+    // Precondition (NITCAD_EXPECTS): the history has one entry per level of the edge.
     [[nodiscard]] InterfaceDrift drift(const InterfaceEdge& e, double psi_insulator,
                                        double psi_semiconductor, double n, double p,
-                                       const InterfaceStatistics& s) const;
+                                       const InterfaceStatistics& s,
+                                       const TrapStep* step = nullptr) const;
+    // The electron occupancy f of each level of the edge at the drift() state, into `f` (one entry
+    // per level, in level order).
+    void occupancies(const InterfaceEdge& e, double psi_insulator, double psi_semiconductor,
+                     double n, double p, const InterfaceStatistics& s, const TrapStep* step,
+                     std::span<double> f) const;
+
+    // Trap slots: one per (interface edge, level of its interface); edge k's slots start at
+    // slot_offset(k).
+    [[nodiscard]] std::size_t slot_count() const noexcept { return slots_; }
+    [[nodiscard]] std::size_t slot_offset(std::size_t edge) const noexcept {
+        return slot_offset_[edge];
+    }
 
 private:
-    struct Charge {  // Q and its partials, at one interface state
-        double value, d_n, d_p, rate, rate_n, rate_p;
+    struct Charge {  // Q and its partials, at one interface state; rate_e / rate_h the rows' terms
+        double value, d_n, d_p, rate, rate_n, rate_p, rate_h, rate_hn, rate_hp;
     };
-    // Q (with the fixed charge) and r at interface densities n_I, p_I.
+    // Q (with the fixed charge) and the rates at interface densities n_I, p_I; with `step` the
+    // occupancies of the step, written to `f` when it is not empty.
     [[nodiscard]] Charge charge_at(const InterfaceEdge& e, double n, double p,
-                                   const InterfaceStatistics& s) const;
+                                   const InterfaceStatistics& s, const TrapStep* step = nullptr,
+                                   std::span<double> f = {}) const;
+    // drift() and occupancies(): the occupancies go to `f` when it is not empty.
+    [[nodiscard]] InterfaceDrift drift_at(const InterfaceEdge& e, double psi_i, double psi_s,
+                                          double n_s, double p_s, const InterfaceStatistics& s,
+                                          const TrapStep* step, std::span<double> f) const;
 
     std::vector<InterfaceEdge> edges_;
     std::vector<InterfaceLevel> levels_;
+    std::vector<std::size_t> slot_offset_;
     std::size_t interfaces_ = 0;
+    std::size_t slots_ = 0;
 };
 
 }  // namespace NiTCAD::assemble
