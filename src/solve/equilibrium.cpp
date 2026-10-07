@@ -38,6 +38,8 @@ std::expected<results::EquilibriumResult, base::Error> solve_equilibrium(
     result.gate_charge = system->gate_charges(psi);
     const double charge = detail::charge_scale(*scaling, device.mesh().dimension());
     for (double& Q : result.gate_charge) Q *= charge;
+    result.interface_trap_charge = system->interface_trap_charges(psi);
+    for (double& Q : result.interface_trap_charge) Q *= charge;
     return result;
 }
 

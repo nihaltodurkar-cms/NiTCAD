@@ -9,8 +9,9 @@
 
 namespace NiTCAD::results {
 
-// Per mesh node: electrostatic potential referenced to the intrinsic level of node 0's material,
-// carrier densities.
+// Per mesh node: electrostatic potential referenced to the intrinsic level of node 0's material
+// (with insulators, of the lowest semiconductor node's), carrier densities (0 on insulator
+// nodes).
 struct NodeFields {
     std::vector<double> potential_V;
     std::vector<double> n_cm3;
@@ -21,7 +22,8 @@ struct NodeFields {
 // of a contact at 0 V; a contact at bias V holds its carriers' Fermi level at -V): the conduction
 // and valence band edges (band-gap narrowing shared between them) and the electron and hole
 // quasi-Fermi levels, by the selected statistics. Unlike the potential it does not depend on which
-// material node 0 is in (Unit 15).
+// material node 0 is in (Unit 15). NaN on insulator nodes (Unit 15b), which have no bands in the
+// model.
 struct BandDiagram {
     std::vector<double> conduction_eV;
     std::vector<double> valence_eV;
@@ -34,6 +36,8 @@ struct EquilibriumResult {
     BandDiagram bands;
     // Charge on each gate electrode at zero bias, as BiasPoint::gate_charge.
     std::vector<double> gate_charge;
+    // Trapped charge of each declared interface, as BiasPoint::interface_trap_charge.
+    std::vector<double> interface_trap_charge;
     ConvergenceRecord convergence;
 };
 
@@ -53,10 +57,16 @@ struct BiasPoint {
     // currents far below it need other unknowns (quasi-Fermi potentials). Zero for a gate and in
     // the quasi-static sweep. (Unit 15.)
     std::vector<double> terminal_current_resolution;
-    // Charge on each gate electrode, in C / cm^(3-D) (C/cm^2 in 1D); zero for an ohmic contact. It
-    // balances the semiconductor charge and the fixed oxide charge, so the quasi-static
-    // capacitance is its derivative with respect to the gate bias.
+    // Charge on each gate electrode (a lumped gate or a meshed electrode), in C / cm^(3-D)
+    // (C/cm^2 in 1D); zero for an ohmic contact. It balances the semiconductor charge and the
+    // fixed and trapped interface charge, so the quasi-static capacitance is its derivative with
+    // respect to the gate bias.
     std::vector<double> gate_charge;
+    // Charge held by the traps of each declared interface (Unit 15b), in C / cm^(3-D): q times the
+    // donor-like traps' empty and minus the acceptor-like traps' occupied sheet densities, summed
+    // over the interface's area; zero for an interface without traps. The fixed charge is not in
+    // it.
+    std::vector<double> interface_trap_charge;
     // Electron and hole current through each mesh edge, from Edge::first to Edge::second (same
     // unit).
     std::vector<double> edge_current_n;

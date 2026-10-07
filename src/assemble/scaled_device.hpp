@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "NiTCAD/assemble/gate.hpp"
+#include "NiTCAD/assemble/interface_nodes.hpp"
 #include "NiTCAD/assemble/models.hpp"
 #include "NiTCAD/assemble/scaling.hpp"
 #include "NiTCAD/base/error.hpp"
@@ -26,9 +27,14 @@ struct ScaledEdge {
                        // (legacy et)
     bool interface;    // the ends are in materials whose parameters differ (a heterointerface)
     bool thermionic;   // the ends are in regions of an interface declared thermionic_emission
+    bool carriers;     // both ends are semiconductor nodes: carriers flow along the edge
 };
 
 struct ScaledDevice {
+    // Per node: 1 in an insulator (Unit 15b). Such a node has no carriers; its doping, levels,
+    // radiative coefficient and band shift are 0, and n_ie and the densities of states are
+    // placeholders (n_ie = 1, ln(N / n_ie) = 0) that no equation reads.
+    std::vector<char> insulator;
     std::vector<double> volume;          // control volume / L_D^D
     std::vector<double> doping;          // (N_D - N_A) / Ns
     std::vector<double> donors;          // N_D / Ns
@@ -39,13 +45,21 @@ struct ScaledDevice {
     std::vector<double> log_dos_n;       // ln(Nc / n_ie), the statistics' g for electrons
     std::vector<double> log_dos_p;       // ln(Nv / n_ie), for holes
     // The band shift s (Unit 15): the node material's intrinsic-level depth below the vacuum
-    // level minus that of node 0's material, over V_T. The carriers see psi + s
+    // level minus that of the reference material (node 0's, or the lowest semiconductor node's
+    // with insulators), over V_T. The carriers see psi + s
     // (n = n_ie e^(psi + s) under Boltzmann statistics), so psi is the electrostatic potential,
     // continuous across a heterointerface, and s carries the band offsets; 0 on every node of a
     // single material.
     std::vector<double> band_shift;
     std::vector<std::int32_t> contact;   // index of the node's ohmic contact, or -1
     GateNodes gates;                     // the gate nodes (gate.hpp)
+    // Per node: the index of its electrode contact, or -1, and the electrode's potential at zero
+    // bias (psi_E = V / V_T + electrode_potential): (depth of the reference material - phi_m) /
+    // V_T, the potential at which the electrode's Fermi level lies at the equilibrium Fermi level
+    // shifted by -V, with psi referenced as above (the vacuum level is -psi V_T + depth).
+    std::vector<std::int32_t> electrode;
+    std::vector<double> electrode_potential;
+    InterfaceNodes interfaces;           // interface charge, traps, recombination
     std::vector<device::ContactKind> kinds;  // per contact, in device.contacts() order
     std::vector<ScaledEdge> edges;       // in mesh edge order
 };
@@ -54,7 +68,8 @@ struct ScaledDevice {
 // materials whose parameters differ is a heterointerface (ScaledEdge::interface): the interface
 // lies at the edge's midpoint, each node's control volume is of its own material, and the edge's
 // permittivity is the harmonic mean of the ends' (legacy Device1D, _eps_tilde_edge), which is the
-// series permittivity of the two half-edges.
+// series permittivity of the two half-edges. An edge to an insulator node is such an interface
+// too (Unit 15b), with no carriers along it.
 [[nodiscard]] std::expected<ScaledDevice, base::Error> make_scaled_device(
     const device::Device& device, const Scaling& scaling, const PhysicsModels& models);
 

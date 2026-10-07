@@ -7,8 +7,11 @@
 #include <string>
 #include <string_view>
 #include <utility>
+#include <variant>
 #include <vector>
 
+#include "NiTCAD/physics/insulator.hpp"
+#include "NiTCAD/physics/interface_traps.hpp"
 #include "NiTCAD/physics/semiconductor.hpp"
 #include "NiTCAD/solve/bias.hpp"
 
@@ -131,7 +134,12 @@ results::RunRecord make_run_record(const device::Device& device, const BiasOptio
     d.integer(device.regions().size());
     for (const device::Region& r : device.regions()) {
         d.text(r.name);
-        material(d, r.material.parameters());
+        if (device::is_insulator(r)) {  // tagged; a semiconductor region hashes as before
+            d.text("insulator");
+            d.real(std::get<physics::Insulator>(r.material).parameters().eps_r);
+            continue;
+        }
+        material(d, std::get<physics::Semiconductor>(r.material).parameters());
     }
     d.integers<device::RegionId>(device.node_region());
     d.reals(device.donors());
@@ -150,6 +158,43 @@ results::RunRecord make_run_record(const device::Device& device, const BiasOptio
             }
             // A polysilicon electrode takes its work function from the semiconductor.
             if (c.gate.electrode == device::GateElectrode::metal) d.real(c.gate.work_function_eV);
+        }
+        if (c.kind == device::ContactKind::electrode) {
+            d.integer(static_cast<std::uint64_t>(c.electrode.kind));
+            if (c.electrode.kind == device::GateElectrode::metal) {
+                d.real(c.electrode.work_function_eV);
+            }
+        }
+    }
+    // Interface charge and traps act on Poisson (both equation sets), recombination on the
+    // continuity equations; hashed only when an interface has them, so a device without keeps its
+    // digest.
+    for (std::size_t k = 0; k < device.interfaces().size(); ++k) {
+        const device::Interface& f = device.interfaces()[k];
+        if (!device::has_interface_charge_or_recombination(f)) continue;
+        d.integer(k);
+        d.real(f.fixed_charge_cm2);
+        const physics::InterfaceTraps& t = f.traps;
+        d.integer(t.levels.size());
+        for (const physics::TrapLevel& l : t.levels) {
+            d.integer(static_cast<std::uint64_t>(l.type));
+            for (const double v : {l.density_cm2, l.energy_eV, l.sigma_n_cm2, l.sigma_p_cm2}) {
+                d.real(v);
+            }
+        }
+        d.integer(t.bands.size());
+        for (const physics::TrapBand& b : t.bands) {
+            d.integer(static_cast<std::uint64_t>(b.type));
+            for (const double v : {b.density_cm2_eV, b.energy_low_eV, b.energy_high_eV,
+                                   b.sigma_n_cm2, b.sigma_p_cm2}) {
+                d.real(v);
+            }
+        }
+        d.real(t.thermal_velocity_n_cm_s);
+        d.real(t.thermal_velocity_p_cm_s);
+        if (options.equations == Equations::drift_diffusion) {
+            d.real(f.recombination_velocity_n_cm_s);
+            d.real(f.recombination_velocity_p_cm_s);
         }
     }
     // Interface transport acts on the continuity equations only.

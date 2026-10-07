@@ -10,6 +10,10 @@
 //   displacement flux (Gauss's law across the interface, a Robin condition on the potential) and
 //   the fixed oxide charge. No carriers cross it: the continuity rows keep zero boundary flux, and
 //   a gate carries no DC current. Schottky contacts are deferred.
+// - Electrode (Unit 15b): a gate electrode on a meshed insulator. It is electrostatic only: its
+//   nodes, which lie in an insulator region, hold the potential the electrode's Fermi level
+//   imposes (a Dirichlet condition on psi); they have no carriers and carry no current. Its charge
+//   is the displacement flux leaving it (assemble).
 #pragma once
 
 #include <cstdint>
@@ -20,7 +24,7 @@
 
 namespace NiTCAD::device {
 
-enum class ContactKind : std::uint8_t { ohmic, gate };
+enum class ContactKind : std::uint8_t { ohmic, gate, electrode };
 
 // The gate electrode's work function phi_m (legacy moscap.flatband_voltage): a degenerately doped
 // polysilicon gate has its Fermi level at the band edge of the semiconductor under it, so
@@ -38,11 +42,20 @@ struct GateStack {
     double fixed_charge_cm2 = 0.0;             // Q_f: fixed positive oxide charge at the interface
 };
 
+// The electrode of an `electrode` contact. A polysilicon electrode is degenerately doped silicon:
+// phi_m = chi or chi + Eg(T) of physics::silicon_parameters (it has no semiconductor under it to
+// take them from, unlike a lumped gate); a metal gives phi_m.
+struct Electrode {
+    GateElectrode kind = GateElectrode::n_poly;
+    double work_function_eV = 0.0;  // phi_m of a metal; finite and positive
+};
+
 struct Contact {
     std::string name;
     ContactKind kind;
     std::vector<mesh::NodeId> nodes;  // strictly increasing; each on a mesh boundary patch
     GateStack gate{};                 // read only when kind == ContactKind::gate
+    Electrode electrode{};            // read only when kind == ContactKind::electrode
 };
 
 }  // namespace NiTCAD::device

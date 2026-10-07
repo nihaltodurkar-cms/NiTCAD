@@ -8,6 +8,7 @@
 #include <set>
 #include <string>
 #include <utility>
+#include <variant>
 #include <vector>
 
 #include "NiTCAD/base/contract.hpp"
@@ -46,19 +47,32 @@ private:
     std::vector<mesh::NodeId> parent_;
 };
 
+bool insulator_node(const DeviceDescription& d, mesh::NodeId v) {
+    const RegionId r = d.node_region[static_cast<std::size_t>(v)];
+    return is_insulator(d.regions[static_cast<std::size_t>(r)]);
+}
+
+const physics::Semiconductor& semiconductor_of(const Region& r) {
+    return std::get<physics::Semiconductor>(r.material);
+}
+
 std::optional<base::Error> check_regions(const DeviceDescription& d) {
     if (d.regions.empty()) return invalid("device needs at least one region");
     std::set<std::string_view> names;
+    bool semiconductor = false;
     for (std::size_t r = 0; r < d.regions.size(); ++r) {
         const Region& region = d.regions[r];
         if (region.name.empty() || !names.insert(region.name).second) {
             return invalid("region name is empty or repeated", r);
         }
-        if (auto ok = physics::check_temperature(region.material, d.temperature_K); !ok) {
+        if (is_insulator(region)) continue;
+        semiconductor = true;
+        if (auto ok = physics::check_temperature(semiconductor_of(region), d.temperature_K); !ok) {
             return invalid("region '" + region.name + "': " + ok.error().message, r,
                            ok.error().context ? ok.error().context->value : std::nullopt);
         }
     }
+    if (!semiconductor) return invalid("device needs at least one semiconductor region");
     return std::nullopt;
 }
 
@@ -77,6 +91,10 @@ std::optional<base::Error> check_nodes(const DeviceDescription& d) {
         for (const double c : {d.donors[i], d.acceptors[i]}) {
             if (!(std::isfinite(c) && c >= 0.0)) {
                 return invalid("donor or acceptor concentration is not finite and >= 0", i, c);
+            }
+            if (c != 0.0 && is_insulator(d.regions[static_cast<std::size_t>(r)])) {
+                return invalid("insulator node has a nonzero donor or acceptor concentration", i,
+                               c);
             }
         }
     }
@@ -145,7 +163,8 @@ std::optional<base::Error> check_contacts(const DeviceDescription& d) {
         if (contact.name.empty() || !names.insert(contact.name).second) {
             return invalid("contact name is empty or repeated", c);
         }
-        if (contact.kind != ContactKind::ohmic && contact.kind != ContactKind::gate) {
+        if (contact.kind != ContactKind::ohmic && contact.kind != ContactKind::gate &&
+            contact.kind != ContactKind::electrode) {
             return invalid("unknown contact kind", c);
         }
         if (contact.nodes.empty()) return invalid("contact '" + contact.name + "' has no nodes", c);
@@ -167,34 +186,70 @@ std::optional<base::Error> check_contacts(const DeviceDescription& d) {
                                c, static_cast<double>(v));
             }
             in_contact[i] = true;
+            const bool electrode = contact.kind == ContactKind::electrode;
+            if (insulator_node(d, v) != electrode) {
+                return invalid("contact '" + contact.name +
+                                   (electrode ? "': an electrode node is not in an insulator"
+                                              : "': node is in an insulator (only an electrode "
+                                                "may be)"),
+                               c, static_cast<double>(v));
+            }
         }
         if (contact.kind == ContactKind::gate) {
             if (auto e = check_gate(d, c)) return e;
+        }
+        if (contact.kind == ContactKind::electrode) {
+            const Electrode& el = contact.electrode;
+            const std::string where = "electrode '" + contact.name + "': ";
+            if (el.kind == GateElectrode::metal) {
+                if (!(std::isfinite(el.work_function_eV) && el.work_function_eV > 0.0)) {
+                    return invalid(where + "work function is not finite and positive", c,
+                                   el.work_function_eV);
+                }
+            } else if (el.kind != GateElectrode::n_poly && el.kind != GateElectrode::p_poly) {
+                return invalid(where + "unknown electrode kind", c);
+            }
         }
     }
     return std::nullopt;
 }
 
-// Every connected part of the mesh graph must contain an ohmic contact node (ARCHITECTURE.md 6.10,
-// the topology gate for Unit 6). A gate fixes no carrier density, so on its own it leaves the
-// continuity equations of its part singular.
+// Every connected part of the semiconductor nodes must contain an ohmic contact node, and every
+// connected part of the mesh graph an ohmic contact or an electrode node (ARCHITECTURE.md 6.10,
+// the topology gate for Unit 6; Unit 15b). A gate or an electrode fixes no carrier density, so on
+// its own it leaves the continuity equations of its part singular; carriers do not cross an edge
+// to an insulator. Without insulators the two rules are one.
 std::optional<base::Error> check_topology(const DeviceDescription& d) {
     const std::size_t n = d.mesh.node_count();
-    Components parts(n);
-    for (const mesh::Edge& e : d.mesh.edges()) parts.join(e.first, e.second);
-    std::vector<bool> anchored(n, false);
+    Components semiconductor(n), whole(n);
+    for (const mesh::Edge& e : d.mesh.edges()) {
+        whole.join(e.first, e.second);
+        if (!insulator_node(d, e.first) && !insulator_node(d, e.second)) {
+            semiconductor.join(e.first, e.second);
+        }
+    }
+    std::vector<bool> carriers(n, false), potential(n, false);
     for (const Contact& contact : d.contacts) {
-        if (contact.kind != ContactKind::ohmic) continue;
+        if (contact.kind == ContactKind::gate) continue;
         for (const mesh::NodeId v : contact.nodes) {
-            anchored[static_cast<std::size_t>(parts.root(v))] = true;
+            potential[static_cast<std::size_t>(whole.root(v))] = true;
+            if (contact.kind == ContactKind::ohmic) {
+                carriers[static_cast<std::size_t>(semiconductor.root(v))] = true;
+            }
         }
     }
     for (std::size_t i = 0; i < n; ++i) {
         // Nodes are visited in increasing order, so the first one found is the lowest node of a
         // floating part.
-        if (!anchored[static_cast<std::size_t>(parts.root(static_cast<mesh::NodeId>(i)))]) {
+        const auto v = static_cast<mesh::NodeId>(i);
+        if (!insulator_node(d, v) && !carriers[static_cast<std::size_t>(semiconductor.root(v))]) {
             return invalid("floating region: part of the mesh is connected to no ohmic contact",
                            i);
+        }
+        if (!potential[static_cast<std::size_t>(whole.root(v))]) {
+            return invalid(
+                "floating region: part of the mesh is connected to no ohmic contact or electrode",
+                i);
         }
     }
     return std::nullopt;
@@ -217,6 +272,36 @@ std::optional<base::Error> check_interfaces(const DeviceDescription& d) {
         if (f.transport != InterfaceTransport::drift_diffusion &&
             f.transport != InterfaceTransport::thermionic_emission) {
             return invalid("interface has an unknown transport", k);
+        }
+        const Region& region_a = d.regions[static_cast<std::size_t>(*a)];
+        const Region& region_b = d.regions[static_cast<std::size_t>(*b)];
+        if (f.transport == InterfaceTransport::thermionic_emission &&
+            (is_insulator(region_a) || is_insulator(region_b))) {
+            return invalid("thermionic emission needs two semiconductor regions", k);
+        }
+        if (has_interface_charge_or_recombination(f)) {
+            if (is_insulator(region_a) == is_insulator(region_b)) {
+                return invalid(
+                    "interface charge, traps and surface recombination need a semiconductor-"
+                    "insulator interface",
+                    k);
+            }
+            if (!std::isfinite(f.fixed_charge_cm2)) {
+                return invalid("interface fixed charge is not finite", k, f.fixed_charge_cm2);
+            }
+            for (const double s : {f.recombination_velocity_n_cm_s,
+                                   f.recombination_velocity_p_cm_s}) {
+                if (!(std::isfinite(s) && s >= 0.0)) {
+                    return invalid("interface recombination velocity is not finite and >= 0", k,
+                                   s);
+                }
+            }
+            const physics::Semiconductor& m =
+                semiconductor_of(is_insulator(region_a) ? region_b : region_a);
+            if (auto ok = physics::check_interface_traps(f.traps, m, d.temperature_K); !ok) {
+                return invalid("interface: " + ok.error().message, k,
+                               ok.error().context ? ok.error().context->value : std::nullopt);
+            }
         }
         if (!pairs.insert(std::minmax(*a, *b)).second) {
             return invalid("interface between '" + f.region_a + "' and '" + f.region_b +
@@ -251,6 +336,10 @@ std::expected<Device, base::Error> Device::create(DeviceDescription description)
     return Device{std::move(description)};
 }
 
+Device::Device(DeviceDescription description) noexcept : d_(std::move(description)) {
+    while (insulator_node(d_, reference_node_)) ++reference_node_;  // a semiconductor node exists
+}
+
 InterfaceTransport Device::transport(RegionId a, RegionId b) const {
     NITCAD_EXPECTS(a >= 0 && static_cast<std::size_t>(a) < d_.regions.size());
     NITCAD_EXPECTS(b >= 0 && static_cast<std::size_t>(b) < d_.regions.size());
@@ -262,6 +351,20 @@ InterfaceTransport Device::transport(RegionId a, RegionId b) const {
         }
     }
     return InterfaceTransport::drift_diffusion;
+}
+
+std::int32_t Device::find_interface(RegionId a, RegionId b) const {
+    NITCAD_EXPECTS(a >= 0 && static_cast<std::size_t>(a) < d_.regions.size());
+    NITCAD_EXPECTS(b >= 0 && static_cast<std::size_t>(b) < d_.regions.size());
+    const std::string& na = d_.regions[static_cast<std::size_t>(a)].name;
+    const std::string& nb = d_.regions[static_cast<std::size_t>(b)].name;
+    for (std::size_t k = 0; k < d_.interfaces.size(); ++k) {
+        const Interface& f = d_.interfaces[k];
+        if ((f.region_a == na && f.region_b == nb) || (f.region_a == nb && f.region_b == na)) {
+            return static_cast<std::int32_t>(k);
+        }
+    }
+    return -1;
 }
 
 const Contact* Device::find_contact(std::string_view name) const noexcept {
@@ -285,8 +388,23 @@ double Device::total_impurity(mesh::NodeId node) const {
 
 const physics::Semiconductor& Device::material(mesh::NodeId node) const {
     NITCAD_EXPECTS(node >= 0 && static_cast<std::size_t>(node) < d_.node_region.size());
-    return d_.regions[static_cast<std::size_t>(d_.node_region[static_cast<std::size_t>(node)])]
-        .material;
+    const Region& r =
+        d_.regions[static_cast<std::size_t>(d_.node_region[static_cast<std::size_t>(node)])];
+    NITCAD_EXPECTS(!device::is_insulator(r));
+    return std::get<physics::Semiconductor>(r.material);
+}
+
+bool Device::is_insulator(mesh::NodeId node) const {
+    NITCAD_EXPECTS(node >= 0 && static_cast<std::size_t>(node) < d_.node_region.size());
+    return insulator_node(d_, node);
+}
+
+double Device::relative_permittivity(mesh::NodeId node) const {
+    NITCAD_EXPECTS(node >= 0 && static_cast<std::size_t>(node) < d_.node_region.size());
+    const Region& r =
+        d_.regions[static_cast<std::size_t>(d_.node_region[static_cast<std::size_t>(node)])];
+    if (device::is_insulator(r)) return std::get<physics::Insulator>(r.material).parameters().eps_r;
+    return std::get<physics::Semiconductor>(r.material).parameters().eps_r;
 }
 
 }  // namespace NiTCAD::device

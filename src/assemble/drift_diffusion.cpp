@@ -12,6 +12,7 @@
 #include "NiTCAD/assemble/thermionic_flux.hpp"
 #include "NiTCAD/base/contract.hpp"
 #include "NiTCAD/physics/field_mobility.hpp"
+#include "NiTCAD/physics/interface_traps.hpp"
 #include "NiTCAD/physics/mobility.hpp"
 #include "NiTCAD/physics/recombination.hpp"
 #include "NiTCAD/physics/thermionic_emission.hpp"
@@ -52,6 +53,10 @@ std::expected<DriftDiffusion, base::Error> DriftDiffusion::create(
     s.ionization_ = models.incomplete_ionization;
     s.radiative_on_ = models.radiative;
     s.contact_ = std::move(scaled->contact);
+    s.insulator_ = std::move(scaled->insulator);
+    s.electrode_ = std::move(scaled->electrode);
+    s.electrode_potential_ = std::move(scaled->electrode_potential);
+    s.interfaces_ = std::move(scaled->interfaces);
     s.gates_ = std::move(scaled->gates);
     s.kinds_ = std::move(scaled->kinds);
     s.contact_count_ = device.contacts().size();
@@ -68,6 +73,12 @@ std::expected<DriftDiffusion, base::Error> DriftDiffusion::create(
     std::vector<double> mu_n(n), mu_p(n);
     for (std::size_t i = 0; i < n; ++i) {
         const auto node = static_cast<mesh::NodeId>(i);
+        if (s.insulator_[i] != 0) {  // placeholders; no carrier equation reads them
+            mu_n[i] = mu_p[i] = 1.0;
+            s.tau_n_[i] = s.tau_p_[i] = 1.0;
+            s.auger_n_[i] = s.auger_p_[i] = 0.0;
+            continue;
+        }
         const physics::Semiconductor& m = device.material(node);
         const double N = device.total_impurity(node);
         const double N_mobility = models.doping_mobility ? N : 0.0;
@@ -116,6 +127,15 @@ std::expected<DriftDiffusion, base::Error> DriftDiffusion::create(
         t.a = e.i;
         t.b = e.j;
         t.c = e.et * e.geometry;
+        t.carriers = e.carriers;
+        for (std::size_t k = 0; k < 5; ++k) {
+            t.ab[k] = detail::position(s.pattern_, 3 * e.i + edge_rows[k], 3 * e.j + edge_cols[k]);
+            t.ba[k] = detail::position(s.pattern_, 3 * e.j + edge_rows[k], 3 * e.i + edge_cols[k]);
+        }
+        if (!t.carriers) {  // Poisson only
+            s.edges_.push_back(t);
+            continue;
+        }
         t.mu_n = harmonic_mean(mu_n[e.i], mu_n[e.j]);
         t.mu_p = harmonic_mean(mu_p[e.i], mu_p[e.j]);
         t.an = t.mu_n * scaling.V_T / scaling.D0 * e.geometry;
@@ -159,10 +179,6 @@ std::expected<DriftDiffusion, base::Error> DriftDiffusion::create(
             t.te_log_nv = std::log(nvb / nva);
             t.te_ratio_nv = nva / nvb;
         }
-        for (std::size_t k = 0; k < 5; ++k) {
-            t.ab[k] = detail::position(s.pattern_, 3 * e.i + edge_rows[k], 3 * e.j + edge_cols[k]);
-            t.ba[k] = detail::position(s.pattern_, 3 * e.j + edge_rows[k], 3 * e.i + edge_cols[k]);
-        }
         s.edges_.push_back(t);
     }
 
@@ -178,6 +194,11 @@ std::expected<void, base::Error> DriftDiffusion::set_bias(std::span<const double
     if (auto ok = check_contact_bias(kinds_, bias_V, false); !ok) return ok;
     gates_.set_bias(bias_V);
     for (std::size_t i = 0; i < node_count(); ++i) {
+        if (electrode_[i] >= 0) {
+            psi0_[i] = bias_V[static_cast<std::size_t>(electrode_[i])] / V_T_ +
+                       electrode_potential_[i];
+            continue;
+        }
         if (contact_[i] < 0) continue;
         const double bias = bias_V[static_cast<std::size_t>(contact_[i])] / V_T_;
         const OhmicValue v = ohmic_contact_value(
@@ -198,6 +219,7 @@ std::vector<double> DriftDiffusion::state_from_potential(std::span<const double>
     for (std::size_t i = 0; i < node_count(); ++i) {
         const double eta = psi[i] + band_shift_[i];
         x[3 * i] = psi[i];
+        if (insulator_[i] != 0) continue;  // stamped below
         x[3 * i + 1] = detail::density(fermi_dirac_, n_ie_[i], log_dos_n_[i], eta).density;
         x[3 * i + 2] = detail::density(fermi_dirac_, n_ie_[i], log_dos_p_[i], -eta).density;
     }
@@ -208,6 +230,11 @@ std::vector<double> DriftDiffusion::state_from_potential(std::span<const double>
 void DriftDiffusion::stamp_contacts(std::span<double> x) const {
     NITCAD_EXPECTS(x.size() == unknowns());
     for (std::size_t i = 0; i < node_count(); ++i) {
+        if (insulator_[i] != 0) {
+            if (electrode_[i] >= 0) x[3 * i] = psi0_[i];
+            x[3 * i + 1] = x[3 * i + 2] = 0.0;
+            continue;
+        }
         if (contact_[i] < 0) continue;
         x[3 * i] = psi0_[i];
         x[3 * i + 1] = n0_[i];
@@ -223,6 +250,10 @@ std::vector<DriftDiffusion::NodeDegeneracy> DriftDiffusion::degeneracies(
     if (!fermi_dirac_) return g;
     g.reserve(node_count());
     for (std::size_t i = 0; i < node_count(); ++i) {
+        if (insulator_[i] != 0) {
+            g.push_back({{0.0, 0.0}, {0.0, 0.0}});
+            continue;
+        }
         g.push_back({physics::fermi_dirac_degeneracy(n_ie_[i], log_dos_n_[i], x[3 * i + 1]),
                      physics::fermi_dirac_degeneracy(n_ie_[i], log_dos_p_[i], x[3 * i + 2])});
     }
@@ -307,6 +338,17 @@ void DriftDiffusion::assemble(std::span<const double> x, std::span<double> f,
             if (jacobian) at(i, 0, 0) = at(i, 1, 1) = at(i, 2, 2) = 1.0;
             continue;
         }
+        if (insulator_[i] != 0) {  // no charge, no carriers; an electrode holds psi
+            const bool electrode = electrode_[i] >= 0;
+            f[3 * i] = electrode ? psi - psi0_[i] : 0.0;
+            f[3 * i + 1] = n;
+            f[3 * i + 2] = p;
+            if (jacobian) {
+                if (electrode) at(i, 0, 0) = 1.0;
+                at(i, 1, 1) = at(i, 2, 2) = 1.0;
+            }
+            continue;
+        }
         const double V = volume_[i];
         f[3 * i] = -V * (n - p - doping_[i]);
         f[3 * i + 1] = 0.0;
@@ -384,10 +426,46 @@ void DriftDiffusion::assemble(std::span<const double> x, std::span<double> f,
                                                           radiative_[i]));
         }
     }
+    for (const InterfaceNode& v : interfaces_.nodes()) {
+        const std::size_t i = v.node;
+        const physics::EquilibriumProduct E = product(i);
+        const InterfaceTerms t = interfaces_.terms(
+            v, x[3 * i + 1], x[3 * i + 2], n_ie_[i], fermi_dirac_ ? g[i].n.log_gamma : 0.0,
+            fermi_dirac_ ? g[i].n.d_density : 0.0, fermi_dirac_ ? g[i].p.log_gamma : 0.0,
+            fermi_dirac_ ? g[i].p.d_density : 0.0, E.value, E.d_dn, E.d_dp);
+        f[3 * i] += t.charge;
+        f[3 * i + 1] -= t.rate;
+        f[3 * i + 2] += t.rate;
+        if (jacobian) {
+            at(i, 0, 1) += t.charge_dn;
+            at(i, 0, 2) += t.charge_dp;
+            at(i, 1, 1) -= t.rate_dn;
+            at(i, 1, 2) -= t.rate_dp;
+            at(i, 2, 1) += t.rate_dn;
+            at(i, 2, 2) += t.rate_dp;
+        }
+    }
     for (const EdgeTerm& e : edges_) {
         const std::size_t a = e.a, b = e.b;
         const double psi_a = x[3 * a], psi_b = x[3 * b];
         const double poisson = e.c * (psi_b - psi_a);
+        if (!e.carriers) {  // Poisson only, into the rows that are not Dirichlet
+            if (contact_[a] < 0 && electrode_[a] < 0) {
+                f[3 * a] += poisson;
+                if (jacobian) {
+                    at(a, 0, 0) -= e.c;
+                    values[e.ab[0]] += e.c;
+                }
+            }
+            if (contact_[b] < 0 && electrode_[b] < 0) {
+                f[3 * b] -= poisson;
+                if (jacobian) {
+                    at(b, 0, 0) -= e.c;
+                    values[e.ba[0]] += e.c;
+                }
+            }
+            continue;
+        }
         const auto [fn, fp] = edge_fluxes(e, x, g);
         if (contact_[a] < 0) {
             f[3 * a] += poisson;
@@ -451,6 +529,10 @@ double DriftDiffusion::update_size(std::span<const double> x, std::span<const do
     const double floor = 1e-20 * largest;
     double size = 0.0;
     for (std::size_t i = 0; i < node_count(); ++i) {
+        if (insulator_[i] != 0) {
+            size = std::max(size, std::abs(dx[3 * i]));
+            continue;
+        }
         const double n = x[3 * i + 1], p = x[3 * i + 2];
         size = std::max({size, std::abs(dx[3 * i]),
                          n > 0.0 ? std::abs(dx[3 * i + 1]) / std::max(n, floor) : infinity,
@@ -464,6 +546,7 @@ void DriftDiffusion::apply_update(std::span<double> x, std::span<const double> d
     NITCAD_EXPECTS(x.size() == unknowns() && dx.size() == unknowns());
     for (std::size_t i = 0; i < node_count(); ++i) {
         x[3 * i] += std::clamp(dx[3 * i], -max_update, max_update);
+        if (insulator_[i] != 0) continue;  // the densities stay 0
         for (const std::size_t k : {3 * i + 1, 3 * i + 2}) {
             x[k] = std::clamp(x[k] + dx[k], 0.1 * x[k], 10.0 * x[k]);
         }
@@ -477,6 +560,10 @@ std::vector<std::pair<double, double>> DriftDiffusion::edge_currents(
     currents.reserve(edges_.size());
     const std::vector<NodeDegeneracy> g = degeneracies(x);
     for (const EdgeTerm& e : edges_) {
+        if (!e.carriers) {
+            currents.emplace_back(0.0, 0.0);
+            continue;
+        }
         const auto [fn, fp] = edge_fluxes(e, x, g);
         currents.emplace_back(fn.flux, fp.flux);
     }
@@ -508,6 +595,7 @@ std::vector<double> DriftDiffusion::terminal_current_resolution(std::span<const 
     const std::vector<NodeDegeneracy> g = degeneracies(x);
     std::vector<double> terms(n, 0.0), flux_n(n, 0.0);
     for (const EdgeTerm& e : edges_) {
+        if (!e.carriers) continue;
         const auto [fn, fp] = edge_fluxes(e, x, g);
         const double t =
             std::abs(fn.d_c1 * x[3 * e.a + 1]) + std::abs(fn.d_c2 * x[3 * e.b + 1]) +
@@ -540,6 +628,11 @@ BandEdges DriftDiffusion::band_edges(std::span<const double> x) const {
     BandEdges b{std::vector<double>(n), std::vector<double>(n), std::vector<double>(n),
                 std::vector<double>(n)};
     for (std::size_t i = 0; i < n; ++i) {
+        if (insulator_[i] != 0) {
+            const double nan = std::numeric_limits<double>::quiet_NaN();
+            b.conduction[i] = b.valence[i] = b.electron_fermi[i] = b.hole_fermi[i] = nan;
+            continue;
+        }
         const detail::NodeBands e =
             detail::node_bands(fermi_dirac_, n_ie_[i], log_dos_n_[i], log_dos_p_[i],
                                x[3 * i] + band_shift_[i], x[3 * i + 1], x[3 * i + 2]);
@@ -553,7 +646,28 @@ BandEdges DriftDiffusion::band_edges(std::span<const double> x) const {
 
 std::vector<double> DriftDiffusion::gate_charges(std::span<const double> x) const {
     NITCAD_EXPECTS(x.size() == unknowns());
-    return gates_.charges(x, 3, contact_count_);
+    std::vector<double> charge = gates_.charges(x, 3, contact_count_);
+    for (const EdgeTerm& e : edges_) {
+        const std::int32_t ca = electrode_[e.a], cb = electrode_[e.b];
+        if (ca == cb) continue;
+        const double flux = e.c * (x[3 * e.a] - x[3 * e.b]);  // from a to b
+        if (ca >= 0) charge[static_cast<std::size_t>(ca)] += flux;
+        if (cb >= 0) charge[static_cast<std::size_t>(cb)] -= flux;
+    }
+    return charge;
+}
+
+std::vector<double> DriftDiffusion::interface_trap_charges(std::span<const double> x) const {
+    NITCAD_EXPECTS(x.size() == unknowns());
+    const std::vector<NodeDegeneracy> g = degeneracies(x);
+    return interfaces_.trapped_charges([&](const InterfaceNode& v, const InterfaceLevel& l) {
+        const std::size_t i = v.node;
+        const double n = x[3 * i + 1], p = x[3 * i + 2];
+        const double n1 = n_ie_[i] * std::exp((fermi_dirac_ ? g[i].n.log_gamma : 0.0) + l.tau);
+        const double p1 = n_ie_[i] * std::exp((fermi_dirac_ ? g[i].p.log_gamma : 0.0) - l.tau);
+        const physics::TrapKinetics t = physics::trap_kinetics(n, p, n1, 0.0, p1, 0.0, l.cn, l.cp);
+        return std::pair{t.occupied, t.empty};
+    });
 }
 
 }  // namespace NiTCAD::assemble

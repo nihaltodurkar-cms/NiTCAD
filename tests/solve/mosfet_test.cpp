@@ -21,7 +21,9 @@
 
 #include "NiTCAD/base/constants.hpp"
 #include "NiTCAD/device/device.hpp"
+#include "NiTCAD/mesh/mesh.hpp"
 #include "NiTCAD/mesh/tensor_grid.hpp"
+#include "NiTCAD/physics/insulator.hpp"
 #include "NiTCAD/physics/semiconductor.hpp"
 #include "NiTCAD/solve/bias.hpp"
 #include "legacy_graded_mesh.hpp"
@@ -79,6 +81,77 @@ device::Device mosfet(int nx = 90, int ny = 50) {
                       {"drain", device::ContactKind::ohmic, std::move(drain)},
                       {"body", device::ContactKind::ohmic, std::move(body)},
                       std::move(g)}});
+}
+
+// The same MOSFET with a meshed oxide (Unit 15b): SiO2 rows on [-t_ox, -h/2] above the whole
+// surface (h the first spacing of the legacy y axis, the silicon nodes moved down by h/2, the
+// interface at y = 0 midway between rows), the gate an electrode on the oxide top over the channel
+// (Lsd < x < Lsd + Lg), the rest of the oxide top free. Source and drain stay ohmic on the top
+// silicon row (a boundary patch "surface" added to the grid), as the lumped device's on y = 0.
+device::Device meshed_mosfet(int nx = 90, int ny = 50, int oxide_cells = 5) {
+    const double L = 2 * Lsd + Lg;
+    const auto x = legacy_graded_mesh(L, {Lsd, Lsd + Lg}, L / (nx * 20), L / nx, 1.15);
+    const auto y_si = legacy_graded_mesh(depth, 0.0, depth / (ny * 20), depth / ny, 1.15);
+    const double h = y_si[1];
+    std::vector<double> y;
+    for (int k = 0; k <= oxide_cells; ++k) y.push_back(-t_ox + (t_ox - 0.5 * h) * k / oxide_cells);
+    for (const double v : y_si) y.push_back(v + 0.5 * h);
+    const mesh::Mesh grid = *mesh::make_tensor_grid(x, y);
+    // The top silicon row as a patch, each node with its x width.
+    mesh::BoundaryPatch surface{"surface", {}, {}};
+    for (std::size_t i = 0; i < grid.node_count(); ++i) {
+        const auto& p = grid.points()[i];
+        if (p[1] != 0.5 * h) continue;
+        const auto k =
+            static_cast<std::size_t>(std::lower_bound(x.begin(), x.end(), p[0]) - x.begin());
+        const double left = k > 0 ? 0.5 * (x[k] - x[k - 1]) : 0.0;
+        const double right = k + 1 < x.size() ? 0.5 * (x[k + 1] - x[k]) : 0.0;
+        surface.nodes.push_back(static_cast<mesh::NodeId>(i));
+        surface.areas.push_back(left + right);
+    }
+    std::vector<mesh::BoundaryPatch> patches(grid.boundary().begin(), grid.boundary().end());
+    patches.push_back(surface);
+    mesh::Mesh m = *mesh::Mesh::from_parts(
+        2, std::vector<mesh::Point>(grid.points().begin(), grid.points().end()),
+        std::vector<double>(grid.volumes().begin(), grid.volumes().end()),
+        std::vector<mesh::Edge>(grid.edges().begin(), grid.edges().end()), std::move(patches));
+    const std::size_t n = m.node_count();
+    std::vector<double> donors(n, 0.0), acceptors(n, 0.0);
+    std::vector<device::RegionId> region(n, 1);
+    for (std::size_t i = 0; i < n; ++i) {
+        const auto& p = m.points()[i];
+        if (p[1] < 0.0) {
+            region[i] = 0;
+            continue;
+        }
+        const double depth_y = p[1] - 0.5 * h;  // the legacy profile's y
+        donors[i] =
+            sd_profile(p[0], depth_y, Lsd, true) + sd_profile(p[0], depth_y, Lsd + Lg, false);
+        acceptors[i] = N_A;
+    }
+    std::vector<mesh::NodeId> source, drain, gate;
+    for (const mesh::NodeId v : m.find_boundary("surface")->nodes) {
+        const double px = m.points()[static_cast<std::size_t>(v)][0];
+        if (px <= Lsd) source.push_back(v);
+        if (px >= Lsd + Lg) drain.push_back(v);
+    }
+    for (const mesh::NodeId v : m.find_boundary("y_min")->nodes) {
+        const double px = m.points()[static_cast<std::size_t>(v)][0];
+        if (px > Lsd && px < Lsd + Lg) gate.push_back(v);
+    }
+    auto body = m.find_boundary("y_max")->nodes;
+    return *device::Device::create(
+        {.mesh = std::move(m),
+         .temperature_K = 300.0,
+         .regions = {{"oxide", physics::silicon_dioxide()}, {"silicon", physics::silicon()}},
+         .node_region = std::move(region),
+         .donors = std::move(donors),
+         .acceptors = std::move(acceptors),
+         .contacts = {{"source", device::ContactKind::ohmic, std::move(source)},
+                      {"drain", device::ContactKind::ohmic, std::move(drain)},
+                      {"body", device::ContactKind::ohmic, std::move(body)},
+                      {"gate", device::ContactKind::electrode, std::move(gate)}},
+         .interfaces = {{"oxide", "silicon"}}});
 }
 
 // mosfet.id_vg_sweep: equilibrium, then each Vg at the drain bias from the previous point. The
@@ -212,4 +285,27 @@ TEST_CASE("mosfet: field mobility lowers the drain current at high drain bias (U
     REQUIRE(ratio.front() < 1.0);
     for (std::size_t k = 1; k < ratio.size(); ++k) REQUIRE(ratio[k] < ratio[k - 1]);
     REQUIRE(ratio.back() < 0.9);
+}
+
+TEST_CASE("mosfet: a meshed oxide gives the lumped-oxide transfer curve (Unit 15b)", "[.mosfet]") {
+    // Id-Vg at Vds = 0.05 V from -1 to 1.5 V on both devices. They differ by the oxide's fringing
+    // field at the gate edges and over source and drain (the lumped oxide couples each surface
+    // node vertically only) and by the meshed silicon starting h / 2 below the interface.
+    const auto Vg = linspace(-1.0, 1.5, 26);
+    const double Vds = 0.05;
+    const auto lumped = id_vg(mosfet(), Vg, Vds);
+    const auto meshed = id_vg(meshed_mosfet(), Vg, Vds);
+    const std::vector<double> Vg21(Vg.begin(), Vg.begin() + 21);
+    const double vth_l =
+        vth_max_gm(Vg21, std::vector<double>(lumped.begin(), lumped.begin() + 21), Vds);
+    const double vth_m =
+        vth_max_gm(Vg21, std::vector<double>(meshed.begin(), meshed.begin() + 21), Vds);
+    std::vector<double> ratio;
+    for (std::size_t k = 0; k < Vg.size(); ++k) ratio.push_back(meshed[k] / lumped[k]);
+    CAPTURE(lumped, meshed, ratio, vth_l, vth_m);
+    // Measured: the thresholds 0.152 V apart by 0.21 mV; from Vg = -0.4 V (Id 2e-10 A/cm) up the
+    // currents within 0.58% (the meshed one lower, most at 1.5 V). Below -0.4 V both are at the
+    // extraction floor of about 5e-12 A/cm (sign included), so they are not compared.
+    REQUIRE(std::abs(vth_m - vth_l) < 2e-3);
+    for (std::size_t k = 6; k < Vg.size(); ++k) REQUIRE(std::abs(ratio[k] - 1.0) < 0.01);
 }

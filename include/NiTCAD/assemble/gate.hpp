@@ -61,6 +61,11 @@ struct GateTerm {
 [[nodiscard]] GateTerm gate_term(const device::GateStack& gate, const physics::Semiconductor& m,
                                  double area_cm, int dimension, const Scaling& scaling);
 
+// phi_m [eV] of an `electrode` contact (device/contact.hpp: polysilicon is silicon's).
+// Precondition: temperature_K finite and positive.
+[[nodiscard]] double electrode_work_function_eV(const device::Electrode& electrode,
+                                                double temperature_K);
+
 // The gate nodes of a device, shared by both assemblers: per node, its gate contact (or -1), its
 // term and the electrode potential psi_G at the gate's current bias.
 class GateNodes {

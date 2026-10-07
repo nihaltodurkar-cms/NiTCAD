@@ -21,7 +21,10 @@ base::Error invalid(std::string message, std::optional<std::size_t> index = std:
 }
 
 // A usable starting state; potential_only for the quasi-static sweep, which reads nothing else.
-bool valid_fields(const results::NodeFields& s, std::size_t n, bool potential_only) {
+// The densities of insulator nodes are not read (they are 0).
+bool valid_fields(const results::NodeFields& s, const device::Device& device,
+                  bool potential_only) {
+    const std::size_t n = device.mesh().node_count();
     if (s.potential_V.size() != n) return false;
     for (std::size_t i = 0; i < n; ++i) {
         if (!std::isfinite(s.potential_V[i])) return false;
@@ -29,6 +32,7 @@ bool valid_fields(const results::NodeFields& s, std::size_t n, bool potential_on
     if (potential_only) return true;
     if (s.n_cm3.size() != n || s.p_cm3.size() != n) return false;
     for (std::size_t i = 0; i < n; ++i) {
+        if (device.is_insulator(static_cast<mesh::NodeId>(i))) continue;
         if (!(std::isfinite(s.n_cm3[i]) && s.n_cm3[i] > 0.0)) return false;
         if (!(std::isfinite(s.p_cm3[i]) && s.p_cm3[i] > 0.0)) return false;
     }
@@ -97,11 +101,11 @@ std::expected<results::Sweep, base::Error> sweep_bias(const device::Device& devi
                                            base::ErrorContext{.index = k, .value = value}});
     }
     const std::size_t nodes = device.mesh().node_count();
-    if (initial != nullptr && !valid_fields(*initial, nodes, equilibrium)) {
+    if (initial != nullptr && !valid_fields(*initial, device, equilibrium)) {
         return std::unexpected(invalid(
             equilibrium ? "initial state needs a finite potential for every node"
-                        : "initial state needs a finite potential and positive densities for "
-                          "every node"));
+                        : "initial state needs a finite potential for every node and positive "
+                          "densities for every semiconductor node"));
     }
     auto scaling = assemble::make_scaling(device, options.Ns_override);
     if (!scaling) return std::unexpected(std::move(scaling.error()));
@@ -140,6 +144,8 @@ std::expected<results::Sweep, base::Error> sweep_bias(const device::Device& devi
                        point.terminal_current_resolution.assign(contacts.size(), 0.0);
                        point.gate_charge = system->gate_charges(psi);
                        for (double& Q : point.gate_charge) Q *= charge_scale;
+                       point.interface_trap_charge = system->interface_trap_charges(psi);
+                       for (double& Q : point.interface_trap_charge) Q *= charge_scale;
                        point.edge_current_n.assign(edges, 0.0);
                        point.edge_current_p.assign(edges, 0.0);
                        return {};
@@ -160,6 +166,7 @@ std::expected<results::Sweep, base::Error> sweep_bias(const device::Device& devi
             x[3 * i + 1] = initial->n_cm3[i] / scaling->Ns;
             x[3 * i + 2] = initial->p_cm3[i] / scaling->Ns;
         }
+        system->stamp_contacts(x);  // insulator densities 0
     } else {
         auto start = solve_equilibrium(
             device,
@@ -201,6 +208,8 @@ std::expected<results::Sweep, base::Error> sweep_bias(const device::Device& devi
                    for (double& I : point.terminal_current_resolution) I *= current_scale;
                    point.gate_charge = system->gate_charges(x);
                    for (double& Q : point.gate_charge) Q *= charge_scale;
+                   point.interface_trap_charge = system->interface_trap_charges(x);
+                   for (double& Q : point.interface_trap_charge) Q *= charge_scale;
                    for (const auto& [jn, jp] : system->edge_currents(x)) {
                        point.edge_current_n.push_back(jn * current_scale);
                        point.edge_current_p.push_back(jp * current_scale);

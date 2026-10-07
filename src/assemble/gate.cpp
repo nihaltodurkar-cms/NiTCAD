@@ -35,6 +35,21 @@ double gate_intrinsic_offset_V(const device::GateStack& gate, const physics::Sem
            conduction_to_intrinsic;
 }
 
+double electrode_work_function_eV(const device::Electrode& electrode, double temperature_K) {
+    const physics::Semiconductor poly = physics::silicon();
+    const double chi = poly.parameters().electron_affinity_eV;
+    switch (electrode.kind) {
+        case device::GateElectrode::n_poly:
+            return chi;
+        case device::GateElectrode::p_poly:
+            return chi + physics::band_gap_eV(poly, temperature_K);
+        case device::GateElectrode::metal:
+            return electrode.work_function_eV;
+    }
+    NITCAD_EXPECTS(false);  // a validated device has no other electrode
+    return 0.0;
+}
+
 GateTerm gate_term(const device::GateStack& gate, const physics::Semiconductor& m, double area_cm,
                    int dimension, const Scaling& scaling) {
     const double area = area_cm / std::pow(scaling.L_D, dimension - 1);

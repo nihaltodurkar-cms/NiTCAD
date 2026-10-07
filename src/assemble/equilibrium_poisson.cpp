@@ -2,11 +2,13 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <utility>
 
 #include "NiTCAD/assemble/contact_bias.hpp"
 #include "NiTCAD/assemble/ohmic.hpp"
 #include "NiTCAD/base/contract.hpp"
+#include "NiTCAD/physics/interface_traps.hpp"
 #include "scaled_device.hpp"
 
 namespace NiTCAD::assemble {
@@ -33,7 +35,16 @@ std::expected<EquilibriumPoisson, base::Error> EquilibriumPoisson::create(
     p.contact_.assign(n, 0);
     p.gates_ = std::move(scaled->gates);
     p.kinds_ = std::move(scaled->kinds);
+    p.insulator_ = std::move(scaled->insulator);
+    p.electrode_ = std::move(scaled->electrode);
+    p.electrode_potential_ = std::move(scaled->electrode_potential);
+    p.interfaces_ = std::move(scaled->interfaces);
+    p.V_T_ = scaling.V_T;
     for (std::size_t i = 0; i < n; ++i) {
+        if (p.electrode_[i] >= 0) {
+            p.contact_[i] = 1;
+            p.psi0_[i] = p.electrode_potential_[i];
+        }
         if (scaled->contact[i] < 0) continue;
         p.contact_[i] = 1;
         const physics::NeutralEquilibrium e = detail::neutral_equilibrium(
@@ -72,12 +83,36 @@ std::expected<EquilibriumPoisson, base::Error> EquilibriumPoisson::create(
 std::expected<void, base::Error> EquilibriumPoisson::set_bias(std::span<const double> bias_V) {
     if (auto ok = check_contact_bias(kinds_, bias_V, true); !ok) return ok;
     gates_.set_bias(bias_V);
+    for (std::size_t i = 0; i < unknowns(); ++i) {
+        if (electrode_[i] < 0) continue;
+        psi0_[i] = bias_V[static_cast<std::size_t>(electrode_[i])] / V_T_ + electrode_potential_[i];
+    }
     return {};
 }
 
 std::vector<double> EquilibriumPoisson::gate_charges(std::span<const double> psi) const {
     NITCAD_EXPECTS(psi.size() == unknowns());
-    return gates_.charges(psi, 1, kinds_.size());
+    std::vector<double> charge = gates_.charges(psi, 1, kinds_.size());
+    // An electrode's charge is the displacement flux leaving its nodes (Gauss over their boxes,
+    // which hold no other charge).
+    for (const EdgeTerm& e : edges_) {
+        const std::int32_t ci = electrode_[e.i], cj = electrode_[e.j];
+        if (ci == cj) continue;
+        const double flux = e.c * (psi[e.i] - psi[e.j]);  // from i to j
+        if (ci >= 0) charge[static_cast<std::size_t>(ci)] += flux;
+        if (cj >= 0) charge[static_cast<std::size_t>(cj)] -= flux;
+    }
+    return charge;
+}
+
+std::vector<double> EquilibriumPoisson::interface_trap_charges(
+    std::span<const double> psi) const {
+    NITCAD_EXPECTS(psi.size() == unknowns());
+    return interfaces_.trapped_charges([&](const InterfaceNode& v, const InterfaceLevel& l) {
+        const physics::FermiOccupancy f =
+            physics::fermi_occupancy(l.tau - (psi[v.node] + band_shift_[v.node]));
+        return std::pair{f.occupied, f.empty};
+    });
 }
 
 linalg::SparseMatrix EquilibriumPoisson::make_jacobian() const { return pattern_; }
@@ -89,6 +124,11 @@ void EquilibriumPoisson::residual_into(std::span<const double> psi, std::span<do
     for (std::size_t i = 0; i < n; ++i) {
         if (contact_[i] != 0) {
             residual[i] = psi[i] - psi0_[i];
+            continue;
+        }
+        if (insulator_[i] != 0) {  // no charge
+            residual[i] = 0.0;
+            if (!jacobian_values.empty()) jacobian_values[diag_[i]] = 0.0;
             continue;
         }
         const double eta = psi[i] + band_shift_[i];
@@ -117,6 +157,12 @@ void EquilibriumPoisson::residual_into(std::span<const double> psi, std::span<do
             residual[i] += gates_.row_term(i, psi[i]);
             if (!jacobian_values.empty()) jacobian_values[diag_[i]] -= gates_.term(i).coupling;
         }
+    }
+    for (const InterfaceNode& v : interfaces_.nodes()) {
+        const InterfaceNodes::EquilibriumCharge q =
+            interfaces_.equilibrium_charge(v, psi[v.node] + band_shift_[v.node]);
+        residual[v.node] += q.value;
+        if (!jacobian_values.empty()) jacobian_values[diag_[v.node]] += q.d_eta;
     }
     for (const EdgeTerm& e : edges_) {
         const double flux = e.c * (psi[e.j] - psi[e.i]);
@@ -154,6 +200,10 @@ void EquilibriumPoisson::carriers(std::span<const double> psi, std::span<double>
                                   std::span<double> p) const {
     NITCAD_EXPECTS(psi.size() == unknowns() && n.size() == unknowns() && p.size() == unknowns());
     for (std::size_t i = 0; i < unknowns(); ++i) {
+        if (insulator_[i] != 0) {
+            n[i] = p[i] = 0.0;
+            continue;
+        }
         const double eta = psi[i] + band_shift_[i];
         n[i] = detail::density(fermi_dirac_, n_ie_[i], log_dos_n_[i], eta).density;
         p[i] = detail::density(fermi_dirac_, n_ie_[i], log_dos_p_[i], -eta).density;
@@ -168,6 +218,11 @@ BandEdges EquilibriumPoisson::band_edges(std::span<const double> psi) const {
     BandEdges b{std::vector<double>(n), std::vector<double>(n), std::vector<double>(n),
                 std::vector<double>(n)};
     for (std::size_t i = 0; i < n; ++i) {
+        if (insulator_[i] != 0) {
+            const double nan = std::numeric_limits<double>::quiet_NaN();
+            b.conduction[i] = b.valence[i] = b.electron_fermi[i] = b.hole_fermi[i] = nan;
+            continue;
+        }
         const detail::NodeBands e =
             detail::node_bands(fermi_dirac_, n_ie_[i], log_dos_n_[i], log_dos_p_[i],
                                psi[i] + band_shift_[i], carriers_n[i], carriers_p[i]);
@@ -182,8 +237,8 @@ BandEdges EquilibriumPoisson::band_edges(std::span<const double> psi) const {
 std::vector<double> EquilibriumPoisson::charge_neutral_potential() const {
     std::vector<double> psi(unknowns());
     for (std::size_t i = 0; i < psi.size(); ++i) {
-        psi[i] = contact_[i] != 0
-                     ? psi0_[i]
+        psi[i] = contact_[i] != 0  ? psi0_[i]
+                 : insulator_[i] != 0 ? 0.0
                      : detail::neutral_equilibrium(fermi_dirac_, ionization_, doping_[i],
                                                    donors_[i], acceptors_[i], n_ie_[i],
                                                    log_dos_n_[i], log_dos_p_[i], levels_[i])

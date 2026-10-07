@@ -49,6 +49,14 @@
 // gate's bias, G_i (psi_G,i - psi_i) + S_i, and its continuity rows no boundary flux (legacy
 // Device2D GateBC: Robin on psi only).
 //
+// Insulators (Unit 15b): an insulator node's continuity rows are n = 0 and p = 0 (F = n, F = p),
+// its Poisson row the box row with no charge, or on an electrode node the Dirichlet row
+// psi - psi_E (scaled_device.hpp); no carrier flux is assembled on an edge with an insulator end,
+// so none crosses a semiconductor-insulator edge. A semiconductor node at a semiconductor-insulator
+// interface gains the interface terms of interface_nodes.hpp: the fixed and trapped charge in its
+// Poisson row and the traps' and surface recombination in its continuity rows, with the
+// steady-state SRH occupancy at its n and p.
+//
 // Jn and Jp are the electron and hole current densities in units of J0 (conventional current, along
 // the edge from a to b); their sum is divergence-free at every node off the ohmic contacts (gate
 // nodes included), so the terminal current of an ohmic contact is the total flux on the edges
@@ -57,7 +65,8 @@
 // Newton update (legacy Device1D::newton): psi is clipped to +-max_update; n and p are clamped to
 // [0.1, 10] times their current value, which keeps them positive. The convergence measure is the
 // largest of |dpsi|, |dn| / n and |dp| / p of the FULL correction (6.2; the legacy measured the
-// damped one). Only during iteration: the converged state is never clamped (6.7).
+// damped one); an insulator node's densities stay 0 and are not measured. Only during iteration:
+// the converged state is never clamped (6.7).
 #pragma once
 
 #include <cstddef>
@@ -69,6 +78,7 @@
 
 #include "NiTCAD/assemble/band_edges.hpp"
 #include "NiTCAD/assemble/gate.hpp"
+#include "NiTCAD/assemble/interface_nodes.hpp"
 #include "NiTCAD/assemble/models.hpp"
 #include "NiTCAD/assemble/sg_flux.hpp"
 #include "NiTCAD/assemble/scaling.hpp"
@@ -98,11 +108,12 @@ public:
     [[nodiscard]] std::expected<void, base::Error> set_bias(std::span<const double> bias_V);
 
     // Scaled state of every node in equilibrium at the scaled potential psi under the selected
-    // statistics (Boltzmann: n = n_ie e^(psi + s), p = n_ie e^-(psi + s)), with the ohmic contact
-    // nodes set to their Dirichlet values. Precondition (NITCAD_EXPECTS): psi has node_count()
-    // entries.
+    // statistics (Boltzmann: n = n_ie e^(psi + s), p = n_ie e^-(psi + s); 0 on insulator nodes),
+    // with the ohmic contact and electrode nodes set to their Dirichlet values. Precondition
+    // (NITCAD_EXPECTS): psi has node_count() entries.
     [[nodiscard]] std::vector<double> state_from_potential(std::span<const double> psi) const;
-    // Sets the ohmic contact nodes of a state to their Dirichlet values.
+    // Sets the ohmic contact and electrode nodes of a state to their Dirichlet values and the
+    // densities of insulator nodes to 0.
     void stamp_contacts(std::span<double> x) const;
 
     [[nodiscard]] linalg::SparseMatrix make_jacobian() const;
@@ -132,13 +143,18 @@ public:
     // value for every ohmic contact; zero for a gate. A current below it is not resolved by the
     // (psi, n, p) state.
     [[nodiscard]] std::vector<double> terminal_current_resolution(std::span<const double> x) const;
-    // The band diagram at state x (band_edges.hpp). Precondition (NITCAD_EXPECTS): x has
-    // unknowns() entries and positive densities.
+    // The band diagram at state x (band_edges.hpp); NaN on insulator nodes. Precondition
+    // (NITCAD_EXPECTS): x has unknowns() entries and positive densities off the insulators.
     [[nodiscard]] BandEdges band_edges(std::span<const double> x) const;
-    // Scaled charge on each gate electrode, the sum over its nodes of G_i (psi_G,i - psi_i)
-    // (gate.hpp), in device.contacts() order; zero for an ohmic contact. Physical value: times
-    // q Ns L_D^D, in C / cm^(3-D).
+    // Scaled charge on each gate, the sum over its nodes of G_i (psi_G,i - psi_i) (gate.hpp), and
+    // on each electrode, the displacement flux leaving its nodes along the edges to other nodes,
+    // in device.contacts() order; zero for an ohmic contact. Physical value: times q Ns L_D^D, in
+    // C / cm^(3-D).
     [[nodiscard]] std::vector<double> gate_charges(std::span<const double> x) const;
+    // Scaled trapped charge of each declared interface at state x (interface_nodes.hpp, without the
+    // fixed charge), in units of q Ns L_D^D. Precondition (NITCAD_EXPECTS): x has unknowns()
+    // entries.
+    [[nodiscard]] std::vector<double> interface_trap_charges(std::span<const double> x) const;
 
 private:
     DriftDiffusion() = default;
@@ -160,6 +176,7 @@ private:
         // Thermionic emission (an interface edge with the model on): factors K and, per band,
         // ln(N_b / N_a) and N_a / N_b.
         bool thermionic;
+        bool carriers;      // both ends are semiconductor nodes (else no carrier flux)
         double te_kn, te_kp, te_log_nc, te_ratio_nc, te_log_nv, te_ratio_nv;
         // Positions in the Jacobian values: row a with columns of b, row b with columns of a,
         // in the order (psi, psi), (n, psi), (n, n), (p, psi), (p, p).
@@ -189,7 +206,11 @@ private:
     std::vector<physics::DopantLevels> levels_;  // dopant levels in units of kT
     std::vector<double> radiative_;              // B [cm^3/s]
     std::vector<std::int32_t> contact_;   // ohmic contact index per node, or -1
+    std::vector<char> insulator_;         // 1 on insulator nodes
+    std::vector<std::int32_t> electrode_; // electrode contact index per node, or -1
+    std::vector<double> electrode_potential_;  // psi_E at zero bias
     GateNodes gates_;
+    InterfaceNodes interfaces_;
     std::vector<device::ContactKind> kinds_;  // per contact
     std::vector<double> psi0_, n0_, p0_;  // Dirichlet values per node (contact nodes only)
     std::vector<EdgeTerm> edges_;
