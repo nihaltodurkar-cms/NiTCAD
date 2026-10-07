@@ -148,7 +148,8 @@ add_library(nitcad_physics STATIC
   src/physics/bandgap_narrowing.cpp
   src/physics/field_mobility.cpp
   src/physics/fermi_dirac.cpp
-  src/physics/thermionic_emission.cpp)
+  src/physics/thermionic_emission.cpp
+  src/physics/ionization.cpp)
 add_library(NiTCAD::physics ALIAS nitcad_physics)
 target_include_directories(nitcad_physics PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
 target_link_libraries(nitcad_physics PUBLIC NiTCAD::base)

@@ -10,7 +10,10 @@
 #include <numbers>
 
 #include "NiTCAD/base/constants.hpp"
+#include "NiTCAD/physics/ionization.hpp"
+#include "NiTCAD/physics/recombination.hpp"
 #include "NiTCAD/physics/semiconductor.hpp"
+#include "NiTCAD/physics/statistics.hpp"
 #include "NiTCAD/physics/thermionic_emission.hpp"
 
 using namespace NiTCAD;
@@ -56,16 +59,18 @@ TEST_CASE("materials: every legacy set validates and gives its band quantities a
 }
 
 TEST_CASE("materials: AlGaAs follows the legacy interpolation inside the direct-gap regime") {
-    // x = 0 has GaAs's band parameters (the other fields are the silicon defaults, as in the
-    // legacy, so it is not GaAs's full set).
+    // x = 0 is GaAs except the radiative coefficient (AlGaAs's) and the dopant levels (complete
+    // ionization): the legacy took silicon's defaults for the fields it did not interpolate.
     const SemiconductorParameters g = *algaas_parameters(0.0);
-    const SemiconductorParameters& gaas = gallium_arsenide_parameters;
-    REQUIRE(g.eps_r == gaas.eps_r);
-    REQUIRE(g.Eg0_eV == gaas.Eg0_eV);
-    REQUIRE(g.electron_affinity_eV == gaas.electron_affinity_eV);
-    REQUIRE(g.Nc300 == gaas.Nc300);
-    REQUIRE(g.Nv300 == gaas.Nv300);
-    REQUIRE(g.electron_mobility.mu_min == silicon_parameters.electron_mobility.mu_min);
+    SemiconductorParameters gaas = gallium_arsenide_parameters;
+    gaas.radiative_cm3_s = 1.8e-10;
+    gaas.ionization.donor_eV = 0.0;
+    gaas.ionization.acceptor_eV = 0.0;
+    REQUIRE(g == gaas);
+    // The conduction-band share sets chi: 0.62 of the 1.247 x gap step.
+    REQUIRE(close(algaas_parameters(0.3, 0.62)->electron_affinity_eV, 4.07 - 0.62 * 1.247 * 0.3,
+                  1e-15));
+    REQUIRE_FALSE(algaas_parameters(0.3, 1.2).has_value());
     // The conduction band takes 0.85 / 1.247 of the gap step.
     const SemiconductorParameters a = *algaas_parameters(0.45);
     REQUIRE(close((g.electron_affinity_eV - a.electron_affinity_eV) / (a.Eg0_eV - g.Eg0_eV),
@@ -114,4 +119,111 @@ TEST_CASE("thermionic: the emission velocity is sqrt(kT / 2 pi m) with m from N"
                   1e-15));
     REQUIRE(close(emission_velocity_cm_s(8e19, 300.0), 0.5 * emission_velocity_cm_s(1e19, 300.0),
                   1e-15));
+}
+
+// Unit 15 fixes: incomplete ionization, radiative recombination, Richardson constants.
+
+TEST_CASE("ionization: the ionized fraction, its derivative and its limits") {
+    // N / (1 + g e^(eta + E/kT)) with an exact eta derivative; complete for a zero level depth;
+    // no overflow at either end.
+    const double N = 3e17, depth = 1.7, g = 4.0;
+    for (const double eta : {-40.0, -5.0, -1.7 - std::log(4.0), 0.0, 3.0, 40.0}) {
+        CAPTURE(eta);
+        const IonizedDensity d = ionized_density(N, eta, depth, g);
+        REQUIRE(close(d.value, N / (1.0 + g * std::exp(eta + depth)), 1e-14));
+        const double h = 1e-6;
+        const double fd = (ionized_density(N, eta + h, depth, g).value -
+                           ionized_density(N, eta - h, depth, g).value) /
+                          (2.0 * h);
+        REQUIRE(std::abs(d.d_eta - fd) <= 1e-8 * N);
+        REQUIRE(d.d_eta <= 0.0);
+    }
+    REQUIRE(ionized_density(N, -1000.0, depth, g).value == N);
+    REQUIRE(ionized_density(N, 1000.0, depth, g).value == 0.0);
+    REQUIRE(ionized_density(N, 2.0, 0.0, g).value == N);  // no level modelled
+    REQUIRE(ionized_density(N, 2.0, 0.0, g).d_eta == 0.0);
+}
+
+TEST_CASE("ionization: freeze-out of boron in silicon against 40-digit roots (legacy G7(b,c))") {
+    // N_A = 1e16, Fermi-Dirac statistics, no band-gap narrowing: the ionized fraction from the
+    // neutral root, against 40-digit bisection (mpmath) and the legacy's literature bands (Sze and
+    // Ng freeze-out curves; Altermatt et al. 2002): 77 K 15-45%, 150 K 70-98%, 250 K >= 85%,
+    // 300 K >= 95%.
+    struct Case {
+        double T, fraction, lo, hi;
+    };
+    const Semiconductor si = silicon();
+    for (const Case& c : {Case{77.0, 0.28569515950110180743, 0.15, 0.45},
+                          Case{150.0, 0.90320077464647178068, 0.70, 0.98},
+                          Case{250.0, 0.98666377695706836634, 0.85, 1.01},
+                          Case{300.0, 0.99274907884852032535, 0.95, 1.01}}) {
+        CAPTURE(c.T);
+        const double ni = intrinsic_density(si, c.T);
+        const double VT = base::thermal_voltage(c.T);
+        const DopantLevels levels{0.045 / VT, 0.045 / VT, 2.0, 4.0};
+        const NeutralEquilibrium e = ionized_neutral_equilibrium(
+            0.0, 1e16, ni, std::log(conduction_band_dos(si, c.T) / ni),
+            std::log(valence_band_dos(si, c.T) / ni), levels, true);
+        const double fraction = (e.p - e.n) / 1e16;
+        REQUIRE(close(fraction, c.fraction, 1e-10));
+        REQUIRE(fraction >= c.lo);
+        REQUIRE(fraction <= c.hi);
+    }
+}
+
+TEST_CASE("ionization: 4H-SiC dopants at 300 K against 40-digit roots") {
+    // 1e17 cm^-3: nitrogen (70 meV) is 87% ionized, aluminium (220 meV) only 10.6%, the reason
+    // p-type SiC needs incomplete ionization at room temperature.
+    const Semiconductor sic = *Semiconductor::create(silicon_carbide_4h_parameters);
+    const double T = 300.0, VT = base::thermal_voltage(T);
+    const double ni = intrinsic_density(sic, T);
+    const double gn = std::log(conduction_band_dos(sic, T) / ni);
+    const double gp = std::log(valence_band_dos(sic, T) / ni);
+    const DopantLevels levels{0.070 / VT, 0.220 / VT, 2.0, 4.0};
+    const auto n_type = ionized_neutral_equilibrium(1e17, 0.0, ni, gn, gp, levels, false);
+    const auto p_type = ionized_neutral_equilibrium(0.0, 1e17, ni, gn, gp, levels, false);
+    const auto p_fd = ionized_neutral_equilibrium(0.0, 1e17, ni, gn, gp, levels, true);
+    REQUIRE(close((n_type.n - n_type.p) / 1e17, 0.86730068141878451811, 1e-10));
+    REQUIRE(close((p_type.p - p_type.n) / 1e17, 0.10608856780082795032, 1e-10));
+    REQUIRE(close((p_fd.p - p_fd.n) / 1e17, 0.10608105608322771641, 1e-10));
+    // Complete-ionization limit: a zero level depth gives the ordinary neutral root.
+    const DopantLevels none{0.0, 0.0, 2.0, 4.0};
+    const auto complete = ionized_neutral_equilibrium(1e17, 0.0, ni, gn, gp, none, false);
+    REQUIRE(std::abs(complete.eta - boltzmann_neutral_equilibrium(1e17, ni).eta) <=
+            1e-12 * complete.eta);
+}
+
+TEST_CASE("recombination: radiative is B (n p - E) with the partials of E") {
+    const EquilibriumProduct E{4.0e20, 3.0e3, 2.0e3};
+    const double B = 7.2e-10, n = 1e17, p = 5e10;
+    const RecombinationRate r = radiative_recombination(n, p, E, B);
+    REQUIRE(r.rate == B * (n * p - E.value));
+    REQUIRE(r.d_dn == B * (p - E.d_dn));
+    REQUIRE(r.d_dp == B * (n - E.d_dp));
+    REQUIRE(radiative_recombination(2e10, 2e10, {4e20, 0.0, 0.0}, B).rate == 0.0);
+}
+
+TEST_CASE("thermionic: a set Richardson constant gives A* T^2 / (q N)") {
+    // The legacy Schottky table's silicon electron value, 252 A/(cm^2 K^2), gives 4.950e6 cm/s at
+    // 300 K (legacy emission_velocity docstring), 1.92 times the density-of-states velocity.
+    SemiconductorParameters p = silicon_parameters;
+    p.richardson = {.electron = 252.0, .hole = 0.0};
+    const Semiconductor m = *Semiconductor::create(p);
+    const double Nc = conduction_band_dos(m, 300.0);
+    const double v = emission_velocity_cm_s(m, Carrier::electron, 300.0);
+    REQUIRE(close(v, 252.0 * 300.0 * 300.0 / (base::q_C * Nc), 1e-15));
+    REQUIRE(close(v, 4.950e6, 1e-3));
+    REQUIRE(close(v / emission_velocity_cm_s(Nc, 300.0), 1.92, 0.01));
+    // An unset constant falls back to the density of states.
+    REQUIRE(emission_velocity_cm_s(m, Carrier::hole, 300.0) ==
+            emission_velocity_cm_s(valence_band_dos(m, 300.0), 300.0));
+    SemiconductorParameters bad = silicon_parameters;
+    bad.richardson.hole = -1.0;
+    REQUIRE_FALSE(Semiconductor::create(bad).has_value());
+    bad = silicon_parameters;
+    bad.ionization.donor_degeneracy = 0.0;
+    REQUIRE_FALSE(Semiconductor::create(bad).has_value());
+    bad = silicon_parameters;
+    bad.radiative_cm3_s = -1e-10;
+    REQUIRE_FALSE(Semiconductor::create(bad).has_value());
 }

@@ -46,7 +46,8 @@ struct BiasOptions {
     NewtonOptions newton;
     linalg::SolverConfig linear;
     std::optional<double> Ns_override;  // see assemble::make_scaling
-    assemble::PhysicsModels models;     // equilibrium_poisson: only bgn and fermi_dirac matter
+    assemble::PhysicsModels models;     // equilibrium_poisson: bgn, fermi_dirac and
+                                        // incomplete_ionization matter
     Equations equations = Equations::drift_diffusion;
 };
 
@@ -74,8 +75,8 @@ struct BiasOptions {
 // The run record of a sweep: the identity digest of every input the sweep reads (device, options,
 // bias points, initial state) and those options as named settings. Inputs the sweep ignores are
 // left out, so they do not change the identity: with equilibrium_poisson the mobility, SRH, Auger,
-// field-mobility and thermionic-emission switches and the initial densities; the work function of
-// a polysilicon gate.
+// field-mobility and radiative switches, the interfaces' transport and the initial densities; the
+// work function of a polysilicon gate.
 [[nodiscard]] results::RunRecord make_run_record(const device::Device& device,
                                                  const BiasOptions& options,
                                                  std::span<const std::vector<double>> points,

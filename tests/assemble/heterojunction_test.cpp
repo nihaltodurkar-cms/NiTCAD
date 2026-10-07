@@ -16,6 +16,8 @@
 #include "NiTCAD/assemble/thermionic_flux.hpp"
 #include "NiTCAD/device/device.hpp"
 #include "NiTCAD/mesh/tensor_grid.hpp"
+#include "NiTCAD/physics/field_mobility.hpp"
+#include "NiTCAD/physics/mobility.hpp"
 #include "NiTCAD/physics/semiconductor.hpp"
 #include "NiTCAD/physics/statistics.hpp"
 #include "NiTCAD/physics/thermionic_emission.hpp"
@@ -46,11 +48,14 @@ std::vector<double> uniform_axis(double length, int nodes) {
     return a;
 }
 
+constexpr auto drift_diffusion = device::InterfaceTransport::drift_diffusion;
+constexpr auto thermionic = device::InterfaceTransport::thermionic_emission;
+
 // Material `left` on x < 1 um with net doping C_left, `right` beyond with C_right (positive:
-// donors); ohmic contacts on x_min and x_max.
+// donors); ohmic contacts on x_min and x_max; the interface declared with `transport`.
 device::Device junction(mesh::Mesh m, const physics::SemiconductorParameters& left,
                         const physics::SemiconductorParameters& right, double C_left,
-                        double C_right) {
+                        double C_right, device::InterfaceTransport transport = drift_diffusion) {
     const std::size_t n = m.node_count();
     std::vector<double> donors(n, 0.0), acceptors(n, 0.0);
     std::vector<device::RegionId> region(n, 0);
@@ -71,7 +76,8 @@ device::Device junction(mesh::Mesh m, const physics::SemiconductorParameters& le
          .donors = std::move(donors),
          .acceptors = std::move(acceptors),
          .contacts = {{"anode", device::ContactKind::ohmic, std::move(anode)},
-                      {"cathode", device::ContactKind::ohmic, std::move(cathode)}}});
+                      {"cathode", device::ContactKind::ohmic, std::move(cathode)}},
+         .interfaces = {{"left", "right", transport}}});
 }
 
 physics::SemiconductorParameters silicon_with(double d_chi, double d_eps = 0.0) {
@@ -271,13 +277,20 @@ TEST_CASE("heterojunction: FD-Jacobian gates in 1D, 2D and 3D, with thermionic e
     const auto x = graded_axis(30);
     const auto xs = graded_axis(10);
     const auto y = uniform_axis(1e-4, 3);
-    const auto make = [&](mesh::Mesh m) {
-        return junction(std::move(m), physics::silicon_parameters, right, -1e17, 1e17);
+    struct Case {
+        assemble::PhysicsModels models;
+        device::InterfaceTransport transport;
     };
-    for (const assemble::PhysicsModels& models :
-         {assemble::PhysicsModels{}, assemble::PhysicsModels{.thermionic_emission = true},
-          assemble::PhysicsModels{.fermi_dirac = true, .thermionic_emission = true}}) {
-        CAPTURE(models.thermionic_emission, models.fermi_dirac);
+    for (const Case& c : {Case{{}, drift_diffusion}, Case{{}, thermionic},
+                          Case{{.fermi_dirac = true}, thermionic},
+                          Case{{.field_mobility = true, .incomplete_ionization = true},
+                               drift_diffusion}}) {
+        const assemble::PhysicsModels& models = c.models;
+        const auto make = [&](mesh::Mesh m) {
+            return junction(std::move(m), physics::silicon_parameters, right, -1e17, 1e17,
+                            c.transport);
+        };
+        CAPTURE(c.transport == thermionic, models.fermi_dirac, models.field_mobility);
         const auto [s1, x1] = probe_state(make(*mesh::make_tensor_grid(x)), 42, models);
         const auto [s2, x2] = probe_state(make(*mesh::make_tensor_grid(xs, y)), 43, models);
         const auto [s3, x3] = probe_state(make(*mesh::make_tensor_grid(xs, y, y)), 44, models);
@@ -290,7 +303,8 @@ TEST_CASE("heterojunction: FD-Jacobian gates in 1D, 2D and 3D, with thermionic e
         REQUIRE(e2 <= 5e-5);
         REQUIRE(e3 <= 5e-5);
     }
-    const device::Device d = make(*mesh::make_tensor_grid(x));
+    const device::Device d =
+        junction(*mesh::make_tensor_grid(x), physics::silicon_parameters, right, -1e17, 1e17);
     const auto poisson = *EquilibriumPoisson::create(d, *assemble::make_scaling(d));
     std::vector<double> psi = poisson.charge_neutral_potential();
     Noise noise{9};
@@ -306,7 +320,10 @@ TEST_CASE("heterojunction: the thermionic part of the Jacobian matches finite di
     // columns (minority densities are below what a relative step resolves, Unit 14).
     const device::Device d = junction(*mesh::make_tensor_grid(graded_axis(20)),
                                       physics::silicon_parameters, silicon_with(0.3), 1e17, 1e17);
-    const auto [with, x0] = probe_state(d, 5, {.thermionic_emission = true});
+    const device::Device dt = junction(*mesh::make_tensor_grid(graded_axis(20)),
+                                       physics::silicon_parameters, silicon_with(0.3), 1e17, 1e17,
+                                       thermionic);
+    const auto [with, x0] = probe_state(dt, 5);
     const auto [without, unused] = probe_state(d, 5);
     std::vector<double> x = x0;
     const std::size_t n = with.unknowns();
@@ -352,8 +369,10 @@ TEST_CASE("heterojunction: the thermionic edge factor is hmean(v) times the scal
     const auto x = graded_axis(10);
     const device::Device d = junction(*mesh::make_tensor_grid(x), physics::silicon_parameters,
                                       silicon_with(-0.3), 1e17, 1e17);
+    const device::Device dt = junction(*mesh::make_tensor_grid(x), physics::silicon_parameters,
+                                       silicon_with(-0.3), 1e17, 1e17, thermionic);
     const auto s = *assemble::make_scaling(d);
-    const auto system = *DriftDiffusion::create(d, s, {.thermionic_emission = true});
+    const auto system = *DriftDiffusion::create(dt, s);
     std::vector<double> state(system.unknowns());
     for (std::size_t i = 0; i < x.size(); ++i) {
         state[3 * i] = 0.0;
@@ -374,17 +393,244 @@ TEST_CASE("heterojunction: the thermionic edge factor is hmean(v) times the scal
     REQUIRE(plain.edge_currents(state)[iface + 3] == currents[iface + 3]);
 }
 
-TEST_CASE("heterojunction: field mobility on an interface edge is refused") {
+TEST_CASE("heterojunction: field mobility across a material step is the mean of each side's") {
+    // Silicon | silicon with chi + 0.1 and its own Canali parameters (v_sat 0.5x, beta 1): the
+    // interface edge's mobility is hmean(mu_C,a(E), mu_C,b(E)), each end with its own material's
+    // low-field mobility and saturation; a homojunction edge keeps Unit 13's mu_C(hmean).
+    physics::SemiconductorParameters right = silicon_with(0.1);
+    right.electron_saturation = {.v_sat_cm_s = 0.5e7, .beta = 1.0};
+    right.electron_mobility.mu_max = 1000.0;
     const auto x = graded_axis(10);
-    const device::Device d = junction(*mesh::make_tensor_grid(x), physics::silicon_parameters,
-                                      silicon_with(0.1), 1e17, 1e17);
+    const device::Device d =
+        junction(*mesh::make_tensor_grid(x), physics::silicon_parameters, right, 1e17, 1e17);
     const auto s = *assemble::make_scaling(d);
-    const auto e = DriftDiffusion::create(d, s, {.field_mobility = true});
-    REQUIRE_FALSE(e.has_value());
-    REQUIRE(e.error().code == base::ErrorCode::invalid_input);
-    REQUIRE(e.error().context->index == static_cast<std::size_t>(x.size() / 2 - 1));
-    // A device of one material is unaffected.
-    const device::Device homo = junction(*mesh::make_tensor_grid(x), physics::silicon_parameters,
-                                         physics::silicon_parameters, 1e17, 1e17);
-    REQUIRE(DriftDiffusion::create(homo, s, {.field_mobility = true}).has_value());
+    const auto with = *DriftDiffusion::create(d, s, {.field_mobility = true});
+    const auto without = *DriftDiffusion::create(d, s);
+    std::vector<double> state(with.unknowns());
+    Noise noise{17};
+    for (std::size_t i = 0; i < x.size(); ++i) {
+        state[3 * i] = 2.0 * noise.next();  // edge fields of order 1e4-1e6 V/cm
+        state[3 * i + 1] = 1.0 + 0.1 * noise.next();
+        state[3 * i + 2] = 1e-6;
+    }
+    const auto a = with.edge_currents(state), b = without.edge_currents(state);
+    std::size_t iface = 0;
+    while (!(x[iface] < 1e-4 && x[iface + 1] >= 1e-4)) ++iface;
+    const physics::Semiconductor si = physics::silicon();
+    const physics::Semiconductor r = *physics::Semiconductor::create(right);
+    const auto electron = physics::Carrier::electron;
+    const double mu_a = physics::caughey_thomas_mobility(si, electron, 1e17, 300.0);
+    const double mu_b = physics::caughey_thomas_mobility(r, electron, 1e17, 300.0);
+    const double E = s.V_T * std::abs(state[3 * (iface + 1)] - state[3 * iface]) /
+                     (x[iface + 1] - x[iface]);
+    const double ma =
+        physics::canali_mobility(mu_a, E, si.parameters().electron_saturation).mobility;
+    const double mb = physics::canali_mobility(mu_b, E, right.electron_saturation).mobility;
+    const double factor = (2.0 * ma * mb / (ma + mb)) / (2.0 * mu_a * mu_b / (mu_a + mu_b));
+    CAPTURE(E, factor);
+    REQUIRE(factor < 0.9);  // the field is high enough to matter
+    REQUIRE(close(a[iface].first, factor * b[iface].first, 1e-13));
+    // And the Jacobian stays exact there.
+    const auto [system, probe] = probe_state(d, 21, {.field_mobility = true});
+    REQUIRE(fd_jacobian_error(system, probe) <= 5e-5);
+}
+
+// Unit 15 fixes: incomplete ionization, radiative recombination, band edges, a non-planar
+// interface.
+
+namespace {
+
+// J(with) - J(without) against finite differences of F(with) - F(without), per column relative to
+// that column's largest difference, on the columns `use` selects; step relative (1e-6) on
+// densities, absolute (1e-7) on potentials.
+template <class Use>
+double part_error(const DriftDiffusion& with, const DriftDiffusion& without, std::vector<double> x,
+                  Use use) {
+    const std::size_t n = with.unknowns();
+    std::vector<double> f(n), g(n), up(n), down(n);
+    auto ja = with.make_jacobian(), jb = without.make_jacobian();
+    with.evaluate(x, f, ja);
+    without.evaluate(x, g, jb);
+    const auto a = dense(ja), b = dense(jb);
+    const auto difference = [&](const std::vector<double>& u, std::vector<double>& out) {
+        with.residual(u, f);
+        without.residual(u, g);
+        for (std::size_t r = 0; r < n; ++r) out[r] = f[r] - g[r];
+    };
+    double worst = 0.0, largest = 0.0;
+    for (std::size_t c = 0; c < n; ++c) {
+        if (!use(c, x[c])) continue;
+        const double base = x[c];
+        const double step = c % 3 == 0 ? 1e-7 * std::max(std::abs(base), 1.0) : 1e-6 * base;
+        x[c] = base + step;
+        const double hi = x[c];
+        difference(x, up);
+        x[c] = base - step;
+        const double lo = x[c];
+        difference(x, down);
+        x[c] = base;
+        double scale = 0.0, error = 0.0;
+        for (std::size_t r = 0; r < n; ++r) scale = std::max(scale, std::abs(a[r][c] - b[r][c]));
+        for (std::size_t r = 0; r < n; ++r) {
+            error = std::max(error, std::abs((up[r] - down[r]) / (hi - lo) - (a[r][c] - b[r][c])));
+        }
+        largest = std::max(largest, scale);
+        if (scale > 0.0) worst = std::max(worst, error / scale);
+    }
+    REQUIRE(largest > 0.0);
+    return worst;
+}
+
+}  // namespace
+
+TEST_CASE("heterojunction: FD-Jacobian gates with incomplete ionization (Poisson and DD)") {
+    // A 4H-SiC p-n junction (aluminium 220 meV: about 10% ionized) and a silicon one, Boltzmann
+    // and Fermi-Dirac.
+    const physics::SemiconductorParameters sic = physics::silicon_carbide_4h_parameters;
+    for (const bool fd : {false, true}) {
+        CAPTURE(fd);
+        const assemble::PhysicsModels models{.fermi_dirac = fd, .incomplete_ionization = true};
+        const device::Device d =
+            junction(*mesh::make_tensor_grid(graded_axis(30)), sic, sic, -1e17, 1e17);
+        const auto poisson = *EquilibriumPoisson::create(d, *assemble::make_scaling(d), models);
+        std::vector<double> psi = poisson.charge_neutral_potential();
+        Noise noise{31};
+        for (double& v : psi) v += 0.02 * noise.next();
+        REQUIRE(fd_jacobian_error(poisson, psi) <= 5e-5);
+        const auto [system, x] = probe_state(d, 32, models);
+        REQUIRE(fd_jacobian_error(system, x) <= 5e-5);
+        const auto [s2, x2] = probe_state(junction(*mesh::make_tensor_grid(graded_axis(30)),
+                                                   physics::silicon_parameters,
+                                                   physics::silicon_parameters, -1e17, 1e17),
+                                          33, models);
+        REQUIRE(fd_jacobian_error(s2, x2) <= 5e-5);
+    }
+}
+
+TEST_CASE("heterojunction: the ionization part of the Jacobian matches finite differences") {
+    // The ionized doping depends on the majority densities (its own band's): their columns.
+    const physics::SemiconductorParameters sic = physics::silicon_carbide_4h_parameters;
+    const device::Device d =
+        junction(*mesh::make_tensor_grid(graded_axis(20)), sic, sic, -1e17, 1e17);
+    for (const bool fd : {false, true}) {
+        CAPTURE(fd);
+        const auto [with, x0] =
+            probe_state(d, 41, {.fermi_dirac = fd, .incomplete_ionization = true});
+        const auto [without, unused] = probe_state(d, 41, {.fermi_dirac = fd});
+        const double e = part_error(with, without, x0, [](std::size_t c, double v) {
+            return c % 3 != 0 && v > 1e-4;
+        });
+        UNSCOPED_INFO("worst ionization column error " << e);
+        REQUIRE(e <= 1e-5);
+    }
+}
+
+TEST_CASE("heterojunction: the radiative part of the Jacobian matches finite differences") {
+    // A uniform GaAs state out of equilibrium (every flux zero): J(radiative) - J(none).
+    mesh::Mesh m = *mesh::make_tensor_grid(uniform_axis(2e-4, 21));
+    const std::size_t n_nodes = m.node_count();
+    auto left = m.find_boundary("x_min")->nodes;
+    const device::Device d = *device::Device::create(
+        {.mesh = std::move(m),
+         .temperature_K = 300.0,
+         .regions = {{"gaas", *physics::Semiconductor::create(
+                                   physics::gallium_arsenide_parameters)}},
+         .node_region = std::vector<device::RegionId>(n_nodes, 0),
+         .donors = std::vector<double>(n_nodes, 1e17),
+         .acceptors = std::vector<double>(n_nodes, 0.0),
+         .contacts = {{"left", device::ContactKind::ohmic, std::move(left)}}});
+    const auto s = *assemble::make_scaling(d);
+    const auto with = *DriftDiffusion::create(d, s, {.srh = false, .auger = false});
+    const auto without =
+        *DriftDiffusion::create(d, s, {.srh = false, .auger = false, .radiative = false});
+    std::vector<double> x(with.unknowns());
+    for (std::size_t i = 0; i < n_nodes; ++i) {
+        x[3 * i] = 0.1;
+        x[3 * i + 1] = 1.0;
+        x[3 * i + 2] = 1e-3;
+    }
+    const double e = part_error(with, without, x, [](std::size_t c, double) { return c >= 3; });
+    UNSCOPED_INFO("worst radiative column error " << e);
+    REQUIRE(e <= 1e-8);
+    // The rate is B (n p - n_ie^2): the hole row of a bulk node, divided by its volume.
+    std::vector<double> f(with.unknowns()), g(with.unknowns());
+    with.residual(x, f);
+    without.residual(x, g);
+    const double nie = physics::intrinsic_density(*physics::Semiconductor::create(
+                                                       physics::gallium_arsenide_parameters),
+                                                   300.0);
+    const double R = 7.2e-10 * (s.Ns * s.Ns * 1e-3 - nie * nie);
+    const double V = (1e-5) / s.L_D;  // the uniform 1D control volume, scaled
+    REQUIRE(close((f[3 * 5 + 2] - g[3 * 5 + 2]) / V, R / s.R0, 1e-12));
+}
+
+TEST_CASE("heterojunction: band edges are flat-Fermi at equilibrium and independent of node 0") {
+    // GaAs | Al0.3Ga0.7As p-n and its mirror image (node 0 then in AlGaAs): at the neutral guess
+    // the band edges of mirrored nodes agree, although the potentials differ by the band shift.
+    // The axis straddles the interface (no node on it), so the mirror is exact.
+    const auto graded = graded_axis(20);
+    const auto x = *mesh::straddle_interface(graded, 1e-4, graded[21] - graded[20]);
+    const physics::SemiconductorParameters gaas = physics::gallium_arsenide_parameters;
+    const physics::SemiconductorParameters algaas = *physics::algaas_parameters(0.3);
+    const device::Device d = junction(*mesh::make_tensor_grid(x), gaas, algaas, -1e17, 1e17);
+    const device::Device m = junction(*mesh::make_tensor_grid(x), algaas, gaas, 1e17, -1e17);
+    const auto pd = *EquilibriumPoisson::create(d, *assemble::make_scaling(d));
+    const auto pm = *EquilibriumPoisson::create(m, *assemble::make_scaling(m));
+    const auto bd = pd.band_edges(pd.charge_neutral_potential());
+    const auto bm = pm.band_edges(pm.charge_neutral_potential());
+    const std::size_t n = x.size();
+    for (std::size_t i = 0; i < n; ++i) {
+        CAPTURE(i);
+        REQUIRE(std::abs(bd.electron_fermi[i]) <= 1e-12);
+        REQUIRE(std::abs(bd.hole_fermi[i]) <= 1e-12);
+        REQUIRE(std::abs(bd.conduction[i] - bm.conduction[n - 1 - i]) <= 1e-12);
+        REQUIRE(std::abs(bd.valence[i] - bm.valence[n - 1 - i]) <= 1e-12);
+    }
+    REQUIRE(std::abs(pd.charge_neutral_potential()[0] - pm.charge_neutral_potential()[n - 1]) >
+            1.0);  // the potentials themselves do differ
+}
+
+TEST_CASE("heterojunction: a non-planar interface in 2D (FD-Jacobian, thermionic)") {
+    // GaAs on x < 1 um for y < 0.5 um and on x < 1.2 um above: the interface has a step, so its
+    // edges run in both directions. Declared thermionic.
+    const auto x = graded_axis(10);
+    const auto y = uniform_axis(1e-4, 5);
+    mesh::Mesh m = *mesh::make_tensor_grid(x, y);
+    const std::size_t n = m.node_count();
+    std::vector<device::RegionId> region(n);
+    std::vector<double> donors(n, 0.0), acceptors(n, 0.0);
+    for (std::size_t i = 0; i < n; ++i) {
+        const auto& pt = m.points()[i];
+        const double edge = pt[1] < 0.5e-4 ? 1e-4 : 1.2e-4;
+        region[i] = pt[0] < edge ? 0 : 1;
+        (pt[0] < 1e-4 ? acceptors[i] : donors[i]) = 1e17;
+    }
+    auto anode = m.find_boundary("x_min")->nodes;
+    auto cathode = m.find_boundary("x_max")->nodes;
+    const device::Device d = *device::Device::create(
+        {.mesh = std::move(m),
+         .temperature_K = 300.0,
+         .regions = {{"gaas",
+                      *physics::Semiconductor::create(physics::gallium_arsenide_parameters)},
+                     {"algaas", *physics::Semiconductor::create(*physics::algaas_parameters(0.3))}},
+         .node_region = std::move(region),
+         .donors = std::move(donors),
+         .acceptors = std::move(acceptors),
+         .contacts = {{"anode", device::ContactKind::ohmic, std::move(anode)},
+                      {"cathode", device::ContactKind::ohmic, std::move(cathode)}},
+         .interfaces = {{"gaas", "algaas", thermionic}}});
+    std::size_t vertical = 0;
+    for (const mesh::Edge& e : d.mesh().edges()) {
+        const bool cross = d.node_region()[static_cast<std::size_t>(e.first)] !=
+                           d.node_region()[static_cast<std::size_t>(e.second)];
+        if (cross && std::abs(d.mesh().points()[static_cast<std::size_t>(e.first)][0] -
+                              d.mesh().points()[static_cast<std::size_t>(e.second)][0]) < 1e-12) {
+            ++vertical;
+        }
+    }
+    REQUIRE(vertical > 0);  // interface edges along y exist
+    const auto [system, probe] = probe_state(d, 51, {.fermi_dirac = true});
+    const double e = fd_jacobian_error(system, probe);
+    UNSCOPED_INFO("worst column error " << e);
+    REQUIRE(e <= 5e-5);
 }

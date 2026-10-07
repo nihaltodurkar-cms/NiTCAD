@@ -1,7 +1,8 @@
 // Thermionic-emission fluxes across an abrupt heterointerface, in scaled variables with exact
-// partials (Unit 15; legacy device1d.cpp, the M33-S2 te_edge branch of residual_jacobian). With
-// PhysicsModels::thermionic_emission they replace the Scharfetter-Gummel fluxes of sg_flux.hpp on
-// every edge between two materials, in the same sign convention and EdgeFlux layout, for an edge
+// partials (Unit 15; legacy device1d.cpp, the M33-S2 te_edge branch of residual_jacobian). On the
+// edges of an interface the device declares thermionic_emission (device::Interface) they replace
+// the Scharfetter-Gummel fluxes of sg_flux.hpp, in the same sign convention and EdgeFlux layout,
+// for an edge
 // from node 1 to node 2 with driving term delta (the edge's delta_n or delta_p):
 //     electrons  Jn =  K (n2 g2 - n1 g1),  g1 = min(1, e^u),  g2 = r min(1, e^-u),
 //                      u = delta - ln(N2 / N1),  r = N1 / N2   (N = Nc);

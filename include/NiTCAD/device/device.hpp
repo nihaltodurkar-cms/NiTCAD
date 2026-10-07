@@ -11,7 +11,11 @@
 // total; that is the case where each node carries one dopant type.
 //
 // Several regions with different materials are allowed by the data model; the assemblers treat an
-// edge between two materials as a heterointerface (Unit 15, assemble/scaled_device.hpp).
+// edge between two materials as a heterointerface (Unit 15, assemble/scaled_device.hpp), across
+// which carriers drift and diffuse. A declared Interface between two regions may choose another
+// transport law for the edges joining them (ARCHITECTURE.md principle 9: interfaces carry their own
+// models). A graded composition, described as many regions, needs no declarations: its steps are
+// drift-diffusion.
 #pragma once
 
 #include <cstdint>
@@ -36,6 +40,19 @@ struct Region {
     physics::Semiconductor material;
 };
 
+// The carrier transport across the edges joining two regions.
+enum class InterfaceTransport : std::uint8_t {
+    drift_diffusion,      // Scharfetter-Gummel with the band offsets (the default for any edge)
+    thermionic_emission,  // emission-limited fluxes (assemble/thermionic_flux.hpp)
+};
+
+// A declared interface between two regions (order does not matter).
+struct Interface {
+    std::string region_a;
+    std::string region_b;
+    InterfaceTransport transport = InterfaceTransport::drift_diffusion;
+};
+
 struct DeviceDescription {
     mesh::Mesh mesh;
     double temperature_K;               // lattice temperature, uniform (no self-heating)
@@ -44,6 +61,7 @@ struct DeviceDescription {
     std::vector<double> donors;         // N_D per mesh node [cm^-3]
     std::vector<double> acceptors;      // N_A per mesh node [cm^-3]
     std::vector<Contact> contacts;
+    std::vector<Interface> interfaces;  // declared interfaces; may be empty
 };
 
 class Device {
@@ -65,7 +83,10 @@ public:
     // - a floating region: a connected part of the mesh graph with no ohmic contact node. Its
     //   potential or carrier densities would be undetermined (the Poisson or continuity matrices
     //   singular), the case the linear solver's pivot-ratio heuristic otherwise has to catch
-    //   (6.10); a gate does not anchor the carriers. The index is the lowest node of that part.
+    //   (6.10); a gate does not anchor the carriers. The index is the lowest node of that part;
+    // - an interface naming an unknown region, the same region twice, a pair already declared (in
+    //   either order), a pair no mesh edge joins, or an unknown transport; the index is the
+    //   interface.
     [[nodiscard]] static std::expected<Device, base::Error> create(DeviceDescription description);
 
     [[nodiscard]] const mesh::Mesh& mesh() const noexcept { return d_.mesh; }
@@ -75,6 +96,10 @@ public:
     [[nodiscard]] std::span<const double> donors() const noexcept { return d_.donors; }
     [[nodiscard]] std::span<const double> acceptors() const noexcept { return d_.acceptors; }
     [[nodiscard]] std::span<const Contact> contacts() const noexcept { return d_.contacts; }
+    [[nodiscard]] std::span<const Interface> interfaces() const noexcept { return d_.interfaces; }
+    // The transport across an edge joining regions a and b: the declared interface's, else
+    // drift-diffusion. Precondition (NITCAD_EXPECTS): both are valid region ids.
+    [[nodiscard]] InterfaceTransport transport(RegionId a, RegionId b) const;
     // The contact with this name, or nullptr.
     [[nodiscard]] const Contact* find_contact(std::string_view name) const noexcept;
 

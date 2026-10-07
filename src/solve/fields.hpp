@@ -29,6 +29,15 @@ inline results::NodeFields equilibrium_fields(const assemble::EquilibriumPoisson
     return f;
 }
 
+// The band diagram in eV from the assemblers' scaled one (units of V_T).
+inline results::BandDiagram band_diagram(const assemble::BandEdges& b, double V_T) {
+    results::BandDiagram d{b.conduction, b.valence, b.electron_fermi, b.hole_fermi};
+    for (auto* v : {&d.conduction_eV, &d.valence_eV, &d.electron_fermi_eV, &d.hole_fermi_eV}) {
+        for (double& e : *v) e *= V_T;
+    }
+    return d;
+}
+
 // Scale from scaled gate charges to C / cm^(3-D): q Ns L_D^D.
 inline double charge_scale(const assemble::Scaling& scaling, int dimension) {
     return base::q_C * scaling.Ns * std::pow(scaling.L_D, dimension);

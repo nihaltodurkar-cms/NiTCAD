@@ -13,6 +13,8 @@
 // material): the intrinsic-level depth of its material below the vacuum level, less node 0's, over
 // V_T. psi is then the electrostatic potential, continuous across a heterointerface. In 1D this is
 // the legacy row et (psi[i+1] - psi[i]) / h - ... - dV (n - p - C) (with the M33 affinity shift).
+// With models.incomplete_ionization C is the ionized doping N_D+ - N_A- (physics/ionization.hpp)
+// at eta_c = psi + s - g_n and eta_v = -(psi + s) - g_p, with its psi derivative.
 // Contact row (ohmic, Dirichlet): F_i = psi_i - psi0_i, psi0 from ohmic_contact_value at zero bias,
 // less s.
 // A gate node keeps its box row and gains the oxide term of gate.hpp, G_i (psi_G,i - psi_i) + S_i,
@@ -31,19 +33,22 @@
 #include <span>
 #include <vector>
 
+#include "NiTCAD/assemble/band_edges.hpp"
 #include "NiTCAD/assemble/gate.hpp"
 #include "NiTCAD/assemble/models.hpp"
 #include "NiTCAD/assemble/scaling.hpp"
 #include "NiTCAD/base/error.hpp"
 #include "NiTCAD/device/device.hpp"
 #include "NiTCAD/linalg/sparse_matrix.hpp"
+#include "NiTCAD/physics/ionization.hpp"
 
 namespace NiTCAD::assemble {
 
 class EquilibriumPoisson {
 public:
     // Errors (invalid_input): scaling.temperature_K differs from the device's.
-    // Of the models only `bgn` (the effective n_ie of every node) and `fermi_dirac` matter here.
+    // Of the models only `bgn` (the effective n_ie of every node), `fermi_dirac` and
+    // `incomplete_ionization` matter here.
     [[nodiscard]] static std::expected<EquilibriumPoisson, base::Error> create(
         const device::Device& device, const Scaling& scaling, const PhysicsModels& models = {});
 
@@ -75,6 +80,10 @@ public:
     // initial guess.
     [[nodiscard]] std::vector<double> charge_neutral_potential() const;
 
+    // The band diagram at psi (band_edges.hpp); the quasi-Fermi levels are 0 (equilibrium).
+    // Precondition (NITCAD_EXPECTS): psi has unknowns() entries.
+    [[nodiscard]] BandEdges band_edges(std::span<const double> psi) const;
+
     // Per node: the Dirichlet value psi0 on an ohmic contact node; not meaningful elsewhere.
     [[nodiscard]] std::span<const double> contact_potential() const noexcept { return psi0_; }
     // Per node: 1 on an ohmic contact node (a Dirichlet row), else 0; gate nodes are 0.
@@ -103,7 +112,10 @@ private:
     std::vector<double> n_ie_;      // scaled n_ie
     std::vector<double> log_dos_n_, log_dos_p_;  // ln(Nc / n_ie), ln(Nv / n_ie)
     std::vector<double> band_shift_;             // s
+    std::vector<double> donors_, acceptors_;     // N_D / Ns, N_A / Ns
+    std::vector<physics::DopantLevels> levels_;  // dopant levels in units of kT
     bool fermi_dirac_ = false;
+    bool ionization_ = false;
     std::vector<double> psi0_;      // Dirichlet value on contact nodes
     std::vector<char> contact_;     // 1 on ohmic contact nodes
     GateNodes gates_;

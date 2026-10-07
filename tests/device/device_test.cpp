@@ -298,3 +298,45 @@ TEST_CASE("device: a gate lies on its boundary patch") {
     REQUIRE(mentions(gate_rejected([](Contact& g) { g.nodes.insert(g.nodes.begin(), 0); }),
                      "another contact"));
 }
+
+// Unit 15: declared interfaces.
+
+namespace {
+
+// The diode with its n side (nodes 10 on) in a second region "other", plus a third region "far"
+// on the last node only, so "silicon" and "far" share no edge.
+DeviceDescription three_regions() {
+    DeviceDescription d = diode();
+    d.regions.push_back({"other", silicon()});
+    d.regions.push_back({"far", silicon()});
+    for (std::size_t i = 10; i < d.node_region.size(); ++i) d.node_region[i] = 1;
+    d.node_region.back() = 2;
+    return d;
+}
+
+}  // namespace
+
+TEST_CASE("device: interfaces are validated and looked up in either order") {
+    DeviceDescription ok = three_regions();
+    ok.interfaces = {{"other", "silicon", InterfaceTransport::thermionic_emission}};
+    const auto d = Device::create(std::move(ok));
+    REQUIRE(d.has_value());
+    REQUIRE(d->transport(0, 1) == InterfaceTransport::thermionic_emission);
+    REQUIRE(d->transport(1, 0) == InterfaceTransport::thermionic_emission);
+    REQUIRE(d->transport(1, 2) == InterfaceTransport::drift_diffusion);  // undeclared
+    const auto rejected_with = [](std::vector<Interface> interfaces) {
+        DeviceDescription desc = three_regions();
+        desc.interfaces = std::move(interfaces);
+        auto r = Device::create(std::move(desc));
+        REQUIRE_FALSE(r.has_value());
+        REQUIRE(r.error().code == ErrorCode::invalid_input);
+        return r.error();
+    };
+    REQUIRE(rejected_with({{"silicon", "nowhere"}}).context->index == 0u);
+    REQUIRE(mentions(rejected_with({{"silicon", "silicon"}}), "itself"));
+    REQUIRE(mentions(rejected_with({{"silicon", "other"}, {"other", "silicon"}}), "twice"));
+    REQUIRE(rejected_with({{"silicon", "other"}, {"other", "silicon"}}).context->index == 1u);
+    REQUIRE(mentions(rejected_with({{"silicon", "far"}}), "no mesh edge"));
+    REQUIRE(mentions(rejected_with({{"silicon", "other", static_cast<InterfaceTransport>(7)}}),
+                     "unknown transport"));
+}

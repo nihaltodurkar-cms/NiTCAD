@@ -354,8 +354,9 @@ thermionic emission through per-edge arrays in the `Inputs` struct, `core/includ
   `indium_gallium_arsenide_parameters` (In0.53Ga0.47As), `silicon_carbide_4h_parameters`, and
   `algaas_parameters(x)` for Al_x Ga_1−x As, valid for 0 ≤ x ≤ 0.45 (`invalid_input` outside, where the gap is
   indirect). Every field a legacy set left at its dataclass default keeps the silicon value, as in the legacy:
-  lifetimes, Slotboom narrowing and, for AlGaAs, μ_min, Auger and saturation. All six sets validate; E_g, n_i and
-  the depth below match 40-digit values at 300 K to 1e-12–1e-14.
+  lifetimes and, where not given, Auger and the Canali exponents. All six sets validate; E_g, n_i and the depth below
+  match 40-digit values at 300 K to 1e-12–1e-14. (Changed in the Unit 15 follow-up below: no Slotboom narrowing
+  outside silicon, and AlGaAs built on GaAs.)
 - `intrinsic_level_depth_eV(m, T)` = χ + (E_c − E_i), with E_c − E_i = E_g/2 + (kT/2) ln(Nc/Nv). Its step between two
   materials is the step of the potential at which each holds n = n_i, so it defines the band shift (6.3, Unit 15).
 - `thermionic_emission.hpp`: `emission_velocity_cm_s(N, T)` = (kT/h)(2/N)^(1/3). This is the legacy
@@ -366,6 +367,31 @@ thermionic emission through per-edge arrays in the `Inputs` struct, `core/includ
   - The 4H-SiC comment says E_g(300 K) ≈ 3.23 eV; its own Varshni numbers give 3.201 eV.
   - The AlGaAs comment says the conduction band takes about 85% of the gap step; its χ and E_g0 slopes give
     0.85/1.247 = 68%.
+
+**As built (Unit 15 follow-up, materials; owner request "finish the follow-up" after the Unit 15 review):**
+- `SemiconductorParameters` gains `radiative_cm3_s` (B), `ionization` (`IonizationParameters`: donor depth below E_c,
+  acceptor height above E_v, degeneracies) and `richardson` (`RichardsonParameters`: effective Richardson constants, 0 =
+  the density-of-states velocity). Validation: B, the levels and the Richardson constants ≥ 0, the degeneracies > 0.
+- Values (not in the legacy, sourced): radiative B for Ge 6.4e-14, GaAs 7.2e-10, In0.53Ga0.47As 0.96e-10, 4H-SiC 1.5e-12
+  (the bimolecular value), AlGaAs 1.8e-10 cm³/s (Ioffe; nextnano for GaAs); silicon 0 as in the legacy (its 1e-14 is
+  negligible against SRH), so silicon results do not change. Dopant levels: silicon the legacy hydrogenic 45 meV (M13),
+  GaAs Si donor 5.8 and C acceptor 26.3 meV, Ge P 12.0 and B 10.4 meV, 4H-SiC N 70 and Al 220 meV; InGaAs and AlGaAs 0
+  (complete ionization; AlGaAs donors form DX centres, which one shallow level does not describe). Richardson constants
+  0 everywhere (the legacy's choice); the legacy's Schottky table values are quoted in the header for users who set
+  them.
+- OLD / NEW / REASON, material defaults:
+  - OLD: every non-silicon set carried silicon's Slotboom band-gap narrowing, and AlGaAs took silicon's defaults for
+    every field it did not set (μ_min 92 and 47.7, silicon Auger and saturation).
+  - NEW: no narrowing outside silicon (`no_bandgap_narrowing`), and AlGaAs is built on the GaAs set.
+  - REASON: the Slotboom form and numbers are a silicon fit; a GaAs-alloy built on silicon's fields mixes two materials.
+- `algaas_parameters(x, conduction_share)`: the conduction band takes `conduction_share` of the gap step (default
+  0.85/1.247 = 0.68, the legacy χ slope; measured GaAs/AlGaAs offsets are nearer 0.62–0.65).
+- `ionization.hpp`: `ionized_density(N, η, E/kT, g)` = N/(1 + g e^(η + E/kT)) and its η-derivative, overflow-free
+  (legacy `ionized_eta_doping`); `ionized_neutral_equilibrium` solves n − p = N_D+ − N_A− by safeguarded Newton from the
+  completely ionized root, under either statistics. Boron in silicon at 77 and 300 K and the 4H-SiC dopants at 300 K
+  match 40-digit roots (legacy G7(b,c)).
+- `radiative_recombination(n, p, E, B)` = B(np − E) with the partials of E; `emission_velocity_cm_s(m, carrier, T)` = A*
+  T²/(q N) when the material sets A*, else the density-of-states velocity.
 
 ## 6. Cross-cutting design
 
@@ -742,12 +768,54 @@ thermionic emission, meshed insulators in a later unit):**
       homojunction.
     - NEW: an interface is a parameter difference, and the model does nothing on a device of one material.
     - REASON: two equal parameter sets are one material; a model switch should not fail by device.
-  - Kept from the legacy: field mobility on a heterointerface edge is refused (`invalid_input`, the edge as index),
-    since the two materials' Canali parameters differ.
+  - Kept from the legacy at first: field mobility on a heterointerface edge was refused. Superseded in the follow-up
+    below.
 - Not carried, or deferred:
   - Meshed insulator regions with a Si/SiO₂ interface, interface charge and traps, and interface recombination:
     track 15b, which the owner deferred.
   - The legacy's velocity-scaling knob, which its test used for the K → ∞ limit (a test hack, not an API).
+
+**As built (Unit 15 follow-up, interfaces and outputs):**
+- **Interfaces as device data (principle 9).** `device::Interface{region_a, region_b, transport}` with
+  `InterfaceTransport::drift_diffusion` (the default for any edge) or `thermionic_emission`. `Device::create` rejects an
+  unknown region, a region joined to itself, a pair declared twice (either order), a pair no mesh edge joins, and an
+  unknown transport. `Device::transport(a, b)` looks a pair up.
+- OLD / NEW / REASON, thermionic emission:
+  - OLD: `PhysicsModels::thermionic_emission`, a global switch applying emission to every edge between two materials.
+  - NEW: the transport is chosen per declared interface; undeclared material steps are drift-diffusion.
+  - REASON: a graded composition described as many regions put emission on every step. With 10 steps the current fell to
+    0.554 of the graded device's and depended on the step count. Now J(0.1 V) for 10, 20 and 40 steps is 33762.8,
+    33901.3 and 33928.4 A/cm² (the 20-step value within 8e-4 of the 40-step one).
+- Emission limits checked at device level: a declared interface without a step adds the series resistance V_T/(q v n)
+  (measured 6.2575e-7 against 6.2654e-7 Ω cm²), and as A* grows (DOS, 1e4, 1e6, 1e8) J(TE)/J(DD) goes 0.034, 0.73,
+  0.99947, 1.
+- **Field mobility on a material step** (replacing the refusal): the edge mobility is the harmonic mean of each end's
+  Canali mobility at the edge's field, each with its own material's parameters, with the exact Jacobian. On a
+  one-material edge it is Unit 13's form.
+- **Incomplete ionization** (`PhysicsModels::incomplete_ionization`, off by default as the legacy flag): the Poisson
+  rows use N_D+ − N_A− at the electrons' and holes' own reduced energies (from n and p out of equilibrium, legacy), with
+  the n, p (drift-diffusion) or ψ (equilibrium) derivatives; contacts and the neutral guess use
+  `ionized_neutral_equilibrium`. The solved bulk's ionized fraction equals the 40-digit roots to 1e-10. A 4H-SiC p-n
+  diode (aluminium 10% ionized) sweeps to 3 V.
+- **Radiative recombination** (`PhysicsModels::radiative`, on by default since silicon's B is 0): R gains B(np − E) on
+  physical densities, as Auger. A 200 µm-a-side GaAs diode with radiative recombination alone matches the long-base
+  ideal-diode current with τ = 1/(B N) to 0.9% at 0.6–1.0 V, and with no recombination the short-base current q n_i²(D_n
+  + D_p)/(N W) to 2.7e-4.
+- **Band diagram** (`results::BandDiagram` in `EquilibriumResult` and `BiasPoint`; `assemble/band_edges.hpp`): E_c, E_v
+  and the electron and hole quasi-Fermi levels in eV, measured from the equilibrium Fermi level, by the selected
+  statistics; independent of which material node 0 is in. A contact at bias V holds its carriers' Fermi level at −V (to
+  1e-9 eV).
+- **Current resolution** (`BiasPoint::terminal_current_resolution`): a bound on how far the current through any cut can
+  differ from the terminal current, the sum over the nodes of |F_n + F_p| plus 8 ε times the cancelling flux and
+  recombination terms. In the Unit 11 1e19/1e18 silicon diode the measured edge-to-edge spread is 1.5e-8 A/cm² and the
+  bound 8.9e-6, a factor 600. A first version summed only the contact's edges and fell below the spread (8.3e-9); this
+  test caught it.
+- `mesh::straddle_interface(axis, position, spacing)` puts two nodes at position ∓ spacing/2 and none between, since an
+  interface lies at the midpoint of the edge joining two regions.
+- Mutation checks, each caught (14): the radiative term or its dR/dn, either ionization Jacobian term, the degeneracy, a
+  declared thermionic interface ignored, the Richardson constant ignored, the resolution without the residual, the hole
+  Fermi-level sign, the mixed-edge Canali form, an interface without a joining edge, straddle_interface keeping nodes,
+  the interface transport missing from the run record, the AlGaAs share ignored.
 
 ### 6.4 Contact description
 
@@ -1177,7 +1245,7 @@ src/mesh/                   graph validation, tensor-grid producer           (Un
 tests/mesh/                 graph validation and geometry gates              (Unit 4, exists)
 include/NiTCAD/physics/     semiconductor, mobility, recombination, statistics (Unit 5); bandgap_narrowing (Unit 11);
                             electron affinity (Unit 12); field_mobility (Unit 13); fermi_dirac, Fermi-Dirac
-                            statistics (Unit 14); material sets, thermionic_emission (Unit 15)
+                            statistics (Unit 14); material sets, thermionic_emission, ionization (Unit 15)
 src/physics/                parameter validation, band quantities, models; increasing_root (private) (Units 5, 11,
                             13, 14, 15)
 tests/physics/              published values, limits, FD derivative gates; heavy doping; Canali; Fermi integral and
@@ -1186,7 +1254,7 @@ include/NiTCAD/device/      device.hpp, contact.hpp (Unit 6); gate contacts (Uni
 src/device/                 description validation, topology check           (Unit 6, exists)
 tests/device/               construction, validation, floating regions       (Unit 6, exists)
 include/NiTCAD/assemble/    scaling, bernoulli, sg_flux, ohmic, equilibrium_poisson (Unit 7); drift_diffusion (Unit 9);
-                            models (Unit 11); gate, contact_bias (Unit 12); thermionic_flux (Unit 15)
+                            models (Unit 11); gate, contact_bias (Unit 12); thermionic_flux, band_edges (Unit 15)
 src/assemble/               scaling, scaled device (private), equilibrium Poisson, drift-diffusion, gate, contact bias
                             (Units 7, 9, 12)
 tests/assemble/             Bernoulli/SG references, FD-Jacobian gate, reduction (Unit 7); gate terms (Unit 12);
@@ -1318,7 +1386,7 @@ oxide, belong to the heterojunction and interface track (15); the owner split th
 |---|---|---|---|
 | 13 | Field-dependent mobility / velocity saturation | physics, assemble | **done, on `main`** (`f8bda70`): Canali per edge with exact Jacobian (6.2, Unit 13) |
 | 14 | Fermi–Dirac statistics and high-density carrier models | physics, assemble | **done, on `main`** (`8610d9a`): parabolic-band Fermi–Dirac statistics, the legacy ν-factor scheme with an exact Jacobian (5 and 6.2, Unit 14); incomplete ionization deferred (14.3) |
-| 15 | Heterojunctions, band offsets and interface transport | device, assemble, physics | **done on branch `device/heterojunctions`**: band offsets through a per-node band shift, permittivity steps, thermionic emission, the legacy material sets (6.3 and 6.2, Unit 15); meshed insulators, interface charge and traps are 15b |
+| 15 | Heterojunctions, band offsets and interface transport | device, assemble, physics | **done on branch `device/heterojunctions`**: band offsets through a per-node band shift, permittivity steps, thermionic emission, the legacy material sets (6.3 and 6.2, Unit 15); follow-up: interfaces as device data, incomplete ionization, radiative recombination, band diagram, current resolution; meshed insulators, interface charge and traps are 15b |
 | 16 | Unstructured mesh | mesh, assemble | target |
 | 17 | Adaptive mesh refinement and state transfer | mesh, solve, results | target |
 | 18 | Scalable linear-solver backends: PARDISO and/or iterative/AMG paths | linalg | target; must preserve backend-neutral interface |
@@ -1535,6 +1603,7 @@ architecture; historical branch names remain only where they are useful to expla
 | V20 | Unit 13 (`physics/field-mobility`): Debug and Release build with no warnings; `nitcad_physics_test` 44 test cases, `nitcad_assemble_test` 34, `nitcad_solve_test` 61 (+3 `[.mosfet]`, Release only), all pass. Canali: the legacy formula for β = 1, 2 and 1.5 to 1e-15; μ(0) = μ0, μ falling and μE rising monotonically to v_sat (within 1e-3 at 1e9 V/cm); the low-field expansion; dμ/dE against fourth-order differences to 4.2e-12 of μ/E; the right-hand derivative at E = 0; v_sat and β validated. Assembly: FD-Jacobian gate with field mobility 2.7e-9 (1D), 2.3e-9 (2D), 6.0e-9 (3D) (gate 5e-5); the field-mobility part on its own (ψ columns) 2.5e-7 (gate 1e-5); every edge's current scaled by exactly its Canali factor (2.2e-16; factors down to 0.063 at the probe). Device level: a uniform n- and p-type resistor (100 nm, 1e16, 0.1 V steps to 1e6 V/cm) matches q(nμ_n(E) + pμ_p(E))E to 5.8e-15; electrons reach 0.99996 v_sat and holes 0.9798 v_sat (x/(1 + x) for β = 1); y-uniform 2D and 3D reproduce 1D to 1e-12; at most 5 (electrons) or 7 (holes) Newton iterations per point against 2 with constant mobility; quadratic finish (2.8e-2 then 1.2e-8). Legacy diode: J(0.5 V) −0.77% with the model on, total current the same on every edge to 7.5e-8. MOSFET at V_G = 1 V (max_update 1): I_D ratio 0.968 at 0.1 V falling monotonically to 0.735 at 1 V. Mutation checks, each caught: the field-derivative term dropped, a wrong field scale, the Canali derivative without x^(β−1), the switch ignored, β < 1 accepted, the switch missing from the run record, the hole parameters taken from the electrons. | Verified locally. |
 | V21 | Unit 14 (`physics/fermi-dirac`): Debug and Release build with no warnings; `nitcad_physics_test` 56 test cases, `nitcad_assemble_test` 40, `nitcad_solve_test` 69 (+3 `[.mosfet]`, Release only), all pass. F₁/₂ within 1.5e-15 of 40-digit references from −700 to 1000; F₋₁/₂ within 1.3e-13 to η = 15 and 3e-12 to 40; the returned derivative matches central differences to 1e-8 across both joins; ln F₁/₂ increasing and concave to rounding on a 1e-3 grid over −50 to 100; the inverse to 1e-14; Boltzmann and Sommerfeld limits with their published correction terms. Statistics: densities, degeneracy factors and the equilibrium product against finite differences; generalized mass action to 1e-13; the neutral equilibrium against 40-digit roots to 1e-13 (η) and 1e-12 (n, p). Device gates and mutation checks in 6.2 "As built (Unit 14)". The Boltzmann path is bit-identical to `main` (probe hashes, 6.2). | Verified locally. |
 | V22 | Unit 15 (`device/heterojunctions`): Debug and Release build with no warnings; `nitcad_physics_test` 60 test cases, `nitcad_assemble_test` 47, `nitcad_solve_test` 77 (+3 `[.mosfet]`, Release only), all pass. Material sets, depths and the emission velocity against 40-digit values; the abrupt-heterojunction first integral (V_bi to 1e-12, interface potential within 1.4e-5 V, D within 7.6e-4); legacy M33 G1, G2 and S2 gates, with G2 currents reproduced to 4 digits; FD-Jacobian gates with interfaces, thermionic emission and Fermi–Dirac in 1D/2D/3D; the gate flat band on a heterostructure; 2D = 1D. Details, the Newton floor and the ten mutation checks in 6.2 and 6.3 "As built (Unit 15)". | Verified locally. |
+| V22a | Unit 15 follow-up (`device/heterojunctions`): Debug and Release build with no warnings, all suites pass (Release 9/9 with `solve_mosfet`, Debug 8/8). FD-Jacobian gates with incomplete ionization (Poisson 1.9e-9; drift-diffusion 1D/2D/3D at most 1e-8), the ionization part on its own 1.4e-7 and 2.1e-7 (gate 1e-5), the radiative part 4.8e-9, thermionic part 2.0e-9, a non-planar 2D interface. Ionized fractions against 40-digit roots to 1e-10; radiative long-base GaAs diode within 0.9% of the analytic current, short-base without recombination to 2.7e-4; emission resistance 6.2575e-7 vs 6.2654e-7 Ω cm²; J(TE)/J(DD) → 1 as A* grows; graded staircase 10/20/40 steps converging (8e-4); current resolution bounds the spread (factor 600); band diagram Fermi levels at the contacts' biases to 1e-9 eV. Fourteen mutation checks caught. | Verified locally. |
 | V3 | Scaling definitions, scaled variables and Newton tolerances read from `inputs.cpp` and `device1d.cpp` and recorded in 6.1. One open question remains for Unit 8 (convergence criterion on the clipped correction). | Verified |
 
 Verifications due at their own unit: none left. The 5e-5 Jacobian gate's normalization was read at Unit 7 (section 10), and

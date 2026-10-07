@@ -14,7 +14,8 @@
 //
 // and likewise for p. With the Boltzmann E (partials zero) this is the legacy Boltzmann form
 // operation for operation; with a Fermi-Dirac E it is the legacy recombination_fd form.
-// Auger recombination (Unit 11) is auger_recombination below; the assembler adds it to SRH.
+// Auger recombination (Unit 11) and radiative recombination (Unit 15) are below; the assembler
+// adds them to SRH.
 #pragma once
 
 #include "NiTCAD/physics/semiconductor.hpp"
@@ -65,6 +66,18 @@ struct RecombinationRate {
     const double excess = n * p - np_eq.value;
     const double C = Cn * n + Cp * p;
     return {C * excess, Cn * excess + C * (p - np_eq.d_dn), Cp * excess + C * (n - np_eq.d_dp)};
+}
+
+// Radiative (band-to-band) recombination (Unit 15; not in the legacy):
+//
+//     R = B (n p - E),   dR/dn = B (p - dE/dn),   dR/dp = B (n - dE/dp),
+//
+// with B the material's radiative coefficient and E the equilibrium product. Quadratic in the
+// concentrations: call it with physical densities (cm^-3, E in cm^-6) and B in cm^3/s.
+[[nodiscard]] constexpr RecombinationRate radiative_recombination(double n, double p,
+                                                                  EquilibriumProduct np_eq,
+                                                                  double B) noexcept {
+    return {B * (n * p - np_eq.value), B * (p - np_eq.d_dn), B * (n - np_eq.d_dp)};
 }
 
 }  // namespace NiTCAD::physics
