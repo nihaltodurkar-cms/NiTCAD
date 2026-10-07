@@ -108,6 +108,13 @@ std::expected<DriftDiffusion, base::Error> DriftDiffusion::create(
                                 static_cast<linalg::Index>(3 * e.i + edge_cols[k]), 0.0});
         }
     }
+    // An interface edge: the insulator's Poisson row reads the semiconductor's n and p.
+    for (const InterfaceEdge& f : s.interfaces_.edges()) {
+        for (const std::size_t c : {std::size_t{1}, std::size_t{2}}) {
+            triplets.push_back({static_cast<linalg::Index>(3 * f.insulator),
+                                static_cast<linalg::Index>(3 * f.semiconductor + c), 0.0});
+        }
+    }
     const auto size = static_cast<linalg::Index>(3 * n);
     auto pattern = linalg::SparseMatrix::from_triplets(size, size, triplets);
     if (!pattern) return std::unexpected(std::move(pattern.error()));
@@ -128,6 +135,7 @@ std::expected<DriftDiffusion, base::Error> DriftDiffusion::create(
         t.b = e.j;
         t.c = e.et * e.geometry;
         t.carriers = e.carriers;
+        t.charged = e.charged;
         for (std::size_t k = 0; k < 5; ++k) {
             t.ab[k] = detail::position(s.pattern_, 3 * e.i + edge_rows[k], 3 * e.j + edge_cols[k]);
             t.ba[k] = detail::position(s.pattern_, 3 * e.j + edge_rows[k], 3 * e.i + edge_cols[k]);
@@ -182,6 +190,11 @@ std::expected<DriftDiffusion, base::Error> DriftDiffusion::create(
         s.edges_.push_back(t);
     }
 
+    for (const InterfaceEdge& f : s.interfaces_.edges()) {
+        s.interface_np_.emplace_back(
+            detail::position(s.pattern_, 3 * f.insulator, 3 * f.semiconductor + 1),
+            detail::position(s.pattern_, 3 * f.insulator, 3 * f.semiconductor + 2));
+    }
     s.psi0_.assign(n, 0.0);
     s.n0_.assign(n, 0.0);
     s.p0_.assign(n, 0.0);
@@ -426,29 +439,46 @@ void DriftDiffusion::assemble(std::span<const double> x, std::span<double> f,
                                                           radiative_[i]));
         }
     }
-    for (const InterfaceNode& v : interfaces_.nodes()) {
-        const std::size_t i = v.node;
-        const physics::EquilibriumProduct E = product(i);
-        const InterfaceTerms t = interfaces_.terms(
-            v, x[3 * i + 1], x[3 * i + 2], n_ie_[i], fermi_dirac_ ? g[i].n.log_gamma : 0.0,
-            fermi_dirac_ ? g[i].n.d_density : 0.0, fermi_dirac_ ? g[i].p.log_gamma : 0.0,
-            fermi_dirac_ ? g[i].p.d_density : 0.0, E.value, E.d_dn, E.d_dp);
-        f[3 * i] += t.charge;
-        f[3 * i + 1] -= t.rate;
-        f[3 * i + 2] += t.rate;
+    for (std::size_t k = 0; k < interfaces_.edges().size(); ++k) {
+        const InterfaceEdge& v = interfaces_.edges()[k];
+        const std::size_t o = v.insulator, s = v.semiconductor;
+        const InterfaceDrift t =
+            interfaces_.drift(v, x[3 * o], x[3 * s], x[3 * s + 1], x[3 * s + 2], statistics(s));
+        // Edge positions: row of o with column psi of s, and the rows of s with column psi of o.
+        const EdgeTerm& e = edges_[v.edge];
+        const bool o_first = e.a == o;
+        const std::size_t os = o_first ? e.ab[0] : e.ba[0];
+        const std::size_t so[3] = {o_first ? e.ba[0] : e.ab[0], o_first ? e.ba[1] : e.ab[1],
+                                   o_first ? e.ba[3] : e.ab[3]};
+        if (electrode_[o] < 0) {  // the insulator node's Poisson row
+            f[3 * o] += t.flux_insulator;
+            if (jacobian) {
+                at(o, 0, 0) += t.d_flux_insulator[0];
+                values[os] += t.d_flux_insulator[1];
+                values[interface_np_[k].first] += t.d_flux_insulator[2];
+                values[interface_np_[k].second] += t.d_flux_insulator[3];
+            }
+        }
+        if (contact_[s] >= 0) continue;  // a Dirichlet semiconductor node
+        f[3 * s] += t.flux_semiconductor;
+        f[3 * s + 1] -= t.rate;
+        f[3 * s + 2] += t.rate;
         if (jacobian) {
-            at(i, 0, 1) += t.charge_dn;
-            at(i, 0, 2) += t.charge_dp;
-            at(i, 1, 1) -= t.rate_dn;
-            at(i, 1, 2) -= t.rate_dp;
-            at(i, 2, 1) += t.rate_dn;
-            at(i, 2, 2) += t.rate_dp;
+            values[so[0]] += t.d_flux_semiconductor[0];
+            values[so[1]] -= t.d_rate[0];
+            values[so[2]] += t.d_rate[0];
+            for (std::size_t c = 1; c < 4; ++c) {
+                at(s, 0, c - 1) += t.d_flux_semiconductor[c];
+                at(s, 1, c - 1) -= t.d_rate[c];
+                at(s, 2, c - 1) += t.d_rate[c];
+            }
         }
     }
     for (const EdgeTerm& e : edges_) {
         const std::size_t a = e.a, b = e.b;
         const double psi_a = x[3 * a], psi_b = x[3 * b];
         const double poisson = e.c * (psi_b - psi_a);
+        if (e.charged) continue;  // the interface's half-edge fluxes, above
         if (!e.carriers) {  // Poisson only, into the rows that are not Dirichlet
             if (contact_[a] < 0 && electrode_[a] < 0) {
                 f[3 * a] += poisson;
@@ -649,25 +679,37 @@ std::vector<double> DriftDiffusion::gate_charges(std::span<const double> x) cons
     std::vector<double> charge = gates_.charges(x, 3, contact_count_);
     for (const EdgeTerm& e : edges_) {
         const std::int32_t ca = electrode_[e.a], cb = electrode_[e.b];
-        if (ca == cb) continue;
+        if (ca == cb || e.charged) continue;
         const double flux = e.c * (x[3 * e.a] - x[3 * e.b]);  // from a to b
         if (ca >= 0) charge[static_cast<std::size_t>(ca)] += flux;
         if (cb >= 0) charge[static_cast<std::size_t>(cb)] -= flux;
+    }
+    // An electrode node on an interface edge: the flux leaving it is minus its half-edge flux.
+    for (const InterfaceEdge& v : interfaces_.edges()) {
+        const std::int32_t c = electrode_[v.insulator];
+        if (c < 0) continue;
+        const std::size_t o = v.insulator, s = v.semiconductor;
+        charge[static_cast<std::size_t>(c)] -=
+            interfaces_.drift(v, x[3 * o], x[3 * s], x[3 * s + 1], x[3 * s + 2], statistics(s))
+                .flux_insulator;
     }
     return charge;
 }
 
 std::vector<double> DriftDiffusion::interface_trap_charges(std::span<const double> x) const {
     NITCAD_EXPECTS(x.size() == unknowns());
-    const std::vector<NodeDegeneracy> g = degeneracies(x);
-    return interfaces_.trapped_charges([&](const InterfaceNode& v, const InterfaceLevel& l) {
-        const std::size_t i = v.node;
-        const double n = x[3 * i + 1], p = x[3 * i + 2];
-        const double n1 = n_ie_[i] * std::exp((fermi_dirac_ ? g[i].n.log_gamma : 0.0) + l.tau);
-        const double p1 = n_ie_[i] * std::exp((fermi_dirac_ ? g[i].p.log_gamma : 0.0) - l.tau);
-        const physics::TrapKinetics t = physics::trap_kinetics(n, p, n1, 0.0, p1, 0.0, l.cn, l.cp);
-        return std::pair{t.occupied, t.empty};
-    });
+    std::vector<double> q(interfaces_.interface_count(), 0.0);
+    for (const InterfaceEdge& v : interfaces_.edges()) {
+        const std::size_t o = v.insulator, s = v.semiconductor;
+        q[v.interface] +=
+            interfaces_.drift(v, x[3 * o], x[3 * s], x[3 * s + 1], x[3 * s + 2], statistics(s))
+                .trapped;
+    }
+    return q;
+}
+
+InterfaceStatistics DriftDiffusion::statistics(std::size_t node) const noexcept {
+    return {fermi_dirac_, n_ie_[node], log_dos_n_[node], log_dos_p_[node], band_shift_[node]};
 }
 
 }  // namespace NiTCAD::assemble

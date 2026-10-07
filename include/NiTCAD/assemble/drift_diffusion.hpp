@@ -52,10 +52,13 @@
 // Insulators (Unit 15b): an insulator node's continuity rows are n = 0 and p = 0 (F = n, F = p),
 // its Poisson row the box row with no charge, or on an electrode node the Dirichlet row
 // psi - psi_E (scaled_device.hpp); no carrier flux is assembled on an edge with an insulator end,
-// so none crosses a semiconductor-insulator edge. A semiconductor node at a semiconductor-insulator
-// interface gains the interface terms of interface_nodes.hpp: the fixed and trapped charge in its
-// Poisson row and the traps' and surface recombination in its continuity rows, with the
-// steady-state SRH occupancy at its n and p.
+// so none crosses a semiconductor-insulator edge. An edge of a semiconductor-insulator interface
+// with charge, traps or recombination carries the half-edge fluxes of interface_edges.hpp instead
+// of its own, the fixed and trapped charge sitting at the interface potential psi_I, and its
+// semiconductor node's continuity rows take the traps' and surface recombination, all at the
+// interface densities (the node's quasi-Fermi levels carried to psi_I) with the steady-state SRH
+// occupancy. The insulator node's Poisson row then depends on the semiconductor node's n and p
+// too (the pattern gains those two entries on such edges).
 //
 // Jn and Jp are the electron and hole current densities in units of J0 (conventional current, along
 // the edge from a to b); their sum is divergence-free at every node off the ohmic contacts (gate
@@ -78,7 +81,7 @@
 
 #include "NiTCAD/assemble/band_edges.hpp"
 #include "NiTCAD/assemble/gate.hpp"
-#include "NiTCAD/assemble/interface_nodes.hpp"
+#include "NiTCAD/assemble/interface_edges.hpp"
 #include "NiTCAD/assemble/models.hpp"
 #include "NiTCAD/assemble/sg_flux.hpp"
 #include "NiTCAD/assemble/scaling.hpp"
@@ -151,7 +154,7 @@ public:
     // in device.contacts() order; zero for an ohmic contact. Physical value: times q Ns L_D^D, in
     // C / cm^(3-D).
     [[nodiscard]] std::vector<double> gate_charges(std::span<const double> x) const;
-    // Scaled trapped charge of each declared interface at state x (interface_nodes.hpp, without the
+    // Scaled trapped charge of each declared interface at state x (interface_edges.hpp, without the
     // fixed charge), in units of q Ns L_D^D. Precondition (NITCAD_EXPECTS): x has unknowns()
     // entries.
     [[nodiscard]] std::vector<double> interface_trap_charges(std::span<const double> x) const;
@@ -177,6 +180,7 @@ private:
         // ln(N_b / N_a) and N_a / N_b.
         bool thermionic;
         bool carriers;      // both ends are semiconductor nodes (else no carrier flux)
+        bool charged;       // an interface edge: its Poisson flux is the interface's
         double te_kn, te_kp, te_log_nc, te_ratio_nc, te_log_nv, te_ratio_nv;
         // Positions in the Jacobian values: row a with columns of b, row b with columns of a,
         // in the order (psi, psi), (n, psi), (n, n), (p, psi), (p, p).
@@ -210,7 +214,12 @@ private:
     std::vector<std::int32_t> electrode_; // electrode contact index per node, or -1
     std::vector<double> electrode_potential_;  // psi_E at zero bias
     GateNodes gates_;
-    InterfaceNodes interfaces_;
+    InterfaceEdges interfaces_;
+    // Per interface edge, the Jacobian positions of the insulator node's Poisson row with the
+    // semiconductor node's n and p columns.
+    std::vector<std::pair<std::size_t, std::size_t>> interface_np_;
+
+    [[nodiscard]] InterfaceStatistics statistics(std::size_t node) const noexcept;
     std::vector<device::ContactKind> kinds_;  // per contact
     std::vector<double> psi0_, n0_, p0_;  // Dirichlet values per node (contact nodes only)
     std::vector<EdgeTerm> edges_;

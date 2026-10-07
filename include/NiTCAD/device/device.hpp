@@ -63,9 +63,9 @@ enum class InterfaceTransport : std::uint8_t {
 
 // A declared interface between two regions (order does not matter). Transport other than
 // drift-diffusion needs two semiconductors. The fixed charge, traps and surface recombination need
-// one semiconductor and one insulator; they act on the semiconductor nodes that have an edge to an
-// insulator node of the interface, each with the summed coupling area of those edges as its share
-// of the interface area (the interface lies at the edges' midpoints, mesh::straddle_interface).
+// one semiconductor and one insulator; they act at the interface itself, on each edge joining the
+// two regions, at the interface potential of that edge (the interface lies at the edges' midpoints,
+// mesh::straddle_interface; assemble/interface_edges.hpp).
 struct Interface {
     std::string region_a;
     std::string region_b;

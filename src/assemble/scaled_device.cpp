@@ -1,7 +1,6 @@
 #include "scaled_device.hpp"
 
 #include <cmath>
-#include <map>
 #include <optional>
 #include <string>
 #include <utility>
@@ -124,9 +123,10 @@ std::expected<ScaledDevice, base::Error> make_scaled_device(const device::Device
     s.gates = GateNodes(std::move(gate), std::move(gate_terms), scaling.V_T);
     s.edges.reserve(m.edges().size());
     const auto node_region = device.node_region();
-    // The interface nodes: (semiconductor node, interface) to its summed coupling area [cm^(D-1)].
-    std::map<std::pair<std::size_t, std::size_t>, double> interface_area;
-    for (const mesh::Edge& edge : m.edges()) {
+    // The edges of interfaces with charge, traps or recombination: (mesh edge, interface).
+    std::vector<std::pair<std::size_t, std::size_t>> charged;
+    for (std::size_t e = 0; e < m.edges().size(); ++e) {
+        const mesh::Edge& edge = m.edges()[e];
         const auto i = static_cast<std::size_t>(edge.first);
         const auto j = static_cast<std::size_t>(edge.second);
         const device::RegionId ra = node_region[i];
@@ -142,13 +142,13 @@ std::expected<ScaledDevice, base::Error> make_scaled_device(const device::Device
                                         : ra != rb;
         s.edges.push_back({i, j, edge.coupling_area / edge.length / coupling_scale, edge.length,
                            eta == etb ? eta : 2.0 * eta * etb / (eta + etb), interface,
-                           thermionic, carriers});
+                           thermionic, carriers, false});
         if (s.insulator[i] != s.insulator[j]) {
             const std::int32_t k = device.find_interface(ra, rb);
             if (k >= 0 && device::has_interface_charge_or_recombination(
                               device.interfaces()[static_cast<std::size_t>(k)])) {
-                interface_area[{s.insulator[i] != 0 ? j : i, static_cast<std::size_t>(k)}] +=
-                    edge.coupling_area;
+                s.edges.back().charged = true;
+                charged.emplace_back(e, static_cast<std::size_t>(k));
             }
         }
     }
@@ -173,20 +173,34 @@ std::expected<ScaledDevice, base::Error> make_scaled_device(const device::Device
         range[k].second = levels.size();
     }
     const double area_scale = std::pow(scaling.L_D, D - 1);
-    std::vector<InterfaceNode> interface_nodes;
-    for (const auto& [key, area_cm] : interface_area) {
-        const auto [node, k] = key;
-        if (s.contact[node] >= 0) continue;  // a Dirichlet node
+    std::vector<InterfaceEdge> interface_edges;
+    for (const auto& [e, k] : charged) {
+        const mesh::Edge& edge = m.edges()[e];
+        const detail::ScaledEdge& se = s.edges[e];
+        const bool first_insulator = s.insulator[se.i] != 0;
+        const std::size_t ins = first_insulator ? se.i : se.j;
+        const std::size_t sem = first_insulator ? se.j : se.i;
+        const double et_i = permittivity_ratio(
+            device.relative_permittivity(static_cast<mesh::NodeId>(ins)), scaling);
+        const double et_s = permittivity_ratio(
+            device.relative_permittivity(static_cast<mesh::NodeId>(sem)), scaling);
         const device::Interface& f = interfaces[k];
-        const double a = area_cm / area_scale;
-        interface_nodes.push_back({node, k, a / (scaling.Ns * scaling.L_D),
+        const double a = edge.coupling_area / area_scale;
+        const double cw = a / (scaling.Ns * scaling.L_D);
+        double donors = 0.0, acceptors = 0.0;
+        for (std::size_t l = range[k].first; l < range[k].second; ++l) {
+            (levels[l].donor ? donors : acceptors) += levels[l].density_cm2;
+        }
+        interface_edges.push_back({e, ins, sem, k, 2.0 * et_i * se.geometry,
+                                   2.0 * et_s * se.geometry, cw,
                                    a * scaling.Ns / (scaling.R0 * scaling.L_D),
                                    f.fixed_charge_cm2, f.recombination_velocity_n_cm_s,
                                    f.recombination_velocity_p_cm_s, range[k].first,
-                                   range[k].second});
+                                   range[k].second, cw * (f.fixed_charge_cm2 - acceptors),
+                                   cw * (f.fixed_charge_cm2 + donors)});
     }
     s.interfaces =
-        InterfaceNodes(std::move(interface_nodes), std::move(levels), interfaces.size());
+        InterfaceEdges(std::move(interface_edges), std::move(levels), interfaces.size());
     return s;
 }
 

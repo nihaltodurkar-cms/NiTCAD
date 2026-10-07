@@ -8,7 +8,7 @@
 #include <vector>
 
 #include "NiTCAD/assemble/gate.hpp"
-#include "NiTCAD/assemble/interface_nodes.hpp"
+#include "NiTCAD/assemble/interface_edges.hpp"
 #include "NiTCAD/assemble/models.hpp"
 #include "NiTCAD/assemble/scaling.hpp"
 #include "NiTCAD/base/error.hpp"
@@ -28,6 +28,9 @@ struct ScaledEdge {
     bool interface;    // the ends are in materials whose parameters differ (a heterointerface)
     bool thermionic;   // the ends are in regions of an interface declared thermionic_emission
     bool carriers;     // both ends are semiconductor nodes: carriers flow along the edge
+    // An edge of an interface with charge, traps or recombination: its Poisson flux is the
+    // half-edge fluxes of interface_edges.hpp instead.
+    bool charged;
 };
 
 struct ScaledDevice {
@@ -59,7 +62,7 @@ struct ScaledDevice {
     // shifted by -V, with psi referenced as above (the vacuum level is -psi V_T + depth).
     std::vector<std::int32_t> electrode;
     std::vector<double> electrode_potential;
-    InterfaceNodes interfaces;           // interface charge, traps, recombination
+    InterfaceEdges interfaces;           // interface charge, traps, recombination (per edge)
     std::vector<device::ContactKind> kinds;  // per contact, in device.contacts() order
     std::vector<ScaledEdge> edges;       // in mesh edge order
 };

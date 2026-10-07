@@ -314,19 +314,11 @@ TEST_CASE("insulator: the fixed charge shifts the meshed C-V by -q Q_f / C_ox") 
         const double measured = v1 - ExactMOS({}).Vfb0();
         CAPTURE(Qf, e, shift, measured, (measured - shift) / shift);
         REQUIRE(std::abs(f1) <= 1e-12);
-        // The discrete fixed charge sits in the first silicon box, h / 2 from the interface. At
-        // flat band the silicon is neutral and field-free, so the oxide edges carry the whole
-        // charge and the discrete shift is exactly -q Q_f (t_ox / eps_ox + (h / 2) / eps_si):
-        // 8.3e-4 relative more than -q Q_f / C_ox here, a first-order offset that also bounds the
-        // curve's error (measured 9.4e-5 V at Q_f = 5e11, 2.1e-4 V at -1e12).
-        const double h = legacy_axis(1200)[1];
-        const double discrete =
-            shift * (1.0 + 0.5 * h * exact.Cox() /
-                               (physics::silicon_parameters.eps_r * base::eps0_F_per_cm));
-        CAPTURE(discrete, (measured - discrete) / shift);
-        REQUIRE(std::abs(measured - discrete) <= 1e-9 * std::abs(shift));
-        REQUIRE(std::abs(measured - shift) <= 1e-3 * std::abs(shift));
-        REQUIRE(e <= 1e-3 * std::abs(shift) + 5e-5);
+        // The fixed charge sits at the interface (interface_edges.hpp). At flat band the silicon
+        // is neutral and field-free, so the oxide carries the whole charge over exactly t_ox and
+        // the discrete shift is -q Q_f / C_ox itself.
+        REQUIRE(std::abs(measured - shift) <= 1e-9 * std::abs(shift));
+        REQUIRE(e <= 1e-4);
     }
 }
 
@@ -340,10 +332,13 @@ TEST_CASE("insulator: interface traps against the exact solution and the legacy 
     const device::Device d = meshed_1d(1200, {.Dit = Dit});
     const auto points = sweep(d, Vg);
     const double e = charge_error(points, exact);
-    // The traps see the potential of the first silicon node, h / 2 from the interface: a
-    // first-order error of about q D_it E_s h / 2 in the trapped charge, E_s the surface field
-    // (ARCHITECTURE.md, Unit 15b known limits). Halving h halves it.
-    const double e_fine = charge_error(sweep(meshed_1d(2400, {.Dit = Dit}), Vg), exact);
+    // The traps sit at the interface potential (interface_edges.hpp): second order in the mesh,
+    // as without traps.
+    std::vector<double> e_mesh;
+    for (const std::size_t nx : {300, 600, 2400}) {
+        e_mesh.push_back(charge_error(sweep(meshed_1d(nx, {.Dit = Dit}), Vg), exact));
+    }
+    e_mesh.insert(e_mesh.begin() + 2, e);  // 300, 600, 1200, 2400
     // The traps hold -q D_it phi_s in mid-gap, so the trapped charge reported is that.
     const std::size_t surface = first_silicon(d);
     const std::size_t bulk = d.contacts()[1].nodes.front();
@@ -376,30 +371,52 @@ TEST_CASE("insulator: interface traps against the exact solution and the legacy 
             plain[k].fields.potential_V[surface] - plain[k].fields.potential_V[bulk];
         without_traps = std::max(without_traps, std::abs(phi0 - ref.phi_s[k]));
     }
-    CAPTURE(e, e_fine, e / e_fine, worst_trapped, worst_legacy, without_traps);
-    REQUIRE(e < 5e-4);
-    REQUIRE(e_fine < 0.6 * e);
+    CAPTURE(e_mesh, worst_trapped, worst_legacy, without_traps);
+    for (std::size_t k = 1; k < e_mesh.size(); ++k) REQUIRE(e_mesh[k] < 0.3 * e_mesh[k - 1]);
+    REQUIRE(e_mesh.back() < 2e-5);
     REQUIRE(worst_trapped < 1e-3 * base::q_C * Dit);  // within 1 mV of trapped charge
     REQUIRE(worst_legacy < 2e-3);
     REQUIRE(without_traps > 50.0 * worst_legacy);  // the stretch-out is resolved
 }
 
 TEST_CASE("insulator: Gauss's law with the meshed electrode, fixed charge and traps") {
-    // Q_G + q sum_i V_i (p - n - N_A) + q Q_f + Q_it = 0 over the silicon nodes, at each point.
+    // Q_G + q sum_i V_i (p - n - N_A) + q Q_f + Q_it = 0 over the silicon nodes, at each point;
+    // quasi-static and (below threshold) drift-diffusion. Also with a one-cell oxide: the electrode
+    // node at -t_ox, the first silicon node at +t_ox, so the electrode is an end of the interface
+    // edge and its charge is the half-edge flux.
     const Stack s{.Qf = 3e11, .Dit = 1e12};
-    const device::Device d = meshed_1d(1200, s);
-    const auto points = sweep(d, range(-1.5, 1.5, 0.5));
-    const auto volumes = d.mesh().volumes();
-    for (const results::BiasPoint& p : points) {
-        double Q = 0.0;
-        for (std::size_t i = 0; i < volumes.size(); ++i) {
-            if (d.is_insulator(static_cast<mesh::NodeId>(i)) || i + 1 == volumes.size()) continue;
-            Q += base::q_C * volumes[i] * (p.fields.p_cm3[i] - p.fields.n_cm3[i] - N_A);
+    std::vector<double> one_cell{-t_ox};
+    for (const double v : legacy_axis(600)) one_cell.push_back(v + t_ox);
+    const device::Device thick = meshed_1d(1200, s);
+    const device::Device thin = meshed(*mesh::make_tensor_grid(one_cell), s);
+    std::vector<std::pair<const device::Device*, std::vector<results::BiasPoint>>> runs;
+    runs.emplace_back(&thick, sweep(thick, range(-1.5, 1.5, 0.5)));
+    runs.emplace_back(&thin, sweep(thin, range(-1.5, 1.5, 0.5)));
+    // On this mesh the silicon half-cell at the interface is 5 nm, so in accumulation the
+    // interface hole density is the node's times e^(psi_s - psi_I), about 1e8 here, and the trap
+    // terms are steep in psi: the drift-diffusion Jacobian's pivot ratio falls to 1.2e-10 (6.9e-5
+    // with the traps at the node, 1.5e-5 on the legacy mesh with its 0.0125 nm half-cell), close to
+    // the default singularity check of 1e-11. It converges without the check.
+    solve::BiasOptions unchecked;
+    unchecked.linear.min_pivot_ratio = 0.0;
+    runs.emplace_back(&thin, sweep(thin, range(-1.5, -0.5, 0.5), unchecked));
+    for (const auto& [device, points] : runs) {
+        const device::Device& d = *device;
+        const auto volumes = d.mesh().volumes();
+        for (const results::BiasPoint& p : points) {
+            double Q = 0.0;
+            for (std::size_t i = 0; i < volumes.size(); ++i) {
+                if (d.is_insulator(static_cast<mesh::NodeId>(i)) || i + 1 == volumes.size()) {
+                    continue;
+                }
+                Q += base::q_C * volumes[i] * (p.fields.p_cm3[i] - p.fields.n_cm3[i] - N_A);
+            }
+            const double total =
+                p.gate_charge[0] + Q + base::q_C * s.Qf + p.interface_trap_charge[0];
+            CAPTURE(d.mesh().node_count(), p.bias_V[0], p.gate_charge[0], Q,
+                    p.interface_trap_charge[0], total);
+            REQUIRE(std::abs(total) <= 1e-9 * std::abs(p.gate_charge[0]) + 1e-15);
         }
-        const double total =
-            p.gate_charge[0] + Q + base::q_C * s.Qf + p.interface_trap_charge[0];
-        CAPTURE(p.bias_V[0], p.gate_charge[0], Q, p.interface_trap_charge[0], total);
-        REQUIRE(std::abs(total) <= 1e-9 * std::abs(p.gate_charge[0]) + 1e-15);
     }
 }
 

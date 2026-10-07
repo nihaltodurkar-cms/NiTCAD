@@ -343,10 +343,12 @@ TEST_CASE("insulator assemble: on an equilibrium state the interface terms are t
 }
 
 TEST_CASE("insulator assemble: a mid-gap trap recombines as its surface recombination velocity") {
-    // A mid-gap level with N sigma_n v_n = s_n and N sigma_p v_p = s_p: the continuity rows of
-    // every node equal those of the velocity form at any state (the Poisson rows differ by the
-    // trap's charge, which the velocity form does not hold).
-    const auto make = [](bool traps) {
+    // A mid-gap level with N sigma_n v_n = s_n and N sigma_p v_p = s_p recombines as the velocity
+    // form. The trap also holds a charge, which moves the interface potential and so the interface
+    // densities; with N small (and sigma large) that charge is negligible, and the continuity rows
+    // of every node equal those of the velocity form at any state.
+    enum class Mode { traps, velocity, none };
+    const auto make = [](Mode mode) {
         const auto x = *mesh::straddle_interface(uniform(-5e-7, 1.2e-5, 30), 0.0, 1e-7);
         mesh::Mesh m = *mesh::make_tensor_grid(x);
         const std::size_t n = m.node_count();
@@ -357,12 +359,12 @@ TEST_CASE("insulator assemble: a mid-gap trap recombines as its surface recombin
             if (region[i] == 1) acceptors[i] = 1e16;
         }
         device::Interface f{"oxide", "silicon"};
-        if (traps) {
-            f.traps.levels = {{.type = physics::TrapType::acceptor, .density_cm2 = 2e10,
-                               .energy_eV = 0.0, .sigma_n_cm2 = 3e-15, .sigma_p_cm2 = 1e-15}};
+        if (mode == Mode::traps) {
+            f.traps.levels = {{.type = physics::TrapType::acceptor, .density_cm2 = 2e4,
+                               .energy_eV = 0.0, .sigma_n_cm2 = 3e-9, .sigma_p_cm2 = 1e-9}};
             f.traps.thermal_velocity_n_cm_s = 2e7;
             f.traps.thermal_velocity_p_cm_s = 1.5e7;
-        } else {
+        } else if (mode == Mode::velocity) {
             f.recombination_velocity_n_cm_s = 2e10 * 3e-15 * 2e7;
             f.recombination_velocity_p_cm_s = 2e10 * 1e-15 * 1.5e7;
         }
@@ -378,24 +380,29 @@ TEST_CASE("insulator assemble: a mid-gap trap recombines as its surface recombin
                           {"substrate", device::ContactKind::ohmic, std::move(x_max)}},
              .interfaces = {std::move(f)}});
     };
-    const device::Device a = make(true), b = make(false);
+    const device::Device a = make(Mode::traps), b = make(Mode::velocity), c = make(Mode::none);
     const auto scaling = *assemble::make_scaling(a);
     auto sa = *DriftDiffusion::create(a, scaling);
     auto sb = *DriftDiffusion::create(b, scaling);
+    auto sc = *DriftDiffusion::create(c, scaling);
     const auto poisson = *EquilibriumPoisson::create(a, scaling);
     const auto x = probe_state(sa, poisson, a, 41);
-    std::vector<double> fa(sa.unknowns()), fb(sb.unknowns());
+    std::vector<double> fa(sa.unknowns()), fb(sb.unknowns()), fc(sc.unknowns());
     sa.residual(x, fa);
     sb.residual(x, fb);
-    double worst = 0.0, scale = 0.0, poisson_difference = 0.0;
+    sc.residual(x, fc);
+    // The recombination term is the continuity rows' difference from the device without it;
+    // the two forms are compared on its own scale.
+    double worst = 0.0, rate = 0.0, poisson_difference = 0.0;
     for (std::size_t i = 0; i < sa.node_count(); ++i) {
         for (const std::size_t r : {3 * i + 1, 3 * i + 2}) {
             worst = std::max(worst, std::abs(fa[r] - fb[r]));
-            scale = std::max(scale, std::abs(fa[r]));
+            rate = std::max(rate, std::abs(fb[r] - fc[r]));
         }
         poisson_difference = std::max(poisson_difference, std::abs(fa[3 * i] - fb[3 * i]));
     }
-    CAPTURE(worst, scale, poisson_difference);
-    REQUIRE(worst <= 1e-13 * scale);
+    CAPTURE(worst, rate, worst / rate, poisson_difference);
+    REQUIRE(rate > 0.0);
+    REQUIRE(worst <= 1e-9 * rate);
     REQUIRE(poisson_difference > 0.0);
 }
