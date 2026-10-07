@@ -3,8 +3,8 @@
 //
 // Legacy definitions (core/src/device1d/inputs.cpp:41-65):
 //     V_T = k T / q                              [V]
-//     eps = eps_r eps0                           [F/cm], of node 0's material
-//     Ns  = override if given, else max(max_i |N_D - N_A|_i, n_i)   [cm^-3], n_i of node 0
+//     eps = eps_r eps0                           [F/cm], of the reference material
+//     Ns  = override if given, else max(max_i |N_D - N_A|_i, n_i)   [cm^-3], n_i of it
 //     L_D = sqrt(eps V_T / (q Ns))               [cm]
 //     J0  = q D0 Ns / L_D                        [A/cm^2]
 //     R0  = D0 Ns / L_D^2                        [cm^-3 s^-1]
@@ -35,7 +35,9 @@ struct Scaling {
     double R0;            // rate scale [cm^-3 s^-1]
 };
 
-// The reference material is node 0's, as in the legacy. Errors: invalid_input if Ns_override is
+// The reference material is node 0's, as in the legacy; with insulators (Unit 15b) that of the
+// lowest semiconductor node (device::Device::reference_node). Errors: invalid_input if Ns_override
+// is
 // given and not finite and positive.
 [[nodiscard]] std::expected<Scaling, base::Error> make_scaling(
     const device::Device& device, std::optional<double> Ns_override = std::nullopt);

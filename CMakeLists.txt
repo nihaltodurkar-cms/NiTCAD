@@ -149,7 +149,9 @@ add_library(nitcad_physics STATIC
   src/physics/field_mobility.cpp
   src/physics/fermi_dirac.cpp
   src/physics/thermionic_emission.cpp
-  src/physics/ionization.cpp)
+  src/physics/ionization.cpp
+  src/physics/insulator.cpp
+  src/physics/interface_traps.cpp)
 add_library(NiTCAD::physics ALIAS nitcad_physics)
 target_include_directories(nitcad_physics PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
 target_link_libraries(nitcad_physics PUBLIC NiTCAD::base)
@@ -162,7 +164,8 @@ add_executable(nitcad_physics_test
   tests/physics/heavy_doping_test.cpp
   tests/physics/field_mobility_test.cpp
   tests/physics/fermi_dirac_test.cpp
-  tests/physics/materials_test.cpp)
+  tests/physics/materials_test.cpp
+  tests/physics/interface_traps_test.cpp)
 target_link_libraries(nitcad_physics_test PRIVATE NiTCAD::physics Catch2::Catch2WithMain)
 add_test(NAME physics COMMAND nitcad_physics_test)
 
@@ -174,7 +177,8 @@ target_link_libraries(nitcad_device PUBLIC NiTCAD::base NiTCAD::mesh NiTCAD::phy
 
 add_executable(nitcad_device_test
   tests/device/device_test.cpp
-  tests/device/topology_test.cpp)
+  tests/device/topology_test.cpp
+  tests/device/insulator_test.cpp)
 target_link_libraries(nitcad_device_test PRIVATE NiTCAD::device Catch2::Catch2WithMain)
 add_test(NAME device COMMAND nitcad_device_test)
 
@@ -183,6 +187,7 @@ add_library(nitcad_assemble STATIC
   src/assemble/scaling.cpp
   src/assemble/scaled_device.cpp
   src/assemble/gate.cpp
+  src/assemble/interface_edges.cpp
   src/assemble/contact_bias.cpp
   src/assemble/equilibrium_poisson.cpp
   src/assemble/drift_diffusion.cpp)
@@ -196,7 +201,8 @@ add_executable(nitcad_assemble_test
   tests/assemble/poisson_test.cpp
   tests/assemble/drift_diffusion_test.cpp
   tests/assemble/gate_test.cpp
-  tests/assemble/heterojunction_test.cpp)
+  tests/assemble/heterojunction_test.cpp
+  tests/assemble/insulator_test.cpp)
 target_link_libraries(nitcad_assemble_test PRIVATE NiTCAD::assemble Catch2::Catch2WithMain)
 add_test(NAME assemble COMMAND nitcad_assemble_test)
 
@@ -226,7 +232,8 @@ add_executable(nitcad_solve_test
   tests/solve/mosfet_test.cpp
   tests/solve/field_mobility_test.cpp
   tests/solve/fermi_dirac_test.cpp
-  tests/solve/heterojunction_test.cpp)
+  tests/solve/heterojunction_test.cpp
+  tests/solve/insulator_test.cpp)
 target_link_libraries(nitcad_solve_test PRIVATE NiTCAD::solve Catch2::Catch2WithMain)
 add_test(NAME solve COMMAND nitcad_solve_test)
 # The 2D MOSFET gates (tests/solve/mosfet_test.cpp, hidden tag [.mosfet]) take about a minute in

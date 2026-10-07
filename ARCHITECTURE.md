@@ -99,9 +99,9 @@ solver implementation.
 
 | Concept | Long-term role | Current status |
 |---|---|---|
-| Region | geometry, material, doping and applicable equations | Implemented in `device` |
-| Interface | shared boundary between regions with interface laws | Semiconductor heterointerfaces since Unit 15 (band offsets through the band shift, permittivity steps, thermionic emission); the Unit 12 gate is a lumped oxide on a boundary patch; meshed insulators, interface charge and traps are deferred (15b) |
-| Contact / boundary | named boundary set plus physical boundary condition | Ohmic contacts and gate contacts on a lumped oxide implemented (Unit 12); Schottky contacts deferred |
+| Region | geometry, material, doping and applicable equations | Implemented in `device`; a region is of a semiconductor or, since Unit 15b, of an insulator (Poisson only) |
+| Interface | shared boundary between regions with interface laws | Semiconductor heterointerfaces since Unit 15 (band offsets through the band shift, permittivity steps, thermionic emission); semiconductor-insulator interfaces since Unit 15b (fixed charge, traps, surface recombination); the Unit 12 gate is a lumped oxide on a boundary patch |
+| Contact / boundary | named boundary set plus physical boundary condition | Ohmic contacts, gate contacts on a lumped oxide (Unit 12) and electrodes on a meshed insulator (Unit 15b) implemented; Schottky contacts deferred |
 | Field | named physical quantity with location, units and applicability | Present as specialized solution/result data; generic field abstraction is target |
 | Equation | residual/Jacobian contribution associated with fields and domains | Present through specialized assembler systems; generic equation objects are target |
 | Model | pure constitutive law with exact derivatives | Implemented for current local physics |
@@ -392,6 +392,29 @@ thermionic emission through per-edge arrays in the `Inputs` struct, `core/includ
   match 40-digit roots (legacy G7(b,c)).
 - `radiative_recombination(n, p, E, B)` = B(np − E) with the partials of E; `emission_velocity_cm_s(m, carrier, T)` = A*
   T²/(q N) when the material sets A*, else the density-of-states velocity.
+
+**As built (Unit 15b, insulators and interface traps; owner request, scope approved by the owner):**
+- `physics/insulator.hpp`: `InsulatorParameters{eps_r}` and `Insulator::create` (eps_r finite and positive). Built-in
+  set: SiO₂, 3.9 (the legacy `EPS_OX_R`); any other insulator is given by its permittivity (the owner chose this over
+  sourced Si₃N₄, Al₂O₃ and HfO₂ sets).
+- `physics/interface_traps.hpp` (not in the legacy, whose only trap model is `moscap`'s lumped q D_it, M14):
+  - `TrapLevel` (donor- or acceptor-like, sheet density N_t, energy E_t − E_i, σ_n, σ_p), `TrapBand` (uniform D_it
+    between two energies), `InterfaceTraps` (levels, bands, thermal velocities, default 1e7 cm/s);
+    `check_interface_traps` against the semiconductor's gap at the device temperature.
+  - Steady-state SRH occupancy f = (c_n n + c_p p1)/(c_n(n + n1) + c_p(p + p1)) and rate
+    U/N_t = c_n c_p (np − n1 p1)/(…), c = σ v_th, with n1 = γ_n n_ie e^τ and p1 = γ_p n_ie e^−τ (γ the degeneracy factor
+    of the node's own density, 1 under Boltzmann). At equilibrium n1/n = p/p1 = e^(τ − η), so f is exactly the Fermi
+    function under either statistics (measured within 1.9e-15 over 1134 equilibrium states) and U vanishes.
+    `trap_kinetics` returns f, 1 − f (computed directly, no cancellation) and U/N_t with exact partials, including the
+    density dependence of n1 and p1.
+  - Charge signs (owner's constraint): a donor-like trap is +q when empty, an acceptor-like trap −q when occupied.
+  - Trap bands: composite 6-point Gauss–Legendre on panels no wider than kT (`trap_band_levels`). The occupancy's poles
+    lie π kT off the real axis, so the rule converges fast: on a 1.08 eV band at 300 K (252 levels) the equilibrium
+    occupied density is within 7.1e-16 of the band's density of the closed-form integral (40-digit references).
+  - `fermi_occupancy(x)`: f and 1 − f from the exponential that cannot overflow, within 4 ulp of 40-digit values from
+    x = −40 to 45.
+  - The surface recombination velocity form is SRH with a mid-gap level per unit area (`srh_recombination` with
+    τ = 1/s); a mid-gap trap with N σ v = s gives the same rate to 8 ε.
 
 ## 6. Cross-cutting design
 
@@ -702,6 +725,92 @@ Whether the new solver reproduces these exact defaults is to be confirmed unit b
   - The emission velocity with (1/N)^(1/3).
   - The field-mobility refusal removed.
 
+**As built (Unit 15b, insulators in the assemblers; 6.4 for the device data, section 5 for the models):**
+- An insulator node has no carriers. In `DriftDiffusion` its continuity rows are F = n and F = p (identity rows, n = p
+  = 0 held exactly, owner's constraint) and its Poisson row the box row with no charge; in `EquilibriumPoisson` the box
+  row with no charge. An edge with an insulator end carries Poisson flux only (`ScaledEdge::carriers`), so no carrier
+  crosses a semiconductor-insulator edge: its edge currents are 0 and no semiconductor row reads an insulator density.
+  The edge permittivity is the harmonic mean, as at a heterointerface; the interface lies at the edge's midpoint and
+  each control volume is of one material (`mesh::straddle_interface`), so no mesh change was needed.
+- An electrode node's Poisson row is Dirichlet, ψ − ψ_E, ψ_E = V/V_T + (depth of the reference material − φ_m)/V_T
+  (the vacuum level is −ψ V_T + depth). It is the lumped gate's ψ_G with the oxide meshed. The electrode's charge is
+  the displacement flux leaving its nodes along the edges to other nodes, reported in `gate_charge` with the gates'.
+- `assemble/interface_edges.hpp` (`InterfaceEdges`, shared by both assemblers as `GateNodes`): each mesh edge joining
+  the insulator and semiconductor regions of a declared interface with charge, traps or recombination is two half-edges
+  in series (g_i = 2 et_i c, g_s = 2 et_s c), and the interface potential ψ_I between them obeys Gauss's law on the
+  edge's interface patch (area A, a = A/L_D^(D−1)): g_i(ψ_I − ψ_i) + g_s(ψ_I − ψ_s) = a/(Ns L_D) (Q_f + Σ N_k q_k). The
+  insulator row takes g_i(ψ_I − ψ_i) and the semiconductor row g_s(ψ_I − ψ_s) in place of the edge's flux (with no
+  charge this is the harmonic-mean flux); the semiconductor's continuity rows take ∓ a Ns/(R0 L_D)(Σ N_k r_k + r_s). In
+  `EquilibriumPoisson` the occupancy is the Fermi function of τ − (ψ_I + s); in `DriftDiffusion` the carriers keep their
+  quasi-Fermi levels across the semiconductor half-cell (Boltzmann: n_I = n_s e^(ψ_I − ψ_s), p_I = p_s e^(ψ_s − ψ_I);
+  Fermi–Dirac through the node's reduced energy), and the occupancy is the SRH one at (n_I, p_I). Q falls as ψ_I rises
+  and lies between the fixed charge with every trap charged one way or the other, so ψ_I is the one root of a monotone
+  equation in a known bracket, found by safeguarded Newton to rounding on each evaluation. ψ_I is eliminated (the global
+  unknowns are unchanged); its partials in the edge's end unknowns follow from the local equation (implicit function),
+  so the Jacobian is exact. In drift-diffusion the insulator node's Poisson row then reads the semiconductor node's n
+  and p: the pattern gains those two entries on interface edges only. A Dirichlet end (electrode, ohmic contact) takes
+  no terms; an electrode at an interface edge's end has the half-edge flux as its charge.
+- OLD / NEW / REASON, where the interface terms act (within Unit 15b, owner's request after the first commit `daf4de7`):
+  - OLD: the fixed charge and traps acted at the first semiconductor node, h/2 from the interface, at its own n, p and ψ.
+  - NEW: at the interface potential ψ_I and the interface densities, per interface edge.
+  - REASON: the node placement was first order in h, about q D_it E_s h/2 in the trapped charge and (h/2)/ε_si in the
+    fixed charge's shift, while the rest of the MOS solution is second order. Measured with D_it = 2e12 against the
+    exact solution: 3.8e-4 V (1200 nodes) halving with h, now 1.77e-5 V falling by 4.04–4.08 per halving.
+- Newton: an insulator node's densities are neither measured nor updated (they stay 0).
+- The reference material (scaling, band shift) is the lowest semiconductor node's (`Device::reference_node`): node 0
+  when there is no insulator, so nothing changes for existing devices.
+- Band diagram: NaN on insulator nodes (the model has no insulator bands).
+- Gates (all measured):
+  - FD Jacobian in 1D, 2D and 3D, Boltzmann and Fermi–Dirac, electrode biased, fixed charge, two trap levels, a trap
+    band and surface recombination: at most 1.7e-7 (Poisson) and 1.2e-7 (drift-diffusion); the interface part on its
+    own (difference of the Jacobians with and without the terms) at most 2.0e-8.
+  - On an equilibrium state the drift-diffusion interface terms are the equilibrium ones: trapped charges equal, Poisson
+    rows equal to rounding, continuity rows at most 1.9e-14, in 1D/2D/3D under either statistics.
+  - A mid-gap trap with N σ v = s (N small, so its charge does not move ψ_I) gives the velocity form's continuity rows
+    exactly (0 difference measured).
+  - Meshed MOS-C (legacy fixture: N_A = 1e17, 5 nm SiO₂, n+ poly) against the exact first-integral solution, gate charge
+    over −2 to 2 V: second order, 5.0e-4, 1.24e-4, 3.07e-5, 7.6e-6 V for 300 to 2400 silicon nodes; the lumped oxide
+    6.6e-4 to 1.08e-5; meshed against lumped 1.16e-3 to 1.8e-5.
+  - Fixed charge: the flat-band shift equals −q Q_f/C_ox to 6e-13 (Q_f = 5e11 and −1e12 cm⁻²); the curve's error
+    2.4e-5 and 3.5e-5 V (it was 9.4e-5 and 2.1e-4 V with Q_f at the node).
+  - Uniform D_it = 2e12 cm⁻² eV⁻¹ neutral at flat band: against the exact solution 2.94e-4, 7.20e-5, 1.77e-5, 4.39e-6 V
+    for 300 to 2400 nodes (second order, ratio 4.04–4.08); the trapped charge within 1.1e-12 C/cm² of the exact Fermi
+    integral; the legacy M14 stretch-out (the ported legacy solve with its D_it term) within 0.17 mV of surface
+    potential where the surface Fermi level is mid-gap, against 236 mV without traps.
+  - Gauss's law with electrode, fixed charge and traps (bound 1e-9 relative), quasi-static and drift-diffusion, also with
+    a one-cell oxide whose electrode is the interface edge's end; y-uniform 2D and 3D reproduce 1D (bound 1e-10);
+    drift-diffusion equals the quasi-static state below threshold; a metal electrode moves the curve rigidly by φ_m − χ.
+  - Surface recombination: a 2D p+n diode under oxide with s = 0, 1e3 and 3e3 cm/s against the analytic current (lowest
+    transverse mode, k tan(k w) = s/D) within 8.3e-4 (2.7e-4 at s = 0).
+  - MOSFET (legacy fixture, `[.mosfet]`): meshed oxide against lumped, thresholds 0.21 mV apart, currents from V_G =
+    −0.4 V up within 0.58%.
+  - Without interface charge, traps or recombination nothing changed: devices without insulators hash identically to
+    `main` (seven runs), meshed-oxide devices without interface terms identically to `daf4de7` (1D and 2D, quasi-static
+    and drift-diffusion).
+  - Cost (Release, best of three; run-to-run noise on this machine is 10–20%): with traps, a 1D quasi-static sweep of 81
+    points 0.067 → 0.077–0.083 s, 1D drift-diffusion 16 points 0.151 → 0.159–0.180 s, 2D (8 columns) quasi-static 21
+    points 0.86 → 0.88–1.03 s, 2D drift-diffusion 7 points 3.81 → 4.49–4.66 s; Newton iterations 350 → 350, 116 → 114,
+    121 → 121, 65 → 68. The sparse factorization still dominates.
+- Known limits:
+  - Trap occupancy is steady state; trap dynamics belong to transient (Unit 21).
+  - A coarse semiconductor half-cell at the interface makes the interface densities steep in ψ_I (n_I = n_s e^(ψ_I − ψ_s)):
+    with a one-cell 5 nm oxide (a 5 nm half-cell) in accumulation, the drift-diffusion Jacobian's pivot ratio falls to
+    1.2e-10 (6.9e-5 with the terms at the node), near the default singularity check of 1e-11; on the legacy mesh
+    (0.0125 nm half-cell) it is 1.5e-5. Accuracy needs a fine interface mesh anyway.
+  - Not in 15b (owner's exclusions): tunnelling through insulators, poly-gate depletion, bare-surface recombination
+    velocity, per-cell regions in the mesh.
+- Mutation checks, each caught (26, after the interface-potential change): the donor charge as occupied, the trap
+  charge's n partial, the trap rate's p partial, p for p1 in the occupancy, the half-edge conductance without its
+  factor 2, the interface area halved, carrier flux across semiconductor-insulator edges, the electrode potential's
+  sign, the electrode charge's sign, the charge of an electrode at an interface edge's end (equilibrium and
+  drift-diffusion), the fixed charge missing in drift-diffusion, the band quadrature weight, semiconductor parts joined
+  through oxide in the topology check, insulator doping unchecked, the recombination weight without Ns, the thermal
+  velocity ignored (missed at first: the trap-against-velocity test compared rows on their own scale, and now compares
+  the recombination term on its), the run record without the electron thermal velocity (missed in the first commit; the
+  run-identity test was extended), a charge on insulator rows, the occupancy's sign of τ − η, ψ_I's implicit
+  derivative dropped, its denominator without dQ/dψ_I, the interface electron density shifted the wrong way, the local
+  solve stopped after one step, an interface edge also taking its own flux, the insulator row without its n column.
+
 ### 6.3 Device description
 
 A `device` is plain data: regions (geometry in the mesh's coordinates), doping per node or region,
@@ -772,7 +881,7 @@ thermionic emission, meshed insulators in a later unit):**
     below.
 - Not carried, or deferred:
   - Meshed insulator regions with a Si/SiO₂ interface, interface charge and traps, and interface recombination:
-    track 15b, which the owner deferred.
+    track 15b, which the owner deferred (built in Unit 15b, 6.4).
   - The legacy's velocity-scaling knob, which its test used for the K → ∞ limit (a test hack, not an API).
 
 **As built (Unit 15 follow-up, interfaces and outputs):**
@@ -910,6 +1019,42 @@ from fluxes in `assemble`/`solve`. It is not an `analysis` quantity.
 - The MOSFET gates (about 9500 nodes, about 50 s in Release with Eigen SparseLU, 0.27 s per factorization) carry the hidden
   Catch2 tag `[.mosfet]` and run as the `solve_mosfet` ctest entry, in the Release configuration only.
 
+**As built (Unit 15b, meshed insulators, electrodes and semiconductor-insulator interfaces; owner request, scope approved
+by the owner with constraints on units, signs and exclusions):**
+- `Region::material` is `std::variant<physics::Semiconductor, physics::Insulator>` (`device::Material`). `Device`
+  gains `is_insulator(node)`, `relative_permittivity(node)`, `reference_node()` and `find_interface(a, b)`;
+  `material(node)` requires a semiconductor node.
+- `ContactKind::electrode` with `Electrode{kind, work_function_eV}`: electrostatic only (ψ fixed, no carrier rows, no
+  current). Its nodes must be insulator nodes on a boundary patch. A polysilicon electrode is silicon's (φ_m = χ or
+  χ + Eg of `silicon_parameters`): it has no semiconductor under it to take them from, unlike a lumped gate.
+- `Interface` gains `fixed_charge_cm2` (Q_f, a sheet number density; the charge is q Q_f), `traps` and
+  `recombination_velocity_n_cm_s` / `_p_cm_s`. They act on the semiconductor side of a semiconductor-insulator
+  interface.
+- Validation (each with a test): no semiconductor region; doping on an insulator node; an ohmic or gate contact node in
+  an insulator, an electrode node in a semiconductor; an unknown electrode kind or a metal work function not positive;
+  thermionic emission with an insulator side; charge, traps or recombination on an interface that is not
+  semiconductor-insulator; Q_f not finite; a recombination velocity negative or not finite; traps outside the gap, with
+  a density, cross-section or thermal velocity out of range.
+- OLD / NEW / REASON, topology:
+  - OLD: every connected part of the mesh graph needs an ohmic contact.
+  - NEW: every connected part of the semiconductor nodes (joined by semiconductor-semiconductor edges) needs an ohmic
+    contact, and every connected part of the graph an ohmic contact or an electrode.
+  - REASON: carriers do not cross an insulator, so a silicon island enclosed by oxide has undetermined densities even
+    when the oxide joins it to a contacted part; an oxide part needs its potential fixed. Without insulators the two
+    rules are the old one.
+- `results`: `interface_trap_charge` per declared interface in `EquilibriumResult` and `BiasPoint` (C/cm^(3−D), the
+  traps' charge without Q_f); `gate_charge` includes electrodes; densities 0 and bands NaN on insulator nodes. The
+  sweep's initial state need not have positive densities on insulator nodes. The run record hashes insulators,
+  electrodes and interface charge, traps and recombination, only when present, so existing digests are unchanged.
+- Bit identity: seven runs without insulators (1D and 2D silicon diodes, field mobility with Fermi–Dirac, a
+  GaAs/AlGaAs thermionic junction with ionization, lumped MOS-C quasi-static in 1D and 2D and drift-diffusion) hash every
+  field, band, current, charge, convergence record and run digest identically on `main` and on the branch.
+- **Finding, legacy D_it charge:** `moscap.cv_sweep` with D_it reports Q_g = C_ox (V_G − V_FB − φ_s) − q D_it φ_s. By
+  Gauss, C_ox (V_G − V_FB − φ_s) is already the gate charge and the trapped charge is −q D_it φ_s, so the legacy Q_g is
+  −Q_s, the semiconductor charge, and its C = dQ_g/dV_G leaves out the traps' response, which a measured quasi-static
+  C-V contains. NiTCAD reports the electrode's own charge. The legacy's φ_s(V_G), which the trap term does shape
+  correctly, is the one reproduced (6.2, Unit 15b).
+
 ### 6.5 Input representation
 
 The authoritative input is the in-memory C++ `device` description plus a solver-options struct. An
@@ -936,6 +1081,7 @@ An on-disk result format is **deferred** (R2), under the same independence rule 
 - `Sweep`: the run record, the completed points, and `stopped` (the error that ended the run early, if any) with
   `unfinished` (the convergence history of the point being solved then).
 - No file format (R2). `results` has no test directory of its own: it is plain data, exercised through the solve tests.
+- Later units add fields: the band diagram and current resolution (Unit 15), the interface trap charge (Unit 15b).
 
 ### 6.7 Error policy (R1, decided)
 
@@ -1380,13 +1526,15 @@ testable on arrival. Units 4–9 are dimension-generic from the start (D4) and u
 
 **Target capabilities (Units 13–27).** Design direction, not permission to build: each needs an owner-named
 unit, and the order may change (11.1). Meshed oxide regions and a Si/SiO₂ interface, beyond Unit 12's lumped
-oxide, belong to the heterojunction and interface track (15); the owner split them into a later unit (15b).
+oxide, belong to the heterojunction and interface track (15); the owner split them into a later unit (15b), now
+built.
 
 | # | Unit / capability | Layer(s) | Status / purpose |
 |---|---|---|---|
 | 13 | Field-dependent mobility / velocity saturation | physics, assemble | **done, on `main`** (`f8bda70`): Canali per edge with exact Jacobian (6.2, Unit 13) |
 | 14 | Fermi–Dirac statistics and high-density carrier models | physics, assemble | **done, on `main`** (`8610d9a`): parabolic-band Fermi–Dirac statistics, the legacy ν-factor scheme with an exact Jacobian (5 and 6.2, Unit 14); incomplete ionization deferred (14.3) |
-| 15 | Heterojunctions, band offsets and interface transport | device, assemble, physics | **done on branch `device/heterojunctions`**: band offsets through a per-node band shift, permittivity steps, thermionic emission, the legacy material sets (6.3 and 6.2, Unit 15); follow-up: interfaces as device data, incomplete ionization, radiative recombination, band diagram, current resolution; meshed insulators, interface charge and traps are 15b |
+| 15 | Heterojunctions, band offsets and interface transport | device, assemble, physics | **done, on `main`** (`2a8718a`): band offsets through a per-node band shift, permittivity steps, thermionic emission, the legacy material sets (6.3 and 6.2, Unit 15); follow-up: interfaces as device data, incomplete ionization, radiative recombination, band diagram, current resolution; meshed insulators, interface charge and traps are 15b |
+| 15b | Meshed insulators, semiconductor-insulator interfaces, interface charge, traps and recombination | physics, device, assemble, solve | **done on branch `device/insulators`**: insulator regions, electrodes on a meshed oxide, fixed charge, interface traps (levels and uniform bands, steady-state SRH occupancy), surface recombination, all at the interface potential (5, 6.2 and 6.4, Unit 15b) |
 | 16 | Unstructured mesh | mesh, assemble | target |
 | 17 | Adaptive mesh refinement and state transfer | mesh, solve, results | target |
 | 18 | Scalable linear-solver backends: PARDISO and/or iterative/AMG paths | linalg | target; must preserve backend-neutral interface |
@@ -1574,7 +1722,6 @@ architecture; historical branch names remain only where they are useful to expla
 | R2 | External input/output file formats | Concrete requirements exist. Internal input/result types stay independent of any format. |
 | R3 | Unstructured-mesh implementation | The owner requests it. The mesh design must already allow it without a rewrite (6.11). |
 | — | Statistics beyond parabolic-band Fermi–Dirac (Unit 14); incomplete ionization | Requested (R4). |
-| — | Meshed insulator regions (Si/SiO₂ interface), interface charge, traps and recombination | Requested (15b, split from Unit 15 by the owner). |
 | — | PARDISO and iterative solver backends | Requested; the interface already accommodates them (6.10). |
 
 ### 14.4 Verification results (run 2026-10-02; probes were built outside the repository)
@@ -1604,6 +1751,8 @@ architecture; historical branch names remain only where they are useful to expla
 | V21 | Unit 14 (`physics/fermi-dirac`): Debug and Release build with no warnings; `nitcad_physics_test` 56 test cases, `nitcad_assemble_test` 40, `nitcad_solve_test` 69 (+3 `[.mosfet]`, Release only), all pass. F₁/₂ within 1.5e-15 of 40-digit references from −700 to 1000; F₋₁/₂ within 1.3e-13 to η = 15 and 3e-12 to 40; the returned derivative matches central differences to 1e-8 across both joins; ln F₁/₂ increasing and concave to rounding on a 1e-3 grid over −50 to 100; the inverse to 1e-14; Boltzmann and Sommerfeld limits with their published correction terms. Statistics: densities, degeneracy factors and the equilibrium product against finite differences; generalized mass action to 1e-13; the neutral equilibrium against 40-digit roots to 1e-13 (η) and 1e-12 (n, p). Device gates and mutation checks in 6.2 "As built (Unit 14)". The Boltzmann path is bit-identical to `main` (probe hashes, 6.2). | Verified locally. |
 | V22 | Unit 15 (`device/heterojunctions`): Debug and Release build with no warnings; `nitcad_physics_test` 60 test cases, `nitcad_assemble_test` 47, `nitcad_solve_test` 77 (+3 `[.mosfet]`, Release only), all pass. Material sets, depths and the emission velocity against 40-digit values; the abrupt-heterojunction first integral (V_bi to 1e-12, interface potential within 1.4e-5 V, D within 7.6e-4); legacy M33 G1, G2 and S2 gates, with G2 currents reproduced to 4 digits; FD-Jacobian gates with interfaces, thermionic emission and Fermi–Dirac in 1D/2D/3D; the gate flat band on a heterostructure; 2D = 1D. Details, the Newton floor and the ten mutation checks in 6.2 and 6.3 "As built (Unit 15)". | Verified locally. |
 | V22a | Unit 15 follow-up (`device/heterojunctions`): Debug and Release build with no warnings, all suites pass (Release 9/9 with `solve_mosfet`, Debug 8/8). FD-Jacobian gates with incomplete ionization (Poisson 1.9e-9; drift-diffusion 1D/2D/3D at most 1e-8), the ionization part on its own 1.4e-7 and 2.1e-7 (gate 1e-5), the radiative part 4.8e-9, thermionic part 2.0e-9, a non-planar 2D interface. Ionized fractions against 40-digit roots to 1e-10; radiative long-base GaAs diode within 0.9% of the analytic current, short-base without recombination to 2.7e-4; emission resistance 6.2575e-7 vs 6.2654e-7 Ω cm²; J(TE)/J(DD) → 1 as A* grows; graded staircase 10/20/40 steps converging (8e-4); current resolution bounds the spread (factor 600); band diagram Fermi levels at the contacts' biases to 1e-9 eV. Fourteen mutation checks caught. | Verified locally. |
+| V23 | Unit 15b (`device/insulators`): Debug and Release build with no warnings; `nitcad_physics_test` 72 test cases, `nitcad_device_test` 24, `nitcad_assemble_test` 57, `nitcad_solve_test` 96 (+4 `[.mosfet]`, Release only), all pass. Without insulators every output of seven probe runs hashes identically to `main`. Fermi occupancy, trap-band quadrature and Gauss–Legendre nodes against 40-digit values (4 ε; 7.1e-16; 25 digits); SRH occupancy equals the Fermi function at equilibrium within 1.9e-15; FD Jacobians 1D/2D/3D at most 7.0e-8, the interface part 2.4e-9; meshed MOS-C second order against the exact solution (7.6e-6 V at 2400 nodes); the Q_f shift equals its discrete value to 6e-14; the legacy D_it stretch-out within 0.28 mV; surface recombination against the analytic diode within 8.3e-4; meshed against lumped MOSFET thresholds 0.21 mV apart, currents within 0.58%. Seventeen mutation checks caught (the run-identity test first missed the electron thermal velocity and was extended). | Verified locally. |
+| V23a | Unit 15b interface potential (`device/insulators`, on `daf4de7`): Debug and Release build with no warnings, all suites pass. Q_f, traps and surface recombination at ψ_I by a local solve per interface edge with the exact Jacobian: D_it MOS-C second order (2.94e-4 to 4.39e-6 V, ratio 4.04–4.08, was first order), Q_f flat-band shift = −q Q_f/C_ox to 6e-13, FD Jacobians at most 1.7e-7 (interface part 2.0e-8), surface recombination within 8.3e-4, unchanged devices bit-identical to `main` and `daf4de7`, solve time within 0–20% (noise 10–20%). Twenty-six mutation checks caught. | Verified locally. |
 | V3 | Scaling definitions, scaled variables and Newton tolerances read from `inputs.cpp` and `device1d.cpp` and recorded in 6.1. One open question remains for Unit 8 (convergence criterion on the clipped correction). | Verified |
 
 Verifications due at their own unit: none left. The 5e-5 Jacobian gate's normalization was read at Unit 7 (section 10), and

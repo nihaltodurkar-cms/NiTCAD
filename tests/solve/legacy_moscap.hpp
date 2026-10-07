@@ -1,5 +1,6 @@
 // Test helper: a port of the legacy pytcad/moscap.py MOSCapacitor (Boltzmann statistics, no
-// interface traps, no density gradient), so the Unit 12 gates can compare NiTCAD's general gate
+// density gradient; the M14 interface-trap term with set_interface_traps, Unit 15b), so the Unit 12
+// gates can compare NiTCAD's general gate
 // contact with the legacy 1D MOS-C solve on the legacy mesh, and port the legacy C-V checks
 // (tests/test_cv_physics_validation.py). Independent of NiTCAD's assemble and solve layers: its own
 // residual, its own tridiagonal Newton. Only the material model functions are shared.
@@ -8,6 +9,8 @@
 // the half box with the gate flux kappa (Vg - Vfb - (psi_0 - psi_b)) entering; the last node is
 // held at psi_b; Newton with each correction clipped to +-3, stopping when max |d| < tol after the
 // update. C-V: phi_s = (psi_0 - psi_b) V_T, Qg = C_ox (Vg - V_FB - phi_s), C = numpy.gradient(Qg).
+// M14 interface traps: row 0 loses dit_coeff (psi_0 - psi_b), dit_coeff = q D_it L_D / eps_s (the
+// trapped charge -q D_it phi_s, zero at flat band), and Qg loses q D_it phi_s.
 #pragma once
 
 #include <algorithm>
@@ -110,6 +113,7 @@ public:
             if (i == 0) {
                 F[0] = (psi[1] - psi[0]) / h_right +
                        kappa * (Vg / VT - Vfb / VT - (psi[0] - psi_b)) - dV * rho;
+                if (D_it != 0.0) F[0] -= dit_coeff * (psi[0] - psi_b);
             } else if (i + 1 == n) {
                 F[i] = psi[i] - psi_b;
             } else {
@@ -138,6 +142,7 @@ public:
                 lo[i] = up[i] = 0.0;
                 if (i == 0) {
                     main[0] = -1.0 / h_right - kappa - dV * dnp;
+                    if (D_it != 0.0) main[0] -= dit_coeff;
                     up[0] = 1.0 / h_right;
                 } else if (i + 1 == n) {
                     main[i] = 1.0;
@@ -176,10 +181,17 @@ public:
             guess = psi;
             const double ps = (psi[0] - psi_b) * VT;
             r.phi_s.push_back(ps);
-            r.Qg.push_back(Cox * (v - Vfb - ps));
+            r.Qg.push_back(D_it != 0.0 ? Cox * (v - Vfb - ps) - NiTCAD::base::q_C * D_it * ps
+                                       : Cox * (v - Vfb - ps));
         }
         r.C = numpy_gradient(r.Qg, Vg);
         return r;
+    }
+
+    // moscap.MOSCapacitor(D_it=...): the M14 interface-trap density [cm^-2 eV^-1].
+    void set_interface_traps(double density_cm2_eV) {
+        D_it = density_cm2_eV;
+        dit_coeff = NiTCAD::base::q_C * D_it * LD / eps_s;
     }
 
     struct Landmarks {
@@ -200,4 +212,5 @@ public:
     double Nsub, T, VT = 0, eps_s = 0, Cox = 0, ni = 0, Ns = 0, LD = 0;
     std::vector<double> x, xs;
     double C = 0, nie_s = 0, psi_b = 0, kappa = 0, Vfb = 0;
+    double D_it = 0.0, dit_coeff = 0.0;
 };

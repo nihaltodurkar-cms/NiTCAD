@@ -8,6 +8,7 @@
 #include "NiTCAD/base/constants.hpp"
 #include "NiTCAD/base/contract.hpp"
 #include "NiTCAD/physics/bandgap_narrowing.hpp"
+#include "NiTCAD/physics/interface_traps.hpp"
 #include "NiTCAD/physics/semiconductor.hpp"
 
 namespace NiTCAD::assemble::detail {
@@ -35,6 +36,7 @@ std::expected<ScaledDevice, base::Error> make_scaled_device(const device::Device
     const double coupling_scale = std::pow(scaling.L_D, D - 2);
 
     ScaledDevice s;
+    s.insulator.assign(n, 0);
     s.volume.resize(n);
     s.doping.resize(n);
     s.donors.resize(n);
@@ -47,10 +49,21 @@ std::expected<ScaledDevice, base::Error> make_scaled_device(const device::Device
     s.band_shift.resize(n);
     s.contact.assign(n, -1);
     const double T = scaling.temperature_K;
-    const double reference_depth = physics::intrinsic_level_depth_eV(device.material(0), T);
+    const double reference_depth =
+        physics::intrinsic_level_depth_eV(device.material(device.reference_node()), T);
     for (std::size_t i = 0; i < n; ++i) {
         const auto node = static_cast<mesh::NodeId>(i);
         s.volume[i] = m.volumes()[i] / volume_scale;
+        if (device.is_insulator(node)) {
+            s.insulator[i] = 1;
+            s.doping[i] = s.donors[i] = s.acceptors[i] = 0.0;
+            s.levels[i] = {};
+            s.radiative[i] = 0.0;
+            s.n_ie[i] = 1.0;
+            s.log_dos_n[i] = s.log_dos_p[i] = 0.0;
+            s.band_shift[i] = 0.0;
+            continue;
+        }
         s.doping[i] = device.net_doping(node) / scaling.Ns;
         s.donors[i] = device.donors()[i] / scaling.Ns;
         s.acceptors[i] = device.acceptors()[i] / scaling.Ns;
@@ -71,6 +84,8 @@ std::expected<ScaledDevice, base::Error> make_scaled_device(const device::Device
     }
     std::vector<std::int32_t> gate(n, -1);
     std::vector<GateTerm> gate_terms(n, GateTerm{0.0, 0.0, 0.0});
+    s.electrode.assign(n, -1);
+    s.electrode_potential.assign(n, 0.0);
     const auto contacts = device.contacts();
     for (std::size_t c = 0; c < contacts.size(); ++c) {
         const device::Contact& contact = contacts[c];
@@ -78,6 +93,16 @@ std::expected<ScaledDevice, base::Error> make_scaled_device(const device::Device
         if (contact.kind == device::ContactKind::ohmic) {
             for (const mesh::NodeId v : contact.nodes) {
                 s.contact[static_cast<std::size_t>(v)] = static_cast<std::int32_t>(c);
+            }
+            continue;
+        }
+        if (contact.kind == device::ContactKind::electrode) {
+            const double potential =
+                (reference_depth - electrode_work_function_eV(contact.electrode, T)) /
+                scaling.V_T;
+            for (const mesh::NodeId v : contact.nodes) {
+                s.electrode[static_cast<std::size_t>(v)] = static_cast<std::int32_t>(c);
+                s.electrode_potential[static_cast<std::size_t>(v)] = potential;
             }
             continue;
         }
@@ -98,22 +123,84 @@ std::expected<ScaledDevice, base::Error> make_scaled_device(const device::Device
     s.gates = GateNodes(std::move(gate), std::move(gate_terms), scaling.V_T);
     s.edges.reserve(m.edges().size());
     const auto node_region = device.node_region();
-    for (const mesh::Edge& edge : m.edges()) {
-        const physics::SemiconductorParameters& a = device.material(edge.first).parameters();
-        const physics::SemiconductorParameters& b = device.material(edge.second).parameters();
-        const device::RegionId ra = node_region[static_cast<std::size_t>(edge.first)];
-        const device::RegionId rb = node_region[static_cast<std::size_t>(edge.second)];
+    // The edges of interfaces with charge, traps or recombination: (mesh edge, interface).
+    std::vector<std::pair<std::size_t, std::size_t>> charged;
+    for (std::size_t e = 0; e < m.edges().size(); ++e) {
+        const mesh::Edge& edge = m.edges()[e];
+        const auto i = static_cast<std::size_t>(edge.first);
+        const auto j = static_cast<std::size_t>(edge.second);
+        const device::RegionId ra = node_region[i];
+        const device::RegionId rb = node_region[j];
+        const bool carriers = s.insulator[i] == 0 && s.insulator[j] == 0;
         const bool thermionic =
             ra != rb &&
             device.transport(ra, rb) == device::InterfaceTransport::thermionic_emission;
-        const double eta = permittivity_ratio(a.eps_r, scaling);
-        const double etb = permittivity_ratio(b.eps_r, scaling);
-        s.edges.push_back({static_cast<std::size_t>(edge.first),
-                           static_cast<std::size_t>(edge.second),
-                           edge.coupling_area / edge.length / coupling_scale, edge.length,
-                           eta == etb ? eta : 2.0 * eta * etb / (eta + etb), !(a == b),
-                           thermionic});
+        const double eta = permittivity_ratio(device.relative_permittivity(edge.first), scaling);
+        const double etb = permittivity_ratio(device.relative_permittivity(edge.second), scaling);
+        const bool interface = carriers ? !(device.material(edge.first).parameters() ==
+                                            device.material(edge.second).parameters())
+                                        : ra != rb;
+        s.edges.push_back({i, j, edge.coupling_area / edge.length / coupling_scale, edge.length,
+                           eta == etb ? eta : 2.0 * eta * etb / (eta + etb), interface,
+                           thermionic, carriers, false});
+        if (s.insulator[i] != s.insulator[j]) {
+            const std::int32_t k = device.find_interface(ra, rb);
+            if (k >= 0 && device::has_interface_charge_or_recombination(
+                              device.interfaces()[static_cast<std::size_t>(k)])) {
+                s.edges.back().charged = true;
+                charged.emplace_back(e, static_cast<std::size_t>(k));
+            }
+        }
     }
+    // The interfaces' trap levels, each interface's in one range.
+    const auto interfaces = device.interfaces();
+    std::vector<InterfaceLevel> levels;
+    std::vector<std::pair<std::size_t, std::size_t>> range(interfaces.size(), {0, 0});
+    for (std::size_t k = 0; k < interfaces.size(); ++k) {
+        const device::Interface& f = interfaces[k];
+        if (!device::has_interface_charge_or_recombination(f)) continue;
+        range[k].first = levels.size();
+        const auto add = [&](const physics::TrapLevel& t) {
+            levels.push_back({t.type == physics::TrapType::donor, t.density_cm2,
+                              t.energy_eV / scaling.V_T,
+                              t.sigma_n_cm2 * f.traps.thermal_velocity_n_cm_s,
+                              t.sigma_p_cm2 * f.traps.thermal_velocity_p_cm_s});
+        };
+        for (const physics::TrapLevel& t : f.traps.levels) add(t);
+        for (const physics::TrapBand& b : f.traps.bands) {
+            for (const physics::TrapLevel& t : physics::trap_band_levels(b, T)) add(t);
+        }
+        range[k].second = levels.size();
+    }
+    const double area_scale = std::pow(scaling.L_D, D - 1);
+    std::vector<InterfaceEdge> interface_edges;
+    for (const auto& [e, k] : charged) {
+        const mesh::Edge& edge = m.edges()[e];
+        const detail::ScaledEdge& se = s.edges[e];
+        const bool first_insulator = s.insulator[se.i] != 0;
+        const std::size_t ins = first_insulator ? se.i : se.j;
+        const std::size_t sem = first_insulator ? se.j : se.i;
+        const double et_i = permittivity_ratio(
+            device.relative_permittivity(static_cast<mesh::NodeId>(ins)), scaling);
+        const double et_s = permittivity_ratio(
+            device.relative_permittivity(static_cast<mesh::NodeId>(sem)), scaling);
+        const device::Interface& f = interfaces[k];
+        const double a = edge.coupling_area / area_scale;
+        const double cw = a / (scaling.Ns * scaling.L_D);
+        double donors = 0.0, acceptors = 0.0;
+        for (std::size_t l = range[k].first; l < range[k].second; ++l) {
+            (levels[l].donor ? donors : acceptors) += levels[l].density_cm2;
+        }
+        interface_edges.push_back({e, ins, sem, k, 2.0 * et_i * se.geometry,
+                                   2.0 * et_s * se.geometry, cw,
+                                   a * scaling.Ns / (scaling.R0 * scaling.L_D),
+                                   f.fixed_charge_cm2, f.recombination_velocity_n_cm_s,
+                                   f.recombination_velocity_p_cm_s, range[k].first,
+                                   range[k].second, cw * (f.fixed_charge_cm2 - acceptors),
+                                   cw * (f.fixed_charge_cm2 + donors)});
+    }
+    s.interfaces =
+        InterfaceEdges(std::move(interface_edges), std::move(levels), interfaces.size());
     return s;
 }
 

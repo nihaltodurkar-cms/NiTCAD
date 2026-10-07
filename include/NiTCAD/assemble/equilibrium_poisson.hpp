@@ -22,6 +22,12 @@
 // carries no current, so a biased gate keeps the device in thermal equilibrium as long as every
 // ohmic contact is at 0 V: the legacy MOS-C solve (moscap.MOSCapacitor.solve_psi), whose C-V is
 // the quasi-static one.
+// Insulators (Unit 15b): an insulator node's row is the box row with no charge (its carrier
+// densities are 0), and an electrode node's (an insulator node) is Dirichlet, F_i = psi_i - psi_E
+// with psi_E the electrode potential at its bias (scaled_device.hpp). An edge of a
+// semiconductor-insulator interface with charge, traps or recombination carries the half-edge
+// fluxes of interface_edges.hpp instead of its own: the fixed charge and the traps' charge sit at
+// the interface potential psi_I, with Fermi occupancy at eta_I = psi_I + s.
 //
 // The Jacobian pattern is built once (diagonal plus both directions of every edge; contact rows
 // keep their off-diagonal entries as explicit zeros), and evaluate() rewrites only the values, so a
@@ -29,12 +35,14 @@
 #pragma once
 
 #include <cstddef>
+#include <cstdint>
 #include <expected>
 #include <span>
 #include <vector>
 
 #include "NiTCAD/assemble/band_edges.hpp"
 #include "NiTCAD/assemble/gate.hpp"
+#include "NiTCAD/assemble/interface_edges.hpp"
 #include "NiTCAD/assemble/models.hpp"
 #include "NiTCAD/assemble/scaling.hpp"
 #include "NiTCAD/base/error.hpp"
@@ -70,28 +78,36 @@ public:
     void residual(std::span<const double> psi, std::span<double> residual) const;
 
     // The scaled carrier densities slaved to psi (n = n_ie e^(psi + s) and p = n_ie e^-(psi + s)
-    // under Boltzmann statistics). Precondition (NITCAD_EXPECTS): all three spans have unknowns()
-    // entries.
+    // under Boltzmann statistics; 0 on an insulator node). Precondition (NITCAD_EXPECTS): all three
+    // spans have unknowns() entries.
     void carriers(std::span<const double> psi, std::span<double> n, std::span<double> p) const;
 
     // The charge-neutral potential of every node, asinh(C / 2 n_ie) - s under Boltzmann
     // statistics, the root of physics::fermi_dirac_neutral_equilibrium less s under Fermi-Dirac
     // (ohmic contact nodes: their Dirichlet value, which is the same at zero bias); the legacy
-    // initial guess.
+    // initial guess. An electrode node takes its Dirichlet value at the current bias, another
+    // insulator node 0.
     [[nodiscard]] std::vector<double> charge_neutral_potential() const;
 
-    // The band diagram at psi (band_edges.hpp); the quasi-Fermi levels are 0 (equilibrium).
-    // Precondition (NITCAD_EXPECTS): psi has unknowns() entries.
+    // The band diagram at psi (band_edges.hpp); the quasi-Fermi levels are 0 (equilibrium). NaN on
+    // insulator nodes, which have no bands in the model. Precondition (NITCAD_EXPECTS): psi has
+    // unknowns() entries.
     [[nodiscard]] BandEdges band_edges(std::span<const double> psi) const;
 
-    // Per node: the Dirichlet value psi0 on an ohmic contact node; not meaningful elsewhere.
+    // Per node: the Dirichlet value psi0 on an ohmic contact or electrode node (the electrode's
+    // at its current bias); not meaningful elsewhere.
     [[nodiscard]] std::span<const double> contact_potential() const noexcept { return psi0_; }
-    // Per node: 1 on an ohmic contact node (a Dirichlet row), else 0; gate nodes are 0.
+    // Per node: 1 on an ohmic contact or electrode node (a Dirichlet row), else 0; gate nodes are
+    // 0.
     [[nodiscard]] std::span<const char> is_contact() const noexcept { return contact_; }
 
-    // Scaled charge on each gate electrode, as DriftDiffusion::gate_charges (zero for an ohmic
+    // Scaled charge on each gate and electrode, as DriftDiffusion::gate_charges (zero for an ohmic
     // contact). Precondition (NITCAD_EXPECTS): psi has unknowns() entries.
     [[nodiscard]] std::vector<double> gate_charges(std::span<const double> psi) const;
+    // Scaled trapped charge of each declared interface (interface_edges.hpp, without the fixed
+    // charge; zero for an interface without traps), in units of q Ns L_D^D. Precondition
+    // (NITCAD_EXPECTS): psi has unknowns() entries.
+    [[nodiscard]] std::vector<double> interface_trap_charges(std::span<const double> psi) const;
 
 private:
     EquilibriumPoisson() = default;
@@ -100,7 +116,11 @@ private:
         std::size_t i, j;          // end nodes
         double c;                  // scaled coupling
         std::size_t ij, ji;        // positions of (i, j) and (j, i) in the Jacobian values
+        bool charged;              // an interface edge: its flux is the interface's
     };
+
+    // The interface statistics of a semiconductor node.
+    [[nodiscard]] InterfaceStatistics statistics(std::size_t node) const noexcept;
 
     // Writes the residual and, if jacobian_values is not empty, the charge derivative onto the
     // diagonal of non-contact rows.
@@ -117,8 +137,13 @@ private:
     bool fermi_dirac_ = false;
     bool ionization_ = false;
     std::vector<double> psi0_;      // Dirichlet value on contact nodes
-    std::vector<char> contact_;     // 1 on ohmic contact nodes
+    std::vector<char> contact_;     // 1 on ohmic contact and electrode nodes
+    std::vector<char> insulator_;   // 1 on insulator nodes
+    std::vector<std::int32_t> electrode_;      // electrode contact per node, or -1
+    std::vector<double> electrode_potential_;  // psi_E at zero bias
+    double V_T_ = 1.0;
     GateNodes gates_;
+    InterfaceEdges interfaces_;
     std::vector<device::ContactKind> kinds_;  // per contact
     std::vector<EdgeTerm> edges_;
     std::vector<std::size_t> diag_; // position of (i, i) in the Jacobian values

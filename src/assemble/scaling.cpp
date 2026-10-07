@@ -17,7 +17,7 @@ std::expected<Scaling, base::Error> make_scaling(const device::Device& device,
             base::ErrorContext{.index = std::nullopt, .value = *Ns_override}});
     }
     const double T = device.temperature_K();
-    const physics::Semiconductor& reference = device.material(0);
+    const physics::Semiconductor& reference = device.material(device.reference_node());
     Scaling s{};
     s.temperature_K = T;
     s.V_T = base::thermal_voltage(T);

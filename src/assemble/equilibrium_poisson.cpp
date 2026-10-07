@@ -2,11 +2,13 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <utility>
 
 #include "NiTCAD/assemble/contact_bias.hpp"
 #include "NiTCAD/assemble/ohmic.hpp"
 #include "NiTCAD/base/contract.hpp"
+#include "NiTCAD/physics/interface_traps.hpp"
 #include "scaled_device.hpp"
 
 namespace NiTCAD::assemble {
@@ -33,7 +35,16 @@ std::expected<EquilibriumPoisson, base::Error> EquilibriumPoisson::create(
     p.contact_.assign(n, 0);
     p.gates_ = std::move(scaled->gates);
     p.kinds_ = std::move(scaled->kinds);
+    p.insulator_ = std::move(scaled->insulator);
+    p.electrode_ = std::move(scaled->electrode);
+    p.electrode_potential_ = std::move(scaled->electrode_potential);
+    p.interfaces_ = std::move(scaled->interfaces);
+    p.V_T_ = scaling.V_T;
     for (std::size_t i = 0; i < n; ++i) {
+        if (p.electrode_[i] >= 0) {
+            p.contact_[i] = 1;
+            p.psi0_[i] = p.electrode_potential_[i];
+        }
         if (scaled->contact[i] < 0) continue;
         p.contact_[i] = 1;
         const physics::NeutralEquilibrium e = detail::neutral_equilibrium(
@@ -64,7 +75,7 @@ std::expected<EquilibriumPoisson, base::Error> EquilibriumPoisson::create(
     p.edges_.reserve(scaled->edges.size());
     for (const detail::ScaledEdge& e : scaled->edges) {
         p.edges_.push_back({e.i, e.j, e.et * e.geometry, detail::position(p.pattern_, e.i, e.j),
-                            detail::position(p.pattern_, e.j, e.i)});
+                            detail::position(p.pattern_, e.j, e.i), e.charged});
     }
     return p;
 }
@@ -72,15 +83,55 @@ std::expected<EquilibriumPoisson, base::Error> EquilibriumPoisson::create(
 std::expected<void, base::Error> EquilibriumPoisson::set_bias(std::span<const double> bias_V) {
     if (auto ok = check_contact_bias(kinds_, bias_V, true); !ok) return ok;
     gates_.set_bias(bias_V);
+    for (std::size_t i = 0; i < unknowns(); ++i) {
+        if (electrode_[i] < 0) continue;
+        psi0_[i] = bias_V[static_cast<std::size_t>(electrode_[i])] / V_T_ + electrode_potential_[i];
+    }
     return {};
 }
 
 std::vector<double> EquilibriumPoisson::gate_charges(std::span<const double> psi) const {
     NITCAD_EXPECTS(psi.size() == unknowns());
-    return gates_.charges(psi, 1, kinds_.size());
+    std::vector<double> charge = gates_.charges(psi, 1, kinds_.size());
+    // An electrode's charge is the displacement flux leaving its nodes (Gauss over their boxes,
+    // which hold no other charge).
+    for (const EdgeTerm& e : edges_) {
+        const std::int32_t ci = electrode_[e.i], cj = electrode_[e.j];
+        if (ci == cj || e.charged) continue;
+        const double flux = e.c * (psi[e.i] - psi[e.j]);  // from i to j
+        if (ci >= 0) charge[static_cast<std::size_t>(ci)] += flux;
+        if (cj >= 0) charge[static_cast<std::size_t>(cj)] -= flux;
+    }
+    // An electrode node on an interface edge: the flux leaving it is minus its half-edge flux.
+    for (const InterfaceEdge& f : interfaces_.edges()) {
+        const std::int32_t c = electrode_[f.insulator];
+        if (c < 0) continue;
+        charge[static_cast<std::size_t>(c)] -=
+            interfaces_.equilibrium(f, psi[f.insulator], psi[f.semiconductor],
+                                    statistics(f.semiconductor))
+                .flux_insulator;
+    }
+    return charge;
+}
+
+std::vector<double> EquilibriumPoisson::interface_trap_charges(
+    std::span<const double> psi) const {
+    NITCAD_EXPECTS(psi.size() == unknowns());
+    std::vector<double> q(interfaces_.interface_count(), 0.0);
+    for (const InterfaceEdge& e : interfaces_.edges()) {
+        q[e.interface] += interfaces_
+                              .equilibrium(e, psi[e.insulator], psi[e.semiconductor],
+                                           statistics(e.semiconductor))
+                              .trapped;
+    }
+    return q;
 }
 
 linalg::SparseMatrix EquilibriumPoisson::make_jacobian() const { return pattern_; }
+
+InterfaceStatistics EquilibriumPoisson::statistics(std::size_t node) const noexcept {
+    return {fermi_dirac_, n_ie_[node], log_dos_n_[node], log_dos_p_[node], band_shift_[node]};
+}
 
 void EquilibriumPoisson::residual_into(std::span<const double> psi, std::span<double> residual,
                                        std::span<double> jacobian_values) const {
@@ -89,6 +140,11 @@ void EquilibriumPoisson::residual_into(std::span<const double> psi, std::span<do
     for (std::size_t i = 0; i < n; ++i) {
         if (contact_[i] != 0) {
             residual[i] = psi[i] - psi0_[i];
+            continue;
+        }
+        if (insulator_[i] != 0) {  // no charge
+            residual[i] = 0.0;
+            if (!jacobian_values.empty()) jacobian_values[diag_[i]] = 0.0;
             continue;
         }
         const double eta = psi[i] + band_shift_[i];
@@ -118,7 +174,29 @@ void EquilibriumPoisson::residual_into(std::span<const double> psi, std::span<do
             if (!jacobian_values.empty()) jacobian_values[diag_[i]] -= gates_.term(i).coupling;
         }
     }
+    for (const InterfaceEdge& f : interfaces_.edges()) {
+        const std::size_t a = f.insulator, b = f.semiconductor;
+        const InterfaceEquilibrium q = interfaces_.equilibrium(f, psi[a], psi[b], statistics(b));
+        // The insulator row a and the semiconductor row b, columns (a, b).
+        const EdgeTerm& e = edges_[f.edge];
+        const std::size_t ab = e.i == a ? e.ij : e.ji, ba = e.i == a ? e.ji : e.ij;
+        if (contact_[a] == 0) {
+            residual[a] += q.flux_insulator;
+            if (!jacobian_values.empty()) {
+                jacobian_values[diag_[a]] += q.d_flux_insulator[0];
+                jacobian_values[ab] += q.d_flux_insulator[1];
+            }
+        }
+        if (contact_[b] == 0) {
+            residual[b] += q.flux_semiconductor;
+            if (!jacobian_values.empty()) {
+                jacobian_values[ba] += q.d_flux_semiconductor[0];
+                jacobian_values[diag_[b]] += q.d_flux_semiconductor[1];
+            }
+        }
+    }
     for (const EdgeTerm& e : edges_) {
+        if (e.charged) continue;
         const double flux = e.c * (psi[e.j] - psi[e.i]);
         if (contact_[e.i] == 0) residual[e.i] += flux;
         if (contact_[e.j] == 0) residual[e.j] -= flux;
@@ -139,6 +217,7 @@ void EquilibriumPoisson::evaluate(std::span<const double> psi, std::span<double>
         if (contact_[i] != 0) values[diag_[i]] = 1.0;
     }
     for (const EdgeTerm& e : edges_) {
+        if (e.charged) continue;
         if (contact_[e.i] == 0) {
             values[e.ij] += e.c;
             values[diag_[e.i]] -= e.c;
@@ -154,6 +233,10 @@ void EquilibriumPoisson::carriers(std::span<const double> psi, std::span<double>
                                   std::span<double> p) const {
     NITCAD_EXPECTS(psi.size() == unknowns() && n.size() == unknowns() && p.size() == unknowns());
     for (std::size_t i = 0; i < unknowns(); ++i) {
+        if (insulator_[i] != 0) {
+            n[i] = p[i] = 0.0;
+            continue;
+        }
         const double eta = psi[i] + band_shift_[i];
         n[i] = detail::density(fermi_dirac_, n_ie_[i], log_dos_n_[i], eta).density;
         p[i] = detail::density(fermi_dirac_, n_ie_[i], log_dos_p_[i], -eta).density;
@@ -168,6 +251,11 @@ BandEdges EquilibriumPoisson::band_edges(std::span<const double> psi) const {
     BandEdges b{std::vector<double>(n), std::vector<double>(n), std::vector<double>(n),
                 std::vector<double>(n)};
     for (std::size_t i = 0; i < n; ++i) {
+        if (insulator_[i] != 0) {
+            const double nan = std::numeric_limits<double>::quiet_NaN();
+            b.conduction[i] = b.valence[i] = b.electron_fermi[i] = b.hole_fermi[i] = nan;
+            continue;
+        }
         const detail::NodeBands e =
             detail::node_bands(fermi_dirac_, n_ie_[i], log_dos_n_[i], log_dos_p_[i],
                                psi[i] + band_shift_[i], carriers_n[i], carriers_p[i]);
@@ -182,8 +270,8 @@ BandEdges EquilibriumPoisson::band_edges(std::span<const double> psi) const {
 std::vector<double> EquilibriumPoisson::charge_neutral_potential() const {
     std::vector<double> psi(unknowns());
     for (std::size_t i = 0; i < psi.size(); ++i) {
-        psi[i] = contact_[i] != 0
-                     ? psi0_[i]
+        psi[i] = contact_[i] != 0  ? psi0_[i]
+                 : insulator_[i] != 0 ? 0.0
                      : detail::neutral_equilibrium(fermi_dirac_, ionization_, doping_[i],
                                                    donors_[i], acceptors_[i], n_ie_[i],
                                                    log_dos_n_[i], log_dos_p_[i], levels_[i])
