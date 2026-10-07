@@ -792,7 +792,7 @@ Whether the new solver reproduces these exact defaults is to be confirmed unit b
     points 0.86 → 0.88–1.03 s, 2D drift-diffusion 7 points 3.81 → 4.49–4.66 s; Newton iterations 350 → 350, 116 → 114,
     121 → 121, 65 → 68. The sparse factorization still dominates.
 - Known limits:
-  - Trap occupancy is steady state; trap dynamics belong to transient (Unit 21).
+  - Trap occupancy is steady state in a bias solve; the transient run follows its dynamics (Unit 21, below).
   - A coarse semiconductor half-cell at the interface makes the interface densities steep in ψ_I (n_I = n_s e^(ψ_I − ψ_s)):
     with a one-cell 5 nm oxide (a 5 nm half-cell) in accumulation, the drift-diffusion Jacobian's pivot ratio falls to
     1.2e-10 (6.9e-5 with the terms at the node), near the default singularity check of 1e-11; on the legacy mesh
@@ -810,6 +810,127 @@ Whether the new solver reproduces these exact defaults is to be confirmed unit b
   run-identity test was extended), a charge on insulator rows, the occupancy's sign of τ − η, ψ_I's implicit
   derivative dropped, its denominator without dQ/dψ_I, the interface electron density shifted the wrong way, the local
   solve stopped after one step, an interface edge also taking its own flux, the insulator row without its n column.
+
+**As built (Unit 21, transient drift-diffusion; owner request, scope approved by the owner; legacy `transient.py`,
+`transient2d.py`, `transient3d.py`):**
+- **Time steps in the assembler** (`DriftDiffusion::TimeStep`, `evaluate`/`residual` with a step). A BDF step from
+  earlier states to t_new solves the steady rows plus a storage term on each semiconductor node off the ohmic contacts:
+  electrons − V_i r (S_n − c_n), holes + V_i r (S_p − c_p), r = 1/(β h) with h in units of t₀ = Ns/R0 = L_D²/D0 (the
+  time scale of the scaled rates, the legacy `_time_scale`), c the step's combination of the earlier storages. Poisson,
+  contact, electrode and insulator rows have no storage. Every steady model carries over: SG and thermionic fluxes,
+  field mobility, Fermi–Dirac, band-gap narrowing, lumped gates, meshed insulators.
+- **What a node stores.** S_n = n and S_p = p; with incomplete ionization S_n = n − N_D⁺ and S_p = p − N_A⁻, the
+  carriers bound to the dopants counted with the free ones. Ionization is instantaneous in the model, so storing n
+  alone would create or destroy charge whenever N_D⁺ moves; with S the charge balance is exact (measured: the total
+  currents sum to 1e-11 of the largest with the model on, and the model changes the current).
+- **Interface trap dynamics** (the 15b exclusion). Per level, df/dt = occ − f D (occ = c_n n_I + c_p p1,
+  D = c_n(n_I + n1) + c_p(p_I + p1)); a BDF step f − c = β h (occ − f D) is linear in f, so
+  f = (c + k occ)/(1 + k D), k = β h Ns, is eliminated in closed form inside the per-edge ψ_I solve: the global
+  unknowns stay as they are and the Jacobian stays exact. f is a weighted mean of c and the steady occupancy occ/D, so
+  it lies in [min(c, 0), max(c, 1)] and the trapped charge within the bounds of those, which keep the local solve
+  bracketed; as k grows it is the 15b steady state. The electron row takes the net electron capture
+  c_n(n_I(1 − f) − n1 f) and the hole row the net hole capture c_p(p_I f − p1(1 − f)); they differ by N df/dt. The
+  history of each (interface edge, level) is a trap slot (`InterfaceEdges::slot_offset`).
+- **Contact charges** (`DriftDiffusion::contact_charges`): the displacement flux leaving each contact's nodes along the
+  edges to nodes outside it (an electrode as 15b, a gate as 12, now also an ohmic contact). Gauss's law makes the
+  contact charges balance the charge inside the device (carriers, dopants, fixed and trapped interface charge); the
+  residuals of the Poisson rows are exactly that balance (assemble test, 1e-12).
+- **Conduction current** of a contact (`conduction_currents`): the steady `terminal_currents` plus, on an interface edge
+  whose semiconductor node is on an ohmic contact, the current that charges its traps from the contact (rate_p − rate).
+- **Integrators** (`solve/transient.hpp`): backward Euler (the legacy's) and variable-step BDF2, the default:
+  y_{n+1} − ((1+ω)² y_n − ω² y_{n−1})/(1+2ω) = h (1+ω)/(1+2ω) F(y_{n+1}), ω = h_n/h_{n−1}; second order, L-stable, one
+  Newton solve per step. The run starts, and restarts after every waveform breakpoint, with two backward-Euler steps (the
+  second with an error estimate), then BDF2. TR-BDF2 was considered and not used: its trapezoidal stage has an explicit
+  half that rings on stiff modes (dielectric relaxation is about 1e-13 s; fast traps likewise), which can take densities
+  negative or occupancies far outside [0, 1] within a step.
+- **Step control.** Milne's device: the local error is C/(P − C) times the difference between the solution and the
+  polynomial through the earlier states (linear for backward Euler, C = −h²/2; quadratic for BDF2,
+  C = −(1+ω)² h³/(6ω(1+2ω))), measured as |e_ψ| (units of kT/q), |e_n|/(n + n_ref), |e_p|/(p + p_ref) and |e_f| on trap
+  occupancies, against rtol (default 1e-3; n_ref 1e10 cm⁻³). A step whose estimate exceeds rtol is retried at
+  h (0.9/ratio)^(1/(order+1)) (at least 0.2 h); an accepted one sets the next h by the same rule within [0.2 h, 2 h]
+  (2 is below BDF2's zero-stability limit 1 + √2). A step whose Newton solve fails is retried at h/4. Below dt_min the
+  run stops with non_convergence and keeps its steps. Steps land exactly on waveform breakpoints, output times and
+  t_end; the first step after a start or a breakpoint is at most dt_initial and has no estimate. Fixed steps
+  (`adaptive = false`) take dt_initial throughout.
+  - OLD / NEW / REASON: OLD, the legacy grew the step by 1.5 after a Newton solve of few iterations and halved it on
+    failure; NEW, error-controlled steps; REASON, the number of Newton iterations says nothing about the time error.
+- **Terminal currents.** Total = conduction + displacement, the displacement current being the step's own BDF
+  difference of the contact charge, (Q_c − c_Q)/(β h). Every quantity stored (carriers, bound carriers, trapped and
+  contact charge) is differenced by the same formula, so the total currents of all contacts sum to zero to the solve's
+  tolerance, and under backward Euler Σ h I_disp telescopes to the change of each contact's charge.
+  - OLD / NEW / REASON: OLD, the legacy reported Jn + Jp on the contact edge only; NEW, conduction plus displacement
+    current; REASON, the conduction current alone is not conserved in a transient (a gate carries only displacement
+    current).
+- **Waveforms** (`solve/waveform.hpp`): piecewise linear (two corners at one time are a jump; the waveform is
+  right-continuous, and a step ending on the jump uses the left value), with the legacy step, ramp and pulse built on
+  it (a pulse may have rise and fall times), and sine (SPICE SIN, with delay and phase). Corners and the sine's delay
+  are breakpoints. Every contact, gate and electrode included, takes one.
+- **Starting state:** the steady state at the waveforms' values at t = 0 (left side), from thermal equilibrium or a
+  given guess; the traps start at their steady occupancy, so the initial state is consistent.
+- Gates (all measured):
+  - FD Jacobian of the time-step system (steps of 1 ps and 1 ns, histories off the state, trap histories in
+    [−0.05, 1.05]), 1D/2D/3D, Boltzmann and Fermi–Dirac, with incomplete ionization: at most 1.7e-7; the trap part on
+    its own at most 3.5e-7 (difference step 1e-6: at 1 ps the house step's rounding shows, 3e-6, falling as the step
+    grows, so it is rounding, not the Jacobian).
+  - A step of 1e12 s gives the steady rows and occupancies (difference 0 and 2.2e-16); the capture imbalance of the two
+    rows equals r ΔQ_trap to 1e-6 (rounding).
+  - Constant bias from steady state: the current stays the steady one to 1.9e-15, no displacement current, 22 steps
+    from 1 ps to 1 µs, each at most twice the one before. A diode stepped to 0.5 V ends at sweep_bias's state
+    (bounds: current 1e-8, potential 1e-9 V, densities 1e-7; the current agrees to the eleven digits printed).
+  - Conservation: a 2D MOS structure with an electrode, two ohmic contacts (one on an interface edge), fixed charge,
+    a trap level, a trap band and surface recombination under a gate ramp and a pulse on a contact: the total currents
+    sum to 3.1e-10 (backward Euler) and 2.3e-10 (BDF2) of the largest current; under backward Euler Σ h I_disp equals
+    each contact's charge change to rounding. The diode turn-on: 4.1e-8. Traps on an ohmic node (a 1D oxide whose one
+    silicon node is the contact): under backward Euler the contact's conduction current integrates to the trapped
+    charge's change within 1e-9, and the currents sum to 3.8e-12.
+  - Order (fixed steps, turn-on ramp, against BDF2 at 5120 steps): backward Euler error ratios 1.92–1.99 per halving,
+    BDF2 3.33, 3.60, 3.78, 3.90 (its two backward-Euler starting steps fade from the ratio).
+  - Error control: over a trapezoid with a jump, the charge error falls from 4.1e-3 to 9.9e-4 between rtol 1e-3 and
+    1e-4 and the step count grows 2.0 times (10^(1/3) = 2.15); the jump's two sides are steps' ends and the integrator
+    restarts there.
+  - MOS-C RC response (10 nm oxide, 100 µm of 1e16 p-silicon, accumulated, 1 mV step): the gate charge relaxes with
+    τ = R(C + C_g), R = L/(q μ_p N_A), C the quasi-static capacitance, C_g = ε_si/L: 0.092% (meshed oxide) and 0.093%
+    (lumped gate) short, the local rate constant to 1e-4 over 0.05–3 τ.
+  - Dielectric relaxation (100 µm oxide over 10 µm of 1e16 silicon, τ 1.03 times ε/(q μ_p N_A) = 1.59 ps): 0.34% short.
+  - Trap emission: an acceptor level 0.3 eV below midgap (1e9 cm⁻²) after a gate step to weak inversion fills at
+    B = c_p(p_I + p1) + c_n(n_I + n1) within 3.2e-4; its charge ends at the steady value to 2.2e-8.
+  - The legacy diode turn-off (legacy `transient.py` built from the reference checkout, its p+n fixture, fixed steps of
+    t_t/100): the anode conduction current equals the legacy's to 1e-13 on most steps and 3.7e-5 at worst (where it has
+    fallen to 1.7e-4 of the forward current; both Newtons stop at 1e-8 of the densities, at different iterates). Legacy
+    finding: from step 184 the legacy current repeats −1.4174e-6 A/cm² to the end, though the diode relaxes to
+    equilibrium at 0 V; near equilibrium its merit line search finds no decrease at rounding level, takes no step
+    (λ = 0) and reports the unchanged state as converged. NiTCAD keeps decaying (1.6e-14 A/cm² at 3 t_t).
+  - y-uniform 2D and 3D reproduce the 1D transient to 2.3e-13; the meshed-oxide MOSFET (`[.mosfet]`, 45 × 25) after a
+    gate step 0 → 1 V at V_DS = 0.1 V reaches the Id–Vg sweep's drain current within 1e-6, currents summing to 1.3e-12.
+  - Steady paths unchanged: devices without insulators, meshed oxides without interface terms and meshed oxides with
+    fixed charge and a D_it band (1D and 2D, quasi-static and drift-diffusion) hash identically to `main`, run digests
+    included.
+  - Cost: the steady paths are unchanged (a null-pointer test per node). A step costs one Newton solve under backward
+    Euler and BDF2 alike. The 1D runs of the tests take 22 to 2948 steps; the 2D MOS structure 795 (backward Euler)
+    and 331 (BDF2) steps, 4.5 s for both; the 45 × 25 MOSFET gate step 146 steps, about 50 s with its Id–Vg sweep
+    (Release). The five slowest transient tests (81–280 s each in Debug, 16 s together in Release) carry the hidden
+    tag `[.transient]` and run in Release only (ctest `solve_transient`), as the MOSFET gates do.
+- Known limits:
+  - The first step after a start or breakpoint has no error estimate; it is taken at dt_initial (default t_end/1e6),
+    which the caller should keep small after a jump.
+  - BDF2's history combination may leave a trap occupancy slightly outside [0, 1] (2.1e-8 measured); the bounds of the
+    local solve allow for it.
+  - Not in Unit 21 (owner's exclusions): AC small-signal (22), circuits and mixed mode, optical or external generation,
+    dopant ionization dynamics, bulk trap dynamics, thermal transients (23), tunnelling, transient runs of the
+    quasi-static equations.
+- Mutation checks, each caught (27): the storage term's sign, its Jacobian, the bound donor electrons not stored, the
+  trap history ignored, the occupancy's n partial, the hole capture without p1, the hole row taking the electron
+  capture, the trap bounds without the history (missed at first: a random history never takes the whole interface
+  charge out of the [0, 1] bounds; a test with every history at 1.2 and −0.2 was added), the trap weight without Ns,
+  BDF2's β, its history sign, BDF2 never used, the displacement current's sign, the displacement current differenced by
+  backward Euler under BDF2, the charge sign of an ohmic node on an interface edge, the ohmic contacts' charge left out,
+  the traps' charging current at an ohmic node dropped (missed at first: in the 2D structure it is below the sum's
+  bound; the ohmic-node test was added), backward Euler's error constant, BDF2's predictor on two points, the density
+  error not relative, no restart at breakpoints, no landing on output times, the steady trap occupancy stored for the
+  step's, the right side of a jump as a step's end bias, the waveform's exact left value at a jump (missed at first:
+  the test's corner values interpolate exactly; one that rounds was added), the run record without the waveforms, the
+  step growth unlimited (missed at first: the constant-bias test bounded the step count from above only; it now checks
+  each step's growth).
 
 ### 6.3 Device description
 
@@ -1082,6 +1203,11 @@ An on-disk result format is **deferred** (R2), under the same independence rule 
   `unfinished` (the convergence history of the point being solved then).
 - No file format (R2). `results` has no test directory of its own: it is plain data, exercised through the solve tests.
 - Later units add fields: the band diagram and current resolution (Unit 15), the interface trap charge (Unit 15b).
+- `Transient` (Unit 21, `results/transient.hpp`): the run record, a `TimePoint` per accepted step (time, step, order,
+  error ratio, bias, total, conduction and displacement current per contact, contact charges, trapped charges,
+  convergence), `TransientSnapshot`s (fields, band diagram, edge currents, trap occupancies) at t = 0, the output times
+  and t_end (or every step on request; every step of a large run would be gigabytes), the rejected-step count, and
+  `stopped` / `unfinished` as `Sweep`.
 
 ### 6.7 Error policy (R1, decided)
 
@@ -1160,6 +1286,9 @@ An on-disk result format is **deferred** (R2), under the same independence rule 
   stop is requested).
 - Cancellation latency is at most one residual evaluation, factorization and solve, as stated above; the factorization
   times measured in 6.10 (Known limits) bound it.
+- Unit 21: `solve_transient` takes the same `RunControl`. The token is also checked before every step attempt; a
+  cancelled run keeps its accepted steps. `Phase::transient` events carry the step attempt as point (point count 0,
+  not known in advance) and the step's end time in the new `Progress::time_s`.
 
 ### 6.10 Linear solver interface (D3)
 
@@ -1534,13 +1663,13 @@ built.
 | 13 | Field-dependent mobility / velocity saturation | physics, assemble | **done, on `main`** (`f8bda70`): Canali per edge with exact Jacobian (6.2, Unit 13) |
 | 14 | Fermi–Dirac statistics and high-density carrier models | physics, assemble | **done, on `main`** (`8610d9a`): parabolic-band Fermi–Dirac statistics, the legacy ν-factor scheme with an exact Jacobian (5 and 6.2, Unit 14); incomplete ionization deferred (14.3) |
 | 15 | Heterojunctions, band offsets and interface transport | device, assemble, physics | **done, on `main`** (`2a8718a`): band offsets through a per-node band shift, permittivity steps, thermionic emission, the legacy material sets (6.3 and 6.2, Unit 15); follow-up: interfaces as device data, incomplete ionization, radiative recombination, band diagram, current resolution; meshed insulators, interface charge and traps are 15b |
-| 15b | Meshed insulators, semiconductor-insulator interfaces, interface charge, traps and recombination | physics, device, assemble, solve | **done on branch `device/insulators`**: insulator regions, electrodes on a meshed oxide, fixed charge, interface traps (levels and uniform bands, steady-state SRH occupancy), surface recombination, all at the interface potential (5, 6.2 and 6.4, Unit 15b) |
+| 15b | Meshed insulators, semiconductor-insulator interfaces, interface charge, traps and recombination | physics, device, assemble, solve | **done, on `main`** (`4e23119`): insulator regions, electrodes on a meshed oxide, fixed charge, interface traps (levels and uniform bands, steady-state SRH occupancy), surface recombination, all at the interface potential (5, 6.2 and 6.4, Unit 15b) |
 | 16 | Unstructured mesh | mesh, assemble | target |
 | 17 | Adaptive mesh refinement and state transfer | mesh, solve, results | target |
 | 18 | Scalable linear-solver backends: PARDISO and/or iterative/AMG paths | linalg | target; must preserve backend-neutral interface |
 | 19 | Impact ionization and breakdown-oriented continuation | physics, assemble, solve | target |
 | 20 | Band-to-band tunnelling and nonlocal path machinery | assemble, physics, solve | target |
-| 21 | Transient simulation | solve, assemble, results | target |
+| 21 | Transient simulation | solve, assemble, results | **done on branch `solve/transient`**: backward Euler and variable-step BDF2 with error-controlled steps, waveforms, displacement current with exact conservation, interface trap dynamics eliminated in the interface solve (6.2, Unit 21) |
 | 22 | AC small-signal analysis | linalg, assemble, solve, results | target; complex system already reserved by A5 |
 | 23 | Thermal / electrothermal coupling | physics, assemble, solve | target |
 | 24 | Analysis and extraction engine | analysis | target |
@@ -1549,8 +1678,8 @@ built.
 | 27 | Optimization / sensitivity / inverse-design workflows | analysis, solve | long-term target |
 
 Units 1–9 are the smallest end-to-end vertical slice: a validated drift-diffusion diode. Everything past
-Unit 10 is deferred until sequenced. Units 11–15 were requested by the owner after Unit 10; nothing past them is
-started.
+Unit 10 is deferred until sequenced. Units 11–15, 15b and 21 were requested by the owner after Unit 10; nothing
+else past them is started.
 
 ### 11.1 Capability tracks may interleave
 
@@ -1753,6 +1882,7 @@ architecture; historical branch names remain only where they are useful to expla
 | V22a | Unit 15 follow-up (`device/heterojunctions`): Debug and Release build with no warnings, all suites pass (Release 9/9 with `solve_mosfet`, Debug 8/8). FD-Jacobian gates with incomplete ionization (Poisson 1.9e-9; drift-diffusion 1D/2D/3D at most 1e-8), the ionization part on its own 1.4e-7 and 2.1e-7 (gate 1e-5), the radiative part 4.8e-9, thermionic part 2.0e-9, a non-planar 2D interface. Ionized fractions against 40-digit roots to 1e-10; radiative long-base GaAs diode within 0.9% of the analytic current, short-base without recombination to 2.7e-4; emission resistance 6.2575e-7 vs 6.2654e-7 Ω cm²; J(TE)/J(DD) → 1 as A* grows; graded staircase 10/20/40 steps converging (8e-4); current resolution bounds the spread (factor 600); band diagram Fermi levels at the contacts' biases to 1e-9 eV. Fourteen mutation checks caught. | Verified locally. |
 | V23 | Unit 15b (`device/insulators`): Debug and Release build with no warnings; `nitcad_physics_test` 72 test cases, `nitcad_device_test` 24, `nitcad_assemble_test` 57, `nitcad_solve_test` 96 (+4 `[.mosfet]`, Release only), all pass. Without insulators every output of seven probe runs hashes identically to `main`. Fermi occupancy, trap-band quadrature and Gauss–Legendre nodes against 40-digit values (4 ε; 7.1e-16; 25 digits); SRH occupancy equals the Fermi function at equilibrium within 1.9e-15; FD Jacobians 1D/2D/3D at most 7.0e-8, the interface part 2.4e-9; meshed MOS-C second order against the exact solution (7.6e-6 V at 2400 nodes); the Q_f shift equals its discrete value to 6e-14; the legacy D_it stretch-out within 0.28 mV; surface recombination against the analytic diode within 8.3e-4; meshed against lumped MOSFET thresholds 0.21 mV apart, currents within 0.58%. Seventeen mutation checks caught (the run-identity test first missed the electron thermal velocity and was extended). | Verified locally. |
 | V23a | Unit 15b interface potential (`device/insulators`, on `daf4de7`): Debug and Release build with no warnings, all suites pass. Q_f, traps and surface recombination at ψ_I by a local solve per interface edge with the exact Jacobian: D_it MOS-C second order (2.94e-4 to 4.39e-6 V, ratio 4.04–4.08, was first order), Q_f flat-band shift = −q Q_f/C_ox to 6e-13, FD Jacobians at most 1.7e-7 (interface part 2.0e-8), surface recombination within 8.3e-4, unchanged devices bit-identical to `main` and `daf4de7`, solve time within 0–20% (noise 10–20%). Twenty-six mutation checks caught. | Verified locally. |
+| V24 | Unit 21 (`solve/transient`): Debug and Release build with no warnings; `nitcad_physics_test` 72 test cases, `nitcad_device_test` 24, `nitcad_assemble_test` 63, `nitcad_solve_test` 112 (+5 `[.mosfet]` and 5 `[.transient]`, Release only), all pass (Release 10/10, Debug 8/8). Time-step FD Jacobians 1D/2D/3D, both statistics, incomplete ionization, at most 1.7e-7 (trap part 3.5e-7); a long step is the steady state; total currents sum to 3.1e-10 (2D MOS with traps and two ohmic contacts) and integrate to the contact charges; backward Euler first order (1.92–1.99 per halving) and BDF2 second (3.33 to 3.90); error control follows rtol across kinks and a jump; MOS-C RC response within 0.093% (meshed and lumped), dielectric relaxation within 0.34%, trap emission rate within 3.2e-4; the legacy diode turn-off (legacy core built from the reference checkout) within 3.7e-5 until the legacy run stalls (a legacy finding); 2D/3D extrusions to 2.3e-13; the meshed MOSFET gate step settles to the Id–Vg current within 1e-6. Steady paths bit-identical to `main` (plain, meshed-oxide and trap devices, run digests included). Twenty-seven mutation checks caught (four after a test was added or sharpened). | Verified locally. |
 | V3 | Scaling definitions, scaled variables and Newton tolerances read from `inputs.cpp` and `device1d.cpp` and recorded in 6.1. One open question remains for Unit 8 (convergence criterion on the clipped correction). | Verified |
 
 Verifications due at their own unit: none left. The 5e-5 Jacobian gate's normalization was read at Unit 7 (section 10), and

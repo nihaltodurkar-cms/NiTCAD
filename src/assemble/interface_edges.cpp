@@ -5,6 +5,7 @@
 #include <limits>
 #include <utility>
 
+#include "NiTCAD/base/contract.hpp"
 #include "NiTCAD/physics/interface_traps.hpp"
 #include "NiTCAD/physics/recombination.hpp"
 #include "NiTCAD/physics/statistics.hpp"
@@ -41,7 +42,13 @@ double interface_root(double G, double b, double q_low, double q_high, Eval eval
 
 InterfaceEdges::InterfaceEdges(std::vector<InterfaceEdge> edges,
                                std::vector<InterfaceLevel> levels, std::size_t interfaces)
-    : edges_(std::move(edges)), levels_(std::move(levels)), interfaces_(interfaces) {}
+    : edges_(std::move(edges)), levels_(std::move(levels)), interfaces_(interfaces) {
+    slot_offset_.reserve(edges_.size());
+    for (const InterfaceEdge& e : edges_) {
+        slot_offset_.push_back(slots_);
+        slots_ += e.last_level - e.first_level;
+    }
+}
 
 InterfaceEquilibrium InterfaceEdges::equilibrium(const InterfaceEdge& e, double psi_i,
                                                  double psi_s,
@@ -77,7 +84,9 @@ InterfaceEquilibrium InterfaceEdges::equilibrium(const InterfaceEdge& e, double 
 }
 
 InterfaceEdges::Charge InterfaceEdges::charge_at(const InterfaceEdge& e, double n, double p,
-                                                 const InterfaceStatistics& s) const {
+                                                 const InterfaceStatistics& s,
+                                                 const TrapStep* step,
+                                                 std::span<double> f) const {
     const physics::Degeneracy gn = s.fermi_dirac
                                        ? physics::fermi_dirac_degeneracy(s.n_ie, s.log_dos_n, n)
                                        : physics::Degeneracy{0.0, 0.0};
@@ -85,7 +94,36 @@ InterfaceEdges::Charge InterfaceEdges::charge_at(const InterfaceEdge& e, double 
                                        ? physics::fermi_dirac_degeneracy(s.n_ie, s.log_dos_p, p)
                                        : physics::Degeneracy{0.0, 0.0};
     double q = e.fixed_charge_cm2, q_n = 0.0, q_p = 0.0, r = 0.0, r_n = 0.0, r_p = 0.0;
-    for (std::size_t k = e.first_level; k < e.last_level; ++k) {
+    double h = 0.0, h_n = 0.0, h_p = 0.0;  // the hole row's rate, in a time step
+    if (step != nullptr) {
+        // f = (c + w occ) / (1 + w D); the electron row takes cn (n - f (n + n1)), the hole row
+        // cp (f (p + p1) - p1), and Q falls with f as in steady state.
+        const double w = step->weight;
+        for (std::size_t k = e.first_level; k < e.last_level; ++k) {
+            const InterfaceLevel& l = levels_[k];
+            const double n1 = s.n_ie * std::exp(gn.log_gamma + l.tau);
+            const double p1 = s.n_ie * std::exp(gp.log_gamma - l.tau);
+            const double dn1 = n1 * gn.d_density, dp1 = p1 * gp.d_density;
+            const double occ = l.cn * n + l.cp * p1;
+            const double D = l.cn * (n + n1) + l.cp * (p + p1);
+            const double den = 1.0 + w * D;
+            const double occupied = (step->history[k - e.first_level] + w * occ) / den;
+            const double f_n = w * (l.cn - occupied * l.cn * (1.0 + dn1)) / den;
+            const double f_p = w * (l.cp * dp1 - occupied * l.cp * (1.0 + dp1)) / den;
+            if (!f.empty()) f[k - e.first_level] = occupied;
+            const double N = l.density_cm2;
+            q += N * (l.donor ? 1.0 - occupied : -occupied);
+            q_n -= N * f_n;
+            q_p -= N * f_p;
+            r += N * l.cn * (n - occupied * (n + n1));
+            r_n += N * l.cn * (1.0 - f_n * (n + n1) - occupied * (1.0 + dn1));
+            r_p -= N * l.cn * f_p * (n + n1);
+            h += N * l.cp * (occupied * (p + p1) - p1);
+            h_n += N * l.cp * f_n * (p + p1);
+            h_p += N * l.cp * (f_p * (p + p1) + occupied * (1.0 + dp1) - dp1);
+        }
+    }
+    for (std::size_t k = e.first_level; step == nullptr && k < e.last_level; ++k) {
         const InterfaceLevel& l = levels_[k];
         const double n1 = s.n_ie * std::exp(gn.log_gamma + l.tau);
         const double p1 = s.n_ie * std::exp(gp.log_gamma - l.tau);
@@ -98,6 +136,12 @@ InterfaceEdges::Charge InterfaceEdges::charge_at(const InterfaceEdge& e, double 
         r += l.density_cm2 * t.rate;
         r_n += l.density_cm2 * t.d_rate_dn;
         r_p += l.density_cm2 * t.d_rate_dp;
+        if (!f.empty()) f[k - e.first_level] = t.occupied;
+    }
+    if (step == nullptr) {
+        h = r;
+        h_n = r_n;
+        h_p = r_p;
     }
     if (e.velocity_n > 0.0 && e.velocity_p > 0.0) {
         const physics::EquilibriumProduct E =
@@ -108,14 +152,31 @@ InterfaceEdges::Charge InterfaceEdges::charge_at(const InterfaceEdge& e, double 
         r += v.rate;
         r_n += v.d_dn;
         r_p += v.d_dp;
+        h += v.rate;
+        h_n += v.d_dn;
+        h_p += v.d_dp;
     }
     const double cw = e.charge_weight, rw = e.rate_weight;
-    return {cw * q, cw * q_n, cw * q_p, rw * r, rw * r_n, rw * r_p};
+    return {cw * q, cw * q_n, cw * q_p, rw * r, rw * r_n, rw * r_p, rw * h, rw * h_n, rw * h_p};
 }
 
 InterfaceDrift InterfaceEdges::drift(const InterfaceEdge& e, double psi_i, double psi_s,
-                                     double n_s, double p_s,
-                                     const InterfaceStatistics& s) const {
+                                     double n_s, double p_s, const InterfaceStatistics& s,
+                                     const TrapStep* step) const {
+    return drift_at(e, psi_i, psi_s, n_s, p_s, s, step, {});
+}
+
+void InterfaceEdges::occupancies(const InterfaceEdge& e, double psi_i, double psi_s, double n_s,
+                                 double p_s, const InterfaceStatistics& s, const TrapStep* step,
+                                 std::span<double> f) const {
+    NITCAD_EXPECTS(f.size() == e.last_level - e.first_level);
+    (void)drift_at(e, psi_i, psi_s, n_s, p_s, s, step, f);
+}
+
+InterfaceDrift InterfaceEdges::drift_at(const InterfaceEdge& e, double psi_i, double psi_s,
+                                        double n_s, double p_s, const InterfaceStatistics& s,
+                                        const TrapStep* step, std::span<double> f) const {
+    NITCAD_EXPECTS(step == nullptr || step->history.size() == e.last_level - e.first_level);
     // The node's reduced energies (n = gamma n_ie e^xi) and d xi / d density.
     const physics::Degeneracy gn = s.fermi_dirac
                                        ? physics::fermi_dirac_degeneracy(s.n_ie, s.log_dos_n, n_s)
@@ -137,7 +198,7 @@ InterfaceDrift InterfaceEdges::drift(const InterfaceEdge& e, double psi_i, doubl
         const double shift = psi - psi_s;
         st.n = detail::density(s.fermi_dirac, s.n_ie, s.log_dos_n, xi_n + shift);
         st.p = detail::density(s.fermi_dirac, s.n_ie, s.log_dos_p, xi_p - shift);
-        st.c = charge_at(e, st.n.density, st.p.density, s);
+        st.c = charge_at(e, st.n.density, st.p.density, s, step);
         return st;
     };
     // dQ/dpsi_I = Q_n dn_I/dpsi_I + Q_p dp_I/dpsi_I = Q_n Nd - Q_p Pd.
@@ -146,8 +207,23 @@ InterfaceDrift InterfaceEdges::drift(const InterfaceEdge& e, double psi_i, doubl
         return std::pair{st.c.value, st.c.d_n * st.n.d_eta - st.c.d_p * st.p.d_eta};
     };
     const double gi = e.g_insulator, gs = e.g_semiconductor, G = gi + gs;
-    const double psi = interface_root(G, gi * psi_i + gs * psi_s, e.charge_low, e.charge_high, Q);
-    const State st = at(psi);
+    // In a time step f lies within [min(c, 0), max(c, 1)], so Q within the bounds of those.
+    double low = e.charge_low, high = e.charge_high;
+    if (step != nullptr) {
+        double ql = e.fixed_charge_cm2, qh = e.fixed_charge_cm2;
+        for (std::size_t k = e.first_level; k < e.last_level; ++k) {
+            const InterfaceLevel& l = levels_[k];
+            const double c = step->history[k - e.first_level];
+            const double f_low = std::min(c, 0.0), f_high = std::max(c, 1.0);
+            ql += l.density_cm2 * (l.donor ? 1.0 - f_high : -f_high);
+            qh += l.density_cm2 * (l.donor ? 1.0 - f_low : -f_low);
+        }
+        low = e.charge_weight * ql;
+        high = e.charge_weight * qh;
+    }
+    const double psi = interface_root(G, gi * psi_i + gs * psi_s, low, high, Q);
+    State st = at(psi);
+    if (!f.empty()) st.c = charge_at(e, st.n.density, st.p.density, s, step, f);
     const double Nd = st.n.d_eta, Pd = st.p.d_eta;
     // Partials of n_I and p_I holding psi_I, columns (psi_i, psi_s, n_s, p_s).
     const double pn[4] = {0.0, -Nd, Nd * dxi_n, 0.0};
@@ -160,6 +236,7 @@ InterfaceDrift InterfaceEdges::drift(const InterfaceEdge& e, double psi_i, doubl
     r.flux_insulator = gi * (psi - psi_i);
     r.flux_semiconductor = gs * (psi - psi_s);
     r.rate = st.c.rate;
+    r.rate_p = st.c.rate_h;
     for (std::size_t k = 0; k < 4; ++k) {
         const double Fx = -gi * unit_i[k] - gs * unit_s[k] - (st.c.d_n * pn[k] + st.c.d_p * pp[k]);
         const double dpsi = -Fx / D;
@@ -167,6 +244,7 @@ InterfaceDrift InterfaceEdges::drift(const InterfaceEdge& e, double psi_i, doubl
         r.d_flux_semiconductor[k] = gs * (dpsi - unit_s[k]);
         const double dn = pn[k] + Nd * dpsi, dp = pp[k] - Pd * dpsi;
         r.d_rate[k] = st.c.rate_n * dn + st.c.rate_p * dp;
+        r.d_rate_p[k] = st.c.rate_hn * dn + st.c.rate_hp * dp;
     }
     r.trapped = st.c.value - e.charge_weight * e.fixed_charge_cm2;
     return r;

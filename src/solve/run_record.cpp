@@ -1,5 +1,5 @@
-// The run record of a bias sweep (ARCHITECTURE.md 6.6): an identity digest of every input and the
-// options as named settings.
+// The run records of a bias sweep and of a transient run (ARCHITECTURE.md 6.6): an identity digest
+// of every input and the options as named settings.
 #include <bit>
 #include <cstddef>
 #include <cstdint>
@@ -14,6 +14,7 @@
 #include "NiTCAD/physics/interface_traps.hpp"
 #include "NiTCAD/physics/semiconductor.hpp"
 #include "NiTCAD/solve/bias.hpp"
+#include "NiTCAD/solve/transient.hpp"
 
 namespace NiTCAD::solve {
 
@@ -106,12 +107,9 @@ std::vector<std::pair<std::string, double>> settings(const BiasOptions& o) {
     return s;
 }
 
-}  // namespace
-
-results::RunRecord make_run_record(const device::Device& device, const BiasOptions& options,
-                                   std::span<const std::vector<double>> points,
-                                   const results::NodeFields* initial) {
-    Digest d;
+// The device and the named settings, in the order the sweep's record has always hashed them.
+void device_and_settings(Digest& d, const device::Device& device, const BiasOptions& options,
+                         const std::vector<std::pair<std::string, double>>& named) {
     const mesh::Mesh& m = device.mesh();
     d.integer(static_cast<std::uint64_t>(m.dimension()));
     d.integer(m.node_count());
@@ -206,22 +204,65 @@ results::RunRecord make_run_record(const device::Device& device, const BiasOptio
             d.integer(static_cast<std::uint64_t>(f.transport));
         }
     }
-    const auto named = settings(options);
     d.integer(named.size());
     for (const auto& [name, value] : named) {
         d.text(name);
         d.real(value);
     }
-    d.integer(points.size());
-    for (const auto& p : points) d.reals(p);
+}
+
+void initial_state(Digest& d, const results::NodeFields* initial, bool densities) {
     d.integer(initial != nullptr ? 1 : 0);
     if (initial != nullptr) {
         d.reals(initial->potential_V);
-        if (options.equations == Equations::drift_diffusion) {  // the quasi-static sweep reads
-            d.reals(initial->n_cm3);                            // only the potential
+        if (densities) {
+            d.reals(initial->n_cm3);
             d.reals(initial->p_cm3);
         }
     }
+}
+
+}  // namespace
+
+results::RunRecord make_run_record(const device::Device& device, const BiasOptions& options,
+                                   std::span<const std::vector<double>> points,
+                                   const results::NodeFields* initial) {
+    Digest d;
+    const auto named = settings(options);
+    device_and_settings(d, device, options, named);
+    d.integer(points.size());
+    for (const auto& p : points) d.reals(p);
+    // The quasi-static sweep reads only the potential.
+    initial_state(d, initial, options.equations == Equations::drift_diffusion);
+    return {d.value(), named};
+}
+
+results::RunRecord make_run_record(const device::Device& device, const TransientOptions& options,
+                                   std::span<const Waveform> waveforms,
+                                   const results::NodeFields* initial) {
+    Digest d;
+    auto named = settings(options.steady);
+    const double t_end = options.t_end_s;
+    const double dt0 = options.dt_initial_s.value_or(t_end * 1e-6);
+    named.emplace_back("transient.integrator", static_cast<double>(options.integrator));
+    named.emplace_back("transient.t_end_s", t_end);
+    named.emplace_back("transient.dt_initial_s", dt0);
+    named.emplace_back("transient.dt_min_s", options.dt_min_s.value_or(dt0 * 1e-6));
+    named.emplace_back("transient.dt_max_s", options.dt_max_s.value_or(t_end));
+    named.emplace_back("transient.adaptive", options.adaptive ? 1.0 : 0.0);
+    if (options.adaptive) {
+        named.emplace_back("transient.rtol", options.rtol);
+        named.emplace_back("transient.density_ref_cm3", options.density_ref_cm3);
+    }
+    named.emplace_back("transient.fields_every_step", options.fields_every_step ? 1.0 : 0.0);
+    device_and_settings(d, device, options.steady, named);
+    d.reals(options.output_times_s);
+    d.integer(waveforms.size());
+    for (const Waveform& w : waveforms) {
+        d.integer(static_cast<std::uint64_t>(w.kind()));
+        d.reals(w.parameters());
+    }
+    initial_state(d, initial, true);
     return {d.value(), named};
 }
 

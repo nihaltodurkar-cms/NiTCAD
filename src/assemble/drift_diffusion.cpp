@@ -329,9 +329,55 @@ std::pair<EdgeFlux, EdgeFlux> DriftDiffusion::edge_fluxes(
             scaled(fp, e.ap, e.mu_p, mobility(e.mu_p, e.mu_p_a, e.mu_p_b, e.sat_p, e.sat_p_b))};
 }
 
+DriftDiffusion::NodeStorage DriftDiffusion::node_storage(
+    std::size_t i, std::span<const double> x, std::span<const NodeDegeneracy> g) const {
+    const double n = x[3 * i + 1], p = x[3 * i + 2];
+    NodeStorage s{n, 1.0, p, 1.0};
+    if (!ionization_) return s;
+    // S_n = n - N_D+(eta_c), S_p = p - N_A-(eta_v), with eta_c and eta_v as the Poisson row's.
+    const physics::DopantLevels& l = levels_[i];
+    if (donors_[i] > 0.0) {
+        const double ln = fermi_dirac_ ? g[i].n.log_gamma : 0.0;
+        const double wn = fermi_dirac_ ? g[i].n.d_density : 0.0;
+        const physics::IonizedDensity d = physics::ionized_density(
+            donors_[i], std::log(n / n_ie_[i]) - ln - log_dos_n_[i], l.donor_kT,
+            l.donor_degeneracy);
+        s.n -= d.value;
+        s.d_n -= d.d_eta * (1.0 / n - wn);
+    }
+    if (acceptors_[i] > 0.0) {
+        const double lp = fermi_dirac_ ? g[i].p.log_gamma : 0.0;
+        const double wp = fermi_dirac_ ? g[i].p.d_density : 0.0;
+        const physics::IonizedDensity a = physics::ionized_density(
+            acceptors_[i], std::log(p / n_ie_[i]) - lp - log_dos_p_[i], l.acceptor_kT,
+            l.acceptor_degeneracy);
+        s.p -= a.value;
+        s.d_p -= a.d_eta * (1.0 / p - wp);
+    }
+    return s;
+}
+
+std::optional<TrapStep> DriftDiffusion::trap_step(std::size_t k, const TimeStep* step) const {
+    if (step == nullptr) return std::nullopt;
+    const InterfaceEdge& v = interfaces_.edges()[k];
+    return TrapStep{rate_scale_ * Ns_ / step->rate,
+                    step->traps.subspan(interfaces_.slot_offset(k), v.last_level - v.first_level)};
+}
+
+InterfaceDrift DriftDiffusion::interface_at(std::size_t k, std::span<const double> x,
+                                            const TimeStep* step) const {
+    const InterfaceEdge& v = interfaces_.edges()[k];
+    const std::size_t o = v.insulator, s = v.semiconductor;
+    const std::optional<TrapStep> t = trap_step(k, step);
+    return interfaces_.drift(v, x[3 * o], x[3 * s], x[3 * s + 1], x[3 * s + 2], statistics(s),
+                             t ? &*t : nullptr);
+}
+
 void DriftDiffusion::assemble(std::span<const double> x, std::span<double> f,
-                              std::span<double> values) const {
+                              std::span<double> values, const TimeStep* step) const {
     NITCAD_EXPECTS(x.size() == unknowns() && f.size() == unknowns());
+    NITCAD_EXPECTS(step == nullptr || (step->storage.size() == 2 * node_count() &&
+                                       step->traps.size() == trap_slots()));
     const bool jacobian = !values.empty();
     const auto at = [&](std::size_t node, std::size_t r, std::size_t c) -> double& {
         return values[block_[9 * node + 3 * r + c]];
@@ -438,12 +484,21 @@ void DriftDiffusion::assemble(std::span<const double> x, std::span<double> f,
             add_physical(physics::radiative_recombination(n * Ns_, p * Ns_, physical_product(),
                                                           radiative_[i]));
         }
+        if (step != nullptr) {
+            const NodeStorage st = node_storage(i, x, g);
+            const double k = V * step->rate;
+            f[3 * i + 1] -= k * (st.n - step->storage[2 * i]);
+            f[3 * i + 2] += k * (st.p - step->storage[2 * i + 1]);
+            if (jacobian) {
+                at(i, 1, 1) -= k * st.d_n;
+                at(i, 2, 2) += k * st.d_p;
+            }
+        }
     }
     for (std::size_t k = 0; k < interfaces_.edges().size(); ++k) {
         const InterfaceEdge& v = interfaces_.edges()[k];
         const std::size_t o = v.insulator, s = v.semiconductor;
-        const InterfaceDrift t =
-            interfaces_.drift(v, x[3 * o], x[3 * s], x[3 * s + 1], x[3 * s + 2], statistics(s));
+        const InterfaceDrift t = interface_at(k, x, step);
         // Edge positions: row of o with column psi of s, and the rows of s with column psi of o.
         const EdgeTerm& e = edges_[v.edge];
         const bool o_first = e.a == o;
@@ -462,15 +517,15 @@ void DriftDiffusion::assemble(std::span<const double> x, std::span<double> f,
         if (contact_[s] >= 0) continue;  // a Dirichlet semiconductor node
         f[3 * s] += t.flux_semiconductor;
         f[3 * s + 1] -= t.rate;
-        f[3 * s + 2] += t.rate;
+        f[3 * s + 2] += t.rate_p;
         if (jacobian) {
             values[so[0]] += t.d_flux_semiconductor[0];
             values[so[1]] -= t.d_rate[0];
-            values[so[2]] += t.d_rate[0];
+            values[so[2]] += t.d_rate_p[0];
             for (std::size_t c = 1; c < 4; ++c) {
                 at(s, 0, c - 1) += t.d_flux_semiconductor[c];
                 at(s, 1, c - 1) -= t.d_rate[c];
-                at(s, 2, c - 1) += t.d_rate[c];
+                at(s, 2, c - 1) += t.d_rate_p[c];
             }
         }
     }
@@ -539,11 +594,93 @@ void DriftDiffusion::evaluate(std::span<const double> x, std::span<double> resid
     NITCAD_EXPECTS(jacobian.has_same_pattern(pattern_));
     const std::span<double> values = jacobian.values();
     std::fill(values.begin(), values.end(), 0.0);
-    assemble(x, residual, values);
+    assemble(x, residual, values, nullptr);
 }
 
 void DriftDiffusion::residual(std::span<const double> x, std::span<double> residual) const {
-    assemble(x, residual, {});
+    assemble(x, residual, {}, nullptr);
+}
+
+void DriftDiffusion::evaluate(std::span<const double> x, const TimeStep& step,
+                              std::span<double> residual, linalg::SparseMatrix& jacobian) const {
+    NITCAD_EXPECTS(jacobian.has_same_pattern(pattern_));
+    const std::span<double> values = jacobian.values();
+    std::fill(values.begin(), values.end(), 0.0);
+    assemble(x, residual, values, &step);
+}
+
+void DriftDiffusion::residual(std::span<const double> x, const TimeStep& step,
+                              std::span<double> residual) const {
+    assemble(x, residual, {}, &step);
+}
+
+std::vector<double> DriftDiffusion::storage(std::span<const double> x) const {
+    NITCAD_EXPECTS(x.size() == unknowns());
+    const std::vector<NodeDegeneracy> g = degeneracies(x);
+    std::vector<double> s(2 * node_count(), 0.0);
+    for (std::size_t i = 0; i < node_count(); ++i) {
+        if (insulator_[i] != 0) continue;
+        const NodeStorage st = node_storage(i, x, g);
+        s[2 * i] = st.n;
+        s[2 * i + 1] = st.p;
+    }
+    return s;
+}
+
+std::vector<double> DriftDiffusion::trap_occupancies(std::span<const double> x,
+                                                     const TimeStep* step) const {
+    NITCAD_EXPECTS(x.size() == unknowns());
+    NITCAD_EXPECTS(step == nullptr || step->traps.size() == trap_slots());
+    std::vector<double> f(trap_slots(), 0.0);
+    for (std::size_t k = 0; k < interfaces_.edges().size(); ++k) {
+        const InterfaceEdge& v = interfaces_.edges()[k];
+        const std::size_t o = v.insulator, s = v.semiconductor;
+        const std::optional<TrapStep> t = trap_step(k, step);
+        interfaces_.occupancies(
+            v, x[3 * o], x[3 * s], x[3 * s + 1], x[3 * s + 2], statistics(s), t ? &*t : nullptr,
+            std::span(f).subspan(interfaces_.slot_offset(k), v.last_level - v.first_level));
+    }
+    return f;
+}
+
+std::vector<double> DriftDiffusion::contact_charges(std::span<const double> x,
+                                                    const TimeStep* step) const {
+    NITCAD_EXPECTS(x.size() == unknowns());
+    std::vector<double> charge = gates_.charges(x, 3, contact_count_);
+    const auto owner = [&](std::size_t i) {
+        return contact_[i] >= 0 ? contact_[i] : electrode_[i];
+    };
+    for (const EdgeTerm& e : edges_) {
+        const std::int32_t ca = owner(e.a), cb = owner(e.b);
+        if (ca == cb || e.charged) continue;
+        const double flux = e.c * (x[3 * e.a] - x[3 * e.b]);  // from a to b
+        if (ca >= 0) charge[static_cast<std::size_t>(ca)] += flux;
+        if (cb >= 0) charge[static_cast<std::size_t>(cb)] -= flux;
+    }
+    // A contact node on an interface edge: the flux leaving it is minus its half-edge flux.
+    for (std::size_t k = 0; k < interfaces_.edges().size(); ++k) {
+        const InterfaceEdge& v = interfaces_.edges()[k];
+        const std::int32_t ci = owner(v.insulator), cs = owner(v.semiconductor);
+        if (ci < 0 && cs < 0) continue;
+        const InterfaceDrift t = interface_at(k, x, step);
+        if (ci >= 0) charge[static_cast<std::size_t>(ci)] -= t.flux_insulator;
+        if (cs >= 0) charge[static_cast<std::size_t>(cs)] -= t.flux_semiconductor;
+    }
+    return charge;
+}
+
+std::vector<double> DriftDiffusion::conduction_currents(std::span<const double> x,
+                                                        const TimeStep& step) const {
+    std::vector<double> terminal = terminal_currents(x);
+    // The traps of an interface edge on an ohmic node exchange carriers with the contact:
+    // electron capture takes rate from it, hole capture rate_p.
+    for (std::size_t k = 0; k < interfaces_.edges().size(); ++k) {
+        const std::int32_t c = contact_[interfaces_.edges()[k].semiconductor];
+        if (c < 0) continue;
+        const InterfaceDrift t = interface_at(k, x, &step);
+        terminal[static_cast<std::size_t>(c)] += t.rate_p - t.rate;
+    }
+    return terminal;
 }
 
 double DriftDiffusion::update_size(std::span<const double> x, std::span<const double> dx) const {
@@ -674,7 +811,8 @@ BandEdges DriftDiffusion::band_edges(std::span<const double> x) const {
     return b;
 }
 
-std::vector<double> DriftDiffusion::gate_charges(std::span<const double> x) const {
+std::vector<double> DriftDiffusion::gate_charges(std::span<const double> x,
+                                                 const TimeStep* step) const {
     NITCAD_EXPECTS(x.size() == unknowns());
     std::vector<double> charge = gates_.charges(x, 3, contact_count_);
     for (const EdgeTerm& e : edges_) {
@@ -685,25 +823,20 @@ std::vector<double> DriftDiffusion::gate_charges(std::span<const double> x) cons
         if (cb >= 0) charge[static_cast<std::size_t>(cb)] -= flux;
     }
     // An electrode node on an interface edge: the flux leaving it is minus its half-edge flux.
-    for (const InterfaceEdge& v : interfaces_.edges()) {
-        const std::int32_t c = electrode_[v.insulator];
+    for (std::size_t k = 0; k < interfaces_.edges().size(); ++k) {
+        const std::int32_t c = electrode_[interfaces_.edges()[k].insulator];
         if (c < 0) continue;
-        const std::size_t o = v.insulator, s = v.semiconductor;
-        charge[static_cast<std::size_t>(c)] -=
-            interfaces_.drift(v, x[3 * o], x[3 * s], x[3 * s + 1], x[3 * s + 2], statistics(s))
-                .flux_insulator;
+        charge[static_cast<std::size_t>(c)] -= interface_at(k, x, step).flux_insulator;
     }
     return charge;
 }
 
-std::vector<double> DriftDiffusion::interface_trap_charges(std::span<const double> x) const {
+std::vector<double> DriftDiffusion::interface_trap_charges(std::span<const double> x,
+                                                           const TimeStep* step) const {
     NITCAD_EXPECTS(x.size() == unknowns());
     std::vector<double> q(interfaces_.interface_count(), 0.0);
-    for (const InterfaceEdge& v : interfaces_.edges()) {
-        const std::size_t o = v.insulator, s = v.semiconductor;
-        q[v.interface] +=
-            interfaces_.drift(v, x[3 * o], x[3 * s], x[3 * s + 1], x[3 * s + 2], statistics(s))
-                .trapped;
+    for (std::size_t k = 0; k < interfaces_.edges().size(); ++k) {
+        q[interfaces_.edges()[k].interface] += interface_at(k, x, step).trapped;
     }
     return q;
 }
