@@ -34,6 +34,7 @@ std::expected<results::EquilibriumResult, base::Error> solve_equilibrium(
     }
 
     result.fields = detail::equilibrium_fields(*system, psi, *scaling);
+    result.bands = detail::band_diagram(system->band_edges(psi), scaling->V_T);
     result.gate_charge = system->gate_charges(psi);
     const double charge = detail::charge_scale(*scaling, device.mesh().dimension());
     for (double& Q : result.gate_charge) Q *= charge;

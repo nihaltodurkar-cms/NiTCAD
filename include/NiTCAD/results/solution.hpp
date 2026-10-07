@@ -9,15 +9,29 @@
 
 namespace NiTCAD::results {
 
-// Per mesh node: electrostatic potential referenced to the intrinsic level, carrier densities.
+// Per mesh node: electrostatic potential referenced to the intrinsic level of node 0's material,
+// carrier densities.
 struct NodeFields {
     std::vector<double> potential_V;
     std::vector<double> n_cm3;
     std::vector<double> p_cm3;
 };
 
+// Per mesh node, the band diagram in eV, measured from the equilibrium Fermi level (the Fermi level
+// of a contact at 0 V; a contact at bias V holds its carriers' Fermi level at -V): the conduction
+// and valence band edges (band-gap narrowing shared between them) and the electron and hole
+// quasi-Fermi levels, by the selected statistics. Unlike the potential it does not depend on which
+// material node 0 is in (Unit 15).
+struct BandDiagram {
+    std::vector<double> conduction_eV;
+    std::vector<double> valence_eV;
+    std::vector<double> electron_fermi_eV;
+    std::vector<double> hole_fermi_eV;
+};
+
 struct EquilibriumResult {
     NodeFields fields;
+    BandDiagram bands;
     // Charge on each gate electrode at zero bias, as BiasPoint::gate_charge.
     std::vector<double> gate_charge;
     ConvergenceRecord convergence;
@@ -26,10 +40,19 @@ struct EquilibriumResult {
 struct BiasPoint {
     std::vector<double> bias_V;  // per contact, in the device's contact order
     NodeFields fields;
+    BandDiagram bands;
     // Conventional current entering the device through each contact, in A / cm^(3-D): A/cm^2 in
     // 1D, A/cm in 2D (per unit depth), A in 3D. The currents of all contacts sum to zero; a gate
     // carries none.
     std::vector<double> terminal_current;
+    // Per contact, the resolution of terminal_current (same unit): a bound on how far the current
+    // through any cut of the device can differ from it, from the continuity residuals and the
+    // rounding of the large terms that cancel in them (assemble::DriftDiffusion::
+    // terminal_current_resolution). A current below it is not resolved by the (psi, n, p) state,
+    // whose densities carry the current only as the small difference of two large fluxes;
+    // currents far below it need other unknowns (quasi-Fermi potentials). Zero for a gate and in
+    // the quasi-static sweep. (Unit 15.)
+    std::vector<double> terminal_current_resolution;
     // Charge on each gate electrode, in C / cm^(3-D) (C/cm^2 in 1D); zero for an ohmic contact. It
     // balances the semiconductor charge and the fixed oxide charge, so the quasi-static
     // capacitance is its derivative with respect to the gate bias.

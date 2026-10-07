@@ -2,6 +2,7 @@
 // goes through the public graph (points, volumes, edges, boundary patches); none uses grid indices.
 #include <catch2/catch_test_macros.hpp>
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstddef>
@@ -223,4 +224,26 @@ TEST_CASE("tensor grid: invalid axes are degenerate_mesh with their position") {
     REQUIRE(f.error().message.starts_with("axis y"));
     REQUIRE(make_tensor_grid(ax, ay, back).error().context->index == 2);
     REQUIRE(make_tensor_grid(nan).error().context->index == 1);
+}
+
+TEST_CASE("tensor grid: straddle_interface puts two nodes symmetrically about an interface") {
+    std::vector<double> axis;
+    for (int i = 0; i <= 20; ++i) axis.push_back(1e-5 * i);
+    const auto a = NiTCAD::mesh::straddle_interface(axis, 1.03e-4, 2e-7);
+    REQUIRE(a.has_value());
+    std::size_t k = 0;
+    while ((*a)[k + 1] < 1.03e-4) ++k;
+    REQUIRE(std::abs((*a)[k] - (1.03e-4 - 1e-7)) <= 1e-19);
+    REQUIRE(std::abs((*a)[k + 1] - (1.03e-4 + 1e-7)) <= 1e-19);
+    REQUIRE(std::abs(0.5 * ((*a)[k] + (*a)[k + 1]) - 1.03e-4) <= 1e-19);
+    for (std::size_t i = 1; i < a->size(); ++i) REQUIRE((*a)[i] > (*a)[i - 1]);
+    // A node closer than the spacing is removed: 1e-4 is 3e-6 away with spacing 4e-6.
+    const auto b = NiTCAD::mesh::straddle_interface(axis, 1.03e-4, 4e-6);
+    REQUIRE(std::find(b->begin(), b->end(), 1e-4) == b->end());
+    REQUIRE(b->size() == axis.size() + 1);
+    REQUIRE(NiTCAD::mesh::make_tensor_grid(*b).has_value());
+    // Errors.
+    REQUIRE_FALSE(NiTCAD::mesh::straddle_interface(axis, 1e-7, 4e-7).has_value());
+    REQUIRE_FALSE(NiTCAD::mesh::straddle_interface(axis, 1e-4, 0.0).has_value());
+    REQUIRE_FALSE(NiTCAD::mesh::straddle_interface({0.0, 2.0, 1.0}, 1.0, 0.1).has_value());
 }

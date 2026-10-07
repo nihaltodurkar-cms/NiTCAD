@@ -133,4 +133,40 @@ std::expected<Mesh, base::Error> make_tensor_grid(std::span<const double> x,
     return build(axes);
 }
 
+std::expected<std::vector<double>, base::Error> straddle_interface(std::vector<double> axis,
+                                                                  double position,
+                                                                  double spacing) {
+    const auto invalid = [](const char* message, double value) {
+        return std::unexpected(base::Error{base::ErrorCode::invalid_input, message,
+                                           base::ErrorContext{.index = std::nullopt,
+                                                              .value = value}});
+    };
+    for (std::size_t i = 0; i < axis.size(); ++i) {
+        if (!std::isfinite(axis[i]) || (i > 0 && !(axis[i] > axis[i - 1]))) {
+            return invalid("axis is not finite and strictly increasing", axis[i]);
+        }
+    }
+    if (!(std::isfinite(spacing) && spacing > 0.0)) {
+        return invalid("interface spacing must be finite and positive", spacing);
+    }
+    if (axis.size() < 2 ||
+        !(position - spacing > axis.front() && position + spacing < axis.back())) {
+        return invalid("interface position must lie inside the axis by more than the spacing",
+                       position);
+    }
+    std::vector<double> out;
+    out.reserve(axis.size() + 2);
+    bool inserted = false;
+    for (const double x : axis) {
+        if (!inserted && x > position) {
+            out.push_back(position - 0.5 * spacing);
+            out.push_back(position + 0.5 * spacing);
+            inserted = true;
+        }
+        if (std::abs(x - position) < spacing) continue;
+        if (!inserted || x > position) out.push_back(x);
+    }
+    return out;
+}
+
 }  // namespace NiTCAD::mesh

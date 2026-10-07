@@ -1,5 +1,6 @@
 #include "NiTCAD/device/device.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <cstddef>
 #include <numeric>
@@ -199,13 +200,68 @@ std::optional<base::Error> check_topology(const DeviceDescription& d) {
     return std::nullopt;
 }
 
+std::optional<RegionId> region_named(const DeviceDescription& d, const std::string& name) {
+    for (std::size_t r = 0; r < d.regions.size(); ++r) {
+        if (d.regions[r].name == name) return static_cast<RegionId>(r);
+    }
+    return std::nullopt;
+}
+
+std::optional<base::Error> check_interfaces(const DeviceDescription& d) {
+    std::set<std::pair<RegionId, RegionId>> pairs;
+    for (std::size_t k = 0; k < d.interfaces.size(); ++k) {
+        const Interface& f = d.interfaces[k];
+        const auto a = region_named(d, f.region_a), b = region_named(d, f.region_b);
+        if (!a || !b) return invalid("interface names an unknown region", k);
+        if (*a == *b) return invalid("interface joins region '" + f.region_a + "' to itself", k);
+        if (f.transport != InterfaceTransport::drift_diffusion &&
+            f.transport != InterfaceTransport::thermionic_emission) {
+            return invalid("interface has an unknown transport", k);
+        }
+        if (!pairs.insert(std::minmax(*a, *b)).second) {
+            return invalid("interface between '" + f.region_a + "' and '" + f.region_b +
+                               "' is declared twice",
+                           k);
+        }
+        bool joined = false;
+        for (const mesh::Edge& e : d.mesh.edges()) {
+            const RegionId ra = d.node_region[static_cast<std::size_t>(e.first)];
+            const RegionId rb = d.node_region[static_cast<std::size_t>(e.second)];
+            if (std::minmax(ra, rb) == std::minmax(*a, *b)) {
+                joined = true;
+                break;
+            }
+        }
+        if (!joined) {
+            return invalid("no mesh edge joins regions '" + f.region_a + "' and '" + f.region_b +
+                               "'",
+                           k);
+        }
+    }
+    return std::nullopt;
+}
+
 }  // namespace
 
 std::expected<Device, base::Error> Device::create(DeviceDescription description) {
-    for (auto check : {check_regions, check_nodes, check_contacts, check_topology}) {
+    for (auto check :
+         {check_regions, check_nodes, check_contacts, check_topology, check_interfaces}) {
         if (auto e = check(description)) return std::unexpected(std::move(*e));
     }
     return Device{std::move(description)};
+}
+
+InterfaceTransport Device::transport(RegionId a, RegionId b) const {
+    NITCAD_EXPECTS(a >= 0 && static_cast<std::size_t>(a) < d_.regions.size());
+    NITCAD_EXPECTS(b >= 0 && static_cast<std::size_t>(b) < d_.regions.size());
+    for (const Interface& f : d_.interfaces) {
+        const std::string& na = d_.regions[static_cast<std::size_t>(a)].name;
+        const std::string& nb = d_.regions[static_cast<std::size_t>(b)].name;
+        if ((f.region_a == na && f.region_b == nb) || (f.region_a == nb && f.region_b == na)) {
+            return f.transport;
+        }
+    }
+    return InterfaceTransport::drift_diffusion;
 }
 
 const Contact* Device::find_contact(std::string_view name) const noexcept {

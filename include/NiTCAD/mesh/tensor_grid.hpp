@@ -14,6 +14,7 @@
 
 #include <expected>
 #include <span>
+#include <vector>
 
 #include "NiTCAD/base/error.hpp"
 #include "NiTCAD/mesh/mesh.hpp"
@@ -29,5 +30,14 @@ namespace NiTCAD::mesh {
 [[nodiscard]] std::expected<Mesh, base::Error> make_tensor_grid(std::span<const double> x,
                                                                 std::span<const double> y,
                                                                 std::span<const double> z);
+
+// An axis for a material interface at `position` (Unit 15): the assemblers put an interface at the
+// midpoint of the edge joining two regions, so the axis needs two nodes at position -+ spacing / 2
+// and none between. Returns the axis with every node closer than `spacing` to the position
+// removed and those two inserted (a region is then assigned by x < position). Errors
+// (invalid_input): the axis not strictly increasing or not finite; spacing not finite and
+// positive; the position not inside the axis by more than spacing.
+[[nodiscard]] std::expected<std::vector<double>, base::Error> straddle_interface(
+    std::vector<double> axis, double position, double spacing);
 
 }  // namespace NiTCAD::mesh

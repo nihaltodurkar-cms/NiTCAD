@@ -125,6 +125,24 @@ std::expected<Semiconductor, base::Error> Semiconductor::create(
     if (auto e = check_saturation("hole_saturation.", p.hole_saturation)) {
         return std::unexpected(std::move(*e));
     }
+    const struct {
+        std::string_view group, field;
+        double value;
+        Bound bound;
+    } unit15[] = {
+        {"", "radiative_cm3_s", p.radiative_cm3_s, non_negative},
+        {"ionization.", "donor_eV", p.ionization.donor_eV, non_negative},
+        {"ionization.", "acceptor_eV", p.ionization.acceptor_eV, non_negative},
+        {"ionization.", "donor_degeneracy", p.ionization.donor_degeneracy, positive},
+        {"ionization.", "acceptor_degeneracy", p.ionization.acceptor_degeneracy, positive},
+        {"richardson.", "electron", p.richardson.electron, non_negative},
+        {"richardson.", "hole", p.richardson.hole, non_negative},
+    };
+    for (const auto& c : unit15) {
+        if (auto e = check(c.group, c.field, c.value, c.bound)) {
+            return std::unexpected(std::move(*e));
+        }
+    }
     return Semiconductor{p};
 }
 
@@ -182,6 +200,44 @@ double conduction_band_dos(const Semiconductor& m, double temperature_K) {
 double valence_band_dos(const Semiconductor& m, double temperature_K) {
     detail::expect_temperature(temperature_K);
     return m.parameters().Nv300 * dos_factor(temperature_K);
+}
+
+std::expected<SemiconductorParameters, base::Error> algaas_parameters(double x,
+                                                                     double conduction_share) {
+    if (!(std::isfinite(x) && x >= 0.0 && x <= 0.45)) {
+        return std::unexpected(base::Error{
+            base::ErrorCode::invalid_input,
+            "AlGaAs mole fraction must be in [0, 0.45] (direct-gap regime)",
+            base::ErrorContext{.index = std::nullopt, .value = x}});
+    }
+    if (!(std::isfinite(conduction_share) && conduction_share >= 0.0 && conduction_share <= 1.0)) {
+        return std::unexpected(base::Error{
+            base::ErrorCode::invalid_input, "AlGaAs conduction-band share must be in [0, 1]",
+            base::ErrorContext{.index = std::nullopt, .value = conduction_share}});
+    }
+    SemiconductorParameters p = gallium_arsenide_parameters;
+    p.eps_r = 12.9 - 2.6 * x;
+    p.electron_affinity_eV = 4.07 - conduction_share * 1.247 * x;
+    p.Eg0_eV = 1.519 + 1.247 * x;
+    p.varshni_alpha_eV_per_K = 5.405e-4;
+    p.varshni_beta_K = 204.0;
+    p.Nc300 = 4.7e17 * (1.0 + 0.5 * x);
+    p.Nv300 = 7.0e18 * (1.0 - 0.3 * x);
+    p.electron_mobility.mu_max = 8500.0 - 5500.0 * x;
+    p.hole_mobility.mu_max = 400.0 - 150.0 * x;
+    p.radiative_cm3_s = 1.8e-10;
+    p.ionization.donor_eV = 0.0;
+    p.ionization.acceptor_eV = 0.0;
+    return p;
+}
+
+double intrinsic_level_depth_eV(const Semiconductor& m, double temperature_K) {
+    detail::expect_temperature(temperature_K);
+    const double T = temperature_K;
+    const double ln_dos = std::log(conduction_band_dos(m, T) / valence_band_dos(m, T));
+    const double conduction_to_intrinsic =
+        0.5 * band_gap_eV(m, T) + 0.5 * base::thermal_voltage(T) * ln_dos;
+    return m.parameters().electron_affinity_eV + conduction_to_intrinsic;
 }
 
 double intrinsic_density(const Semiconductor& m, double temperature_K) {

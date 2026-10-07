@@ -64,11 +64,17 @@ void material(Digest& d, const physics::SemiconductorParameters& p) {
         d.real(c.v_sat_cm_s);
         d.real(c.beta);
     }
+    d.real(p.radiative_cm3_s);
+    for (const double v : {p.ionization.donor_eV, p.ionization.acceptor_eV,
+                           p.ionization.donor_degeneracy, p.ionization.acceptor_degeneracy,
+                           p.richardson.electron, p.richardson.hole}) {
+        d.real(v);
+    }
 }
 
 // The options the sweep reads: the quasi-static sweep has no continuity equations, so the
-// mobility, SRH, Auger and field-mobility switches do not apply to it and are left out (of the
-// digest too).
+// mobility, SRH, Auger, field-mobility and radiative switches do not apply to it and are left out
+// (of the digest too).
 std::vector<std::pair<std::string, double>> settings(const BiasOptions& o) {
     const bool transport = o.equations == Equations::drift_diffusion;
     std::vector<std::pair<std::string, double>> s{
@@ -83,6 +89,7 @@ std::vector<std::pair<std::string, double>> settings(const BiasOptions& o) {
         {"linear.min_pivot_ratio", o.linear.min_pivot_ratio},
         {"models.bgn", o.models.bgn ? 1.0 : 0.0},
         {"models.fermi_dirac", o.models.fermi_dirac ? 1.0 : 0.0},
+        {"models.incomplete_ionization", o.models.incomplete_ionization ? 1.0 : 0.0},
         {"equations", static_cast<double>(o.equations)},
     };
     if (transport) {
@@ -90,6 +97,7 @@ std::vector<std::pair<std::string, double>> settings(const BiasOptions& o) {
         s.emplace_back("models.srh", o.models.srh ? 1.0 : 0.0);
         s.emplace_back("models.auger", o.models.auger ? 1.0 : 0.0);
         s.emplace_back("models.field_mobility", o.models.field_mobility ? 1.0 : 0.0);
+        s.emplace_back("models.radiative", o.models.radiative ? 1.0 : 0.0);
     }
     if (o.Ns_override) s.emplace_back("scaling.Ns_override", *o.Ns_override);
     return s;
@@ -142,6 +150,15 @@ results::RunRecord make_run_record(const device::Device& device, const BiasOptio
             }
             // A polysilicon electrode takes its work function from the semiconductor.
             if (c.gate.electrode == device::GateElectrode::metal) d.real(c.gate.work_function_eV);
+        }
+    }
+    // Interface transport acts on the continuity equations only.
+    if (options.equations == Equations::drift_diffusion) {
+        d.integer(device.interfaces().size());
+        for (const device::Interface& f : device.interfaces()) {
+            d.text(f.region_a);
+            d.text(f.region_b);
+            d.integer(static_cast<std::uint64_t>(f.transport));
         }
     }
     const auto named = settings(options);

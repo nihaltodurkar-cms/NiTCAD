@@ -23,7 +23,7 @@ struct EquilibriumOptions {
     NewtonOptions newton;
     linalg::SolverConfig linear;
     std::optional<double> Ns_override;  // see assemble::make_scaling
-    assemble::PhysicsModels models;     // only bgn and fermi_dirac matter at equilibrium
+    assemble::PhysicsModels models;     // bgn, fermi_dirac and incomplete_ionization matter
 };
 
 // Errors: those of assemble::make_scaling, assemble::EquilibriumPoisson::create,

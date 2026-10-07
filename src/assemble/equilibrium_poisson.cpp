@@ -23,7 +23,12 @@ std::expected<EquilibriumPoisson, base::Error> EquilibriumPoisson::create(
     p.n_ie_ = std::move(scaled->n_ie);
     p.log_dos_n_ = std::move(scaled->log_dos_n);
     p.log_dos_p_ = std::move(scaled->log_dos_p);
+    p.band_shift_ = std::move(scaled->band_shift);
+    p.donors_ = std::move(scaled->donors);
+    p.acceptors_ = std::move(scaled->acceptors);
+    p.levels_ = std::move(scaled->levels);
     p.fermi_dirac_ = models.fermi_dirac;
+    p.ionization_ = models.incomplete_ionization;
     p.psi0_.assign(n, 0.0);
     p.contact_.assign(n, 0);
     p.gates_ = std::move(scaled->gates);
@@ -32,8 +37,9 @@ std::expected<EquilibriumPoisson, base::Error> EquilibriumPoisson::create(
         if (scaled->contact[i] < 0) continue;
         p.contact_[i] = 1;
         const physics::NeutralEquilibrium e = detail::neutral_equilibrium(
-            p.fermi_dirac_, p.doping_[i], p.n_ie_[i], p.log_dos_n_[i], p.log_dos_p_[i]);
-        p.psi0_[i] = ohmic_contact_value(e, 0.0).psi;
+            p.fermi_dirac_, p.ionization_, p.doping_[i], p.donors_[i], p.acceptors_[i], p.n_ie_[i],
+            p.log_dos_n_[i], p.log_dos_p_[i], p.levels_[i]);
+        p.psi0_[i] = ohmic_contact_value(e, 0.0).psi - p.band_shift_[i];
     }
 
     std::vector<linalg::Triplet> triplets;
@@ -85,15 +91,27 @@ void EquilibriumPoisson::residual_into(std::span<const double> psi, std::span<do
             residual[i] = psi[i] - psi0_[i];
             continue;
         }
+        const double eta = psi[i] + band_shift_[i];
         const physics::DensityResult carriers_n =
-            detail::density(fermi_dirac_, n_ie_[i], log_dos_n_[i], psi[i]);
+            detail::density(fermi_dirac_, n_ie_[i], log_dos_n_[i], eta);
         const physics::DensityResult carriers_p =
-            detail::density(fermi_dirac_, n_ie_[i], log_dos_p_[i], -psi[i]);
-        residual[i] = -volume_[i] * (carriers_n.density - carriers_p.density - doping_[i]);
+            detail::density(fermi_dirac_, n_ie_[i], log_dos_p_[i], -eta);
         // d/dpsi of the charge term, onto the diagonal (dn/dpsi = n.d_eta, dp/dpsi = -p.d_eta;
-        // Boltzmann: n and -p).
-        if (!jacobian_values.empty()) {
-            jacobian_values[diag_[i]] = -volume_[i] * (carriers_n.d_eta + carriers_p.d_eta);
+        // Boltzmann: n and -p; the ionized doping's: d_eta_c - d_eta_v).
+        if (ionization_) {
+            const detail::IonizedCharge c = detail::ionized_charge(
+                donors_[i], acceptors_[i], eta - log_dos_n_[i], -eta - log_dos_p_[i], levels_[i]);
+            residual[i] = -volume_[i] * (carriers_n.density - carriers_p.density - c.value);
+            if (!jacobian_values.empty()) {
+                jacobian_values[diag_[i]] =
+                    -volume_[i] *
+                    (carriers_n.d_eta + carriers_p.d_eta - c.d_eta_c + c.d_eta_v);
+            }
+        } else {
+            residual[i] = -volume_[i] * (carriers_n.density - carriers_p.density - doping_[i]);
+            if (!jacobian_values.empty()) {
+                jacobian_values[diag_[i]] = -volume_[i] * (carriers_n.d_eta + carriers_p.d_eta);
+            }
         }
         if (gates_.on_gate(i)) {
             residual[i] += gates_.row_term(i, psi[i]);
@@ -136,9 +154,29 @@ void EquilibriumPoisson::carriers(std::span<const double> psi, std::span<double>
                                   std::span<double> p) const {
     NITCAD_EXPECTS(psi.size() == unknowns() && n.size() == unknowns() && p.size() == unknowns());
     for (std::size_t i = 0; i < unknowns(); ++i) {
-        n[i] = detail::density(fermi_dirac_, n_ie_[i], log_dos_n_[i], psi[i]).density;
-        p[i] = detail::density(fermi_dirac_, n_ie_[i], log_dos_p_[i], -psi[i]).density;
+        const double eta = psi[i] + band_shift_[i];
+        n[i] = detail::density(fermi_dirac_, n_ie_[i], log_dos_n_[i], eta).density;
+        p[i] = detail::density(fermi_dirac_, n_ie_[i], log_dos_p_[i], -eta).density;
     }
+}
+
+BandEdges EquilibriumPoisson::band_edges(std::span<const double> psi) const {
+    NITCAD_EXPECTS(psi.size() == unknowns());
+    const std::size_t n = unknowns();
+    std::vector<double> carriers_n(n), carriers_p(n);
+    carriers(psi, carriers_n, carriers_p);
+    BandEdges b{std::vector<double>(n), std::vector<double>(n), std::vector<double>(n),
+                std::vector<double>(n)};
+    for (std::size_t i = 0; i < n; ++i) {
+        const detail::NodeBands e =
+            detail::node_bands(fermi_dirac_, n_ie_[i], log_dos_n_[i], log_dos_p_[i],
+                               psi[i] + band_shift_[i], carriers_n[i], carriers_p[i]);
+        b.conduction[i] = e.conduction;
+        b.valence[i] = e.valence;
+        b.electron_fermi[i] = e.electron_fermi;
+        b.hole_fermi[i] = e.hole_fermi;
+    }
+    return b;
 }
 
 std::vector<double> EquilibriumPoisson::charge_neutral_potential() const {
@@ -146,8 +184,11 @@ std::vector<double> EquilibriumPoisson::charge_neutral_potential() const {
     for (std::size_t i = 0; i < psi.size(); ++i) {
         psi[i] = contact_[i] != 0
                      ? psi0_[i]
-                     : detail::neutral_equilibrium(fermi_dirac_, doping_[i], n_ie_[i],
-                                                   log_dos_n_[i], log_dos_p_[i]).eta;
+                     : detail::neutral_equilibrium(fermi_dirac_, ionization_, doping_[i],
+                                                   donors_[i], acceptors_[i], n_ie_[i],
+                                                   log_dos_n_[i], log_dos_p_[i], levels_[i])
+                               .eta -
+                           band_shift_[i];
     }
     return psi;
 }

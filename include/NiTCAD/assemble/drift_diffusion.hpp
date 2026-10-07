@@ -18,9 +18,24 @@
 // the edge's current, as in the legacy). The Jacobian includes d D_e / d psi, so Newton stays
 // quadratic (OLD / NEW / REASON in ARCHITECTURE.md 6.2, Unit 13: the legacy averaged |E| to the
 // nodes, applied Canali per node, took the harmonic mean, and lagged it).
-// The driving term of the fluxes is delta_n = psi_b - psi_a + ln(n_ie,b / n_ie,a) for electrons and
-// delta_p = psi_b - psi_a - ln(n_ie,b / n_ie,a) for holes (legacy delta, delta_p): with band-gap
-// narrowing n_ie varies in space, and only these make the equilibrium carry no current.
+// The driving term of the fluxes is delta_n = psi_b - psi_a + s_b - s_a + ln(n_ie,b / n_ie,a) for
+// electrons and delta_p = psi_b - psi_a + s_b - s_a - ln(n_ie,b / n_ie,a) for holes (legacy delta,
+// delta_p): with band-gap narrowing n_ie varies in space, and across a heterointerface the band
+// shift s (EquilibriumPoisson; Unit 15) steps, and only these make the equilibrium carry no
+// current.
+// The edge mobility is the harmonic mean of the two nodes' also across an interface (legacy); with
+// field mobility, on an edge between two materials it is the harmonic mean of each end's Canali
+// mobility at the edge's field (each with its own material's parameters), on other edges the
+// Canali mobility of the harmonic mean, as Unit 13.
+// On the edges joining the regions of an interface the device declares thermionic_emission
+// (device::Interface) the fluxes are the thermionic-emission ones of thermionic_flux.hpp instead,
+// with the same driving terms, K the harmonic mean of the ends' emission velocities
+// (physics::emission_velocity_cm_s of each material) times the scaled interface area, and N the
+// ends' Nc (electrons) or Nv (holes); no mobility enters them. Undeclared material steps (a graded
+// composition) stay drift-diffusion.
+// With models.incomplete_ionization the Poisson row's doping is N_D+ - N_A- at the electrons' and
+// holes' own band reduced energies (from n and p), with its n and p derivatives; with
+// models.radiative, R gains B (n p - E) (physical densities, as Auger).
 // With models.fermi_dirac (Unit 14, the legacy nu-factor scheme) delta_n gains
 // ln gamma_n,b - ln gamma_n,a and delta_p loses ln gamma_p,b - ln gamma_p,a, each node's degeneracy
 // factor taken from its own density (physics::fermi_dirac_degeneracy). Then n_b / n_a = e^delta_n
@@ -28,7 +43,8 @@
 // mu n grad(phi_n): the generalized Einstein relation D / mu = (V_T n / (dn / d eta)) is implicit.
 // ln gamma depends on the density, so the Jacobian's density columns gain
 // d flux / d delta times d ln gamma / d density.
-// Contact rows (ohmic): psi - psi0, n - n0, p - p0, from ohmic_contact_value at the contact's bias.
+// Contact rows (ohmic): psi - psi0, n - n0, p - p0, from ohmic_contact_value at the contact's bias
+// (psi0 less s).
 // A gate node keeps its three box rows; its Poisson row gains the oxide term of gate.hpp at the
 // gate's bias, G_i (psi_G,i - psi_i) + S_i, and its continuity rows no boundary flux (legacy
 // Device2D GateBC: Robin on psi only).
@@ -51,6 +67,7 @@
 #include <utility>
 #include <vector>
 
+#include "NiTCAD/assemble/band_edges.hpp"
 #include "NiTCAD/assemble/gate.hpp"
 #include "NiTCAD/assemble/models.hpp"
 #include "NiTCAD/assemble/sg_flux.hpp"
@@ -58,6 +75,7 @@
 #include "NiTCAD/base/error.hpp"
 #include "NiTCAD/device/device.hpp"
 #include "NiTCAD/linalg/sparse_matrix.hpp"
+#include "NiTCAD/physics/ionization.hpp"
 #include "NiTCAD/physics/semiconductor.hpp"
 #include "NiTCAD/physics/statistics.hpp"
 
@@ -65,7 +83,7 @@ namespace NiTCAD::assemble {
 
 class DriftDiffusion {
 public:
-    // Errors: those of EquilibriumPoisson::create (scaling temperature, heterojunctions).
+    // Errors: those of EquilibriumPoisson::create (scaling temperature).
     [[nodiscard]] static std::expected<DriftDiffusion, base::Error> create(
         const device::Device& device, const Scaling& scaling,
         const PhysicsModels& models = {});
@@ -80,8 +98,9 @@ public:
     [[nodiscard]] std::expected<void, base::Error> set_bias(std::span<const double> bias_V);
 
     // Scaled state of every node in equilibrium at the scaled potential psi under the selected
-    // statistics (Boltzmann: n = n_ie e^psi, p = n_ie e^-psi), with the ohmic contact nodes set to
-    // their Dirichlet values. Precondition (NITCAD_EXPECTS): psi has node_count() entries.
+    // statistics (Boltzmann: n = n_ie e^(psi + s), p = n_ie e^-(psi + s)), with the ohmic contact
+    // nodes set to their Dirichlet values. Precondition (NITCAD_EXPECTS): psi has node_count()
+    // entries.
     [[nodiscard]] std::vector<double> state_from_potential(std::span<const double> psi) const;
     // Sets the ohmic contact nodes of a state to their Dirichlet values.
     void stamp_contacts(std::span<double> x) const;
@@ -106,6 +125,16 @@ public:
     // the contact into the device), in device.contacts() order; zero for a gate. Physical value:
     // times J0 L_D^(D-1), in A / cm^(3-D) (A/cm^2 in 1D, A/cm in 2D, A in 3D).
     [[nodiscard]] std::vector<double> terminal_currents(std::span<const double> x) const;
+    // Per ohmic contact, a bound on how far the current through any cut of the device can differ
+    // from terminal_currents (same scale): the sum over the nodes of the total-current residual
+    // |F_n + F_p| plus 8 eps times the magnitudes of the terms that cancel in it (the one-sided
+    // flux terms, density times its flux coefficient, and the recombination terms). The same
+    // value for every ohmic contact; zero for a gate. A current below it is not resolved by the
+    // (psi, n, p) state.
+    [[nodiscard]] std::vector<double> terminal_current_resolution(std::span<const double> x) const;
+    // The band diagram at state x (band_edges.hpp). Precondition (NITCAD_EXPECTS): x has
+    // unknowns() entries and positive densities.
+    [[nodiscard]] BandEdges band_edges(std::span<const double> x) const;
     // Scaled charge on each gate electrode, the sum over its nodes of G_i (psi_G,i - psi_i)
     // (gate.hpp), in device.contacts() order; zero for an ohmic contact. Physical value: times
     // q Ns L_D^D, in C / cm^(3-D).
@@ -120,8 +149,18 @@ private:
         double an, ap;      // electron and hole SG edge factors (low field)
         double mu_n, mu_p;  // low-field edge mobilities (harmonic means) [cm^2/(V s)]
         double field;       // [V/cm] per unit |psi_b - psi_a|: V_T / length
-        physics::CanaliParameters sat_n, sat_p;  // of the edge's material
-        double dln;         // ln(n_ie,b / n_ie,a)
+        physics::CanaliParameters sat_n, sat_p;  // of node a's material
+        // An edge between two materials: the ends' low-field mobilities and node b's Canali
+        // parameters (field mobility takes the harmonic mean of the ends' Canali mobilities).
+        bool mixed;
+        double mu_n_a, mu_n_b, mu_p_a, mu_p_b;
+        physics::CanaliParameters sat_n_b, sat_p_b;
+        double shift_n;     // s_b - s_a + ln(n_ie,b / n_ie,a): delta_n = psi_b - psi_a + shift_n
+        double shift_p;     // s_b - s_a - ln(n_ie,b / n_ie,a)
+        // Thermionic emission (an interface edge with the model on): factors K and, per band,
+        // ln(N_b / N_a) and N_a / N_b.
+        bool thermionic;
+        double te_kn, te_kp, te_log_nc, te_ratio_nc, te_log_nv, te_ratio_nv;
         // Positions in the Jacobian values: row a with columns of b, row b with columns of a,
         // in the order (psi, psi), (n, psi), (n, n), (p, psi), (p, p).
         std::size_t ab[5], ba[5];
@@ -145,6 +184,10 @@ private:
 
     std::vector<double> volume_, doping_, n_ie_, tau_n_, tau_p_, auger_n_, auger_p_;
     std::vector<double> log_dos_n_, log_dos_p_;  // ln(Nc / n_ie), ln(Nv / n_ie)
+    std::vector<double> band_shift_;             // s
+    std::vector<double> donors_, acceptors_;     // N_D / Ns, N_A / Ns
+    std::vector<physics::DopantLevels> levels_;  // dopant levels in units of kT
+    std::vector<double> radiative_;              // B [cm^3/s]
     std::vector<std::int32_t> contact_;   // ohmic contact index per node, or -1
     GateNodes gates_;
     std::vector<device::ContactKind> kinds_;  // per contact
@@ -159,6 +202,8 @@ private:
     bool auger_ = true;
     bool field_mobility_ = false;
     bool fermi_dirac_ = false;
+    bool ionization_ = false;
+    bool radiative_on_ = true;
     linalg::SparseMatrix pattern_;
 };
 

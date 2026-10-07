@@ -28,22 +28,6 @@ std::expected<ScaledDevice, base::Error> make_scaled_device(const device::Device
         return std::unexpected(invalid("scaling temperature differs from the device's"));
     }
     const mesh::Mesh& m = device.mesh();
-    const auto regions = device.regions();
-    const auto node_region = device.node_region();
-    const auto region_of = [&](mesh::NodeId v) {
-        return static_cast<std::size_t>(node_region[static_cast<std::size_t>(v)]);
-    };
-    for (std::size_t e = 0; e < m.edges().size(); ++e) {
-        const std::size_t ra = region_of(m.edges()[e].first);
-        const std::size_t rb = region_of(m.edges()[e].second);
-        if (ra != rb &&
-            !(regions[ra].material.parameters() == regions[rb].material.parameters())) {
-            return std::unexpected(invalid(
-                "heterojunction between regions '" + regions[ra].name + "' and '" +
-                    regions[rb].name + "': band offsets and permittivity steps are deferred",
-                e));
-        }
-    }
 
     const std::size_t n = m.node_count();
     const int D = m.dimension();
@@ -53,23 +37,37 @@ std::expected<ScaledDevice, base::Error> make_scaled_device(const device::Device
     ScaledDevice s;
     s.volume.resize(n);
     s.doping.resize(n);
+    s.donors.resize(n);
+    s.acceptors.resize(n);
+    s.levels.resize(n);
+    s.radiative.resize(n);
     s.n_ie.resize(n);
     s.log_dos_n.resize(n);
     s.log_dos_p.resize(n);
+    s.band_shift.resize(n);
     s.contact.assign(n, -1);
+    const double T = scaling.temperature_K;
+    const double reference_depth = physics::intrinsic_level_depth_eV(device.material(0), T);
     for (std::size_t i = 0; i < n; ++i) {
         const auto node = static_cast<mesh::NodeId>(i);
         s.volume[i] = m.volumes()[i] / volume_scale;
         s.doping[i] = device.net_doping(node) / scaling.Ns;
+        s.donors[i] = device.donors()[i] / scaling.Ns;
+        s.acceptors[i] = device.acceptors()[i] / scaling.Ns;
         const physics::Semiconductor& material = device.material(node);
         const double n_ie =
             models.bgn ? physics::effective_intrinsic_density(
                              material, device.total_impurity(node), scaling.temperature_K)
                        : physics::intrinsic_density(material, scaling.temperature_K);
         s.n_ie[i] = n_ie / scaling.Ns;
-        const double T = scaling.temperature_K;
         s.log_dos_n[i] = std::log(physics::conduction_band_dos(material, T) / n_ie);
         s.log_dos_p[i] = std::log(physics::valence_band_dos(material, T) / n_ie);
+        const physics::IonizationParameters& ion = material.parameters().ionization;
+        s.levels[i] = {ion.donor_eV / scaling.V_T, ion.acceptor_eV / scaling.V_T,
+                       ion.donor_degeneracy, ion.acceptor_degeneracy};
+        s.radiative[i] = material.parameters().radiative_cm3_s;
+        const double depth = physics::intrinsic_level_depth_eV(material, T);
+        s.band_shift[i] = (depth - reference_depth) / scaling.V_T;  // exactly 0 for one material
     }
     std::vector<std::int32_t> gate(n, -1);
     std::vector<GateTerm> gate_terms(n, GateTerm{0.0, 0.0, 0.0});
@@ -93,17 +91,28 @@ std::expected<ScaledDevice, base::Error> make_scaled_device(const device::Device
             gate[i] = static_cast<std::int32_t>(c);
             gate_terms[i] =
                 gate_term(contact.gate, device.material(v), patch->areas[k], D, scaling);
+            // The electrode potential in the equations' reference: psi_G - s (exact for s = 0).
+            gate_terms[i].offset += s.band_shift[i];
         }
     }
     s.gates = GateNodes(std::move(gate), std::move(gate_terms), scaling.V_T);
     s.edges.reserve(m.edges().size());
+    const auto node_region = device.node_region();
     for (const mesh::Edge& edge : m.edges()) {
-        // Both ends are in the same material (heterojunctions are rejected above).
-        const double eps_r = device.material(edge.first).parameters().eps_r;
+        const physics::SemiconductorParameters& a = device.material(edge.first).parameters();
+        const physics::SemiconductorParameters& b = device.material(edge.second).parameters();
+        const device::RegionId ra = node_region[static_cast<std::size_t>(edge.first)];
+        const device::RegionId rb = node_region[static_cast<std::size_t>(edge.second)];
+        const bool thermionic =
+            ra != rb &&
+            device.transport(ra, rb) == device::InterfaceTransport::thermionic_emission;
+        const double eta = permittivity_ratio(a.eps_r, scaling);
+        const double etb = permittivity_ratio(b.eps_r, scaling);
         s.edges.push_back({static_cast<std::size_t>(edge.first),
                            static_cast<std::size_t>(edge.second),
                            edge.coupling_area / edge.length / coupling_scale, edge.length,
-                           permittivity_ratio(eps_r, scaling)});
+                           eta == etb ? eta : 2.0 * eta * etb / (eta + etb), !(a == b),
+                           thermionic});
     }
     return s;
 }

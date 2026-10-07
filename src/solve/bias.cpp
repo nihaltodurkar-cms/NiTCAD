@@ -134,7 +134,10 @@ std::expected<results::Sweep, base::Error> sweep_bias(const device::Device& devi
                            return ok;
                        }
                        point.fields = detail::equilibrium_fields(*system, psi, *scaling);
+                       point.bands =
+                           detail::band_diagram(system->band_edges(psi), scaling->V_T);
                        point.terminal_current.assign(contacts.size(), 0.0);
+                       point.terminal_current_resolution.assign(contacts.size(), 0.0);
                        point.gate_charge = system->gate_charges(psi);
                        for (double& Q : point.gate_charge) Q *= charge_scale;
                        point.edge_current_n.assign(edges, 0.0);
@@ -191,8 +194,11 @@ std::expected<results::Sweep, base::Error> sweep_bias(const device::Device& devi
                        point.fields.n_cm3[i] = x[3 * i + 1] * scaling->Ns;
                        point.fields.p_cm3[i] = x[3 * i + 2] * scaling->Ns;
                    }
+                   point.bands = detail::band_diagram(system->band_edges(x), scaling->V_T);
                    point.terminal_current = system->terminal_currents(x);
                    for (double& I : point.terminal_current) I *= current_scale;
+                   point.terminal_current_resolution = system->terminal_current_resolution(x);
+                   for (double& I : point.terminal_current_resolution) I *= current_scale;
                    point.gate_charge = system->gate_charges(x);
                    for (double& Q : point.gate_charge) Q *= charge_scale;
                    for (const auto& [jn, jp] : system->edge_currents(x)) {

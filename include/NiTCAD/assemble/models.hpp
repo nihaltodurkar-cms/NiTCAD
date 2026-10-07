@@ -22,6 +22,15 @@ struct PhysicsModels {
     // term of the Scharfetter-Gummel driving force, and the equilibrium product of SRH and Auger.
     // Off by default (Boltzmann), as the legacy fd flag.
     bool fermi_dirac = false;
+    // Radiative recombination (physics::radiative_recombination) with each material's coefficient
+    // (drift-diffusion only). On by default: silicon's coefficient is 0, so silicon results do not
+    // change (Unit 15).
+    bool radiative = true;
+    // Incomplete dopant ionization (physics/ionization.hpp) with each material's levels: the
+    // ionized doping in Poisson, the contacts and the neutral guess. Off by default, as the legacy
+    // incomplete_ion flag. Thermionic emission is not a switch here: it is chosen per interface
+    // (device::Interface; Unit 15).
+    bool incomplete_ionization = false;
 };
 
 }  // namespace NiTCAD::assemble
