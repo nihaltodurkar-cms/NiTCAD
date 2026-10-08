@@ -85,8 +85,18 @@
 // for the same BDF difference, and Gauss's law makes the charges of the contacts
 // (contact_charges) balance that charge, so the total currents, conduction plus the BDF difference
 // of the contact charges, sum to zero.
+//
+// Small signal (Unit 22): about a steady state x0, a perturbation dx e^(s t) of the contact biases
+// dV e^(s t) obeys (J + s C + T(s)) dx = -dF/dV dV, with J the steady Jacobian, C the storage
+// term's Jacobian (the electron row -V_i dS_n/dn, the hole row +V_i dS_p/dp, s in units of
+// 1 / t0) and T(s) the interface traps' terms with their occupancy's dynamics
+// (InterfaceSmallSignal), in place of the steady ones. A time step's Jacobian with rate r, from
+// the history x0 and its steady trap occupancies, is this matrix at s = r: backward Euler is exact
+// for the exponential e^(s t) when h = 1 / s. The total current of a contact is its conduction
+// current plus s times its charge.
 #pragma once
 
+#include <complex>
 #include <cstddef>
 #include <cstdint>
 #include <expected>
@@ -177,6 +187,30 @@ public:
     [[nodiscard]] std::vector<double> conduction_currents(std::span<const double> x,
                                                           const TimeStep& step) const;
 
+    // Small-signal analysis (Unit 22; see the header comment). s is the Laplace variable in units
+    // of 1 / time_scale() (s = i omega t0 for a frequency omega).
+    // The pattern of small_signal_matrix: make_jacobian()'s, complex.
+    [[nodiscard]] linalg::ComplexSparseMatrix make_small_signal_matrix() const;
+    // J + s C + T(s) at a steady state x. Preconditions (NITCAD_EXPECTS): x has unknowns() entries;
+    // a has the pattern of make_small_signal_matrix().
+    void small_signal_matrix(std::span<const double> x, std::complex<double> s,
+                             linalg::ComplexSparseMatrix& a) const;
+    // dF / dV of contact c, per volt (the residual's dependence on its bias). Precondition
+    // (NITCAD_EXPECTS): c < contact_count().
+    [[nodiscard]] std::vector<double> bias_derivative(std::size_t contact) const;
+    // The small-signal total current entering through a contact, conduction plus s times its
+    // charge (conduction_currents and contact_charges, linearized about the steady state x):
+    //     dI = sum_k values[k] dx[columns[k]] + bias dV,
+    // dV the contact's own bias in V (a gate's charge depends on it directly). Scaled as
+    // terminal_currents; one row per contact, in device.contacts() order.
+    struct CurrentRow {
+        std::vector<std::size_t> columns;
+        std::vector<std::complex<double>> values;
+        std::complex<double> bias;
+    };
+    [[nodiscard]] std::vector<CurrentRow> small_signal_currents(std::span<const double> x,
+                                                                std::complex<double> s) const;
+
     // Newton hooks (see the header comment).
     [[nodiscard]] double update_size(std::span<const double> x,
                                      std::span<const double> dx) const;
@@ -245,8 +279,10 @@ private:
         physics::Degeneracy n, p;
     };
 
+    // Without `interfaces` the interface edges' terms are left out (small_signal_matrix adds its
+    // own).
     void assemble(std::span<const double> x, std::span<double> residual,
-                  std::span<double> values, const TimeStep* step) const;
+                  std::span<double> values, const TimeStep* step, bool interfaces = true) const;
 
     // The storage of a semiconductor node and its derivatives d S_n / dn, d S_p / dp.
     struct NodeStorage {

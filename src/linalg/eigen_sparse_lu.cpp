@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <charconv>
 #include <cmath>
+#include <complex>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
@@ -23,7 +24,17 @@ static_assert(EIGEN_WORLD_VERSION == 3 && EIGEN_MAJOR_VERSION == 5 && EIGEN_MINO
 
 namespace NiTCAD::linalg::detail {
 
-std::expected<void, base::Error> SparseLuBackend::analyze(const SparseMatrix& a) {
+namespace {
+
+// A pivot as an error context value: itself when real, its modulus when complex.
+double reported(double v) noexcept { return v; }
+double reported(std::complex<double> v) noexcept { return std::abs(v); }
+
+}  // namespace
+
+template <MatrixScalar Scalar>
+std::expected<void, base::Error> SparseLuBackend<Scalar>::analyze(
+    const BasicSparseMatrix<Scalar>& a) {
     NITCAD_EXPECTS(a.rows() == a.cols() && a.rows() > 0);
     const auto n = static_cast<std::size_t>(a.cols());
     const std::span<const Index> row_offsets = a.row_offsets();
@@ -52,7 +63,7 @@ std::expected<void, base::Error> SparseLuBackend::analyze(const SparseMatrix& a)
             csr_to_csc_[k] = position;
         }
     }
-    std::fill(csc_.valuePtr(), csc_.valuePtr() + a.nonzeros(), 0.0);
+    std::fill(csc_.valuePtr(), csc_.valuePtr() + a.nonzeros(), Scalar{});
 
     // Eigen sizes COLAMD's workspace in Index (32-bit) arithmetic (Colamd::recommended), and when
     // COLAMD then fails, Ordering.h writes the permutation out of bounds before anything can
@@ -102,11 +113,12 @@ std::expected<void, base::Error> SparseLuBackend::analyze(const SparseMatrix& a)
     return {};
 }
 
-std::expected<PivotRatio, base::Error> SparseLuBackend::factorize(
-    std::span<const double> csr_values) {
+template <MatrixScalar Scalar>
+std::expected<PivotRatio, base::Error> SparseLuBackend<Scalar>::factorize(
+    std::span<const Scalar> csr_values) {
     NITCAD_EXPECTS(lu_.has_value());
     NITCAD_EXPECTS(csr_values.size() == csr_to_csc_.size());
-    double* const values = csc_.valuePtr();
+    Scalar* const values = csc_.valuePtr();
     for (std::size_t k = 0; k < csr_values.size(); ++k) {
         values[static_cast<std::size_t>(csr_to_csc_[k])] = csr_values[k];
     }
@@ -159,7 +171,7 @@ std::expected<PivotRatio, base::Error> SparseLuBackend::factorize(
                         base::ErrorContext{
                             .index = static_cast<std::size_t>(
                                 factored_to_original_[static_cast<std::size_t>(j)]),
-                            .value = it.value()}});
+                            .value = reported(it.value())}});
                 }
                 if (pivot < smallest) {
                     smallest = pivot;
@@ -173,13 +185,22 @@ std::expected<PivotRatio, base::Error> SparseLuBackend::factorize(
                       .column = static_cast<std::size_t>(factored_to_original_[smallest_at])};
 }
 
-void SparseLuBackend::solve(std::span<const double> b, std::span<double> x) {
+template <MatrixScalar Scalar>
+void SparseLuBackend<Scalar>::solve(std::span<const Scalar> b, std::span<Scalar> x) {
     NITCAD_EXPECTS(lu_.has_value());
     const auto n = static_cast<Eigen::Index>(csc_.rows());
     NITCAD_EXPECTS(b.size() == static_cast<std::size_t>(n) && x.size() == b.size());
-    const Eigen::Map<const Eigen::VectorXd> bv(b.data(), n);
-    Eigen::Map<Eigen::VectorXd> xv(x.data(), n);
+    using Vector = Eigen::Matrix<Scalar, Eigen::Dynamic, 1>;
+    const Eigen::Map<const Vector> bv(b.data(), n);
+    Eigen::Map<Vector> xv(x.data(), n);
     xv = lu_->solve(bv);
 }
+
+}  // namespace NiTCAD::linalg::detail
+
+namespace NiTCAD::linalg::detail {
+
+template class SparseLuBackend<double>;
+template class SparseLuBackend<std::complex<double>>;
 
 }  // namespace NiTCAD::linalg::detail

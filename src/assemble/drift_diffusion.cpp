@@ -374,7 +374,8 @@ InterfaceDrift DriftDiffusion::interface_at(std::size_t k, std::span<const doubl
 }
 
 void DriftDiffusion::assemble(std::span<const double> x, std::span<double> f,
-                              std::span<double> values, const TimeStep* step) const {
+                              std::span<double> values, const TimeStep* step,
+                              bool interfaces) const {
     NITCAD_EXPECTS(x.size() == unknowns() && f.size() == unknowns());
     NITCAD_EXPECTS(step == nullptr || (step->storage.size() == 2 * node_count() &&
                                        step->traps.size() == trap_slots()));
@@ -495,7 +496,7 @@ void DriftDiffusion::assemble(std::span<const double> x, std::span<double> f,
             }
         }
     }
-    for (std::size_t k = 0; k < interfaces_.edges().size(); ++k) {
+    for (std::size_t k = 0; interfaces && k < interfaces_.edges().size(); ++k) {
         const InterfaceEdge& v = interfaces_.edges()[k];
         const std::size_t o = v.insulator, s = v.semiconductor;
         const InterfaceDrift t = interface_at(k, x, step);
@@ -839,6 +840,162 @@ std::vector<double> DriftDiffusion::interface_trap_charges(std::span<const doubl
         q[interfaces_.edges()[k].interface] += interface_at(k, x, step).trapped;
     }
     return q;
+}
+
+linalg::ComplexSparseMatrix DriftDiffusion::make_small_signal_matrix() const {
+    std::vector<linalg::ComplexTriplet> t;
+    t.reserve(pattern_.nonzeros());
+    for (linalg::Index r = 0; r < pattern_.rows(); ++r) {
+        for (linalg::Index k = pattern_.row_offsets()[r]; k < pattern_.row_offsets()[r + 1]; ++k) {
+            t.push_back({r, pattern_.col_indices()[k], {}});
+        }
+    }
+    // The pattern was built from triplets already, so this cannot fail.
+    return *linalg::ComplexSparseMatrix::from_triplets(pattern_.rows(), pattern_.cols(), t);
+}
+
+void DriftDiffusion::small_signal_matrix(std::span<const double> x, std::complex<double> s,
+                                         linalg::ComplexSparseMatrix& a) const {
+    NITCAD_EXPECTS(x.size() == unknowns());
+    NITCAD_EXPECTS(a.rows() == pattern_.rows() &&
+                   std::ranges::equal(a.row_offsets(), pattern_.row_offsets()) &&
+                   std::ranges::equal(a.col_indices(), pattern_.col_indices()));
+    using Complex = std::complex<double>;
+    // The steady rows without the interface edges, then the storage and the interfaces' terms.
+    std::vector<double> f(unknowns()), real(pattern_.nonzeros(), 0.0);
+    assemble(x, f, real, nullptr, false);
+    const std::span<Complex> values = a.values();
+    for (std::size_t k = 0; k < real.size(); ++k) values[k] = real[k];
+    const auto at = [&](std::size_t node, std::size_t r, std::size_t c) -> Complex& {
+        return values[block_[9 * node + 3 * r + c]];
+    };
+    const std::vector<NodeDegeneracy> g = degeneracies(x);
+    for (std::size_t i = 0; i < node_count(); ++i) {
+        if (contact_[i] >= 0 || insulator_[i] != 0) continue;
+        const NodeStorage st = node_storage(i, x, g);
+        at(i, 1, 1) -= s * (volume_[i] * st.d_n);
+        at(i, 2, 2) += s * (volume_[i] * st.d_p);
+    }
+    // The traps' weight Ns / s_physical, s_physical = s / t0.
+    const Complex inv_weight = s / (rate_scale_ * Ns_);
+    for (std::size_t k = 0; k < interfaces_.edges().size(); ++k) {
+        const InterfaceEdge& v = interfaces_.edges()[k];
+        const std::size_t o = v.insulator, sn = v.semiconductor;
+        const InterfaceSmallSignal t = interfaces_.small_signal(
+            v, x[3 * o], x[3 * sn], x[3 * sn + 1], x[3 * sn + 2], statistics(sn), inv_weight);
+        // As assemble's interface terms.
+        const EdgeTerm& e = edges_[v.edge];
+        const bool o_first = e.a == o;
+        const std::size_t os = o_first ? e.ab[0] : e.ba[0];
+        const std::size_t so[3] = {o_first ? e.ba[0] : e.ab[0], o_first ? e.ba[1] : e.ab[1],
+                                   o_first ? e.ba[3] : e.ab[3]};
+        if (electrode_[o] < 0) {
+            at(o, 0, 0) += t.d_flux_insulator[0];
+            values[os] += t.d_flux_insulator[1];
+            values[interface_np_[k].first] += t.d_flux_insulator[2];
+            values[interface_np_[k].second] += t.d_flux_insulator[3];
+        }
+        if (contact_[sn] >= 0) continue;
+        values[so[0]] += t.d_flux_semiconductor[0];
+        values[so[1]] -= t.d_rate[0];
+        values[so[2]] += t.d_rate_p[0];
+        for (std::size_t c = 1; c < 4; ++c) {
+            at(sn, 0, c - 1) += t.d_flux_semiconductor[c];
+            at(sn, 1, c - 1) -= t.d_rate[c];
+            at(sn, 2, c - 1) += t.d_rate_p[c];
+        }
+    }
+}
+
+std::vector<double> DriftDiffusion::bias_derivative(std::size_t contact) const {
+    NITCAD_EXPECTS(contact < contact_count_);
+    const auto c = static_cast<std::int32_t>(contact);
+    std::vector<double> d(unknowns(), 0.0);
+    for (std::size_t i = 0; i < node_count(); ++i) {
+        // A Dirichlet row psi - psi0 with psi0 = V / V_T + const; a gate row G (psi_G - psi),
+        // psi_G = V / V_T - offset. An ohmic node's densities do not depend on the bias.
+        if (contact_[i] == c || electrode_[i] == c) {
+            d[3 * i] = -1.0 / V_T_;
+        } else if (gates_.on_gate(i) && gates_.contact(i) == contact) {
+            d[3 * i] = gates_.term(i).coupling / V_T_;
+        }
+    }
+    return d;
+}
+
+std::vector<DriftDiffusion::CurrentRow> DriftDiffusion::small_signal_currents(
+    std::span<const double> x, std::complex<double> s) const {
+    NITCAD_EXPECTS(x.size() == unknowns());
+    using Complex = std::complex<double>;
+    std::vector<std::vector<std::pair<std::size_t, Complex>>> terms(contact_count_);
+    std::vector<CurrentRow> rows(contact_count_);
+    const auto add = [&](std::int32_t c, std::size_t column, Complex value) {
+        if (c >= 0) terms[static_cast<std::size_t>(c)].emplace_back(column, value);
+    };
+    // Conduction (terminal_currents): the total flux on the edges leaving each ohmic contact.
+    const std::vector<NodeDegeneracy> g = degeneracies(x);
+    for (const EdgeTerm& e : edges_) {
+        const std::int32_t ca = contact_[e.a], cb = contact_[e.b];
+        if (ca == cb || !e.carriers) continue;
+        const auto [fn, fp] = edge_fluxes(e, x, g);
+        const std::pair<std::size_t, double> d[6] = {
+            {3 * e.a, fn.d_psi1 + fp.d_psi1}, {3 * e.b, fn.d_psi2 + fp.d_psi2},
+            {3 * e.a + 1, fn.d_c1},           {3 * e.b + 1, fn.d_c2},
+            {3 * e.a + 2, fp.d_c1},           {3 * e.b + 2, fp.d_c2}};
+        for (const auto& [column, value] : d) {
+            add(ca, column, value);
+            add(cb, column, -value);
+        }
+    }
+    // The traps of an interface edge on an ohmic node (conduction_currents): rate_p - rate; and
+    // the charge of a contact node on an interface edge: minus its half-edge flux.
+    const auto owner = [&](std::size_t i) {
+        return contact_[i] >= 0 ? contact_[i] : electrode_[i];
+    };
+    const Complex inv_weight = s / (rate_scale_ * Ns_);
+    for (std::size_t k = 0; k < interfaces_.edges().size(); ++k) {
+        const InterfaceEdge& v = interfaces_.edges()[k];
+        const std::size_t o = v.insulator, sn = v.semiconductor;
+        const std::int32_t ci = owner(o), cs = owner(sn);
+        if (ci < 0 && cs < 0) continue;
+        const InterfaceSmallSignal t = interfaces_.small_signal(
+            v, x[3 * o], x[3 * sn], x[3 * sn + 1], x[3 * sn + 2], statistics(sn), inv_weight);
+        const std::size_t columns[4] = {3 * o, 3 * sn, 3 * sn + 1, 3 * sn + 2};
+        for (std::size_t c = 0; c < 4; ++c) {
+            add(contact_[sn], columns[c], t.d_rate_p[c] - t.d_rate[c]);
+            add(ci, columns[c], -s * t.d_flux_insulator[c]);
+            add(cs, columns[c], -s * t.d_flux_semiconductor[c]);
+        }
+    }
+    // Displacement: s times the contact charges (contact_charges).
+    for (std::size_t i = 0; i < node_count(); ++i) {
+        if (!gates_.on_gate(i)) continue;
+        const std::size_t c = gates_.contact(i);
+        const double G = gates_.term(i).coupling;
+        terms[c].emplace_back(3 * i, -s * G);
+        rows[c].bias += s * (G / V_T_);
+    }
+    for (const EdgeTerm& e : edges_) {
+        const std::int32_t ca = owner(e.a), cb = owner(e.b);
+        if (ca == cb || e.charged) continue;
+        add(ca, 3 * e.a, s * e.c);
+        add(ca, 3 * e.b, -s * e.c);
+        add(cb, 3 * e.a, -s * e.c);
+        add(cb, 3 * e.b, s * e.c);
+    }
+    // Merge each row's terms by column, in increasing column order.
+    for (std::size_t c = 0; c < contact_count_; ++c) {
+        std::ranges::stable_sort(terms[c], {}, &std::pair<std::size_t, Complex>::first);
+        for (const auto& [column, value] : terms[c]) {
+            if (!rows[c].columns.empty() && rows[c].columns.back() == column) {
+                rows[c].values.back() += value;
+            } else {
+                rows[c].columns.push_back(column);
+                rows[c].values.push_back(value);
+            }
+        }
+    }
+    return rows;
 }
 
 InterfaceStatistics DriftDiffusion::statistics(std::size_t node) const noexcept {

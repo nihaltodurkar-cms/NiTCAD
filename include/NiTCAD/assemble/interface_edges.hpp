@@ -46,6 +46,7 @@
 // cp (p_I f - p1 (1 - f)), each summed over N_k (InterfaceDrift::rate and rate_p).
 #pragma once
 
+#include <complex>
 #include <cstddef>
 #include <span>
 #include <vector>
@@ -99,6 +100,16 @@ struct TrapStep {
     std::span<const double> history;
 };
 
+// The small-signal interface of an edge (Unit 22): the partials of InterfaceDrift's fluxes and
+// rates, in the same columns, for a perturbation e^(s t) about a steady state. With the traps'
+// dynamics df/dt = occ - f D the occupancy follows at (s / Ns + D) df = d occ - f d D, so the
+// partials are complex and depend on s; at s = 0 they are InterfaceDrift's, and at a real s they
+// are those of a backward-Euler step with rate s from the steady state (weight Ns / s, history
+// the steady occupancy).
+struct InterfaceSmallSignal {
+    std::complex<double> d_flux_insulator[4], d_flux_semiconductor[4], d_rate[4], d_rate_p[4];
+};
+
 // The semiconductor node's statistics: Fermi-Dirac or Boltzmann, scaled n_ie, ln(Nc / n_ie) and
 // ln(Nv / n_ie), and its band shift s.
 struct InterfaceStatistics {
@@ -131,6 +142,13 @@ public:
     void occupancies(const InterfaceEdge& e, double psi_insulator, double psi_semiconductor,
                      double n, double p, const InterfaceStatistics& s, const TrapStep* step,
                      std::span<double> f) const;
+    // The small-signal partials about the steady state at these end values (see
+    // InterfaceSmallSignal), for s / Ns = inv_weight in the units of 1 / weight (cm^3/s times
+    // scaled densities); inv_weight = 0 is the steady state.
+    [[nodiscard]] InterfaceSmallSignal small_signal(const InterfaceEdge& e, double psi_insulator,
+                                                    double psi_semiconductor, double n, double p,
+                                                    const InterfaceStatistics& s,
+                                                    std::complex<double> inv_weight) const;
 
     // Trap slots: one per (interface edge, level of its interface); edge k's slots start at
     // slot_offset(k).
@@ -148,6 +166,14 @@ private:
     [[nodiscard]] Charge charge_at(const InterfaceEdge& e, double n, double p,
                                    const InterfaceStatistics& s, const TrapStep* step = nullptr,
                                    std::span<double> f = {}) const;
+    // The small-signal partials of Charge's value and rates (the values themselves are the
+    // steady state's), for s / Ns = inv_weight.
+    struct ChargeSmallSignal {
+        std::complex<double> d_n, d_p, rate_n, rate_p, rate_hn, rate_hp;
+    };
+    [[nodiscard]] ChargeSmallSignal charge_small_signal(const InterfaceEdge& e, double n, double p,
+                                                        const InterfaceStatistics& s,
+                                                        std::complex<double> inv_weight) const;
     // drift() and occupancies(): the occupancies go to `f` when it is not empty.
     [[nodiscard]] InterfaceDrift drift_at(const InterfaceEdge& e, double psi_i, double psi_s,
                                           double n_s, double p_s, const InterfaceStatistics& s,

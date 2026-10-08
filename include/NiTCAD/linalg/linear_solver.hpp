@@ -37,6 +37,7 @@
 // Backend types do not appear in this header.
 #pragma once
 
+#include <complex>
 #include <cstddef>
 #include <cstdint>
 #include <expected>
@@ -97,31 +98,41 @@ struct SolveReport {
 };
 
 namespace detail {
+template <MatrixScalar Scalar>
 class SparseLuBackend;
 }
 
-class LinearSolver {
+// The solver of A x = b for a real (LinearSolver) or complex (ComplexLinearSolver) matrix. The
+// complex solver serves AC small-signal analysis, (J + i omega C) x = b (decision A5); everything
+// above applies to it with |.| the complex modulus: the equilibration scales are powers of two from
+// the moduli of the entries, the pivot ratio is of the pivots' moduli, and the backward error is
+// Oettli-Prager's with moduli. A value is finite when both its parts are.
+template <MatrixScalar Scalar>
+class BasicLinearSolver {
 public:
+    using Matrix = BasicSparseMatrix<Scalar>;
+
     // Errors: invalid_input if threads is not supported by the backend, max_backward_error is not
     // a positive finite number, max_refinement_steps is negative, min_pivot_ratio is not in
     // [0, 1), or min_pivot_ratio is nonzero while equilibrate is false.
-    [[nodiscard]] static std::expected<LinearSolver, base::Error> create(const SolverConfig& config);
+    [[nodiscard]] static std::expected<BasicLinearSolver, base::Error> create(
+        const SolverConfig& config);
 
     // The moved-from solver is left neither analyzed nor factorized, and must not be used again.
-    LinearSolver(LinearSolver&& other) noexcept;
-    LinearSolver& operator=(LinearSolver&& other) noexcept;
-    LinearSolver(const LinearSolver&) = delete;
-    LinearSolver& operator=(const LinearSolver&) = delete;
-    ~LinearSolver();
+    BasicLinearSolver(BasicLinearSolver&& other) noexcept;
+    BasicLinearSolver& operator=(BasicLinearSolver&& other) noexcept;
+    BasicLinearSolver(const BasicLinearSolver&) = delete;
+    BasicLinearSolver& operator=(const BasicLinearSolver&) = delete;
+    ~BasicLinearSolver();
 
     // Requires a square matrix.
-    [[nodiscard]] std::expected<void, base::Error> analyze(const SparseMatrix& a);
+    [[nodiscard]] std::expected<void, base::Error> analyze(const Matrix& a);
     // Requires a square matrix.
-    [[nodiscard]] std::expected<FactorizationReport, base::Error> factorize(const SparseMatrix& a);
+    [[nodiscard]] std::expected<FactorizationReport, base::Error> factorize(const Matrix& a);
     // Requires is_factorized(), b.size() == x.size() == the factorized dimension, and b and x not
     // overlapping. On failure x holds no meaningful result.
-    [[nodiscard]] std::expected<SolveReport, base::Error> solve(std::span<const double> b,
-                                                                std::span<double> x);
+    [[nodiscard]] std::expected<SolveReport, base::Error> solve(std::span<const Scalar> b,
+                                                                std::span<Scalar> x);
 
     [[nodiscard]] bool is_analyzed() const noexcept { return analyzed_; }
     [[nodiscard]] bool is_factorized() const noexcept { return factorized_; }
@@ -131,35 +142,42 @@ public:
     [[nodiscard]] const SolverConfig& config() const noexcept { return config_; }
 
 private:
-    explicit LinearSolver(const SolverConfig& config);
+    explicit BasicLinearSolver(const SolverConfig& config);
 
-    [[nodiscard]] std::expected<void, base::Error> analyze_unchecked(const SparseMatrix& a);
+    [[nodiscard]] std::expected<void, base::Error> analyze_unchecked(const Matrix& a);
     [[nodiscard]] std::expected<FactorizationReport, base::Error> factorize_unchecked(
-        const SparseMatrix& a);
+        const Matrix& a);
     // Solves the equilibrated system for right-hand side rhs into x (unscaled).
-    void scaled_solve(std::span<const double> rhs, std::span<double> x);
+    void scaled_solve(std::span<const Scalar> rhs, std::span<Scalar> x);
     // Componentwise backward error of x on the original system; fills residual_ with b - A x.
-    [[nodiscard]] double backward_error(std::span<const double> b, std::span<const double> x);
+    [[nodiscard]] double backward_error(std::span<const Scalar> b, std::span<const Scalar> x);
     void reset() noexcept;
 
     SolverConfig config_;
-    std::unique_ptr<detail::SparseLuBackend> backend_;
-    SparseMatrix matrix_;               // pattern of the analysis; original values of the factorization
-    std::vector<double> scaled_values_; // values handed to the backend
+    std::unique_ptr<detail::SparseLuBackend<Scalar>> backend_;
+    Matrix matrix_;                     // pattern of the analysis; original values of the factorization
+    std::vector<Scalar> scaled_values_; // values handed to the backend
     // Power-of-two equilibration scales. Always computed (the backward error uses the column
     // scales); applied to the factorization only when config_.equilibrate.
     std::vector<double> row_scale_;
     std::vector<double> col_scale_;
     std::vector<double> weighted_row_max_;  // max_j |a_ij| col_scale_j, for the backward error
-    std::vector<double> residual_;      // work vectors for solve()
-    std::vector<double> work_rhs_;
-    std::vector<double> work_x_;
-    std::vector<double> correction_;
-    std::vector<double> previous_x_;
+    std::vector<Scalar> residual_;      // work vectors for solve()
+    std::vector<Scalar> work_rhs_;
+    std::vector<Scalar> work_x_;
+    std::vector<Scalar> correction_;
+    std::vector<Scalar> previous_x_;
     bool analyzed_ = false;
     bool factorized_ = false;
     std::size_t analyses_ = 0;
     std::size_t factorizations_ = 0;
 };
+
+// Both instantiations are compiled once, in linear_solver.cpp.
+extern template class BasicLinearSolver<double>;
+extern template class BasicLinearSolver<std::complex<double>>;
+
+using LinearSolver = BasicLinearSolver<double>;
+using ComplexLinearSolver = BasicLinearSolver<std::complex<double>>;
 
 }  // namespace NiTCAD::linalg
