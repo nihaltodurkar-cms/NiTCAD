@@ -109,6 +109,11 @@ std::vector<std::pair<std::string, double>> settings(const BiasOptions& o) {
             s.emplace_back("models.impact_ionization", 1.0);
             s.emplace_back("models.impact_current_resolution", o.models.impact_current_resolution);
         }
+        // Unit 20: likewise.
+        if (o.models.btbt_local) s.emplace_back("models.btbt_local", 1.0);
+        if (o.models.btbt_nonlocal != assemble::NonlocalTunnelling::off) {
+            s.emplace_back("models.btbt_nonlocal", static_cast<double>(o.models.btbt_nonlocal));
+        }
     }
     if (o.Ns_override) s.emplace_back("scaling.Ns_override", *o.Ns_override);
     return s;
@@ -217,6 +222,27 @@ void device_and_settings(Digest& d, const device::Device& device, const BiasOpti
                 }
             }
             d.real(ii.phonon_energy_eV);
+        }
+    }
+    // The band-to-band coefficients and masses, and the cells the paths are traced through, when
+    // a tunnelling model is on (Unit 20; a run without keeps its digest).
+    const bool local = options.models.btbt_local;
+    const bool nonlocal = options.models.btbt_nonlocal != assemble::NonlocalTunnelling::off;
+    if (options.equations == Equations::drift_diffusion && (local || nonlocal)) {
+        d.text("band_to_band");
+        for (const device::Region& r : device.regions()) {
+            if (device::is_insulator(r)) continue;
+            const physics::BandToBandParameters& b =
+                std::get<physics::Semiconductor>(r.material).parameters().band_to_band;
+            for (const double v : {b.A_per_cm3_s, b.B_V_per_cm, b.direct_gap ? 1.0 : 0.0,
+                                   b.electron_mass, b.hole_mass}) {
+                d.real(v);
+            }
+        }
+        if (nonlocal && device.cells() != nullptr) {
+            const mesh::TensorCells& c = *device.cells();
+            d.integer(static_cast<std::uint64_t>(c.dimension()));
+            for (int a = 0; a < c.dimension(); ++a) d.reals(c.axis(a));
         }
     }
     // Interface transport acts on the continuity equations only.

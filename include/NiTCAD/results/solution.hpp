@@ -3,6 +3,7 @@
 // contact.
 #pragma once
 
+#include <cstddef>
 #include <vector>
 
 #include "NiTCAD/results/convergence.hpp"
@@ -29,6 +30,18 @@ struct BandDiagram {
     std::vector<double> valence_eV;
     std::vector<double> electron_fermi_eV;
     std::vector<double> hole_fermi_eV;
+};
+
+// One nonlocal tunnel path at a state (Unit 20): its start node; the length from the start to the
+// crossing along the path [cm]; the mean field over it, the potential drop divided by the length
+// [V/cm]; the path's generation rate [cm^-3 s^-1], per volume of its start node; and whether the
+// crossing lies on the path's frozen segment (false only while the paths lag the state).
+struct TunnelPath {
+    std::size_t start_node;
+    double length_cm;
+    double field_V_per_cm;
+    double generation_cm3_s;
+    bool reached;
 };
 
 struct EquilibriumResult {
@@ -72,6 +85,11 @@ struct BiasPoint {
     std::vector<double> edge_current_n;
     std::vector<double> edge_current_p;
     ConvergenceRecord convergence;
+    // Nonlocal band-to-band tunnelling (Unit 20; empty with the model off): each frozen path at
+    // this state, and how many times the paths were re-traced before they agreed with the state
+    // (the convergence record is the last Newton run's).
+    std::vector<TunnelPath> tunnel_paths;
+    int path_relocations = 0;
 };
 
 }  // namespace NiTCAD::results

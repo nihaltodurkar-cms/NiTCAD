@@ -128,6 +128,37 @@
 // The Jacobian is exact. A node's electron generation reads its neighbours' p (through the hole
 // current) and its hole generation their n: with the model on the pattern gains those two
 // entries per edge direction; with it off nothing changes.
+//
+// Band-to-band tunnelling (Unit 20; legacy btbt.py, btbt_grid.py, nonlocal_path.py). Pure
+// generation in both models (no Hurkx D factor, no occupancy factor), so it does not vanish at
+// equilibrium (ARCHITECTURE.md 6.2, Unit 20, known limits).
+// - Local (models.btbt_local): the electron row of a semiconductor node off the ohmic contacts
+//   gains + V_i G / R0 and the hole row - V_i G / R0, G = A F^2 exp(-B / F) with F the size of the
+//   node's field reconstructed as for impact ionization (on a tensor grid the per-axis mean of the
+//   node's two edges, the legacy's). Psi columns only, already in the pattern.
+// - Nonlocal (models.btbt_nonlocal, tunnel_paths.hpp): each path of the frozen set (set_paths) from
+//   start node i generates P = V_i G_p / R0 pairs: holes in i's hole row (- P), electrons at the
+//   crossing in the electron rows of the crossing segment's two samples' stencils, (1 - t) on the
+//   first and t on the second, times their stencil weights, so electrons and holes balance
+//   exactly. With Delta(s) = E_v(i) - E_end(s) along the frozen crossing segment (a, b),
+//   t = Delta_a / (Delta_a - Delta_b), extrapolated along the segment while the crossing moves
+//   off it (smooth in psi; a relocation moves the segment). Rates:
+//   - kane: E_end = E_c; the path's length l = (segments before a) + t L_ab and mean field
+//     F = (psi_f - psi_i) V_T / l [V/cm], psi_f = (1 - t) psi_a + t psi_b the potential at the
+//     crossing (with band-gap narrowing off in one material, psi_f - psi_i = E_g / q); G_p =
+//     A F^2 exp(-B / F) with the start's (A, B). In a uniform field F is the field.
+//   - direct_wkb: E_end = E_v + E_g (delta = 1, physics/band_to_band.hpp), G_p the path rate of
+//     eq. (11) from the exact segment integrals over the forward samples, |dE_v/dx| over the first
+//     segment, and k_m^2 from the band extrema over the path's own span (the backward polyline
+//     and the start for E_vmax, the forward samples for E_cmin = min (E_v + E_g)). The span must
+//     reach past the start: from the start to the crossing E_v is largest at the start itself, so
+//     k_m^2 would vanish.
+//   The rows of a path read the psi of its columns: the start and the crossing segment's stencils
+//   (kane), every sample's stencil (direct_wkb). set_paths rebuilds the pattern with those
+//   entries; without paths the pattern is unchanged. The geometry's own dependence on psi is not
+//   in the Jacobian (frozen; ARCHITECTURE.md 6.2).
+// With any generation model on, update_size measures densities against 1e-8 of the largest (as
+// impact ionization, Unit 19).
 #pragma once
 
 #include <complex>
@@ -145,6 +176,7 @@
 #include "NiTCAD/assemble/models.hpp"
 #include "NiTCAD/assemble/sg_flux.hpp"
 #include "NiTCAD/assemble/scaling.hpp"
+#include "NiTCAD/assemble/tunnel_paths.hpp"
 #include "NiTCAD/base/error.hpp"
 #include "NiTCAD/device/device.hpp"
 #include "NiTCAD/linalg/sparse_matrix.hpp"
@@ -158,7 +190,11 @@ namespace NiTCAD::assemble {
 class DriftDiffusion {
 public:
     // Errors: those of EquilibriumPoisson::create (scaling temperature); invalid_input for
-    // impact_current_resolution not finite and >= 0 with impact ionization on.
+    // impact_current_resolution not finite and >= 0 with impact ionization on; for btbt_local
+    // with btbt_nonlocal; for btbt_nonlocal without the device's cells, on a device with an edge
+    // between two different semiconductors (no tunnel path crosses a heterointerface), or, for
+    // direct_wkb, with a semiconductor region whose material lacks a direct gap or tunnelling
+    // masses (silicon never has them).
     [[nodiscard]] static std::expected<DriftDiffusion, base::Error> create(
         const device::Device& device, const Scaling& scaling,
         const PhysicsModels& models = {});
@@ -249,6 +285,30 @@ public:
     };
     [[nodiscard]] std::vector<CurrentRow> small_signal_currents(std::span<const double> x,
                                                                 std::complex<double> s) const;
+
+    // Nonlocal tunnelling (Unit 20; see the header comment). Whether the model is on; the paths
+    // traced at state x (tunnel_paths.hpp) whose rate at x is at least `matters` of the largest
+    // (the others would only fill the Jacobian); the frozen set the rows use (empty at creation),
+    // whose setting rebuilds the Jacobian pattern (make_jacobian and make_small_signal_matrix again);
+    // and each path's state at x. Preconditions (NITCAD_EXPECTS): x has unknowns() entries; the
+    // paths of set_paths are trace_paths's of this system.
+    [[nodiscard]] bool tunnelling() const noexcept {
+        return tunnel_kind_ != NonlocalTunnelling::off;
+    }
+    [[nodiscard]] TunnelPaths trace_paths(std::span<const double> x) const;
+    void set_paths(TunnelPaths paths);
+    [[nodiscard]] const TunnelPaths& paths() const noexcept { return paths_; }
+    [[nodiscard]] std::vector<TunnelPathState> path_states(std::span<const double> x) const;
+    // Whether two path sets of this system act alike at state x: every path whose rate at x is at
+    // least 1e-10 of the largest rate in either set has a path from the same start in the other
+    // with the same geometry (tunnel_paths.hpp same_geometry). Paths below that are left out: a
+    // start at the edge of the start criterion, or a crossing near the longest length, flips in
+    // and out of the set with the rounding of the state, at a rate near exp(-690) of the scale.
+    [[nodiscard]] bool paths_agree(const TunnelPaths& a, const TunnelPaths& b,
+                                   std::span<const double> x) const;
+    // The share of the largest rate below which a path does not matter (paths_agree), and below
+    // which trace_paths drops it.
+    static constexpr double matters = 1e-10;
 
     // Newton hooks (see the header comment).
     [[nodiscard]] double update_size(std::span<const double> x,
@@ -358,6 +418,47 @@ private:
     void add_impact_generation(std::span<const double> x, std::span<const NodeDegeneracy> g,
                                std::span<double> f, std::span<double> values) const;
 
+    // Local band-to-band tunnelling (Unit 20): per node, its carrier edges (in field_edges_) and
+    // the pseudo-inverse of sum t t^T, as ImpactNode, and its material's Kane pair.
+    struct TunnelNode {
+        std::size_t node;
+        std::size_t first, last;
+        double inverse[9];
+        double A, B;
+    };
+    struct FieldEdge {
+        std::size_t edge;
+        double t[3];
+        double field;  // [V/cm] per unit (psi_b - psi_a)
+    };
+    void add_local_tunnelling(std::span<const double> x, std::span<double> f,
+                              std::span<double> values) const;
+
+    // Nonlocal tunnelling (Unit 20): per frozen path, the nodes whose psi its rows read (columns),
+    // the nodes its electrons go to (deposit), the start's hole-row positions per column and the
+    // deposit rows' positions (deposit-major), and the forward length before each segment [cm].
+    struct PathLayout {
+        std::vector<std::size_t> columns, deposit;
+        std::vector<std::size_t> hole, electron;
+        std::vector<double> before_cm;
+    };
+    // One path's live terms at x: its pairs P (scaled) and dP / dpsi per column, the share of each
+    // deposit node and its partials (deposit-major), and the diagnostics.
+    struct PathTerms {
+        double pairs = 0.0;
+        std::vector<double> d_pairs;
+        std::vector<double> share, d_share;
+        TunnelPathState state{};
+    };
+    // The columns, deposit nodes and lengths of a path (no Jacobian positions).
+    [[nodiscard]] PathLayout layout(const TunnelPath& p) const;
+    void path_terms(const TunnelPath& p, const PathLayout& l, std::span<const double> x,
+                    PathTerms& t) const;
+    void add_path_tunnelling(std::span<const double> x, std::span<double> f,
+                             std::span<double> values) const;
+    // The Jacobian positions every term uses, after the pattern changed (set_paths).
+    void locate_positions();
+
     // Per node at state x under Fermi-Dirac statistics; empty under Boltzmann.
     [[nodiscard]] std::vector<NodeDegeneracy> degeneracies(std::span<const double> x) const;
 
@@ -389,6 +490,19 @@ private:
     std::vector<std::size_t> block_;      // per node, 9 positions of its 3x3 diagonal block
     std::vector<ImpactNode> impact_nodes_;
     std::vector<ImpactEdge> impact_edges_;
+    std::vector<TunnelNode> tunnel_nodes_;
+    std::vector<FieldEdge> field_edges_;
+    // Nonlocal tunnelling: the model, the device's cells, per node the longest path that may start
+    // there (0: none) [cm], the material's gap at T [eV] and tunnelling masses [kg] (direct_wkb),
+    // and the Kane pair (kane); the frozen paths, their layouts, and the pattern's triplets
+    // without them.
+    NonlocalTunnelling tunnel_kind_ = NonlocalTunnelling::off;
+    std::optional<mesh::TensorCells> cells_;
+    std::vector<double> tunnel_length_, tunnel_gap_, tunnel_mc_, tunnel_mv_, tunnel_A_, tunnel_B_;
+    TunnelPaths paths_;
+    std::vector<PathLayout> layouts_;
+    std::vector<linalg::Triplet> base_triplets_;
+    bool generation_ = false;  // any generation model on
     int dimension_ = 1;
     double generation_scale_ = 0.0;        // 1 / R0: [cm^-3 s^-1] to the rows' scaled rate
     double impact_resolution_ = 0.0;       // models.impact_current_resolution

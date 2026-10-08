@@ -108,6 +108,19 @@ struct ImpactIonizationParameters {
     bool operator==(const ImpactIonizationParameters&) const = default;
 };
 
+// Band-to-band tunnelling (band_to_band.hpp; Unit 20). The Kane pair (A, B) of the local and the
+// calibrated nonlocal rate G = A F^2 exp(-B / F); A = 0: none. The direct-gap WKB rate needs a
+// direct gap and both tunnelling masses (conduction and valence band, in units of m0) from a cited
+// source; 0: none (no material set ships them, as none is verified). All zero: no tunnelling.
+struct BandToBandParameters {
+    double A_per_cm3_s;
+    double B_V_per_cm;
+    bool direct_gap;
+    double electron_mass;  // m_c / m0
+    double hole_mass;      // m_v / m0
+    bool operator==(const BandToBandParameters&) const = default;
+};
+
 struct SemiconductorParameters {
     double eps_r;                   // relative permittivity
     double Eg0_eV;                  // band gap at 0 K
@@ -127,6 +140,7 @@ struct SemiconductorParameters {
     IonizationParameters ionization;  // Unit 15
     RichardsonParameters richardson;  // Unit 15
     ImpactIonizationParameters impact_ionization{};  // Unit 19; all zero: none
+    BandToBandParameters band_to_band{};              // Unit 20; all zero: none
 
     bool operator==(const SemiconductorParameters&) const = default;
 };
@@ -137,9 +151,11 @@ struct SemiconductorParameters {
 // fit; velocity saturation the Canali fit; the legacy hydrogenic 45 meV levels for B, P and As
 // (M13); impact ionization van Overstraeten and de Man, Solid-State Electron. 13, 583 (1970), the
 // legacy values (one electron branch; the hole branches switching at 4e5 V/cm) with an
-// optical-phonon energy of 0.063 eV for the temperature factor (Unit 19). The radiative coefficient
-// is left 0 as in the legacy (silicon's is about 1e-14 cm^3/s, negligible against SRH), so
-// silicon results do not change.
+// optical-phonon energy of 0.063 eV for the temperature factor (Unit 19); band-to-band tunnelling
+// the Kane pair A = 3.5e21 cm^-3 s^-1, B = 1.03e8 V/cm of Hurkx, Klaassen and Knuvers, IEEE Trans.
+// Electron Devices 39, 331 (1992), Table I, the legacy values (Unit 20; indirect gap, no WKB
+// masses). The radiative coefficient is left 0 as in the legacy (silicon's is about 1e-14 cm^3/s,
+// negligible against SRH), so silicon results do not change.
 inline constexpr SemiconductorParameters silicon_parameters{
     .eps_r = 11.7,
     .Eg0_eV = 1.17,
@@ -168,6 +184,8 @@ inline constexpr SemiconductorParameters silicon_parameters{
                                    .A_high_per_cm = 6.71e5, .B_high_V_per_cm = 1.693e6,
                                    .switch_V_per_cm = 4.0e5},
                           .phonon_energy_eV = 0.063},
+    .band_to_band = {.A_per_cm3_s = 3.5e21, .B_V_per_cm = 1.03e8, .direct_gap = false,
+                     .electron_mass = 0.0, .hole_mass = 0.0},
 };
 
 // No band-gap narrowing: the Slotboom form and numbers are a silicon fit (Unit 15; the legacy left
@@ -208,7 +226,8 @@ inline constexpr SemiconductorParameters germanium_parameters{
     .richardson = {.electron = 0.0, .hole = 0.0},
 };
 
-// The Gamma-valley gap.
+// The Gamma-valley gap. A direct gap (band_to_band.direct_gap), with no tunnelling masses: the
+// direct-gap WKB rate needs cited ones from the user (Unit 20).
 inline constexpr SemiconductorParameters gallium_arsenide_parameters{
     .eps_r = 12.9,
     .Eg0_eV = 1.519,
@@ -230,9 +249,11 @@ inline constexpr SemiconductorParameters gallium_arsenide_parameters{
     .ionization = {.donor_eV = 0.0058, .acceptor_eV = 0.0263, .donor_degeneracy = 2.0,
                    .acceptor_degeneracy = 4.0},
     .richardson = {.electron = 0.0, .hole = 0.0},
+    .band_to_band = {.A_per_cm3_s = 0.0, .B_V_per_cm = 0.0, .direct_gap = true,
+                     .electron_mass = 0.0, .hole_mass = 0.0},
 };
 
-// In0.53Ga0.47As, lattice-matched to InP.
+// In0.53Ga0.47As, lattice-matched to InP; a direct gap, as GaAs (Unit 20).
 inline constexpr SemiconductorParameters indium_gallium_arsenide_parameters{
     .eps_r = 13.9,
     .Eg0_eV = 0.817,
@@ -254,6 +275,8 @@ inline constexpr SemiconductorParameters indium_gallium_arsenide_parameters{
     .ionization = {.donor_eV = 0.0, .acceptor_eV = 0.0, .donor_degeneracy = 2.0,
                    .acceptor_degeneracy = 4.0},
     .richardson = {.electron = 0.0, .hole = 0.0},
+    .band_to_band = {.A_per_cm3_s = 0.0, .B_V_per_cm = 0.0, .direct_gap = true,
+                     .electron_mass = 0.0, .hole_mass = 0.0},
 };
 
 // 4H-SiC. The legacy marks eps_r, chi, Eg(300 K) = 3.23 eV and the mobility end points as
@@ -306,8 +329,9 @@ public:
     // band-gap-narrowing E0, the radiative coefficient, a dopant level or a Richardson constant is
     // negative, or mu_min > mu_max, or a saturation velocity is not positive, or a Canali beta is
     // below 1, or an impact-ionization coefficient A, B, switch field or phonon energy is negative
-    // (B and the switch field positive where A is). The message names the parameter; the context
-    // value is it.
+    // (B and the switch field positive where A is), or a band-to-band A, B or tunnelling mass is
+    // negative (B positive where A is; the masses both 0 or both positive, on a direct gap, with a
+    // reduced mass below m0 / 2). The message names the parameter; the context value is it.
     [[nodiscard]] static std::expected<Semiconductor, base::Error> create(
         const SemiconductorParameters& parameters);
 

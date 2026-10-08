@@ -48,6 +48,12 @@ public:
 
     void set_reference(double lambda_ref) { lambda_ref_ = lambda_ref; }
 
+    // After the system's pattern changed (re-traced tunnel paths): B0 is rebuilt at the next row.
+    void refresh() {
+        jacobian_ = dd_->make_jacobian();
+        k_ = none;
+    }
+
     // The arc-length row c . (y - y0) = ds, with the sparse row's entry at k.
     void set_row(std::vector<double> c, std::vector<double> y0, double ds, std::size_t k) {
         c_ = std::move(c);
@@ -296,6 +302,9 @@ std::expected<results::Sweep, base::Error> trace_bias(const device::Device& devi
     (void)dd.set_bias(bias);  // checked
     dd.stamp_contacts(std::span(y).first(n));
     y[n] = start / V_T;
+    // Nonlocal tunnelling: the paths of the starting point, re-traced after each accepted point
+    // (the next step uses them; lagging one step, as a transient run's second change).
+    if (dd.tunnelling()) dd.set_paths(dd.trace_paths(std::span(y).first(n)));
     std::vector<double> dF = dd.bias_derivative(options.contact);
     for (double& v : dF) v *= V_T;  // per unit lambda
     Bordered bordered(dd, std::move(dF), y[n], steady.linear);
@@ -492,6 +501,14 @@ std::expected<results::Sweep, base::Error> trace_bias(const device::Device& devi
         // Accepted: the point and the next step.
         point.bias_V = bias;
         detail::drift_diffusion_point(dd, std::span(y).first(n), *scaling, D, point);
+        if (dd.tunnelling()) {
+            assemble::TunnelPaths traced = dd.trace_paths(std::span(y).first(n));
+            if (!dd.paths_agree(traced, dd.paths(), std::span(y).first(n))) {
+                dd.set_paths(std::move(traced));
+                bordered.refresh();
+                point.path_relocations = 1;
+            }
+        }
         const double current = point.terminal_current[options.contact];
         run.points.push_back(std::move(point));
         if (lands) return run;

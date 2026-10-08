@@ -128,14 +128,16 @@ add_test(NAME linalg COMMAND nitcad_linalg_test)
 # --- mesh layer (node/edge/control-volume graph, tensor-grid producer) -------------
 add_library(nitcad_mesh STATIC
   src/mesh/mesh.cpp
-  src/mesh/tensor_grid.cpp)
+  src/mesh/tensor_grid.cpp
+  src/mesh/tensor_cells.cpp)
 add_library(NiTCAD::mesh ALIAS nitcad_mesh)
 target_include_directories(nitcad_mesh PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
 target_link_libraries(nitcad_mesh PUBLIC NiTCAD::base)
 
 add_executable(nitcad_mesh_test
   tests/mesh/mesh_test.cpp
-  tests/mesh/tensor_grid_test.cpp)
+  tests/mesh/tensor_grid_test.cpp
+  tests/mesh/tensor_cells_test.cpp)
 target_link_libraries(nitcad_mesh_test PRIVATE NiTCAD::mesh Catch2::Catch2WithMain)
 add_test(NAME mesh COMMAND nitcad_mesh_test)
 
@@ -152,7 +154,8 @@ add_library(nitcad_physics STATIC
   src/physics/ionization.cpp
   src/physics/insulator.cpp
   src/physics/interface_traps.cpp
-  src/physics/impact_ionization.cpp)
+  src/physics/impact_ionization.cpp
+  src/physics/band_to_band.cpp)
 add_library(NiTCAD::physics ALIAS nitcad_physics)
 target_include_directories(nitcad_physics PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
 target_link_libraries(nitcad_physics PUBLIC NiTCAD::base)
@@ -167,7 +170,8 @@ add_executable(nitcad_physics_test
   tests/physics/fermi_dirac_test.cpp
   tests/physics/materials_test.cpp
   tests/physics/interface_traps_test.cpp
-  tests/physics/impact_ionization_test.cpp)
+  tests/physics/impact_ionization_test.cpp
+  tests/physics/band_to_band_test.cpp)
 target_link_libraries(nitcad_physics_test PRIVATE NiTCAD::physics Catch2::Catch2WithMain)
 add_test(NAME physics COMMAND nitcad_physics_test)
 
@@ -192,7 +196,8 @@ add_library(nitcad_assemble STATIC
   src/assemble/interface_edges.cpp
   src/assemble/contact_bias.cpp
   src/assemble/equilibrium_poisson.cpp
-  src/assemble/drift_diffusion.cpp)
+  src/assemble/drift_diffusion.cpp
+  src/assemble/tunnel_paths.cpp)
 add_library(NiTCAD::assemble ALIAS nitcad_assemble)
 target_include_directories(nitcad_assemble PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
 target_link_libraries(nitcad_assemble PUBLIC
@@ -207,7 +212,8 @@ add_executable(nitcad_assemble_test
   tests/assemble/insulator_test.cpp
   tests/assemble/transient_test.cpp
   tests/assemble/small_signal_test.cpp
-  tests/assemble/impact_ionization_test.cpp)
+  tests/assemble/impact_ionization_test.cpp
+  tests/assemble/band_to_band_test.cpp)
 target_link_libraries(nitcad_assemble_test PRIVATE NiTCAD::assemble Catch2::Catch2WithMain)
 add_test(NAME assemble COMMAND nitcad_assemble_test)
 
@@ -245,7 +251,8 @@ add_executable(nitcad_solve_test
   tests/solve/insulator_test.cpp
   tests/solve/transient_test.cpp
   tests/solve/small_signal_test.cpp
-  tests/solve/impact_ionization_test.cpp)
+  tests/solve/impact_ionization_test.cpp
+  tests/solve/btbt_test.cpp)
 target_link_libraries(nitcad_solve_test PRIVATE NiTCAD::solve Catch2::Catch2WithMain)
 add_test(NAME solve COMMAND nitcad_solve_test)
 # The 2D MOSFET gates (tests/solve/mosfet_test.cpp, hidden tag [.mosfet]) take about a minute in
@@ -256,4 +263,6 @@ if(CMAKE_BUILD_TYPE STREQUAL "Release")
   add_test(NAME solve_transient COMMAND nitcad_solve_test "[transient]")
   # And the breakdown gates (tests/solve/impact_ionization_test.cpp, hidden tag [.breakdown]).
   add_test(NAME solve_breakdown COMMAND nitcad_solve_test "[breakdown]")
+  # And the slow band-to-band gates (tests/solve/btbt_test.cpp, hidden tag [.btbt]).
+  add_test(NAME solve_btbt COMMAND nitcad_solve_test "[btbt]")
 endif()

@@ -91,6 +91,12 @@ std::expected<results::SmallSignal, base::Error> solve_small_signal(
             x[3 * i + 2] = dc.fields.p_cm3[i] / scaling->Ns;
         }
         system->stamp_contacts(x);
+        // Nonlocal tunnelling: the paths at the operating point, frozen (their geometry's own
+        // dependence on the state is not in the small-signal matrix; ARCHITECTURE.md 6.2).
+        if (system->tunnelling()) {
+            system->set_paths(system->trace_paths(x));
+            a = system->make_small_signal_matrix();
+        }
 
         results::SmallSignalPoint point;
         for (std::size_t k = 0; k < frequencies.size(); ++k) {

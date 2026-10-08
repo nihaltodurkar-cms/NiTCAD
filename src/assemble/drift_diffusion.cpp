@@ -3,8 +3,10 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <numbers>
 #include <optional>
 #include <string>
+#include <variant>
 
 #include "NiTCAD/assemble/contact_bias.hpp"
 #include "NiTCAD/assemble/ohmic.hpp"
@@ -12,6 +14,7 @@
 #include "NiTCAD/assemble/thermionic_flux.hpp"
 #include "NiTCAD/base/constants.hpp"
 #include "NiTCAD/base/contract.hpp"
+#include "NiTCAD/physics/band_to_band.hpp"
 #include "NiTCAD/physics/field_mobility.hpp"
 #include "NiTCAD/physics/interface_traps.hpp"
 #include "NiTCAD/physics/mobility.hpp"
@@ -91,10 +94,38 @@ std::expected<DriftDiffusion, base::Error> DriftDiffusion::create(
             "impact_current_resolution must be finite and not negative",
             base::ErrorContext{.index = std::nullopt, .value = models.impact_current_resolution}});
     }
+    const bool nonlocal = models.btbt_nonlocal != NonlocalTunnelling::off;
+    const auto refuse = [](const char* message) {
+        return std::unexpected(base::Error{base::ErrorCode::invalid_input, message, {}});
+    };
+    if (nonlocal && models.btbt_local) {
+        return refuse("btbt_local and btbt_nonlocal would count the same tunnelling twice");
+    }
+    if (nonlocal && device.cells() == nullptr) {
+        return refuse("nonlocal tunnelling needs the device's tensor cells");
+    }
     auto scaled = detail::make_scaled_device(device, scaling, models);
     if (!scaled) return std::unexpected(std::move(scaled.error()));
     const std::size_t n = scaled->volume.size();
     const double T = scaling.temperature_K;
+    if (nonlocal) {
+        for (const detail::ScaledEdge& e : scaled->edges) {
+            if (e.carriers && e.interface) {
+                return refuse("nonlocal tunnelling does not cross a heterointerface");
+            }
+        }
+    }
+    if (models.btbt_nonlocal == NonlocalTunnelling::direct_wkb) {
+        for (const device::Region& r : device.regions()) {
+            if (device::is_insulator(r)) continue;
+            const physics::BandToBandParameters& b =
+                std::get<physics::Semiconductor>(r.material).parameters().band_to_band;
+            if (!b.direct_gap || physics::tunnelling_reduced_mass(b) == 0.0) {
+                return refuse("direct_wkb needs a direct gap and cited tunnelling masses in every "
+                              "semiconductor region (never silicon)");
+            }
+        }
+    }
 
     DriftDiffusion s;
     s.volume_ = std::move(scaled->volume);
@@ -190,6 +221,7 @@ std::expected<DriftDiffusion, base::Error> DriftDiffusion::create(
     auto pattern = linalg::SparseMatrix::from_triplets(size, size, triplets);
     if (!pattern) return std::unexpected(std::move(pattern.error()));
     s.pattern_ = std::move(*pattern);
+    if (nonlocal) s.base_triplets_ = std::move(triplets);  // set_paths adds the paths' entries
 
     s.block_.resize(9 * n);
     for (std::size_t i = 0; i < n; ++i) {
@@ -306,6 +338,77 @@ std::expected<DriftDiffusion, base::Error> DriftDiffusion::create(
             s.impact_nodes_.push_back(node);
         }
     }
+    if (models.btbt_local) {
+        // Per node with a Kane pair: its carrier edges and the pseudo-inverse of sum t t^T.
+        const mesh::Mesh& m = device.mesh();
+        const int D = m.dimension();
+        s.dimension_ = D;
+        s.generation_scale_ = 1.0 / scaling.R0;
+        std::vector<std::vector<std::size_t>> incident(n);
+        for (std::size_t k = 0; k < scaled->edges.size(); ++k) {
+            const detail::ScaledEdge& e = scaled->edges[k];
+            if (!e.carriers) continue;
+            incident[e.i].push_back(k);
+            incident[e.j].push_back(k);
+        }
+        for (std::size_t i = 0; i < n; ++i) {
+            if (s.insulator_[i] != 0 || s.contact_[i] >= 0 || incident[i].empty()) continue;
+            const physics::BandToBandParameters& b =
+                device.material(static_cast<mesh::NodeId>(i)).parameters().band_to_band;
+            if (b.A_per_cm3_s == 0.0) continue;
+            TunnelNode node{i, s.field_edges_.size(), 0, {}, b.A_per_cm3_s, b.B_V_per_cm};
+            double outer[9] = {};
+            for (const std::size_t k : incident[i]) {
+                const detail::ScaledEdge& e = scaled->edges[k];
+                const mesh::Point& pa = m.points()[e.i];
+                const mesh::Point& pb = m.points()[e.j];
+                FieldEdge fe{k, {}, scaling.V_T / e.length_cm};
+                for (int d = 0; d < D; ++d) fe.t[d] = (pb[d] - pa[d]) / e.length_cm;
+                for (int r = 0; r < D; ++r) {
+                    for (int c = 0; c < D; ++c) outer[r * D + c] += fe.t[r] * fe.t[c];
+                }
+                s.field_edges_.push_back(fe);
+            }
+            pseudo_inverse(outer, D, node.inverse);
+            node.last = s.field_edges_.size();
+            s.tunnel_nodes_.push_back(node);
+        }
+    }
+    if (nonlocal) {
+        // Per node: the longest path that may start there, where the rate falls below exp(-690)
+        // of its scale: E_g / F_min with F_min = B / 690 (kane), or the field at which eq. (8)'s
+        // exponent reaches 690 (direct_wkb).
+        s.tunnel_kind_ = models.btbt_nonlocal;
+        s.cells_ = *device.cells();
+        s.generation_scale_ = 1.0 / scaling.R0;
+        for (auto* v : {&s.tunnel_length_, &s.tunnel_gap_, &s.tunnel_mc_, &s.tunnel_mv_,
+                        &s.tunnel_A_, &s.tunnel_B_}) {
+            v->assign(n, 0.0);
+        }
+        constexpr double exponent = 690.0;
+        for (std::size_t i = 0; i < n; ++i) {
+            if (s.insulator_[i] != 0) continue;
+            const physics::Semiconductor& mat = device.material(static_cast<mesh::NodeId>(i));
+            const physics::BandToBandParameters& b = mat.parameters().band_to_band;
+            const double Eg = physics::band_gap_eV(mat, T);
+            s.tunnel_gap_[i] = Eg;
+            if (s.tunnel_kind_ == NonlocalTunnelling::kane) {
+                if (b.A_per_cm3_s == 0.0) continue;
+                s.tunnel_A_[i] = b.A_per_cm3_s;
+                s.tunnel_B_[i] = b.B_V_per_cm;
+                s.tunnel_length_[i] = Eg / (b.B_V_per_cm / exponent);
+                continue;
+            }
+            s.tunnel_mc_[i] = b.electron_mass * base::m0_kg;
+            s.tunnel_mv_[i] = b.hole_mass * base::m0_kg;
+            const double mr = physics::tunnelling_reduced_mass(b) * base::m0_kg;
+            const double Eg_J = Eg * base::q_C;
+            const double F_min = std::numbers::pi * std::sqrt(mr) * std::pow(Eg_J, 1.5) /
+                                 (2.0 * base::q_C * base::hbar_J_s * exponent);  // [V/m]
+            s.tunnel_length_[i] = Eg_J / (base::q_C * F_min) * 100.0;           // [cm]
+        }
+    }
+    s.generation_ = !s.impact_nodes_.empty() || models.btbt_local || nonlocal;
     for (const InterfaceEdge& f : s.interfaces_.edges()) {
         s.interface_np_.emplace_back(
             detail::position(s.pattern_, 3 * f.insulator, 3 * f.semiconductor + 1),
@@ -705,6 +808,8 @@ void DriftDiffusion::assemble(std::span<const double> x, std::span<double> f,
         }
     }
     if (!impact_nodes_.empty()) add_impact_generation(x, g, f, values);
+    if (!tunnel_nodes_.empty()) add_local_tunnelling(x, f, values);
+    if (!paths_.paths.empty()) add_path_tunnelling(x, f, values);
 }
 
 void DriftDiffusion::add_impact_generation(std::span<const double> x,
@@ -963,7 +1068,7 @@ double DriftDiffusion::update_size(std::span<const double> x, std::span<const do
     // density 1e-21 of the largest (-0.5 V); at 1e-12 the trace's corrector stalls at 1.4e-7 of
     // that floor (-9.8 V). Densities below 1e-8 of the largest, the legacy's floor for its
     // impact-ionization paths, are measured against it then.
-    const double floor = (impact_nodes_.empty() ? 1e-20 : 1e-8) * largest;
+    const double floor = (generation_ ? 1e-8 : 1e-20) * largest;
     double size = 0.0;
     for (std::size_t i = 0; i < node_count(); ++i) {
         if (insulator_[i] != 0) {
@@ -1265,6 +1370,444 @@ std::vector<DriftDiffusion::CurrentRow> DriftDiffusion::small_signal_currents(
         }
     }
     return rows;
+}
+
+void DriftDiffusion::add_local_tunnelling(std::span<const double> x, std::span<double> f,
+                                          std::span<double> values) const {
+    const bool jacobian = !values.empty();
+    const int D = dimension_;
+    for (const TunnelNode& node : tunnel_nodes_) {
+        const std::size_t i = node.node;
+        // The field at the node by least squares from its edges' components
+        // E_k = -field (psi_b - psi_a): E = P sum_k t_k E_k.
+        double E[3] = {};
+        for (std::size_t k = node.first; k < node.last; ++k) {
+            const FieldEdge& fe = field_edges_[k];
+            const EdgeTerm& e = edges_[fe.edge];
+            const double Ek = -fe.field * (x[3 * e.b] - x[3 * e.a]);
+            for (int r = 0; r < D; ++r) {
+                double w = 0.0;  // (P t_k)_r
+                for (int c = 0; c < D; ++c) w += node.inverse[r * D + c] * fe.t[c];
+                E[r] += w * Ek;
+            }
+        }
+        double F2 = 0.0;
+        for (int r = 0; r < D; ++r) F2 += E[r] * E[r];
+        const double F = std::sqrt(F2);
+        const physics::KaneRate g = physics::kane_generation(node.A, node.B, F);
+        if (g.rate == 0.0 && g.d_dF == 0.0) continue;
+        const double k_row = volume_[i] * generation_scale_;
+        f[3 * i + 1] += k_row * g.rate;
+        f[3 * i + 2] -= k_row * g.rate;
+        if (!jacobian) continue;
+        // dG/dE_r = G' E_r / F (F > 0 here: G vanishes at F = 0); an edge's component enters
+        // through (P t_k), and E_k through its ends' psi.
+        for (std::size_t k = node.first; k < node.last; ++k) {
+            const FieldEdge& fe = field_edges_[k];
+            const EdgeTerm& e = edges_[fe.edge];
+            double dEk = 0.0;  // dG / dE_k
+            for (int r = 0; r < D; ++r) {
+                double w = 0.0;
+                for (int c = 0; c < D; ++c) w += node.inverse[r * D + c] * fe.t[c];
+                dEk += w * g.d_dF * E[r] / F;
+            }
+            const double d_b = -dEk * fe.field;  // dG / dpsi_b; dG / dpsi_a = -d_b
+            const bool i_is_a = e.a == i;
+            const std::size_t* p = i_is_a ? e.ab : e.ba;  // row i, the other end's psi column
+            const double own = i_is_a ? -d_b : d_b, other = i_is_a ? d_b : -d_b;
+            values[block_[9 * i + 3]] += k_row * own;   // (n, psi) of i
+            values[block_[9 * i + 6]] -= k_row * own;   // (p, psi) of i
+            values[p[1]] += k_row * other;              // (n, psi) of the other end
+            values[p[3]] -= k_row * other;              // (p, psi) of the other end
+        }
+    }
+}
+
+TunnelPaths DriftDiffusion::trace_paths(std::span<const double> x) const {
+    NITCAD_EXPECTS(x.size() == unknowns());
+    if (!tunnelling()) return {};
+    const std::size_t n = node_count();
+    std::vector<double> psi(n), valence(n, 0.0), end(n, 0.0);
+    std::vector<char> semiconductor(n, 0), contact(n, 0);
+    const bool wkb = tunnel_kind_ == NonlocalTunnelling::direct_wkb;
+    for (std::size_t i = 0; i < n; ++i) {
+        psi[i] = x[3 * i];
+        if (insulator_[i] != 0) continue;
+        const double eta = psi[i] + band_shift_[i];
+        valence[i] = -(log_dos_p_[i] + eta);
+        end[i] = wkb ? valence[i] + tunnel_gap_[i] / V_T_ : log_dos_n_[i] - eta;
+        semiconductor[i] = 1;
+        contact[i] = contact_[i] >= 0 ? 1 : 0;
+    }
+    const TunnelTraceInput in{&*cells_, psi, valence, end, semiconductor, contact,
+                              tunnel_length_, V_T_, wkb};
+    TunnelPaths traced = trace_tunnel_paths(in);
+    // Only the paths whose rate at x is at least `matters` of the largest are kept: the others
+    // carry no current the state resolves (a start deep in a neutral region crosses after the
+    // whole depletion width, at a mean field far below the peak), but each would couple its start
+    // to a distant crossing in the Jacobian and fill the factors.
+    std::vector<double> rate;
+    double largest = 0.0;
+    PathTerms t;
+    for (const TunnelPath& p : traced.paths) {
+        path_terms(p, layout(p), x, t);
+        rate.push_back(t.state.rate_cm3_s);
+        largest = std::max(largest, t.state.rate_cm3_s);
+    }
+    TunnelPaths kept;
+    for (std::size_t k = 0; k < traced.paths.size(); ++k) {
+        if (rate[k] > 0.0 && rate[k] >= matters * largest) {
+            kept.paths.push_back(std::move(traced.paths[k]));
+        }
+    }
+    return kept;
+}
+
+DriftDiffusion::PathLayout DriftDiffusion::layout(const TunnelPath& p) const {
+    NITCAD_EXPECTS(p.crossing + 1 < p.forward.size());
+    const auto nodes_of = [](const TunnelSample& s, std::vector<std::size_t>& into) {
+        for (int k = 0; k < s.count; ++k) {
+            const auto i = static_cast<std::size_t>(k);
+            if (s.weights[i] != 0.0) into.push_back(s.nodes[i]);
+        }
+    };
+    const auto unique = [](std::vector<std::size_t>& v) {
+        std::ranges::sort(v);
+        v.erase(std::unique(v.begin(), v.end()), v.end());
+    };
+    PathLayout l;
+    nodes_of(p.forward[p.crossing], l.deposit);
+    nodes_of(p.forward[p.crossing + 1], l.deposit);
+    unique(l.deposit);
+    l.columns = l.deposit;
+    l.columns.push_back(p.start);
+    if (tunnel_kind_ == NonlocalTunnelling::direct_wkb) {
+        for (const TunnelSample& s : p.forward) nodes_of(s, l.columns);
+        for (const TunnelSample& s : p.backward) nodes_of(s, l.columns);
+    }
+    unique(l.columns);
+    l.before_cm.assign(p.forward.size(), 0.0);
+    for (std::size_t s = 0; s + 1 < p.forward.size(); ++s) {
+        l.before_cm[s + 1] = l.before_cm[s] + p.length_cm[s];
+    }
+    return l;
+}
+
+bool DriftDiffusion::paths_agree(const TunnelPaths& a, const TunnelPaths& b,
+                                 std::span<const double> x) const {
+    NITCAD_EXPECTS(x.size() == unknowns());
+    const auto states = [&](const TunnelPaths& set) {
+        std::vector<TunnelPathState> r;
+        PathTerms t;
+        for (const TunnelPath& p : set.paths) {
+            path_terms(p, layout(p), x, t);
+            r.push_back(t.state);
+        }
+        return r;
+    };
+    const std::vector<TunnelPathState> sa = states(a), sb = states(b);
+    double largest = 0.0;
+    for (const auto& s : sa) largest = std::max(largest, s.rate_cm3_s);
+    for (const auto& s : sb) largest = std::max(largest, s.rate_cm3_s);
+    // Every path of `from` that matters has a twin in `to` (both sorted by start) with the same
+    // geometry; if their crossing segments differ (by one), the crossing lies at the sample they
+    // share, to 1e-6 of a segment, so the two evaluate the same crossing.
+    const auto covered = [&](const TunnelPaths& from, const std::vector<TunnelPathState>& sf,
+                             const TunnelPaths& to, const std::vector<TunnelPathState>& st) {
+        for (std::size_t k = 0; k < from.paths.size(); ++k) {
+            if (!(sf[k].rate_cm3_s >= matters * largest) || sf[k].rate_cm3_s == 0.0) continue;
+            const TunnelPath& p = from.paths[k];
+            const auto it = std::ranges::lower_bound(to.paths, p.start, {}, &TunnelPath::start);
+            if (it == to.paths.end() || it->start != p.start || !same_geometry(p, *it)) {
+                return false;
+            }
+            const auto m = static_cast<std::size_t>(it - to.paths.begin());
+            if (p.crossing == it->crossing) continue;
+            const bool first = p.crossing < it->crossing;  // p's segment ends where it's starts
+            const double t_p = sf[k].fraction, t_q = st[m].fraction;
+            const bool shared = first ? std::abs(t_p - 1.0) <= 1e-6 && std::abs(t_q) <= 1e-6
+                                      : std::abs(t_p) <= 1e-6 && std::abs(t_q - 1.0) <= 1e-6;
+            if (!shared) return false;
+        }
+        return true;
+    };
+    return covered(a, sa, b, sb) && covered(b, sb, a, sa);
+}
+
+void DriftDiffusion::set_paths(TunnelPaths paths) {
+    NITCAD_EXPECTS(tunnelling());
+    paths_ = std::move(paths);
+    layouts_.clear();
+    std::vector<linalg::Triplet> t = base_triplets_;
+    for (const TunnelPath& p : paths_.paths) {
+        PathLayout l = layout(p);
+        for (const std::size_t c : l.columns) {
+            t.push_back({static_cast<linalg::Index>(3 * p.start + 2),
+                         static_cast<linalg::Index>(3 * c), 0.0});
+            for (const std::size_t d : l.deposit) {
+                t.push_back({static_cast<linalg::Index>(3 * d + 1),
+                             static_cast<linalg::Index>(3 * c), 0.0});
+            }
+        }
+        layouts_.push_back(std::move(l));
+    }
+    const auto size = static_cast<linalg::Index>(unknowns());
+    pattern_ = *linalg::SparseMatrix::from_triplets(size, size, t);  // in range
+    locate_positions();
+    for (std::size_t k = 0; k < paths_.paths.size(); ++k) {
+        PathLayout& l = layouts_[k];
+        const std::size_t i = paths_.paths[k].start;
+        for (const std::size_t c : l.columns) {
+            l.hole.push_back(detail::position(pattern_, 3 * i + 2, 3 * c));
+        }
+        for (const std::size_t d : l.deposit) {
+            for (const std::size_t c : l.columns) {
+                l.electron.push_back(detail::position(pattern_, 3 * d + 1, 3 * c));
+            }
+        }
+    }
+}
+
+void DriftDiffusion::locate_positions() {
+    for (std::size_t i = 0; i < node_count(); ++i) {
+        for (std::size_t r = 0; r < 3; ++r) {
+            for (std::size_t c = 0; c < 3; ++c) {
+                block_[9 * i + 3 * r + c] = detail::position(pattern_, 3 * i + r, 3 * i + c);
+            }
+        }
+    }
+    for (EdgeTerm& e : edges_) {
+        for (std::size_t k = 0; k < 5; ++k) {
+            e.ab[k] = detail::position(pattern_, 3 * e.a + edge_rows[k], 3 * e.b + edge_cols[k]);
+            e.ba[k] = detail::position(pattern_, 3 * e.b + edge_rows[k], 3 * e.a + edge_cols[k]);
+        }
+    }
+    for (const ImpactNode& node : impact_nodes_) {
+        for (std::size_t k = node.first; k < node.last; ++k) {
+            ImpactEdge& ie = impact_edges_[k];
+            const EdgeTerm& e = edges_[ie.edge];
+            const std::size_t other = e.a == node.node ? e.b : e.a;
+            ie.n_p = detail::position(pattern_, 3 * node.node + 1, 3 * other + 2);
+            ie.p_n = detail::position(pattern_, 3 * node.node + 2, 3 * other + 1);
+        }
+    }
+    for (std::size_t k = 0; k < interfaces_.edges().size(); ++k) {
+        const InterfaceEdge& f = interfaces_.edges()[k];
+        interface_np_[k] = {detail::position(pattern_, 3 * f.insulator, 3 * f.semiconductor + 1),
+                            detail::position(pattern_, 3 * f.insulator, 3 * f.semiconductor + 2)};
+    }
+}
+
+void DriftDiffusion::path_terms(const TunnelPath& p, const PathLayout& l,
+                                std::span<const double> x, PathTerms& t) const {
+    const std::size_t nc = l.columns.size(), nd = l.deposit.size();
+    const std::size_t i = p.start;
+    t.pairs = 0.0;
+    t.d_pairs.assign(nc, 0.0);
+    t.share.assign(nd, 0.0);
+    t.d_share.assign(nd * nc, 0.0);
+    t.state = {i, 0.0, 0.0, 0.0, 0.0, false};
+    const auto column = [&](std::size_t node) {
+        return static_cast<std::size_t>(std::ranges::lower_bound(l.columns, node) -
+                                        l.columns.begin());
+    };
+    const std::size_t ci = column(i);
+    // A sample's psi and E_v (units of V_T), each linear in psi with partials w (E_v: -w).
+    const auto value = [&](const TunnelSample& s, auto&& f) {
+        double v = 0.0;
+        for (int q = 0; q < s.count; ++q) {
+            const auto m = static_cast<std::size_t>(q);
+            if (s.weights[m] != 0.0) v += s.weights[m] * f(s.nodes[m]);
+        }
+        return v;
+    };
+    const auto psi_at = [&](std::size_t node) { return x[3 * node]; };
+    const auto valence_at = [&](std::size_t node) {
+        return -(log_dos_p_[node] + x[3 * node] + band_shift_[node]);
+    };
+    const auto end_at = [&](std::size_t node) {
+        return tunnel_kind_ == NonlocalTunnelling::kane
+                   ? log_dos_n_[node] - x[3 * node] - band_shift_[node]
+                   : valence_at(node) + tunnel_gap_[i] / V_T_;
+    };
+    // d/dpsi of a sample's linear value with weights times `sign`, added into d.
+    const auto add_weights = [&](const TunnelSample& s, double sign, std::vector<double>& d) {
+        for (int q = 0; q < s.count; ++q) {
+            const auto m = static_cast<std::size_t>(q);
+            if (s.weights[m] != 0.0) d[column(s.nodes[m])] += sign * s.weights[m];
+        }
+    };
+
+    // The crossing on the frozen segment (a, b): Delta = E_v(i) - E_end, dDelta = -e_i + w.
+    const TunnelSample& sa = p.forward[p.crossing];
+    const TunnelSample& sb = p.forward[p.crossing + 1];
+    const double Ev_i = valence_at(i);
+    const double Da = Ev_i - value(sa, end_at), Db = Ev_i - value(sb, end_at);
+    const double den = Da - Db;
+    if (!(den < 0.0)) return;  // the band does not fall along the segment: no crossing on it
+    const double tt = Da / den;
+    std::vector<double> dDa(nc, 0.0), dDb(nc, 0.0), dt(nc);
+    dDa[ci] = dDb[ci] = -1.0;
+    add_weights(sa, 1.0, dDa);
+    add_weights(sb, 1.0, dDb);
+    for (std::size_t c = 0; c < nc; ++c) dt[c] = (-Db * dDa[c] + Da * dDb[c]) / (den * den);
+    const double La = p.length_cm[p.crossing];
+    const double length = l.before_cm[p.crossing] + tt * La;
+    const double psi_a = value(sa, psi_at), psi_b = value(sb, psi_at);
+    const double drop = (1.0 - tt) * psi_a + tt * psi_b - x[3 * i];
+    t.state.length_cm = length;
+    t.state.fraction = tt;
+    t.state.reached = tt >= -1e-6 && tt <= 1.0 + 1e-6;
+    if (length > 0.0) t.state.field_V_per_cm = V_T_ * drop / length;
+
+    double G = 0.0;
+    std::vector<double> dG(nc, 0.0);
+    if (tunnel_kind_ == NonlocalTunnelling::kane) {
+        if (!(length > 0.0 && drop > 0.0)) return;
+        // F = V_T (psi_f - psi_i) / l: dF = V_T ((dpsi_f - e_i) / l - drop dl / l^2), with
+        // dpsi_f = (1 - t) w_a + t w_b + (psi_b - psi_a) dt and dl = L_a dt.
+        const double F = V_T_ * drop / length;
+        const physics::KaneRate g = physics::kane_generation(tunnel_A_[i], tunnel_B_[i], F);
+        G = g.rate;
+        std::vector<double> dpf(nc, 0.0);
+        add_weights(sa, 1.0 - tt, dpf);
+        add_weights(sb, tt, dpf);
+        for (std::size_t c = 0; c < nc; ++c) {
+            const double dpsi_f = dpf[c] + (psi_b - psi_a) * dt[c] - (c == ci ? 1.0 : 0.0);
+            const double dF = V_T_ * (dpsi_f / length - drop * La * dt[c] / (length * length));
+            dG[c] = g.d_dF * dF;
+        }
+    } else {
+        // eq. (11) over the forward samples, in SI: delta = (E_v(i) - E_v(s)) V_T / E_g.
+        constexpr double q = base::q_C, hbar = base::hbar_J_s;
+        const double Eg = tunnel_gap_[i];
+        const double cd = V_T_ / Eg;
+        const double mr = tunnel_mc_[i] * tunnel_mv_[i] / (tunnel_mc_[i] + tunnel_mv_[i]);
+        const physics::WkbBand band{Eg * q, mr};
+        const std::size_t ns = p.forward.size();
+        std::vector<double> delta(ns), Ev(ns);
+        for (std::size_t s = 0; s < ns; ++s) {
+            Ev[s] = value(p.forward[s], valence_at);
+            delta[s] = cd * (Ev_i - Ev[s]);
+        }
+        // dδ_s = cd (-e_i + w_s).
+        const auto add_delta = [&](std::size_t s, double scale, std::vector<double>& d) {
+            d[ci] -= scale * cd;
+            add_weights(p.forward[s], scale * cd, d);
+        };
+        double Ik = 0.0, Iik = 0.0;
+        std::vector<double> dIk(nc, 0.0), dIik(nc, 0.0);
+        for (std::size_t s = 0; s + 1 < ns; ++s) {
+            const physics::WkbSegment w =
+                physics::wkb_segment(delta[s], delta[s + 1], p.length_cm[s] * 1e-2, band);
+            Ik += w.I_k;
+            Iik += w.I_ik;
+            add_delta(s, w.dI_k_da, dIk);
+            add_delta(s + 1, w.dI_k_db, dIk);
+            add_delta(s, w.dI_ik_da, dIik);
+            add_delta(s + 1, w.dI_ik_db, dIik);
+        }
+        // |dE_v/dx| at the start over the first segment [J/m]: q V_T (E_v(i) - E_v(1)) / L_0.
+        const double L0 = p.length_cm[0] * 1e-2;
+        const double slope = q * V_T_ * (Ev_i - Ev[1]) / L0;
+        std::vector<double> dslope(nc, 0.0);
+        dslope[ci] -= q * V_T_ / L0;
+        add_weights(p.forward[1], q * V_T_ / L0, dslope);
+        // k_m^2 from E_vmax over the start and the backward samples and E_cmin = min(E_v + E_g)
+        // over the forward ones.
+        double Evmax = Ev_i;
+        const TunnelSample* at_max = nullptr;  // nullptr: the start node
+        for (const TunnelSample& s : p.backward) {
+            const double v = value(s, valence_at);
+            if (v > Evmax) {
+                Evmax = v;
+                at_max = &s;
+            }
+        }
+        std::size_t at_min = 0;
+        for (std::size_t s = 1; s < ns; ++s) {
+            if (Ev[s] < Ev[at_min]) at_min = s;
+        }
+        const double Ecmin = Ev[at_min] + Eg / V_T_;
+        const double kv = 2.0 * tunnel_mv_[i] * q * V_T_ / (hbar * hbar);
+        const double kc = 2.0 * tunnel_mc_[i] * q * V_T_ / (hbar * hbar);
+        const double win_v = kv * (Evmax - Ev_i), win_c = kc * (Ev_i - Ecmin);
+        const double km2 = std::max(std::min(win_v, win_c), 0.0);
+        std::vector<double> dkm2(nc, 0.0);
+        if (km2 > 0.0) {
+            if (win_v <= win_c) {  // kv (dE_vmax - dE), dE = -e_i
+                if (at_max != nullptr) {
+                    add_weights(*at_max, -kv, dkm2);
+                    dkm2[ci] += kv;
+                }  // at the start dE_vmax = dE: no dependence
+            } else {  // kc (dE - dE_cmin), dE_cmin = -w_min
+                dkm2[ci] -= kc;
+                add_weights(p.forward[at_min], kc, dkm2);
+            }
+        }
+        const physics::WkbPathRate r = physics::wkb_path_rate(slope, Ik, Iik, km2);
+        G = r.rate * 1e-6;  // [cm^-3 s^-1]
+        for (std::size_t c = 0; c < nc; ++c) {
+            dG[c] = 1e-6 * (r.d_slope * dslope[c] + r.d_I_k * dIk[c] + r.d_I_ik * dIik[c] +
+                            r.d_km2 * dkm2[c]);
+        }
+    }
+    t.state.rate_cm3_s = G;
+    const double k_row = volume_[i] * generation_scale_;
+    t.pairs = k_row * G;
+    for (std::size_t c = 0; c < nc; ++c) t.d_pairs[c] = k_row * dG[c];
+    // Deposit: (1 - t) on sample a's stencil, t on b's.
+    const auto deposit = [&](const TunnelSample& s, double share, double sign) {
+        for (int q = 0; q < s.count; ++q) {
+            const auto m = static_cast<std::size_t>(q);
+            if (s.weights[m] == 0.0) continue;
+            const auto d = static_cast<std::size_t>(
+                std::ranges::lower_bound(l.deposit, s.nodes[m]) - l.deposit.begin());
+            const double w = s.weights[m];
+            t.share[d] += share * w;
+            for (std::size_t c = 0; c < nc; ++c) t.d_share[d * nc + c] += sign * w * dt[c];
+        }
+    };
+    deposit(sa, 1.0 - tt, -1.0);
+    deposit(sb, tt, 1.0);
+}
+
+void DriftDiffusion::add_path_tunnelling(std::span<const double> x, std::span<double> f,
+                                         std::span<double> values) const {
+    const bool jacobian = !values.empty();
+    PathTerms t;
+    for (std::size_t k = 0; k < paths_.paths.size(); ++k) {
+        const PathLayout& l = layouts_[k];
+        path_terms(paths_.paths[k], l, x, t);
+        if (t.pairs == 0.0 && std::ranges::all_of(t.d_pairs, [](double v) { return v == 0.0; })) {
+            continue;
+        }
+        const std::size_t nc = l.columns.size();
+        const std::size_t i = paths_.paths[k].start;
+        f[3 * i + 2] -= t.pairs;
+        for (std::size_t d = 0; d < l.deposit.size(); ++d) {
+            f[3 * l.deposit[d] + 1] += t.share[d] * t.pairs;
+        }
+        if (!jacobian) continue;
+        for (std::size_t c = 0; c < nc; ++c) {
+            values[l.hole[c]] -= t.d_pairs[c];
+            for (std::size_t d = 0; d < l.deposit.size(); ++d) {
+                values[l.electron[d * nc + c]] +=
+                    t.share[d] * t.d_pairs[c] + t.pairs * t.d_share[d * nc + c];
+            }
+        }
+    }
+}
+
+std::vector<TunnelPathState> DriftDiffusion::path_states(std::span<const double> x) const {
+    NITCAD_EXPECTS(x.size() == unknowns());
+    std::vector<TunnelPathState> states;
+    PathTerms t;
+    for (std::size_t k = 0; k < paths_.paths.size(); ++k) {
+        path_terms(paths_.paths[k], layouts_[k], x, t);
+        states.push_back(t.state);
+    }
+    return states;
 }
 
 InterfaceStatistics DriftDiffusion::statistics(std::size_t node) const noexcept {

@@ -73,6 +73,10 @@ inline void drift_diffusion_point(const assemble::DriftDiffusion& system,
         point.edge_current_n.push_back(jn * current_scale);
         point.edge_current_p.push_back(jp * current_scale);
     }
+    for (const assemble::TunnelPathState& s : system.path_states(x)) {
+        point.tunnel_paths.push_back(
+            {s.start, s.length_cm, s.field_V_per_cm, s.rate_cm3_s, s.reached});
+    }
 }
 
 }  // namespace NiTCAD::solve::detail

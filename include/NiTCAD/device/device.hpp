@@ -26,6 +26,7 @@
 
 #include <cstdint>
 #include <expected>
+#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
@@ -36,6 +37,7 @@
 #include "NiTCAD/base/error.hpp"
 #include "NiTCAD/device/contact.hpp"
 #include "NiTCAD/mesh/mesh.hpp"
+#include "NiTCAD/mesh/tensor_cells.hpp"
 #include "NiTCAD/physics/insulator.hpp"
 #include "NiTCAD/physics/interface_traps.hpp"
 #include "NiTCAD/physics/semiconductor.hpp"
@@ -95,6 +97,9 @@ struct DeviceDescription {
     std::vector<double> acceptors;      // N_A per mesh node [cm^-3]; 0 on insulator nodes
     std::vector<Contact> contacts;
     std::vector<Interface> interfaces;  // declared interfaces; may be empty
+    // The cells of a tensor-product mesh (mesh::TensorCells, Unit 20), which nonlocal tunnelling
+    // traces its paths through; optional, nothing else reads them.
+    std::optional<mesh::TensorCells> cells;
 };
 
 class Device {
@@ -129,7 +134,8 @@ public:
     //   recombination on an interface that is not between a semiconductor and an insulator; a
     //   fixed charge not finite, a recombination velocity not finite and >= 0, or traps rejected
     //   by physics::check_interface_traps for the semiconductor side (the message says which);
-    //   the index is the interface.
+    //   the index is the interface;
+    // - cells that are not those of the mesh (mesh::TensorCells::matches).
     [[nodiscard]] static std::expected<Device, base::Error> create(DeviceDescription description);
 
     [[nodiscard]] const mesh::Mesh& mesh() const noexcept { return d_.mesh; }
@@ -140,6 +146,10 @@ public:
     [[nodiscard]] std::span<const double> acceptors() const noexcept { return d_.acceptors; }
     [[nodiscard]] std::span<const Contact> contacts() const noexcept { return d_.contacts; }
     [[nodiscard]] std::span<const Interface> interfaces() const noexcept { return d_.interfaces; }
+    // The mesh's cells, or nullptr when the description gave none.
+    [[nodiscard]] const mesh::TensorCells* cells() const noexcept {
+        return d_.cells ? &*d_.cells : nullptr;
+    }
     // The transport across an edge joining regions a and b: the declared interface's, else
     // drift-diffusion. Precondition (NITCAD_EXPECTS): both are valid region ids.
     [[nodiscard]] InterfaceTransport transport(RegionId a, RegionId b) const;

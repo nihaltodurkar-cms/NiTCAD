@@ -121,7 +121,7 @@ Each layer may depend only on layers drawn below it. Layers on the same row do n
  L6   analysis    derived observables from results   (deferred; nothing requested yet)
  L5   solve       Newton, damping, continuation, sweeps; produces results; cancellation + progress
  L4   assemble    scaling; discretization (SG flux and extensions); contacts/BC handling;
-                  residual + Jacobian; nonlocal models (deferred)
+                  residual + Jacobian; nonlocal models (tunnel paths since Unit 20)
  L3   device | results      device = problem description (regions, doping, materials, contacts)
                             results = plain result data (fields, terminal quantities, run record)
  L2   physics     materials and local models; value + exact partial derivatives; no mesh, no matrices
@@ -192,7 +192,8 @@ thermionic emission through per-edge arrays in the `Inputs` struct, `core/includ
    state, but they still return only their physical value and exact partial derivatives. The model does not own mesh
    traversal or Newton iteration.
 6. **Nonlocal models** (path-integrated band-to-band tunnelling, nonlocal ionization) need paths across the
-   mesh, so they live in `assemble`, not `physics`. They are deferred.
+   mesh, so they live in `assemble`, not `physics`. Nonlocal band-to-band tunnelling exists since Unit 20
+   (`assemble/tunnel_paths.hpp`; the rates stay in `physics/band_to_band.hpp`); nonlocal ionization is deferred.
 7. A new physics feature must be expressible as one or more reusable models/equation contributions. It must not
    create a device-specific nonlinear solver, duplicate contact handling, or duplicate linear-algebra infrastructure.
 8. The first physics unit contained only what the first diode needed; later units may extend the model library without
@@ -1116,6 +1117,129 @@ legacy `ionization.py`, `continuation.py` `arc_length_sweep`):**
   generation-free retry, the tangent-turn check, the current in the arc metric, the pivot hysteresis) is exercised by
   the breakdown gates, not by mutation: one such run takes about five minutes.
 
+**As built (Unit 20, band-to-band tunnelling and nonlocal path machinery; owner request, scope approved by the owner
+after two review rounds; legacy `btbt.py`, `btbt_grid.py`, `nonlocal_path.py`, `core/src/nonlocal/`):**
+- **Owner's decisions.** Local Kane with the legacy silicon pair; no Hurkx D factor and no occupancy factor (pure
+  generation, as the legacy); a calibrated nonlocal Kane rate for silicon; the Esseni direct-gap WKB rate only for
+  materials with a direct gap and cited tunnelling masses, never silicon; a tensor-grid locator; frozen geometry with
+  live evaluation, relocation with cycle protection, transient re-tracing, semiconductor-only tracing, path-span band
+  extrema, one SI boundary; the review's Jacobian, equilibrium, pair, 1D, transient, AC, relocation, uniform-field and
+  cost gates. Excluded: phonon-assisted nonlocal tunnelling, trap-assisted tunnelling, tunnelling through insulators,
+  paths across heterointerfaces, temperature dependence of A and B, an unstructured locator (Unit 16).
+- **Rates** (`physics/band_to_band.hpp`). Kane G = A F² exp(−B/F), silicon A = 3.5e21 cm⁻³s⁻¹, B = 1.03e8 V/cm (Hurkx,
+  Klaassen and Knuvers 1992, Table I, the legacy pin), 0 where B/F > 700. Per material `BandToBandParameters`: (A, B), a
+  direct-gap flag and the conduction- and valence-band tunnelling masses (both 0 or both positive, only on a direct gap,
+  m_r < m₀/2). Silicon: indirect, no masses; GaAs, In0.53Ga0.47As and AlGaAs: direct, no masses (none verified; the
+  user supplies cited ones); germanium and 4H-SiC: none. The Esseni functions (κ, its antiderivatives, the exact segment
+  integrals, eq. (11), eq. (8)) are SI and keep the legacy's three transcription fixes.
+- **Local** (`models.btbt_local`, off by default). At each semiconductor node off the ohmic contacts, F = |E| of the field
+  reconstructed as for impact ionization (Unit 19). OLD / NEW / REASON: OLD, the legacy's per-axis mean of |E| combined
+  by norm; NEW, the reconstructed vector; REASON, one field definition with impact ionization (the two agree wherever the
+  field keeps its sign at a node).
+- **Nonlocal** (`models.btbt_nonlocal` = `kane` | `direct_wkb`, off by default). Needs the device's cells
+  (`DeviceDescription::cells`, a `mesh::TensorCells` checked against the mesh); refused with `btbt_local`, on a device
+  with an edge between two different semiconductors, and (`direct_wkb`) where a semiconductor region lacks a direct gap
+  or masses.
+  - Tracing (`assemble/tunnel_paths.hpp`; ψ in V_T, lengths in cm). Node i starts a path if and only if it is a
+    semiconductor node off the ohmic contacts, its material has the model's parameters, some semiconductor node j within
+    ℓ_max + the largest cell diagonal has E_end(j) ≤ E_v(i) (a superset of the reachable crossings), and ∇ψ(i) ≠ 0. The
+    path follows +∇ψ (multilinear interpolation of nodal central differences, components below 1e-12 of the largest
+    dropped so a transverse-uniform state traces exactly as 1D), step to the nearer of the cell's next face (landing on
+    it, also when the step falls short by 1e-6 of itself, so the geometry does not depend on rounding) and half the
+    cell's smallest width. Only all-semiconductor cells are traced; other faces are Neumann (the outward component is
+    dropped). With Δ(s) = E_v(i) − E_end(s) the crossing is the first segment where Δ reaches 0; the path continues to
+    Δ = E_g/2 (the legacy margin) and stops before a sample with weight on a contact, when its direction vanishes, after
+    64 steps without a new maximum of ψ, or after 100000. A path with no crossing within ℓ_max (where the rate falls to
+    exp(−690) of its scale: E_g B/690 for kane) is dropped. E_end is E_c (kane) or E_v + E_g (direct_wkb, δ = 1); both
+    band edges include band-gap narrowing and the band shift.
+  - Live evaluation. The crossing segment (a, b) is frozen; t = Δ_a/(Δ_a − Δ_b) is extrapolated along it while the
+    crossing moves (smooth in ψ, and the Jacobian reads only the start and the two stencils). kane: ℓ = (segments before
+    a) + t L_ab, F̄ = (ψ_f − ψ_i)/ℓ in V/cm with ψ in V (scaled: (V_T/L_D)(ψ̂_f − ψ̂_i)/ℓ̂), ψ_f = (1 − t)ψ_a + tψ_b;
+    with band-gap narrowing off in one material ψ_f − ψ_i = E_g/q, and in a uniform field F̄ = F. G_p = A F̄² exp(−B/F̄).
+    direct_wkb: eq. (11) from the exact integrals over the forward samples, |dE_v/dx| over the first segment, k_m² from
+    E_vmax over the start and a backward polyline (from the start along −∇ψ) and E_cmin = min(E_v + E_g) over the forward
+    samples, both polylines run to the end of the band bending (field below 1e3 V/cm, or ten ℓ_max). The consolidated
+    proposal said "path-span extrema"; from the start to the crossing E_v is largest at the start itself, so k_m² would
+    be 0 there: the span runs past both ends, still local (OLD, the legacy's whole-device extrema).
+  - Pairs. P = V_i G_p / R0: holes from the start's hole row, electrons into the electron rows of the crossing segment's
+    stencils, (1 − t) and t times the stencil weights; electrons and holes balance to rounding. The Jacobian is exact for
+    the frozen geometry; `set_paths` rebuilds the pattern (no paths, no change).
+  - Which paths. `trace_paths(x)` keeps the paths whose rate at x is at least 1e-10 (`DriftDiffusion::matters`) of the
+    largest: a start deep in a neutral region crosses only after the whole depletion width, at a negligible rate, but
+    would couple distant nodes in the factors (the 2D cost gate: 3536 paths without, 444 with).
+- **Relocation** (`src/solve/relocation.hpp`, private). After Newton converges the paths are re-traced; while the traced
+  set does not agree with the frozen one at the solution, the system takes it and Newton runs again. Agreement
+  (`paths_agree`): every path that matters in either set has a twin from the same start with the same geometry (nonzero-
+  weight stencil nodes and positions within 1e-9 cm up to the later crossing segment's end; crossing segments at most one
+  apart, and then the crossing at their shared sample to 1e-6). At most 8 re-tracings; a set agreeing with one used
+  before (a cycle) or the limit is `non_convergence`. Found while building the gates: comparing every path made the
+  Zener sweep cycle (starts at the edge of the criterion, carrying exp(−690) of the scale, flip with rounding), and a
+  half-cell step stopping 1e-15 short of a face shifted every later sample (hence the landing tolerance); a y-uniform 2D
+  state cycled on rounding-level transverse gradients (hence the 1e-12 cut).
+- **Solves.** `sweep_bias` relocates each point (the paths carry over); the generation-free retry covers any generation
+  model. Transient: the starting state relocates; after each step the paths are re-traced, a changed set repeats the
+  step once and a second change is accepted with the paths lagging (`Transient::retraced_steps`, `lagged_steps`).
+  Small-signal: the paths of each operating point, frozen (the geometry's dependence on the state is not in the
+  matrix). `trace_bias`: the starting point's paths, re-traced after each accepted point (lagging one step). The Newton
+  update floor is 1e-8 of the largest density with any generation model on. Results: `BiasPoint::tunnel_paths` (start,
+  length, mean field, rate, reached) and `path_relocations`. The run record lists the switches and hashes the
+  coefficients, masses and cells only when on.
+- **Off is bit-identical**: the 14 Unit 22 probe runs, run digests included, hash identically to `main`.
+- **Gates** (`tests/physics/band_to_band_test.cpp`, `tests/mesh/tensor_cells_test.cpp`,
+  `tests/assemble/band_to_band_test.cpp`, `tests/solve/btbt_test.cpp`; `[.btbt]` in Release only, ctest `solve_btbt`):
+  - Coefficients pinned; κ = 0 at both band edges; antiderivatives against Simpson (1e-10); segment partials against
+    differences; eq. (11) over 1 to 200 segments of a uniform field equals eq. (8) to 1e-11; the parameter refusals.
+  - Uniform field at 0, 30 and 45° in 1D/2D/3D: local Kane at every node to 1e-9; nonlocal kane per path equal to the
+    local rate at its start and direct_wkb to eq. (8) (worst 2.1e-13 over all cases), the mean field equal to the field.
+  - Finite-difference Jacobian, every column, local, kane and direct_wkb in 1D, 2D and 3D with noise: worst 5.4e-8.
+  - Pairs balance (electrons against holes) to 1e-16 relative; transverse-uniform 2D and 3D generation equal to 1D
+    (assembler 0; solves 3.3e-16 and 2.2e-16 of the current density); paths never enter an oxide and start beside it.
+  - Silicon Zener diode (p⁺ and n⁺ 5e19, 100 nm, 0.5 nm spacing; the current resolution is 5e-4 A/cm² at this
+    doping): local, the current is the generated pairs' within the resolution at every point, ln(I/F⁴) against 1/F has
+    slope −1.019 B (−1.5 to −3 V), 2.1 times over the last 0.25 V to −3 V. Nonlocal kane: every point settles in at most
+    two re-tracings, its paths reach their crossings, the current is the paths' pairs; against local 33 times smaller at
+    −1 V and 1.9 at −3 V (the mean field over a path is below the peak field). With recombination off the current is
+    the pairs' to 5.7e-6 and 9.3e-7.
+  - Equilibrium (no D factor): at 0 V the current is the pairs' within the resolution; the pairs are 2.9e-9 A/cm²
+    (2.9e-6 of the −1 V current) at 5e19 and 3.4e-4 A/cm² (7.7e-5) at 1e20.
+  - Relocation: −2 V in one step and by a ramp agree to rounding (0); a cycle and a set that never settles are reported
+    (a stand-in system). A trace to −2 V (388 points, 28 re-tracings) ends at the sweep's current; from −1 V
+    every point carries its paths.
+  - Transient: a constant −2 V holds the steady current (0 drift, no re-tracing); a 1 ns ramp to −2.5 V re-traces 14
+    steps (none lagged) and ends at the steady −2.5 V current, fixed steps of 20 and 10 ps alike.
+  - Small signal at −2 V, f = 0: Y against the DC differences 3.7e-5 (local) and 9.5e-5 (nonlocal; the differences
+    themselves scatter by −3e-5 to 1.3e-4 between h = 0.1 and 0.0125 V).
+  - 2D corner junction (100 by 50 nm, 1 nm): per junction length the curved junction's current exceeds the planar one's
+    from −1 V and reaches 1e-3 A/cm per cm at −1.25 V against −1.5 V.
+  - GaAs with a test's masses (m_c 0.067, m_v 0.5 m₀; no set ships them): direct_wkb sweeps to −2 V (the current reaches
+    5e5 A/cm²: a direct gap tunnels far more readily) with the current the paths' pairs.
+  - Cost (the 2D corner junction at −2 V): 444 paths; Jacobian entries 1.033 times, evaluation and factorization 1.14
+    times the model off.
+- **Known limits.**
+  - Pure generation: the junction field generates at equilibrium (above: negligible at 5e19, 7.7e-5 of the −1 V current at
+    1e20). A D factor or occupancy factor needs a verified source (owner's decision).
+  - The calibrated nonlocal rate uses the local (A, B) at the path's mean field; it is not a phonon-assisted nonlocal
+    model, and it differs from the local rate by the factors above.
+  - The tracer reads the tensor grid's axes and cell indices (`mesh::TensorCells`), an exception to 6.11 item 1 scoped
+    to the nonlocal model; an unstructured locator (Unit 16) needs a cell-walk interface for it.
+  - The geometry's own dependence on the state is outside the Jacobian and the small-signal matrix; transient and trace
+    runs can lag the paths by one step (counted).
+  - At heavy doping the current resolution (5e-4 to 1e-3 A/cm² here) bounds how small a tunnelling current is resolved.
+- Mutation checks (46, applied by the C++ string-replacement tool and a shell loop, no Python; the per-mutation run is
+  the band-to-band and tensor-cell tests, hidden gates included): 44 caught, two after a test was added (the flat
+  segment's partials, now against the derivative of L κ(midpoint); a trace that starts without paths, now traced from
+  −1 V with every point required to carry paths). Caught: the Kane derivative, cut-off and F²; the WKB antiderivatives,
+  eq. (11)'s prefactor and its I_ik partial, eq. (8)'s exponent (the legacy's √2 bug); the parameter checks (B with A,
+  masses on an indirect gap, the reduced-mass bound); the stencil weights and the cells-to-mesh check; the gradient,
+  the start criterion, the Neumann projection, the landing tolerance, the direction cut, the crossing index, samples
+  on contacts; the local field partial and hole sign; the mean field's V_T and length partial, the deposit shares, the
+  hole sign, dt, the WKB slope and k_m² partials, the pruning, the shared-sample rule, the generation flag, the
+  heterointerface and local-with-nonlocal refusals; relocation that never re-traces, without cycle detection or
+  limit; the transient repeat, the small-signal paths, the trace's starting paths and re-tracing; the run record's
+  switch and coefficients. Not caught: ℓ_max at exp(−100) instead of exp(−690) (it drops only paths at or below
+  exp(−100) of the rate scale, which no gate resolves; practically equivalent), and the generation-free retry keeping
+  the nonlocal model (no tunnelling fixture fails a point, so the retry never runs).
+
 ### 6.3 Device description
 
 A `device` is plain data: regions (geometry in the mesh's coordinates), doping per node or region,
@@ -1621,6 +1745,12 @@ Unstructured meshes are not implemented initially. The mesh architecture must st
 - Not carried from the legacy mesh modules: `graded_mesh` and `merge_mesh` (node placement, to come with the device unit if
   requested) and `check_mesh` (needs doping, so it belongs above `mesh`); the unstructured stencils (`stencil.cpp`) stay
   deferred (R3).
+- Unit 20: `mesh::TensorCells` (`tensor_cells.hpp`) carries what a path traced through the device needs and the graph
+  does not: the axes, cell indices and the multilinear stencil of a point in a cell, built from the same axes as
+  `make_tensor_grid` and checked against the mesh (`matches`). The device holds it optionally
+  (`DeviceDescription::cells`); only nonlocal tunnelling reads it. Its tracer (`assemble/tunnel_paths.cpp`) walks
+  cells by axis, an exception to item 1 scoped to that model; an unstructured producer (Unit 16) needs a cell-walk
+  interface (locate, stencil, exit face, neighbour) for the tracer to use instead.
 
 ### 6.12 Long-term computational architecture
 
@@ -1724,12 +1854,13 @@ tests/base/                 constants, error, contract tests and probe       (Un
 include/NiTCAD/linalg/      sparse_matrix.hpp, linear_solver.hpp             (Unit 3, exists)
 src/linalg/                 sparse matrix, solver, private Eigen backend     (Unit 3, exists)
 tests/linalg/               matrix, solver and header-boundary tests         (Unit 3, exists)
-include/NiTCAD/mesh/        mesh.hpp, tensor_grid.hpp                        (Unit 4, exists)
-src/mesh/                   graph validation, tensor-grid producer           (Unit 4, exists)
-tests/mesh/                 graph validation and geometry gates              (Unit 4, exists)
+include/NiTCAD/mesh/        mesh.hpp, tensor_grid.hpp (Unit 4); tensor_cells.hpp (Unit 20)
+src/mesh/                   graph validation, tensor-grid producer (Unit 4); tensor cells (Unit 20)
+tests/mesh/                 graph validation and geometry gates (Unit 4); tensor cells (Unit 20)
 include/NiTCAD/physics/     semiconductor, mobility, recombination, statistics (Unit 5); bandgap_narrowing (Unit 11);
                             electron affinity (Unit 12); field_mobility (Unit 13); fermi_dirac, Fermi-Dirac
-                            statistics (Unit 14); material sets, thermionic_emission, ionization (Unit 15)
+                            statistics (Unit 14); material sets, thermionic_emission, ionization (Unit 15);
+                            band_to_band (Unit 20)
 src/physics/                parameter validation, band quantities, models; increasing_root (private) (Units 5, 11,
                             13, 14, 15)
 tests/physics/              published values, limits, FD derivative gates; heavy doping; Canali; Fermi integral and
@@ -1738,17 +1869,19 @@ include/NiTCAD/device/      device.hpp, contact.hpp (Unit 6); gate contacts (Uni
 src/device/                 description validation, topology check           (Unit 6, exists)
 tests/device/               construction, validation, floating regions       (Unit 6, exists)
 include/NiTCAD/assemble/    scaling, bernoulli, sg_flux, ohmic, equilibrium_poisson (Unit 7); drift_diffusion (Unit 9);
-                            models (Unit 11); gate, contact_bias (Unit 12); thermionic_flux, band_edges (Unit 15)
+                            models (Unit 11); gate, contact_bias (Unit 12); thermionic_flux, band_edges (Unit 15);
+                            tunnel_paths (Unit 20)
 src/assemble/               scaling, scaled device (private), equilibrium Poisson, drift-diffusion, gate, contact bias
                             (Units 7, 9, 12)
 tests/assemble/             Bernoulli/SG references, FD-Jacobian gate, reduction (Unit 7); gate terms (Unit 12);
                             heterojunctions (Unit 15)
 include/NiTCAD/solve/       newton.hpp, equilibrium.hpp (Unit 8); bias.hpp (Unit 9, sweeps Unit 10); control.hpp (Unit 10)
 src/solve/                  equilibrium and bias solves, sweeps, run record (Units 8-10); fields helper (private,
-                            Unit 12)
+                            Unit 12); relocation (private, Unit 20)
 tests/solve/                Newton contract, equilibrium and bias diode gates, legacy graded_mesh port, sweeps,
                             cancellation and progress (Units 8-10); MOS-C (legacy moscap port) and MOSFET (Unit 12);
-                            field mobility (Unit 13); Fermi-Dirac (Unit 14); heterojunctions (Unit 15)
+                            field mobility (Unit 13); Fermi-Dirac (Unit 14); heterojunctions (Unit 15);
+                            band-to-band tunnelling (Unit 20)
 include/NiTCAD/results/     convergence.hpp, solution.hpp, run.hpp (header-only plain data) (Unit 10, exists)
 .github/workflows/ci.yml    CI: build and test Debug and Release per branch  (CI unit, exists)
 include/NiTCAD/<layer>/...  public headers per layer                         (created per unit)
@@ -1876,8 +2009,8 @@ built.
 | 16 | Unstructured mesh | mesh, assemble | target |
 | 17 | Adaptive mesh refinement and state transfer | mesh, solve, results | target |
 | 18 | Scalable linear-solver backends: PARDISO and/or iterative/AMG paths | linalg | target; must preserve backend-neutral interface |
-| 19 | Impact ionization and breakdown-oriented continuation | physics, assemble, solve | **done on branch `physics/impact-ionization`**: van Overstraeten–de Man with the temperature factor, local generation along the reconstructed current with an exact Jacobian, off by default and bit-identical when off; pseudo-arclength `trace_bias` through folds; breakdown read from the ionization integral (6.2, Unit 19) |
-| 20 | Band-to-band tunnelling and nonlocal path machinery | assemble, physics, solve | target |
+| 19 | Impact ionization and breakdown-oriented continuation | physics, assemble, solve | **done, on `main`** (`b665b9d`): van Overstraeten–de Man with the temperature factor, local generation along the reconstructed current with an exact Jacobian, off by default and bit-identical when off; pseudo-arclength `trace_bias` through folds; breakdown read from the ionization integral (6.2, Unit 19) |
+| 20 | Band-to-band tunnelling and nonlocal path machinery | assemble, physics, solve | **done on branch `physics/band-to-band-tunnelling`**: local Kane (the legacy silicon pair), nonlocal paths traced through tensor-grid cells as frozen geometry with live evaluation and relocation, the calibrated Kane rate at the path's mean field (silicon) and the direct-gap WKB rate (cited masses only), pure generation, off by default and bit-identical when off (6.2, Unit 20) |
 | 21 | Transient simulation | solve, assemble, results | **done, on `main`** (`a601e7e`): backward Euler and variable-step BDF2 with error-controlled steps, waveforms, displacement current with exact conservation, interface trap dynamics eliminated in the interface solve (6.2, Unit 21) |
 | 22 | AC small-signal analysis | linalg, assemble, solve, results | **done, on `main`** (`75cc2c0`): J + iωt₀C + T(iωt₀) at a DC or quasi-static operating point, complex linear solver, admittance matrix with displacement current and a resolution bound, interface traps in the frequency domain (6.2, Unit 22) |
 | 23 | Thermal / electrothermal coupling | physics, assemble, solve | target |
@@ -2095,7 +2228,8 @@ architecture; historical branch names remain only where they are useful to expla
 | V24 | Unit 21 (`solve/transient`): Debug and Release build with no warnings; `nitcad_physics_test` 72 test cases, `nitcad_device_test` 24, `nitcad_assemble_test` 63, `nitcad_solve_test` 112 (+5 `[.mosfet]` and 5 `[.transient]`, Release only), all pass (Release 10/10, Debug 8/8). Time-step FD Jacobians 1D/2D/3D, both statistics, incomplete ionization, at most 1.7e-7 (trap part 3.5e-7); a long step is the steady state; total currents sum to 3.1e-10 (2D MOS with traps and two ohmic contacts) and integrate to the contact charges; backward Euler first order (1.92–1.99 per halving) and BDF2 second (3.33 to 3.90); error control follows rtol across kinks and a jump; MOS-C RC response within 0.093% (meshed and lumped), dielectric relaxation within 0.34%, trap emission rate within 3.2e-4; the legacy diode turn-off (legacy core built from the reference checkout) within 3.7e-5 until the legacy run stalls (a legacy finding); 2D/3D extrusions to 2.3e-13; the meshed MOSFET gate step settles to the Id–Vg current within 1e-6. Steady paths bit-identical to `main` (plain, meshed-oxide and trap devices, run digests included). Twenty-seven mutation checks caught (four after a test was added or sharpened). | Verified locally. |
 | V25 | No-Python cleanup (`test/no-python-refs`, owner request before Unit 22): every reference value that came from an outside tool is recomputed in C++. `tests/physics/reference_arithmetic.hpp` (double-double arithmetic: exp, log, sqrt, pow, ln 2 and π computed by series, Gauss–Legendre by Newton, ζ by Euler–Maclaurin) and `tests/physics/references.hpp` (Bernoulli function, F₁/₂ and F₋₁/₂ by polylogarithm series and quadrature, neutral roots by bisection with and without dopant levels, the legacy material formulas) replace the mpmath and 50-digit literals of `flux_test`, `poisson_test`, `fermi_dirac_test` (physics and solve), `heavy_doping_test`, `interface_traps_test`, `materials_test`, `mobility_test`, `semiconductor_test`, `statistics_test` and `heterojunction_test`; series and quadrature agree to 1e-26 and F₁/₂(0) matches (1 − 2^−½) ζ(3/2) to 1e-26; every existing tolerance holds unchanged. A new test checks the stored 6-point Gauss–Legendre constants against the Newton-computed rule to 4 ε. The graded-mesh check against values from a numpy run of the legacy `mesh.py` became a check against the legacy specification (cell count from the spacing integral in closed form, end points, gradient limit). The stored legacy turn-off table (generated by running the legacy Python) became a C++ port of the legacy 1D diode and transient loop; NiTCAD agrees with it to 3.7e-5, as with the table, and the port reproduces the legacy stall (from step 190; the legacy run's from 184). Source changed only in provenance comments (`bernoulli.hpp`, `fermi_dirac.hpp`, `fermi_dirac.cpp`). | Verified locally. |
 | V26 | Unit 22 (`solve/ac-small-signal`): Debug and Release build with no warnings; `nitcad_linalg_test` 47 test cases, `nitcad_physics_test` 72, `nitcad_device_test` 24, `nitcad_assemble_test` 69, `nitcad_solve_test` 123 (+6 `[.mosfet]` and 6 `[.transient]`, Release only), all pass (Release 10/10, Debug 8/8). Complex solver against the real block form to 1e-12; the small-signal matrix equals the steady Jacobian at s = 0 (9.8e-16) and the backward-Euler step Jacobian at a real s (1.6e-15, trap part 2.1e-13); current rows against differences to 2.6e-8; conservation and equilibrium reciprocity within the reported resolution; MOS-C RC 6.7e-4, dielectric relaxation 1.3e-4, frozen-minority HF C-V 3.1e-9, gated-diode LF C-V below 1e-6, junction 0.88% (depletion approximation), long diode 3.2e-3, trap conductance peak 0.09%, transient sine runs converging to Y at second order; MOSFET g_m 6.9e-10, g_ds 1.0e-11, C_gg 8.7e-13. Steady and transient paths bit-identical to `main` (14 probe runs: diodes 1D/2D, field mobility with Fermi–Dirac, a heterojunction, lumped MOS-C quasi-static and drift-diffusion, a meshed MOS with traps quasi-static and drift-diffusion, transients under BDF2, backward Euler and fixed steps, 1D and 2D trap transients, run digests included). 31 of 33 mutations caught (one after a fixture was added; one undetectable, one equivalent). | Verified locally. |
-| V27 | Unit 19 (`physics/impact-ionization`): Debug and Release build with no warnings; `nitcad_linalg_test` 47 test cases, `nitcad_physics_test` 79, `nitcad_device_test` 24, `nitcad_assemble_test` 77, `nitcad_solve_test` 126 (+6 `[.mosfet]`, 6 `[.transient]` and 6 `[.breakdown]`, Release only), all pass (Release 11/11, Debug 8/8). Coefficients and γ against the published silicon set; FD Jacobian with the generation 6.6e-7 (1D/2D/3D, 5% noise), the resolution's partials 4e-8; a uniform field ionizes alike at 0/30/45° (1e-9), the resolution term's value to 1e-9; a field across the current gives no generation (2.3e-10), nor does a vanishing current; contact rows unchanged. Breakdown at the ionization-integral condition: 55.34 V against the analytic 55.26 V (1e16) and 35.95 against 35.86 V (2e16); the legacy-lifetime fixture's integral 0.99965 at 1e-4 A/cm²; the current balance below 1e-6 at low multiplication; open-base snapback through its fold at 17.27 V (α_T·M = 1 to 1.6e-4); a curved 2D junction's current grows 5.7 times by −27 V against 2.2 planar; 2D/3D extrusions 0 and 2.2e-16; transient drift 6.1e-11; small-signal conductance against DC differences 4.7e-6. Model off: the 14 Unit 22 probe runs hash identically to `main`. 34 of 36 mutations caught (four after a test was added; two equivalent). | Verified locally. |
+| V27 | Unit 19 (`physics/impact-ionization`): Debug and Release build with no warnings; `nitcad_linalg_test` 47 test cases, `nitcad_physics_test` 79, `nitcad_device_test` 24, `nitcad_assemble_test` 77, `nitcad_solve_test` 126 (+6 `[.mosfet]`, 6 `[.transient]` and 6 `[.breakdown]`, Release only), all pass (Release 11/11, Debug 8/8). Coefficients and γ against the published silicon set; FD Jacobian with the generation 6.6e-7 (1D/2D/3D, 5% noise), the resolution's partials 4e-8; a uniform field ionizes alike at 0/30/45° (1e-9), the resolution term's value to 1e-9; a field across the current gives no generation (2.3e-10), nor does a vanishing current; contact rows unchanged. Breakdown at the ionization-integral condition: 55.34 V against the analytic 55.26 V (1e16) and 35.95 against 35.86 V (2e16); the legacy-lifetime fixture's integral 0.99965 at 1e-4 A/cm²; the current balance below 1e-6 at low multiplication; open-base snapback through its fold at 17.27 V (α_T·M = 1 to 1.6e-4); a curved 2D junction's current grows 5.7 times by −27 V against 2.2 planar; 2D/3D extrusions 0 and 2.2e-16; transient drift 6.1e-11; small-signal conductance against DC differences 4.7e-6. Model off: the 14 Unit 22 probe runs hash identically to `main`. 34 of 36 mutations caught (four after a test was added; two equivalent). | Verified locally; on `main` (`b665b9d`, PR #25, CI passed). |
+| V28 | Unit 20 (`physics/band-to-band-tunnelling`): Debug and Release build with no warnings; all suites pass (Release 12/12 with the new Release-only ctest `solve_btbt`, Debug 8/8). Physics, cells, assembler and solve gates as listed in 6.2 (Unit 20): uniform-field closed forms to 2.1e-13, FD Jacobian 5.4e-8, pairs to rounding, 1D reduction 3.3e-16, Zener Kane slope 1.019 B, relocation settles in at most two re-tracings, AC 9.5e-5, 2D cost 1.14 times. Models off: the 14 Unit 22 probe runs hash identically to `main`. 44 of 46 mutations caught (two after a test was added; one practically equivalent, one in the unexercised retry path). | Verified locally. |
 | V3 | Scaling definitions, scaled variables and Newton tolerances read from `inputs.cpp` and `device1d.cpp` and recorded in 6.1. One open question remains for Unit 8 (convergence criterion on the clipped correction). | Verified |
 
 Verifications due at their own unit: none left. The 5e-5 Jacobian gate's normalization was read at Unit 7 (section 10), and

@@ -13,6 +13,7 @@
 #include "NiTCAD/solve/equilibrium.hpp"
 #include "NiTCAD/solve/newton.hpp"
 #include "fields.hpp"
+#include "relocation.hpp"
 
 namespace NiTCAD::solve {
 
@@ -243,7 +244,14 @@ std::expected<results::Transient, base::Error> solve_transient(
             }
         };
         results::ConvergenceRecord record;
-        if (auto ok = newton_solve(dd, x, steady.newton, *solver, record, control.stop, observe);
+        int relocations = 0;
+        if (auto ok = detail::solve_relocating(
+                *system, x,
+                [&] {
+                    return newton_solve(dd, x, steady.newton, *solver, record, control.stop,
+                                        observe);
+                },
+                relocations);
             !ok) {
             run.stopped = std::move(ok.error());
             run.unfinished = std::move(record);
@@ -303,6 +311,7 @@ std::expected<results::Transient, base::Error> solve_transient(
     double h = dt0;                // the next step to try, seconds
     std::size_t landing = 0;       // index of the next landing time
     std::size_t attempt = 0;
+    bool repeating = false;        // the step is being repeated with re-traced tunnel paths
     std::vector<double> f(dd.unknowns());
     while (landing < landings.size()) {
         if (control.stop.stop_requested()) {
@@ -352,6 +361,7 @@ std::expected<results::Transient, base::Error> solve_transient(
                 if (step_s / 4.0 >= dt_min) {
                     h = step_s / 4.0;
                     ++run.rejected_steps;
+                    repeating = false;
                     continue;
                 }
                 base::Error e = std::move(solved.error());
@@ -364,6 +374,23 @@ std::expected<results::Transient, base::Error> solve_transient(
             run.unfinished = std::move(record);
             return run;
         }
+        // Nonlocal tunnelling: the paths re-traced at the new state. If they differ, the step is
+        // repeated once with them; if they differ again it is accepted with the paths lagging
+        // and the next step takes the new ones.
+        if (dd.tunnelling()) {
+            assemble::TunnelPaths traced = dd.trace_paths(x);
+            if (!dd.paths_agree(traced, dd.paths(), x)) {
+                system->set_paths(std::move(traced));
+                if (!repeating) {
+                    repeating = true;
+                    ++run.retraced_steps;
+                    h = step_s;
+                    continue;
+                }
+                ++run.lagged_steps;
+            }
+        }
+        repeating = false;
         State next{t_new / t0, x, dd.storage(x), dd.trap_occupancies(x, &step),
                    dd.contact_charges(x, &step)};
 
@@ -425,6 +452,7 @@ std::expected<results::Transient, base::Error> solve_transient(
                 }
                 h = step_s * shrink;
                 ++run.rejected_steps;
+                repeating = false;
                 continue;
             }
         }
