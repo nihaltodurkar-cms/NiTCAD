@@ -1035,6 +1035,83 @@ Whether the new solver reproduces these exact defaults is to be confirmed unit b
   resolution without the Poisson rows' residual (in every fixture that term is below the others, so the bound still
   holds), and the operating point not stamped (equivalent: the reported fields hold the contact values to rounding).
 
+**As built (Unit 19, impact ionization and breakdown-oriented continuation; owner request, scope approved by the owner;
+legacy `ionization.py`, `continuation.py` `arc_length_sweep`):**
+- **Coefficients** (`physics/impact_ionization.hpp`). van Overstraeten–de Man, α(E) = γA exp(−γB/E) per carrier, with
+  a low- and a high-field pair switched at E₀ (holes 4e5 V/cm; electrons one pair), and the temperature factor
+  γ = tanh(ħω/2kT₀)/tanh(ħω/2kT), ħω = 0.063 eV, T₀ = 300 K (γ > 1 above 300 K, so α falls with temperature). Per
+  region in `SemiconductorParameters::impact_ionization` (silicon set; A = 0 turns a carrier off). α is zero at E = 0
+  and where γB/E > 700 (below the smallest double).
+- **Generation** (`DriftDiffusion`, `models.impact_ionization`, off by default). At each semiconductor node, the field
+  and both current densities are reconstructed as vectors from the node's edges: v = P Σ_k t_k v_k, with t_k the edge
+  directions, v_k the edge components and P the pseudo-inverse of Σ t_k t_kᵀ (eigenvalues below 1e-12 of the largest
+  dropped, so a 1D or extruded node has no transverse part). Each carrier generates
+  G = α(E_∥)|J|²/(m q), E_∥ = |E·J|/m, m = sqrt(|J|² + ε²): the field along the current, the current's magnitude,
+  with ε² = (1e-12 A/cm²)² + (ρR)². As |J| → 0, G ≤ α(E_∥)|J|²/(εq) → 0 and E_∥ → 0, so the direction of a vanishing
+  current cannot create ionization; R is the node's mean edge current scale and ρ = `models.impact_current_resolution`
+  (default 0) an optional floor relative to it. The Jacobian is exact, ε's dependence on R included (FD gate 6.6e-7;
+  the generation part on its own, isotropy at 0/30/45°, a field across the current, zero current, γ and ρ partials
+  tested on their own). The pattern gains (n-row, p) and (p-row, n) entries only when the model is on.
+  - OLD / NEW / REASON: OLD, the legacy took |E| and |J| per edge (1D) or the field magnitude (2D/3D); NEW, the field
+    component along the reconstructed current; REASON, owner's choice: the carriers are accelerated along their path,
+    and a field across the current (a MOSFET's gate field) must not ionize.
+- **Off is bit-identical.** With the model off the assembler, Newton floor, sweep and run record follow the previous
+  paths exactly (the 14 probe runs of Unit 22, run digests included, hash identically to `main`); the run record
+  lists `models.impact_ionization`, the resolution and the coefficients only when on.
+- **Newton with generation.** The update-size density floor is 1e-8 of the largest density with the model on (1e-20
+  off; legacy precedent): generation driven by currents below the state's resolution made Newton cycle between
+  states. `sweep_bias` with the model on retries a failed point from the stamped state through a generation-free solve
+  (the legacy 0.0 stage), not reported to progress.
+- **Continuation** (`solve/trace.hpp`, `trace_bias`). Pseudo-arclength in one contact's bias: Euler predictor along the
+  unit tangent, Newton on the bordered system [J dF/dλ; cᵀ], regular at a fold. The dense arc row is solved through a
+  sparse B₀ (its largest entry only, pivot kept within 0.3 of the largest) and Sherman–Morrison (a dense row cost 50
+  times the factorization: 47 s against 1.2 s on the 1D gate). The arc metric is in volts: the bias, the swept
+  contact's current at 1 V per decade of |I| + I₀ (I₀ ten times the starting resolution) and 0.1 of the state's root
+  mean square; a tangent turning by more than acos 0.9 rejects the step (near a fold the corrector can land on the
+  other branch). Steps grow ×1.5 after at most 7 iterations, shrink ×0.7 after 12 or more, halve on failure. Ends at
+  end_V (landing on it), current_limit, max_points, or a step below min_step_V (non_convergence, points kept).
+- **Breakdown is read from the ionization integral, not from the trace stalling.** The gates take the bias where
+  ∫α_n exp(−∫(α_n−α_p)) on the simulated field reaches 1; the trace defines no breakdown voltage of its own.
+- **Gates** (`tests/physics`, `tests/assemble`, `tests/solve/impact_ionization_test.cpp`; `[.breakdown]` runs in
+  Release only, ctest `solve_breakdown`):
+  - The reverse current follows the local model's balance J(1 − I_n) = J_n0 + J_p0 e^{−φ(W)} + q∫g e^{−φ} (10 ps
+    lifetimes: below 1e-6 up to I_n = 0.25, 2.6e-4 at multiplication 18, 0.97% at 500, where 1/(1 − I_n) amplifies
+    the integral's discretization error).
+  - Trace options and errors, its stops (end_V landed exactly, current_limit, max_points, cancellation keeping the
+    completed points) and progress; the run record (the model's settings and coefficients only when on).
+  - One-sided junctions with 10 ps lifetimes: the integral crosses 1 at 55.34 V (analytic one-sided 55.26) for 1e16
+    and 35.95 V (35.86) for 2e16, the current there over ten times its value at 90% of the bias. The legacy fixture
+    (legacy lifetimes) traced to 1e-4 A/cm²: integral 0.99965, bias within 1% of the analytic value.
+  - The trace's points are steady states within their resolution; an open-base transistor snaps back (fold at 17.27 V;
+    α_T·M = 1 on the high-current branch to 1.6e-4; a sweep agrees on the low branch to 2.2e-4).
+  - 2D: a cylindrical junction edge (radius about 1 µm) breaks down first: swept to −27 V its current grows 5.7 times over
+    its −10 V value against 2.2 for the planar junction (traced, 100 times at 27.8 V against 55.4 V).
+  - y-uniform 2D and 3D reproduce 1D (0 and 2.2e-16); transient runs hold the multiplied steady current (6.1e-11) and
+    the small-signal conductance equals the DC derivative (4.7e-6, the differences' own scatter about 3e-6).
+- **Known limits.**
+  - Below the state's current resolution the generation is noise, and a trace crawls (many short steps) where the
+    current is unresolved; the legacy-lifetime gate caps its corrector at 25 iterations. ρ > 0 suppresses that noise
+    but delays the start of an open-base trace, so it stays 0 by default.
+  - A 2D trace costs about 3 s per point on the 2D junction (minutes per trace); the 2D gate uses sweeps.
+  - Not in Unit 19 (owner's exclusions): nonlocal ionization, tunnelling, thermal effects, other coefficient models.
+- Mutation checks (36, applied by the C++ string-replacement tool and a shell loop, no Python; the per-mutation run
+  is the non-hidden impact-ionization tests): 34 caught. Caught: the temperature factor inverted or left out, the
+  high-field branch never taken, α' without its exponent, γ left out of the exponent or the prefactor, B_low allowed
+  to vanish with A_low (missed at first; a validation case was added), the field magnitude instead of the component
+  along the current, either generation sign, |j| for |j|²/m, the current floor dropped (first a build failure, an
+  unused constant), ρ not squared (missed at first: the partials were consistent with the wrong ε; a value check was
+  added), the resolution's partial dropped, dG/dj without 2ε², dG/dE without the sign, the pseudo-inverse not
+  inverted, the n-row p partial in the wrong entry, the R ψ partial's sign, the field partial's sign, contact nodes
+  generating (missed at first: every solve fixture has a low field at its contacts, where α is exactly 0; the
+  isotropy case now checks the contact rows), the resolution not validated, the Newton floor without the generation,
+  the settings or the coefficients missing from the run record, the trace's max_step or current_limit missing from
+  it, the current-limit stop, the Sherman–Morrison denominator or its kept entry, dF per volt, the progress point,
+  max_points 0 or the step order accepted. Not caught, both equivalent: the end bias not set in the landing
+  predictor (the landing row λ − λ_prev = λ_end − λ_prev puts the corrector there anyway), and the stop token not
+  checked between steps (the corrector checks it at every iteration). The continuation's own strategy (the
+  generation-free retry, the tangent-turn check, the current in the arc metric, the pivot hysteresis) is exercised by
+  the breakdown gates, not by mutation: one such run takes about five minutes.
+
 ### 6.3 Device description
 
 A `device` is plain data: regions (geometry in the mesh's coordinates), doping per node or region,
@@ -1316,6 +1393,8 @@ An on-disk result format is **deferred** (R2), under the same independence rule 
   frequency), the linear solve's pivot ratio and backward error, the resolution of each column, and the small-signal
   fields (δψ, δn, δp per volt on each contact) at the requested frequencies; `stopped` / `unfinished` as `Sweep`.
   Helpers give G = Re Y and C = Im Y / ω.
+- Unit 19: `trace_bias` returns a `Sweep`: its points in trace order (the bias may fall back through a fold), each
+  `BiasPoint`'s bias the full contact vector and its convergence the corrector's; `stopped` / `unfinished` as a sweep.
 
 ### 6.7 Error policy (R1, decided)
 
@@ -1401,6 +1480,9 @@ An on-disk result format is **deferred** (R2), under the same independence rule 
   `Phase::small_signal` event per frequency of each point (the frequency's index + 1 as iteration, the largest backward
   error as residual, the frequency in the new `Progress::frequency_Hz`). The token is checked before every frequency;
   a cancelled run keeps its completed points.
+- Unit 19: `trace_bias` reports its starting point as a sweep (`Phase::bias`, point 0 of 1), then every step attempt
+  with `Phase::bias`, the attempt's index + 1 as point and point_count 0 (unknown in advance). The token is checked
+  before every step and in the corrector; a cancelled trace keeps its accepted points.
 
 ### 6.10 Linear solver interface (D3)
 
@@ -1790,10 +1872,10 @@ built.
 | 16 | Unstructured mesh | mesh, assemble | target |
 | 17 | Adaptive mesh refinement and state transfer | mesh, solve, results | target |
 | 18 | Scalable linear-solver backends: PARDISO and/or iterative/AMG paths | linalg | target; must preserve backend-neutral interface |
-| 19 | Impact ionization and breakdown-oriented continuation | physics, assemble, solve | target |
+| 19 | Impact ionization and breakdown-oriented continuation | physics, assemble, solve | **done on branch `physics/impact-ionization`**: van Overstraeten–de Man with the temperature factor, local generation along the reconstructed current with an exact Jacobian, off by default and bit-identical when off; pseudo-arclength `trace_bias` through folds; breakdown read from the ionization integral (6.2, Unit 19) |
 | 20 | Band-to-band tunnelling and nonlocal path machinery | assemble, physics, solve | target |
 | 21 | Transient simulation | solve, assemble, results | **done, on `main`** (`a601e7e`): backward Euler and variable-step BDF2 with error-controlled steps, waveforms, displacement current with exact conservation, interface trap dynamics eliminated in the interface solve (6.2, Unit 21) |
-| 22 | AC small-signal analysis | linalg, assemble, solve, results | **done on branch `solve/ac-small-signal`**: J + iωt₀C + T(iωt₀) at a DC or quasi-static operating point, complex linear solver, admittance matrix with displacement current and a resolution bound, interface traps in the frequency domain (6.2, Unit 22) |
+| 22 | AC small-signal analysis | linalg, assemble, solve, results | **done, on `main`** (`75cc2c0`): J + iωt₀C + T(iωt₀) at a DC or quasi-static operating point, complex linear solver, admittance matrix with displacement current and a resolution bound, interface traps in the frequency domain (6.2, Unit 22) |
 | 23 | Thermal / electrothermal coupling | physics, assemble, solve | target |
 | 24 | Analysis and extraction engine | analysis | target |
 | 25 | Scientific visualization / rendering | render | target |
@@ -2009,6 +2091,7 @@ architecture; historical branch names remain only where they are useful to expla
 | V24 | Unit 21 (`solve/transient`): Debug and Release build with no warnings; `nitcad_physics_test` 72 test cases, `nitcad_device_test` 24, `nitcad_assemble_test` 63, `nitcad_solve_test` 112 (+5 `[.mosfet]` and 5 `[.transient]`, Release only), all pass (Release 10/10, Debug 8/8). Time-step FD Jacobians 1D/2D/3D, both statistics, incomplete ionization, at most 1.7e-7 (trap part 3.5e-7); a long step is the steady state; total currents sum to 3.1e-10 (2D MOS with traps and two ohmic contacts) and integrate to the contact charges; backward Euler first order (1.92–1.99 per halving) and BDF2 second (3.33 to 3.90); error control follows rtol across kinks and a jump; MOS-C RC response within 0.093% (meshed and lumped), dielectric relaxation within 0.34%, trap emission rate within 3.2e-4; the legacy diode turn-off (legacy core built from the reference checkout) within 3.7e-5 until the legacy run stalls (a legacy finding); 2D/3D extrusions to 2.3e-13; the meshed MOSFET gate step settles to the Id–Vg current within 1e-6. Steady paths bit-identical to `main` (plain, meshed-oxide and trap devices, run digests included). Twenty-seven mutation checks caught (four after a test was added or sharpened). | Verified locally. |
 | V25 | No-Python cleanup (`test/no-python-refs`, owner request before Unit 22): every reference value that came from an outside tool is recomputed in C++. `tests/physics/reference_arithmetic.hpp` (double-double arithmetic: exp, log, sqrt, pow, ln 2 and π computed by series, Gauss–Legendre by Newton, ζ by Euler–Maclaurin) and `tests/physics/references.hpp` (Bernoulli function, F₁/₂ and F₋₁/₂ by polylogarithm series and quadrature, neutral roots by bisection with and without dopant levels, the legacy material formulas) replace the mpmath and 50-digit literals of `flux_test`, `poisson_test`, `fermi_dirac_test` (physics and solve), `heavy_doping_test`, `interface_traps_test`, `materials_test`, `mobility_test`, `semiconductor_test`, `statistics_test` and `heterojunction_test`; series and quadrature agree to 1e-26 and F₁/₂(0) matches (1 − 2^−½) ζ(3/2) to 1e-26; every existing tolerance holds unchanged. A new test checks the stored 6-point Gauss–Legendre constants against the Newton-computed rule to 4 ε. The graded-mesh check against values from a numpy run of the legacy `mesh.py` became a check against the legacy specification (cell count from the spacing integral in closed form, end points, gradient limit). The stored legacy turn-off table (generated by running the legacy Python) became a C++ port of the legacy 1D diode and transient loop; NiTCAD agrees with it to 3.7e-5, as with the table, and the port reproduces the legacy stall (from step 190; the legacy run's from 184). Source changed only in provenance comments (`bernoulli.hpp`, `fermi_dirac.hpp`, `fermi_dirac.cpp`). | Verified locally. |
 | V26 | Unit 22 (`solve/ac-small-signal`): Debug and Release build with no warnings; `nitcad_linalg_test` 47 test cases, `nitcad_physics_test` 72, `nitcad_device_test` 24, `nitcad_assemble_test` 69, `nitcad_solve_test` 123 (+6 `[.mosfet]` and 6 `[.transient]`, Release only), all pass (Release 10/10, Debug 8/8). Complex solver against the real block form to 1e-12; the small-signal matrix equals the steady Jacobian at s = 0 (9.8e-16) and the backward-Euler step Jacobian at a real s (1.6e-15, trap part 2.1e-13); current rows against differences to 2.6e-8; conservation and equilibrium reciprocity within the reported resolution; MOS-C RC 6.7e-4, dielectric relaxation 1.3e-4, frozen-minority HF C-V 3.1e-9, gated-diode LF C-V below 1e-6, junction 0.88% (depletion approximation), long diode 3.2e-3, trap conductance peak 0.09%, transient sine runs converging to Y at second order; MOSFET g_m 6.9e-10, g_ds 1.0e-11, C_gg 8.7e-13. Steady and transient paths bit-identical to `main` (14 probe runs: diodes 1D/2D, field mobility with Fermi–Dirac, a heterojunction, lumped MOS-C quasi-static and drift-diffusion, a meshed MOS with traps quasi-static and drift-diffusion, transients under BDF2, backward Euler and fixed steps, 1D and 2D trap transients, run digests included). 31 of 33 mutations caught (one after a fixture was added; one undetectable, one equivalent). | Verified locally. |
+| V27 | Unit 19 (`physics/impact-ionization`): Debug and Release build with no warnings; `nitcad_linalg_test` 47 test cases, `nitcad_physics_test` 79, `nitcad_device_test` 24, `nitcad_assemble_test` 77, `nitcad_solve_test` 126 (+6 `[.mosfet]`, 6 `[.transient]` and 6 `[.breakdown]`, Release only), all pass (Release 11/11, Debug 8/8). Coefficients and γ against the published silicon set; FD Jacobian with the generation 6.6e-7 (1D/2D/3D, 5% noise), the resolution's partials 4e-8; a uniform field ionizes alike at 0/30/45° (1e-9), the resolution term's value to 1e-9; a field across the current gives no generation (2.3e-10), nor does a vanishing current; contact rows unchanged. Breakdown at the ionization-integral condition: 55.34 V against the analytic 55.26 V (1e16) and 35.95 against 35.86 V (2e16); the legacy-lifetime fixture's integral 0.99965 at 1e-4 A/cm²; the current balance below 1e-6 at low multiplication; open-base snapback through its fold at 17.27 V (α_T·M = 1 to 1.6e-4); a curved 2D junction's current grows 5.7 times by −27 V against 2.2 planar; 2D/3D extrusions 0 and 2.2e-16; transient drift 6.1e-11; small-signal conductance against DC differences 4.7e-6. Model off: the 14 Unit 22 probe runs hash identically to `main`. 34 of 36 mutations caught (four after a test was added; two equivalent). | Verified locally. |
 | V3 | Scaling definitions, scaled variables and Newton tolerances read from `inputs.cpp` and `device1d.cpp` and recorded in 6.1. One open question remains for Unit 8 (convergence criterion on the clipped correction). | Verified |
 
 Verifications due at their own unit: none left. The 5e-5 Jacobian gate's normalization was read at Unit 7 (section 10), and

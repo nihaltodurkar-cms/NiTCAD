@@ -87,6 +87,27 @@ struct SlotboomParameters {
     bool operator==(const SlotboomParameters&) const = default;
 };
 
+// Impact ionization of one carrier, van Overstraeten-de Man (impact_ionization.hpp; Unit 19):
+// alpha(E) = A exp(-B / E), the low branch (A_low, B_low) below switch_V_per_cm and the high branch
+// from it on. A of 0 on both branches: the carrier does not ionize.
+struct ImpactIonizationCoefficients {
+    double A_low_per_cm;
+    double B_low_V_per_cm;
+    double A_high_per_cm;
+    double B_high_V_per_cm;
+    double switch_V_per_cm;
+    bool operator==(const ImpactIonizationCoefficients&) const = default;
+};
+
+// Both carriers and the optical-phonon energy of the temperature factor (0: no temperature
+// dependence). All zero (the default): the material does not ionize.
+struct ImpactIonizationParameters {
+    ImpactIonizationCoefficients electron;
+    ImpactIonizationCoefficients hole;
+    double phonon_energy_eV;
+    bool operator==(const ImpactIonizationParameters&) const = default;
+};
+
 struct SemiconductorParameters {
     double eps_r;                   // relative permittivity
     double Eg0_eV;                  // band gap at 0 K
@@ -105,6 +126,7 @@ struct SemiconductorParameters {
     double radiative_cm3_s;          // radiative (band-to-band) coefficient B [cm^3/s] (Unit 15)
     IonizationParameters ionization;  // Unit 15
     RichardsonParameters richardson;  // Unit 15
+    ImpactIonizationParameters impact_ionization{};  // Unit 19; all zero: none
 
     bool operator==(const SemiconductorParameters&) const = default;
 };
@@ -113,8 +135,11 @@ struct SemiconductorParameters {
 // electron affinity measured / from band structure; mobility a Caughey-Thomas fit; lifetimes a
 // Scharfetter fit; Auger coefficients measured (Dziewior and Schmid); band-gap narrowing a Slotboom
 // fit; velocity saturation the Canali fit; the legacy hydrogenic 45 meV levels for B, P and As
-// (M13). The radiative coefficient is left 0 as in the legacy (silicon's is about 1e-14 cm^3/s,
-// negligible against SRH), so silicon results do not change.
+// (M13); impact ionization van Overstraeten and de Man, Solid-State Electron. 13, 583 (1970), the
+// legacy values (one electron branch; the hole branches switching at 4e5 V/cm) with an
+// optical-phonon energy of 0.063 eV for the temperature factor (Unit 19). The radiative coefficient
+// is left 0 as in the legacy (silicon's is about 1e-14 cm^3/s, negligible against SRH), so
+// silicon results do not change.
 inline constexpr SemiconductorParameters silicon_parameters{
     .eps_r = 11.7,
     .Eg0_eV = 1.17,
@@ -136,6 +161,13 @@ inline constexpr SemiconductorParameters silicon_parameters{
     .ionization = {.donor_eV = 0.045, .acceptor_eV = 0.045, .donor_degeneracy = 2.0,
                    .acceptor_degeneracy = 4.0},
     .richardson = {.electron = 0.0, .hole = 0.0},
+    .impact_ionization = {.electron = {.A_low_per_cm = 7.03e5, .B_low_V_per_cm = 1.231e6,
+                                       .A_high_per_cm = 7.03e5, .B_high_V_per_cm = 1.231e6,
+                                       .switch_V_per_cm = 5.0e5},
+                          .hole = {.A_low_per_cm = 1.582e6, .B_low_V_per_cm = 2.036e6,
+                                   .A_high_per_cm = 6.71e5, .B_high_V_per_cm = 1.693e6,
+                                   .switch_V_per_cm = 4.0e5},
+                          .phonon_energy_eV = 0.063},
 };
 
 // No band-gap narrowing: the Slotboom form and numbers are a silicon fit (Unit 15; the legacy left
@@ -273,7 +305,9 @@ public:
     // or varshni_alpha, varshni_beta, the electron affinity, mu_min, an Auger coefficient, the
     // band-gap-narrowing E0, the radiative coefficient, a dopant level or a Richardson constant is
     // negative, or mu_min > mu_max, or a saturation velocity is not positive, or a Canali beta is
-    // below 1. The message names the parameter; the context value is it.
+    // below 1, or an impact-ionization coefficient A, B, switch field or phonon energy is negative
+    // (B and the switch field positive where A is). The message names the parameter; the context
+    // value is it.
     [[nodiscard]] static std::expected<Semiconductor, base::Error> create(
         const SemiconductorParameters& parameters);
 

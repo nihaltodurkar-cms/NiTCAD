@@ -10,6 +10,7 @@
 #include "NiTCAD/assemble/ohmic.hpp"
 #include "NiTCAD/assemble/sg_flux.hpp"
 #include "NiTCAD/assemble/thermionic_flux.hpp"
+#include "NiTCAD/base/constants.hpp"
 #include "NiTCAD/base/contract.hpp"
 #include "NiTCAD/physics/field_mobility.hpp"
 #include "NiTCAD/physics/interface_traps.hpp"
@@ -29,10 +30,67 @@ constexpr std::size_t edge_cols[5] = {0, 0, 1, 0, 2};
 
 double harmonic_mean(double a, double b) { return 2.0 * a * b / (a + b); }
 
+// The Moore-Penrose pseudo-inverse of a symmetric positive semi-definite D x D matrix (D <= 3,
+// row-major), by Jacobi rotations: eigenvalues below 1e-12 of the largest are taken as zero, so a
+// node whose edges do not span every direction reconstructs only the directions they span.
+void pseudo_inverse(const double* a, int D, double* inverse) {
+    double m[3][3] = {}, v[3][3] = {{1, 0, 0}, {0, 1, 0}, {0, 0, 1}};
+    for (int r = 0; r < D; ++r) {
+        for (int c = 0; c < D; ++c) m[r][c] = a[r * D + c];
+    }
+    for (int sweep = 0; sweep < 50; ++sweep) {
+        double off = 0.0;
+        for (int p = 0; p < D; ++p) {
+            for (int q = p + 1; q < D; ++q) off += m[p][q] * m[p][q];
+        }
+        if (off == 0.0) break;
+        for (int p = 0; p < D; ++p) {
+            for (int q = p + 1; q < D; ++q) {
+                if (m[p][q] == 0.0) continue;
+                const double theta = 0.5 * std::atan2(2.0 * m[p][q], m[q][q] - m[p][p]);
+                const double c = std::cos(theta), s = std::sin(theta);
+                for (int k = 0; k < D; ++k) {  // m <- m J
+                    const double mkp = m[k][p], mkq = m[k][q];
+                    m[k][p] = c * mkp - s * mkq;
+                    m[k][q] = s * mkp + c * mkq;
+                }
+                for (int k = 0; k < D; ++k) {  // m <- J^T m
+                    const double mpk = m[p][k], mqk = m[q][k];
+                    m[p][k] = c * mpk - s * mqk;
+                    m[q][k] = s * mpk + c * mqk;
+                }
+                for (int k = 0; k < D; ++k) {  // v <- v J
+                    const double vkp = v[k][p], vkq = v[k][q];
+                    v[k][p] = c * vkp - s * vkq;
+                    v[k][q] = s * vkp + c * vkq;
+                }
+            }
+        }
+    }
+    double largest = 0.0;
+    for (int k = 0; k < D; ++k) largest = std::max(largest, std::abs(m[k][k]));
+    for (int r = 0; r < D; ++r) {
+        for (int c = 0; c < D; ++c) {
+            double sum = 0.0;
+            for (int k = 0; k < D; ++k) {
+                if (m[k][k] > 1e-12 * largest) sum += v[r][k] * v[c][k] / m[k][k];
+            }
+            inverse[r * D + c] = sum;
+        }
+    }
+}
+
 }  // namespace
 
 std::expected<DriftDiffusion, base::Error> DriftDiffusion::create(
     const device::Device& device, const Scaling& scaling, const PhysicsModels& models) {
+    if (models.impact_ionization && !(std::isfinite(models.impact_current_resolution) &&
+                                      models.impact_current_resolution >= 0.0)) {
+        return std::unexpected(base::Error{
+            base::ErrorCode::invalid_input,
+            "impact_current_resolution must be finite and not negative",
+            base::ErrorContext{.index = std::nullopt, .value = models.impact_current_resolution}});
+    }
     auto scaled = detail::make_scaled_device(device, scaling, models);
     if (!scaled) return std::unexpected(std::move(scaled.error()));
     const std::size_t n = scaled->volume.size();
@@ -115,6 +173,19 @@ std::expected<DriftDiffusion, base::Error> DriftDiffusion::create(
                                 static_cast<linalg::Index>(3 * f.semiconductor + c), 0.0});
         }
     }
+    // Impact ionization: a node's electron generation reads its neighbours' p (through the hole
+    // current) and its hole generation their n.
+    if (models.impact_ionization) {
+        for (const detail::ScaledEdge& e : scaled->edges) {
+            if (!e.carriers) continue;
+            for (const auto [a, b] : {std::pair{e.i, e.j}, std::pair{e.j, e.i}}) {
+                triplets.push_back({static_cast<linalg::Index>(3 * a + 1),
+                                    static_cast<linalg::Index>(3 * b + 2), 0.0});
+                triplets.push_back({static_cast<linalg::Index>(3 * a + 2),
+                                    static_cast<linalg::Index>(3 * b + 1), 0.0});
+            }
+        }
+    }
     const auto size = static_cast<linalg::Index>(3 * n);
     auto pattern = linalg::SparseMatrix::from_triplets(size, size, triplets);
     if (!pattern) return std::unexpected(std::move(pattern.error()));
@@ -190,6 +261,51 @@ std::expected<DriftDiffusion, base::Error> DriftDiffusion::create(
         s.edges_.push_back(t);
     }
 
+    if (models.impact_ionization) {
+        // Per node with coefficients: its carrier edges and the pseudo-inverse of sum t t^T.
+        const mesh::Mesh& m = device.mesh();
+        const int D = m.dimension();
+        s.dimension_ = D;
+        s.generation_scale_ = 1.0 / scaling.R0;
+        s.impact_resolution_ = models.impact_current_resolution;
+        std::vector<std::vector<std::size_t>> incident(n);
+        for (std::size_t k = 0; k < scaled->edges.size(); ++k) {
+            const detail::ScaledEdge& e = scaled->edges[k];
+            if (!e.carriers) continue;
+            incident[e.i].push_back(k);
+            incident[e.j].push_back(k);
+        }
+        for (std::size_t i = 0; i < n; ++i) {
+            if (s.insulator_[i] != 0 || s.contact_[i] >= 0 || incident[i].empty()) continue;
+            const physics::Semiconductor& mat = device.material(static_cast<mesh::NodeId>(i));
+            const physics::ImpactIonizationParameters& ii = mat.parameters().impact_ionization;
+            if (ii.electron.A_low_per_cm == 0.0 && ii.electron.A_high_per_cm == 0.0 &&
+                ii.hole.A_low_per_cm == 0.0 && ii.hole.A_high_per_cm == 0.0) {
+                continue;
+            }
+            ImpactNode node{i, s.impact_edges_.size(), 0, {}, ii.electron, ii.hole,
+                            physics::impact_ionization_temperature_factor(ii.phonon_energy_eV, T)};
+            double outer[9] = {};
+            for (const std::size_t k : incident[i]) {
+                const detail::ScaledEdge& e = scaled->edges[k];
+                const mesh::Point& pa = m.points()[e.i];
+                const mesh::Point& pb = m.points()[e.j];
+                ImpactEdge ie{k, {}, scaling.V_T / e.length_cm,
+                              scaling.J0 / (e.geometry * e.length_cm / scaling.L_D), 0, 0};
+                for (int d = 0; d < D; ++d) ie.t[d] = (pb[d] - pa[d]) / e.length_cm;
+                for (int r = 0; r < D; ++r) {
+                    for (int c = 0; c < D; ++c) outer[r * D + c] += ie.t[r] * ie.t[c];
+                }
+                const std::size_t other = e.i == i ? e.j : e.i;
+                ie.n_p = detail::position(s.pattern_, 3 * i + 1, 3 * other + 2);
+                ie.p_n = detail::position(s.pattern_, 3 * i + 2, 3 * other + 1);
+                s.impact_edges_.push_back(ie);
+            }
+            pseudo_inverse(outer, D, node.inverse);
+            node.last = s.impact_edges_.size();
+            s.impact_nodes_.push_back(node);
+        }
+    }
     for (const InterfaceEdge& f : s.interfaces_.edges()) {
         s.interface_np_.emplace_back(
             detail::position(s.pattern_, 3 * f.insulator, 3 * f.semiconductor + 1),
@@ -588,6 +704,152 @@ void DriftDiffusion::assemble(std::span<const double> x, std::span<double> f,
             }
         }
     }
+    if (!impact_nodes_.empty()) add_impact_generation(x, g, f, values);
+}
+
+void DriftDiffusion::add_impact_generation(std::span<const double> x,
+                                           std::span<const NodeDegeneracy> g,
+                                           std::span<double> f,
+                                           std::span<double> values) const {
+    const bool jacobian = !values.empty();
+    const int D = dimension_;
+    // The carrier edges' fluxes, once.
+    std::vector<std::pair<EdgeFlux, EdgeFlux>> flux(edges_.size());
+    for (std::size_t k = 0; k < edges_.size(); ++k) {
+        if (edges_[k].carriers) flux[k] = edge_fluxes(edges_[k], x, g);
+    }
+    constexpr double q = base::q_C;
+    constexpr double floor2 = impact_current_floor * impact_current_floor;
+    const double rho2 = impact_resolution_ * impact_resolution_;
+    for (const ImpactNode& node : impact_nodes_) {
+        const std::size_t i = node.node;
+        const double count = static_cast<double>(node.last - node.first);
+        // The field and the two current densities at the node, reconstructed from their edge
+        // components by least squares: v = P sum_k t_k v_k, P the pseudo-inverse of sum t t^T.
+        // Edge components: E_k = -field (psi_b - psi_a), j_k = current * flux.
+        // And the size of the opposing flux terms whose difference each current is, averaged over
+        // the edges: R_c = mean_k current_k a_k (c_a + c_b) sqrt(1 + Delta_k^2), a the edge's
+        // low-field factor, c the carrier's density, Delta = psi_b - psi_a.
+        double E[3] = {}, jn[3] = {}, jp[3] = {}, R[2] = {0.0, 0.0};
+        for (std::size_t k = node.first; k < node.last; ++k) {
+            const ImpactEdge& ie = impact_edges_[k];
+            const EdgeTerm& e = edges_[ie.edge];
+            const double delta = x[3 * e.b] - x[3 * e.a];
+            const double Ek = -ie.field * delta;
+            const double jnk = ie.current * flux[ie.edge].first.flux;
+            const double jpk = ie.current * flux[ie.edge].second.flux;
+            const double root = std::sqrt(1.0 + delta * delta);
+            R[0] += ie.current * e.an * (x[3 * e.a + 1] + x[3 * e.b + 1]) * root / count;
+            R[1] += ie.current * e.ap * (x[3 * e.a + 2] + x[3 * e.b + 2]) * root / count;
+            for (int r = 0; r < D; ++r) {
+                double w = 0.0;  // (P t_k)_r
+                for (int c = 0; c < D; ++c) w += node.inverse[r * D + c] * ie.t[c];
+                E[r] += w * Ek;
+                jn[r] += w * jnk;
+                jp[r] += w * jpk;
+            }
+        }
+        // Per carrier, with m = sqrt(|j|^2 + eps^2), eps^2 = floor^2 + (rho R)^2:
+        //     E_par = |E . j| / m,   G = alpha(E_par) |j|^2 / m / q.
+        // E_par is the field along the current (|E . j^| for |j| >> eps), at most |E|; |j|^2 / m is
+        // |j| for |j| >> eps, at most |j|, and smooth through j = 0, where it and its gradient
+        // vanish. eps is the current's resolution at the node: rho =
+        // models.impact_current_resolution of the opposing flux terms, above impact_current_floor;
+        // a current at or below it (rounding, in the dense spill-over layer at a junction, where it
+        // is a difference of fluxes 1e14 times larger and flips sign between Newton iterates) does
+        // not ionize and has no kink.
+        // Partials, s = sign(E . j), w = |j|^2 / m:
+        //     dG/dE   = alpha' w s j / m / q,
+        //     dG/dj   = (alpha' w (s E / m - |E . j| j / m^3)
+        //                + alpha j (|j|^2 + 2 eps^2) / m^3) / q,
+        //     dG/deps = -(alpha' w |E . j| + alpha |j|^2) eps / m^3 / q,  deps/dR = rho^2 R / eps.
+        double G = 0.0, dE[3] = {}, dj[2][3] = {}, dR[2] = {0.0, 0.0};
+        for (int c = 0; c < 2; ++c) {
+            const double* j = c == 0 ? jn : jp;
+            double mag2 = 0.0, Ej = 0.0;
+            for (int r = 0; r < D; ++r) {
+                mag2 += j[r] * j[r];
+                Ej += E[r] * j[r];
+            }
+            const double eps2 = floor2 + rho2 * R[c] * R[c];
+            const double m = std::sqrt(mag2 + eps2);
+            const double Epar = std::abs(Ej) / m;
+            const physics::ImpactIonizationRate a = physics::impact_ionization_coefficient(
+                c == 0 ? node.n : node.p, node.gamma, Epar);
+            if (a.alpha == 0.0 && a.d_dE == 0.0) continue;
+            const double w = mag2 / m;
+            G += a.alpha * w / q;
+            const double s = Ej > 0.0 ? 1.0 : Ej < 0.0 ? -1.0 : 0.0;
+            const double m3 = m * m * m;
+            for (int r = 0; r < D; ++r) {
+                dE[r] += a.d_dE * w * s * j[r] / m / q;
+                dj[c][r] = (a.d_dE * w * (s * E[r] / m - std::abs(Ej) * j[r] / m3) +
+                            a.alpha * j[r] * (mag2 + 2.0 * eps2) / m3) /
+                           q;
+            }
+            // dG/deps deps/dR = -(alpha' w |E . j| + alpha |j|^2) / m^3 / q * rho^2 R.
+            dR[c] = -(a.d_dE * w * std::abs(Ej) + a.alpha * mag2) / m3 / q * rho2 * R[c];
+        }
+        const double k_row = volume_[i] * generation_scale_;
+        f[3 * i + 1] += k_row * G;
+        f[3 * i + 2] -= k_row * G;
+        if (!jacobian) continue;
+        const auto add = [&](std::size_t node_j, int comp, std::size_t k, double v) {
+            // Row n of node i gets +v, row p -v, at column comp of node_j through edge k.
+            const ImpactEdge& ie = impact_edges_[k];
+            const EdgeTerm& e = edges_[ie.edge];
+            const bool own = node_j == i;
+            const bool i_is_a = e.a == i;
+            for (const int row : {1, 2}) {
+                const double sign = row == 1 ? k_row : -k_row;
+                std::size_t pos;
+                if (own) {
+                    pos = block_[9 * i + 3 * static_cast<std::size_t>(row) +
+                                 static_cast<std::size_t>(comp)];
+                } else {
+                    const std::size_t* p = i_is_a ? e.ab : e.ba;
+                    // Edge positions: (psi,psi), (n,psi), (n,n), (p,psi), (p,p).
+                    if (row == 1) {
+                        pos = comp == 0 ? p[1] : comp == 1 ? p[2] : ie.n_p;
+                    } else {
+                        pos = comp == 0 ? p[3] : comp == 1 ? ie.p_n : p[4];
+                    }
+                }
+                values[pos] += sign * v;
+            }
+        };
+        for (std::size_t k = node.first; k < node.last; ++k) {
+            const ImpactEdge& ie = impact_edges_[k];
+            const EdgeTerm& e = edges_[ie.edge];
+            const EdgeFlux& fn = flux[ie.edge].first;
+            const EdgeFlux& fp = flux[ie.edge].second;
+            double wE = 0.0, wn = 0.0, wp = 0.0;  // dG / d(edge component)
+            for (int r = 0; r < D; ++r) {
+                double w = 0.0;
+                for (int c = 0; c < D; ++c) w += node.inverse[r * D + c] * ie.t[c];
+                wE += w * dE[r];
+                wn += w * dj[0][r];
+                wp += w * dj[1][r];
+            }
+            wn *= ie.current;
+            wp *= ie.current;
+            // R's own partials through this edge: d/dc_a = d/dc_b = current a root / count,
+            // d/dpsi_b = -d/dpsi_a = current a (c_a + c_b) Delta / root / count.
+            const double delta = x[3 * e.b] - x[3 * e.a];
+            const double root = std::sqrt(1.0 + delta * delta);
+            const double rn = ie.current * e.an / count, rp = ie.current * e.ap / count;
+            const double sn = x[3 * e.a + 1] + x[3 * e.b + 1];
+            const double sp = x[3 * e.a + 2] + x[3 * e.b + 2];
+            const double dpsi = (dR[0] * rn * sn + dR[1] * rp * sp) * delta / root;
+            // E_k = -field (psi_b - psi_a); the fluxes' own partials.
+            add(e.a, 0, k, wE * ie.field + wn * fn.d_psi1 + wp * fp.d_psi1 - dpsi);
+            add(e.b, 0, k, -wE * ie.field + wn * fn.d_psi2 + wp * fp.d_psi2 + dpsi);
+            add(e.a, 1, k, wn * fn.d_c1 + dR[0] * rn * root);
+            add(e.b, 1, k, wn * fn.d_c2 + dR[0] * rn * root);
+            add(e.a, 2, k, wp * fp.d_c1 + dR[1] * rp * root);
+            add(e.b, 2, k, wp * fp.d_c2 + dR[1] * rp * root);
+        }
+    }
 }
 
 void DriftDiffusion::evaluate(std::span<const double> x, std::span<double> residual,
@@ -694,7 +956,14 @@ double DriftDiffusion::update_size(std::span<const double> x, std::span<const do
     for (std::size_t i = 0; i < node_count(); ++i) {
         largest = std::max({largest, x[3 * i + 1], x[3 * i + 2]});
     }
-    const double floor = 1e-20 * largest;
+    // With impact ionization (Unit 19) a sub-floor density's row also carries the generation of
+    // the currents around it, whose rounding (the opposing fluxes of the dense spill-over layers
+    // at a junction) limits it far above eps. Measured on the legacy one-sided junction: with
+    // the floor at 1e-20 of the largest density Newton chatters in a period two at 1.5e-5 of a
+    // density 1e-21 of the largest (-0.5 V); at 1e-12 the trace's corrector stalls at 1.4e-7 of
+    // that floor (-9.8 V). Densities below 1e-8 of the largest, the legacy's floor for its
+    // impact-ionization paths, are measured against it then.
+    const double floor = (impact_nodes_.empty() ? 1e-20 : 1e-8) * largest;
     double size = 0.0;
     for (std::size_t i = 0; i < node_count(); ++i) {
         if (insulator_[i] != 0) {
