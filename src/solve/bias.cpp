@@ -11,6 +11,7 @@
 #include "NiTCAD/assemble/scaling.hpp"
 #include "NiTCAD/solve/equilibrium.hpp"
 #include "fields.hpp"
+#include "relocation.hpp"
 
 namespace NiTCAD::solve {
 
@@ -155,12 +156,16 @@ std::expected<results::Sweep, base::Error> sweep_bias(const device::Device& devi
 
     auto system = assemble::DriftDiffusion::create(device, *scaling, options.models);
     if (!system) return std::unexpected(std::move(system.error()));
-    // The same system without impact ionization, for the retry of a failed point (below).
+    // The same system without generation (impact ionization, tunnelling), for the retry of a
+    // failed point (below).
     std::optional<assemble::DriftDiffusion> plain;
     std::optional<linalg::LinearSolver> plain_solver;
-    if (options.models.impact_ionization) {
+    if (options.models.impact_ionization || options.models.btbt_local ||
+        options.models.btbt_nonlocal != assemble::NonlocalTunnelling::off) {
         assemble::PhysicsModels models = options.models;
         models.impact_ionization = false;
+        models.btbt_local = false;
+        models.btbt_nonlocal = assemble::NonlocalTunnelling::off;
         plain.emplace(*assemble::DriftDiffusion::create(device, *scaling, models));  // as above
         plain_solver.emplace(*linalg::LinearSolver::create(options.linear));        // as above
     }
@@ -199,10 +204,17 @@ std::expected<results::Sweep, base::Error> sweep_bias(const device::Device& devi
                    if (auto ok = system->set_bias(points[k]); !ok) return ok;  // checked
                    system->stamp_contacts(x);
                    const std::vector<double> stamped = x;
-                   auto solved = newton_solve(*system, x, options.newton, *solver,
-                                              point.convergence, control.stop, observe);
-                   // With impact ionization a point that fails is retried from its stamped start,
-                   // first converged without the generation (legacy device.py, its 0.0 stage):
+                   // With nonlocal tunnelling the paths are re-traced until they agree with the
+                   // solution (relocation.hpp); they carry over from the previous point.
+                   const auto steady = [&](const IterationObserver& report) {
+                       return detail::solve_relocating(*system, x, [&] {
+                           return newton_solve(*system, x, options.newton, *solver,
+                                               point.convergence, control.stop, report);
+                       }, point.path_relocations);
+                   };
+                   auto solved = steady(observe);
+                   // With generation a point that fails is retried from its stamped start, first
+                   // converged without the generation (legacy device.py, its 0.0 stage):
                    // stamping a new bias puts the whole step across the cell beside each contact,
                    // and the generation at that transient field can swamp the iterations. Not
                    // first, so a state on a high-current branch (a snapback) is solved where it
@@ -216,8 +228,8 @@ std::expected<results::Sweep, base::Error> sweep_bias(const device::Device& devi
                            !ok) {
                            return ok;
                        }
-                       solved = newton_solve(*system, x, options.newton, *solver,
-                                             point.convergence, control.stop);
+                       if (system->tunnelling()) system->set_paths(system->trace_paths(x));
+                       solved = steady({});
                    }
                    if (!solved) return solved;
                    detail::drift_diffusion_point(*system, x, *scaling, D, point);

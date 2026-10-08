@@ -2,7 +2,11 @@
 // silicon models; the defaults are the legacy ones).
 #pragma once
 
+#include <cstdint>
+
 namespace NiTCAD::assemble {
+
+enum class NonlocalTunnelling : std::uint8_t { off, kane, direct_wkb };
 
 struct PhysicsModels {
     // Caughey-Thomas mobility; false: the lattice mobility (Caughey-Thomas at N = 0).
@@ -42,6 +46,17 @@ struct PhysicsModels {
     // currents and the corrector cycles they cause near breakdown, but stalls the trace of an
     // open-base transistor at its start (ARCHITECTURE.md 6.2, Unit 19).
     double impact_current_resolution = 0.0;
+    // Local band-to-band tunnelling (physics/band_to_band.hpp; drift-diffusion only, Unit 20):
+    // Kane generation A F^2 exp(-B / F) at each semiconductor node off the ohmic contacts, F the
+    // magnitude of the node's reconstructed field, with each material's (A, B). Pure generation
+    // (no Hurkx D factor). Off by default, as the legacy btbt flag.
+    bool btbt_local = false;
+    // Nonlocal band-to-band tunnelling along traced paths (assemble/tunnel_paths.hpp; Unit 20),
+    // off by default: `kane` the calibrated rate A F^2 exp(-B / F) at each path's mean field (the
+    // silicon model), `direct_wkb` the direct-gap WKB rate of Esseni et al. (2017) for materials
+    // with a direct gap and cited tunnelling masses (never silicon). Needs the device's tensor
+    // cells; excludes btbt_local (each would count the same tunnelling).
+    NonlocalTunnelling btbt_nonlocal = NonlocalTunnelling::off;
 };
 
 }  // namespace NiTCAD::assemble

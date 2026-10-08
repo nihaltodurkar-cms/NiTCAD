@@ -66,6 +66,38 @@ std::optional<base::Error> check_impact(std::string_view group,
     return std::nullopt;
 }
 
+// A >= 0, B > 0 where A is (G would not vanish at low field); the tunnelling masses both 0 or
+// both positive, only on a direct gap, with a reduced mass below m0 / 2 (the WKB kappa vanishes at
+// both band edges only then, band_to_band.hpp).
+std::optional<base::Error> check_band_to_band(const BandToBandParameters& b) {
+    constexpr std::string_view group = "band_to_band.";
+    if (auto e = check(group, "A_per_cm3_s", b.A_per_cm3_s, Bound::non_negative)) return e;
+    if (auto e = check(group, "B_V_per_cm", b.B_V_per_cm,
+                       b.A_per_cm3_s > 0.0 ? Bound::positive : Bound::non_negative)) {
+        return e;
+    }
+    if (auto e = check(group, "electron_mass", b.electron_mass, Bound::non_negative)) return e;
+    if (auto e = check(group, "hole_mass", b.hole_mass, Bound::non_negative)) return e;
+    if ((b.electron_mass > 0.0) != (b.hole_mass > 0.0)) {
+        return parameter_error(group, "hole_mass", " must be given with electron_mass",
+                               b.hole_mass);
+    }
+    if (b.electron_mass > 0.0) {
+        if (!b.direct_gap) {
+            return parameter_error(group, "electron_mass",
+                                   " needs a direct gap (tunnelling masses are for the direct-gap "
+                                   "WKB rate)",
+                                   b.electron_mass);
+        }
+        const double mr = b.electron_mass * b.hole_mass / (b.electron_mass + b.hole_mass);
+        if (!(mr < 0.5)) {
+            return parameter_error(group, "electron_mass",
+                                   ": the reduced mass must be below m0 / 2", mr);
+        }
+    }
+    return std::nullopt;
+}
+
 // beta >= 1 keeps dmu/dE finite at E = 0 (the legacy only required beta > 0; its silicon values
 // are 2 and 1).
 std::optional<base::Error> check_saturation(std::string_view group, const CanaliParameters& c) {
@@ -175,6 +207,7 @@ std::expected<Semiconductor, base::Error> Semiconductor::create(
                        p.impact_ionization.phonon_energy_eV, non_negative)) {
         return std::unexpected(std::move(*e));
     }
+    if (auto e = check_band_to_band(p.band_to_band)) return std::unexpected(std::move(*e));
     return Semiconductor{p};
 }
 

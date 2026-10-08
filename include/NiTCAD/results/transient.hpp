@@ -61,6 +61,11 @@ struct Transient {
     std::vector<TimePoint> points;
     std::vector<TransientSnapshot> snapshots;
     std::size_t rejected_steps = 0;  // by the error estimate or by Newton
+    // Nonlocal tunnelling (Unit 20): steps repeated because the paths re-traced after them
+    // differed, and steps accepted with the paths lagging (they changed again after the repeat;
+    // the next step uses the new ones).
+    std::size_t retraced_steps = 0;
+    std::size_t lagged_steps = 0;
     std::optional<base::Error> stopped;
     std::optional<ConvergenceRecord> unfinished;
 };

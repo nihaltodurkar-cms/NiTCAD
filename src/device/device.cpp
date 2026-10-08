@@ -333,6 +333,11 @@ std::expected<Device, base::Error> Device::create(DeviceDescription description)
          {check_regions, check_nodes, check_contacts, check_topology, check_interfaces}) {
         if (auto e = check(description)) return std::unexpected(std::move(*e));
     }
+    if (description.cells && !description.cells->matches(description.mesh)) {
+        return std::unexpected(base::Error{base::ErrorCode::invalid_input,
+                                           "the cells are not those of the mesh",
+                                           base::ErrorContext{}});
+    }
     return Device{std::move(description)};
 }
 
