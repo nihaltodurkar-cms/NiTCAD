@@ -1,5 +1,6 @@
 // Slotboom band-gap narrowing and Auger recombination (ARCHITECTURE.md section 11, Unit 11).
-// Reference values computed at 40 digits from the legacy formulas, independently of this code.
+// References computed here in double-double arithmetic (references.hpp) from the legacy formulas,
+// independently of this code.
 #include <catch2/catch_test_macros.hpp>
 
 #include <algorithm>
@@ -10,6 +11,7 @@
 #include <vector>
 
 #include "NiTCAD/physics/bandgap_narrowing.hpp"
+#include "references.hpp"
 #include "NiTCAD/physics/recombination.hpp"
 #include "NiTCAD/physics/semiconductor.hpp"
 #include "NiTCAD/physics/statistics.hpp"
@@ -31,9 +33,11 @@ TEST_CASE("bgn: Slotboom narrowing of silicon") {
     REQUIRE(bandgap_narrowing_eV(si, 1e17) == 0.0);
     REQUIRE(bandgap_narrowing_eV(si, 1.3e17) == 0.0);  // zero at N0, so no step there
     REQUIRE(bandgap_narrowing_eV(si, 1.3e17 * (1 + 1e-9)) < 1e-11);
-    REQUIRE(close(bandgap_narrowing_eV(si, 1e18), 0.024167384290821196086, 1e-13));
-    REQUIRE(close(bandgap_narrowing_eV(si, 1e19), 0.055607009169529899981, 1e-13));
-    REQUIRE(close(bandgap_narrowing_eV(si, 1e20), 0.087338630787303864975, 1e-13));
+    for (const double N : {1e18, 1e19, 1e20}) {
+        CAPTURE(N);
+        REQUIRE(close(bandgap_narrowing_eV(si, N),
+                      reference::slotboom_narrowing(silicon_parameters, N).value(), 1e-13));
+    }
     // Legacy test_slotboom_bgn_positive_and_monotonic.
     const double lo = bandgap_narrowing_eV(si, 1e18), hi = bandgap_narrowing_eV(si, 1e20);
     REQUIRE((hi > lo && lo >= 0.0));

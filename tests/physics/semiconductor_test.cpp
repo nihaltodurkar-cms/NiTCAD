@@ -1,6 +1,6 @@
 // Semiconductor parameter validation and band quantities (ARCHITECTURE.md section 11, Unit 5).
-// Reference values were computed independently at 40 digits from the legacy formulas and the
-// CODATA 2018 constants (not from this code).
+// References computed here in double-double arithmetic (references.hpp) from the legacy formulas
+// and the CODATA 2018 constants (not from this code).
 #include <catch2/catch_test_macros.hpp>
 
 #include <atomic>
@@ -16,6 +16,7 @@
 #include "NiTCAD/base/constants.hpp"
 #include "NiTCAD/physics/mobility.hpp"
 #include "NiTCAD/physics/semiconductor.hpp"
+#include "references.hpp"
 
 // Counts every allocation through the global operator new in this test executable, so a test can
 // show that successful validation does not allocate (base/error.hpp: strings only on the error
@@ -54,18 +55,22 @@ TEST_CASE("semiconductor: n_i(300 K) of silicon is 1.0674e10 cm^-3 (section 10 g
     const double ni = intrinsic_density(si, 300.0);
     REQUIRE(close(ni, 1.0674e10, 1e-4));                // proposed gate (ARCHITECTURE.md section 10)
     REQUIRE((ni > 9e9 && ni < 1.6e10));                 // legacy test_ni_300k_within_accepted_band
-    REQUIRE(close(ni, 10673775147.815624025, 1e-13));   // 40-digit reference
+    REQUIRE(close(ni, reference::intrinsic_density(silicon_parameters, 300.0).value(), 1e-13));
 }
 
 TEST_CASE("semiconductor: Varshni band gap and effective densities of states") {
     const Semiconductor si = silicon();
-    REQUIRE(close(band_gap_eV(si, 300.0), 1.1245192307692307692, 1e-15));
-    REQUIRE(close(band_gap_eV(si, 400.0), 1.0969498069498069498, 1e-15));
+    const SemiconductorParameters& p = silicon_parameters;
+    REQUIRE(close(band_gap_eV(si, 300.0), reference::band_gap(p, 300.0).value(), 1e-15));
+    REQUIRE(close(band_gap_eV(si, 400.0), reference::band_gap(p, 400.0).value(), 1e-15));
     REQUIRE(conduction_band_dos(si, 300.0) == 2.86e19);
     REQUIRE(valence_band_dos(si, 300.0) == 3.10e19);
-    REQUIRE(close(conduction_band_dos(si, 400.0), 44032580530195458307.0, 1e-15));
-    REQUIRE(close(intrinsic_density(si, 400.0), 5633682064707.5052902, 1e-13));
-    REQUIRE(close(intrinsic_density(si, 250.0), 79127613.386517756152, 1e-13));
+    REQUIRE(close(conduction_band_dos(si, 400.0),
+                  (reference::DD(p.Nc300) * reference::dos_factor(400.0)).value(), 1e-15));
+    REQUIRE(close(intrinsic_density(si, 400.0), reference::intrinsic_density(p, 400.0).value(),
+                  1e-13));
+    REQUIRE(close(intrinsic_density(si, 250.0), reference::intrinsic_density(p, 250.0).value(),
+                  1e-13));
 }
 
 TEST_CASE("semiconductor: every parameter is validated and the error names it") {

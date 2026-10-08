@@ -3,8 +3,8 @@
 // G4(c) generalized mass action, G6(b) Boltzmann equivalence, G7(a) degenerate bulk, G7(d) the
 // degenerate MOS C_max direction).
 //
-// References: the 40-digit Fermi-Dirac neutral roots of tests/physics/statistics_test.cpp (silicon,
-// 300 K, no band-gap narrowing, this code's n_i, Nc and Nv).
+// References: Fermi-Dirac neutral roots bisected in double-double arithmetic (silicon,
+// 300 K, no band-gap narrowing, this code's n_i, Nc and Nv; ../physics/references.hpp).
 #include <catch2/catch_test_macros.hpp>
 
 #include <algorithm>
@@ -27,6 +27,7 @@
 #include "NiTCAD/solve/equilibrium.hpp"
 #include "legacy_graded_mesh.hpp"
 #include "legacy_moscap.hpp"
+#include "../physics/references.hpp"
 
 using namespace NiTCAD;
 
@@ -87,6 +88,15 @@ double Nc() { return physics::conduction_band_dos(physics::silicon(), T); }
 double Nv() { return physics::valence_band_dos(physics::silicon(), T); }
 double ni() { return physics::intrinsic_density(physics::silicon(), T); }
 
+// The double-double Fermi-Dirac neutral root at net doping C (../physics/references.hpp), with
+// this code's n_i, Nc and Nv.
+reference::Neutral fd_root(double C) {
+    reference::Dopants d;
+    (C > 0.0 ? d.donors : d.acceptors) = std::abs(C);
+    return reference::neutral_equilibrium(d, ni(), std::log(Nc() / ni()), std::log(Nv() / ni()),
+                                          true);
+}
+
 // The reduced Fermi energies of a density: eta = F_{1/2}^-1(n / N).
 double eta_of(double density, double N) { return physics::inverse_fermi_half(density / N); }
 
@@ -94,10 +104,11 @@ double eta_of(double density, double N) { return physics::inverse_fermi_half(den
 
 TEST_CASE("fermi-dirac: a uniform degenerate bulk holds the neutral root (legacy G7(a))") {
     // N_D = 1e20, no band-gap narrowing: n = N_D + p everywhere and the Fermi level 2.43 kT above
-    // the conduction band edge (40-digit root); the minority density is n_i^2 gamma_n / N_D, a
+    // the conduction band edge (double-double root); the minority density is n_i^2 gamma_n / N_D, a
     // third of the Boltzmann value.
     const assemble::PhysicsModels models{.srh = false, .bgn = false, .fermi_dirac = true};
-    const double p_ref = 0.34958572744568781884;
+    const reference::Neutral root = fd_root(1e20);
+    const double p_ref = root.p.value();
     for (const int D : {1, 2}) {
         CAPTURE(D);
         const auto x = uniform_axis(1e-4, 21);
@@ -111,7 +122,8 @@ TEST_CASE("fermi-dirac: a uniform degenerate bulk holds the neutral root (legacy
             REQUIRE(close(eq->fields.n_cm3[i], 1e20, 1e-13));
             REQUIRE(close(eq->fields.p_cm3[i], p_ref, 1e-11));
         }
-        REQUIRE(std::abs(eta_of(eq->fields.n_cm3[0], Nc()) - 2.433179368) <= 1e-8);
+        REQUIRE(std::abs(eta_of(eq->fields.n_cm3[0], Nc()) -
+                         (root.eta - std::log(Nc() / ni()))) <= 1e-8);
         const auto boltzmann =
             solve::solve_equilibrium(d, {.models = {.srh = false, .bgn = false}});
         REQUIRE(close(boltzmann->fields.p_cm3[0], ni() * ni() / 1e20, 1e-12));
@@ -121,8 +133,8 @@ TEST_CASE("fermi-dirac: a uniform degenerate bulk holds the neutral root (legacy
 
 TEST_CASE("fermi-dirac: built-in potential of a degenerate junction (legacy G4(d))") {
     // p+ 1e20 / n 1e17, no band-gap narrowing: V_bi = V_T (eta(1e17) - eta(-1e20)) from the
-    // 40-digit roots, 28 mV above the Boltzmann value because the degenerate side needs a deeper
-    // Fermi level for the same hole density. The legacy gate was 1e-3 V; both ends are Dirichlet
+    // double-double roots, 28 mV above the Boltzmann value because the degenerate side needs a
+    // deeper Fermi level for the same hole density. The legacy gate was 1e-3 V; both ends are Dirichlet
     // contact values, so the solve reproduces them to rounding.
     const device::Device d = diode(1e20, 1e17);
     const auto fd = solve::solve_equilibrium(d, {.models = {.bgn = false, .fermi_dirac = true}});
@@ -130,14 +142,15 @@ TEST_CASE("fermi-dirac: built-in potential of a degenerate junction (legacy G4(d
     REQUIRE(fd.has_value());
     REQUIRE(bz.has_value());
     const double VT = base::thermal_voltage(T);
-    const double vbi_ref = VT * (16.054127071827567345 + 24.05416724582482388);
+    const double eta_n = fd_root(1e17).eta, eta_p = -fd_root(-1e20).eta;
+    const double vbi_ref = VT * (eta_n + eta_p);
     const auto& phi = fd->fields.potential_V;
     const double vbi = phi.back() - phi.front();
     REQUIRE(close(vbi, vbi_ref, 1e-13));
     const double shift = vbi - (bz->fields.potential_V.back() - bz->fields.potential_V.front());
     UNSCOPED_INFO("V_bi " << vbi << " V, above Boltzmann by " << shift << " V");
-    const double expected = VT * ((16.054127071827567345 - std::asinh(1e17 / (2.0 * ni()))) +
-                                  (24.05416724582482388 - std::asinh(1e20 / (2.0 * ni()))));
+    const double expected = VT * ((eta_n - std::asinh(1e17 / (2.0 * ni()))) +
+                                  (eta_p - std::asinh(1e20 / (2.0 * ni()))));
     REQUIRE(close(shift, expected, 1e-11));
     // The 1e20 side is degenerate (legacy G3 companion: eta_p > 2).
     REQUIRE(eta_of(fd->fields.p_cm3.front(), Nv()) > 2.0);

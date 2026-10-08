@@ -1,21 +1,23 @@
 // The Fermi-Dirac integral F_{1/2} and its inverse (ARCHITECTURE.md section 11, Unit 14; legacy
 // tests/test_m13_fermi.py, gates G1-G3).
 //
-// Reference values, 40-digit mpmath: for eta < 0 the polylogarithm F_j = -Li_{j+1}(-e^eta); for
-// eta >= 0 quadratures of the defining integrals subdivided at the Fermi edge t ~ eta. The two
-// agree to 1e-31 where both were evaluated (-40 <= eta < 0; at -700 the quadrature loses 7
-// digits, hence the polylogarithm), and the quadrature gives F_{1/2}(0) = (1 - 2^(-1/2)) zeta(3/2)
-// and F_{-1/2}(0) = (1 - 2^(1/2)) zeta(1/2) to all digits.
-// Independent of this code (different arithmetic, different discretization). The points avoid the
-// table nodes, so they measure the interpolation and not only the quadrature it is built from.
+// References computed here in double-double arithmetic (../physics/references.hpp): for
+// eta < -1 the polylogarithm series F_j = -Li_{j+1}(-e^eta), otherwise composite Gauss-Legendre
+// quadrature of the defining integrals after t = u^2. The two methods are checked against each
+// other where both converge, and the quadrature against the closed form
+// F_{1/2}(0) = (1 - 2^(-1/2)) zeta(3/2), zeta by Euler-Maclaurin. Independent of this code
+// (different arithmetic, different discretization). The points avoid the table nodes, so they
+// measure the interpolation and not only the quadrature it is built from.
 #include <catch2/catch_test_macros.hpp>
 
 #include <algorithm>
 #include <cmath>
 #include <limits>
 #include <numbers>
+#include <vector>
 
 #include "NiTCAD/physics/fermi_dirac.hpp"
+#include "references.hpp"
 
 using namespace NiTCAD::physics;
 
@@ -25,31 +27,22 @@ struct Reference {
     double eta, f12, fm12;  // F_{1/2}(eta), F_{-1/2}(eta)
 };
 
-constexpr Reference references[] = {
-    {-700, 9.859676543759770856705e-305, 9.859676543759770856705e-305},
-    {-40, 4.248354255291588988948e-18, 4.248354255291588982567e-18},
-    {-12.5, 0.000003726648261958989501984, 0.000003726643351849268323077},
-    {-5, 0.006721954314505912707786, 0.006706019989268209127845},
-    {-2.000001, 0.1292983896545103617568, 0.1236655086574104040811},
-    {-1.987654, 0.1308339415807036505649, 0.1250696910250291204103},
-    {-1.2345, 0.265043325548207017367, 0.2424872355199710840049},
-    {-0.31, 0.59527185592054674347, 0.4931650088039558883891},
-    {0, 0.7651470246254079453673, 0.6048986434216303702473},
-    {0.0123, 0.7726160676922649119224, 0.6095828828964767049883},
-    {0.777, 1.35765955632693248621, 0.9281156611207317590773},
-    {1.5, 2.144860877583114035964, 1.24932334785271220083},
-    {2.71828, 3.979869169740514112218, 1.749864442627717048176},
-    {4.444, 7.511764021998324437939, 2.318135866755477192745},
-    {7.3, 15.18751192060517394408, 3.022500415460546063469},
-    {12.34567, 32.89714466814245236305, 3.953672833234494470665},
-    {19.99, 67.44110836493078802666, 5.039752784653832820401},
-    {27.1828, 106.7899664623740525882, 5.879751022508753663206},
-    {39.98765, 190.3652841674622841409, 7.133554596611505259675},
-    {40.5, 194.0318552090013066966, 7.179155892384824068736},
-    {60, 349.7353379459762089049, 8.73938781383138152102},
-    {100, 752.3455915521961188446, 11.28332744292768060324},
-    {1000, 23788.35089639434090471, 35.68246764915936962222},
-};
+constexpr double points[] = {-700,     -40,     -12.5, -5,      -2.000001, -1.987654,
+                             -1.2345,  -0.31,   0,     0.0123,  0.777,     1.5,
+                             2.71828,  4.444,   7.3,   12.34567, 19.99,    27.1828,
+                             39.98765, 40.5,    60,    100,     1000};
+
+const std::vector<Reference>& references() {
+    static const std::vector<Reference> r = [] {
+        std::vector<Reference> v;
+        for (const double eta : points) {
+            v.push_back({eta, reference::fermi_half(eta).value(),
+                         reference::fermi_minus_half(eta).value()});
+        }
+        return v;
+    }();
+    return r;
+}
 
 double relative(double a, double b) { return std::abs(a - b) / std::abs(b); }
 
@@ -57,9 +50,25 @@ constexpr double eps = std::numeric_limits<double>::epsilon();
 
 }  // namespace
 
-TEST_CASE("Fermi-Dirac: F_1/2 and F_-1/2 against 40-digit references") {
+TEST_CASE("Fermi-Dirac: the reference methods agree with each other and the closed form") {
+    // Series and quadrature where both converge; the quadrature at 0 against
+    // (1 - 2^(-1/2)) zeta(3/2).
+    for (const double eta : {-12.5, -5.0, -2.000001, -1.2345, -1.0001}) {
+        CAPTURE(eta);
+        const reference::DD s = reference::fermi_half_series(eta);
+        const reference::DD q = reference::fermi_half_quadrature(eta);
+        REQUIRE(std::abs((s - q).value()) <= 1e-26 * std::abs(s.value()));
+    }
+    const reference::DD zeta = reference::zeta(1.5);
+    const reference::DD f0 =
+        (reference::DD(1.0) - reference::DD(1.0) / reference::sqrt(2.0)) * zeta;
+    CAPTURE(zeta.value(), f0.value());
+    REQUIRE(std::abs((reference::fermi_half(0.0) - f0).value()) <= 1e-26);
+}
+
+TEST_CASE("Fermi-Dirac: F_1/2 and F_-1/2 against double-double references") {
     double worst_value = 0.0, worst_derivative = 0.0;
-    for (const Reference& r : references) {
+    for (const Reference& r : references()) {
         CAPTURE(r.eta);
         const FermiIntegral f = fermi_half(r.eta);
         worst_value = std::max(worst_value, relative(f.value, r.f12));
@@ -70,9 +79,11 @@ TEST_CASE("Fermi-Dirac: F_1/2 and F_-1/2 against 40-digit references") {
         REQUIRE(relative(f.derivative, r.fm12) <= (r.eta <= 15.0 ? 2e-13 : 5e-12));
     }
     UNSCOPED_INFO("worst relative error: F_1/2 " << worst_value << ", F_-1/2 " << worst_derivative);
-    // The exact anchor at eta = 0, with zeta(3/2) = 2.612375348685488343348567...
-    REQUIRE(relative(fermi_half(0.0).value, (1.0 - 1.0 / std::numbers::sqrt2) *
-                                                 2.6123753486854883433) <= 2e-15);
+    // The exact anchor at eta = 0: (1 - 2^(-1/2)) zeta(3/2), zeta by Euler-Maclaurin.
+    const double anchor =
+        ((reference::DD(1.0) - reference::DD(1.0) / reference::sqrt(2.0)) * reference::zeta(1.5))
+            .value();
+    REQUIRE(relative(fermi_half(0.0).value, anchor) <= 2e-15);
 }
 
 TEST_CASE("Fermi-Dirac: the returned derivative is that of the value, across both joins") {
@@ -95,7 +106,7 @@ TEST_CASE("Fermi-Dirac: the returned derivative is that of the value, across bot
 }
 
 TEST_CASE("Fermi-Dirac: ln gamma is F_1/2 / e^eta, continuous through the joins") {
-    for (const Reference& r : references) {
+    for (const Reference& r : references()) {
         if (r.eta < -600.0) continue;  // F underflows towards the subnormals there
         CAPTURE(r.eta);
         const LogDegeneracy L = log_degeneracy(r.eta);

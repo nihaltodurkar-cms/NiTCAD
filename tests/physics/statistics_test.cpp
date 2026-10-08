@@ -9,6 +9,7 @@
 #include "NiTCAD/physics/fermi_dirac.hpp"
 #include "NiTCAD/physics/semiconductor.hpp"
 #include "NiTCAD/physics/statistics.hpp"
+#include "references.hpp"
 
 using namespace NiTCAD::physics;
 
@@ -258,28 +259,22 @@ TEST_CASE("statistics: generalized mass action under Fermi-Dirac statistics") {
     REQUIRE(close(fermi_dirac_equilibrium_product(b.ni, light, light).value, b.ni * b.ni, 1e-9));
 }
 
-TEST_CASE("statistics: Fermi-Dirac neutral equilibrium against 40-digit roots") {
+TEST_CASE("statistics: Fermi-Dirac neutral equilibrium against double-double roots") {
     // Silicon, 300 K, no band-gap narrowing: the root of Nc F(eta - g_n) - Nv F(-eta - g_p) = C by
-    // 200-step bisection in 40-digit arithmetic (mpmath), with this code's n_i, Nc and Nv.
-    struct Root {
-        double C, eta, n, p;
-    };
-    constexpr Root roots[] = {
-        {1e20, 24.142062110644792886, 1e20, 0.34958572744568781884},
-        {-1e20, -24.05416724582482388, 0.38170332944338358495, 1e20},
-        {1e17, 16.054127071827567345, 100000000000001137.89, 1137.8873011477545844},
-        {1e19, 20.78108228663461974, 1e19, 10.074156302026300529},
-        {-3e19, -22.094316656215173357, 2.7094319300520569736, 3e19},
-        {0.0, 5.1077140447875337858e-12, 10673775146.461745676, 10673775146.461745676},
-    };
+    // bisection in double-double arithmetic with the reference F_{1/2} (references.hpp), with this
+    // code's n_i, Nc and Nv.
     const Bands b = silicon_bands();
-    for (const Root& r : roots) {
-        CAPTURE(r.C);
-        const NeutralEquilibrium e = fermi_dirac_neutral_equilibrium(r.C, b.ni, b.gn, b.gp);
+    for (const double C : {1e20, -1e20, 1e17, 1e19, -3e19, 0.0}) {
+        CAPTURE(C);
+        reference::Dopants d;
+        (C > 0.0 ? d.donors : d.acceptors) = std::abs(C);
+        const reference::Neutral r = reference::neutral_equilibrium(d, b.ni, b.gn, b.gp, true);
+        const NeutralEquilibrium e = fermi_dirac_neutral_equilibrium(C, b.ni, b.gn, b.gp);
+        CAPTURE(e.eta, r.eta);
         REQUIRE(std::abs(e.eta - r.eta) <= 1e-13 * std::max(1.0, std::abs(r.eta)));
-        REQUIRE(close(e.n, r.n, 1e-12));
-        REQUIRE(close(e.p, r.p, 1e-12));
-        REQUIRE(std::abs((e.n - e.p) - r.C) <= 4.0 * eps * std::max(e.n, e.p));
+        REQUIRE(close(e.n, r.n.value(), 1e-12));
+        REQUIRE(close(e.p, r.p.value(), 1e-12));
+        REQUIRE(std::abs((e.n - e.p) - C) <= 4.0 * eps * std::max(e.n, e.p));
         // Consistent with the density functions at its own eta.
         REQUIRE(close(e.n, fermi_dirac_density(b.ni, b.gn, e.eta).density, 1e-13));
         REQUIRE(close(e.p, fermi_dirac_density(b.ni, b.gp, -e.eta).density, 1e-13));

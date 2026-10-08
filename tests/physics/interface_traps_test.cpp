@@ -1,7 +1,8 @@
 // Insulators and interface traps (ARCHITECTURE.md section 11, Unit 15b): the insulator set, the
-// Fermi occupancy and the trap-band quadrature against 40-digit values, the steady-state occupancy
-// reducing to the Fermi function at equilibrium under either statistics, the exact partials against
-// finite differences, and the validation.
+// Fermi occupancy, the trap-band quadrature and its Gauss-Legendre rule against double-double
+// references computed here, the steady-state occupancy reducing to the Fermi function at
+// equilibrium under either statistics, the exact partials against finite differences, and the
+// validation.
 #include <catch2/catch_test_macros.hpp>
 
 #include <algorithm>
@@ -17,6 +18,7 @@
 #include "NiTCAD/physics/recombination.hpp"
 #include "NiTCAD/physics/semiconductor.hpp"
 #include "NiTCAD/physics/statistics.hpp"
+#include "references.hpp"
 
 using namespace NiTCAD::physics;
 
@@ -39,20 +41,19 @@ TEST_CASE("insulator: SiO2 and validation") {
     }
 }
 
-TEST_CASE("interface traps: Fermi occupancy against 40-digit values") {
-    // x, f = 1 / (1 + e^x), 1 - f, f (1 - f) (mpmath, 40 digits).
+TEST_CASE("interface traps: Fermi occupancy against double-double values") {
+    // x, f = 1 / (1 + e^x), 1 - f = e^x / (1 + e^x), f (1 - f), in double-double arithmetic
+    // (references.hpp).
     struct Ref {
         double x, f, g, d;
     };
-    constexpr Ref refs[] = {
-        {-40.0, 0.9999999999999999957516, 4.248354255291588977281e-18, 4.248354255291588959232e-18},
-        {-3.5, 0.9706877692486436811347, 0.02931223075135631886529, 0.02845302387973555983969},
-        {-0.25, 0.5621765008857981040273, 0.4378234991142018959727, 0.2461340827375983475853},
-        {0.0, 0.5, 0.5, 0.25},
-        {0.7, 0.3318122278318338934692, 0.6681877721681661065308, 0.2217128732931090504051},
-        {12.0, 6.144174602214717825574e-6, 0.9999938558253977852822, 6.144136851333175325188e-6},
-        {45.0, 2.862518580549393644388e-20, 0.9999999999999999999714, 2.862518580549393644306e-20},
-    };
+    std::vector<Ref> refs;
+    for (const double x : {-40.0, -3.5, -0.25, 0.0, 0.7, 12.0, 45.0}) {
+        const reference::DD e = reference::exp(x);
+        const reference::DD f = reference::DD(1.0) / (reference::DD(1.0) + e);
+        const reference::DD g = e / (reference::DD(1.0) + e);
+        refs.push_back({x, f.value(), g.value(), (f * g).value()});
+    }
     for (const Ref& r : refs) {
         const FermiOccupancy f = fermi_occupancy(r.x);
         CAPTURE(r.x, f.occupied, f.empty, f.d_eta);
@@ -157,14 +158,16 @@ TEST_CASE("interface traps: a mid-gap level is the surface recombination velocit
 TEST_CASE("interface traps: band quadrature against the closed-form equilibrium integral") {
     // A uniform band from -0.55 to 0.53 eV about E_i at 300 K: 42 panels of 6 levels. The
     // occupied density at Fermi level E_F, D_it int f dE, has the closed form
-    // D_it kT ln((1 + e^((E_F - lo)/kT)) / (1 + e^((E_F - hi)/kT))) (mpmath, 40 digits).
+    // D_it kT ln((1 + e^((E_F - lo)/kT)) / (1 + e^((E_F - hi)/kT))), evaluated in double-double
+    // arithmetic with kT from the CODATA constants (references.hpp).
     const TrapBand band{.type = TrapType::acceptor,
                         .density_cm2_eV = 2e11,
                         .energy_low_eV = -0.55,
                         .energy_high_eV = 0.53};
     const double T = 300.0;
     const double kT = NiTCAD::base::thermal_voltage(T);
-    REQUIRE(close(kT, 0.02585199978643553230099098, 2 * eps));
+    const reference::DD kT_ref = reference::thermal_voltage(T);
+    REQUIRE(close(kT, kT_ref.value(), 2 * eps));
     const std::vector<TrapLevel> levels = trap_band_levels(band, T);
     REQUIRE(levels.size() == 6 * static_cast<std::size_t>(std::ceil(1.08 / kT)));
     double total = 0.0;
@@ -175,27 +178,55 @@ TEST_CASE("interface traps: band quadrature against the closed-form equilibrium 
         total += l.density_cm2;
     }
     REQUIRE(close(total, 2e11 * 1.08, 1e-14));
-    struct Ref {
-        double EF, integral;
-    };
-    constexpr Ref refs[] = {
-        {-0.6, 0.00349046036301059988093},  {-0.3, 0.2500016317938146783758},
-        {0.0, 0.5499999999826137404589},    {0.123, 0.672999996240065518931},
-        {0.5, 1.042953339583036665382},     {0.7, 1.07996399876439887113},
-    };
     double worst = 0.0;
-    for (const Ref& r : refs) {
+    for (const double EF : {-0.6, -0.3, 0.0, 0.123, 0.5, 0.7}) {
         double occupied = 0.0;
         for (const TrapLevel& l : levels) {
-            occupied += l.density_cm2 * fermi_occupancy((l.energy_eV - r.EF) / kT).occupied;
+            occupied += l.density_cm2 * fermi_occupancy((l.energy_eV - EF) / kT).occupied;
         }
-        const double exact = 2e11 * r.integral;
+        using reference::DD;
+        const DD integral =
+            kT_ref * reference::log((DD(1.0) + reference::exp((DD(EF) - DD(-0.55)) / kT_ref)) /
+                                    (DD(1.0) + reference::exp((DD(EF) - DD(0.53)) / kT_ref)));
+        const double exact = 2e11 * integral.value();
         worst = std::max(worst, std::abs(occupied - exact) / (2e11 * 1.08));
-        CAPTURE(r.EF, occupied, exact);
+        CAPTURE(EF, occupied, exact);
     }
     CAPTURE(worst);
     // Relative to the band's whole density; measured 7.1e-16.
     REQUIRE(worst < 1e-14);
+}
+
+TEST_CASE("interface traps: a one-panel band places the 6-point Gauss-Legendre rule") {
+    // A band narrower than kT is one panel: its levels are the rule's nodes mid +- half x_i with
+    // densities D_it half w_i. Nodes and weights computed here by Newton on P_6 in double-double
+    // arithmetic (reference_arithmetic.hpp), against the code's stored 25-digit constants.
+    const double lo = -0.01, hi = 0.01;  // 0.02 eV < kT at 300 K
+    const TrapBand band{.type = TrapType::donor,
+                        .density_cm2_eV = 1e12,
+                        .energy_low_eV = lo,
+                        .energy_high_eV = hi};
+    const std::vector<TrapLevel> levels = trap_band_levels(band, 300.0);
+    REQUIRE(levels.size() == 6);
+    const reference::GaussLegendre g = reference::gauss_legendre(6);
+    REQUIRE(g.x.size() == 3);
+    const double mid = 0.5 * (lo + hi), half = 0.5 * (hi - lo);
+    std::vector<std::pair<double, double>> expected;
+    for (std::size_t i = 0; i < 3; ++i) {
+        for (const double s : {-1.0, 1.0}) {
+            expected.emplace_back(mid + s * half * g.x[i].value(),
+                                  1e12 * half * g.w[i].value());
+        }
+    }
+    std::ranges::sort(expected);
+    std::vector<std::pair<double, double>> got;
+    for (const TrapLevel& l : levels) got.emplace_back(l.energy_eV, l.density_cm2);
+    std::ranges::sort(got);
+    for (std::size_t k = 0; k < 6; ++k) {
+        CAPTURE(k, got[k].first, expected[k].first, got[k].second, expected[k].second);
+        REQUIRE(std::abs(got[k].first - expected[k].first) <= 4 * eps * half);
+        REQUIRE(close(got[k].second, expected[k].second, 4 * eps));
+    }
 }
 
 TEST_CASE("interface traps: validation") {

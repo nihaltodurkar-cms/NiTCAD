@@ -48,7 +48,9 @@ Core series(double eta) {
 
 // eta > 40: F_{1/2} = A eta^(3/2) S, S = 1 + sum_k c_k u^k, u = eta^-2, with
 // c_k = 2 (1 - 2^(1-2k)) zeta(2k) prod_{m=0}^{2k-1} (3/2 - m) (Sommerfeld; c_1 = pi^2 / 8,
-// c_2 = 7 pi^4 / 640), from 40-digit evaluations. F_{-1/2} = A eta^(1/2) (3/2 S - sum 2k c_k u^k).
+// c_2 = 7 pi^4 / 640), the values of that closed form (zeta(2k) through the Bernoulli numbers);
+// F_{1/2} above eta = 40 is checked against the double-double quadrature of the tests.
+// F_{-1/2} = A eta^(1/2) (3/2 S - sum 2k c_k u^k).
 Core sommerfeld(double eta) {
     static constexpr std::array<double, 10> c{
         1.233700550136169827354,   1.065411933184401657274,  9.701518554959126805969,

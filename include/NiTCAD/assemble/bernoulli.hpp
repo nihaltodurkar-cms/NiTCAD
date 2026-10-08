@@ -4,8 +4,8 @@
 // Identities: B(-x) = B(x) + x and B'(x) + B'(-x) = -1. Limits: B(x) -> -x as x -> -inf (with
 // B' -> -1), B(x) -> x e^-x -> 0 as x -> +inf.
 //
-// Evaluation, accurate to a few ulp for B and about 1e-13 relative for B' (tested against 50-digit
-// values):
+// Evaluation, accurate to a few ulp for B and about 1e-13 relative for B' (tested against
+// double-double references, tests/physics/references.hpp):
 // - |x| < 1e-2: Taylor series to x^8 (B) and x^7 (B'); the next terms are below 1e-20.
 // - otherwise B = x / expm1(x) and B' = (1 - x - B) / expm1(x), from B'(x) = B(x)(1 - B(-x)) / x,
 //   the identity above and B / x = 1 / expm1(x); the subtraction loses at most about 2 digits near

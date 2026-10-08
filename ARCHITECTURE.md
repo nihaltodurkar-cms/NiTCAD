@@ -297,8 +297,9 @@ thermionic emission through per-edge arrays in the `Inputs` struct, `core/includ
   F₁/₂, F₋₁/₂ and F₋₃/₂: t = s² on [0, 1], then panels of width ≤ 2 up to max(η, 0) + 40, summed with Neumaier
   compensation (naive sums left 4e-15). It is built once per process, on first use, as a function-local static (C++
   makes that initialisation thread-safe). It is immutable, a cached constant, and is the one exception to item 1's "no
-  global state". Measured against 40-digit mpmath references (polylogarithm for η < 0, edge-subdivided quadrature
-  above, checked against each other and against F₁/₂(0) = (1 − 2^−½) ζ(3/2)):
+  global state". Measured against double-double references computed in C++ (`tests/physics/references.hpp`: the
+  polylogarithm series for η < −1, Gauss–Legendre quadrature after t = u² above, checked against each other and
+  against F₁/₂(0) = (1 − 2^−½) ζ(3/2), ζ by Euler–Maclaurin):
   - F₁/₂ is within 1.5e-15 everywhere.
   - F₋₁/₂ is within 1.3e-13 up to η = 15 and 3e-12 up to 40 (the slope F₋₁/₂/F₁/₂ falls to 0.04 there), and 1e-14
     above.
@@ -317,7 +318,7 @@ thermionic emission through per-edge arrays in the `Inputs` struct, `core/includ
   - `fermi_dirac_neutral_equilibrium(C, n_ie, g_n, g_p)`: safeguarded Newton on ln(majority) = ln(|C| + minority),
     from the Boltzmann root; the majority is then |C| + minority, so neutrality holds to rounding.
   The degeneracy is a per-iteration kernel with no checks: a non-finite density gives NaN, so a diverging Newton
-  iterate surfaces as a non-finite residual (6.7). Against 40-digit roots for silicon at 300 K, the neutral equilibrium
+  iterate surfaces as a non-finite residual (6.7). Against double-double roots for silicon at 300 K, the neutral equilibrium
   is within 1e-13 in η and 1e-12 in n and p at ±1e20, 1e19, −3e19, 1e17 and 0. At 1e20 the Fermi level is 2.43 kT
   inside the band (legacy G7(a): > 2).
 - OLD / NEW / REASON:
@@ -355,7 +356,7 @@ thermionic emission through per-edge arrays in the `Inputs` struct, `core/includ
   `algaas_parameters(x)` for Al_x Ga_1−x As, valid for 0 ≤ x ≤ 0.45 (`invalid_input` outside, where the gap is
   indirect). Every field a legacy set left at its dataclass default keeps the silicon value, as in the legacy:
   lifetimes and, where not given, Auger and the Canali exponents. All six sets validate; E_g, n_i and the depth below
-  match 40-digit values at 300 K to 1e-12–1e-14. (Changed in the Unit 15 follow-up below: no Slotboom narrowing
+  match double-double values at 300 K to 1e-12–1e-14. (Changed in the Unit 15 follow-up below: no Slotboom narrowing
   outside silicon, and AlGaAs built on GaAs.)
 - `intrinsic_level_depth_eV(m, T)` = χ + (E_c − E_i), with E_c − E_i = E_g/2 + (kT/2) ln(Nc/Nv). Its step between two
   materials is the step of the potential at which each holds n = n_i, so it defines the band shift (6.3, Unit 15).
@@ -389,7 +390,7 @@ thermionic emission through per-edge arrays in the `Inputs` struct, `core/includ
 - `ionization.hpp`: `ionized_density(N, η, E/kT, g)` = N/(1 + g e^(η + E/kT)) and its η-derivative, overflow-free
   (legacy `ionized_eta_doping`); `ionized_neutral_equilibrium` solves n − p = N_D+ − N_A− by safeguarded Newton from the
   completely ionized root, under either statistics. Boron in silicon at 77 and 300 K and the 4H-SiC dopants at 300 K
-  match 40-digit roots (legacy G7(b,c)).
+  match double-double roots (legacy G7(b,c)).
 - `radiative_recombination(n, p, E, B)` = B(np − E) with the partials of E; `emission_velocity_cm_s(m, carrier, T)` = A*
   T²/(q N) when the material sets A*, else the density-of-states velocity.
 
@@ -410,8 +411,8 @@ thermionic emission through per-edge arrays in the `Inputs` struct, `core/includ
   - Charge signs (owner's constraint): a donor-like trap is +q when empty, an acceptor-like trap −q when occupied.
   - Trap bands: composite 6-point Gauss–Legendre on panels no wider than kT (`trap_band_levels`). The occupancy's poles
     lie π kT off the real axis, so the rule converges fast: on a 1.08 eV band at 300 K (252 levels) the equilibrium
-    occupied density is within 7.1e-16 of the band's density of the closed-form integral (40-digit references).
-  - `fermi_occupancy(x)`: f and 1 − f from the exponential that cannot overflow, within 4 ulp of 40-digit values from
+    occupied density is within 7.1e-16 of the band's density of the closed-form integral (double-double references).
+  - `fermi_occupancy(x)`: f and 1 − f from the exponential that cannot overflow, within 4 ulp of double-double values from
     x = −40 to 45.
   - The surface recombination velocity form is SRH with a mid-gap level per unit area (`srh_recombination` with
     τ = 1/s); a mid-gap trap with N σ v = s gives the same rate to 8 ε.
@@ -481,7 +482,7 @@ Scaled quantities (same files):
   over length by L_D^(D−2), which reproduces the legacy 1D row exactly (tested against it written out by hand).
 - `bernoulli` and `bernoulli_derivative` (inline). For |x| < 1e-2 they use a Taylor series; otherwise B = x/expm1(x) and
   B' = (1 − x − B)/expm1(x). The second form follows from B(−x) = B(x) + x, and it avoids dividing by x (MSVC Release
-  reported C4723 for that). B is within 4 ulp and B' within 1e-13 of 50-digit references.
+  reported C4723 for that). B is within 4 ulp and B' within 1e-13 of double-double references.
   OLD / NEW / REASON: the legacy clipped x to ±700, so B(−1000) was 700; NEW has no clip (expm1 gives B(x) = −x and
   B(x) = 0 at the extremes) because the clip was a silent clamp (6.7). The legacy switched to the series only below 1e-4,
   where its derivative formula lost about 4 digits; NEW switches at 1e-2 with a longer series.
@@ -638,7 +639,7 @@ Whether the new solver reproduces these exact defaults is to be confirmed unit b
       comparable to p: 2.2e-11.
   - Detailed balance: every edge of the 1e20/1e17 junction, with band-gap narrowing, is within 1.3% of its rounding
     bound at the equilibrium state.
-  - Legacy G7(a), uniform 1e20 in 1D and 2D: n = N_D and p = 0.3496, matching the 40-digit root to 1e-11. That is a
+  - Legacy G7(a), uniform 1e20 in 1D and 2D: n = N_D and p = 0.3496, matching the double-double root to 1e-11. That is a
     third of the Boltzmann minority density.
   - Legacy G4(d), 1e20/1e17 without narrowing: V_bi = 1.03688 V, the root pair to 1e-13, and 28.3 mV above
     Boltzmann.
@@ -894,12 +895,16 @@ Whether the new solver reproduces these exact defaults is to be confirmed unit b
   - Dielectric relaxation (100 µm oxide over 10 µm of 1e16 silicon, τ 1.03 times ε/(q μ_p N_A) = 1.59 ps): 0.34% short.
   - Trap emission: an acceptor level 0.3 eV below midgap (1e9 cm⁻²) after a gate step to weak inversion fills at
     B = c_p(p_I + p1) + c_n(n_I + n1) within 3.2e-4; its charge ends at the steady value to 2.2e-8.
-  - The legacy diode turn-off (legacy `transient.py` built from the reference checkout, its p+n fixture, fixed steps of
-    t_t/100): the anode conduction current equals the legacy's to 1e-13 on most steps and 3.7e-5 at worst (where it has
-    fallen to 1.7e-4 of the forward current; both Newtons stop at 1e-8 of the densities, at different iterates). Legacy
-    finding: from step 184 the legacy current repeats −1.4174e-6 A/cm² to the end, though the diode relaxes to
-    equilibrium at 0 V; near equilibrium its merit line search finds no decrease at rounding level, takes no step
-    (λ = 0) and reports the unchanged state as converged. NiTCAD keeps decaying (1.6e-14 A/cm² at 3 t_t).
+  - The legacy diode turn-off (its p+n fixture, fixed steps of t_t/100), against a C++ port of the legacy 1D diode and
+    backward-Euler loop (`tests/solve/legacy_turnoff.hpp`: residual, Jacobian, merit line search, clamps and
+    convergence measure as in `device1d.cpp` and `transient.py`), computed in the test: the anode conduction current
+    agrees to 3.7e-5 at worst (where it has fallen to 1.7e-4 of the forward current; both Newtons stop at 1e-8 of the
+    densities, at different iterates). Legacy finding: near equilibrium the legacy loop's merit stops decreasing at
+    rounding level, its line search shrinks λ to 0, and a step with λ = 0 is reported as converged, so the current
+    freezes though the diode relaxes to equilibrium at 0 V. The step where it starts depends on rounding: the legacy
+    run froze from step 184 (−1.4174e-6 A/cm²), the port from step 190 (−1.2497e-6 A/cm², λ collapsing from 186).
+    NiTCAD keeps decaying (1.6e-14 A/cm² at 3 t_t). (Until the no-Python cleanup the reference was the legacy run's
+    own output, generated with Python; replaced by the port, which reproduces it to the same 3.7e-5.)
   - y-uniform 2D and 3D reproduce the 1D transient to 2.3e-13; the meshed-oxide MOSFET (`[.mosfet]`, 45 × 25) after a
     gate step 0 → 1 V at V_DS = 0.1 V reaches the Id–Vg sweep's drain current within 1e-6, currents summing to 1.3e-12.
   - Steady paths unchanged: devices without insulators, meshed oxides without interface terms and meshed oxides with
@@ -1025,7 +1030,7 @@ thermionic emission, meshed insulators in a later unit):**
 - **Incomplete ionization** (`PhysicsModels::incomplete_ionization`, off by default as the legacy flag): the Poisson
   rows use N_D+ − N_A− at the electrons' and holes' own reduced energies (from n and p out of equilibrium, legacy), with
   the n, p (drift-diffusion) or ψ (equilibrium) derivatives; contacts and the neutral guess use
-  `ionized_neutral_equilibrium`. The solved bulk's ionized fraction equals the 40-digit roots to 1e-10. A 4H-SiC p-n
+  `ionized_neutral_equilibrium`. The solved bulk's ionized fraction equals the double-double roots to 1e-10. A 4H-SiC p-n
   diode (aluminium 10% ionized) sweeps to 3 V.
 - **Radiative recombination** (`PhysicsModels::radiative`, on by default since silicon's B is 0): R gains B(np − E) on
   physical densities, as Auger. A 200 µm-a-side GaAs diode with radiative recombination alone matches the long-base
@@ -1831,6 +1836,7 @@ architecture; historical branch names remain only where they are useful to expla
 | Q9 | Verified reference toolset MSVC 14.51 (`14.51.36231`), with exact MSVC toolset, Windows SDK, CMake and Ninja versions pinned for CI, Visual Studio Build Tools on CI, and local Community use subject to Microsoft's licence terms. The 14.50 LTS target was not adopted (untested); an LTS move is Q11. |
 | D8 | CMake + vcpkg manifest mode with a pinned baseline, explicit version constraints/overrides, and a reproducible CI dependency/cache strategy. Baseline, Eigen version and triplet are decided (Q7, Q8); the CI cache strategy is open (Q10). |
 | A5 | **AC representation and index width** (decided 2026-10-02, owner: "Do A5 now"). AC small-signal solves the complex system (J + iωC) x = b, as the legacy code does (`ac.py:187`, `ac2d.py:317`, `ac3d.py:256`: `spsolve(J0 + 1j*omega*Cmat, b)`); the real 2N block form is not used (4× the nonzeros and a departure from legacy). `SparseMatrix` is therefore `BasicSparseMatrix<Scalar>` with `Scalar` ∈ {`double`, `std::complex<double>`}, done while only linalg and its tests depend on it; `SparseMatrix` stays the name of the real matrix, so no caller changes. Assembly (Unit 7) should build J and, later, C on one shared pattern so the AC matrix reuses it. Complex solving (a complex `LinearSolver`, its acceptance check and backends) is part of the AC unit. Index width stays `std::int32_t`: it is the index of Eigen SparseLU and LP64 PARDISO and allows 2³¹ − 1 nonzeros in A, beyond the reach of a direct factorization; the backend-internal factor limits are in 6.10 "Known limits". |
+| D9 | **No Python in NiTCAD work** (owner, 2026-10-07): none in the runtime (section 1), and none in tooling, tests, mutation checks or reference generation either. Reference values are computed in C++ (`tests/physics/references.hpp`, double-double arithmetic) or are closed forms; legacy algorithms used as references are ported to C++ test helpers (`legacy_graded_mesh.hpp`, `legacy_moscap.hpp`, `legacy_turnoff.hpp`), never run in Python. Committed C++ edited with Python earlier is not rewritten for that reason alone. |
 
 ### 14.2 Provisionally decided (stand unless verification or Unit work disproves them)
 
@@ -1883,6 +1889,7 @@ architecture; historical branch names remain only where they are useful to expla
 | V23 | Unit 15b (`device/insulators`): Debug and Release build with no warnings; `nitcad_physics_test` 72 test cases, `nitcad_device_test` 24, `nitcad_assemble_test` 57, `nitcad_solve_test` 96 (+4 `[.mosfet]`, Release only), all pass. Without insulators every output of seven probe runs hashes identically to `main`. Fermi occupancy, trap-band quadrature and Gauss–Legendre nodes against 40-digit values (4 ε; 7.1e-16; 25 digits); SRH occupancy equals the Fermi function at equilibrium within 1.9e-15; FD Jacobians 1D/2D/3D at most 7.0e-8, the interface part 2.4e-9; meshed MOS-C second order against the exact solution (7.6e-6 V at 2400 nodes); the Q_f shift equals its discrete value to 6e-14; the legacy D_it stretch-out within 0.28 mV; surface recombination against the analytic diode within 8.3e-4; meshed against lumped MOSFET thresholds 0.21 mV apart, currents within 0.58%. Seventeen mutation checks caught (the run-identity test first missed the electron thermal velocity and was extended). | Verified locally. |
 | V23a | Unit 15b interface potential (`device/insulators`, on `daf4de7`): Debug and Release build with no warnings, all suites pass. Q_f, traps and surface recombination at ψ_I by a local solve per interface edge with the exact Jacobian: D_it MOS-C second order (2.94e-4 to 4.39e-6 V, ratio 4.04–4.08, was first order), Q_f flat-band shift = −q Q_f/C_ox to 6e-13, FD Jacobians at most 1.7e-7 (interface part 2.0e-8), surface recombination within 8.3e-4, unchanged devices bit-identical to `main` and `daf4de7`, solve time within 0–20% (noise 10–20%). Twenty-six mutation checks caught. | Verified locally. |
 | V24 | Unit 21 (`solve/transient`): Debug and Release build with no warnings; `nitcad_physics_test` 72 test cases, `nitcad_device_test` 24, `nitcad_assemble_test` 63, `nitcad_solve_test` 112 (+5 `[.mosfet]` and 5 `[.transient]`, Release only), all pass (Release 10/10, Debug 8/8). Time-step FD Jacobians 1D/2D/3D, both statistics, incomplete ionization, at most 1.7e-7 (trap part 3.5e-7); a long step is the steady state; total currents sum to 3.1e-10 (2D MOS with traps and two ohmic contacts) and integrate to the contact charges; backward Euler first order (1.92–1.99 per halving) and BDF2 second (3.33 to 3.90); error control follows rtol across kinks and a jump; MOS-C RC response within 0.093% (meshed and lumped), dielectric relaxation within 0.34%, trap emission rate within 3.2e-4; the legacy diode turn-off (legacy core built from the reference checkout) within 3.7e-5 until the legacy run stalls (a legacy finding); 2D/3D extrusions to 2.3e-13; the meshed MOSFET gate step settles to the Id–Vg current within 1e-6. Steady paths bit-identical to `main` (plain, meshed-oxide and trap devices, run digests included). Twenty-seven mutation checks caught (four after a test was added or sharpened). | Verified locally. |
+| V25 | No-Python cleanup (`test/no-python-refs`, owner request before Unit 22): every reference value that came from an outside tool is recomputed in C++. `tests/physics/reference_arithmetic.hpp` (double-double arithmetic: exp, log, sqrt, pow, ln 2 and π computed by series, Gauss–Legendre by Newton, ζ by Euler–Maclaurin) and `tests/physics/references.hpp` (Bernoulli function, F₁/₂ and F₋₁/₂ by polylogarithm series and quadrature, neutral roots by bisection with and without dopant levels, the legacy material formulas) replace the mpmath and 50-digit literals of `flux_test`, `poisson_test`, `fermi_dirac_test` (physics and solve), `heavy_doping_test`, `interface_traps_test`, `materials_test`, `mobility_test`, `semiconductor_test`, `statistics_test` and `heterojunction_test`; series and quadrature agree to 1e-26 and F₁/₂(0) matches (1 − 2^−½) ζ(3/2) to 1e-26; every existing tolerance holds unchanged. A new test checks the stored 6-point Gauss–Legendre constants against the Newton-computed rule to 4 ε. The graded-mesh check against values from a numpy run of the legacy `mesh.py` became a check against the legacy specification (cell count from the spacing integral in closed form, end points, gradient limit). The stored legacy turn-off table (generated by running the legacy Python) became a C++ port of the legacy 1D diode and transient loop; NiTCAD agrees with it to 3.7e-5, as with the table, and the port reproduces the legacy stall (from step 190; the legacy run's from 184). Source changed only in provenance comments (`bernoulli.hpp`, `fermi_dirac.hpp`, `fermi_dirac.cpp`). | Verified locally. |
 | V3 | Scaling definitions, scaled variables and Newton tolerances read from `inputs.cpp` and `device1d.cpp` and recorded in 6.1. One open question remains for Unit 8 (convergence criterion on the clipped correction). | Verified |
 
 Verifications due at their own unit: none left. The 5e-5 Jacobian gate's normalization was read at Unit 7 (section 10), and

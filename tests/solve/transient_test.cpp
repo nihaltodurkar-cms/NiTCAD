@@ -655,15 +655,28 @@ TEST_CASE("transient: the run record covers the waveforms and the time options")
 }
 
 TEST_CASE("transient: the legacy diode turn-off, backward Euler on the legacy steps") {
-    // The legacy fixture (legacy_turnoff.hpp) on its own mesh and models, the same fixed steps.
-    // The legacy reports the conduction current of the anode edge; NiTCAD's conduction current
-    // of the anode contact is the same quantity.
+    // The legacy fixture (test_m17_transient.py test_diode_turnoff_storage_delay_reference: p+n,
+    // 1e19 / 1e15, L = 10 um, junction at 3 um, graded_mesh(L, [xj], 1e-7, 1e-6, 1.2), no BGN, no
+    // Auger), run by the C++ port of the legacy diode and transient loop (legacy_turnoff.hpp) and
+    // by NiTCAD with the same fixed backward-Euler steps of t_t / 100 over 3 t_t. (At the legacy
+    // fixture's own t_t / 50 the legacy Newton stalls on a fixed step.) The legacy reports the
+    // conduction current of the anode edge; NiTCAD's conduction current of the anode contact is the
+    // same quantity.
     const double L = 1e-3, xj = 3e-4;
-    mesh::Mesh m = *mesh::make_tensor_grid(legacy_graded_mesh(L, {xj}, 1e-7, 1e-6, 1.2));
+    const std::vector<double> x = legacy_graded_mesh(L, {xj}, 1e-7, 1e-6, 1.2);
+    REQUIRE(x.size() == 1016);
+    std::vector<double> doping(x.size());
+    for (std::size_t i = 0; i < x.size(); ++i) doping[i] = x[i] < xj ? -1e19 : 1e15;
+    LegacyDiode1D legacy(x, doping);
+    const LegacyTurnoffRun ref = legacy.turnoff(0.5, L, xj, 100, 3);
+    REQUIRE(ref.current.size() == 301);
+
+    mesh::Mesh m = *mesh::make_tensor_grid(x);
     const std::size_t n = m.node_count();
     std::vector<double> donors(n, 0.0), acceptors(n, 0.0);
-    for (std::size_t i = 0; i < n; ++i) (m.points()[i][0] < xj ? acceptors : donors)[i] =
-        m.points()[i][0] < xj ? 1e19 : 1e15;
+    for (std::size_t i = 0; i < n; ++i) {
+        (doping[i] < 0.0 ? acceptors : donors)[i] = std::abs(doping[i]);
+    }
     auto anode = m.find_boundary("x_min")->nodes;
     auto cathode = m.find_boundary("x_max")->nodes;
     const device::Device d = *device::Device::create(
@@ -675,49 +688,55 @@ TEST_CASE("transient: the legacy diode turn-off, backward Euler on the legacy st
          .acceptors = std::move(acceptors),
          .contacts = {{"anode", device::ContactKind::ohmic, std::move(anode)},
                       {"cathode", device::ContactKind::ohmic, std::move(cathode)}}});
-    REQUIRE(n == 1016);
     const auto wf = waveforms(*Waveform::step(0.5, 0.0, 0.0), Waveform::constant(0.0));
     solve::TransientOptions o{.integrator = solve::Integrator::backward_euler,
-                              .t_end_s = legacy_turnoff_steps * legacy_turnoff_dt,
-                              .dt_initial_s = legacy_turnoff_dt,
+                              .t_end_s = 300 * ref.dt,
+                              .dt_initial_s = ref.dt,
                               .adaptive = false};
     o.steady.models.auger = false;
     o.steady.models.bgn = false;
     const auto run = *solve::solve_transient(d, wf, o);
     REQUIRE(!run.stopped);
-    REQUIRE(run.points.size() == legacy_turnoff_current.size());
-    // The legacy run stalls from step 184 on: its current repeats -1.4174e-6 A/cm^2 to the end,
-    // though the diode is relaxing to equilibrium at 0 V (no current). Near equilibrium its merit
-    // line search finds no decrease at rounding level, takes no step (lambda = 0) and reports the
-    // unchanged state as converged. NiTCAD keeps decaying (1.6e-14 A/cm^2 at 3 tt). Compared up to
-    // the stall.
-    std::size_t frozen = legacy_turnoff_current.size();
-    for (std::size_t k = 1; k < legacy_turnoff_current.size(); ++k) {
-        if (legacy_turnoff_current[k] == legacy_turnoff_current[k - 1]) {
+    REQUIRE(run.points.size() == ref.current.size());
+    // The legacy loop stalls near equilibrium: the merit 0.5 |F|^2 stops decreasing at rounding
+    // level, the line search shrinks lambda towards 0, and a step with lambda = 0 is reported as
+    // converged (the clipped correction is below the tolerance), so the state, and the current,
+    // freeze. The step where this starts depends on the rounding of the merit sum: the legacy run
+    // froze from step 184 (current -1.4174e-6 A/cm^2), this port, the same algorithm in C++, from
+    // step 190 (-1.2497e-6 A/cm^2), its line search collapsing from step 186. NiTCAD keeps
+    // decaying to equilibrium (1.6e-14 A/cm^2 at 3 t_t).
+    std::size_t frozen = ref.current.size();  // the first step that leaves the state unchanged
+    for (std::size_t k = 1; k < ref.current.size(); ++k) {
+        if (ref.current[k] == ref.current[k - 1]) {
             frozen = k;
             break;
         }
     }
-    REQUIRE(frozen == 184);
-    double worst = 0.0, worst_k = 0;
-    for (std::size_t k = 0; k + 1 < frozen; ++k) {
-        const double a = run.points[k].conduction_current[0], b = legacy_turnoff_current[k];
-        const double e = std::abs(a - b) / std::abs(b);
-        if (e > worst) {
-            worst = e;
-            worst_k = static_cast<double>(k);
-        }
+    REQUIRE(frozen < ref.current.size());
+    // The collapse: the run of steps with lambda below 1e-3 that ends in the stall.
+    std::size_t collapse = frozen;
+    while (collapse > 1 && ref.step_lambda[collapse - 1] < 1e-3) --collapse;
+    double worst = 0.0;
+    for (std::size_t k = 0; k < collapse; ++k) {
+        worst = std::max(worst, std::abs(run.points[k].conduction_current[0] - ref.current[k]) /
+                                    std::abs(ref.current[k]));
     }
-    UNSCOPED_INFO("worst relative difference " << worst << " at " << worst_k);
-    // Measured 3.7e-5, where the current has fallen to 1.7e-4 of the forward one; 1.1e-5 while it
-    // is above 1e-2 of it, and 1e-13 on most steps. Both runs stop Newton at a correction below
-    // 1e-8 of the densities, at different iterates; the current, a small difference of large
-    // fluxes, amplifies that.
+    CAPTURE(collapse, frozen, worst, ref.forward_current, ref.current[frozen],
+            run.points.back().terminal_current[0]);
+    // Before the collapse: 1e-13 on most steps, 3.7e-5 at worst, where the current has fallen to
+    // 1.7e-4 of the forward one (the same as against the legacy run's own output). Both stop
+    // Newton at a correction below 1e-8 of the densities, at different iterates; the current, a
+    // small difference of large fluxes, amplifies that.
     REQUIRE(worst <= 5e-5);
-    // The current after the switch: the stored charge is pulled out first (a reverse current
-    // 447 times the forward one on the first step), then the diode relaxes to equilibrium.
-    REQUIRE(run.points[1].conduction_current[0] < -400.0 * legacy_turnoff_IF);
-    REQUIRE(std::abs(run.points.back().terminal_current[0]) < 1e-12 * legacy_turnoff_IF);
+    // The stall: near equilibrium, a lambda of 0, and the current frozen to the end.
+    REQUIRE(collapse < frozen);
+    REQUIRE(std::abs(ref.current[frozen]) < 1e-4 * ref.forward_current);
+    REQUIRE(ref.step_lambda[frozen + 1] == 0.0);
+    REQUIRE(ref.current.back() == ref.current[frozen]);
+    // The physics: the stored charge is pulled out first (a reverse current 447 times the forward
+    // one on the first step), then the diode relaxes to equilibrium, which NiTCAD reaches.
+    REQUIRE(run.points[1].conduction_current[0] < -400.0 * ref.forward_current);
+    REQUIRE(std::abs(run.points.back().terminal_current[0]) < 1e-12 * ref.forward_current);
 }
 
 TEST_CASE("transient: with incomplete ionization the bound carriers are stored too") {
