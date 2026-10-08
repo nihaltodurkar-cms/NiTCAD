@@ -14,10 +14,13 @@
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
+#include <cstdio>
 #include <numeric>
 #include <utility>
 #include <vector>
 
+#include "NiTCAD/analysis/curve.hpp"
+#include "NiTCAD/analysis/dc.hpp"
 #include "NiTCAD/assemble/bernoulli.hpp"
 #include "NiTCAD/assemble/drift_diffusion.hpp"
 #include "NiTCAD/assemble/scaling.hpp"
@@ -200,6 +203,46 @@ TEST_CASE("bias: ideality from a fit over 0.3 to 0.7 V (legacy g3)") {
     const double ideality = 1.0 / (slope * base::thermal_voltage(300.0));
     UNSCOPED_INFO("ideality " << ideality);
     REQUIRE(std::abs(ideality - 1.0) < 0.05);
+}
+
+TEST_CASE("bias: the analysis extractors read the diode's ideality (Unit 24)") {
+    // analysis::diode_fit on the sweep's curve is the least-squares fit above (legacy g3, V16:
+    // ideality 1.004); the local ideality stays within 0.02 of 1 from 0.3 to 0.6 V (legacy
+    // test_ideal_diode_law); the currents are far above their resolution.
+    const auto d = diode_1d(gate_mesh());
+    std::vector<std::vector<double>> points;
+    for (int k = 0; k <= 14; ++k) points.push_back({0.05 * k, 0.0});
+    const auto s = solve::sweep_bias(d, points);
+    REQUIRE(s.has_value());
+    REQUIRE(!s->stopped);
+    const auto curve = analysis::current_curve(*s, 0, 0);
+    REQUIRE(curve.has_value());
+    REQUIRE(curve->resolution.size() == points.size());
+    double sv = 0, sy = 0, svv = 0, svy = 0, count = 0;
+    for (std::size_t k = 6; k < points.size(); ++k) {
+        const double y = std::log(curve->y[k]);
+        sv += curve->x[k];
+        sy += y;
+        svv += curve->x[k] * curve->x[k];
+        svy += curve->x[k] * y;
+        count += 1;
+    }
+    const double by_hand =
+        (count * svv - sv * sv) / ((count * svy - sv * sy) * base::thermal_voltage(300.0));
+    const auto fit = analysis::diode_fit(*curve, 0.3, 0.7, 300.0);
+    REQUIRE(fit.has_value());
+    const auto local = analysis::local_ideality(*analysis::slice(*curve, 0.3, 0.6), 300.0);
+    const auto rs = analysis::series_resistance(*curve, 0.3, 0.7, 300.0);
+    REQUIRE(rs.has_value());
+    std::printf("diode: ideality %.6f (by hand %.6f) I_s %.4e, R_s fit: n %.6f R_s %.4e\n",
+                fit->ideality.value, by_hand, fit->saturation_current.value, rs->ideality.value,
+                rs->resistance.value);
+    REQUIRE(fit->ideality.window.first == 6);
+    REQUIRE(fit->ideality.window.last == 14);
+    REQUIRE(!fit->ideality.below_resolution);
+    REQUIRE(std::abs(fit->ideality.value / by_hand - 1.0) < 1e-12);
+    REQUIRE(std::abs(fit->ideality.value - 1.0) < 0.05);
+    for (const double n : *local) REQUIRE(std::abs(n - 1.0) < 0.02);
 }
 
 TEST_CASE("bias: a 2x finer mesh moves J(0.5 V) by less than 3% (legacy g4)") {

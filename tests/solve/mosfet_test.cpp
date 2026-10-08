@@ -18,9 +18,13 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdio>
+#include <numbers>
 #include <utility>
 #include <vector>
 
+#include "NiTCAD/analysis/curve.hpp"
+#include "NiTCAD/analysis/dc.hpp"
+#include "NiTCAD/analysis/two_port.hpp"
 #include "NiTCAD/base/constants.hpp"
 #include "NiTCAD/device/device.hpp"
 #include "NiTCAD/mesh/mesh.hpp"
@@ -160,8 +164,9 @@ device::Device meshed_mosfet(int nx = 90, int ny = 50, int oxide_cells = 5) {
 }
 
 // mosfet.id_vg_sweep: equilibrium, then each Vg at the drain bias from the previous point. The
-// drain current in A/cm (per unit depth).
-std::vector<double> id_vg(const device::Device& d, const std::vector<double>& Vg, double Vds) {
+// drain current in A/cm (per unit depth); the sweep itself into out, if given.
+std::vector<double> id_vg(const device::Device& d, const std::vector<double>& Vg, double Vds,
+                          results::Sweep* out = nullptr) {
     std::vector<std::vector<double>> points;
     for (const double v : Vg) points.push_back({0.0, Vds, 0.0, v});
     const auto sweep = solve::sweep_bias(d, points);
@@ -181,6 +186,7 @@ std::vector<double> id_vg(const device::Device& d, const std::vector<double>& Vg
         REQUIRE(std::abs(sum) <= 1e-6 * std::abs(p.terminal_current[1]) + 1e-10);
         Id.push_back(p.terminal_current[1]);
     }
+    if (out) *out = *sweep;
     return Id;
 }
 
@@ -206,7 +212,8 @@ TEST_CASE("mosfet: Id-Vg threshold, on/off ratio, swing and monotonic rise (lega
     // 0.1 V steps) and test_id_vg_monotonic_above_threshold (0.3 to 1.5 V in 0.1 V steps).
     const auto Vg = linspace(-1.0, 1.5, 26);
     const double Vds = 0.05;
-    const auto Id = id_vg(mosfet(), Vg, Vds);
+    results::Sweep sweep;
+    const auto Id = id_vg(mosfet(), Vg, Vds, &sweep);
     const std::vector<double> Vg_legacy(Vg.begin(), Vg.begin() + 21);
     const std::vector<double> Id_legacy(Id.begin(), Id.begin() + 21);
 
@@ -239,6 +246,81 @@ TEST_CASE("mosfet: Id-Vg threshold, on/off ratio, swing and monotonic rise (lega
     REQUIRE(SS < ideal(lm.phi_F));
     // Monotonic above threshold, 0.3 to 1.5 V.
     for (std::size_t k = 13; k + 1 < Id.size(); ++k) REQUIRE(Id[k + 1] > Id[k]);
+
+    // Unit 24: the analysis extractors on the sweep's drain current (contact 1) against the gate
+    // (contact 3), over the legacy -1 to 1 V. The max-g_m threshold is the legacy extraction above;
+    // the swing (steepest segment below 1e-2 of the largest current, above the resolution) lies
+    // within the long-channel bounds; the constant-current threshold at the current where the
+    // max-g_m threshold is, I(V_th), returns it; the on/off ratio between 1 V and the off state.
+    const auto full = analysis::current_curve(sweep, 3, 1);
+    REQUIRE(full.has_value());
+    REQUIRE(full->resolution.size() == Vg.size());
+    const auto transfer = analysis::slice(*full, -1.0, 1.0);
+    REQUIRE(transfer->x.size() == 21);
+    const auto vt = analysis::threshold_max_gm(*transfer, Vds);
+    const auto ss = analysis::subthreshold_swing(*transfer);
+    // Finding: below Vg = -0.3 V the drain current (|I| <= 2e-10 A/cm, some of it negative) is
+    // under its resolution (about 1e-9 A/cm): rounding noise. The legacy off-state check above
+    // compares with that noise; the on/off ratio is read at the first resolved point, and at -1 V
+    // it is an error (the currents' signs differ).
+    CAPTURE(transfer->y, transfer->resolution);
+    std::size_t resolved = 0;
+    while (transfer->y[resolved] <= transfer->resolution[resolved]) ++resolved;
+    const double off_V = transfer->x[resolved];
+    const auto onoff = analysis::on_off_ratio(*transfer, transfer->x.back(), off_V);
+    REQUIRE(vt.has_value());
+    REQUIRE(ss.has_value());
+    REQUIRE(onoff.has_value());
+    REQUIRE(std::abs(off_V + 0.3) < 1e-9);
+    REQUIRE(!onoff->below_resolution);
+    REQUIRE(!analysis::on_off_ratio(*transfer, transfer->x.back(), transfer->x.front()).has_value());
+    const double I_vt = analysis::value_at(*transfer, vt->value, analysis::Scale::logarithmic)->value;
+    const auto vt_cc = analysis::threshold_constant_current(*transfer, I_vt);
+    std::printf("mosfet extraction: V_th max-gm %.5f V (legacy %.5f), swing %.2f mV/decade over "
+                "points %zu-%zu (steepest of all %.2f), I(V_th) %.3e A/cm, on/off %.3e\n",
+                vt->value, extracted, ss->value, ss->window.first, ss->window.last, SS, I_vt,
+                onoff->value);
+    REQUIRE(std::abs(vt->value - extracted) <= 1e-12);
+    REQUIRE(!vt->below_resolution);
+    REQUIRE(ss->value > ideal(2.0 * lm.phi_F));
+    REQUIRE(ss->value < ideal(lm.phi_F));
+    REQUIRE(std::abs(vt_cc->value - vt->value) < 1e-12);
+    REQUIRE(onoff->value > 1e6);
+}
+
+TEST_CASE("mosfet: f_T from h21 against the quasi-static estimate (Unit 24)", "[.mosfet]") {
+    // At Vg = 1 V, Vds = 0.05 V, with source and body at AC ground: the quasi-static two-port
+    // h21 = (g_m - i omega C_gd) / (i omega C_gg) gives |h21| = 1 at
+    // omega_T = g_m / sqrt(C_gg^2 - C_gd^2), with g_m, C_gg and C_gd read at 1 kHz. f_T from the
+    // admittance over 1e7 to 1e11 Hz (a quarter decade apart) against it.
+    const device::Device d = mosfet();
+    const double Vds = 0.05, Vg = 1.0;
+    std::vector<std::vector<double>> ramp;
+    for (const double v : linspace(0.0, Vg, 11)) ramp.push_back({0.0, Vds, 0.0, v});
+    const auto up = solve::sweep_bias(d, ramp);
+    REQUIRE(up.has_value());
+    REQUIRE(!up->stopped);
+    std::vector<double> f{1e3};
+    for (int k = 0; k <= 16; ++k) f.push_back(std::pow(10.0, 7.0 + 0.25 * k));
+    const std::vector<std::vector<double>> point{{0.0, Vds, 0.0, Vg}};
+    const auto r = solve::solve_small_signal(d, point, {.frequencies_Hz = f}, &up->points.back().fields);
+    REQUIRE(r.has_value());
+    REQUIRE(!r->stopped);
+    const double w = 2.0 * std::numbers::pi * f[0];
+    const double gm = r->admittance(0, 0, 1, 3).real();
+    const double Cgg = r->admittance(0, 0, 3, 3).imag() / w;
+    const double Cgd = -r->admittance(0, 0, 3, 1).imag() / w;
+    const double quasi_static = gm / std::sqrt(Cgg * Cgg - Cgd * Cgd) / (2.0 * std::numbers::pi);
+    const auto fT = analysis::transition_frequency(*r, 0, 3, 1);
+    REQUIRE(fT.has_value());
+    const auto fmax = analysis::maximum_oscillation_frequency(*r, 0, 3, 1);
+    std::printf("mosfet f_T: %.4e Hz (quasi-static %.4e, ratio - 1 = %.3e), window %zu-%zu, "
+                "extrapolated %d; gm %.4e Cgg %.4e Cgd %.4e; f_max %s %.4e\n",
+                fT->value, quasi_static, fT->value / quasi_static - 1.0, fT->window.first,
+                fT->window.last, fT->extrapolated ? 1 : 0, gm, Cgg, Cgd,
+                fmax ? "" : "(none)", fmax ? fmax->value : 0.0);
+    REQUIRE(!fT->extrapolated);
+    REQUIRE(std::abs(fT->value / quasi_static - 1.0) < 2e-2);  // measured 0.54%
 }
 
 TEST_CASE("mosfet: the on current is mesh independent (legacy gate)", "[.mosfet]") {

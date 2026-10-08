@@ -16,11 +16,14 @@
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
+#include <cstdio>
 #include <optional>
 #include <string>
 #include <utility>
 #include <vector>
 
+#include "NiTCAD/analysis/curve.hpp"
+#include "NiTCAD/analysis/cv.hpp"
 #include "NiTCAD/base/constants.hpp"
 #include "NiTCAD/device/device.hpp"
 #include "NiTCAD/mesh/tensor_grid.hpp"
@@ -414,6 +417,62 @@ TEST_CASE("mos: P5 series capacitance and doping recovered from the depletion C-
     }
     REQUIRE(median(relation) < 0.10);
     REQUIRE(*std::max_element(relation.begin(), relation.end()) < 0.35);
+}
+
+TEST_CASE("mos: the analysis extractors read the quasi-static C-V (Unit 24)") {
+    // The quasi-static capacitance from the sweep's gate charge is the curve above (numpy.gradient);
+    // the accumulation capacitance approaches C_ox from below; the flat-band voltage from the
+    // flat-band capacitance (Debye length) is the analytic one (as P7, 50 mV); the doping profile
+    // from d(1/C_d^2)/dV in depletion (behind C_ox) approaches N_A from above (see below).
+    const Curve& c = fixture_curve();
+    const LegacyMOSCapacitor& m = legacy();
+    const auto lm = m.analytic_landmarks();
+    results::Sweep sweep;
+    sweep.points = c.points;
+    const auto charge = analysis::gate_charge_curve(sweep, 0, 0);
+    REQUIRE(charge.has_value());
+    const auto C = analysis::quasi_static_capacitance(*charge);
+    REQUIRE(C.has_value());
+    for (std::size_t k = 0; k < c.C.size(); ++k) {
+        REQUIRE(std::abs(C->y[k] - c.C[k]) <= 1e-12 * std::abs(c.C[k]));
+    }
+    const auto acc = analysis::accumulation_capacitance(*C);
+    REQUIRE(acc->value < m.Cox);
+    REQUIRE(acc->value > 0.9 * m.Cox);
+    const double C_fb = analysis::flat_band_capacitance(m.Cox, m.eps_s, N_A, 300.0);
+    const auto V_fb = analysis::flat_band_voltage(*C, C_fb);
+    REQUIRE(V_fb.has_value());
+
+    const double phiF = lm.phi_F;
+    std::vector<double> window;
+    for (std::size_t k = 0; k < c.Vg.size(); ++k) {
+        if (0.05 * phiF < c.phi_s[k] && c.phi_s[k] < 0.95 * phiF) window.push_back(c.Vg[k]);
+    }
+    const Curve fine = cv(moscap_1d(), range(window.front(), window.back(), 0.005));
+    std::vector<double> V_dep;
+    for (std::size_t k = 0; k < fine.Vg.size(); ++k) {
+        if (0.30 * phiF < fine.phi_s[k] && fine.phi_s[k] < 0.65 * phiF) V_dep.push_back(fine.Vg[k]);
+    }
+    const auto fine_C = analysis::make_curve(fine.Vg, fine.C);
+    const auto profile = analysis::doping_profile(
+        *analysis::slice(*fine_C, V_dep.front(), V_dep.back()), m.eps_s, m.Cox);
+    REQUIRE(profile.has_value());
+    const double N_median = median(profile->doping_cm3);
+    std::printf("mos C-V: C_acc / C_ox %.4f, V_FB %.4f V (analytic %.4f), N median %.4e over %zu "
+                "points, from %.4e to %.4e, depth %.3e to %.3e cm\n",
+                acc->value / m.Cox, V_fb->value, lm.V_FB, N_median, profile->doping_cm3.size(),
+                profile->doping_cm3.front(), profile->doping_cm3.back(), profile->depth_cm.front(),
+                profile->depth_cm.back());
+    REQUIRE(std::abs(V_fb->value - lm.V_FB) < 0.05);
+    // The 1/C^2 profile assumes a depletion edge sharp on the scale of the depletion width; here
+    // the window (P5's) is in weak depletion, w = 2.8 to 4.3 Debye lengths (L_D = 12.9 nm), and the
+    // profile reads high, falling towards N_A with depth (measured 1.48 to 1.27 N_A, median 1.33).
+    // A junction in reverse bias recovers its doping within 1% (small_signal_test.cpp).
+    for (std::size_t k = 0; k < profile->doping_cm3.size(); ++k) {
+        REQUIRE(profile->doping_cm3[k] > N_A);
+        if (k > 0) REQUIRE(profile->doping_cm3[k] < profile->doping_cm3[k - 1]);
+    }
+    REQUIRE(N_median < 1.4 * N_A);
 }
 
 TEST_CASE("mos: P6 C_min and W_max match the values derived from the parameters") {
