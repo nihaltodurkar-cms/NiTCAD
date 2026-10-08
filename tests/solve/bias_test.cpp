@@ -16,6 +16,7 @@
 #include <cstddef>
 #include <cstdio>
 #include <numeric>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -34,7 +35,9 @@
 #include "NiTCAD/solve/bias.hpp"
 #include "NiTCAD/solve/equilibrium.hpp"
 #include "NiTCAD/solve/newton.hpp"
+#include "../linalg/mkl_test_runtime.hpp"
 #include "legacy_graded_mesh.hpp"
+#include "solver_timing.hpp"
 
 using namespace NiTCAD;
 using base::ErrorCode;
@@ -363,6 +366,87 @@ TEST_CASE("bias: Newton analyzes once, and converges to a quadratic finish") {
     for (const auto& r : record.iterations) u.push_back(r.update);
     REQUIRE(u.back() < 1e-8);
     REQUIRE(u[u.size() - 1] <= 10.0 * u[u.size() - 2] * u[u.size() - 2]);
+}
+
+TEST_CASE("bias: PARDISO, one analysis per Newton run and the diode gates (Unit 18)",
+          "[pardiso]") {
+    // The hard reuse gate on a real Newton run: PARDISO analyzes once, factorizes once per Newton
+    // iteration (each Jacobian), and solves once per iteration. The J(0.5 V) gate and a forward
+    // sweep agree with Eigen SparseLU within 1e-10 (measured below).
+    REQUIRE_MKL();
+    const linalg::SolverConfig pardiso{.backend = linalg::SolverBackend::mkl_pardiso};
+    const auto d = diode_1d(gate_mesh());
+    const auto scaling = *assemble::make_scaling(d);
+    auto system = *assemble::DriftDiffusion::create(d, scaling);
+    const auto eq = *solve::solve_equilibrium(d);
+    std::vector<double> psi(eq.fields.potential_V.size());
+    for (std::size_t i = 0; i < psi.size(); ++i) psi[i] = eq.fields.potential_V[i] / scaling.V_T;
+    REQUIRE(system.set_bias(std::vector<double>{0.5, 0.0}).has_value());
+    auto x = system.state_from_potential(psi);
+    const auto x0 = x;
+    auto solver = *linalg::LinearSolver::create(pardiso);
+    results::ConvergenceRecord record;
+    REQUIRE(solve::newton_solve(system, x, {}, solver, record).has_value());
+    const linalg::BackendCounts& counts = solver.backend_counts();
+    auto eigen = *linalg::LinearSolver::create({});
+    results::ConvergenceRecord eigen_record;
+    auto xe = x0;
+    REQUIRE(solve::newton_solve(system, xe, {}, eigen, eigen_record).has_value());
+    std::printf("pardiso Newton: %zu iterations, analyses %zu, factorizations %zu, solves %zu "
+                "(Eigen: %zu iterations, solves %zu)\n",
+                record.iterations.size(), counts.analyses, counts.factorizations, counts.solves,
+                eigen_record.iterations.size(), eigen.backend_counts().solves);
+    // One solve per iteration, plus at most max_refinement_steps (1) refinement solves each.
+    const std::size_t n = record.iterations.size();
+    REQUIRE(counts.analyses == 1);
+    REQUIRE(counts.factorizations == n);
+    REQUIRE(counts.solves >= n);
+    REQUIRE(counts.solves <= 2 * n);
+
+    solve::BiasOptions options;
+    options.linear = pardiso;
+    std::vector<double> V;
+    for (int k = 0; k <= 14; ++k) V.push_back(0.05 * k);
+    const auto Je = sweep(d, V);
+    const auto Jp = sweep(d, V, options);
+    double worst = 0.0;
+    for (std::size_t k = 1; k < V.size(); ++k) worst = std::max(worst, std::abs(Jp[k] / Je[k] - 1.0));
+    std::printf("pardiso diode: J(0.5 V) %.10e (Eigen %.10e), worst relative difference %.2e\n",
+                Jp[10], Je[10], worst);
+    REQUIRE(close(Jp[10], 1.280e-2, 0.01));
+    REQUIRE(worst < 1e-10);
+}
+
+TEST_CASE("bias: PARDISO cost on 3D diode Jacobians (Unit 18 measurement)", "[.pardiso_perf]") {
+    // Uniform 3D diodes of 20^3 and 30^3 nodes (24,000 and 81,000 unknowns; the second the size at
+    // which the Unit 3 review measured Eigen at 70 s a factorization), the Jacobian at 0.5 V on the
+    // equilibrium potential: Eigen, PARDISO on 1 thread and on up to 8. Run by hand; not a ctest.
+    REQUIRE_MKL();
+    const int threads = static_cast<int>(std::clamp(std::thread::hardware_concurrency(), 1u, 8u));
+    for (const int nodes : {20, 30}) {
+        const auto a = uniform_axis(2e-4, nodes), b = uniform_axis(1e-4, nodes);
+        const auto d = diode(*mesh::make_tensor_grid(a, b, b));
+        const auto eq = *solve::solve_equilibrium(d);
+        std::vector<double> rhs;
+        const linalg::SparseMatrix j =
+            device_jacobian(d, std::vector<double>{0.5, 0.0}, eq.fields.potential_V, rhs);
+        const SolverTiming te = time_solver(j, rhs, {}, 1);
+        const SolverTiming t1 = time_solver(j, rhs, {.backend = linalg::SolverBackend::mkl_pardiso});
+        const SolverTiming tn = time_solver(
+            j, rhs, {.backend = linalg::SolverBackend::mkl_pardiso, .threads = threads});
+        double scale = 0.0, differ = 0.0;
+        for (const double v : te.x) scale = std::max(scale, std::abs(v));
+        for (std::size_t i = 0; i < te.x.size(); ++i) {
+            differ = std::max(differ, std::abs(t1.x[i] - te.x[i]) / scale);
+        }
+        std::printf("pardiso 3D diode %d^3 (%zu unknowns, %zu nonzeros): first / refactor / solve "
+                    "[s] Eigen %.3f / %.3f / %.4f, PARDISO 1 thread %.3f / %.3f / %.4f, %d threads "
+                    "%.3f / %.3f / %.4f; step difference %.2e\n",
+                    nodes, static_cast<std::size_t>(j.rows()), j.nonzeros(), te.first_s,
+                    te.refactor_s, te.solve_s, t1.first_s, t1.refactor_s, t1.solve_s, threads,
+                    tn.first_s, tn.refactor_s, tn.solve_s, differ);
+        REQUIRE(differ < 1e-8);
+    }
 }
 
 TEST_CASE("bias: invalid input and non-convergence return errors") {

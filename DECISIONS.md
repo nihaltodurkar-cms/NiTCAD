@@ -139,7 +139,7 @@ None of these is decided. Each needs an owner position before the build scaffold
 | N3 | Exception flag: `/EHsc` is needed because Eigen and the standard library can throw. State it. | Unit 1 |
 | N4 | Windows headers: define `UNICODE`/`_UNICODE`, use `/utf-8`, and define `NOMINMAX`/`WIN32_LEAN_AND_MEAN` before `windows.h` reaches any code. | Unit 1 (core), L7/L8 (app) |
 | N5 | Whether both Debug and Release builds run the tests in CI. | CI unit |
-| N6 | Licence of NiTCAD: Eigen is MPL-2.0, which affects static linking of release binaries. The repo has a `LICENSE` file; the advisor did not check it. | before release |
+| N6 | Licence. NiTCAD stays MIT (`LICENSE`), as the owner stated with Unit 18 (2026-10-08). Eigen (MPL-2.0) is compiled into the binaries: a release must carry its notice and MPL source terms. Intel MKL (Unit 18) is an optional, separately licensed external dependency (Intel Simplified Software License): NiTCAD loads it at run time from a path the user gives and never links or ships it; bundling MKL with a release would need its licence and notices handled explicitly. | release notices before release |
 | N7 | Whether clang-format, `/analyze` or clang-tidy are wanted at all, given "no speculative files". | owner |
 
 ## Inconsistencies the advisor found in `ARCHITECTURE.md` (not yet fixed)

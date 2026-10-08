@@ -34,6 +34,7 @@
 #include "NiTCAD/solve/small_signal.hpp"
 #include "NiTCAD/solve/transient.hpp"
 #include "NiTCAD/solve/waveform.hpp"
+#include "../linalg/mkl_test_runtime.hpp"
 #include "legacy_graded_mesh.hpp"
 
 using namespace NiTCAD;
@@ -900,6 +901,48 @@ TEST_CASE("small signal: analysis::doping_profile of a reverse-biased junction (
         REQUIRE(p->doping_cm3[k] > p->doping_cm3[k - 1]);
     }
     REQUIRE(p->depth_cm.back() > p->depth_cm.front());
+}
+
+TEST_CASE("small signal: PARDISO gives Eigen SparseLU's admittance (Unit 18)", "[pardiso]") {
+    // The complex path: a p+n junction in reverse and forward bias, and the MOS capacitor with an
+    // interface trap level (complex trap terms), from 1 kHz to 1 GHz. Every entry within 1e-9 of
+    // the largest of its frequency's matrix, or within its column's resolution where that is
+    // larger: the reverse-biased junction's conductance (1e-9 to 7e-6 S/cm^2) lies under its
+    // resolution (up to 2.4e-5), where both backends give rounding noise (Unit 22) and differ by up
+    // to 3.4% of the largest entry.
+    REQUIRE_MKL();
+    const auto compare = [](const device::Device& d, const std::vector<std::vector<double>>& points,
+                            solve::BiasOptions eigen, const char* name) {
+        const std::vector<double> f{1e3, 1e5, 1e7, 1e9};
+        solve::BiasOptions pardiso = eigen;
+        pardiso.linear = {.backend = linalg::SolverBackend::mkl_pardiso};
+        const auto e = run(d, points, f, eigen);
+        const auto p = run(d, points, f, pardiso);
+        const std::size_t contacts = e.contacts;
+        double worst = 0.0;
+        for (std::size_t k = 0; k < points.size(); ++k) {
+            for (std::size_t j = 0; j < f.size(); ++j) {
+                double scale = 0.0;
+                for (const Complex y : e.points[k].admittance[j]) scale = std::max(scale, std::abs(y));
+                for (std::size_t i = 0; i < e.points[k].admittance[j].size(); ++i) {
+                    const double bound =
+                        std::max(1e-9 * scale, e.points[k].resolution[j][i % contacts]);
+                    worst = std::max(worst, std::abs(p.points[k].admittance[j][i] -
+                                                     e.points[k].admittance[j][i]) /
+                                                bound);
+                }
+            }
+        }
+        std::printf("pardiso small signal, %s: worst |Y_p - Y_e| / max(1e-9 max |Y_e|, "
+                    "resolution) %.3f\n",
+                    name, worst);
+        REQUIRE(worst <= 1.0);
+    };
+    solve::BiasOptions o;
+    o.models.bgn = false;
+    compare(p_plus_n(1e19, 1e16), {{-2.0, 0.0}, {0.6, 0.0}}, o, "junction");
+    const TrapFixture t = trap_fixture();
+    compare(t.device, {{t.V0, 0.0}}, t.options, "trap level");
 }
 
 TEST_CASE("small signal: a long diode, the diffusion admittance") {

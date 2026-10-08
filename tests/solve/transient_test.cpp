@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
+#include <cstdio>
 #include <stop_token>
 #include <tuple>
 #include <utility>
@@ -23,6 +24,7 @@
 #include "NiTCAD/physics/semiconductor.hpp"
 #include "NiTCAD/solve/bias.hpp"
 #include "NiTCAD/solve/transient.hpp"
+#include "../linalg/mkl_test_runtime.hpp"
 #include "legacy_graded_mesh.hpp"
 #include "legacy_turnoff.hpp"
 
@@ -147,6 +149,34 @@ TEST_CASE("transient: a diode switched on reaches its steady state, conserving c
     }
     CAPTURE(worst);
     REQUIRE(worst <= 1e-7);  // measured 4.1e-8 (the displacement spike right after the step)
+}
+
+TEST_CASE("transient: PARDISO gives Eigen SparseLU's switch-on (Unit 18)", "[pardiso]") {
+    // The diode switch-on with fixed BDF2 steps (adaptive steps could branch on rounding-level
+    // differences in the error estimate): every step's currents against Eigen's.
+    REQUIRE_MKL();
+    const device::Device d = diode(*mesh::make_tensor_grid(diode_axis()));
+    const auto wf = waveforms(*Waveform::step(0.0, 0.5, 0.0), Waveform::constant(0.0));
+    solve::TransientOptions o{.t_end_s = 2e-9, .dt_initial_s = 2e-11, .adaptive = false};
+    const auto e = *solve::solve_transient(d, wf, o);
+    o.steady.linear = {.backend = linalg::SolverBackend::mkl_pardiso};
+    const auto p = *solve::solve_transient(d, wf, o);
+    REQUIRE(!e.stopped);
+    REQUIRE(!p.stopped);
+    REQUIRE(p.points.size() == e.points.size());
+    double scale = 0.0, worst = 0.0;
+    for (const auto& q : e.points) scale = std::max(scale, largest_abs(q.terminal_current));
+    for (std::size_t k = 0; k < e.points.size(); ++k) {
+        REQUIRE(p.points[k].time_s == e.points[k].time_s);
+        for (std::size_t c = 0; c < 2; ++c) {
+            worst = std::max(worst, std::abs(p.points[k].terminal_current[c] -
+                                             e.points[k].terminal_current[c]) /
+                                        scale);
+        }
+    }
+    std::printf("pardiso transient: %zu steps, worst current difference %.2e of the largest\n",
+                e.points.size(), worst);
+    REQUIRE(worst < 1e-9);
 }
 
 TEST_CASE("transient: measured order of backward Euler and BDF2", "[.transient]") {
