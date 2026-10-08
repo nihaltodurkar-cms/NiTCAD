@@ -107,11 +107,25 @@ add_dependencies(nitcad_base_test nitcad_contract_probe)
 target_compile_definitions(nitcad_base_test PRIVATE
   NITCAD_CONTRACT_PROBE_PATH="$<TARGET_FILE:nitcad_contract_probe>")
 
-# --- linalg layer (sparse matrix, backend-neutral solver, Eigen SparseLU backend) ---
+# --- MKL runtime for the PARDISO tests (Unit 18) ------------------------------------
+# MKL is optional and never linked: the mkl_pardiso backend loads mkl_rt at run time from a path
+# the program gives (linalg/mkl_runtime.hpp). The tests take that path from this cache variable;
+# when it is empty they skip the PARDISO cases, unless NITCAD_REQUIRE_MKL is on (CI), which makes
+# a missing runtime a configuration error.
+set(NITCAD_MKL_RUNTIME "" CACHE FILEPATH "mkl_rt DLL for the PARDISO tests (optional)")
+option(NITCAD_REQUIRE_MKL "Fail the configuration when NITCAD_MKL_RUNTIME is not a file" OFF)
+if(NITCAD_REQUIRE_MKL AND NOT EXISTS "${NITCAD_MKL_RUNTIME}")
+  message(FATAL_ERROR "NITCAD_REQUIRE_MKL is on but NITCAD_MKL_RUNTIME ('${NITCAD_MKL_RUNTIME}') is not a file.")
+endif()
+file(TO_CMAKE_PATH "${NITCAD_MKL_RUNTIME}" NITCAD_MKL_RUNTIME_PATH)
+
+# --- linalg layer (sparse matrix, backend-neutral solver, Eigen SparseLU and PARDISO backends) ---
 add_library(nitcad_linalg STATIC
   src/linalg/sparse_matrix.cpp
   src/linalg/linear_solver.cpp
-  src/linalg/eigen_sparse_lu.cpp)
+  src/linalg/eigen_sparse_lu.cpp
+  src/linalg/mkl_runtime.cpp
+  src/linalg/mkl_pardiso.cpp)
 add_library(NiTCAD::linalg ALIAS nitcad_linalg)
 target_include_directories(nitcad_linalg PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
 # Eigen is PRIVATE so its include path never reaches linalg consumers (6.10, Q5);
@@ -121,8 +135,16 @@ target_link_libraries(nitcad_linalg PUBLIC NiTCAD::base PRIVATE Eigen3::Eigen)
 add_executable(nitcad_linalg_test
   tests/linalg/sparse_matrix_test.cpp
   tests/linalg/linear_solver_test.cpp
+  tests/linalg/pardiso_test.cpp
   tests/linalg/header_boundary_test.cpp)
 target_link_libraries(nitcad_linalg_test PRIVATE NiTCAD::linalg Catch2::Catch2WithMain)
+target_compile_definitions(nitcad_linalg_test PRIVATE
+  NITCAD_MKL_RUNTIME_PATH="${NITCAD_MKL_RUNTIME_PATH}")
+# A process that never loads MKL: mkl_pardiso must refuse to start (its own process, because the
+# PARDISO tests load the runtime and Catch2 runs tests in random order).
+add_executable(nitcad_mkl_absent_probe tests/linalg/mkl_absent_probe.cpp)
+target_link_libraries(nitcad_mkl_absent_probe PRIVATE NiTCAD::linalg)
+add_test(NAME linalg_mkl_absent COMMAND nitcad_mkl_absent_probe)
 add_test(NAME linalg COMMAND nitcad_linalg_test)
 
 # --- mesh layer (node/edge/control-volume graph, tensor-grid producer) -------------
@@ -273,6 +295,8 @@ add_executable(nitcad_solve_test
   tests/solve/btbt_test.cpp)
 # The solve tests also read their results through the analysis extractors (Unit 24 gates).
 target_link_libraries(nitcad_solve_test PRIVATE NiTCAD::solve NiTCAD::analysis Catch2::Catch2WithMain)
+target_compile_definitions(nitcad_solve_test PRIVATE
+  NITCAD_MKL_RUNTIME_PATH="${NITCAD_MKL_RUNTIME_PATH}")
 add_test(NAME solve COMMAND nitcad_solve_test)
 # The 2D MOSFET gates (tests/solve/mosfet_test.cpp, hidden tag [.mosfet]) take about a minute in
 # Release and far longer in Debug, so they run in the Release configuration only.

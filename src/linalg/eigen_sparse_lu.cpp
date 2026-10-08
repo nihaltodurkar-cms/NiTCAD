@@ -90,6 +90,7 @@ std::expected<void, base::Error> SparseLuBackend<Scalar>::analyze(
 
     lu_.emplace();
     lu_->analyzePattern(csc_);
+    ++this->counts_.analyses;
 
     // Eigen checks COLAMD's result only with eigen_assert, which is compiled out in release
     // builds. With the size guard above COLAMD cannot run out of workspace; verify the column
@@ -114,7 +115,7 @@ std::expected<void, base::Error> SparseLuBackend<Scalar>::analyze(
 }
 
 template <MatrixScalar Scalar>
-std::expected<PivotRatio, base::Error> SparseLuBackend<Scalar>::factorize(
+std::expected<Factorization, base::Error> SparseLuBackend<Scalar>::factorize(
     std::span<const Scalar> csr_values) {
     NITCAD_EXPECTS(lu_.has_value());
     NITCAD_EXPECTS(csr_values.size() == csr_to_csc_.size());
@@ -124,6 +125,7 @@ std::expected<PivotRatio, base::Error> SparseLuBackend<Scalar>::factorize(
     }
 
     lu_->factorize(csc_);
+    ++this->counts_.factorizations;
     // Eigen 5.0.1 leaves info() unset when it cannot allocate its working memory, but always sets
     // the message on failure. lu_ is recreated by every analysis and the caller re-analyzes after
     // a failure, so an empty message means this factorization did not fail; info() is read only
@@ -181,8 +183,10 @@ std::expected<PivotRatio, base::Error> SparseLuBackend<Scalar>::factorize(
             }
         }
     }
-    return PivotRatio{.ratio = largest > 0.0 ? smallest / largest : 0.0,
-                      .column = static_cast<std::size_t>(factored_to_original_[smallest_at])};
+    return Factorization{
+        .pivots = PivotRatio{.ratio = largest > 0.0 ? smallest / largest : 0.0,
+                             .column = static_cast<std::size_t>(factored_to_original_[smallest_at])},
+        .perturbed_pivots = std::nullopt};
 }
 
 template <MatrixScalar Scalar>
@@ -194,6 +198,7 @@ void SparseLuBackend<Scalar>::solve(std::span<const Scalar> b, std::span<Scalar>
     const Eigen::Map<const Vector> bv(b.data(), n);
     Eigen::Map<Vector> xv(x.data(), n);
     xv = lu_->solve(bv);
+    ++this->counts_.solves;
 }
 
 }  // namespace NiTCAD::linalg::detail

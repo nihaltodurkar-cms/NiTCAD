@@ -12,6 +12,8 @@
 
 #include "NiTCAD/base/contract.hpp"
 #include "eigen_sparse_lu.hpp"
+#include "mkl_api.hpp"
+#include "mkl_pardiso.hpp"
 
 namespace NiTCAD::linalg {
 
@@ -84,6 +86,18 @@ std::expected<BasicLinearSolver<Scalar>, base::Error> BasicLinearSolver<Scalar>:
                                              std::nullopt, static_cast<double>(config.threads)));
             }
             break;
+        case SolverBackend::mkl_pardiso:
+            if (detail::mkl_api() == nullptr) {
+                return std::unexpected(error(base::ErrorCode::invalid_input,
+                                             "mkl_pardiso needs the MKL runtime: call "
+                                             "load_mkl_runtime first"));
+            }
+            if (config.threads < 1 || config.threads > 1024) {
+                return std::unexpected(error(base::ErrorCode::invalid_input,
+                                             "mkl_pardiso supports 1 to 1024 threads",
+                                             std::nullopt, static_cast<double>(config.threads)));
+            }
+            break;
         default:
             return std::unexpected(
                 error(base::ErrorCode::invalid_input, "unknown linear solver backend"));
@@ -113,8 +127,19 @@ std::expected<BasicLinearSolver<Scalar>, base::Error> BasicLinearSolver<Scalar>:
 }
 
 template <MatrixScalar Scalar>
-BasicLinearSolver<Scalar>::BasicLinearSolver(const SolverConfig& config)
-    : config_(config), backend_(std::make_unique<detail::SparseLuBackend<Scalar>>()) {}
+BasicLinearSolver<Scalar>::BasicLinearSolver(const SolverConfig& config) : config_(config) {
+    if (config.backend == SolverBackend::mkl_pardiso) {
+        backend_ = std::make_unique<detail::PardisoBackend<Scalar>>(config.threads);
+    } else {
+        backend_ = std::make_unique<detail::SparseLuBackend<Scalar>>();
+    }
+}
+
+template <MatrixScalar Scalar>
+const BackendCounts& BasicLinearSolver<Scalar>::backend_counts() const noexcept {
+    NITCAD_EXPECTS(backend_ != nullptr);
+    return backend_->counts();
+}
 
 template <MatrixScalar Scalar>
 BasicLinearSolver<Scalar>::BasicLinearSolver(BasicLinearSolver&& other) noexcept
@@ -298,22 +323,34 @@ std::expected<FactorizationReport, base::Error> BasicLinearSolver<Scalar>::facto
         weighted_row_max_[r] = weighted;
     }
 
-    const auto pivots = backend_->factorize(scaled_values_);
-    if (!pivots) {
+    const auto factorization = backend_->factorize(scaled_values_);
+    if (!factorization) {
         reset();
-        return std::unexpected(pivots.error());
+        return std::unexpected(factorization.error());
     }
-    if (pivots->ratio < config_.min_pivot_ratio) {
+    const auto& pivots = factorization->pivots;
+    if (pivots && pivots->ratio < config_.min_pivot_ratio) {
         reset();
         return std::unexpected(error(base::ErrorCode::singular_system,
                                      "pivot ratio below min_pivot_ratio: the matrix is singular "
                                      "to working precision (for example a floating region)",
                                      pivots->column, pivots->ratio));
     }
+    // A perturbed pivot was below 1e-13 of the largest: under any useful min_pivot_ratio.
+    const std::size_t perturbed = factorization->perturbed_pivots.value_or(0);
+    if (config_.min_pivot_ratio > 0.0 && perturbed > 0) {
+        reset();
+        return std::unexpected(error(base::ErrorCode::singular_system,
+                                     "the backend perturbed tiny pivots: the matrix is singular "
+                                     "to working precision (for example a floating region)",
+                                     std::nullopt, static_cast<double>(perturbed)));
+    }
     std::ranges::copy(values, matrix_.values().begin());
     factorized_ = true;
     ++factorizations_;
-    return FactorizationReport{.pivot_ratio = pivots->ratio};
+    return FactorizationReport{
+        .pivot_ratio = pivots ? std::optional<double>(pivots->ratio) : std::nullopt,
+        .perturbed_pivots = factorization->perturbed_pivots};
 }
 
 template <MatrixScalar Scalar>

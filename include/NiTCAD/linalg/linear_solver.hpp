@@ -7,7 +7,10 @@
 //   solve(b, x)   solves with the last factorization and checks the result.
 // With the Eigen backend the reusable part is only the column ordering and elimination tree:
 // every factorization redoes its own symbolic work because row pivoting depends on the values
-// (measured: the ordering is 2-6% of a 2D factorization and 0.1% of a 3D one).
+// (measured: the ordering is 2-6% of a 2D factorization and 0.1% of a 3D one). With PARDISO the
+// whole analysis (matching, scaling, nested-dissection ordering, symbolic factorization) is done
+// once per pattern, at the first factorization after it (the matching and scaling need values),
+// and every later factorization of that pattern is numeric only (backend_counts()).
 //
 // What this layer adds around the backend, identically for every backend:
 // - Equilibration (optional, on by default): rows, then columns, are scaled by powers of two so
@@ -52,13 +55,22 @@
 namespace NiTCAD::linalg {
 
 enum class SolverBackend : std::uint8_t {
-    // Eigen SparseLU with COLAMD column ordering. Single-threaded.
+    // Eigen SparseLU with COLAMD column ordering. Single-threaded. The default.
     eigen_sparse_lu,
+    // Intel MKL PARDISO (Unit 18), opt-in: real and complex unsymmetric matrices, METIS nested
+    // dissection, PARDISO's weighted matching and scaling, no iterative refinement of its own (this
+    // layer's applies). It does not fail on a tiny pivot: it replaces a pivot below 1e-13 of the
+    // largest by that size and counts it (FactorizationReport::perturbed_pivots). Requires the MKL
+    // runtime to be loaded first (mkl_runtime.hpp). Results agree with eigen_sparse_lu within the
+    // acceptance tolerances, not bit for bit, and may differ at rounding level between thread
+    // counts (6.8).
+    mkl_pardiso,
 };
 
 struct SolverConfig {
     SolverBackend backend = SolverBackend::eigen_sparse_lu;
-    // Thread count (6.8: default 1). eigen_sparse_lu accepts only 1.
+    // Thread count (6.8: default 1). eigen_sparse_lu accepts only 1; mkl_pardiso 1 to 1024 (MKL
+    // threads for this solver's calls only, set thread-locally around each one).
     int threads = 1;
     // Scale rows and columns by powers of two before factorizing.
     bool equilibrate = true;
@@ -77,6 +89,11 @@ struct SolverConfig {
     //   one joined by a single weak link w gives about w / 2. Such a region with n = 1000 is
     //   rejected for delta / g = 1e-14 or w = 1e-12 (an SRH-only floating body on a fine mesh can
     //   reach this). No threshold separates the two; topology checks belong to the device layer.
+    // mkl_pardiso reports no pivot ratio: its factor's diagonal is not a singularity measure (it
+    // pivots statically; a valid equilibrated system measured 1.8e-13 with no perturbed pivot).
+    // Instead, when this is positive, a perturbed pivot (below 1e-13 of the largest) is
+    // singular_system: a floating region gives one. Between 1e-13 and min_pivot_ratio PARDISO
+    // cannot tell a floating region from a valid system; the acceptance check still applies.
     double min_pivot_ratio = 1e-11;
 };
 
@@ -84,6 +101,18 @@ struct FactorizationReport {
     // Smallest |pivot| / largest |pivot| (of the equilibrated matrix when equilibrating), if the
     // backend reports pivots.
     std::optional<double> pivot_ratio;
+    // Pivots the backend perturbed instead of failing (mkl_pardiso); empty for eigen_sparse_lu.
+    std::optional<std::size_t> perturbed_pivots;
+};
+
+// The backend's own work since the solver was created: symbolic analyses (an ordering and symbolic
+// factorization), numeric factorizations, and triangular solves (one per solve() call and one per
+// refinement step). With mkl_pardiso these are its phases 11, 22 and 33, counted where they are
+// called; with eigen_sparse_lu its analyzePattern, factorize and solve.
+struct BackendCounts {
+    std::size_t analyses = 0;
+    std::size_t factorizations = 0;
+    std::size_t solves = 0;
 };
 
 struct SolveReport {
@@ -99,7 +128,7 @@ struct SolveReport {
 
 namespace detail {
 template <MatrixScalar Scalar>
-class SparseLuBackend;
+class Backend;
 }
 
 // The solver of A x = b for a real (LinearSolver) or complex (ComplexLinearSolver) matrix. The
@@ -112,9 +141,10 @@ class BasicLinearSolver {
 public:
     using Matrix = BasicSparseMatrix<Scalar>;
 
-    // Errors: invalid_input if threads is not supported by the backend, max_backward_error is not
-    // a positive finite number, max_refinement_steps is negative, min_pivot_ratio is not in
-    // [0, 1), or min_pivot_ratio is nonzero while equilibrate is false.
+    // Errors: invalid_input if the backend is unknown, or mkl_pardiso without the MKL runtime
+    // loaded, threads is not supported by the backend, max_backward_error is not a positive finite
+    // number, max_refinement_steps is negative, min_pivot_ratio is not in [0, 1), or
+    // min_pivot_ratio is nonzero while equilibrate is false.
     [[nodiscard]] static std::expected<BasicLinearSolver, base::Error> create(
         const SolverConfig& config);
 
@@ -139,6 +169,8 @@ public:
     // Successful analyses and factorizations since creation (to observe symbolic reuse).
     [[nodiscard]] std::size_t analyses() const noexcept { return analyses_; }
     [[nodiscard]] std::size_t factorizations() const noexcept { return factorizations_; }
+    // The backend's own analyses, factorizations and triangular solves (BackendCounts).
+    [[nodiscard]] const BackendCounts& backend_counts() const noexcept;
     [[nodiscard]] const SolverConfig& config() const noexcept { return config_; }
 
 private:
@@ -154,7 +186,7 @@ private:
     void reset() noexcept;
 
     SolverConfig config_;
-    std::unique_ptr<detail::SparseLuBackend<Scalar>> backend_;
+    std::unique_ptr<detail::Backend<Scalar>> backend_;
     Matrix matrix_;                     // pattern of the analysis; original values of the factorization
     std::vector<Scalar> scaled_values_; // values handed to the backend
     // Power-of-two equilibration scales. Always computed (the backward error uses the column

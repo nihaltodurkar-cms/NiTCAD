@@ -14,27 +14,24 @@
 
 #include "NiTCAD/base/error.hpp"
 #include "NiTCAD/linalg/sparse_matrix.hpp"
+#include "backend.hpp"
 
 namespace NiTCAD::linalg::detail {
 
-// Smallest |pivot| over largest |pivot| of a factorization, and the original column of the
-// smallest one.
-struct PivotRatio {
-    double ratio;
-    std::size_t column;
-};
-
 // Scalar is double or std::complex<double>; both are instantiated in eigen_sparse_lu.cpp.
 template <MatrixScalar Scalar>
-class SparseLuBackend {
+class SparseLuBackend final : public Backend<Scalar> {
 public:
     // Builds the column-compressed copy of A's pattern and runs the symbolic analysis.
     // Requires a square, non-empty matrix.
-    [[nodiscard]] std::expected<void, base::Error> analyze(const BasicSparseMatrix<Scalar>& a);
-    // Numeric factorization of values laid out in the CSR order of the analyzed pattern.
-    [[nodiscard]] std::expected<PivotRatio, base::Error> factorize(std::span<const Scalar> csr_values);
+    [[nodiscard]] std::expected<void, base::Error> analyze(
+        const BasicSparseMatrix<Scalar>& a) override;
+    // Numeric factorization of values laid out in the CSR order of the analyzed pattern; its pivot
+    // ratio and the original column of the smallest pivot.
+    [[nodiscard]] std::expected<Factorization, base::Error> factorize(
+        std::span<const Scalar> csr_values) override;
     // x = A^-1 b with the last factorization. b and x have the analyzed dimension.
-    void solve(std::span<const Scalar> b, std::span<Scalar> x);
+    void solve(std::span<const Scalar> b, std::span<Scalar> x) override;
 
 private:
     // COLAMD, not AMD on A^T + A: legacy measured AMD as pathological with SparseLU on the coupled

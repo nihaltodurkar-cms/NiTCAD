@@ -19,6 +19,7 @@
 #include <cstddef>
 #include <cstdio>
 #include <numbers>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -34,8 +35,10 @@
 #include "NiTCAD/solve/bias.hpp"
 #include "NiTCAD/solve/small_signal.hpp"
 #include "NiTCAD/solve/transient.hpp"
+#include "../linalg/mkl_test_runtime.hpp"
 #include "legacy_graded_mesh.hpp"
 #include "legacy_moscap.hpp"
+#include "solver_timing.hpp"
 
 using namespace NiTCAD;
 using Complex = std::complex<double>;
@@ -321,6 +324,60 @@ TEST_CASE("mosfet: f_T from h21 against the quasi-static estimate (Unit 24)", "[
                 fmax ? "" : "(none)", fmax ? fmax->value : 0.0);
     REQUIRE(!fT->extrapolated);
     REQUIRE(std::abs(fT->value / quasi_static - 1.0) < 2e-2);  // measured 0.54%
+}
+
+TEST_CASE("mosfet: PARDISO gives the Id-Vg curve of Eigen SparseLU, and its cost (Unit 18)",
+          "[.mosfet]") {
+    // The Id-Vg sweep at Vds = 0.05 V with PARDISO against Eigen: each drain current within 1e-8
+    // of it, or within the current's resolution where that is larger (the off state is rounding
+    // noise, Unit 24). Then the cost on the Jacobian at Vg = 1 V: the first factorization (with
+    // the analysis), a numeric refactorization and a solve, for Eigen, PARDISO on 1 thread and on
+    // up to 8.
+    REQUIRE_MKL();
+    const device::Device d = mosfet();
+    const auto Vg = linspace(-0.5, 1.0, 16);
+    const double Vds = 0.05;
+    std::vector<std::vector<double>> points;
+    for (const double v : Vg) points.push_back({0.0, Vds, 0.0, v});
+    solve::BiasOptions pardiso;
+    pardiso.linear = {.backend = linalg::SolverBackend::mkl_pardiso};
+    const auto e = solve::sweep_bias(d, points);
+    const auto p = solve::sweep_bias(d, points, pardiso);
+    REQUIRE(e.has_value());
+    REQUIRE(p.has_value());
+    REQUIRE(!e->stopped);
+    REQUIRE(!p->stopped);
+    double worst = 0.0;
+    for (std::size_t k = 0; k < points.size(); ++k) {
+        const double Ie = e->points[k].terminal_current[1], Ip = p->points[k].terminal_current[1];
+        const double bound =
+            std::max(1e-8 * std::abs(Ie), e->points[k].terminal_current_resolution[1]);
+        worst = std::max(worst, std::abs(Ip - Ie) / bound);
+    }
+    std::printf("pardiso mosfet Id-Vg: worst |I_p - I_e| / max(1e-8 |I_e|, resolution) %.3f\n",
+                worst);
+    REQUIRE(worst <= 1.0);
+
+    std::vector<double> rhs;
+    const linalg::SparseMatrix j = device_jacobian(d, points.back(), e->points.back().fields.potential_V, rhs);
+    const int threads = static_cast<int>(std::clamp(std::thread::hardware_concurrency(), 1u, 8u));
+    const SolverTiming te = time_solver(j, rhs, {});
+    const SolverTiming t1 = time_solver(j, rhs, {.backend = linalg::SolverBackend::mkl_pardiso});
+    const SolverTiming tn =
+        time_solver(j, rhs, {.backend = linalg::SolverBackend::mkl_pardiso, .threads = threads});
+    double scale = 0.0, differ = 0.0;
+    for (const double v : te.x) scale = std::max(scale, std::abs(v));
+    for (std::size_t i = 0; i < te.x.size(); ++i) {
+        differ = std::max(differ, std::abs(t1.x[i] - te.x[i]) / scale);
+    }
+    std::printf("pardiso mosfet cost (%zu unknowns, %zu nonzeros): first / refactor / solve [ms] "
+                "Eigen %.1f / %.1f / %.2f, PARDISO 1 thread %.1f / %.1f / %.2f, %d threads "
+                "%.1f / %.1f / %.2f; Newton step difference %.2e\n",
+                static_cast<std::size_t>(j.rows()), j.nonzeros(), 1e3 * te.first_s,
+                1e3 * te.refactor_s, 1e3 * te.solve_s, 1e3 * t1.first_s, 1e3 * t1.refactor_s,
+                1e3 * t1.solve_s, threads, 1e3 * tn.first_s, 1e3 * tn.refactor_s,
+                1e3 * tn.solve_s, differ);
+    REQUIRE(differ < 1e-8);
 }
 
 TEST_CASE("mosfet: the on current is mesh independent (legacy gate)", "[.mosfet]") {

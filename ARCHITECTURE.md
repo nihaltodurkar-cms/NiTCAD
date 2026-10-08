@@ -1614,8 +1614,9 @@ An on-disk result format is **deferred** (R2), under the same independence rule 
 
 ### 6.10 Linear solver interface (D3)
 
-`linalg` exposes a small backend-neutral interface. Eigen SparseLU is the first backend. PARDISO and
-iterative backends are deferred. The interface must be shaped so adding them needs no redesign of callers:
+`linalg` exposes a small backend-neutral interface. Eigen SparseLU is the first backend and the default; PARDISO
+followed in Unit 18 (opt-in, below); iterative backends are deferred. The interface must be shaped so adding them
+needs no redesign of callers:
 
 1. The input is a sparse matrix in a `linalg`-owned storage type plus right-hand sides. Eigen types are an
    implementation detail of the Eigen backend and do not appear in the interface.
@@ -1694,10 +1695,97 @@ interface fits both direct and iterative backends stays unproven until one is re
   `J0 + 1j ω Cmat` with SciPy's `spsolve`/`splu`; NEW, the same hardened interface as the real solves; REASON, the
   acceptance checks (6.10, 4) apply to every solve.
 
+**As built (Unit 18, Intel MKL PARDISO; owner request, scope approved with the owner's conditions):**
+- **Backends behind one interface.** `BasicLinearSolver` holds a private `detail::Backend<Scalar>` (`src/linalg/backend.hpp`:
+  analyze, factorize, solve, and counts of its own work). `SparseLuBackend` (Eigen) and `PardisoBackend` implement it.
+  `SolverBackend::mkl_pardiso` is opt-in; **Eigen SparseLU stays the default**, and the default path is unchanged (no
+  solver result on it moved: every existing gate passes as before).
+- **MKL is loaded at run time, never linked** (`linalg/mkl_runtime.hpp`): `load_mkl_runtime(path)` loads `mkl_rt` with
+  `LoadLibraryExW(LOAD_WITH_ALTERED_SEARCH_PATH)` so MKL's own libraries are found next to it, resolves `pardisoinit`,
+  `pardiso`, `MKL_Set_Num_Threads_Local`, the layer setters and the version string with `GetProcAddress` (no MKL header;
+  the prototypes are declared in `src/linalg/mkl_api.hpp`), selects the LP64 interface (32-bit indices, as
+  `SparseMatrix`'s) and the Intel OpenMP threading layer, and checks the runtime with a 1 × 1 solve. Process-wide and
+  thread-safe; the first success wins. Without it, `create` with `mkl_pardiso` is `invalid_input`. Paths are explicit
+  arguments, never environment variables (6.10, 3). Verified with oneMKL 2026.1 (Intel's NuGet redistributable, as CI
+  uses) and the 2026.1 runtime of a local conda environment. NiTCAD stays MIT; MKL is an optional, separately licensed
+  external dependency (N6).
+- **PARDISO settings:** matrix type 11 (real unsymmetric) or 13 (complex unsymmetric) on the CSR pattern as given
+  (zero-based, PARDISO's native layout: no transpose); METIS nested dissection; PARDISO's weighted matching and scaling
+  (the unsymmetric defaults) on top of this layer's equilibration; pivots below 1e-13 of the largest perturbed and counted
+  (`iparm[13]`); **no iterative refinement of its own** (`iparm[7] = 0`, set after `pardisoinit`, which sets 2; verified:
+  0 steps even with a perturbed pivot), so this layer's refinement on the original system is the only one; no matrix
+  checker (the input is checked here); phases 11, 22 and 33, released with phase −1.
+- **The reuse gate (hard, owner's condition):** one analysis per pattern, one numeric factorization per matrix, one
+  triangular solve per right-hand side (and per refinement step). PARDISO's analysis (matching and scaling need values,
+  then ordering and symbolic factorization) runs at the first factorization after `analyze()`, and every later
+  factorization of the pattern is phase 22 only. `backend_counts()` (new, `BackendCounts`) counts the backend's own work
+  where it is called, from the phase numbers for PARDISO (a phase ab runs steps a to b) and from `analyzePattern`,
+  `factorize` and `solve` for Eigen. Gates: four factorizations and twelve solves of one pattern give 1 / 4 / 12; a
+  Newton run of the Unit 9 diode at 0.5 V gives 1 analysis, 10 factorizations for 10 iterations, and 11 solves (one
+  refinement step; Eigen also takes 11).
+- **Singularity.** OLD / NEW / REASON: the plan was to read PARDISO's pivots with `pardiso_getdiag` for real matrices.
+  NEW: no pivot ratio from PARDISO at all (`FactorizationReport::pivot_ratio` empty). REASON: its factor's diagonal is not
+  a singularity measure: PARDISO pivots statically (matching, then pivoting within supernodes), and a valid equilibrated
+  system (the coupled 3-per-node test system, rows scaled 1e±20) has a diagonal ratio of 1.8e-13 with no perturbed pivot,
+  below the 1e-11 that Eigen's partial-pivoting ratio is calibrated for. Instead, when `min_pivot_ratio` is positive, a
+  **perturbed pivot is `singular_system`** (it was below 1e-13 of the largest), for real and complex matrices;
+  `FactorizationReport::perturbed_pivots` always reports the count (empty for Eigen). Measured: exact and rounding-level
+  floating regions, alone or beside a contacted chain, and a complex one give a perturbed pivot and are rejected; the
+  Eigen suite's weakly anchored valid systems (δ = 1e-14, w = 1e-12), which Eigen rejects, are not perturbed and solve
+  with backward error 1e-16. Between 1e-13 and 1e-11 PARDISO cannot tell a floating region from a valid one; the
+  backward-error acceptance still applies, and device topology is checked in `device` (6.4).
+- **Threads:** `threads` 1 to 1024 (default 1), set thread-locally (`MKL_Set_Num_Threads_Local`) around each call and
+  restored, so solvers on different threads keep their own counts. Results are compared within tolerances, never bit
+  for bit (owner's condition): 4 threads against 1 differ by 2.6e-12 on the coupled system; two solvers on two threads
+  agree with a serial run within 1e-10.
+- **Agreement with Eigen** (Release, oneMKL 2026.1): the shared linear systems to 5.6e-16 (nonsymmetric), 5.5e-12
+  (graded Laplacian), 5.1e-12 (coupled, badly scaled; unequilibrated PARDISO still 6.4e-14 from exact); complex G + iωC
+  over ω = 1e-6 to 1e6 to 1.8e-13. Devices: the Unit 9 diode's J(0.5 V) to 11 digits (worst 2.0e-15 over 0 to 0.7 V);
+  the MOS-C quasi-static gate charge to 7.9e-17 of its largest; the diode switch-on with fixed BDF2 steps to 2.2e-14;
+  the admittance of a p⁺n junction (reverse and forward) and of the trap-level MOS capacitor within max(1e-9 max |Y|,
+  the column's resolution) (worst 0.42 and 0.59 of that bound; the reverse junction's conductance is under its
+  resolution, where the two backends' rounding noise differs by up to 3.4% of the largest entry); the 2D MOSFET Id-Vg
+  (−0.5 to 1 V) within max(1e-8 |I|, resolution), and its Newton step to 3.4e-13.
+- **Cost** (Release, 10 logical processors; first factorization with the analysis / numeric refactorization / solve):
+
+  | System | Eigen SparseLU | PARDISO, 1 thread | PARDISO, 8 threads |
+  |---|---|---|---|
+  | 2D MOSFET, 28,470 unknowns, 273k nonzeros | 199 / 163 / 5.2 ms | 120 / 33 / 3.1 ms | 78 / 10 / 1.6 ms |
+  | 3D diode 20³, 24,000 unknowns | 6.09 / 5.92 / 0.026 s | 0.48 / 0.35 / 0.006 s | 0.18 / 0.074 / 0.004 s |
+  | 3D diode 30³, 81,000 unknowns | 82.7 / 79.5 / 0.14 s | 5.33 / 4.73 / 0.029 s | 1.45 / 1.07 / 0.018 s |
+
+  A Newton iteration pays the refactorization: PARDISO is 5 times faster on the 2D MOSFET and 17 times on 3D on one
+  thread, 16 and 74 times on eight. (`[.pardiso_perf]` in `tests/solve/bias_test.cpp` and the MOSFET gate measure it.)
+- **Tests:** `tests/linalg/pardiso_test.cpp` (loader and configuration, agreement, singular systems, weakly anchored
+  systems, the reuse gate for both backends, complex systems, threads, invalid input) on the matrices of
+  `tests/linalg/fixtures.hpp`, now shared with the Eigen suite; device gates tagged `[pardiso]` in the bias, MOS, small-
+  signal and transient tests, and the MOSFET gate under `[.mosfet]`. `REQUIRE_MKL()` (`tests/linalg/mkl_test_runtime.hpp`)
+  skips them when no runtime is configured (`NITCAD_MKL_RUNTIME`) and fails them when the configured one does not load;
+  CI configures one and requires it (section 9). A process that never loads MKL (`tests/linalg/mkl_absent_probe.cpp`,
+  ctest `linalg_mkl_absent`) checks that `mkl_pardiso` refuses to start and a failed load leaves nothing loaded: Catch2
+  runs tests in random order, so inside the test executable the runtime may already be loaded.
+- **Default path unchanged, bit for bit (owner's condition):** the 14 probe runs of Unit 22 (steady 1D/2D, field
+  mobility with Fermi–Dirac, heterojunction, MOS-C quasi-static and drift-diffusion, transients, traps) give the same
+  result and run hashes as `main`.
+- Mutation checks (20, the C++ string-replacement tool and a shell loop): 18 caught: one-based indices, the real or
+  complex matrix type, analysis on every factorization (phase 12), the analysis flag never set, solves not counted, a
+  perturbed pivot allowed or rejected with the check off, the perturbed count not reported, the thread limit, the
+  runtime check in `create` (caught by the probe, added after it was missed), PARDISO never selected, Eigen's solves not
+  counted, no weighted matching, a 1e-8 perturbation threshold, the loader's check solve, the sequential threading layer,
+  PARDISO's refinement left on. Missed: counting a release (phase −1) as an analysis (equivalent: the release does not
+  pass through the counting wrapper), and a failed phase 33 leaving x as computed (no input reaches it).
+- Failure paths: PARDISO's error codes map to `invalid_input` (−1), `resource_exhausted` (−2, −8, −9, −12),
+  `singular_system` (−4, −7) or `inaccurate_solve` (others); a failed phase 33 leaves x NaN, reported as
+  `inaccurate_solve`. An overflow during factorization is not seen at factorization (no pivots are read) but makes x
+  non-finite, so the solve is `inaccurate_solve`. Not exercised: PARDISO's out-of-memory and internal-error codes.
+- Not in Unit 18 (owner's scope): iterative and AMG solvers, MUMPS, distributed and GPU solvers, a 64-bit Eigen index,
+  changing the default backend.
+
 **Known limits, recorded for later units (from the Unit 3 review):**
 - Eigen SparseLU does not scale to 3D: 81k unknowns (3D, 3 per node) took 70 s per factorization with 123× fill; 2D 270k
   took 6.8 s. A faster backend (PARDISO first; iterative or MUMPS for 3D, per the legacy measurements) is needed before 3D
-  device work.
+  device work. **Unit 18:** PARDISO, measured above (81k 3D unknowns: Eigen 79.5 s a refactorization here, PARDISO 4.7 s
+  on one thread and 1.07 s on eight). Iterative paths remain for larger 3D systems.
 - Eigen stores L and U offsets in the 32-bit index type; extrapolated, that overflows near 5e5 3D unknowns, where a
   factorization would already take over 15 minutes. Fix with the next backend, or a 64-bit index in the private Eigen copy.
 - About four copies of A exist during a factorization (caller, solver, CSC copy, Eigen's own), small next to L and U.
@@ -1940,9 +2028,11 @@ tests/scaffold_test.cpp     Unit 1 scaffold test                             (Un
 include/NiTCAD/base/        constants.hpp, error.hpp, contract.hpp           (Unit 2, exists)
 src/base/contract.cpp       NITCAD_EXPECTS failure path                      (Unit 2, exists)
 tests/base/                 constants, error, contract tests and probe       (Unit 2, exists)
-include/NiTCAD/linalg/      sparse_matrix.hpp, linear_solver.hpp             (Unit 3, exists)
-src/linalg/                 sparse matrix, solver, private Eigen backend     (Unit 3, exists)
-tests/linalg/               matrix, solver and header-boundary tests         (Unit 3, exists)
+include/NiTCAD/linalg/      sparse_matrix.hpp, linear_solver.hpp (Unit 3); mkl_runtime.hpp (Unit 18)
+src/linalg/                 sparse matrix, solver, private Eigen backend (Unit 3); backend interface, MKL loader
+                            and entry points, PARDISO backend (private, Unit 18)
+tests/linalg/               matrix, solver and header-boundary tests (Unit 3); shared fixtures, PARDISO tests, MKL
+                            test runtime (Unit 18)
 include/NiTCAD/mesh/        mesh.hpp, tensor_grid.hpp (Unit 4); tensor_cells.hpp (Unit 20)
 src/mesh/                   graph validation, tensor-grid producer (Unit 4); tensor cells (Unit 20)
 tests/mesh/                 graph validation and geometry gates (Unit 4); tensor cells (Unit 20)
@@ -1970,12 +2060,13 @@ src/solve/                  equilibrium and bias solves, sweeps, run record (Uni
 tests/solve/                Newton contract, equilibrium and bias diode gates, legacy graded_mesh port, sweeps,
                             cancellation and progress (Units 8-10); MOS-C (legacy moscap port) and MOSFET (Unit 12);
                             field mobility (Unit 13); Fermi-Dirac (Unit 14); heterojunctions (Unit 15);
-                            band-to-band tunnelling (Unit 20); extraction from solved devices (Unit 24)
+                            band-to-band tunnelling (Unit 20); extraction from solved devices (Unit 24); PARDISO
+                            device gates and solver timing (Unit 18)
 include/NiTCAD/results/     convergence.hpp, solution.hpp, run.hpp (header-only plain data) (Unit 10, exists)
 include/NiTCAD/analysis/    curve.hpp, dc.hpp, cv.hpp, two_port.hpp                     (Unit 24)
 src/analysis/               extractors; common.hpp helpers (private)                    (Unit 24)
 tests/analysis/             synthetic curves and networks with exact figures            (Unit 24)
-.github/workflows/ci.yml    CI: build and test Debug and Release per branch  (CI unit, exists)
+.github/workflows/ci.yml    CI: build and test Debug and Release per branch (CI unit); pinned MKL runtime (Unit 18)
 include/NiTCAD/<layer>/...  public headers per layer                         (created per unit)
 src/<layer>/...             implementations                                  (created per unit)
 tests/<layer>/...           Catch2 tests mirroring src/                      (created per unit)
@@ -2042,6 +2133,12 @@ the owner approves them in a unit request: `cmake/` (toolchain modules), `benchm
   `vcvarsall.bat`, and so must anyone building from a Visual Studio developer prompt. **Cache verified on a re-run of the same
   workflow:** the first run missed and saved; the second restored all 4 packages in 850 ms (vcpkg install step 228 ms). Whole-job time
   barely changed (about 2m20s to 2m35s, Debug and Release), so the cache is not the dominant cost.
+  **Unit 18:** CI also installs the Intel MKL runtime for the PARDISO tests: Intel's NuGet redistributables
+  `intelmkl.redist.win-x64` 2026.1.0.226 (174 MB) and `intelopenmp.redist.win` 2026.1.0.239, each checked against a
+  pinned SHA-256 (computed locally from the downloads; NuGet publishes none) and cached by those hashes, their DLLs
+  copied into one directory. The configuration gets `NITCAD_MKL_RUNTIME` and `NITCAD_REQUIRE_MKL=ON`, so a missing
+  runtime fails it instead of the PARDISO tests skipping. Locally the variable is optional and the tests skip without
+  it.
 - **Test levels** per component, from the legacy practice: analytic and limiting cases → published-value
   regression → Jacobian vs finite differences → dimensional-reduction identity → convergence and mesh
   independence → benchmark. A compile-only check is never the sole gate for a numerical unit.
@@ -2100,13 +2197,13 @@ built.
 | 15b | Meshed insulators, semiconductor-insulator interfaces, interface charge, traps and recombination | physics, device, assemble, solve | **done, on `main`** (`4e23119`): insulator regions, electrodes on a meshed oxide, fixed charge, interface traps (levels and uniform bands, steady-state SRH occupancy), surface recombination, all at the interface potential (5, 6.2 and 6.4, Unit 15b) |
 | 16 | Unstructured mesh | mesh, assemble | target |
 | 17 | Adaptive mesh refinement and state transfer | mesh, solve, results | target |
-| 18 | Scalable linear-solver backends: PARDISO and/or iterative/AMG paths | linalg | target; must preserve backend-neutral interface |
+| 18 | Scalable linear-solver backends: PARDISO and/or iterative/AMG paths | linalg | **done on branch `linalg/pardiso`**: Intel MKL PARDISO behind the backend-neutral interface, opt-in (Eigen SparseLU stays the default), MKL loaded at run time from a given path and never linked; real and complex; one analysis per pattern, numeric refactorization per Jacobian, one solve per right-hand side; singularity from perturbed pivots (6.10, Unit 18). Iterative/AMG paths remain a target |
 | 19 | Impact ionization and breakdown-oriented continuation | physics, assemble, solve | **done, on `main`** (`b665b9d`): van Overstraeten–de Man with the temperature factor, local generation along the reconstructed current with an exact Jacobian, off by default and bit-identical when off; pseudo-arclength `trace_bias` through folds; breakdown read from the ionization integral (6.2, Unit 19) |
 | 20 | Band-to-band tunnelling and nonlocal path machinery | assemble, physics, solve | **done, on `main`** (`cf2f70a`): local Kane (the legacy silicon pair), nonlocal paths traced through tensor-grid cells as frozen geometry with live evaluation and relocation, the calibrated Kane rate at the path's mean field (silicon) and the direct-gap WKB rate (cited masses only), pure generation, off by default and bit-identical when off (6.2, Unit 20) |
 | 21 | Transient simulation | solve, assemble, results | **done, on `main`** (`a601e7e`): backward Euler and variable-step BDF2 with error-controlled steps, waveforms, displacement current with exact conservation, interface trap dynamics eliminated in the interface solve (6.2, Unit 21) |
 | 22 | AC small-signal analysis | linalg, assemble, solve, results | **done, on `main`** (`75cc2c0`): J + iωt₀C + T(iωt₀) at a DC or quasi-static operating point, complex linear solver, admittance matrix with displacement current and a resolution bound, interface traps in the frequency domain (6.2, Unit 22) |
 | 23 | Thermal / electrothermal coupling | physics, assemble, solve | target |
-| 24 | Analysis and extraction engine | analysis | **done on branch `analysis/extraction`**: curves read from sweeps and small-signal runs; transistor, diode and breakdown figures; C-V doping profile, flat band and the conductance method; two-port Y/Z/h/S, Mason's U, k, MAG/MSG, f_T and f_max; every extraction with the points it used and resolution and extrapolation flags (6.13, Unit 24) |
+| 24 | Analysis and extraction engine | analysis | **done, on `main`** (`4183767`): curves read from sweeps and small-signal runs; transistor, diode and breakdown figures; C-V doping profile, flat band and the conductance method; two-port Y/Z/h/S, Mason's U, k, MAG/MSG, f_T and f_max; every extraction with the points it used and resolution and extrapolation flags (6.13, Unit 24) |
 | 25 | Scientific visualization / rendering | render | target |
 | 26 | Native Windows application and workflow | app | target; Win32 API, x64 target, Direct3D 12 / Direct2D |
 | 27 | Optimization / sensitivity / inverse-design workflows | analysis, solve | long-term target |
@@ -2322,7 +2419,8 @@ architecture; historical branch names remain only where they are useful to expla
 | V26 | Unit 22 (`solve/ac-small-signal`): Debug and Release build with no warnings; `nitcad_linalg_test` 47 test cases, `nitcad_physics_test` 72, `nitcad_device_test` 24, `nitcad_assemble_test` 69, `nitcad_solve_test` 123 (+6 `[.mosfet]` and 6 `[.transient]`, Release only), all pass (Release 10/10, Debug 8/8). Complex solver against the real block form to 1e-12; the small-signal matrix equals the steady Jacobian at s = 0 (9.8e-16) and the backward-Euler step Jacobian at a real s (1.6e-15, trap part 2.1e-13); current rows against differences to 2.6e-8; conservation and equilibrium reciprocity within the reported resolution; MOS-C RC 6.7e-4, dielectric relaxation 1.3e-4, frozen-minority HF C-V 3.1e-9, gated-diode LF C-V below 1e-6, junction 0.88% (depletion approximation), long diode 3.2e-3, trap conductance peak 0.09%, transient sine runs converging to Y at second order; MOSFET g_m 6.9e-10, g_ds 1.0e-11, C_gg 8.7e-13. Steady and transient paths bit-identical to `main` (14 probe runs: diodes 1D/2D, field mobility with Fermi–Dirac, a heterojunction, lumped MOS-C quasi-static and drift-diffusion, a meshed MOS with traps quasi-static and drift-diffusion, transients under BDF2, backward Euler and fixed steps, 1D and 2D trap transients, run digests included). 31 of 33 mutations caught (one after a fixture was added; one undetectable, one equivalent). | Verified locally. |
 | V27 | Unit 19 (`physics/impact-ionization`): Debug and Release build with no warnings; `nitcad_linalg_test` 47 test cases, `nitcad_physics_test` 79, `nitcad_device_test` 24, `nitcad_assemble_test` 77, `nitcad_solve_test` 126 (+6 `[.mosfet]`, 6 `[.transient]` and 6 `[.breakdown]`, Release only), all pass (Release 11/11, Debug 8/8). Coefficients and γ against the published silicon set; FD Jacobian with the generation 6.6e-7 (1D/2D/3D, 5% noise), the resolution's partials 4e-8; a uniform field ionizes alike at 0/30/45° (1e-9), the resolution term's value to 1e-9; a field across the current gives no generation (2.3e-10), nor does a vanishing current; contact rows unchanged. Breakdown at the ionization-integral condition: 55.34 V against the analytic 55.26 V (1e16) and 35.95 against 35.86 V (2e16); the legacy-lifetime fixture's integral 0.99965 at 1e-4 A/cm²; the current balance below 1e-6 at low multiplication; open-base snapback through its fold at 17.27 V (α_T·M = 1 to 1.6e-4); a curved 2D junction's current grows 5.7 times by −27 V against 2.2 planar; 2D/3D extrusions 0 and 2.2e-16; transient drift 6.1e-11; small-signal conductance against DC differences 4.7e-6. Model off: the 14 Unit 22 probe runs hash identically to `main`. 34 of 36 mutations caught (four after a test was added; two equivalent). | Verified locally; on `main` (`b665b9d`, PR #25, CI passed). |
 | V28 | Unit 20 (`physics/band-to-band-tunnelling`): Debug and Release build with no warnings; all suites pass (Release 12/12 with the new Release-only ctest `solve_btbt`, Debug 8/8). Physics, cells, assembler and solve gates as listed in 6.2 (Unit 20): uniform-field closed forms to 2.1e-13, FD Jacobian 5.4e-8, pairs to rounding, 1D reduction 3.3e-16, Zener Kane slope 1.019 B, relocation settles in at most two re-tracings, AC 9.5e-5, 2D cost 1.14 times. Models off: the 14 Unit 22 probe runs hash identically to `main`. 44 of 46 mutations caught (two after a test was added; one practically equivalent, one in the unexercised retry path). | Verified locally; on `main` (`cf2f70a`, PR #26, CI passed). |
-| V29 | Unit 24 (`analysis/extraction`): Debug and Release build with no warnings; all suites pass (Release 13/13 with the new `analysis` ctest, Debug 9/9; `nitcad_analysis_test` 22 test cases). Synthetic gates and the gates on solved devices as listed in 6.13: the Unit 9 diode ideality equals V16's fit to 1e-12 (1.004060); MOSFET V_th equals the legacy max-g_m extraction to 1e-12, swing 70.55 mV/decade, f_T 0.54% from the quasi-static value; MOS-C V_FB within 0.7 mV; the trap level's conductance peak 0.22%; a junction's doping profile within 1.9%; breakdown at 1e-4 A/cm² 0.11% from analytic; BV_CEO at the fold. Findings: the MOS-C 1/C² profile in weak depletion and the MOSFET's unresolved off state (6.13). No solver source changed, so steady, transient and AC results are those of `main`. 43 of 43 mutations caught (five after a rewrite that builds). | Verified locally. |
+| V29 | Unit 24 (`analysis/extraction`): Debug and Release build with no warnings; all suites pass (Release 13/13 with the new `analysis` ctest, Debug 9/9; `nitcad_analysis_test` 22 test cases). Synthetic gates and the gates on solved devices as listed in 6.13: the Unit 9 diode ideality equals V16's fit to 1e-12 (1.004060); MOSFET V_th equals the legacy max-g_m extraction to 1e-12, swing 70.55 mV/decade, f_T 0.54% from the quasi-static value; MOS-C V_FB within 0.7 mV; the trap level's conductance peak 0.22%; a junction's doping profile within 1.9%; breakdown at 1e-4 A/cm² 0.11% from analytic; BV_CEO at the fold. Findings: the MOS-C 1/C² profile in weak depletion and the MOSFET's unresolved off state (6.13). No solver source changed, so steady, transient and AC results are those of `main`. 43 of 43 mutations caught (five after a rewrite that builds). | Verified locally; on `main` (`4183767`, PR #27). |
+| V30 | Unit 18 (`linalg/pardiso`): Debug and Release build with no warnings; all suites pass with the MKL runtime configured (oneMKL 2026.1, Intel's NuGet redistributable; Release 14/14, Debug 10/10, the new ctest `linalg_mkl_absent` in both). PARDISO agrees with Eigen SparseLU on the shared systems (5.6e-16 to 5.5e-12), complex G + iωC (1.8e-13), the diode (J(0.5 V) to 11 digits), MOS-C (7.9e-17), transient (2.2e-14), admittances within max(1e-9 max |Y|, resolution), the MOSFET Id-Vg; reuse gate 1 analysis / one factorization per Jacobian / one solve per right-hand side; floating regions rejected through perturbed pivots. Refactorization 5x (2D MOSFET) and 17x (3D, 81k unknowns) faster than Eigen on one thread, 16x and 74x on eight. Default Eigen path: the 14 probe runs hash identically to `main`. 18 of 20 mutations caught (one equivalent, one unreachable). | Verified locally. |
 | V3 | Scaling definitions, scaled variables and Newton tolerances read from `inputs.cpp` and `device1d.cpp` and recorded in 6.1. One open question remains for Unit 8 (convergence criterion on the clipped correction). | Verified |
 
 Verifications due at their own unit: none left. The 5e-5 Jacobian gate's normalization was read at Unit 7 (section 10), and
@@ -2333,7 +2431,7 @@ Auger and BGN that do not matter, 6.2).
 
 | # | Question | Needed by |
 |---|---|---|
-| N6 | Licence of NiTCAD. Eigen is MPL-2.0, which affects static linking of release binaries. The repository `LICENSE` file was not checked | before release |
+| N6 | Licence. NiTCAD stays MIT (`LICENSE`), as the owner stated with Unit 18 (2026-10-08). Eigen (MPL-2.0) is compiled into the binaries: a release must carry its notice and MPL source terms. Intel MKL (Unit 18) is an optional, separately licensed external dependency (Intel Simplified Software License): NiTCAD loads it at run time from a path the user gives and never links or ships it; bundling MKL with a release would need its licence and notices handled explicitly. | release notices before release |
 | N7 | Whether clang-format, `/analyze` or clang-tidy are wanted at all (feature freeze) | owner |
 
 Nothing in this table blocks Units 1–3.

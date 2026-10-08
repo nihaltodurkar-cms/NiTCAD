@@ -78,6 +78,44 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'vcpkg bootstrap failed' }
           Add-Content $env:GITHUB_ENV "NITCAD_VCPKG_ROOT=$root"
 
+      # The Intel MKL runtime for the PARDISO tests (Unit 18). MKL is optional and never linked:
+      # NiTCAD loads mkl_rt at run time from a path the program gives. Intel's NuGet
+      # redistributables, pinned by version and SHA-256 (the oneMKL runtime and the Intel OpenMP
+      # runtime its threading layer loads), cached by those hashes. Their DLLs go into one
+      # directory; their licence (Intel Simplified Software License) comes with the packages.
+      - name: Restore MKL runtime cache
+        id: mkl-cache
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: ${{ runner.temp }}\mkl-nupkg
+          key: mkl-nupkg-ac2d4a14a70b0215-2a0f9fcdb51d8ac9
+
+      - name: Install pinned MKL runtime
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $packages = Join-Path $env:RUNNER_TEMP 'mkl-nupkg'
+          $runtime = Join-Path $env:RUNNER_TEMP 'mkl'
+          New-Item -ItemType Directory -Force $packages, $runtime | Out-Null
+          function Get-Pinned([string]$Url, [string]$Sha256, [string]$Out) {
+            if (-not (Test-Path $Out)) { Invoke-WebRequest -Uri $Url -OutFile $Out }
+            $actual = (Get-FileHash $Out -Algorithm SHA256).Hash
+            if ($actual -ne $Sha256.ToUpperInvariant()) { throw "SHA-256 mismatch for ${Url}: $actual" }
+          }
+          $feed = 'https://api.nuget.org/v3-flatcontainer'
+          Get-Pinned "$feed/intelmkl.redist.win-x64/2026.1.0.226/intelmkl.redist.win-x64.2026.1.0.226.nupkg" `
+            'ac2d4a14a70b021557170f53460b57038af5ab1977e82a05aca8e4a5af7bcb61' "$packages\mkl.zip"
+          Get-Pinned "$feed/intelopenmp.redist.win/2026.1.0.239/intelopenmp.redist.win.2026.1.0.239.nupkg" `
+            '2a0f9fcdb51d8ac9fa535b67f013fd9341338355679261a39b946ef5e3f399fe' "$packages\openmp.zip"
+          foreach ($zip in "$packages\mkl.zip", "$packages\openmp.zip") {
+            $unpacked = Join-Path $env:RUNNER_TEMP ("unpack-" + [IO.Path]::GetFileNameWithoutExtension($zip))
+            Expand-Archive $zip -DestinationPath $unpacked -Force
+            Copy-Item "$unpacked\runtimes\win-x64\native\*.dll" $runtime
+          }
+          if (-not (Test-Path "$runtime\mkl_rt.3.dll")) { throw 'mkl_rt.3.dll missing' }
+          if (-not (Test-Path "$runtime\libiomp5md.dll")) { throw 'libiomp5md.dll missing' }
+          Add-Content $env:GITHUB_ENV "NITCAD_MKL_RUNTIME=$runtime\mkl_rt.3.dll"
+
       - name: Restore vcpkg binary cache
         uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
         with:
@@ -108,7 +146,8 @@ jobs:
           ninja --version | findstr /X /C:"1.13.2"
           if errorlevel 1 (echo ::error::ninja is not 1.13.2 & ninja --version & exit /b 1)
 
-          cmake --preset %PRESET%
+          rem The PARDISO tests must run here, not skip: a missing runtime fails the configuration.
+          cmake --preset %PRESET% "-DNITCAD_MKL_RUNTIME=%NITCAD_MKL_RUNTIME%" -DNITCAD_REQUIRE_MKL=ON
           if errorlevel 1 exit /b 1
           cmake --build --preset %PRESET%
           if errorlevel 1 exit /b 1
