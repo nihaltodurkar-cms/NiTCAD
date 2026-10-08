@@ -1065,7 +1065,11 @@ legacy `ionization.py`, `continuation.py` `arc_length_sweep`):**
 - **Continuation** (`solve/trace.hpp`, `trace_bias`). Pseudo-arclength in one contact's bias: Euler predictor along the
   unit tangent, Newton on the bordered system [J dF/dλ; cᵀ], regular at a fold. The dense arc row is solved through a
   sparse B₀ (its largest entry only, pivot kept within 0.3 of the largest) and Sherman–Morrison (a dense row cost 50
-  times the factorization: 47 s against 1.2 s on the 1D gate). The arc metric is in volts: the bias, the swept
+  times the factorization: 47 s against 1.2 s on the 1D gate). B₀ is regular only where c_k v_k ≠ 0 (its determinant
+  is c_k times a minor proportional to v_k), and the current term can cancel c_k on the contact's columns, so an entry
+  whose share c_k v_k of |v|² is below 1e-12 of the largest is never chosen (found in review after the first commit:
+  the unguarded choice hit such an entry 55 times across the gates and was rescued by Sherman–Morrison; every
+  measured value is unchanged to the digits quoted). The arc metric is in volts: the bias, the swept
   contact's current at 1 V per decade of |I| + I₀ (I₀ ten times the starting resolution) and 0.1 of the state's root
   mean square; a tangent turning by more than acos 0.9 rejects the step (near a fold the corrector can land on the
   other branch). Steps grow ×1.5 after at most 7 iterations, shrink ×0.7 after 12 or more, halve on failure. Ends at

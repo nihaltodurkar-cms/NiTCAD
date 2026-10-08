@@ -351,16 +351,29 @@ std::expected<results::Sweep, base::Error> trace_bias(const device::Device& devi
         c[n] = s[n] * s[n] * v[n] + gv * g[n];
         return c;
     };
-    // The entry of B0's last row: where the tangent, in the state scales, is largest; the previous
-    // one is kept while its component is at least 0.3 of the largest (a new entry changes B0's
-    // pattern, and the solver analyzes it afresh).
+    // The entry of B0's last row (c the arc row of tangent v): where the tangent, in the state
+    // scales, is largest; the previous one is kept while its component is at least 0.3 of the
+    // largest (a new entry changes B0's pattern, and the solver analyzes it afresh). B0's
+    // determinant is c_k times the minor of [J dF] without column k, which is proportional to v_k,
+    // so B0 is regular only where c_k v_k is not 0; on the columns of the contact's current row
+    // the current term can cancel c_k, so an entry whose share c_k v_k of |v|^2 is below 1e-12 of
+    // the largest share (B0 singular to rounding) is passed over.
     std::size_t kept = n;
-    const auto pivot = [&](const std::vector<double>& v) {
+    const auto pivot = [&](const std::vector<double>& v, const std::vector<double>& c) {
+        double share = 0.0;
+        for (std::size_t q = 0; q <= n; ++q) share = std::max(share, std::abs(c[q] * v[q]));
+        const auto usable = [&](std::size_t q) {
+            return std::abs(c[q] * v[q]) >= 1e-12 * share;
+        };
         std::size_t k = n;
         for (std::size_t q = 0; q < n; ++q) {
-            if (std::abs(s[q] * v[q]) > std::abs(s[k] * v[k])) k = q;
+            if (usable(q) && (!usable(k) || std::abs(s[q] * v[q]) > std::abs(s[k] * v[k]))) {
+                k = q;
+            }
         }
-        if (std::abs(s[kept] * v[kept]) >= 0.3 * std::abs(s[k] * v[k])) return kept;
+        if (usable(kept) && std::abs(s[kept] * v[kept]) >= 0.3 * std::abs(s[k] * v[k])) {
+            return kept;
+        }
         kept = k;
         return k;
     };
@@ -371,7 +384,9 @@ std::expected<results::Sweep, base::Error> trace_bias(const device::Device& devi
     v[n] = direction / V_T;
     const auto tangent = [&]() -> std::expected<void, base::Error> {
         std::vector<double> f(n + 1), e(n + 1, 0.0), w(n + 1);
-        bordered.set_row(row_of(v), y, 0.0, pivot(v));
+        std::vector<double> c = row_of(v);
+        const std::size_t k = pivot(v, c);
+        bordered.set_row(std::move(c), y, 0.0, k);
         results::ConvergenceRecord unused;
         if (auto ok = bordered.evaluate(y, f, unused); !ok) return std::unexpected(ok.error());
         e[n] = 1.0;
@@ -408,7 +423,9 @@ std::expected<results::Sweep, base::Error> trace_bias(const device::Device& devi
             c[n] = 1.0;
             bordered.set_row(std::move(c), y, lambda_end - y[n], n);
         } else {
-            bordered.set_row(row_of(v), y, ds, pivot(v));
+            std::vector<double> c = row_of(v);
+            const std::size_t k = pivot(v, c);
+            bordered.set_row(std::move(c), y, ds, k);
         }
         results::BiasPoint point;
         const IterationObserver observe = [&](const results::IterationRecord& r, bool converged) {
