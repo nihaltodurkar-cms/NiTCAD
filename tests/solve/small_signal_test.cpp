@@ -12,6 +12,7 @@
 #include <cmath>
 #include <complex>
 #include <cstddef>
+#include <cstdio>
 #include <initializer_list>
 #include <numbers>
 #include <stop_token>
@@ -20,6 +21,8 @@
 #include <utility>
 #include <vector>
 
+#include "NiTCAD/analysis/curve.hpp"
+#include "NiTCAD/analysis/cv.hpp"
 #include "NiTCAD/base/constants.hpp"
 #include "NiTCAD/device/device.hpp"
 #include "NiTCAD/mesh/tensor_grid.hpp"
@@ -757,6 +760,23 @@ TEST_CASE("small signal: an interface trap level, the conductance method") {
     REQUIRE(std::abs((Cs.front() - Cs.back()) / t.C_it - 1.0) < 1e-3);
 }
 
+TEST_CASE("small signal: analysis::conductance_peak finds the trap level (Unit 24)") {
+    // The same level, a quarter decade apart from omega tau = 0.1 to 3.2 and off-centre by 0.1
+    // decade: the extractor's peak against C_it / 2 at omega tau = 1 (the synthetic
+    // tests/analysis/cv_test.cpp case measured 0.31% and 0.41% on this sampling).
+    const TrapFixture t = trap_fixture();
+    std::vector<double> freq;
+    for (int k = -4; k <= 2; ++k) freq.push_back(std::pow(10.0, 0.25 * k + 0.1) / (two_pi * t.tau));
+    const auto r = run(t.device, {{t.V0, 0.0}}, freq, t.options);
+    const auto peak = analysis::conductance_peak(r, 0, 0, t.C_ox);
+    REQUIRE(peak.has_value());
+    const double value = peak->conductance_over_omega.value / (0.5 * t.C_it) - 1.0;
+    const double where = peak->frequency.value * two_pi * t.tau - 1.0;
+    std::printf("trap level: conductance peak %.3e off, frequency %.3e off\n", value, where);
+    REQUIRE(std::abs(value) < 5e-3);
+    REQUIRE(std::abs(where) < 1e-2);
+}
+
 TEST_CASE("small signal: transient sine responses converge to the admittance", "[.transient]") {
     // A 1 mV sine through Unit 21's transient run, eight periods in fixed BDF2 steps, the
     // fundamental of the last period: it converges to Y at second order (ratio 4 per halving).
@@ -799,14 +819,13 @@ TEST_CASE("small signal: transient sine responses converge to the admittance", "
     }
 }
 
-TEST_CASE("small signal: a reverse-biased junction, depletion capacitance") {
-    // An abrupt p+n junction (1e19 / 1e16) at -2 V: C = sqrt(q eps N / (2 (V_bi - V - 2 V_T))),
-    // 1/N = 1/N_A + 1/N_D (the depletion approximation with the majority-carrier tails, Sze):
-    // measured 0.88% above it at 1 kHz and 1 MHz alike (the approximation's own error).
+namespace {
+
+// An abrupt p+n junction (N_A on x < 1 um, N_D beyond, 6 um): anode (contact 0) on x_min.
+device::Device p_plus_n(double NA, double ND) {
     const auto x = legacy_graded_mesh(6e-4, {1e-4}, 1e-8, 2e-6);
     mesh::Mesh m = *mesh::make_tensor_grid(x);
     const std::size_t n = m.node_count();
-    const double NA = 1e19, ND = 1e16;
     std::vector<double> donors(n, 0.0), acceptors(n, 0.0);
     for (std::size_t i = 0; i < n; ++i) {
         if (m.points()[i][0] < 1e-4) {
@@ -817,7 +836,7 @@ TEST_CASE("small signal: a reverse-biased junction, depletion capacitance") {
     }
     auto anode = m.find_boundary("x_min")->nodes;
     auto cathode = m.find_boundary("x_max")->nodes;
-    const device::Device d = *device::Device::create(
+    return *device::Device::create(
         {.mesh = std::move(m),
          .temperature_K = 300.0,
          .regions = {{"silicon", physics::silicon()}},
@@ -826,6 +845,16 @@ TEST_CASE("small signal: a reverse-biased junction, depletion capacitance") {
          .acceptors = std::move(acceptors),
          .contacts = {{"anode", device::ContactKind::ohmic, std::move(anode)},
                       {"cathode", device::ContactKind::ohmic, std::move(cathode)}}});
+}
+
+}  // namespace
+
+TEST_CASE("small signal: a reverse-biased junction, depletion capacitance") {
+    // An abrupt p+n junction (1e19 / 1e16) at -2 V: C = sqrt(q eps N / (2 (V_bi - V - 2 V_T))),
+    // 1/N = 1/N_A + 1/N_D (the depletion approximation with the majority-carrier tails, Sze):
+    // measured 0.88% above it at 1 kHz and 1 MHz alike (the approximation's own error).
+    const double NA = 1e19, ND = 1e16;
+    const device::Device d = p_plus_n(NA, ND);
     solve::BiasOptions o;
     o.models.bgn = false;
     const auto r = run(d, {{-2.0, 0.0}}, {1e3, 1e6}, o);
@@ -840,6 +869,37 @@ TEST_CASE("small signal: a reverse-biased junction, depletion capacitance") {
         REQUIRE(std::abs(r.capacitance(0, k, 0, 0) / C - 1.0) < 1.5e-2);
     }
     REQUIRE(std::abs(r.capacitance(0, 0, 0, 0) / r.capacitance(0, 1, 0, 0) - 1.0) < 1e-6);
+}
+
+TEST_CASE("small signal: analysis::doping_profile of a reverse-biased junction (Unit 24)") {
+    // The same junction from -0.5 to -4 V at 1 kHz: d(1/C^2)/dV gives the n side's doping at the
+    // depletion edge, w = eps / C. The majority tails shift 1/C^2 by a constant to first order and
+    // leave a second-order error of order (L_D / w)^2 (L_D = 41 nm, w = 10 to 19 L_D here): the
+    // profile reads below N and approaches it with depth (measured 1.9% low at -0.5 V, 0.5% at -4 V).
+    const double NA = 1e19, ND = 1e16;
+    solve::BiasOptions o;
+    o.models.bgn = false;
+    std::vector<std::vector<double>> points;
+    for (int k = 0; k <= 14; ++k) points.push_back({-0.5 - 0.25 * k, 0.0});
+    const auto r = run(p_plus_n(NA, ND), points, {1e3}, o);
+    const auto C = analysis::capacitance_curve(r, 0, 0, 0, 0);
+    REQUIRE(C.has_value());
+    const double eps = physics::silicon_parameters.eps_r * base::eps0_F_per_cm;
+    const auto p = analysis::doping_profile(*C, eps);
+    REQUIRE(p.has_value());
+    const double N = 1.0 / (1.0 / NA + 1.0 / ND);
+    double worst = 0.0;
+    for (const double v : p->doping_cm3) worst = std::max(worst, std::abs(v / N - 1.0));
+    std::printf("junction profile: doping within %.3e of N over depth %.3e to %.3e cm\n", worst,
+                p->depth_cm.front(), p->depth_cm.back());
+    CAPTURE(p->doping_cm3);
+    REQUIRE(worst < 2.5e-2);
+    REQUIRE(std::abs(p->doping_cm3.back() / N - 1.0) < 1e-2);
+    for (std::size_t k = 1; k < p->doping_cm3.size(); ++k) {
+        REQUIRE(p->doping_cm3[k] < N);
+        REQUIRE(p->doping_cm3[k] > p->doping_cm3[k - 1]);
+    }
+    REQUIRE(p->depth_cm.back() > p->depth_cm.front());
 }
 
 TEST_CASE("small signal: a long diode, the diffusion admittance") {

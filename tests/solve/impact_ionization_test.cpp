@@ -20,6 +20,8 @@
 #include <utility>
 #include <vector>
 
+#include "NiTCAD/analysis/curve.hpp"
+#include "NiTCAD/analysis/dc.hpp"
 #include "NiTCAD/base/constants.hpp"
 #include "NiTCAD/base/error.hpp"
 #include "NiTCAD/device/device.hpp"
@@ -261,6 +263,17 @@ TEST_CASE("impact ionization: avalanche breakdown at the ionization-integral con
         REQUIRE(std::abs(I - 1.0) < 2e-3);
         REQUIRE(std::abs(V_bd / analytic - 1.0) < 1e-2);
         REQUIRE(below < 1e-2 * 1e-4);
+        // Unit 24: analysis::breakdown_at_current reads the same bias from the curve (between the
+        // last two traced points, interpolated in ln |I|).
+        const auto curve = analysis::current_curve(*t, 0, 0);
+        REQUIRE(curve.has_value());
+        const auto bd = analysis::breakdown_at_current(*curve, 1e-4);
+        REQUIRE(bd.has_value());
+        CAPTURE(bd->value);
+        std::printf("breakdown at 1e-4 A/cm^2: %.4f V (analytic %.4f)\n", -bd->value, analytic);
+        REQUIRE(bd->window.last + 1 == t->points.size());
+        REQUIRE(!bd->below_resolution);
+        REQUIRE(std::abs(-bd->value / analytic - 1.0) < 1e-2);
     }
 }
 
@@ -522,6 +535,18 @@ TEST_CASE("impact ionization: an open-base transistor snaps back", "[.breakdown]
     REQUIRE(last.terminal_current[1] >= 20.0);
     REQUIRE(last.bias_V[1] < 0.7 * fold.bias_V[1]);
     REQUIRE(last.terminal_current[1] > 1e3 * fold.terminal_current[1]);
+    // Unit 24: analysis::turning_point finds the fold (BV_CEO) at or just past the highest traced
+    // bias, within the traced points around it.
+    const auto tp = analysis::turning_point(*analysis::current_curve(*t, 1, 1));
+    REQUIRE(tp.has_value());
+    CAPTURE(tp->value, tp->window.first, tp->window.last);
+    std::printf("turning point: %.4f V (highest traced %.4f V)\n", tp->value, fold.bias_V[1]);
+    REQUIRE(tp->window.first <= top);
+    REQUIRE(top <= tp->window.last);
+    REQUIRE(tp->value >= fold.bias_V[1]);
+    REQUIRE(tp->value - fold.bias_V[1] <
+            std::max(fold.bias_V[1] - t->points[top - 1].bias_V[1],
+                     fold.bias_V[1] - t->points[top + 1].bias_V[1]));
     // Past the fold the bias falls monotonically while the current rises.
     for (std::size_t k = top + 1; k < t->points.size(); ++k) {
         REQUIRE(t->points[k].terminal_current[1] > t->points[k - 1].terminal_current[1]);

@@ -223,6 +223,24 @@ add_library(NiTCAD::results ALIAS nitcad_results)
 target_include_directories(nitcad_results INTERFACE "${CMAKE_CURRENT_SOURCE_DIR}/include")
 target_link_libraries(nitcad_results INTERFACE NiTCAD::base)
 
+# --- analysis layer (extraction from results; never solves) ------------------------
+add_library(nitcad_analysis STATIC
+  src/analysis/curve.cpp
+  src/analysis/dc.cpp
+  src/analysis/cv.cpp
+  src/analysis/two_port.cpp)
+add_library(NiTCAD::analysis ALIAS nitcad_analysis)
+target_include_directories(nitcad_analysis PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
+target_link_libraries(nitcad_analysis PUBLIC NiTCAD::base NiTCAD::results)
+
+add_executable(nitcad_analysis_test
+  tests/analysis/curve_test.cpp
+  tests/analysis/dc_test.cpp
+  tests/analysis/cv_test.cpp
+  tests/analysis/two_port_test.cpp)
+target_link_libraries(nitcad_analysis_test PRIVATE NiTCAD::analysis Catch2::Catch2WithMain)
+add_test(NAME analysis COMMAND nitcad_analysis_test)
+
 # --- solve layer (Newton, equilibrium and bias solves, sweeps, cancellation, progress) ---
 add_library(nitcad_solve STATIC
   src/solve/equilibrium.cpp
@@ -253,7 +271,8 @@ add_executable(nitcad_solve_test
   tests/solve/small_signal_test.cpp
   tests/solve/impact_ionization_test.cpp
   tests/solve/btbt_test.cpp)
-target_link_libraries(nitcad_solve_test PRIVATE NiTCAD::solve Catch2::Catch2WithMain)
+# The solve tests also read their results through the analysis extractors (Unit 24 gates).
+target_link_libraries(nitcad_solve_test PRIVATE NiTCAD::solve NiTCAD::analysis Catch2::Catch2WithMain)
 add_test(NAME solve COMMAND nitcad_solve_test)
 # The 2D MOSFET gates (tests/solve/mosfet_test.cpp, hidden tag [.mosfet]) take about a minute in
 # Release and far longer in Debug, so they run in the Release configuration only.

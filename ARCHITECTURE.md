@@ -118,7 +118,7 @@ Each layer may depend only on layers drawn below it. Layers on the same row do n
 ```text
  L8   app         Win32 application: windows, input, run control UI
  L7   render      Direct3D 12 / Direct2D drawing of meshes, fields, plots
- L6   analysis    derived observables from results   (deferred; nothing requested yet)
+ L6   analysis    quantities extracted from results (Unit 24); reads results, never solves
  L5   solve       Newton, damping, continuation, sweeps; produces results; cancellation + progress
  L4   assemble    scaling; discretization (SG flux and extensions); contacts/BC handling;
                   residual + Jacobian; nonlocal models (tunnel paths since Unit 20)
@@ -1826,6 +1826,95 @@ or `HEMTSolver`) when the capability can be represented by the existing region/i
 A device family may have a convenience builder, example or analysis workflow, but the numerical engine must remain
 composable.
 
+### 6.13 Analysis and extraction
+
+**As built (Unit 24, analysis and extraction engine; owner request, scope approved by the owner; legacy
+`gui/services/characterization.py`, `gui/services/sweep_derived.py`, `tests/test_validation_2d.py`
+`_extract_vth_max_gm`):**
+- **The layer.** `nitcad_analysis` depends on `base` and `results` only (the layer table allows `mesh` too; nothing
+  needed it). Every extractor is a pure function of results already computed; none solves. Device numbers it needs
+  (permittivity, oxide capacitance, doping, temperature, size) are arguments, since `analysis` may not read `device`.
+- **Extractions** return `std::expected<Extraction, base::Error>`: the value and its unit, the window (the point or
+  frequency indices it came from), `extrapolated` (the value lies outside the data: a tangent's zero, a saturation
+  current, f_T past the last frequency) and `below_resolution` (a point used has |I| at or below its
+  `terminal_current_resolution`, where it is rounding noise). A curve that cannot give the quantity is an
+  `invalid_input` error with the reason; a singular conversion is `singular_system`.
+  - OLD / NEW / REASON: OLD, the legacy returned NaN or None without a reason and sorted its input by x, dropping
+    non-finite points. NEW, the input is checked and kept in its own order. REASON, a traced curve folds and is not a
+    function of its bias; a reason makes a failed extraction actionable.
+- **Curves** (`curve.hpp`): the swept bias against a contact's current (with its resolution, when every point has one),
+  a gate's charge, or Im Y / ω over the operating points of a small-signal run; `scaled` (a sign or a size),
+  `slice` (bounds widened by 1e-9 of their distance: 0.05 · 14 is 0.7000000000000001), the numpy.gradient
+  derivative (second order inside on uneven spacing, first order at the ends), `value_at` (a point's own value, and
+  only that point in the window, when x is on it) and `crossing`, linear or in
+  ln |y|.
+- **DC** (`dc.hpp`): the largest g_m and the max-g_m threshold (the legacy's tangent, less V_ds / 2); the
+  constant-current threshold, interpolated in ln I (OLD: linearly in I; exact below threshold now); the subthreshold
+  swing as the steepest segment below 1e-2 of the largest current and above the resolution (OLD: the 25th percentile
+  of the local inverse slopes; REASON: the swing is the steepest part, a percentile depends on the point spacing);
+  DIBL from two constant-current thresholds; the on/off ratio at named biases (OLD: the sweep's largest over smallest
+  current; REASON: those depend on the sweep's range); g_ds by least squares over the saturation tail; the diode fit
+  (ideality and saturation current), the local ideality, and the series resistance from dV/d ln I = n V_T + R_s I
+  (dV/d ln I differentiated directly; the curve's end points, first order, left out); the breakdown bias at a current
+  limit (in ln |I|) and the first turning point of a traced curve (refined by the parabola V(ln |I|)).
+- **C-V** (`cv.hpp`): dQ/dV of a gate charge; the accumulation capacitance; the doping profile
+  N(w) = 2 / (q ε |d(1/C_d²)/dV|), w = ε / C_d, with C_d the capacitance less a series (oxide) capacitance; the
+  flat-band capacitance from the extrinsic Debye length and the flat-band voltage where C reaches it; the conductance
+  method: the oxide removed from Y, G_p / ω over the frequencies, its peak refined by the parabola in ln f through
+  ln (G_p / ω) (a single level's ln (G_p / ω) is a parabola to fourth order, G_p / ω itself only to second), and
+  D_it = 2.5 (G_p / ω)_max / q.
+- **Two-port** (`two_port.hpp`): Y of two contacts with every other contact at AC ground (the 2 × 2 block of the
+  admittance matrix, exact); Z, h and S (S needs Y in siemens: the caller scales by the device's size; reference
+  impedance 50 Ω by default) and back; h21, Mason's U, Rollett's k, MAG / MSG; the unity-gain frequency of |h21|
+  (f_T) or √U (f_max), interpolated in ln f and ln gain, or extrapolated from the last sample at −20 dB/decade and
+  flagged (OLD: along the last segment's slope; REASON: that slope is not yet the asymptotic one).
+- Not in Unit 24 (owner's exclusions): compact-model fitting, noise, mobility extraction (Y-function), transient
+  metrics (switching times, reverse recovery), statistics, plotting (Unit 25), optimization (Unit 27).
+- **Gates.** Synthetic curves and networks with exact figures (`tests/analysis`, 22 test cases): a piecewise-linear
+  transfer curve (max-g_m threshold to 1e-12), exponential subthreshold currents (constant-current threshold, swing,
+  DIBL, on/off to 1e-10 or better), a linear saturation tail, the diode law (ideality to 1e-12; with series
+  resistance, n and R_s within 1e-3), a parabolic fold (to 1e-11), a uniform junction alone and behind an oxide (N to
+  1e-9), the flat-band capacitance, a trap level behind an oxide (exact on centred samples; 0.31% and 0.41% off
+  centre), round trips Y–Z–h–S to 1e-14, S of matched, open and series-resistor ports, U on a unilateral amplifier and
+  its invariance under lossless reciprocal embedding, k and MAG of an attenuator, and f_T (1e-4) and f_max (1e-3) of
+  the π model with a gate resistance. On solved devices (`tests/solve`, tests named "(Unit 24)" and two breakdown
+  tests):
+  - the Unit 9 diode: `diode_fit` over 0.3–0.7 V equals the least-squares fit by hand (V16) to 1e-12, ideality
+    1.004060; the local ideality within 0.02 of 1 from 0.3 to 0.6 V;
+  - the MOS-C: the quasi-static capacitance equals numpy.gradient of the gate charge; C_acc = 0.973 C_ox; V_FB
+    −0.9766 V against −0.9773 V analytic;
+  - **Finding, doping profile of a MOS-C in weak depletion:** over P5's window (w = 2.8 to 4.3 Debye lengths) the 1/C²
+    profile reads 1.48 to 1.27 N_A, falling towards N_A with depth: the depletion approximation's limit, not the
+    extractor's. A p⁺n junction in reverse bias (−0.5 to −4 V, w = 10 to 19 L_D) reads 1.9% low at −0.5 V and 0.5% at
+    −4 V, approaching N from below;
+  - the trap level: the conductance peak 0.22% and its frequency 0.51% from C_it / 2 at ωτ = 1 on quarter-decade
+    samples 0.1 decade off centre;
+  - the MOSFET (Release-only, `[.mosfet]`): the max-g_m threshold equals the legacy extraction to 1e-12 (0.15197 V);
+    the swing 70.55 mV/decade, within the long-channel bounds (68.1 to 71.7); the constant-current threshold at I(V_th)
+    returns V_th; on/off 7.0e7 between 1 V and −0.3 V; f_T from h21 between gate and drain (source and body at AC
+    ground) 1.750 GHz against the quasi-static g_m / (2π √(C_gg² − C_gd²)) = 1.741 GHz (0.54%);
+  - **Finding, the MOSFET's off state is not resolved:** from Vg = −1 to −0.4 V the drain current (|I| ≤ 2e-10 A/cm,
+    partly negative) is below its resolution (about 1e-9 A/cm, the 1e19 source and drain's flux cancellation, Unit 11).
+    The legacy off-state check (Unit 12: Id(1 V) > 1e6 |Id(−1 V)|) compares with that noise, and so does the steepest
+    swing over all points (68.79 mV/decade); `on_off_ratio` at −1 V is an error (the signs differ), and the off state
+    is read at the first resolved point, −0.3 V;
+  - breakdown (Release-only, `[.breakdown]`): `breakdown_at_current` at 1e-4 A/cm² within 1% of the analytic one-sided
+    value (55.32 V against 55.26 V, 0.11%); `turning_point` on the open-base transistor's trace finds BV_CEO at
+    17.2666 V, 0.4 mV past the highest traced bias, between the traced points around the fold.
+- Mutation checks (43, applied by the C++ string-replacement tool and a shell loop, no Python): all caught, five
+  of them after a rewrite (their first form left a variable unused, which the warnings-as-errors build rejects).
+  Caught: the derivative's interior and end formulas, equal x taken as monotone, logarithmic interpolation taken
+  linear, the crossing on the first point and on a point equal to the target, a partial resolution kept, the
+  resolution flag strict, the scaled resolution signed, a capacitance at zero frequency, window bounds without slack,
+  the max-g_m threshold without V_ds / 2 and with the tangent's sign flipped, the constant-current threshold
+  interpolated linearly, the swing ignoring the resolution or the ceiling or taking the shallowest segment, the DIBL
+  sign, on/off interpolated linearly, a short g_ds tail, the least-squares intercept sign, the ideality without V_T,
+  the series resistance's derivative index, breakdown on the signed current, the turning point unrefined or its
+  vertex value wrong, the doping without its factor 2, the series capacitance ignored, the depth from C, the Debye
+  length with 2 eps, the oxide added rather than removed, the peak parabola in G_p / omega, D_it with 2, h21 from y12,
+  h22 over y22, the Cayley map's sign, U's denominator sign, k's numerator sign, the MAG root's sign, the
+  extrapolation slope, the unity crossing interpolated linearly in the gain, y12 and y21 swapped, the inverse's sign.
+
 ## 7. Language placement (D6: C and Fortran deferred)
 
 | Component | Language | Reason |
@@ -1881,8 +1970,11 @@ src/solve/                  equilibrium and bias solves, sweeps, run record (Uni
 tests/solve/                Newton contract, equilibrium and bias diode gates, legacy graded_mesh port, sweeps,
                             cancellation and progress (Units 8-10); MOS-C (legacy moscap port) and MOSFET (Unit 12);
                             field mobility (Unit 13); Fermi-Dirac (Unit 14); heterojunctions (Unit 15);
-                            band-to-band tunnelling (Unit 20)
+                            band-to-band tunnelling (Unit 20); extraction from solved devices (Unit 24)
 include/NiTCAD/results/     convergence.hpp, solution.hpp, run.hpp (header-only plain data) (Unit 10, exists)
+include/NiTCAD/analysis/    curve.hpp, dc.hpp, cv.hpp, two_port.hpp                     (Unit 24)
+src/analysis/               extractors; common.hpp helpers (private)                    (Unit 24)
+tests/analysis/             synthetic curves and networks with exact figures            (Unit 24)
 .github/workflows/ci.yml    CI: build and test Debug and Release per branch  (CI unit, exists)
 include/NiTCAD/<layer>/...  public headers per layer                         (created per unit)
 src/<layer>/...             implementations                                  (created per unit)
@@ -2010,11 +2102,11 @@ built.
 | 17 | Adaptive mesh refinement and state transfer | mesh, solve, results | target |
 | 18 | Scalable linear-solver backends: PARDISO and/or iterative/AMG paths | linalg | target; must preserve backend-neutral interface |
 | 19 | Impact ionization and breakdown-oriented continuation | physics, assemble, solve | **done, on `main`** (`b665b9d`): van Overstraeten–de Man with the temperature factor, local generation along the reconstructed current with an exact Jacobian, off by default and bit-identical when off; pseudo-arclength `trace_bias` through folds; breakdown read from the ionization integral (6.2, Unit 19) |
-| 20 | Band-to-band tunnelling and nonlocal path machinery | assemble, physics, solve | **done on branch `physics/band-to-band-tunnelling`**: local Kane (the legacy silicon pair), nonlocal paths traced through tensor-grid cells as frozen geometry with live evaluation and relocation, the calibrated Kane rate at the path's mean field (silicon) and the direct-gap WKB rate (cited masses only), pure generation, off by default and bit-identical when off (6.2, Unit 20) |
+| 20 | Band-to-band tunnelling and nonlocal path machinery | assemble, physics, solve | **done, on `main`** (`cf2f70a`): local Kane (the legacy silicon pair), nonlocal paths traced through tensor-grid cells as frozen geometry with live evaluation and relocation, the calibrated Kane rate at the path's mean field (silicon) and the direct-gap WKB rate (cited masses only), pure generation, off by default and bit-identical when off (6.2, Unit 20) |
 | 21 | Transient simulation | solve, assemble, results | **done, on `main`** (`a601e7e`): backward Euler and variable-step BDF2 with error-controlled steps, waveforms, displacement current with exact conservation, interface trap dynamics eliminated in the interface solve (6.2, Unit 21) |
 | 22 | AC small-signal analysis | linalg, assemble, solve, results | **done, on `main`** (`75cc2c0`): J + iωt₀C + T(iωt₀) at a DC or quasi-static operating point, complex linear solver, admittance matrix with displacement current and a resolution bound, interface traps in the frequency domain (6.2, Unit 22) |
 | 23 | Thermal / electrothermal coupling | physics, assemble, solve | target |
-| 24 | Analysis and extraction engine | analysis | target |
+| 24 | Analysis and extraction engine | analysis | **done on branch `analysis/extraction`**: curves read from sweeps and small-signal runs; transistor, diode and breakdown figures; C-V doping profile, flat band and the conductance method; two-port Y/Z/h/S, Mason's U, k, MAG/MSG, f_T and f_max; every extraction with the points it used and resolution and extrapolation flags (6.13, Unit 24) |
 | 25 | Scientific visualization / rendering | render | target |
 | 26 | Native Windows application and workflow | app | target; Win32 API, x64 target, Direct3D 12 / Direct2D |
 | 27 | Optimization / sensitivity / inverse-design workflows | analysis, solve | long-term target |
@@ -2229,7 +2321,8 @@ architecture; historical branch names remain only where they are useful to expla
 | V25 | No-Python cleanup (`test/no-python-refs`, owner request before Unit 22): every reference value that came from an outside tool is recomputed in C++. `tests/physics/reference_arithmetic.hpp` (double-double arithmetic: exp, log, sqrt, pow, ln 2 and π computed by series, Gauss–Legendre by Newton, ζ by Euler–Maclaurin) and `tests/physics/references.hpp` (Bernoulli function, F₁/₂ and F₋₁/₂ by polylogarithm series and quadrature, neutral roots by bisection with and without dopant levels, the legacy material formulas) replace the mpmath and 50-digit literals of `flux_test`, `poisson_test`, `fermi_dirac_test` (physics and solve), `heavy_doping_test`, `interface_traps_test`, `materials_test`, `mobility_test`, `semiconductor_test`, `statistics_test` and `heterojunction_test`; series and quadrature agree to 1e-26 and F₁/₂(0) matches (1 − 2^−½) ζ(3/2) to 1e-26; every existing tolerance holds unchanged. A new test checks the stored 6-point Gauss–Legendre constants against the Newton-computed rule to 4 ε. The graded-mesh check against values from a numpy run of the legacy `mesh.py` became a check against the legacy specification (cell count from the spacing integral in closed form, end points, gradient limit). The stored legacy turn-off table (generated by running the legacy Python) became a C++ port of the legacy 1D diode and transient loop; NiTCAD agrees with it to 3.7e-5, as with the table, and the port reproduces the legacy stall (from step 190; the legacy run's from 184). Source changed only in provenance comments (`bernoulli.hpp`, `fermi_dirac.hpp`, `fermi_dirac.cpp`). | Verified locally. |
 | V26 | Unit 22 (`solve/ac-small-signal`): Debug and Release build with no warnings; `nitcad_linalg_test` 47 test cases, `nitcad_physics_test` 72, `nitcad_device_test` 24, `nitcad_assemble_test` 69, `nitcad_solve_test` 123 (+6 `[.mosfet]` and 6 `[.transient]`, Release only), all pass (Release 10/10, Debug 8/8). Complex solver against the real block form to 1e-12; the small-signal matrix equals the steady Jacobian at s = 0 (9.8e-16) and the backward-Euler step Jacobian at a real s (1.6e-15, trap part 2.1e-13); current rows against differences to 2.6e-8; conservation and equilibrium reciprocity within the reported resolution; MOS-C RC 6.7e-4, dielectric relaxation 1.3e-4, frozen-minority HF C-V 3.1e-9, gated-diode LF C-V below 1e-6, junction 0.88% (depletion approximation), long diode 3.2e-3, trap conductance peak 0.09%, transient sine runs converging to Y at second order; MOSFET g_m 6.9e-10, g_ds 1.0e-11, C_gg 8.7e-13. Steady and transient paths bit-identical to `main` (14 probe runs: diodes 1D/2D, field mobility with Fermi–Dirac, a heterojunction, lumped MOS-C quasi-static and drift-diffusion, a meshed MOS with traps quasi-static and drift-diffusion, transients under BDF2, backward Euler and fixed steps, 1D and 2D trap transients, run digests included). 31 of 33 mutations caught (one after a fixture was added; one undetectable, one equivalent). | Verified locally. |
 | V27 | Unit 19 (`physics/impact-ionization`): Debug and Release build with no warnings; `nitcad_linalg_test` 47 test cases, `nitcad_physics_test` 79, `nitcad_device_test` 24, `nitcad_assemble_test` 77, `nitcad_solve_test` 126 (+6 `[.mosfet]`, 6 `[.transient]` and 6 `[.breakdown]`, Release only), all pass (Release 11/11, Debug 8/8). Coefficients and γ against the published silicon set; FD Jacobian with the generation 6.6e-7 (1D/2D/3D, 5% noise), the resolution's partials 4e-8; a uniform field ionizes alike at 0/30/45° (1e-9), the resolution term's value to 1e-9; a field across the current gives no generation (2.3e-10), nor does a vanishing current; contact rows unchanged. Breakdown at the ionization-integral condition: 55.34 V against the analytic 55.26 V (1e16) and 35.95 against 35.86 V (2e16); the legacy-lifetime fixture's integral 0.99965 at 1e-4 A/cm²; the current balance below 1e-6 at low multiplication; open-base snapback through its fold at 17.27 V (α_T·M = 1 to 1.6e-4); a curved 2D junction's current grows 5.7 times by −27 V against 2.2 planar; 2D/3D extrusions 0 and 2.2e-16; transient drift 6.1e-11; small-signal conductance against DC differences 4.7e-6. Model off: the 14 Unit 22 probe runs hash identically to `main`. 34 of 36 mutations caught (four after a test was added; two equivalent). | Verified locally; on `main` (`b665b9d`, PR #25, CI passed). |
-| V28 | Unit 20 (`physics/band-to-band-tunnelling`): Debug and Release build with no warnings; all suites pass (Release 12/12 with the new Release-only ctest `solve_btbt`, Debug 8/8). Physics, cells, assembler and solve gates as listed in 6.2 (Unit 20): uniform-field closed forms to 2.1e-13, FD Jacobian 5.4e-8, pairs to rounding, 1D reduction 3.3e-16, Zener Kane slope 1.019 B, relocation settles in at most two re-tracings, AC 9.5e-5, 2D cost 1.14 times. Models off: the 14 Unit 22 probe runs hash identically to `main`. 44 of 46 mutations caught (two after a test was added; one practically equivalent, one in the unexercised retry path). | Verified locally. |
+| V28 | Unit 20 (`physics/band-to-band-tunnelling`): Debug and Release build with no warnings; all suites pass (Release 12/12 with the new Release-only ctest `solve_btbt`, Debug 8/8). Physics, cells, assembler and solve gates as listed in 6.2 (Unit 20): uniform-field closed forms to 2.1e-13, FD Jacobian 5.4e-8, pairs to rounding, 1D reduction 3.3e-16, Zener Kane slope 1.019 B, relocation settles in at most two re-tracings, AC 9.5e-5, 2D cost 1.14 times. Models off: the 14 Unit 22 probe runs hash identically to `main`. 44 of 46 mutations caught (two after a test was added; one practically equivalent, one in the unexercised retry path). | Verified locally; on `main` (`cf2f70a`, PR #26, CI passed). |
+| V29 | Unit 24 (`analysis/extraction`): Debug and Release build with no warnings; all suites pass (Release 13/13 with the new `analysis` ctest, Debug 9/9; `nitcad_analysis_test` 22 test cases). Synthetic gates and the gates on solved devices as listed in 6.13: the Unit 9 diode ideality equals V16's fit to 1e-12 (1.004060); MOSFET V_th equals the legacy max-g_m extraction to 1e-12, swing 70.55 mV/decade, f_T 0.54% from the quasi-static value; MOS-C V_FB within 0.7 mV; the trap level's conductance peak 0.22%; a junction's doping profile within 1.9%; breakdown at 1e-4 A/cm² 0.11% from analytic; BV_CEO at the fold. Findings: the MOS-C 1/C² profile in weak depletion and the MOSFET's unresolved off state (6.13). No solver source changed, so steady, transient and AC results are those of `main`. 43 of 43 mutations caught (five after a rewrite that builds). | Verified locally. |
 | V3 | Scaling definitions, scaled variables and Newton tolerances read from `inputs.cpp` and `device1d.cpp` and recorded in 6.1. One open question remains for Unit 8 (convergence criterion on the clipped correction). | Verified |
 
 Verifications due at their own unit: none left. The 5e-5 Jacobian gate's normalization was read at Unit 7 (section 10), and
