@@ -14,7 +14,7 @@
 //   Gauss-Legendre quadratures of F_{1/2}, F_{-1/2} and F_{-3/2};
 // - eta > 40: the Sommerfeld expansion F_{1/2} = 4 / (3 sqrt(pi)) eta^(3/2) (1 + sum_k c_k eta^-2k)
 //   with ten terms, whose residual falls like e^-eta (3.7e-18 at eta = 40).
-// Measured against 40-digit references (tests/physics/fermi_dirac_test.cpp): F_{1/2} within
+// Measured against double-double references (tests/physics/fermi_dirac_test.cpp): F_{1/2} within
 // 1.5e-15 relative everywhere; F_{-1/2} within 1.3e-13 up to eta = 15 and 3e-12 up to 40, where
 // the slope F_{-1/2} / F_{1/2} has fallen to 0.04, and 1e-14 above. The derivatives returned are
 // those of the function evaluated (the interpolant's own derivative inside the table), so a

@@ -1,6 +1,6 @@
 // Bernoulli function and Scharfetter-Gummel edge fluxes (ARCHITECTURE.md section 11, Unit 7 gate:
-// Bernoulli limits and symmetry). Reference values computed at 50 digits from x / expm1(x) and
-// (expm1(x) - x e^x) / expm1(x)^2, independently of this code.
+// Bernoulli limits and symmetry). References computed here in double-double arithmetic
+// (../physics/references.hpp) from x / expm1(x) and its derivative, independently of this code.
 #include <catch2/catch_test_macros.hpp>
 
 #include <algorithm>
@@ -9,6 +9,7 @@
 
 #include "NiTCAD/assemble/bernoulli.hpp"
 #include "NiTCAD/assemble/sg_flux.hpp"
+#include "../physics/references.hpp"
 
 using namespace NiTCAD::assemble;
 
@@ -18,39 +19,17 @@ bool close(double a, double b, double rel) { return std::abs(a - b) <= rel * std
 
 constexpr double eps = std::numeric_limits<double>::epsilon();
 
-struct Reference {
-    double x;
-    double b;
-    double db;
-};
-
-constexpr Reference references[] = {
-    {-1000, 1000.0, -1.0},
-    {-800, 800.0, -1.0},
-    {-40, 40.00000000000000017, -0.99999999999999983431},
-    {-1, 1.5819767068693264244, -0.66130311266153410544},
-    {-0.01, 1.0050083333194444775, -0.50166666111113095231},
-    {-0.0099, 1.0049581674866584199, -0.50164999460946886879},
-    {-1e-4, 1.0000500008333333332, -0.50001666666666111111},
-    {1e-6, 0.99999950000008333333, -0.49999983333333333334},
-    {1e-4, 0.99995000083333333319, -0.49998333333333888889},
-    {0.0099, 0.99505816748665841988, -0.49835000539053113121},
-    {0.01, 0.99500833331944447751, -0.49833333888886904769},
-    {0.5, 0.77074704126839914207, -0.41735496197958359829},
-    {1, 0.58197670686932642439, -0.33869688733846589456},
-    {3, 0.15718708947376785592, -0.11302732001492333777},
-    {40, 1.6993417021166356054e-16, -1.6568581595637197224e-16},
-    {700, 6.9017735806318395997e-302, -6.8919139040880798288e-302},
-    {709, 8.6269755219200695345e-306, -8.6148077144138353039e-306},
-};
+constexpr double points[] = {-1000, -800,  -40,    -1, -0.01, -0.0099, -1e-4, 1e-6, 1e-4,
+                             0.0099, 0.01, 0.5,    1,  3,     40,      700,   709};
 
 }  // namespace
 
-TEST_CASE("bernoulli: values and derivatives against 50-digit references") {
-    for (const Reference& r : references) {
-        CAPTURE(r.x);
-        REQUIRE(close(bernoulli(r.x), r.b, 4.0 * eps));
-        REQUIRE(close(bernoulli_derivative(r.x), r.db, 1e-13));
+TEST_CASE("bernoulli: values and derivatives against double-double references") {
+    for (const double x : points) {
+        CAPTURE(x);
+        const reference::Bernoulli r = reference::bernoulli(x);
+        REQUIRE(close(bernoulli(x), r.value.value(), 4.0 * eps));
+        REQUIRE(close(bernoulli_derivative(x), r.derivative.value(), 1e-13));
     }
     REQUIRE(bernoulli(0.0) == 1.0);
     REQUIRE(bernoulli_derivative(0.0) == -0.5);

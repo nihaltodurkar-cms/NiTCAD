@@ -1,6 +1,7 @@
 // Test helper: a port of the legacy pytcad/mesh.py graded_mesh, so the Unit 9 and 12 gates run on
-// the legacy fixtures' own meshes. Checked against the legacy output in bias_test.cpp (one focus
-// point); Unit 12's MOSFET uses two (mosfet.build_mosfet).
+// the legacy fixtures' own meshes. Checked against the legacy specification (cell count from the
+// spacing integral in closed form, end points, gradient limit) in bias_test.cpp (one focus point);
+// Unit 12's MOSFET uses two (mosfet.build_mosfet).
 //
 // Spacing target s(x) = min(h_max, h_min + (ratio - 1) dist(x, x_focus)), with x_focus clipped to
 // [0, L] and dist the distance to the nearest focus point; nodes at equal increments of

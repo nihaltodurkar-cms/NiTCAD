@@ -1,5 +1,6 @@
 // Scaling, ohmic contact values and the equilibrium Poisson residual and Jacobian (ARCHITECTURE.md
-// section 11, Unit 7 gate: FD-Jacobian, section 10). Scaling references computed at 50 digits.
+// section 11, Unit 7 gate: FD-Jacobian, section 10). Scaling references computed here in
+// double-double arithmetic (../physics/references.hpp).
 #include <catch2/catch_test_macros.hpp>
 
 #include <algorithm>
@@ -20,6 +21,8 @@
 #include "NiTCAD/physics/bandgap_narrowing.hpp"
 #include "NiTCAD/physics/semiconductor.hpp"
 #include "NiTCAD/physics/statistics.hpp"
+#include "NiTCAD/base/constants.hpp"
+#include "../physics/references.hpp"
 
 using namespace NiTCAD;
 using assemble::EquilibriumPoisson;
@@ -136,15 +139,23 @@ EquilibriumPoisson system_for(const device::Device& d) {
 }  // namespace
 
 TEST_CASE("scaling: the legacy definitions on a 1e17 silicon diode") {
+    // V_T = kT/q, L_D = sqrt(eps V_T / (q Ns)), J0 = q D0 Ns / L_D, R0 = D0 Ns / L_D^2 and n_i,
+    // in double-double arithmetic from the CODATA constants (../physics/references.hpp).
     const auto d = diode(*mesh::make_tensor_grid(graded_axis(30)));
     const Scaling s = *assemble::make_scaling(d);
+    using reference::DD;
+    const DD VT = reference::thermal_voltage(300.0);
+    const DD eps = DD(physics::silicon_parameters.eps_r) * DD(base::eps0_F_per_cm);
+    const DD Ns = 1e17, q = base::q_C;
+    const DD LD = reference::sqrt(eps * VT / (q * Ns));
     REQUIRE(s.Ns == 1e17);  // max |N_D - N_A|
-    REQUIRE(close(s.V_T, 0.025851999786435532301, 1e-15));
-    REQUIRE(close(s.L_D, 1.2928828386067502361e-6, 1e-14));
-    REQUIRE(close(s.J0, 12392.280152210498359, 1e-14));
-    REQUIRE(close(s.R0, 5.982485551949377858e28, 1e-14));
+    REQUIRE(close(s.V_T, VT.value(), 1e-15));
+    REQUIRE(close(s.L_D, LD.value(), 1e-14));
+    REQUIRE(close(s.J0, (q * Ns / LD).value(), 1e-14));
+    REQUIRE(close(s.R0, (Ns / (LD * LD)).value(), 1e-14));
     REQUIRE(s.D0 == 1.0);
-    REQUIRE(close(s.n_i, 1.0673775147815624025e10, 1e-13));
+    REQUIRE(close(s.n_i, reference::intrinsic_density(physics::silicon_parameters, 300.0).value(),
+                  1e-13));
 }
 
 TEST_CASE("scaling: Ns override, and n_i for an undoped device") {
@@ -159,7 +170,7 @@ TEST_CASE("scaling: Ns override, and n_i for an undoped device") {
 }
 
 TEST_CASE("ohmic: contact values are the neutral equilibrium shifted by the bias") {
-    const double C = 1.0, ni = 1.0673775147815624e10 / 1e17;
+    const double C = 1.0, ni = physics::intrinsic_density(physics::silicon(), 300.0) / 1e17;
     const auto zero = assemble::ohmic_contact_value(C, ni, 0.0);
     const auto e = physics::boltzmann_neutral_equilibrium(C, ni);
     REQUIRE(zero.psi == e.eta);

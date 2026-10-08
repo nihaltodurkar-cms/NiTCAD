@@ -93,20 +93,40 @@ std::vector<double> sweep(const device::Device& d, const std::vector<double>& vo
 
 }  // namespace
 
-TEST_CASE("bias: the ported legacy graded_mesh reproduces the legacy fixtures") {
-    // Values from pytcad/mesh.py graded_mesh, run with numpy 2.5.3.
-    const auto x = gate_mesh();
-    REQUIRE(x.size() == 250);
-    REQUIRE(close(x[1], 1.0130361468266314e-06, 1e-12));
-    REQUIRE(close(x[125], 1.0000525934758916e-04, 1e-12));
-    REQUIRE(close(x[248], 1.989869638531323e-04, 1e-12));
-    const auto v = validation_mesh();
-    REQUIRE(v.size() == 262);
-    REQUIRE(close(v[1], 1.0136206324853459e-06, 1e-12));
-    REQUIRE(close(v[131], 1.0000522282466969e-04, 1e-12));
-    const auto fine = legacy_graded_mesh(2e-4, 1e-4, 5e-9, 5e-7);
-    REQUIRE(fine.size() == 450);
-    REQUIRE(close(fine[225], 1.0000261276265647e-04, 1e-12));
+TEST_CASE("bias: the ported legacy graded_mesh follows the legacy specification") {
+    // The legacy pytcad/mesh.py graded_mesh puts ceil(int dx / s(x)) cells under the spacing
+    // target s(x) = min(h_max, h_min + (ratio - 1) |x - x_focus|), then limits neighbouring cells
+    // to `ratio` and rescales them to span [0, L]. Checked here against that specification: the
+    // cell count from the integral in closed form (ln((h_min + g d) / h_min) / g up to the cap,
+    // then d / h_max), the end points, monotonicity and the gradient limit. (The node positions
+    // are not compared with the legacy's own output, which would need the legacy run; the Unit 9
+    // J(0.5 V) gate below exercises them against the legacy current.)
+    struct Case {
+        double L, focus, h_min, h_max, ratio;
+        std::size_t nodes;  // the legacy fixtures' counts, also from the closed form below
+    };
+    for (const Case& c : {Case{2e-4, 1e-4, 1e-8, 1e-6, 1.15, 250},
+                          Case{2e-4, 1e-4, 1e-8, 1e-6, 1.12, 262},
+                          Case{2e-4, 1e-4, 5e-9, 5e-7, 1.15, 450}}) {
+        CAPTURE(c.ratio, c.h_min);
+        const double g = c.ratio - 1.0;
+        const auto side = [&](double D) {  // int_0^D dd / min(h_max, h_min + g d)
+            const double knee = (c.h_max - c.h_min) / g;
+            if (D <= knee) return std::log((c.h_min + g * D) / c.h_min) / g;
+            return std::log(c.h_max / c.h_min) / g + (D - knee) / c.h_max;
+        };
+        const double cells = std::ceil(side(c.focus) + side(c.L - c.focus));
+        REQUIRE(static_cast<std::size_t>(cells) + 1 == c.nodes);
+        const auto x = legacy_graded_mesh(c.L, c.focus, c.h_min, c.h_max, c.ratio);
+        REQUIRE(x.size() == c.nodes);
+        REQUIRE(x.front() == 0.0);
+        REQUIRE(x.back() == c.L);
+        for (std::size_t k = 1; k < x.size(); ++k) REQUIRE(x[k] > x[k - 1]);
+        for (std::size_t k = 2; k < x.size(); ++k) {
+            const double a = x[k - 1] - x[k - 2], b = x[k] - x[k - 1];
+            REQUIRE(std::max(a, b) / std::min(a, b) <= c.ratio * (1.0 + 1e-9));
+        }
+    }
 }
 
 TEST_CASE("bias: J(0.5 V) = 1.280e-2 A/cm^2 within 1% (section 10 gate)") {

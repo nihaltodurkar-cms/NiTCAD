@@ -2,8 +2,8 @@
 // section 11, Unit 15; legacy materials.py M11-S1 and the 4H-SiC set, device.py emission_velocity,
 // tests/test_m33_interface.py S2).
 //
-// References computed at 40 digits (mpmath) from the legacy formulas and parameters, independently
-// of this code.
+// References computed here in double-double arithmetic (references.hpp) from the legacy formulas
+// and parameters, independently of this code.
 #include <catch2/catch_test_macros.hpp>
 
 #include <cmath>
@@ -15,6 +15,7 @@
 #include "NiTCAD/physics/semiconductor.hpp"
 #include "NiTCAD/physics/statistics.hpp"
 #include "NiTCAD/physics/thermionic_emission.hpp"
+#include "references.hpp"
 
 using namespace NiTCAD;
 using namespace NiTCAD::physics;
@@ -23,39 +24,39 @@ namespace {
 
 bool close(double a, double b, double rel) { return std::abs(a - b) <= rel * std::abs(b); }
 
-struct Reference {
-    const char* name;
-    SemiconductorParameters parameters;
-    double Eg, ni, depth;  // at 300 K: eV, cm^-3, eV
-};
-
 }  // namespace
 
 TEST_CASE("materials: every legacy set validates and gives its band quantities at 300 K") {
-    const Reference references[] = {
-        {"Si", silicon_parameters, 1.1245192307692307692, 10673775147.815624025,
-         4.6112180320226613287},
-        {"Ge", germanium_parameters, 0.6636897196261682243, 21030229406096.730196,
-         4.4689547587053674452},
-        {"GaAs", gallium_arsenide_parameters, 1.4224821428571428571, 2043025.6913016548437,
-         4.7463288152059162278},
-        {"In0.53Ga0.47As", indium_gallium_arsenide_parameters, 0.72971812080536912752,
-         944044715427.80413982, 4.8683013140223912968},
-        // The legacy comment says Eg(300 K) is about 3.23 eV; its own Varshni numbers give 3.201.
-        {"4H-SiC", silicon_carbide_4h_parameters, 3.201, 2.6728700597565474886e-8,
-         4.7655149268142061874},
-        {"Al0.3Ga0.7As", *algaas_parameters(0.3), 1.7965821428571428571, 1506.058167826050866,
-         4.6814044378909079971},
+    // References from the legacy formulas in double-double arithmetic (references.hpp): the
+    // Varshni gap, n_i = sqrt(Nc Nv) e^(-Eg / 2kT) and the depth chi + Eg/2 + (kT/2) ln(Nc/Nv).
+    struct Set {
+        const char* name;
+        SemiconductorParameters parameters;
     };
-    for (const Reference& r : references) {
+    const Set sets[] = {
+        {"Si", silicon_parameters},
+        {"Ge", germanium_parameters},
+        {"GaAs", gallium_arsenide_parameters},
+        {"In0.53Ga0.47As", indium_gallium_arsenide_parameters},
+        {"4H-SiC", silicon_carbide_4h_parameters},
+        {"Al0.3Ga0.7As", *algaas_parameters(0.3)},
+    };
+    for (const Set& r : sets) {
         CAPTURE(r.name);
         const auto m = Semiconductor::create(r.parameters);
         REQUIRE(m.has_value());
         REQUIRE(check_temperature(*m, 300.0).has_value());
-        REQUIRE(close(band_gap_eV(*m, 300.0), r.Eg, 1e-14));
-        REQUIRE(close(intrinsic_density(*m, 300.0), r.ni, 1e-12));
-        REQUIRE(close(intrinsic_level_depth_eV(*m, 300.0), r.depth, 1e-14));
+        REQUIRE(close(band_gap_eV(*m, 300.0), reference::band_gap(r.parameters, 300.0).value(),
+                      1e-14));
+        REQUIRE(close(intrinsic_density(*m, 300.0),
+                      reference::intrinsic_density(r.parameters, 300.0).value(), 1e-12));
+        REQUIRE(close(intrinsic_level_depth_eV(*m, 300.0),
+                      reference::intrinsic_level_depth(r.parameters, 300.0).value(), 1e-14));
     }
+    // The legacy comment says Eg(300 K) of 4H-SiC is about 3.23 eV; its own Varshni numbers give
+    // 3.201.
+    REQUIRE(close(band_gap_eV(*Semiconductor::create(silicon_carbide_4h_parameters), 300.0),
+                  3.201, 1e-14));
 }
 
 TEST_CASE("materials: AlGaAs follows the legacy interpolation inside the direct-gap regime") {
@@ -105,15 +106,23 @@ TEST_CASE("materials: the intrinsic-level depth is chi plus E_c - E_i") {
 
 TEST_CASE("thermionic: the emission velocity is sqrt(kT / 2 pi m) with m from N") {
     // Legacy test_s2_emission_velocity_matches_the_closed_form: m_DOS from
-    // N = 2 (2 pi m kT / h^2)^1.5, at 40 digits. Silicon Nc gives the legacy 2.575e6 cm/s.
-    struct Case {
-        double N, v;
+    // N = 2 (2 pi m kT / h^2)^1.5, then v = sqrt(kT / (2 pi m)), in double-double arithmetic
+    // (references.hpp) by that route, not the code's simplified kT / h (2 / N)^(1/3). Silicon Nc
+    // gives the legacy 2.575e6 cm/s.
+    using reference::DD;
+    const auto velocity = [](double N_cm3, double T) {
+        const DD kT = DD(base::k_B_J_per_K) * DD(T);
+        const DD h = DD(2.0) * reference::pi() * DD(base::hbar_J_s);
+        const DD N = DD(N_cm3) * DD(1e6);  // m^-3
+        const DD m = reference::pow(N / DD(2.0), DD(2.0) / DD(3.0)) * h * h /
+                     (DD(2.0) * reference::pi() * kT);
+        return (reference::sqrt(kT / (DD(2.0) * reference::pi() * m)) * DD(100.0)).value();
     };
-    for (const Case& c : {Case{2.86e19, 2575351.3998235678652}, Case{4.7e17, 10129606.016810534997},
-                          Case{7.0e18, 4117110.2172364250936}}) {
-        CAPTURE(c.N);
-        REQUIRE(close(emission_velocity_cm_s(c.N, 300.0), c.v, 1e-14));
+    for (const double N : {2.86e19, 4.7e17, 7.0e18}) {
+        CAPTURE(N);
+        REQUIRE(close(emission_velocity_cm_s(N, 300.0), velocity(N, 300.0), 1e-14));
     }
+    REQUIRE(close(velocity(2.86e19, 300.0), 2.575e6, 2e-4));
     // Scales as T (N fixed) and N^(-1/3).
     REQUIRE(close(emission_velocity_cm_s(1e19, 600.0), 2.0 * emission_velocity_cm_s(1e19, 300.0),
                   1e-15));
@@ -144,34 +153,37 @@ TEST_CASE("ionization: the ionized fraction, its derivative and its limits") {
     REQUIRE(ionized_density(N, 2.0, 0.0, g).d_eta == 0.0);
 }
 
-TEST_CASE("ionization: freeze-out of boron in silicon against 40-digit roots (legacy G7(b,c))") {
+TEST_CASE("ionization: freeze-out of boron in silicon against double-double roots (legacy G7)") {
     // N_A = 1e16, Fermi-Dirac statistics, no band-gap narrowing: the ionized fraction from the
-    // neutral root, against 40-digit bisection (mpmath) and the legacy's literature bands (Sze and
-    // Ng freeze-out curves; Altermatt et al. 2002): 77 K 15-45%, 150 K 70-98%, 250 K >= 85%,
-    // 300 K >= 95%.
+    // neutral root, against bisection in double-double arithmetic with the reference F_{1/2}
+    // (references.hpp), and the legacy's literature bands (Sze and Ng freeze-out curves;
+    // Altermatt et al. 2002): 77 K 15-45%, 150 K 70-98%, 250 K >= 85%, 300 K >= 95%.
     struct Case {
-        double T, fraction, lo, hi;
+        double T, lo, hi;
     };
     const Semiconductor si = silicon();
-    for (const Case& c : {Case{77.0, 0.28569515950110180743, 0.15, 0.45},
-                          Case{150.0, 0.90320077464647178068, 0.70, 0.98},
-                          Case{250.0, 0.98666377695706836634, 0.85, 1.01},
-                          Case{300.0, 0.99274907884852032535, 0.95, 1.01}}) {
+    for (const Case& c : {Case{77.0, 0.15, 0.45}, Case{150.0, 0.70, 0.98},
+                          Case{250.0, 0.85, 1.01}, Case{300.0, 0.95, 1.01}}) {
         CAPTURE(c.T);
         const double ni = intrinsic_density(si, c.T);
         const double VT = base::thermal_voltage(c.T);
         const DopantLevels levels{0.045 / VT, 0.045 / VT, 2.0, 4.0};
-        const NeutralEquilibrium e = ionized_neutral_equilibrium(
-            0.0, 1e16, ni, std::log(conduction_band_dos(si, c.T) / ni),
-            std::log(valence_band_dos(si, c.T) / ni), levels, true);
+        const double gn = std::log(conduction_band_dos(si, c.T) / ni);
+        const double gp = std::log(valence_band_dos(si, c.T) / ni);
+        const NeutralEquilibrium e =
+            ionized_neutral_equilibrium(0.0, 1e16, ni, gn, gp, levels, true);
+        const reference::Neutral r = reference::neutral_equilibrium(
+            {.acceptors = 1e16, .donor_kT = levels.donor_kT, .acceptor_kT = levels.acceptor_kT},
+            ni, gn, gp, true);
         const double fraction = (e.p - e.n) / 1e16;
-        REQUIRE(close(fraction, c.fraction, 1e-10));
+        CAPTURE(fraction, ((r.p - r.n) / reference::DD(1e16)).value());
+        REQUIRE(close(fraction, ((r.p - r.n) / reference::DD(1e16)).value(), 1e-10));
         REQUIRE(fraction >= c.lo);
         REQUIRE(fraction <= c.hi);
     }
 }
 
-TEST_CASE("ionization: 4H-SiC dopants at 300 K against 40-digit roots") {
+TEST_CASE("ionization: 4H-SiC dopants at 300 K against double-double roots") {
     // 1e17 cm^-3: nitrogen (70 meV) is 87% ionized, aluminium (220 meV) only 10.6%, the reason
     // p-type SiC needs incomplete ionization at room temperature.
     const Semiconductor sic = *Semiconductor::create(silicon_carbide_4h_parameters);
@@ -183,9 +195,19 @@ TEST_CASE("ionization: 4H-SiC dopants at 300 K against 40-digit roots") {
     const auto n_type = ionized_neutral_equilibrium(1e17, 0.0, ni, gn, gp, levels, false);
     const auto p_type = ionized_neutral_equilibrium(0.0, 1e17, ni, gn, gp, levels, false);
     const auto p_fd = ionized_neutral_equilibrium(0.0, 1e17, ni, gn, gp, levels, true);
-    REQUIRE(close((n_type.n - n_type.p) / 1e17, 0.86730068141878451811, 1e-10));
-    REQUIRE(close((p_type.p - p_type.n) / 1e17, 0.10608856780082795032, 1e-10));
-    REQUIRE(close((p_fd.p - p_fd.n) / 1e17, 0.10608105608322771641, 1e-10));
+    const reference::Dopants nd{.donors = 1e17, .donor_kT = levels.donor_kT,
+                                .acceptor_kT = levels.acceptor_kT};
+    const reference::Dopants na{.acceptors = 1e17, .donor_kT = levels.donor_kT,
+                                .acceptor_kT = levels.acceptor_kT};
+    const reference::Neutral rn = reference::neutral_equilibrium(nd, ni, gn, gp, false);
+    const reference::Neutral rp = reference::neutral_equilibrium(na, ni, gn, gp, false);
+    const reference::Neutral rf = reference::neutral_equilibrium(na, ni, gn, gp, true);
+    const reference::DD N = 1e17;
+    REQUIRE(close((n_type.n - n_type.p) / 1e17, ((rn.n - rn.p) / N).value(), 1e-10));
+    REQUIRE(close((p_type.p - p_type.n) / 1e17, ((rp.p - rp.n) / N).value(), 1e-10));
+    REQUIRE(close((p_fd.p - p_fd.n) / 1e17, ((rf.p - rf.n) / N).value(), 1e-10));
+    REQUIRE(close((n_type.n - n_type.p) / 1e17, 0.867, 1e-3));
+    REQUIRE(close((p_type.p - p_type.n) / 1e17, 0.106, 1e-2));
     // Complete-ionization limit: a zero level depth gives the ordinary neutral root.
     const DopantLevels none{0.0, 0.0, 2.0, 4.0};
     const auto complete = ionized_neutral_equilibrium(1e17, 0.0, ni, gn, gp, none, false);

@@ -26,6 +26,7 @@
 #include "NiTCAD/solve/bias.hpp"
 #include "NiTCAD/solve/equilibrium.hpp"
 #include "legacy_graded_mesh.hpp"
+#include "../physics/references.hpp"
 
 using namespace NiTCAD;
 
@@ -505,18 +506,18 @@ TEST_CASE("heterojunction: a graded composition converges with its staircase") {
 
 TEST_CASE("heterojunction: incomplete ionization in the device solves") {
     // Boron in silicon at 1e16, Fermi-Dirac, no narrowing: the solved bulk's ionized fraction
-    // (p - n) / N_A equals the 40-digit root (physics test) at 77 and 300 K; 4H-SiC nitrogen and
-    // aluminium at 1e17, 300 K.
+    // (p - n) / N_A equals the neutral root bisected in double-double arithmetic
+    // (../physics/references.hpp) at 77 and 300 K; 4H-SiC nitrogen and aluminium at 1e17, 300 K.
     struct Case {
         physics::SemiconductorParameters p;
-        double ND, NA, T, fraction;
+        double ND, NA, T;
         bool fd;
     };
     const Case cases[] = {
-        {physics::silicon_parameters, 0.0, 1e16, 77.0, 0.28569515950110180743, true},
-        {physics::silicon_parameters, 0.0, 1e16, 300.0, 0.99274907884852032535, true},
-        {physics::silicon_carbide_4h_parameters, 1e17, 0.0, 300.0, 0.86730068141878451811, false},
-        {physics::silicon_carbide_4h_parameters, 0.0, 1e17, 300.0, 0.10608856780082795032, false},
+        {physics::silicon_parameters, 0.0, 1e16, 77.0, true},
+        {physics::silicon_parameters, 0.0, 1e16, 300.0, true},
+        {physics::silicon_carbide_4h_parameters, 1e17, 0.0, 300.0, false},
+        {physics::silicon_carbide_4h_parameters, 0.0, 1e17, 300.0, false},
     };
     for (const Case& c : cases) {
         CAPTURE(c.T, c.ND, c.NA);
@@ -529,7 +530,22 @@ TEST_CASE("heterojunction: incomplete ionization in the device solves") {
         const double N = c.ND > 0.0 ? c.ND : c.NA;
         const double carriers = c.ND > 0.0 ? eq->fields.n_cm3[10] - eq->fields.p_cm3[10]
                                            : eq->fields.p_cm3[10] - eq->fields.n_cm3[10];
-        REQUIRE(close(carriers / N, c.fraction, 1e-10));
+        const physics::Semiconductor m = *physics::Semiconductor::create(c.p);
+        const double ni = physics::intrinsic_density(m, c.T);
+        const double VT = base::thermal_voltage(c.T);
+        const reference::Neutral r = reference::neutral_equilibrium(
+            {.donors = c.ND,
+             .acceptors = c.NA,
+             .donor_kT = c.p.ionization.donor_eV / VT,
+             .acceptor_kT = c.p.ionization.acceptor_eV / VT,
+             .donor_degeneracy = c.p.ionization.donor_degeneracy,
+             .acceptor_degeneracy = c.p.ionization.acceptor_degeneracy},
+            ni, std::log(physics::conduction_band_dos(m, c.T) / ni),
+            std::log(physics::valence_band_dos(m, c.T) / ni), c.fd);
+        const double fraction =
+            ((c.ND > 0.0 ? r.n - r.p : r.p - r.n) / reference::DD(N)).value();
+        CAPTURE(carriers / N, fraction);
+        REQUIRE(close(carriers / N, fraction, 1e-10));
     }
 }
 
