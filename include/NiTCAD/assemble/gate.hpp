@@ -74,6 +74,10 @@ public:
     GateNodes(std::vector<std::int32_t> contact, std::vector<GateTerm> term, double V_T);
 
     [[nodiscard]] bool on_gate(std::size_t node) const noexcept { return contact_[node] >= 0; }
+    // The gate contact of a gate node, in device.contacts() order.
+    [[nodiscard]] std::size_t contact(std::size_t node) const noexcept {
+        return static_cast<std::size_t>(contact_[node]);
+    }
     [[nodiscard]] const GateTerm& term(std::size_t node) const noexcept { return term_[node]; }
     // psi_G of a gate node.
     [[nodiscard]] double potential(std::size_t node) const noexcept { return psi_gate_[node]; }

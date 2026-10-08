@@ -5,6 +5,7 @@
 #include <array>
 #include <bit>
 #include <cmath>
+#include <complex>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
@@ -729,4 +730,206 @@ TEST_CASE("linear solver: independent solvers on separate threads match a serial
         REQUIRE(std::bit_cast<std::uint64_t>(first[i]) == std::bit_cast<std::uint64_t>(serial[i]));
         REQUIRE(std::bit_cast<std::uint64_t>(second[i]) == std::bit_cast<std::uint64_t>(serial[i]));
     }
+}
+
+// --- complex scalar (Unit 22: AC small-signal solves (J + i omega C) x = b) ------------------
+
+namespace {
+
+using Complex = std::complex<double>;
+
+ComplexSparseMatrix complex_from(Index n, const std::vector<ComplexTriplet>& t) {
+    return ComplexSparseMatrix::from_triplets(n, n, t).value();
+}
+
+ComplexLinearSolver make_complex_solver(SolverConfig config = {}) {
+    return ComplexLinearSolver::create(config).value();
+}
+
+double max_abs_diff(std::span<const Complex> a, std::span<const Complex> b) {
+    double m = 0.0;
+    for (std::size_t i = 0; i < a.size(); ++i) m = std::max(m, std::abs(a[i] - b[i]));
+    return m;
+}
+
+double max_abs(std::span<const Complex> a) {
+    double m = 0.0;
+    for (const Complex v : a) m = std::max(m, std::abs(v));
+    return m;
+}
+
+ComplexSparseMatrix to_complex(const SparseMatrix& a, double imag_scale = 0.0) {
+    std::vector<ComplexTriplet> t;
+    for (Index r = 0; r < a.rows(); ++r) {
+        for (Index k = a.row_offsets()[r]; k < a.row_offsets()[r + 1]; ++k) {
+            const double v = a.values()[k];
+            t.push_back({r, a.col_indices()[k],
+                         imag_scale == 0.0 ? Complex{v, 0.0} : Complex{0.0, imag_scale * v}});
+        }
+    }
+    return complex_from(a.rows(), t);
+}
+
+// G + i omega C from a real G and a diagonal C (the AC system's shape).
+ComplexSparseMatrix ac_matrix(const SparseMatrix& g, const std::vector<double>& c_diag,
+                              double omega) {
+    std::vector<ComplexTriplet> t;
+    for (Index r = 0; r < g.rows(); ++r) {
+        for (Index k = g.row_offsets()[r]; k < g.row_offsets()[r + 1]; ++k) {
+            const Index col = g.col_indices()[k];
+            const double imag = col == r ? omega * c_diag[static_cast<std::size_t>(r)] : 0.0;
+            t.push_back({r, col, Complex{g.values()[k], imag}});
+        }
+    }
+    return complex_from(g.rows(), t);
+}
+
+}  // namespace
+
+TEST_CASE("complex linear solver: a known nonsymmetric system") {
+    const Index n = 400;
+    std::vector<ComplexTriplet> t;
+    for (Index i = 0; i < n; ++i) {
+        if (i > 0) t.push_back({i, i - 1, Complex{-1.3, 0.4}});
+        t.push_back({i, i, Complex{2.5, 1.0 + 0.001 * i}});
+        if (i + 1 < n) t.push_back({i, i + 1, Complex{-0.7, -0.2}});
+    }
+    const ComplexSparseMatrix a = complex_from(n, t);
+    std::vector<Complex> exact, b(static_cast<std::size_t>(n)), x(b.size());
+    for (Index i = 0; i < n; ++i) exact.push_back({1.0 + std::sin(0.01 * i), std::cos(0.07 * i)});
+    a.multiply(exact, b);
+    ComplexLinearSolver solver = make_complex_solver();
+    REQUIRE(solver.factorize(a).has_value());
+    const auto report = solver.solve(b, x);
+    REQUIRE(report.has_value());
+    REQUIRE(report->backward_error < 4 * std::numeric_limits<double>::epsilon());
+    REQUIRE(max_abs_diff(x, exact) / max_abs(exact) < 1e-14);
+}
+
+TEST_CASE("complex linear solver: agrees with the real block form of G + i omega C") {
+    // A 1D RC line: G a Dirichlet-anchored Laplacian, C a positive diagonal. The real form
+    // [G, -omega C; omega C, G] [xr; xi] = [br; bi] is an independent route to the same x.
+    const std::vector<double> g = random_conductances(299);
+    const SparseMatrix lap = laplace_1d(g, true);
+    const auto n = static_cast<std::size_t>(lap.rows());
+    std::vector<double> c(n);
+    for (std::size_t i = 0; i < n; ++i) c[i] = 0.5 + hash01(5'000 + i);
+    for (const double omega : {1e-6, 0.3, 30.0, 1e6}) {
+        const ComplexSparseMatrix a = ac_matrix(lap, c, omega);
+        std::vector<Complex> b(n), x(n);
+        for (std::size_t i = 0; i < n; ++i) b[i] = {hash01(i), hash01(10'000 + i) - 0.5};
+        ComplexLinearSolver solver = make_complex_solver();
+        REQUIRE(solver.factorize(a).has_value());
+        REQUIRE(solver.solve(b, x).has_value());
+
+        std::vector<Triplet> t;
+        const auto m = static_cast<Index>(n);
+        for (Index r = 0; r < m; ++r) {
+            for (Index k = lap.row_offsets()[r]; k < lap.row_offsets()[r + 1]; ++k) {
+                const Index col = lap.col_indices()[k];
+                t.push_back({r, col, lap.values()[k]});
+                t.push_back({r + m, col + m, lap.values()[k]});
+            }
+            const double wc = omega * c[static_cast<std::size_t>(r)];
+            t.push_back({r, r + m, -wc});
+            t.push_back({r + m, r, wc});
+        }
+        const SparseMatrix block = from(2 * m, std::move(t));
+        std::vector<double> rb(2 * n), rx(2 * n);
+        for (std::size_t i = 0; i < n; ++i) {
+            rb[i] = b[i].real();
+            rb[i + n] = b[i].imag();
+        }
+        LinearSolver real = make_solver();
+        REQUIRE(real.factorize(block).has_value());
+        REQUIRE(real.solve(rb, rx).has_value());
+        std::vector<Complex> xb(n);
+        for (std::size_t i = 0; i < n; ++i) xb[i] = {rx[i], rx[i + n]};
+        REQUIRE(max_abs_diff(x, xb) / max_abs(xb) < 1e-12);
+    }
+}
+
+TEST_CASE("complex linear solver: a real matrix gives the real solution") {
+    const System s = nonsymmetric(500);
+    std::vector<Complex> b(s.b.begin(), s.b.end()), x(b.size());
+    ComplexLinearSolver solver = make_complex_solver();
+    REQUIRE(solver.factorize(to_complex(s.a)).has_value());
+    REQUIRE(solver.solve(b, x).has_value());
+    std::vector<double> xr(x.size());
+    LinearSolver real = make_solver();
+    REQUIRE(real.factorize(s.a).has_value());
+    REQUIRE(real.solve(s.b, xr).has_value());
+    for (std::size_t i = 0; i < x.size(); ++i) {
+        REQUIRE(x[i].imag() == 0.0);
+        REQUIRE(std::abs(x[i].real() - xr[i]) <= 1e-14 * std::abs(xr[i]));
+    }
+}
+
+TEST_CASE("complex linear solver: equilibration handles badly scaled coupled blocks") {
+    // The real badly scaled system with each entry turned by a phase: the moduli are the same,
+    // so the equilibration scales are those of the real system.
+    const System s = badly_scaled_coupled(20);
+    std::vector<ComplexTriplet> t;
+    for (Index r = 0; r < s.a.rows(); ++r) {
+        for (Index k = s.a.row_offsets()[r]; k < s.a.row_offsets()[r + 1]; ++k) {
+            const double phase = 0.3 * (hash01(3'000'000 + static_cast<std::uint64_t>(k)) - 0.5);
+            t.push_back({r, s.a.col_indices()[k], std::polar(s.a.values()[k], phase)});
+        }
+    }
+    const ComplexSparseMatrix a = complex_from(s.a.rows(), t);
+    std::vector<Complex> exact(s.x_exact.begin(), s.x_exact.end()), b(exact.size()),
+        x(exact.size());
+    a.multiply(exact, b);
+
+    ComplexLinearSolver raw = make_complex_solver(
+        {.equilibrate = false, .max_refinement_steps = 0, .min_pivot_ratio = 0.0});
+    REQUIRE(raw.factorize(a).has_value());
+    const auto rejected = raw.solve(b, x);
+    REQUIRE(rejected.error().code == ErrorCode::inaccurate_solve);
+    REQUIRE(*rejected.error().context->value > 1e-6);
+
+    ComplexLinearSolver solver = make_complex_solver();
+    REQUIRE(solver.factorize(a).has_value());
+    const auto report = solver.solve(b, x);
+    REQUIRE(report.has_value());
+    // Measured 3.3e-12 (the real system: 1.9e-11, see above).
+    REQUIRE(report->backward_error <= 1e-10);
+    REQUIRE(max_abs_diff(x, exact) / max_abs(exact) <= 1e-10);
+}
+
+TEST_CASE("complex linear solver: singular and invalid systems are errors") {
+    // A floating region: i omega times a pure-Neumann Laplacian.
+    const SparseMatrix lap = laplace_1d(random_conductances(99), false);
+    ComplexLinearSolver solver = make_complex_solver();
+    REQUIRE(solver.factorize(to_complex(lap, 7.0)).error().code == ErrorCode::singular_system);
+
+    const ComplexSparseMatrix zero_row =
+        complex_from(2, {{0, 0, Complex{1.0, 1.0}}, {1, 0, Complex{2.0, 0.0}}, {1, 1, Complex{}}});
+    REQUIRE(solver.factorize(zero_row).error().code == ErrorCode::singular_system);
+
+    const double nan = std::numeric_limits<double>::quiet_NaN();
+    const ComplexSparseMatrix bad =
+        complex_from(2, {{0, 0, Complex{1.0, nan}}, {1, 1, Complex{1.0, 0.0}}});
+    const auto f = solver.factorize(bad);
+    REQUIRE(f.error().code == ErrorCode::invalid_input);
+    REQUIRE(f.error().context->index == 0);
+
+    const ComplexSparseMatrix good =
+        complex_from(2, {{0, 0, Complex{1.0, 2.0}}, {1, 1, Complex{0.0, 3.0}}});
+    REQUIRE(solver.factorize(good).has_value());
+    std::vector<Complex> b{{1.0, 0.0}, {0.0, std::numeric_limits<double>::infinity()}}, x(2);
+    const auto s = solver.solve(b, x);
+    REQUIRE(s.error().code == ErrorCode::invalid_input);
+    REQUIRE(s.error().context->index == 1);
+}
+
+TEST_CASE("complex linear solver: the analysis is reused across frequencies") {
+    const SparseMatrix lap = laplace_1d(random_conductances(199), true);
+    const std::vector<double> c(static_cast<std::size_t>(lap.rows()), 1.0);
+    ComplexLinearSolver solver = make_complex_solver();
+    for (const double omega : {0.1, 1.0, 10.0}) {
+        REQUIRE(solver.factorize(ac_matrix(lap, c, omega)).has_value());
+    }
+    REQUIRE(solver.analyses() == 1);
+    REQUIRE(solver.factorizations() == 3);
 }

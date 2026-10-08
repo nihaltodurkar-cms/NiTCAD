@@ -203,7 +203,8 @@ add_executable(nitcad_assemble_test
   tests/assemble/gate_test.cpp
   tests/assemble/heterojunction_test.cpp
   tests/assemble/insulator_test.cpp
-  tests/assemble/transient_test.cpp)
+  tests/assemble/transient_test.cpp
+  tests/assemble/small_signal_test.cpp)
 target_link_libraries(nitcad_assemble_test PRIVATE NiTCAD::assemble Catch2::Catch2WithMain)
 add_test(NAME assemble COMMAND nitcad_assemble_test)
 
@@ -219,7 +220,8 @@ add_library(nitcad_solve STATIC
   src/solve/bias.cpp
   src/solve/run_record.cpp
   src/solve/waveform.cpp
-  src/solve/transient.cpp)
+  src/solve/transient.cpp
+  src/solve/small_signal.cpp)
 add_library(NiTCAD::solve ALIAS nitcad_solve)
 target_include_directories(nitcad_solve PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
 target_link_libraries(nitcad_solve PUBLIC
@@ -237,7 +239,8 @@ add_executable(nitcad_solve_test
   tests/solve/fermi_dirac_test.cpp
   tests/solve/heterojunction_test.cpp
   tests/solve/insulator_test.cpp
-  tests/solve/transient_test.cpp)
+  tests/solve/transient_test.cpp
+  tests/solve/small_signal_test.cpp)
 target_link_libraries(nitcad_solve_test PRIVATE NiTCAD::solve Catch2::Catch2WithMain)
 add_test(NAME solve COMMAND nitcad_solve_test)
 # The 2D MOSFET gates (tests/solve/mosfet_test.cpp, hidden tag [.mosfet]) take about a minute in

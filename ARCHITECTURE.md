@@ -937,6 +937,104 @@ Whether the new solver reproduces these exact defaults is to be confirmed unit b
   step growth unlimited (missed at first: the constant-bias test bounded the step count from above only; it now checks
   each step's growth).
 
+**As built (Unit 22, AC small-signal analysis; owner request, scope approved by the owner; legacy `ac.py`, `ac2d.py`,
+`ac3d.py`):**
+- **The system.** About a steady state x₀, a perturbation δV e^(st) of the biases gives
+  (J + sC + T(s)) δx = −∂F/∂V δV (`DriftDiffusion::small_signal_matrix`, `bias_derivative`), s in units of 1/t₀
+  (s = iωt₀). J is the steady Jacobian with every steady model; C the storage term's Jacobian (electron row −V_i dS_n/dn,
+  hole row +V_i dS_p/dp, the dopant-bound carriers included under incomplete ionization); T(s) the interface traps'
+  terms with their occupancy's dynamics, replacing the steady ones. The matrix has J's pattern. Backward Euler is exact
+  for e^(st) when h = 1/s, so at a real s the matrix is Unit 21's step Jacobian with rate s from the history x₀ and its
+  steady occupancies: the check that pins it, the matrix being rational in s.
+- **Traps in the frequency domain** (`InterfaceEdges::small_signal`). Each level's occupancy obeys
+  (s/N_s + D) δf = δocc − f δD (Unit 21's step with weight N_s/s and history f), so its partials are complex; ψ_I is
+  still eliminated per edge by the implicit-function rule, now in complex arithmetic. The global unknowns are unchanged.
+  At s = 0 the partials are the steady ones.
+- **Forcing.** ∂F/∂V_j per volt: −1/V_T on the Dirichlet ψ rows of an ohmic contact or electrode (an ohmic node's
+  densities do not depend on the bias), +G_i/V_T on a lumped gate's Poisson rows.
+- **Currents** (`small_signal_currents`). The total current of a contact is its conduction current plus s times its
+  charge, Unit 21's `conduction_currents` and `contact_charges` linearized exactly into sparse rows; a lumped gate's
+  charge also depends on its own bias directly (the row's `bias` term). Y_ij = δI_i/δV_j with every other contact held,
+  in S/cm^(3−D).
+  - OLD / NEW / REASON: OLD, the legacy read the particle current only, through a central finite difference of the edge
+    current (and its own reciprocity check missed by 1.2% at 1e10 Hz for want of the displacement current); NEW, the
+    displacement current is included and the partials are exact; REASON, conservation and gauge invariance then hold
+    (every column and row of Y sums to zero).
+- **Resolution.** The currents of all contacts sum to the residual the linear solve leaves in the continuity rows and,
+  times s, in the Poisson rows (Gauss). Each frequency and driven contact reports that sum (its moduli) plus 8ε times
+  the terms that cancel in each current, as `SmallSignalPoint::resolution` (as `BiasPoint::terminal_current_resolution`
+  for DC currents). An admittance far below it is not resolved by the (ψ, n, p) state. The DC conductances of a reverse
+  biased junction or a gate at f = 0 sit there; the conservation and reciprocity checks are judged against it.
+- **Runs** (`solve/small_signal.hpp`). `solve_small_signal(device, points, options)` solves the operating points as
+  `sweep_bias`, then at each frequency builds the matrix, factorizes it once (the pattern is analyzed once per run) and
+  solves one right-hand side per contact. With `Equations::equilibrium_poisson` the operating point is the quasi-static
+  one (the carriers in equilibrium at its potential) and the small-signal system is still drift-diffusion: a MOS
+  capacitor in inversion, which drift-diffusion DC cannot reach (Unit 12), gets its high-frequency response. The run
+  record hashes the transport settings even then (the small-signal system reads them) and the frequencies. Fields
+  (δψ, δn, δp per volt) are kept at the requested frequencies.
+- Gates (all measured):
+  - Assembler, against Unit 21 and differences, 1D/2D/3D, Boltzmann and Fermi–Dirac, incomplete ionization, field
+    mobility, traps, a lumped gate, an electrode (also on a one-cell oxide) and an ohmic contact on an interface edge: at
+    s = 0 the matrix is the steady Jacobian (9.8e-16 of the column scale); at a real s, the backward-Euler step's
+    Jacobian (1.6e-15; the trap part on its own 2.1e-13); holomorphic in s (Cauchy–Riemann, 1.7e-8 with differences);
+    ∂F/∂V against differences of the residual (3.2e-14); the current rows against differences of the step's total
+    current, unknowns and bias (2.6e-8).
+  - Complex solver: see 6.10.
+  - Conservation: the 2D MOS structure with traps, an electrode and two ohmic contacts (one on an interface edge), biased
+    and in equilibrium, f = 0 to 1e13 Hz: every column sum within its resolution (at most 0.43 of it), every row sum
+    likewise; where the displacement current dominates the sums vanish to 3e-15 of the entries. Reciprocity in
+    equilibrium within the resolution (0.06 of it); biased, it fails by up to 114 times the resolution (not reciprocal).
+  - Low frequency: Y(0) is the derivative of the DC current (fourth-order differences: 4.1e-8 at 0.5 V, 2.6e-10 at
+    0.7 V; below about 0.3 V the DC current itself is resolved only to 1e-4 of its derivative). The MOSFET (`[.mosfet]`,
+    the legacy fixture at V_G = 1 V, V_DS = 0.05 V): g_m to 6.9e-10, g_ds to 1.0e-11, C_gg to 8.7e-13, Y_gd = 0 (not
+    reciprocal), columns within 0.061 of their resolution.
+  - MOS capacitor RC (Unit 21's fixture, meshed and lumped): Y = 1/(1/(iωC) + R/(1 + iωRC_g)) from ωτ = 1e-4 to 100
+    within 6.7e-4; at ωτ = 1e-4, Im Y/ω is the quasi-static C to 6e-9. Dielectric relaxation behind a thick oxide:
+    1.3e-4.
+  - Inversion (quasi-static operating point, 1D lumped MOS-C at 1.5 V): at 1 MHz C is the frozen-minority capacitance
+    (holes following, electrons conserved with a uniform quasi-Fermi level, solved in the test on the same mesh) to
+    3.1e-9. A 2D gated diode (an n+ source beside the gate) gives the quasi-static dQ/dV from 10 Hz to 100 kHz in
+    accumulation, depletion and inversion, to below 1e-6.
+  - Junction: an abrupt p+n (1e19/1e16) at −2 V within 0.88% of the depletion approximation with the 2V_T correction.
+    Long diode (1 µs, 300 µm n side, 0.5 V): Re Y/Re Y(0) = Re √(1 + iωτ) from ωτ = 0.01 to 3 within 3.2e-3.
+  - Traps (conductance method): a single acceptor level near flat band, G_p/ω = C_it ωτ/(1 + ω²τ²) from ωτ = 0.01 to 3
+    within 2.5e-3 of the peak (0.09% at the peak), with the analytic τ and C_it = qN_t f(1 − f)/V_T; the capacitance falls
+    by C_it to 2.1e-4.
+  - Against transient runs: a 1 mV sine through `solve_transient` (eight periods, fixed BDF2 steps), the fundamental of
+    the last period converges to Y at second order: the RC case 2.3e-4, 5.8e-5, 1.5e-5 and the trap level at ωτ = 1
+    3.1e-4, 7.8e-5, 2.1e-5 at 200, 400, 800 steps per period.
+  - y-uniform 2D and 3D diodes reproduce 1D within the runs' resolutions; the fields are 1 V/V on the driven contact and
+    0 on the others; cancellation keeps completed points; progress is monotonic; the run record covers the frequencies,
+    the operating-point equations and the transport settings.
+  - Steady and transient paths bit-identical to `main` (V26).
+- Known limits:
+  - The low-frequency response of an isolated inversion layer (a MOS capacitor with no minority-carrier contact) is the
+    minority current across the depleted region, a tiny difference of large fluxes in the (ψ, n, p) state, and is not
+    resolved (|Y| below the reported resolution below about 1 Hz on the test fixture), as the DC current there is not
+    (Unit 12). The quasi-static sweep gives the low-frequency C-V; a resolved small-signal one needs a source of minority
+    carriers (the gated diode) or quasi-Fermi-potential unknowns.
+  - The resolution is a bound, dominated by the conduction terms: a capacitive current below it can still be accurate
+    (the gated diode at 10 Hz).
+  - Each frequency costs one complex factorization; the numeric factorization is not reused across frequencies.
+    Measured (Release, 2D diode, 30,753 unknowns, best of five): a complex factorization 0.48 s against 0.19 s for the
+    real Jacobian (2.5 times); building the small-signal matrix 2 ms. The real paths' cost is unchanged.
+  - Not in Unit 22 (owner's exclusions): circuits and mixed mode, harmonic balance, noise, large-signal analysis, AC of
+    the quasi-static equations alone, f_T / f_max and S/Z/h conversions (Unit 24), thermal (23), tunnelling, bulk-trap
+    and dopant dynamics.
+- Mutation checks (33, applied by a small C++ string-replacement tool and a shell loop, no Python): 31 caught. Caught:
+  the complex finiteness test ignoring the imaginary part, equilibration on the real part, the storage term's sign, its
+  dS_p/dp, the trap weight without N_s, a conjugate s, the insulator row of an electrode taking the interface terms
+  (missed at first: no fixture had an electrode on an interface edge's end; a one-cell oxide was added to the assembler
+  cases), the ohmic and the gate bias derivatives' signs, the conduction into an edge's second contact, the trap current
+  at an ohmic node reversed, the interface-edge and the edge displacement signs, the gate charge's bias term, the trap
+  occupancy without its dynamics, its hole partial without dp1, the hole capture without its p1 partial, the electron
+  capture's n partial, the interface potential's denominator, the interface density without its direct partial, the
+  surface recombination left out, the forcing's sign, the frequency without t₀, the admittance without the bias term,
+  the resolution without the currents' rounding, Y transposed, the fields without V_T, the run record without the
+  frequencies or without the transport settings, the progress frequency, the cancellation check. Not caught: the
+  resolution without the Poisson rows' residual (in every fixture that term is below the others, so the bound still
+  holds), and the operating point not stamped (equivalent: the reported fields hold the contact values to rounding).
+
 ### 6.3 Device description
 
 A `device` is plain data: regions (geometry in the mesh's coordinates), doping per node or region,
@@ -1213,6 +1311,11 @@ An on-disk result format is **deferred** (R2), under the same independence rule 
   convergence), `TransientSnapshot`s (fields, band diagram, edge currents, trap occupancies) at t = 0, the output times
   and t_end (or every step on request; every step of a large run would be gigabytes), the rejected-step count, and
   `stopped` / `unfinished` as `Sweep`.
+- `SmallSignal` (Unit 22, `results/small_signal.hpp`): the run record, the contact count, the frequencies, and per
+  bias point the operating point (a `BiasPoint`), the admittance matrix Y_ij (complex, S/cm^(3−D), row-major per
+  frequency), the linear solve's pivot ratio and backward error, the resolution of each column, and the small-signal
+  fields (δψ, δn, δp per volt on each contact) at the requested frequencies; `stopped` / `unfinished` as `Sweep`.
+  Helpers give G = Re Y and C = Im Y / ω.
 
 ### 6.7 Error policy (R1, decided)
 
@@ -1294,6 +1397,10 @@ An on-disk result format is **deferred** (R2), under the same independence rule 
 - Unit 21: `solve_transient` takes the same `RunControl`. The token is also checked before every step attempt; a
   cancelled run keeps its accepted steps. `Phase::transient` events carry the step attempt as point (point count 0,
   not known in advance) and the step's end time in the new `Progress::time_s`.
+- Unit 22: `solve_small_signal` takes the same `RunControl`: the operating points report as a sweep, then one
+  `Phase::small_signal` event per frequency of each point (the frequency's index + 1 as iteration, the largest backward
+  error as residual, the frequency in the new `Progress::frequency_Hz`). The token is checked before every frequency;
+  a cancelled run keeps its completed points.
 
 ### 6.10 Linear solver interface (D3)
 
@@ -1365,6 +1472,17 @@ interface fits both direct and iterative backends stays unproven until one is re
 - Not carried from the legacy `ReusableLU`/`DirectSession`: the subset-scatter and union-pattern re-analysis (only the
   deferred nonlocal models need them), the AMD ordering switch (measured pathological), and the size and instability
   fallbacks to SciPy (no SciPy here).
+- **Complex solver (Unit 22, A5):** `LinearSolver` is `BasicLinearSolver<double>`, and `ComplexLinearSolver` is
+  `BasicLinearSolver<std::complex<double>>`, both compiled once in `linear_solver.cpp`, with the backend
+  `SparseLuBackend<Scalar>` (Eigen SparseLU on the complex scalar). Everything above applies with |·| the modulus:
+  power-of-two equilibration scales from the entries' moduli (exact on complex values too), the pivot ratio of the
+  pivots' moduli, the Oettli–Prager backward error with moduli; a value is finite when both parts are. The real path is
+  unchanged (bit-identical results, V26). Tests: a known nonsymmetric complex system (backward error below 4 ε), agreement
+  with the real 2n × 2n block form of G + iωC to 1e-12 over ω = 1e-6 to 1e6, a real matrix giving the real solver's
+  solution, a phase-rotated badly scaled system (rejected unequilibrated, backward error 3.3e-12 equilibrated), singular
+  and non-finite input, and analysis reuse across frequencies. OLD / NEW / REASON: OLD, the legacy solved
+  `J0 + 1j ω Cmat` with SciPy's `spsolve`/`splu`; NEW, the same hardened interface as the real solves; REASON, the
+  acceptance checks (6.10, 4) apply to every solve.
 
 **Known limits, recorded for later units (from the Unit 3 review):**
 - Eigen SparseLU does not scale to 3D: 81k unknowns (3D, 3 per node) took 70 s per factorization with 123× fill; 2D 270k
@@ -1373,9 +1491,9 @@ interface fits both direct and iterative backends stays unproven until one is re
 - Eigen stores L and U offsets in the 32-bit index type; extrapolated, that overflows near 5e5 3D unknowns, where a
   factorization would already take over 15 minutes. Fix with the next backend, or a 64-bit index in the private Eigen copy.
 - About four copies of A exist during a factorization (caller, solver, CSC copy, Eigen's own), small next to L and U.
-- The interface has one real right-hand side and an output-only `x`. Terminal admittances and sensitivities need several
-  right-hand sides; AC small-signal solves a complex system (A5: the matrix type exists, a complex `LinearSolver` comes with
-  the AC unit); iterative backends need an initial guess and the 3-unknowns-per-node block size.
+- The interface has one right-hand side and an output-only `x`. Terminal admittances and sensitivities need several
+  right-hand sides (Unit 22 solves them one after another on one factorization); iterative backends need an initial
+  guess and the 3-unknowns-per-node block size. The complex solver came with Unit 22 (below).
 - Pattern stability is the assembler's job: skipping a zero entry changes the pattern and forces a re-analysis. Unit 7
   should build the pattern once and assemble values in place; Newton tests should assert `analyses() == 1`.
 - The pivot-ratio check cannot tell a floating region from a weakly anchored one (see Singularity above). Gates for later
@@ -1674,8 +1792,8 @@ built.
 | 18 | Scalable linear-solver backends: PARDISO and/or iterative/AMG paths | linalg | target; must preserve backend-neutral interface |
 | 19 | Impact ionization and breakdown-oriented continuation | physics, assemble, solve | target |
 | 20 | Band-to-band tunnelling and nonlocal path machinery | assemble, physics, solve | target |
-| 21 | Transient simulation | solve, assemble, results | **done on branch `solve/transient`**: backward Euler and variable-step BDF2 with error-controlled steps, waveforms, displacement current with exact conservation, interface trap dynamics eliminated in the interface solve (6.2, Unit 21) |
-| 22 | AC small-signal analysis | linalg, assemble, solve, results | target; complex system already reserved by A5 |
+| 21 | Transient simulation | solve, assemble, results | **done, on `main`** (`a601e7e`): backward Euler and variable-step BDF2 with error-controlled steps, waveforms, displacement current with exact conservation, interface trap dynamics eliminated in the interface solve (6.2, Unit 21) |
+| 22 | AC small-signal analysis | linalg, assemble, solve, results | **done on branch `solve/ac-small-signal`**: J + iωt₀C + T(iωt₀) at a DC or quasi-static operating point, complex linear solver, admittance matrix with displacement current and a resolution bound, interface traps in the frequency domain (6.2, Unit 22) |
 | 23 | Thermal / electrothermal coupling | physics, assemble, solve | target |
 | 24 | Analysis and extraction engine | analysis | target |
 | 25 | Scientific visualization / rendering | render | target |
@@ -1683,7 +1801,7 @@ built.
 | 27 | Optimization / sensitivity / inverse-design workflows | analysis, solve | long-term target |
 
 Units 1–9 are the smallest end-to-end vertical slice: a validated drift-diffusion diode. Everything past
-Unit 10 is deferred until sequenced. Units 11–15, 15b and 21 were requested by the owner after Unit 10; nothing
+Unit 10 is deferred until sequenced. Units 11–15, 15b, 21 and 22 were requested by the owner after Unit 10; nothing
 else past them is started.
 
 ### 11.1 Capability tracks may interleave
@@ -1890,6 +2008,7 @@ architecture; historical branch names remain only where they are useful to expla
 | V23a | Unit 15b interface potential (`device/insulators`, on `daf4de7`): Debug and Release build with no warnings, all suites pass. Q_f, traps and surface recombination at ψ_I by a local solve per interface edge with the exact Jacobian: D_it MOS-C second order (2.94e-4 to 4.39e-6 V, ratio 4.04–4.08, was first order), Q_f flat-band shift = −q Q_f/C_ox to 6e-13, FD Jacobians at most 1.7e-7 (interface part 2.0e-8), surface recombination within 8.3e-4, unchanged devices bit-identical to `main` and `daf4de7`, solve time within 0–20% (noise 10–20%). Twenty-six mutation checks caught. | Verified locally. |
 | V24 | Unit 21 (`solve/transient`): Debug and Release build with no warnings; `nitcad_physics_test` 72 test cases, `nitcad_device_test` 24, `nitcad_assemble_test` 63, `nitcad_solve_test` 112 (+5 `[.mosfet]` and 5 `[.transient]`, Release only), all pass (Release 10/10, Debug 8/8). Time-step FD Jacobians 1D/2D/3D, both statistics, incomplete ionization, at most 1.7e-7 (trap part 3.5e-7); a long step is the steady state; total currents sum to 3.1e-10 (2D MOS with traps and two ohmic contacts) and integrate to the contact charges; backward Euler first order (1.92–1.99 per halving) and BDF2 second (3.33 to 3.90); error control follows rtol across kinks and a jump; MOS-C RC response within 0.093% (meshed and lumped), dielectric relaxation within 0.34%, trap emission rate within 3.2e-4; the legacy diode turn-off (legacy core built from the reference checkout) within 3.7e-5 until the legacy run stalls (a legacy finding); 2D/3D extrusions to 2.3e-13; the meshed MOSFET gate step settles to the Id–Vg current within 1e-6. Steady paths bit-identical to `main` (plain, meshed-oxide and trap devices, run digests included). Twenty-seven mutation checks caught (four after a test was added or sharpened). | Verified locally. |
 | V25 | No-Python cleanup (`test/no-python-refs`, owner request before Unit 22): every reference value that came from an outside tool is recomputed in C++. `tests/physics/reference_arithmetic.hpp` (double-double arithmetic: exp, log, sqrt, pow, ln 2 and π computed by series, Gauss–Legendre by Newton, ζ by Euler–Maclaurin) and `tests/physics/references.hpp` (Bernoulli function, F₁/₂ and F₋₁/₂ by polylogarithm series and quadrature, neutral roots by bisection with and without dopant levels, the legacy material formulas) replace the mpmath and 50-digit literals of `flux_test`, `poisson_test`, `fermi_dirac_test` (physics and solve), `heavy_doping_test`, `interface_traps_test`, `materials_test`, `mobility_test`, `semiconductor_test`, `statistics_test` and `heterojunction_test`; series and quadrature agree to 1e-26 and F₁/₂(0) matches (1 − 2^−½) ζ(3/2) to 1e-26; every existing tolerance holds unchanged. A new test checks the stored 6-point Gauss–Legendre constants against the Newton-computed rule to 4 ε. The graded-mesh check against values from a numpy run of the legacy `mesh.py` became a check against the legacy specification (cell count from the spacing integral in closed form, end points, gradient limit). The stored legacy turn-off table (generated by running the legacy Python) became a C++ port of the legacy 1D diode and transient loop; NiTCAD agrees with it to 3.7e-5, as with the table, and the port reproduces the legacy stall (from step 190; the legacy run's from 184). Source changed only in provenance comments (`bernoulli.hpp`, `fermi_dirac.hpp`, `fermi_dirac.cpp`). | Verified locally. |
+| V26 | Unit 22 (`solve/ac-small-signal`): Debug and Release build with no warnings; `nitcad_linalg_test` 47 test cases, `nitcad_physics_test` 72, `nitcad_device_test` 24, `nitcad_assemble_test` 69, `nitcad_solve_test` 123 (+6 `[.mosfet]` and 6 `[.transient]`, Release only), all pass (Release 10/10, Debug 8/8). Complex solver against the real block form to 1e-12; the small-signal matrix equals the steady Jacobian at s = 0 (9.8e-16) and the backward-Euler step Jacobian at a real s (1.6e-15, trap part 2.1e-13); current rows against differences to 2.6e-8; conservation and equilibrium reciprocity within the reported resolution; MOS-C RC 6.7e-4, dielectric relaxation 1.3e-4, frozen-minority HF C-V 3.1e-9, gated-diode LF C-V below 1e-6, junction 0.88% (depletion approximation), long diode 3.2e-3, trap conductance peak 0.09%, transient sine runs converging to Y at second order; MOSFET g_m 6.9e-10, g_ds 1.0e-11, C_gg 8.7e-13. Steady and transient paths bit-identical to `main` (14 probe runs: diodes 1D/2D, field mobility with Fermi–Dirac, a heterojunction, lumped MOS-C quasi-static and drift-diffusion, a meshed MOS with traps quasi-static and drift-diffusion, transients under BDF2, backward Euler and fixed steps, 1D and 2D trap transients, run digests included). 31 of 33 mutations caught (one after a fixture was added; one undetectable, one equivalent). | Verified locally. |
 | V3 | Scaling definitions, scaled variables and Newton tolerances read from `inputs.cpp` and `device1d.cpp` and recorded in 6.1. One open question remains for Unit 8 (convergence criterion on the clipped correction). | Verified |
 
 Verifications due at their own unit: none left. The 5e-5 Jacobian gate's normalization was read at Unit 7 (section 10), and

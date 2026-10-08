@@ -6,7 +6,8 @@
 // completed points (results/run.hpp).
 // Progress: the callback is called on the solving thread after every Newton iteration. Events are
 // strictly increasing in (phase, point, iteration); in a transient run the point is the step
-// attempt (transient.hpp). The callback must not throw and must not call
+// attempt (transient.hpp), and in a small-signal run the small-signal phase has one event per
+// frequency (small_signal.hpp). The callback must not throw and must not call
 // back into the solve; an application forwards events to its UI thread itself (by posting a
 // message), the solver never calls UI code.
 #pragma once
@@ -17,7 +18,7 @@
 
 namespace NiTCAD::solve {
 
-enum class Phase : int { equilibrium = 0, bias = 1, transient = 2 };
+enum class Phase : int { equilibrium = 0, bias = 1, transient = 2, small_signal = 3 };
 
 struct Progress {
     Phase phase;
@@ -28,6 +29,7 @@ struct Progress {
     double residual;          // largest |F| before the correction
     bool converged;           // true on the iteration that converged
     double time_s = 0.0;      // transient: the end time of the step (0 in the other phases)
+    double frequency_Hz = 0.0;  // small signal: the frequency (0 in the other phases)
 };
 
 struct RunControl {

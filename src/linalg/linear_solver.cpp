@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <complex>
 #include <cstddef>
 #include <functional>
 #include <limits>
@@ -29,17 +30,28 @@ base::Error out_of_memory() {
     return {base::ErrorCode::resource_exhausted, "out of memory", std::nullopt};
 }
 
+bool is_finite(double v) noexcept { return std::isfinite(v); }
+bool is_finite(std::complex<double> v) noexcept {
+    return std::isfinite(v.real()) && std::isfinite(v.imag());
+}
+
+// A value as an error context value: itself when real, its modulus when complex.
+double reported(double v) noexcept { return v; }
+double reported(std::complex<double> v) noexcept { return std::abs(v); }
+
 // Index of the first non-finite value, or values.size() if all are finite.
-std::size_t first_non_finite(std::span<const double> values) noexcept {
-    const auto it = std::ranges::find_if(values, [](double v) { return !std::isfinite(v); });
+template <MatrixScalar Scalar>
+std::size_t first_non_finite(std::span<const Scalar> values) noexcept {
+    const auto it = std::ranges::find_if(values, [](Scalar v) { return !is_finite(v); });
     return static_cast<std::size_t>(it - values.begin());
 }
 
-bool overlaps(std::span<const double> a, std::span<const double> b) noexcept {
+template <MatrixScalar Scalar>
+bool overlaps(std::span<const Scalar> a, std::span<const Scalar> b) noexcept {
     if (a.empty() || b.empty()) {
         return false;
     }
-    const std::less<const double*> before;
+    const std::less<const Scalar*> before;
     return before(a.data(), b.data() + b.size()) && before(b.data(), a.data() + a.size());
 }
 
@@ -50,9 +62,10 @@ double power_of_two_scale(double largest) noexcept {
     return std::ldexp(1.0, std::clamp(-exponent, -1022, 1022));
 }
 
-double inf_norm(std::span<const double> v) noexcept {
+template <MatrixScalar Scalar>
+double inf_norm(std::span<const Scalar> v) noexcept {
     double m = 0.0;
-    for (const double x : v) {
+    for (const Scalar x : v) {
         m = std::max(m, std::abs(x));
     }
     return m;
@@ -60,7 +73,9 @@ double inf_norm(std::span<const double> v) noexcept {
 
 }  // namespace
 
-std::expected<LinearSolver, base::Error> LinearSolver::create(const SolverConfig& config) {
+template <MatrixScalar Scalar>
+std::expected<BasicLinearSolver<Scalar>, base::Error> BasicLinearSolver<Scalar>::create(
+    const SolverConfig& config) {
     switch (config.backend) {
         case SolverBackend::eigen_sparse_lu:
             if (config.threads != 1) {
@@ -94,13 +109,15 @@ std::expected<LinearSolver, base::Error> LinearSolver::create(const SolverConfig
                                      "set it to 0 when equilibrate is false",
                                      std::nullopt, config.min_pivot_ratio));
     }
-    return LinearSolver(config);
+    return BasicLinearSolver(config);
 }
 
-LinearSolver::LinearSolver(const SolverConfig& config)
-    : config_(config), backend_(std::make_unique<detail::SparseLuBackend>()) {}
+template <MatrixScalar Scalar>
+BasicLinearSolver<Scalar>::BasicLinearSolver(const SolverConfig& config)
+    : config_(config), backend_(std::make_unique<detail::SparseLuBackend<Scalar>>()) {}
 
-LinearSolver::LinearSolver(LinearSolver&& other) noexcept
+template <MatrixScalar Scalar>
+BasicLinearSolver<Scalar>::BasicLinearSolver(BasicLinearSolver&& other) noexcept
     : config_(other.config_),
       backend_(std::move(other.backend_)),
       matrix_(std::move(other.matrix_)),
@@ -118,7 +135,9 @@ LinearSolver::LinearSolver(LinearSolver&& other) noexcept
       analyses_(other.analyses_),
       factorizations_(other.factorizations_) {}
 
-LinearSolver& LinearSolver::operator=(LinearSolver&& other) noexcept {
+template <MatrixScalar Scalar>
+BasicLinearSolver<Scalar>& BasicLinearSolver<Scalar>::operator=(
+    BasicLinearSolver&& other) noexcept {
     if (this != &other) {
         config_ = other.config_;
         backend_ = std::move(other.backend_);
@@ -140,14 +159,17 @@ LinearSolver& LinearSolver::operator=(LinearSolver&& other) noexcept {
     return *this;
 }
 
-LinearSolver::~LinearSolver() = default;
+template <MatrixScalar Scalar>
+BasicLinearSolver<Scalar>::~BasicLinearSolver() = default;
 
-void LinearSolver::reset() noexcept {
+template <MatrixScalar Scalar>
+void BasicLinearSolver<Scalar>::reset() noexcept {
     analyzed_ = false;
     factorized_ = false;
 }
 
-std::expected<void, base::Error> LinearSolver::analyze(const SparseMatrix& a) {
+template <MatrixScalar Scalar>
+std::expected<void, base::Error> BasicLinearSolver<Scalar>::analyze(const Matrix& a) {
     NITCAD_EXPECTS(backend_ != nullptr);
     NITCAD_EXPECTS(a.rows() == a.cols());
     try {
@@ -158,7 +180,8 @@ std::expected<void, base::Error> LinearSolver::analyze(const SparseMatrix& a) {
     }
 }
 
-std::expected<void, base::Error> LinearSolver::analyze_unchecked(const SparseMatrix& a) {
+template <MatrixScalar Scalar>
+std::expected<void, base::Error> BasicLinearSolver<Scalar>::analyze_unchecked(const Matrix& a) {
     reset();
     if (a.rows() == 0) {
         return std::unexpected(error(base::ErrorCode::invalid_input, "empty linear system"));
@@ -188,8 +211,10 @@ std::expected<void, base::Error> LinearSolver::analyze_unchecked(const SparseMat
     }
     matrix_ = a;
     scaled_values_.resize(a.nonzeros());
-    for (auto* v : {&row_scale_, &col_scale_, &weighted_row_max_, &residual_, &work_rhs_, &work_x_,
-                    &correction_, &previous_x_}) {
+    for (auto* v : {&row_scale_, &col_scale_, &weighted_row_max_}) {
+        v->resize(n);
+    }
+    for (auto* v : {&residual_, &work_rhs_, &work_x_, &correction_, &previous_x_}) {
         v->resize(n);
     }
     analyzed_ = true;
@@ -197,7 +222,9 @@ std::expected<void, base::Error> LinearSolver::analyze_unchecked(const SparseMat
     return {};
 }
 
-std::expected<FactorizationReport, base::Error> LinearSolver::factorize(const SparseMatrix& a) {
+template <MatrixScalar Scalar>
+std::expected<FactorizationReport, base::Error> BasicLinearSolver<Scalar>::factorize(
+    const Matrix& a) {
     NITCAD_EXPECTS(backend_ != nullptr);
     NITCAD_EXPECTS(a.rows() == a.cols());
     try {
@@ -208,15 +235,16 @@ std::expected<FactorizationReport, base::Error> LinearSolver::factorize(const Sp
     }
 }
 
-std::expected<FactorizationReport, base::Error> LinearSolver::factorize_unchecked(
-    const SparseMatrix& a) {
+template <MatrixScalar Scalar>
+std::expected<FactorizationReport, base::Error> BasicLinearSolver<Scalar>::factorize_unchecked(
+    const Matrix& a) {
     factorized_ = false;
     if (!analyzed_ || !a.has_same_pattern(matrix_)) {
         if (auto analyzed = analyze_unchecked(a); !analyzed) {
             return std::unexpected(std::move(analyzed.error()));
         }
     }
-    const std::span<const double> values = a.values();
+    const std::span<const Scalar> values = a.values();
     const std::span<const Index> offsets = a.row_offsets();
     const std::span<const Index> columns = a.col_indices();
     if (const std::size_t k = first_non_finite(values); k < values.size()) {
@@ -224,7 +252,7 @@ std::expected<FactorizationReport, base::Error> LinearSolver::factorize_unchecke
                          offsets.begin() - 1;
         return std::unexpected(error(base::ErrorCode::invalid_input,
                                      "matrix contains a non-finite value",
-                                     static_cast<std::size_t>(row), values[k]));
+                                     static_cast<std::size_t>(row), reported(values[k])));
     }
 
     // Row scales from the row maxima, then column scales from the column maxima of the
@@ -288,7 +316,8 @@ std::expected<FactorizationReport, base::Error> LinearSolver::factorize_unchecke
     return FactorizationReport{.pivot_ratio = pivots->ratio};
 }
 
-void LinearSolver::scaled_solve(std::span<const double> rhs, std::span<double> x) {
+template <MatrixScalar Scalar>
+void BasicLinearSolver<Scalar>::scaled_solve(std::span<const Scalar> rhs, std::span<Scalar> x) {
     if (!config_.equilibrate) {
         backend_->solve(rhs, x);
         return;
@@ -302,10 +331,12 @@ void LinearSolver::scaled_solve(std::span<const double> rhs, std::span<double> x
     }
 }
 
-double LinearSolver::backward_error(std::span<const double> b, std::span<const double> x) {
+template <MatrixScalar Scalar>
+double BasicLinearSolver<Scalar>::backward_error(std::span<const Scalar> b,
+                                                 std::span<const Scalar> x) {
     const std::span<const Index> offsets = matrix_.row_offsets();
     const std::span<const Index> columns = matrix_.col_indices();
-    const std::span<const double> values = matrix_.values();
+    const std::span<const Scalar> values = matrix_.values();
     // ||x|| in column-equilibrated units, so the fallback below is invariant to column scaling
     // (with plain ||x||_inf, columns scaled by 1e+-10 make it fire on every row and hide errors).
     double z_norm = 0.0;
@@ -315,15 +346,15 @@ double LinearSolver::backward_error(std::span<const double> b, std::span<const d
     const double rounding = 1000.0 * static_cast<double>(b.size()) * epsilon;
     double worst = 0.0;
     for (std::size_t i = 0; i < b.size(); ++i) {
-        double ax = 0.0;
+        Scalar ax{};
         double abs_ax = 0.0;
         for (auto k = static_cast<std::size_t>(offsets[i]);
              k < static_cast<std::size_t>(offsets[i + 1]); ++k) {
-            const double term = values[k] * x[static_cast<std::size_t>(columns[k])];
+            const Scalar term = values[k] * x[static_cast<std::size_t>(columns[k])];
             ax += term;
             abs_ax += std::abs(term);
         }
-        const double r = b[i] - ax;
+        const Scalar r = b[i] - ax;
         residual_[i] = r;
         // Oettli-Prager denominator, replaced by the Arioli-Demmel-Duff one where it is at
         // rounding level (for example a row with b_i = 0 whose x entries nearly cancel).
@@ -333,7 +364,7 @@ double LinearSolver::backward_error(std::span<const double> b, std::span<const d
             denominator = abs_ax + bound;
         }
         const double row_error = denominator > 0.0 ? std::abs(r) / denominator
-                                 : r == 0.0       ? 0.0
+                                 : r == Scalar{}  ? 0.0
                                                   : std::numeric_limits<double>::infinity();
         // A NaN (from overflow) must not be lost by max.
         worst = std::isnan(row_error) ? row_error : std::max(worst, row_error);
@@ -344,22 +375,24 @@ double LinearSolver::backward_error(std::span<const double> b, std::span<const d
     return worst;
 }
 
-std::expected<SolveReport, base::Error> LinearSolver::solve(std::span<const double> b,
-                                                            std::span<double> x) {
+template <MatrixScalar Scalar>
+std::expected<SolveReport, base::Error> BasicLinearSolver<Scalar>::solve(std::span<const Scalar> b,
+                                                                     std::span<Scalar> x) {
     NITCAD_EXPECTS(backend_ != nullptr);
     NITCAD_EXPECTS(factorized_);
     NITCAD_EXPECTS(b.size() == static_cast<std::size_t>(matrix_.rows()) && x.size() == b.size());
-    NITCAD_EXPECTS(!overlaps(b, x));
+    NITCAD_EXPECTS(!overlaps<Scalar>(b, x));
 
     if (const std::size_t k = first_non_finite(b); k < b.size()) {
         return std::unexpected(error(base::ErrorCode::invalid_input,
-                                     "right-hand side contains a non-finite value", k, b[k]));
+                                     "right-hand side contains a non-finite value", k,
+                                     reported(b[k])));
     }
     double omega = 0.0;
     std::size_t steps = 0;
     try {
         scaled_solve(b, x);
-        if (const std::size_t k = first_non_finite(x); k < x.size()) {
+        if (const std::size_t k = first_non_finite<Scalar>(x); k < x.size()) {
             return std::unexpected(error(base::ErrorCode::inaccurate_solve,
                                          "solution contains a non-finite value", k));
         }
@@ -372,7 +405,7 @@ std::expected<SolveReport, base::Error> LinearSolver::solve(std::span<const doub
             for (std::size_t i = 0; i < x.size(); ++i) {
                 x[i] += correction_[i];
             }
-            const double refined = first_non_finite(x) < x.size()
+            const double refined = first_non_finite<Scalar>(x) < x.size()
                                        ? std::numeric_limits<double>::quiet_NaN()
                                        : backward_error(b, x);
             if (!(refined < omega)) {
@@ -392,12 +425,15 @@ std::expected<SolveReport, base::Error> LinearSolver::solve(std::span<const doub
                                      "componentwise backward error above max_backward_error",
                                      std::nullopt, omega));
     }
-    const double b_norm = inf_norm(b);
-    const double r_norm = inf_norm(residual_);
+    const double b_norm = inf_norm<Scalar>(b);
+    const double r_norm = inf_norm<Scalar>(residual_);
     return SolveReport{.backward_error = omega,
                        .relative_residual = b_norm > 0.0 ? r_norm / b_norm : r_norm,
                        .refinement_steps = steps,
                        .iterations = std::nullopt};
 }
+
+template class BasicLinearSolver<double>;
+template class BasicLinearSolver<std::complex<double>>;
 
 }  // namespace NiTCAD::linalg

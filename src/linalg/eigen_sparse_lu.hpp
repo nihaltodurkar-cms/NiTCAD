@@ -5,6 +5,7 @@
 #include <Eigen/SparseCore>
 #include <Eigen/SparseLU>
 
+#include <complex>
 #include <cstddef>
 #include <expected>
 #include <optional>
@@ -23,20 +24,22 @@ struct PivotRatio {
     std::size_t column;
 };
 
+// Scalar is double or std::complex<double>; both are instantiated in eigen_sparse_lu.cpp.
+template <MatrixScalar Scalar>
 class SparseLuBackend {
 public:
     // Builds the column-compressed copy of A's pattern and runs the symbolic analysis.
     // Requires a square, non-empty matrix.
-    [[nodiscard]] std::expected<void, base::Error> analyze(const SparseMatrix& a);
+    [[nodiscard]] std::expected<void, base::Error> analyze(const BasicSparseMatrix<Scalar>& a);
     // Numeric factorization of values laid out in the CSR order of the analyzed pattern.
-    [[nodiscard]] std::expected<PivotRatio, base::Error> factorize(std::span<const double> csr_values);
+    [[nodiscard]] std::expected<PivotRatio, base::Error> factorize(std::span<const Scalar> csr_values);
     // x = A^-1 b with the last factorization. b and x have the analyzed dimension.
-    void solve(std::span<const double> b, std::span<double> x);
+    void solve(std::span<const Scalar> b, std::span<Scalar> x);
 
 private:
     // COLAMD, not AMD on A^T + A: legacy measured AMD as pathological with SparseLU on the coupled
     // psi/n/p Jacobians (more than 15 s where COLAMD took about 45 ms, 11,640 unknowns).
-    using Matrix = Eigen::SparseMatrix<double, Eigen::ColMajor, Index>;
+    using Matrix = Eigen::SparseMatrix<Scalar, Eigen::ColMajor, Index>;
     using Lu = Eigen::SparseLU<Matrix, Eigen::COLAMDOrdering<Index>>;
 
     Matrix csc_;

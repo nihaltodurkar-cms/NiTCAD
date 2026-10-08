@@ -14,6 +14,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <algorithm>
+#include <complex>
 #include <cmath>
 #include <cstddef>
 #include <cstdio>
@@ -27,11 +28,13 @@
 #include "NiTCAD/physics/insulator.hpp"
 #include "NiTCAD/physics/semiconductor.hpp"
 #include "NiTCAD/solve/bias.hpp"
+#include "NiTCAD/solve/small_signal.hpp"
 #include "NiTCAD/solve/transient.hpp"
 #include "legacy_graded_mesh.hpp"
 #include "legacy_moscap.hpp"
 
 using namespace NiTCAD;
+using Complex = std::complex<double>;
 
 namespace {
 
@@ -349,4 +352,68 @@ TEST_CASE("mosfet: a gate step settles to the steady drain current (Unit 21)", "
     REQUIRE(worst <= 1e-7);
     REQUIRE(std::abs(I_end - Id.back()) <= 1e-6 * std::abs(Id.back()));
     REQUIRE(run->points.back().displacement_current[3] < 1e-6 * std::abs(Id.back()));
+}
+
+TEST_CASE("mosfet: small-signal parameters at low frequency (Unit 22)", "[.mosfet]") {
+    // The legacy MOSFET at Vg = 1 V, Vds = 0.05 V. Contacts: source 0, drain 1, body 2, gate 3.
+    // At f = 0 the transconductance Re Y_dg and the output conductance Re Y_dd are the
+    // derivatives of the DC drain current (fourth-order central differences, h = 2 mV), and at
+    // 1 kHz Im Y_gg / omega is the gate capacitance dQ_g/dV_g. The device is not reciprocal: the
+    // gate draws no current at f = 0 whatever the drain does (Y_gd = 0) while Y_dg = g_m. Every
+    // column sums to zero within its resolution.
+    const device::Device d = mosfet();
+    const double Vds = 0.05, Vg = 1.0, h = 2e-3;
+    std::vector<std::vector<double>> ramp;
+    for (const double v : linspace(0.0, Vg, 11)) ramp.push_back({0.0, Vds, 0.0, v});
+    const auto up = solve::sweep_bias(d, ramp);
+    REQUIRE(up.has_value());
+    REQUIRE(!up->stopped);
+    const results::NodeFields& at = up->points.back().fields;
+    const auto around = [&](std::size_t contact) {
+        std::vector<std::vector<double>> p;
+        for (const double k : {-2.0, -1.0, 1.0, 2.0}) {
+            std::vector<double> b{0.0, Vds, 0.0, Vg};
+            b[contact] += k * h;
+            p.push_back(b);
+        }
+        const auto s = solve::sweep_bias(d, p, {}, &at);
+        REQUIRE(s.has_value());
+        REQUIRE(!s->stopped);
+        return s->points;
+    };
+    const auto derivative = [&](const std::vector<results::BiasPoint>& p, auto value) {
+        return (8.0 * (value(p[2]) - value(p[1])) - (value(p[3]) - value(p[0]))) / (12.0 * h);
+    };
+    const auto gate = around(3), drain = around(1);
+    const auto Id = [](const results::BiasPoint& p) { return p.terminal_current[1]; };
+    const auto Qg = [](const results::BiasPoint& p) { return p.gate_charge[3]; };
+    const double gm = derivative(gate, Id), gds = derivative(drain, Id), Cgg = derivative(gate, Qg);
+
+    const std::vector<double> f{0.0, 1e3, 1e9};
+    const std::vector<std::vector<double>> point{{0.0, Vds, 0.0, Vg}};
+    const auto r = solve::solve_small_signal(d, point, {.frequencies_Hz = f}, &at);
+    REQUIRE(r.has_value());
+    REQUIRE(!r->stopped);
+    const auto Y = [&](std::size_t k, std::size_t i, std::size_t j) {
+        return r->admittance(0, k, i, j);
+    };
+    double column = 0.0;
+    for (std::size_t k = 0; k < f.size(); ++k) {
+        for (std::size_t j = 0; j < 4; ++j) {
+            Complex sum;
+            for (std::size_t i = 0; i < 4; ++i) sum += Y(k, i, j);
+            column = std::max(column, std::abs(sum) / r->points[0].resolution[k][j]);
+        }
+    }
+    CAPTURE(gm, gds, Cgg, Y(0, 1, 3), Y(0, 1, 1), r->capacitance(0, 1, 3, 3), Y(0, 3, 1), column);
+    std::printf("mosfet small signal: gm %.6e (%.3e) gds %.6e (%.3e) Cgg %.6e (%.3e) Ygd %.3e "
+                "column %.3f\n",
+                gm, Y(0, 1, 3).real() / gm - 1.0, gds, Y(0, 1, 1).real() / gds - 1.0, Cgg,
+                r->capacitance(0, 1, 3, 3) / Cgg - 1.0, std::abs(Y(0, 3, 1)), column);
+    REQUIRE(std::abs(Y(0, 1, 3).real() / gm - 1.0) < 1e-7);  // measured 6.9e-10
+    REQUIRE(std::abs(Y(0, 1, 1).real() / gds - 1.0) < 1e-7);  // measured 1.0e-11
+    REQUIRE(std::abs(r->capacitance(0, 1, 3, 3) / Cgg - 1.0) < 1e-7);  // measured 8.7e-13
+    REQUIRE(std::abs(Y(0, 3, 1)) <= r->points[0].resolution[0][1]);
+    REQUIRE(std::abs(Y(0, 3, 1)) < 1e-6 * gm);
+    REQUIRE(column <= 1.0);  // measured 0.061
 }

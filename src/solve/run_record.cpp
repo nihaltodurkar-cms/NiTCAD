@@ -1,5 +1,5 @@
-// The run records of a bias sweep and of a transient run (ARCHITECTURE.md 6.6): an identity digest
-// of every input and the options as named settings.
+// The run records of a bias sweep, a transient run and a small-signal run (ARCHITECTURE.md 6.6):
+// an identity digest of every input and the options as named settings.
 #include <bit>
 #include <cstddef>
 #include <cstdint>
@@ -14,6 +14,7 @@
 #include "NiTCAD/physics/interface_traps.hpp"
 #include "NiTCAD/physics/semiconductor.hpp"
 #include "NiTCAD/solve/bias.hpp"
+#include "NiTCAD/solve/small_signal.hpp"
 #include "NiTCAD/solve/transient.hpp"
 
 namespace NiTCAD::solve {
@@ -263,6 +264,27 @@ results::RunRecord make_run_record(const device::Device& device, const Transient
         d.reals(w.parameters());
     }
     initial_state(d, initial, true);
+    return {d.value(), named};
+}
+
+results::RunRecord make_run_record(const device::Device& device,
+                                   const SmallSignalOptions& options,
+                                   std::span<const std::vector<double>> points,
+                                   const results::NodeFields* initial) {
+    // The small-signal system is drift-diffusion whatever the operating point, so the transport
+    // settings and the interfaces' transport and recombination are in the record.
+    Digest d;
+    BiasOptions system = options.steady;
+    system.equations = Equations::drift_diffusion;
+    auto named = settings(system);
+    named.emplace_back("small_signal.operating_point_equations",
+                       static_cast<double>(options.steady.equations));
+    device_and_settings(d, device, system, named);
+    d.integer(points.size());
+    for (const auto& p : points) d.reals(p);
+    d.reals(options.frequencies_Hz);
+    d.reals(options.field_frequencies_Hz);
+    initial_state(d, initial, options.steady.equations == Equations::drift_diffusion);
     return {d.value(), named};
 }
 

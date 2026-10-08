@@ -160,6 +160,94 @@ InterfaceEdges::Charge InterfaceEdges::charge_at(const InterfaceEdge& e, double 
     return {cw * q, cw * q_n, cw * q_p, rw * r, rw * r_n, rw * r_p, rw * h, rw * h_n, rw * h_p};
 }
 
+InterfaceEdges::ChargeSmallSignal InterfaceEdges::charge_small_signal(
+    const InterfaceEdge& e, double n, double p, const InterfaceStatistics& s,
+    std::complex<double> inv_weight) const {
+    using Complex = std::complex<double>;
+    const physics::Degeneracy gn = s.fermi_dirac
+                                       ? physics::fermi_dirac_degeneracy(s.n_ie, s.log_dos_n, n)
+                                       : physics::Degeneracy{0.0, 0.0};
+    const physics::Degeneracy gp = s.fermi_dirac
+                                       ? physics::fermi_dirac_degeneracy(s.n_ie, s.log_dos_p, p)
+                                       : physics::Degeneracy{0.0, 0.0};
+    Complex q_n, q_p, r_n, r_p, h_n, h_p;
+    for (std::size_t k = e.first_level; k < e.last_level; ++k) {
+        // As charge_at's time step, linearized about the steady occupancy f: the occupancy moves
+        // by df = (f_n dn + f_p dp), (1 / w + D) f_n = cn - f cn (1 + dn1), likewise f_p.
+        const InterfaceLevel& l = levels_[k];
+        const double n1 = s.n_ie * std::exp(gn.log_gamma + l.tau);
+        const double p1 = s.n_ie * std::exp(gp.log_gamma - l.tau);
+        const double dn1 = n1 * gn.d_density, dp1 = p1 * gp.d_density;
+        const double D = l.cn * (n + n1) + l.cp * (p + p1);
+        const double f = physics::trap_kinetics(n, p, n1, dn1, p1, dp1, l.cn, l.cp).occupied;
+        const Complex den = inv_weight + D;
+        const Complex f_n = (l.cn - f * l.cn * (1.0 + dn1)) / den;
+        const Complex f_p = (l.cp * dp1 - f * l.cp * (1.0 + dp1)) / den;
+        const double N = l.density_cm2;
+        q_n -= N * f_n;
+        q_p -= N * f_p;
+        r_n += N * l.cn * (1.0 - f_n * (n + n1) - f * (1.0 + dn1));
+        r_p -= N * l.cn * f_p * (n + n1);
+        h_n += N * l.cp * f_n * (p + p1);
+        h_p += N * l.cp * (f_p * (p + p1) + f * (1.0 + dp1) - dp1);
+    }
+    if (e.velocity_n > 0.0 && e.velocity_p > 0.0) {
+        const physics::EquilibriumProduct E =
+            s.fermi_dirac ? physics::fermi_dirac_equilibrium_product(s.n_ie, gn, gp)
+                          : physics::boltzmann_equilibrium_product(s.n_ie);
+        const physics::RecombinationRate v = physics::srh_recombination(
+            n, p, E, s.n_ie, 1.0 / e.velocity_n, 1.0 / e.velocity_p);
+        r_n += v.d_dn;
+        r_p += v.d_dp;
+        h_n += v.d_dn;
+        h_p += v.d_dp;
+    }
+    const double cw = e.charge_weight, rw = e.rate_weight;
+    return {cw * q_n, cw * q_p, rw * r_n, rw * r_p, rw * h_n, rw * h_p};
+}
+
+InterfaceSmallSignal InterfaceEdges::small_signal(const InterfaceEdge& e, double psi_i,
+                                                  double psi_s, double n_s, double p_s,
+                                                  const InterfaceStatistics& s,
+                                                  std::complex<double> inv_weight) const {
+    using Complex = std::complex<double>;
+    // The steady interface potential, then drift_at's implicit derivatives with the complex
+    // partials of the charge and rates.
+    const double psi = drift_at(e, psi_i, psi_s, n_s, p_s, s, nullptr, {}).psi;
+    const physics::Degeneracy gn = s.fermi_dirac
+                                       ? physics::fermi_dirac_degeneracy(s.n_ie, s.log_dos_n, n_s)
+                                       : physics::Degeneracy{0.0, 0.0};
+    const physics::Degeneracy gp = s.fermi_dirac
+                                       ? physics::fermi_dirac_degeneracy(s.n_ie, s.log_dos_p, p_s)
+                                       : physics::Degeneracy{0.0, 0.0};
+    const double xi_n = std::log(n_s / s.n_ie) - gn.log_gamma;
+    const double xi_p = std::log(p_s / s.n_ie) - gp.log_gamma;
+    const double dxi_n = 1.0 / n_s - gn.d_density;
+    const double dxi_p = 1.0 / p_s - gp.d_density;
+    const physics::DensityResult nI =
+        detail::density(s.fermi_dirac, s.n_ie, s.log_dos_n, xi_n + (psi - psi_s));
+    const physics::DensityResult pI =
+        detail::density(s.fermi_dirac, s.n_ie, s.log_dos_p, xi_p - (psi - psi_s));
+    const ChargeSmallSignal c = charge_small_signal(e, nI.density, pI.density, s, inv_weight);
+    const double Nd = nI.d_eta, Pd = pI.d_eta;
+    const double pn[4] = {0.0, -Nd, Nd * dxi_n, 0.0};
+    const double pp[4] = {0.0, Pd, 0.0, Pd * dxi_p};
+    const double gi = e.g_insulator, gs = e.g_semiconductor, G = gi + gs;
+    const Complex D = G - (c.d_n * Nd - c.d_p * Pd);
+    const double unit_i[4] = {1.0, 0.0, 0.0, 0.0}, unit_s[4] = {0.0, 1.0, 0.0, 0.0};
+    InterfaceSmallSignal r{};
+    for (std::size_t k = 0; k < 4; ++k) {
+        const Complex Fx = -gi * unit_i[k] - gs * unit_s[k] - (c.d_n * pn[k] + c.d_p * pp[k]);
+        const Complex dpsi = -Fx / D;
+        r.d_flux_insulator[k] = gi * (dpsi - unit_i[k]);
+        r.d_flux_semiconductor[k] = gs * (dpsi - unit_s[k]);
+        const Complex dn = pn[k] + Nd * dpsi, dp = pp[k] - Pd * dpsi;
+        r.d_rate[k] = c.rate_n * dn + c.rate_p * dp;
+        r.d_rate_p[k] = c.rate_hn * dn + c.rate_hp * dp;
+    }
+    return r;
+}
+
 InterfaceDrift InterfaceEdges::drift(const InterfaceEdge& e, double psi_i, double psi_s,
                                      double n_s, double p_s, const InterfaceStatistics& s,
                                      const TrapStep* step) const {
