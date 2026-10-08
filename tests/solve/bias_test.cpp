@@ -403,18 +403,34 @@ TEST_CASE("bias: PARDISO, one analysis per Newton run and the diode gates (Unit 
     REQUIRE(counts.solves >= n);
     REQUIRE(counts.solves <= 2 * n);
 
+    // Each current within 1e-10 of Eigen's, or within its resolution where that is larger: near
+    // zero bias the current is close to its rounding floor, and the two backends' rounding differs
+    // with the machine (identical to 2e-15 on the development machine, 5.7e-9 relative on CI's).
     solve::BiasOptions options;
     options.linear = pardiso;
-    std::vector<double> V;
-    for (int k = 0; k <= 14; ++k) V.push_back(0.05 * k);
-    const auto Je = sweep(d, V);
-    const auto Jp = sweep(d, V, options);
-    double worst = 0.0;
-    for (std::size_t k = 1; k < V.size(); ++k) worst = std::max(worst, std::abs(Jp[k] / Je[k] - 1.0));
-    std::printf("pardiso diode: J(0.5 V) %.10e (Eigen %.10e), worst relative difference %.2e\n",
-                Jp[10], Je[10], worst);
-    REQUIRE(close(Jp[10], 1.280e-2, 0.01));
-    REQUIRE(worst < 1e-10);
+    std::vector<std::vector<double>> points;
+    for (int k = 0; k <= 14; ++k) points.push_back({0.05 * k, 0.0});
+    const auto e = solve::sweep_bias(d, points);
+    const auto p = solve::sweep_bias(d, points, options);
+    REQUIRE(e.has_value());
+    REQUIRE(p.has_value());
+    REQUIRE(!e->stopped);
+    REQUIRE(!p->stopped);
+    double worst = 0.0, worst_relative = 0.0;
+    for (std::size_t k = 1; k < points.size(); ++k) {
+        const double Je = e->points[k].terminal_current[0], Jp = p->points[k].terminal_current[0];
+        const double bound =
+            std::max(1e-10 * std::abs(Je), e->points[k].terminal_current_resolution[0]);
+        worst = std::max(worst, std::abs(Jp - Je) / bound);
+        worst_relative = std::max(worst_relative, std::abs(Jp / Je - 1.0));
+    }
+    const double J05 = p->points[10].terminal_current[0];
+    std::printf("pardiso diode: J(0.5 V) %.10e (Eigen %.10e), worst relative difference %.2e, "
+                "worst against max(1e-10 |J|, resolution) %.3f\n",
+                J05, e->points[10].terminal_current[0], worst_relative, worst);
+    REQUIRE(close(J05, 1.280e-2, 0.01));
+    REQUIRE(std::abs(J05 / e->points[10].terminal_current[0] - 1.0) < 1e-10);
+    REQUIRE(worst <= 1.0);
 }
 
 TEST_CASE("bias: PARDISO cost on 3D diode Jacobians (Unit 18 measurement)", "[.pardiso_perf]") {
