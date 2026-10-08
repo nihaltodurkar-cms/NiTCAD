@@ -1,6 +1,7 @@
 #include "NiTCAD/solve/bias.hpp"
 
 #include <cmath>
+#include <optional>
 #include <cstddef>
 #include <string>
 #include <utility>
@@ -113,7 +114,6 @@ std::expected<results::Sweep, base::Error> sweep_bias(const device::Device& devi
     if (!solver) return std::unexpected(std::move(solver.error()));
 
     const int D = device.mesh().dimension();
-    const double current_scale = scaling->J0 * std::pow(scaling->L_D, D - 1);
     const double charge_scale = detail::charge_scale(*scaling, D);
     const std::size_t edges = device.mesh().edges().size();
 
@@ -155,6 +155,15 @@ std::expected<results::Sweep, base::Error> sweep_bias(const device::Device& devi
 
     auto system = assemble::DriftDiffusion::create(device, *scaling, options.models);
     if (!system) return std::unexpected(std::move(system.error()));
+    // The same system without impact ionization, for the retry of a failed point (below).
+    std::optional<assemble::DriftDiffusion> plain;
+    std::optional<linalg::LinearSolver> plain_solver;
+    if (options.models.impact_ionization) {
+        assemble::PhysicsModels models = options.models;
+        models.impact_ionization = false;
+        plain.emplace(*assemble::DriftDiffusion::create(device, *scaling, models));  // as above
+        plain_solver.emplace(*linalg::LinearSolver::create(options.linear));        // as above
+    }
     results::Sweep sweep;
     sweep.run = make_run_record(device, options, points, initial);
 
@@ -189,31 +198,29 @@ std::expected<results::Sweep, base::Error> sweep_bias(const device::Device& devi
                    const IterationObserver& observe) -> std::expected<void, base::Error> {
                    if (auto ok = system->set_bias(points[k]); !ok) return ok;  // checked
                    system->stamp_contacts(x);
-                   if (auto ok = newton_solve(*system, x, options.newton, *solver,
+                   const std::vector<double> stamped = x;
+                   auto solved = newton_solve(*system, x, options.newton, *solver,
                                               point.convergence, control.stop, observe);
-                       !ok) {
-                       return ok;
+                   // With impact ionization a point that fails is retried from its stamped start,
+                   // first converged without the generation (legacy device.py, its 0.0 stage):
+                   // stamping a new bias puts the whole step across the cell beside each contact,
+                   // and the generation at that transient field can swamp the iterations. Not
+                   // first, so a state on a high-current branch (a snapback) is solved where it
+                   // is; the retry's iterations are recorded but not reported.
+                   if (!solved && plain && solved.error().code != base::ErrorCode::cancelled) {
+                       x = stamped;
+                       (void)plain->set_bias(points[k]);  // checked
+                       results::ConvergenceRecord unused;
+                       if (auto ok = newton_solve(*plain, x, options.newton, *plain_solver, unused,
+                                                  control.stop);
+                           !ok) {
+                           return ok;
+                       }
+                       solved = newton_solve(*system, x, options.newton, *solver,
+                                             point.convergence, control.stop);
                    }
-                   point.fields = {std::vector<double>(nodes), std::vector<double>(nodes),
-                                   std::vector<double>(nodes)};
-                   for (std::size_t i = 0; i < nodes; ++i) {
-                       point.fields.potential_V[i] = x[3 * i] * scaling->V_T;
-                       point.fields.n_cm3[i] = x[3 * i + 1] * scaling->Ns;
-                       point.fields.p_cm3[i] = x[3 * i + 2] * scaling->Ns;
-                   }
-                   point.bands = detail::band_diagram(system->band_edges(x), scaling->V_T);
-                   point.terminal_current = system->terminal_currents(x);
-                   for (double& I : point.terminal_current) I *= current_scale;
-                   point.terminal_current_resolution = system->terminal_current_resolution(x);
-                   for (double& I : point.terminal_current_resolution) I *= current_scale;
-                   point.gate_charge = system->gate_charges(x);
-                   for (double& Q : point.gate_charge) Q *= charge_scale;
-                   point.interface_trap_charge = system->interface_trap_charges(x);
-                   for (double& Q : point.interface_trap_charge) Q *= charge_scale;
-                   for (const auto& [jn, jp] : system->edge_currents(x)) {
-                       point.edge_current_n.push_back(jn * current_scale);
-                       point.edge_current_p.push_back(jp * current_scale);
-                   }
+                   if (!solved) return solved;
+                   detail::drift_diffusion_point(*system, x, *scaling, D, point);
                    return {};
                });
     return sweep;

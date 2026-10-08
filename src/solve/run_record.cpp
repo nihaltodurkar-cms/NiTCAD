@@ -1,5 +1,5 @@
-// The run records of a bias sweep, a transient run and a small-signal run (ARCHITECTURE.md 6.6):
-// an identity digest of every input and the options as named settings.
+// The run records of a bias sweep, a transient run, a small-signal run and a trace (ARCHITECTURE.md
+// 6.6): an identity digest of every input and the options as named settings.
 #include <bit>
 #include <cstddef>
 #include <cstdint>
@@ -15,6 +15,7 @@
 #include "NiTCAD/physics/semiconductor.hpp"
 #include "NiTCAD/solve/bias.hpp"
 #include "NiTCAD/solve/small_signal.hpp"
+#include "NiTCAD/solve/trace.hpp"
 #include "NiTCAD/solve/transient.hpp"
 
 namespace NiTCAD::solve {
@@ -103,6 +104,11 @@ std::vector<std::pair<std::string, double>> settings(const BiasOptions& o) {
         s.emplace_back("models.auger", o.models.auger ? 1.0 : 0.0);
         s.emplace_back("models.field_mobility", o.models.field_mobility ? 1.0 : 0.0);
         s.emplace_back("models.radiative", o.models.radiative ? 1.0 : 0.0);
+        // Unit 19: recorded only when on, so the runs without it keep their identity.
+        if (o.models.impact_ionization) {
+            s.emplace_back("models.impact_ionization", 1.0);
+            s.emplace_back("models.impact_current_resolution", o.models.impact_current_resolution);
+        }
     }
     if (o.Ns_override) s.emplace_back("scaling.Ns_override", *o.Ns_override);
     return s;
@@ -196,6 +202,23 @@ void device_and_settings(Digest& d, const device::Device& device, const BiasOpti
             d.real(f.recombination_velocity_p_cm_s);
         }
     }
+    // The impact-ionization coefficients, when the model is on (Unit 19; a run without it keeps its
+    // digest).
+    if (options.equations == Equations::drift_diffusion && options.models.impact_ionization) {
+        d.text("impact_ionization");
+        for (const device::Region& r : device.regions()) {
+            if (device::is_insulator(r)) continue;
+            const physics::ImpactIonizationParameters& ii =
+                std::get<physics::Semiconductor>(r.material).parameters().impact_ionization;
+            for (const auto& c : {ii.electron, ii.hole}) {
+                for (const double v : {c.A_low_per_cm, c.B_low_V_per_cm, c.A_high_per_cm,
+                                       c.B_high_V_per_cm, c.switch_V_per_cm}) {
+                    d.real(v);
+                }
+            }
+            d.real(ii.phonon_energy_eV);
+        }
+    }
     // Interface transport acts on the continuity equations only.
     if (options.equations == Equations::drift_diffusion) {
         d.integer(device.interfaces().size());
@@ -285,6 +308,24 @@ results::RunRecord make_run_record(const device::Device& device,
     d.reals(options.frequencies_Hz);
     d.reals(options.field_frequencies_Hz);
     initial_state(d, initial, options.steady.equations == Equations::drift_diffusion);
+    return {d.value(), named};
+}
+
+results::RunRecord make_run_record(const device::Device& device, const TraceOptions& options,
+                                   const results::NodeFields* initial) {
+    Digest d;
+    auto named = settings(options.steady);
+    named.emplace_back("trace.contact", static_cast<double>(options.contact));
+    named.emplace_back("trace.end_V", options.end_V);
+    named.emplace_back("trace.step_V", options.step_V);
+    named.emplace_back("trace.max_step_V", options.max_step_V);
+    named.emplace_back("trace.min_step_V", options.min_step_V);
+    if (options.current_limit) named.emplace_back("trace.current_limit", *options.current_limit);
+    named.emplace_back("trace.max_points", static_cast<double>(options.max_points));
+    named.emplace_back("trace.density_floor_cm3", options.density_floor_cm3);
+    device_and_settings(d, device, options.steady, named);
+    d.reals(options.start_V);
+    initial_state(d, initial, true);
     return {d.value(), named};
 }
 

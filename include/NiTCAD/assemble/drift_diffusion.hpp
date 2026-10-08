@@ -94,6 +94,40 @@
 // the history x0 and its steady trap occupancies, is this matrix at s = r: backward Euler is exact
 // for the exponential e^(s t) when h = 1 / s. The total current of a contact is its conduction
 // current plus s times its charge.
+//
+// Impact ionization (Unit 19, models.impact_ionization; legacy device.py M15 and ii_grid.py):
+// the electron row of a semiconductor node off the ohmic contacts gains + V_i G / R0 and the hole
+// row - V_i G / R0, with G = (alpha_n(E_n) |j_n| + alpha_p(E_p) |j_p|) / q. The field E and the
+// current densities j_n, j_p at the node are vectors reconstructed by least squares from their
+// components along the node's carrier edges (v = P sum_k t_k v_k, t_k the edge's unit vector, P
+// the pseudo-inverse of sum_k t_k t_k^T; on a tensor grid the per-axis mean of the two edges, the
+// legacy's; on any mesh exact for a uniform field). With m = sqrt(|j_c|^2 + eps_c^2), carrier c
+// ionizes at the field along its current, E_c = |E . j_c| / m, and its term is
+// alpha_c(E_c) |j_c|^2 / m: a field across the current does not ionize, G is the same for a
+// current at any angle to the mesh, and G never exceeds alpha(|E|) |j|. For |j| >> eps these are
+// |E . j^| and |j|; through j = 0 they are smooth and vanish with their gradients.
+// eps_c^2 = floor^2 + (rho R_c)^2: floor = impact_current_floor (1e-12 A/cm^2), below which a
+// current fades out of the generation (no generation without current, no kink as a current at
+// rounding level flips its sign between Newton iterates: |j| itself made Newton cycle in a period
+// two), and, optionally, rho = models.impact_current_resolution (0 by default) times R_c, the
+// opposing flux terms the current is the difference of (the mean over the node's edges of
+// a_k (c_a + c_b) sqrt(1 + Delta_k^2), a the edge's low-field factor, c the carrier's density,
+// Delta the potential difference, as a current density). A current is a small difference of large
+// fluxes where the carriers are dense: in the spill-over layer at a junction, where the field and
+// alpha peak, the electron current is rounding, some 1e-14 of the fluxes. Without rho it
+// generates there, a negligible amount (1e-11 against 2e-9 A/cm^2 of leakage, measured), but
+// with the field at breakdown its sign flips can make a trace's corrector cycle; rho = 1e-12
+// removes that and leaves the depleted region (where R is small) alone, but stalls the trace of
+// an open-base transistor at its start. Reverse leakage (1e-9 A/cm^2 and more) is unaffected.
+// OLD / NEW / REASON: the legacy smoothed |J| as sqrt(J^2 + eps^2) with eps 1e-6 of the largest
+// edge current, which generates at zero current and ties every node's generation to that one
+// edge (a dense Jacobian column), and in 2D/3D averaged the per-axis magnitudes; NEW, a vector
+// reconstruction and a local resolution in a form that vanishes at zero current; REASON, no
+// generation from currents the state does not resolve, a local and exact Jacobian (eps's own
+// partials included), and a uniform field reconstructed exactly at any angle.
+// The Jacobian is exact. A node's electron generation reads its neighbours' p (through the hole
+// current) and its hole generation their n: with the model on the pattern gains those two
+// entries per edge direction; with it off nothing changes.
 #pragma once
 
 #include <complex>
@@ -114,6 +148,7 @@
 #include "NiTCAD/base/error.hpp"
 #include "NiTCAD/device/device.hpp"
 #include "NiTCAD/linalg/sparse_matrix.hpp"
+#include "NiTCAD/physics/impact_ionization.hpp"
 #include "NiTCAD/physics/ionization.hpp"
 #include "NiTCAD/physics/semiconductor.hpp"
 #include "NiTCAD/physics/statistics.hpp"
@@ -122,10 +157,14 @@ namespace NiTCAD::assemble {
 
 class DriftDiffusion {
 public:
-    // Errors: those of EquilibriumPoisson::create (scaling temperature).
+    // Errors: those of EquilibriumPoisson::create (scaling temperature); invalid_input for
+    // impact_current_resolution not finite and >= 0 with impact ionization on.
     [[nodiscard]] static std::expected<DriftDiffusion, base::Error> create(
         const device::Device& device, const Scaling& scaling,
         const PhysicsModels& models = {});
+
+    // The current density below which impact ionization fades out (see the header comment).
+    static constexpr double impact_current_floor = 1e-12;  // [A/cm^2]
 
     [[nodiscard]] std::size_t unknowns() const noexcept { return 3 * node_count(); }
     [[nodiscard]] std::size_t node_count() const noexcept { return volume_.size(); }
@@ -296,6 +335,29 @@ private:
     [[nodiscard]] InterfaceDrift interface_at(std::size_t k, std::span<const double> x,
                                               const TimeStep* step) const;
 
+    // Impact ionization (Unit 19; see the header comment). Per node that ionizes: its carrier
+    // edges (in impact_edges_) and the pseudo-inverse of sum t t^T over them (row-major, D x D);
+    // per such edge: the unit vector t from its first to its second node, the field per unit
+    // psi_b - psi_a and the current density per unit scaled flux, and the Jacobian positions of
+    // the node's electron row with the other end's p column and of its hole row with the other
+    // end's n column. Empty when the model is off.
+    struct ImpactNode {
+        std::size_t node;
+        std::size_t first, last;
+        double inverse[9];
+        physics::ImpactIonizationCoefficients n, p;
+        double gamma;  // the temperature factor of the node's material
+    };
+    struct ImpactEdge {
+        std::size_t edge;
+        double t[3];
+        double field;    // [V/cm] per unit (psi_b - psi_a): V_T / length
+        double current;  // [A/cm^2] per unit scaled flux: J0 / scaled coupling area
+        std::size_t n_p, p_n;
+    };
+    void add_impact_generation(std::span<const double> x, std::span<const NodeDegeneracy> g,
+                               std::span<double> f, std::span<double> values) const;
+
     // Per node at state x under Fermi-Dirac statistics; empty under Boltzmann.
     [[nodiscard]] std::vector<NodeDegeneracy> degeneracies(std::span<const double> x) const;
 
@@ -325,6 +387,11 @@ private:
     std::vector<double> psi0_, n0_, p0_;  // Dirichlet values per node (contact nodes only)
     std::vector<EdgeTerm> edges_;
     std::vector<std::size_t> block_;      // per node, 9 positions of its 3x3 diagonal block
+    std::vector<ImpactNode> impact_nodes_;
+    std::vector<ImpactEdge> impact_edges_;
+    int dimension_ = 1;
+    double generation_scale_ = 0.0;        // 1 / R0: [cm^-3 s^-1] to the rows' scaled rate
+    double impact_resolution_ = 0.0;       // models.impact_current_resolution
     std::size_t contact_count_ = 0;
     double rate_scale_ = 0.0;             // Ns / R0: scaled SRH call to R / R0
     double Ns_ = 0.0;

@@ -151,7 +151,8 @@ add_library(nitcad_physics STATIC
   src/physics/thermionic_emission.cpp
   src/physics/ionization.cpp
   src/physics/insulator.cpp
-  src/physics/interface_traps.cpp)
+  src/physics/interface_traps.cpp
+  src/physics/impact_ionization.cpp)
 add_library(NiTCAD::physics ALIAS nitcad_physics)
 target_include_directories(nitcad_physics PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
 target_link_libraries(nitcad_physics PUBLIC NiTCAD::base)
@@ -165,7 +166,8 @@ add_executable(nitcad_physics_test
   tests/physics/field_mobility_test.cpp
   tests/physics/fermi_dirac_test.cpp
   tests/physics/materials_test.cpp
-  tests/physics/interface_traps_test.cpp)
+  tests/physics/interface_traps_test.cpp
+  tests/physics/impact_ionization_test.cpp)
 target_link_libraries(nitcad_physics_test PRIVATE NiTCAD::physics Catch2::Catch2WithMain)
 add_test(NAME physics COMMAND nitcad_physics_test)
 
@@ -204,7 +206,8 @@ add_executable(nitcad_assemble_test
   tests/assemble/heterojunction_test.cpp
   tests/assemble/insulator_test.cpp
   tests/assemble/transient_test.cpp
-  tests/assemble/small_signal_test.cpp)
+  tests/assemble/small_signal_test.cpp
+  tests/assemble/impact_ionization_test.cpp)
 target_link_libraries(nitcad_assemble_test PRIVATE NiTCAD::assemble Catch2::Catch2WithMain)
 add_test(NAME assemble COMMAND nitcad_assemble_test)
 
@@ -221,7 +224,8 @@ add_library(nitcad_solve STATIC
   src/solve/run_record.cpp
   src/solve/waveform.cpp
   src/solve/transient.cpp
-  src/solve/small_signal.cpp)
+  src/solve/small_signal.cpp
+  src/solve/trace.cpp)
 add_library(NiTCAD::solve ALIAS nitcad_solve)
 target_include_directories(nitcad_solve PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
 target_link_libraries(nitcad_solve PUBLIC
@@ -240,7 +244,8 @@ add_executable(nitcad_solve_test
   tests/solve/heterojunction_test.cpp
   tests/solve/insulator_test.cpp
   tests/solve/transient_test.cpp
-  tests/solve/small_signal_test.cpp)
+  tests/solve/small_signal_test.cpp
+  tests/solve/impact_ionization_test.cpp)
 target_link_libraries(nitcad_solve_test PRIVATE NiTCAD::solve Catch2::Catch2WithMain)
 add_test(NAME solve COMMAND nitcad_solve_test)
 # The 2D MOSFET gates (tests/solve/mosfet_test.cpp, hidden tag [.mosfet]) take about a minute in
@@ -249,4 +254,6 @@ if(CMAKE_BUILD_TYPE STREQUAL "Release")
   add_test(NAME solve_mosfet COMMAND nitcad_solve_test "[mosfet]")
   # Likewise the slowest transient gates (tests/solve/transient_test.cpp, hidden tag [.transient]).
   add_test(NAME solve_transient COMMAND nitcad_solve_test "[transient]")
+  # And the breakdown gates (tests/solve/impact_ionization_test.cpp, hidden tag [.breakdown]).
+  add_test(NAME solve_breakdown COMMAND nitcad_solve_test "[breakdown]")
 endif()

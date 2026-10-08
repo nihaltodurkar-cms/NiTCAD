@@ -44,6 +44,28 @@ std::optional<base::Error> check(std::string_view group, std::string_view field,
     return std::nullopt;
 }
 
+// A >= 0 on both branches; a branch with A > 0 needs B > 0 (alpha would not vanish at low field);
+// the switch field positive.
+std::optional<base::Error> check_impact(std::string_view group,
+                                        const ImpactIonizationCoefficients& c) {
+    if (auto e = check(group, "A_low_per_cm", c.A_low_per_cm, Bound::non_negative)) return e;
+    if (auto e = check(group, "A_high_per_cm", c.A_high_per_cm, Bound::non_negative)) return e;
+    if (auto e = check(group, "switch_V_per_cm", c.switch_V_per_cm,
+                       c.A_low_per_cm > 0.0 || c.A_high_per_cm > 0.0 ? Bound::positive
+                                                                     : Bound::non_negative)) {
+        return e;
+    }
+    if (auto e = check(group, "B_low_V_per_cm", c.B_low_V_per_cm,
+                       c.A_low_per_cm > 0.0 ? Bound::positive : Bound::non_negative)) {
+        return e;
+    }
+    if (auto e = check(group, "B_high_V_per_cm", c.B_high_V_per_cm,
+                       c.A_high_per_cm > 0.0 ? Bound::positive : Bound::non_negative)) {
+        return e;
+    }
+    return std::nullopt;
+}
+
 // beta >= 1 keeps dmu/dE finite at E = 0 (the legacy only required beta > 0; its silicon values
 // are 2 and 1).
 std::optional<base::Error> check_saturation(std::string_view group, const CanaliParameters& c) {
@@ -142,6 +164,16 @@ std::expected<Semiconductor, base::Error> Semiconductor::create(
         if (auto e = check(c.group, c.field, c.value, c.bound)) {
             return std::unexpected(std::move(*e));
         }
+    }
+    if (auto e = check_impact("impact_ionization.electron.", p.impact_ionization.electron)) {
+        return std::unexpected(std::move(*e));
+    }
+    if (auto e = check_impact("impact_ionization.hole.", p.impact_ionization.hole)) {
+        return std::unexpected(std::move(*e));
+    }
+    if (auto e = check("impact_ionization.", "phonon_energy_eV",
+                       p.impact_ionization.phonon_energy_eV, non_negative)) {
+        return std::unexpected(std::move(*e));
     }
     return Semiconductor{p};
 }

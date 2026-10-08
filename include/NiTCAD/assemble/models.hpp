@@ -31,6 +31,17 @@ struct PhysicsModels {
     // incomplete_ion flag. Thermionic emission is not a switch here: it is chosen per interface
     // (device::Interface; Unit 15).
     bool incomplete_ionization = false;
+    // Impact ionization (physics/impact_ionization.hpp; drift-diffusion only, Unit 19): generation
+    // (alpha_n |J_n| + alpha_p |J_p|) / q at each node with each material's coefficients, the field
+    // taken along each carrier's current (drift_diffusion.hpp). Off by default, as the legacy.
+    bool impact_ionization = false;
+    // The resolution of a current for impact ionization, relative to the opposing flux terms it is
+    // the difference of (drift_diffusion.hpp): a current at or below it does not ionize. A
+    // numerical option, not physics, off (0) by default: 1e-12 (50 times the measured rounding of
+    // the spill-over layer at a junction) removes the generation of that layer's unresolved
+    // currents and the corrector cycles they cause near breakdown, but stalls the trace of an
+    // open-base transistor at its start (ARCHITECTURE.md 6.2, Unit 19).
+    double impact_current_resolution = 0.0;
 };
 
 }  // namespace NiTCAD::assemble
