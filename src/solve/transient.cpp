@@ -14,6 +14,7 @@
 #include "NiTCAD/solve/newton.hpp"
 #include "fields.hpp"
 #include "relocation.hpp"
+#include "thermal.hpp"
 
 namespace NiTCAD::solve {
 
@@ -37,6 +38,39 @@ struct StepSystem {
     void evaluate(std::span<const double> x, std::span<double> f,
                   linalg::SparseMatrix& j) const {
         dd.evaluate(x, step, f, j);
+    }
+    [[nodiscard]] double update_size(std::span<const double> x,
+                                     std::span<const double> dx) const {
+        return dd.update_size(x, dx);
+    }
+    void apply_update(std::span<double> x, std::span<const double> dx, double max_update) const {
+        dd.apply_update(x, dx, max_update);
+    }
+};
+
+// The steady rows with every node's temperature held at `hold` (the electrothermal start from a
+// given temperature, or of a domain without a heat sink, Unit 23): each heat row becomes
+// tau - hold.
+struct HeldTemperature {
+    const assemble::DriftDiffusion& dd;
+    std::span<const double> hold;  // tau per node
+
+    [[nodiscard]] std::size_t unknowns() const { return dd.unknowns(); }
+    [[nodiscard]] linalg::SparseMatrix make_jacobian() const { return dd.make_jacobian(); }
+    void evaluate(std::span<const double> x, std::span<double> f,
+                  linalg::SparseMatrix& j) const {
+        dd.evaluate(x, f, j);
+        const auto offsets = j.row_offsets();
+        const auto columns = j.col_indices();
+        const std::span<double> values = j.values();
+        for (std::size_t i = 0; i < dd.node_count(); ++i) {
+            const std::size_t r = 4 * i + 3;
+            f[r] = x[r] - hold[i];
+            for (auto k = static_cast<std::size_t>(offsets[r]);
+                 k < static_cast<std::size_t>(offsets[r + 1]); ++k) {
+                values[k] = static_cast<std::size_t>(columns[k]) == r ? 1.0 : 0.0;
+            }
+        }
     }
     [[nodiscard]] double update_size(std::span<const double> x,
                                      std::span<const double> dx) const {
@@ -106,9 +140,6 @@ std::expected<results::Transient, base::Error> solve_transient(
     }
     if (options.steady.equations != Equations::drift_diffusion) {
         return std::unexpected(invalid("a transient run solves the drift-diffusion equations"));
-    }
-    if (options.steady.models.electrothermal) {  // Unit 23, in progress
-        return std::unexpected(invalid("electrothermal does not yet support transient runs"));
     }
     const double t_end = options.t_end_s;
     if (!positive(t_end)) {
@@ -182,15 +213,32 @@ std::expected<results::Transient, base::Error> solve_transient(
                     "densities for every semiconductor node"));
     }
     const BiasOptions& steady = options.steady;
+    // Electrothermal (Unit 23): the thermal contacts' temperatures (steady.thermal_bias_K, one
+    // list, or the device's) for the whole run.
+    const bool thermal = steady.models.electrothermal;
+    std::vector<double> thermal_bias;
+    if (thermal) {
+        auto t = detail::thermal_points(device, steady.thermal_bias_K, 1);
+        if (!t) return std::unexpected(std::move(t.error()));
+        thermal_bias = std::move(t->front());
+        if (initial != nullptr &&
+            !detail::valid_temperature(*initial, device.mesh().node_count())) {
+            return std::unexpected(invalid(
+                "initial temperature needs one finite, positive value per node, or none"));
+        }
+    }
     auto scaling = assemble::make_scaling(device, steady.Ns_override);
     if (!scaling) return std::unexpected(std::move(scaling.error()));
     auto solver = linalg::LinearSolver::create(steady.linear);
     if (!solver) return std::unexpected(std::move(solver.error()));
     auto system = assemble::DriftDiffusion::create(device, *scaling, steady.models);
     if (!system) return std::unexpected(std::move(system.error()));
+    if (thermal) (void)system->set_thermal_bias(thermal_bias);  // checked
     const assemble::DriftDiffusion& dd = *system;
 
     const std::size_t nodes = device.mesh().node_count();
+    const std::size_t m = dd.stride();
+    const double T0 = scaling->temperature_K;
     const int D = device.mesh().dimension();
     const double current_scale = scaling->J0 * std::pow(scaling->L_D, D - 1);
     const double charge_scale = detail::charge_scale(*scaling, D);
@@ -207,6 +255,17 @@ std::expected<results::Transient, base::Error> solve_transient(
         if (c.kind == device::ContactKind::gate) continue;  // box rows
         for (const mesh::NodeId i : c.nodes) measure[static_cast<std::size_t>(i)] = Measure::none;
     }
+    // Electrothermal: the temperature rise of every node off the isothermal sinks, absolute in
+    // units of T0 (as the potential in V_T).
+    std::vector<char> heated(nodes, thermal ? 1 : 0);
+    if (thermal) {
+        for (const device::ThermalContact& c : device.thermal_contacts()) {
+            if (c.kind != device::ThermalContactKind::isothermal) continue;
+            for (const mesh::NodeId i : device.mesh().find_boundary(c.boundary)->nodes) {
+                heated[static_cast<std::size_t>(i)] = 0;
+            }
+        }
+    }
 
     results::Transient run;
     run.run = make_run_record(device, options, waveforms, initial);
@@ -215,9 +274,12 @@ std::expected<results::Transient, base::Error> solve_transient(
     std::vector<double> x(dd.unknowns());
     if (initial != nullptr) {
         for (std::size_t i = 0; i < nodes; ++i) {
-            x[3 * i] = initial->potential_V[i] / scaling->V_T;
-            x[3 * i + 1] = initial->n_cm3[i] / scaling->Ns;
-            x[3 * i + 2] = initial->p_cm3[i] / scaling->Ns;
+            x[m * i] = initial->potential_V[i] / scaling->V_T;
+            x[m * i + 1] = initial->n_cm3[i] / scaling->Ns;
+            x[m * i + 2] = initial->p_cm3[i] / scaling->Ns;
+            if (thermal && !initial->temperature_K.empty()) {
+                x[4 * i + 3] = (initial->temperature_K[i] - T0) / T0;  // the rise tau
+            }
         }
     } else {
         auto start = solve_equilibrium(
@@ -248,9 +310,21 @@ std::expected<results::Transient, base::Error> solve_transient(
         };
         results::ConvergenceRecord record;
         int relocations = 0;
+        // Electrothermal: with a given initial temperature, or a part of the device with no heat
+        // sink (no steady temperature, DECISIONS.md T7), the temperature at t = 0 is held (the
+        // given one, or T0; the isothermal sinks at theirs) and only the electrical rows are
+        // solved; otherwise the starting state is the full electrothermal steady state.
+        const bool hold = thermal && ((initial != nullptr && !initial->temperature_K.empty()) ||
+                                      !dd.heat_sinks_complete());
+        std::vector<double> held(nodes);
+        for (std::size_t i = 0; hold && i < nodes; ++i) held[i] = x[4 * i + 3];
         if (auto ok = detail::solve_relocating(
                 *system, x,
                 [&] {
+                    if (hold) {
+                        return newton_solve(HeldTemperature{dd, held}, x, steady.newton, *solver,
+                                            record, control.stop, observe);
+                    }
                     return newton_solve(dd, x, steady.newton, *solver, record, control.stop,
                                         observe);
                 },
@@ -273,9 +347,10 @@ std::expected<results::Transient, base::Error> solve_transient(
         snap.fields = {std::vector<double>(nodes), std::vector<double>(nodes),
                        std::vector<double>(nodes)};
         for (std::size_t i = 0; i < nodes; ++i) {
-            snap.fields.potential_V[i] = s.x[3 * i] * scaling->V_T;
-            snap.fields.n_cm3[i] = s.x[3 * i + 1] * scaling->Ns;
-            snap.fields.p_cm3[i] = s.x[3 * i + 2] * scaling->Ns;
+            snap.fields.potential_V[i] = s.x[m * i] * scaling->V_T;
+            snap.fields.n_cm3[i] = s.x[m * i + 1] * scaling->Ns;
+            snap.fields.p_cm3[i] = s.x[m * i + 2] * scaling->Ns;
+            if (thermal) snap.fields.temperature_K.push_back(T0 + T0 * s.x[4 * i + 3]);
         }
         snap.bands = detail::band_diagram(dd.band_edges(s.x), scaling->V_T);
         for (const auto& [jn, jp] : dd.edge_currents(s.x)) {
@@ -294,6 +369,10 @@ std::expected<results::Transient, base::Error> solve_transient(
     first.terminal_current = first.conduction_current;
     first.contact_charge = scale(history.back().charges, charge_scale);
     first.interface_trap_charge = scale(dd.interface_trap_charges(x), charge_scale);
+    if (thermal) {
+        first.thermal_contact_heat =
+            scale(dd.thermal_contact_heat(x), scaling->V_T * current_scale);
+    }
     run.points.push_back(std::move(first));
     run.snapshots.push_back(snapshot(history.back()));
 
@@ -427,11 +506,15 @@ std::expected<results::Transient, base::Error> solve_transient(
             };
             double err = 0.0;
             for (std::size_t i = 0; i < nodes; ++i) {
+                if (heated[i] != 0) {
+                    err = std::max(err, std::abs(factor * (next.x[4 * i + 3] -
+                                                           predicted(&State::x, 4 * i + 3))));
+                }
                 if (measure[i] == Measure::none) continue;
-                err = std::max(err, std::abs(factor * (next.x[3 * i] -
-                                                       predicted(&State::x, 3 * i))));
+                err = std::max(err, std::abs(factor * (next.x[m * i] -
+                                                       predicted(&State::x, m * i))));
                 if (measure[i] != Measure::carriers) continue;
-                for (const std::size_t k : {3 * i + 1, 3 * i + 2}) {
+                for (const std::size_t k : {m * i + 1, m * i + 2}) {
                     const double e = factor * (next.x[k] - predicted(&State::x, k));
                     err = std::max(err, std::abs(e) / (std::abs(next.x[k]) + density_ref));
                 }
@@ -460,8 +543,19 @@ std::expected<results::Transient, base::Error> solve_transient(
             }
         }
 
-        // Accepted.
+        // Accepted (an electrothermal step whose temperature leaves a material's range stops the
+        // run, T10).
+        if (thermal) {
+            if (auto e = detail::converged_temperature(device, x, T0)) {
+                run.stopped = std::move(*e);
+                return run;
+            }
+        }
         results::TimePoint point{t_new, step_s, formula.order, ratio, bias};
+        if (thermal) {
+            point.thermal_contact_heat =
+                scale(dd.thermal_contact_heat(x, &step), scaling->V_T * current_scale);
+        }
         point.conduction_current = scale(dd.conduction_currents(x, step), current_scale);
         point.displacement_current.resize(contacts.size());
         const std::vector<double> q_old =

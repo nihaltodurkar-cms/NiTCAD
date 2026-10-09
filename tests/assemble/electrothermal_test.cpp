@@ -11,6 +11,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <span>
 #include <string>
 #include <utility>
 #include <vector>
@@ -162,11 +163,24 @@ std::vector<std::vector<double>> dense(const linalg::SparseMatrix& a) {
 // The finite-difference gate (as impact_ionization_test.cpp): every column, central differences,
 // the worst error over the column's largest entry, each column's error the smallest at steps of
 // 1e-5, 1e-6 and 1e-7 max(|x|, 1).
-double fd_jacobian_error(const DriftDiffusion& dd, std::vector<double> x) {
+// With a time step, of the step's rows.
+double fd_jacobian_error(const DriftDiffusion& dd, std::vector<double> x,
+                         const DriftDiffusion::TimeStep* step = nullptr) {
     const std::size_t n = dd.unknowns();
     std::vector<double> f(n), fp(n), fm(n);
     auto jacobian = dd.make_jacobian();
-    dd.evaluate(x, f, jacobian);
+    if (step != nullptr) {
+        dd.evaluate(x, *step, f, jacobian);
+    } else {
+        dd.evaluate(x, f, jacobian);
+    }
+    const auto residual = [&](std::span<double> out) {
+        if (step != nullptr) {
+            dd.residual(x, *step, out);
+        } else {
+            dd.residual(x, out);
+        }
+    };
     const auto j = dense(jacobian);
     double worst = 0.0;
     for (std::size_t c = 0; c < n; ++c) {
@@ -175,13 +189,13 @@ double fd_jacobian_error(const DriftDiffusion& dd, std::vector<double> x) {
         double best = std::numeric_limits<double>::infinity();
         for (const double relative : {1e-5, 1e-6, 1e-7}) {
             const double base = x[c];
-            const double step = relative * std::max(std::abs(base), 1.0);
-            x[c] = base + step;
+            const double delta = relative * std::max(std::abs(base), 1.0);
+            x[c] = base + delta;
             const double up = x[c];
-            dd.residual(x, fp);
-            x[c] = base - step;
+            residual(fp);
+            x[c] = base - delta;
             const double down = x[c];
-            dd.residual(x, fm);
+            residual(fm);
             x[c] = base;
             double error = 0.0;
             for (std::size_t r = 0; r < n; ++r) {
@@ -250,6 +264,30 @@ TEST_CASE("electrothermal assemble: the finite-difference Jacobian gate") {
         const auto x = heated(dd, d, s, 0.05, 11, 0.3, c.o.fermi ? 1e20 : 1e16);
         const double error = fd_jacobian_error(dd, x);
         CAPTURE(c.name, error);
+        REQUIRE(error <= 1e-6);
+    }
+}
+
+TEST_CASE("electrothermal assemble: the finite-difference Jacobian gate of a time step") {
+    // The storage terms: carriers in the continuity rows, rho c dT/dt and the carriers' stored
+    // energy in the heat rows, from a history state that differs from the new one everywhere.
+    for (const Options o : {Options{.D = 1, .hetero = true},
+                            Options{.D = 2, .nodes = 9, .hetero = true, .oxide = true},
+                            Options{.D = 1, .hetero = true, .fermi = true, .field = true}}) {
+        const device::Device d = diode(o);
+        const auto s = *assemble::make_scaling(d);
+        auto dd = *DriftDiffusion::create(
+            d, s, {.field_mobility = o.field, .fermi_dirac = o.fermi, .electrothermal = true});
+        REQUIRE(dd.set_bias(std::vector<double>{0.4, -0.3}).has_value());
+        const double n_cm3 = o.fermi ? 1e20 : 1e16;
+        const auto before = heated(dd, d, s, 0.05, 5, 0.25, n_cm3);
+        const auto x = heated(dd, d, s, 0.05, 11, 0.3, n_cm3);
+        const std::vector<double> storage = dd.storage(before);
+        REQUIRE(storage.size() == 3 * dd.node_count());
+        REQUIRE(dd.storage_width() == 3);
+        const DriftDiffusion::TimeStep step{0.7, storage, {}};
+        const double error = fd_jacobian_error(dd, x, &step);
+        CAPTURE(o.D, o.fermi, error);
         REQUIRE(error <= 1e-6);
     }
 }

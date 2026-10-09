@@ -9,7 +9,9 @@
 
 #include <algorithm>
 #include <cmath>
+#include <complex>
 #include <cstddef>
+#include <numbers>
 #include <string>
 #include <utility>
 #include <vector>
@@ -341,6 +343,127 @@ TEST_CASE("electrothermal solve: Peltier heat at a current-carrying contact") {
     REQUIRE(std::abs(dQ_left / dI_left / expected - 1.0) <= 1e-7);
 }
 
+TEST_CASE("electrothermal solve: a diode with R_th against the lumped model; the runaway fold") {
+    // A 1 um pn diode with kappa 1e3 times silicon's (uniform T: the internal drop is some 1e-6 K;
+    // 1e8 would leave the R_th rows 1e-13 of the conduction, singular to working precision) and
+    // an R_th of 2 K cm^2/W to
+    // 300 K at each end (R_eff = 1 K cm^2/W). By the energy balance every watt of sum I V leaves
+    // through the two resistances, so T = 300 + R_eff V I and the current is the isothermal
+    // device's at that T: the lumped electrothermal model is exact here. Each lumped point is
+    // solved by bisection in T over isothermal solves. The heating raises the current, which
+    // raises the heating: past the fold of the I-V curve (dV/dI = 0) the branch turns back, and
+    // trace_bias follows it; the fold's bias is the largest V of the lumped V(T) along
+    // T - 300 = R_eff V I_iso(V, T).
+    const double R = 2.0, R_eff = 1.0;
+    Bar b;
+    b.donors = pn_donors;
+    b.acceptors = pn_acceptors;
+    b.material.thermal.conductivity_W_cmK *= 1e3;
+    for (auto& t : b.thermal) t = {t.name, t.boundary, device::ThermalContactKind::resistance,
+                                   300.0, R};
+    const device::Device d = bar(b);
+    const auto isothermal_current = [&](double V, double T) {
+        Bar iso = b;
+        iso.temperature_K = T;
+        iso.thermal.clear();
+        solve::BiasOptions plain;
+        plain.newton.tol_update = 1e-12;
+        return solved(bar(iso), {V, 0.0}, plain).terminal_current[0];
+    };
+    // Lumped T at bias V: the root of T - 300 - R_eff V I_iso(V, T) below the fold (bisection
+    // from 300 K up to where the heating overtakes).
+    const auto lumped_T = [&](double V) {
+        double lo = 300.0, hi = 300.0;
+        while (hi - 300.0 <= R_eff * V * isothermal_current(V, hi)) hi += 5.0;
+        for (int k = 0; k < 50; ++k) {
+            const double T = 0.5 * (lo + hi);
+            (T - 300.0 <= R_eff * V * isothermal_current(V, T) ? lo : hi) = T;
+        }
+        return 0.5 * (lo + hi);
+    };
+    auto o = thermal_options();
+    for (const double V : {0.55, 0.62}) {
+        const auto p = solved(d, {V, 0.0}, o);
+        const double T = lumped_T(V);
+        const double I = isothermal_current(V, T);
+        double spread = 0.0;
+        for (const double Ti : p.fields.temperature_K) {
+            spread = std::max(spread, std::abs(Ti - p.fields.temperature_K.front()));
+        }
+        CAPTURE(V, T, p.fields.temperature_K.front(), I, p.terminal_current[0], spread);
+        REQUIRE(spread <= 1e-6);
+        REQUIRE(std::abs(p.fields.temperature_K.front() - T) <= 1e-6 * (T - 300.0));
+        REQUIRE(std::abs(p.terminal_current[0] / I - 1.0) <= 1e-6);
+    }
+
+    // The fold: the trace's largest bias against the lumped V(T)'s maximum.
+    solve::TraceOptions trace;
+    trace.steady = o;
+    trace.contact = 0;
+    trace.start_V = {0.5, 0.0};
+    trace.end_V = 1.0;
+    trace.step_V = 0.02;
+    trace.max_step_V = 0.02;
+    const auto run = solve::trace_bias(d, trace);
+    REQUIRE(run.has_value());
+    // V and T along the branch; it must turn back.
+    std::size_t top = 0;
+    for (std::size_t k = 0; k < run->points.size(); ++k) {
+        if (run->points[k].bias_V[0] > run->points[top].bias_V[0]) top = k;
+    }
+    REQUIRE(top > 0);
+    REQUIRE(top + 1 < run->points.size());
+    REQUIRE(run->points.back().bias_V[0] < run->points[top].bias_V[0]);
+    // The branch carries on past the fold until the temperature leaves silicon's range (near
+    // 857 K, holes' mu_max below mu_min): the trace stops there (T10) with its points.
+    REQUIRE(run->stopped);
+    REQUIRE(run->stopped->code == ErrorCode::non_convergence);
+    REQUIRE(run->points.back().fields.temperature_K.front() > 800.0);
+    // The trace's fold: the vertex of the parabola V(T) through the top point and its neighbours.
+    const auto at = [&](std::size_t k) {
+        return std::pair{run->points[k].fields.temperature_K.front(), run->points[k].bias_V[0]};
+    };
+    const auto [T1, V1] = at(top - 1);
+    const auto [T2, V2] = at(top);
+    const auto [T3, V3] = at(top + 1);
+    const double s12 = (V2 - V1) / (T2 - T1), s23 = (V3 - V2) / (T3 - T2);
+    const double curvature = (s23 - s12) / (T3 - T1);  // V = V2 + s (T - T2) + c (T - T2)^2
+    const double slope = s12 + curvature * (T2 - T1);   // at T2
+    const double traced = V2 - slope * slope / (4.0 * curvature);
+    // The lumped fold: the largest V on T - 300 = R_eff V I_iso(V, T), V(T) by bisection in V
+    // (V I_iso rises with V), its maximum by golden section in T.
+    const auto lumped_V = [&](double T) {
+        double lo = 0.5, hi = 0.8;
+        for (int k = 0; k < 45; ++k) {
+            const double V = 0.5 * (lo + hi);
+            (R_eff * V * isothermal_current(V, T) < T - 300.0 ? lo : hi) = V;
+        }
+        return 0.5 * (lo + hi);
+    };
+    double a = T2 - 3.0, c = T2 + 3.0;
+    const double g = 0.5 * (std::sqrt(5.0) - 1.0);
+    double x1 = c - g * (c - a), x2 = a + g * (c - a);
+    double f1 = lumped_V(x1), f2 = lumped_V(x2);
+    for (int k = 0; k < 30; ++k) {
+        if (f1 > f2) {
+            c = x2;
+            x2 = x1;
+            f2 = f1;
+            x1 = c - g * (c - a);
+            f1 = lumped_V(x1);
+        } else {
+            a = x1;
+            x1 = x2;
+            f1 = f2;
+            x2 = a + g * (c - a);
+            f2 = lumped_V(x2);
+        }
+    }
+    const double lumped = std::max(f1, f2);
+    CAPTURE(traced, lumped, T2, 0.5 * (a + c));
+    REQUIRE(std::abs(traced - lumped) <= 1e-7);  // measured 4.6e-9 V
+}
+
 TEST_CASE("electrothermal solve: the run record carries the thermal data") {
     const device::Device d = bar({});
     const std::vector<std::vector<double>> points{{0.1, 0.0}};
@@ -357,6 +480,269 @@ TEST_CASE("electrothermal solve: the run record carries the thermal data") {
     auto swept = on;
     swept.thermal_bias_K = {{300.0, 305.0}};
     REQUIRE(solve::make_run_record(d, swept, points).input_identity != r_on.input_identity);
+}
+
+namespace {
+
+// A rod of length 1e-3 cm for the heat equation alone: two silicon nodes at x_min (the only ohmic
+// contact; no current flows) and an insulator, both with kappa = 1.48 W/(cm K) independent of T
+// and silicon's rho c, so T_t = D T_xx with D = kappa / rho c; an isothermal sink at x_min at
+// 310 K, x_max adiabatic.
+device::Device rod(int nodes) {
+    physics::ThermalParameters thermal = physics::silicon_parameters.thermal;
+    thermal.conductivity_exponent = 0.0;
+    physics::SemiconductorParameters si = physics::silicon_parameters;
+    si.thermal = thermal;
+    physics::InsulatorParameters oxide = physics::silicon_dioxide_parameters;
+    oxide.thermal = thermal;
+    mesh::Mesh m = *mesh::make_tensor_grid(uniform(0.0, 1e-3, nodes));
+    const auto n = static_cast<std::size_t>(nodes);
+    std::vector<device::RegionId> region(n, 1);
+    region[0] = region[1] = 0;
+    std::vector<double> donors(n, 0.0);
+    donors[0] = donors[1] = 1e16;
+    auto left = m.find_boundary("x_min")->nodes;
+    auto d = device::Device::create(
+        {.mesh = std::move(m),
+         .temperature_K = 300.0,
+         .regions = {{"silicon", *physics::Semiconductor::create(si)},
+                     {"oxide", *physics::Insulator::create(oxide)}},
+         .node_region = std::move(region),
+         .donors = std::move(donors),
+         .acceptors = std::vector<double>(n, 0.0),
+         .contacts = {{"left", device::ContactKind::ohmic, std::move(left)}},
+         .thermal_contacts = {{"hot", "x_min", device::ThermalContactKind::isothermal, 310.0,
+                               0.0}}});
+    if (!d) FAIL(d.error().message);
+    return std::move(*d);
+}
+
+// The rod from 300 K (held at t = 0, the sink at 310 K), fixed steps of t_end / steps.
+results::Transient heated_rod(const device::Device& d, solve::Integrator integrator, int steps,
+                              double t_end) {
+    auto start = solved(d, {0.0}, thermal_options());
+    start.fields.temperature_K.assign(d.mesh().node_count(), 300.0);
+    solve::TransientOptions o;
+    o.steady = thermal_options();
+    o.integrator = integrator;
+    o.t_end_s = t_end;
+    o.dt_initial_s = o.dt_max_s = t_end / steps;
+    o.adaptive = false;
+    const std::vector<solve::Waveform> w{solve::Waveform::constant(0.0)};
+    auto run = solve::solve_transient(d, w, o, &start.fields);
+    if (!run) FAIL(run.error().message);
+    if (run->stopped) FAIL(run->stopped->message);
+    return std::move(*run);
+}
+
+}  // namespace
+
+TEST_CASE("electrothermal solve: the step-heated rod, orders 1 and 2") {
+    // Against the series T = T1 + (T0 - T1) sum_k 4 / ((2k+1) pi) sin(l_k x) exp(-l_k^2 D t),
+    // l_k = (2k+1) pi / (2L) (x from the sink, the far end adiabatic), at t = 2e-7 s (0.18 of
+    // L^2 / D); the time error's order against a run of 1280 steps on the same mesh (40 and 80
+    // steps: at 20 backward Euler is not yet asymptotic after the sink's jump at t = 0): halving
+    // the step halves backward Euler's error and quarters BDF2's.
+    const double t_end = 2e-7, L = 1e-3;
+    const double D = 1.48 / physics::silicon_parameters.thermal.heat_capacity_J_cm3K;
+    const auto series = [&](double x, double t) {
+        double sum = 0.0;
+        for (int k = 0; k < 200; ++k) {
+            const double l = (2 * k + 1) * std::numbers::pi / (2.0 * L);
+            sum += 4.0 / ((2 * k + 1) * std::numbers::pi) * std::sin(l * x) *
+                   std::exp(-l * l * D * t);
+        }
+        return 310.0 + (300.0 - 310.0) * sum;
+    };
+    {
+        const device::Device d = rod(101);
+        const auto run = heated_rod(d, solve::Integrator::bdf2, 400, t_end);
+        const auto& T = run.snapshots.back().fields.temperature_K;
+        double worst = 0.0;
+        for (std::size_t i = 0; i < d.mesh().node_count(); ++i) {
+            worst = std::max(worst, std::abs(T[i] - series(d.mesh().points()[i][0], t_end)));
+        }
+        CAPTURE(worst);
+        REQUIRE(worst <= 5e-4);  // K, the spatial error of 101 nodes (measured 1.2e-4)
+    }
+    const device::Device d = rod(41);
+    const auto end = [&](solve::Integrator integrator, int steps) {
+        const auto run = heated_rod(d, integrator, steps, t_end);
+        return run.snapshots.back().fields.temperature_K.back();
+    };
+    const double reference = end(solve::Integrator::bdf2, 1280);
+    for (const auto& [integrator, order] :
+         {std::pair{solve::Integrator::backward_euler, 1}, std::pair{solve::Integrator::bdf2, 2}}) {
+        const double e1 = std::abs(end(integrator, 40) - reference);
+        const double e2 = std::abs(end(integrator, 80) - reference);
+        CAPTURE(order, e1, e2, e1 / e2);
+        REQUIRE(std::abs(std::log2(e1 / e2) - order) <= 0.15);
+    }
+}
+
+TEST_CASE("electrothermal solve: the transient energy balance") {
+    // At every step, sum_c V_c I_c (conduction) = the heat out of the sinks + the lattice's
+    // storage rho c dT/dt + the carriers' stored energy e_n dn/dt - e_p dp/dt (e_n = E_c + 2 kT,
+    // e_p = E_v - 2 kT for r = -1/2), each rate the step's BDF difference. An n-type bar at 0.5 V,
+    // from 300 K held at t = 0: adiabatic (no sink; T7 allows it in time), and with an isothermal
+    // and an R_th sink; backward Euler and BDF2, fixed steps.
+    for (const bool sinks : {false, true}) {
+        Bar b;
+        if (!sinks) {
+            b.thermal.clear();
+        } else {
+            b.thermal[1] = {"right", "x_max", device::ThermalContactKind::resistance, 300.0,
+                            1e-4};
+        }
+        const device::Device d = bar(b);
+        auto start = solved(bar({}), {0.5, 0.0}, thermal_options());
+        start.fields.temperature_K.assign(d.mesh().node_count(), 300.0);
+        for (const auto integrator :
+             {solve::Integrator::backward_euler, solve::Integrator::bdf2}) {
+            solve::TransientOptions o;
+            o.steady = thermal_options();
+            o.integrator = integrator;
+            o.t_end_s = 1e-8;
+            o.dt_initial_s = o.dt_max_s = 1e-9;
+            o.adaptive = false;
+            o.fields_every_step = true;
+            const std::vector<solve::Waveform> w{solve::Waveform::constant(0.5),
+                                                 solve::Waveform::constant(0.0)};
+            const auto run = solve::solve_transient(d, w, o, &start.fields);
+            REQUIRE(run.has_value());
+            REQUIRE_FALSE(run->stopped);
+            REQUIRE(run->snapshots.size() == run->points.size());
+            const auto volumes = d.mesh().volumes();
+            const double rho_c = physics::silicon_parameters.thermal.heat_capacity_J_cm3K;
+            const double k = base::k_B_eV_per_K, q = base::q_C;
+            double worst = 0.0;
+            for (std::size_t s = 1; s < run->points.size(); ++s) {
+                const results::TimePoint& p = run->points[s];
+                const double h = p.step_s;
+                // The BDF difference of a node quantity, as the run's (beta, a1, a2).
+                double beta = 1.0, a1 = 1.0, a2 = 0.0;
+                if (p.order == 2) {
+                    const double w2 = h / run->points[s - 1].step_s, dd = 1.0 + 2.0 * w2;
+                    beta = (1.0 + w2) / dd;
+                    a1 = (1.0 + w2) * (1.0 + w2) / dd;
+                    a2 = w2 * w2 / dd;
+                }
+                const auto& now = run->snapshots[s].fields;
+                const auto& one = run->snapshots[s - 1].fields;
+                const results::NodeFields* two =
+                    s >= 2 ? &run->snapshots[s - 2].fields : nullptr;
+                const auto rate = [&](const std::vector<double> results::NodeFields::*f,
+                                      std::size_t i) {
+                    double c = (one.*f)[i] * a1;
+                    if (p.order == 2) c -= a2 * (two->*f)[i];
+                    return ((now.*f)[i] - c) / (beta * h);
+                };
+                double lattice = 0.0, carriers = 0.0, scale = 0.0;
+                const auto& bands = run->snapshots[s].bands;
+                for (std::size_t i = 0; i < d.mesh().node_count(); ++i) {
+                    lattice += rho_c * volumes[i] * rate(&results::NodeFields::temperature_K, i);
+                    if (i == 0 || i + 1 == d.mesh().node_count()) continue;  // ohmic: no storage
+                    const double T = now.temperature_K[i];
+                    const double en = bands.conduction_eV[i] + 2.0 * k * T;
+                    const double ep = bands.valence_eV[i] - 2.0 * k * T;
+                    const double dn = rate(&results::NodeFields::n_cm3, i);
+                    const double dp = rate(&results::NodeFields::p_cm3, i);
+                    carriers += q * volumes[i] * (en * dn - ep * dp);
+                    scale += q * volumes[i] * (std::abs(en * dn) + std::abs(ep * dp));
+                }
+                double power = 0.0, out = 0.0;
+                for (std::size_t c = 0; c < 2; ++c) {
+                    power += p.bias_V[c] * p.conduction_current[c];
+                }
+                for (const double hq : p.thermal_contact_heat) out += hq;
+                const double imbalance = power - out - lattice - carriers;
+                worst = std::max(worst, std::abs(imbalance) / (std::abs(power) + scale));
+            }
+            CAPTURE(sinks, integrator == solve::Integrator::bdf2, worst);
+            REQUIRE(worst <= 1e-9);
+            // Heated: the adiabatic bar warms everywhere, rho c L dT/dt = P on average.
+            if (!sinks) REQUIRE(run->snapshots.back().fields.temperature_K[20] > 300.0);
+        }
+    }
+}
+
+TEST_CASE("electrothermal solve: small-signal limits and the thermal pole") {
+    // The diode of the lumped gate (kappa 1e2 times silicon's: uniform T; R_th 2 K cm^2/W at each
+    // end, R_eff = 1) at 0.6 V. With T uniform the lumped model is exact: T~ = Z P~,
+    // Z = R_eff / (1 + i w R_eff C_th), C_th = rho c L (every box), P~ = I V~ + V I~_d and
+    // I~ = Y_e V~ + I_T T~, I~_d its dissipative part (the displacement current stores, it does
+    // not heat), so Y = Y_e + I_T Z (I + V Re Y_e) / (1 - Z V I_T), with Y_e the isothermal
+    // device's admittance at the operating temperature (its conductance and capacitance, 1.7e-7
+    // F/cm^2) and I_T its dI/dT (the carriers' stored energy, which the model also has, is
+    // negligible this far below the electrical poles). Low frequency: Y equals dI/dV of the
+    // electrothermal sweep; across the pole (R_eff C_th = 1.6e-4 s, 1 kHz) it follows the lumped
+    // Y; well above it, the isothermal admittance at the operating temperature.
+    const double R = 2.0, R_eff = 1.0, V = 0.6;
+    Bar b;
+    b.donors = pn_donors;
+    b.acceptors = pn_acceptors;
+    b.material.thermal.conductivity_W_cmK *= 1e2;  // see below
+    for (auto& t : b.thermal) {
+        t = {t.name, t.boundary, device::ThermalContactKind::resistance, 300.0, R};
+    }
+    const device::Device d = bar(b);
+    solve::SmallSignalOptions ac;
+    ac.steady = thermal_options();
+    ac.frequencies_Hz = {1e-3, 10.0, 100.0, 1e3, 1e4, 1e5, 1e8};
+    const std::vector<std::vector<double>> points{{V, 0.0}};
+    const auto run = solve::solve_small_signal(d, points, ac);
+    REQUIRE(run.has_value());
+    REQUIRE_FALSE(run->stopped);
+    const results::SmallSignalPoint& p = run->points.front();
+    const double I = p.dc.terminal_current[0];
+    const double T = p.dc.fields.temperature_K.front();
+    // The electrothermal sweep's slope.
+    const double dV = 1e-5;
+    const double slope = (solved(d, {V + dV, 0.0}, ac.steady).terminal_current[0] -
+                          solved(d, {V - dV, 0.0}, ac.steady).terminal_current[0]) /
+                         (2.0 * dV);
+    // The isothermal device at T: G, I_T and its admittance Y_e at every frequency.
+    const auto isothermal = [&](double temperature) {
+        Bar iso = b;
+        iso.temperature_K = temperature;
+        iso.thermal.clear();
+        return bar(iso);
+    };
+    solve::BiasOptions plain;
+    plain.newton.tol_update = 1e-12;
+    const device::Device at_T = isothermal(T);
+    const double G = (solved(at_T, {V + dV, 0.0}, plain).terminal_current[0] -
+                      solved(at_T, {V - dV, 0.0}, plain).terminal_current[0]) /
+                     (2.0 * dV);
+    const double dT = 0.01;
+    const double I_T = (solved(isothermal(T + dT), {V, 0.0}, plain).terminal_current[0] -
+                        solved(isothermal(T - dT), {V, 0.0}, plain).terminal_current[0]) /
+                       (2.0 * dT);
+    solve::SmallSignalOptions iso_ac;
+    iso_ac.steady = plain;
+    iso_ac.frequencies_Hz = ac.frequencies_Hz;
+    const auto iso_run = solve::solve_small_signal(at_T, points, iso_ac);
+    REQUIRE(iso_run.has_value());
+    const double C_th = physics::silicon_parameters.thermal.heat_capacity_J_cm3K * 1e-4;
+    for (std::size_t k = 0; k < ac.frequencies_Hz.size(); ++k) {
+        const double f = ac.frequencies_Hz[k];
+        const std::complex<double> Y = p.admittance[k][0];
+        const std::complex<double> Z =
+            R_eff / (1.0 + std::complex<double>(0.0, 2.0 * std::numbers::pi * f * R_eff * C_th));
+        const std::complex<double> Y_e = iso_run->points.front().admittance[k][0];
+        const std::complex<double> lumped =
+            Y_e + I_T * Z * (I + V * Y_e.real()) / (1.0 - Z * V * I_T);
+        CAPTURE(f, Y, lumped, slope, Y_e, p.pivot_ratio[k]);
+        // Measured: at most 1.4e-7 up to 1e5 Hz; at 1e8 Hz 7e-7 (lumped) and 1.0e-6 (Y_e), where
+        // the bar's own diffusion time (L^2 rho c / kappa, 1e-10 s with kappa 1e2 times
+        // silicon's, w tau = 0.06) and the residual thermal response show.
+        const double bound = f < 1e6 ? 1e-6 : 3e-6;
+        REQUIRE(std::abs(Y / lumped - 1.0) <= bound);
+        if (f == 1e-3) REQUIRE(std::abs(Y.real() / slope - 1.0) <= 1e-6);
+        if (f == 1e8) REQUIRE(std::abs(Y / Y_e - 1.0) <= bound);
+    }
+    // The heating's share at low frequency is large enough to be seen.
+    REQUIRE(slope > 1.01 * G);
 }
 
 TEST_CASE("electrothermal solve: refused inputs") {
@@ -394,19 +780,20 @@ TEST_CASE("electrothermal solve: refused inputs") {
     const auto p = solve::solve_bias(d, std::vector<double>{0.1, 0.0}, o, &initial);
     REQUIRE_FALSE(p.has_value());
     REQUIRE(p.error().message.find("initial temperature") != std::string::npos);
-    // Not built yet: trace, transient, small signal.
-    solve::TraceOptions trace;
-    trace.steady = o;
-    trace.start_V = {0.0, 0.0};
-    trace.end_V = 0.5;
-    const auto traced = solve::trace_bias(d, trace);
-    REQUIRE_FALSE(traced.has_value());
-    REQUIRE(traced.error().message.find("trace_bias") != std::string::npos);
+    // T7: a small-signal operating point and a trace need a heat sink too (a transient does not;
+    // see the transient energy balance).
     solve::SmallSignalOptions ac;
     ac.steady = o;
     ac.frequencies_Hz = {1e6};
     const std::vector<std::vector<double>> points{{0.1, 0.0}};
-    const auto small = solve::solve_small_signal(d, points, ac);
+    const auto small = solve::solve_small_signal(bar(bare), points, ac);
     REQUIRE_FALSE(small.has_value());
-    REQUIRE(small.error().message.find("small-signal") != std::string::npos);
+    REQUIRE(small.error().message.find("no thermal contact") != std::string::npos);
+    solve::TraceOptions trace;
+    trace.steady = o;
+    trace.start_V = {0.0, 0.0};
+    trace.end_V = 0.5;
+    const auto traced = solve::trace_bias(bar(bare), trace);
+    REQUIRE_FALSE(traced.has_value());
+    REQUIRE(traced.error().message.find("no thermal contact") != std::string::npos);
 }

@@ -31,9 +31,6 @@ std::expected<results::SmallSignal, base::Error> solve_small_signal(
     const device::Device& device, std::span<const std::vector<double>> points,
     const SmallSignalOptions& options, const results::NodeFields* initial,
     const RunControl& control) {
-    if (options.steady.models.electrothermal) {  // Unit 23, in progress
-        return std::unexpected(invalid("electrothermal does not yet support small-signal runs"));
-    }
     const std::vector<double>& frequencies = options.frequencies_Hz;
     if (frequencies.empty()) {
         return std::unexpected(invalid("a small-signal run needs at least one frequency"));
@@ -69,17 +66,25 @@ std::expected<results::SmallSignal, base::Error> solve_small_signal(
     const double current_scale = scaling->J0 * std::pow(scaling->L_D, D - 1);
     const double t0 = system->time_scale();
     const std::size_t n = system->unknowns();
+    const std::size_t m = system->stride();
+    const bool thermal = steady.models.electrothermal;
+    const double T0 = scaling->temperature_K;
 
     results::SmallSignal run;
     run.run = make_run_record(device, options, points, initial);
     run.contacts = contacts;
     run.frequency_Hz = frequencies;
 
+    // The forcing -dF/dV of each contact (with the electrothermal model it depends on the
+    // operating point: set there).
     std::vector<std::vector<Complex>> forcing(contacts, std::vector<Complex>(n));
-    for (std::size_t j = 0; j < contacts; ++j) {
-        const std::vector<double> d = system->bias_derivative(j);
-        for (std::size_t q = 0; q < n; ++q) forcing[j][q] = -d[q];
-    }
+    const auto set_forcing = [&](std::span<const double> x) {
+        for (std::size_t j = 0; j < contacts; ++j) {
+            const std::vector<double> d = system->bias_derivative(j, x);
+            for (std::size_t q = 0; q < n; ++q) forcing[j][q] = -d[q];
+        }
+    };
+    if (!thermal) set_forcing(std::vector<double>(n, 0.0));  // the state is not read
     linalg::ComplexSparseMatrix a = system->make_small_signal_matrix();
     std::vector<std::vector<Complex>> response(contacts, std::vector<Complex>(n));
     std::vector<Complex> product(n);  // A dx, for the residual
@@ -87,13 +92,16 @@ std::expected<results::SmallSignal, base::Error> solve_small_signal(
     for (std::size_t p = 0; p < sweep->points.size(); ++p) {
         results::BiasPoint& dc = sweep->points[p];
         (void)system->set_bias(dc.bias_V);  // checked by sweep_bias
+        if (thermal) (void)system->set_thermal_bias(dc.thermal_bias_K);  // likewise
         std::vector<double> x(n);
         for (std::size_t i = 0; i < nodes; ++i) {
-            x[3 * i] = dc.fields.potential_V[i] / scaling->V_T;
-            x[3 * i + 1] = dc.fields.n_cm3[i] / scaling->Ns;
-            x[3 * i + 2] = dc.fields.p_cm3[i] / scaling->Ns;
+            x[m * i] = dc.fields.potential_V[i] / scaling->V_T;
+            x[m * i + 1] = dc.fields.n_cm3[i] / scaling->Ns;
+            x[m * i + 2] = dc.fields.p_cm3[i] / scaling->Ns;
+            if (thermal) x[4 * i + 3] = (dc.fields.temperature_K[i] - T0) / T0;  // the rise
         }
         system->stamp_contacts(x);
+        if (thermal) set_forcing(x);
         // Nonlocal tunnelling: the paths at the operating point, frozen (their geometry's own
         // dependence on the state is not in the small-signal matrix; ARCHITECTURE.md 6.2).
         if (system->tunnelling()) {
@@ -140,9 +148,9 @@ std::expected<results::SmallSignal, base::Error> solve_small_signal(
                 a.multiply(response[j], product);
                 double left = 0.0;
                 for (std::size_t i = 0; i < nodes; ++i) {
-                    left += std::abs(forcing[j][3 * i + 1] - product[3 * i + 1]) +
-                            std::abs(forcing[j][3 * i + 2] - product[3 * i + 2]) +
-                            std::abs(s) * std::abs(forcing[j][3 * i] - product[3 * i]);
+                    left += std::abs(forcing[j][m * i + 1] - product[m * i + 1]) +
+                            std::abs(forcing[j][m * i + 2] - product[m * i + 2]) +
+                            std::abs(s) * std::abs(forcing[j][m * i] - product[m * i]);
                 }
                 resolution[j] = left;
             }
@@ -172,11 +180,12 @@ std::expected<results::SmallSignal, base::Error> solve_small_signal(
             if (std::ranges::find(options.field_frequencies_Hz, frequencies[k]) !=
                 options.field_frequencies_Hz.end()) {
                 for (std::size_t j = 0; j < contacts; ++j) {
-                    results::SmallSignalFields fields{frequencies[k], j, {}, {}, {}};
+                    results::SmallSignalFields fields{frequencies[k], j, {}, {}, {}, {}};
                     for (std::size_t i = 0; i < nodes; ++i) {
-                        fields.potential.push_back(response[j][3 * i] * scaling->V_T);
-                        fields.n_cm3.push_back(response[j][3 * i + 1] * scaling->Ns);
-                        fields.p_cm3.push_back(response[j][3 * i + 2] * scaling->Ns);
+                        fields.potential.push_back(response[j][m * i] * scaling->V_T);
+                        fields.n_cm3.push_back(response[j][m * i + 1] * scaling->Ns);
+                        fields.p_cm3.push_back(response[j][m * i + 2] * scaling->Ns);
+                        if (thermal) fields.temperature_K.push_back(response[j][4 * i + 3] * T0);
                     }
                     point.fields.push_back(std::move(fields));
                 }

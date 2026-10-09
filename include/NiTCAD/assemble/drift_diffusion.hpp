@@ -262,6 +262,8 @@ public:
     // Unknowns per node: 3 (psi, n, p), or 4 with the electrothermal model (theta last).
     [[nodiscard]] std::size_t stride() const noexcept { return m_; }
 
+    struct TimeStep;  // a BDF time step (below)
+
     // Electrothermal (Unit 23; see the header comment). Whether the model is on.
     [[nodiscard]] bool electrothermal() const noexcept { return m_ == 4; }
     // The temperature of each thermal contact in K (isothermal: its own; resistance: the ambient
@@ -280,7 +282,9 @@ public:
     // V_T J0 L_D^(D-1) (a power in W / cm^(3-D) after multiplying by it), in
     // device.thermal_contacts() order. In a steady state their sum is electrical_power(x).
     // Preconditions (NITCAD_EXPECTS): the model is on; x has unknowns() entries.
-    [[nodiscard]] std::vector<double> thermal_contact_heat(std::span<const double> x) const;
+    // With a time step, the heat rows' storage terms are in the balance.
+    [[nodiscard]] std::vector<double> thermal_contact_heat(std::span<const double> x,
+                                                           const TimeStep* step = nullptr) const;
     // The power the ohmic contacts deliver, sum_c V_c I_c, in the same units.
     [[nodiscard]] double electrical_power(std::span<const double> x) const;
     // The Joule part of each carrier edge's heat (Jn, Jp), in the same units: each flux times the
@@ -312,9 +316,10 @@ public:
     void residual(std::span<const double> x, std::span<double> residual) const;
 
     // A BDF time step (see the header comment): rate = 1 / (beta h), h in units of time_scale();
-    // storage holds c_n and c_p of every node (2 node_count() entries, node i at 2i and 2i + 1;
-    // read only off the contacts and insulators), traps c of every trap slot (trap_slots()
-    // entries).
+    // storage holds c_n and c_p of every node (storage_width() node_count() entries, node i from
+    // storage_width() i; read only off the contacts and insulators), and with the electrothermal
+    // model c of the rise tau third (read off the isothermal sinks); traps c of every trap slot
+    // (trap_slots() entries).
     struct TimeStep {
         double rate;
         std::span<const double> storage;
@@ -329,8 +334,10 @@ public:
                   linalg::SparseMatrix& jacobian) const;
     void residual(std::span<const double> x, const TimeStep& step,
                   std::span<double> residual) const;
-    // (S_n, S_p) of every node at state x, scaled (0 on insulator nodes).
+    // (S_n, S_p) of every node at state x, scaled (0 on insulator nodes), with the electrothermal
+    // model (S_n, S_p, tau).
     [[nodiscard]] std::vector<double> storage(std::span<const double> x) const;
+    [[nodiscard]] std::size_t storage_width() const noexcept { return m_ - 1; }
     // The occupancy f of every trap slot at state x: after `step`, or without one the steady
     // state.
     [[nodiscard]] std::vector<double> trap_occupancies(std::span<const double> x,
@@ -357,6 +364,14 @@ public:
     // dF / dV of contact c, per volt (the residual's dependence on its bias). Precondition
     // (NITCAD_EXPECTS): c < contact_count().
     [[nodiscard]] std::vector<double> bias_derivative(std::size_t contact) const;
+    // With the electrothermal model the heat row of an ohmic node also depends on its contact's
+    // bias, through the metal's Peltier term m (Jn + Jp) / K0, so dF / dV depends on the state:
+    // this overload evaluates it at x (without the model it is bias_derivative(contact)). The
+    // rows where it can be nonzero at any state: bias_rows(contact). F stays linear in V at fixed
+    // x. Preconditions (NITCAD_EXPECTS): contact < contact_count(); x has unknowns() entries.
+    [[nodiscard]] std::vector<double> bias_derivative(std::size_t contact,
+                                                      std::span<const double> x) const;
+    [[nodiscard]] std::vector<std::size_t> bias_rows(std::size_t contact) const;
     // The small-signal total current entering through a contact, conduction plus s times its
     // charge (conduction_currents and contact_charges, linearized about the steady state x):
     //     dI = sum_k values[k] dx[columns[k]] + bias dV,
@@ -554,8 +569,9 @@ private:
     // Electrothermal (Unit 23; electrothermal.cpp). Per node, constant: the material (index into
     // thermal_materials_, or -1 on an insulator), its thermal data, the impurity densities the
     // mobility and band-gap narrowing read, the band constants c_n, c_p and Eg(T0), the
-    // thermopower exponents, ln Nc0 and ln Nv0 (scaled), the thermal contact (-1: none) and the
-    // R_th coefficient h (0: none).
+    // thermopower exponents, ln Nc0 and ln Nv0 (scaled), the thermal contact (-1: none), the
+    // R_th coefficient h (0: none) and the heat capacity C = rho c V L_D^2 / (t0 kappa_ref) of the
+    // heat row (times the rate and the change of tau).
     struct ThermalNode {
         std::int32_t material;
         physics::ThermalParameters thermal;
@@ -563,6 +579,7 @@ private:
         double c_n, c_p, gap0_eV, r_n, r_p, log_nc, log_nv;
         std::int32_t contact;
         double h;
+        double capacity;
     };
     // Per node at a state: theta and tau = theta - 1 (the unknown), n_ie / Ns, the mobilities
     // [cm^2/(V s)], g (the valence band's shift), kappa [W/(cm K)] and the Kirchhoff transform u,
@@ -637,6 +654,10 @@ private:
     bool sinks_complete_ = false;
     // One node's thermal state at tau (NaN entries unless tau is finite and theta positive).
     [[nodiscard]] ThermalState thermal_state(std::size_t node, double tau) const;
+    // s times the Jacobian of the electrothermal storage terms (assemble_heat with a step) about a
+    // steady state, added to the small-signal matrix's values.
+    void add_thermal_storage(std::span<const double> x, std::complex<double> s,
+                             std::span<std::complex<double>> values) const;
     // The electrothermal rows (assemble with the model on); with sinks false, without the thermal
     // contacts' terms, so every heat row is the node's heat balance alone.
     void assemble_heat(std::span<const double> x, std::span<double> f, std::span<double> values,

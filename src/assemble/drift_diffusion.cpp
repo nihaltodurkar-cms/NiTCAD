@@ -1037,12 +1037,14 @@ void DriftDiffusion::residual(std::span<const double> x, const TimeStep& step,
 std::vector<double> DriftDiffusion::storage(std::span<const double> x) const {
     NITCAD_EXPECTS(x.size() == unknowns());
     const std::vector<NodeDegeneracy> g = degeneracies(x);
-    std::vector<double> s(2 * node_count(), 0.0);
+    const std::size_t w = storage_width();
+    std::vector<double> s(w * node_count(), 0.0);
     for (std::size_t i = 0; i < node_count(); ++i) {
+        if (electrothermal()) s[3 * i + 2] = x[4 * i + 3];  // tau, every node
         if (insulator_[i] != 0) continue;
         const NodeStorage st = node_storage(i, x, g);
-        s[2 * i] = st.n;
-        s[2 * i + 1] = st.p;
+        s[w * i] = st.n;
+        s[w * i + 1] = st.p;
     }
     return s;
 }
@@ -1348,6 +1350,10 @@ void DriftDiffusion::small_signal_matrix(std::span<const double> x, std::complex
     const auto at = [&](std::size_t node, std::size_t r, std::size_t c) -> Complex& {
         return values[block_[m_ * m_ * node + m_ * r + c]];
     };
+    if (electrothermal()) {  // the storage of a time step's rows at s, about a steady state
+        add_thermal_storage(x, s, values);
+        return;  // no interface terms: the model refuses traps and interface charge
+    }
     const std::vector<NodeDegeneracy> g = degeneracies(x);
     for (std::size_t i = 0; i < node_count(); ++i) {
         if (contact_[i] >= 0 || insulator_[i] != 0) continue;
@@ -1412,10 +1418,30 @@ std::vector<DriftDiffusion::CurrentRow> DriftDiffusion::small_signal_currents(
         if (c >= 0) terms[static_cast<std::size_t>(c)].emplace_back(column, value);
     };
     // Conduction (terminal_currents): the total flux on the edges leaving each ohmic contact.
+    if (electrothermal()) {  // with the temperature columns
+        const std::vector<ThermalState> t = thermal_states(x);
+        const std::vector<NodeLevels> l = thermal_levels(x, t);
+        for (std::size_t k = 0; k < edges_.size(); ++k) {
+            const EdgeTerm& e = edges_[k];
+            const std::int32_t ca = contact_[e.a], cb = contact_[e.b];
+            if (ca == cb || !e.carriers) continue;
+            const auto [fn, fp] = thermal_fluxes(k, x, t, l);
+            const std::pair<std::size_t, double> d[8] = {
+                {4 * e.a, fn.d_psi[0] + fp.d_psi[0]},     {4 * e.b, fn.d_psi[1] + fp.d_psi[1]},
+                {4 * e.a + 1, fn.d_c[0]},                 {4 * e.b + 1, fn.d_c[1]},
+                {4 * e.a + 2, fp.d_c[0]},                 {4 * e.b + 2, fp.d_c[1]},
+                {4 * e.a + 3, fn.d_theta[0] + fp.d_theta[0]},
+                {4 * e.b + 3, fn.d_theta[1] + fp.d_theta[1]}};
+            for (const auto& [column, value] : d) {
+                add(ca, column, value);
+                add(cb, column, -value);
+            }
+        }
+    }
     const std::vector<NodeDegeneracy> g = degeneracies(x);
     for (const EdgeTerm& e : edges_) {
         const std::int32_t ca = contact_[e.a], cb = contact_[e.b];
-        if (ca == cb || !e.carriers) continue;
+        if (electrothermal() || ca == cb || !e.carriers) continue;
         const auto [fn, fp] = edge_fluxes(e, x, g);
         const std::pair<std::size_t, double> d[6] = {
             {m_ * e.a, fn.d_psi1 + fp.d_psi1}, {m_ * e.b, fn.d_psi2 + fp.d_psi2},
