@@ -194,7 +194,10 @@ before more physics; Windows-only C++23, Win32/D3D12/D2D, no Python, no Qt; exis
 behaviour preserved; each change isolated and regression-tested in Debug and Release; no merges without authorization.
 `ARCHITECTURE.md` 11.3 tracks each item's status (implemented and verified, in progress, planned).
 
-### Unit 28 — bias step cutting (branch `solve/bias-step-control`, stacked on `physics/electrothermal`)
+### Unit 28 — bias step cutting (branch `solve/bias-step-control`, based on `main` after PR #30)
+
+The branch starts at `59de5d5`, the head of `physics/electrothermal`, which PR #30 merged into `main` as `7300b67`
+(2026-10-09); `main`'s tree equals `59de5d5`'s, so the branch carries Unit 28 alone against `main`.
 
 Choices made without a ruling, open to the owner's review:
 

@@ -1,12 +1,13 @@
 # NiTCAD — Architecture
 
-**CURRENT ARCHITECTURE, updated for Units 1–15b and 18–24.** Units 1–10 established the validated drift-diffusion
-foundation; Units 11–15b added band-gap narrowing and Auger, gate contacts (the MOS capacitor and the MOSFET), field
-mobility, Fermi–Dirac statistics, heterojunctions and meshed insulators with interface traps; Units 18–22 and 24 added
-the PARDISO backend, impact ionization with arc-length continuation, band-to-band tunnelling, transients, AC
-small-signal analysis and the extraction engine. All of these are on `main` (the last as `c8fd145`); Unit 23,
-electrothermal coupling, is on its branch (section 11). The architecture below keeps the implemented layers and
-numerical contracts intact while adding a long-term north-star for a general multiphysics semiconductor equation engine.
+**CURRENT ARCHITECTURE, updated for Units 1–15b and 18–24, with Unit 28 on its branch.** Units 1–10 established the
+validated drift-diffusion foundation; Units 11–15b added band-gap narrowing and Auger, gate contacts (the MOS capacitor
+and the MOSFET), field mobility, Fermi–Dirac statistics, heterojunctions and meshed insulators with interface traps;
+Units 18–22 and 24 added the PARDISO backend, impact ionization with arc-length continuation, band-to-band tunnelling,
+transients, AC small-signal analysis and the extraction engine; Unit 23 added electrothermal coupling. All of these are
+on `main` (Unit 23 merged as `7300b67`, PR #30). Unit 28, bias step cutting, is on its branch (sections 11 and 11.3).
+The architecture below keeps the implemented layers and numerical contracts intact while adding a long-term north-star
+for a general multiphysics semiconductor equation engine.
 Sections distinguish implemented design from target architecture: the north-star material (2.1, 2.2, 6.12, 11.1, 11.2,
 14.6) is future target architecture, not a new layer and not a claim about the current implementation. The dependency
 architecture of sections 3 and 4 is authoritative.
@@ -2352,12 +2353,12 @@ built.
 | 20 | Band-to-band tunnelling and nonlocal path machinery | assemble, physics, solve | **done, on `main`** (`cf2f70a`): local Kane (the legacy silicon pair), nonlocal paths traced through tensor-grid cells as frozen geometry with live evaluation and relocation, the calibrated Kane rate at the path's mean field (silicon) and the direct-gap WKB rate (cited masses only), pure generation, off by default and bit-identical when off (6.2, Unit 20) |
 | 21 | Transient simulation | solve, assemble, results | **done, on `main`** (`a601e7e`): backward Euler and variable-step BDF2 with error-controlled steps, waveforms, displacement current with exact conservation, interface trap dynamics eliminated in the interface solve (6.2, Unit 21) |
 | 22 | AC small-signal analysis | linalg, assemble, solve, results | **done, on `main`** (`75cc2c0`): J + iωt₀C + T(iωt₀) at a DC or quasi-static operating point, complex linear solver, admittance matrix with displacement current and a resolution bound, interface traps in the frequency domain (6.2, Unit 22) |
-| 23 | Thermal / electrothermal coupling | physics, assemble, solve | **done on branch `physics/electrothermal`**: the lattice temperature as a fourth Newton unknown (the rise τ) with an exact Jacobian; Wachutka's thermodynamic fluxes (Boltzmann and Fermi–Dirac), the heat as the energy flux's divergence with Peltier and Thomson heat, isothermal and R_th thermal contacts; T in every model the assembler has; steady sweeps, `trace_bias` (thermal-runaway folds), transients and AC; traps and BTBT refused; thermionic emission (deferred) and incomplete ionization refused (6.2, Unit 23; DECISIONS.md T1–T14, U1–U8) |
+| 23 | Thermal / electrothermal coupling | physics, assemble, solve | **done, on `main`** (`7300b67`, PR #30): the lattice temperature as a fourth Newton unknown (the rise τ) with an exact Jacobian; Wachutka's thermodynamic fluxes (Boltzmann and Fermi–Dirac), the heat as the energy flux's divergence with Peltier and Thomson heat, isothermal and R_th thermal contacts; T in every model the assembler has; steady sweeps, `trace_bias` (thermal-runaway folds), transients and AC; traps and BTBT refused; thermionic emission (deferred) and incomplete ionization refused (6.2, Unit 23; DECISIONS.md T1–T14, U1–U8) |
 | 24 | Analysis and extraction engine | analysis | **done, on `main`** (`4183767`): curves read from sweeps and small-signal runs; transistor, diode and breakdown figures; C-V doping profile, flat band and the conductance method; two-port Y/Z/h/S, Mason's U, k, MAG/MSG, f_T and f_max; every extraction with the points it used and resolution and extrapolation flags (6.13, Unit 24) |
 | 25 | Scientific visualization / rendering | render | target |
 | 26 | Native Windows application and workflow | app | target; Win32 API, x64 target, Direct3D 12 / Direct2D |
 | 27 | Optimization / sensitivity / inverse-design workflows | analysis, solve | long-term target |
-| 28 | Bias step cutting (commercial-readiness programme, 11.3) | solve, results | **verified on branch `solve/bias-step-control`** (stacked on `physics/electrothermal`): off by default; halving and growth from the last converged state (11.3, Unit 28; DECISIONS.md S1–S7) |
+| 28 | Bias step cutting (commercial-readiness programme, 11.3) | solve, results | **verified on branch `solve/bias-step-control`** (based on `main` after PR #30; its base `59de5d5` has `main`'s tree): off by default; halving and growth from the last converged state (11.3, Unit 28; DECISIONS.md S1–S7) |
 
 Units 1–9 are the smallest end-to-end vertical slice: a validated drift-diffusion diode. Everything past
 Unit 10 is deferred until sequenced. Units 11–15, 15b, 21 and 22 were requested by the owner after Unit 10; nothing
@@ -2403,7 +2404,7 @@ No device family should require a second numerical architecture to participate i
 ### 11.3 Commercial-readiness programme: status (owner request, 2026-10-09; DECISIONS.md)
 
 Status words: **verified** (built, on a branch or `main`, Debug and Release suites pass), **in progress** (a branch
-exists, not finished), **planned** (nothing built). Audit of 2026-10-09, against the code on `physics/electrothermal`.
+exists, not finished), **planned** (nothing built). Audit of 2026-10-09, against the code on `physics/electrothermal`, since merged to `main` (`7300b67`, PR #30).
 
 | Area | What exists (audited) | Status | Next step |
 |---|---|---|---|
