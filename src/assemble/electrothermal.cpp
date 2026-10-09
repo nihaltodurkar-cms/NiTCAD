@@ -13,6 +13,7 @@
 
 #include "NiTCAD/assemble/bernoulli.hpp"
 #include "NiTCAD/assemble/drift_diffusion.hpp"
+#include "NiTCAD/assemble/thermionic_flux.hpp"
 #include "NiTCAD/base/constants.hpp"
 #include "NiTCAD/base/contract.hpp"
 #include "NiTCAD/physics/bandgap_narrowing.hpp"
@@ -58,24 +59,6 @@ std::optional<base::Error> DriftDiffusion::make_thermal(const device::Device& de
             return refused("electrothermal does not support interface traps (DECISIONS.md T8)");
         }
     }
-    // Models whose temperature coupling is not built yet.
-    const auto pending = [](const char* what) {
-        return refused(std::string("electrothermal does not yet support ") + what);
-    };
-    if (models.incomplete_ionization) return pending("incomplete ionization");
-    if (models.impact_ionization) return pending("impact ionization");
-    for (const device::Contact& c : device.contacts()) {
-        if (c.kind != device::ContactKind::ohmic) return pending("gates and electrodes");
-    }
-    for (const device::Interface& f : device.interfaces()) {
-        if (device::has_interface_charge_or_recombination(f)) {
-            return pending("interface charge and surface recombination");
-        }
-        if (f.transport == device::InterfaceTransport::thermionic_emission) {
-            return pending("thermionic emission");
-        }
-    }
-
     // Every material needs thermal data (T11); none is invented.
     const auto regions = device.regions();
     std::vector<std::int32_t> region_material(regions.size(), -1);
@@ -119,7 +102,7 @@ std::optional<base::Error> DriftDiffusion::make_thermal(const device::Device& de
         const device::RegionId r = node_region[i];
         ThermalNode& t = thermal_nodes_[i];
         t = ThermalNode{region_material[r], region_thermal[r], 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-                        -1, 0.0, 0.0};
+                        -1, 0.0, 0.0, 0};
         // rho c V L_D^2 / (t0 kappa_ref): the heat row's storage per unit rate and change of tau.
         t.capacity = t.thermal.heat_capacity_J_cm3K * volume_[i] * scaling.L_D * scaling.L_D /
                      (rate_scale_ * kappa_ref_);
@@ -137,6 +120,17 @@ std::optional<base::Error> DriftDiffusion::make_thermal(const device::Device& de
         t.log_nv = std::log(n_ie_[i]) + log_dos_p_[i];
     }
 
+    // Gates and electrodes with a p-polysilicon work function (chi + Eg(T)).
+    for (const device::Contact& c : device.contacts()) {
+        const bool gate = c.kind == device::ContactKind::gate &&
+                          c.gate.electrode == device::GateElectrode::p_poly;
+        const bool electrode = c.kind == device::ContactKind::electrode &&
+                               c.electrode.kind == device::GateElectrode::p_poly;
+        if (!gate && !electrode) continue;
+        for (const mesh::NodeId v : c.nodes) {
+            thermal_nodes_[static_cast<std::size_t>(v)].ppoly = gate ? 1 : 2;
+        }
+    }
     // Thermal contacts: the nodes of each patch; R_th as h = A L_D / (R_th kappa_ref) per node.
     const auto contacts = device.thermal_contacts();
     const double area_scale = std::pow(scaling.L_D, D - 1);
@@ -283,10 +277,60 @@ DriftDiffusion::Level DriftDiffusion::level(double c, double theta, double nie,
     return v;
 }
 
+physics::DopantLevels DriftDiffusion::thermal_levels_at(std::size_t i, double theta) const {
+    physics::DopantLevels l = levels_[i];  // in units of k T0
+    l.donor_kT /= theta;
+    l.acceptor_kT /= theta;
+    return l;
+}
+
+DriftDiffusion::ThermalCharge DriftDiffusion::thermal_charge(std::size_t i, const ThermalState& t,
+                                                             const NodeLevels& l) const {
+    if (!ionization_) return {doping_[i], 0.0, 0.0, 0.0};
+    // N_D+ - N_A- at eta_c = x_n, eta_v = x_p and the levels E / k T; each ionized density is a
+    // function of eta + E / k T, so its level partial is its eta partial.
+    const physics::DopantLevels levels = thermal_levels_at(i, t.theta);
+    const double eta_c = donors_[i] > 0.0 ? l.n.x : 0.0;
+    const double eta_v = acceptors_[i] > 0.0 ? l.p.x : 0.0;
+    const detail::IonizedCharge c =
+        detail::ionized_charge(donors_[i], acceptors_[i], eta_c, eta_v, levels);
+    return {c.value, c.d_eta_c * l.n.dx_dc, c.d_eta_v * l.p.dx_dc,
+            c.d_eta_c * (l.n.dx_dt - levels.donor_kT / t.theta) +
+                c.d_eta_v * (l.p.dx_dt - levels.acceptor_kT / t.theta)};
+}
+
+DriftDiffusion::ThermalStorage DriftDiffusion::thermal_storage(std::size_t i,
+                                                               std::span<const double> x,
+                                                               const ThermalState& t,
+                                                               const NodeLevels& l) const {
+    const double n = x[4 * i + 1], p = x[4 * i + 2];
+    ThermalStorage s{n, 1.0, 0.0, p, 1.0, 0.0};
+    if (!ionization_) return s;
+    // S_n = n - N_D+, S_p = p - N_A- (the carriers bound to the dopants are stored too).
+    const physics::DopantLevels levels = thermal_levels_at(i, t.theta);
+    if (donors_[i] > 0.0) {
+        const physics::IonizedDensity d = physics::ionized_density(
+            donors_[i], l.n.x, levels.donor_kT, levels.donor_degeneracy);
+        s.n -= d.value;
+        s.n_n -= d.d_eta * l.n.dx_dc;
+        s.n_t -= d.d_eta * (l.n.dx_dt - levels.donor_kT / t.theta);
+    }
+    if (acceptors_[i] > 0.0) {
+        const physics::IonizedDensity a = physics::ionized_density(
+            acceptors_[i], l.p.x, levels.acceptor_kT, levels.acceptor_degeneracy);
+        s.p -= a.value;
+        s.p_p -= a.d_eta * l.p.dx_dc;
+        s.p_t -= a.d_eta * (l.p.dx_dt - levels.acceptor_kT / t.theta);
+    }
+    return s;
+}
+
 std::vector<DriftDiffusion::NodeLevels> DriftDiffusion::thermal_levels(
     std::span<const double> x, std::span<const ThermalState> t) const {
     std::vector<NodeLevels> g;
-    if (!fermi_dirac_) return g;
+    // Under Boltzmann statistics with complete ionization nothing reads them (their excess and
+    // ln gamma are 0 then anyway).
+    if (!fermi_dirac_ && !ionization_) return g;
     g.resize(node_count());
     for (std::size_t i = 0; i < node_count(); ++i) {
         if (insulator_[i] != 0) continue;
@@ -376,26 +420,50 @@ DriftDiffusion::thermal_fluxes(std::size_t k, std::span<const double> x,
                         h[2] * (cb.mobility + E * cb.d_dE) / mu_b * d_mu_b,
                         (h[1] * ca.d_dE + h[2] * cb.d_dE) * dE};
     };
+    // On a thermionic-emission edge (thermionic_flux.hpp) the same w and delta enter the emission
+    // flux, with K0 theta_e^(1/2) (both velocity forms scale as T^(1/2)) over theta_e^(1 + r):
+    // each side then emits ~ n v(T) for r = -1/2, and at a uniform T it is the isothermal flux
+    // at that T. log_N, ratio: ln(N_b / N_a) and N_a / N_b of the band.
     const auto carrier = [&](double sign, double r, const Mobility& mu, double c_a, double c_b,
                              double base, double L, double dbase_a, double dbase_b,
-                             const Extra& xd) {
+                             const Extra& xd, double K0, double log_N, double ratio) {
         ThermalFlux f{};
         const double delta = base / th + L + xd.value;
         const double s = sign * delta;  // the electron form's argument
         const double ex = 1.0 + r;
         const double pa = std::pow(ta, ex), pb = std::pow(tb, ex);
         const double wa = pa * c_a, wb = pb * c_b;
-        const double q = std::pow(th, -r);
-        const double A = mu.value * te.coupling * q;
-        const double dA_a = te.coupling * q * mu.d_a - 0.5 * r * A / th;
-        const double dA_b = te.coupling * q * mu.d_b - 0.5 * r * A / th;
-        const double dA_psi = te.coupling * q * mu.d_psi;
-        const double bp = bernoulli(s), bm = bernoulli(-s);
-        const double unit = sign * (wb * bp - wa * bm);
+        double A, dA_a, dA_b, dA_psi;
+        if (e.thermionic) {
+            const double k = -0.5 - r;
+            A = K0 * std::pow(th, k);
+            dA_a = dA_b = 0.5 * k * A / th;
+            dA_psi = 0.0;
+        } else {
+            const double q = std::pow(th, -r);
+            A = mu.value * te.coupling * q;
+            dA_a = te.coupling * q * mu.d_a - 0.5 * r * A / th;
+            dA_b = te.coupling * q * mu.d_b - 0.5 * r * A / th;
+            dA_psi = te.coupling * q * mu.d_psi;
+        }
+        double unit, d_delta, dw_a, dw_b;
+        if (e.thermionic) {
+            const EdgeFlux u = sign > 0.0
+                                   ? thermionic_electron_flux(1.0, delta, log_N, ratio, wa, wb)
+                                   : thermionic_hole_flux(1.0, delta, log_N, ratio, wa, wb);
+            unit = u.flux;
+            d_delta = A * u.d_psi2;
+            dw_a = A * u.d_c1;
+            dw_b = A * u.d_c2;
+        } else {
+            const double bp = bernoulli(s), bm = bernoulli(-s);
+            unit = sign * (wb * bp - wa * bm);
+            // d flux / d delta = sign A (wb B'(s) + wa B'(-s)) sign.
+            d_delta = A * (wb * bernoulli_derivative(s) + wa * bernoulli_derivative(-s));
+            dw_a = -sign * A * bm;
+            dw_b = sign * A * bp;
+        }
         f.flux = A * unit;
-        // d flux / d delta = sign A (wb B'(s) + wa B'(-s)) sign.
-        const double d_delta = A * (wb * bernoulli_derivative(s) + wa * bernoulli_derivative(-s));
-        const double dw_a = -sign * A * bm, dw_b = sign * A * bp;
         f.d_psi[0] = -d_delta / th - dA_psi * unit;
         f.d_psi[1] = d_delta / th + dA_psi * unit;
         f.d_c[0] = dw_a * pa + d_delta * xd.d_c[0];
@@ -418,9 +486,9 @@ DriftDiffusion::thermal_fluxes(std::size_t k, std::span<const double> x,
     const Mobility mu_p =
         mobility(t[a].mu_p, t[a].d_mu_p, t[b].mu_p, t[b].d_mu_p, e.sat_p, e.sat_p_b);
     return {carrier(1.0, te.r_n, mu_n, x[4 * a + 1], x[4 * b + 1], base_n, te.log_nc, 0.0, 0.0,
-                    xn),
+                    xn, e.te_kn, e.te_log_nc, e.te_ratio_nc),
             carrier(-1.0, te.r_p, mu_p, x[4 * a + 2], x[4 * b + 2], base_p, -te.log_nv,
-                    t[a].d_gap, -t[b].d_gap, xp)};
+                    t[a].d_gap, -t[b].d_gap, xp, e.te_kp, e.te_log_nv, e.te_ratio_nv)};
 }
 
 DriftDiffusion::Conduction DriftDiffusion::conduction(std::size_t k,
@@ -444,10 +512,10 @@ DriftDiffusion::ThermalOhmic DriftDiffusion::thermal_ohmic(std::size_t i,
     const ThermalNode& tn = thermal_nodes_[i];
     const double theta = t.theta;
     const double lt = 1.5 * std::log(theta), ln_nie = std::log(t.nie);
-    const physics::NeutralEquilibrium q =
-        fermi_dirac_ ? physics::fermi_dirac_neutral_equilibrium(
-                           doping_[i], t.nie, tn.log_nc + lt - ln_nie, tn.log_nv + lt - ln_nie)
-                     : physics::boltzmann_neutral_equilibrium(doping_[i], t.nie);
+    const physics::DopantLevels levels = thermal_levels_at(i, theta);
+    const physics::NeutralEquilibrium q = detail::neutral_equilibrium(
+        fermi_dirac_, ionization_, doping_[i], donors_[i], acceptors_[i], t.nie,
+        tn.log_nc + lt - ln_nie, tn.log_nv + lt - ln_nie, levels);
     // With E_F = -m (m = V / V_T) the band reduced energies are x_n = (psi - m - c_n) / theta and
     // x_p = (c_p + g + m - psi) / theta, so psi0 = m + c_n + theta x_n. Neutrality
     // G = n(x_n, theta) - p(x_p, theta) - C = 0 fixes psi0(theta): dpsi0 / dtheta = -G_t / G_psi,
@@ -456,13 +524,258 @@ DriftDiffusion::ThermalOhmic DriftDiffusion::thermal_ohmic(std::size_t i,
     const Level ln = level(q.n, theta, t.nie, tn.log_nc);
     const Level lp = level(q.p, theta, t.nie, tn.log_nv);
     const double sn = q.n / (1.0 - q.n * ln.dg_dc), sp = q.p / (1.0 - q.p * lp.dg_dc);
-    const double G_psi = (sn + sp) / theta;
-    const double G_t = 1.5 * q.n / theta - sn * ln.x / theta - 1.5 * q.p / theta -
-                       sp * (t.d_gap - lp.x) / theta;
+    double G_psi = (sn + sp) / theta;
+    double G_t = 1.5 * q.n / theta - sn * ln.x / theta - 1.5 * q.p / theta -
+                 sp * (t.d_gap - lp.x) / theta;
+    if (ionization_) {
+        // G also loses N_D+ - N_A- at (x_n, x_p) and the levels E / k T (each a function of
+        // eta + E / k T).
+        const detail::IonizedCharge c = detail::ionized_charge(
+            donors_[i], acceptors_[i], donors_[i] > 0.0 ? ln.x : 0.0,
+            acceptors_[i] > 0.0 ? lp.x : 0.0, levels);
+        G_psi -= (c.d_eta_c - c.d_eta_v) / theta;
+        G_t -= c.d_eta_c * (-ln.x - levels.donor_kT) / theta +
+               c.d_eta_v * (t.d_gap - lp.x - levels.acceptor_kT) / theta;
+    }
     const double d_psi_t = -G_t / G_psi;  // of theta x_n, which psi0 - m - c_n is
     const double dn = 1.5 * q.n / theta + sn * (d_psi_t - ln.x) / theta;
     const double dp = 1.5 * q.p / theta + sp * (t.d_gap - d_psi_t - lp.x) / theta;
     return {metal_[i] + tn.c_n + theta * ln.x, q.n, q.p, d_psi_t, dn, dp};
+}
+
+DriftDiffusion::Shift DriftDiffusion::electrode_shift(std::size_t i,
+                                                      const ThermalState& t) const {
+    // psi_E = (V - phi_m(T) + reference depth at T0) / V_T: a p-polysilicon phi_m = chi + Eg(T)
+    // moves it by -(Eg(T) - Eg(T0)) / k T0; for a gate that is the node's own g(theta) (the gate's
+    // polysilicon is the node's material, gate.hpp), for an electrode silicon's.
+    const std::int32_t kind = thermal_nodes_[i].ppoly;
+    if (kind == 1) return {t.gap, t.d_gap};
+    if (kind == 2) {
+        const physics::Semiconductor poly = physics::silicon();
+        const double T = t.theta * T0_;
+        return {-(physics::band_gap_eV(poly, T) - physics::band_gap_eV(poly, T0_)) / V_T_,
+                -T0_ * physics::band_gap_slope_eV_per_K(poly, T) / V_T_};
+    }
+    return {0.0, 0.0};
+}
+
+void DriftDiffusion::add_thermal_impact(std::span<const double> x,
+                                        std::span<const ThermalState> t,
+                                        std::span<const NodeLevels> g, std::span<double> f,
+                                        std::span<double> values) const {
+    // add_impact_generation (drift_diffusion.cpp, the header comment) with the thermal fluxes,
+    // whose temperature partials enter through the currents, and gamma at the node's own T:
+    // d alpha / d gamma = (alpha - E d alpha / dE) / gamma for alpha = gamma A exp(-gamma B / E).
+    const bool jacobian = !values.empty();
+    const int D = dimension_;
+    std::vector<std::pair<ThermalFlux, ThermalFlux>> flux(edges_.size());
+    for (std::size_t k = 0; k < edges_.size(); ++k) {
+        if (edges_[k].carriers) flux[k] = thermal_fluxes(k, x, t, g);
+    }
+    constexpr double q = base::q_C;
+    constexpr double floor2 = impact_current_floor * impact_current_floor;
+    const double rho2 = impact_resolution_ * impact_resolution_;
+    for (const ImpactNode& node : impact_nodes_) {
+        const std::size_t i = node.node;
+        const double count = static_cast<double>(node.last - node.first);
+        const double T = t[i].theta * T0_;
+        const double gamma = physics::impact_ionization_temperature_factor(node.phonon_eV, T);
+        const double d_gamma =
+            T0_ * physics::impact_ionization_temperature_factor_slope(node.phonon_eV, T);
+        double E[3] = {}, jn[3] = {}, jp[3] = {}, R[2] = {0.0, 0.0};
+        for (std::size_t k = node.first; k < node.last; ++k) {
+            const ImpactEdge& ie = impact_edges_[k];
+            const EdgeTerm& e = edges_[ie.edge];
+            const double delta = x[4 * e.b] - x[4 * e.a];
+            const double Ek = -ie.field * delta;
+            const double jnk = ie.current * flux[ie.edge].first.flux;
+            const double jpk = ie.current * flux[ie.edge].second.flux;
+            const double root = std::sqrt(1.0 + delta * delta);
+            R[0] += ie.current * e.an * (x[4 * e.a + 1] + x[4 * e.b + 1]) * root / count;
+            R[1] += ie.current * e.ap * (x[4 * e.a + 2] + x[4 * e.b + 2]) * root / count;
+            for (int r = 0; r < D; ++r) {
+                double w = 0.0;
+                for (int c = 0; c < D; ++c) w += node.inverse[r * D + c] * ie.t[c];
+                E[r] += w * Ek;
+                jn[r] += w * jnk;
+                jp[r] += w * jpk;
+            }
+        }
+        double G = 0.0, dG_gamma = 0.0, dE[3] = {}, dj[2][3] = {}, dR[2] = {0.0, 0.0};
+        for (int c = 0; c < 2; ++c) {
+            const double* j = c == 0 ? jn : jp;
+            double mag2 = 0.0, Ej = 0.0;
+            for (int r = 0; r < D; ++r) {
+                mag2 += j[r] * j[r];
+                Ej += E[r] * j[r];
+            }
+            const double eps2 = floor2 + rho2 * R[c] * R[c];
+            const double m = std::sqrt(mag2 + eps2);
+            const double Epar = std::abs(Ej) / m;
+            const physics::ImpactIonizationRate a =
+                physics::impact_ionization_coefficient(c == 0 ? node.n : node.p, gamma, Epar);
+            if (a.alpha == 0.0 && a.d_dE == 0.0) continue;
+            const double w = mag2 / m;
+            G += a.alpha * w / q;
+            dG_gamma += (a.alpha - Epar * a.d_dE) / gamma * w / q;
+            const double s = Ej > 0.0 ? 1.0 : Ej < 0.0 ? -1.0 : 0.0;
+            const double m3 = m * m * m;
+            for (int r = 0; r < D; ++r) {
+                dE[r] += a.d_dE * w * s * j[r] / m / q;
+                dj[c][r] = (a.d_dE * w * (s * E[r] / m - std::abs(Ej) * j[r] / m3) +
+                            a.alpha * j[r] * (mag2 + 2.0 * eps2) / m3) /
+                           q;
+            }
+            dR[c] = -(a.d_dE * w * std::abs(Ej) + a.alpha * mag2) / m3 / q * rho2 * R[c];
+        }
+        const double k_row = volume_[i] * generation_scale_;
+        f[4 * i + 1] += k_row * G;
+        f[4 * i + 2] -= k_row * G;
+        if (!jacobian) continue;
+        // Row n of node i gets +v, row p -v, at column comp of node_j through edge `edge`.
+        const auto add = [&](std::size_t node_j, std::size_t comp, std::size_t edge, double v) {
+            const EdgeTerm& e = edges_[edge];
+            const ThermalEdge& te = thermal_edges_[edge];
+            for (const std::size_t row : {std::size_t{1}, std::size_t{2}}) {
+                const std::size_t pos = node_j == i ? block_[16 * i + 4 * row + comp]
+                                                    : (e.a == i ? te.ab : te.ba)[4 * row + comp];
+                values[pos] += (row == 1 ? k_row : -k_row) * v;
+            }
+        };
+        // gamma's own temperature dependence, on node i's theta column.
+        values[block_[16 * i + 4 * 1 + 3]] += k_row * dG_gamma * d_gamma;
+        values[block_[16 * i + 4 * 2 + 3]] -= k_row * dG_gamma * d_gamma;
+        for (std::size_t k = node.first; k < node.last; ++k) {
+            const ImpactEdge& ie = impact_edges_[k];
+            const EdgeTerm& e = edges_[ie.edge];
+            const ThermalFlux& fn = flux[ie.edge].first;
+            const ThermalFlux& fp = flux[ie.edge].second;
+            double wE = 0.0, wn = 0.0, wp = 0.0;
+            for (int r = 0; r < D; ++r) {
+                double w = 0.0;
+                for (int c = 0; c < D; ++c) w += node.inverse[r * D + c] * ie.t[c];
+                wE += w * dE[r];
+                wn += w * dj[0][r];
+                wp += w * dj[1][r];
+            }
+            wn *= ie.current;
+            wp *= ie.current;
+            const double delta = x[4 * e.b] - x[4 * e.a];
+            const double root = std::sqrt(1.0 + delta * delta);
+            const double rn = ie.current * e.an / count, rp = ie.current * e.ap / count;
+            const double sn = x[4 * e.a + 1] + x[4 * e.b + 1];
+            const double sp = x[4 * e.a + 2] + x[4 * e.b + 2];
+            const double dpsi = (dR[0] * rn * sn + dR[1] * rp * sp) * delta / root;
+            add(e.a, 0, ie.edge, wE * ie.field + wn * fn.d_psi[0] + wp * fp.d_psi[0] - dpsi);
+            add(e.b, 0, ie.edge, -wE * ie.field + wn * fn.d_psi[1] + wp * fp.d_psi[1] + dpsi);
+            add(e.a, 1, ie.edge, wn * fn.d_c[0] + dR[0] * rn * root);
+            add(e.b, 1, ie.edge, wn * fn.d_c[1] + dR[0] * rn * root);
+            add(e.a, 2, ie.edge, wp * fp.d_c[0] + dR[1] * rp * root);
+            add(e.b, 2, ie.edge, wp * fp.d_c[1] + dR[1] * rp * root);
+            add(e.a, 3, ie.edge, wn * fn.d_theta[0] + wp * fp.d_theta[0]);
+            add(e.b, 3, ie.edge, wn * fn.d_theta[1] + wp * fp.d_theta[1]);
+        }
+    }
+}
+
+void DriftDiffusion::add_thermal_interfaces(std::span<const double> x,
+                                            std::span<const ThermalState> t,
+                                            std::span<double> f,
+                                            std::span<double> values) const {
+    // interface_edges.hpp without traps (the model refuses them, T8): psi_I solves
+    // g_i (psi_I - psi_o) + g_s (psi_I - psi_s) = Q, Q = a Q_f / (Ns L_D) constant, so it does
+    // not depend on T; the half-edge fluxes go to the Poisson rows. Surface recombination at the
+    // semiconductor node's T: the carriers keep their quasi-Fermi levels across its half-cell, so
+    // the band reduced energies at the interface are x_n + (psi_I - psi_s) / theta and
+    // x_p - (psi_I - psi_s) / theta (at fixed x a density moves with N(theta), 1.5 / theta in
+    // ln), and the rate is SRH with lifetimes 1 / s and the equilibrium product and n1 = n_ie of
+    // the node's T.
+    const bool jacobian = !values.empty();
+    for (const InterfaceEdge& v : interfaces_.edges()) {
+        const std::size_t o = v.insulator, s = v.semiconductor;
+        const EdgeTerm& e = edges_[v.edge];
+        const ThermalEdge& te = thermal_edges_[v.edge];
+        const auto pos = [&](std::size_t row, std::size_t r, std::size_t col, std::size_t c) {
+            if (row == col) return block_[16 * row + 4 * r + c];
+            return (row == e.a ? te.ab : te.ba)[4 * r + c];
+        };
+        const double gi = v.g_insulator, gs = v.g_semiconductor, G = gi + gs;
+        const double psi_o = x[4 * o], psi_s = x[4 * s];
+        const double psi_I = (gi * psi_o + gs * psi_s + v.charge_weight * v.fixed_charge_cm2) / G;
+        const double dI_o = gi / G, dI_s = gs / G;  // d psi_I / d psi_o, d psi_s
+        if (electrode_[o] < 0 && contact_[o] < 0) {  // the insulator node's Poisson row
+            f[4 * o] += gi * (psi_I - psi_o);
+            if (jacobian) {
+                values[pos(o, 0, o, 0)] += gi * (dI_o - 1.0);
+                values[pos(o, 0, s, 0)] += gi * dI_s;
+            }
+        }
+        if (contact_[s] >= 0) continue;  // a Dirichlet semiconductor node
+        f[4 * s] += gs * (psi_I - psi_s);
+        if (jacobian) {
+            values[pos(s, 0, o, 0)] += gs * dI_o;
+            values[pos(s, 0, s, 0)] += gs * (dI_s - 1.0);
+        }
+        if (!(v.velocity_n > 0.0 && v.velocity_p > 0.0)) continue;
+        const ThermalState& ts = t[s];
+        const ThermalNode& tn = thermal_nodes_[s];
+        const double theta = ts.theta;
+        const double bend = (psi_I - psi_s) / theta;
+        // d bend / d (psi_o, psi_s, theta).
+        const double db[3] = {dI_o / theta, (dI_s - 1.0) / theta, -bend / theta};
+        const Level ln = level(x[4 * s + 1], theta, ts.nie, tn.log_nc);
+        const Level lp = level(x[4 * s + 2], theta, ts.nie, tn.log_nv);
+        const double lt = 1.5 * std::log(theta), ln_nie = std::log(ts.nie);
+        const double gn_log = tn.log_nc + lt - ln_nie, gp_log = tn.log_nv + lt - ln_nie;
+        const physics::DensityResult nI =
+            detail::density(fermi_dirac_, ts.nie, gn_log, ln.x + bend + gn_log);
+        const physics::DensityResult pI =
+            detail::density(fermi_dirac_, ts.nie, gp_log, lp.x - bend + gp_log);
+        // n_I and p_I in (psi_o, psi_s, n_s, p_s, theta).
+        const double Nd = nI.d_eta, Pd = pI.d_eta;
+        const double dn[5] = {Nd * db[0], Nd * db[1], Nd * ln.dx_dc, 0.0,
+                              1.5 * nI.density / theta + Nd * (ln.dx_dt + db[2])};
+        const double dp[5] = {-Pd * db[0], -Pd * db[1], 0.0, Pd * lp.dx_dc,
+                              1.5 * pI.density / theta + Pd * (lp.dx_dt - db[2])};
+        // The product at the interface densities and its direct theta derivative (n_ie and, at
+        // fixed density, ln gamma through N(theta)).
+        physics::EquilibriumProduct E = physics::boltzmann_equilibrium_product(ts.nie);
+        double dE_t = 2.0 * ts.nie * ts.d_nie;
+        if (fermi_dirac_) {
+            const Level In = level(nI.density, theta, ts.nie, tn.log_nc);
+            const Level Ip = level(pI.density, theta, ts.nie, tn.log_nv);
+            E = physics::fermi_dirac_equilibrium_product(ts.nie, {In.log_gamma, In.dg_dc},
+                                                         {Ip.log_gamma, Ip.dg_dc});
+            dE_t = E.value * (2.0 * ts.d_nie / ts.nie + In.dg_dt + Ip.dg_dt);
+        }
+        const double tp = 1.0 / v.velocity_n, tq = 1.0 / v.velocity_p;  // as srh's tau_n, tau_p
+        const physics::RecombinationRate r =
+            physics::srh_recombination(nI.density, pI.density, E, ts.nie, tp, tq);
+        const double den = tq * (nI.density + ts.nie) + tp * (pI.density + ts.nie);
+        const double R_t = -dE_t / den - (nI.density * pI.density - E.value) * (tq + tp) *
+                                             ts.d_nie / (den * den);
+        const double rw = v.rate_weight;
+        f[4 * s + 1] -= rw * r.rate;
+        f[4 * s + 2] += rw * r.rate;
+        if (!jacobian) continue;
+        // Columns: psi_o, psi_s, n_s, p_s, theta_s.
+        const std::size_t col_node[5] = {o, s, s, s, s};
+        const std::size_t col[5] = {0, 0, 1, 2, 3};
+        for (std::size_t c = 0; c < 5; ++c) {
+            const double d = r.d_dn * dn[c] + r.d_dp * dp[c] + (c == 4 ? R_t : 0.0);
+            if (d == 0.0) continue;
+            values[pos(s, 1, col_node[c], col[c])] -= rw * d;
+            values[pos(s, 2, col_node[c], col[c])] += rw * d;
+        }
+    }
+}
+
+void DriftDiffusion::add_gate_shift(std::span<const double> x, std::span<double> charge) const {
+    for (std::size_t i = 0; i < node_count(); ++i) {
+        if (!gates_.on_gate(i) || thermal_nodes_[i].ppoly != 1) continue;
+        charge[gates_.contact(i)] +=
+            gates_.term(i).coupling * electrode_shift(i, thermal_state(i, x[4 * i + 3])).value;
+    }
 }
 
 void DriftDiffusion::assemble_heat(std::span<const double> x, std::span<double> f,
@@ -512,20 +825,40 @@ void DriftDiffusion::assemble_heat(std::span<const double> x, std::span<double> 
             }
             continue;
         }
-        if (insulator_[i] != 0) {  // no charge, no carriers (electrodes are refused)
-            f[4 * i] = 0.0;
+        if (insulator_[i] != 0) {  // no charge, no carriers; an electrode holds psi at its T
+            const bool electrode = electrode_[i] >= 0;
+            const Shift e = electrode ? electrode_shift(i, t[i]) : Shift{0.0, 0.0};
+            f[4 * i] = electrode ? psi - psi0_[i] - e.value : 0.0;
             f[4 * i + 1] = n;
             f[4 * i + 2] = p;
-            if (jacobian) at(i, 1, 1) = at(i, 2, 2) = 1.0;
+            if (jacobian) {
+                if (electrode) {
+                    at(i, 0, 0) = 1.0;
+                    at(i, 0, 3) = -e.d_theta;
+                }
+                at(i, 1, 1) = at(i, 2, 2) = 1.0;
+            }
             continue;
         }
         const double V = volume_[i];
-        f[4 * i] = -V * (n - p - doping_[i]);
+        // The charge with the ionized doping at the node's T (the net doping when complete).
+        const ThermalCharge dop = thermal_charge(i, t[i], g.empty() ? NodeLevels{} : g[i]);
+        f[4 * i] = -V * (n - p - dop.value);
         f[4 * i + 1] = 0.0;
         f[4 * i + 2] = 0.0;
         if (jacobian) {
-            at(i, 0, 1) = -V;
-            at(i, 0, 2) = V;
+            at(i, 0, 1) = -V * (1.0 - dop.d_n);
+            at(i, 0, 2) = V * (1.0 + dop.d_p);
+            at(i, 0, 3) = V * dop.d_theta;
+        }
+        if (gates_.on_gate(i)) {  // the oxide term G (psi_G(T) - psi) + S (gate.hpp)
+            const double G = gates_.term(i).coupling;
+            const Shift e = electrode_shift(i, t[i]);
+            f[4 * i] += gates_.row_term(i, psi) + G * e.value;
+            if (jacobian) {
+                at(i, 0, 0) -= G;
+                at(i, 0, 3) += G * e.d_theta;
+            }
         }
         const double nie = t[i].nie, d_nie = t[i].d_nie;
         // Recombination R / R0 and its partials; d_t its theta derivative through n_ie.
@@ -583,13 +916,17 @@ void DriftDiffusion::assemble_heat(std::span<const double> x, std::span<double> 
         // heat row the energy they take with them, e_n V dn/dt - e_p V dp/dt over K0 (T4: the
         // edges' energy flow counts the carriers a box stores as received; they are not heat),
         // e at the node's own state.
+        // The stored carriers S_n, S_p (with incomplete ionization the bound ones too, at T).
+        const ThermalStorage st = thermal_storage(i, x, t[i], g.empty() ? NodeLevels{} : g[i]);
         const double ks = V * step->rate;
-        const double dn = n - step->storage[3 * i], dp = p - step->storage[3 * i + 1];
+        const double dn = st.n - step->storage[3 * i], dp = st.p - step->storage[3 * i + 1];
         f[4 * i + 1] -= ks * dn;
         f[4 * i + 2] += ks * dp;
         if (jacobian) {
-            at(i, 1, 1) -= ks;
-            at(i, 2, 2) += ks;
+            at(i, 1, 1) -= ks * st.n_n;
+            at(i, 1, 3) -= ks * st.n_t;
+            at(i, 2, 2) += ks * st.p_p;
+            at(i, 2, 3) += ks * st.p_t;
         }
         if (held(i)) continue;
         const Level none{};
@@ -603,14 +940,15 @@ void DriftDiffusion::assemble_heat(std::span<const double> x, std::span<double> 
         f[4 * i + 3] += inv_K0 * ks * (en * dn - ep * dp);
         if (jacobian) {
             at(i, 3, 0) += inv_K0 * ks * (dp - dn);
-            at(i, 3, 1) += inv_K0 * ks * (en + dn * theta * ln.dh_dc);
-            at(i, 3, 2) += inv_K0 * ks * (-ep + dp * theta * lp.dh_dc);
+            at(i, 3, 1) += inv_K0 * ks * (en * st.n_n + dn * theta * ln.dh_dc);
+            at(i, 3, 2) += inv_K0 * ks * (-ep * st.p_p + dp * theta * lp.dh_dc);
             at(i, 3, 3) += inv_K0 * ks *
-                           (dn * (kn + theta * ln.dh_dt) -
+                           (en * st.n_t - ep * st.p_t + dn * (kn + theta * ln.dh_dt) -
                             dp * (t[i].d_gap - kp - theta * lp.dh_dt));
         }
     }
 
+    if (!interfaces_.empty()) add_thermal_interfaces(x, t, f, values);
     const double inv_K0 = 1.0 / heat_scale_;
     for (std::size_t k = 0; k < edges_.size(); ++k) {
         const EdgeTerm& e = edges_[k];
@@ -642,8 +980,13 @@ void DriftDiffusion::assemble_heat(std::span<const double> x, std::span<double> 
         const double poisson = e.c * (x[4 * b] - x[4 * a]);
         const double dpoisson[2][4] = {{-e.c, 0, 0, 0}, {e.c, 0, 0, 0}};
         if (!e.carriers) {
-            if (contact_[a] < 0) add(a, 0, 1.0, poisson, dpoisson);
-            if (contact_[b] < 0) add(b, 0, -1.0, poisson, dpoisson);
+            // A charged interface edge takes the half-edge fluxes instead (add_thermal_interfaces).
+            if (!e.charged && contact_[a] < 0 && electrode_[a] < 0) {
+                add(a, 0, 1.0, poisson, dpoisson);
+            }
+            if (!e.charged && contact_[b] < 0 && electrode_[b] < 0) {
+                add(b, 0, -1.0, poisson, dpoisson);
+            }
             if (!held(a)) add(a, 3, 1.0, heat_value, heat);
             if (!held(b)) add(b, 3, -1.0, heat_value, heat);
             continue;
@@ -698,6 +1041,7 @@ void DriftDiffusion::assemble_heat(std::span<const double> x, std::span<double> 
                 heat_value - inv_K0 * ((en + m) * fn.flux + (ep + m) * fp.flux), grad);
         }
     }
+    if (!impact_nodes_.empty()) add_thermal_impact(x, t, g, f, values);
 }
 
 void DriftDiffusion::add_thermal_storage(std::span<const double> x, std::complex<double> s,
@@ -717,8 +1061,12 @@ void DriftDiffusion::add_thermal_storage(std::span<const double> x, std::complex
         if (!held) at(i, 3, 3) += s * tn.capacity;
         if (contact_[i] >= 0 || insulator_[i] != 0) continue;
         const double V = volume_[i];
-        at(i, 1, 1) -= s * V;
-        at(i, 2, 2) += s * V;
+        const NodeLevels none_levels{};
+        const ThermalStorage st = thermal_storage(i, x, t[i], g.empty() ? none_levels : g[i]);
+        at(i, 1, 1) -= s * (V * st.n_n);
+        at(i, 1, 3) -= s * (V * st.n_t);
+        at(i, 2, 2) += s * (V * st.p_p);
+        at(i, 2, 3) += s * (V * st.p_t);
         if (held) continue;
         const Level none{};
         const Level& ln = g.empty() ? none : g[i].n;
@@ -726,8 +1074,9 @@ void DriftDiffusion::add_thermal_storage(std::span<const double> x, std::complex
         const double psi = x[4 * i], theta = t[i].theta;
         const double en = tn.c_n - psi + (tn.r_n + 2.5 + ln.extra) * theta;
         const double ep = tn.c_p - psi + t[i].gap - (tn.r_p + 2.5 + lp.extra) * theta;
-        at(i, 3, 1) += s * (inv_K0 * V * en);
-        at(i, 3, 2) -= s * (inv_K0 * V * ep);
+        at(i, 3, 1) += s * (inv_K0 * V * en * st.n_n);
+        at(i, 3, 2) -= s * (inv_K0 * V * ep * st.p_p);
+        at(i, 3, 3) += s * (inv_K0 * V * (en * st.n_t - ep * st.p_t));
     }
 }
 

@@ -333,7 +333,8 @@ std::expected<DriftDiffusion, base::Error> DriftDiffusion::create(
                 continue;
             }
             ImpactNode node{i, s.impact_edges_.size(), 0, {}, ii.electron, ii.hole,
-                            physics::impact_ionization_temperature_factor(ii.phonon_energy_eV, T)};
+                            physics::impact_ionization_temperature_factor(ii.phonon_energy_eV, T),
+                            ii.phonon_energy_eV};
             double outer[9] = {};
             for (const std::size_t k : incident[i]) {
                 const detail::ScaledEdge& e = scaled->edges[k];
@@ -499,6 +500,9 @@ void DriftDiffusion::stamp_contacts(std::span<double> x) const {
                 x[4 * i + 3] = thermal_rise_[static_cast<std::size_t>(c)];
             }
             if (insulator_[i] != 0) {
+                if (electrode_[i] >= 0) {
+                    x[4 * i] = psi0_[i] + electrode_shift(i, thermal_state(i, x[4 * i + 3])).value;
+                }
                 x[4 * i + 1] = x[4 * i + 2] = 0.0;
             } else if (contact_[i] >= 0) {
                 const ThermalOhmic o = thermal_ohmic(i, thermal_state(i, x[4 * i + 3]));
@@ -1036,11 +1040,22 @@ void DriftDiffusion::residual(std::span<const double> x, const TimeStep& step,
 
 std::vector<double> DriftDiffusion::storage(std::span<const double> x) const {
     NITCAD_EXPECTS(x.size() == unknowns());
-    const std::vector<NodeDegeneracy> g = degeneracies(x);
     const std::size_t w = storage_width();
     std::vector<double> s(w * node_count(), 0.0);
+    if (electrothermal()) {  // (S_n, S_p) at each node's T, and tau
+        const std::vector<ThermalState> t = thermal_states(x);
+        const std::vector<NodeLevels> l = thermal_levels(x, t);
+        for (std::size_t i = 0; i < node_count(); ++i) {
+            s[3 * i + 2] = x[4 * i + 3];
+            if (insulator_[i] != 0) continue;
+            const ThermalStorage st = thermal_storage(i, x, t[i], l.empty() ? NodeLevels{} : l[i]);
+            s[3 * i] = st.n;
+            s[3 * i + 1] = st.p;
+        }
+        return s;
+    }
+    const std::vector<NodeDegeneracy> g = degeneracies(x);
     for (std::size_t i = 0; i < node_count(); ++i) {
-        if (electrothermal()) s[3 * i + 2] = x[4 * i + 3];  // tau, every node
         if (insulator_[i] != 0) continue;
         const NodeStorage st = node_storage(i, x, g);
         s[w * i] = st.n;
@@ -1069,6 +1084,7 @@ std::vector<double> DriftDiffusion::contact_charges(std::span<const double> x,
                                                     const TimeStep* step) const {
     NITCAD_EXPECTS(x.size() == unknowns());
     std::vector<double> charge = gates_.charges(x, m_, contact_count_);
+    if (electrothermal()) add_gate_shift(x, charge);
     const auto owner = [&](std::size_t i) {
         return contact_[i] >= 0 ? contact_[i] : electrode_[i];
     };
@@ -1297,6 +1313,7 @@ std::vector<double> DriftDiffusion::gate_charges(std::span<const double> x,
                                                  const TimeStep* step) const {
     NITCAD_EXPECTS(x.size() == unknowns());
     std::vector<double> charge = gates_.charges(x, m_, contact_count_);
+    if (electrothermal()) add_gate_shift(x, charge);
     for (const EdgeTerm& e : edges_) {
         const std::int32_t ca = electrode_[e.a], cb = electrode_[e.b];
         if (ca == cb || e.charged) continue;
@@ -1478,6 +1495,10 @@ std::vector<DriftDiffusion::CurrentRow> DriftDiffusion::small_signal_currents(
         const std::size_t c = gates_.contact(i);
         const double G = gates_.term(i).coupling;
         terms[c].emplace_back(m_ * i, -s * G);
+        if (electrothermal()) {  // a p-polysilicon gate's potential moves with the node's T
+            const double d = electrode_shift(i, thermal_state(i, x[4 * i + 3])).d_theta;
+            if (d != 0.0) terms[c].emplace_back(4 * i + 3, s * G * d);
+        }
         rows[c].bias += s * (G / V_T_);
     }
     for (const EdgeTerm& e : edges_) {

@@ -256,6 +256,7 @@ std::expected<results::Sweep, base::Error> sweep_bias(const device::Device& devi
                    if (!solved && plain && solved.error().code != base::ErrorCode::cancelled) {
                        x = stamped;
                        (void)plain->set_bias(points[k]);  // checked
+                       if (thermal) (void)plain->set_thermal_bias(thermal_bias[k]);  // likewise
                        results::ConvergenceRecord unused;
                        if (auto ok = newton_solve(*plain, x, options.newton, *plain_solver, unused,
                                                   control.stop);

@@ -13,6 +13,7 @@
 #include <limits>
 #include <span>
 #include <string>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -21,6 +22,7 @@
 #include "NiTCAD/device/device.hpp"
 #include "NiTCAD/mesh/tensor_grid.hpp"
 #include "NiTCAD/physics/insulator.hpp"
+#include "NiTCAD/physics/interface_traps.hpp"
 #include "NiTCAD/physics/semiconductor.hpp"
 
 using namespace NiTCAD;
@@ -60,7 +62,28 @@ struct Options {
     bool sinks = true;    // isothermal x_min, R_th x_max
     bool fermi = false;   // Fermi-Dirac statistics (the models, and other_material's exponents)
     bool field = false;   // field-dependent mobility (the models)
+    bool gate = false;    // 2D: a p-polysilicon gate on y_max (inside the x ends)
+    bool electrode = false;  // 2D with oxide: a p-polysilicon electrode on y_max
+    bool thermionic = false;  // with hetero: the material step declared thermionic_emission
+    bool interface = false;   // with oxide: silicon-oxide fixed charge and surface recombination
+    bool traps = false;       // with interface: an interface trap level too (refused, T8)
+    bool ionization = false;  // incomplete ionization (the models)
 };
+
+// The models of the fixture's options, with or without the electrothermal model.
+assemble::PhysicsModels models(const Options& o, bool thermal = true) {
+    return {.field_mobility = o.field,
+            .fermi_dirac = o.fermi,
+            .incomplete_ionization = o.ionization,
+            .electrothermal = thermal};
+}
+
+// The biases of the fixture's contacts: anode, cathode, and the gate or electrode.
+std::vector<double> biases(const Options& o) {
+    std::vector<double> v{0.4, -0.3};
+    if (o.gate || o.electrode) v.push_back(0.7);
+    return v;
+}
 
 // A pn diode on [0, 1 um] along x (p 1e17 below 0.5 um, n 2e17 above), [0, 0.5 um] across.
 device::Device diode(const Options& o) {
@@ -96,6 +119,32 @@ device::Device diode(const Options& o) {
     std::vector<device::Contact> contacts{
         {"anode", device::ContactKind::ohmic, silicon_nodes("x_min")},
         {"cathode", device::ContactKind::ohmic, silicon_nodes("x_max")}};
+    if (o.gate || o.electrode) {
+        std::vector<mesh::NodeId> top;
+        for (const mesh::NodeId k : m.find_boundary("y_max")->nodes) {
+            const double xk = m.points()[static_cast<std::size_t>(k)][0];
+            if (o.electrode || (xk > 1e-12 && xk < 1e-4 - 1e-12)) top.push_back(k);
+        }
+        if (o.gate) {
+            contacts.push_back({"gate", device::ContactKind::gate, std::move(top),
+                                {.boundary = "y_max", .oxide_thickness_cm = 5e-7,
+                                 .electrode = device::GateElectrode::p_poly}});
+        } else {
+            contacts.push_back({"electrode", device::ContactKind::electrode, std::move(top), {},
+                                {.kind = device::GateElectrode::p_poly}});
+        }
+    }
+    std::vector<device::Interface> interfaces;
+    if (o.interface) {
+        interfaces.push_back({.region_a = "silicon", .region_b = "oxide",
+                              .fixed_charge_cm2 = 1e11, .recombination_velocity_n_cm_s = 1e4,
+                              .recombination_velocity_p_cm_s = 2e4});
+        if (o.traps) interfaces.back().traps.levels = {{.density_cm2 = 1e10, .energy_eV = 0.1}};
+    }
+    if (o.thermionic) {
+        interfaces.push_back(
+            {"silicon", "other", device::InterfaceTransport::thermionic_emission});
+    }
     std::vector<device::ThermalContact> thermal;
     if (o.sinks) {
         thermal = {{"sink", "x_min", device::ThermalContactKind::isothermal, 310.0, 0.0},
@@ -109,6 +158,7 @@ device::Device diode(const Options& o) {
          .donors = std::move(donors),
          .acceptors = std::move(acceptors),
          .contacts = std::move(contacts),
+         .interfaces = interfaces,
          .thermal_contacts = std::move(thermal)});
     if (!device) FAIL(device.error().message);
     REQUIRE(device->regions().size() == 1u + (o.hetero ? 1u : 0u) + (o.oxide ? 1u : 0u));
@@ -126,18 +176,18 @@ struct Noise {
     }
 };
 
-// A biased, heated state: psi falling 20 V_T across the device, n (1e16) and p 1e15 cm^-3, theta
-// rising from 1 to 1.3 along x, every unknown with relative noise. Insulator densities 0; the
-// contact nodes are not stamped (their rows are Dirichlet rows).
+// A biased, heated state: psi falling `drop` (20) V_T across the device, n (1e16) and p 1e15
+// cm^-3, theta rising from 1 to 1.3 along x, every unknown with relative noise. Insulator
+// densities 0; the contact nodes are not stamped (their rows are Dirichlet rows).
 std::vector<double> heated(const DriftDiffusion& dd, const device::Device& d,
                            const assemble::Scaling& s, double noise, std::uint64_t seed,
-                           double theta_rise = 0.3, double n_cm3 = 1e16) {
+                           double theta_rise = 0.3, double n_cm3 = 1e16, double drop = 20.0) {
     const std::size_t m = dd.stride();
     std::vector<double> x(dd.unknowns());
     Noise z{seed};
     for (std::size_t i = 0; i < dd.node_count(); ++i) {
         const double u = d.mesh().points()[i][0] / 1e-4;
-        x[m * i] = -20.0 * u * (1.0 + noise * z.next());
+        x[m * i] = -drop * u * (1.0 + noise * z.next());
         const bool insulator = d.is_insulator(static_cast<mesh::NodeId>(i));
         x[m * i + 1] = insulator ? 0.0 : n_cm3 / s.Ns * (1.0 + noise * z.next());
         x[m * i + 2] = insulator ? 0.0 : 1e15 / s.Ns * (1.0 + noise * z.next());
@@ -251,16 +301,26 @@ TEST_CASE("electrothermal assemble: the finite-difference Jacobian gate") {
         {{.D = 2, .nodes = 9, .hetero = true, .oxide = true, .fermi = true}, "2D Fermi-Dirac"},
         {{.D = 1, .hetero = true, .field = true}, "1D field mobility"},
         {{.D = 2, .nodes = 9, .hetero = true, .fermi = true, .field = true},
-         "2D Fermi-Dirac and field mobility"}};
+         "2D Fermi-Dirac and field mobility"},
+        {{.D = 2, .nodes = 9, .gate = true}, "2D p-polysilicon gate"},
+        {{.D = 2, .nodes = 9, .hetero = true, .oxide = true, .electrode = true},
+         "2D p-polysilicon electrode"},
+        {{.D = 1, .hetero = true, .thermionic = true}, "1D thermionic emission"},
+        {{.D = 2, .nodes = 9, .hetero = true, .fermi = true, .thermionic = true},
+         "2D thermionic emission, Fermi-Dirac"},
+        {{.D = 2, .nodes = 9, .oxide = true, .interface = true}, "2D interface"},
+        {{.D = 2, .nodes = 9, .oxide = true, .fermi = true, .interface = true},
+         "2D interface, Fermi-Dirac"},
+        {{.D = 1, .hetero = true, .ionization = true}, "1D incomplete ionization"},
+        {{.D = 2, .nodes = 9, .hetero = true, .fermi = true, .ionization = true},
+         "2D incomplete ionization, Fermi-Dirac"}};
     for (const Case& c : cases) {
         const device::Device d = diode(c.o);
         const auto s = *assemble::make_scaling(d);
-        auto made = DriftDiffusion::create(
-            d, s,
-            {.field_mobility = c.o.field, .fermi_dirac = c.o.fermi, .electrothermal = true});
+        auto made = DriftDiffusion::create(d, s, models(c.o));
         if (!made) FAIL(c.name << ": " << made.error().message);
         auto& dd = *made;
-        REQUIRE(dd.set_bias(std::vector<double>{0.4, -0.3}).has_value());
+        REQUIRE(dd.set_bias(biases(c.o)).has_value());
         const auto x = heated(dd, d, s, 0.05, 11, 0.3, c.o.fermi ? 1e20 : 1e16);
         const double error = fd_jacobian_error(dd, x);
         CAPTURE(c.name, error);
@@ -273,12 +333,19 @@ TEST_CASE("electrothermal assemble: the finite-difference Jacobian gate of a tim
     // energy in the heat rows, from a history state that differs from the new one everywhere.
     for (const Options o : {Options{.D = 1, .hetero = true},
                             Options{.D = 2, .nodes = 9, .hetero = true, .oxide = true},
-                            Options{.D = 1, .hetero = true, .fermi = true, .field = true}}) {
+                            Options{.D = 1, .hetero = true, .fermi = true, .field = true},
+                            Options{.D = 2, .nodes = 9, .gate = true},
+                            Options{.D = 2, .nodes = 9, .oxide = true, .electrode = true},
+          Options{.D = 1, .hetero = true, .thermionic = true},
+          Options{.D = 1, .hetero = true, .fermi = true, .thermionic = true},
+          Options{.D = 2, .nodes = 9, .oxide = true, .interface = true},
+          Options{.D = 2, .nodes = 9, .oxide = true, .fermi = true, .interface = true},
+          Options{.D = 1, .hetero = true, .ionization = true},
+          Options{.D = 1, .hetero = true, .fermi = true, .ionization = true}}) {
         const device::Device d = diode(o);
         const auto s = *assemble::make_scaling(d);
-        auto dd = *DriftDiffusion::create(
-            d, s, {.field_mobility = o.field, .fermi_dirac = o.fermi, .electrothermal = true});
-        REQUIRE(dd.set_bias(std::vector<double>{0.4, -0.3}).has_value());
+        auto dd = *DriftDiffusion::create(d, s, models(o));
+        REQUIRE(dd.set_bias(biases(o)).has_value());
         const double n_cm3 = o.fermi ? 1e20 : 1e16;
         const auto before = heated(dd, d, s, 0.05, 5, 0.25, n_cm3);
         const auto x = heated(dd, d, s, 0.05, 11, 0.3, n_cm3);
@@ -298,14 +365,20 @@ TEST_CASE("electrothermal assemble: at theta = 1 the isothermal rows and current
           Options{.D = 2, .nodes = 9, .hetero = true, .oxide = true},
           Options{.D = 1, .hetero = true, .fermi = true},
           Options{.D = 2, .nodes = 9, .hetero = true, .oxide = true, .fermi = true},
-          Options{.D = 1, .hetero = true, .fermi = true, .field = true}}) {
+          Options{.D = 1, .hetero = true, .fermi = true, .field = true},
+          Options{.D = 2, .nodes = 9, .gate = true},
+          Options{.D = 2, .nodes = 9, .oxide = true, .electrode = true},
+          Options{.D = 1, .hetero = true, .thermionic = true},
+          Options{.D = 1, .hetero = true, .fermi = true, .thermionic = true},
+          Options{.D = 2, .nodes = 9, .oxide = true, .interface = true},
+          Options{.D = 2, .nodes = 9, .oxide = true, .fermi = true, .interface = true},
+          Options{.D = 1, .hetero = true, .ionization = true},
+          Options{.D = 1, .hetero = true, .fermi = true, .ionization = true}}) {
         const device::Device d = diode(o);
         const auto s = *assemble::make_scaling(d);
-        auto iso =
-            *DriftDiffusion::create(d, s, {.field_mobility = o.field, .fermi_dirac = o.fermi});
-        auto on = *DriftDiffusion::create(
-            d, s, {.field_mobility = o.field, .fermi_dirac = o.fermi, .electrothermal = true});
-        const std::vector<double> bias{0.4, -0.3};
+        auto iso = *DriftDiffusion::create(d, s, models(o, false));
+        auto on = *DriftDiffusion::create(d, s, models(o));
+        const std::vector<double> bias = biases(o);
         REQUIRE(iso.set_bias(bias).has_value());
         REQUIRE(on.set_bias(bias).has_value());
         const auto x3 = heated(iso, d, s, 0.05, 3, 0.3, o.fermi ? 1e20 : 1e16);
@@ -345,9 +418,13 @@ TEST_CASE("electrothermal assemble: no current at equilibrium at a uniform tempe
     // over a potential profile and across the material step: every flux vanishes to round-off of
     // its one-sided terms. With a temperature step instead, the fluxes do not vanish.
     // Under Fermi-Dirac statistics too, with the potential swinging the electrons degenerate.
-    for (const auto& [fermi, hetero] : {std::pair{false, false}, std::pair{false, true},
-                                        std::pair{true, false}, std::pair{true, true}}) {
-        const device::Device d = diode({.D = 1, .hetero = hetero, .fermi = fermi});
+    // And across a thermionic-emission step.
+    for (const auto& [fermi, hetero, emission] :
+         {std::tuple{false, false, false}, std::tuple{false, true, false},
+          std::tuple{false, true, true}, std::tuple{true, false, false},
+          std::tuple{true, true, false}, std::tuple{true, true, true}}) {
+        const device::Device d =
+            diode({.D = 1, .hetero = hetero, .fermi = fermi, .thermionic = emission});
         const auto s = *assemble::make_scaling(d);
         const auto dd =
             *DriftDiffusion::create(d, s, {.fermi_dirac = fermi, .electrothermal = true});
@@ -394,12 +471,69 @@ TEST_CASE("electrothermal assemble: no current at equilibrium at a uniform tempe
                 worst = std::max({worst, std::abs(c[k].first) / size_n,
                                   std::abs(c[k].second) / size_p});
             }
-            CAPTURE(fermi, hetero, step, worst);
+            CAPTURE(fermi, hetero, emission, step, worst);
             if (step == 0.0) {
                 REQUIRE(worst <= 1e-9);
             } else {
                 REQUIRE(worst >= 1e-6);
             }
+        }
+    }
+}
+
+TEST_CASE("electrothermal assemble: impact ionization with gamma(T)") {
+    // A field of about 3e5 V/cm (1160 V_T across 1 um): generation at every node, its temperature
+    // dependence through the currents and gamma. The FD gate; and at theta = 1 the isothermal
+    // rows, generation included.
+    for (const int D : {1, 2}) {
+        for (const bool fermi : {false, true}) {
+            const Options o{.D = D, .nodes = D == 1 ? 11 : 9};
+            const device::Device d = diode(o);
+            const auto s = *assemble::make_scaling(d);
+            const assemble::PhysicsModels on_models{
+                .fermi_dirac = fermi, .impact_ionization = true, .electrothermal = true};
+            auto dd = *DriftDiffusion::create(d, s, on_models);
+            REQUIRE(dd.set_bias(biases(o)).has_value());
+            const auto x = heated(dd, d, s, 0.05, 7, 0.3, 1e16, 1160.0);
+            const double error = fd_jacobian_error(dd, x);
+            CAPTURE(D, fermi, error);
+            REQUIRE(error <= 1e-6);
+            // The generation is there: the rows differ from the model without it.
+            auto off_models = on_models;
+            off_models.impact_ionization = false;
+            auto plain = *DriftDiffusion::create(d, s, off_models);
+            REQUIRE(plain.set_bias(biases(o)).has_value());
+            std::vector<double> f_on(dd.unknowns()), f_off(dd.unknowns());
+            dd.residual(x, f_on);
+            plain.residual(x, f_off);
+            double generation = 0.0;
+            for (std::size_t k = 0; k < f_on.size(); ++k) {
+                generation = std::max(generation, std::abs(f_on[k] - f_off[k]));
+            }
+            REQUIRE(generation > 0.0);
+            // theta = 1: the isothermal system's rows.
+            auto iso = *DriftDiffusion::create(
+                d, s, {.fermi_dirac = fermi, .impact_ionization = true});
+            REQUIRE(iso.set_bias(biases(o)).has_value());
+            std::vector<double> x3(iso.unknowns()), x4 = x;
+            for (std::size_t i = 0; i < iso.node_count(); ++i) {
+                for (std::size_t r = 0; r < 3; ++r) x3[3 * i + r] = x[4 * i + r];
+                x4[4 * i + 3] = 0.0;
+            }
+            std::vector<double> f3(iso.unknowns()), f4(dd.unknowns());
+            iso.residual(x3, f3);
+            dd.residual(x4, f4);
+            double scale = 0.0, worst = 0.0;
+            for (const auto& [jn, jp] : iso.edge_currents(x3)) {
+                scale = std::max({scale, std::abs(jn), std::abs(jp)});
+            }
+            for (std::size_t i = 0; i < iso.node_count(); ++i) {
+                for (std::size_t r = 1; r < 3; ++r) {
+                    worst = std::max(worst, std::abs(f4[4 * i + r] - f3[3 * i + r]) / scale);
+                }
+            }
+            CAPTURE(worst);
+            REQUIRE(worst <= 1e-12);
         }
     }
 }
@@ -419,7 +553,7 @@ TEST_CASE("electrothermal assemble: the Joule part of each edge's heat is not ne
     }
 }
 
-TEST_CASE("electrothermal assemble: refused and unsupported inputs") {
+TEST_CASE("electrothermal assemble: refused inputs") {
     const device::Device d = diode({});
     const auto s = *assemble::make_scaling(d);
     const auto refused = [&](const device::Device& dev, assemble::PhysicsModels models,
@@ -433,6 +567,8 @@ TEST_CASE("electrothermal assemble: refused and unsupported inputs") {
     };
     // T8: band-to-band tunnelling and interface traps are refused, not frozen at T0.
     refused(d, {.btbt_local = true}, "band-to-band tunnelling (DECISIONS.md T8)");
+    refused(diode({.D = 2, .nodes = 9, .oxide = true, .interface = true, .traps = true}), {},
+            "interface traps (DECISIONS.md T8)");
     // T11: a material without thermal data.
     {
         physics::SemiconductorParameters p = physics::silicon_parameters;
@@ -449,11 +585,8 @@ TEST_CASE("electrothermal assemble: refused and unsupported inputs") {
              .contacts = {{"left", device::ContactKind::ohmic, std::move(left)}}});
         refused(bare, {}, "region 'plain' has no thermal data");
     }
-    // Not built yet (Unit 23 in progress).
     // T3: Fermi-Dirac only with thermopower exponents of -1/2 (other_material's are not).
     refused(diode({.D = 1, .hetero = true}), {.fermi_dirac = true}, "exponents of -1/2");
-    refused(d, {.incomplete_ionization = true}, "incomplete ionization");
-    refused(d, {.impact_ionization = true}, "impact ionization");
     // Off, the same device and models are accepted.
     REQUIRE(DriftDiffusion::create(d, s, {.btbt_local = true}).has_value());
 }

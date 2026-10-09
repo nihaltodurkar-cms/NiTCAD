@@ -506,6 +506,7 @@ private:
         double inverse[9];
         physics::ImpactIonizationCoefficients n, p;
         double gamma;  // the temperature factor of the node's material
+        double phonon_eV;  // its optical-phonon energy (gamma at the node's T, electrothermal)
     };
     struct ImpactEdge {
         std::size_t edge;
@@ -580,6 +581,10 @@ private:
         std::int32_t contact;
         double h;
         double capacity;
+        // A p-polysilicon work function, the only one that moves with T (chi + Eg(T)): 1 on a
+        // node of a gate with one (its electrode potential gains the node's own g(theta)), 2 on a
+        // node of an electrode of one (it gains polysilicon's, silicon's -(Eg(T) - Eg(T0)) / k T0).
+        std::int32_t ppoly;
     };
     // Per node at a state: theta and tau = theta - 1 (the unknown), n_ie / Ns, the mobilities
     // [cm^2/(V s)], g (the valence band's shift), kappa [W/(cm K)] and the Kirchhoff transform u,
@@ -633,6 +638,41 @@ private:
         double psi, n, p, d_psi, d_n, d_p;
     };
     [[nodiscard]] ThermalOhmic thermal_ohmic(std::size_t node, const ThermalState& t) const;
+    // A semiconductor node's dopant levels at its T (E / k T: the levels_ of T0 over theta).
+    [[nodiscard]] physics::DopantLevels thermal_levels_at(std::size_t node, double theta) const;
+    // The ionized net doping N_D+ - N_A- at a node's state and T, and its partials in n, p and
+    // theta (complete ionization: the net doping, no partials).
+    struct ThermalCharge {
+        double value, d_n, d_p, d_theta;
+    };
+    [[nodiscard]] ThermalCharge thermal_charge(std::size_t node, const ThermalState& t,
+                                               const NodeLevels& l) const;
+    // The carriers a semiconductor node stores at its T: S_n = n - N_D+, S_p = p - N_A- (n and p
+    // with complete ionization) and the partials of each in its density and theta.
+    struct ThermalStorage {
+        double n, n_n, n_t, p, p_p, p_t;
+    };
+    [[nodiscard]] ThermalStorage thermal_storage(std::size_t node, std::span<const double> x,
+                                                 const ThermalState& t,
+                                                 const NodeLevels& l) const;
+    // The shift of a gate or electrode node's electrode potential from its value at T0 (ppoly),
+    // and its theta derivative; 0 for every other node.
+    struct Shift {
+        double value, d_theta;
+    };
+    [[nodiscard]] Shift electrode_shift(std::size_t node, const ThermalState& t) const;
+    // Impact ionization with the electrothermal model: add_impact_generation's terms with the
+    // thermal fluxes and gamma at each node's T.
+    void add_thermal_impact(std::span<const double> x, std::span<const ThermalState> t,
+                            std::span<const NodeLevels> g, std::span<double> f,
+                            std::span<double> values) const;
+    // The interface edges' terms with the electrothermal model (fixed charge and surface
+    // recombination; traps are refused): the half-edge fluxes and the surface rate at the
+    // semiconductor node's T.
+    void add_thermal_interfaces(std::span<const double> x, std::span<const ThermalState> t,
+                                std::span<double> f, std::span<double> values) const;
+    // Adds G shift of every p-polysilicon gate node to its gate's charge (gates_.charges is at T0).
+    void add_gate_shift(std::span<const double> x, std::span<double> charge) const;
     // Creation of the thermal data; errors as create's (see electrothermal.cpp).
     // edge_geometry: each mesh edge's scaled coupling (coupling area / length / L_D^(D-2)).
     [[nodiscard]] std::optional<base::Error> make_thermal(const device::Device& device,

@@ -295,6 +295,50 @@ TEST_CASE("electrothermal solve: consistency with the isothermal solve") {
     }
 }
 
+TEST_CASE("electrothermal solve: a p-polysilicon gate at 350 K") {
+    // A p-type bar (1e17) with a p-polysilicon gate (10 nm oxide) at x_min and an ohmic contact at
+    // x_max, kappa 1e8 times silicon's, both ends' sinks at 350 K: the gate's work function
+    // chi + Eg(350 K) and the charges equal the isothermal device's at 350 K (reference 300 K).
+    const auto build = [](double T, bool sinks) {
+        physics::SemiconductorParameters si = physics::silicon_parameters;
+        si.thermal.conductivity_W_cmK *= 1e8;
+        mesh::Mesh m = *mesh::make_tensor_grid(uniform(0.0, 1e-4, 81));
+        const std::size_t n = m.node_count();
+        auto gate = m.find_boundary("x_min")->nodes;
+        auto body = m.find_boundary("x_max")->nodes;
+        std::vector<device::ThermalContact> thermal;
+        if (sinks) {
+            thermal = {{"gate", "x_min", device::ThermalContactKind::isothermal, 350.0, 0.0},
+                       {"body", "x_max", device::ThermalContactKind::isothermal, 350.0, 0.0}};
+        }
+        auto d = device::Device::create(
+            {.mesh = std::move(m),
+             .temperature_K = T,
+             .regions = {{"silicon", *physics::Semiconductor::create(si)}},
+             .node_region = std::vector<device::RegionId>(n, 0),
+             .donors = std::vector<double>(n, 0.0),
+             .acceptors = std::vector<double>(n, 1e17),
+             .contacts = {{"gate", device::ContactKind::gate, std::move(gate),
+                           {.boundary = "x_min", .oxide_thickness_cm = 1e-6,
+                            .electrode = device::GateElectrode::p_poly}},
+                          {"body", device::ContactKind::ohmic, std::move(body)}},
+             .thermal_contacts = std::move(thermal)});
+        if (!d) FAIL(d.error().message);
+        return std::move(*d);
+    };
+    const device::Device hot = build(300.0, true), iso = build(350.0, false);
+    solve::BiasOptions plain;
+    plain.newton.tol_update = 1e-12;
+    for (const double V : {-1.0, 0.0, 0.4}) {
+        const auto p = solved(hot, {V, 0.0}, thermal_options());
+        const auto q = solved(iso, {V, 0.0}, plain);
+        const double dQ =
+            std::abs(p.gate_charge[0] - q.gate_charge[0]) / std::abs(q.gate_charge[0]);
+        CAPTURE(V, p.gate_charge[0], q.gate_charge[0], dQ);
+        REQUIRE(dQ <= 1e-9);
+    }
+}
+
 TEST_CASE("electrothermal solve: the Seebeck voltage of an n-type bar") {
     // N_D = 1e17, sinks at 300 and 310 K. Open circuit, J_n = -q mu n (grad phi_n + P_n grad T)
     // = 0, so V_R - V_L = -integral of P_n dT, with P_n = -(k/q) ((5/2 + r) - ln(n / Nc(T))),
