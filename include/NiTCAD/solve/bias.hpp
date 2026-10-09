@@ -49,6 +49,10 @@ struct BiasOptions {
     assemble::PhysicsModels models;     // equilibrium_poisson: bgn, fermi_dirac and
                                         // incomplete_ionization matter
     Equations equations = Equations::drift_diffusion;
+    // Electrothermal (models.electrothermal, Unit 23): per bias point, the temperature of each
+    // thermal contact in K, in the device's thermal-contact order; empty: the device's own at
+    // every point. Read only with the model on.
+    std::vector<std::vector<double>> thermal_bias_K;
 };
 
 // Solves each bias point in order. `points[k]` holds one bias in V per contact.
@@ -58,7 +62,15 @@ struct BiasOptions {
 // bias as value; an initial state without a finite potential for every node, or, for
 // drift-diffusion, without positive densities (the quasi-static sweep reads only the potential);
 // those of assemble::make_scaling, assemble::DriftDiffusion::create (or
-// EquilibriumPoisson::create) and linalg::LinearSolver::create.
+// EquilibriumPoisson::create) and linalg::LinearSolver::create. With models.electrothermal
+// (Unit 23; DECISIONS.md T7, T10, T12): equilibrium_poisson; a connected part of the device with
+// no thermal contact (a steady state has no heat sink there); thermal_bias_K neither empty nor
+// one list per point, a list without one temperature per thermal contact, or a temperature not
+// finite and positive or outside the range of a semiconductor region's models
+// (physics::check_temperature), with the point as context index; an initial state whose
+// temperature_K is neither empty nor one finite, positive value per node.
+// With the model on, a point whose converged temperature lies outside a node's material range
+// stops the run with non_convergence (context: the node and its temperature).
 // Once solving has started, nothing is an error: the Sweep holds the completed points and, if the
 // run stopped early, `stopped` (cancelled, non_convergence, singular_system, ...) and the stopped
 // point's convergence history in `unfinished` (empty if the starting equilibrium stopped).

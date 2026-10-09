@@ -12,6 +12,7 @@
 #include "NiTCAD/solve/equilibrium.hpp"
 #include "fields.hpp"
 #include "relocation.hpp"
+#include "thermal.hpp"
 
 namespace NiTCAD::solve {
 
@@ -103,6 +104,23 @@ std::expected<results::Sweep, base::Error> sweep_bias(const device::Device& devi
                                            base::ErrorContext{.index = k, .value = value}});
     }
     const std::size_t nodes = device.mesh().node_count();
+    // Electrothermal (Unit 23): drift-diffusion only (T12), and the thermal contacts' temperatures
+    // of every point checked before anything is solved.
+    const bool thermal = options.models.electrothermal;
+    std::vector<std::vector<double>> thermal_bias;
+    if (thermal) {
+        if (equilibrium) {
+            return std::unexpected(invalid(
+                "electrothermal needs the drift-diffusion equations (DECISIONS.md T12)"));
+        }
+        auto t = detail::thermal_points(device, options.thermal_bias_K, points.size());
+        if (!t) return std::unexpected(std::move(t.error()));
+        thermal_bias = std::move(*t);
+        if (initial != nullptr && !detail::valid_temperature(*initial, nodes)) {
+            return std::unexpected(invalid(
+                "initial temperature needs one finite, positive value per node, or none"));
+        }
+    }
     if (initial != nullptr && !valid_fields(*initial, device, equilibrium)) {
         return std::unexpected(invalid(
             equilibrium ? "initial state needs a finite potential for every node"
@@ -156,6 +174,11 @@ std::expected<results::Sweep, base::Error> sweep_bias(const device::Device& devi
 
     auto system = assemble::DriftDiffusion::create(device, *scaling, options.models);
     if (!system) return std::unexpected(std::move(system.error()));
+    if (thermal && !system->heat_sinks_complete()) {
+        return std::unexpected(invalid(
+            "electrothermal: a connected part of the device has no thermal contact, so a steady "
+            "state has no heat sink (DECISIONS.md T7)"));
+    }
     // The same system without generation (impact ionization, tunnelling), for the retry of a
     // failed point (below).
     std::optional<assemble::DriftDiffusion> plain;
@@ -174,12 +197,20 @@ std::expected<results::Sweep, base::Error> sweep_bias(const device::Device& devi
 
     // Starting state, scaled.
     std::vector<double> x(system->unknowns());
+    const std::size_t m = system->stride();
     if (initial != nullptr) {
         for (std::size_t i = 0; i < nodes; ++i) {
-            x[3 * i] = initial->potential_V[i] / scaling->V_T;
-            x[3 * i + 1] = initial->n_cm3[i] / scaling->Ns;
-            x[3 * i + 2] = initial->p_cm3[i] / scaling->Ns;
+            x[m * i] = initial->potential_V[i] / scaling->V_T;
+            x[m * i + 1] = initial->n_cm3[i] / scaling->Ns;
+            x[m * i + 2] = initial->p_cm3[i] / scaling->Ns;
+            if (thermal) {
+                const double T0 = scaling->temperature_K;  // the rise tau = (T - T0) / T0
+                x[4 * i + 3] = initial->temperature_K.empty()
+                                   ? 0.0
+                                   : (initial->temperature_K[i] - T0) / T0;
+            }
         }
+        if (thermal) (void)system->set_thermal_bias(thermal_bias.front());  // checked
         system->stamp_contacts(x);  // insulator densities 0
     } else {
         auto start = solve_equilibrium(
@@ -202,6 +233,9 @@ std::expected<results::Sweep, base::Error> sweep_bias(const device::Device& devi
                [&](std::size_t k, results::BiasPoint& point,
                    const IterationObserver& observe) -> std::expected<void, base::Error> {
                    if (auto ok = system->set_bias(points[k]); !ok) return ok;  // checked
+                   if (thermal) {
+                       if (auto ok = system->set_thermal_bias(thermal_bias[k]); !ok) return ok;
+                   }
                    system->stamp_contacts(x);
                    const std::vector<double> stamped = x;
                    // With nonlocal tunnelling the paths are re-traced until they agree with the
@@ -222,6 +256,7 @@ std::expected<results::Sweep, base::Error> sweep_bias(const device::Device& devi
                    if (!solved && plain && solved.error().code != base::ErrorCode::cancelled) {
                        x = stamped;
                        (void)plain->set_bias(points[k]);  // checked
+                       if (thermal) (void)plain->set_thermal_bias(thermal_bias[k]);  // likewise
                        results::ConvergenceRecord unused;
                        if (auto ok = newton_solve(*plain, x, options.newton, *plain_solver, unused,
                                                   control.stop);
@@ -232,7 +267,14 @@ std::expected<results::Sweep, base::Error> sweep_bias(const device::Device& devi
                        solved = steady({});
                    }
                    if (!solved) return solved;
+                   if (thermal) {
+                       if (auto e = detail::converged_temperature(device, x,
+                                                                  scaling->temperature_K)) {
+                           return std::unexpected(std::move(*e));
+                       }
+                   }
                    detail::drift_diffusion_point(*system, x, *scaling, D, point);
+                   if (thermal) point.thermal_bias_K = thermal_bias[k];
                    return {};
                });
     return sweep;

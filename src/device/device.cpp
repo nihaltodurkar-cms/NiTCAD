@@ -326,11 +326,52 @@ std::optional<base::Error> check_interfaces(const DeviceDescription& d) {
     return std::nullopt;
 }
 
+// The heat sinks (Unit 23): named, of a known kind, on existing and disjoint boundary patches, at
+// a temperature every semiconductor's models accept, a resistance with a positive R_th.
+std::optional<base::Error> check_thermal_contacts(const DeviceDescription& d) {
+    std::set<std::string_view> names;
+    std::vector<bool> held(d.mesh.node_count(), false);
+    for (std::size_t c = 0; c < d.thermal_contacts.size(); ++c) {
+        const ThermalContact& t = d.thermal_contacts[c];
+        if (t.name.empty() || !names.insert(t.name).second) {
+            return invalid("thermal contact name is empty or repeated", c);
+        }
+        const std::string where = "thermal contact '" + t.name + "': ";
+        if (t.kind != ThermalContactKind::isothermal && t.kind != ThermalContactKind::resistance) {
+            return invalid(where + "unknown kind", c);
+        }
+        const mesh::BoundaryPatch* patch = d.mesh.find_boundary(t.boundary);
+        if (patch == nullptr) return invalid(where + "no boundary patch '" + t.boundary + "'", c);
+        for (const mesh::NodeId v : patch->nodes) {
+            const auto i = static_cast<std::size_t>(v);
+            if (held[i]) return invalid(where + "shares a node with another thermal contact", c);
+            held[i] = true;
+        }
+        if (!(std::isfinite(t.temperature_K) && t.temperature_K > 0.0)) {
+            return invalid(where + "temperature must be finite and positive", c, t.temperature_K);
+        }
+        for (const Region& region : d.regions) {
+            if (is_insulator(region)) continue;
+            if (auto ok = physics::check_temperature(semiconductor_of(region), t.temperature_K);
+                !ok) {
+                return invalid(where + "region '" + region.name + "': " + ok.error().message, c,
+                               t.temperature_K);
+            }
+        }
+        if (t.kind == ThermalContactKind::resistance &&
+            !(std::isfinite(t.resistance_K_cm2_W) && t.resistance_K_cm2_W > 0.0)) {
+            return invalid(where + "thermal resistance must be finite and positive", c,
+                           t.resistance_K_cm2_W);
+        }
+    }
+    return std::nullopt;
+}
+
 }  // namespace
 
 std::expected<Device, base::Error> Device::create(DeviceDescription description) {
-    for (auto check :
-         {check_regions, check_nodes, check_contacts, check_topology, check_interfaces}) {
+    for (auto check : {check_regions, check_nodes, check_contacts, check_topology, check_interfaces,
+                       check_thermal_contacts}) {
         if (auto e = check(description)) return std::unexpected(std::move(*e));
     }
     if (description.cells && !description.cells->matches(description.mesh)) {

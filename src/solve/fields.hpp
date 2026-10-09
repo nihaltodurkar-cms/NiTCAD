@@ -55,10 +55,19 @@ inline void drift_diffusion_point(const assemble::DriftDiffusion& system,
     const double charges = charge_scale(scaling, dimension);
     point.fields = {std::vector<double>(nodes), std::vector<double>(nodes),
                     std::vector<double>(nodes)};
+    const std::size_t m = system.stride();
     for (std::size_t i = 0; i < nodes; ++i) {
-        point.fields.potential_V[i] = x[3 * i] * scaling.V_T;
-        point.fields.n_cm3[i] = x[3 * i + 1] * scaling.Ns;
-        point.fields.p_cm3[i] = x[3 * i + 2] * scaling.Ns;
+        point.fields.potential_V[i] = x[m * i] * scaling.V_T;
+        point.fields.n_cm3[i] = x[m * i + 1] * scaling.Ns;
+        point.fields.p_cm3[i] = x[m * i + 2] * scaling.Ns;
+    }
+    if (system.electrothermal()) {  // Unit 23: the temperature and the heat to each sink
+        for (std::size_t i = 0; i < nodes; ++i) {
+            const double T0 = scaling.temperature_K;  // tau = (T - T0) / T0
+            point.fields.temperature_K.push_back(T0 + T0 * x[4 * i + 3]);
+        }
+        point.thermal_contact_heat = system.thermal_contact_heat(x);
+        for (double& P : point.thermal_contact_heat) P *= scaling.V_T * current_scale;
     }
     point.bands = band_diagram(system.band_edges(x), scaling.V_T);
     point.terminal_current = system.terminal_currents(x);

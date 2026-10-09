@@ -15,6 +15,7 @@
 #include "NiTCAD/linalg/linear_solver.hpp"
 #include "NiTCAD/solve/newton.hpp"
 #include "fields.hpp"
+#include "thermal.hpp"
 
 namespace NiTCAD::solve {
 
@@ -36,14 +37,23 @@ bool positive(double v) { return std::isfinite(v) && v > 0.0; }
 // nonzero k component); B = B0 + e_n u^T with u = c - c_k e_k, and Sherman-Morrison gives
 //     B^-1 r = z - w (u . z) / (1 + u . w),   B0 z = r,   B0 w = e_n.
 // The steady rows depend on lambda exactly linearly: F(x, lambda) = F(x, lambda_0) + dF (lambda -
-// lambda_0).
+// lambda_0). With the electrothermal model (Unit 23) dF depends on x (the metal's Peltier term in
+// the heat rows of the contact's nodes, assemble::DriftDiffusion::bias_derivative), so the rows
+// are evaluated at lambda itself (the system's bias set to it) and dF at x, which keeps the
+// Jacobian exact; B0's dF column then sits on the rows bias_rows names.
 class Bordered {
 public:
-    Bordered(const assemble::DriftDiffusion& dd, std::vector<double> dF, double lambda_ref,
-             const linalg::SolverConfig& config)
+    Bordered(assemble::DriftDiffusion& dd, std::vector<double> dF, double lambda_ref,
+             const linalg::SolverConfig& config, std::vector<double> bias, std::size_t contact,
+             double V_T)
         : dd_(&dd), dF_(std::move(dF)), lambda_ref_(lambda_ref),
-          solver_(*linalg::LinearSolver::create(config)) {  // checked by the caller
+          solver_(*linalg::LinearSolver::create(config)),  // checked by the caller
+          bias_(std::move(bias)), contact_(contact), V_T_(V_T) {
         jacobian_ = dd.make_jacobian();
+        if (dd.electrothermal()) {
+            structural_.assign(dd.unknowns(), 0);
+            for (const std::size_t r : dd.bias_rows(contact)) structural_[r] = 1;
+        }
     }
 
     void set_reference(double lambda_ref) { lambda_ref_ = lambda_ref; }
@@ -69,8 +79,15 @@ public:
                                                               std::span<double> f,
                                                               results::ConvergenceRecord& record) {
         const std::size_t n = dd_->unknowns();
+        const bool thermal = dd_->electrothermal();
+        if (thermal) {  // the rows at lambda itself, dF at x (per unit lambda)
+            bias_[contact_] = y[n] * V_T_;
+            (void)dd_->set_bias(bias_);  // finite
+            dF_ = dd_->bias_derivative(contact_, y.first(n));
+            for (double& d : dF_) d *= V_T_;
+        }
         dd_->evaluate(y.first(n), f.first(n), jacobian_);
-        const double dl = y[n] - lambda_ref_;
+        const double dl = thermal ? 0.0 : y[n] - lambda_ref_;
         const std::span<double> v = pattern_.values();
         std::fill(v.begin(), v.end(), 0.0);
         for (std::size_t q = 0; q < to_bordered_.size(); ++q) {
@@ -78,7 +95,7 @@ public:
         }
         for (std::size_t r = 0; r < n; ++r) {
             if (column_[r] == none) continue;
-            f[r] += dF_[r] * dl;
+            if (!thermal) f[r] += dF_[r] * dl;
             v[column_[r]] = dF_[r];
         }
         v[v.size() - 1] = c_[k_];  // the last row's single entry
@@ -139,7 +156,7 @@ private:
             for (auto q = j.row_offsets()[r]; q < j.row_offsets()[r + 1]; ++q) {
                 t.push_back({r, j.col_indices()[q], 0.0});
             }
-            if (dF_[static_cast<std::size_t>(r)] != 0.0) t.push_back({r, n, 0.0});
+            if (has_column(static_cast<std::size_t>(r))) t.push_back({r, n, 0.0});
         }
         t.push_back({n, static_cast<linalg::Index>(k), 0.0});
         pattern_ = *linalg::SparseMatrix::from_triplets(n + 1, n + 1, t);  // in range
@@ -151,13 +168,18 @@ private:
             for (auto q = j.row_offsets()[r]; q < j.row_offsets()[r + 1]; ++q) {
                 to_bordered_.push_back(static_cast<std::size_t>(start + (q - j.row_offsets()[r])));
             }
-            column_.push_back(dF_[static_cast<std::size_t>(r)] != 0.0
+            column_.push_back(has_column(static_cast<std::size_t>(r))
                                   ? static_cast<std::size_t>(pattern_.row_offsets()[r + 1] - 1)
                                   : none);
         }
     }
 
-    const assemble::DriftDiffusion* dd_;
+    // Whether B0 has the dF column on row r: dF's nonzeros, or (electrothermal) bias_rows.
+    [[nodiscard]] bool has_column(std::size_t r) const {
+        return structural_.empty() ? dF_[r] != 0.0 : structural_[r] != 0;
+    }
+
+    assemble::DriftDiffusion* dd_;
     std::vector<double> dF_;
     double lambda_ref_;
     linalg::LinearSolver solver_;
@@ -166,6 +188,10 @@ private:
     std::vector<double> c_, y0_;
     double ds_ = 0.0;
     std::size_t k_ = none;
+    std::vector<double> bias_;  // electrothermal: every contact's bias [V]
+    std::size_t contact_;
+    double V_T_;
+    std::vector<char> structural_;  // electrothermal: the rows of bias_rows
 };
 
 // Newton on the bordered system (newton.hpp's rules: the full correction measured before the
@@ -284,6 +310,8 @@ std::expected<results::Sweep, base::Error> trace_bias(const device::Device& devi
     const int D = device.mesh().dimension();
     const std::size_t nodes = device.mesh().node_count();
     const std::size_t n = dd.unknowns();
+    const std::size_t m = dd.stride();
+    const bool thermal = steady.models.electrothermal;
     const double floor = options.density_floor_cm3 / scaling->Ns;
     const double rms = 1.0 / std::sqrt(static_cast<double>(nodes));
     const double direction = options.end_V > start ? 1.0 : -1.0;
@@ -293,12 +321,16 @@ std::expected<results::Sweep, base::Error> trace_bias(const device::Device& devi
     std::vector<double> y(n + 1);
     {
         const results::NodeFields& f = run.points.front().fields;
+        const double T0 = scaling->temperature_K;
         for (std::size_t i = 0; i < nodes; ++i) {
-            y[3 * i] = f.potential_V[i] / V_T;
-            y[3 * i + 1] = f.n_cm3[i] / scaling->Ns;
-            y[3 * i + 2] = f.p_cm3[i] / scaling->Ns;
+            y[m * i] = f.potential_V[i] / V_T;
+            y[m * i + 1] = f.n_cm3[i] / scaling->Ns;
+            y[m * i + 2] = f.p_cm3[i] / scaling->Ns;
+            if (thermal) y[4 * i + 3] = (f.temperature_K[i] - T0) / T0;  // the rise tau
         }
     }
+    // Electrothermal: the thermal contacts at the starting point's temperatures throughout.
+    if (thermal) (void)dd.set_thermal_bias(run.points.front().thermal_bias_K);  // checked
     (void)dd.set_bias(bias);  // checked
     dd.stamp_contacts(std::span(y).first(n));
     y[n] = start / V_T;
@@ -307,7 +339,7 @@ std::expected<results::Sweep, base::Error> trace_bias(const device::Device& devi
     if (dd.tunnelling()) dd.set_paths(dd.trace_paths(std::span(y).first(n)));
     std::vector<double> dF = dd.bias_derivative(options.contact);
     for (double& v : dF) v *= V_T;  // per unit lambda
-    Bordered bordered(dd, std::move(dF), y[n], steady.linear);
+    Bordered bordered(dd, std::move(dF), y[n], steady.linear, bias, options.contact, V_T);
 
     // The arc metric, in volts: the swept bias; the swept contact's current at 1 V per decade of
     // |I| + I0, I0 ten times the starting point's current resolution (a current below the
@@ -323,10 +355,12 @@ std::expected<results::Sweep, base::Error> trace_bias(const device::Device& devi
     std::vector<double> s(n + 1, 0.0), g(n + 1, 0.0);  // state scales; d log10(|I| + I0) / dy
     const auto metric = [&]() {
         for (std::size_t i = 0; i < nodes; ++i) {
-            s[3 * i] = V_T * rms;
+            s[m * i] = V_T * rms;
+            // The temperature rise in units of T0 weighs as the potential in V_T (Unit 23).
+            if (thermal) s[4 * i + 3] = V_T * rms;
             if (device.is_insulator(static_cast<mesh::NodeId>(i))) continue;
-            s[3 * i + 1] = V_T * rms / std::max(y[3 * i + 1], floor);
-            s[3 * i + 2] = V_T * rms / std::max(y[3 * i + 2], floor);
+            s[m * i + 1] = V_T * rms / std::max(y[m * i + 1], floor);
+            s[m * i + 2] = V_T * rms / std::max(y[m * i + 2], floor);
         }
         s[n] = V_T;
         std::fill(g.begin(), g.end(), 0.0);
@@ -499,8 +533,16 @@ std::expected<results::Sweep, base::Error> trace_bias(const device::Device& devi
             }
         }
         // Accepted: the point and the next step.
+        if (thermal) {  // T10
+            if (auto e = detail::converged_temperature(device, std::span(y).first(n),
+                                                       scaling->temperature_K)) {
+                run.stopped = std::move(*e);
+                return run;
+            }
+        }
         point.bias_V = bias;
         detail::drift_diffusion_point(dd, std::span(y).first(n), *scaling, D, point);
+        if (thermal) point.thermal_bias_K = run.points.front().thermal_bias_K;
         if (dd.tunnelling()) {
             assemble::TunnelPaths traced = dd.trace_paths(std::span(y).first(n));
             if (!dd.paths_agree(traced, dd.paths(), std::span(y).first(n))) {

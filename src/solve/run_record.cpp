@@ -114,6 +114,8 @@ std::vector<std::pair<std::string, double>> settings(const BiasOptions& o) {
         if (o.models.btbt_nonlocal != assemble::NonlocalTunnelling::off) {
             s.emplace_back("models.btbt_nonlocal", static_cast<double>(o.models.btbt_nonlocal));
         }
+        // Unit 23: likewise.
+        if (o.models.electrothermal) s.emplace_back("models.electrothermal", 1.0);
     }
     if (o.Ns_override) s.emplace_back("scaling.Ns_override", *o.Ns_override);
     return s;
@@ -245,6 +247,32 @@ void device_and_settings(Digest& d, const device::Device& device, const BiasOpti
             for (int a = 0; a < c.dimension(); ++a) d.reals(c.axis(a));
         }
     }
+    // The thermal data of every region and the thermal contacts, when the electrothermal model is
+    // on (Unit 23; a run without keeps its digest).
+    if (options.equations == Equations::drift_diffusion && options.models.electrothermal) {
+        d.text("electrothermal");
+        for (const device::Region& r : device.regions()) {
+            const physics::ThermalParameters& t =
+                device::is_insulator(r)
+                    ? std::get<physics::Insulator>(r.material).parameters().thermal
+                    : std::get<physics::Semiconductor>(r.material).parameters().thermal;
+            for (const double v : {t.conductivity_W_cmK, t.conductivity_exponent,
+                                   t.heat_capacity_J_cm3K, t.thermopower_exponent_n,
+                                   t.thermopower_exponent_p}) {
+                d.real(v);
+            }
+        }
+        d.integer(device.thermal_contacts().size());
+        for (const device::ThermalContact& c : device.thermal_contacts()) {
+            d.text(c.name);
+            d.text(c.boundary);
+            d.integer(static_cast<std::uint64_t>(c.kind));
+            d.real(c.temperature_K);
+            if (c.kind == device::ThermalContactKind::resistance) d.real(c.resistance_K_cm2_W);
+        }
+        d.integer(options.thermal_bias_K.size());
+        for (const auto& p : options.thermal_bias_K) d.reals(p);
+    }
     // Interface transport acts on the continuity equations only.
     if (options.equations == Equations::drift_diffusion) {
         d.integer(device.interfaces().size());
@@ -261,7 +289,9 @@ void device_and_settings(Digest& d, const device::Device& device, const BiasOpti
     }
 }
 
-void initial_state(Digest& d, const results::NodeFields* initial, bool densities) {
+// The temperature only with the electrothermal model (Unit 23), which alone reads it.
+void initial_state(Digest& d, const results::NodeFields* initial, bool densities,
+                   bool temperature = false) {
     d.integer(initial != nullptr ? 1 : 0);
     if (initial != nullptr) {
         d.reals(initial->potential_V);
@@ -269,6 +299,7 @@ void initial_state(Digest& d, const results::NodeFields* initial, bool densities
             d.reals(initial->n_cm3);
             d.reals(initial->p_cm3);
         }
+        if (temperature) d.reals(initial->temperature_K);
     }
 }
 
@@ -283,7 +314,8 @@ results::RunRecord make_run_record(const device::Device& device, const BiasOptio
     d.integer(points.size());
     for (const auto& p : points) d.reals(p);
     // The quasi-static sweep reads only the potential.
-    initial_state(d, initial, options.equations == Equations::drift_diffusion);
+    const bool transport = options.equations == Equations::drift_diffusion;
+    initial_state(d, initial, transport, transport && options.models.electrothermal);
     return {d.value(), named};
 }
 

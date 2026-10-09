@@ -159,6 +159,65 @@
 //   in the Jacobian (frozen; ARCHITECTURE.md 6.2).
 // With any generation model on, update_size measures densities against 1e-8 of the largest (as
 // impact ionization, Unit 19).
+//
+// Electrothermal coupling (Unit 23, models.electrothermal; DECISIONS.md T1-T14; legacy thermal.py,
+// thermal_grid.py). Each node has a fourth unknown, the scaled temperature rise
+// tau = (T - T0) / T0 (T0 the device's temperature, the scaling's), interleaved as x[4i + 3];
+// theta = T / T0 = 1 + tau below. The rise, not theta, is the unknown (DECISIONS.md U1) so that
+// a small heating keeps its digits: a double near 1 is spaced 2.2e-16, so theta resolves T only
+// to 6.7e-14 K at 300 K, while tau resolves the rise to 2.2e-16 of itself. The heat reaching a
+// sink is the flux kappa dT / h through the edge next to it, so with theta it was resolved only
+// to kappa 6.7e-14 K / h, 4e-8 W/cm^2 for h = 25 nm. Measured on a diode at 3.7e-6 W/cm^2
+// (0.3 V): with theta the energy balance missed by 9.0e-9 W/cm^2 (0.24%); with tau by 2.4e-12
+// (6.4e-7), the rounding floor of the energy flows (U8). Without the model the stride stays 3 and
+// nothing changes. Energies below are in units of k T0, densities and fluxes as above.
+// - Bands: the electron affinity is temperature independent, so the conduction-band edge
+//   E_c = c_n - psi does not move with T (c_n = ln(Nc / n_ie) - s at T0, band-gap narrowing
+//   included), and the valence-band edge E_v = c_p - psi + g(theta) carries the gap's change,
+//   c_p = -(ln(Nv / n_ie) + s) at T0, g = -(Eg(T) - Eg(T0)) / k T0.
+// - Carrier fluxes (T2, Wachutka's thermodynamic model with Boltzmann statistics, Nc and Nv
+//   ~ T^(3/2), the momentum relaxation time ~ E^r): J_n = mu_n (n grad E_c' + k T grad n
+//   + k (1 + r) n grad T), with E_c' = E_c - k T ln Nc0 (Nc0 the material's Nc at T0: a step of it
+//   acts as a band step), and the mirror for holes. With w = theta^(1+r) n this is
+//   mu_n k T^(-r) (grad w + w grad E_c' / k T); freezing T in the coefficients at the edge's mean
+//   theta_e = (theta_a + theta_b) / 2 gives the Scharfetter-Gummel flux in w,
+//       Jn = A_n (w_b B(delta_n) - w_a B(-delta_n)),   A_n = hmean(mu_n,a, mu_n,b) V_T / D0 g_e
+//                                                              theta_e^(-r),
+//       delta_n = (psi_b - psi_a + shift_n - L_c) / theta_e + L_c,
+//       Jp = -A_p (w_b B(-delta_p) - w_a B(delta_p)),
+//       delta_p = (psi_b - psi_a + shift_p + L_v - (g_b - g_a)) / theta_e - L_v,
+//   with g_e the edge's coupling, mu at each node's own T, L_c = ln(Nc0_b / Nc0_a) and
+//   L_v = ln(Nv0_b / Nv0_a) (0 in one material), r the mean of the ends' thermopower exponents.
+//   At theta = 1 these are the isothermal fluxes; at any uniform theta they vanish at
+//   equilibrium; between two temperatures the open-circuit voltage is the Seebeck voltage, to
+//   second order in the spacing (DECISIONS.md U2). Thermionic-emission interfaces and incomplete
+//   ionization are refused with the model (U3 deferred, U6).
+// - Heat (T4): each carrier carries the energy e_n = E_c + (r_n + 5/2) theta (electrons) or
+//   e_p = E_v - (r_p + 5/2) theta (holes) per particle, so the energy flux along an edge, from a to
+//   b, is -(ebar_n Jn + ebar_p Jp) (ebar the mean of the ends'). The heat a node's box receives
+//   is the energy flowing into it: + (ebar_n Jn + ebar_p Jp) from each edge it is the first node
+//   of, - from each it is the second of, plus on an ohmic contact node m (Jn + Jp) with the same
+//   signs, m = V / V_T (the metal delivers carriers at its Fermi
+//   level -V; that term is the contact's Peltier heat, T5). This is the discrete divergence of
+//   the energy flux, so it contains the Joule, recombination ((Eg + (r_n + r_p + 5) kT) R),
+//   Peltier and Thomson heat, and in a steady state the heat of all nodes is sum_c V_c I_c to
+//   round-off.
+// - Heat row of node i (scaled by K0 = kappa_ref T0 / (V_T J0 L_D), kappa_ref the reference
+//   material's conductivity at 300 K, so conduction is O(1)): sum over its edges of the
+//   conducted heat leaving it minus the heat above / K0, plus h_i (theta_i - theta_amb) on a node
+//   of a thermal resistance contact (h_i = A_i L_D / (R_th kappa_ref), A_i its scaled face
+//   area). Conduction along an edge of one material is exact for steady 1D conduction (the
+//   Kirchhoff transform u(theta) = integral of kappa from 1 to theta):
+//   (g_e / kappa_ref) (u(theta_a) - u(theta_b)); between two materials (or to an insulator)
+//   (g_e / kappa_ref) hmean(kappa_a, kappa_b) (theta_a - theta_b), each kappa at its own node's T.
+//   A node of an isothermal thermal contact has the row theta - theta_c. Insulator nodes conduct
+//   (their material's kappa) and carry no carriers.
+// - Temperature in the other rows: n_ie(T) (and its product) in SRH, Auger and radiative
+//   recombination; the Caughey-Thomas mobility; an ohmic contact's neutral equilibrium and
+//   potential psi0 = V / V_T + c_n + theta ln(n0 / Nc(theta)) at its own node's T.
+// - Newton: a temperature step is clipped to 50 K (scaled by T0) and to [0.5, 2] times theta;
+//   update_size includes |d theta|.
+// The Jacobian is exact (with the model on, the node and edge blocks are full 4 x 4).
 #pragma once
 
 #include <complex>
@@ -194,7 +253,10 @@ public:
     // with btbt_nonlocal; for btbt_nonlocal without the device's cells, on a device with an edge
     // between two different semiconductors (no tunnel path crosses a heterointerface), or, for
     // direct_wkb, with a semiconductor region whose material lacks a direct gap or tunnelling
-    // masses (silicon never has them).
+    // masses (silicon never has them). With models.electrothermal (invalid_input): band-to-band
+    // tunnelling or interface traps (DECISIONS.md T8), a thermionic-emission interface (U3,
+    // deferred), incomplete ionization (U6), Fermi-Dirac statistics with a thermopower exponent
+    // other than -1/2 (T3), a region whose material has no thermal data (T11).
     [[nodiscard]] static std::expected<DriftDiffusion, base::Error> create(
         const device::Device& device, const Scaling& scaling,
         const PhysicsModels& models = {});
@@ -202,9 +264,50 @@ public:
     // The current density below which impact ionization fades out (see the header comment).
     static constexpr double impact_current_floor = 1e-12;  // [A/cm^2]
 
-    [[nodiscard]] std::size_t unknowns() const noexcept { return 3 * node_count(); }
+    [[nodiscard]] std::size_t unknowns() const noexcept { return m_ * node_count(); }
     [[nodiscard]] std::size_t node_count() const noexcept { return volume_.size(); }
     [[nodiscard]] std::size_t contact_count() const noexcept { return contact_count_; }
+    // Unknowns per node: 3 (psi, n, p), or 4 with the electrothermal model (theta last).
+    [[nodiscard]] std::size_t stride() const noexcept { return m_; }
+
+    struct TimeStep;  // a BDF time step (below)
+
+    // Electrothermal (Unit 23; see the header comment). Whether the model is on.
+    [[nodiscard]] bool electrothermal() const noexcept { return m_ == 4; }
+    // The temperature of each thermal contact in K (isothermal: its own; resistance: the ambient
+    // behind it), in the order of device.thermal_contacts(); initially the device's values.
+    // Errors (invalid_input, the index the thermal contact, the value it): the size is not the
+    // thermal contact count; a value not finite and positive. (The solve layer checks a
+    // temperature against the materials' range.) Precondition (NITCAD_EXPECTS): the model is on.
+    [[nodiscard]] std::expected<void, base::Error> set_thermal_bias(
+        std::span<const double> temperature_K);
+    // Whether every connected part of the mesh (every edge conducts heat) has a node of a thermal
+    // contact. A steady state needs one (DECISIONS.md T7); a transient does not. False without
+    // the model.
+    [[nodiscard]] bool heat_sinks_complete() const noexcept { return sinks_complete_; }
+    // Whether the connected thermal domain of a node has a node of a thermal contact (DECISIONS.md
+    // U5): a region without a sink of its own but joined to one has. Preconditions
+    // (NITCAD_EXPECTS): the model is on; node < node_count().
+    [[nodiscard]] bool reaches_heat_sink(std::size_t node) const;
+    // K0 = kappa_ref T0 / (V_T J0 L_D) (see the header comment): the heat rows are the nodes' heat
+    // balances in units of V_T J0 L_D^(D-1) divided by it. 0 without the model.
+    [[nodiscard]] double heat_scale() const noexcept { return heat_scale_; }
+    // Scaled heat leaving through each thermal contact at state x (the heat its isothermal nodes'
+    // rows would balance without their Dirichlet terms, or its R_th flux), in units of
+    // V_T J0 L_D^(D-1) (a power in W / cm^(3-D) after multiplying by it), in
+    // device.thermal_contacts() order. In a steady state their sum is electrical_power(x).
+    // Preconditions (NITCAD_EXPECTS): the model is on; x has unknowns() entries.
+    // With a time step, the heat rows' storage terms are in the balance.
+    [[nodiscard]] std::vector<double> thermal_contact_heat(std::span<const double> x,
+                                                           const TimeStep* step = nullptr) const;
+    // The power the ohmic contacts deliver, sum_c V_c I_c, in the same units.
+    [[nodiscard]] double electrical_power(std::span<const double> x) const;
+    // The Joule part of each carrier edge's heat (Jn, Jp), in the same units: each flux times the
+    // drop of its quasi-Fermi level along it, theta_e (ln(w_b / w_a) - delta_n) for electrons and
+    // theta_e (ln(w_a / w_b) - delta_p) for holes; each >= 0, since a flux runs down that drop.
+    // Zero on edges without carriers. Preconditions as thermal_contact_heat.
+    [[nodiscard]] std::vector<std::pair<double, double>> edge_joule_heat(
+        std::span<const double> x) const;
 
     // Applied bias of each contact in V, in the order of device.contacts(); sets the Dirichlet
     // values of the ohmic contacts and the electrode potential of the gates. Errors: those of
@@ -228,9 +331,10 @@ public:
     void residual(std::span<const double> x, std::span<double> residual) const;
 
     // A BDF time step (see the header comment): rate = 1 / (beta h), h in units of time_scale();
-    // storage holds c_n and c_p of every node (2 node_count() entries, node i at 2i and 2i + 1;
-    // read only off the contacts and insulators), traps c of every trap slot (trap_slots()
-    // entries).
+    // storage holds c_n and c_p of every node (storage_width() node_count() entries, node i from
+    // storage_width() i; read only off the contacts and insulators), and with the electrothermal
+    // model c of the rise tau third (read off the isothermal sinks); traps c of every trap slot
+    // (trap_slots() entries).
     struct TimeStep {
         double rate;
         std::span<const double> storage;
@@ -245,8 +349,10 @@ public:
                   linalg::SparseMatrix& jacobian) const;
     void residual(std::span<const double> x, const TimeStep& step,
                   std::span<double> residual) const;
-    // (S_n, S_p) of every node at state x, scaled (0 on insulator nodes).
+    // (S_n, S_p) of every node at state x, scaled (0 on insulator nodes), with the electrothermal
+    // model (S_n, S_p, tau).
     [[nodiscard]] std::vector<double> storage(std::span<const double> x) const;
+    [[nodiscard]] std::size_t storage_width() const noexcept { return m_ - 1; }
     // The occupancy f of every trap slot at state x: after `step`, or without one the steady
     // state.
     [[nodiscard]] std::vector<double> trap_occupancies(std::span<const double> x,
@@ -273,6 +379,14 @@ public:
     // dF / dV of contact c, per volt (the residual's dependence on its bias). Precondition
     // (NITCAD_EXPECTS): c < contact_count().
     [[nodiscard]] std::vector<double> bias_derivative(std::size_t contact) const;
+    // With the electrothermal model the heat row of an ohmic node also depends on its contact's
+    // bias, through the metal's Peltier term m (Jn + Jp) / K0, so dF / dV depends on the state:
+    // this overload evaluates it at x (without the model it is bias_derivative(contact)). The
+    // rows where it can be nonzero at any state: bias_rows(contact). F stays linear in V at fixed
+    // x. Preconditions (NITCAD_EXPECTS): contact < contact_count(); x has unknowns() entries.
+    [[nodiscard]] std::vector<double> bias_derivative(std::size_t contact,
+                                                      std::span<const double> x) const;
+    [[nodiscard]] std::vector<std::size_t> bias_rows(std::size_t contact) const;
     // The small-signal total current entering through a contact, conduction plus s times its
     // charge (conduction_currents and contact_charges, linearized about the steady state x):
     //     dI = sum_k values[k] dx[columns[k]] + bias dV,
@@ -407,6 +521,7 @@ private:
         double inverse[9];
         physics::ImpactIonizationCoefficients n, p;
         double gamma;  // the temperature factor of the node's material
+        double phonon_eV;  // its optical-phonon energy (gamma at the node's T, electrothermal)
     };
     struct ImpactEdge {
         std::size_t edge;
@@ -466,6 +581,126 @@ private:
     // the model is on and the degeneracy terms g (degeneracies(x)) when it is not empty.
     [[nodiscard]] std::pair<EdgeFlux, EdgeFlux> edge_fluxes(
         const EdgeTerm& e, std::span<const double> x, std::span<const NodeDegeneracy> g) const;
+
+    // Electrothermal (Unit 23; electrothermal.cpp). Per node, constant: the material (index into
+    // thermal_materials_, or -1 on an insulator), its thermal data, the impurity densities the
+    // mobility and band-gap narrowing read, the band constants c_n, c_p and Eg(T0), the
+    // thermopower exponents, ln Nc0 and ln Nv0 (scaled), the thermal contact (-1: none), the
+    // R_th coefficient h (0: none) and the heat capacity C = rho c V L_D^2 / (t0 kappa_ref) of the
+    // heat row (times the rate and the change of tau).
+    struct ThermalNode {
+        std::int32_t material;
+        physics::ThermalParameters thermal;
+        double impurity, impurity_mobility, narrowing_eV;
+        double c_n, c_p, gap0_eV, r_n, r_p, log_nc, log_nv;
+        std::int32_t contact;
+        double h;
+        double capacity;
+        // A p-polysilicon work function, the only one that moves with T (chi + Eg(T)): 1 on a
+        // node of a gate with one (its electrode potential gains the node's own g(theta)), 2 on a
+        // node of an electrode of one (it gains polysilicon's, silicon's -(Eg(T) - Eg(T0)) / k T0).
+        std::int32_t ppoly;
+    };
+    // Per node at a state: theta and tau = theta - 1 (the unknown), n_ie / Ns, the mobilities
+    // [cm^2/(V s)], g (the valence band's shift), kappa [W/(cm K)] and the Kirchhoff transform u,
+    // each with d / d theta.
+    struct ThermalState {
+        double theta, tau, nie, d_nie, mu_n, d_mu_n, mu_p, d_mu_p, gap, d_gap, kappa, d_kappa, u;
+    };
+    // Per edge, constant: V_T / D0 times the coupling (g_e), L_c, L_v, the mean thermopower
+    // exponents, whether conduction takes the Kirchhoff form (both ends in one material), g_e /
+    // kappa_ref, and the Jacobian positions of the full 4 x 4 blocks (row a with columns of b,
+    // row b with columns of a; row-major).
+    struct ThermalEdge {
+        double coupling, log_nc, log_nv, r_n, r_p;
+        bool kirchhoff;
+        double conduction;
+        std::size_t ab[16], ba[16];
+    };
+    // A flux and its partials with respect to psi, the density and theta of each end (a, b).
+    struct ThermalFlux {
+        double flux;
+        double d_psi[2], d_c[2], d_theta[2];
+        double delta, theta_e, w[2];  // for the Joule part
+    };
+    [[nodiscard]] std::vector<ThermalState> thermal_states(std::span<const double> x) const;
+    // A carrier's band reduced energy x = ln(c / N(theta)) - ln gamma (Fermi-Dirac; ln gamma 0
+    // under Boltzmann statistics) at its node's T, with ln gamma and the Fermi-Dirac thermal
+    // diffusion factor's excess over the Boltzmann 1 + r (r = -1/2): h - 1/2, each with its
+    // partials in the density c and theta. log_N: ln N0 (scaled) of the band.
+    struct Level {
+        double x, dx_dc, dx_dt;
+        double log_gamma, dg_dc, dg_dt;
+        double extra, dh_dc, dh_dt;
+    };
+    [[nodiscard]] Level level(double density, double theta, double nie, double log_N) const;
+    struct NodeLevels {
+        Level n, p;
+    };
+    // Per node at x under Fermi-Dirac statistics; empty under Boltzmann.
+    [[nodiscard]] std::vector<NodeLevels> thermal_levels(std::span<const double> x,
+                                                         std::span<const ThermalState> t) const;
+    [[nodiscard]] std::pair<ThermalFlux, ThermalFlux> thermal_fluxes(
+        std::size_t edge, std::span<const double> x, std::span<const ThermalState> t,
+        std::span<const NodeLevels> g) const;
+    // The heat row's conduction term along an edge, from a to b, and its theta partials.
+    struct Conduction {
+        double flux, d_a, d_b;
+    };
+    [[nodiscard]] Conduction conduction(std::size_t edge, std::span<const ThermalState> t) const;
+    // An ohmic contact node's Dirichlet values at its T and their theta derivatives.
+    struct ThermalOhmic {
+        double psi, n, p, d_psi, d_n, d_p;
+    };
+    [[nodiscard]] ThermalOhmic thermal_ohmic(std::size_t node, const ThermalState& t) const;
+    // The shift of a gate or electrode node's electrode potential from its value at T0 (ppoly),
+    // and its theta derivative; 0 for every other node.
+    struct Shift {
+        double value, d_theta;
+    };
+    [[nodiscard]] Shift electrode_shift(std::size_t node, const ThermalState& t) const;
+    // Impact ionization with the electrothermal model: add_impact_generation's terms with the
+    // thermal fluxes and gamma at each node's T.
+    void add_thermal_impact(std::span<const double> x, std::span<const ThermalState> t,
+                            std::span<const NodeLevels> g, std::span<double> f,
+                            std::span<double> values) const;
+    // The interface edges' terms with the electrothermal model (fixed charge and surface
+    // recombination; traps are refused): the half-edge fluxes and the surface rate at the
+    // semiconductor node's T.
+    void add_thermal_interfaces(std::span<const double> x, std::span<const ThermalState> t,
+                                std::span<double> f, std::span<double> values) const;
+    // Adds G shift of every p-polysilicon gate node to its gate's charge (gates_.charges is at T0).
+    void add_gate_shift(std::span<const double> x, std::span<double> charge) const;
+    // Creation of the thermal data; errors as create's (see electrothermal.cpp).
+    // edge_geometry: each mesh edge's scaled coupling (coupling area / length / L_D^(D-2)).
+    [[nodiscard]] std::optional<base::Error> make_thermal(const device::Device& device,
+                                                          const Scaling& scaling,
+                                                          const PhysicsModels& models,
+                                                          std::span<const double> edge_geometry);
+
+    std::size_t m_ = 3;  // unknowns per node
+    std::vector<physics::Semiconductor> thermal_materials_;
+    std::vector<ThermalNode> thermal_nodes_;
+    std::vector<ThermalEdge> thermal_edges_;
+    std::vector<double> thermal_rise_;  // per thermal contact: (T_c - T0) / T0
+    std::vector<double> metal_;          // per node: V / V_T on an ohmic contact node, else 0
+    std::vector<double> contact_bias_;   // per contact: V / V_T
+    // A thermal contact's kind (true: isothermal) and its nodes' indices into its list.
+    std::vector<char> thermal_isothermal_;
+    double T0_ = 0.0, heat_scale_ = 0.0, kappa_ref_ = 0.0;
+    bool thermal_bgn_ = false;
+    bool sinks_complete_ = false;
+    std::vector<char> reaches_sink_;  // per node (reaches_heat_sink)
+    // One node's thermal state at tau (NaN entries unless tau is finite and theta positive).
+    [[nodiscard]] ThermalState thermal_state(std::size_t node, double tau) const;
+    // s times the Jacobian of the electrothermal storage terms (assemble_heat with a step) about a
+    // steady state, added to the small-signal matrix's values.
+    void add_thermal_storage(std::span<const double> x, std::complex<double> s,
+                             std::span<std::complex<double>> values) const;
+    // The electrothermal rows (assemble with the model on); with sinks false, without the thermal
+    // contacts' terms, so every heat row is the node's heat balance alone.
+    void assemble_heat(std::span<const double> x, std::span<double> f, std::span<double> values,
+                       const TimeStep* step, bool sinks) const;
 
     std::vector<double> volume_, doping_, n_ie_, tau_n_, tau_p_, auger_n_, auger_p_;
     std::vector<double> log_dos_n_, log_dos_p_;  // ln(Nc / n_ie), ln(Nv / n_ie)

@@ -34,6 +34,8 @@ struct SmallSignalFields {
     std::vector<std::complex<double>> potential;
     std::vector<std::complex<double>> n_cm3;
     std::vector<std::complex<double>> p_cm3;
+    // With the electrothermal model (Unit 23), the lattice temperature's (K / V); empty without.
+    std::vector<std::complex<double>> temperature_K;
 };
 
 struct SmallSignalPoint {

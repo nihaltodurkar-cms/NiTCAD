@@ -177,7 +177,8 @@ add_library(nitcad_physics STATIC
   src/physics/insulator.cpp
   src/physics/interface_traps.cpp
   src/physics/impact_ionization.cpp
-  src/physics/band_to_band.cpp)
+  src/physics/band_to_band.cpp
+  src/physics/thermal.cpp)
 add_library(NiTCAD::physics ALIAS nitcad_physics)
 target_include_directories(nitcad_physics PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
 target_link_libraries(nitcad_physics PUBLIC NiTCAD::base)
@@ -193,7 +194,8 @@ add_executable(nitcad_physics_test
   tests/physics/materials_test.cpp
   tests/physics/interface_traps_test.cpp
   tests/physics/impact_ionization_test.cpp
-  tests/physics/band_to_band_test.cpp)
+  tests/physics/band_to_band_test.cpp
+  tests/physics/thermal_test.cpp)
 target_link_libraries(nitcad_physics_test PRIVATE NiTCAD::physics Catch2::Catch2WithMain)
 add_test(NAME physics COMMAND nitcad_physics_test)
 
@@ -219,6 +221,7 @@ add_library(nitcad_assemble STATIC
   src/assemble/contact_bias.cpp
   src/assemble/equilibrium_poisson.cpp
   src/assemble/drift_diffusion.cpp
+  src/assemble/electrothermal.cpp
   src/assemble/tunnel_paths.cpp)
 add_library(NiTCAD::assemble ALIAS nitcad_assemble)
 target_include_directories(nitcad_assemble PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
@@ -235,7 +238,8 @@ add_executable(nitcad_assemble_test
   tests/assemble/transient_test.cpp
   tests/assemble/small_signal_test.cpp
   tests/assemble/impact_ionization_test.cpp
-  tests/assemble/band_to_band_test.cpp)
+  tests/assemble/band_to_band_test.cpp
+  tests/assemble/electrothermal_test.cpp)
 target_link_libraries(nitcad_assemble_test PRIVATE NiTCAD::assemble Catch2::Catch2WithMain)
 add_test(NAME assemble COMMAND nitcad_assemble_test)
 
@@ -292,7 +296,8 @@ add_executable(nitcad_solve_test
   tests/solve/transient_test.cpp
   tests/solve/small_signal_test.cpp
   tests/solve/impact_ionization_test.cpp
-  tests/solve/btbt_test.cpp)
+  tests/solve/btbt_test.cpp
+  tests/solve/electrothermal_test.cpp)
 # The solve tests also read their results through the analysis extractors (Unit 24 gates).
 target_link_libraries(nitcad_solve_test PRIVATE NiTCAD::solve NiTCAD::analysis Catch2::Catch2WithMain)
 target_compile_definitions(nitcad_solve_test PRIVATE

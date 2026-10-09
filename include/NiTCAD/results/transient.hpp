@@ -39,6 +39,9 @@ struct TimePoint {
     // Per declared interface, as BiasPoint::interface_trap_charge, with the traps' occupancy of
     // this time.
     std::vector<double> interface_trap_charge;
+    // Electrothermal (Unit 23; empty with the model off): the heat leaving through each thermal
+    // contact, as BiasPoint::thermal_contact_heat, at this time.
+    std::vector<double> thermal_contact_heat;
     ConvergenceRecord convergence;  // empty for the starting state
 };
 

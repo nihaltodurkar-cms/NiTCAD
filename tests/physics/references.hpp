@@ -112,6 +112,37 @@ inline DD fermi_half_quadrature(double eta) {
     return DD(4.0) / sqrt(pi()) * detail::fermi_quadrature(eta, true);
 }
 
+// F_0 = ln(1 + e^eta) and F_1 = int t / (1 + e^(t - eta)) dt (Unit 23): F_1 by the series below
+// eta = -1, otherwise by the quadrature of 2 u^3 / (1 + e^(u^2 - eta)) (t = u^2), as fermi_half.
+inline DD fermi_zero(double eta) {
+    if (eta < 0.0) return log(DD(1.0) + exp(DD(eta)));
+    return DD(eta) + log(DD(1.0) + exp(DD(-eta)));
+}
+inline DD fermi_one_quadrature(double eta) {
+    const double U = std::sqrt(std::max(eta, 0.0) + 120.0);
+    const double width = std::min(0.25, pi().hi / (4.0 * std::sqrt(std::max(eta, 1.0))));
+    const int panels = static_cast<int>(std::ceil(U / width));
+    const GaussLegendre& g = detail::gl20();
+    DD sum = 0.0;
+    for (int p = 0; p < panels; ++p) {
+        const DD a = DD(U) * DD(p) / DD(panels), b = DD(U) * DD(p + 1.0) / DD(panels);
+        const DD half = (b - a) / DD(2.0), mid = (a + b) / DD(2.0);
+        for (std::size_t i = 0; i < g.x.size(); ++i) {
+            for (const double sign : {-1.0, 1.0}) {
+                const DD u = mid + DD(sign) * half * g.x[i];
+                const DD y = u * u - DD(eta);
+                if (y.hi > 300.0) continue;
+                sum += g.w[i] * half * DD(2.0) * u * u * u / (DD(1.0) + exp(y));
+            }
+        }
+    }
+    return sum;
+}
+inline DD fermi_one_series(double eta) { return detail::fermi_series(eta, 2.0); }
+inline DD fermi_one(double eta) {
+    return eta < -1.0 ? fermi_one_series(eta) : fermi_one_quadrature(eta);
+}
+
 // The root of an increasing f on [lo, hi] by 200 halvings.
 inline double bisect(const std::function<DD(double)>& f, double lo, double hi) {
     for (int i = 0; i < 200; ++i) {

@@ -15,8 +15,13 @@
 // solved through a sparse B0 holding only the row's largest entry (kept while it stays within 0.3
 // of the largest, so B0's pattern rarely changes) and a Sherman-Morrison correction for the rest.
 // The residual is exactly linear in the bias: F(x, lambda) = F(x, lambda_0) + dF/dlambda
-// (lambda - lambda_0). The next tangent solves the same matrix with the right-hand side (0, 1), so
-// it keeps its orientation through a fold.
+// (lambda - lambda_0). With the electrothermal model (Unit 23) dF/dlambda depends on the state (the
+// metal's Peltier heat at the swept contact's nodes), so the rows are evaluated at lambda itself
+// with dF/dlambda at x; the thermal contacts stay at the starting point's temperatures
+// (steady.thermal_bias_K, one list, or the device's), and the temperature rise in units of T0
+// enters the state part of the arc metric like the potential in V_T. A thermal-runaway fold of a
+// device with a thermal resistance is a turning point like any other. The next tangent solves the
+// same matrix with the right-hand side (0, 1), so it keeps its orientation through a fold.
 // The arc length is measured in volts: the swept bias; the swept contact's current at 1 V per
 // decade of |I| + I0 (I0 ten times the starting point's current resolution); and, weighted by 0.1,
 // the state (the potential in V_T and each density relative to itself above density_floor, times
@@ -69,7 +74,9 @@ struct TraceOptions {
 // range; start_V not one finite bias per contact (and those of check_contact_bias), end_V not
 // finite or equal to the start; a step not finite and positive or min_step_V > step_V > max_step_V;
 // current_limit not finite and positive; max_points 0; density_floor negative; an initial state as
-// for sweep_bias; those of make_scaling, DriftDiffusion::create and LinearSolver::create.
+// for sweep_bias (and its electrothermal checks for the starting point); those of make_scaling,
+// DriftDiffusion::create and LinearSolver::create. With electrothermal, an accepted point whose
+// temperature leaves a material's range stops the trace (non_convergence, as sweep_bias).
 [[nodiscard]] std::expected<results::Sweep, base::Error> trace_bias(
     const device::Device& device, const TraceOptions& options,
     const results::NodeFields* initial = nullptr, const RunControl& control = {});
