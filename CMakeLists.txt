@@ -267,6 +267,22 @@ add_executable(nitcad_analysis_test
 target_link_libraries(nitcad_analysis_test PRIVATE NiTCAD::analysis Catch2::Catch2WithMain)
 add_test(NAME analysis COMMAND nitcad_analysis_test)
 
+# --- io layer (files: meshes, sweeps, checkpoints; Unit 29, approved 2026-10-09) ----------
+add_library(nitcad_io STATIC
+  src/io/record.cpp
+  src/io/files.cpp)
+add_library(NiTCAD::io ALIAS nitcad_io)
+target_include_directories(nitcad_io PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
+target_link_libraries(nitcad_io PUBLIC NiTCAD::base NiTCAD::mesh NiTCAD::results)
+
+add_executable(nitcad_io_test
+  tests/io/record_test.cpp
+  tests/io/files_test.cpp)
+# The record test reads the private encoding directly.
+target_include_directories(nitcad_io_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/io")
+target_link_libraries(nitcad_io_test PRIVATE NiTCAD::io Catch2::Catch2WithMain)
+add_test(NAME io COMMAND nitcad_io_test)
+
 # --- solve layer (Newton, equilibrium and bias solves, sweeps, cancellation, progress) ---
 add_library(nitcad_solve STATIC
   src/solve/equilibrium.cpp
@@ -298,9 +314,11 @@ add_executable(nitcad_solve_test
   tests/solve/small_signal_test.cpp
   tests/solve/impact_ionization_test.cpp
   tests/solve/btbt_test.cpp
-  tests/solve/electrothermal_test.cpp)
+  tests/solve/electrothermal_test.cpp
+  tests/solve/restart_test.cpp)
 # The solve tests also read their results through the analysis extractors (Unit 24 gates).
-target_link_libraries(nitcad_solve_test PRIVATE NiTCAD::solve NiTCAD::analysis Catch2::Catch2WithMain)
+target_link_libraries(nitcad_solve_test PRIVATE NiTCAD::solve NiTCAD::analysis NiTCAD::io
+  Catch2::Catch2WithMain)
 target_compile_definitions(nitcad_solve_test PRIVATE
   NITCAD_MKL_RUNTIME_PATH="${NITCAD_MKL_RUNTIME_PATH}")
 add_test(NAME solve COMMAND nitcad_solve_test)

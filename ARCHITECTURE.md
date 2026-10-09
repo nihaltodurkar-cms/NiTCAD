@@ -127,6 +127,7 @@ Each layer may depend only on layers drawn below it. Layers on the same row do n
  L5   solve       Newton, damping, continuation, sweeps; produces results; cancellation + progress
  L4   assemble    scaling; discretization (SG flux and extensions); contacts/BC handling;
                   residual + Jacobian; nonlocal models (tunnel paths since Unit 20)
+ L4   io          files: meshes, sweeps, checkpoints (Unit 29); solve does not use it
  L3   device | results      device = problem description (regions, doping, materials, contacts)
                             results = plain result data (fields, terminal quantities, run record)
  L2   physics     materials and local models; value + exact partial derivatives; no mesh, no matrices
@@ -146,9 +147,10 @@ Allowed dependencies (everything not listed is forbidden):
 | results | base, mesh |
 | assemble | base, linalg, mesh, physics, device |
 | solve | base, linalg, assemble, device, results |
+| io | base, mesh, results (Unit 29; device descriptions later) |
 | analysis | base, mesh, results |
 | render | base, mesh, results, analysis |
-| app | all of the above except physics and assemble |
+| app | all of the above except physics and assemble (io included) |
 
 `results` sits below `solve` so that `analysis`, `render` and `app` can read results without including any
 solver header.
@@ -170,6 +172,7 @@ and boundary/interface laws into the global residual and Jacobian. This preserve
 | physics | material parameters and constitutive models; node/edge/interface-local laws and exact derivatives | meshes, matrices, bias, solving |
 | device | regions, material assignment, doping, interfaces and contact/boundary descriptions (data only) | solving, assembling |
 | results | field/terminal data, convergence history, diagnostics and run record | solving |
+| io | file formats: the container, records, atomic writes, checkpoints (Unit 29) | solving; the in-memory types (they know nothing of it, R2) |
 | assemble | equation contributions, scaling, Scharfetter–Gummel flux (and its extensions), contact/interface residuals, F(x) and J(x), gathering model inputs | Newton iteration, UI |
 | solve | Newton, damping, continuation, sweeps, cancellation, progress | assembly, rendering |
 | analysis | quantities derived from results | solving |
@@ -1675,6 +1678,46 @@ An on-disk result format is **deferred** (R2), under the same independence rule 
 - Unit 19: `trace_bias` returns a `Sweep`: its points in trace order (the bias may fall back through a fold), each
   `BiasPoint`'s bias the full contact vector and its convergence the corrector's; `stopped` / `unfinished` as a sweep.
 
+**As built (Unit 29, the io layer: files and checkpoint/restart; owner approval of the layer 2026-10-09; R2 met for
+meshes, sweeps and checkpoints; DECISIONS.md IO1–IO7):**
+- `io/files.hpp`: `save_mesh` / `load_mesh`, `save_sweep` / `load_sweep`, `save_checkpoint` / `load_checkpoint`,
+  `mesh_digest`. The in-memory types are unchanged and know nothing of the format; `io` depends on `base`, `mesh` and
+  `results` only, and `solve` does not use it.
+- **Container:** magic `NiTCADio`, format version (1), content kind, payload length, payload, FNV-1a 64 checksum of
+  the payload; all integers little-endian, doubles by IEEE-754 bit pattern, so every value reads back bit for bit
+  (NaN, −0, denormals and infinities included). A different version, another content kind, a length or checksum
+  mismatch, truncation or appended bytes are `invalid_input` ("corrupt or incompatible file: ...").
+- **Records** (`src/io/record.hpp`, private): fields keyed by 16-bit keys with 64-bit lengths, nested records,
+  repeated keys as lists. Readers skip unknown keys and default absent ones, so the format can gain fields without a
+  version change; removing or retyping a field needs one.
+- **Atomic writes:** the file is written as `<name>.tmp`, flushed, closed and renamed over the target
+  (`std::filesystem::rename`, which replaces on Windows); a failure removes the temporary and leaves an existing
+  target untouched (`resource_exhausted`).
+- **Meshes** load through `Mesh::from_parts`, so a loaded mesh is validated like any other.
+- **Checkpoint:** the mesh digest and node count, the run identity, the bias, the thermal-contact temperatures and the
+  node fields of one converged point. `load_checkpoint` refuses a checkpoint written for another mesh (digest) or
+  with fields of the wrong length. A restart is `sweep_bias(device, remaining, options, &c.fields)` with
+  `options.step_control.initial_bias_V = c.bias_V` so the first restarted step can be cut (Unit 28).
+- Gates (`tests/io`, 9 cases; `tests/solve/restart_test.cpp`, 2 cases):
+  - every record type round-trips bit for bit; the layout is little-endian; unknown keys are skipped, absent keys
+    defaulted, malformed records refused;
+  - 1D, 2D and 3D graded tensor meshes round-trip exactly with equal digests; a one-ulp coordinate change changes
+    the digest;
+  - a sweep with every field set (bands with NaN, tunnel paths, thermal quantities, pivot ratio, stopping error with
+    context, unfinished history) round-trips exactly; a missing file, another kind, a flipped payload byte, a
+    truncated file, appended bytes, another version and a text file are refused; a second save replaces the first
+    and leaves no temporary; an unwritable path is an error;
+  - the legacy diode swept 0–0.6 V equals a sweep stopped at 0.3 V, checkpointed to a file and restarted, to 1e-9
+    relative (fields and current; the restart passes the state through physical units, as Unit 10's chain of
+    one-point solves); a restart from the loaded checkpoint and from the in-memory state are identical bit for bit,
+    run identity included; a solved sweep saved and loaded is unchanged.
+- Mutation checks (10, the shell loop of Unit 28, no Python): all caught, one after a test was added (a loosened
+  length check accepted appended bytes): the checksum unchecked, the checkpoint's mesh unchecked, the sub-step count,
+  the pivot ratio or the error's index not written, a patch name altered, big-endian writes, a copy instead of the
+  rename, the length check loosened.
+- Not in Unit 29: device descriptions on disk and a text input deck (the next io unit), transient and small-signal
+  results, compression, a build/version stamp in the file, file locking.
+
 ### 6.7 Error policy (R1, decided)
 
 - **Recoverable errors** are returned as `std::expected<T, NiTCAD::base::Error>`: invalid input, a degenerate
@@ -2215,6 +2258,9 @@ tests/solve/                Newton contract, equilibrium and bias diode gates, l
                             band-to-band tunnelling (Unit 20); extraction from solved devices (Unit 24); PARDISO
                             device gates and solver timing (Unit 18); electrothermal (Unit 23)
 include/NiTCAD/results/     convergence.hpp, solution.hpp, run.hpp (header-only plain data) (Unit 10, exists)
+include/NiTCAD/io/          files.hpp: container, meshes, sweeps, checkpoints               (Unit 29)
+src/io/                     record encoding (private), files                          (Unit 29)
+tests/io/                   record and file round trips, damage, atomic writes      (Unit 29)
 include/NiTCAD/analysis/    curve.hpp, dc.hpp, cv.hpp, two_port.hpp                     (Unit 24)
 src/analysis/               extractors; common.hpp helpers (private)                    (Unit 24)
 tests/analysis/             synthetic curves and networks with exact figures            (Unit 24)
@@ -2360,6 +2406,7 @@ built.
 | 26 | Native Windows application and workflow | app | target; Win32 API, x64 target, Direct3D 12 / Direct2D |
 | 27 | Optimization / sensitivity / inverse-design workflows | analysis, solve | long-term target |
 | 28 | Bias step cutting (commercial-readiness programme, 11.3) | solve, results | **done, on `main`** (`06b708d`, PR #31): off by default; halving and growth from the last converged state (11.3, Unit 28; DECISIONS.md S1–S7) |
+| 29 | The io layer: files and checkpoint/restart (11.3) | io | **verified on branch `io/checkpoint`** (stacked on `solve/bias-step-control`): meshes, sweeps and checkpoints in a versioned, checksummed container with atomic writes; restart equals the uninterrupted sweep (6.6, Unit 29; DECISIONS.md IO1–IO7) |
 | 30 | Newton line search (11.3) | solve, results | **verified on branch `solve/line-search`** (on top of Unit 28, which is on `main`): opt-in backtracking on the damped step, residual or natural test; benchmarked against step cutting (11.3, Unit 30; DECISIONS.md L1–L6) |
 
 Units 1–9 are the smallest end-to-end vertical slice: a validated drift-diffusion diode. Everything past
@@ -2411,12 +2458,12 @@ exists, not finished), **planned** (nothing built). Audit of 2026-10-09, against
 | Area | What exists (audited) | Status | Next step |
 |---|---|---|---|
 | Robust nonlinear solving | Newton with componentwise clipping (6.2); the generation-free retry (Units 19, 20); arc-length `trace_bias` (Unit 19) | **Bias step cutting verified, on `main`** (Unit 28, below; `06b708d`, PR #31); **Newton line search verified, opt-in** (Unit 30, below; branch `solve/line-search`) | A natural-test norm monotone in reverse bias; a Gummel or pseudo-transient fallback |
-| Input/output, checkpoint/restart | In-memory C++ description only; no file format (R2) | planned | A versioned, checksummed binary state file (fields + bias + run record) for restart; then a text input deck. Needs the owner's ruling on a new layer (`io`, beside `results`) |
+| Input/output, checkpoint/restart | The `io` layer (approved 2026-10-09): versioned, checksummed, atomic files for meshes, sweeps and checkpoints | **Verified** (Unit 29, 6.6; branch `io/checkpoint`) | Device descriptions on disk and a text input deck; transient and small-signal results |
 | Geometry and unstructured 3D meshing | `Mesh::from_parts` accepts any valid node/edge/volume graph; only the tensor-grid producer exists; nonlocal BTBT needs tensor cells (6.11) | planned (Unit 16) | A 2D Delaunay/Voronoi producer with geometric checks, then 3D tetrahedra; analytic doping profiles |
 | Low-current accuracy | `terminal_current_resolution` reports the floor (Unit 15); off-state MOSFET current unresolved (6.13) | planned | Current extraction from the minority side or quasi-Fermi unknowns, gated against the resolution |
 | Generic fields/equations | Specialized `DriftDiffusion` assembler with a stride (Unit 23) | planned (6.12.1–2) | Field and equation descriptors behind the current assembler, bit-identical |
 | Scalable linear solvers | Eigen SparseLU (default), PARDISO opt-in (Unit 18) | planned | Iterative Krylov with ILU/AMG behind `linalg`; parallel assembly |
-| Results and provenance | Plain-data results; run record with identity digest (6.6) | partial | Persisted with the checkpoint format; build/version stamp |
+| Results and provenance | Plain-data results; run record with identity digest (6.6); sweeps persisted bit for bit (Unit 29) | partial | Build/version stamp in files; transient and small-signal results on disk |
 | Visualization, GUI, batch | None (Units 25, 26) | planned | A batch runner over the input deck before the GUI |
 | Validation against published/measured data | Legacy, analytic and convergence gates throughout | partial | Published benchmark devices with cited data |
 
@@ -2596,7 +2643,7 @@ architecture; historical branch names remain only where they are useful to expla
 |---|---|
 | D2 | Catch2 v3 is the C++ test framework. Its availability through vcpkg is checked under V2; the decision stands. |
 | D4 | Dimension-generic architecture for 1D, 2D and 3D. |
-| D5 | Root namespace `NiTCAD`. Layers: `base`, `linalg`, `mesh`, `physics`, `device`, `assemble`, `solve`, `results`, `analysis`, `render`, `app`. Nesting and include root: Q1. |
+| D5 | Root namespace `NiTCAD`. Layers: `base`, `linalg`, `mesh`, `physics`, `device`, `assemble`, `solve`, `results`, `analysis`, `render`, `app`. **Amended 2026-10-09 (owner):** the `io` layer is approved (Unit 29). Nesting and include root: Q1. |
 | R1 | `std::expected` for recoverable errors; exceptions only for exceptional or programmer-error cases; no exceptions in hot numerical kernels or Newton iterations (6.7). |
 | Q1 | Layers are nested namespaces `NiTCAD::<layer>`; the include root is `include/NiTCAD/<layer>/`, spelled exactly like the namespace. Settle casing before any file exists, because Git `core.ignorecase` can hide case-only renames. |
 | Q2 | `NITCAD_EXPECTS(cond)` fail-fast precondition macro (6.7). |
@@ -2631,7 +2678,7 @@ architecture; historical branch names remain only where they are useful to expla
 | # | Item | Condition to revisit |
 |---|---|---|
 | D6 | C and Fortran integration | A measured, justified component is named by the owner. The primary architecture stays C++23. |
-| R2 | External input/output file formats | Concrete requirements exist. Internal input/result types stay independent of any format. |
+| R2 | External input/output file formats | **Partly met (Unit 29, 2026-10-09):** meshes, sweeps and checkpoints have a format (6.6). Still deferred: device descriptions and an input deck. Internal types stay independent of any format. |
 | R3 | Unstructured-mesh implementation | The owner requests it. The mesh design must already allow it without a rewrite (6.11). |
 | — | Statistics beyond parabolic-band Fermi–Dirac (Unit 14); incomplete ionization | Requested (R4). |
 | — | PARDISO and iterative solver backends | Requested; the interface already accommodates them (6.10). |
@@ -2674,6 +2721,7 @@ architecture; historical branch names remain only where they are useful to expla
 | V30 | Unit 18 (`linalg/pardiso`): Debug and Release build with no warnings; all suites pass with the MKL runtime configured (oneMKL 2026.1, Intel's NuGet redistributable; Release 14/14, Debug 10/10, the new ctest `linalg_mkl_absent` in both). PARDISO agrees with Eigen SparseLU on the shared systems (5.6e-16 to 5.5e-12), complex G + iωC (1.8e-13), the diode (J(0.5 V) to 11 digits), MOS-C (7.9e-17), transient (2.2e-14), admittances within max(1e-9 max |Y|, resolution), the MOSFET Id-Vg; reuse gate 1 analysis / one factorization per Jacobian / one solve per right-hand side; floating regions rejected through perturbed pivots. Refactorization 5x (2D MOSFET) and 17x (3D, 81k unknowns) faster than Eigen on one thread, 16x and 74x on eight. Default Eigen path: the 14 probe runs hash identically to `main`. 18 of 20 mutations caught (one equivalent, one unreachable). | Verified locally. |
 | V31 | Unit 23 (`physics/electrothermal`): Debug and Release build with no warnings; all suites pass (Release 14/14, Debug 10/10); `nitcad_physics_test` 91 test cases, `nitcad_device_test` 25, `nitcad_assemble_test` 96, `nitcad_solve_test` 167 (+9 `[.mosfet]`, one of them the electrothermal MOSFET, Release only). The electrothermal gates, cost and the 34 + 5 mutation checks (all caught; the U1–U8 rulings re-verified 2026-10-09) in 6.2 "As built (Unit 23)". With the model off every path is unchanged (the full suites pass after the stride refactor). | Verified locally. |
 | V32 | Unit 28 (`solve/bias-step-control`): Release 14/14 and Debug 10/10, both with no warnings (Debug `solve` 957 s against 596 s before: the step-control gates are slow in Debug); `nitcad_solve_test` 174 test cases (+9 `[.mosfet]`, +1 `[.benchmark]`, not in ctest); the other suites unchanged. Step-control gates, the MOSFET benchmark (3.0e-14 against the 1 V_T sweep, 12 minutes) and the cost finding in 11.3. With the control off every existing test passes unchanged. | Verified locally. |
+| V33 | Unit 29 (`io/checkpoint`): Debug and Release build with no warnings; all suites pass (Release 15/15 and Debug 11/11, with the new ctest `io`); `nitcad_io_test` 9 test cases, `nitcad_solve_test` 176 (+2 restart cases). Round trips, damage, atomic writes, restart against the uninterrupted sweep (1e-9) and the 10 mutation checks in 6.6 "As built (Unit 29)". No solver source changed. | Verified locally. |
 | V34 | Unit 30 (`solve/line-search`): Debug and Release build with no warnings; all suites pass (Release 14/14, Debug 10/10); `nitcad_solve_test` 180 test cases (+9 `[.mosfet]`, +4 `[.benchmark]`, not in ctest). Line-search gates, the MOSFET and diode-jump benchmarks against step cutting, and the findings in 11.3 "As built (Unit 30)". Off by default: every existing test passes unchanged. | Verified locally. |
 | V3 | Scaling definitions, scaled variables and Newton tolerances read from `inputs.cpp` and `device1d.cpp` and recorded in 6.1. One open question remains for Unit 8 (convergence criterion on the clipped correction). | Verified |
 
