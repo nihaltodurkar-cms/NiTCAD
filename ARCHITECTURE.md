@@ -1253,9 +1253,10 @@ after two review rounds; legacy `btbt.py`, `btbt_grid.py`, `nonlocal_path.py`, `
   - OLD / NEW / REASON: OLD, the legacy iterated an outer Gummel loop between an isothermal device at a uniform peak T
     and a separate heat solve; NEW, one monolithic Newton system with a per-node T; REASON, a uniform T misses local
     heating, and an outer loop hides thermal runaway behind its own non-convergence (T1).
-  - τ, not θ, is the unknown: θ ≈ 1 resolves T only to about 7e-14 K, which limited the heat conducted to a sink to
-    some 4e-8 W/cm² across a micron (measured with θ: a diode's energy balance at 3.7e-6 W/cm² closed to 0.2%; with τ,
-    to 1.3e-14 where the heating is resolved).
+  - τ, not θ, is the unknown (DECISIONS.md U1, accepted): a double near 1 is spaced 2.2e-16, so θ resolves T only to
+    6.7e-14 K at 300 K; the heat reaching a sink is the flux κΔT/h through the edge next to it, resolved with θ to
+    κ·6.7e-14 K/h, 4e-8 W/cm² for h = 25 nm. Measured on a diode at 0.3 V (3.7e-6 W/cm²): with θ the energy balance
+    missed by 9.0e-9 W/cm² (0.24%); with τ by 2.4e-12 (6.4e-7), the rounding floor of the energy flows (U8).
 - **Material data** (section 5; `physics/semiconductor.hpp`, `physics/insulator.hpp`, `physics/thermal.hpp`, T11):
   κ(T) = κ₃₀₀ (T/300)^(−a), a constant ρc and the thermopower scattering exponents r_n, r_p per material, every value
   cited (silicon the legacy 1.48 W/(cm K) and a = 1.33; 4H-SiC 3.7; SiO₂ 0.014, a = 0); a material without them is
@@ -1272,26 +1273,26 @@ after two review rounds; legacy `btbt.py`, `btbt_grid.py`, `nonlocal_path.py`, `
   - Fermi–Dirac (T3; r = −1/2 only, else refused): δ gains Δ ln γ (Unit 14's ν-factor) and −h̄_excess Δθ/θ_e, h̄ the
     ends' mean of h − 1/2, all partials exact.
   - Field mobility: Canali of the T-dependent low-field mobility; ∂μ/∂μ₀ = (μ + E ∂μ/∂E)/μ₀ as μ = μ₀ f(μ₀E).
-  - Thermionic emission: the same w and δ, K₀ θ_e^(1/2)/θ_e^(1+r) (both velocity forms scale as T^(1/2)): for r = −1/2
-    each side emits ~ n v(T); at a uniform T it is Unit 15's flux at that T. (A design choice beyond T9's wording: the
-    form across a temperature step.)
+  - Thermionic emission is refused with the model (DECISIONS.md U3, deferred): no non-isothermal emission form is
+    justified or benchmarked yet.
 - **Heat** (T4, T5). Each carrier carries e_n = E_c + (r + 5/2 + h_excess) kT (electrons) or e_p = E_v − (…) kT; the heat
   a box receives is the energy flowing into it along its edges, ±(ē_n Jn + ē_p Jp) (ē the ends' mean), plus on an ohmic
   node the metal's (V/V_T)(Jn + Jp): the discrete divergence of the energy flux, so Joule, recombination, Peltier and
   Thomson heat are all in it, and in a steady state the heat of all nodes is Σ V_c I_c to round-off (the contact's
   Peltier heat is the metal term, T5). Conduction along an edge of one material is (g_e/κ_ref)(u(θ_a) − u(θ_b)), u the
-  Kirchhoff transform (exact for steady 1D conduction); between materials the harmonic mean of the ends' κ at their T.
+  Kirchhoff transform (exact for steady 1D conduction); between materials the harmonic mean of the ends' κ at their T
+  (U4, accepted with the two-layer refinement gate below: second order).
   The heat rows are divided by K₀ = κ_ref T₀/(V_T J₀ L_D) so conduction is O(1). Transients and AC subtract the carriers'
   stored energy e_n dS_n/dt − e_p dS_p/dt and add ρc dT/dt (T4's local form).
 - **Thermal contacts** (T6; `device/contact.hpp`): isothermal (Dirichlet τ) or R_th per boundary area to an ambient,
   each with its own temperature, swept per bias point (`BiasOptions::thermal_bias_K`); every other boundary adiabatic.
 - **T elsewhere** (T9): n_ie(T) (BGN included) in SRH (n₁ = n_ie), Auger and radiative recombination and their FD
   product; the Caughey–Thomas mobility; an ohmic contact's neutral equilibrium and ψ₀ = V/V_T + c_n + θ x_n at the node's
-  T, its θ-derivative by the implicit-function rule on the neutrality equation (incomplete ionization included); a
+  T, its θ-derivative by the implicit-function rule on the neutrality equation; a
   p-polysilicon gate's or electrode's work function χ + Eg(T) (metal and n-poly ones do not move); the impact-ionization
   factor γ(T), ∂α/∂γ = (α − E α′)/γ; surface recombination at the semiconductor node's T (the interface potential has no
-  T dependence without traps); incomplete ionization's E_d/kT at each node's T in Poisson, the contacts and the stored
-  carriers S_n = n − N_D⁺. SRH lifetimes, Auger coefficients and v_sat stay T-independent (legacy, T9).
+  T dependence without traps). Incomplete ionization is refused with the model (U6) until the energy of the carriers
+  bound to dopants is derived and validated. SRH lifetimes, Auger coefficients and v_sat stay T-independent (legacy, T9).
 - **Newton** (T10): a step in T is clipped to 50 K and to [θ/2, 2θ]; the convergence measure gains |Δτ| (absolute, in
   units of T₀); a converged T outside `check_temperature`'s range is `non_convergence` (context the node and T).
 - **Solve paths** (T12). Steady sweeps: per-point thermal-contact temperatures, the starting equilibrium at T₀
@@ -1299,12 +1300,15 @@ after two review rounds; legacy `btbt.py`, `btbt_grid.py`, `nonlocal_path.py`, `
   `trace_bias`: F stays linear in the swept bias but ∂F/∂λ depends on x (the metal term), so the bordered rows are
   evaluated at λ itself with ∂F/∂λ = `bias_derivative(contact, x)` on the rows `bias_rows` names; τ enters the arc
   metric like ψ in V_T; a thermal-runaway fold is an ordinary turning point. Transients: storage width 3 (S_n, S_p, τ),
-  BE/BDF2, the error estimate measures τ (absolute), the sinks' heat per time point; the state at t = 0 is the
-  electrothermal steady state unless an initial temperature is given or a part of the device has no sink (then T is held
-  at it, or T₀, while the electrical rows are solved): a fully adiabatic device is well posed in time (T7). AC: ρc and
+  BE/BDF2, the error estimate measures τ (absolute), the sinks' heat per time point. The state at t = 0 (U5): a given
+  initial temperature is held everywhere while the electrical rows are solved; otherwise each connected thermal domain
+  with a thermal contact (a region without one of its own included, when joined to one) starts from its electrothermal
+  steady state, and only a domain with no thermal contact at all is held at T₀: a fully adiabatic device is well posed in
+  time (T7). AC: ρc and
   the carriers' energy in sC, a state-dependent forcing, the temperature response field. The run record hashes the
   regions' thermal data, the thermal contacts, `thermal_bias_K` and an initial temperature, only with the model on.
-- **Refused** (`invalid_input`): interface traps and band-to-band tunnelling (T8: not frozen at T₀); Fermi–Dirac with
+- **Refused** (`invalid_input`): interface traps and band-to-band tunnelling (T8: not frozen at T₀); thermionic
+  emission (U3, deferred); incomplete ionization (U6); Fermi–Dirac with
   r ≠ −1/2 (T3); a material without thermal data (T11); a steady sweep, trace or AC operating point on a device with a
   connected part without a thermal contact (T7); `Equations::equilibrium_poisson` (T12).
 - Gates (all measured; `tests/physics/thermal_test.cpp`, `tests/device/device_test.cpp`,
@@ -1312,21 +1316,34 @@ after two review rounds; legacy `btbt.py`, `btbt_grid.py`, `nonlocal_path.py`, `
   - Physics: F₋₁, F₀, F₁ and h(η) against double-double references; every T-derivative against differences; the
     material data and its validation; thermal contacts' validation.
   - FD Jacobian of the four-block system, every column at three steps: 1D, 2D (with an oxide) and 3D, two materials,
-    Fermi–Dirac (degenerate electrons), field mobility, a p-poly gate and electrode, thermionic emission, an interface
-    with fixed charge and surface recombination, incomplete ionization: at most 1.4e-7 of the column scale; a time
-    step's rows likewise; impact ionization at 3e5 V/cm 1.5e-9.
+    Fermi–Dirac (degenerate electrons), field mobility, a p-poly gate and electrode, an interface with fixed charge and
+    surface recombination: at most 1.4e-7 of the column scale; a time step's rows likewise; impact ionization at
+    3e5 V/cm 1.5e-9; at rises of 1e-7 T₀ 1.5e-10 (U1); across a factor-2.5 temperature jump on one edge 4.4e-9 (U2).
+  - The heat rows' energy identity (U1): Σ K₀ f_T = −Σ V I at arbitrary heated states, no sinks, to 1e-13.
   - θ = 1 against the isothermal rows and currents (every case above): 2e-15; uniform θ = 1.25 at equilibrium, Boltzmann
-    and Fermi–Dirac, across a material and a thermionic step: zero flux to 1.2e-14 of the one-sided terms (a T step
-    drives O(1)); the Joule part of every edge's heat ≥ 0.
+    and Fermi–Dirac, across a material step: zero flux to 7e-15 of the one-sided terms (a T step drives O(1)); the Joule
+    part of every edge's heat ≥ 0.
+  - Open circuit between 300 and 400 K (U2): no current on any edge within its resolution; the quasi-Fermi rise
+    converges at order 2.00 (21 to 321 nodes) and lies within 1e-5 of ∫P dT (the ends' space charge departs from
+    n = N_D by about 4e-6 of it).
+  - Two conducting layers in series (U4): against the exact Kirchhoff solution, 4.5e-2 to 7.5e-4 K from 10 to 160
+    cells, orders 1.91 to 1.99 (the interface edge's harmonic mean the only inexact term).
+  - The bordered system's bias column (U7): `bias_derivative(contact, x)` against differences of the residual in each
+    contact's bias, 3e-11, every nonzero on `bias_rows`.
+  - Transient start (U5): a sinkless oxide joined to a sunk resistor starts from the steady state; of two unconnected
+    resistors, the sunk one starts from its own steady state exactly and the sinkless one at exactly T₀.
   - Heat equation alone: the Kirchhoff-transform solution on a graded insulator rod, isothermal and R_th ends, 1e-9 K;
     legacy G-PARABOLA (uniform Joule source, constant κ) to 1.0e-7 of the rise and G-BC (hotter with R_th; the profile
     shifted by the ends' heats through R_th, Peltier included) to 3.1e-6.
   - Consistency: κ × 1e8 against the isothermal device (rise below 1.2e-11 K, currents 3e-12 or within the runs'
     resolution); sinks at a uniform 350 K against the isothermal device at 350 K, with the reference at 300 K (3e-12),
     and a p-poly gate's charge there (5e-16).
-  - Energy balance: steady, Σ heat = Σ V I to 1.3e-14 where the heating is resolved (below the Newton tolerance's 3e-10 K
-    of rise it is limited by that: 6.4e-7 at a 1.5e-10 K rise); transient with the storage terms 2.8e-14 (BE) and 9.4e-13
-    (BDF2), adiabatic and with sinks; 2D MOSFET 2.3e-13.
+  - Energy balance, steady (U8): at every bias and at Newton tolerances 1e-8 and 1e-12, an absolute gate
+    |heat − Σ V I| ≤ E_max R_I (the two sides are the same energy flows summed two ways, their currents resolved to
+    R_I = `terminal_current_resolution`, E_max the largest carrier or contact energy): measured 1e-4 to 5e-3 of it;
+    and a relative gate 1e-9 where that bound is below 1e-9 Σ V I: measured 3.4e-12 (tolerance 1e-8) and 1.3e-14. At
+    0.3–0.5 V the imbalance (2.4e-12 W/cm²) is the same at both tolerances (rounding, not the tolerance). Transient
+    with the storage terms 2.8e-14 (BE) and 9.4e-13 (BDF2), adiabatic and with sinks; 2D MOSFET 2.3e-13.
   - Thermoelectricity: Seebeck V_oc = ∫P dT at the I = 0 crossing of a sweep, Boltzmann (1e17) 4.4e-7 and Fermi–Dirac
     (1e20) 1.5e-6; Peltier heat at a contact 4.7e-10; at an n⁺/n junction, split between the sinks, 7.2e-4 (the junction
     heat is spread over a Debye length).
@@ -1347,12 +1364,10 @@ after two review rounds; legacy `btbt.py`, `btbt_grid.py`, `nonlocal_path.py`, `
   - Conditioning: a device far better conducting than its sinks (κ × 1e8 with R_th ends) leaves the heat block singular
     to working precision (the pivot check refuses it), and with κ × 1e3 a single AC solve resolves the uniform mode only
     to about 1.5e-6 (steady Newton iterates it away). Realistic κ and R_th are some 1e3 times better conditioned.
-  - The energy balance is exact to round-off of the solved state; where the rise is below the absolute Newton tolerance
-    on T (T10) it is limited by that tolerance.
-  - The flux across an edge freezes T at the edge's mean in the coefficients (second order); the thermionic form across a
-    temperature step and the held transient start are design choices beyond T1–T14's wording, recorded here.
-  - Incomplete ionization's bound carriers are counted, in transients, with the free carriers' transport energy
-    (T4's form applied to S_n = n − N_D⁺).
+  - The energy balance holds to the rounding of the energy flows (the absolute gate above); at small heating that floor,
+    not the Newton tolerance, sets the relative imbalance.
+  - The flux across an edge freezes T at the edge's mean in the coefficients (second order, U2).
+  - Thermionic-emission interfaces (U3, deferred) and incomplete ionization (U6) cannot be combined with the model.
   - Not in Unit 23 (T14): hydrodynamic carrier temperatures, Kapitza resistance, radiation, T-dependent ρc, unstructured
     meshes; traps and band-to-band tunnelling with electrothermal (T8), deferred to a follow-up unit.
 - Cost (Release, the 2D MOSFET gate's 16-point sweep on 861 nodes, best of three): 13.6 s against 4.24 s isothermal,
@@ -1369,7 +1384,10 @@ after two review rounds; legacy `btbt.py`, `btbt_grid.py`, `nonlocal_path.py`, `
   first and caught after a test was added for each: the 50 K step cap at 500 K (the update tested directly), the T10
   range check off (the runaway trace then still stopped, for another reason: the stop is now checked to be T10's), and
   the error estimate without τ (an adaptive step-heated rod; the gates used fixed steps). One (δ without the Nc₀ step)
-  first failed to build and was rerun in an equivalent form.
+  first failed to build and was rerun in an equivalent form. Two of the 34 (thermionic K₀θ_e, ionization levels at
+  T₀) targeted code removed under U3 and U6. After the U1–U8 rulings, five more, all caught: each refusal (U3, U6)
+  switched off, the transient start reverted to holding every node when any domain lacks a sink or holding none (U5),
+  and the R_th node's heat-row bias derivative dropped (U7).
 
 ### 6.3 Device description
 
@@ -2334,7 +2352,7 @@ built.
 | 20 | Band-to-band tunnelling and nonlocal path machinery | assemble, physics, solve | **done, on `main`** (`cf2f70a`): local Kane (the legacy silicon pair), nonlocal paths traced through tensor-grid cells as frozen geometry with live evaluation and relocation, the calibrated Kane rate at the path's mean field (silicon) and the direct-gap WKB rate (cited masses only), pure generation, off by default and bit-identical when off (6.2, Unit 20) |
 | 21 | Transient simulation | solve, assemble, results | **done, on `main`** (`a601e7e`): backward Euler and variable-step BDF2 with error-controlled steps, waveforms, displacement current with exact conservation, interface trap dynamics eliminated in the interface solve (6.2, Unit 21) |
 | 22 | AC small-signal analysis | linalg, assemble, solve, results | **done, on `main`** (`75cc2c0`): J + iωt₀C + T(iωt₀) at a DC or quasi-static operating point, complex linear solver, admittance matrix with displacement current and a resolution bound, interface traps in the frequency domain (6.2, Unit 22) |
-| 23 | Thermal / electrothermal coupling | physics, assemble, solve | **done on branch `physics/electrothermal`**: the lattice temperature as a fourth Newton unknown (the rise τ) with an exact Jacobian; Wachutka's thermodynamic fluxes (Boltzmann and Fermi–Dirac), the heat as the energy flux's divergence with Peltier and Thomson heat, isothermal and R_th thermal contacts; T in every model the assembler has; steady sweeps, `trace_bias` (thermal-runaway folds), transients and AC; traps and BTBT refused (6.2, Unit 23; DECISIONS.md T1–T14) |
+| 23 | Thermal / electrothermal coupling | physics, assemble, solve | **done on branch `physics/electrothermal`**: the lattice temperature as a fourth Newton unknown (the rise τ) with an exact Jacobian; Wachutka's thermodynamic fluxes (Boltzmann and Fermi–Dirac), the heat as the energy flux's divergence with Peltier and Thomson heat, isothermal and R_th thermal contacts; T in every model the assembler has; steady sweeps, `trace_bias` (thermal-runaway folds), transients and AC; traps and BTBT refused; thermionic emission (deferred) and incomplete ionization refused (6.2, Unit 23; DECISIONS.md T1–T14, U1–U8) |
 | 24 | Analysis and extraction engine | analysis | **done, on `main`** (`4183767`): curves read from sweeps and small-signal runs; transistor, diode and breakdown figures; C-V doping profile, flat band and the conductance method; two-port Y/Z/h/S, Mason's U, k, MAG/MSG, f_T and f_max; every extraction with the points it used and resolution and extrapolation flags (6.13, Unit 24) |
 | 25 | Scientific visualization / rendering | render | target |
 | 26 | Native Windows application and workflow | app | target; Win32 API, x64 target, Direct3D 12 / Direct2D |
@@ -2553,7 +2571,7 @@ architecture; historical branch names remain only where they are useful to expla
 | V28 | Unit 20 (`physics/band-to-band-tunnelling`): Debug and Release build with no warnings; all suites pass (Release 12/12 with the new Release-only ctest `solve_btbt`, Debug 8/8). Physics, cells, assembler and solve gates as listed in 6.2 (Unit 20): uniform-field closed forms to 2.1e-13, FD Jacobian 5.4e-8, pairs to rounding, 1D reduction 3.3e-16, Zener Kane slope 1.019 B, relocation settles in at most two re-tracings, AC 9.5e-5, 2D cost 1.14 times. Models off: the 14 Unit 22 probe runs hash identically to `main`. 44 of 46 mutations caught (two after a test was added; one practically equivalent, one in the unexercised retry path). | Verified locally; on `main` (`cf2f70a`, PR #26, CI passed). |
 | V29 | Unit 24 (`analysis/extraction`): Debug and Release build with no warnings; all suites pass (Release 13/13 with the new `analysis` ctest, Debug 9/9; `nitcad_analysis_test` 22 test cases). Synthetic gates and the gates on solved devices as listed in 6.13: the Unit 9 diode ideality equals V16's fit to 1e-12 (1.004060); MOSFET V_th equals the legacy max-g_m extraction to 1e-12, swing 70.55 mV/decade, f_T 0.54% from the quasi-static value; MOS-C V_FB within 0.7 mV; the trap level's conductance peak 0.22%; a junction's doping profile within 1.9%; breakdown at 1e-4 A/cm² 0.11% from analytic; BV_CEO at the fold. Findings: the MOS-C 1/C² profile in weak depletion and the MOSFET's unresolved off state (6.13). No solver source changed, so steady, transient and AC results are those of `main`. 43 of 43 mutations caught (five after a rewrite that builds). | Verified locally; on `main` (`4183767`, PR #27). |
 | V30 | Unit 18 (`linalg/pardiso`): Debug and Release build with no warnings; all suites pass with the MKL runtime configured (oneMKL 2026.1, Intel's NuGet redistributable; Release 14/14, Debug 10/10, the new ctest `linalg_mkl_absent` in both). PARDISO agrees with Eigen SparseLU on the shared systems (5.6e-16 to 5.5e-12), complex G + iωC (1.8e-13), the diode (J(0.5 V) to 11 digits), MOS-C (7.9e-17), transient (2.2e-14), admittances within max(1e-9 max |Y|, resolution), the MOSFET Id-Vg; reuse gate 1 analysis / one factorization per Jacobian / one solve per right-hand side; floating regions rejected through perturbed pivots. Refactorization 5x (2D MOSFET) and 17x (3D, 81k unknowns) faster than Eigen on one thread, 16x and 74x on eight. Default Eigen path: the 14 probe runs hash identically to `main`. 18 of 20 mutations caught (one equivalent, one unreachable). | Verified locally. |
-| V31 | Unit 23 (`physics/electrothermal`): Debug and Release build with no warnings; all suites pass (Release 14/14, Debug 10/10); `nitcad_physics_test` 91 test cases, `nitcad_device_test` 25, `nitcad_assemble_test` 93, `nitcad_solve_test` 164 (+9 `[.mosfet]`, one of them the electrothermal MOSFET, Release only). The electrothermal gates, cost and the 34 mutation checks (all caught) in 6.2 "As built (Unit 23)". With the model off every path is unchanged (the full suites pass after the stride refactor). | Verified locally. |
+| V31 | Unit 23 (`physics/electrothermal`): Debug and Release build with no warnings; all suites pass (Release 14/14, Debug 10/10); `nitcad_physics_test` 91 test cases, `nitcad_device_test` 25, `nitcad_assemble_test` 96, `nitcad_solve_test` 167 (+9 `[.mosfet]`, one of them the electrothermal MOSFET, Release only). The electrothermal gates, cost and the 34 + 5 mutation checks (all caught; the U1–U8 rulings re-verified 2026-10-09) in 6.2 "As built (Unit 23)". With the model off every path is unchanged (the full suites pass after the stride refactor). | Verified locally. |
 | V3 | Scaling definitions, scaled variables and Newton tolerances read from `inputs.cpp` and `device1d.cpp` and recorded in 6.1. One open question remains for Unit 8 (convergence criterion on the clipped correction). | Verified |
 
 Verifications due at their own unit: none left. The 5e-5 Jacobian gate's normalization was read at Unit 7 (section 10), and

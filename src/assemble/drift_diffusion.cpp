@@ -1042,15 +1042,12 @@ std::vector<double> DriftDiffusion::storage(std::span<const double> x) const {
     NITCAD_EXPECTS(x.size() == unknowns());
     const std::size_t w = storage_width();
     std::vector<double> s(w * node_count(), 0.0);
-    if (electrothermal()) {  // (S_n, S_p) at each node's T, and tau
-        const std::vector<ThermalState> t = thermal_states(x);
-        const std::vector<NodeLevels> l = thermal_levels(x, t);
+    if (electrothermal()) {  // (n, p, tau): complete ionization (DECISIONS.md U6)
         for (std::size_t i = 0; i < node_count(); ++i) {
             s[3 * i + 2] = x[4 * i + 3];
             if (insulator_[i] != 0) continue;
-            const ThermalStorage st = thermal_storage(i, x, t[i], l.empty() ? NodeLevels{} : l[i]);
-            s[3 * i] = st.n;
-            s[3 * i + 1] = st.p;
+            s[3 * i] = x[4 * i + 1];
+            s[3 * i + 1] = x[4 * i + 2];
         }
         return s;
     }

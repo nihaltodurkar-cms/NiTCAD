@@ -86,11 +86,12 @@ struct TransientOptions {
 // contacts keep the temperatures of steady.thermal_bias_K (one list) or the device's for the whole
 // run; the heat rows store rho c dT/dt and the carriers' stored energy, and the error estimate
 // measures every node's temperature rise off the isothermal sinks (absolute, in units of the
-// device's temperature T0, as the potential in V_T). The state at t = 0 is the electrothermal
-// steady state, except that a given initial temperature (initial->temperature_K) is the
-// temperature at t = 0, held while the electrical rows are solved, and that a device with a part
-// without any thermal contact (no steady temperature) starts held at T0; a fully adiabatic device
-// is well posed in time. Errors as sweep_bias's electrothermal input checks (thermal_bias_K at most
+// device's temperature T0, as the potential in V_T). The state at t = 0 (DECISIONS.md U5): a given
+// initial temperature (initial->temperature_K) is the temperature at t = 0 everywhere, held while
+// the electrical rows are solved; otherwise every connected thermal domain with a thermal contact
+// (a region without one of its own included, when joined to one) starts from its electrothermal
+// steady state, and only a domain with no thermal contact at all (no steady temperature) is held
+// at T0. A fully adiabatic device is well posed in time. Errors as sweep_bias's electrothermal input checks (thermal_bias_K at most
 // one list); a step whose temperature leaves a material's range stops the run (non_convergence).
 // Each TimePoint carries the heat leaving through each thermal contact.
 [[nodiscard]] std::expected<results::Transient, base::Error> solve_transient(

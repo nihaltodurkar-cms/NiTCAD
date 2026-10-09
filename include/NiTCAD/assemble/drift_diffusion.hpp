@@ -163,11 +163,14 @@
 // Electrothermal coupling (Unit 23, models.electrothermal; DECISIONS.md T1-T14; legacy thermal.py,
 // thermal_grid.py). Each node has a fourth unknown, the scaled temperature rise
 // tau = (T - T0) / T0 (T0 the device's temperature, the scaling's), interleaved as x[4i + 3];
-// theta = T / T0 = 1 + tau below. The rise, not theta, is the unknown so that a small heating
-// keeps its digits: theta near 1 resolves T only to about 7e-14 K at 300 K, which limits the
-// heat conducted to a sink to about 4e-8 W/cm^2 across a micron (measured: the energy balance
-// of a diode at 3.7e-6 W/cm^2 closed to 0.2%). Without the model the stride stays 3 and nothing
-// changes. Energies below are in units of k T0, densities and fluxes as above.
+// theta = T / T0 = 1 + tau below. The rise, not theta, is the unknown (DECISIONS.md U1) so that
+// a small heating keeps its digits: a double near 1 is spaced 2.2e-16, so theta resolves T only
+// to 6.7e-14 K at 300 K, while tau resolves the rise to 2.2e-16 of itself. The heat reaching a
+// sink is the flux kappa dT / h through the edge next to it, so with theta it was resolved only
+// to kappa 6.7e-14 K / h, 4e-8 W/cm^2 for h = 25 nm. Measured on a diode at 3.7e-6 W/cm^2
+// (0.3 V): with theta the energy balance missed by 9.0e-9 W/cm^2 (0.24%); with tau by 2.4e-12
+// (6.4e-7), the rounding floor of the energy flows (U8). Without the model the stride stays 3 and
+// nothing changes. Energies below are in units of k T0, densities and fluxes as above.
 // - Bands: the electron affinity is temperature independent, so the conduction-band edge
 //   E_c = c_n - psi does not move with T (c_n = ln(Nc / n_ie) - s at T0, band-gap narrowing
 //   included), and the valence-band edge E_v = c_p - psi + g(theta) carries the gap's change,
@@ -186,7 +189,9 @@
 //   with g_e the edge's coupling, mu at each node's own T, L_c = ln(Nc0_b / Nc0_a) and
 //   L_v = ln(Nv0_b / Nv0_a) (0 in one material), r the mean of the ends' thermopower exponents.
 //   At theta = 1 these are the isothermal fluxes; at any uniform theta they vanish at
-//   equilibrium; between two temperatures the open-circuit voltage is the Seebeck voltage.
+//   equilibrium; between two temperatures the open-circuit voltage is the Seebeck voltage, to
+//   second order in the spacing (DECISIONS.md U2). Thermionic-emission interfaces and incomplete
+//   ionization are refused with the model (U3 deferred, U6).
 // - Heat (T4): each carrier carries the energy e_n = E_c + (r_n + 5/2) theta (electrons) or
 //   e_p = E_v - (r_p + 5/2) theta (holes) per particle, so the energy flux along an edge, from a to
 //   b, is -(ebar_n Jn + ebar_p Jp) (ebar the mean of the ends'). The heat a node's box receives
@@ -248,7 +253,10 @@ public:
     // with btbt_nonlocal; for btbt_nonlocal without the device's cells, on a device with an edge
     // between two different semiconductors (no tunnel path crosses a heterointerface), or, for
     // direct_wkb, with a semiconductor region whose material lacks a direct gap or tunnelling
-    // masses (silicon never has them).
+    // masses (silicon never has them). With models.electrothermal (invalid_input): band-to-band
+    // tunnelling or interface traps (DECISIONS.md T8), a thermionic-emission interface (U3,
+    // deferred), incomplete ionization (U6), Fermi-Dirac statistics with a thermopower exponent
+    // other than -1/2 (T3), a region whose material has no thermal data (T11).
     [[nodiscard]] static std::expected<DriftDiffusion, base::Error> create(
         const device::Device& device, const Scaling& scaling,
         const PhysicsModels& models = {});
@@ -277,6 +285,13 @@ public:
     // contact. A steady state needs one (DECISIONS.md T7); a transient does not. False without
     // the model.
     [[nodiscard]] bool heat_sinks_complete() const noexcept { return sinks_complete_; }
+    // Whether the connected thermal domain of a node has a node of a thermal contact (DECISIONS.md
+    // U5): a region without a sink of its own but joined to one has. Preconditions
+    // (NITCAD_EXPECTS): the model is on; node < node_count().
+    [[nodiscard]] bool reaches_heat_sink(std::size_t node) const;
+    // K0 = kappa_ref T0 / (V_T J0 L_D) (see the header comment): the heat rows are the nodes' heat
+    // balances in units of V_T J0 L_D^(D-1) divided by it. 0 without the model.
+    [[nodiscard]] double heat_scale() const noexcept { return heat_scale_; }
     // Scaled heat leaving through each thermal contact at state x (the heat its isothermal nodes'
     // rows would balance without their Dirichlet terms, or its R_th flux), in units of
     // V_T J0 L_D^(D-1) (a power in W / cm^(3-D) after multiplying by it), in
@@ -638,23 +653,6 @@ private:
         double psi, n, p, d_psi, d_n, d_p;
     };
     [[nodiscard]] ThermalOhmic thermal_ohmic(std::size_t node, const ThermalState& t) const;
-    // A semiconductor node's dopant levels at its T (E / k T: the levels_ of T0 over theta).
-    [[nodiscard]] physics::DopantLevels thermal_levels_at(std::size_t node, double theta) const;
-    // The ionized net doping N_D+ - N_A- at a node's state and T, and its partials in n, p and
-    // theta (complete ionization: the net doping, no partials).
-    struct ThermalCharge {
-        double value, d_n, d_p, d_theta;
-    };
-    [[nodiscard]] ThermalCharge thermal_charge(std::size_t node, const ThermalState& t,
-                                               const NodeLevels& l) const;
-    // The carriers a semiconductor node stores at its T: S_n = n - N_D+, S_p = p - N_A- (n and p
-    // with complete ionization) and the partials of each in its density and theta.
-    struct ThermalStorage {
-        double n, n_n, n_t, p, p_p, p_t;
-    };
-    [[nodiscard]] ThermalStorage thermal_storage(std::size_t node, std::span<const double> x,
-                                                 const ThermalState& t,
-                                                 const NodeLevels& l) const;
     // The shift of a gate or electrode node's electrode potential from its value at T0 (ppoly),
     // and its theta derivative; 0 for every other node.
     struct Shift {
@@ -692,6 +690,7 @@ private:
     double T0_ = 0.0, heat_scale_ = 0.0, kappa_ref_ = 0.0;
     bool thermal_bgn_ = false;
     bool sinks_complete_ = false;
+    std::vector<char> reaches_sink_;  // per node (reaches_heat_sink)
     // One node's thermal state at tau (NaN entries unless tau is finite and theta positive).
     [[nodiscard]] ThermalState thermal_state(std::size_t node, double tau) const;
     // s times the Jacobian of the electrothermal storage terms (assemble_heat with a step) about a

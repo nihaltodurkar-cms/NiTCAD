@@ -329,15 +329,9 @@ TEST_CASE("electrothermal assemble: the finite-difference Jacobian gate") {
         {{.D = 2, .nodes = 9, .gate = true}, "2D p-polysilicon gate"},
         {{.D = 2, .nodes = 9, .hetero = true, .oxide = true, .electrode = true},
          "2D p-polysilicon electrode"},
-        {{.D = 1, .hetero = true, .thermionic = true}, "1D thermionic emission"},
-        {{.D = 2, .nodes = 9, .hetero = true, .fermi = true, .thermionic = true},
-         "2D thermionic emission, Fermi-Dirac"},
         {{.D = 2, .nodes = 9, .oxide = true, .interface = true}, "2D interface"},
         {{.D = 2, .nodes = 9, .oxide = true, .fermi = true, .interface = true},
-         "2D interface, Fermi-Dirac"},
-        {{.D = 1, .hetero = true, .ionization = true}, "1D incomplete ionization"},
-        {{.D = 2, .nodes = 9, .hetero = true, .fermi = true, .ionization = true},
-         "2D incomplete ionization, Fermi-Dirac"}};
+         "2D interface, Fermi-Dirac"}};
     for (const Case& c : cases) {
         const device::Device d = diode(c.o);
         const auto s = *assemble::make_scaling(d);
@@ -360,12 +354,8 @@ TEST_CASE("electrothermal assemble: the finite-difference Jacobian gate of a tim
                             Options{.D = 1, .hetero = true, .fermi = true, .field = true},
                             Options{.D = 2, .nodes = 9, .gate = true},
                             Options{.D = 2, .nodes = 9, .oxide = true, .electrode = true},
-          Options{.D = 1, .hetero = true, .thermionic = true},
-          Options{.D = 1, .hetero = true, .fermi = true, .thermionic = true},
           Options{.D = 2, .nodes = 9, .oxide = true, .interface = true},
-          Options{.D = 2, .nodes = 9, .oxide = true, .fermi = true, .interface = true},
-          Options{.D = 1, .hetero = true, .ionization = true},
-          Options{.D = 1, .hetero = true, .fermi = true, .ionization = true}}) {
+          Options{.D = 2, .nodes = 9, .oxide = true, .fermi = true, .interface = true}}) {
         const device::Device d = diode(o);
         const auto s = *assemble::make_scaling(d);
         auto dd = *DriftDiffusion::create(d, s, models(o));
@@ -392,12 +382,8 @@ TEST_CASE("electrothermal assemble: at theta = 1 the isothermal rows and current
           Options{.D = 1, .hetero = true, .fermi = true, .field = true},
           Options{.D = 2, .nodes = 9, .gate = true},
           Options{.D = 2, .nodes = 9, .oxide = true, .electrode = true},
-          Options{.D = 1, .hetero = true, .thermionic = true},
-          Options{.D = 1, .hetero = true, .fermi = true, .thermionic = true},
           Options{.D = 2, .nodes = 9, .oxide = true, .interface = true},
-          Options{.D = 2, .nodes = 9, .oxide = true, .fermi = true, .interface = true},
-          Options{.D = 1, .hetero = true, .ionization = true},
-          Options{.D = 1, .hetero = true, .fermi = true, .ionization = true}}) {
+          Options{.D = 2, .nodes = 9, .oxide = true, .fermi = true, .interface = true}}) {
         const device::Device d = diode(o);
         const auto s = *assemble::make_scaling(d);
         auto iso = *DriftDiffusion::create(d, s, models(o, false));
@@ -442,13 +428,9 @@ TEST_CASE("electrothermal assemble: no current at equilibrium at a uniform tempe
     // over a potential profile and across the material step: every flux vanishes to round-off of
     // its one-sided terms. With a temperature step instead, the fluxes do not vanish.
     // Under Fermi-Dirac statistics too, with the potential swinging the electrons degenerate.
-    // And across a thermionic-emission step.
-    for (const auto& [fermi, hetero, emission] :
-         {std::tuple{false, false, false}, std::tuple{false, true, false},
-          std::tuple{false, true, true}, std::tuple{true, false, false},
-          std::tuple{true, true, false}, std::tuple{true, true, true}}) {
-        const device::Device d =
-            diode({.D = 1, .hetero = hetero, .fermi = fermi, .thermionic = emission});
+    for (const auto& [fermi, hetero] : {std::pair{false, false}, std::pair{false, true},
+                                        std::pair{true, false}, std::pair{true, true}}) {
+        const device::Device d = diode({.D = 1, .hetero = hetero, .fermi = fermi});
         const auto s = *assemble::make_scaling(d);
         const auto dd =
             *DriftDiffusion::create(d, s, {.fermi_dirac = fermi, .electrothermal = true});
@@ -495,7 +477,7 @@ TEST_CASE("electrothermal assemble: no current at equilibrium at a uniform tempe
                 worst = std::max({worst, std::abs(c[k].first) / size_n,
                                   std::abs(c[k].second) / size_p});
             }
-            CAPTURE(fermi, hetero, emission, step, worst);
+            CAPTURE(fermi, hetero, step, worst);
             if (step == 0.0) {
                 REQUIRE(worst <= 1e-9);
             } else {
@@ -562,6 +544,108 @@ TEST_CASE("electrothermal assemble: impact ionization with gamma(T)") {
     }
 }
 
+TEST_CASE("electrothermal assemble: the energy identity of the heat rows (U1)") {
+    // With no sinks every heat row is its node's balance, K0 f_T,i = (conduction out) - (heat
+    // received). Summed over the nodes the conduction cancels edge by edge and the energy flows
+    // telescope to the metal's, so sum_i K0 f_T,i = -sum_c V_c I_c at ANY state, converged or
+    // not: the discrete energy conservation itself. Checked at heated, noisy states (rises of order
+    // 0.3 and 1e-7 of T0) across the cases of the FD gate.
+    for (const Options base : {Options{.D = 1}, Options{.D = 1, .hetero = true},
+                               Options{.D = 2, .nodes = 9, .oxide = true, .interface = true},
+                               Options{.D = 2, .nodes = 9, .gate = true},
+                               Options{.D = 1, .hetero = true, .fermi = true, .field = true}}) {
+        Options o = base;
+        o.sinks = false;
+        const device::Device d = diode(o);
+        const auto s = *assemble::make_scaling(d);
+        auto dd = *DriftDiffusion::create(d, s, models(o));
+        REQUIRE(dd.set_bias(biases(o)).has_value());
+        for (const double rise : {0.3, 1e-7}) {
+            const auto x = heated(dd, d, s, 0.05, 13, rise, o.fermi ? 1e20 : 1e16);
+            std::vector<double> f(dd.unknowns());
+            dd.residual(x, f);
+            double sum = 0.0, scale = 0.0;
+            for (std::size_t i = 0; i < dd.node_count(); ++i) {
+                sum += dd.heat_scale() * f[4 * i + 3];
+                scale += dd.heat_scale() * std::abs(f[4 * i + 3]);
+            }
+            const double power = dd.electrical_power(x);
+            CAPTURE(o.D, o.hetero, o.gate, rise, sum, power, scale);
+            REQUIRE(std::abs(sum + power) <= 1e-12 * (scale + std::abs(power)));
+        }
+    }
+}
+
+TEST_CASE("electrothermal assemble: derivatives at a small rise and a steep T step (U1, U2)") {
+    // U1: the rise as the unknown keeps its derivatives at tiny heating: the FD gate at rises
+    // of 1e-7 T0. U2: the edge-mean temperature flux and its partials where T jumps by a factor
+    // 2.5 across one edge (theta 0.8 below 0.45 um, 2.0 above), Boltzmann and Fermi-Dirac.
+    for (const bool fermi : {false, true}) {
+        const Options o{.D = 1, .hetero = true, .fermi = fermi};
+        const device::Device d = diode(o);
+        const auto s = *assemble::make_scaling(d);
+        auto dd = *DriftDiffusion::create(d, s, models(o));
+        REQUIRE(dd.set_bias(biases(o)).has_value());
+        auto x = heated(dd, d, s, 0.05, 17, 0.3, fermi ? 1e20 : 1e16);
+        for (std::size_t i = 0; i < dd.node_count(); ++i) x[4 * i + 3] = 1e-7 * (1.0 + i % 3);
+        const double small = fd_jacobian_error(dd, x);
+        for (std::size_t i = 0; i < dd.node_count(); ++i) {
+            x[4 * i + 3] = d.mesh().points()[i][0] < 0.45e-4 ? -0.2 : 1.0;
+        }
+        const double step = fd_jacobian_error(dd, x);
+        CAPTURE(fermi, small, step);
+        REQUIRE(small <= 1e-6);
+        REQUIRE(step <= 1e-6);
+    }
+}
+
+TEST_CASE("electrothermal assemble: the bias column of the bordered system (U7)") {
+    // trace_bias's bordered matrix is [J, dF/dlambda]: J is the FD-gated Jacobian at the bias, and
+    // dF/dV = bias_derivative(contact, x) depends on x through the metal's Peltier term in the
+    // heat rows of the contact's (non-isothermal) nodes. Against central differences of the
+    // residual in each contact's bias at a heated state; every nonzero row is in bias_rows.
+    for (const Options o : {Options{.D = 1, .hetero = true}, Options{.D = 2, .nodes = 9},
+                            Options{.D = 2, .nodes = 9, .gate = true},
+                            Options{.D = 1, .hetero = true, .fermi = true}}) {
+        const device::Device d = diode(o);
+        const auto s = *assemble::make_scaling(d);
+        auto dd = *DriftDiffusion::create(d, s, models(o));
+        const std::vector<double> bias = biases(o);
+        REQUIRE(dd.set_bias(bias).has_value());
+        const auto x = heated(dd, d, s, 0.05, 19, 0.3, o.fermi ? 1e20 : 1e16);
+        for (std::size_t c = 0; c < bias.size(); ++c) {
+            const std::vector<double> dF = dd.bias_derivative(c, x);
+            const double h = 1e-6;
+            std::vector<double> up = bias, down = bias;
+            up[c] += h;
+            down[c] -= h;
+            std::vector<double> fp(dd.unknowns()), fm(dd.unknowns());
+            REQUIRE(dd.set_bias(up).has_value());
+            dd.residual(x, fp);
+            REQUIRE(dd.set_bias(down).has_value());
+            dd.residual(x, fm);
+            REQUIRE(dd.set_bias(bias).has_value());
+            const auto rows = dd.bias_rows(c);
+            double scale = 0.0, worst = 0.0, outside = 0.0, heat_rows = 0.0;
+            for (const double v : dF) scale = std::max(scale, std::abs(v));
+            for (std::size_t r = 0; r < dF.size(); ++r) {
+                const double fd = (fp[r] - fm[r]) / (2.0 * h);
+                worst = std::max(worst, std::abs(fd - dF[r]));
+                if (std::ranges::find(rows, r) == rows.end()) {
+                    outside = std::max(outside, std::abs(dF[r]));
+                } else if (r % 4 == 3) {
+                    heat_rows = std::max(heat_rows, std::abs(dF[r]));
+                }
+            }
+            CAPTURE(o.D, o.gate, c, worst / scale, outside, heat_rows);
+            REQUIRE(worst <= 1e-7 * scale);
+            REQUIRE(outside == 0.0);
+            // The cathode's node is an R_th sink: its heat row moves with the bias.
+            if (c == 1) REQUIRE(heat_rows > 0.0);
+        }
+    }
+}
+
 TEST_CASE("electrothermal assemble: the Joule part of each edge's heat is not negative") {
     for (const Options o : {Options{.D = 1, .hetero = true}, Options{.D = 2, .nodes = 9}}) {
         const device::Device d = diode(o);
@@ -591,6 +675,13 @@ TEST_CASE("electrothermal assemble: refused inputs") {
     };
     // T8: band-to-band tunnelling and interface traps are refused, not frozen at T0.
     refused(d, {.btbt_local = true}, "band-to-band tunnelling (DECISIONS.md T8)");
+    // U3 (deferred) and U6: thermionic emission and incomplete ionization are refused, each
+    // accepted with the model off.
+    const device::Device emission = diode({.D = 1, .hetero = true, .thermionic = true});
+    refused(emission, {}, "thermionic emission (DECISIONS.md U3");
+    refused(d, {.incomplete_ionization = true}, "incomplete ionization (DECISIONS.md U6");
+    REQUIRE(DriftDiffusion::create(emission, *assemble::make_scaling(emission)).has_value());
+    REQUIRE(DriftDiffusion::create(d, s, {.incomplete_ionization = true}).has_value());
     refused(diode({.D = 2, .nodes = 9, .oxide = true, .interface = true, .traps = true}), {},
             "interface traps (DECISIONS.md T8)");
     // T11: a material without thermal data.

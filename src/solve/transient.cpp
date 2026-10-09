@@ -48,12 +48,13 @@ struct StepSystem {
     }
 };
 
-// The steady rows with every node's temperature held at `hold` (the electrothermal start from a
-// given temperature, or of a domain without a heat sink, Unit 23): each heat row becomes
-// tau - hold.
+// The steady rows with the temperature of the nodes `held` marks held at `hold` (the
+// electrothermal start from a given temperature, or of a domain without a heat sink, Unit 23,
+// DECISIONS.md U5): each such heat row becomes tau - hold.
 struct HeldTemperature {
     const assemble::DriftDiffusion& dd;
     std::span<const double> hold;  // tau per node
+    std::span<const char> held;    // per node: 1 if held
 
     [[nodiscard]] std::size_t unknowns() const { return dd.unknowns(); }
     [[nodiscard]] linalg::SparseMatrix make_jacobian() const { return dd.make_jacobian(); }
@@ -64,6 +65,7 @@ struct HeldTemperature {
         const auto columns = j.col_indices();
         const std::span<double> values = j.values();
         for (std::size_t i = 0; i < dd.node_count(); ++i) {
+            if (held[i] == 0) continue;
             const std::size_t r = 4 * i + 3;
             f[r] = x[r] - hold[i];
             for (auto k = static_cast<std::size_t>(offsets[r]);
@@ -310,20 +312,26 @@ std::expected<results::Transient, base::Error> solve_transient(
         };
         results::ConvergenceRecord record;
         int relocations = 0;
-        // Electrothermal: with a given initial temperature, or a part of the device with no heat
-        // sink (no steady temperature, DECISIONS.md T7), the temperature at t = 0 is held (the
-        // given one, or T0; the isothermal sinks at theirs) and only the electrical rows are
-        // solved; otherwise the starting state is the full electrothermal steady state.
-        const bool hold = thermal && ((initial != nullptr && !initial->temperature_K.empty()) ||
-                                      !dd.heat_sinks_complete());
+        // Electrothermal (DECISIONS.md U5): a given initial temperature is the temperature at
+        // t = 0 everywhere, held while the electrical rows are solved. Otherwise each connected
+        // thermal domain with a sink (a region without one of its own included, if joined to one)
+        // starts from its steady state, and only a domain with no sink at all (no steady
+        // temperature, T7) is held, at T0.
+        const bool given = initial != nullptr && !initial->temperature_K.empty();
+        std::vector<char> mask(nodes, 0);
+        bool hold = false;
+        for (std::size_t i = 0; thermal && i < nodes; ++i) {
+            mask[i] = given || !dd.reaches_heat_sink(i) ? 1 : 0;
+            hold = hold || mask[i] != 0;
+        }
         std::vector<double> held(nodes);
         for (std::size_t i = 0; hold && i < nodes; ++i) held[i] = x[4 * i + 3];
         if (auto ok = detail::solve_relocating(
                 *system, x,
                 [&] {
                     if (hold) {
-                        return newton_solve(HeldTemperature{dd, held}, x, steady.newton, *solver,
-                                            record, control.stop, observe);
+                        return newton_solve(HeldTemperature{dd, held, mask}, x, steady.newton,
+                                            *solver, record, control.stop, observe);
                     }
                     return newton_solve(dd, x, steady.newton, *solver, record, control.stop,
                                         observe);

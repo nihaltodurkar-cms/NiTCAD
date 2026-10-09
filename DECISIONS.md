@@ -165,23 +165,22 @@ admittance; 2D/3D extrusion and MOSFET self-heating; run identity carries the th
 
 - **Owner decision:** [x] accept (2026-10-09)  [ ] change  [ ] defer
 
-### Unit 23 implementation choices beyond T1–T14 (for the owner's review; not yet ruled on)
+### Unit 23 implementation choices beyond T1–T14 (U1–U8, ruled on by the owner on 2026-10-09)
 
-Built as stated, each recorded in `ARCHITECTURE.md` 6.2 "As built (Unit 23)"; each can be changed without touching the
-rest.
+Each is recorded in `ARCHITECTURE.md` 6.2 "As built (Unit 23)". Rulings and what was done:
 
-| # | Choice | Why |
-|---|---|---|
-| U1 | The fourth unknown is the scaled rise τ = (T − T₀)/T₀, not θ = T/T₀. | θ ≈ 1 resolves T to ~7e-14 K only; the steady energy balance closed to 0.2% at small heating with θ, to round-off with τ. |
-| U2 | The flux freezes T at the edge's mean θ_e in its coefficients (Scharfetter–Gummel in w = θ^(1+r) n). | Second order, exact at uniform T, vanishes at uniform-T equilibrium; T2 asked for an SG flux "generalized to edge-varying T" without fixing the form. |
-| U3 | Thermionic emission across a temperature step: the same w and δ with K₀ θ_e^(1/2)/θ_e^(1+r). | Reduces to Unit 15's flux at any uniform T; for r = −1/2 each side emits ~ n v(T). T9 named only the velocity's T dependence. |
-| U4 | Conduction along an edge of one material uses the Kirchhoff transform; between materials the harmonic mean of the ends' κ at their own T. | Exact for steady 1D conduction in one material; no interface temperature unknown (Kapitza excluded, T14). |
-| U5 | Transient start: the electrothermal steady state, except a given initial temperature (held at t = 0 while the electrical rows are solved) or a device part without a sink (held at T₀). | T7 allows adiabatic transients; they need a defined initial T and have no steady one. |
-| U6 | Incomplete ionization (not listed in T9) is coupled: E_d/kT at each node's T, and in transients the bound carriers carry the free carriers' transport energy (T4's form applied to S_n = n − N_D⁺). | The alternative was refusing it; T4's storage term generalizes as written. |
-| U7 | `trace_bias` evaluates the bordered rows at the swept bias itself, dF/dλ at the state. | The metal's Peltier term makes dF/dλ state-dependent; this keeps the Jacobian exact. |
-| U8 | The steady energy-balance gate is judged where the heating exceeds the absolute Newton tolerance on T (T10). | Below it the balance is limited by that tolerance (6.4e-7 at a 1.5e-10 K rise against 3e-10 K). |
+| # | Choice | Owner ruling | Implemented |
+|---|---|---|---|
+| U1 | The fourth unknown is the scaled rise τ = (T − T₀)/T₀, not θ = T/T₀. | **Accept**; correct the rationale; verify the derivatives and energy residuals. | Rationale corrected: a double near 1 is spaced 2.2e-16, so θ resolves T to 6.7e-14 K at 300 K; the sink heat is the flux κΔT/h through the edge next to the sink, resolved with θ to κ·6.7e-14 K/h (4e-8 W/cm² for h = 25 nm, not "across a micron"). Measured on a diode at 0.3 V: imbalance 9.0e-9 W/cm² with θ, 2.4e-12 with τ (the flows' rounding floor, U8; earlier wrongly attributed to the Newton tolerance). Tests: the heat rows' exact energy identity Σ K₀ f_T = −Σ V I at arbitrary states (to 1e-13); the FD Jacobian at rises of 1e-7 T₀ (1.5e-10). |
+| U2 | The flux freezes T at the edge's mean θ_e in its coefficients (Scharfetter–Gummel in w = θ^(1+r) n). | **Accept**; add nonuniform-T convergence, equilibrium and Jacobian tests. | Tests: an open-circuit bar between 300 and 400 K carries no current on any edge (within its resolution) and its quasi-Fermi rise converges at order 2.00 by self-refinement (21 to 321 nodes), within 1e-5 of ∫P dT; the FD Jacobian across a factor-2.5 temperature jump on one edge, Boltzmann and Fermi–Dirac (4.4e-9). |
+| U3 | Thermionic emission across a temperature step. | **Defer**; no claim without analytical justification and benchmarks; reject explicitly. | Electrothermal with a thermionic-emission interface is `invalid_input` ("DECISIONS.md U3, deferred"); the non-isothermal emission code is removed. Test: the refusal, and the same device accepted with the model off. |
+| U4 | Kirchhoff transform in one material; the harmonic mean of the ends' κ at their own T between materials. | **Accept with gate**; add multilayer analytical and mesh-refinement tests. | Test: two layers in series (κ_A = 1.48 (T/300)^−1.33, κ_B = 0.3 (T/300)^0.5) between 300 and 500 K against the exact Kirchhoff solution: errors 4.5e-2 to 7.5e-4 K from 10 to 160 cells, orders 1.91 to 1.99. |
+| U5 | Transient start. | **Change**: initialize per connected thermal domain; tell regions without a local sink from sink-free domains. | Each connected thermal domain with a thermal contact (a region with none of its own included, if joined to one) starts from its steady state; only domains with no thermal contact at all are held at T₀; a given initial temperature is held everywhere. Tests: a resistor with a sinkless oxide layer starts from the steady state everywhere; of two unconnected resistors, the one with a sink starts from its own steady state (exactly) and the other at exactly 300 K. |
+| U6 | Incomplete ionization coupled with T. | **Change**: reject with `invalid_input` until the bound-state energy accounting is derived and validated. | Refused ("DECISIONS.md U6"); its temperature-coupled code (ionized doping, bound-carrier storage, contact terms) is removed. Test: the refusal, and the model off accepted. |
+| U7 | `trace_bias` evaluates the bordered rows at the swept bias, dF/dλ at the state. | **Accept**; verify the full bordered Jacobian and the fold regression. | Test: the bias column against central differences of the residual in each contact's bias (3e-11), every nonzero on `bias_rows`, the R_th contact's heat row nonzero; with the FD-gated J this is the bordered matrix. The fold regression (4.6e-9 V from the lumped fold) is unchanged. |
+| U8 | The steady energy-balance gate. | **Change**: separate absolute and relative gates; justify and test the threshold against the solver tolerances. | Two gates at every bias, at Newton tolerances 1e-8 and 1e-12: absolute \|heat − ΣVI\| ≤ E_max R_I (the two sides are the same energy flows summed two ways; their currents are resolved to R_I, `terminal_current_resolution`, E_max the largest carrier or contact energy in V), measured 1e-4 to 5e-3 of it; relative 1e-9 where E_max R_I < 1e-9 ΣVI (resolved points), measured ≤ 3.4e-12. The imbalance at 0.3–0.5 V (2.4e-12 W/cm²) does not depend on the tolerance; the tolerance shows at 0.7 V (1.4e-10 at 1e-8, 3.2e-11 at 1e-12). |
 
-- **Owner decision:** [ ] accept  [ ] change  [ ] defer
+- **Owner decision:** U1, U2, U7 accept; U3 defer; U4 accept with gate; U5, U6, U8 change (2026-10-09).
 
 ---
 
