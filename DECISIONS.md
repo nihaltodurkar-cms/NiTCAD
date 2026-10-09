@@ -184,6 +184,37 @@ Each is recorded in `ARCHITECTURE.md` 6.2 "As built (Unit 23)". Rulings and what
 
 ---
 
+## Commercial-readiness programme (owner request, 2026-10-09)
+
+The owner asked for the architectural work a commercially viable device simulator needs, in this priority: input/output
+and checkpoint/restart; realistic geometry and unstructured 3D meshing; robust nonlinear solving; low-current accuracy;
+generic field/equation abstractions; scalable linear solvers; results and provenance; visualization, GUI and batch
+workflows; validation against published and measured data. Constraints restated: foundations and numerical reliability
+before more physics; Windows-only C++23, Win32/D3D12/D2D, no Python, no Qt; existing physics, APIs and validated
+behaviour preserved; each change isolated and regression-tested in Debug and Release; no merges without authorization.
+`ARCHITECTURE.md` 11.3 tracks each item's status (implemented and verified, in progress, planned).
+
+### Unit 28 — bias step cutting (branch `solve/bias-step-control`, stacked on `physics/electrothermal`)
+
+Choices made without a ruling, open to the owner's review:
+
+| # | Choice | Why | Trade-off |
+|---|---|---|---|
+| S1 | Off by default (`StepControl::max_cuts = 0`). | Every existing result, run identity and test stays bit-identical. | Users must turn it on; a later batch/input layer should default it on. |
+| S2 | Halve from the last converged state; grow ×2 after a success; give up below 2^-max_cuts. | The standard commercial ramp; deterministic. | No predictor (the sub-step starts from the previous state with the new contact values stamped), so steps are shorter than an extrapolating ramp would need. |
+| S3 | Only `non_convergence`, `singular_system`, `inaccurate_solve` are retried. | Cancellation and resource exhaustion are not cured by a shorter step. | — |
+| S4 | Sub-step states are not sweep points; the point records `bias_substeps` and its last Newton run. | The sweep's points stay the requested ones, so extraction and comparisons are unchanged. | Intermediate states are lost (a checkpoint layer may want them). |
+| S5 | Progress iterations count across a point's attempts. | Keeps the Unit 10 rule: events strictly increasing. | An event's iteration number is no longer the Newton iteration within one run. |
+| S6 | The first point of a sweep from a given state is cut only if `initial_bias_V` says that state's bias. | The solver cannot infer the bias of an arbitrary state. | One more option to fill; a checkpoint format should store the bias with the state. |
+| S7 | Step control settings and `initial_bias_V` enter the run record and identity only when on. | Runs without it keep their identity (as Units 19, 20, 23 did). | — |
+| S8 | With the control on, every attempt (the full step included) is limited to `StepControl::max_iterations` (default 25). | Measured: without it each failed attempt ran 100 iterations and the MOSFET benchmark did not finish in 20 minutes; with it, 12 minutes. | A point that would converge slowly from the full step (more than 25 iterations) is reached by cutting instead: the same steady state, a different path. |
+
+Finding (ARCHITECTURE.md 11.3): cutting rescues the MOSFET field-mobility drain sweep at the default damping, but
+expensively (7 sub-steps per 0.1 V point). That failure is a damping problem, so the next reliability step is a
+Newton line search, with cutting kept as the safety net.
+
+---
+
 ## New questions the advisor raised (not yet in `ARCHITECTURE.md`)
 
 None of these is decided. Each needs an owner position before the build scaffold fixes the flags.

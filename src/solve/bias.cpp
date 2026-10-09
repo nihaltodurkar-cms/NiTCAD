@@ -1,5 +1,6 @@
 #include "NiTCAD/solve/bias.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <optional>
 #include <cstddef>
@@ -42,12 +43,58 @@ bool valid_fields(const results::NodeFields& s, const device::Device& device,
     return true;
 }
 
-// What the two equation sets share: the bias loop with its stop checks, progress events and
-// Newton runs. `solve_point(k, point)` solves point k into `point` (convergence filled) and returns
-// newton_solve's result; on success it also fills the point's fields and terminal quantities.
-template <class SolvePoint>
-void run_points(std::span<const std::vector<double>> points, const RunControl& control,
-                results::Sweep& sweep, SolvePoint solve_point) {
+// The step control's options (bias.hpp).
+std::optional<base::Error> check_step_control(const StepControl& s,
+                                              std::span<const device::ContactKind> kinds,
+                                              bool equilibrium) {
+    if (s.max_cuts < 0 || s.max_cuts > 52) {
+        return invalid("step_control.max_cuts must lie in 0..52");
+    }
+    if (!(std::isfinite(s.growth) && s.growth >= 1.0)) {
+        return invalid("step_control.growth must be finite and at least 1");
+    }
+    if (s.max_iterations < 1) return invalid("step_control.max_iterations must be at least 1");
+    if (!s.initial_bias_V.empty() &&
+        !assemble::check_contact_bias(kinds, s.initial_bias_V, equilibrium)) {
+        return invalid("step_control.initial_bias_V needs one finite bias per contact (and, in the "
+                       "quasi-static sweep, every ohmic contact at 0 V)");
+    }
+    return std::nullopt;
+}
+
+// Whether a failed solve may be retried with a shorter bias step.
+bool retryable(const base::Error& e) {
+    return e.code == base::ErrorCode::non_convergence ||
+           e.code == base::ErrorCode::singular_system ||
+           e.code == base::ErrorCode::inaccurate_solve;
+}
+
+// a + t (b - a), with t = 1 giving b exactly.
+std::vector<double> along(std::span<const double> a, std::span<const double> b, double t) {
+    std::vector<double> v(b.begin(), b.end());
+    if (t >= 1.0) return v;
+    for (std::size_t c = 0; c < v.size(); ++c) v[c] = a[c] + t * (b[c] - a[c]);
+    return v;
+}
+
+// What the two equation sets share: the bias loop with its stop checks, progress events, Newton
+// runs and step cutting (Unit 28).
+// - `attempt(bias, thermal, point, observe)` solves `state` in place at the given contact biases
+//   (and thermal-contact temperatures, empty without the electrothermal model), filling
+//   point.convergence, and returns the Newton result;
+// - `finish(k, point)` fills the point's fields and terminal quantities from the converged state
+//   (and may still fail, e.g. a temperature outside the models' range).
+// `previous` is the bias of the starting state when it is known (it is the start of point 0's
+// step), `thermal` the thermal-contact temperatures per point (empty without the model).
+// With cutting, the progress events count a point's iterations across its attempts, so they stay
+// strictly increasing.
+template <class Attempt, class Finish>
+void run_points(std::span<const std::vector<double>> points,
+                std::span<const std::vector<double>> thermal,
+                std::optional<std::vector<double>> previous, const StepControl& steps,
+                const RunControl& control, std::vector<double>& state, results::Sweep& sweep,
+                Attempt attempt, Finish finish) {
+    std::vector<double> previous_thermal = thermal.empty() ? std::vector<double>{} : thermal[0];
     for (std::size_t k = 0; k < points.size(); ++k) {
         if (control.stop.stop_requested()) {
             sweep.stopped = base::Error{
@@ -58,17 +105,73 @@ void run_points(std::span<const std::vector<double>> points, const RunControl& c
         }
         results::BiasPoint point;
         point.bias_V = points[k];
+        const std::vector<double> no_thermal;
+        const std::vector<double>& target_thermal = thermal.empty() ? no_thermal : thermal[k];
+        int reported = 0;  // iterations reported in earlier attempts at this point
         const IterationObserver observe = [&](const results::IterationRecord& r, bool converged) {
             if (control.progress) {
-                control.progress({Phase::bias, k, points.size(), r.iteration, r.update,
-                                  r.residual, converged});
+                control.progress({Phase::bias, k, points.size(), reported + r.iteration,
+                                  r.update, r.residual, converged});
             }
         };
-        if (auto ok = solve_point(k, point, observe); !ok) {
-            sweep.stopped = std::move(ok.error());
+        const std::vector<double> start = state;
+        auto solved = attempt(points[k], target_thermal, point, observe);
+        reported += static_cast<int>(point.convergence.iterations.size());
+        if (!solved && steps.max_cuts > 0 && previous && retryable(solved.error())) {
+            // From the last converged state, halve the step until a sub-step converges, then let
+            // the next grow; t is the fraction of the step reached.
+            const double smallest = std::ldexp(1.0, -steps.max_cuts);
+            std::vector<double> good = start;
+            double t = 0.0;
+            double h = 0.5;
+            state = good;
+            while (true) {
+                if (control.stop.stop_requested()) {
+                    solved = std::unexpected(base::Error{
+                        base::ErrorCode::cancelled,
+                        "cancelled while cutting the step to bias point " + std::to_string(k),
+                        base::ErrorContext{.index = k, .value = std::nullopt}});
+                    break;
+                }
+                const double next = t + h >= 1.0 ? 1.0 : t + h;
+                auto sub = attempt(along(*previous, points[k], next),
+                                   thermal.empty() ? no_thermal
+                                                   : along(previous_thermal, target_thermal, next),
+                                   point, observe);
+                reported += static_cast<int>(point.convergence.iterations.size());
+                if (sub) {
+                    t = next;
+                    good = state;
+                    if (t >= 1.0) {
+                        solved = std::move(sub);
+                        break;
+                    }
+                    ++point.bias_substeps;
+                    h = std::min(h * steps.growth, 1.0 - t);
+                    continue;
+                }
+                if (!retryable(sub.error()) || h * 0.5 < smallest) {
+                    base::Error e = std::move(sub.error());
+                    if (retryable(e)) {
+                        e.message = "bias point " + std::to_string(k) + ": no convergence with "
+                                    "the step cut to 2^-" + std::to_string(steps.max_cuts) +
+                                    " of the full step (" + e.message + ")";
+                    }
+                    solved = std::unexpected(std::move(e));
+                    break;
+                }
+                state = good;
+                h *= 0.5;
+            }
+        }
+        if (solved) solved = finish(k, point);
+        if (!solved) {
+            sweep.stopped = std::move(solved.error());
             sweep.unfinished = std::move(point.convergence);
             return;
         }
+        previous = points[k];
+        previous_thermal = target_thermal;
         sweep.points.push_back(std::move(point));
     }
 }
@@ -90,6 +193,9 @@ std::expected<results::Sweep, base::Error> sweep_bias(const device::Device& devi
     // names the point (context index) and the contact (message), with the contact's bias as value.
     std::vector<device::ContactKind> kinds;
     for (const device::Contact& c : contacts) kinds.push_back(c.kind);
+    if (auto e = check_step_control(options.step_control, kinds, equilibrium)) {
+        return std::unexpected(std::move(*e));
+    }
     for (std::size_t k = 0; k < points.size(); ++k) {
         auto ok = assemble::check_contact_bias(kinds, points[k], equilibrium);
         if (ok) continue;
@@ -132,6 +238,13 @@ std::expected<results::Sweep, base::Error> sweep_bias(const device::Device& devi
     auto solver = linalg::LinearSolver::create(options.linear);
     if (!solver) return std::unexpected(std::move(solver.error()));
 
+    // With step control, every attempt at a bias (the full step included) fails fast: a
+    // diverging Newton run is cut after step_control.max_iterations rather than run to the end.
+    NewtonOptions newton = options.newton;
+    if (options.step_control.max_cuts > 0) {
+        newton.max_iterations =
+            std::min(newton.max_iterations, options.step_control.max_iterations);
+    }
     const int D = device.mesh().dimension();
     const double charge_scale = detail::charge_scale(*scaling, D);
     const std::size_t edges = device.mesh().edges().size();
@@ -147,15 +260,19 @@ std::expected<results::Sweep, base::Error> sweep_bias(const device::Device& devi
                 psi[i] = initial->potential_V[i] / scaling->V_T;
             }
         }
-        run_points(points, control, sweep,
-                   [&](std::size_t k, results::BiasPoint& point,
+        std::optional<std::vector<double>> previous;
+        if (initial != nullptr && !options.step_control.initial_bias_V.empty()) {
+            previous = options.step_control.initial_bias_V;
+        }
+        run_points(points, {}, std::move(previous), options.step_control, control, psi, sweep,
+                   [&](std::span<const double> bias, std::span<const double>,
+                       results::BiasPoint& point,
                        const IterationObserver& observe) -> std::expected<void, base::Error> {
-                       if (auto ok = system->set_bias(points[k]); !ok) return ok;  // checked
-                       if (auto ok = newton_solve(*system, psi, options.newton, *solver,
-                                                  point.convergence, control.stop, observe);
-                           !ok) {
-                           return ok;
-                       }
+                       if (auto ok = system->set_bias(bias); !ok) return ok;  // checked
+                       return newton_solve(*system, psi, newton, *solver,
+                                           point.convergence, control.stop, observe);
+                   },
+                   [&](std::size_t, results::BiasPoint& point) -> std::expected<void, base::Error> {
                        point.fields = detail::equilibrium_fields(*system, psi, *scaling);
                        point.bands =
                            detail::band_diagram(system->band_edges(psi), scaling->V_T);
@@ -229,12 +346,20 @@ std::expected<results::Sweep, base::Error> sweep_bias(const device::Device& devi
         x = system->state_from_potential(psi);
     }
 
-    run_points(points, control, sweep,
-               [&](std::size_t k, results::BiasPoint& point,
+    // The bias of the starting state: zero on every contact at equilibrium, or the given one.
+    std::optional<std::vector<double>> previous;
+    if (initial == nullptr) {
+        previous.emplace(contacts.size(), 0.0);
+    } else if (!options.step_control.initial_bias_V.empty()) {
+        previous = options.step_control.initial_bias_V;
+    }
+    run_points(points, thermal_bias, std::move(previous), options.step_control, control, x, sweep,
+               [&](std::span<const double> bias, std::span<const double> temperatures,
+                   results::BiasPoint& point,
                    const IterationObserver& observe) -> std::expected<void, base::Error> {
-                   if (auto ok = system->set_bias(points[k]); !ok) return ok;  // checked
+                   if (auto ok = system->set_bias(bias); !ok) return ok;  // checked
                    if (thermal) {
-                       if (auto ok = system->set_thermal_bias(thermal_bias[k]); !ok) return ok;
+                       if (auto ok = system->set_thermal_bias(temperatures); !ok) return ok;
                    }
                    system->stamp_contacts(x);
                    const std::vector<double> stamped = x;
@@ -242,7 +367,7 @@ std::expected<results::Sweep, base::Error> sweep_bias(const device::Device& devi
                    // solution (relocation.hpp); they carry over from the previous point.
                    const auto steady = [&](const IterationObserver& report) {
                        return detail::solve_relocating(*system, x, [&] {
-                           return newton_solve(*system, x, options.newton, *solver,
+                           return newton_solve(*system, x, newton, *solver,
                                                point.convergence, control.stop, report);
                        }, point.path_relocations);
                    };
@@ -255,10 +380,10 @@ std::expected<results::Sweep, base::Error> sweep_bias(const device::Device& devi
                    // is; the retry's iterations are recorded but not reported.
                    if (!solved && plain && solved.error().code != base::ErrorCode::cancelled) {
                        x = stamped;
-                       (void)plain->set_bias(points[k]);  // checked
-                       if (thermal) (void)plain->set_thermal_bias(thermal_bias[k]);  // likewise
+                       (void)plain->set_bias(bias);  // checked
+                       if (thermal) (void)plain->set_thermal_bias(temperatures);  // likewise
                        results::ConvergenceRecord unused;
-                       if (auto ok = newton_solve(*plain, x, options.newton, *plain_solver, unused,
+                       if (auto ok = newton_solve(*plain, x, newton, *plain_solver, unused,
                                                   control.stop);
                            !ok) {
                            return ok;
@@ -266,7 +391,9 @@ std::expected<results::Sweep, base::Error> sweep_bias(const device::Device& devi
                        if (system->tunnelling()) system->set_paths(system->trace_paths(x));
                        solved = steady({});
                    }
-                   if (!solved) return solved;
+                   return solved;
+               },
+               [&](std::size_t k, results::BiasPoint& point) -> std::expected<void, base::Error> {
                    if (thermal) {
                        if (auto e = detail::converged_temperature(device, x,
                                                                   scaling->temperature_K)) {

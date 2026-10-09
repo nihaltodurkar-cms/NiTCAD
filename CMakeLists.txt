@@ -285,6 +285,7 @@ add_executable(nitcad_solve_test
   tests/solve/newton_test.cpp
   tests/solve/equilibrium_test.cpp
   tests/solve/bias_test.cpp
+  tests/solve/step_control_test.cpp
   tests/solve/sweep_test.cpp
   tests/solve/heavy_doping_test.cpp
   tests/solve/mos_test.cpp

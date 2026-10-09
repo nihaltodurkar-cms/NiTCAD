@@ -100,6 +100,9 @@ struct BiasPoint {
     // thermal-contact order. In a steady state the heats sum to sum_c V_c I_c over the contacts.
     std::vector<double> thermal_bias_K;
     std::vector<double> thermal_contact_heat;
+    // Bias step cutting (Unit 28; solve::StepControl): how many intermediate states were solved
+    // on the way to this point after the full step failed; 0 when the full step converged.
+    int bias_substeps = 0;
 };
 
 }  // namespace NiTCAD::results
