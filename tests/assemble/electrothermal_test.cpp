@@ -260,6 +260,30 @@ double fd_jacobian_error(const DriftDiffusion& dd, std::vector<double> x,
 
 }  // namespace
 
+TEST_CASE("electrothermal assemble: the Newton update of the temperature") {
+    // T10: a step in T is clipped to 50 K (here 50 / 300 in tau) and theta to [theta / 2,
+    // 2 theta]; update_size measures |d tau|.
+    const device::Device d = diode({});
+    const auto s = *assemble::make_scaling(d);
+    const auto dd = *DriftDiffusion::create(d, s, {.electrothermal = true});
+    std::vector<double> x = heated(dd, d, s, 0.0, 1, 0.0);  // tau = 0
+    std::vector<double> dx(dd.unknowns(), 0.0);
+    dx[4 * 3 + 3] = 1.0;    // +300 K: clipped to +50 K
+    dx[4 * 4 + 3] = -0.1;   // -30 K: kept
+    dx[4 * 5 + 3] = -10.0;  // clipped to -50 K
+    REQUIRE(dd.update_size(x, dx) == 10.0);
+    dd.apply_update(x, dx, 5.0);
+    REQUIRE(x[4 * 3 + 3] == 50.0 / 300.0);
+    REQUIRE(x[4 * 4 + 3] == -0.1);
+    REQUIRE(x[4 * 5 + 3] == -50.0 / 300.0);
+    // At theta = 0.2 (60 K) a -50 K step would leave theta 1/30: theta / 2 bounds it.
+    x[4 * 6 + 3] = -0.8;
+    std::fill(dx.begin(), dx.end(), 0.0);
+    dx[4 * 6 + 3] = -50.0 / 300.0;
+    dd.apply_update(x, dx, 5.0);
+    REQUIRE(std::abs(x[4 * 6 + 3] - (0.5 * 0.2 - 1.0)) <= 1e-15);
+}
+
 TEST_CASE("electrothermal assemble: the stride and the pattern") {
     const device::Device d = diode({});
     const auto s = *assemble::make_scaling(d);

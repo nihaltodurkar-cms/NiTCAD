@@ -165,6 +165,24 @@ admittance; 2D/3D extrusion and MOSFET self-heating; run identity carries the th
 
 - **Owner decision:** [x] accept (2026-10-09)  [ ] change  [ ] defer
 
+### Unit 23 implementation choices beyond T1–T14 (for the owner's review; not yet ruled on)
+
+Built as stated, each recorded in `ARCHITECTURE.md` 6.2 "As built (Unit 23)"; each can be changed without touching the
+rest.
+
+| # | Choice | Why |
+|---|---|---|
+| U1 | The fourth unknown is the scaled rise τ = (T − T₀)/T₀, not θ = T/T₀. | θ ≈ 1 resolves T to ~7e-14 K only; the steady energy balance closed to 0.2% at small heating with θ, to round-off with τ. |
+| U2 | The flux freezes T at the edge's mean θ_e in its coefficients (Scharfetter–Gummel in w = θ^(1+r) n). | Second order, exact at uniform T, vanishes at uniform-T equilibrium; T2 asked for an SG flux "generalized to edge-varying T" without fixing the form. |
+| U3 | Thermionic emission across a temperature step: the same w and δ with K₀ θ_e^(1/2)/θ_e^(1+r). | Reduces to Unit 15's flux at any uniform T; for r = −1/2 each side emits ~ n v(T). T9 named only the velocity's T dependence. |
+| U4 | Conduction along an edge of one material uses the Kirchhoff transform; between materials the harmonic mean of the ends' κ at their own T. | Exact for steady 1D conduction in one material; no interface temperature unknown (Kapitza excluded, T14). |
+| U5 | Transient start: the electrothermal steady state, except a given initial temperature (held at t = 0 while the electrical rows are solved) or a device part without a sink (held at T₀). | T7 allows adiabatic transients; they need a defined initial T and have no steady one. |
+| U6 | Incomplete ionization (not listed in T9) is coupled: E_d/kT at each node's T, and in transients the bound carriers carry the free carriers' transport energy (T4's form applied to S_n = n − N_D⁺). | The alternative was refusing it; T4's storage term generalizes as written. |
+| U7 | `trace_bias` evaluates the bordered rows at the swept bias itself, dF/dλ at the state. | The metal's Peltier term makes dF/dλ state-dependent; this keeps the Jacobian exact. |
+| U8 | The steady energy-balance gate is judged where the heating exceeds the absolute Newton tolerance on T (T10). | Below it the balance is limited by that tolerance (6.4e-7 at a 1.5e-10 K rise against 3e-10 K). |
+
+- **Owner decision:** [ ] accept  [ ] change  [ ] defer
+
 ---
 
 ## New questions the advisor raised (not yet in `ARCHITECTURE.md`)

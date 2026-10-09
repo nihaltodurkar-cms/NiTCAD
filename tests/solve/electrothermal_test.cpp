@@ -8,6 +8,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <complex>
 #include <cstddef>
@@ -465,6 +466,9 @@ TEST_CASE("electrothermal solve: a diode with R_th against the lumped model; the
     // 857 K, holes' mu_max below mu_min): the trace stops there (T10) with its points.
     REQUIRE(run->stopped);
     REQUIRE(run->stopped->code == ErrorCode::non_convergence);
+    REQUIRE(run->stopped->message.find("outside its material's range") != std::string::npos);
+    REQUIRE(run->stopped->context);
+    REQUIRE(run->stopped->context->value > 850.0);  // the offending temperature [K]
     REQUIRE(run->points.back().fields.temperature_K.front() > 800.0);
     // The trace's fold: the vertex of the parabola V(T) through the top point and its neighbours.
     const auto at = [&](std::size_t k) {
@@ -851,7 +855,9 @@ TEST_CASE("electrothermal solve: MOSFET self-heating", "[.mosfet]") {
     const device::Device hot = build(true);
     auto o = thermal_options();
     o.newton.tol_update = 1e-10;
+    const auto t0 = std::chrono::steady_clock::now();
     const auto sweep = solve::sweep_bias(hot, points, o);
+    const auto t1 = std::chrono::steady_clock::now();
     REQUIRE(sweep.has_value());
     if (sweep->stopped) FAIL(sweep->stopped->message);
     const results::BiasPoint& p = sweep->points.back();
@@ -864,12 +870,20 @@ TEST_CASE("electrothermal solve: MOSFET self-heating", "[.mosfet]") {
     }
     solve::BiasOptions plain = o;
     plain.models.electrothermal = false;
-    const auto iso = solve::sweep_bias(build(false), points, plain);
+    const device::Device cold = build(false);
+    const auto t2 = std::chrono::steady_clock::now();
+    const auto iso = solve::sweep_bias(cold, points, plain);
+    const auto t3 = std::chrono::steady_clock::now();
+    const std::chrono::duration<double> thermal_s = t1 - t0, isothermal_s = t3 - t2;
+    std::size_t thermal_it = 0, isothermal_it = 0;
+    for (const auto& q : sweep->points) thermal_it += q.convergence.iterations.size();
+    for (const auto& q : iso->points) isothermal_it += q.convergence.iterations.size();
     REQUIRE(iso.has_value());
     REQUIRE_FALSE(iso->stopped);
     const double Id = p.terminal_current[1], Id_iso = iso->points.back().terminal_current[1];
     const double x_hot = hot.mesh().points()[hottest][0];
-    CAPTURE(power, heat, p.fields.temperature_K[hottest], x_hot, Id, Id_iso);
+    CAPTURE(power, heat, p.fields.temperature_K[hottest], x_hot, Id, Id_iso, thermal_s.count(),
+            isothermal_s.count(), thermal_it, isothermal_it);
     REQUIRE(std::abs(heat - power) <= 1e-9 * power);
     REQUIRE(p.fields.temperature_K[hottest] > 300.05);
     REQUIRE(x_hot > Lsd + 0.5 * Lg);
@@ -930,8 +944,9 @@ device::Device rod(int nodes) {
 }
 
 // The rod from 300 K (held at t = 0, the sink at 310 K), fixed steps of t_end / steps.
+// With rtol > 0, adaptive steps from t_end / steps instead.
 results::Transient heated_rod(const device::Device& d, solve::Integrator integrator, int steps,
-                              double t_end) {
+                              double t_end, double rtol = 0.0) {
     auto start = solved(d, {0.0}, thermal_options());
     start.fields.temperature_K.assign(d.mesh().node_count(), 300.0);
     solve::TransientOptions o;
@@ -939,7 +954,11 @@ results::Transient heated_rod(const device::Device& d, solve::Integrator integra
     o.integrator = integrator;
     o.t_end_s = t_end;
     o.dt_initial_s = o.dt_max_s = t_end / steps;
-    o.adaptive = false;
+    o.adaptive = rtol > 0.0;
+    if (o.adaptive) {
+        o.rtol = rtol;
+        o.dt_max_s = t_end;
+    }
     const std::vector<solve::Waveform> w{solve::Waveform::constant(0.0)};
     auto run = solve::solve_transient(d, w, o, &start.fields);
     if (!run) FAIL(run.error().message);
@@ -990,6 +1009,13 @@ TEST_CASE("electrothermal solve: the step-heated rod, orders 1 and 2") {
         CAPTURE(order, e1, e2, e1 / e2);
         REQUIRE(std::abs(std::log2(e1 / e2) - order) <= 0.15);
     }
+    // Adaptive steps (rtol 1e-6 of T0 on the rise, 0.3 mK a step, from t_end / 1000): only the
+    // temperature changes, so the error estimate must measure it (T12) for the run to stay
+    // accurate. Measured: 124 steps, 1.4e-3 K.
+    const auto adaptive = heated_rod(d, solve::Integrator::bdf2, 1000, t_end, 1e-6);
+    const double e = std::abs(adaptive.snapshots.back().fields.temperature_K.back() - reference);
+    CAPTURE(adaptive.points.size(), adaptive.rejected_steps, e);
+    REQUIRE(e <= 3e-3);
 }
 
 TEST_CASE("electrothermal solve: the transient energy balance") {
