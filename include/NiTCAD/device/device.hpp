@@ -90,7 +90,9 @@ struct Interface {
 
 struct DeviceDescription {
     mesh::Mesh mesh;
-    double temperature_K;               // lattice temperature, uniform (no self-heating)
+    // Lattice temperature: uniform, or with the electrothermal model (Unit 23) the reference
+    // temperature of its scaling and the uniform starting state.
+    double temperature_K;
     std::vector<Region> regions;
     std::vector<RegionId> node_region;  // one per mesh node, indexing regions
     std::vector<double> donors;         // N_D per mesh node [cm^-3]; 0 on insulator nodes
@@ -100,6 +102,8 @@ struct DeviceDescription {
     // The cells of a tensor-product mesh (mesh::TensorCells, Unit 20), which nonlocal tunnelling
     // traces its paths through; optional, nothing else reads them.
     std::optional<mesh::TensorCells> cells;
+    // Heat sinks of the electrothermal model (Unit 23); read only by it. May be empty.
+    std::vector<ThermalContact> thermal_contacts;
 };
 
 class Device {
@@ -135,7 +139,12 @@ public:
     //   fixed charge not finite, a recombination velocity not finite and >= 0, or traps rejected
     //   by physics::check_interface_traps for the semiconductor side (the message says which);
     //   the index is the interface;
-    // - cells that are not those of the mesh (mesh::TensorCells::matches).
+    // - cells that are not those of the mesh (mesh::TensorCells::matches);
+    // - a thermal contact (Unit 23) whose name is empty or repeated, of unknown kind, on a boundary
+    //   patch that does not exist or shares a node with another thermal contact's patch, with a
+    //   temperature not finite and positive or rejected by physics::check_temperature for a
+    //   region's semiconductor, or, for a resistance, an R_th not finite and positive; the index is
+    //   the thermal contact.
     [[nodiscard]] static std::expected<Device, base::Error> create(DeviceDescription description);
 
     [[nodiscard]] const mesh::Mesh& mesh() const noexcept { return d_.mesh; }
@@ -146,6 +155,9 @@ public:
     [[nodiscard]] std::span<const double> acceptors() const noexcept { return d_.acceptors; }
     [[nodiscard]] std::span<const Contact> contacts() const noexcept { return d_.contacts; }
     [[nodiscard]] std::span<const Interface> interfaces() const noexcept { return d_.interfaces; }
+    [[nodiscard]] std::span<const ThermalContact> thermal_contacts() const noexcept {
+        return d_.thermal_contacts;
+    }
     // The mesh's cells, or nullptr when the description gave none.
     [[nodiscard]] const mesh::TensorCells* cells() const noexcept {
         return d_.cells ? &*d_.cells : nullptr;

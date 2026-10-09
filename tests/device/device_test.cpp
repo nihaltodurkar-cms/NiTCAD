@@ -340,3 +340,49 @@ TEST_CASE("device: interfaces are validated and looked up in either order") {
     REQUIRE(mentions(rejected_with({{"silicon", "other", static_cast<InterfaceTransport>(7)}}),
                      "unknown transport"));
 }
+
+TEST_CASE("device: thermal contacts (Unit 23) are validated and read back") {
+    DeviceDescription ok = diode();
+    ok.thermal_contacts = {
+        {"sink", "x_min", ThermalContactKind::isothermal, 300.0, 0.0},
+        {"package", "x_max", ThermalContactKind::resistance, 320.0, 2.5}};
+    const auto d = Device::create(std::move(ok));
+    REQUIRE(d.has_value());
+    REQUIRE(d->thermal_contacts().size() == 2);
+    REQUIRE(d->thermal_contacts()[1].name == "package");
+    REQUIRE(d->thermal_contacts()[1].kind == ThermalContactKind::resistance);
+    REQUIRE(d->thermal_contacts()[1].temperature_K == 320.0);
+    REQUIRE(d->thermal_contacts()[1].resistance_K_cm2_W == 2.5);
+    REQUIRE(Device::create(diode())->thermal_contacts().empty());
+
+    const auto spoiled = [](std::vector<ThermalContact> contacts) {
+        return rejected([&](DeviceDescription& desc) { desc.thermal_contacts = contacts; });
+    };
+    const ThermalContact sink{"sink", "x_min", ThermalContactKind::isothermal, 300.0, 0.0};
+    REQUIRE(mentions(spoiled({{"", "x_min"}}), "empty or repeated"));
+    const auto twice = spoiled({sink, {"sink", "x_max"}});
+    REQUIRE(mentions(twice, "empty or repeated"));
+    REQUIRE(twice.context->index == 1u);
+    REQUIRE(mentions(spoiled({{"t", "x_min", static_cast<ThermalContactKind>(9)}}),
+                     "unknown kind"));
+    REQUIRE(mentions(spoiled({{"t", "nowhere"}}), "no boundary patch 'nowhere'"));
+    const auto shared = spoiled({sink, {"other", "x_min"}});
+    REQUIRE(mentions(shared, "shares a node"));
+    REQUIRE(shared.context->index == 1u);
+    for (const double T : {0.0, -5.0, not_a_number, infinity}) {
+        REQUIRE(mentions(spoiled({{"t", "x_min", ThermalContactKind::isothermal, T}}),
+                         "finite and positive"));
+    }
+    // A temperature silicon's models refuse (mu_max below mu_min for holes above about 857 K).
+    const auto hot = spoiled({{"t", "x_min", ThermalContactKind::isothermal, 1000.0}});
+    REQUIRE(mentions(hot, "region 'silicon'"));
+    REQUIRE(hot.context->value == 1000.0);
+    for (const double R : {0.0, -1.0, not_a_number, infinity}) {
+        REQUIRE(mentions(spoiled({{"t", "x_min", ThermalContactKind::resistance, 300.0, R}}),
+                         "thermal resistance"));
+    }
+    // An isothermal contact does not read its resistance.
+    DeviceDescription iso = diode();
+    iso.thermal_contacts = {{"t", "x_min", ThermalContactKind::isothermal, 300.0, not_a_number}};
+    REQUIRE(Device::create(std::move(iso)).has_value());
+}

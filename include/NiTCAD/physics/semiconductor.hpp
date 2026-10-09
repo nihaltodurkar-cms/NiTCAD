@@ -121,6 +121,24 @@ struct BandToBandParameters {
     bool operator==(const BandToBandParameters&) const = default;
 };
 
+// Lattice heat conduction and storage, and the thermopower's scattering exponents (thermal.hpp;
+// Unit 23): kappa(T) = conductivity (T / 300)^-conductivity_exponent [W/(cm K)], rho c the
+// volumetric heat capacity [J/(cm^3 K)], temperature independent. thermopower_exponent_n / _p is
+// the exponent r of the carriers' momentum relaxation time in their energy, tau ~ E^r, which sets
+// the energy a current carries (the thermopower, thermal.hpp); -1/2 is acoustic-phonon scattering
+// (M. Lundstrom, Fundamentals of Carrier Transport, 2nd ed., Cambridge 2000, sec. 3.4).
+// A conductivity of 0 (the default) means the material has no thermal data: the electrothermal
+// model refuses it rather than invent values.
+struct ThermalParameters {
+    double conductivity_W_cmK = 0.0;
+    double conductivity_exponent = 0.0;
+    double heat_capacity_J_cm3K = 0.0;
+    double thermopower_exponent_n = -0.5;
+    double thermopower_exponent_p = -0.5;
+
+    bool operator==(const ThermalParameters&) const = default;
+};
+
 struct SemiconductorParameters {
     double eps_r;                   // relative permittivity
     double Eg0_eV;                  // band gap at 0 K
@@ -141,6 +159,7 @@ struct SemiconductorParameters {
     RichardsonParameters richardson;  // Unit 15
     ImpactIonizationParameters impact_ionization{};  // Unit 19; all zero: none
     BandToBandParameters band_to_band{};              // Unit 20; all zero: none
+    ThermalParameters thermal{};                      // Unit 23; conductivity 0: none
 
     bool operator==(const SemiconductorParameters&) const = default;
 };
@@ -155,7 +174,10 @@ struct SemiconductorParameters {
 // the Kane pair A = 3.5e21 cm^-3 s^-1, B = 1.03e8 V/cm of Hurkx, Klaassen and Knuvers, IEEE Trans.
 // Electron Devices 39, 331 (1992), Table I, the legacy values (Unit 20; indirect gap, no WKB
 // masses). The radiative coefficient is left 0 as in the legacy (silicon's is about 1e-14 cm^3/s,
-// negligible against SRH), so silicon results do not change.
+// negligible against SRH), so silicon results do not change. Thermal data (Unit 23): the legacy
+// kappa(T) = 1.48 (T / 300)^-1.33 W/(cm K) (materials.py kappa_th); rho c = 2.329 g/cm^3 times
+// 0.7 J/(g K) (Ioffe NSM archive, silicon thermal properties); acoustic-phonon thermopower
+// exponents.
 inline constexpr SemiconductorParameters silicon_parameters{
     .eps_r = 11.7,
     .Eg0_eV = 1.17,
@@ -186,6 +208,9 @@ inline constexpr SemiconductorParameters silicon_parameters{
                           .phonon_energy_eV = 0.063},
     .band_to_band = {.A_per_cm3_s = 3.5e21, .B_V_per_cm = 1.03e8, .direct_gap = false,
                      .electron_mass = 0.0, .hole_mass = 0.0},
+    .thermal = {.conductivity_W_cmK = 1.48, .conductivity_exponent = 1.33,
+                .heat_capacity_J_cm3K = 1.6303, .thermopower_exponent_n = -0.5,
+                .thermopower_exponent_p = -0.5},
 };
 
 // No band-gap narrowing: the Slotboom form and numbers are a silicon fit (Unit 15; the legacy left
@@ -284,6 +309,10 @@ inline constexpr SemiconductorParameters indium_gallium_arsenide_parameters{
 // lifetimes (growth dependent) and Auger as carried-over approximations. Its radiative value is
 // the bimolecular coefficient (Ioffe; the purely radiative part is about 1e-14 cm^3/s). The
 // dopant levels are deep at 300 K (aluminium 220 meV): use incomplete ionization with it.
+// Thermal data (Unit 23): the legacy conductivity 3.7 W/(cm K) at 300 K (materials.py) with the
+// legacy exponent, which it applies to every material (silicon's 1.33; not checked against a
+// source for SiC); rho c = 3.211 g/cm^3 times 0.69 J/(g K) (Ioffe NSM archive, 4H-SiC thermal
+// properties). The other sets carry no thermal data (none of their values is in the legacy).
 inline constexpr SemiconductorParameters silicon_carbide_4h_parameters{
     .eps_r = 9.7,
     .Eg0_eV = 3.30,
@@ -305,6 +334,9 @@ inline constexpr SemiconductorParameters silicon_carbide_4h_parameters{
     .ionization = {.donor_eV = 0.070, .acceptor_eV = 0.220, .donor_degeneracy = 2.0,
                    .acceptor_degeneracy = 4.0},
     .richardson = {.electron = 0.0, .hole = 0.0},
+    .thermal = {.conductivity_W_cmK = 3.7, .conductivity_exponent = 1.33,
+                .heat_capacity_J_cm3K = 2.2156, .thermopower_exponent_n = -0.5,
+                .thermopower_exponent_p = -0.5},
 };
 
 // Al_x Ga_1-x As in the direct-gap regime, 0 <= x <= 0.45 (legacy materials.algaas): eps_r linear

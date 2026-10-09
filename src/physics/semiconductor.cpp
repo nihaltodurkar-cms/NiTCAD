@@ -8,6 +8,7 @@
 
 #include "NiTCAD/base/constants.hpp"
 #include "NiTCAD/base/contract.hpp"
+#include "NiTCAD/physics/thermal.hpp"
 #include "temperature.hpp"
 
 namespace NiTCAD::physics {
@@ -208,6 +209,9 @@ std::expected<Semiconductor, base::Error> Semiconductor::create(
         return std::unexpected(std::move(*e));
     }
     if (auto e = check_band_to_band(p.band_to_band)) return std::unexpected(std::move(*e));
+    if (auto ok = check_thermal_parameters(p.thermal, "semiconductor"); !ok) {
+        return std::unexpected(std::move(ok.error()));
+    }
     return Semiconductor{p};
 }
 

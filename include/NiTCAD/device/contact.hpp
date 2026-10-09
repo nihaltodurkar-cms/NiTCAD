@@ -58,4 +58,22 @@ struct Contact {
     Electrode electrode{};            // read only when kind == ContactKind::electrode
 };
 
+// A thermal contact (Unit 23, the electrothermal model; legacy thermal.ThermalBC): a heat sink on
+// a mesh boundary patch, separate from the electrical contacts (a patch may carry both).
+// - isothermal: every node of the patch held at temperature_K (Dirichlet; legacy "isothermal");
+// - resistance: the heat flux out through each node's face area A is (T - temperature_K) / R_th
+//   (Robin; legacy "resistance"), R_th = resistance_K_cm2_W per unit boundary area in every
+//   dimension, temperature_K the ambient behind it.
+// Every boundary without a thermal contact is adiabatic (no heat flux; legacy "adiabatic"). The
+// temperatures are those of a bias point unless the solve gives others (solve/bias.hpp).
+enum class ThermalContactKind : std::uint8_t { isothermal, resistance };
+
+struct ThermalContact {
+    std::string name;
+    std::string boundary;  // the mesh boundary patch
+    ThermalContactKind kind = ThermalContactKind::isothermal;
+    double temperature_K = 300.0;
+    double resistance_K_cm2_W = 0.0;  // read only when kind == resistance
+};
+
 }  // namespace NiTCAD::device
