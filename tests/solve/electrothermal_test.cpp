@@ -20,12 +20,15 @@
 #include "NiTCAD/device/device.hpp"
 #include "NiTCAD/mesh/tensor_grid.hpp"
 #include "NiTCAD/physics/insulator.hpp"
+#include "NiTCAD/physics/mobility.hpp"
+#include "NiTCAD/physics/statistics.hpp"
 #include "NiTCAD/physics/semiconductor.hpp"
 #include "NiTCAD/physics/thermal.hpp"
 #include "NiTCAD/solve/bias.hpp"
 #include "NiTCAD/solve/small_signal.hpp"
 #include "NiTCAD/solve/trace.hpp"
 #include "NiTCAD/solve/transient.hpp"
+#include "legacy_graded_mesh.hpp"
 
 using namespace NiTCAD;
 using base::ErrorCode;
@@ -506,6 +509,371 @@ TEST_CASE("electrothermal solve: a diode with R_th against the lumped model; the
     const double lumped = std::max(f1, f2);
     CAPTURE(traced, lumped, T2, 0.5 * (a + c));
     REQUIRE(std::abs(traced - lumped) <= 1e-7);  // measured 4.6e-9 V
+}
+
+namespace {
+
+// An n-type resistor (1e17) of length L between isothermal 300 K sinks, its mobility and
+// conductivity independent of T when `constant` (the parabola's linear heat equation).
+Bar resistor(int nodes, double L, bool constant) {
+    Bar b;
+    b.nodes = nodes;
+    b.length_cm = L;
+    if (constant) {
+        b.material.electron_mobility.T_exponent = 0.0;
+        b.material.hole_mobility.T_exponent = 0.0;
+        b.material.thermal.conductivity_exponent = 0.0;
+    }
+    return b;
+}
+
+}  // namespace
+
+TEST_CASE("electrothermal solve: legacy G-PARABOLA and G-BC") {
+    // G-PARABOLA (legacy test_m19_thermal.py): a uniform heat source H0 with a constant kappa
+    // between isothermal ends gives T = T0 + H0 / (2 kappa) x (L - x). Here the source is the
+    // Joule heat of a 10 um resistor at 1 mV (mobility and kappa independent of T): uniform,
+    // H0 = V I / L, its thermoelectric (Thomson) part some 1e-8 of it; the rise is about 1e-6 K.
+    // The control volumes' second difference is exact for a parabola, so the nodes match it.
+    // G-BC: with an R_th of 1e-3 K cm^2/W at each end instead the rod runs hotter, and as the
+    // problem is linear by T_res - T_iso = R Q_L + R (Q_R - Q_L) x / L, Q the heat through each
+    // end: half the Joule heat each, plus or minus each contact's Peltier heat Pi I (some 200
+    // times the Joule heat at 1 mV, which isothermal ends absorb where it is released).
+    const double L = 1e-3, V = 1e-3, kappa = 1.48;
+    const device::Device iso = bar(resistor(101, L, true));
+    const auto p = solved(iso, {V, 0.0}, thermal_options());
+    const double P = V * p.terminal_current[0];
+    const double H0 = P / L;
+    double rise = 0.0, worst = 0.0;
+    for (std::size_t i = 0; i < iso.mesh().node_count(); ++i) {
+        const double x = iso.mesh().points()[i][0];
+        const double T = 300.0 + H0 / (2.0 * kappa) * x * (L - x);
+        rise = std::max(rise, T - 300.0);
+        worst = std::max(worst, std::abs(p.fields.temperature_K[i] - T));
+    }
+    CAPTURE(rise, worst, worst / rise);
+    REQUIRE(rise > 5e-7);
+    REQUIRE(worst <= 1e-6 * rise);  // measured 1.0e-7
+    Bar rb = resistor(101, L, true);
+    const double R = 1e-3;
+    for (auto& t : rb.thermal) t = {t.name, t.boundary, device::ThermalContactKind::resistance,
+                                    300.0, R};
+    const auto q = solved(bar(rb), {V, 0.0}, thermal_options());
+    const double QL = q.thermal_contact_heat[0], QR = q.thermal_contact_heat[1];
+    double shift = 0.0;
+    for (std::size_t i = 0; i < iso.mesh().node_count(); ++i) {
+        const double x = iso.mesh().points()[i][0];
+        const double expected = R * QL + R * (QR - QL) * x / L;
+        shift = std::max(shift, std::abs(q.fields.temperature_K[i] -
+                                         p.fields.temperature_K[i] - expected));
+    }
+    // The R_th run's own power: its ends differ by 1.3 mK (the Peltier heats through R_th), whose
+    // Seebeck voltage moves the current by 8.6e-4.
+    const double Pq = V * q.terminal_current[0];
+    CAPTURE(R * P / 2.0, R * QL, R * QR, QL + QR - Pq, shift);
+    REQUIRE(*std::ranges::max_element(q.fields.temperature_K) >
+            *std::ranges::max_element(p.fields.temperature_K));
+    REQUIRE(std::abs(QL + QR - Pq) <= 1e-9 * Pq);
+    REQUIRE(shift <= 1e-5 * R * std::max(std::abs(QL), std::abs(QR)));  // measured 3.1e-6
+}
+
+TEST_CASE("electrothermal solve: a self-heated resistor against a reference ODE") {
+    // Legacy G-ROLLOFF's direction, quantitatively. In an n-type resistor (N_D = 1e17, 10 um,
+    // isothermal 300 K ends) n = N_D throughout (its space charge is some 1e-8 of it here), so the
+    // model reduces to J = q mu(T) N_D (E_c' + (k/q)(1 + r) T') and the heat to H = J e_n' with
+    // e_n = E_c + 2 kT: (kappa(T) T')' = -(J^2 / (q mu(T) N_D) + (3/2) (k/q) J T'), T = 300 K at
+    // both ends, and V = integral of J / (q mu(T) N_D). That ODE is solved here to 2e-9 (Kirchhoff
+    // form on 20000 cells, Newton) and J found for the device's V by the secant method. At 4 V the
+    // centre is about 18 K hotter, the mobility lower, and the current below the isothermal one.
+    const double L = 1e-3, N = 1e17, V = 4.0;
+    const Bar b = resistor(201, L, false);
+    const device::Device d = bar(b);
+    const physics::Semiconductor si = *physics::Semiconductor::create(b.material);
+    const physics::ThermalParameters& th = b.material.thermal;
+    const double q = base::q_C, kq = base::k_B_eV_per_K;
+    const auto mu = [&](double T) {
+        return physics::caughey_thomas_mobility(si, physics::Carrier::electron, N, T);
+    };
+    const auto u = [&](double T) {  // the Kirchhoff transform, integral of kappa from 300 K
+        const double s = 1.0 - th.conductivity_exponent;
+        return th.conductivity_W_cmK * 300.0 / s * (std::pow(T / 300.0, s) - 1.0);
+    };
+    const auto kappa = [&](double T) { return physics::thermal_conductivity(th, T).value; };
+    constexpr int M = 20000;
+    const double h = L / M;
+    // T on the grid for current density J, by Newton on the tridiagonal system.
+    const auto profile = [&](double J) {
+        std::vector<double> T(M + 1, 300.0);
+        for (int it = 0; it < 50; ++it) {
+            std::vector<double> a(M + 1), bb(M + 1), c(M + 1), r(M + 1);
+            double change = 0.0;
+            for (int k = 1; k < M; ++k) {
+                // (u_{k+1} - 2 u_k + u_{k-1}) / h^2 + J^2 / (q mu N) + 1.5 kq J T' = 0.
+                const double Tp = T[k + 1], Tk = T[k], Tm = T[k - 1];
+                const double src = J * J / (q * mu(Tk) * N);
+                const double dmu = physics::caughey_thomas_mobility_slope(
+                    si, physics::Carrier::electron, N, Tk);
+                r[k] = (u(Tp) - 2.0 * u(Tk) + u(Tm)) / (h * h) + src +
+                       1.5 * kq * J * (Tp - Tm) / (2.0 * h);
+                a[k] = kappa(Tm) / (h * h) - 1.5 * kq * J / (2.0 * h);
+                c[k] = kappa(Tp) / (h * h) + 1.5 * kq * J / (2.0 * h);
+                bb[k] = -2.0 * kappa(Tk) / (h * h) - src * dmu / mu(Tk);
+            }
+            // Thomas algorithm on rows 1..M-1 (T_0, T_M fixed): J dT = -r.
+            std::vector<double> cp(M + 1), dp(M + 1);
+            for (int k = 1; k < M; ++k) {
+                const double den = bb[k] - (k > 1 ? a[k] * cp[k - 1] : 0.0);
+                cp[k] = c[k] / den;
+                dp[k] = (-r[k] - (k > 1 ? a[k] * dp[k - 1] : 0.0)) / den;
+            }
+            for (int k = M - 1; k >= 1; --k) {
+                const double dT = dp[k] - (k < M - 1 ? cp[k] * dp[k + 1] : 0.0);
+                dp[k] = dT;
+                T[k] += dT;
+                change = std::max(change, std::abs(dT));
+            }
+            if (change < 1e-12) break;
+        }
+        return T;
+    };
+    const auto voltage = [&](double J, std::vector<double>* T_out) {
+        const std::vector<double> T = profile(J);
+        double v = 0.0;
+        for (int k = 0; k < M; ++k) {
+            v += 0.5 * h * (J / (q * mu(T[k]) * N) + J / (q * mu(T[k + 1]) * N));
+        }
+        if (T_out != nullptr) *T_out = T;
+        return v;
+    };
+    double J0 = V * q * mu(300.0) * N / L, J1 = 0.9 * J0;
+    double V0 = voltage(J0, nullptr), V1 = voltage(J1, nullptr);
+    for (int it = 0; it < 30 && std::abs(V1 - V) > 1e-14 * V; ++it) {
+        const double J2 = J1 + (V - V1) * (J1 - J0) / (V1 - V0);
+        J0 = J1;
+        V0 = V1;
+        J1 = J2;
+        V1 = voltage(J1, nullptr);
+    }
+    std::vector<double> T_ref;
+    (void)voltage(J1, &T_ref);
+    const auto p = solved(d, {V, 0.0}, thermal_options());
+    solve::BiasOptions plain;
+    plain.newton.tol_update = 1e-12;
+    Bar iso = b;
+    iso.thermal.clear();
+    const double I_iso = solved(bar(iso), {V, 0.0}, plain).terminal_current[0];
+    const double T_mid = p.fields.temperature_K[100];
+    CAPTURE(p.terminal_current[0], J1, I_iso, T_mid, T_ref[M / 2]);
+    REQUIRE(T_ref[M / 2] - 300.0 > 10.0);
+    REQUIRE(p.terminal_current[0] < I_iso);  // the roll-off
+    REQUIRE(std::abs(p.terminal_current[0] / J1 - 1.0) <= 1e-5);  // measured 1.7e-6
+    REQUIRE(std::abs(T_mid - T_ref[M / 2]) <= 1e-5 * (T_ref[M / 2] - 300.0));  // 2.2e-6
+}
+
+TEST_CASE("electrothermal solve: the Seebeck voltage under Fermi-Dirac statistics") {
+    // A degenerate n-type bar (1e20 cm^-3, about 1.5 kT above the band edge) between 300 and
+    // 310 K: V_R - V_L = integral of (k/q) (2 F_1(eta) / F_0(eta) - eta) dT, eta from
+    // N_D = Nc(T) F_1/2(eta) (the thermopower of r = -1/2, thermal.hpp).
+    Bar b;
+    b.nodes = 81;
+    b.length_cm = 2e-4;
+    b.donors = [](double, double) { return 1e20; };
+    b.thermal[1].temperature_K = 310.0;
+    const device::Device d = bar(b);
+    auto o = thermal_options();
+    o.models.fermi_dirac = true;
+    const std::vector<std::vector<double>> points{{0.0, 0.0}, {0.0, 0.01}};
+    const auto sweep = solve::sweep_bias(d, points, o);
+    REQUIRE(sweep.has_value());
+    REQUIRE(sweep->points.size() == 2);
+    const double I0 = sweep->points[0].terminal_current[1];
+    const double I1 = sweep->points[1].terminal_current[1];
+    const double Voc = -I0 * 0.01 / (I1 - I0);
+    const physics::Semiconductor si = physics::silicon();
+    const auto integrand = [&](double T) {
+        const double Nc = physics::conduction_band_dos(si, T);
+        const double eta =
+            std::log(1e20 / Nc) -
+            physics::fermi_dirac_degeneracy(1.0, std::log(Nc), 1e20).log_gamma;
+        const physics::FermiOrdersZeroOne F = physics::fermi_orders_zero_one(eta);
+        return base::k_B_eV_per_K * (2.0 * F.one / F.zero - eta);
+    };
+    double expected = 0.0;  // Simpson, 200 intervals
+    const int K = 200;
+    for (int k = 0; k <= K; ++k) {
+        const double w = k == 0 || k == K ? 1.0 : (k % 2 == 1 ? 4.0 : 2.0);
+        expected += w * integrand(300.0 + 10.0 * k / K);
+    }
+    expected *= 10.0 / K / 3.0;
+    CAPTURE(Voc, expected, Voc / expected - 1.0);
+    REQUIRE(expected > 0.0);
+    REQUIRE(std::abs(Voc / expected - 1.0) <= 1e-5);
+}
+
+TEST_CASE("electrothermal solve: Peltier heat at an n+ / n junction") {
+    // A 100 um bar, 1e18 cm^-3 below 50 um and 1e16 above, kappa independent of T, isothermal
+    // 300 K ends, +-1 mV. Pi = T P_n = -(kT/q) (2 - ln(n / Nc)) changes across the junction, which
+    // releases (Pi_L - Pi_R) I for a current I from left to right; at the bar's middle half of it
+    // reaches each sink (constant kappa). With the right contact's own -Pi_R I_R, the odd part of
+    // the right sink's heat over its current is -(Pi_L + Pi_R) / 2. The junction heat is spread
+    // over the n side's space charge (a Debye length of 40 nm), 4e-4 of the bar from its middle.
+    Bar b = resistor(401, 1e-2, true);
+    b.donors = [](double x, double L) { return x < 0.5 * L ? 1e18 : 1e16; };
+    const device::Device d = bar(b);
+    const auto plus = solved(d, {1e-3, 0.0}, thermal_options());
+    const auto minus = solved(d, {-1e-3, 0.0}, thermal_options());
+    const double dQ = plus.thermal_contact_heat[1] - minus.thermal_contact_heat[1];
+    const double dI = plus.terminal_current[1] - minus.terminal_current[1];
+    const double kT = base::k_B_eV_per_K * 300.0;
+    const double Nc = physics::conduction_band_dos(physics::silicon(), 300.0);
+    const double expected =
+        kT * (2.0 - 0.5 * std::log(1e18 / Nc) - 0.5 * std::log(1e16 / Nc));
+    CAPTURE(dQ / dI, expected, dQ / dI / expected - 1.0);
+    REQUIRE(std::abs(dQ / dI / expected - 1.0) <= 2e-3);  // measured 7.2e-4
+}
+
+TEST_CASE("electrothermal solve: 1D extruded to 2D and 3D") {
+    // The diode of the energy-balance gate (isothermal x_min, R_th x_max) on 1D, 2D (5 rows) and
+    // 3D (4 x 4) tensor grids: per unit area the currents and heats, and every node's temperature
+    // and potential, are the 1D ones.
+    const auto build = [](int D) {
+        const auto x = uniform(0.0, 1e-4, 41);
+        const auto y = uniform(0.0, 0.4e-4, D == 2 ? 5 : 4);
+        mesh::Mesh m = D == 1   ? *mesh::make_tensor_grid(x)
+                       : D == 2 ? *mesh::make_tensor_grid(x, y)
+                                : *mesh::make_tensor_grid(x, y, y);
+        const std::size_t n = m.node_count();
+        std::vector<double> donors(n), acceptors(n);
+        for (std::size_t i = 0; i < n; ++i) {
+            const double px = m.points()[i][0];
+            donors[i] = px < 0.5e-4 ? 0.0 : 1e17;
+            acceptors[i] = px < 0.5e-4 ? 1e17 : 0.0;
+        }
+        auto left = m.find_boundary("x_min")->nodes;
+        auto right = m.find_boundary("x_max")->nodes;
+        auto dev = device::Device::create(
+            {.mesh = std::move(m),
+             .temperature_K = 300.0,
+             .regions = {{"silicon", physics::silicon()}},
+             .node_region = std::vector<device::RegionId>(n, 0),
+             .donors = std::move(donors),
+             .acceptors = std::move(acceptors),
+             .contacts = {{"anode", device::ContactKind::ohmic, std::move(left)},
+                          {"cathode", device::ContactKind::ohmic, std::move(right)}},
+             .thermal_contacts = {
+                 {"left", "x_min", device::ThermalContactKind::isothermal, 300.0, 0.0},
+                 {"right", "x_max", device::ThermalContactKind::resistance, 300.0, 1e-3}}});
+        if (!dev) FAIL(dev.error().message);
+        return std::move(*dev);
+    };
+    const device::Device d1 = build(1);
+    const auto p1 = solved(d1, {0.75, 0.0}, thermal_options());
+    REQUIRE(p1.fields.temperature_K.back() > 300.0005);  // 0.68 mK
+    for (const int D : {2, 3}) {
+        const device::Device d = build(D);
+        const auto p = solved(d, {0.75, 0.0}, thermal_options());
+        const double area = D == 2 ? 0.4e-4 : 0.4e-4 * 0.4e-4;
+        double worst = 0.0;
+        for (std::size_t c = 0; c < 2; ++c) {
+            worst = std::max(
+                worst, std::abs(p.terminal_current[c] / area / p1.terminal_current[c] - 1.0));
+            worst = std::max(worst, std::abs(p.thermal_contact_heat[c] / area /
+                                             p1.thermal_contact_heat[c] - 1.0));
+        }
+        double dT = 0.0, dpsi = 0.0;
+        for (std::size_t i = 0; i < d.mesh().node_count(); ++i) {
+            const std::size_t i1 = i % 41;  // x varies fastest
+            dT = std::max(dT, std::abs(p.fields.temperature_K[i] - p1.fields.temperature_K[i1]));
+            dpsi = std::max(dpsi, std::abs(p.fields.potential_V[i] - p1.fields.potential_V[i1]));
+        }
+        CAPTURE(D, worst, dT, dpsi);
+        REQUIRE(worst <= 1e-9);
+        REQUIRE(dT <= 1e-9);
+        REQUIRE(dpsi <= 1e-9);
+    }
+}
+
+TEST_CASE("electrothermal solve: MOSFET self-heating", "[.mosfet]") {
+    // The legacy MOSFET of mosfet_test.cpp (Lg 600 nm, n+ source and drain, N_A 1e17, 5 nm oxide,
+    // n+ polysilicon gate) on a coarser graded mesh (40 x 20), with an isothermal 300 K sink on the
+    // body contact's bottom face, at Vg = 1.5 V, Vd = 1 V: the heat out of the sink equals
+    // sum I V (the gate carries none); the device warms, most of all on the drain side of the
+    // channel (where the field and the current density are largest); and the drain current is below
+    // the isothermal one (the lattice mobility falls with T). About 18 s in Release: hidden tag
+    // [.mosfet], its own ctest entry (CMakeLists.txt). Measured: balance 2.3e-13, 301.6 K at the
+    // drain edge, I_d 0.75% below the isothermal 6.34 A/cm.
+    constexpr double Lg = 6e-5, Lsd = 3e-5, depth = 2e-5;
+    const auto build = [&](bool sink) {
+        const double L = 2 * Lsd + Lg;
+        const auto x = legacy_graded_mesh(L, {Lsd, Lsd + Lg}, L / 800.0, L / 40.0, 1.15);
+        const auto y = legacy_graded_mesh(depth, 0.0, depth / 400.0, depth / 20.0, 1.15);
+        mesh::Mesh m = *mesh::make_tensor_grid(x, y);
+        const std::size_t n = m.node_count();
+        const auto sd = [](double px, double py, double edge, bool source) {
+            const double s = source ? edge - px : px - edge;
+            return 1e19 * std::exp(-(py * py) / (2.0 * 5e-6 * 5e-6)) * 0.5 *
+                   std::erfc(-s / (std::sqrt(2.0) * 1e-6));
+        };
+        std::vector<double> donors(n);
+        for (std::size_t i = 0; i < n; ++i) {
+            const auto& p = m.points()[i];
+            donors[i] = sd(p[0], p[1], Lsd, true) + sd(p[0], p[1], Lsd + Lg, false);
+        }
+        std::vector<mesh::NodeId> source, drain, gate;
+        for (const mesh::NodeId v : m.find_boundary("y_min")->nodes) {
+            const double px = m.points()[static_cast<std::size_t>(v)][0];
+            (px <= Lsd ? source : px >= Lsd + Lg ? drain : gate).push_back(v);
+        }
+        auto body = m.find_boundary("y_max")->nodes;
+        device::Contact g{"gate", device::ContactKind::gate, std::move(gate)};
+        g.gate = {.boundary = "y_min", .oxide_thickness_cm = 5e-7};
+        std::vector<device::ThermalContact> thermal;
+        if (sink) thermal = {{"heat sink", "y_max", device::ThermalContactKind::isothermal, 300.0}};
+        auto dev = device::Device::create(
+            {.mesh = std::move(m),
+             .temperature_K = 300.0,
+             .regions = {{"silicon", physics::silicon()}},
+             .node_region = std::vector<device::RegionId>(n, 0),
+             .donors = std::move(donors),
+             .acceptors = std::vector<double>(n, 1e17),
+             .contacts = {{"source", device::ContactKind::ohmic, std::move(source)},
+                          {"drain", device::ContactKind::ohmic, std::move(drain)},
+                          {"body", device::ContactKind::ohmic, std::move(body)},
+                          std::move(g)},
+             .thermal_contacts = std::move(thermal)});
+        if (!dev) FAIL(dev.error().message);
+        return std::move(*dev);
+    };
+    // Contacts: source, drain, body, gate. The gate up to 1.5 V, then the drain up to 1 V.
+    std::vector<std::vector<double>> points;
+    for (int k = 1; k <= 6; ++k) points.push_back({0.0, 0.0, 0.0, 0.25 * k});
+    for (int k = 1; k <= 10; ++k) points.push_back({0.0, 0.1 * k, 0.0, 1.5});
+    const device::Device hot = build(true);
+    auto o = thermal_options();
+    o.newton.tol_update = 1e-10;
+    const auto sweep = solve::sweep_bias(hot, points, o);
+    REQUIRE(sweep.has_value());
+    if (sweep->stopped) FAIL(sweep->stopped->message);
+    const results::BiasPoint& p = sweep->points.back();
+    double power = 0.0;
+    for (std::size_t c = 0; c < 4; ++c) power += p.bias_V[c] * p.terminal_current[c];
+    const double heat = p.thermal_contact_heat[0];
+    std::size_t hottest = 0;
+    for (std::size_t i = 0; i < hot.mesh().node_count(); ++i) {
+        if (p.fields.temperature_K[i] > p.fields.temperature_K[hottest]) hottest = i;
+    }
+    solve::BiasOptions plain = o;
+    plain.models.electrothermal = false;
+    const auto iso = solve::sweep_bias(build(false), points, plain);
+    REQUIRE(iso.has_value());
+    REQUIRE_FALSE(iso->stopped);
+    const double Id = p.terminal_current[1], Id_iso = iso->points.back().terminal_current[1];
+    const double x_hot = hot.mesh().points()[hottest][0];
+    CAPTURE(power, heat, p.fields.temperature_K[hottest], x_hot, Id, Id_iso);
+    REQUIRE(std::abs(heat - power) <= 1e-9 * power);
+    REQUIRE(p.fields.temperature_K[hottest] > 300.05);
+    REQUIRE(x_hot > Lsd + 0.5 * Lg);
+    REQUIRE(Id < Id_iso);
 }
 
 TEST_CASE("electrothermal solve: the run record carries the thermal data") {
