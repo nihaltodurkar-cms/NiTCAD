@@ -57,6 +57,12 @@ struct PhysicsModels {
     // with a direct gap and cited tunnelling masses (never silicon). Needs the device's tensor
     // cells; excludes btbt_local (each would count the same tunnelling).
     NonlocalTunnelling btbt_nonlocal = NonlocalTunnelling::off;
+    // Electrothermal coupling (Unit 23; DECISIONS.md T1-T14; drift_diffusion.hpp): the lattice
+    // temperature is a fourth unknown per node, with the heat equation, the thermopower in the
+    // carrier fluxes and the temperature dependence of the band, mobility and contact models; heat
+    // leaves through the device's thermal contacts. Drift-diffusion only. Off by default; off,
+    // every result is that of the isothermal device at its temperature.
+    bool electrothermal = false;
 };
 
 }  // namespace NiTCAD::assemble

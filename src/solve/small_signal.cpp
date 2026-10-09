@@ -31,6 +31,9 @@ std::expected<results::SmallSignal, base::Error> solve_small_signal(
     const device::Device& device, std::span<const std::vector<double>> points,
     const SmallSignalOptions& options, const results::NodeFields* initial,
     const RunControl& control) {
+    if (options.steady.models.electrothermal) {  // Unit 23, in progress
+        return std::unexpected(invalid("electrothermal does not yet support small-signal runs"));
+    }
     const std::vector<double>& frequencies = options.frequencies_Hz;
     if (frequencies.empty()) {
         return std::unexpected(invalid("a small-signal run needs at least one frequency"));

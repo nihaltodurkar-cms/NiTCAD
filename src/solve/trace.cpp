@@ -223,6 +223,9 @@ std::expected<results::Sweep, base::Error> trace_bias(const device::Device& devi
     if (steady.equations != Equations::drift_diffusion) {
         return std::unexpected(invalid("a trace solves the drift-diffusion equations"));
     }
+    if (steady.models.electrothermal) {  // Unit 23, in progress
+        return std::unexpected(invalid("electrothermal does not yet support trace_bias"));
+    }
     if (options.contact >= contacts.size()) {
         return std::unexpected(invalid("the traced contact does not exist",
                                        static_cast<double>(options.contact)));

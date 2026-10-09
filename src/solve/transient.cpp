@@ -107,6 +107,9 @@ std::expected<results::Transient, base::Error> solve_transient(
     if (options.steady.equations != Equations::drift_diffusion) {
         return std::unexpected(invalid("a transient run solves the drift-diffusion equations"));
     }
+    if (options.steady.models.electrothermal) {  // Unit 23, in progress
+        return std::unexpected(invalid("electrothermal does not yet support transient runs"));
+    }
     const double t_end = options.t_end_s;
     if (!positive(t_end)) {
         return std::unexpected(invalid("t_end must be finite and positive", std::nullopt, t_end));

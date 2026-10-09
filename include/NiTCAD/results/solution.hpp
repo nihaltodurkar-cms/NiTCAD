@@ -17,6 +17,10 @@ struct NodeFields {
     std::vector<double> potential_V;
     std::vector<double> n_cm3;
     std::vector<double> p_cm3;
+    // The lattice temperature in K with the electrothermal model (Unit 23); empty without it (the
+    // device's uniform temperature). In an initial state, empty starts every node at the device's
+    // reference temperature.
+    std::vector<double> temperature_K;
 };
 
 // Per mesh node, the band diagram in eV, measured from the equilibrium Fermi level (the Fermi level
@@ -90,6 +94,12 @@ struct BiasPoint {
     // (the convergence record is the last Newton run's).
     std::vector<TunnelPath> tunnel_paths;
     int path_relocations = 0;
+    // Electrothermal (Unit 23; empty with the model off): the temperature of each thermal contact
+    // at this point in K (isothermal: its own; R_th: its ambient), and the heat leaving the device
+    // through each, in W / cm^(3-D) (W/cm^2 in 1D, W/cm in 2D, W in 3D), in the device's
+    // thermal-contact order. In a steady state the heats sum to sum_c V_c I_c over the contacts.
+    std::vector<double> thermal_bias_K;
+    std::vector<double> thermal_contact_heat;
 };
 
 }  // namespace NiTCAD::results
