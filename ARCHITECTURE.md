@@ -2080,8 +2080,21 @@ Unstructured meshes are not implemented initially. The mesh architecture must st
     cancellation.
   - `check_interfaces` (`include/NiTCAD/mesh/interfaces.hpp`) is the only way to establish P4: the dual faces between
     regions measured against declared interface pieces, exact outside corner zones of radius 2 s, within s inside them.
-- Not yet: the generators (M5–M13), an independent Voronoi-clipping check, and io persistence (M14). Nothing above
-  `mesh` requires a P4 report yet.
+- **Round 3, the 2D generator** (DECISIONS.md "2D generator, round 3"):
+  - `mesh::generate_mesh(Geometry2D, MeshOptions2D)` (`include/NiTCAD/mesh/generate.hpp`) turns region polygons and
+    boundary patches into a boundary-conforming Delaunay mesh. It returns the box-method graph, node regions, the
+    simplices and, with two or more regions, the P4 certificate.
+  - Placement, the U12 corner rules, Ruppert refinement with protected bands, determinism, and the explicit
+    unsupported cases (interfaces at domain corners, multiple interfaces at one boundary point, sectors below 60°).
+  - `Device::create` requires a current P4 certificate for a multi-region device on a 2D or 3D mesh that is not a
+    tensor grid. `Mesh::origin()` tags tensor grids, verified by `from_parts` and saved by io.
+  - `device::sample` gives analytic doping profiles. `io::save_generated_mesh` and `load_generated_mesh` keep the
+    simplices, regions, report and certificate.
+  - Gates passed: linear-field exactness; diode convergence (H1, L2 and current orders); the abrupt diode against 1D,
+    better than tensor at equal node count; 1.04e5 nodes in 1.70 s.
+  - **Unmet:** the MOSFET acceptance gate, because isotropic triangles lack the tensor grid's surface anisotropy
+    (DECISIONS.md U14). The gate is in the suite as `[!shouldfail]`.
+- Not yet: the 3D generator (M6, M9, M10), an independent Voronoi-clipping check, anisotropic refinement.
 
 ### 6.12 Long-term computational architecture
 
@@ -2442,7 +2455,7 @@ built.
 | 14 | Fermi–Dirac statistics and high-density carrier models | physics, assemble | **done, on `main`** (`8610d9a`): parabolic-band Fermi–Dirac statistics, the legacy ν-factor scheme with an exact Jacobian (5 and 6.2, Unit 14); incomplete ionization deferred (14.3) |
 | 15 | Heterojunctions, band offsets and interface transport | device, assemble, physics | **done, on `main`** (`2a8718a`): band offsets through a per-node band shift, permittivity steps, thermionic emission, the legacy material sets (6.3 and 6.2, Unit 15); follow-up: interfaces as device data, incomplete ionization, radiative recombination, band diagram, current resolution; meshed insulators, interface charge and traps are 15b |
 | 15b | Meshed insulators, semiconductor-insulator interfaces, interface charge, traps and recombination | physics, device, assemble, solve | **done, on `main`** (`4e23119`): insulator regions, electrodes on a meshed oxide, fixed charge, interface traps (levels and uniform bands, steady-state SRH occupancy), surface recombination, all at the interface potential (5, 6.2 and 6.4, Unit 15b) |
-| 16 | Unstructured mesh | mesh, device | **in progress** (branch `mesh/unstructured`): 2D and 3D in-tree generators, scope ruled 2026-10-14; DECISIONS.md M1–M16 and U1–U10 await ruling (11.3) |
+| 16 | Unstructured mesh | mesh, device, io | **in progress** (branch `mesh/unstructured`): the 2D generator, P4-certified devices, doping profiles, generated meshes on disk; 2D gates passed except the MOSFET acceptance (U14); 3D next, after approval (11.3) |
 | 17 | Adaptive mesh refinement and state transfer | mesh, solve, results | target |
 | 18 | Scalable linear-solver backends: PARDISO and/or iterative/AMG paths | linalg | **done, on `main`** (`002cb53`, `c8fd145`): Intel MKL PARDISO behind the backend-neutral interface, opt-in (Eigen SparseLU stays the default), MKL loaded at run time from a given path and never linked; real and complex; one analysis per pattern, numeric refactorization per Jacobian, one solve per right-hand side; singularity from perturbed pivots (6.10, Unit 18). Iterative/AMG paths remain a target |
 | 19 | Impact ionization and breakdown-oriented continuation | physics, assemble, solve | **done, on `main`** (`b665b9d`): van Overstraeten–de Man with the temperature factor, local generation along the reconstructed current with an exact Jacobian, off by default and bit-identical when off; pseudo-arclength `trace_bias` through folds; breakdown read from the ionization integral (6.2, Unit 19) |
@@ -2508,7 +2521,7 @@ exists, not finished), **planned** (nothing built). Audit of 2026-10-09, against
 |---|---|---|---|
 | Robust nonlinear solving | Newton with componentwise clipping (6.2); the generation-free retry (Units 19, 20); arc-length `trace_bias` (Unit 19) | **Bias step cutting verified, on `main`** (Unit 28, below; `06b708d`, PR #31); **Newton line search verified, opt-in, on `main`** (Unit 30, below; `f3e2811`, PR #32) | A natural-test norm monotone in reverse bias; a Gummel or pseudo-transient fallback |
 | Input/output, checkpoint/restart | The `io` layer (approved 2026-10-09): versioned, checksummed, atomic files for meshes, sweeps and checkpoints | **Verified, on `main`** (Unit 29, 6.6; `f69a7a8`, PR #33) | Device descriptions on disk and a text input deck; transient and small-signal results |
-| Geometry and unstructured 3D meshing | `Mesh::from_parts` accepts any valid node/edge/volume graph; only the tensor-grid producer exists; nonlocal BTBT needs tensor cells (6.11) | **in progress** (Unit 16, branch `mesh/unstructured`; scope ruled 2026-10-14; predicates, import path and the P4 check on the branch; U2 and U12 ruled 2026-10-14; 2D generator in progress) | Boundary-conforming Delaunay generators (2D any polygon, 3D convex) on the Voronoi dual with exact predicates, checked postconditions P0–P5, straddled interfaces and contact patches, persisted metadata; analytic doping profiles |
+| Geometry and unstructured 3D meshing | `Mesh::from_parts` accepts any valid node/edge/volume graph; only the tensor-grid producer exists; nonlocal BTBT needs tensor cells (6.11) | **in progress** (Unit 16, branch `mesh/unstructured`; scope ruled 2026-10-14; 2D generator, P4 certification of devices, doping profiles and generated-mesh io on the branch; 2D gates passed except the MOSFET (U14); 3D not started) | Boundary-conforming Delaunay generators (2D any polygon, 3D convex) on the Voronoi dual with exact predicates, checked postconditions P0–P5, straddled interfaces and contact patches, persisted metadata; analytic doping profiles |
 | Low-current accuracy | `terminal_current_resolution` reports the floor (Unit 15); off-state MOSFET current unresolved (6.13) | planned | Current extraction from the minority side or quasi-Fermi unknowns, gated against the resolution |
 | Generic fields/equations | Specialized `DriftDiffusion` assembler with a stride (Unit 23) | planned (6.12.1–2) | Field and equation descriptors behind the current assembler, bit-identical |
 | Scalable linear solvers | Eigen SparseLU (default), PARDISO opt-in (Unit 18) | planned | Iterative Krylov with ILU/AMG behind `linalg`; parallel assembly |

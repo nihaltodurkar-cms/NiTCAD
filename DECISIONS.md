@@ -433,6 +433,55 @@ has no kept cross face, that point carries no interface measure.
   - A sector below 60° is refused (`invalid_input`) until measurements justify it.
   - The angle tests are exact (integer arithmetic on the input coordinates).
 
+**2D generator, round 3 (2026-10-14; commits `740beba` to `8be2cc3`):**
+
+*What was built:*
+- **P4 certification (U2):** `Device::create` refuses a multi-region device on a 2D or 3D non-tensor mesh without a
+  current certificate. Tensor grids are exempt by provenance (`MeshOrigin`, verified, saved by io). 1D meshes are exempt
+  too: an interpretation of the ruling, for the same reason (every edge lies along x).
+- **The generator** (`mesh::generate_mesh`):
+  - exact validation and the U12 corner rules;
+  - mirrored pairs graded toward features, a straddle at boundary junctions, nodes exactly at patch ends;
+  - Bowyer–Watson with the exact predicates, then Ruppert refinement with protected bands;
+  - import and certification of the result.
+- **Doping profiles (M15) and generated meshes on disk (M14).**
+
+*Measured:*
+
+| Gate | Result |
+|---|---|
+| Generator validity, quality (min angle ≥ 20.7° outside bands), size, determinism, refusals | passed |
+| P4 by feature: flat, 90° bend, T-junction, 60.3°, 120°, thin layer, band-forcing refinement | certified: corner deviation 0, 0, 0.31 s, 0.95 s, 0.73 s |
+| Speed (Release) | 103,627 nodes in 1.70 s (target 2 s) |
+| Linear-field consistency (oxide between electrodes, skew mesh) | linear to 1e-10 V: passed |
+| Smooth diode convergence | H1 1.79, 1.24; L2 2.36, 2.11; current 1.50, 2.09: passed (≥ 0.9, 1.5, 0.9) |
+| Abrupt diode against 1D | error 1.9e-4 (11,549 nodes) against the tensor grid's 2.6e-4 (11,536): passed |
+| MOSFET, k = 1.5 against the tensor MOSFET | **not met**: on current 4 % low at 8,031 nodes, tensor 0.05 % at 9,490 (U14) |
+
+*Mutations:*
+- certification: 7 of 7 caught;
+- generator: 15 of 15 caught (one rule, boundary grading at junctions, was removed as redundant after its mutant
+  survived: refinement splits do that work);
+- doping and io: 7 of 7 caught.
+
+*Findings that need a ruling:*
+- **U14, the MOSFET gate (unmet).** The generator makes isotropic triangles. The tensor MOSFET resolves the inversion
+  layer with 2e-8 cm cells normal to the surface; isotropic triangles that fine over the channel exceed the node budget.
+  - Options: anisotropic refinement near selected boundaries (a boundary-layer mode for the generator); a hybrid mesh
+    with a tensor strip under the gate; or a ruling that changes the gate.
+  - The gate stays in the suite as `[!shouldfail]` with its measurement.
+- **U15, the U12 corner rule.** Bisector nodes make every measured corner worse:
+
+  | Corner | With bisector nodes | Without |
+  |---|---|---|
+  | T-junction | 0.31 s | 0 |
+  | 60.3° | 0.95 s | 0.36 s |
+  | 120° | 0.73 s | 0.32 s |
+
+  Proposed: drop the bisector nodes everywhere. Graded pairs alone give a smaller deviation and a wider margin at 60°.
+  They are implemented as ruled until then.
+- **U16, U2 in 1D.** The 1D exemption above was applied without an explicit ruling.
+
 **Gates (predefined, so a threshold is never set after the run):**
 - **Tensor equivalence:** split rectangles and Kuhn-split boxes give exactly `make_tensor_grid`'s volumes, couplings
   and areas to 1e-13 relative, with the diagonals dropped. Their diode solve matches the tensor run to 1e-12.
@@ -487,6 +536,10 @@ has no kept cross face, that point carries no interface measure.
   passes; sectors below 60° refused.
 - U13 P4 does not check that each node lies inside its region's geometry, which is not an input. A misplaced node
   surrounded by its own region's nodes is not detected; one next to another region is.
+- U14 The MOSFET gate is unmet (round 3 above): anisotropic refinement, a hybrid mesh or a changed gate needs a
+  ruling.
+- U15 The bisector nodes of U12 make corners worse (round 3 above): dropping them is proposed.
+- U16 1D meshes are exempt from P4 certification by interpretation of U2 (round 3 above).
 - U10 Budgets (M13) are targets. If the 3D generator misses its gates or budgets within the unit, the PR carries 2D plus
   3D import and says so (unchanged from revision 1).
 
