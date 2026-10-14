@@ -62,7 +62,9 @@ public:
     //   or a nonzero coordinate beyond the dimension; an edge endpoint out of range, with
     //   first >= second, or listed twice; a boundary patch with an empty or repeated name, nodes
     //   out of range or not strictly increasing, or a size mismatch; origin tensor_grid with an
-    //   edge that is not axis-aligned (its end points differing in more than one coordinate);
+    //   edge that is not axis-aligned (its end points differing in more than one coordinate), or,
+    //   in 1D, a mesh that is not a chain (strictly increasing x, edges joining x-consecutive
+    //   nodes only, n - 1 of them);
     // - degenerate_mesh: a control volume, edge length, coupling area or boundary area that is not
     //   positive and finite, or an edge length that differs from its endpoints' distance;
     // - resource_exhausted: more nodes than NodeId can index.

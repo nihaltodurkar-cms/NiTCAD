@@ -152,3 +152,88 @@ TEST_CASE("device: tensor-grid meshes are exempt from P4 certification by proven
                                      {"top", ContactKind::ohmic, {9, 10, 11}}}};
     CHECK(Device::create(std::move(d)).has_value());
 }
+
+// ---------------------------------------------------------------------------------------------
+// 1D (DECISIONS.md U16): only a verified tensor grid is exempt; any other 1D mesh with two regions
+// needs certify_interfaces_1d.
+
+namespace {
+
+// Nodes at x = 0, 1, 2, 3, 4 (um) joined in order, regions 0 0 1 1 1: the transition at 1.5 um.
+Mesh chain_1d(NiTCAD::mesh::MeshOrigin origin) {
+    std::vector<Point> p;
+    std::vector<NiTCAD::mesh::Edge> e;
+    for (int i = 0; i < 5; ++i) p.push_back({1e-4 * i, 0, 0});
+    for (int i = 0; i < 4; ++i) e.push_back({i, i + 1, 1e-4, 1.0});
+    return *Mesh::from_parts(1, p, std::vector<double>(5, 1e-4), e,
+                             {{"x_min", {0}, {1.0}}, {"x_max", {4}, {1.0}}}, origin);
+}
+
+DeviceDescription two_region_1d(Mesh m) {
+    return DeviceDescription{.mesh = std::move(m),
+                             .temperature_K = 300.0,
+                             .regions = {{"left", silicon()}, {"right", silicon()}},
+                             .node_region = {0, 0, 1, 1, 1},
+                             .donors = std::vector<double>(5, 1e16),
+                             .acceptors = std::vector<double>(5, 0.0),
+                             .contacts = {{"a", ContactKind::ohmic, {0}}, {"b", ContactKind::ohmic, {4}}}};
+}
+
+}  // namespace
+
+TEST_CASE("device: a general 1D mesh with two regions needs a 1D P4 certificate", "[device]") {
+    SECTION("missing: refused") {
+        const auto r = Device::create(two_region_1d(chain_1d(NiTCAD::mesh::MeshOrigin::graph)));
+        REQUIRE_FALSE(r.has_value());
+        CHECK(r.error().message.find("needs a P4 certificate") != std::string::npos);
+    }
+    SECTION("the transition on a declared point: certified and accepted") {
+        auto d = two_region_1d(chain_1d(NiTCAD::mesh::MeshOrigin::graph));
+        const std::vector<NiTCAD::mesh::InterfacePoint1D> at{{1.5e-4, 0, 1}};
+        const auto cert = NiTCAD::mesh::certify_interfaces_1d(d.mesh, d.node_region, at);
+        REQUIRE(cert.has_value());
+        CHECK(cert->report.cross_faces == 1);
+        d.interface_certificate = *cert;
+        CHECK(Device::create(std::move(d)).has_value());
+    }
+    SECTION("the declared point off the dual face, or undeclared: not certified") {
+        const auto d = two_region_1d(chain_1d(NiTCAD::mesh::MeshOrigin::graph));
+        const std::vector<NiTCAD::mesh::InterfacePoint1D> off{{1.4e-4, 0, 1}};
+        const auto a = NiTCAD::mesh::certify_interfaces_1d(d.mesh, d.node_region, off);
+        REQUIRE_FALSE(a.has_value());
+        CHECK(a.error().code == ErrorCode::degenerate_mesh);
+        const auto b = NiTCAD::mesh::certify_interfaces_1d(d.mesh, d.node_region, {});
+        REQUIRE_FALSE(b.has_value());
+        CHECK(b.error().message.find("no declared interface") != std::string::npos);
+    }
+    SECTION("stale for other regions: refused") {
+        auto d = two_region_1d(chain_1d(NiTCAD::mesh::MeshOrigin::graph));
+        const std::vector<NiTCAD::mesh::InterfacePoint1D> at{{1.5e-4, 0, 1}};
+        d.interface_certificate = *NiTCAD::mesh::certify_interfaces_1d(d.mesh, d.node_region, at);
+        d.node_region = {0, 0, 0, 1, 1};
+        const auto r = Device::create(std::move(d));
+        REQUIRE_FALSE(r.has_value());
+        CHECK(r.error().message.find("stale") != std::string::npos);
+    }
+    SECTION("a verified 1D tensor grid is exempt") {
+        CHECK(Device::create(two_region_1d(chain_1d(NiTCAD::mesh::MeshOrigin::tensor_grid))).has_value());
+        const auto grid = NiTCAD::mesh::make_tensor_grid(std::vector<double>{0, 1e-4, 2e-4, 3e-4, 4e-4});
+        REQUIRE(grid.has_value());
+        CHECK(Device::create(two_region_1d(*grid)).has_value());
+    }
+}
+
+TEST_CASE("mesh: the 1D tensor-grid tag needs the chain structure (U16)", "[device]") {
+    const std::vector<Point> p{{0, 0, 0}, {1, 0, 0}, {2, 0, 0}};
+    const auto tagged = [&](std::vector<Point> pts, std::vector<NiTCAD::mesh::Edge> e) {
+        return Mesh::from_parts(1, std::move(pts), std::vector<double>(3, 1.0), std::move(e), {},
+                                NiTCAD::mesh::MeshOrigin::tensor_grid);
+    };
+    CHECK(tagged(p, {{0, 1, 1, 1}, {1, 2, 1, 1}}).has_value());
+    CHECK_FALSE(tagged(p, {{0, 2, 2, 1}, {1, 2, 1, 1}}).has_value());  // an edge skips node 1
+    CHECK_FALSE(tagged(p, {{0, 1, 1, 1}}).has_value());                // not every neighbour joined
+    CHECK_FALSE(tagged({{0, 0, 0}, {2, 0, 0}, {1, 0, 0}}, {{0, 1, 2, 1}, {1, 2, 1, 1}}).has_value());  // 0-2 skips x = 1
+    CHECK_FALSE(tagged({{0, 0, 0}, {1, 0, 0}, {1, 0, 0}}, {{0, 1, 1, 1}, {1, 2, 1, 1}}).has_value());  // two nodes at x = 1
+    // Untagged, the same graphs are general meshes, which need a certificate for two regions.
+    CHECK(Mesh::from_parts(1, p, std::vector<double>(3, 1.0), {{0, 2, 2, 1}, {1, 2, 1, 1}}, {}).has_value());
+}

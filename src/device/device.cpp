@@ -379,10 +379,10 @@ std::expected<Device, base::Error> Device::create(DeviceDescription description)
                                            "the cells are not those of the mesh",
                                            base::ErrorContext{}});
     }
-    // DECISIONS.md U2: a multi-region device on a mesh that is not a tensor grid (nor 1D, where
-    // every edge lies along x and every dual face is its midpoint: the same reason) needs a P4
+    // DECISIONS.md U2, U16: a multi-region device on a mesh that is not a verified tensor grid
+    // (Mesh::from_parts checks the tag; in 1D also the chain structure) needs a P4
     // certificate issued for this mesh and these node regions.
-    if (description.regions.size() > 1 && description.mesh.dimension() > 1 &&
+    if (description.regions.size() > 1 &&
         description.mesh.origin() != mesh::MeshOrigin::tensor_grid) {
         if (!description.interface_certificate) {
             return std::unexpected(base::Error{

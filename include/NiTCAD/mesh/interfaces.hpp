@@ -101,4 +101,24 @@ struct InterfaceCertificate {
 [[nodiscard]] bool certifies(const InterfaceCertificate& c, const Mesh& mesh,
                              std::span<const std::int32_t> node_region);
 
+
+// P4 in 1D (DECISIONS.md U16): an interface is a point between two regions. In 1D the dual face of
+// an edge is its midpoint, so a mesh establishes P4 when the midpoint of every edge joining two
+// regions lies on a declared point of that pair, within 1e-12 L + 1e-13 X (as P4a), and every
+// pair of regions that meets is declared. A verified 1D tensor grid needs no certificate; any
+// other 1D mesh with more than one region needs this one.
+struct InterfacePoint1D {
+    double x = 0.0;  // [cm]
+    std::int32_t region_a = 0;
+    std::int32_t region_b = 0;
+};
+
+// Errors: invalid_input (the mesh not 1D, node_region not one per node or negative, a point not
+// finite or with equal or negative regions); degenerate_mesh, the rule not established (an edge
+// between regions with no declared pair, or its midpoint off every declared point of its pair;
+// the index is the edge's first node).
+[[nodiscard]] std::expected<InterfaceCertificate, base::Error> certify_interfaces_1d(
+    const Mesh& mesh, std::span<const std::int32_t> node_region,
+    std::span<const InterfacePoint1D> interfaces);
+
 }  // namespace NiTCAD::mesh

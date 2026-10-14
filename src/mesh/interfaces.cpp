@@ -363,4 +363,70 @@ bool certifies(const InterfaceCertificate& c, const Mesh& mesh,
     return c.mesh_digest == graph_digest(mesh) && c.region_digest == region_digest(node_region);
 }
 
+
+std::expected<InterfaceCertificate, base::Error> certify_interfaces_1d(
+    const Mesh& mesh, std::span<const std::int32_t> node_region,
+    std::span<const InterfacePoint1D> interfaces) {
+    using base::ErrorCode;
+    if (mesh.dimension() != 1) {
+        return std::unexpected(error(ErrorCode::invalid_input, "certify_interfaces_1d needs a 1D mesh", std::nullopt));
+    }
+    if (node_region.size() != mesh.node_count()) {
+        return std::unexpected(error(ErrorCode::invalid_input, "node_region needs one region per node", std::nullopt));
+    }
+    for (std::size_t i = 0; i < node_region.size(); ++i) {
+        if (node_region[i] < 0) return std::unexpected(error(ErrorCode::invalid_input, "node region is negative", i));
+    }
+    for (std::size_t k = 0; k < interfaces.size(); ++k) {
+        const InterfacePoint1D& p = interfaces[k];
+        if (!std::isfinite(p.x) || p.region_a < 0 || p.region_b < 0 || p.region_a == p.region_b) {
+            return std::unexpected(error(ErrorCode::invalid_input,
+                                         "interface point not finite, or regions equal or negative", k));
+        }
+    }
+    InterfaceReport report;
+    for (const Edge& e : mesh.edges()) {
+        const std::int32_t ra = node_region[static_cast<std::size_t>(e.first)];
+        const std::int32_t rb = node_region[static_cast<std::size_t>(e.second)];
+        if (ra == rb) continue;
+        const double xa = mesh.points()[static_cast<std::size_t>(e.first)][0];
+        const double xb = mesh.points()[static_cast<std::size_t>(e.second)][0];
+        const double mid = 0.5 * (xa + xb);
+        const double tolerance = flat_relative * e.length + flat_rounding * std::max({std::abs(xa), std::abs(xb)});
+        bool declared = false;
+        double best = std::numeric_limits<double>::infinity();
+        for (const InterfacePoint1D& p : interfaces) {
+            if (!((p.region_a == ra && p.region_b == rb) || (p.region_a == rb && p.region_b == ra))) continue;
+            declared = true;
+            best = std::min(best, std::abs(mid - p.x));
+        }
+        if (!declared) {
+            return std::unexpected(error(ErrorCode::degenerate_mesh,
+                                         "interface rule (P4, 1D): regions " + std::to_string(ra) + " and " +
+                                             std::to_string(rb) + " meet at edge " + pair_text(e.first, e.second) +
+                                             " with no declared interface",
+                                         static_cast<std::size_t>(e.first)));
+        }
+        ++report.cross_faces;
+        report.max_flat_deviation = std::max(report.max_flat_deviation, best / tolerance);
+        if (!(best <= tolerance)) {
+            return std::unexpected(error(ErrorCode::degenerate_mesh,
+                                         "interface rule (P4, 1D): the dual face of edge " + pair_text(e.first, e.second) +
+                                             " (its midpoint) is not on a declared interface",
+                                         static_cast<std::size_t>(e.first), best));
+        }
+    }
+    std::uint64_t h = 0xcbf29ce484222325ULL;
+    digest_word(h, interfaces.size());
+    for (const InterfacePoint1D& p : interfaces) {
+        digest_word(h, std::bit_cast<std::uint64_t>(p.x));
+        digest_word(h, static_cast<std::uint64_t>(static_cast<std::uint32_t>(p.region_a)));
+        digest_word(h, static_cast<std::uint64_t>(static_cast<std::uint32_t>(p.region_b)));
+    }
+    return InterfaceCertificate{.mesh_digest = graph_digest(mesh),
+                                .region_digest = region_digest(node_region),
+                                .interfaces_digest = h,
+                                .report = report};
+}
+
 }  // namespace NiTCAD::mesh

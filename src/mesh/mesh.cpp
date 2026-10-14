@@ -146,6 +146,30 @@ std::expected<Mesh, base::Error> Mesh::from_parts(int dimension, std::vector<Poi
         }
     }
 
+    // A 1D tensor grid (DECISIONS.md U16): in 1D every edge is axis-aligned, so the tag also needs
+    // the chain structure that makes region transitions fall on dual faces: nodes at strictly
+    // increasing x, and exactly the n - 1 edges joining x-consecutive nodes.
+    if (origin == MeshOrigin::tensor_grid && dimension == 1) {
+        std::vector<std::size_t> order(points.size());
+        for (std::size_t i = 0; i < order.size(); ++i) order[i] = i;
+        std::ranges::sort(order, [&](std::size_t l, std::size_t r) { return points[l][0] < points[r][0]; });
+        std::vector<std::size_t> rank(points.size());
+        for (std::size_t k = 0; k < order.size(); ++k) rank[order[k]] = k;
+        bool chain = edges.size() + 1 == points.size();
+        for (std::size_t k = 1; k < order.size() && chain; ++k) chain = points[order[k - 1]][0] < points[order[k]][0];
+        for (const Edge& edge : edges) {
+            const std::size_t ra = rank[static_cast<std::size_t>(edge.first)];
+            const std::size_t rb = rank[static_cast<std::size_t>(edge.second)];
+            chain = chain && (ra + 1 == rb || rb + 1 == ra);
+        }
+        if (!chain) {
+            return std::unexpected(base::Error{base::ErrorCode::invalid_input,
+                                               "a 1D tensor-grid mesh must be a chain: strictly increasing x, edges "
+                                               "joining x-consecutive nodes only",
+                                               std::nullopt});
+        }
+    }
+
     Mesh mesh;
     mesh.dimension_ = dimension;
     mesh.origin_ = origin;
