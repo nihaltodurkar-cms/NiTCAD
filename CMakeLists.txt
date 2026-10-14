@@ -327,6 +327,7 @@ add_executable(nitcad_solve_test
   tests/solve/heavy_doping_test.cpp
   tests/solve/mos_test.cpp
   tests/solve/mosfet_test.cpp
+  tests/solve/unstructured_test.cpp
   tests/solve/field_mobility_test.cpp
   tests/solve/fermi_dirac_test.cpp
   tests/solve/heterojunction_test.cpp
@@ -353,4 +354,6 @@ if(CMAKE_BUILD_TYPE STREQUAL "Release")
   add_test(NAME solve_breakdown COMMAND nitcad_solve_test "[breakdown]")
   # And the slow band-to-band gates (tests/solve/btbt_test.cpp, hidden tag [.btbt]).
   add_test(NAME solve_btbt COMMAND nitcad_solve_test "[btbt]")
+  # And the device gates on generated 2D meshes (tests/solve/unstructured_test.cpp, [.unstructured]).
+  add_test(NAME solve_unstructured COMMAND nitcad_solve_test "[unstructured]")
 endif()
