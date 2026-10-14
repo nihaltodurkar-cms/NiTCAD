@@ -536,6 +536,110 @@ has no kept cross face, that point carries no interface measure.
   - A defect found and fixed: boundary nodes were filled between lattice columns more than h apart, breaking the
     lattice. Hidden in the MOSFET (columns closer than h), found by the new lattice test.
 
+**3D generator, commit 6 (owner approval 2026-10-15; commits `c12915a`, `86621b7`, `9da439a`, `3c56d24` and the 6e
+gates):** Owner choices for this commit: full M6 (convex polyhedra), planar interfaces with no junction lines, and a
+z-uniform convergence gate against a 2D reference.
+
+- **6a, `Triangulation3D`** (`src/mesh/triangulation3d.hpp`):
+  - Bowyer–Watson insertion with the exact orient3d and the perturbed insphere, and a visibility walk.
+  - BRIO insertion order: splitmix64 rounds, with a 3D Hilbert order inside each round (Skilling).
+  - It equals the brute-force perturbed Delaunay on a lattice where every tie occurs.
+  - 1e5 points take 4.2 s (Release).
+  - Defect found and fixed: a cavity slot reused before its outside neighbours were relinked.
+- **6b, single region** (`generate_mesh(Geometry3D, MeshOptions3D)`):
+  - Exact validation of convexity, closure and planar, convex faces; non-convex domains are refused (U7).
+  - Refinement follows Shewchuk:
+    - encroached domain-edge subsegments are split, with concentric shells at vertices;
+    - encroached subfacets are split at their circumcentres;
+    - tetrahedra whose radius–edge ratio exceeds the bound, or whose circumradius exceeds √(3/8)·h, get their
+      circumcentre unless it encroaches.
+  - **Change from the plan:** faces are not meshed by the 2D generator. Each face keeps a 2D Delaunay triangulation of
+    its nodes, in face coordinates and exact on axis-aligned faces, and that triangulation defines its subfacets. The
+    public 2D generator is unchanged, and the face and 3D nodes are one set.
+  - Extraction:
+    - drops the super-vertex tetrahedra and any tetrahedron whose four vertices lie on one face;
+    - checks that every exposed triangle lies on one face and that the volume matches to 1e-12;
+    - then runs `make_dual_mesh`.
+  - **Oblique faces pass**, including an irregular tetrahedron at device scale whose split points round off its lines and
+    planes. The pre-stated fallback (refuse oblique faces, U17) is not needed, and no flat tetrahedron occurred.
+- **6c, face patches (M9)** (`PolyhedronFace::patches`):
+  - A conforming tiling of a face. Its interior edges become constrained subsegments, so every boundary triangle lies in
+    one patch and patch areas are exact.
+  - **Change from M9:** M9 said patch edges were straddled and accurate to s. Conforming edges make them exact, as the
+    2D generator already does at patch ends.
+  - Gate: every node's patch area matches `make_dual_mesh` 2D on that patch's triangles to 1e-12. Cases:
+    - contact strips;
+    - a contact inside a face;
+    - a slanted patch edge.
+- **6d, planar interfaces (M7)** (`Geometry3D::interfaces` and `regions`):
+  - **Validation:**
+    - each plane stays at least 4 s from every vertex;
+    - it meets every face it cuts at 60–120°, checked before its traces;
+    - each trace meets the domain edges it crosses at 60–120° and is at least 6 s long;
+    - no cut face carries patches (deferred);
+    - planes never meet in the domain and stay at least 4 s apart;
+    - there is one seed per slab.
+  - **Nodes:**
+    - on each crossed edge, nodes at ±s/2 from the crossing (the segment between them is never split);
+    - along each trace in a face, pairs at ±s/2 within the face, graded from each end (1.5 s, 3 s);
+    - on the polygon inset by 1.5 s, a pair set P from the 2D generator, with nodes at p ± (s/2)·n.
+  - **Band:** b = √(h_P²/3 + s²/4). Inside it:
+    - no circumcentre is inserted;
+    - an encroached subfacet gets a new trace pair;
+    - tetrahedra made only of interface nodes are exempt.
+  - The result carries the P4 certificate. `Device::create` refuses the mesh when the certificate is missing or stale.
+  - P4b measured at the traces (s = 0.02, h = 0.25, unit cube), with regression bounds taken from the measurements:
+
+    | Configuration | Flat deviation | Corner deviation | Bound |
+    |---|---|---|---|
+    | Horizontal plane | 0 | 0 | 1e-12 s |
+    | Thin middle layer (5 s) | 0 | 0 | 1e-12 s |
+    | Oblique plane | 3.75e-3 of tolerance | 0.180 s | 0.19 s |
+
+- **6e, gates** (predefined; none set after a run):
+  - **Linear field:** conjugate gradients on the generated dual give the linear potential to 1e-12.
+  - **Kuhn equivalence:** a solve on Kuhn-split boxes matches the tensor diode solve to 1e-12 in potential and current.
+  - **io:** a 3D generated mesh round-trips with its patches, regions, certificate and the 3D report (optional records).
+  - **Convergence** (z-uniform doping; reference a 2D tensor solve 4× finer than the finest mesh; `[.unstructured3d]`,
+    beyond the ctest node budget of M13, run explicitly):
+
+    | Mesh | Nodes | H1 orders | L2 orders | Current orders |
+    |---|---|---|---|---|
+    | Generated | 391, 2030, 13057 | 1.78, 1.32 | 1.63, 2.05 | 1.63, 2.18 |
+    | Perturbed lattice (sliver stress, M10) | 132, 693, 4305 | 2.12, 1.81 | 2.62, 2.31 | 2.22, 2.01 |
+
+    - The generated meshes have 6, 13 and 133 slivers, with minimum dihedral angles down to 0.65°. The perturbed
+      lattices have 0, 33 and 290, down to 0.24°. Slivers did not degrade any gate, which M10 (ii) predicts and the run
+      now measures.
+    - One of my own test assertions failed: every stress mesh must have slivers. The coarsest lattice has one cell
+      through z, so no interior point moves and it has none. I narrowed that check to meshes with interior points. The
+      gates were unchanged.
+- **Mutations** (each run against the tests; "equivalent" means it survived every measured case, with the reason):
+
+  | Commit | Caught | Equivalent in the measured cases |
+  |---|---|---|
+  | 6a | 3 of 3 | — |
+  | 6b | 2 of 4, plus a fault injection caught by the postcondition and, with the postcondition removed, by the tests | skip subsegment encroachment (subfacet splitting splits the subsegments it encroaches); remove the flat-tetrahedron drop (none occurs) |
+  | 6c | 4 of 5 | skip patch-segment encroachment (same reason as 6b) |
+  | 6d | 6 | band rule alone and pair-only exemption alone (they mask each other; caught together); trace pairs at ±3s/4 (still mirror-symmetric, so exact); trace-edge rule loosened (on these shapes the face rule refuses the same planes) |
+  | 6e (io) | 2 of 2 | — |
+
+- **Performance** (Release, budget targets, M13):
+  - 128,671 nodes take 23 s. Of that, `make_dual_mesh`'s exact circumcentres (M1) take 17.7 s and generation about
+    5.5 s. The 15 s per 1e5 target is not met.
+  - Making it faster needs a filtered circumcentre that certifies the correctly rounded result, a change to M1 (U18).
+  - The Debug mesh tests grew to 61 s; the 3D tests add about 33 s.
+- **Literature (U6), checked 2026-10-15:**
+  - **Confirmed:** Gärtner–Si–Fuhrmann 2010 (Comput. Math. Math. Phys. 50(1)). Its abstract says 3D boundary-conforming
+    Delaunay meshes can be generated when the smallest input angle is at least arccos(1/3) ≈ 70.53°, and that arbitrary
+    2D polygonal regions can be meshed.
+  - **Bibliography only, content not reached:** Shewchuk 1998 (SoCG, pp. 86–95) gives the radius–edge bound of 2, but
+    the input-angle value could not be read from any source reached. Devillers–Teillaud 2011 (CGTA 44:160–168) and
+    Amenta–Choi–Rote 2003 (SoCG, pp. 211–219) are cited by CGAL.
+  - **Not reached:** the 20.7° of Shewchuk 2002, and Eymard–Gallouët–Herbin.
+  - These stay "cited, to verify".
+  - Termination in 3D is therefore not claimed from Shewchuk 1998. Every run is capped by `max_nodes`.
+
 **Gates (predefined, so a threshold is never set after the run):**
 - **Tensor equivalence:** split rectangles and Kuhn-split boxes give exactly `make_tensor_grid`'s volumes, couplings
   and areas to 1e-13 relative, with the diagonals dropped. Their diode solve matches the tensor run to 1e-12.
@@ -572,15 +676,17 @@ has no kept cross face, that point carries no interface measure.
 **Unresolved (need a ruling or carried as limits):**
 - U1 MOSFET factor k = 1.5: a judgement, not derived. The owner may set it.
 - U2 **Ruled 2026-10-14** (above): multi-region devices on non-tensor meshes need a valid P4 certificate.
-- U3 Termination is unproven for the band and pair modifications (M7, M8), for 3D convex domains with input angles
-  under the M6/M11 hypotheses, and for options beyond the cited bounds. Capped (M11) and reported.
+- U3 Termination is unproven for the band and pair modifications (M7, M8), for 3D convex domains (the input-angle
+  hypothesis of Shewchuk 1998 is not confirmed, U6), and for options beyond the cited bounds. Capped (M11) and reported;
+  every 3D test case terminated well below its cap.
 - U4 Corner-zone accuracy (M8) has no a-priori bound; it is measured and refused above s (P4b). Measured in round 2: 0 at a
   right angle without corner nodes, 0.80 s with bisector nodes, 0.95 s at 60°, 0.31 s at a T-junction.
 - U5 Slivers affect future simplex-based consumers (M10 iii); removal needs a power-diagram dual (its own decision).
 - U6 Literature hypotheses to confirm against the papers before `ARCHITECTURE.md` cites them: Gärtner–Si–Fuhrmann 2010
   (70.53°, 2D arbitrary polygons); Shewchuk 1998 (radius–edge ≤ 2, input-angle threshold 60° or 90°); Shewchuk 2002
   (20.7°, concentric shells); Devillers–Teillaud 2011; Amenta–Choi–Rote 2003; Eymard–Gallouët–Herbin.
-- U7 Non-convex 3D domains (fins, mesas) are deferred.
+- U7 Non-convex 3D domains (fins, mesas) are deferred. So are 3D interface junction lines and bends (owner choice
+  2026-10-15), interfaces cutting faces that carry patches, and 3D structured boundary layers.
 - U8 The L2 order gate (1.5) is a judgement where theory gives no rate.
 - U9 Region-only straddling: doping steps (abrupt junctions not on a region boundary) are not straddled, so an abrupt
   junction is resolved only to h. "Doping interfaces" with pairs could be added later.
@@ -595,7 +701,11 @@ has no kept cross face, that point carries no interface measure.
 - U15 **Resolved 2026-10-14**: no bisector nodes; regression tests per measured configuration (above).
 - U16 **Resolved 2026-10-14**: only verified 1D tensor chains are exempt; other 1D meshes need certify_interfaces_1d.
 - U10 Budgets (M13) are targets. If the 3D generator misses its gates or budgets within the unit, the PR carries 2D plus
-  3D import and says so (unchanged from revision 1).
+  3D import and says so (unchanged from revision 1). Result: every 3D gate passed; the 3D speed target was
+  missed (23 s at 1.29e5 nodes, U18).
+- U17 (pre-stated fallback for oblique faces) **not needed**: oblique faces pass.
+- U18 3D import checks are slow: `make_dual_mesh` spends 17.7 s of 23 s at 1.29e5 nodes on exact circumcentres (M1). A
+  filtered circumcentre that certifies the correctly rounded result would keep M1's guarantee; it needs its own ruling.
 
 ---
 
