@@ -9,6 +9,7 @@
 #include <optional>
 #include <set>
 #include <string>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -135,6 +136,7 @@ struct Subsegment {
     int edge = 0;  // a domain edge, or (a patch segment) the domain edge count plus its constraint
     bool alive = true;
     int face = -1;  // a patch segment: its face; -1 for a domain edge
+    bool locked = false;  // the segment across an interface crossing: never split (its midpoint is on it)
 };
 
 struct Generator3D {
@@ -156,6 +158,170 @@ struct Generator3D {
     // face's plane and in the face; the polygons conforming (every edge either on the face's
     // boundary or shared whole, in the opposite direction, by exactly one other polygon of the
     // face) and their areas summing to the face's (1e-12). Patch names unique among all patches.
+    // Planar interfaces (6d).
+    struct Plane {
+        std::array<Point, 3> p{};
+        Point n{};       // unit normal, toward orient3d(p, x) > 0
+        Point u{}, w{};  // an orthonormal frame in the plane
+        std::vector<Point> polygon;     // the plane within the domain, in order
+        std::vector<int> polygon_edge;  // the domain edge each polygon vertex lies on
+        std::int32_t below = -1;        // the regions on the negative and positive sides
+        std::int32_t above = -1;
+    };
+    std::vector<Plane> planes;
+    double res = 0.0;  // the interface resolution s
+    std::map<std::vector<int>, std::int32_t> slab_region;
+
+    [[nodiscard]] static double signed_distance(const Plane& q, const Point& x) {
+        return detail::dot3(detail::sub(x, q.p[0]), q.n);
+    }
+    [[nodiscard]] std::vector<int> slab_of(const Point& x) const {
+        std::vector<int> key;
+        for (const Plane& q : planes) key.push_back(predicates::orient3d(q.p[0], q.p[1], q.p[2], x));
+        return key;
+    }
+    [[nodiscard]] std::optional<std::int32_t> region_at(const Point& x) const {
+        if (planes.empty()) return g.region;
+        const auto it = slab_region.find(slab_of(x));
+        if (it == slab_region.end()) return std::nullopt;
+        return it->second;
+    }
+
+    std::optional<base::Error> read_interfaces() {
+        const ConvexPolyhedron& d = g.domain;
+        if (g.interfaces.empty()) {
+            if (!g.regions.empty()) return invalid("region seeds are only for domains with interfaces");
+            return std::nullopt;
+        }
+        res = o.interface_resolution;
+        if (!(std::isfinite(res) && res > 0.0)) return invalid("interface_resolution must be finite and positive with interfaces");
+        for (std::size_t k = 0; k < g.interfaces.size(); ++k) {
+            const auto& pts = g.interfaces[k].points;
+            for (const Point& x : pts) {
+                if (!std::isfinite(x[0]) || !std::isfinite(x[1]) || !std::isfinite(x[2])) return invalid("interface point not finite", k);
+            }
+            if (collinear(pts[0], pts[1], pts[2])) return invalid("interface points are collinear", k);
+            Plane q;
+            q.p = pts;
+            const Point n = detail::cross(detail::sub(pts[1], pts[0]), detail::sub(pts[2], pts[0]));
+            q.n = detail::scale(1.0 / std::sqrt(detail::dot3(n, n)), n);
+            const Point e = detail::sub(pts[1], pts[0]);
+            q.u = detail::scale(1.0 / std::sqrt(detail::dot3(e, e)), e);
+            q.w = detail::cross(q.n, q.u);
+            bool neg = false;
+            bool pos = false;
+            for (const Point& v : d.vertices) {
+                const double dv = signed_distance(q, v);
+                if (!(std::abs(dv) >= 4.0 * res)) return invalid("an interface passes within 4 s of a polyhedron vertex", k);
+                (dv < 0.0 ? neg : pos) = true;
+            }
+            if (!neg || !pos) return invalid("an interface does not cut the domain", k);
+            // The polygon: the crossings of the domain edges, ordered by angle in the plane.
+            std::vector<std::pair<Point, int>> crossings;
+            Point centre{0, 0, 0};
+            for (std::size_t ei = 0; ei < edges.size(); ++ei) {
+                const Point& a = d.vertices[edges[ei].a];
+                const Point& b = d.vertices[edges[ei].b];
+                const double da = signed_distance(q, a);
+                const double db = signed_distance(q, b);
+                if ((da < 0.0) == (db < 0.0)) continue;
+                const double t = da / (da - db);
+                Point x{};
+                for (std::size_t c = 0; c < 3; ++c) x[c] = a[c] == b[c] ? a[c] : a[c] + t * (b[c] - a[c]);
+                crossings.emplace_back(x, static_cast<int>(ei));
+                centre = detail::add(centre, x);
+            }
+            centre = detail::scale(1.0 / static_cast<double>(crossings.size()), centre);
+            std::vector<std::tuple<double, Point, int>> around;
+            for (const auto& [x, ei] : crossings) {
+                const Point r = detail::sub(x, centre);
+                around.emplace_back(std::atan2(detail::dot3(r, q.w), detail::dot3(r, q.u)), x, ei);
+            }
+            std::ranges::sort(around);
+            for (const auto& [angle, x, ei] : around) {
+                q.polygon.push_back(x);
+                q.polygon_edge.push_back(ei);
+            }
+            // The faces it cuts: first no patches there and the angle with every cut face, then each
+            // trace against the crossed edges and its length.
+            std::vector<std::size_t> cut;
+            for (std::size_t fi = 0; fi < faces.size(); ++fi) {
+                bool fneg = false;
+                bool fpos = false;
+                for (const std::size_t v : faces[fi].vid) (signed_distance(q, d.vertices[v]) < 0.0 ? fneg : fpos) = true;
+                if (fneg && fpos) cut.push_back(fi);
+            }
+            const auto face_normal = [&](const Face& f) {
+                const Point nf = detail::cross(detail::sub(f.plane[1], f.plane[0]), detail::sub(f.plane[2], f.plane[0]));
+                return detail::scale(1.0 / std::sqrt(detail::dot3(nf, nf)), nf);
+            };
+            for (const std::size_t fi : cut) {
+                if (!d.faces[fi].patches.empty()) return invalid("an interface cuts a face that carries patches (deferred)", k);
+                if (!(std::abs(detail::dot3(face_normal(faces[fi]), q.n)) <= 0.5)) {
+                    return invalid("an interface meets a face at under 60 degrees", k);
+                }
+            }
+            for (const std::size_t fi : cut) {
+                const Point nf = face_normal(faces[fi]);
+                Point t = detail::cross(q.n, nf);
+                t = detail::scale(1.0 / std::sqrt(detail::dot3(t, t)), t);
+                std::vector<Point> ends;
+                for (std::size_t c = 0; c < q.polygon.size(); ++c) {
+                    const DomainEdge& de = edges[static_cast<std::size_t>(q.polygon_edge[c])];
+                    if (de.faces[0] != static_cast<int>(fi) && de.faces[1] != static_cast<int>(fi)) continue;
+                    Point ed = detail::sub(d.vertices[de.b], d.vertices[de.a]);
+                    ed = detail::scale(1.0 / std::sqrt(detail::dot3(ed, ed)), ed);
+                    if (!(std::abs(detail::dot3(ed, t)) <= 0.5)) {
+                        return invalid("an interface trace meets a domain edge at under 60 degrees", k);
+                    }
+                    ends.push_back(q.polygon[c]);
+                }
+                if (ends.size() != 2 || !(dist3(ends[0], ends[1]) >= 6.0 * res)) {
+                    return invalid("an interface trace on a face is shorter than 6 s", k);
+                }
+            }
+            planes.push_back(std::move(q));
+        }
+        // No two planes meet in the domain or come within 4 s: each polygon on one side of every
+        // other plane (the distance is linear on the polygon, so its vertices bound it).
+        for (std::size_t a = 0; a < planes.size(); ++a) {
+            for (std::size_t b = 0; b < planes.size(); ++b) {
+                if (a == b) continue;
+                int side = 0;
+                for (const Point& x : planes[a].polygon) {
+                    const double dx = signed_distance(planes[b], x);
+                    const int sx = dx < 0.0 ? -1 : 1;
+                    if (!(std::abs(dx) >= 4.0 * res) || (side != 0 && sx != side)) {
+                        return invalid("two interfaces meet in the domain or come within 4 s (no junction lines)", a);
+                    }
+                    side = sx;
+                }
+            }
+        }
+        // Regions: one seed per slab, k + 1 slabs, different regions across each plane.
+        for (std::size_t k = 0; k < g.regions.size(); ++k) {
+            const RegionSeed& r = g.regions[k];
+            if (r.region < 0) return invalid("region seed: region < 0", k);
+            if (!inside(r.p)) return invalid("region seed outside the domain", k);
+            const std::vector<int> key = slab_of(r.p);
+            if (std::ranges::find(key, 0) != key.end()) return invalid("region seed on an interface", k);
+            if (!slab_region.emplace(key, r.region).second) return invalid("two region seeds in one slab", k);
+        }
+        if (slab_region.size() != planes.size() + 1) return invalid("every slab needs one region seed");
+        for (std::size_t k = 0; k < planes.size(); ++k) {
+            for (const auto& [key, region] : slab_region) {
+                std::vector<int> other = key;
+                other[k] = -other[k];
+                const auto it = slab_region.find(other);
+                if (it == slab_region.end()) continue;
+                if (it->second == region) return invalid("the regions on the two sides of an interface must differ", k);
+                (key[k] < 0 ? planes[k].below : planes[k].above) = region;
+            }
+            if (planes[k].below < 0 || planes[k].above < 0) return invalid("an interface separates no two slabs", k);
+        }
+        return std::nullopt;
+    }
+
     std::optional<base::Error> read_patches() {
         const ConvexPolyhedron& d = g.domain;
         std::map<std::pair<std::size_t, std::size_t>, int> edge_index;
@@ -254,6 +420,9 @@ struct Generator3D {
         }
         if (!(std::isfinite(o.radius_edge) && o.radius_edge >= 1.414)) return invalid("radius_edge must be finite and >= 1.414");
         if (g.region < 0) return invalid("region must be >= 0");
+        for (const double h : o.region_max_size) {
+            if (!(std::isfinite(h) && h >= 0.0)) return invalid("region_max_size entries must be finite and >= 0");
+        }
         if (o.max_nodes < 4) return invalid("max_nodes must be at least 4");
         return std::nullopt;
     }
@@ -374,8 +543,20 @@ struct Generator3D {
         return true;
     }
 
-    [[nodiscard]] double size_at(const Point& p) const {
+    [[nodiscard]] double region_size(std::int32_t r) const {
         double h = o.max_size;
+        if (r >= 0 && static_cast<std::size_t>(r) < o.region_max_size.size() && o.region_max_size[static_cast<std::size_t>(r)] > 0.0) {
+            h = std::min(h, o.region_max_size[static_cast<std::size_t>(r)]);
+        }
+        return h;
+    }
+
+    [[nodiscard]] double size_at(const Point& p) const {
+        const auto r = region_at(p);
+        double h = r ? region_size(*r) : o.max_size;
+        if (!r) {
+            for (const auto& [key, region] : slab_region) h = std::min(h, region_size(region));
+        }
         for (const SizeBox& b : o.boxes) {
             if (p[0] >= b.lo[0] && p[0] <= b.hi[0] && p[1] >= b.lo[1] && p[1] <= b.hi[1] && p[2] >= b.lo[2] &&
                 p[2] <= b.hi[2]) {
@@ -407,6 +588,7 @@ std::expected<GeneratedMesh, base::Error> generate_mesh(const Geometry3D& geomet
     if (auto e = gen.validate_options()) return std::unexpected(*e);
     if (auto e = gen.read_polyhedron()) return std::unexpected(*e);
     if (auto e = gen.read_patches()) return std::unexpected(*e);
+    if (auto e = gen.read_interfaces()) return std::unexpected(*e);
     const ConvexPolyhedron& d = geometry.domain;
     if (d.vertices.size() > options.max_nodes) {
         return std::unexpected(base::Error{ErrorCode::resource_exhausted, "max_nodes reached", std::nullopt});
@@ -522,6 +704,131 @@ std::expected<GeneratedMesh, base::Error> generate_mesh(const Geometry3D& geomet
         vertex_at[q] = insert(q, {de.faces[0], de.faces[1]}, {e}, -1);
     }
     for (const auto& [fi, q] : gen.face_pins) vertex_at[q] = insert(q, {fi}, {}, -1);
+    const int corner_end = static_cast<int>(tri.vertex_count());  // polyhedron and patch vertices end here
+    // Interface nodes (M7, 6d).
+    std::vector<char> interface_node(tri.vertex_count(), 0);
+    const auto mark_interface = [&](int v) {
+        if (static_cast<std::size_t>(v) >= interface_node.size()) interface_node.resize(static_cast<std::size_t>(v) + 1, 0);
+        interface_node[static_cast<std::size_t>(v)] = 1;
+    };
+    struct Trace {
+        int plane;
+        int face;
+        Point start;  // on a domain edge
+        Point dir;    // unit, along the trace
+        Point normal; // unit, in the face, across the trace
+        double length;
+        std::vector<double> params;  // the pair positions along the trace
+    };
+    std::vector<Trace> traces;
+    std::vector<std::pair<int, int>> protected_ends;  // the two crossing nodes of each crossed edge
+    double band = 0.0;
+    const auto snap = [&](const Face& f, Point p) {
+        if (f.axis >= 0) p[static_cast<std::size_t>(f.axis)] = f.plane[0][static_cast<std::size_t>(f.axis)];
+        return p;
+    };
+    for (std::size_t k = 0; k < gen.planes.size(); ++k) {
+        const auto& q = gen.planes[k];
+        const double hp = std::min({gen.region_size(q.below), gen.region_size(q.above), 4.0 * gen.res});
+        band = std::max(band, std::sqrt(hp * hp / 3.0 + gen.res * gen.res / 4.0));
+        // On each crossed domain edge: nodes at +- s/2 from the crossing.
+        for (std::size_t c = 0; c < q.polygon.size(); ++c) {
+            const int e = q.polygon_edge[c];
+            const DomainEdge& de = gen.edges[static_cast<std::size_t>(e)];
+            const Point& A = d.vertices[de.a];
+            const Point& B = d.vertices[de.b];
+            const Point ed = detail::scale(1.0 / dist3(A, B), detail::sub(B, A));
+            std::array<int, 2> ends{};
+            for (std::size_t side = 0; side < 2; ++side) {
+                Point x = detail::add(q.polygon[c], detail::scale(side == 0 ? -0.5 * gen.res : 0.5 * gen.res, ed));
+                for (std::size_t a = 0; a < 3; ++a) {
+                    if (A[a] == B[a]) x[a] = A[a];
+                }
+                ends[side] = insert(x, {de.faces[0], de.faces[1]}, {e}, -1);
+                vertex_at[x] = ends[side];
+                gen.edge_pins.emplace_back(e, x);
+                mark_interface(ends[side]);
+            }
+            protected_ends.emplace_back(std::min(ends[0], ends[1]), std::max(ends[0], ends[1]));
+        }
+        // Along each trace in a cut face: pairs at +- s/2 within the face, graded from each end.
+        for (std::size_t fi = 0; fi < gen.faces.size(); ++fi) {
+            const Face& f = gen.faces[fi];
+            std::vector<Point> ends;
+            for (std::size_t c = 0; c < q.polygon.size(); ++c) {
+                const DomainEdge& de = gen.edges[static_cast<std::size_t>(q.polygon_edge[c])];
+                if (de.faces[0] == static_cast<int>(fi) || de.faces[1] == static_cast<int>(fi)) ends.push_back(q.polygon[c]);
+            }
+            if (ends.size() != 2) continue;
+            Trace tr;
+            tr.plane = static_cast<int>(k);
+            tr.face = static_cast<int>(fi);
+            tr.start = ends[0];
+            tr.length = dist3(ends[0], ends[1]);
+            tr.dir = detail::scale(1.0 / tr.length, detail::sub(ends[1], ends[0]));
+            Point nf = detail::cross(detail::sub(f.plane[1], f.plane[0]), detail::sub(f.plane[2], f.plane[0]));
+            Point m = detail::cross(nf, tr.dir);
+            tr.normal = detail::scale(1.0 / std::sqrt(detail::dot3(m, m)), m);
+            const double L = tr.length;
+            const double s = gen.res;
+            std::vector<double> at{1.5 * s, 3.0 * s};
+            const auto intervals = static_cast<int>(std::ceil((L - 6.0 * s) / hp));
+            for (int i = 1; i < intervals; ++i) at.push_back(3.0 * s + (L - 6.0 * s) * i / intervals);
+            at.push_back(L - 3.0 * s);
+            at.push_back(L - 1.5 * s);
+            std::ranges::sort(at);
+            at.erase(std::unique(at.begin(), at.end(), [&](double x, double y) { return y - x < 0.25 * s; }), at.end());
+            for (const double t : at) {
+                const Point c = detail::add(tr.start, detail::scale(t, tr.dir));
+                for (const double sign : {-0.5, 0.5}) {
+                    const Point x = snap(f, detail::add(c, detail::scale(sign * s, tr.normal)));
+                    const int v = insert(x, {static_cast<int>(fi)}, {}, -1);
+                    mark_interface(v);
+                }
+            }
+            tr.params = at;
+            traces.push_back(std::move(tr));
+        }
+        // The pair set P on the polygon inset by 1.5 s, from the 2D generator.
+        std::vector<Point> local;
+        for (const Point& x : q.polygon) {
+            const Point r = detail::sub(x, q.p[0]);
+            local.push_back({detail::dot3(r, q.u), detail::dot3(r, q.w), 0.0});
+        }
+        std::vector<Point> inset;
+        const std::size_t nv = local.size();
+        for (std::size_t i = 0; i < nv; ++i) {
+            // The offset lines of the edges into and out of vertex i, moved 1.5 s inward (the
+            // polygon is counterclockwise in (u, w)).
+            const auto offset_line = [&](std::size_t a, std::size_t b) {
+                const Point dd = detail::sub(local[b], local[a]);
+                const double len = std::hypot(dd[0], dd[1]);
+                const Point in{-dd[1] / len, dd[0] / len, 0.0};
+                return std::pair{detail::add(local[a], detail::scale(1.5 * gen.res, in)), dd};
+            };
+            const auto [p1, d1] = offset_line((i + nv - 1) % nv, i);
+            const auto [p2, d2] = offset_line(i, (i + 1) % nv);
+            const double den = d1[0] * d2[1] - d1[1] * d2[0];
+            const double t = ((p2[0] - p1[0]) * d2[1] - (p2[1] - p1[1]) * d2[0]) / den;
+            inset.push_back({p1[0] + t * d1[0], p1[1] + t * d1[1], 0.0});
+        }
+        MeshOptions2D o2;
+        o2.max_size = hp;
+        o2.max_nodes = options.max_nodes;
+        const auto pairs = generate_mesh(Geometry2D{{RegionPolygon{inset, 0}}, {}}, o2);
+        if (!pairs) {
+            return std::unexpected(invalid("the pair set of an interface could not be meshed: " + pairs.error().message, k));
+        }
+        for (const Point& a : pairs->simplices.points) {
+            const Point x = detail::add(q.p[0], detail::add(detail::scale(a[0], q.u), detail::scale(a[1], q.w)));
+            for (const double sign : {-0.5, 0.5}) {
+                if (tri.vertex_count() - 4 >= options.max_nodes) {
+                    return std::unexpected(base::Error{ErrorCode::resource_exhausted, "max_nodes reached", std::nullopt});
+                }
+                mark_interface(insert(detail::add(x, detail::scale(sign * gen.res, q.n)), {}, {}, -1));
+            }
+        }
+    }
     // The domain edges' subsegments, between consecutive vertices along each edge.
     for (std::size_t e = 0; e < gen.edges.size(); ++e) {
         const Point& A = d.vertices[gen.edges[e].a];
@@ -533,6 +840,10 @@ std::expected<GeneratedMesh, base::Error> generate_mesh(const Geometry3D& geomet
         }
         std::ranges::sort(along);
         for (std::size_t k = 0; k + 1 < along.size(); ++k) add_segment(along[k].second, along[k + 1].second, static_cast<int>(e));
+    }
+    for (const auto& [a, b] : protected_ends) {
+        const auto it = segment_at.find({a, b});
+        if (it != segment_at.end()) segments[static_cast<std::size_t>(it->second)].locked = true;
     }
     // Patch edges inside faces: constrained subsegments of their face (line ids after the edges).
     const auto edge_count = static_cast<int>(gen.edges.size());
@@ -547,8 +858,13 @@ std::expected<GeneratedMesh, base::Error> generate_mesh(const Geometry3D& geomet
         segments.back().face = con.face;
     }
     // Input vertices (polyhedron and patch vertices) are the centres of concentric shells.
-    const int first_steiner = static_cast<int>(tri.vertex_count());
-    const auto is_corner = [&](int v) { return v >= 4 && v < first_steiner; };
+    const auto is_corner = [&](int v) { return v >= 4 && v < corner_end; };
+    const auto is_interface = [&](int v) {
+        return static_cast<std::size_t>(v) < interface_node.size() && interface_node[static_cast<std::size_t>(v)] != 0;
+    };
+    const auto in_band = [&](const Point& x) {
+        return std::ranges::any_of(gen.planes, [&](const auto& q) { return std::abs(Generator3D::signed_distance(q, x)) < band; });
+    };
 
     const auto common_face = [&](std::initializer_list<int> vs) -> int {
         const std::vector<int>& first = faces_of[static_cast<std::size_t>(*vs.begin())];
@@ -650,6 +966,7 @@ std::expected<GeneratedMesh, base::Error> generate_mesh(const Geometry3D& geomet
 
     const auto split_segment = [&](int k) -> std::optional<base::Error> {
         const Subsegment s = segments[static_cast<std::size_t>(k)];
+        if (s.locked) return std::nullopt;
         const Point& A = tri.point(s.a);
         const Point& B = tri.point(s.b);
         const double len = dist3(A, B);
@@ -701,12 +1018,42 @@ std::expected<GeneratedMesh, base::Error> generate_mesh(const Geometry3D& geomet
         }
         Point c = detail::triangle_circumcentre({tri.point(v[0]), tri.point(v[1]), tri.point(v[2])});
         if (f.axis >= 0) c[static_cast<std::size_t>(f.axis)] = f.plane[0][static_cast<std::size_t>(f.axis)];
+        if (in_band(c)) {
+            // Near a trace: a new trace pair at the projection instead (M11), unless one is already
+            // within s / 2 along the trace; then c itself, judged by P4.
+            Trace* best = nullptr;
+            double best_d = 0.0;
+            for (Trace& tr : traces) {
+                if (tr.face != fi) continue;
+                const double dd = std::abs(Generator3D::signed_distance(gen.planes[static_cast<std::size_t>(tr.plane)], c));
+                if (best == nullptr || dd < best_d) {
+                    best = &tr;
+                    best_d = dd;
+                }
+            }
+            if (best != nullptr) {
+                const double t = std::clamp(detail::dot3(detail::sub(c, best->start), best->dir), 1.5 * gen.res, best->length - 1.5 * gen.res);
+                const bool near = std::ranges::any_of(best->params, [&](double x) { return std::abs(x - t) < 0.5 * gen.res; });
+                if (!near) {
+                    if (node_cap()) return exhausted();
+                    const Point centre = detail::add(best->start, detail::scale(t, best->dir));
+                    for (const double sign : {-0.5, 0.5}) {
+                        const Point x = snap(f, detail::add(centre, detail::scale(sign * gen.res, best->normal)));
+                        mark_interface(insert(x, {fi}, {}, tri.vertex_tet(v[0])));
+                    }
+                    best->params.push_back(t);
+                    ++report.facet_splits;
+                    return std::nullopt;
+                }
+            }
+            ++report.band_facet_points;
+        }
         std::vector<int> hit;
         int nearest = -1;
         double nearest_d = 0.0;
         for (std::size_t k = 0; k < segments.size(); ++k) {
             const Subsegment& s = segments[k];
-            if (!s.alive) continue;
+            if (!s.alive || s.locked) continue;
             const Point& A = tri.point(s.a);
             const Point& B = tri.point(s.b);
             if (s.face >= 0) {
@@ -755,7 +1102,7 @@ std::expected<GeneratedMesh, base::Error> generate_mesh(const Geometry3D& geomet
         if (!segment_queue.empty()) {
             const int k = segment_queue.front();
             segment_queue.pop_front();
-            if (!segments[static_cast<std::size_t>(k)].alive || !segment_encroached(segments[static_cast<std::size_t>(k)])) continue;
+            if (!segments[static_cast<std::size_t>(k)].alive || segments[static_cast<std::size_t>(k)].locked || !segment_encroached(segments[static_cast<std::size_t>(k)])) continue;
             if (auto e = split_segment(k)) return std::unexpected(*e);
             continue;
         }
@@ -783,7 +1130,15 @@ std::expected<GeneratedMesh, base::Error> generate_mesh(const Geometry3D& geomet
         }
         const Point centroid = detail::scale(0.25, detail::add(detail::add(p[0], p[1]), detail::add(p[2], p[3])));
         if (!(radius > bound * shortest) && !(radius > size_factor * gen.size_at(centroid))) continue;
+        if (std::ranges::all_of(tt.v, [&](int x) { return is_interface(x); })) {
+            ++report.exempt_tetrahedra;  // pair nodes only (M11)
+            continue;
+        }
         const Point cc = detail::tetrahedron_circumcentre(p);
+        if (in_band(cc)) {
+            ++report.exempt_tetrahedra;  // no circumcentre in a protected band (M7)
+            continue;
+        }
         const int start = tri.locate(cc, t);
         const auto cav = tri.cavity(cc, start);
         // A candidate that encroaches subsegments or subfacets is not inserted; they are split
@@ -795,7 +1150,7 @@ std::expected<GeneratedMesh, base::Error> generate_mesh(const Geometry3D& geomet
             for (std::size_t i = 0; i < 4; ++i) {
                 for (std::size_t j = i + 1; j < 4; ++j) {
                     const auto it = segment_at.find({std::min(cv[i], cv[j]), std::max(cv[i], cv[j])});
-                    if (it == segment_at.end()) continue;
+                    if (it == segment_at.end() || segments[static_cast<std::size_t>(it->second)].locked) continue;
                     const Point& A = tri.point(cv[i]);
                     const Point& B = tri.point(cv[j]);
                     if (detail::dot3(detail::sub(A, cc), detail::sub(B, cc)) < 0.0 &&
@@ -929,8 +1284,28 @@ std::expected<GeneratedMesh, base::Error> generate_mesh(const Geometry3D& geomet
     report.tetrahedra = sm.cells.size() / 4;
     report.min_dihedral_deg = min_dihedral_all;
     report.max_radius_edge = max_ratio;
-    std::vector<std::int32_t> node_region(sm.points.size(), geometry.region);
-    return GeneratedMesh{std::move(*dual), std::move(sm), std::move(node_region), std::nullopt, report};
+    // Regions: each node's slab, exactly (no node lies on an interface plane).
+    std::vector<std::int32_t> node_region;
+    node_region.reserve(sm.points.size());
+    for (const Point& p : sm.points) {
+        const auto r = gen.region_at(p);
+        if (!r) return std::unexpected(degenerate("a generated node lies on an interface"));
+        node_region.push_back(*r);
+    }
+    for (std::size_t v = 4; v < tri.vertex_count(); ++v) report.interface_nodes += is_interface(static_cast<int>(v)) ? 1 : 0;
+    std::optional<InterfaceCertificate> certificate;
+    if (!gen.planes.empty()) {
+        InterfaceSet set{{}, gen.res};
+        for (const auto& q : gen.planes) set.pieces.push_back({q.polygon, q.below, q.above});
+        auto cert = certify_interfaces(sm, *dual, node_region, set);
+        if (!cert) {
+            return std::unexpected(base::Error{ErrorCode::degenerate_mesh,
+                                               "the generated mesh did not meet P4: " + cert.error().message,
+                                               cert.error().context});
+        }
+        certificate = std::move(*cert);
+    }
+    return GeneratedMesh{std::move(*dual), std::move(sm), std::move(node_region), std::move(certificate), report};
 }
 
 }  // namespace NiTCAD::mesh

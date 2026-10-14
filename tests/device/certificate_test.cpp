@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "NiTCAD/device/device.hpp"
+#include "NiTCAD/mesh/generate.hpp"
 #include "NiTCAD/mesh/interfaces.hpp"
 #include "NiTCAD/mesh/simplex_mesh.hpp"
 #include "NiTCAD/mesh/tensor_grid.hpp"
@@ -236,4 +237,46 @@ TEST_CASE("mesh: the 1D tensor-grid tag needs the chain structure (U16)", "[devi
     CHECK_FALSE(tagged({{0, 0, 0}, {1, 0, 0}, {1, 0, 0}}, {{0, 1, 1, 1}, {1, 2, 1, 1}}).has_value());  // two nodes at x = 1
     // Untagged, the same graphs are general meshes, which need a certificate for two regions.
     CHECK(Mesh::from_parts(1, p, std::vector<double>(3, 1.0), {{0, 2, 2, 1}, {1, 2, 1, 1}}, {}).has_value());
+}
+
+TEST_CASE("device: a generated 3D mesh with a planar interface carries its certificate (6d)", "[device]") {
+    using namespace NiTCAD::mesh;
+    Geometry3D g;
+    g.domain.vertices = {{0, 0, 0}, {1, 0, 0}, {1, 1, 0}, {0, 1, 0}, {0, 0, 1}, {1, 0, 1}, {1, 1, 1}, {0, 1, 1}};
+    g.domain.faces = {{{0, 3, 7, 4}, "x_min"}, {{1, 2, 6, 5}, "x_max"}, {{0, 1, 5, 4}, "y_min"},
+                      {{3, 2, 6, 7}, "y_max"}, {{0, 1, 2, 3}, "bottom"}, {{4, 5, 6, 7}, "top"}};
+    g.interfaces = {InterfacePlane{{Point{0, 0, 0.5}, Point{1, 0, 0.5}, Point{0, 1, 0.5}}}};
+    g.regions = {{{0.5, 0.5, 0.25}, 0}, {{0.5, 0.5, 0.75}, 1}};
+    MeshOptions3D o;
+    o.max_size = 0.3;
+    o.interface_resolution = 0.03;
+    const auto m = generate_mesh(g, o);
+    REQUIRE(m.has_value());
+    REQUIRE(m->certificate.has_value());
+    const std::size_t n = m->mesh.node_count();
+    const auto contact = [&](const char* name) {
+        const BoundaryPatch* p = m->mesh.find_boundary(name);
+        REQUIRE(p != nullptr);
+        return std::vector<NodeId>(p->nodes.begin(), p->nodes.end());
+    };
+    const auto description = [&]() {
+        return DeviceDescription{.mesh = m->mesh,
+                                 .temperature_K = 300.0,
+                                 .regions = {{"lower", silicon()}, {"upper", silicon()}},
+                                 .node_region = std::vector<RegionId>(m->node_region.begin(), m->node_region.end()),
+                                 .donors = std::vector<double>(n, 1e16),
+                                 .acceptors = std::vector<double>(n, 0.0),
+                                 .contacts = {{"bottom", ContactKind::ohmic, contact("bottom")},
+                                              {"top", ContactKind::ohmic, contact("top")}}};
+    };
+    const auto missing = Device::create(description());
+    REQUIRE_FALSE(missing.has_value());
+    CHECK(missing.error().message.find("needs a P4 certificate") != std::string::npos);
+    auto d = description();
+    d.interface_certificate = m->certificate;
+    CHECK(Device::create(std::move(d)).has_value());
+    auto stale = description();
+    stale.interface_certificate = m->certificate;
+    stale.node_region[0] = 1 - stale.node_region[0];
+    CHECK_FALSE(Device::create(std::move(stale)).has_value());
 }

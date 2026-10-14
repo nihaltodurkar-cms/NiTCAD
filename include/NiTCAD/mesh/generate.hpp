@@ -34,6 +34,7 @@
 // counted. Determinism: the same input gives the same mesh in the same build.
 #pragma once
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <expected>
@@ -114,6 +115,7 @@ struct MeshReport {
     double min_dihedral_deg = 0.0;      // over all tetrahedra
     std::size_t slivers = 0;            // tetrahedra with a dihedral angle below 5 degrees
     std::size_t flat_dropped = 0;       // tetrahedra dropped with all four vertices on one face
+    std::size_t band_facet_points = 0;  // subfacet circumcentres inserted within an interface band (judged by P4)
 };
 
 struct GeneratedMesh {
@@ -188,13 +190,43 @@ struct ConvexPolyhedron {
     std::vector<PolyhedronFace> faces;
 };
 
+// A planar material interface (DECISIONS.md M7, U12; owner choice 2026-10-15: planar, no junction
+// lines). The plane through three points (exact side tests); it must cut the whole domain. Rules
+// (invalid_input otherwise, the index naming the interface): the points finite and not collinear;
+// every polyhedron vertex at least 4 s from the plane, with vertices on both sides; every face it
+// cuts met at 60 to 120 degrees, and every domain edge it crosses met by the face's trace at 60
+// to 120 degrees within that face; each trace at least 6 s long; no cut face carrying patches
+// (deferred); two planes never meeting in the domain and at least 4 s apart (so no line where three
+// regions meet). Each slab between planes is one region, named by one seed point strictly inside
+// it; the regions on the two sides of a plane differ.
+// Nodes (M7): on the plane's polygon (the plane within the domain), inset by 1.5 s, a pair set P
+// from the 2D generator at spacing min(h, 4 s), and for each p in P the nodes p +- (s/2) n; along
+// each trace in a face, pairs at +- s/2 within the face, graded from each end (1.5 s, 3 s); on each
+// crossed domain edge, nodes at +- s/2 from the crossing. The protected band b = sqrt(R^2 + s^2/4),
+// R = h_P / sqrt 3: refinement inserts no circumcentre within b of the polygon, an encroached
+// subfacet within b of a trace gets a new trace pair instead, and tetrahedra of interface nodes
+// only are exempt from the quality bound. The result carries the P4 certificate (check_interfaces
+// on the polygons, resolution s).
+struct InterfacePlane {
+    std::array<Point, 3> points;
+};
+
+struct RegionSeed {
+    Point p;
+    std::int32_t region = 0;  // >= 0
+};
+
 struct Geometry3D {
     ConvexPolyhedron domain;
-    std::int32_t region = 0;  // the region of every node, >= 0
+    std::int32_t region = 0;                // with no interfaces: the region of every node, >= 0
+    std::vector<InterfacePlane> interfaces;  // planar interfaces (6d)
+    std::vector<RegionSeed> regions;         // with interfaces: one seed per slab
 };
 
 struct MeshOptions3D {
     double max_size = 0.0;                // h [cm], finite and positive
+    std::vector<double> region_max_size;  // per region index; 0 or absent: max_size
+    double interface_resolution = 0.0;    // s [cm]; required with interfaces
     std::vector<SizeBox> boxes;           // smaller h where given (lo and hi in all three coordinates)
     double radius_edge = 2.0;             // in [1.414, infinity)
     std::size_t max_nodes = 2'000'000;

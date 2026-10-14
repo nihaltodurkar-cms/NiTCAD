@@ -17,6 +17,7 @@
 #include <vector>
 
 #include "NiTCAD/mesh/generate.hpp"
+#include "NiTCAD/mesh/interfaces.hpp"
 #include "NiTCAD/mesh/mesh.hpp"
 
 using namespace NiTCAD::mesh;
@@ -139,6 +140,14 @@ void check_edges(const GeneratedMesh& m, const Geometry3D& g) {
             CHECK(least >= 0.0);
         }
     }
+}
+
+// The total volume only (meshes with interfaces have regions other than 0).
+void check_mesh_volume(const GeneratedMesh& m, double volume) {
+    CHECK(close(total(m.mesh.volumes()), volume, 1e-12));
+    double cells = 0.0;
+    for (std::size_t c = 0; c < m.report.tetrahedra; ++c) cells += tet_volume(m.simplices, c);
+    CHECK(close(cells, volume, 1e-12));
 }
 
 }  // namespace
@@ -443,4 +452,104 @@ TEST_CASE("generator 3D: face tilings are refused unless exact and conforming", 
     refused({whole, {"whole", {{0, 0, 1}, {1, 0, 1}, {1, 1, 1}}}}, "unique");
     refused({{"x_min", whole.vertices}}, "unique");
     refused({{"thin", {{0, 0, 1}, {3, 0, 1}, {1.5, 0, 1}}}}, "no area");
+}
+
+namespace {
+
+InterfacePlane plane_through(Point a, Point b, Point c) { return InterfacePlane{{a, b, c}}; }
+
+// The unit cube cut by planes, with seeds at the given points.
+Geometry3D cut_cube(std::vector<InterfacePlane> planes, std::vector<RegionSeed> seeds) {
+    Geometry3D g = box(1, 1, 1);
+    g.interfaces = std::move(planes);
+    g.regions = std::move(seeds);
+    return g;
+}
+
+// The generated mesh with interfaces: certified (P4), each node in its seed's slab, the
+// certificate matching; deviations printed for the record.
+// `corner_bound`: the regression bound for this configuration (DECISIONS.md U15 style), from the
+// measured corner deviation.
+void check_interfaces_3d(const GeneratedMesh& m, double s, const char* label, double corner_bound) {
+    REQUIRE(m.certificate.has_value());
+    CHECK(certifies(*m.certificate, m.mesh, m.node_region));
+    const InterfaceReport& r = m.certificate->report;
+    CHECK(r.cross_faces > 0);
+    CHECK(r.max_flat_deviation <= 1.0);
+    CHECK(r.max_corner_deviation <= s);
+    CHECK(r.max_corner_deviation <= corner_bound * s);
+    std::printf("P4 3D %s: %zu nodes, %zu cross faces (%zu in corner zones), flat %.3g of tolerance, corner %.3f s, "
+                "band facet points %zu, exempt %zu\n",
+                label, m.report.nodes, r.cross_faces, r.corner_faces, r.max_flat_deviation, r.max_corner_deviation / s,
+                m.report.band_facet_points, m.report.exempt_tetrahedra);
+}
+
+}  // namespace
+
+TEST_CASE("generator 3D: planar interfaces are certified (M7, P4)", "[mesh][generate3d]") {
+    MeshOptions3D o;
+    o.max_size = 0.25;
+    o.interface_resolution = 0.02;
+    SECTION("one horizontal plane") {
+        const auto m = generate_mesh(cut_cube({plane_through({0, 0, 0.5}, {1, 0, 0.5}, {0, 1, 0.5})},
+                                              {{{0.5, 0.5, 0.2}, 0}, {{0.5, 0.5, 0.8}, 1}}),
+                                     o);
+        REQUIRE(m.has_value());
+        check_mesh_volume(*m, 1.0);
+        check_interfaces_3d(*m, o.interface_resolution, "horizontal", 1e-12);  // measured 0
+        for (std::size_t i = 0; i < m->mesh.node_count(); ++i) CHECK(m->node_region[i] == (m->mesh.points()[i][2] < 0.5 ? 0 : 1));
+    }
+    SECTION("three slabs: a thin middle layer (5 s)") {
+        const auto m = generate_mesh(cut_cube({plane_through({0, 0, 0.4}, {1, 0, 0.4}, {0, 1, 0.4}),
+                                               plane_through({0, 0, 0.5}, {1, 0, 0.5}, {0, 1, 0.5})},
+                                              {{{0.5, 0.5, 0.2}, 0}, {{0.5, 0.5, 0.45}, 1}, {{0.5, 0.5, 0.8}, 2}}),
+                                     o);
+        REQUIRE(m.has_value());
+        check_mesh_volume(*m, 1.0);
+        check_interfaces_3d(*m, o.interface_resolution, "thin layer", 1e-12);  // measured 0
+    }
+    SECTION("an oblique plane") {
+        const auto m = generate_mesh(cut_cube({plane_through({0, 0, 0.4}, {1, 0, 0.5}, {0, 1, 0.45})},
+                                              {{{0.5, 0.5, 0.2}, 3}, {{0.5, 0.5, 0.8}, 1}}),
+                                     o);
+        REQUIRE(m.has_value());
+        check_mesh_volume(*m, 1.0);
+        check_interfaces_3d(*m, o.interface_resolution, "oblique", 0.19);  // measured 0.180
+    }
+}
+
+TEST_CASE("generator 3D: interface refusals", "[mesh][generate3d]") {
+    MeshOptions3D o;
+    o.max_size = 0.25;
+    o.interface_resolution = 0.02;
+    const auto refused = [&](const Geometry3D& g, const MeshOptions3D& opt, const std::string& text) {
+        const auto m = generate_mesh(g, opt);
+        REQUIRE_FALSE(m.has_value());
+        INFO(m.error().message);
+        CHECK(m.error().code == ErrorCode::invalid_input);
+        CHECK(m.error().message.find(text) != std::string::npos);
+    };
+    const auto flat = [](double z) { return plane_through({0, 0, z}, {1, 0, z}, {0, 1, z}); };
+    const std::vector<RegionSeed> two{{{0.5, 0.5, 0.2}, 0}, {{0.5, 0.5, 0.8}, 1}};
+    MeshOptions3D no_s = o;
+    no_s.interface_resolution = 0.0;
+    refused(cut_cube({flat(0.5)}, two), no_s, "interface_resolution");
+    refused(cut_cube({flat(0.05)}, {{{0.5, 0.5, 0.02}, 0}, {{0.5, 0.5, 0.8}, 1}}), o, "within 4 s of a polyhedron vertex");
+    refused(cut_cube({flat(1.5)}, two), o, "does not cut");
+    // Steeper than 60 degrees against the side faces x = 0 and x = 1.
+    refused(cut_cube({plane_through({0.2, 0, 0}, {0.2, 1, 0}, {0.8, 0, 1})}, two), o, "meets a face at under 60 degrees");
+    // Two planes crossing inside the cube (a junction line).
+    refused(cut_cube({flat(0.5), plane_through({0, 0, 0.3}, {1, 0, 0.7}, {0, 1, 0.3})},
+                     {{{0.5, 0.5, 0.1}, 0}, {{0.5, 0.5, 0.9}, 1}, {{0.9, 0.5, 0.45}, 2}}),
+            o, "");
+    refused(cut_cube({flat(0.5), flat(0.55)}, {{{0.5, 0.5, 0.2}, 0}, {{0.5, 0.5, 0.52}, 1}, {{0.5, 0.5, 0.8}, 2}}), o,
+            "within 4 s");
+    refused(cut_cube({flat(0.5)}, {{{0.5, 0.5, 0.2}, 0}}), o, "every slab");
+    refused(cut_cube({flat(0.5)}, {{{0.5, 0.5, 0.2}, 0}, {{0.5, 0.5, 0.3}, 1}}), o, "two region seeds in one slab");
+    refused(cut_cube({flat(0.5)}, {{{0.5, 0.5, 0.2}, 1}, {{0.5, 0.5, 0.8}, 1}}), o, "must differ");
+    refused(cut_cube({}, two), o, "only for domains with interfaces");
+    Geometry3D patched = cut_cube({plane_through({0, 0, 0.5}, {0, 1, 0.5}, {1, 0, 0.5})}, two);
+    patched.domain.faces[0].patches = {{"lo", {{0, 0, 0}, {0, 1, 0}, {0, 1, 0.5}, {0, 0, 0.5}}},
+                                       {"hi", {{0, 0, 0.5}, {0, 1, 0.5}, {0, 1, 1}, {0, 0, 1}}}};
+    refused(patched, o, "carries patches");
 }
