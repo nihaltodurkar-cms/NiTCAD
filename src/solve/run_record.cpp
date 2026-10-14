@@ -124,6 +124,14 @@ std::vector<std::pair<std::string, double>> settings(const BiasOptions& o) {
         s.emplace_back("step_control.max_iterations",
                        static_cast<double>(o.step_control.max_iterations));
     }
+    // Unit 30: recorded only when on, so the runs without it keep their identity.
+    if (o.newton.line_search.enabled) {
+        s.emplace_back("newton.line_search.max_backtracks",
+                       static_cast<double>(o.newton.line_search.max_backtracks));
+        s.emplace_back("newton.line_search.sufficient_decrease",
+                       o.newton.line_search.sufficient_decrease);
+        s.emplace_back("newton.line_search.test", static_cast<double>(o.newton.line_search.test));
+    }
     if (o.Ns_override) s.emplace_back("scaling.Ns_override", *o.Ns_override);
     return s;
 }

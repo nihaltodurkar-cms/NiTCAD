@@ -4,6 +4,8 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <algorithm>
+#include <chrono>
+#include <cstdio>
 #include <cmath>
 #include <cstddef>
 #include <stop_token>
@@ -206,5 +208,81 @@ TEST_CASE("step control: invalid options are errors before anything is solved") 
         const auto e = solve::sweep_bias(d, points, options);
         REQUIRE_FALSE(e.has_value());
         CHECK(e.error().code == ErrorCode::invalid_input);
+    }
+}
+
+TEST_CASE("benchmark (Unit 30): single-step diode jumps under each nonlinear strategy",
+          "[.benchmark][.diode_jumps]") {
+    // From equilibrium straight to V in one requested point, default Newton options otherwise:
+    // whether each strategy converges, its Newton iterations over every attempt, its time, and
+    // the largest relative difference from a fine 0.05 V sweep's state at V.
+    const auto d = diode();
+    for (const double V : {0.6, 0.8, 1.0, 1.2, -5.0, -20.0}) {
+        std::vector<std::vector<double>> fine;
+        const int steps = static_cast<int>(std::round(std::abs(V) / 0.05));
+        for (int k = 1; k <= steps; ++k) fine.push_back({V * k / steps, 0.0});
+        const auto reference = solve::sweep_bias(d, fine, {.newton = {.tol_update = 1e-12}});
+        REQUIRE(reference.has_value());
+        REQUIRE_FALSE(reference->stopped.has_value());
+        const auto& ref = reference->points.back();
+        for (int strategy = 0; strategy < 4; ++strategy) {
+            solve::BiasOptions o{.newton = {.tol_update = 1e-12}};
+            if (strategy == 1 || strategy == 3) o.newton.line_search.enabled = true;
+            if (strategy >= 2) o.step_control.max_cuts = 20;
+            long events = 0;
+            const solve::RunControl count{.stop = {}, .progress = [&](const solve::Progress& e) {
+                                              if (e.phase == solve::Phase::bias) ++events;
+                                          }};
+            const std::vector<std::vector<double>> jump{{V, 0.0}};
+            const auto t0 = std::chrono::steady_clock::now();
+            const auto s = solve::sweep_bias(d, jump, o, nullptr, count);
+            const double seconds =
+                std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+            REQUIRE(s.has_value());
+            const bool ok = !s->stopped.has_value();
+            double worst = 0.0;
+            if (ok) {
+                worst = std::max({relative(s->points[0].fields.potential_V, ref.fields.potential_V),
+                                  relative(s->points[0].fields.n_cm3, ref.fields.n_cm3),
+                                  relative(s->points[0].fields.p_cm3, ref.fields.p_cm3)});
+                CHECK(worst < 1e-8);
+            }
+            static constexpr const char* names[] = {"plain", "line search", "step cutting",
+                                                    "both"};
+            std::printf("JUMP %6.1f V  %-13s %-9s iterations %4ld  substeps %3d  time %6.2f s  "
+                        "worst %.1e\n",
+                        V, names[strategy], ok ? "converged" : "FAILED", events,
+                        ok ? s->points[0].bias_substeps : -1, seconds, worst);
+        }
+    }
+}
+
+TEST_CASE("line search (Unit 30): a diode sweep reaches the same steady states, and the run "
+          "record names it") {
+    // Both criteria on the legacy diode's 0-0.6 V sweep: the converged states equal the plain
+    // sweep's (both converge to 1e-12), and the run identity changes only with the search on.
+    const auto d = diode();
+    std::vector<std::vector<double>> points;
+    for (int k = 0; k <= 6; ++k) points.push_back({0.1 * k, 0.0});
+    const solve::BiasOptions plain{.newton = {.tol_update = 1e-12}};
+    const auto off = solve::sweep_bias(d, points, plain);
+    REQUIRE(off.has_value());
+    REQUIRE_FALSE(off->stopped.has_value());
+    for (const auto test : {solve::LineSearchTest::residual, solve::LineSearchTest::natural}) {
+        CAPTURE(static_cast<int>(test));
+        solve::BiasOptions searched = plain;
+        searched.newton.line_search.enabled = true;
+        searched.newton.line_search.test = test;
+        const auto on = solve::sweep_bias(d, points, searched);
+        REQUIRE(on.has_value());
+        REQUIRE_FALSE(on->stopped.has_value());
+        for (std::size_t k = 0; k < points.size(); ++k) {
+            CHECK(relative(on->points[k].fields.potential_V, off->points[k].fields.potential_V) <
+                  1e-9);
+            CHECK(relative(on->points[k].fields.n_cm3, off->points[k].fields.n_cm3) < 1e-9);
+            CHECK(relative(on->points[k].terminal_current, off->points[k].terminal_current) <
+                  1e-9);
+        }
+        CHECK(on->run.input_identity != off->run.input_identity);
     }
 }

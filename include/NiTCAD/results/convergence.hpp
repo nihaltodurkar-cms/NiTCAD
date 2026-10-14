@@ -10,6 +10,8 @@ struct IterationRecord {
     int iteration;    // 1-based
     double update;    // largest scaled correction (the convergence measure, before damping)
     double residual;  // largest |F| at the iterate the correction was computed from
+    // The fraction of the damped step taken (solve::LineSearch, Unit 30); 1 without a search.
+    double step = 1.0;
 };
 
 struct ConvergenceRecord {

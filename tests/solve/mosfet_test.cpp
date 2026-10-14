@@ -14,6 +14,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <algorithm>
+#include <chrono>
 #include <complex>
 #include <cmath>
 #include <cstddef>
@@ -603,4 +604,143 @@ TEST_CASE("mosfet: small-signal parameters at low frequency (Unit 22)", "[.mosfe
     REQUIRE(std::abs(Y(0, 3, 1)) <= r->points[0].resolution[0][1]);
     REQUIRE(std::abs(Y(0, 3, 1)) < 1e-6 * gm);
     REQUIRE(column <= 1.0);  // measured 0.061
+}
+
+namespace {
+
+// The Unit 13 field-mobility drain sweep (V_G = 1 V, drain 0.1 to 1 V) from the gate-on state, as
+// a solver benchmark (Unit 30): completed points, Newton iterations over every attempt (one
+// factorization each), wall time and the largest drain-current difference from the 1 V_T sweep,
+// relative to max(|I|, resolution).
+struct DrainRun {
+    std::size_t completed = 0;
+    long iterations = 0;
+    double seconds = 0.0;
+    double worst = 0.0;
+    std::vector<int> substeps;
+    std::vector<std::size_t> last_iterations;
+};
+
+DrainRun drain_run(const device::Device& d, const solve::BiasOptions& options,
+                   const results::NodeFields& start,
+                   const results::Sweep* reference = nullptr) {
+    std::vector<std::vector<double>> points;
+    for (int k = 1; k <= 10; ++k) points.push_back({0.0, 0.1 * k, 0.0, 1.0});
+    DrainRun run;
+    long events = 0;
+    const solve::RunControl count{.stop = {}, .progress = [&](const solve::Progress& e) {
+                                      if (e.phase == solve::Phase::bias) ++events;
+                                  }};
+    const auto t0 = std::chrono::steady_clock::now();
+    const auto s = solve::sweep_bias(d, points, options, &start, count);
+    run.seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+    REQUIRE(s.has_value());
+    run.completed = s->points.size();
+    // With step cutting the events count every attempt (strictly increasing per point); without
+    // it each point's events are its one Newton run, and a failed point's are in `unfinished`.
+    run.iterations = events;
+    for (std::size_t k = 0; k < s->points.size(); ++k) {
+        const auto& p = s->points[k];
+        run.substeps.push_back(p.bias_substeps);
+        run.last_iterations.push_back(p.convergence.iterations.size());
+        if (reference != nullptr && k < reference->points.size()) {
+            const double a = p.terminal_current[1];
+            const double b = reference->points[k].terminal_current[1];
+            run.worst = std::max(
+                run.worst, std::abs(a - b) /
+                               std::max(std::abs(b),
+                                        reference->points[k].terminal_current_resolution[1]));
+        }
+    }
+    return run;
+}
+
+struct DrainBench {
+    device::Device d = mosfet();
+    results::NodeFields start;
+    results::Sweep reference;
+    DrainBench() {
+        const std::vector<double> gate_on{0.0, 0.0, 0.0, 1.0};
+        auto s = solve::solve_bias(d, gate_on);
+        REQUIRE(s.has_value());
+        start = s->fields;
+        std::vector<std::vector<double>> points;
+        for (int k = 1; k <= 10; ++k) points.push_back({0.0, 0.1 * k, 0.0, 1.0});
+        solve::BiasOptions damped;
+        damped.models.field_mobility = true;
+        damped.newton.max_update = 1.0;
+        auto r = solve::sweep_bias(d, points, damped, &start);
+        REQUIRE(r.has_value());
+        REQUIRE_FALSE(r->stopped.has_value());
+        reference = std::move(*r);
+    }
+    [[nodiscard]] solve::BiasOptions field() const {
+        solve::BiasOptions o;
+        o.models.field_mobility = true;
+        return o;
+    }
+};
+
+void report(const char* name, const DrainRun& r) {
+    std::printf("BENCH %-28s points %2zu/10  iterations %5ld  time %8.1f s  worst %.2e\n", name,
+                r.completed, r.iterations, r.seconds, r.worst);
+    std::printf("      substeps:");
+    for (const int s : r.substeps) std::printf(" %d", s);
+    std::printf("  last-run iterations:");
+    for (const std::size_t i : r.last_iterations) std::printf(" %zu", i);
+    std::printf("\n");
+}
+
+}  // namespace
+
+TEST_CASE("mosfet benchmark (Unit 30): the drain sweep under each nonlinear strategy",
+          "[.benchmark][.line_search]") {
+    // The Unit 28 benchmark's sweep at the default 5 V_T cap, solved five ways: as is, with line
+    // search, with step cutting, with both, and the 1 V_T reference. Every completed point must be
+    // the reference's steady state.
+    const DrainBench b;
+    const auto timed_reference = drain_run(b.d, [&] {
+        auto o = b.field();
+        o.newton.max_update = 1.0;
+        return o;
+    }(), b.start, &b.reference);
+    report("1 V_T damping (reference)", timed_reference);
+
+    const auto plain = drain_run(b.d, b.field(), b.start, &b.reference);
+    report("default damping", plain);
+    CHECK(plain.completed == 0);
+
+    auto residual = b.field();
+    residual.newton.line_search.enabled = true;
+    residual.newton.line_search.test = solve::LineSearchTest::residual;
+    report("line search (residual test)", drain_run(b.d, residual, b.start, &b.reference));
+
+    auto searched = b.field();
+    searched.newton.line_search.enabled = true;  // the natural test, the default
+    const auto search = drain_run(b.d, searched, b.start, &b.reference);
+    report("line search (natural test)", search);
+
+    auto cut = b.field();
+    cut.step_control.max_cuts = 10;
+    cut.step_control.initial_bias_V = {0.0, 0.0, 0.0, 1.0};
+    auto both = cut;
+    both.newton.line_search.enabled = true;
+    const auto combined = drain_run(b.d, both, b.start, &b.reference);
+    report("natural line search + cutting", combined);
+    CHECK(combined.completed == 10);
+    CHECK(combined.worst < 1e-6);
+
+    if (search.completed == 10) CHECK(search.worst < 1e-6);
+}
+
+TEST_CASE("mosfet benchmark (Unit 30): step cutting alone, for comparison (12 minutes)",
+          "[.benchmark][.step_cutting]") {
+    const DrainBench b;
+    auto cut = b.field();
+    cut.step_control.max_cuts = 10;
+    cut.step_control.initial_bias_V = {0.0, 0.0, 0.0, 1.0};
+    const auto r = drain_run(b.d, cut, b.start, &b.reference);
+    report("step cutting", r);
+    CHECK(r.completed == 10);
+    CHECK(r.worst < 1e-6);
 }

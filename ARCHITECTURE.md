@@ -1,12 +1,13 @@
 # NiTCAD — Architecture
 
-**CURRENT ARCHITECTURE, updated for Units 1–15b and 18–24, with Unit 28 on its branch.** Units 1–10 established the
-validated drift-diffusion foundation; Units 11–15b added band-gap narrowing and Auger, gate contacts (the MOS capacitor
-and the MOSFET), field mobility, Fermi–Dirac statistics, heterojunctions and meshed insulators with interface traps;
-Units 18–22 and 24 added the PARDISO backend, impact ionization with arc-length continuation, band-to-band tunnelling,
-transients, AC small-signal analysis and the extraction engine; Unit 23 added electrothermal coupling. All of these are
-on `main` (Unit 23 merged as `7300b67`, PR #30). Unit 28, bias step cutting, is on its branch (sections 11 and 11.3).
-The architecture below keeps the implemented layers and numerical contracts intact while adding a long-term north-star
+**CURRENT ARCHITECTURE, updated for Units 1–15b, 18–24 and 28, with Unit 30 on its branch.** Units 1–10
+established the validated drift-diffusion foundation; Units 11–15b added band-gap narrowing and Auger, gate
+contacts (the MOS capacitor and the MOSFET), field mobility, Fermi–Dirac statistics, heterojunctions and meshed
+insulators with interface traps; Units 18–22 and 24 added the PARDISO backend, impact ionization with arc-length
+continuation, band-to-band tunnelling, transients, AC small-signal analysis and the extraction engine; Unit 23 added
+electrothermal coupling and Unit 28 bias step cutting. All of these are on `main` (Unit 23 merged as `7300b67`,
+PR #30; Unit 28 as `06b708d`, PR #31). Unit 30, the Newton line search, is on its branch (sections 11 and 11.3). The
+architecture below keeps the implemented layers and numerical contracts intact while adding a long-term north-star
 for a general multiphysics semiconductor equation engine.
 Sections distinguish implemented design from target architecture: the north-star material (2.1, 2.2, 6.12, 11.1, 11.2,
 14.6) is future target architecture, not a new layer and not a claim about the current implementation. The dependency
@@ -2358,7 +2359,8 @@ built.
 | 25 | Scientific visualization / rendering | render | target |
 | 26 | Native Windows application and workflow | app | target; Win32 API, x64 target, Direct3D 12 / Direct2D |
 | 27 | Optimization / sensitivity / inverse-design workflows | analysis, solve | long-term target |
-| 28 | Bias step cutting (commercial-readiness programme, 11.3) | solve, results | **verified on branch `solve/bias-step-control`** (based on `main` after PR #30; its base `59de5d5` has `main`'s tree): off by default; halving and growth from the last converged state (11.3, Unit 28; DECISIONS.md S1–S7) |
+| 28 | Bias step cutting (commercial-readiness programme, 11.3) | solve, results | **done, on `main`** (`06b708d`, PR #31): off by default; halving and growth from the last converged state (11.3, Unit 28; DECISIONS.md S1–S7) |
+| 30 | Newton line search (11.3) | solve, results | **verified on branch `solve/line-search`** (on top of Unit 28, which is on `main`): opt-in backtracking on the damped step, residual or natural test; benchmarked against step cutting (11.3, Unit 30; DECISIONS.md L1–L6) |
 
 Units 1–9 are the smallest end-to-end vertical slice: a validated drift-diffusion diode. Everything past
 Unit 10 is deferred until sequenced. Units 11–15, 15b, 21 and 22 were requested by the owner after Unit 10; nothing
@@ -2408,7 +2410,7 @@ exists, not finished), **planned** (nothing built). Audit of 2026-10-09, against
 
 | Area | What exists (audited) | Status | Next step |
 |---|---|---|---|
-| Robust nonlinear solving | Newton with componentwise clipping (6.2); the generation-free retry (Units 19, 20); arc-length `trace_bias` (Unit 19) | **Bias step cutting verified** (Unit 28, below; branch `solve/bias-step-control`) | A backtracking line search in `newton_solve`; a Gummel or pseudo-transient fallback |
+| Robust nonlinear solving | Newton with componentwise clipping (6.2); the generation-free retry (Units 19, 20); arc-length `trace_bias` (Unit 19) | **Bias step cutting verified, on `main`** (Unit 28, below; `06b708d`, PR #31); **Newton line search verified, opt-in** (Unit 30, below; branch `solve/line-search`) | A natural-test norm monotone in reverse bias; a Gummel or pseudo-transient fallback |
 | Input/output, checkpoint/restart | In-memory C++ description only; no file format (R2) | planned | A versioned, checksummed binary state file (fields + bias + run record) for restart; then a text input deck. Needs the owner's ruling on a new layer (`io`, beside `results`) |
 | Geometry and unstructured 3D meshing | `Mesh::from_parts` accepts any valid node/edge/volume graph; only the tensor-grid producer exists; nonlocal BTBT needs tensor cells (6.11) | planned (Unit 16) | A 2D Delaunay/Voronoi producer with geometric checks, then 3D tetrahedra; analytic doping profiles |
 | Low-current accuracy | `terminal_current_resolution` reports the floor (Unit 15); off-state MOSFET current unresolved (6.13) | planned | Current extraction from the minority side or quasi-Fermi unknowns, gated against the resolution |
@@ -2446,9 +2448,57 @@ exists, not finished), **planned** (nothing built). Audit of 2026-10-09, against
 - **Finding, cost:** most of that run is failed attempts (each up to `max_iterations`, default 25). Without the
   per-attempt limit every failure ran the full 100 Newton iterations and the run did not finish in 20 minutes; the
   limit was added for that. Cutting rescues a sweep whose failure is a step-size problem; this MOSFET's is a damping
-  problem (6.2, Unit 13), which a line search should fix far more cheaply. Cutting is the safety net, not the cure.
+  problem (6.2, Unit 13). Unit 30 measured a line search against it: the natural test finishes it in 47 s, but
+  fails reverse-bias jumps that plain Newton solves, so cutting stays the general safety net (Unit 30, below).
 - Not in Unit 28: a predictor (sub-steps start from the previous state), a Newton line search, an automatic
   `initial_bias_V` (a checkpoint format should carry the bias with the state).
+
+**As built (Unit 30, Newton line search; `solve::LineSearch` in `solve/newton.hpp`; branch `solve/line-search`, on
+top of Unit 28; DECISIONS.md L1–L6):**
+- `NewtonOptions::line_search`: backtracking along the damped step, trials x + λ(x₁ − x) with x₁ the system's own
+  damped update (clipping, density bounds), so every trial keeps the bounds x₁ keeps; λ halved at most
+  `max_backtracks` (10) times; a non-finite trial fails; if none passes, the best is taken (never λ = 0). Convergence
+  is still judged on the full correction; a converging iteration takes the full step without a search; an accepted
+  λ = 1 is the update without a search, and its F and J are reused by the next iteration. Two tests: `residual`
+  (Armijo on Σ F²) and `natural` (Deuflhard's natural monotonicity test, the default: the simplified correction
+  J(x)⁻¹F(trial), one back-substitution with the existing factorization, must be ≤ (1 − λ/4) of the full
+  correction, both in the convergence test's measure). Off by default; `IterationRecord::step` records λ; the
+  settings enter the run record only when on.
+- **Benchmarks** (Release, this machine; `[.benchmark]`, not in ctest):
+  - MOSFET field-mobility drain sweep, V_G = 1 V, drain 0.1–1 V, default 5 V_T cap (Unit 28's case):
+
+    | Strategy | Points | Newton iterations | Time | Worst vs 1 V_T sweep |
+    |---|---|---|---|---|
+    | 1 V_T damping (hand-tuned reference) | 10/10 | 128 | 20.7 s | — |
+    | default damping | 0/10 | 100 | 17.0 s | — |
+    | line search, residual test | 0/10 | 100 | 18.5 s | — |
+    | line search, natural test | 10/10 | 227 | 46.8 s | 3.0e-14 |
+    | natural line search + step cutting | 10/10 | 416 | 88.3 s | 4.3e-14 |
+    | step cutting alone (Unit 28) | 10/10 | 3393 | 540 s | 3.0e-14 |
+
+  - The legacy diode, one requested point from equilibrium to V, default options (`[.diode_jumps]`): plain Newton
+    converges at 0.6, 0.8, 1.0 and −5 V and fails at 1.2 and −20 V; the natural line search converges at 0.6–1.0 V
+    and **fails at −5 V, where plain Newton converges** (45 iterations), and at 1.2 and −20 V; step cutting converges
+    at every V (79 iterations at 1.2 V, 128 at −5 V, 508 at −20 V); both together converge at every V but take 644 and
+    2289 iterations at −5 and −20 V (0.3 and 1.0 s). Every converged state equals a 0.05 V-step sweep's to 1e-14.
+- **Findings:**
+  - The residual (Armijo) test does not help: the clipped step is not a descent direction for Σ F² on these badly
+    scaled rows, and the steps collapse to 2⁻¹⁰ with Σ F² falling 0.1% per iteration.
+  - The natural test rescues the MOSFET case 11.5 times faster than step cutting, but in reverse bias the
+    convergence measure (relative updates of minority densities near 1e-14) jumps between 1e2 and 1e8 even along
+    plain Newton's successful path, so a monotonicity test in it rejects good clipped steps and stagnates. Two
+    variants were measured and discarded: scaling the test by the clipped fraction of the step (MOSFET 1/10, −5 V
+    still failing) and measuring in the largest scaled component (1.0 V then failing too).
+  - Only step cutting converges in every case measured. The line search is a targeted, opt-in tool (damping-limited
+    sweeps such as the field-mobility MOSFET), not a default. With both on, Unit 28's per-attempt limit of 25 (S8)
+    cuts points the line search would finish in 27–43 iterations (88 s against 47 s).
+- Gates (non-hidden): 5 scalar cases in `newton_test.cpp` under both tests (arctan from x = 2 converges, plain
+  Newton runs away; bit-identical to no search where every step is full; uphill Jacobian takes the smallest step,
+  never zero, and reports non-convergence; a non-finite trial fails and the search recovers; invalid options); the
+  diode 0–0.6 V sweep under both tests equals the plain sweep to 1e-9 with a different run identity.
+- Not in Unit 30: a norm in which the natural test is monotone in reverse bias (a weighted or potential-only norm
+  needs the system's unknown layout), Gummel or pseudo-transient fallbacks, a line search inside `trace_bias`'s
+  corrector (it has its own loop).
 
 ## 12. Legacy facts: verified, derived and unverified
 
@@ -2624,6 +2674,7 @@ architecture; historical branch names remain only where they are useful to expla
 | V30 | Unit 18 (`linalg/pardiso`): Debug and Release build with no warnings; all suites pass with the MKL runtime configured (oneMKL 2026.1, Intel's NuGet redistributable; Release 14/14, Debug 10/10, the new ctest `linalg_mkl_absent` in both). PARDISO agrees with Eigen SparseLU on the shared systems (5.6e-16 to 5.5e-12), complex G + iωC (1.8e-13), the diode (J(0.5 V) to 11 digits), MOS-C (7.9e-17), transient (2.2e-14), admittances within max(1e-9 max |Y|, resolution), the MOSFET Id-Vg; reuse gate 1 analysis / one factorization per Jacobian / one solve per right-hand side; floating regions rejected through perturbed pivots. Refactorization 5x (2D MOSFET) and 17x (3D, 81k unknowns) faster than Eigen on one thread, 16x and 74x on eight. Default Eigen path: the 14 probe runs hash identically to `main`. 18 of 20 mutations caught (one equivalent, one unreachable). | Verified locally. |
 | V31 | Unit 23 (`physics/electrothermal`): Debug and Release build with no warnings; all suites pass (Release 14/14, Debug 10/10); `nitcad_physics_test` 91 test cases, `nitcad_device_test` 25, `nitcad_assemble_test` 96, `nitcad_solve_test` 167 (+9 `[.mosfet]`, one of them the electrothermal MOSFET, Release only). The electrothermal gates, cost and the 34 + 5 mutation checks (all caught; the U1–U8 rulings re-verified 2026-10-09) in 6.2 "As built (Unit 23)". With the model off every path is unchanged (the full suites pass after the stride refactor). | Verified locally. |
 | V32 | Unit 28 (`solve/bias-step-control`): Release 14/14 and Debug 10/10, both with no warnings (Debug `solve` 957 s against 596 s before: the step-control gates are slow in Debug); `nitcad_solve_test` 174 test cases (+9 `[.mosfet]`, +1 `[.benchmark]`, not in ctest); the other suites unchanged. Step-control gates, the MOSFET benchmark (3.0e-14 against the 1 V_T sweep, 12 minutes) and the cost finding in 11.3. With the control off every existing test passes unchanged. | Verified locally. |
+| V34 | Unit 30 (`solve/line-search`): Debug and Release build with no warnings; all suites pass (Release 14/14, Debug 10/10); `nitcad_solve_test` 180 test cases (+9 `[.mosfet]`, +4 `[.benchmark]`, not in ctest). Line-search gates, the MOSFET and diode-jump benchmarks against step cutting, and the findings in 11.3 "As built (Unit 30)". Off by default: every existing test passes unchanged. | Verified locally. |
 | V3 | Scaling definitions, scaled variables and Newton tolerances read from `inputs.cpp` and `device1d.cpp` and recorded in 6.1. One open question remains for Unit 8 (convergence criterion on the clipped correction). | Verified |
 
 Verifications due at their own unit: none left. The 5e-5 Jacobian gate's normalization was read at Unit 7 (section 10), and
