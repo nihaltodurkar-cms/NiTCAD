@@ -9,6 +9,8 @@
 // tests agree, but judging the full correction does not rely on that. The legacy 1D loop declares a
 // residual tolerance (1e-10) and never uses it; there is none here, and each iteration's residual
 // is recorded instead.
+// With options.line_search (Unit 30) the damped step is shortened by backtracking until the squared
+// residual falls enough (LineSearch below); the fraction taken is IterationRecord::step.
 // The Jacobian pattern is fixed by the system, so the solver analyzes once per run.
 // A system may replace the measure and the update with its own hooks (assemble::DriftDiffusion
 // does, for relative density updates):
@@ -22,6 +24,7 @@
 #include <cstddef>
 #include <expected>
 #include <functional>
+#include <limits>
 #include <optional>
 #include <span>
 #include <stop_token>
@@ -36,10 +39,39 @@
 
 namespace NiTCAD::solve {
 
+// Backtracking line search on the damped step (Unit 30). The damped update x1 (the system's own
+// clipping and density bounds applied to the full correction) is tried first; if it fails the
+// test below, the step is halved along the segment from x to x1, x + lambda (x1 - x), at most
+// max_backtracks times. Every trial is a convex combination of x and x1, so it keeps every bound
+// x1 keeps (positive densities, temperatures in range). A trial whose residual is not finite
+// fails. If no trial passes, the best one is taken (never lambda = 0), so the iteration always
+// moves. Convergence is still judged on the full correction, so a short step is never taken for
+// convergence, and a converging iteration (full correction below tol_update) takes the full
+// damped step without a search. lambda = 1, when it passes, is exactly the update without a
+// search, and its F and J are reused by the next iteration. Off by default: every existing run is
+// unchanged.
+// What a trial must achieve:
+// - residual: the Armijo test on m(x) = sum_i F_i(x)^2, m(trial) <= (1 - 2 alpha lambda) m(x);
+// - natural (the default): Deuflhard's natural monotonicity test, affine-invariant and so blind to
+//   the very different scales of the rows: the simplified correction at the trial,
+//   dx_bar = J(x)^-1 F(trial) with the factorization already made (one back-substitution, no
+//   factorization), must be smaller than the full correction dx, |dx_bar| <= (1 - lambda / 4) |dx|,
+//   both measured as the convergence test measures a correction (the system's update_size, or the
+//   largest component).
+enum class LineSearchTest : int { residual = 0, natural = 1 };
+
+struct LineSearch {
+    bool enabled = false;
+    int max_backtracks = 10;            // the smallest trial is 2^-max_backtracks of the step
+    double sufficient_decrease = 1e-4;  // alpha of the residual test, in (0, 0.5)
+    LineSearchTest test = LineSearchTest::natural;
+};
+
 struct NewtonOptions {
     int max_iterations = 100;
     double tol_update = 1e-8;  // on the largest scaled correction
     double max_update = 5.0;   // componentwise damping cap on the scaled correction
+    LineSearch line_search;
 };
 
 // Called after every iteration with its record and whether it converged (see control.hpp for the
@@ -57,7 +89,9 @@ concept NewtonSystem = requires(const S& s, std::span<const double> x, std::span
 
 // The convergence history goes into `record`, which is reset first and filled whatever the outcome.
 // Errors:
-// - invalid_input: max_iterations < 1, or tol_update or max_update not finite and positive;
+// - invalid_input: max_iterations < 1, or tol_update or max_update not finite and positive, or
+//   line_search with max_backtracks outside 0..60, sufficient_decrease outside (0, 0.5) or an
+//   unknown test;
 // - cancelled: the stop token was set before an iteration (context: the iteration it would have
 //   been); the token is checked before every iteration, the first included;
 // - non_convergence: no convergence within max_iterations (context: the iteration count and the
@@ -86,10 +120,56 @@ template <NewtonSystem System>
     if (!(std::isfinite(options.max_update) && options.max_update > 0.0)) {
         return invalid("Newton max_update must be finite and positive", options.max_update);
     }
+    const LineSearch& search = options.line_search;
+    if (search.max_backtracks < 0 || search.max_backtracks > 60) {
+        return invalid("Newton line_search.max_backtracks must lie in 0..60",
+                       search.max_backtracks);
+    }
+    if (!(search.sufficient_decrease > 0.0 && search.sufficient_decrease < 0.5)) {
+        return invalid("Newton line_search.sufficient_decrease must lie in (0, 0.5)",
+                       search.sufficient_decrease);
+    }
+    if (search.test != LineSearchTest::residual && search.test != LineSearchTest::natural) {
+        return invalid("Newton line_search.test is unknown", static_cast<double>(search.test));
+    }
 
     const std::size_t n = system.unknowns();
     linalg::SparseMatrix jacobian = system.make_jacobian();
     std::vector<double> f(n), rhs(n), dx(n);
+    // The damped update, as the system applies it.
+    const auto damp = [&](std::span<double> to, std::span<const double> correction) {
+        if constexpr (requires { system.apply_update(to, correction, options.max_update); }) {
+            system.apply_update(to, correction, options.max_update);
+        } else {
+            for (std::size_t i = 0; i < n; ++i) {
+                to[i] += std::clamp(correction[i], -options.max_update, options.max_update);
+            }
+        }
+    };
+    // The size of a correction, as the convergence test measures it.
+    const auto measure = [&](std::span<const double> at, std::span<const double> d) {
+        if constexpr (requires { system.update_size(at, d); }) {
+            return system.update_size(at, d);
+        } else {
+            (void)at;  // systems without update_size measure the largest component
+            double size = 0.0;
+            for (std::size_t i = 0; i < n; ++i) size = std::max(size, std::abs(d[i]));
+            return size;
+        }
+    };
+    // Line search work (LineSearch): the iterate, the damped update, a trial's residual and its
+    // simplified correction.
+    std::vector<double> x0, x1, f_trial, dx_bar;
+    if (search.enabled) {
+        f_trial.resize(n);
+        dx_bar.resize(n);
+    }
+    const auto merit = [n](std::span<const double> r) {
+        double m = 0.0;
+        for (std::size_t i = 0; i < n; ++i) m += r[i] * r[i];
+        return std::isfinite(m) ? m : std::numeric_limits<double>::infinity();
+    };
+    bool evaluated = false;  // f and jacobian already hold F and J at x (an accepted trial)
     for (int iteration = 1; iteration <= options.max_iterations; ++iteration) {
         if (stop.stop_requested()) {
             return std::unexpected(base::Error{
@@ -98,7 +178,8 @@ template <NewtonSystem System>
                 base::ErrorContext{.index = static_cast<std::size_t>(iteration),
                                    .value = std::nullopt}});
         }
-        system.evaluate(x, f, jacobian);
+        if (!evaluated) system.evaluate(x, f, jacobian);
+        evaluated = false;
         double residual = 0.0;
         for (std::size_t i = 0; i < n; ++i) {
             if (!std::isfinite(f[i])) {
@@ -128,21 +209,72 @@ template <NewtonSystem System>
             return std::unexpected(std::move(e));
         }
         const std::span<const double> step = dx;
-        double update = 0.0;
-        if constexpr (requires { system.update_size(std::span<const double>(x), step); }) {
-            update = system.update_size(x, step);
+        const double update = measure(x, step);
+        const bool converged = update < options.tol_update;
+        double taken = 1.0;
+        if (!search.enabled || converged) {
+            damp(x, step);
         } else {
-            for (std::size_t i = 0; i < n; ++i) update = std::max(update, std::abs(dx[i]));
-        }
-        if constexpr (requires { system.apply_update(x, step, options.max_update); }) {
-            system.apply_update(x, step, options.max_update);
-        } else {
-            for (std::size_t i = 0; i < n; ++i) {
-                x[i] += std::clamp(dx[i], -options.max_update, options.max_update);
+            // Backtrack along the damped step (LineSearch).
+            x0.assign(x.begin(), x.end());
+            damp(x, step);
+            x1.assign(x.begin(), x.end());
+            const double m0 = merit(f);
+            const bool natural = search.test == LineSearchTest::natural;
+            // A trial's figure (smaller is better) and whether it passes the test.
+            const auto judge = [&](double lambda) -> std::pair<double, bool> {
+                if (natural) {
+                    for (std::size_t i = 0; i < n; ++i) {
+                        if (!std::isfinite(f_trial[i])) {
+                            return {std::numeric_limits<double>::infinity(), false};
+                        }
+                        rhs[i] = -f_trial[i];
+                    }
+                    if (!solver.solve(rhs, dx_bar)) {
+                        return {std::numeric_limits<double>::infinity(), false};
+                    }
+                    const double size = measure(x, dx_bar);
+                    return {size, size <= (1.0 - 0.25 * lambda) * update};
+                }
+                const double m = merit(f_trial);
+                return {m, m <= (1.0 - 2.0 * search.sufficient_decrease * lambda) * m0};
+            };
+            double lambda = 1.0, best_lambda = 1.0;
+            double best = std::numeric_limits<double>::infinity();
+            bool accepted = false;
+            for (int b = 0; b <= search.max_backtracks; ++b, lambda *= 0.5) {
+                if (b > 0) {
+                    for (std::size_t i = 0; i < n; ++i) x[i] = x0[i] + lambda * (x1[i] - x0[i]);
+                }
+                system.evaluate(x, f_trial, jacobian);
+                const auto [figure, passes] = judge(lambda);
+                if (passes) {
+                    accepted = true;
+                    taken = lambda;
+                    f.swap(f_trial);  // F and J at the new iterate: the next iteration's
+                    evaluated = true;
+                    break;
+                }
+                if (figure < best) {
+                    best = figure;
+                    best_lambda = lambda;
+                }
+            }
+            if (!accepted) {
+                // No trial decreased enough: the one of smallest merit (the smallest trial when
+                // none had a finite residual), never a zero step.
+                if (!std::isfinite(best)) best_lambda = std::ldexp(1.0, -search.max_backtracks);
+                taken = best_lambda;
+                if (best_lambda == 1.0) {
+                    std::copy(x1.begin(), x1.end(), x.begin());
+                } else {
+                    for (std::size_t i = 0; i < n; ++i) {
+                        x[i] = x0[i] + best_lambda * (x1[i] - x0[i]);
+                    }
+                }
             }
         }
-        record.iterations.push_back({iteration, update, residual});
-        const bool converged = update < options.tol_update;
+        record.iterations.push_back({iteration, update, residual, taken});
         record.converged = converged;
         if (observe) observe(record.iterations.back(), converged);
         if (converged) return {};

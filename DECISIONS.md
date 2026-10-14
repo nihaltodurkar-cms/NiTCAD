@@ -194,7 +194,7 @@ before more physics; Windows-only C++23, Win32/D3D12/D2D, no Python, no Qt; exis
 behaviour preserved; each change isolated and regression-tested in Debug and Release; no merges without authorization.
 `ARCHITECTURE.md` 11.3 tracks each item's status (implemented and verified, in progress, planned).
 
-### Unit 28 — bias step cutting (branch `solve/bias-step-control`, based on `main` after PR #30)
+### Unit 28 — bias step cutting (merged to `main` as `06b708d`, PR #31, 2026-10-14)
 
 The branch starts at `59de5d5`, the head of `physics/electrothermal`, which PR #30 merged into `main` as `7300b67`
 (2026-10-09); `main`'s tree equals `59de5d5`'s, so the branch carries Unit 28 alone against `main`.
@@ -213,8 +213,29 @@ Choices made without a ruling, open to the owner's review:
 | S8 | With the control on, every attempt (the full step included) is limited to `StepControl::max_iterations` (default 25). | Measured: without it each failed attempt ran 100 iterations and the MOSFET benchmark did not finish in 20 minutes; with it, 12 minutes. | A point that would converge slowly from the full step (more than 25 iterations) is reached by cutting instead: the same steady state, a different path. |
 
 Finding (ARCHITECTURE.md 11.3): cutting rescues the MOSFET field-mobility drain sweep at the default damping, but
-expensively (7 sub-steps per 0.1 V point). That failure is a damping problem, so the next reliability step is a
-Newton line search, with cutting kept as the safety net.
+expensively (7 sub-steps per 0.1 V point). Unit 30 then measured a Newton line search against it (below).
+
+### Unit 30 — Newton line search (branch `solve/line-search`, on top of Unit 28)
+
+Owner request (2026-10-14): implement a Newton line search on a separate branch and benchmark the MOSFET case against
+step cutting, convergence reliability and runtime, before deciding whether Unit 28 needs changes.
+
+| # | Choice | Why | Trade-off |
+|---|---|---|---|
+| L1 | Backtrack along the damped step x + λ(x₁ − x), not along the raw correction. | ψ is clipped and densities bounded, so scaling the raw correction is undone by the clipping; convex combinations of x and x₁ keep every bound. | The direction is the damped one, not Newton's, so descent is not guaranteed. |
+| L2 | Two tests: `residual` (Armijo on Σ F²) and `natural` (Deuflhard), natural the default when enabled. | Measured: residual 0/10 on the MOSFET, natural 10/10. | One more back-substitution per trial for natural (no factorization). |
+| L3 | The natural test in the convergence test's measure (`update_size`). | It is the norm Newton already trusts; two alternatives measured worse (11.3). | That measure is erratic in reverse bias, so the search fails −5 V jumps plain Newton solves. |
+| L4 | No trial passing: take the best, never λ = 0; convergence on the full correction. | The legacy line search reported λ = 0 steps as converged (6.2, Unit 21). | A hopeless iteration still moves (uphill if it must) and ends in non_convergence. |
+| L5 | Off by default; settings in the run record only when on. | Every existing result and identity unchanged; the measured regressions make it unsafe as a default. | Users must opt in per problem. |
+| L6 | An accepted λ = 1 trial's F and J are reused. | A search that always accepts λ = 1 costs nothing extra and is bit-identical to none. | — |
+
+**Recommendation on Unit 28:** no change. **Owner decision (2026-10-14):** merged as is (PR #31, `06b708d`), S1–S8
+accepted as they stand. Step cutting is the only strategy that converged in
+every case measured (MOSFET and all six diode jumps); the line search is faster where it works (MOSFET 47 s against
+540 s) but fails cases plain Newton solves. One tuning question remains open: with both on, S8's per-attempt limit of
+25 makes step cutting cut points the line search would finish in 27–43 iterations (88 s against 47 s). Raising it
+would speed that combination but slow step cutting alone (each failed attempt costs more), so it is left at 25 until
+more cases are measured.
 
 ---
 

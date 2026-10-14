@@ -2,6 +2,7 @@
 // convergence, damping, the full-correction criterion and each error path.
 #include <catch2/catch_test_macros.hpp>
 
+#include <array>
 #include <cmath>
 #include <cstddef>
 #include <functional>
@@ -124,4 +125,133 @@ TEST_CASE("newton: a singular Jacobian is reported with the iteration") {
     REQUIRE_FALSE(r.has_value());
     REQUIRE(r.error().code == ErrorCode::singular_system);
     REQUIRE(r.error().message.starts_with("Newton iteration 1: "));
+}
+
+// --- Line search (Unit 30, solve::LineSearch) ----------------------------------------------------
+
+namespace {
+
+// arctan: Newton from |x| > 1.3917 overshoots further each iteration and diverges.
+const Scalar arctan{[](double x) { return std::atan(x); },
+                    [](double x) { return 1.0 / (1.0 + x * x); }};
+
+NewtonOptions searched(int iterations = 100,
+                       solve::LineSearchTest test = solve::LineSearchTest::natural) {
+    NewtonOptions o{.max_iterations = iterations, .tol_update = 1e-12, .max_update = 1e6};
+    o.line_search.enabled = true;
+    o.line_search.test = test;
+    return o;
+}
+
+constexpr std::array tests{solve::LineSearchTest::residual, solve::LineSearchTest::natural};
+
+}  // namespace
+
+TEST_CASE("line search: Newton on arctan from x = 2 diverges without it and converges with it") {
+    auto s = solver();
+    results::ConvergenceRecord record;
+    std::vector<double> x{2.0};
+    const auto plain = solve::newton_solve(
+        arctan, x, NewtonOptions{.max_iterations = 8, .tol_update = 1e-12, .max_update = 1e6}, s,
+        record);
+    REQUIRE_FALSE(plain.has_value());
+    CHECK(std::abs(x[0]) > 1e4);  // the iterates run away (1.2e5 after 8 iterations)
+
+    for (const auto test : tests) {
+        CAPTURE(static_cast<int>(test));
+        std::vector<double> y{2.0};
+        REQUIRE(solve::newton_solve(arctan, y, searched(100, test), s, record).has_value());
+        CHECK(std::abs(y[0]) < 1e-12);
+        // The first step is shortened; the last ones are full, so convergence stays quadratic.
+        CHECK(record.iterations.front().step < 1.0);
+        CHECK(record.iterations.back().step == 1.0);
+        for (std::size_t k = 1; k < record.iterations.size(); ++k) {
+            const auto& before = record.iterations[k - 1];
+            const auto& after = record.iterations[k];
+            if (test == solve::LineSearchTest::residual) {
+                // Each step lowered the merit |F|^2 by the sufficient-decrease factor.
+                CHECK(after.residual * after.residual <=
+                      (1.0 - 2.0 * 1e-4 * before.step) * before.residual * before.residual);
+            } else {
+                // Each step shrank the next correction (the natural monotonicity test).
+                CHECK(after.update <= (1.0 - 0.25 * before.step) * before.update);
+            }
+        }
+    }
+}
+
+TEST_CASE("line search: where every full step is accepted the run is bit-identical to none") {
+    for (const double start : {3.0, 1.5, 10.0}) {
+        auto s = solver();
+        results::ConvergenceRecord off_record, on_record;
+        std::vector<double> off{start}, on{start};
+        NewtonOptions plain{.max_iterations = 100, .tol_update = 1e-12, .max_update = 1e6};
+        REQUIRE(solve::newton_solve(cube, off, plain, s, off_record).has_value());
+        REQUIRE(solve::newton_solve(cube, on, searched(), s, on_record).has_value());
+        CAPTURE(start);
+        bool full = true;
+        for (const auto& r : on_record.iterations) full = full && r.step == 1.0;
+        if (!full) continue;  // a start that backtracks is not this test's case
+        CHECK(on[0] == off[0]);
+        REQUIRE(on_record.iterations.size() == off_record.iterations.size());
+        for (std::size_t k = 0; k < on_record.iterations.size(); ++k) {
+            CHECK(on_record.iterations[k].update == off_record.iterations[k].update);
+            CHECK(on_record.iterations[k].residual == off_record.iterations[k].residual);
+        }
+    }
+}
+
+TEST_CASE("line search: with no descent it takes the smallest step, never zero, and reports "
+          "non-convergence") {
+    // A wrong-signed Jacobian: the correction points uphill, so no trial decreases the merit.
+    const Scalar uphill{[](double x) { return x; }, [](double) { return -1.0; }};
+    auto s = solver();
+    results::ConvergenceRecord record;
+    std::vector<double> x{1.0};
+    auto o = searched(5);
+    o.line_search.max_backtracks = 4;
+    const auto r = solve::newton_solve(uphill, x, o, s, record);
+    REQUIRE_FALSE(r.has_value());
+    CHECK(r.error().code == ErrorCode::non_convergence);
+    REQUIRE(record.iterations.size() == 5);
+    for (const auto& it : record.iterations) CHECK(it.step == 1.0 / 16.0);
+    CHECK(x[0] > 1.0);  // it moved (uphill), it did not stall at lambda = 0
+}
+
+TEST_CASE("line search: a trial with a non-finite residual counts as no decrease") {
+    // F = x - 1, NaN beyond x = 4, with a Jacobian of 0.25 (a quarter of the slope): from -0.5 the
+    // correction is +6, to 5.5, where F is NaN. Without a search the run stops there; with one
+    // that trial is rejected, 2.5 (merit 2.25, no decrease) too, and 1 (the root) accepted.
+    const Scalar overshoot{[](double x) { return x > 4.0 ? std::nan("") : x - 1.0; },
+                           [](double) { return 0.25; }};
+    auto s = solver();
+    results::ConvergenceRecord record;
+    std::vector<double> plain_x{-0.5};
+    const auto plain = solve::newton_solve(
+        overshoot, plain_x,
+        NewtonOptions{.max_iterations = 10, .tol_update = 1e-12, .max_update = 1e6}, s, record);
+    REQUIRE_FALSE(plain.has_value());
+    CHECK(plain.error().message.find("not finite") != std::string::npos);
+
+    std::vector<double> x{-0.5};
+    REQUIRE(solve::newton_solve(overshoot, x, searched(), s, record).has_value());
+    CHECK(x[0] == 1.0);
+    CHECK(record.iterations.front().step == 0.25);
+}
+
+TEST_CASE("line search: invalid options are errors") {
+    auto s = solver();
+    results::ConvergenceRecord record;
+    std::vector<double> x{3.0};
+    for (const auto& bad : {solve::LineSearch{true, -1, 1e-4}, solve::LineSearch{true, 61, 1e-4},
+                            solve::LineSearch{true, 10, 0.0}, solve::LineSearch{true, 10, 0.5},
+                            solve::LineSearch{true, 10, std::nan("")},
+                            solve::LineSearch{true, 10, 1e-4,
+                                              static_cast<solve::LineSearchTest>(7)}}) {
+        NewtonOptions o;
+        o.line_search = bad;
+        const auto r = solve::newton_solve(cube, x, o, s, record);
+        REQUIRE_FALSE(r.has_value());
+        CHECK(r.error().code == ErrorCode::invalid_input);
+    }
 }
