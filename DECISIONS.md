@@ -256,31 +256,89 @@ more cases are measured.
 
 ---
 
-### Unit 16 — unstructured 2D and 3D meshing (branch `mesh/unstructured`, proposed 2026-10-14)
+### Unit 16 — unstructured 2D and 3D meshing (branch `mesh/unstructured`, revised 2026-10-14)
 
-**Owner rulings (2026-10-14):** 2D and 3D in this unit; an in-tree mesh generator (no new dependency); material
-interfaces as node regions with straddling node pairs; analytic doping profiles included. The branch starts at `main`
-`23199a9`. Choices below are proposed and **await the owner's ruling before any code**:
+**Owner rulings (2026-10-14), unchanged:** R1 2D and 3D in this unit; R2 an in-tree mesh generator, no new dependency;
+R3 material interfaces as node regions with straddling node pairs; R4 analytic doping profiles included. The branch
+starts at `main` `23199a9`. Everything below is proposed and **awaits the owner's ruling before any code**. Revision 2
+follows the review of revision 1 (`cae0ef0`): its M2 contradicted M3, its sliver refusal contradicted M3, it had no
+tie-break rule, and M7 lacked the conditions under which it is exact.
 
-| # | Choice | Why | Trade-off |
-|---|---|---|---|
-| M1 | Box method on the circumcentric (Voronoi) dual: an edge's coupling area is its dual face's measure summed over the simplices sharing it; a node's volume is the sum of its circumcentric sub-volumes; a boundary node's area is the dual measure of its boundary facets. | The standard TCAD construction; on a Delaunay mesh it is the Voronoi diagram, and it reduces to the tensor-grid box method on split rectangles and boxes. | Needs Delaunay meshes (M2, M3). |
-| M2 | A new constructor `make_box_mesh` refuses (`degenerate_mesh`, index of the simplex) any negative circumcentric piece or negative total coupling; never repairs or clips. Couplings that are zero or below 1e-12 relative (cocircular edges) are left out of the graph. | 6.11 item 4: the legacy pinned negative dual areas instead of fixing them; its obtuse-triangle area split keeps volumes positive but makes fluxes inconsistent. | A mesh made elsewhere that is not Delaunay is refused, not fixed. |
-| M3 | Generated meshes are Delaunay with no encroached boundary segment (2D) or facet (3D): Ruppert refinement in 2D (minimum angle, default 25°), Shewchuk's refinement in 3D (radius–edge bound, default 2.0), plus a size field. | Under that condition every circumcentric piece is non-negative, so M2 never refuses a generated mesh. | More nodes near boundaries than an unconstrained mesh. |
-| M4 | orient2d, incircle, orient3d and insphere ported to C++ from Shewchuk's public-domain adaptive exact-arithmetic predicates, with attribution. | Topology decisions in floating point make Delaunay insertion fail on near-degenerate input (rectangular grids are exactly cocircular). | A few hundred lines of carefully ported code. |
-| M5 | 2D domains: any planar straight-line graph (non-convex polygons, holes) by constrained Delaunay triangulation. | Real cross-sections (MOSFET, trenches, mesas). | — |
-| M6 | 3D domains: convex polyhedra only (boxes and convex hulls); non-convex domains refused (`invalid_input`) and deferred. | For a convex domain the Delaunay tetrahedralization of the points conforms to the boundary, so no 3D constrained boundary recovery (the TetGen-class problem) is needed; with M7 internal interfaces need no conforming faces. | Fins and mesas wait for a later unit; covers 3D diodes, bipolars, planar MOSFETs and box-shaped multi-region devices. |
-| M7 | (Ruled.) Every node has one region. Along each interface segment or facet the generator places mirrored node pairs at ±s/2 (s the local size), so the dual face between a pair lies on the interface; no node lies on an interface. | Generalizes `mesh::straddle_interface`; device and assembler unchanged. | The interface is exact only up to the pair spacing; a curved interface becomes a polyline at the local size. |
-| M8 | The same geometry and options give a bit-identical mesh: fixed, documented insertion order; no hash- or pointer-order dependence. | 6.8 determinism; the io mesh digest identifies generated meshes. | Rules out some faster unordered containers. |
-| M9 | Nonlocal BTBT stays tensor-only (already refused without `DeviceDescription::cells`); the cell-walk interface is deferred. | Keeps the unit to meshing. | Nonlocal tunnelling needs tensor grids until then. |
-| M10 | (Ruled.) Doping profiles: constant, box, Gaussian and erfc per axis with lateral erfc fall-off, summed per species, sampled at nodes (`device/doping_profiles.hpp`). | Generated meshes need doping without hand-written per-node code; point sampling matches today's lambdas. | No cell-averaged doping. |
+**Evidence labels.** *Proven*: follows from a stated argument or a cited theorem whose hypotheses are checked on every
+generated mesh. *Cited, to verify*: from the literature; the theorem's exact hypotheses must be confirmed against the paper
+before `ARCHITECTURE.md` cites it. *Heuristic*: no guarantee; bounded by a cap and checked after the fact.
+*Limitation*: known and stated, not fixed here.
 
-Plan: predicates and `make_box_mesh` (import path, 2D and 3D) first; then the 2D generator; doping profiles and 2D
-device gates (diode, MOSFET); then the 3D generator and 3D gates. If the 3D generator does not pass its gates within
-the unit, the PR carries 2D plus the 3D import path, and says so. Gates: tensor equivalence of split rectangles and
-Kuhn-split boxes (1e-13), per-node geometric closure and volume sum (1e-12), exactness for linear fields, refusals,
-exact predicate signs on degenerate input, Delaunay / angle / encroachment / determinism checks, io round trip, second-order
-convergence of a 2D and a 3D diode, a 2D MOSFET against the tensor one, and mutation tests.
+| # | Choice | Evidence | Why | Trade-off |
+|---|---|---|---|---|
+| M1 | Box method on the circumcentric dual. An edge's coupling area is the signed sum, over the simplices sharing it, of the dual-face pieces. A node's volume and a boundary node's face area are the signed sums of its pieces. Circumcentres are computed with exact determinants (Shewchuk expansion arithmetic) and one final rounding. | Proven: on a Delaunay mesh the dual is the Voronoi diagram, which depends on the points only, not on which tetrahedra were chosen. | Standard Voronoi finite volume; reduces to the tensor-grid box method on split rectangles and Kuhn-split boxes. Exact determinants keep each circumcentre accurate to a few ulps however flat the element. | — |
+| M2 | Checks on **totals**, never per-element pieces (an obtuse triangle's pieces are legitimately negative). Tolerance τ = 1e-12, scale L_e^(D−1) for an edge and the node's (local mean edge)^D for a volume. A total within τ·scale of zero is zero: the edge is dropped, a zero volume is refused. A total below −τ·scale is refused (`degenerate_mesh`, index of the edge or node). Roundoff of order 1e-17 is never refused. | Proven that totals are ≥ 0 under M3's conditions; τ is about 4.5e3 ulps, the precedent of `length_tolerance` in `mesh.cpp`. | Fixes revision 1's contradiction with M3; cocircular diagonals (exact zeros) are dropped, not refused. | A total that is truly negative but within τ of zero is treated as zero. |
+| M3 | Guarantees. (a) Delaunay ⇒ every interior total coupling ≥ 0. (b) Delaunay plus the Gabriel property for every boundary segment or facet ("boundary conforming Delaunay") ⇒ the dual is the Voronoi diagram clipped to the domain: every volume > 0 and every boundary area ≥ 0. (c) The generator checks (a) and (b) exactly on its output (P1, P2 below), so they are postconditions, not just claims. | (a) proven; (b) cited, to verify (Gärtner, Si, Fuhrmann 2010; Fuhrmann's lecture notes). | (b) is the property Voronoi box methods require. | — |
+| M4 | Exact predicates (orient2d/3d, incircle, insphere) ported from Shewchuk's public-domain adaptive code. Ties (incircle or insphere = 0) are broken by the symbolic perturbation of Devillers and Teillaud (2011): perturb the lifting, decide by orientation tests on subsets ordered by node index. orient tests are never perturbed, so no tetrahedron of four coplanar points can exist; every element has orient > 0 (P0). | Proven for the predicates and for determinism; the tie-break is cited, to verify. | Tensor lattices, Kuhn splits and mirrored pairs are exactly cocircular or cospherical by design; ties must resolve the same way on every machine (6.8). | Each tie costs a few extra orientation tests. |
+| M5 | 2D domains: any planar straight-line graph (non-convex polygons, holes) by constrained Delaunay triangulation, then refinement until no segment is encroached (so the CDT is Delaunay). | Cited, to verify: boundary conforming Delaunay meshes exist and are computable for arbitrary polygonal regions in 2D (Gärtner–Si–Fuhrmann abstract). | Real cross-sections. | — |
+| M6 | 3D domains: convex polyhedra only. Boundary conformity (M3 b) is guaranteed only when every input angle is at least arccos(1/3) ≈ 70.53°; boxes (90°) satisfy this. Convex domains with smaller dihedral angles are allowed and handled by the heuristic in M11, with P2 still checked. Non-convex domains are refused (`invalid_input`) and deferred. | Proven: for convex domains the Delaunay tetrahedralization meets the hull without boundary recovery. 70.53° is cited, to verify (Gärtner–Si–Fuhrmann 2010). | No 3D constrained boundary recovery (the TetGen-class problem). Interfaces need no conforming faces (M7). | The angle is the theorem's hypothesis, not a refusal rule. |
+| M7 | (Ruled R3.) Every node has one region; nodes are never on an interface. On each interface, a pair set: a 1D (2D domain) or 2D (3D domain) point set P on the interface with covering radius R(x), and for each p ∈ P the nodes p ± (s/2)·n. A **protected band**: no node outside the pair set lies within b(x) = √(R² + s²/4) of the interface. Pair spacing s = min(h(x), lfs(x)/2), where lfs is the local feature size, so pairs from different features cannot interfere. | Proven (away from corner zones, M8): with mirror symmetry and the band, every point of the interface is nearest to a pair node and every off-interface point is strictly nearer its own side's mirror image. So the Voronoi faces between the two regions lie in the interface, couplings between non-mirror nodes across it are exactly 0, and each cross edge's midpoint lies on the interface (the assembler's assumption, `assemble/interface_edges.hpp`). | Generalizes `mesh::straddle_interface` exactly. | Coordinates p ± s/2 round, so cross couplings come out at about 1e-17 relative instead of 0 (absorbed by M2's τ). The interface is a polyline or polygon at resolution s. |
+| M8 | Corners and junctions: a bend in an interface; an interface meeting the boundary, another interface (three or more regions) or a contact end. Inside a corner zone of radius 2s(x) around the feature, nodes are placed per sector (one per region, on the sector's bisector at distance s/2), and junction nodes on the boundary straddle the junction point. No angle limit is imposed. Instead the generator measures the dual interface near each feature (the union of Voronoi faces separating regions) and refuses (`degenerate_mesh`, feature index) when its Hausdorff distance from the true interface exceeds s, or a node falls in the wrong region. | Heuristic placement, checked postcondition (P4b). The bound s is the resolution M7 already accepts. | A check-based limit instead of an arbitrary angle. | Interface geometry inside corner zones is accurate only to s. |
+| M9 | Contacts. 2D: a patch is a sub-interval of boundary segments; its ends are straddled along the boundary by node pairs (M8 junction rule). 3D: each convex face carries any number of named patch polygons (simple polygons in the face, pairwise disjoint, each inside one face), with the rest of the face under the face's name. The face is first meshed by the 2D generator, with its patch edges as straddled 1D interfaces; the face nodes then go into the 3D mesh. A node on an edge between two faces belongs to a patch of each, with each patch's own area. | Proven (needs M3 b): under boundary conformity a node's boundary area on a face is its 2D Voronoi cell among the face's nodes. So patch boundaries are exact to s, by the M7 argument in 2D. Gate: compare with the 2D path computed independently. | Planar MOSFET source, drain and gate on one top face. | A patch cannot span two faces; a contact over two faces lists both patches' nodes. |
+| M10 | Slivers. **Not assumed harmless.** Facts: (i) exactly flat elements cannot exist (M4, P0); (ii) for Delaunay meshes the couplings and volumes are Voronoi measures, independent of slivers, and M1's exact determinants keep a sliver's circumcentre accurate; (iii) anything that interpolates on simplices (rendering, future AMR transfer, a future unstructured BTBT locator) **is** degraded by slivers. Handling: report the minimum dihedral angle and the sliver count (dihedral < 5°) per mesh. P5 compares the dual against an independent Voronoi clipping on test meshes. A sliver-rich stress test (perturbed lattice) must pass the same solver gates as a clean mesh. No refusal on angle. Sliver removal is deferred: it needs weighted Delaunay, so a power-diagram dual, a different control-volume definition needing its own ruling. | (i) and (ii) proven; their effect on the solve is measured, not assumed; (iii) limitation. | Separates what slivers can and cannot affect, with tests. | Simplex-based consumers must handle slivers when they arrive. |
+| M11 | Refinement and termination. 2D: Ruppert/Shewchuk with concentric-shell segment splitting; minimum-angle bound default 20.7°, option up to 33.8°; skinny triangles allowed only at small input angles. 3D: radius–edge bound default 2.0 with encroachment splitting; option down to 1.414. A size field h(x) with h_min > 0 (else `invalid_input`) and grading ≤ 1.5 per h. Every run has a node cap (`MeshOptions::max_nodes`, default 2e6), giving `resource_exhausted` if hit. Modified steps (no Steiner point in a protected band: split the interface pair set locally instead; elements made only of pair nodes exempt from the quality bound) are heuristic. | 2D: termination at 20.7° for input angles ≥ 60°, and with small angles under concentric shells, cited, to verify (Shewchuk 2002). 33.8°: heuristic. 3D: radius–edge ≤ 2 under an input-angle hypothesis, cited, to verify (Shewchuk 1998; sources disagree between 60° and 90°, so the paper's theorem must be checked). 1.414: heuristic (TetGen's practice). Band and pair modifications: heuristic, capped. | Proven where the literature proves it; otherwise capped and reported. | A heuristic run may stop at the cap, with a message naming it. |
+| M12 | Postconditions, checked on every generated mesh in Debug and Release (O(n)): P0 every element has orient > 0. P1 locally Delaunay (exact, tie-broken). P2 every boundary segment or facet is Gabriel (exact). P3 M2 totals. P4a every edge with nonzero coupling joining two regions is a mirror pair whose midpoint lies on the interface within 1e-12·L_e (outside corner zones). P4b the M8 corner bound. P5 per-node closure: Σ A_e t̂_e (outward) + Σ boundary area · n = 0 within 1e-11 relative to Σ\|A_e\|. A failure is `degenerate_mesh` naming the check; it signals a generator bug, never a user error. | Checks, not claims. The 1e-11 is a few ulps times the face count (≤ ~200). | Each guarantee in M3, M7 and M8 is verified, not trusted. | ~10–20% on top of generation time (to measure). |
+| M13 | Determinism and speed. Insertion order: BRIO rounds with a Hilbert-curve sort, using a fixed-seed splitmix64 (not `std::` distributions, whose output is implementation-defined). Point location by visibility walk from the last insertion (terminates on Delaunay triangulations); cavities by breadth-first search over neighbours. Same input and options give a bit-identical mesh on any machine (6.8). Budgets, measured and recorded, not promised: Release 2D 1e5 nodes ≤ 2 s; 3D 1e5 nodes ≤ 15 s. ctest meshes ≤ 1e4 nodes (2D) and ≤ 2e3 (3D); 3D solves in ctest ≤ 3e3 nodes; larger ones `[.benchmark]`. The Debug suite grows by ≤ 120 s in total, or cases move to `[.benchmark]`. | Expected O(n log n) for BRIO plus walking: cited (Amenta–Choi–Rote 2003). Budgets are targets. | 3D without fast location is O(n²); SparseLU fill-in makes large 3D solves slow (PARDISO for benchmarks). | Hilbert sort plus BRIO adds code. |
+| M14 | Mesh metadata persists. The io mesh file gains optional keyed records (IO2: old readers skip them): simplices, node region, patch provenance, generator options and a generation digest. `mesh_digest` stays the graph only, so a mesh's identity is unchanged. A new `load_generated_mesh` returns `GeneratedMesh`, or `invalid_input` if the records are missing; `load_mesh` is unchanged. | — | Reloaded meshes stay renderable (Unit 25) and refinable (Unit 17) without regeneration. | Larger files (simplices are about 2× the edges). |
+| M15 | (Ruled R4.) Doping profiles: constant, box, Gaussian and erfc per axis with lateral erfc fall-off, summed per species, sampled at nodes (`device/doping_profiles.hpp`). | — | Point sampling matches today's lambdas. | Abrupt doping steps are not straddled (U9). |
+| M16 | Nonlocal BTBT stays tensor-only; it is already refused without `DeviceDescription::cells`. | — | Keeps the unit to meshing. | Unstructured nonlocal tunnelling waits for a cell-walk locator. |
+
+**Gates (predefined, so a threshold is never set after the run):**
+- **Tensor equivalence:** split rectangles and Kuhn-split boxes give exactly `make_tensor_grid`'s volumes, couplings
+  and areas to 1e-13 relative, with the diagonals dropped. Their diode solve matches the tensor run to 1e-12.
+- **Dual correctness:** P5 closure, plus an *independent* Voronoi cell per node (half-space clipping by bisectors, which
+  does not use the simplices) equal to the simplex-built dual within 1e-12 on small 2D and 3D meshes. Closure alone
+  cannot detect a wrong dual that is not orthogonal; the independent cells can.
+- **Linear-field consistency at the assembler:** Poisson with no charge, Dirichlet at two opposite faces and Neumann
+  elsewhere. The discrete potential equals the exact linear one to 1e-12 on generated meshes, and the field
+  reconstruction recovers the uniform field exactly. This replaces revision 1's linear-flux gate, which duplicated
+  closure.
+- **Convergence** (smooth Gaussian doping, h, h/2, h/4; reference a 4× finer tensor solve interpolated
+  bilinearly):
+  - discrete H1 potential error order ≥ 0.9 (proven O(h) for admissible meshes: Eymard–Gallouët–Herbin, cited, to
+    verify);
+  - L2 potential order recorded, gate ≥ 1.5 (observed second order is typical but not proven on general meshes);
+  - terminal current order ≥ 0.9.
+  - Abrupt junction: a laterally uniform 2D unstructured diode against the 1D legacy-validated diode; current error ≤
+    the error of a 2D tensor grid with the same node count against the same reference.
+- **MOSFET acceptance:**
+  - Reference: the existing tensor MOSFET (`tests/solve/mosfet_test.cpp`) at 2× refinement per direction.
+  - Compared: I_D at every sweep point above the current resolution, V_T (analysis extraction), maximum g_m, and the
+    subthreshold slope over the resolved range.
+  - Pass: |Q_unstructured − Q_ref| ≤ k · |Q_tensor − Q_ref| + f, with k = 1.5 (U1). Q_tensor is the baseline tensor
+    MOSFET; the unstructured mesh has at most as many nodes. f = the reference's Richardson error estimate.
+  - Every point converges, with bias step cutting on if needed (recorded).
+  - Off-state current is excluded (6.13).
+- **Slivers:** the perturbed-lattice 3D diode passes the same convergence gates as the clean one; sliver statistics are
+  recorded.
+- **Refusals, predicates, determinism, io:** each M2/M6/M8/M12 refusal returns its code and index; exact signs on 1e-17
+  perturbations and cocircular/cospherical sets; two runs bit-identical; `save`/`load_generated_mesh` round trip.
+- **Mutation tests:** at least: drop a circumcentric piece's sign; skip P2; skip the band rule; reverse the tie-break; use
+  `<` for `<=` in τ; break insertion order. Each must fail a gate.
+
+**Unresolved (need a ruling or carried as limits):**
+- U1 MOSFET factor k = 1.5: a judgement, not derived. The owner may set it.
+- U2 Imported meshes (`make_dual_mesh` on outside simplices) can be checked for P0–P3 and P5, but not P4: without the
+  interface geometry the assembler's midpoint assumption is unchecked for them. The proposal is to document this and
+  report the cross-region edge count.
+- U3 Termination is unproven for the band and pair modifications (M7, M8), for 3D convex domains with input angles
+  under the M6/M11 hypotheses, and for options beyond the cited bounds. Capped (M11) and reported.
+- U4 Corner-zone accuracy (M8) has no a-priori bound; it is measured and refused above s.
+- U5 Slivers affect future simplex-based consumers (M10 iii); removal needs a power-diagram dual (its own decision).
+- U6 Literature hypotheses to confirm against the papers before `ARCHITECTURE.md` cites them: Gärtner–Si–Fuhrmann 2010
+  (70.53°, 2D arbitrary polygons); Shewchuk 1998 (radius–edge ≤ 2, input-angle threshold 60° or 90°); Shewchuk 2002
+  (20.7°, concentric shells); Devillers–Teillaud 2011; Amenta–Choi–Rote 2003; Eymard–Gallouët–Herbin.
+- U7 Non-convex 3D domains (fins, mesas) are deferred.
+- U8 The L2 order gate (1.5) is a judgement where theory gives no rate.
+- U9 Region-only straddling: doping steps (abrupt junctions not on a region boundary) are not straddled, so an abrupt
+  junction is resolved only to h. "Doping interfaces" with pairs could be added later.
+- U10 Budgets (M13) are targets. If the 3D generator misses its gates or budgets within the unit, the PR carries 2D plus
+  3D import and says so (unchanged from revision 1).
 
 ---
 
