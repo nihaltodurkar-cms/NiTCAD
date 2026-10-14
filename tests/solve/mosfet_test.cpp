@@ -431,6 +431,54 @@ TEST_CASE("mosfet: field mobility lowers the drain current at high drain bias (U
     REQUIRE(ratio.back() < 0.9);
 }
 
+TEST_CASE("mosfet: step cutting takes the field-mobility drain sweep at the default damping "
+          "(Unit 28)",
+          "[.benchmark]") {
+    // The sweep of the Unit 13 test above, at the legacy damping cap of 5 V_T: its first drain
+    // step diverges. With step cutting from the gate-on state it reaches every point, and each is
+    // the steady state the 1 V_T sweep finds.
+    const device::Device d = mosfet();
+    const std::vector<double> gate_on{0.0, 0.0, 0.0, 1.0};
+    const auto start = solve::solve_bias(d, gate_on);
+    REQUIRE(start.has_value());
+    std::vector<std::vector<double>> points;
+    for (int k = 1; k <= 10; ++k) points.push_back({0.0, 0.1 * k, 0.0, 1.0});
+    solve::BiasOptions field;
+    field.models.field_mobility = true;
+    const auto plain = solve::sweep_bias(d, points, field, &start->fields);
+    REQUIRE(plain.has_value());
+    REQUIRE(plain->stopped.has_value());
+    REQUIRE(plain->points.empty());
+
+    solve::BiasOptions cut = field;
+    cut.step_control.max_cuts = 10;
+    cut.step_control.initial_bias_V = gate_on;
+    const auto stepped = solve::sweep_bias(d, points, cut, &start->fields);
+    solve::BiasOptions damped = field;
+    damped.newton.max_update = 1.0;
+    const auto reference = solve::sweep_bias(d, points, damped, &start->fields);
+    REQUIRE(stepped.has_value());
+    REQUIRE(reference.has_value());
+    REQUIRE_FALSE(stepped->stopped.has_value());
+    REQUIRE_FALSE(reference->stopped.has_value());
+    std::vector<int> substeps;
+    std::vector<std::size_t> iterations, damped_iterations;
+    double worst = 0.0;
+    for (std::size_t k = 0; k < points.size(); ++k) {
+        const double a = stepped->points[k].terminal_current[1];
+        const double b = reference->points[k].terminal_current[1];
+        worst = std::max(worst, std::abs(a - b) /
+                                    std::max(std::abs(b),
+                                             reference->points[k].terminal_current_resolution[1]));
+        substeps.push_back(stepped->points[k].bias_substeps);
+        iterations.push_back(stepped->points[k].convergence.iterations.size());
+        damped_iterations.push_back(reference->points[k].convergence.iterations.size());
+    }
+    CAPTURE(substeps, iterations, damped_iterations, worst);
+    CHECK(substeps.front() > 0);
+    CHECK(worst < 1e-6);
+}
+
 TEST_CASE("mosfet: a meshed oxide gives the lumped-oxide transfer curve (Unit 15b)", "[.mosfet]") {
     // Id-Vg at Vds = 0.05 V from -1 to 1.5 V on both devices. They differ by the oxide's fringing
     // field at the gate edges and over source and drain (the lumped oxide couples each surface

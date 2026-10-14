@@ -117,6 +117,13 @@ std::vector<std::pair<std::string, double>> settings(const BiasOptions& o) {
         // Unit 23: likewise.
         if (o.models.electrothermal) s.emplace_back("models.electrothermal", 1.0);
     }
+    // Unit 28: recorded only when on, so the runs without it keep their identity.
+    if (o.step_control.max_cuts > 0) {
+        s.emplace_back("step_control.max_cuts", static_cast<double>(o.step_control.max_cuts));
+        s.emplace_back("step_control.growth", o.step_control.growth);
+        s.emplace_back("step_control.max_iterations",
+                       static_cast<double>(o.step_control.max_iterations));
+    }
     if (o.Ns_override) s.emplace_back("scaling.Ns_override", *o.Ns_override);
     return s;
 }
@@ -286,6 +293,10 @@ void device_and_settings(Digest& d, const device::Device& device, const BiasOpti
     for (const auto& [name, value] : named) {
         d.text(name);
         d.real(value);
+    }
+    // Unit 28: only when the step control is on and given it, so other runs keep their identity.
+    if (options.step_control.max_cuts > 0 && !options.step_control.initial_bias_V.empty()) {
+        d.reals(options.step_control.initial_bias_V);
     }
 }
 

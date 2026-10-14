@@ -1,12 +1,13 @@
 # NiTCAD — Architecture
 
-**CURRENT ARCHITECTURE, updated for Units 1–15b and 18–24.** Units 1–10 established the validated drift-diffusion
-foundation; Units 11–15b added band-gap narrowing and Auger, gate contacts (the MOS capacitor and the MOSFET), field
-mobility, Fermi–Dirac statistics, heterojunctions and meshed insulators with interface traps; Units 18–22 and 24 added
-the PARDISO backend, impact ionization with arc-length continuation, band-to-band tunnelling, transients, AC
-small-signal analysis and the extraction engine. All of these are on `main` (the last as `c8fd145`); Unit 23,
-electrothermal coupling, is on its branch (section 11). The architecture below keeps the implemented layers and
-numerical contracts intact while adding a long-term north-star for a general multiphysics semiconductor equation engine.
+**CURRENT ARCHITECTURE, updated for Units 1–15b and 18–24, with Unit 28 on its branch.** Units 1–10 established the
+validated drift-diffusion foundation; Units 11–15b added band-gap narrowing and Auger, gate contacts (the MOS capacitor
+and the MOSFET), field mobility, Fermi–Dirac statistics, heterojunctions and meshed insulators with interface traps;
+Units 18–22 and 24 added the PARDISO backend, impact ionization with arc-length continuation, band-to-band tunnelling,
+transients, AC small-signal analysis and the extraction engine; Unit 23 added electrothermal coupling. All of these are
+on `main` (Unit 23 merged as `7300b67`, PR #30). Unit 28, bias step cutting, is on its branch (sections 11 and 11.3).
+The architecture below keeps the implemented layers and numerical contracts intact while adding a long-term north-star
+for a general multiphysics semiconductor equation engine.
 Sections distinguish implemented design from target architecture: the north-star material (2.1, 2.2, 6.12, 11.1, 11.2,
 14.6) is future target architecture, not a new layer and not a claim about the current implementation. The dependency
 architecture of sections 3 and 4 is authoritative.
@@ -2352,11 +2353,12 @@ built.
 | 20 | Band-to-band tunnelling and nonlocal path machinery | assemble, physics, solve | **done, on `main`** (`cf2f70a`): local Kane (the legacy silicon pair), nonlocal paths traced through tensor-grid cells as frozen geometry with live evaluation and relocation, the calibrated Kane rate at the path's mean field (silicon) and the direct-gap WKB rate (cited masses only), pure generation, off by default and bit-identical when off (6.2, Unit 20) |
 | 21 | Transient simulation | solve, assemble, results | **done, on `main`** (`a601e7e`): backward Euler and variable-step BDF2 with error-controlled steps, waveforms, displacement current with exact conservation, interface trap dynamics eliminated in the interface solve (6.2, Unit 21) |
 | 22 | AC small-signal analysis | linalg, assemble, solve, results | **done, on `main`** (`75cc2c0`): J + iωt₀C + T(iωt₀) at a DC or quasi-static operating point, complex linear solver, admittance matrix with displacement current and a resolution bound, interface traps in the frequency domain (6.2, Unit 22) |
-| 23 | Thermal / electrothermal coupling | physics, assemble, solve | **done on branch `physics/electrothermal`**: the lattice temperature as a fourth Newton unknown (the rise τ) with an exact Jacobian; Wachutka's thermodynamic fluxes (Boltzmann and Fermi–Dirac), the heat as the energy flux's divergence with Peltier and Thomson heat, isothermal and R_th thermal contacts; T in every model the assembler has; steady sweeps, `trace_bias` (thermal-runaway folds), transients and AC; traps and BTBT refused; thermionic emission (deferred) and incomplete ionization refused (6.2, Unit 23; DECISIONS.md T1–T14, U1–U8) |
+| 23 | Thermal / electrothermal coupling | physics, assemble, solve | **done, on `main`** (`7300b67`, PR #30): the lattice temperature as a fourth Newton unknown (the rise τ) with an exact Jacobian; Wachutka's thermodynamic fluxes (Boltzmann and Fermi–Dirac), the heat as the energy flux's divergence with Peltier and Thomson heat, isothermal and R_th thermal contacts; T in every model the assembler has; steady sweeps, `trace_bias` (thermal-runaway folds), transients and AC; traps and BTBT refused; thermionic emission (deferred) and incomplete ionization refused (6.2, Unit 23; DECISIONS.md T1–T14, U1–U8) |
 | 24 | Analysis and extraction engine | analysis | **done, on `main`** (`4183767`): curves read from sweeps and small-signal runs; transistor, diode and breakdown figures; C-V doping profile, flat band and the conductance method; two-port Y/Z/h/S, Mason's U, k, MAG/MSG, f_T and f_max; every extraction with the points it used and resolution and extrapolation flags (6.13, Unit 24) |
 | 25 | Scientific visualization / rendering | render | target |
 | 26 | Native Windows application and workflow | app | target; Win32 API, x64 target, Direct3D 12 / Direct2D |
 | 27 | Optimization / sensitivity / inverse-design workflows | analysis, solve | long-term target |
+| 28 | Bias step cutting (commercial-readiness programme, 11.3) | solve, results | **verified on branch `solve/bias-step-control`** (based on `main` after PR #30; its base `59de5d5` has `main`'s tree): off by default; halving and growth from the last converged state (11.3, Unit 28; DECISIONS.md S1–S7) |
 
 Units 1–9 are the smallest end-to-end vertical slice: a validated drift-diffusion diode. Everything past
 Unit 10 is deferred until sequenced. Units 11–15, 15b, 21 and 22 were requested by the owner after Unit 10; nothing
@@ -2398,6 +2400,55 @@ Analysis / visualization / optimization
 ```
 
 No device family should require a second numerical architecture to participate in this flow.
+
+### 11.3 Commercial-readiness programme: status (owner request, 2026-10-09; DECISIONS.md)
+
+Status words: **verified** (built, on a branch or `main`, Debug and Release suites pass), **in progress** (a branch
+exists, not finished), **planned** (nothing built). Audit of 2026-10-09, against the code on `physics/electrothermal`, since merged to `main` (`7300b67`, PR #30).
+
+| Area | What exists (audited) | Status | Next step |
+|---|---|---|---|
+| Robust nonlinear solving | Newton with componentwise clipping (6.2); the generation-free retry (Units 19, 20); arc-length `trace_bias` (Unit 19) | **Bias step cutting verified** (Unit 28, below; branch `solve/bias-step-control`) | A backtracking line search in `newton_solve`; a Gummel or pseudo-transient fallback |
+| Input/output, checkpoint/restart | In-memory C++ description only; no file format (R2) | planned | A versioned, checksummed binary state file (fields + bias + run record) for restart; then a text input deck. Needs the owner's ruling on a new layer (`io`, beside `results`) |
+| Geometry and unstructured 3D meshing | `Mesh::from_parts` accepts any valid node/edge/volume graph; only the tensor-grid producer exists; nonlocal BTBT needs tensor cells (6.11) | planned (Unit 16) | A 2D Delaunay/Voronoi producer with geometric checks, then 3D tetrahedra; analytic doping profiles |
+| Low-current accuracy | `terminal_current_resolution` reports the floor (Unit 15); off-state MOSFET current unresolved (6.13) | planned | Current extraction from the minority side or quasi-Fermi unknowns, gated against the resolution |
+| Generic fields/equations | Specialized `DriftDiffusion` assembler with a stride (Unit 23) | planned (6.12.1–2) | Field and equation descriptors behind the current assembler, bit-identical |
+| Scalable linear solvers | Eigen SparseLU (default), PARDISO opt-in (Unit 18) | planned | Iterative Krylov with ILU/AMG behind `linalg`; parallel assembly |
+| Results and provenance | Plain-data results; run record with identity digest (6.6) | partial | Persisted with the checkpoint format; build/version stamp |
+| Visualization, GUI, batch | None (Units 25, 26) | planned | A batch runner over the input deck before the GUI |
+| Validation against published/measured data | Legacy, analytic and convergence gates throughout | partial | Published benchmark devices with cited data |
+
+**As built (Unit 28, bias step cutting; `solve::StepControl` in `solve/bias.hpp`; DECISIONS.md S1–S7):**
+- When a sweep point does not converge, the bias step to it is retried from the last converged state, halved until a
+  sub-step converges, then grown ×`growth` (default 2) up to the rest of the step; the point fails only when a step
+  below 2^-`max_cuts` of the full one fails, with that limit in the message. With the control on, every attempt (the
+  full step included) is limited to `StepControl::max_iterations` Newton iterations (default 25), so a diverging
+  attempt fails fast. Contact biases (and thermal-contact
+  temperatures) move linearly. Retried: `non_convergence`, `singular_system`, `inaccurate_solve`; cancellation is
+  checked before every sub-step. Both equation sets share the loop (`run_points` in `src/solve/bias.cpp`), as do the
+  generation-free retry and tunnel-path relocation, which now run inside each attempt.
+- Off by default (`max_cuts = 0`): every existing path, result and run identity is unchanged. The first point steps
+  from zero bias when the sweep starts from equilibrium, or from `initial_bias_V` when given an initial state.
+- Results: `BiasPoint::bias_substeps`; the point's convergence is its last Newton run; progress iterations count across
+  a point's attempts so events stay strictly increasing. The settings and `initial_bias_V` enter the run record only
+  when on.
+- Gates (`tests/solve/step_control_test.cpp`, 7 cases; `[.mosfet]` case in `mosfet_test.cpp`):
+  - the legacy diode's 0 → 0.8 V jump, which fails in 8 Newton iterations, is reached by cutting, and equals a fine
+    16-step sweep's 0.8 V state to 1e-9 relative (potential, densities, current);
+  - with the control on but never needed, every field, current and iteration count is identical to the control off;
+  - a step failing at the smallest cut stops the sweep with the earlier points kept and the limit named;
+  - progress strictly increasing across attempts; cancellation inside the cut attempts keeps the completed points;
+  - a given initial state without `initial_bias_V` is not cut; invalid options are errors before solving.
+  - MOSFET benchmark (`[.benchmark]` in `mosfet_test.cpp`, Release, not in ctest: 12 minutes): the field-mobility
+    drain sweep at V_G = 1 V, which diverges at its first step under the default 5 V_T cap (6.2, Unit 13), completes
+    with cutting; every point's drain current equals the 1 V_T sweep's to 3.0e-14 relative. Each 0.1 V point took 7
+    sub-steps and 12–19 Newton iterations in its last run (the 1 V_T sweep: 10–16, no sub-steps).
+- **Finding, cost:** most of that run is failed attempts (each up to `max_iterations`, default 25). Without the
+  per-attempt limit every failure ran the full 100 Newton iterations and the run did not finish in 20 minutes; the
+  limit was added for that. Cutting rescues a sweep whose failure is a step-size problem; this MOSFET's is a damping
+  problem (6.2, Unit 13), which a line search should fix far more cheaply. Cutting is the safety net, not the cure.
+- Not in Unit 28: a predictor (sub-steps start from the previous state), a Newton line search, an automatic
+  `initial_bias_V` (a checkpoint format should carry the bias with the state).
 
 ## 12. Legacy facts: verified, derived and unverified
 
@@ -2572,6 +2623,7 @@ architecture; historical branch names remain only where they are useful to expla
 | V29 | Unit 24 (`analysis/extraction`): Debug and Release build with no warnings; all suites pass (Release 13/13 with the new `analysis` ctest, Debug 9/9; `nitcad_analysis_test` 22 test cases). Synthetic gates and the gates on solved devices as listed in 6.13: the Unit 9 diode ideality equals V16's fit to 1e-12 (1.004060); MOSFET V_th equals the legacy max-g_m extraction to 1e-12, swing 70.55 mV/decade, f_T 0.54% from the quasi-static value; MOS-C V_FB within 0.7 mV; the trap level's conductance peak 0.22%; a junction's doping profile within 1.9%; breakdown at 1e-4 A/cm² 0.11% from analytic; BV_CEO at the fold. Findings: the MOS-C 1/C² profile in weak depletion and the MOSFET's unresolved off state (6.13). No solver source changed, so steady, transient and AC results are those of `main`. 43 of 43 mutations caught (five after a rewrite that builds). | Verified locally; on `main` (`4183767`, PR #27). |
 | V30 | Unit 18 (`linalg/pardiso`): Debug and Release build with no warnings; all suites pass with the MKL runtime configured (oneMKL 2026.1, Intel's NuGet redistributable; Release 14/14, Debug 10/10, the new ctest `linalg_mkl_absent` in both). PARDISO agrees with Eigen SparseLU on the shared systems (5.6e-16 to 5.5e-12), complex G + iωC (1.8e-13), the diode (J(0.5 V) to 11 digits), MOS-C (7.9e-17), transient (2.2e-14), admittances within max(1e-9 max |Y|, resolution), the MOSFET Id-Vg; reuse gate 1 analysis / one factorization per Jacobian / one solve per right-hand side; floating regions rejected through perturbed pivots. Refactorization 5x (2D MOSFET) and 17x (3D, 81k unknowns) faster than Eigen on one thread, 16x and 74x on eight. Default Eigen path: the 14 probe runs hash identically to `main`. 18 of 20 mutations caught (one equivalent, one unreachable). | Verified locally. |
 | V31 | Unit 23 (`physics/electrothermal`): Debug and Release build with no warnings; all suites pass (Release 14/14, Debug 10/10); `nitcad_physics_test` 91 test cases, `nitcad_device_test` 25, `nitcad_assemble_test` 96, `nitcad_solve_test` 167 (+9 `[.mosfet]`, one of them the electrothermal MOSFET, Release only). The electrothermal gates, cost and the 34 + 5 mutation checks (all caught; the U1–U8 rulings re-verified 2026-10-09) in 6.2 "As built (Unit 23)". With the model off every path is unchanged (the full suites pass after the stride refactor). | Verified locally. |
+| V32 | Unit 28 (`solve/bias-step-control`): Release 14/14 and Debug 10/10, both with no warnings (Debug `solve` 957 s against 596 s before: the step-control gates are slow in Debug); `nitcad_solve_test` 174 test cases (+9 `[.mosfet]`, +1 `[.benchmark]`, not in ctest); the other suites unchanged. Step-control gates, the MOSFET benchmark (3.0e-14 against the 1 V_T sweep, 12 minutes) and the cost finding in 11.3. With the control off every existing test passes unchanged. | Verified locally. |
 | V3 | Scaling definitions, scaled variables and Newton tolerances read from `inputs.cpp` and `device1d.cpp` and recorded in 6.1. One open question remains for Unit 8 (convergence criterion on the clipped correction). | Verified |
 
 Verifications due at their own unit: none left. The 5e-5 Jacobian gate's normalization was read at Unit 7 (section 10), and

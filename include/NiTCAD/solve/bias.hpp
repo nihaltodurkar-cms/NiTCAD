@@ -42,8 +42,33 @@ enum class Equations : std::uint8_t {
     equilibrium_poisson,  // Poisson alone, carriers in thermal equilibrium (only gates biased)
 };
 
+// Automatic bias step cutting (Unit 28). When a point does not converge from the previous
+// converged state, the bias step to it is halved, from the previous converged state, until a
+// sub-step converges; each converged sub-step lets the next grow by `growth`, up to the rest of
+// the step. The point fails only when a step below 2^-max_cuts of the full one fails. Every
+// contact's bias (and, with the electrothermal model, every thermal contact's temperature) moves
+// linearly along the step. The sub-step states are not points of the sweep: only the requested
+// point is recorded, with its sub-step count in BiasPoint::bias_substeps and its last Newton run
+// in its convergence.
+// Off by default (max_cuts = 0): a point that does not converge stops the sweep, as before.
+// What a cut retries: non_convergence, singular_system and inaccurate_solve; cancellation and
+// resource_exhausted stop at once. The first point steps from the bias of the starting state:
+// zero on every contact for a drift-diffusion sweep started from equilibrium, initial_bias_V for
+// a sweep given an initial state; without one (initial_bias_V empty, or the quasi-static sweep
+// started from the charge-neutral potential) it is not cut.
+struct StepControl {
+    int max_cuts = 0;     // 0: off; at most 52 (a step of 2^-52 is at the rounding of the bias)
+    double growth = 2.0;  // the factor a sub-step grows by after converging; at least 1
+    // The Newton iteration limit of every attempt (the full step included), when on: a diverging
+    // attempt is cut after these rather than after newton.max_iterations (the smaller applies).
+    int max_iterations = 25;
+    // The contact biases of the initial state given to the sweep, if known (empty: unknown).
+    std::vector<double> initial_bias_V;
+};
+
 struct BiasOptions {
     NewtonOptions newton;
+    StepControl step_control;
     linalg::SolverConfig linear;
     std::optional<double> Ns_override;  // see assemble::make_scaling
     assemble::PhysicsModels models;     // equilibrium_poisson: bgn, fermi_dirac and
@@ -56,7 +81,9 @@ struct BiasOptions {
 };
 
 // Solves each bias point in order. `points[k]` holds one bias in V per contact.
-// Errors, before anything is solved (invalid_input unless noted): no points; a point rejected by
+// Errors, before anything is solved (invalid_input unless noted): no points; step_control with
+// max_cuts outside 0..52, growth not finite or below 1, max_iterations below 1, or
+// initial_bias_V neither empty nor one finite value per contact; a point rejected by
 // assemble::check_contact_bias (one finite value per contact; with equilibrium_poisson, every
 // ohmic contact at 0 V), with the point as context index, the contact named in the message and its
 // bias as value; an initial state without a finite potential for every node, or, for
