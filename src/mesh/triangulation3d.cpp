@@ -164,6 +164,7 @@ int Triangulation3D::insert(const Point& p, const Cavity& c) {
     // vertices; each such pair of vertices is shared by exactly two new tetrahedra.
     std::vector<std::tuple<int, int, int, int>> shared;  // (lo, hi, new tet, j)
     shared.reserve(3 * pending.size());
+    created_.clear();
     for (const Pending& q : pending) {
         const int t = new_tet(q.v);
         Tetrahedron& nt = tets_[static_cast<std::size_t>(t)];
@@ -188,6 +189,7 @@ int Triangulation3D::insert(const Point& p, const Cavity& c) {
             shared.emplace_back(std::min(a, b), std::max(a, b), t, static_cast<int>(j));
         }
         for (const int v : nt.v) vertex_tet_[static_cast<std::size_t>(v)] = t;
+        created_.push_back(t);
         last_ = t;
     }
     std::ranges::sort(shared);

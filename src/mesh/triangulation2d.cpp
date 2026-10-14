@@ -156,6 +156,28 @@ int Triangulation2D::insert(const Point& p) {
     return insert(p, cavity(p, t));
 }
 
+std::vector<int> Triangulation2D::incident(int v) const {
+    std::vector<int> out;
+    const int start = vertex_triangle_[static_cast<std::size_t>(v)];
+    if (start < 0) return out;
+    std::vector<int> stack{start};
+    out.push_back(start);
+    while (!stack.empty()) {
+        const int t = stack.back();
+        stack.pop_back();
+        const Triangle& tr = tris_[static_cast<std::size_t>(t)];
+        for (std::size_t i = 0; i < 3; ++i) {
+            if (tr.v[i] == v) continue;  // the edge opposite v does not hold v
+            const int nb = tr.n[i];
+            if (nb < 0 || std::ranges::find(out, nb) != out.end()) continue;
+            out.push_back(nb);
+            stack.push_back(nb);
+        }
+    }
+    std::ranges::sort(out);
+    return out;
+}
+
 std::optional<int> Triangulation2D::triangle_with_edge(int a, int b) const {
     const int start = vertex_triangle_[static_cast<std::size_t>(a)];
     if (start < 0) return std::nullopt;

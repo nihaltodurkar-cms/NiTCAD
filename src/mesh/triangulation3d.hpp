@@ -66,6 +66,8 @@ public:
     // locate, cavity and insert. Precondition: p strictly inside the super tetrahedron, not a vertex.
     int insert(const Point& p);
 
+    // The tetrahedra created by the last insertion.
+    [[nodiscard]] const std::vector<int>& created() const noexcept { return created_; }
     // The alive tetrahedra incident to vertex v.
     [[nodiscard]] std::vector<int> incident(int v) const;
     // The id the tie-break uses for vertex v.
@@ -81,6 +83,7 @@ private:
     std::vector<int> vertex_tet_;  // an alive tetrahedron incident to each vertex
     mutable std::vector<std::uint32_t> mark_;  // per tetrahedron slot: the stamp of the last search
     mutable std::uint32_t stamp_ = 0;
+    std::vector<int> created_;
     int last_ = 0;
 };
 

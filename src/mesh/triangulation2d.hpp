@@ -64,6 +64,8 @@ public:
 
     // The alive triangle with directed edge a -> b (counterclockwise in it), if any.
     [[nodiscard]] std::optional<int> triangle_with_edge(int a, int b) const;
+    // The alive triangles incident to vertex v, in increasing slot order.
+    [[nodiscard]] std::vector<int> incident(int v) const;
     // The id the tie-break uses for vertex v.
     [[nodiscard]] NodeId tie_id(int v) const noexcept;
 

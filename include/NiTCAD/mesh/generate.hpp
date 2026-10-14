@@ -106,6 +106,14 @@ struct MeshReport {
     std::size_t segment_splits = 0;
     std::size_t exempt_triangles = 0;  // skinny or large, but in a band or all interface nodes
     double min_angle_deg = 0.0;        // over the triangles not exempt
+    // 3D only (DECISIONS.md M10, M11).
+    std::size_t tetrahedra = 0;
+    std::size_t facet_splits = 0;       // boundary subfacets split at their circumcentres
+    std::size_t exempt_tetrahedra = 0;  // poor or large, but not refinable (see generate_mesh 3D)
+    double max_radius_edge = 0.0;       // over the tetrahedra not exempt
+    double min_dihedral_deg = 0.0;      // over all tetrahedra
+    std::size_t slivers = 0;            // tetrahedra with a dihedral angle below 5 degrees
+    std::size_t flat_dropped = 0;       // tetrahedra dropped with all four vertices on one face
 };
 
 struct GeneratedMesh {
@@ -121,5 +129,68 @@ struct GeneratedMesh {
 // feature, the corner rule did not meet P4b, DECISIONS.md U12).
 [[nodiscard]] std::expected<GeneratedMesh, base::Error> generate_mesh(const Geometry2D& geometry,
                                                                      const MeshOptions2D& options);
+
+
+// The 3D generator (Unit 16; DECISIONS.md M6, M9-M13): convex polyhedra.
+//
+// Input: a convex polyhedron with named faces. Output: a boundary-conforming Delaunay
+// tetrahedralization (every boundary triangle Gabriel, P2), its box-method graph (make_dual_mesh),
+// and the region of every node.
+//
+// Geometry rules (invalid_input otherwise, the index naming the face or vertex):
+// - vertices finite; each face at least three distinct vertex indices in range, a non-empty name
+//   unique among the faces;
+// - each face exactly planar (every vertex on the plane of its first three non-collinear ones, by
+//   exact orientation), convex and simple (every vertex on the same side of every edge's line,
+//   exactly);
+// - the polyhedron closed (every edge in exactly two faces, V - E + F = 2) and strictly convex
+//   (every vertex not in a face strictly on one side of its plane, the same side for all), so of
+//   non-zero volume. Non-convex domains are refused (DECISIONS.md U7).
+//
+// Node placement and refinement (Shewchuk's 3D Delaunay refinement, DECISIONS.md M11): the
+// polyhedron's vertices; then, in this priority, encroached boundary edge segments are split (at
+// midpoints; next to a polyhedron vertex at a power of two from it), encroached boundary
+// subfacets (the triangles of each face's 2D Delaunay triangulation) are split at their
+// circumcentres, and tetrahedra with a circumradius-to-shortest-edge ratio above radius_edge or a
+// circumradius above sqrt(3/8) h (a regular tetrahedron of edge h) get their circumcentre. A
+// subsegment or subfacet is encroached when it is missing from the tetrahedralization or a vertex
+// lies strictly inside its diametral ball. A candidate circumcentre that encroaches subsegments
+// or subfacets is not inserted: they are split instead. A candidate outside the domain that
+// encroaches nothing is not inserted, and its tetrahedron is exempt and counted. Termination at
+// radius_edge = 2 for input angles of at least 90 degrees is cited, to verify (Shewchuk 1998,
+// DECISIONS.md U6); otherwise heuristic, capped by max_nodes.
+// Points on axis-aligned faces and edges keep their constant coordinates exactly, so they are
+// exactly coplanar or collinear. Points on oblique faces are rounded off the plane by about an
+// ulp; the tetrahedra whose four vertices lie on one face (by construction) are dropped, and the
+// result is checked: every boundary triangle on one face, the volume equal to the polyhedron's to
+// 1e-12, then make_dual_mesh's P0-P3 and P5. Determinism: the same input gives the same mesh in
+// the same build.
+struct PolyhedronFace {
+    std::vector<std::size_t> vertices;  // indices into ConvexPolyhedron::vertices, in order around the face
+    std::string name;                   // the boundary patch of the result
+};
+
+struct ConvexPolyhedron {
+    std::vector<Point> vertices;  // cm
+    std::vector<PolyhedronFace> faces;
+};
+
+struct Geometry3D {
+    ConvexPolyhedron domain;
+    std::int32_t region = 0;  // the region of every node, >= 0
+};
+
+struct MeshOptions3D {
+    double max_size = 0.0;                // h [cm], finite and positive
+    std::vector<SizeBox> boxes;           // smaller h where given (lo and hi in all three coordinates)
+    double radius_edge = 2.0;             // in [1.414, infinity)
+    std::size_t max_nodes = 2'000'000;
+};
+
+// Errors: invalid_input (the geometry or option rules above); resource_exhausted (max_nodes
+// reached, or refinement did not settle within its iteration cap); degenerate_mesh (the generated
+// mesh failed the boundary check or an import check).
+[[nodiscard]] std::expected<GeneratedMesh, base::Error> generate_mesh(const Geometry3D& geometry,
+                                                                     const MeshOptions3D& options);
 
 }  // namespace NiTCAD::mesh
