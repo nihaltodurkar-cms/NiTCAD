@@ -168,7 +168,8 @@ add_executable(nitcad_mesh_test
   tests/mesh/predicates_test.cpp
   tests/mesh/filter_test.cpp
   tests/mesh/simplex_mesh_test.cpp
-  tests/mesh/interfaces_test.cpp)
+  tests/mesh/interfaces_test.cpp
+  tests/mesh/origin_test.cpp)
 # The predicate and dual-geometry tests read the internal headers directly (Unit 16).
 target_include_directories(nitcad_mesh_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/mesh")
 target_link_libraries(nitcad_mesh_test PRIVATE NiTCAD::mesh Catch2::Catch2WithMain)
@@ -219,7 +220,8 @@ target_link_libraries(nitcad_device PUBLIC NiTCAD::base NiTCAD::mesh NiTCAD::phy
 add_executable(nitcad_device_test
   tests/device/device_test.cpp
   tests/device/topology_test.cpp
-  tests/device/insulator_test.cpp)
+  tests/device/insulator_test.cpp
+  tests/device/certificate_test.cpp)
 target_link_libraries(nitcad_device_test PRIVATE NiTCAD::device Catch2::Catch2WithMain)
 add_test(NAME device COMMAND nitcad_device_test)
 
@@ -288,7 +290,8 @@ target_link_libraries(nitcad_io PUBLIC NiTCAD::base NiTCAD::mesh NiTCAD::results
 
 add_executable(nitcad_io_test
   tests/io/record_test.cpp
-  tests/io/files_test.cpp)
+  tests/io/files_test.cpp
+  tests/io/origin_test.cpp)
 # The record test reads the private encoding directly.
 target_include_directories(nitcad_io_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/io")
 target_link_libraries(nitcad_io_test PRIVATE NiTCAD::io Catch2::Catch2WithMain)

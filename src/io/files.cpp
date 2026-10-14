@@ -126,7 +126,7 @@ std::expected<std::vector<std::byte>, base::Error> read_file(const std::filesyst
 
 namespace mesh_key {
 constexpr std::uint16_t dimension = 1, points = 2, volumes = 3, endpoints = 4, lengths = 5,
-                        couplings = 6, patch = 7;
+                        couplings = 6, patch = 7, origin = 8;  // origin: absent in older files
 constexpr std::uint16_t patch_name = 1, patch_nodes = 2, patch_areas = 3;
 }  // namespace mesh_key
 
@@ -149,6 +149,7 @@ Writer write_mesh(const mesh::Mesh& m) {
     w.i64s(mesh_key::endpoints, ends);
     w.f64s(mesh_key::lengths, lengths);
     w.f64s(mesh_key::couplings, couplings);
+    w.u64(mesh_key::origin, static_cast<std::uint64_t>(m.origin()));
     for (const mesh::BoundaryPatch& b : m.boundary()) {
         Writer p;
         p.text(mesh_key::patch_name, b.name);
@@ -168,6 +169,10 @@ std::expected<mesh::Mesh, base::Error> read_mesh(const Reader& r) {
     NITCAD_IO_TRY(lengths, r.f64s(mesh_key::lengths));
     NITCAD_IO_TRY(couplings, r.f64s(mesh_key::couplings));
     NITCAD_IO_TRY(patches, r.records(mesh_key::patch));
+    NITCAD_IO_TRY(origin, r.u64_or(mesh_key::origin, 0));  // a file without it: a general graph
+    if (origin > static_cast<std::uint64_t>(mesh::MeshOrigin::tensor_grid)) {
+        return std::unexpected(corrupt("unknown mesh origin"));
+    }
     if (xyz.size() % 3 != 0 || ends.size() != 2 * lengths.size() ||
         couplings.size() != lengths.size()) {
         return std::unexpected(corrupt("mesh array sizes"));
@@ -201,7 +206,8 @@ std::expected<mesh::Mesh, base::Error> read_mesh(const Reader& r) {
         boundary.push_back(std::move(b));
     }
     return mesh::Mesh::from_parts(static_cast<int>(dimension), std::move(points),
-                                  std::move(volumes), std::move(edges), std::move(boundary));
+                                  std::move(volumes), std::move(edges), std::move(boundary),
+                                  static_cast<mesh::MeshOrigin>(origin));
 }
 
 // --- results -----------------------------------------------------------------------------------

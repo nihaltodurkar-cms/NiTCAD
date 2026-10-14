@@ -1,6 +1,7 @@
 #include "NiTCAD/mesh/interfaces.hpp"
 
 #include <algorithm>
+#include <bit>
 #include <array>
 #include <cmath>
 #include <cstddef>
@@ -309,6 +310,57 @@ std::expected<InterfaceReport, base::Error> check_interfaces(const SimplexMesh& 
         }
     }
     return report;
+}
+
+namespace {
+
+void digest_word(std::uint64_t& h, std::uint64_t v) {
+    for (int i = 0; i < 8; ++i) {
+        h ^= (v >> (8 * i)) & 0xffU;
+        h *= 0x100000001b3ULL;
+    }
+}
+
+std::uint64_t interfaces_digest(const InterfaceSet& set) {
+    std::uint64_t h = 0xcbf29ce484222325ULL;
+    digest_word(h, std::bit_cast<std::uint64_t>(set.resolution));
+    digest_word(h, set.pieces.size());
+    for (const InterfacePiece& p : set.pieces) {
+        digest_word(h, static_cast<std::uint64_t>(static_cast<std::uint32_t>(p.region_a)));
+        digest_word(h, static_cast<std::uint64_t>(static_cast<std::uint32_t>(p.region_b)));
+        digest_word(h, p.vertices.size());
+        for (const Point& v : p.vertices) {
+            for (const double c : v) digest_word(h, std::bit_cast<std::uint64_t>(c));
+        }
+    }
+    return h;
+}
+
+}  // namespace
+
+std::uint64_t region_digest(std::span<const std::int32_t> node_region) {
+    std::uint64_t h = 0xcbf29ce484222325ULL;
+    digest_word(h, node_region.size());
+    for (const std::int32_t r : node_region) {
+        digest_word(h, static_cast<std::uint64_t>(static_cast<std::uint32_t>(r)));
+    }
+    return h;
+}
+
+std::expected<InterfaceCertificate, base::Error> certify_interfaces(
+    const SimplexMesh& simplices, const Mesh& dual, std::span<const std::int32_t> node_region,
+    const InterfaceSet& interfaces) {
+    auto report = check_interfaces(simplices, dual, node_region, interfaces);
+    if (!report) return std::unexpected(std::move(report.error()));
+    return InterfaceCertificate{.mesh_digest = graph_digest(dual),
+                                .region_digest = region_digest(node_region),
+                                .interfaces_digest = interfaces_digest(interfaces),
+                                .report = *report};
+}
+
+bool certifies(const InterfaceCertificate& c, const Mesh& mesh,
+               std::span<const std::int32_t> node_region) {
+    return c.mesh_digest == graph_digest(mesh) && c.region_digest == region_digest(node_region);
 }
 
 }  // namespace NiTCAD::mesh

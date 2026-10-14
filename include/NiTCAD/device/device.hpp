@@ -36,6 +36,7 @@
 
 #include "NiTCAD/base/error.hpp"
 #include "NiTCAD/device/contact.hpp"
+#include "NiTCAD/mesh/interfaces.hpp"
 #include "NiTCAD/mesh/mesh.hpp"
 #include "NiTCAD/mesh/tensor_cells.hpp"
 #include "NiTCAD/physics/insulator.hpp"
@@ -104,6 +105,10 @@ struct DeviceDescription {
     std::optional<mesh::TensorCells> cells;
     // Heat sinks of the electrothermal model (Unit 23); read only by it. May be empty.
     std::vector<ThermalContact> thermal_contacts;
+    // The P4 certificate (mesh::certify_interfaces, DECISIONS.md U2): required when there is more
+    // than one region on a 2D or 3D mesh that is not a tensor grid, and then it must be issued
+    // for this mesh and these node regions. Ignored otherwise.
+    std::optional<mesh::InterfaceCertificate> interface_certificate;
 };
 
 class Device {
@@ -140,6 +145,9 @@ public:
     //   by physics::check_interface_traps for the semiconductor side (the message says which);
     //   the index is the interface;
     // - cells that are not those of the mesh (mesh::TensorCells::matches);
+    // - more than one region on a 2D or 3D mesh that is not a tensor grid, without an
+    //   interface_certificate,
+    //   or with one issued for another mesh or other node regions (stale; DECISIONS.md U2);
     // - a thermal contact (Unit 23) whose name is empty or repeated, of unknown kind, on a boundary
     //   patch that does not exist or shares a node with another thermal contact's patch, with a
     //   temperature not finite and positive or rejected by physics::check_temperature for a

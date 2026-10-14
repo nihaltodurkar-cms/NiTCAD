@@ -76,4 +76,29 @@ struct InterfaceReport {
     const SimplexMesh& simplices, const Mesh& dual, std::span<const std::int32_t> node_region,
     const InterfaceSet& interfaces);
 
+
+// A record that check_interfaces established P4 for one mesh, one node-region assignment and one
+// set of declared interfaces (DECISIONS.md U2). Device::create requires a matching one for a
+// multi-region device on a mesh that is not a tensor grid; a certificate whose digests do not
+// match the device's mesh and node regions is stale and refused.
+struct InterfaceCertificate {
+    std::uint64_t mesh_digest = 0;        // graph_digest of the dual mesh
+    std::uint64_t region_digest = 0;      // region_digest of the node regions
+    std::uint64_t interfaces_digest = 0;  // the declared pieces and resolution
+    InterfaceReport report;
+};
+
+// FNV-1a 64 of a node-region assignment (count, then each region as a 64-bit word).
+[[nodiscard]] std::uint64_t region_digest(std::span<const std::int32_t> node_region);
+
+// check_interfaces, and on success the certificate of what it checked. Errors: those of
+// check_interfaces.
+[[nodiscard]] std::expected<InterfaceCertificate, base::Error> certify_interfaces(
+    const SimplexMesh& simplices, const Mesh& dual, std::span<const std::int32_t> node_region,
+    const InterfaceSet& interfaces);
+
+// Whether the certificate was issued for this mesh and these node regions.
+[[nodiscard]] bool certifies(const InterfaceCertificate& c, const Mesh& mesh,
+                             std::span<const std::int32_t> node_region);
+
 }  // namespace NiTCAD::mesh
