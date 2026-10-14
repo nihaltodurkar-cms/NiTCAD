@@ -22,9 +22,9 @@
 // Node placement:
 // - along each interface, mirrored pairs at +-s/2, graded toward each end (1.5 s, 3 s) and at
 //   most min(h, 4 s) apart elsewhere;
-// - at a bend of exactly 90 degrees no corner nodes (mirror symmetry makes it exact); at every
-//   other interior feature one node per sector on its bisector at s/2; at a junction with the
-//   boundary a node at s/2 on either side along the boundary;
+// - no corner nodes at any interior feature (DECISIONS.md U15: the graded pairs alone measured
+//   better than bisector nodes everywhere; a 90-degree bend is exact by mirror symmetry); P4b
+//   judges every feature; at a junction with the boundary a node at s/2 on either side along it;
 // - boundary nodes at domain corners and at patch ends (exactly at the given points), then at most h
 //   apart.
 // Refinement (Ruppert): encroached boundary segments are split (at midpoints; next to a domain

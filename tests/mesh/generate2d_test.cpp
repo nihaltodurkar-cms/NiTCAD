@@ -124,78 +124,68 @@ TEST_CASE("generator: a flat interface, certified; the device needs the certific
     check_quality(*m, o);
 }
 
-TEST_CASE("generator: interface features under the corner rules (U12)", "[mesh][generate]") {
+namespace {
+
+// No node within one resolution of a feature point: the generator places no corner nodes (U15);
+// the nearest are the graded pairs, sqrt((1.5 s)^2 + (s/2)^2) = 1.58 s away.
+void check_no_corner_nodes(const GeneratedMesh& m, const Point& v, double s) {
+    for (const Point& p : m.simplices.points) CHECK(std::hypot(p[0] - v[0], p[1] - v[1]) > s);
+}
+
+}  // namespace
+
+TEST_CASE("generator: every measured corner configuration (U12, U15 regression)", "[mesh][generate]") {
+    // Regression bounds from the measurements of 2026-10-14 (DECISIONS.md U15), per configuration;
+    // P4b (<= s) still decides acceptance, these catch a regression below it.
     MeshOptions2D o;
     o.max_size = 0.1;
     o.interface_resolution = 1.0 / 64.0;
-    SECTION("a 90-degree bend: no corner nodes, exact") {
-        Geometry2D g{{{{{0, 0, 0}, {1, 0, 0}, {1, 0.5, 0}, {0.5, 0.5, 0}, {0.5, 1, 0}, {0, 1, 0}}, 0},
-                      {{{0.5, 0.5, 0}, {1, 0.5, 0}, {1, 1, 0}, {0.5, 1, 0}}, 1}},
-                     {}};
-        const auto m = generate_mesh(g, o);
+    const double s = o.interface_resolution;
+    const auto certified = [&](const Geometry2D& g) {
+        auto m = generate_mesh(g, o);
         REQUIRE(m.has_value());
         REQUIRE(m->certificate.has_value());
-        CHECK(m->certificate->report.max_corner_deviation <= 1e-12 * o.interface_resolution);  // exact
         CHECK(m->certificate->report.max_flat_deviation <= 1.0);
+        return std::move(*m);
+    };
+    SECTION("a flat interface: exact") {
+        const auto m = certified({{rect(0, 0, 1, 0.5, 0), rect(0, 0.5, 1, 1, 1)}, {}});
+        CHECK(m.certificate->report.max_corner_deviation <= 1e-12 * s);
     }
-    SECTION("a T-junction of three regions") {
-        Geometry2D g{{{{{0, 0, 0}, {1, 0, 0}, {1, 0.5, 0}, {0.5, 0.5, 0}, {0, 0.5, 0}}, 0}, rect(0, 0.5, 0.5, 1, 1),
-                      rect(0.5, 0.5, 1, 1, 2)},
-                     {}};
-        const auto m = generate_mesh(g, o);
-        REQUIRE(m.has_value());
-        REQUIRE(m->certificate.has_value());
-        CHECK(m->certificate->report.max_corner_deviation <= o.interface_resolution);
+    SECTION("a 90-degree bend: exact, no corner nodes") {
+        const auto m = certified({{{{{0, 0, 0}, {1, 0, 0}, {1, 0.5, 0}, {0.5, 0.5, 0}, {0.5, 1, 0}, {0, 1, 0}}, 0},
+                                   {{{0.5, 0.5, 0}, {1, 0.5, 0}, {1, 1, 0}, {0.5, 1, 0}}, 1}},
+                                  {}});
+        CHECK(m.certificate->report.max_corner_deviation <= 1e-12 * s);
+        check_no_corner_nodes(m, {0.5, 0.5, 0}, s);
     }
-    SECTION("a 60.3-degree bend with an oblique boundary junction: accepted only through P4b") {
-        // The arm meets y = 1.5 at x = 0.97: about 60.3 degrees (exactly 60 cannot be represented, and
-        // a hair below is refused).
-        const double top = 0.97;
-        Geometry2D g{{{{{0, 0, 0}, {1.5, 0, 0}, {1.5, 0.5, 0}, {0.4, 0.5, 0}, {top, 1.5, 0}, {0, 1.5, 0}}, 0},
-                      {{{0.4, 0.5, 0}, {1.5, 0.5, 0}, {1.5, 1.5, 0}, {top, 1.5, 0}}, 1}},
-                     {}};
-        const auto m = generate_mesh(g, o);
-        if (m.has_value()) {
-            REQUIRE(m->certificate.has_value());
-            CHECK(m->certificate->report.max_corner_deviation <= o.interface_resolution);
-        } else {
-            // The ruling's other outcome: refused because P4b failed, never silently accepted.
-            CHECK(m.error().code == ErrorCode::degenerate_mesh);
-            CHECK(m.error().message.find("U12") != std::string::npos);
-        }
-        INFO((m.has_value() ? "accepted, corner deviation / s = " +
-                                  std::to_string(m->certificate->report.max_corner_deviation / o.interface_resolution)
-                            : "refused: " + m.error().message));
-        CHECK(m.has_value());  // measured: the generator's 60-degree construction meets P4b
+    SECTION("a T-junction of three regions: exact (0.31 s with bisector nodes)") {
+        const auto m = certified({{{{{0, 0, 0}, {1, 0, 0}, {1, 0.5, 0}, {0.5, 0.5, 0}, {0, 0.5, 0}}, 0},
+                                   rect(0, 0.5, 0.5, 1, 1), rect(0.5, 0.5, 1, 1, 2)},
+                                  {}});
+        CHECK(m.certificate->report.max_corner_deviation <= 1e-12 * s);
+        check_no_corner_nodes(m, {0.5, 0.5, 0}, s);
     }
-    SECTION("a 120-degree bend (measured 0.73 s)") {
-        Geometry2D g{{{{{0, 0, 0}, {1.5, 0, 0}, {1.5, 0.5, 0}, {0.6, 0.5, 0}, {0.1, 1.5, 0}, {0, 1.5, 0}}, 0},
-                      {{{0.6, 0.5, 0}, {1.5, 0.5, 0}, {1.5, 1.5, 0}, {0.1, 1.5, 0}}, 1}},
-                     {}};
-        const auto m = generate_mesh(g, o);
-        REQUIRE(m.has_value());
-        REQUIRE(m->certificate.has_value());
-        CHECK(m->certificate->report.max_corner_deviation <= o.interface_resolution);
-        CHECK(m->certificate->report.max_corner_deviation > 0.0);  // bisector nodes: not exact
-        // The ruled rule (U12): one node per sector on its bisector at s / 2 from the bend at
-        // (0.6, 0.5); the arms run toward +x and toward (0.1, 1.5).
-        const double s = o.interface_resolution;
-        const double ax = 1.0, ay = 0.0;
-        const double bl = std::hypot(-0.5, 1.0), bx = -0.5 / bl, by = 1.0 / bl;
-        const double dl = std::hypot(ax + bx, ay + by);
-        const std::array<Point, 2> expected{Point{0.6 + 0.5 * s * (ax + bx) / dl, 0.5 + 0.5 * s * (ay + by) / dl, 0},
-                                            Point{0.6 - 0.5 * s * (ax + bx) / dl, 0.5 - 0.5 * s * (ay + by) / dl, 0}};
-        for (const Point& e : expected) {
-            bool found = false;
-            for (const Point& p : m->simplices.points) found = found || std::hypot(p[0] - e[0], p[1] - e[1]) <= 1e-14;
-            CHECK(found);
-        }
+    SECTION("a 60.3-degree bend with an oblique boundary junction: 0.359 s (0.95 s with bisector nodes)") {
+        const double top = 0.97;  // the arm meets y = 1.5 here; exactly 60 cannot be represented
+        const auto m = certified({{{{{0, 0, 0}, {1.5, 0, 0}, {1.5, 0.5, 0}, {0.4, 0.5, 0}, {top, 1.5, 0}, {0, 1.5, 0}}, 0},
+                                   {{{0.4, 0.5, 0}, {1.5, 0.5, 0}, {1.5, 1.5, 0}, {top, 1.5, 0}}, 1}},
+                                  {}});
+        CHECK(m.certificate->report.max_corner_deviation <= 0.37 * s);
+        check_no_corner_nodes(m, {0.4, 0.5, 0}, s);
     }
-    SECTION("a 45-degree sector is refused (U12)") {
-        Geometry2D g{{{{{0, 0, 0}, {1, 0, 0}, {1, 0.5, 0}, {0.4, 0.5, 0}, {0.9, 1.0, 0}, {0, 1, 0}}, 0},
-                      {{{0.4, 0.5, 0}, {1, 0.5, 0}, {1, 1, 0}, {0.9, 1.0, 0}}, 1}},
-                     {}};
-        const auto m = generate_mesh(g, o);
+    SECTION("a 120-degree bend: 0.321 s (0.73 s with bisector nodes)") {
+        const auto m = certified({{{{{0, 0, 0}, {1.5, 0, 0}, {1.5, 0.5, 0}, {0.6, 0.5, 0}, {0.1, 1.5, 0}, {0, 1.5, 0}}, 0},
+                                   {{{0.6, 0.5, 0}, {1.5, 0.5, 0}, {1.5, 1.5, 0}, {0.1, 1.5, 0}}, 1}},
+                                  {}});
+        CHECK(m.certificate->report.max_corner_deviation <= 0.33 * s);
+        check_no_corner_nodes(m, {0.6, 0.5, 0}, s);
+    }
+    SECTION("a 45-degree sector is still refused (U12)") {
+        const auto m = generate_mesh({{{{{0, 0, 0}, {1, 0, 0}, {1, 0.5, 0}, {0.4, 0.5, 0}, {0.9, 1.0, 0}, {0, 1, 0}}, 0},
+                                       {{{0.4, 0.5, 0}, {1, 0.5, 0}, {1, 1, 0}, {0.9, 1.0, 0}}, 1}},
+                                      {}},
+                                     o);
         REQUIRE_FALSE(m.has_value());
         CHECK(m.error().code == ErrorCode::invalid_input);
         CHECK(m.error().message.find("U12") != std::string::npos);

@@ -386,30 +386,11 @@ struct Generator {
                                    " degrees (refused until justified, DECISIONS.md U12), at " + where(v));
                 }
             }
-            // Corner nodes (U12): none at a 90-degree bend; else one per sector on its bisector.
-            if (walls.empty()) {
-                const bool right_bend = arms.size() == 2 && predicates::dot_sign(v, arms[0], arms[1]) == 0;
-                if (!right_bend) {
-                    for (std::size_t i = 0; i < rays.size(); ++i) {
-                        const Point& a = rays[i];
-                        const Point& b = rays[(i + 1) % rays.size()];
-                        const double ax = a[0] - v[0], ay = a[1] - v[1], bx = b[0] - v[0], by = b[1] - v[1];
-                        const double la = std::hypot(ax, ay), lb = std::hypot(bx, by);
-                        double dx = ax / la + bx / lb, dy = ay / la + by / lb;
-                        const int turn = predicates::orient2d(v, a, b);
-                        if (turn < 0 || (rays.size() == 1)) {
-                            dx = -dx;
-                            dy = -dy;
-                        }
-                        if (turn == 0) {  // a straight sector: the left normal of a
-                            dx = -ay / la;
-                            dy = ax / la;
-                        }
-                        const double ld = std::hypot(dx, dy);
-                        add(Point{v[0] + 0.5 * s * dx / ld, v[1] + 0.5 * s * dy / ld, 0.0}, NodeKind::interface_node);
-                    }
-                }
-            }
+            // No corner nodes at any feature (DECISIONS.md U15, 2026-10-14): the graded pairs alone
+            // gave a smaller corner deviation in every measured configuration than the bisector
+            // nodes U12 first prescribed (0 against 0.31 s at a T-junction, 0.36 against 0.95 s at
+            // 60.3 degrees, 0.32 against 0.73 s at 120 degrees; a 90-degree bend is exact either way).
+            // P4b still judges every feature after generation.
         }
         // Chains: straight runs through non-feature vertices.
         std::vector<char> used(interface_edges.size(), 0);
