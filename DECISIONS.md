@@ -215,7 +215,7 @@ Choices made without a ruling, open to the owner's review:
 Finding (ARCHITECTURE.md 11.3): cutting rescues the MOSFET field-mobility drain sweep at the default damping, but
 expensively (7 sub-steps per 0.1 V point). Unit 30 then measured a Newton line search against it (below).
 
-### Unit 29 — the io layer (branch `io/checkpoint`, based on `main` after PR #32)
+### Unit 29 — the io layer (merged to `main` as `f69a7a8`, PR #33, 2026-10-14)
 
 **Owner decision (2026-10-09):** "File I/O layer: Approved." D5's layer list gains `io` (depends on base, mesh,
 results; solve does not use it). Choices made within that approval, open to review:
