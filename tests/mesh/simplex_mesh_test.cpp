@@ -13,6 +13,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <map>
 #include <string>
 #include <utility>
@@ -21,11 +22,14 @@
 #include "NiTCAD/mesh/mesh.hpp"
 #include "NiTCAD/mesh/simplex_mesh.hpp"
 #include "NiTCAD/mesh/tensor_grid.hpp"
+#include "dual_tolerance.hpp"
 #include "predicates.hpp"
+#include "simplex_fixtures.hpp"
 
 using namespace NiTCAD::mesh;
 using NiTCAD::base::ErrorCode;
 namespace pr = NiTCAD::mesh::predicates;
+using namespace mesh_fixtures;
 
 namespace {
 
@@ -34,69 +38,6 @@ const std::vector<double> ax{0.0, 1e-7, 3e-7, 7e-7, 1.5e-6, 1.0e-5};
 const std::vector<double> ay{0.0, 2.0e-6, 2.5e-6, 9.0e-6};
 const std::vector<double> az{0.0, 5.0e-6, 6.0e-6};
 
-bool close(double a, double b, double rel) {
-    return std::abs(a - b) <= rel * std::max(std::abs(a), std::abs(b));
-}
-
-struct SplitMix {
-    std::uint64_t state;
-    double uniform() {
-        std::uint64_t z = (state += 0x9E3779B97F4A7C15ull);
-        z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ull;
-        z = (z ^ (z >> 27)) * 0x94D049BB133111EBull;
-        return static_cast<double>((z ^ (z >> 31)) >> 11) * 0x1p-53;
-    }
-};
-
-// Grid points in make_tensor_grid's order (x fastest).
-std::vector<Point> grid_points(const std::vector<double>& x, const std::vector<double>& y,
-                               const std::vector<double>& z = {}) {
-    std::vector<Point> p;
-    const std::size_t nz = z.empty() ? 1 : z.size();
-    for (std::size_t k = 0; k < nz; ++k) {
-        for (std::size_t j = 0; j < y.size(); ++j) {
-            for (std::size_t i = 0; i < x.size(); ++i) {
-                p.push_back({x[i], y[j], z.empty() ? 0.0 : z[k]});
-            }
-        }
-    }
-    return p;
-}
-
-// Lists every topological boundary facet whose nodes lie on one face of the box [lo, hi], under
-// the tensor grid's patch names and order: x_min, x_max, y_min, y_max, z_min, z_max.
-void tag_box_boundary(SimplexMesh& s, const Point& lo, const Point& hi) {
-    const auto dim = static_cast<std::size_t>(s.dimension);
-    const std::size_t per = dim + 1;
-    std::map<std::vector<NodeId>, int> count;
-    for (std::size_t c = 0; c < s.cells.size() / per; ++c) {
-        for (std::size_t l = 0; l < per; ++l) {
-            std::vector<NodeId> key;
-            for (std::size_t q = 0; q < per; ++q) {
-                if (q != l) key.push_back(s.cells[c * per + q]);
-            }
-            std::ranges::sort(key);
-            ++count[key];
-        }
-    }
-    const std::array<const char*, 6> names{"x_min", "x_max", "y_min", "y_max", "z_min", "z_max"};
-    s.patch_names.assign(names.begin(), names.begin() + static_cast<std::ptrdiff_t>(2 * dim));
-    for (const auto& [key, c] : count) {
-        if (c != 1) continue;
-        for (std::size_t a = 0; a < dim; ++a) {
-            for (const int side : {0, 1}) {
-                const double plane = side == 0 ? lo[a] : hi[a];
-                const bool on = std::ranges::all_of(
-                    key, [&](NodeId v) { return s.points[static_cast<std::size_t>(v)][a] == plane; });
-                if (!on) continue;
-                s.facets.insert(s.facets.end(), key.begin(), key.end());
-                s.facet_patch.push_back(static_cast<std::int32_t>(2 * a) + side);
-            }
-        }
-    }
-}
-
-// Each rectangle split into two triangles; `checker` alternates the diagonal.
 SimplexMesh split_rectangles(const std::vector<double>& x, const std::vector<double>& y,
                              bool checker) {
     SimplexMesh s;
@@ -152,71 +93,6 @@ SimplexMesh kuhn_boxes(const std::vector<double>& x, const std::vector<double>& 
 
 // The Delaunay triangulation of the points under the perturbed predicates, by brute force: every
 // non-degenerate simplex whose perturbed circumsphere holds no other point.
-std::vector<NodeId> brute_delaunay(int dim, const std::vector<Point>& p) {
-    const auto n = static_cast<NodeId>(p.size());
-    const auto P = [&](NodeId i) -> const Point& { return p[static_cast<std::size_t>(i)]; };
-    std::vector<NodeId> cells;
-    if (dim == 2) {
-        for (NodeId i = 0; i < n; ++i) {
-            for (NodeId j = i + 1; j < n; ++j) {
-                for (NodeId k = j + 1; k < n; ++k) {
-                    const int o = pr::orient2d(P(i), P(j), P(k));
-                    if (o == 0) continue;
-                    const NodeId a = o > 0 ? i : j, b = o > 0 ? j : i;
-                    bool empty = true;
-                    for (NodeId l = 0; l < n && empty; ++l) {
-                        if (l == i || l == j || l == k) continue;
-                        empty = pr::incircle_perturbed({P(a), P(b), P(k), P(l)}, {a, b, k, l}) < 0;
-                    }
-                    if (empty) cells.insert(cells.end(), {a, b, k});
-                }
-            }
-        }
-        return cells;
-    }
-    for (NodeId i = 0; i < n; ++i) {
-        for (NodeId j = i + 1; j < n; ++j) {
-            for (NodeId k = j + 1; k < n; ++k) {
-                for (NodeId m = k + 1; m < n; ++m) {
-                    const int o = pr::orient3d(P(i), P(j), P(k), P(m));
-                    if (o == 0) continue;
-                    const NodeId a = o > 0 ? i : j, b = o > 0 ? j : i;
-                    bool empty = true;
-                    for (NodeId l = 0; l < n && empty; ++l) {
-                        if (l == i || l == j || l == k || l == m) continue;
-                        empty = pr::insphere_perturbed({P(a), P(b), P(k), P(m), P(l)},
-                                                       {a, b, k, m, l}) < 0;
-                    }
-                    if (empty) cells.insert(cells.end(), {a, b, k, m});
-                }
-            }
-        }
-    }
-    return cells;
-}
-
-// The total measure of the cells (positive orientation assumed), in double.
-double cell_measure(int dim, const SimplexMesh& s) {
-    const std::size_t per = static_cast<std::size_t>(dim) + 1;
-    double total = 0.0;
-    for (std::size_t c = 0; c < s.cells.size() / per; ++c) {
-        const auto P = [&](std::size_t k) { return s.points[static_cast<std::size_t>(s.cells[c * per + k])]; };
-        const Point a = P(0), b = P(1), d = P(2);
-        const std::array<double, 3> u{b[0] - a[0], b[1] - a[1], b[2] - a[2]};
-        const std::array<double, 3> v{d[0] - a[0], d[1] - a[1], d[2] - a[2]};
-        if (dim == 2) {
-            total += 0.5 * std::abs(u[0] * v[1] - u[1] * v[0]);
-        } else {
-            const Point e = P(3);
-            const std::array<double, 3> w{e[0] - a[0], e[1] - a[1], e[2] - a[2]};
-            total += std::abs(u[0] * (v[1] * w[2] - v[2] * w[1]) - u[1] * (v[0] * w[2] - v[2] * w[0]) +
-                              u[2] * (v[0] * w[1] - v[1] * w[0])) /
-                     6.0;
-        }
-    }
-    return total;
-}
-
 void expect_same_graph(const Mesh& got, const Mesh& want, double rel) {
     REQUIRE(got.dimension() == want.dimension());
     REQUIRE(got.node_count() == want.node_count());
@@ -259,14 +135,6 @@ std::size_t unique_edge_count(int dim, const SimplexMesh& s) {
     }
     std::ranges::sort(e);
     return static_cast<std::size_t>(std::ranges::unique(e).begin() - e.begin());
-}
-
-SimplexMesh two_d(std::vector<Point> points, std::vector<NodeId> cells) {
-    SimplexMesh s;
-    s.dimension = 2;
-    s.points = std::move(points);
-    s.cells = std::move(cells);
-    return s;
 }
 
 ErrorCode code_of(const SimplexMesh& s) {
@@ -612,4 +480,111 @@ TEST_CASE("degenerate meshes are refused with degenerate_mesh and the cell", "[m
         t.cells = {0, 1, 2, 3};
         CHECK(code_of(t) == ErrorCode::degenerate_mesh);
     }
+}
+
+TEST_CASE("M2 rule: exact boundaries of keep, zero and refuse", "[mesh][simplex][tolerance]") {
+    using NiTCAD::mesh::detail::accept_volume;
+    using NiTCAD::mesh::detail::classify_total;
+    using NiTCAD::mesh::detail::dual_tau;
+    using NiTCAD::mesh::detail::TotalClass;
+    constexpr double inf = std::numeric_limits<double>::infinity();
+    for (const double scale : {1.0, 3.0, 1e-14, 1e-30, 2.5e8}) {
+        const double t = dual_tau * scale;
+        INFO("scale " << scale);
+        CHECK(classify_total(0.0, scale) == TotalClass::zero);
+        CHECK(classify_total(t, scale) == TotalClass::zero);  // both ends included
+        CHECK(classify_total(std::nextafter(t, inf), scale) == TotalClass::keep);
+        CHECK(classify_total(-t, scale) == TotalClass::zero);
+        CHECK(classify_total(std::nextafter(-t, -inf), scale) == TotalClass::refuse);
+        CHECK_FALSE(accept_volume(t, scale));  // a zero volume is refused, not dropped
+        CHECK(accept_volume(std::nextafter(t, inf), scale));
+    }
+    CHECK(classify_total(std::nan(""), 1.0) == TotalClass::refuse);
+    CHECK(classify_total(inf, 1.0) == TotalClass::refuse);
+    CHECK_FALSE(accept_volume(std::nan(""), 1.0));
+}
+
+TEST_CASE("M2 on assembled totals: the threshold, under changes of scale", "[mesh][simplex][tolerance]") {
+    // The unit square with (0, 1) moved to (0, 1 + eps): the diagonal (0,0)-(1,1) is Delaunay; its
+    // total coupling is eps / sqrt 2 (the right angle at (1,0) contributes 0, the angle at
+    // (0, 1 + eps) has cotangent eps), its scale max(L, |pieces|) = sqrt 2. It is dropped below
+    // eps = 2e-12 (total 1.414e-12 = tau * scale) and kept above, at every coordinate scale.
+    for (const double lambda : {1.0, 1e-7, 0x1p-40, 1e5}) {
+        for (const auto& [eps, kept] : {std::pair{1e-12, false}, std::pair{4e-12, true}, std::pair{1e-9, true}}) {
+            INFO("lambda " << lambda << ", eps " << eps);
+            const std::vector<Point> p{{0, 0, 0}, {lambda, 0, 0}, {lambda, lambda, 0}, {0, lambda * (1 + eps), 0}};
+            DualMeshReport report;
+            const auto m = make_dual_mesh(two_d(p, {0, 1, 2, 0, 2, 3}), &report);
+            REQUIRE(m.has_value());
+            CHECK(report.dropped_edges == (kept ? 0u : 1u));
+            if (kept) {
+                const auto it = std::ranges::find_if(m->edges(), [](const Edge& e) { return e.first == 0 && e.second == 2; });
+                REQUIRE(it != m->edges().end());
+                CHECK(close(it->coupling_area, lambda * eps / std::sqrt(2.0), 1e-3));
+            }
+        }
+    }
+    // The same in 3D: the Kuhn-split tensor grid scaled by lambda drops the same diagonals.
+    std::size_t reference = 0;
+    for (const double lambda : {1.0, 1e-9, 1e3}) {
+        std::vector<double> x = ax, y = ay, z = az;
+        for (double& v : x) v *= lambda;
+        for (double& v : y) v *= lambda;
+        for (double& v : z) v *= lambda;
+        DualMeshReport report;
+        REQUIRE(make_dual_mesh(kuhn_boxes(x, y, z), &report).has_value());
+        if (lambda == 1.0) reference = report.dropped_edges;
+        CHECK(report.dropped_edges == reference);
+    }
+}
+
+TEST_CASE("M2 on assembled totals: cancellation of large pieces, and validity before totals",
+          "[mesh][simplex][tolerance]") {
+    // (-3,4), (3,4), (0,5), (0,-5) lie on the circle of radius 5. The shared edge (-3,4)-(3,4) has
+    // pieces -4 (the obtuse angle at (0,5)) and +4 (at (0,-5)), both exact: the total is exactly 0,
+    // its scale max(L, |pieces|) = 8, and it is dropped, not refused.
+    const std::vector<Point> p{{-3, 4, 0}, {3, 4, 0}, {0, 5, 0}, {0, -5, 0}};
+    DualMeshReport report;
+    REQUIRE(make_dual_mesh(two_d(p, {0, 1, 2, 1, 0, 3}), &report).has_value());
+    CHECK(report.dropped_edges == 1);
+    // With (0,-5) moved out by one ulp the quad is still Delaunay; the total is a tiny positive
+    // rounding-level value, still dropped.
+    std::vector<Point> out = p;
+    out[3][1] = std::nextafter(-5.0, -10.0);
+    REQUIRE(make_dual_mesh(two_d(out, {0, 1, 2, 1, 0, 3}), &report).has_value());
+    CHECK(report.dropped_edges == 1);
+    // Moved in by one ulp it is not Delaunay: refused by the exact P1 test, although its total
+    // (a tiny negative within tau * scale) would only have been dropped by M2.
+    std::vector<Point> in = p;
+    in[3][1] = std::nextafter(-5.0, 0.0);
+    const auto refused = make_dual_mesh(two_d(in, {0, 1, 2, 1, 0, 3}));
+    REQUIRE_FALSE(refused.has_value());
+    CHECK(refused.error().message.find("P1") != std::string::npos);
+    // (0,-10): one negative piece (-4) and one positive (6 * 187/84 / 2): only the total, 3 (187/84
+    // - 4/3) = 2.678571..., decides, and it is kept.
+    std::vector<Point> far = p;
+    far[3][1] = -10.0;
+    const auto m = make_dual_mesh(two_d(far, {0, 1, 2, 1, 0, 3}), &report);
+    REQUIRE(m.has_value());
+    CHECK(report.dropped_edges == 0);
+    const auto it = std::ranges::find_if(m->edges(), [](const Edge& e) { return e.first == 0 && e.second == 1; });
+    REQUIRE(it != m->edges().end());
+    CHECK(close(it->coupling_area, 3.0 * (187.0 / 84.0 - 4.0 / 3.0), 1e-14));
+}
+
+TEST_CASE("M2: the cancellation term decides when pieces dwarf the edge", "[mesh][simplex][tolerance]") {
+    // (-101, 5100), (101, 5100), (0, 5101), (0, -5101) lie on the circle of radius 5101. The chord
+    // (L = 202) has pieces -5100.5 and +5100.5, 25 times L. Moving (0, -5101) out by eta keeps the
+    // quad Delaunay and makes the total about eta / 2. Between tau L (2.0e-10) and tau sum |pieces|
+    // (1.02e-8) only the cancellation term of the scale treats it as zero: rounding in such a
+    // total scales with the pieces, not with L.
+    const auto edge_kept = [](double eta) {
+        const std::vector<Point> p{{-101, 5100, 0}, {101, 5100, 0}, {0, 5101, 0}, {0, -(5101 + eta), 0}};
+        const auto m = make_dual_mesh(two_d(p, {0, 1, 2, 1, 0, 3}));
+        REQUIRE(m.has_value());
+        return std::ranges::any_of(m->edges(), [](const Edge& e) { return e.first == 0 && e.second == 1; });
+    };
+    CHECK_FALSE(edge_kept(0.0));
+    CHECK_FALSE(edge_kept(2e-9));  // total ~1e-9: above tau L, within tau sum |pieces|
+    CHECK(edge_kept(2e-7));        // total ~1e-7: kept
 }

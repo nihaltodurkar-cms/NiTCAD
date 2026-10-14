@@ -15,15 +15,14 @@
 #include <vector>
 
 #include "dual_geometry.hpp"
+#include "dual_tolerance.hpp"
 #include "predicates.hpp"
 
 namespace NiTCAD::mesh {
 
 namespace {
 
-// M2: relative tolerance of a total against its scale (about 4.5e3 ulps; the precedent of
-// mesh.cpp's length tolerance). P5: closure tolerance relative to the sum of magnitudes.
-constexpr double tau = 1e-12;
+// P5: closure tolerance relative to the sum of magnitudes. The M2 rule is in dual_tolerance.hpp.
 constexpr double closure_tolerance = 1e-11;
 constexpr NodeId none = -1;
 
@@ -38,8 +37,6 @@ base::Error error(base::ErrorCode code, std::string message, std::optional<std::
 std::string pair_text(NodeId a, NodeId b) {
     return "(" + std::to_string(a) + ", " + std::to_string(b) + ")";
 }
-
-bool positive_finite(double v) noexcept { return std::isfinite(v) && v > 0.0; }
 
 // Exact orientation of up to four points of a cell, in the mesh dimension.
 int orientation(int dim, const std::vector<Point>& pts, const Cell& c) {
@@ -508,11 +505,10 @@ std::expected<Mesh, base::Error> make_dual_mesh(const SimplexMesh& s, DualMeshRe
         }
     }
 
-    // P3: volumes.
+    // P3: volumes (dual_tolerance.hpp).
     for (std::size_t i = 0; i < n; ++i) {
-        const double l = mean_length(i);
-        const double scale = std::max(std::pow(l, static_cast<double>(D)), volume_magnitude[i]);
-        if (!(volume[i] > tau * scale)) {
+        const double scale = detail::total_scale(mean_length(i), dim, volume_magnitude[i]);
+        if (!detail::accept_volume(volume[i], scale)) {
             return std::unexpected(error(ErrorCode::degenerate_mesh,
                                          "control volume is not positive (P3)", i, volume[i]));
         }
@@ -523,14 +519,15 @@ std::expected<Mesh, base::Error> make_dual_mesh(const SimplexMesh& s, DualMeshRe
     edges.reserve(totals.size());
     std::size_t dropped_edges = 0;
     for (const Total& t : totals) {
-        const double scale = std::max(std::pow(t.length, static_cast<double>(D - 1)), t.magnitude);
-        if (t.area < -tau * scale) {
+        const double scale = detail::total_scale(t.length, dim - 1, t.magnitude);
+        const detail::TotalClass c = detail::classify_total(t.area, scale);
+        if (c == detail::TotalClass::refuse) {
             return std::unexpected(error(ErrorCode::degenerate_mesh,
                                          "negative coupling area (P3) on edge " +
                                              pair_text(t.first, t.second),
                                          static_cast<std::size_t>(t.first), t.area));
         }
-        if (t.area <= tau * scale) {
+        if (c == detail::TotalClass::zero) {
             ++dropped_edges;
             continue;
         }
@@ -556,15 +553,15 @@ std::expected<Mesh, base::Error> make_dual_mesh(const SimplexMesh& s, DualMeshRe
             magnitude += std::abs(patch_pieces[g].value);
         }
         const auto i = static_cast<std::size_t>(node);
-        const double scale =
-            std::max(std::pow(mean_length(i), static_cast<double>(D - 1)), magnitude);
-        if (area < -tau * scale) {
+        const double scale = detail::total_scale(mean_length(i), dim - 1, magnitude);
+        const detail::TotalClass c = detail::classify_total(area, scale);
+        if (c == detail::TotalClass::refuse) {
             return std::unexpected(error(ErrorCode::degenerate_mesh,
                                          "negative boundary area (P3) in patch '" +
                                              s.patch_names[static_cast<std::size_t>(patch)] + "'",
                                          i, area));
         }
-        if (area <= tau * scale || !positive_finite(area)) {
+        if (c == detail::TotalClass::zero) {
             ++dropped_patch_nodes;
             continue;
         }
