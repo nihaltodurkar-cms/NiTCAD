@@ -214,6 +214,22 @@ const auto diametral_sphere_formula = [](const auto& p) {
     return dot3(w, big_n) - dot3(n, n) * dot3(w, w);
 };
 
+const auto dot_formula = [](const auto& p) {
+    return (p[1][0] - p[0][0]) * (p[2][0] - p[0][0]) + (p[1][1] - p[0][1]) * (p[2][1] - p[0][1]);
+};
+
+const auto cos60_formula = [](const auto& p) {
+    // 4 (u.v)^2 - |u|^2 |v|^2, degree 4: positive when |cos| > 1/2.
+    using T = Scalar<decltype(p)>;
+    const T ux = p[1][0] - p[0][0];
+    const T uy = p[1][1] - p[0][1];
+    const T vx = p[2][0] - p[0][0];
+    const T vy = p[2][1] - p[0][1];
+    const T d = ux * vx + uy * vy;
+    const T four = constant<T>(4);
+    return four * d * d - (ux * ux + uy * uy) * (vx * vx + vy * vy);
+};
+
 // The perturbed sign: the base sign, else the first nonzero lifted-value cofactor in decreasing id
 // order (the point with the largest id carries the dominant perturbation).
 template <std::size_t K, class Base, class Cofactor>
@@ -272,6 +288,14 @@ int in_diametral_circle(const Point& a, const Point& b, const Point& p) {
 }
 int in_diametral_sphere(const Point& a, const Point& b, const Point& c, const Point& p) {
     return diametral_sphere_impl(a, b, c, p, true);
+}
+
+int dot_sign(const Point& o, const Point& a, const Point& b) {
+    return sign_of(std::array<Point, 3>{o, a, b}, 2, true, dot_formula);
+}
+bool angle_below_60(const Point& o, const Point& a, const Point& b) {
+    const std::array<Point, 3> p{o, a, b};
+    return sign_of(p, 2, true, dot_formula) > 0 && sign_of(p, 2, true, cos60_formula) > 0;
 }
 
 int incircle_perturbed(const std::array<Point, 4>& p, const std::array<NodeId, 4>& id) {

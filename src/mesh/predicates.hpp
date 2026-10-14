@@ -81,6 +81,12 @@ namespace NiTCAD::mesh::predicates {
 [[nodiscard]] int insphere(const Point& a, const Point& b, const Point& c, const Point& d,
                            const Point& e);
 [[nodiscard]] int in_diametral_circle(const Point& a, const Point& b, const Point& p);
+// 2D angle tests at o between the rays to a and b (both distinct from o): the sign of
+// (a - o) . (b - o) (0 exactly at 90 degrees), and whether the angle (in [0, 180]) is below 60
+// degrees, cos > 1/2, decided exactly as (a - o).(b - o) > 0 and 4 ((a - o).(b - o))^2 >
+// |a - o|^2 |b - o|^2.
+[[nodiscard]] int dot_sign(const Point& o, const Point& a, const Point& b);
+[[nodiscard]] bool angle_below_60(const Point& o, const Point& a, const Point& b);
 [[nodiscard]] int in_diametral_sphere(const Point& a, const Point& b, const Point& c,
                                       const Point& p);
 
