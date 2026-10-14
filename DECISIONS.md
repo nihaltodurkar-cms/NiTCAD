@@ -256,6 +256,34 @@ more cases are measured.
 
 ---
 
+### Unit 16 — unstructured 2D and 3D meshing (branch `mesh/unstructured`, proposed 2026-10-14)
+
+**Owner rulings (2026-10-14):** 2D and 3D in this unit; an in-tree mesh generator (no new dependency); material
+interfaces as node regions with straddling node pairs; analytic doping profiles included. The branch starts at `main`
+`23199a9`. Choices below are proposed and **await the owner's ruling before any code**:
+
+| # | Choice | Why | Trade-off |
+|---|---|---|---|
+| M1 | Box method on the circumcentric (Voronoi) dual: an edge's coupling area is its dual face's measure summed over the simplices sharing it; a node's volume is the sum of its circumcentric sub-volumes; a boundary node's area is the dual measure of its boundary facets. | The standard TCAD construction; on a Delaunay mesh it is the Voronoi diagram, and it reduces to the tensor-grid box method on split rectangles and boxes. | Needs Delaunay meshes (M2, M3). |
+| M2 | A new constructor `make_box_mesh` refuses (`degenerate_mesh`, index of the simplex) any negative circumcentric piece or negative total coupling; never repairs or clips. Couplings that are zero or below 1e-12 relative (cocircular edges) are left out of the graph. | 6.11 item 4: the legacy pinned negative dual areas instead of fixing them; its obtuse-triangle area split keeps volumes positive but makes fluxes inconsistent. | A mesh made elsewhere that is not Delaunay is refused, not fixed. |
+| M3 | Generated meshes are Delaunay with no encroached boundary segment (2D) or facet (3D): Ruppert refinement in 2D (minimum angle, default 25°), Shewchuk's refinement in 3D (radius–edge bound, default 2.0), plus a size field. | Under that condition every circumcentric piece is non-negative, so M2 never refuses a generated mesh. | More nodes near boundaries than an unconstrained mesh. |
+| M4 | orient2d, incircle, orient3d and insphere ported to C++ from Shewchuk's public-domain adaptive exact-arithmetic predicates, with attribution. | Topology decisions in floating point make Delaunay insertion fail on near-degenerate input (rectangular grids are exactly cocircular). | A few hundred lines of carefully ported code. |
+| M5 | 2D domains: any planar straight-line graph (non-convex polygons, holes) by constrained Delaunay triangulation. | Real cross-sections (MOSFET, trenches, mesas). | — |
+| M6 | 3D domains: convex polyhedra only (boxes and convex hulls); non-convex domains refused (`invalid_input`) and deferred. | For a convex domain the Delaunay tetrahedralization of the points conforms to the boundary, so no 3D constrained boundary recovery (the TetGen-class problem) is needed; with M7 internal interfaces need no conforming faces. | Fins and mesas wait for a later unit; covers 3D diodes, bipolars, planar MOSFETs and box-shaped multi-region devices. |
+| M7 | (Ruled.) Every node has one region. Along each interface segment or facet the generator places mirrored node pairs at ±s/2 (s the local size), so the dual face between a pair lies on the interface; no node lies on an interface. | Generalizes `mesh::straddle_interface`; device and assembler unchanged. | The interface is exact only up to the pair spacing; a curved interface becomes a polyline at the local size. |
+| M8 | The same geometry and options give a bit-identical mesh: fixed, documented insertion order; no hash- or pointer-order dependence. | 6.8 determinism; the io mesh digest identifies generated meshes. | Rules out some faster unordered containers. |
+| M9 | Nonlocal BTBT stays tensor-only (already refused without `DeviceDescription::cells`); the cell-walk interface is deferred. | Keeps the unit to meshing. | Nonlocal tunnelling needs tensor grids until then. |
+| M10 | (Ruled.) Doping profiles: constant, box, Gaussian and erfc per axis with lateral erfc fall-off, summed per species, sampled at nodes (`device/doping_profiles.hpp`). | Generated meshes need doping without hand-written per-node code; point sampling matches today's lambdas. | No cell-averaged doping. |
+
+Plan: predicates and `make_box_mesh` (import path, 2D and 3D) first; then the 2D generator; doping profiles and 2D
+device gates (diode, MOSFET); then the 3D generator and 3D gates. If the 3D generator does not pass its gates within
+the unit, the PR carries 2D plus the 3D import path, and says so. Gates: tensor equivalence of split rectangles and
+Kuhn-split boxes (1e-13), per-node geometric closure and volume sum (1e-12), exactness for linear fields, refusals,
+exact predicate signs on degenerate input, Delaunay / angle / encroachment / determinism checks, io round trip, second-order
+convergence of a 2D and a 3D diode, a 2D MOSFET against the tensor one, and mutation tests.
+
+---
+
 ## New questions the advisor raised (not yet in `ARCHITECTURE.md`)
 
 None of these is decided. Each needs an owner position before the build scaffold fixes the flags.
