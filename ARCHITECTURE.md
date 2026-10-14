@@ -1,15 +1,14 @@
 # NiTCAD — Architecture
 
-**CURRENT ARCHITECTURE, updated for Units 1–15b, 18–24, 28 and 30, with Unit 29 on its branch.** Units 1–10
-established the validated drift-diffusion foundation; Units 11–15b added band-gap narrowing and Auger, gate
-contacts (the MOS capacitor and the MOSFET), field mobility, Fermi–Dirac statistics, heterojunctions and meshed
-insulators with interface traps; Units 18–22 and 24 added the PARDISO backend, impact ionization with arc-length
-continuation, band-to-band tunnelling, transients, AC small-signal analysis and the extraction engine; Unit 23 added
-electrothermal coupling, Unit 28 bias step cutting and Unit 30 a Newton line search. All of these are on `main`
-(Unit 23 merged as `7300b67`, PR #30; Unit 28 as `06b708d`, PR #31; Unit 30 as `f3e2811`, PR #32). Unit 29, the
-io layer, is on its branch (sections 11 and 11.3). The architecture below keeps the implemented layers and
-numerical contracts intact while adding a long-term north-star for a general multiphysics semiconductor equation
-engine.
+**CURRENT ARCHITECTURE, updated for Units 1–15b, 18–24 and 28–30.** Units 1–10 established the validated
+drift-diffusion foundation; Units 11–15b added band-gap narrowing and Auger, gate contacts (the MOS capacitor and the
+MOSFET), field mobility, Fermi–Dirac statistics, heterojunctions and meshed insulators with interface traps; Units
+18–22 and 24 added the PARDISO backend, impact ionization with arc-length continuation, band-to-band tunnelling,
+transients, AC small-signal analysis and the extraction engine; Unit 23 added electrothermal coupling, Unit 28 bias
+step cutting, Unit 29 the io layer (files and checkpoint/restart) and Unit 30 a Newton line search. All of these are
+on `main` (Unit 23 merged as `7300b67`, PR #30; Unit 28 as `06b708d`, PR #31; Unit 30 as `f3e2811`, PR #32; Unit 29
+as `f69a7a8`, PR #33; sections 11 and 11.3). The architecture below keeps the implemented layers and numerical
+contracts intact while adding a long-term north-star for a general multiphysics semiconductor equation engine.
 Sections distinguish implemented design from target architecture: the north-star material (2.1, 2.2, 6.12, 11.1, 11.2,
 14.6) is future target architecture, not a new layer and not a claim about the current implementation. The dependency
 architecture of sections 3 and 4 is authoritative.
@@ -2410,7 +2409,7 @@ built.
 | 26 | Native Windows application and workflow | app | target; Win32 API, x64 target, Direct3D 12 / Direct2D |
 | 27 | Optimization / sensitivity / inverse-design workflows | analysis, solve | long-term target |
 | 28 | Bias step cutting (commercial-readiness programme, 11.3) | solve, results | **done, on `main`** (`06b708d`, PR #31): off by default; halving and growth from the last converged state (11.3, Unit 28; DECISIONS.md S1–S7) |
-| 29 | The io layer: files and checkpoint/restart (11.3) | io | **verified on branch `io/checkpoint`** (based on `main` after PR #32): meshes, sweeps and checkpoints in a versioned, checksummed container with atomic writes; restart equals the uninterrupted sweep (6.6, Unit 29; DECISIONS.md IO1–IO7) |
+| 29 | The io layer: files and checkpoint/restart (11.3) | io | **done, on `main`** (`f69a7a8`, PR #33): meshes, sweeps and checkpoints in a versioned, checksummed container with atomic writes; restart equals the uninterrupted sweep (6.6, Unit 29; DECISIONS.md IO1–IO7) |
 | 30 | Newton line search (11.3) | solve, results | **done, on `main`** (`f3e2811`, PR #32): opt-in backtracking on the damped step, residual or natural test; benchmarked against step cutting (11.3, Unit 30; DECISIONS.md L1–L6) |
 
 Units 1–9 are the smallest end-to-end vertical slice: a validated drift-diffusion diode. Everything past
@@ -2462,7 +2461,7 @@ exists, not finished), **planned** (nothing built). Audit of 2026-10-09, against
 | Area | What exists (audited) | Status | Next step |
 |---|---|---|---|
 | Robust nonlinear solving | Newton with componentwise clipping (6.2); the generation-free retry (Units 19, 20); arc-length `trace_bias` (Unit 19) | **Bias step cutting verified, on `main`** (Unit 28, below; `06b708d`, PR #31); **Newton line search verified, opt-in, on `main`** (Unit 30, below; `f3e2811`, PR #32) | A natural-test norm monotone in reverse bias; a Gummel or pseudo-transient fallback |
-| Input/output, checkpoint/restart | The `io` layer (approved 2026-10-09): versioned, checksummed, atomic files for meshes, sweeps and checkpoints | **Verified** (Unit 29, 6.6; branch `io/checkpoint`, based on `main` after PR #32) | Device descriptions on disk and a text input deck; transient and small-signal results |
+| Input/output, checkpoint/restart | The `io` layer (approved 2026-10-09): versioned, checksummed, atomic files for meshes, sweeps and checkpoints | **Verified, on `main`** (Unit 29, 6.6; `f69a7a8`, PR #33) | Device descriptions on disk and a text input deck; transient and small-signal results |
 | Geometry and unstructured 3D meshing | `Mesh::from_parts` accepts any valid node/edge/volume graph; only the tensor-grid producer exists; nonlocal BTBT needs tensor cells (6.11) | planned (Unit 16) | A 2D Delaunay/Voronoi producer with geometric checks, then 3D tetrahedra; analytic doping profiles |
 | Low-current accuracy | `terminal_current_resolution` reports the floor (Unit 15); off-state MOSFET current unresolved (6.13) | planned | Current extraction from the minority side or quasi-Fermi unknowns, gated against the resolution |
 | Generic fields/equations | Specialized `DriftDiffusion` assembler with a stride (Unit 23) | planned (6.12.1–2) | Field and equation descriptors behind the current assembler, bit-identical |
