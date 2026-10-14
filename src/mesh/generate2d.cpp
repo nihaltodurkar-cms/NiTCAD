@@ -138,7 +138,36 @@ struct Chain {
     std::vector<double> positions;  // pair positions along it, from start
 };
 
-enum class NodeKind : std::uint8_t { free, boundary, interface_node };
+// A structured boundary layer, prepared (U14).
+struct Layer {
+    Point a;
+    Point u;  // along the segment
+    Point n;  // the inward normal of its boundary edge
+    double len = 0.0;
+    double top = 0.0;  // the largest offset
+    std::vector<double> along;
+    std::vector<double> offsets;
+    std::int32_t region = 0;
+    std::size_t edge = 0;
+
+    [[nodiscard]] Point corner(double t, double off) const {
+        return {a[0] + t * u[0] + off * n[0], a[1] + t * u[1] + off * n[1], 0.0};
+    }
+    // Whether p lies in the layer's rectangle, widened by `slack` on every side.
+    [[nodiscard]] bool contains(const Point& p, double slack) const {
+        const double t = (p[0] - a[0]) * u[0] + (p[1] - a[1]) * u[1];
+        const double off = (p[0] - a[0]) * n[0] + (p[1] - a[1]) * n[1];
+        return t >= -slack && t <= len + slack && off >= -slack && off <= top + slack;
+    }
+};
+
+// A point that must be a node of a given boundary edge, exactly as given.
+struct Pinned {
+    Point p;
+    std::size_t edge;
+};
+
+enum class NodeKind : std::uint8_t { free, boundary, interface_node, layer };
 
 struct Generator {
     const Geometry2D& g;
@@ -158,6 +187,8 @@ struct Generator {
     std::vector<NodeKind> kind;
     std::vector<std::int32_t> hint;  // a boundary node's region (from its edge), else -1
     std::vector<std::vector<Point>> edge_nodes;  // per boundary edge, its nodes in order along it
+    std::vector<Layer> layers;
+    std::vector<Pinned> pinned;  // layer nodes on boundary edges
 
     // The region at p (a polygon containing it, on its boundary counted), or nullopt outside.
     [[nodiscard]] std::optional<std::int32_t> region_at(const Point& p) const {
@@ -503,53 +534,162 @@ struct Generator {
         hint.push_back(region_hint);
     }
 
-    // Boundary nodes along each boundary edge: its end points (not junctions), patch ends, the
-    // junction straddle (s / 2 on either side), then at most h apart.
+    // Structured boundary layers (U14): validation and their lattice nodes.
+    std::optional<base::Error> read_layers() {
+        for (std::size_t k = 0; k < o.layers.size(); ++k) {
+            const BoundaryLayer& in = o.layers[k];
+            const auto bad = [&](const char* what) { return invalid(std::string("boundary layer: ") + what, k); };
+            for (const Point& p : {in.a, in.b}) {
+                if (!std::isfinite(p[0]) || !std::isfinite(p[1]) || p[2] != 0.0) return bad("an end not finite or z != 0");
+            }
+            if (same(in.a, in.b)) return bad("zero length");
+            std::optional<std::size_t> edge;
+            for (std::size_t e = 0; e < boundary_edges.size(); ++e) {
+                const PolyEdge& be = boundary_edges[e];
+                if (predicates::orient2d(be.a, be.b, in.a) == 0 && predicates::orient2d(be.a, be.b, in.b) == 0 &&
+                    within(in.a, be.a, be.b) && within(in.b, be.a, be.b)) {
+                    edge = e;
+                }
+            }
+            if (!edge) return bad("the segment is not inside one boundary edge");
+            const PolyEdge& be = boundary_edges[*edge];
+            Layer L;
+            L.a = in.a;
+            L.len = dist(in.a, in.b);
+            L.u = {(in.b[0] - in.a[0]) / L.len, (in.b[1] - in.a[1]) / L.len, 0.0};
+            const double el = dist(be.a, be.b);
+            L.n = {-(be.b[1] - be.a[1]) / el, (be.b[0] - be.a[0]) / el, 0.0};  // the interior is on the left
+            L.region = polys[be.poly].region;
+            L.edge = *edge;
+            L.along = in.along;
+            L.offsets = in.offsets;
+            if (L.along.size() < 2 || L.along.front() != 0.0 || !(std::abs(L.along.back() - L.len) <= 1e-12 * L.len)) {
+                return bad("along must run from 0 to the segment's length");
+            }
+            L.along.back() = L.len;
+            for (std::size_t i = 1; i < L.along.size(); ++i) {
+                if (!(L.along[i] > L.along[i - 1])) return bad("along not strictly increasing");
+            }
+            if (L.offsets.empty()) return bad("no offsets");
+            for (std::size_t i = 0; i < L.offsets.size(); ++i) {
+                if (!(std::isfinite(L.offsets[i]) && L.offsets[i] > 0.0 && (i == 0 || L.offsets[i] > L.offsets[i - 1]))) {
+                    return bad("offsets not positive and strictly increasing");
+                }
+            }
+            L.top = L.offsets.back();
+            // Patch ends on the segment become lattice columns.
+            for (const PatchSegment& p : g.patches) {
+                for (const Point& q : {p.a, p.b}) {
+                    if (predicates::orient2d(in.a, in.b, q) != 0 || !within(q, in.a, in.b)) continue;
+                    const double t = dist(in.a, q);
+                    const auto it = std::ranges::lower_bound(L.along, t);
+                    const bool near = (it != L.along.end() && std::abs(*it - t) <= 1e-12 * L.len) ||
+                                      (it != L.along.begin() && std::abs(*(it - 1) - t) <= 1e-12 * L.len);
+                    if (!near) L.along.insert(it, t);
+                }
+            }
+            // The lattice inside the owning polygon, clear of other layers and of interface bands.
+            const auto corner = [&](double t, double off) {
+                return Point{L.a[0] + t * L.u[0] + off * L.n[0], L.a[1] + t * L.u[1] + off * L.n[1], 0.0};
+            };
+            for (const double t : {0.0, L.len}) {
+                for (const double off : {0.0, L.top}) {
+                    const auto r = region_at(corner(t, off));
+                    if (!r || *r != L.region) return bad("the lattice leaves the polygon owning its edge");
+                }
+            }
+            const std::array<Point, 4> box{corner(0, 0), corner(L.len, 0), corner(L.len, L.top), corner(0, L.top)};
+            for (const Layer& other : layers) {
+                for (const Point& p : box) {
+                    if (other.contains(p, 0.0)) return bad("layers overlap");
+                }
+                const std::array<Point, 4> ob{other.corner(0, 0), other.corner(other.len, 0), other.corner(other.len, other.top),
+                                              other.corner(0, other.top)};
+                for (const Point& p : ob) {
+                    if (L.contains(p, 0.0)) return bad("layers overlap");
+                }
+            }
+            for (const Chain& c : chains) {
+                for (std::size_t i = 0; i < 4; ++i) {
+                    if (segment_segment_distance(c.start, c.end, box[i], box[(i + 1) % 4]) < c.band) {
+                        return bad("an interface within its protected band of the layer");
+                    }
+                }
+                if (L.contains(c.start, 0.0) || L.contains(c.end, 0.0)) return bad("an interface inside the layer");
+            }
+            // Lattice nodes. The bottom row is on the boundary edge; side nodes that fall exactly on
+            // another boundary edge are pinned there.
+            for (const double t : L.along) {
+                const Point p0 = corner(t, 0.0);
+                add(p0, NodeKind::layer, L.region);
+                pinned.push_back({p0, *edge});
+                for (const double off : L.offsets) {
+                    const Point p = corner(t, off);
+                    add(p, NodeKind::layer, L.region);
+                    for (std::size_t e = 0; e < boundary_edges.size(); ++e) {
+                        const PolyEdge& q = boundary_edges[e];
+                        if (predicates::orient2d(q.a, q.b, p) == 0 && within(p, q.a, q.b)) pinned.push_back({p, e});
+                    }
+                }
+            }
+            layers.push_back(std::move(L));
+        }
+        return std::nullopt;
+    }
+
+    // Boundary nodes along each boundary edge: its end points (not junctions), the junction
+    // straddle (s / 2 on either side), patch ends and layer nodes exactly as given, then at most h
+    // apart.
     void place_boundary() {
-        for (const PolyEdge& e : boundary_edges) {
+        struct Break {
+            double x;
+            NodeKind kind;
+            std::optional<Point> exact;
+        };
+        for (std::size_t edge = 0; edge < boundary_edges.size(); ++edge) {
+            const PolyEdge& e = boundary_edges[edge];
             edge_nodes.emplace_back();
             const double len = dist(e.a, e.b);
             const double ux = (e.b[0] - e.a[0]) / len, uy = (e.b[1] - e.a[1]) / len;
-            std::vector<std::pair<double, NodeKind>> t;
+            std::vector<Break> t;
             for (const auto& [end, from_start] : {std::pair{e.a, true}, std::pair{e.b, false}}) {
                 const bool junction = std::ranges::find_if(junctions, [&](const Point& j) { return same(j, end); }) != junctions.end();
                 if (!junction) {
-                    t.emplace_back(from_start ? 0.0 : len, NodeKind::boundary);
+                    t.push_back({from_start ? 0.0 : len, NodeKind::boundary, end});
                     continue;
                 }
-                for (const double d : {0.5 * s}) {  // the straddle; refinement splits as needed
-                    t.emplace_back(from_start ? d : len - d, NodeKind::interface_node);
-                }
+                t.push_back({from_start ? 0.5 * s : len - 0.5 * s, NodeKind::interface_node, std::nullopt});  // the straddle
             }
             for (const PatchSegment& p : g.patches) {
                 for (const Point& q : {p.a, p.b}) {
                     if (predicates::orient2d(e.a, e.b, q) == 0 && within(q, e.a, e.b)) {
-                        t.emplace_back(dist(e.a, q), NodeKind::boundary);
+                        t.push_back({dist(e.a, q), NodeKind::boundary, q});
                     }
                 }
             }
-            std::ranges::sort(t);
-            std::vector<std::pair<double, NodeKind>> filled;
+            for (const Pinned& pin : pinned) {
+                if (pin.edge == edge) t.push_back({dist(e.a, pin.p), NodeKind::layer, pin.p});
+            }
+            std::ranges::sort(t, [](const Break& l, const Break& r) { return l.x < r.x; });
+            std::vector<Break> filled;
             const double h = region_size(polys[e.poly].region);
-            for (std::size_t k = 0; k < t.size(); ++k) {
-                if (k > 0 && t[k].first == t[k - 1].first) continue;
-                if (k > 0) {
-                    const double gap = t[k].first - filled.back().first;
+            for (const Break& b : t) {
+                if (!filled.empty() && b.x - filled.back().x <= 1e-12 * len) {
+                    if (b.kind == NodeKind::layer || b.exact) filled.back() = b;  // keep the exact one
+                    continue;
+                }
+                // Between two lattice nodes the layer sets the spacing: no fill (U14).
+                if (!filled.empty() && !(b.kind == NodeKind::layer && filled.back().kind == NodeKind::layer)) {
+                    const double gap = b.x - filled.back().x;
                     const int steps = static_cast<int>(std::ceil(gap / h));
-                    const double base = filled.back().first;
-                    for (int m = 1; m < steps; ++m) filled.emplace_back(base + gap * m / steps, NodeKind::boundary);
+                    const double base = filled.back().x;
+                    for (int m = 1; m < steps; ++m) filled.push_back({base + gap * m / steps, NodeKind::boundary, std::nullopt});
                 }
-                filled.push_back(t[k]);
+                filled.push_back(b);
             }
-            for (const auto& [x, k] : filled) {
-                Point p = x == 0.0 ? e.a : (x == len ? e.b : Point{e.a[0] + x * ux, e.a[1] + x * uy, 0.0});
-                // A patch end lies exactly on the edge: use it as given.
-                for (const PatchSegment& ps : g.patches) {
-                    for (const Point& q : {ps.a, ps.b}) {
-                        if (predicates::orient2d(e.a, e.b, q) == 0 && within(q, e.a, e.b) && dist(e.a, q) == x) p = q;
-                    }
-                }
-                add(p, k, polys[e.poly].region);  // on its edge, though rounding may put it a hair outside
+            for (const Break& b : filled) {
+                const Point p = b.exact ? *b.exact : Point{e.a[0] + b.x * ux, e.a[1] + b.x * uy, 0.0};
+                add(p, b.kind, polys[e.poly].region);  // on its edge, though rounding may put it a hair outside
                 edge_nodes.back().push_back(p);
             }
         }
@@ -601,6 +741,7 @@ std::expected<GeneratedMesh, base::Error> generate_mesh(const Geometry2D& geomet
     if (auto e = gen.read_polygons()) return std::unexpected(*e);
     if (auto e = gen.read_patches()) return std::unexpected(*e);
     if (auto e = gen.read_interfaces()) return std::unexpected(*e);
+    if (auto e = gen.read_layers()) return std::unexpected(*e);
     gen.place_boundary();
 
     // Triangulate the initial nodes in Hilbert order.
@@ -747,6 +888,13 @@ std::expected<GeneratedMesh, base::Error> generate_mesh(const Geometry2D& geomet
         return std::nullopt;
     };
 
+    // A candidate inside a structured layer's rectangle (U14), with a margin of 1e-9 of its size.
+    const auto in_layer = [&](const Point& c) {
+        for (const Layer& L : gen.layers) {
+            if (L.contains(c, 1e-9 * std::max(L.len, L.top))) return true;
+        }
+        return false;
+    };
     const auto in_band = [&](const Point& c) {
         for (const Chain& ch : gen.chains) {
             if (segment_distance(c, ch.start, ch.end) < ch.band) return true;
@@ -788,12 +936,15 @@ std::expected<GeneratedMesh, base::Error> generate_mesh(const Geometry2D& geomet
         const bool all_interface = kind[static_cast<std::size_t>(tr.v[0])] == NodeKind::interface_node &&
                                    kind[static_cast<std::size_t>(tr.v[1])] == NodeKind::interface_node &&
                                    kind[static_cast<std::size_t>(tr.v[2])] == NodeKind::interface_node;
-        if (all_interface) {
+        const bool all_layer = kind[static_cast<std::size_t>(tr.v[0])] == NodeKind::layer &&
+                               kind[static_cast<std::size_t>(tr.v[1])] == NodeKind::layer &&
+                               kind[static_cast<std::size_t>(tr.v[2])] == NodeKind::layer;
+        if (all_interface || all_layer) {
             ++report.exempt_triangles;
             continue;
         }
         const Point cc = detail::triangle_circumcentre({a, b, c});
-        if (in_band(cc)) {
+        if (in_band(cc) || in_layer(cc)) {
             ++report.exempt_triangles;
             continue;
         }
@@ -862,7 +1013,10 @@ std::expected<GeneratedMesh, base::Error> generate_mesh(const Geometry2D& geomet
         const Point cc = circumcentre_fast(a, b, c);
         const bool protected_tri = kind[static_cast<std::size_t>(tr.v[0])] == NodeKind::interface_node ||
                                    kind[static_cast<std::size_t>(tr.v[1])] == NodeKind::interface_node ||
-                                   kind[static_cast<std::size_t>(tr.v[2])] == NodeKind::interface_node || in_band(cc);
+                                   kind[static_cast<std::size_t>(tr.v[2])] == NodeKind::interface_node || in_band(cc) ||
+                                   in_layer(cc) || kind[static_cast<std::size_t>(tr.v[0])] == NodeKind::layer ||
+                                   kind[static_cast<std::size_t>(tr.v[1])] == NodeKind::layer ||
+                                   kind[static_cast<std::size_t>(tr.v[2])] == NodeKind::layer;
         if (!protected_tri) {
             const double shortest = std::min({dist(a, b), dist(b, c), dist(c, a)});
             min_angle = std::min(min_angle, std::asin(std::min(1.0, shortest / (2.0 * dist(cc, a)))) * 180.0 / 3.141592653589793);

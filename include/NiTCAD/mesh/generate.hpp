@@ -64,6 +64,24 @@ struct Geometry2D {
     std::vector<PatchSegment> patches;  // the result's boundary patches, in this order
 };
 
+// A structured boundary layer (DECISIONS.md U14): a tensor lattice along a boundary segment, for
+// thin features the isotropic refinement cannot resolve within a node budget (a MOSFET's
+// inversion layer). Its nodes are a + t u + o n for t in `along` and o in {0} and `offsets`, u the
+// segment's direction and n the inward normal of its boundary edge. The lattice's rectangles are
+// Delaunay (all ties), so its dual is exactly the tensor grid's box method; refinement never
+// inserts into the layer's rectangle and does not judge triangles of layer nodes alone. Patch
+// ends on the segment are added to `along`.
+// Rules (invalid_input otherwise): the segment inside one boundary edge; `along` strictly
+// increasing from 0 to the segment's length (to 1e-12 relative); `offsets` strictly increasing and
+// positive; the lattice inside the polygon owning the edge; layers not overlapping; no interface
+// within its protected band of a layer.
+struct BoundaryLayer {
+    Point a;
+    Point b;
+    std::vector<double> along;    // [cm] positions from a toward b
+    std::vector<double> offsets;  // [cm] distances into the domain
+};
+
 struct SizeBox {
     Point lo;
     Point hi;
@@ -74,6 +92,7 @@ struct MeshOptions2D {
     double max_size = 0.0;                // h [cm], finite and positive
     std::vector<double> region_max_size;  // per region index; 0 or absent: max_size
     std::vector<SizeBox> boxes;           // smaller h where given
+    std::vector<BoundaryLayer> layers;    // structured layers (U14)
     double interface_resolution = 0.0;    // s [cm]; required when there are interfaces
     double min_angle_deg = 20.7;          // in (0, 33.8]
     std::size_t max_nodes = 2'000'000;

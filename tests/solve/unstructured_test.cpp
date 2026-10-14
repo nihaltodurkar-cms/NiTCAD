@@ -282,9 +282,23 @@ device::Device mosfet_on(mesh::Mesh m, std::vector<mesh::NodeId> source, std::ve
                                                  std::move(g)}});
 }
 
-device::Device tensor_mosfet(int nx, int ny) {
+// The legacy graded x axis of the MOSFET with its nearest nodes moved onto the contact edges Lsd
+// and Lsd + Lg (2.9e-8 cm at nx = 90, 1.4e-8 at 180; the node count unchanged), so that every mesh
+// compared here models the same device: contact edges exactly at the given positions, as the
+// generator's patches put them. Without it the tensor meshes' effective gate edges sit off by
+// those amounts, an offset that halves with refinement.
+std::vector<double> mosfet_x_axis(int nx) {
     const double L = 2 * Lsd + Lg;
-    const auto x = legacy_graded_mesh(L, {Lsd, Lsd + Lg}, L / (nx * 20), L / nx, 1.15);
+    auto x = legacy_graded_mesh(L, {Lsd, Lsd + Lg}, L / (nx * 20), L / nx, 1.15);
+    for (const double edge : {Lsd, Lsd + Lg}) {
+        const auto it = std::ranges::min_element(x, [&](double a, double b) { return std::abs(a - edge) < std::abs(b - edge); });
+        *it = edge;
+    }
+    return x;
+}
+
+device::Device tensor_mosfet(int nx, int ny) {
+    const auto x = mosfet_x_axis(nx);
     const auto y = legacy_graded_mesh(depth, 0.0, depth / (ny * 20), depth / ny, 1.15);
     mesh::Mesh m = *mesh::make_tensor_grid(x, y);
     std::vector<mesh::NodeId> source, drain, gate;
@@ -332,21 +346,30 @@ bool accepted(double q_u, double q_t, double q_ref) {
 
 }  // namespace
 
-// UNMET GATE (DECISIONS.md U14), marked [!shouldfail]: measured 2026-10-14 at 8031 nodes against
-// the tensor 9490, the on current is 4 % below the reference while the tensor grid is within
-// 0.05 % (V_T 4.7 mV off against 0.3 mV; SS within 0.04 mV/decade for both). The tensor grid has
-// 2e-8 cm cells normal to the surface; the generator makes isotropic triangles, and resolving the
-// inversion layer isotropically needs more nodes than the budget. If this test starts passing,
-// Catch2 reports it as a failure, so the marker must then be removed.
-TEST_CASE("unstructured: the MOSFET against the tensor MOSFET (predefined k = 1.5)",
-          "[.unstructured][!shouldfail]") {
+// U14 (DECISIONS.md): with isotropic triangles only, this gate was not met (8031 nodes: on current
+// 4 % low; the tensor grid has 2e-8 cm cells normal to the surface). It passes with a structured
+// boundary layer, the hybrid tensor strip: the tensor MOSFET's own x and y lines from the surface
+// to 1.8e-5 of the 2e-5 cm depth (the inversion layer, the depletion region, the source and drain
+// with their bottom junctions), unstructured refinement below it at the body contact. All three
+// meshes put the contact edges exactly at Lsd and Lsd + Lg (mosfet_x_axis). Measured 2026-10-14:
+// 9342 nodes against 9490; every quantity within the predefined k = 1.5 rule.
+TEST_CASE("unstructured: the MOSFET against the tensor MOSFET (predefined k = 1.5)", "[.unstructured]") {
     const double L = 2 * Lsd + Lg;
     mesh::Geometry2D g{{rect(0, 0, L, depth, 0)},
                        {{"source", {0, 0, 0}, {Lsd, 0, 0}}, {"channel", {Lsd, 0, 0}, {Lsd + Lg, 0, 0}},
                         {"drain", {Lsd + Lg, 0, 0}, {L, 0, 0}}, {"body", {0, depth, 0}, {L, depth, 0}}}};
     mesh::MeshOptions2D o;
     o.max_size = 3e-6;
-    o.boxes = {{{Lsd - 2e-6, 0, 0}, {Lsd + Lg + 2e-6, 3e-7, 0}, 1e-7}, {{0, 0, 0}, {L, 3e-6, 0}, 6e-7}};
+    // U14: a structured surface layer with the tensor MOSFET's own x axis and its y lines through the
+    // depletion region and the source and drain with their bottom junctions (to 1.8e-5 cm of the
+    // 2e-5 cm depth: subthreshold conduction, series resistance, junction depletion);
+    // unstructured below, refined along the lateral source and drain junctions.
+    std::vector<double> ys;
+    for (const double y : legacy_graded_mesh(depth, 0.0, depth / 1000, depth / 50, 1.15)) {
+        if (y > 0.0 && y <= 1.8e-5) ys.push_back(y);
+    }
+    o.layers = {{{0, 0, 0}, {L, 0, 0}, mosfet_x_axis(90), ys}};
+    o.boxes = {{{0, 1.8e-5, 0}, {L, depth, 0}, 1e-6}};  // the strip below the layer, at the body contact
     const auto gm = mesh::generate_mesh(g, o);
     REQUIRE(gm.has_value());
     const auto& m = gm->mesh;
@@ -360,7 +383,7 @@ TEST_CASE("unstructured: the MOSFET against the tensor MOSFET (predefined k = 1.
     const Transfer t = transfer(tensor_mosfet(90, 50));
     const Transfer ref = transfer(tensor_mosfet(180, 100));
     std::printf("mosfet nodes: unstructured %zu, tensor %zu, reference %zu\n", u.nodes, t.nodes, ref.nodes);
-    std::printf("mosfet V_T: u %.5f t %.5f ref %.5f; gm_max: u %.5e t %.5e ref %.5e; SS: u %.3f t %.3f ref %.3f\n",
+    std::printf("mosfet V_T: u %.5f t %.5f ref %.5f; gm_max: u %.5e t %.5e ref %.5e; SS: u %.6f t %.6f ref %.6f\n",
                 u.vt, t.vt, ref.vt, u.gm_max, t.gm_max, ref.gm_max, u.ss, t.ss, ref.ss);
     REQUIRE(u.nodes <= t.nodes);  // the comparison is at no more nodes
     CHECK(accepted(u.vt, t.vt, ref.vt));

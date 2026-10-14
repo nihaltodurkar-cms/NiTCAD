@@ -340,3 +340,88 @@ TEST_CASE("generator: regions that do not touch are certified (no interfaces)", 
     REQUIRE(m->certificate.has_value());
     CHECK(m->certificate->report.cross_faces == 0);
 }
+
+TEST_CASE("generator: a structured boundary layer is a tensor lattice in the dual (U14)", "[mesh][generate]") {
+    // The unit square with a layer on its bottom edge: columns at 0, 0.25, ..., 1 and rows at
+    // 0.05, 0.1, 0.2. Inside the layer the dual is the tensor grid's: a horizontal edge in the
+    // row y = 0.05 couples (0.05 + 0.05) / 2, a vertical edge between y = 0 and 0.05 at x = 0.5
+    // couples (0.25 + 0.25) / 2; no other node lies in the layer's rectangle.
+    Geometry2D g{{rect(0, 0, 1, 1, 0)}, {{"bottom", {0, 0, 0}, {1, 0, 0}}}};
+    MeshOptions2D o;
+    o.max_size = 0.1;
+    o.layers = {{{0, 0, 0}, {1, 0, 0}, {0, 0.25, 0.5, 0.75, 1}, {0.05, 0.1, 0.2}}};
+    const auto m = generate_mesh(g, o);
+    REQUIRE(m.has_value());
+    const auto node_at = [&](double x, double y) {
+        for (std::size_t i = 0; i < m->mesh.node_count(); ++i) {
+            if (m->mesh.points()[i][0] == x && m->mesh.points()[i][1] == y) return static_cast<NodeId>(i);
+        }
+        return NodeId{-1};
+    };
+    const auto coupling = [&](NodeId a, NodeId b) {
+        for (const Edge& e : m->mesh.edges()) {
+            if (e.first == std::min(a, b) && e.second == std::max(a, b)) return e.coupling_area;
+        }
+        return -1.0;
+    };
+    for (const double x : {0.0, 0.25, 0.5, 0.75, 1.0}) {
+        for (const double y : {0.0, 0.05, 0.1, 0.2}) CHECK(node_at(x, y) >= 0);
+    }
+    INFO("couplings: " << coupling(node_at(0.25, 0.05), node_at(0.5, 0.05)) << " " << coupling(node_at(0.5, 0.0), node_at(0.5, 0.05)) << " " << coupling(node_at(0.5, 0.05), node_at(0.5, 0.1)));
+    CHECK(close(coupling(node_at(0.25, 0.05), node_at(0.5, 0.05)), 0.05, 1e-12));
+    CHECK(close(coupling(node_at(0.5, 0.0), node_at(0.5, 0.05)), 0.25, 1e-12));
+    CHECK(close(coupling(node_at(0.5, 0.05), node_at(0.5, 0.1)), 0.25, 1e-12));
+    std::size_t inside = 0;
+    for (const Point& p : m->simplices.points) inside += (p[1] > 0.0 && p[1] < 0.2 && p[0] > 0.0 && p[0] < 1.0) ? 1 : 0;
+    CHECK(inside == 6);  // the lattice's interior nodes only: rows 0.05 and 0.1, three inner columns each
+    CHECK(close(total(m->mesh.boundary()[0].areas), 1.0, 1e-12));
+}
+
+TEST_CASE("generator: boundary layers take patch ends as columns, and refuse bad input", "[mesh][generate]") {
+    MeshOptions2D o;
+    o.max_size = 0.1;
+    SECTION("a patch end becomes a lattice column") {
+        Geometry2D g{{rect(0, 0, 1, 1, 0)}, {{"left", {0, 0, 0}, {0.375, 0, 0}}}};
+        o.layers = {{{0, 0, 0}, {1, 0, 0}, {0, 0.5, 1}, {0.05}}};
+        const auto m = generate_mesh(g, o);
+        REQUIRE(m.has_value());
+        bool found = false;
+        for (const Point& p : m->simplices.points) found = found || (p[0] == 0.375 && p[1] == 0.05);
+        CHECK(found);
+        CHECK(close(total(m->mesh.boundary()[0].areas), 0.375, 1e-12));
+    }
+    const auto refused = [&](const Geometry2D& g, const BoundaryLayer& layer, const std::string& text) {
+        MeshOptions2D opt = o;
+        opt.layers = {layer};
+        opt.interface_resolution = 1.0 / 64.0;
+        const auto m = generate_mesh(g, opt);
+        REQUIRE_FALSE(m.has_value());
+        CHECK(m.error().code == ErrorCode::invalid_input);
+        INFO(m.error().message);
+        CHECK(m.error().message.find(text) != std::string::npos);
+    };
+    const Geometry2D square{{rect(0, 0, 1, 1, 0)}, {}};
+    refused(square, {{0, 0, 0}, {1, 0, 0}, {0.1, 1}, {0.05}}, "along must run");
+    refused(square, {{0, 0, 0}, {1, 0, 0}, {0, 0.6, 0.5, 1}, {0.05}}, "along not strictly increasing");
+    refused(square, {{0, 0, 0}, {1, 0, 0}, {0, 1}, {0.1, 0.05}}, "offsets");
+    refused(square, {{0, 0.5, 0}, {1, 0.5, 0}, {0, 1}, {0.05}}, "not inside one boundary edge");
+    refused(square, {{0, 0, 0}, {1, 0, 0}, {0, 1}, {1.5}}, "leaves the polygon");
+    // An interface 0.1 above the layer's top, closer than its band.
+    refused({{rect(0, 0, 1, 0.3, 0), rect(0, 0.3, 1, 1, 1)}, {}}, {{0, 0, 0}, {1, 0, 0}, {0, 0.5, 1}, {0.29}}, "band");
+    MeshOptions2D two = o;
+    two.layers = {{{0, 0, 0}, {1, 0, 0}, {0, 1}, {0.3}}, {{0, 0, 0}, {0, 1, 0}, {0, 1}, {0.3}}};
+    const auto overlap = generate_mesh(square, two);
+    REQUIRE_FALSE(overlap.has_value());
+    CHECK(overlap.error().message.find("overlap") != std::string::npos);
+    // A small layer on the left edge lying wholly inside the bottom one: only its corners are in
+    // the other.
+    MeshOptions2D nested = o;
+    nested.layers = {{{0, 0, 0}, {1, 0, 0}, {0, 1}, {0.3}}, {{0, 0.1, 0}, {0, 0.2, 0}, {0, 0.1}, {0.05}}};
+    const auto inner = generate_mesh(square, nested);
+    REQUIRE_FALSE(inner.has_value());
+    CHECK(inner.error().message.find("overlap") != std::string::npos);
+    std::swap(nested.layers[0], nested.layers[1]);  // the same, in the other order
+    const auto outer = generate_mesh(square, nested);
+    REQUIRE_FALSE(outer.has_value());
+    CHECK(outer.error().message.find("overlap") != std::string::npos);
+}
