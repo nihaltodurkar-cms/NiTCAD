@@ -313,9 +313,106 @@ before `ARCHITECTURE.md` cites it. *Heuristic*: no guarantee; bounded by a cap a
     rule using `< 0`; P1 skipped; P2 skipped; the 3D boundary piece and the volume factor.
   - The filter with no error bound is caught too, in a second form: its first form failed to build on an
     unused-variable warning and is not counted.
-  - **Survived:** the product rule written as max + 1, and the underflow guard removed. The worst-case error they
+  - **Survived (closed in round 2, below):** the product rule written as max + 1, and the underflow guard removed. The worst-case error they
     under-bound is not reached by any input the tests generate, so the filter's soundness rests on the error analysis
     in `predicates.hpp`, not on a test (U11).
+
+**Approval blockers, round 2 (owner request 2026-10-14; commits `ce7e1cd`, `93a6d2b`, `dd32cbd`):**
+
+*U11, the filter (closed).* The soundness argument is now written in full in `src/mesh/predicates.hpp`: the
+arithmetic model (binary64, round to nearest, gradual underflow, no contraction), the induction for sums and
+products, cancellation (the bound is relative to M, not to |v|), overflow (an infinity or NaN reaches v or m) and
+underflow.
+- **Defect found and fixed:** the filter flagged a product only when its magnitude underflowed. A product whose
+  *value* underflows while its magnitude does not escaped the flag. This happens when a factor's value is small by
+  cancellation, and it falls outside the rounding model the bound assumes. Both are now checked.
+- **Removed as redundant:** a deferral on a subnormal bound. Every formula's root is a sum of products, and each
+  product's m is 0 or at least DBL_MIN, so a nonzero bound is at least d·2^-1073. Its rounding error is then at
+  most 1/(4d) relative, which the factor 2 covers.
+- **Tests (`tests/mesh/filter_test.cpp`)** use a probe that exposes each evaluation's value, magnitude, depth, flag,
+  bound and decision beside the exact value. They check:
+  - the depth table;
+  - |value − exact| ≤ bound decided in exact integers, for 600 near-degenerate samples per predicate at scales
+    2^±40, with the threshold region (|v| within 4× of the bound) exercised for every predicate;
+  - both underflow contracts, overflow, cancellation at offsets up to 2^52, subnormal bounds, and the arithmetic
+    model itself.
+- **Mutations:**
+
+| Mutation | Result |
+|---|---|
+| U11-1 product depth max + 1 (the earlier survivor) | caught by the depth table |
+| U11-2 underflow flag ignored (the earlier survivor) | caught |
+| U11-3 value-underflow check removed (the new check) | caught |
+| U11-4 magnitude-underflow check removed | caught, after a test for a product with an exactly zero factor value |
+| U11-5 subnormal-bound deferral removed | redundant (argument above); the code was removed |
+| U11-6 bound factor 2 → 0.25 | caught |
+| U11-7 magnitude of a difference subtracts | caught |
+
+*M4, the tie-break (verified).* The scheme documented in `predicates.hpp` is checked against itself evaluated
+directly, independently of the implementation's cofactor expansion:
+- lifted rows (p, |p|² + ε^(r+1), 1), with r the rank by decreasing id and ε = 2^-128, scaled to integers;
+- their Leibniz determinant (24 or 120 terms), with incircle its sign and insphere its negation;
+- on tied integer points on x² + y² = 625 and x² + y² + z² = 9, translated, with half the cases off the tie.
+- All 600 2D and 300 3D cases agree (more than 100 and 50 of them exact ties).
+- Mutations caught: tie-break order reversed, query cofactor sign, incircle query cofactor as a unit column.
+- Guarantees:
+  - every sign is exact for any finite doubles;
+  - the perturbed predicates never return 0 and define one consistent regular triangulation;
+  - on any platform satisfying the arithmetic model the same inputs give the same signs, so the same topology. This
+    is by the argument, not by cross-platform runs (none were made).
+  - The dual measures are floating-point; their bit identity across compilers or machines is not claimed.
+
+*M2, the tolerance (verified).* `src/mesh/dual_tolerance.hpp` holds the whole rule. `make_dual_mesh` calls it for
+every coupling, patch area and volume, always on the assembled total and its scale, never on a piece. Non-finite
+totals are refused. Tests:
+- exact boundaries with nextafter on both sides of ±τ·scale, at five scales, plus NaN and infinity;
+- a near-cocircular square whose diagonal crosses the threshold at ε = 2e-12, under coordinate scalings from 1e-7 to
+  1e5;
+- Kuhn grids scaled from 1e-9 to 1e3 dropping the same edges;
+- exact cancellation of ±4 pieces (dropped, not refused), and the exact P1 refusal that precedes M2 when the same
+  quad is moved by one ulp;
+- a −4 piece with a +6.68 piece, kept at its exact total;
+- a kite whose pieces are 25× its edge, where only the Σ|pieces| term drops a resolved total of 1e-9.
+- Mutations: 9 of 9 caught (both inclusive ends, non-finite, the volume bound, τ ×10 and ÷10, either term of the
+  scale, the coupling scale's power).
+
+*M7, the interface rule P4 (specified and implemented as a check; no generator).* `include/NiTCAD/mesh/interfaces.hpp`
+gives the metric and its computation:
+- deviation(F) = min over the declared pieces between the two regions of max over the face's vertices of the
+  distance to the piece;
+- the face's vertices are the circumcentres around the edge, and on the boundary the boundary-facet circumcentres
+  and the midpoint;
+- because F lies in the hull of its vertices and the distance to a convex piece is convex, this is an upper bound on
+  the face's distance from the interface.
+
+Acceptance:
+- **P4a**, outside the corner zones (2 s around piece boundaries): 1e-12 L + 1e-13 X;
+- **P4b**, inside the zones: s;
+- every region pair that meets must be declared.
+
+`check_interfaces` is the only way to establish P4. `make_dual_mesh` never does, and an imported multi-region mesh
+fails it unless its nodes follow the rule (tested). Results on brute-force Delaunay layouts:
+
+| Layout | Result |
+|---|---|
+| Flat, uniform or graded pairs; thin layer wider than both bands; 3D plane | exact (flat deviation 0) |
+| Node inside the protected band; layer inside a band with staggered pairs; 3D broken mirror | refused |
+| Node just outside the band (1.05 b) | accepted, as the band argument says |
+| Right-angle corner, pairs 8 s away, no corner nodes | exact: by mirror symmetry the corner point is equidistant from both arms |
+| Right-angle corner, bisector nodes, pairs graded to 1.5 s | 0.80 s |
+| 60° corner, bisector nodes, graded pairs, oblique boundary junction | 0.95 s |
+| T-junction | 0.31 s |
+| Corner threshold | the 0.80 s layout is accepted at resolution 0.026 and refused by P4b at 0.024 |
+
+M8 findings, which change what the generator must do:
+- the bisector nodes make a right-angle corner worse, so the generator should not place them there;
+- an oblique boundary junction needs the pairs *and* the boundary nodes graded toward it (1.5 s, 3 s). Without that
+  the import failed P2, or the junction face deviated beyond s;
+- below 60° nothing is measured, and 60° itself passes with a thin margin (U12).
+
+Mutations: 12 run; 11 caught. M7-12 ("zero-coupling cross edges judged too") is **equivalent**: such a face is
+degenerate, and its single point is the circumcentre of cells whose kept cross faces already contain it; if a cell
+has no kept cross face, that point carries no interface measure.
 
 **Gates (predefined, so a threshold is never set after the run):**
 - **Tensor equivalence:** split rectangles and Kuhn-split boxes give exactly `make_tensor_grid`'s volumes, couplings
@@ -352,12 +449,14 @@ before `ARCHITECTURE.md` cites it. *Heuristic*: no guarantee; bounded by a cap a
 
 **Unresolved (need a ruling or carried as limits):**
 - U1 MOSFET factor k = 1.5: a judgement, not derived. The owner may set it.
-- U2 Imported meshes (`make_dual_mesh` on outside simplices) can be checked for P0–P3 and P5, but not P4: without the
-  interface geometry the assembler's midpoint assumption is unchecked for them. The proposal is to document this and
-  report the cross-region edge count.
+- U2 Imported meshes: `make_dual_mesh` checks P0–P3 and P5 only. P4 is established solely by `check_interfaces`, given
+  declared interface pieces; without them an imported multi-region mesh is not interface-valid (round 2). Still open:
+  nothing above `mesh` yet *requires* a P4 report before assembling a multi-region device, so the device layer cannot
+  enforce it until the generator unit wires it in (a ruling is needed on whether `Device` should demand it).
 - U3 Termination is unproven for the band and pair modifications (M7, M8), for 3D convex domains with input angles
   under the M6/M11 hypotheses, and for options beyond the cited bounds. Capped (M11) and reported.
-- U4 Corner-zone accuracy (M8) has no a-priori bound; it is measured and refused above s.
+- U4 Corner-zone accuracy (M8) has no a-priori bound; it is measured and refused above s (P4b). Measured in round 2: 0 at a
+  right angle without corner nodes, 0.80 s with bisector nodes, 0.95 s at 60°, 0.31 s at a T-junction.
 - U5 Slivers affect future simplex-based consumers (M10 iii); removal needs a power-diagram dual (its own decision).
 - U6 Literature hypotheses to confirm against the papers before `ARCHITECTURE.md` cites them: Gärtner–Si–Fuhrmann 2010
   (70.53°, 2D arbitrary polygons); Shewchuk 1998 (radius–edge ≤ 2, input-angle threshold 60° or 90°); Shewchuk 2002
@@ -366,8 +465,18 @@ before `ARCHITECTURE.md` cites it. *Heuristic*: no guarantee; bounded by a cap a
 - U8 The L2 order gate (1.5) is a judgement where theory gives no rate.
 - U9 Region-only straddling: doping steps (abrupt junctions not on a region boundary) are not straddled, so an abrupt
   junction is resolved only to h. "Doping interfaces" with pairs could be added later.
-- U11 Filter soundness (M4) is argued, not tested: two filter mutations survive (implementation notes, commit 3). A
-  white-box test of the error bound, or an adversarial generator, would close this.
+- U11 Filter soundness: **closed** in round 2 (the argument written out, one defect fixed, direct tests against the exact
+  value, every mutation caught or removed as redundant).
+- U12 M8 placement rules are heuristics, judged by P4b:
+  - the bisector rule is harmful at right angles;
+  - 60° passes with a 5% margin;
+  - nothing below 60° is measured;
+  - oblique boundary junctions need pairs and boundary nodes graded toward them.
+  The generator's corner rule needs a ruling before commit 4. Proposed: no corner nodes at right angles; bisector
+  nodes plus grading at other angles; no angle limit: P4b decides each corner, and acute corners below 60° stay an
+  unmeasured risk until the generator's tests cover them.
+- U13 P4 does not check that each node lies inside its region's geometry, which is not an input. A misplaced node
+  surrounded by its own region's nodes is not detected; one next to another region is.
 - U10 Budgets (M13) are targets. If the 3D generator misses its gates or budgets within the unit, the PR carries 2D plus
   3D import and says so (unchanged from revision 1).
 

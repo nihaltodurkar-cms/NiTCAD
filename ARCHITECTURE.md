@@ -2071,7 +2071,17 @@ Unstructured meshes are not implemented initially. The mesh architecture must st
 - Regular hexagon and tetrahedron duals match closed forms to 1e-13. Every refusal is tested with its code and index.
 - Determinism: the same input gives a bit-identical mesh in the same build. Topology decisions are exact, so they don't
   depend on the platform; floating-point measures are not claimed bit-identical across compilers or machines.
-- Not yet: the generators (M5–M13), P4 interface checks, an independent Voronoi-clipping check, and io persistence (M14).
+- Round 2 (DECISIONS.md "Approval blockers, round 2"):
+  - The filter's soundness argument is in `predicates.hpp`. A product whose value underflows by cancellation is now
+    flagged as well as one whose magnitude underflows. Tests compare each evaluation with its exact value through a
+    probe.
+  - The tie-break is checked against the documented lifted perturbation, evaluated directly as a Leibniz determinant.
+  - The M2 rule is one function (`dual_tolerance.hpp`), tested at its exact boundaries, under scaling and under
+    cancellation.
+  - `check_interfaces` (`include/NiTCAD/mesh/interfaces.hpp`) is the only way to establish P4: the dual faces between
+    regions measured against declared interface pieces, exact outside corner zones of radius 2 s, within s inside them.
+- Not yet: the generators (M5–M13), an independent Voronoi-clipping check, and io persistence (M14). Nothing above
+  `mesh` requires a P4 report yet.
 
 ### 6.12 Long-term computational architecture
 
@@ -2498,7 +2508,7 @@ exists, not finished), **planned** (nothing built). Audit of 2026-10-09, against
 |---|---|---|---|
 | Robust nonlinear solving | Newton with componentwise clipping (6.2); the generation-free retry (Units 19, 20); arc-length `trace_bias` (Unit 19) | **Bias step cutting verified, on `main`** (Unit 28, below; `06b708d`, PR #31); **Newton line search verified, opt-in, on `main`** (Unit 30, below; `f3e2811`, PR #32) | A natural-test norm monotone in reverse bias; a Gummel or pseudo-transient fallback |
 | Input/output, checkpoint/restart | The `io` layer (approved 2026-10-09): versioned, checksummed, atomic files for meshes, sweeps and checkpoints | **Verified, on `main`** (Unit 29, 6.6; `f69a7a8`, PR #33) | Device descriptions on disk and a text input deck; transient and small-signal results |
-| Geometry and unstructured 3D meshing | `Mesh::from_parts` accepts any valid node/edge/volume graph; only the tensor-grid producer exists; nonlocal BTBT needs tensor cells (6.11) | **in progress** (Unit 16, branch `mesh/unstructured`; scope ruled 2026-10-14; choices M1–M16 (revision 2) and open issues U1–U10 in DECISIONS.md await ruling) | Boundary-conforming Delaunay generators (2D any polygon, 3D convex) on the Voronoi dual with exact predicates, checked postconditions P0–P5, straddled interfaces and contact patches, persisted metadata; analytic doping profiles |
+| Geometry and unstructured 3D meshing | `Mesh::from_parts` accepts any valid node/edge/volume graph; only the tensor-grid producer exists; nonlocal BTBT needs tensor cells (6.11) | **in progress** (Unit 16, branch `mesh/unstructured`; scope ruled 2026-10-14; predicates, import path and the P4 check on the branch; generators await rulings on U2 and U12) | Boundary-conforming Delaunay generators (2D any polygon, 3D convex) on the Voronoi dual with exact predicates, checked postconditions P0–P5, straddled interfaces and contact patches, persisted metadata; analytic doping profiles |
 | Low-current accuracy | `terminal_current_resolution` reports the floor (Unit 15); off-state MOSFET current unresolved (6.13) | planned | Current extraction from the minority side or quasi-Fermi unknowns, gated against the resolution |
 | Generic fields/equations | Specialized `DriftDiffusion` assembler with a stride (Unit 23) | planned (6.12.1–2) | Field and equation descriptors behind the current assembler, bit-identical |
 | Scalable linear solvers | Eigen SparseLU (default), PARDISO opt-in (Unit 18) | planned | Iterative Krylov with ILU/AMG behind `linalg`; parallel assembly |
