@@ -7,6 +7,7 @@
 #include <iterator>
 #include <limits>
 #include <optional>
+#include <span>
 #include <string>
 #include <system_error>
 #include <utility>
@@ -126,7 +127,10 @@ std::expected<std::vector<std::byte>, base::Error> read_file(const std::filesyst
 
 namespace mesh_key {
 constexpr std::uint16_t dimension = 1, points = 2, volumes = 3, endpoints = 4, lengths = 5,
-                        couplings = 6, patch = 7, origin = 8;  // origin: absent in older files
+                        couplings = 6, patch = 7, origin = 8,  // origin: absent in older files
+                        // A generated mesh (M14), absent in plain mesh files:
+                        cells = 9, facets = 10, facet_patch = 11, node_region = 12, report = 13,
+                        certificate = 14;
 constexpr std::uint16_t patch_name = 1, patch_nodes = 2, patch_areas = 3;
 }  // namespace mesh_key
 
@@ -514,6 +518,119 @@ std::expected<mesh::Mesh, base::Error> load_mesh(const std::filesystem::path& pa
     NITCAD_IO_TRY(bytes, read_file(path, Content::mesh));
     NITCAD_IO_TRY(r, Reader::parse(bytes));
     return read_mesh(r);
+}
+
+namespace {
+
+namespace report_key {
+constexpr std::uint16_t counts = 1, min_angle = 2;
+}  // namespace report_key
+namespace certificate_key {
+constexpr std::uint16_t digests = 1, counts = 2, deviations = 3;
+}  // namespace certificate_key
+
+std::vector<std::int64_t> wide(std::span<const std::int32_t> v) { return {v.begin(), v.end()}; }
+
+// Each value into [0, top] as an int32, or false.
+bool narrow(const std::vector<std::int64_t>& v, std::vector<std::int32_t>& out) {
+    for (const std::int64_t x : v) {
+        if (x < 0 || x > std::numeric_limits<std::int32_t>::max()) return false;
+        out.push_back(static_cast<std::int32_t>(x));
+    }
+    return true;
+}
+
+}  // namespace
+
+std::expected<void, base::Error> save_generated_mesh(const std::filesystem::path& path,
+                                                     const mesh::GeneratedMesh& m) {
+    Writer w = write_mesh(m.mesh);
+    w.i64s(mesh_key::cells, wide(m.simplices.cells));
+    w.i64s(mesh_key::facets, wide(m.simplices.facets));
+    w.i64s(mesh_key::facet_patch, wide(m.simplices.facet_patch));
+    w.i64s(mesh_key::node_region, wide(m.node_region));
+    Writer rep;
+    const mesh::MeshReport& r = m.report;
+    rep.i64s(report_key::counts,
+             std::vector<std::int64_t>{static_cast<std::int64_t>(r.nodes), static_cast<std::int64_t>(r.triangles),
+                                       static_cast<std::int64_t>(r.interface_nodes),
+                                       static_cast<std::int64_t>(r.refinement_points),
+                                       static_cast<std::int64_t>(r.segment_splits),
+                                       static_cast<std::int64_t>(r.exempt_triangles)});
+    rep.f64(report_key::min_angle, r.min_angle_deg);
+    w.record(mesh_key::report, rep);
+    if (m.certificate) {
+        const mesh::InterfaceCertificate& c = *m.certificate;
+        Writer cw;
+        cw.i64s(certificate_key::digests,
+                std::vector<std::int64_t>{std::bit_cast<std::int64_t>(c.mesh_digest),
+                                          std::bit_cast<std::int64_t>(c.region_digest),
+                                          std::bit_cast<std::int64_t>(c.interfaces_digest)});
+        cw.i64s(certificate_key::counts,
+                std::vector<std::int64_t>{static_cast<std::int64_t>(c.report.cross_faces),
+                                          static_cast<std::int64_t>(c.report.corner_faces)});
+        cw.f64s(certificate_key::deviations,
+                std::vector<double>{c.report.max_flat_deviation, c.report.max_corner_deviation});
+        w.record(mesh_key::certificate, cw);
+    }
+    return write_file(path, Content::mesh, w);
+}
+
+std::expected<mesh::GeneratedMesh, base::Error> load_generated_mesh(const std::filesystem::path& path) {
+    NITCAD_IO_TRY(bytes, read_file(path, Content::mesh));
+    NITCAD_IO_TRY(r, Reader::parse(bytes));
+    if (!r.has(mesh_key::cells) || !r.has(mesh_key::node_region) || !r.has(mesh_key::report)) {
+        return std::unexpected(invalid("'" + path.string() + "' is a plain mesh, not a generated one"));
+    }
+    NITCAD_IO_TRY(m, read_mesh(r));
+    NITCAD_IO_TRY(cells, r.i64s(mesh_key::cells));
+    NITCAD_IO_TRY(facets, r.i64s(mesh_key::facets));
+    NITCAD_IO_TRY(facet_patch, r.i64s(mesh_key::facet_patch));
+    NITCAD_IO_TRY(regions, r.i64s(mesh_key::node_region));
+    NITCAD_IO_TRY(rep, r.record(mesh_key::report));
+    NITCAD_IO_TRY(counts, rep.i64s(report_key::counts));
+    NITCAD_IO_TRY(min_angle, rep.f64(report_key::min_angle));
+    if (counts.size() != 6 || regions.size() != m.node_count()) {
+        return std::unexpected(corrupt("generated mesh sizes"));
+    }
+    mesh::SimplexMesh s;
+    s.dimension = m.dimension();
+    s.points.assign(m.points().begin(), m.points().end());
+    std::vector<std::int32_t> node_region;
+    if (!narrow(cells, s.cells) || !narrow(facets, s.facets) || !narrow(facet_patch, s.facet_patch) ||
+        !narrow(regions, node_region)) {
+        return std::unexpected(corrupt("generated mesh index out of range"));
+    }
+    for (const mesh::BoundaryPatch& b : m.boundary()) s.patch_names.push_back(b.name);
+    auto dual = mesh::make_dual_mesh(s);
+    if (!dual || mesh::graph_digest(*dual) != mesh::graph_digest(m)) {
+        return std::unexpected(corrupt("the simplices do not give the stored mesh"));
+    }
+    std::optional<mesh::InterfaceCertificate> certificate;
+    if (r.has(mesh_key::certificate)) {
+        NITCAD_IO_TRY(cr, r.record(mesh_key::certificate));
+        NITCAD_IO_TRY(digests, cr.i64s(certificate_key::digests));
+        NITCAD_IO_TRY(ccounts, cr.i64s(certificate_key::counts));
+        NITCAD_IO_TRY(deviations, cr.f64s(certificate_key::deviations));
+        if (digests.size() != 3 || ccounts.size() != 2 || deviations.size() != 2) {
+            return std::unexpected(corrupt("certificate sizes"));
+        }
+        mesh::InterfaceCertificate c{.mesh_digest = std::bit_cast<std::uint64_t>(digests[0]),
+                                     .region_digest = std::bit_cast<std::uint64_t>(digests[1]),
+                                     .interfaces_digest = std::bit_cast<std::uint64_t>(digests[2]),
+                                     .report = {static_cast<std::size_t>(ccounts[0]),
+                                                static_cast<std::size_t>(ccounts[1]), deviations[0],
+                                                deviations[1]}};
+        if (!mesh::certifies(c, m, node_region)) {
+            return std::unexpected(corrupt("the certificate does not certify the stored mesh and regions"));
+        }
+        certificate = c;
+    }
+    const mesh::MeshReport report{static_cast<std::size_t>(counts[0]), static_cast<std::size_t>(counts[1]),
+                                  static_cast<std::size_t>(counts[2]), static_cast<std::size_t>(counts[3]),
+                                  static_cast<std::size_t>(counts[4]), static_cast<std::size_t>(counts[5]),
+                                  min_angle};
+    return mesh::GeneratedMesh{std::move(m), std::move(s), std::move(node_region), std::move(certificate), report};
 }
 
 std::expected<void, base::Error> save_sweep(const std::filesystem::path& path,

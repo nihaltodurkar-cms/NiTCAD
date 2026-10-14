@@ -215,7 +215,9 @@ target_link_libraries(nitcad_physics_test PRIVATE NiTCAD::physics Catch2::Catch2
 add_test(NAME physics COMMAND nitcad_physics_test)
 
 # --- device layer (regions, doping, contacts; validated problem description) -------
-add_library(nitcad_device STATIC src/device/device.cpp)
+add_library(nitcad_device STATIC
+  src/device/device.cpp
+  src/device/doping_profiles.cpp)
 add_library(NiTCAD::device ALIAS nitcad_device)
 target_include_directories(nitcad_device PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
 target_link_libraries(nitcad_device PUBLIC NiTCAD::base NiTCAD::mesh NiTCAD::physics)
@@ -224,7 +226,8 @@ add_executable(nitcad_device_test
   tests/device/device_test.cpp
   tests/device/topology_test.cpp
   tests/device/insulator_test.cpp
-  tests/device/certificate_test.cpp)
+  tests/device/certificate_test.cpp
+  tests/device/doping_profiles_test.cpp)
 target_link_libraries(nitcad_device_test PRIVATE NiTCAD::device Catch2::Catch2WithMain)
 add_test(NAME device COMMAND nitcad_device_test)
 
@@ -294,7 +297,8 @@ target_link_libraries(nitcad_io PUBLIC NiTCAD::base NiTCAD::mesh NiTCAD::results
 add_executable(nitcad_io_test
   tests/io/record_test.cpp
   tests/io/files_test.cpp
-  tests/io/origin_test.cpp)
+  tests/io/origin_test.cpp
+  tests/io/generated_test.cpp)
 # The record test reads the private encoding directly.
 target_include_directories(nitcad_io_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/io")
 target_link_libraries(nitcad_io_test PRIVATE NiTCAD::io Catch2::Catch2WithMain)

@@ -27,6 +27,7 @@
 #include <vector>
 
 #include "NiTCAD/base/error.hpp"
+#include "NiTCAD/mesh/generate.hpp"
 #include "NiTCAD/mesh/mesh.hpp"
 #include "NiTCAD/results/run.hpp"
 #include "NiTCAD/results/solution.hpp"
@@ -46,6 +47,17 @@ enum class Content : std::uint32_t { mesh = 1, sweep = 2, checkpoint = 3 };
                                                          const mesh::Mesh& m);
 // Rebuilt through mesh::Mesh::from_parts, so a loaded mesh is validated like any other.
 [[nodiscard]] std::expected<mesh::Mesh, base::Error> load_mesh(const std::filesystem::path& path);
+
+// A generated mesh (Unit 16; DECISIONS.md M14): the mesh file with optional records for its
+// simplices, node regions, generator report and P4 certificate, so a reloaded mesh can be rendered,
+// refined or given to a multi-region device without regenerating it. load_mesh reads the same
+// file as a plain mesh (unknown records are skipped). load_generated_mesh refuses (invalid_input)
+// a file without those records, simplices whose dual is not the stored mesh, and a certificate
+// that does not certify the stored mesh and node regions.
+[[nodiscard]] std::expected<void, base::Error> save_generated_mesh(const std::filesystem::path& path,
+                                                                   const mesh::GeneratedMesh& m);
+[[nodiscard]] std::expected<mesh::GeneratedMesh, base::Error> load_generated_mesh(
+    const std::filesystem::path& path);
 
 // Every field of a sweep: the run record, every point (fields, bands, currents, resolutions,
 // charges, edge currents, convergence, tunnel paths, thermal quantities, sub-steps), the stopping
