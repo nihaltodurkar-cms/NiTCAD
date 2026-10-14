@@ -905,7 +905,8 @@ std::expected<GeneratedMesh, base::Error> generate_mesh(const Geometry2D& geomet
     std::optional<InterfaceCertificate> certificate;
     std::set<std::int32_t> distinct(node_region.begin(), node_region.end());
     if (distinct.size() > 1) {
-        InterfaceSet set{{}, gen.s};
+        // With no interfaces (regions that do not touch) any positive resolution serves.
+        InterfaceSet set{{}, gen.s > 0.0 ? gen.s : options.max_size};
         for (std::size_t k = 0; k < gen.interface_edges.size(); ++k) {
             const PolyEdge& e = gen.interface_edges[k];
             set.pieces.push_back({{e.a, e.b}, gen.polys[e.poly].region, gen.interface_right[k]});

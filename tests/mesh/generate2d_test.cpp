@@ -340,3 +340,13 @@ TEST_CASE("generator: patch ends are nodes exactly, on a slanted edge too", "[me
     }
     CHECK(close(total(m->mesh.boundary()[0].areas), std::hypot(0.5, 0.25), 1e-12));
 }
+
+TEST_CASE("generator: regions that do not touch are certified (no interfaces)", "[mesh][generate]") {
+    Geometry2D g{{rect(0, 0, 1, 1, 0), rect(2, 0, 3, 1, 1)}, {}};
+    MeshOptions2D o;
+    o.max_size = 0.2;  // no interface_resolution: there are no interfaces
+    const auto m = generate_mesh(g, o);
+    REQUIRE(m.has_value());
+    REQUIRE(m->certificate.has_value());
+    CHECK(m->certificate->report.cross_faces == 0);
+}
