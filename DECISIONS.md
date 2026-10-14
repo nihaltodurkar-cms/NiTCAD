@@ -482,6 +482,60 @@ has no kept cross face, that point carries no interface measure.
   They are implemented as ruled until then.
 - **U16, U2 in 1D.** The 1D exemption above was applied without an explicit ruling.
 
+**Owner rulings on U14, U15 and U16 (2026-10-14), and their implementation (commits `d741912`, `898fbf1`, `13f9148`):**
+
+- **U15, corners (ruled: remove the bisector nodes where they worsen accuracy). Done.** They worsened every measured
+  configuration, so none are placed. P4b still judges every feature, the 90° rule stands, and sectors below 60° are
+  still refused. Regression tests pin each measured configuration, with deviation bounds from the measurements and no
+  node within s of the feature:
+
+  | Configuration | Corner deviation |
+  |---|---|
+  | Flat interface | 0 |
+  | 90° bend | 0 |
+  | T-junction | 0 |
+  | 60.3° | ≤ 0.37 s (measured 0.359) |
+  | 120° | ≤ 0.33 s (measured 0.321) |
+
+  Mutations: 3 of 3 caught, including the old bisector generator run as a mutant.
+- **U16, 1D (ruled: exempt only verified 1D tensor grids). Done.**
+  - The blanket 1D exemption is removed.
+  - The tensor tag is verified by `Mesh::from_parts`; in 1D it also requires a chain: strictly increasing x, and
+    exactly the n − 1 edges joining x-consecutive nodes. Every region transition then lies on the dual face between
+    two neighbours.
+  - Any other 1D mesh with two regions needs `mesh::certify_interfaces_1d`: every cross-region edge's midpoint (its
+    dual face) on a declared interface point of that pair, within the P4a tolerance.
+  - The 1D insulator test, a mesh built from parts, now carries such a certificate.
+  - Mutations: 5 of 6 caught. The sixth, the increasing-x check removed, is equivalent: with n − 1 rank-consecutive
+    edges, a duplicate x is an edge of zero length, which the length check refuses.
+- **U14, the MOSFET gate (ruled: keep k = 1.5; investigate anisotropic layers and a hybrid tensor strip; pass before
+  3D). Passed.**
+  - Both options were realised as one mechanism, `MeshOptions2D::layers`: a structured boundary layer is a tensor
+    lattice along a boundary segment, and placed under the gate it is the hybrid strip. Its cells are Delaunay ties,
+    so its dual is exactly the tensor box method; refinement stays out of it.
+  - Mesh specifications tried, the threshold fixed throughout:
+
+    | Attempt | Specification | Nodes | Result |
+    |---|---|---|---|
+    | 0 | isotropic, size boxes | 8,031 | on current 4 % low |
+    | 1 | layer to 1e-6 cm | 4,438 | subthreshold 1–4 % high |
+    | 2 | layer to 1.2e-5 cm | 7,337 | high-gate current and swing fail |
+    | 3 | layer to 1.6e-5 cm | 8,304 | high-gate current, g_m and swing fail |
+    | 4 | as 3, contact edges exactly at Lsd and Lsd + Lg in all three meshes | 8,190 | only the swing fails, 7.5e-4 against 1.03e-4 allowed |
+    | 5 | layer to 1.8e-5 cm | 8,864 | swing fails, 1.4e-4 |
+    | 6 | layer to 1.8e-5 cm, unstructured refinement (1e-6 cm) below at the body contact | 9,342 | **passes** |
+
+  - Before attempt 4, the tensor baseline and reference missed the contact edges by 2.9e-8 and 1.4e-8 cm, an offset
+    that halves with refinement. Snapping their nearest nodes onto the edges, with node counts unchanged, makes all
+    three meshes model the defined device. It does not weaken the rule: the tensor error only shrinks.
+  - **Plainly:** the passing mesh is a tensor lattice over 90 % of the depth with unstructured refinement only at the
+    bottom. Isotropic triangles alone could not meet the gate at this node budget.
+  - The gate is in ctest (`solve_unstructured`, Release) as an ordinary test; the `[!shouldfail]` marker is removed.
+  - Mutations: 8 of 9 caught. The ninth, judging layer-only triangles, is equivalent: they are cell halves whose
+    circumcentres lie in the layer, already exempt.
+  - A defect found and fixed: boundary nodes were filled between lattice columns more than h apart, breaking the
+    lattice. Hidden in the MOSFET (columns closer than h), found by the new lattice test.
+
 **Gates (predefined, so a threshold is never set after the run):**
 - **Tensor equivalence:** split rectangles and Kuhn-split boxes give exactly `make_tensor_grid`'s volumes, couplings
   and areas to 1e-13 relative, with the diagonals dropped. Their diode solve matches the tensor run to 1e-12.
@@ -536,10 +590,10 @@ has no kept cross face, that point carries no interface measure.
   passes; sectors below 60° refused.
 - U13 P4 does not check that each node lies inside its region's geometry, which is not an input. A misplaced node
   surrounded by its own region's nodes is not detected; one next to another region is.
-- U14 The MOSFET gate is unmet (round 3 above): anisotropic refinement, a hybrid mesh or a changed gate needs a
-  ruling.
-- U15 The bisector nodes of U12 make corners worse (round 3 above): dropping them is proposed.
-- U16 1D meshes are exempt from P4 certification by interpretation of U2 (round 3 above).
+- U14 **Resolved 2026-10-14**: the MOSFET gate passes with a structured boundary layer (the hybrid strip), k = 1.5
+  unchanged (above).
+- U15 **Resolved 2026-10-14**: no bisector nodes; regression tests per measured configuration (above).
+- U16 **Resolved 2026-10-14**: only verified 1D tensor chains are exempt; other 1D meshes need certify_interfaces_1d.
 - U10 Budgets (M13) are targets. If the 3D generator misses its gates or budgets within the unit, the PR carries 2D plus
   3D import and says so (unchanged from revision 1).
 
