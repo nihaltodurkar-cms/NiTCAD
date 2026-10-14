@@ -288,6 +288,35 @@ before `ARCHITECTURE.md` cites it. *Heuristic*: no guarantee; bounded by a cap a
 | M15 | (Ruled R4.) Doping profiles: constant, box, Gaussian and erfc per axis with lateral erfc fall-off, summed per species, sampled at nodes (`device/doping_profiles.hpp`). | — | Point sampling matches today's lambdas. | Abrupt doping steps are not straddled (U9). |
 | M16 | Nonlocal BTBT stays tensor-only; it is already refused without `DeviceDescription::cells`. | — | Keeps the unit to meshing. | Unstructured nonlocal tunnelling waits for a cell-walk locator. |
 
+**Implementation notes, commit 3 (predicates and simplex import; differences from the text above, for review):**
+- **M4, exact stage:** exact integers over the inputs scaled by a common power of two, instead of Shewchuk's expansion
+  arithmetic.
+  - Why: expansions can underflow on the degree-6 diametral-sphere test and on circumcentre numerators at extreme
+    coordinate scales. Integers have no range restriction and are simpler to verify.
+  - The filter is a forward error bound computed alongside the same formula, instead of Shewchuk's stage-A constants, so
+    the filter and the exact stage cannot evaluate different formulas.
+  - Trade-off: the exact stage is slower; it runs only on near-ties.
+- **M4, tie-break:** the largest node id is perturbed most. Any fixed order is consistent; this one is documented and
+  pinned by a test.
+- **M2, scales:** the scale is max(L^(D−1), Σ|pieces|) for couplings, max(l^D, Σ|pieces|) for volumes and
+  max(l^(D−1), Σ|pieces|) for patch areas, instead of L^(D−1) and l^D alone. The Σ|pieces| term covers cancellation
+  among signed pieces near poorly shaped elements, where rounding scales with the pieces rather than with L.
+  - The P5 closure tolerance is relative to Σ|pieces| for the same reason.
+  - A patch node whose area is within τ of zero is dropped from the patch, as zero couplings are dropped.
+- **Import scope:** P0, P1, P2, P3 and P5 are checked, plus manifoldness and folds. Accepted, but stated as limits:
+  - global overlap of a locally valid mesh is not detected;
+  - P4 cannot be checked without interfaces (U2).
+- **Determinism:** claimed only within one build. Topology decisions are exact and therefore platform-independent;
+  bit identity of the measures across compilers or machines is not claimed, because it has not been verified.
+- **Mutation tests:** 12 run against the 20 new test cases; 10 caught, 2 survived.
+  - Caught: insphere sign; tie-break order; the query-point cofactor sign; the face-side sign of the 3D dual; the drop
+    rule using `< 0`; P1 skipped; P2 skipped; the 3D boundary piece and the volume factor.
+  - The filter with no error bound is caught too, in a second form: its first form failed to build on an
+    unused-variable warning and is not counted.
+  - **Survived:** the product rule written as max + 1, and the underflow guard removed. The worst-case error they
+    under-bound is not reached by any input the tests generate, so the filter's soundness rests on the error analysis
+    in `predicates.hpp`, not on a test (U11).
+
 **Gates (predefined, so a threshold is never set after the run):**
 - **Tensor equivalence:** split rectangles and Kuhn-split boxes give exactly `make_tensor_grid`'s volumes, couplings
   and areas to 1e-13 relative, with the diagonals dropped. Their diode solve matches the tensor run to 1e-12.
@@ -337,6 +366,8 @@ before `ARCHITECTURE.md` cites it. *Heuristic*: no guarantee; bounded by a cap a
 - U8 The L2 order gate (1.5) is a judgement where theory gives no rate.
 - U9 Region-only straddling: doping steps (abrupt junctions not on a region boundary) are not straddled, so an abrupt
   junction is resolved only to h. "Doping interfaces" with pairs could be added later.
+- U11 Filter soundness (M4) is argued, not tested: two filter mutations survive (implementation notes, commit 3). A
+  white-box test of the error bound, or an adversarial generator, would close this.
 - U10 Budgets (M13) are targets. If the 3D generator misses its gates or budgets within the unit, the PR carries 2D plus
   3D import and says so (unchanged from revision 1).
 

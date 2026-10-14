@@ -2037,6 +2037,42 @@ Unstructured meshes are not implemented initially. The mesh architecture must st
   cells by axis, an exception to item 1 scoped to that model; an unstructured producer (Unit 16) needs a cell-walk
   interface (locate, stencil, exit face, neighbour) for the tracer to use instead.
 
+**As built (Unit 16, in progress on `mesh/unstructured`: predicates and the simplex import path; DECISIONS.md M1–M4):**
+- Exact predicates (`src/mesh/predicates.hpp`, internal): orient2d/3d, incircle, insphere, the diametral circle and
+  sphere tests. Each predicate's polynomial is written once and evaluated twice. First comes a double-precision filter
+  with a forward error bound carried alongside: the bound is γ_d·M, where M is the polynomial evaluated on absolute
+  values and d counts roundings (max + 1 for sums, a + b + 1 for products). The filter defers on product underflow or
+  overflow. Otherwise the sign comes from exact integers (`exact_integer.hpp`), with the inputs scaled by a common power
+  of two. Exactness holds for any finite doubles, with no range restriction.
+- Tie-break: the lifted values are perturbed symbolically. The point with the largest node id is raised most, and the
+  sign is the first nonzero cofactor. The orientation predicates are never perturbed, so no flat element can come from a
+  tie.
+- Tests for the tie-break:
+  - antisymmetry of the perturbed incircle and insphere over every permutation;
+  - the documented order pinned;
+  - brute-force perturbed Delaunay triangulations of all-tie lattices, which are valid triangulations whose dual is the
+    tensor grid.
+- `make_dual_mesh(SimplexMesh)` (`include/NiTCAD/mesh/simplex_mesh.hpp`) builds the circumcentric dual of given triangles
+  or tetrahedra and checks it:
+  - P0: no flat cell; negatively oriented cells are reoriented.
+  - Manifold, with no folds.
+  - P1: locally Delaunay. Ties are allowed.
+  - P2: every boundary facet is Gabriel, listed or not.
+  - P3: totals are non-negative, with τ = 1e-12 on a scale of the total's own dimension, max(L^(D−1) or l^D, Σ|pieces|).
+    Zero couplings and zero patch areas are dropped.
+  - P5: every control volume closes to 1e-11.
+- Pieces are built from exact dot products and determinants rounded once, so they stay accurate for flat elements.
+  Unlisted boundary facets are natural (zero-flux) boundaries.
+- Tensor equivalence holds to 1e-13 for split rectangles (both diagonals), Kuhn-split boxes, a box in five tetrahedra,
+  and perturbed-Delaunay lattices, all on graded axes. Every diagonal is dropped.
+- Unstructured cases pass with closure ≤ 1e-12 and total measures to 1e-12:
+  - a 2D square with scattered points and obtuse cells (their negative pieces are accepted);
+  - a 3D cube with a boundary lattice and interior points.
+- Regular hexagon and tetrahedron duals match closed forms to 1e-13. Every refusal is tested with its code and index.
+- Determinism: the same input gives a bit-identical mesh in the same build. Topology decisions are exact, so they don't
+  depend on the platform; floating-point measures are not claimed bit-identical across compilers or machines.
+- Not yet: the generators (M5–M13), P4 interface checks, an independent Voronoi-clipping check, and io persistence (M14).
+
 ### 6.12 Long-term computational architecture
 
 The following are **target capabilities**, not currently implemented layers. They are recorded here so future units
