@@ -6,7 +6,9 @@
 #include <cstddef>
 #include <limits>
 #include <numeric>
+#include <span>
 #include <type_traits>
+#include <utility>
 
 #include "NiTCAD/base/contract.hpp"
 #include "exact_integer.hpp"
@@ -18,19 +20,19 @@ namespace {
 
 using detail::ExactInteger;
 
-// A double with a forward error bound: |v - exact| <= gamma_d M, where M is the expression evaluated
-// exactly on absolute values (m is M computed in double; on positive operands it carries the same
-// relative bound). By induction: a sum's error is the operands' errors plus one rounding, so
-// d = max + 1; a product's relative errors compound, (1 + gamma_a)(1 + gamma_b)(1 + u) <=
-// 1 + gamma_(a+b+1), so d = a + b + 1.
-// The model fl(x op y) = (x op y)(1 + delta) fails only when a product underflows (a subnormal sum
-// is exact); such a product sets `underflow` and the filter defers to the exact stage.
+// A double with a forward error bound (the argument is in predicates.hpp, "Filter soundness"):
+// |v - exact| <= gamma_d M, M the expression evaluated exactly on absolute values, m its value in
+// double, d = max + 1 for a sum and a + b + 1 for a product. `underflow` marks a product whose
+// value or magnitude fell below the normal range, where the rounding model fails; the filter then
+// defers to the exact stage.
 struct Filtered {
     double v = 0.0;
     double m = 0.0;
     int d = 0;
     bool underflow = false;
 };
+
+constexpr double smallest_normal = std::numeric_limits<double>::min();
 
 Filtered operator+(const Filtered& a, const Filtered& b) {
     return {a.v + b.v, a.m + b.m, std::max(a.d, b.d) + 1, a.underflow || b.underflow};
@@ -39,11 +41,35 @@ Filtered operator-(const Filtered& a, const Filtered& b) {
     return {a.v - b.v, a.m + b.m, std::max(a.d, b.d) + 1, a.underflow || b.underflow};
 }
 Filtered operator*(const Filtered& a, const Filtered& b) {
+    const double v = a.v * b.v;
     const double m = a.m * b.m;
-    const bool tiny = a.m != 0.0 && b.m != 0.0 && m < std::numeric_limits<double>::min();
-    return {a.v * b.v, m, a.d + b.d + 1, a.underflow || b.underflow || tiny};
+    // Either product below the normal range (including a nonzero product rounded to zero). The
+    // value can underflow while the magnitude does not, when a factor's value is small by
+    // cancellation, so both are checked.
+    const bool tiny = (a.m != 0.0 && b.m != 0.0 && m < smallest_normal) ||
+                      (a.v != 0.0 && b.v != 0.0 && std::abs(v) < smallest_normal);
+    return {v, m, a.d + b.d + 1, a.underflow || b.underflow || tiny};
 }
 Filtered operator-(const Filtered& a) { return {-a.v, a.m, a.d, a.underflow}; }  // exact
+
+// The filter's decision for one evaluation: the sign, or 0 to defer, and the bound it used.
+struct Decision {
+    int sign = 0;
+    double bound = 0.0;
+};
+
+Decision decide(const Filtered& r) {
+    if (!std::isfinite(r.v) || !std::isfinite(r.m)) return {};
+    // gamma_d M <= 2 d u m for d u <= 2^-40 (predicates.hpp, "Filter soundness", which also shows
+    // why a subnormal bound needs no special case). Defer when a product underflowed: the
+    // rounding model failed.
+    constexpr double u = 0x1p-53;
+    const double bound = 2.0 * static_cast<double>(r.d) * u * r.m;
+    if (r.underflow) return {0, bound};
+    if (r.v > bound) return {1, bound};
+    if (r.v < -bound) return {-1, bound};
+    return {0, bound};
+}
 
 template <class T>
 T constant(int c);
@@ -87,25 +113,24 @@ T det4(const std::array<std::array<T, 4>, 4>& m) {
     return m[0][0] * minor(0) - m[0][1] * minor(1) + m[0][2] * minor(2) - m[0][3] * minor(3);
 }
 
+template <std::size_t K, class Formula>
+Filtered filter_eval(const std::array<Point, K>& points, int dimension, Formula formula) {
+    std::array<Vec<Filtered>, K> p;
+    for (std::size_t k = 0; k < K; ++k) {
+        for (std::size_t c = 0; c < 3; ++c) {
+            const double x = c < static_cast<std::size_t>(dimension) ? points[k][c] : 0.0;
+            p[k][c] = {x, std::abs(x), 0, false};
+        }
+    }
+    return formula(p);
+}
+
 // The sign of formula(points): the filter first (unless disabled), then exact integers.
 template <std::size_t K, class Formula>
 int sign_of(const std::array<Point, K>& points, int dimension, bool filter, Formula formula) {
     if (filter) {
-        std::array<Vec<Filtered>, K> p;
-        for (std::size_t k = 0; k < K; ++k) {
-            for (std::size_t c = 0; c < 3; ++c) {
-                const double x = c < static_cast<std::size_t>(dimension) ? points[k][c] : 0.0;
-                p[k][c] = {x, std::abs(x), 0, false};
-            }
-        }
-        const Filtered r = formula(p);
-        if (!r.underflow && std::isfinite(r.v) && std::isfinite(r.m)) {
-            // gamma_d M <= 2 d u m for d u << 1 (m within gamma_d of M).
-            constexpr double u = 0x1p-53;
-            const double bound = 2.0 * static_cast<double>(r.d) * u * r.m;
-            if (r.v > bound) return 1;
-            if (r.v < -bound) return -1;
-        }
+        const int s = decide(filter_eval(points, dimension, formula)).sign;
+        if (s != 0) return s;
     }
     const auto exact = detail::to_integers(points, dimension);
     return formula(exact.c).sign();
@@ -278,3 +303,51 @@ int in_diametral_sphere(const Point& a, const Point& b, const Point& c, const Po
 }  // namespace exact
 
 }  // namespace NiTCAD::mesh::predicates
+
+namespace NiTCAD::mesh::predicates::probe {
+
+namespace {
+
+template <std::size_t K, class Formula>
+Result run(std::span<const Point> points, int dimension, Formula formula, int degree) {
+    NITCAD_EXPECTS(points.size() == K);
+    std::array<Point, K> p{};
+    std::ranges::copy(points, p.begin());
+    const Filtered r = filter_eval(p, dimension, formula);
+    const Decision decision = decide(r);
+    const auto exact = detail::to_integers(p, dimension);
+    ExactInteger value = formula(exact.c);
+    const int sign = value.sign();
+    return Result{.value = r.v,
+                  .magnitude = r.m,
+                  .depth = r.d,
+                  .underflow = r.underflow,
+                  .bound = decision.bound,
+                  .filter_sign = decision.sign,
+                  .exact_sign = sign,
+                  .exact = std::move(value),
+                  .exponent = degree * exact.e0};
+}
+
+}  // namespace
+
+Result evaluate(Kind kind, std::span<const Point> points, int column) {
+    switch (kind) {
+        case Kind::orient2d: return run<3>(points, 2, orient2d_formula, 2);
+        case Kind::orient3d: return run<4>(points, 3, orient3d_formula, 3);
+        case Kind::incircle: return run<4>(points, 2, incircle_formula(-1), 4);
+        case Kind::insphere: return run<5>(points, 3, insphere_formula(-1), 5);
+        case Kind::diametral_circle: return run<3>(points, 2, diametral_circle_formula, 2);
+        case Kind::diametral_sphere: return run<4>(points, 3, diametral_sphere_formula, 6);
+        case Kind::incircle_cofactor:
+            NITCAD_EXPECTS(column >= 0 && column <= 3);
+            return run<4>(points, 2, incircle_formula(column), 2);
+        case Kind::insphere_cofactor:
+            NITCAD_EXPECTS(column >= 0 && column <= 4);
+            return run<5>(points, 3, insphere_formula(column), 3);
+    }
+    NITCAD_EXPECTS(false);
+    return {};
+}
+
+}  // namespace NiTCAD::mesh::predicates::probe

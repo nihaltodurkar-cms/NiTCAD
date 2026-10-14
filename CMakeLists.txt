@@ -165,6 +165,7 @@ add_executable(nitcad_mesh_test
   tests/mesh/tensor_grid_test.cpp
   tests/mesh/tensor_cells_test.cpp
   tests/mesh/predicates_test.cpp
+  tests/mesh/filter_test.cpp
   tests/mesh/simplex_mesh_test.cpp)
 # The predicate and dual-geometry tests read the internal headers directly (Unit 16).
 target_include_directories(nitcad_mesh_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/mesh")
