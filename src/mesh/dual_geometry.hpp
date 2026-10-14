@@ -36,8 +36,11 @@ inline constexpr std::array<std::array<int, 2>, 6> tetrahedron_edges{
 // collinear.
 [[nodiscard]] std::array<double, 3> facet_pieces(const std::array<Point, 3>& p);
 
-// The circumcentre of a 3D triangle (for neighbour searches; rounded). Precondition: not collinear.
+// The circumcentre of a 3D triangle (for neighbour searches and P4; rounded). Precondition: not
+// collinear. In 2D (z = 0) it is the triangle's circumcentre in the plane.
 [[nodiscard]] Point triangle_circumcentre(const std::array<Point, 3>& p);
+// The circumcentre of a tetrahedron (rounded once from exact numerators). Precondition: not flat.
+[[nodiscard]] Point tetrahedron_circumcentre(const std::array<Point, 4>& p);
 
 [[nodiscard]] double distance(const Point& a, const Point& b) noexcept;
 

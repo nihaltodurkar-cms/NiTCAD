@@ -1,0 +1,79 @@
+// The interface rule P4 (Unit 16; DECISIONS.md M7, M8): whether the control volumes of a dual mesh
+// meet the declared material interfaces.
+//
+// Under M7 every node belongs to one region and the interface between two regions is represented
+// by the dual faces between their nodes (the faces of the edges joining a node of each). The
+// assembler treats each such edge as crossing the interface at its midpoint
+// (assemble/interface_edges.hpp). check_interfaces is the only way to establish that this holds
+// for a mesh: make_dual_mesh does not (an imported mesh carries no interfaces), and a mesh that
+// has not passed check_interfaces must not be treated as interface-valid.
+//
+// Metric. For each cross-region dual face F (of an edge e = ij with regions A != B, kept in the
+// dual graph), with vertex set V(F) (the circumcentres of the simplices around e, and on the
+// boundary the circumcentres of the boundary facets around e and e's midpoint):
+//   deviation(F) = min over the declared pieces P separating A and B of max over v in V(F) of
+//   dist(v, P).
+// Each piece is convex (a segment, or a planar convex polygon), so dist(., P) is convex, and F lies
+// in the convex hull of V(F): max over V(F) of dist(., P) bounds it over all of F. The minimum over
+// pieces makes deviation(F) an upper bound on the largest distance from F to the interface (exact
+// where one piece is nearest everywhere on F; an over-estimate near a bend, the safe direction).
+// Corner zones: the points within 2 s of a piece's relative boundary (a segment's end points; a
+// polygon's edges), s the declared resolution. A face is in a zone when its midpoint or any vertex
+// is. Acceptance:
+// - outside the zones (P4a, the exact part of M7): deviation(F) <= 1e-12 L_e + 1e-13 X, X the
+//   largest coordinate magnitude among F's vertices and e's end points (the first term relative to
+//   the edge, the second the rounding of coordinates far from the origin, about 450 ulps). This
+//   holds exactly in real arithmetic for a mirrored pair set with its protected band (M7), and
+//   then e is a mirrored pair and its midpoint lies on the interface;
+// - inside the zones (P4b, M8): deviation(F) <= s;
+// - every pair of regions joined by a kept edge must have a declared piece.
+// Not checked here: that each node lies inside its region's geometry (the geometry of whole regions
+// is not an input); a misplaced node shows up as a deviating face unless it is surrounded by its
+// own region's nodes.
+#pragma once
+
+#include <cstddef>
+#include <cstdint>
+#include <expected>
+#include <span>
+#include <vector>
+
+#include "NiTCAD/base/error.hpp"
+#include "NiTCAD/mesh/mesh.hpp"
+#include "NiTCAD/mesh/simplex_mesh.hpp"
+
+namespace NiTCAD::mesh {
+
+struct InterfacePiece {
+    // 2D: a segment, two points. 3D: a planar convex polygon, at least three points in order.
+    std::vector<Point> vertices;
+    std::int32_t region_a = 0;
+    std::int32_t region_b = 0;
+};
+
+struct InterfaceSet {
+    std::vector<InterfacePiece> pieces;
+    double resolution = 0.0;  // s [cm]: corner zones have radius 2 s; faces in them may deviate s
+};
+
+struct InterfaceReport {
+    std::size_t cross_faces = 0;        // dual faces between nodes of different regions
+    std::size_t corner_faces = 0;       // of those, the faces in a corner zone
+    double max_flat_deviation = 0.0;    // outside the zones, deviation / its tolerance (<= 1)
+    double max_corner_deviation = 0.0;  // inside the zones [cm] (<= s)
+};
+
+// `dual` must be make_dual_mesh(simplices) (same dimension, node count and points).
+// Errors:
+// - invalid_input: node_region not one per node, or a region negative; dual not of these
+//   simplices; resolution not finite and positive; a piece with the wrong vertex count, a
+//   non-finite vertex, equal or negative regions, or (3D) not planar, convex and non-degenerate
+//   (the index names the piece);
+// - degenerate_mesh, the rule not established (the index is the edge's first node, both nodes in
+//   the message): regions joined with no declared piece between them; a face outside the corner
+//   zones deviating beyond its tolerance (P4a); a face in a corner zone deviating beyond s (P4b).
+[[nodiscard]] std::expected<InterfaceReport, base::Error> check_interfaces(
+    const SimplexMesh& simplices, const Mesh& dual, std::span<const std::int32_t> node_region,
+    const InterfaceSet& interfaces);
+
+}  // namespace NiTCAD::mesh

@@ -127,4 +127,19 @@ Point triangle_circumcentre(const std::array<Point, 3>& p) {
             p[0][2] + big_n[2].to_double(5 * I.e0) / den};
 }
 
+Point tetrahedron_circumcentre(const std::array<Point, 4>& p) {
+    const auto I = to_integers(p, 3);
+    const V u = sub(I.c[1], I.c[0]);
+    const V v = sub(I.c[2], I.c[0]);
+    const V w = sub(I.c[3], I.c[0]);
+    const ExactInteger det = dot3(u, cross(v, w));
+    NITCAD_EXPECTS(det.sign() != 0);
+    const V num = add(add(scale(dot3(u, u), cross(v, w)), scale(dot3(v, v), cross(w, u))),
+                      scale(dot3(w, w), cross(u, v)));  // degree 4; the centre is p0 + num / (2 det)
+    const double two_det = 2.0 * det.to_double(3 * I.e0);
+    return {p[0][0] + num[0].to_double(4 * I.e0) / two_det,
+            p[0][1] + num[1].to_double(4 * I.e0) / two_det,
+            p[0][2] + num[2].to_double(4 * I.e0) / two_det};
+}
+
 }  // namespace NiTCAD::mesh::detail
