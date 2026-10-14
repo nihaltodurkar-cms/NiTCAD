@@ -523,7 +523,7 @@ std::expected<mesh::Mesh, base::Error> load_mesh(const std::filesystem::path& pa
 namespace {
 
 namespace report_key {
-constexpr std::uint16_t counts = 1, min_angle = 2;
+constexpr std::uint16_t counts = 1, min_angle = 2, counts_3d = 3, quality_3d = 4;  // 3D: optional
 }  // namespace report_key
 namespace certificate_key {
 constexpr std::uint16_t digests = 1, counts = 2, deviations = 3;
@@ -558,6 +558,14 @@ std::expected<void, base::Error> save_generated_mesh(const std::filesystem::path
                                        static_cast<std::int64_t>(r.segment_splits),
                                        static_cast<std::int64_t>(r.exempt_triangles)});
     rep.f64(report_key::min_angle, r.min_angle_deg);
+    if (m.simplices.dimension == 3) {
+        rep.i64s(report_key::counts_3d,
+                 std::vector<std::int64_t>{static_cast<std::int64_t>(r.tetrahedra), static_cast<std::int64_t>(r.facet_splits),
+                                           static_cast<std::int64_t>(r.exempt_tetrahedra), static_cast<std::int64_t>(r.slivers),
+                                           static_cast<std::int64_t>(r.flat_dropped),
+                                           static_cast<std::int64_t>(r.band_facet_points)});
+        rep.f64s(report_key::quality_3d, std::vector<double>{r.max_radius_edge, r.min_dihedral_deg});
+    }
     w.record(mesh_key::report, rep);
     if (m.certificate) {
         const mesh::InterfaceCertificate& c = *m.certificate;
@@ -626,10 +634,23 @@ std::expected<mesh::GeneratedMesh, base::Error> load_generated_mesh(const std::f
         }
         certificate = c;
     }
-    const mesh::MeshReport report{static_cast<std::size_t>(counts[0]), static_cast<std::size_t>(counts[1]),
+    mesh::MeshReport report{static_cast<std::size_t>(counts[0]), static_cast<std::size_t>(counts[1]),
                                   static_cast<std::size_t>(counts[2]), static_cast<std::size_t>(counts[3]),
                                   static_cast<std::size_t>(counts[4]), static_cast<std::size_t>(counts[5]),
                                   min_angle};
+    if (rep.has(report_key::counts_3d)) {
+        NITCAD_IO_TRY(c3, rep.i64s(report_key::counts_3d));
+        NITCAD_IO_TRY(q3, rep.f64s(report_key::quality_3d));
+        if (c3.size() != 6 || q3.size() != 2) return std::unexpected(corrupt("generated mesh 3D report sizes"));
+        report.tetrahedra = static_cast<std::size_t>(c3[0]);
+        report.facet_splits = static_cast<std::size_t>(c3[1]);
+        report.exempt_tetrahedra = static_cast<std::size_t>(c3[2]);
+        report.slivers = static_cast<std::size_t>(c3[3]);
+        report.flat_dropped = static_cast<std::size_t>(c3[4]);
+        report.band_facet_points = static_cast<std::size_t>(c3[5]);
+        report.max_radius_edge = q3[0];
+        report.min_dihedral_deg = q3[1];
+    }
     return mesh::GeneratedMesh{std::move(m), std::move(s), std::move(node_region), std::move(certificate), report};
 }
 

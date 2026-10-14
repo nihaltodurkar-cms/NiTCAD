@@ -332,6 +332,7 @@ add_executable(nitcad_solve_test
   tests/solve/mos_test.cpp
   tests/solve/mosfet_test.cpp
   tests/solve/unstructured_test.cpp
+  tests/solve/unstructured3d_test.cpp
   tests/solve/field_mobility_test.cpp
   tests/solve/fermi_dirac_test.cpp
   tests/solve/heterojunction_test.cpp
@@ -345,6 +346,8 @@ add_executable(nitcad_solve_test
 # The solve tests also read their results through the analysis extractors (Unit 24 gates).
 target_link_libraries(nitcad_solve_test PRIVATE NiTCAD::solve NiTCAD::analysis NiTCAD::io
   Catch2::Catch2WithMain)
+# The 3D sliver stress test meshes perturbed lattices with the generator's Delaunay (Unit 16).
+target_include_directories(nitcad_solve_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/mesh")
 target_compile_definitions(nitcad_solve_test PRIVATE
   NITCAD_MKL_RUNTIME_PATH="${NITCAD_MKL_RUNTIME_PATH}")
 add_test(NAME solve COMMAND nitcad_solve_test)

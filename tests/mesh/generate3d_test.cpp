@@ -553,3 +553,62 @@ TEST_CASE("generator 3D: interface refusals", "[mesh][generate3d]") {
                                        {"hi", {{0, 0, 0.5}, {0, 1, 0.5}, {0, 1, 1}, {0, 0, 1}}}};
     refused(patched, o, "carries patches");
 }
+
+TEST_CASE("generator 3D: a linear potential is exact on the generated dual (linear-field gate)", "[mesh][generate3d]") {
+    // Laplace with V = 0 on x = 0, V = 1 on x = 1.3e-4 and no flux elsewhere: the box method gives
+    // the linear potential exactly when every dual face is orthogonal to its edge and every control
+    // volume closes (P5), whatever the tetrahedra. Solved by conjugate gradients on the free nodes.
+    const double L = 1.3e-4;
+    Geometry3D g = box(L, 5e-5, 4e-5);
+    MeshOptions3D o;
+    o.max_size = 1.1e-5;  // not commensurate with the box: genuinely unstructured
+    const auto m = generate_mesh(g, o);
+    REQUIRE(m.has_value());
+    const Mesh& mesh = m->mesh;
+    const std::size_t n = mesh.node_count();
+    std::vector<int> fixed(n, -1);
+    for (const NodeId v : mesh.find_boundary("x_min")->nodes) fixed[static_cast<std::size_t>(v)] = 0;
+    for (const NodeId v : mesh.find_boundary("x_max")->nodes) fixed[static_cast<std::size_t>(v)] = 1;
+    std::vector<double> V(n, 0.0);
+    for (std::size_t i = 0; i < n; ++i) V[i] = fixed[i] == 1 ? 1.0 : 0.0;
+    // A V on the free nodes: sum over edges of w (V_i - V_j), w = coupling / length.
+    const auto apply = [&](const std::vector<double>& x) {
+        std::vector<double> y(n, 0.0);
+        for (const Edge& e : mesh.edges()) {
+            const auto a = static_cast<std::size_t>(e.first);
+            const auto b = static_cast<std::size_t>(e.second);
+            const double w = e.coupling_area / e.length;
+            y[a] += w * (x[a] - x[b]);
+            y[b] += w * (x[b] - x[a]);
+        }
+        for (std::size_t i = 0; i < n; ++i) {
+            if (fixed[i] >= 0) y[i] = 0.0;
+        }
+        return y;
+    };
+    const auto dot = [&](const std::vector<double>& a, const std::vector<double>& b) {
+        double s = 0.0;
+        for (std::size_t i = 0; i < n; ++i) s += a[i] * b[i];
+        return s;
+    };
+    std::vector<double> r = apply(V);
+    for (double& x : r) x = -x;
+    std::vector<double> p = r;
+    double rr = dot(r, r);
+    const double r0 = std::sqrt(rr);
+    for (int it = 0; it < 10000 && std::sqrt(rr) > 1e-15 * r0; ++it) {
+        const std::vector<double> Ap = apply(p);
+        const double alpha = rr / dot(p, Ap);
+        for (std::size_t i = 0; i < n; ++i) {
+            V[i] += alpha * p[i];
+            r[i] -= alpha * Ap[i];
+        }
+        const double next = dot(r, r);
+        for (std::size_t i = 0; i < n; ++i) p[i] = r[i] + next / rr * p[i];
+        rr = next;
+    }
+    double worst = 0.0;
+    for (std::size_t i = 0; i < n; ++i) worst = std::max(worst, std::abs(V[i] - mesh.points()[i][0] / L));
+    INFO(n << " nodes; worst deviation " << worst);
+    CHECK(worst <= 1e-12);
+}

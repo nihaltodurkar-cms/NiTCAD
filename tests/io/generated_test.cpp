@@ -96,3 +96,42 @@ TEST_CASE("io: generated-mesh refusals", "[io][generate]") {
     }
     fs::remove_all(dir);
 }
+
+TEST_CASE("io: a generated 3D mesh round-trips with its patches, regions, certificate and 3D report",
+          "[io][generate]") {
+    const fs::path dir = fs::temp_directory_path() / "nitcad_io_generated_3d_test";
+    fs::create_directories(dir);
+    mesh::Geometry3D g;
+    g.domain.vertices = {{0, 0, 0}, {1e-4, 0, 0}, {1e-4, 1e-4, 0}, {0, 1e-4, 0},
+                         {0, 0, 1e-4}, {1e-4, 0, 1e-4}, {1e-4, 1e-4, 1e-4}, {0, 1e-4, 1e-4}};
+    g.domain.faces = {{{0, 3, 7, 4}, "x_min"}, {{1, 2, 6, 5}, "x_max"}, {{0, 1, 5, 4}, "y_min"},
+                      {{3, 2, 6, 7}, "y_max"}, {{0, 1, 2, 3}, "bottom"}, {{4, 5, 6, 7}, "top"}};
+    g.domain.faces[5].patches = {{"gate", {{0, 0, 1e-4}, {5e-5, 0, 1e-4}, {5e-5, 1e-4, 1e-4}, {0, 1e-4, 1e-4}}},
+                                 {"rest", {{5e-5, 0, 1e-4}, {1e-4, 0, 1e-4}, {1e-4, 1e-4, 1e-4}, {5e-5, 1e-4, 1e-4}}}};
+    g.interfaces = {mesh::InterfacePlane{{mesh::Point{0, 0, 6e-5}, mesh::Point{1e-4, 0, 6e-5}, mesh::Point{0, 1e-4, 6e-5}}}};
+    g.regions = {{{5e-5, 5e-5, 2e-5}, 0}, {{5e-5, 5e-5, 9e-5}, 1}};
+    mesh::MeshOptions3D o;
+    o.max_size = 3e-5;
+    o.interface_resolution = 3e-6;
+    const auto m = mesh::generate_mesh(g, o);
+    REQUIRE(m.has_value());
+    REQUIRE(m->certificate.has_value());
+    REQUIRE(io::save_generated_mesh(dir / "g3.ntc", *m).has_value());
+    const auto back = io::load_generated_mesh(dir / "g3.ntc");
+    REQUIRE(back.has_value());
+    CHECK(back->mesh.dimension() == 3);
+    CHECK(mesh::graph_digest(back->mesh) == mesh::graph_digest(m->mesh));
+    CHECK(back->simplices.cells == m->simplices.cells);
+    CHECK(back->simplices.facets == m->simplices.facets);
+    CHECK(back->simplices.facet_patch == m->simplices.facet_patch);
+    CHECK(back->simplices.patch_names == m->simplices.patch_names);
+    CHECK(back->node_region == m->node_region);
+    REQUIRE(back->certificate.has_value());
+    CHECK(back->certificate->interfaces_digest == m->certificate->interfaces_digest);
+    CHECK(back->report.tetrahedra == m->report.tetrahedra);
+    CHECK(back->report.slivers == m->report.slivers);
+    CHECK(back->report.band_facet_points == m->report.band_facet_points);
+    CHECK(back->report.min_dihedral_deg == m->report.min_dihedral_deg);
+    CHECK(back->report.max_radius_edge == m->report.max_radius_edge);
+    fs::remove_all(dir);
+}
