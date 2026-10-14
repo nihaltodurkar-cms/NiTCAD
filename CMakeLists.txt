@@ -151,7 +151,9 @@ add_test(NAME linalg COMMAND nitcad_linalg_test)
 add_library(nitcad_mesh STATIC
   src/mesh/mesh.cpp
   src/mesh/tensor_grid.cpp
-  src/mesh/tensor_cells.cpp)
+  src/mesh/tensor_cells.cpp
+  src/mesh/exact_integer.cpp
+  src/mesh/predicates.cpp)
 add_library(NiTCAD::mesh ALIAS nitcad_mesh)
 target_include_directories(nitcad_mesh PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
 target_link_libraries(nitcad_mesh PUBLIC NiTCAD::base)
@@ -159,7 +161,10 @@ target_link_libraries(nitcad_mesh PUBLIC NiTCAD::base)
 add_executable(nitcad_mesh_test
   tests/mesh/mesh_test.cpp
   tests/mesh/tensor_grid_test.cpp
-  tests/mesh/tensor_cells_test.cpp)
+  tests/mesh/tensor_cells_test.cpp
+  tests/mesh/predicates_test.cpp)
+# The predicate tests read the internal headers directly (Unit 16).
+target_include_directories(nitcad_mesh_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/mesh")
 target_link_libraries(nitcad_mesh_test PRIVATE NiTCAD::mesh Catch2::Catch2WithMain)
 add_test(NAME mesh COMMAND nitcad_mesh_test)
 
