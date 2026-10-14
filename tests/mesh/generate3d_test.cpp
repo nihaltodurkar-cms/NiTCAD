@@ -6,8 +6,10 @@
 #include <algorithm>
 #include <array>
 #include <chrono>
+#include <map>
 #include <cmath>
 #include <cstddef>
+#include <cstdint>
 #include <cstdio>
 #include <set>
 #include <string>
@@ -328,4 +330,117 @@ TEST_CASE("generator 3D: speed (Release budget 1e5 nodes in 15 s)", "[.benchmark
     const double dual_seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
     REQUIRE(again.has_value());
     std::printf("generator 3D: of which make_dual_mesh %.2f s\n", dual_seconds);
+}
+
+namespace {
+
+// The M9 gate: each node's area in each patch of an axis-aligned face (the constant coordinate
+// `axis`) against an independent 2D computation, make_dual_mesh on that patch's boundary
+// triangles in face coordinates; and the patch's total against its exact area.
+void check_patch_duals(const GeneratedMesh& m, int axis, const std::vector<std::pair<std::string, double>>& patches) {
+    const auto& s = m.simplices;
+    for (const auto& [name, area] : patches) {
+        std::size_t p = 0;
+        while (p < s.patch_names.size() && s.patch_names[p] != name) ++p;
+        REQUIRE(p < s.patch_names.size());
+        SimplexMesh flat;
+        flat.dimension = 2;
+        std::map<NodeId, NodeId> local;
+        std::vector<NodeId> global;
+        for (std::size_t k = 0; k < s.facet_patch.size(); ++k) {
+            if (s.facet_patch[k] != static_cast<std::int32_t>(p)) continue;
+            for (std::size_t j = 0; j < 3; ++j) {
+                const NodeId g = s.facets[3 * k + j];
+                auto [it, fresh] = local.try_emplace(g, static_cast<NodeId>(global.size()));
+                if (fresh) {
+                    global.push_back(g);
+                    const Point& q = s.points[static_cast<std::size_t>(g)];
+                    flat.points.push_back({q[static_cast<std::size_t>((axis + 1) % 3)], q[static_cast<std::size_t>((axis + 2) % 3)], 0.0});
+                }
+                flat.cells.push_back(it->second);
+            }
+        }
+        const auto dual = make_dual_mesh(flat);
+        REQUIRE(dual.has_value());
+        const BoundaryPatch* bp = m.mesh.find_boundary(name);
+        REQUIRE(bp != nullptr);
+        CHECK(close(total(bp->areas), area, 1e-12));
+        CHECK(close(total(dual->volumes()), area, 1e-12));
+        // Node by node (nodes whose area in the patch is tau-zero are dropped from the 3D patch).
+        std::map<NodeId, double> by_node;
+        for (std::size_t k = 0; k < bp->nodes.size(); ++k) by_node[bp->nodes[k]] = bp->areas[k];
+        double worst = 0.0;
+        for (std::size_t i = 0; i < global.size(); ++i) {
+            const auto it = by_node.find(global[i]);
+            const double three_d = it == by_node.end() ? 0.0 : it->second;
+            worst = std::max(worst, std::abs(three_d - dual->volumes()[i]));
+        }
+        CHECK(worst <= 1e-12 * area);
+    }
+}
+
+Geometry3D box_with_top(std::vector<FacePatch> top) {
+    Geometry3D g = box(3, 1, 1);
+    g.domain.faces[5].patches = std::move(top);
+    return g;
+}
+
+}  // namespace
+
+TEST_CASE("generator 3D: contacts on one face are exact patches (M9)", "[mesh][generate3d]") {
+    MeshOptions3D o;
+    o.max_size = 0.35;
+    SECTION("source, gate and drain strips across the top face") {
+        const auto m = generate_mesh(box_with_top({{"source", {{0, 0, 1}, {1, 0, 1}, {1, 1, 1}, {0, 1, 1}}},
+                                                   {"gate", {{1, 0, 1}, {2, 0, 1}, {2, 1, 1}, {1, 1, 1}}},
+                                                   {"drain", {{2, 0, 1}, {3, 0, 1}, {3, 1, 1}, {2, 1, 1}}}}),
+                                     o);
+        REQUIRE(m.has_value());
+        check_mesh(*m, 3.0, {1, 1, 3, 3, 3, 1, 1, 1}, o);
+        check_patch_duals(*m, 2, {{"source", 1.0}, {"gate", 1.0}, {"drain", 1.0}});
+    }
+    SECTION("a contact inside the face, the rest tiled around it") {
+        const auto m = generate_mesh(
+            box_with_top({{"contact", {{1, 0.25, 1}, {2, 0.25, 1}, {2, 0.75, 1}, {1, 0.75, 1}}},
+                          {"left", {{0, 0, 1}, {1, 0, 1}, {1, 0.25, 1}, {1, 0.75, 1}, {1, 1, 1}, {0, 1, 1}}},
+                          {"right", {{2, 0, 1}, {3, 0, 1}, {3, 1, 1}, {2, 1, 1}, {2, 0.75, 1}, {2, 0.25, 1}}},
+                          {"front", {{1, 0, 1}, {2, 0, 1}, {2, 0.25, 1}, {1, 0.25, 1}}},
+                          {"back", {{1, 0.75, 1}, {2, 0.75, 1}, {2, 1, 1}, {1, 1, 1}}}}),
+            o);
+        REQUIRE(m.has_value());
+        check_mesh(*m, 3.0, {1, 1, 3, 3, 3, 0.5, 1, 1, 0.25, 0.25}, o);
+        check_patch_duals(*m, 2, {{"contact", 0.5}, {"left", 1.0}, {"right", 1.0}, {"front", 0.25}, {"back", 0.25}});
+    }
+    SECTION("a slanted patch edge (its split points round off the line)") {
+        const auto m = generate_mesh(box_with_top({{"a", {{0, 0, 1}, {0.3, 0, 1}, {0.7, 1, 1}, {0, 1, 1}}},
+                                                   {"b", {{0.3, 0, 1}, {3, 0, 1}, {3, 1, 1}, {0.7, 1, 1}}}}),
+                                     o);
+        REQUIRE(m.has_value());
+        check_mesh(*m, 3.0, {1, 1, 3, 3, 3, 0.5, 2.5}, o);
+        check_patch_duals(*m, 2, {{"a", 0.5}, {"b", 2.5}});
+    }
+}
+
+TEST_CASE("generator 3D: face tilings are refused unless exact and conforming", "[mesh][generate3d]") {
+    MeshOptions3D o;
+    o.max_size = 0.5;
+    const auto refused = [&](std::vector<FacePatch> top, const std::string& text) {
+        const auto m = generate_mesh(box_with_top(std::move(top)), o);
+        REQUIRE_FALSE(m.has_value());
+        INFO(m.error().message);
+        CHECK(m.error().code == ErrorCode::invalid_input);
+        CHECK(m.error().message.find(text) != std::string::npos);
+    };
+    const FacePatch whole{"whole", {{0, 0, 1}, {3, 0, 1}, {3, 1, 1}, {0, 1, 1}}};
+    refused({{"low", {{0, 0, 1}, {3, 0, 1}, {3, 1, 0.5}, {0, 1, 1}}}}, "plane");
+    refused({{"out", {{0, 0, 1}, {4, 0, 1}, {4, 1, 1}, {0, 1, 1}}}}, "outside");
+    refused({{"half", {{0, 0, 1}, {1.5, 0, 1}, {1.5, 1, 1}, {0, 1, 1}}}}, "tile");
+    // A T-vertex: the right polygon's left edge is split where the two left polygons meet.
+    refused({{"l1", {{0, 0, 1}, {1, 0, 1}, {1, 0.5, 1}, {0, 0.5, 1}}},
+             {"l2", {{0, 0.5, 1}, {1, 0.5, 1}, {1, 1, 1}, {0, 1, 1}}},
+             {"r", {{1, 0, 1}, {3, 0, 1}, {3, 1, 1}, {1, 1, 1}}}},
+            "shared whole");
+    refused({whole, {"whole", {{0, 0, 1}, {1, 0, 1}, {1, 1, 1}}}}, "unique");
+    refused({{"x_min", whole.vertices}}, "unique");
+    refused({{"thin", {{0, 0, 1}, {3, 0, 1}, {1.5, 0, 1}}}}, "no area");
 }

@@ -90,6 +90,20 @@ struct Face {
     std::unique_ptr<Triangulation2D> tri;
     std::vector<int> global;  // per face-triangulation vertex: the 3D vertex (-1: super)
     std::map<int, int> local;  // 3D vertex -> face-triangulation vertex
+    Point off{};    // a polyhedron vertex off the face
+    int turn = 0;   // orient3d(v[k], v[k+1], q, off) for q inside the face
+    std::vector<std::vector<Point>> patch_local;  // the patch polygons, counterclockwise
+    std::vector<int> patch_id;                    // their indices among all patches
+    int whole_patch = -1;                         // with no tiling: the face's patch
+
+    // Whether a point on the face's plane lies in the closed face (exact).
+    [[nodiscard]] bool contains(const ConvexPolyhedron& d, const Point& q) const {
+        for (std::size_t k = 0; k < vid.size(); ++k) {
+            const int s = predicates::orient3d(d.vertices[vid[k]], d.vertices[vid[(k + 1) % vid.size()]], q, off);
+            if (s != 0 && s != turn) return false;
+        }
+        return true;
+    }
 
     [[nodiscard]] Point to_local(const Point& p) const {
         if (axis >= 0) {
@@ -118,8 +132,9 @@ struct DomainEdge {
 struct Subsegment {
     int a = 0;  // 3D vertices
     int b = 0;
-    int edge = 0;
+    int edge = 0;  // a domain edge, or (a patch segment) the domain edge count plus its constraint
     bool alive = true;
+    int face = -1;  // a patch segment: its face; -1 for a domain edge
 };
 
 struct Generator3D {
@@ -127,6 +142,106 @@ struct Generator3D {
     const MeshOptions3D& o;
     std::vector<Face> faces;
     std::vector<DomainEdge> edges;
+    std::vector<std::string> patch_names;           // the result's boundary patches
+    std::vector<std::pair<int, Point>> edge_pins;   // patch vertices inside domain edges (edge, point)
+    std::vector<std::pair<int, Point>> face_pins;   // patch vertices inside faces (face, point)
+    struct Constraint {
+        int face;
+        Point a;
+        Point b;
+    };
+    std::vector<Constraint> constraints;  // patch edges inside faces: edges of the mesh
+
+    // The face tilings (DECISIONS.md M9): each tiling polygon is a patch; its vertices on the
+    // face's plane and in the face; the polygons conforming (every edge either on the face's
+    // boundary or shared whole, in the opposite direction, by exactly one other polygon of the
+    // face) and their areas summing to the face's (1e-12). Patch names unique among all patches.
+    std::optional<base::Error> read_patches() {
+        const ConvexPolyhedron& d = g.domain;
+        std::map<std::pair<std::size_t, std::size_t>, int> edge_index;
+        for (std::size_t e = 0; e < edges.size(); ++e) edge_index[{edges[e].a, edges[e].b}] = static_cast<int>(e);
+        std::set<std::string> seen;
+        std::set<Point> pinned;
+        for (std::size_t fi = 0; fi < faces.size(); ++fi) {
+            const PolyhedronFace& in = d.faces[fi];
+            Face& face = faces[fi];
+            if (in.patches.empty()) {
+                if (!seen.insert(in.name).second) return invalid("patch names must be unique (a face's own name included)", fi);
+                face.whole_patch = static_cast<int>(patch_names.size());
+                patch_names.push_back(in.name);
+                continue;
+            }
+            const auto shoelace = [](const std::vector<Point>& v) {
+                double a = 0.0;
+                for (std::size_t k = 0; k < v.size(); ++k) a += v[k][0] * v[(k + 1) % v.size()][1] - v[(k + 1) % v.size()][0] * v[k][1];
+                return 0.5 * a;
+            };
+            double total = 0.0;
+            std::vector<std::array<Point, 2>> directed;
+            for (const FacePatch& p : in.patches) {
+                if (p.name.empty() || !seen.insert(p.name).second) return invalid("patch names must be non-empty and unique", fi);
+                if (p.vertices.size() < 3) return invalid("a patch polygon needs at least three vertices", fi);
+                std::vector<Point> v3 = p.vertices;
+                for (std::size_t k = 0; k < v3.size(); ++k) {
+                    const Point& q = v3[k];
+                    if (!std::isfinite(q[0]) || !std::isfinite(q[1]) || !std::isfinite(q[2])) return invalid("patch vertex not finite", fi);
+                    if (predicates::orient3d(face.plane[0], face.plane[1], face.plane[2], q) != 0) {
+                        return invalid("patch vertex not exactly on its face's plane", fi);
+                    }
+                    if (!face.contains(d, q)) return invalid("patch vertex outside its face", fi);
+                    if (q == v3[(k + 1) % v3.size()]) return invalid("patch polygon has a repeated consecutive vertex", fi);
+                }
+                std::vector<Point> loc;
+                for (const Point& q : v3) loc.push_back(face.to_local(q));
+                double area = shoelace(loc);
+                double extent = 0.0;
+                for (const Point& q : loc) extent = std::max(extent, std::hypot(q[0] - loc[0][0], q[1] - loc[0][1]));
+                if (!(std::abs(area) > 1e-14 * extent * extent)) return invalid("patch polygon has no area", fi);
+                if (area < 0.0) {
+                    std::ranges::reverse(loc);
+                    std::ranges::reverse(v3);
+                    area = -area;
+                }
+                total += area;
+                face.patch_local.push_back(loc);
+                face.patch_id.push_back(static_cast<int>(patch_names.size()));
+                patch_names.push_back(p.name);
+                for (std::size_t k = 0; k < v3.size(); ++k) directed.push_back({v3[k], v3[(k + 1) % v3.size()]});
+                for (const Point& q : v3) {
+                    if (std::ranges::find(d.vertices, q) != d.vertices.end() || !pinned.insert(q).second) continue;
+                    int on_edge = -1;
+                    for (std::size_t k = 0; k < face.vid.size() && on_edge < 0; ++k) {
+                        const std::size_t a = face.vid[k];
+                        const std::size_t b = face.vid[(k + 1) % face.vid.size()];
+                        if (collinear(d.vertices[a], d.vertices[b], q)) on_edge = edge_index.at({std::min(a, b), std::max(a, b)});
+                    }
+                    if (on_edge >= 0) {
+                        edge_pins.emplace_back(on_edge, q);
+                    } else {
+                        face_pins.emplace_back(static_cast<int>(fi), q);
+                    }
+                }
+            }
+            const double face_area = std::abs(shoelace(face.local_polygon));
+            if (!(std::abs(total - face_area) <= 1e-12 * face_area)) return invalid("the patches do not tile their face (areas differ)", fi);
+            for (const auto& [a, b] : directed) {
+                bool boundary = false;
+                for (std::size_t k = 0; k < face.vid.size() && !boundary; ++k) {
+                    const Point& p0 = d.vertices[face.vid[k]];
+                    const Point& p1 = d.vertices[face.vid[(k + 1) % face.vid.size()]];
+                    boundary = collinear(p0, p1, a) && collinear(p0, p1, b);
+                }
+                if (boundary) continue;
+                const auto twins = std::ranges::count_if(directed, [&](const std::array<Point, 2>& e) { return e[0] == b && e[1] == a; });
+                if (twins != 1) {
+                    return invalid("patch edges must lie on the face's boundary or be shared whole by two patches", fi);
+                }
+                if (a < b) constraints.push_back({static_cast<int>(fi), a, b});
+            }
+        }
+        return std::nullopt;
+    }
+
 
     std::optional<base::Error> validate_options() const {
         if (!(std::isfinite(o.max_size) && o.max_size > 0.0)) return invalid("max_size must be finite and positive");
@@ -214,6 +329,8 @@ struct Generator3D {
                 const std::size_t b = in.vertices[(k + 1) % in.vertices.size()];
                 edge_faces[{std::min(a, b), std::max(a, b)}].push_back(static_cast<int>(f));
             }
+            face.off = off;
+            face.turn = turn;
             for (int axis = 0; axis < 3 && face.axis < 0; ++axis) {
                 const auto ax = static_cast<std::size_t>(axis);
                 if (std::ranges::all_of(in.vertices, [&](std::size_t v) { return d.vertices[v][ax] == P(0)[ax]; })) {
@@ -289,6 +406,7 @@ std::expected<GeneratedMesh, base::Error> generate_mesh(const Geometry3D& geomet
     Generator3D gen{geometry, options, {}, {}};
     if (auto e = gen.validate_options()) return std::unexpected(*e);
     if (auto e = gen.read_polyhedron()) return std::unexpected(*e);
+    if (auto e = gen.read_patches()) return std::unexpected(*e);
     const ConvexPolyhedron& d = geometry.domain;
     if (d.vertices.size() > options.max_nodes) {
         return std::unexpected(base::Error{ErrorCode::resource_exhausted, "max_nodes reached", std::nullopt});
@@ -396,10 +514,41 @@ std::expected<GeneratedMesh, base::Error> generate_mesh(const Geometry3D& geomet
         }
         vertex_of[i] = insert(d.vertices[i], fs, es, -1);
     }
-    for (std::size_t e = 0; e < gen.edges.size(); ++e) {
-        add_segment(vertex_of[gen.edges[e].a], vertex_of[gen.edges[e].b], static_cast<int>(e));
+    // Patch vertices: inside domain edges (on both faces of the edge) and inside faces.
+    std::map<Point, int> vertex_at;
+    for (std::size_t i = 0; i < d.vertices.size(); ++i) vertex_at[d.vertices[i]] = vertex_of[i];
+    for (const auto& [e, q] : gen.edge_pins) {
+        const DomainEdge& de = gen.edges[static_cast<std::size_t>(e)];
+        vertex_at[q] = insert(q, {de.faces[0], de.faces[1]}, {e}, -1);
     }
-    const auto is_corner = [&](int v) { return v >= 4 && static_cast<std::size_t>(v) < 4 + d.vertices.size(); };
+    for (const auto& [fi, q] : gen.face_pins) vertex_at[q] = insert(q, {fi}, {}, -1);
+    // The domain edges' subsegments, between consecutive vertices along each edge.
+    for (std::size_t e = 0; e < gen.edges.size(); ++e) {
+        const Point& A = d.vertices[gen.edges[e].a];
+        const Point& B = d.vertices[gen.edges[e].b];
+        const Point dir = detail::sub(B, A);
+        std::vector<std::pair<double, int>> along{{0.0, vertex_of[gen.edges[e].a]}, {1.0, vertex_of[gen.edges[e].b]}};
+        for (const auto& [pe, q] : gen.edge_pins) {
+            if (pe == static_cast<int>(e)) along.emplace_back(detail::dot3(detail::sub(q, A), dir) / detail::dot3(dir, dir), vertex_at.at(q));
+        }
+        std::ranges::sort(along);
+        for (std::size_t k = 0; k + 1 < along.size(); ++k) add_segment(along[k].second, along[k + 1].second, static_cast<int>(e));
+    }
+    // Patch edges inside faces: constrained subsegments of their face (line ids after the edges).
+    const auto edge_count = static_cast<int>(gen.edges.size());
+    for (std::size_t c = 0; c < gen.constraints.size(); ++c) {
+        const auto& con = gen.constraints[c];
+        const int a = vertex_at.at(con.a);
+        const int b = vertex_at.at(con.b);
+        const int line = edge_count + static_cast<int>(c);
+        edges_of[static_cast<std::size_t>(a)].push_back(line);
+        edges_of[static_cast<std::size_t>(b)].push_back(line);
+        add_segment(a, b, line);
+        segments.back().face = con.face;
+    }
+    // Input vertices (polyhedron and patch vertices) are the centres of concentric shells.
+    const int first_steiner = static_cast<int>(tri.vertex_count());
+    const auto is_corner = [&](int v) { return v >= 4 && v < first_steiner; };
 
     const auto common_face = [&](std::initializer_list<int> vs) -> int {
         const std::vector<int>& first = faces_of[static_cast<std::size_t>(*vs.begin())];
@@ -434,6 +583,24 @@ std::expected<GeneratedMesh, base::Error> generate_mesh(const Geometry3D& geomet
     };
 
     const auto segment_encroached = [&](const Subsegment& s) {
+        if (s.face >= 0) {
+            // A patch segment: an edge of its face's triangulation with no apex strictly inside its
+            // diametral circle (in face coordinates).
+            const Face& f = gen.faces[static_cast<std::size_t>(s.face)];
+            const int la = f.local.at(s.a);
+            const int lb = f.local.at(s.b);
+            bool present = false;
+            for (const auto& [x, y] : {std::pair{la, lb}, std::pair{lb, la}}) {
+                const auto t = f.tri->triangle_with_edge(x, y);
+                if (!t) continue;
+                present = true;
+                for (const int apex : f.tri->triangle(*t).v) {
+                    if (apex == la || apex == lb || f.tri->is_super(apex)) continue;
+                    if (predicates::in_diametral_circle(f.tri->point(la), f.tri->point(lb), f.tri->point(apex)) > 0) return true;
+                }
+            }
+            return !present;
+        }
         const std::vector<int> around = tets_with(s.a, s.b, -1);
         if (around.empty()) return true;
         const Point& A = tri.point(s.a);
@@ -498,12 +665,18 @@ std::expected<GeneratedMesh, base::Error> generate_mesh(const Geometry3D& geomet
         Point m{};
         for (std::size_t c = 0; c < 3; ++c) m[c] = A[c] == B[c] ? A[c] : A[c] + t * (B[c] - A[c]);
         if (node_cap()) return exhausted();
-        const DomainEdge& e = gen.edges[static_cast<std::size_t>(s.edge)];
-        const int v = insert(m, {e.faces[0], e.faces[1]}, {s.edge}, tri.vertex_tet(s.a));
+        std::vector<int> on_faces{s.face};
+        if (s.face < 0) {
+            const DomainEdge& e = gen.edges[static_cast<std::size_t>(s.edge)];
+            on_faces = {e.faces[0], e.faces[1]};
+        }
+        const int v = insert(m, on_faces, {s.edge}, tri.vertex_tet(s.a));
         segments[static_cast<std::size_t>(k)].alive = false;
         segment_at.erase({std::min(s.a, s.b), std::max(s.a, s.b)});
         add_segment(s.a, v, s.edge);
+        segments.back().face = s.face;
         add_segment(v, s.b, s.edge);
+        segments.back().face = s.face;
         ++report.segment_splits;
         return std::nullopt;
     };
@@ -534,10 +707,18 @@ std::expected<GeneratedMesh, base::Error> generate_mesh(const Geometry3D& geomet
         for (std::size_t k = 0; k < segments.size(); ++k) {
             const Subsegment& s = segments[k];
             if (!s.alive) continue;
-            const DomainEdge& e = gen.edges[static_cast<std::size_t>(s.edge)];
-            if (e.faces[0] != fi && e.faces[1] != fi) continue;
             const Point& A = tri.point(s.a);
             const Point& B = tri.point(s.b);
+            if (s.face >= 0) {
+                // A patch segment of this face: encroached in face coordinates.
+                if (s.face == fi &&
+                    predicates::in_diametral_circle(f.tri->point(f.local.at(s.a)), f.tri->point(f.local.at(s.b)), f.to_local(c)) > 0) {
+                    hit.push_back(static_cast<int>(k));
+                }
+                continue;
+            }
+            const DomainEdge& e = gen.edges[static_cast<std::size_t>(s.edge)];
+            if (e.faces[0] != fi && e.faces[1] != fi) continue;
             if (detail::dot3(detail::sub(A, c), detail::sub(B, c)) < 0.0) hit.push_back(static_cast<int>(k));
             const Point mid = detail::scale(0.5, detail::add(A, B));
             const double dm = dist3(mid, c);
@@ -690,7 +871,30 @@ std::expected<GeneratedMesh, base::Error> generate_mesh(const Geometry3D& geomet
         max_ratio = std::max(max_ratio, dist3(circumcentre_fast(p[0], p[1], p[2], p[3]), p[0]) / shortest);
     }
     // The boundary check: every exposed triangle on one face; the volume of the polyhedron.
-    for (std::size_t f = 0; f < d.faces.size(); ++f) sm.patch_names.push_back(d.faces[f].name);
+    sm.patch_names = gen.patch_names;
+    // A boundary triangle's patch: its face's, or the tiling polygon holding its centroid (it
+    // crosses no patch edge, which are edges of the mesh).
+    const auto patch_of = [&](int fi, const std::array<int, 3>& fv) -> int {
+        const Face& f = gen.faces[static_cast<std::size_t>(fi)];
+        if (f.patch_local.empty()) return f.whole_patch;
+        Point c{0, 0, 0};
+        for (const int v : fv) {
+            const Point q = f.to_local(tri.point(v));
+            c = {c[0] + q[0] / 3.0, c[1] + q[1] / 3.0, 0.0};
+        }
+        for (std::size_t k = 0; k < f.patch_local.size(); ++k) {
+            const std::vector<Point>& poly = f.patch_local[k];
+            bool in = false;
+            for (std::size_t i = 0, j = poly.size() - 1; i < poly.size(); j = i++) {
+                if ((poly[i][1] > c[1]) != (poly[j][1] > c[1]) &&
+                    c[0] < (poly[j][0] - poly[i][0]) * (c[1] - poly[i][1]) / (poly[j][1] - poly[i][1]) + poly[i][0]) {
+                    in = !in;
+                }
+            }
+            if (in) return f.patch_id[k];
+        }
+        return -1;
+    };
     for (std::size_t t = 0; t < tri.tet_slots(); ++t) {
         if (kept[t] == 0) continue;
         const auto& tt = tri.tet(static_cast<int>(t));
@@ -703,8 +907,10 @@ std::expected<GeneratedMesh, base::Error> generate_mesh(const Geometry3D& geomet
             }
             const int fi = common_face({fv[0], fv[1], fv[2]});
             if (fi < 0) return std::unexpected(degenerate("a boundary triangle of the generated mesh is not on one face"));
+            const int patch = patch_of(fi, fv);
+            if (patch < 0) return std::unexpected(degenerate("a boundary triangle of the generated mesh is in no patch"));
             for (const int v : fv) sm.facets.push_back(static_cast<NodeId>(v - 4));
-            sm.facet_patch.push_back(fi);
+            sm.facet_patch.push_back(patch);
         }
     }
     const double volume = gen.volume();

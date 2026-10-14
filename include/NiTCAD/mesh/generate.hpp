@@ -165,9 +165,22 @@ struct GeneratedMesh {
 // result is checked: every boundary triangle on one face, the volume equal to the polyhedron's to
 // 1e-12, then make_dual_mesh's P0-P3 and P5. Determinism: the same input gives the same mesh in
 // the same build.
+// A contact or other boundary patch on part of a face (DECISIONS.md M9): a simple polygon of a
+// tiling of the face. The polygons of a face's tiling: vertices exactly on the face's plane and in
+// the face; conforming (every edge on the face's boundary or shared whole, in the opposite
+// direction, by exactly one other polygon of the face); areas summing to the face's (1e-12). Their
+// edges inside the face become edges of the mesh (split when encroached, as the domain edges), so
+// every boundary triangle lies in one patch and each patch's area is exact. A patch vertex inside
+// a domain edge is a node of both faces of the edge.
+struct FacePatch {
+    std::string name;  // a boundary patch of the result; unique among all patches
+    std::vector<Point> vertices;
+};
+
 struct PolyhedronFace {
     std::vector<std::size_t> vertices;  // indices into ConvexPolyhedron::vertices, in order around the face
-    std::string name;                   // the boundary patch of the result
+    std::string name;                   // the boundary patch of the result when `patches` is empty
+    std::vector<FacePatch> patches;     // a tiling of the face into patches, or empty
 };
 
 struct ConvexPolyhedron {
