@@ -414,6 +414,25 @@ Mutations: 12 run; 11 caught. M7-12 ("zero-coupling cross edges judged too") is 
 degenerate, and its single point is the circumcentre of cells whose kept cross faces already contain it; if a cell
 has no kept cross face, that point carries no interface measure.
 
+**Owner rulings on U2 and U12 (2026-10-14):**
+- **U2, P4 certification: required.**
+  - A multi-region device (two or more regions) on a mesh that is not a tensor product must carry a valid P4
+    certificate. A missing certificate is refused, and so is a stale one.
+  - The certificate comes from `mesh::certify_interfaces`. It records digests of the dual mesh, the node regions and the
+    declared interfaces; it is stale when the device's mesh or node regions differ from those it was issued for.
+  - Tensor-grid meshes are exempt by provenance (owner's choice of the recommended option). `make_tensor_grid` tags its
+    mesh, `Mesh::from_parts` verifies that a mesh tagged so has only axis-aligned edges, and io saves and loads the tag.
+    A file written before the tag existed loads as a general graph.
+  - Single-region devices need no certificate.
+  - Enforced in `Device::create`, so every solve of such a device has one.
+- **U12, corner rules: as proposed, with acute corners refused.**
+  - A bend of exactly 90° between two interface segments gets no corner nodes, since mirror symmetry makes it exact.
+  - Every other interface feature with all sectors at least 60° (bends, junctions of three or more regions, junctions
+    with the outer boundary) gets graded pairs (1.5 s, 3 s) and one bisector node per sector at s / 2. It is accepted
+    only if the generated mesh passes P4b; otherwise generation fails with `degenerate_mesh`.
+  - A sector below 60° is refused (`invalid_input`) until measurements justify it.
+  - The angle tests are exact (integer arithmetic on the input coordinates).
+
 **Gates (predefined, so a threshold is never set after the run):**
 - **Tensor equivalence:** split rectangles and Kuhn-split boxes give exactly `make_tensor_grid`'s volumes, couplings
   and areas to 1e-13 relative, with the diagonals dropped. Their diode solve matches the tensor run to 1e-12.
@@ -449,10 +468,7 @@ has no kept cross face, that point carries no interface measure.
 
 **Unresolved (need a ruling or carried as limits):**
 - U1 MOSFET factor k = 1.5: a judgement, not derived. The owner may set it.
-- U2 Imported meshes: `make_dual_mesh` checks P0–P3 and P5 only. P4 is established solely by `check_interfaces`, given
-  declared interface pieces; without them an imported multi-region mesh is not interface-valid (round 2). Still open:
-  nothing above `mesh` yet *requires* a P4 report before assembling a multi-region device, so the device layer cannot
-  enforce it until the generator unit wires it in (a ruling is needed on whether `Device` should demand it).
+- U2 **Ruled 2026-10-14** (above): multi-region devices on non-tensor meshes need a valid P4 certificate.
 - U3 Termination is unproven for the band and pair modifications (M7, M8), for 3D convex domains with input angles
   under the M6/M11 hypotheses, and for options beyond the cited bounds. Capped (M11) and reported.
 - U4 Corner-zone accuracy (M8) has no a-priori bound; it is measured and refused above s (P4b). Measured in round 2: 0 at a
@@ -467,14 +483,8 @@ has no kept cross face, that point carries no interface measure.
   junction is resolved only to h. "Doping interfaces" with pairs could be added later.
 - U11 Filter soundness: **closed** in round 2 (the argument written out, one defect fixed, direct tests against the exact
   value, every mutation caught or removed as redundant).
-- U12 M8 placement rules are heuristics, judged by P4b:
-  - the bisector rule is harmful at right angles;
-  - 60° passes with a 5% margin;
-  - nothing below 60° is measured;
-  - oblique boundary junctions need pairs and boundary nodes graded toward them.
-  The generator's corner rule needs a ruling before commit 4. Proposed: no corner nodes at right angles; bisector
-  nodes plus grading at other angles; no angle limit: P4b decides each corner, and acute corners below 60° stay an
-  unmeasured risk until the generator's tests cover them.
+- U12 **Ruled 2026-10-14** (above): no corner nodes at 90° bends; graded bisector nodes elsewhere, accepted only if P4b
+  passes; sectors below 60° refused.
 - U13 P4 does not check that each node lies inside its region's geometry, which is not an input. A misplaced node
   surrounded by its own region's nodes is not detected; one next to another region is.
 - U10 Budgets (M13) are targets. If the 3D generator misses its gates or budgets within the unit, the PR carries 2D plus
