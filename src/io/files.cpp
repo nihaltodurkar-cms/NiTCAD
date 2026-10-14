@@ -105,7 +105,8 @@ std::expected<std::vector<std::byte>, base::Error> read_file(const std::filesyst
         }
     }
     if (const auto v = get(in, 8, 4); v != format_version) {
-        return std::unexpected(corrupt("format version " + std::to_string(v) + ", this build reads " +
+        return std::unexpected(corrupt("format version " + std::to_string(v) +
+                                       ", this build reads " +
                                        std::to_string(format_version)));
     }
     if (const auto k = get(in, 12, 4); k != static_cast<std::uint32_t>(kind)) {
@@ -212,7 +213,8 @@ namespace bands_key {
 constexpr std::uint16_t conduction = 1, valence = 2, electron = 3, hole = 4;
 }
 namespace convergence_key {
-constexpr std::uint16_t iteration = 1, update = 2, residual = 3, converged = 4, pivot_ratio = 5;
+constexpr std::uint16_t iteration = 1, update = 2, residual = 3, converged = 4, pivot_ratio = 5,
+                        step = 6;
 }
 namespace paths_key {
 constexpr std::uint16_t start = 1, length = 2, field = 3, generation = 4, reached = 5;
@@ -262,15 +264,17 @@ std::expected<results::NodeFields, base::Error> read_fields(const Reader& r) {
 Writer write_convergence(const results::ConvergenceRecord& c) {
     Writer w;
     std::vector<std::int64_t> iteration;
-    std::vector<double> update, residual;
+    std::vector<double> update, residual, step;
     for (const results::IterationRecord& i : c.iterations) {
         iteration.push_back(i.iteration);
         update.push_back(i.update);
         residual.push_back(i.residual);
+        step.push_back(i.step);
     }
     w.i64s(convergence_key::iteration, iteration);
     w.f64s(convergence_key::update, update);
     w.f64s(convergence_key::residual, residual);
+    w.f64s(convergence_key::step, step);
     w.u64(convergence_key::converged, c.converged ? 1 : 0);
     if (c.smallest_pivot_ratio) w.f64(convergence_key::pivot_ratio, *c.smallest_pivot_ratio);
     return w;
@@ -282,11 +286,15 @@ std::expected<results::ConvergenceRecord, base::Error> read_convergence(const Re
     NITCAD_IO_TRY(update, r.f64s(convergence_key::update));
     NITCAD_IO_TRY(residual, r.f64s(convergence_key::residual));
     NITCAD_IO_TRY(converged, r.u64(convergence_key::converged));
-    if (update.size() != iteration.size() || residual.size() != iteration.size()) {
+    // The fraction of each step taken (Unit 30); absent in files written before it: full steps.
+    NITCAD_IO_TRY(step, r.f64s_or_empty(convergence_key::step));
+    if (step.empty()) step.assign(iteration.size(), 1.0);
+    if (update.size() != iteration.size() || residual.size() != iteration.size() ||
+        step.size() != iteration.size()) {
         return std::unexpected(corrupt("convergence record sizes"));
     }
     for (std::size_t i = 0; i < iteration.size(); ++i) {
-        c.iterations.push_back({static_cast<int>(iteration[i]), update[i], residual[i]});
+        c.iterations.push_back({static_cast<int>(iteration[i]), update[i], residual[i], step[i]});
     }
     c.converged = converged != 0;
     if (r.has(convergence_key::pivot_ratio)) {

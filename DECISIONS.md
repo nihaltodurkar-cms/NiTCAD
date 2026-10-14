@@ -215,7 +215,24 @@ Choices made without a ruling, open to the owner's review:
 Finding (ARCHITECTURE.md 11.3): cutting rescues the MOSFET field-mobility drain sweep at the default damping, but
 expensively (7 sub-steps per 0.1 V point). Unit 30 then measured a Newton line search against it (below).
 
-### Unit 30 — Newton line search (branch `solve/line-search`, on top of Unit 28)
+### Unit 29 — the io layer (branch `io/checkpoint`, based on `main` after PR #32)
+
+**Owner decision (2026-10-09):** "File I/O layer: Approved." D5's layer list gains `io` (depends on base, mesh,
+results; solve does not use it). Choices made within that approval, open to review:
+
+| # | Choice | Why | Trade-off |
+|---|---|---|---|
+| IO1 | One binary container (magic, version, kind, length, payload, FNV-1a 64) for every content. | One reader, one set of checks; exact doubles; fast. | Not human-readable; a text input deck is a separate, later unit. |
+| IO2 | Keyed records: unknown keys skipped, absent keys defaulted. | New result fields need no version bump; old files keep loading. | Removing or retyping a field needs a format version change. |
+| IO3 | FNV-1a 64 as the checksum. | Already the project's digest (run identity); detects corruption. | Not cryptographic: it detects accidents, not tampering. |
+| IO4 | Atomic write by temporary file and rename. | A crash or full disk never leaves a half-written file under the target name. | Needs write access to the target's directory; no file locking between processes. |
+| IO5 | A checkpoint is one converged point's state plus its bias, the mesh digest and the run identity. | Minimal, and enough to restart a sweep (with Unit 28's `initial_bias_V`). | Does not carry the device or options; the caller must restart with the same ones (the run identity lets it check). |
+| IO6 | A checkpoint is refused on a mesh with another digest. | A state on another mesh is meaningless. | A remeshed device cannot restart from it (state transfer is Unit 17). |
+| IO7 | Device descriptions and an input deck are not in this unit. | Each is a large surface (materials, contacts, interfaces, traps, thermal). | Restart needs the device rebuilt in code until then. |
+
+---
+
+### Unit 30 — Newton line search (merged to `main` as `f3e2811`, PR #32, 2026-10-14)
 
 Owner request (2026-10-14): implement a Newton line search on a separate branch and benchmark the MOSFET case against
 step cutting, convergence reliability and runtime, before deciding whether Unit 28 needs changes.
@@ -236,21 +253,6 @@ every case measured (MOSFET and all six diode jumps); the line search is faster 
 25 makes step cutting cut points the line search would finish in 27–43 iterations (88 s against 47 s). Raising it
 would speed that combination but slow step cutting alone (each failed attempt costs more), so it is left at 25 until
 more cases are measured.
-
-### Unit 29 — the io layer (branch `io/checkpoint`, stacked on `solve/bias-step-control`)
-
-**Owner decision (2026-10-09):** "File I/O layer: Approved." D5's layer list gains `io` (depends on base, mesh,
-results; solve does not use it). Choices made within that approval, open to review:
-
-| # | Choice | Why | Trade-off |
-|---|---|---|---|
-| IO1 | One binary container (magic, version, kind, length, payload, FNV-1a 64) for every content. | One reader, one set of checks; exact doubles; fast. | Not human-readable; a text input deck is a separate, later unit. |
-| IO2 | Keyed records: unknown keys skipped, absent keys defaulted. | New result fields need no version bump; old files keep loading. | Removing or retyping a field needs a format version change. |
-| IO3 | FNV-1a 64 as the checksum. | Already the project's digest (run identity); detects corruption. | Not cryptographic: it detects accidents, not tampering. |
-| IO4 | Atomic write by temporary file and rename. | A crash or full disk never leaves a half-written file under the target name. | Needs write access to the target's directory; no file locking between processes. |
-| IO5 | A checkpoint is one converged point's state plus its bias, the mesh digest and the run identity. | Minimal, and enough to restart a sweep (with Unit 28's `initial_bias_V`). | Does not carry the device or options; the caller must restart with the same ones (the run identity lets it check). |
-| IO6 | A checkpoint is refused on a mesh with another digest. | A state on another mesh is meaningless. | A remeshed device cannot restart from it (state transfer is Unit 17). |
-| IO7 | Device descriptions and an input deck are not in this unit. | Each is a large surface (materials, contacts, interfaces, traps, thermal). | Restart needs the device rebuilt in code until then. |
 
 ---
 

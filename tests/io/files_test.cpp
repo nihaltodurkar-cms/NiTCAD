@@ -14,6 +14,7 @@
 
 #include "NiTCAD/io/files.hpp"
 #include "NiTCAD/mesh/tensor_grid.hpp"
+#include "record.hpp"
 
 using namespace NiTCAD;
 using base::ErrorCode;
@@ -86,7 +87,7 @@ results::Sweep full_sweep() {
         p.interface_trap_charge = {-1.6e-9};
         p.edge_current_n = {1e-3};
         p.edge_current_p = {2e-4};
-        p.convergence = {{{1, 0.5, 1e-2}, {2, 1e-9, 1e-12}}, true, 2.1e-3};
+        p.convergence = {{{1, 0.5, 1e-2, 0.25}, {2, 1e-9, 1e-12, 1.0}}, true, 2.1e-3};
         p.tunnel_paths = {{4, 1e-6, 2e5, 1e10, true}, {5, 2e-6, 1e5, 1e8, false}};
         p.path_relocations = 2;
         p.thermal_bias_K = {300.0};
@@ -121,6 +122,7 @@ void check_same(const results::BiasPoint& a, const results::BiasPoint& b) {
         CHECK(a.convergence.iterations[i].iteration == b.convergence.iterations[i].iteration);
         CHECK(a.convergence.iterations[i].update == b.convergence.iterations[i].update);
         CHECK(a.convergence.iterations[i].residual == b.convergence.iterations[i].residual);
+        CHECK(a.convergence.iterations[i].step == b.convergence.iterations[i].step);
     }
     CHECK(a.convergence.converged == b.convergence.converged);
     CHECK(a.convergence.smallest_pivot_ratio == b.convergence.smallest_pivot_ratio);
@@ -289,4 +291,57 @@ TEST_CASE("files: a checkpoint is refused on another mesh or with the wrong node
     short_fields.fields.n_cm3.pop_back();
     REQUIRE(io::save_checkpoint(dir / "short.ntc", m, run, short_fields).has_value());
     CHECK(io::load_checkpoint(dir / "short.ntc", m).error().code == ErrorCode::invalid_input);
+}
+
+TEST_CASE("files: a sweep written before Unit 30 (no step fractions) loads with full steps") {
+    // The bytes a pre-Unit-30 writer produced: a sweep whose one point's convergence record has
+    // iteration, update, residual and converged, but no step field (key 6). Keys as in files.cpp.
+    using io::detail::Writer;
+    Writer convergence;
+    const std::vector<std::int64_t> iterations{1, 2};
+    convergence.i64s(1, iterations);
+    convergence.f64s(2, std::vector<double>{0.5, 1e-9});
+    convergence.f64s(3, std::vector<double>{1e-2, 1e-12});
+    convergence.u64(4, 1);
+    Writer fields;
+    fields.f64s(1, std::vector<double>{0.1, 0.2});
+    Writer point;
+    point.f64s(1, std::vector<double>{0.3, 0.0});
+    point.record(2, fields);
+    point.record(10, convergence);
+    Writer run;
+    run.u64(1, 99);
+    Writer sweep;
+    sweep.record(1, run);
+    sweep.record(2, point);
+    // The container (files.hpp): magic, version 1, kind 2 (sweep), length, payload, FNV-1a 64.
+    const auto& body = sweep.bytes();
+    std::vector<std::byte> file;
+    const auto put = [&](std::uint64_t v, int bytes) {
+        for (int b = 0; b < bytes; ++b) {
+            file.push_back(static_cast<std::byte>((v >> (8 * b)) & 0xff));
+        }
+    };
+    for (const char c : std::string("NiTCADio")) file.push_back(static_cast<std::byte>(c));
+    put(1, 4);
+    put(2, 4);
+    put(body.size(), 8);
+    file.insert(file.end(), body.begin(), body.end());
+    put(io::detail::fnv1a(body), 8);
+    const fs::path path = scratch("pre_unit30") / "old.ntc";
+    {
+        std::ofstream f(path, std::ios::binary);
+        f.write(reinterpret_cast<const char*>(file.data()),
+                static_cast<std::streamsize>(file.size()));
+    }
+    const auto back = io::load_sweep(path);
+    REQUIRE(back.has_value());
+    CHECK(back->run.input_identity == 99);
+    REQUIRE(back->points.size() == 1);
+    const auto& it = back->points[0].convergence.iterations;
+    REQUIRE(it.size() == 2);
+    CHECK(it[0].step == 1.0);
+    CHECK(it[1].step == 1.0);
+    CHECK(it[1].update == 1e-9);
+    CHECK(back->points[0].bias_substeps == 0);  // also absent: the Unit 28 default
 }
