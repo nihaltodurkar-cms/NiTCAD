@@ -36,7 +36,7 @@ namespace NiTCAD::io {
 
 inline constexpr std::uint32_t format_version = 1;
 
-enum class Content : std::uint32_t { mesh = 1, sweep = 2, checkpoint = 3 };
+enum class Content : std::uint32_t { mesh = 1, sweep = 2, checkpoint = 3, device = 4 };
 
 // A 64-bit FNV-1a digest of the mesh graph (dimension, points, volumes, edges, boundary patches;
 // doubles by bit pattern). Equal meshes give equal digests; it identifies a mesh on any machine,
