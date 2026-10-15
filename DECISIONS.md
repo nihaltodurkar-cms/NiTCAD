@@ -862,6 +862,45 @@ phosphorus 4.5%), so an error in a reconstruction would fail it.
 
 ---
 
+### Unit 34 — selectable Masetti hole mobility (branch `physics/masetti-hole-mobility`, from `validation/published`)
+
+**Owner request (2026-10-15):** a selectable Masetti doping-dependent hole mobility, off by default (legacy results
+preserved), equations and coefficients verified against the paper or a reliable primary reproduction before coding,
+compared with Caughey–Thomas on Unit 33's boron resistivity benchmarks, with regression tests against acceptance
+criteria fixed in advance; incomplete ionization and n_i unchanged; no push, merge or default change without
+authorization.
+
+**Sources read (before coding).** G. Masetti, M. Severi, S. Solmi, IEEE Trans. Electron Devices 30, 764 (1983),
+doi:10.1109/T-ED.1983.21207, is paywalled and was not read directly. Its boron model was read from three independent
+reproductions, which agree on the form and on every coefficient:
+- CERN Allpix Squared, "Charge Carrier Mobility" (allpix-squared.docs.cern.ch/docs/06_models/02_carrier_mobility/):
+  the hole formula as the paper's eq (4), the values "taken from Table I" of the paper;
+- Crosslight Software, "Low field mobility models" (2010; crosslight.com, Low_field_mobility_model.pdf): the
+  Masetti default coefficients in SI units;
+- the Flooxs model page (flooxs.ece.ufl.edu, Masetti Mobility Model), as quoted by a search engine (the page itself
+  could not be fetched: certificate error).
+
+μ_p(N) = μ_min1 exp(−P_c / N) + (μ_max − μ_min2) / (1 + (N / C_r)^α) − μ_1 / (1 + (C_s / N)^β), N the total ionized
+impurity density, with μ_min1 = 44.9, μ_min2 = 0, μ_max = 470.5, μ_1 = 29.0 cm²/(V s), P_c = 9.23e16, C_r = 2.23e17,
+C_s = 6.10e20 cm⁻³, α = 0.719, β = 2.0. Masetti's fits are at 300 K; the μ_max (T / 300)^−2.2 scaling that Allpix
+Squared and Crosslight apply is not from the paper (Allpix attributes it to another model).
+
+**Acceptance criteria, fixed before any Masetti result was computed:**
+
+| # | Criterion |
+|---|---|
+| AC1 | Off (the default): every existing test passes unchanged; run identities and Unit 33's pinned Caughey–Thomas gaps are unchanged. |
+| AC2 | The implemented μ_p equals the formula above evaluated independently in the test at N = 0 and 1e13 to 1e21 cm⁻³ (each decade) and at 250, 300 and 400 K, within 1e-12 relative; μ_p(0) = μ_max (T / 300)^−2.2. |
+| AC3 | Boron resistivity at 300 K (Unit 33's decks, NBS SP 400-64): \|simulated / reference − 1\| ≤ 10% at each of 1e15, 1e16, 1e17, 1e18, 1e19 cm⁻³. |
+| AC4 | At 1e17, 1e18 and 1e19 cm⁻³ the 300 K gap is at least 10 percentage points smaller in magnitude than Caughey–Thomas's (30.0%, 48.0%, 23.3%), and the largest \|gap\| over 1e15–1e19 is below Caughey–Thomas's 48.0%. |
+| AC5 | Boron resistivity at 23 °C: \|gap\| ≤ 12% at each density (looser: the temperature scaling is not from the paper). |
+| AC6 | The electron mobility is unchanged with Masetti on: the phosphorus benchmark gaps equal the Caughey–Thomas pins. |
+| AC7 | The temperature slope used by the electrothermal model matches a central difference of μ_p(T) to 1e-6 relative. |
+| AC8 | Masetti is refused (invalid_input, before solving) on a semiconductor region whose hole mobility parameters are not silicon's (its coefficients are silicon's). |
+| AC9 | Performance: with Masetti the isothermal sweep's wall time is within 10% of Caughey–Thomas's (the mobility is computed once per node at assembly); measured and reported. |
+
+---
+
 ## New questions the advisor raised (not yet in `ARCHITECTURE.md`)
 
 None of these is decided. Each needs an owner position before the build scaffold fixes the flags.
