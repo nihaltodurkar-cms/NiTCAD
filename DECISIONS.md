@@ -800,7 +800,7 @@ Findings:
 
 ---
 
-### Unit 33 — validation against published data (branch `validation/published`, 2026-10-15)
+### Unit 33 — validation against published data (merged to `main` as `a14ac96`, PR #41, 2026-10-15)
 
 **Owner rulings (2026-10-15)**, asked before any work: references are values stated in the text or tables of
 published sources (no digitized curves); the benchmarks are decks in a new top-level `benchmarks/` directory, run by a
@@ -862,7 +862,7 @@ phosphorus 4.5%), so an error in a reconstruction would fail it.
 
 ---
 
-### Unit 34 — selectable Masetti hole mobility (branch `physics/masetti-hole-mobility`, from `validation/published`)
+### Unit 34 — selectable Masetti hole mobility (merged to `main` as `e14a53f`, PR #42, 2026-10-15)
 
 **Owner request (2026-10-15):** a selectable Masetti doping-dependent hole mobility, off by default (legacy results
 preserved), equations and coefficients verified against the paper or a reliable primary reproduction before coding,
