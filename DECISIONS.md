@@ -942,6 +942,62 @@ a hidden `[.performance]` case (timing does not belong in ctest).
 
 ---
 
+### Unit 35 — published silicon defaults: band set and hole mobility (branch `physics/default-silicon`)
+
+**Owner authorization and rulings (2026-10-15)**, asked before any work: change the defaults. (1) n_i from a
+published, physically consistent silicon band set (Eg(T), Nc(T), Nv(T)), verified from the source before coding — not
+a rescale of Nc/Nv or an Eg0 shift; (2) the default hole mobility becomes "automatic": Masetti in regions with
+silicon's hole mobility parameters, the material's Caughey–Thomas elsewhere (heterostructures keep working); (3) the
+legacy stays selectable — the legacy silicon set (n_i 1.0674e10 cm⁻³) and `hole_mobility = caughey_thomas` as named
+options reproducing old results bit for bit; (4) legacy-port gates keep running on the explicitly selected legacy
+options; new-default gates are added with their before/after values recorded and justified against Unit 33's
+benchmarks. Incomplete ionization is not touched.
+
+**Source read (before coding).** R. Couderc, M. Amara, M. Lemiti, "Reassessment of the intrinsic carrier density
+temperature dependence in crystalline silicon", J. Appl. Phys. 115, 093705 (2014), doi:10.1063/1.4867776, open
+access (hal.science/hal-00956479), read from the PDF's own text streams. The extraction drops minus signs (plus signs
+survive as a separate glyph); each sign below was fixed by the paper's own cross-checks, recorded in the last column.
+
+| Quantity | As used | Paper | Check |
+|---|---|---|---|
+| n_i | n_i² = Nc Nv exp(−Eg(T) / kT) | eq (1) | — |
+| Nc, Nv | 4.83e15 (m_dc / m0)^(3/2) T^(3/2), likewise Nv [cm⁻³] | eqs (4), (5) (the constant as printed; CODATA gives 4.829e15) | — |
+| (m_dc / m0)^(3/2) | A T³ + B T² + C T + D, A = −4.609e-10, B = 6.753e-7, C = −1.312e-5, D = 1.094 | eq (18), 0–400 K | It fits 6 m_t √m_l / m0^(3/2) with m_l = 0.9163, m_t = 0.1905 Eg(0) / Eg(T) (eqs 16, 17) within 0.5% (the paper); these signs give 0.03% from 20 to 400 K, and D = 1.094 = 6 (0.1905) √0.9163 |
+| (m_dv / m0)^(3/2) | A T³ + B T² + C T + D, A = 2.525e-9, B = −4.689e-6, C = 3.376e-3, D = 0.3426 | eq (19), from eq (15) | With eq (18) and Eg(T) the resulting n_i is within 1.5% of eq (15) from 50 to 400 K (the paper); these signs give 1.3% (largest, 100 K), 0.12% at 300 K |
+| Eg(T) | Eg(0) − αΘ [ (1 − 3Δ²) / (exp(Θ / T) − 1) + (3Δ² / 2) ( ⁶√(1 + π² χ² / (3 (1 + Δ²)) + (3Δ² − 1) χ³ / 4 + 8 χ⁴ / 3 + χ⁶) − 1 ) ], χ = 2T / Θ | eq (10), R. Pässler, Phys. Rev. B 66, 085201 (2002), the paper's chosen gap model | π² / (3(1 + Δ²)) (not π² · 3(1 + Δ²)): the mass fit above holds to 0.03% only so (2.4% otherwise); prefactor αΘ: gives the renormalization αΘ / 2 the paper states for Pässler's model and Eg(300 K) = 1.1242 eV |
+| Pässler's parameters | Eg(0) = 1.17 eV, α = 3.23e-4 eV/K, Θ = 446 K, Δ = 0.51 | Table I | — |
+| Reference n_i(T) | 1.541e15 T^1.712 exp(−Eg(T) / 2kT) | eq (15); "9.68 × 10⁹ cm⁻³" at 300 K | Reproduced: 9.685e9 |
+
+Resulting silicon values at 300 K: Eg = 1.12416 eV (legacy 1.12452), Nc = 2.857e19 (legacy 2.86e19), Nv = 2.514e19 cm⁻³
+(legacy 3.10e19), n_i = 9.673e9 cm⁻³ (legacy 1.0674e10; Misiakos 9.7 ± 0.1e9, Unit 33 V4).
+
+**Design (decided here, before coding):**
+
+| # | Choice | Why | Trade-off |
+|---|---|---|---|
+| S1 | Two optional parameter groups on `SemiconductorParameters`: a Pässler gap (α, Θ, Δ, with `Eg0_eV` as Eg(0); the Varshni α and β then 0) and density-of-states mass polynomials (conduction and valence; Nc300 and Nv300 then 0). All zero (every existing set): the legacy Varshni and (T / 300)^(3/2) formulas, evaluated exactly as before. | A published set in the material's own data; legacy sets bit for bit; the forms are general, not a silicon switch. | Two ways to state a band; `create` refuses a mixture (both forms given for one quantity). |
+| S2 | `physics::silicon_parameters` (deck `silicon`) becomes Couderc's set; every other field is unchanged. The old set is `physics::legacy_silicon_parameters` (`legacy_silicon()`, deck `silicon_legacy`). | Ruling (1), (3). | Code and decks that named silicon change results (the point of the unit). |
+| S3 | `HoleMobility::automatic`, the new default: per semiconductor region, Masetti where the region's hole mobility parameters equal silicon's Caughey–Thomas set, the material's Caughey–Thomas elsewhere. `caughey_thomas` (legacy) and `masetti` (refuses non-silicon regions, Unit 34) stay. The run record names the setting unless it is `caughey_thomas`, so legacy-option runs keep their identity. | Ruling (2), (3). | "Silicon" is recognized by its hole mobility parameters (as Unit 34's refusal). |
+| S4 | Electrothermal: with temperature-dependent DOS masses, N(T) = N(T0) θ^(3/2) M(θ). The extra −kT ∇ln M in Wachutka's flux is a band-parameter step across an edge: ln M(θ_b) − ln M(θ_a) joins the edge's ln Nc0 step (electrons; −ln Nv for holes), with its θ partials; the densities at fixed reduced energy move with 3 / (2θ) + d ln M / dθ in place of 3 / (2θ). The energy a carrier carries, (r + 5/2) kT above its band edge, is unchanged (an assumption: the thermopower is that of parabolic bands at the local mass). With no mass polynomial, M ≡ 1 and every term is the legacy's, bit for bit. | The default material must keep working electrothermally; refusing it or freezing M at T0 would be a silent approximation (T8's rule). | The thermopower assumption above is recorded, not validated. |
+| S5 | The p-polysilicon work function of an `electrode` contact (no semiconductor under it) uses `silicon_parameters`, now Couderc's gap: 0.36 meV below the legacy at 300 K. | One silicon default. | A legacy run with a p-poly electrode contact differs by that shift (gates take the gap of the semiconductor under them, so a legacy-silicon device is bit for bit). |
+
+**Acceptance criteria, fixed before any implementation:**
+
+| # | Criterion |
+|---|---|
+| DC1 | Legacy selectable, bit for bit: with `silicon_legacy` / `legacy_silicon_parameters` and `hole_mobility = caughey_thomas`, a diode sweep and the boron 1e18 benchmark written by `nitcad run` are byte-identical to the same decks run on `main` (`0768cae`, the deck's `silicon` then), and every legacy-port gate passes on those options with its unchanged tolerance. |
+| DC2 | The implemented Eg(T), Nc(T), Nv(T) equal the formulas above evaluated independently in the test (from this table, not the parameter struct) at 50, 77, 100, 200, 300, 400 K within 1e-12 relative; legacy sets unchanged (Varshni and power law, bit for bit). |
+| DC3 | n_i(300 K) of the default silicon in [9.6e9, 9.8e9] cm⁻³ (Misiakos's 9.7 ± 0.1e9) and within 1.5% of eq (15) from 50 to 400 K (the paper's stated precision). |
+| DC4 | Unit 33's solved n_i benchmark (√(np) in the 1e14 bar at 0 V) with the defaults: \|gap\| ≤ 1.1% against 9.7e9 (within the measurement's uncertainty); the legacy pin (+10.0%) unchanged on legacy options. |
+| DC5 | Unit 33/34 resistivity benchmarks with the defaults: boron gaps equal Unit 34's Masetti pins and phosphorus gaps equal the Caughey–Thomas pins, each within 0.2 points (a majority-carrier resistivity does not depend on n_i); the largest boron \|gap\| ≤ 11.2%. |
+| DC6 | dEg/dT, d ln Nc / dT, d ln Nv / dT and d ln n_i / dT used by the electrothermal model match central differences within 1e-6 relative at 100, 300 and 400 K (both band forms). |
+| DC7 | Electrothermal with the defaults: the existing Jacobian (finite-difference) and energy-balance checks pass on the new silicon; with isothermal sinks at 300 K and a small current, the electrothermal current matches the isothermal one within 1e-3. |
+| DC8 | `automatic`: Masetti in a silicon region and Caughey–Thomas in a germanium region of one device (no refusal), each region's hole current matching a run with the explicit model on a single-material device; `masetti` still refuses the germanium region. |
+| DC9 | New-default gates: each legacy-port gate's device is also run on the defaults, the value recorded here before/after with its explanation; a diffusion-limited diode current changes by the n_i² ratio (9.673e9 / 1.0674e10)² = 0.821 within 2% (hole mobility held at Caughey–Thomas to isolate it). |
+| DC10 | Full Release and Debug suites after each commit; zero new warnings. |
+
+---
+
 ## New questions the advisor raised (not yet in `ARCHITECTURE.md`)
 
 None of these is decided. Each needs an owner position before the build scaffold fixes the flags.
