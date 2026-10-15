@@ -110,7 +110,7 @@ solver implementation.
 | Field | named physical quantity with location, units and applicability | Present as specialized solution/result data; generic field abstraction is target |
 | Equation | residual/Jacobian contribution associated with fields and domains | Present through specialized assembler systems; generic equation objects are target |
 | Model | pure constitutive law with exact derivatives | Implemented for current local physics |
-| Mesh | geometric graph supporting 1D/2D/3D and future unstructured producers | Implemented graph abstraction; unstructured/adaptive mesh deferred |
+| Mesh | geometric graph supporting 1D/2D/3D and future unstructured producers | Implemented graph abstraction; unstructured 2D and 3D generators and the simplex import (Unit 16); adaptive mesh deferred (Unit 17) |
 | Solver | nonlinear/linear algorithms independent of device type | Newton + backend-neutral linear solve implemented; more strategies deferred |
 | Result | fields, terminals, convergence, provenance and diagnostics | Implemented plain-data results; richer scientific data model is target |
 
@@ -168,7 +168,7 @@ and boundary/interface laws into the global residual and Jacobian. This preserve
 |---|---|---|
 | base | physical constants, unit convention, error types | physics |
 | linalg | sparse matrix storage, backend-neutral solver interface (6.10), Eigen SparseLU backend (D3), residual check | meshes, Newton |
-| mesh | node/edge/control-volume graph, per-edge length and coupling area, per-node volume; tensor-grid constructors for 1D/2D/3D; no tensor-grid indexing in its public interface (6.11) | doping, materials, linear algebra |
+| mesh | node/edge/control-volume graph, per-edge length and coupling area, per-node volume; tensor-grid constructors for 1D/2D/3D; the unstructured 2D and 3D generators and the simplex import with checked duals (Unit 16); no tensor-grid indexing in its public interface (6.11) | doping, materials, linear algebra |
 | physics | material parameters and constitutive models; node/edge/interface-local laws and exact derivatives | meshes, matrices, bias, solving |
 | device | regions, material assignment, doping, interfaces and contact/boundary descriptions (data only) | solving, assembling |
 | results | field/terminal data, convergence history, diagnostics and run record | solving |
@@ -1998,7 +1998,7 @@ interface fits both direct and iterative backends stays unproven until one is re
 - Untested failure paths: `std::bad_alloc`, Eigen's out-of-memory messages, the COLAMD size guard (it needs about 1e9
   nonzeros), and a refinement step that increases the backward error.
 
-### 6.11 Mesh generality (R3: unstructured meshes deferred, no later rewrite)
+### 6.11 Mesh generality (R3: unstructured meshes added in Unit 16, no rewrite)
 
 Unstructured meshes are not implemented initially. The mesh architecture must still not assume a tensor grid:
 
@@ -2037,7 +2037,7 @@ Unstructured meshes are not implemented initially. The mesh architecture must st
   cells by axis, an exception to item 1 scoped to that model; an unstructured producer (Unit 16) needs a cell-walk
   interface (locate, stencil, exit face, neighbour) for the tracer to use instead.
 
-**As built (Unit 16, in progress on `mesh/unstructured`: predicates and the simplex import path; DECISIONS.md M1–M4):**
+**As built (Unit 16, on `main` as `a09cf43`, PR #35; DECISIONS.md M1–M16, U1–U18):**
 - Exact predicates (`src/mesh/predicates.hpp`, internal): orient2d/3d, incircle, insphere, the diametral circle and
   sphere tests. Each predicate's polynomial is written once and evaluated twice. First comes a double-precision filter
   with a forward error bound carried alongside: the bound is γ_d·M, where M is the polynomial evaluated on absolute
@@ -2471,7 +2471,7 @@ built.
 | 14 | Fermi–Dirac statistics and high-density carrier models | physics, assemble | **done, on `main`** (`8610d9a`): parabolic-band Fermi–Dirac statistics, the legacy ν-factor scheme with an exact Jacobian (5 and 6.2, Unit 14); incomplete ionization deferred (14.3) |
 | 15 | Heterojunctions, band offsets and interface transport | device, assemble, physics | **done, on `main`** (`2a8718a`): band offsets through a per-node band shift, permittivity steps, thermionic emission, the legacy material sets (6.3 and 6.2, Unit 15); follow-up: interfaces as device data, incomplete ionization, radiative recombination, band diagram, current resolution; meshed insulators, interface charge and traps are 15b |
 | 15b | Meshed insulators, semiconductor-insulator interfaces, interface charge, traps and recombination | physics, device, assemble, solve | **done, on `main`** (`4e23119`): insulator regions, electrodes on a meshed oxide, fixed charge, interface traps (levels and uniform bands, steady-state SRH occupancy), surface recombination, all at the interface potential (5, 6.2 and 6.4, Unit 15b) |
-| 16 | Unstructured mesh | mesh, device, io | **in progress** (branch `mesh/unstructured`): the 2D generator, P4-certified devices, doping profiles, generated meshes on disk; every 2D gate passed, the MOSFET acceptance included (U14); the 3D generator for convex polyhedra with contact patches and planar interfaces, every 3D gate passed; awaiting review (11.3) |
+| 16 | Unstructured mesh | mesh, device, io | **done, on `main`** (`a09cf43`, PR #35): exact predicates and the simplex import with checked duals; the 2D generator (any polygons, straddled interfaces, structured boundary layers); the 3D generator (convex polyhedra, contact patches, planar interfaces); P4-certified devices, analytic doping profiles, generated meshes on disk; every 2D and 3D gate passed, the MOSFET acceptance included (6.11; DECISIONS.md Unit 16) |
 | 17 | Adaptive mesh refinement and state transfer | mesh, solve, results | target |
 | 18 | Scalable linear-solver backends: PARDISO and/or iterative/AMG paths | linalg | **done, on `main`** (`002cb53`, `c8fd145`): Intel MKL PARDISO behind the backend-neutral interface, opt-in (Eigen SparseLU stays the default), MKL loaded at run time from a given path and never linked; real and complex; one analysis per pattern, numeric refactorization per Jacobian, one solve per right-hand side; singularity from perturbed pivots (6.10, Unit 18). Iterative/AMG paths remain a target |
 | 19 | Impact ionization and breakdown-oriented continuation | physics, assemble, solve | **done, on `main`** (`b665b9d`): van Overstraeten–de Man with the temperature factor, local generation along the reconstructed current with an exact Jacobian, off by default and bit-identical when off; pseudo-arclength `trace_bias` through folds; breakdown read from the ionization integral (6.2, Unit 19) |
@@ -2537,7 +2537,7 @@ exists, not finished), **planned** (nothing built). Audit of 2026-10-09, against
 |---|---|---|---|
 | Robust nonlinear solving | Newton with componentwise clipping (6.2); the generation-free retry (Units 19, 20); arc-length `trace_bias` (Unit 19) | **Bias step cutting verified, on `main`** (Unit 28, below; `06b708d`, PR #31); **Newton line search verified, opt-in, on `main`** (Unit 30, below; `f3e2811`, PR #32) | A natural-test norm monotone in reverse bias; a Gummel or pseudo-transient fallback |
 | Input/output, checkpoint/restart | The `io` layer (approved 2026-10-09): versioned, checksummed, atomic files for meshes, sweeps and checkpoints | **Verified, on `main`** (Unit 29, 6.6; `f69a7a8`, PR #33) | Device descriptions on disk and a text input deck; transient and small-signal results |
-| Geometry and unstructured 3D meshing | `Mesh::from_parts` accepts any valid node/edge/volume graph; only the tensor-grid producer exists; nonlocal BTBT needs tensor cells (6.11) | **in progress** (Unit 16, branch `mesh/unstructured`; scope ruled 2026-10-14; 2D generator with structured boundary layers, P4 certification of devices, doping profiles and generated-mesh io on the branch; every 2D gate passed, the MOSFET included (U14); the 3D generator for convex polyhedra, with contact patches and planar interfaces, every 3D gate passed; 3D speed target met after U18) | Boundary-conforming Delaunay generators (2D any polygon, 3D convex) on the Voronoi dual with exact predicates, checked postconditions P0–P5, straddled interfaces and contact patches, persisted metadata; analytic doping profiles |
+| Geometry and unstructured 3D meshing | `Mesh::from_parts` accepts any valid node/edge/volume graph; besides the tensor-grid producer, Unit 16 added the 2D and 3D Delaunay generators and the simplex import (checked duals P0–P5, P4-certified interfaces, contact patches, structured 2D boundary layers); nonlocal BTBT still needs tensor cells (6.11, M16) | **Verified, on `main`** (Unit 16, 6.11; `a09cf43`, PR #35) | Non-convex 3D domains, 3D interface junction lines, interfaces across patched faces and 3D boundary layers (U7); an unstructured locator for nonlocal BTBT (M16) |
 | Low-current accuracy | `terminal_current_resolution` reports the floor (Unit 15); off-state MOSFET current unresolved (6.13) | planned | Current extraction from the minority side or quasi-Fermi unknowns, gated against the resolution |
 | Generic fields/equations | Specialized `DriftDiffusion` assembler with a stride (Unit 23) | planned (6.12.1–2) | Field and equation descriptors behind the current assembler, bit-identical |
 | Scalable linear solvers | Eigen SparseLU (default), PARDISO opt-in (Unit 18) | planned | Iterative Krylov with ILU/AMG behind `linalg`; parallel assembly |
@@ -2801,6 +2801,7 @@ architecture; historical branch names remain only where they are useful to expla
 | V32 | Unit 28 (`solve/bias-step-control`): Release 14/14 and Debug 10/10, both with no warnings (Debug `solve` 957 s against 596 s before: the step-control gates are slow in Debug); `nitcad_solve_test` 174 test cases (+9 `[.mosfet]`, +1 `[.benchmark]`, not in ctest); the other suites unchanged. Step-control gates, the MOSFET benchmark (3.0e-14 against the 1 V_T sweep, 12 minutes) and the cost finding in 11.3. With the control off every existing test passes unchanged. | Verified locally. |
 | V33 | Unit 29 (`io/checkpoint`, rebuilt on `main` after PR #32 on 2026-10-14): Debug and Release build with no warnings; all suites pass (Release 15/15 and Debug 11/11, with the new ctest `io`); `nitcad_io_test` 10 test cases, `nitcad_solve_test` 182 (+2 restart cases). Round trips, damage, atomic writes, the pre-Unit-30 file, restart against the uninterrupted sweep (1e-9) and the 13 mutation checks in 6.6 "As built (Unit 29)". No solver source changed. | Verified locally. |
 | V34 | Unit 30 (`solve/line-search`): Debug and Release build with no warnings; all suites pass (Release 14/14, Debug 10/10); `nitcad_solve_test` 180 test cases (+9 `[.mosfet]`, +4 `[.benchmark]`, not in ctest). Line-search gates, the MOSFET and diode-jump benchmarks against step cutting, and the findings in 11.3 "As built (Unit 30)". Off by default: every existing test passes unchanged. | Verified locally. |
+| V35 | Unit 16 (`mesh/unstructured`, merged as `a09cf43`, PR #35): Debug and Release build with no warnings before every code commit; all suites pass (Release 16/16, Debug 10/10, `base` run alone). The 2D gates (linear field, diode convergence, abrupt diode, the MOSFET at k = 1.5) run in ctest `solve_unstructured` (Release). The 3D gates (linear field, Kuhn equivalence, z-uniform and sliver-stress convergence, io) run with `[.unstructured3d]` explicitly. Mutation results for each round are in DECISIONS.md Unit 16. Speed after U18: 2D 1.04e5 nodes in 1.15 s, 3D 1.29e5 nodes in 15.9 s. | Verified locally. |
 | V3 | Scaling definitions, scaled variables and Newton tolerances read from `inputs.cpp` and `device1d.cpp` and recorded in 6.1. One open question remains for Unit 8 (convergence criterion on the clipped correction). | Verified |
 
 Verifications due at their own unit: none left. The 5e-5 Jacobian gate's normalization was read at Unit 7 (section 10), and

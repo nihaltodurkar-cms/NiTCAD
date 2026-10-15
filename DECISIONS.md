@@ -256,7 +256,7 @@ more cases are measured.
 
 ---
 
-### Unit 16 — unstructured 2D and 3D meshing (branch `mesh/unstructured`, revised 2026-10-14)
+### Unit 16 — unstructured 2D and 3D meshing (branch `mesh/unstructured`, revised 2026-10-14; on `main` as `a09cf43`, PR #35)
 
 **Owner rulings (2026-10-14), unchanged:** R1 2D and 3D in this unit; R2 an in-tree mesh generator, no new dependency;
 R3 material interfaces as node regions with straddling node pairs; R4 analytic doping profiles included. The branch
