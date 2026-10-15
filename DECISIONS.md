@@ -919,6 +919,9 @@ touched. No default changed.
 | AC8 | Refused for a germanium region; accepted for silicon with another parameter changed. | yes |
 | AC9 | 2D diode, 20,301 nodes, 6 points, best of 3: ratios 1.36, 0.94, 0.98, 0.93 in four runs; the three runs that counted iterations took 26 Newton iterations with either model. | yes in 3 of 4 runs; the 1.36 run is timing noise on this machine (its iterations were not recorded) |
 
+**Owner ruling (2026-10-15):** the AC3 and AC5 misses at 10¹⁸ cm⁻³ are **accepted as documented limitations, not as
+passed criteria**.
+
 The criteria are not loosened. The validation test checks AC3 and AC5 everywhere but 1e18, pins every measured gap,
 and states AC3 and AC5 at 1e18 in a separate `[!shouldfail]` case that reports the miss (and would report a fix). AC9 is
 a hidden `[.performance]` case (timing does not belong in ctest).
