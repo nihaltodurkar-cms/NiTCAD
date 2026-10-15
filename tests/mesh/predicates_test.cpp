@@ -76,6 +76,42 @@ TEST_CASE("exact integers: arithmetic, sign and rounding", "[mesh][predicates]")
     }
 }
 
+TEST_CASE("exact integers: inline and heap limbs, and to_double's top 64 bits", "[mesh][predicates]") {
+    // Values with a 64-bit top m (top bit set) at every shift s, plus a tail below 2^s: to_double
+    // truncates to the top 64 bits, so it must give m 2^s converted once, whether the limbs fit
+    // inline (24 limbs) or live on the heap (s up to 3000), and at every offset s % 32.
+    std::uint64_t state = 12345;
+    const auto next = [&]() {
+        state += 0x9E3779B97F4A7C15ull;
+        std::uint64_t z = state;
+        z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ull;
+        z = (z ^ (z >> 27)) * 0x94D049BB133111EBull;
+        return z ^ (z >> 31);
+    };
+    for (int s = 0; s <= 3000; s += (s < 128 ? 1 : 37)) {
+        const std::uint64_t m = next() | (std::uint64_t{1} << 63);
+        ExactInteger v = ExactInteger::from_shifted(m, false, s);
+        if (s >= 64) v = v + ExactInteger::from_shifted(next(), false, s - 64);  // a tail below 2^s
+        const double expected = std::ldexp(static_cast<double>(m), s - 3000);
+        CHECK(v.to_double(-3000) == expected);
+        CHECK((-v).to_double(-3000) == -expected);
+    }
+    // Small values: fewer than 64 bits, converted exactly or rounded once.
+    for (const std::uint64_t m : {std::uint64_t{1}, std::uint64_t{0xFFFFFFFF}, std::uint64_t{0x1FFFFFFFFFFFFF},
+                                  std::uint64_t{0x123456789ABCDEF}}) {
+        CHECK(ExactInteger::from_shifted(m, false, 0).to_double() == static_cast<double>(m));
+    }
+    // Identities through products far beyond the inline limbs: (x + y)(x - y) = x^2 - y^2.
+    ExactInteger x = ExactInteger::from_shifted(next(), false, 1500) + ExactInteger::from_shifted(next(), true, 700);
+    ExactInteger y = ExactInteger::from_shifted(next(), true, 1400) + ExactInteger::from_shifted(next(), false, 3);
+    CHECK(((x + y) * (x - y) - (x * x - y * y)).sign() == 0);
+    CHECK((x * y + y * x - (x + x) * y).sign() == 0);
+    // Back from the heap to small values: the difference of two huge equal products is zero, and
+    // a huge value minus itself plus one is one.
+    const ExactInteger one(1);
+    CHECK((x * y - y * x + one).to_double() == 1.0);
+}
+
 TEST_CASE("orientation: signs, exact zeros and near-collinear points", "[mesh][predicates]") {
     CHECK(pr::orient2d({0, 0, 0}, {1, 0, 0}, {0, 1, 0}) == 1);
     CHECK(pr::orient2d({0, 0, 0}, {0, 1, 0}, {1, 0, 0}) == -1);

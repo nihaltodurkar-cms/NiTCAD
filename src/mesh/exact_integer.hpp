@@ -4,13 +4,16 @@
 // A finite double is m * 2^e with an integer mantissa m (|m| < 2^53). A set of doubles scaled by a
 // common power of two 2^-e0 (e0 the smallest exponent among them) is a set of integers, exactly; a
 // polynomial in them is then an integer, computed here without rounding, overflow or underflow.
-// Only sign() is exact; to_double() rounds. Speed is not a goal: this runs only when the
-// floating-point filter cannot decide, or once per element for the dual measures.
+// Only sign() is exact; to_double() rounds. It runs when the floating-point filter cannot decide,
+// and once per element for the dual measures, so values up to 24 limbs avoid the heap (U18).
 #pragma once
 
+#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <initializer_list>
+#include <utility>
 #include <vector>
 
 #include "NiTCAD/mesh/mesh.hpp"
@@ -37,7 +40,50 @@ public:
     friend ExactInteger operator-(ExactInteger a);
 
 private:
-    using Limbs = std::vector<std::uint32_t>;  // magnitude, least significant first, no high zeros
+    // The magnitude, least significant limb first, no high zeros. Up to `inline_limbs` limbs live in
+    // the object (the dual measures of one simplex stay within it for coordinates of similar
+    // magnitude); longer ones move to the heap. Only the storage differs: every value and every
+    // rounding is the same either way (DECISIONS.md U18).
+    class Limbs {
+    public:
+        static constexpr std::size_t inline_limbs = 24;
+        Limbs() = default;
+        Limbs(std::size_t n, std::uint32_t value) { assign(n, value); }
+        Limbs(std::initializer_list<std::uint32_t> values) {
+            for (const std::uint32_t v : values) push_back(v);
+        }
+        [[nodiscard]] std::size_t size() const noexcept { return size_; }
+        [[nodiscard]] bool empty() const noexcept { return size_ == 0; }
+        [[nodiscard]] std::uint32_t* data() noexcept { return heap_.empty() ? local_.data() : heap_.data(); }
+        [[nodiscard]] const std::uint32_t* data() const noexcept { return heap_.empty() ? local_.data() : heap_.data(); }
+        std::uint32_t& operator[](std::size_t i) noexcept { return data()[i]; }
+        std::uint32_t operator[](std::size_t i) const noexcept { return data()[i]; }
+        [[nodiscard]] std::uint32_t back() const noexcept { return data()[size_ - 1]; }
+        void assign(std::size_t n, std::uint32_t value) {
+            reserve(n);
+            std::uint32_t* d = data();
+            for (std::size_t i = 0; i < n; ++i) d[i] = value;
+            size_ = n;
+        }
+        void push_back(std::uint32_t value) {
+            reserve(size_ + 1);
+            data()[size_++] = value;
+        }
+        void pop_back() noexcept { --size_; }
+
+    private:
+        void reserve(std::size_t n) {
+            if (n <= inline_limbs || n <= heap_.size()) return;
+            // Move to (or grow on) the heap, keeping the limbs; heap_.size() is the capacity.
+            std::vector<std::uint32_t> grown(std::max(n, 2 * std::max(heap_.size(), inline_limbs)), 0u);
+            const std::uint32_t* d = data();
+            for (std::size_t i = 0; i < size_; ++i) grown[i] = d[i];
+            heap_ = std::move(grown);
+        }
+        std::array<std::uint32_t, inline_limbs> local_;  // only the first size_ limbs are meaningful
+        std::vector<std::uint32_t> heap_;  // empty while the limbs are inline
+        std::size_t size_ = 0;
+    };
 
     static int compare(const Limbs& a, const Limbs& b) noexcept;
     static Limbs add(const Limbs& a, const Limbs& b);

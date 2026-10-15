@@ -47,12 +47,16 @@ double ExactInteger::to_double(int exp2) const {
     const int bits = static_cast<int>(32 * (limbs_.size() - 1)) +
                      static_cast<int>(std::bit_width(limbs_.back()));
     // The top 64 bits, truncated; converting them rounds once, so the result is within one ulp.
+    // Bits [drop, bits) come from at most three limbs, starting at limb drop / 32.
     const int drop = bits > 64 ? bits - 64 : 0;
-    std::uint64_t top = 0;
-    for (int b = bits - 1; b >= drop; --b) {
-        const std::uint32_t limb = limbs_[static_cast<std::size_t>(b / 32)];
-        top = (top << 1) | ((limb >> (b % 32)) & 1u);
-    }
+    const auto lo = static_cast<std::size_t>(drop / 32);
+    const int shift = drop % 32;
+    const std::size_t n = limbs_.size();
+    const std::uint64_t w0 = limbs_[lo];
+    const std::uint64_t w1 = lo + 1 < n ? limbs_[lo + 1] : 0;
+    const std::uint64_t w2 = lo + 2 < n ? limbs_[lo + 2] : 0;
+    const std::uint64_t top = shift == 0 ? (w0 | (w1 << 32))
+                                         : ((w0 >> shift) | (w1 << (32 - shift)) | (w2 << (64 - shift)));
     const double magnitude = std::ldexp(static_cast<double>(top), drop + exp2);
     return negative_ ? -magnitude : magnitude;
 }
@@ -69,27 +73,35 @@ ExactInteger::Limbs ExactInteger::add(const Limbs& a, const Limbs& b) {
     const Limbs& longer = a.size() >= b.size() ? a : b;
     const Limbs& shorter = a.size() >= b.size() ? b : a;
     Limbs r(longer.size() + 1, 0);
+    const std::uint32_t* L = longer.data();
+    const std::uint32_t* S = shorter.data();
+    std::uint32_t* R = r.data();
+    const std::size_t nl = longer.size();
+    const std::size_t ns = shorter.size();
     std::uint64_t carry = 0;
-    for (std::size_t i = 0; i < longer.size(); ++i) {
-        const std::uint64_t s = static_cast<std::uint64_t>(longer[i]) +
-                                (i < shorter.size() ? shorter[i] : 0u) + carry;
-        r[i] = static_cast<std::uint32_t>(s);
+    for (std::size_t i = 0; i < nl; ++i) {
+        const std::uint64_t s = static_cast<std::uint64_t>(L[i]) + (i < ns ? S[i] : 0u) + carry;
+        R[i] = static_cast<std::uint32_t>(s);
         carry = s >> 32;
     }
-    r[longer.size()] = static_cast<std::uint32_t>(carry);
+    R[nl] = static_cast<std::uint32_t>(carry);
     trim(r);
     return r;
 }
 
 ExactInteger::Limbs ExactInteger::subtract(const Limbs& a, const Limbs& b) {
     Limbs r(a.size(), 0);
+    const std::uint32_t* A = a.data();
+    const std::uint32_t* B = b.data();
+    std::uint32_t* R = r.data();
+    const std::size_t na = a.size();
+    const std::size_t nb = b.size();
     std::int64_t borrow = 0;
-    for (std::size_t i = 0; i < a.size(); ++i) {
-        std::int64_t d = static_cast<std::int64_t>(a[i]) -
-                         (i < b.size() ? static_cast<std::int64_t>(b[i]) : 0) - borrow;
+    for (std::size_t i = 0; i < na; ++i) {
+        std::int64_t d = static_cast<std::int64_t>(A[i]) - (i < nb ? static_cast<std::int64_t>(B[i]) : 0) - borrow;
         borrow = d < 0 ? 1 : 0;
         if (d < 0) d += std::int64_t{1} << 32;
-        r[i] = static_cast<std::uint32_t>(d);
+        R[i] = static_cast<std::uint32_t>(d);
     }
     trim(r);
     return r;
@@ -98,14 +110,19 @@ ExactInteger::Limbs ExactInteger::subtract(const Limbs& a, const Limbs& b) {
 ExactInteger::Limbs ExactInteger::multiply(const Limbs& a, const Limbs& b) {
     if (a.empty() || b.empty()) return {};
     Limbs r(a.size() + b.size(), 0);
-    for (std::size_t i = 0; i < a.size(); ++i) {
+    const std::uint32_t* A = a.data();
+    const std::uint32_t* B = b.data();
+    std::uint32_t* R = r.data();
+    const std::size_t na = a.size();
+    const std::size_t nb = b.size();
+    for (std::size_t i = 0; i < na; ++i) {
         std::uint64_t carry = 0;
-        for (std::size_t j = 0; j < b.size(); ++j) {
-            const std::uint64_t t = static_cast<std::uint64_t>(a[i]) * b[j] + r[i + j] + carry;
-            r[i + j] = static_cast<std::uint32_t>(t);
+        for (std::size_t j = 0; j < nb; ++j) {
+            const std::uint64_t t = static_cast<std::uint64_t>(A[i]) * B[j] + R[i + j] + carry;
+            R[i + j] = static_cast<std::uint32_t>(t);
             carry = t >> 32;
         }
-        r[i + b.size()] = static_cast<std::uint32_t>(carry);
+        R[i + nb] = static_cast<std::uint32_t>(carry);
     }
     trim(r);
     return r;
