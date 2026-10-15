@@ -394,3 +394,13 @@ add_test(NAME deck COMMAND nitcad_deck_test)
 # The batch runner (`nitcad check|run <deck>`).
 add_executable(nitcad src/cli/main.cpp)
 target_link_libraries(nitcad PRIVATE NiTCAD::deck)
+
+# --- validation against published data (Unit 33; benchmarks/ decks) ----------------------
+add_executable(nitcad_validation_test tests/validation/published_test.cpp)
+target_link_libraries(nitcad_validation_test PRIVATE NiTCAD::deck Catch2::Catch2WithMain)
+target_compile_definitions(nitcad_validation_test PRIVATE
+  NITCAD_BENCHMARKS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/benchmarks")
+# The benchmarks solve many devices and pin measured gaps; they run in the Release configuration.
+if(CMAKE_BUILD_TYPE STREQUAL "Release")
+  add_test(NAME validation COMMAND nitcad_validation_test)
+endif()

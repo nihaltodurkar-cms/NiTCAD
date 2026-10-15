@@ -2436,6 +2436,8 @@ src/deck/                   syntax, values (private), build, run                
 src/cli/                    main.cpp: the nitcad batch runner (DK10, open to review)  (Unit 31)
 tests/io/                   record and file round trips, damage, atomic writes (Unit 29); device files (Unit 31)
 tests/deck/                 syntax, decks against hand-built devices, runs, restarts, the executable (Unit 31)
+tests/validation/           the benchmark decks against their cited published values (Unit 33)
+benchmarks/resistivity/     resistor decks, phosphorus and boron, for NBS SP 400-64 (Unit 33)
 include/NiTCAD/analysis/    curve.hpp, dc.hpp, cv.hpp, two_port.hpp                     (Unit 24)
 src/analysis/               extractors; common.hpp helpers (private)                    (Unit 24)
 tests/analysis/             synthetic curves and networks with exact figures            (Unit 24)
@@ -2447,7 +2449,8 @@ app/                        Win32 entry point                                (cr
 ```
 
 The layer names are decided (D5) and the namespace and include root are decided (Q1). Not part of the structure until
-the owner approves them in a unit request: `cmake/` (toolchain modules), `benchmarks/` (measured performance cases). A unit adds its headers, sources and tests together.
+the owner approves them in a unit request: `cmake/` (toolchain modules). `benchmarks/` was approved on 2026-10-15
+(Unit 33) for validation decks against published data. A unit adds its headers, sources and tests together.
 `tests/scaffold_test.cpp` sits outside `tests/<layer>/` because Unit 1 has no layer.
 
 ## 9. Build, test and warnings
@@ -2532,6 +2535,31 @@ These are the acceptance criteria the new units should meet. Source and verifica
 | Dimensional reduction | a transversely uniform 2D solution is y-independent to atol 1e-9 | [verified] `tests/test_validation_2d.py`. Legacy also reports 1.11e-16 V for 3D → 2D (`examples/05_3d_reduces_to_2d.py`, quoted in legacy `ARCHITECTURE.md` [unverified: not re-run]). New tolerances are set per unit. |
 | Mesh geometry | total volume/length matches the domain to 1e-14 (2D) / 1e-10 (3D) | [verified] `tests/test_validation_2d.py`, `tests/test_validation_3d.py` |
 
+### 10.1 Validation against published data (Unit 33; owner rulings 2026-10-15; DECISIONS.md V1–V6)
+
+Benchmarks are decks in `benchmarks/`, checked by the Release-only ctest `validation`
+(`tests/validation/published_test.cpp`) against values read from their cited sources. Disagreements are findings:
+each gap is pinned at its measured value (within 0.2 percentage points), and no model parameter was changed.
+
+| Benchmark | Reference | Result (simulated against reference) |
+|---|---|---|
+| Resistivity of phosphorus-doped Si, 1e14–1e19 cm⁻³, 300 K and 23 °C (6 decks) | Thurber et al., NBS SP 400-64 (1981), eq (1), table 9 (the basis of ASTM F723) | −8.8% to +3.9% at 300 K; the 23 °C gaps within 1 point of those |
+| Resistivity of boron-doped Si, 1e15–1e19 cm⁻³, 300 K and 23 °C (5 decks) | the same report, eq (4), table 12 | −4.4% and +3.4% at 1e15 and 1e16; **+30%, +48%, +23%** at 1e17, 1e18, 1e19 (the legacy Caughey–Thomas hole mobility, which the report finds a poor fit) |
+| The same with incomplete ionization (Unit 15) | the same | heavily doped bars far off: +31% and +138% (phosphorus 1e18, 1e19), +121% and +302% (boron 1e18, 1e19): the fixed 45 meV level does not lower with density |
+| Intrinsic density n_i(300 K), from √(np) of the solved 1e14 bar | Misiakos and Tsamakis, J. Appl. Phys. 74, 3293 (1993): (9.7 ± 0.1)e9 cm⁻³ | 1.0674e10, +10.0% (9.7 times the stated uncertainty): the legacy silicon set |
+
+The fits were transcribed from the report's OCR text. Reconstructed, not read: eq (1)'s + signs, its N₀ = 10¹⁶ cm⁻³,
+and table 12's boron N_ref decades (4.09 × 10¹⁸ at 300 K, 3.88 × 10¹⁸ at 23 °C), each fixed by the report's stated
+self-consistency between its two fits; the test checks every fit used against the report's other fit (V2; the
+reconstruction table is in DECISIONS.md, Unit 33). Not included (V6): Sze–Gibbons breakdown voltages (no accessible
+copy was read) and MOS C-V landmarks (analytic, not measured).
+
+**Unit 33 is a validation baseline only: it changes no physics.** Unsupported regimes it establishes (DECISIONS.md,
+Unit 33): boron mobility at 10¹⁷–10¹⁹ cm⁻³; incomplete ionization above about 10¹⁷ cm⁻³; absolute n_i-driven
+currents (about 21% high); doping outside the benchmarked range, other temperatures, compensated material and other
+dopants; and breakdown, MOS C-V, high-field, transient and small-signal behaviour, which no published benchmark yet
+covers.
+
 ## 11. Build order and long-term capability roadmap
 
 Each implemented unit is one branch, is independently tested, and is merged only on the owner's instruction. The table
@@ -2585,6 +2613,7 @@ built.
 | 30 | Newton line search (11.3) | solve, results | **done, on `main`** (`f3e2811`, PR #32): opt-in backtracking on the damped step, residual or natural test; benchmarked against step cutting (11.3, Unit 30; DECISIONS.md L1–L6) |
 | 31 | Device files, the text input deck and the batch runner (11.3) | io, deck | **done, on `main`** (`6f67510`, PR #37): device descriptions on disk, the deck (meshes of every kind, materials, doping, contacts, interfaces, models, solver options, equilibrium and steady sweeps, restart, outputs), `nitcad check|run` (6.5, Unit 31; DECISIONS.md DK1–DK11) |
 | 32 | Low-current accuracy: the weighted terminal current (11.3) | solve, assemble, results, io, analysis, deck | **done, on `main`** (`6e54c69`, PR #39): opt-in, the total current weighted by a conductance-weighted Laplace solution, so it is read where it is resolved; an adjoint error estimate; the MOSFET off state and sub-floor diode currents resolved (6.6, Unit 32; DECISIONS.md W1–W8) |
+| 33 | Validation against published data (11.3) | benchmarks, tests | **built, on branch `validation/published`**: resistivity against dopant density (NBS SP 400-64) for phosphorus and boron at 300 K and 23 °C, and the measured n_i(300 K), as decks in `benchmarks/` with a Release-only ctest; gaps reported and pinned, not tuned (10.1, Unit 33; DECISIONS.md V1–V6) |
 
 Units 1–9 are the smallest end-to-end vertical slice: a validated drift-diffusion diode. Everything past
 Unit 10 is deferred until sequenced. Units 11–15, 15b, 21 and 22 were requested by the owner after Unit 10; nothing
@@ -2642,7 +2671,7 @@ exists, not finished), **planned** (nothing built). Audit of 2026-10-09, against
 | Scalable linear solvers | Eigen SparseLU (default), PARDISO opt-in (Unit 18) | planned | Iterative Krylov with ILU/AMG behind `linalg`; parallel assembly |
 | Results and provenance | Plain-data results; run record with identity digest (6.6); sweeps persisted bit for bit (Unit 29) | partial | Build/version stamp in files; transient and small-signal results on disk |
 | Visualization, GUI, batch | The `nitcad check|run` batch runner over the input deck (Unit 31); no visualization or GUI (Units 25, 26) | **Batch runner verified, on `main`** (Unit 31; `6f67510`, PR #37); visualization and GUI planned | Rendering of meshes and fields (Unit 25), then the GUI over the same plan (Unit 26) |
-| Validation against published/measured data | Legacy, analytic and convergence gates throughout | partial | Published benchmark devices with cited data |
+| Validation against published/measured data | Legacy, analytic and convergence gates throughout; resistivity against dopant density (NBS SP 400-64) and the measured n_i(300 K) as benchmark decks (Unit 33, 10.1) | **Verified, on branch `validation/published`** (Unit 33): gaps found and pinned (boron mobility up to +48%, incomplete ionization at heavy doping, n_i +10%) | Owner decisions on the model findings (boron mobility, a density-dependent ionization level, n_i); breakdown and device-level benchmarks from accessible sources |
 
 **As built (Unit 28, bias step cutting; `solve::StepControl` in `solve/bias.hpp`; DECISIONS.md S1–S7):**
 - When a sweep point does not converge, the bias step to it is retried from the last converged state, halved until a
