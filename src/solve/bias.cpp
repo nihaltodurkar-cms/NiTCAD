@@ -13,6 +13,7 @@
 #include "NiTCAD/solve/equilibrium.hpp"
 #include "fields.hpp"
 #include "relocation.hpp"
+#include "weighted_current.hpp"
 #include "thermal.hpp"
 
 namespace NiTCAD::solve {
@@ -233,10 +234,17 @@ std::expected<results::Sweep, base::Error> sweep_bias(const device::Device& devi
                         : "initial state needs a finite potential for every node and positive "
                           "densities for every semiconductor node"));
     }
+    if (auto e = detail::check_weighted_current(options)) return std::unexpected(std::move(*e));
     auto scaling = assemble::make_scaling(device, options.Ns_override);
     if (!scaling) return std::unexpected(std::move(scaling.error()));
     auto solver = linalg::LinearSolver::create(options.linear);
     if (!solver) return std::unexpected(std::move(solver.error()));
+    std::optional<detail::WeightedCurrents> weighted;
+    if (options.weighted_current) {
+        auto w = detail::WeightedCurrents::create(device, options.linear);
+        if (!w) return std::unexpected(std::move(w.error()));
+        weighted.emplace(std::move(*w));
+    }
 
     // With step control, every attempt at a bias (the full step included) fails fast: a
     // diverging Newton run is cut after step_control.max_iterations rather than run to the end.
@@ -402,6 +410,9 @@ std::expected<results::Sweep, base::Error> sweep_bias(const device::Device& devi
                    }
                    detail::drift_diffusion_point(*system, x, *scaling, D, point);
                    if (thermal) point.thermal_bias_K = thermal_bias[k];
+                   if (weighted) {
+                       return weighted->fill(*system, x, newton.max_update, *scaling, D, point);
+                   }
                    return {};
                });
     return sweep;

@@ -57,7 +57,8 @@ struct Curve {
                                                            std::vector<double> resolution = {});
 
 // The swept contact's bias against the sense contact's terminal current, with its resolution
-// (left empty if any point lacks it). Errors: as make_curve; a contact out of range for a point.
+// (left empty if any point lacks it); a point with the weighted current (Unit 32) gives it and
+// its resolution instead. Errors: as make_curve; a contact out of range for a point.
 [[nodiscard]] std::expected<Curve, base::Error> current_curve(const results::Sweep& sweep,
                                                               std::size_t swept,
                                                               std::size_t sense);

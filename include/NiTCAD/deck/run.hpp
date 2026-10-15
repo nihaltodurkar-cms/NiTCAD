@@ -38,8 +38,9 @@ struct RunReport {
 [[nodiscard]] std::expected<RunReport, base::Error> run(const Plan& plan,
                                                         const solve::RunControl& control = {});
 
-// The CSV table (Outputs::table): a header "point,<contact> V...,<contact> A...,substeps" and one
-// row per point, every number with 17 significant digits.
+// The CSV table (Outputs::table): a header "point,<contact> V...,<contact> A...,substeps" (with the
+// weighted current, Unit 32, "<contact> weighted A..." and "<contact> weighted resolution A..."
+// before substeps) and one row per point, every number with 17 significant digits.
 [[nodiscard]] std::expected<void, base::Error> write_table(const std::filesystem::path& path,
                                                            const device::Device& device,
                                                            const results::Sweep& sweep);

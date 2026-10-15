@@ -16,6 +16,7 @@
 #include "NiTCAD/solve/newton.hpp"
 #include "fields.hpp"
 #include "thermal.hpp"
+#include "weighted_current.hpp"
 
 namespace NiTCAD::solve {
 
@@ -292,6 +293,13 @@ std::expected<results::Sweep, base::Error> trace_bias(const device::Device& devi
     auto system = assemble::DriftDiffusion::create(device, *scaling, steady.models);
     if (!system) return std::unexpected(std::move(system.error()));
     assemble::DriftDiffusion& dd = *system;
+    // Unit 32: the weighted current of every traced point (the first comes from sweep_bias).
+    std::optional<detail::WeightedCurrents> weighted;
+    if (steady.weighted_current) {
+        auto w = detail::WeightedCurrents::create(device, steady.linear);
+        if (!w) return std::unexpected(std::move(w.error()));
+        weighted.emplace(std::move(*w));
+    }
 
     // The starting point (sweep_bias checks the initial state).
     const std::vector<std::vector<double>> first{options.start_V};
@@ -543,6 +551,14 @@ std::expected<results::Sweep, base::Error> trace_bias(const device::Device& devi
         point.bias_V = bias;
         detail::drift_diffusion_point(dd, std::span(y).first(n), *scaling, D, point);
         if (thermal) point.thermal_bias_K = run.points.front().thermal_bias_K;
+        if (weighted) {
+            if (auto ok = weighted->fill(dd, std::span(y).first(n), steady.newton.max_update,
+                                         *scaling, D, point);
+                !ok) {
+                run.stopped = std::move(ok.error());
+                return run;
+            }
+        }
         if (dd.tunnelling()) {
             assemble::TunnelPaths traced = dd.trace_paths(std::span(y).first(n));
             if (!dd.paths_agree(traced, dd.paths(), std::span(y).first(n))) {

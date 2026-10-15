@@ -70,9 +70,9 @@ struct BiasPoint {
     // through any cut of the device can differ from it, from the continuity residuals and the
     // rounding of the large terms that cancel in them (assemble::DriftDiffusion::
     // terminal_current_resolution). A current below it is not resolved by the (psi, n, p) state,
-    // whose densities carry the current only as the small difference of two large fluxes;
-    // currents far below it need other unknowns (quasi-Fermi potentials). Zero for a gate and in
-    // the quasi-static sweep. (Unit 15.)
+    // whose densities carry the current only as the small difference of two large fluxes at the
+    // contact; weighted_current (below, Unit 32) reads it where it is resolved. Zero for a gate
+    // and in the quasi-static sweep. (Unit 15.)
     std::vector<double> terminal_current_resolution;
     // Charge on each gate electrode (a lumped gate or a meshed electrode), in C / cm^(3-D)
     // (C/cm^2 in 1D); zero for an ohmic contact. It balances the semiconductor charge and the
@@ -103,6 +103,17 @@ struct BiasPoint {
     // Bias step cutting (Unit 28; solve::StepControl): how many intermediate states were solved
     // on the way to this point after the full step failed; 0 when the full step converged.
     int bias_substeps = 0;
+    // The weighted terminal current (Unit 32; solve::BiasOptions::weighted_current; empty when
+    // off), same unit and sign as terminal_current: the total current through the device weighted
+    // by a function that is 1 on the contact and 0 on the other ohmic contacts, so it is read where
+    // the current is resolved (depletion regions, a channel), not as the difference of two large
+    // fluxes at a heavily doped contact. Equal to terminal_current for an exactly solved state;
+    // zero for a gate.
+    std::vector<double> weighted_current;
+    // Per contact, its accuracy: the change of weighted_current over one more Newton correction
+    // from this state (the adjoint estimate of the Newton residual's effect) plus the rounding of
+    // the weighted edge currents. Zero for a gate.
+    std::vector<double> weighted_current_resolution;
 };
 
 }  // namespace NiTCAD::results

@@ -78,6 +78,7 @@ cut_max_iterations = 30
 equilibrate = off
 min_pivot_ratio = 0
 Ns = 1e17
+weighted_current = on
 
 [output]
 sweep = out/diode.nitsweep
@@ -103,6 +104,7 @@ table = "iv table.csv"
     CHECK(o.linear.min_pivot_ratio == 0.0);
     REQUIRE(o.Ns_override.has_value());
     CHECK(*o.Ns_override == 1e17);
+    CHECK(o.weighted_current);
     CHECK(p.outputs.sweep == dir / "out/diode.nitsweep");
     CHECK(p.outputs.table == dir / "iv table.csv");
 

@@ -745,3 +745,91 @@ TEST_CASE("mosfet benchmark (Unit 30): step cutting alone, for comparison (12 mi
     CHECK(r.completed == 10);
     CHECK(r.worst < 1e-6);
 }
+
+TEST_CASE("mosfet: the off state through the weighted current (Unit 32)", "[.mosfet]") {
+    // The Id-Vg sweep of the legacy gates, Vds = 0.05 V, with the weighted current. Unit 24 found
+    // the drain current below Vg = -0.3 V under its resolution (rounding noise of the 1e19 source
+    // and drain's fluxes, about 1e-9 A/cm); the weighted current reads it where it flows.
+    const auto d = mosfet();
+    const double Vds = 0.05;
+    const auto Vg = linspace(-1.0, 1.0, 21);
+    std::vector<std::vector<double>> points;
+    for (const double v : Vg) points.push_back({0.0, Vds, 0.0, v});
+    solve::BiasOptions options;
+    options.weighted_current = true;
+    const auto sweep = solve::sweep_bias(d, points, options);
+    REQUIRE(sweep.has_value());
+    REQUIRE_FALSE(sweep->stopped.has_value());
+    std::vector<double> Id;
+    for (std::size_t k = 0; k < sweep->points.size(); ++k) {
+        const auto& p = sweep->points[k];
+        const double I = p.weighted_current[1], R = p.weighted_current_resolution[1];
+        CAPTURE(Vg[k], I, R, p.terminal_current[1], p.terminal_current_resolution[1]);
+        // Resolved at every gate bias, positive, and Kirchhoff to its resolution.
+        REQUIRE(I > 1e3 * R);
+        REQUIRE(p.weighted_current[3] == 0.0);
+        REQUIRE(std::abs(p.weighted_current[0] + p.weighted_current[1] + p.weighted_current[2]) <=
+                1e-12 * I + R);
+        // Where the contact current is resolved, the two agree within their resolutions.
+        if (std::abs(p.terminal_current[1]) > 10.0 * p.terminal_current_resolution[1]) {
+            REQUIRE(std::abs(I - p.terminal_current[1]) <= R + p.terminal_current_resolution[1]);
+        }
+        if (k > 0) REQUIRE(I > Id.back());  // the drain current rises with the gate bias
+        Id.push_back(I);
+    }
+    // Deep off (-1 to -0.8 V) the current no longer depends on the gate: the drain junction's
+    // leakage, within 2%.
+    REQUIRE(std::abs(Id[2] / Id[0] - 1.0) < 0.02);
+    // Subthreshold, -0.5 to 0 V: the swing per 0.1 V narrows towards threshold (the depletion
+    // capacitance falls as the surface potential rises) and ends at Unit 24's 70.55 mV/decade.
+    std::vector<double> swing;
+    for (std::size_t k = 5; k < 10; ++k) swing.push_back(100.0 / std::log10(Id[k + 1] / Id[k]));
+    CAPTURE(swing);
+    for (std::size_t k = 0; k + 1 < swing.size(); ++k) REQUIRE(swing[k + 1] < swing[k]);
+    REQUIRE(std::abs(swing.back() - 70.55) < 0.1);
+    // The extractors read the weighted current: the on/off ratio at -1 V is now a value.
+    const auto curve = analysis::current_curve(*sweep, 3, 1);
+    REQUIRE(curve.has_value());
+    const auto onoff = analysis::on_off_ratio(*curve, 1.0, -1.0);
+    REQUIRE(onoff.has_value());
+    REQUIRE_FALSE(onoff->below_resolution);
+    std::printf("mosfet weighted current: Id(-1 V) %.4e A/cm (resolution %.1e; contact current "
+                "%.2e, resolution %.1e), on/off %.3e, swing -0.5..0 V %.1f..%.2f mV/decade\n",
+                Id[0], sweep->points[0].weighted_current_resolution[1],
+                sweep->points[0].terminal_current[1], sweep->points[0].terminal_current_resolution[1],
+                onoff->value, swing.front(), swing.back());
+
+    // The plateau is not generation: without SRH it moves by a few percent, and the subthreshold
+    // current (diffusion along the channel, Vg = -0.2 V) by less than 1%. It is the minority
+    // electrons' diffusion through the p body into the drain. Finding: its rate
+    // I / (1 - exp(-Vds / V_T)) is not constant in Vds (+6% at 0.1 V, +19% at 0.2 V, measured):
+    // the drain's depletion region widens with Vds and shortens the base the electrons cross, so
+    // the 1D saturation law is no reference here; the rate is gated only to rise with Vds.
+    // (The quantitative check of the method is the diode's ideal-diode law, weighted_current_test.)
+    solve::BiasOptions no_srh = options;
+    no_srh.models.srh = false;
+    const std::vector<std::vector<double>> drain{{0.0, 0.05, 0.0, -1.0}, {0.0, 0.1, 0.0, -1.0},
+                                                 {0.0, 0.2, 0.0, -1.0}};
+    const auto quiet = solve::sweep_bias(d, drain, no_srh);
+    REQUIRE(quiet.has_value());
+    REQUIRE_FALSE(quiet->stopped.has_value());
+    const double V_T = 0.025852;
+    std::vector<double> rate;
+    for (const auto& p : quiet->points) {
+        REQUIRE(p.weighted_current[1] > 1e3 * p.weighted_current_resolution[1]);
+        rate.push_back(p.weighted_current[1] / -std::expm1(-p.bias_V[1] / V_T));
+    }
+    CAPTURE(rate);
+    REQUIRE(std::abs(quiet->points[0].weighted_current[1] / Id[0] - 1.0) < 0.1);
+    REQUIRE(rate[1] > rate[0]);
+    REQUIRE(rate[2] > rate[1]);
+    const auto sub = solve::sweep_bias(d, std::vector<std::vector<double>>{points[8]}, no_srh);
+    REQUIRE(sub.has_value());
+    REQUIRE_FALSE(sub->stopped.has_value());
+    REQUIRE(std::abs(sub->points[0].weighted_current[1] / Id[8] - 1.0) < 0.01);
+    std::printf("mosfet weighted current without SRH: Id(-1 V) %.4e A/cm (%.1f%% below), "
+                "Id(-0.2 V) %.1e relative change, rate at Vds 0.05/0.1/0.2 V %.4e %.4e %.4e\n",
+                quiet->points[0].weighted_current[1],
+                100.0 * (1.0 - quiet->points[0].weighted_current[1] / Id[0]),
+                sub->points[0].weighted_current[1] / Id[8] - 1.0, rate[0], rate[1], rate[2]);
+}

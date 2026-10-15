@@ -65,6 +65,17 @@ TEST_CASE("curve: reading a sweep's current, resolution and gate charge") {
     REQUIRE(!analysis::current_curve(s, 2, 0).has_value());
     REQUIRE(!analysis::current_curve(s, 1, 2).has_value());
     REQUIRE(!analysis::gate_charge_curve(s, 1, 2).has_value());
+
+    // Points with the weighted current (Unit 32) are read through it and its resolution.
+    s.points[1].terminal_current_resolution = {1e-3, 3e-3};
+    for (auto& p : s.points) {
+        p.weighted_current = {10.0 * p.terminal_current[0], 0.0};
+        p.weighted_current_resolution = {1e-9, 1e-9};
+    }
+    const auto w = analysis::current_curve(s, 1, 0);
+    REQUIRE(w.has_value());
+    REQUIRE(w->y == std::vector<double>{10.0, 20.0});
+    REQUIRE(w->resolution == std::vector<double>{1e-9, 1e-9});
 }
 
 TEST_CASE("curve: capacitance from a small-signal run") {

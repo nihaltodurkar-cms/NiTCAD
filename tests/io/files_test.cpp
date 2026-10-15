@@ -93,6 +93,8 @@ results::Sweep full_sweep() {
         p.thermal_bias_K = {300.0};
         p.thermal_contact_heat = {1e-4};
         p.bias_substeps = 3;
+        p.weighted_current = {3.5e-13, -3.5e-13};
+        p.weighted_current_resolution = {2.4e-19, 2.4e-19};
         s.points.push_back(p);
     }
     s.stopped = base::Error{ErrorCode::non_convergence, "no convergence at point 2",
@@ -138,6 +140,8 @@ void check_same(const results::BiasPoint& a, const results::BiasPoint& b) {
     CHECK(same_bits(a.thermal_bias_K, b.thermal_bias_K));
     CHECK(same_bits(a.thermal_contact_heat, b.thermal_contact_heat));
     CHECK(a.bias_substeps == b.bias_substeps);
+    CHECK(same_bits(a.weighted_current, b.weighted_current));
+    CHECK(same_bits(a.weighted_current_resolution, b.weighted_current_resolution));
 }
 
 void corrupt_byte(const fs::path& path, std::size_t at) {
@@ -344,4 +348,5 @@ TEST_CASE("files: a sweep written before Unit 30 (no step fractions) loads with 
     CHECK(it[1].step == 1.0);
     CHECK(it[1].update == 1e-9);
     CHECK(back->points[0].bias_substeps == 0);  // also absent: the Unit 28 default
+    CHECK(back->points[0].weighted_current.empty());  // and the Unit 32 fields
 }
