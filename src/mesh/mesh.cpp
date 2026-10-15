@@ -1,12 +1,15 @@
 #include "NiTCAD/mesh/mesh.hpp"
 
 #include <algorithm>
+#include <array>
+#include <bit>
 #include <cmath>
 #include <cstddef>
 #include <functional>
 #include <limits>
 #include <optional>
 #include <set>
+#include <span>
 #include <string>
 #include <utility>
 
@@ -30,7 +33,8 @@ constexpr double length_tolerance = 1e-12;
 std::expected<Mesh, base::Error> Mesh::from_parts(int dimension, std::vector<Point> points,
                                                   std::vector<double> volumes,
                                                   std::vector<Edge> edges,
-                                                  std::vector<BoundaryPatch> boundary) {
+                                                  std::vector<BoundaryPatch> boundary,
+                                                  MeshOrigin origin) {
     if (dimension < 1 || dimension > 3) {
         return std::unexpected(base::Error{base::ErrorCode::invalid_input,
                                            "mesh dimension must be 1, 2 or 3", std::nullopt});
@@ -89,6 +93,15 @@ std::expected<Mesh, base::Error> Mesh::from_parts(int dimension, std::vector<Poi
                                          "edge length differs from its endpoints' distance", e,
                                          edge.length));
         }
+        if (origin == MeshOrigin::tensor_grid) {
+            int differing = 0;
+            for (std::size_t c = 0; c < 3; ++c) differing += a[c] != b[c] ? 1 : 0;
+            if (differing != 1) {
+                return std::unexpected(error(base::ErrorCode::invalid_input,
+                                             "a tensor-grid mesh has an edge that is not axis-aligned",
+                                             e));
+            }
+        }
         pairs.emplace_back(edge.first, edge.second);
     }
     {
@@ -133,8 +146,33 @@ std::expected<Mesh, base::Error> Mesh::from_parts(int dimension, std::vector<Poi
         }
     }
 
+    // A 1D tensor grid (DECISIONS.md U16): in 1D every edge is axis-aligned, so the tag also needs
+    // the chain structure that makes region transitions fall on dual faces: nodes at strictly
+    // increasing x, and exactly the n - 1 edges joining x-consecutive nodes.
+    if (origin == MeshOrigin::tensor_grid && dimension == 1) {
+        std::vector<std::size_t> order(points.size());
+        for (std::size_t i = 0; i < order.size(); ++i) order[i] = i;
+        std::ranges::sort(order, [&](std::size_t l, std::size_t r) { return points[l][0] < points[r][0]; });
+        std::vector<std::size_t> rank(points.size());
+        for (std::size_t k = 0; k < order.size(); ++k) rank[order[k]] = k;
+        bool chain = edges.size() + 1 == points.size();
+        for (std::size_t k = 1; k < order.size() && chain; ++k) chain = points[order[k - 1]][0] < points[order[k]][0];
+        for (const Edge& edge : edges) {
+            const std::size_t ra = rank[static_cast<std::size_t>(edge.first)];
+            const std::size_t rb = rank[static_cast<std::size_t>(edge.second)];
+            chain = chain && (ra + 1 == rb || rb + 1 == ra);
+        }
+        if (!chain) {
+            return std::unexpected(base::Error{base::ErrorCode::invalid_input,
+                                               "a 1D tensor-grid mesh must be a chain: strictly increasing x, edges "
+                                               "joining x-consecutive nodes only",
+                                               std::nullopt});
+        }
+    }
+
     Mesh mesh;
     mesh.dimension_ = dimension;
+    mesh.origin_ = origin;
     mesh.points_ = std::move(points);
     mesh.volumes_ = std::move(volumes);
     mesh.edges_ = std::move(edges);
@@ -145,6 +183,51 @@ std::expected<Mesh, base::Error> Mesh::from_parts(int dimension, std::vector<Poi
 const BoundaryPatch* Mesh::find_boundary(std::string_view name) const noexcept {
     const auto it = std::ranges::find(boundary_, name, &BoundaryPatch::name);
     return it == boundary_.end() ? nullptr : &*it;
+}
+
+}  // namespace NiTCAD::mesh
+
+namespace NiTCAD::mesh {
+
+namespace {
+
+// FNV-1a 64 over little-endian 8-byte words: the io layer's container checksum and digests use the
+// same function, so a digest written by io::mesh_digest before this function existed is unchanged.
+void digest_word(std::uint64_t& h, std::uint64_t v) {
+    for (int i = 0; i < 8; ++i) {
+        h ^= (v >> (8 * i)) & 0xffU;
+        h *= 0x100000001b3ULL;
+    }
+}
+void digest_reals(std::uint64_t& h, std::span<const double> v) {
+    for (const double d : v) digest_word(h, std::bit_cast<std::uint64_t>(d));
+}
+
+}  // namespace
+
+std::uint64_t graph_digest(const Mesh& m) {
+    std::uint64_t h = 0xcbf29ce484222325ULL;
+    digest_word(h, static_cast<std::uint64_t>(m.dimension()));
+    digest_word(h, m.node_count());
+    for (const Point& p : m.points()) digest_reals(h, p);
+    digest_reals(h, m.volumes());
+    digest_word(h, m.edges().size());
+    for (const Edge& e : m.edges()) {
+        digest_word(h, static_cast<std::uint64_t>(e.first));
+        digest_word(h, static_cast<std::uint64_t>(e.second));
+        digest_reals(h, std::array{e.length, e.coupling_area});
+    }
+    digest_word(h, m.boundary().size());
+    for (const BoundaryPatch& b : m.boundary()) {
+        for (const char c : b.name) {
+            h ^= static_cast<std::uint64_t>(static_cast<unsigned char>(c));
+            h *= 0x100000001b3ULL;
+        }
+        digest_word(h, b.nodes.size());
+        for (const NodeId n : b.nodes) digest_word(h, static_cast<std::uint64_t>(n));
+        digest_reals(h, b.areas);
+    }
+    return h;
 }
 
 }  // namespace NiTCAD::mesh

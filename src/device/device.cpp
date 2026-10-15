@@ -379,6 +379,26 @@ std::expected<Device, base::Error> Device::create(DeviceDescription description)
                                            "the cells are not those of the mesh",
                                            base::ErrorContext{}});
     }
+    // DECISIONS.md U2, U16: a multi-region device on a mesh that is not a verified tensor grid
+    // (Mesh::from_parts checks the tag; in 1D also the chain structure) needs a P4
+    // certificate issued for this mesh and these node regions.
+    if (description.regions.size() > 1 &&
+        description.mesh.origin() != mesh::MeshOrigin::tensor_grid) {
+        if (!description.interface_certificate) {
+            return std::unexpected(base::Error{
+                base::ErrorCode::invalid_input,
+                "a multi-region device on a mesh that is not a tensor grid needs a P4 certificate "
+                "(mesh::certify_interfaces)",
+                base::ErrorContext{}});
+        }
+        if (!mesh::certifies(*description.interface_certificate, description.mesh,
+                             description.node_region)) {
+            return std::unexpected(base::Error{
+                base::ErrorCode::invalid_input,
+                "the P4 certificate is stale: it was issued for another mesh or other node regions",
+                base::ErrorContext{}});
+        }
+    }
     return Device{std::move(description)};
 }
 

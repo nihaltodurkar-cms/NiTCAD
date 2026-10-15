@@ -1,0 +1,1311 @@
+#include <algorithm>
+#include <array>
+#include <cmath>
+#include <cstddef>
+#include <cstdint>
+#include <deque>
+#include <map>
+#include <memory>
+#include <optional>
+#include <set>
+#include <string>
+#include <tuple>
+#include <utility>
+#include <vector>
+
+#include "NiTCAD/mesh/generate.hpp"
+#include "dual_geometry.hpp"
+#include "predicates.hpp"
+#include "triangulation2d.hpp"
+#include "triangulation3d.hpp"
+#include "vec_ops.hpp"
+
+namespace NiTCAD::mesh {
+
+namespace {
+
+using detail::Triangulation2D;
+using detail::Triangulation3D;
+using ErrorCode = base::ErrorCode;
+
+base::Error invalid(std::string message, std::optional<std::size_t> index = std::nullopt) {
+    return {ErrorCode::invalid_input, std::move(message), base::ErrorContext{.index = index, .value = std::nullopt}};
+}
+
+base::Error degenerate(std::string message) { return {ErrorCode::degenerate_mesh, std::move(message), std::nullopt}; }
+
+double dist3(const Point& a, const Point& b) { return std::sqrt(detail::dot3(detail::sub(a, b), detail::sub(a, b))); }
+
+// Collinear in 3D, exactly: collinear in all three coordinate projections.
+bool collinear(const Point& a, const Point& b, const Point& c) {
+    const auto proj = [](const Point& p, int i, int j) { return Point{p[static_cast<std::size_t>(i)], p[static_cast<std::size_t>(j)], 0.0}; };
+    for (const auto& [i, j] : {std::pair{0, 1}, std::pair{1, 2}, std::pair{0, 2}}) {
+        if (predicates::orient2d(proj(a, i, j), proj(b, i, j), proj(c, i, j)) != 0) return false;
+    }
+    return true;
+}
+
+// The circumcentre of a tetrahedron in double: for quality decisions only.
+Point circumcentre_fast(const Point& a, const Point& b, const Point& c, const Point& d) {
+    const Point u = detail::sub(b, a);
+    const Point v = detail::sub(c, a);
+    const Point w = detail::sub(d, a);
+    const double det = 2.0 * detail::dot3(u, detail::cross(v, w));
+    const Point num = detail::add(detail::add(detail::scale(detail::dot3(w, w), detail::cross(u, v)),
+                                              detail::scale(detail::dot3(v, v), detail::cross(w, u))),
+                                  detail::scale(detail::dot3(u, u), detail::cross(v, w)));
+    return detail::add(a, detail::scale(1.0 / det, num));
+}
+
+// The smallest dihedral angle of a tetrahedron [degrees].
+double min_dihedral(const std::array<Point, 4>& p) {
+    double best = 180.0;
+    for (std::size_t i = 0; i < 4; ++i) {
+        for (std::size_t j = i + 1; j < 4; ++j) {
+            std::size_t k = 0;
+            while (k == i || k == j) ++k;
+            std::size_t l = k + 1;
+            while (l == i || l == j) ++l;
+            const Point e = detail::sub(p[j], p[i]);
+            const double ee = detail::dot3(e, e);
+            const auto perp = [&](const Point& q) {
+                const Point r = detail::sub(q, p[i]);
+                return detail::sub(r, detail::scale(detail::dot3(r, e) / ee, e));
+            };
+            const Point u = perp(p[k]);
+            const Point v = perp(p[l]);
+            const double c = detail::dot3(u, v) / std::sqrt(detail::dot3(u, u) * detail::dot3(v, v));
+            best = std::min(best, std::acos(std::clamp(c, -1.0, 1.0)) * 180.0 / 3.141592653589793);
+        }
+    }
+    return best;
+}
+
+struct Face {
+    std::vector<std::size_t> vid;  // polyhedron vertex indices, in order
+    std::array<Point, 3> plane{};  // three non-collinear vertices
+    int inside = 0;                // the sign of orient3d(plane, x) for x inside the polyhedron
+    int axis = -1;                 // the coordinate constant on the face, or -1 (oblique)
+    Point origin{}, u{}, w{};      // an orthonormal frame in the plane (oblique faces)
+    std::vector<Point> local_polygon;  // counterclockwise in face coordinates
+    std::unique_ptr<Triangulation2D> tri;
+    std::vector<int> global;  // per face-triangulation vertex: the 3D vertex (-1: super)
+    std::map<int, int> local;  // 3D vertex -> face-triangulation vertex
+    Point off{};    // a polyhedron vertex off the face
+    int turn = 0;   // orient3d(v[k], v[k+1], q, off) for q inside the face
+    std::vector<std::vector<Point>> patch_local;  // the patch polygons, counterclockwise
+    std::vector<int> patch_id;                    // their indices among all patches
+    int whole_patch = -1;                         // with no tiling: the face's patch
+
+    // Whether a point on the face's plane lies in the closed face (exact).
+    [[nodiscard]] bool contains(const ConvexPolyhedron& d, const Point& q) const {
+        for (std::size_t k = 0; k < vid.size(); ++k) {
+            const int s = predicates::orient3d(d.vertices[vid[k]], d.vertices[vid[(k + 1) % vid.size()]], q, off);
+            if (s != 0 && s != turn) return false;
+        }
+        return true;
+    }
+
+    [[nodiscard]] Point to_local(const Point& p) const {
+        if (axis >= 0) {
+            const auto a = static_cast<std::size_t>((axis + 1) % 3);
+            const auto b = static_cast<std::size_t>((axis + 2) % 3);
+            return {p[a], p[b], 0.0};
+        }
+        const Point r = detail::sub(p, origin);
+        return {detail::dot3(r, u), detail::dot3(r, w), 0.0};
+    }
+    // Whether a face-coordinate point lies in the closed polygon.
+    [[nodiscard]] bool contains_local(const Point& q) const {
+        for (std::size_t i = 0; i < local_polygon.size(); ++i) {
+            if (predicates::orient2d(local_polygon[i], local_polygon[(i + 1) % local_polygon.size()], q) < 0) return false;
+        }
+        return true;
+    }
+};
+
+struct DomainEdge {
+    std::size_t a = 0;
+    std::size_t b = 0;
+    std::array<int, 2> faces{-1, -1};
+};
+
+struct Subsegment {
+    int a = 0;  // 3D vertices
+    int b = 0;
+    int edge = 0;  // a domain edge, or (a patch segment) the domain edge count plus its constraint
+    bool alive = true;
+    int face = -1;  // a patch segment: its face; -1 for a domain edge
+    bool locked = false;  // the segment across an interface crossing: never split (its midpoint is on it)
+};
+
+struct Generator3D {
+    const Geometry3D& g;
+    const MeshOptions3D& o;
+    std::vector<Face> faces;
+    std::vector<DomainEdge> edges;
+    std::vector<std::string> patch_names;           // the result's boundary patches
+    std::vector<std::pair<int, Point>> edge_pins;   // patch vertices inside domain edges (edge, point)
+    std::vector<std::pair<int, Point>> face_pins;   // patch vertices inside faces (face, point)
+    struct Constraint {
+        int face;
+        Point a;
+        Point b;
+    };
+    std::vector<Constraint> constraints;  // patch edges inside faces: edges of the mesh
+
+    // The face tilings (DECISIONS.md M9): each tiling polygon is a patch; its vertices on the
+    // face's plane and in the face; the polygons conforming (every edge either on the face's
+    // boundary or shared whole, in the opposite direction, by exactly one other polygon of the
+    // face) and their areas summing to the face's (1e-12). Patch names unique among all patches.
+    // Planar interfaces (6d).
+    struct Plane {
+        std::array<Point, 3> p{};
+        Point n{};       // unit normal, toward orient3d(p, x) > 0
+        Point u{}, w{};  // an orthonormal frame in the plane
+        std::vector<Point> polygon;     // the plane within the domain, in order
+        std::vector<int> polygon_edge;  // the domain edge each polygon vertex lies on
+        std::int32_t below = -1;        // the regions on the negative and positive sides
+        std::int32_t above = -1;
+    };
+    std::vector<Plane> planes;
+    double res = 0.0;  // the interface resolution s
+    std::map<std::vector<int>, std::int32_t> slab_region;
+
+    [[nodiscard]] static double signed_distance(const Plane& q, const Point& x) {
+        return detail::dot3(detail::sub(x, q.p[0]), q.n);
+    }
+    [[nodiscard]] std::vector<int> slab_of(const Point& x) const {
+        std::vector<int> key;
+        for (const Plane& q : planes) key.push_back(predicates::orient3d(q.p[0], q.p[1], q.p[2], x));
+        return key;
+    }
+    [[nodiscard]] std::optional<std::int32_t> region_at(const Point& x) const {
+        if (planes.empty()) return g.region;
+        const auto it = slab_region.find(slab_of(x));
+        if (it == slab_region.end()) return std::nullopt;
+        return it->second;
+    }
+
+    std::optional<base::Error> read_interfaces() {
+        const ConvexPolyhedron& d = g.domain;
+        if (g.interfaces.empty()) {
+            if (!g.regions.empty()) return invalid("region seeds are only for domains with interfaces");
+            return std::nullopt;
+        }
+        res = o.interface_resolution;
+        if (!(std::isfinite(res) && res > 0.0)) return invalid("interface_resolution must be finite and positive with interfaces");
+        for (std::size_t k = 0; k < g.interfaces.size(); ++k) {
+            const auto& pts = g.interfaces[k].points;
+            for (const Point& x : pts) {
+                if (!std::isfinite(x[0]) || !std::isfinite(x[1]) || !std::isfinite(x[2])) return invalid("interface point not finite", k);
+            }
+            if (collinear(pts[0], pts[1], pts[2])) return invalid("interface points are collinear", k);
+            Plane q;
+            q.p = pts;
+            const Point n = detail::cross(detail::sub(pts[1], pts[0]), detail::sub(pts[2], pts[0]));
+            q.n = detail::scale(1.0 / std::sqrt(detail::dot3(n, n)), n);
+            const Point e = detail::sub(pts[1], pts[0]);
+            q.u = detail::scale(1.0 / std::sqrt(detail::dot3(e, e)), e);
+            q.w = detail::cross(q.n, q.u);
+            bool neg = false;
+            bool pos = false;
+            for (const Point& v : d.vertices) {
+                const double dv = signed_distance(q, v);
+                if (!(std::abs(dv) >= 4.0 * res)) return invalid("an interface passes within 4 s of a polyhedron vertex", k);
+                (dv < 0.0 ? neg : pos) = true;
+            }
+            if (!neg || !pos) return invalid("an interface does not cut the domain", k);
+            // The polygon: the crossings of the domain edges, ordered by angle in the plane.
+            std::vector<std::pair<Point, int>> crossings;
+            Point centre{0, 0, 0};
+            for (std::size_t ei = 0; ei < edges.size(); ++ei) {
+                const Point& a = d.vertices[edges[ei].a];
+                const Point& b = d.vertices[edges[ei].b];
+                const double da = signed_distance(q, a);
+                const double db = signed_distance(q, b);
+                if ((da < 0.0) == (db < 0.0)) continue;
+                const double t = da / (da - db);
+                Point x{};
+                for (std::size_t c = 0; c < 3; ++c) x[c] = a[c] == b[c] ? a[c] : a[c] + t * (b[c] - a[c]);
+                crossings.emplace_back(x, static_cast<int>(ei));
+                centre = detail::add(centre, x);
+            }
+            centre = detail::scale(1.0 / static_cast<double>(crossings.size()), centre);
+            std::vector<std::tuple<double, Point, int>> around;
+            for (const auto& [x, ei] : crossings) {
+                const Point r = detail::sub(x, centre);
+                around.emplace_back(std::atan2(detail::dot3(r, q.w), detail::dot3(r, q.u)), x, ei);
+            }
+            std::ranges::sort(around);
+            for (const auto& [angle, x, ei] : around) {
+                q.polygon.push_back(x);
+                q.polygon_edge.push_back(ei);
+            }
+            // The faces it cuts: first no patches there and the angle with every cut face, then each
+            // trace against the crossed edges and its length.
+            std::vector<std::size_t> cut;
+            for (std::size_t fi = 0; fi < faces.size(); ++fi) {
+                bool fneg = false;
+                bool fpos = false;
+                for (const std::size_t v : faces[fi].vid) (signed_distance(q, d.vertices[v]) < 0.0 ? fneg : fpos) = true;
+                if (fneg && fpos) cut.push_back(fi);
+            }
+            const auto face_normal = [&](const Face& f) {
+                const Point nf = detail::cross(detail::sub(f.plane[1], f.plane[0]), detail::sub(f.plane[2], f.plane[0]));
+                return detail::scale(1.0 / std::sqrt(detail::dot3(nf, nf)), nf);
+            };
+            for (const std::size_t fi : cut) {
+                if (!d.faces[fi].patches.empty()) return invalid("an interface cuts a face that carries patches (deferred)", k);
+                if (!(std::abs(detail::dot3(face_normal(faces[fi]), q.n)) <= 0.5)) {
+                    return invalid("an interface meets a face at under 60 degrees", k);
+                }
+            }
+            for (const std::size_t fi : cut) {
+                const Point nf = face_normal(faces[fi]);
+                Point t = detail::cross(q.n, nf);
+                t = detail::scale(1.0 / std::sqrt(detail::dot3(t, t)), t);
+                std::vector<Point> ends;
+                for (std::size_t c = 0; c < q.polygon.size(); ++c) {
+                    const DomainEdge& de = edges[static_cast<std::size_t>(q.polygon_edge[c])];
+                    if (de.faces[0] != static_cast<int>(fi) && de.faces[1] != static_cast<int>(fi)) continue;
+                    Point ed = detail::sub(d.vertices[de.b], d.vertices[de.a]);
+                    ed = detail::scale(1.0 / std::sqrt(detail::dot3(ed, ed)), ed);
+                    if (!(std::abs(detail::dot3(ed, t)) <= 0.5)) {
+                        return invalid("an interface trace meets a domain edge at under 60 degrees", k);
+                    }
+                    ends.push_back(q.polygon[c]);
+                }
+                if (ends.size() != 2 || !(dist3(ends[0], ends[1]) >= 6.0 * res)) {
+                    return invalid("an interface trace on a face is shorter than 6 s", k);
+                }
+            }
+            planes.push_back(std::move(q));
+        }
+        // No two planes meet in the domain or come within 4 s: each polygon on one side of every
+        // other plane (the distance is linear on the polygon, so its vertices bound it).
+        for (std::size_t a = 0; a < planes.size(); ++a) {
+            for (std::size_t b = 0; b < planes.size(); ++b) {
+                if (a == b) continue;
+                int side = 0;
+                for (const Point& x : planes[a].polygon) {
+                    const double dx = signed_distance(planes[b], x);
+                    const int sx = dx < 0.0 ? -1 : 1;
+                    if (!(std::abs(dx) >= 4.0 * res) || (side != 0 && sx != side)) {
+                        return invalid("two interfaces meet in the domain or come within 4 s (no junction lines)", a);
+                    }
+                    side = sx;
+                }
+            }
+        }
+        // Regions: one seed per slab, k + 1 slabs, different regions across each plane.
+        for (std::size_t k = 0; k < g.regions.size(); ++k) {
+            const RegionSeed& r = g.regions[k];
+            if (r.region < 0) return invalid("region seed: region < 0", k);
+            if (!inside(r.p)) return invalid("region seed outside the domain", k);
+            const std::vector<int> key = slab_of(r.p);
+            if (std::ranges::find(key, 0) != key.end()) return invalid("region seed on an interface", k);
+            if (!slab_region.emplace(key, r.region).second) return invalid("two region seeds in one slab", k);
+        }
+        if (slab_region.size() != planes.size() + 1) return invalid("every slab needs one region seed");
+        for (std::size_t k = 0; k < planes.size(); ++k) {
+            for (const auto& [key, region] : slab_region) {
+                std::vector<int> other = key;
+                other[k] = -other[k];
+                const auto it = slab_region.find(other);
+                if (it == slab_region.end()) continue;
+                if (it->second == region) return invalid("the regions on the two sides of an interface must differ", k);
+                (key[k] < 0 ? planes[k].below : planes[k].above) = region;
+            }
+            if (planes[k].below < 0 || planes[k].above < 0) return invalid("an interface separates no two slabs", k);
+        }
+        return std::nullopt;
+    }
+
+    std::optional<base::Error> read_patches() {
+        const ConvexPolyhedron& d = g.domain;
+        std::map<std::pair<std::size_t, std::size_t>, int> edge_index;
+        for (std::size_t e = 0; e < edges.size(); ++e) edge_index[{edges[e].a, edges[e].b}] = static_cast<int>(e);
+        std::set<std::string> seen;
+        std::set<Point> pinned;
+        for (std::size_t fi = 0; fi < faces.size(); ++fi) {
+            const PolyhedronFace& in = d.faces[fi];
+            Face& face = faces[fi];
+            if (in.patches.empty()) {
+                if (!seen.insert(in.name).second) return invalid("patch names must be unique (a face's own name included)", fi);
+                face.whole_patch = static_cast<int>(patch_names.size());
+                patch_names.push_back(in.name);
+                continue;
+            }
+            const auto shoelace = [](const std::vector<Point>& v) {
+                double a = 0.0;
+                for (std::size_t k = 0; k < v.size(); ++k) a += v[k][0] * v[(k + 1) % v.size()][1] - v[(k + 1) % v.size()][0] * v[k][1];
+                return 0.5 * a;
+            };
+            double total = 0.0;
+            std::vector<std::array<Point, 2>> directed;
+            for (const FacePatch& p : in.patches) {
+                if (p.name.empty() || !seen.insert(p.name).second) return invalid("patch names must be non-empty and unique", fi);
+                if (p.vertices.size() < 3) return invalid("a patch polygon needs at least three vertices", fi);
+                std::vector<Point> v3 = p.vertices;
+                for (std::size_t k = 0; k < v3.size(); ++k) {
+                    const Point& q = v3[k];
+                    if (!std::isfinite(q[0]) || !std::isfinite(q[1]) || !std::isfinite(q[2])) return invalid("patch vertex not finite", fi);
+                    if (predicates::orient3d(face.plane[0], face.plane[1], face.plane[2], q) != 0) {
+                        return invalid("patch vertex not exactly on its face's plane", fi);
+                    }
+                    if (!face.contains(d, q)) return invalid("patch vertex outside its face", fi);
+                    if (q == v3[(k + 1) % v3.size()]) return invalid("patch polygon has a repeated consecutive vertex", fi);
+                }
+                std::vector<Point> loc;
+                for (const Point& q : v3) loc.push_back(face.to_local(q));
+                double area = shoelace(loc);
+                double extent = 0.0;
+                for (const Point& q : loc) extent = std::max(extent, std::hypot(q[0] - loc[0][0], q[1] - loc[0][1]));
+                if (!(std::abs(area) > 1e-14 * extent * extent)) return invalid("patch polygon has no area", fi);
+                if (area < 0.0) {
+                    std::ranges::reverse(loc);
+                    std::ranges::reverse(v3);
+                    area = -area;
+                }
+                total += area;
+                face.patch_local.push_back(loc);
+                face.patch_id.push_back(static_cast<int>(patch_names.size()));
+                patch_names.push_back(p.name);
+                for (std::size_t k = 0; k < v3.size(); ++k) directed.push_back({v3[k], v3[(k + 1) % v3.size()]});
+                for (const Point& q : v3) {
+                    if (std::ranges::find(d.vertices, q) != d.vertices.end() || !pinned.insert(q).second) continue;
+                    int on_edge = -1;
+                    for (std::size_t k = 0; k < face.vid.size() && on_edge < 0; ++k) {
+                        const std::size_t a = face.vid[k];
+                        const std::size_t b = face.vid[(k + 1) % face.vid.size()];
+                        if (collinear(d.vertices[a], d.vertices[b], q)) on_edge = edge_index.at({std::min(a, b), std::max(a, b)});
+                    }
+                    if (on_edge >= 0) {
+                        edge_pins.emplace_back(on_edge, q);
+                    } else {
+                        face_pins.emplace_back(static_cast<int>(fi), q);
+                    }
+                }
+            }
+            const double face_area = std::abs(shoelace(face.local_polygon));
+            if (!(std::abs(total - face_area) <= 1e-12 * face_area)) return invalid("the patches do not tile their face (areas differ)", fi);
+            for (const auto& [a, b] : directed) {
+                bool boundary = false;
+                for (std::size_t k = 0; k < face.vid.size() && !boundary; ++k) {
+                    const Point& p0 = d.vertices[face.vid[k]];
+                    const Point& p1 = d.vertices[face.vid[(k + 1) % face.vid.size()]];
+                    boundary = collinear(p0, p1, a) && collinear(p0, p1, b);
+                }
+                if (boundary) continue;
+                const auto twins = std::ranges::count_if(directed, [&](const std::array<Point, 2>& e) { return e[0] == b && e[1] == a; });
+                if (twins != 1) {
+                    return invalid("patch edges must lie on the face's boundary or be shared whole by two patches", fi);
+                }
+                if (a < b) constraints.push_back({static_cast<int>(fi), a, b});
+            }
+        }
+        return std::nullopt;
+    }
+
+
+    std::optional<base::Error> validate_options() const {
+        if (!(std::isfinite(o.max_size) && o.max_size > 0.0)) return invalid("max_size must be finite and positive");
+        for (std::size_t k = 0; k < o.boxes.size(); ++k) {
+            const SizeBox& b = o.boxes[k];
+            if (!(std::isfinite(b.max_size) && b.max_size > 0.0) ||
+                !(b.lo[0] <= b.hi[0] && b.lo[1] <= b.hi[1] && b.lo[2] <= b.hi[2])) {
+                return invalid("size box: max_size must be finite and positive, lo <= hi", k);
+            }
+        }
+        if (!(std::isfinite(o.radius_edge) && o.radius_edge >= 1.414)) return invalid("radius_edge must be finite and >= 1.414");
+        if (g.region < 0) return invalid("region must be >= 0");
+        for (const double h : o.region_max_size) {
+            if (!(std::isfinite(h) && h >= 0.0)) return invalid("region_max_size entries must be finite and >= 0");
+        }
+        if (o.max_nodes < 4) return invalid("max_nodes must be at least 4");
+        return std::nullopt;
+    }
+
+    std::optional<base::Error> read_polyhedron() {
+        const ConvexPolyhedron& d = g.domain;
+        if (d.vertices.size() < 4 || d.faces.size() < 4) return invalid("a polyhedron needs at least four vertices and faces");
+        for (std::size_t i = 0; i < d.vertices.size(); ++i) {
+            for (const double c : d.vertices[i]) {
+                if (!std::isfinite(c)) return invalid("polyhedron vertex not finite", i);
+            }
+            for (std::size_t j = 0; j < i; ++j) {
+                if (d.vertices[i] == d.vertices[j]) return invalid("polyhedron vertices repeated", i);
+            }
+        }
+        std::set<std::string> names;
+        std::map<std::pair<std::size_t, std::size_t>, std::vector<int>> edge_faces;
+        std::vector<int> used(d.vertices.size(), 0);
+        for (std::size_t f = 0; f < d.faces.size(); ++f) {
+            const PolyhedronFace& in = d.faces[f];
+            if (in.name.empty() || !names.insert(in.name).second) return invalid("face names must be non-empty and unique", f);
+            if (in.vertices.size() < 3) return invalid("a face needs at least three vertices", f);
+            std::set<std::size_t> distinct;
+            for (const std::size_t v : in.vertices) {
+                if (v >= d.vertices.size()) return invalid("face vertex index out of range", f);
+                if (!distinct.insert(v).second) return invalid("face vertex repeated", f);
+                used[v] = 1;
+            }
+            Face face;
+            face.vid = in.vertices;
+            const auto P = [&](std::size_t k) -> const Point& { return d.vertices[in.vertices[k % in.vertices.size()]]; };
+            // A non-collinear triple of consecutive vertices defines the plane.
+            bool found = false;
+            for (std::size_t k = 0; k < in.vertices.size() && !found; ++k) {
+                if (!collinear(P(k), P(k + 1), P(k + 2))) {
+                    face.plane = {P(k), P(k + 1), P(k + 2)};
+                    found = true;
+                }
+            }
+            if (!found) return invalid("face has no area", f);
+            for (std::size_t k = 0; k < in.vertices.size(); ++k) {
+                if (predicates::orient3d(face.plane[0], face.plane[1], face.plane[2], P(k)) != 0) {
+                    return invalid("face is not planar", f);
+                }
+            }
+            // The other vertices: strictly on one side (convexity); a vertex on the plane would
+            // lie on this face without being one of its vertices.
+            for (std::size_t v = 0; v < d.vertices.size(); ++v) {
+                if (distinct.contains(v)) continue;
+                const int s = predicates::orient3d(face.plane[0], face.plane[1], face.plane[2], d.vertices[v]);
+                if (s == 0) return invalid("a polyhedron vertex lies on the plane of a face it is not a vertex of", f);
+                if (face.inside == 0) face.inside = s;
+                if (s != face.inside) return invalid("the polyhedron is not convex (DECISIONS.md M6, U7)", f);
+            }
+            // Convex and simple in its plane: every vertex strictly on the same side of every
+            // edge, seen from a point off the plane.
+            Point off{};
+            for (std::size_t v = 0; v < d.vertices.size(); ++v) {
+                if (!distinct.contains(v)) {
+                    off = d.vertices[v];
+                    break;
+                }
+            }
+            int turn = 0;
+            for (std::size_t k = 0; k < in.vertices.size(); ++k) {
+                for (std::size_t m = 0; m < in.vertices.size(); ++m) {
+                    if (m == k || m == (k + 1) % in.vertices.size()) continue;
+                    const int s = predicates::orient3d(P(k), P(k + 1), P(m), off);
+                    if (s == 0 || (turn != 0 && s != turn)) return invalid("face is not strictly convex and simple", f);
+                    turn = s;
+                }
+                const std::size_t a = in.vertices[k];
+                const std::size_t b = in.vertices[(k + 1) % in.vertices.size()];
+                edge_faces[{std::min(a, b), std::max(a, b)}].push_back(static_cast<int>(f));
+            }
+            face.off = off;
+            face.turn = turn;
+            for (int axis = 0; axis < 3 && face.axis < 0; ++axis) {
+                const auto ax = static_cast<std::size_t>(axis);
+                if (std::ranges::all_of(in.vertices, [&](std::size_t v) { return d.vertices[v][ax] == P(0)[ax]; })) {
+                    face.axis = axis;
+                }
+            }
+            if (face.axis < 0) {
+                face.origin = face.plane[0];
+                const Point e = detail::sub(face.plane[1], face.plane[0]);
+                face.u = detail::scale(1.0 / std::sqrt(detail::dot3(e, e)), e);
+                Point n = detail::cross(e, detail::sub(face.plane[2], face.plane[0]));
+                n = detail::scale(1.0 / std::sqrt(detail::dot3(n, n)), n);
+                face.w = detail::cross(n, face.u);
+            }
+            for (std::size_t k = 0; k < in.vertices.size(); ++k) face.local_polygon.push_back(face.to_local(P(k)));
+            double area = 0.0;
+            for (std::size_t k = 0; k < face.local_polygon.size(); ++k) {
+                const Point& a = face.local_polygon[k];
+                const Point& b = face.local_polygon[(k + 1) % face.local_polygon.size()];
+                area += a[0] * b[1] - b[0] * a[1];
+            }
+            if (area < 0.0) std::ranges::reverse(face.local_polygon);
+            faces.push_back(std::move(face));
+        }
+        if (std::ranges::find(used, 0) != used.end()) return invalid("a polyhedron vertex is in no face");
+        for (const auto& [key, fs] : edge_faces) {
+            if (fs.size() != 2) return invalid("the polyhedron is not closed: an edge is not in exactly two faces", key.first);
+            edges.push_back({key.first, key.second, {fs[0], fs[1]}});
+        }
+        const auto euler = static_cast<long long>(d.vertices.size()) - static_cast<long long>(edges.size()) +
+                           static_cast<long long>(d.faces.size());
+        if (euler != 2) return invalid("the polyhedron is not a closed convex surface (V - E + F != 2)");
+        return std::nullopt;
+    }
+
+    [[nodiscard]] bool inside(const Point& p) const {
+        for (const Face& f : faces) {
+            const int s = predicates::orient3d(f.plane[0], f.plane[1], f.plane[2], p);
+            if (s != 0 && s != f.inside) return false;
+        }
+        return true;
+    }
+
+    [[nodiscard]] double region_size(std::int32_t r) const {
+        double h = o.max_size;
+        if (r >= 0 && static_cast<std::size_t>(r) < o.region_max_size.size() && o.region_max_size[static_cast<std::size_t>(r)] > 0.0) {
+            h = std::min(h, o.region_max_size[static_cast<std::size_t>(r)]);
+        }
+        return h;
+    }
+
+    [[nodiscard]] double size_at(const Point& p) const {
+        const auto r = region_at(p);
+        double h = r ? region_size(*r) : o.max_size;
+        if (!r) {
+            for (const auto& [key, region] : slab_region) h = std::min(h, region_size(region));
+        }
+        for (const SizeBox& b : o.boxes) {
+            if (p[0] >= b.lo[0] && p[0] <= b.hi[0] && p[1] >= b.lo[1] && p[1] <= b.hi[1] && p[2] >= b.lo[2] &&
+                p[2] <= b.hi[2]) {
+                h = std::min(h, b.max_size);
+            }
+        }
+        return h;
+    }
+
+    [[nodiscard]] double volume() const {
+        // Sum over faces of the fan tetrahedra from the first vertex of the polyhedron.
+        const Point& apex = g.domain.vertices[0];
+        double v = 0.0;
+        for (const Face& f : faces) {
+            const auto P = [&](std::size_t k) -> const Point& { return g.domain.vertices[f.vid[k]]; };
+            for (std::size_t k = 1; k + 1 < f.vid.size(); ++k) {
+                v += std::abs(detail::dot3(detail::sub(P(0), apex),
+                                           detail::cross(detail::sub(P(k), apex), detail::sub(P(k + 1), apex)))) / 6.0;
+            }
+        }
+        return v;
+    }
+};
+
+}  // namespace
+
+std::expected<GeneratedMesh, base::Error> generate_mesh(const Geometry3D& geometry, const MeshOptions3D& options) {
+    Generator3D gen{geometry, options, {}, {}};
+    if (auto e = gen.validate_options()) return std::unexpected(*e);
+    if (auto e = gen.read_polyhedron()) return std::unexpected(*e);
+    if (auto e = gen.read_patches()) return std::unexpected(*e);
+    if (auto e = gen.read_interfaces()) return std::unexpected(*e);
+    const ConvexPolyhedron& d = geometry.domain;
+    if (d.vertices.size() > options.max_nodes) {
+        return std::unexpected(base::Error{ErrorCode::resource_exhausted, "max_nodes reached", std::nullopt});
+    }
+
+    Point lo = d.vertices[0];
+    Point hi = d.vertices[0];
+    for (const Point& p : d.vertices) {
+        for (std::size_t k = 0; k < 3; ++k) {
+            lo[k] = std::min(lo[k], p[k]);
+            hi[k] = std::max(hi[k], p[k]);
+        }
+    }
+    Triangulation3D tri(lo, hi);
+    // Per 3D vertex (super vertices included): the faces and domain edges it lies on.
+    std::vector<std::vector<int>> faces_of(4);
+    std::vector<std::vector<int>> edges_of(4);
+    std::vector<std::vector<int>> segments_of(4);  // the subsegments it ends
+
+    std::deque<int> tet_queue;
+    std::deque<std::pair<int, int>> facet_queue;  // (face, face-triangulation triangle)
+    std::deque<int> segment_queue;
+    std::vector<Subsegment> segments;
+    std::map<std::pair<int, int>, int> segment_at;
+    MeshReport report;
+
+    for (Face& f : gen.faces) {
+        Point flo = f.local_polygon[0];
+        Point fhi = f.local_polygon[0];
+        for (const Point& q : f.local_polygon) {
+            flo = {std::min(flo[0], q[0]), std::min(flo[1], q[1]), 0.0};
+            fhi = {std::max(fhi[0], q[0]), std::max(fhi[1], q[1]), 0.0};
+        }
+        f.tri = std::make_unique<Triangulation2D>(flo, fhi);
+        f.global = {-1, -1, -1};
+    }
+
+    const auto queue_face_triangles = [&](int fi, const std::vector<int>& ts) {
+        for (const int t : ts) facet_queue.emplace_back(fi, t);
+    };
+
+    // Inserts a point into the tetrahedralization and into the triangulations of its faces.
+    const auto insert = [&](const Point& p, const std::vector<int>& on_faces, const std::vector<int>& on_edges,
+                            int hint) -> int {
+        const int start = tri.locate(p, hint >= 0 ? hint : tri.last_tet());
+        const auto cav = tri.cavity(p, start);
+        const int v = tri.insert(p, cav);
+        faces_of.push_back(on_faces);
+        edges_of.push_back(on_edges);
+        segments_of.emplace_back();
+        for (const int t : tri.created()) tet_queue.push_back(t);
+        for (const int fi : on_faces) {
+            Face& f = gen.faces[static_cast<std::size_t>(fi)];
+            const std::size_t before = f.tri->triangle_slots();
+            const Point q = f.to_local(p);
+            const int at = f.tri->locate(q, f.tri->last_triangle());
+            const auto fc = f.tri->cavity(q, at);
+            const int lv = f.tri->insert(q, fc);
+            if (static_cast<std::size_t>(lv) >= f.global.size()) f.global.resize(static_cast<std::size_t>(lv) + 1, -1);
+            f.global[static_cast<std::size_t>(lv)] = v;
+            f.local[v] = lv;
+            std::vector<int> fresh;
+            for (const int t : fc.triangles) {
+                if (f.tri->triangle(t).alive) fresh.push_back(t);
+            }
+            for (std::size_t t = before; t < f.tri->triangle_slots(); ++t) fresh.push_back(static_cast<int>(t));
+            queue_face_triangles(fi, fresh);
+        }
+        // The subfacets and subsegments around the cavity may now be encroached by p.
+        std::set<int> around;
+        for (const int t : tri.created()) {
+            for (const int x : tri.tet(t).v) {
+                if (x != v && !tri.is_super(x)) around.insert(x);
+            }
+        }
+        for (const int x : around) {
+            for (const int fi : faces_of[static_cast<std::size_t>(x)]) {
+                const Face& f = gen.faces[static_cast<std::size_t>(fi)];
+                queue_face_triangles(fi, f.tri->incident(f.local.at(x)));
+            }
+            for (const int s : segments_of[static_cast<std::size_t>(x)]) segment_queue.push_back(s);
+        }
+        return v;
+    };
+
+    const auto add_segment = [&](int a, int b, int edge) {
+        const int k = static_cast<int>(segments.size());
+        segments.push_back({a, b, edge, true});
+        segment_at[{std::min(a, b), std::max(a, b)}] = k;
+        segments_of[static_cast<std::size_t>(a)].push_back(k);
+        segments_of[static_cast<std::size_t>(b)].push_back(k);
+        segment_queue.push_back(k);
+    };
+
+    // The polyhedron's vertices, in BRIO order.
+    std::vector<int> vertex_of(d.vertices.size(), -1);
+    for (const std::size_t i : detail::brio_order(d.vertices)) {
+        std::vector<int> fs;
+        for (std::size_t f = 0; f < gen.faces.size(); ++f) {
+            if (std::ranges::find(gen.faces[f].vid, i) != gen.faces[f].vid.end()) fs.push_back(static_cast<int>(f));
+        }
+        std::vector<int> es;
+        for (std::size_t e = 0; e < gen.edges.size(); ++e) {
+            if (gen.edges[e].a == i || gen.edges[e].b == i) es.push_back(static_cast<int>(e));
+        }
+        vertex_of[i] = insert(d.vertices[i], fs, es, -1);
+    }
+    // Patch vertices: inside domain edges (on both faces of the edge) and inside faces.
+    std::map<Point, int> vertex_at;
+    for (std::size_t i = 0; i < d.vertices.size(); ++i) vertex_at[d.vertices[i]] = vertex_of[i];
+    for (const auto& [e, q] : gen.edge_pins) {
+        const DomainEdge& de = gen.edges[static_cast<std::size_t>(e)];
+        vertex_at[q] = insert(q, {de.faces[0], de.faces[1]}, {e}, -1);
+    }
+    for (const auto& [fi, q] : gen.face_pins) vertex_at[q] = insert(q, {fi}, {}, -1);
+    const int corner_end = static_cast<int>(tri.vertex_count());  // polyhedron and patch vertices end here
+    // Interface nodes (M7, 6d).
+    std::vector<char> interface_node(tri.vertex_count(), 0);
+    const auto mark_interface = [&](int v) {
+        if (static_cast<std::size_t>(v) >= interface_node.size()) interface_node.resize(static_cast<std::size_t>(v) + 1, 0);
+        interface_node[static_cast<std::size_t>(v)] = 1;
+    };
+    struct Trace {
+        int plane;
+        int face;
+        Point start;  // on a domain edge
+        Point dir;    // unit, along the trace
+        Point normal; // unit, in the face, across the trace
+        double length;
+        std::vector<double> params;  // the pair positions along the trace
+    };
+    std::vector<Trace> traces;
+    std::vector<std::pair<int, int>> protected_ends;  // the two crossing nodes of each crossed edge
+    double band = 0.0;
+    const auto snap = [&](const Face& f, Point p) {
+        if (f.axis >= 0) p[static_cast<std::size_t>(f.axis)] = f.plane[0][static_cast<std::size_t>(f.axis)];
+        return p;
+    };
+    for (std::size_t k = 0; k < gen.planes.size(); ++k) {
+        const auto& q = gen.planes[k];
+        const double hp = std::min({gen.region_size(q.below), gen.region_size(q.above), 4.0 * gen.res});
+        band = std::max(band, std::sqrt(hp * hp / 3.0 + gen.res * gen.res / 4.0));
+        // On each crossed domain edge: nodes at +- s/2 from the crossing.
+        for (std::size_t c = 0; c < q.polygon.size(); ++c) {
+            const int e = q.polygon_edge[c];
+            const DomainEdge& de = gen.edges[static_cast<std::size_t>(e)];
+            const Point& A = d.vertices[de.a];
+            const Point& B = d.vertices[de.b];
+            const Point ed = detail::scale(1.0 / dist3(A, B), detail::sub(B, A));
+            std::array<int, 2> ends{};
+            for (std::size_t side = 0; side < 2; ++side) {
+                Point x = detail::add(q.polygon[c], detail::scale(side == 0 ? -0.5 * gen.res : 0.5 * gen.res, ed));
+                for (std::size_t a = 0; a < 3; ++a) {
+                    if (A[a] == B[a]) x[a] = A[a];
+                }
+                ends[side] = insert(x, {de.faces[0], de.faces[1]}, {e}, -1);
+                vertex_at[x] = ends[side];
+                gen.edge_pins.emplace_back(e, x);
+                mark_interface(ends[side]);
+            }
+            protected_ends.emplace_back(std::min(ends[0], ends[1]), std::max(ends[0], ends[1]));
+        }
+        // Along each trace in a cut face: pairs at +- s/2 within the face, graded from each end.
+        for (std::size_t fi = 0; fi < gen.faces.size(); ++fi) {
+            const Face& f = gen.faces[fi];
+            std::vector<Point> ends;
+            for (std::size_t c = 0; c < q.polygon.size(); ++c) {
+                const DomainEdge& de = gen.edges[static_cast<std::size_t>(q.polygon_edge[c])];
+                if (de.faces[0] == static_cast<int>(fi) || de.faces[1] == static_cast<int>(fi)) ends.push_back(q.polygon[c]);
+            }
+            if (ends.size() != 2) continue;
+            Trace tr;
+            tr.plane = static_cast<int>(k);
+            tr.face = static_cast<int>(fi);
+            tr.start = ends[0];
+            tr.length = dist3(ends[0], ends[1]);
+            tr.dir = detail::scale(1.0 / tr.length, detail::sub(ends[1], ends[0]));
+            Point nf = detail::cross(detail::sub(f.plane[1], f.plane[0]), detail::sub(f.plane[2], f.plane[0]));
+            Point m = detail::cross(nf, tr.dir);
+            tr.normal = detail::scale(1.0 / std::sqrt(detail::dot3(m, m)), m);
+            const double L = tr.length;
+            const double s = gen.res;
+            std::vector<double> at{1.5 * s, 3.0 * s};
+            const auto intervals = static_cast<int>(std::ceil((L - 6.0 * s) / hp));
+            for (int i = 1; i < intervals; ++i) at.push_back(3.0 * s + (L - 6.0 * s) * i / intervals);
+            at.push_back(L - 3.0 * s);
+            at.push_back(L - 1.5 * s);
+            std::ranges::sort(at);
+            at.erase(std::unique(at.begin(), at.end(), [&](double x, double y) { return y - x < 0.25 * s; }), at.end());
+            for (const double t : at) {
+                const Point c = detail::add(tr.start, detail::scale(t, tr.dir));
+                for (const double sign : {-0.5, 0.5}) {
+                    const Point x = snap(f, detail::add(c, detail::scale(sign * s, tr.normal)));
+                    const int v = insert(x, {static_cast<int>(fi)}, {}, -1);
+                    mark_interface(v);
+                }
+            }
+            tr.params = at;
+            traces.push_back(std::move(tr));
+        }
+        // The pair set P on the polygon inset by 1.5 s, from the 2D generator.
+        std::vector<Point> local;
+        for (const Point& x : q.polygon) {
+            const Point r = detail::sub(x, q.p[0]);
+            local.push_back({detail::dot3(r, q.u), detail::dot3(r, q.w), 0.0});
+        }
+        std::vector<Point> inset;
+        const std::size_t nv = local.size();
+        for (std::size_t i = 0; i < nv; ++i) {
+            // The offset lines of the edges into and out of vertex i, moved 1.5 s inward (the
+            // polygon is counterclockwise in (u, w)).
+            const auto offset_line = [&](std::size_t a, std::size_t b) {
+                const Point dd = detail::sub(local[b], local[a]);
+                const double len = std::hypot(dd[0], dd[1]);
+                const Point in{-dd[1] / len, dd[0] / len, 0.0};
+                return std::pair{detail::add(local[a], detail::scale(1.5 * gen.res, in)), dd};
+            };
+            const auto [p1, d1] = offset_line((i + nv - 1) % nv, i);
+            const auto [p2, d2] = offset_line(i, (i + 1) % nv);
+            const double den = d1[0] * d2[1] - d1[1] * d2[0];
+            const double t = ((p2[0] - p1[0]) * d2[1] - (p2[1] - p1[1]) * d2[0]) / den;
+            inset.push_back({p1[0] + t * d1[0], p1[1] + t * d1[1], 0.0});
+        }
+        MeshOptions2D o2;
+        o2.max_size = hp;
+        o2.max_nodes = options.max_nodes;
+        const auto pairs = generate_mesh(Geometry2D{{RegionPolygon{inset, 0}}, {}}, o2);
+        if (!pairs) {
+            return std::unexpected(invalid("the pair set of an interface could not be meshed: " + pairs.error().message, k));
+        }
+        for (const Point& a : pairs->simplices.points) {
+            const Point x = detail::add(q.p[0], detail::add(detail::scale(a[0], q.u), detail::scale(a[1], q.w)));
+            for (const double sign : {-0.5, 0.5}) {
+                if (tri.vertex_count() - 4 >= options.max_nodes) {
+                    return std::unexpected(base::Error{ErrorCode::resource_exhausted, "max_nodes reached", std::nullopt});
+                }
+                mark_interface(insert(detail::add(x, detail::scale(sign * gen.res, q.n)), {}, {}, -1));
+            }
+        }
+    }
+    // The domain edges' subsegments, between consecutive vertices along each edge.
+    for (std::size_t e = 0; e < gen.edges.size(); ++e) {
+        const Point& A = d.vertices[gen.edges[e].a];
+        const Point& B = d.vertices[gen.edges[e].b];
+        const Point dir = detail::sub(B, A);
+        std::vector<std::pair<double, int>> along{{0.0, vertex_of[gen.edges[e].a]}, {1.0, vertex_of[gen.edges[e].b]}};
+        for (const auto& [pe, q] : gen.edge_pins) {
+            if (pe == static_cast<int>(e)) along.emplace_back(detail::dot3(detail::sub(q, A), dir) / detail::dot3(dir, dir), vertex_at.at(q));
+        }
+        std::ranges::sort(along);
+        for (std::size_t k = 0; k + 1 < along.size(); ++k) add_segment(along[k].second, along[k + 1].second, static_cast<int>(e));
+    }
+    for (const auto& [a, b] : protected_ends) {
+        const auto it = segment_at.find({a, b});
+        if (it != segment_at.end()) segments[static_cast<std::size_t>(it->second)].locked = true;
+    }
+    // Patch edges inside faces: constrained subsegments of their face (line ids after the edges).
+    const auto edge_count = static_cast<int>(gen.edges.size());
+    for (std::size_t c = 0; c < gen.constraints.size(); ++c) {
+        const auto& con = gen.constraints[c];
+        const int a = vertex_at.at(con.a);
+        const int b = vertex_at.at(con.b);
+        const int line = edge_count + static_cast<int>(c);
+        edges_of[static_cast<std::size_t>(a)].push_back(line);
+        edges_of[static_cast<std::size_t>(b)].push_back(line);
+        add_segment(a, b, line);
+        segments.back().face = con.face;
+    }
+    // Input vertices (polyhedron and patch vertices) are the centres of concentric shells.
+    const auto is_corner = [&](int v) { return v >= 4 && v < corner_end; };
+    const auto is_interface = [&](int v) {
+        return static_cast<std::size_t>(v) < interface_node.size() && interface_node[static_cast<std::size_t>(v)] != 0;
+    };
+    const auto in_band = [&](const Point& x) {
+        return std::ranges::any_of(gen.planes, [&](const auto& q) { return std::abs(Generator3D::signed_distance(q, x)) < band; });
+    };
+
+    const auto common_face = [&](std::initializer_list<int> vs) -> int {
+        const std::vector<int>& first = faces_of[static_cast<std::size_t>(*vs.begin())];
+        for (const int f : first) {
+            if (std::ranges::all_of(vs, [&](int x) {
+                    return std::ranges::find(faces_of[static_cast<std::size_t>(x)], f) != faces_of[static_cast<std::size_t>(x)].end();
+                })) {
+                return f;
+            }
+        }
+        return -1;
+    };
+    const auto on_one_edge = [&](std::initializer_list<int> vs) {
+        const std::vector<int>& first = edges_of[static_cast<std::size_t>(*vs.begin())];
+        return std::ranges::any_of(first, [&](int e) {
+            return std::ranges::all_of(vs, [&](int x) {
+                return std::ranges::find(edges_of[static_cast<std::size_t>(x)], e) != edges_of[static_cast<std::size_t>(x)].end();
+            });
+        });
+    };
+
+    // The 3D tetrahedra holding vertices a and b (and c, when c >= 0).
+    const auto tets_with = [&](int a, int b, int c) {
+        std::vector<int> out;
+        for (const int t : tri.incident(a)) {
+            const auto& v = tri.tet(t).v;
+            if (std::ranges::find(v, b) == v.end()) continue;
+            if (c >= 0 && std::ranges::find(v, c) == v.end()) continue;
+            out.push_back(t);
+        }
+        return out;
+    };
+
+    const auto segment_encroached = [&](const Subsegment& s) {
+        if (s.face >= 0) {
+            // A patch segment: an edge of its face's triangulation with no apex strictly inside its
+            // diametral circle (in face coordinates).
+            const Face& f = gen.faces[static_cast<std::size_t>(s.face)];
+            const int la = f.local.at(s.a);
+            const int lb = f.local.at(s.b);
+            bool present = false;
+            for (const auto& [x, y] : {std::pair{la, lb}, std::pair{lb, la}}) {
+                const auto t = f.tri->triangle_with_edge(x, y);
+                if (!t) continue;
+                present = true;
+                for (const int apex : f.tri->triangle(*t).v) {
+                    if (apex == la || apex == lb || f.tri->is_super(apex)) continue;
+                    if (predicates::in_diametral_circle(f.tri->point(la), f.tri->point(lb), f.tri->point(apex)) > 0) return true;
+                }
+            }
+            return !present;
+        }
+        const std::vector<int> around = tets_with(s.a, s.b, -1);
+        if (around.empty()) return true;
+        const Point& A = tri.point(s.a);
+        const Point& B = tri.point(s.b);
+        for (const int t : around) {
+            for (const int x : tri.tet(t).v) {
+                if (x == s.a || x == s.b || tri.is_super(x)) continue;
+                const Point& X = tri.point(x);
+                if (detail::dot3(detail::sub(A, X), detail::sub(B, X)) < 0.0) return true;
+            }
+        }
+        return false;
+    };
+
+    // A face-triangulation triangle that is a subfacet: alive, no super vertex, inside the face,
+    // and not three vertices of one domain edge. Its 3D vertices, or nullopt.
+    const auto subfacet = [&](int fi, int t) -> std::optional<std::array<int, 3>> {
+        const Face& f = gen.faces[static_cast<std::size_t>(fi)];
+        const auto& tr = f.tri->triangle(t);
+        if (!tr.alive || f.tri->is_super(tr.v[0]) || f.tri->is_super(tr.v[1]) || f.tri->is_super(tr.v[2])) return std::nullopt;
+        const std::array<int, 3> v{f.global[static_cast<std::size_t>(tr.v[0])], f.global[static_cast<std::size_t>(tr.v[1])],
+                                   f.global[static_cast<std::size_t>(tr.v[2])]};
+        if (on_one_edge({v[0], v[1], v[2]})) return std::nullopt;
+        const Point& a = f.tri->point(tr.v[0]);
+        const Point& b = f.tri->point(tr.v[1]);
+        const Point& c = f.tri->point(tr.v[2]);
+        if (!f.contains_local({(a[0] + b[0] + c[0]) / 3.0, (a[1] + b[1] + c[1]) / 3.0, 0.0})) return std::nullopt;
+        return v;
+    };
+
+    const auto facet_encroached = [&](const std::array<int, 3>& v) {
+        const std::vector<int> around = tets_with(v[0], v[1], v[2]);
+        if (around.empty()) return true;
+        for (const int t : around) {
+            for (const int x : tri.tet(t).v) {
+                if (x == v[0] || x == v[1] || x == v[2] || tri.is_super(x)) continue;
+                if (predicates::in_diametral_sphere(tri.point(v[0]), tri.point(v[1]), tri.point(v[2]), tri.point(x)) > 0) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    };
+
+    const auto node_cap = [&]() { return tri.vertex_count() - 4 >= options.max_nodes; };
+    const auto exhausted = []() { return base::Error{ErrorCode::resource_exhausted, "max_nodes reached", std::nullopt}; };
+
+    const auto split_segment = [&](int k) -> std::optional<base::Error> {
+        const Subsegment s = segments[static_cast<std::size_t>(k)];
+        if (s.locked) return std::nullopt;
+        const Point& A = tri.point(s.a);
+        const Point& B = tri.point(s.b);
+        const double len = dist3(A, B);
+        double t = 0.5;
+        const bool ca = is_corner(s.a);
+        const bool cb = is_corner(s.b);
+        if (ca != cb) {
+            // Concentric shells around a polyhedron vertex: a power of two from it, near the middle.
+            const double dd = std::exp2(std::round(std::log2(0.5 * len)));
+            const double f = dd / len;
+            if (f > 0.25 && f < 0.75) t = ca ? f : 1.0 - f;
+        }
+        Point m{};
+        for (std::size_t c = 0; c < 3; ++c) m[c] = A[c] == B[c] ? A[c] : A[c] + t * (B[c] - A[c]);
+        if (node_cap()) return exhausted();
+        std::vector<int> on_faces{s.face};
+        if (s.face < 0) {
+            const DomainEdge& e = gen.edges[static_cast<std::size_t>(s.edge)];
+            on_faces = {e.faces[0], e.faces[1]};
+        }
+        const int v = insert(m, on_faces, {s.edge}, tri.vertex_tet(s.a));
+        segments[static_cast<std::size_t>(k)].alive = false;
+        segment_at.erase({std::min(s.a, s.b), std::max(s.a, s.b)});
+        add_segment(s.a, v, s.edge);
+        segments.back().face = s.face;
+        add_segment(v, s.b, s.edge);
+        segments.back().face = s.face;
+        ++report.segment_splits;
+        return std::nullopt;
+    };
+
+    // Splits a subfacet at its circumcentre, unless that encroaches subsegments of its face (they
+    // are split instead) or lies outside the face (the nearest subsegment beyond it is split).
+    const auto split_facet = [&](int fi, const std::array<int, 3>& v) -> std::optional<base::Error> {
+        const Face& f = gen.faces[static_cast<std::size_t>(fi)];
+        // Still a triangle of the face (an earlier split may have removed it, and cocircular
+        // subfacets share a circumcentre that must be inserted once).
+        {
+            const auto la = f.local.find(v[0]);
+            const auto lb = f.local.find(v[1]);
+            const auto lc = f.local.find(v[2]);
+            if (la == f.local.end() || lb == f.local.end() || lc == f.local.end()) return std::nullopt;
+            bool present = false;
+            for (const auto& [x, y] : {std::pair{la->second, lb->second}, std::pair{lb->second, la->second}}) {
+                const auto t = f.tri->triangle_with_edge(x, y);
+                if (t && std::ranges::find(f.tri->triangle(*t).v, lc->second) != f.tri->triangle(*t).v.end()) present = true;
+            }
+            if (!present) return std::nullopt;
+        }
+        Point c = detail::triangle_circumcentre({tri.point(v[0]), tri.point(v[1]), tri.point(v[2])});
+        if (f.axis >= 0) c[static_cast<std::size_t>(f.axis)] = f.plane[0][static_cast<std::size_t>(f.axis)];
+        if (in_band(c)) {
+            // Near a trace: a new trace pair at the projection instead (M11), unless one is already
+            // within s / 2 along the trace; then c itself, judged by P4.
+            Trace* best = nullptr;
+            double best_d = 0.0;
+            for (Trace& tr : traces) {
+                if (tr.face != fi) continue;
+                const double dd = std::abs(Generator3D::signed_distance(gen.planes[static_cast<std::size_t>(tr.plane)], c));
+                if (best == nullptr || dd < best_d) {
+                    best = &tr;
+                    best_d = dd;
+                }
+            }
+            if (best != nullptr) {
+                const double t = std::clamp(detail::dot3(detail::sub(c, best->start), best->dir), 1.5 * gen.res, best->length - 1.5 * gen.res);
+                const bool near = std::ranges::any_of(best->params, [&](double x) { return std::abs(x - t) < 0.5 * gen.res; });
+                if (!near) {
+                    if (node_cap()) return exhausted();
+                    const Point centre = detail::add(best->start, detail::scale(t, best->dir));
+                    for (const double sign : {-0.5, 0.5}) {
+                        const Point x = snap(f, detail::add(centre, detail::scale(sign * gen.res, best->normal)));
+                        mark_interface(insert(x, {fi}, {}, tri.vertex_tet(v[0])));
+                    }
+                    best->params.push_back(t);
+                    ++report.facet_splits;
+                    return std::nullopt;
+                }
+            }
+            ++report.band_facet_points;
+        }
+        std::vector<int> hit;
+        int nearest = -1;
+        double nearest_d = 0.0;
+        for (std::size_t k = 0; k < segments.size(); ++k) {
+            const Subsegment& s = segments[k];
+            if (!s.alive || s.locked) continue;
+            const Point& A = tri.point(s.a);
+            const Point& B = tri.point(s.b);
+            if (s.face >= 0) {
+                // A patch segment of this face: encroached in face coordinates.
+                if (s.face == fi &&
+                    predicates::in_diametral_circle(f.tri->point(f.local.at(s.a)), f.tri->point(f.local.at(s.b)), f.to_local(c)) > 0) {
+                    hit.push_back(static_cast<int>(k));
+                }
+                continue;
+            }
+            const DomainEdge& e = gen.edges[static_cast<std::size_t>(s.edge)];
+            if (e.faces[0] != fi && e.faces[1] != fi) continue;
+            if (detail::dot3(detail::sub(A, c), detail::sub(B, c)) < 0.0) hit.push_back(static_cast<int>(k));
+            const Point mid = detail::scale(0.5, detail::add(A, B));
+            const double dm = dist3(mid, c);
+            if (nearest < 0 || dm < nearest_d) {
+                nearest = static_cast<int>(k);
+                nearest_d = dm;
+            }
+        }
+        if (hit.empty() && !f.contains_local(f.to_local(c))) hit.push_back(nearest);
+        if (!hit.empty()) {
+            for (const int k : hit) {
+                if (!segments[static_cast<std::size_t>(k)].alive) continue;
+                if (auto e = split_segment(k)) return e;
+            }
+            return std::nullopt;
+        }
+        if (node_cap()) return exhausted();
+        insert(c, {fi}, {}, tri.vertex_tet(v[0]));
+        ++report.facet_splits;
+        return std::nullopt;
+    };
+
+    for (std::size_t t = 0; t < tri.tet_slots(); ++t) {
+        if (tri.tet(static_cast<int>(t)).alive) tet_queue.push_back(static_cast<int>(t));
+    }
+    const double bound = options.radius_edge;
+    const double size_factor = std::sqrt(3.0 / 8.0);
+    const std::size_t iteration_cap = 256 * options.max_nodes + 4096;
+    for (std::size_t iteration = 0;; ++iteration) {
+        if (iteration > iteration_cap) {
+            return std::unexpected(base::Error{ErrorCode::resource_exhausted,
+                                               "refinement did not settle within its iteration cap", std::nullopt});
+        }
+        if (!segment_queue.empty()) {
+            const int k = segment_queue.front();
+            segment_queue.pop_front();
+            if (!segments[static_cast<std::size_t>(k)].alive || segments[static_cast<std::size_t>(k)].locked || !segment_encroached(segments[static_cast<std::size_t>(k)])) continue;
+            if (auto e = split_segment(k)) return std::unexpected(*e);
+            continue;
+        }
+        if (!facet_queue.empty()) {
+            const auto [fi, t] = facet_queue.front();
+            facet_queue.pop_front();
+            const auto v = subfacet(fi, t);
+            if (!v || !facet_encroached(*v)) continue;
+            if (auto e = split_facet(fi, *v)) return std::unexpected(*e);
+            facet_queue.emplace_back(fi, t);  // tried again (it may have been split by a segment)
+            continue;
+        }
+        if (tet_queue.empty()) break;
+        const int t = tet_queue.front();
+        tet_queue.pop_front();
+        const auto& tt = tri.tet(t);
+        if (!tt.alive || std::ranges::any_of(tt.v, [&](int x) { return tri.is_super(x); })) continue;
+        if (common_face({tt.v[0], tt.v[1], tt.v[2], tt.v[3]}) >= 0) continue;  // flat on a face: dropped
+        const std::array<Point, 4> p{tri.point(tt.v[0]), tri.point(tt.v[1]), tri.point(tt.v[2]), tri.point(tt.v[3])};
+        const Point cf = circumcentre_fast(p[0], p[1], p[2], p[3]);
+        const double radius = dist3(cf, p[0]);
+        double shortest = dist3(p[0], p[1]);
+        for (std::size_t i = 0; i < 4; ++i) {
+            for (std::size_t j = i + 1; j < 4; ++j) shortest = std::min(shortest, dist3(p[i], p[j]));
+        }
+        const Point centroid = detail::scale(0.25, detail::add(detail::add(p[0], p[1]), detail::add(p[2], p[3])));
+        if (!(radius > bound * shortest) && !(radius > size_factor * gen.size_at(centroid))) continue;
+        if (std::ranges::all_of(tt.v, [&](int x) { return is_interface(x); })) {
+            ++report.exempt_tetrahedra;  // pair nodes only (M11)
+            continue;
+        }
+        const Point cc = detail::tetrahedron_circumcentre(p);
+        if (in_band(cc)) {
+            ++report.exempt_tetrahedra;  // no circumcentre in a protected band (M7)
+            continue;
+        }
+        const int start = tri.locate(cc, t);
+        const auto cav = tri.cavity(cc, start);
+        // A candidate that encroaches subsegments or subfacets is not inserted; they are split
+        // instead, and the tetrahedron is tried again.
+        std::vector<int> seg_hit;
+        std::vector<std::pair<int, std::array<int, 3>>> facet_hit;
+        for (const int ct : cav.tetrahedra) {
+            const auto& cv = tri.tet(ct).v;
+            for (std::size_t i = 0; i < 4; ++i) {
+                for (std::size_t j = i + 1; j < 4; ++j) {
+                    const auto it = segment_at.find({std::min(cv[i], cv[j]), std::max(cv[i], cv[j])});
+                    if (it == segment_at.end() || segments[static_cast<std::size_t>(it->second)].locked) continue;
+                    const Point& A = tri.point(cv[i]);
+                    const Point& B = tri.point(cv[j]);
+                    if (detail::dot3(detail::sub(A, cc), detail::sub(B, cc)) < 0.0 &&
+                        std::ranges::find(seg_hit, it->second) == seg_hit.end()) {
+                        seg_hit.push_back(it->second);
+                    }
+                }
+            }
+            for (std::size_t i = 0; i < 4; ++i) {
+                std::array<int, 3> fv{};
+                for (std::size_t a = 0, m = 0; a < 4; ++a) {
+                    if (a != i) fv[m++] = cv[a];
+                }
+                if (std::ranges::any_of(fv, [&](int x) { return tri.is_super(x); })) continue;
+                const int fi = common_face({fv[0], fv[1], fv[2]});
+                if (fi < 0) continue;
+                if (predicates::in_diametral_sphere(tri.point(fv[0]), tri.point(fv[1]), tri.point(fv[2]), cc) > 0) {
+                    std::ranges::sort(fv);
+                    if (std::ranges::find(facet_hit, std::pair{fi, fv}) == facet_hit.end()) facet_hit.emplace_back(fi, fv);
+                }
+            }
+        }
+        if (!seg_hit.empty()) {
+            for (const int k : seg_hit) {
+                if (!segments[static_cast<std::size_t>(k)].alive) continue;
+                if (auto e = split_segment(k)) return std::unexpected(*e);
+            }
+            tet_queue.push_back(t);
+            continue;
+        }
+        if (!facet_hit.empty()) {
+            for (const auto& [fi, fv] : facet_hit) {
+                if (auto e = split_facet(fi, fv)) return std::unexpected(*e);
+            }
+            tet_queue.push_back(t);
+            continue;
+        }
+        if (!gen.inside(cc)) {
+            ++report.exempt_tetrahedra;
+            continue;
+        }
+        if (node_cap()) return std::unexpected(exhausted());
+        insert(cc, {}, {}, t);
+        ++report.refinement_points;
+    }
+
+    // Extraction: drop the super tetrahedra and those flat on one face.
+    SimplexMesh sm;
+    sm.dimension = 3;
+    for (std::size_t v = 4; v < tri.vertex_count(); ++v) sm.points.push_back(tri.point(static_cast<int>(v)));
+    std::vector<char> kept(tri.tet_slots(), 0);
+    double kept_volume = 0.0;
+    double min_dihedral_all = 180.0;
+    double max_ratio = 0.0;
+    for (std::size_t t = 0; t < tri.tet_slots(); ++t) {
+        const auto& tt = tri.tet(static_cast<int>(t));
+        if (!tt.alive || std::ranges::any_of(tt.v, [&](int x) { return tri.is_super(x); })) continue;
+        if (common_face({tt.v[0], tt.v[1], tt.v[2], tt.v[3]}) >= 0) {
+            ++report.flat_dropped;
+            continue;
+        }
+        kept[t] = 1;
+        for (const int v : tt.v) sm.cells.push_back(static_cast<NodeId>(v - 4));
+        const std::array<Point, 4> p{tri.point(tt.v[0]), tri.point(tt.v[1]), tri.point(tt.v[2]), tri.point(tt.v[3])};
+        kept_volume += detail::dot3(detail::sub(p[1], p[0]), detail::cross(detail::sub(p[2], p[0]), detail::sub(p[3], p[0]))) / 6.0;
+        const double dih = min_dihedral(p);
+        min_dihedral_all = std::min(min_dihedral_all, dih);
+        report.slivers += dih < 5.0 ? 1 : 0;
+        double shortest = dist3(p[0], p[1]);
+        for (std::size_t i = 0; i < 4; ++i) {
+            for (std::size_t j = i + 1; j < 4; ++j) shortest = std::min(shortest, dist3(p[i], p[j]));
+        }
+        max_ratio = std::max(max_ratio, dist3(circumcentre_fast(p[0], p[1], p[2], p[3]), p[0]) / shortest);
+    }
+    // The boundary check: every exposed triangle on one face; the volume of the polyhedron.
+    sm.patch_names = gen.patch_names;
+    // A boundary triangle's patch: its face's, or the tiling polygon holding its centroid (it
+    // crosses no patch edge, which are edges of the mesh).
+    const auto patch_of = [&](int fi, const std::array<int, 3>& fv) -> int {
+        const Face& f = gen.faces[static_cast<std::size_t>(fi)];
+        if (f.patch_local.empty()) return f.whole_patch;
+        Point c{0, 0, 0};
+        for (const int v : fv) {
+            const Point q = f.to_local(tri.point(v));
+            c = {c[0] + q[0] / 3.0, c[1] + q[1] / 3.0, 0.0};
+        }
+        for (std::size_t k = 0; k < f.patch_local.size(); ++k) {
+            const std::vector<Point>& poly = f.patch_local[k];
+            bool in = false;
+            for (std::size_t i = 0, j = poly.size() - 1; i < poly.size(); j = i++) {
+                if ((poly[i][1] > c[1]) != (poly[j][1] > c[1]) &&
+                    c[0] < (poly[j][0] - poly[i][0]) * (c[1] - poly[i][1]) / (poly[j][1] - poly[i][1]) + poly[i][0]) {
+                    in = !in;
+                }
+            }
+            if (in) return f.patch_id[k];
+        }
+        return -1;
+    };
+    for (std::size_t t = 0; t < tri.tet_slots(); ++t) {
+        if (kept[t] == 0) continue;
+        const auto& tt = tri.tet(static_cast<int>(t));
+        for (std::size_t i = 0; i < 4; ++i) {
+            const int nb = tt.n[i];
+            if (nb >= 0 && kept[static_cast<std::size_t>(nb)] != 0) continue;
+            std::array<int, 3> fv{};
+            for (std::size_t a = 0, m = 0; a < 4; ++a) {
+                if (a != i) fv[m++] = tt.v[a];
+            }
+            const int fi = common_face({fv[0], fv[1], fv[2]});
+            if (fi < 0) return std::unexpected(degenerate("a boundary triangle of the generated mesh is not on one face"));
+            const int patch = patch_of(fi, fv);
+            if (patch < 0) return std::unexpected(degenerate("a boundary triangle of the generated mesh is in no patch"));
+            for (const int v : fv) sm.facets.push_back(static_cast<NodeId>(v - 4));
+            sm.facet_patch.push_back(patch);
+        }
+    }
+    const double volume = gen.volume();
+    if (!(std::abs(kept_volume - volume) <= 1e-12 * volume)) {
+        return std::unexpected(degenerate("the generated mesh does not fill the polyhedron (volume " +
+                                          std::to_string(kept_volume) + " of " + std::to_string(volume) + ")"));
+    }
+    DualMeshReport dual_report;
+    auto dual = make_dual_mesh(sm, &dual_report);
+    if (!dual) {
+        return std::unexpected(base::Error{ErrorCode::degenerate_mesh,
+                                           "the generated mesh failed an import check: " + dual.error().message,
+                                           dual.error().context});
+    }
+    report.nodes = dual->node_count();
+    report.tetrahedra = sm.cells.size() / 4;
+    report.min_dihedral_deg = min_dihedral_all;
+    report.max_radius_edge = max_ratio;
+    // Regions: each node's slab, exactly (no node lies on an interface plane).
+    std::vector<std::int32_t> node_region;
+    node_region.reserve(sm.points.size());
+    for (const Point& p : sm.points) {
+        const auto r = gen.region_at(p);
+        if (!r) return std::unexpected(degenerate("a generated node lies on an interface"));
+        node_region.push_back(*r);
+    }
+    for (std::size_t v = 4; v < tri.vertex_count(); ++v) report.interface_nodes += is_interface(static_cast<int>(v)) ? 1 : 0;
+    std::optional<InterfaceCertificate> certificate;
+    if (!gen.planes.empty()) {
+        InterfaceSet set{{}, gen.res};
+        for (const auto& q : gen.planes) set.pieces.push_back({q.polygon, q.below, q.above});
+        auto cert = certify_interfaces(sm, *dual, node_region, set);
+        if (!cert) {
+            return std::unexpected(base::Error{ErrorCode::degenerate_mesh,
+                                               "the generated mesh did not meet P4: " + cert.error().message,
+                                               cert.error().context});
+        }
+        certificate = std::move(*cert);
+    }
+    return GeneratedMesh{std::move(*dual), std::move(sm), std::move(node_region), std::move(certificate), report};
+}
+
+}  // namespace NiTCAD::mesh

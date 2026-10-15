@@ -127,7 +127,8 @@ device::Device meshed_mosfet(int nx = 90, int ny = 50, int oxide_cells = 5) {
     mesh::Mesh m = *mesh::Mesh::from_parts(
         2, std::vector<mesh::Point>(grid.points().begin(), grid.points().end()),
         std::vector<double>(grid.volumes().begin(), grid.volumes().end()),
-        std::vector<mesh::Edge>(grid.edges().begin(), grid.edges().end()), std::move(patches));
+        std::vector<mesh::Edge>(grid.edges().begin(), grid.edges().end()), std::move(patches),
+        mesh::MeshOrigin::tensor_grid);  // the grid with one more patch: still a tensor product
     const std::size_t n = m.node_count();
     std::vector<double> donors(n, 0.0), acceptors(n, 0.0);
     std::vector<device::RegionId> region(n, 1);

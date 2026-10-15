@@ -110,7 +110,7 @@ std::expected<Mesh, base::Error> build(std::span<const std::span<const double>> 
     }
 
     return Mesh::from_parts(static_cast<int>(dim), std::move(points), std::move(volumes),
-                            std::move(edges), std::move(boundary));
+                            std::move(edges), std::move(boundary), MeshOrigin::tensor_grid);
 }
 
 }  // namespace

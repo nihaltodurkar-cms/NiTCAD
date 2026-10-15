@@ -151,7 +151,16 @@ add_test(NAME linalg COMMAND nitcad_linalg_test)
 add_library(nitcad_mesh STATIC
   src/mesh/mesh.cpp
   src/mesh/tensor_grid.cpp
-  src/mesh/tensor_cells.cpp)
+  src/mesh/tensor_cells.cpp
+  src/mesh/exact_integer.cpp
+  src/mesh/predicates.cpp
+  src/mesh/dual_geometry.cpp
+  src/mesh/simplex_mesh.cpp
+  src/mesh/interfaces.cpp
+  src/mesh/triangulation2d.cpp
+  src/mesh/triangulation3d.cpp
+  src/mesh/generate2d.cpp
+  src/mesh/generate3d.cpp)
 add_library(NiTCAD::mesh ALIAS nitcad_mesh)
 target_include_directories(nitcad_mesh PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
 target_link_libraries(nitcad_mesh PUBLIC NiTCAD::base)
@@ -159,7 +168,17 @@ target_link_libraries(nitcad_mesh PUBLIC NiTCAD::base)
 add_executable(nitcad_mesh_test
   tests/mesh/mesh_test.cpp
   tests/mesh/tensor_grid_test.cpp
-  tests/mesh/tensor_cells_test.cpp)
+  tests/mesh/tensor_cells_test.cpp
+  tests/mesh/predicates_test.cpp
+  tests/mesh/filter_test.cpp
+  tests/mesh/simplex_mesh_test.cpp
+  tests/mesh/interfaces_test.cpp
+  tests/mesh/origin_test.cpp
+  tests/mesh/generate2d_test.cpp
+  tests/mesh/triangulation3d_test.cpp
+  tests/mesh/generate3d_test.cpp)
+# The predicate and dual-geometry tests read the internal headers directly (Unit 16).
+target_include_directories(nitcad_mesh_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/mesh")
 target_link_libraries(nitcad_mesh_test PRIVATE NiTCAD::mesh Catch2::Catch2WithMain)
 add_test(NAME mesh COMMAND nitcad_mesh_test)
 
@@ -200,7 +219,9 @@ target_link_libraries(nitcad_physics_test PRIVATE NiTCAD::physics Catch2::Catch2
 add_test(NAME physics COMMAND nitcad_physics_test)
 
 # --- device layer (regions, doping, contacts; validated problem description) -------
-add_library(nitcad_device STATIC src/device/device.cpp)
+add_library(nitcad_device STATIC
+  src/device/device.cpp
+  src/device/doping_profiles.cpp)
 add_library(NiTCAD::device ALIAS nitcad_device)
 target_include_directories(nitcad_device PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
 target_link_libraries(nitcad_device PUBLIC NiTCAD::base NiTCAD::mesh NiTCAD::physics)
@@ -208,7 +229,9 @@ target_link_libraries(nitcad_device PUBLIC NiTCAD::base NiTCAD::mesh NiTCAD::phy
 add_executable(nitcad_device_test
   tests/device/device_test.cpp
   tests/device/topology_test.cpp
-  tests/device/insulator_test.cpp)
+  tests/device/insulator_test.cpp
+  tests/device/certificate_test.cpp
+  tests/device/doping_profiles_test.cpp)
 target_link_libraries(nitcad_device_test PRIVATE NiTCAD::device Catch2::Catch2WithMain)
 add_test(NAME device COMMAND nitcad_device_test)
 
@@ -277,7 +300,9 @@ target_link_libraries(nitcad_io PUBLIC NiTCAD::base NiTCAD::mesh NiTCAD::results
 
 add_executable(nitcad_io_test
   tests/io/record_test.cpp
-  tests/io/files_test.cpp)
+  tests/io/files_test.cpp
+  tests/io/origin_test.cpp
+  tests/io/generated_test.cpp)
 # The record test reads the private encoding directly.
 target_include_directories(nitcad_io_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/io")
 target_link_libraries(nitcad_io_test PRIVATE NiTCAD::io Catch2::Catch2WithMain)
@@ -306,6 +331,8 @@ add_executable(nitcad_solve_test
   tests/solve/heavy_doping_test.cpp
   tests/solve/mos_test.cpp
   tests/solve/mosfet_test.cpp
+  tests/solve/unstructured_test.cpp
+  tests/solve/unstructured3d_test.cpp
   tests/solve/field_mobility_test.cpp
   tests/solve/fermi_dirac_test.cpp
   tests/solve/heterojunction_test.cpp
@@ -319,6 +346,8 @@ add_executable(nitcad_solve_test
 # The solve tests also read their results through the analysis extractors (Unit 24 gates).
 target_link_libraries(nitcad_solve_test PRIVATE NiTCAD::solve NiTCAD::analysis NiTCAD::io
   Catch2::Catch2WithMain)
+# The 3D sliver stress test meshes perturbed lattices with the generator's Delaunay (Unit 16).
+target_include_directories(nitcad_solve_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/mesh")
 target_compile_definitions(nitcad_solve_test PRIVATE
   NITCAD_MKL_RUNTIME_PATH="${NITCAD_MKL_RUNTIME_PATH}")
 add_test(NAME solve COMMAND nitcad_solve_test)
@@ -332,4 +361,6 @@ if(CMAKE_BUILD_TYPE STREQUAL "Release")
   add_test(NAME solve_breakdown COMMAND nitcad_solve_test "[breakdown]")
   # And the slow band-to-band gates (tests/solve/btbt_test.cpp, hidden tag [.btbt]).
   add_test(NAME solve_btbt COMMAND nitcad_solve_test "[btbt]")
+  # And the device gates on generated 2D meshes (tests/solve/unstructured_test.cpp, [.unstructured]).
+  add_test(NAME solve_unstructured COMMAND nitcad_solve_test "[unstructured]")
 endif()

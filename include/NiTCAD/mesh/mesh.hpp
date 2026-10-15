@@ -45,6 +45,15 @@ struct BoundaryPatch {
     std::vector<double> areas;  // boundary face area per node, in parallel with nodes
 };
 
+// How a mesh was produced. A tensor product (make_tensor_grid) has only axis-aligned edges, so the
+// dual faces between nodes of different regions are axis-aligned bisector planes: its material
+// interfaces are consistent by construction and need no P4 certificate (DECISIONS.md U2). Any
+// other producer gives a general graph.
+enum class MeshOrigin : std::uint8_t {
+    graph,
+    tensor_grid,
+};
+
 class Mesh {
 public:
     // Builds a mesh from its graph and validates it; every producer goes through here.
@@ -52,16 +61,21 @@ public:
     // - invalid_input: dimension not 1, 2 or 3; sizes that do not match; a non-finite coordinate
     //   or a nonzero coordinate beyond the dimension; an edge endpoint out of range, with
     //   first >= second, or listed twice; a boundary patch with an empty or repeated name, nodes
-    //   out of range or not strictly increasing, or a size mismatch;
+    //   out of range or not strictly increasing, or a size mismatch; origin tensor_grid with an
+    //   edge that is not axis-aligned (its end points differing in more than one coordinate), or,
+    //   in 1D, a mesh that is not a chain (strictly increasing x, edges joining x-consecutive
+    //   nodes only, n - 1 of them);
     // - degenerate_mesh: a control volume, edge length, coupling area or boundary area that is not
     //   positive and finite, or an edge length that differs from its endpoints' distance;
     // - resource_exhausted: more nodes than NodeId can index.
     // The context index names the offending node, edge or patch entry.
     [[nodiscard]] static std::expected<Mesh, base::Error> from_parts(
         int dimension, std::vector<Point> points, std::vector<double> volumes,
-        std::vector<Edge> edges, std::vector<BoundaryPatch> boundary);
+        std::vector<Edge> edges, std::vector<BoundaryPatch> boundary,
+        MeshOrigin origin = MeshOrigin::graph);
 
     [[nodiscard]] int dimension() const noexcept { return dimension_; }
+    [[nodiscard]] MeshOrigin origin() const noexcept { return origin_; }
     [[nodiscard]] std::size_t node_count() const noexcept { return points_.size(); }
     [[nodiscard]] std::span<const Point> points() const noexcept { return points_; }
     [[nodiscard]] std::span<const double> volumes() const noexcept { return volumes_; }
@@ -74,10 +88,16 @@ private:
     Mesh() = default;
 
     int dimension_ = 1;
+    MeshOrigin origin_ = MeshOrigin::graph;
     std::vector<Point> points_;
     std::vector<double> volumes_;
     std::vector<Edge> edges_;
     std::vector<BoundaryPatch> boundary_;
 };
+
+// A 64-bit FNV-1a digest of the graph (dimension, points, volumes, edges, boundary patches; doubles
+// by bit pattern; not the origin). Equal meshes give equal digests on any machine; it identifies a
+// mesh in checkpoints (io::mesh_digest) and in P4 certificates.
+[[nodiscard]] std::uint64_t graph_digest(const Mesh& m);
 
 }  // namespace NiTCAD::mesh

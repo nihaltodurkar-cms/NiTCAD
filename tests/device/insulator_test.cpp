@@ -179,6 +179,9 @@ TEST_CASE("insulator device: topology with insulators") {
         REQUIRE(r.error().message.find("no ohmic contact or electrode") != std::string::npos);
         REQUIRE(r.error().context->index == 0u);
         d.contacts.push_back({"gate", device::ContactKind::electrode, {0}});
+        // A 1D mesh built from parts with two regions needs a P4 certificate (DECISIONS.md U16);
+        // the two parts share no edge, so no interface point is declared.
+        d.interface_certificate = *mesh::certify_interfaces_1d(d.mesh, d.node_region, {});
         REQUIRE(device::Device::create(std::move(d)).has_value());
     }
 }

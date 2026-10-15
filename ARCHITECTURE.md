@@ -2037,6 +2037,81 @@ Unstructured meshes are not implemented initially. The mesh architecture must st
   cells by axis, an exception to item 1 scoped to that model; an unstructured producer (Unit 16) needs a cell-walk
   interface (locate, stencil, exit face, neighbour) for the tracer to use instead.
 
+**As built (Unit 16, in progress on `mesh/unstructured`: predicates and the simplex import path; DECISIONS.md M1–M4):**
+- Exact predicates (`src/mesh/predicates.hpp`, internal): orient2d/3d, incircle, insphere, the diametral circle and
+  sphere tests. Each predicate's polynomial is written once and evaluated twice. First comes a double-precision filter
+  with a forward error bound carried alongside: the bound is γ_d·M, where M is the polynomial evaluated on absolute
+  values and d counts roundings (max + 1 for sums, a + b + 1 for products). The filter defers on product underflow or
+  overflow. Otherwise the sign comes from exact integers (`exact_integer.hpp`), with the inputs scaled by a common power
+  of two. Exactness holds for any finite doubles, with no range restriction.
+- Tie-break: the lifted values are perturbed symbolically. The point with the largest node id is raised most, and the
+  sign is the first nonzero cofactor. The orientation predicates are never perturbed, so no flat element can come from a
+  tie.
+- Tests for the tie-break:
+  - antisymmetry of the perturbed incircle and insphere over every permutation;
+  - the documented order pinned;
+  - brute-force perturbed Delaunay triangulations of all-tie lattices, which are valid triangulations whose dual is the
+    tensor grid.
+- `make_dual_mesh(SimplexMesh)` (`include/NiTCAD/mesh/simplex_mesh.hpp`) builds the circumcentric dual of given triangles
+  or tetrahedra and checks it:
+  - P0: no flat cell; negatively oriented cells are reoriented.
+  - Manifold, with no folds.
+  - P1: locally Delaunay. Ties are allowed.
+  - P2: every boundary facet is Gabriel, listed or not.
+  - P3: totals are non-negative, with τ = 1e-12 on a scale of the total's own dimension, max(L^(D−1) or l^D, Σ|pieces|).
+    Zero couplings and zero patch areas are dropped.
+  - P5: every control volume closes to 1e-11.
+- Pieces are built from exact dot products and determinants rounded once, so they stay accurate for flat elements.
+  Unlisted boundary facets are natural (zero-flux) boundaries.
+- Tensor equivalence holds to 1e-13 for split rectangles (both diagonals), Kuhn-split boxes, a box in five tetrahedra,
+  and perturbed-Delaunay lattices, all on graded axes. Every diagonal is dropped.
+- Unstructured cases pass with closure ≤ 1e-12 and total measures to 1e-12:
+  - a 2D square with scattered points and obtuse cells (their negative pieces are accepted);
+  - a 3D cube with a boundary lattice and interior points.
+- Regular hexagon and tetrahedron duals match closed forms to 1e-13. Every refusal is tested with its code and index.
+- Determinism: the same input gives a bit-identical mesh in the same build. Topology decisions are exact, so they don't
+  depend on the platform; floating-point measures are not claimed bit-identical across compilers or machines.
+- Round 2 (DECISIONS.md "Approval blockers, round 2"):
+  - The filter's soundness argument is in `predicates.hpp`. A product whose value underflows by cancellation is now
+    flagged as well as one whose magnitude underflows. Tests compare each evaluation with its exact value through a
+    probe.
+  - The tie-break is checked against the documented lifted perturbation, evaluated directly as a Leibniz determinant.
+  - The M2 rule is one function (`dual_tolerance.hpp`), tested at its exact boundaries, under scaling and under
+    cancellation.
+  - `check_interfaces` (`include/NiTCAD/mesh/interfaces.hpp`) is the only way to establish P4: the dual faces between
+    regions measured against declared interface pieces, exact outside corner zones of radius 2 s, within s inside them.
+- **Round 3, the 2D generator** (DECISIONS.md "2D generator, round 3"):
+  - `mesh::generate_mesh(Geometry2D, MeshOptions2D)` (`include/NiTCAD/mesh/generate.hpp`) turns region polygons and
+    boundary patches into a boundary-conforming Delaunay mesh. It returns the box-method graph, node regions, the
+    simplices and, with two or more regions, the P4 certificate.
+  - Placement, the U12 corner rules, Ruppert refinement with protected bands, determinism, and the explicit
+    unsupported cases (interfaces at domain corners, multiple interfaces at one boundary point, sectors below 60°).
+  - `Device::create` requires a current P4 certificate for a multi-region device on a 2D or 3D mesh that is not a
+    tensor grid. `Mesh::origin()` tags tensor grids, verified by `from_parts` and saved by io.
+  - `device::sample` gives analytic doping profiles. `io::save_generated_mesh` and `load_generated_mesh` keep the
+    simplices, regions, report and certificate.
+  - Gates passed: linear-field exactness; diode convergence (H1, L2 and current orders); the abrupt diode against 1D,
+    better than tensor at equal node count; 1.04e5 nodes in 1.70 s.
+  - The MOSFET acceptance gate passes (k = 1.5 unchanged) with a structured boundary layer, the hybrid tensor strip
+    (`MeshOptions2D::layers`; DECISIONS.md U14); isotropic triangles alone did not pass. No bisector corner nodes
+    (U15); 1D meshes need a verified tensor chain or `certify_interfaces_1d` (U16).
+- **Commit 6, the 3D generator** (DECISIONS.md "3D generator, commit 6"):
+  - `mesh::generate_mesh(Geometry3D, MeshOptions3D)` meshes convex polyhedra. It is built on `Triangulation3D` (exact
+    Bowyer–Watson, BRIO order) and Shewchuk-style refinement, where each face keeps a 2D Delaunay triangulation of its
+    nodes to define its subfacets.
+  - Exact validation; non-convex domains are refused.
+  - Extraction is checked (boundary on faces, volume to 1e-12), then `make_dual_mesh`.
+  - Face tilings into contact patches (`PolyhedronFace::patches`) conform, so patch areas are exact (M9).
+  - Planar interfaces (`Geometry3D::interfaces`, one region per slab, no junction lines) use straddled pair sets,
+    trace pairs, edge-crossing nodes and a protected band. The result carries the P4 certificate.
+  - Gates passed: linear field to 1e-12; the Kuhn solve equal to the tensor solve to 1e-12; z-uniform diode
+    convergence on generated meshes and on sliver-rich perturbed lattices (every order above the predefined gates);
+    the 3D io round trip.
+  - Speed: 1.29e5 nodes in 15.9 s (target met), after U18 made the exact integers allocation-free up to 24 limbs
+    with bit-identical results (23 s before).
+- Not yet: non-convex 3D domains, 3D interface junction lines, 3D structured boundary layers, an independent
+  Voronoi-clipping check, layers on curved or crossing boundaries.
+
 ### 6.12 Long-term computational architecture
 
 The following are **target capabilities**, not currently implemented layers. They are recorded here so future units
@@ -2396,7 +2471,7 @@ built.
 | 14 | Fermi–Dirac statistics and high-density carrier models | physics, assemble | **done, on `main`** (`8610d9a`): parabolic-band Fermi–Dirac statistics, the legacy ν-factor scheme with an exact Jacobian (5 and 6.2, Unit 14); incomplete ionization deferred (14.3) |
 | 15 | Heterojunctions, band offsets and interface transport | device, assemble, physics | **done, on `main`** (`2a8718a`): band offsets through a per-node band shift, permittivity steps, thermionic emission, the legacy material sets (6.3 and 6.2, Unit 15); follow-up: interfaces as device data, incomplete ionization, radiative recombination, band diagram, current resolution; meshed insulators, interface charge and traps are 15b |
 | 15b | Meshed insulators, semiconductor-insulator interfaces, interface charge, traps and recombination | physics, device, assemble, solve | **done, on `main`** (`4e23119`): insulator regions, electrodes on a meshed oxide, fixed charge, interface traps (levels and uniform bands, steady-state SRH occupancy), surface recombination, all at the interface potential (5, 6.2 and 6.4, Unit 15b) |
-| 16 | Unstructured mesh | mesh, assemble | target |
+| 16 | Unstructured mesh | mesh, device, io | **in progress** (branch `mesh/unstructured`): the 2D generator, P4-certified devices, doping profiles, generated meshes on disk; every 2D gate passed, the MOSFET acceptance included (U14); the 3D generator for convex polyhedra with contact patches and planar interfaces, every 3D gate passed; awaiting review (11.3) |
 | 17 | Adaptive mesh refinement and state transfer | mesh, solve, results | target |
 | 18 | Scalable linear-solver backends: PARDISO and/or iterative/AMG paths | linalg | **done, on `main`** (`002cb53`, `c8fd145`): Intel MKL PARDISO behind the backend-neutral interface, opt-in (Eigen SparseLU stays the default), MKL loaded at run time from a given path and never linked; real and complex; one analysis per pattern, numeric refactorization per Jacobian, one solve per right-hand side; singularity from perturbed pivots (6.10, Unit 18). Iterative/AMG paths remain a target |
 | 19 | Impact ionization and breakdown-oriented continuation | physics, assemble, solve | **done, on `main`** (`b665b9d`): van Overstraeten–de Man with the temperature factor, local generation along the reconstructed current with an exact Jacobian, off by default and bit-identical when off; pseudo-arclength `trace_bias` through folds; breakdown read from the ionization integral (6.2, Unit 19) |
@@ -2462,7 +2537,7 @@ exists, not finished), **planned** (nothing built). Audit of 2026-10-09, against
 |---|---|---|---|
 | Robust nonlinear solving | Newton with componentwise clipping (6.2); the generation-free retry (Units 19, 20); arc-length `trace_bias` (Unit 19) | **Bias step cutting verified, on `main`** (Unit 28, below; `06b708d`, PR #31); **Newton line search verified, opt-in, on `main`** (Unit 30, below; `f3e2811`, PR #32) | A natural-test norm monotone in reverse bias; a Gummel or pseudo-transient fallback |
 | Input/output, checkpoint/restart | The `io` layer (approved 2026-10-09): versioned, checksummed, atomic files for meshes, sweeps and checkpoints | **Verified, on `main`** (Unit 29, 6.6; `f69a7a8`, PR #33) | Device descriptions on disk and a text input deck; transient and small-signal results |
-| Geometry and unstructured 3D meshing | `Mesh::from_parts` accepts any valid node/edge/volume graph; only the tensor-grid producer exists; nonlocal BTBT needs tensor cells (6.11) | planned (Unit 16) | A 2D Delaunay/Voronoi producer with geometric checks, then 3D tetrahedra; analytic doping profiles |
+| Geometry and unstructured 3D meshing | `Mesh::from_parts` accepts any valid node/edge/volume graph; only the tensor-grid producer exists; nonlocal BTBT needs tensor cells (6.11) | **in progress** (Unit 16, branch `mesh/unstructured`; scope ruled 2026-10-14; 2D generator with structured boundary layers, P4 certification of devices, doping profiles and generated-mesh io on the branch; every 2D gate passed, the MOSFET included (U14); the 3D generator for convex polyhedra, with contact patches and planar interfaces, every 3D gate passed; 3D speed target met after U18) | Boundary-conforming Delaunay generators (2D any polygon, 3D convex) on the Voronoi dual with exact predicates, checked postconditions P0–P5, straddled interfaces and contact patches, persisted metadata; analytic doping profiles |
 | Low-current accuracy | `terminal_current_resolution` reports the floor (Unit 15); off-state MOSFET current unresolved (6.13) | planned | Current extraction from the minority side or quasi-Fermi unknowns, gated against the resolution |
 | Generic fields/equations | Specialized `DriftDiffusion` assembler with a stride (Unit 23) | planned (6.12.1–2) | Field and equation descriptors behind the current assembler, bit-identical |
 | Scalable linear solvers | Eigen SparseLU (default), PARDISO opt-in (Unit 18) | planned | Iterative Krylov with ILU/AMG behind `linalg`; parallel assembly |
