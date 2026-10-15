@@ -625,9 +625,9 @@ z-uniform convergence gate against a 2D reference.
   | 6e (io) | 2 of 2 | — |
 
 - **Performance** (Release, budget targets, M13):
-  - 128,671 nodes take 23 s. Of that, `make_dual_mesh`'s exact circumcentres (M1) take 17.7 s and generation about
-    5.5 s. The 15 s per 1e5 target is not met.
-  - Making it faster needs a filtered circumcentre that certifies the correctly rounded result, a change to M1 (U18).
+  - As first committed: 128,671 nodes took 23 s, the 15 s per 1e5 target missed. `make_dual_mesh` alone took 16.5 s,
+    14.3 s of it in the exact coupling pieces (M1).
+  - After U18 (below): 15.9 s, about 12.4 s per 1e5, so the target is met; `make_dual_mesh` takes 7.8 s.
   - The Debug mesh tests grew to 61 s; the 3D tests add about 33 s.
 - **Literature (U6), checked 2026-10-15 (completed the same day):**
 
@@ -703,10 +703,24 @@ z-uniform convergence gate against a 2D reference.
 - U16 **Resolved 2026-10-14**: only verified 1D tensor chains are exempt; other 1D meshes need certify_interfaces_1d.
 - U10 Budgets (M13) are targets. If the 3D generator misses its gates or budgets within the unit, the PR carries 2D plus
   3D import and says so (unchanged from revision 1). Result: every 3D gate passed; the 3D speed target was
-  missed (23 s at 1.29e5 nodes, U18).
+  missed at first (23 s at 1.29e5 nodes) and met after U18 (15.9 s).
 - U17 (pre-stated fallback for oblique faces) **not needed**: oblique faces pass.
-- U18 3D import checks are slow: `make_dual_mesh` spends 17.7 s of 23 s at 1.29e5 nodes on exact circumcentres (M1). A
-  filtered circumcentre that certifies the correctly rounded result would keep M1's guarantee; it needs its own ruling.
+- U18 **Resolved 2026-10-15** (owner request), with no change to M1.
+  - Profile (128,671 nodes, 774,877 tetrahedra): the exact coupling pieces took 14.3 s of `make_dual_mesh`'s 16.5 s,
+    the exact circumcentres 3.1 s, the predicates 0.05 s. The cost was the exact integers' storage, not their
+    arithmetic: each operation allocated its limbs on the heap.
+  - Fix: `ExactInteger` keeps up to 24 limbs inline and moves to the heap only beyond that; its loops use raw
+    pointers; `to_double` gathers its top 64 bits from at most three limbs, with the same truncation as before.
+  - **Bit-identical:** the same input gives the same bits. Over all 774,877 tetrahedra, the digests of every
+    coupling piece and circumcentre, and the dual graph digest, are equal before and after the change.
+  - Result: couplings 14.1 s to 5.6 s; `make_dual_mesh` 16.5 s to 7.8 s; the 3D benchmark 23 s to 15.9 s at
+    1.29e5 nodes (target met); the 2D benchmark 1.96 s to 1.15 s at 1.04e5 nodes.
+  - Tests: inline and heap values to about 94 limbs; `to_double` against a known top 64 bits at every shift
+    offset; identities through heap-sized products.
+  - Mutations: 4 of 5 caught. The fifth, heap growth not copying the limbs, is equivalent: growth only ever
+    copies limbs that `assign` has just zeroed, into a zeroed buffer.
+  - The earlier idea, a filtered circumcentre certifying the correctly rounded value, is not needed; it would have
+    changed M1, since `to_double` is faithful, not correctly rounded.
 
 ---
 
