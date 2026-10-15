@@ -695,6 +695,7 @@ private:
     std::vector<char> thermal_isothermal_;
     double T0_ = 0.0, heat_scale_ = 0.0, kappa_ref_ = 0.0;
     bool thermal_bgn_ = false;
+    bool masetti_holes_ = false;  // Unit 34: the hole mobility is Masetti's
     bool sinks_complete_ = false;
     std::vector<char> reaches_sink_;  // per node (reaches_heat_sink)
     // One node's thermal state at tau (NaN entries unless tau is finite and theta positive).

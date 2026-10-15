@@ -214,7 +214,8 @@ add_executable(nitcad_physics_test
   tests/physics/interface_traps_test.cpp
   tests/physics/impact_ionization_test.cpp
   tests/physics/band_to_band_test.cpp
-  tests/physics/thermal_test.cpp)
+  tests/physics/thermal_test.cpp
+  tests/physics/masetti_test.cpp)
 target_link_libraries(nitcad_physics_test PRIVATE NiTCAD::physics Catch2::Catch2WithMain)
 add_test(NAME physics COMMAND nitcad_physics_test)
 
@@ -346,7 +347,8 @@ add_executable(nitcad_solve_test
   tests/solve/btbt_test.cpp
   tests/solve/electrothermal_test.cpp
   tests/solve/restart_test.cpp
-  tests/solve/weighted_current_test.cpp)
+  tests/solve/weighted_current_test.cpp
+  tests/solve/hole_mobility_test.cpp)
 # The solve tests also read their results through the analysis extractors (Unit 24 gates).
 target_link_libraries(nitcad_solve_test PRIVATE NiTCAD::solve NiTCAD::analysis NiTCAD::io
   Catch2::Catch2WithMain)

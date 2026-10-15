@@ -116,6 +116,10 @@ std::vector<std::pair<std::string, double>> settings(const BiasOptions& o) {
         }
         // Unit 23: likewise.
         if (o.models.electrothermal) s.emplace_back("models.electrothermal", 1.0);
+        // Unit 34: likewise.
+        if (o.models.hole_mobility != assemble::HoleMobility::caughey_thomas) {
+            s.emplace_back("models.hole_mobility", static_cast<double>(o.models.hole_mobility));
+        }
     }
     // Unit 28: recorded only when on, so the runs without it keep their identity.
     if (o.step_control.max_cuts > 0) {

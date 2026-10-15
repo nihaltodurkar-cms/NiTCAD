@@ -104,6 +104,23 @@ std::expected<DriftDiffusion, base::Error> DriftDiffusion::create(
     if (nonlocal && device.cells() == nullptr) {
         return refuse("nonlocal tunnelling needs the device's tensor cells");
     }
+    // Unit 34: Masetti's coefficients are boron-doped silicon's, so every semiconductor region must
+    // carry silicon's hole mobility (its Caughey-Thomas set stands for "silicon" here).
+    if (models.hole_mobility == HoleMobility::masetti) {
+        for (const device::Region& r : device.regions()) {
+            const auto* s = std::get_if<physics::Semiconductor>(&r.material);
+            if (s && !(s->parameters().hole_mobility == physics::silicon_parameters.hole_mobility)) {
+                return std::unexpected(base::Error{
+                    base::ErrorCode::invalid_input,
+                    "hole_mobility masetti: region '" + r.name +
+                        "' does not have silicon's hole mobility (Masetti's coefficients are "
+                        "boron-doped silicon's)",
+                    {}});
+            }
+        }
+    } else if (models.hole_mobility != HoleMobility::caughey_thomas) {
+        return refuse("unknown hole mobility model");
+    }
     auto scaled = detail::make_scaled_device(device, scaling, models);
     if (!scaled) return std::unexpected(std::move(scaled.error()));
     const std::size_t n = scaled->volume.size();
@@ -172,7 +189,9 @@ std::expected<DriftDiffusion, base::Error> DriftDiffusion::create(
         const double N = device.total_impurity(node);
         const double N_mobility = models.doping_mobility ? N : 0.0;
         mu_n[i] = physics::caughey_thomas_mobility(m, physics::Carrier::electron, N_mobility, T);
-        mu_p[i] = physics::caughey_thomas_mobility(m, physics::Carrier::hole, N_mobility, T);
+        mu_p[i] = models.hole_mobility == HoleMobility::masetti
+                      ? physics::masetti_mobility(physics::masetti_boron_silicon, N_mobility, T)
+                      : physics::caughey_thomas_mobility(m, physics::Carrier::hole, N_mobility, T);
         s.tau_n_[i] = physics::scharfetter_lifetime(m, physics::Carrier::electron, N);
         s.tau_p_[i] = physics::scharfetter_lifetime(m, physics::Carrier::hole, N);
         s.auger_n_[i] = m.parameters().auger.Cn;

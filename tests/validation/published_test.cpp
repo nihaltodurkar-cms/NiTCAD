@@ -3,6 +3,7 @@
 // tuned: each gap is pinned at its measured value (V5).
 #include <catch2/catch_test_macros.hpp>
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstdio>
@@ -124,10 +125,12 @@ deck::Deck load(const char* file, const char* temperature = nullptr) {
 }
 
 // The simulated resistivity of a resistor deck: 0.01 V over the 10 um bar.
-double simulated_rho(const deck::Deck& d, bool incomplete_ionization = false) {
+double simulated_rho(const deck::Deck& d, bool incomplete_ionization = false,
+                     assemble::HoleMobility holes = assemble::HoleMobility::caughey_thomas) {
     auto plan = deck::build(d);
     if (!plan) FAIL(plan.error().message);
     plan->options.models.incomplete_ionization = incomplete_ionization;
+    plan->options.models.hole_mobility = holes;
     const auto report = deck::run(*plan);
     if (!report) FAIL(report.error().message);
     REQUIRE(report->sweep.has_value());
@@ -194,4 +197,74 @@ TEST_CASE("validation: the intrinsic carrier density, Misiakos and Tsamakis (V4)
                 (n_i - measured) / uncertainty);
     // The legacy silicon value, 1.0674e10 (Unit 5), lies 10% above the measurement: a finding (V5).
     CHECK(std::abs(n_i / measured - 1.0 - 0.100) < pin);
+}
+
+// Unit 34: the measured Masetti gaps (simulated / reference - 1) at 300 K and 23 C, pinned like
+// Unit 33's (V5), per boron density 1e15 ... 1e19.
+constexpr std::array<double, 5> masetti_gap_300K{-0.011, -0.011, -0.053, -0.110, -0.039};
+constexpr std::array<double, 5> masetti_gap_23C{-0.011, -0.011, -0.058, -0.124, -0.049};
+
+// The Masetti gaps of the boron decks at 300 K and 23 C, and the phosphorus decks' (which must not
+// move: electrons keep Caughey-Thomas).
+struct MasettiRun {
+    std::vector<double> boron_300K, boron_23C, phosphorus_300K, phosphorus_23C;
+};
+
+MasettiRun run_masetti() {
+    MasettiRun r;
+    const auto masetti = assemble::HoleMobility::masetti;
+    for (const Benchmark& b : resistors) {
+        const double gap300 =
+            simulated_rho(load(b.file), false, masetti) / thurber_rho(b.dopant, b.N, true) - 1.0;
+        const double gap23 = simulated_rho(load(b.file, "296.15"), false, masetti) /
+                                 thurber_rho(b.dopant, b.N, false) - 1.0;
+        (b.dopant == Dopant::boron ? r.boron_300K : r.phosphorus_300K).push_back(gap300);
+        (b.dopant == Dopant::boron ? r.boron_23C : r.phosphorus_23C).push_back(gap23);
+    }
+    return r;
+}
+
+TEST_CASE("validation: Masetti hole mobility against the boron benchmarks (Unit 34)", "[validation]") {
+    // The acceptance criteria were fixed before this ran (DECISIONS.md, Unit 34). Checked here:
+    // AC4 (at least 10 points better than Caughey-Thomas at 1e17, 1e18, 1e19 and a smaller largest
+    // |gap|), AC6 (the phosphorus gaps unchanged), and AC3 (|gap| <= 10% at 300 K) and AC5 (<= 12% at
+    // 23 C) at every boron density but 1e18, where they are NOT met (the next test case). Every
+    // measured gap is also pinned.
+    const MasettiRun r = run_masetti();
+    std::printf("Masetti hole mobility (NBS SP 400-64): gap Caughey-Thomas -> Masetti, 300 K | 23 C\n");
+    double worst_masetti = 0.0, worst_ct = 0.0;
+    std::size_t boron = 0, phosphorus = 0;
+    for (const Benchmark& b : resistors) {
+        CAPTURE(b.file);
+        if (b.dopant == Dopant::phosphorus) {
+            CHECK(std::abs(r.phosphorus_300K[phosphorus] - b.gap_300K) < pin);  // AC6
+            CHECK(std::abs(r.phosphorus_23C[phosphorus] - b.gap_23C) < pin);
+            ++phosphorus;
+            continue;
+        }
+        const double g300 = r.boron_300K[boron], g23 = r.boron_23C[boron];
+        std::printf("%-20s %+6.1f%% -> %+6.1f%% | %+6.1f%% -> %+6.1f%%\n", b.file, 100.0 * b.gap_300K,
+                    100.0 * g300, 100.0 * b.gap_23C, 100.0 * g23);
+        CHECK(std::abs(g300 - masetti_gap_300K[boron]) < pin);
+        CHECK(std::abs(g23 - masetti_gap_23C[boron]) < pin);
+        if (b.N != 1e18) {
+            CHECK(std::abs(g300) <= 0.10);  // AC3
+            CHECK(std::abs(g23) <= 0.12);   // AC5
+        }
+        if (b.N >= 1e17) CHECK(std::abs(g300) <= std::abs(b.gap_300K) - 0.10);  // AC4
+        worst_masetti = std::max(worst_masetti, std::abs(g300));
+        worst_ct = std::max(worst_ct, std::abs(b.gap_300K));
+        ++boron;
+    }
+    CHECK(worst_masetti < worst_ct);  // AC4
+}
+
+TEST_CASE("validation: Masetti AC3 and AC5 at boron 1e18 as fixed in advance (not met, Unit 34)",
+          "[validation][!shouldfail]") {
+    // Expected to fail, and reported as a failure of the predefined criteria: at 1e18 cm^-3 the
+    // Masetti gap is -11.0% at 300 K (AC3 asks <= 10%) and -12.4% at 23 C (AC5 asks <= 12%). The
+    // criteria are not loosened after the fact; if this case starts passing, Catch2 reports it.
+    const MasettiRun r = run_masetti();
+    CHECK(std::abs(r.boron_300K[3]) <= 0.10);  // AC3 at 1e18
+    CHECK(std::abs(r.boron_23C[3]) <= 0.12);   // AC5 at 1e18
 }

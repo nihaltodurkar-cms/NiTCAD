@@ -862,6 +862,10 @@ std::expected<void, base::Error> Builder::models(assemble::PhysicsModels& m) con
             else if (e.value == "kane") m.btbt_nonlocal = assemble::NonlocalTunnelling::kane;
             else if (e.value == "direct_wkb") m.btbt_nonlocal = assemble::NonlocalTunnelling::direct_wkb;
             else return std::unexpected(at(e.line, "btbt_nonlocal is off, kane or direct_wkb"));
+        } else if (e.key == "hole_mobility") {
+            if (e.value == "caughey_thomas") m.hole_mobility = assemble::HoleMobility::caughey_thomas;
+            else if (e.value == "masetti") m.hole_mobility = assemble::HoleMobility::masetti;
+            else return std::unexpected(at(e.line, "hole_mobility is caughey_thomas or masetti"));
         } else if (e.key == "impact_current_resolution") {
             NITCAD_DECK_TRY(v, num(e));
             m.impact_current_resolution = v;
