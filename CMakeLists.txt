@@ -293,16 +293,18 @@ add_test(NAME analysis COMMAND nitcad_analysis_test)
 # --- io layer (files: meshes, sweeps, checkpoints; Unit 29, approved 2026-10-09) ----------
 add_library(nitcad_io STATIC
   src/io/record.cpp
-  src/io/files.cpp)
+  src/io/files.cpp
+  src/io/device_file.cpp)
 add_library(NiTCAD::io ALIAS nitcad_io)
 target_include_directories(nitcad_io PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
-target_link_libraries(nitcad_io PUBLIC NiTCAD::base NiTCAD::mesh NiTCAD::results)
+target_link_libraries(nitcad_io PUBLIC NiTCAD::base NiTCAD::mesh NiTCAD::device NiTCAD::results)
 
 add_executable(nitcad_io_test
   tests/io/record_test.cpp
   tests/io/files_test.cpp
   tests/io/origin_test.cpp
-  tests/io/generated_test.cpp)
+  tests/io/generated_test.cpp
+  tests/io/device_file_test.cpp)
 # The record test reads the private encoding directly.
 target_include_directories(nitcad_io_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/io")
 target_link_libraries(nitcad_io_test PRIVATE NiTCAD::io Catch2::Catch2WithMain)
@@ -364,3 +366,29 @@ if(CMAKE_BUILD_TYPE STREQUAL "Release")
   # And the device gates on generated 2D meshes (tests/solve/unstructured_test.cpp, [.unstructured]).
   add_test(NAME solve_unstructured COMMAND nitcad_solve_test "[unstructured]")
 endif()
+
+# --- deck layer (the text input deck, its meaning and the batch runner; Unit 31) ----------
+add_library(nitcad_deck STATIC
+  src/deck/syntax.cpp
+  src/deck/build.cpp
+  src/deck/run.cpp)
+add_library(NiTCAD::deck ALIAS nitcad_deck)
+target_include_directories(nitcad_deck PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
+target_link_libraries(nitcad_deck PUBLIC NiTCAD::base NiTCAD::io NiTCAD::solve)
+
+add_executable(nitcad_deck_test
+  tests/deck/syntax_test.cpp
+  tests/deck/build_test.cpp
+  tests/deck/run_test.cpp)
+target_include_directories(nitcad_deck_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/deck")
+target_link_libraries(nitcad_deck_test PRIVATE NiTCAD::deck Catch2::Catch2WithMain)
+# The run tests start the nitcad executable for the exit status and Ctrl+C-free paths.
+add_dependencies(nitcad_deck_test nitcad)
+target_compile_definitions(nitcad_deck_test PRIVATE
+  NITCAD_CLI_PATH="$<TARGET_FILE:nitcad>"
+  NITCAD_MKL_RUNTIME_PATH="${NITCAD_MKL_RUNTIME_PATH}")
+add_test(NAME deck COMMAND nitcad_deck_test)
+
+# The batch runner (`nitcad check|run <deck>`).
+add_executable(nitcad src/cli/main.cpp)
+target_link_libraries(nitcad PRIVATE NiTCAD::deck)

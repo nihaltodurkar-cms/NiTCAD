@@ -171,6 +171,10 @@ public:
     [[nodiscard]] const mesh::TensorCells* cells() const noexcept {
         return d_.cells ? &*d_.cells : nullptr;
     }
+    // The P4 certificate the description gave, or nullptr.
+    [[nodiscard]] const mesh::InterfaceCertificate* interface_certificate() const noexcept {
+        return d_.interface_certificate ? &*d_.interface_certificate : nullptr;
+    }
     // The transport across an edge joining regions a and b: the declared interface's, else
     // drift-diffusion. Precondition (NITCAD_EXPECTS): both are valid region ids.
     [[nodiscard]] InterfaceTransport transport(RegionId a, RegionId b) const;

@@ -12,29 +12,28 @@
 #include <system_error>
 #include <utility>
 
+#include "container.hpp"
 #include "record.hpp"
 
-// Unwraps an expected into `var`, or returns its error from the enclosing function (local to this
-// file: every read is a chain of fallible field reads).
-#define NITCAD_IO_TRY(var, expr)                                                  \
-    auto var##_expected = (expr);                                                 \
-    if (!var##_expected) return std::unexpected(std::move(var##_expected.error())); \
-    auto var = std::move(*var##_expected)
-
 namespace NiTCAD::io {
+
+namespace detail {
+
+base::Error invalid(std::string message) {
+    return {base::ErrorCode::invalid_input, std::move(message), std::nullopt};
+}
+
+}  // namespace detail
 
 namespace {
 
 using detail::corrupt;
+using detail::invalid;
 using detail::Reader;
 using detail::Writer;
 
 constexpr std::array<char, 8> magic{'N', 'i', 'T', 'C', 'A', 'D', 'i', 'o'};
 constexpr std::size_t header_size = 8 + 4 + 4 + 8;
-
-base::Error invalid(std::string message) {
-    return {base::ErrorCode::invalid_input, std::move(message), std::nullopt};
-}
 
 base::Error unwritable(const std::filesystem::path& path, const std::string& what) {
     return {base::ErrorCode::resource_exhausted,
@@ -53,7 +52,10 @@ std::uint64_t get(std::span<const std::byte> in, std::size_t at, int bytes) {
     return v;
 }
 
-// The container around a payload, written atomically (files.hpp).
+}  // namespace
+
+namespace detail {
+
 std::expected<void, base::Error> write_file(const std::filesystem::path& path, Content kind,
                                             const Writer& payload) {
     const std::vector<std::byte>& body = payload.bytes();
@@ -90,7 +92,6 @@ std::expected<void, base::Error> write_file(const std::filesystem::path& path, C
     return {};
 }
 
-// The payload of a container of this kind, checked (files.hpp).
 std::expected<std::vector<std::byte>, base::Error> read_file(const std::filesystem::path& path,
                                                              Content kind) {
     std::ifstream f(path, std::ios::binary);
@@ -213,6 +214,49 @@ std::expected<mesh::Mesh, base::Error> read_mesh(const Reader& r) {
                                   std::move(volumes), std::move(edges), std::move(boundary),
                                   static_cast<mesh::MeshOrigin>(origin));
 }
+
+namespace certificate_key {
+constexpr std::uint16_t digests = 1, counts = 2, deviations = 3;
+}  // namespace certificate_key
+
+Writer write_certificate(const mesh::InterfaceCertificate& c) {
+    Writer cw;
+    cw.i64s(certificate_key::digests,
+            std::vector<std::int64_t>{std::bit_cast<std::int64_t>(c.mesh_digest),
+                                      std::bit_cast<std::int64_t>(c.region_digest),
+                                      std::bit_cast<std::int64_t>(c.interfaces_digest)});
+    cw.i64s(certificate_key::counts,
+            std::vector<std::int64_t>{static_cast<std::int64_t>(c.report.cross_faces),
+                                      static_cast<std::int64_t>(c.report.corner_faces)});
+    cw.f64s(certificate_key::deviations,
+            std::vector<double>{c.report.max_flat_deviation, c.report.max_corner_deviation});
+    return cw;
+}
+
+std::expected<mesh::InterfaceCertificate, base::Error> read_certificate(const Reader& cr) {
+    NITCAD_IO_TRY(digests, cr.i64s(certificate_key::digests));
+    NITCAD_IO_TRY(ccounts, cr.i64s(certificate_key::counts));
+    NITCAD_IO_TRY(deviations, cr.f64s(certificate_key::deviations));
+    if (digests.size() != 3 || ccounts.size() != 2 || deviations.size() != 2) {
+        return std::unexpected(corrupt("certificate sizes"));
+    }
+    return mesh::InterfaceCertificate{.mesh_digest = std::bit_cast<std::uint64_t>(digests[0]),
+                                      .region_digest = std::bit_cast<std::uint64_t>(digests[1]),
+                                      .interfaces_digest = std::bit_cast<std::uint64_t>(digests[2]),
+                                      .report = {static_cast<std::size_t>(ccounts[0]),
+                                                 static_cast<std::size_t>(ccounts[1]), deviations[0],
+                                                 deviations[1]}};
+}
+
+}  // namespace detail
+
+namespace {
+
+using detail::read_file;
+using detail::read_mesh;
+using detail::write_file;
+using detail::write_mesh;
+namespace mesh_key = detail::mesh_key;
 
 // --- results -----------------------------------------------------------------------------------
 
@@ -525,9 +569,6 @@ namespace {
 namespace report_key {
 constexpr std::uint16_t counts = 1, min_angle = 2, counts_3d = 3, quality_3d = 4;  // 3D: optional
 }  // namespace report_key
-namespace certificate_key {
-constexpr std::uint16_t digests = 1, counts = 2, deviations = 3;
-}  // namespace certificate_key
 
 std::vector<std::int64_t> wide(std::span<const std::int32_t> v) { return {v.begin(), v.end()}; }
 
@@ -567,20 +608,7 @@ std::expected<void, base::Error> save_generated_mesh(const std::filesystem::path
         rep.f64s(report_key::quality_3d, std::vector<double>{r.max_radius_edge, r.min_dihedral_deg});
     }
     w.record(mesh_key::report, rep);
-    if (m.certificate) {
-        const mesh::InterfaceCertificate& c = *m.certificate;
-        Writer cw;
-        cw.i64s(certificate_key::digests,
-                std::vector<std::int64_t>{std::bit_cast<std::int64_t>(c.mesh_digest),
-                                          std::bit_cast<std::int64_t>(c.region_digest),
-                                          std::bit_cast<std::int64_t>(c.interfaces_digest)});
-        cw.i64s(certificate_key::counts,
-                std::vector<std::int64_t>{static_cast<std::int64_t>(c.report.cross_faces),
-                                          static_cast<std::int64_t>(c.report.corner_faces)});
-        cw.f64s(certificate_key::deviations,
-                std::vector<double>{c.report.max_flat_deviation, c.report.max_corner_deviation});
-        w.record(mesh_key::certificate, cw);
-    }
+    if (m.certificate) w.record(mesh_key::certificate, detail::write_certificate(*m.certificate));
     return write_file(path, Content::mesh, w);
 }
 
@@ -617,18 +645,7 @@ std::expected<mesh::GeneratedMesh, base::Error> load_generated_mesh(const std::f
     std::optional<mesh::InterfaceCertificate> certificate;
     if (r.has(mesh_key::certificate)) {
         NITCAD_IO_TRY(cr, r.record(mesh_key::certificate));
-        NITCAD_IO_TRY(digests, cr.i64s(certificate_key::digests));
-        NITCAD_IO_TRY(ccounts, cr.i64s(certificate_key::counts));
-        NITCAD_IO_TRY(deviations, cr.f64s(certificate_key::deviations));
-        if (digests.size() != 3 || ccounts.size() != 2 || deviations.size() != 2) {
-            return std::unexpected(corrupt("certificate sizes"));
-        }
-        mesh::InterfaceCertificate c{.mesh_digest = std::bit_cast<std::uint64_t>(digests[0]),
-                                     .region_digest = std::bit_cast<std::uint64_t>(digests[1]),
-                                     .interfaces_digest = std::bit_cast<std::uint64_t>(digests[2]),
-                                     .report = {static_cast<std::size_t>(ccounts[0]),
-                                                static_cast<std::size_t>(ccounts[1]), deviations[0],
-                                                deviations[1]}};
+        NITCAD_IO_TRY(c, detail::read_certificate(cr));
         if (!mesh::certifies(c, m, node_region)) {
             return std::unexpected(corrupt("the certificate does not certify the stored mesh and regions"));
         }
@@ -733,5 +750,3 @@ std::expected<Checkpoint, base::Error> load_checkpoint(const std::filesystem::pa
 }
 
 }  // namespace NiTCAD::io
-
-#undef NITCAD_IO_TRY

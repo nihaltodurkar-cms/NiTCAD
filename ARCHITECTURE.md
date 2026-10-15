@@ -124,6 +124,7 @@ Each layer may depend only on layers drawn below it. Layers on the same row do n
  L8   app         Win32 application: windows, input, run control UI
  L7   render      Direct3D 12 / Direct2D drawing of meshes, fields, plots
  L6   analysis    quantities extracted from results (Unit 24); reads results, never solves
+ L6   deck        the text input deck, its meaning (device, options, plan) and the batch runner (Unit 31)
  L5   solve       Newton, damping, continuation, sweeps; produces results; cancellation + progress
  L4   assemble    scaling; discretization (SG flux and extensions); contacts/BC handling;
                   residual + Jacobian; nonlocal models (tunnel paths since Unit 20)
@@ -147,10 +148,11 @@ Allowed dependencies (everything not listed is forbidden):
 | results | base, mesh |
 | assemble | base, linalg, mesh, physics, device |
 | solve | base, linalg, assemble, device, results |
-| io | base, mesh, results (Unit 29; device descriptions later) |
+| io | base, mesh, device, results (Unit 29; device files Unit 31) |
 | analysis | base, mesh, results |
+| deck | base, mesh, physics, device, results, solve (with the option types of linalg and assemble it carries), io (Unit 31) |
 | render | base, mesh, results, analysis |
-| app | all of the above except physics and assemble (io included) |
+| app | all of the above except physics and assemble (io and deck included) |
 
 `results` sits below `solve` so that `analysis`, `render` and `app` can read results without including any
 solver header.
@@ -172,7 +174,8 @@ and boundary/interface laws into the global residual and Jacobian. This preserve
 | physics | material parameters and constitutive models; node/edge/interface-local laws and exact derivatives | meshes, matrices, bias, solving |
 | device | regions, material assignment, doping, interfaces and contact/boundary descriptions (data only) | solving, assembling |
 | results | field/terminal data, convergence history, diagnostics and run record | solving |
-| io | file formats: the container, records, atomic writes, checkpoints (Unit 29) | solving; the in-memory types (they know nothing of it, R2) |
+| io | file formats: the container, records, atomic writes, checkpoints (Unit 29); device files (Unit 31) | solving; the in-memory types (they know nothing of it, R2) |
+| deck | the input deck's syntax and meaning, the run plan, the batch runner (Unit 31) | physics, assembling, solving (it calls `solve`) |
 | assemble | equation contributions, scaling, Scharfetter–Gummel flux (and its extensions), contact/interface residuals, F(x) and J(x), gathering model inputs | Newton iteration, UI |
 | solve | Newton, damping, continuation, sweeps, cancellation, progress | assembly, rendering |
 | analysis | quantities derived from results | solving |
@@ -1645,6 +1648,56 @@ on-disk input format is **deferred** (R2) until concrete requirements exist. The
 any file format: no serialization types or format concepts inside them, and any future reader or writer depends on
 them, never the reverse. The legacy wire format was a Python JSON `DeviceSpec` and is not carried over.
 
+**As built (Unit 31, device files, the input deck and the batch runner; owner rulings 2026-10-15; R2 met for
+inputs; DECISIONS.md DK1–DK11):**
+- `io/device_file.hpp`: `save_device` / `load_device`, content kind 4 in the Unit 29 container. Every field of the
+  description: the mesh, temperature, regions with every material parameter under its own key (absent keys take the
+  parameter struct's defaults), node regions, doping, contacts (gate stacks, electrodes), interfaces (traps, charge,
+  surface recombination), tensor cells (as their axes), thermal contacts and the P4 certificate. A loaded description
+  goes through `Device::create`. `Device` gained `interface_certificate()` so a device can be written back.
+- `deck/syntax.hpp`: the deck's grammar (DK1): `[kind name]` sections of `key = value` entries, comments, quoted
+  values, line continuations; syntax errors name file and line.
+- `deck/build.hpp`: the deck's meaning (the reference list of sections and keys is the header's comment): `[device]`,
+  `[mesh]` (tensor axes from lists and `linspace` pieces, `straddle` interfaces, the 2D and 3D generators with
+  patches, size boxes and planar interfaces, a `cuboid` shorthand, or a mesh file), `[region]` (a built-in material,
+  parameter overrides by member path, boxes, polygons or seeds), `[doping]` (the Unit 16 analytic profiles),
+  `[contact]`, `[interface]`, `[thermal_contact]`, `[models]`, `[solver]` (Newton, line search, step cutting, linear
+  backend), `[equilibrium]` or `[sweep]` (series per contact and thermal contact, restart), `[output]`. Strict: an
+  unknown section or key is an error (DK3); every error names its line (DK4). Lengths take `cm`, `um`, `nm` (DK5).
+- `deck/run.hpp`: `run(plan)` solves the analysis and writes the outputs (device, mesh, sweep, a CSV table of the
+  bias and terminal currents, the last completed point as a checkpoint), also for a sweep that stopped early; a
+  restart continues after the checkpoint's point (DK9).
+- `nitcad check|run <deck>` (`src/cli/main.cpp`, DK10): exit status 0, 1 (error), 2 (stopped early), 64 (usage);
+  Ctrl+C stops the solver at its next check and the completed points are written.
+- Gates (`tests/io/device_file_test.cpp`, 3 cases; `tests/deck`, 14 cases):
+  - a 2D device using every part of a description (three regions, AlGaAs, an oxide with a one-ulp permittivity,
+    an electrode, a thermionic interface, trap levels and bands, cells, two thermal contacts) and a 1D graph-mesh
+    device with a gate and a P4 certificate round-trip bit for bit, and saving the loaded device reproduces the file
+    byte for byte; foreign, damaged and invalid files are refused (a material or `Device::create` rejection
+    included); absent parameter keys take their defaults, unknown keys are skipped;
+  - the diode deck gives the hand-built diode's run identity (every input the solver reads equal), and its run
+    equals the hand-built sweep bit for bit; the 2D generated deck equals the hand-built generator call (mesh
+    digest and node regions), and the same deck on the saved mesh file gives the same run identity; a `cuboid` deck
+    meshes the unit cube (volume and face areas exact to 1e-12);
+  - a 2D tensor deck with an oxide box, a straddled interface, an electrode, contacts limited by boxes and a patch
+    reaching into the oxide, material overrides, a Gaussian profile and interface traps builds what it says;
+  - 29 mistakes each give their message and line (syntax errors separately, 10 more);
+  - every output reads back (sweep, device, mesh, checkpoint, table with 17-digit values); a restart from a
+    checkpoint at 0.3 V reaches the uninterrupted 0.4–0.6 V points to 1e-9 relative; a restart from a bias that is
+    not a point, or from the last point, is refused; the equilibrium analysis equals `solve_equilibrium` bit for
+    bit; a sweep stopped by its iteration limit writes its completed point;
+  - the `nitcad` executable: `check` describes and writes nothing, `run` converges and writes, a bad deck exits 1
+    with `file:line`, a stopped sweep exits 2, misuse exits 64.
+- Mutation checks (23, the shell loop of Unit 28, no Python), all caught: device files (9: a parameter, the thermal
+  record, a gate work function, the cells, a thermal velocity, a thermal resistance not written or read, absent keys
+  not defaulted); the deck (14: repeated axis join points kept, the exponent `+` split, the contact region filter
+  removed, box order reversed, the doping error's line, insulator thermal overrides, held series values, the
+  series' exact last value, the `um` scale, quoted comments, the restart's skipped count, the checkpoint's point,
+  bit-exact restart matching, the stopped exit status).
+- Not in Unit 31: transient, small-signal and `trace_bias` decks and their results on disk (owner ruling, the next
+  io unit); 2D structured boundary layers and per-region sizes in the deck; general 1D graph meshes; variables,
+  expressions and includes.
+
 ### 6.6 Result representation
 
 `results` holds fields indexed by mesh node, terminal quantities per bias point, and a run record
@@ -2279,7 +2332,7 @@ composable.
 
 | Component | Language | Reason |
 |---|---|---|
-| base, linalg, mesh, physics, device, results, assemble, solve, analysis, render, app | C++23 | primary language |
+| base, linalg, mesh, physics, device, results, assemble, solve, io, analysis, deck, render, app | C++23 | primary language |
 | Any later low-level kernel | C or Fortran | deferred; only for a measured, justified component named by the owner |
 
 C and Fortran integration is deferred. If introduced later, it is used only for a measured and justified
@@ -2336,9 +2389,13 @@ tests/solve/                Newton contract, equilibrium and bias diode gates, l
                             band-to-band tunnelling (Unit 20); extraction from solved devices (Unit 24); PARDISO
                             device gates and solver timing (Unit 18); electrothermal (Unit 23)
 include/NiTCAD/results/     convergence.hpp, solution.hpp, run.hpp (header-only plain data) (Unit 10, exists)
-include/NiTCAD/io/          files.hpp: container, meshes, sweeps, checkpoints               (Unit 29)
-src/io/                     record encoding (private), files                          (Unit 29)
-tests/io/                   record and file round trips, damage, atomic writes      (Unit 29)
+include/NiTCAD/io/          files.hpp: container, meshes, sweeps, checkpoints (Unit 29); device_file.hpp (Unit 31)
+include/NiTCAD/deck/        syntax.hpp, build.hpp, run.hpp: the input deck and the batch runner      (Unit 31)
+src/io/                     record encoding (private), files (Unit 29); container (private), device files (Unit 31)
+src/deck/                   syntax, values (private), build, run                     (Unit 31)
+src/cli/                    main.cpp: the nitcad batch runner (DK10, open to review)  (Unit 31)
+tests/io/                   record and file round trips, damage, atomic writes (Unit 29); device files (Unit 31)
+tests/deck/                 syntax, decks against hand-built devices, runs, restarts, the executable (Unit 31)
 include/NiTCAD/analysis/    curve.hpp, dc.hpp, cv.hpp, two_port.hpp                     (Unit 24)
 src/analysis/               extractors; common.hpp helpers (private)                    (Unit 24)
 tests/analysis/             synthetic curves and networks with exact figures            (Unit 24)
@@ -2486,6 +2543,7 @@ built.
 | 28 | Bias step cutting (commercial-readiness programme, 11.3) | solve, results | **done, on `main`** (`06b708d`, PR #31): off by default; halving and growth from the last converged state (11.3, Unit 28; DECISIONS.md S1–S7) |
 | 29 | The io layer: files and checkpoint/restart (11.3) | io | **done, on `main`** (`f69a7a8`, PR #33): meshes, sweeps and checkpoints in a versioned, checksummed container with atomic writes; restart equals the uninterrupted sweep (6.6, Unit 29; DECISIONS.md IO1–IO7) |
 | 30 | Newton line search (11.3) | solve, results | **done, on `main`** (`f3e2811`, PR #32): opt-in backtracking on the damped step, residual or natural test; benchmarked against step cutting (11.3, Unit 30; DECISIONS.md L1–L6) |
+| 31 | Device files, the text input deck and the batch runner (11.3) | io, deck | **built, on branch `io/input-deck`**: device descriptions on disk, the deck (meshes of every kind, materials, doping, contacts, interfaces, models, solver options, equilibrium and steady sweeps, restart, outputs), `nitcad check|run` (6.5, Unit 31; DECISIONS.md DK1–DK11) |
 
 Units 1–9 are the smallest end-to-end vertical slice: a validated drift-diffusion diode. Everything past
 Unit 10 is deferred until sequenced. Units 11–15, 15b, 21 and 22 were requested by the owner after Unit 10; nothing
@@ -2536,13 +2594,13 @@ exists, not finished), **planned** (nothing built). Audit of 2026-10-09, against
 | Area | What exists (audited) | Status | Next step |
 |---|---|---|---|
 | Robust nonlinear solving | Newton with componentwise clipping (6.2); the generation-free retry (Units 19, 20); arc-length `trace_bias` (Unit 19) | **Bias step cutting verified, on `main`** (Unit 28, below; `06b708d`, PR #31); **Newton line search verified, opt-in, on `main`** (Unit 30, below; `f3e2811`, PR #32) | A natural-test norm monotone in reverse bias; a Gummel or pseudo-transient fallback |
-| Input/output, checkpoint/restart | The `io` layer (approved 2026-10-09): versioned, checksummed, atomic files for meshes, sweeps and checkpoints | **Verified, on `main`** (Unit 29, 6.6; `f69a7a8`, PR #33) | Device descriptions on disk and a text input deck; transient and small-signal results |
+| Input/output, checkpoint/restart | The `io` layer (approved 2026-10-09): versioned, checksummed, atomic files for meshes, sweeps and checkpoints; device files and the text input deck (Unit 31) | **Verified, on `main`** (Unit 29, 6.6; `f69a7a8`, PR #33); **device files and the deck verified, on branch `io/input-deck`** (Unit 31, 6.5) | Transient, small-signal and `trace_bias` decks with their results on disk |
 | Geometry and unstructured 3D meshing | `Mesh::from_parts` accepts any valid node/edge/volume graph; besides the tensor-grid producer, Unit 16 added the 2D and 3D Delaunay generators and the simplex import (checked duals P0–P5, P4-certified interfaces, contact patches, structured 2D boundary layers); nonlocal BTBT still needs tensor cells (6.11, M16) | **Verified, on `main`** (Unit 16, 6.11; `a09cf43`, PR #35) | Non-convex 3D domains, 3D interface junction lines, interfaces across patched faces and 3D boundary layers (U7); an unstructured locator for nonlocal BTBT (M16) |
 | Low-current accuracy | `terminal_current_resolution` reports the floor (Unit 15); off-state MOSFET current unresolved (6.13) | planned | Current extraction from the minority side or quasi-Fermi unknowns, gated against the resolution |
 | Generic fields/equations | Specialized `DriftDiffusion` assembler with a stride (Unit 23) | planned (6.12.1–2) | Field and equation descriptors behind the current assembler, bit-identical |
 | Scalable linear solvers | Eigen SparseLU (default), PARDISO opt-in (Unit 18) | planned | Iterative Krylov with ILU/AMG behind `linalg`; parallel assembly |
 | Results and provenance | Plain-data results; run record with identity digest (6.6); sweeps persisted bit for bit (Unit 29) | partial | Build/version stamp in files; transient and small-signal results on disk |
-| Visualization, GUI, batch | None (Units 25, 26) | planned | A batch runner over the input deck before the GUI |
+| Visualization, GUI, batch | The `nitcad check|run` batch runner over the input deck (Unit 31); no visualization or GUI (Units 25, 26) | **Batch runner verified, on branch `io/input-deck`** (Unit 31); visualization and GUI planned | Rendering of meshes and fields (Unit 25), then the GUI over the same plan (Unit 26) |
 | Validation against published/measured data | Legacy, analytic and convergence gates throughout | partial | Published benchmark devices with cited data |
 
 **As built (Unit 28, bias step cutting; `solve::StepControl` in `solve/bias.hpp`; DECISIONS.md S1–S7):**
@@ -2721,7 +2779,7 @@ architecture; historical branch names remain only where they are useful to expla
 |---|---|
 | D2 | Catch2 v3 is the C++ test framework. Its availability through vcpkg is checked under V2; the decision stands. |
 | D4 | Dimension-generic architecture for 1D, 2D and 3D. |
-| D5 | Root namespace `NiTCAD`. Layers: `base`, `linalg`, `mesh`, `physics`, `device`, `assemble`, `solve`, `results`, `analysis`, `render`, `app`. **Amended 2026-10-09 (owner):** the `io` layer is approved (Unit 29). Nesting and include root: Q1. |
+| D5 | Root namespace `NiTCAD`. Layers: `base`, `linalg`, `mesh`, `physics`, `device`, `assemble`, `solve`, `results`, `analysis`, `render`, `app`. **Amended 2026-10-09 (owner):** the `io` layer is approved (Unit 29). **Amended 2026-10-15:** the `deck` layer, added with the owner's Unit 31 scope ruling (input deck and batch runner; its name and `src/cli/` open to review, DECISIONS.md DK2, DK10). Nesting and include root: Q1. |
 | R1 | `std::expected` for recoverable errors; exceptions only for exceptional or programmer-error cases; no exceptions in hot numerical kernels or Newton iterations (6.7). |
 | Q1 | Layers are nested namespaces `NiTCAD::<layer>`; the include root is `include/NiTCAD/<layer>/`, spelled exactly like the namespace. Settle casing before any file exists, because Git `core.ignorecase` can hide case-only renames. |
 | Q2 | `NITCAD_EXPECTS(cond)` fail-fast precondition macro (6.7). |
