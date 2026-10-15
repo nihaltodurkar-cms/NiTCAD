@@ -8,9 +8,17 @@ namespace NiTCAD::assemble {
 
 enum class NonlocalTunnelling : std::uint8_t { off, kane, direct_wkb };
 
+// The doping-dependent hole mobility (Unit 34): the material's Caughey-Thomas (the legacy, the
+// default) or Masetti's boron-doped silicon fit (physics/mobility.hpp), which needs every
+// semiconductor region to carry silicon's hole mobility parameters. Electrons keep
+// Caughey-Thomas either way.
+enum class HoleMobility : std::uint8_t { caughey_thomas, masetti };
+
 struct PhysicsModels {
     // Caughey-Thomas mobility; false: the lattice mobility (Caughey-Thomas at N = 0).
     bool doping_mobility = true;
+    // Which doping-dependent hole mobility (Unit 34); with doping_mobility false, its N = 0 value.
+    HoleMobility hole_mobility = HoleMobility::caughey_thomas;
     // SRH recombination with Scharfetter lifetimes.
     bool srh = true;
     // Auger recombination (physics::auger_recombination).

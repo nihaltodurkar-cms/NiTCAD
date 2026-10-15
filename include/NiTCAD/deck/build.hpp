@@ -53,7 +53,8 @@
 //   [thermal_contact <name>] (repeatable) patch; kind = isothermal | resistance; temperature;
 //                     resistance
 //   [models]          each assemble::PhysicsModels switch by its name = on | off;
-//                     btbt_nonlocal = off | kane | direct_wkb; impact_current_resolution = <x>
+//                     btbt_nonlocal = off | kane | direct_wkb; impact_current_resolution = <x>;
+//                     hole_mobility = caughey_thomas | masetti  (Unit 34)
 //   [solver]          equations = drift_diffusion | equilibrium_poisson; max_iterations; tol_update;
 //                     max_update; line_search = off | residual | natural; line_search.max_backtracks;
 //                     line_search.sufficient_decrease; max_cuts; growth; cut_max_iterations;

@@ -64,6 +64,7 @@ field_mobility = on
 auger = off
 btbt_nonlocal = kane
 impact_current_resolution = 1e-12
+hole_mobility = masetti
 
 [solver]
 equations = drift_diffusion
@@ -90,6 +91,7 @@ table = "iv table.csv"
     CHECK(m.srh);
     CHECK(m.btbt_nonlocal == assemble::NonlocalTunnelling::kane);
     CHECK(m.impact_current_resolution == 1e-12);
+    CHECK(m.hole_mobility == assemble::HoleMobility::masetti);
     const auto& o = p.options;
     CHECK(o.newton.max_iterations == 40);
     CHECK(o.newton.tol_update == 1e-9);
@@ -402,6 +404,8 @@ TEST_CASE("deck build: every mistake names its line", "[deck]") {
     expect(failure(head + "[equilibrium]\n[mesh]\n"), "t.deck:13: a second [mesh] section");
     expect(failure(head + "[equilibrium]\n[models]\nsrh = maybe\n"), "t.deck:14: 'maybe' is not on or off");
     expect(failure(head + "[equilibrium]\n[models]\nquantum = on\n"), "t.deck:14: unknown key 'quantum' in [models]");
+    expect(failure(head + "[equilibrium]\n[models]\nhole_mobility = arora\n"),
+           "t.deck:14: hole_mobility is caughey_thomas or masetti");
     expect(failure(head + "[equilibrium]\n[solver]\nbackend = pardiso\n"), "t.deck:13: backend = pardiso needs 'mkl'");
     expect(failure(head + "[equilibrium]\n[solver]\nmax_cuts = 99\n"), "t.deck:14: 'max_cuts' must lie in 0..52");
     expect(failure(head + "[equilibrium]\n[doping]\nprofile = donor flat 1e16\n"),
