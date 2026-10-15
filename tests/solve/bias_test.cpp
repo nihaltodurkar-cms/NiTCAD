@@ -44,6 +44,11 @@ using base::ErrorCode;
 
 namespace {
 
+// The legacy options (Unit 35, DECISIONS.md ruling 4): these gates are the legacy's, so they run on
+// its silicon (physics::legacy_silicon) and its Caughey-Thomas hole mobility; the published
+// defaults are gated in default_physics_test.cpp.
+const solve::BiasOptions legacy{.models = {.hole_mobility = assemble::HoleMobility::caughey_thomas}};
+
 bool close(double a, double b, double rel) { return std::abs(a - b) <= rel * std::abs(b); }
 
 std::vector<double> gate_mesh() { return legacy_graded_mesh(2e-4, 1e-4, 1e-8, 1e-6); }
@@ -71,7 +76,7 @@ device::Device diode(mesh::Mesh m, double NA = 1e17, double ND = 1e17) {
     return *device::Device::create(
         {.mesh = std::move(m),
          .temperature_K = 300.0,
-         .regions = {{"silicon", physics::silicon()}},
+         .regions = {{"silicon", physics::legacy_silicon()}},
          .node_region = std::vector<device::RegionId>(n, 0),
          .donors = std::move(donors),
          .acceptors = std::move(acceptors),
@@ -84,7 +89,7 @@ device::Device diode_1d(const std::vector<double>& x) { return diode(*mesh::make
 // Anode current density of a sweep over the given anode voltages (cathode grounded), each point
 // started from the previous one.
 std::vector<double> sweep(const device::Device& d, const std::vector<double>& volts,
-                          const solve::BiasOptions& options = {}) {
+                          const solve::BiasOptions& options = legacy) {
     std::vector<double> J;
     std::optional<results::NodeFields> state;
     for (const double V : volts) {
@@ -138,7 +143,7 @@ TEST_CASE("bias: the ported legacy graded_mesh follows the legacy specification"
 TEST_CASE("bias: J(0.5 V) = 1.280e-2 A/cm^2 within 1% (section 10 gate)") {
     const auto d = diode_1d(gate_mesh());
     const std::vector<double> bias{0.5, 0.0};
-    const auto s = solve::solve_bias(d, bias);
+    const auto s = solve::solve_bias(d, bias, legacy);
     REQUIRE(s.has_value());
     const double J = s->terminal_current[0];
     UNSCOPED_INFO("J(0.5 V) = " << J << " A/cm^2, " << s->convergence.iterations.size()
@@ -165,12 +170,12 @@ TEST_CASE("bias: ideal-diode law (legacy test_ideal_diode_law)") {
     // Short-base saturation current: J_s = q n_i^2 (D_p / (W_n N_D) + D_n / (W_p N_A)), with the
     // neutral widths 1 um - W/2 and W the zero-bias depletion width.
     const double VT = base::thermal_voltage(300.0);
-    const double ni = physics::intrinsic_density(physics::silicon(), 300.0);
+    const double ni = physics::intrinsic_density(physics::legacy_silicon(), 300.0);
     const double eps = 11.7 * base::eps0_F_per_cm;
     const double Vbi = VT * std::log(1e34 / (ni * ni));
     const double W = std::sqrt(2.0 * eps * Vbi / base::q_C * (1.0 / 1e17 + 1.0 / 1e17));
     const double Wn = 1e-4 - W / 2.0, Wp = Wn;
-    const physics::Semiconductor si = physics::silicon();
+    const physics::Semiconductor si = physics::legacy_silicon();
     const double Dn =
         physics::caughey_thomas_mobility(si, physics::Carrier::electron, 1e17, 300.0) * VT;
     const double Dp =
@@ -215,7 +220,7 @@ TEST_CASE("bias: the analysis extractors read the diode's ideality (Unit 24)") {
     const auto d = diode_1d(gate_mesh());
     std::vector<std::vector<double>> points;
     for (int k = 0; k <= 14; ++k) points.push_back({0.05 * k, 0.0});
-    const auto s = solve::sweep_bias(d, points);
+    const auto s = solve::sweep_bias(d, points, legacy);
     REQUIRE(s.has_value());
     REQUIRE(!s->stopped);
     const auto curve = analysis::current_curve(*s, 0, 0);
@@ -250,9 +255,9 @@ TEST_CASE("bias: the analysis extractors read the diode's ideality (Unit 24)") {
 
 TEST_CASE("bias: a 2x finer mesh moves J(0.5 V) by less than 3% (legacy g4)") {
     const std::vector<double> bias{0.5, 0.0};
-    const double coarse = solve::solve_bias(diode_1d(gate_mesh()), bias)->terminal_current[0];
+    const double coarse = solve::solve_bias(diode_1d(gate_mesh()), bias, legacy)->terminal_current[0];
     const auto fine_mesh = legacy_graded_mesh(2e-4, 1e-4, 5e-9, 5e-7);
-    const double fine = solve::solve_bias(diode_1d(fine_mesh), bias)->terminal_current[0];
+    const double fine = solve::solve_bias(diode_1d(fine_mesh), bias, legacy)->terminal_current[0];
     UNSCOPED_INFO("coarse " << coarse << ", fine " << fine);
     REQUIRE(std::abs(fine - coarse) / std::abs(coarse) < 0.03);
 }
@@ -262,9 +267,9 @@ TEST_CASE("bias: y-uniform 2D and 3D devices reproduce the 1D current") {
     const auto y = uniform_axis(1e-4, 3);
     const auto z = uniform_axis(5e-5, 3);
     const std::vector<double> bias{0.5, 0.0};
-    const double J1 = solve::solve_bias(diode_1d(x), bias)->terminal_current[0];
-    const auto s2 = solve::solve_bias(diode(*mesh::make_tensor_grid(x, y)), bias);
-    const auto s3 = solve::solve_bias(diode(*mesh::make_tensor_grid(x, y, z)), bias);
+    const double J1 = solve::solve_bias(diode_1d(x), bias, legacy)->terminal_current[0];
+    const auto s2 = solve::solve_bias(diode(*mesh::make_tensor_grid(x, y)), bias, legacy);
+    const auto s3 = solve::solve_bias(diode(*mesh::make_tensor_grid(x, y, z)), bias, legacy);
     REQUIRE(s2.has_value());
     REQUIRE(s3.has_value());
     // 2D current is per unit depth (A/cm), over a 1 um wide device; 3D is in A over 1 um x 0.5 um.
@@ -286,7 +291,7 @@ TEST_CASE("bias: reverse leakage is generation-limited, and its Jacobians are no
     std::optional<results::NodeFields> state;
     for (const double v : V) {
         const std::vector<double> bias{v, 0.0};
-        auto s = solve::solve_bias(d, bias, {}, state ? &*state : nullptr);
+        auto s = solve::solve_bias(d, bias, legacy, state ? &*state : nullptr);
         REQUIRE(s.has_value());
         J.push_back(s->terminal_current[0]);
         smallest = std::min(smallest, s->convergence.smallest_pivot_ratio.value_or(1.0));
@@ -312,7 +317,7 @@ TEST_CASE("bias: reverse leakage is generation-limited, and its Jacobians are no
 TEST_CASE("bias: zero bias is equilibrium") {
     const auto d = diode_1d(gate_mesh());
     const std::vector<double> bias{0.0, 0.0};
-    const auto s = solve::solve_bias(d, bias);
+    const auto s = solve::solve_bias(d, bias, legacy);
     REQUIRE(s.has_value());
     const auto eq = solve::solve_equilibrium(d);
     for (std::size_t i = 0; i < eq->fields.potential_V.size(); ++i) {
@@ -325,7 +330,10 @@ TEST_CASE("bias: zero bias is equilibrium") {
 TEST_CASE("bias: without recombination the electron current is the same on every edge") {
     const auto d = diode_1d(gate_mesh());
     const std::vector<double> bias{0.4, 0.0};
-    const auto s = solve::solve_bias(d, bias, {.models = {.srh = false, .auger = false}});
+    const auto s = solve::solve_bias(
+        d, bias,
+        {.models = {.hole_mobility = assemble::HoleMobility::caughey_thomas, .srh = false,
+                    .auger = false}});
     REQUIRE(s.has_value());
     // Exact up to rounding. In the neutral n region the electron flux is a difference of one-sided
     // terms n2 B(delta) and n1 B(-delta) up to 2.7e9 times larger (measured: deviation 4.9e-6 of
@@ -344,7 +352,7 @@ TEST_CASE("bias: without recombination the electron current is the same on every
                                                            1e-9 * std::abs(Jn));
     }
     // With SRH the electron current changes along the device while the total does not.
-    const auto with_srh = solve::solve_bias(d, bias);
+    const auto with_srh = solve::solve_bias(d, bias, legacy);
     REQUIRE_FALSE(close(with_srh->edge_current_n.front(), with_srh->edge_current_n.back(), 1e-3));
 }
 
@@ -406,11 +414,11 @@ TEST_CASE("bias: PARDISO, one analysis per Newton run and the diode gates (Unit 
     // Each current within 1e-10 of Eigen's, or within its resolution where that is larger: near
     // zero bias the current is close to its rounding floor, and the two backends' rounding differs
     // with the machine (identical to 2e-15 on the development machine, 5.7e-9 relative on CI's).
-    solve::BiasOptions options;
+    solve::BiasOptions options = legacy;
     options.linear = pardiso;
     std::vector<std::vector<double>> points;
     for (int k = 0; k <= 14; ++k) points.push_back({0.05 * k, 0.0});
-    const auto e = solve::sweep_bias(d, points);
+    const auto e = solve::sweep_bias(d, points, legacy);
     const auto p = solve::sweep_bias(d, points, options);
     REQUIRE(e.has_value());
     REQUIRE(p.has_value());
@@ -473,7 +481,7 @@ TEST_CASE("bias: invalid input and non-convergence return errors") {
     REQUIRE(solve::solve_bias(d, bad).error().code == ErrorCode::invalid_input);
     const std::vector<double> bias{0.5, 0.0};
     results::NodeFields empty;
-    REQUIRE(solve::solve_bias(d, bias, {}, &empty).error().code == ErrorCode::invalid_input);
+    REQUIRE(solve::solve_bias(d, bias, legacy, &empty).error().code == ErrorCode::invalid_input);
     const auto few = solve::solve_bias(d, bias, {.newton = {.max_iterations = 2}});
     REQUIRE_FALSE(few.has_value());
     REQUIRE(few.error().code == ErrorCode::non_convergence);

@@ -34,7 +34,7 @@ TEST_CASE("materials: every legacy set validates and gives its band quantities a
         SemiconductorParameters parameters;
     };
     const Set sets[] = {
-        {"Si", silicon_parameters},
+        {"Si (legacy)", legacy_silicon_parameters},
         {"Ge", germanium_parameters},
         {"GaAs", gallium_arsenide_parameters},
         {"In0.53Ga0.47As", indium_gallium_arsenide_parameters},

@@ -20,7 +20,8 @@ using namespace NiTCAD;
 
 namespace {
 
-device::Device diode(double NA, double ND) {
+device::Device diode(double NA, double ND,
+                      const physics::Semiconductor& material = physics::silicon()) {
     mesh::Mesh m = *mesh::make_tensor_grid(legacy_graded_mesh(2e-4, 1e-4, 1e-8, 1e-6));
     const std::size_t n = m.node_count();
     std::vector<double> donors(n, 0.0), acceptors(n, 0.0);
@@ -36,7 +37,7 @@ device::Device diode(double NA, double ND) {
     return *device::Device::create(
         {.mesh = std::move(m),
          .temperature_K = 300.0,
-         .regions = {{"silicon", physics::silicon()}},
+         .regions = {{"silicon", material}},
          .node_region = std::vector<device::RegionId>(n, 0),
          .donors = std::move(donors),
          .acceptors = std::move(acceptors),
@@ -108,11 +109,16 @@ TEST_CASE("heavy doping: band-gap narrowing raises the low-injection current by 
 }
 
 TEST_CASE("heavy doping: Auger barely moves the legacy J(0.5 V) fixture (Unit 9 measurement)") {
-    const auto d = diode(1e17, 1e17);
+    const auto d = diode(1e17, 1e17, physics::legacy_silicon());
     const std::vector<double> bias{0.5, 0.0};
-    const double J = solve::solve_bias(d, bias)->terminal_current[0];
+    // The legacy options (Unit 35): the Unit 9 fixture on legacy silicon and Caughey-Thomas holes.
+    const solve::BiasOptions legacy{.models = {.hole_mobility = assemble::HoleMobility::caughey_thomas}};
+    const double J = solve::solve_bias(d, bias, legacy)->terminal_current[0];
     const double J_no_auger =
-        solve::solve_bias(d, bias, {.models = {.auger = false}})->terminal_current[0];
+        solve::solve_bias(
+            d, bias,
+            {.models = {.hole_mobility = assemble::HoleMobility::caughey_thomas, .auger = false}})
+            ->terminal_current[0];
     const double effect = J / J_no_auger - 1.0;
     UNSCOPED_INFO("Auger effect " << effect);
     REQUIRE(effect > 0.0);   // Auger adds recombination current

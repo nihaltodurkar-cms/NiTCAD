@@ -74,7 +74,7 @@ device::Device moscap(mesh::Mesh m, device::GateStack gate = stack(), double T =
     return *device::Device::create(
         {.mesh = std::move(m),
          .temperature_K = T,
-         .regions = {{"silicon", physics::silicon()}},
+         .regions = {{"silicon", physics::legacy_silicon()}},
          .node_region = std::vector<device::RegionId>(n, 0),
          .donors = std::vector<double>(n, 0.0),
          .acceptors = std::vector<double>(n, N_A),
@@ -92,8 +92,15 @@ struct Curve {
     std::vector<results::BiasPoint> points;
 };
 
-solve::BiasOptions quasi_static() {
+// The legacy options (Unit 35): the legacy MOS capacitor on its silicon and Caughey-Thomas holes.
+solve::BiasOptions legacy_options() {
     solve::BiasOptions o;
+    o.models.hole_mobility = assemble::HoleMobility::caughey_thomas;
+    return o;
+}
+
+solve::BiasOptions quasi_static() {
+    solve::BiasOptions o = legacy_options();
     o.equations = solve::Equations::equilibrium_poisson;
     return o;
 }
@@ -155,7 +162,7 @@ std::optional<double> rising_crossing(const std::vector<double>& x, const std::v
 // level, the legacy from midgap (assemble/gate.hpp), so NiTCAD's curve is the legacy one moved to
 // higher gate voltage by this much.
 double intrinsic_shift(double T = 300.0) {
-    const physics::Semiconductor si = physics::silicon();
+    const physics::Semiconductor si = physics::legacy_silicon();
     return 0.5 * base::thermal_voltage(T) *
            std::log(physics::valence_band_dos(si, T) / physics::conduction_band_dos(si, T));
 }
@@ -199,7 +206,7 @@ TEST_CASE("mos: drift-diffusion with the gate gives the same state below thresho
     std::vector<double> down(Vg.rbegin(), Vg.rend());
     const Curve qs = cv(d, down);
     const Curve dd = cv(d, down, {});
-    const physics::Semiconductor si = physics::silicon();
+    const physics::Semiconductor si = physics::legacy_silicon();
     const double nie = physics::effective_intrinsic_density(si, N_A, 300.0);
     const double VT = base::thermal_voltage(300.0);
     double psi_error = 0.0, q_error = 0.0, hole_error = 0.0, current = 0.0;
@@ -231,7 +238,7 @@ TEST_CASE("mos: drift-diffusion stalls once the inversion layer forms") {
     // supported path for a MOS capacitor.
     std::vector<std::vector<double>> points;
     for (const double v : range(-0.3, 0.5, 0.1)) points.push_back({v, 0.0});
-    const auto sweep = solve::sweep_bias(moscap_1d(), points);
+    const auto sweep = solve::sweep_bias(moscap_1d(), points, legacy_options());
     REQUIRE(sweep.has_value());
     REQUIRE(sweep->stopped.has_value());
     REQUIRE(sweep->stopped->code == base::ErrorCode::non_convergence);
@@ -265,7 +272,7 @@ TEST_CASE("mos: the quasi-static sweep starts from a potential alone") {
     const auto cold = cv(d, {0.45});
     REQUIRE(std::abs(warm->points[0].gate_charge[0] - cold.Qg[0]) <= 1e-12 * std::abs(cold.Qg[0]));
     // Drift-diffusion needs the densities too.
-    const auto dd = solve::sweep_bias(d, points, {}, &potential_only);
+    const auto dd = solve::sweep_bias(d, points, legacy_options(), &potential_only);
     REQUIRE_FALSE(dd.has_value());
     REQUIRE(dd.error().message.find("positive densities") != std::string::npos);
 }
@@ -623,8 +630,8 @@ TEST_CASE("mos: fixed oxide charge shifts the curve by -q Q_f / C_ox") {
 
 TEST_CASE("mos: the electrode work function shifts the curve rigidly") {
     // phi_m(p+) - phi_m(n+) = Eg(T); a metal at chi + 0.3 eV shifts by 0.3 V.
-    const double Eg = physics::band_gap_eV(physics::silicon(), 300.0);
-    const double chi = physics::silicon_parameters.electron_affinity_eV;
+    const double Eg = physics::band_gap_eV(physics::legacy_silicon(), 300.0);
+    const double chi = physics::legacy_silicon_parameters.electron_affinity_eV;
     const std::vector<double> Vg{-0.5, 0.4, 1.4};
     const Curve n_poly = cv(moscap_1d(), Vg);
     for (const auto& [gate, offset] :

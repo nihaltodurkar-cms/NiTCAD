@@ -80,8 +80,18 @@ bool close_point(const results::BiasPoint& a, const results::BiasPoint& b) {
         }
         return true;
     };
+    // The currents to 1e-9 or to their resolution (Unit 32): that rounding moves a contact current
+    // by up to the resolution: 6e-8 relative at 0.4 V with the published silicon (Unit 35,
+    // whose lower n_i leaves a smaller current against the same cancelling majority fluxes).
+    bool currents = a.terminal_current.size() == b.terminal_current.size();
+    for (std::size_t c = 0; currents && c < a.terminal_current.size(); ++c) {
+        const double u = a.terminal_current[c], v = b.terminal_current[c];
+        const double resolution =
+            std::max(a.terminal_current_resolution[c], b.terminal_current_resolution[c]);
+        currents = std::abs(u - v) <= std::max(1e-9 * std::max(std::abs(u), std::abs(v)), resolution);
+    }
     return a.bias_V == b.bias_V && close(a.fields.potential_V, b.fields.potential_V) &&
-           close(a.fields.n_cm3, b.fields.n_cm3) && close(a.terminal_current, b.terminal_current);
+           close(a.fields.n_cm3, b.fields.n_cm3) && currents;
 }
 
 auto key(const Progress& e) { return std::tuple(static_cast<int>(e.phase), e.point, e.iteration); }
@@ -106,7 +116,8 @@ TEST_CASE("sweep: completed run, matching one-point solves, with its record") {
         REQUIRE(sweep->points[k].convergence.converged);
         state = std::move(one->fields);
     }
-    REQUIRE(std::abs(sweep->points[5].terminal_current[0] - 1.280e-2) / 1.280e-2 < 1e-2);
+    // The default diode at 0.5 V (Unit 35, default_physics_test.cpp; the legacy's 1.280e-2).
+    REQUIRE(std::abs(sweep->points[5].terminal_current[0] / 1.1399e-2 - 1.0) < 1e-3);
     REQUIRE(sweep->run.input_identity != 0);
     bool found = false;
     for (const auto& [name, value] : sweep->run.settings) {

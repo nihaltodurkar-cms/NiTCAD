@@ -84,8 +84,9 @@ TEST_CASE("weighted current: equal to the contact current where both are resolve
         CHECK(std::abs(p.weighted_current[0] + p.weighted_current[1]) <=
               1e-12 * std::abs(p.weighted_current[0]) + p.weighted_current_resolution[0]);
     }
-    // The 0.5 V Unit 9 gate, J = 1.280e-2 A/cm^2 within 1%.
-    CHECK(std::abs(sweep->points[5].weighted_current[0] / 1.280e-2 - 1.0) < 0.01);
+    // The default diode at 0.5 V, 1.1399e-2 A/cm^2 (Unit 35, default_physics_test.cpp; the Unit 9
+    // gate, the legacy's 1.280e-2, runs on the legacy options in bias_test.cpp).
+    CHECK(std::abs(sweep->points[5].weighted_current[0] / 1.1399e-2 - 1.0) < 1e-3);
 }
 
 TEST_CASE("weighted current: off by default, and on it changes nothing else", "[weighted]") {

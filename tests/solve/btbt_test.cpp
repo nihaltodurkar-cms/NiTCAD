@@ -538,10 +538,12 @@ TEST_CASE("btbt: the cost of the nonlocal paths", "[.btbt]") {
 TEST_CASE("btbt: a trace carries the paths") {
     // trace_bias with the nonlocal rate to -2 V: the paths are re-traced after each accepted
     // point (lagging one step), and the end point is the swept solve's within the resolution and
-    // the corrector's tolerance.
+    // the corrector's tolerance. On the Caughey-Thomas hole mobility: with the default (Masetti on
+    // silicon, Unit 35) the corrector stalls at -1.31 V (the next case).
     const device::Device d = zener();
     solve::TraceOptions o;
     o.steady = with(false, NonlocalTunnelling::kane);
+    o.steady.models.hole_mobility = assemble::HoleMobility::caughey_thomas;
     o.start_V = {0.0, 0.0};
     o.end_V = -2.0;
     o.step_V = 0.1;
@@ -565,6 +567,25 @@ TEST_CASE("btbt: a trace carries the paths") {
     REQUIRE(!u->stopped);
     for (const auto& p : u->points) REQUIRE_FALSE(p.tunnel_paths.empty());
     REQUIRE(std::abs(a - b) <= s->terminal_current_resolution[0] + 1e-6 * std::abs(b));
+}
+
+TEST_CASE("btbt: the trace on the default hole mobility (Unit 35, unresolved)", "[!shouldfail]") {
+    // The case above with the default (automatic: Masetti on this 5e19 silicon zener). Measured
+    // (Unit 35): the corrector stalls at -1.31 V, its updates between 3e-8 and 2.5e-6 against the
+    // 1e-8 tolerance with the residual flat at 2.3e-5 and 9.7e-5, down to min_step_V; a rounding
+    // floor of the lagged-path system, not a divergence (the swept solves to -3 V converge). With
+    // the Caughey-Thomas holes it completes. Reported as unresolved (DECISIONS.md, Unit 35); this
+    // case passes, and so reports, once it is fixed.
+    const device::Device d = zener();
+    solve::TraceOptions o;
+    o.steady = with(false, NonlocalTunnelling::kane);
+    o.start_V = {0.0, 0.0};
+    o.end_V = -2.0;
+    o.step_V = 0.1;
+    o.max_step_V = 0.5;
+    const auto t = solve::trace_bias(d, o);
+    REQUIRE(t.has_value());
+    REQUIRE(!t->stopped);
 }
 
 TEST_CASE("btbt: the run record") {

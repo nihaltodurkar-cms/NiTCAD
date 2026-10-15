@@ -139,7 +139,9 @@ TEST_CASE("device: the temperature is checked against every region's material") 
         REQUIRE(mentions(e, "region 'silicon'"));
         REQUIRE(e.context->index == 0);
     }
-    REQUIRE(mentions(rejected([](DeviceDescription& d) { d.temperature_K = 3500.0; }), "band gap"));
+    // Silicon's density-of-states mass fit turns negative near 2030 K, before its gap closes (Unit
+    // 35; legacy silicon's Varshni gap is refused there instead, semiconductor_test.cpp).
+    REQUIRE(mentions(rejected([](DeviceDescription& d) { d.temperature_K = 3500.0; }), "mass fit"));
     REQUIRE(mentions(rejected([](DeviceDescription& d) { d.temperature_K = 1000.0; }), "mobility"));
 }
 

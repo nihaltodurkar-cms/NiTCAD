@@ -88,7 +88,11 @@ double resistor_current(bool n_type, double E, bool with_field) {
     double J = 0.0;
     for (const auto [carrier, density] :
          {std::pair{physics::Carrier::electron, eq.n}, std::pair{physics::Carrier::hole, eq.p}}) {
-        const double mu0 = physics::caughey_thomas_mobility(si, carrier, N, 300.0);
+        // The default hole mobility is Masetti's (Unit 35, automatic on silicon).
+        const double mu0 =
+            carrier == physics::Carrier::hole
+                ? physics::masetti_mobility(physics::masetti_boron_silicon, N, 300.0)
+                : physics::caughey_thomas_mobility(si, carrier, N, 300.0);
         const double mu = with_field
                               ? physics::canali_mobility(mu0, E, physics::saturation(si, carrier))
                                     .mobility
@@ -194,7 +198,7 @@ TEST_CASE("field mobility: the legacy J(0.5 V) diode") {
     const auto d = *device::Device::create(
         {.mesh = std::move(m),
          .temperature_K = 300.0,
-         .regions = {{"silicon", physics::silicon()}},
+         .regions = {{"silicon", physics::legacy_silicon()}},  // the legacy options (Unit 35)
          .node_region = std::vector<device::RegionId>(n, 0),
          .donors = std::move(donors),
          .acceptors = std::move(acceptors),
@@ -202,8 +206,11 @@ TEST_CASE("field mobility: the legacy J(0.5 V) diode") {
                       {"cathode", device::ContactKind::ohmic, std::move(cathode)}}});
     std::vector<std::vector<double>> points;
     for (int k = 1; k <= 5; ++k) points.push_back({0.1 * k, 0.0});
-    const auto on = sweep(d, points, field_mobility());
-    const auto off = sweep(d, points, {});
+    solve::BiasOptions legacy_on = field_mobility(), legacy_off;
+    legacy_on.models.hole_mobility = legacy_off.models.hole_mobility =
+        assemble::HoleMobility::caughey_thomas;
+    const auto on = sweep(d, points, legacy_on);
+    const auto off = sweep(d, points, legacy_off);
     const double J_on = on.points.back().terminal_current[0];
     const double J_off = off.points.back().terminal_current[0];
     double spread = 0.0;

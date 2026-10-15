@@ -82,6 +82,7 @@ std::optional<base::Error> DriftDiffusion::make_thermal(const device::Device& de
             region_thermal[r] = m.parameters().thermal;
             region_material[r] = static_cast<std::int32_t>(thermal_materials_.size());
             thermal_materials_.push_back(m);
+            masetti_holes_.push_back(masetti_holes(models.hole_mobility, m.parameters()) ? 1 : 0);
         }
         if (!physics::has_thermal_data(region_thermal[r])) {
             return refused("electrothermal: region '" + region.name +
@@ -102,7 +103,6 @@ std::optional<base::Error> DriftDiffusion::make_thermal(const device::Device& de
     const int D = mesh.dimension();
     T0_ = scaling.temperature_K;
     thermal_bgn_ = models.bgn;
-    masetti_holes_ = models.hole_mobility == HoleMobility::masetti;
     const auto node_region = device.node_region();
     kappa_ref_ = region_thermal[node_region[device.reference_node()]].conductivity_W_cmK;
     heat_scale_ = kappa_ref_ * T0_ / (scaling.V_T * scaling.J0 * scaling.L_D);
@@ -237,7 +237,7 @@ std::expected<void, base::Error> DriftDiffusion::set_thermal_bias(
 DriftDiffusion::ThermalState DriftDiffusion::thermal_state(std::size_t i, double tau) const {
     const double nan = std::numeric_limits<double>::quiet_NaN();
     const double theta = 1.0 + tau;
-    ThermalState s{theta, tau, nan, nan, nan, nan, nan, nan, nan, nan, nan, nan, nan};
+    ThermalState s{theta, tau, nan, nan, nan, nan, nan, nan, nan, nan, nan, nan, nan, 0.0, 0.0, 0.0, 0.0};
     if (!(std::isfinite(tau) && theta > 0.0)) return s;
     const ThermalNode& t = thermal_nodes_[i];
     const double T = theta * T0_;
@@ -259,7 +259,7 @@ DriftDiffusion::ThermalState DriftDiffusion::thermal_state(std::size_t i, double
     const auto electron = physics::Carrier::electron, hole = physics::Carrier::hole;
     s.mu_n = physics::caughey_thomas_mobility(m, electron, t.impurity_mobility, T);
     s.d_mu_n = T0_ * physics::caughey_thomas_mobility_slope(m, electron, t.impurity_mobility, T);
-    if (masetti_holes_) {  // Unit 34
+    if (masetti_holes_[static_cast<std::size_t>(t.material)] != 0) {  // Units 34, 35
         const auto& masetti = physics::masetti_boron_silicon;
         s.mu_p = physics::masetti_mobility(masetti, t.impurity_mobility, T);
         s.d_mu_p = T0_ * physics::masetti_mobility_slope(masetti, t.impurity_mobility, T);
@@ -269,6 +269,15 @@ DriftDiffusion::ThermalState DriftDiffusion::thermal_state(std::size_t i, double
     }
     s.gap = -(physics::band_gap_eV(m, T) - t.gap0_eV) / V_T_;
     s.d_gap = -T0_ * physics::band_gap_slope_eV_per_K(m, T) / V_T_;
+    // Unit 35 (DECISIONS.md S4): the density-of-states masses' change from T0; 0 without a fit.
+    if (physics::has_dos_mass_fit(m.parameters())) {
+        const physics::ValueSlope cn = physics::dos_mass_log(m, physics::Carrier::electron, T);
+        const physics::ValueSlope cp = physics::dos_mass_log(m, physics::Carrier::hole, T);
+        s.mass_n = cn.value - physics::dos_mass_log(m, physics::Carrier::electron, T0_).value;
+        s.d_mass_n = T0_ * cn.d_dT;
+        s.mass_p = cp.value - physics::dos_mass_log(m, physics::Carrier::hole, T0_).value;
+        s.d_mass_p = T0_ * cp.d_dT;
+    }
     return s;
 }
 
@@ -280,18 +289,18 @@ std::vector<DriftDiffusion::ThermalState> DriftDiffusion::thermal_states(
     return s;
 }
 
-DriftDiffusion::Level DriftDiffusion::level(double c, double theta, double nie,
-                                            double log_N) const {
+DriftDiffusion::Level DriftDiffusion::level(double c, double theta, double nie, double log_N,
+                                            double mass, double d_mass) const {
     const double l15 = 1.5 * std::log(theta);
-    const double log_N_theta = log_N + l15;  // N(theta) = N0 theta^1.5
-    Level v{std::log(c) - log_N_theta, 1.0 / c, -1.5 / theta, 0, 0, 0, 0, 0, 0};
+    const double log_N_theta = log_N + l15 + mass;  // N(theta) = N0 theta^1.5 M(theta)
+    Level v{std::log(c) - log_N_theta, 1.0 / c, -1.5 / theta - d_mass, 0, 0, 0, 0, 0, 0};
     if (!fermi_dirac_) return v;
-    // ln gamma depends on c / N(theta) alone: d / d theta = -(1.5 / theta) c d / dc.
+    // ln gamma depends on c / N(theta) alone: d / d theta = -(1.5 / theta + d_mass) c d / dc.
     const physics::Degeneracy g =
         physics::fermi_dirac_degeneracy(nie, log_N_theta - std::log(nie), c);
     v.log_gamma = g.log_gamma;
     v.dg_dc = g.d_density;
-    v.dg_dt = -1.5 / theta * c * g.d_density;
+    v.dg_dt = -1.5 / theta * c * g.d_density - d_mass * c * g.d_density;
     v.x -= g.log_gamma;
     v.dx_dc -= v.dg_dc;
     v.dx_dt -= v.dg_dt;
@@ -310,8 +319,8 @@ std::vector<DriftDiffusion::NodeLevels> DriftDiffusion::thermal_levels(
     for (std::size_t i = 0; i < node_count(); ++i) {
         if (insulator_[i] != 0) continue;
         const ThermalNode& tn = thermal_nodes_[i];
-        g[i] = {level(x[4 * i + 1], t[i].theta, t[i].nie, tn.log_nc),
-                level(x[4 * i + 2], t[i].theta, t[i].nie, tn.log_nv)};
+        g[i] = {level(x[4 * i + 1], t[i].theta, t[i].nie, tn.log_nc, t[i].mass_n, t[i].d_mass_n),
+                level(x[4 * i + 2], t[i].theta, t[i].nie, tn.log_nv, t[i].mass_p, t[i].d_mass_p)};
     }
     return g;
 }
@@ -354,6 +363,19 @@ DriftDiffusion::thermal_fluxes(std::size_t k, std::span<const double> x,
             xp.d_c[j] = -xp.d_c[j];
             xp.d_t[j] = -xp.d_t[j];
         }
+    }
+    // Unit 35 (DECISIONS.md S4): -k T grad ln M of a temperature-dependent density-of-states mass
+    // is a band-parameter step, delta_n gains ln M_c(theta_b) - ln M_c(theta_a) as it has L_c,
+    // delta_p loses ln M_v(theta_b) - ln M_v(theta_a) as it has -L_v. 0 without a mass fit.
+    if (t[a].d_mass_n != 0.0 || t[b].d_mass_n != 0.0) {
+        xn.value += t[b].mass_n - t[a].mass_n;
+        xn.d_t[0] -= t[a].d_mass_n;
+        xn.d_t[1] += t[b].d_mass_n;
+    }
+    if (t[a].d_mass_p != 0.0 || t[b].d_mass_p != 0.0) {
+        xp.value -= t[b].mass_p - t[a].mass_p;
+        xp.d_t[0] += t[a].d_mass_p;
+        xp.d_t[1] -= t[b].d_mass_p;
     }
     // One carrier: flux = sign A (w_b B(sign delta) - w_a B(-sign delta)) with sign +1 for
     // electrons (A_n, delta_n) and -1 for holes, where the hole flux -A (w_b B(-delta) -
@@ -467,22 +489,24 @@ DriftDiffusion::ThermalOhmic DriftDiffusion::thermal_ohmic(std::size_t i,
     // Complete ionization (incomplete ionization is refused, DECISIONS.md U6).
     const physics::NeutralEquilibrium q =
         fermi_dirac_ ? physics::fermi_dirac_neutral_equilibrium(
-                           doping_[i], t.nie, tn.log_nc + lt - ln_nie, tn.log_nv + lt - ln_nie)
+                           doping_[i], t.nie, tn.log_nc + lt + t.mass_n - ln_nie,
+                           tn.log_nv + lt + t.mass_p - ln_nie)
                      : physics::boltzmann_neutral_equilibrium(doping_[i], t.nie);
     // With E_F = -m (m = V / V_T) the band reduced energies are x_n = (psi - m - c_n) / theta and
     // x_p = (c_p + g + m - psi) / theta, so psi0 = m + c_n + theta x_n. Neutrality
     // G = n(x_n, theta) - p(x_p, theta) - C = 0 fixes psi0(theta): dpsi0 / dtheta = -G_t / G_psi,
     // with dn / dx = n / (1 - n d ln gamma / dn) (n under Boltzmann statistics) and
-    // d n / d theta = 1.5 n / theta at fixed x.
-    const Level ln = level(q.n, theta, t.nie, tn.log_nc);
-    const Level lp = level(q.p, theta, t.nie, tn.log_nv);
+    // d n / d theta = (1.5 / theta + d ln M / d theta) n at fixed x.
+    const Level ln = level(q.n, theta, t.nie, tn.log_nc, t.mass_n, t.d_mass_n);
+    const Level lp = level(q.p, theta, t.nie, tn.log_nv, t.mass_p, t.d_mass_p);
     const double sn = q.n / (1.0 - q.n * ln.dg_dc), sp = q.p / (1.0 - q.p * lp.dg_dc);
     const double G_psi = (sn + sp) / theta;
     const double G_t = 1.5 * q.n / theta - sn * ln.x / theta - 1.5 * q.p / theta -
-                       sp * (t.d_gap - lp.x) / theta;
+                       sp * (t.d_gap - lp.x) / theta + t.d_mass_n * q.n - t.d_mass_p * q.p;
     const double d_psi_t = -G_t / G_psi;  // of theta x_n, which psi0 - m - c_n is
-    const double dn = 1.5 * q.n / theta + sn * (d_psi_t - ln.x) / theta;
-    const double dp = 1.5 * q.p / theta + sp * (t.d_gap - d_psi_t - lp.x) / theta;
+    const double dn = 1.5 * q.n / theta + sn * (d_psi_t - ln.x) / theta + t.d_mass_n * q.n;
+    const double dp = 1.5 * q.p / theta + sp * (t.d_gap - d_psi_t - lp.x) / theta +
+                      t.d_mass_p * q.p;
     return {metal_[i] + tn.c_n + theta * ln.x, q.n, q.p, d_psi_t, dn, dp};
 }
 
@@ -630,7 +654,8 @@ void DriftDiffusion::add_thermal_interfaces(std::span<const double> x,
     // not depend on T; the half-edge fluxes go to the Poisson rows. Surface recombination at the
     // semiconductor node's T: the carriers keep their quasi-Fermi levels across its half-cell, so
     // the band reduced energies at the interface are x_n + (psi_I - psi_s) / theta and
-    // x_p - (psi_I - psi_s) / theta (at fixed x a density moves with N(theta), 1.5 / theta in
+    // x_p - (psi_I - psi_s) / theta (at fixed x a density moves with N(theta), 1.5 / theta + d ln M
+    // / d theta in
     // ln), and the rate is SRH with lifetimes 1 / s and the equilibrium product and n1 = n_ie of
     // the node's T.
     const bool jacobian = !values.empty();
@@ -666,10 +691,11 @@ void DriftDiffusion::add_thermal_interfaces(std::span<const double> x,
         const double bend = (psi_I - psi_s) / theta;
         // d bend / d (psi_o, psi_s, theta).
         const double db[3] = {dI_o / theta, (dI_s - 1.0) / theta, -bend / theta};
-        const Level ln = level(x[4 * s + 1], theta, ts.nie, tn.log_nc);
-        const Level lp = level(x[4 * s + 2], theta, ts.nie, tn.log_nv);
+        const Level ln = level(x[4 * s + 1], theta, ts.nie, tn.log_nc, ts.mass_n, ts.d_mass_n);
+        const Level lp = level(x[4 * s + 2], theta, ts.nie, tn.log_nv, ts.mass_p, ts.d_mass_p);
         const double lt = 1.5 * std::log(theta), ln_nie = std::log(ts.nie);
-        const double gn_log = tn.log_nc + lt - ln_nie, gp_log = tn.log_nv + lt - ln_nie;
+        const double gn_log = tn.log_nc + lt + ts.mass_n - ln_nie;
+        const double gp_log = tn.log_nv + lt + ts.mass_p - ln_nie;
         const physics::DensityResult nI =
             detail::density(fermi_dirac_, ts.nie, gn_log, ln.x + bend + gn_log);
         const physics::DensityResult pI =
@@ -677,16 +703,18 @@ void DriftDiffusion::add_thermal_interfaces(std::span<const double> x,
         // n_I and p_I in (psi_o, psi_s, n_s, p_s, theta).
         const double Nd = nI.d_eta, Pd = pI.d_eta;
         const double dn[5] = {Nd * db[0], Nd * db[1], Nd * ln.dx_dc, 0.0,
-                              1.5 * nI.density / theta + Nd * (ln.dx_dt + db[2])};
+                              1.5 * nI.density / theta + Nd * (ln.dx_dt + db[2]) +
+                                  ts.d_mass_n * nI.density};
         const double dp[5] = {-Pd * db[0], -Pd * db[1], 0.0, Pd * lp.dx_dc,
-                              1.5 * pI.density / theta + Pd * (lp.dx_dt - db[2])};
+                              1.5 * pI.density / theta + Pd * (lp.dx_dt - db[2]) +
+                                  ts.d_mass_p * pI.density};
         // The product at the interface densities and its direct theta derivative (n_ie and, at
         // fixed density, ln gamma through N(theta)).
         physics::EquilibriumProduct E = physics::boltzmann_equilibrium_product(ts.nie);
         double dE_t = 2.0 * ts.nie * ts.d_nie;
         if (fermi_dirac_) {
-            const Level In = level(nI.density, theta, ts.nie, tn.log_nc);
-            const Level Ip = level(pI.density, theta, ts.nie, tn.log_nv);
+            const Level In = level(nI.density, theta, ts.nie, tn.log_nc, ts.mass_n, ts.d_mass_n);
+            const Level Ip = level(pI.density, theta, ts.nie, tn.log_nv, ts.mass_p, ts.d_mass_p);
             E = physics::fermi_dirac_equilibrium_product(ts.nie, {In.log_gamma, In.dg_dc},
                                                          {Ip.log_gamma, Ip.dg_dc});
             dE_t = E.value * (2.0 * ts.d_nie / ts.nie + In.dg_dt + Ip.dg_dt);

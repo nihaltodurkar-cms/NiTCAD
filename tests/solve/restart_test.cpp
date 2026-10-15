@@ -97,7 +97,15 @@ TEST_CASE("restart: a sweep resumed from a checkpoint file reaches the uninterru
         CHECK(relative(a.fields.potential_V, b.fields.potential_V) < 1e-9);
         CHECK(relative(a.fields.n_cm3, b.fields.n_cm3) < 1e-9);
         CHECK(relative(a.fields.p_cm3, b.fields.p_cm3) < 1e-9);
-        CHECK(relative(a.terminal_current, b.terminal_current) < 1e-9);
+        // The currents to 1e-9 or to their resolution (Unit 32), which that rounding can move them
+        // by (6e-8 relative at 0.4 V with the published silicon, Unit 35).
+        for (std::size_t j = 0; j < a.terminal_current.size(); ++j) {
+            const double u = a.terminal_current[j], v = b.terminal_current[j];
+            CAPTURE(k, j, u, v, a.terminal_current_resolution[j]);
+            CHECK(std::abs(u - v) <= std::max(1e-9 * std::abs(v),
+                                              std::max(a.terminal_current_resolution[j],
+                                                       b.terminal_current_resolution[j])));
+        }
     }
 }
 

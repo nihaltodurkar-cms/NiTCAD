@@ -1,24 +1,37 @@
 // Physical model switches shared by the assemblers (the legacy Models flags of the baseline
-// silicon models; the defaults are the legacy ones).
+// silicon models; the defaults are the legacy ones but for the hole mobility, Unit 35).
 #pragma once
 
 #include <cstdint>
+
+#include "NiTCAD/physics/semiconductor.hpp"
 
 namespace NiTCAD::assemble {
 
 enum class NonlocalTunnelling : std::uint8_t { off, kane, direct_wkb };
 
-// The doping-dependent hole mobility (Unit 34): the material's Caughey-Thomas (the legacy, the
-// default) or Masetti's boron-doped silicon fit (physics/mobility.hpp), which needs every
-// semiconductor region to carry silicon's hole mobility parameters. Electrons keep
-// Caughey-Thomas either way.
-enum class HoleMobility : std::uint8_t { caughey_thomas, masetti };
+// The doping-dependent hole mobility (Units 34, 35): the material's Caughey-Thomas (the legacy),
+// Masetti's boron-doped silicon fit (physics/mobility.hpp), which needs every semiconductor region
+// to carry silicon's hole mobility parameters, or automatic (the default since Unit 35): Masetti
+// in the regions that carry silicon's hole mobility parameters, the material's Caughey-Thomas in
+// the others. Electrons keep Caughey-Thomas either way. The values are recorded in run records.
+enum class HoleMobility : std::uint8_t { caughey_thomas = 0, masetti = 1, automatic = 2 };
+
+// Whether a semiconductor's holes take Masetti's mobility under `model`: always for masetti, for
+// automatic when the material's hole mobility parameters are silicon's.
+[[nodiscard]] constexpr bool masetti_holes(HoleMobility model,
+                                           const physics::SemiconductorParameters& p) noexcept {
+    return model == HoleMobility::masetti ||
+           (model == HoleMobility::automatic &&
+            p.hole_mobility == physics::silicon_parameters.hole_mobility);
+}
 
 struct PhysicsModels {
     // Caughey-Thomas mobility; false: the lattice mobility (Caughey-Thomas at N = 0).
     bool doping_mobility = true;
-    // Which doping-dependent hole mobility (Unit 34); with doping_mobility false, its N = 0 value.
-    HoleMobility hole_mobility = HoleMobility::caughey_thomas;
+    // Which doping-dependent hole mobility (Units 34, 35); with doping_mobility false, its N = 0
+    // value.
+    HoleMobility hole_mobility = HoleMobility::automatic;
     // SRH recombination with Scharfetter lifetimes.
     bool srh = true;
     // Auger recombination (physics::auger_recombination).

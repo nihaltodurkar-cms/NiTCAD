@@ -45,22 +45,33 @@ constexpr double infinity = std::numeric_limits<double>::infinity();
 
 }  // namespace
 
-TEST_CASE("semiconductor: the silicon parameter set is valid") {
+TEST_CASE("semiconductor: the silicon parameter sets are valid") {
+    REQUIRE(Semiconductor::create(legacy_silicon_parameters).has_value());
+    REQUIRE(legacy_silicon().parameters().eps_r == 11.7);
+    // The default (Unit 35) differs from the legacy only in its band forms.
     REQUIRE(Semiconductor::create(silicon_parameters).has_value());
-    REQUIRE(silicon().parameters().eps_r == 11.7);
+    SemiconductorParameters bands = silicon_parameters;
+    bands.Eg0_eV = legacy_silicon_parameters.Eg0_eV;
+    bands.varshni_alpha_eV_per_K = legacy_silicon_parameters.varshni_alpha_eV_per_K;
+    bands.varshni_beta_K = legacy_silicon_parameters.varshni_beta_K;
+    bands.Nc300 = legacy_silicon_parameters.Nc300;
+    bands.Nv300 = legacy_silicon_parameters.Nv300;
+    bands.passler_gap = {};
+    bands.dos_mass = {};
+    REQUIRE(bands == legacy_silicon_parameters);
 }
 
-TEST_CASE("semiconductor: n_i(300 K) of silicon is 1.0674e10 cm^-3 (section 10 gate)") {
-    const Semiconductor si = silicon();
+TEST_CASE("semiconductor: n_i(300 K) of legacy silicon is 1.0674e10 cm^-3 (section 10 gate)") {
+    const Semiconductor si = legacy_silicon();
     const double ni = intrinsic_density(si, 300.0);
     REQUIRE(close(ni, 1.0674e10, 1e-4));                // proposed gate (ARCHITECTURE.md section 10)
     REQUIRE((ni > 9e9 && ni < 1.6e10));                 // legacy test_ni_300k_within_accepted_band
-    REQUIRE(close(ni, reference::intrinsic_density(silicon_parameters, 300.0).value(), 1e-13));
+    REQUIRE(close(ni, reference::intrinsic_density(legacy_silicon_parameters, 300.0).value(), 1e-13));
 }
 
 TEST_CASE("semiconductor: Varshni band gap and effective densities of states") {
-    const Semiconductor si = silicon();
-    const SemiconductorParameters& p = silicon_parameters;
+    const Semiconductor si = legacy_silicon();
+    const SemiconductorParameters& p = legacy_silicon_parameters;
     REQUIRE(close(band_gap_eV(si, 300.0), reference::band_gap(p, 300.0).value(), 1e-15));
     REQUIRE(close(band_gap_eV(si, 400.0), reference::band_gap(p, 400.0).value(), 1e-15));
     REQUIRE(conduction_band_dos(si, 300.0) == 2.86e19);
@@ -104,7 +115,7 @@ TEST_CASE("semiconductor: every parameter is validated and the error names it") 
     };
     for (const Case& c : cases) {
         CAPTURE(c.name);
-        SemiconductorParameters p = silicon_parameters;
+        SemiconductorParameters p = legacy_silicon_parameters;
         c.spoil(p);
         const auto m = Semiconductor::create(p);
         REQUIRE_FALSE(m.has_value());
@@ -115,7 +126,7 @@ TEST_CASE("semiconductor: every parameter is validated and the error names it") 
 }
 
 TEST_CASE("semiconductor: zero values allowed by the legacy material sets are accepted") {
-    SemiconductorParameters p = silicon_parameters;
+    SemiconductorParameters p = legacy_silicon_parameters;
     p.electron_mobility.mu_min = 0.0;  // legacy GE, GAAS
     p.hole_mobility.mu_min = 0.0;
     p.varshni_beta_K = 0.0;            // legacy SIC_4H
@@ -124,13 +135,13 @@ TEST_CASE("semiconductor: zero values allowed by the legacy material sets are ac
 
 TEST_CASE("semiconductor: successful validation does not allocate") {
     const long long before = allocation_count.load();
-    const auto m = Semiconductor::create(silicon_parameters);
+    const auto m = Semiconductor::create(legacy_silicon_parameters);
     const bool valid_at_300 = m.has_value() && check_temperature(*m, 300.0).has_value();
     const long long after = allocation_count.load();
     REQUIRE(valid_at_300);
     REQUIRE(after == before);
     // The counter does see the library's allocations: a failure builds its message.
-    SemiconductorParameters p = silicon_parameters;
+    SemiconductorParameters p = legacy_silicon_parameters;
     p.hole_mobility.alpha = 0.0;
     const long long before_failure = allocation_count.load();
     const auto bad = Semiconductor::create(p);
@@ -145,7 +156,7 @@ TEST_CASE("semiconductor: n_i uses the base thermal voltage for kT") {
     // At these temperatures k_B_eV_per_K * T and thermal_voltage(T) = k_B T / q differ by one
     // rounding, and Eg / 2kT is 300 to 70, so the other spelling would move n_i by about 1e-14
     // relative. With the same kT, only the prefactor's roundings differ (a few 1e-16).
-    const Semiconductor si = silicon();
+    const Semiconductor si = legacy_silicon();
     for (const double T : {22.0, 30.5, 44.0, 77.5, 95.5}) {
         CAPTURE(T);
         const double expected =
@@ -156,7 +167,7 @@ TEST_CASE("semiconductor: n_i uses the base thermal voltage for kT") {
 }
 
 TEST_CASE("check_temperature: silicon is accepted over its working range") {
-    const Semiconductor si = silicon();
+    const Semiconductor si = legacy_silicon();
     for (const double T : {1.0, 77.0, 300.0, 500.0, 850.0}) {
         CAPTURE(T);
         REQUIRE(check_temperature(si, T).has_value());
@@ -164,7 +175,7 @@ TEST_CASE("check_temperature: silicon is accepted over its working range") {
 }
 
 TEST_CASE("check_temperature: T must be finite and positive") {
-    const Semiconductor si = silicon();
+    const Semiconductor si = legacy_silicon();
     for (const double T : {0.0, -0.0, -300.0, not_a_number, infinity, -infinity}) {
         CAPTURE(T);
         const auto r = check_temperature(si, T);
@@ -176,7 +187,7 @@ TEST_CASE("check_temperature: T must be finite and positive") {
 
 TEST_CASE("check_temperature: the band gap must stay positive") {
     // Silicon's Varshni gap crosses zero near 2998 K.
-    const Semiconductor si = silicon();
+    const Semiconductor si = legacy_silicon();
     const auto hot = check_temperature(si, 3500.0);
     REQUIRE_FALSE(hot.has_value());
     REQUIRE(hot.error().message.find("band gap") != std::string::npos);
@@ -185,7 +196,7 @@ TEST_CASE("check_temperature: the band gap must stay positive") {
     // Exactly zero is rejected: beta = 0 (as legacy SIC_4H) and alpha = 2^-10 eV/K give
     // Eg = 1 - T / 1024 eV, exact in floating point. Temperature-independent mobility isolates
     // the band-gap rule.
-    SemiconductorParameters p = silicon_parameters;
+    SemiconductorParameters p = legacy_silicon_parameters;
     p.Eg0_eV = 1.0;
     p.varshni_alpha_eV_per_K = 0x1p-10;
     p.varshni_beta_K = 0.0;
@@ -198,7 +209,7 @@ TEST_CASE("check_temperature: the band gap must stay positive") {
 }
 
 TEST_CASE("check_temperature: mu_max(T) must not fall below mu_min") {
-    const Semiconductor si = silicon();
+    const Semiconductor si = legacy_silicon();
     // Holes cross at about 857 K, electrons at about 953 K; electrons are reported first.
     REQUIRE(check_temperature(si, 850.0).has_value());
     const auto holes = check_temperature(si, 860.0);

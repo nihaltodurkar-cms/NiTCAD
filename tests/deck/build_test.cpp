@@ -405,7 +405,7 @@ TEST_CASE("deck build: every mistake names its line", "[deck]") {
     expect(failure(head + "[equilibrium]\n[models]\nsrh = maybe\n"), "t.deck:14: 'maybe' is not on or off");
     expect(failure(head + "[equilibrium]\n[models]\nquantum = on\n"), "t.deck:14: unknown key 'quantum' in [models]");
     expect(failure(head + "[equilibrium]\n[models]\nhole_mobility = arora\n"),
-           "t.deck:14: hole_mobility is caughey_thomas or masetti");
+           "t.deck:14: hole_mobility is automatic, caughey_thomas or masetti");
     expect(failure(head + "[equilibrium]\n[solver]\nbackend = pardiso\n"), "t.deck:13: backend = pardiso needs 'mkl'");
     expect(failure(head + "[equilibrium]\n[solver]\nmax_cuts = 99\n"), "t.deck:14: 'max_cuts' must lie in 0..52");
     expect(failure(head + "[equilibrium]\n[doping]\nprofile = donor flat 1e16\n"),
@@ -441,4 +441,25 @@ TEST_CASE("deck build: every mistake names its line", "[deck]") {
            "t.deck:12: oxide_thickness, oxide_permittivity and fixed_charge are for a gate");
     // Device::create's own errors come located at line 1 with their message.
     expect(failure(head + "[contact a]\nkind = ohmic\npatch = x_max\n[equilibrium]\n"), "t.deck:1: device: ");
+}
+
+TEST_CASE("deck build: silicon, silicon_legacy and the hole mobility default (Unit 35)", "[deck]") {
+    // silicon is the published band set, silicon_legacy the legacy's; hole_mobility defaults to
+    // automatic.
+    const deck::Plan p = must(diode_deck);
+    const auto& si = std::get<physics::Semiconductor>(p.device.regions()[0].material).parameters();
+    CHECK(si == physics::silicon_parameters);
+    CHECK(p.options.models.hole_mobility == assemble::HoleMobility::automatic);
+    std::string legacy = diode_deck;
+    legacy.replace(legacy.find("material = silicon"), 18, "material = silicon_legacy");
+    const deck::Plan q = must(legacy + "[models]\nhole_mobility = caughey_thomas\n");
+    const auto& old = std::get<physics::Semiconductor>(q.device.regions()[0].material).parameters();
+    CHECK(old == physics::legacy_silicon_parameters);
+    CHECK(q.options.models.hole_mobility == assemble::HoleMobility::caughey_thomas);
+    // A Passler parameter is overridable by its member path.
+    std::string theta = diode_deck;
+    theta.replace(theta.find("material = silicon"), 18, "material = silicon\npassler_gap.Theta_K = 400");
+    const deck::Plan r = must(theta);
+    CHECK(std::get<physics::Semiconductor>(r.device.regions()[0].material).parameters().passler_gap.Theta_K ==
+          400.0);
 }

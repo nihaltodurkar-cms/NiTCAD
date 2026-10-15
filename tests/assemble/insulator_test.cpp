@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <cstddef>
 #include <cstdint>
 #include <utility>
@@ -393,16 +394,19 @@ TEST_CASE("insulator assemble: a mid-gap trap recombines as its surface recombin
     sc.residual(x, fc);
     // The recombination term is the continuity rows' difference from the device without it;
     // the two forms are compared on its own scale.
-    double worst = 0.0, rate = 0.0, poisson_difference = 0.0;
+    double worst = 0.0, rate = 0.0, row = 0.0, poisson_difference = 0.0;
     for (std::size_t i = 0; i < sa.node_count(); ++i) {
         for (const std::size_t r : {3 * i + 1, 3 * i + 2}) {
             worst = std::max(worst, std::abs(fa[r] - fb[r]));
             rate = std::max(rate, std::abs(fb[r] - fc[r]));
+            row = std::max(row, std::abs(fb[r]));
         }
         poisson_difference = std::max(poisson_difference, std::abs(fa[3 * i] - fb[3 * i]));
     }
-    CAPTURE(worst, rate, worst / rate, poisson_difference);
+    CAPTURE(worst, rate, row, worst / rate, poisson_difference);
     REQUIRE(rate > 0.0);
-    REQUIRE(worst <= 1e-9 * rate);
+    // Equal to 1e-9 of the rate, or to the rounding of the rows the rate is part of (with the
+    // published silicon's lower n_i, Unit 35, the rate here is 2e-8 and the rows round at 1e-16).
+    REQUIRE(worst <= 1e-9 * rate + 4.0 * std::numeric_limits<double>::epsilon() * row);
     REQUIRE(poisson_difference > 0.0);
 }

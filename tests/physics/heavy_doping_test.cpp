@@ -50,7 +50,7 @@ TEST_CASE("bgn: Slotboom narrowing of silicon") {
 }
 
 TEST_CASE("bgn: effective intrinsic density") {
-    const Semiconductor si = silicon();
+    const Semiconductor si = legacy_silicon();
     REQUIRE(effective_intrinsic_density(si, 1e16, 300.0) == intrinsic_density(si, 300.0));
     REQUIRE(close(effective_intrinsic_density(si, 1e18, 300.0), 17033941184.25466429, 1e-12));
     REQUIRE(close(effective_intrinsic_density(si, 1e19, 300.0), 31289337616.097783699, 1e-12));

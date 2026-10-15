@@ -111,6 +111,14 @@ void semiconductor_fields(P& p, F&& f) {
     f(53, p.band_to_band.direct_gap);
     f(54, p.band_to_band.electron_mass);
     f(55, p.band_to_band.hole_mass);
+    // Unit 35: the Passler gap and the density-of-states mass fits (absent: legacy forms).
+    f(56, p.passler_gap.alpha_eV_per_K);
+    f(57, p.passler_gap.Theta_K);
+    f(58, p.passler_gap.Delta);
+    for (int k = 0; k < 4; ++k) {
+        f(60 + k, p.dos_mass.conduction[k]);
+        f(64 + k, p.dos_mass.valence[k]);
+    }
 }
 
 constexpr std::uint16_t thermal_record_key = 100;

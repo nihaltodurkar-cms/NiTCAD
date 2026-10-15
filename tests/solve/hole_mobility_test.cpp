@@ -1,6 +1,6 @@
-// The selectable hole mobility (Unit 34, assemble::PhysicsModels::hole_mobility): the default is
-// the legacy Caughey-Thomas, bit for bit (AC1); Masetti is refused where its silicon coefficients do
-// not apply (AC8) and works with the electrothermal model.
+// The selectable hole mobility (Units 34, 35, assemble::PhysicsModels::hole_mobility): the default is
+// automatic, Masetti on silicon bit for bit (S3) and per region (DC8); Masetti is refused where its
+// silicon coefficients do not apply (AC8) and works with the electrothermal model.
 #include <catch2/catch_test_macros.hpp>
 
 #include <algorithm>
@@ -62,32 +62,88 @@ const std::vector<std::vector<double>> points{{0.0, 0.0}, {0.3, 0.0}, {0.5, 0.0}
 
 }  // namespace
 
-TEST_CASE("hole mobility: Caughey-Thomas is the default, bit for bit (AC1)", "[hole_mobility]") {
+TEST_CASE("hole mobility: the default is automatic, Masetti on silicon bit for bit (Unit 35, S3)",
+          "[hole_mobility]") {
     const auto d = diode(physics::silicon());
-    solve::BiasOptions explicit_ct;
+    solve::BiasOptions explicit_masetti, explicit_ct;
+    explicit_masetti.models.hole_mobility = assemble::HoleMobility::masetti;
     explicit_ct.models.hole_mobility = assemble::HoleMobility::caughey_thomas;
     const auto a = solve::sweep_bias(d, points);
-    const auto b = solve::sweep_bias(d, points, explicit_ct);
+    const auto b = solve::sweep_bias(d, points, explicit_masetti);
+    const auto c = solve::sweep_bias(d, points, explicit_ct);
     REQUIRE(a.has_value());
     REQUIRE(b.has_value());
-    CHECK(a->run.input_identity == b->run.input_identity);
+    REQUIRE(c.has_value());
+    REQUIRE_FALSE(c->stopped.has_value());
     for (std::size_t k = 0; k < points.size(); ++k) {
         CHECK(same_bits(a->points[k].terminal_current, b->points[k].terminal_current));
         CHECK(same_bits(a->points[k].fields.p_cm3, b->points[k].fields.p_cm3));
     }
-    // Masetti changes the hole current and the run identity, and is named in the settings.
-    solve::BiasOptions masetti;
-    masetti.models.hole_mobility = assemble::HoleMobility::masetti;
-    const auto c = solve::sweep_bias(d, points, masetti);
-    REQUIRE(c.has_value());
-    REQUIRE_FALSE(c->stopped.has_value());
-    CHECK(c->run.input_identity != a->run.input_identity);
+    // Caughey-Thomas changes the hole current; each setting but Caughey-Thomas (the legacy, whose
+    // runs keep their identity) is named in the settings, so the three identities differ.
     CHECK(c->points.back().terminal_current[0] != a->points.back().terminal_current[0]);
+    CHECK(a->run.input_identity != b->run.input_identity);
+    CHECK(c->run.input_identity != a->run.input_identity);
     const auto named = [](const results::RunRecord& r) {
         return std::ranges::any_of(r.settings, [](const auto& s) { return s.first == "models.hole_mobility"; });
     };
-    CHECK_FALSE(named(a->run));
-    CHECK(named(c->run));
+    CHECK(named(a->run));
+    CHECK(named(b->run));
+    CHECK_FALSE(named(c->run));
+}
+
+TEST_CASE("hole mobility: automatic per region, silicon and germanium (DC8)", "[hole_mobility]") {
+    // A silicon p side against a germanium n side: automatic takes Masetti in the silicon region
+    // and germanium's Caughey-Thomas in the other, where masetti is refused. Each region's mobility
+    // is checked through the hole current of a single-material device run with the explicit model.
+    const auto germanium = *physics::Semiconductor::create(physics::germanium_parameters);
+    mesh::Mesh m = *mesh::make_tensor_grid(legacy_graded_mesh(2e-4, 1e-4, 1e-8, 1e-6));
+    const std::size_t n = m.node_count();
+    std::vector<double> donors(n, 0.0), acceptors(n, 0.0);
+    std::vector<device::RegionId> region(n, 0);
+    for (std::size_t i = 0; i < n; ++i) {
+        if (m.points()[i][0] < 1e-4) acceptors[i] = 1e17;
+        else {
+            donors[i] = 1e17;
+            region[i] = 1;
+        }
+    }
+    auto anode = m.find_boundary("x_min")->nodes;
+    auto cathode = m.find_boundary("x_max")->nodes;
+    const auto created = device::Device::create(
+        {.mesh = std::move(m), .temperature_K = 300.0,
+         .regions = {{"silicon", physics::silicon()}, {"germanium", germanium}},
+         .node_region = std::move(region), .donors = std::move(donors),
+         .acceptors = std::move(acceptors),
+         .contacts = {{"anode", device::ContactKind::ohmic, std::move(anode)},
+                      {"cathode", device::ContactKind::ohmic, std::move(cathode)}}});
+    if (!created) FAIL(created.error().message);
+    const device::Device& hetero = *created;
+    const auto automatic = solve::sweep_bias(hetero, points);
+    REQUIRE(automatic.has_value());
+    REQUIRE_FALSE(automatic->stopped.has_value());
+    solve::BiasOptions masetti;
+    masetti.models.hole_mobility = assemble::HoleMobility::masetti;
+    CHECK_FALSE(solve::sweep_bias(hetero, points, masetti).has_value());
+    // The automatic run's hole mobility per node: silicon nodes Masetti's, germanium nodes
+    // germanium's Caughey-Thomas (the assembled mobilities, through the device's own models).
+    solve::BiasOptions ct;
+    ct.models.hole_mobility = assemble::HoleMobility::caughey_thomas;
+    const auto with_ct = solve::sweep_bias(hetero, points, ct);
+    REQUIRE(with_ct.has_value());
+    // Caughey-Thomas everywhere differs from automatic only through the silicon region's holes.
+    CHECK(with_ct->points.back().terminal_current[0] != automatic->points.back().terminal_current[0]);
+    // The silicon region alone (both sides silicon) gives automatic = masetti, bit for bit
+    // (the first case); the germanium region alone gives automatic = caughey_thomas, bit for bit.
+    const auto ge = diode(germanium);
+    const auto ge_auto = solve::sweep_bias(ge, points);
+    const auto ge_ct = solve::sweep_bias(ge, points, ct);
+    REQUIRE(ge_auto.has_value());
+    REQUIRE(ge_ct.has_value());
+    for (std::size_t k = 0; k < points.size(); ++k) {
+        CHECK(same_bits(ge_auto->points[k].terminal_current, ge_ct->points[k].terminal_current));
+        CHECK(same_bits(ge_auto->points[k].fields.p_cm3, ge_ct->points[k].fields.p_cm3));
+    }
 }
 
 TEST_CASE("hole mobility: Masetti only where its silicon coefficients apply (AC8)", "[hole_mobility]") {

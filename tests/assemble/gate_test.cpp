@@ -184,7 +184,8 @@ std::pair<DriftDiffusion, std::vector<double>> probe_state(const device::Device&
 
 }  // namespace
 
-// (k T / 2) ln(Nv / Nc): the intrinsic level above midgap (silicon at 300 K: 1.04 mV).
+// (k T / 2) ln(Nv / Nc): the intrinsic level above midgap (silicon at 300 K: -1.655 mV, below it;
+// legacy silicon +1.04 mV).
 double intrinsic_above_midgap(double T) {
     const physics::Semiconductor si = physics::silicon();
     return 0.5 * base::thermal_voltage(T) *
@@ -196,8 +197,8 @@ TEST_CASE("gate: electrode work functions and the offset from the intrinsic leve
     const double Eg = physics::band_gap_eV(si, 300.0);
     const double shift = intrinsic_above_midgap(300.0);
     CAPTURE(shift);
-    REQUIRE(shift > 1.03e-3);  // ln(3.10 / 2.86) V_T / 2
-    REQUIRE(shift < 1.05e-3);
+    REQUIRE(shift > -1.67e-3);  // ln(2.514 / 2.857) V_T / 2 (Unit 35)
+    REQUIRE(shift < -1.64e-3);
     // Phi = phi_m - chi - (E_c - E_i), E_c - E_i = Eg / 2 - shift.
     device::GateStack g = stack("x_min");
     REQUIRE(assemble::gate_work_function_eV(g, si, 300.0) == 4.05);  // n+ poly: chi

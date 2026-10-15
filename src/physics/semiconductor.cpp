@@ -123,11 +123,72 @@ std::optional<base::Error> check_mobility(std::string_view group,
 }
 
 double band_gap_unchecked(const SemiconductorParameters& p, double T) {
+    if (has_passler_gap(p)) return detail::passler_gap(p.Eg0_eV, p.passler_gap, T).value;
     return p.Eg0_eV - p.varshni_alpha_eV_per_K * (T * T) / (T + p.varshni_beta_K);
 }
 
 // (T / 300)^1.5, the temperature factor of both effective densities of states.
 double dos_factor(double T) { return std::pow(T / 300.0, 1.5); }
+
+// Nc(T) or Nv(T) [cm^-3]: the mass fit's, or N300 (T / 300)^1.5.
+double dos_unchecked(const SemiconductorParameters& p, Carrier band, double T) {
+    if (has_dos_mass_fit(p)) {
+        const auto& c = band == Carrier::electron ? p.dos_mass.conduction : p.dos_mass.valence;
+        return detail::dos_constant * detail::dos_mass(c, T).value * std::pow(T, 1.5);
+    }
+    return (band == Carrier::electron ? p.Nc300 : p.Nv300) * dos_factor(T);
+}
+
+// A Passler gap needs Theta > 0, Delta in [0, 1) and no Varshni terms; without one, Theta and
+// Delta are 0. A mass fit needs Nc300 = Nv300 = 0 and a nonzero polynomial per band; without one,
+// Nc300 and Nv300 positive.
+std::optional<base::Error> check_band_forms(const SemiconductorParameters& p) {
+    using enum Bound;
+    const PasslerGapParameters& g = p.passler_gap;
+    if (auto e = check("passler_gap.", "alpha_eV_per_K", g.alpha_eV_per_K, non_negative)) return e;
+    if (auto e = check("passler_gap.", "Theta_K", g.Theta_K, non_negative)) return e;
+    if (auto e = check("passler_gap.", "Delta", g.Delta, non_negative)) return e;
+    if (has_passler_gap(p)) {
+        if (!(g.Theta_K > 0.0)) {
+            return parameter_error("passler_gap.", "Theta_K", " must be positive with alpha",
+                                   g.Theta_K);
+        }
+        if (!(g.Delta < 1.0)) {
+            return parameter_error("passler_gap.", "Delta", " must be below 1", g.Delta);
+        }
+        if (p.varshni_alpha_eV_per_K != 0.0 || p.varshni_beta_K != 0.0) {
+            return parameter_error("", "varshni_alpha_eV_per_K",
+                                   " and varshni_beta_K must be 0 with a Passler gap",
+                                   p.varshni_alpha_eV_per_K);
+        }
+    } else if (g.Theta_K != 0.0 || g.Delta != 0.0) {
+        return parameter_error("passler_gap.", "alpha_eV_per_K",
+                               " must be positive with Theta_K or Delta", g.alpha_eV_per_K);
+    }
+    for (int k = 0; k < 4; ++k) {
+        if (auto e = check("dos_mass.", "conduction", p.dos_mass.conduction[k], finite)) return e;
+        if (auto e = check("dos_mass.", "valence", p.dos_mass.valence[k], finite)) return e;
+    }
+    if (!has_dos_mass_fit(p)) {
+        if (auto e = check("", "Nc300", p.Nc300, positive)) return e;
+        if (auto e = check("", "Nv300", p.Nv300, positive)) return e;
+        return std::nullopt;
+    }
+    const auto zero = [](const double (&c)[4]) {
+        return c[0] == 0.0 && c[1] == 0.0 && c[2] == 0.0 && c[3] == 0.0;
+    };
+    if (zero(p.dos_mass.conduction)) {
+        return parameter_error("dos_mass.", "conduction", " must be given with the valence fit", 0.0);
+    }
+    if (zero(p.dos_mass.valence)) {
+        return parameter_error("dos_mass.", "valence", " must be given with the conduction fit", 0.0);
+    }
+    if (p.Nc300 != 0.0 || p.Nv300 != 0.0) {
+        return parameter_error("", "Nc300", " and Nv300 must be 0 with a density-of-states mass fit",
+                               p.Nc300);
+    }
+    return std::nullopt;
+}
 
 }  // namespace
 
@@ -142,8 +203,7 @@ std::expected<Semiconductor, base::Error> Semiconductor::create(
     if (auto e = check("", "varshni_beta_K", p.varshni_beta_K, non_negative)) {
         return std::unexpected(std::move(*e));
     }
-    if (auto e = check("", "Nc300", p.Nc300, positive)) return std::unexpected(std::move(*e));
-    if (auto e = check("", "Nv300", p.Nv300, positive)) return std::unexpected(std::move(*e));
+    if (auto e = check_band_forms(p)) return std::unexpected(std::move(*e));
     if (auto e = check("", "electron_affinity_eV", p.electron_affinity_eV, non_negative)) {
         return std::unexpected(std::move(*e));
     }
@@ -221,6 +281,12 @@ Semiconductor silicon() {
     return *m;
 }
 
+Semiconductor legacy_silicon() {
+    auto m = Semiconductor::create(legacy_silicon_parameters);
+    NITCAD_EXPECTS(m.has_value());
+    return *m;
+}
+
 std::expected<void, base::Error> check_temperature(const Semiconductor& m,
                                                    double temperature_K) {
     const double T = temperature_K;
@@ -235,6 +301,17 @@ std::expected<void, base::Error> check_temperature(const Semiconductor& m,
         return std::unexpected(base::Error{
             base::ErrorCode::invalid_input, "band gap Eg(T) is not positive at this temperature",
             base::ErrorContext{.index = std::nullopt, .value = Eg}});
+    }
+    if (has_dos_mass_fit(p)) {
+        for (const auto* c : {&p.dos_mass.conduction, &p.dos_mass.valence}) {
+            const double mass = detail::dos_mass(*c, T).value;
+            if (!(mass > 0.0)) {
+                return std::unexpected(base::Error{
+                    base::ErrorCode::invalid_input,
+                    "density-of-states mass fit is not positive at this temperature",
+                    base::ErrorContext{.index = std::nullopt, .value = mass}});
+            }
+        }
     }
     const struct {
         std::string_view message;
@@ -263,12 +340,12 @@ double band_gap_eV(const Semiconductor& m, double temperature_K) {
 
 double conduction_band_dos(const Semiconductor& m, double temperature_K) {
     detail::expect_temperature(temperature_K);
-    return m.parameters().Nc300 * dos_factor(temperature_K);
+    return dos_unchecked(m.parameters(), Carrier::electron, temperature_K);
 }
 
 double valence_band_dos(const Semiconductor& m, double temperature_K) {
     detail::expect_temperature(temperature_K);
-    return m.parameters().Nv300 * dos_factor(temperature_K);
+    return dos_unchecked(m.parameters(), Carrier::hole, temperature_K);
 }
 
 std::expected<SemiconductorParameters, base::Error> algaas_parameters(double x,
@@ -315,6 +392,10 @@ double intrinsic_density(const Semiconductor& m, double temperature_K) {
     const double T = temperature_K;
     // kT in eV is numerically V_T = kT/q in V; use the one definition of it (base).
     const double kT_eV = base::thermal_voltage(T);
+    if (has_dos_mass_fit(p)) {
+        return std::sqrt(dos_unchecked(p, Carrier::electron, T) * dos_unchecked(p, Carrier::hole, T)) *
+               std::exp(-band_gap_unchecked(p, T) / (2.0 * kT_eV));
+    }
     return std::sqrt(p.Nc300 * p.Nv300) * dos_factor(T) *
            std::exp(-band_gap_unchecked(p, T) / (2.0 * kT_eV));
 }

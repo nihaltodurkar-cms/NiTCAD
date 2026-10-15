@@ -139,13 +139,39 @@ struct ThermalParameters {
     bool operator==(const ThermalParameters&) const = default;
 };
 
+// Passler's band gap (Unit 35; R. Passler, Phys. Rev. B 66, 085201 (2002), as given by Couderc et
+// al., J. Appl. Phys. 115, 093705 (2014), eq (10)), with chi = 2 T / Theta:
+//     Eg(T) = Eg0 - alpha Theta [ (1 - 3 Delta^2) / (exp(Theta / T) - 1)
+//             + (3 Delta^2 / 2) ( (1 + pi^2 chi^2 / (3 (1 + Delta^2)) + (3 Delta^2 - 1) chi^3 / 4
+//                                  + 8 chi^4 / 3 + chi^6)^(1/6) - 1 ) ]
+// alpha of 0 (the default): no Passler gap, the Varshni form instead.
+struct PasslerGapParameters {
+    double alpha_eV_per_K = 0.0;  // slope of the high-temperature asymptote
+    double Theta_K = 0.0;         // mean phonon temperature
+    double Delta = 0.0;           // phonon dispersion coefficient, in [0, 1)
+
+    bool operator==(const PasslerGapParameters&) const = default;
+};
+
+// Temperature-dependent density-of-states effective masses (Unit 35; Couderc et al. (2014), eqs
+// (4), (5), (18), (19)): (m_d / m0)^(3/2) = c[0] T^3 + c[1] T^2 + c[2] T + c[3] per band, and
+//     Nc(T) = 4.83e15 (m_dc / m0)^(3/2) T^(3/2) [cm^-3], Nv likewise,
+// 4.83e15 = 2 (2 pi m0 k / h^2)^(3/2) in cm^-3 K^-3/2 as printed there. All zero (the default):
+// no mass fit, Nc300 (T / 300)^(3/2) instead.
+struct DensityOfStatesMassParameters {
+    double conduction[4] = {0.0, 0.0, 0.0, 0.0};
+    double valence[4] = {0.0, 0.0, 0.0, 0.0};
+
+    bool operator==(const DensityOfStatesMassParameters&) const = default;
+};
+
 struct SemiconductorParameters {
     double eps_r;                   // relative permittivity
     double Eg0_eV;                  // band gap at 0 K
-    double varshni_alpha_eV_per_K;
-    double varshni_beta_K;
-    double Nc300;                   // conduction-band effective density of states at 300 K [cm^-3]
-    double Nv300;                   // valence-band effective density of states at 300 K [cm^-3]
+    double varshni_alpha_eV_per_K;  // 0 with a Passler gap
+    double varshni_beta_K;          // 0 with a Passler gap
+    double Nc300;  // conduction-band effective density of states at 300 K [cm^-3]; 0 with a mass fit
+    double Nv300;  // valence-band effective density of states at 300 K [cm^-3]; 0 with a mass fit
     double electron_affinity_eV;    // chi: vacuum level to conduction-band edge [eV]
     CaugheyThomasParameters electron_mobility;
     CaugheyThomasParameters hole_mobility;
@@ -160,11 +186,23 @@ struct SemiconductorParameters {
     ImpactIonizationParameters impact_ionization{};  // Unit 19; all zero: none
     BandToBandParameters band_to_band{};              // Unit 20; all zero: none
     ThermalParameters thermal{};                      // Unit 23; conductivity 0: none
+    PasslerGapParameters passler_gap{};               // Unit 35; alpha 0: Varshni
+    DensityOfStatesMassParameters dos_mass{};         // Unit 35; all 0: (T / 300)^(3/2)
 
     bool operator==(const SemiconductorParameters&) const = default;
 };
 
-// Silicon, the legacy defaults (materials.py SILICON): band and density-of-states values and the
+// Whether a parameter set uses Passler's gap, and a density-of-states mass fit (Unit 35).
+[[nodiscard]] constexpr bool has_passler_gap(const SemiconductorParameters& p) noexcept {
+    return p.passler_gap.alpha_eV_per_K != 0.0;
+}
+[[nodiscard]] constexpr bool has_dos_mass_fit(const SemiconductorParameters& p) noexcept {
+    return !(p.dos_mass == DensityOfStatesMassParameters{});
+}
+
+// Silicon as the legacy had it (materials.py SILICON; the default silicon until Unit 35, kept
+// selectable, deck material `silicon_legacy`; n_i(300 K) = 1.0674e10 cm^-3): band and
+// density-of-states values and the
 // electron affinity measured / from band structure; mobility a Caughey-Thomas fit; lifetimes a
 // Scharfetter fit; Auger coefficients measured (Dziewior and Schmid); band-gap narrowing a Slotboom
 // fit; velocity saturation the Canali fit; the legacy hydrogenic 45 meV levels for B, P and As
@@ -178,7 +216,7 @@ struct SemiconductorParameters {
 // kappa(T) = 1.48 (T / 300)^-1.33 W/(cm K) (materials.py kappa_th); rho c = 2.329 g/cm^3 times
 // 0.7 J/(g K) (Ioffe NSM archive, silicon thermal properties); acoustic-phonon thermopower
 // exponents.
-inline constexpr SemiconductorParameters silicon_parameters{
+inline constexpr SemiconductorParameters legacy_silicon_parameters{
     .eps_r = 11.7,
     .Eg0_eV = 1.17,
     .varshni_alpha_eV_per_K = 4.73e-4,
@@ -212,6 +250,25 @@ inline constexpr SemiconductorParameters silicon_parameters{
                 .heat_capacity_J_cm3K = 1.6303, .thermopower_exponent_n = -0.5,
                 .thermopower_exponent_p = -0.5},
 };
+
+// Silicon, the default (Unit 35, DECISIONS.md S1-S2): the legacy set with the published band set of
+// R. Couderc, M. Amara, M. Lemiti, J. Appl. Phys. 115, 093705 (2014): Passler's gap (Table I:
+// Eg(0) = 1.17 eV, alpha = 3.23e-4 eV/K, Theta = 446 K, Delta = 0.51) and the density-of-states
+// mass fits of eqs (18) and (19), the valence one fitted to the paper's n_i(T) (eq (15)).
+// n_i(300 K) = 9.673e9 cm^-3 (Misiakos and Tsamakis measured (9.7 +/- 0.1)e9; Unit 33 V4); Eg(300 K)
+// = 1.1242 eV, Nc = 2.857e19, Nv = 2.514e19 cm^-3. Every other field is the legacy's.
+inline constexpr SemiconductorParameters silicon_parameters = [] {
+    SemiconductorParameters p = legacy_silicon_parameters;
+    p.Eg0_eV = 1.17;
+    p.varshni_alpha_eV_per_K = 0.0;
+    p.varshni_beta_K = 0.0;
+    p.Nc300 = 0.0;
+    p.Nv300 = 0.0;
+    p.passler_gap = {.alpha_eV_per_K = 3.23e-4, .Theta_K = 446.0, .Delta = 0.51};
+    p.dos_mass = {.conduction = {-4.609e-10, 6.753e-7, -1.312e-5, 1.094},
+                  .valence = {2.525e-9, -4.689e-6, 3.376e-3, 3.426e-1}};
+    return p;
+}();
 
 // No band-gap narrowing: the Slotboom form and numbers are a silicon fit (Unit 15; the legacy left
 // silicon's on every material).
@@ -363,7 +420,10 @@ public:
     // below 1, or an impact-ionization coefficient A, B, switch field or phonon energy is negative
     // (B and the switch field positive where A is), or a band-to-band A, B or tunnelling mass is
     // negative (B positive where A is; the masses both 0 or both positive, on a direct gap, with a
-    // reduced mass below m0 / 2). The message names the parameter; the context value is it.
+    // reduced mass below m0 / 2), or a band form is mixed or incomplete (Unit 35): a Passler gap
+    // (alpha above 0) needs Theta above 0, Delta in [0, 1) and the Varshni alpha and beta 0, and
+    // without one Theta and Delta are 0; a density-of-states mass fit needs Nc300 and Nv300 0 and
+    // a nonzero polynomial for each band. The message names the parameter; the context value is it.
     [[nodiscard]] static std::expected<Semiconductor, base::Error> create(
         const SemiconductorParameters& parameters);
 
@@ -377,14 +437,17 @@ private:
     SemiconductorParameters parameters_;
 };
 
-// Semiconductor::create(silicon_parameters), which cannot fail.
+// Semiconductor::create(silicon_parameters) and (legacy_silicon_parameters), which cannot fail.
 [[nodiscard]] Semiconductor silicon();
+[[nodiscard]] Semiconductor legacy_silicon();
 
 // Whether the models of this material are usable at lattice temperature T. The device or solve
 // layer calls this when it validates its input; the model functions below only require T to be
 // finite and positive. Errors (invalid_input, the context value is the offending quantity):
 // - T not finite and positive;
 // - Eg(T) <= 0 (the Varshni fit has run past zero; n_i would exceed sqrt(Nc Nv));
+// - with a density-of-states mass fit, either band's (m_d / m0)^(3/2) not positive (Unit 35;
+//   silicon's conduction-band cubic turns negative near 2030 K);
 // - for either carrier, mu_max(T) = mu_max (T / 300)^T_exponent not finite or below mu_min, so
 //   the Caughey-Thomas mobility would rise with doping. Silicon: holes from about 857 K,
 //   electrons from about 953 K. Create() applies the same rule at 300 K.
@@ -392,12 +455,13 @@ private:
                                                                  double temperature_K);
 
 // Temperature-dependent band quantities. Precondition (NITCAD_EXPECTS): temperature_K is finite
-// and positive. The Varshni fit is stated by the legacy to hold for silicon over 0-500 K; outside
-// that range the formulas are evaluated as written (see check_temperature).
+// and positive. The legacy Varshni fit is stated to hold for silicon over 0-500 K, Couderc's mass
+// fits over 0-400 K (n_i within 1.5% of their eq (15) over 50-400 K); outside those ranges the
+// formulas are evaluated as written (see check_temperature).
 [[nodiscard]] double band_gap_eV(const Semiconductor& m, double temperature_K);
 [[nodiscard]] double conduction_band_dos(const Semiconductor& m, double temperature_K);
 [[nodiscard]] double valence_band_dos(const Semiconductor& m, double temperature_K);
-// 1.0674e10 cm^-3 for silicon at 300 K.
+// 9.673e9 cm^-3 for silicon at 300 K (1.0674e10 for legacy silicon).
 [[nodiscard]] double intrinsic_density(const Semiconductor& m, double temperature_K);
 // The intrinsic level's depth below the vacuum level, chi + (E_c - E_i) with
 // E_c - E_i = Eg / 2 + (k T / 2) ln(Nc / Nv) [eV] (Unit 15). Where two materials meet, the

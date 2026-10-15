@@ -93,7 +93,7 @@ TEST_CASE("statistics: n-type and p-type are mirror images, and the result is sc
 
 TEST_CASE("statistics: built-in potential of a 1e17/1e17 junction") {
     // V_bi = V_T (eta(N_D) - eta(-N_A)) equals V_T ln(N_D N_A / n_i^2) up to n_i^2 / N^2.
-    const double ni = intrinsic_density(silicon(), 300.0);
+    const double ni = intrinsic_density(legacy_silicon(), 300.0);
     const double VT = NiTCAD::base::thermal_voltage(300.0);
     const double N = 1e17;
     const double vbi = VT * (boltzmann_neutral_equilibrium(N, ni).eta -
