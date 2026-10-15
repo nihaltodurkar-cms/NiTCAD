@@ -159,8 +159,9 @@ struct GeneratedMesh {
 // lies strictly inside its diametral ball. A candidate circumcentre that encroaches subsegments
 // or subfacets is not inserted: they are split instead. A candidate outside the domain that
 // encroaches nothing is not inserted, and its tetrahedron is exempt and counted. Termination at
-// radius_edge = 2 for input angles of at least 90 degrees is cited, to verify (Shewchuk 1998,
-// DECISIONS.md U6); otherwise heuristic, capped by max_nodes.
+// radius_edge = 2 for input angles of at least 90 degrees is cited (Shewchuk 1998, checked in
+// DECISIONS.md U6); for smaller input angles, patches and interfaces it is heuristic, capped by
+// max_nodes.
 // Points on axis-aligned faces and edges keep their constant coordinates exactly, so they are
 // exactly coplanar or collinear. Points on oblique faces are rounded off the plane by about an
 // ulp; the tetrahedra whose four vertices lie on one face (by construction) are dropped, and the
