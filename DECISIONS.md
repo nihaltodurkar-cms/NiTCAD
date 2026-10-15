@@ -832,6 +832,34 @@ Findings (pinned gaps, simulated against the reference):
 - Mutation checks (4): a phosphorus coefficient, the boron N_ref decade, a 23 °C ρ-fit exponent (caught by the
   transcription check), the temperature override; all caught.
 
+**Scope (owner instruction, 2026-10-15): Unit 33 is a validation baseline only.** It changes no physics, model,
+parameter or solver code; the findings above are recorded for later units, each an owner decision.
+
+**Reconstructed coefficients (read from the OCR text where legible; reconstructed where not):**
+
+| Quantity | Printed (OCR) | Used | How it was fixed |
+|---|---|---|---|
+| Eq (1) operators | "Aq - A^X . A^X . A3X" | A₀ + A₁X + A₂X² + A₃X³ over 1 + B₁X + B₂X² + B₃X³ | With + signs the ρ- and N-based phosphorus fits agree within 1.3% at 10¹⁶ cm⁻³ (the report's stated self-consistency) |
+| N₀ (eq 1) | "Nq =10^^ cm~^" | 10¹⁶ cm⁻³ | Gives 0.52 Ω cm at 10¹⁶ cm⁻³ phosphorus, consistent with both fits |
+| Boron N_ref, 300 K (table 12) | "4.09 x 10 + 0.20 x 10" | 4.09 × 10¹⁸ cm⁻³ | At ρ = ρ_ref of eq (3) (N = 3.84e18), eq (4) agrees within 1.5% only for 10¹⁸; 10¹⁷ is 60% off. The report states the two fits agree within 3% from 10¹⁴ to 10¹⁹ |
+| Boron N_ref, 23 °C (table 12) | "3.88 x 10 + 0.21 x 10" | 3.88 × 10¹⁸ cm⁻³ | The same test at 23 °C: 1.8% for 10¹⁸ |
+| All other coefficients (tables 9, 11, 12) | legible | as printed | — |
+
+The test checks every fit used against the report's other fit within the stated self-consistency (boron 3%,
+phosphorus 4.5%), so an error in a reconstruction would fail it.
+
+**Unsupported regimes (do not rely on the model there; none is fixed by this unit):**
+- **Boron (p-type) mobility at 10¹⁷–10¹⁹ cm⁻³:** resistivity 23–48% high (the legacy Caughey–Thomas hole mobility).
+- **Incomplete ionization above about 10¹⁷ cm⁻³:** resistivity 31% to 302% high at 10¹⁸–10¹⁹ (a fixed 45 meV level).
+- **Absolute n_i-driven currents:** n_i(300 K) 10% high against the measurement, so n_i² currents (diode saturation,
+  generation) about 21% high.
+- **Outside the benchmarked range:** below 10¹⁴ (phosphorus) or 10¹⁵ (boron) and above 10¹⁹ cm⁻³; temperatures
+  other than 300 K and 23 °C; compensated material; dopants other than phosphorus and boron (the report's fits
+  apply to them only approximately). The report notes its phosphorus conversion understates density above about
+  5 × 10¹⁹ cm⁻³.
+- **Not validated against published data at all:** breakdown (only the analytic one-sided value, Unit 19), MOS C-V,
+  high-field transport (the benchmarks use 10 V/cm), transient and small-signal behaviour.
+
 ---
 
 ## New questions the advisor raised (not yet in `ARCHITECTURE.md`)

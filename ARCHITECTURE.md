@@ -2548,9 +2548,17 @@ each gap is pinned at its measured value (within 0.2 percentage points), and no 
 | The same with incomplete ionization (Unit 15) | the same | heavily doped bars far off: +31% and +138% (phosphorus 1e18, 1e19), +121% and +302% (boron 1e18, 1e19): the fixed 45 meV level does not lower with density |
 | Intrinsic density n_i(300 K), from √(np) of the solved 1e14 bar | Misiakos and Tsamakis, J. Appl. Phys. 74, 3293 (1993): (9.7 ± 0.1)e9 cm⁻³ | 1.0674e10, +10.0% (9.7 times the stated uncertainty): the legacy silicon set |
 
-The fits were transcribed from the report's OCR text; two lost exponents were inferred from the report's stated
-self-consistency, and the test checks each fit against the report's other fit (V2). Not included (V6): Sze–Gibbons
-breakdown voltages (no accessible copy was read) and MOS C-V landmarks (analytic, not measured).
+The fits were transcribed from the report's OCR text. Reconstructed, not read: eq (1)'s + signs, its N₀ = 10¹⁶ cm⁻³,
+and table 12's boron N_ref decades (4.09 × 10¹⁸ at 300 K, 3.88 × 10¹⁸ at 23 °C), each fixed by the report's stated
+self-consistency between its two fits; the test checks every fit used against the report's other fit (V2; the
+reconstruction table is in DECISIONS.md, Unit 33). Not included (V6): Sze–Gibbons breakdown voltages (no accessible
+copy was read) and MOS C-V landmarks (analytic, not measured).
+
+**Unit 33 is a validation baseline only: it changes no physics.** Unsupported regimes it establishes (DECISIONS.md,
+Unit 33): boron mobility at 10¹⁷–10¹⁹ cm⁻³; incomplete ionization above about 10¹⁷ cm⁻³; absolute n_i-driven
+currents (about 21% high); doping outside the benchmarked range, other temperatures, compensated material and other
+dopants; and breakdown, MOS C-V, high-field, transient and small-signal behaviour, which no published benchmark yet
+covers.
 
 ## 11. Build order and long-term capability roadmap
 
