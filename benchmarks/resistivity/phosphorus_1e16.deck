@@ -1,0 +1,30 @@
+# Resistivity of uniformly phosphorus-doped silicon at N = 1e16 cm^-3 and 300 K (Unit 33).
+# Reference: W. R. Thurber, R. L. Mattis, Y. M. Liu, J. J. Filliben, "The relationship between
+# resistivity and dopant density for phosphorus- and boron-doped silicon", NBS Special
+# Publication 400-64 (1981), doi:10.6028/NBS.SP.400-64, the basis of ASTM F723. The fit used
+# and its coefficients are in DECISIONS.md, Unit 33 (V1, V2). The resistivity is the slope of
+# the 10 um bar's current: rho = 0.01 V / (J L).
+
+[device]
+temperature = 300
+
+[mesh]
+type = tensor
+x = linspace(0, 10um, 51)
+
+[region silicon]
+material = silicon
+
+[doping]
+profile = donor constant 1e16
+
+[contact left]
+kind = ohmic
+patch = x_min
+
+[contact right]
+kind = ohmic
+patch = x_max
+
+[sweep]
+contact left = 0, 0.01
