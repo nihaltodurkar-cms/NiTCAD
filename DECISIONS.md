@@ -724,7 +724,7 @@ z-uniform convergence gate against a 2D reference.
 
 ---
 
-### Unit 31 — device files, the text input deck and the batch runner (branch `io/input-deck`, 2026-10-15)
+### Unit 31 — device files, the text input deck and the batch runner (merged to `main` as `6f67510`, PR #37, 2026-10-15)
 
 **Owner rulings (2026-10-15)**, asked before any code:
 - syntax: an own sectioned `key = value` format with an in-tree parser; no TOML or JSON dependency;
