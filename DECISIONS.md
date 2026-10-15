@@ -757,7 +757,7 @@ includes and parameter studies.
 
 ---
 
-### Unit 32 — low-current accuracy: the weighted terminal current (branch `solve/low-current`, 2026-10-15)
+### Unit 32 — low-current accuracy: the weighted terminal current (merged to `main` as `6e54c69`, PR #39, 2026-10-15)
 
 **Owner rulings (2026-10-15)**, asked before any code: the method is weighted current extraction (no change of
 unknowns; quasi-Fermi unknowns not now); new, opt-in result fields, so every existing result and run identity stays
