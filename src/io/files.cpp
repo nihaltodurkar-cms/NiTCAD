@@ -277,7 +277,8 @@ namespace point_key {
 constexpr std::uint16_t bias = 1, fields = 2, bands = 3, current = 4, resolution = 5,
                         gate_charge = 6, trap_charge = 7, edge_n = 8, edge_p = 9,
                         convergence = 10, paths = 11, relocations = 12, thermal_bias = 13,
-                        thermal_heat = 14, substeps = 15;
+                        thermal_heat = 14, substeps = 15, weighted = 16,
+                        weighted_resolution = 17;  // Unit 32: absent when off
 }
 namespace run_key {
 constexpr std::uint16_t identity = 1, setting = 2, name = 1, value = 2;
@@ -395,6 +396,10 @@ Writer write_point(const results::BiasPoint& p) {
     w.f64s(point_key::thermal_bias, p.thermal_bias_K);
     w.f64s(point_key::thermal_heat, p.thermal_contact_heat);
     w.i64(point_key::substeps, p.bias_substeps);
+    if (!p.weighted_current.empty()) {
+        w.f64s(point_key::weighted, p.weighted_current);
+        w.f64s(point_key::weighted_resolution, p.weighted_current_resolution);
+    }
     return w;
 }
 
@@ -455,6 +460,10 @@ std::expected<results::BiasPoint, base::Error> read_point(const Reader& r) {
     p.thermal_bias_K = std::move(thermal_bias);
     p.thermal_contact_heat = std::move(thermal_heat);
     p.bias_substeps = static_cast<int>(substeps);
+    NITCAD_IO_TRY(weighted, r.f64s_or_empty(point_key::weighted));
+    NITCAD_IO_TRY(weighted_resolution, r.f64s_or_empty(point_key::weighted_resolution));
+    p.weighted_current = std::move(weighted);
+    p.weighted_current_resolution = std::move(weighted_resolution);
     return p;
 }
 

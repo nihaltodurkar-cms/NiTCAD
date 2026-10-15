@@ -74,6 +74,11 @@ struct BiasOptions {
     assemble::PhysicsModels models;     // equilibrium_poisson: bgn, fermi_dirac and
                                         // incomplete_ionization matter
     Equations equations = Equations::drift_diffusion;
+    // The weighted terminal current and its resolution in every point (Unit 32;
+    // results::BiasPoint::weighted_current; DECISIONS.md W1-W8). Off by default: one more
+    // factorization and a linear solve on the node graph per point. Drift-diffusion only; not with
+    // nonlocal tunnelling (its pairs are not carried along the edges).
+    bool weighted_current = false;
     // Electrothermal (models.electrothermal, Unit 23): per bias point, the temperature of each
     // thermal contact in K, in the device's thermal-contact order; empty: the device's own at
     // every point. Read only with the model on.

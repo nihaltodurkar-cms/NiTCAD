@@ -123,6 +123,31 @@ table = iv.csv
     CHECK_FALSE(fs::exists(dir / "iv.csv.tmp"));
 }
 
+TEST_CASE("deck run: the weighted current in the sweep and the table (Unit 32)", "[deck]") {
+    const fs::path dir = scratch("run_weighted");
+    const deck::Plan plan = must(diode_device + R"(
+[solver]
+weighted_current = on
+[sweep]
+contact anode = 0 : 0.2 : 0.1
+[output]
+table = iv.csv
+)", dir);
+    CHECK(plan.options.weighted_current);
+    const auto report = deck::run(plan);
+    if (!report) FAIL(report.error().message);
+    REQUIRE(report->sweep.has_value());
+    const auto& last = report->sweep->points.back();
+    REQUIRE(last.weighted_current.size() == 2);
+    const std::string table = text_of(dir / "iv.csv");
+    CHECK(table.starts_with("point,anode V,cathode V,anode A,cathode A,anode weighted A,cathode "
+                            "weighted A,anode weighted resolution A,cathode weighted resolution "
+                            "A,substeps\n"));
+    char row[64];
+    std::snprintf(row, sizeof row, ",%.17g,", last.weighted_current[0]);
+    CHECK(table.find(row) != std::string::npos);
+}
+
 TEST_CASE("deck run: a restart continues after the checkpoint's point", "[deck]") {
     const fs::path dir = scratch("run_restart");
     const deck::Plan first = must(diode_device + R"(

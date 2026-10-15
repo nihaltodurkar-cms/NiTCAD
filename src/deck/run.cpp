@@ -44,15 +44,27 @@ std::string format(double v) {
 std::expected<void, base::Error> write_table(const std::filesystem::path& path,
                                              const device::Device& device,
                                              const results::Sweep& sweep) {
+    // With the weighted current (Unit 32) every point has it: two more columns per contact.
+    const bool weighted = !sweep.points.empty() && !sweep.points.front().weighted_current.empty();
     std::string text = "point";
     for (const device::Contact& c : device.contacts()) text += "," + c.name + " V";
     for (const device::Contact& c : device.contacts()) text += "," + c.name + " A";
+    if (weighted) {
+        for (const device::Contact& c : device.contacts()) text += "," + c.name + " weighted A";
+        for (const device::Contact& c : device.contacts()) {
+            text += "," + c.name + " weighted resolution A";
+        }
+    }
     text += ",substeps\n";
     for (std::size_t k = 0; k < sweep.points.size(); ++k) {
         const results::BiasPoint& p = sweep.points[k];
         text += std::to_string(k);
         for (const double v : p.bias_V) text += "," + format(v);
         for (const double i : p.terminal_current) text += "," + format(i);
+        if (weighted) {
+            for (const double i : p.weighted_current) text += "," + format(i);
+            for (const double i : p.weighted_current_resolution) text += "," + format(i);
+        }
         text += "," + std::to_string(p.bias_substeps) + "\n";
     }
     // Atomic like the binary files: a temporary beside the target, renamed over it.

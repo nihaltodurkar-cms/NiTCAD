@@ -315,6 +315,7 @@ add_library(nitcad_solve STATIC
   src/solve/equilibrium.cpp
   src/solve/bias.cpp
   src/solve/run_record.cpp
+  src/solve/weighted_current.cpp
   src/solve/waveform.cpp
   src/solve/transient.cpp
   src/solve/small_signal.cpp
@@ -344,7 +345,8 @@ add_executable(nitcad_solve_test
   tests/solve/impact_ionization_test.cpp
   tests/solve/btbt_test.cpp
   tests/solve/electrothermal_test.cpp
-  tests/solve/restart_test.cpp)
+  tests/solve/restart_test.cpp
+  tests/solve/weighted_current_test.cpp)
 # The solve tests also read their results through the analysis extractors (Unit 24 gates).
 target_link_libraries(nitcad_solve_test PRIVATE NiTCAD::solve NiTCAD::analysis NiTCAD::io
   Catch2::Catch2WithMain)

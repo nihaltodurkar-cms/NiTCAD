@@ -1270,6 +1270,32 @@ std::vector<double> DriftDiffusion::terminal_current_resolution(std::span<const 
     return resolution;
 }
 
+std::vector<double> DriftDiffusion::edge_flux_terms(std::span<const double> x) const {
+    NITCAD_EXPECTS(x.size() == unknowns());
+    std::vector<double> terms(edges_.size(), 0.0);
+    if (electrothermal()) {
+        const std::vector<ThermalState> states = thermal_states(x);
+        const std::vector<NodeLevels> levels = thermal_levels(x, states);
+        for (std::size_t k = 0; k < edges_.size(); ++k) {
+            const EdgeTerm& e = edges_[k];
+            if (!e.carriers) continue;
+            const auto [fn, fp] = thermal_fluxes(k, x, states, levels);
+            terms[k] = std::abs(fn.d_c[0] * x[4 * e.a + 1]) + std::abs(fn.d_c[1] * x[4 * e.b + 1]) +
+                       std::abs(fp.d_c[0] * x[4 * e.a + 2]) + std::abs(fp.d_c[1] * x[4 * e.b + 2]);
+        }
+        return terms;
+    }
+    const std::vector<NodeDegeneracy> g = degeneracies(x);
+    for (std::size_t k = 0; k < edges_.size(); ++k) {
+        const EdgeTerm& e = edges_[k];
+        if (!e.carriers) continue;
+        const auto [fn, fp] = edge_fluxes(e, x, g);
+        terms[k] = std::abs(fn.d_c1 * x[m_ * e.a + 1]) + std::abs(fn.d_c2 * x[m_ * e.b + 1]) +
+                   std::abs(fp.d_c1 * x[m_ * e.a + 2]) + std::abs(fp.d_c2 * x[m_ * e.b + 2]);
+    }
+    return terms;
+}
+
 BandEdges DriftDiffusion::band_edges(std::span<const double> x) const {
     NITCAD_EXPECTS(x.size() == unknowns());
     const std::size_t n = node_count();

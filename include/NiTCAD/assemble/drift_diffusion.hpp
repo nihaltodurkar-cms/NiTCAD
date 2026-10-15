@@ -444,6 +444,12 @@ public:
     // value for every ohmic contact; zero for a gate. A current below it is not resolved by the
     // (psi, n, p) state.
     [[nodiscard]] std::vector<double> terminal_current_resolution(std::span<const double> x) const;
+    // Per mesh edge, the magnitudes of the one-sided terms whose difference is the edge's total
+    // current: |d_c1 c_a| + |d_c2 c_b| of each carrier (density times its flux coefficient), in
+    // the units of edge_currents; 0 for an edge without carriers. It scales the edge current's
+    // rounding (8 eps times it), and half of it is the edge's conductance to a quasi-Fermi
+    // potential difference near equilibrium (the weights of the weighted current, Unit 32).
+    [[nodiscard]] std::vector<double> edge_flux_terms(std::span<const double> x) const;
     // The band diagram at state x (band_edges.hpp); NaN on insulator nodes. Precondition
     // (NITCAD_EXPECTS): x has unknowns() entries and positive densities off the insulators.
     [[nodiscard]] BandEdges band_edges(std::span<const double> x) const;

@@ -938,6 +938,9 @@ std::expected<void, base::Error> Builder::solver(Plan& plan) const {
         } else if (e.key == "Ns") {
             NITCAD_DECK_TRY(v, num(e));
             o.Ns_override = v;
+        } else if (e.key == "weighted_current") {
+            NITCAD_DECK_TRY(v, flag(e));
+            o.weighted_current = v;
         } else {
             return std::unexpected(unknown(e, *s));
         }

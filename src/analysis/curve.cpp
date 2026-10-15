@@ -58,13 +58,19 @@ std::expected<Curve, base::Error> make_curve(std::vector<double> x, std::vector<
 
 std::expected<Curve, base::Error> current_curve(const results::Sweep& sweep, std::size_t swept,
                                                 std::size_t sense) {
+    // A point with the weighted current (Unit 32) is read through it and its own resolution.
     return read_sweep(
         sweep, swept,
         [&](const results::BiasPoint& p) -> std::optional<double> {
+            if (sense < p.weighted_current.size()) return p.weighted_current[sense];
             if (sense >= p.terminal_current.size()) return std::nullopt;
             return p.terminal_current[sense];
         },
         [&](const results::BiasPoint& p) -> std::optional<double> {
+            if (sense < p.weighted_current.size()) {
+                if (sense >= p.weighted_current_resolution.size()) return std::nullopt;
+                return p.weighted_current_resolution[sense];
+            }
             if (sense >= p.terminal_current_resolution.size()) return std::nullopt;
             return p.terminal_current_resolution[sense];
         });

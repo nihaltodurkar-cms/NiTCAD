@@ -1774,6 +1774,45 @@ meshes, sweeps and checkpoints; DECISIONS.md IO1–IO7):**
 - Not in Unit 29: device descriptions on disk and a text input deck (the next io unit), transient and small-signal
   results, compression, a build/version stamp in the file, file locking.
 
+**As built (Unit 32, low-current accuracy: the weighted terminal current; owner rulings 2026-10-15; DECISIONS.md
+W1–W8):**
+- `BiasOptions::weighted_current` (off by default) gives every steady point (`sweep_bias`, `solve_bias`,
+  `trace_bias`) `BiasPoint::weighted_current` and `weighted_current_resolution`, per contact, in the unit and sign of
+  `terminal_current`. With it off nothing changes: fields, currents, run identities and files are bit-identical.
+- The current (`src/solve/weighted_current.hpp`, private): I_c = Σ over edges of (J_n + J_p)_e (w_a − w_b), w = 1 on
+  contact c and 0 on the other ohmic contacts. By summation by parts of the nodes' total-current balances it is the
+  contact current for a solved state whatever w is (W1); pair generation and recombination cancel in the total
+  (W3). w solves the Laplace problem weighted by each edge's conductance (half its one-sided flux terms,
+  `DriftDiffusion::edge_flux_terms`), so it is flat in heavily doped regions, whose edge currents are differences of
+  huge fluxes, and varies in depletion regions and channels, where the current is resolved (W2).
+- Its resolution: the adjoint estimate of the Newton residual's effect, measured as the change of I_c over one more
+  Newton correction with w held fixed, plus the rounding of the weighted edges (W4).
+- Refused with nonlocal tunnelling and the quasi-static sweep (W6). `analysis::current_curve` reads it when present
+  (W7); sweep files store it (keys 16 and 17, only when on); the deck's `[solver] weighted_current = on` and its
+  CSV table carry it (W8).
+- Gates (`tests/solve/weighted_current_test.cpp`, 7 cases; `[.mosfet]` case in `mosfet_test.cpp`):
+  - the legacy diode: equal to the contact current within both resolutions at 0–0.6 V, J(0.5 V) = 1.280e-2 A/cm²
+    within 1%, the currents summing to zero;
+  - off, every field, contact current, resolution and iteration count is identical to a sweep with it on, and the
+    run record names it only when on;
+  - the ideal-diode law below the contact current's resolution: an n⁺ (1e19) / p (1e17) diode without
+    recombination follows J₀(e^{V/V_T} − 1) within 0.5% (measured 0.1%) from 0.05 to 0.5 V, each current more than
+    100 times its resolution; seven of the points are below the contact current's floor;
+  - equal to the contact current (within both resolutions, and 1e-6 relative; 1e-4 at reverse bias, where the
+    contact current's own noise is 2e-5) with Fermi–Dirac statistics, incomplete ionization, field mobility,
+    reverse generation, impact ionization, local tunnelling, electrothermal coupling, a thermionic heterojunction,
+    and an oxide interface with fixed charge, traps and surface recombination under an electrode;
+  - a state stopped at `tol_update` = 0.5: the resolution covers its error, and where the error is real (22 times
+    the current at 0.1 V) equals it within 1% (measured 3e-6);
+  - every traced point carries it; refusals named;
+  - the MOSFET (Release, `[.mosfet]`): resolved at every Vg from −1 to 1 V, rising, Kirchhoff to its resolution, equal
+    to the contact current where that is resolved; the off-state plateau (3.50e-13 A/cm) independent of Vg within
+    2%; the swing narrowing to 70.55 mV/decade at threshold; `on_off_ratio` at −1 V a value (9.0e11); without SRH the
+    plateau within 10% (measured 4.8% lower) and the subthreshold current within 1% (diffusion, not generation).
+- Mutation checks (14), all caught (DECISIONS.md, Unit 32).
+- Not in Unit 32: transient and small-signal weighted currents (displacement-current terms), nonlocal tunnelling (a
+  path term), a weighted current per region or cut chosen by the user.
+
 ### 6.7 Error policy (R1, decided)
 
 - **Recoverable errors** are returned as `std::expected<T, NiTCAD::base::Error>`: invalid input, a degenerate
@@ -2310,7 +2349,8 @@ composable.
     partly negative) is below its resolution (about 1e-9 A/cm, the 1e19 source and drain's flux cancellation, Unit 11).
     The legacy off-state check (Unit 12: Id(1 V) > 1e6 |Id(−1 V)|) compares with that noise, and so does the steepest
     swing over all points (68.79 mV/decade); `on_off_ratio` at −1 V is an error (the signs differ), and the off state
-    is read at the first resolved point, −0.3 V;
+    is read at the first resolved point, −0.3 V. **Resolved by Unit 32** (6.6): the weighted current is resolved at
+    every Vg (3.50e-13 A/cm at −1 V, estimated error 2e-19), and the on/off ratio at −1 V is 9.0e11;
   - breakdown (Release-only, `[.breakdown]`): `breakdown_at_current` at 1e-4 A/cm² within 1% of the analytic one-sided
     value (55.32 V against 55.26 V, 0.11%); `turning_point` on the open-base transistor's trace finds BV_CEO at
     17.2666 V, 0.4 mV past the highest traced bias, between the traced points around the fold.
@@ -2544,6 +2584,7 @@ built.
 | 29 | The io layer: files and checkpoint/restart (11.3) | io | **done, on `main`** (`f69a7a8`, PR #33): meshes, sweeps and checkpoints in a versioned, checksummed container with atomic writes; restart equals the uninterrupted sweep (6.6, Unit 29; DECISIONS.md IO1–IO7) |
 | 30 | Newton line search (11.3) | solve, results | **done, on `main`** (`f3e2811`, PR #32): opt-in backtracking on the damped step, residual or natural test; benchmarked against step cutting (11.3, Unit 30; DECISIONS.md L1–L6) |
 | 31 | Device files, the text input deck and the batch runner (11.3) | io, deck | **done, on `main`** (`6f67510`, PR #37): device descriptions on disk, the deck (meshes of every kind, materials, doping, contacts, interfaces, models, solver options, equilibrium and steady sweeps, restart, outputs), `nitcad check|run` (6.5, Unit 31; DECISIONS.md DK1–DK11) |
+| 32 | Low-current accuracy: the weighted terminal current (11.3) | solve, assemble, results, io, analysis, deck | **built, on branch `solve/low-current`**: opt-in, the total current weighted by a conductance-weighted Laplace solution, so it is read where it is resolved; an adjoint error estimate; the MOSFET off state and sub-floor diode currents resolved (6.6, Unit 32; DECISIONS.md W1–W8) |
 
 Units 1–9 are the smallest end-to-end vertical slice: a validated drift-diffusion diode. Everything past
 Unit 10 is deferred until sequenced. Units 11–15, 15b, 21 and 22 were requested by the owner after Unit 10; nothing
@@ -2596,7 +2637,7 @@ exists, not finished), **planned** (nothing built). Audit of 2026-10-09, against
 | Robust nonlinear solving | Newton with componentwise clipping (6.2); the generation-free retry (Units 19, 20); arc-length `trace_bias` (Unit 19) | **Bias step cutting verified, on `main`** (Unit 28, below; `06b708d`, PR #31); **Newton line search verified, opt-in, on `main`** (Unit 30, below; `f3e2811`, PR #32) | A natural-test norm monotone in reverse bias; a Gummel or pseudo-transient fallback |
 | Input/output, checkpoint/restart | The `io` layer (approved 2026-10-09): versioned, checksummed, atomic files for meshes, sweeps and checkpoints; device files and the text input deck (Unit 31) | **Verified, on `main`** (Unit 29, 6.6; `f69a7a8`, PR #33); **device files and the deck verified, on `main`** (Unit 31, 6.5; `6f67510`, PR #37) | Transient, small-signal and `trace_bias` decks with their results on disk |
 | Geometry and unstructured 3D meshing | `Mesh::from_parts` accepts any valid node/edge/volume graph; besides the tensor-grid producer, Unit 16 added the 2D and 3D Delaunay generators and the simplex import (checked duals P0–P5, P4-certified interfaces, contact patches, structured 2D boundary layers); nonlocal BTBT still needs tensor cells (6.11, M16) | **Verified, on `main`** (Unit 16, 6.11; `a09cf43`, PR #35) | Non-convex 3D domains, 3D interface junction lines, interfaces across patched faces and 3D boundary layers (U7); an unstructured locator for nonlocal BTBT (M16) |
-| Low-current accuracy | `terminal_current_resolution` reports the floor (Unit 15); off-state MOSFET current unresolved (6.13) | planned | Current extraction from the minority side or quasi-Fermi unknowns, gated against the resolution |
+| Low-current accuracy | `terminal_current_resolution` reports the floor (Unit 15); the weighted terminal current with an adjoint error estimate (Unit 32, 6.6) | **Verified, on branch `solve/low-current`** (Unit 32): the MOSFET off state resolved at every Vg, sub-floor diode currents on the ideal-diode law to 0.1% | Weighted transient and small-signal currents; a path term for nonlocal tunnelling |
 | Generic fields/equations | Specialized `DriftDiffusion` assembler with a stride (Unit 23) | planned (6.12.1–2) | Field and equation descriptors behind the current assembler, bit-identical |
 | Scalable linear solvers | Eigen SparseLU (default), PARDISO opt-in (Unit 18) | planned | Iterative Krylov with ILU/AMG behind `linalg`; parallel assembly |
 | Results and provenance | Plain-data results; run record with identity digest (6.6); sweeps persisted bit for bit (Unit 29) | partial | Build/version stamp in files; transient and small-signal results on disk |
