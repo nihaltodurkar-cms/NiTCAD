@@ -12,6 +12,7 @@
 #include "NiTCAD/assemble/contact_bias.hpp"
 #include "NiTCAD/assemble/drift_diffusion.hpp"
 #include "NiTCAD/assemble/scaling.hpp"
+#include "NiTCAD/linalg/compensated_dot.hpp"
 #include "NiTCAD/linalg/linear_solver.hpp"
 #include "NiTCAD/solve/newton.hpp"
 #include "fields.hpp"
@@ -70,6 +71,7 @@ public:
         c_ = std::move(c);
         y0_ = std::move(y0);
         ds_ = ds;
+        step_.resize(c_.size());
         if (k != k_ || pattern_.rows() == 0) build(k);
     }
 
@@ -100,9 +102,10 @@ public:
             v[column_[r]] = dF_[r];
         }
         v[v.size() - 1] = c_[k_];  // the last row's single entry
-        double arc = -ds_;
-        for (std::size_t q = 0; q <= n; ++q) arc += c_[q] * (y[q] - y0_[q]);
-        f[n] = arc;
+        // R1 (DECISIONS.md, Unit 36): the arc row's terms cancel over many orders (its current
+        // term is the contact current's linearization), so its products are compensated.
+        for (std::size_t q = 0; q <= n; ++q) step_[q] = y[q] - y0_[q];
+        f[n] = linalg::compensated_dot(c_, step_) - ds_;
         auto factored = solver_.factorize(pattern_);
         if (!factored) return std::unexpected(std::move(factored.error()));
         if (const auto ratio = factored->pivot_ratio) {
@@ -122,12 +125,9 @@ public:
         e[n] = 1.0;
         if (auto ok = solver_.solve(r, x); !ok) return std::unexpected(std::move(ok.error()));
         if (auto ok = solver_.solve(e, w); !ok) return std::unexpected(std::move(ok.error()));
-        double uz = 0.0, uw = 0.0;
-        for (std::size_t q = 0; q <= n; ++q) {
-            if (q == k_) continue;
-            uz += c_[q] * x[q];
-            uw += c_[q] * w[q];
-        }
+        // u . z and u . w, u = c - c_k e_k: compensated (R1).
+        const double uz = linalg::compensated_dot(c_, x, k_);
+        const double uw = linalg::compensated_dot(c_, w, k_);
         const double s = uz / (1.0 + uw);
         for (std::size_t q = 0; q <= n; ++q) x[q] -= s * w[q];
         return {};
@@ -186,7 +186,7 @@ private:
     linalg::LinearSolver solver_;
     linalg::SparseMatrix jacobian_, pattern_;
     std::vector<std::size_t> to_bordered_, column_;
-    std::vector<double> c_, y0_;
+    std::vector<double> c_, y0_, step_;  // step_: y - y0, for the arc residual
     double ds_ = 0.0;
     std::size_t k_ = none;
     std::vector<double> bias_;  // electrothermal: every contact's bias [V]
@@ -478,6 +478,7 @@ std::expected<results::Sweep, base::Error> trace_bias(const device::Device& devi
             const std::size_t k = pivot(v, c);
             bordered.set_row(std::move(c), y, ds, k);
         }
+        const std::vector<double> predicted = y_next;
         results::BiasPoint point;
         const IterationObserver observe = [&](const results::IterationRecord& r, bool converged) {
             if (control.progress) {
@@ -504,6 +505,27 @@ std::expected<results::Sweep, base::Error> trace_bias(const device::Device& devi
                 return run;
             }
             continue;
+        }
+        // R2 (DECISIONS.md, Unit 36): a corrected point farther from its prediction than the step,
+        // in the arc metric, is on another branch (measured: a 1 V step that landed 3.5 V back on
+        // the snap-back's high-current branch, which the tangent test below let through); the step
+        // is retried at half.
+        if (!lands) {
+            std::vector<double> moved(n + 1);
+            for (std::size_t q = 0; q <= n; ++q) moved[q] = y_next[q] - predicted[q];
+            const double distance = std::sqrt(dot(moved, moved));
+            if (distance > ds) {
+                ds *= 0.5;
+                if (ds < options.min_step_V) {
+                    run.stopped = base::Error{
+                        base::ErrorCode::non_convergence,
+                        "trace step below min_step_V at " + std::to_string(y[n] * V_T) +
+                            " V: the corrector leaves the predicted point",
+                        base::ErrorContext{.index = attempt, .value = distance}};
+                    return run;
+                }
+                continue;
+            }
         }
         // The new tangent may turn by at most acos(0.9) = 26 degrees: a larger turn means the
         // corrector found the branch somewhere else (near a fold two branches lie close, and the

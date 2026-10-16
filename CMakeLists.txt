@@ -136,7 +136,8 @@ add_executable(nitcad_linalg_test
   tests/linalg/sparse_matrix_test.cpp
   tests/linalg/linear_solver_test.cpp
   tests/linalg/pardiso_test.cpp
-  tests/linalg/header_boundary_test.cpp)
+  tests/linalg/header_boundary_test.cpp
+  tests/linalg/compensated_dot_test.cpp)
 target_link_libraries(nitcad_linalg_test PRIVATE NiTCAD::linalg Catch2::Catch2WithMain)
 target_compile_definitions(nitcad_linalg_test PRIVATE
   NITCAD_MKL_RUNTIME_PATH="${NITCAD_MKL_RUNTIME_PATH}")
