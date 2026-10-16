@@ -488,3 +488,12 @@ TEST_CASE("deck build: ionization_levels and its run record (Unit 37, I5)", "[de
     CHECK(failure(diode_deck + "[models]\nionization_levels = schenk\n").find(
               "ionization_levels is fixed or altermatt") != std::string::npos);
 }
+
+TEST_CASE("deck build: electron_mobility (Unit 38)", "[deck]") {
+    CHECK(must(diode_deck).options.models.electron_mobility ==
+          assemble::ElectronMobility::caughey_thomas);
+    CHECK(must(diode_deck + "[models]\nelectron_mobility = masetti\n").options.models.electron_mobility ==
+          assemble::ElectronMobility::masetti);
+    CHECK(failure(diode_deck + "[models]\nelectron_mobility = arora\n").find(
+              "electron_mobility is caughey_thomas or masetti") != std::string::npos);
+}

@@ -26,6 +26,11 @@ enum class HoleMobility : std::uint8_t { caughey_thomas = 0, masetti = 1, automa
             p.hole_mobility == physics::silicon_parameters.hole_mobility);
 }
 
+// The doping-dependent electron mobility (Unit 38): the material's Caughey-Thomas (the default)
+// or Masetti's phosphorus-doped silicon fit (physics/mobility.hpp), which needs every
+// semiconductor region to carry silicon's electron mobility parameters. Opt-in.
+enum class ElectronMobility : std::uint8_t { caughey_thomas = 0, masetti = 1 };
+
 // The dopant levels of incomplete ionization (Unit 37): each material's fixed levels (Unit 15,
 // the default) or Altermatt et al.'s density-dependent levels of silicon (physics/ionization.hpp;
 // phosphorus for donors, boron for acceptors), which needs every semiconductor region to carry
@@ -38,6 +43,9 @@ struct PhysicsModels {
     // Which doping-dependent hole mobility (Units 34, 35); with doping_mobility false, its N = 0
     // value.
     HoleMobility hole_mobility = HoleMobility::automatic;
+    // Which doping-dependent electron mobility (Unit 38); with doping_mobility false, its N = 0
+    // value.
+    ElectronMobility electron_mobility = ElectronMobility::caughey_thomas;
     // SRH recombination with Scharfetter lifetimes.
     bool srh = true;
     // Auger recombination (physics::auger_recombination).

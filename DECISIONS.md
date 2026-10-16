@@ -1262,6 +1262,29 @@ phosphorus row is used. Temperature: μ_max (T / 300)^−2.5 (Allpix and Crossli
 | ME6 | Refused on a germanium region; accepted on silicon with another parameter changed; works with the electrothermal model (isothermal limit within 1e-3). |
 | ME7 | Full Release and Debug suites; zero warnings. |
 
+**Implementation.** `physics::masetti_phosphorus_silicon`; `masetti_mobility` at N = 0 keeps μ_min1 when P_c = 0
+(E3; the boron set's value unchanged); `PhysicsModels::electron_mobility` (`caughey_thomas`, the default, or
+`masetti`) in the isothermal and electrothermal assemblies, refused on regions without silicon's electron mobility;
+the run record names it only when `masetti`; the deck's `[models] electron_mobility`.
+
+**Results against the criteria (measured after the criteria commit, `4ce3ff8`):**
+
+| # | Result | Met? |
+|---|---|---|
+| ME1 | The default is Caughey–Thomas; every existing test and pin passes unchanged. | yes |
+| ME2 | Within 1e-12 of the independent evaluation at N = 0, 1e13–1e21 and 250, 300, 400 K; μ_n(0) = 1414 (T/300)^−2.5; 1e6 cm⁻³ within 1e-6 of it (E3); slopes within 1e-6. | yes |
+| ME3 | Phosphorus at 300 K, Caughey–Thomas → Masetti: +3.9 → +0.5%, +0.5 → −0.7%, −6.9 → −1.9%, −8.8 → +1.3%, +0.6 → −4.3%, −7.1 → −6.2% (1e14 … 1e19); the largest \|gap\| 8.8% → 6.2%. | yes |
+| ME4 | At 23 °C: +0.4%, −1.0%, −2.3%, +0.1%, −6.8%, −7.1%; all within 12%. | yes |
+| ME5 | The boron gaps equal the defaults' pins. | yes |
+| ME6 | Refused on germanium; accepted on silicon with eps_r changed; named in the run record; electrothermal with 300 K sinks within 1e-3 of the isothermal current. | yes |
+| ME7 | Release 18/18, Debug 12/12; no warnings. | yes |
+
+**Limitations.** μ_max = 1414 rests on one reproduction (above); the paper itself not read. Phosphorus only (the
+arsenic row, where the reproductions disagree on C_s, is not used). The (T/300)^−2.5 scaling is not Masetti's.
+
+Mutation checks (6), all caught: the N = 0 branch reverted, the electron temperature exponent miscopied, the model
+selection inverted, the electrothermal flag never set, the silicon refusal off, the run record silent.
+
 ---
 
 ## New questions the advisor raised (not yet in `ARCHITECTURE.md`)
