@@ -323,19 +323,8 @@ std::expected<results::Sweep, base::Error> sweep_bias_unobserved(const device::D
 
     // Starting state, scaled.
     std::vector<double> x(system->unknowns());
-    const std::size_t m = system->stride();
     if (initial != nullptr) {
-        for (std::size_t i = 0; i < nodes; ++i) {
-            x[m * i] = initial->potential_V[i] / scaling->V_T;
-            x[m * i + 1] = initial->n_cm3[i] / scaling->Ns;
-            x[m * i + 2] = initial->p_cm3[i] / scaling->Ns;
-            if (thermal) {
-                const double T0 = scaling->temperature_K;  // the rise tau = (T - T0) / T0
-                x[4 * i + 3] = initial->temperature_K.empty()
-                                   ? 0.0
-                                   : (initial->temperature_K[i] - T0) / T0;
-            }
-        }
+        detail::scaled_state(*system, *initial, *scaling, x);
         if (thermal) (void)system->set_thermal_bias(thermal_bias.front());  // checked
         system->stamp_contacts(x);  // insulator densities 0
     } else {
@@ -404,7 +393,7 @@ std::expected<results::Sweep, base::Error> sweep_bias_unobserved(const device::D
                },
                [&](std::size_t k, results::BiasPoint& point) -> std::expected<void, base::Error> {
                    if (thermal) {
-                       if (auto e = detail::converged_temperature(device, x,
+                       if (auto e = detail::converged_temperature(device, system->dofs(), x,
                                                                   scaling->temperature_K)) {
                            return std::unexpected(std::move(*e));
                        }

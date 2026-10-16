@@ -6,12 +6,14 @@
 #include <cstddef>
 #include <limits>
 #include <numbers>
+#include <span>
 #include <string>
 #include <utility>
 
 #include "NiTCAD/assemble/drift_diffusion.hpp"
 #include "NiTCAD/assemble/scaling.hpp"
 #include "NiTCAD/linalg/linear_solver.hpp"
+#include "fields.hpp"
 #include "observe.hpp"
 
 namespace NiTCAD::solve {
@@ -67,7 +69,8 @@ std::expected<results::SmallSignal, base::Error> solve_small_signal_unobserved(
     const double current_scale = scaling->J0 * std::pow(scaling->L_D, D - 1);
     const double t0 = system->time_scale();
     const std::size_t n = system->unknowns();
-    const std::size_t m = system->stride();
+    const detail::Slots slot = detail::slots(system->dofs());
+    const std::size_t m = slot.block;
     const bool thermal = steady.models.electrothermal;
     const double T0 = scaling->temperature_K;
 
@@ -95,12 +98,7 @@ std::expected<results::SmallSignal, base::Error> solve_small_signal_unobserved(
         (void)system->set_bias(dc.bias_V);  // checked by sweep_bias
         if (thermal) (void)system->set_thermal_bias(dc.thermal_bias_K);  // likewise
         std::vector<double> x(n);
-        for (std::size_t i = 0; i < nodes; ++i) {
-            x[m * i] = dc.fields.potential_V[i] / scaling->V_T;
-            x[m * i + 1] = dc.fields.n_cm3[i] / scaling->Ns;
-            x[m * i + 2] = dc.fields.p_cm3[i] / scaling->Ns;
-            if (thermal) x[4 * i + 3] = (dc.fields.temperature_K[i] - T0) / T0;  // the rise
-        }
+        detail::scaled_state(*system, dc.fields, *scaling, x);
         system->stamp_contacts(x);
         if (thermal) set_forcing(x);
         // Nonlocal tunnelling: the paths at the operating point, frozen (their geometry's own
@@ -149,9 +147,11 @@ std::expected<results::SmallSignal, base::Error> solve_small_signal_unobserved(
                 a.multiply(response[j], product);
                 double left = 0.0;
                 for (std::size_t i = 0; i < nodes; ++i) {
-                    left += std::abs(forcing[j][m * i + 1] - product[m * i + 1]) +
-                            std::abs(forcing[j][m * i + 2] - product[m * i + 2]) +
-                            std::abs(s) * std::abs(forcing[j][m * i] - product[m * i]);
+                    const std::size_t psi = m * i + slot.potential, n_i = m * i + slot.electrons,
+                                      p_i = m * i + slot.holes;
+                    left += std::abs(forcing[j][n_i] - product[n_i]) +
+                            std::abs(forcing[j][p_i] - product[p_i]) +
+                            std::abs(s) * std::abs(forcing[j][psi] - product[psi]);
                 }
                 resolution[j] = left;
             }
@@ -183,10 +183,11 @@ std::expected<results::SmallSignal, base::Error> solve_small_signal_unobserved(
                 for (std::size_t j = 0; j < contacts; ++j) {
                     results::SmallSignalFields fields{frequencies[k], j, {}, {}, {}, {}};
                     for (std::size_t i = 0; i < nodes; ++i) {
-                        fields.potential.push_back(response[j][m * i] * scaling->V_T);
-                        fields.n_cm3.push_back(response[j][m * i + 1] * scaling->Ns);
-                        fields.p_cm3.push_back(response[j][m * i + 2] * scaling->Ns);
-                        if (thermal) fields.temperature_K.push_back(response[j][4 * i + 3] * T0);
+                        const std::span<const Complex> r(response[j].data() + m * i, m);
+                        fields.potential.push_back(r[slot.potential] * scaling->V_T);
+                        fields.n_cm3.push_back(r[slot.electrons] * scaling->Ns);
+                        fields.p_cm3.push_back(r[slot.holes] * scaling->Ns);
+                        if (thermal) fields.temperature_K.push_back(r[slot.temperature] * T0);
                     }
                     point.fields.push_back(std::move(fields));
                 }

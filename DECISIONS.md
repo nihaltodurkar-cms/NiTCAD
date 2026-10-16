@@ -1423,7 +1423,55 @@ existing suites:
   the 2D MOSFET with field mobility, the 3D generated diode, the electrothermal pn bar, the Zener diode with nonlocal
   paths) in the solve test files that already build those devices.
 
-**Status:** implementation in progress on `assemble/fields-equations`.
+**Commit 0 findings (2026-10-17, commit `4e8a3af`, this machine: Intel Core Ultra 5 225F, 6 P + 4 E cores):**
+- Catch2 v3 runs test cases in random order by default ("Randomness seeded to …"), so traces are recorded with
+  `--order decl`; in random order one-time static work (e.g. a cached reference solution) is traced under
+  whichever case runs first.
+- Determinism: two full traced runs (A, B) of the same commit-0 binaries agreed on every traced entry except
+  `solve_unstructured`, whose three cases (an 80 000-node tensor reference, 241 803 unknowns) differed in B from the
+  first observed value on (the printed results agreed to every printed digit). Later full runs showed the same
+  kind of split in `solve` (after a complex solve), `solve_btbt` (after a Newton linear solve) and `solve_mosfet`:
+  always exactly two outcomes per entry, always starting right after a linear solve. **Cause found:** the
+  outcome depends on the core type the process runs on. `btbt: a curved junction tunnels before a planar one`,
+  pinned to each logical CPU in turn, gives one trace on CPUs 0, 1 and 6–9 (the P cores) and another on CPUs 2–5
+  (the E-core cluster); an unpinned process lands on either. (The earlier pinned probes happened to use P cores
+  only.) The likely mechanism [unverified]: Eigen sizes its dense kernels' blocking from the cache sizes of the
+  core it first queries (the E-core cluster's L2 differs from a P core's), and SparseLU's supernodal updates then
+  sum in a different order. **This is a reproducibility defect on `main`** (ARCHITECTURE.md 6.8), outside this
+  unit's scope: results depend in the last bits on the core a run starts on, on hybrid CPUs. A fix (e.g. fixing
+  Eigen's cache sizes at start-up) changes last bits of existing results, so it needs its own owner-approved unit.
+  **For this unit's gates:** every trace run is pinned to the P cores (affinity mask 0x3C3), and a slice's trace
+  must equal the pinned baseline's exactly.
+- FG4 noise: three back-to-back runs of the benchmark on commit 0 gave medians spread by 20–40% per device (e.g.
+  the MOSFET's `evaluate` 3818–4655 µs, the 3D diode's 1706–2274 µs): the machine's run-to-run variation is far
+  above FD2's 2%. FG4 is therefore measured by alternating runs of the commit-0 test binary (kept in scratch) and
+  the slice's, several times back to back, comparing the minimum of each device's medians; the gate is the slice's
+  minimum not above commit 0's by more than 2% plus the spread of commit 0's minima across the alternation, with
+  every number reported.
+- An existing timing gate, `btbt: the cost of the nonlocal paths` (`t_on < 2 t_off + 0.05`), failed once when nine
+  traced test processes ran at once (0.88 s against 0.63 s); it passes under `ctest -j 4`. Not changed in this
+  unit; noted as a load-sensitive test.
+
+- Commit 0b (`a7ddc6b`): the public solves also hand their results (fields, bands, currents, charges, admittances,
+  convergence records, run identities) to the observer, so the slices' solve-layer conversions are compared bit
+  for bit, not only through the tests' tolerances.
+- FG4 as measured: commit 0b's and the slice's `[.assembly_benchmark]` runs alternate four times, each pinned to
+  CPU 0 (a P core), and the minimum per device is compared. Pinned, the spread of commit 0b's four runs is 1–10%
+  per device (unpinned it was 20–40%).
+
+**Slice 1 results (fields and the unknown map):**
+
+| Gate | Result |
+|---|---|
+| FG1/FG2 | Pinned traces: two commit-0b baselines identical to each other on all nine traced entries; slice 1 identical to them on all nine (the only extra lines are the two new `fields` test cases). |
+| FG3 | Every existing FD-Jacobian gate passes unchanged (no term moved in slice 1). |
+| FG4 | `evaluate`, slice 1 against commit 0b (minimum of four pinned runs): MOSFET 2056 against 2038 µs (+0.9%), 3D diode 665 against 650 (+2.2%; commit 0b's own spread 9.7%), electrothermal bar +0.4%, 1D diode +0.6%, Zener +0.9%; `residual` −1.8% to −0.1%. Within the gate (no assembly loop changed). |
+| FG5 | Release 18/18, Debug 12/12, no warnings. |
+| FG6 | 7 mutants, all caught: electron and hole fields swapped in the map (fields test), `DofMap::index` off by one (fields test), the temperature slot pointing at the holes (electrothermal test), `scaled_state` writing electrons into the hole slot (small-signal test; the run also crashed), the transient error estimate reading the potential for the rise (electrothermal test), `converged_temperature` reading the potential (electrothermal test); the small-signal residual bound reading the electron slot for the potential survived the suites and was caught by the trace (only the `result.ac_resolution` lines differ). |
+| FG7 | `stride()` and every public signature unchanged; `DriftDiffusion::dofs()` answers the field and node of every unknown and the unknown of every (field, node); the block size is set from the map; the solve layer reads every slot through it (`solve/fields.hpp` `Slots`, `scaled_state`). |
+| FG9 | The map is in `assemble` (`fields.hpp`); `solve` reads only its public queries. |
+
+**Status:** commit 0, commit 0b and slice 1 done; slice 2 next.
 
 ---
 

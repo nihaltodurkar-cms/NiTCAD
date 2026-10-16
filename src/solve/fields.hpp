@@ -45,6 +45,39 @@ inline double charge_scale(const assemble::Scaling& scaling, int dimension) {
     return base::q_C * scaling.Ns * std::pow(scaling.L_D, dimension);
 }
 
+// The positions of the drift-diffusion fields in each node's block of unknowns (the system's
+// assemble::DofMap, Unit 40): field f of node i is unknown block i + f. temperature only with the
+// electrothermal model's field.
+struct Slots {
+    std::size_t block, potential, electrons, holes, temperature;
+};
+
+inline Slots slots(const assemble::DofMap& dofs) {
+    using assemble::FieldId;
+    return {dofs.block(), *dofs.slot(FieldId::potential), *dofs.slot(FieldId::electrons),
+            *dofs.slot(FieldId::holes), dofs.slot(FieldId::temperature).value_or(0)};
+}
+
+// The scaled state of physical node fields into x (the inverse of drift_diffusion_point):
+// psi / V_T, n / Ns, p / Ns and, with the temperature field, the rise tau = (T - T0) / T0 (0 when
+// the fields carry no temperature). Precondition: x has the system's unknowns (or more: the rest
+// is not written).
+inline void scaled_state(const assemble::DriftDiffusion& system, const results::NodeFields& f,
+                         const assemble::Scaling& scaling, std::span<double> x) {
+    const Slots k = slots(system.dofs());
+    const bool thermal = system.dofs().has(assemble::FieldId::temperature);
+    const double T0 = scaling.temperature_K;
+    for (std::size_t i = 0; i < system.node_count(); ++i) {
+        x[k.block * i + k.potential] = f.potential_V[i] / scaling.V_T;
+        x[k.block * i + k.electrons] = f.n_cm3[i] / scaling.Ns;
+        x[k.block * i + k.holes] = f.p_cm3[i] / scaling.Ns;
+        if (thermal) {
+            x[k.block * i + k.temperature] =
+                f.temperature_K.empty() ? 0.0 : (f.temperature_K[i] - T0) / T0;
+        }
+    }
+}
+
 // The fields and terminal quantities of a drift-diffusion state x into `point` (its bias and
 // convergence are the caller's), in the public units; shared by sweep_bias and trace_bias.
 inline void drift_diffusion_point(const assemble::DriftDiffusion& system,
@@ -55,16 +88,16 @@ inline void drift_diffusion_point(const assemble::DriftDiffusion& system,
     const double charges = charge_scale(scaling, dimension);
     point.fields = {std::vector<double>(nodes), std::vector<double>(nodes),
                     std::vector<double>(nodes)};
-    const std::size_t m = system.stride();
+    const Slots k = slots(system.dofs());
     for (std::size_t i = 0; i < nodes; ++i) {
-        point.fields.potential_V[i] = x[m * i] * scaling.V_T;
-        point.fields.n_cm3[i] = x[m * i + 1] * scaling.Ns;
-        point.fields.p_cm3[i] = x[m * i + 2] * scaling.Ns;
+        point.fields.potential_V[i] = x[k.block * i + k.potential] * scaling.V_T;
+        point.fields.n_cm3[i] = x[k.block * i + k.electrons] * scaling.Ns;
+        point.fields.p_cm3[i] = x[k.block * i + k.holes] * scaling.Ns;
     }
     if (system.electrothermal()) {  // Unit 23: the temperature and the heat to each sink
         for (std::size_t i = 0; i < nodes; ++i) {
             const double T0 = scaling.temperature_K;  // tau = (T - T0) / T0
-            point.fields.temperature_K.push_back(T0 + T0 * x[4 * i + 3]);
+            point.fields.temperature_K.push_back(T0 + T0 * x[k.block * i + k.temperature]);
         }
         point.thermal_contact_heat = system.thermal_contact_heat(x);
         for (double& P : point.thermal_contact_heat) P *= scaling.V_T * current_scale;

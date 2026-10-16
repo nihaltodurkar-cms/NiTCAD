@@ -235,6 +235,7 @@
 #include <vector>
 
 #include "NiTCAD/assemble/band_edges.hpp"
+#include "NiTCAD/assemble/fields.hpp"
 #include "NiTCAD/assemble/gate.hpp"
 #include "NiTCAD/assemble/interface_edges.hpp"
 #include "NiTCAD/assemble/models.hpp"
@@ -274,6 +275,8 @@ public:
     [[nodiscard]] std::size_t contact_count() const noexcept { return contact_count_; }
     // Unknowns per node: 3 (psi, n, p), or 4 with the electrothermal model (theta last).
     [[nodiscard]] std::size_t stride() const noexcept { return m_; }
+    // Where each field's unknowns are (fields.hpp; Unit 40): node-interleaved, stride() per node.
+    [[nodiscard]] const DofMap& dofs() const noexcept { return dofs_; }
 
     struct TimeStep;  // a BDF time step (below)
 
@@ -694,7 +697,8 @@ private:
                                                           const PhysicsModels& models,
                                                           std::span<const double> edge_geometry);
 
-    std::size_t m_ = 3;  // unknowns per node
+    DofMap dofs_;        // the unknowns: (psi, n, p), with the electrothermal model theta last
+    std::size_t m_ = 3;  // unknowns per node: dofs_.block()
     std::vector<physics::Semiconductor> thermal_materials_;
     std::vector<ThermalNode> thermal_nodes_;
     std::vector<ThermalEdge> thermal_edges_;

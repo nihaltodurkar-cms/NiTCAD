@@ -250,7 +250,8 @@ add_library(nitcad_assemble STATIC
   src/assemble/drift_diffusion.cpp
   src/assemble/electrothermal.cpp
   src/assemble/tunnel_paths.cpp
-  src/assemble/observer.cpp)
+  src/assemble/observer.cpp
+  src/assemble/fields.cpp)
 add_library(NiTCAD::assemble ALIAS nitcad_assemble)
 target_include_directories(nitcad_assemble PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
 target_link_libraries(nitcad_assemble PUBLIC
@@ -268,6 +269,7 @@ add_executable(nitcad_assemble_test
   tests/assemble/impact_ionization_test.cpp
   tests/assemble/band_to_band_test.cpp
   tests/assemble/electrothermal_test.cpp
+  tests/assemble/fields_test.cpp
   tests/baseline/trace_listener.cpp)
 target_link_libraries(nitcad_assemble_test PRIVATE NiTCAD::assemble Catch2::Catch2WithMain)
 add_test(NAME assemble COMMAND nitcad_assemble_test)

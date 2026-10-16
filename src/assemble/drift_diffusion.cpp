@@ -220,8 +220,12 @@ std::expected<DriftDiffusion, base::Error> DriftDiffusion::create(
         s.auger_p_[i] = m.parameters().auger.Cp;
     }
 
-    // With the electrothermal model every node and edge block is full 4 x 4.
-    s.m_ = models.electrothermal ? 4 : 3;
+    // The unknowns (Unit 40, fields.hpp): psi, n, p per node, and with the electrothermal model
+    // the temperature rise last; every node and edge block is then full 4 x 4.
+    const Field fields[] = {potential_field, electron_field, hole_field, temperature_field};
+    s.dofs_ = DofMap::node_interleaved(
+        std::span(fields).first(models.electrothermal ? 4 : 3), n);
+    s.m_ = s.dofs_.block();
     const std::size_t stride = s.m_;
     std::vector<linalg::Triplet> triplets;
     triplets.reserve(stride * stride * n + 2 * stride * stride * scaled->edges.size());
