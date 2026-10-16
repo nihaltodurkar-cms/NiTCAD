@@ -1068,7 +1068,7 @@ skipping the valence fit, the device file dropping it, the deck's `silicon_legac
 
 ---
 
-### Unit 36 — trace robustness at the current-resolution floor (branch `solve/trace-resolution`)
+### Unit 36 — trace robustness at the current-resolution floor (merged to `main` as `07cd53a`, PR #46, 2026-10-16)
 
 **Owner ruling (2026-10-16):** Units 36–39 in order (trace robustness, density-dependent ionization, Masetti electron
 mobility, breakdown validation), each its own branch, criteria before code and PR; stop for the go-ahead to merge
@@ -1131,7 +1131,7 @@ metric at the step's start.
 
 ---
 
-### Unit 37 — density-dependent dopant ionization, opt-in (branch `physics/ionization-density`)
+### Unit 37 — density-dependent dopant ionization, opt-in (merged to `main` as `16a77b5`, PR #47, 2026-10-16)
 
 **Owner rulings (2026-10-16):** the model is opt-in (off by default); a default change only on later authorization.
 
@@ -1217,7 +1217,7 @@ deck mapping.
 
 ---
 
-### Unit 38 — Masetti electron mobility, opt-in (branch `physics/masetti-electrons`)
+### Unit 38 — Masetti electron mobility, opt-in (merged to `main` as `1b446d0`, PR #48, 2026-10-16)
 
 **Owner rulings (2026-10-16):** opt-in (off by default); a default change only on later authorization.
 
@@ -1284,6 +1284,17 @@ arsenic row, where the reproductions disagree on C_s, is not used). The (T/300)^
 
 Mutation checks (6), all caught: the N = 0 branch reverted, the electron temperature exponent miscopied, the model
 selection inverted, the electrothermal flag never set, the silicon refusal off, the run record silent.
+
+---
+
+### Unit 39 — breakdown validation against published data (deferred by the owner, 2026-10-16)
+
+The planned last unit of the Units 36–39 sequence: abrupt-junction avalanche breakdown voltages against a published
+source. Deferred before any work: no source could be read. S. M. Sze, G. Gibbons, Appl. Phys. Lett. 8, 111 (1966),
+doi:10.1063/1.1754511, is paywalled (as in Unit 33, V6); a 2021 analysis, "Analysis of the dependence of critical electric field on semiconductor bandgap"
+(doi:10.1557/s43578-021-00465-2), is login-gated and its OSTI record would not connect; an archived RCA
+Review (March 1969) would not download. Breakdown stays validated against the analytic one-sided value only (Unit
+19). It resumes if a readable copy of a source is supplied.
 
 ---
 
