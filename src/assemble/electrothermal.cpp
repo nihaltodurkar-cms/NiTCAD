@@ -103,6 +103,7 @@ std::optional<base::Error> DriftDiffusion::make_thermal(const device::Device& de
     const int D = mesh.dimension();
     T0_ = scaling.temperature_K;
     thermal_bgn_ = models.bgn;
+    masetti_electrons_ = models.electron_mobility == ElectronMobility::masetti;  // Unit 38
     const auto node_region = device.node_region();
     kappa_ref_ = region_thermal[node_region[device.reference_node()]].conductivity_W_cmK;
     heat_scale_ = kappa_ref_ * T0_ / (scaling.V_T * scaling.J0 * scaling.L_D);
@@ -257,8 +258,14 @@ DriftDiffusion::ThermalState DriftDiffusion::thermal_state(std::size_t i, double
     s.nie = nie / Ns_;
     s.d_nie = s.nie * T0_ * physics::intrinsic_density_log_slope(m, T, t.narrowing_eV);
     const auto electron = physics::Carrier::electron, hole = physics::Carrier::hole;
-    s.mu_n = physics::caughey_thomas_mobility(m, electron, t.impurity_mobility, T);
-    s.d_mu_n = T0_ * physics::caughey_thomas_mobility_slope(m, electron, t.impurity_mobility, T);
+    if (masetti_electrons_) {  // Unit 38
+        const auto& masetti = physics::masetti_phosphorus_silicon;
+        s.mu_n = physics::masetti_mobility(masetti, t.impurity_mobility, T);
+        s.d_mu_n = T0_ * physics::masetti_mobility_slope(masetti, t.impurity_mobility, T);
+    } else {
+        s.mu_n = physics::caughey_thomas_mobility(m, electron, t.impurity_mobility, T);
+        s.d_mu_n = T0_ * physics::caughey_thomas_mobility_slope(m, electron, t.impurity_mobility, T);
+    }
     if (masetti_holes_[static_cast<std::size_t>(t.material)] != 0) {  // Units 34, 35
         const auto& masetti = physics::masetti_boron_silicon;
         s.mu_p = physics::masetti_mobility(masetti, t.impurity_mobility, T);

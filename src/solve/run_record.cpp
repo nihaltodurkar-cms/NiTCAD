@@ -131,6 +131,11 @@ std::vector<std::pair<std::string, double>> settings(const BiasOptions& o) {
         if (o.models.hole_mobility != assemble::HoleMobility::caughey_thomas) {
             s.emplace_back("models.hole_mobility", static_cast<double>(o.models.hole_mobility));
         }
+        // Unit 38: likewise.
+        if (o.models.electron_mobility != assemble::ElectronMobility::caughey_thomas) {
+            s.emplace_back("models.electron_mobility",
+                           static_cast<double>(o.models.electron_mobility));
+        }
     }
     // Unit 37: only where it is read (with incomplete ionization, in either equation set) and not
     // the default, so the runs without it keep their identity.

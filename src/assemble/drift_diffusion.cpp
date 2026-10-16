@@ -122,6 +122,23 @@ std::expected<DriftDiffusion, base::Error> DriftDiffusion::create(
                models.hole_mobility != HoleMobility::automatic) {
         return refuse("unknown hole mobility model");
     }
+    // Unit 38: likewise for Masetti's phosphorus-doped silicon electrons.
+    if (models.electron_mobility == ElectronMobility::masetti) {
+        for (const device::Region& r : device.regions()) {
+            const auto* s = std::get_if<physics::Semiconductor>(&r.material);
+            if (s && !(s->parameters().electron_mobility ==
+                       physics::silicon_parameters.electron_mobility)) {
+                return std::unexpected(base::Error{
+                    base::ErrorCode::invalid_input,
+                    "electron_mobility masetti: region '" + r.name +
+                        "' does not have silicon's electron mobility (Masetti's coefficients are "
+                        "phosphorus-doped silicon's)",
+                    {}});
+            }
+        }
+    } else if (models.electron_mobility != ElectronMobility::caughey_thomas) {
+        return refuse("unknown electron mobility model");
+    }
     auto scaled = detail::make_scaled_device(device, scaling, models);
     if (!scaled) return std::unexpected(std::move(scaled.error()));
     const std::size_t n = scaled->volume.size();
@@ -189,7 +206,10 @@ std::expected<DriftDiffusion, base::Error> DriftDiffusion::create(
         const physics::Semiconductor& m = device.material(node);
         const double N = device.total_impurity(node);
         const double N_mobility = models.doping_mobility ? N : 0.0;
-        mu_n[i] = physics::caughey_thomas_mobility(m, physics::Carrier::electron, N_mobility, T);
+        mu_n[i] = models.electron_mobility == ElectronMobility::masetti
+                      ? physics::masetti_mobility(physics::masetti_phosphorus_silicon, N_mobility, T)
+                      : physics::caughey_thomas_mobility(m, physics::Carrier::electron, N_mobility,
+                                                         T);
         mu_p[i] = masetti_holes(models.hole_mobility, m.parameters())
                       ? physics::masetti_mobility(physics::masetti_boron_silicon, N_mobility, T)
                       : physics::caughey_thomas_mobility(m, physics::Carrier::hole, N_mobility, T);

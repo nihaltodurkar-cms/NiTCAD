@@ -35,7 +35,9 @@ double masetti_mobility(const MasettiParameters& p, double total_impurity_cm3,
     detail::expect_temperature(temperature_K);
     const double N = total_impurity_cm3;
     const double mu_max = p.mu_max * std::pow(temperature_K / 300.0, p.T_exponent);
-    if (N == 0.0) return mu_max - p.mu_min2;  // exp(-P_c / 0) and 1 / (1 + (C_s / 0)^beta) vanish
+    // At N = 0: 1 / (1 + (C_s / 0)^beta) vanishes, and exp(-P_c / 0) vanishes for P_c > 0 but is
+    // 1 for P_c = 0 (the electron sets, Unit 38: the mu_min1 term stays).
+    if (N == 0.0) return p.P_c > 0.0 ? mu_max - p.mu_min2 : p.mu_min1 + (mu_max - p.mu_min2);
     return p.mu_min1 * std::exp(-p.P_c / N) + (mu_max - p.mu_min2) * masetti_lattice_share(p, N) -
            p.mu_1 / (1.0 + std::pow(p.C_s / N, p.beta));
 }

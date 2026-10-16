@@ -137,11 +137,13 @@ deck::Deck load(const char* file, const char* temperature = nullptr,
 // the deck's (the default, automatic) unless given.
 double simulated_rho(const deck::Deck& d, bool incomplete_ionization = false,
                      std::optional<assemble::HoleMobility> holes = std::nullopt,
-                     assemble::IonizationLevels levels = assemble::IonizationLevels::fixed) {
+                     assemble::IonizationLevels levels = assemble::IonizationLevels::fixed,
+                     assemble::ElectronMobility electrons = assemble::ElectronMobility::caughey_thomas) {
     auto plan = deck::build(d);
     if (!plan) FAIL(plan.error().message);
     plan->options.models.incomplete_ionization = incomplete_ionization;
     plan->options.models.ionization_levels = levels;
+    plan->options.models.electron_mobility = electrons;
     if (holes) plan->options.models.hole_mobility = *holes;
     const auto report = deck::run(*plan);
     if (!report) FAIL(report.error().message);
@@ -373,4 +375,45 @@ TEST_CASE("validation: incomplete ionization at density-dependent levels (Unit 3
         if (b.N >= 1e18) CHECK(std::abs(gap) < std::abs(fixed));  // II4
         CHECK(std::abs(gap - altermatt_gaps[k]) < pin);
     }
+}
+
+// Unit 38: the gaps with Masetti's phosphorus electron mobility on the defaults, at 300 K and
+// 23 C, per deck in the order of `resistors` (pinned, V5).
+constexpr double electron_gaps_300K[] = {0.005, -0.007, -0.019, 0.013, -0.043, -0.062,  // phosphorus
+                                         -0.011, -0.011, -0.053, -0.110, -0.039};  // boron
+constexpr double electron_gaps_23C[] = {0.004, -0.010, -0.024, 0.001, -0.068, -0.071,
+                                        -0.011, -0.011, -0.058, -0.124, -0.049};
+
+TEST_CASE("validation: Masetti electron mobility against the phosphorus benchmarks (Unit 38)",
+          "[validation]") {
+    // ME3-ME5, fixed before this ran (DECISIONS.md, Unit 38): the largest phosphorus |gap| at 300 K
+    // below Caughey-Thomas's 8.8%, each 23 C |gap| <= 12%, the boron gaps unchanged (the defaults'
+    // pins, Unit 35); every gap pinned.
+    std::printf("Masetti electron mobility (NBS SP 400-64), defaults: gap Caughey-Thomas -> Masetti, "
+                "300 K | 23 C\n");
+    const auto masetti = assemble::ElectronMobility::masetti;
+    const auto fixed = assemble::IonizationLevels::fixed;
+    double worst = 0.0;
+    for (std::size_t k = 0; k < std::size(resistors); ++k) {
+        const Benchmark& b = resistors[k];
+        const double g300 = simulated_rho(load(b.file), false, std::nullopt, fixed, masetti) /
+                                thurber_rho(b.dopant, b.N, true) - 1.0;
+        const double g23 = simulated_rho(load(b.file, "296.15"), false, std::nullopt, fixed, masetti) /
+                               thurber_rho(b.dopant, b.N, false) - 1.0;
+        std::printf("%-20s %+6.1f%% -> %+6.1f%% | %+6.1f%% -> %+6.1f%%\n", b.file,
+                    100.0 * default_gaps[k].gap_300K, 100.0 * g300, 100.0 * default_gaps[k].gap_23C,
+                    100.0 * g23);
+        CAPTURE(b.file, g300, g23);
+        if (b.dopant == Dopant::phosphorus) {
+            worst = std::max(worst, std::abs(g300));
+            CHECK(std::abs(g23) <= 0.12);  // ME4
+        } else {
+            CHECK(std::abs(g300 - default_gaps[k].gap_300K) < pin);  // ME5
+            CHECK(std::abs(g23 - default_gaps[k].gap_23C) < pin);
+        }
+        CHECK(std::abs(g300 - electron_gaps_300K[k]) < pin);
+        CHECK(std::abs(g23 - electron_gaps_23C[k]) < pin);
+    }
+    CAPTURE(worst);
+    CHECK(worst < 0.088);  // ME3
 }

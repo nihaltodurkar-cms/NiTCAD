@@ -869,6 +869,10 @@ std::expected<void, base::Error> Builder::models(assemble::PhysicsModels& m) con
             else if (e.value == "masetti") m.hole_mobility = assemble::HoleMobility::masetti;
             else if (e.value == "automatic") m.hole_mobility = assemble::HoleMobility::automatic;
             else return std::unexpected(at(e.line, "hole_mobility is automatic, caughey_thomas or masetti"));
+        } else if (e.key == "electron_mobility") {
+            if (e.value == "caughey_thomas") m.electron_mobility = assemble::ElectronMobility::caughey_thomas;
+            else if (e.value == "masetti") m.electron_mobility = assemble::ElectronMobility::masetti;
+            else return std::unexpected(at(e.line, "electron_mobility is caughey_thomas or masetti"));
         } else if (e.key == "ionization_levels") {
             if (e.value == "fixed") m.ionization_levels = assemble::IonizationLevels::fixed;
             else if (e.value == "altermatt") m.ionization_levels = assemble::IonizationLevels::altermatt;

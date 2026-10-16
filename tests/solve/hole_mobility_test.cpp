@@ -236,3 +236,44 @@ TEST_CASE("hole mobility: the cost of Masetti (AC9)", "[.performance]") {
                     (ct.seconds / static_cast<double>(ct.iterations)));
     CHECK(masetti.seconds / ct.seconds <= 1.10);  // AC9
 }
+
+TEST_CASE("electron mobility: Masetti, opt-in, only on silicon, electrothermal (Unit 38, ME6)",
+          "[hole_mobility]") {
+    solve::BiasOptions masetti;
+    masetti.models.electron_mobility = assemble::ElectronMobility::masetti;
+    // Refused on germanium; accepted on silicon with another parameter changed.
+    const auto germanium = *physics::Semiconductor::create(physics::germanium_parameters);
+    const auto refused = solve::sweep_bias(diode(germanium), points, masetti);
+    REQUIRE_FALSE(refused.has_value());
+    CHECK(refused.error().code == base::ErrorCode::invalid_input);
+    CHECK(refused.error().message.find("silicon's electron mobility") != std::string::npos);
+    auto params = physics::silicon_parameters;
+    params.eps_r = 11.9;
+    const auto accepted = solve::sweep_bias(diode(*physics::Semiconductor::create(params)), points,
+                                            masetti);
+    REQUIRE(accepted.has_value());
+    CHECK_FALSE(accepted->stopped.has_value());
+    // It changes the current and is named in the run record; the default is not.
+    const auto plain = solve::sweep_bias(diode(physics::silicon()), points);
+    REQUIRE(plain.has_value());
+    const auto named = [](const results::RunRecord& r) {
+        return std::ranges::any_of(r.settings,
+                                   [](const auto& s) { return s.first == "models.electron_mobility"; });
+    };
+    CHECK(accepted->points.back().terminal_current[0] != 0.0);
+    CHECK(named(accepted->run));
+    CHECK_FALSE(named(plain->run));
+    // With the electrothermal model and isothermal sinks at 300 K: the isothermal current to 1e-3.
+    solve::BiasOptions thermal = masetti;
+    thermal.models.electrothermal = true;
+    const auto run = solve::sweep_bias(diode(physics::silicon(), true), points, thermal);
+    const auto iso = solve::sweep_bias(diode(physics::silicon()), points, masetti);
+    REQUIRE(run.has_value());
+    REQUIRE_FALSE(run->stopped.has_value());
+    REQUIRE(iso.has_value());
+    const double I = run->points.back().terminal_current[0];
+    const double I_iso = iso->points.back().terminal_current[0];
+    CAPTURE(I, I_iso);
+    CHECK(std::abs(I / I_iso - 1.0) < 1e-3);
+    CHECK(I_iso != plain->points.back().terminal_current[0]);
+}

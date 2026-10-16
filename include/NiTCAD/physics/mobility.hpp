@@ -29,8 +29,9 @@ namespace NiTCAD::physics {
 //             - mu_1 / (1 + (C_s / N)^beta),       mu_max(T) = mu_max (T / 300)^T_exponent
 //
 // N the total ionized impurity density. The fits are at 300 K; the mu_max scaling (exponent -2.2
-// for holes) is the one those reproductions apply, not the paper's. At N = 0 the mobility is
-// mu_max(T) - mu_min2 (the exponential and the last term vanish).
+// for holes, -2.5 for electrons) is the one those reproductions apply, not the paper's. At N = 0
+// the mobility is mu_max(T) - mu_min2 (the exponential and the last term vanish), or with
+// P_c = 0 (the electron sets, eq (1); Unit 38) mu_min1 + mu_max(T) - mu_min2.
 struct MasettiParameters {
     double mu_min1;     // [cm^2/(V s)]
     double mu_min2;     // [cm^2/(V s)]
@@ -48,6 +49,12 @@ struct MasettiParameters {
 inline constexpr MasettiParameters masetti_boron_silicon{
     .mu_min1 = 44.9, .mu_min2 = 0.0, .mu_max = 470.5, .mu_1 = 29.0, .P_c = 9.23e16,
     .C_r = 2.23e17, .C_s = 6.10e20, .alpha = 0.719, .beta = 2.0, .T_exponent = -2.2};
+
+// Electrons in phosphorus-doped silicon (Table I as reproduced; DECISIONS.md, Unit 38): the
+// paper's eq (1), the form above with P_c = 0.
+inline constexpr MasettiParameters masetti_phosphorus_silicon{
+    .mu_min1 = 68.5, .mu_min2 = 68.5, .mu_max = 1414.0, .mu_1 = 56.1, .P_c = 0.0,
+    .C_r = 9.20e16, .C_s = 3.41e20, .alpha = 0.711, .beta = 1.98, .T_exponent = -2.5};
 
 // [cm^2/(V s)]. Preconditions (NITCAD_EXPECTS): total_impurity_cm3 is finite and >= 0;
 // temperature_K is finite and positive.

@@ -707,6 +707,7 @@ private:
     bool thermal_bgn_ = false;
     // Units 34, 35: per thermal material, whether its hole mobility is Masetti's.
     std::vector<char> masetti_holes_;
+    bool masetti_electrons_ = false;  // Unit 38: the electron mobility is Masetti's
     bool sinks_complete_ = false;
     std::vector<char> reaches_sink_;  // per node (reaches_heat_sink)
     // One node's thermal state at tau (NaN entries unless tau is finite and theta positive).
