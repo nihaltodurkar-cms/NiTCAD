@@ -16,6 +16,7 @@
 #include "NiTCAD/linalg/linear_solver.hpp"
 #include "NiTCAD/solve/newton.hpp"
 #include "fields.hpp"
+#include "observe.hpp"
 #include "thermal.hpp"
 #include "weighted_current.hpp"
 
@@ -241,7 +242,7 @@ std::expected<void, base::Error> correct(Bordered& b, std::span<double> y,
 
 }  // namespace
 
-std::expected<results::Sweep, base::Error> trace_bias(const device::Device& device,
+std::expected<results::Sweep, base::Error> trace_bias_unobserved(const device::Device& device,
                                                       const TraceOptions& options,
                                                       const results::NodeFields* initial,
                                                       const RunControl& control) {
@@ -598,6 +599,16 @@ std::expected<results::Sweep, base::Error> trace_bias(const device::Device& devi
         if (iterations >= 12) ds = std::max(0.7 * ds, options.min_step_V);
     }
     return run;
+}
+
+// The public trace: the body above, its result handed to the test observer (observe.hpp).
+std::expected<results::Sweep, base::Error> trace_bias(const device::Device& device,
+                                                      const TraceOptions& options,
+                                                      const results::NodeFields* initial,
+                                                      const RunControl& control) {
+    auto r = trace_bias_unobserved(device, options, initial, control);
+    if (r) detail::observe_result(*r);
+    return r;
 }
 
 }  // namespace NiTCAD::solve

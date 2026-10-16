@@ -12,6 +12,7 @@
 #include "NiTCAD/assemble/drift_diffusion.hpp"
 #include "NiTCAD/assemble/scaling.hpp"
 #include "NiTCAD/linalg/linear_solver.hpp"
+#include "observe.hpp"
 
 namespace NiTCAD::solve {
 
@@ -27,7 +28,7 @@ base::Error invalid(std::string message, std::optional<std::size_t> index = std:
 
 }  // namespace
 
-std::expected<results::SmallSignal, base::Error> solve_small_signal(
+std::expected<results::SmallSignal, base::Error> solve_small_signal_unobserved(
     const device::Device& device, std::span<const std::vector<double>> points,
     const SmallSignalOptions& options, const results::NodeFields* initial,
     const RunControl& control) {
@@ -202,6 +203,16 @@ std::expected<results::SmallSignal, base::Error> solve_small_signal(
     run.stopped = std::move(sweep->stopped);
     run.unfinished = std::move(sweep->unfinished);
     return run;
+}
+
+// The public analysis: the body above, its result handed to the test observer (observe.hpp).
+std::expected<results::SmallSignal, base::Error> solve_small_signal(
+    const device::Device& device, std::span<const std::vector<double>> points,
+    const SmallSignalOptions& options, const results::NodeFields* initial,
+    const RunControl& control) {
+    auto r = solve_small_signal_unobserved(device, points, options, initial, control);
+    if (r) detail::observe_result(*r);
+    return r;
 }
 
 }  // namespace NiTCAD::solve

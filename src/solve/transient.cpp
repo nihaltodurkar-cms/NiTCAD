@@ -13,6 +13,7 @@
 #include "NiTCAD/solve/equilibrium.hpp"
 #include "NiTCAD/solve/newton.hpp"
 #include "fields.hpp"
+#include "observe.hpp"
 #include "relocation.hpp"
 #include "thermal.hpp"
 
@@ -131,7 +132,7 @@ bool positive(double v) { return std::isfinite(v) && v > 0.0; }
 
 }  // namespace
 
-std::expected<results::Transient, base::Error> solve_transient(
+std::expected<results::Transient, base::Error> solve_transient_unobserved(
     const device::Device& device, std::span<const Waveform> waveforms,
     const TransientOptions& options, const results::NodeFields* initial,
     const RunControl& control) {
@@ -612,6 +613,16 @@ std::expected<results::Transient, base::Error> solve_transient(
         }
     }
     return run;
+}
+
+// The public run: the body above, its result handed to the test observer (observe.hpp).
+std::expected<results::Transient, base::Error> solve_transient(
+    const device::Device& device, std::span<const Waveform> waveforms,
+    const TransientOptions& options, const results::NodeFields* initial,
+    const RunControl& control) {
+    auto r = solve_transient_unobserved(device, waveforms, options, initial, control);
+    if (r) detail::observe_result(*r);
+    return r;
 }
 
 }  // namespace NiTCAD::solve

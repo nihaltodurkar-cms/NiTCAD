@@ -12,6 +12,7 @@
 #include "NiTCAD/assemble/scaling.hpp"
 #include "NiTCAD/solve/equilibrium.hpp"
 #include "fields.hpp"
+#include "observe.hpp"
 #include "relocation.hpp"
 #include "weighted_current.hpp"
 #include "thermal.hpp"
@@ -179,7 +180,7 @@ void run_points(std::span<const std::vector<double>> points,
 
 }  // namespace
 
-std::expected<results::Sweep, base::Error> sweep_bias(const device::Device& device,
+std::expected<results::Sweep, base::Error> sweep_bias_unobserved(const device::Device& device,
                                                       std::span<const std::vector<double>> points,
                                                       const BiasOptions& options,
                                                       const results::NodeFields* initial,
@@ -428,6 +429,17 @@ std::expected<results::BiasPoint, base::Error> solve_bias(const device::Device& 
     if (!sweep) return std::unexpected(std::move(sweep.error()));
     if (sweep->stopped) return std::unexpected(std::move(*sweep->stopped));
     return std::move(sweep->points.front());
+}
+
+// The public sweep: the body above, its result handed to the test observer (observe.hpp).
+std::expected<results::Sweep, base::Error> sweep_bias(const device::Device& device,
+                                                      std::span<const std::vector<double>> points,
+                                                      const BiasOptions& options,
+                                                      const results::NodeFields* initial,
+                                                      const RunControl& control) {
+    auto r = sweep_bias_unobserved(device, points, options, initial, control);
+    if (r) detail::observe_result(*r);
+    return r;
 }
 
 }  // namespace NiTCAD::solve
