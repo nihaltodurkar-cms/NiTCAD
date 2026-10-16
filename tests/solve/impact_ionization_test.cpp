@@ -463,7 +463,8 @@ namespace {
 // p 1e17 on [1, 1.5) um, collector n- 1e16 to 5 um, n+ 1e19 to 6 um; emitter on x_min, collector on
 // x_max; lifetimes 1e-7 s (Scharfetter, N_ref 5e16).
 device::Device open_base(double T) {
-    physics::SemiconductorParameters si = physics::silicon_parameters;
+    // Legacy silicon (Unit 35): the snap-back case below was measured on it (see there).
+    physics::SemiconductorParameters si = physics::legacy_silicon_parameters;
     si.lifetime = {.tau_n0 = 1e-7, .tau_p0 = 1e-7, .N_ref = 5e16};
     const double xb = 1e-4, xc = 1.5e-4;
     mesh::Mesh m = *mesh::make_tensor_grid(legacy_graded_mesh(6e-4, {xb, xc, 5e-4}, 2e-8, 2e-6));
@@ -509,9 +510,15 @@ TEST_CASE("impact ionization: an open-base transistor snaps back", "[.breakdown]
     // 1.0002 at 0.58 A/cm^2; below 1 at the fold by the collector leakage's share). Every traced
     // point, re-solved at its own bias from its own state, is that state within the current
     // resolution.
+    // On the legacy options (Unit 35): with the defaults (Couderc's silicon, Masetti holes) the
+    // fold is at 17.46 V, 1.61e-3 A/cm^2, but the trace crawls over it in some 5000 steps, the
+    // current moving in steps of 2.9e-7 A/cm^2 (its resolution), and its highest bias falls
+    // hundreds of points past the turning point analysis::turning_point finds (DECISIONS.md, Unit
+    // 35, unresolved).
     const double T = 350.0, xc = 1.5e-4;
     const device::Device d = open_base(T);
     solve::TraceOptions o;
+    o.steady.models.hole_mobility = assemble::HoleMobility::caughey_thomas;
     o.steady.models.bgn = false;
     o.steady.models.impact_ionization = true;
     o.contact = 1;

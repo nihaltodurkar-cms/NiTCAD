@@ -27,6 +27,11 @@
 //     gamma_ii = tanh(h / 300) / tanh(h / T), h = hbar w / 2k
 //                                                 dgamma/dT = tanh(h / 300) h / (T^2 sinh^2(h / T))
 //     v_emission ~ T^(1/2) (both forms)           dv/dT = v / (2 T)
+// With a Passler gap and density-of-states mass fits (Unit 35, semiconductor.hpp) the gap's slope
+// is that of Passler's form, d ln N / dT = 3 / (2 T) + d ln (m_d / m0)^(3/2) / dT per band, d ln n_i
+// / dT takes the mean of the two bands' instead of 3 / (2 T), and v_emission ~ T N^(-1/3) (or
+// T^2 / N with a Richardson constant) gives dv/dT = v (1 / T - d ln N / dT / 3) (or
+// v (2 / T - d ln N / dT)).
 // The electron affinity is temperature independent (as in semiconductor.hpp), so in the vacuum-level
 // gauge the conduction-band edge does not move with T and the valence-band edge carries all of the
 // gap's change.
@@ -61,6 +66,16 @@ struct ValueSlope {
 
 // dEg/dT [eV/K] of band_gap_eV. Precondition (NITCAD_EXPECTS): T finite and positive.
 [[nodiscard]] double band_gap_slope_eV_per_K(const Semiconductor& m, double temperature_K);
+
+// ln (m_d / m0)^(3/2) of a band's density-of-states mass fit (Unit 35; the conduction band for
+// electron, the valence band for hole) and its derivative d / dT [1/K]; {0, 0} without a fit,
+// where the density of states is N300 (T / 300)^(3/2). Precondition (NITCAD_EXPECTS): T finite and
+// positive.
+[[nodiscard]] ValueSlope dos_mass_log(const Semiconductor& m, Carrier band, double temperature_K);
+
+// d ln N / dT [1/K] of conduction_band_dos (electron) or valence_band_dos (hole):
+// 3 / (2 T) + d ln (m_d / m0)^(3/2) / dT. Precondition as dos_mass_log.
+[[nodiscard]] double dos_log_slope(const Semiconductor& m, Carrier band, double temperature_K);
 
 // d ln n_i / dT [1/K] of intrinsic_density, and of effective_intrinsic_density (band-gap
 // narrowing dEg_BGN [eV] given). Precondition (NITCAD_EXPECTS): T finite and positive.

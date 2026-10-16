@@ -27,10 +27,13 @@
 //                       regions and certificate; a plain mesh file is a one-region mesh)
 //   [region <name>]   (repeatable, in order: region k is the k-th section, also for a generated
 //                     mesh and a mesh file, whose node regions are indices)
-//                     material = silicon | germanium | gaas | ingaas | sic_4h | algaas <x> [<share>]
-//                                | sio2 | insulator
+//                     material = silicon | silicon_legacy | germanium | gaas | ingaas | sic_4h
+//                                | algaas <x> [<share>] | sio2 | insulator
+//                       (silicon: Couderc et al.'s band set, Unit 35; silicon_legacy: the legacy's)
 //                     <parameter> = <value>   (a material parameter by its C++ member path, e.g.
-//                       eps_r, electron_mobility.mu_max, thermal.conductivity_W_cmK; DK7)
+//                       eps_r, electron_mobility.mu_max, thermal.conductivity_W_cmK,
+//                       passler_gap.Theta_K; DK7; the density-of-states mass fits are not
+//                       overridable here)
 //                     tensor meshes: box = <lo hi> per dimension (repeatable; a region without boxes
 //                       is the background, at most one; later regions override earlier ones, DK8)
 //                     generate2d: polygon = <x y>, ... (repeatable)
@@ -54,7 +57,8 @@
 //                     resistance
 //   [models]          each assemble::PhysicsModels switch by its name = on | off;
 //                     btbt_nonlocal = off | kane | direct_wkb; impact_current_resolution = <x>;
-//                     hole_mobility = caughey_thomas | masetti  (Unit 34)
+//                     hole_mobility = automatic | caughey_thomas | masetti  (Units 34, 35;
+//                       automatic, the default: Masetti in silicon regions)
 //   [solver]          equations = drift_diffusion | equilibrium_poisson; max_iterations; tol_update;
 //                     max_update; line_search = off | residual | natural; line_search.max_backtracks;
 //                     line_search.sufficient_decrease; max_cuts; growth; cut_max_iterations;

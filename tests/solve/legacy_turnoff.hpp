@@ -61,7 +61,7 @@ public:
     // doping: N_D - N_A per node [cm^-3]; x ascending [cm].
     LegacyDiode1D(std::vector<double> x, std::vector<double> doping, double T = 300.0)
         : x_(std::move(x)), doping_(std::move(doping)) {
-        const NiTCAD::physics::Semiconductor si = NiTCAD::physics::silicon();
+        const NiTCAD::physics::Semiconductor si = NiTCAD::physics::legacy_silicon();
         N_ = x_.size();
         VT_ = NiTCAD::base::thermal_voltage(T);
         eps_ = si.parameters().eps_r * NiTCAD::base::eps0_F_per_cm;

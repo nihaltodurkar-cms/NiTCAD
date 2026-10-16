@@ -244,7 +244,8 @@ TEST_CASE("small signal: MOS capacitor RC response, meshed oxide and lumped gate
         };
         const double C = (q_at(V0 + dV) - q_at(V0 - dV)) / (2.0 * dV);
         const physics::Semiconductor si = physics::silicon();
-        const double mu = physics::caughey_thomas_mobility(si, physics::Carrier::hole, N_A, 300.0);
+        // The default hole mobility, Masetti's on silicon (Unit 35, automatic).
+        const double mu = physics::masetti_mobility(physics::masetti_boron_silicon, N_A, 300.0);
         const double R = L / (base::q_C * mu * N_A);
         const double Cg = si.parameters().eps_r * base::eps0_F_per_cm / L;
         const double tau = R * (C + Cg);
@@ -278,7 +279,8 @@ TEST_CASE("small signal: dielectric relaxation behind a thick oxide") {
     };
     const double C = (q_at(V0 + dV) - q_at(V0 - dV)) / (2.0 * dV);
     const physics::Semiconductor si = physics::silicon();
-    const double mu = physics::caughey_thomas_mobility(si, physics::Carrier::hole, N_A, 300.0);
+    // The default hole mobility, Masetti's on silicon (Unit 35, automatic).
+    const double mu = physics::masetti_mobility(physics::masetti_boron_silicon, N_A, 300.0);
     const double R = L / (base::q_C * mu * N_A);
     const double Cg = si.parameters().eps_r * base::eps0_F_per_cm / L;
     const double tau = R * (C + Cg);
@@ -793,7 +795,8 @@ TEST_CASE("small signal: transient sine responses converge to the admittance", "
         };
         const double C = (q_at(V0 + 1e-3) - q_at(V0 - 1e-3)) / 2e-3;
         const physics::Semiconductor si = physics::silicon();
-        const double mu = physics::caughey_thomas_mobility(si, physics::Carrier::hole, N_A, 300.0);
+        // The default hole mobility, Masetti's on silicon (Unit 35, automatic).
+        const double mu = physics::masetti_mobility(physics::masetti_boron_silicon, N_A, 300.0);
         const double tau = L / (base::q_C * mu * N_A) *
                            (C + si.parameters().eps_r * base::eps0_F_per_cm / L);
         const double f = 1.0 / (two_pi * tau);

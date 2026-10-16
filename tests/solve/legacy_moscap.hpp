@@ -51,7 +51,7 @@ inline std::vector<double> numpy_gradient(const std::vector<double>& f,
 inline double legacy_flatband_voltage(double Nsub, double tox_cm, LegacyGate gate, double Qf,
                                       double T) {
     using namespace NiTCAD;
-    const physics::Semiconductor si = physics::silicon();
+    const physics::Semiconductor si = physics::legacy_silicon();
     const double VT = base::thermal_voltage(T);
     const double Cox = legacy_eps_ox_r * base::eps0_F_per_cm / tox_cm;
     const double ni = physics::intrinsic_density(si, T);
@@ -77,7 +77,7 @@ public:
                        double T = 300.0, double L_cm = 2e-4, std::size_t nx = 1200)
         : Nsub(Nsub), T(T) {
         using namespace NiTCAD;
-        const physics::Semiconductor si = physics::silicon();
+        const physics::Semiconductor si = physics::legacy_silicon();
         VT = base::thermal_voltage(T);
         eps_s = si.parameters().eps_r * base::eps0_F_per_cm;
         const double eps_ox = legacy_eps_ox_r * base::eps0_F_per_cm;

@@ -181,7 +181,7 @@ TEST_CASE("Thermal data of the material sets and its validation") {
 }
 
 TEST_CASE("Temperature derivatives of the material models") {
-    const Semiconductor si = silicon();
+    const Semiconductor si = legacy_silicon();
     const Semiconductor sic = *Semiconductor::create(silicon_carbide_4h_parameters);
     for (const Semiconductor* m : {&si, &sic}) {
         const SemiconductorParameters& p = m->parameters();

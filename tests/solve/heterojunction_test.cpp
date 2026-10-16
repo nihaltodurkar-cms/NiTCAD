@@ -76,14 +76,16 @@ device::Device junction(const physics::SemiconductorParameters& left,
 }
 
 physics::SemiconductorParameters silicon_with(double chi_eV, double Eg0_eV = 1.17) {
-    physics::SemiconductorParameters p = physics::silicon_parameters;
+    physics::SemiconductorParameters p = physics::legacy_silicon_parameters;
     p.electron_affinity_eV = chi_eV;
     p.Eg0_eV = Eg0_eV;
     return p;
 }
 
-// The legacy M33 models: band-gap narrowing off, everything else default.
-constexpr assemble::PhysicsModels m33{.bgn = false};
+// The legacy M33 models: band-gap narrowing off, everything else the legacy default (Unit 35: the
+// Caughey-Thomas hole mobility; this file's fixtures are the legacy's, on legacy silicon).
+constexpr assemble::PhysicsModels m33{.hole_mobility = assemble::HoleMobility::caughey_thomas,
+                                      .bgn = false};
 
 double current(const device::Device& d, double bias, const assemble::PhysicsModels& models = m33) {
     const std::vector<double> v{bias, 0.0};
@@ -162,7 +164,7 @@ TEST_CASE("heterojunction: the solved interface matches the exact first integral
         {"n-GaAs / N-AlGaAs", gaas, algaas, 1e17, 1e17},
         {"p-GaAs / N-AlGaAs", gaas, algaas, -1e17, 1e17},
         {"N-AlGaAs / n-GaAs", algaas, gaas, 1e17, 3e16},
-        {"n-Si / n-Si(chi + 0.25, eps 13)", physics::silicon_parameters, si2, 1e17, 1e17},
+        {"n-Si / n-Si(chi + 0.25, eps 13)", physics::legacy_silicon_parameters, si2, 1e17, 1e17},
     };
     const auto x = m33_axis();
     const std::size_t k = interface_node(x);
@@ -201,7 +203,7 @@ TEST_CASE("heterojunction: equilibrium carries no current, per carrier (legacy G
         for (const bool te : {false, true}) {
             CAPTURE(c.chi, c.Eg0, te);
             const device::Device d =
-                junction(physics::silicon_parameters, silicon_with(c.chi, c.Eg0), -1e17, 1e17, {},
+                junction(physics::legacy_silicon_parameters, silicon_with(c.chi, c.Eg0), -1e17, 1e17, {},
                          te ? thermionic : device::InterfaceTransport::drift_diffusion);
             const assemble::PhysicsModels models = m33;
             const auto eq = solve::solve_equilibrium(d, {.models = models});
@@ -245,7 +247,7 @@ TEST_CASE("heterojunction: the affinity step moves the solution, in the physical
     const double chis[] = {3.85, 3.95, 4.05, 4.15, 4.25};
     std::vector<double> J;
     for (const double chi : chis) {
-        J.push_back(current(junction(physics::silicon_parameters, silicon_with(chi), -1e17, 1e17),
+        J.push_back(current(junction(physics::legacy_silicon_parameters, silicon_with(chi), -1e17, 1e17),
                             0.4));
     }
     UNSCOPED_INFO("J(0.4 V): " << J[0] << " ... " << J[4]);
@@ -254,9 +256,9 @@ TEST_CASE("heterojunction: the affinity step moves the solution, in the physical
     REQUIRE(close(J[4], 2.650e-4, 2e-3));
     // And psi moves: at equilibrium the potential differs by more than 1 mV somewhere.
     const auto a = solve::solve_equilibrium(
-        junction(physics::silicon_parameters, silicon_with(4.05), -1e17, 1e17), {.models = m33});
+        junction(physics::legacy_silicon_parameters, silicon_with(4.05), -1e17, 1e17), {.models = m33});
     const auto b = solve::solve_equilibrium(
-        junction(physics::silicon_parameters, silicon_with(4.25), -1e17, 1e17), {.models = m33});
+        junction(physics::legacy_silicon_parameters, silicon_with(4.25), -1e17, 1e17), {.models = m33});
     double moved = 0.0;
     for (std::size_t i = 0; i < a->fields.potential_V.size(); ++i) {
         moved = std::max(moved, std::abs(a->fields.potential_V[i] - b->fields.potential_V[i]));
@@ -268,7 +270,7 @@ TEST_CASE("heterojunction: an isotype step is a barrier of either sign (legacy G
     // n-Si / n-Si(chi), 1e17, 0.1 V: the majority current is largest at no step and falls for
     // either sign. The legacy measured 6.42e3 A/cm^2 flat, 4.34e3 at -0.20 eV, 3.11e3 at +0.20 eV.
     const auto run = [&](double chi) {
-        return current(junction(physics::silicon_parameters, silicon_with(chi), 1e17, 1e17), 0.1);
+        return current(junction(physics::legacy_silicon_parameters, silicon_with(chi), 1e17, 1e17), 0.1);
     };
     const double flat = run(4.05), lo = run(3.85), hi = run(4.25);
     UNSCOPED_INFO("J flat " << flat << ", -0.2 eV " << lo << ", +0.2 eV " << hi);
@@ -282,9 +284,9 @@ TEST_CASE("heterojunction: thermionic emission limits the current, more so behin
     // real emission velocity the interface cuts the current relative to drift-diffusion, and the
     // cut deepens with the step.
     const auto ratio = [&](double chi) {
-        const device::Device d = junction(physics::silicon_parameters, silicon_with(chi), 1e17,
+        const device::Device d = junction(physics::legacy_silicon_parameters, silicon_with(chi), 1e17,
                                           1e17);
-        const device::Device t = junction(physics::silicon_parameters, silicon_with(chi), 1e17,
+        const device::Device t = junction(physics::legacy_silicon_parameters, silicon_with(chi), 1e17,
                                           1e17, {}, thermionic);
         return current(t, 0.1) / current(d, 0.1);
     };
@@ -301,13 +303,13 @@ TEST_CASE("heterojunction: a declared interface without a step is the emission r
     // velocity limit, J = q v (n1 - n2), i.e. a series resistance V_T / (q v n) at small bias
     // (v the emission velocity, n = 1e17). In a uniform resistor the drift-diffusion edge it
     // replaces is a 1e-8 cm slice (resistance 1e-3 of it). So V / J(TE) - V / J(DD) = R_int.
-    const device::Device d = junction(physics::silicon_parameters, physics::silicon_parameters,
+    const device::Device d = junction(physics::legacy_silicon_parameters, physics::legacy_silicon_parameters,
                                       1e17, 1e17);
-    const device::Device t = junction(physics::silicon_parameters, physics::silicon_parameters,
+    const device::Device t = junction(physics::legacy_silicon_parameters, physics::legacy_silicon_parameters,
                                       1e17, 1e17, {}, thermionic);
     const double V = 0.01, VT = base::thermal_voltage(T);
     const double v = physics::emission_velocity_cm_s(physics::conduction_band_dos(
-                                                         physics::silicon(), T),
+                                                         physics::legacy_silicon(), T),
                                                      T);
     const double R_int = VT / (base::q_C * v * 1e17);
     const double added = V / current(t, V) - V / current(d, V);
@@ -322,7 +324,7 @@ TEST_CASE("heterojunction: thermionic emission becomes drift-diffusion as the ve
     // replaces), and the ratio rises monotonically.
     std::vector<double> ratios;
     for (const double A : {0.0, 1e4, 1e6, 1e8}) {
-        physics::SemiconductorParameters a = physics::silicon_parameters, b = silicon_with(4.35);
+        physics::SemiconductorParameters a = physics::legacy_silicon_parameters, b = silicon_with(4.35);
         a.richardson = b.richardson = {.electron = A, .hole = A};
         const device::Device d = junction(a, b, 1e17, 1e17);
         const device::Device t = junction(a, b, 1e17, 1e17, {}, thermionic);
@@ -389,7 +391,7 @@ TEST_CASE("heterojunction: a gate on the shifted material sees its own flat band
     device::Contact gate{"gate", device::ContactKind::gate, m.find_boundary("x_max")->nodes};
     gate.gate = {.boundary = "x_max", .oxide_thickness_cm = 5e-7};
     auto substrate = m.find_boundary("x_min")->nodes;
-    const physics::Semiconductor si = physics::silicon();
+    const physics::Semiconductor si = physics::legacy_silicon();
     const device::Device d = *device::Device::create(
         {.mesh = std::move(m),
          .temperature_K = T,
@@ -514,8 +516,8 @@ TEST_CASE("heterojunction: incomplete ionization in the device solves") {
         bool fd;
     };
     const Case cases[] = {
-        {physics::silicon_parameters, 0.0, 1e16, 77.0, true},
-        {physics::silicon_parameters, 0.0, 1e16, 300.0, true},
+        {physics::legacy_silicon_parameters, 0.0, 1e16, 77.0, true},
+        {physics::legacy_silicon_parameters, 0.0, 1e16, 300.0, true},
         {physics::silicon_carbide_4h_parameters, 1e17, 0.0, 300.0, false},
         {physics::silicon_carbide_4h_parameters, 0.0, 1e17, 300.0, false},
     };
@@ -626,7 +628,7 @@ TEST_CASE("heterojunction: radiative recombination in GaAs, none in silicon") {
     CAPTURE(none, short_base);
     REQUIRE(std::abs(none / short_base - 1.0) < 0.02);
     const device::Device s =
-        junction(physics::silicon_parameters, physics::silicon_parameters, -1e17, 1e17);
+        junction(physics::legacy_silicon_parameters, physics::legacy_silicon_parameters, -1e17, 1e17);
     REQUIRE(current(s, 0.5, {}) == current(s, 0.5, {.radiative = false}));
 }
 
@@ -664,7 +666,7 @@ TEST_CASE("heterojunction: the band diagram at equilibrium and under bias") {
 TEST_CASE("heterojunction: the current resolution bounds the edge-to-edge spread") {
     // Unit 11's finding: in a 1e19 / 1e18 silicon diode the total current varies edge to edge by
     // rounding. The reported resolution covers that spread and is within 1e4 of it.
-    const physics::SemiconductorParameters si = physics::silicon_parameters;
+    const physics::SemiconductorParameters si = physics::legacy_silicon_parameters;
     const device::Device d = junction(si, si, -1e19, 1e18);
     const std::vector<double> v{0.5, 0.0};
     const auto p = solve::solve_bias(d, v);

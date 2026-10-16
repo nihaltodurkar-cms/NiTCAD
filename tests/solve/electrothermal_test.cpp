@@ -43,6 +43,19 @@ std::vector<double> uniform(double a, double b, int nodes) {
     return v;
 }
 
+// The Seebeck voltage of an n-type region at n = N_D between TL and TR, -integral of P_n dT =
+// (k/q) integral of (2 - ln(N_D / Nc(T))) dT [V] (r = -1/2), with the material's own Nc(T) (Unit
+// 35: Couderc's for silicon, (T / 300)^(3/2) M(T); the legacy's closed form is the case M = 1). By
+// Simpson's rule on 2000 intervals, exact to rounding for this smooth integrand.
+double seebeck_voltage(const physics::Semiconductor& m, double ND, double TL, double TR) {
+    const int intervals = 2000;
+    const double h = (TR - TL) / intervals;
+    const auto f = [&](double T) { return 2.0 - std::log(ND / physics::conduction_band_dos(m, T)); };
+    double sum = f(TL) + f(TR);
+    for (int k = 1; k < intervals; ++k) sum += (k % 2 == 1 ? 4.0 : 2.0) * f(TL + k * h);
+    return base::k_B_eV_per_K * sum * h / 3.0;
+}
+
 struct Bar {
     int nodes = 41;
     double length_cm = 1e-4;
@@ -373,29 +386,31 @@ TEST_CASE("electrothermal solve: a p-polysilicon gate at 350 K") {
 TEST_CASE("electrothermal solve: the Seebeck voltage of an n-type bar") {
     // N_D = 1e17, sinks at 300 and 310 K. Open circuit, J_n = -q mu n (grad phi_n + P_n grad T)
     // = 0, so V_R - V_L = -integral of P_n dT, with P_n = -(k/q) ((5/2 + r) - ln(n / Nc(T))),
-    // n = N_D, Nc = Nc300 (T/300)^1.5, r = -1/2 (holes negligible). The open-circuit voltage is
-    // read where the current of a sweep of the right contact crosses zero (a resistor: linear).
-    Bar b;
-    b.nodes = 81;
-    b.length_cm = 2e-4;
-    b.thermal[1].temperature_K = 310.0;
-    const device::Device d = bar(b);
-    auto o = thermal_options();
-    const std::vector<std::vector<double>> points{{0.0, 0.0}, {0.0, 0.01}};
-    const auto sweep = solve::sweep_bias(d, points, o);
-    REQUIRE(sweep.has_value());
-    REQUIRE(sweep->points.size() == 2);
-    const double I0 = sweep->points[0].terminal_current[1];
-    const double I1 = sweep->points[1].terminal_current[1];
-    const double Voc = -I0 * 0.01 / (I1 - I0);
-    const double TL = 300.0, TR = 310.0;
-    const auto F = [](double T) { return T * std::log(T / 300.0) - T; };  // of ln(T/300)
-    const double kq = base::k_B_eV_per_K;  // k/q [V/K]
-    const double expected =
-        kq * (2.0 * (TR - TL) - (TR - TL) * std::log(1e17 / 2.86e19) + 1.5 * (F(TR) - F(TL)));
-    CAPTURE(Voc, expected, Voc / expected - 1.0);
-    REQUIRE(expected > 0.0);
-    REQUIRE(std::abs(Voc / expected - 1.0) <= 1e-5);  // measured 4.4e-7 (81 nodes)
+    // n = N_D, Nc(T) the material's (seebeck_voltage), r = -1/2 (holes negligible). The
+    // open-circuit voltage is read where the current of a sweep of the right contact crosses zero
+    // (a resistor: linear). Run on both silicon sets: the default's Nc(T) carries Couderc's
+    // temperature-dependent mass (Unit 35, DECISIONS.md S4), the legacy's is Nc300 (T/300)^1.5.
+    for (const auto& material : {physics::silicon_parameters, physics::legacy_silicon_parameters}) {
+        Bar b;
+        b.nodes = 81;
+        b.length_cm = 2e-4;
+        b.thermal[1].temperature_K = 310.0;
+        b.material = material;
+        const device::Device d = bar(b);
+        auto o = thermal_options();
+        const std::vector<std::vector<double>> points{{0.0, 0.0}, {0.0, 0.01}};
+        const auto sweep = solve::sweep_bias(d, points, o);
+        REQUIRE(sweep.has_value());
+        REQUIRE(sweep->points.size() == 2);
+        const double I0 = sweep->points[0].terminal_current[1];
+        const double I1 = sweep->points[1].terminal_current[1];
+        const double Voc = -I0 * 0.01 / (I1 - I0);
+        const double expected =
+            seebeck_voltage(*physics::Semiconductor::create(material), 1e17, 300.0, 310.0);
+        CAPTURE(Voc, expected, Voc / expected - 1.0);
+        REQUIRE(expected > 0.0);
+        REQUIRE(std::abs(Voc / expected - 1.0) <= 1e-5);  // legacy measured 4.4e-7 (81 nodes)
+    }
 }
 
 TEST_CASE("electrothermal solve: Peltier heat at a current-carrying contact") {
@@ -409,7 +424,8 @@ TEST_CASE("electrothermal solve: Peltier heat at a current-carrying contact") {
     const double dQ = plus.thermal_contact_heat[1] - minus.thermal_contact_heat[1];
     const double dI = plus.terminal_current[1] - minus.terminal_current[1];
     const double kT = base::k_B_eV_per_K * 300.0;
-    const double expected = kT * (2.0 - std::log(1e17 / 2.86e19));
+    const double Nc = physics::conduction_band_dos(physics::silicon(), 300.0);  // 2.857e19
+    const double expected = kT * (2.0 - std::log(1e17 / Nc));
     CAPTURE(dQ / dI, expected);
     REQUIRE(std::abs(dQ / dI / expected - 1.0) <= 1e-7);  // measured 4.7e-10
     // The left sink sees the opposite.
@@ -943,12 +959,8 @@ TEST_CASE("electrothermal solve: open circuit in a temperature gradient, by refi
         if (!d) FAIL(d.error().message);
         return std::move(*d);
     };
-    const double TL = 300.0, TR = 400.0;
-    const auto F = [](double T) { return T * std::log(T / 300.0) - T; };
-    const double Nc300 = physics::conduction_band_dos(physics::silicon(), 300.0);
-    const double expected = -base::k_B_eV_per_K * (2.0 * (TR - TL) -
-                                                   (TR - TL) * std::log(1e17 / Nc300) +
-                                                   1.5 * (F(TR) - F(TL)));
+    const double expected = -seebeck_voltage(physics::silicon(), 1e17, 300.0, 400.0);
+    const double TR = 400.0;
     std::vector<double> rises;
     for (const int nodes : {21, 41, 81, 161, 321}) {
         const device::Device d = build(nodes);

@@ -191,7 +191,12 @@
 //   At theta = 1 these are the isothermal fluxes; at any uniform theta they vanish at
 //   equilibrium; between two temperatures the open-circuit voltage is the Seebeck voltage, to
 //   second order in the spacing (DECISIONS.md U2). Thermionic-emission interfaces and incomplete
-//   ionization are refused with the model (U3 deferred, U6).
+//   ionization are refused with the model (U3 deferred, U6). A material with density-of-states
+//   mass fits (Unit 35, DECISIONS.md S4) has N(T) = N(T0) theta^(3/2) M(theta): the extra
+//   -k T n grad ln M is a band-parameter step, so delta_n gains ln M_c(theta_b) - ln M_c(theta_a)
+//   beside L_c and delta_p loses ln M_v(theta_b) - ln M_v(theta_a) beside -L_v, and a density at
+//   fixed reduced energy moves with 3 / (2 theta) + d ln M / d theta; the energy a carrier carries
+//   is unchanged (parabolic bands at the local mass, an assumption). M = 1 without a fit.
 // - Heat (T4): each carrier carries the energy e_n = E_c + (r_n + 5/2) theta (electrons) or
 //   e_p = E_v - (r_p + 5/2) theta (holes) per particle, so the energy flux along an edge, from a to
 //   b, is -(ebar_n Jn + ebar_p Jp) (ebar the mean of the ends'). The heat a node's box receives
@@ -610,8 +615,11 @@ private:
     // Per node at a state: theta and tau = theta - 1 (the unknown), n_ie / Ns, the mobilities
     // [cm^2/(V s)], g (the valence band's shift), kappa [W/(cm K)] and the Kirchhoff transform u,
     // each with d / d theta.
+    // mass_n, mass_p: ln M(theta) = ln((m_d / m0)^(3/2) at T / at T0) of the conduction and
+    // valence bands (Unit 35; 0 without a density-of-states mass fit), d_mass_* d / d theta.
     struct ThermalState {
         double theta, tau, nie, d_nie, mu_n, d_mu_n, mu_p, d_mu_p, gap, d_gap, kappa, d_kappa, u;
+        double mass_n, d_mass_n, mass_p, d_mass_p;
     };
     // Per edge, constant: V_T / D0 times the coupling (g_e), L_c, L_v, the mean thermopower
     // exponents, whether conduction takes the Kirchhoff form (both ends in one material), g_e /
@@ -639,7 +647,9 @@ private:
         double log_gamma, dg_dc, dg_dt;
         double extra, dh_dc, dh_dt;
     };
-    [[nodiscard]] Level level(double density, double theta, double nie, double log_N) const;
+    // mass, d_mass: the band's ln M(theta) and its theta derivative (ThermalState).
+    [[nodiscard]] Level level(double density, double theta, double nie, double log_N, double mass,
+                              double d_mass) const;
     struct NodeLevels {
         Level n, p;
     };
@@ -695,7 +705,8 @@ private:
     std::vector<char> thermal_isothermal_;
     double T0_ = 0.0, heat_scale_ = 0.0, kappa_ref_ = 0.0;
     bool thermal_bgn_ = false;
-    bool masetti_holes_ = false;  // Unit 34: the hole mobility is Masetti's
+    // Units 34, 35: per thermal material, whether its hole mobility is Masetti's.
+    std::vector<char> masetti_holes_;
     bool sinks_complete_ = false;
     std::vector<char> reaches_sink_;  // per node (reaches_heat_sink)
     // One node's thermal state at tau (NaN entries unless tau is finite and theta positive).

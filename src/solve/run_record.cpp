@@ -76,6 +76,17 @@ void material(Digest& d, const physics::SemiconductorParameters& p) {
                            p.richardson.electron, p.richardson.hole}) {
         d.real(v);
     }
+    // Unit 35: only when given, so the sets without them (the legacy forms) keep their identity.
+    if (physics::has_passler_gap(p)) {
+        for (const double v : {p.passler_gap.alpha_eV_per_K, p.passler_gap.Theta_K,
+                               p.passler_gap.Delta}) {
+            d.real(v);
+        }
+    }
+    if (physics::has_dos_mass_fit(p)) {
+        for (const double v : p.dos_mass.conduction) d.real(v);
+        for (const double v : p.dos_mass.valence) d.real(v);
+    }
 }
 
 // The options the sweep reads: the quasi-static sweep has no continuity equations, so the

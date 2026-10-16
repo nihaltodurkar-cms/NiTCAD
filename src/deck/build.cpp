@@ -58,6 +58,7 @@ using namespace detail;
     X(impact_ionization.hole.B_high_V_per_cm) X(impact_ionization.hole.switch_V_per_cm)        \
     X(impact_ionization.phonon_energy_eV) X(band_to_band.A_per_cm3_s)                          \
     X(band_to_band.B_V_per_cm) X(band_to_band.electron_mass) X(band_to_band.hole_mass)         \
+    X(passler_gap.alpha_eV_per_K) X(passler_gap.Theta_K) X(passler_gap.Delta)                  \
     NITCAD_THERMAL_PARAMETERS(X)
 
 double* semiconductor_parameter(physics::SemiconductorParameters& p, std::string_view name) {
@@ -258,6 +259,7 @@ std::expected<RegionSpec, base::Error> Builder::region(const Section& s) const {
     } else {
         if (words.size() != 1) return std::unexpected(at(material->line, "'" + std::string(kind) + "' takes no arguments"));
         if (kind == "silicon") params = physics::silicon_parameters;
+        else if (kind == "silicon_legacy") params = physics::legacy_silicon_parameters;
         else if (kind == "germanium") params = physics::germanium_parameters;
         else if (kind == "gaas") params = physics::gallium_arsenide_parameters;
         else if (kind == "ingaas") params = physics::indium_gallium_arsenide_parameters;
@@ -865,7 +867,8 @@ std::expected<void, base::Error> Builder::models(assemble::PhysicsModels& m) con
         } else if (e.key == "hole_mobility") {
             if (e.value == "caughey_thomas") m.hole_mobility = assemble::HoleMobility::caughey_thomas;
             else if (e.value == "masetti") m.hole_mobility = assemble::HoleMobility::masetti;
-            else return std::unexpected(at(e.line, "hole_mobility is caughey_thomas or masetti"));
+            else if (e.value == "automatic") m.hole_mobility = assemble::HoleMobility::automatic;
+            else return std::unexpected(at(e.line, "hole_mobility is automatic, caughey_thomas or masetti"));
         } else if (e.key == "impact_current_resolution") {
             NITCAD_DECK_TRY(v, num(e));
             m.impact_current_resolution = v;

@@ -255,9 +255,10 @@ io::detail::Writer minimal_payload(F&& params, std::uint64_t region_kind = 0) {
     return w;
 }
 
-// Silicon's parameters by the device file's keys (device_file.cpp), skipping `skip`.
+// Legacy silicon's parameters by the device file's keys (device_file.cpp), as a file written
+// before Unit 35 has them, skipping `skip`.
 void silicon_keys(io::detail::Writer& p, int skip = 0) {
-    const auto& s = physics::silicon_parameters;
+    const auto& s = physics::legacy_silicon_parameters;
     const std::vector<std::pair<int, double>> v{
         {1, s.eps_r}, {2, s.Eg0_eV}, {3, s.varshni_alpha_eV_per_K}, {4, s.varshni_beta_K},
         {5, s.Nc300}, {6, s.Nv300}, {7, s.electron_affinity_eV},
@@ -329,12 +330,12 @@ TEST_CASE("device file: a loaded description is validated and versioned by key",
     const fs::path dir = scratch("device_keys");
     const fs::path file = dir / "d.nitdev";
 
-    SECTION("the hand-built minimal file loads as silicon") {
+    SECTION("the hand-built minimal file (no Unit 35 keys) loads as legacy silicon") {
         write_raw(file, minimal_payload([](io::detail::Writer& p) { silicon_keys(p); }));
         const auto r = io::load_device(file);
         if (!r) FAIL(r.error().message);
         const auto& s = std::get<physics::Semiconductor>(r->regions()[0].material).parameters();
-        auto expected = physics::silicon_parameters;
+        auto expected = physics::legacy_silicon_parameters;
         // Keys the file leaves out take the parameter struct's defaults (IO2): no impact
         // ionization, tunnelling or thermal data, no radiative or Richardson terms.
         expected.impact_ionization = {};

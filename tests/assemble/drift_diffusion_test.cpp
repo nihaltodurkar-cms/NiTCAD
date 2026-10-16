@@ -307,7 +307,9 @@ TEST_CASE("drift-diffusion: the 1D residual is the legacy rows, written out") {
     const auto x = graded_axis(15);
     const auto d = diode(*mesh::make_tensor_grid(x), 1e18, 1e16);
     const auto scaling = *assemble::make_scaling(d);
-    auto system = *DriftDiffusion::create(d, scaling);
+    // The legacy rows have the Caughey-Thomas hole mobility (Unit 35: no longer the default).
+    auto system =
+        *DriftDiffusion::create(d, scaling, {.hole_mobility = assemble::HoleMobility::caughey_thomas});
     const std::vector<double> bias{0.3, 0.0};
     REQUIRE(system.set_bias(bias).has_value());
     const auto poisson = *assemble::EquilibriumPoisson::create(d, scaling);
@@ -494,8 +496,11 @@ TEST_CASE("drift-diffusion: each edge's current is scaled by its Canali factor")
     // the end nodes' Caughey-Thomas mobilities and E = V_T |psi_b - psi_a| / length.
     const auto d = diode(*mesh::make_tensor_grid(graded_axis(15)), 1e18, 1e16);
     const auto scaling = *assemble::make_scaling(d);
-    const auto [with, x] = probe_state(d, 9, {.field_mobility = true});
-    const auto [without, unused] = probe_state(d, 9);
+    // The Caughey-Thomas hole mobility, so both carriers' mu0 is the one written out below.
+    const auto [with, x] = probe_state(
+        d, 9, {.hole_mobility = assemble::HoleMobility::caughey_thomas, .field_mobility = true});
+    const auto [without, unused] =
+        probe_state(d, 9, {.hole_mobility = assemble::HoleMobility::caughey_thomas});
     const auto a = with.edge_currents(x), b = without.edge_currents(x);
     const physics::Semiconductor si = physics::silicon();
     const auto edges = d.mesh().edges();

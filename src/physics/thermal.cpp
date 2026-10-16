@@ -135,8 +135,22 @@ ValueSlope thermal_conductivity(const ThermalParameters& t, double temperature_K
 double band_gap_slope_eV_per_K(const Semiconductor& m, double temperature_K) {
     detail::expect_temperature(temperature_K);
     const SemiconductorParameters& p = m.parameters();
+    if (has_passler_gap(p)) return detail::passler_gap(p.Eg0_eV, p.passler_gap, temperature_K).d_dT;
     const double T = temperature_K, s = T + p.varshni_beta_K;
     return -p.varshni_alpha_eV_per_K * T * (T + 2.0 * p.varshni_beta_K) / (s * s);
+}
+
+ValueSlope dos_mass_log(const Semiconductor& m, Carrier band, double temperature_K) {
+    detail::expect_temperature(temperature_K);
+    const SemiconductorParameters& p = m.parameters();
+    if (!has_dos_mass_fit(p)) return {0.0, 0.0};
+    const auto& c = band == Carrier::electron ? p.dos_mass.conduction : p.dos_mass.valence;
+    const detail::BandSlope mass = detail::dos_mass(c, temperature_K);
+    return {std::log(mass.value), mass.d_dT / mass.value};
+}
+
+double dos_log_slope(const Semiconductor& m, Carrier band, double temperature_K) {
+    return 1.5 / temperature_K + dos_mass_log(m, band, temperature_K).d_dT;
 }
 
 double intrinsic_density_log_slope(const Semiconductor& m, double temperature_K,
@@ -144,7 +158,13 @@ double intrinsic_density_log_slope(const Semiconductor& m, double temperature_K,
     const double T = temperature_K;
     const double kT = base::thermal_voltage(T);  // [eV]
     const double Eg = band_gap_eV(m, T);
-    return 1.5 / T + (Eg - T * band_gap_slope_eV_per_K(m, T) - narrowing_eV) / (2.0 * kT * T);
+    // The legacy expression exactly without a mass fit (bit for bit), the mean of the bands'
+    // slopes with one.
+    const double dos = has_dos_mass_fit(m.parameters())
+                           ? 0.5 * (dos_log_slope(m, Carrier::electron, T) +
+                                    dos_log_slope(m, Carrier::hole, T))
+                           : 1.5 / T;
+    return dos + (Eg - T * band_gap_slope_eV_per_K(m, T) - narrowing_eV) / (2.0 * kT * T);
 }
 
 double caughey_thomas_mobility_slope(const Semiconductor& m, Carrier carrier,
@@ -170,7 +190,13 @@ double impact_ionization_temperature_factor_slope(double phonon_energy_eV,
 }
 
 double emission_velocity_slope(const Semiconductor& m, Carrier carrier, double temperature_K) {
-    return 0.5 * emission_velocity_cm_s(m, carrier, temperature_K) / temperature_K;
+    const double v = emission_velocity_cm_s(m, carrier, temperature_K);
+    if (!has_dos_mass_fit(m.parameters())) return 0.5 * v / temperature_K;
+    // v ~ T N^(-1/3) (from the density of states) or T^2 / N (a Richardson constant).
+    const double T = temperature_K, s = dos_log_slope(m, carrier, T);
+    const double A = carrier == Carrier::electron ? m.parameters().richardson.electron
+                                                  : m.parameters().richardson.hole;
+    return A > 0.0 ? v * (2.0 / T - s) : v * (1.0 / T - s / 3.0);
 }
 
 FermiOrdersZeroOne fermi_orders_zero_one(double x) noexcept {

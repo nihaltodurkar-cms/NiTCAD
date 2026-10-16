@@ -46,6 +46,11 @@ using Complex = std::complex<double>;
 
 namespace {
 
+// The legacy options (Unit 35, ruling 4): the legacy gates run on legacy silicon
+// (mosfet(..., physics::legacy_silicon())) and the Caughey-Thomas hole mobility; the other cases
+// run the fixture on the defaults.
+const solve::BiasOptions legacy{.models = {.hole_mobility = assemble::HoleMobility::caughey_thomas}};
+
 constexpr double Lg = 6e-5, Lsd = 3e-5, depth = 2e-5, N_A = 1e17, t_ox = 5e-7;
 constexpr double N_peak = 1e19, sigma_y = 5e-6, sigma_lat = 1e-6;
 
@@ -58,7 +63,8 @@ double sd_profile(double x, double y, double x_edge, bool source) {
 }
 
 // Contacts in the order source, drain, body, gate (the legacy add order).
-device::Device mosfet(int nx = 90, int ny = 50) {
+device::Device mosfet(int nx = 90, int ny = 50,
+                      const physics::Semiconductor& material = physics::silicon()) {
     const double L = 2 * Lsd + Lg;
     const auto x = legacy_graded_mesh(L, {Lsd, Lsd + Lg}, L / (nx * 20), L / nx, 1.15);
     const auto y = legacy_graded_mesh(depth, 0.0, depth / (ny * 20), depth / ny, 1.15);
@@ -86,7 +92,7 @@ device::Device mosfet(int nx = 90, int ny = 50) {
     return *device::Device::create(
         {.mesh = std::move(m),
          .temperature_K = 300.0,
-         .regions = {{"silicon", physics::silicon()}},
+         .regions = {{"silicon", material}},
          .node_region = std::vector<device::RegionId>(n, 0),
          .donors = std::move(donors),
          .acceptors = std::vector<double>(n, N_A),
@@ -171,10 +177,10 @@ device::Device meshed_mosfet(int nx = 90, int ny = 50, int oxide_cells = 5) {
 // mosfet.id_vg_sweep: equilibrium, then each Vg at the drain bias from the previous point. The
 // drain current in A/cm (per unit depth); the sweep itself into out, if given.
 std::vector<double> id_vg(const device::Device& d, const std::vector<double>& Vg, double Vds,
-                          results::Sweep* out = nullptr) {
+                          results::Sweep* out = nullptr, const solve::BiasOptions& options = {}) {
     std::vector<std::vector<double>> points;
     for (const double v : Vg) points.push_back({0.0, Vds, 0.0, v});
-    const auto sweep = solve::sweep_bias(d, points);
+    const auto sweep = solve::sweep_bias(d, points, options);
     REQUIRE(sweep.has_value());
     if (sweep->stopped) {
         CAPTURE(sweep->stopped->message, sweep->points.size());
@@ -218,7 +224,8 @@ TEST_CASE("mosfet: Id-Vg threshold, on/off ratio, swing and monotonic rise (lega
     const auto Vg = linspace(-1.0, 1.5, 26);
     const double Vds = 0.05;
     results::Sweep sweep;
-    const auto Id = id_vg(mosfet(), Vg, Vds, &sweep);
+    // The legacy options (Unit 35): legacy silicon and Caughey-Thomas holes.
+    const auto Id = id_vg(mosfet(90, 50, physics::legacy_silicon()), Vg, Vds, &sweep, legacy);
     const std::vector<double> Vg_legacy(Vg.begin(), Vg.begin() + 21);
     const std::vector<double> Id_legacy(Id.begin(), Id.begin() + 21);
 
@@ -291,6 +298,51 @@ TEST_CASE("mosfet: Id-Vg threshold, on/off ratio, swing and monotonic rise (lega
     REQUIRE(ss->value < ideal(lm.phi_F));
     REQUIRE(std::abs(vt_cc->value - vt->value) < 1e-12);
     REQUIRE(onoff->value > 1e6);
+}
+
+TEST_CASE("mosfet: the legacy gates' figures on the defaults, before and after (Unit 35, DC9)",
+          "[.mosfet]") {
+    // The Id-Vg sweep of the legacy gates (the case above) on the legacy options and on the
+    // defaults: the threshold from the maximum transconductance, the steepest swing, Id at
+    // Vg = 1 V, and the on/off ratio over Vg -1 to 1 V; each printed and pinned (DECISIONS.md, Unit
+    // 35), and the legacy gates' own criteria held on the defaults too.
+    const auto Vg = linspace(-1.0, 1.0, 21);
+    const double Vds = 0.05;
+    struct Figures {
+        double vth, ss, id_on, ratio;
+    };
+    const auto figures = [&](const device::Device& d, const solve::BiasOptions& options) {
+        const auto Id = id_vg(d, Vg, Vds, nullptr, options);
+        double slope = 0.0;
+        for (std::size_t k = 0; k + 1 < Id.size(); ++k) {
+            slope = std::max(slope, (std::log10(std::abs(Id[k + 1])) - std::log10(std::abs(Id[k]))) /
+                                        (Vg[k + 1] - Vg[k]));
+        }
+        return Figures{vth_max_gm(Vg, Id, Vds), 1000.0 / slope, Id.back(),
+                       Id.back() / std::abs(Id.front())};
+    };
+    const Figures before = figures(mosfet(90, 50, physics::legacy_silicon()), legacy);
+    const Figures after = figures(mosfet(), {});
+    std::printf("MOSFET legacy gates, legacy options -> defaults: V_th %.4f -> %.4f V, swing %.2f -> "
+                "%.2f mV/decade, Id(1 V) %.4e -> %.4e A/cm (%+.1f%%), on/off %.3e -> %.3e\n",
+                before.vth, after.vth, before.ss, after.ss, before.id_on, after.id_on,
+                100.0 * (after.id_on / before.id_on - 1.0), before.ratio, after.ratio);
+    // Measured (Unit 35): V_th 0.1520 -> 0.1527 V, swing 68.79 -> 68.61 mV/decade, Id(1 V)
+    // 0.31471 -> 0.31448 A/cm (-0.1%: the electrons' channel current; n_i and the hole mobility
+    // barely enter), on/off 1.459e11 -> 1.303e11 (the off current, junction leakage, 12% higher).
+    const auto pinned = [](const Figures& f, const Figures& p) {
+        CHECK(std::abs(f.vth - p.vth) < 1e-3);
+        CHECK(std::abs(f.ss - p.ss) < 0.1);
+        CHECK(std::abs(f.id_on / p.id_on - 1.0) < 1e-3);
+        CHECK(std::abs(f.ratio / p.ratio - 1.0) < 1e-2);
+    };
+    pinned(before, {0.1520, 68.79, 0.31471, 1.459e11});
+    pinned(after, {0.1527, 68.61, 0.31448, 1.303e11});
+    const auto lm = LegacyMOSCapacitor(-N_A, t_ox).analytic_landmarks();
+    CHECK(std::abs(after.vth - lm.V_th) < 0.1);  // the legacy gate's criteria on the defaults
+    CHECK(after.ss > 55.0);
+    CHECK(after.ss < 120.0);
+    CHECK(after.ratio > 1e6);
 }
 
 TEST_CASE("mosfet: f_T from h21 against the quasi-static estimate (Unit 24)", "[.mosfet]") {
@@ -386,8 +438,9 @@ TEST_CASE("mosfet: the on current is mesh independent (legacy gate)", "[.mosfet]
     // Legacy test_mosfet_mesh_independence: Id(Vg = 1 V, Vds = 0.05 V) on nx = 90, ny = 50 and on
     // nx = 180, ny = 100 within 10%.
     const std::vector<double> point{0.0, 0.05, 0.0, 1.0};
-    const auto coarse = solve::solve_bias(mosfet(), point);
-    const auto fine = solve::solve_bias(mosfet(180, 100), point);
+    // The legacy options (Unit 35).
+    const auto coarse = solve::solve_bias(mosfet(90, 50, physics::legacy_silicon()), point, legacy);
+    const auto fine = solve::solve_bias(mosfet(180, 100, physics::legacy_silicon()), point, legacy);
     REQUIRE(coarse.has_value());
     REQUIRE(fine.has_value());
     const double a = coarse->terminal_current[1], b = fine->terminal_current[1];

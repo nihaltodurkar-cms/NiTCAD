@@ -572,8 +572,8 @@ double surface_diode_current(double S, double V, double w) {
     const physics::Semiconductor si = physics::silicon();
     const double VT = base::thermal_voltage(T);
     const double ni = physics::intrinsic_density(si, T);
-    const double Dp =
-        physics::caughey_thomas_mobility(si, physics::Carrier::hole, N_base, T) * VT;
+    // The default hole mobility, Masetti's on silicon (Unit 35, automatic).
+    const double Dp = physics::masetti_mobility(physics::masetti_boron_silicon, N_base, T) * VT;
     const double Dn =
         physics::caughey_thomas_mobility(si, physics::Carrier::electron, N_emitter, T) * VT;
     const double eps = si.parameters().eps_r * base::eps0_F_per_cm;

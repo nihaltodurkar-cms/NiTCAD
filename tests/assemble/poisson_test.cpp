@@ -154,8 +154,8 @@ TEST_CASE("scaling: the legacy definitions on a 1e17 silicon diode") {
     REQUIRE(close(s.J0, (q * Ns / LD).value(), 1e-14));
     REQUIRE(close(s.R0, (Ns / (LD * LD)).value(), 1e-14));
     REQUIRE(s.D0 == 1.0);
-    REQUIRE(close(s.n_i, reference::intrinsic_density(physics::silicon_parameters, 300.0).value(),
-                  1e-13));
+    // n_i is the material's (its formulas are checked in physics/band_set_test.cpp, Unit 35).
+    REQUIRE(s.n_i == physics::intrinsic_density(physics::silicon(), 300.0));
 }
 
 TEST_CASE("scaling: Ns override, and n_i for an undoped device") {

@@ -118,7 +118,8 @@ std::expected<DriftDiffusion, base::Error> DriftDiffusion::create(
                     {}});
             }
         }
-    } else if (models.hole_mobility != HoleMobility::caughey_thomas) {
+    } else if (models.hole_mobility != HoleMobility::caughey_thomas &&
+               models.hole_mobility != HoleMobility::automatic) {
         return refuse("unknown hole mobility model");
     }
     auto scaled = detail::make_scaled_device(device, scaling, models);
@@ -189,7 +190,7 @@ std::expected<DriftDiffusion, base::Error> DriftDiffusion::create(
         const double N = device.total_impurity(node);
         const double N_mobility = models.doping_mobility ? N : 0.0;
         mu_n[i] = physics::caughey_thomas_mobility(m, physics::Carrier::electron, N_mobility, T);
-        mu_p[i] = models.hole_mobility == HoleMobility::masetti
+        mu_p[i] = masetti_holes(models.hole_mobility, m.parameters())
                       ? physics::masetti_mobility(physics::masetti_boron_silicon, N_mobility, T)
                       : physics::caughey_thomas_mobility(m, physics::Carrier::hole, N_mobility, T);
         s.tau_n_[i] = physics::scharfetter_lifetime(m, physics::Carrier::electron, N);
@@ -1336,8 +1337,11 @@ BandEdges DriftDiffusion::band_edges(std::span<const double> x) const {
             b.conduction[i] = tn.c_n - psi;
             b.valence[i] = tn.c_p - psi + s.gap;
             b.electron_fermi[i] =
-                b.conduction[i] + theta * level(x[4 * i + 1], theta, s.nie, tn.log_nc).x;
-            b.hole_fermi[i] = b.valence[i] - theta * level(x[4 * i + 2], theta, s.nie, tn.log_nv).x;
+                b.conduction[i] +
+                theta * level(x[4 * i + 1], theta, s.nie, tn.log_nc, s.mass_n, s.d_mass_n).x;
+            b.hole_fermi[i] =
+                b.valence[i] -
+                theta * level(x[4 * i + 2], theta, s.nie, tn.log_nv, s.mass_p, s.d_mass_p).x;
             continue;
         }
         const detail::NodeBands e =

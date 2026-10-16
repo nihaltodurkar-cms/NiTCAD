@@ -1,6 +1,7 @@
-// Validation against published data (Unit 33; DECISIONS.md V1-V6): the benchmark decks in
-// benchmarks/ against values taken from their cited sources. A disagreement is reported, not
-// tuned: each gap is pinned at its measured value (V5).
+// Validation against published data (Units 33-35; DECISIONS.md V1-V6, Unit 34, Unit 35): the
+// benchmark decks in benchmarks/ against values taken from their cited sources. A disagreement is
+// reported, not tuned: each gap is pinned at its measured value (V5). Units 33 and 34 ran on legacy
+// silicon, as their pins still do; Unit 35 adds the defaults' own pins.
 #include <catch2/catch_test_macros.hpp>
 
 #include <algorithm>
@@ -8,6 +9,7 @@
 #include <cmath>
 #include <cstdio>
 #include <filesystem>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -109,28 +111,36 @@ constexpr double pin = 0.002;
 
 fs::path deck_path(const char* file) { return fs::path(NITCAD_BENCHMARKS_DIR) / "resistivity" / file; }
 
-// The deck, with its [device] temperature replaced when given.
-deck::Deck load(const char* file, const char* temperature = nullptr) {
+// The material the decks' silicon is run with (Unit 35): the deck's own `silicon` (the published
+// band set, the default) or `silicon_legacy`, on which Units 33 and 34 measured their pins.
+enum class Silicon { published, legacy };
+
+// The deck, with its [device] temperature replaced when given, and its silicon the legacy set when
+// asked.
+deck::Deck load(const char* file, const char* temperature = nullptr,
+                Silicon silicon = Silicon::published) {
     auto d = deck::read(deck_path(file));
     if (!d) FAIL(d.error().message);
-    if (temperature) {
-        for (deck::Section& s : d->sections) {
-            if (s.kind != "device") continue;
-            for (deck::Entry& e : s.entries) {
-                if (e.key == "temperature") e.value = temperature;
+    for (deck::Section& s : d->sections) {
+        for (deck::Entry& e : s.entries) {
+            if (temperature && s.kind == "device" && e.key == "temperature") e.value = temperature;
+            if (silicon == Silicon::legacy && s.kind == "region" && e.key == "material") {
+                REQUIRE(e.value == "silicon");
+                e.value = "silicon_legacy";
             }
         }
     }
     return std::move(*d);
 }
 
-// The simulated resistivity of a resistor deck: 0.01 V over the 10 um bar.
+// The simulated resistivity of a resistor deck: 0.01 V over the 10 um bar. The hole mobility is
+// the deck's (the default, automatic) unless given.
 double simulated_rho(const deck::Deck& d, bool incomplete_ionization = false,
-                     assemble::HoleMobility holes = assemble::HoleMobility::caughey_thomas) {
+                     std::optional<assemble::HoleMobility> holes = std::nullopt) {
     auto plan = deck::build(d);
     if (!plan) FAIL(plan.error().message);
     plan->options.models.incomplete_ionization = incomplete_ionization;
-    plan->options.models.hole_mobility = holes;
+    if (holes) plan->options.models.hole_mobility = *holes;
     const auto report = deck::run(*plan);
     if (!report) FAIL(report.error().message);
     REQUIRE(report->sweep.has_value());
@@ -158,14 +168,18 @@ TEST_CASE("validation: the Thurber fits as transcribed agree with themselves (V2
 }
 
 TEST_CASE("validation: resistivity against dopant density, Thurber et al. (V3)", "[validation]") {
-    std::printf("resistivity benchmark (NBS SP 400-64): N, reference, simulated, gap; 300 K | 23 C | "
-                "300 K with incomplete ionization\n");
+    // Unit 33's baseline, on the legacy options it was measured with (Unit 35, ruling 4): legacy
+    // silicon and the Caughey-Thomas hole mobility.
+    const auto ct = assemble::HoleMobility::caughey_thomas;
+    const auto legacy = Silicon::legacy;
+    std::printf("resistivity benchmark (NBS SP 400-64), legacy options: N, reference, simulated, "
+                "gap; 300 K | 23 C | 300 K with incomplete ionization\n");
     for (const Benchmark& b : resistors) {
         const double ref300 = thurber_rho(b.dopant, b.N, true);
         const double ref23 = thurber_rho(b.dopant, b.N, false);
-        const double sim300 = simulated_rho(load(b.file));
-        const double sim23 = simulated_rho(load(b.file, "296.15"));
-        const double simII = simulated_rho(load(b.file), true);
+        const double sim300 = simulated_rho(load(b.file, nullptr, legacy), false, ct);
+        const double sim23 = simulated_rho(load(b.file, "296.15", legacy), false, ct);
+        const double simII = simulated_rho(load(b.file, nullptr, legacy), true, ct);
         std::printf("%-20s %8.3g ohm cm: %8.4g %+6.1f%% | %8.4g vs %8.4g %+6.1f%% | %8.4g %+6.1f%%\n",
                     b.file, ref300, sim300, 100.0 * (sim300 / ref300 - 1.0), sim23, ref23,
                     100.0 * (sim23 / ref23 - 1.0), simII, 100.0 * (simII / ref300 - 1.0));
@@ -182,21 +196,28 @@ TEST_CASE("validation: the intrinsic carrier density, Misiakos and Tsamakis (V4)
     // n(i) was found to be (9.7 +/- 0.1) X 10(9) cm-3" (abstract). The model's n_i is read from
     // the solved 1e14 phosphorus bar at 0 V, sqrt(n p) at its middle node (no band-gap narrowing
     // at that doping).
-    auto plan = deck::build(load("phosphorus_1e14.deck"));
-    if (!plan) FAIL(plan.error().message);
-    const auto report = deck::run(*plan);
-    REQUIRE(report.has_value());
-    REQUIRE(report->sweep.has_value());
-    const auto& f = report->sweep->points.front().fields;
-    const std::size_t mid = f.n_cm3.size() / 2;
-    const double n_i = std::sqrt(f.n_cm3[mid] * f.p_cm3[mid]);
     const double measured = 9.7e9, uncertainty = 0.1e9;
-    std::printf("intrinsic density at 300 K: model %.5g cm^-3, measured %.3g +/- %.1g (gap %+.1f%%, "
-                "%.1f times the uncertainty)\n",
-                n_i, measured, uncertainty, 100.0 * (n_i / measured - 1.0),
-                (n_i - measured) / uncertainty);
+    const auto solved_ni = [&](Silicon silicon) {
+        auto plan = deck::build(load("phosphorus_1e14.deck", nullptr, silicon));
+        if (!plan) FAIL(plan.error().message);
+        const auto report = deck::run(*plan);
+        REQUIRE(report.has_value());
+        REQUIRE(report->sweep.has_value());
+        const auto& f = report->sweep->points.front().fields;
+        const std::size_t mid = f.n_cm3.size() / 2;
+        const double n_i = std::sqrt(f.n_cm3[mid] * f.p_cm3[mid]);
+        std::printf("intrinsic density at 300 K, %s silicon: model %.5g cm^-3, measured %.3g +/- "
+                    "%.1g (gap %+.1f%%, %.1f times the uncertainty)\n",
+                    silicon == Silicon::legacy ? "legacy" : "published", n_i, measured, uncertainty,
+                    100.0 * (n_i / measured - 1.0), (n_i - measured) / uncertainty);
+        return n_i;
+    };
     // The legacy silicon value, 1.0674e10 (Unit 5), lies 10% above the measurement: a finding (V5).
-    CHECK(std::abs(n_i / measured - 1.0 - 0.100) < pin);
+    CHECK(std::abs(solved_ni(Silicon::legacy) / measured - 1.0 - 0.100) < pin);
+    // The default, Couderc et al.'s band set (Unit 35, DC4): within the measurement's uncertainty.
+    const double n_i = solved_ni(Silicon::published);
+    CHECK(std::abs(n_i / measured - 1.0) <= 0.011);
+    CHECK(std::abs(n_i - measured) <= uncertainty);
 }
 
 // Unit 34: the measured Masetti gaps (simulated / reference - 1) at 300 K and 23 C, pinned like
@@ -210,13 +231,15 @@ struct MasettiRun {
     std::vector<double> boron_300K, boron_23C, phosphorus_300K, phosphorus_23C;
 };
 
+// Unit 34's runs, on the legacy silicon they were measured with (Unit 35).
 MasettiRun run_masetti() {
     MasettiRun r;
     const auto masetti = assemble::HoleMobility::masetti;
+    const auto legacy = Silicon::legacy;
     for (const Benchmark& b : resistors) {
-        const double gap300 =
-            simulated_rho(load(b.file), false, masetti) / thurber_rho(b.dopant, b.N, true) - 1.0;
-        const double gap23 = simulated_rho(load(b.file, "296.15"), false, masetti) /
+        const double gap300 = simulated_rho(load(b.file, nullptr, legacy), false, masetti) /
+                                  thurber_rho(b.dopant, b.N, true) - 1.0;
+        const double gap23 = simulated_rho(load(b.file, "296.15", legacy), false, masetti) /
                                  thurber_rho(b.dopant, b.N, false) - 1.0;
         (b.dopant == Dopant::boron ? r.boron_300K : r.phosphorus_300K).push_back(gap300);
         (b.dopant == Dopant::boron ? r.boron_23C : r.phosphorus_23C).push_back(gap23);
@@ -267,4 +290,60 @@ TEST_CASE("validation: Masetti AC3 and AC5 at boron 1e18 as fixed in advance (no
     const MasettiRun r = run_masetti();
     CHECK(std::abs(r.boron_300K[3]) <= 0.10);  // AC3 at 1e18
     CHECK(std::abs(r.boron_23C[3]) <= 0.12);   // AC5 at 1e18
+}
+
+// Unit 35: the defaults (Couderc et al.'s silicon band set, the automatic hole mobility, Masetti on
+// silicon) against the same benchmarks, each gap pinned at its measured value (V5), per deck in
+// the order of `resistors`: 300 K, 23 C, and 300 K with incomplete ionization.
+struct DefaultGaps {
+    double gap_300K, gap_23C, gap_incomplete;
+};
+constexpr DefaultGaps default_gaps[] = {
+    {0.039, 0.040, 0.039},     // phosphorus 1e14
+    {0.005, 0.005, 0.006},     // 1e15
+    {-0.069, -0.072, -0.065},  // 1e16
+    {-0.088, -0.097, -0.053},  // 1e17
+    {0.006, -0.015, 0.314},    // 1e18
+    {-0.071, -0.074, 1.378},   // 1e19
+    {-0.011, -0.011, -0.010},  // boron 1e15
+    {-0.011, -0.011, -0.002},  // 1e16
+    {-0.053, -0.058, 0.026},   // 1e17
+    {-0.110, -0.124, 0.403},   // 1e18
+    {-0.039, -0.049, 2.414},   // 1e19
+};
+
+TEST_CASE("validation: the defaults against the resistivity benchmarks (Unit 35, DC5)", "[validation]") {
+    // DC5, fixed before this ran (DECISIONS.md, Unit 35): the boron gaps equal Unit 34's Masetti
+    // pins and the phosphorus gaps Unit 33's Caughey-Thomas pins, each within 0.2 points (a
+    // majority-carrier resistivity does not depend on n_i), and the largest boron |gap| is at most
+    // 11.2%. Every measured gap, including those with incomplete ionization (whose occupancy does
+    // depend on Nc and Nv), is pinned.
+    std::printf("resistivity benchmark (NBS SP 400-64), defaults: gap at 300 K | 23 C | 300 K with "
+                "incomplete ionization (legacy options in brackets)\n");
+    double worst_boron = 0.0;
+    std::size_t boron = 0;
+    for (std::size_t k = 0; k < std::size(resistors); ++k) {
+        const Benchmark& b = resistors[k];
+        const double g300 = simulated_rho(load(b.file)) / thurber_rho(b.dopant, b.N, true) - 1.0;
+        const double g23 =
+            simulated_rho(load(b.file, "296.15")) / thurber_rho(b.dopant, b.N, false) - 1.0;
+        const double gII = simulated_rho(load(b.file), true) / thurber_rho(b.dopant, b.N, true) - 1.0;
+        std::printf("%-20s %+6.1f%% (%+6.1f%%) | %+6.1f%% (%+6.1f%%) | %+6.1f%% (%+6.1f%%)\n", b.file,
+                    100.0 * g300, 100.0 * b.gap_300K, 100.0 * g23, 100.0 * b.gap_23C, 100.0 * gII,
+                    100.0 * b.gap_incomplete);
+        CAPTURE(b.file, g300, g23, gII);
+        if (b.dopant == Dopant::boron) {
+            CHECK(std::abs(g300 - masetti_gap_300K[boron]) < pin);  // DC5
+            CHECK(std::abs(g23 - masetti_gap_23C[boron]) < pin);
+            worst_boron = std::max(worst_boron, std::abs(g300));
+            ++boron;
+        } else {
+            CHECK(std::abs(g300 - b.gap_300K) < pin);  // DC5
+            CHECK(std::abs(g23 - b.gap_23C) < pin);
+        }
+        CHECK(std::abs(g300 - default_gaps[k].gap_300K) < pin);
+        CHECK(std::abs(g23 - default_gaps[k].gap_23C) < pin);
+        CHECK(std::abs(gII - default_gaps[k].gap_incomplete) < pin);
+    }
+    CHECK(worst_boron <= 0.112);  // DC5
 }

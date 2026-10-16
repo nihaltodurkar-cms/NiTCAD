@@ -292,7 +292,8 @@ std::pair<double, double> rc_response(const device::Device& d, double L, double 
     };
     const double C = (q_at(V0 + dV) - q_at(V0 - dV)) / (2.0 * dV);
     const physics::Semiconductor si = physics::silicon();
-    const double mu = physics::caughey_thomas_mobility(si, physics::Carrier::hole, N_A, 300.0);
+    // The default hole mobility, Masetti's on silicon (Unit 35, automatic).
+    const double mu = physics::masetti_mobility(physics::masetti_boron_silicon, N_A, 300.0);
     const double R = L / (base::q_C * mu * N_A);
     const double Cg = si.parameters().eps_r * base::eps0_F_per_cm / L;
     const double tau = R * (C + Cg);
@@ -345,7 +346,8 @@ TEST_CASE("transient: dielectric relaxation behind a thick oxide") {
     const device::Device d = moscap(1e-2, L, N_A, true);
     const auto [measured, tau] = rc_response(d, L, N_A, -1.0, 1e-3);
     const physics::Semiconductor si = physics::silicon();
-    const double mu = physics::caughey_thomas_mobility(si, physics::Carrier::hole, N_A, 300.0);
+    // The default hole mobility, Masetti's on silicon (Unit 35, automatic).
+    const double mu = physics::masetti_mobility(physics::masetti_boron_silicon, N_A, 300.0);
     const double relaxation =
         si.parameters().eps_r * base::eps0_F_per_cm / (base::q_C * mu * N_A);
     CAPTURE(measured, tau, relaxation, measured / tau - 1.0);
@@ -392,8 +394,10 @@ TEST_CASE("transient: an interface trap level empties at its emission rate", "[.
     double ps = 0.0, ns = 0.0;
     for (const auto& s : run.snapshots) {
         REQUIRE(s.trap_occupancy.size() == 1);
-        if (s.time_s == tau) f1 = s.trap_occupancy[0];
-        if (s.time_s == 3.0 * tau) f2 = s.trap_occupancy[0];
+        // The output times to rounding: a snapshot's time passes through the scaled time (1 ulp
+        // off 3 tau with the published silicon's tau, Unit 35).
+        if (std::abs(s.time_s / tau - 1.0) < 1e-12) f1 = s.trap_occupancy[0];
+        if (std::abs(s.time_s / (3.0 * tau) - 1.0) < 1e-12) f2 = s.trap_occupancy[0];
     }
     const auto& first = run.snapshots.front();
     const auto& last = run.snapshots.back();
@@ -712,7 +716,7 @@ TEST_CASE("transient: the legacy diode turn-off, backward Euler on the legacy st
     const device::Device d = *device::Device::create(
         {.mesh = std::move(m),
          .temperature_K = 300.0,
-         .regions = {{"silicon", physics::silicon()}},
+         .regions = {{"silicon", physics::legacy_silicon()}},  // the legacy options (Unit 35)
          .node_region = std::vector<device::RegionId>(n, 0),
          .donors = std::move(donors),
          .acceptors = std::move(acceptors),
@@ -723,6 +727,7 @@ TEST_CASE("transient: the legacy diode turn-off, backward Euler on the legacy st
                               .t_end_s = 300 * ref.dt,
                               .dt_initial_s = ref.dt,
                               .adaptive = false};
+    o.steady.models.hole_mobility = assemble::HoleMobility::caughey_thomas;  // legacy options
     o.steady.models.auger = false;
     o.steady.models.bgn = false;
     const auto run = *solve::solve_transient(d, wf, o);
