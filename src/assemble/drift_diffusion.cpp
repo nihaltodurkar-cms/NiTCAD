@@ -9,6 +9,7 @@
 #include <variant>
 
 #include "NiTCAD/assemble/contact_bias.hpp"
+#include "NiTCAD/assemble/observer.hpp"
 #include "NiTCAD/assemble/ohmic.hpp"
 #include "NiTCAD/assemble/sg_flux.hpp"
 #include "NiTCAD/assemble/thermionic_flux.hpp"
@@ -527,6 +528,7 @@ std::vector<double> DriftDiffusion::state_from_potential(std::span<const double>
         if (electrothermal()) x[4 * i + 3] = 0.0;
     }
     stamp_contacts(x);
+    detail::observe("state_from_potential", x);
     return x;
 }
 
@@ -551,6 +553,7 @@ void DriftDiffusion::stamp_contacts(std::span<double> x) const {
                 x[4 * i + 2] = o.p;
             }
         }
+        detail::observe("stamp_contacts", x);
         return;
     }
     for (std::size_t i = 0; i < node_count(); ++i) {
@@ -564,6 +567,7 @@ void DriftDiffusion::stamp_contacts(std::span<double> x) const {
         x[m_ * i + 1] = n0_[i];
         x[m_ * i + 2] = p0_[i];
     }
+    detail::observe("stamp_contacts", x);
 }
 
 linalg::SparseMatrix DriftDiffusion::make_jacobian() const { return pattern_; }
@@ -1059,11 +1063,27 @@ void DriftDiffusion::evaluate(std::span<const double> x, std::span<double> resid
     const std::span<double> values = jacobian.values();
     std::fill(values.begin(), values.end(), 0.0);
     assemble(x, residual, values, nullptr);
+    detail::observe("evaluate.x", x);
+    detail::observe("evaluate.residual", residual);
+    detail::observe("evaluate.jacobian", values);
 }
 
 void DriftDiffusion::residual(std::span<const double> x, std::span<double> residual) const {
     assemble(x, residual, {}, nullptr);
+    detail::observe("residual.x", x);
+    detail::observe("residual.residual", residual);
 }
+
+namespace {
+
+// The step's inputs, for the observer (observer.hpp).
+void observe_step(const DriftDiffusion::TimeStep& step) {
+    detail::observe("step.rate", step.rate);
+    detail::observe("step.storage", step.storage);
+    detail::observe("step.traps", step.traps);
+}
+
+}  // namespace
 
 void DriftDiffusion::evaluate(std::span<const double> x, const TimeStep& step,
                               std::span<double> residual, linalg::SparseMatrix& jacobian) const {
@@ -1071,11 +1091,18 @@ void DriftDiffusion::evaluate(std::span<const double> x, const TimeStep& step,
     const std::span<double> values = jacobian.values();
     std::fill(values.begin(), values.end(), 0.0);
     assemble(x, residual, values, &step);
+    observe_step(step);
+    detail::observe("evaluate.x", x);
+    detail::observe("evaluate.residual", residual);
+    detail::observe("evaluate.jacobian", values);
 }
 
 void DriftDiffusion::residual(std::span<const double> x, const TimeStep& step,
                               std::span<double> residual) const {
     assemble(x, residual, {}, &step);
+    observe_step(step);
+    detail::observe("residual.x", x);
+    detail::observe("residual.residual", residual);
 }
 
 std::vector<double> DriftDiffusion::storage(std::span<const double> x) const {
@@ -1089,6 +1116,7 @@ std::vector<double> DriftDiffusion::storage(std::span<const double> x) const {
             s[3 * i] = x[4 * i + 1];
             s[3 * i + 1] = x[4 * i + 2];
         }
+        detail::observe("storage", s);
         return s;
     }
     const std::vector<NodeDegeneracy> g = degeneracies(x);
@@ -1098,6 +1126,7 @@ std::vector<double> DriftDiffusion::storage(std::span<const double> x) const {
         s[w * i] = st.n;
         s[w * i + 1] = st.p;
     }
+    detail::observe("storage", s);
     return s;
 }
 
@@ -1114,6 +1143,7 @@ std::vector<double> DriftDiffusion::trap_occupancies(std::span<const double> x,
             v, x[m_ * o], x[m_ * s], x[m_ * s + 1], x[m_ * s + 2], statistics(s), t ? &*t : nullptr,
             std::span(f).subspan(interfaces_.slot_offset(k), v.last_level - v.first_level));
     }
+    detail::observe("trap_occupancies", f);
     return f;
 }
 
@@ -1141,6 +1171,7 @@ std::vector<double> DriftDiffusion::contact_charges(std::span<const double> x,
         if (ci >= 0) charge[static_cast<std::size_t>(ci)] -= t.flux_insulator;
         if (cs >= 0) charge[static_cast<std::size_t>(cs)] -= t.flux_semiconductor;
     }
+    detail::observe("contact_charges", charge);
     return charge;
 }
 
@@ -1155,6 +1186,7 @@ std::vector<double> DriftDiffusion::conduction_currents(std::span<const double> 
         const InterfaceDrift t = interface_at(k, x, &step);
         terminal[static_cast<std::size_t>(c)] += t.rate_p - t.rate;
     }
+    detail::observe("conduction_currents", terminal);
     return terminal;
 }
 
@@ -1192,6 +1224,7 @@ double DriftDiffusion::update_size(std::span<const double> x, std::span<const do
             size = std::max(size, std::abs(dx[4 * i + 3]));
         }
     }
+    detail::observe("update_size", size);
     return size;
 }
 
@@ -1211,6 +1244,7 @@ void DriftDiffusion::apply_update(std::span<double> x, std::span<const double> d
             x[k] = std::clamp(x[k] + dx[k], 0.1 * x[k], 10.0 * x[k]);
         }
     }
+    detail::observe("apply_update", x);
 }
 
 std::vector<std::pair<double, double>> DriftDiffusion::edge_currents(
@@ -1229,6 +1263,7 @@ std::vector<std::pair<double, double>> DriftDiffusion::edge_currents(
             const auto [fn, fp] = thermal_fluxes(k, x, t, g);
             currents.emplace_back(fn.flux, fp.flux);
         }
+        detail::observe("edge_currents", currents);
         return currents;
     }
     const std::vector<NodeDegeneracy> g = degeneracies(x);
@@ -1240,6 +1275,7 @@ std::vector<std::pair<double, double>> DriftDiffusion::edge_currents(
         const auto [fn, fp] = edge_fluxes(e, x, g);
         currents.emplace_back(fn.flux, fp.flux);
     }
+    detail::observe("edge_currents", currents);
     return currents;
 }
 
@@ -1253,6 +1289,7 @@ std::vector<double> DriftDiffusion::terminal_currents(std::span<const double> x)
         if (ca >= 0) terminal[static_cast<std::size_t>(ca)] += total;  // leaves contact a
         if (cb >= 0) terminal[static_cast<std::size_t>(cb)] -= total;  // flows into contact b
     }
+    detail::observe("terminal_currents", terminal);
     return terminal;
 }
 
@@ -1307,6 +1344,7 @@ std::vector<double> DriftDiffusion::terminal_current_resolution(std::span<const 
     for (std::size_t c = 0; c < contact_count_; ++c) {
         if (kinds_[c] == device::ContactKind::ohmic) resolution[c] = bound;
     }
+    detail::observe("terminal_current_resolution", resolution);
     return resolution;
 }
 
@@ -1323,6 +1361,7 @@ std::vector<double> DriftDiffusion::edge_flux_terms(std::span<const double> x) c
             terms[k] = std::abs(fn.d_c[0] * x[4 * e.a + 1]) + std::abs(fn.d_c[1] * x[4 * e.b + 1]) +
                        std::abs(fp.d_c[0] * x[4 * e.a + 2]) + std::abs(fp.d_c[1] * x[4 * e.b + 2]);
         }
+        detail::observe("edge_flux_terms", terms);
         return terms;
     }
     const std::vector<NodeDegeneracy> g = degeneracies(x);
@@ -1333,6 +1372,7 @@ std::vector<double> DriftDiffusion::edge_flux_terms(std::span<const double> x) c
         terms[k] = std::abs(fn.d_c1 * x[m_ * e.a + 1]) + std::abs(fn.d_c2 * x[m_ * e.b + 1]) +
                    std::abs(fp.d_c1 * x[m_ * e.a + 2]) + std::abs(fp.d_c2 * x[m_ * e.b + 2]);
     }
+    detail::observe("edge_flux_terms", terms);
     return terms;
 }
 
@@ -1372,6 +1412,10 @@ BandEdges DriftDiffusion::band_edges(std::span<const double> x) const {
         b.electron_fermi[i] = e.electron_fermi;
         b.hole_fermi[i] = e.hole_fermi;
     }
+    detail::observe("band_edges.conduction", b.conduction);
+    detail::observe("band_edges.valence", b.valence);
+    detail::observe("band_edges.electron_fermi", b.electron_fermi);
+    detail::observe("band_edges.hole_fermi", b.hole_fermi);
     return b;
 }
 
@@ -1393,6 +1437,7 @@ std::vector<double> DriftDiffusion::gate_charges(std::span<const double> x,
         if (c < 0) continue;
         charge[static_cast<std::size_t>(c)] -= interface_at(k, x, step).flux_insulator;
     }
+    detail::observe("gate_charges", charge);
     return charge;
 }
 
@@ -1403,6 +1448,7 @@ std::vector<double> DriftDiffusion::interface_trap_charges(std::span<const doubl
     for (std::size_t k = 0; k < interfaces_.edges().size(); ++k) {
         q[interfaces_.edges()[k].interface] += interface_at(k, x, step).trapped;
     }
+    detail::observe("interface_trap_charges", q);
     return q;
 }
 
@@ -1435,6 +1481,7 @@ void DriftDiffusion::small_signal_matrix(std::span<const double> x, std::complex
     };
     if (electrothermal()) {  // the storage of a time step's rows at s, about a steady state
         add_thermal_storage(x, s, values);
+        detail::observe("small_signal_matrix", values);
         return;  // no interface terms: the model refuses traps and interface charge
     }
     const std::vector<NodeDegeneracy> g = degeneracies(x);
@@ -1473,6 +1520,7 @@ void DriftDiffusion::small_signal_matrix(std::span<const double> x, std::complex
             at(sn, 2, c - 1) += t.d_rate_p[c];
         }
     }
+    detail::observe("small_signal_matrix", values);
 }
 
 std::vector<double> DriftDiffusion::bias_derivative(std::size_t contact) const {
@@ -1488,6 +1536,7 @@ std::vector<double> DriftDiffusion::bias_derivative(std::size_t contact) const {
             d[m_ * i] = gates_.term(i).coupling / V_T_;
         }
     }
+    detail::observe("bias_derivative", d);
     return d;
 }
 
@@ -1586,6 +1635,14 @@ std::vector<DriftDiffusion::CurrentRow> DriftDiffusion::small_signal_currents(
                 rows[c].values.push_back(value);
             }
         }
+    }
+    for (std::size_t c = 0; detail::observer != nullptr && c < rows.size(); ++c) {
+        std::vector<double> columns;
+        for (const std::size_t k : rows[c].columns) columns.push_back(static_cast<double>(k));
+        detail::observe("small_signal_currents.columns", columns);
+        detail::observe("small_signal_currents.values", rows[c].values);
+        detail::observe("small_signal_currents.bias",
+                        std::span<const std::complex<double>>(&rows[c].bias, 1));
     }
     return rows;
 }

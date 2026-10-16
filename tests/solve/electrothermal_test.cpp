@@ -30,6 +30,7 @@
 #include "NiTCAD/solve/small_signal.hpp"
 #include "NiTCAD/solve/trace.hpp"
 #include "NiTCAD/solve/transient.hpp"
+#include "assembly_timing.hpp"
 #include "legacy_graded_mesh.hpp"
 
 using namespace NiTCAD;
@@ -1596,4 +1597,19 @@ TEST_CASE("electrothermal solve: refused inputs") {
     const auto traced = solve::trace_bias(bar(bare), trace);
     REQUIRE_FALSE(traced.has_value());
     REQUIRE(traced.error().message.find("no thermal contact") != std::string::npos);
+}
+
+TEST_CASE("electrothermal solve: assembly cost on a pn bar", "[.assembly_benchmark]") {
+    // Unit 40 (DECISIONS.md FG4): a 401-node pn bar with isothermal ends at 0.5 V.
+    Bar b;
+    b.nodes = 401;
+    b.donors = pn_donors;
+    b.acceptors = pn_acceptors;
+    const device::Device d = bar(b);
+    const std::vector<double> bias{0.5, 0.0};
+    const results::BiasPoint p = solved(d, bias, thermal_options());
+    const auto scaling = *assemble::make_scaling(d);
+    auto system = *assemble::DriftDiffusion::create(d, scaling, thermal_options().models);
+    REQUIRE(system.set_bias(bias).has_value());
+    time_assembly("electrothermal 1D pn bar", system, scaled_state(system, p.fields, scaling));
 }

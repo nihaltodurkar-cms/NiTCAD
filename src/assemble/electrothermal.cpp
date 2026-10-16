@@ -13,6 +13,7 @@
 
 #include "NiTCAD/assemble/bernoulli.hpp"
 #include "NiTCAD/assemble/drift_diffusion.hpp"
+#include "NiTCAD/assemble/observer.hpp"
 #include "NiTCAD/base/constants.hpp"
 #include "NiTCAD/base/contract.hpp"
 #include "NiTCAD/physics/bandgap_narrowing.hpp"
@@ -1051,7 +1052,10 @@ std::vector<double> DriftDiffusion::bias_derivative(std::size_t contact,
                                                     std::span<const double> x) const {
     NITCAD_EXPECTS(x.size() == unknowns());
     std::vector<double> d = bias_derivative(contact);
-    if (!electrothermal()) return d;
+    if (!electrothermal()) {
+        detail::observe("bias_derivative.state", d);
+        return d;
+    }
     // The heat row of a node of the contact gains -m (Jn + Jp) / K0 per edge it is the first node
     // of and + per edge it is the second of (assemble_heat), m = V / V_T; isothermal nodes hold T.
     const auto c = static_cast<std::int32_t>(contact);
@@ -1071,6 +1075,7 @@ std::vector<double> DriftDiffusion::bias_derivative(std::size_t contact,
         if (loose(e.a)) d[4 * e.a + 3] -= k * J;
         if (loose(e.b)) d[4 * e.b + 3] += k * J;
     }
+    detail::observe("bias_derivative.state", d);
     return d;
 }
 
@@ -1107,6 +1112,7 @@ std::vector<double> DriftDiffusion::thermal_contact_heat(std::span<const double>
                                                 : tn.h * (x[4 * i + 3] - thermal_rise_[c]);
     }
     for (double& h : heat) h *= heat_scale_;
+    detail::observe("thermal_contact_heat", heat);
     return heat;
 }
 
@@ -1115,6 +1121,7 @@ double DriftDiffusion::electrical_power(std::span<const double> x) const {
     const std::vector<double> I = terminal_currents(x);
     double power = 0.0;
     for (std::size_t c = 0; c < I.size(); ++c) power += contact_bias_[c] * I[c];
+    detail::observe("electrical_power", power);
     return power;
 }
 
@@ -1130,6 +1137,7 @@ std::vector<std::pair<double, double>> DriftDiffusion::edge_joule_heat(
         joule[k] = {fn.flux * fn.theta_e * (std::log(fn.w[1] / fn.w[0]) - fn.delta),
                     fp.flux * fp.theta_e * (std::log(fp.w[0] / fp.w[1]) - fp.delta)};
     }
+    detail::observe("edge_joule_heat", joule);
     return joule;
 }
 

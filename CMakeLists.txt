@@ -249,7 +249,8 @@ add_library(nitcad_assemble STATIC
   src/assemble/equilibrium_poisson.cpp
   src/assemble/drift_diffusion.cpp
   src/assemble/electrothermal.cpp
-  src/assemble/tunnel_paths.cpp)
+  src/assemble/tunnel_paths.cpp
+  src/assemble/observer.cpp)
 add_library(NiTCAD::assemble ALIAS nitcad_assemble)
 target_include_directories(nitcad_assemble PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
 target_link_libraries(nitcad_assemble PUBLIC
@@ -266,7 +267,8 @@ add_executable(nitcad_assemble_test
   tests/assemble/small_signal_test.cpp
   tests/assemble/impact_ionization_test.cpp
   tests/assemble/band_to_band_test.cpp
-  tests/assemble/electrothermal_test.cpp)
+  tests/assemble/electrothermal_test.cpp
+  tests/baseline/trace_listener.cpp)
 target_link_libraries(nitcad_assemble_test PRIVATE NiTCAD::assemble Catch2::Catch2WithMain)
 add_test(NAME assemble COMMAND nitcad_assemble_test)
 
@@ -352,7 +354,8 @@ add_executable(nitcad_solve_test
   tests/solve/restart_test.cpp
   tests/solve/weighted_current_test.cpp
   tests/solve/hole_mobility_test.cpp
-  tests/solve/default_physics_test.cpp)
+  tests/solve/default_physics_test.cpp
+  tests/baseline/trace_listener.cpp)
 # The solve tests also read their results through the analysis extractors (Unit 24 gates).
 target_link_libraries(nitcad_solve_test PRIVATE NiTCAD::solve NiTCAD::analysis NiTCAD::io
   Catch2::Catch2WithMain)
@@ -387,7 +390,8 @@ target_link_libraries(nitcad_deck PUBLIC NiTCAD::base NiTCAD::io NiTCAD::solve)
 add_executable(nitcad_deck_test
   tests/deck/syntax_test.cpp
   tests/deck/build_test.cpp
-  tests/deck/run_test.cpp)
+  tests/deck/run_test.cpp
+  tests/baseline/trace_listener.cpp)
 target_include_directories(nitcad_deck_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/deck")
 target_link_libraries(nitcad_deck_test PRIVATE NiTCAD::deck Catch2::Catch2WithMain)
 # The run tests start the nitcad executable for the exit status and Ctrl+C-free paths.
@@ -402,7 +406,8 @@ add_executable(nitcad src/cli/main.cpp)
 target_link_libraries(nitcad PRIVATE NiTCAD::deck)
 
 # --- validation against published data (Unit 33; benchmarks/ decks) ----------------------
-add_executable(nitcad_validation_test tests/validation/published_test.cpp)
+add_executable(nitcad_validation_test tests/validation/published_test.cpp
+  tests/baseline/trace_listener.cpp)
 target_link_libraries(nitcad_validation_test PRIVATE NiTCAD::deck Catch2::Catch2WithMain)
 target_compile_definitions(nitcad_validation_test PRIVATE
   NITCAD_BENCHMARKS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/benchmarks")

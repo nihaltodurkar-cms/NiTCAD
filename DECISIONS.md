@@ -1298,7 +1298,7 @@ Review (March 1969) would not download. Breakdown stays validated against the an
 
 ---
 
-### Unit 40 — generic fields and equations behind the assembler (proposed 2026-10-16; awaiting owner review, nothing implemented)
+### Unit 40 — generic fields and equations behind the assembler (proposed 2026-10-16; authorized 2026-10-17; in progress on `assemble/fields-equations`)
 
 **Owner request (2026-10-16):** document a refactor toward ARCHITECTURE.md 6.12.1–6.12.2 (the equation graph, 2.1) in
 three slices; documentation only on branch `assemble/fields-equations`; no implementation until explicitly authorized.
@@ -1353,7 +1353,7 @@ sequence; any slice that changes the order of the additions into one entry chang
 | FG4 | **No measurable assembly slowdown.** A Release benchmark (`[.benchmark]`, not in ctest) times `evaluate` (residual and Jacobian) and `residual` alone on: the legacy 1D diode, the 2D MOSFET with field mobility, a 3D unstructured device, the electrothermal diode, and a nonlocal-tunnelling diode. Measured at commit 0 and after each slice on this machine, in the same session and power state, the median of at least 31 repetitions after warm-up; the gate is the post-slice median not above the pre-refactor median by more than the threshold of FD2 (proposed: 2%, or the measured run-to-run spread of the medians if that is larger, reported alongside). The end-to-end MOSFET and transient benchmarks' wall times are reported, not gated. |
 | FG5 | **Suites.** Full Release and Debug suites pass at every slice commit (18/18 and 12/12 as last recorded on `main` after Unit 38, to be re-run at commit 0 before relying on it); zero warnings under the existing flags (`/W4 /WX`). |
 | FG6 | **Mutation checks.** For every slice, mutants applied by hand to the new code are caught by the suites **or by the FG1/FG2 comparison** (a reordering mutant, such as two node terms swapped, changes only the last bits, which the suites' tolerances do not see; the comparison is the gate for those, and the report says which of the two caught each mutant). At least: the `DofMap` swapping two fields, an off-by-one block size, the ionization override turned into an addition, two node terms swapped in order, an edge term skipping row b's Dirichlet check, a term's pattern entry dropped, a thermal term's θ column moved, the small-signal pass including interface terms twice, and the wrapper ignoring a model switch. Each is listed with the test that caught it; a surviving mutant is a missing gate, added before the slice is committed. |
-| FG7 | **Slice 1 stands alone.** After slice 1 alone: FG1–FG6 pass; `stride()` and every public signature unchanged; the field of every unknown index and the unknown of every (field, node) are queryable; the assembler's block size comes from the map (one source of truth: `m_` and the literal `4` and `16` in `assemble_heat` are read from it); the solve layer's slot reads (`bias.cpp`, `small_signal.cpp`, `trace.cpp`, `transient.cpp`, `fields.hpp`) go through the map. The per-access `m_ * i + k` arithmetic inside the assembler's loops stays until slice 2 moves those loops into terms (rewriting all of it in slice 1 would make slice 1 as large as slice 2). |
+| FG7 | **Slice 1 stands alone.** After slice 1 alone: FG1–FG6 pass; `stride()` and every public signature unchanged; the field of every unknown index and the unknown of every (field, node) are queryable; the assembler's block size comes from the map (one source of truth: `m_` is set from it; the literal `4` and `16` of the electrothermal code, where the block is 4 by construction, move with that code into terms in slice 2b); the solve layer's slot reads (`bias.cpp`, `small_signal.cpp`, `trace.cpp`, `transient.cpp`, `fields.hpp`) go through the map. The per-access `m_ * i + k` arithmetic inside the assembler's loops stays until slice 2 moves those loops into terms (rewriting all of it in slice 1 would make slice 1 as large as slice 2). |
 | FG9 | **Layering.** The field, map and term types live in `assemble`; `solve` reads only the public map queries (FD4); no new dependency from `physics`, `mesh` or `linalg` on `assemble`; the existing header-boundary checks pass. |
 | FG8 | **No scope creep.** No change to physics, models, defaults, deck syntax, file formats, run-record fields or public `DriftDiffusion` signatures; `ARCHITECTURE.md` 2.2, 6.12.1–2 and 11.3 updated to "as built" only after the owner accepts the result. |
 
@@ -1396,8 +1396,34 @@ rewrite all 114 lines of index arithmetic, which is slice 2's work, now narrowed
 patterns make a committed reference file unsafe (FD8). Added: slice 2 split into isothermal and electrothermal
 commits (FE7), the layering gate (FG9), the coverage risk of the recorded states (FR9), FD9.
 
-**Status:** proposal only. No code is changed on `assemble/fields-equations`; implementation waits for the owner's
-explicit authorization and rulings on FD1–FD9.
+**Owner ruling (2026-10-17):** "go ahead" after the self-review, taken as authorization to implement with the
+proposals of FD1–FD9 accepted as written.
+
+**Commit 0 as built (the recorder differs from FG1's wording above, and is stronger).** Instead of F and J at fixed
+states built for the purpose, the recorder traces **every** value the assembler's public members return during the
+existing suites:
+- `include/NiTCAD/assemble/observer.hpp`, `src/assemble/observer.cpp`: a null-by-default observer. `DriftDiffusion`'s
+  public members hand it their inputs and outputs under a tag: `evaluate` and `residual` (state, residual, Jacobian
+  values, and a time step's rate, storage and traps), `small_signal_matrix`, both `bias_derivative`s,
+  `small_signal_currents` (columns, values, bias), `state_from_potential`, `stamp_contacts`, `update_size`,
+  `apply_update`, `storage`, `trap_occupancies`, `edge_currents`, `terminal_currents`, `terminal_current_resolution`,
+  `edge_flux_terms`, `band_edges`, `gate_charges`, `contact_charges`, `conduction_currents`, `interface_trap_charges`,
+  `thermal_contact_heat`, `electrical_power`, `edge_joule_heat`. Unset, each call pays one null test; the hooks only
+  read, so no value changes.
+- `tests/baseline/trace_listener.cpp`, a Catch2 listener linked into the assemble, solve, deck and validation test
+  executables: with `NITCAD_TRACE_FILE` set, one line per observed value (index in its section, tag, length, a 64-bit
+  FNV-1a hash of its bit patterns) under each test case and section. Child processes (the deck tests' `nitcad.exe`)
+  are not traced.
+- Each traced ctest entry is run with the variable set (scratch script; the files stay in scratch, FD8); a slice
+  passes FG1 and FG2 when its traces equal commit 0's line for line. The solve layer is unchanged by every slice, so
+  equal assembler outputs at every call give equal iteration counts and results; the first differing line names the
+  test, section and call. This also covers every active term of every configuration the suites run (FR9's concern),
+  without states built for the purpose.
+- The FG4 benchmark: `tests/solve/assembly_timing.hpp` and five `[.assembly_benchmark]` cases (the legacy 1D diode,
+  the 2D MOSFET with field mobility, the 3D generated diode, the electrothermal pn bar, the Zener diode with nonlocal
+  paths) in the solve test files that already build those devices.
+
+**Status:** implementation in progress on `assemble/fields-equations`.
 
 ---
 

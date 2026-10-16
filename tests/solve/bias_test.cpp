@@ -36,6 +36,7 @@
 #include "NiTCAD/solve/equilibrium.hpp"
 #include "NiTCAD/solve/newton.hpp"
 #include "../linalg/mkl_test_runtime.hpp"
+#include "assembly_timing.hpp"
 #include "legacy_graded_mesh.hpp"
 #include "solver_timing.hpp"
 
@@ -487,3 +488,15 @@ TEST_CASE("bias: invalid input and non-convergence return errors") {
     REQUIRE(few.error().code == ErrorCode::non_convergence);
 }
 
+
+TEST_CASE("bias: assembly cost on the legacy diode", "[.assembly_benchmark]") {
+    // Unit 40 (DECISIONS.md FG4): the legacy 1D diode at 0.5 V.
+    const device::Device d = diode_1d(gate_mesh());
+    const std::vector<double> bias{0.5, 0.0};
+    const auto p = solve::solve_bias(d, bias, legacy);
+    REQUIRE(p.has_value());
+    const auto scaling = *assemble::make_scaling(d);
+    auto system = *assemble::DriftDiffusion::create(d, scaling, legacy.models);
+    REQUIRE(system.set_bias(bias).has_value());
+    time_assembly("legacy 1D diode", system, scaled_state(system, p->fields, scaling));
+}

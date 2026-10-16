@@ -30,6 +30,7 @@
 #include "NiTCAD/solve/transient.hpp"
 #include "NiTCAD/solve/waveform.hpp"
 #include "../../src/solve/relocation.hpp"
+#include "assembly_timing.hpp"
 
 using namespace NiTCAD;
 using assemble::NonlocalTunnelling;
@@ -602,4 +603,22 @@ TEST_CASE("btbt: the run record") {
     const device::Device d2 = zener(1, 5e19, other);
     REQUIRE(solve::make_run_record(d2, with(true), p).input_identity != local.input_identity);
     REQUIRE(solve::make_run_record(d2, with(false), p).input_identity == off.input_identity);
+}
+
+TEST_CASE("btbt: assembly cost with nonlocal paths", "[.assembly_benchmark]") {
+    // Unit 40 (DECISIONS.md FG4): the Zener diode with the calibrated nonlocal rate at -1 V, its
+    // paths traced at that state.
+    const device::Device d = zener();
+    const solve::BiasOptions o = with(false, NonlocalTunnelling::kane);
+    const auto s = solve::sweep_bias(d, reverse(-1.0, 0.25), o);
+    REQUIRE(s.has_value());
+    REQUIRE(!s->stopped);
+    const results::BiasPoint& p = s->points.back();
+    const auto scaling = *assemble::make_scaling(d);
+    auto system = *assemble::DriftDiffusion::create(d, scaling, o.models);
+    REQUIRE(system.set_bias(p.bias_V).has_value());
+    const std::vector<double> x = scaled_state(system, p.fields, scaling);
+    system.set_paths(system.trace_paths(x));
+    REQUIRE(!system.paths().paths.empty());
+    time_assembly("1D Zener, nonlocal paths", system, x);
 }
