@@ -513,17 +513,37 @@ TEST_CASE("electrothermal solve: a diode with R_th against the lumped model; the
     REQUIRE(run->stopped->context);
     REQUIRE(run->stopped->context->value > 850.0);  // the offending temperature [K]
     REQUIRE(run->points.back().fields.temperature_K.front() > 800.0);
-    // The trace's fold: the vertex of the parabola V(T) through the top point and its neighbours.
-    const auto at = [&](std::size_t k) {
-        return std::pair{run->points[k].fields.temperature_K.front(), run->points[k].bias_V[0]};
+    // The trace's fold: the maximum of the quartic V(T) through the top point and two neighbours
+    // on each side (its error is O(h^5) in the points' spacing h, 0.6 K here; the parabola
+    // through three points, O(h^3), depended on where the top point fell: 4.6e-9 V when it lay
+    // 0.05 K from the fold, 1.4e-7 V at 0.13 K, Unit 36), by golden section between the top's
+    // neighbours.
+    REQUIRE(top >= 2);
+    REQUIRE(top + 2 < run->points.size());
+    double Tk[5], Vk[5];
+    for (std::size_t j = 0; j < 5; ++j) {
+        Tk[j] = run->points[top - 2 + j].fields.temperature_K.front();
+        Vk[j] = run->points[top - 2 + j].bias_V[0];
+    }
+    const auto quartic = [&](double T) {  // Lagrange form
+        double v = 0.0;
+        for (int j = 0; j < 5; ++j) {
+            double w = Vk[j];
+            for (int i = 0; i < 5; ++i) {
+                if (i != j) w *= (T - Tk[i]) / (Tk[j] - Tk[i]);
+            }
+            v += w;
+        }
+        return v;
     };
-    const auto [T1, V1] = at(top - 1);
-    const auto [T2, V2] = at(top);
-    const auto [T3, V3] = at(top + 1);
-    const double s12 = (V2 - V1) / (T2 - T1), s23 = (V3 - V2) / (T3 - T2);
-    const double curvature = (s23 - s12) / (T3 - T1);  // V = V2 + s (T - T2) + c (T - T2)^2
-    const double slope = s12 + curvature * (T2 - T1);   // at T2
-    const double traced = V2 - slope * slope / (4.0 * curvature);
+    const double T2 = Tk[2];
+    double lo = Tk[1], hi = Tk[3];
+    const double golden = 0.5 * (std::sqrt(5.0) - 1.0);
+    for (int k = 0; k < 80; ++k) {
+        const double u1 = hi - golden * (hi - lo), u2 = lo + golden * (hi - lo);
+        (quartic(u1) > quartic(u2) ? hi : lo) = quartic(u1) > quartic(u2) ? u2 : u1;
+    }
+    const double traced = quartic(0.5 * (lo + hi));
     // The lumped fold: the largest V on T - 300 = R_eff V I_iso(V, T), V(T) by bisection in V
     // (V I_iso rises with V), its maximum by golden section in T.
     const auto lumped_V = [&](double T) {
@@ -555,7 +575,9 @@ TEST_CASE("electrothermal solve: a diode with R_th against the lumped model; the
     }
     const double lumped = std::max(f1, f2);
     CAPTURE(traced, lumped, T2, 0.5 * (a + c));
-    REQUIRE(std::abs(traced - lumped) <= 1e-7);  // measured 4.6e-9 V
+    std::printf("runaway fold: traced %.10f V, lumped %.10f V, difference %.2e V\n", traced, lumped,
+                traced - lumped);
+    REQUIRE(std::abs(traced - lumped) <= 1e-7);  // measured 7.3e-10 V (-2.7e-10 before Unit 36)
 }
 
 namespace {

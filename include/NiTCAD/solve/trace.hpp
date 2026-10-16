@@ -27,8 +27,13 @@
 // the state (the potential in V_T and each density relative to itself above density_floor, times
 // V_T, as root mean squares over the nodes). Through a snapback the current grows by decades while
 // the bias hardly moves, and the current term keeps such steps short.
-// A step whose new tangent turns by more than acos(0.9) from the last (the corrector found another
-// branch nearby) is rejected and retried at half. A step whose corrector converges in at most 7
+// The arc row's current term is the contact current's linearization, whose terms cancel over many
+// orders (as the current does, its resolution, Unit 32), so every product with that row (the arc
+// residual and the Sherman-Morrison corrections) is a compensated dot product (Unit 36,
+// linalg::compensated_dot); in plain arithmetic the corrector could not resolve the bias near a
+// fold or a tunnelling onset. A step whose corrected point lies farther from its predicted point
+// than the step, in the arc metric, or whose new tangent turns by more than acos(0.9) from the
+// last (either: the corrector found another branch nearby) is rejected and retried at half. A step whose corrector converges in at most 7
 // iterations lets the next grow by 1.5 (to max_step_V); one taking 12 or more shrinks it by 0.7; a
 // failed corrector is retried at half the step, down to min_step_V, below which the trace stops
 // (non_convergence) and keeps its points.

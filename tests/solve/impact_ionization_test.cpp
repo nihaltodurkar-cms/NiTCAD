@@ -11,6 +11,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstddef>
 #include <cstdio>
@@ -462,9 +463,8 @@ namespace {
 // An open-base n+ p n- n+ transistor (1D, two contacts) at T: emitter n+ 1e19 on [0, 1) um, base
 // p 1e17 on [1, 1.5) um, collector n- 1e16 to 5 um, n+ 1e19 to 6 um; emitter on x_min, collector on
 // x_max; lifetimes 1e-7 s (Scharfetter, N_ref 5e16).
-device::Device open_base(double T) {
-    // Legacy silicon (Unit 35): the snap-back case below was measured on it (see there).
-    physics::SemiconductorParameters si = physics::legacy_silicon_parameters;
+device::Device open_base(double T, const physics::SemiconductorParameters& material) {
+    physics::SemiconductorParameters si = material;
     si.lifetime = {.tau_n0 = 1e-7, .tau_p0 = 1e-7, .N_ref = 5e16};
     const double xb = 1e-4, xc = 1.5e-4;
     mesh::Mesh m = *mesh::make_tensor_grid(legacy_graded_mesh(6e-4, {xb, xc, 5e-4}, 2e-8, 2e-6));
@@ -495,9 +495,8 @@ device::Device open_base(double T) {
                       {"collector", device::ContactKind::ohmic, std::move(c)}}});
 }
 
-}  // namespace
-
-TEST_CASE("impact ionization: an open-base transistor snaps back", "[.breakdown]") {
+// The snap-back case below on the defaults or on the legacy options.
+void snap_back(bool legacy) {
     // At 350 K (the leakage, 1e-5 A/cm^2 and more, above the state's resolution) the collector
     // current of the open-base transistor rises with the bias until avalanche multiplication
     // turns the base current around (BV_CEO, measured 17.27 V at 1.8 mA/cm^2); then the current
@@ -510,15 +509,14 @@ TEST_CASE("impact ionization: an open-base transistor snaps back", "[.breakdown]
     // 1.0002 at 0.58 A/cm^2; below 1 at the fold by the collector leakage's share). Every traced
     // point, re-solved at its own bias from its own state, is that state within the current
     // resolution.
-    // On the legacy options (Unit 35): with the defaults (Couderc's silicon, Masetti holes) the
-    // fold is at 17.46 V, 1.61e-3 A/cm^2, but the trace crawls over it in some 5000 steps, the
-    // current moving in steps of 2.9e-7 A/cm^2 (its resolution), and its highest bias falls
-    // hundreds of points past the turning point analysis::turning_point finds (DECISIONS.md, Unit
-    // 35, unresolved).
+    // The figures above are the legacy options'; on the defaults (Couderc's silicon, Masetti holes)
+    // the fold is at 17.46 V, 1.6e-3 A/cm^2. Before Unit 36's compensated arc row and distance test
+    // (DECISIONS.md, TR2) the defaults' trace crawled over the fold in some 5000 steps.
     const double T = 350.0, xc = 1.5e-4;
-    const device::Device d = open_base(T);
+    const device::Device d = open_base(
+        T, legacy ? physics::legacy_silicon_parameters : physics::silicon_parameters);
     solve::TraceOptions o;
-    o.steady.models.hole_mobility = assemble::HoleMobility::caughey_thomas;
+    if (legacy) o.steady.models.hole_mobility = assemble::HoleMobility::caughey_thomas;
     o.steady.models.bgn = false;
     o.steady.models.impact_ionization = true;
     o.contact = 1;
@@ -527,9 +525,14 @@ TEST_CASE("impact ionization: an open-base transistor snaps back", "[.breakdown]
     o.step_V = 0.5;
     o.max_step_V = 2.0;
     o.current_limit = 20.0;
+    const auto start = std::chrono::steady_clock::now();
     const auto t = solve::trace_bias(d, o);
+    const std::chrono::duration<double> took = std::chrono::steady_clock::now() - start;
     REQUIRE(t.has_value());
-    REQUIRE(!t->stopped);
+    if (t->stopped) FAIL(t->stopped->message);
+    std::printf("open-base snap-back, %s: %zu traced points in %.1f s\n",
+                legacy ? "legacy options" : "defaults", t->points.size(), took.count());
+    REQUIRE(t->points.size() <= 200);  // TR5 (Unit 35's defaults: about 5000)
     std::size_t top = 0;
     for (std::size_t k = 0; k < t->points.size(); ++k) {
         if (t->points[k].bias_V[1] > t->points[top].bias_V[1]) top = k;
@@ -598,6 +601,16 @@ TEST_CASE("impact ionization: an open-base transistor snaps back", "[.breakdown]
     REQUIRE(high < 1e-3);
     REQUIRE(worst_resolve <= 1.0);
     REQUIRE(low < 1e-2 * last.terminal_current[1]);
+}
+
+}  // namespace
+
+TEST_CASE("impact ionization: an open-base transistor snaps back", "[.breakdown]") {
+    snap_back(false);  // the defaults (TR2)
+}
+
+TEST_CASE("impact ionization: an open-base transistor snaps back, legacy options", "[.breakdown]") {
+    snap_back(true);  // TR3
 }
 
 namespace {
