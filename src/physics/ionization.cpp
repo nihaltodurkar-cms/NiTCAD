@@ -7,8 +7,8 @@
 
 namespace NiTCAD::physics {
 
-IonizedDensity ionized_density(double N, double eta, double depth_over_kT,
-                               double degeneracy) noexcept {
+IonizedDensity ionized_density(double N, double eta, double depth_over_kT, double degeneracy,
+                               double bound) noexcept {
     if (!(depth_over_kT > 0.0)) return {N, 0.0};
     // s = 1 / (1 + e^y), y = eta + depth + ln g, with e = e^-|y| so nothing overflows:
     // s = e / (1 + e) for y > 0, 1 / (1 + e) otherwise, and s (1 - s) = e / (1 + e)^2 either way.
@@ -16,7 +16,16 @@ IonizedDensity ionized_density(double N, double eta, double depth_over_kT,
     const double e = std::exp(-std::abs(y));
     const double d = 1.0 / (1.0 + e);
     const double s = y > 0.0 ? e * d : d;
-    return {N * s, -N * e * d * d};
+    // N ((1 - b) + b s); with b = 1, (0 + s) and 1 s are s exactly (Unit 37, I4).
+    return {N * ((1.0 - bound) + bound * s), -N * bound * e * d * d};
+}
+
+double dopant_level_eV(const DensityDependentLevel& l, double N) noexcept {
+    return l.E0_eV / (1.0 + std::pow(N / l.N_ref, l.c));
+}
+
+double bound_fraction(const DensityDependentLevel& l, double N) noexcept {
+    return 1.0 / (1.0 + std::pow(N / l.N_b, l.d));
 }
 
 NeutralEquilibrium ionized_neutral_equilibrium(double donors, double acceptors, double n_ie,
@@ -35,9 +44,9 @@ NeutralEquilibrium ionized_neutral_equilibrium(double donors, double acceptors, 
         const DensityResult n = density(log_dos_n, eta);
         const DensityResult p = density(log_dos_p, -eta);
         const IonizedDensity nd = ionized_density(donors, eta - log_dos_n, levels.donor_kT,
-                                                  levels.donor_degeneracy);
+                                                  levels.donor_degeneracy, levels.donor_bound);
         const IonizedDensity na = ionized_density(acceptors, -eta - log_dos_p, levels.acceptor_kT,
-                                                  levels.acceptor_degeneracy);
+                                                  levels.acceptor_degeneracy, levels.acceptor_bound);
         return detail::ValueSlope{(n.density - p.density - nd.value + na.value) / scale,
                                   (n.d_eta + p.d_eta - nd.d_eta - na.d_eta) / scale};
     };

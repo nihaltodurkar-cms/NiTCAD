@@ -869,6 +869,10 @@ std::expected<void, base::Error> Builder::models(assemble::PhysicsModels& m) con
             else if (e.value == "masetti") m.hole_mobility = assemble::HoleMobility::masetti;
             else if (e.value == "automatic") m.hole_mobility = assemble::HoleMobility::automatic;
             else return std::unexpected(at(e.line, "hole_mobility is automatic, caughey_thomas or masetti"));
+        } else if (e.key == "ionization_levels") {
+            if (e.value == "fixed") m.ionization_levels = assemble::IonizationLevels::fixed;
+            else if (e.value == "altermatt") m.ionization_levels = assemble::IonizationLevels::altermatt;
+            else return std::unexpected(at(e.line, "ionization_levels is fixed or altermatt"));
         } else if (e.key == "impact_current_resolution") {
             NITCAD_DECK_TRY(v, num(e));
             m.impact_current_resolution = v;

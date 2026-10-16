@@ -632,7 +632,7 @@ DriftDiffusion::NodeStorage DriftDiffusion::node_storage(
         const double wn = fermi_dirac_ ? g[i].n.d_density : 0.0;
         const physics::IonizedDensity d = physics::ionized_density(
             donors_[i], std::log(n / n_ie_[i]) - ln - log_dos_n_[i], l.donor_kT,
-            l.donor_degeneracy);
+            l.donor_degeneracy, l.donor_bound);
         s.n -= d.value;
         s.d_n -= d.d_eta * (1.0 / n - wn);
     }
@@ -641,7 +641,7 @@ DriftDiffusion::NodeStorage DriftDiffusion::node_storage(
         const double wp = fermi_dirac_ ? g[i].p.d_density : 0.0;
         const physics::IonizedDensity a = physics::ionized_density(
             acceptors_[i], std::log(p / n_ie_[i]) - lp - log_dos_p_[i], l.acceptor_kT,
-            l.acceptor_degeneracy);
+            l.acceptor_degeneracy, l.acceptor_bound);
         s.p -= a.value;
         s.d_p -= a.d_eta * (1.0 / p - wp);
     }

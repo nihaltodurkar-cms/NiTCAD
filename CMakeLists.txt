@@ -217,7 +217,8 @@ add_executable(nitcad_physics_test
   tests/physics/band_to_band_test.cpp
   tests/physics/thermal_test.cpp
   tests/physics/masetti_test.cpp
-  tests/physics/band_set_test.cpp)
+  tests/physics/band_set_test.cpp
+  tests/physics/ionization_density_test.cpp)
 target_link_libraries(nitcad_physics_test PRIVATE NiTCAD::physics Catch2::Catch2WithMain)
 add_test(NAME physics COMMAND nitcad_physics_test)
 

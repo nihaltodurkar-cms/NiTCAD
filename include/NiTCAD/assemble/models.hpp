@@ -26,6 +26,12 @@ enum class HoleMobility : std::uint8_t { caughey_thomas = 0, masetti = 1, automa
             p.hole_mobility == physics::silicon_parameters.hole_mobility);
 }
 
+// The dopant levels of incomplete ionization (Unit 37): each material's fixed levels (Unit 15,
+// the default) or Altermatt et al.'s density-dependent levels of silicon (physics/ionization.hpp;
+// phosphorus for donors, boron for acceptors), which needs every semiconductor region to carry
+// silicon's ionization parameters. Read only with incomplete_ionization on.
+enum class IonizationLevels : std::uint8_t { fixed = 0, altermatt = 1 };
+
 struct PhysicsModels {
     // Caughey-Thomas mobility; false: the lattice mobility (Caughey-Thomas at N = 0).
     bool doping_mobility = true;
@@ -56,6 +62,8 @@ struct PhysicsModels {
     // incomplete_ion flag. Thermionic emission is not a switch here: it is chosen per interface
     // (device::Interface; Unit 15).
     bool incomplete_ionization = false;
+    // Which dopant levels incomplete ionization uses (Unit 37); the default is the fixed levels.
+    IonizationLevels ionization_levels = IonizationLevels::fixed;
     // Impact ionization (physics/impact_ionization.hpp; drift-diffusion only, Unit 19): generation
     // (alpha_n |J_n| + alpha_p |J_p|) / q at each node with each material's coefficients, the field
     // taken along each carrier's current (drift_diffusion.hpp). Off by default, as the legacy.

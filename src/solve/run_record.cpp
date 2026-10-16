@@ -132,6 +132,12 @@ std::vector<std::pair<std::string, double>> settings(const BiasOptions& o) {
             s.emplace_back("models.hole_mobility", static_cast<double>(o.models.hole_mobility));
         }
     }
+    // Unit 37: only where it is read (with incomplete ionization, in either equation set) and not
+    // the default, so the runs without it keep their identity.
+    if (o.models.incomplete_ionization &&
+        o.models.ionization_levels != assemble::IonizationLevels::fixed) {
+        s.emplace_back("models.ionization_levels", static_cast<double>(o.models.ionization_levels));
+    }
     // Unit 28: recorded only when on, so the runs without it keep their identity.
     if (o.step_control.max_cuts > 0) {
         s.emplace_back("step_control.max_cuts", static_cast<double>(o.step_control.max_cuts));

@@ -507,6 +507,56 @@ TEST_CASE("heterojunction: FD-Jacobian gates with incomplete ionization (Poisson
     }
 }
 
+TEST_CASE("ionization levels: FD-Jacobian gates with Altermatt's levels (Unit 37, II5, II6)") {
+    // A silicon p-n junction doped near the Mott density (2e18 cm^-3: about a fifth of the dopants
+    // bound), Boltzmann and Fermi-Dirac, Poisson and drift-diffusion; and the ionization part of
+    // the Jacobian on its own.
+    const physics::SemiconductorParameters si = physics::silicon_parameters;
+    const device::Device d =
+        junction(*mesh::make_tensor_grid(graded_axis(30)), si, si, -2e18, 2e18);
+    for (const bool fd : {false, true}) {
+        CAPTURE(fd);
+        const assemble::PhysicsModels models{.fermi_dirac = fd, .incomplete_ionization = true,
+                                             .ionization_levels =
+                                                 assemble::IonizationLevels::altermatt};
+        const auto poisson = *EquilibriumPoisson::create(d, *assemble::make_scaling(d), models);
+        std::vector<double> psi = poisson.charge_neutral_potential();
+        Noise noise{37};
+        for (double& v : psi) v += 0.02 * noise.next();
+        REQUIRE(fd_jacobian_error(poisson, psi) <= 5e-5);
+        const auto [system, x] = probe_state(d, 38, models);
+        REQUIRE(fd_jacobian_error(system, x) <= 5e-5);
+        const auto [without, unused] = probe_state(d, 38, {.fermi_dirac = fd});
+        const double e = part_error(system, without, x, [](std::size_t c, double v) {
+            return c % 3 != 0 && v > 1e-4;
+        });
+        UNSCOPED_INFO("worst Altermatt ionization column error " << e);
+        REQUIRE(e <= 1e-5);
+    }
+    // II6: refused on germanium (its ionization levels are not silicon's), before anything is
+    // assembled; accepted on silicon with another parameter changed.
+    const physics::SemiconductorParameters ge = physics::germanium_parameters;
+    const device::Device g =
+        junction(*mesh::make_tensor_grid(graded_axis(10)), ge, ge, -1e17, 1e17);
+    const assemble::PhysicsModels altermatt{.incomplete_ionization = true,
+                                            .ionization_levels =
+                                                assemble::IonizationLevels::altermatt};
+    const auto refused = DriftDiffusion::create(g, *assemble::make_scaling(g), altermatt);
+    REQUIRE_FALSE(refused.has_value());
+    CHECK(refused.error().code == base::ErrorCode::invalid_input);
+    CHECK(refused.error().message.find("silicon's ionization parameters") != std::string::npos);
+    CHECK_FALSE(EquilibriumPoisson::create(g, *assemble::make_scaling(g), altermatt).has_value());
+    // Without incomplete ionization the setting is not read.
+    CHECK(DriftDiffusion::create(g, *assemble::make_scaling(g),
+                                 {.ionization_levels = assemble::IonizationLevels::altermatt})
+              .has_value());
+    physics::SemiconductorParameters changed = si;
+    changed.eps_r = 11.9;
+    const device::Device c =
+        junction(*mesh::make_tensor_grid(graded_axis(10)), changed, changed, -1e17, 1e17);
+    CHECK(DriftDiffusion::create(c, *assemble::make_scaling(c), altermatt).has_value());
+}
+
 TEST_CASE("heterojunction: the ionization part of the Jacobian matches finite differences") {
     // The ionized doping depends on the majority densities (its own band's): their columns.
     const physics::SemiconductorParameters sic = physics::silicon_carbide_4h_parameters;

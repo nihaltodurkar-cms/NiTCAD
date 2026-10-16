@@ -3,6 +3,7 @@
 // error naming its line.
 #include <catch2/catch_test_macros.hpp>
 
+#include <algorithm>
 #include <cmath>
 #include <filesystem>
 #include <numeric>
@@ -462,4 +463,28 @@ TEST_CASE("deck build: silicon, silicon_legacy and the hole mobility default (Un
     const deck::Plan r = must(theta);
     CHECK(std::get<physics::Semiconductor>(r.device.regions()[0].material).parameters().passler_gap.Theta_K ==
           400.0);
+}
+
+TEST_CASE("deck build: ionization_levels and its run record (Unit 37, I5)", "[deck]") {
+    const deck::Plan fixed = must(diode_deck);
+    CHECK(fixed.options.models.ionization_levels == assemble::IonizationLevels::fixed);
+    const deck::Plan a = must(diode_deck + "[models]\nincomplete_ionization = on\nionization_levels = altermatt\n");
+    CHECK(a.options.models.ionization_levels == assemble::IonizationLevels::altermatt);
+    const deck::Plan b = must(diode_deck + "[models]\nincomplete_ionization = on\n");
+    const deck::Plan c = must(diode_deck + "[models]\nionization_levels = altermatt\n");
+    const auto record = [](const deck::Plan& p) {
+        return solve::make_run_record(p.device, p.options, p.points);
+    };
+    const auto named = [](const results::RunRecord& r) {
+        return std::ranges::any_of(r.settings,
+                                   [](const auto& s) { return s.first == "models.ionization_levels"; });
+    };
+    // Named, and the identity changed, only where it is read and not the default.
+    CHECK(named(record(a)));
+    CHECK_FALSE(named(record(b)));
+    CHECK_FALSE(named(record(c)));
+    CHECK(record(a).input_identity != record(b).input_identity);
+    CHECK(record(c).input_identity == record(fixed).input_identity);
+    CHECK(failure(diode_deck + "[models]\nionization_levels = schenk\n").find(
+              "ionization_levels is fixed or altermatt") != std::string::npos);
 }
