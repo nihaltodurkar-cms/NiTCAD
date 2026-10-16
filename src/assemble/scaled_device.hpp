@@ -110,11 +110,13 @@ struct IonizedCharge {
                                                   double eta_v,
                                                   const physics::DopantLevels& l) noexcept {
     const physics::IonizedDensity nd =
-        donors > 0.0 ? physics::ionized_density(donors, eta_c, l.donor_kT, l.donor_degeneracy)
+        donors > 0.0 ? physics::ionized_density(donors, eta_c, l.donor_kT, l.donor_degeneracy,
+                                                   l.donor_bound)
                      : physics::IonizedDensity{0.0, 0.0};
     const physics::IonizedDensity na =
         acceptors > 0.0
-            ? physics::ionized_density(acceptors, eta_v, l.acceptor_kT, l.acceptor_degeneracy)
+            ? physics::ionized_density(acceptors, eta_v, l.acceptor_kT, l.acceptor_degeneracy,
+                                       l.acceptor_bound)
             : physics::IonizedDensity{0.0, 0.0};
     return {nd.value - na.value, nd.d_eta, -na.d_eta};
 }

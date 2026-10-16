@@ -58,7 +58,8 @@
 //   [models]          each assemble::PhysicsModels switch by its name = on | off;
 //                     btbt_nonlocal = off | kane | direct_wkb; impact_current_resolution = <x>;
 //                     hole_mobility = automatic | caughey_thomas | masetti  (Units 34, 35;
-//                       automatic, the default: Masetti in silicon regions)
+//                       automatic, the default: Masetti in silicon regions);
+//                     ionization_levels = fixed | altermatt  (Unit 37; with incomplete_ionization)
 //   [solver]          equations = drift_diffusion | equilibrium_poisson; max_iterations; tol_update;
 //                     max_update; line_search = off | residual | natural; line_search.max_backtracks;
 //                     line_search.sufficient_decrease; max_cuts; growth; cut_max_iterations;

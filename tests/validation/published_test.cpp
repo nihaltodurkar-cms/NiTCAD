@@ -136,10 +136,12 @@ deck::Deck load(const char* file, const char* temperature = nullptr,
 // The simulated resistivity of a resistor deck: 0.01 V over the 10 um bar. The hole mobility is
 // the deck's (the default, automatic) unless given.
 double simulated_rho(const deck::Deck& d, bool incomplete_ionization = false,
-                     std::optional<assemble::HoleMobility> holes = std::nullopt) {
+                     std::optional<assemble::HoleMobility> holes = std::nullopt,
+                     assemble::IonizationLevels levels = assemble::IonizationLevels::fixed) {
     auto plan = deck::build(d);
     if (!plan) FAIL(plan.error().message);
     plan->options.models.incomplete_ionization = incomplete_ionization;
+    plan->options.models.ionization_levels = levels;
     if (holes) plan->options.models.hole_mobility = *holes;
     const auto report = deck::run(*plan);
     if (!report) FAIL(report.error().message);
@@ -346,4 +348,29 @@ TEST_CASE("validation: the defaults against the resistivity benchmarks (Unit 35,
         CHECK(std::abs(gII - default_gaps[k].gap_incomplete) < pin);
     }
     CHECK(worst_boron <= 0.112);  // DC5
+}
+
+// Unit 37: the gaps with incomplete ionization at Altermatt et al.'s density-dependent levels, on
+// the defaults, per deck in the order of `resistors` (pinned, V5).
+constexpr double altermatt_gaps[] = {0.039, 0.006, -0.065, -0.052, 0.246, 0.028,    // phosphorus
+                                     -0.010, -0.002, 0.021, 0.176, 0.043};  // boron
+
+TEST_CASE("validation: incomplete ionization at density-dependent levels (Unit 37, II4)",
+          "[validation]") {
+    // II4, fixed before this ran (DECISIONS.md, Unit 37): at 1e18 and 1e19 cm^-3 the gaps with
+    // Altermatt's levels are smaller in magnitude than the fixed 45 meV level's (Unit 35's pins),
+    // for both dopants; every gap is pinned.
+    std::printf("resistivity benchmark (NBS SP 400-64), defaults with incomplete ionization: gap with "
+                "Altermatt's levels (the fixed level's in brackets)\n");
+    for (std::size_t k = 0; k < std::size(resistors); ++k) {
+        const Benchmark& b = resistors[k];
+        const double gap = simulated_rho(load(b.file), true, std::nullopt,
+                                         assemble::IonizationLevels::altermatt) /
+                               thurber_rho(b.dopant, b.N, true) - 1.0;
+        const double fixed = default_gaps[k].gap_incomplete;
+        std::printf("%-20s %+7.1f%% (%+7.1f%%)\n", b.file, 100.0 * gap, 100.0 * fixed);
+        CAPTURE(b.file, gap, fixed);
+        if (b.N >= 1e18) CHECK(std::abs(gap) < std::abs(fixed));  // II4
+        CHECK(std::abs(gap - altermatt_gaps[k]) < pin);
+    }
 }

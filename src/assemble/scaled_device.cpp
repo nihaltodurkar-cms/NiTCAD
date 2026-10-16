@@ -4,11 +4,13 @@
 #include <optional>
 #include <string>
 #include <utility>
+#include <variant>
 
 #include "NiTCAD/base/constants.hpp"
 #include "NiTCAD/base/contract.hpp"
 #include "NiTCAD/physics/bandgap_narrowing.hpp"
 #include "NiTCAD/physics/interface_traps.hpp"
+#include "NiTCAD/physics/ionization.hpp"
 #include "NiTCAD/physics/semiconductor.hpp"
 
 namespace NiTCAD::assemble::detail {
@@ -27,6 +29,23 @@ std::expected<ScaledDevice, base::Error> make_scaled_device(const device::Device
                                                             const PhysicsModels& models) {
     if (scaling.temperature_K != device.temperature_K()) {
         return std::unexpected(invalid("scaling temperature differs from the device's"));
+    }
+    // Unit 37 (DECISIONS.md I2): Altermatt's levels are silicon's phosphorus and boron.
+    const bool altermatt = models.incomplete_ionization &&
+                           models.ionization_levels == IonizationLevels::altermatt;
+    if (altermatt) {
+        for (const device::Region& r : device.regions()) {
+            const auto* s = std::get_if<physics::Semiconductor>(&r.material);
+            if (s && !(s->parameters().ionization == physics::silicon_parameters.ionization)) {
+                return std::unexpected(invalid(
+                    "ionization_levels altermatt: region '" + r.name +
+                    "' does not have silicon's ionization parameters (Altermatt's levels are "
+                    "phosphorus and boron in silicon)"));
+            }
+        }
+    } else if (models.ionization_levels != IonizationLevels::fixed &&
+               models.ionization_levels != IonizationLevels::altermatt) {
+        return std::unexpected(invalid("unknown ionization levels"));
     }
     const mesh::Mesh& m = device.mesh();
 
@@ -78,6 +97,15 @@ std::expected<ScaledDevice, base::Error> make_scaled_device(const device::Device
         const physics::IonizationParameters& ion = material.parameters().ionization;
         s.levels[i] = {ion.donor_eV / scaling.V_T, ion.acceptor_eV / scaling.V_T,
                        ion.donor_degeneracy, ion.acceptor_degeneracy};
+        if (altermatt) {  // each dopant's level and bound fraction at its own concentration (I3)
+            const double ND = device.donors()[i], NA = device.acceptors()[i];
+            s.levels[i].donor_kT = physics::dopant_level_eV(physics::altermatt_phosphorus, ND) /
+                                   scaling.V_T;
+            s.levels[i].acceptor_kT =
+                physics::dopant_level_eV(physics::altermatt_boron, NA) / scaling.V_T;
+            s.levels[i].donor_bound = physics::bound_fraction(physics::altermatt_phosphorus, ND);
+            s.levels[i].acceptor_bound = physics::bound_fraction(physics::altermatt_boron, NA);
+        }
         s.radiative[i] = material.parameters().radiative_cm3_s;
         const double depth = physics::intrinsic_level_depth_eV(material, T);
         s.band_shift[i] = (depth - reference_depth) / scaling.V_T;  // exactly 0 for one material
