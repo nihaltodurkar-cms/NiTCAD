@@ -942,7 +942,7 @@ a hidden `[.performance]` case (timing does not belong in ctest).
 
 ---
 
-### Unit 35 — published silicon defaults: band set and hole mobility (branch `physics/default-silicon`)
+### Unit 35 — published silicon defaults: band set and hole mobility (merged to `main` as `2d1fdc7`, PR #44, 2026-10-16)
 
 **Owner authorization and rulings (2026-10-15)**, asked before any work: change the defaults. (1) n_i from a
 published, physically consistent silicon band set (Eg(T), Nc(T), Nv(T)), verified from the source before coding — not
