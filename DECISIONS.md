@@ -1298,6 +1298,95 @@ Review (March 1969) would not download. Breakdown stays validated against the an
 
 ---
 
+### Unit 40 — generic fields and equations behind the assembler (proposed 2026-10-16; awaiting owner review, nothing implemented)
+
+**Owner request (2026-10-16):** document a refactor toward ARCHITECTURE.md 6.12.1–6.12.2 (the equation graph, 2.1) in
+three slices; documentation only on branch `assemble/fields-equations`; no implementation until explicitly authorized.
+Scope: this refactor only. No new physics, models, solver strategies, deck keys or file formats.
+
+**Why now (audited on `main` at `f153d57`).** `DriftDiffusion` is one class with the whole system in it:
+`src/assemble/drift_diffusion.cpp` (2036 lines) and `src/assemble/electrothermal.cpp` (1136 lines). The unknown layout
+is the hard-coded stride `m_` (3: ψ, n, p; 4 with θ last), read as `m_ * i + k` (and `m_ * m_` blocks) on 114 lines of `drift_diffusion.cpp`
+and as literal `4 * i + k` throughout `assemble_heat`; `stride()` is read by `solve/bias.cpp`, `solve/fields.hpp`,
+`solve/small_signal.cpp`, `solve/trace.cpp`, `solve/transient.cpp` and `electrothermal_test.cpp`. Each physics unit
+added private structs and an `add_*` pass to the class (`ImpactNode`, `TunnelNode`, `PathLayout`, `ThermalNode`, …).
+Several targets need the layout and the terms to be explicit: Unit 30's open finding (a natural-test norm monotone in
+reverse bias "needs the system's unknown layout"), block preconditioners for iterative solvers (field blocks), state
+transfer for mesh refinement (Unit 17; field location and units), and rendering (Unit 25; named fields with units).
+
+**The current accumulation order (to be preserved exactly; `DriftDiffusion::assemble`, isothermal path):**
+
+1. Per node in index order: a Dirichlet node (ohmic contact) sets its three rows and diagonal and skips the rest; an
+   insulator node sets its rows; otherwise the Poisson charge `-V (n - p - N)` is **assigned**, then incomplete
+   ionization **re-assigns** the Poisson row and its two entries, then the gate term is added, then SRH, Auger,
+   radiative, then the BDF storage term.
+2. The interface edges, in `InterfaceEdges` order (the insulator node's Poisson row, then the semiconductor node's
+   three rows).
+3. The mesh edges, in mesh edge order: Poisson only on edges without carriers; otherwise Poisson, electron and hole
+   fluxes into row a, then row b, skipping Dirichlet rows; interface (`charged`) edges skipped.
+4. Impact ionization, local band-to-band tunnelling, nonlocal path tunnelling, each in its own node or path order.
+
+The electrothermal model takes a separate pass (`assemble_heat`, stride 4, its own order); `small_signal_matrix`
+calls `assemble` with `interfaces = false` and adds the interface terms itself; `EquilibriumPoisson` is a separate
+assembler. Floating-point addition is not associative, so each value of F and J is a sum whose order is fixed by this
+sequence; any slice that changes the order of the additions into one entry changes results in the last bits.
+
+**Design (proposed):**
+
+| # | Choice | Why | Trade-off |
+|---|---|---|---|
+| FE1 | **Slice 1 — field descriptors and the per-node unknown map.** A `Field` descriptor: name, units, location (node only in this unit), unknown or fixed, region applicability (semiconductor, insulator, all). A `DofMap` built from the active fields: the unknown index of (field, node), the per-node block size, and the field of an unknown index. For every existing configuration it reproduces today's layout exactly: node-interleaved, ψ, n, p, then θ with the electrothermal model, every field at every node (insulator nodes keep their n, p unknowns held at 0). `stride()` stays and returns the block size; the solve layer and tests move to the map only where they read a field's slot. | The layout becomes data instead of `m_ * i + k` and `4 * i + k` literals; the norm (Unit 30), preconditioner blocks and field output can ask for a field's unknowns. Same layout, so checkpoints (Unit 29), run identities and the Jacobian pattern are unchanged. | Insulator nodes still carry unused density unknowns (dropping them changes the layout: deferred, FD5). Edge, face and cell fields are not in this unit. |
+| FE2 | **Slice 2 — equation-term interfaces.** A term declares the fields it writes and reads, its domain (nodes, mesh edges, interface edges, contacts, paths), its Jacobian pattern contribution at creation, and an `add(state, residual, values)` that adds its residual and exact partials at positions located once at creation (as today's `ab`/`ba`/`block_`). The existing passes become terms, each keeping its own loop body and order: node terms (Dirichlet, insulator, Poisson charge with the ionization override, gate, SRH, Auger, radiative, storage), interface-edge terms, mesh-edge terms (Poisson, Scharfetter–Gummel electron and hole fluxes), impact ionization, local and nonlocal tunnelling; and the heat equation and thermal variants of `assemble_heat`. | The 2.1 graph's local, edge and interface/boundary terms as objects; a new equation is a new term, not a new pass in the class. Exact Jacobians stay hand-written (6.12.3: no automatic differentiation in this unit). | Dispatch overhead per term (FG4 measures it); the terms are called per pass over their domain, never per entry, to keep it negligible. |
+| FE3 | **Order rule for slice 2.** Every entry of F and J receives its contributions in today's sequence with today's operands: node terms in the order of step 1 (assign → ionization re-assign → gate → SRH → Auger → radiative → storage), with today's skips (a Dirichlet or insulator node gets no later node term); then interface-edge, mesh-edge and global terms in steps 2, 3, 4, each over its domain in today's index order. A node term only writes its own node's rows, so the node terms may run fused in one node loop or as one loop per term without changing any entry's order; the fused loop is kept unless FG4 says otherwise (it is today's memory access pattern). Assignments stay assignments (the Dirichlet rows, the Poisson charge and its ionization override); no term is rewritten as "zero then add" where today's code assigns. | Bit-identical results (FG1) need every entry's additions in the same order with the same operands. | Sequential assembly only: concurrent assembly, where several edges add into one row, changes the order (deferred, FD6). |
+| FE4 | **Slice 3 — composition.** An assembler that builds the active term list and the `DofMap` from the device and `PhysicsModels`, in the FE3 order, and evaluates F, J, the time-step and small-signal forms over it. `DriftDiffusion` stays as a compatibility wrapper over it with every public member unchanged in signature, preconditions and errors (`create`, `evaluate`, `residual`, `storage`, `small_signal_matrix`, `terminal_currents`, the thermal and tunnelling members, the Newton hooks); the solve layer, the deck, `io` and the tests compile and run without change beyond FE1's map reads. | Composition per 6.12.2 (diode = Poisson + continuity; thermal = those + heat) without moving the solve layer; the wrapper keeps the change reviewable and revertible. | Two names for one system until a later unit retires the wrapper (not this unit). |
+| FE5 | **Diagnostics stay where they are in this unit.** `edge_currents`, `terminal_current_resolution`, `edge_flux_terms`, `band_edges`, `gate_charges`, `contact_charges`, `trap_occupancies`, `thermal_contact_heat` and the weighted-current inputs keep their current code paths, reading the layout through the map. | They are derived quantities, not residual terms; moving them is not needed for composition and multiplies the bit-identity surface. | They are not yet generic derived fields (6.12.1's "derived" kind is deferred, FD7). |
+| FE6 | **`EquilibriumPoisson` is out of scope** unless the owner rules otherwise (FD1). | It is a separate, small (284 lines) assembler with its own layout (ψ only); it composes from the same Poisson terms later. | Two Poisson implementations remain for now. |
+| FE7 | **One branch, three commits (one per slice), each passing every gate on its own**, in the order FE1, FE2, FE4. The owner may stop after any slice; slice 1 is useful alone (FG7). | Each commit is revertible and reviewable; a failed bit-identity check names the slice that caused it. | Slices 2 and 3 touch most of `drift_diffusion.cpp` and `electrothermal.cpp`; reviews are large. |
+
+**Acceptance gates, fixed before any implementation:**
+
+| # | Gate |
+|---|---|
+| FG1 | **Bit-identical numerics.** For every configuration the existing suites exercise (Boltzmann and Fermi–Dirac; every recombination, mobility, ionization, band-set and gap option; gates, insulators, interfaces and traps; heterojunctions and thermionic emission; impact ionization, local and nonlocal tunnelling; electrothermal; steady, transient, small-signal and `trace_bias`; tensor-grid and unstructured meshes in 1D, 2D and 3D), F and every Jacobian value equal the pre-refactor values **bit for bit** (compared as `std::bit_cast<std::uint64_t>`, not with a tolerance), as do the time-step and small-signal matrices. Checked by a comparison test that evaluates both implementations at the same states (equilibrium, biased, and perturbed off-solution states) before the old path is removed; the old path is kept, test-only, until slice 3 passes. |
+| FG2 | **Identical iteration counts and results.** Every Newton iteration count, step-cut count, line-search λ, arc-length step, transient step sequence and accepted/rejected step, every terminal current and field, and every run identity digest equal those recorded on `main` before the refactor. Recorded once from `main` into a reference file outside the tree (scratch, not committed) and compared exactly; every existing pin passes unchanged. |
+| FG3 | **FD-Jacobian checks.** Every existing FD-Jacobian gate passes unchanged; in addition each term (FE2) has its own FD check of its partials at a non-equilibrium state, under the same tolerances as the existing gates. |
+| FG4 | **No measurable assembly slowdown.** A Release benchmark (`[.benchmark]`, not in ctest) times `evaluate` (residual and Jacobian) and `residual` alone on: the legacy 1D diode, the 2D MOSFET with field mobility, a 3D unstructured device, the electrothermal diode, and a nonlocal-tunnelling diode. Measured before (on `main`) and after each slice on this machine, the median of at least 31 repetitions after warm-up; the gate is the post-slice median not above the pre-refactor median by more than the threshold of FD2 (proposed: 2%, or the measured run-to-run spread of the medians if that is larger, reported alongside). The end-to-end MOSFET and transient benchmarks' wall times are reported, not gated. |
+| FG5 | **Suites.** Full Release and Debug suites pass at every slice commit (today: Release 18/18, Debug 12/12); zero warnings under the existing flags. |
+| FG6 | **Mutation checks.** For every slice, mutants applied by hand to the new code are caught by the suites: at least, the `DofMap` swapping two fields, an off-by-one block size, the ionization override turned into an addition, two node terms swapped in order, an edge term skipping row b's Dirichlet check, a term's pattern entry dropped, a thermal term's θ column moved, the small-signal pass including interface terms twice, and the wrapper ignoring a model switch. Each is listed with the test that caught it; a surviving mutant is a missing gate, added before the slice is committed. |
+| FG7 | **Slice 1 stands alone.** After slice 1 alone: FG1–FG6 pass; `stride()` and every public signature unchanged; the field of every unknown index and the unknown of every (field, node) are queryable; no `m_ * i + k` or `4 * i + k` literal remains outside the map's own implementation in `assemble` and `solve`. |
+| FG8 | **No scope creep.** No change to physics, models, defaults, deck syntax, file formats, run-record fields or public `DriftDiffusion` signatures; `ARCHITECTURE.md` 2.2, 6.12.1–2 and 11.3 updated to "as built" only after the owner accepts the result. |
+
+**Risks:**
+
+| # | Risk | Mitigation |
+|---|---|---|
+| FR1 | Bit identity is fragile: a reordered sum, a hoisted common factor (e.g. computing `V * rate_scale_` once instead of per term), a fused multiply-add the compiler forms differently after inlining across a virtual boundary, or a temporary in a different precision changes the last bits and then the iteration counts. | FE3's order rule; terms keep today's expressions verbatim; FG1 compares bit patterns at many states before any iteration-level comparison; the existing `/fp` flags unchanged (N2). If the compiler contracts differently across the new boundaries, the slice stops and the owner is told, rather than tolerances being loosened. |
+| FR2 | Indirection costs: virtual dispatch or `std::function` per node or per edge would slow assembly measurably on large 3D meshes; the fused node loop (FE3) needs a per-node call per node term. | Edge and global terms: dispatch once per term per pass, the loop inside the term. Node terms: a per-node call through a list fixed at creation, or static composition (a fixed tuple or variant of terms) if FG4 shows the calls cost (FD3). |
+| FR3 | The ionization override and the Dirichlet assignments are not additive; a generic "terms add" interface would break them silently. | Assignment terms are explicit in the interface (a node term may set its rows); FG6 has the override-as-addition mutant. |
+| FR4 | The electrothermal pass (`assemble_heat`) duplicates the isothermal terms with T-dependent variants and its own order; folding both into one term list risks differences in either. | Separate thermal term variants with `assemble_heat`'s own order; FG1 runs on electrothermal configurations explicitly. |
+| FR5 | Small-signal assembly calls `assemble(…, interfaces = false)` and adds its own interface terms; transient storage and trap elimination thread through `TimeStep`. A missed special case changes AC or transient results only. | FG1 covers the time-step and small-signal matrices; FG2 covers transient step sequences and AC admittances. |
+| FR6 | Nonlocal tunnelling changes the Jacobian pattern after creation (`set_paths` → `locate_positions`); a term list with positions fixed at creation would go stale. | The path term relocates its positions on `set_paths` as today; a mutant that skips relocation (FG6, the dropped pattern entry) must be caught. |
+| FR7 | Review size: slices 2 and 3 rewrite most of 3200 lines. | One commit per slice (FE7); the old path kept test-only until slice 3 passes FG1; the owner may stop after slice 1. |
+| FR8 | Unused density unknowns on insulator nodes are baked into the layout; a later layout change (FD5) will change checkpoints and run identities. | Not done in this unit; recorded so the later unit plans a checkpoint version bump. |
+
+**Unresolved decisions (need an owner ruling before implementation):**
+
+| # | Question | Proposal |
+|---|---|---|
+| FD1 | Include `EquilibriumPoisson` in slice 3 (built from the same Poisson terms) or leave it separate? | Leave it separate in this unit (FE6). |
+| FD2 | The slowdown threshold for FG4. | 2%, or the measured spread of the medians if larger, with both reported. |
+| FD3 | Dispatch mechanism: virtual terms, or static composition (variant/tuple) chosen at creation? | Virtual dispatch once per term per pass; static composition only if FG4 fails. |
+| FD4 | Public or internal: is the `Field`/`DofMap`/term API public in `include/NiTCAD/assemble/`, or internal to `src/assemble/` with only the map queries public? | Internal terms; public read-only `DofMap` queries (the solve layer and later the norm and preconditioners need them). |
+| FD5 | Drop the density unknowns on insulator nodes (a layout change)? | No; a later unit with a checkpoint version bump. |
+| FD6 | Parallel assembly (edges or nodes split across threads, which changes the order of additions into shared rows and so is not bit-identical)? | Not in this unit; a later unit with tolerance-based gates the owner sets then. |
+| FD7 | Derived fields (currents, band edges, charges) as generic fields? | Not in this unit (FE5). |
+| FD8 | Where the pre-refactor reference values for FG2 live: scratch only, or a committed reference file? | Scratch only (regenerated from `main` on demand); nothing added to the tree. |
+
+**Status:** proposal only. No code is changed on `assemble/fields-equations`; implementation waits for the owner's
+explicit authorization and rulings on FD1–FD8.
+
+---
+
 ## New questions the advisor raised (not yet in `ARCHITECTURE.md`)
 
 None of these is decided. Each needs an owner position before the build scaffold fixes the flags.
