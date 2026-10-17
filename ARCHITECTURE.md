@@ -1702,7 +1702,8 @@ inputs; DECISIONS.md DK1–DK11):**
 
 `results` holds fields indexed by mesh node, terminal quantities per bias point, and a run record
 (inputs hash/identity, options, per-iteration convergence history, converged flag). It is plain data.
-An on-disk result format is **deferred** (R2), under the same independence rule as 6.5.
+An on-disk result format was deferred (R2), under the same independence rule as 6.5; it is met for sweeps and
+checkpoints (Unit 29) and for transient and small-signal runs (Unit 42), each with the run's provenance.
 
 **As built (Unit 10, `include/NiTCAD/results/`, header-only, depends on `base` only):**
 - `NodeFields`: potential, n and p per node.
@@ -1812,6 +1813,48 @@ W1–W8):**
 - Mutation checks (14), all caught (DECISIONS.md, Unit 32).
 - Not in Unit 32: transient and small-signal weighted currents (displacement-current terms), nonlocal tunnelling (a
   path term), a weighted current per region or cut chosen by the user.
+
+**As built (Unit 42, results and provenance; approved and accepted by the owner 2026-10-17; DECISIONS.md PV1–PV7,
+PD1–PD5, PG1–PG8):**
+- `results::Provenance`, in every `RunRecord`: the build (version, git revision and a `dirty` flag, build type,
+  compiler, Eigen version), the Eigen cache sizes products are blocked by (fixed, 6.8), the loaded MKL runtime's
+  version, the OS version, the processor's brand string and logical CPU count, the start (UTC, ISO 8601, to the
+  millisecond) and the wall time. No host or user name (PD3). The linear backend and its threads are already
+  settings and are not repeated.
+- **Not part of the input identity** (PV2): run identities and checkpoints written before Unit 42 stay valid.
+- **Where it comes from:** `cmake/build_info.cmake` writes the generated `NiTCAD/build_info.hpp` at every build,
+  replacing it only when its text changes, so a build after no change recompiles nothing and a new revision
+  recompiles `src/solve/provenance.cpp` alone. Without git the revision is `unknown`. `linalg::eigen_build()` gives
+  Eigen's version and sizes; `solve::provenance()` adds the run-time facts. Every `make_run_record` attaches it, and
+  the four public runs (`sweep_bias`, `solve_transient`, `solve_small_signal`, `trace_bias`) set `wall_s` when they
+  return.
+- **Files:** sweeps (run-record key 3) and checkpoints (key 7, `io::Checkpoint::provenance`) carry it, every field
+  optional on read (IO2); files without it load with an empty provenance. No format version change. Two runs of
+  one deck give files that differ in the start and wall time (PD2).
+- **Transient and small-signal files** (content kinds 5 and 6): `io::save_transient` / `load_transient`,
+  `save_small_signal` / `load_small_signal`; every field bit for bit, complex values as (real, imaginary) pairs.
+  Each point's admittances are one array of frequencies × contacts² values and its resolutions one of
+  frequencies × contacts, so a loaded run's `admittance(point, frequency, i, j)` stays in bounds; a snapshot of a
+  missing time point, an order outside 0–2 and fields of a missing contact are refused. A trace is a `Sweep` and
+  goes through `save_sweep`. R2 is now met for every result type.
+- **The runner:** `nitcad --version` prints the build on one line; `nitcad run` prints the build, the platform, the
+  start and the wall time after the files it wrote. The CSV table is unchanged (PD4). The version stays `0.0.0`
+  until a release policy exists (PD5).
+- Gates (`tests/solve/provenance_test.cpp`, 3 cases; `tests/io/provenance_test.cpp`, 2; `tests/io/run_files_test.cpp`,
+  5; ctest `cli_version`):
+  - every public run records a true provenance (the revision a commit of the source's history, the cache sizes,
+    the MKL version only with a runtime loaded, the CPU count, the start's format, 0 < wall time ≤ the call's);
+    two records of one input made at different times share the identity;
+  - provenance round-trips in sweeps and checkpoints; `tests/io/fixtures/pre_unit42/` (files written by `nitcad`
+    from `main` at `67e8fe5`) load with an empty provenance;
+  - transient and small-signal runs with NaN, −0, infinities, denormals, stops and unfinished histories round-trip
+    bit for bit; truncation, a flipped byte, appended bytes, other kinds and shapes that do not fit are refused;
+  - **no numerical change** (PG1): with `--order decl`, one MKL configuration and P-core pinning, every one of the
+    362 test-case blocks of `main`'s assembly traces over the nine traced entries is byte-identical, run
+    identities included.
+- Mutation checks (29), all caught (DECISIONS.md, Unit 42).
+- Not in Unit 42: deck analyses for transient, small-signal and trace runs (PD1: the next unit); visualization
+  formats (Unit 25); cross-machine checksums (6.8); compression; file locking.
 
 ### 6.7 Error policy (R1, decided)
 
@@ -2729,12 +2772,12 @@ exists, not finished), **planned** (nothing built). Audit of 2026-10-09, against
 | Area | What exists (audited) | Status | Next step |
 |---|---|---|---|
 | Robust nonlinear solving | Newton with componentwise clipping (6.2); the generation-free retry (Units 19, 20); arc-length `trace_bias` (Unit 19) | **Bias step cutting verified, on `main`** (Unit 28, below; `06b708d`, PR #31); **Newton line search verified, opt-in, on `main`** (Unit 30, below; `f3e2811`, PR #32) | A natural-test norm monotone in reverse bias; a Gummel or pseudo-transient fallback |
-| Input/output, checkpoint/restart | The `io` layer (approved 2026-10-09): versioned, checksummed, atomic files for meshes, sweeps and checkpoints; device files and the text input deck (Unit 31) | **Verified, on `main`** (Unit 29, 6.6; `f69a7a8`, PR #33); **device files and the deck verified, on `main`** (Unit 31, 6.5; `6f67510`, PR #37) | Transient, small-signal and `trace_bias` decks with their results on disk |
+| Input/output, checkpoint/restart | The `io` layer (approved 2026-10-09): versioned, checksummed, atomic files for meshes, sweeps and checkpoints; device files and the text input deck (Unit 31) | **Verified, on `main`** (Unit 29, 6.6; `f69a7a8`, PR #33); **device files and the deck verified, on `main`** (Unit 31, 6.5; `6f67510`, PR #37); **transient and small-signal files verified** (Unit 42, 6.6; PR #52) | Transient, small-signal and `trace_bias` deck analyses writing those files (the next unit, DECISIONS.md PD1) |
 | Geometry and unstructured 3D meshing | `Mesh::from_parts` accepts any valid node/edge/volume graph; besides the tensor-grid producer, Unit 16 added the 2D and 3D Delaunay generators and the simplex import (checked duals P0–P5, P4-certified interfaces, contact patches, structured 2D boundary layers); nonlocal BTBT still needs tensor cells (6.11, M16) | **Verified, on `main`** (Unit 16, 6.11; `a09cf43`, PR #35) | Non-convex 3D domains, 3D interface junction lines, interfaces across patched faces and 3D boundary layers (U7); an unstructured locator for nonlocal BTBT (M16) |
 | Low-current accuracy | `terminal_current_resolution` reports the floor (Unit 15); the weighted terminal current with an adjoint error estimate (Unit 32, 6.6) | **Verified, on `main`** (Unit 32; `6e54c69`, PR #39): the MOSFET off state resolved at every Vg, sub-floor diode currents on the ideal-diode law to 0.1% | Weighted transient and small-signal currents; a path term for nonlocal tunnelling |
 | Generic fields/equations | Field descriptors and the unknowns' map; the drift-diffusion and electrothermal rows as equation terms composed by equation set, behind the unchanged `DriftDiffusion` (Unit 40, 6.12.1–2) | **Verified, bit-identical, on `main`** (Unit 40; `629bed0`, PR #50; below) | Move the model data out of `DriftDiffusion` and retire it as the wrapper; derived and edge/cell fields; `EquilibriumPoisson` from the same terms |
 | Scalable linear solvers | Eigen SparseLU (default), PARDISO opt-in (Unit 18) | planned | Iterative Krylov with ILU/AMG behind `linalg`; parallel assembly |
-| Results and provenance | Plain-data results; run record with identity digest (6.6); sweeps persisted bit for bit (Unit 29) | partial | Build/version stamp in files; transient and small-signal results on disk |
+| Results and provenance | Plain-data results; run record with identity digest (6.6); sweeps persisted bit for bit (Unit 29); provenance (build, revision, platform, start, wall time) in every run record and file, transient and small-signal files, `nitcad --version` (Unit 42) | **Verified** (Unit 42, 6.6; PR #52; DECISIONS.md PV1–PV7) | A release version policy (PD5); cross-machine checksums (6.8) |
 | Visualization, GUI, batch | The `nitcad check|run` batch runner over the input deck (Unit 31); no visualization or GUI (Units 25, 26) | **Batch runner verified, on `main`** (Unit 31; `6f67510`, PR #37); visualization and GUI planned | Rendering of meshes and fields (Unit 25), then the GUI over the same plan (Unit 26) |
 | Validation against published/measured data | Legacy, analytic and convergence gates throughout; resistivity against dopant density (NBS SP 400-64) and the measured n_i(300 K) as benchmark decks (Unit 33, 10.1) | **Verified, on `main`** (Unit 33; `a14ac96`, PR #41): gaps found and pinned (boron mobility up to +48%, incomplete ionization at heavy doping, n_i +10%); the opt-in Masetti hole mobility (Unit 34; `e14a53f`, PR #42) brings boron to within 11% (AC3/AC5 at 1e18 accepted as documented limitations); Unit 35 (`2d1fdc7`, PR #44) makes Masetti and a published band set (n_i within the measurement's uncertainty) the defaults | A density-dependent ionization level (owner decision); breakdown and device-level benchmarks from accessible sources |
 

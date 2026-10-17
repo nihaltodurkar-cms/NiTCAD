@@ -1772,7 +1772,7 @@ result; bit-identity across machines is not promised, and tolerances stay the co
 
 **Status:** fixed; merged to `main` as `67e8fe5` (PR #51, 2026-10-17).
 
-### Unit 42 — results and provenance (proposed and authorized 2026-10-17; on `results/provenance`)
+### Unit 42 — results and provenance (proposed, authorized and accepted 2026-10-17; on `results/provenance`, PR #52)
 
 **Owner request (2026-10-17):** a scope proposal for the "Results and provenance" row of ARCHITECTURE.md 11.3
 (status "partial"; missing "build/version stamp in files; transient and small-signal results on disk"). Documentation
@@ -1885,8 +1885,8 @@ CSV table is unchanged; PD5 the version stays `0.0.0`.
   validation 8), `result.identity` included. The only blocks without a counterpart are this unit's three new solve
   cases. No numerical result and no input identity changed.
 
-**Status:** commits 1–4 built and gated; awaiting the owner's acceptance. ARCHITECTURE.md 6.6 and 11.3 are
-updated to "as built" after it (PG8).
+**Status:** accepted by the owner (2026-10-17, "accepted"); ARCHITECTURE.md 6.6 and 11.3 updated to "as built"
+(PG8). PR #52; not merged.
 
 ---
 
