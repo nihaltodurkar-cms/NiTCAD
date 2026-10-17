@@ -1,0 +1,5 @@
+# NiTCAD's binary files (io/files.hpp): never converted, so committed fixtures stay byte for byte.
+*.nitsweep binary
+*.nitckpt binary
+*.nitdev binary
+*.nitmesh binary

@@ -325,10 +325,14 @@ add_executable(nitcad_io_test
   tests/io/files_test.cpp
   tests/io/origin_test.cpp
   tests/io/generated_test.cpp
-  tests/io/device_file_test.cpp)
+  tests/io/device_file_test.cpp
+  tests/io/provenance_test.cpp)
 # The record test reads the private encoding directly.
 target_include_directories(nitcad_io_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/io")
 target_link_libraries(nitcad_io_test PRIVATE NiTCAD::io Catch2::Catch2WithMain)
+# Files written by earlier builds, which must keep loading (Unit 42, PG3).
+target_compile_definitions(nitcad_io_test PRIVATE
+  NITCAD_IO_FIXTURES="${CMAKE_CURRENT_SOURCE_DIR}/tests/io/fixtures")
 add_test(NAME io COMMAND nitcad_io_test)
 
 # --- solve layer (Newton, equilibrium and bias solves, sweeps, cancellation, progress) ---

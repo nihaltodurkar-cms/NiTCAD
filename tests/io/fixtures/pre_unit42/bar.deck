@@ -1,0 +1,31 @@
+# Compatibility fixture (Unit 42, gate PG3): run by nitcad built from main at 67e8fe5, before
+# provenance existed. Its output files are committed beside it and must keep loading.
+[device]
+temperature = 300
+
+[mesh]
+type = tensor
+x = linspace(0, 10um, 11)
+
+[region silicon]
+material = silicon
+
+[doping]
+profile = acceptor constant 1e16
+
+[contact left]
+kind = ohmic
+patch = x_min
+
+[contact right]
+kind = ohmic
+patch = x_max
+
+[sweep]
+contact left = 0, 0.01
+
+[output]
+sweep = bar.nitsweep
+checkpoint = bar.nitckpt
+device = bar.nitdev
+mesh = bar.nitmesh

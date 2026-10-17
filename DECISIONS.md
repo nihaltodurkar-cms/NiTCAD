@@ -1772,7 +1772,7 @@ result; bit-identity across machines is not promised, and tolerances stay the co
 
 **Status:** fixed; merged to `main` as `67e8fe5` (PR #51, 2026-10-17).
 
-### Unit 42 — results and provenance (proposed 2026-10-17; not authorized; on `results/provenance`)
+### Unit 42 — results and provenance (proposed and authorized 2026-10-17; on `results/provenance`)
 
 **Owner request (2026-10-17):** a scope proposal for the "Results and provenance" row of ARCHITECTURE.md 11.3
 (status "partial"; missing "build/version stamp in files; transient and small-signal results on disk"). Documentation
@@ -1834,7 +1834,27 @@ report (PV6). Each passes PG6 on its own.
 - A build from a source archive has no git: the revision is `unknown` and `dirty` false, which PG5 must accept.
 - The build-time git step must not force a rebuild when nothing changed (checked by a second, no-op build).
 
-**Status:** proposal only; no code. Awaiting the owner's approval and rulings PD1–PD5.
+**Owner approval (2026-10-17):** "go ahead", taken as approval of the proposal with every recommendation:
+PD1 the deck analyses are the next unit; PD2 start and wall time are in files; PD3 no host or user name; PD4 the
+CSV table is unchanged; PD5 the version stays `0.0.0`.
+
+**As built, so far:**
+- Commit 1 (`4831f75`): `results::Provenance` in `RunRecord`; `cmake/build_info.cmake` writes the generated
+  `NiTCAD/build_info.hpp` at every build, only when its text changes (a second build recompiles nothing);
+  `linalg::eigen_build()`; `solve::provenance()`; every `make_run_record` attaches it and the four public runs
+  stamp `wall_s`. The backend and its thread count are already settings, so they are not repeated (PV1 refined).
+  Release 19/19. Mutants: 8 applied, 8 caught (the identity hashing the start time; a run's wall time dropped,
+  for trace and for transient; cache sizes swapped; the start time to whole seconds; a wrong revision; a wrong CPU
+  count; the Eigen version dropped). One further mutant, `%T` replaced by `%H:%M:%S`, is equivalent: `%S`
+  prints the fractional seconds too.
+- Commit 2: provenance as run-record key 3 and checkpoint key 7 (`io::Checkpoint::provenance`), every field
+  optional on read. Fixtures `tests/io/fixtures/pre_unit42/` (a 1D bar run by `nitcad` built from `main` at
+  `67e8fe5`) load with an empty provenance (PG3). `.gitattributes` keeps the binary fixtures unconverted.
+  Mutants: 7 applied, 7 caught (provenance not written in the run record or in the checkpoint; a field not read;
+  provenance required on read; the dirty flag inverted; wall time not written; its key colliding with the
+  settings').
+
+**Status:** commits 1–2 built; commits 3 (transient and small-signal files) and 4 (the runner) to come.
 
 ---
 

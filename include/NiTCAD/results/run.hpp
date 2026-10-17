@@ -37,6 +37,8 @@ struct Provenance {
     std::uint32_t logical_cpus = 0;
     std::string started_utc;  // ISO 8601, e.g. "2026-10-17T09:12:03.123Z"
     double wall_s = 0.0;      // from the run's start to its result; 0 for a record made alone
+
+    bool operator==(const Provenance&) const = default;
 };
 
 struct RunRecord {

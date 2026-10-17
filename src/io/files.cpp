@@ -282,6 +282,12 @@ constexpr std::uint16_t bias = 1, fields = 2, bands = 3, current = 4, resolution
 }
 namespace run_key {
 constexpr std::uint16_t identity = 1, setting = 2, name = 1, value = 2;
+constexpr std::uint16_t provenance = 3;  // Unit 42; absent in older files
+}
+namespace provenance_key {
+constexpr std::uint16_t version = 1, revision = 2, dirty = 3, build_type = 4, compiler = 5,
+                        eigen_version = 6, eigen_cache = 7, mkl_version = 8, os = 9, cpu = 10,
+                        logical_cpus = 11, started = 12, wall = 13;
 }
 namespace error_key {
 constexpr std::uint16_t code = 1, message = 2, index = 3, value = 4;
@@ -292,6 +298,7 @@ constexpr std::uint16_t run = 1, point = 2, stopped = 3, unfinished = 4;
 namespace checkpoint_key {
 constexpr std::uint16_t mesh_digest = 1, run_identity = 2, bias = 3, thermal_bias = 4,
                         fields = 5, nodes = 6;
+constexpr std::uint16_t provenance = 7;  // Unit 42; absent in older files
 }
 
 Writer write_fields(const results::NodeFields& f) {
@@ -467,6 +474,62 @@ std::expected<results::BiasPoint, base::Error> read_point(const Reader& r) {
     return p;
 }
 
+Writer write_provenance(const results::Provenance& p) {
+    namespace k = provenance_key;
+    Writer w;
+    w.text(k::version, p.version);
+    w.text(k::revision, p.revision);
+    w.u64(k::dirty, p.dirty ? 1 : 0);
+    w.text(k::build_type, p.build_type);
+    w.text(k::compiler, p.compiler);
+    w.text(k::eigen_version, p.eigen_version);
+    w.i64s(k::eigen_cache, p.eigen_cache_bytes);
+    w.text(k::mkl_version, p.mkl_version);
+    w.text(k::os, p.os);
+    w.text(k::cpu, p.cpu);
+    w.u64(k::logical_cpus, p.logical_cpus);
+    w.text(k::started, p.started_utc);
+    w.f64(k::wall, p.wall_s);
+    return w;
+}
+
+// Every field is optional (IO2): a provenance written by a later revision may lack one.
+std::expected<results::Provenance, base::Error> read_provenance(const Reader& r) {
+    namespace k = provenance_key;
+    results::Provenance p;
+    const auto text = [&r](std::uint16_t key, std::string& out) -> std::expected<void, base::Error> {
+        if (!r.has(key)) return {};
+        NITCAD_IO_TRY(v, r.text(key));
+        out = std::move(v);
+        return {};
+    };
+    for (const auto& [key, out] :
+         {std::pair{k::version, &p.version}, std::pair{k::revision, &p.revision},
+          std::pair{k::build_type, &p.build_type}, std::pair{k::compiler, &p.compiler},
+          std::pair{k::eigen_version, &p.eigen_version}, std::pair{k::mkl_version, &p.mkl_version},
+          std::pair{k::os, &p.os}, std::pair{k::cpu, &p.cpu},
+          std::pair{k::started, &p.started_utc}}) {
+        if (auto t = text(key, *out); !t) return std::unexpected(std::move(t.error()));
+    }
+    NITCAD_IO_TRY(dirty, r.u64_or(k::dirty, 0));
+    if (dirty > 1) return std::unexpected(corrupt("provenance dirty flag"));
+    p.dirty = dirty == 1;
+    if (r.has(k::eigen_cache)) {
+        NITCAD_IO_TRY(cache, r.i64s(k::eigen_cache));
+        p.eigen_cache_bytes = std::move(cache);
+    }
+    NITCAD_IO_TRY(cpus, r.u64_or(k::logical_cpus, 0));
+    if (cpus > std::numeric_limits<std::uint32_t>::max()) {
+        return std::unexpected(corrupt("provenance logical CPU count"));
+    }
+    p.logical_cpus = static_cast<std::uint32_t>(cpus);
+    if (r.has(k::wall)) {
+        NITCAD_IO_TRY(wall, r.f64(k::wall));
+        p.wall_s = wall;
+    }
+    return p;
+}
+
 Writer write_run(const results::RunRecord& run) {
     Writer w;
     w.u64(run_key::identity, run.input_identity);
@@ -476,6 +539,7 @@ Writer write_run(const results::RunRecord& run) {
         s.f64(run_key::value, value);
         w.record(run_key::setting, s);
     }
+    w.record(run_key::provenance, write_provenance(run.provenance));
     return w;
 }
 
@@ -488,6 +552,11 @@ std::expected<results::RunRecord, base::Error> read_run(const Reader& r) {
         NITCAD_IO_TRY(name, s.text(run_key::name));
         NITCAD_IO_TRY(value, s.f64(run_key::value));
         run.settings.emplace_back(std::move(name), value);
+    }
+    if (r.has(run_key::provenance)) {
+        NITCAD_IO_TRY(p, r.record(run_key::provenance));
+        NITCAD_IO_TRY(provenance, read_provenance(p));
+        run.provenance = std::move(provenance);
     }
     return run;
 }
@@ -726,6 +795,7 @@ std::expected<void, base::Error> save_checkpoint(const std::filesystem::path& pa
     w.f64s(checkpoint_key::bias, point.bias_V);
     w.f64s(checkpoint_key::thermal_bias, point.thermal_bias_K);
     w.record(checkpoint_key::fields, write_fields(point.fields));
+    w.record(checkpoint_key::provenance, write_provenance(run.provenance));
     return write_file(path, Content::checkpoint, w);
 }
 
@@ -755,6 +825,11 @@ std::expected<Checkpoint, base::Error> load_checkpoint(const std::filesystem::pa
         return std::unexpected(corrupt("checkpoint fields do not have one value per node"));
     }
     c.fields = std::move(fields);
+    if (r.has(checkpoint_key::provenance)) {
+        NITCAD_IO_TRY(p, r.record(checkpoint_key::provenance));
+        NITCAD_IO_TRY(provenance, read_provenance(p));
+        c.provenance = std::move(provenance);
+    }
     return c;
 }
 

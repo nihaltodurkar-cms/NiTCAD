@@ -76,6 +76,8 @@ struct Checkpoint {
     std::vector<double> bias_V;        // per contact
     std::vector<double> thermal_bias_K;  // per thermal contact; empty without the model
     results::NodeFields fields;
+    // Of the run that wrote it (Unit 42); empty for a checkpoint written before Unit 42.
+    results::Provenance provenance;
 };
 
 [[nodiscard]] std::expected<void, base::Error> save_checkpoint(const std::filesystem::path& path,
