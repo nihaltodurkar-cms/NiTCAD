@@ -14,6 +14,9 @@
 #include "NiTCAD/linalg/mkl_runtime.hpp"
 #include "NiTCAD/solve/bias.hpp"
 #include "NiTCAD/solve/equilibrium.hpp"
+#include "NiTCAD/solve/small_signal.hpp"
+#include "NiTCAD/solve/trace.hpp"
+#include "NiTCAD/solve/transient.hpp"
 
 namespace NiTCAD::deck {
 
@@ -38,6 +41,8 @@ std::string format(double v) {
     const int n = std::snprintf(buffer, sizeof buffer, "%.17g", v);
     return std::string(buffer, static_cast<std::size_t>(n));
 }
+
+std::expected<void, base::Error> write_text(const std::filesystem::path& path, const std::string& text);
 
 }  // namespace
 
@@ -67,7 +72,61 @@ std::expected<void, base::Error> write_table(const std::filesystem::path& path,
         }
         text += "," + std::to_string(p.bias_substeps) + "\n";
     }
-    // Atomic like the binary files: a temporary beside the target, renamed over it.
+    return write_text(path, text);
+}
+
+std::expected<void, base::Error> write_transient_table(const std::filesystem::path& path,
+                                                       const device::Device& device,
+                                                       const results::Transient& run) {
+    std::string text = "time s,step s,order";
+    for (const char* what : {" V", " A", " conduction A", " displacement A"}) {
+        for (const device::Contact& c : device.contacts()) text += "," + c.name + what;
+    }
+    text += "\n";
+    for (const results::TimePoint& p : run.points) {
+        text += format(p.time_s) + "," + format(p.step_s) + "," + std::to_string(p.order);
+        for (const auto* v : {&p.bias_V, &p.terminal_current, &p.conduction_current, &p.displacement_current}) {
+            for (const double x : *v) text += "," + format(x);
+        }
+        text += "\n";
+    }
+    return write_text(path, text);
+}
+
+std::expected<void, base::Error> write_small_signal_table(const std::filesystem::path& path,
+                                                          const device::Device& device,
+                                                          const results::SmallSignal& run) {
+    const auto contacts = device.contacts();
+    std::string text = "point,frequency Hz";
+    for (const device::Contact& c : contacts) text += "," + c.name + " V";
+    for (const char* what : {"G ", "C "}) {
+        for (const device::Contact& i : contacts) {
+            for (const device::Contact& j : contacts) {
+                text += std::string(",") + what + i.name + "," + j.name + (what[0] == 'G' ? " S" : " F");
+            }
+        }
+    }
+    text += "\n";
+    for (std::size_t k = 0; k < run.points.size(); ++k) {
+        for (std::size_t f = 0; f < run.frequency_Hz.size(); ++f) {
+            text += std::to_string(k) + "," + format(run.frequency_Hz[f]);
+            for (const double v : run.points[k].dc.bias_V) text += "," + format(v);
+            for (std::size_t i = 0; i < run.contacts; ++i) {
+                for (std::size_t j = 0; j < run.contacts; ++j) text += "," + format(run.conductance(k, f, i, j));
+            }
+            for (std::size_t i = 0; i < run.contacts; ++i) {
+                for (std::size_t j = 0; j < run.contacts; ++j) text += "," + format(run.capacitance(k, f, i, j));
+            }
+            text += "\n";
+        }
+    }
+    return write_text(path, text);
+}
+
+namespace {
+
+// Atomic like the binary files: a temporary beside the target, renamed over it.
+std::expected<void, base::Error> write_text(const std::filesystem::path& path, const std::string& text) {
     std::filesystem::path temporary = path;
     temporary += ".tmp";
     {
@@ -94,14 +153,10 @@ std::expected<void, base::Error> write_table(const std::filesystem::path& path,
     return {};
 }
 
+}  // namespace
+
 std::expected<RunReport, base::Error> run(const Plan& plan, const solve::RunControl& control) {
     RunReport report;
-    if (plan.analysis != Analysis::equilibrium && plan.analysis != Analysis::sweep) {
-        return std::unexpected(base::Error{base::ErrorCode::invalid_input,
-                                           "this build does not run [transient], [small_signal] or "
-                                           "[trace] decks yet (Unit 43)",
-                                           std::nullopt});
-    }
     if (plan.options.linear.backend == linalg::SolverBackend::mkl_pardiso) {
         auto mkl = linalg::load_mkl_runtime(plan.mkl_runtime);
         if (!mkl) return std::unexpected(std::move(mkl.error()));
@@ -139,6 +194,58 @@ std::expected<RunReport, base::Error> run(const Plan& plan, const solve::RunCont
             if (auto w = written(out.checkpoint, std::move(r)); !w) return std::unexpected(w.error());
         }
         report.equilibrium = std::move(*eq);
+        return report;
+    }
+
+    // Unit 43: the analysis's own options, with the plan's models and solver as their `steady`.
+    if (plan.analysis == Analysis::transient) {
+        solve::TransientOptions o = plan.transient;
+        o.steady = plan.options;
+        auto t = solve::solve_transient(plan.device, plan.waveforms, o, nullptr, control);
+        if (!t) return std::unexpected(std::move(t.error()));
+        if (!out.transient.empty()) {
+            if (auto w = written(out.transient, io::save_transient(out.transient, *t)); !w) return std::unexpected(w.error());
+        }
+        if (!out.table.empty()) {
+            if (auto w = written(out.table, write_transient_table(out.table, plan.device, *t)); !w) return std::unexpected(w.error());
+        }
+        report.transient = std::move(*t);
+        return report;
+    }
+    if (plan.analysis == Analysis::small_signal) {
+        solve::SmallSignalOptions o = plan.small_signal;
+        o.steady = plan.options;
+        auto s = solve::solve_small_signal(plan.device, plan.points, o, nullptr, control);
+        if (!s) return std::unexpected(std::move(s.error()));
+        if (!out.small_signal.empty()) {
+            if (auto w = written(out.small_signal, io::save_small_signal(out.small_signal, *s)); !w) return std::unexpected(w.error());
+        }
+        if (!out.table.empty()) {
+            if (auto w = written(out.table, write_small_signal_table(out.table, plan.device, *s)); !w) return std::unexpected(w.error());
+        }
+        if (!out.checkpoint.empty() && !s->points.empty()) {
+            auto r = io::save_checkpoint(out.checkpoint, plan.device.mesh(), s->run, s->points.back().dc);
+            if (auto w = written(out.checkpoint, std::move(r)); !w) return std::unexpected(w.error());
+        }
+        report.small_signal = std::move(*s);
+        return report;
+    }
+    if (plan.analysis == Analysis::trace) {
+        solve::TraceOptions o = plan.trace;
+        o.steady = plan.options;
+        auto s = solve::trace_bias(plan.device, o, nullptr, control);
+        if (!s) return std::unexpected(std::move(s.error()));
+        if (!out.sweep.empty()) {
+            if (auto w = written(out.sweep, io::save_sweep(out.sweep, *s)); !w) return std::unexpected(w.error());
+        }
+        if (!out.table.empty()) {
+            if (auto w = written(out.table, write_table(out.table, plan.device, *s)); !w) return std::unexpected(w.error());
+        }
+        if (!out.checkpoint.empty() && !s->points.empty()) {
+            auto r = io::save_checkpoint(out.checkpoint, plan.device.mesh(), s->run, s->points.back());
+            if (auto w = written(out.checkpoint, std::move(r)); !w) return std::unexpected(w.error());
+        }
+        report.sweep = std::move(*s);
         return report;
     }
 

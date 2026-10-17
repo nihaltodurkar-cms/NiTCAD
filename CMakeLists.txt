@@ -427,6 +427,7 @@ add_executable(nitcad_deck_test
   tests/deck/build_test.cpp
   tests/deck/run_test.cpp
   tests/deck/analyses_test.cpp
+  tests/deck/analyses_run_test.cpp
   tests/baseline/trace_listener.cpp)
 target_include_directories(nitcad_deck_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/deck")
 target_link_libraries(nitcad_deck_test PRIVATE NiTCAD::deck Catch2::Catch2WithMain)
