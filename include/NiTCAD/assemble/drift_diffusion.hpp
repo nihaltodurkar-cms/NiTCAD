@@ -229,12 +229,14 @@
 #include <cstddef>
 #include <cstdint>
 #include <expected>
+#include <memory>
 #include <optional>
 #include <span>
 #include <utility>
 #include <vector>
 
 #include "NiTCAD/assemble/band_edges.hpp"
+#include "NiTCAD/assemble/fields.hpp"
 #include "NiTCAD/assemble/gate.hpp"
 #include "NiTCAD/assemble/interface_edges.hpp"
 #include "NiTCAD/assemble/models.hpp"
@@ -274,6 +276,9 @@ public:
     [[nodiscard]] std::size_t contact_count() const noexcept { return contact_count_; }
     // Unknowns per node: 3 (psi, n, p), or 4 with the electrothermal model (theta last).
     [[nodiscard]] std::size_t stride() const noexcept { return m_; }
+    // Where each field's unknowns are (fields.hpp; Unit 40): node-interleaved, stride() per node.
+    // Precondition (NITCAD_EXPECTS): not a moved-from system.
+    [[nodiscard]] const DofMap& dofs() const noexcept;
 
     struct TimeStep;  // a BDF time step (below)
 
@@ -473,6 +478,14 @@ public:
 private:
     DriftDiffusion() = default;
 
+    // The equation terms of the rows and their composition from the device and the models
+    // (Unit 40, DECISIONS.md FE2, FE4): internal to the assemble library (src/assemble/terms.hpp,
+    // composition.hpp), which names them through TermAccess.
+    class Term;
+    struct Terms;
+    class Composition;
+    friend struct TermAccess;
+
     struct EdgeTerm {
         std::size_t a, b;   // end nodes
         double c;           // et * scaled coupling, Poisson
@@ -541,8 +554,6 @@ private:
         double current;  // [A/cm^2] per unit scaled flux: J0 / scaled coupling area
         std::size_t n_p, p_n;
     };
-    void add_impact_generation(std::span<const double> x, std::span<const NodeDegeneracy> g,
-                               std::span<double> f, std::span<double> values) const;
 
     // Local band-to-band tunnelling (Unit 20): per node, its carrier edges (in field_edges_) and
     // the pseudo-inverse of sum t t^T, as ImpactNode, and its material's Kane pair.
@@ -557,8 +568,6 @@ private:
         double t[3];
         double field;  // [V/cm] per unit (psi_b - psi_a)
     };
-    void add_local_tunnelling(std::span<const double> x, std::span<double> f,
-                              std::span<double> values) const;
 
     // Nonlocal tunnelling (Unit 20): per frozen path, the nodes whose psi its rows read (columns),
     // the nodes its electrons go to (deposit), the start's hole-row positions per column and the
@@ -580,8 +589,6 @@ private:
     [[nodiscard]] PathLayout layout(const TunnelPath& p) const;
     void path_terms(const TunnelPath& p, const PathLayout& l, std::span<const double> x,
                     PathTerms& t) const;
-    void add_path_tunnelling(std::span<const double> x, std::span<double> f,
-                             std::span<double> values) const;
     // The Jacobian positions every term uses, after the pattern changed (set_paths).
     void locate_positions();
 
@@ -675,16 +682,6 @@ private:
         double value, d_theta;
     };
     [[nodiscard]] Shift electrode_shift(std::size_t node, const ThermalState& t) const;
-    // Impact ionization with the electrothermal model: add_impact_generation's terms with the
-    // thermal fluxes and gamma at each node's T.
-    void add_thermal_impact(std::span<const double> x, std::span<const ThermalState> t,
-                            std::span<const NodeLevels> g, std::span<double> f,
-                            std::span<double> values) const;
-    // The interface edges' terms with the electrothermal model (fixed charge and surface
-    // recombination; traps are refused): the half-edge fluxes and the surface rate at the
-    // semiconductor node's T.
-    void add_thermal_interfaces(std::span<const double> x, std::span<const ThermalState> t,
-                                std::span<double> f, std::span<double> values) const;
     // Adds G shift of every p-polysilicon gate node to its gate's charge (gates_.charges is at T0).
     void add_gate_shift(std::span<const double> x, std::span<double> charge) const;
     // Creation of the thermal data; errors as create's (see electrothermal.cpp).
@@ -694,7 +691,10 @@ private:
                                                           const PhysicsModels& models,
                                                           std::span<const double> edge_geometry);
 
-    std::size_t m_ = 3;  // unknowns per node
+    // The unknowns (psi, n, p, with the electrothermal model theta last) and the rows' terms in
+    // assembly order (composition.hpp; DECISIONS.md FE3, FE4). Immutable, shared by copies.
+    std::shared_ptr<const Composition> composition_;
+    std::size_t m_ = 3;  // unknowns per node: composition_->dofs().block()
     std::vector<physics::Semiconductor> thermal_materials_;
     std::vector<ThermalNode> thermal_nodes_;
     std::vector<ThermalEdge> thermal_edges_;
@@ -749,7 +749,7 @@ private:
     // Nonlocal tunnelling: the model, the device's cells, per node the longest path that may start
     // there (0: none) [cm], the material's gap at T [eV] and tunnelling masses [kg] (direct_wkb),
     // and the Kane pair (kane); the frozen paths, their layouts, and the pattern's triplets
-    // without them.
+    // without the terms' own entries (Term::pattern).
     NonlocalTunnelling tunnel_kind_ = NonlocalTunnelling::off;
     std::optional<mesh::TensorCells> cells_;
     std::vector<double> tunnel_length_, tunnel_gap_, tunnel_mc_, tunnel_mv_, tunnel_A_, tunnel_B_;

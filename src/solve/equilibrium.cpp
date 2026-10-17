@@ -7,10 +7,13 @@
 #include "NiTCAD/assemble/equilibrium_poisson.hpp"
 #include "NiTCAD/assemble/scaling.hpp"
 #include "fields.hpp"
+#include "observe.hpp"
 
 namespace NiTCAD::solve {
 
-std::expected<results::EquilibriumResult, base::Error> solve_equilibrium(
+namespace {
+
+std::expected<results::EquilibriumResult, base::Error> solve_equilibrium_unobserved(
     const device::Device& device, const EquilibriumOptions& options, const RunControl& control) {
     auto scaling = assemble::make_scaling(device, options.Ns_override);
     if (!scaling) return std::unexpected(std::move(scaling.error()));
@@ -41,6 +44,16 @@ std::expected<results::EquilibriumResult, base::Error> solve_equilibrium(
     result.interface_trap_charge = system->interface_trap_charges(psi);
     for (double& Q : result.interface_trap_charge) Q *= charge;
     return result;
+}
+
+}  // namespace
+
+// The public solve: the body above, its result handed to the test observer (observe.hpp).
+std::expected<results::EquilibriumResult, base::Error> solve_equilibrium(
+    const device::Device& device, const EquilibriumOptions& options, const RunControl& control) {
+    auto r = solve_equilibrium_unobserved(device, options, control);
+    if (r) detail::observe_result(*r);
+    return r;
 }
 
 }  // namespace NiTCAD::solve

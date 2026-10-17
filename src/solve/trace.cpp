@@ -16,6 +16,7 @@
 #include "NiTCAD/linalg/linear_solver.hpp"
 #include "NiTCAD/solve/newton.hpp"
 #include "fields.hpp"
+#include "observe.hpp"
 #include "thermal.hpp"
 #include "weighted_current.hpp"
 
@@ -239,9 +240,7 @@ std::expected<void, base::Error> correct(Bordered& b, std::span<double> y,
                            .value = record.iterations.back().update}});
 }
 
-}  // namespace
-
-std::expected<results::Sweep, base::Error> trace_bias(const device::Device& device,
+std::expected<results::Sweep, base::Error> trace_bias_unobserved(const device::Device& device,
                                                       const TraceOptions& options,
                                                       const results::NodeFields* initial,
                                                       const RunControl& control) {
@@ -318,7 +317,8 @@ std::expected<results::Sweep, base::Error> trace_bias(const device::Device& devi
     const int D = device.mesh().dimension();
     const std::size_t nodes = device.mesh().node_count();
     const std::size_t n = dd.unknowns();
-    const std::size_t m = dd.stride();
+    const detail::Slots slot = detail::slots(dd.dofs());
+    const std::size_t m = slot.block;
     const bool thermal = steady.models.electrothermal;
     const double floor = options.density_floor_cm3 / scaling->Ns;
     const double rms = 1.0 / std::sqrt(static_cast<double>(nodes));
@@ -327,16 +327,7 @@ std::expected<results::Sweep, base::Error> trace_bias(const device::Device& devi
 
     std::vector<double> bias = options.start_V;
     std::vector<double> y(n + 1);
-    {
-        const results::NodeFields& f = run.points.front().fields;
-        const double T0 = scaling->temperature_K;
-        for (std::size_t i = 0; i < nodes; ++i) {
-            y[m * i] = f.potential_V[i] / V_T;
-            y[m * i + 1] = f.n_cm3[i] / scaling->Ns;
-            y[m * i + 2] = f.p_cm3[i] / scaling->Ns;
-            if (thermal) y[4 * i + 3] = (f.temperature_K[i] - T0) / T0;  // the rise tau
-        }
-    }
+    detail::scaled_state(dd, run.points.front().fields, *scaling, std::span(y).first(n));
     // Electrothermal: the thermal contacts at the starting point's temperatures throughout.
     if (thermal) (void)dd.set_thermal_bias(run.points.front().thermal_bias_K);  // checked
     (void)dd.set_bias(bias);  // checked
@@ -363,12 +354,13 @@ std::expected<results::Sweep, base::Error> trace_bias(const device::Device& devi
     std::vector<double> s(n + 1, 0.0), g(n + 1, 0.0);  // state scales; d log10(|I| + I0) / dy
     const auto metric = [&]() {
         for (std::size_t i = 0; i < nodes; ++i) {
-            s[m * i] = V_T * rms;
+            s[m * i + slot.potential] = V_T * rms;
             // The temperature rise in units of T0 weighs as the potential in V_T (Unit 23).
-            if (thermal) s[4 * i + 3] = V_T * rms;
+            if (thermal) s[m * i + slot.temperature] = V_T * rms;
             if (device.is_insulator(static_cast<mesh::NodeId>(i))) continue;
-            s[m * i + 1] = V_T * rms / std::max(y[m * i + 1], floor);
-            s[m * i + 2] = V_T * rms / std::max(y[m * i + 2], floor);
+            const std::size_t n_i = m * i + slot.electrons, p_i = m * i + slot.holes;
+            s[n_i] = V_T * rms / std::max(y[n_i], floor);
+            s[p_i] = V_T * rms / std::max(y[p_i], floor);
         }
         s[n] = V_T;
         std::fill(g.begin(), g.end(), 0.0);
@@ -564,7 +556,7 @@ std::expected<results::Sweep, base::Error> trace_bias(const device::Device& devi
         }
         // Accepted: the point and the next step.
         if (thermal) {  // T10
-            if (auto e = detail::converged_temperature(device, std::span(y).first(n),
+            if (auto e = detail::converged_temperature(device, dd.dofs(), std::span(y).first(n),
                                                        scaling->temperature_K)) {
                 run.stopped = std::move(*e);
                 return run;
@@ -598,6 +590,18 @@ std::expected<results::Sweep, base::Error> trace_bias(const device::Device& devi
         if (iterations >= 12) ds = std::max(0.7 * ds, options.min_step_V);
     }
     return run;
+}
+
+}  // namespace
+
+// The public trace: the body above, its result handed to the test observer (observe.hpp).
+std::expected<results::Sweep, base::Error> trace_bias(const device::Device& device,
+                                                      const TraceOptions& options,
+                                                      const results::NodeFields* initial,
+                                                      const RunControl& control) {
+    auto r = trace_bias_unobserved(device, options, initial, control);
+    if (r) detail::observe_result(*r);
+    return r;
 }
 
 }  // namespace NiTCAD::solve

@@ -34,9 +34,11 @@
 #include "NiTCAD/physics/insulator.hpp"
 #include "NiTCAD/physics/semiconductor.hpp"
 #include "NiTCAD/solve/bias.hpp"
+#include "NiTCAD/solve/equilibrium.hpp"
 #include "NiTCAD/solve/small_signal.hpp"
 #include "NiTCAD/solve/transient.hpp"
 #include "../linalg/mkl_test_runtime.hpp"
+#include "assembly_timing.hpp"
 #include "legacy_graded_mesh.hpp"
 #include "legacy_moscap.hpp"
 #include "solver_timing.hpp"
@@ -885,4 +887,20 @@ TEST_CASE("mosfet: the off state through the weighted current (Unit 32)", "[.mos
                 quiet->points[0].weighted_current[1],
                 100.0 * (1.0 - quiet->points[0].weighted_current[1] / Id[0]),
                 sub->points[0].weighted_current[1] / Id[8] - 1.0, rate[0], rate[1], rate[2]);
+}
+
+TEST_CASE("mosfet: assembly cost with field mobility", "[.assembly_benchmark]") {
+    // Unit 40 (DECISIONS.md FG4): the 2D MOSFET with field-dependent mobility, at the equilibrium
+    // potential under V_G = 1 V and V_D = 0.1 V (the cost does not depend on the state).
+    const device::Device d = mosfet();
+    const auto eq = solve::solve_equilibrium(d);
+    REQUIRE(eq.has_value());
+    solve::BiasOptions o;
+    o.models.field_mobility = true;
+    const auto scaling = *assemble::make_scaling(d);
+    auto system = *assemble::DriftDiffusion::create(d, scaling, o.models);
+    REQUIRE(system.set_bias(std::vector<double>{0.0, 0.1, 0.0, 1.0}).has_value());
+    std::vector<double> psi(eq->fields.potential_V);
+    for (double& v : psi) v /= scaling.V_T;
+    time_assembly("2D MOSFET, field mobility", system, system.state_from_potential(psi));
 }

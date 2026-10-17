@@ -27,6 +27,7 @@
 #include "NiTCAD/physics/semiconductor.hpp"
 #include "NiTCAD/solve/bias.hpp"
 #include "NiTCAD/solve/equilibrium.hpp"
+#include "assembly_timing.hpp"
 #include "triangulation3d.hpp"
 
 using namespace NiTCAD;
@@ -350,4 +351,26 @@ TEST_CASE("unstructured 3D: perturbed lattices (sliver stress, M10) pass the sam
         if (std::lround(D / h) >= 2) CHECK(slivers > 0);
     }
     check_orders(err, "perturbed lattice");
+}
+
+TEST_CASE("unstructured 3D: assembly cost on a generated mesh", "[.assembly_benchmark]") {
+    // Unit 40 (DECISIONS.md FG4): the z-uniform diode on the generated mesh of size 5e-6 at 0.3 V.
+    mesh::Geometry3D g;
+    g.domain.vertices = {{0, 0, 0}, {W, 0, 0}, {W, H, 0}, {0, H, 0}, {0, 0, D}, {W, 0, D}, {W, H, D}, {0, H, D}};
+    g.domain.faces = {{{0, 3, 7, 4}, "anode"}, {{1, 2, 6, 5}, "x_max"}, {{0, 1, 5, 4}, "y_min"},
+                      {{3, 2, 6, 7}, "y_max"}, {{0, 1, 2, 3}, "z_min"}, {{4, 5, 6, 7}, "z_max"}};
+    g.domain.faces[1].patches = {{"cathode", {{W, 0, 0}, {W, cathode_top, 0}, {W, cathode_top, D}, {W, 0, D}}},
+                                 {"x_max_rest", {{W, cathode_top, 0}, {W, H, 0}, {W, H, D}, {W, cathode_top, D}}}};
+    mesh::MeshOptions3D o;
+    o.max_size = 5e-6;
+    const auto gm = mesh::generate_mesh(g, o);
+    REQUIRE(gm.has_value());
+    const device::Device d = diode(gm->mesh, patch_nodes(gm->mesh, "anode"), patch_nodes(gm->mesh, "cathode"));
+    const std::vector<double> bias{0.3, 0.0};
+    const auto p = solve::solve_bias(d, bias);
+    REQUIRE(p.has_value());
+    const auto scaling = *assemble::make_scaling(d);
+    auto system = *assemble::DriftDiffusion::create(d, scaling);
+    REQUIRE(system.set_bias(bias).has_value());
+    time_assembly("3D generated diode", system, scaled_state(system, p->fields, scaling));
 }

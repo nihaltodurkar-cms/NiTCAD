@@ -13,6 +13,7 @@
 #include "NiTCAD/solve/equilibrium.hpp"
 #include "NiTCAD/solve/newton.hpp"
 #include "fields.hpp"
+#include "observe.hpp"
 #include "relocation.hpp"
 #include "thermal.hpp"
 
@@ -64,9 +65,11 @@ struct HeldTemperature {
         const auto offsets = j.row_offsets();
         const auto columns = j.col_indices();
         const std::span<double> values = j.values();
+        const std::size_t m = dd.dofs().block(),
+                          t = dd.dofs().slot(assemble::FieldId::temperature).value_or(0);
         for (std::size_t i = 0; i < dd.node_count(); ++i) {
             if (held[i] == 0) continue;
-            const std::size_t r = 4 * i + 3;
+            const std::size_t r = m * i + t;
             f[r] = x[r] - hold[i];
             for (auto k = static_cast<std::size_t>(offsets[r]);
                  k < static_cast<std::size_t>(offsets[r + 1]); ++k) {
@@ -129,9 +132,7 @@ bool valid_fields(const results::NodeFields& s, const device::Device& device) {
 
 bool positive(double v) { return std::isfinite(v) && v > 0.0; }
 
-}  // namespace
-
-std::expected<results::Transient, base::Error> solve_transient(
+std::expected<results::Transient, base::Error> solve_transient_unobserved(
     const device::Device& device, std::span<const Waveform> waveforms,
     const TransientOptions& options, const results::NodeFields* initial,
     const RunControl& control) {
@@ -239,7 +240,8 @@ std::expected<results::Transient, base::Error> solve_transient(
     const assemble::DriftDiffusion& dd = *system;
 
     const std::size_t nodes = device.mesh().node_count();
-    const std::size_t m = dd.stride();
+    const detail::Slots slot = detail::slots(dd.dofs());
+    const std::size_t m = slot.block;
     const double T0 = scaling->temperature_K;
     const int D = device.mesh().dimension();
     const double current_scale = scaling->J0 * std::pow(scaling->L_D, D - 1);
@@ -275,14 +277,7 @@ std::expected<results::Transient, base::Error> solve_transient(
     // The steady state at t = 0.
     std::vector<double> x(dd.unknowns());
     if (initial != nullptr) {
-        for (std::size_t i = 0; i < nodes; ++i) {
-            x[m * i] = initial->potential_V[i] / scaling->V_T;
-            x[m * i + 1] = initial->n_cm3[i] / scaling->Ns;
-            x[m * i + 2] = initial->p_cm3[i] / scaling->Ns;
-            if (thermal && !initial->temperature_K.empty()) {
-                x[4 * i + 3] = (initial->temperature_K[i] - T0) / T0;  // the rise tau
-            }
-        }
+        detail::scaled_state(dd, *initial, *scaling, x);
     } else {
         auto start = solve_equilibrium(
             device,
@@ -325,7 +320,7 @@ std::expected<results::Transient, base::Error> solve_transient(
             hold = hold || mask[i] != 0;
         }
         std::vector<double> held(nodes);
-        for (std::size_t i = 0; hold && i < nodes; ++i) held[i] = x[4 * i + 3];
+        for (std::size_t i = 0; hold && i < nodes; ++i) held[i] = x[m * i + slot.temperature];
         if (auto ok = detail::solve_relocating(
                 *system, x,
                 [&] {
@@ -355,10 +350,12 @@ std::expected<results::Transient, base::Error> solve_transient(
         snap.fields = {std::vector<double>(nodes), std::vector<double>(nodes),
                        std::vector<double>(nodes)};
         for (std::size_t i = 0; i < nodes; ++i) {
-            snap.fields.potential_V[i] = s.x[m * i] * scaling->V_T;
-            snap.fields.n_cm3[i] = s.x[m * i + 1] * scaling->Ns;
-            snap.fields.p_cm3[i] = s.x[m * i + 2] * scaling->Ns;
-            if (thermal) snap.fields.temperature_K.push_back(T0 + T0 * s.x[4 * i + 3]);
+            snap.fields.potential_V[i] = s.x[m * i + slot.potential] * scaling->V_T;
+            snap.fields.n_cm3[i] = s.x[m * i + slot.electrons] * scaling->Ns;
+            snap.fields.p_cm3[i] = s.x[m * i + slot.holes] * scaling->Ns;
+            if (thermal) {
+                snap.fields.temperature_K.push_back(T0 + T0 * s.x[m * i + slot.temperature]);
+            }
         }
         snap.bands = detail::band_diagram(dd.band_edges(s.x), scaling->V_T);
         for (const auto& [jn, jp] : dd.edge_currents(s.x)) {
@@ -514,15 +511,15 @@ std::expected<results::Transient, base::Error> solve_transient(
             };
             double err = 0.0;
             for (std::size_t i = 0; i < nodes; ++i) {
+                const std::size_t psi = m * i + slot.potential, tau = m * i + slot.temperature;
                 if (heated[i] != 0) {
-                    err = std::max(err, std::abs(factor * (next.x[4 * i + 3] -
-                                                           predicted(&State::x, 4 * i + 3))));
+                    const double e = factor * (next.x[tau] - predicted(&State::x, tau));
+                    err = std::max(err, std::abs(e));
                 }
                 if (measure[i] == Measure::none) continue;
-                err = std::max(err, std::abs(factor * (next.x[m * i] -
-                                                       predicted(&State::x, m * i))));
+                err = std::max(err, std::abs(factor * (next.x[psi] - predicted(&State::x, psi))));
                 if (measure[i] != Measure::carriers) continue;
-                for (const std::size_t k : {m * i + 1, m * i + 2}) {
+                for (const std::size_t k : {m * i + slot.electrons, m * i + slot.holes}) {
                     const double e = factor * (next.x[k] - predicted(&State::x, k));
                     err = std::max(err, std::abs(e) / (std::abs(next.x[k]) + density_ref));
                 }
@@ -554,7 +551,7 @@ std::expected<results::Transient, base::Error> solve_transient(
         // Accepted (an electrothermal step whose temperature leaves a material's range stops the
         // run, T10).
         if (thermal) {
-            if (auto e = detail::converged_temperature(device, x, T0)) {
+            if (auto e = detail::converged_temperature(device, dd.dofs(), x, T0)) {
                 run.stopped = std::move(*e);
                 return run;
             }
@@ -612,6 +609,18 @@ std::expected<results::Transient, base::Error> solve_transient(
         }
     }
     return run;
+}
+
+}  // namespace
+
+// The public run: the body above, its result handed to the test observer (observe.hpp).
+std::expected<results::Transient, base::Error> solve_transient(
+    const device::Device& device, std::span<const Waveform> waveforms,
+    const TransientOptions& options, const results::NodeFields* initial,
+    const RunControl& control) {
+    auto r = solve_transient_unobserved(device, waveforms, options, initial, control);
+    if (r) detail::observe_result(*r);
+    return r;
 }
 
 }  // namespace NiTCAD::solve

@@ -84,11 +84,13 @@ inline bool valid_temperature(const results::NodeFields& s, std::size_t nodes) {
 // T10: a converged temperature outside a node's material range (non_convergence, context: the
 // node and its temperature [K]). Insulator nodes are not checked (their models have no range).
 inline std::optional<base::Error> converged_temperature(const device::Device& device,
+                                                        const assemble::DofMap& dofs,
                                                         std::span<const double> x, double T0) {
+    const std::size_t m = dofs.block(), t = *dofs.slot(assemble::FieldId::temperature);
     for (std::size_t i = 0; i < device.mesh().node_count(); ++i) {
         const auto node = static_cast<mesh::NodeId>(i);
         if (device.is_insulator(node)) continue;
-        const double T = T0 + T0 * x[4 * i + 3];  // the rise tau = (T - T0) / T0
+        const double T = T0 + T0 * x[m * i + t];  // the rise tau = (T - T0) / T0
         if (auto ok = physics::check_temperature(device.material(node), T); !ok) {
             return base::Error{base::ErrorCode::non_convergence,
                                "converged lattice temperature at node " + std::to_string(i) +
