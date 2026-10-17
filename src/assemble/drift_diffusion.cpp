@@ -239,17 +239,7 @@ std::expected<DriftDiffusion, base::Error> DriftDiffusion::create(
         }
     }
     for (const detail::ScaledEdge& e : scaled->edges) {
-        if (models.electrothermal) {
-            for (std::size_t r = 0; r < 4; ++r) {
-                for (std::size_t c = 0; c < 4; ++c) {
-                    triplets.push_back({static_cast<linalg::Index>(4 * e.i + r),
-                                        static_cast<linalg::Index>(4 * e.j + c), 0.0});
-                    triplets.push_back({static_cast<linalg::Index>(4 * e.j + r),
-                                        static_cast<linalg::Index>(4 * e.i + c), 0.0});
-                }
-            }
-            continue;
-        }
+        if (models.electrothermal) continue;  // full 4 x 4 blocks (ThermalEdges, terms.hpp)
         for (std::size_t k = 0; k < 5; ++k) {
             triplets.push_back({static_cast<linalg::Index>(stride * e.i + edge_rows[k]),
                                 static_cast<linalg::Index>(stride * e.j + edge_cols[k]), 0.0});

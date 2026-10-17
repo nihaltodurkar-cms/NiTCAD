@@ -677,16 +677,6 @@ private:
         double value, d_theta;
     };
     [[nodiscard]] Shift electrode_shift(std::size_t node, const ThermalState& t) const;
-    // Impact ionization with the electrothermal model: the ImpactGeneration term's rows
-    // (terms.cpp) with the thermal fluxes and gamma at each node's T.
-    void add_thermal_impact(std::span<const double> x, std::span<const ThermalState> t,
-                            std::span<const NodeLevels> g, std::span<double> f,
-                            std::span<double> values) const;
-    // The interface edges' terms with the electrothermal model (fixed charge and surface
-    // recombination; traps are refused): the half-edge fluxes and the surface rate at the
-    // semiconductor node's T.
-    void add_thermal_interfaces(std::span<const double> x, std::span<const ThermalState> t,
-                                std::span<double> f, std::span<double> values) const;
     // Adds G shift of every p-polysilicon gate node to its gate's charge (gates_.charges is at T0).
     void add_gate_shift(std::span<const double> x, std::span<double> charge) const;
     // Creation of the thermal data; errors as create's (see electrothermal.cpp).
@@ -774,7 +764,8 @@ private:
     bool ionization_ = false;
     bool radiative_on_ = true;
     linalg::SparseMatrix pattern_;
-    // The isothermal rows' terms in assembly order (terms.hpp; DECISIONS.md FE3).
+    // The rows' terms in assembly order, isothermal or electrothermal (terms.hpp; DECISIONS.md
+    // FE3).
     std::vector<std::shared_ptr<const Term>> terms_;
 };
 

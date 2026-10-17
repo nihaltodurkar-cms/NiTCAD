@@ -18,9 +18,14 @@
 // and the ionization override assign their rows, as before; every other term adds. The terms keep
 // the expressions of the assembler before them operand for operand.
 //
-// The electrothermal rows are not terms yet (assemble_heat; slice 2b).
+// With the electrothermal model the rows are the electrothermal terms (thermal_terms.cpp), in
+// assemble_heat's order: per node the heat row (sinks, lattice storage) before the electrical
+// rows, the carriers' storage last (it adds to the heat row too); then the interfaces, the edges
+// (Poisson, carriers and heat in one term: the heat row takes the carrier fluxes), impact
+// ionization.
 #pragma once
 
+#include <cstdint>
 #include <memory>
 #include <span>
 #include <string_view>
@@ -49,21 +54,31 @@ struct TermInfo {
 struct DriftDiffusion::Terms {
     // One evaluation: the state, F (every row is assigned by a node term), the Jacobian's values
     // (empty: the residual alone; else zero on entry), the time step (nullptr: steady) and the
-    // degeneracy factors (degeneracies(x)).
+    // degeneracy factors (degeneracies(x); isothermal). With the electrothermal model
+    // (assemble_heat): the nodes' thermal states and levels (thermal_states, thermal_levels) and
+    // whether the thermal contacts' terms are in (sinks).
     struct Evaluation {
         std::span<const double> x;
         std::span<double> f;
         std::span<double> values;
         const TimeStep* step;
         std::span<const NodeDegeneracy> g;
+        std::span<const ThermalState> thermal = {};
+        std::span<const NodeLevels> levels = {};
+        bool sinks = true;
         [[nodiscard]] bool jacobian() const noexcept { return !values.empty(); }
     };
 
     // The terms of a system's models in assembly order. Inclusion follows the models alone, since
     // the system's tables (impact nodes, tunnel nodes) are built after the pattern the terms add
-    // to; a term whose table is empty adds nothing.
+    // to; a term whose table is empty adds nothing. With the electrothermal model, the
+    // electrothermal terms (make_thermal, thermal_terms.cpp).
     [[nodiscard]] static std::vector<std::shared_ptr<const Term>> make(const DriftDiffusion& s,
                                                                        const PhysicsModels& models);
+    [[nodiscard]] static std::vector<std::shared_ptr<const Term>> make_thermal(
+        const DriftDiffusion& s, const PhysicsModels& models);
+    // The Poisson charge term, shared by both lists.
+    [[nodiscard]] static std::shared_ptr<const Term> poisson_charge();
     // Appends every term's own pattern entries (Term::pattern) to triplets.
     static void pattern(const DriftDiffusion& s, std::vector<linalg::Triplet>& triplets);
     // A system's terms (for its tests).
@@ -98,6 +113,28 @@ struct DriftDiffusion::Terms {
                                                                       std::size_t i);
     static void add_physical(const DriftDiffusion& s, const Evaluation& e, std::size_t i,
                              const physics::RecombinationRate& r);
+    // The pattern entries of the interface edges (the insulator's Poisson row reads the
+    // semiconductor's n and p) and of impact ionization (a node's electron generation reads its
+    // neighbours' p, its hole generation their n), shared by the isothermal and electrothermal
+    // terms.
+    static void interface_pattern(const DriftDiffusion& s, std::vector<linalg::Triplet>& t);
+    static void impact_pattern(const DriftDiffusion& s, std::vector<linalg::Triplet>& t);
+
+    // Electrothermal: whether node i's heat row is an isothermal sink's Dirichlet row.
+    [[nodiscard]] static bool held(const DriftDiffusion& s, const Evaluation& e,
+                                   std::size_t i) noexcept {
+        const std::int32_t c = s.thermal_nodes_[i].contact;
+        return e.sinks && c >= 0 && s.thermal_isothermal_[static_cast<std::size_t>(c)] != 0;
+    }
+    // Electrothermal: node i's equilibrium product at its T (scaled), n_ie^2 or, under
+    // Fermi-Dirac statistics, n_ie^2 gamma_n gamma_p with its density partials, and its theta
+    // derivative dE_t.
+    static void thermal_product(const DriftDiffusion& s, const Evaluation& e, std::size_t i,
+                                physics::EquilibriumProduct& E, double& dE_t);
+    // Electrothermal: k times a recombination rate R / R0 into node i's continuity rows, with its
+    // density partials and d_t its theta derivative.
+    static void add_thermal_rate(const DriftDiffusion& s, const Evaluation& e, std::size_t i,
+                                 double k, double rate, double d_n, double d_p, double d_t);
 
     class ContactRows;
     class InsulatorRows;
@@ -114,6 +151,19 @@ struct DriftDiffusion::Terms {
     class ImpactGeneration;
     class LocalTunnelling;
     class PathTunnelling;
+    // Electrothermal (thermal_terms.cpp; PoissonCharge is shared).
+    class HeatSinks;
+    class LatticeStorage;
+    class ThermalContactRows;
+    class ThermalInsulatorRows;
+    class ThermalGate;
+    class ThermalSrh;
+    class ThermalAuger;
+    class ThermalRadiative;
+    class ThermalCarrierStorage;
+    class ThermalInterfaces;
+    class ThermalEdges;
+    class ThermalImpact;
 };
 
 class DriftDiffusion::Term {

@@ -1514,7 +1514,53 @@ existing suites:
 | FG6 | 9 mutants, all caught by the suites. Ionization override turned into an addition: heterojunction test. SRH and Auger swapped in order: the terms test's order check (the swap itself only changes last bits). Carrier fluxes ignoring row b's Dirichlet check: electrothermal test. The interface pattern without the hole column, and the paths' pattern entries dropped: the contract check in the position lookup. The impact pattern on the wrong edges: impact test. `assemble` ignoring `interfaces = false`, so small-signal adds the interface terms twice: small-signal test. The Poisson flux ignoring an electrode row: insulator test. The gate term left out: gate test. |
 | FG9 | The terms are in `src/assemble` (internal); no new dependency; `solve` unchanged. |
 
-**Status:** commit 0, commit 0b, slice 1 and slice 2a done; slice 2b (the electrothermal rows as terms) next.
+**Slice 2b as built (the electrothermal rows; `src/assemble/thermal_terms.cpp`):**
+- `assemble_heat` stays the entry point, because `thermal_contact_heat` calls it with the sinks out. It is now the
+  loop over the electrothermal term list, which `Terms::make` builds when the model is on. The evaluation carries the
+  thermal states, the levels and the sinks flag.
+- Twelve terms, in `assemble_heat`'s order:
+  - heat sinks (assigns the heat row: the isothermal sink's Dirichlet row, R_th, or 0)
+  - lattice heat storage
+  - ohmic contact rows at the node's T
+  - insulator rows (an electrode at its T)
+  - the Poisson charge (the isothermal term, shared; complete ionization, U6)
+  - gate with the p-polysilicon shift
+  - SRH, Auger and radiative at the node's T
+  - carrier storage (the continuity rows and the stored carriers' energy in the heat row)
+  - interfaces
+  - edge fluxes (Poisson, carriers and heat)
+  - impact ionization with gamma(T)
+- Per node, the heat row is written before the electrical rows, and the carrier storage adds to it last. With one
+  loop per term, every entry still receives its additions in that order.
+- **The edges stay one term.** The heat rows take the carrier fluxes and their partials, so splitting would compute
+  `thermal_fluxes` twice.
+- **The interface term runs even for small-signal.** `assemble_heat` never skipped interfaces, and the electrothermal
+  `small_signal_matrix` adds no interface terms of its own.
+- The literal 4 and 16 moved with the code into the terms (FG7). Every block is 4 × 4 by construction.
+- The edges' full 4 × 4 pattern blocks moved from `create` into the edge term's `pattern()`, so the pattern is the
+  same set. `make_thermal`'s positions and the diagnostics (`add_thermal_storage`, `bias_derivative`,
+  `thermal_contact_heat`) keep their code (FE5).
+- `terms_test` gains:
+  - a heated 1D and 2D diode in radiative silicon, with an oxide and a recombining fixed-charge interface in 2D,
+    under both statistics, steady and with a time step;
+  - a p-polysilicon gate;
+  - impact ionization at about 3e5 V/cm;
+  - the electrothermal order;
+  - a held heat row being its sink's Dirichlet row in a time step too.
+
+  The last was added for two mutants that survived the suites (below).
+
+**Slice 2b results:**
+
+| Gate | Result |
+|---|---|
+| FG1/FG2 | Pinned traces identical to slice 2a's on all nine traced entries. |
+| FG3 | Existing FD-Jacobian gates unchanged; all 27 terms pass their own checks at 1e-6 and are active (478 assertions in 4 cases). |
+| FG4 | Minimum of four alternating pinned runs, slice 2b against 2a. `evaluate`: electrothermal bar 194.6 against 192.7 µs (+1.0%, slice 2a's own spread 7.1%); `residual` +0.9%. The isothermal devices −3.0% to −0.2% (unchanged code). Within the gate. |
+| FG5 | Release 18/18, Debug 12/12, no warnings. |
+| FG6 | 8 mutants, all caught. Heat-sink assignment turned into an addition: electrothermal test. A θ column moved (the contact row's ψ entry into the p column): electrothermal test. Thermal SRH and Auger swapped: the terms test's order check. The edges' pattern without the heat rows: the position lookup's contract check. The interfaces term left out: the terms test's activity check. The gate's p-polysilicon shift dropped: electrothermal test. Lattice storage, and separately the carriers' stored energy, added to a held (isothermal-sink) heat row: **both survived the suites**. At a converged step the held rise equals the sink's before and after, so the term vanishes at the solution, and no fixture held a node that was neither contact nor insulator. The new held-row case (a sink on y_min) catches both. |
+
+**Status:** commit 0, commit 0b and slices 1, 2a, 2b done; slice 3 (composition, `DriftDiffusion` as the wrapper) next.
 
 ---
 

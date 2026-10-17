@@ -279,13 +279,7 @@ public:
     }
     // The insulator's Poisson row reads the semiconductor's n and p.
     void pattern(const DriftDiffusion& s, std::vector<linalg::Triplet>& t) const override {
-        const std::size_t stride = s.m_;
-        for (const InterfaceEdge& f : s.interfaces_.edges()) {
-            for (const std::size_t c : {std::size_t{1}, std::size_t{2}}) {
-                t.push_back({static_cast<linalg::Index>(stride * f.insulator),
-                             static_cast<linalg::Index>(stride * f.semiconductor + c), 0.0});
-            }
-        }
+        interface_pattern(s, t);
     }
     void add(const DriftDiffusion& s, const Evaluation& ev) const override {
         const std::size_t m = s.m_;
@@ -439,16 +433,7 @@ public:
     // A node's electron generation reads its neighbours' p (through the hole current) and its
     // hole generation their n.
     void pattern(const DriftDiffusion& s, std::vector<linalg::Triplet>& t) const override {
-        const std::size_t stride = s.m_;
-        for (const EdgeTerm& e : s.edges_) {
-            if (!e.carriers) continue;
-            for (const auto [a, b] : {std::pair{e.a, e.b}, std::pair{e.b, e.a}}) {
-                t.push_back({static_cast<linalg::Index>(stride * a + 1),
-                             static_cast<linalg::Index>(stride * b + 2), 0.0});
-                t.push_back({static_cast<linalg::Index>(stride * a + 2),
-                             static_cast<linalg::Index>(stride * b + 1), 0.0});
-            }
-        }
+        impact_pattern(s, t);
     }
     void add(const DriftDiffusion& s, const Evaluation& ev) const override {
         if (s.impact_nodes_.empty()) return;
@@ -718,8 +703,13 @@ public:
     }
 };
 
+std::shared_ptr<const DriftDiffusion::Term> DriftDiffusion::Terms::poisson_charge() {
+    return std::make_shared<PoissonCharge>();
+}
+
 std::vector<std::shared_ptr<const DriftDiffusion::Term>> DriftDiffusion::Terms::make(
     const DriftDiffusion& s, const PhysicsModels& models) {
+    if (models.electrothermal) return make_thermal(s, models);
     std::vector<std::shared_ptr<const Term>> t;
     t.push_back(std::make_shared<ContactRows>());
     t.push_back(std::make_shared<InsulatorRows>());
@@ -743,6 +733,31 @@ std::vector<std::shared_ptr<const DriftDiffusion::Term>> DriftDiffusion::Terms::
     return t;
 }
 
+void DriftDiffusion::Terms::interface_pattern(const DriftDiffusion& s,
+                                              std::vector<linalg::Triplet>& t) {
+    const std::size_t stride = s.m_;
+    for (const InterfaceEdge& f : s.interfaces_.edges()) {
+        for (const std::size_t c : {std::size_t{1}, std::size_t{2}}) {
+            t.push_back({static_cast<linalg::Index>(stride * f.insulator),
+                         static_cast<linalg::Index>(stride * f.semiconductor + c), 0.0});
+        }
+    }
+}
+
+void DriftDiffusion::Terms::impact_pattern(const DriftDiffusion& s,
+                                           std::vector<linalg::Triplet>& t) {
+    const std::size_t stride = s.m_;
+    for (const EdgeTerm& e : s.edges_) {
+        if (!e.carriers) continue;
+        for (const auto [a, b] : {std::pair{e.a, e.b}, std::pair{e.b, e.a}}) {
+            t.push_back({static_cast<linalg::Index>(stride * a + 1),
+                         static_cast<linalg::Index>(stride * b + 2), 0.0});
+            t.push_back({static_cast<linalg::Index>(stride * a + 2),
+                         static_cast<linalg::Index>(stride * b + 1), 0.0});
+        }
+    }
+}
+
 void DriftDiffusion::Terms::pattern(const DriftDiffusion& s,
                                     std::vector<linalg::Triplet>& triplets) {
     for (const std::shared_ptr<const Term>& t : s.terms_) t->pattern(s, triplets);
@@ -753,11 +768,18 @@ void DriftDiffusion::Terms::evaluate(const DriftDiffusion& s, const Term& t,
                                      std::span<double> f, linalg::SparseMatrix& jacobian) {
     NITCAD_EXPECTS(x.size() == s.unknowns() && f.size() == s.unknowns());
     NITCAD_EXPECTS(jacobian.has_same_pattern(s.pattern_));
-    NITCAD_EXPECTS(step == nullptr || (step->storage.size() == 2 * s.node_count() &&
+    const std::size_t per_node = s.electrothermal() ? 3 : 2;  // storage entries
+    NITCAD_EXPECTS(step == nullptr || (step->storage.size() == per_node * s.node_count() &&
                                        step->traps.size() == s.trap_slots()));
     const std::span<double> values = jacobian.values();
     std::ranges::fill(f, 0.0);
     std::ranges::fill(values, 0.0);
+    if (s.electrothermal()) {
+        const std::vector<ThermalState> thermal = s.thermal_states(x);
+        const std::vector<NodeLevels> levels = s.thermal_levels(x, thermal);
+        t.add(s, {x, f, values, step, {}, thermal, levels, true});
+        return;
+    }
     const std::vector<NodeDegeneracy> g = s.degeneracies(x);
     t.add(s, {x, f, values, step, g});
 }

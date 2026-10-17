@@ -313,6 +313,92 @@ History history(const DriftDiffusion& dd, std::vector<double> x, std::uint64_t s
     return h;
 }
 
+
+// The electrothermal fixture (electrothermal_test.cpp, reduced): a pn diode on [0, 1 um] along x
+// (p 1e17 below 0.5 um, n 2e17 above) in radiative silicon, 2D [0, 0.5 um] across; with `oxide`
+// y >= 0.3 um oxide with a fixed-charge, recombining interface; with `gate` a p-polysilicon gate on
+// y_max inside the x ends. An isothermal sink on `sink` (x_min) and, with the sink there, a
+// thermal resistance on x_max.
+device::Device thermal_diode(int D, bool oxide, bool gate, const char* sink = "x_min") {
+    const auto x = uniform(0.0, 1e-4, D == 1 ? 11 : 9);
+    const auto y = uniform(0.0, 0.5e-4, 6);
+    mesh::Mesh m = D == 1 ? *mesh::make_tensor_grid(x) : *mesh::make_tensor_grid(x, y);
+    const std::size_t n = m.node_count();
+    std::vector<device::Region> regions{{"silicon", radiative_silicon()}};
+    if (oxide) regions.push_back({"oxide", physics::silicon_dioxide()});
+    std::vector<device::RegionId> region(n, 0);
+    std::vector<double> donors(n, 0.0), acceptors(n, 0.0);
+    for (std::size_t i = 0; i < n; ++i) {
+        const auto& p = m.points()[i];
+        if (oxide && p[1] >= 0.3e-4 - 1e-12) {
+            region[i] = 1;
+            continue;
+        }
+        (p[0] < 0.5e-4 ? acceptors : donors)[i] = p[0] < 0.5e-4 ? 1e17 : 2e17;
+    }
+    const auto silicon_nodes = [&](const char* patch) {
+        std::vector<mesh::NodeId> v;
+        for (const mesh::NodeId k : m.find_boundary(patch)->nodes) {
+            if (region[static_cast<std::size_t>(k)] == 0) v.push_back(k);
+        }
+        return v;
+    };
+    std::vector<device::Contact> contacts{
+        {"anode", device::ContactKind::ohmic, silicon_nodes("x_min")},
+        {"cathode", device::ContactKind::ohmic, silicon_nodes("x_max")}};
+    if (gate) {
+        std::vector<mesh::NodeId> top;
+        for (const mesh::NodeId k : m.find_boundary("y_max")->nodes) {
+            const double xk = m.points()[static_cast<std::size_t>(k)][0];
+            if (xk > 1e-12 && xk < 1e-4 - 1e-12) top.push_back(k);
+        }
+        contacts.push_back({"gate", device::ContactKind::gate, std::move(top),
+                            {.boundary = "y_max", .oxide_thickness_cm = 5e-7,
+                             .electrode = device::GateElectrode::p_poly}});
+    }
+    std::vector<device::Interface> interfaces;
+    if (oxide) {
+        interfaces.push_back({.region_a = "silicon", .region_b = "oxide",
+                              .fixed_charge_cm2 = 1e11, .recombination_velocity_n_cm_s = 1e4,
+                              .recombination_velocity_p_cm_s = 2e4});
+    }
+    std::vector<device::ThermalContact> thermal{
+        {"sink", sink, device::ThermalContactKind::isothermal, 310.0, 0.0}};
+    if (std::string(sink) == "x_min") {  // elsewhere it would share a corner with x_max
+        thermal.push_back(
+            {"package", "x_max", device::ThermalContactKind::resistance, 290.0, 1e-4});
+    }
+    auto made = device::Device::create({.mesh = std::move(m),
+                                        .temperature_K = 300.0,
+                                        .regions = std::move(regions),
+                                        .node_region = std::move(region),
+                                        .donors = std::move(donors),
+                                        .acceptors = std::move(acceptors),
+                                        .contacts = std::move(contacts),
+                                        .interfaces = std::move(interfaces),
+                                        .thermal_contacts = std::move(thermal)});
+    if (!made) FAIL(made.error().message);
+    return std::move(*made);
+}
+
+// A biased, heated state (electrothermal_test.cpp): psi falling `drop` V_T across the device, n
+// and p uniform (insulator densities 0), theta rising from 1 to 1.3 along x, relative noise on
+// every unknown; the contact nodes not stamped.
+std::vector<double> heated(const DriftDiffusion& dd, const device::Device& d,
+                           const assemble::Scaling& s, double noise, std::uint64_t seed,
+                           double theta_rise = 0.3, double drop = 20.0) {
+    std::vector<double> x(dd.unknowns());
+    Noise z{seed};
+    for (std::size_t i = 0; i < dd.node_count(); ++i) {
+        const double u = d.mesh().points()[i][0] / 1e-4;
+        x[4 * i] = -drop * u * (1.0 + noise * z.next());
+        const bool insulator = d.is_insulator(static_cast<mesh::NodeId>(i));
+        x[4 * i + 1] = insulator ? 0.0 : 1e16 / s.Ns * (1.0 + noise * z.next());
+        x[4 * i + 2] = insulator ? 0.0 : 1e15 / s.Ns * (1.0 + noise * z.next());
+        x[4 * i + 3] = (1.0 + theta_rise * u) * (1.0 + noise * z.next()) - 1.0;
+    }
+    return x;
+}
 }  // namespace
 
 TEST_CASE("terms: each term's partials match finite differences of its own residual") {
@@ -396,6 +482,51 @@ TEST_CASE("terms: each term's partials match finite differences of its own resid
         require_active(active,
                        {"local band-to-band tunnelling", "nonlocal band-to-band tunnelling"});
     }
+    SECTION("electrothermal: a heated diode with an oxide and an interface, steady and a step") {
+        for (const int D : {1, 2}) {
+            for (const bool fermi_dirac : {false, true}) {
+                const bool oxide = D == 2;
+                const device::Device d = thermal_diode(D, oxide, false);
+                const auto s = *assemble::make_scaling(d);
+                auto dd = *DriftDiffusion::create(
+                    d, s, {.fermi_dirac = fermi_dirac, .electrothermal = true});
+                REQUIRE(dd.set_bias(std::vector<double>{0.4, -0.3}).has_value());
+                const auto before = heated(dd, d, s, 0.05, 5, 0.25);
+                const auto x = heated(dd, d, s, 0.05, 11);
+                CAPTURE(D, fermi_dirac);
+                check_terms(dd, x, active);
+                const std::vector<double> storage = dd.storage(before);
+                const DriftDiffusion::TimeStep step{0.7, storage, {}};
+                check_terms(dd, x, active, &step);
+            }
+        }
+        require_active(active,
+                       {"heat sinks", "lattice heat storage", "ohmic contact rows (electrothermal)",
+                        "insulator rows (electrothermal)", "Poisson charge",
+                        "SRH recombination (electrothermal)",
+                        "Auger recombination (electrothermal)",
+                        "radiative recombination (electrothermal)",
+                        "carrier storage (electrothermal)", "interfaces (electrothermal)",
+                        "edge fluxes (electrothermal)"});
+    }
+    SECTION("electrothermal: a p-polysilicon gate, and impact ionization with gamma(T)") {
+        {
+            const device::Device d = thermal_diode(2, false, true);
+            const auto s = *assemble::make_scaling(d);
+            auto dd = *DriftDiffusion::create(d, s, {.electrothermal = true});
+            REQUIRE(dd.set_bias(std::vector<double>{0.4, -0.3, 0.7}).has_value());
+            check_terms(dd, heated(dd, d, s, 0.05, 11), active);
+        }
+        {
+            const device::Device d = thermal_diode(1, false, false);
+            const auto s = *assemble::make_scaling(d);
+            auto dd =
+                *DriftDiffusion::create(d, s, {.impact_ionization = true, .electrothermal = true});
+            REQUIRE(dd.set_bias(std::vector<double>{0.4, -0.3}).has_value());
+            check_terms(dd, heated(dd, d, s, 0.05, 7, 0.3, 1160.0), active);
+        }
+        require_active(active, {"gate (electrothermal)", "impact ionization (electrothermal)"});
+    }
 }
 
 TEST_CASE("terms: the assembly order and domains of FE3") {
@@ -426,4 +557,66 @@ TEST_CASE("terms: the assembly order and domains of FE3") {
         CHECK(t->info().assigns == (name == "ohmic contact rows" || name == "insulator rows" ||
                                     name == "Poisson charge" || name == "incomplete ionization"));
     }
+}
+
+TEST_CASE("terms: the electrothermal assembly order") {
+    // assemble_heat's order: per node the heat row before the electrical rows, the carriers'
+    // storage last; then the interfaces, the edges, impact ionization.
+    const device::Device d = thermal_diode(2, true, false);
+    const auto s = *assemble::make_scaling(d);
+    const auto dd =
+        *DriftDiffusion::create(d, s, {.impact_ionization = true, .electrothermal = true});
+    std::vector<std::string> names;
+    std::vector<TermDomain> domains;
+    for (const auto& t : Terms::list(dd)) {
+        names.emplace_back(t->info().name);
+        domains.push_back(t->info().domain);
+    }
+    CHECK(names == std::vector<std::string>{"heat sinks",
+                                            "lattice heat storage",
+                                            "ohmic contact rows (electrothermal)",
+                                            "insulator rows (electrothermal)",
+                                            "Poisson charge",
+                                            "SRH recombination (electrothermal)",
+                                            "Auger recombination (electrothermal)",
+                                            "radiative recombination (electrothermal)",
+                                            "carrier storage (electrothermal)",
+                                            "interfaces (electrothermal)",
+                                            "edge fluxes (electrothermal)",
+                                            "impact ionization (electrothermal)"});
+    CHECK(std::ranges::is_sorted(domains));
+}
+
+TEST_CASE("terms: a held heat row is its sink's Dirichlet row in a time step too") {
+    // An isothermal sink on y_min holds the rise of nodes that are neither contact nor insulator
+    // nodes: no storage term (the lattice's or the carriers' energy) may enter their heat rows,
+    // whose residual and Jacobian row are those of the steady rows.
+    const device::Device d = thermal_diode(2, false, false, "y_min");
+    const auto s = *assemble::make_scaling(d);
+    auto dd = *DriftDiffusion::create(d, s, {.electrothermal = true});
+    REQUIRE(dd.set_bias(std::vector<double>{0.4, -0.3}).has_value());
+    const auto before = heated(dd, d, s, 0.05, 5, 0.25);
+    const auto x = heated(dd, d, s, 0.05, 11);
+    const std::vector<double> storage = dd.storage(before);
+    const DriftDiffusion::TimeStep step{0.7, storage, {}};
+    const std::size_t n = dd.unknowns();
+    std::vector<double> f0(n), f1(n);
+    auto j0 = dd.make_jacobian(), j1 = dd.make_jacobian();
+    dd.evaluate(x, f0, j0);
+    dd.evaluate(x, step, f1, j1);
+    std::size_t held = 0;
+    for (const mesh::NodeId v : d.mesh().find_boundary("y_min")->nodes) {
+        const auto i = static_cast<std::size_t>(v);
+        const double px = d.mesh().points()[i][0];
+        if (px < 1e-12 || px > 1e-4 - 1e-12) continue;  // the ohmic contacts' nodes
+        ++held;
+        const std::size_t row = 4 * i + 3;
+        CAPTURE(i);
+        CHECK(f1[row] == f0[row]);
+        for (auto k = j0.row_offsets()[row]; k < j0.row_offsets()[row + 1]; ++k) {
+            CHECK(j1.values()[static_cast<std::size_t>(k)] ==
+                  j0.values()[static_cast<std::size_t>(k)]);
+        }
+    }
+    REQUIRE(held > 0);
 }
