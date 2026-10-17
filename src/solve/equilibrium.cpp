@@ -11,6 +11,8 @@
 
 namespace NiTCAD::solve {
 
+namespace {
+
 std::expected<results::EquilibriumResult, base::Error> solve_equilibrium_unobserved(
     const device::Device& device, const EquilibriumOptions& options, const RunControl& control) {
     auto scaling = assemble::make_scaling(device, options.Ns_override);
@@ -43,6 +45,8 @@ std::expected<results::EquilibriumResult, base::Error> solve_equilibrium_unobser
     for (double& Q : result.interface_trap_charge) Q *= charge;
     return result;
 }
+
+}  // namespace
 
 // The public solve: the body above, its result handed to the test observer (observe.hpp).
 std::expected<results::EquilibriumResult, base::Error> solve_equilibrium(

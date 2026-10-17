@@ -28,8 +28,6 @@ base::Error invalid(std::string message, std::optional<std::size_t> index = std:
             base::ErrorContext{.index = index, .value = value}};
 }
 
-}  // namespace
-
 std::expected<results::SmallSignal, base::Error> solve_small_signal_unobserved(
     const device::Device& device, std::span<const std::vector<double>> points,
     const SmallSignalOptions& options, const results::NodeFields* initial,
@@ -205,6 +203,8 @@ std::expected<results::SmallSignal, base::Error> solve_small_signal_unobserved(
     run.unfinished = std::move(sweep->unfinished);
     return run;
 }
+
+}  // namespace
 
 // The public analysis: the body above, its result handed to the test observer (observe.hpp).
 std::expected<results::SmallSignal, base::Error> solve_small_signal(

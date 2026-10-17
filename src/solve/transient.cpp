@@ -132,8 +132,6 @@ bool valid_fields(const results::NodeFields& s, const device::Device& device) {
 
 bool positive(double v) { return std::isfinite(v) && v > 0.0; }
 
-}  // namespace
-
 std::expected<results::Transient, base::Error> solve_transient_unobserved(
     const device::Device& device, std::span<const Waveform> waveforms,
     const TransientOptions& options, const results::NodeFields* initial,
@@ -612,6 +610,8 @@ std::expected<results::Transient, base::Error> solve_transient_unobserved(
     }
     return run;
 }
+
+}  // namespace
 
 // The public run: the body above, its result handed to the test observer (observe.hpp).
 std::expected<results::Transient, base::Error> solve_transient(

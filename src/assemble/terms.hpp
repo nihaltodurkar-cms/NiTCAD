@@ -182,4 +182,13 @@ public:
     virtual void add(const DriftDiffusion& s, const Terms::Evaluation& e) const = 0;
 };
 
+// The names of DriftDiffusion's private term types, for the assemble library and its tests
+// (this header is internal: not under include/).
+struct TermAccess {
+    using Term = DriftDiffusion::Term;
+    using Terms = DriftDiffusion::Terms;
+    using Composition = DriftDiffusion::Composition;
+    using Evaluation = DriftDiffusion::Terms::Evaluation;
+};
+
 }  // namespace NiTCAD::assemble

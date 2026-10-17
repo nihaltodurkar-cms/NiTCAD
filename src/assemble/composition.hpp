@@ -62,7 +62,7 @@ struct CompositionEntry {
     // Whether the term is in a system with these models; reads the device data create has set
     // before the unknowns' map (contacts, insulators, gates, interfaces).
     bool (*active)(const DriftDiffusion& s, const PhysicsModels& models);
-    std::shared_ptr<const DriftDiffusion::Term> (*make)();
+    std::shared_ptr<const TermAccess::Term> (*make)();
 };
 
 class DriftDiffusion::Composition {

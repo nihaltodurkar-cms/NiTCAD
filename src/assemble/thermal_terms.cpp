@@ -30,7 +30,7 @@ constexpr FieldId all4[] = {FieldId::potential, FieldId::electrons, FieldId::hol
 
 }  // namespace
 
-using Evaluation = DriftDiffusion::Terms::Evaluation;
+using Evaluation = TermAccess::Evaluation;
 
 void DriftDiffusion::Terms::thermal_product(const DriftDiffusion& s, const Evaluation& ev,
                                             std::size_t i, physics::EquilibriumProduct& E,
@@ -725,7 +725,7 @@ public:
 namespace {
 
 template <class T>
-std::shared_ptr<const DriftDiffusion::Term> make_term() {
+std::shared_ptr<const TermAccess::Term> make_term() {
     return std::make_shared<T>();
 }
 

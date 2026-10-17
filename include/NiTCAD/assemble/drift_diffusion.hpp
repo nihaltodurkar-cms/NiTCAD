@@ -277,13 +277,8 @@ public:
     // Unknowns per node: 3 (psi, n, p), or 4 with the electrothermal model (theta last).
     [[nodiscard]] std::size_t stride() const noexcept { return m_; }
     // Where each field's unknowns are (fields.hpp; Unit 40): node-interleaved, stride() per node.
+    // Precondition (NITCAD_EXPECTS): not a moved-from system.
     [[nodiscard]] const DofMap& dofs() const noexcept;
-    // The equation terms of the rows and their composition from the device and the models
-    // (Unit 40, DECISIONS.md FE2, FE4): internal to the assemble library (src/assemble/terms.hpp,
-    // composition.hpp).
-    class Term;
-    struct Terms;
-    class Composition;
 
     struct TimeStep;  // a BDF time step (below)
 
@@ -482,6 +477,14 @@ public:
 
 private:
     DriftDiffusion() = default;
+
+    // The equation terms of the rows and their composition from the device and the models
+    // (Unit 40, DECISIONS.md FE2, FE4): internal to the assemble library (src/assemble/terms.hpp,
+    // composition.hpp), which names them through TermAccess.
+    class Term;
+    struct Terms;
+    class Composition;
+    friend struct TermAccess;
 
     struct EdgeTerm {
         std::size_t a, b;   // end nodes

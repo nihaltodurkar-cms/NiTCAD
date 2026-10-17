@@ -1417,8 +1417,14 @@ existing suites:
 - Each traced ctest entry is run with the variable set (scratch script; the files stay in scratch, FD8); a slice
   passes FG1 and FG2 when its traces equal commit 0's line for line. The solve layer is unchanged by every slice, so
   equal assembler outputs at every call give equal iteration counts and results; the first differing line names the
-  test, section and call. This also covers every active term of every configuration the suites run (FR9's concern),
-  without states built for the purpose.
+  test, section and call. It covers every term the suites activate, at the suites' own states.
+- **FR9's planned mitigation was not built.** The plan was for the recorder to fail at commit 0 when a term is
+  inactive at every recorded state. Because the recorder traces only the states the suites reach, a term the suites
+  never activated would go unchecked bit for bit. In its place:
+  - The existing per-model FD-gate cases evaluate each model where it is active: impact ionization, local and
+    nonlocal tunnelling, gates, interfaces and traps, the electrothermal fixtures, time steps. This was checked by
+    reading those tests, not measured.
+  - From slice 2a, the terms test requires every term to be active in its fixtures and checks its partials.
 - The FG4 benchmark: `tests/solve/assembly_timing.hpp` and five `[.assembly_benchmark]` cases (the legacy 1D diode,
   the 2D MOSFET with field mobility, the 3D generated diode, the electrothermal pn bar, the Zener diode with nonlocal
   paths) in the solve test files that already build those devices.
@@ -1602,9 +1608,41 @@ existing suites:
 | FG8 | No change to physics, models, defaults, deck syntax, file formats, run records or public signatures. `ARCHITECTURE.md` 2.2, 6.12.1–2 and 11.3 are to be updated to "as built" after the owner accepts the result. |
 | FG9 | Fields and the map public in `assemble`; terms and composition internal (`src/assemble`); no new dependency; `solve` reads only the map. |
 
+**Review (2026-10-17, owner request: review all eight commits against `main` before push authorization):**
+
+| Area | How | Result |
+|---|---|---|
+| Term order and bodies | `main`'s `assemble`, `add_*`, `assemble_heat` and `add_thermal_*` against the 27 terms, statement by statement after normalizing only the mechanical renames (`s.`, `ev.`, `stride`/`m` for `m_`, `at(s, ev, …)`) | Every expression unchanged operand for operand. The only other lines are skip conditions equivalent to the old if/continue chain, helpers with the old lambdas' bodies, and wrapping. The tables' order is `main`'s sequence |
+| Activation predicates | Each against the guard it replaced | Equivalent. The impact, tunnel and path tables are filled only under the same model switches. `InterfaceEdges::empty()` is `edges_.empty()`. The pattern entries are the same set |
+| `create`, `set_paths` | Read line by line | Positions are located the same way in the same pattern; paths rebuild from the same entry set |
+| Public API | Headers diffed against `main` | Nothing public removed or changed. Additions: `dofs()`, `fields.hpp`, `observer.hpp` |
+| Bit identity against `main` | `main` built in a separate worktree. Six decks run with `nitcad run` from `main` and from HEAD, pinned to a P core: a diode with Fermi–Dirac, field mobility and incomplete ionization; an oxide with an electrode and a trapped interface; a lumped gate; electrothermal; impact ionization; nonlocal tunnelling | Output tables byte-identical. This adds direct steady-state evidence for the link from commit 0 back to `main`, which until then rested on the hooks only reading. Transient and small-signal (which the deck runner does not run) still rest on that, and on the suites |
+
+Six findings, none a blocker, fixed at the owner's word ("do 1"):
+1. **The terms' field declarations were unchecked.** New test case: every term writes only the rows and Jacobian
+   columns of the fields it declares, across every fixture. Before it was committed, it caught a deliberately
+   wrong declaration (the gate term declaring the density rows).
+2. The five `*_unobserved` solves had external linkage and no declaration. They are now in anonymous namespaces.
+3. `Term`, `Terms` and `Composition` were public nested names. They are now private to `DriftDiffusion`. The
+   library and its tests name them through `TermAccess`, declared only in the internal `src/assemble/terms.hpp`.
+4. `dofs()` on a moved-from system dereferenced a null composition. It now has a contract check
+   (`NITCAD_EXPECTS`).
+5. Electrothermal under Fermi–Dirac computes the equilibrium product in each of SRH, Auger and radiative (once
+   before). Measured with a new `[.assembly_benchmark]` case, the 401-node pn bar under Fermi–Dirac, against
+   `main` (the case was added there temporarily, then removed): `evaluate` 339.9 against 342.8 µs (−0.8%),
+   `residual` −3.0%. No slowdown.
+6. The FR9 wording above was corrected: the planned recorder check was not built, and the text now says what
+   covers its concern instead.
+
+After the fixes: pinned traces identical to slice 3's on all nine traced entries (the `terms:` and `composition:`
+cases aside, as before); Release 18/18, Debug 12/12, no warnings; FG4 against slice 3 with six alternating pinned
+runs, `evaluate` −0.6% to +0.7%, `residual` −1.6% to +2.8% (the 3D diode; slice 3's own spread 14.6%). A first
+four-run measurement read up to +6.3%, but with both binaries about 15% slower than usual, and did not repeat.
+
 **Status:** commit 0, commit 0b and slices 1, 2a, 2b, 3 done. Unit 40 is complete on `assemble/fields-equations`,
-not pushed. It awaits the owner's review; `ARCHITECTURE.md` is to be updated once accepted (FG8). The hybrid-CPU
-reproducibility defect (commit 0 findings) awaits its own owner decision.
+not pushed. Reviewed, and the review's findings fixed. It awaits the owner's acceptance; `ARCHITECTURE.md` is to
+be updated once accepted (FG8). The hybrid-CPU reproducibility defect (commit 0 findings) is tracked separately as
+Unit 41 (`investigate/hybrid-cpu-determinism`).
 
 ---
 

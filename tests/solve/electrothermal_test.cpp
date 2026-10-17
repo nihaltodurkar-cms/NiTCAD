@@ -1613,3 +1613,22 @@ TEST_CASE("electrothermal solve: assembly cost on a pn bar", "[.assembly_benchma
     REQUIRE(system.set_bias(bias).has_value());
     time_assembly("electrothermal 1D pn bar", system, scaled_state(system, p.fields, scaling));
 }
+
+TEST_CASE("electrothermal solve: assembly cost on a pn bar, Fermi-Dirac", "[.assembly_benchmark]") {
+    // Unit 40 (DECISIONS.md FG4): as above under Fermi-Dirac statistics, where every recombination
+    // term evaluates the node's degenerate equilibrium product.
+    Bar b;
+    b.nodes = 401;
+    b.donors = pn_donors;
+    b.acceptors = pn_acceptors;
+    const device::Device d = bar(b);
+    const std::vector<double> bias{0.5, 0.0};
+    solve::BiasOptions o = thermal_options();
+    o.models.fermi_dirac = true;
+    const results::BiasPoint p = solved(d, bias, o);
+    const auto scaling = *assemble::make_scaling(d);
+    auto system = *assemble::DriftDiffusion::create(d, scaling, o.models);
+    REQUIRE(system.set_bias(bias).has_value());
+    time_assembly("electrothermal 1D pn bar, Fermi-Dirac", system,
+                  scaled_state(system, p.fields, scaling));
+}

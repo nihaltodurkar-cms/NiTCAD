@@ -31,7 +31,7 @@ using namespace NiTCAD;
 using assemble::DriftDiffusion;
 using assemble::EquilibriumPoisson;
 using assemble::TermDomain;
-using Terms = DriftDiffusion::Terms;
+using Terms = assemble::TermAccess::Terms;
 
 namespace {
 
@@ -76,7 +76,7 @@ struct Check {
     bool active;
 };
 
-Check check(const DriftDiffusion& dd, const DriftDiffusion::Term& t, std::vector<double> x,
+Check check(const DriftDiffusion& dd, const assemble::TermAccess::Term& t, std::vector<double> x,
             const DriftDiffusion::TimeStep* step = nullptr) {
     const std::size_t n = dd.unknowns();
     std::vector<double> f(n), fp(n), fm(n);
@@ -719,4 +719,102 @@ TEST_CASE("composition: the electrothermal small-signal matrix keeps the interfa
         if (a.values()[k].real() != j.values()[k] || a.values()[k].imag() != 0.0) ++differ;
     }
     CHECK(differ == 0);
+}
+
+namespace {
+
+// The entries a term writes outside the fields it declares (TermInfo::rows, columns): every
+// nonzero residual entry in a row of a declared field, every nonzero Jacobian entry in such a row
+// and a column of a declared field. Zero when the declarations hold.
+std::size_t undeclared(const DriftDiffusion& dd, const std::vector<double>& x,
+                       const DriftDiffusion::TimeStep* step = nullptr) {
+    const auto has = [](std::span<const assemble::FieldId> fields, assemble::FieldId f) {
+        return std::ranges::find(fields, f) != fields.end();
+    };
+    std::size_t outside = 0;
+    for (const auto& t : Terms::list(dd)) {
+        const assemble::TermInfo info = t->info();
+        std::vector<double> f(dd.unknowns());
+        auto j = dd.make_jacobian();
+        Terms::evaluate(dd, *t, x, step, f, j);
+        for (std::size_t r = 0; r < f.size(); ++r) {
+            const bool row = has(info.rows, dd.dofs().field_of(r).id);
+            if (f[r] != 0.0 && !row) {
+                ++outside;
+                UNSCOPED_INFO(info.name << ": residual row " << r);
+            }
+            for (auto k = static_cast<std::size_t>(j.row_offsets()[r]);
+                 k < static_cast<std::size_t>(j.row_offsets()[r + 1]); ++k) {
+                if (j.values()[k] == 0.0) continue;
+                const auto c = static_cast<std::size_t>(j.col_indices()[k]);
+                if (row && has(info.columns, dd.dofs().field_of(c).id)) continue;
+                ++outside;
+                UNSCOPED_INFO(info.name << ": Jacobian entry " << r << ", " << c);
+            }
+        }
+    }
+    return outside;
+}
+
+}  // namespace
+
+TEST_CASE("terms: every term writes only the rows and columns it declares") {
+    // FE2: a term names the fields of its rows and of its partials; the fixtures of the checks
+    // above, each term at an active state.
+    {
+        const device::Device d = diode(2);
+        const auto s = *assemble::make_scaling(d);
+        auto dd = *DriftDiffusion::create(
+            d, s, {.field_mobility = true, .fermi_dirac = true, .incomplete_ionization = true});
+        REQUIRE(dd.set_bias(std::vector<double>{0.3, 0.0}).has_value());
+        const auto x = probe(dd, d, 5);
+        const History h = history(dd, x, 11);
+        const DriftDiffusion::TimeStep step{1e-3, h.storage, h.traps};
+        CHECK(undeclared(dd, x) == 0);
+        CHECK(undeclared(dd, x, &step) == 0);
+    }
+    {
+        const device::Device d = mos(2);
+        const auto s = *assemble::make_scaling(d);
+        auto dd = *DriftDiffusion::create(d, s);
+        REQUIRE(dd.set_bias(std::vector<double>{-0.4, 0.1}).has_value());
+        const auto x = probe(dd, d, 3);
+        const History h = history(dd, x, 13);
+        const DriftDiffusion::TimeStep step{1e-3, h.storage, h.traps};
+        CHECK(undeclared(dd, x, &step) == 0);
+    }
+    {
+        const device::Device d = moscap();
+        const auto s = *assemble::make_scaling(d);
+        auto dd = *DriftDiffusion::create(d, s);
+        REQUIRE(dd.set_bias(std::vector<double>{0.5, 0.0}).has_value());
+        CHECK(undeclared(dd, probe(dd, d, 9)) == 0);
+    }
+    for (const assemble::PhysicsModels m :
+         {assemble::PhysicsModels{.impact_ionization = true},
+          assemble::PhysicsModels{.btbt_local = true},
+          assemble::PhysicsModels{.btbt_nonlocal = assemble::NonlocalTunnelling::kane}}) {
+        const bool impact = m.impact_ionization;
+        const device::Device d = impact ? block(2, 11, 1e-4) : block(2, 13, 3e-6);
+        const auto s = *assemble::make_scaling(d);
+        auto dd = *DriftDiffusion::create(d, s, m);
+        const auto x = impact ? sloped(dd, d, s, 3e5, 0.5, 1e16, 1e15, 0.05, 7)
+                              : sloped(dd, d, s, 4e6, 0.35, 1e17, 1e3, 0.02, 3);
+        if (dd.tunnelling()) dd.set_paths(dd.trace_paths(x));
+        CHECK(undeclared(dd, x) == 0);
+    }
+    for (const bool gate : {false, true}) {
+        const device::Device d = thermal_diode(2, !gate, gate);
+        const auto s = *assemble::make_scaling(d);
+        auto dd = *DriftDiffusion::create(
+            d, s, {.fermi_dirac = !gate, .impact_ionization = true, .electrothermal = true});
+        REQUIRE(dd.set_bias(gate ? std::vector<double>{0.4, -0.3, 0.7}
+                                 : std::vector<double>{0.4, -0.3})
+                    .has_value());
+        const auto before = heated(dd, d, s, 0.05, 5, 0.25);
+        const auto x = heated(dd, d, s, 0.05, 11, 0.3, 1160.0);
+        const std::vector<double> storage = dd.storage(before);
+        const DriftDiffusion::TimeStep step{0.7, storage, {}};
+        CHECK(undeclared(dd, x, &step) == 0);
+    }
 }

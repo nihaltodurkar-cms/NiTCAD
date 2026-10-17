@@ -178,8 +178,6 @@ void run_points(std::span<const std::vector<double>> points,
     }
 }
 
-}  // namespace
-
 std::expected<results::Sweep, base::Error> sweep_bias_unobserved(const device::Device& device,
                                                       std::span<const std::vector<double>> points,
                                                       const BiasOptions& options,
@@ -407,6 +405,8 @@ std::expected<results::Sweep, base::Error> sweep_bias_unobserved(const device::D
                });
     return sweep;
 }
+
+}  // namespace
 
 std::expected<results::BiasPoint, base::Error> solve_bias(const device::Device& device,
                                                           std::span<const double> bias_V,

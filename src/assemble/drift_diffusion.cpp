@@ -551,7 +551,10 @@ void DriftDiffusion::stamp_contacts(std::span<double> x) const {
     detail::observe("stamp_contacts", x);
 }
 
-const DofMap& DriftDiffusion::dofs() const noexcept { return composition_->dofs(); }
+const DofMap& DriftDiffusion::dofs() const noexcept {
+    NITCAD_EXPECTS(composition_ != nullptr);  // not a moved-from system
+    return composition_->dofs();
+}
 
 linalg::SparseMatrix DriftDiffusion::make_jacobian() const { return pattern_; }
 

@@ -21,7 +21,7 @@ constexpr FieldId all3[] = {FieldId::potential, FieldId::electrons, FieldId::hol
 
 }  // namespace
 
-using Evaluation = DriftDiffusion::Terms::Evaluation;
+using Evaluation = TermAccess::Evaluation;
 
 void DriftDiffusion::Term::pattern(const DriftDiffusion&, std::vector<linalg::Triplet>&) const {}
 
@@ -712,7 +712,7 @@ std::shared_ptr<const DriftDiffusion::Term> DriftDiffusion::Terms::poisson_charg
 namespace {
 
 template <class T>
-std::shared_ptr<const DriftDiffusion::Term> make_term() {
+std::shared_ptr<const TermAccess::Term> make_term() {
     return std::make_shared<T>();
 }
 

@@ -240,8 +240,6 @@ std::expected<void, base::Error> correct(Bordered& b, std::span<double> y,
                            .value = record.iterations.back().update}});
 }
 
-}  // namespace
-
 std::expected<results::Sweep, base::Error> trace_bias_unobserved(const device::Device& device,
                                                       const TraceOptions& options,
                                                       const results::NodeFields* initial,
@@ -593,6 +591,8 @@ std::expected<results::Sweep, base::Error> trace_bias_unobserved(const device::D
     }
     return run;
 }
+
+}  // namespace
 
 // The public trace: the body above, its result handed to the test observer (observe.hpp).
 std::expected<results::Sweep, base::Error> trace_bias(const device::Device& device,
