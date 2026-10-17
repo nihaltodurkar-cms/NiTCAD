@@ -1,5 +1,6 @@
-// Files: meshes, sweeps and checkpoints on disk (ARCHITECTURE.md 6.5, 6.6 and 11.3, Unit 29; the
-// io layer approved by the owner on 2026-10-09).
+// Files: meshes, sweeps, checkpoints, transient and small-signal runs on disk (ARCHITECTURE.md
+// 6.5, 6.6 and 11.3, Unit 29; the io layer approved by the owner on 2026-10-09; transient and
+// small-signal runs and provenance, Unit 42).
 //
 // One container format for every content:
 //   magic "NiTCADio" (8 bytes) | format version (u32) | content kind (u32) |
@@ -30,13 +31,22 @@
 #include "NiTCAD/mesh/generate.hpp"
 #include "NiTCAD/mesh/mesh.hpp"
 #include "NiTCAD/results/run.hpp"
+#include "NiTCAD/results/small_signal.hpp"
 #include "NiTCAD/results/solution.hpp"
+#include "NiTCAD/results/transient.hpp"
 
 namespace NiTCAD::io {
 
 inline constexpr std::uint32_t format_version = 1;
 
-enum class Content : std::uint32_t { mesh = 1, sweep = 2, checkpoint = 3, device = 4 };
+enum class Content : std::uint32_t {
+    mesh = 1,
+    sweep = 2,
+    checkpoint = 3,
+    device = 4,
+    transient = 5,     // Unit 42
+    small_signal = 6,  // Unit 42
+};
 
 // A 64-bit FNV-1a digest of the mesh graph (dimension, points, volumes, edges, boundary patches;
 // doubles by bit pattern). Equal meshes give equal digests; it identifies a mesh on any machine,
@@ -65,6 +75,27 @@ enum class Content : std::uint32_t { mesh = 1, sweep = 2, checkpoint = 3, device
 [[nodiscard]] std::expected<void, base::Error> save_sweep(const std::filesystem::path& path,
                                                           const results::Sweep& sweep);
 [[nodiscard]] std::expected<results::Sweep, base::Error> load_sweep(
+    const std::filesystem::path& path);
+
+// Every field of a transient run (Unit 42): the run record, every time point, every snapshot,
+// the step counts, the stopping error and the unfinished history. A trace (solve::trace_bias)
+// is a Sweep and goes through save_sweep.
+[[nodiscard]] std::expected<void, base::Error> save_transient(const std::filesystem::path& path,
+                                                              const results::Transient& run);
+// Refused (invalid_input) also when a snapshot names a time point the file does not have.
+[[nodiscard]] std::expected<results::Transient, base::Error> load_transient(
+    const std::filesystem::path& path);
+
+// Every field of a small-signal run (Unit 42): the run record, the contact count, the
+// frequencies, and per point the operating point, the admittances, the solve diagnostics, the
+// resolutions and the small-signal fields; the stopping error and the unfinished history.
+// Complex values are stored as (real, imaginary) pairs, bit for bit.
+[[nodiscard]] std::expected<void, base::Error> save_small_signal(const std::filesystem::path& path,
+                                                                 const results::SmallSignal& run);
+// Refused (invalid_input) also when a point's admittances are not one contacts x contacts matrix
+// per frequency, its resolutions not one value per frequency and contact (or none), or its fields
+// name a contact that is not there.
+[[nodiscard]] std::expected<results::SmallSignal, base::Error> load_small_signal(
     const std::filesystem::path& path);
 
 // A restart point: the state of one converged bias point and what it belongs to. A sweep restarts

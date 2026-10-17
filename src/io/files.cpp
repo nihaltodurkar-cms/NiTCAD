@@ -2,6 +2,7 @@
 
 #include <array>
 #include <bit>
+#include <complex>
 #include <cstddef>
 #include <fstream>
 #include <iterator>
@@ -299,6 +300,33 @@ namespace checkpoint_key {
 constexpr std::uint16_t mesh_digest = 1, run_identity = 2, bias = 3, thermal_bias = 4,
                         fields = 5, nodes = 6;
 constexpr std::uint16_t provenance = 7;  // Unit 42; absent in older files
+}
+// Transient runs (Unit 42).
+namespace transient_key {
+constexpr std::uint16_t run = 1, point = 2, snapshot = 3, rejected = 4, retraced = 5, lagged = 6,
+                        stopped = 7, unfinished = 8;
+}
+namespace time_key {
+constexpr std::uint16_t time = 1, step = 2, order = 3, error_ratio = 4, bias = 5, current = 6,
+                        conduction = 7, displacement = 8, contact_charge = 9, trap_charge = 10,
+                        thermal_heat = 11, convergence = 12;
+}
+namespace snapshot_key {
+constexpr std::uint16_t time = 1, point = 2, fields = 3, bands = 4, edge_n = 5, edge_p = 6,
+                        occupancy = 7;
+}
+// Small-signal runs (Unit 42). Complex values are stored as (real, imaginary) pairs of doubles.
+namespace small_signal_key {
+constexpr std::uint16_t run = 1, contacts = 2, frequencies = 3, point = 4, stopped = 5,
+                        unfinished = 6;
+}
+namespace ac_point_key {
+// admittance and resolution repeat once per frequency, in frequency order.
+constexpr std::uint16_t dc = 1, admittance = 2, pivot_ratio = 3, backward_error = 4,
+                        resolution = 5, fields = 6;
+}
+namespace ac_fields_key {
+constexpr std::uint16_t frequency = 1, contact = 2, potential = 3, n = 4, p = 5, temperature = 6;
 }
 
 Writer write_fields(const results::NodeFields& f) {
@@ -607,6 +635,239 @@ void write_digest_integer(std::uint64_t& h, std::uint64_t v) {
     h = detail::fnv1a(b, h);
 }
 
+// --- transient and small-signal runs (Unit 42) -------------------------------------------------
+
+Writer write_bands(const results::BandDiagram& b) {
+    Writer w;
+    w.f64s(bands_key::conduction, b.conduction_eV);
+    w.f64s(bands_key::valence, b.valence_eV);
+    w.f64s(bands_key::electron, b.electron_fermi_eV);
+    w.f64s(bands_key::hole, b.hole_fermi_eV);
+    return w;
+}
+
+std::expected<results::BandDiagram, base::Error> read_bands(const Reader& r) {
+    NITCAD_IO_TRY(conduction, r.f64s_or_empty(bands_key::conduction));
+    NITCAD_IO_TRY(valence, r.f64s_or_empty(bands_key::valence));
+    NITCAD_IO_TRY(electron, r.f64s_or_empty(bands_key::electron));
+    NITCAD_IO_TRY(hole, r.f64s_or_empty(bands_key::hole));
+    return results::BandDiagram{std::move(conduction), std::move(valence), std::move(electron),
+                                std::move(hole)};
+}
+
+// A size_t count or index stored as u64; corrupt if it does not fit.
+std::expected<std::size_t, base::Error> size_of(std::uint64_t v, const char* what) {
+    if (v > std::numeric_limits<std::size_t>::max()) return std::unexpected(corrupt(what));
+    return static_cast<std::size_t>(v);
+}
+
+std::vector<double> interleaved(std::span<const std::complex<double>> v) {
+    std::vector<double> out;
+    out.reserve(2 * v.size());
+    for (const std::complex<double> z : v) {
+        out.push_back(z.real());
+        out.push_back(z.imag());
+    }
+    return out;
+}
+
+std::expected<std::vector<std::complex<double>>, base::Error> complexes(
+    const std::vector<double>& v) {
+    if (v.size() % 2 != 0) return std::unexpected(corrupt("odd length of a complex array"));
+    std::vector<std::complex<double>> out(v.size() / 2);
+    for (std::size_t i = 0; i < out.size(); ++i) out[i] = {v[2 * i], v[2 * i + 1]};
+    return out;
+}
+
+std::expected<std::vector<std::complex<double>>, base::Error> read_complexes(const Reader& r,
+                                                                             std::uint16_t key) {
+    NITCAD_IO_TRY(v, r.f64s_or_empty(key));
+    return complexes(v);
+}
+
+Writer write_time_point(const results::TimePoint& p) {
+    namespace k = time_key;
+    Writer w;
+    w.f64(k::time, p.time_s);
+    w.f64(k::step, p.step_s);
+    w.i64(k::order, p.order);
+    w.f64(k::error_ratio, p.error_ratio);
+    w.f64s(k::bias, p.bias_V);
+    w.f64s(k::current, p.terminal_current);
+    w.f64s(k::conduction, p.conduction_current);
+    w.f64s(k::displacement, p.displacement_current);
+    w.f64s(k::contact_charge, p.contact_charge);
+    w.f64s(k::trap_charge, p.interface_trap_charge);
+    w.f64s(k::thermal_heat, p.thermal_contact_heat);
+    w.record(k::convergence, write_convergence(p.convergence));
+    return w;
+}
+
+std::expected<results::TimePoint, base::Error> read_time_point(const Reader& r) {
+    namespace k = time_key;
+    NITCAD_IO_TRY(time, r.f64(k::time));
+    NITCAD_IO_TRY(step, r.f64(k::step));
+    NITCAD_IO_TRY(order, r.i64(k::order));
+    if (order < 0 || order > 2) return std::unexpected(corrupt("time step order"));
+    NITCAD_IO_TRY(error_ratio, r.f64(k::error_ratio));
+    NITCAD_IO_TRY(bias, r.f64s_or_empty(k::bias));
+    NITCAD_IO_TRY(current, r.f64s_or_empty(k::current));
+    NITCAD_IO_TRY(conduction, r.f64s_or_empty(k::conduction));
+    NITCAD_IO_TRY(displacement, r.f64s_or_empty(k::displacement));
+    NITCAD_IO_TRY(contact_charge, r.f64s_or_empty(k::contact_charge));
+    NITCAD_IO_TRY(trap_charge, r.f64s_or_empty(k::trap_charge));
+    NITCAD_IO_TRY(thermal_heat, r.f64s_or_empty(k::thermal_heat));
+    NITCAD_IO_TRY(c, r.record(k::convergence));
+    NITCAD_IO_TRY(convergence, read_convergence(c));
+    return results::TimePoint{.time_s = time,
+                              .step_s = step,
+                              .order = static_cast<int>(order),
+                              .error_ratio = error_ratio,
+                              .bias_V = std::move(bias),
+                              .terminal_current = std::move(current),
+                              .conduction_current = std::move(conduction),
+                              .displacement_current = std::move(displacement),
+                              .contact_charge = std::move(contact_charge),
+                              .interface_trap_charge = std::move(trap_charge),
+                              .thermal_contact_heat = std::move(thermal_heat),
+                              .convergence = std::move(convergence)};
+}
+
+Writer write_snapshot(const results::TransientSnapshot& s) {
+    namespace k = snapshot_key;
+    Writer w;
+    w.f64(k::time, s.time_s);
+    w.u64(k::point, s.point);
+    w.record(k::fields, write_fields(s.fields));
+    w.record(k::bands, write_bands(s.bands));
+    w.f64s(k::edge_n, s.edge_current_n);
+    w.f64s(k::edge_p, s.edge_current_p);
+    w.f64s(k::occupancy, s.trap_occupancy);
+    return w;
+}
+
+std::expected<results::TransientSnapshot, base::Error> read_snapshot(const Reader& r,
+                                                                     std::size_t points) {
+    namespace k = snapshot_key;
+    results::TransientSnapshot s;
+    NITCAD_IO_TRY(time, r.f64(k::time));
+    s.time_s = time;
+    NITCAD_IO_TRY(point, r.u64(k::point));
+    if (point >= points) return std::unexpected(corrupt("snapshot of a time point that is not there"));
+    s.point = static_cast<std::size_t>(point);
+    NITCAD_IO_TRY(f, r.record(k::fields));
+    NITCAD_IO_TRY(fields, read_fields(f));
+    s.fields = std::move(fields);
+    NITCAD_IO_TRY(b, r.record(k::bands));
+    NITCAD_IO_TRY(bands, read_bands(b));
+    s.bands = std::move(bands);
+    NITCAD_IO_TRY(edge_n, r.f64s_or_empty(k::edge_n));
+    NITCAD_IO_TRY(edge_p, r.f64s_or_empty(k::edge_p));
+    NITCAD_IO_TRY(occupancy, r.f64s_or_empty(k::occupancy));
+    s.edge_current_n = std::move(edge_n);
+    s.edge_current_p = std::move(edge_p);
+    s.trap_occupancy = std::move(occupancy);
+    return s;
+}
+
+Writer write_ac_fields(const results::SmallSignalFields& f) {
+    namespace k = ac_fields_key;
+    Writer w;
+    w.f64(k::frequency, f.frequency_Hz);
+    w.u64(k::contact, f.contact);
+    w.f64s(k::potential, interleaved(f.potential));
+    w.f64s(k::n, interleaved(f.n_cm3));
+    w.f64s(k::p, interleaved(f.p_cm3));
+    w.f64s(k::temperature, interleaved(f.temperature_K));
+    return w;
+}
+
+std::expected<results::SmallSignalFields, base::Error> read_ac_fields(const Reader& r) {
+    namespace k = ac_fields_key;
+    results::SmallSignalFields f;
+    NITCAD_IO_TRY(frequency, r.f64(k::frequency));
+    f.frequency_Hz = frequency;
+    NITCAD_IO_TRY(contact, r.u64(k::contact));
+    NITCAD_IO_TRY(c, size_of(contact, "small-signal field contact"));
+    f.contact = c;
+    NITCAD_IO_TRY(potential, read_complexes(r, k::potential));
+    NITCAD_IO_TRY(n, read_complexes(r, k::n));
+    NITCAD_IO_TRY(p, read_complexes(r, k::p));
+    NITCAD_IO_TRY(temperature, read_complexes(r, k::temperature));
+    f.potential = std::move(potential);
+    f.n_cm3 = std::move(n);
+    f.p_cm3 = std::move(p);
+    f.temperature_K = std::move(temperature);
+    return f;
+}
+
+// The admittance matrices of all frequencies as one array, in frequency order, each row-major as
+// in memory; the resolutions likewise (frequency, then driven contact).
+Writer write_ac_point(const results::SmallSignalPoint& p) {
+    namespace k = ac_point_key;
+    Writer w;
+    w.record(k::dc, write_point(p.dc));
+    std::vector<double> admittance, resolution;
+    for (const auto& y : p.admittance) {
+        const std::vector<double> v = interleaved(y);
+        admittance.insert(admittance.end(), v.begin(), v.end());
+    }
+    for (const auto& r : p.resolution) resolution.insert(resolution.end(), r.begin(), r.end());
+    w.f64s(k::admittance, admittance);
+    w.f64s(k::pivot_ratio, p.pivot_ratio);
+    w.f64s(k::backward_error, p.backward_error);
+    w.f64s(k::resolution, resolution);
+    for (const auto& f : p.fields) w.record(k::fields, write_ac_fields(f));
+    return w;
+}
+
+// Every point has one contacts x contacts admittance matrix per frequency, so that
+// SmallSignal::admittance stays in bounds; the resolution has one value per frequency and driven
+// contact, or none.
+std::expected<results::SmallSignalPoint, base::Error> read_ac_point(const Reader& r,
+                                                                    std::size_t frequencies,
+                                                                    std::size_t contacts) {
+    namespace k = ac_point_key;
+    results::SmallSignalPoint p;
+    NITCAD_IO_TRY(dc, r.record(k::dc));
+    NITCAD_IO_TRY(point, read_point(dc));
+    p.dc = std::move(point);
+    NITCAD_IO_TRY(flat, r.f64s_or_empty(k::admittance));
+    NITCAD_IO_TRY(admittance, complexes(flat));
+    // load_small_signal bounds contacts and frequencies, so these products do not overflow.
+    const std::size_t matrix = contacts * contacts;
+    if (admittance.size() != frequencies * matrix) {
+        return std::unexpected(corrupt("admittances do not fit the frequencies and contacts"));
+    }
+    for (std::size_t f = 0; f < frequencies; ++f) {
+        const auto first = admittance.begin() + static_cast<std::ptrdiff_t>(f * matrix);
+        p.admittance.emplace_back(first, first + static_cast<std::ptrdiff_t>(matrix));
+    }
+    NITCAD_IO_TRY(pivot_ratio, r.f64s_or_empty(k::pivot_ratio));
+    NITCAD_IO_TRY(backward_error, r.f64s_or_empty(k::backward_error));
+    p.pivot_ratio = std::move(pivot_ratio);
+    p.backward_error = std::move(backward_error);
+    NITCAD_IO_TRY(resolution, r.f64s_or_empty(k::resolution));
+    if (!resolution.empty()) {
+        if (resolution.size() != frequencies * contacts) {
+            return std::unexpected(corrupt("resolutions do not fit the frequencies and contacts"));
+        }
+        for (std::size_t f = 0; f < frequencies; ++f) {
+            const auto first = resolution.begin() + static_cast<std::ptrdiff_t>(f * contacts);
+            p.resolution.emplace_back(first, first + static_cast<std::ptrdiff_t>(contacts));
+        }
+    }
+    NITCAD_IO_TRY(fields, r.records(k::fields));
+    for (const Reader& f : fields) {
+        NITCAD_IO_TRY(ac, read_ac_fields(f));
+        if (ac.contact >= contacts) {
+            return std::unexpected(corrupt("small-signal fields of a contact that is not there"));
+        }
+        p.fields.push_back(std::move(ac));
+    }
+    return p;
+}
+
 }  // namespace
 
 std::uint64_t mesh_digest(const mesh::Mesh& m) {
@@ -831,6 +1092,110 @@ std::expected<Checkpoint, base::Error> load_checkpoint(const std::filesystem::pa
         c.provenance = std::move(provenance);
     }
     return c;
+}
+
+std::expected<void, base::Error> save_transient(const std::filesystem::path& path,
+                                                const results::Transient& t) {
+    namespace k = transient_key;
+    Writer w;
+    w.record(k::run, write_run(t.run));
+    for (const results::TimePoint& p : t.points) w.record(k::point, write_time_point(p));
+    for (const results::TransientSnapshot& s : t.snapshots) w.record(k::snapshot, write_snapshot(s));
+    w.u64(k::rejected, t.rejected_steps);
+    w.u64(k::retraced, t.retraced_steps);
+    w.u64(k::lagged, t.lagged_steps);
+    if (t.stopped) w.record(k::stopped, write_error(*t.stopped));
+    if (t.unfinished) w.record(k::unfinished, write_convergence(*t.unfinished));
+    return write_file(path, Content::transient, w);
+}
+
+std::expected<results::Transient, base::Error> load_transient(const std::filesystem::path& path) {
+    namespace k = transient_key;
+    NITCAD_IO_TRY(bytes, read_file(path, Content::transient));
+    NITCAD_IO_TRY(r, Reader::parse(bytes));
+    results::Transient t;
+    NITCAD_IO_TRY(run_record, r.record(k::run));
+    NITCAD_IO_TRY(run, read_run(run_record));
+    t.run = std::move(run);
+    NITCAD_IO_TRY(points, r.records(k::point));
+    for (const Reader& p : points) {
+        NITCAD_IO_TRY(point, read_time_point(p));
+        t.points.push_back(std::move(point));
+    }
+    NITCAD_IO_TRY(snapshots, r.records(k::snapshot));
+    for (const Reader& s : snapshots) {
+        NITCAD_IO_TRY(snapshot, read_snapshot(s, t.points.size()));
+        t.snapshots.push_back(std::move(snapshot));
+    }
+    NITCAD_IO_TRY(rejected, r.u64(k::rejected));
+    NITCAD_IO_TRY(retraced, r.u64(k::retraced));
+    NITCAD_IO_TRY(lagged, r.u64(k::lagged));
+    NITCAD_IO_TRY(rejected_n, size_of(rejected, "rejected step count"));
+    NITCAD_IO_TRY(retraced_n, size_of(retraced, "retraced step count"));
+    NITCAD_IO_TRY(lagged_n, size_of(lagged, "lagged step count"));
+    t.rejected_steps = rejected_n;
+    t.retraced_steps = retraced_n;
+    t.lagged_steps = lagged_n;
+    if (r.has(k::stopped)) {
+        NITCAD_IO_TRY(e, r.record(k::stopped));
+        NITCAD_IO_TRY(stopped, read_error(e));
+        t.stopped = std::move(stopped);
+    }
+    if (r.has(k::unfinished)) {
+        NITCAD_IO_TRY(c, r.record(k::unfinished));
+        NITCAD_IO_TRY(unfinished, read_convergence(c));
+        t.unfinished = std::move(unfinished);
+    }
+    return t;
+}
+
+std::expected<void, base::Error> save_small_signal(const std::filesystem::path& path,
+                                                   const results::SmallSignal& s) {
+    namespace k = small_signal_key;
+    Writer w;
+    w.record(k::run, write_run(s.run));
+    w.u64(k::contacts, s.contacts);
+    w.f64s(k::frequencies, s.frequency_Hz);
+    for (const results::SmallSignalPoint& p : s.points) w.record(k::point, write_ac_point(p));
+    if (s.stopped) w.record(k::stopped, write_error(*s.stopped));
+    if (s.unfinished) w.record(k::unfinished, write_convergence(*s.unfinished));
+    return write_file(path, Content::small_signal, w);
+}
+
+std::expected<results::SmallSignal, base::Error> load_small_signal(
+    const std::filesystem::path& path) {
+    namespace k = small_signal_key;
+    NITCAD_IO_TRY(bytes, read_file(path, Content::small_signal));
+    NITCAD_IO_TRY(r, Reader::parse(bytes));
+    results::SmallSignal s;
+    NITCAD_IO_TRY(run_record, r.record(k::run));
+    NITCAD_IO_TRY(run, read_run(run_record));
+    s.run = std::move(run);
+    NITCAD_IO_TRY(contacts, r.u64(k::contacts));
+    NITCAD_IO_TRY(frequencies, r.f64s_or_empty(k::frequencies));
+    // A file's arrays are bounded by its size (far below 2^40 values), so these bounds keep
+    // frequencies x contacts^2 well inside 64 bits.
+    if (contacts > (std::uint64_t{1} << 16) || frequencies.size() > (std::size_t{1} << 30)) {
+        return std::unexpected(corrupt("small-signal contact or frequency count"));
+    }
+    s.contacts = static_cast<std::size_t>(contacts);
+    s.frequency_Hz = std::move(frequencies);
+    NITCAD_IO_TRY(points, r.records(k::point));
+    for (const Reader& p : points) {
+        NITCAD_IO_TRY(point, read_ac_point(p, s.frequency_Hz.size(), s.contacts));
+        s.points.push_back(std::move(point));
+    }
+    if (r.has(k::stopped)) {
+        NITCAD_IO_TRY(e, r.record(k::stopped));
+        NITCAD_IO_TRY(stopped, read_error(e));
+        s.stopped = std::move(stopped);
+    }
+    if (r.has(k::unfinished)) {
+        NITCAD_IO_TRY(c, r.record(k::unfinished));
+        NITCAD_IO_TRY(unfinished, read_convergence(c));
+        s.unfinished = std::move(unfinished);
+    }
+    return s;
 }
 
 }  // namespace NiTCAD::io
