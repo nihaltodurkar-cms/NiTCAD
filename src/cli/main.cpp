@@ -5,12 +5,14 @@
 //                         provenance (Unit 42)
 //   nitcad --version      print the build: version, git revision, build type, compiler, Eigen
 //
-// Exit status: 0 done; 1 the deck or the run failed (the message on stderr); 2 the sweep stopped
-// early (its completed points and outputs are written; the reason on stderr); 64 usage.
+// Exit status: 0 done; 1 the deck or the run failed (the message on stderr); 2 a sweep, trace,
+// transient or small-signal run stopped early (its completed part and outputs are written; the
+// reason on stderr; Unit 43 for the last three); 64 usage.
 // Ctrl+C or Ctrl+Break asks the run to stop: the solver stops at its next check and the completed
 // points are written, as for any early stop.
 #include <windows.h>
 
+#include <algorithm>
 #include <cstdio>
 #include <stop_token>
 #include <string>
@@ -60,6 +62,12 @@ int fail(const NiTCAD::base::Error& e) {
     return 1;
 }
 
+// A waveform's shape, from its kind and the number of its parameters (two per corner).
+const char* waveform_name(NiTCAD::solve::Waveform::Kind kind, std::size_t parameters) {
+    if (kind == NiTCAD::solve::Waveform::Kind::sine) return "sine";
+    return parameters == 2 ? "constant" : "piecewise linear";
+}
+
 const char* kind_name(NiTCAD::device::ContactKind k) {
     switch (k) {
     case NiTCAD::device::ContactKind::ohmic: return "ohmic";
@@ -80,11 +88,34 @@ void describe(const NiTCAD::deck::Plan& plan) {
     for (const auto& c : d.contacts()) {
         std::printf("contact %s: %s, %zu nodes\n", c.name.c_str(), kind_name(c.kind), c.nodes.size());
     }
-    if (plan.analysis == NiTCAD::deck::Analysis::equilibrium) {
-        std::puts("analysis: equilibrium");
-    } else {
+    using NiTCAD::deck::Analysis;
+    switch (plan.analysis) {
+    case Analysis::equilibrium: std::puts("analysis: equilibrium"); break;
+    case Analysis::sweep:
         std::printf("analysis: sweep of %zu point(s)%s\n", plan.points.size(),
                     plan.restart.empty() ? "" : ", restarted from a checkpoint");
+        break;
+    case Analysis::transient: {
+        std::printf("analysis: transient to %g s\n", plan.transient.t_end_s);
+        const auto contacts = d.contacts();
+        for (std::size_t k = 0; k < contacts.size(); ++k) {
+            std::printf("  contact %s: %s\n", contacts[k].name.c_str(),
+                        waveform_name(plan.waveforms[k].kind(), plan.waveforms[k].parameters().size()));
+        }
+        break;
+    }
+    case Analysis::small_signal: {
+        const auto& f = plan.small_signal.frequencies_Hz;
+        std::printf("analysis: small signal at %zu point(s), %zu frequenc%s from %g to %g Hz\n",
+                    plan.points.size(), f.size(), f.size() == 1 ? "y" : "ies",
+                    *std::min_element(f.begin(), f.end()), *std::max_element(f.begin(), f.end()));
+        break;
+    }
+    case Analysis::trace:
+        std::printf("analysis: trace of contact %s from %g to %g V\n",
+                    d.contacts()[plan.trace.contact].name.c_str(), plan.trace.start_V[plan.trace.contact],
+                    plan.trace.end_V);
+        break;
     }
 }
 
@@ -107,10 +138,18 @@ int main(int argc, char** argv) {
 
     SetConsoleCtrlHandler(on_console_event, TRUE);
     NiTCAD::solve::RunControl control{.stop = stop.get_token(), .progress = {}};
-    control.progress = [](const NiTCAD::solve::Progress& p) {
+    const bool tracing = plan->analysis == NiTCAD::deck::Analysis::trace;
+    control.progress = [tracing](const NiTCAD::solve::Progress& p) {
         if (!p.converged) return;
-        if (p.phase == NiTCAD::solve::Phase::equilibrium) {
+        using NiTCAD::solve::Phase;
+        if (p.phase == Phase::equilibrium) {
             std::printf("equilibrium: converged in %d iterations\n", p.iteration);
+        } else if (p.phase == Phase::transient) {
+            std::printf("t = %.6g s: converged (%d iterations)\n", p.time_s, p.iteration);
+        } else if (p.phase == Phase::small_signal) {
+            std::printf("point %zu of %zu, %.6g Hz: solved\n", p.point + 1, p.point_count, p.frequency_Hz);
+        } else if (tracing) {
+            std::printf("traced point %zu: converged (%d iterations)\n", p.point + 1, p.iteration);
         } else {
             std::printf("point %zu of %zu: converged (%d iterations)\n", p.point + 1, p.point_count,
                         p.iteration);
@@ -127,9 +166,27 @@ int main(int argc, char** argv) {
     // wall time.
     print_provenance(report->sweep ? report->sweep->run.provenance : NiTCAD::solve::provenance());
     if (report->sweep && report->sweep->stopped) {
-        std::fprintf(stderr, "nitcad: the sweep stopped after %zu of %zu point(s): %s\n",
-                     report->sweep->points.size(), plan->points.size() - report->skipped_points,
-                     report->sweep->stopped->message.c_str());
+        if (plan->analysis == NiTCAD::deck::Analysis::trace) {
+            std::fprintf(stderr, "nitcad: the trace stopped after %zu point(s): %s\n",
+                         report->sweep->points.size(), report->sweep->stopped->message.c_str());
+        } else {
+            std::fprintf(stderr, "nitcad: the sweep stopped after %zu of %zu point(s): %s\n",
+                         report->sweep->points.size(), plan->points.size() - report->skipped_points,
+                         report->sweep->stopped->message.c_str());
+        }
+        return 2;
+    }
+    if (report->transient && report->transient->stopped) {
+        const auto& t = *report->transient;
+        std::fprintf(stderr, "nitcad: the transient stopped at t = %g s after %zu step(s): %s\n",
+                     t.points.empty() ? 0.0 : t.points.back().time_s,
+                     t.points.empty() ? std::size_t{0} : t.points.size() - 1, t.stopped->message.c_str());
+        return 2;
+    }
+    if (report->small_signal && report->small_signal->stopped) {
+        std::fprintf(stderr, "nitcad: the small-signal run stopped after %zu of %zu point(s): %s\n",
+                     report->small_signal->points.size(), plan->points.size(),
+                     report->small_signal->stopped->message.c_str());
         return 2;
     }
     return 0;

@@ -1,6 +1,7 @@
 #include "NiTCAD/deck/build.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
@@ -17,6 +18,7 @@
 #include "NiTCAD/mesh/tensor_grid.hpp"
 #include "NiTCAD/physics/insulator.hpp"
 #include "values.hpp"
+#include "waveforms.hpp"
 
 // Unwraps an expected into `var`, or returns its error from the enclosing function.
 #define NITCAD_DECK_TRY(var, expr)                                                \
@@ -195,6 +197,18 @@ private:
     std::expected<void, base::Error> models(assemble::PhysicsModels& m) const;
     std::expected<void, base::Error> solver(Plan& plan) const;
     std::expected<void, base::Error> analysis(Plan& plan) const;
+    std::expected<void, base::Error> transient(const Section& s, Plan& plan) const;
+    std::expected<void, base::Error> small_signal(const Section& s, Plan& plan) const;
+    std::expected<void, base::Error> trace(const Section& s, Plan& plan) const;
+    template <class Other>
+    std::expected<void, base::Error> operating_points(const Section& s, Plan& plan, Other&& other) const;
+    std::expected<bool, base::Error> held_temperature(const Entry& e, Plan& plan,
+                                                      std::vector<bool>& given) const;
+    std::expected<std::size_t, base::Error> contact_index(const Entry& e, std::string_view name,
+                                                          const Plan& plan) const;
+    std::expected<std::size_t, base::Error> thermal_index(const Entry& e, std::string_view name,
+                                                          const Plan& plan) const;
+    base::Error no_restart(const Entry& e, const Section& s) const;
     std::expected<void, base::Error> outputs(Plan& plan) const;
     std::expected<Box, base::Error> box(const Entry& e, int dim) const;
 
@@ -205,8 +219,10 @@ private:
 };
 
 std::expected<void, base::Error> Builder::check_sections() const {
-    static const std::set<std::string_view> once{"device", "mesh", "doping", "models", "solver",
-                                                 "equilibrium", "sweep", "output"};
+    static const std::set<std::string_view> once{"device",       "mesh",      "doping",
+                                                 "models",       "solver",    "equilibrium",
+                                                 "sweep",        "transient", "small_signal",
+                                                 "trace",        "output"};
     static const std::set<std::string_view> many{"region", "contact", "interface",
                                                  "thermal_contact"};
     std::set<std::string> seen;
@@ -223,8 +239,12 @@ std::expected<void, base::Error> Builder::check_sections() const {
         }
     }
     if (!seen.contains("mesh")) return std::unexpected(at(1, "the deck has no [mesh] section"));
-    if (seen.contains("equilibrium") == seen.contains("sweep")) {
-        return std::unexpected(at(1, "the deck needs exactly one of [equilibrium] and [sweep]"));
+    const auto analyses = std::ranges::count_if(
+        std::array{"equilibrium", "sweep", "transient", "small_signal", "trace"},
+        [&](const char* k) { return seen.contains(k); });
+    if (analyses != 1) {
+        return std::unexpected(at(1, "the deck needs exactly one analysis: [equilibrium], [sweep], "
+                                     "[transient], [small_signal] or [trace]"));
     }
     return {};
 }
@@ -972,8 +992,181 @@ std::expected<void, base::Error> Builder::analysis(Plan& plan) const {
         plan.analysis = Analysis::equilibrium;
         return {};
     }
+    if (const Section* s = single("transient")) return transient(*s, plan);
+    if (const Section* s = single("small_signal")) return small_signal(*s, plan);
+    if (const Section* s = single("trace")) return trace(*s, plan);
     const Section& s = *single("sweep");
     plan.analysis = Analysis::sweep;
+    return operating_points(s, plan, [&](const Entry& e) -> std::expected<bool, base::Error> {
+        if (e.key != "restart") return false;
+        plan.restart = file(e);
+        return true;
+    });
+}
+
+// A refusal of `restart` outside [sweep] (DK9, Unit 43 AN6).
+base::Error Builder::no_restart(const Entry& e, const Section& s) const {
+    return at(e.line, "restart is only for [sweep] (DK9), not [" + s.kind + "]");
+}
+
+std::expected<std::size_t, base::Error> Builder::contact_index(const Entry& e, std::string_view name,
+                                                               const Plan& plan) const {
+    const auto contacts = plan.device.contacts();
+    const auto it = std::find_if(contacts.begin(), contacts.end(), [&](const auto& c) { return c.name == name; });
+    if (it == contacts.end()) return std::unexpected(at(e.line, "no contact named '" + std::string(name) + "'"));
+    return static_cast<std::size_t>(it - contacts.begin());
+}
+
+std::expected<std::size_t, base::Error> Builder::thermal_index(const Entry& e, std::string_view name,
+                                                               const Plan& plan) const {
+    const auto thermal = plan.device.thermal_contacts();
+    const auto it = std::find_if(thermal.begin(), thermal.end(), [&](const auto& t) { return t.name == name; });
+    if (it == thermal.end()) return std::unexpected(at(e.line, "no thermal contact named '" + std::string(name) + "'"));
+    return static_cast<std::size_t>(it - thermal.begin());
+}
+
+// `thermal <name> = <K>` entries of a run that holds one temperature list (a transient, a trace):
+// the thermal contacts' temperatures, each contact's own when not named; set only when one is
+// named. Returns whether `e` was such an entry.
+std::expected<bool, base::Error> Builder::held_temperature(const Entry& e, Plan& plan,
+                                                           std::vector<bool>& given) const {
+    const auto w = tokens(e.key);
+    if (w.size() != 2 || w[0] != "thermal") return false;
+    NITCAD_DECK_TRY(index, thermal_index(e, w[1], plan));
+    if (given.empty()) given.assign(plan.device.thermal_contacts().size(), false);
+    if (given[index]) return std::unexpected(at(e.line, "a second temperature for '" + std::string(w[1]) + "'"));
+    given[index] = true;
+    NITCAD_DECK_TRY(v, num(e));
+    if (plan.options.thermal_bias_K.empty()) {
+        std::vector<double> t;
+        for (const device::ThermalContact& c : plan.device.thermal_contacts()) t.push_back(c.temperature_K);
+        plan.options.thermal_bias_K.push_back(std::move(t));
+    }
+    plan.options.thermal_bias_K.front()[index] = v;
+    return true;
+}
+
+std::expected<void, base::Error> Builder::transient(const Section& s, Plan& plan) const {
+    plan.analysis = Analysis::transient;
+    solve::TransientOptions& o = plan.transient;
+    const auto contacts = plan.device.contacts();
+    std::vector<std::optional<solve::Waveform>> waveforms(contacts.size());
+    std::vector<bool> given_t;
+    bool t_end = false;
+    for (const Entry& e : s.entries) {
+        NITCAD_DECK_TRY(thermal, held_temperature(e, plan, given_t));
+        if (thermal) continue;
+        const auto w = tokens(e.key);
+        if (w.size() == 2 && w[0] == "contact") {
+            NITCAD_DECK_TRY(index, contact_index(e, w[1], plan));
+            if (waveforms[index]) return std::unexpected(at(e.line, "a second waveform for '" + std::string(w[1]) + "'"));
+            NITCAD_DECK_TRY(f, lift(e.line, waveform(e.value)));
+            waveforms[index] = std::move(f);
+        } else if (e.key == "t_end") {
+            NITCAD_DECK_TRY(v, num(e));
+            o.t_end_s = v;
+            t_end = true;
+        } else if (e.key == "dt_initial" || e.key == "dt_min" || e.key == "dt_max") {
+            NITCAD_DECK_TRY(v, num(e));
+            (e.key == "dt_initial" ? o.dt_initial_s : e.key == "dt_min" ? o.dt_min_s : o.dt_max_s) = v;
+        } else if (e.key == "integrator") {
+            if (e.value == "bdf2") o.integrator = solve::Integrator::bdf2;
+            else if (e.value == "backward_euler") o.integrator = solve::Integrator::backward_euler;
+            else return std::unexpected(at(e.line, "integrator is bdf2 or backward_euler"));
+        } else if (e.key == "adaptive" || e.key == "fields_every_step") {
+            NITCAD_DECK_TRY(v, lift(e.line, boolean(e.value)));
+            (e.key == "adaptive" ? o.adaptive : o.fields_every_step) = v;
+        } else if (e.key == "rtol") {
+            NITCAD_DECK_TRY(v, num(e));
+            o.rtol = v;
+        } else if (e.key == "density_ref") {
+            NITCAD_DECK_TRY(v, num(e));
+            o.density_ref_cm3 = v;
+        } else if (e.key == "output_times") {
+            NITCAD_DECK_TRY(v, lift(e.line, series(e.value, [](std::string_view t) { return number(t); })));
+            o.output_times_s = std::move(v);
+        } else if (e.key == "restart") {
+            return std::unexpected(no_restart(e, s));
+        } else {
+            return std::unexpected(unknown(e, s));
+        }
+    }
+    if (!t_end) return std::unexpected(at(s.line, "[transient] needs t_end"));
+    for (auto& f : waveforms) plan.waveforms.push_back(f ? std::move(*f) : solve::Waveform::constant(0.0));
+    return {};
+}
+
+std::expected<void, base::Error> Builder::small_signal(const Section& s, Plan& plan) const {
+    plan.analysis = Analysis::small_signal;
+    bool frequencies = false;
+    NITCAD_DECK_CHECK(operating_points(s, plan, [&](const Entry& e) -> std::expected<bool, base::Error> {
+        if (e.key == "restart") return std::unexpected(no_restart(e, s));
+        if (e.key != "frequencies" && e.key != "field_frequencies") return false;
+        NITCAD_DECK_TRY(v, lift(e.line, series(e.value, [](std::string_view t) { return number(t); })));
+        if (e.key == "frequencies") {
+            plan.small_signal.frequencies_Hz = std::move(v);
+            frequencies = true;
+        } else {
+            plan.small_signal.field_frequencies_Hz = std::move(v);
+        }
+        return true;
+    }));
+    if (!frequencies) return std::unexpected(at(s.line, "[small_signal] needs frequencies"));
+    return {};
+}
+
+std::expected<void, base::Error> Builder::trace(const Section& s, Plan& plan) const {
+    plan.analysis = Analysis::trace;
+    solve::TraceOptions& o = plan.trace;
+    o.start_V.assign(plan.device.contacts().size(), 0.0);
+    std::vector<bool> given(o.start_V.size(), false), given_t;
+    bool has_contact = false, has_end = false;
+    for (const Entry& e : s.entries) {
+        NITCAD_DECK_TRY(thermal, held_temperature(e, plan, given_t));
+        if (thermal) continue;
+        const auto w = tokens(e.key);
+        if (w.size() == 2 && w[0] == "start") {
+            NITCAD_DECK_TRY(index, contact_index(e, w[1], plan));
+            if (given[index]) return std::unexpected(at(e.line, "a second start for '" + std::string(w[1]) + "'"));
+            given[index] = true;
+            NITCAD_DECK_TRY(v, num(e));
+            o.start_V[index] = v;
+        } else if (e.key == "contact") {
+            NITCAD_DECK_TRY(index, contact_index(e, trimmed(e.value), plan));
+            o.contact = index;
+            has_contact = true;
+        } else if (e.key == "end") {
+            NITCAD_DECK_TRY(v, num(e));
+            o.end_V = v;
+            has_end = true;
+        } else if (e.key == "step" || e.key == "max_step" || e.key == "min_step" ||
+                   e.key == "density_floor") {
+            NITCAD_DECK_TRY(v, num(e));
+            (e.key == "step"       ? o.step_V
+             : e.key == "max_step" ? o.max_step_V
+             : e.key == "min_step" ? o.min_step_V
+                                   : o.density_floor_cm3) = v;
+        } else if (e.key == "current_limit") {
+            NITCAD_DECK_TRY(v, num(e));
+            o.current_limit = v;
+        } else if (e.key == "max_points") {
+            NITCAD_DECK_TRY(v, count(e, 1, 100'000'000));
+            o.max_points = static_cast<std::size_t>(v);
+        } else if (e.key == "restart") {
+            return std::unexpected(no_restart(e, s));
+        } else {
+            return std::unexpected(unknown(e, s));
+        }
+    }
+    if (!has_contact) return std::unexpected(at(s.line, "[trace] needs contact, the swept contact"));
+    if (!has_end) return std::unexpected(at(s.line, "[trace] needs end, the swept contact's last bias"));
+    return {};
+}
+
+// The operating points of [sweep] and [small_signal] (DK6): `contact <name>` and `thermal <name>`
+// series. `other` handles the section's other keys, returning whether it took the entry.
+template <class Other>
+std::expected<void, base::Error> Builder::operating_points(const Section& s, Plan& plan, Other&& other) const {
     const auto contacts = plan.device.contacts();
     const auto thermal = plan.device.thermal_contacts();
     std::vector<std::vector<double>> bias(contacts.size(), std::vector<double>{0.0});
@@ -984,10 +1177,8 @@ std::expected<void, base::Error> Builder::analysis(Plan& plan) const {
     std::size_t n = 1;
     int n_line = s.line;
     for (const Entry& e : s.entries) {
-        if (e.key == "restart") {
-            plan.restart = file(e);
-            continue;
-        }
+        NITCAD_DECK_TRY(taken, other(e));
+        if (taken) continue;
         const auto w = tokens(e.key);
         if (w.size() != 2 || (w[0] != "contact" && w[0] != "thermal")) return std::unexpected(unknown(e, s));
         const bool is_thermal = w[0] == "thermal";
@@ -1036,17 +1227,41 @@ std::expected<void, base::Error> Builder::outputs(Plan& plan) const {
     const Section* s = single("output");
     if (!s) return {};
     for (const Entry& e : s->entries) {
-        std::filesystem::path* target = e.key == "sweep"        ? &plan.outputs.sweep
-                                        : e.key == "device"     ? &plan.outputs.device
-                                        : e.key == "mesh"       ? &plan.outputs.mesh
-                                        : e.key == "checkpoint" ? &plan.outputs.checkpoint
-                                        : e.key == "table"      ? &plan.outputs.table
-                                                                : nullptr;
+        std::filesystem::path* target = e.key == "sweep"          ? &plan.outputs.sweep
+                                        : e.key == "device"       ? &plan.outputs.device
+                                        : e.key == "mesh"         ? &plan.outputs.mesh
+                                        : e.key == "checkpoint"   ? &plan.outputs.checkpoint
+                                        : e.key == "table"        ? &plan.outputs.table
+                                        : e.key == "transient"    ? &plan.outputs.transient
+                                        : e.key == "small_signal" ? &plan.outputs.small_signal
+                                                                  : nullptr;
         if (!target) return std::unexpected(unknown(e, *s));
         *target = file(e);
     }
     if (plan.analysis == Analysis::equilibrium && (!plan.outputs.sweep.empty() || !plan.outputs.table.empty())) {
         return std::unexpected(at(s->line, "an equilibrium run writes no sweep or table"));
+    }
+    // Each analysis writes only its own results (Unit 43, AN5).
+    const Outputs& o = plan.outputs;
+    const auto refuse = [&](const char* what, const char* analysis) {
+        return at(s->line, std::string(analysis) + " run writes no " + what);
+    };
+    const bool writes_sweep = plan.analysis == Analysis::sweep || plan.analysis == Analysis::trace;
+    const char* name = plan.analysis == Analysis::equilibrium ? "an equilibrium"
+                       : plan.analysis == Analysis::sweep     ? "a sweep"
+                       : plan.analysis == Analysis::transient ? "a transient"
+                       : plan.analysis == Analysis::trace     ? "a trace"
+                                                              : "a small-signal";
+    if (!o.sweep.empty() && !writes_sweep) return std::unexpected(refuse("sweep", name));
+    if (!o.transient.empty() && plan.analysis != Analysis::transient) {
+        return std::unexpected(refuse("transient", name));
+    }
+    if (!o.small_signal.empty() && plan.analysis != Analysis::small_signal) {
+        return std::unexpected(refuse("small_signal", name));
+    }
+    if (!o.checkpoint.empty() && plan.analysis == Analysis::transient) {
+        return std::unexpected(at(s->line, "a transient run writes no checkpoint: its end state is not "
+                                           "a steady state a sweep can restart from"));
     }
     return {};
 }

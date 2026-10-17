@@ -73,9 +73,32 @@
 //                       same length; a contact not named is held at 0 V);
 //                     thermal <name> = <series>  (electrothermal: a thermal contact's temperature);
 //                     restart = <checkpoint file>  (continue after the point it holds, DK9)
-//   [output]          sweep, device, mesh, checkpoint, table = <file>  (relative to the deck)
-// Exactly one of [equilibrium] and [sweep]. Lengths take the suffixes cm, um, nm (DK5); every
-// other quantity is in the units of the C++ field it sets (V, K, cm^-3, eV, cm^-2, cm/s, s).
+//   [transient]       (Unit 43; solve/transient.hpp) contact <name> = <waveform>  (a contact not
+//                       named is held at 0 V): constant(v), step(v0, v1, t),
+//                       ramp(v0, v1, t0, t1), pulse(base, pulse, t_start, width[, rise, fall]),
+//                       pwl(t v, t v, ...), sine(offset, amplitude, frequency[, delay, phase]);
+//                     t_end (required), dt_initial, dt_min, dt_max, integrator = bdf2 |
+//                     backward_euler, adaptive = on | off, rtol, density_ref,
+//                     output_times = <series>, fields_every_step = on | off;
+//                     thermal <name> = <K>  (electrothermal: held for the whole run)
+//   [small_signal]    (Unit 43; solve/small_signal.hpp) contact <name> = <series> and
+//                     thermal <name> = <series>, the operating points as in [sweep];
+//                     frequencies = <series> (required), field_frequencies = <series>
+//   [trace]           (Unit 43; solve/trace.hpp) contact = <name> and end = <V> (required);
+//                     start <name> = <V>  (each contact's bias at the start, default 0);
+//                     step, max_step, min_step, current_limit, max_points, density_floor;
+//                     thermal <name> = <K>
+//   [output]          sweep, device, mesh, checkpoint, table = <file>  (relative to the deck);
+//                     transient, small_signal = <file>  (Unit 43). Each analysis takes only what
+//                     it writes: equilibrium device, mesh, checkpoint; sweep and trace sweep,
+//                     device, mesh, checkpoint, table; transient transient, device, mesh, table
+//                     (no checkpoint: its end state is not steady); small_signal small_signal,
+//                     device, mesh, checkpoint (the last operating point), table.
+// Exactly one analysis section: [equilibrium], [sweep], [transient], [small_signal] or [trace].
+// A series is a comma list, first : last : step (DK6) or logspace(first, last, count) (Unit 43:
+// count values evenly spaced in log10, first and last exact, both positive). Lengths take the
+// suffixes cm, um, nm (DK5); every other quantity is in the units of the C++ field it sets (V, K,
+// cm^-3, eV, cm^-2, cm/s, s, Hz).
 //
 // Errors: invalid_input "<source>:<line>: <what>" for anything the deck states wrongly, with the
 // line as the context index; the errors of the mesh generators, the materials, the doping profiles
@@ -92,29 +115,43 @@
 #include "NiTCAD/device/device.hpp"
 #include "NiTCAD/mesh/generate.hpp"
 #include "NiTCAD/solve/bias.hpp"
+#include "NiTCAD/solve/small_signal.hpp"
+#include "NiTCAD/solve/trace.hpp"
+#include "NiTCAD/solve/transient.hpp"
+#include "NiTCAD/solve/waveform.hpp"
 
 namespace NiTCAD::deck {
 
-enum class Analysis : unsigned char { equilibrium, sweep };
+enum class Analysis : unsigned char { equilibrium, sweep, transient, small_signal, trace };
 
 // Files the run writes; an empty path is not written.
 struct Outputs {
-    std::filesystem::path sweep;       // io::save_sweep
-    std::filesystem::path device;      // io::save_device
-    std::filesystem::path mesh;        // io::save_generated_mesh, or io::save_mesh
-    std::filesystem::path checkpoint;  // the last converged point (equilibrium: the equilibrium)
-    std::filesystem::path table;       // a CSV of the bias and terminal currents per point
+    std::filesystem::path sweep;         // io::save_sweep (a sweep or a trace)
+    std::filesystem::path device;        // io::save_device
+    std::filesystem::path mesh;          // io::save_generated_mesh, or io::save_mesh
+    std::filesystem::path checkpoint;    // the last converged point (equilibrium: the equilibrium)
+    std::filesystem::path table;         // a CSV of the analysis's terminal quantities
+    std::filesystem::path transient;     // io::save_transient (Unit 43)
+    std::filesystem::path small_signal;  // io::save_small_signal (Unit 43)
 };
 
 struct Plan {
     device::Device device;
     std::optional<mesh::GeneratedMesh> generated;  // the mesh the deck generated or loaded, if any
     Analysis analysis = Analysis::sweep;
+    // Models, solver and, for a sweep or a small-signal run, the thermal contacts' temperature per
+    // point (for a transient or a trace, one list held for the run).
     solve::BiasOptions options;
-    std::vector<std::vector<double>> points;  // one bias per contact, device contact order
+    // Sweep and small-signal: the points, one bias per contact, device contact order.
+    std::vector<std::vector<double>> points;
     std::filesystem::path restart;            // a checkpoint to continue from, or empty
     std::filesystem::path mkl_runtime;        // mkl_rt to load for backend = pardiso, or empty
     Outputs outputs;
+    // The analysis's own options (Unit 43). Their `steady` is left default: the run uses `options`.
+    solve::TransientOptions transient;
+    std::vector<solve::Waveform> waveforms;  // one per contact, device contact order
+    solve::SmallSignalOptions small_signal;
+    solve::TraceOptions trace;
 };
 
 [[nodiscard]] std::expected<Plan, base::Error> build(const Deck& deck);

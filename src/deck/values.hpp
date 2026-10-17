@@ -98,11 +98,39 @@ inline std::expected<bool, std::string> boolean(std::string_view s) {
     return std::unexpected("'" + std::string(s) + "' is not on or off");
 }
 
+// logspace(a, b, n) (Unit 43): n values from a to b evenly spaced in log10, a and b exact, both
+// positive; each bound read by `read`.
+template <class Read>
+std::expected<std::vector<double>, std::string> logspace(std::string_view s, Read&& read) {
+    if (!s.ends_with(")")) return std::unexpected("logspace( without ')'");
+    const auto args = items(s.substr(9, s.size() - 10));
+    if (args.size() != 3) return std::unexpected("logspace takes (first, last, count)");
+    auto a = read(args[0]);
+    auto b = read(args[1]);
+    if (!a) return std::unexpected(a.error());
+    if (!b) return std::unexpected(b.error());
+    const auto n = integer(args[2]);
+    if (!n) return std::unexpected(n.error());
+    if (*a <= 0.0 || *b <= 0.0) return std::unexpected("logspace needs positive bounds");
+    if (*n < 2 || *n > 1'000'000) return std::unexpected("logspace needs a count from 2 to a million");
+    std::vector<double> out(static_cast<std::size_t>(*n));
+    const double la = std::log10(*a), lb = std::log10(*b);
+    for (long long k = 0; k < *n; ++k) {
+        out[static_cast<std::size_t>(k)] =
+            std::pow(10.0, la + (lb - la) * static_cast<double>(k) / static_cast<double>(*n - 1));
+    }
+    out.front() = *a;
+    out.back() = *b;
+    return out;
+}
+
 // Values from `a : b : step` (from a to b inclusive, a + k step; b is included when it lies on the
-// grid to 1e-9 of a step) or a comma list; each read by `read`.
+// grid to 1e-9 of a step), logspace(a, b, n) or a comma list; each read by `read`.
 template <class Read>
 std::expected<std::vector<double>, std::string> series(std::string_view s, Read&& read) {
     std::vector<double> out;
+    s = trimmed(s);
+    if (s.starts_with("logspace(")) return logspace(s, read);
     if (s.find(':') != std::string_view::npos) {
         const auto parts = items(s, ':');
         if (parts.size() != 3) return std::unexpected("a range is 'first : last : step'");

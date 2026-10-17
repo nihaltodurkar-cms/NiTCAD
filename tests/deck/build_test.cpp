@@ -400,8 +400,8 @@ TEST_CASE("deck build: every mistake names its line", "[deck]") {
     expect(failure(head + "[sweep]\ncontact a = 0,1\ncontact b = 0,1,2\n"),
            "t.deck:14: this series has 3 values, the one on line 13 has 2");
     expect(failure(head + "[sweep]\nvoltage a = 1\n"), "t.deck:13: unknown key 'voltage a' in [sweep]");
-    expect(failure(head), "the deck needs exactly one of [equilibrium] and [sweep]");
-    expect(failure(head + "[equilibrium]\n[sweep]\n"), "the deck needs exactly one of [equilibrium] and [sweep]");
+    expect(failure(head), "the deck needs exactly one analysis: [equilibrium], [sweep], [transient], [small_signal] or [trace]");
+    expect(failure(head + "[equilibrium]\n[sweep]\n"), "the deck needs exactly one analysis: [equilibrium], [sweep], [transient], [small_signal] or [trace]");
     expect(failure(head + "[equilibrium]\n[mesh]\n"), "t.deck:13: a second [mesh] section");
     expect(failure(head + "[equilibrium]\n[models]\nsrh = maybe\n"), "t.deck:14: 'maybe' is not on or off");
     expect(failure(head + "[equilibrium]\n[models]\nquantum = on\n"), "t.deck:14: unknown key 'quantum' in [models]");
