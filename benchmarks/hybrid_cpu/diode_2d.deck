@@ -1,0 +1,23 @@
+# Unit 41 (DECISIONS.md): a 2D pn diode large enough for deep supernodes (121 x 81 nodes); its
+# current table differs in the last bits between a P-core and an E-core run (benchmarks/hybrid_cpu).
+[mesh]
+type = tensor
+x = linspace(0, 2um, 121)
+y = linspace(0, 1um, 81)
+[region silicon]
+material = silicon
+[doping]
+profile = acceptor constant 1e17 x=0:1um
+profile = donor gaussian 1e19 axis=y center=0 width=100nm x=1um:2um lateral=50nm
+[contact anode]
+kind = ohmic
+patch = x_min
+[contact cathode]
+kind = ohmic
+patch = x_max
+[models]
+field_mobility = on
+[sweep]
+contact anode = 0 : 0.8 : 0.1
+[output]
+table = diode_2d.csv

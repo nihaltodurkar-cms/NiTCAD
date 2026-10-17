@@ -1,0 +1,142 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 057b6aa..cdae35f 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -423,3 +423,8 @@ target_compile_definitions(nitcad_validation_test PRIVATE
+ if(CMAKE_BUILD_TYPE STREQUAL "Release")
+   add_test(NAME validation COMMAND nitcad_validation_test)
+ endif()
++
++# Unit 41 measurement only (not committed): the trace listener sets Eigen's cache sizes.
++foreach(t nitcad_assemble_test nitcad_solve_test nitcad_deck_test nitcad_validation_test)
++  target_link_libraries(${t} PRIVATE Eigen3::Eigen)
++endforeach()
+diff --git a/tests/baseline/trace_listener.cpp b/tests/baseline/trace_listener.cpp
+index 62aecd5..18e519a 100644
+--- a/tests/baseline/trace_listener.cpp
++++ b/tests/baseline/trace_listener.cpp
+@@ -22,6 +22,8 @@
+ 
+ #include "NiTCAD/assemble/observer.hpp"
+ 
++#include <Eigen/Core>  // Unit 41 measurement only (not committed)
++
+ namespace {
+ 
+ std::ofstream* trace = nullptr;
+@@ -42,7 +44,17 @@ void record(std::string_view tag, std::span<const double> data) {
+     for (const double v : data) h = fnv1a(h, std::bit_cast<std::uint64_t>(v));
+     char hex[17];
+     std::snprintf(hex, sizeof hex, "%016llx", static_cast<unsigned long long>(h));
+-    *trace << call++ << '\t' << tag << '\t' << data.size() << '\t' << hex << '\n';
++    *trace << call++ << '\t' << tag << '\t' << data.size() << '\t' << hex;
++    // Unit 41 measurement only (not committed): the solve results' values in full.
++    if (tag.starts_with("result.")) {
++        char buffer[32];
++        *trace << '\t';
++        for (const double v : data) {
++            std::snprintf(buffer, sizeof buffer, "%.17g ", v);
++            *trace << buffer;
++        }
++    }
++    *trace << '\n';
+ }
+ 
+ std::string environment(const char* name) {
+@@ -58,6 +70,16 @@ public:
+     using Catch::EventListenerBase::EventListenerBase;
+ 
+     void testRunStarting(const Catch::TestRunInfo&) override {
++        // Unit 41 measurement only (not committed): NITCAD_EIGEN_CACHE=l1,l2,l3 fixes Eigen's cache
++        // sizes (bytes) before any product, and reports what Eigen then uses.
++        const std::string cache = environment("NITCAD_EIGEN_CACHE");
++        long long l1 = 0, l2 = 0, l3 = 0;
++        if (!cache.empty() && sscanf_s(cache.c_str(), "%lld,%lld,%lld", &l1, &l2, &l3) == 3) {
++            Eigen::setCpuCacheSizes(static_cast<std::ptrdiff_t>(l1), static_cast<std::ptrdiff_t>(l2),
++                                    static_cast<std::ptrdiff_t>(l3));
++            std::fprintf(stderr, "eigen cache sizes fixed: %td %td %td\n", Eigen::l1CacheSize(),
++                         Eigen::l2CacheSize(), Eigen::l3CacheSize());
++        }
+         const std::string path = environment("NITCAD_TRACE_FILE");
+         if (path.empty()) return;
+         file_.open(path, std::ios::binary | std::ios::trunc);
+diff --git a/tests/solve/mosfet_test.cpp b/tests/solve/mosfet_test.cpp
+index 1c4cba8..cc90aea 100644
+--- a/tests/solve/mosfet_test.cpp
++++ b/tests/solve/mosfet_test.cpp
+@@ -14,6 +14,7 @@
+ #include <catch2/catch_test_macros.hpp>
+ 
+ #include <algorithm>
++#include <bit>
+ #include <chrono>
+ #include <complex>
+ #include <cmath>
+@@ -904,3 +905,67 @@ TEST_CASE("mosfet: assembly cost with field mobility", "[.assembly_benchmark]")
+     for (double& v : psi) v /= scaling.V_T;
+     time_assembly("2D MOSFET, field mobility", system, system.state_from_potential(psi));
+ }
++
++// Unit 41 measurement only (not committed): Eigen SparseLU cost and result bits on the MOSFET's
++// and a 20^3 3D diode's Jacobians, under whatever cache sizes the process uses (NITCAD_EIGEN_CACHE).
++namespace {
++unsigned long long bits_hash(const std::vector<double>& x) {
++    unsigned long long h = 0xcbf29ce484222325ull;
++    for (const double v : x) {
++        const auto b = std::bit_cast<unsigned long long>(v);
++        for (int k = 0; k < 8; ++k) {
++            h ^= (b >> (8 * k)) & 0xffu;
++            h *= 0x100000001b3ull;
++        }
++    }
++    return h;
++}
++}  // namespace
++
++TEST_CASE("unit41: Eigen SparseLU cost", "[.unit41_cost]") {
++    {
++        const device::Device d = mosfet();
++        const auto eq = *solve::solve_equilibrium(d);
++        std::vector<double> rhs;
++        const linalg::SparseMatrix j = device_jacobian(
++            d, std::vector<double>{0.0, 0.05, 0.0, 1.0}, eq.fields.potential_V, rhs);
++        const SolverTiming t = time_solver(j, rhs, {}, 5);
++        std::printf("unit41 mosfet (%zu unknowns): first %.2f ms refactor %.2f ms solve %.3f ms "
++                    "x %016llx\n",
++                    static_cast<std::size_t>(j.rows()), 1e3 * t.first_s, 1e3 * t.refactor_s,
++                    1e3 * t.solve_s, bits_hash(t.x));
++    }
++    {
++        std::vector<double> a(20), b(20);
++        for (int i = 0; i < 20; ++i) {
++            a[static_cast<std::size_t>(i)] = 2e-4 * i / 19.0;
++            b[static_cast<std::size_t>(i)] = 1e-4 * i / 19.0;
++        }
++        mesh::Mesh m = *mesh::make_tensor_grid(a, b, b);
++        const std::size_t n = m.node_count();
++        std::vector<double> donors(n, 0.0), acceptors(n, 0.0);
++        for (std::size_t i = 0; i < n; ++i) {
++            (m.points()[i][0] < 1e-4 ? acceptors : donors)[i] = 1e17;
++        }
++        auto anode = m.find_boundary("x_min")->nodes;
++        auto cathode = m.find_boundary("x_max")->nodes;
++        const device::Device d = *device::Device::create(
++            {.mesh = std::move(m),
++             .temperature_K = 300.0,
++             .regions = {{"silicon", physics::silicon()}},
++             .node_region = std::vector<device::RegionId>(n, 0),
++             .donors = std::move(donors),
++             .acceptors = std::move(acceptors),
++             .contacts = {{"anode", device::ContactKind::ohmic, std::move(anode)},
++                          {"cathode", device::ContactKind::ohmic, std::move(cathode)}}});
++        const auto eq = *solve::solve_equilibrium(d);
++        std::vector<double> rhs;
++        const linalg::SparseMatrix j =
++            device_jacobian(d, std::vector<double>{0.5, 0.0}, eq.fields.potential_V, rhs);
++        const SolverTiming t = time_solver(j, rhs, {}, 3);
++        std::printf("unit41 3D diode 20^3 (%zu unknowns): first %.1f ms refactor %.1f ms solve "
++                    "%.2f ms x %016llx\n",
++                    static_cast<std::size_t>(j.rows()), 1e3 * t.first_s, 1e3 * t.refactor_s,
++                    1e3 * t.solve_s, bits_hash(t.x));
++    }
++}

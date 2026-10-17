@@ -146,6 +146,11 @@ target_compile_definitions(nitcad_linalg_test PRIVATE
 add_executable(nitcad_mkl_absent_probe tests/linalg/mkl_absent_probe.cpp)
 target_link_libraries(nitcad_mkl_absent_probe PRIVATE NiTCAD::linalg)
 add_test(NAME linalg_mkl_absent COMMAND nitcad_mkl_absent_probe)
+# One process per logical CPU, each pinned: the Eigen backend gives the same bits on every core
+# (Unit 41; its own executable, because Eigen detects the cache sizes once per process).
+add_executable(nitcad_eigen_blocking_probe tests/linalg/eigen_blocking_probe.cpp)
+target_link_libraries(nitcad_eigen_blocking_probe PRIVATE NiTCAD::linalg)
+add_test(NAME linalg_eigen_blocking COMMAND nitcad_eigen_blocking_probe)
 add_test(NAME linalg COMMAND nitcad_linalg_test)
 
 # --- mesh layer (node/edge/control-volume graph, tensor-grid producer) -------------

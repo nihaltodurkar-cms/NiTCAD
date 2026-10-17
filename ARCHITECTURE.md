@@ -1855,6 +1855,17 @@ W1–W8):**
   (`core/include/tcad/runtime/threads.hpp` [verified]).
 - A multithreaded linear solver may differ at round-off between thread counts (legacy `CLAUDE.md` on MKL
   PARDISO [verified]); results then need tolerance-based comparison.
+- **The CPU a run executes on must not change its result** (owner decision, Unit 41, 2026-10-17). On a hybrid
+  CPU, Eigen used to block its matrix products by the cache sizes of whichever core ran the first product. P and
+  E cores report different L1 sizes, so SparseLU results differed in the last bits between P-core and E-core
+  runs. That was enough to change Newton iteration counts.
+  - The Eigen backend now fixes the cache sizes before its first analysis (`src/linalg/eigen_sparse_lu.cpp`). The
+    values are the development machine's P-core ones (L1 48 KiB, L2 3 MiB, L3 20 MiB), which keep its P-core
+    results.
+  - The blocking therefore no longer depends on the CPU. The probe `nitcad_eigen_blocking_probe` (ctest
+    `linalg_eigen_blocking`) runs one pinned process per logical CPU and requires identical bits.
+  - Bit-identity across different machines is still not promised. Tolerances stay the contract. Other
+    differences between CPUs are unexamined, and MKL PARDISO's CPU dispatch is unverified.
 
 ### 6.9 Threading, worker execution, cancellation, progress
 
@@ -2721,7 +2732,7 @@ exists, not finished), **planned** (nothing built). Audit of 2026-10-09, against
 | Input/output, checkpoint/restart | The `io` layer (approved 2026-10-09): versioned, checksummed, atomic files for meshes, sweeps and checkpoints; device files and the text input deck (Unit 31) | **Verified, on `main`** (Unit 29, 6.6; `f69a7a8`, PR #33); **device files and the deck verified, on `main`** (Unit 31, 6.5; `6f67510`, PR #37) | Transient, small-signal and `trace_bias` decks with their results on disk |
 | Geometry and unstructured 3D meshing | `Mesh::from_parts` accepts any valid node/edge/volume graph; besides the tensor-grid producer, Unit 16 added the 2D and 3D Delaunay generators and the simplex import (checked duals P0–P5, P4-certified interfaces, contact patches, structured 2D boundary layers); nonlocal BTBT still needs tensor cells (6.11, M16) | **Verified, on `main`** (Unit 16, 6.11; `a09cf43`, PR #35) | Non-convex 3D domains, 3D interface junction lines, interfaces across patched faces and 3D boundary layers (U7); an unstructured locator for nonlocal BTBT (M16) |
 | Low-current accuracy | `terminal_current_resolution` reports the floor (Unit 15); the weighted terminal current with an adjoint error estimate (Unit 32, 6.6) | **Verified, on `main`** (Unit 32; `6e54c69`, PR #39): the MOSFET off state resolved at every Vg, sub-floor diode currents on the ideal-diode law to 0.1% | Weighted transient and small-signal currents; a path term for nonlocal tunnelling |
-| Generic fields/equations | Field descriptors and the unknowns' map; the drift-diffusion and electrothermal rows as equation terms composed by equation set, behind the unchanged `DriftDiffusion` (Unit 40, 6.12.1–2) | **Verified, bit-identical** (Unit 40, branch `assemble/fields-equations`; below) | Move the model data out of `DriftDiffusion` and retire it as the wrapper; derived and edge/cell fields; `EquilibriumPoisson` from the same terms |
+| Generic fields/equations | Field descriptors and the unknowns' map; the drift-diffusion and electrothermal rows as equation terms composed by equation set, behind the unchanged `DriftDiffusion` (Unit 40, 6.12.1–2) | **Verified, bit-identical, on `main`** (Unit 40; `629bed0`, PR #50; below) | Move the model data out of `DriftDiffusion` and retire it as the wrapper; derived and edge/cell fields; `EquilibriumPoisson` from the same terms |
 | Scalable linear solvers | Eigen SparseLU (default), PARDISO opt-in (Unit 18) | planned | Iterative Krylov with ILU/AMG behind `linalg`; parallel assembly |
 | Results and provenance | Plain-data results; run record with identity digest (6.6); sweeps persisted bit for bit (Unit 29) | partial | Build/version stamp in files; transient and small-signal results on disk |
 | Visualization, GUI, batch | The `nitcad check|run` batch runner over the input deck (Unit 31); no visualization or GUI (Units 25, 26) | **Batch runner verified, on `main`** (Unit 31; `6f67510`, PR #37); visualization and GUI planned | Rendering of meshes and fields (Unit 25), then the GUI over the same plan (Unit 26) |
@@ -2807,7 +2818,7 @@ top of Unit 28; DECISIONS.md L1–L6):**
   needs the system's unknown layout), Gummel or pseudo-transient fallbacks, a line search inside `trace_bias`'s
   corrector (it has its own loop).
 
-**As built (Unit 40, generic fields and equations; branch `assemble/fields-equations`; DECISIONS.md FE1–FE7,
+**As built (Unit 40, generic fields and equations; on `main` as `629bed0`, PR #50; DECISIONS.md FE1–FE7,
 FG1–FG9):**
 - **Commits.** Commit 0 added the measurement tools (an assembly trace and an assembly benchmark). Then came
   slice 1 (fields and the unknowns' map, 6.12.1), slices 2a and 2b (the isothermal and electrothermal rows as terms,
@@ -2821,8 +2832,8 @@ FG1–FG9):**
   suites; 31 mutants, all caught (one only by the trace, two only by a test added for them), except one equivalent
   mutant whose dead code was removed; no assembly slowdown on five devices.
 - **Finding:** run to run, results on this machine depend in the last bits on the core type a process starts on
-  (P or E core of a hybrid CPU). The traces were therefore recorded pinned to P cores. Tracked as Unit 41
-  (DECISIONS.md); it is not caused by this unit and is present on `main`.
+  (P or E core of a hybrid CPU). The traces were therefore recorded pinned to P cores. Not caused by this
+  unit, and present on `main` before it. Fixed by Unit 41 (6.8; DECISIONS.md): the P-core results were kept.
 - **The unknowns' layout** is unchanged, so checkpoints and run identities are too. The unit names the unknowns'
   layout that Unit 30's open norm needs (`DriftDiffusion::dofs()`).
 
