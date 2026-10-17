@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <bit>
 #include <complex>
+#include <cstdio>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
@@ -171,12 +172,28 @@ table = ac.csv
                             "G cathode,anode S,G cathode,cathode S,C anode,anode F,C anode,cathode F,"
                             "C cathode,anode F,C cathode,cathode F\n0,1000,-0.20000000000000001,0,"));
     CHECK(lines_of(table) == 1 + 2 * 3);
-    CHECK(table.find("\n1,1000000000,0,0,") != std::string::npos);
+    // The row of point 1 at 1 GHz, rebuilt from the run: G then C, row-major, 17 digits.
+    const auto g17 = [](double v) {
+        char b[32];
+        std::snprintf(b, sizeof b, "%.17g", v);
+        return std::string(b);
+    };
+    std::string row = "\n1,1000000000,0,0";
+    for (std::size_t i = 0; i < 2; ++i) {
+        for (std::size_t j = 0; j < 2; ++j) row += "," + g17(s.conductance(1, 2, i, j));
+    }
+    for (std::size_t i = 0; i < 2; ++i) {
+        for (std::size_t j = 0; j < 2; ++j) row += "," + g17(s.capacitance(1, 2, i, j));
+    }
+    CHECK(table.find(row + "\n") != std::string::npos);
 }
 
 TEST_CASE("deck run: a [trace] deck equals trace_bias; its files and table", "[deck]") {
     const fs::path dir = scratch("run_trace");
+    // A solver option too, so the trace is seen to run with the plan's options as its steady ones.
     const deck::Plan plan = must(diode_device + R"(
+[solver]
+tol_update = 1e-12
 [trace]
 contact = anode
 end = 0.3
@@ -200,6 +217,7 @@ table = tr.csv
     o.end_V = 0.3;
     o.step_V = 0.05;
     o.max_step_V = 0.1;
+    o.steady.newton.tol_update = 1e-12;
     const auto hand = solve::trace_bias(hand_diode(), o);
     REQUIRE(hand.has_value());
     CHECK(s.run.input_identity == hand->run.input_identity);
