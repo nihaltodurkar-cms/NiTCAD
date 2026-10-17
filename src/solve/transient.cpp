@@ -14,6 +14,7 @@
 #include "NiTCAD/solve/newton.hpp"
 #include "fields.hpp"
 #include "observe.hpp"
+#include "wall_clock.hpp"
 #include "relocation.hpp"
 #include "thermal.hpp"
 
@@ -618,8 +619,12 @@ std::expected<results::Transient, base::Error> solve_transient(
     const device::Device& device, std::span<const Waveform> waveforms,
     const TransientOptions& options, const results::NodeFields* initial,
     const RunControl& control) {
+    const detail::WallClock clock;
     auto r = solve_transient_unobserved(device, waveforms, options, initial, control);
-    if (r) detail::observe_result(*r);
+    if (r) {
+        r->run.provenance.wall_s = clock.seconds();
+        detail::observe_result(*r);
+    }
     return r;
 }
 

@@ -14,6 +14,7 @@
 #include <vector>
 
 #include "NiTCAD/base/contract.hpp"
+#include "NiTCAD/linalg/linear_solver.hpp"
 
 // The failure handling below depends on Eigen 5.0.1 internals: the text of lastErrorMessage(),
 // info() being left unset when SparseLU cannot allocate its working memory, the supernodal storage
@@ -227,3 +228,12 @@ template class SparseLuBackend<double>;
 template class SparseLuBackend<std::complex<double>>;
 
 }  // namespace NiTCAD::linalg::detail
+
+namespace NiTCAD::linalg {
+
+EigenBuild eigen_build() {
+    return {EIGEN_VERSION_STRING,
+            {detail::fixed_l1_bytes, detail::fixed_l2_bytes, detail::fixed_l3_bytes}};
+}
+
+}  // namespace NiTCAD::linalg

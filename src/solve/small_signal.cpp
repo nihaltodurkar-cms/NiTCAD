@@ -15,6 +15,7 @@
 #include "NiTCAD/linalg/linear_solver.hpp"
 #include "fields.hpp"
 #include "observe.hpp"
+#include "wall_clock.hpp"
 
 namespace NiTCAD::solve {
 
@@ -211,8 +212,12 @@ std::expected<results::SmallSignal, base::Error> solve_small_signal(
     const device::Device& device, std::span<const std::vector<double>> points,
     const SmallSignalOptions& options, const results::NodeFields* initial,
     const RunControl& control) {
+    const detail::WallClock clock;
     auto r = solve_small_signal_unobserved(device, points, options, initial, control);
-    if (r) detail::observe_result(*r);
+    if (r) {
+        r->run.provenance.wall_s = clock.seconds();
+        detail::observe_result(*r);
+    }
     return r;
 }
 

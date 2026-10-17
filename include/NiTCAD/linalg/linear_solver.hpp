@@ -40,6 +40,7 @@
 // Backend types do not appear in this header.
 #pragma once
 
+#include <array>
 #include <complex>
 #include <cstddef>
 #include <cstdint>
@@ -47,6 +48,7 @@
 #include <memory>
 #include <optional>
 #include <span>
+#include <string>
 #include <vector>
 
 #include "NiTCAD/base/error.hpp"
@@ -211,5 +213,14 @@ extern template class BasicLinearSolver<std::complex<double>>;
 
 using LinearSolver = BasicLinearSolver<double>;
 using ComplexLinearSolver = BasicLinearSolver<std::complex<double>>;
+
+// The Eigen backend's part of a run's provenance (Unit 42): the Eigen version built in, and the
+// cache sizes its products are blocked by in bytes (L1, L2, L3), fixed by Unit 41, so the same on
+// every core.
+struct EigenBuild {
+    std::string version;
+    std::array<std::int64_t, 3> cache_bytes;
+};
+[[nodiscard]] EigenBuild eigen_build();
 
 }  // namespace NiTCAD::linalg

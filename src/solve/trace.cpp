@@ -17,6 +17,7 @@
 #include "NiTCAD/solve/newton.hpp"
 #include "fields.hpp"
 #include "observe.hpp"
+#include "wall_clock.hpp"
 #include "thermal.hpp"
 #include "weighted_current.hpp"
 
@@ -599,8 +600,12 @@ std::expected<results::Sweep, base::Error> trace_bias(const device::Device& devi
                                                       const TraceOptions& options,
                                                       const results::NodeFields* initial,
                                                       const RunControl& control) {
+    const detail::WallClock clock;
     auto r = trace_bias_unobserved(device, options, initial, control);
-    if (r) detail::observe_result(*r);
+    if (r) {
+        r->run.provenance.wall_s = clock.seconds();
+        detail::observe_result(*r);
+    }
     return r;
 }
 
