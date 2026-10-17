@@ -1296,6 +1296,62 @@ doi:10.1063/1.1754511, is paywalled (as in Unit 33, V6); a 2021 analysis, "Analy
 Review (March 1969) would not download. Breakdown stays validated against the analytic one-sided value only (Unit
 19). It resumes if a readable copy of a source is supplied.
 
+### Unit 41 — last-bit reproducibility on hybrid CPUs (investigation opened 2026-10-17; no fix authorized)
+
+**Owner request (2026-10-17):** track the P/E-core last-bit difference found during Unit 40 (its commit 0
+findings) as its own unit, separate from Unit 40. First a minimal reproducer and the root cause. Do not change any
+numerical result or implement a fix until the impact, the performance cost and the reproducibility policy have been
+reviewed.
+
+**Reproducer (`benchmarks/hybrid_cpu/`, standalone, Eigen only, not in the CMake build).**
+- `repro.cpp` prints the executing core's CPUID leaf-4 cache sizes, the sizes Eigen adopted, and bit hashes
+  (FNV-1a) of a 300 × 300 dense product and a SparseLU solve of a 22 500-unknown nonsymmetric five-point operator.
+- Run pinned to each logical CPU of this machine (Intel Core Ultra 5 225F, 6 P + 4 E cores):
+
+| Cores | CPUID L1d / L2 | Eigen's adopted L1 / L2 | SparseLU hash, `auto` | `fixed` (any one set) |
+|---|---|---|---|---|
+| P: CPUs 0, 1, 6–9 | 48 KiB / 3 MiB | the same | `317ad696…` | one hash on all ten CPUs |
+| E: CPUs 2–5 | 32 KiB / 4 MiB | the same | `50df5dd6…` | the same hash |
+
+- The 300 × 300 dense product agrees on every core. A 1200 × 1200 product does not.
+- `diode_2d.deck` (a 121 × 81-node 2D diode, `nitcad run` from `main`): 6 of the table's current values differ
+  between a run pinned to CPU 0 and one pinned to CPU 2, by at most 1.1e-15 relative. CPU 0 against CPU 6 (two P
+  cores) is identical. Six small decks (1D, and a small 2D oxide structure) are identical on P and E cores. Their
+  systems are too small for the blocking to change.
+
+**Root cause.**
+- Eigen (5.0.0, vcpkg) detects the cache sizes once per process, with CPUID leaf 4 on the core that runs the first
+  matrix product, and keeps them in a static.
+- The blocking of its matrix products is computed from them. SparseLU's supernodal updates (`panel_bmod`,
+  `kernel_bmod`) are such products.
+- On a hybrid CPU the two core types report different L1 data caches, so the products split their sums
+  differently and round differently in the last bits. Newton then amplifies the differences from the first linear
+  solve on.
+- **The L1 size alone decides it.** On a P core, `fixed 32768 3145728 …` (only L1 changed to the E core's) gives
+  the E-core hash. On an E core, `fixed 49152 …` gives the P-core hash. L2 at 3 or 4 MiB makes no difference.
+- So the result depends on the core type the first product runs on. That is usually the start core, but a thread
+  can migrate before then. It does not depend on the machine's load or on the core of later products.
+- [unverified] The MKL PARDISO backend (Unit 18) dispatches by CPU too. Whether it differs between core types is
+  not measured; MKL's conditional numerical reproducibility settings (`MKL_CBWR`) would be the place to look.
+
+**Not yet measured (the review the owner asked for before any fix):**
+- **Impact:** how far results move between core types across the suites and the validation decks: iteration
+  counts, accepted steps, printed values.
+- **Performance cost of each option:** the solve times of the SparseLU-heavy benchmarks (the MOSFET and the 3D
+  diode) with the cache sizes fixed to the P-core values, the E-core values, and the smaller of each.
+- **Options:**
+  - Fix Eigen's cache sizes at start-up to one set. Runs that today start on the other core type would change in
+    the last bits.
+  - Query every core and take the smallest.
+  - Make the sizes a solver option recorded in the run record.
+  - Only document the limit.
+- **Policy:** which reproducibility NiTCAD promises (ARCHITECTURE.md 6.8). Bit-identical on one machine whatever
+  the core? Across machines? Only to a tolerance? That decides whether a change of last bits for one core type is
+  acceptable.
+
+**Status:** reproducer and root cause done on `investigate/hybrid-cpu-determinism`. No code, flag or result
+changed. Awaiting the owner's review of impact, cost and policy before any fix.
+
 ---
 
 ### Unit 40 — generic fields and equations behind the assembler (proposed 2026-10-16; authorized and accepted 2026-10-17; on `assemble/fields-equations`)
