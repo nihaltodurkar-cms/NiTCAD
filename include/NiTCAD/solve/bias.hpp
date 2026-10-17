@@ -117,7 +117,8 @@ struct BiasOptions {
     const results::NodeFields* initial = nullptr, const RunControl& control = {});
 
 // The run record of a sweep: the identity digest of every input the sweep reads (device, options,
-// bias points, initial state) and those options as named settings. Inputs the sweep ignores are
+// bias points, initial state), those options as named settings, and the provenance (provenance.hpp;
+// not in the identity; wall_s 0, which sweep_bias sets when it returns). Inputs the sweep ignores are
 // left out, so they do not change the identity: with equilibrium_poisson the mobility, SRH, Auger,
 // field-mobility and radiative switches, the interfaces' transport and the initial densities; the
 // work function of a polysilicon gate.

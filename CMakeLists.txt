@@ -80,6 +80,8 @@ add_compile_definitions(UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN)
 # --- Dependencies (from vcpkg.json) ------------------------------------------------
 find_package(Catch2 3 CONFIG REQUIRED)
 find_package(Eigen3 CONFIG REQUIRED)
+# Optional: the build stamps its git revision into a run's provenance (Unit 42); "unknown" without.
+find_package(Git QUIET)
 
 # --- Scaffold test -----------------------------------------------------------------
 enable_testing()
@@ -323,10 +325,15 @@ add_executable(nitcad_io_test
   tests/io/files_test.cpp
   tests/io/origin_test.cpp
   tests/io/generated_test.cpp
-  tests/io/device_file_test.cpp)
+  tests/io/device_file_test.cpp
+  tests/io/provenance_test.cpp
+  tests/io/run_files_test.cpp)
 # The record test reads the private encoding directly.
 target_include_directories(nitcad_io_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/io")
 target_link_libraries(nitcad_io_test PRIVATE NiTCAD::io Catch2::Catch2WithMain)
+# Files written by earlier builds, which must keep loading (Unit 42, PG3).
+target_compile_definitions(nitcad_io_test PRIVATE
+  NITCAD_IO_FIXTURES="${CMAKE_CURRENT_SOURCE_DIR}/tests/io/fixtures")
 add_test(NAME io COMMAND nitcad_io_test)
 
 # --- solve layer (Newton, equilibrium and bias solves, sweeps, cancellation, progress) ---
@@ -338,11 +345,24 @@ add_library(nitcad_solve STATIC
   src/solve/waveform.cpp
   src/solve/transient.cpp
   src/solve/small_signal.cpp
-  src/solve/trace.cpp)
+  src/solve/trace.cpp
+  src/solve/provenance.cpp)
 add_library(NiTCAD::solve ALIAS nitcad_solve)
 target_include_directories(nitcad_solve PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
 target_link_libraries(nitcad_solve PUBLIC
   NiTCAD::base NiTCAD::linalg NiTCAD::assemble NiTCAD::device NiTCAD::results)
+# The build facts of a run's provenance (Unit 42; DECISIONS.md PV3), rewritten at every build by
+# cmake/build_info.cmake but only when they change, so only provenance.cpp ever recompiles.
+set(NITCAD_BUILD_INFO "${CMAKE_CURRENT_BINARY_DIR}/generated/NiTCAD/build_info.hpp")
+add_custom_target(nitcad_build_info
+  COMMAND "${CMAKE_COMMAND}" "-DSOURCE=${CMAKE_CURRENT_SOURCE_DIR}" "-DOUTPUT=${NITCAD_BUILD_INFO}"
+    "-DGIT=${GIT_EXECUTABLE}" "-DVERSION=${PROJECT_VERSION}" "-DBUILD_TYPE=${CMAKE_BUILD_TYPE}"
+    "-DCOMPILER=MSVC ${CMAKE_CXX_COMPILER_VERSION}"
+    -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/build_info.cmake"
+  BYPRODUCTS "${NITCAD_BUILD_INFO}"
+  VERBATIM)
+add_dependencies(nitcad_solve nitcad_build_info)
+target_include_directories(nitcad_solve PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated")
 
 add_executable(nitcad_solve_test
   tests/solve/newton_test.cpp
@@ -368,6 +388,7 @@ add_executable(nitcad_solve_test
   tests/solve/weighted_current_test.cpp
   tests/solve/hole_mobility_test.cpp
   tests/solve/default_physics_test.cpp
+  tests/solve/provenance_test.cpp
   tests/baseline/trace_listener.cpp)
 # The solve tests also read their results through the analysis extractors (Unit 24 gates).
 target_link_libraries(nitcad_solve_test PRIVATE NiTCAD::solve NiTCAD::analysis NiTCAD::io
@@ -375,7 +396,8 @@ target_link_libraries(nitcad_solve_test PRIVATE NiTCAD::solve NiTCAD::analysis N
 # The 3D sliver stress test meshes perturbed lattices with the generator's Delaunay (Unit 16).
 target_include_directories(nitcad_solve_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/mesh")
 target_compile_definitions(nitcad_solve_test PRIVATE
-  NITCAD_MKL_RUNTIME_PATH="${NITCAD_MKL_RUNTIME_PATH}")
+  NITCAD_MKL_RUNTIME_PATH="${NITCAD_MKL_RUNTIME_PATH}"
+  NITCAD_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}" NITCAD_GIT="${GIT_EXECUTABLE}")
 add_test(NAME solve COMMAND nitcad_solve_test)
 # The 2D MOSFET gates (tests/solve/mosfet_test.cpp, hidden tag [.mosfet]) take about a minute in
 # Release and far longer in Debug, so they run in the Release configuration only.
@@ -417,6 +439,10 @@ add_test(NAME deck COMMAND nitcad_deck_test)
 # The batch runner (`nitcad check|run <deck>`).
 add_executable(nitcad src/cli/main.cpp)
 target_link_libraries(nitcad PRIVATE NiTCAD::deck)
+# `nitcad --version` names the build (Unit 42, PV6): a 40-digit revision, or unknown without git.
+add_test(NAME cli_version COMMAND nitcad --version)
+set_tests_properties(cli_version PROPERTIES PASS_REGULAR_EXPRESSION
+  "^nitcad ${PROJECT_VERSION} \\(revision ([0-9a-f]+|unknown)(, modified)?, ${CMAKE_BUILD_TYPE}, MSVC [0-9.]+, Eigen [0-9]")
 
 # --- validation against published data (Unit 33; benchmarks/ decks) ----------------------
 add_executable(nitcad_validation_test tests/validation/published_test.cpp

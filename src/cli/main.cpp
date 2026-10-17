@@ -1,7 +1,9 @@
 // nitcad: the batch runner (ARCHITECTURE.md 11.3, Unit 31; DECISIONS.md DK10).
 //
 //   nitcad check <deck>   parse and build the deck, print what it describes, solve nothing
-//   nitcad run <deck>     build the deck, run its analysis, write its outputs
+//   nitcad run <deck>     build the deck, run its analysis, write its outputs, and print the run's
+//                         provenance (Unit 42)
+//   nitcad --version      print the build: version, git revision, build type, compiler, Eigen
 //
 // Exit status: 0 done; 1 the deck or the run failed (the message on stderr); 2 the sweep stopped
 // early (its completed points and outputs are written; the reason on stderr); 64 usage.
@@ -17,6 +19,7 @@
 #include "NiTCAD/deck/build.hpp"
 #include "NiTCAD/deck/run.hpp"
 #include "NiTCAD/deck/syntax.hpp"
+#include "NiTCAD/solve/provenance.hpp"
 
 namespace {
 
@@ -31,8 +34,25 @@ BOOL WINAPI on_console_event(DWORD event) {
 }
 
 int usage() {
-    std::fputs("usage: nitcad check <deck>\n       nitcad run <deck>\n", stderr);
+    std::fputs("usage: nitcad check <deck>\n       nitcad run <deck>\n       nitcad --version\n",
+               stderr);
     return 64;
+}
+
+// The build, one line: "nitcad 0.0.0 (revision <commit>[, modified], Release, MSVC ..., Eigen ...)".
+void print_build(const NiTCAD::results::Provenance& p) {
+    std::printf("nitcad %s (revision %s%s, %s, %s, Eigen %s)\n", p.version.c_str(),
+                p.revision.c_str(), p.dirty ? ", modified" : "", p.build_type.c_str(),
+                p.compiler.c_str(), p.eigen_version.c_str());
+}
+
+// A run's provenance (Unit 42): the build, the platform, the start and the wall time.
+void print_provenance(const NiTCAD::results::Provenance& p) {
+    std::fputs("build: ", stdout);
+    print_build(p);
+    std::printf("platform: %s, %s, %u logical CPUs%s%s\n", p.os.c_str(), p.cpu.c_str(),
+                p.logical_cpus, p.mkl_version.empty() ? "" : ", MKL ", p.mkl_version.c_str());
+    std::printf("started: %s, wall time %.3f s\n", p.started_utc.c_str(), p.wall_s);
 }
 
 int fail(const NiTCAD::base::Error& e) {
@@ -71,6 +91,10 @@ void describe(const NiTCAD::deck::Plan& plan) {
 }  // namespace
 
 int main(int argc, char** argv) {
+    if (argc == 2 && std::string_view(argv[1]) == "--version") {
+        print_build(NiTCAD::solve::provenance());
+        return 0;
+    }
     if (argc != 3) return usage();
     const std::string_view command = argv[1];
     if (command != "check" && command != "run") return usage();
@@ -99,6 +123,9 @@ int main(int argc, char** argv) {
         std::printf("restart: %zu point(s) already done\n", report->skipped_points);
     }
     for (const auto& p : report->written) std::printf("wrote %s\n", p.string().c_str());
+    // A sweep's own record; an equilibrium run has none, so the provenance of now, without a
+    // wall time.
+    print_provenance(report->sweep ? report->sweep->run.provenance : NiTCAD::solve::provenance());
     if (report->sweep && report->sweep->stopped) {
         std::fprintf(stderr, "nitcad: the sweep stopped after %zu of %zu point(s): %s\n",
                      report->sweep->points.size(), plan->points.size() - report->skipped_points,
