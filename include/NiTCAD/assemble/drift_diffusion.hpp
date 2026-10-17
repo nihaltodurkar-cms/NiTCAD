@@ -277,11 +277,13 @@ public:
     // Unknowns per node: 3 (psi, n, p), or 4 with the electrothermal model (theta last).
     [[nodiscard]] std::size_t stride() const noexcept { return m_; }
     // Where each field's unknowns are (fields.hpp; Unit 40): node-interleaved, stride() per node.
-    [[nodiscard]] const DofMap& dofs() const noexcept { return dofs_; }
-    // The equation terms of the rows (Unit 40, DECISIONS.md FE2): internal to the assemble
-    // library (src/assemble/terms.hpp).
+    [[nodiscard]] const DofMap& dofs() const noexcept;
+    // The equation terms of the rows and their composition from the device and the models
+    // (Unit 40, DECISIONS.md FE2, FE4): internal to the assemble library (src/assemble/terms.hpp,
+    // composition.hpp).
     class Term;
     struct Terms;
+    class Composition;
 
     struct TimeStep;  // a BDF time step (below)
 
@@ -686,8 +688,10 @@ private:
                                                           const PhysicsModels& models,
                                                           std::span<const double> edge_geometry);
 
-    DofMap dofs_;        // the unknowns: (psi, n, p), with the electrothermal model theta last
-    std::size_t m_ = 3;  // unknowns per node: dofs_.block()
+    // The unknowns (psi, n, p, with the electrothermal model theta last) and the rows' terms in
+    // assembly order (composition.hpp; DECISIONS.md FE3, FE4). Immutable, shared by copies.
+    std::shared_ptr<const Composition> composition_;
+    std::size_t m_ = 3;  // unknowns per node: composition_->dofs().block()
     std::vector<physics::Semiconductor> thermal_materials_;
     std::vector<ThermalNode> thermal_nodes_;
     std::vector<ThermalEdge> thermal_edges_;
@@ -764,9 +768,6 @@ private:
     bool ionization_ = false;
     bool radiative_on_ = true;
     linalg::SparseMatrix pattern_;
-    // The rows' terms in assembly order, isothermal or electrothermal (terms.hpp; DECISIONS.md
-    // FE3).
-    std::vector<std::shared_ptr<const Term>> terms_;
 };
 
 }  // namespace NiTCAD::assemble

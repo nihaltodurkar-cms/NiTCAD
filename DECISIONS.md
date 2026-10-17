@@ -1560,7 +1560,51 @@ existing suites:
 | FG5 | Release 18/18, Debug 12/12, no warnings. |
 | FG6 | 8 mutants, all caught. Heat-sink assignment turned into an addition: electrothermal test. A θ column moved (the contact row's ψ entry into the p column): electrothermal test. Thermal SRH and Auger swapped: the terms test's order check. The edges' pattern without the heat rows: the position lookup's contract check. The interfaces term left out: the terms test's activity check. The gate's p-polysilicon shift dropped: electrothermal test. Lattice storage, and separately the carriers' stored energy, added to a held (isothermal-sink) heat row: **both survived the suites**. At a converged step the held rise equals the sink's before and after, so the term vanishes at the solution, and no fixture held a node that was neither contact nor insulator. The new held-row case (a sink on y_min) catches both. |
 
-**Status:** commit 0, commit 0b and slices 1, 2a, 2b done; slice 3 (composition, `DriftDiffusion` as the wrapper) next.
+**Slice 3 as built (composition; `src/assemble/composition.hpp`, `composition.cpp`):**
+- `DriftDiffusion::Composition` owns the unknowns' map and the active terms, with each term's equation sets, and
+  runs the evaluation loop over them. `DriftDiffusion` holds one, immutable and shared by copies, in place of
+  `dofs_` and the term list, and forwards `dofs()`, `assemble` and `assemble_heat` to it. Every public signature is
+  unchanged (`dofs()` moved out of line).
+- **Equation sets after ARCHITECTURE.md 6.12.2.** Poisson, continuity, contacts, oxide, gate, interfaces,
+  generation and heat. They form a bit set: the electrothermal edge term belongs to Poisson, continuity and heat
+  at once.
+- **Composition tables.** The two `make` functions became tables in `terms.cpp` and `thermal_terms.cpp`. Each row
+  is a term's sets, an activation predicate over the models and the device data `create` has set by then
+  (contacts, insulators, gates, interfaces), and a factory. Table order is FE3's assembly order. `compose` picks
+  the table by the electrothermal model, keeps the active rows, and builds the map from the fields the equations
+  solve for.
+  - Diode = Poisson + continuity + contacts.
+  - MOS adds oxide, gate and interfaces.
+  - Thermal adds heat and a fourth unknown.
+  - The generation models add generation.
+- The contact-row and insulator-row terms are now active only when the device has such nodes. Before, they were
+  always in, with empty loops. No value changes.
+- **Not done:** the model data the terms read (per node, edge and contact) stays in `DriftDiffusion`, because its
+  diagnostics read it too (FE5). `DriftDiffusion` is therefore both the compatibility wrapper (FE4) and that
+  data's store. Moving the data out and retiring the wrapper is a later unit's work, as FE4 already says.
+- `terms_test` gains three composition cases:
+  - the equation sets and block sizes of a diode, a MOS structure with an oxide and interface, a lumped-gate
+    MOS-C, a generation model, and a thermal diode;
+  - every model switch (SRH, Auger, radiative, incomplete ionization, impact, local and nonlocal tunnelling; the
+    electrothermal SRH, Auger, radiative and impact) adds exactly its term;
+  - the electrothermal small-signal matrix at s = 0 equals the steady Jacobian entry for entry, so its interface
+    terms stay in.
+
+**Slice 3 results:**
+
+| Gate | Result |
+|---|---|
+| FG1/FG2 | Pinned traces identical to slice 2b's on all nine traced entries, every test case except the `terms:` and `composition:` cases. Those trace their own calls to `evaluate`, so they change with the term lists of their fixtures (an oxide-free fixture no longer carries an empty insulator-rows term). |
+| FG3 | Existing FD-Jacobian gates unchanged; the term checks pass. |
+| FG4 | Minimum of four alternating pinned runs, slice 3 against 2b, measured twice. `evaluate` −0.9% to +2.3% (1D diode, 11.4 against 11.7 µs; +0.9% in the first measurement), `residual` −2.1% to +0.3%. The first measurement's 3D-diode `residual` +2.5% was +0.3% when repeated. Within the gate; the only code-path change is one indirect call per evaluation. |
+| FG5 | Release 18/18, Debug 12/12, no warnings. |
+| FG6 | 7 mutants. Six caught: the Auger switch ignored (drift-diffusion test); the electrothermal table never chosen (crash); the `interfaces` flag ignored, so small-signal adds the interface terms twice (small-signal test); radiative and storage swapped in the table (the order check); the temperature field dropped from the map (electrothermal test); the gate predicate false (gate test). The seventh (the electrothermal interface term skipped without `interfaces`) **survived and was equivalent**: `assemble_heat` always passes `true`, so the check it mutated was dead code. The dead check was removed. The new electrothermal small-signal case guards that behaviour. |
+| FG8 | No change to physics, models, defaults, deck syntax, file formats, run records or public signatures. `ARCHITECTURE.md` 2.2, 6.12.1–2 and 11.3 are to be updated to "as built" after the owner accepts the result. |
+| FG9 | Fields and the map public in `assemble`; terms and composition internal (`src/assemble`); no new dependency; `solve` reads only the map. |
+
+**Status:** commit 0, commit 0b and slices 1, 2a, 2b, 3 done. Unit 40 is complete on `assemble/fields-equations`,
+not pushed. It awaits the owner's review; `ARCHITECTURE.md` is to be updated once accepted (FG8). The hybrid-CPU
+reproducibility defect (commit 0 findings) awaits its own owner decision.
 
 ---
 

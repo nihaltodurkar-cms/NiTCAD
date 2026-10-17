@@ -24,6 +24,7 @@
 #include "NiTCAD/physics/insulator.hpp"
 #include "NiTCAD/physics/interface_traps.hpp"
 #include "NiTCAD/physics/semiconductor.hpp"
+#include "composition.hpp"
 #include "terms.hpp"
 
 using namespace NiTCAD;
@@ -619,4 +620,103 @@ TEST_CASE("terms: a held heat row is its sink's Dirichlet row in a time step too
         }
     }
     REQUIRE(held > 0);
+}
+
+TEST_CASE("composition: the equation sets of ARCHITECTURE.md 6.12.2") {
+    using assemble::EquationSet;
+    using E = EquationSet;
+    const auto sets = [](const DriftDiffusion& dd) { return Terms::composition(dd).sets(); };
+    // Diode = Poisson + electron and hole continuity, with its contacts.
+    const device::Device pn = diode(1);
+    const auto s = *assemble::make_scaling(pn);
+    const auto plain = *DriftDiffusion::create(pn, s);
+    CHECK(sets(plain) == (E::poisson | E::continuity | E::contacts));
+    CHECK(Terms::composition(plain).dofs().block() == 3);
+    // MOS = the diode's + the oxide's Poisson + gate and interface conditions.
+    const device::Device oxide = mos(1);
+    const auto so = *assemble::make_scaling(oxide);
+    CHECK(sets(*DriftDiffusion::create(oxide, so)) ==
+          (E::poisson | E::continuity | E::contacts | E::oxide | E::interfaces));
+    const device::Device cap = moscap();
+    const auto sc = *assemble::make_scaling(cap);
+    CHECK(sets(*DriftDiffusion::create(cap, sc)) ==
+          (E::poisson | E::continuity | E::contacts | E::gate));
+    // Generation models add their set.
+    CHECK(sets(*DriftDiffusion::create(pn, s, {.impact_ionization = true})) ==
+          (E::poisson | E::continuity | E::contacts | E::generation));
+    // Thermal = the semiconductor equations + the heat equation, with a fourth unknown.
+    const device::Device hot = thermal_diode(2, true, false);
+    const auto sh = *assemble::make_scaling(hot);
+    const auto thermal = *DriftDiffusion::create(hot, sh, {.electrothermal = true});
+    CHECK(sets(thermal) == (E::poisson | E::continuity | E::contacts | E::oxide | E::interfaces |
+                            E::heat));
+    CHECK(Terms::composition(thermal).dofs().block() == 4);
+    CHECK(thermal.dofs().has(assemble::FieldId::temperature));
+}
+
+TEST_CASE("composition: every model switch adds its term") {
+    // A switch the composition ignored would leave the term list unchanged (FG6).
+    struct Switch {
+        assemble::PhysicsModels off, on;
+        const char* term;
+        bool thermal;
+    };
+    const Switch switches[] = {
+        {{.srh = false}, {}, "SRH recombination", false},
+        {{.auger = false}, {}, "Auger recombination", false},
+        {{.radiative = false}, {}, "radiative recombination", false},
+        {{}, {.incomplete_ionization = true}, "incomplete ionization", false},
+        {{}, {.impact_ionization = true}, "impact ionization", false},
+        {{}, {.btbt_local = true}, "local band-to-band tunnelling", false},
+        {{}, {.btbt_nonlocal = assemble::NonlocalTunnelling::kane},
+         "nonlocal band-to-band tunnelling", false},
+        {{.srh = false, .electrothermal = true}, {.electrothermal = true},
+         "SRH recombination (electrothermal)", true},
+        {{.auger = false, .electrothermal = true}, {.electrothermal = true},
+         "Auger recombination (electrothermal)", true},
+        {{.radiative = false, .electrothermal = true}, {.electrothermal = true},
+         "radiative recombination (electrothermal)", true},
+        {{.electrothermal = true}, {.impact_ionization = true, .electrothermal = true},
+         "impact ionization (electrothermal)", true},
+    };
+    const device::Device cold = block(1, 13, 3e-6);  // with cells, for the nonlocal paths
+    const device::Device hot = thermal_diode(1, false, false);
+    for (const Switch& w : switches) {
+        const device::Device& d = w.thermal ? hot : cold;
+        const auto s = *assemble::make_scaling(d);
+        const auto names = [&](const assemble::PhysicsModels& m) {
+            std::vector<std::string> v;
+            for (const auto& t : Terms::list(*DriftDiffusion::create(d, s, m))) {
+                v.emplace_back(t->info().name);
+            }
+            return v;
+        };
+        const std::vector<std::string> off = names(w.off), on = names(w.on);
+        CAPTURE(w.term);
+        CHECK(std::ranges::find(off, w.term) == off.end());
+        CHECK(std::ranges::find(on, w.term) != on.end());
+        CHECK(on.size() == off.size() + 1);
+    }
+}
+
+TEST_CASE("composition: the electrothermal small-signal matrix keeps the interfaces' terms") {
+    // small_signal_matrix assembles the steady rows without the isothermal interface terms and
+    // adds its own; the electrothermal form adds none, so its interface term stays in the steady
+    // rows: at s = 0 the matrix is the steady Jacobian, entry for entry.
+    const device::Device d = thermal_diode(2, true, false);
+    const auto s = *assemble::make_scaling(d);
+    auto dd = *DriftDiffusion::create(d, s, {.electrothermal = true});
+    REQUIRE(dd.set_bias(std::vector<double>{0.4, -0.3}).has_value());
+    const auto x = heated(dd, d, s, 0.05, 11);
+    std::vector<double> f(dd.unknowns());
+    auto j = dd.make_jacobian();
+    dd.evaluate(x, f, j);
+    auto a = dd.make_small_signal_matrix();
+    dd.small_signal_matrix(x, {0.0, 0.0}, a);
+    REQUIRE(a.values().size() == j.values().size());
+    std::size_t differ = 0;
+    for (std::size_t k = 0; k < j.values().size(); ++k) {
+        if (a.values()[k].real() != j.values()[k] || a.values()[k].imag() != 0.0) ++differ;
+    }
+    CHECK(differ == 0);
 }

@@ -2,11 +2,13 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <utility>
 
 #include "NiTCAD/base/constants.hpp"
 #include "NiTCAD/base/contract.hpp"
 #include "NiTCAD/physics/band_to_band.hpp"
+#include "composition.hpp"
 #include "scaled_device.hpp"
 
 namespace NiTCAD::assemble {
@@ -707,30 +709,64 @@ std::shared_ptr<const DriftDiffusion::Term> DriftDiffusion::Terms::poisson_charg
     return std::make_shared<PoissonCharge>();
 }
 
-std::vector<std::shared_ptr<const DriftDiffusion::Term>> DriftDiffusion::Terms::make(
-    const DriftDiffusion& s, const PhysicsModels& models) {
-    if (models.electrothermal) return make_thermal(s, models);
-    std::vector<std::shared_ptr<const Term>> t;
-    t.push_back(std::make_shared<ContactRows>());
-    t.push_back(std::make_shared<InsulatorRows>());
-    t.push_back(std::make_shared<PoissonCharge>());
-    if (models.incomplete_ionization) t.push_back(std::make_shared<Ionization>());
-    bool gated = false;
-    for (std::size_t i = 0; i < s.node_count(); ++i) gated = gated || s.gates_.on_gate(i);
-    if (gated) t.push_back(std::make_shared<Gate>());
-    if (models.srh) t.push_back(std::make_shared<Srh>());
-    if (models.auger) t.push_back(std::make_shared<Auger>());
-    if (models.radiative) t.push_back(std::make_shared<Radiative>());
-    t.push_back(std::make_shared<Storage>());
-    if (!s.interfaces_.edges().empty()) t.push_back(std::make_shared<Interfaces>());
-    t.push_back(std::make_shared<PoissonFlux>());
-    t.push_back(std::make_shared<CarrierFluxes>());
-    if (models.impact_ionization) t.push_back(std::make_shared<ImpactGeneration>());
-    if (models.btbt_local) t.push_back(std::make_shared<LocalTunnelling>());
-    if (models.btbt_nonlocal != NonlocalTunnelling::off) {
-        t.push_back(std::make_shared<PathTunnelling>());
-    }
-    return t;
+namespace {
+
+template <class T>
+std::shared_ptr<const DriftDiffusion::Term> make_term() {
+    return std::make_shared<T>();
+}
+
+}  // namespace
+
+std::span<const CompositionEntry> DriftDiffusion::Terms::isothermal_table() {
+    using E = EquationSet;
+    using M = const PhysicsModels&;
+    const auto always = [](const DriftDiffusion&, M) { return true; };
+    const auto contacts = [](const DriftDiffusion& s, M) {
+        return std::ranges::any_of(s.contact_, [](std::int32_t c) { return c >= 0; });
+    };
+    const auto insulators = [](const DriftDiffusion& s, M) {
+        return std::ranges::any_of(s.insulator_, [](char c) { return c != 0; });
+    };
+    const auto gated = [](const DriftDiffusion& s, M) {
+        for (std::size_t i = 0; i < s.node_count(); ++i) {
+            if (s.gates_.on_gate(i)) return true;
+        }
+        return false;
+    };
+    const auto interfaces = [](const DriftDiffusion& s, M) {
+        return !s.interfaces_.edges().empty();
+    };
+    static const CompositionEntry table[] = {
+        {+E::contacts, contacts, &make_term<ContactRows>},
+        {+E::oxide, insulators, &make_term<InsulatorRows>},
+        {+E::poisson, always, &make_term<PoissonCharge>},
+        {+E::poisson, [](const DriftDiffusion&, M m) { return m.incomplete_ionization; },
+         &make_term<Ionization>},
+        {+E::gate, gated, &make_term<Gate>},
+        {+E::continuity, [](const DriftDiffusion&, M m) { return m.srh; }, &make_term<Srh>},
+        {+E::continuity, [](const DriftDiffusion&, M m) { return m.auger; },
+         &make_term<Auger>},
+        {+E::continuity, [](const DriftDiffusion&, M m) { return m.radiative; },
+         &make_term<Radiative>},
+        {+E::continuity, always, &make_term<Storage>},
+        {+E::interfaces, interfaces, &make_term<Interfaces>},
+        {+E::poisson, always, &make_term<PoissonFlux>},
+        {+E::continuity, always, &make_term<CarrierFluxes>},
+        {+E::generation, [](const DriftDiffusion&, M m) { return m.impact_ionization; },
+         &make_term<ImpactGeneration>},
+        {+E::generation, [](const DriftDiffusion&, M m) { return m.btbt_local; },
+         &make_term<LocalTunnelling>},
+        {+E::generation,
+         [](const DriftDiffusion&, M m) { return m.btbt_nonlocal != NonlocalTunnelling::off; },
+         &make_term<PathTunnelling>},
+    };
+    return table;
+}
+
+std::span<const std::shared_ptr<const DriftDiffusion::Term>> DriftDiffusion::Terms::list(
+    const DriftDiffusion& s) {
+    return s.composition_->terms();
 }
 
 void DriftDiffusion::Terms::interface_pattern(const DriftDiffusion& s,
@@ -760,7 +796,7 @@ void DriftDiffusion::Terms::impact_pattern(const DriftDiffusion& s,
 
 void DriftDiffusion::Terms::pattern(const DriftDiffusion& s,
                                     std::vector<linalg::Triplet>& triplets) {
-    for (const std::shared_ptr<const Term>& t : s.terms_) t->pattern(s, triplets);
+    s.composition_->pattern(s, triplets);
 }
 
 void DriftDiffusion::Terms::evaluate(const DriftDiffusion& s, const Term& t,

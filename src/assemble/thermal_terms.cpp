@@ -1,6 +1,7 @@
 // The electrothermal rows as equation terms (Unit 40 slice 2b; terms.hpp; Unit 23,
 // drift_diffusion.hpp "Electrothermal coupling", DECISIONS.md T1-T14). Every node and edge block is
 // 4 x 4 (psi, n, p, theta) by construction, so the terms index it as such.
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <utility>
@@ -10,6 +11,7 @@
 #include "NiTCAD/physics/recombination.hpp"
 #include "NiTCAD/physics/statistics.hpp"
 #include "NiTCAD/physics/thermal.hpp"
+#include "composition.hpp"
 #include "scaled_device.hpp"
 #include "terms.hpp"
 
@@ -720,25 +722,56 @@ public:
     }
 };
 
-std::vector<std::shared_ptr<const DriftDiffusion::Term>> DriftDiffusion::Terms::make_thermal(
-    const DriftDiffusion& s, const PhysicsModels& models) {
-    std::vector<std::shared_ptr<const Term>> t;
-    t.push_back(std::make_shared<HeatSinks>());
-    t.push_back(std::make_shared<LatticeStorage>());
-    t.push_back(std::make_shared<ThermalContactRows>());
-    t.push_back(std::make_shared<ThermalInsulatorRows>());
-    t.push_back(poisson_charge());  // complete ionization (U6)
-    bool gated = false;
-    for (std::size_t i = 0; i < s.node_count(); ++i) gated = gated || s.gates_.on_gate(i);
-    if (gated) t.push_back(std::make_shared<ThermalGate>());
-    if (models.srh) t.push_back(std::make_shared<ThermalSrh>());
-    if (models.auger) t.push_back(std::make_shared<ThermalAuger>());
-    if (models.radiative) t.push_back(std::make_shared<ThermalRadiative>());
-    t.push_back(std::make_shared<ThermalCarrierStorage>());
-    if (!s.interfaces_.edges().empty()) t.push_back(std::make_shared<ThermalInterfaces>());
-    t.push_back(std::make_shared<ThermalEdges>());
-    if (models.impact_ionization) t.push_back(std::make_shared<ThermalImpact>());
-    return t;
+namespace {
+
+template <class T>
+std::shared_ptr<const DriftDiffusion::Term> make_term() {
+    return std::make_shared<T>();
+}
+
+}  // namespace
+
+// The semiconductor equations at T, the heat equation and its sinks; incomplete ionization and
+// tunnelling are refused with the model (create), so their terms have no electrothermal form.
+std::span<const CompositionEntry> DriftDiffusion::Terms::thermal_table() {
+    using E = EquationSet;
+    using M = const PhysicsModels&;
+    const auto always = [](const DriftDiffusion&, M) { return true; };
+    const auto contacts = [](const DriftDiffusion& s, M) {
+        return std::ranges::any_of(s.contact_, [](std::int32_t c) { return c >= 0; });
+    };
+    const auto insulators = [](const DriftDiffusion& s, M) {
+        return std::ranges::any_of(s.insulator_, [](char c) { return c != 0; });
+    };
+    const auto gated = [](const DriftDiffusion& s, M) {
+        for (std::size_t i = 0; i < s.node_count(); ++i) {
+            if (s.gates_.on_gate(i)) return true;
+        }
+        return false;
+    };
+    const auto interfaces = [](const DriftDiffusion& s, M) {
+        return !s.interfaces_.edges().empty();
+    };
+    static const CompositionEntry table[] = {
+        {+E::heat, always, &make_term<HeatSinks>},
+        {+E::heat, always, &make_term<LatticeStorage>},
+        {+E::contacts, contacts, &make_term<ThermalContactRows>},
+        {+E::oxide, insulators, &make_term<ThermalInsulatorRows>},
+        {+E::poisson, always, &poisson_charge},  // complete ionization (U6)
+        {+E::gate, gated, &make_term<ThermalGate>},
+        {+E::continuity, [](const DriftDiffusion&, M m) { return m.srh; },
+         &make_term<ThermalSrh>},
+        {+E::continuity, [](const DriftDiffusion&, M m) { return m.auger; },
+         &make_term<ThermalAuger>},
+        {+E::continuity, [](const DriftDiffusion&, M m) { return m.radiative; },
+         &make_term<ThermalRadiative>},
+        {E::continuity | E::heat, always, &make_term<ThermalCarrierStorage>},
+        {+E::interfaces, interfaces, &make_term<ThermalInterfaces>},
+        {E::poisson | E::continuity | E::heat, always, &make_term<ThermalEdges>},
+        {+E::generation, [](const DriftDiffusion&, M m) { return m.impact_ionization; },
+         &make_term<ThermalImpact>},
+    };
+    return table;
 }
 
 }  // namespace NiTCAD::assemble

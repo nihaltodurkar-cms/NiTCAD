@@ -23,6 +23,7 @@
 #include "NiTCAD/physics/recombination.hpp"
 #include "NiTCAD/physics/statistics.hpp"
 #include "NiTCAD/physics/thermal.hpp"
+#include "composition.hpp"
 #include "scaled_device.hpp"
 #include "terms.hpp"
 
@@ -554,8 +555,7 @@ void DriftDiffusion::assemble_heat(std::span<const double> x, std::span<double> 
     // interface terms of its own.
     const std::vector<ThermalState> t = thermal_states(x);
     const std::vector<NodeLevels> g = thermal_levels(x, t);
-    const Terms::Evaluation evaluation{x, f, values, step, {}, t, g, sinks};
-    for (const std::shared_ptr<const Term>& term : terms_) term->add(*this, evaluation);
+    composition_->assemble(*this, {x, f, values, step, {}, t, g, sinks}, true);
 }
 
 void DriftDiffusion::add_thermal_storage(std::span<const double> x, std::complex<double> s,

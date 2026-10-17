@@ -21,6 +21,7 @@
 #include "NiTCAD/physics/mobility.hpp"
 #include "NiTCAD/physics/recombination.hpp"
 #include "NiTCAD/physics/thermionic_emission.hpp"
+#include "composition.hpp"
 #include "scaled_device.hpp"
 #include "terms.hpp"
 
@@ -221,12 +222,11 @@ std::expected<DriftDiffusion, base::Error> DriftDiffusion::create(
         s.auger_p_[i] = m.parameters().auger.Cp;
     }
 
-    // The unknowns (Unit 40, fields.hpp): psi, n, p per node, and with the electrothermal model
-    // the temperature rise last; every node and edge block is then full 4 x 4.
-    const Field fields[] = {potential_field, electron_field, hole_field, temperature_field};
-    s.dofs_ = DofMap::node_interleaved(
-        std::span(fields).first(models.electrothermal ? 4 : 3), n);
-    s.m_ = s.dofs_.block();
+    // The system's equations and unknowns from the device and the models (Unit 40,
+    // composition.hpp): psi, n, p per node, and with the electrothermal model the temperature rise
+    // last; every node and edge block is then full 4 x 4.
+    s.composition_ = Composition::compose(s, models);
+    s.m_ = s.composition_->dofs().block();
     const std::size_t stride = s.m_;
     std::vector<linalg::Triplet> triplets;
     triplets.reserve(stride * stride * n + 2 * stride * stride * scaled->edges.size());
@@ -306,9 +306,8 @@ std::expected<DriftDiffusion, base::Error> DriftDiffusion::create(
         s.edges_.push_back(t);
     }
 
-    // The terms (terms.hpp) and their own entries; set_paths adds the paths' to the base again.
+    // The terms' own entries (terms.hpp); set_paths adds the paths' to the base again.
     if (nonlocal) s.base_triplets_ = triplets;
-    s.terms_ = Terms::make(s, models);
     Terms::pattern(s, triplets);
     const auto size = static_cast<linalg::Index>(stride * n);
     auto pattern = linalg::SparseMatrix::from_triplets(size, size, triplets);
@@ -552,6 +551,8 @@ void DriftDiffusion::stamp_contacts(std::span<double> x) const {
     detail::observe("stamp_contacts", x);
 }
 
+const DofMap& DriftDiffusion::dofs() const noexcept { return composition_->dofs(); }
+
 linalg::SparseMatrix DriftDiffusion::make_jacobian() const { return pattern_; }
 
 std::vector<DriftDiffusion::NodeDegeneracy> DriftDiffusion::degeneracies(
@@ -680,13 +681,9 @@ void DriftDiffusion::assemble(std::span<const double> x, std::span<double> f,
     NITCAD_EXPECTS(x.size() == unknowns() && f.size() == unknowns());
     NITCAD_EXPECTS(step == nullptr || (step->storage.size() == 2 * node_count() &&
                                        step->traps.size() == trap_slots()));
-    // The terms in assembly order (terms.hpp).
+    // The terms in assembly order (composition.hpp).
     const std::vector<NodeDegeneracy> g = degeneracies(x);
-    const Terms::Evaluation evaluation{x, f, values, step, g};
-    for (const std::shared_ptr<const Term>& t : terms_) {
-        if (!interfaces && t->info().domain == TermDomain::interface_edges) continue;
-        t->add(*this, evaluation);
-    }
+    composition_->assemble(*this, {x, f, values, step, g}, interfaces);
 }
 
 void DriftDiffusion::evaluate(std::span<const double> x, std::span<double> residual,

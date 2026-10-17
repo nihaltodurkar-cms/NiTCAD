@@ -40,6 +40,8 @@
 
 namespace NiTCAD::assemble {
 
+struct CompositionEntry;  // composition.hpp
+
 // What a term loops over, once per evaluation (DECISIONS.md FD3: one call per term per pass).
 enum class TermDomain { nodes, interface_edges, mesh_edges, global };
 
@@ -69,22 +71,21 @@ struct DriftDiffusion::Terms {
         [[nodiscard]] bool jacobian() const noexcept { return !values.empty(); }
     };
 
-    // The terms of a system's models in assembly order. Inclusion follows the models alone, since
-    // the system's tables (impact nodes, tunnel nodes) are built after the pattern the terms add
-    // to; a term whose table is empty adds nothing. With the electrothermal model, the
-    // electrothermal terms (make_thermal, thermal_terms.cpp).
-    [[nodiscard]] static std::vector<std::shared_ptr<const Term>> make(const DriftDiffusion& s,
-                                                                       const PhysicsModels& models);
-    [[nodiscard]] static std::vector<std::shared_ptr<const Term>> make_thermal(
-        const DriftDiffusion& s, const PhysicsModels& models);
-    // The Poisson charge term, shared by both lists.
+    // The composition tables (composition.hpp): every term a system can have, in assembly order,
+    // with its equation sets and activation. Activation follows the models and the device data set
+    // before the unknowns' map, since the system's other tables (impact nodes, tunnel nodes) are
+    // built after the pattern the terms add to; a term whose table is empty adds nothing.
+    // Isothermal in terms.cpp; with the electrothermal model thermal_terms.cpp.
+    [[nodiscard]] static std::span<const CompositionEntry> isothermal_table();
+    [[nodiscard]] static std::span<const CompositionEntry> thermal_table();
+    // The Poisson charge term, in both tables.
     [[nodiscard]] static std::shared_ptr<const Term> poisson_charge();
     // Appends every term's own pattern entries (Term::pattern) to triplets.
     static void pattern(const DriftDiffusion& s, std::vector<linalg::Triplet>& triplets);
-    // A system's terms (for its tests).
-    [[nodiscard]] static std::span<const std::shared_ptr<const Term>> list(
-        const DriftDiffusion& s) noexcept {
-        return s.terms_;
+    // A system's terms and its composition (for its tests).
+    [[nodiscard]] static std::span<const std::shared_ptr<const Term>> list(const DriftDiffusion& s);
+    [[nodiscard]] static const Composition& composition(const DriftDiffusion& s) noexcept {
+        return *s.composition_;
     }
     // One term alone at x: F and the values set to 0, then the term's add (for its tests: each
     // term's partials against finite differences of its own residual). Preconditions
