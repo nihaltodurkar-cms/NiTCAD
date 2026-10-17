@@ -2004,7 +2004,7 @@ with `[transient]`; AQ5 `logspace`.
 **Status:** accepted by the owner (2026-10-17, "accept"); ARCHITECTURE.md 6.5 and 11.3 updated to "as built"
 (AG8). Merged to `main` as `913dac0` (PR #53, 2026-10-17).
 
-### Unit 44 — an iterative linear solver (proposed 2026-10-17; not authorized; on `linalg/iterative`)
+### Unit 44 — an iterative linear solver (proposed and authorized 2026-10-17; on `linalg/iterative`)
 
 **Owner request (2026-10-17):** the scope of the "Scalable linear solvers" row of ARCHITECTURE.md 11.3 (planned:
 "iterative Krylov with ILU/AMG behind `linalg`; parallel assembly"). Documentation only until the owner approves.
@@ -2032,7 +2032,7 @@ with `[transient]`; AQ5 `logspace`.
 | LS5 | **The deck:** `[solver] backend = gmres_ilut`, with `restart`, `max_linear_iterations`, `ilut_drop`, `ilut_fill`. | The batch runner reaches it like PARDISO. | Four keys. |
 | LS6 | **Out of scope:** algebraic multigrid; block (field-split) preconditioners (they need Unit 40's unknown map, a later unit); parallel assembly; a GPU solver; changing the default backend. | Keeps the unit to one backend and its evidence. | 3D scaling beyond what ILUT gives waits for AMG. |
 
-**Owner decisions needed:**
+**Owner decisions (asked; ruled below):**
 
 | # | Question | Recommendation |
 |---|---|---|
@@ -2066,7 +2066,24 @@ deck keys (LG5); 3) the benchmark and its results (LG4).
   default change.
 - Results differ from SparseLU's at the tolerance, not bit for bit, as PARDISO's do.
 
-**Status:** proposal only; no code. Awaiting the owner's approval and rulings LQ1–LQ4.
+**Owner rulings (2026-10-17).** The owner approved the unit and delegated LQ1–LQ4 to the choice best for a
+commercial TCAD product ("for decisions choose whats best for Commercial TCAD").
+
+| # | Ruling | Why, for a commercial product |
+|---|---|---|
+| LQ1 | GMRES in-tree (LS2). | The stopping test is the acceptance measure, and the solver stays under this project's tests and stability promise. |
+| LQ2 | **Fall back** (differs from the recommendation). When GMRES-ILUT fails to reach `max_backward_error` within `max_iterations`, or the ILUT build fails, that system is solved by Eigen SparseLU, and the fallback is reported: `SolveReport` gains a field saying the system fell back, with the GMRES iterations spent. The direct solve's own checks then apply as usual (`inaccurate_solve`, `singular_system`). The deck key `linear_fallback = sparse_lu` (default) or `none` (fail with `inaccurate_solve`, the strict behaviour) controls it. | A production run must not abort where a direct solve can finish; the user sees in the report how often it happened. The strict mode keeps the failure rate measurable. |
+| LQ3 | Complex systems (small signal) in this unit. | The same template; high-frequency admittances test the preconditioner. |
+| LQ4 | Merge as opt-in with the measurements recorded, whatever LG4 shows. | It is the base for AMG and block preconditioners, the path to large 3D. |
+
+**Amendments from LQ2.** LS4: failure falls back as LQ2, with `none` giving the behaviour written there. LS5: a
+fifth key, `linear_fallback`. LG2: with `linear_fallback = none` an unconverged system is `inaccurate_solve`; with
+`sparse_lu` the same system is solved, the fallback is reported, and its solution meets the backward-error target.
+LG3: the agreement cases run with `none`, so a fallback cannot hide a failure; any device that fails is recorded.
+LG4: also records each case's fallback count with the default setting. LG7: a further mutant, a fallback that is
+not reported.
+
+**Status:** authorized with LQ1–LQ4; no code. First in VQ6's order, before Unit 25a.
 
 ---
 
