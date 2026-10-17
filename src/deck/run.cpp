@@ -96,6 +96,12 @@ std::expected<void, base::Error> write_table(const std::filesystem::path& path,
 
 std::expected<RunReport, base::Error> run(const Plan& plan, const solve::RunControl& control) {
     RunReport report;
+    if (plan.analysis != Analysis::equilibrium && plan.analysis != Analysis::sweep) {
+        return std::unexpected(base::Error{base::ErrorCode::invalid_input,
+                                           "this build does not run [transient], [small_signal] or "
+                                           "[trace] decks yet (Unit 43)",
+                                           std::nullopt});
+    }
     if (plan.options.linear.backend == linalg::SolverBackend::mkl_pardiso) {
         auto mkl = linalg::load_mkl_runtime(plan.mkl_runtime);
         if (!mkl) return std::unexpected(std::move(mkl.error()));

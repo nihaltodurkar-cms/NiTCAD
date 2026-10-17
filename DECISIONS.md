@@ -1948,7 +1948,30 @@ own.
 - AG2's bit-for-bit comparison needs both sides to see the same options, including defaults the deck fills; any
   default the deck sets differently from C++ would show here, as intended.
 
-**Status:** proposal only; no code. Awaiting the owner's approval and rulings AQ1–AQ5.
+**Owner approval (2026-10-17):** "start the scope", taken as approval with every recommendation: AQ1
+function-call waveforms; AQ2 times in seconds (DK5 kept); AQ3 the CSV columns as stated; AQ4 `checkpoint` refused
+with `[transient]`; AQ5 `logspace`.
+
+**As built, so far:**
+- Commit 1: the three sections in `deck::build` (`Plan::transient`, `waveforms`, `small_signal`, `trace`; their
+  `steady` left default, the run uses `Plan::options`); waveforms in `src/deck/waveforms.hpp`; `logspace` in the
+  series reader. AN3 refined: series never had `linspace` (an axis form), so `logspace` is a series form of its own,
+  usable in every series. `[sweep]` and `[small_signal]` share one operating-point reader (the sweep's, moved
+  unchanged). Until commit 2, `deck::run` refuses the new analyses.
+  - **The one change to existing behaviour (AG1 refined):** the message for a deck without exactly one analysis
+    now lists the five sections; the two existing tests that quoted the old message were updated to it.
+  - Tests (`tests/deck/analyses_test.cpp`, 6 cases): every key changed from its default reaches its option;
+    absent keys equal the C++ defaults; each waveform form equals its factory; `logspace` values and exact bounds
+    (also where 10^log10(x) does not round-trip); the outputs each analysis takes and refuses; every mistake
+    with its line.
+  - Mutants (Release): 14 applied, 14 caught (a key ignored: `rtol`, `max_points`; `t_end` not required; step
+    arguments swapped; no analysis accepted; `logspace` bounds not exact, first and last, caught only after the
+    inexact-bound test was added; the trace start always on the first contact; a transient checkpoint accepted;
+    field frequencies stored as frequencies; a pulse with a rise only; `backward_euler` read as `bdf2`; the sweep
+    output refused for a transient only; `[trace]` parsed as `[transient]`). A first form of the sweep-output mutant
+    did not compile and was replaced.
+
+**Status:** commit 1 built; commits 2 (running and outputs) and 3 (the runner) to come.
 
 ---
 
