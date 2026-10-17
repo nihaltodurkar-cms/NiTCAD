@@ -1854,7 +1854,39 @@ CSV table is unchanged; PD5 the version stays `0.0.0`.
   provenance required on read; the dirty flag inverted; wall time not written; its key colliding with the
   settings').
 
-**Status:** commits 1–2 built; commits 3 (transient and small-signal files) and 4 (the runner) to come.
+- `b5940c8`, a test fix: the commit-2 Debug suite failed 4 assertions, all the revision check. It required the
+  stamped revision to equal git's HEAD when the test runs, and commit 2 was made after that build. A build
+  older than HEAD is normal, so the revision must now be a 40-digit commit of HEAD's history
+  (`git merge-base --is-ancestor`), or `unknown` without git (PG5 refined). The same commit adds PV5's test that
+  a `trace_bias` sweep round-trips through `save_sweep`.
+- Commit 3 (`397b08c`): content kinds 5 and 6, `save_transient` / `load_transient` and `save_small_signal` /
+  `load_small_signal`. Each point's admittances are stored as one array (frequencies × contacts² complex values,
+  as (real, imaginary) pairs) and its resolutions as one (frequencies × contacts), so a loaded run's
+  `admittance(point, frequency, i, j)` stays in bounds. Loading also refuses a snapshot of a missing time point,
+  an order outside 0–2, and small-signal fields of a missing contact (PG4). Mutants: 11 applied, 11 caught (error
+  ratio, trap occupancy, small-signal fields or resolutions dropped; real and imaginary parts swapped; the
+  admittance size check loosened, caught only after a too-long case was added to the test; the snapshot and
+  contact bounds off by one; the order unchecked; the wrong content kind; the lagged count written as the
+  retraced one). A first form of the snapshot mutant did not compile and was replaced.
+- Commit 4 (`d8186bb`): `nitcad --version` prints the build on one line; `nitcad run` prints the build, the
+  platform, the start and the wall time after the files it wrote (for an equilibrium run, which has no run
+  record, the provenance of now). New ctest `cli_version` checks the line. Mutants: 3 applied, 3 caught.
+- **Suites (PG6):** commit 1 Release 19/19; commit 2 Release 19/19, Debug 12 of 13 (the revision check above);
+  commit 3 Release 19/19, Debug 13/13; commit 4 Release 20/20, Debug 14/14. No warnings under `/W4 /WX`. After
+  the stamp, a second build recompiles nothing.
+- **Debug assertion dialogs:** a mutant that makes a test read a failed `std::expected` opens the MSVC Debug
+  runtime's modal assertion dialog, which waits for a click. Later mutant runs used the Release build.
+- **PG1 trace gate, method:** Catch2 3 orders test cases randomly per run, and fixtures cached in function-local
+  statics (for example `fixture_curve()` in `mos_test.cpp`) are traced inside whichever case first uses them. So
+  traces are compared with `--order decl`, with both builds configured with the same MKL runtime (PARDISO cases
+  run, not skipped), each pinned to P cores, block by block (a block is one test case's trace).
+- **PG1 result:** every one of `main`'s 362 blocks over the nine traced entries is byte-identical in this branch's
+  traces (assemble 107, deck 18, solve 199, breakdown 7, BTBT 3, MOSFET 11, transient 6, unstructured 3,
+  validation 8), `result.identity` included. The only blocks without a counterpart are this unit's three new solve
+  cases. No numerical result and no input identity changed.
+
+**Status:** commits 1–4 built and gated; awaiting the owner's acceptance. ARCHITECTURE.md 6.6 and 11.3 are
+updated to "as built" after it (PG8).
 
 ---
 
