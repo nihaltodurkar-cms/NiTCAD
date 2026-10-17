@@ -1971,7 +1971,38 @@ with `[transient]`; AQ5 `logspace`.
     output refused for a transient only; `[trace]` parsed as `[transient]`). A first form of the sweep-output mutant
     did not compile and was replaced.
 
-**Status:** commit 1 built; commits 2 (running and outputs) and 3 (the runner) to come.
+- Commit 2 (`b77aacc`): `deck::run` calls `solve_transient`, `solve_small_signal` or `trace_bias` with the
+  analysis's options and `Plan::options` as their `steady`; writes the transient, small_signal or sweep file, the
+  checkpoint (small signal: the last operating point; trace: the last point) and the AQ3 table
+  (`write_transient_table`, `write_small_signal_table`; a trace uses the sweep table). `RunReport` gains
+  `transient` and `small_signal`; a trace's result is `sweep`.
+  - Tests (`tests/deck/analyses_run_test.cpp`, 3 cases; AG2, AG4): each deck run equals the C++ call on the
+    hand-built diode (not the deck's device), bit for bit, run identity included: a transient (a ramp, fixed
+    backward-Euler steps, an output time), a small-signal run (two points, a `logspace`, field frequencies), a
+    trace (with a solver option); the files reload equal, provenance included; the checkpoints; the tables'
+    headers, row counts and a whole small-signal row rebuilt from the run.
+  - AG2 narrowed: a diode stands in for the MOS-C the proposal named, and the waveform kinds are checked against
+    their factories in the plan tests (commit 1), with one run (a ramp) through the solver; no electrothermal run
+    from a deck (the thermal keys are checked in the plan).
+- Commit 3 (`892d5fc`): `nitcad check` describes the new analyses; `run` prints progress per accepted step, per
+  operating point and frequency, and per traced point; exit 2 when a trace, transient or small-signal run stops
+  early. Tests: the CLI for each analysis (check, run, exit 0), a stopped transient and small-signal run (exit 2),
+  and a stopped transient's file holding its accepted steps (AG5; the stop is a non-convergence, which takes the
+  same path as a cancellation).
+- Mutants for commits 2–3 (Release): 11 applied, 11 caught (displacement columns dropped; the small-signal
+  checkpoint of the first point; each run without the plan's options, the trace's caught after its test gained a
+  solver option; capacitances written as conductances, caught after the whole-row test was added; the trace table
+  not written; the step column holding the time; a stopped transient exiting 0; waveform names swapped; trace
+  progress printed as a sweep's).
+- **AG1 result:** with `--order decl`, the same MKL configuration and P-core pinning, all 18 of `main`'s deck
+  test-case blocks and all 8 validation blocks are byte-identical; the only other blocks are this unit's 11 new
+  cases.
+- **Suites (AG6):** commit 1 Release 20/20, Debug 14/14. Commit 2 changes the `deck` library and its tests only,
+  so its gate was the deck suite (Debug, 27 cases), not the full suites, to save about 40 minutes; commit 3
+  Release 20/20, Debug 14/14. No warnings under `/W4 /WX`.
+
+**Status:** commits 1–3 built and gated; awaiting the owner's acceptance. ARCHITECTURE.md 6.5 and 11.3 are updated
+to "as built" after it (AG8).
 
 ---
 
