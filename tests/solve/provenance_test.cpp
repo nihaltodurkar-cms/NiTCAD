@@ -3,10 +3,12 @@
 // the input identity.
 #include <catch2/catch_test_macros.hpp>
 
+#include <bit>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
+#include <filesystem>
 #include <regex>
 #include <string>
 #include <thread>
@@ -14,6 +16,7 @@
 #include <vector>
 
 #include "NiTCAD/device/device.hpp"
+#include "NiTCAD/io/files.hpp"
 #include "NiTCAD/linalg/mkl_runtime.hpp"
 #include "NiTCAD/mesh/tensor_grid.hpp"
 #include "NiTCAD/physics/semiconductor.hpp"
@@ -49,27 +52,31 @@ device::Device diode() {
                       {"cathode", device::ContactKind::ohmic, std::move(cathode)}}});
 }
 
-// The commit the source tree is at, as git reports it now; "unknown" when the build found no git.
-std::string head_revision() {
+// Whether `revision` is a commit of the source tree's history: HEAD or an ancestor of it, as git
+// reports it now. The build stamps the commit it was built from, and a commit made after the build
+// moves HEAD on, so equality with HEAD would fail a test run that is merely not rebuilt. Without
+// git at build time the revision must be "unknown".
+bool known_revision(const std::string& revision) {
     const std::string git = NITCAD_GIT;
-    if (git.empty()) return "unknown";
+    if (git.empty()) return revision == "unknown";
+    if (revision.size() != 40 || revision.find_first_not_of("0123456789abcdef") != std::string::npos) {
+        return false;
+    }
     // cmd /c strips the outer quotes, leaving the quoted program and directory.
-    const std::string command =
-        "\"\"" + git + "\" -C \"" + std::string(NITCAD_SOURCE_DIR) + "\" rev-parse HEAD\"";
+    const std::string command = "\"\"" + git + "\" -C \"" + std::string(NITCAD_SOURCE_DIR) +
+                                "\" merge-base --is-ancestor " + revision + " HEAD\"";
     std::FILE* pipe = _popen(command.c_str(), "r");
-    if (pipe == nullptr) return {};
-    std::string out;
+    if (pipe == nullptr) return false;
     char buffer[128];
-    while (std::fgets(buffer, sizeof buffer, pipe) != nullptr) out += buffer;
-    _pclose(pipe);
-    while (!out.empty() && (out.back() == '\n' || out.back() == '\r')) out.pop_back();
-    return out;
+    while (std::fgets(buffer, sizeof buffer, pipe) != nullptr) {
+    }
+    return _pclose(pipe) == 0;
 }
 
 // What every run records about the build and the platform, whatever the run.
 void check_provenance(const results::Provenance& p, double outer_s) {
     CHECK(p.version == "0.0.0");
-    CHECK(p.revision == head_revision());
+    CHECK(known_revision(p.revision));
 #ifdef NDEBUG
     CHECK(p.build_type == "Release");
 #else
@@ -138,6 +145,43 @@ TEST_CASE("provenance: every public run records it") {
         REQUIRE(r.has_value());
         check_provenance(r->run.provenance, s);
     }
+}
+
+TEST_CASE("a trace round-trips through save_sweep") {
+    // trace_bias returns a Sweep (Unit 19), so the sweep file stores it (Unit 42, PV5): its
+    // points in trace order with the full contact bias, values and provenance bit for bit.
+    const device::Device d = diode();
+    solve::TraceOptions o;
+    o.start_V = {0.0, 0.0};
+    o.end_V = 0.2;
+    o.step_V = 0.05;
+    const auto t = solve::trace_bias(d, o);
+    REQUIRE(t.has_value());
+    REQUIRE(t->points.size() > 2);
+    const auto dir = std::filesystem::temp_directory_path() / "nitcad_solve_test" / "trace_file";
+    std::filesystem::remove_all(dir);
+    std::filesystem::create_directories(dir);
+    REQUIRE(io::save_sweep(dir / "trace.nitsweep", *t).has_value());
+    const auto back = io::load_sweep(dir / "trace.nitsweep");
+    REQUIRE(back.has_value());
+    CHECK(back->run.input_identity == t->run.input_identity);
+    CHECK(back->run.settings == t->run.settings);
+    CHECK(back->run.provenance == t->run.provenance);
+    REQUIRE(back->points.size() == t->points.size());
+    const auto bits = [](const std::vector<double>& v) {
+        std::vector<std::uint64_t> b;
+        for (const double x : v) b.push_back(std::bit_cast<std::uint64_t>(x));
+        return b;
+    };
+    for (std::size_t k = 0; k < t->points.size(); ++k) {
+        CHECK(bits(back->points[k].bias_V) == bits(t->points[k].bias_V));
+        CHECK(bits(back->points[k].terminal_current) == bits(t->points[k].terminal_current));
+        CHECK(bits(back->points[k].fields.potential_V) == bits(t->points[k].fields.potential_V));
+        CHECK(bits(back->points[k].fields.n_cm3) == bits(t->points[k].fields.n_cm3));
+        CHECK(back->points[k].convergence.iterations.size() ==
+              t->points[k].convergence.iterations.size());
+    }
+    CHECK(back->stopped.has_value() == t->stopped.has_value());
 }
 
 TEST_CASE("provenance: not part of the input identity") {
