@@ -27,3 +27,13 @@ core to the E-core result and back; the L2 size has no effect.
 
 `diode_2d.deck` shows the same thing through `nitcad run`. Its current table differs in the last
 bits between a run pinned to a P core and one pinned to an E core.
+
+## Measuring the impact and the cost
+
+Impact and cost were measured on 2026-10-17 (DECISIONS.md, Unit 41, "Measured"). Neither tool is part of any build.
+- `measurement.patch`: applies to Unit 40's tree, which has `tests/baseline/trace_listener.cpp`. It writes the
+  full values of the solve results into the trace, adds `NITCAD_EIGEN_CACHE=l1,l2,l3` (bytes) to fix Eigen's cache
+  sizes before any test runs, and adds a hidden `[.unit41_cost]` SparseLU timing case.
+- `compare-values.sh <dir A> <dir B>`: compares two directories of such traces block by block. It reports the
+  blocks whose call sequence changed (iterations, steps or cuts) and, for the others, each result's largest
+  difference relative to its array's largest value.
