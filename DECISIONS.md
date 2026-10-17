@@ -1888,7 +1888,7 @@ CSV table is unchanged; PD5 the version stays `0.0.0`.
 **Status:** accepted by the owner (2026-10-17, "accepted"); ARCHITECTURE.md 6.6 and 11.3 updated to "as built"
 (PG8). Merged to `main` as `145f23c` (PR #52, 2026-10-17).
 
-### Unit 43 — transient, small-signal and trace analyses in the deck (proposed 2026-10-17; not authorized; on `deck/analyses`)
+### Unit 43 — transient, small-signal and trace analyses in the deck (proposed, authorized and accepted 2026-10-17; on `deck/analyses`, PR #53)
 
 **Owner request (2026-10-17):** the scope of the next unit named by Unit 42's PD1. Documentation only until the
 owner approves.
@@ -2001,8 +2001,8 @@ with `[transient]`; AQ5 `logspace`.
   so its gate was the deck suite (Debug, 27 cases), not the full suites, to save about 40 minutes; commit 3
   Release 20/20, Debug 14/14. No warnings under `/W4 /WX`.
 
-**Status:** commits 1–3 built and gated; awaiting the owner's acceptance. ARCHITECTURE.md 6.5 and 11.3 are updated
-to "as built" after it (AG8).
+**Status:** accepted by the owner (2026-10-17, "accept"); ARCHITECTURE.md 6.5 and 11.3 updated to "as built"
+(AG8). PR #53; not merged.
 
 ---
 

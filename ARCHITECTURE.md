@@ -1698,6 +1698,40 @@ inputs; DECISIONS.md DK1–DK11):**
   io unit); 2D structured boundary layers and per-region sizes in the deck; general 1D graph meshes; variables,
   expressions and includes.
 
+**As built (Unit 43, transient, small-signal and trace analyses in the deck; approved and accepted by the owner
+2026-10-17; DECISIONS.md AN1–AN8, AQ1–AQ5, AG1–AG8):**
+- `[transient]`, `[small_signal]` and `[trace]` join `[equilibrium]` and `[sweep]`; a deck has exactly one of the
+  five (`deck::Analysis`). Each key sets one option of `solve::TransientOptions`, `SmallSignalOptions` or
+  `TraceOptions` (held in `Plan`); absent keys keep the C++ defaults; the run takes `Plan::options` (models,
+  solver) as their `steady` options.
+  - `[transient]`: `contact <name> = <waveform>`, a call of one `solve::Waveform` factory: `constant(v)`,
+    `step(v0, v1, t)`, `ramp(v0, v1, t0, t1)`, `pulse(base, pulse, t_start, width[, rise, fall])`,
+    `pwl(t v, ...)`, `sine(offset, amplitude, f[, delay, phase])` (AQ1); a contact not named is held at 0 V.
+    `t_end` is required; times are in seconds (DK5 kept, AQ2).
+  - `[small_signal]`: the operating points as `[sweep]` (one reader for both); `frequencies` required.
+  - `[trace]`: `contact` and `end` required; `start <name>` per contact.
+  - `thermal <name>` everywhere the run takes thermal-contact temperatures (one list for a transient or a trace).
+  - `logspace(a, b, n)` is a series form (AQ5), with exact bounds.
+- **Outputs:** `transient =` and `small_signal =` (Unit 42's files); a trace writes `sweep =`. Each analysis
+  takes only what it writes; `checkpoint =` with `[transient]` is refused (AQ4); a small-signal checkpoint is its
+  last operating point, a trace's its last point. CSV tables (AQ3): transient, per accepted step, time, step,
+  order and per contact bias, total, conduction and displacement current; small signal, per point and frequency,
+  the bias and G and C for every contact pair; trace, the sweep table. `restart` stays `[sweep]`'s (DK9).
+- **The runner:** `check` describes each analysis; `run` prints progress per accepted step, per operating point
+  and frequency, or per traced point; exit 2 when any run stops early, its completed part written.
+- The message for a deck without exactly one analysis lists the five sections (the one change to existing
+  behaviour).
+- Gates (`tests/deck/analyses_test.cpp`, 6 cases; `analyses_run_test.cpp`, 3; 2 more in `run_test.cpp`):
+  - every key reaches its option, the defaults are C++'s, every waveform form equals its factory, every mistake
+    names its line;
+  - each analysis run from a deck equals the C++ call on the hand-built diode bit for bit, run identity included;
+    its files reload equal; its table's header, rows and a whole small-signal row;
+  - the CLI for each analysis, a stopped transient and small-signal run (exit 2), a stopped transient's file;
+  - existing decks unchanged: `main`'s deck and validation assembly traces byte-identical (AG1).
+- Mutation checks (25), all caught (DECISIONS.md, Unit 43).
+- Not in Unit 43: restart of the new analyses, a transient or small-signal run from a checkpoint (`initial`),
+  harmonic balance, unit suffixes on times.
+
 ### 6.6 Result representation
 
 `results` holds fields indexed by mesh node, terminal quantities per bias point, and a run record
@@ -2772,7 +2806,7 @@ exists, not finished), **planned** (nothing built). Audit of 2026-10-09, against
 | Area | What exists (audited) | Status | Next step |
 |---|---|---|---|
 | Robust nonlinear solving | Newton with componentwise clipping (6.2); the generation-free retry (Units 19, 20); arc-length `trace_bias` (Unit 19) | **Bias step cutting verified, on `main`** (Unit 28, below; `06b708d`, PR #31); **Newton line search verified, opt-in, on `main`** (Unit 30, below; `f3e2811`, PR #32) | A natural-test norm monotone in reverse bias; a Gummel or pseudo-transient fallback |
-| Input/output, checkpoint/restart | The `io` layer (approved 2026-10-09): versioned, checksummed, atomic files for meshes, sweeps and checkpoints; device files and the text input deck (Unit 31) | **Verified, on `main`** (Unit 29, 6.6; `f69a7a8`, PR #33); **device files and the deck verified, on `main`** (Unit 31, 6.5; `6f67510`, PR #37); **transient and small-signal files verified** (Unit 42, 6.6; PR #52) | Transient, small-signal and `trace_bias` deck analyses writing those files (the next unit, DECISIONS.md PD1) |
+| Input/output, checkpoint/restart | The `io` layer (approved 2026-10-09): versioned, checksummed, atomic files for meshes, sweeps and checkpoints; device files and the text input deck (Unit 31) | **Verified, on `main`** (Unit 29, 6.6; `f69a7a8`, PR #33); **device files and the deck verified, on `main`** (Unit 31, 6.5; `6f67510`, PR #37); **transient and small-signal files verified** (Unit 42, 6.6; PR #52); **transient, small-signal and trace deck analyses verified** (Unit 43, 6.5; PR #53) | Restart of transient and trace runs; a run started from a checkpoint (`initial`); unit suffixes on times |
 | Geometry and unstructured 3D meshing | `Mesh::from_parts` accepts any valid node/edge/volume graph; besides the tensor-grid producer, Unit 16 added the 2D and 3D Delaunay generators and the simplex import (checked duals P0–P5, P4-certified interfaces, contact patches, structured 2D boundary layers); nonlocal BTBT still needs tensor cells (6.11, M16) | **Verified, on `main`** (Unit 16, 6.11; `a09cf43`, PR #35) | Non-convex 3D domains, 3D interface junction lines, interfaces across patched faces and 3D boundary layers (U7); an unstructured locator for nonlocal BTBT (M16) |
 | Low-current accuracy | `terminal_current_resolution` reports the floor (Unit 15); the weighted terminal current with an adjoint error estimate (Unit 32, 6.6) | **Verified, on `main`** (Unit 32; `6e54c69`, PR #39): the MOSFET off state resolved at every Vg, sub-floor diode currents on the ideal-diode law to 0.1% | Weighted transient and small-signal currents; a path term for nonlocal tunnelling |
 | Generic fields/equations | Field descriptors and the unknowns' map; the drift-diffusion and electrothermal rows as equation terms composed by equation set, behind the unchanged `DriftDiffusion` (Unit 40, 6.12.1–2) | **Verified, bit-identical, on `main`** (Unit 40; `629bed0`, PR #50; below) | Move the model data out of `DriftDiffusion` and retire it as the wrapper; derived and edge/cell fields; `EquilibriumPoisson` from the same terms |
