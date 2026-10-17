@@ -439,6 +439,10 @@ add_test(NAME deck COMMAND nitcad_deck_test)
 # The batch runner (`nitcad check|run <deck>`).
 add_executable(nitcad src/cli/main.cpp)
 target_link_libraries(nitcad PRIVATE NiTCAD::deck)
+# `nitcad --version` names the build (Unit 42, PV6): a 40-digit revision, or unknown without git.
+add_test(NAME cli_version COMMAND nitcad --version)
+set_tests_properties(cli_version PROPERTIES PASS_REGULAR_EXPRESSION
+  "^nitcad ${PROJECT_VERSION} \\(revision ([0-9a-f]+|unknown)(, modified)?, ${CMAKE_BUILD_TYPE}, MSVC [0-9.]+, Eigen [0-9]")
 
 # --- validation against published data (Unit 33; benchmarks/ decks) ----------------------
 add_executable(nitcad_validation_test tests/validation/published_test.cpp
