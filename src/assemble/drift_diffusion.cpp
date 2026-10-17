@@ -22,6 +22,7 @@
 #include "NiTCAD/physics/recombination.hpp"
 #include "NiTCAD/physics/thermionic_emission.hpp"
 #include "scaled_device.hpp"
+#include "terms.hpp"
 
 namespace NiTCAD::assemble {
 
@@ -256,41 +257,7 @@ std::expected<DriftDiffusion, base::Error> DriftDiffusion::create(
                                 static_cast<linalg::Index>(stride * e.i + edge_cols[k]), 0.0});
         }
     }
-    // An interface edge: the insulator's Poisson row reads the semiconductor's n and p.
-    for (const InterfaceEdge& f : s.interfaces_.edges()) {
-        for (const std::size_t c : {std::size_t{1}, std::size_t{2}}) {
-            triplets.push_back({static_cast<linalg::Index>(stride * f.insulator),
-                                static_cast<linalg::Index>(stride * f.semiconductor + c), 0.0});
-        }
-    }
-    // Impact ionization: a node's electron generation reads its neighbours' p (through the hole
-    // current) and its hole generation their n.
-    if (models.impact_ionization) {
-        for (const detail::ScaledEdge& e : scaled->edges) {
-            if (!e.carriers) continue;
-            for (const auto [a, b] : {std::pair{e.i, e.j}, std::pair{e.j, e.i}}) {
-                triplets.push_back({static_cast<linalg::Index>(stride * a + 1),
-                                    static_cast<linalg::Index>(stride * b + 2), 0.0});
-                triplets.push_back({static_cast<linalg::Index>(stride * a + 2),
-                                    static_cast<linalg::Index>(stride * b + 1), 0.0});
-            }
-        }
-    }
-    const auto size = static_cast<linalg::Index>(stride * n);
-    auto pattern = linalg::SparseMatrix::from_triplets(size, size, triplets);
-    if (!pattern) return std::unexpected(std::move(pattern.error()));
-    s.pattern_ = std::move(*pattern);
-    if (nonlocal) s.base_triplets_ = std::move(triplets);  // set_paths adds the paths' entries
-
-    s.block_.resize(stride * stride * n);
-    for (std::size_t i = 0; i < n; ++i) {
-        for (std::size_t r = 0; r < stride; ++r) {
-            for (std::size_t c = 0; c < stride; ++c) {
-                s.block_[stride * stride * i + stride * r + c] =
-                    detail::position(s.pattern_, stride * i + r, stride * i + c);
-            }
-        }
-    }
+    // The edges' data first: the terms' pattern entries (Term::pattern) read it.
     s.edges_.reserve(scaled->edges.size());
     for (const detail::ScaledEdge& e : scaled->edges) {
         EdgeTerm t{};
@@ -299,12 +266,6 @@ std::expected<DriftDiffusion, base::Error> DriftDiffusion::create(
         t.c = e.et * e.geometry;
         t.carriers = e.carriers;
         t.charged = e.charged;
-        for (std::size_t k = 0; k < 5; ++k) {
-            t.ab[k] = detail::position(s.pattern_, stride * e.i + edge_rows[k],
-                                       stride * e.j + edge_cols[k]);
-            t.ba[k] = detail::position(s.pattern_, stride * e.j + edge_rows[k],
-                                       stride * e.i + edge_cols[k]);
-        }
         if (!t.carriers) {  // Poisson only
             s.edges_.push_back(t);
             continue;
@@ -353,6 +314,33 @@ std::expected<DriftDiffusion, base::Error> DriftDiffusion::create(
             t.te_ratio_nv = nva / nvb;
         }
         s.edges_.push_back(t);
+    }
+
+    // The terms (terms.hpp) and their own entries; set_paths adds the paths' to the base again.
+    if (nonlocal) s.base_triplets_ = triplets;
+    s.terms_ = Terms::make(s, models);
+    Terms::pattern(s, triplets);
+    const auto size = static_cast<linalg::Index>(stride * n);
+    auto pattern = linalg::SparseMatrix::from_triplets(size, size, triplets);
+    if (!pattern) return std::unexpected(std::move(pattern.error()));
+    s.pattern_ = std::move(*pattern);
+
+    s.block_.resize(stride * stride * n);
+    for (std::size_t i = 0; i < n; ++i) {
+        for (std::size_t r = 0; r < stride; ++r) {
+            for (std::size_t c = 0; c < stride; ++c) {
+                s.block_[stride * stride * i + stride * r + c] =
+                    detail::position(s.pattern_, stride * i + r, stride * i + c);
+            }
+        }
+    }
+    for (EdgeTerm& t : s.edges_) {
+        for (std::size_t k = 0; k < 5; ++k) {
+            t.ab[k] = detail::position(s.pattern_, stride * t.a + edge_rows[k],
+                                       stride * t.b + edge_cols[k]);
+            t.ba[k] = detail::position(s.pattern_, stride * t.b + edge_rows[k],
+                                       stride * t.a + edge_cols[k]);
+        }
     }
 
     if (models.impact_ionization) {
@@ -702,362 +690,12 @@ void DriftDiffusion::assemble(std::span<const double> x, std::span<double> f,
     NITCAD_EXPECTS(x.size() == unknowns() && f.size() == unknowns());
     NITCAD_EXPECTS(step == nullptr || (step->storage.size() == 2 * node_count() &&
                                        step->traps.size() == trap_slots()));
-    const bool jacobian = !values.empty();
-    const auto at = [&](std::size_t node, std::size_t r, std::size_t c) -> double& {
-        return values[block_[m_ * m_ * node + m_ * r + c]];
-    };
+    // The terms in assembly order (terms.hpp).
     const std::vector<NodeDegeneracy> g = degeneracies(x);
-    // The equilibrium product of node i, scaled.
-    const auto product = [&](std::size_t i) {
-        return fermi_dirac_ ? physics::fermi_dirac_equilibrium_product(n_ie_[i], g[i].n, g[i].p)
-                            : physics::boltzmann_equilibrium_product(n_ie_[i]);
-    };
-    for (std::size_t i = 0; i < node_count(); ++i) {
-        const double psi = x[m_ * i], n = x[m_ * i + 1], p = x[m_ * i + 2];
-        if (contact_[i] >= 0) {
-            f[m_ * i] = psi - psi0_[i];
-            f[m_ * i + 1] = n - n0_[i];
-            f[m_ * i + 2] = p - p0_[i];
-            if (jacobian) at(i, 0, 0) = at(i, 1, 1) = at(i, 2, 2) = 1.0;
-            continue;
-        }
-        if (insulator_[i] != 0) {  // no charge, no carriers; an electrode holds psi
-            const bool electrode = electrode_[i] >= 0;
-            f[m_ * i] = electrode ? psi - psi0_[i] : 0.0;
-            f[m_ * i + 1] = n;
-            f[m_ * i + 2] = p;
-            if (jacobian) {
-                if (electrode) at(i, 0, 0) = 1.0;
-                at(i, 1, 1) = at(i, 2, 2) = 1.0;
-            }
-            continue;
-        }
-        const double V = volume_[i];
-        f[m_ * i] = -V * (n - p - doping_[i]);
-        f[m_ * i + 1] = 0.0;
-        f[m_ * i + 2] = 0.0;
-        if (jacobian) {
-            at(i, 0, 1) = -V;
-            at(i, 0, 2) = V;
-        }
-        if (ionization_) {
-            // eta_c = ln(n / n_ie) - ln gamma_n - g_n, d eta_c / dn = 1/n - d ln gamma_n / dn;
-            // eta_v likewise from p.
-            const double ln = fermi_dirac_ ? g[i].n.log_gamma : 0.0;
-            const double lp = fermi_dirac_ ? g[i].p.log_gamma : 0.0;
-            const double wn = fermi_dirac_ ? g[i].n.d_density : 0.0;
-            const double wp = fermi_dirac_ ? g[i].p.d_density : 0.0;
-            const double eta_c = donors_[i] > 0.0 ? std::log(n / n_ie_[i]) - ln - log_dos_n_[i]
-                                                  : 0.0;
-            const double eta_v = acceptors_[i] > 0.0
-                                     ? std::log(p / n_ie_[i]) - lp - log_dos_p_[i]
-                                     : 0.0;
-            const detail::IonizedCharge c =
-                detail::ionized_charge(donors_[i], acceptors_[i], eta_c, eta_v, levels_[i]);
-            f[m_ * i] = -V * (n - p - c.value);
-            if (jacobian) {
-                at(i, 0, 1) = -V * (1.0 - c.d_eta_c * (1.0 / n - wn));
-                at(i, 0, 2) = V * (1.0 + c.d_eta_v * (1.0 / p - wp));
-            }
-        }
-        if (gates_.on_gate(i)) {
-            f[m_ * i] += gates_.row_term(i, psi);
-            if (jacobian) at(i, 0, 0) -= gates_.term(i).coupling;
-        }
-        if (srh_) {
-            const physics::RecombinationRate r =
-                physics::srh_recombination(n, p, product(i), n_ie_[i], tau_n_[i], tau_p_[i]);
-            const double k = V * rate_scale_;
-            f[m_ * i + 1] -= k * r.rate;
-            f[m_ * i + 2] += k * r.rate;
-            if (jacobian) {
-                at(i, 1, 1) -= k * r.d_dn;
-                at(i, 1, 2) -= k * r.d_dp;
-                at(i, 2, 1) += k * r.d_dn;
-                at(i, 2, 2) += k * r.d_dp;
-            }
-        }
-        // Auger and radiative recombination take physical densities; R / R0 = rate_scale (R / Ns),
-        // d(R / R0)/dn' = rate_scale dR/dn. The scaled product E' = E / Ns^2 has
-        // dE/dn = Ns dE'/dn'.
-        const auto physical_product = [&] {
-            const double nie = n_ie_[i] * Ns_;
-            physics::EquilibriumProduct E = physics::boltzmann_equilibrium_product(nie);
-            if (fermi_dirac_) {
-                const physics::EquilibriumProduct s = product(i);
-                E = {s.value * Ns_ * Ns_, s.d_dn * Ns_, s.d_dp * Ns_};
-            }
-            return E;
-        };
-        const auto add_physical = [&](const physics::RecombinationRate& r) {
-            const double k = V * rate_scale_;
-            f[m_ * i + 1] -= k * (r.rate / Ns_);
-            f[m_ * i + 2] += k * (r.rate / Ns_);
-            if (jacobian) {
-                at(i, 1, 1) -= k * r.d_dn;
-                at(i, 1, 2) -= k * r.d_dp;
-                at(i, 2, 1) += k * r.d_dn;
-                at(i, 2, 2) += k * r.d_dp;
-            }
-        };
-        if (auger_) {
-            add_physical(physics::auger_recombination(n * Ns_, p * Ns_, physical_product(),
-                                                      auger_n_[i], auger_p_[i]));
-        }
-        if (radiative_on_ && radiative_[i] > 0.0) {
-            add_physical(physics::radiative_recombination(n * Ns_, p * Ns_, physical_product(),
-                                                          radiative_[i]));
-        }
-        if (step != nullptr) {
-            const NodeStorage st = node_storage(i, x, g);
-            const double k = V * step->rate;
-            f[m_ * i + 1] -= k * (st.n - step->storage[2 * i]);
-            f[m_ * i + 2] += k * (st.p - step->storage[2 * i + 1]);
-            if (jacobian) {
-                at(i, 1, 1) -= k * st.d_n;
-                at(i, 2, 2) += k * st.d_p;
-            }
-        }
-    }
-    for (std::size_t k = 0; interfaces && k < interfaces_.edges().size(); ++k) {
-        const InterfaceEdge& v = interfaces_.edges()[k];
-        const std::size_t o = v.insulator, s = v.semiconductor;
-        const InterfaceDrift t = interface_at(k, x, step);
-        // Edge positions: row of o with column psi of s, and the rows of s with column psi of o.
-        const EdgeTerm& e = edges_[v.edge];
-        const bool o_first = e.a == o;
-        const std::size_t os = o_first ? e.ab[0] : e.ba[0];
-        const std::size_t so[3] = {o_first ? e.ba[0] : e.ab[0], o_first ? e.ba[1] : e.ab[1],
-                                   o_first ? e.ba[3] : e.ab[3]};
-        if (electrode_[o] < 0) {  // the insulator node's Poisson row
-            f[m_ * o] += t.flux_insulator;
-            if (jacobian) {
-                at(o, 0, 0) += t.d_flux_insulator[0];
-                values[os] += t.d_flux_insulator[1];
-                values[interface_np_[k].first] += t.d_flux_insulator[2];
-                values[interface_np_[k].second] += t.d_flux_insulator[3];
-            }
-        }
-        if (contact_[s] >= 0) continue;  // a Dirichlet semiconductor node
-        f[m_ * s] += t.flux_semiconductor;
-        f[m_ * s + 1] -= t.rate;
-        f[m_ * s + 2] += t.rate_p;
-        if (jacobian) {
-            values[so[0]] += t.d_flux_semiconductor[0];
-            values[so[1]] -= t.d_rate[0];
-            values[so[2]] += t.d_rate_p[0];
-            for (std::size_t c = 1; c < 4; ++c) {
-                at(s, 0, c - 1) += t.d_flux_semiconductor[c];
-                at(s, 1, c - 1) -= t.d_rate[c];
-                at(s, 2, c - 1) += t.d_rate_p[c];
-            }
-        }
-    }
-    for (const EdgeTerm& e : edges_) {
-        const std::size_t a = e.a, b = e.b;
-        const double psi_a = x[m_ * a], psi_b = x[m_ * b];
-        const double poisson = e.c * (psi_b - psi_a);
-        if (e.charged) continue;  // the interface's half-edge fluxes, above
-        if (!e.carriers) {  // Poisson only, into the rows that are not Dirichlet
-            if (contact_[a] < 0 && electrode_[a] < 0) {
-                f[m_ * a] += poisson;
-                if (jacobian) {
-                    at(a, 0, 0) -= e.c;
-                    values[e.ab[0]] += e.c;
-                }
-            }
-            if (contact_[b] < 0 && electrode_[b] < 0) {
-                f[m_ * b] -= poisson;
-                if (jacobian) {
-                    at(b, 0, 0) -= e.c;
-                    values[e.ba[0]] += e.c;
-                }
-            }
-            continue;
-        }
-        const auto [fn, fp] = edge_fluxes(e, x, g);
-        if (contact_[a] < 0) {
-            f[m_ * a] += poisson;
-            f[m_ * a + 1] += fn.flux;
-            f[m_ * a + 2] += fp.flux;
-            if (jacobian) {
-                at(a, 0, 0) -= e.c;
-                values[e.ab[0]] += e.c;
-                at(a, 1, 0) += fn.d_psi1;
-                values[e.ab[1]] += fn.d_psi2;
-                at(a, 1, 1) += fn.d_c1;
-                values[e.ab[2]] += fn.d_c2;
-                at(a, 2, 0) += fp.d_psi1;
-                values[e.ab[3]] += fp.d_psi2;
-                at(a, 2, 2) += fp.d_c1;
-                values[e.ab[4]] += fp.d_c2;
-            }
-        }
-        if (contact_[b] < 0) {
-            f[m_ * b] -= poisson;
-            f[m_ * b + 1] -= fn.flux;
-            f[m_ * b + 2] -= fp.flux;
-            if (jacobian) {
-                at(b, 0, 0) -= e.c;
-                values[e.ba[0]] += e.c;
-                values[e.ba[1]] -= fn.d_psi1;
-                at(b, 1, 0) -= fn.d_psi2;
-                values[e.ba[2]] -= fn.d_c1;
-                at(b, 1, 1) -= fn.d_c2;
-                values[e.ba[3]] -= fp.d_psi1;
-                at(b, 2, 0) -= fp.d_psi2;
-                values[e.ba[4]] -= fp.d_c1;
-                at(b, 2, 2) -= fp.d_c2;
-            }
-        }
-    }
-    if (!impact_nodes_.empty()) add_impact_generation(x, g, f, values);
-    if (!tunnel_nodes_.empty()) add_local_tunnelling(x, f, values);
-    if (!paths_.paths.empty()) add_path_tunnelling(x, f, values);
-}
-
-void DriftDiffusion::add_impact_generation(std::span<const double> x,
-                                           std::span<const NodeDegeneracy> g,
-                                           std::span<double> f,
-                                           std::span<double> values) const {
-    const bool jacobian = !values.empty();
-    const int D = dimension_;
-    // The carrier edges' fluxes, once.
-    std::vector<std::pair<EdgeFlux, EdgeFlux>> flux(edges_.size());
-    for (std::size_t k = 0; k < edges_.size(); ++k) {
-        if (edges_[k].carriers) flux[k] = edge_fluxes(edges_[k], x, g);
-    }
-    constexpr double q = base::q_C;
-    constexpr double floor2 = impact_current_floor * impact_current_floor;
-    const double rho2 = impact_resolution_ * impact_resolution_;
-    for (const ImpactNode& node : impact_nodes_) {
-        const std::size_t i = node.node;
-        const double count = static_cast<double>(node.last - node.first);
-        // The field and the two current densities at the node, reconstructed from their edge
-        // components by least squares: v = P sum_k t_k v_k, P the pseudo-inverse of sum t t^T.
-        // Edge components: E_k = -field (psi_b - psi_a), j_k = current * flux.
-        // And the size of the opposing flux terms whose difference each current is, averaged over
-        // the edges: R_c = mean_k current_k a_k (c_a + c_b) sqrt(1 + Delta_k^2), a the edge's
-        // low-field factor, c the carrier's density, Delta = psi_b - psi_a.
-        double E[3] = {}, jn[3] = {}, jp[3] = {}, R[2] = {0.0, 0.0};
-        for (std::size_t k = node.first; k < node.last; ++k) {
-            const ImpactEdge& ie = impact_edges_[k];
-            const EdgeTerm& e = edges_[ie.edge];
-            const double delta = x[m_ * e.b] - x[m_ * e.a];
-            const double Ek = -ie.field * delta;
-            const double jnk = ie.current * flux[ie.edge].first.flux;
-            const double jpk = ie.current * flux[ie.edge].second.flux;
-            const double root = std::sqrt(1.0 + delta * delta);
-            R[0] += ie.current * e.an * (x[m_ * e.a + 1] + x[m_ * e.b + 1]) * root / count;
-            R[1] += ie.current * e.ap * (x[m_ * e.a + 2] + x[m_ * e.b + 2]) * root / count;
-            for (int r = 0; r < D; ++r) {
-                double w = 0.0;  // (P t_k)_r
-                for (int c = 0; c < D; ++c) w += node.inverse[r * D + c] * ie.t[c];
-                E[r] += w * Ek;
-                jn[r] += w * jnk;
-                jp[r] += w * jpk;
-            }
-        }
-        // Per carrier, with m = sqrt(|j|^2 + eps^2), eps^2 = floor^2 + (rho R)^2:
-        //     E_par = |E . j| / m,   G = alpha(E_par) |j|^2 / m / q.
-        // E_par is the field along the current (|E . j^| for |j| >> eps), at most |E|; |j|^2 / m is
-        // |j| for |j| >> eps, at most |j|, and smooth through j = 0, where it and its gradient
-        // vanish. eps is the current's resolution at the node: rho =
-        // models.impact_current_resolution of the opposing flux terms, above impact_current_floor;
-        // a current at or below it (rounding, in the dense spill-over layer at a junction, where it
-        // is a difference of fluxes 1e14 times larger and flips sign between Newton iterates) does
-        // not ionize and has no kink.
-        // Partials, s = sign(E . j), w = |j|^2 / m:
-        //     dG/dE   = alpha' w s j / m / q,
-        //     dG/dj   = (alpha' w (s E / m - |E . j| j / m^3)
-        //                + alpha j (|j|^2 + 2 eps^2) / m^3) / q,
-        //     dG/deps = -(alpha' w |E . j| + alpha |j|^2) eps / m^3 / q,  deps/dR = rho^2 R / eps.
-        double G = 0.0, dE[3] = {}, dj[2][3] = {}, dR[2] = {0.0, 0.0};
-        for (int c = 0; c < 2; ++c) {
-            const double* j = c == 0 ? jn : jp;
-            double mag2 = 0.0, Ej = 0.0;
-            for (int r = 0; r < D; ++r) {
-                mag2 += j[r] * j[r];
-                Ej += E[r] * j[r];
-            }
-            const double eps2 = floor2 + rho2 * R[c] * R[c];
-            const double m = std::sqrt(mag2 + eps2);
-            const double Epar = std::abs(Ej) / m;
-            const physics::ImpactIonizationRate a = physics::impact_ionization_coefficient(
-                c == 0 ? node.n : node.p, node.gamma, Epar);
-            if (a.alpha == 0.0 && a.d_dE == 0.0) continue;
-            const double w = mag2 / m;
-            G += a.alpha * w / q;
-            const double s = Ej > 0.0 ? 1.0 : Ej < 0.0 ? -1.0 : 0.0;
-            const double m3 = m * m * m;
-            for (int r = 0; r < D; ++r) {
-                dE[r] += a.d_dE * w * s * j[r] / m / q;
-                dj[c][r] = (a.d_dE * w * (s * E[r] / m - std::abs(Ej) * j[r] / m3) +
-                            a.alpha * j[r] * (mag2 + 2.0 * eps2) / m3) /
-                           q;
-            }
-            // dG/deps deps/dR = -(alpha' w |E . j| + alpha |j|^2) / m^3 / q * rho^2 R.
-            dR[c] = -(a.d_dE * w * std::abs(Ej) + a.alpha * mag2) / m3 / q * rho2 * R[c];
-        }
-        const double k_row = volume_[i] * generation_scale_;
-        f[m_ * i + 1] += k_row * G;
-        f[m_ * i + 2] -= k_row * G;
-        if (!jacobian) continue;
-        const auto add = [&](std::size_t node_j, int comp, std::size_t k, double v) {
-            // Row n of node i gets +v, row p -v, at column comp of node_j through edge k.
-            const ImpactEdge& ie = impact_edges_[k];
-            const EdgeTerm& e = edges_[ie.edge];
-            const bool own = node_j == i;
-            const bool i_is_a = e.a == i;
-            for (const int row : {1, 2}) {
-                const double sign = row == 1 ? k_row : -k_row;
-                std::size_t pos;
-                if (own) {
-                    pos = block_[m_ * m_ * i + m_ * static_cast<std::size_t>(row) +
-                                 static_cast<std::size_t>(comp)];
-                } else {
-                    const std::size_t* p = i_is_a ? e.ab : e.ba;
-                    // Edge positions: (psi,psi), (n,psi), (n,n), (p,psi), (p,p).
-                    if (row == 1) {
-                        pos = comp == 0 ? p[1] : comp == 1 ? p[2] : ie.n_p;
-                    } else {
-                        pos = comp == 0 ? p[3] : comp == 1 ? ie.p_n : p[4];
-                    }
-                }
-                values[pos] += sign * v;
-            }
-        };
-        for (std::size_t k = node.first; k < node.last; ++k) {
-            const ImpactEdge& ie = impact_edges_[k];
-            const EdgeTerm& e = edges_[ie.edge];
-            const EdgeFlux& fn = flux[ie.edge].first;
-            const EdgeFlux& fp = flux[ie.edge].second;
-            double wE = 0.0, wn = 0.0, wp = 0.0;  // dG / d(edge component)
-            for (int r = 0; r < D; ++r) {
-                double w = 0.0;
-                for (int c = 0; c < D; ++c) w += node.inverse[r * D + c] * ie.t[c];
-                wE += w * dE[r];
-                wn += w * dj[0][r];
-                wp += w * dj[1][r];
-            }
-            wn *= ie.current;
-            wp *= ie.current;
-            // R's own partials through this edge: d/dc_a = d/dc_b = current a root / count,
-            // d/dpsi_b = -d/dpsi_a = current a (c_a + c_b) Delta / root / count.
-            const double delta = x[m_ * e.b] - x[m_ * e.a];
-            const double root = std::sqrt(1.0 + delta * delta);
-            const double rn = ie.current * e.an / count, rp = ie.current * e.ap / count;
-            const double sn = x[m_ * e.a + 1] + x[m_ * e.b + 1];
-            const double sp = x[m_ * e.a + 2] + x[m_ * e.b + 2];
-            const double dpsi = (dR[0] * rn * sn + dR[1] * rp * sp) * delta / root;
-            // E_k = -field (psi_b - psi_a); the fluxes' own partials.
-            add(e.a, 0, k, wE * ie.field + wn * fn.d_psi1 + wp * fp.d_psi1 - dpsi);
-            add(e.b, 0, k, -wE * ie.field + wn * fn.d_psi2 + wp * fp.d_psi2 + dpsi);
-            add(e.a, 1, k, wn * fn.d_c1 + dR[0] * rn * root);
-            add(e.b, 1, k, wn * fn.d_c2 + dR[0] * rn * root);
-            add(e.a, 2, k, wp * fp.d_c1 + dR[1] * rp * root);
-            add(e.b, 2, k, wp * fp.d_c2 + dR[1] * rp * root);
-        }
+    const Terms::Evaluation evaluation{x, f, values, step, g};
+    for (const std::shared_ptr<const Term>& t : terms_) {
+        if (!interfaces && t->info().domain == TermDomain::interface_edges) continue;
+        t->add(*this, evaluation);
     }
 }
 
@@ -1651,57 +1289,6 @@ std::vector<DriftDiffusion::CurrentRow> DriftDiffusion::small_signal_currents(
     return rows;
 }
 
-void DriftDiffusion::add_local_tunnelling(std::span<const double> x, std::span<double> f,
-                                          std::span<double> values) const {
-    const bool jacobian = !values.empty();
-    const int D = dimension_;
-    for (const TunnelNode& node : tunnel_nodes_) {
-        const std::size_t i = node.node;
-        // The field at the node by least squares from its edges' components
-        // E_k = -field (psi_b - psi_a): E = P sum_k t_k E_k.
-        double E[3] = {};
-        for (std::size_t k = node.first; k < node.last; ++k) {
-            const FieldEdge& fe = field_edges_[k];
-            const EdgeTerm& e = edges_[fe.edge];
-            const double Ek = -fe.field * (x[m_ * e.b] - x[m_ * e.a]);
-            for (int r = 0; r < D; ++r) {
-                double w = 0.0;  // (P t_k)_r
-                for (int c = 0; c < D; ++c) w += node.inverse[r * D + c] * fe.t[c];
-                E[r] += w * Ek;
-            }
-        }
-        double F2 = 0.0;
-        for (int r = 0; r < D; ++r) F2 += E[r] * E[r];
-        const double F = std::sqrt(F2);
-        const physics::KaneRate g = physics::kane_generation(node.A, node.B, F);
-        if (g.rate == 0.0 && g.d_dF == 0.0) continue;
-        const double k_row = volume_[i] * generation_scale_;
-        f[m_ * i + 1] += k_row * g.rate;
-        f[m_ * i + 2] -= k_row * g.rate;
-        if (!jacobian) continue;
-        // dG/dE_r = G' E_r / F (F > 0 here: G vanishes at F = 0); an edge's component enters
-        // through (P t_k), and E_k through its ends' psi.
-        for (std::size_t k = node.first; k < node.last; ++k) {
-            const FieldEdge& fe = field_edges_[k];
-            const EdgeTerm& e = edges_[fe.edge];
-            double dEk = 0.0;  // dG / dE_k
-            for (int r = 0; r < D; ++r) {
-                double w = 0.0;
-                for (int c = 0; c < D; ++c) w += node.inverse[r * D + c] * fe.t[c];
-                dEk += w * g.d_dF * E[r] / F;
-            }
-            const double d_b = -dEk * fe.field;  // dG / dpsi_b; dG / dpsi_a = -d_b
-            const bool i_is_a = e.a == i;
-            const std::size_t* p = i_is_a ? e.ab : e.ba;  // row i, the other end's psi column
-            const double own = i_is_a ? -d_b : d_b, other = i_is_a ? d_b : -d_b;
-            values[block_[m_ * m_ * i + m_]] += k_row * own;   // (n, psi) of i
-            values[block_[m_ * m_ * i + 2 * m_]] -= k_row * own;   // (p, psi) of i
-            values[p[1]] += k_row * other;              // (n, psi) of the other end
-            values[p[3]] -= k_row * other;              // (p, psi) of the other end
-        }
-    }
-}
-
 TunnelPaths DriftDiffusion::trace_paths(std::span<const double> x) const {
     NITCAD_EXPECTS(x.size() == unknowns());
     if (!tunnelling()) return {};
@@ -1817,19 +1404,10 @@ void DriftDiffusion::set_paths(TunnelPaths paths) {
     NITCAD_EXPECTS(tunnelling());
     paths_ = std::move(paths);
     layouts_.clear();
+    for (const TunnelPath& p : paths_.paths) layouts_.push_back(layout(p));
+    // The base and every term's entries, the paths' among them (PathTunnelling, terms.cpp).
     std::vector<linalg::Triplet> t = base_triplets_;
-    for (const TunnelPath& p : paths_.paths) {
-        PathLayout l = layout(p);
-        for (const std::size_t c : l.columns) {
-            t.push_back({static_cast<linalg::Index>(m_ * p.start + 2),
-                         static_cast<linalg::Index>(m_ * c), 0.0});
-            for (const std::size_t d : l.deposit) {
-                t.push_back({static_cast<linalg::Index>(m_ * d + 1),
-                             static_cast<linalg::Index>(m_ * c), 0.0});
-            }
-        }
-        layouts_.push_back(std::move(l));
-    }
+    Terms::pattern(*this, t);
     const auto size = static_cast<linalg::Index>(unknowns());
     pattern_ = *linalg::SparseMatrix::from_triplets(size, size, t);  // in range
     locate_positions();
@@ -2050,33 +1628,6 @@ void DriftDiffusion::path_terms(const TunnelPath& p, const PathLayout& l,
     };
     deposit(sa, 1.0 - tt, -1.0);
     deposit(sb, tt, 1.0);
-}
-
-void DriftDiffusion::add_path_tunnelling(std::span<const double> x, std::span<double> f,
-                                         std::span<double> values) const {
-    const bool jacobian = !values.empty();
-    PathTerms t;
-    for (std::size_t k = 0; k < paths_.paths.size(); ++k) {
-        const PathLayout& l = layouts_[k];
-        path_terms(paths_.paths[k], l, x, t);
-        if (t.pairs == 0.0 && std::ranges::all_of(t.d_pairs, [](double v) { return v == 0.0; })) {
-            continue;
-        }
-        const std::size_t nc = l.columns.size();
-        const std::size_t i = paths_.paths[k].start;
-        f[m_ * i + 2] -= t.pairs;
-        for (std::size_t d = 0; d < l.deposit.size(); ++d) {
-            f[m_ * l.deposit[d] + 1] += t.share[d] * t.pairs;
-        }
-        if (!jacobian) continue;
-        for (std::size_t c = 0; c < nc; ++c) {
-            values[l.hole[c]] -= t.d_pairs[c];
-            for (std::size_t d = 0; d < l.deposit.size(); ++d) {
-                values[l.electron[d * nc + c]] +=
-                    t.share[d] * t.d_pairs[c] + t.pairs * t.d_share[d * nc + c];
-            }
-        }
-    }
 }
 
 std::vector<TunnelPathState> DriftDiffusion::path_states(std::span<const double> x) const {

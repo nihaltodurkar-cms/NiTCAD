@@ -1471,7 +1471,50 @@ existing suites:
 | FG7 | `stride()` and every public signature unchanged; `DriftDiffusion::dofs()` answers the field and node of every unknown and the unknown of every (field, node); the block size is set from the map; the solve layer reads every slot through it (`solve/fields.hpp` `Slots`, `scaled_state`). |
 | FG9 | The map is in `assemble` (`fields.hpp`); `solve` reads only its public queries. |
 
-**Status:** commit 0, commit 0b and slice 1 done; slice 2 next.
+**Slice 2a as built (the isothermal terms; `src/assemble/terms.hpp`, `terms.cpp`, internal per FD4):**
+- `DriftDiffusion::Term`: `info()` (name, domain, the fields whose rows it writes and those its partials are taken
+  in, whether it assigns its rows), `pattern()` (the entries it needs beyond every node's full block and the edges'
+  stencil), `add(system, evaluation)`. Terms hold no data: they read the system's at each call, so a system stays
+  copyable and shares its terms (`std::shared_ptr<const Term>`). `DriftDiffusion::Terms` holds the term types, the
+  factory, the pattern hook and a one-term evaluation for the tests.
+- Fifteen terms, in FE3's order: ohmic contact rows, insulator rows, Poisson charge, incomplete ionization, gate,
+  SRH, Auger, radiative, storage (nodes); interfaces (interface edges); Poisson flux, carrier fluxes (mesh edges);
+  impact ionization, local and nonlocal band-to-band tunnelling (global). The loop bodies are the old ones, moved;
+  `add_impact_generation`, `add_local_tunnelling` and `add_path_tunnelling` became the three global terms.
+  `assemble` is the term loop; with `interfaces = false` (small-signal) it skips the interface-edge terms.
+- **One loop per node term, not one fused node loop (FE3's default).** FD3's dispatch (one virtual call per term
+  per pass) would otherwise have been a call per node per term. FE3 allows separate loops: a node term writes only
+  its own node's rows, so every entry receives its additions in the old order. FG4 decided: no slowdown (below).
+- **The mesh-edge pass is split** into the Poisson flux and the carrier fluxes. The two write disjoint entries (ψ
+  rows; n and p rows), so the order of the additions into each entry is unchanged. The electron and hole fluxes
+  stay one term, because `edge_fluxes` computes them together.
+- **The pattern.** `create` builds the edge table before the pattern, adds each term's own entries (interfaces'
+  insulator-row density columns, impact ionization's other carrier, the paths'), then locates the positions as
+  before. `set_paths` rebuilds the pattern from the base plus every term's entries. The pattern is the same set, and
+  `from_triplets` sorts, so it is identical. Which terms exist depends on the models alone (the impact and tunnel
+  node tables are built after the pattern); a term whose table is empty adds nothing.
+- `tests/assemble/terms_test.cpp` (FG3): each term's partials against central differences of its own residual, at
+  non-equilibrium states across five fixtures: a diode with every node model under both statistics, steady and with
+  a time step; the oxide/electrode/trapped-interface fixture, steady and with a time step; a lumped gate; impact
+  ionization at 3e5 V/cm; local and nonlocal tunnelling at 4e6 V/cm. Each runs in 1D and 2D (the gate in 1D only),
+  with the tolerance of the Unit 19/20 gates (1e-6, the best of steps 1e-5 to 1e-7). Each fixture requires its terms
+  to be active (FR9). A second case checks the order, the domains and which terms assign. The column scale is the
+  whole system's Jacobian, the existing gates' scale. Scaled by a term's own column, the vanishing side of a
+  Scharfetter–Gummel flux at a drop of hundreds of V_T (an entry near 1e-128 beside a flux near 300) is below what
+  any difference step resolves, and reads as error 1.
+
+**Slice 2a results:**
+
+| Gate | Result |
+|---|---|
+| FG1/FG2 | Pinned traces identical to slice 1's on all nine traced entries. |
+| FG3 | Every existing FD-Jacobian gate passes unchanged; the 15 terms pass their own checks (230 assertions). |
+| FG4 | Minimum of four alternating pinned runs, slice 2a against slice 1. `evaluate`: MOSFET 2028 against 2033 µs (−0.2%), 3D diode 647 against 664 (−2.7%), electrothermal bar −0.1% (not a term yet), 1D diode 11.9 against 13.2 (−10%), Zener 11.1 against 12.1 (−8.6%). `residual`: MOSFET +1.5% (slice 1's own spread 4.8%), others −3.2% to −0.1%. No slowdown. |
+| FG5 | Release 18/18, Debug 12/12, no warnings. |
+| FG6 | 9 mutants, all caught by the suites. Ionization override turned into an addition: heterojunction test. SRH and Auger swapped in order: the terms test's order check (the swap itself only changes last bits). Carrier fluxes ignoring row b's Dirichlet check: electrothermal test. The interface pattern without the hole column, and the paths' pattern entries dropped: the contract check in the position lookup. The impact pattern on the wrong edges: impact test. `assemble` ignoring `interfaces = false`, so small-signal adds the interface terms twice: small-signal test. The Poisson flux ignoring an electrode row: insulator test. The gate term left out: gate test. |
+| FG9 | The terms are in `src/assemble` (internal); no new dependency; `solve` unchanged. |
+
+**Status:** commit 0, commit 0b, slice 1 and slice 2a done; slice 2b (the electrothermal rows as terms) next.
 
 ---
 

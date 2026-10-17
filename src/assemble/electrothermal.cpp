@@ -538,8 +538,9 @@ void DriftDiffusion::add_thermal_impact(std::span<const double> x,
                                         std::span<const ThermalState> t,
                                         std::span<const NodeLevels> g, std::span<double> f,
                                         std::span<double> values) const {
-    // add_impact_generation (drift_diffusion.cpp, the header comment) with the thermal fluxes,
-    // whose temperature partials enter through the currents, and gamma at the node's own T:
+    // The ImpactGeneration term (terms.cpp; drift_diffusion.hpp's header comment) with the
+    // thermal fluxes, whose temperature partials enter through the currents, and gamma at the
+    // node's own T:
     // d alpha / d gamma = (alpha - E d alpha / dE) / gamma for alpha = gamma A exp(-gamma B / E).
     const bool jacobian = !values.empty();
     const int D = dimension_;

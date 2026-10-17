@@ -251,7 +251,8 @@ add_library(nitcad_assemble STATIC
   src/assemble/electrothermal.cpp
   src/assemble/tunnel_paths.cpp
   src/assemble/observer.cpp
-  src/assemble/fields.cpp)
+  src/assemble/fields.cpp
+  src/assemble/terms.cpp)
 add_library(NiTCAD::assemble ALIAS nitcad_assemble)
 target_include_directories(nitcad_assemble PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
 target_link_libraries(nitcad_assemble PUBLIC
@@ -270,8 +271,11 @@ add_executable(nitcad_assemble_test
   tests/assemble/band_to_band_test.cpp
   tests/assemble/electrothermal_test.cpp
   tests/assemble/fields_test.cpp
+  tests/assemble/terms_test.cpp
   tests/baseline/trace_listener.cpp)
 target_link_libraries(nitcad_assemble_test PRIVATE NiTCAD::assemble Catch2::Catch2WithMain)
+# The terms (Unit 40) are internal to the assemble layer; their own test reads them.
+target_include_directories(nitcad_assemble_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/assemble")
 add_test(NAME assemble COMMAND nitcad_assemble_test)
 
 # --- results layer (plain result data; header-only) --------------------------------

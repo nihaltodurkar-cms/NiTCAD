@@ -229,6 +229,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <expected>
+#include <memory>
 #include <optional>
 #include <span>
 #include <utility>
@@ -277,6 +278,10 @@ public:
     [[nodiscard]] std::size_t stride() const noexcept { return m_; }
     // Where each field's unknowns are (fields.hpp; Unit 40): node-interleaved, stride() per node.
     [[nodiscard]] const DofMap& dofs() const noexcept { return dofs_; }
+    // The equation terms of the rows (Unit 40, DECISIONS.md FE2): internal to the assemble
+    // library (src/assemble/terms.hpp).
+    class Term;
+    struct Terms;
 
     struct TimeStep;  // a BDF time step (below)
 
@@ -544,8 +549,6 @@ private:
         double current;  // [A/cm^2] per unit scaled flux: J0 / scaled coupling area
         std::size_t n_p, p_n;
     };
-    void add_impact_generation(std::span<const double> x, std::span<const NodeDegeneracy> g,
-                               std::span<double> f, std::span<double> values) const;
 
     // Local band-to-band tunnelling (Unit 20): per node, its carrier edges (in field_edges_) and
     // the pseudo-inverse of sum t t^T, as ImpactNode, and its material's Kane pair.
@@ -560,8 +563,6 @@ private:
         double t[3];
         double field;  // [V/cm] per unit (psi_b - psi_a)
     };
-    void add_local_tunnelling(std::span<const double> x, std::span<double> f,
-                              std::span<double> values) const;
 
     // Nonlocal tunnelling (Unit 20): per frozen path, the nodes whose psi its rows read (columns),
     // the nodes its electrons go to (deposit), the start's hole-row positions per column and the
@@ -583,8 +584,6 @@ private:
     [[nodiscard]] PathLayout layout(const TunnelPath& p) const;
     void path_terms(const TunnelPath& p, const PathLayout& l, std::span<const double> x,
                     PathTerms& t) const;
-    void add_path_tunnelling(std::span<const double> x, std::span<double> f,
-                             std::span<double> values) const;
     // The Jacobian positions every term uses, after the pattern changed (set_paths).
     void locate_positions();
 
@@ -678,8 +677,8 @@ private:
         double value, d_theta;
     };
     [[nodiscard]] Shift electrode_shift(std::size_t node, const ThermalState& t) const;
-    // Impact ionization with the electrothermal model: add_impact_generation's terms with the
-    // thermal fluxes and gamma at each node's T.
+    // Impact ionization with the electrothermal model: the ImpactGeneration term's rows
+    // (terms.cpp) with the thermal fluxes and gamma at each node's T.
     void add_thermal_impact(std::span<const double> x, std::span<const ThermalState> t,
                             std::span<const NodeLevels> g, std::span<double> f,
                             std::span<double> values) const;
@@ -753,7 +752,7 @@ private:
     // Nonlocal tunnelling: the model, the device's cells, per node the longest path that may start
     // there (0: none) [cm], the material's gap at T [eV] and tunnelling masses [kg] (direct_wkb),
     // and the Kane pair (kane); the frozen paths, their layouts, and the pattern's triplets
-    // without them.
+    // without the terms' own entries (Term::pattern).
     NonlocalTunnelling tunnel_kind_ = NonlocalTunnelling::off;
     std::optional<mesh::TensorCells> cells_;
     std::vector<double> tunnel_length_, tunnel_gap_, tunnel_mc_, tunnel_mv_, tunnel_A_, tunnel_B_;
@@ -775,6 +774,8 @@ private:
     bool ionization_ = false;
     bool radiative_on_ = true;
     linalg::SparseMatrix pattern_;
+    // The isothermal rows' terms in assembly order (terms.hpp; DECISIONS.md FE3).
+    std::vector<std::shared_ptr<const Term>> terms_;
 };
 
 }  // namespace NiTCAD::assemble
