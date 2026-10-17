@@ -7,6 +7,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <mutex>
 #include <string>
 #include <string_view>
 #include <type_traits>
@@ -30,12 +31,29 @@ namespace {
 double reported(double v) noexcept { return v; }
 double reported(std::complex<double> v) noexcept { return std::abs(v); }
 
+// Unit 41 (DECISIONS.md). Eigen blocks its matrix products, which SparseLU's supernodal updates
+// use, by the cache sizes it detects once per process with CPUID on the core that runs the first
+// product. The two core types of a hybrid CPU report different L1 sizes (here 48 against 32 KiB),
+// so results differed in the last bits with the core a run started on. The sizes are fixed
+// before the first analysis, to the development machine's P-core values, which keep its P-core
+// results: the blocking no longer depends on the CPU.
+constexpr std::ptrdiff_t fixed_l1_bytes = 48 * 1024;
+constexpr std::ptrdiff_t fixed_l2_bytes = 3 * 1024 * 1024;
+constexpr std::ptrdiff_t fixed_l3_bytes = 20 * 1024 * 1024;
+
+void fix_cache_sizes() {
+    static std::once_flag once;
+    std::call_once(once,
+                   [] { Eigen::setCpuCacheSizes(fixed_l1_bytes, fixed_l2_bytes, fixed_l3_bytes); });
+}
+
 }  // namespace
 
 template <MatrixScalar Scalar>
 std::expected<void, base::Error> SparseLuBackend<Scalar>::analyze(
     const BasicSparseMatrix<Scalar>& a) {
     NITCAD_EXPECTS(a.rows() == a.cols() && a.rows() > 0);
+    fix_cache_sizes();
     const auto n = static_cast<std::size_t>(a.cols());
     const std::span<const Index> row_offsets = a.row_offsets();
     const std::span<const Index> col_indices = a.col_indices();

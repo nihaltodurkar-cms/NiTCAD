@@ -1644,7 +1644,7 @@ reviewed, and the review's findings fixed. **Accepted by the owner (2026-10-17, 
 `ARCHITECTURE.md` 2.2, 6.12.1–2 and 11.3 updated to "as built" (FG8). The hybrid-CPU reproducibility
 defect (commit 0 findings) is tracked separately as Unit 41 (`investigate/hybrid-cpu-determinism`).
 
-### Unit 41 — last-bit reproducibility on hybrid CPUs (investigation opened 2026-10-17; no fix authorized)
+### Unit 41 — last-bit reproducibility on hybrid CPUs (opened 2026-10-17; fix decided by the owner 2026-10-17; on `linalg/hybrid-cpu-determinism`)
 
 **Owner request (2026-10-17):** track the P/E-core last-bit difference found during Unit 40 (its commit 0
 findings) as its own unit, separate from Unit 40. First a minimal reproducer and the root cause. Do not change any
@@ -1668,7 +1668,7 @@ reviewed.
   systems are too small for the blocking to change.
 
 **Root cause.**
-- Eigen (5.0.0, vcpkg) detects the cache sizes once per process, with CPUID leaf 4 on the core that runs the first
+- Eigen (5.0.1, vcpkg; the backend's static_assert pins it) detects the cache sizes once per process, with CPUID leaf 4 on the core that runs the first
   matrix product, and keeps them in a static.
 - The blocking of its matrix products is computed from them. SparseLU's supernodal updates (`panel_bmod`,
   `kernel_bmod`) are such products.
@@ -1725,7 +1725,7 @@ The cost of any fixed choice is within about 4%, at most at the edge of the nois
 which of today's two results survives: P-core sizes keep the P-core runs' bits, which match Unit 40's recorded
 traces; a 32 KiB L1 keeps the E-core runs'.
 
-**Options for the owner (none chosen):**
+**Options for the owner (option 1 with the P-core values chosen 2026-10-17; below):**
 1. Fix Eigen's cache sizes at start-up to one set, for example in `linalg`'s Eigen backend before the first
    factorization:
    - to the P-core values, so runs that start on an E core change in the last bits;
@@ -1741,13 +1741,36 @@ traces; a 32 KiB L1 keeps the E-core runs'.
 For reproducibility across machines, the blocking must not depend on the hardware at all: one fixed set
 everywhere (option 1 with constants). Its cost on other CPUs is not measured.
 
-**Still open:**
-- **The policy (ARCHITECTURE.md 6.8):** bit-identical on one machine whatever the core? across machines? or to a
-  tolerance?
-- [unverified] PARDISO (MKL) on P against E cores.
+**Owner decision (2026-10-17):** option 1, with the P-core values. The CPU a run executes on must not change its
+result; bit-identity across machines is not promised, and tolerances stay the contract (ARCHITECTURE.md 6.8).
 
-**Status:** reproducer, root cause, impact and cost done on `investigate/hybrid-cpu-determinism`. No code, flag
-or result changed. Awaiting the owner's policy decision (6.8) and choice of option before any fix.
+**Fix (branch `linalg/hybrid-cpu-determinism`, from `main` 629bed0 with the two investigation commits).**
+- `src/linalg/eigen_sparse_lu.cpp`: `fix_cache_sizes()` calls `Eigen::setCpuCacheSizes` once per process
+  (`std::call_once`) with L1 48 KiB, L2 3 MiB, L3 20 MiB, at the start of `SparseLuBackend::analyze`, before any
+  product of the backend.
+- `tests/linalg/eigen_blocking_probe.cpp`, ctest `linalg_eigen_blocking`: starts itself once per logical CPU of
+  its affinity mask, each child suspended, pinned, then resumed; each solves a 22 500-unknown nonsymmetric
+  five-point system with the default `LinearSolver` and prints a hash of the solution's bits. It fails unless all
+  hashes agree. Its own executable, because Eigen detects the cache sizes once per process.
+
+**Verified (2026-10-17):**
+- Probe with the fix: one hash (`130858804b42571a`) on all ten CPUs.
+- Mutant (the `setCpuCacheSizes` call removed): the probe fails; CPUs 2–5 (E) give `b1405c79cef29076`, the P cores
+  `130858804b42571a`, the fixed build's hash. The P-core results are kept.
+- Release suite 19/19 (the probe added).
+- Not run, at the owner's direction: a whole-suite trace pinned to P against E cores with the fix in place. The
+  investigation's E-core run with the P-core sizes was bit-identical to the P cores on all nine entries, but it
+  fixed the sizes before any test ran; the fix does so at the backend's first analysis. An Eigen product large
+  enough to be blocked that runs before the first factorization would still use the detected sizes. The probe
+  does not cover that.
+- Debug suite 13/13, the probe among them (its CPUs agree in Debug too).
+
+**Still open:**
+- [unverified] PARDISO (MKL) on P against E cores (`MKL_CBWR`).
+- The cost of the fixed sizes on CPUs other than this one is not measured.
+- [unverified] Whether any Eigen product large enough to be blocked runs before the first factorization (above).
+
+**Status:** fixed on `linalg/hybrid-cpu-determinism`; not pushed, no PR.
 
 ---
 
