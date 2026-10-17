@@ -2246,8 +2246,31 @@ WG4, WG5). Estimated sizes: 25a about 3,900 lines, 25b about 1,700, 26 about 2,9
 large 3D results (single-precision GPU copies, scales from the doubles); `dxc` and WARP on the CI runner are
 unverified (checked in 25a's first commits); screen-reader support for custom views is out of scope.
 
-**Status:** authorized; no code. Unit 25a starts after VQ6's order is settled: Unit 44 is proposed but not yet
-approved.
+**Detailed plan (page versions 4–6, 2026-10-17).** At the owner's request the page planned the application in
+more detail and took the look of the owner's workspace reference (a light 3D workspace: menu bar, tool bar, scene
+tree, viewport with overlay cards, metrics strip, inspector, status footer). VA1 now describes that workspace; VA8
+adds the viewport tools and overlays (select, orbit, pan, zoom, fit; axonometric and perspective; view, field,
+colorbar, probe and orientation overlays; probe and measure in 26, slice in 25a, clip in 25c). Figures 3–8 plan
+the start page, the deck editor, the run monitor, the results workspace, cut lines with band diagrams and run
+comparison; sixteen more views (13–28) are assigned to units. Sizes: 25a about 4,100 lines, 25b 1,700, 25c 1,600,
+26 3,300, 26b 2,600, 45 500.
+
+**Rulings VQ8–VQ14 (2026-10-17).** The owner delegated these to the recommendation best for a commercial TCAD
+product ("for decisions choose whats best for Commercial TCAD"); each is the page's recommendation.
+
+| # | Ruling | Why, for a commercial product |
+|---|---|---|
+| VQ8 | `render` may depend on `device`, read-only: regions, material names and the insulator flag, contacts, doping. No solver, assembler or physics model. VG1 becomes: `render` includes only base, mesh, results, analysis and device. ARCHITECTURE.md 3 changes with 25a. | Region colors, electrodes and doping are what users look at first; a copied "view description" in results would be a second source of truth for the same geometry. |
+| VQ9 | Unit 25c (vector glyphs, clipping box, exploded view, transient filmstrips) after 25b, each view droppable. | Vectors and clipping are expected in every commercial viewer; independent views keep the risk small. |
+| VQ10 | Unit 26b (live deck checking and completion, structure preview, cut lines with band diagrams, run comparison and difference maps, mesh quality) after 26. | These make the application an analysis tool rather than a viewer; 26 keeps its size. |
+| VQ11 | A top-level `examples/` directory with four decks (1D diode, 2D MOSFET, 3D MOSFET, MOS-C), each run by a test. | A first-run user needs working examples; tested examples never rot. |
+| VQ12 | Unit 45 (recombination and generation rates in results and files; the mesh digest in sweep, transient and small-signal files) before 25b. | Unlocks the R view and exact result–mesh pairing instead of a node-count check. |
+| VQ13 | The Device, Mesh, Physics and Simulation menus open the deck at that section and list its keys for insertion; the deck stays the only source of truth. Form editors that write the deck may be a later unit. | Reproducible, diffable, scriptable input is what production flows depend on; a form editor that writes the deck can come later without a second model. |
+| VQ14 | Turbo stays the default (VQ5); the reference's softer five-color map is added as a named option, `soft`. | Turbo is the familiar high-contrast default; `soft` matches the reference where wanted. |
+
+**Status:** authorized with VQ1–VQ14; no code. Unit 44 was approved the same day (its entry on `linalg/iterative`),
+so by VQ6 it is implemented first; then 25a, 45, 25b, 25c, 26, 26b, each approved after the one before it is
+accepted.
 
 ---
 
