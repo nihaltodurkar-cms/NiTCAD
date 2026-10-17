@@ -1298,7 +1298,7 @@ Review (March 1969) would not download. Breakdown stays validated against the an
 
 ---
 
-### Unit 40 — generic fields and equations behind the assembler (proposed 2026-10-16; authorized 2026-10-17; in progress on `assemble/fields-equations`)
+### Unit 40 — generic fields and equations behind the assembler (proposed 2026-10-16; authorized and accepted 2026-10-17; on `assemble/fields-equations`)
 
 **Owner request (2026-10-16):** document a refactor toward ARCHITECTURE.md 6.12.1–6.12.2 (the equation graph, 2.1) in
 three slices; documentation only on branch `assemble/fields-equations`; no implementation until explicitly authorized.
@@ -1640,9 +1640,9 @@ runs, `evaluate` −0.6% to +0.7%, `residual` −1.6% to +2.8% (the 3D diode; sl
 four-run measurement read up to +6.3%, but with both binaries about 15% slower than usual, and did not repeat.
 
 **Status:** commit 0, commit 0b and slices 1, 2a, 2b, 3 done. Unit 40 is complete on `assemble/fields-equations`,
-not pushed. Reviewed, and the review's findings fixed. It awaits the owner's acceptance; `ARCHITECTURE.md` is to
-be updated once accepted (FG8). The hybrid-CPU reproducibility defect (commit 0 findings) is tracked separately as
-Unit 41 (`investigate/hybrid-cpu-determinism`).
+reviewed, and the review's findings fixed. **Accepted by the owner (2026-10-17, "accept and push Unit 40")**;
+`ARCHITECTURE.md` 2.2, 6.12.1–2 and 11.3 updated to "as built" (FG8). The hybrid-CPU reproducibility
+defect (commit 0 findings) is tracked separately as Unit 41 (`investigate/hybrid-cpu-determinism`).
 
 ---
 

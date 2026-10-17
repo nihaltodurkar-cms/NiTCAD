@@ -107,8 +107,8 @@ solver implementation.
 | Region | geometry, material, doping and applicable equations | Implemented in `device`; a region is of a semiconductor or, since Unit 15b, of an insulator (Poisson only) |
 | Interface | shared boundary between regions with interface laws | Semiconductor heterointerfaces since Unit 15 (band offsets through the band shift, permittivity steps, thermionic emission); semiconductor-insulator interfaces since Unit 15b (fixed charge, traps, surface recombination); the Unit 12 gate is a lumped oxide on a boundary patch |
 | Contact / boundary | named boundary set plus physical boundary condition | Ohmic contacts, gate contacts on a lumped oxide (Unit 12) and electrodes on a meshed insulator (Unit 15b) implemented; Schottky contacts deferred |
-| Field | named physical quantity with location, units and applicability | Present as specialized solution/result data; generic field abstraction is target |
-| Equation | residual/Jacobian contribution associated with fields and domains | Present through specialized assembler systems; generic equation objects are target |
+| Field | named physical quantity with location, units and applicability | Unknown fields since Unit 40 (6.12.1): `Field` descriptors (name, units, node location, region applicability) and the `DofMap` that places their unknowns; derived fields and edge, face and cell fields are target |
+| Equation | residual/Jacobian contribution associated with fields and domains | Equation terms since Unit 40 (6.12.2): the drift-diffusion and electrothermal rows are terms with declared fields and domains, composed by equation set from the device and the models; internal to `assemble`; other assemblers (`EquilibriumPoisson`) not yet built from them |
 | Model | pure constitutive law with exact derivatives | Implemented for current local physics |
 | Mesh | geometric graph supporting 1D/2D/3D and future unstructured producers | Implemented graph abstraction; unstructured 2D and 3D generators and the simplex import (Unit 16); adaptive mesh deferred (Unit 17) |
 | Solver | nonlinear/linear algorithms independent of device type | Newton + backend-neutral linear solve implemented; more strategies deferred |
@@ -2215,6 +2215,18 @@ A future field abstraction should describe at least: name, units, location (node
 shape, known versus unknown status, region applicability, and storage. Specialized `NodeFields` and solution types
 remain valid until a generic representation is actually needed.
 
+**As built (Unit 40, `include/NiTCAD/assemble/fields.hpp`; DECISIONS.md FE1, FG7):**
+- `Field` describes one field: id, name, units, location (nodes only so far), whether it is an unknown, and its
+  domain (every node, or semiconductor nodes).
+- `DofMap::node_interleaved` places the unknowns of a field list node by node. It answers a field's slot, the
+  unknown of a (field, node) pair, and the field and node of any unknown.
+- `DriftDiffusion::dofs()` returns the system's map: ψ, n, p, then θ with the electrothermal model. The layout is
+  the one before the unit, so checkpoints, run identities and the Jacobian pattern are unchanged.
+- Insulator nodes keep their n and p unknowns, held at 0. Dropping them would change the layout (FD5, deferred).
+- The solve layer reads every field slot through the map (`solve/fields.hpp`).
+- Not yet: derived fields (currents, band edges, charges), vector and tensor shapes, and edge, face and cell
+  locations.
+
 #### 6.12.2 Generic equations
 
 A future equation abstraction should identify its unknown fields, domain, residual contribution, Jacobian contribution,
@@ -2232,6 +2244,37 @@ Hydrodynamic = existing equations + carrier-energy equations + corresponding con
 ```
 
 The exact equation sets remain deferred until their units are requested.
+
+**As built (Unit 40, internal to `assemble`: `src/assemble/terms.hpp`, `composition.hpp`; DECISIONS.md FE2–FE4):**
+- **Terms.** Each term is one contribution to F and its exact Jacobian. It declares:
+  - the fields whose rows it writes and the fields its partials are taken in;
+  - its domain (nodes, interface edges, mesh edges, or global);
+  - whether it assigns its rows or adds to them;
+  - the Jacobian entries it needs beyond the node blocks and the edge stencil.
+
+  `add()` loops over its domain once per evaluation (one virtual call per term per pass).
+- **The isothermal terms (15):** ohmic contact rows, insulator rows, Poisson charge, incomplete ionization, gate,
+  SRH, Auger, radiative, storage, interfaces, Poisson flux, carrier fluxes, impact ionization, and local and
+  nonlocal band-to-band tunnelling.
+- **The electrothermal terms (12):** heat sinks, lattice heat storage, the contact, insulator, gate and
+  recombination rows at T, carrier storage, interfaces, one edge term (Poisson, carriers and heat), and impact
+  ionization with gamma(T).
+- **Composition.** A table lists every term in assembly order with its equation sets (Poisson, continuity,
+  contacts, oxide, gate, interfaces, generation, heat), an activation rule and a factory. The composition keeps the
+  active rows and builds the `DofMap`.
+  - Diode = Poisson + continuity + contacts.
+  - MOS adds oxide, gate and interfaces.
+  - Thermal adds heat and the θ unknown.
+- **The wrapper.** `DriftDiffusion` keeps every public signature and evaluates through its composition.
+- **The order of additions is fixed.** Every entry of F and J receives its contributions in the pre-unit order
+  (DECISIONS.md FE3). The refactor was gated bit for bit: pinned traces of every value the suites see, identical
+  slice by slice, and the output tables of `nitcad run` identical to `main`'s.
+- Not yet:
+  - The model data the terms read still lives in `DriftDiffusion`, which its diagnostics share, so `DriftDiffusion`
+    is both the wrapper and that data's store.
+  - `EquilibriumPoisson` is separate.
+  - Exact Jacobians are hand-written (6.12.3).
+  - Assembly is sequential: parallel assembly changes the order of additions (FD6).
 
 #### 6.12.3 Automatic or assisted differentiation
 
@@ -2678,7 +2721,7 @@ exists, not finished), **planned** (nothing built). Audit of 2026-10-09, against
 | Input/output, checkpoint/restart | The `io` layer (approved 2026-10-09): versioned, checksummed, atomic files for meshes, sweeps and checkpoints; device files and the text input deck (Unit 31) | **Verified, on `main`** (Unit 29, 6.6; `f69a7a8`, PR #33); **device files and the deck verified, on `main`** (Unit 31, 6.5; `6f67510`, PR #37) | Transient, small-signal and `trace_bias` decks with their results on disk |
 | Geometry and unstructured 3D meshing | `Mesh::from_parts` accepts any valid node/edge/volume graph; besides the tensor-grid producer, Unit 16 added the 2D and 3D Delaunay generators and the simplex import (checked duals P0–P5, P4-certified interfaces, contact patches, structured 2D boundary layers); nonlocal BTBT still needs tensor cells (6.11, M16) | **Verified, on `main`** (Unit 16, 6.11; `a09cf43`, PR #35) | Non-convex 3D domains, 3D interface junction lines, interfaces across patched faces and 3D boundary layers (U7); an unstructured locator for nonlocal BTBT (M16) |
 | Low-current accuracy | `terminal_current_resolution` reports the floor (Unit 15); the weighted terminal current with an adjoint error estimate (Unit 32, 6.6) | **Verified, on `main`** (Unit 32; `6e54c69`, PR #39): the MOSFET off state resolved at every Vg, sub-floor diode currents on the ideal-diode law to 0.1% | Weighted transient and small-signal currents; a path term for nonlocal tunnelling |
-| Generic fields/equations | Specialized `DriftDiffusion` assembler with a stride (Unit 23) | planned (6.12.1–2) | Field and equation descriptors behind the current assembler, bit-identical |
+| Generic fields/equations | Field descriptors and the unknowns' map; the drift-diffusion and electrothermal rows as equation terms composed by equation set, behind the unchanged `DriftDiffusion` (Unit 40, 6.12.1–2) | **Verified, bit-identical** (Unit 40, branch `assemble/fields-equations`; below) | Move the model data out of `DriftDiffusion` and retire it as the wrapper; derived and edge/cell fields; `EquilibriumPoisson` from the same terms |
 | Scalable linear solvers | Eigen SparseLU (default), PARDISO opt-in (Unit 18) | planned | Iterative Krylov with ILU/AMG behind `linalg`; parallel assembly |
 | Results and provenance | Plain-data results; run record with identity digest (6.6); sweeps persisted bit for bit (Unit 29) | partial | Build/version stamp in files; transient and small-signal results on disk |
 | Visualization, GUI, batch | The `nitcad check|run` batch runner over the input deck (Unit 31); no visualization or GUI (Units 25, 26) | **Batch runner verified, on `main`** (Unit 31; `6f67510`, PR #37); visualization and GUI planned | Rendering of meshes and fields (Unit 25), then the GUI over the same plan (Unit 26) |
@@ -2763,6 +2806,25 @@ top of Unit 28; DECISIONS.md L1–L6):**
 - Not in Unit 30: a norm in which the natural test is monotone in reverse bias (a weighted or potential-only norm
   needs the system's unknown layout), Gummel or pseudo-transient fallbacks, a line search inside `trace_bias`'s
   corrector (it has its own loop).
+
+**As built (Unit 40, generic fields and equations; branch `assemble/fields-equations`; DECISIONS.md FE1–FE7,
+FG1–FG9):**
+- **Commits.** Commit 0 added the measurement tools (an assembly trace and an assembly benchmark). Then came
+  slice 1 (fields and the unknowns' map, 6.12.1), slices 2a and 2b (the isothermal and electrothermal rows as terms,
+  6.12.2) and slice 3 (composition), then the review's fixes.
+- **The bit-identity gate.** A test observer, null by default, receives every value `DriftDiffusion` and the
+  public solves return during the suites. A test listener writes a 64-bit hash of each value's bit pattern. Every
+  slice's traces equal the previous slice's on all nine traced suite entries. In the review, the output tables of
+  six `nitcad run` decks (diode, oxide with traps, lumped gate, electrothermal, impact ionization, nonlocal
+  tunnelling) were byte-identical to `main`'s.
+- **Other gates.** Per-term FD-Jacobian checks; the terms writing only the fields they declare; Release and Debug
+  suites; 31 mutants, all caught (one only by the trace, two only by a test added for them), except one equivalent
+  mutant whose dead code was removed; no assembly slowdown on five devices.
+- **Finding:** run to run, results on this machine depend in the last bits on the core type a process starts on
+  (P or E core of a hybrid CPU). The traces were therefore recorded pinned to P cores. Tracked as Unit 41
+  (DECISIONS.md); it is not caused by this unit and is present on `main`.
+- **The unknowns' layout** is unchanged, so checkpoints and run identities are too. The unit names the unknowns'
+  layout that Unit 30's open norm needs (`DriftDiffusion::dofs()`).
 
 ## 12. Legacy facts: verified, derived and unverified
 
