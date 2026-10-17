@@ -2002,7 +2002,71 @@ with `[transient]`; AQ5 `logspace`.
   Release 20/20, Debug 14/14. No warnings under `/W4 /WX`.
 
 **Status:** accepted by the owner (2026-10-17, "accept"); ARCHITECTURE.md 6.5 and 11.3 updated to "as built"
-(AG8). PR #53; not merged.
+(AG8). Merged to `main` as `913dac0` (PR #53, 2026-10-17).
+
+### Unit 44 — an iterative linear solver (proposed 2026-10-17; not authorized; on `linalg/iterative`)
+
+**Owner request (2026-10-17):** the scope of the "Scalable linear solvers" row of ARCHITECTURE.md 11.3 (planned:
+"iterative Krylov with ILU/AMG behind `linalg`; parallel assembly"). Documentation only until the owner approves.
+
+**Why now (audited on `main` at `913dac0`).**
+- Every solve is a direct sparse LU: Eigen SparseLU (default) or MKL PARDISO (Unit 18, opt-in). Fill and time grow
+  steeply on 3D meshes: one SparseLU refactorization of the 20³-node 3D diode took 5.8 s on this machine (Unit 41's
+  cost measurement), and 3D meshing has been on `main` since Unit 16.
+- The interface is ready for it: every run creates its solver from `BiasOptions::linear` (`bias`, `equilibrium`,
+  `transient`, `small_signal`, `trace`, `weighted_current`); the backend interface (`src/linalg/backend.hpp`) is
+  analyze / factorize / solve; `SolveReport::iterations` already exists, documented "for iterative backends".
+- The acceptance check is backend-neutral: every solve is accepted on its componentwise backward error
+  (`max_backward_error`, 1e-8), with iterative refinement.
+- Eigen 5.0.1 (vcpkg, pinned) has `IncompleteLUT` and `BiCGSTAB` (supported) and GMRES, IDR(s), BiCGSTAB(L) and
+  ILU(0) in `unsupported/`. No new dependency is needed.
+
+**Design (proposed):**
+
+| # | Choice | Why | Trade-off |
+|---|---|---|---|
+| LS1 | **A third backend, `SolverBackend::gmres_ilut`, opt-in.** "Factorize" builds the preconditioner (Eigen's `IncompleteLUT`, with its own fill-reducing ordering); "solve" runs restarted GMRES with right preconditioning from x = 0. Real and complex (`ComplexLinearSolver`, the small-signal systems), as the other backends. | One more backend behind the same interface: the runs, the deck and every acceptance check are unchanged; the default backend and its results are untouched. | Eigen's ILUT, not an in-tree one: its ordering and drop rule are Eigen's. |
+| LS2 | **GMRES in-tree (LQ1)**, about 200 lines in `linalg`: restarted GMRES(m) with modified Gram–Schmidt and Givens rotations. Its stopping test is the layer's own acceptance measure: each restart cycle ends with the componentwise backward error of the true residual, and the solve stops when it is at most `max_backward_error` or the iteration limit is reached. | The stopping test must be the componentwise backward error the layer accepts on (GMRES's own residual estimate is a 2-norm of the preconditioned system); `unsupported/` code has no stability promise. | Code to own and test; Eigen's GMRES would be less. |
+| LS3 | **Configuration** (`SolverConfig`): `restart` (30), `max_iterations` (1000), `ilut_drop_tolerance` (1e-4), `ilut_fill_factor` (10). The existing `equilibrate` applies before the preconditioner, as for the direct backends. `threads` must be 1. | Equilibration matters more for ILU than for LU on drift-diffusion's widely scaled rows. Single-threaded keeps results deterministic on one machine (6.8). | Defaults are guesses until LG4 measures them. |
+| LS4 | **Failure:** a solve that does not reach `max_backward_error` within `max_iterations` is `inaccurate_solve`, as a direct solve that fails acceptance; `SolveReport::iterations` reports the iterations. No pivot ratio (ILUT's diagonal is no singularity measure, as PARDISO's), so `min_pivot_ratio` is not applied; a singular system shows as non-convergence. Fallback to a direct solve: LQ2. | One failure path for every backend: Newton, step cutting and the run's `stopped` already handle `inaccurate_solve`. | A floating region is not reported as `singular_system` by this backend. |
+| LS5 | **The deck:** `[solver] backend = gmres_ilut`, with `restart`, `max_linear_iterations`, `ilut_drop`, `ilut_fill`. | The batch runner reaches it like PARDISO. | Four keys. |
+| LS6 | **Out of scope:** algebraic multigrid; block (field-split) preconditioners (they need Unit 40's unknown map, a later unit); parallel assembly; a GPU solver; changing the default backend. | Keeps the unit to one backend and its evidence. | 3D scaling beyond what ILUT gives waits for AMG. |
+
+**Owner decisions needed:**
+
+| # | Question | Recommendation |
+|---|---|---|
+| LQ1 | GMRES in-tree (LS2), or Eigen's `unsupported/` GMRES with a componentwise check after it? | **In-tree.** The stopping test is the acceptance measure, and the code stays under this project's tests. |
+| LQ2 | When GMRES fails, fall back to Eigen SparseLU for that system (and say so in the report), or fail with `inaccurate_solve`? | **Fail** in this unit (one behaviour, measurable failure rate); a fallback can follow once LG4 shows how often it fails. |
+| LQ3 | Complex systems (small signal) in this unit? | **Yes**: the same template; the high-frequency admittance systems are a useful test of the preconditioner. |
+| LQ4 | If LG4 shows no device where GMRES-ILUT beats SparseLU in time or memory, merge it anyway as an opt-in (documented as such), or stop? | **Merge as opt-in** with the measurements recorded; it is the base AMG and block preconditioners plug into. |
+
+**Acceptance gates, fixed before any implementation:**
+
+| # | Gate |
+|---|---|
+| LG1 | **The default is untouched.** With `eigen_sparse_lu` every suite passes unchanged and the assembly traces are byte-identical to `main`'s (`--order decl`, PG1's method). |
+| LG2 | **GMRES on its own.** Linear-algebra tests: GMRES with no preconditioner and with ILUT reaches the backward-error target on nonsymmetric real and complex systems (including `tests/linalg`'s shared systems); its iteration count on a matrix with k distinct eigenvalues is at most k; restart and iteration limits are honoured; a singular or unconverged system is `inaccurate_solve` with the iterations reported; `threads != 1` and bad settings are `invalid_input`. |
+| LG3 | **It agrees with SparseLU** on the devices, as PARDISO does (Unit 18's `[pardiso]` cases as `[gmres]` cases): the diode bias gates, the MOS quasi-static C-V, the small-signal admittances, the transient switch-on, within the same acceptance tolerances; the Newton iteration counts reported. |
+| LG4 | **Measured, not assumed:** a Release benchmark (`[.benchmark]`) of one Newton step's linear solve on the 2D MOSFET and on 3D diodes of growing size (at least 20³, 30³ and 40³ nodes where SparseLU still fits): time, peak working set, GMRES iterations, for SparseLU and GMRES-ILUT (and PARDISO where configured). The results go into DECISIONS.md whatever they show (LQ4). |
+| LG5 | **The deck** keys of LS5 reach `SolverConfig`; a 3D deck runs with `backend = gmres_ilut`. |
+| LG6 | **Suites:** Release and Debug at every commit; no warnings under `/W4 /WX`. |
+| LG7 | **Mutation checks** (Release): GMRES (a skipped reorthogonalization, a wrong Givens sign, the stopping test on the estimate instead of the true residual, a restart that keeps the old basis), the preconditioner applied on the wrong side, a configuration check removed, a deck key ignored. |
+| LG8 | **No scope creep:** nothing outside LS1–LS5; ARCHITECTURE.md 6.10 and 11.3 updated to "as built" after acceptance. |
+
+**Commits (proposed):** 1) GMRES and the backend in `linalg`, with LG2; 2) the device agreement cases (LG3) and the
+deck keys (LG5); 3) the benchmark and its results (LG4).
+
+**Risks:**
+- Drift-diffusion Jacobians are hard for ILU: the continuity rows are strongly nonsymmetric at high fields, and the
+  scales of ψ, n and p differ by tens of decades before equilibration. GMRES-ILUT may fail on some devices; LG3 and
+  LG4 will show where, and LQ2 decides what a failure does.
+- A backward error of 1e-8 componentwise may take many iterations where a direct solve gets 1e-16 at once; the
+  benchmark may show a looser `max_backward_error` is needed for speed, which is the user's choice per run, not a
+  default change.
+- Results differ from SparseLU's at the tolerance, not bit for bit, as PARDISO's do.
+
+**Status:** proposal only; no code. Awaiting the owner's approval and rulings LQ1–LQ4.
 
 ---
 
