@@ -339,6 +339,57 @@ target_compile_definitions(nitcad_io_test PRIVATE
   NITCAD_IO_FIXTURES="${CMAKE_CURRENT_SOURCE_DIR}/tests/io/fixtures")
 add_test(NAME io COMMAND nitcad_io_test)
 
+# --- render layer (the views: CPU scene, then drawing; Unit 25a, DECISIONS.md VR1-VR9, VQ8) ------
+# HLSL compiled at build time with the SDK's dxc into headers of bytecode (VQ2).
+find_program(NITCAD_DXC dxc
+  HINTS "$ENV{WindowsSdkVerBinPath}/x64" "C:/Program Files (x86)/Windows Kits/10/bin/10.0.26100.0/x64"
+  REQUIRED)
+set(NITCAD_SHADER_DIR "${CMAKE_CURRENT_BINARY_DIR}/shaders")
+set(NITCAD_SHADER_HEADERS "")
+foreach(entry
+    "scene mesh_vs vs_6_0" "scene opaque_ps ps_6_0" "scene transparent_ps ps_6_0"
+    "scene line_vs vs_6_0" "scene line_ps ps_6_0"
+    "post fullscreen_vs vs_6_0" "post composite_ps ps_6_0" "post resolve_ps ps_6_0")
+  separate_arguments(parts NATIVE_COMMAND "${entry}")
+  list(GET parts 0 file)
+  list(GET parts 1 name)
+  list(GET parts 2 profile)
+  set(header "${NITCAD_SHADER_DIR}/${name}.h")
+  add_custom_command(OUTPUT "${header}"
+    COMMAND ${CMAKE_COMMAND} -E make_directory "${NITCAD_SHADER_DIR}"
+    COMMAND "${NITCAD_DXC}" -nologo -WX -O3 -T ${profile} -E ${name} -Vn ${name}_bytecode
+            -Fh "${header}" "${CMAKE_CURRENT_SOURCE_DIR}/src/render/shaders/${file}.hlsl"
+    DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/src/render/shaders/${file}.hlsl"
+    COMMENT "dxc ${file}.hlsl ${name}")
+  list(APPEND NITCAD_SHADER_HEADERS "${header}")
+endforeach()
+add_library(nitcad_render STATIC
+  src/render/color.cpp
+  src/render/geometry.cpp
+  src/render/scene.cpp
+  src/render/renderer.cpp
+  src/render/png.cpp
+  ${NITCAD_SHADER_HEADERS})
+add_library(NiTCAD::render ALIAS nitcad_render)
+target_include_directories(nitcad_render PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
+target_link_libraries(nitcad_render PUBLIC NiTCAD::base NiTCAD::mesh NiTCAD::results
+  NiTCAD::analysis NiTCAD::device PRIVATE d3d12 dxgi d3d11 d2d1 dwrite windowscodecs ole32)
+target_include_directories(nitcad_render PRIVATE "${NITCAD_SHADER_DIR}")
+
+add_executable(nitcad_render_test
+  tests/render/color_test.cpp
+  tests/render/geometry_test.cpp
+  tests/render/scene_test.cpp
+  tests/render/image_test.cpp)
+# The image test solves its MOSFETs (tests may use any layer; render itself may not).
+target_link_libraries(nitcad_render_test PRIVATE NiTCAD::render NiTCAD::solve Catch2::Catch2WithMain)
+target_compile_definitions(nitcad_render_test PRIVATE
+  NITCAD_RENDER_REFERENCES="${CMAKE_CURRENT_SOURCE_DIR}/tests/render/references")
+add_test(NAME render COMMAND nitcad_render_test)
+# VG1: render's includes stay within base, mesh, results, analysis and device.
+add_test(NAME render_layering
+  COMMAND ${CMAKE_COMMAND} -DROOT=${CMAKE_CURRENT_SOURCE_DIR} -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/render/layering.cmake)
+
 # --- solve layer (Newton, equilibrium and bias solves, sweeps, cancellation, progress) ---
 add_library(nitcad_solve STATIC
   src/solve/equilibrium.cpp
@@ -434,7 +485,8 @@ add_executable(nitcad_deck_test
   tests/deck/analyses_run_test.cpp
   tests/baseline/trace_listener.cpp)
 target_include_directories(nitcad_deck_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/deck")
-target_link_libraries(nitcad_deck_test PRIVATE NiTCAD::deck Catch2::Catch2WithMain)
+# The plot tests read the images back (Unit 25a).
+target_link_libraries(nitcad_deck_test PRIVATE NiTCAD::deck NiTCAD::render Catch2::Catch2WithMain)
 # The run tests start the nitcad executable for the exit status and Ctrl+C-free paths.
 add_dependencies(nitcad_deck_test nitcad)
 target_compile_definitions(nitcad_deck_test PRIVATE
@@ -443,8 +495,8 @@ target_compile_definitions(nitcad_deck_test PRIVATE
 add_test(NAME deck COMMAND nitcad_deck_test)
 
 # The batch runner (`nitcad check|run <deck>`).
-add_executable(nitcad src/cli/main.cpp)
-target_link_libraries(nitcad PRIVATE NiTCAD::deck)
+add_executable(nitcad src/cli/main.cpp src/cli/plot.cpp)
+target_link_libraries(nitcad PRIVATE NiTCAD::deck NiTCAD::render)
 # `nitcad --version` names the build (Unit 42, PV6): a 40-digit revision, or unknown without git.
 add_test(NAME cli_version COMMAND nitcad --version)
 set_tests_properties(cli_version PROPERTIES PASS_REGULAR_EXPRESSION
