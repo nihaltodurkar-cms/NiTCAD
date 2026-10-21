@@ -2269,7 +2269,7 @@ product ("for decisions choose whats best for Commercial TCAD"); each is the pag
 | VQ14 | Turbo stays the default (VQ5); the reference's softer five-color map is added as a named option, `soft`. | Turbo is the familiar high-contrast default; `soft` matches the reference where wanted. |
 
 **Status:** authorized with VQ1–VQ14. Unit 44 was implemented first (VQ6) and merged (`b518c99`, PR #54); Unit 25a
-started on the owner's "go 25a" (2026-10-21), on `render/visualization` rebased onto `b518c99`; commit 25a·1 of 3
+started on the owner's "go 25a" (2026-10-21), on `render/visualization` rebased onto `b518c99`; commits 25a·1 and 25a·2 of 3
 done. Then 45, 25b, 25c, 26, 26b, each approved after the one before it is accepted.
 
 **Commit 25a·1 (the CPU scene; VG1–VG3, VG6), as built.** The `render` layer (`include/NiTCAD/render/`,
@@ -2310,6 +2310,51 @@ done. Then 45, 25b, 25c, 26, 26b, each approved after the one before it is accep
   positions, the doping threshold, a forbidden include). A degenerate-triangle check was found dead (the vertex
   merge before it removes every case) and removed. Release 22/22 and Debug 16/16 (with the new ctests `render` and
   `render_layering`), no warnings under `/W4 /WX`.
+
+**Commit 25a·2 (drawing; VG4, VG6, VG7), as built.** `image.hpp`: a `Renderer` on a Direct3D 12 device (the first
+hardware adapter, else WARP) draws a `FieldScene` or a `PlotScene` off screen into an `Image`; `save_png`,
+`load_png` (WIC) and `compare`.
+- Triangles and lines on Direct3D 12 at twice the image's size, averaged 2 × 2; field triangles look the colormap up
+  per pixel from the interpolated position (a 256-entry table resampled from `sample`); one directional light
+  (from the upper left over the viewer's shoulder) and ambient 0.38, two-sided; translucent triangles by weighted
+  blended OIT (McGuire and Bavoil); lines as screen-space quads of their width, depth-tested or on top. Text,
+  colorbars, 2D axes in µm, the axis triad and plots on Direct2D and DirectWrite (Segoe UI, grayscale text
+  antialiasing) drawn into the same target through D3D11On12 (VQ1). HLSL compiled at build time by the SDK's `dxc`
+  into headers of bytecode (VQ2; CMake finds `dxc` and fails without it).
+- **The camera convention (changes 25a·1's):** +y up, the device's vertical axis, as in 2D; azimuth about +y from +z
+  toward +x, elevation above the xz plane; 2D looks down −z. The default 3D view is azimuth 35°, elevation 25°.
+  Drawing fits the scene's bounds to the image's aspect (92% of the view).
+- **Debug layer:** the one message the pipeline raises, `REFLECTSHAREDPROPERTIES_INVALIDOBJECT` from D3D11On12's
+  `CreateWrappedResource` probing a resource Direct3D 12 created, is filtered by its exact ID; every other error
+  counts, and the tests require none (Debug builds run the image tests with the layer).
+- **Errors:** a device failure is `resource_exhausted` with the call and its HRESULT (there is no device error code in
+  `base`; a new one was not added in this unit).
+- **VG4 references** (`tests/render/references/`, 11 images, 960 × 720, WARP): a 2D MOSFET's potential map with
+  contours and its regions with the mesh, a band diagram, an I-V plot with flagged points, and a 3D MOSFET's solid,
+  n, p and ψ surfaces, mesh, two slices, and an opaque perspective view; the MOSFETs are solved in the test (21 × 21
+  and 21 × 21 × 7 nodes, Vg = 1 V, Vd = 0.5 V). Each was looked at before it was committed; the first renders
+  showed the views mirrored (the camera's right vector reversed), fixed before any reference was kept. A render
+  matches when at most 0.5% of its pixels differ by more than 24 in a channel; `NITCAD_UPDATE_REFERENCES=1` rewrites
+  them. Also exact checks: a flat triangle's color, a field's colormap color, image sizes, the PNG round trip, and
+  order-independent transparency giving the same image in either order.
+- **VG7 benchmark** (`[.benchmark]`, 1280 × 960, the boundary of a thin tensor box):
+
+  | Triangles | Adapter | Image (draw: upload, passes, overlays, readback) | Redraw on resident geometry |
+  |---|---|---|---|
+  | 6.8e4 | RTX 5060 Ti | 13.6 ms (74/s) | 0.20 ms |
+  | 1.0e6 | RTX 5060 Ti | 146 ms (6.8/s) | 0.81 ms (1236 frames/s) |
+  | 6.8e4 | WARP | 29.0 ms | 13.8 ms (72/s) |
+  | 1.0e6 | WARP | 302 ms | 88.1 ms (11/s) |
+
+  The 60 frames per second budget at 10⁶ triangles is met on the GPU by the passes a window repeats (0.81 ms); a
+  whole image costs 146 ms, nearly all of it the per-image upload of 132 MB of vertices and the readback, which a
+  window does not repeat. Scene building for 10⁶ triangles takes 1.3 s on the CPU.
+- **Mutation checks (VG6, Release): 10 of 10 caught** — the camera's handedness, the fit margin, the readback and
+  PNG channel order, the field flag, a line quad's corner, the depth test, and in the shaders the lighting, the OIT
+  revealage and the 2 × 2 average.
+- ARCHITECTURE.md 3: `render`'s row of allowed dependencies adds `device`, read-only (VQ8).
+- **Suites:** Release 22/22 and Debug 16/16, no warnings; `nitcad_render_test` 30 test cases (+4). The Debug `render`
+  ctest takes 641 s (the two MOSFETs solved unoptimized, then drawn on WARP with the debug layer), Release 12 s.
 
 ---
 

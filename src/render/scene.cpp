@@ -112,8 +112,8 @@ void frame(FieldScene& s, const ViewOptions& o) {
     s.camera.target = to_f(c);
     s.camera.projection = o.projection;
     if (s.dimension == 2) {
-        s.camera.azimuth_deg = -90.0f;
-        s.camera.elevation_deg = 90.0f;
+        s.camera.azimuth_deg = 0.0f;
+        s.camera.elevation_deg = 0.0f;
         s.camera.extent_um = static_cast<float>(0.55 * std::max(d[0], d[1]));
         s.axis_triad = false;
     } else {

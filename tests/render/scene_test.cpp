@@ -185,7 +185,7 @@ TEST_CASE("render scene: a 2D region map is the control volumes by material") {
     CHECK(top > 1.0f);
     CHECK(s->hi[1] >= top);
     CHECK(s->lo[0] < 0.0f);  // the source pad on x_min
-    CHECK(s->camera.elevation_deg == 90.0f);
+    CHECK(s->camera.elevation_deg == 0.0f);  // 2D: looking down -z
 }
 
 TEST_CASE("render scene: a 3D solid with a translucent oxide shows the silicon under it") {

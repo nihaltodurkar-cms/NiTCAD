@@ -151,7 +151,7 @@ Allowed dependencies (everything not listed is forbidden):
 | io | base, mesh, device, results (Unit 29; device files Unit 31) |
 | analysis | base, mesh, results |
 | deck | base, mesh, physics, device, results, solve (with the option types of linalg and assemble it carries), io (Unit 31) |
-| render | base, mesh, results, analysis |
+| render | base, mesh, results, analysis, device (read-only: regions, materials, contacts, doping; VQ8, Unit 25a) |
 | app | all of the above except physics and assemble (io and deck included) |
 
 `results` sits below `solve` so that `analysis`, `render` and `app` can read results without including any

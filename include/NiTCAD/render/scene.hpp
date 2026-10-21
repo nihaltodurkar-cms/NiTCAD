@@ -71,12 +71,13 @@ struct Colorbar {
 
 enum class Projection : std::uint8_t { orthographic, perspective };
 
-// Looks at `target` from the direction given by azimuth (from +x toward +y) and elevation (above
-// the xy plane), with +z up; 2D scenes look down -z with +y up. `extent` is the half height of the
-// view in um (orthographic) and fixes the distance (perspective, with fov_deg).
+// Looks at `target` from the direction given by azimuth (about +y, from +z toward +x) and elevation
+// (above the xz plane), with +y up: the device's vertical axis, as in 2D, where the camera looks
+// down -z (azimuth and elevation 0). `extent` is the half height of the bounds' view at aspect 1;
+// drawing refits the bounds to the image's aspect.
 struct Camera {
     Float3 target{};
-    float azimuth_deg = -55.0f;
+    float azimuth_deg = 35.0f;
     float elevation_deg = 25.0f;
     float extent_um = 1.0f;
     Projection projection = Projection::orthographic;
@@ -156,7 +157,7 @@ struct ViewOptions {
     bool mesh_edges = false;        // element edges (2D) or boundary-face edges (3D)
     bool transparent_insulators = true;
     Projection projection = Projection::orthographic;
-    float azimuth_deg = -55.0f;
+    float azimuth_deg = 35.0f;
     float elevation_deg = 25.0f;
 };
 
