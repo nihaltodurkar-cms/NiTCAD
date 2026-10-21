@@ -840,3 +840,57 @@ sweep = )" + tag + ".nitsweep\ndevice = " + tag + ".nitdev\n";
     CHECK(flat.status == 1);
     CHECK(flat.output.find("needs a 3D device") != std::string::npos);
 }
+
+TEST_CASE("nitcad plot: the exploded view (Unit 25c, CG6)", "[deck]") {
+    const fs::path dir = scratch("cli_plot_exploded");
+    const auto write = [&](const char* name, const std::string& text) {
+        std::ofstream(dir / name, std::ios::binary) << text;
+        return "\"" + (dir / name).string() + "\"";
+    };
+    const auto out = [&](const char* name) { return "\"" + (dir / name).string() + "\""; };
+    // Silicon under an oxide layer, a metal electrode on the oxide.
+    const auto deck = [](const char* mesh, const char* oxide_box, const char* gate_box, const char* tag) {
+        return std::string("[mesh]\ntype = tensor\n") + mesh + "[region silicon]\nmaterial = silicon\n[region oxide]\n"
+               "material = sio2\nbox = " + oxide_box + R"(
+[doping]
+profile = acceptor constant 1e17
+[contact body]
+kind = ohmic
+patch = y_min
+[contact gate]
+kind = electrode
+patch = y_max
+box = )" + gate_box + R"(
+electrode = metal
+work_function = 4.6
+[sweep]
+contact gate = 0, 0.5
+[output]
+sweep = )" + tag + ".nitsweep\ndevice = " + tag + ".nitdev\n";
+    };
+    const std::string d3 = write("m3.deck", deck("x = linspace(0, 1um, 6)\ny = linspace(0, 1um, 6)\nz = linspace(0, 0.4um, 3)\n",
+                                                 "0 1um  0.75um 1um  0 0.4um", "0.2um 0.8um  1um 1um  0 0.4um", "m3"));
+    const Cli run = cli("run " + d3);
+    CAPTURE(run.output);
+    REQUIRE(run.status == 0);
+    for (const auto& [args, name] : {std::pair{std::string("--view exploded"), "e.png"},
+                                     std::pair{std::string("--view exploded --gap 0"), "e0.png"},
+                                     std::pair{std::string("--view exploded --field n --axis x --gap 0.2"), "en.png"}}) {
+        const Cli c = cli("plot " + d3 + " " + args + " --adapter warp --size 400x300 --out " + out(name));
+        CAPTURE(args, c.output);
+        CHECK(c.status == 0);
+        CHECK(render::load_png(dir / name).has_value());
+    }
+    // The gap separates the layers: the default and zero gaps differ; a field replaces the region colors.
+    CHECK(render::load_png(dir / "e.png")->rgba != render::load_png(dir / "e0.png")->rgba);
+    REQUIRE(cli("plot " + d3 + " --view exploded --field n --adapter warp --size 400x300 --out " + out("ef.png")).status == 0);
+    CHECK(render::load_png(dir / "e.png")->rgba != render::load_png(dir / "ef.png")->rgba);
+    CHECK(cli("plot " + d3 + " --view exploded --axis w --out " + out("x.png")).status == 64);
+    CHECK(cli("plot " + d3 + " --view exploded --gap -1 --out " + out("x.png")).status == 64);
+    const std::string d2 = write("m2.deck", deck("x = linspace(0, 1um, 6)\ny = linspace(0, 1um, 6)\n",
+                                                 "0 1um  0.75um 1um", "0.2um 0.8um  1um 1um", "m2"));
+    REQUIRE(cli("run " + d2).status == 0);
+    const Cli flat = cli("plot " + d2 + " --view exploded --out " + out("x.png"));
+    CHECK(flat.status == 1);
+    CHECK(flat.output.find("needs a 3D device") != std::string::npos);
+}

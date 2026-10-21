@@ -433,6 +433,42 @@ std::vector<Polygon> Geometry::clipped_surface(const Box& box) const {
     return out;
 }
 
+// --- exploded view ----------------------------------------------------------------------------
+
+std::vector<std::vector<Geometry::RegionFace>> Geometry::region_surfaces(
+    std::span<const std::int32_t> node_region) const {
+    std::vector<std::vector<RegionFace>> out;
+    if (dimension() != 3 || element_count() == 0) return out;
+    std::int32_t regions = 0;
+    for (const std::int32_t r : node_region) regions = std::max(regions, r + 1);
+    out.resize(static_cast<std::size_t>(regions));
+    for (const Polygon& f : boundary_faces()) {
+        for (OwnedPolygon& piece : owner_pieces(f)) {
+            const auto r = static_cast<std::size_t>(node_region[static_cast<std::size_t>(piece.owner)]);
+            out[r].push_back({std::move(piece.points), piece.owner, f.element});
+        }
+    }
+    const auto points = mesh_->points();
+    for (const InterfacePiece& p : interfaces(node_region)) {
+        const Vec n = [&] {
+            Vec s{};
+            for (std::size_t i = 0; i < p.points.size(); ++i) s = add(s, cross(p.points[i], p.points[(i + 1) % p.points.size()]));
+            return s;
+        }();
+        // Each side, turned away from its own node (toward the other region).
+        for (const bool a_side : {true, false}) {
+            const NodeId own = a_side ? p.node_a : p.node_b;
+            const NodeId other = a_side ? p.node_b : p.node_a;
+            std::vector<Point> pts = p.points;
+            const Vec toward = sub(points[static_cast<std::size_t>(other)], points[static_cast<std::size_t>(own)]);
+            if (dot(n, toward) < 0.0) std::ranges::reverse(pts);
+            const auto r = static_cast<std::size_t>(a_side ? p.region_a : p.region_b);
+            out[r].push_back({std::move(pts), own, p.element});
+        }
+    }
+    return out;
+}
+
 // --- control-volume pieces --------------------------------------------------------------------
 
 std::vector<OwnedPolygon> Geometry::owner_pieces(const Polygon& polygon) const {

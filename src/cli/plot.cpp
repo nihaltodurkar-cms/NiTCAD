@@ -34,7 +34,7 @@ constexpr const char* plot_usage =
     "usage: nitcad plot <deck | result file> [options] --out <image.png>\n"
     "  input   a deck (its device, mesh and the result files its run wrote), or a .nitsweep,\n"
     "          .nittran or .nitac file with --device <file.nitdev> [--mesh <file.nitmesh>]\n"
-    "  view    --view solid|mesh|field|slice|iso|iv|cv|current|bands|profile\n"
+    "  view    --view solid|mesh|field|slice|iso|exploded|iv|cv|current|bands|profile\n"
     "          (default: field with --field, else solid)\n"
     "  iso     --view iso --field <f> --levels <v>[,<v>...] (3D surfaces, 2D contours)\n"
     "  field   --field potential|n|p|Ec|Ev|Efn|Efp|T|doping|ND|NA|R|srh|auger|\n"
@@ -46,6 +46,7 @@ constexpr const char* plot_usage =
     "  curves  --contact <name> (swept)  --sense <name>  --frequency <k>  --log\n"
     "  arrows  --vectors E|J|Jn|Jp  --arrows <n> (300 in 2D, 400 in 3D)\n"
     "  clip    --clip <x0>,<y0>,<z0>:<x1>,<y1>,<z1> (um): that box removed from a 3D solid or field view\n"
+    "  explode --view exploded [--field <f>] [--axis x|y|z (y)] [--gap <um> (12% of the extent)]\n"
     "  lines   --streamlines E|J|Jn|Jp  --lines <n> (24)  --from <contact>\n"
     "          --seeds <x0>,<y0>[,<z0>]:<x1>,<y1>[,<z1>] (um) | x=<um>|y=<um>|z=<um> (3D plane)\n"
     "  image   --size <w>x<h> (1280x960)  --adapter auto|gpu|warp\n";
@@ -74,6 +75,8 @@ struct Options {
     std::size_t lines = 24;
     std::string vectors;  // Unit 25c
     std::optional<Box> clip;
+    std::optional<double> gap;  // um
+    int axis = 1;
     std::size_t arrows = 0;
     std::optional<std::size_t> point, frequency;
     std::optional<std::pair<double, double>> range;
@@ -194,6 +197,18 @@ int plot(int argc, char** argv) {
         else if (a == "--adapter") { if (!flag_value(o.adapter)) return usage("--adapter needs a name"); }
         else if (a == "--streamlines") { if (!flag_value(o.streamlines)) return usage("--streamlines needs E, J, Jn or Jp"); }
         else if (a == "--vectors") { if (!flag_value(o.vectors)) return usage("--vectors needs E, J, Jn or Jp"); }
+        else if (a == "--gap") {
+            const auto v = value();
+            const auto n = v ? number(*v) : std::nullopt;
+            if (!n || *n < 0.0) return usage("--gap needs a length in um, at least 0");
+            o.gap = *n;
+        } else if (a == "--axis") {
+            const auto v = value();
+            if (!v || v->size() != 1 || std::string_view("xyz").find((*v)[0]) == std::string_view::npos) {
+                return usage("--axis is x, y or z");
+            }
+            o.axis = (*v)[0] - 'x';
+        }
         else if (a == "--clip") {
             // <x0>,<y0>,<z0>:<x1>,<y1>,<z1> in um, lo below hi on each axis.
             const auto v = value();
@@ -301,6 +316,7 @@ int plot(int argc, char** argv) {
         if (o.field.empty()) o.field = o.vectors;
     }
     if (o.view.empty()) o.view = !o.slices.empty() ? "slice" : o.field.empty() ? "solid" : "field";
+    const bool field_given = !o.field.empty();  // the exploded view draws regions without one
     if (o.field.empty()) o.field = "potential";
 
     // The device, its geometry and the results.
@@ -521,6 +537,23 @@ int plot(int argc, char** argv) {
         auto f = field_options(*v);
         if (!f) return fail(f.error());
         auto s = iso_view(*device, *geometry, *v, o.levels, *f);
+        if (!s) return fail(s.error().message);
+        field_scene = std::move(*s);
+    } else if (o.view == "exploded") {
+        if (m.dimension() != 3) return fail("the exploded view needs a 3D device");
+        const double gap = o.gap ? *o.gap * 1e-4 : default_gap(*device, o.axis);
+        std::expected<FieldScene, base::Error> s;
+        if (field_given) {
+            auto v = values_for();
+            if (!v) return fail(v.error());
+            auto f = field_options(*v);
+            if (!f) return fail(f.error());
+            s = exploded_view(*device, *geometry, o.axis, gap, *v, *f);
+        } else {
+            FieldOptions f;
+            f.view = view;
+            s = exploded_view(*device, *geometry, o.axis, gap, {}, f);
+        }
         if (!s) return fail(s.error().message);
         field_scene = std::move(*s);
     } else if (o.view == "profile" || o.view == "bands") {

@@ -2805,6 +2805,25 @@ view's exposed boundary.
   kept, the view unclipped, interfaces unclipped, `nitcad plot` ignoring the box (caught once the clipped and whole
   images were compared). The face-on-boundary case was added after a first version kept such a face.
 
+**Commit 3 (the exploded view; CG3, CG6 in part), as built.** `geometry.hpp`: `Geometry::region_surfaces` (per
+region, the boundary pieces its nodes own and its side of every interface piece, each turned outward from the
+region). `scene.hpp`: `exploded_view` (each region's surface and its contacts' slabs moved along the axis by the
+gap times the region's rank in the order of its mean node coordinate, the first staying; the semiconductor with a
+field or by class, insulators translucent), `default_gap` (CQ3: 12% of the extent). `nitcad plot --view exploded
+[--field f] [--axis x|y|z] [--gap um]` (regions without `--field`).
+- **CG3:** on a 3D silicon device under an oxide layer with an electrode, each region's surface is closed (vector
+  area 0 to 10⁻¹⁰) and outward, enclosing exactly its nodes' control volumes (10⁻¹⁰); at zero gap the surfaces' area
+  is the boundary's plus both sides of the interface; the oxide and its electrode move up by one gap and the silicon
+  stays; a field colors the silicon only, at its scale's positions; refused: an axis outside 0..2, a negative gap, a
+  field not one per node.
+- **CG6 (in part):** regions, zero gap and a field along x from a deck; the gap and the field change the image;
+  refused: an unknown axis and a negative gap (usage), a 2D device.
+- Looked at on the 3D MOSFET deck: the oxide and gate lifted off the silicon, and with n the inverted channel's
+  surface (V_G = 5 V) between the pockets.
+- **Mutation checks (CG7, Release): 9 of 9 caught** — boundary pieces put in region 0, interface pieces not turned,
+  interface sides swapped, the default gap, the order reversed, the first region moved, the field ignored (caught
+  once a field case was added), contacts left behind, `nitcad plot` ignoring `--field`.
+
 ---
 
 ## New questions the advisor raised (not yet in `ARCHITECTURE.md`)

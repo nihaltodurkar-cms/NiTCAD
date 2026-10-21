@@ -254,6 +254,20 @@ void add_arrows(FieldScene& scene, std::span<const Arrow> arrows, double length,
                                                                  const Geometry& geometry,
                                                                  const ViewOptions& options = {});
 
+// The exploded view (Unit 25c, DC3, CQ3), 3D: each region's closed surface (Geometry::region_surfaces)
+// and its contacts' slabs moved along `axis` (0 x, 1 y, 2 z) by `gap` cm times the region's rank in
+// the regions' order of their mean node coordinate along it (the first stays). With values (one per
+// node) the semiconductor is drawn with the field, else by region class (VR8); insulators
+// translucent as in the solid view. Errors (invalid_input): as solid_view, a 2D geometry, an axis
+// outside 0..2, a gap negative or not finite, values not one per node.
+[[nodiscard]] std::expected<FieldScene, base::Error> exploded_view(const device::Device& device,
+                                                                  const Geometry& geometry, int axis,
+                                                                  double gap,
+                                                                  std::span<const double> values = {},
+                                                                  const FieldOptions& options = {});
+// CQ3's default gap: 12% of the device's extent along the axis.
+[[nodiscard]] double default_gap(const device::Device& device, int axis) noexcept;
+
 // --- plots ---------------------------------------------------------------------------------------
 
 enum class AxisScale : std::uint8_t { linear, log10 };

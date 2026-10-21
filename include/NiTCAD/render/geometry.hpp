@@ -141,6 +141,16 @@ public:
     // box), each a convex polygon in its element. A box face on or beyond the mesh's bounding box makes
     // no cut face. Empty for a geometry that is not 3D.
     [[nodiscard]] std::vector<Polygon> clipped_surface(const Box& box) const;
+    // 3D, the closed surface of each region's control volumes (Unit 25c, DC3): the boundary pieces its
+    // nodes own and its side of every interface piece, each oriented outward from the region; indexed
+    // by region id (node_region has one entry per node, ids from 0).
+    struct RegionFace {
+        std::vector<Point> points;
+        NodeId owner = 0;          // the region's node whose control volume it bounds
+        std::size_t element = 0;   // an element it lies in, for reading fields
+    };
+    [[nodiscard]] std::vector<std::vector<RegionFace>> region_surfaces(
+        std::span<const std::int32_t> node_region) const;
     // The parts of a polygon inside element `p.element` nearest to each of the element's nodes, by
     // the rule above. Pieces of zero area are dropped.
     [[nodiscard]] std::vector<OwnedPolygon> owner_pieces(const Polygon& p) const;
