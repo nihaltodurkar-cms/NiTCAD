@@ -1890,6 +1890,22 @@ PD1–PD5, PG1–PG8):**
 - Not in Unit 42: deck analyses for transient, small-signal and trace runs (PD1: the next unit); visualization
   formats (Unit 25); cross-machine checksums (6.8); compression; file locking.
 
+**As built (Unit 45, generation-recombination rates and the mesh digest in results; approved and accepted by the
+owner 2026-10-21; DECISIONS.md RS1–RS6, RQ1–RQ4, RG1–RG8):**
+- `results::RateFields` in `BiasPoint` and `TransientSnapshot` (so in sweeps, traces, transient snapshots and
+  small-signal operating points): per node, in cm⁻³ s⁻¹, each mechanism's net recombination R − G — SRH, Auger,
+  radiative and impact ionization (one vector each), the interfaces and band-to-band tunnelling per carrier (the
+  interfaces' as an effective volume rate at interface nodes), and the net per carrier. Read by
+  `assemble::DriftDiffusion::rates`, which evaluates each term alone and takes its continuity rows over the node's
+  volume, so they are the residual's; stored by default (`BiasOptions::store_rates`, deck `[solver] rates`).
+- `RunRecord::mesh_digest` (`mesh::graph_digest` of the device's mesh), outside `input_identity`; files store it and
+  the rates in optional records (older files load with neither); `nitcad plot` refuses a result whose digest is not
+  the device mesh's and draws `R`, `srh`, `auger`, `radiative`, `surface`, `Gii` and `Gbtbt`.
+- Gates: at every node of converged states the stored edge currents' divergence equals q U V per carrier (every
+  mechanism, incl. interfaces, nonlocal tunnelling, electrothermal); equilibrium rates vanish; assembly traces
+  byte-identical to `main`'s; round trips bit for bit. Cost: no measurable time, sweep files +40–46%. 21 mutants
+  caught.
+
 ### 6.7 Error policy (R1, decided)
 
 - **Recoverable errors** are returned as `std::expected<T, NiTCAD::base::Error>`: invalid input, a degenerate
@@ -2884,7 +2900,7 @@ exists, not finished), **planned** (nothing built). Audit of 2026-10-09, against
 | Generic fields/equations | Field descriptors and the unknowns' map; the drift-diffusion and electrothermal rows as equation terms composed by equation set, behind the unchanged `DriftDiffusion` (Unit 40, 6.12.1–2) | **Verified, bit-identical, on `main`** (Unit 40; `629bed0`, PR #50; below) | Move the model data out of `DriftDiffusion` and retire it as the wrapper; derived and edge/cell fields; `EquilibriumPoisson` from the same terms |
 | Scalable linear solvers | Eigen SparseLU (default), PARDISO opt-in (Unit 18); GMRES with an ILUT preconditioner opt-in, real and complex, with a reported SparseLU fallback (Unit 44, 6.10) | **GMRES-ILUT verified, opt-in** (Unit 44, on `linalg/iterative`): 3D 9–72× faster and 8–26× less memory than SparseLU | Algebraic multigrid and block (field-split) preconditioners; parallel assembly |
 | Results and provenance | Plain-data results; run record with identity digest (6.6); sweeps persisted bit for bit (Unit 29); provenance (build, revision, platform, start, wall time) in every run record and file, transient and small-signal files, `nitcad --version` (Unit 42) | **Verified** (Unit 42, 6.6; PR #52; DECISIONS.md PV1–PV7) | A release version policy (PD5); cross-machine checksums (6.8) |
-| Visualization, GUI, batch | The `nitcad check|run|plot` batch runner over the input deck (Unit 31); the `render` layer and `nitcad plot` (Unit 25a, 6.14); no GUI | **Batch runner verified, on `main`** (Unit 31; `6f67510`, PR #37); **core visualization verified** (Unit 25a, on `render/visualization`); GUI planned | Unit 45 (rates and mesh digest in results), 25b (derived fields), 25c, then the GUI (Units 26, 26b) |
+| Visualization, GUI, batch | The `nitcad check|run|plot` batch runner over the input deck (Unit 31); the `render` layer and `nitcad plot` (Unit 25a, 6.14); rates and the mesh digest in results (Unit 45, 6.6); no GUI | **Batch runner verified, on `main`** (Unit 31; `6f67510`, PR #37); **core visualization verified, on `main`** (Unit 25a; `6d2135b`, PR #55); **rates and digest verified** (Unit 45); GUI planned | 25b (derived fields), 25c, then the GUI (Units 26, 26b) |
 | Validation against published/measured data | Legacy, analytic and convergence gates throughout; resistivity against dopant density (NBS SP 400-64) and the measured n_i(300 K) as benchmark decks (Unit 33, 10.1) | **Verified, on `main`** (Unit 33; `a14ac96`, PR #41): gaps found and pinned (boron mobility up to +48%, incomplete ionization at heavy doping, n_i +10%); the opt-in Masetti hole mobility (Unit 34; `e14a53f`, PR #42) brings boron to within 11% (AC3/AC5 at 1e18 accepted as documented limitations); Unit 35 (`2d1fdc7`, PR #44) makes Masetti and a published band set (n_i within the measurement's uncertainty) the defaults | A density-dependent ionization level (owner decision); breakdown and device-level benchmarks from accessible sources |
 
 **As built (Unit 28, bias step cutting; `solve::StepControl` in `solve/bias.hpp`; DECISIONS.md S1–S7):**

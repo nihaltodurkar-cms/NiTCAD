@@ -2443,7 +2443,7 @@ continuity rows are read).
 **Status:** authorized by the owner 2026-10-21 ("Approve, as recommended"): RQ1 rates stored by default
 (`[solver] rates = off` to opt out), RQ2 components and the net rate, RQ3 surface recombination included and
 labelled as an effective volume rate, RQ4 `nitcad plot` refuses a differing digest (exit 1). Commits 1–3 done,
-awaiting the owner's acceptance (then ARCHITECTURE.md 6.6 and 11.3 as built, RG8).
+**accepted by the owner (2026-10-21)**; ARCHITECTURE.md 6.6 and 11.3 as built (RG8).
 
 **Commit 1 (the rates; RG1–RG3, RG5's timing), as built.** `DriftDiffusion::rates(x)` evaluates each generation-
 recombination term alone (residual only, no Jacobian) and reads its electron and hole rows: rate = row × R0 / V in
