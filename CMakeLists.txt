@@ -485,7 +485,8 @@ add_executable(nitcad_deck_test
   tests/deck/analyses_run_test.cpp
   tests/baseline/trace_listener.cpp)
 target_include_directories(nitcad_deck_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/deck")
-target_link_libraries(nitcad_deck_test PRIVATE NiTCAD::deck Catch2::Catch2WithMain)
+# The plot tests read the images back (Unit 25a).
+target_link_libraries(nitcad_deck_test PRIVATE NiTCAD::deck NiTCAD::render Catch2::Catch2WithMain)
 # The run tests start the nitcad executable for the exit status and Ctrl+C-free paths.
 add_dependencies(nitcad_deck_test nitcad)
 target_compile_definitions(nitcad_deck_test PRIVATE
@@ -494,8 +495,8 @@ target_compile_definitions(nitcad_deck_test PRIVATE
 add_test(NAME deck COMMAND nitcad_deck_test)
 
 # The batch runner (`nitcad check|run <deck>`).
-add_executable(nitcad src/cli/main.cpp)
-target_link_libraries(nitcad PRIVATE NiTCAD::deck)
+add_executable(nitcad src/cli/main.cpp src/cli/plot.cpp)
+target_link_libraries(nitcad PRIVATE NiTCAD::deck NiTCAD::render)
 # `nitcad --version` names the build (Unit 42, PV6): a 40-digit revision, or unknown without git.
 add_test(NAME cli_version COMMAND nitcad --version)
 set_tests_properties(cli_version PROPERTIES PASS_REGULAR_EXPRESSION

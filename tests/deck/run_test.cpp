@@ -17,6 +17,7 @@
 #include "NiTCAD/deck/run.hpp"
 #include "NiTCAD/io/device_file.hpp"
 #include "NiTCAD/io/files.hpp"
+#include "NiTCAD/render/image.hpp"
 #include "NiTCAD/solve/bias.hpp"
 #include "NiTCAD/solve/equilibrium.hpp"
 #include "fixtures.hpp"
@@ -403,4 +404,136 @@ linear_fallback = none
     }
     std::printf("gmres 3D deck: worst relative current difference %.2e\n", worst);
     CHECK(worst < 1e-8);
+}
+
+TEST_CASE("nitcad plot: images from decks and result files; a foreign mesh refused (Unit 25a, VG5)", "[deck]") {
+    const fs::path dir = scratch("cli_plot");
+    const auto write = [&](const char* name, const std::string& text) {
+        std::ofstream(dir / name, std::ios::binary) << text;
+        return "\"" + (dir / name).string() + "\"";
+    };
+    const auto out = [&](const char* name) { return "\"" + (dir / name).string() + "\""; };
+    const auto image_ok = [&](const char* name, int w, int h) {
+        const auto img = render::load_png(dir / name);
+        REQUIRE(img.has_value());
+        CHECK(img->width == w);
+        CHECK(img->height == h);
+    };
+    // A 2D pn diode: the deck's sweep and device files.
+    const std::string pn2d = R"(
+[mesh]
+type = tensor
+x = linspace(0, 2um, 21)
+y = linspace(0, 1um, 6)
+[region silicon]
+material = silicon
+[doping]
+profile = acceptor constant 1e17 axis=y x=-1:1um
+profile = donor constant 1e17 axis=y x=1um:3um
+[contact anode]
+kind = ohmic
+patch = x_min
+[contact cathode]
+kind = ohmic
+patch = x_max
+[sweep]
+contact anode = 0 : 0.4 : 0.2
+[output]
+sweep = pn.nitsweep
+device = pn.nitdev
+)";
+    const std::string deck = write("pn.deck", pn2d);
+    // Views needing results before the run: refused with the reason; the regions need none.
+    const Cli early = cli("plot " + deck + " --field n --adapter warp --out " + out("early.png"));
+    CHECK(early.status == 1);
+    CHECK(early.output.find("(run the deck first)") != std::string::npos);
+    const Cli solid = cli("plot " + deck + " --adapter warp --size 320x240 --out " + out("solid.png"));
+    CHECK(solid.status == 0);
+    image_ok("solid.png", 320, 240);
+    REQUIRE(cli("run " + deck).status == 0);
+
+    for (const auto& [args, name] :
+         {std::pair{std::string("--field n --scale log --contours"), "n.png"},
+          std::pair{std::string("--view mesh"), "mesh.png"},
+          std::pair{std::string("--field doping"), "doping.png"},
+          std::pair{std::string("--view iv --log"), "iv.png"}}) {
+        const Cli c = cli("plot " + deck + " " + args + " --adapter warp --size 400x300 --out " + out(name));
+        CAPTURE(args, c.output);
+        CHECK(c.status == 0);
+        CHECK(c.output.find("wrote ") != std::string::npos);
+        image_ok(name, 400, 300);
+    }
+    // From the result file with its device file, at a chosen point.
+    const Cli from_file = cli("plot " + out("pn.nitsweep") + " --device " + out("pn.nitdev") +
+                              " --field potential --point 1 --adapter warp --size 400x300 --out " + out("psi1.png"));
+    CHECK(from_file.status == 0);
+    image_ok("psi1.png", 400, 300);
+    const Cli beyond = cli("plot " + out("pn.nitsweep") + " --device " + out("pn.nitdev") +
+                           " --point 9 --field n --out " + out("x.png"));
+    CHECK(beyond.status == 1);
+    CHECK(beyond.output.find("--point 9 is out of range (3 points)") != std::string::npos);
+
+    // Another device's mesh: refused, the counts in the message.
+    std::string other = pn2d;
+    other.replace(other.find("linspace(0, 1um, 6)"), 19, "linspace(0, 1um, 4)");
+    other.replace(other.find("pn.nitsweep"), 11, "o.nitsweep");
+    other.replace(other.find("pn.nitdev"), 9, "o.nitdev");
+    REQUIRE(cli("run " + write("o.deck", other)).status == 0);
+    const Cli foreign = cli("plot " + out("pn.nitsweep") + " --device " + out("o.nitdev") + " --field n --out " +
+                            out("foreign.png"));
+    CHECK(foreign.status == 1);
+    CHECK(foreign.output.find("they do not belong together") != std::string::npos);
+    CHECK_FALSE(fs::exists(dir / "foreign.png"));
+
+
+    // A generated mesh: from the result file with its device and --mesh (the simplices), and
+    // refused with another deck's mesh file.
+    const auto generated = [&](const char* tag, const char* size) {
+        return std::string(R"(
+[mesh]
+type = generate2d
+patch left = 0 0, 0 1um
+patch right = 2um 0, 2um 1um
+max_size = )") + size + R"(
+interface_resolution = 20nm
+[region p]
+material = silicon
+polygon = 0 0, 1um 0, 1um 1um, 0 1um
+[region n]
+material = silicon
+polygon = 1um 0, 2um 0, 2um 1um, 1um 1um
+[doping]
+profile = acceptor constant 1e16 x=0:1um axis=y
+profile = donor constant 1e16 x=1um:2um axis=y
+[contact left]
+kind = ohmic
+patch = left
+[contact right]
+kind = ohmic
+patch = right
+[sweep]
+contact left = 0, 0.1
+[output]
+mesh = )" + tag + R"(.nitmesh
+device = )" + tag + R"(.nitdev
+sweep = )" + tag + R"(.nitsweep
+)";
+    };
+    REQUIRE(cli("run " + write("g.deck", generated("g", "0.25um"))).status == 0);
+    REQUIRE(cli("run " + write("h.deck", generated("h", "0.2um"))).status == 0);
+    const Cli gen = cli("plot " + out("g.nitsweep") + " --device " + out("g.nitdev") + " --mesh " + out("g.nitmesh") +
+                        " --field potential --adapter warp --size 400x300 --out " + out("g.png"));
+    CAPTURE(gen.output);
+    CHECK(gen.status == 0);
+    image_ok("g.png", 400, 300);
+    const Cli wrong = cli("plot " + out("g.nitsweep") + " --device " + out("g.nitdev") + " --mesh " +
+                          out("h.nitmesh") + " --field potential --out " + out("wrong.png"));
+    CHECK(wrong.status == 1);
+    CHECK(wrong.output.find("is not the device's mesh") != std::string::npos);
+    // Usage: exit 64.
+    CHECK(cli("plot").status == 64);
+    CHECK(cli("plot " + deck).status == 64);  // no --out
+    CHECK(cli("plot " + deck + " --view nothing --out " + out("u.png")).status == 64);
+    CHECK(cli("plot " + deck + " --field J --out " + out("u.png")).status == 64);
+    CHECK(cli("plot " + out("pn.nitsweep") + " --out " + out("u.png")).status == 64);  // no --device
 }

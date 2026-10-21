@@ -3,11 +3,13 @@
 //   nitcad check <deck>   parse and build the deck, print what it describes, solve nothing
 //   nitcad run <deck>     build the deck, run its analysis, write its outputs, and print the run's
 //                         provenance (Unit 42)
+//   nitcad plot <deck or result file> ... --out <image.png>
+//                         draw a view or a curve of a deck's results (Unit 25a; plot.hpp)
 //   nitcad --version      print the build: version, git revision, build type, compiler, Eigen
 //
-// Exit status: 0 done; 1 the deck or the run failed (the message on stderr); 2 a sweep, trace,
-// transient or small-signal run stopped early (its completed part and outputs are written; the
-// reason on stderr; Unit 43 for the last three); 64 usage.
+// Exit status: 0 done; 1 the deck, the run or the plot failed (the message on stderr); 2 a sweep,
+// trace, transient or small-signal run stopped early (its completed part and outputs are written;
+// the reason on stderr; Unit 43 for the last three); 64 usage.
 // Ctrl+C or Ctrl+Break asks the run to stop: the solver stops at its next check and the completed
 // points are written, as for any early stop.
 #include <windows.h>
@@ -22,6 +24,7 @@
 #include "NiTCAD/deck/run.hpp"
 #include "NiTCAD/deck/syntax.hpp"
 #include "NiTCAD/solve/provenance.hpp"
+#include "plot.hpp"
 
 namespace {
 
@@ -36,7 +39,9 @@ BOOL WINAPI on_console_event(DWORD event) {
 }
 
 int usage() {
-    std::fputs("usage: nitcad check <deck>\n       nitcad run <deck>\n       nitcad --version\n",
+    std::fputs("usage: nitcad check <deck>\n       nitcad run <deck>\n"
+               "       nitcad plot <deck or result file> [options] --out <image.png>\n"
+               "       nitcad --version\n",
                stderr);
     return 64;
 }
@@ -126,6 +131,7 @@ int main(int argc, char** argv) {
         print_build(NiTCAD::solve::provenance());
         return 0;
     }
+    if (argc >= 2 && std::string_view(argv[1]) == "plot") return NiTCAD::cli::plot(argc, argv);
     if (argc != 3) return usage();
     const std::string_view command = argv[1];
     if (command != "check" && command != "run") return usage();

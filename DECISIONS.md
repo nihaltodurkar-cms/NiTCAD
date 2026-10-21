@@ -2269,8 +2269,9 @@ product ("for decisions choose whats best for Commercial TCAD"); each is the pag
 | VQ14 | Turbo stays the default (VQ5); the reference's softer five-color map is added as a named option, `soft`. | Turbo is the familiar high-contrast default; `soft` matches the reference where wanted. |
 
 **Status:** authorized with VQ1–VQ14. Unit 44 was implemented first (VQ6) and merged (`b518c99`, PR #54); Unit 25a
-started on the owner's "go 25a" (2026-10-21), on `render/visualization` rebased onto `b518c99`; commits 25a·1 and 25a·2 of 3
-done. Then 45, 25b, 25c, 26, 26b, each approved after the one before it is accepted.
+started on the owner's "go 25a" (2026-10-21), on `render/visualization` rebased onto `b518c99`; commits 25a·1–3 done,
+awaiting the owner's acceptance (then ARCHITECTURE.md as built). Then 45, 25b, 25c, 26, 26b, each approved after the one
+before it is accepted.
 
 **Commit 25a·1 (the CPU scene; VG1–VG3, VG6), as built.** The `render` layer (`include/NiTCAD/render/`,
 `src/render/`; CMake target `NiTCAD::render`, linked to base, mesh, results, analysis and device):
@@ -2355,6 +2356,34 @@ hardware adapter, else WARP) draws a `FieldScene` or a `PlotScene` off screen in
 - ARCHITECTURE.md 3: `render`'s row of allowed dependencies adds `device`, read-only (VQ8).
 - **Suites:** Release 22/22 and Debug 16/16, no warnings; `nitcad_render_test` 30 test cases (+4). The Debug `render`
   ctest takes 641 s (the two MOSFETs solved unoptimized, then drawn on WARP with the debug layer), Release 12 s.
+
+**Commit 25a·3 (`nitcad plot`; VG5), as built.** `nitcad plot <deck | result file> [options] --out <image.png>`
+(`src/cli/plot.cpp`; `nitcad` now links `render`):
+- **Input:** a deck (its device and mesh rebuilt, the result file its analysis writes read: `sweep`, `transient`,
+  `small_signal`, or the equilibrium's `checkpoint`), or a `.nitsweep`, `.nittran` or `.nitac` file with `--device
+  <file.nitdev>` and, for a generated mesh, `--mesh <file.nitmesh>` (its simplices; refused unless its graph digest is
+  the device mesh's). A result whose fields are not one value per node of the device's mesh is refused (exit 1):
+  the node-count pairing of VR6, until Unit 45 stores the mesh digest in result files.
+- **Views:** `solid`, `mesh`, `field` (a 1D device's is a profile plot), `slice` (`--slice x|y|z=<um>`, repeatable),
+  `profile`, `bands` (1D), and the curves `iv` (a sweep, `analysis::current_curve`), `cv` (a small-signal run,
+  `capacitance_curve`) and `current` (a transient's terminal currents against time). Options: `--field` (the keys of
+  `field_info`), `--point`, `--scale`, `--range`, `--colormap`, `--contours`, `--edges`, `--opaque`, `--azimuth`,
+  `--elevation`, `--perspective`, `--contact`, `--sense`, `--frequency`, `--log`, `--size` (1280 × 960), `--adapter`.
+  Regions and doping need no results; other views before the run fail with "(run the deck first)".
+- **Exit status:** 0 written, 1 failure (the message on stderr), 64 usage (the option list on stderr).
+- **Gates** (`tests/deck/run_test.cpp`, the executable started as the other CLI tests do, `--adapter warp`): images
+  of the expected size from a deck (regions before the run; n with contours, the mesh, doping and I-V after it),
+  from a result file with its device (a chosen point), and from a generated mesh's result with `--mesh`; refusals
+  with exit 1 of a views-before-run request, a point out of range, another deck's device (node counts named) and
+  another deck's mesh file; usage errors with exit 64. Checked by hand on a 2D pn diode: n across the junction and an
+  I-V of about 60 mV per decade. (The first try drew a uniform n: the demo deck's profiles had their depth axis
+  along x, so their x windows were ignored and the doping compensated to zero, which the plot showed as it was.)
+- **Mutation checks (VG6, Release): 7 of 7 caught** — the node-count and mesh-digest refusals, the point's range
+  (first caught only by the status, through undefined behaviour; the test now checks the message), the results a view
+  needs, `--out` and `--device` required, the `--point` option.
+- **VG1, assembly traces:** nothing in Unit 25a changes `assemble`, `solve`, `deck` or `io` (render, its tests, the
+  CLI's plot command and CMakeLists.txt only), so every existing suite runs the code `main` runs; the suites pass
+  unchanged. Release 22/22 and Debug 16/16, no warnings.
 
 ---
 
