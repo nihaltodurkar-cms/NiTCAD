@@ -948,6 +948,49 @@ TEST_CASE("small signal: PARDISO gives Eigen SparseLU's admittance (Unit 18)", "
     compare(t.device, {{t.V0, 0.0}}, t.options, "trap level");
 }
 
+TEST_CASE("small signal: GMRES-ILUT operating points give Eigen SparseLU's admittance (Unit 44)",
+          "[gmres]") {
+    // LG3 with LQ3 amended: with gmres_ilut (strict mode) the operating points are GMRES's and the
+    // small-signal systems are solved by SparseLU, so the admittances are the PARDISO case's within
+    // the same bound. (Solved by GMRES they were measured within their own resolution, which
+    // reached 22% of max |Y| for the junction and 93% for the trap level at max_backward_error
+    // 1e-8 and 1e-9; DECISIONS.md.)
+    const auto compare = [](const device::Device& d, const std::vector<std::vector<double>>& points,
+                            solve::BiasOptions eigen, const char* name) {
+        const std::vector<double> f{1e3, 1e5, 1e7, 1e9};
+        solve::BiasOptions gmres = eigen;
+        gmres.linear = {.backend = linalg::SolverBackend::gmres_ilut,
+                        .fallback = linalg::LinearFallback::none};
+        const auto e = run(d, points, f, eigen);
+        const auto g = run(d, points, f, gmres);
+        const std::size_t contacts = e.contacts;
+        double worst = 0.0;
+        for (std::size_t k = 0; k < points.size(); ++k) {
+            for (std::size_t j = 0; j < f.size(); ++j) {
+                double scale = 0.0;
+                for (const Complex y : e.points[k].admittance[j]) scale = std::max(scale, std::abs(y));
+                for (std::size_t i = 0; i < e.points[k].admittance[j].size(); ++i) {
+                    const double bound =
+                        std::max(1e-9 * scale, e.points[k].resolution[j][i % contacts]);
+                    worst = std::max(worst, std::abs(g.points[k].admittance[j][i] -
+                                                     e.points[k].admittance[j][i]) /
+                                                bound);
+                }
+                REQUIRE(g.points[k].pivot_ratio[j] > 0.0);  // a direct factorization's
+            }
+        }
+        std::printf("gmres small signal, %s: worst |Y_g - Y_e| / max(1e-9 max |Y_e|, "
+                    "resolution) %.3f\n",
+                    name, worst);
+        REQUIRE(worst <= 1.0);
+    };
+    solve::BiasOptions o;
+    o.models.bgn = false;
+    compare(p_plus_n(1e19, 1e16), {{-2.0, 0.0}, {0.6, 0.0}}, o, "junction");
+    const TrapFixture t = trap_fixture();
+    compare(t.device, {{t.V0, 0.0}}, t.options, "trap level");
+}
+
 TEST_CASE("small signal: a long diode, the diffusion admittance") {
     // A p+n diode (1e19 / 1e16, band-gap narrowing and Auger off), lifetimes 1 us everywhere,
     // 300 um of n side (9.4 diffusion lengths) at 0.5 V (low injection): the hole diffusion

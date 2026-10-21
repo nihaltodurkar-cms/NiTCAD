@@ -355,3 +355,52 @@ table = t.csv
     CHECK(loaded->points.size() == 3);
     CHECK(fs::exists(dir / "t.csv"));
 }
+
+TEST_CASE("deck run: a 3D diode deck with backend = gmres_ilut (Unit 44, LG5)", "[deck]") {
+    // The deck keys reach the solver: the 3D sweep runs on GMRES-ILUT in strict mode (a fallback
+    // cannot finish it) and its currents agree with the Eigen SparseLU run of the same deck.
+    const std::string device = R"(
+[mesh]
+type = tensor
+x = linspace(0, 2um, 21)
+y = linspace(0, 1um, 6)
+z = linspace(0, 1um, 6)
+
+[region silicon]
+material = silicon
+
+[doping]
+profile = acceptor constant 1e17 x=-1:1um
+profile = donor constant 1e17 x=1um:3um
+
+[contact anode]
+kind = ohmic
+patch = x_min
+
+[contact cathode]
+kind = ohmic
+patch = x_max
+
+[sweep]
+contact anode = 0 : 0.4 : 0.2
+)";
+    const deck::Plan gmres = must(device + R"(
+[solver]
+backend = gmres_ilut
+linear_fallback = none
+)");
+    REQUIRE(gmres.device.mesh().dimension() == 3);
+    const auto g = deck::run(gmres);
+    if (!g) FAIL(g.error().message);
+    const auto e = deck::run(must(device));
+    if (!e) FAIL(e.error().message);
+    REQUIRE_FALSE(g->sweep->stopped.has_value());
+    REQUIRE(g->sweep->points.size() == 3);
+    double worst = 0.0;
+    for (std::size_t k = 1; k < 3; ++k) {
+        worst = std::max(worst, relative(g->sweep->points[k].terminal_current,
+                                         e->sweep->points[k].terminal_current));
+    }
+    std::printf("gmres 3D deck: worst relative current difference %.2e\n", worst);
+    CHECK(worst < 1e-8);
+}

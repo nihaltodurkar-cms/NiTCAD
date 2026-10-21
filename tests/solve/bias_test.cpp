@@ -442,6 +442,70 @@ TEST_CASE("bias: PARDISO, one analysis per Newton run and the diode gates (Unit 
     REQUIRE(worst <= 1.0);
 }
 
+TEST_CASE("bias: GMRES-ILUT, one ILUT per Newton iteration and the diode gates (Unit 44)",
+          "[gmres]") {
+    // LG3: the PARDISO case above with gmres_ilut in strict mode (no fallback can stand in for
+    // GMRES): one ordering per Newton run and one ILUT per Jacobian; the J(0.5 V) gate and the
+    // forward sweep against Eigen SparseLU, with the Newton iteration counts.
+    const linalg::SolverConfig gmres{.backend = linalg::SolverBackend::gmres_ilut,
+                                     .fallback = linalg::LinearFallback::none};
+    const auto d = diode_1d(gate_mesh());
+    const auto scaling = *assemble::make_scaling(d);
+    auto system = *assemble::DriftDiffusion::create(d, scaling);
+    const auto eq = *solve::solve_equilibrium(d);
+    std::vector<double> psi(eq.fields.potential_V.size());
+    for (std::size_t i = 0; i < psi.size(); ++i) psi[i] = eq.fields.potential_V[i] / scaling.V_T;
+    REQUIRE(system.set_bias(std::vector<double>{0.5, 0.0}).has_value());
+    auto x = system.state_from_potential(psi);
+    const auto x0 = x;
+    auto solver = *linalg::LinearSolver::create(gmres);
+    results::ConvergenceRecord record;
+    REQUIRE(solve::newton_solve(system, x, {}, solver, record).has_value());
+    const linalg::BackendCounts& counts = solver.backend_counts();
+    auto eigen = *linalg::LinearSolver::create({});
+    results::ConvergenceRecord eigen_record;
+    auto xe = x0;
+    REQUIRE(solve::newton_solve(system, xe, {}, eigen, eigen_record).has_value());
+    std::printf("gmres Newton: %zu iterations, analyses %zu, ILUT builds %zu, applications %zu "
+                "(Eigen: %zu iterations)\n",
+                record.iterations.size(), counts.analyses, counts.factorizations, counts.solves,
+                eigen_record.iterations.size());
+    const std::size_t n = record.iterations.size();
+    REQUIRE(counts.analyses == 1);
+    REQUIRE(counts.factorizations == n);
+    REQUIRE(n <= eigen_record.iterations.size() + 1);
+
+    solve::BiasOptions options = legacy;
+    options.linear = gmres;
+    std::vector<std::vector<double>> points;
+    for (int k = 0; k <= 14; ++k) points.push_back({0.05 * k, 0.0});
+    const auto e = solve::sweep_bias(d, points, legacy);
+    const auto g = solve::sweep_bias(d, points, options);
+    REQUIRE(e.has_value());
+    REQUIRE(g.has_value());
+    REQUIRE(!e->stopped);
+    REQUIRE(!g->stopped);
+    double worst = 0.0, worst_relative = 0.0;
+    std::size_t iterations_e = 0, iterations_g = 0;
+    for (std::size_t k = 1; k < points.size(); ++k) {
+        const double Je = e->points[k].terminal_current[0], Jg = g->points[k].terminal_current[0];
+        const double bound =
+            std::max(1e-10 * std::abs(Je), e->points[k].terminal_current_resolution[0]);
+        worst = std::max(worst, std::abs(Jg - Je) / bound);
+        worst_relative = std::max(worst_relative, std::abs(Jg / Je - 1.0));
+        iterations_e += e->points[k].convergence.iterations.size();
+        iterations_g += g->points[k].convergence.iterations.size();
+    }
+    const double J05 = g->points[10].terminal_current[0];
+    std::printf("gmres diode: J(0.5 V) %.10e (Eigen %.10e), worst relative difference %.2e, "
+                "worst against max(1e-10 |J|, resolution) %.3f, Newton iterations %zu (Eigen %zu)\n",
+                J05, e->points[10].terminal_current[0], worst_relative, worst, iterations_g,
+                iterations_e);
+    REQUIRE(close(J05, 1.280e-2, 0.01));
+    REQUIRE(std::abs(J05 / e->points[10].terminal_current[0] - 1.0) < 1e-10);
+    REQUIRE(worst <= 1.0);
+}
+
 TEST_CASE("bias: PARDISO cost on 3D diode Jacobians (Unit 18 measurement)", "[.pardiso_perf]") {
     // Uniform 3D diodes of 20^3 and 30^3 nodes (24,000 and 81,000 unknowns; the second the size at
     // which the Unit 3 review measured Eigen at 70 s a factorization), the Jacobian at 0.5 V on the

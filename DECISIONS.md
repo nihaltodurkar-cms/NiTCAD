@@ -2083,7 +2083,36 @@ LG3: the agreement cases run with `none`, so a fallback cannot hide a failure; a
 LG4: also records each case's fallback count with the default setting. LG7: a further mutant, a fallback that is
 not reported.
 
-**Status:** authorized with LQ1–LQ4; commit 1 of 3 done (2026-10-21). First in VQ6's order, before Unit 25a.
+**Status:** authorized with LQ1–LQ4; LQ3 amended by the owner (LQ3a, 2026-10-21); commits 1 and 2 of 3 done.
+First in VQ6's order, before Unit 25a.
+
+**LQ3a (owner ruling, 2026-10-21): small-signal systems are solved directly.** Measured in commit 2: with GMRES
+the admittances agree with SparseLU only within each run's own reported resolution, and that resolution reached
+22% of max |Y| (p+n junction) and 93% (MOS capacitor with an interface trap level), the same at
+`max_backward_error` 1e-8 and 1e-9; at 1e-10 GMRES-ILUT did not converge the trap device's operating point in 1000
+iterations. An admittance is a near-cancellation in the continuity rows: a componentwise backward error of 1e-9
+still leaves an absolute residual comparable to the AC current, and only a rounding-level (direct) solve resolves
+it. Asked with three options (direct AC solves; keep GMRES with coarse resolutions; stop the unit), the owner chose
+**direct AC solves**: with `backend = gmres_ilut`, `solve_small_signal` takes its operating points with GMRES-ILUT
+and solves the complex small-signal systems with Eigen SparseLU (`small_signal.hpp`). The complex GMRES path stays
+in `linalg`, tested (LG2), for later preconditioners. Not recorded in the results: the run record's
+`linear.backend` says gmres_ilut, and each frequency's `pivot_ratio` is the direct factorization's.
+
+**Commit 2 (device agreement LG3, deck keys LG5), as built.** `[solver]` keys `backend = gmres_ilut`, `restart`,
+`max_linear_iterations`, `ilut_drop`, `ilut_fill`, `linear_fallback = sparse_lu|none`, each checked with its line;
+the run record digests the five settings only with `gmres_ilut`, so every other run keeps its identity. `[gmres]`
+cases (strict mode, in the `solve` ctest) beside Unit 18's `[pardiso]` ones, measured in Release:
+- diode: one ordering per Newton run, one ILUT per Jacobian (10 iterations as Eigen, 71 preconditioner
+  applications); J(0.5 V) 1.2800773807e-2 as Eigen; the 0–0.7 V sweep within 5.7e-9 relative, 69 Newton
+  iterations as Eigen's 69;
+- MOS quasi-static C-V: gate charge within 7.9e-17 of the largest, φ_s within 1.1e-16 V;
+- transient switch-on (101 BDF2 steps): currents within 4.4e-21 of the largest;
+- small signal (LQ3a): junction and trap level within 0.10 and 0.23 of the PARDISO case's bound;
+- deck: a 3D diode deck (21 × 6 × 6 nodes) with `backend = gmres_ilut` sweeps to 0.4 V within 4.4e-16 of the
+  SparseLU run.
+- **Suites:** Release 20/20 and Debug 14/14, no warnings. **Mutation checks (LG7, Release): 12 of 12 caught** —
+  each of the six deck keys ignored, each of the five run-record entries dropped, and the small-signal systems
+  left on GMRES (LQ3a).
 
 **Commit 1 (GMRES and the backend, LG2), as built.** `SolverBackend::gmres_ilut` and `LinearFallback`;
 `SolverConfig` gains `restart`, `max_iterations`, `ilut_drop_tolerance`, `ilut_fill_factor`, `fallback` (validated

@@ -111,6 +111,14 @@ std::vector<std::pair<std::string, double>> settings(const BiasOptions& o) {
         {"models.incomplete_ionization", o.models.incomplete_ionization ? 1.0 : 0.0},
         {"equations", static_cast<double>(o.equations)},
     };
+    // Unit 44: recorded only with the iterative backend, so the direct runs keep their identity.
+    if (o.linear.backend == linalg::SolverBackend::gmres_ilut) {
+        s.emplace_back("linear.restart", static_cast<double>(o.linear.restart));
+        s.emplace_back("linear.max_iterations", static_cast<double>(o.linear.max_iterations));
+        s.emplace_back("linear.ilut_drop_tolerance", o.linear.ilut_drop_tolerance);
+        s.emplace_back("linear.ilut_fill_factor", static_cast<double>(o.linear.ilut_fill_factor));
+        s.emplace_back("linear.fallback", static_cast<double>(o.linear.fallback));
+    }
     if (transport) {
         s.emplace_back("models.doping_mobility", o.models.doping_mobility ? 1.0 : 0.0);
         s.emplace_back("models.srh", o.models.srh ? 1.0 : 0.0);
