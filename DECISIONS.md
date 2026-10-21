@@ -2503,6 +2503,68 @@ the node count for a result without a digest.
 - **Mutation checks (RG7, Release): 4 of 4 caught** — the digest check off, a generation not negated, SRH read as
   Auger, a missing rate not refused. Unit 45 in all: 21 of 21. Release 22/22 and Debug 16/16, no warnings.
 
+### Unit 25b — derived fields, isosurfaces and streamlines (proposed 2026-10-21; on `render/derived-fields`)
+
+**Owner request:** VQ7 (2026-10-17): "25b, derived |E| and |J|, isosurfaces and streamlines", after Unit 45
+(VQ12); gates VG4 (in 25b also |E|, |J| with streamlines and isosurfaces) and VG8 (scientific validation), with VG6
+(suites and mutants). The owner's "GO" (2026-10-21) asked for this proposal. Documentation only until the owner
+approves.
+
+**What exists (audited on `main` at `81622ca`).**
+- Every result with fields holds what the vectors need, so nothing is solved again: the potential per node, and the
+  electron and hole current through every mesh edge (`BiasPoint::edge_current_n/p` and
+  `TransientSnapshot::edge_current_n/p`, in every result file since Unit 9). The mesh gives each edge its length and
+  its coupling area (`mesh::Edge::coupling_area`), so I_ij / A_ij is the current density along the edge, in A/cm² in
+  every dimension.
+- `render::Geometry` has the linear elements (Kuhn tetrahedra of tensor cells, generated simplices), the slices, the
+  barycentric interpolants and marching triangles (2D contours). It has no marching tetrahedra, no point location
+  and no vector field.
+- `render::Field` is nodal; `field_values` returns one value per node; `nitcad plot` draws field, slice and contour
+  views of it. Line batches have one color and a pixel width.
+
+**Design (proposed):**
+
+| # | Choice | Why | Trade-off |
+|---|---|---|---|
+| DS1 | **E per element:** E = −∇ψ of the linear interpolant on each segment, triangle or tetrahedron, in V/cm; insulators included. | Exact for a linear potential (VG8); the field in the oxide matters as much as in the silicon. | Constant per element; an element whose nodes lie in two regions (the box method puts the interface between nodes) mixes both permittivities' fields. |
+| DS2 | **J per element from the stored edge currents:** for each element, the vector whose projections on its mesh edges best match the edge densities I_ij / A_ij (least squares over the edges with a positive coupling area and both ends in a semiconductor); Jn and Jp separately, J = Jn + Jp. An element without D independent such edges has no current vector. | The solver's own currents (Scharfetter–Gummel), not a second discretization; exact for a uniform current (VG8). A Kuhn tetrahedron of a tensor cell has exactly three axis edges, so the fit is a solve there. | Conduction current only: a transient snapshot's displacement current is not stored (named in the title). |
+| DS3 | **Nodal values for drawing:** each node gets the average of its elements' vectors, weighted by the volume of its control-volume piece in each element (the region rule of 25a); \|E\|, \|J\|, \|Jn\|, \|Jp\| are the magnitudes of those averages. New `render::Field` keys `E` (V/cm), `J`, `Jn`, `Jp` (A/cm²), log scale by default; 1D gives profiles. | Every 25a view (maps, 3D surfaces, slices, contours) draws them unchanged; the average stays inside the node's own region. | Smoothed: a peak narrower than an element is spread (the element values remain available to the code and the tests). |
+| DS4 | **Isosurfaces (3D):** marching tetrahedra on the elements, for any nodal field, one or more levels; triangles oriented toward increasing value, shared edges cut once (watertight), each level colored by its colormap position and drawn translucent over the solid. Values are interpolated in the field's scale (log10 for densities and \|J\|), as the colormaps already are. In 2D the same request draws contour lines (25a). | Isosurfaces are the standard 3D view of depletion edges, channels and current paths; interpolating in the drawn scale puts a 1e16 surface where the map shows 1e16. | Exact planes on a linear field only on a linear scale. |
+| DS5 | **Streamlines of E, J, Jn or Jp (2D and 3D):** the nodal vectors interpolated linearly in each element; adaptive Runge–Kutta (Dormand–Prince 5(4)) with point location by walking element neighbours from a bucket grid; a line stops at the domain boundary, a contact, the edge of the current-carrying region (J), a vanishing field or a length limit. Drawn as lines, in one color over the field map, or over the translucent solid in 3D. | Integrating the same linear field the maps show keeps lines and colors consistent; an adaptive integrator gives VG8's closure test a stated tolerance. | Lines have no arrowheads (vector glyphs are 25c). |
+| DS6 | **Seeds:** J lines start on a contact, spaced so each carries an equal share of its current (the line density then shows the current density); E lines start evenly along a contact or gate; an explicit seed line or plane (`--seeds`) for either. | What a TCAD user reads from a current-line plot is where the current flows and how much. | Equal-current seeding needs the contact's current density along it, read from its edges. |
+| DS7 | **`nitcad plot`:** `--field E|J|Jn|Jp`; `--streamlines E|J|Jn|Jp` over any field view (`--lines <n>`, `--from <contact>`, `--seeds <line or plane>`); `--view iso --field <f> --levels <v,...>`. | One more switch per feature on the existing command. | — |
+| DS8 | **Out of scope:** vector glyphs, clipping, exploded views and filmstrips (25c); displacement current; per-element drawing (DS3's alternative); animated or tube-shaped streamlines; E or J stored in results (the `render` layer reconstructs them). | Keeps the unit to VQ7's list. | — |
+
+**Owner decisions (asked):**
+
+| # | Question | Recommendation |
+|---|---|---|
+| BQ1 | Draw \|E\| and \|J\| as nodal averages (smooth, DS3) or as one value per element (faceted, exact)? | **Nodal averages**, as commercial viewers draw them; the exact element values are what the gates test. |
+| BQ2 | Seed J streamlines on a contact with an equal current per line (DS6), or only evenly along a user's line? | **Equal current per line from a contact**, with `--seeds` for an explicit line: the line density then means current density. |
+| BQ3 | Interpolate isosurfaces in the field's scale (log10 for densities and \|J\|), or always linearly in the value? | **In the field's scale**, so the surface lies where the map's color says the level is. |
+
+**Acceptance gates, fixed before any implementation (VG8, VG4 and VG6 made precise):**
+
+| # | Gate |
+|---|---|
+| BG1 | **E and J exact per element (VG8):** \|E\| of a linear potential is exact (to rounding) on every element of 1D, 2D and 3D tensor and generated meshes; J from edge currents of a uniform current (I_ij = J · t_ij A_ij) is exact on every element; a solved uniform resistor bar gives \|J\| = I / area at every node to the solver's current resolution; Jn + Jp = J. |
+| BG2 | **Isosurfaces (VG8):** marching tetrahedra on a linear field give the exact plane (every vertex on it, normals along the gradient); on a sphere's distance field inside the mesh the surface is closed (no edge used once) and outward, and its enclosed volume converges at second order under refinement (rate measured on three meshes, between 1.8 and 2.2). |
+| BG3 | **Streamlines (VG8):** a uniform field gives straight lines to rounding; the rotational field (−y, x) (linear, so exactly represented) closes after one turn within the integrator's tolerance; lines stop at the boundary and at contacts; equal-current seeds of a uniform bar are evenly spaced, and of a known nonuniform contact current spaced by its integral. |
+| BG4 | **Images (VG4):** WARP references, kept like 25a's: the 2D MOSFET's \|E\| with E lines and its \|J\| with current lines; the 3D MOSFET's isosurfaces of n and its current lines over the translucent solid; within 25a's per-pixel tolerance; the D3D12 debug layer clean in Debug. |
+| BG5 | **No numerical change:** nothing outside `render` and `nitcad plot` changes (a header-boundary test as VG1); the assembly traces byte-identical to `main`'s; every suite passes unchanged. |
+| BG6 | **`nitcad plot`:** each new field, the isosurface view and streamlines written from decks and from result files; a result without edge currents, a 2D isosurface request and an unknown contact refused with a message (exit 1). |
+| BG7 | **Benchmarks:** \|E\| and \|J\| reconstruction, isosurfaces and 100 streamlines on the 3D MOSFET and on a 10⁶-tetrahedron mesh, Release, recorded. |
+| BG8 | **Suites and mutants (VG6):** Release and Debug at every commit, no warnings under `/W4 /WX`; mutants in the gradient, the edge fit, the averaging weights, marching tetrahedra (an orientation, a shared-edge cut), the integrator (a stage weight, the step control), point location and the seeding, all caught. |
+| BG9 | **No scope creep:** nothing outside DS1–DS7; ARCHITECTURE.md 6.14 and 11.3 as built after acceptance. |
+
+**Commits (proposed):** 1) element and nodal E and J, the four field keys and `--field` (BG1, BG5, part of BG6);
+2) marching tetrahedra and `--view iso` (BG2); 3) point location, the integrator, seeding and `--streamlines`
+(BG3); 4) the references and the benchmark (BG4, BG7). About 1,700 lines with tests (VQ7's estimate).
+
+**Risks:** element-mixed interfaces blur E across an oxide–silicon interface on coarse meshes (DS1; the gates use
+single-region elements, the references show it as drawn); streamlines through regions of near-zero current wander
+(stopped by DS5's vanishing-field rule); point location on large 3D meshes (BG7 measures it).
+
 ---
 
 ## New questions the advisor raised (not yet in `ARCHITECTURE.md`)
