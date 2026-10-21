@@ -2703,6 +2703,59 @@ ARCHITECTURE.md 6.14, 11 and 11.3 as built (BG9). For the owner's record: DS2 am
 currents are zero, not absent), DS5 amended (the streamline field, commit 4), and BG6's "2D isosurface request
 refused" superseded by DS4 (2D draws contours at the levels).
 
+### Unit 25c — vector glyphs, the clipping box, the exploded view, transient filmstrips (2026-10-22; on `render/vectors-clip`)
+
+**Owner request:** VQ9 (2026-10-17): "Unit 25c (vector glyphs, clipping box, exploded view, transient filmstrips)
+after 25b, each view droppable"; the plan's views 20 (current arrows on a 2D section), 21 (E arrows on the surface),
+23 (a clipping box, a quarter cut away), 24 (regions and electrodes lifted apart) and 26 (a filmstrip of n as the
+gate switches on), about 1,600 lines. On 2026-10-22 the owner asked for 25c to start without a further approval
+("then start 25c without my approval"): the rulings below (CQ1–CQ4) are taken as recommended under that instruction
+and recorded for the owner's review at acceptance.
+
+**What exists (audited on `main` at `8256cf8`).** Nodal E and J and the no-flux streamline field (Unit 25b), point
+location, slices and convex-polygon clipping (`Geometry::slice`, the internal `clip`), the 3D solid layer by
+control-volume pieces with translucent insulators, contact slabs, the outline shell. Transient results hold
+snapshots with fields, edge currents and rates, but `nitcad plot` converts a snapshot to a bias point with its fields
+and bands only, so \|J\|, streamlines and R are unavailable on transient results (finding; fixed here).
+
+**Design:**
+
+| # | Choice | Why | Trade-off |
+|---|---|---|---|
+| DC1 | **Vector glyphs** of E, J, Jn or Jp (`vectors.hpp`'s streamline field, so tangential on no-flux boundaries): 2D at the points of a regular grid over the device, about N across; 3D at points of the boundary surface, spread evenly by area (a deterministic stratified sample of its faces), or on a slice. Each arrow a flat shaft and head (2D, over the map) or a lit cone on a cylinder (3D), of one length (a fraction of the spacing), colored by \|v\| through the colormap on the field's scale; points with no field drawn nothing. | Direction is what arrows add over a map; one length keeps 20 decades of magnitude readable, and the color carries the magnitude (CQ1). | No length-coded magnitude. |
+| DC2 | **Clipping box** (3D): an axis-aligned box removed from the device. The remaining boundary faces (each clipped to its parts outside the box, as convex pieces) and the cut faces (the box's faces inside the device, from slices of the geometry clipped to the face) are drawn with the field or the regions, insulators translucent as in the field view. | The standard way to see inside a 3D device while keeping its outline; exact from the existing convex clipping. | The box is axis-aligned. |
+| DC3 | **Exploded view** (3D): each region's closed surface (its boundary faces and its side of every interface) and the contact slabs on it, moved apart along an axis (default y, the stack) by a gap per step in the regions' order along it; drawn solid by region or with a field. | Shows the layer stack and buried regions without slicing. | Regions that interlock along the axis still overlap in projection. |
+| DC4 | **Transient filmstrip**: chosen snapshots (all, or every k-th, at most 12) drawn as one field view each and tiled into one image, each titled with its time, on one scale fitted over all of them (CQ2); `--frames <dir>` writes each frame as its own PNG for a video tool. | Comparing frames needs one scale; frames serve presentations. | No animation playback (26). |
+| DC5 | **`nitcad plot`**: `--vectors E\|J\|Jn\|Jp [--arrows n]` over any 2D or 3D field or slice view; `--clip <x0>,<y0>,<z0>:<x1>,<y1>,<z1>` (µm) on 3D field and solid views; `--view exploded [--gap <um>] [--axis x\|y\|z]`; `--view filmstrip [--every k] [--columns c] [--frames <dir>]` on a transient result. Transient snapshots keep their edge currents and rates. | One flag per view on the existing command. | — |
+| DC6 | **Out of scope:** interactive clip handles, animation (26); oblique clipping planes; streamtubes; glyphs scaled by magnitude; video encoding. | Keeps 25c to VQ9's list. | — |
+
+**Rulings (CQ1–CQ4), taken as recommended under the owner's instruction of 2026-10-22:**
+
+| # | Question | Ruling |
+|---|---|---|
+| CQ1 | Arrow length by magnitude, or one length with the magnitude as color? | **One length, colored by \|v\|** on the field's scale. |
+| CQ2 | Filmstrip frames on one shared scale, or each fitted? | **One scale** fitted over all chosen frames. |
+| CQ3 | Exploded gap default? | **12% of the device's extent along the axis**, per region step. |
+| CQ4 | Clipping applied to which views? | **Solid and field views in 3D** (and the vectors over them); slices and isosurfaces unchanged. |
+
+**Acceptance gates:**
+
+| # | Gate |
+|---|---|
+| CG1 | **Glyphs:** in a uniform field every arrow is parallel to it and of the set length; 2D arrows lie on the grid's points inside the device, as many as asked (to ±10%); 3D arrows lie on the boundary and are tangential on no-flux faces; colors are the colormap at \|v\|'s position; a NaN region gets none. |
+| CG2 | **Clipping:** for a box inside a tensor device, the kept boundary pieces and the cut faces together form a closed, outward surface whose enclosed volume is the device's minus the box's (to rounding); a box covering a corner (the quarter cut) likewise; a box missing the device leaves the view unchanged; field values on the cut faces equal the interpolated field. |
+| CG3 | **Exploded:** each region's surface is closed and outward; its volume is the region's control volume total; each region and its contacts move by the stated offset; with a zero gap the surfaces cover the solid view's. |
+| CG4 | **Filmstrip:** one tile per chosen snapshot in time order, one shared scale, titles with the times; `--frames` writes one PNG per frame; transient snapshots draw \|J\| and streamlines. |
+| CG5 | **Images:** WARP references (25a's tolerance): the 2D MOSFET's \|J\| with current arrows, the 3D MOSFET's E arrows on its surface, a quarter-cut clipping box of n, the exploded MOSFET, a filmstrip; a clean D3D12 debug layer in Debug. |
+| CG6 | **`nitcad plot`:** each new flag from decks and result files; refusals with a message (exit 1, or usage 64): vectors in 1D, a clip box in 2D or not a box, a filmstrip of a non-transient result, unknown axes. |
+| CG7 | **No numerical change** (only `render`, `nitcad plot`, tests and documents change); Release and Debug suites at every commit, no warnings under `/W4 /WX`; mutants in the arrow placement and direction, the clipping (inside/outside, the cut faces), the explosion offsets and the filmstrip scale and order, all caught. |
+| CG8 | **Benchmarks:** arrows, clipping and the exploded view on the 10⁶-tetrahedron device, recorded. |
+| CG9 | **No scope creep:** nothing outside DC1–DC5; ARCHITECTURE.md 6.14 and 11.3 as built after acceptance. |
+
+**Commits (planned):** 1) vector glyphs and `--vectors` (CG1); 2) the clipping box and `--clip` (CG2); 3) the exploded
+view (CG3); 4) filmstrips, transient snapshots' currents and rates in the plot, references and benchmarks (CG4, CG5,
+CG8). Each view is independent and can be dropped (VQ9).
+
 ---
 
 ## New questions the advisor raised (not yet in `ARCHITECTURE.md`)
