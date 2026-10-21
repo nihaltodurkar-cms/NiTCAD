@@ -49,6 +49,10 @@ struct RunRecord {
     // The options in effect, as (name, value) pairs, e.g. ("newton.tol_update", 1e-8).
     std::vector<std::pair<std::string, double>> settings;
     Provenance provenance;
+    // The device mesh's mesh::graph_digest (Unit 45, RS3): pairs a result with its mesh exactly.
+    // Not part of input_identity (which covers the mesh already); 0 when unknown (a file written
+    // before Unit 45).
+    std::uint64_t mesh_digest = 0;
 };
 
 struct Sweep {

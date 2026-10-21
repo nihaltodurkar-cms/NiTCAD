@@ -9,11 +9,14 @@
 #include <chrono>
 #include <cmath>
 #include <cstddef>
+#include <cstdint>
 #include <cstdio>
+#include <filesystem>
 #include <vector>
 
 #include "NiTCAD/base/constants.hpp"
 #include "NiTCAD/device/device.hpp"
+#include "NiTCAD/io/files.hpp"
 #include "NiTCAD/mesh/tensor_cells.hpp"
 #include "NiTCAD/mesh/tensor_grid.hpp"
 #include "NiTCAD/physics/insulator.hpp"
@@ -342,6 +345,7 @@ TEST_CASE("rates: what storing them costs (Unit 45, RG5)", "[.benchmark]") {
         const device::Device d = three_d ? pn(*mesh::make_tensor_grid(axis(2e-4, 41), axis(0.5e-4, 11), axis(0.5e-4, 11)))
                                          : pn(*mesh::make_tensor_grid(axis(2e-4, 241), axis(0.5e-4, 61)));
         double best[2] = {1e300, 1e300};
+        std::uintmax_t bytes[2] = {0, 0};
         for (int run = 0; run < 3; ++run) {
             for (const bool store : {true, false}) {
                 solve::BiasOptions o;
@@ -351,10 +355,17 @@ TEST_CASE("rates: what storing them costs (Unit 45, RG5)", "[.benchmark]") {
                 const double t = std::chrono::duration<double>(clock::now() - t0).count();
                 REQUIRE(s.has_value());
                 best[store ? 0 : 1] = std::min(best[store ? 0 : 1], t);
+                if (run == 0) {
+                    const auto file = std::filesystem::temp_directory_path() / (store ? "with.nitsweep" : "without.nitsweep");
+                    REQUIRE(io::save_sweep(file, *s).has_value());
+                    bytes[store ? 0 : 1] = std::filesystem::file_size(file);
+                }
             }
         }
-        std::printf("rates cost, %s diode (%zu nodes, 7 points): with %.3f s, without %.3f s (%+.1f%%)\n",
-                    three_d ? "3D" : "2D", d.mesh().node_count(), best[0], best[1], 100.0 * (best[0] / best[1] - 1.0));
+        std::printf("rates cost, %s diode (%zu nodes, 7 points): with %.3f s, without %.3f s (%+.1f%%); "
+                    "sweep file %ju and %ju bytes (%+.1f%%)\n",
+                    three_d ? "3D" : "2D", d.mesh().node_count(), best[0], best[1], 100.0 * (best[0] / best[1] - 1.0),
+                    bytes[0], bytes[1], 100.0 * (static_cast<double>(bytes[0]) / static_cast<double>(bytes[1]) - 1.0));
     }
 }
 
@@ -392,4 +403,20 @@ TEST_CASE("rates: nonlocal tunnelling puts electrons and holes apart; the balanc
     CHECK(p.rates.band_to_band_n != p.rates.band_to_band_p);
     CHECK(p.rates.net_n != p.rates.net_p);
     check_balance(d, p, 1e-6);
+}
+
+TEST_CASE("rates: every run record carries the mesh digest (Unit 45, RS3)") {
+    const device::Device d = diode2d();
+    const std::uint64_t digest = mesh::graph_digest(d.mesh());
+    REQUIRE(digest != 0);
+    const auto sweep = solve::sweep_bias(d, std::vector<std::vector<double>>{{0.0, 0.0}});
+    REQUIRE(sweep.has_value());
+    CHECK(sweep->run.mesh_digest == digest);
+    solve::TransientOptions o{.t_end_s = 1e-10, .dt_initial_s = 5e-11, .adaptive = false};
+    const std::vector<solve::Waveform> wf{solve::Waveform::constant(0.0), solve::Waveform::constant(0.0)};
+    CHECK(solve::solve_transient(d, wf, o)->run.mesh_digest == digest);
+    // Not part of the identity: a record made by hand without it has the same.
+    auto record = solve::make_run_record(d, solve::BiasOptions{}, std::vector<std::vector<double>>{{0.0, 0.0}});
+    CHECK(record.mesh_digest == digest);
+    CHECK(record.input_identity == sweep->run.input_identity);
 }

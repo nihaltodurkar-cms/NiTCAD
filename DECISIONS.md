@@ -2475,6 +2475,21 @@ assembly observer.
   two batch calls; its two survivors were rerun with a fixed runner, one then caught.) Release 22/22 and Debug 16/16,
   no warnings.
 
+**Commit 2 (the digest and the files; RG4, RG5's sizes), as built.** `RunRecord::mesh_digest` (the device mesh's
+`mesh::graph_digest`, filled by every `make_run_record`; not in `input_identity`; 0 = unknown). Files: the run record's
+key 4 (the digest, written when nonzero), the points' key 18 and the snapshots' key 8 (a rates record of the ten
+vectors, written when the rates were stored); absent in older files, which load with no rates and digest 0.
+- **RG4:** sweep, transient and small-signal files round-trip the rates (signed zero, NaN, a denormal) and the digest
+  bit for bit; a point or snapshot without rates stays without; the pre-Unit-42 fixtures load with no rates and
+  digest 0; every run record (sweep, transient, by hand) carries the device mesh's digest.
+- **RG5 (size), the sweeps above:** 2D diode 13.1 MB with rates against 9.0 MB without (+46%); 3D diode 4.9 against
+  3.5 MB (+40%): five node arrays per point (SRH, Auger, radiative and the two nets) beside the fields, bands and
+  currents. Time stays within noise (+0.1% and +4.5% this run). **For the owner (RQ1):** the default stays on as
+  ruled; `rates = off` saves the 40–46%.
+- **Mutation checks (RG7, Release): 7 of 7 caught** — the digest not written, not read, not filled; the point's and
+  the snapshot's rates not written; the point's not read; a rates key swapped. Release 22/22 and Debug 16/16, no
+  warnings.
+
 ---
 
 ## New questions the advisor raised (not yet in `ARCHITECTURE.md`)

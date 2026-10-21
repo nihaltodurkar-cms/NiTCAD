@@ -330,7 +330,8 @@ add_executable(nitcad_io_test
   tests/io/generated_test.cpp
   tests/io/device_file_test.cpp
   tests/io/provenance_test.cpp
-  tests/io/run_files_test.cpp)
+  tests/io/run_files_test.cpp
+  tests/io/rates_files_test.cpp)
 # The record test reads the private encoding directly.
 target_include_directories(nitcad_io_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/io")
 target_link_libraries(nitcad_io_test PRIVATE NiTCAD::io Catch2::Catch2WithMain)

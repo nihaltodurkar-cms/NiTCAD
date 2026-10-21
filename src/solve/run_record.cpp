@@ -376,7 +376,7 @@ results::RunRecord make_run_record(const device::Device& device, const BiasOptio
     // The quasi-static sweep reads only the potential.
     const bool transport = options.equations == Equations::drift_diffusion;
     initial_state(d, initial, transport, transport && options.models.electrothermal);
-    return {d.value(), named, provenance()};
+    return {d.value(), named, provenance(), mesh::graph_digest(device.mesh())};
 }
 
 results::RunRecord make_run_record(const device::Device& device, const TransientOptions& options,
@@ -405,7 +405,7 @@ results::RunRecord make_run_record(const device::Device& device, const Transient
         d.reals(w.parameters());
     }
     initial_state(d, initial, true);
-    return {d.value(), named, provenance()};
+    return {d.value(), named, provenance(), mesh::graph_digest(device.mesh())};
 }
 
 results::RunRecord make_run_record(const device::Device& device,
@@ -426,7 +426,7 @@ results::RunRecord make_run_record(const device::Device& device,
     d.reals(options.frequencies_Hz);
     d.reals(options.field_frequencies_Hz);
     initial_state(d, initial, options.steady.equations == Equations::drift_diffusion);
-    return {d.value(), named, provenance()};
+    return {d.value(), named, provenance(), mesh::graph_digest(device.mesh())};
 }
 
 results::RunRecord make_run_record(const device::Device& device, const TraceOptions& options,
@@ -444,7 +444,7 @@ results::RunRecord make_run_record(const device::Device& device, const TraceOpti
     device_and_settings(d, device, options.steady, named);
     d.reals(options.start_V);
     initial_state(d, initial, true);
-    return {d.value(), named, provenance()};
+    return {d.value(), named, provenance(), mesh::graph_digest(device.mesh())};
 }
 
 }  // namespace NiTCAD::solve
