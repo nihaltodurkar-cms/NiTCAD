@@ -40,7 +40,9 @@ namespace NiTCAD::solve {
 
 struct SmallSignalOptions {
     // The operating points (equations: drift_diffusion or equilibrium_poisson) and the small-signal
-    // system's models, scaling and linear solver configuration.
+    // system's models, scaling and linear solver configuration. With backend gmres_ilut the
+    // operating points use it and the small-signal systems are solved by eigen_sparse_lu (Unit 44:
+    // GMRES leaves the admittances a coarse resolution).
     BiasOptions steady;
     std::vector<double> frequencies_Hz;        // finite and >= 0, at least one
     std::vector<double> field_frequencies_Hz;  // each one of frequencies_Hz: keep the fields there

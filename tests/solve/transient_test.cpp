@@ -179,6 +179,33 @@ TEST_CASE("transient: PARDISO gives Eigen SparseLU's switch-on (Unit 18)", "[par
     REQUIRE(worst < 1e-9);
 }
 
+TEST_CASE("transient: GMRES-ILUT gives Eigen SparseLU's switch-on (Unit 44)", "[gmres]") {
+    // LG3: the PARDISO case above with gmres_ilut in strict mode, fixed BDF2 steps.
+    const device::Device d = diode(*mesh::make_tensor_grid(diode_axis()));
+    const auto wf = waveforms(*Waveform::step(0.0, 0.5, 0.0), Waveform::constant(0.0));
+    solve::TransientOptions o{.t_end_s = 2e-9, .dt_initial_s = 2e-11, .adaptive = false};
+    const auto e = *solve::solve_transient(d, wf, o);
+    o.steady.linear = {.backend = linalg::SolverBackend::gmres_ilut,
+                       .fallback = linalg::LinearFallback::none};
+    const auto g = *solve::solve_transient(d, wf, o);
+    REQUIRE(!e.stopped);
+    REQUIRE(!g.stopped);
+    REQUIRE(g.points.size() == e.points.size());
+    double scale = 0.0, worst = 0.0;
+    for (const auto& q : e.points) scale = std::max(scale, largest_abs(q.terminal_current));
+    for (std::size_t k = 0; k < e.points.size(); ++k) {
+        REQUIRE(g.points[k].time_s == e.points[k].time_s);
+        for (std::size_t c = 0; c < 2; ++c) {
+            worst = std::max(worst, std::abs(g.points[k].terminal_current[c] -
+                                             e.points[k].terminal_current[c]) /
+                                        scale);
+        }
+    }
+    std::printf("gmres transient: %zu steps, worst current difference %.2e of the largest\n",
+                e.points.size(), worst);
+    REQUIRE(worst < 1e-9);
+}
+
 TEST_CASE("transient: measured order of backward Euler and BDF2", "[.transient]") {
     // Fixed steps over a smooth turn-on ramp (0 to 0.6 V in 1 ns); the error of the anode's total
     // current and charge at 1 ns against a BDF2 run of 5120 steps. Measured ratios per halving:

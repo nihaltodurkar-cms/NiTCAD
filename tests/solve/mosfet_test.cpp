@@ -436,6 +436,66 @@ TEST_CASE("mosfet: PARDISO gives the Id-Vg curve of Eigen SparseLU, and its cost
     REQUIRE(differ < 1e-8);
 }
 
+TEST_CASE("mosfet: GMRES-ILUT against SparseLU, one Newton step and the Id-Vg sweep (Unit 44, LG4)",
+          "[.benchmark][gmres_benchmark]") {
+    // The 2D MOSFET (90 x 50 nodes): one Newton step's linear solve on the Jacobian at Vg = 1 V,
+    // Vds = 0.05 V (fresh solver: analysis, factorization or ILUT, one solve), then the Id-Vg
+    // sweep with each backend: time, GMRES iterations and fallbacks at the default settings.
+    // PARDISO too when an MKL runtime is configured. Run by hand in Release; the results are in
+    // DECISIONS.md (Unit 44, LG4).
+    const device::Device d = mosfet();
+    const auto Vg = linspace(-0.5, 1.0, 16);
+    std::vector<std::vector<double>> points;
+    for (const double v : Vg) points.push_back({0.0, 0.05, 0.0, v});
+    solve::BiasOptions gmres;
+    gmres.linear = {.backend = linalg::SolverBackend::gmres_ilut};
+    using clock = std::chrono::steady_clock;
+    auto t0 = clock::now();
+    const auto e = solve::sweep_bias(d, points);
+    const double sweep_e = std::chrono::duration<double>(clock::now() - t0).count();
+    t0 = clock::now();
+    const auto g = solve::sweep_bias(d, points, gmres);
+    const double sweep_g = std::chrono::duration<double>(clock::now() - t0).count();
+    REQUIRE(e.has_value());
+    REQUIRE(g.has_value());
+    REQUIRE(!e->stopped);
+    REQUIRE(!g->stopped);
+    double worst = 0.0;
+    std::size_t newton_e = 0, newton_g = 0;
+    for (std::size_t k = 0; k < points.size(); ++k) {
+        const double Ie = e->points[k].terminal_current[1], Ig = g->points[k].terminal_current[1];
+        worst = std::max(worst, std::abs(Ig - Ie) / std::max(1e-8 * std::abs(Ie),
+                                                             e->points[k].terminal_current_resolution[1]));
+        newton_e += e->points[k].convergence.iterations.size();
+        newton_g += g->points[k].convergence.iterations.size();
+    }
+
+    std::vector<double> rhs;
+    const linalg::SparseMatrix j =
+        device_jacobian(d, points.back(), e->points.back().fields.potential_V, rhs);
+    const StepCost sg = newton_step_cost(j, rhs, gmres.linear);
+    const StepCost se = newton_step_cost(j, rhs, {});
+    double scale = 0.0, differ = 0.0;
+    for (const double v : se.x) scale = std::max(scale, std::abs(v));
+    for (std::size_t i = 0; i < se.x.size(); ++i) {
+        differ = std::max(differ, std::abs(sg.x[i] - se.x[i]) / scale);
+    }
+    std::printf("gmres mosfet (%zu unknowns, %zu nonzeros): one step SparseLU %.1f ms, held %.1f "
+                "MB; GMRES-ILUT %.1f ms, held %.1f MB, %zu iterations, fell back %s; step "
+                "difference %.2e\n",
+                static_cast<std::size_t>(j.rows()), j.nonzeros(), 1e3 * se.seconds, se.held_MB,
+                1e3 * sg.seconds, sg.held_MB, sg.iterations, sg.fell_back ? "yes" : "no", differ);
+    std::printf("gmres mosfet Id-Vg: SparseLU %.1f s, %zu Newton iterations; GMRES-ILUT %.1f s, "
+                "%zu Newton iterations; worst |I_g - I_e| / max(1e-8 |I_e|, resolution) %.3f\n",
+                sweep_e, newton_e, sweep_g, newton_g, worst);
+    if (!mkl_test::configured_path.empty() && mkl_test::runtime().has_value()) {
+        const StepCost sp = newton_step_cost(j, rhs, {.backend = linalg::SolverBackend::mkl_pardiso});
+        std::printf("  PARDISO 1 thread one step %.1f ms, held %.1f MB\n", 1e3 * sp.seconds,
+                    sp.held_MB);
+    }
+    REQUIRE(worst <= 1.0);
+}
+
 TEST_CASE("mosfet: the on current is mesh independent (legacy gate)", "[.mosfet]") {
     // Legacy test_mosfet_mesh_independence: Id(Vg = 1 V, Vds = 0.05 V) on nx = 90, ny = 50 and on
     // nx = 180, ny = 100 within 10%.

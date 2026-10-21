@@ -497,3 +497,56 @@ TEST_CASE("deck build: electron_mobility (Unit 38)", "[deck]") {
     CHECK(failure(diode_deck + "[models]\nelectron_mobility = arora\n").find(
               "electron_mobility is caughey_thomas or masetti") != std::string::npos);
 }
+
+TEST_CASE("deck build: the GMRES-ILUT keys and their run record (Unit 44, LG5)", "[deck]") {
+    const std::string solver = R"(
+[solver]
+backend = gmres_ilut
+restart = 40
+max_linear_iterations = 500
+ilut_drop = 1e-5
+ilut_fill = 20
+linear_fallback = none
+)";
+    const deck::Plan p = must(diode_deck + solver);
+    const linalg::SolverConfig& l = p.options.linear;
+    CHECK(l.backend == linalg::SolverBackend::gmres_ilut);
+    CHECK(l.restart == 40);
+    CHECK(l.max_iterations == 500);
+    CHECK(l.ilut_drop_tolerance == 1e-5);
+    CHECK(l.ilut_fill_factor == 20);
+    CHECK(l.fallback == linalg::LinearFallback::none);
+    const deck::Plan d = must(diode_deck + "[solver]\nbackend = gmres_ilut\n");
+    CHECK(d.options.linear.fallback == linalg::LinearFallback::sparse_lu);
+
+    // Each key is in the run's identity with the iterative backend; with a direct backend the keys
+    // do not apply and the identity is the plain deck's.
+    const auto identity = [](const deck::Plan& q) {
+        return solve::make_run_record(q.device, q.options, q.points).input_identity;
+    };
+    const deck::Plan plain = must(diode_deck);
+    CHECK(identity(d) != identity(plain));
+    for (const char* key : {"restart = 41", "max_linear_iterations = 501", "ilut_drop = 2e-5",
+                            "ilut_fill = 21", "linear_fallback = sparse_lu"}) {
+        CAPTURE(key);
+        CHECK(identity(must(diode_deck + solver + key + "\n")) != identity(p));
+    }
+    const deck::Plan direct =
+        must(diode_deck + "[solver]\nrestart = 40\nilut_fill = 20\nlinear_fallback = none\n");
+    CHECK(identity(direct) == identity(plain));
+
+    const std::string head = "[mesh]\ntype = tensor\nx = 0, 1um, 2um\n[region si]\nmaterial = silicon\n"
+                             "[contact a]\nkind = ohmic\npatch = x_min\n[contact b]\nkind = ohmic\npatch = x_max\n"
+                             "[equilibrium]\n[solver]\n";
+    const auto expect = [&](const std::string& entry, const std::string& what) {
+        const std::string message = failure(head + entry + "\n");
+        INFO(message);
+        CHECK(message.find(what) != std::string::npos);
+    };
+    expect("backend = gmres", "t.deck:14: backend is eigen, pardiso or gmres_ilut");
+    expect("restart = 0", "t.deck:14: 'restart' must lie in 1..1000");
+    expect("max_linear_iterations = 0", "t.deck:14: 'max_linear_iterations' must lie in 1..");
+    expect("ilut_drop = 1", "t.deck:14: ilut_drop is in [0, 1)");
+    expect("ilut_fill = 1001", "t.deck:14: 'ilut_fill' must lie in 1..1000");
+    expect("linear_fallback = pardiso", "t.deck:14: linear_fallback is sparse_lu or none");
+}

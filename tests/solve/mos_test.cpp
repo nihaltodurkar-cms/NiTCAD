@@ -501,6 +501,24 @@ TEST_CASE("mos: PARDISO gives Eigen SparseLU's quasi-static C-V (Unit 18)", "[pa
     REQUIRE(worst_psi < 1e-10);
 }
 
+TEST_CASE("mos: GMRES-ILUT gives Eigen SparseLU's quasi-static C-V (Unit 44)", "[gmres]") {
+    solve::BiasOptions o = quasi_static();
+    o.linear = {.backend = linalg::SolverBackend::gmres_ilut,
+                .fallback = linalg::LinearFallback::none};
+    const Curve g = cv(moscap_1d(), range(-2.0, 2.0, 0.05), o);
+    const Curve& e = fixture_curve();
+    double scale = 0.0, worst = 0.0, worst_psi = 0.0;
+    for (const double q : e.Qg) scale = std::max(scale, std::abs(q));
+    for (std::size_t k = 0; k < e.Qg.size(); ++k) {
+        worst = std::max(worst, std::abs(g.Qg[k] - e.Qg[k]) / scale);
+        worst_psi = std::max(worst_psi, std::abs(g.phi_s[k] - e.phi_s[k]));
+    }
+    std::printf("gmres MOS-C: gate charge within %.2e of the largest, phi_s within %.2e V\n",
+                worst, worst_psi);
+    REQUIRE(worst < 1e-10);
+    REQUIRE(worst_psi < 1e-10);
+}
+
 TEST_CASE("mos: P6 C_min and W_max match the values derived from the parameters") {
     const Curve& c = fixture_curve();
     const auto lm = legacy().analytic_landmarks();

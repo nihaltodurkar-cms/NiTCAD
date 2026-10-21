@@ -67,6 +67,27 @@ enum class SolverBackend : std::uint8_t {
     // acceptance tolerances, not bit for bit, and may differ at rounding level between thread
     // counts (6.8).
     mkl_pardiso,
+    // GMRES with an ILUT preconditioner (Unit 44), opt-in: an iterative solve, real and complex.
+    // "factorize" builds Eigen's IncompleteLUT of the (equilibrated) matrix with its own AMD
+    // ordering; "solve" runs the in-tree restarted GMRES with right preconditioning from x = 0 until
+    // the componentwise backward error of the true iterate is at most max_backward_error, measured
+    // at the end of every cycle (src/linalg/gmres.hpp). No refinement steps: GMRES continues
+    // instead. No pivot checks (min_pivot_ratio is used only by a fallback), so as with
+    // min_pivot_ratio = 0 a floating region is not detected: GMRES can return an x of huge norm
+    // whose backward error is small (measured |x| ~ 1e17); the device layer rejects floating
+    // regions by topology. A system that does not converge within max_iterations, or whose
+    // ILUT build fails, is solved by Eigen SparseLU when fallback is sparse_lu
+    // (SolveReport::fell_back), or is inaccurate_solve when it is none. Single-threaded; results
+    // agree with eigen_sparse_lu within max_backward_error, not bit for bit.
+    gmres_ilut,
+};
+
+// What gmres_ilut does with a system it cannot solve (Unit 44, LQ2).
+enum class LinearFallback : std::uint8_t {
+    // Factorize that system with Eigen SparseLU and solve it directly, with the direct checks.
+    sparse_lu,
+    // Fail with inaccurate_solve (the strict behaviour, which keeps the failure rate visible).
+    none,
 };
 
 struct SolverConfig {
@@ -97,6 +118,18 @@ struct SolverConfig {
     // singular_system: a floating region gives one. Between 1e-13 and min_pivot_ratio PARDISO
     // cannot tell a floating region from a valid system; the acceptance check still applies.
     double min_pivot_ratio = 1e-11;
+
+    // gmres_ilut only (validated for every backend). Basis vectors per GMRES cycle, 1 to 1000.
+    int restart = 30;
+    // Products with the matrix over all cycles of one solve, at least 1.
+    int max_iterations = 1000;
+    // ILUT drop tolerance, in [0, 1): eliminations by a multiplier of at most this, and U entries
+    // of at most this times their row's 2-norm, are dropped. 0 drops nothing by size and can leave
+    // a zero pivot.
+    double ilut_drop_tolerance = 1e-4;
+    // ILUT fill, 1 to 1000: each row of L and of U keeps at most fill * nnz(A) / (2 n) entries.
+    int ilut_fill_factor = 10;
+    LinearFallback fallback = LinearFallback::sparse_lu;
 };
 
 struct FactorizationReport {
@@ -110,7 +143,8 @@ struct FactorizationReport {
 // The backend's own work since the solver was created: symbolic analyses (an ordering and symbolic
 // factorization), numeric factorizations, and triangular solves (one per solve() call and one per
 // refinement step). With mkl_pardiso these are its phases 11, 22 and 33, counted where they are
-// called; with eigen_sparse_lu its analyzePattern, factorize and solve.
+// called; with eigen_sparse_lu its analyzePattern, factorize and solve; with gmres_ilut ILUT's
+// ordering, its builds and its applications (one per GMRES iteration and one per cycle), not the fallback's.
 struct BackendCounts {
     std::size_t analyses = 0;
     std::size_t factorizations = 0;
@@ -124,13 +158,20 @@ struct SolveReport {
     double relative_residual;
     // Iterative-refinement steps kept (a step that did not reduce the backward error is undone).
     std::size_t refinement_steps;
-    // Iterations used, for iterative backends only; empty for a direct backend.
+    // Iterations used, for iterative backends only (gmres_ilut: products with the matrix, including
+    // those spent before a fallback); empty for a direct backend.
     std::optional<std::size_t> iterations;
+    // gmres_ilut: the system was solved by the SparseLU fallback (LinearFallback::sparse_lu), at
+    // this solve or at an earlier one of the same factorization.
+    bool fell_back = false;
 };
 
 namespace detail {
 template <MatrixScalar Scalar>
 class Backend;
+template <MatrixScalar Scalar>
+class Gmres;
+struct Factorization;
 }
 
 // The solver of A x = b for a real (LinearSolver) or complex (ComplexLinearSolver) matrix. The
@@ -146,7 +187,8 @@ public:
     // Errors: invalid_input if the backend is unknown, or mkl_pardiso without the MKL runtime
     // loaded, threads is not supported by the backend, max_backward_error is not a positive finite
     // number, max_refinement_steps is negative, min_pivot_ratio is not in [0, 1), or
-    // min_pivot_ratio is nonzero while equilibrate is false.
+    // min_pivot_ratio is nonzero while equilibrate is false, or a gmres_ilut setting (restart,
+    // max_iterations, ilut_drop_tolerance, ilut_fill_factor, fallback) is out of its range.
     [[nodiscard]] static std::expected<BasicLinearSolver, base::Error> create(
         const SolverConfig& config);
 
@@ -181,8 +223,23 @@ private:
     [[nodiscard]] std::expected<void, base::Error> analyze_unchecked(const Matrix& a);
     [[nodiscard]] std::expected<FactorizationReport, base::Error> factorize_unchecked(
         const Matrix& a);
-    // Solves the equilibrated system for right-hand side rhs into x (unscaled).
-    void scaled_solve(std::span<const Scalar> rhs, std::span<Scalar> x);
+    // A backend's factorization as reported, or rejected by its pivots (min_pivot_ratio) or
+    // perturbed pivots.
+    [[nodiscard]] std::expected<FactorizationReport, base::Error> check_pivots(
+        std::expected<detail::Factorization, base::Error> factorization) const;
+    // gmres_ilut: factorizes scaled_values_ with the SparseLU fallback, analyzing it first when the
+    // pattern is new to it, with the direct checks; on success later solves are direct.
+    [[nodiscard]] std::expected<FactorizationReport, base::Error> factorize_fallback();
+    // A direct solve with refinement through backend; x, omega and steps as solve() reports them.
+    [[nodiscard]] std::expected<SolveReport, base::Error> direct_solve(detail::Backend<Scalar>& backend,
+                                                                     std::span<const Scalar> b,
+                                                                     std::span<Scalar> x);
+    // gmres_ilut: GMRES on the equilibrated system, then the fallback as configured.
+    [[nodiscard]] std::expected<SolveReport, base::Error> iterative_solve(std::span<const Scalar> b,
+                                                                        std::span<Scalar> x);
+    // Solves the equilibrated system for right-hand side rhs into x (unscaled) through backend.
+    void scaled_solve(detail::Backend<Scalar>& backend, std::span<const Scalar> rhs,
+                      std::span<Scalar> x);
     // Componentwise backward error of x on the original system; fills residual_ with b - A x.
     [[nodiscard]] double backward_error(std::span<const Scalar> b, std::span<const Scalar> x);
     void reset() noexcept;
@@ -201,6 +258,11 @@ private:
     std::vector<Scalar> work_x_;
     std::vector<Scalar> correction_;
     std::vector<Scalar> previous_x_;
+    // gmres_ilut only: the GMRES workspace, and the SparseLU fallback (created at its first use).
+    std::unique_ptr<detail::Gmres<Scalar>> gmres_;
+    std::unique_ptr<detail::Backend<Scalar>> fallback_;
+    bool fallback_analyzed_ = false;  // fallback_ holds an analysis of matrix_'s pattern
+    bool direct_ = false;             // this factorization is solved by fallback_
     bool analyzed_ = false;
     bool factorized_ = false;
     std::size_t analyses_ = 0;

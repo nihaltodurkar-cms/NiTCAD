@@ -11,7 +11,9 @@
 #include <utility>
 
 #include "NiTCAD/base/contract.hpp"
+#include "eigen_ilut.hpp"
 #include "eigen_sparse_lu.hpp"
+#include "gmres.hpp"
 #include "mkl_api.hpp"
 #include "mkl_pardiso.hpp"
 
@@ -98,9 +100,39 @@ std::expected<BasicLinearSolver<Scalar>, base::Error> BasicLinearSolver<Scalar>:
                                              std::nullopt, static_cast<double>(config.threads)));
             }
             break;
+        case SolverBackend::gmres_ilut:
+            if (config.threads != 1) {
+                return std::unexpected(error(base::ErrorCode::invalid_input,
+                                             "gmres_ilut supports exactly 1 thread", std::nullopt,
+                                             static_cast<double>(config.threads)));
+            }
+            break;
         default:
             return std::unexpected(
                 error(base::ErrorCode::invalid_input, "unknown linear solver backend"));
+    }
+    if (config.restart < 1 || config.restart > 1000) {
+        return std::unexpected(error(base::ErrorCode::invalid_input,
+                                     "restart must be in [1, 1000]", std::nullopt,
+                                     static_cast<double>(config.restart)));
+    }
+    if (config.max_iterations < 1) {
+        return std::unexpected(error(base::ErrorCode::invalid_input,
+                                     "max_iterations must be at least 1", std::nullopt,
+                                     static_cast<double>(config.max_iterations)));
+    }
+    if (!(config.ilut_drop_tolerance >= 0.0 && config.ilut_drop_tolerance < 1.0)) {
+        return std::unexpected(error(base::ErrorCode::invalid_input,
+                                     "ilut_drop_tolerance must be in [0, 1)", std::nullopt,
+                                     config.ilut_drop_tolerance));
+    }
+    if (config.ilut_fill_factor < 1 || config.ilut_fill_factor > 1000) {
+        return std::unexpected(error(base::ErrorCode::invalid_input,
+                                     "ilut_fill_factor must be in [1, 1000]", std::nullopt,
+                                     static_cast<double>(config.ilut_fill_factor)));
+    }
+    if (config.fallback != LinearFallback::sparse_lu && config.fallback != LinearFallback::none) {
+        return std::unexpected(error(base::ErrorCode::invalid_input, "unknown linear fallback"));
     }
     if (!std::isfinite(config.max_backward_error) || config.max_backward_error <= 0.0) {
         return std::unexpected(error(base::ErrorCode::invalid_input,
@@ -130,6 +162,10 @@ template <MatrixScalar Scalar>
 BasicLinearSolver<Scalar>::BasicLinearSolver(const SolverConfig& config) : config_(config) {
     if (config.backend == SolverBackend::mkl_pardiso) {
         backend_ = std::make_unique<detail::PardisoBackend<Scalar>>(config.threads);
+    } else if (config.backend == SolverBackend::gmres_ilut) {
+        backend_ = std::make_unique<detail::IlutBackend<Scalar>>(config.ilut_drop_tolerance,
+                                                                 config.ilut_fill_factor);
+        gmres_ = std::make_unique<detail::Gmres<Scalar>>();
     } else {
         backend_ = std::make_unique<detail::SparseLuBackend<Scalar>>();
     }
@@ -155,6 +191,10 @@ BasicLinearSolver<Scalar>::BasicLinearSolver(BasicLinearSolver&& other) noexcept
       work_x_(std::move(other.work_x_)),
       correction_(std::move(other.correction_)),
       previous_x_(std::move(other.previous_x_)),
+      gmres_(std::move(other.gmres_)),
+      fallback_(std::move(other.fallback_)),
+      fallback_analyzed_(std::exchange(other.fallback_analyzed_, false)),
+      direct_(std::exchange(other.direct_, false)),
       analyzed_(std::exchange(other.analyzed_, false)),
       factorized_(std::exchange(other.factorized_, false)),
       analyses_(other.analyses_),
@@ -176,6 +216,10 @@ BasicLinearSolver<Scalar>& BasicLinearSolver<Scalar>::operator=(
         work_x_ = std::move(other.work_x_);
         correction_ = std::move(other.correction_);
         previous_x_ = std::move(other.previous_x_);
+        gmres_ = std::move(other.gmres_);
+        fallback_ = std::move(other.fallback_);
+        fallback_analyzed_ = std::exchange(other.fallback_analyzed_, false);
+        direct_ = std::exchange(other.direct_, false);
         analyzed_ = std::exchange(other.analyzed_, false);
         factorized_ = std::exchange(other.factorized_, false);
         analyses_ = other.analyses_;
@@ -191,6 +235,7 @@ template <MatrixScalar Scalar>
 void BasicLinearSolver<Scalar>::reset() noexcept {
     analyzed_ = false;
     factorized_ = false;
+    direct_ = false;
 }
 
 template <MatrixScalar Scalar>
@@ -231,6 +276,7 @@ std::expected<void, base::Error> BasicLinearSolver<Scalar>::analyze_unchecked(co
                                          static_cast<std::size_t>(it - used.begin())));
         }
     }
+    fallback_analyzed_ = false;
     if (auto analyzed = backend_->analyze(a); !analyzed) {
         return analyzed;
     }
@@ -323,14 +369,32 @@ std::expected<FactorizationReport, base::Error> BasicLinearSolver<Scalar>::facto
         weighted_row_max_[r] = weighted;
     }
 
-    const auto factorization = backend_->factorize(scaled_values_);
+    direct_ = false;
+    auto factorization = check_pivots(backend_->factorize(scaled_values_));
+    // gmres_ilut (LQ2): an ILUT that cannot be built falls back to SparseLU; running out of
+    // memory does not (the direct factorization needs more).
+    if (!factorization && gmres_ && config_.fallback == LinearFallback::sparse_lu &&
+        factorization.error().code == base::ErrorCode::inaccurate_solve) {
+        factorization = factorize_fallback();
+    }
     if (!factorization) {
         reset();
-        return std::unexpected(factorization.error());
+        return std::unexpected(std::move(factorization.error()));
+    }
+    std::ranges::copy(values, matrix_.values().begin());
+    factorized_ = true;
+    ++factorizations_;
+    return factorization;
+}
+
+template <MatrixScalar Scalar>
+std::expected<FactorizationReport, base::Error> BasicLinearSolver<Scalar>::check_pivots(
+    std::expected<detail::Factorization, base::Error> factorization) const {
+    if (!factorization) {
+        return std::unexpected(std::move(factorization.error()));
     }
     const auto& pivots = factorization->pivots;
     if (pivots && pivots->ratio < config_.min_pivot_ratio) {
-        reset();
         return std::unexpected(error(base::ErrorCode::singular_system,
                                      "pivot ratio below min_pivot_ratio: the matrix is singular "
                                      "to working precision (for example a floating region)",
@@ -339,30 +403,48 @@ std::expected<FactorizationReport, base::Error> BasicLinearSolver<Scalar>::facto
     // A perturbed pivot was below 1e-13 of the largest: under any useful min_pivot_ratio.
     const std::size_t perturbed = factorization->perturbed_pivots.value_or(0);
     if (config_.min_pivot_ratio > 0.0 && perturbed > 0) {
-        reset();
         return std::unexpected(error(base::ErrorCode::singular_system,
                                      "the backend perturbed tiny pivots: the matrix is singular "
                                      "to working precision (for example a floating region)",
                                      std::nullopt, static_cast<double>(perturbed)));
     }
-    std::ranges::copy(values, matrix_.values().begin());
-    factorized_ = true;
-    ++factorizations_;
     return FactorizationReport{
         .pivot_ratio = pivots ? std::optional<double>(pivots->ratio) : std::nullopt,
         .perturbed_pivots = factorization->perturbed_pivots};
 }
 
 template <MatrixScalar Scalar>
-void BasicLinearSolver<Scalar>::scaled_solve(std::span<const Scalar> rhs, std::span<Scalar> x) {
+std::expected<FactorizationReport, base::Error> BasicLinearSolver<Scalar>::factorize_fallback() {
+    if (!fallback_) {
+        fallback_ = std::make_unique<detail::SparseLuBackend<Scalar>>();
+        fallback_analyzed_ = false;
+    }
+    if (!fallback_analyzed_) {
+        if (auto analyzed = fallback_->analyze(matrix_); !analyzed) {
+            return std::unexpected(std::move(analyzed.error()));
+        }
+        fallback_analyzed_ = true;
+    }
+    auto factorization = check_pivots(fallback_->factorize(scaled_values_));
+    if (!factorization) {
+        fallback_analyzed_ = false;  // as for the primary backend: nothing kept after a failure
+        return factorization;
+    }
+    direct_ = true;
+    return factorization;
+}
+
+template <MatrixScalar Scalar>
+void BasicLinearSolver<Scalar>::scaled_solve(detail::Backend<Scalar>& backend,
+                                             std::span<const Scalar> rhs, std::span<Scalar> x) {
     if (!config_.equilibrate) {
-        backend_->solve(rhs, x);
+        backend.solve(rhs, x);
         return;
     }
     for (std::size_t i = 0; i < rhs.size(); ++i) {
         work_rhs_[i] = rhs[i] * row_scale_[i];
     }
-    backend_->solve(work_rhs_, work_x_);
+    backend.solve(work_rhs_, work_x_);
     for (std::size_t i = 0; i < x.size(); ++i) {
         x[i] = work_x_[i] * col_scale_[i];
     }
@@ -425,37 +507,114 @@ std::expected<SolveReport, base::Error> BasicLinearSolver<Scalar>::solve(std::sp
                                      "right-hand side contains a non-finite value", k,
                                      reported(b[k])));
     }
-    double omega = 0.0;
-    std::size_t steps = 0;
     try {
-        scaled_solve(b, x);
-        if (const std::size_t k = first_non_finite<Scalar>(x); k < x.size()) {
-            return std::unexpected(error(base::ErrorCode::inaccurate_solve,
-                                         "solution contains a non-finite value", k));
+        if (gmres_ && !direct_) {
+            return iterative_solve(b, x);
         }
-        omega = backward_error(b, x);
-        for (int attempt = 0;
-             !(omega <= config_.max_backward_error) && attempt < config_.max_refinement_steps;
-             ++attempt) {
-            scaled_solve(residual_, correction_);
-            std::ranges::copy(x, previous_x_.begin());
-            for (std::size_t i = 0; i < x.size(); ++i) {
-                x[i] += correction_[i];
-            }
-            const double refined = first_non_finite<Scalar>(x) < x.size()
-                                       ? std::numeric_limits<double>::quiet_NaN()
-                                       : backward_error(b, x);
-            if (!(refined < omega)) {
-                // No progress: keep the better iterate, restore its residual, and stop.
-                std::ranges::copy(previous_x_, x.begin());
-                omega = backward_error(b, x);
-                break;
-            }
-            omega = refined;
-            ++steps;
+        auto solved = direct_solve(direct_ ? *fallback_ : *backend_, b, x);
+        if (solved && gmres_) {
+            solved->iterations = 0;
+            solved->fell_back = true;
         }
+        return solved;
     } catch (const std::bad_alloc&) {
         return std::unexpected(out_of_memory());
+    }
+}
+
+template <MatrixScalar Scalar>
+std::expected<SolveReport, base::Error> BasicLinearSolver<Scalar>::iterative_solve(
+    std::span<const Scalar> b, std::span<Scalar> x) {
+    const std::span<const Index> offsets = matrix_.row_offsets();
+    const std::span<const Index> columns = matrix_.col_indices();
+    const bool scaled = config_.equilibrate;
+    // GMRES runs on the system the preconditioner was built from, R A C y = R b with x = C y.
+    const auto apply = [&](std::span<const Scalar> v, std::span<Scalar> w) {
+        for (std::size_t r = 0; r < w.size(); ++r) {
+            Scalar s{};
+            for (auto k = static_cast<std::size_t>(offsets[r]);
+                 k < static_cast<std::size_t>(offsets[r + 1]); ++k) {
+                s += scaled_values_[k] * v[static_cast<std::size_t>(columns[k])];
+            }
+            w[r] = s;
+        }
+    };
+    const auto precondition = [&](std::span<const Scalar> v, std::span<Scalar> w) {
+        backend_->solve(v, w);
+    };
+    // The acceptance measure on the original system; a non-finite x gives NaN, which stops GMRES.
+    const auto measure = [&](std::span<const Scalar> y, std::span<Scalar> r) {
+        for (std::size_t i = 0; i < x.size(); ++i) {
+            x[i] = scaled ? y[i] * col_scale_[i] : y[i];
+        }
+        const double omega = backward_error(b, x);
+        for (std::size_t i = 0; i < r.size(); ++i) {
+            r[i] = scaled ? residual_[i] * row_scale_[i] : residual_[i];
+        }
+        return omega;
+    };
+    const detail::GmresResult result = gmres_->solve(
+        {.restart = static_cast<std::size_t>(config_.restart),
+         .max_iterations = static_cast<std::size_t>(config_.max_iterations),
+         .tolerance = config_.max_backward_error},
+        apply, precondition, measure, std::span<Scalar>(work_x_));
+    if (result.converged) {
+        const double b_norm = inf_norm<Scalar>(b);
+        const double r_norm = inf_norm<Scalar>(residual_);
+        return SolveReport{.backward_error = result.measure,
+                           .relative_residual = b_norm > 0.0 ? r_norm / b_norm : r_norm,
+                           .refinement_steps = 0,
+                           .iterations = result.iterations,
+                           .fell_back = false};
+    }
+    if (config_.fallback == LinearFallback::none) {
+        return std::unexpected(error(base::ErrorCode::inaccurate_solve,
+                                     "GMRES did not reach max_backward_error in " +
+                                         std::to_string(result.iterations) + " iterations",
+                                     std::nullopt, result.measure));
+    }
+    // LQ2: this factorization is solved directly from now on, and the report says so.
+    if (auto factorization = factorize_fallback(); !factorization) {
+        return std::unexpected(std::move(factorization.error()));
+    }
+    auto solved = direct_solve(*fallback_, b, x);
+    if (solved) {
+        solved->iterations = result.iterations;
+        solved->fell_back = true;
+    }
+    return solved;
+}
+
+template <MatrixScalar Scalar>
+std::expected<SolveReport, base::Error> BasicLinearSolver<Scalar>::direct_solve(
+    detail::Backend<Scalar>& backend, std::span<const Scalar> b, std::span<Scalar> x) {
+    double omega = 0.0;
+    std::size_t steps = 0;
+    scaled_solve(backend, b, x);
+    if (const std::size_t k = first_non_finite<Scalar>(x); k < x.size()) {
+        return std::unexpected(error(base::ErrorCode::inaccurate_solve,
+                                     "solution contains a non-finite value", k));
+    }
+    omega = backward_error(b, x);
+    for (int attempt = 0;
+         !(omega <= config_.max_backward_error) && attempt < config_.max_refinement_steps;
+         ++attempt) {
+        scaled_solve(backend, residual_, correction_);
+        std::ranges::copy(x, previous_x_.begin());
+        for (std::size_t i = 0; i < x.size(); ++i) {
+            x[i] += correction_[i];
+        }
+        const double refined = first_non_finite<Scalar>(x) < x.size()
+                                   ? std::numeric_limits<double>::quiet_NaN()
+                                   : backward_error(b, x);
+        if (!(refined < omega)) {
+            // No progress: keep the better iterate, restore its residual, and stop.
+            std::ranges::copy(previous_x_, x.begin());
+            omega = backward_error(b, x);
+            break;
+        }
+        omega = refined;
+        ++steps;
     }
     if (!(omega <= config_.max_backward_error)) {
         return std::unexpected(error(base::ErrorCode::inaccurate_solve,

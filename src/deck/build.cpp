@@ -952,7 +952,25 @@ std::expected<void, base::Error> Builder::solver(Plan& plan) const {
         } else if (e.key == "backend") {
             if (e.value == "eigen") o.linear.backend = linalg::SolverBackend::eigen_sparse_lu;
             else if (e.value == "pardiso") o.linear.backend = linalg::SolverBackend::mkl_pardiso;
-            else return std::unexpected(at(e.line, "backend is eigen or pardiso"));
+            else if (e.value == "gmres_ilut") o.linear.backend = linalg::SolverBackend::gmres_ilut;
+            else return std::unexpected(at(e.line, "backend is eigen, pardiso or gmres_ilut"));
+        } else if (e.key == "restart") {
+            NITCAD_DECK_TRY(v, count(e, 1, 1000));
+            o.linear.restart = v;
+        } else if (e.key == "max_linear_iterations") {
+            NITCAD_DECK_TRY(v, count(e, 1, 1'000'000'000));
+            o.linear.max_iterations = v;
+        } else if (e.key == "ilut_drop") {
+            NITCAD_DECK_TRY(v, num(e));
+            if (!(v >= 0.0 && v < 1.0)) return std::unexpected(at(e.line, "ilut_drop is in [0, 1)"));
+            o.linear.ilut_drop_tolerance = v;
+        } else if (e.key == "ilut_fill") {
+            NITCAD_DECK_TRY(v, count(e, 1, 1000));
+            o.linear.ilut_fill_factor = v;
+        } else if (e.key == "linear_fallback") {
+            if (e.value == "sparse_lu") o.linear.fallback = linalg::LinearFallback::sparse_lu;
+            else if (e.value == "none") o.linear.fallback = linalg::LinearFallback::none;
+            else return std::unexpected(at(e.line, "linear_fallback is sparse_lu or none"));
         } else if (e.key == "mkl") {
             plan.mkl_runtime = file(e);
         } else if (e.key == "threads") {

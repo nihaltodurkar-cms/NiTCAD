@@ -53,7 +53,15 @@ std::expected<results::SmallSignal, base::Error> solve_small_signal_unobserved(
     const BiasOptions& steady = options.steady;
     auto scaling = assemble::make_scaling(device, steady.Ns_override);
     if (!scaling) return std::unexpected(std::move(scaling.error()));
-    auto solver = linalg::ComplexLinearSolver::create(steady.linear);
+    // Unit 44 (LQ3 amended): with gmres_ilut the operating points are iterative, but the
+    // small-signal systems are solved by Eigen SparseLU. An admittance is a near-cancellation in
+    // the continuity rows, and a GMRES solve at any reachable backward error left it a resolution
+    // of up to 93% of max |Y| (measured, DECISIONS.md); a direct solve leaves rounding.
+    linalg::SolverConfig ac = steady.linear;
+    if (ac.backend == linalg::SolverBackend::gmres_ilut) {
+        ac.backend = linalg::SolverBackend::eigen_sparse_lu;
+    }
+    auto solver = linalg::ComplexLinearSolver::create(ac);
     if (!solver) return std::unexpected(std::move(solver.error()));
     auto system = assemble::DriftDiffusion::create(device, *scaling, steady.models);
     if (!system) return std::unexpected(std::move(system.error()));

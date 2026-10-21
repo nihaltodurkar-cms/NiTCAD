@@ -1992,7 +1992,8 @@ PD1–PD5, PG1–PG8):**
 ### 6.10 Linear solver interface (D3)
 
 `linalg` exposes a small backend-neutral interface. Eigen SparseLU is the first backend and the default; PARDISO
-followed in Unit 18 (opt-in, below); iterative backends are deferred. The interface must be shaped so adding them
+followed in Unit 18 (opt-in, below), and GMRES-ILUT, the first iterative backend, in Unit 44 (opt-in, below). The
+interface must be shaped so adding them
 needs no redesign of callers:
 
 1. The input is a sparse matrix in a `linalg`-owned storage type plus right-hand sides. Eigen types are an
@@ -2158,11 +2159,55 @@ interface fits both direct and iterative backends stays unproven until one is re
 - Not in Unit 18 (owner's scope): iterative and AMG solvers, MUMPS, distributed and GPU solvers, a 64-bit Eigen index,
   changing the default backend.
 
+**As built (Unit 44, GMRES with an ILUT preconditioner; approved and accepted by the owner 2026-10-21;
+DECISIONS.md LS1–LS6, LQ1–LQ4, LQ3a, LG1–LG8):**
+- `SolverBackend::gmres_ilut`, opt-in, real and complex, behind the same interface: the default backend and its
+  results are untouched (every suite unchanged). "Factorize" builds Eigen 5.0.1's `IncompleteLUT` of the equilibrated
+  matrix (its own AMD ordering on the pattern of A + Aᵀ, once per pattern; `src/linalg/eigen_ilut.*`, version-asserted;
+  a non-finite factor is a failed build). "Solve" runs the in-tree restarted GMRES (`src/linalg/gmres.hpp`, no Eigen):
+  modified Gram–Schmidt with one full reorthogonalization pass, Givens rotations, right preconditioning, from x = 0.
+- **Acceptance is the layer's own:** GMRES runs on the equilibrated system and stops only when the componentwise
+  backward error of the true iterate, on the original system, is at most `max_backward_error`, measured at the end of
+  each cycle. A cycle ends early when its residual estimate falls below ½ · β · `max_backward_error` / (current
+  backward error); a wrong aim costs a restart, never a wrong answer. No refinement steps.
+- `SolverConfig`: `restart` (30, 1–1000), `max_iterations` (1000), `ilut_drop_tolerance` (1e-4, [0, 1)),
+  `ilut_fill_factor` (10, 1–1000), `fallback` (`LinearFallback::sparse_lu`), validated for every backend; `threads`
+  must be 1. `SolveReport::iterations` counts the products with A, `fell_back` says SparseLU solved the system.
+- **Fallback (LQ2):** a solve that does not converge within `max_iterations`, or an ILUT that cannot be built, is
+  solved by Eigen SparseLU with the direct checks (pivot ratio included), and so are the later solves of that
+  factorization; `fallback = none` makes it `inaccurate_solve`. Running out of memory never falls back.
+- **No singularity check:** without pivots, a floating region is not detected; GMRES returns an x of norm about 1e17
+  with a rounding-level backward error, as SparseLU does with `min_pivot_ratio = 0`. The device layer's topology check
+  (6.4) rejects floating regions before any solve.
+- **Small signal (LQ3a, owner ruling):** with `gmres_ilut`, `solve_small_signal` takes its operating points with it and
+  solves the complex small-signal systems with SparseLU: GMRES left the admittances a resolution of up to 93% of
+  max |Y| at every reachable tolerance (an admittance is a near-cancellation in the continuity rows). The complex
+  GMRES path stays tested in `linalg`.
+- The deck: `[solver] backend = gmres_ilut`, `restart`, `max_linear_iterations`, `ilut_drop`, `ilut_fill`,
+  `linear_fallback = sparse_lu|none`; the run record digests the five settings only with `gmres_ilut`.
+- Gates: `tests/linalg/gmres_kernel_test.cpp` (6 cases: at most k iterations for k distinct eigenvalues, real and
+  complex; restart and iteration limits; right preconditioning; singular systems) and `gmres_ilut_test.cpp` (12:
+  agreement with SparseLU on the shared systems, complex G + iωC, the fallback and strict modes, ILUT build failure,
+  reuse counts, bit-identical repeats); `[gmres]` device cases beside Unit 18's `[pardiso]` ones (diode within
+  5.7e-9, MOS C-V 1e-16, transient 4e-21, admittances within the PARDISO bound); a 3D deck within 4.4e-16.
+  Mutation checks: 31 of 32 caught, the survivor equivalent.
+- **Measured (LG4, Release, one thread), one Newton step's linear solve with a fresh solver:**
+
+  | Case | Unknowns | SparseLU | GMRES-ILUT (iterations) |
+  |---|---|---|---|
+  | 2D MOSFET | 28,470 | 0.23 s, 122 MB | 0.47 s, 48 MB (120) |
+  | 3D diode 20³ | 24,000 | 7.1 s, 409 MB | 0.77 s, 50 MB (40) |
+  | 3D diode 30³ | 81,000 | 105 s, 3.1 GB | 3.8 s, 174 MB (60) |
+  | 3D diode 40³ | 192,000 | 1021 s, 10.9 GB | 14.1 s, 422 MB (90) |
+
+  No fallback in any case. SparseLU stays the default; `gmres_ilut` is the recommended backend for 3D devices.
+
 **Known limits, recorded for later units (from the Unit 3 review):**
 - Eigen SparseLU does not scale to 3D: 81k unknowns (3D, 3 per node) took 70 s per factorization with 123× fill; 2D 270k
   took 6.8 s. A faster backend (PARDISO first; iterative or MUMPS for 3D, per the legacy measurements) is needed before 3D
   device work. **Unit 18:** PARDISO, measured above (81k 3D unknowns: Eigen 79.5 s a refactorization here, PARDISO 4.7 s
-  on one thread and 1.07 s on eight). Iterative paths remain for larger 3D systems.
+  on one thread and 1.07 s on eight). Iterative paths remain for larger 3D systems. **Unit 44:** GMRES-ILUT, measured
+  above (192k 3D unknowns: 14.1 s and 0.4 GB against SparseLU's 1021 s and 10.9 GB).
 - Eigen stores L and U offsets in the 32-bit index type; extrapolated, that overflows near 5e5 3D unknowns, where a
   factorization would already take over 15 minutes. Fix with the next backend, or a 64-bit index in the private Eigen copy.
 - About four copies of A exist during a factorization (caller, solver, CSC copy, Eigen's own), small next to L and U.
@@ -2810,7 +2855,7 @@ exists, not finished), **planned** (nothing built). Audit of 2026-10-09, against
 | Geometry and unstructured 3D meshing | `Mesh::from_parts` accepts any valid node/edge/volume graph; besides the tensor-grid producer, Unit 16 added the 2D and 3D Delaunay generators and the simplex import (checked duals P0–P5, P4-certified interfaces, contact patches, structured 2D boundary layers); nonlocal BTBT still needs tensor cells (6.11, M16) | **Verified, on `main`** (Unit 16, 6.11; `a09cf43`, PR #35) | Non-convex 3D domains, 3D interface junction lines, interfaces across patched faces and 3D boundary layers (U7); an unstructured locator for nonlocal BTBT (M16) |
 | Low-current accuracy | `terminal_current_resolution` reports the floor (Unit 15); the weighted terminal current with an adjoint error estimate (Unit 32, 6.6) | **Verified, on `main`** (Unit 32; `6e54c69`, PR #39): the MOSFET off state resolved at every Vg, sub-floor diode currents on the ideal-diode law to 0.1% | Weighted transient and small-signal currents; a path term for nonlocal tunnelling |
 | Generic fields/equations | Field descriptors and the unknowns' map; the drift-diffusion and electrothermal rows as equation terms composed by equation set, behind the unchanged `DriftDiffusion` (Unit 40, 6.12.1–2) | **Verified, bit-identical, on `main`** (Unit 40; `629bed0`, PR #50; below) | Move the model data out of `DriftDiffusion` and retire it as the wrapper; derived and edge/cell fields; `EquilibriumPoisson` from the same terms |
-| Scalable linear solvers | Eigen SparseLU (default), PARDISO opt-in (Unit 18) | planned | Iterative Krylov with ILU/AMG behind `linalg`; parallel assembly |
+| Scalable linear solvers | Eigen SparseLU (default), PARDISO opt-in (Unit 18); GMRES with an ILUT preconditioner opt-in, real and complex, with a reported SparseLU fallback (Unit 44, 6.10) | **GMRES-ILUT verified, opt-in** (Unit 44, on `linalg/iterative`): 3D 9–72× faster and 8–26× less memory than SparseLU | Algebraic multigrid and block (field-split) preconditioners; parallel assembly |
 | Results and provenance | Plain-data results; run record with identity digest (6.6); sweeps persisted bit for bit (Unit 29); provenance (build, revision, platform, start, wall time) in every run record and file, transient and small-signal files, `nitcad --version` (Unit 42) | **Verified** (Unit 42, 6.6; PR #52; DECISIONS.md PV1–PV7) | A release version policy (PD5); cross-machine checksums (6.8) |
 | Visualization, GUI, batch | The `nitcad check|run` batch runner over the input deck (Unit 31); no visualization or GUI (Units 25, 26) | **Batch runner verified, on `main`** (Unit 31; `6f67510`, PR #37); visualization and GUI planned | Rendering of meshes and fields (Unit 25), then the GUI over the same plan (Unit 26) |
 | Validation against published/measured data | Legacy, analytic and convergence gates throughout; resistivity against dopant density (NBS SP 400-64) and the measured n_i(300 K) as benchmark decks (Unit 33, 10.1) | **Verified, on `main`** (Unit 33; `a14ac96`, PR #41): gaps found and pinned (boron mobility up to +48%, incomplete ionization at heavy doping, n_i +10%); the opt-in Masetti hole mobility (Unit 34; `e14a53f`, PR #42) brings boron to within 11% (AC3/AC5 at 1e18 accepted as documented limitations); Unit 35 (`2d1fdc7`, PR #44) makes Masetti and a published band set (n_i within the measurement's uncertainty) the defaults | A density-dependent ionization level (owner decision); breakdown and device-level benchmarks from accessible sources |
