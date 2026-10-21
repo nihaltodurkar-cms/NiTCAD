@@ -2686,6 +2686,23 @@ trace instead of the bare nodal vectors:
 - **Mutation checks (BG8, Release): 5 of 5 caught** — insulator nodes not zeroed, every normal merged into one,
   interfaces ignored, no projection, contacts projected. Unit 25b in all: 40 of 40.
 
+**BG5 (no numerical change), as checked.** Only `render`, `nitcad plot`, tests and documents differ from `main`
+(`81622ca`); `CMakeLists.txt` adds the three sources and test files. Assembly traces of the bias, sweep and transient
+tests (`--order decl`): the 38 cases other than "bias: assembly cost on the legacy diode" are byte-identical
+(666,691 lines); that case repeats residual evaluations for a time budget, and on the branch (run while three test
+suites shared the CPU) it stopped after 118,371 of main's 185,955 lines, which are an exact prefix of main's. Its count
+depends on the machine's load, not on the code.
+
+**BG8 suites:** Release 22/22 and Debug 16/16 at each of the four commits (commits 2–4 in clean worktrees), no
+warnings under `/W4 /WX`; the Debug render suite includes the D3D12 debug layer check (no errors).
+
+**Acceptance (2026-10-22).** The owner pre-accepted the unit and authorized push, PR and merge, then the start of 25c
+without a further approval ("As Unit 25b is done, accept it push, open pr and merge, then start 25c without my
+approval"), given while only commit 1 existed; it was taken as acceptance on the gates passing, which they did.
+ARCHITECTURE.md 6.14, 11 and 11.3 as built (BG9). For the owner's record: DS2 amended (a quasi-static result's
+currents are zero, not absent), DS5 amended (the streamline field, commit 4), and BG6's "2D isosurface request
+refused" superseded by DS4 (2D draws contours at the levels).
+
 ---
 
 ## New questions the advisor raised (not yet in `ARCHITECTURE.md`)
