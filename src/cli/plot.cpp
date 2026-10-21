@@ -44,6 +44,7 @@ constexpr const char* plot_usage =
     "  3D      --slice x=<um>|y=<um>|z=<um> (repeatable)  --azimuth <deg>  --elevation <deg>\n"
     "          --perspective\n"
     "  curves  --contact <name> (swept)  --sense <name>  --frequency <k>  --log\n"
+    "  arrows  --vectors E|J|Jn|Jp  --arrows <n> (300 in 2D, 400 in 3D)\n"
     "  lines   --streamlines E|J|Jn|Jp  --lines <n> (24)  --from <contact>\n"
     "          --seeds <x0>,<y0>[,<z0>]:<x1>,<y1>[,<z1>] (um) | x=<um>|y=<um>|z=<um> (3D plane)\n"
     "  image   --size <w>x<h> (1280x960)  --adapter auto|gpu|warp\n";
@@ -70,6 +71,8 @@ struct Options {
     std::string view, field, scale, colormap = "turbo", contact, sense, adapter = "auto";
     std::string streamlines, from, seeds;  // Unit 25b
     std::size_t lines = 24;
+    std::string vectors;  // Unit 25c
+    std::size_t arrows = 0;
     std::optional<std::size_t> point, frequency;
     std::optional<std::pair<double, double>> range;
     std::vector<Plane> slices;
@@ -188,6 +191,13 @@ int plot(int argc, char** argv) {
         else if (a == "--sense") { if (!flag_value(o.sense)) return usage("--sense needs a name"); }
         else if (a == "--adapter") { if (!flag_value(o.adapter)) return usage("--adapter needs a name"); }
         else if (a == "--streamlines") { if (!flag_value(o.streamlines)) return usage("--streamlines needs E, J, Jn or Jp"); }
+        else if (a == "--vectors") { if (!flag_value(o.vectors)) return usage("--vectors needs E, J, Jn or Jp"); }
+        else if (a == "--arrows") {
+            const auto v = value();
+            const auto n = v ? number(*v) : std::nullopt;
+            if (!n || *n < 1 || *n > 100000 || *n != std::floor(*n)) return usage("--arrows needs a count from 1 to 100000");
+            o.arrows = static_cast<std::size_t>(*n);
+        }
         else if (a == "--from") { if (!flag_value(o.from)) return usage("--from needs a contact"); }
         else if (a == "--seeds") { if (!flag_value(o.seeds)) return usage("--seeds needs a segment or a plane"); }
         else if (a == "--lines") {
@@ -258,6 +268,12 @@ int plot(int argc, char** argv) {
             return usage("--streamlines is E, J, Jn or Jp");
         }
         if (o.field.empty()) o.field = o.streamlines;  // drawn over their own magnitude
+    }
+    if (!o.vectors.empty()) {
+        if (o.vectors != "E" && o.vectors != "J" && o.vectors != "Jn" && o.vectors != "Jp") {
+            return usage("--vectors is E, J, Jn or Jp");
+        }
+        if (o.field.empty()) o.field = o.vectors;
     }
     if (o.view.empty()) o.view = !o.slices.empty() ? "slice" : o.field.empty() ? "solid" : "field";
     if (o.field.empty()) o.field = "potential";
@@ -365,6 +381,7 @@ int plot(int argc, char** argv) {
     if (o.elevation) view.elevation_deg = *o.elevation;
     std::optional<FieldScene> field_scene;
     std::optional<PlotScene> plot_scene;
+    bool colored_arrows = false;  // 3D arrows on the solid, colored by their own magnitude
     const auto field = find_field(o.field);
     if (!field) return usage("unknown field " + o.field);
     const auto scale_kind = [&]() -> std::optional<ScaleKind> {
@@ -422,6 +439,19 @@ int plot(int argc, char** argv) {
         auto s = o.view == "solid" ? solid_view(*device, *geometry, view) : mesh_view(*device, *geometry, view);
         if (!s) return fail(s.error().message);
         field_scene = std::move(*s);
+    } else if (!o.vectors.empty() && o.streamlines.empty() && m.dimension() == 3 && o.view == "field" &&
+               o.field == o.vectors) {
+        // 3D arrows over their own magnitude: on the solid device, colored by it.
+        auto v = values_for();
+        if (!v) return fail(v.error());
+        auto f = field_options(*v);
+        if (!f) return fail(f.error());
+        auto s = solid_view(*device, *geometry, view);
+        if (!s) return fail(s.error().message);
+        s->title = f->title;
+        s->colorbar = Colorbar{f->map, *f->scale, f->title};
+        field_scene = std::move(*s);
+        colored_arrows = true;
     } else if (!o.streamlines.empty() && m.dimension() == 3 && o.view == "field" && o.field == o.streamlines) {
         // 3D streamlines over their own magnitude: the lines, colored by it, in the device's outline.
         auto v = values_for();
@@ -622,6 +652,44 @@ int plot(int argc, char** argv) {
             add_streamlines(*field_scene, lines, *field_scene->colorbar);
         } else {
             add_streamlines(*field_scene, lines, Rgba{0.05f, 0.05f, 0.05f, 0.85f});
+        }
+    }
+
+    // Arrows (Unit 25c, DC1) over the view: 2D on a grid, 3D on the slices shown or the boundary.
+    if (!o.vectors.empty()) {
+        if (!field_scene || m.dimension() < 2) {
+            return fail("arrows need a 2D or 3D device and a field, slice, iso or solid view");
+        }
+        const VectorField vf = o.vectors == "E"    ? VectorField::electric
+                               : o.vectors == "J"  ? VectorField::current
+                               : o.vectors == "Jn" ? VectorField::electron_current
+                                                   : VectorField::hole_current;
+        auto p = pick();
+        if (!p) return fail(p.error());
+        auto ev = element_vectors(*device, *geometry, **p, vf);
+        if (!ev) return fail(ev.error().message);
+        const std::vector<Point> nodal = streamline_field(*device, *geometry, *ev, vf);
+        const Locator locator(*geometry);
+        const std::size_t count = o.arrows > 0 ? o.arrows : (m.dimension() == 2 ? 300 : 400);
+        double spacing = 0.0;
+        std::vector<Arrow> arrows;
+        if (m.dimension() == 2) {
+            arrows = grid_arrows(locator, nodal, count, spacing);
+        } else {
+            std::vector<Polygon> surface;
+            if (o.view == "slice") {
+                for (const Plane& plane : o.slices) {
+                    for (Polygon& q : geometry->slice(plane)) surface.push_back(std::move(q));
+                }
+            } else {
+                surface = exposed_boundary(*device, *geometry);  // the contacts' slabs cover theirs
+            }
+            arrows = surface_arrows(locator, nodal, surface, count, spacing);
+        }
+        if (colored_arrows && field_scene->colorbar) {
+            add_arrows(*field_scene, arrows, 0.8 * spacing, *field_scene->colorbar);
+        } else {
+            add_arrows(*field_scene, arrows, 0.8 * spacing, Rgba{0.05f, 0.05f, 0.05f, 1.0f});
         }
     }
 

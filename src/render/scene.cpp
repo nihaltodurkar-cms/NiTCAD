@@ -7,6 +7,7 @@
 #include <cstddef>
 #include <limits>
 #include <map>
+#include <numbers>
 #include <string>
 #include <utility>
 
@@ -818,6 +819,86 @@ void add_streamlines(FieldScene& s, std::span<const Streamline> lines, const Col
     for (LineBatch& b : batch) {
         if (!b.points.empty()) s.lines.push_back(std::move(b));
     }
+}
+
+namespace {
+
+// The triangles of one arrow, as polygons with their outward normals (cm).
+void arrow_polygons(const FieldScene& s, const Arrow& a, double length,
+                    std::vector<std::pair<std::vector<Point>, Point>>& out) {
+    const Point d = a.direction;
+    const double head = 0.35 * length;
+    if (s.dimension == 2) {
+        const double lift = 1e-3 * length;  // in front of the map (the camera looks down -z)
+        const Point q{-d[1], d[0], 0.0};
+        const Point c{a.position[0], a.position[1], lift};
+        const Point tail = add(c, scale(d, -0.5 * length)), tip = add(c, scale(d, 0.5 * length));
+        const Point neck = add(tip, scale(d, -head));
+        const double w = 0.05 * length, hw = 0.18 * length;
+        const Point up{0.0, 0.0, 1.0};
+        out.push_back({{add(tail, scale(q, -w)), add(neck, scale(q, -w)), add(neck, scale(q, w)), add(tail, scale(q, w))}, up});
+        out.push_back({{add(neck, scale(q, -hw)), tip, add(neck, scale(q, hw))}, up});
+        return;
+    }
+    const Point c = add(a.position, scale(a.normal, 0.25 * length));
+    const Point tail = add(c, scale(d, -0.5 * length)), tip = add(c, scale(d, 0.5 * length));
+    const Point neck = add(tip, scale(d, -head));
+    // A basis (d, u, w) around the axis.
+    const Point helper = std::abs(d[0]) < 0.9 ? Point{1.0, 0.0, 0.0} : Point{0.0, 1.0, 0.0};
+    const Point u = unit(cross(d, helper)), w = cross(d, u);
+    constexpr int sides = 6;
+    const double r = 0.04 * length, cone = 0.13 * length;
+    const auto ring = [&](const Point& at, double radius, int k) {
+        const double t = 2.0 * std::numbers::pi * k / sides;
+        return add(at, add(scale(u, radius * std::cos(t)), scale(w, radius * std::sin(t))));
+    };
+    for (int k = 0; k < sides; ++k) {
+        const double t = 2.0 * std::numbers::pi * (k + 0.5) / sides;
+        const Point radial = add(scale(u, std::cos(t)), scale(w, std::sin(t)));
+        out.push_back({{ring(tail, r, k), ring(tail, r, k + 1), ring(neck, r, k + 1), ring(neck, r, k)}, radial});
+        out.push_back({{ring(neck, cone, k), ring(neck, cone, k + 1), tip}, add(radial, scale(d, cone / head))});
+        out.push_back({{ring(neck, cone, k + 1), ring(neck, cone, k), neck}, scale(d, -1.0)});  // the cone's base
+    }
+}
+
+}  // namespace
+
+std::vector<Polygon> exposed_boundary(const device::Device& d, const Geometry& g) {
+    std::vector<std::uint8_t> on_contact(d.mesh().node_count(), 0);
+    for (const device::Contact& c : d.contacts()) {
+        for (const NodeId v : c.nodes) on_contact[static_cast<std::size_t>(v)] = 1;
+    }
+    std::vector<Polygon> out;
+    for (Polygon& f : g.boundary_faces()) {
+        const bool covered = std::ranges::all_of(f.vertices, [&](const SurfaceVertex& v) {
+            return on_contact[static_cast<std::size_t>(v.at.nodes[0])] != 0;
+        });
+        if (!covered) out.push_back(std::move(f));
+    }
+    return out;
+}
+
+void add_arrows(FieldScene& s, std::span<const Arrow> arrows, double length, const Rgba& color) {
+    TriangleBatch batch{"arrows", Shading::flat, s.dimension == 3, false, {}};
+    std::vector<std::pair<std::vector<Point>, Point>> polys;
+    for (const Arrow& a : arrows) {
+        polys.clear();
+        arrow_polygons(s, a, length, polys);
+        for (const auto& [pts, n] : polys) fan(batch, pts, {}, color, n);
+    }
+    if (!batch.vertices.empty()) s.triangles.push_back(std::move(batch));
+}
+
+void add_arrows(FieldScene& s, std::span<const Arrow> arrows, double length, const Colorbar& colors) {
+    TriangleBatch batch{"arrows", Shading::field, s.dimension == 3, false, {}};
+    std::vector<std::pair<std::vector<Point>, Point>> polys;
+    for (const Arrow& a : arrows) {
+        polys.clear();
+        arrow_polygons(s, a, length, polys);
+        const float t = static_cast<float>(colors.scale.position(a.magnitude));
+        for (const auto& [pts, n] : polys) fan(batch, pts, std::vector<float>(pts.size(), t), {}, n);
+    }
+    if (!batch.vertices.empty()) s.triangles.push_back(std::move(batch));
 }
 
 std::expected<FieldScene, base::Error> outline_view(const device::Device& d, const Geometry& g,

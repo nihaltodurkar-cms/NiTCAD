@@ -745,3 +745,48 @@ sweep = )" + tag + ".nitsweep\ndevice = " + tag + ".nitdev\n";
     CHECK(one.status == 1);
     CHECK(one.output.find("streamlines need a 2D or 3D device") != std::string::npos);
 }
+
+TEST_CASE("nitcad plot: arrows (Unit 25c, CG6)", "[deck]") {
+    const fs::path dir = scratch("cli_plot_arrows");
+    const auto write = [&](const char* name, const std::string& text) {
+        std::ofstream(dir / name, std::ios::binary) << text;
+        return "\"" + (dir / name).string() + "\"";
+    };
+    const auto out = [&](const char* name) { return "\"" + (dir / name).string() + "\""; };
+    const auto pn = [](const char* mesh, const char* tag, const char* doping) {
+        return std::string("[mesh]\ntype = tensor\n") + mesh + "[region silicon]\nmaterial = silicon\n[doping]\n" +
+               doping + R"([contact anode]
+kind = ohmic
+patch = x_min
+[contact cathode]
+kind = ohmic
+patch = x_max
+[sweep]
+contact anode = 0, 0.4
+[output]
+sweep = )" + tag + ".nitsweep\ndevice = " + tag + ".nitdev\n";
+    };
+    const char* lateral = "profile = acceptor constant 1e17 axis=y x=-1:1um\nprofile = donor constant 1e17 axis=y x=1um:3um\n";
+    const std::string d2 = write("pn2.deck", pn("x = linspace(0, 2um, 21)\ny = linspace(0, 1um, 6)\n", "pn2", lateral));
+    REQUIRE(cli("run " + d2).status == 0);
+    const std::string d3 = write("pn3.deck", pn("x = linspace(0, 2um, 11)\ny = linspace(0, 1um, 5)\nz = linspace(0, 0.5um, 3)\n", "pn3", lateral));
+    REQUIRE(cli("run " + d3).status == 0);
+    for (const auto& [deck, args, name] :
+         {std::tuple{d2, std::string("--vectors J"), "j2.png"},
+          std::tuple{d2, std::string("--field n --vectors E --arrows 50"), "e2.png"},
+          std::tuple{d3, std::string("--vectors J"), "j3.png"},
+          std::tuple{d3, std::string("--field potential --vectors E --slice z=0.25"), "e3.png"},
+          std::tuple{d3, std::string("--vectors Jn --streamlines Jn"), "jn3.png"}}) {
+        const Cli c = cli("plot " + deck + " " + args + " --adapter warp --size 400x300 --out " + out(name));
+        CAPTURE(args, c.output);
+        CHECK(c.status == 0);
+        CHECK(render::load_png(dir / name).has_value());
+    }
+    CHECK(cli("plot " + d2 + " --vectors B --out " + out("x.png")).status == 64);
+    CHECK(cli("plot " + d2 + " --vectors J --arrows 0 --out " + out("x.png")).status == 64);
+    const std::string d1 = write("pn1.deck", pn("x = linspace(0, 1um, 11)\n", "pn1", "profile = donor constant 1e16\n"));
+    REQUIRE(cli("run " + d1).status == 0);
+    const Cli one = cli("plot " + d1 + " --vectors J --out " + out("x.png"));
+    CHECK(one.status == 1);
+    CHECK(one.output.find("arrows need a 2D or 3D device") != std::string::npos);
+}

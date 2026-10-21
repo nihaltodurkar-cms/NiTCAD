@@ -236,6 +236,14 @@ struct FieldOptions {
 // in 2D and depth-tested in 3D. Points are in cm (streamlines.hpp); the scene's bounds are kept.
 void add_streamlines(FieldScene& scene, std::span<const Streamline> lines, const Rgba& color);
 void add_streamlines(FieldScene& scene, std::span<const Streamline> lines, const Colorbar& colors);
+// Arrows (Unit 25c, DC1, CQ1) added to a scene, each of one length (cm) and centred on its site: in 2D
+// a flat shaft and head in the plane, just in front of the map (unlit); in 3D a six-sided shaft and a
+// cone, lifted off their surface by a quarter of the length along its normal (lit). In one color, or
+// colored by |v| through the colorbar's map and scale (the scene's colorbar should be that one).
+void add_arrows(FieldScene& scene, std::span<const Arrow> arrows, double length, const Rgba& color);
+// The 3D boundary faces not wholly on a contact: those the contact slabs leave in view (arrow sites).
+[[nodiscard]] std::vector<Polygon> exposed_boundary(const device::Device& device, const Geometry& geometry);
+void add_arrows(FieldScene& scene, std::span<const Arrow> arrows, double length, const Colorbar& colors);
 // The context for 3D streamlines: the device's faint translucent outline and the contacts. Errors as
 // solid_view, and (invalid_input) a 2D geometry.
 [[nodiscard]] std::expected<FieldScene, base::Error> outline_view(const device::Device& device,

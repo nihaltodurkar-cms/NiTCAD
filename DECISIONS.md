@@ -2756,6 +2756,32 @@ and bands only, so \|J\|, streamlines and R are unavailable on transient results
 view (CG3); 4) filmstrips, transient snapshots' currents and rates in the plot, references and benchmarks (CG4, CG5,
 CG8). Each view is independent and can be dropped (VQ9).
 
+**Commit 1 (vector glyphs; CG1, CG6 in part), as built.** `streamlines.hpp`: `Arrow` (site, unit direction, \|v\|,
+the surface's normal, the interpolant), `grid_arrows` (2D: cell centres of a square grid centred on the mesh's box,
+spacing sqrt(area / count)), `surface_arrows` (3D: a stratified sample of surface polygons by area, each with its
+polygon's normal); both read the field at the site through the point locator and skip undefined or zero fields.
+`scene.hpp`: `add_arrows` (2D a flat shaft and head just in front of the map, unlit; 3D a six-sided shaft and cone
+lifted a quarter of the length off the surface, lit; one length; one color or \|v\| through a colorbar),
+`exposed_boundary` (the boundary faces not wholly on a contact). `nitcad plot --vectors E|J|Jn|Jp [--arrows n]`:
+arrows of the streamline field (Unit 25b: tangential on no-flux boundaries), 0.8 of the spacing long; 2D over the
+map (by default the vectors' own magnitude) in near-black; 3D, over their own magnitude, on the solid device colored
+by \|v\| with its colorbar (CQ1), else near-black over the chosen field or slice view; 3D sites on the exposed
+boundary or the slices shown. **CQ1 as built:** colored by \|v\| where the view does not itself show a field (the
+solid); over a field map an arrow colored like the map under it would vanish, so there it is near-black.
+- **CG1:** a uniform field's grid arrows (50, 200 and 800 asked) number within 10% of the request, point along the
+  field (10⁻¹²), lie on a grid of the stated spacing centred on the device; none where the field is NaN or zero;
+  surface arrows on a 3D bar's exposed faces (its contact faces excluded: 6 sides less 2) have unit normals and no
+  normal component away from the contacts; drawn arrows span the set length along their direction, sit in front of
+  the 2D map or above their 3D surface, and carry the color or \|v\|'s colormap position.
+- **CG6 (in part):** J arrows in 2D and 3D, E arrows over n (2D) and over a slice (3D), Jn arrows with streamlines;
+  refused: an unknown field and `--arrows 0` (usage), a 1D device.
+- Looked at on a 2D and a 3D MOSFET deck (the 3D one at V_G = 5 V, V_D = 0.5 V): current into the drain pocket and
+  out of the source, the body leakage, fields from the gate; arrows on contact faces stood normal to them under the
+  slabs, so contact faces are excluded (`exposed_boundary`).
+- **Mutation checks (CG7, Release): 11 of 11 caught** — zero fields kept, the direction unnormalized, the spacing
+  doubled, the grid not centred (caught once the centring check was added), a non-unit normal, the 2D arrow behind
+  the map, a short 2D and 3D arrow, the 3D arrow sunk into its surface, contact faces kept, the color not \|v\|'s.
+
 ---
 
 ## New questions the advisor raised (not yet in `ARCHITECTURE.md`)

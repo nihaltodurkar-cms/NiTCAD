@@ -443,6 +443,95 @@ std::vector<Point> contact_seeds(const device::Device& d, const Locator& loc, st
     return quantiles(weight, count, [&](std::size_t k, double f) { return lerp(pieces[k].a, pieces[k].b, f); });
 }
 
+// --- arrows -----------------------------------------------------------------------------------
+
+namespace {
+
+// The field at x as an arrow, or nothing outside the mesh or where the field is undefined or zero.
+std::optional<Arrow> arrow_at(const Locator& loc, std::span<const Point> field, const Point& x,
+                              const Point& normal) {
+    const auto h = loc.locate(x);
+    if (!h) return std::nullopt;
+    const auto n = loc.geometry().element(h->element);
+    Arrow a;
+    a.position = x;
+    a.normal = normal;
+    Point v{};
+    for (std::size_t k = 0; k < n.size(); ++k) {
+        v = add(v, scale(field[static_cast<std::size_t>(n[k])], h->weights[k]));
+        a.at.nodes[k] = n[k];
+        a.at.weights[k] = h->weights[k];
+    }
+    a.magnitude = norm(v);
+    if (!std::isfinite(a.magnitude) || !(a.magnitude > 0.0)) return std::nullopt;
+    a.direction = scale(v, 1.0 / a.magnitude);
+    return a;
+}
+
+}  // namespace
+
+std::vector<Arrow> grid_arrows(const Locator& loc, std::span<const Point> field, std::size_t count,
+                               double& spacing) {
+    std::vector<Arrow> out;
+    spacing = 0.0;
+    const Geometry& g = loc.geometry();
+    if (g.dimension() != 2 || g.element_count() == 0 || count == 0) return out;
+    double area = 0.0;
+    for (std::size_t e = 0; e < g.element_count(); ++e) area += element_volume(g, e);
+    Point lo = g.mesh().points()[0], hi = lo;
+    for (const Point& p : g.mesh().points()) {
+        for (std::size_t c = 0; c < 2; ++c) lo[c] = std::min(lo[c], p[c]), hi[c] = std::max(hi[c], p[c]);
+    }
+    const double h = std::sqrt(area / static_cast<double>(count));
+    spacing = h;
+    const auto nx = static_cast<std::size_t>(std::max(1.0, std::floor((hi[0] - lo[0]) / h)));
+    const auto ny = static_cast<std::size_t>(std::max(1.0, std::floor((hi[1] - lo[1]) / h)));
+    // Centred in the box.
+    const double x0 = lo[0] + 0.5 * ((hi[0] - lo[0]) - static_cast<double>(nx) * h);
+    const double y0 = lo[1] + 0.5 * ((hi[1] - lo[1]) - static_cast<double>(ny) * h);
+    for (std::size_t j = 0; j < ny; ++j) {
+        for (std::size_t i = 0; i < nx; ++i) {
+            const Point x{x0 + (static_cast<double>(i) + 0.5) * h, y0 + (static_cast<double>(j) + 0.5) * h, 0.0};
+            if (auto a = arrow_at(loc, field, x, Point{})) out.push_back(*a);
+        }
+    }
+    return out;
+}
+
+std::vector<Arrow> surface_arrows(const Locator& loc, std::span<const Point> field,
+                                  std::span<const Polygon> surface, std::size_t count, double& spacing) {
+    std::vector<std::array<Point, 3>> triangles;
+    std::vector<Point> normals;
+    std::vector<double> area;
+    for (const Polygon& p : surface) {
+        for (std::size_t i = 1; i + 1 < p.vertices.size(); ++i) {
+            const std::array<Point, 3> t{p.vertices[0].position, p.vertices[i].position, p.vertices[i + 1].position};
+            const Point n = cross(sub(t[1], t[0]), sub(t[2], t[0]));
+            const double a = 0.5 * norm(n);
+            if (!(a > 0.0)) continue;
+            triangles.push_back(t);
+            normals.push_back(scale(n, 0.5 / a));
+            area.push_back(a);
+        }
+    }
+    double total = 0.0;
+    for (const double a : area) total += a;
+    spacing = count > 0 ? std::sqrt(total / static_cast<double>(count)) : 0.0;
+    std::vector<std::size_t> which;
+    std::size_t i = 0;
+    const std::vector<Point> sites = quantiles(area, count, [&](std::size_t k, double f) {
+        which.push_back(k);
+        const double gold = std::fmod(static_cast<double>(i++) * 0.6180339887498949, 1.0);
+        const auto& t = triangles[k];
+        return lerp(t[0], lerp(t[1], t[2], gold), std::sqrt(f));
+    });
+    std::vector<Arrow> out;
+    for (std::size_t s = 0; s < sites.size(); ++s) {
+        if (auto a = arrow_at(loc, field, sites[s], normals[which[s]])) out.push_back(*a);
+    }
+    return out;
+}
+
 std::vector<Point> segment_seeds(const Point& a, const Point& b, std::size_t count) {
     std::vector<Point> out;
     for (std::size_t i = 0; i < count; ++i) out.push_back(lerp(a, b, (static_cast<double>(i) + 0.5) / static_cast<double>(count)));
