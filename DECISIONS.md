@@ -2083,8 +2083,8 @@ LG3: the agreement cases run with `none`, so a fallback cannot hide a failure; a
 LG4: also records each case's fallback count with the default setting. LG7: a further mutant, a fallback that is
 not reported.
 
-**Status:** authorized with LQ1–LQ4; LQ3 amended by the owner (LQ3a, 2026-10-21); commits 1–3 done, awaiting the
-owner's acceptance (then ARCHITECTURE.md 6.10 and 11.3 as built, LG8). First in VQ6's order, before Unit 25a.
+**Status:** accepted by the owner 2026-10-21 ("go next"); LQ3 amended by the owner (LQ3a); commits 1–3 done;
+ARCHITECTURE.md 6.10 and 11.3 updated to "as built" (LG8). First in VQ6's order, before Unit 25a.
 
 **Commit 3 (LG4 benchmark), measured 2026-10-21** on the development machine (Release, one thread, 31.6 GB),
 `[.benchmark][gmres_benchmark]` in `bias_test.cpp` and `mosfet_test.cpp`; MKL not configured, so no PARDISO
