@@ -370,7 +370,10 @@ TEST_CASE("render scene: field values from a bias point, and material classes") 
     for (int f = 0; f <= static_cast<int>(Field::last); ++f) {
         CHECK(find_field(field_info(static_cast<Field>(f)).key) == static_cast<Field>(f));
     }
-    CHECK_FALSE(find_field("J").has_value());
+    CHECK_FALSE(find_field("Jz").has_value());
+    // The vector magnitudes need the geometry (Unit 25b).
+    CHECK(field_values(m.device, p, Field::electric_field).error().message.find("needs the geometry") !=
+          std::string::npos);
 
     // Unit 45: the rates, generations as positive; a missing rate is an error that says so.
     const auto rf = [&]() {

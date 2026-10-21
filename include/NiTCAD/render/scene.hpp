@@ -119,7 +119,13 @@ enum class Field : std::uint8_t {
     surface,           // the interfaces' effective volume rate (electron rows), signed
     impact_generation, // Gii: impact-ionization generation, positive
     btbt_generation,   // Gbtbt: band-to-band generation (electron rows), positive
-    last = btbt_generation,
+    // Unit 25b: magnitudes of the reconstructed vectors (vectors.hpp), averaged to the nodes; they
+    // need the geometry's elements, so only the field_values overload taking a Geometry gives them.
+    electric_field,    // |E|, V/cm
+    current_density,   // |J| = |Jn + Jp|, A/cm^2 (NaN on insulator nodes)
+    electron_current,  // |Jn|, A/cm^2
+    hole_current,      // |Jp|, A/cm^2
+    last = hole_current,
 };
 
 struct FieldInfo {
@@ -134,6 +140,12 @@ struct FieldInfo {
 // one per mesh node.
 [[nodiscard]] std::expected<std::vector<double>, base::Error> field_values(
     const device::Device& device, const results::BiasPoint& point, Field f);
+// Every field, the vector magnitudes (E, J, Jn, Jp) included. Errors as above and as
+// element_vectors (vectors.hpp).
+[[nodiscard]] std::expected<std::vector<double>, base::Error> field_values(
+    const device::Device& device, const Geometry& geometry, const results::BiasPoint& point, Field f);
+// Whether the field is a vector magnitude (needs the geometry).
+[[nodiscard]] bool is_vector_magnitude(Field f) noexcept;
 
 // --- region colors (VR8) -------------------------------------------------------------------------
 

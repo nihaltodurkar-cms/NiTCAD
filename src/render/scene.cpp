@@ -1,4 +1,5 @@
 #include "NiTCAD/render/scene.hpp"
+#include "NiTCAD/render/vectors.hpp"
 
 #include <algorithm>
 #include <array>
@@ -416,6 +417,11 @@ FieldInfo field_info(Field f) noexcept {
         case Field::surface: return {"surface", "surface, per volume (cm\xE2\x81\xBB\xC2\xB3 s\xE2\x81\xBB\xC2\xB9)", ScaleKind::signed_log10};
         case Field::impact_generation: return {"Gii", "G impact (cm\xE2\x81\xBB\xC2\xB3 s\xE2\x81\xBB\xC2\xB9)", ScaleKind::log10};
         case Field::btbt_generation: return {"Gbtbt", "G band-to-band (cm\xE2\x81\xBB\xC2\xB3 s\xE2\x81\xBB\xC2\xB9)", ScaleKind::log10};
+        // Vector magnitudes, log10 (Unit 25b).
+        case Field::electric_field: return {"E", "|E| (V/cm)", ScaleKind::log10};
+        case Field::current_density: return {"J", "|J| (A/cm\xC2\xB2)", ScaleKind::log10};
+        case Field::electron_current: return {"Jn", "|Jn| (A/cm\xC2\xB2)", ScaleKind::log10};
+        case Field::hole_current: return {"Jp", "|Jp| (A/cm\xC2\xB2)", ScaleKind::log10};
     }
     return {"?", "?", ScaleKind::linear};
 }
@@ -483,8 +489,33 @@ std::expected<std::vector<double>, base::Error> field_values(const device::Devic
             for (std::size_t i = 0; i < n; ++i) g[i] = -v[i];  // a generation, positive
             return g;
         }
+        case Field::electric_field:
+        case Field::current_density:
+        case Field::electron_current:
+        case Field::hole_current:
+            return std::unexpected(invalid(std::string(field_info(f).key) +
+                                           " is reconstructed on the mesh's elements: it needs the geometry"));
     }
     return std::unexpected(invalid("unknown field"));
+}
+
+bool is_vector_magnitude(Field f) noexcept {
+    return f == Field::electric_field || f == Field::current_density || f == Field::electron_current ||
+           f == Field::hole_current;
+}
+
+std::expected<std::vector<double>, base::Error> field_values(const device::Device& device,
+                                                             const Geometry& geometry,
+                                                             const results::BiasPoint& point,
+                                                             Field f) {
+    if (!is_vector_magnitude(f)) return field_values(device, point, f);
+    const VectorField v = f == Field::electric_field     ? VectorField::electric
+                          : f == Field::current_density  ? VectorField::current
+                          : f == Field::electron_current ? VectorField::electron_current
+                                                         : VectorField::hole_current;
+    auto e = element_vectors(device, geometry, point, v);
+    if (!e) return std::unexpected(std::move(e.error()));
+    return magnitudes(nodal_vectors(geometry, *e));
 }
 
 // --- region colors ------------------------------------------------------------------------------

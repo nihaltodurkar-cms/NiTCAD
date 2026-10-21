@@ -2569,6 +2569,32 @@ single-region elements, the references show it as drawn); streamlines through re
 averages, BQ2 J streamlines seeded on a contact with an equal current per line (and `--seeds` for an explicit line),
 BQ3 isosurfaces interpolated in the field's scale.
 
+**Commit 1 (\|E\| and \|J\|; BG1, BG5, BG6 in part), as built.** `vectors.hpp`: `element_vectors` (E = −∇ψ per
+element, by Cramer's rule on its edge vectors; Jn and Jp by least squares on the element's mesh edges with a positive
+coupling area and both ends in a semiconductor, J their sum), `control_volume_shares` (tensor: binomial(D, m) / 2^D
+for the vertex m steps along the Kuhn path, which is the corner sub-box's part of the simplex, so the shares add up to
+the box method's control volumes exactly; simplex: 1 / (D + 1)), `nodal_vectors`, `magnitudes`. `render::Field` gains
+`E`, `J`, `Jn`, `Jp` (log10), given by a `field_values` overload taking the geometry (the old one refuses them).
+`nitcad plot --field E|J|Jn|Jp`: on a log scale without `--range`, the ten decades below the largest value, values
+under them at the bottom color (below that the reconstructed currents are rounding: Jn at equilibrium spans 1e-42 to
+1e-10 A/cm²); a magnitude that is zero everywhere on a linear 0..1 scale.
+- **BG1:** E of a linear potential and J from the edge currents of a uniform current exact (10⁻¹¹) on every element
+  and node of 1D, 2D and 3D tensor and 2D and 3D generated meshes; the tensor shares sum to the mesh's control
+  volumes (10⁻¹²) in 1D, 2D and 3D; a nonuniform 1D E averages each node's two half segments; a solved 2D resistor
+  bar at 0.1 V has \|J\| = I / height at every node within 10⁻⁶ plus the current resolution, along +x; Jn + Jp = J;
+  elements with an oxide node have no current, oxide nodes NaN \|J\|; results without edge currents and other or
+  element-less geometries refused.
+- **Finding (DS2 amended):** a quasi-static result stores zero edge currents, not none (`sweep_bias` reports zero
+  currents), so its \|J\| draws as zero; the refusal is for results without edge currents.
+- **BG6 (in part):** E, J, Jn and Jp drawn from a 2D deck and from its result file (the equilibrium point's \|J\|,
+  exactly zero, on 0..1), a 1D \|E\| profile (the junction's peak), a quasi-static \|J\| drawn as zero.
+- **Mutation checks (BG8, Release): 14 of 14 caught** — E's sign, the 2D and 3D Cramer solves, insulator edges kept
+  at either end, a reversed edge tangent, no division by the coupling area, holes subtracted, equal tensor shares, a
+  wrong Kuhn step count, unweighted volumes, a 2D magnitude, `nitcad plot` on the old overload, the zero-field
+  scale off. (With oxide only at the top, the first-node check was unseen: tensor numbering puts the silicon node
+  first on every such edge, so oxide was added below. Two first versions failed only the `/WX` build, an unused
+  variable, and were replaced by mutants the tests catch.)
+
 ---
 
 ## New questions the advisor raised (not yet in `ARCHITECTURE.md`)

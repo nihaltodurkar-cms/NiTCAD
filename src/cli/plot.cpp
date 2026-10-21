@@ -36,7 +36,7 @@ constexpr const char* plot_usage =
     "  view    --view solid|mesh|field|slice|iv|cv|current|bands|profile\n"
     "          (default: field with --field, else solid)\n"
     "  field   --field potential|n|p|Ec|Ev|Efn|Efp|T|doping|ND|NA|R|srh|auger|\n"
-    "          radiative|surface|Gii|Gbtbt  --point <k> (default: last)\n"
+    "          radiative|surface|Gii|Gbtbt|E|J|Jn|Jp  --point <k> (default: last)\n"
     "          --scale linear|log|signed-log  --range <lo>,<hi>\n"
     "          --colormap turbo|viridis|cividis|coolwarm|soft  --contours  --edges  --opaque\n"
     "  3D      --slice x=<um>|y=<um>|z=<um> (repeatable)  --azimuth <deg>  --elevation <deg>\n"
@@ -353,8 +353,19 @@ int plot(int argc, char** argv) {
         }
         auto p = pick();
         if (!p) return std::unexpected(p.error());
-        auto v = field_values(*device, **p, *field);
+        auto v = field_values(*device, *geometry, **p, *field);
         if (!v) return std::unexpected(v.error().message);
+        // A vector magnitude on a log scale (Unit 25b): without --range, the ten decades below its
+        // largest value, everything under them (zero included) at the bottom color. Below that the
+        // reconstructed currents are rounding: Jn at equilibrium spans 1e-42 to 1e-10 A/cm^2.
+        if (is_vector_magnitude(*field) && *scale_kind == ScaleKind::log10 && !o.range) {
+            double top = 0.0;
+            for (const double x : *v) if (std::isfinite(x)) top = std::max(top, x);
+            if (top > 0.0) {
+                const double floor = std::pow(10.0, std::ceil(std::log10(top)) - 10.0);
+                for (double& x : *v) if (std::isfinite(x) && x < floor) x = floor;
+            }
+        }
         return *v;
     };
     const auto field_options = [&](const std::vector<double>& values) -> std::expected<FieldOptions, std::string> {
@@ -363,8 +374,12 @@ int plot(int argc, char** argv) {
         f.map = *colormap;
         f.contours = o.contours;
         f.title = std::string(field_info(*field).title);
-        auto s = o.range ? ColorScale::create(*scale_kind, o.range->first, o.range->second, 1e10)
-                         : ColorScale::fit(*scale_kind, values, 1e10);
+        // A magnitude that is zero everywhere (a quasi-static result's currents) is drawn on 0..1.
+        const bool all_zero = is_vector_magnitude(*field) &&
+                              std::ranges::none_of(values, [](double x) { return std::isfinite(x) && x != 0.0; });
+        auto s = o.range    ? ColorScale::create(*scale_kind, o.range->first, o.range->second, 1e10)
+                 : all_zero ? ColorScale::create(ScaleKind::linear, 0.0, 1.0, 1e10)
+                            : ColorScale::fit(*scale_kind, values, 1e10);
         if (!s) return std::unexpected(s.error().message);
         f.scale = *s;
         return f;
