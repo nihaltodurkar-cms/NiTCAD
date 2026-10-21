@@ -2565,6 +2565,10 @@ approves.
 single-region elements, the references show it as drawn); streamlines through regions of near-zero current wander
 (stopped by DS5's vanishing-field rule); point location on large 3D meshes (BG7 measures it).
 
+**Status:** authorized by the owner 2026-10-22 ("Approve, as recommended"): BQ1 \|E\| and \|J\| drawn as nodal
+averages, BQ2 J streamlines seeded on a contact with an equal current per line (and `--seeds` for an explicit line),
+BQ3 isosurfaces interpolated in the field's scale.
+
 ---
 
 ## New questions the advisor raised (not yet in `ARCHITECTURE.md`)
