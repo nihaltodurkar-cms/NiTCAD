@@ -339,6 +339,26 @@ target_compile_definitions(nitcad_io_test PRIVATE
   NITCAD_IO_FIXTURES="${CMAKE_CURRENT_SOURCE_DIR}/tests/io/fixtures")
 add_test(NAME io COMMAND nitcad_io_test)
 
+# --- render layer (the views: CPU scene, then drawing; Unit 25a, DECISIONS.md VR1-VR9, VQ8) ------
+add_library(nitcad_render STATIC
+  src/render/color.cpp
+  src/render/geometry.cpp
+  src/render/scene.cpp)
+add_library(NiTCAD::render ALIAS nitcad_render)
+target_include_directories(nitcad_render PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
+target_link_libraries(nitcad_render PUBLIC NiTCAD::base NiTCAD::mesh NiTCAD::results
+  NiTCAD::analysis NiTCAD::device)
+
+add_executable(nitcad_render_test
+  tests/render/color_test.cpp
+  tests/render/geometry_test.cpp
+  tests/render/scene_test.cpp)
+target_link_libraries(nitcad_render_test PRIVATE NiTCAD::render Catch2::Catch2WithMain)
+add_test(NAME render COMMAND nitcad_render_test)
+# VG1: render's includes stay within base, mesh, results, analysis and device.
+add_test(NAME render_layering
+  COMMAND ${CMAKE_COMMAND} -DROOT=${CMAKE_CURRENT_SOURCE_DIR} -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/render/layering.cmake)
+
 # --- solve layer (Newton, equilibrium and bias solves, sweeps, cancellation, progress) ---
 add_library(nitcad_solve STATIC
   src/solve/equilibrium.cpp

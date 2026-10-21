@@ -2084,7 +2084,7 @@ LG4: also records each case's fallback count with the default setting. LG7: a fu
 not reported.
 
 **Status:** accepted by the owner 2026-10-21 ("go next"); LQ3 amended by the owner (LQ3a); commits 1–3 done;
-ARCHITECTURE.md 6.10 and 11.3 updated to "as built" (LG8). First in VQ6's order, before Unit 25a.
+ARCHITECTURE.md 6.10 and 11.3 updated to "as built" (LG8). Merged to `main` as `b518c99` (PR #54, 2026-10-21).
 
 **Commit 3 (LG4 benchmark), measured 2026-10-21** on the development machine (Release, one thread, 31.6 GB),
 `[.benchmark][gmres_benchmark]` in `bias_test.cpp` and `mosfet_test.cpp`; MKL not configured, so no PARDISO
@@ -2268,9 +2268,48 @@ product ("for decisions choose whats best for Commercial TCAD"); each is the pag
 | VQ13 | The Device, Mesh, Physics and Simulation menus open the deck at that section and list its keys for insertion; the deck stays the only source of truth. Form editors that write the deck may be a later unit. | Reproducible, diffable, scriptable input is what production flows depend on; a form editor that writes the deck can come later without a second model. |
 | VQ14 | Turbo stays the default (VQ5); the reference's softer five-color map is added as a named option, `soft`. | Turbo is the familiar high-contrast default; `soft` matches the reference where wanted. |
 
-**Status:** authorized with VQ1–VQ14; no code. Unit 44 was approved the same day (its entry on `linalg/iterative`),
-so by VQ6 it is implemented first; then 25a, 45, 25b, 25c, 26, 26b, each approved after the one before it is
-accepted.
+**Status:** authorized with VQ1–VQ14. Unit 44 was implemented first (VQ6) and merged (`b518c99`, PR #54); Unit 25a
+started on the owner's "go 25a" (2026-10-21), on `render/visualization` rebased onto `b518c99`; commit 25a·1 of 3
+done. Then 45, 25b, 25c, 26, 26b, each approved after the one before it is accepted.
+
+**Commit 25a·1 (the CPU scene; VG1–VG3, VG6), as built.** The `render` layer (`include/NiTCAD/render/`,
+`src/render/`; CMake target `NiTCAD::render`, linked to base, mesh, results, analysis and device):
+- `color.hpp`: Turbo, viridis, cividis (matplotlib 3.9.2's 256-entry tables, extracted with awk), Moreland's
+  cool-warm (33 points) and `soft` (VQ14: the reference names deep blue, teal, green, gold and muted red without
+  values; chosen as #253f8f, #2a9d9c, #6dbb5a, #e3b23c, #c0504d), interpolated linearly in sRGB; `ColorScale` linear,
+  log10 and signed log10 (sign(v) log10(1 + |v| / floor), for doping); ticks of 1, 2 or 5 times a power of ten,
+  decades on log axes (minor 2..9 on axes of at most three decades), labels with U+2212 and superscript powers.
+- `geometry.hpp`: elements from `TensorCells` (2 triangles; 6 Kuhn tetrahedra, conforming between cells) or a
+  `SimplexMesh` (reoriented counterclockwise), else the graph; 3D boundary faces (outward); slices (a facet lying
+  in the plane taken once, from its positive side); **regions drawn by control volume**: in the box method the
+  interface between two regions runs between their nodes (no generated node lies on one), so a tensor cell is
+  split at its mid-planes (exactly the box-method control volumes) and a simplex by its planes of equal
+  barycentric weight; pieces, interfaces and both rules by convex-polygon clipping; marching-triangle contours (a
+  vertex at the level counts as above it).
+- `scene.hpp`: `FieldScene` (triangles with per-vertex colormap positions or flat colors, line segments, colorbar,
+  camera, bounds, in µm) and `PlotScene` (axes, series, flags); views `solid_view`, `mesh_view`, `field_view`
+  (2D maps; 3D on the boundary surface, with the semiconductor seen through translucent insulators at their
+  interfaces), `slice_view`; contact slabs of nominal thickness (3% of the device: a lumped gate as oxide under
+  metal, an electrode as metal, an ohmic contact as a thin pad); the VR8 palette by doping class (n⁺ ≥ 1e19 red,
+  n salmon, p channel 1e17–1e19 blue, p⁺ dark blue, substrate beige, insulators pale at alpha 0.35, metal dark
+  grey); `field_values` for ψ, n, p, the bands and quasi-Fermi levels, T and doping; `curve_plot` (Unit 24 curves;
+  a log axis of all-negative values plots |y|; points at or below their resolution flagged), `profile_plot`,
+  `band_plot` (1D; insulators as gaps).
+- **Gates:** `tests/render` (26 cases): VG2 — 2D tensor and generated triangles cover the domain exactly once
+  (no directed edge twice); 3D tensor and generated boundaries closed and outward (enclosed volume and area to
+  1e-12); Kuhn tetrahedra fill each cell; slices match the analytic sections (x = 0.73, a grid plane, the hexagon
+  x + y + z = 1.5) with a linear field exact on them; the control-volume pieces of a tensor mesh equal its control
+  volumes to 1e-14; tensor interfaces lie halfway between the nodes; VG3 — table endpoints, log positions exact at
+  decades, ticks and labels; scenes — region areas per material equal the control volumes, field positions exact,
+  contours on their levels, winding consistent with every normal, the silicon under an oxide facing the oxide
+  above and below. VG1: ctest `render_layering` (a CMake script, no Python) checks that `render` includes only
+  base, mesh, results, analysis and device; nothing outside `render`, its tests and CMakeLists.txt changed.
+- **Mutation checks (VG6, Release): 18 of 18 caught** (Kuhn, simplex and face orientation, the slice facet rule,
+  the tensor and barycentric owner rules, the interface position, the contour tie rule, the table step, the ticks'
+  2, the scale's clamp, the fan's orientation, the interface normal, insulator transparency, field and slice
+  positions, the doping threshold, a forbidden include). A degenerate-triangle check was found dead (the vertex
+  merge before it removes every case) and removed. Release 22/22 and Debug 16/16 (with the new ctests `render` and
+  `render_layering`), no warnings under `/W4 /WX`.
 
 ---
 
