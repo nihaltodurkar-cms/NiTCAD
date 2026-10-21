@@ -392,6 +392,7 @@ add_executable(nitcad_solve_test
   tests/solve/hole_mobility_test.cpp
   tests/solve/default_physics_test.cpp
   tests/solve/provenance_test.cpp
+  tests/solve/process_memory.cpp
   tests/baseline/trace_listener.cpp)
 # The solve tests also read their results through the analysis extractors (Unit 24 gates).
 target_link_libraries(nitcad_solve_test PRIVATE NiTCAD::solve NiTCAD::analysis NiTCAD::io

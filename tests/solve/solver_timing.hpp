@@ -65,3 +65,47 @@ inline SolverTiming time_solver(const NiTCAD::linalg::SparseMatrix& a, std::span
     REQUIRE(solver.backend_counts().factorizations == static_cast<std::size_t>(repeats) + 1);
     return t;
 }
+
+// Unit 44 (LG4): the cost of one Newton step's linear solve with a fresh solver (analysis,
+// factorization or preconditioner build, and one solve), its GMRES iterations and whether it fell
+// back, and memory: the private bytes the solver holds after the solve, and how far the process's
+// peak working set rose during it (a lower bound on the step's own peak; exact when the step sets
+// a new peak, so run the cheaper configurations first).
+struct StepCost {
+    double seconds;
+    std::size_t iterations;  // 0 for a direct backend
+    bool fell_back;
+    double held_MB;
+    double peak_rise_MB;
+    double backward_error;
+    std::vector<double> x;
+};
+
+struct ProcessMemory {
+    double private_MB;
+    double peak_working_set_MB;
+};
+
+ProcessMemory process_memory();  // process_memory.cpp: keeps windows.h out of the tests
+
+inline StepCost newton_step_cost(const NiTCAD::linalg::SparseMatrix& a, std::span<const double> b,
+                                 const NiTCAD::linalg::SolverConfig& config) {
+    using clock = std::chrono::steady_clock;
+    const ProcessMemory before = process_memory();
+    StepCost c{0.0, 0, false, 0.0, 0.0, 0.0, std::vector<double>(b.size())};
+    {
+        const auto t0 = clock::now();
+        auto solver = *NiTCAD::linalg::LinearSolver::create(config);
+        REQUIRE(solver.factorize(a).has_value());
+        const auto r = solver.solve(b, c.x);
+        c.seconds = std::chrono::duration<double>(clock::now() - t0).count();
+        REQUIRE(r.has_value());
+        c.iterations = r->iterations.value_or(0);
+        c.fell_back = r->fell_back;
+        c.backward_error = r->backward_error;
+        const ProcessMemory after = process_memory();
+        c.held_MB = after.private_MB - before.private_MB;
+        c.peak_rise_MB = after.peak_working_set_MB - before.peak_working_set_MB;
+    }
+    return c;
+}

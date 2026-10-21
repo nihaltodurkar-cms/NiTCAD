@@ -506,6 +506,45 @@ TEST_CASE("bias: GMRES-ILUT, one ILUT per Newton iteration and the diode gates (
     REQUIRE(worst <= 1.0);
 }
 
+TEST_CASE("bias: GMRES-ILUT against SparseLU on 3D diode Jacobians (Unit 44, LG4)",
+          "[.benchmark][gmres_benchmark]") {
+    // One Newton step's linear solve (fresh solver: analysis, factorization or ILUT, one solve) on
+    // uniform 3D diodes of 20^3, 30^3 and 40^3 nodes, the Jacobian at 0.5 V on the equilibrium
+    // potential: time, memory, GMRES iterations and fallback (default settings), and the step
+    // against SparseLU's. PARDISO too when an MKL runtime is configured. Run by hand in Release;
+    // the results are in DECISIONS.md (Unit 44, LG4).
+    const bool mkl = !mkl_test::configured_path.empty() && mkl_test::runtime().has_value();
+    for (const int nodes : {20, 30, 40}) {
+        const auto a = uniform_axis(2e-4, nodes), b = uniform_axis(1e-4, nodes);
+        const auto d = diode(*mesh::make_tensor_grid(a, b, b));
+        const auto eq = *solve::solve_equilibrium(
+            d, {.linear = {.backend = linalg::SolverBackend::gmres_ilut}});
+        std::vector<double> rhs;
+        const linalg::SparseMatrix j =
+            device_jacobian(d, std::vector<double>{0.5, 0.0}, eq.fields.potential_V, rhs);
+        const StepCost g = newton_step_cost(j, rhs, {.backend = linalg::SolverBackend::gmres_ilut});
+        const StepCost s = newton_step_cost(j, rhs, {});
+        double scale = 0.0, differ = 0.0;
+        for (const double v : s.x) scale = std::max(scale, std::abs(v));
+        for (std::size_t i = 0; i < s.x.size(); ++i) {
+            differ = std::max(differ, std::abs(g.x[i] - s.x[i]) / scale);
+        }
+        std::printf("gmres 3D diode %d^3 (%zu unknowns, %zu nonzeros): SparseLU %.2f s, held "
+                    "%.0f MB, peak rise %.0f MB; GMRES-ILUT %.2f s, held %.0f MB, peak rise %.0f "
+                    "MB, %zu iterations, fell back %s, backward error %.1e; step difference %.2e\n",
+                    nodes, static_cast<std::size_t>(j.rows()), j.nonzeros(), s.seconds, s.held_MB,
+                    s.peak_rise_MB, g.seconds, g.held_MB, g.peak_rise_MB, g.iterations,
+                    g.fell_back ? "yes" : "no", g.backward_error, differ);
+        if (mkl) {
+            const StepCost p =
+                newton_step_cost(j, rhs, {.backend = linalg::SolverBackend::mkl_pardiso});
+            std::printf("  PARDISO 1 thread %.2f s, held %.0f MB, peak rise %.0f MB\n", p.seconds,
+                        p.held_MB, p.peak_rise_MB);
+        }
+        REQUIRE(differ < 1e-6);
+    }
+}
+
 TEST_CASE("bias: PARDISO cost on 3D diode Jacobians (Unit 18 measurement)", "[.pardiso_perf]") {
     // Uniform 3D diodes of 20^3 and 30^3 nodes (24,000 and 81,000 unknowns; the second the size at
     // which the Unit 3 review measured Eigen at 70 s a factorization), the Jacobian at 0.5 V on the

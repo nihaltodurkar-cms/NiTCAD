@@ -2083,8 +2083,29 @@ LG3: the agreement cases run with `none`, so a fallback cannot hide a failure; a
 LG4: also records each case's fallback count with the default setting. LG7: a further mutant, a fallback that is
 not reported.
 
-**Status:** authorized with LQ1–LQ4; LQ3 amended by the owner (LQ3a, 2026-10-21); commits 1 and 2 of 3 done.
-First in VQ6's order, before Unit 25a.
+**Status:** authorized with LQ1–LQ4; LQ3 amended by the owner (LQ3a, 2026-10-21); commits 1–3 done, awaiting the
+owner's acceptance (then ARCHITECTURE.md 6.10 and 11.3 as built, LG8). First in VQ6's order, before Unit 25a.
+
+**Commit 3 (LG4 benchmark), measured 2026-10-21** on the development machine (Release, one thread, 31.6 GB),
+`[.benchmark][gmres_benchmark]` in `bias_test.cpp` and `mosfet_test.cpp`; MKL not configured, so no PARDISO
+column. One Newton step's linear solve with a fresh solver (analysis, factorization or ILUT build, one solve), at
+the default settings (`max_backward_error` 1e-8, restart 30, drop 1e-4, fill 10, fallback `sparse_lu`). "Held" is
+the private memory the solver holds after the solve; "peak rise" how far the process's peak working set rose
+during the step (GMRES-ILUT ran first and never raised it: its peak stayed below the Jacobian assembly's).
+
+| Case | Unknowns | SparseLU | GMRES-ILUT | GMRES iterations | Fallbacks | Step difference |
+|---|---|---|---|---|---|---|
+| 2D MOSFET 90 × 50, Vg = 1 V | 28,470 | 0.23 s, held 122 MB | 0.47 s, held 48 MB | 120 | 0 | 3.3e-13 |
+| 3D diode 20³, 0.5 V | 24,000 | 7.1 s, held 409 MB, peak +321 MB | 0.77 s, held 50 MB | 40 | 0 | 2.2e-14 |
+| 3D diode 30³ | 81,000 | 105 s, held 3.1 GB, peak +2.6 GB | 3.8 s, held 174 MB | 60 | 0 | 7.4e-14 |
+| 3D diode 40³ | 192,000 | 1021 s, held 10.9 GB, peak +8.0 GB | 14.1 s, held 422 MB | 90 | 0 | 8.7e-14 |
+
+The MOSFET's Id-Vg sweep (16 points, Vds = 0.05 V): SparseLU 21.1 s and 100 Newton iterations, GMRES-ILUT 29.9 s
+and 84, every drain current within max(1e-8 |I|, resolution) of SparseLU's (worst ratio 0.000).
+**Reading (LQ4):** on the 2D MOSFET SparseLU is twice as fast and GMRES-ILUT holds 2.5× less memory; on 3D
+GMRES-ILUT is 9×, 27× and 72× faster and holds 8×, 18× and 26× less memory, its iterations growing about as the
+grid's linear size (40, 60, 90). No fallback was taken in any case. The default backend stays SparseLU (LS6);
+these figures are the evidence for recommending `backend = gmres_ilut` for 3D devices.
 
 **LQ3a (owner ruling, 2026-10-21): small-signal systems are solved directly.** Measured in commit 2: with GMRES
 the admittances agree with SparseLU only within each run's own reported resolution, and that resolution reached
