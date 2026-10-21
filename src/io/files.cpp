@@ -264,6 +264,10 @@ namespace mesh_key = detail::mesh_key;
 namespace fields_key {
 constexpr std::uint16_t potential = 1, n = 2, p = 3, temperature = 4;
 }
+namespace rates_key {  // Unit 45
+constexpr std::uint16_t srh = 1, auger = 2, radiative = 3, impact = 4, interface_n = 5, interface_p = 6,
+                        band_to_band_n = 7, band_to_band_p = 8, net_n = 9, net_p = 10;
+}
 namespace bands_key {
 constexpr std::uint16_t conduction = 1, valence = 2, electron = 3, hole = 4;
 }
@@ -280,10 +284,12 @@ constexpr std::uint16_t bias = 1, fields = 2, bands = 3, current = 4, resolution
                         convergence = 10, paths = 11, relocations = 12, thermal_bias = 13,
                         thermal_heat = 14, substeps = 15, weighted = 16,
                         weighted_resolution = 17;  // Unit 32: absent when off
+constexpr std::uint16_t rates = 18;                // Unit 45: absent when not stored
 }
 namespace run_key {
 constexpr std::uint16_t identity = 1, setting = 2, name = 1, value = 2;
-constexpr std::uint16_t provenance = 3;  // Unit 42; absent in older files
+constexpr std::uint16_t provenance = 3;   // Unit 42; absent in older files
+constexpr std::uint16_t mesh_digest = 4;  // Unit 45; absent in older files (0: unknown)
 }
 namespace provenance_key {
 constexpr std::uint16_t version = 1, revision = 2, dirty = 3, build_type = 4, compiler = 5,
@@ -314,6 +320,7 @@ constexpr std::uint16_t time = 1, step = 2, order = 3, error_ratio = 4, bias = 5
 namespace snapshot_key {
 constexpr std::uint16_t time = 1, point = 2, fields = 3, bands = 4, edge_n = 5, edge_p = 6,
                         occupancy = 7;
+constexpr std::uint16_t rates = 8;  // Unit 45: absent when not stored
 }
 // Small-signal runs (Unit 42). Complex values are stored as (real, imaginary) pairs of doubles.
 namespace small_signal_key {
@@ -349,6 +356,38 @@ std::expected<results::NodeFields, base::Error> read_fields(const Reader& r) {
     f.p_cm3 = std::move(p);
     f.temperature_K = std::move(temperature);
     return f;
+}
+
+// The rates of a point or a snapshot (Unit 45): every vector, empty ones as absent.
+Writer write_rates(const results::RateFields& r) {
+    namespace k = rates_key;
+    Writer w;
+    w.f64s(k::srh, r.srh);
+    w.f64s(k::auger, r.auger);
+    w.f64s(k::radiative, r.radiative);
+    w.f64s(k::impact, r.impact);
+    w.f64s(k::interface_n, r.interface_n);
+    w.f64s(k::interface_p, r.interface_p);
+    w.f64s(k::band_to_band_n, r.band_to_band_n);
+    w.f64s(k::band_to_band_p, r.band_to_band_p);
+    w.f64s(k::net_n, r.net_n);
+    w.f64s(k::net_p, r.net_p);
+    return w;
+}
+
+std::expected<results::RateFields, base::Error> read_rates(const Reader& r) {
+    namespace k = rates_key;
+    results::RateFields out;
+    const std::array<std::pair<std::uint16_t, std::vector<double>*>, 10> slots{
+        {{k::srh, &out.srh}, {k::auger, &out.auger}, {k::radiative, &out.radiative},
+         {k::impact, &out.impact}, {k::interface_n, &out.interface_n}, {k::interface_p, &out.interface_p},
+         {k::band_to_band_n, &out.band_to_band_n}, {k::band_to_band_p, &out.band_to_band_p},
+         {k::net_n, &out.net_n}, {k::net_p, &out.net_p}}};
+    for (const auto& [key, target] : slots) {
+        NITCAD_IO_TRY(values, r.f64s_or_empty(key));
+        *target = std::move(values);
+    }
+    return out;
 }
 
 Writer write_convergence(const results::ConvergenceRecord& c) {
@@ -435,6 +474,7 @@ Writer write_point(const results::BiasPoint& p) {
         w.f64s(point_key::weighted, p.weighted_current);
         w.f64s(point_key::weighted_resolution, p.weighted_current_resolution);
     }
+    if (!p.rates.net_n.empty()) w.record(point_key::rates, write_rates(p.rates));
     return w;
 }
 
@@ -499,6 +539,11 @@ std::expected<results::BiasPoint, base::Error> read_point(const Reader& r) {
     NITCAD_IO_TRY(weighted_resolution, r.f64s_or_empty(point_key::weighted_resolution));
     p.weighted_current = std::move(weighted);
     p.weighted_current_resolution = std::move(weighted_resolution);
+    if (r.has(point_key::rates)) {
+        NITCAD_IO_TRY(rr, r.record(point_key::rates));
+        NITCAD_IO_TRY(rates, read_rates(rr));
+        p.rates = std::move(rates);
+    }
     return p;
 }
 
@@ -568,6 +613,7 @@ Writer write_run(const results::RunRecord& run) {
         w.record(run_key::setting, s);
     }
     w.record(run_key::provenance, write_provenance(run.provenance));
+    if (run.mesh_digest != 0) w.u64(run_key::mesh_digest, run.mesh_digest);
     return w;
 }
 
@@ -585,6 +631,10 @@ std::expected<results::RunRecord, base::Error> read_run(const Reader& r) {
         NITCAD_IO_TRY(p, r.record(run_key::provenance));
         NITCAD_IO_TRY(provenance, read_provenance(p));
         run.provenance = std::move(provenance);
+    }
+    if (r.has(run_key::mesh_digest)) {
+        NITCAD_IO_TRY(digest, r.u64(run_key::mesh_digest));
+        run.mesh_digest = digest;
     }
     return run;
 }
@@ -743,6 +793,7 @@ Writer write_snapshot(const results::TransientSnapshot& s) {
     w.f64s(k::edge_n, s.edge_current_n);
     w.f64s(k::edge_p, s.edge_current_p);
     w.f64s(k::occupancy, s.trap_occupancy);
+    if (!s.rates.net_n.empty()) w.record(k::rates, write_rates(s.rates));
     return w;
 }
 
@@ -767,6 +818,11 @@ std::expected<results::TransientSnapshot, base::Error> read_snapshot(const Reade
     s.edge_current_n = std::move(edge_n);
     s.edge_current_p = std::move(edge_p);
     s.trap_occupancy = std::move(occupancy);
+    if (r.has(k::rates)) {
+        NITCAD_IO_TRY(rr, r.record(k::rates));
+        NITCAD_IO_TRY(rates, read_rates(rr));
+        s.rates = std::move(rates);
+    }
     return s;
 }
 

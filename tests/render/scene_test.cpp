@@ -367,10 +367,28 @@ TEST_CASE("render scene: field values from a bias point, and material classes") 
     }
     p.fields.n_cm3.pop_back();
     CHECK(field_values(m.device, p, Field::electrons).error().code == base::ErrorCode::invalid_input);
-    for (int f = 0; f <= static_cast<int>(Field::acceptors); ++f) {
+    for (int f = 0; f <= static_cast<int>(Field::last); ++f) {
         CHECK(find_field(field_info(static_cast<Field>(f)).key) == static_cast<Field>(f));
     }
     CHECK_FALSE(find_field("J").has_value());
+
+    // Unit 45: the rates, generations as positive; a missing rate is an error that says so.
+    const auto rf = [&]() {
+        p.fields.n_cm3.assign(n, 1e10);
+        return p;
+    }();
+    results::BiasPoint q = rf;
+    q.rates.net_n.assign(n, 2e15);
+    q.rates.srh.assign(n, 1.5e15);
+    q.rates.impact.assign(n, -3e12);
+    CHECK(field_values(m.device, q, Field::recombination)->at(4) == 2e15);
+    CHECK(field_values(m.device, q, Field::srh)->at(4) == 1.5e15);
+    CHECK(field_values(m.device, q, Field::impact_generation)->at(4) == 3e12);
+    const auto missing = field_values(m.device, q, Field::btbt_generation);
+    REQUIRE_FALSE(missing.has_value());
+    CHECK(missing.error().message.find("holds no Gbtbt rates") != std::string::npos);
+    CHECK(field_info(Field::recombination).default_scale == ScaleKind::signed_log10);
+    CHECK(field_info(Field::impact_generation).default_scale == ScaleKind::log10);
 
     std::set<Material> seen;
     for (std::size_t i = 0; i < n; ++i) seen.insert(material_class(m.device, static_cast<NodeId>(i)));

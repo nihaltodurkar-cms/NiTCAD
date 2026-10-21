@@ -473,7 +473,7 @@ device = pn.nitdev
     CHECK(beyond.status == 1);
     CHECK(beyond.output.find("--point 9 is out of range (3 points)") != std::string::npos);
 
-    // Another device's mesh: refused, the counts in the message.
+    // Another device's mesh: refused (by the result's mesh digest since Unit 45).
     std::string other = pn2d;
     other.replace(other.find("linspace(0, 1um, 6)"), 19, "linspace(0, 1um, 4)");
     other.replace(other.find("pn.nitsweep"), 11, "o.nitsweep");
@@ -482,7 +482,7 @@ device = pn.nitdev
     const Cli foreign = cli("plot " + out("pn.nitsweep") + " --device " + out("o.nitdev") + " --field n --out " +
                             out("foreign.png"));
     CHECK(foreign.status == 1);
-    CHECK(foreign.output.find("they do not belong together") != std::string::npos);
+    CHECK(foreign.output.find("its mesh digest is not the device's") != std::string::npos);  // Unit 45
     CHECK_FALSE(fs::exists(dir / "foreign.png"));
 
 
@@ -530,6 +530,36 @@ sweep = )" + tag + R"(.nitsweep
                           out("h.nitmesh") + " --field potential --out " + out("wrong.png"));
     CHECK(wrong.status == 1);
     CHECK(wrong.output.find("is not the device's mesh") != std::string::npos);
+
+    // Unit 45: a mesh with the same node count is refused by its digest; the rates draw; a file
+    // written before Unit 45 falls back to the node count and holds no rates.
+    std::string same_count = pn2d;
+    same_count.replace(same_count.find("linspace(0, 2um, 21)"), 20, "linspace(0, 3um, 21)");
+    same_count.replace(same_count.find("pn.nitsweep"), 11, "s.nitsweep");
+    same_count.replace(same_count.find("pn.nitdev"), 9, "s.nitdev");
+    REQUIRE(cli("run " + write("s.deck", same_count)).status == 0);
+    const Cli digest = cli("plot " + out("pn.nitsweep") + " --device " + out("s.nitdev") + " --field n --out " +
+                           out("digest.png"));
+    CHECK(digest.status == 1);
+    CHECK(digest.output.find("its mesh digest is not the device's") != std::string::npos);
+    const Cli rate = cli("plot " + deck + " --field R --adapter warp --size 400x300 --out " + out("r.png"));
+    CAPTURE(rate.output);
+    CHECK(rate.status == 0);
+    image_ok("r.png", 400, 300);
+    const fs::path old = fs::path(NITCAD_IO_FIXTURES) / "pre_unit42";
+    const std::string old_sweep = "\"" + (old / "bar.nitsweep").string() + "\"";
+    const std::string old_device = "\"" + (old / "bar.nitdev").string() + "\"";
+    const Cli fallback = cli("plot " + old_sweep + " --device " + old_device +
+                             " --field potential --adapter warp --size 400x300 --out " + out("old.png"));
+    CAPTURE(fallback.output);
+    CHECK(fallback.status == 0);
+    const Cli no_rates = cli("plot " + old_sweep + " --device " + old_device + " --field R --out " + out("old_r.png"));
+    CHECK(no_rates.status == 1);
+    CHECK(no_rates.output.find("holds no R rates") != std::string::npos);
+    // An old file with another device: the node counts refuse it, named in the message.
+    const Cli counts = cli("plot " + old_sweep + " --device " + out("pn.nitdev") + " --field n --out " + out("c.png"));
+    CHECK(counts.status == 1);
+    CHECK(counts.output.find("they do not belong together") != std::string::npos);
     // Usage: exit 64.
     CHECK(cli("plot").status == 64);
     CHECK(cli("plot " + deck).status == 64);  // no --out

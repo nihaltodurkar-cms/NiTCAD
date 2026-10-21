@@ -111,6 +111,9 @@ std::vector<std::pair<std::string, double>> settings(const BiasOptions& o) {
         {"models.incomplete_ionization", o.models.incomplete_ionization ? 1.0 : 0.0},
         {"equations", static_cast<double>(o.equations)},
     };
+    // Unit 45: the rates change no result the run computes, but a run without them is a different
+    // output; recorded only when off, so every run that stores them keeps its identity.
+    if (!o.store_rates) s.emplace_back("store_rates", 0.0);
     // Unit 44: recorded only with the iterative backend, so the direct runs keep their identity.
     if (o.linear.backend == linalg::SolverBackend::gmres_ilut) {
         s.emplace_back("linear.restart", static_cast<double>(o.linear.restart));
@@ -373,7 +376,7 @@ results::RunRecord make_run_record(const device::Device& device, const BiasOptio
     // The quasi-static sweep reads only the potential.
     const bool transport = options.equations == Equations::drift_diffusion;
     initial_state(d, initial, transport, transport && options.models.electrothermal);
-    return {d.value(), named, provenance()};
+    return {d.value(), named, provenance(), mesh::graph_digest(device.mesh())};
 }
 
 results::RunRecord make_run_record(const device::Device& device, const TransientOptions& options,
@@ -402,7 +405,7 @@ results::RunRecord make_run_record(const device::Device& device, const Transient
         d.reals(w.parameters());
     }
     initial_state(d, initial, true);
-    return {d.value(), named, provenance()};
+    return {d.value(), named, provenance(), mesh::graph_digest(device.mesh())};
 }
 
 results::RunRecord make_run_record(const device::Device& device,
@@ -423,7 +426,7 @@ results::RunRecord make_run_record(const device::Device& device,
     d.reals(options.frequencies_Hz);
     d.reals(options.field_frequencies_Hz);
     initial_state(d, initial, options.steady.equations == Equations::drift_diffusion);
-    return {d.value(), named, provenance()};
+    return {d.value(), named, provenance(), mesh::graph_digest(device.mesh())};
 }
 
 results::RunRecord make_run_record(const device::Device& device, const TraceOptions& options,
@@ -441,7 +444,7 @@ results::RunRecord make_run_record(const device::Device& device, const TraceOpti
     device_and_settings(d, device, options.steady, named);
     d.reals(options.start_V);
     initial_state(d, initial, true);
-    return {d.value(), named, provenance()};
+    return {d.value(), named, provenance(), mesh::graph_digest(device.mesh())};
 }
 
 }  // namespace NiTCAD::solve

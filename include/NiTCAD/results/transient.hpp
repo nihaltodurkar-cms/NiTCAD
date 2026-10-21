@@ -57,6 +57,8 @@ struct TransientSnapshot {
     // Electron occupancy of each interface trap level on each interface edge (empty without
     // traps), in the assembler's slot order.
     std::vector<double> trap_occupancy;
+    // Generation-recombination rates (Unit 45; steady traps); empty when not stored.
+    RateFields rates;
 };
 
 struct Transient {

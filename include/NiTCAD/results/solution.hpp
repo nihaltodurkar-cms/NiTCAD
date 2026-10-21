@@ -58,6 +58,28 @@ struct EquilibriumResult {
     ConvergenceRecord convergence;
 };
 
+// Per node, the generation-recombination rates of a state in cm^-3 s^-1 (Unit 45, DECISIONS.md
+// RS1, RS2): each mechanism's net recombination R - G (a generation is negative), read from its own
+// equation term, so the rates are the solver's (assemble::DriftDiffusion::rates). A vector is empty
+// when the mechanism is off or the rates were not stored (solve::BiasOptions::store_rates, deck
+// `[solver] rates`). SRH, Auger and radiative recombination and impact ionization change both
+// carriers alike (one vector); the interfaces and band-to-band tunnelling, whose nonlocal paths put
+// electrons and holes at different nodes, per carrier. The interfaces' rate is their edges' carrier
+// exchange (surface recombination and trap capture) over the node's control volume: an effective
+// volume rate at interface nodes, exact in its total, not in its spread.
+struct RateFields {
+    std::vector<double> srh;
+    std::vector<double> auger;
+    std::vector<double> radiative;
+    std::vector<double> impact;
+    std::vector<double> interface_n;
+    std::vector<double> interface_p;
+    std::vector<double> band_to_band_n;
+    std::vector<double> band_to_band_p;
+    std::vector<double> net_n;  // the sum of every mechanism, as the electron rows see it
+    std::vector<double> net_p;
+};
+
 struct BiasPoint {
     std::vector<double> bias_V;  // per contact, in the device's contact order
     NodeFields fields;
@@ -93,6 +115,8 @@ struct BiasPoint {
     // this state, and how many times the paths were re-traced before they agreed with the state
     // (the convergence record is the last Newton run's).
     std::vector<TunnelPath> tunnel_paths;
+    // Generation-recombination rates (Unit 45); empty when not stored.
+    RateFields rates;
     int path_relocations = 0;
     // Electrothermal (Unit 23; empty with the model off): the temperature of each thermal contact
     // at this point in K (isothermal: its own; R_th: its ambient), and the heat leaving the device

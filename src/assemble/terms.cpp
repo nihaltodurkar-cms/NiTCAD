@@ -3,6 +3,8 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <optional>
+#include <string_view>
 #include <utility>
 
 #include "NiTCAD/base/constants.hpp"
@@ -818,6 +820,62 @@ void DriftDiffusion::Terms::evaluate(const DriftDiffusion& s, const Term& t,
     }
     const std::vector<NodeDegeneracy> g = s.degeneracies(x);
     t.add(s, {x, f, values, step, g});
+}
+
+// --- Unit 45: rates read from the terms --------------------------------------------------------
+
+namespace {
+
+// The mechanism of a term, by its name (terms.cpp and thermal_terms.cpp), or none.
+std::optional<DriftDiffusion::RateMechanism> mechanism_of(std::string_view name) noexcept {
+    using M = DriftDiffusion::RateMechanism;
+    if (name.starts_with("SRH recombination")) return M::srh;
+    if (name.starts_with("Auger recombination")) return M::auger;
+    if (name.starts_with("radiative recombination")) return M::radiative;
+    if (name.starts_with("interfaces")) return M::interfaces;
+    if (name.starts_with("impact ionization")) return M::impact;
+    if (name == "local band-to-band tunnelling" || name == "nonlocal band-to-band tunnelling") {
+        return M::band_to_band;
+    }
+    return std::nullopt;
+}
+
+}  // namespace
+
+std::vector<DriftDiffusion::MechanismRate> DriftDiffusion::rates(std::span<const double> x) const {
+    NITCAD_EXPECTS(x.size() == unknowns());
+    const std::size_t n = node_count();
+    // A row's scaled residual r is V R / R0 (rate_scale_ = Ns / R0, generation_scale_ = 1 / R0).
+    const double R0 = Ns_ / rate_scale_;
+    std::vector<double> f(unknowns());
+    std::vector<NodeDegeneracy> g;
+    std::vector<ThermalState> thermal;
+    std::vector<NodeLevels> levels;
+    if (electrothermal()) {
+        thermal = thermal_states(x);
+        levels = thermal_levels(x, thermal);
+    } else {
+        g = degeneracies(x);
+    }
+    std::vector<MechanismRate> out;
+    for (const std::shared_ptr<const Term>& t : Terms::list(*this)) {
+        const auto m = mechanism_of(t->info().name);
+        if (!m) continue;
+        std::ranges::fill(f, 0.0);
+        const Terms::Evaluation ev{x, f, {}, nullptr, g, thermal, levels, true};
+        t->add(*this, ev);
+        auto it = std::ranges::find(out, *m, &MechanismRate::mechanism);
+        if (it == out.end()) {
+            out.push_back({*m, std::vector<double>(n, 0.0), std::vector<double>(n, 0.0)});
+            it = out.end() - 1;
+        }
+        for (std::size_t i = 0; i < n; ++i) {
+            const double k = R0 / volume_[i];
+            it->electron[i] -= f[m_ * i + 1] * k;  // the electron row subtracts V R / R0
+            it->hole[i] += f[m_ * i + 2] * k;      // the hole row adds it
+        }
+    }
+    return out;
 }
 
 }  // namespace NiTCAD::assemble

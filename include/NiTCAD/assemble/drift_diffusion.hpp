@@ -463,6 +463,23 @@ public:
     // The band diagram at state x (band_edges.hpp); NaN on insulator nodes. Precondition
     // (NITCAD_EXPECTS): x has unknowns() entries and positive densities off the insulators.
     [[nodiscard]] BandEdges band_edges(std::span<const double> x) const;
+
+    // Unit 45 (DECISIONS.md RS1): each generation-recombination mechanism at state x, per node, in
+    // cm^-3 s^-1, read from its own equation term: the term's contribution to the node's electron
+    // and hole continuity rows divided by the node's control volume, so the rates are the
+    // residual's, operand for operand. Sign: net recombination R - G (a generation is negative).
+    // A mechanism is listed only when the system has its term; the local and nonlocal
+    // band-to-band terms add into one entry. Interfaces: their edges' carrier exchange (surface
+    // recombination and trap capture) over the node's control volume, an effective volume rate at
+    // interface nodes; read with steady traps (no time step). Precondition (NITCAD_EXPECTS): x has
+    // unknowns() entries.
+    enum class RateMechanism : std::uint8_t { srh, auger, radiative, interfaces, impact, band_to_band };
+    struct MechanismRate {
+        RateMechanism mechanism;
+        std::vector<double> electron;  // per node, as the electron row sees it
+        std::vector<double> hole;
+    };
+    [[nodiscard]] std::vector<MechanismRate> rates(std::span<const double> x) const;
     // Scaled charge on each gate, the sum over its nodes of G_i (psi_G,i - psi_i) (gate.hpp), and
     // on each electrode, the displacement flux leaving its nodes along the edges to other nodes,
     // in device.contacts() order; zero for an ohmic contact. Physical value: times q Ns L_D^D, in

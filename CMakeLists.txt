@@ -330,7 +330,8 @@ add_executable(nitcad_io_test
   tests/io/generated_test.cpp
   tests/io/device_file_test.cpp
   tests/io/provenance_test.cpp
-  tests/io/run_files_test.cpp)
+  tests/io/run_files_test.cpp
+  tests/io/rates_files_test.cpp)
 # The record test reads the private encoding directly.
 target_include_directories(nitcad_io_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/io")
 target_link_libraries(nitcad_io_test PRIVATE NiTCAD::io Catch2::Catch2WithMain)
@@ -443,6 +444,7 @@ add_executable(nitcad_solve_test
   tests/solve/hole_mobility_test.cpp
   tests/solve/default_physics_test.cpp
   tests/solve/provenance_test.cpp
+  tests/solve/rates_test.cpp
   tests/solve/process_memory.cpp
   tests/baseline/trace_listener.cpp)
 # The solve tests also read their results through the analysis extractors (Unit 24 gates).
@@ -491,6 +493,7 @@ target_link_libraries(nitcad_deck_test PRIVATE NiTCAD::deck NiTCAD::render Catch
 add_dependencies(nitcad_deck_test nitcad)
 target_compile_definitions(nitcad_deck_test PRIVATE
   NITCAD_CLI_PATH="$<TARGET_FILE:nitcad>"
+  NITCAD_IO_FIXTURES="${CMAKE_CURRENT_SOURCE_DIR}/tests/io/fixtures"
   NITCAD_MKL_RUNTIME_PATH="${NITCAD_MKL_RUNTIME_PATH}")
 add_test(NAME deck COMMAND nitcad_deck_test)
 
