@@ -25,6 +25,7 @@
 #include <expected>
 #include <filesystem>
 #include <memory>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -101,5 +102,9 @@ struct ImageDifference {
 };
 [[nodiscard]] std::expected<ImageDifference, base::Error> compare(const Image& a, const Image& b,
                                                                  int tolerance);
+
+// Images of one size tiled in rows of `columns`, left to right and top to bottom, on white (Unit 25c,
+// DC4: a filmstrip). Errors (invalid_input): no image, images of different sizes, columns below 1.
+[[nodiscard]] std::expected<Image, base::Error> tile_images(std::span<const Image> images, int columns);
 
 }  // namespace NiTCAD::render

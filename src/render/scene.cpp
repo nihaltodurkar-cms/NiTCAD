@@ -5,6 +5,7 @@
 #include <array>
 #include <cmath>
 #include <cstddef>
+#include <cstdio>
 #include <limits>
 #include <map>
 #include <numbers>
@@ -930,6 +931,47 @@ std::expected<FieldScene, base::Error> outline_view(const device::Device& d, con
     if (o.contacts) contact_slabs(d, g, o.palette, s.triangles, o.clip);
     frame(s, o);
     return s;
+}
+
+std::expected<std::vector<FieldScene>, base::Error> filmstrip_scenes(const device::Device& d, const Geometry& g,
+                                                                    std::span<const FilmFrame> frames,
+                                                                    ScaleKind kind, const FieldOptions& o) {
+    if (frames.empty()) return std::unexpected(invalid("a filmstrip needs a frame"));
+    FieldOptions shared = o;
+    if (!shared.scale) {
+        // CQ2: one scale over every frame, so a color means the same value in each.
+        std::vector<double> all;
+        for (const FilmFrame& f : frames) all.insert(all.end(), f.values.begin(), f.values.end());
+        auto s = ColorScale::fit(kind, all, 1e10);
+        if (!s) return std::unexpected(std::move(s.error()));
+        shared.scale = *s;
+    }
+    std::vector<FieldScene> out;
+    for (std::size_t k = 0; k < frames.size(); ++k) {
+        auto s = field_view(d, g, frames[k].values, shared);
+        if (!s) return std::unexpected(std::move(s.error()));
+        s->title = o.title.empty() ? frames[k].label : o.title + ", " + frames[k].label;
+        out.push_back(std::move(*s));
+    }
+    return out;
+}
+
+std::string time_label(double t) {
+    if (t == 0.0) return "t = 0 s";
+    struct Unit {
+        double scale;
+        const char* name;
+    };
+    constexpr std::array<Unit, 6> units{{{1.0, "s"}, {1e-3, "ms"}, {1e-6, "\xC2\xB5s"}, {1e-9, "ns"}, {1e-12, "ps"}, {1e-15, "fs"}}};
+    const double a = std::abs(t);
+    std::size_t u = 0;
+    while (u + 1 < units.size() && a < units[u].scale * (1.0 - 5e-4)) ++u;
+    const double v = t / units[u].scale;
+    // Three significant digits.
+    const int decimals = std::abs(v) >= 99.95 ? 0 : std::abs(v) >= 9.995 ? 1 : 2;
+    char buffer[48];
+    std::snprintf(buffer, sizeof buffer, "t = %.*f %s", decimals, v, units[u].name);
+    return buffer;
 }
 
 double default_gap(const device::Device& d, int axis) noexcept {

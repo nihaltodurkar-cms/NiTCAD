@@ -265,6 +265,18 @@ void add_arrows(FieldScene& scene, std::span<const Arrow> arrows, double length,
                                                                   double gap,
                                                                   std::span<const double> values = {},
                                                                   const FieldOptions& options = {});
+// A transient filmstrip's frames (Unit 25c, DC4, CQ2): one field view per frame (2D map or 3D
+// surface, as field_view), all on one scale (options.scale, else fitted over every frame's values),
+// each titled "<options.title>, <label>". Errors as field_view, and (invalid_input) no frame.
+struct FilmFrame {
+    std::string label;           // e.g. time_label(t)
+    std::vector<double> values;  // one per node
+};
+[[nodiscard]] std::expected<std::vector<FieldScene>, base::Error> filmstrip_scenes(
+    const device::Device& device, const Geometry& geometry, std::span<const FilmFrame> frames,
+    ScaleKind kind, const FieldOptions& options = {});
+// "t = 1.25 ns": three significant digits in s, ms, us (µs), ns, ps or fs; "t = 0 s" at zero.
+[[nodiscard]] std::string time_label(double seconds);
 // CQ3's default gap: 12% of the device's extent along the axis.
 [[nodiscard]] double default_gap(const device::Device& device, int axis) noexcept;
 

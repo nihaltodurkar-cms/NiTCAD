@@ -447,12 +447,20 @@ std::vector<Point> contact_seeds(const device::Device& d, const Locator& loc, st
 
 namespace {
 
-// The field at x as an arrow, or nothing outside the mesh or where the field is undefined or zero.
+// The field at x as an arrow, or nothing outside the mesh, where the field is undefined or zero, or
+// where the element's nearest node (largest weight) is excluded.
 std::optional<Arrow> arrow_at(const Locator& loc, std::span<const Point> field, const Point& x,
-                              const Point& normal) {
+                              const Point& normal, std::span<const std::uint8_t> excluded) {
     const auto h = loc.locate(x);
     if (!h) return std::nullopt;
     const auto n = loc.geometry().element(h->element);
+    if (!excluded.empty()) {
+        std::size_t nearest = 0;
+        for (std::size_t k = 1; k < n.size(); ++k) {
+            if (h->weights[k] > h->weights[nearest]) nearest = k;
+        }
+        if (excluded[static_cast<std::size_t>(n[nearest])]) return std::nullopt;
+    }
     Arrow a;
     a.position = x;
     a.normal = normal;
@@ -471,7 +479,7 @@ std::optional<Arrow> arrow_at(const Locator& loc, std::span<const Point> field, 
 }  // namespace
 
 std::vector<Arrow> grid_arrows(const Locator& loc, std::span<const Point> field, std::size_t count,
-                               double& spacing) {
+                               double& spacing, std::span<const std::uint8_t> excluded) {
     std::vector<Arrow> out;
     spacing = 0.0;
     const Geometry& g = loc.geometry();
@@ -492,14 +500,15 @@ std::vector<Arrow> grid_arrows(const Locator& loc, std::span<const Point> field,
     for (std::size_t j = 0; j < ny; ++j) {
         for (std::size_t i = 0; i < nx; ++i) {
             const Point x{x0 + (static_cast<double>(i) + 0.5) * h, y0 + (static_cast<double>(j) + 0.5) * h, 0.0};
-            if (auto a = arrow_at(loc, field, x, Point{})) out.push_back(*a);
+            if (auto a = arrow_at(loc, field, x, Point{}, excluded)) out.push_back(*a);
         }
     }
     return out;
 }
 
 std::vector<Arrow> surface_arrows(const Locator& loc, std::span<const Point> field,
-                                  std::span<const Polygon> surface, std::size_t count, double& spacing) {
+                                  std::span<const Polygon> surface, std::size_t count, double& spacing,
+                                  std::span<const std::uint8_t> excluded) {
     std::vector<std::array<Point, 3>> triangles;
     std::vector<Point> normals;
     std::vector<double> area;
@@ -527,7 +536,7 @@ std::vector<Arrow> surface_arrows(const Locator& loc, std::span<const Point> fie
     });
     std::vector<Arrow> out;
     for (std::size_t s = 0; s < sites.size(); ++s) {
-        if (auto a = arrow_at(loc, field, sites[s], normals[which[s]])) out.push_back(*a);
+        if (auto a = arrow_at(loc, field, sites[s], normals[which[s]], excluded)) out.push_back(*a);
     }
     return out;
 }

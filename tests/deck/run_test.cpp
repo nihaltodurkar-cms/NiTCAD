@@ -894,3 +894,75 @@ sweep = )" + tag + ".nitsweep\ndevice = " + tag + ".nitdev\n";
     CHECK(flat.status == 1);
     CHECK(flat.output.find("needs a 3D device") != std::string::npos);
 }
+
+TEST_CASE("nitcad plot: transient filmstrips and transient currents (Unit 25c, CG4, CG6)", "[deck]") {
+    const fs::path dir = scratch("cli_plot_film");
+    const auto write = [&](const char* name, const std::string& text) {
+        std::ofstream(dir / name, std::ios::binary) << text;
+        return "\"" + (dir / name).string() + "\"";
+    };
+    const auto out = [&](const char* name) { return "\"" + (dir / name).string() + "\""; };
+    const std::string device = R"([mesh]
+type = tensor
+x = linspace(0, 2um, 21)
+y = linspace(0, 1um, 6)
+[region silicon]
+material = silicon
+[doping]
+profile = acceptor constant 1e17 axis=y x=-1:1um
+profile = donor constant 1e17 axis=y x=1um:3um
+[contact anode]
+kind = ohmic
+patch = x_min
+[contact cathode]
+kind = ohmic
+patch = x_max
+)";
+    const std::string tr = write("tr.deck", device + R"([transient]
+contact anode = ramp(0, 0.4, 0, 4e-10)
+t_end = 6e-10
+dt_initial = 1e-10
+adaptive = off
+fields_every_step = on
+[output]
+transient = tr.nittran
+device = tr.nitdev
+)");
+    REQUIRE(cli("run " + tr).status == 0);
+    const auto run = io::load_transient(dir / "tr.nittran");
+    REQUIRE(run.has_value());
+    const std::size_t snapshots = run->snapshots.size();
+    REQUIRE(snapshots >= 5);
+    // Every snapshot as a frame (at most 12), each also written alone; the strip is 4 frames wide.
+    const fs::path frames = dir / "frames";
+    const Cli film = cli("plot " + tr + " --view filmstrip --field n --size 200x150 --frames \"" + frames.string() +
+                         "\" --adapter warp --out " + out("film.png"));
+    CAPTURE(film.output);
+    REQUIRE(film.status == 0);
+    const std::size_t shown = std::min<std::size_t>(snapshots, 12);
+    CHECK(film.output.find(std::to_string(shown) + " frames") != std::string::npos);
+    const auto strip = render::load_png(dir / "film.png");
+    REQUIRE(strip.has_value());
+    CHECK(strip->width == 200 * static_cast<int>(std::min<std::size_t>(shown, 4)));
+    CHECK(strip->height == 150 * static_cast<int>((shown + 3) / 4));
+    std::size_t written = 0;
+    for (const auto& e : fs::directory_iterator(frames)) written += e.path().extension() == ".png";
+    CHECK(written == shown);
+    // Every 2nd, in 2 columns; |J| of the snapshots (their currents are read since Unit 25c).
+    const Cli j = cli("plot " + tr + " --view filmstrip --field J --every 2 --columns 2 --size 200x150 --adapter warp --out " +
+                      out("film_j.png"));
+    CAPTURE(j.output);
+    CHECK(j.status == 0);
+    CHECK(render::load_png(dir / "film_j.png")->width == 400);
+    const Cli lines = cli("plot " + out("tr.nittran") + " --device " + out("tr.nitdev") +
+                          " --streamlines J --adapter warp --size 400x300 --out " + out("lines.png"));
+    CAPTURE(lines.output);
+    CHECK(lines.status == 0);
+    // Refused: a sweep's results, a 1D device.
+    const std::string sw = write("sw.deck", device + "[sweep]\ncontact anode = 0, 0.2\n[output]\nsweep = sw.nitsweep\n");
+    REQUIRE(cli("run " + sw).status == 0);
+    const Cli not_transient = cli("plot " + sw + " --view filmstrip --field n --out " + out("x.png"));
+    CHECK(not_transient.status == 1);
+    CHECK(not_transient.output.find("needs a transient run's results") != std::string::npos);
+    CHECK(cli("plot " + tr + " --view filmstrip --field n --every 0 --out " + out("x.png")).status == 64);
+}

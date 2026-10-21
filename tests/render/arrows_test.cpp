@@ -99,6 +99,29 @@ TEST_CASE("render arrows: a 2D grid of arrows in a uniform field (CG1)") {
     }
 }
 
+TEST_CASE("render arrows: excluded nodes' control volumes get no arrow (CG1)") {
+    // The upper half of the bar's nodes flagged (as an insulator's are for currents): no site whose
+    // nearest node is flagged; the lower half keeps its arrows.
+    const device::Device d = bar(2);
+    const Geometry g = *Geometry::tensor(d.mesh(), *d.cells());
+    const Locator loc(g);
+    const std::vector<Point> field(d.mesh().node_count(), Point{1.0, 0.0, 0.0});
+    std::vector<std::uint8_t> excluded;
+    for (const Point& p : d.mesh().points()) excluded.push_back(p[1] > 0.5e-4 ? 1 : 0);
+    double h = 0.0;
+    const auto all = grid_arrows(loc, field, 400, h);
+    const auto kept = grid_arrows(loc, field, 400, h, excluded);
+    CHECK(kept.size() < all.size());
+    CHECK(kept.size() > all.size() / 3);
+    for (const Arrow& a : kept) {
+        std::size_t nearest = 0;
+        for (std::size_t k = 1; k < 3; ++k) {
+            if (a.at.weights[k] > a.at.weights[nearest]) nearest = k;
+        }
+        CHECK(excluded[static_cast<std::size_t>(a.at.nodes[nearest])] == 0);
+    }
+}
+
 TEST_CASE("render arrows: surface arrows are tangential on no-flux faces (CG1)") {
     const device::Device d = bar(3);
     const Geometry g = *Geometry::tensor(d.mesh(), *d.cells());

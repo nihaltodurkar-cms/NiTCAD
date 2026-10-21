@@ -89,6 +89,7 @@ std::vector<double> uniform(double a, double b, int n) {
 struct Mosfet {
     device::Device device;
     results::BiasPoint point;
+    std::vector<results::BiasPoint> sweep;  // every point, for the filmstrip (Unit 25c)
 };
 
 const Mosfet& mosfet(bool three_d) {
@@ -142,7 +143,7 @@ const Mosfet& mosfet(bool three_d) {
         auto sweep = solve::sweep_bias(*d, points);
         if (!sweep) FAIL(sweep.error().message);
         if (sweep->stopped) FAIL(sweep->stopped->message);
-        return Mosfet{std::move(*d), sweep->points.back()};
+        return Mosfet{std::move(*d), sweep->points.back(), sweep->points};
     };
     static const Mosfet two = make(false);
     static const Mosfet three = make(true);
@@ -384,6 +385,65 @@ TEST_CASE("render image: the views match their WARP references (VG4)") {
         add_streamlines(*s, lines_of(m3, g3, VectorField::current, 1, 24), *s->colorbar);
         check_image(*r.draw(*s, W, H), "mosfet3d_current_lines");
     }
+    // Unit 25c (CG5): arrows, the clipping box, the exploded view, a filmstrip.
+    SECTION("2D |J| with current arrows") {
+        values = magnitudes_floored(m2.device, g2, m2.point, Field::current_density);
+        FieldOptions o;
+        o.title = std::string(field_info(Field::current_density).title);
+        o.scale = *ColorScale::fit(ScaleKind::log10, values, 1e10);
+        auto s = field_view(m2.device, g2, values, o);
+        REQUIRE(s.has_value());
+        const auto field = streamline_field(m2.device, g2, *element_vectors(m2.device, g2, m2.point, VectorField::current),
+                                            VectorField::current);
+        std::vector<std::uint8_t> insulator;  // no current arrows in the oxide
+        for (std::size_t i = 0; i < m2.device.mesh().node_count(); ++i) {
+            insulator.push_back(m2.device.is_insulator(static_cast<NodeId>(i)) ? 1 : 0);
+        }
+        double h = 0.0;
+        const auto arrows = grid_arrows(Locator(g2), field, 250, h, insulator);
+        add_arrows(*s, arrows, 0.8 * h, Rgba{0.05f, 0.05f, 0.05f, 1.0f});
+        check_image(*r.draw(*s, W, H), "mosfet2d_current_arrows");
+    }
+    SECTION("3D E arrows on the surface") {
+        values = magnitudes_floored(m3.device, g3, m3.point, Field::electric_field);
+        auto s = solid_view(m3.device, g3);
+        REQUIRE(s.has_value());
+        s->colorbar = Colorbar{Colormap::turbo, *ColorScale::fit(ScaleKind::log10, values, 1e10),
+                               std::string(field_info(Field::electric_field).title)};
+        const auto field = streamline_field(m3.device, g3, *element_vectors(m3.device, g3, m3.point, VectorField::electric),
+                                            VectorField::electric);
+        double h = 0.0;
+        const auto arrows = surface_arrows(Locator(g3), field, exposed_boundary(m3.device, g3), 300, h);
+        add_arrows(*s, arrows, 0.8 * h, *s->colorbar);
+        check_image(*r.draw(*s, W, H), "mosfet3d_efield_arrows");
+    }
+    SECTION("3D quarter cut of n") {
+        FieldOptions o = field_options(m3.device, m3.point, Field::electrons, values);
+        o.view.clip = Box{{1.0e-4, 0.5e-4, 0.4e-4}, {3e-4, 3e-4, 3e-4}};
+        const auto s = field_view(m3.device, g3, values, o);
+        REQUIRE(s.has_value());
+        check_image(*r.draw(*s, W, H), "mosfet3d_clip_n");
+    }
+    SECTION("3D exploded") {
+        const auto s = exploded_view(m3.device, g3, 1, default_gap(m3.device, 1));
+        REQUIRE(s.has_value());
+        check_image(*r.draw(*s, W, H), "mosfet3d_exploded");
+    }
+    SECTION("2D filmstrip of n over the gate sweep") {
+        std::vector<FilmFrame> frames;
+        for (const results::BiasPoint& p : m2.sweep) {
+            char label[48];
+            std::snprintf(label, sizeof label, "VG = %.2f V, VD = %.2f V", p.bias_V[0], p.bias_V[2]);
+            frames.push_back({label, *field_values(m2.device, p, Field::electrons)});
+        }
+        FieldOptions o;
+        o.title = std::string(field_info(Field::electrons).title);
+        const auto scenes = filmstrip_scenes(m2.device, g2, frames, ScaleKind::log10, o);
+        REQUIRE(scenes.has_value());
+        std::vector<Image> tiles;
+        for (const FieldScene& sc : *scenes) tiles.push_back(*r.draw(sc, 480, 360));
+        check_image(*tile_images(tiles, 3), "mosfet2d_filmstrip_n");
+    }
     SECTION("3D opaque oxide, perspective") {
         FieldOptions o = field_options(m3.device, m3.point, Field::potential, values);
         o.view.transparent_insulators = false;
@@ -485,6 +545,26 @@ TEST_CASE("render image: derived-field benchmark (Unit 25b, BG7)", "[.benchmark]
                     name, d.mesh().node_count(), g.element_count(), t_e, t_j, t_iso, iso.triangles.size(), t_prep,
                     t_lines, points);
         CHECK(en.size() == jn.size());
+        // Unit 25c (CG8): 400 surface arrows, a quarter-cut clipped surface, the exploded view's scene.
+        t = clock::now();
+        double hs = 0.0;
+        const auto arrows = surface_arrows(loc, field, exposed_boundary(d, g), 400, hs);
+        const double t_arrows = seconds(t);
+        const auto pts = d.mesh().points();
+        Point lo = pts[0], hi = pts[0];
+        for (const Point& q : pts) for (std::size_t a = 0; a < 3; ++a) lo[a] = std::min(lo[a], q[a]), hi[a] = std::max(hi[a], q[a]);
+        Box quarter;
+        for (std::size_t a = 0; a < 3; ++a) quarter.lo[a] = 0.5 * (lo[a] + hi[a]), quarter.hi[a] = hi[a] + 1.0;
+        t = clock::now();
+        const auto clipped = g.clipped_surface(quarter);
+        const double t_clip = seconds(t);
+        t = clock::now();
+        const auto exploded = exploded_view(d, g, 1, default_gap(d, 1));
+        const double t_exploded = seconds(t);
+        REQUIRE(exploded.has_value());
+        std::printf("unit 25c benchmark %s: 400 surface arrows %.3f s (%zu drawn), quarter-cut surface %.3f s (%zu polygons), "
+                    "exploded view %.3f s\n",
+                    name, t_arrows, arrows.size(), t_clip, clipped.size(), t_exploded);
     };
     const Mosfet& m3 = mosfet(true);
     run("3D MOSFET", m3.device, m3.point);

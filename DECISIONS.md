@@ -2824,6 +2824,36 @@ field or by class, insulators translucent), `default_gap` (CQ3: 12% of the exten
   interface sides swapped, the default gap, the order reversed, the first region moved, the field ignored (caught
   once a field case was added), contacts left behind, `nitcad plot` ignoring `--field`.
 
+**Commit 4 (filmstrips, transient currents, references, benchmarks; CG4, CG5, CG8), as built.** `scene.hpp`:
+`FilmFrame`, `filmstrip_scenes` (one field view per frame on one scale fitted over every frame (CQ2), titled with
+its label), `time_label` (three significant digits in s, ms, µs, ns, ps or fs). `image.hpp`: `tile_images` (rows of
+`columns`, in order, on white). `nitcad plot --view filmstrip --field f [--every k] [--columns c] [--frames dir]`
+on a transient result: at most 12 frames (every k-th snapshot from the first; by default every ⌈n/12⌉-th), each
+drawn at the frame size (`--size`, else 640 × 480: a first version tiled the frames into `--size` and left each map
+about 110 pixels wide), 4 to a row, each also written alone under `--frames`; a vector magnitude's ten-decade floor
+taken over all frames. **Finding (fixed):** `nitcad plot` read a transient snapshot's fields and bands only; it now
+keeps the snapshot's edge currents, rates and bias, so \|J\|, streamlines, arrows and R work on transient results.
+**Arrows (amending commit 1):** `grid_arrows` and `surface_arrows` take an exclusion mask; a site whose nearest node
+is masked gets no arrow, and `nitcad plot` masks the insulators for currents (the first 2D reference showed a row
+of current arrows in the oxide, where the elements next to the interface interpolate the silicon's current).
+- **CG4:** tiles in order, the empty place white, sizes checked; frames on one scale (1..5 from frames of 1..2 and
+  3..5), titled, a given scale kept; time labels; a transient deck's filmstrip of n with every snapshot (frame count
+  in the output, the strip's size, one PNG per frame), of \|J\| every 2nd in 2 columns, and current streamlines from
+  the transient file; refused: a sweep's results, `--every 0`.
+- **CG5:** WARP references (960 × 720 unless stated), each looked at before being kept: `mosfet2d_current_arrows`
+  (\|J\| with 250 grid arrows, none in the oxide), `mosfet3d_efield_arrows` (E arrows on the exposed surface,
+  colored by \|E\|), `mosfet3d_clip_n` (n with the quarter cut, the gate slab notched), `mosfet3d_exploded` (the oxide
+  and its gate lifted), `mosfet2d_filmstrip_n` (n over the five bias points of the gate and drain sweep, 3 to a row of
+  480 × 360 frames: the drain-side depletion grows with VD). 20 references in all pass.
+- **CG8 (Release, other jobs running, so upper bounds):** the 3D MOSFET: 400 surface arrows 0.007 s, the quarter-cut
+  surface 0.010 s, the exploded view 0.044 s; the 1,053,696-tetrahedron device: 400 arrows 0.61 s (the locator
+  included), the quarter-cut surface 0.67 s (37,632 polygons), the exploded view 2.0 s.
+- **Mutation checks (CG7, Release): 10 of 10 caught** — tiles transposed, the scale from the first frame only, the
+  label left out of the title, the unit threshold, the decimals, the exclusion off, the snapshots' currents dropped,
+  the default every-k, the default columns, the frames not written. (`nitcad plot`'s insulator mask for arrows is
+  wiring the tests do not observe; the mask itself is tested, and the reference shows its effect.) Unit 25c in all:
+  40 of 40.
+
 ---
 
 ## New questions the advisor raised (not yet in `ARCHITECTURE.md`)

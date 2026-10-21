@@ -112,4 +112,31 @@ std::expected<ImageDifference, base::Error> compare(const Image& a, const Image&
     return d;
 }
 
+std::expected<Image, base::Error> tile_images(std::span<const Image> images, int columns) {
+    const auto invalid = [](const char* m) { return base::Error{base::ErrorCode::invalid_input, m, std::nullopt}; };
+    if (images.empty()) return std::unexpected(invalid("no image to tile"));
+    if (columns < 1) return std::unexpected(invalid("tiles need at least one column"));
+    const int w = images[0].width, h = images[0].height;
+    for (const Image& i : images) {
+        if (i.width != w || i.height != h || i.rgba.size() != static_cast<std::size_t>(w) * static_cast<std::size_t>(h) * 4) {
+            return std::unexpected(invalid("the images to tile differ in size"));
+        }
+    }
+    const int cols = std::min(columns, static_cast<int>(images.size()));
+    const int rows = (static_cast<int>(images.size()) + cols - 1) / cols;
+    Image out;
+    out.width = w * cols;
+    out.height = h * rows;
+    out.rgba.assign(static_cast<std::size_t>(out.width) * static_cast<std::size_t>(out.height) * 4, 255);
+    for (std::size_t k = 0; k < images.size(); ++k) {
+        const int x0 = static_cast<int>(k) % cols * w, y0 = static_cast<int>(k) / cols * h;
+        for (int y = 0; y < h; ++y) {
+            const auto src = images[k].rgba.begin() + static_cast<std::ptrdiff_t>(y) * w * 4;
+            std::copy(src, src + static_cast<std::ptrdiff_t>(w) * 4,
+                      out.rgba.begin() + (static_cast<std::ptrdiff_t>(y0 + y) * out.width + x0) * 4);
+        }
+    }
+    return out;
+}
+
 }  // namespace NiTCAD::render
