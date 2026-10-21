@@ -78,11 +78,45 @@ inline void scaled_state(const assemble::DriftDiffusion& system, const results::
     }
 }
 
+// The generation-recombination rates of a drift-diffusion state (Unit 45): the system's mechanisms
+// (DriftDiffusion::rates, already in cm^-3 s^-1) into RateFields, and their sum.
+inline results::RateFields rate_fields(const assemble::DriftDiffusion& system,
+                                       std::span<const double> x) {
+    using M = assemble::DriftDiffusion::RateMechanism;
+    results::RateFields r;
+    const std::size_t nodes = system.node_count();
+    r.net_n.assign(nodes, 0.0);
+    r.net_p.assign(nodes, 0.0);
+    for (assemble::DriftDiffusion::MechanismRate& m : system.rates(x)) {
+        for (std::size_t i = 0; i < nodes; ++i) {
+            r.net_n[i] += m.electron[i];
+            r.net_p[i] += m.hole[i];
+        }
+        switch (m.mechanism) {
+            case M::srh: r.srh = std::move(m.electron); break;
+            case M::auger: r.auger = std::move(m.electron); break;
+            case M::radiative: r.radiative = std::move(m.electron); break;
+            case M::impact: r.impact = std::move(m.electron); break;
+            case M::interfaces:
+                r.interface_n = std::move(m.electron);
+                r.interface_p = std::move(m.hole);
+                break;
+            case M::band_to_band:
+                r.band_to_band_n = std::move(m.electron);
+                r.band_to_band_p = std::move(m.hole);
+                break;
+        }
+    }
+    return r;
+}
+
 // The fields and terminal quantities of a drift-diffusion state x into `point` (its bias and
-// convergence are the caller's), in the public units; shared by sweep_bias and trace_bias.
+// convergence are the caller's), in the public units; shared by sweep_bias and trace_bias. With
+// `rates`, its generation-recombination rates too (Unit 45).
 inline void drift_diffusion_point(const assemble::DriftDiffusion& system,
                                   std::span<const double> x, const assemble::Scaling& scaling,
-                                  int dimension, results::BiasPoint& point) {
+                                  int dimension, results::BiasPoint& point, bool rates = true) {
+    if (rates) point.rates = rate_fields(system, x);
     const std::size_t nodes = system.node_count();
     const double current_scale = scaling.J0 * std::pow(scaling.L_D, dimension - 1);
     const double charges = charge_scale(scaling, dimension);

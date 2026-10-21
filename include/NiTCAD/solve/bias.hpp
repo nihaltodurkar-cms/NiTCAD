@@ -79,6 +79,10 @@ struct BiasOptions {
     // factorization and a linear solve on the node graph per point. Drift-diffusion only; not with
     // nonlocal tunnelling (its pairs are not carried along the edges).
     bool weighted_current = false;
+    // The generation-recombination rates of every drift-diffusion point and transient snapshot
+    // (Unit 45; results::RateFields; DECISIONS.md RQ1): on by default, off to save memory and file
+    // size. They are read from the state after it converged and change nothing in the solve.
+    bool store_rates = true;
     // Electrothermal (models.electrothermal, Unit 23): per bias point, the temperature of each
     // thermal contact in K, in the device's thermal-contact order; empty: the device's own at
     // every point. Read only with the model on.

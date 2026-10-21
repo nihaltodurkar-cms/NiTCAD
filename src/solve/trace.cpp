@@ -564,7 +564,8 @@ std::expected<results::Sweep, base::Error> trace_bias_unobserved(const device::D
             }
         }
         point.bias_V = bias;
-        detail::drift_diffusion_point(dd, std::span(y).first(n), *scaling, D, point);
+        detail::drift_diffusion_point(dd, std::span(y).first(n), *scaling, D, point,
+                                      steady.store_rates);
         if (thermal) point.thermal_bias_K = run.points.front().thermal_bias_K;
         if (weighted) {
             if (auto ok = weighted->fill(dd, std::span(y).first(n), steady.newton.max_update,

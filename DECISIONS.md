@@ -2442,7 +2442,38 @@ continuity rows are read).
 
 **Status:** authorized by the owner 2026-10-21 ("Approve, as recommended"): RQ1 rates stored by default
 (`[solver] rates = off` to opt out), RQ2 components and the net rate, RQ3 surface recombination included and
-labelled as an effective volume rate, RQ4 `nitcad plot` refuses a differing digest (exit 1). No code yet.
+labelled as an effective volume rate, RQ4 `nitcad plot` refuses a differing digest (exit 1).
+
+**Commit 1 (the rates; RG1–RG3, RG5's timing), as built.** `DriftDiffusion::rates(x)` evaluates each generation-
+recombination term alone (residual only, no Jacobian) and reads its electron and hole rows: rate = row × R0 / V in
+cm⁻³ s⁻¹, positive for net recombination (one conversion for every term: `rate_scale_` = Ns / R0 and
+`generation_scale_` = 1 / R0). Mechanisms by term name; local and nonlocal tunnelling add into one entry; the
+electrothermal terms are read the same way. `results::RateFields` (srh, auger, radiative, impact; interface_n/p,
+band_to_band_n/p; net_n/p) in `BiasPoint` and `TransientSnapshot` (small-signal operating points are `BiasPoint`s),
+filled by `sweep_bias`, `trace_bias` and `solve_transient` after convergence; `BiasOptions::store_rates` (on, RQ1),
+recorded in the run record only when off; deck `[solver] rates = on|off`. `rates()` reports nothing to the
+assembly observer.
+- **RG1, the balance:** at every node off the contacts of a converged state, the net current out of its control
+  volume (from the stored edge currents) equals q U V for electrons and −q U V for holes, within 10⁻⁶ of the node's
+  currents plus 5% of the run's current resolution (a node's net current below it is the rounding of large opposing
+  majority fluxes: measured ≤ 9e-15 A/cm against a resolution of 1.06e-12 in a reverse-biased diode, while the
+  minority carriers agree to five digits). Holds for SRH, Auger and radiative (forward diode), impact ionization
+  (reverse to −4 V), interface traps and surface recombination (the small-signal tests' oxide-silicon device), local
+  and nonlocal band-to-band tunnelling (nonlocal: electron and hole rates differ, each balanced) and the
+  electrothermal terms.
+- **RG2:** at equilibrium every rate is below 1e4 cm⁻³ s⁻¹ (against n_i/τ ≈ 1e16); forward recombination exceeds
+  1e18; impact and tunnelling rates are generations (negative).
+- **RG3:** assembly traces of the bias, sweep and transient tests byte-identical to `main`'s (`6d2135b`, `--order
+  decl`, 852,646 lines); a run storing rates keeps the default run identity; switching them off changes no field or
+  current.
+- **RG5 (time):** sweeps of 7 points with and without rates, best of three: 2D diode, 14,701 nodes: 8.92 s and
+  9.19 s; 3D diode, 4,961 nodes: 20.17 s and 20.24 s. The extra pass is below the runs' noise.
+- **Mutation checks (RG7, Release): 10 of 10 caught** — the electron row's sign, the volume division, the rows
+  swapped, Auger read as SRH, tunnelling dropped, the hole net from the electron rows (caught only once the nonlocal
+  case was added: every other mechanism moves carriers in pairs), `store_rates` ignored in sweeps and in
+  snapshots, the setting always recorded, the deck key ignored. (A first runner lost a test's exit status between
+  two batch calls; its two survivors were rerun with a fixed runner, one then caught.) Release 22/22 and Debug 16/16,
+  no warnings.
 
 ---
 

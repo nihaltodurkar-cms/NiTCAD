@@ -550,3 +550,13 @@ linear_fallback = none
     expect("ilut_fill = 1001", "t.deck:14: 'ilut_fill' must lie in 1..1000");
     expect("linear_fallback = pardiso", "t.deck:14: linear_fallback is sparse_lu or none");
 }
+
+TEST_CASE("deck build: rates = off (Unit 45, RQ1)", "[deck]") {
+    CHECK(must(diode_deck).options.store_rates);
+    CHECK_FALSE(must(diode_deck + "[solver]\nrates = off\n").options.store_rates);
+    CHECK(must(diode_deck + "[solver]\nrates = on\n").options.store_rates);
+    const std::string head = "[mesh]\ntype = tensor\nx = 0, 1um, 2um\n[region si]\nmaterial = silicon\n"
+                             "[contact a]\nkind = ohmic\npatch = x_min\n[contact b]\nkind = ohmic\npatch = x_max\n"
+                             "[equilibrium]\n[solver]\nrates = maybe\n";
+    CHECK(failure(head).find("t.deck:14: 'maybe' is not on or off") != std::string::npos);
+}

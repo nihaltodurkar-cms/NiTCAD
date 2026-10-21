@@ -111,6 +111,9 @@ std::vector<std::pair<std::string, double>> settings(const BiasOptions& o) {
         {"models.incomplete_ionization", o.models.incomplete_ionization ? 1.0 : 0.0},
         {"equations", static_cast<double>(o.equations)},
     };
+    // Unit 45: the rates change no result the run computes, but a run without them is a different
+    // output; recorded only when off, so every run that stores them keeps its identity.
+    if (!o.store_rates) s.emplace_back("store_rates", 0.0);
     // Unit 44: recorded only with the iterative backend, so the direct runs keep their identity.
     if (o.linear.backend == linalg::SolverBackend::gmres_ilut) {
         s.emplace_back("linear.restart", static_cast<double>(o.linear.restart));

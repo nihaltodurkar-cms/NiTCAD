@@ -364,6 +364,7 @@ std::expected<results::Transient, base::Error> solve_transient_unobserved(
             snap.edge_current_p.push_back(jp * current_scale);
         }
         snap.trap_occupancy = s.traps;
+        if (steady.store_rates) snap.rates = detail::rate_fields(dd, s.x);
         return snap;
     };
 

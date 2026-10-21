@@ -397,7 +397,8 @@ std::expected<results::Sweep, base::Error> sweep_bias_unobserved(const device::D
                            return std::unexpected(std::move(*e));
                        }
                    }
-                   detail::drift_diffusion_point(*system, x, *scaling, D, point);
+                   detail::drift_diffusion_point(*system, x, *scaling, D, point,
+                                                 options.store_rates);
                    if (thermal) point.thermal_bias_K = thermal_bias[k];
                    if (weighted) {
                        return weighted->fill(*system, x, newton.max_update, *scaling, D, point);
