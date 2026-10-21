@@ -2544,6 +2544,33 @@ composable.
   h22 over y22, the Cayley map's sign, U's denominator sign, k's numerator sign, the MAG root's sign, the
   extrapolation slope, the unity crossing interpolated linearly in the gain, y12 and y21 swapped, the inverse's sign.
 
+### 6.14 Rendering (Unit 25a; DECISIONS.md VR1–VR9, VQ1–VQ14, VG1–VG7)
+
+**As built (Unit 25a, the core views and `nitcad plot`; approved and accepted by the owner 2026-10-21):**
+- `render` (L7) reads base, mesh, results, analysis and device (read-only, VQ8); a ctest (`render_layering`, a CMake
+  script) checks its includes. It builds plain CPU scenes, then draws them; drawing never reads results (VR1).
+- **Geometry** (`geometry.hpp`): linear elements from `TensorCells` (2 triangles, 6 Kuhn tetrahedra) or a
+  `SimplexMesh`, else the graph; outward 3D boundary faces; slices; contours by marching triangles. Regions are drawn
+  by control volume, where the box method puts them: a tensor cell split at its mid-planes (exactly its control
+  volumes), a simplex by its planes of equal barycentric weight.
+- **Scenes** (`scene.hpp`): `FieldScene` (µm, +y up as in 2D, triangles with per-vertex colormap positions or flat
+  colors, lines, colorbar, camera) and `PlotScene`; views solid, mesh, field (2D maps, 3D boundary surfaces with the
+  semiconductor seen through translucent insulators), slices; contact slabs; the VR8 palette by doping class; plots
+  of Unit 24 curves (resolution flags), 1D profiles and band diagrams. Colormaps Turbo (default), viridis, cividis,
+  cool-warm and soft; linear, log10 and signed-log scales; 1-2-5 and decade ticks.
+- **Drawing** (`image.hpp`): Direct3D 12 (hardware or WARP), 2 × 2 supersampling, per-pixel colormap lookup,
+  two-sided lighting, weighted blended order-independent transparency, screen-space line quads; Direct2D and
+  DirectWrite overlays and plots through D3D11On12 (VQ1); HLSL compiled by `dxc` at build time (VQ2); PNG via WIC.
+  Errors of the device are `resource_exhausted` with the HRESULT.
+- **`nitcad plot`** draws any view or curve from a deck's outputs or a result file with its device (and a generated
+  mesh's file); a result not of the device's mesh is refused by node count (until Unit 45 adds the mesh digest).
+- Gates: 30 render test cases (exact geometry, values and scenes; 11 WARP reference images within 0.5% of pixels
+  differing by more than 24; a clean D3D12 debug layer in Debug), the CLI's plot test, 35 mutants caught in all.
+  Measured: 10⁶ triangles redraw in 0.81 ms on an RTX 5060 Ti (88 ms on WARP); a whole image with upload and
+  readback 146 ms.
+- Not in Unit 25a: |E|, |J|, isosurfaces and streamlines (25b, after Unit 45's rates); vectors, clipping, exploded
+  views, filmstrips (25c); windows (26).
+
 ## 7. Language placement (D6: C and Fortran deferred)
 
 | Component | Language | Reason |
@@ -2786,7 +2813,7 @@ built.
 | 22 | AC small-signal analysis | linalg, assemble, solve, results | **done, on `main`** (`75cc2c0`): J + iωt₀C + T(iωt₀) at a DC or quasi-static operating point, complex linear solver, admittance matrix with displacement current and a resolution bound, interface traps in the frequency domain (6.2, Unit 22) |
 | 23 | Thermal / electrothermal coupling | physics, assemble, solve | **done, on `main`** (`7300b67`, PR #30): the lattice temperature as a fourth Newton unknown (the rise τ) with an exact Jacobian; Wachutka's thermodynamic fluxes (Boltzmann and Fermi–Dirac), the heat as the energy flux's divergence with Peltier and Thomson heat, isothermal and R_th thermal contacts; T in every model the assembler has; steady sweeps, `trace_bias` (thermal-runaway folds), transients and AC; traps and BTBT refused; thermionic emission (deferred) and incomplete ionization refused (6.2, Unit 23; DECISIONS.md T1–T14, U1–U8) |
 | 24 | Analysis and extraction engine | analysis | **done, on `main`** (`4183767`): curves read from sweeps and small-signal runs; transistor, diode and breakdown figures; C-V doping profile, flat band and the conductance method; two-port Y/Z/h/S, Mason's U, k, MAG/MSG, f_T and f_max; every extraction with the points it used and resolution and extrapolation flags (6.13, Unit 24) |
-| 25 | Scientific visualization / rendering | render | target |
+| 25 | Scientific visualization / rendering | render | **25a done** (`render/visualization`): CPU scenes, Direct3D 12 and Direct2D drawing to PNG, `nitcad plot` (6.14); 25b, 25c target |
 | 26 | Native Windows application and workflow | app | target; Win32 API, x64 target, Direct3D 12 / Direct2D |
 | 27 | Optimization / sensitivity / inverse-design workflows | analysis, solve | long-term target |
 | 28 | Bias step cutting (commercial-readiness programme, 11.3) | solve, results | **done, on `main`** (`06b708d`, PR #31): off by default; halving and growth from the last converged state (11.3, Unit 28; DECISIONS.md S1–S7) |
@@ -2857,7 +2884,7 @@ exists, not finished), **planned** (nothing built). Audit of 2026-10-09, against
 | Generic fields/equations | Field descriptors and the unknowns' map; the drift-diffusion and electrothermal rows as equation terms composed by equation set, behind the unchanged `DriftDiffusion` (Unit 40, 6.12.1–2) | **Verified, bit-identical, on `main`** (Unit 40; `629bed0`, PR #50; below) | Move the model data out of `DriftDiffusion` and retire it as the wrapper; derived and edge/cell fields; `EquilibriumPoisson` from the same terms |
 | Scalable linear solvers | Eigen SparseLU (default), PARDISO opt-in (Unit 18); GMRES with an ILUT preconditioner opt-in, real and complex, with a reported SparseLU fallback (Unit 44, 6.10) | **GMRES-ILUT verified, opt-in** (Unit 44, on `linalg/iterative`): 3D 9–72× faster and 8–26× less memory than SparseLU | Algebraic multigrid and block (field-split) preconditioners; parallel assembly |
 | Results and provenance | Plain-data results; run record with identity digest (6.6); sweeps persisted bit for bit (Unit 29); provenance (build, revision, platform, start, wall time) in every run record and file, transient and small-signal files, `nitcad --version` (Unit 42) | **Verified** (Unit 42, 6.6; PR #52; DECISIONS.md PV1–PV7) | A release version policy (PD5); cross-machine checksums (6.8) |
-| Visualization, GUI, batch | The `nitcad check|run` batch runner over the input deck (Unit 31); no visualization or GUI (Units 25, 26) | **Batch runner verified, on `main`** (Unit 31; `6f67510`, PR #37); visualization and GUI planned | Rendering of meshes and fields (Unit 25), then the GUI over the same plan (Unit 26) |
+| Visualization, GUI, batch | The `nitcad check|run|plot` batch runner over the input deck (Unit 31); the `render` layer and `nitcad plot` (Unit 25a, 6.14); no GUI | **Batch runner verified, on `main`** (Unit 31; `6f67510`, PR #37); **core visualization verified** (Unit 25a, on `render/visualization`); GUI planned | Unit 45 (rates and mesh digest in results), 25b (derived fields), 25c, then the GUI (Units 26, 26b) |
 | Validation against published/measured data | Legacy, analytic and convergence gates throughout; resistivity against dopant density (NBS SP 400-64) and the measured n_i(300 K) as benchmark decks (Unit 33, 10.1) | **Verified, on `main`** (Unit 33; `a14ac96`, PR #41): gaps found and pinned (boron mobility up to +48%, incomplete ionization at heavy doping, n_i +10%); the opt-in Masetti hole mobility (Unit 34; `e14a53f`, PR #42) brings boron to within 11% (AC3/AC5 at 1e18 accepted as documented limitations); Unit 35 (`2d1fdc7`, PR #44) makes Masetti and a published band set (n_i within the measurement's uncertainty) the defaults | A density-dependent ionization level (owner decision); breakdown and device-level benchmarks from accessible sources |
 
 **As built (Unit 28, bias step cutting; `solve::StepControl` in `solve/bias.hpp`; DECISIONS.md S1–S7):**

@@ -2269,9 +2269,9 @@ product ("for decisions choose whats best for Commercial TCAD"); each is the pag
 | VQ14 | Turbo stays the default (VQ5); the reference's softer five-color map is added as a named option, `soft`. | Turbo is the familiar high-contrast default; `soft` matches the reference where wanted. |
 
 **Status:** authorized with VQ1–VQ14. Unit 44 was implemented first (VQ6) and merged (`b518c99`, PR #54); Unit 25a
-started on the owner's "go 25a" (2026-10-21), on `render/visualization` rebased onto `b518c99`; commits 25a·1–3 done,
-awaiting the owner's acceptance (then ARCHITECTURE.md as built). Then 45, 25b, 25c, 26, 26b, each approved after the one
-before it is accepted.
+started on the owner's "go 25a" (2026-10-21), on `render/visualization` rebased onto `b518c99`; commits 25a·1–3 done;
+**accepted by the owner (2026-10-21, "accepted")**; ARCHITECTURE.md 6.14, 3, 11 and 11.3 as built. Then 45, 25b, 25c,
+26, 26b, each approved after the one before it is accepted.
 
 **Commit 25a·1 (the CPU scene; VG1–VG3, VG6), as built.** The `render` layer (`include/NiTCAD/render/`,
 `src/render/`; CMake target `NiTCAD::render`, linked to base, mesh, results, analysis and device):
