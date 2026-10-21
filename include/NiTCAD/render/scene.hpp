@@ -218,6 +218,18 @@ struct FieldOptions {
                                                                std::span<const Plane> planes,
                                                                const FieldOptions& options = {});
 
+// Isosurfaces (Unit 25b, DS4, BQ3): 3D, the surfaces where the field equals each level, by marching
+// tetrahedra on the field's scale coordinate (ColorScale::transform: log10 for densities), each
+// colored by its level's colormap position and lit, inside the device's faint translucent outline
+// with the contacts; opaque for one level, translucent for more. 2D: the field map with contour lines
+// at the levels. Errors as field_view, and (invalid_input) no level, or a level outside the scale
+// (not finite, or not positive on log10).
+[[nodiscard]] std::expected<FieldScene, base::Error> iso_view(const device::Device& device,
+                                                             const Geometry& geometry,
+                                                             std::span<const double> values,
+                                                             std::span<const double> levels,
+                                                             const FieldOptions& options = {});
+
 // --- plots ---------------------------------------------------------------------------------------
 
 enum class AxisScale : std::uint8_t { linear, log10 };

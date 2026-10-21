@@ -624,3 +624,59 @@ sweep = )" + tag + ".nitsweep\ndevice = " + tag + ".nitdev\n" + extra;
     CHECK(zero_j.status == 0);
     CHECK(cli("plot " + qs + " --field E --adapter warp --size 400x300 --out " + out("qs_e.png")).status == 0);
 }
+
+TEST_CASE("nitcad plot: isosurfaces and contours at levels (Unit 25b, BG6)", "[deck]") {
+    const fs::path dir = scratch("cli_plot_iso");
+    const auto write = [&](const char* name, const std::string& text) {
+        std::ofstream(dir / name, std::ios::binary) << text;
+        return "\"" + (dir / name).string() + "\"";
+    };
+    const auto out = [&](const char* name) { return "\"" + (dir / name).string() + "\""; };
+    const auto pn = [](const char* mesh, const char* tag) {
+        return std::string("[mesh]\ntype = tensor\n") + mesh + R"(
+[region silicon]
+material = silicon
+[doping]
+profile = acceptor constant 1e17 axis=y x=-1:1um
+profile = donor constant 1e17 axis=y x=1um:3um
+[contact anode]
+kind = ohmic
+patch = x_min
+[contact cathode]
+kind = ohmic
+patch = x_max
+[sweep]
+contact anode = 0, 0.3
+[output]
+sweep = )" + tag + ".nitsweep\ndevice = " + tag + ".nitdev\n";
+    };
+    const std::string d3 = write("pn3.deck", pn("x = linspace(0, 2um, 11)\ny = linspace(0, 1um, 5)\nz = linspace(0, 0.5um, 3)\n", "pn3"));
+    REQUIRE(cli("run " + d3).status == 0);
+    for (const auto& [args, name] : {std::pair{std::string("--field n --levels 1e10,1e15"), "iso_n.png"},
+                                     std::pair{std::string("--field potential --levels 0.1"), "iso_psi.png"}}) {
+        const Cli c = cli("plot " + d3 + " --view iso " + args + " --adapter warp --size 400x300 --out " + out(name));
+        CAPTURE(args, c.output);
+        CHECK(c.status == 0);
+        CHECK(render::load_png(dir / name).has_value());
+    }
+    const std::string d2 = write("pn2.deck", pn("x = linspace(0, 2um, 21)\ny = linspace(0, 1um, 6)\n", "pn2"));
+    REQUIRE(cli("run " + d2).status == 0);
+    const Cli contours = cli("plot " + d2 + " --view iso --field n --levels 1e12 --adapter warp --size 400x300 --out " +
+                             out("iso2.png"));
+    CAPTURE(contours.output);
+    CHECK(contours.status == 0);
+    // Refused: no levels (usage), a level off the log scale, a 1D device.
+    CHECK(cli("plot " + d3 + " --view iso --field n --out " + out("x.png")).status == 64);
+    CHECK(cli("plot " + d3 + " --view iso --field n --levels 1e10,x --out " + out("x.png")).status == 64);
+    const Cli negative = cli("plot " + d3 + " --view iso --field n --levels -5 --out " + out("x.png"));
+    CHECK(negative.status == 1);
+    CHECK(negative.output.find("not finite on the field's scale") != std::string::npos);
+    const std::string d1 = write("pn1.deck", "[mesh]\ntype = tensor\nx = linspace(0, 1um, 11)\n[region silicon]\n"
+                                             "material = silicon\n[doping]\nprofile = donor constant 1e16\n"
+                                             "[contact a]\nkind = ohmic\npatch = x_min\n[contact b]\nkind = ohmic\n"
+                                             "patch = x_max\n[sweep]\ncontact a = 0\n[output]\nsweep = pn1.nitsweep\n");
+    REQUIRE(cli("run " + d1).status == 0);
+    const Cli one = cli("plot " + d1 + " --view iso --field n --levels 1e16 --out " + out("x.png"));
+    CHECK(one.status == 1);
+    CHECK(one.output.find("isosurfaces need a 2D or 3D device") != std::string::npos);
+}

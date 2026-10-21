@@ -454,3 +454,49 @@ TEST_CASE("render scene: plots fit their axes and flag points below resolution")
     CHECK(prof->y.lo == 1e15);
     CHECK(prof->y.hi == 1e19);
 }
+
+TEST_CASE("render scene: isosurfaces on the field's scale, contours at levels in 2D (Unit 25b, BQ3)") {
+    // A field exponential in y, 1e10 at y = 0 to 1e20 at y = 1 um: linear on the log scale, so the
+    // 10^14.3 isosurface is exactly the plane y = 0.43 um there (linear interpolation in the value would
+    // put it near the upper node of each cell).
+    const Mos m3 = mos(true);
+    const Geometry g3 = *Geometry::tensor(m3.device.mesh(), *m3.device.cells());
+    std::vector<double> f;
+    for (const Point& x : m3.device.mesh().points()) f.push_back(std::pow(10.0, 10.0 + 10.0 * x[1] / 1e-4));
+    FieldOptions o;
+    o.scale = *ColorScale::create(ScaleKind::log10, 1e10, 1e20);
+    o.view.contacts = false;
+    const std::vector<double> one{std::pow(10.0, 14.3)};  // y = 0.43 um, between grid planes
+    const auto s = iso_view(m3.device, g3, f, one, o);
+    REQUIRE(s.has_value());
+    const auto iso = std::ranges::find_if(s->triangles, [](const TriangleBatch& b) { return b.name == "isosurface"; });
+    REQUIRE(iso != s->triangles.end());
+    CHECK_FALSE(iso->transparent);
+    for (const SceneVertex& v : iso->vertices) {
+        CHECK(std::abs(v.position[1] - 0.43f) <= 1e-5f);  // um
+        CHECK(std::abs(v.value - 0.43f) <= 1e-6f);         // the level's colormap position
+        CHECK(v.normal[1] > 0.999f);                      // toward higher values
+    }
+    // Two levels: two translucent surfaces.
+    const std::vector<double> two{1e12, 1e18};
+    const auto t = iso_view(m3.device, g3, f, two, o);
+    REQUIRE(t.has_value());
+    CHECK(std::ranges::count_if(t->triangles, [](const TriangleBatch& b) {
+              return b.name == "isosurface" && b.transparent;
+          }) == 2);
+    // Refused: no level, a level off the log scale.
+    CHECK(iso_view(m3.device, g3, f, std::vector<double>{}, o).error().code == base::ErrorCode::invalid_input);
+    CHECK(iso_view(m3.device, g3, f, std::vector<double>{-1.0}, o).error().code == base::ErrorCode::invalid_input);
+
+    // 2D: the field map with contour lines at the levels only, on the log scale (y = 0.43 um).
+    const Mos m2 = mos(false);
+    const Geometry g2 = *Geometry::tensor(m2.device.mesh(), *m2.device.cells());
+    std::vector<double> f2;
+    for (const Point& x : m2.device.mesh().points()) f2.push_back(std::pow(10.0, 10.0 + 10.0 * x[1] / 1e-4));
+    const auto c = iso_view(m2.device, g2, f2, one, o);
+    REQUIRE(c.has_value());
+    const auto lines = std::ranges::find_if(c->lines, [](const LineBatch& b) { return b.name == "contours"; });
+    REQUIRE(lines != c->lines.end());
+    CHECK_FALSE(lines->points.empty());
+    for (const Float3& p : lines->points) CHECK(std::abs(p[1] - 0.43f) <= 1e-5f);
+}

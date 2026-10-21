@@ -2595,6 +2595,32 @@ under them at the bottom color (below that the reconstructed currents are roundi
   first on every such edge, so oxide was added below. Two first versions failed only the `/WX` build, an unused
   variable, and were replaced by mutants the tests catch.)
 
+**Commit 2 (isosurfaces; BG2, BG6 in part), as built.** `geometry.hpp`: `isosurface` (marching tetrahedra into an
+indexed mesh: one vertex per cut mesh edge, computed from its lower-numbered node so every element around the edge
+makes the same point, or the node itself for a crossing exactly at it; a node at the level counts as above it, as in
+the 2D contours; triangles of zero area dropped; each triangle turned toward higher values by the sign of
+Σ (v_k − level)(x_k − p₀), which for a linear field is the gradient's). `ColorScale::transform` is public.
+`scene.hpp`: `iso_view` (3D: the surfaces of the field's scale coordinate (BQ3), colored by each level's colormap
+position, smooth-shaded, opaque for one level and translucent for more, in the device's faint outline with the
+contacts; 2D: the field map with contour lines at the levels). `nitcad plot --view iso --field <f> --levels
+<v>[,<v>...]`.
+- **BG2:** a linear field's surfaces on graded tensor and generated 3D meshes: every vertex on the plane (10⁻¹²),
+  every normal along the gradient (cosine ≥ 1 − 10⁻⁹), no directed edge twice. A sphere's distance field (R = 0.3 µm,
+  centre off the grid planes) on 8³, 16³ and 32³ cells: closed and consistently oriented, outward, volume errors
+  8.81e-2, 2.15e-2 and 5.41e-3, **rates 2.03 and 1.99**. Crossings at nodes give one vertex per node (both edge
+  orientations); a level at the field's maximum gives the boundary face; NaN nodes and 2D geometries give nothing.
+- **BQ3:** a field exponential in y (log scale) has its 10^14.3 surface on the plane y = 0.43 µm between grid
+  planes, and its 2D contour on that line.
+- **BG6 (in part):** 3D surfaces of n (two levels) and ψ (one) from a deck, 2D contours at a level; refused: no
+  `--levels` (usage), an unreadable level (usage), a negative level on a log scale, a 1D device. **For the owner:**
+  BG6 listed "a 2D isosurface request" among the refusals while DS4 draws contours at the levels in 2D; DS4 is built
+  (2D draws contours), and the refusal applies to 1D.
+- **Mutation checks (BG8, Release): 9 of 9 caught** — the shared edge cut from either end, the node rule off, a node
+  at the level counted below, a crossed quadrilateral, flipped orientation, contour levels ignored, interpolation in
+  the value instead of the scale, one level translucent, `nitcad plot` allowing 1D. (The first two survived a first
+  run: Kuhn simplices number their nodes in increasing x, so only a decreasing field reaches the node rule's other
+  branch, and only a level at the field's maximum shows the at-level convention; both cases were added.)
+
 ---
 
 ## New questions the advisor raised (not yet in `ARCHITECTURE.md`)

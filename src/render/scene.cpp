@@ -321,11 +321,15 @@ float position_at(const Geometry& g, std::size_t element, const Point& x, std::s
     return static_cast<float>(scale_.position(interpolate(g.interpolant(element, x), values)));
 }
 
-void contours(const TriangleBatch& field, const Colorbar& bar, std::vector<LineBatch>& out) {
+// Contour lines at the colorbar's major ticks, or at the given colormap positions.
+void contours(const TriangleBatch& field, const Colorbar& bar, std::vector<LineBatch>& out,
+              std::span<const double> positions = {}) {
     LineBatch lines{"contours", {0.1f, 0.1f, 0.1f, 0.85f}, 1.0f, true, {}};
-    std::vector<double> levels;
-    for (const Tick& t : bar.scale.ticks()) {
-        if (t.major && t.position > 0.0 && t.position < 1.0) levels.push_back(t.position);
+    std::vector<double> levels(positions.begin(), positions.end());
+    if (positions.empty()) {
+        for (const Tick& t : bar.scale.ticks()) {
+            if (t.major && t.position > 0.0 && t.position < 1.0) levels.push_back(t.position);
+        }
     }
     for (std::size_t i = 0; i + 2 < field.vertices.size(); i += 3) {
         std::array<Point, 3> p{};
@@ -706,6 +710,73 @@ std::expected<FieldScene, base::Error> slice_view(const device::Device& d, const
     }
     if (o.contours) contours(field, *bar, s.lines);
     s.triangles.push_back(std::move(field));
+    // The device's boundary, faint and translucent, for context.
+    TriangleBatch shell{"outline", Shading::flat, true, true, {}};
+    for (const Polygon& f : g.boundary_faces()) {
+        std::vector<Point> pts;
+        for (const SurfaceVertex& v : f.vertices) pts.push_back(v.position);
+        fan(shell, pts, {}, {0.82f, 0.85f, 0.88f, 0.12f}, polygon_normal(pts));
+    }
+    s.triangles.push_back(std::move(shell));
+    if (o.view.contacts) contact_slabs(d, g, o.view.palette, s.triangles);
+    s.colorbar = std::move(*bar);
+    frame(s, o.view);
+    return s;
+}
+
+std::expected<FieldScene, base::Error> iso_view(const device::Device& d, const Geometry& g,
+                                                std::span<const double> values,
+                                                std::span<const double> levels, const FieldOptions& o) {
+    if (auto c = check_view(d, g); !c) return std::unexpected(std::move(c.error()));
+    if (values.size() != d.mesh().node_count()) {
+        return std::unexpected(invalid("the field is not one value per mesh node", values.size()));
+    }
+    if (levels.empty()) return std::unexpected(invalid("an isosurface needs a level"));
+    auto bar = colorbar_for(values, o);
+    if (!bar) return std::unexpected(std::move(bar.error()));
+    for (std::size_t k = 0; k < levels.size(); ++k) {
+        if (!std::isfinite(bar->scale.transform(levels[k]))) {
+            return std::unexpected(invalid("a level is not finite on the field's scale", k));
+        }
+    }
+    if (g.dimension() == 2) {
+        FieldOptions plain = o;
+        plain.contours = false;
+        auto s = field_view(d, g, values, plain);
+        if (!s) return s;
+        std::vector<double> positions;
+        for (const double level : levels) positions.push_back(bar->scale.position(level));
+        for (const TriangleBatch& t : s->triangles) {
+            if (t.shading == Shading::field) contours(t, *bar, s->lines, positions);
+        }
+        return s;
+    }
+    FieldScene s;
+    s.dimension = 3;
+    s.title = o.title;
+    // On the scale's coordinate (BQ3), so a level lies where the colormap shows it.
+    std::vector<double> scaled(values.size());
+    for (std::size_t i = 0; i < values.size(); ++i) scaled[i] = bar->scale.transform(values[i]);
+    const bool one = levels.size() == 1;
+    for (const double level : levels) {
+        const IsoSurface iso = isosurface(g, scaled, bar->scale.transform(level));
+        // Smooth shading: each vertex's normal is the area-weighted sum of its triangles'.
+        std::vector<Point> normal(iso.vertices.size(), Point{});
+        for (const auto& t : iso.triangles) {
+            const Point& p0 = iso.vertices[t[0]].position;
+            const Point n = cross(sub(iso.vertices[t[1]].position, p0), sub(iso.vertices[t[2]].position, p0));
+            for (const std::uint32_t v : t) normal[v] = add(normal[v], n);
+        }
+        TriangleBatch batch{"isosurface", Shading::field, true, !one, {}};
+        const float position = static_cast<float>(bar->scale.position(level));
+        const Rgba tint{0.0f, 0.0f, 0.0f, one ? 1.0f : 0.55f};
+        for (const auto& t : iso.triangles) {
+            for (const std::uint32_t v : t) {
+                batch.vertices.push_back({um(iso.vertices[v].position), to_f(unit(normal[v])), position, tint});
+            }
+        }
+        if (!batch.vertices.empty()) s.triangles.push_back(std::move(batch));
+    }
     // The device's boundary, faint and translucent, for context.
     TriangleBatch shell{"outline", Shading::flat, true, true, {}};
     for (const Polygon& f : g.boundary_faces()) {

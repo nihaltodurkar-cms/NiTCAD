@@ -33,8 +33,9 @@ constexpr const char* plot_usage =
     "usage: nitcad plot <deck | result file> [options] --out <image.png>\n"
     "  input   a deck (its device, mesh and the result files its run wrote), or a .nitsweep,\n"
     "          .nittran or .nitac file with --device <file.nitdev> [--mesh <file.nitmesh>]\n"
-    "  view    --view solid|mesh|field|slice|iv|cv|current|bands|profile\n"
+    "  view    --view solid|mesh|field|slice|iso|iv|cv|current|bands|profile\n"
     "          (default: field with --field, else solid)\n"
+    "  iso     --view iso --field <f> --levels <v>[,<v>...] (3D surfaces, 2D contours)\n"
     "  field   --field potential|n|p|Ec|Ev|Efn|Efp|T|doping|ND|NA|R|srh|auger|\n"
     "          radiative|surface|Gii|Gbtbt|E|J|Jn|Jp  --point <k> (default: last)\n"
     "          --scale linear|log|signed-log  --range <lo>,<hi>\n"
@@ -67,6 +68,7 @@ struct Options {
     std::optional<std::size_t> point, frequency;
     std::optional<std::pair<double, double>> range;
     std::vector<Plane> slices;
+    std::vector<double> levels;
     std::optional<float> azimuth, elevation;
     bool contours = false, edges = false, opaque = false, perspective = false, log = false;
     int width = 1280, height = 960;
@@ -202,6 +204,17 @@ int plot(int argc, char** argv) {
             const auto lo = number(v->substr(0, comma)), hi = number(v->substr(comma + 1));
             if (!lo || !hi) return usage("--range needs <lo>,<hi>");
             o.range = std::pair{*lo, *hi};
+        } else if (a == "--levels") {
+            const auto v = value();
+            if (!v) return usage("--levels needs <v>[,<v>...]");
+            for (std::string_view rest = *v;;) {
+                const auto comma = rest.find(',');
+                const auto level = number(rest.substr(0, comma));
+                if (!level) return usage("--levels needs <v>[,<v>...]");
+                o.levels.push_back(*level);
+                if (comma == std::string_view::npos) break;
+                rest = rest.substr(comma + 1);
+            }
         } else if (a == "--slice") {
             const auto v = value();
             if (!v || v->size() < 3 || (*v)[1] != '=' || std::string_view("xyz").find((*v)[0]) == std::string_view::npos) {
@@ -409,6 +422,16 @@ int plot(int argc, char** argv) {
             if (!s) return fail(s.error().message);
             field_scene = std::move(*s);
         }
+    } else if (o.view == "iso") {
+        if (o.levels.empty()) return usage("--view iso needs --levels");
+        if (m.dimension() == 1) return fail("isosurfaces need a 2D or 3D device (a 1D field is a profile)");
+        auto v = values_for();
+        if (!v) return fail(v.error());
+        auto f = field_options(*v);
+        if (!f) return fail(f.error());
+        auto s = iso_view(*device, *geometry, *v, o.levels, *f);
+        if (!s) return fail(s.error().message);
+        field_scene = std::move(*s);
     } else if (o.view == "profile" || o.view == "bands") {
         auto p = pick();
         if (!p) return fail(p.error());

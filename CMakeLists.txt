@@ -383,6 +383,7 @@ add_executable(nitcad_render_test
   tests/render/geometry_test.cpp
   tests/render/scene_test.cpp
   tests/render/vectors_test.cpp
+  tests/render/iso_test.cpp
   tests/render/image_test.cpp)
 # The image test solves its MOSFETs (tests may use any layer; render itself may not).
 target_link_libraries(nitcad_render_test PRIVATE NiTCAD::render NiTCAD::solve Catch2::Catch2WithMain)
