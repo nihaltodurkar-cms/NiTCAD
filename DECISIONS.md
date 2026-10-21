@@ -2385,6 +2385,63 @@ hardware adapter, else WARP) draws a `FieldScene` or a `PlotScene` off screen in
   CLI's plot command and CMakeLists.txt only), so every existing suite runs the code `main` runs; the suites pass
   unchanged. Release 22/22 and Debug 16/16, no warnings.
 
+### Unit 45 — generation and recombination rates and the mesh digest in results (proposed 2026-10-21; on `results/rates-digest`)
+
+**Owner request:** VQ12 (2026-10-17) put this unit before 25b: "recombination and generation rates in results and
+files; the mesh digest in sweep, transient and small-signal files", to unlock the R view and exact result–mesh
+pairing. Documentation only until the owner approves.
+
+**Why now (audited on `main` at `6d2135b`).**
+- No result holds a rate. The assembler computes each mechanism only inside its residual: since Unit 40 the
+  drift-diffusion rows are equation terms, one per mechanism (`terms.hpp`: SRH, Auger, radiative, interfaces,
+  impact generation, local and nonlocal band-to-band tunnelling, and their electrothermal forms). The only rate in
+  results is a tunnel path's (`TunnelPath::generation_cm3_s`).
+- `nitcad plot` pairs a result file with a device by node count (25a·3): two meshes of equal size pass. The mesh
+  digest exists (`mesh::graph_digest`, `io::mesh_digest`) and only checkpoints and P4 certificates store it.
+- 25b's derived-field views and the reference's R panel need the rates per node.
+
+**Design (proposed):**
+
+| # | Choice | Why | Trade-off |
+|---|---|---|---|
+| RS1 | **Rates read from the terms.** `DriftDiffusion::rates(x)` evaluates each recombination or generation term alone on the state and takes its contribution to each node's electron and hole continuity rows, divided by the node's control volume and scaled to cm⁻³ s⁻¹. Per node: SRH, Auger, radiative and surface recombination (net, R − G of each, signed), impact-ionization and band-to-band generation (electron and hole rows separately where they differ: nonlocal tunnelling puts its electrons and holes at the path's two ends). | The stored rate is the residual's, operand for operand: no second implementation to drift from the solver. | One extra pass of those terms per stored point. |
+| RS2 | **`results::RateFields`** in `BiasPoint`, `TransientSnapshot` and the small-signal operating points: the components above and the net `U = R − G` per carrier, each empty when its mechanism is off. Surface recombination is the interface edges' rate over the node's control volume (an effective volume rate at interface nodes), labelled as such. | One type for every result that has fields; empty vectors cost nothing. | A volume rate for a surface process is an approximation of its distribution, not of its total (the total is exact). |
+| RS3 | **The mesh digest in `RunRecord`** (`mesh_digest`, filled by `make_run_record` from the device's mesh); not part of `input_identity` (which already covers the mesh). | Every result type carries its run record, so sweep, transient and small-signal files get it at once. | — |
+| RS4 | **Files:** new optional records in the sweep, transient and small-signal files for the rates and the digest; files without them (every file written before) load as before, with no rates and digest 0 (unknown). | Old files keep loading (Unit 42's rule, PG3). | — |
+| RS5 | **`nitcad plot`** checks the digest when the result has one (exact refusal), and falls back to the node count for older files; `render` gains the fields `R` (net), `srh`, `auger`, `radiative`, `surface`, `Gii`, `Gbtbt`. | The pairing VR6 asked for; the R view for 25b and the reference grid. | Seven field keys. |
+| RS6 | **Out of scope:** |E| and |J| (25b, `render` reconstructs them); optical generation (no model yet); rates in checkpoints; per-edge rates. | Keeps the unit to stored rates and the digest. | — |
+
+**Owner decisions (asked):**
+
+| # | Question | Recommendation |
+|---|---|---|
+| RQ1 | Store the rates by default, or only when asked (`BiasOptions::store_rates`, deck `[solver] rates = on`)? | **By default**, with `rates = off` to save file size: a commercial viewer opens any result and shows R without rerunning. Measured cost in RG5 decides whether the default holds. |
+| RQ2 | Components (as RS1), or the net rate only? | **Components and the net rate**: which mechanism dominates is the question users ask of an R map. |
+| RQ3 | Surface recombination as an effective volume rate at interface nodes (RS2), or left out? | **Include, labelled** as an effective volume rate, with its exact total. |
+| RQ4 | The digest refusal in `nitcad plot`: refuse a result whose digest differs, or warn? | **Refuse** (exit 1), as for a node-count mismatch: an image of the wrong mesh is worse than none. |
+
+**Acceptance gates, fixed before any implementation:**
+
+| # | Gate |
+|---|---|
+| RG1 | **Exact against the residual:** for every mechanism and every state of the existing device tests' kinds (diode, MOSFET, traps, impact, local and nonlocal BTBT, electrothermal), the volume-weighted rates reproduce that term's contribution to the continuity residual to rounding. |
+| RG2 | **Physics checks:** a uniform bar at low injection gives SRH = Δn/τ; radiative B(np − n_ie²) exactly; Auger as its formula; at equilibrium every net rate is zero to rounding; the integral of impact generation equals the avalanche current's increase (Unit 19's integral). |
+| RG3 | **No numerical change:** the assembly traces are byte-identical to `main`'s (`--order decl`); every suite passes unchanged; `input_identity` of the fixtures unchanged. |
+| RG4 | **Files:** round trips of rates and digest bit for bit; every committed file of earlier units (`tests/io/fixtures`) loads unchanged with no rates and digest 0. |
+| RG5 | **Cost measured:** time and file size per point with and without rates on the 2D MOSFET sweep and a 3D diode; recorded whatever they show. |
+| RG6 | **`nitcad plot`:** a result of a different mesh with the same node count is refused by digest; an old file falls back to the node count; the R and component fields draw. |
+| RG7 | **Suites and mutants:** Release and Debug at every commit, no warnings; mutants in the rate extraction (a term's sign, a missing volume division, electron and hole rows swapped, a mechanism's flag), the file records and the digest check, all caught. |
+| RG8 | **No scope creep:** nothing outside RS1–RS5; ARCHITECTURE.md 6.6 and 11.3 as built after acceptance. |
+
+**Commits (proposed):** 1) `rates()` and `RateFields`, filled by the solves (RG1–RG3, RG5's timing); 2) the digest in
+`RunRecord` and the file records (RG4, RG5's sizes); 3) `nitcad plot` and the render fields (RG6).
+
+**Risks:** the rates' extra pass slows stored points (RG5 measures it); files grow by up to eight node arrays per
+point, which RQ1's off switch answers; the electrothermal terms add their rates into the heat row too (only the
+continuity rows are read).
+
+**Status:** proposed; no code.
+
 ---
 
 ## New questions the advisor raised (not yet in `ARCHITECTURE.md`)
