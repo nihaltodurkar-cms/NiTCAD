@@ -27,6 +27,7 @@
 #include "NiTCAD/device/device.hpp"
 #include "NiTCAD/render/color.hpp"
 #include "NiTCAD/render/geometry.hpp"
+#include "NiTCAD/render/streamlines.hpp"
 #include "NiTCAD/results/solution.hpp"
 
 namespace NiTCAD::render {
@@ -229,6 +230,17 @@ struct FieldOptions {
                                                              std::span<const double> values,
                                                              std::span<const double> levels,
                                                              const FieldOptions& options = {});
+
+// Streamlines (Unit 25b, DS5) added to a scene as line segments: in one color, or each segment colored
+// by |v| at its midpoint through the colorbar's map and scale (64 color bins); drawn over the triangles
+// in 2D and depth-tested in 3D. Points are in cm (streamlines.hpp); the scene's bounds are kept.
+void add_streamlines(FieldScene& scene, std::span<const Streamline> lines, const Rgba& color);
+void add_streamlines(FieldScene& scene, std::span<const Streamline> lines, const Colorbar& colors);
+// The context for 3D streamlines: the device's faint translucent outline and the contacts. Errors as
+// solid_view, and (invalid_input) a 2D geometry.
+[[nodiscard]] std::expected<FieldScene, base::Error> outline_view(const device::Device& device,
+                                                                 const Geometry& geometry,
+                                                                 const ViewOptions& options = {});
 
 // --- plots ---------------------------------------------------------------------------------------
 

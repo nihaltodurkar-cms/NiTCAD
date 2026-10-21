@@ -2621,6 +2621,39 @@ contacts; 2D: the field map with contour lines at the levels). `nitcad plot --vi
   run: Kuhn simplices number their nodes in increasing x, so only a decreasing field reaches the node rule's other
   branch, and only a level at the field's maximum shows the at-level convention; both cases were added.)
 
+**Commit 3 (streamlines; BG3, BG6 in part), as built.** `streamlines.hpp`: `Locator` (the hint element, then the
+elements sharing a node with it, then a bucket grid of about one element per bucket over the elements' bounding
+boxes; barycentric weights by Cramer's rule, inside at −10⁻¹⁰); `trace_streamline` (the nodal vectors interpolated
+linearly, followed at unit speed, adaptive Dormand–Prince 5(4) with first-same-as-last, local error per step at most
+`tolerance` (10⁻⁵) times the device's size, steps at most half the local element's size so the drawn polyline follows
+the field; forward and backward from the seed; stops at the boundary (to 10⁻⁷ of the size), at an undefined or
+vanishing field (|v| ≤ 10⁻¹² of the largest), at a sink (a step that turns the direction back), at 20 device sizes
+or 20,000 steps; |v| kept per point); `contact_node_currents` (the stored edge currents from each contact node to
+nodes outside the contact); `contact_seeds` (BQ2: the contact's boundary segments (2D, walked in order along each
+chain) or faces (3D), each node's \|current\| spread evenly over its part, seeds at the midpoints of equal shares;
+without currents, by length or area); `segment_seeds`, `plane_seeds` (by area over `Geometry::slice`).
+`scene.hpp`: `add_streamlines` (one color, or each segment through the colorbar in 64 bins), `outline_view` (the
+outline shell, now shared with the slice and isosurface views, and the contacts). `nitcad plot --streamlines
+E|J|Jn|Jp [--lines n] [--from contact] [--seeds a:b | x=um]`: 2D over the field map (by default the lines' own
+magnitude) in near-black; 3D over its own magnitude, the lines colored by it in the device's outline, else over the
+chosen view. Default seeds: J lines on the contact carrying the most current, E lines on the first gate or electrode,
+else the most biased contact.
+- **BG3:** a uniform field's lines straight to rounding, ordered, ending on y = 0 and y = 1 µm (10⁻⁶ of the size);
+  the rotational field (−y, x) closes after one turn to 1.2e-15 cm (109 points) and, on a coarse mesh at tolerance
+  10⁻¹², to 1.4e-16 cm; a field with a kink on a node column, v = (1, k\|x − xm\|), follows its closed-form line within
+  4.2e-14 cm (budget: tolerance × size × points); lines stop at a NaN region (no field), at a sink, and a zero field
+  gives the seed alone; 2000 points located in a generated 3D mesh, their weights rebuilding them to 10⁻¹²; equal-
+  current seeds of a uniform current at (i + ½)/N of the contact, and of j(y) = 1 + 3y/H at equal shares of its
+  integral (10⁻⁹), denser where the current is; the two contacts' currents balance (10⁻¹²); plane seeds on the plane.
+- **BG6 (in part):** J, Jn (from a named contact) and E (from a segment, over ψ) lines in 2D; J lines, E lines from a
+  plane and Jp lines over a slice in 3D; refused: an unknown field, a malformed segment, a 3D segment in 2D, a plane
+  in 2D, `--lines 0` (usage), an unknown contact, a plane that misses the device, a 1D device.
+- **Mutation checks (BG8, Release): 12 of 12 caught** — the quantiles' midpoints, a Dormand–Prince stage weight and
+  the error estimate's last weight, the barycentric weight of node 0, the length limit, every step accepted, the
+  sink stop, the step cap, the backward part's order, a contact current's sign, the density not per length, a half
+  segment reversed. (Every step accepted survived until the kinked field: in a smooth field the step sizing keeps
+  each attempt within the tolerance, and only a kink makes a step fail.)
+
 ---
 
 ## New questions the advisor raised (not yet in `ARCHITECTURE.md`)

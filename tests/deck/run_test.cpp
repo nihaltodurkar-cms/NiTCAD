@@ -12,6 +12,7 @@
 #include <fstream>
 #include <iterator>
 #include <string>
+#include <tuple>
 #include <vector>
 
 #include "NiTCAD/deck/run.hpp"
@@ -679,4 +680,68 @@ sweep = )" + tag + ".nitsweep\ndevice = " + tag + ".nitdev\n";
     const Cli one = cli("plot " + d1 + " --view iso --field n --levels 1e16 --out " + out("x.png"));
     CHECK(one.status == 1);
     CHECK(one.output.find("isosurfaces need a 2D or 3D device") != std::string::npos);
+}
+
+TEST_CASE("nitcad plot: streamlines (Unit 25b, BG6)", "[deck]") {
+    const fs::path dir = scratch("cli_plot_lines");
+    const auto write = [&](const char* name, const std::string& text) {
+        std::ofstream(dir / name, std::ios::binary) << text;
+        return "\"" + (dir / name).string() + "\"";
+    };
+    const auto out = [&](const char* name) { return "\"" + (dir / name).string() + "\""; };
+    const auto pn = [](const char* mesh, const char* tag) {
+        return std::string("[mesh]\ntype = tensor\n") + mesh + R"(
+[region silicon]
+material = silicon
+[doping]
+profile = acceptor constant 1e17 axis=y x=-1:1um
+profile = donor constant 1e17 axis=y x=1um:3um
+[contact anode]
+kind = ohmic
+patch = x_min
+[contact cathode]
+kind = ohmic
+patch = x_max
+[sweep]
+contact anode = 0, 0.4
+[output]
+sweep = )" + tag + ".nitsweep\ndevice = " + tag + ".nitdev\n";
+    };
+    const std::string d2 = write("pn2.deck", pn("x = linspace(0, 2um, 21)\ny = linspace(0, 1um, 6)\n", "pn2"));
+    REQUIRE(cli("run " + d2).status == 0);
+    const std::string d3 = write("pn3.deck", pn("x = linspace(0, 2um, 11)\ny = linspace(0, 1um, 5)\nz = linspace(0, 0.5um, 3)\n", "pn3"));
+    REQUIRE(cli("run " + d3).status == 0);
+    for (const auto& [deck, args, name] :
+         {std::tuple{d2, std::string("--streamlines J --lines 6"), "j2.png"},
+          std::tuple{d2, std::string("--streamlines Jn --from cathode"), "jn2.png"},
+          std::tuple{d2, std::string("--streamlines E --seeds 0.2,0.1:1.8,0.9 --field potential"), "e2.png"},
+          std::tuple{d3, std::string("--streamlines J --lines 9"), "j3.png"},
+          std::tuple{d3, std::string("--streamlines E --seeds x=1.0 --lines 9"), "e3.png"},
+          std::tuple{d3, std::string("--streamlines Jp --slice z=0.25"), "jp3.png"}}) {
+        const Cli c = cli("plot " + deck + " " + args + " --adapter warp --size 400x300 --out " + out(name));
+        CAPTURE(args, c.output);
+        CHECK(c.status == 0);
+        CHECK(render::load_png(dir / name).has_value());
+    }
+    // Refused: an unknown field (usage), a malformed segment (usage), a plane in 2D (usage), an unknown
+    // contact, a 1D device, a plane that misses the device.
+    CHECK(cli("plot " + d2 + " --streamlines B --out " + out("x.png")).status == 64);
+    CHECK(cli("plot " + d2 + " --streamlines J --seeds 0.2,0.1 --out " + out("x.png")).status == 64);
+    CHECK(cli("plot " + d2 + " --streamlines J --seeds 0.2,0.1,0:1,1,0 --out " + out("x.png")).status == 64);
+    CHECK(cli("plot " + d2 + " --streamlines J --seeds x=1 --out " + out("x.png")).status == 64);
+    CHECK(cli("plot " + d2 + " --streamlines J --lines 0 --out " + out("x.png")).status == 64);
+    const Cli unknown = cli("plot " + d2 + " --streamlines J --from drain --out " + out("x.png"));
+    CHECK(unknown.status == 1);
+    CHECK(unknown.output.find("there is no contact drain") != std::string::npos);
+    const Cli miss = cli("plot " + d3 + " --streamlines J --seeds x=5 --out " + out("x.png"));
+    CHECK(miss.status == 1);
+    CHECK(miss.output.find("misses the device") != std::string::npos);
+    const std::string d1 = write("pn1.deck", "[mesh]\ntype = tensor\nx = linspace(0, 1um, 11)\n[region silicon]\n"
+                                             "material = silicon\n[doping]\nprofile = donor constant 1e16\n"
+                                             "[contact a]\nkind = ohmic\npatch = x_min\n[contact b]\nkind = ohmic\n"
+                                             "patch = x_max\n[sweep]\ncontact a = 0, 0.1\n[output]\nsweep = pn1.nitsweep\n");
+    REQUIRE(cli("run " + d1).status == 0);
+    const Cli one = cli("plot " + d1 + " --streamlines J --out " + out("x.png"));
+    CHECK(one.status == 1);
+    CHECK(one.output.find("streamlines need a 2D or 3D device") != std::string::npos);
 }

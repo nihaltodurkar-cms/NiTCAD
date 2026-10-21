@@ -21,6 +21,7 @@
 #include "NiTCAD/mesh/mesh.hpp"
 #include "NiTCAD/render/image.hpp"
 #include "NiTCAD/render/scene.hpp"
+#include "NiTCAD/render/vectors.hpp"
 
 namespace NiTCAD::cli {
 
@@ -43,6 +44,8 @@ constexpr const char* plot_usage =
     "  3D      --slice x=<um>|y=<um>|z=<um> (repeatable)  --azimuth <deg>  --elevation <deg>\n"
     "          --perspective\n"
     "  curves  --contact <name> (swept)  --sense <name>  --frequency <k>  --log\n"
+    "  lines   --streamlines E|J|Jn|Jp  --lines <n> (24)  --from <contact>\n"
+    "          --seeds <x0>,<y0>[,<z0>]:<x1>,<y1>[,<z1>] (um) | x=<um>|y=<um>|z=<um> (3D plane)\n"
     "  image   --size <w>x<h> (1280x960)  --adapter auto|gpu|warp\n";
 
 int usage(std::string_view why) {
@@ -65,6 +68,8 @@ std::optional<double> number(std::string_view s) {
 struct Options {
     fs::path input, device, mesh, out;
     std::string view, field, scale, colormap = "turbo", contact, sense, adapter = "auto";
+    std::string streamlines, from, seeds;  // Unit 25b
+    std::size_t lines = 24;
     std::optional<std::size_t> point, frequency;
     std::optional<std::pair<double, double>> range;
     std::vector<Plane> slices;
@@ -182,6 +187,15 @@ int plot(int argc, char** argv) {
         else if (a == "--contact") { if (!flag_value(o.contact)) return usage("--contact needs a name"); }
         else if (a == "--sense") { if (!flag_value(o.sense)) return usage("--sense needs a name"); }
         else if (a == "--adapter") { if (!flag_value(o.adapter)) return usage("--adapter needs a name"); }
+        else if (a == "--streamlines") { if (!flag_value(o.streamlines)) return usage("--streamlines needs E, J, Jn or Jp"); }
+        else if (a == "--from") { if (!flag_value(o.from)) return usage("--from needs a contact"); }
+        else if (a == "--seeds") { if (!flag_value(o.seeds)) return usage("--seeds needs a segment or a plane"); }
+        else if (a == "--lines") {
+            const auto v = value();
+            const auto n = v ? number(*v) : std::nullopt;
+            if (!n || *n < 1 || *n > 10000 || *n != std::floor(*n)) return usage("--lines needs a count from 1 to 10000");
+            o.lines = static_cast<std::size_t>(*n);
+        }
         else if (a == "--contours") o.contours = true;
         else if (a == "--edges") o.edges = true;
         else if (a == "--opaque") o.opaque = true;
@@ -239,6 +253,12 @@ int plot(int argc, char** argv) {
         }
     }
     if (o.out.empty()) return usage("--out is required");
+    if (!o.streamlines.empty()) {
+        if (o.streamlines != "E" && o.streamlines != "J" && o.streamlines != "Jn" && o.streamlines != "Jp") {
+            return usage("--streamlines is E, J, Jn or Jp");
+        }
+        if (o.field.empty()) o.field = o.streamlines;  // drawn over their own magnitude
+    }
     if (o.view.empty()) o.view = !o.slices.empty() ? "slice" : o.field.empty() ? "solid" : "field";
     if (o.field.empty()) o.field = "potential";
 
@@ -402,6 +422,17 @@ int plot(int argc, char** argv) {
         auto s = o.view == "solid" ? solid_view(*device, *geometry, view) : mesh_view(*device, *geometry, view);
         if (!s) return fail(s.error().message);
         field_scene = std::move(*s);
+    } else if (!o.streamlines.empty() && m.dimension() == 3 && o.view == "field" && o.field == o.streamlines) {
+        // 3D streamlines over their own magnitude: the lines, colored by it, in the device's outline.
+        auto v = values_for();
+        if (!v) return fail(v.error());
+        auto f = field_options(*v);
+        if (!f) return fail(f.error());
+        auto s = outline_view(*device, *geometry, view);
+        if (!s) return fail(s.error().message);
+        s->title = f->title;
+        s->colorbar = Colorbar{f->map, *f->scale, f->title};
+        field_scene = std::move(*s);
     } else if (o.view == "field" || o.view == "slice") {
         auto v = values_for();
         if (!v) return fail(v.error());
@@ -495,6 +526,103 @@ int plot(int argc, char** argv) {
         plot_scene = std::move(*s);
     } else {
         return usage("unknown view " + o.view);
+    }
+
+    // Streamlines (Unit 25b, DS5-DS7) over the view.
+    if (!o.streamlines.empty()) {
+        if (!field_scene || m.dimension() < 2) {
+            return fail("streamlines need a 2D or 3D device and a field, slice or iso view");
+        }
+        const VectorField vf = o.streamlines == "E"    ? VectorField::electric
+                               : o.streamlines == "J"  ? VectorField::current
+                               : o.streamlines == "Jn" ? VectorField::electron_current
+                                                       : VectorField::hole_current;
+        auto p = pick();
+        if (!p) return fail(p.error());
+        auto ev = element_vectors(*device, *geometry, **p, vf);
+        if (!ev) return fail(ev.error().message);
+        const std::vector<Point> nodal = nodal_vectors(*geometry, *ev);
+        const Locator locator(*geometry);
+        const auto contacts = device->contacts();
+        std::vector<Point> seeds;
+        if (!o.seeds.empty()) {
+            const std::string_view s = o.seeds;
+            if (s.size() > 2 && s[1] == '=' && std::string_view("xyz").find(s[0]) != std::string_view::npos) {
+                const auto at = number(s.substr(2));
+                if (!at) return usage("--seeds needs a segment or x=<um>, y=<um> or z=<um>");
+                if (m.dimension() != 3) return usage("a seed plane needs a 3D device");
+                Plane plane;
+                plane.normal[static_cast<std::size_t>(s[0] - 'x')] = 1.0;
+                plane.offset = *at * 1e-4;
+                seeds = plane_seeds(*geometry, plane, o.lines);
+                if (seeds.empty()) return fail("the seed plane misses the device");
+            } else {
+                // <x0>,<y0>[,<z0>]:<x1>,<y1>[,<z1>] in um.
+                const auto point_of = [&](std::string_view t) -> std::optional<Point> {
+                    Point q{};
+                    std::size_t k = 0;
+                    for (std::string_view rest = t;; ++k) {
+                        const auto comma = rest.find(',');
+                        const auto x = number(rest.substr(0, comma));
+                        if (!x || k >= 3) return std::nullopt;
+                        q[k] = *x * 1e-4;
+                        if (comma == std::string_view::npos) break;
+                        rest = rest.substr(comma + 1);
+                    }
+                    if (k + 1 != static_cast<std::size_t>(m.dimension())) return std::nullopt;
+                    return q;
+                };
+                const auto colon = s.find(':');
+                const auto a = colon == std::string_view::npos ? std::nullopt : point_of(s.substr(0, colon));
+                const auto b = colon == std::string_view::npos ? std::nullopt : point_of(s.substr(colon + 1));
+                if (!a || !b) return usage("--seeds needs <x0>,<y0>[,<z0>]:<x1>,<y1>[,<z1>] in the device's dimension");
+                seeds = segment_seeds(*a, *b, o.lines);
+            }
+        } else {
+            // From a contact: --from, else for currents the one carrying the most, for E the first
+            // gate or electrode, else the most biased.
+            std::size_t c = 0;
+            if (!o.from.empty()) {
+                const device::Contact* named = device->find_contact(o.from);
+                if (!named) return fail("there is no contact " + o.from);
+                c = static_cast<std::size_t>(named - contacts.data());
+            } else if (vf != VectorField::electric) {
+                double best = -1.0;
+                for (std::size_t k = 0; k < contacts.size(); ++k) {
+                    double sum = 0.0;
+                    for (const double i : contact_node_currents(*device, **p, k)) sum += i;
+                    if (std::abs(sum) > best) {
+                        best = std::abs(sum);
+                        c = k;
+                    }
+                }
+            } else {
+                const auto gate = std::ranges::find_if(contacts, [](const device::Contact& k) {
+                    return k.kind != device::ContactKind::ohmic;
+                });
+                if (gate != contacts.end()) {
+                    c = static_cast<std::size_t>(gate - contacts.begin());
+                } else {
+                    double best = -1.0;
+                    for (std::size_t k = 0; k < contacts.size() && k < (*p)->bias_V.size(); ++k) {
+                        if (std::abs((*p)->bias_V[k]) > best) {
+                            best = std::abs((*p)->bias_V[k]);
+                            c = k;
+                        }
+                    }
+                }
+            }
+            const std::vector<double> currents =
+                vf == VectorField::electric ? std::vector<double>{} : contact_node_currents(*device, **p, c);
+            seeds = contact_seeds(*device, locator, c, o.lines, currents);
+        }
+        std::vector<Streamline> lines;
+        for (const Point& seed : seeds) lines.push_back(trace_streamline(locator, nodal, seed));
+        if (m.dimension() == 3 && o.view == "field" && o.field == o.streamlines && field_scene->colorbar) {
+            add_streamlines(*field_scene, lines, *field_scene->colorbar);
+        } else {
+            add_streamlines(*field_scene, lines, Rgba{0.05f, 0.05f, 0.05f, 0.85f});
+        }
     }
 
     // Draw and write.

@@ -299,6 +299,17 @@ void contact_slabs(const device::Device& d, const Geometry& g, const Palette& pa
     if (!metal.vertices.empty()) out.push_back(std::move(metal));
 }
 
+// The device's boundary, faint and translucent, for context in 3D.
+TriangleBatch outline_shell(const Geometry& g) {
+    TriangleBatch shell{"outline", Shading::flat, true, true, {}};
+    for (const Polygon& f : g.boundary_faces()) {
+        std::vector<Point> pts;
+        for (const SurfaceVertex& v : f.vertices) pts.push_back(v.position);
+        fan(shell, pts, {}, {0.82f, 0.85f, 0.88f, 0.12f}, polygon_normal(pts));
+    }
+    return shell;
+}
+
 // 2D outlines: the boundary and the interfaces between regions.
 void outlines_2d(const device::Device& d, const Geometry& g, std::vector<LineBatch>& out) {
     LineBatch lines{"outline", {0.12f, 0.14f, 0.16f, 1.0f}, 1.5f, true, {}};
@@ -710,14 +721,7 @@ std::expected<FieldScene, base::Error> slice_view(const device::Device& d, const
     }
     if (o.contours) contours(field, *bar, s.lines);
     s.triangles.push_back(std::move(field));
-    // The device's boundary, faint and translucent, for context.
-    TriangleBatch shell{"outline", Shading::flat, true, true, {}};
-    for (const Polygon& f : g.boundary_faces()) {
-        std::vector<Point> pts;
-        for (const SurfaceVertex& v : f.vertices) pts.push_back(v.position);
-        fan(shell, pts, {}, {0.82f, 0.85f, 0.88f, 0.12f}, polygon_normal(pts));
-    }
-    s.triangles.push_back(std::move(shell));
+    s.triangles.push_back(outline_shell(g));
     if (o.view.contacts) contact_slabs(d, g, o.view.palette, s.triangles);
     s.colorbar = std::move(*bar);
     frame(s, o.view);
@@ -777,17 +781,55 @@ std::expected<FieldScene, base::Error> iso_view(const device::Device& d, const G
         }
         if (!batch.vertices.empty()) s.triangles.push_back(std::move(batch));
     }
-    // The device's boundary, faint and translucent, for context.
-    TriangleBatch shell{"outline", Shading::flat, true, true, {}};
-    for (const Polygon& f : g.boundary_faces()) {
-        std::vector<Point> pts;
-        for (const SurfaceVertex& v : f.vertices) pts.push_back(v.position);
-        fan(shell, pts, {}, {0.82f, 0.85f, 0.88f, 0.12f}, polygon_normal(pts));
-    }
-    s.triangles.push_back(std::move(shell));
+    s.triangles.push_back(outline_shell(g));
     if (o.view.contacts) contact_slabs(d, g, o.view.palette, s.triangles);
     s.colorbar = std::move(*bar);
     frame(s, o.view);
+    return s;
+}
+
+void add_streamlines(FieldScene& s, std::span<const Streamline> lines, const Rgba& color) {
+    LineBatch batch{"streamlines", color, 1.5f, s.dimension == 2, {}};
+    for (const Streamline& l : lines) {
+        for (std::size_t i = 1; i < l.points.size(); ++i) {
+            batch.points.push_back(um(l.points[i - 1]));
+            batch.points.push_back(um(l.points[i]));
+        }
+    }
+    if (!batch.points.empty()) s.lines.push_back(std::move(batch));
+}
+
+void add_streamlines(FieldScene& s, std::span<const Streamline> lines, const Colorbar& colors) {
+    constexpr std::size_t bins = 64;
+    std::vector<LineBatch> batch(bins + 1);  // the last for segments without a position
+    for (std::size_t b = 0; b <= bins; ++b) {
+        const Rgb c = b < bins ? sample(colors.map, (static_cast<double>(b) + 0.5) / bins) : no_data;
+        batch[b] = {"streamlines", {c.r, c.g, c.b, 1.0f}, 2.0f, s.dimension == 2, {}};
+    }
+    for (const Streamline& l : lines) {
+        for (std::size_t i = 1; i < l.points.size(); ++i) {
+            const double m = 0.5 * (l.magnitude[i - 1] + l.magnitude[i]);
+            const double t = colors.scale.position(m);
+            const std::size_t b = std::isfinite(t) ? std::min(bins - 1, static_cast<std::size_t>(t * bins)) : bins;
+            batch[b].points.push_back(um(l.points[i - 1]));
+            batch[b].points.push_back(um(l.points[i]));
+        }
+    }
+    for (LineBatch& b : batch) {
+        if (!b.points.empty()) s.lines.push_back(std::move(b));
+    }
+}
+
+std::expected<FieldScene, base::Error> outline_view(const device::Device& d, const Geometry& g,
+                                                    const ViewOptions& o) {
+    if (auto c = check_view(d, g); !c) return std::unexpected(std::move(c.error()));
+    if (g.dimension() != 3) return std::unexpected(invalid("the outline view needs a 3D geometry"));
+    FieldScene s;
+    s.dimension = 3;
+    s.title = "Streamlines";
+    s.triangles.push_back(outline_shell(g));
+    if (o.contacts) contact_slabs(d, g, o.palette, s.triangles);
+    frame(s, o);
     return s;
 }
 
