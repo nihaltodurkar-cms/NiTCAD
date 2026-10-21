@@ -2782,6 +2782,29 @@ solid); over a field map an arrow colored like the map under it would vanish, so
   doubled, the grid not centred (caught once the centring check was added), a non-unit normal, the 2D arrow behind
   the map, a short 2D and 3D arrow, the 3D arrow sunk into its surface, contact faces kept, the color not \|v\|'s.
 
+**Commit 2 (the clipping box; CG2, CG6 in part), as built.** `geometry.hpp`: `Box`; `outside_box` (a convex
+polygon cut by the box's six planes in turn, the part beyond each kept and the rest passed on; a part lying in a box
+plane, with nothing strictly beyond it, belongs to the box); `Geometry::clipped_surface` (the boundary faces' parts
+outside the box, and the cut faces: sections of the elements by each box face strictly inside the mesh's bounding
+box, clipped to the face and turned toward the box, each with its interpolants). `ViewOptions::clip` (CQ4: the 3D
+solid and field views draw the clipped surface, interfaces cut alike, a contact slab's face left out when its
+centroid is in the box). `nitcad plot --clip <x0>,<y0>,<z0>:<x1>,<y1>,<z1>` (µm), arrows then sit on the clipped
+view's exposed boundary.
+- **CG2:** a square's parts outside a box are convex and cover the square less the overlap; on a graded tensor mesh,
+  an interior box, a corner box (the quarter cut), a slab through the device (two pieces), a box with a face on the
+  boundary and a box missing the device give closed surfaces (vector area 0 to 10⁻¹⁰) enclosing the device's volume
+  less the overlap (10⁻¹⁰), outward; the same for an interior and a corner box on a generated mesh; a linear field
+  exact on the cut faces; the field and solid views (with oxide above and below, so interfaces too) draw nothing
+  inside the box and draw the cut face; a box over the drain end removes its pad.
+- **CG6 (in part):** clipped field, solid and arrow views from a deck, and the clipped image differs from the whole;
+  refused: a two-coordinate or inverted box (usage), a slice view, a 2D device.
+- Looked at on the 3D MOSFET deck: the quarter cut shows n inside the source and drain pockets and the channel
+  region, the gate slab notched where the box removes it.
+- **Mutation checks (CG7, Release): 10 of 10 caught** — the box's faces swapped, in-plane parts kept, the remainder
+  not reduced, cut faces at the bounding box, cut faces turned outward, cut faces not clipped to the face, slabs
+  kept, the view unclipped, interfaces unclipped, `nitcad plot` ignoring the box (caught once the clipped and whole
+  images were compared). The face-on-boundary case was added after a first version kept such a face.
+
 ---
 
 ## New questions the advisor raised (not yet in `ARCHITECTURE.md`)

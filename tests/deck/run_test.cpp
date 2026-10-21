@@ -790,3 +790,53 @@ sweep = )" + tag + ".nitsweep\ndevice = " + tag + ".nitdev\n";
     CHECK(one.status == 1);
     CHECK(one.output.find("arrows need a 2D or 3D device") != std::string::npos);
 }
+
+TEST_CASE("nitcad plot: the clipping box (Unit 25c, CG6)", "[deck]") {
+    const fs::path dir = scratch("cli_plot_clip");
+    const auto write = [&](const char* name, const std::string& text) {
+        std::ofstream(dir / name, std::ios::binary) << text;
+        return "\"" + (dir / name).string() + "\"";
+    };
+    const auto out = [&](const char* name) { return "\"" + (dir / name).string() + "\""; };
+    const auto deck = [](const char* mesh, const char* tag) {
+        return std::string("[mesh]\ntype = tensor\n") + mesh + R"([region silicon]
+material = silicon
+[doping]
+profile = acceptor constant 1e17 axis=y x=-1:1um
+profile = donor constant 1e17 axis=y x=1um:3um
+[contact anode]
+kind = ohmic
+patch = x_min
+[contact cathode]
+kind = ohmic
+patch = x_max
+[sweep]
+contact anode = 0, 0.4
+[output]
+sweep = )" + tag + ".nitsweep\ndevice = " + tag + ".nitdev\n";
+    };
+    const std::string d3 = write("pn3.deck", deck("x = linspace(0, 2um, 11)\ny = linspace(0, 1um, 5)\nz = linspace(0, 0.5um, 3)\n", "pn3"));
+    REQUIRE(cli("run " + d3).status == 0);
+    for (const auto& [args, name] : {std::pair{std::string("--field n --clip 1,0.5,0.25:3,2,1"), "n.png"},
+                                     std::pair{std::string("--clip 0.5,0.2,0.1:1.5,0.8,0.4"), "solid.png"},
+                                     std::pair{std::string("--vectors J --clip 1,0.5,0.25:3,2,1"), "j.png"}}) {
+        const Cli c = cli("plot " + d3 + " " + args + " --adapter warp --size 400x300 --out " + out(name));
+        CAPTURE(args, c.output);
+        CHECK(c.status == 0);
+        CHECK(render::load_png(dir / name).has_value());
+    }
+    // The box changes the picture: the same view without it differs.
+    REQUIRE(cli("plot " + d3 + " --field n --adapter warp --size 400x300 --out " + out("n_whole.png")).status == 0);
+    CHECK(render::load_png(dir / "n.png")->rgba != render::load_png(dir / "n_whole.png")->rgba);
+    // Refused: malformed or inverted boxes (usage), a slice view, a 2D device.
+    CHECK(cli("plot " + d3 + " --clip 1,0.5:3,2 --out " + out("x.png")).status == 64);
+    CHECK(cli("plot " + d3 + " --clip 3,0.5,0.2:1,2,1 --out " + out("x.png")).status == 64);
+    const Cli slice = cli("plot " + d3 + " --field n --slice z=0.2 --clip 1,0.5,0.25:3,2,1 --out " + out("x.png"));
+    CHECK(slice.status == 1);
+    CHECK(slice.output.find("applies to the solid and field views") != std::string::npos);
+    const std::string d2 = write("pn2.deck", deck("x = linspace(0, 2um, 11)\ny = linspace(0, 1um, 5)\n", "pn2"));
+    REQUIRE(cli("run " + d2).status == 0);
+    const Cli flat = cli("plot " + d2 + " --clip 1,0.5,0:3,2,1 --out " + out("x.png"));
+    CHECK(flat.status == 1);
+    CHECK(flat.output.find("needs a 3D device") != std::string::npos);
+}

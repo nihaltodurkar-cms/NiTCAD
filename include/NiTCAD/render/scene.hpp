@@ -182,6 +182,10 @@ struct ViewOptions {
     Projection projection = Projection::orthographic;
     float azimuth_deg = 35.0f;
     float elevation_deg = 25.0f;
+    // 3D solid and field views (Unit 25c, DC2, CQ4): the box removed, its cut faces drawn like the
+    // boundary (Geometry::clipped_surface); interfaces cut alike; a contact slab's face whose centroid
+    // lies in the box is left out. Ignored in 2D.
+    std::optional<Box> clip;
 };
 
 // The regions (VR2, VR8): 2D a map of the control-volume pieces; 3D the boundary surface and the

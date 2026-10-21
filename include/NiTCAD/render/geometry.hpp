@@ -87,6 +87,17 @@ struct Plane {
     double offset = 0.0;
 };
 
+// An axis-aligned box, lo <= hi on each axis (cm): the part a clipping box removes (Unit 25c, DC2).
+struct Box {
+    Point lo{};
+    Point hi{};
+};
+
+// The parts of a convex planar polygon outside a box, each convex: the polygon is cut by the box's six
+// planes in turn, the part beyond each kept and the rest passed on (what remains is inside and
+// dropped). Parts of zero area are dropped.
+[[nodiscard]] std::vector<std::vector<Point>> outside_box(std::span<const Point> polygon, const Box& box);
+
 class Geometry {
 public:
     // Errors (invalid_input): cells that do not match the mesh (TensorCells::matches).
@@ -124,6 +135,12 @@ public:
     // 2D segments as two-vertex polygons). Elements touching the plane only at a vertex, an edge
     // or (3D) lying in it on a face give no piece of zero area.
     [[nodiscard]] std::vector<Polygon> slice(const Plane& plane) const;
+    // 3D, the surface of the device with the box removed (Unit 25c, DC2): the boundary faces' parts
+    // outside the box, and the box's faces inside the device (sections of the elements by each face's
+    // plane, clipped to the face), all oriented outward from what is left (the cut faces toward the
+    // box), each a convex polygon in its element. A box face on or beyond the mesh's bounding box makes
+    // no cut face. Empty for a geometry that is not 3D.
+    [[nodiscard]] std::vector<Polygon> clipped_surface(const Box& box) const;
     // The parts of a polygon inside element `p.element` nearest to each of the element's nodes, by
     // the rule above. Pieces of zero area are dropped.
     [[nodiscard]] std::vector<OwnedPolygon> owner_pieces(const Polygon& p) const;

@@ -215,7 +215,7 @@ double largest_extent_cm(const mesh::Mesh& m) {
 // Contacts as slabs of nominal thickness on their boundary (VR8): a lumped gate as its oxide (pale)
 // under the electrode, an electrode as metal, an ohmic contact as a thin metal pad.
 void contact_slabs(const device::Device& d, const Geometry& g, const Palette& palette,
-                   std::vector<TriangleBatch>& out) {
+                   std::vector<TriangleBatch>& out, const std::optional<Box>& clip = std::nullopt) {
     const double t = 0.03 * largest_extent_cm(d.mesh());
     const auto points = d.mesh().points();
     TriangleBatch metal{"electrode", Shading::flat, g.dimension() == 3, false, {}};
@@ -274,6 +274,14 @@ void contact_slabs(const device::Device& d, const Geometry& g, const Palette& pa
         for (Polygon& f : g.boundary_faces()) {
             bool all = true;
             for (const SurfaceVertex& v : f.vertices) all = all && in[static_cast<std::size_t>(v.at.nodes[0])];
+            if (all && clip) {
+                // Under a clipping box: a face whose centroid lies in the box is left out.
+                Point c{};
+                for (const SurfaceVertex& v : f.vertices) c = add(c, scale(v.position, 1.0 / 3.0));
+                bool in_box = true;
+                for (std::size_t a = 0; a < 3; ++a) in_box = in_box && c[a] >= clip->lo[a] && c[a] <= clip->hi[a];
+                all = !in_box;
+            }
             if (all) faces.push_back(std::move(f));
         }
         std::map<std::pair<NodeId, NodeId>, int> edge_count;
@@ -369,7 +377,8 @@ void solid_3d(const device::Device& d, const Geometry& g, const ViewOptions& o, 
     Batches batches(o.palette, true, o.transparent_insulators);
     TriangleBatch field_batch{"field", Shading::field, true, false, {}};
     const auto is_insulator = [&](NodeId n) { return d.is_insulator(n); };
-    for (const Polygon& face : g.boundary_faces()) {
+    // With a clipping box (Unit 25c), the surface of what is left: cut faces drawn like the boundary.
+    for (const Polygon& face : o.clip ? g.clipped_surface(*o.clip) : g.boundary_faces()) {
         std::vector<Point> pts;
         for (const SurfaceVertex& v : face.vertices) pts.push_back(v.position);
         const Point n = polygon_normal(pts);
@@ -394,13 +403,18 @@ void solid_3d(const device::Device& d, const Geometry& g, const ViewOptions& o, 
                                      d.mesh().points()[static_cast<std::size_t>(semi)]);
             Point n = polygon_normal(p.points);
             if (dot(n, toward) < 0.0) n = scale(n, -1.0);
-            if (field_scale) {
-                std::vector<float> vals;
-                for (const Point& x : p.points) vals.push_back(position_at(g, p.element, x, values, *field_scale));
-                fan(field_batch, p.points, vals, {}, n);
-            } else {
-                const Material m = material_class(d, semi, o.palette);
-                fan(batches[m], p.points, {}, material_color(m, o.palette), n);
+            std::vector<std::vector<Point>> parts;
+            if (o.clip) parts = outside_box(p.points, *o.clip);
+            else parts.push_back(p.points);
+            for (const std::vector<Point>& part : parts) {
+                if (field_scale) {
+                    std::vector<float> vals;
+                    for (const Point& x : part) vals.push_back(position_at(g, p.element, x, values, *field_scale));
+                    fan(field_batch, part, vals, {}, n);
+                } else {
+                    const Material m = material_class(d, semi, o.palette);
+                    fan(batches[m], part, {}, material_color(m, o.palette), n);
+                }
             }
         }
     }
@@ -595,7 +609,7 @@ std::expected<FieldScene, base::Error> solid_view(const device::Device& d, const
     } else {
         solid_3d(d, g, o, s, {}, nullptr);
     }
-    if (o.contacts) contact_slabs(d, g, o.palette, s.triangles);
+    if (o.contacts) contact_slabs(d, g, o.palette, s.triangles, o.clip);
     frame(s, o);
     return s;
 }
@@ -677,7 +691,7 @@ std::expected<FieldScene, base::Error> field_view(const device::Device& d, const
             }
         }
     }
-    if (o.view.contacts) contact_slabs(d, g, o.view.palette, s.triangles);
+    if (o.view.contacts) contact_slabs(d, g, o.view.palette, s.triangles, o.view.clip);
     if (o.view.mesh_edges && g.dimension() == 2) {
         LineBatch edges{"mesh", {0.15f, 0.17f, 0.2f, 0.5f}, 1.0f, true, {}};
         const auto points = d.mesh().points();
@@ -723,7 +737,7 @@ std::expected<FieldScene, base::Error> slice_view(const device::Device& d, const
     if (o.contours) contours(field, *bar, s.lines);
     s.triangles.push_back(std::move(field));
     s.triangles.push_back(outline_shell(g));
-    if (o.view.contacts) contact_slabs(d, g, o.view.palette, s.triangles);
+    if (o.view.contacts) contact_slabs(d, g, o.view.palette, s.triangles, o.view.clip);
     s.colorbar = std::move(*bar);
     frame(s, o.view);
     return s;
@@ -783,7 +797,7 @@ std::expected<FieldScene, base::Error> iso_view(const device::Device& d, const G
         if (!batch.vertices.empty()) s.triangles.push_back(std::move(batch));
     }
     s.triangles.push_back(outline_shell(g));
-    if (o.view.contacts) contact_slabs(d, g, o.view.palette, s.triangles);
+    if (o.view.contacts) contact_slabs(d, g, o.view.palette, s.triangles, o.view.clip);
     s.colorbar = std::move(*bar);
     frame(s, o.view);
     return s;
@@ -909,7 +923,7 @@ std::expected<FieldScene, base::Error> outline_view(const device::Device& d, con
     s.dimension = 3;
     s.title = "Streamlines";
     s.triangles.push_back(outline_shell(g));
-    if (o.contacts) contact_slabs(d, g, o.palette, s.triangles);
+    if (o.contacts) contact_slabs(d, g, o.palette, s.triangles, o.clip);
     frame(s, o);
     return s;
 }

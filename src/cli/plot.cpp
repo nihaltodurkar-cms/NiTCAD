@@ -45,6 +45,7 @@ constexpr const char* plot_usage =
     "          --perspective\n"
     "  curves  --contact <name> (swept)  --sense <name>  --frequency <k>  --log\n"
     "  arrows  --vectors E|J|Jn|Jp  --arrows <n> (300 in 2D, 400 in 3D)\n"
+    "  clip    --clip <x0>,<y0>,<z0>:<x1>,<y1>,<z1> (um): that box removed from a 3D solid or field view\n"
     "  lines   --streamlines E|J|Jn|Jp  --lines <n> (24)  --from <contact>\n"
     "          --seeds <x0>,<y0>[,<z0>]:<x1>,<y1>[,<z1>] (um) | x=<um>|y=<um>|z=<um> (3D plane)\n"
     "  image   --size <w>x<h> (1280x960)  --adapter auto|gpu|warp\n";
@@ -72,6 +73,7 @@ struct Options {
     std::string streamlines, from, seeds;  // Unit 25b
     std::size_t lines = 24;
     std::string vectors;  // Unit 25c
+    std::optional<Box> clip;
     std::size_t arrows = 0;
     std::optional<std::size_t> point, frequency;
     std::optional<std::pair<double, double>> range;
@@ -192,6 +194,29 @@ int plot(int argc, char** argv) {
         else if (a == "--adapter") { if (!flag_value(o.adapter)) return usage("--adapter needs a name"); }
         else if (a == "--streamlines") { if (!flag_value(o.streamlines)) return usage("--streamlines needs E, J, Jn or Jp"); }
         else if (a == "--vectors") { if (!flag_value(o.vectors)) return usage("--vectors needs E, J, Jn or Jp"); }
+        else if (a == "--clip") {
+            // <x0>,<y0>,<z0>:<x1>,<y1>,<z1> in um, lo below hi on each axis.
+            const auto v = value();
+            const auto colon = v ? v->find(':') : std::string_view::npos;
+            const auto corner = [](std::string_view t) -> std::optional<Point> {
+                Point q{};
+                for (std::size_t k = 0; k < 3; ++k) {
+                    const auto comma = t.find(',');
+                    if ((k < 2) == (comma == std::string_view::npos)) return std::nullopt;
+                    const auto x = number(t.substr(0, comma));
+                    if (!x) return std::nullopt;
+                    q[k] = *x * 1e-4;
+                    if (k < 2) t = t.substr(comma + 1);
+                }
+                return q;
+            };
+            const auto a0 = colon == std::string_view::npos ? std::nullopt : corner(v->substr(0, colon));
+            const auto a1 = colon == std::string_view::npos ? std::nullopt : corner(v->substr(colon + 1));
+            if (!a0 || !a1 || !((*a0)[0] < (*a1)[0] && (*a0)[1] < (*a1)[1] && (*a0)[2] < (*a1)[2])) {
+                return usage("--clip needs <x0>,<y0>,<z0>:<x1>,<y1>,<z1> (um) with each lo below its hi");
+            }
+            o.clip = Box{*a0, *a1};
+        }
         else if (a == "--arrows") {
             const auto v = value();
             const auto n = v ? number(*v) : std::nullopt;
@@ -375,6 +400,11 @@ int plot(int argc, char** argv) {
     ViewOptions view;
     view.contacts = true;
     view.mesh_edges = o.edges;
+    if (o.clip) {
+        if (m.dimension() != 3) return fail("a clipping box needs a 3D device");
+        if (o.view != "solid" && o.view != "field") return fail("a clipping box applies to the solid and field views");
+        view.clip = o.clip;
+    }
     view.transparent_insulators = !o.opaque;
     view.projection = o.perspective ? Projection::perspective : Projection::orthographic;
     if (o.azimuth) view.azimuth_deg = *o.azimuth;
