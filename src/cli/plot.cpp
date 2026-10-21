@@ -541,7 +541,7 @@ int plot(int argc, char** argv) {
         if (!p) return fail(p.error());
         auto ev = element_vectors(*device, *geometry, **p, vf);
         if (!ev) return fail(ev.error().message);
-        const std::vector<Point> nodal = nodal_vectors(*geometry, *ev);
+        const std::vector<Point> nodal = streamline_field(*device, *geometry, *ev, vf);
         const Locator locator(*geometry);
         const auto contacts = device->contacts();
         std::vector<Point> seeds;

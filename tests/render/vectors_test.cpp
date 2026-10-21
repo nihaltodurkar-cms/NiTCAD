@@ -16,6 +16,7 @@
 #include "NiTCAD/physics/insulator.hpp"
 #include "NiTCAD/physics/semiconductor.hpp"
 #include "NiTCAD/render/scene.hpp"
+#include "NiTCAD/render/streamlines.hpp"
 #include "NiTCAD/render/vectors.hpp"
 #include "NiTCAD/solve/bias.hpp"
 
@@ -290,6 +291,51 @@ TEST_CASE("render vectors: insulators carry no current; refusals (DS2)") {
         CHECK(std::isnan(mag[i]) == d.is_insulator(static_cast<NodeId>(i)));
     }
     CHECK(field_values(d, g, p, Field::electric_field).has_value());
+    // The streamline field: zero current at the oxide nodes, and no current across the interfaces: with
+    // J = (5, 2) A/cm^2 in the silicon, the silicon nodes next to the oxide keep (5, 0), the others
+    // (5, 2) except the contacts', so a line along the top silicon row (next to the oxide, inside
+    // elements with no current vector) runs along it to the right contact.
+    results::BiasPoint along = p;
+    for (std::size_t k = 0; k < d.mesh().edges().size(); ++k) {
+        const mesh::Edge& ed = d.mesh().edges()[k];
+        const Point& a = d.mesh().points()[static_cast<std::size_t>(ed.first)];
+        const Point& b = d.mesh().points()[static_cast<std::size_t>(ed.second)];
+        const double tx = (b[0] - a[0]) / ed.length, ty = (b[1] - a[1]) / ed.length;
+        const bool semi = !d.is_insulator(ed.first) && !d.is_insulator(ed.second);
+        along.edge_current_n[k] = semi ? (5.0 * tx + 2.0 * ty) * ed.coupling_area : 0.0;
+    }
+    const auto ea = *element_vectors(d, g, along, VectorField::current);
+    const auto sf = streamline_field(d, g, ea, VectorField::current);
+    double top_silicon = 0.0;
+    std::vector<std::uint8_t> next_to_oxide(sf.size(), 0), on_contact(sf.size(), 0);
+    for (const mesh::Edge& ed : d.mesh().edges()) {
+        if (d.is_insulator(ed.first) != d.is_insulator(ed.second)) {
+            next_to_oxide[static_cast<std::size_t>(d.is_insulator(ed.first) ? ed.second : ed.first)] = 1;
+        }
+    }
+    for (const device::Contact& c : d.contacts()) for (const NodeId n : c.nodes) on_contact[static_cast<std::size_t>(n)] = 1;
+    for (std::size_t i = 0; i < sf.size(); ++i) {
+        if (d.is_insulator(static_cast<NodeId>(i))) {
+            CHECK(sf[i] == Point{0.0, 0.0, 0.0});
+            continue;
+        }
+        top_silicon = std::max(top_silicon, d.mesh().points()[i][1]);
+        const Point expected = next_to_oxide[i] && !on_contact[i] ? Point{5.0, 0.0, 0.0} : Point{5.0, 2.0, 0.0};
+        CAPTURE(i);
+        CHECK(near(sf[i], expected, 1e-11));
+    }
+    const Locator loc(g);
+    const Streamline line = trace_streamline(loc, sf, {0.1e-4, top_silicon, 0.0});
+    CHECK(std::abs(line.points.back()[0] - 2e-4) <= 1e-6 * 2e-4);
+    // It ends in the band between the last silicon row and the first oxide row (where the current runs
+    // along the interface), not in the oxide.
+    double oxide_above = 1.0;
+    for (std::size_t i = 0; i < sf.size(); ++i) {
+        const double yi = d.mesh().points()[i][1];
+        if (d.is_insulator(static_cast<NodeId>(i)) && yi > top_silicon) oxide_above = std::min(oxide_above, yi);
+    }
+    CHECK(line.points.back()[1] >= top_silicon - 1e-12);
+    CHECK(line.points.back()[1] < oxide_above);
 
     // No edge currents (a quasi-static result), a graph geometry, another mesh: refused.
     results::BiasPoint q = p;
@@ -331,6 +377,30 @@ TEST_CASE("render vectors: a solved resistor's |J| is I / area at every node (BG
     for (std::size_t k = 0; k < g.element_count(); ++k) {
         for (std::size_t c = 0; c < 3; ++c) {
             CHECK(std::abs(jn.value[k][c] + jp.value[k][c] - e.value[k][c]) <= 1e-12 * expected);
+        }
+    }
+}
+
+TEST_CASE("render vectors: the streamline field has no normal part on no-flux boundaries (DS5)") {
+    // E = (3, 4) kV/cm in a bar with contacts on x_min and x_max: the outer boundary elsewhere is
+    // homogeneous Neumann, so its nodes keep (3, 0); contact nodes and interior nodes keep (3, 4).
+    for (const int D : {2, 3}) {
+        CAPTURE(D);
+        const Built b = tensor(D);
+        const Geometry g = geometry_of(b);
+        const mesh::Mesh& m = b.device.mesh();
+        results::BiasPoint p;
+        for (const Point& x : m.points()) p.fields.potential_V.push_back(-3e3 * x[0] - 4e3 * x[1]);
+        const auto e = *element_vectors(b.device, g, p, VectorField::electric);
+        const auto sf = streamline_field(b.device, g, e, VectorField::electric);
+        std::vector<std::uint8_t> contact(m.node_count(), 0);
+        for (const device::Contact& c : b.device.contacts()) for (const NodeId n : c.nodes) contact[static_cast<std::size_t>(n)] = 1;
+        const double ymax = m.points().back()[1];
+        for (std::size_t i = 0; i < m.node_count(); ++i) {
+            const double y = m.points()[i][1];
+            const bool side = !contact[i] && (y == 0.0 || y == ymax);
+            CAPTURE(i);
+            CHECK(near(sf[i], side ? Point{3e3, 0.0, 0.0} : Point{3e3, 4e3, 0.0}, 1e-11));
         }
     }
 }

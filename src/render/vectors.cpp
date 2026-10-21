@@ -227,6 +227,96 @@ std::vector<Point> nodal_vectors(const Geometry& g, const ElementVectors& v) {
     return sum;
 }
 
+std::vector<Point> streamline_field(const device::Device& d, const Geometry& g, const ElementVectors& v,
+                                    VectorField field) {
+    std::vector<Point> out = nodal_vectors(g, v);
+    for (Point& p : out) {
+        if (std::isnan(p[0])) p = {0.0, 0.0, 0.0};
+    }
+    const auto points = d.mesh().points();
+    const int D = g.dimension();
+    const auto sub = [](const Point& a, const Point& b) { return Point{a[0] - b[0], a[1] - b[1], a[2] - b[2]}; };
+    const auto dot = [](const Point& a, const Point& b) { return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]; };
+    const auto norm = [&](const Point& a) { return std::sqrt(dot(a, a)); };
+    // Each node's no-flux normals, summed over its boundary pieces weighted by their size and grouped
+    // by direction: pieces within 30 degrees of each other (one face, or a gently curved boundary) share
+    // one, while the faces meeting at an edge or a corner give one each.
+    std::vector<std::vector<Point>> normals(points.size());
+    const auto add_to = [&](NodeId i, const Point& n) {
+        const double nn = norm(n);
+        if (!(nn > 0.0)) return;
+        for (Point& group : normals[static_cast<std::size_t>(i)]) {
+            if (dot(group, n) > 0.866 * norm(group) * nn) {
+                for (std::size_t c = 0; c < 3; ++c) group[c] += n[c];
+                return;
+            }
+        }
+        normals[static_cast<std::size_t>(i)].push_back(n);
+    };
+    if (D == 2) {
+        // Outer boundary: triangle edges used once, their normal turned away from the third vertex.
+        std::unordered_map<std::uint64_t, std::array<NodeId, 3>> once;
+        for (std::size_t e = 0; e < g.element_count(); ++e) {
+            const auto n = g.element(e);
+            for (std::size_t i = 0; i < 3; ++i) {
+                const NodeId a = n[i], b = n[(i + 1) % 3], c = n[(i + 2) % 3];
+                const auto [it, fresh] = once.try_emplace(edge_key(a, b), std::array<NodeId, 3>{a, b, c});
+                if (!fresh) it->second[0] = -1;  // shared: interior
+            }
+        }
+        for (const auto& [key, abc] : once) {
+            if (abc[0] < 0) continue;
+            const Point t = sub(points[static_cast<std::size_t>(abc[1])], points[static_cast<std::size_t>(abc[0])]);
+            Point n{t[1], -t[0], 0.0};  // |n| = the edge's length
+            if (dot(n, sub(points[static_cast<std::size_t>(abc[2])], points[static_cast<std::size_t>(abc[0])])) > 0.0) {
+                n = {-n[0], -n[1], 0.0};
+            }
+            add_to(abc[0], n);
+            add_to(abc[1], n);
+        }
+    } else if (D == 3) {
+        for (const Polygon& f : g.boundary_faces()) {
+            const Point& p0 = f.vertices[0].position;
+            const Point a = sub(f.vertices[1].position, p0), b = sub(f.vertices[2].position, p0);
+            const Point n{a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]};
+            for (const SurfaceVertex& s : f.vertices) add_to(s.at.nodes[0], n);
+        }
+    }
+    if (field != VectorField::electric) {
+        // Semiconductor-insulator interfaces: toward the insulator, weighted by the coupling area.
+        for (const mesh::Edge& ed : d.mesh().edges()) {
+            const bool ia = d.is_insulator(ed.first), ib = d.is_insulator(ed.second);
+            if (ia == ib || !(ed.coupling_area > 0.0)) continue;
+            const NodeId s = ia ? ed.second : ed.first, i = ia ? ed.first : ed.second;
+            const Point t = sub(points[static_cast<std::size_t>(i)], points[static_cast<std::size_t>(s)]);
+            const double w = ed.coupling_area / ed.length;
+            add_to(s, {t[0] * w, t[1] * w, t[2] * w});
+        }
+    }
+    std::vector<std::uint8_t> contact(points.size(), 0);
+    for (const device::Contact& c : d.contacts()) for (const NodeId n : c.nodes) contact[static_cast<std::size_t>(n)] = 1;
+    for (std::size_t i = 0; i < points.size(); ++i) {
+        if (contact[i]) continue;
+        // Remove the part along each direction, made orthonormal (Gram-Schmidt; a direction nearly in
+        // the span of the earlier ones adds nothing).
+        std::vector<Point> basis;
+        for (Point n : normals[i]) {
+            const double n0 = norm(n);
+            for (const Point& b : basis) {
+                const double k = dot(n, b);
+                for (std::size_t c = 0; c < 3; ++c) n[c] -= k * b[c];
+            }
+            const double left = norm(n);
+            if (!(left > 0.3 * n0)) continue;
+            for (std::size_t c = 0; c < 3; ++c) n[c] /= left;
+            basis.push_back(n);
+            const double along = dot(out[i], n);
+            for (std::size_t c = 0; c < 3; ++c) out[i][c] -= along * n[c];
+        }
+    }
+    return out;
+}
+
 std::vector<double> magnitudes(std::span<const Point> v) {
     std::vector<double> out(v.size());
     for (std::size_t i = 0; i < v.size(); ++i) {

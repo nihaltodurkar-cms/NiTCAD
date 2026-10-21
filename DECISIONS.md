@@ -2654,6 +2654,38 @@ else the most biased contact.
   segment reversed. (Every step accepted survived until the kinked field: in a smooth field the step sizing keeps
   each attempt within the tolerance, and only a kink makes a step fail.)
 
+**Commit 4 (references and the benchmark; BG4, BG7), as built.** The four references showed two faults of the lines
+the unit tests had not, both fixed here in `vectors.hpp`'s `streamline_field`, which the plot and the references now
+trace instead of the bare nodal vectors:
+- **Finding 1, the elements along an interface:** with insulator nodes NaN, every element joining the last silicon
+  row to the first oxide row has no current vector, so each current line stopped at the silicon surface, short of the
+  drain contact (in an on-state MOSFET it would cut every channel line). Insulator nodes now carry zero current for
+  streamlines (the |J| map keeps them as no data), so lines continue along the interface and stop only where the
+  current vanishes in the oxide.
+- **Finding 2, normal components on no-flux boundaries:** the element average at a boundary node comes from one side,
+  so it kept a normal part there (the top silicon row's current pointed into the oxide, and lines left through it
+  0.25 µm short of the drain). The model has no normal current at semiconductor–insulator interfaces and no normal
+  current or field on the outer boundary away from contacts (homogeneous Neumann), so `streamline_field` removes the
+  normal part there: per node its boundary pieces' normals, grouped within 30° (one face, or a gently curved one)
+  and orthonormalized (the faces meeting at an edge or corner each count), every component along them removed;
+  contact nodes keep theirs. DS5 is amended accordingly.
+- **BG4:** WARP references, 960 × 720, in 25a's tolerance (at most 0.5% of pixels off by more than 24):
+  `mosfet2d_efield_lines` (\|E\|, 16 lines from the gate through the oxide to the depletion edge, where they end at
+  the field's sink), `mosfet2d_current_lines` (\|J\|, 16 equal-current lines from the source: this subthreshold
+  device conducts under the channel through the 1e15 substrate, then along the drain pocket's surface to the drain),
+  `mosfet3d_iso_n` (n = 1e14 and 1e18, the source and drain junctions), `mosfet3d_current_lines` (24 lines colored
+  by \|J\|, source to drain contact). Each was looked at before being kept; all 15 references pass; no D3D12 debug
+  errors.
+- **Tests:** insulator nodes zero and interface nodes tangential with J = (5, 2), and a line along the top silicon
+  row reaching the far contact inside the interface band; E = (3, 4) on 2D and 3D bars keeps (3, 0) on the
+  non-contact sides, edges and corners included, and (3, 4) at contacts and inside.
+- **BG7 (Release, other jobs running, so upper bounds):** the 3D MOSFET (3,087 nodes, 14,400 tetrahedra): E 0.001 s,
+  J 0.003 s, an isosurface 0.0004 s, streamline field and locator 0.009 s, 100 lines 0.012 s; a 3D tensor device of
+  185,193 nodes and **1,053,696 tetrahedra**: E 0.048 s, J 0.495 s, an isosurface 0.014 s (41,078 triangles),
+  streamline field and locator 0.73 s, 100 lines 0.054 s (24,844 points).
+- **Mutation checks (BG8, Release): 5 of 5 caught** — insulator nodes not zeroed, every normal merged into one,
+  interfaces ignored, no projection, contacts projected. Unit 25b in all: 40 of 40.
+
 ---
 
 ## New questions the advisor raised (not yet in `ARCHITECTURE.md`)

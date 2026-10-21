@@ -60,6 +60,16 @@ struct ElementVectors {
 // The control-volume-weighted average at every node; NaN components where no element has one.
 [[nodiscard]] std::vector<Point> nodal_vectors(const Geometry& geometry, const ElementVectors& v);
 
+// The field streamlines follow (DS5): nodal_vectors with zero where no element has a vector (J in an
+// insulator carries no current), and with the model's no-flux boundaries imposed: at nodes on the
+// outer boundary that are not contact nodes (homogeneous Neumann: no normal current or field) and,
+// for currents, at semiconductor nodes next to an insulator, the component along the boundary's
+// normal there is removed. A line along such a boundary then runs along it to a contact, instead of
+// leaving through it where the element average (from the elements on one side) keeps a normal part.
+// `field` is what `v` holds.
+[[nodiscard]] std::vector<Point> streamline_field(const device::Device& device, const Geometry& geometry,
+                                                  const ElementVectors& v, VectorField field);
+
 // |v| per entry (NaN stays NaN).
 [[nodiscard]] std::vector<double> magnitudes(std::span<const Point> v);
 
