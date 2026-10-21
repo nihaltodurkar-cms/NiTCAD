@@ -2440,7 +2440,9 @@ pairing. Documentation only until the owner approves.
 point, which RQ1's off switch answers; the electrothermal terms add their rates into the heat row too (only the
 continuity rows are read).
 
-**Status:** proposed; no code.
+**Status:** authorized by the owner 2026-10-21 ("Approve, as recommended"): RQ1 rates stored by default
+(`[solver] rates = off` to opt out), RQ2 components and the net rate, RQ3 surface recombination included and
+labelled as an effective volume rate, RQ4 `nitcad plot` refuses a differing digest (exit 1). No code yet.
 
 ---
 
