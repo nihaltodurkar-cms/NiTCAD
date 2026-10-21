@@ -2442,7 +2442,8 @@ continuity rows are read).
 
 **Status:** authorized by the owner 2026-10-21 ("Approve, as recommended"): RQ1 rates stored by default
 (`[solver] rates = off` to opt out), RQ2 components and the net rate, RQ3 surface recombination included and
-labelled as an effective volume rate, RQ4 `nitcad plot` refuses a differing digest (exit 1).
+labelled as an effective volume rate, RQ4 `nitcad plot` refuses a differing digest (exit 1). Commits 1–3 done,
+awaiting the owner's acceptance (then ARCHITECTURE.md 6.6 and 11.3 as built, RG8).
 
 **Commit 1 (the rates; RG1–RG3, RG5's timing), as built.** `DriftDiffusion::rates(x)` evaluates each generation-
 recombination term alone (residual only, no Jacobian) and reads its electron and hole rows: rate = row × R0 / V in
@@ -2489,6 +2490,18 @@ vectors, written when the rates were stored); absent in older files, which load 
 - **Mutation checks (RG7, Release): 7 of 7 caught** — the digest not written, not read, not filled; the point's and
   the snapshot's rates not written; the point's not read; a rates key swapped. Release 22/22 and Debug 16/16, no
   warnings.
+
+**Commit 3 (`nitcad plot` and the render fields; RG6), as built.** `render::Field` gains `R` (net R − G),
+`srh`, `auger`, `radiative`, `surface` (signed, on the signed log scale), `Gii` and `Gbtbt` (generations, positive,
+log10); `field_values` refuses a rate the result does not hold, saying how to store it. `nitcad plot` refuses a
+result whose run record names another mesh (RQ4: "its mesh digest is not the device's", exit 1), and falls back to
+the node count for a result without a digest.
+- **RG6:** a result of a mesh with the same node count (x over 3 µm instead of 2) refused by digest; the R map of a
+  forward-biased diode drawn (looked at: the peak at the junction, zero at the contacts); a pre-Unit-42 sweep with
+  its device drawn through the node-count fallback, its R refused ("holds no R rates"), and with another device
+  refused by node count; the render fields' values, signs, scales and the missing-rate error.
+- **Mutation checks (RG7, Release): 4 of 4 caught** — the digest check off, a generation not negated, SRH read as
+  Auger, a missing rate not refused. Unit 45 in all: 21 of 21. Release 22/22 and Debug 16/16, no warnings.
 
 ---
 

@@ -408,12 +408,20 @@ FieldInfo field_info(Field f) noexcept {
         case Field::net_doping: return {"doping", "ND \xE2\x88\x92 NA (cm\xE2\x81\xBB\xC2\xB3)", ScaleKind::signed_log10};
         case Field::donors: return {"ND", "ND (cm\xE2\x81\xBB\xC2\xB3)", ScaleKind::log10};
         case Field::acceptors: return {"NA", "NA (cm\xE2\x81\xBB\xC2\xB3)", ScaleKind::log10};
+        // Rates in cm^-3 s^-1: signed ones on the signed log scale, generations on log10.
+        case Field::recombination: return {"R", "R \xE2\x88\x92 G (cm\xE2\x81\xBB\xC2\xB3 s\xE2\x81\xBB\xC2\xB9)", ScaleKind::signed_log10};
+        case Field::srh: return {"srh", "SRH (cm\xE2\x81\xBB\xC2\xB3 s\xE2\x81\xBB\xC2\xB9)", ScaleKind::signed_log10};
+        case Field::auger: return {"auger", "Auger (cm\xE2\x81\xBB\xC2\xB3 s\xE2\x81\xBB\xC2\xB9)", ScaleKind::signed_log10};
+        case Field::radiative: return {"radiative", "radiative (cm\xE2\x81\xBB\xC2\xB3 s\xE2\x81\xBB\xC2\xB9)", ScaleKind::signed_log10};
+        case Field::surface: return {"surface", "surface, per volume (cm\xE2\x81\xBB\xC2\xB3 s\xE2\x81\xBB\xC2\xB9)", ScaleKind::signed_log10};
+        case Field::impact_generation: return {"Gii", "G impact (cm\xE2\x81\xBB\xC2\xB3 s\xE2\x81\xBB\xC2\xB9)", ScaleKind::log10};
+        case Field::btbt_generation: return {"Gbtbt", "G band-to-band (cm\xE2\x81\xBB\xC2\xB3 s\xE2\x81\xBB\xC2\xB9)", ScaleKind::log10};
     }
     return {"?", "?", ScaleKind::linear};
 }
 
 std::optional<Field> find_field(std::string_view key) noexcept {
-    for (int f = 0; f <= static_cast<int>(Field::acceptors); ++f) {
+    for (int f = 0; f <= static_cast<int>(Field::last); ++f) {
         if (field_info(static_cast<Field>(f)).key == key) return static_cast<Field>(f);
     }
     return std::nullopt;
@@ -448,6 +456,32 @@ std::expected<std::vector<double>, base::Error> field_values(const device::Devic
                                                : device.donors()[i] - device.acceptors()[i];
             }
             return v;
+        }
+        case Field::recombination:
+        case Field::srh:
+        case Field::auger:
+        case Field::radiative:
+        case Field::surface:
+        case Field::impact_generation:
+        case Field::btbt_generation: {
+            const results::RateFields& r = point.rates;
+            const std::vector<double>& v = f == Field::recombination ? r.net_n
+                                           : f == Field::srh         ? r.srh
+                                           : f == Field::auger       ? r.auger
+                                           : f == Field::radiative   ? r.radiative
+                                           : f == Field::surface     ? r.interface_n
+                                           : f == Field::impact_generation ? r.impact
+                                                                           : r.band_to_band_n;
+            if (v.size() != n) {
+                return std::unexpected(invalid(
+                    "the result holds no " + std::string(field_info(f).key) +
+                        " rates (stored with [solver] rates = on, for a mechanism that is on)",
+                    v.size()));
+            }
+            if (f != Field::impact_generation && f != Field::btbt_generation) return v;
+            std::vector<double> g(n);
+            for (std::size_t i = 0; i < n; ++i) g[i] = -v[i];  // a generation, positive
+            return g;
         }
     }
     return std::unexpected(invalid("unknown field"));

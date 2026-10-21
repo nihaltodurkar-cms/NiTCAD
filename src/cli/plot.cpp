@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <charconv>
 #include <cmath>
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
@@ -34,7 +35,8 @@ constexpr const char* plot_usage =
     "          .nittran or .nitac file with --device <file.nitdev> [--mesh <file.nitmesh>]\n"
     "  view    --view solid|mesh|field|slice|iv|cv|current|bands|profile\n"
     "          (default: field with --field, else solid)\n"
-    "  field   --field potential|n|p|Ec|Ev|Efn|Efp|T|doping|ND|NA  --point <k> (default: last)\n"
+    "  field   --field potential|n|p|Ec|Ev|Efn|Efp|T|doping|ND|NA|R|srh|auger|\n"
+    "          radiative|surface|Gii|Gbtbt  --point <k> (default: last)\n"
     "          --scale linear|log|signed-log  --range <lo>,<hi>\n"
     "          --colormap turbo|viridis|cividis|coolwarm|soft  --contours  --edges  --opaque\n"
     "  3D      --slice x=<um>|y=<um>|z=<um> (repeatable)  --azimuth <deg>  --elevation <deg>\n"
@@ -277,6 +279,17 @@ int plot(int argc, char** argv) {
         }
     }
     const mesh::Mesh& m = device->mesh();
+    // Unit 45 (RQ4): a result that names its mesh must be of the device's; older results (digest 0)
+    // fall back to the node count below.
+    {
+        const std::uint64_t digest = l.sweep          ? l.sweep->run.mesh_digest
+                                     : l.transient    ? l.transient->run.mesh_digest
+                                     : l.small_signal ? l.small_signal->run.mesh_digest
+                                                      : 0;
+        if (digest != 0 && digest != mesh::graph_digest(m)) {
+            return fail("the result was computed on another mesh: its mesh digest is not the device's");
+        }
+    }
     const mesh::GeneratedMesh* generated = plan && plan->generated ? &*plan->generated : l.generated ? &*l.generated : nullptr;
     std::optional<Geometry> geometry;
     if (device->cells()) {

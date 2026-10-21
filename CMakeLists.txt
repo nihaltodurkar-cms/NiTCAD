@@ -493,6 +493,7 @@ target_link_libraries(nitcad_deck_test PRIVATE NiTCAD::deck NiTCAD::render Catch
 add_dependencies(nitcad_deck_test nitcad)
 target_compile_definitions(nitcad_deck_test PRIVATE
   NITCAD_CLI_PATH="$<TARGET_FILE:nitcad>"
+  NITCAD_IO_FIXTURES="${CMAKE_CURRENT_SOURCE_DIR}/tests/io/fixtures"
   NITCAD_MKL_RUNTIME_PATH="${NITCAD_MKL_RUNTIME_PATH}")
 add_test(NAME deck COMMAND nitcad_deck_test)
 

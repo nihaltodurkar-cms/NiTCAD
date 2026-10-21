@@ -110,6 +110,16 @@ enum class Field : std::uint8_t {
     net_doping,        // N_D - N_A, cm^-3
     donors,            // N_D, cm^-3
     acceptors,         // N_A, cm^-3
+    // Unit 45: generation-recombination rates (results::RateFields), cm^-3 s^-1; an error when the
+    // result holds none (not stored, or the mechanism off).
+    recombination,     // R: net R - G of every mechanism (electron rows), signed
+    srh,               // SRH net recombination, signed
+    auger,             // Auger net recombination, signed
+    radiative,         // radiative net recombination, signed
+    surface,           // the interfaces' effective volume rate (electron rows), signed
+    impact_generation, // Gii: impact-ionization generation, positive
+    btbt_generation,   // Gbtbt: band-to-band generation (electron rows), positive
+    last = btbt_generation,
 };
 
 struct FieldInfo {
