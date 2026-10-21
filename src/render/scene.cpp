@@ -1,4 +1,5 @@
 #include "NiTCAD/render/scene.hpp"
+#include "NiTCAD/render/vectors.hpp"
 
 #include <algorithm>
 #include <array>
@@ -298,6 +299,17 @@ void contact_slabs(const device::Device& d, const Geometry& g, const Palette& pa
     if (!metal.vertices.empty()) out.push_back(std::move(metal));
 }
 
+// The device's boundary, faint and translucent, for context in 3D.
+TriangleBatch outline_shell(const Geometry& g) {
+    TriangleBatch shell{"outline", Shading::flat, true, true, {}};
+    for (const Polygon& f : g.boundary_faces()) {
+        std::vector<Point> pts;
+        for (const SurfaceVertex& v : f.vertices) pts.push_back(v.position);
+        fan(shell, pts, {}, {0.82f, 0.85f, 0.88f, 0.12f}, polygon_normal(pts));
+    }
+    return shell;
+}
+
 // 2D outlines: the boundary and the interfaces between regions.
 void outlines_2d(const device::Device& d, const Geometry& g, std::vector<LineBatch>& out) {
     LineBatch lines{"outline", {0.12f, 0.14f, 0.16f, 1.0f}, 1.5f, true, {}};
@@ -320,11 +332,15 @@ float position_at(const Geometry& g, std::size_t element, const Point& x, std::s
     return static_cast<float>(scale_.position(interpolate(g.interpolant(element, x), values)));
 }
 
-void contours(const TriangleBatch& field, const Colorbar& bar, std::vector<LineBatch>& out) {
+// Contour lines at the colorbar's major ticks, or at the given colormap positions.
+void contours(const TriangleBatch& field, const Colorbar& bar, std::vector<LineBatch>& out,
+              std::span<const double> positions = {}) {
     LineBatch lines{"contours", {0.1f, 0.1f, 0.1f, 0.85f}, 1.0f, true, {}};
-    std::vector<double> levels;
-    for (const Tick& t : bar.scale.ticks()) {
-        if (t.major && t.position > 0.0 && t.position < 1.0) levels.push_back(t.position);
+    std::vector<double> levels(positions.begin(), positions.end());
+    if (positions.empty()) {
+        for (const Tick& t : bar.scale.ticks()) {
+            if (t.major && t.position > 0.0 && t.position < 1.0) levels.push_back(t.position);
+        }
     }
     for (std::size_t i = 0; i + 2 < field.vertices.size(); i += 3) {
         std::array<Point, 3> p{};
@@ -416,6 +432,11 @@ FieldInfo field_info(Field f) noexcept {
         case Field::surface: return {"surface", "surface, per volume (cm\xE2\x81\xBB\xC2\xB3 s\xE2\x81\xBB\xC2\xB9)", ScaleKind::signed_log10};
         case Field::impact_generation: return {"Gii", "G impact (cm\xE2\x81\xBB\xC2\xB3 s\xE2\x81\xBB\xC2\xB9)", ScaleKind::log10};
         case Field::btbt_generation: return {"Gbtbt", "G band-to-band (cm\xE2\x81\xBB\xC2\xB3 s\xE2\x81\xBB\xC2\xB9)", ScaleKind::log10};
+        // Vector magnitudes, log10 (Unit 25b).
+        case Field::electric_field: return {"E", "|E| (V/cm)", ScaleKind::log10};
+        case Field::current_density: return {"J", "|J| (A/cm\xC2\xB2)", ScaleKind::log10};
+        case Field::electron_current: return {"Jn", "|Jn| (A/cm\xC2\xB2)", ScaleKind::log10};
+        case Field::hole_current: return {"Jp", "|Jp| (A/cm\xC2\xB2)", ScaleKind::log10};
     }
     return {"?", "?", ScaleKind::linear};
 }
@@ -483,8 +504,33 @@ std::expected<std::vector<double>, base::Error> field_values(const device::Devic
             for (std::size_t i = 0; i < n; ++i) g[i] = -v[i];  // a generation, positive
             return g;
         }
+        case Field::electric_field:
+        case Field::current_density:
+        case Field::electron_current:
+        case Field::hole_current:
+            return std::unexpected(invalid(std::string(field_info(f).key) +
+                                           " is reconstructed on the mesh's elements: it needs the geometry"));
     }
     return std::unexpected(invalid("unknown field"));
+}
+
+bool is_vector_magnitude(Field f) noexcept {
+    return f == Field::electric_field || f == Field::current_density || f == Field::electron_current ||
+           f == Field::hole_current;
+}
+
+std::expected<std::vector<double>, base::Error> field_values(const device::Device& device,
+                                                             const Geometry& geometry,
+                                                             const results::BiasPoint& point,
+                                                             Field f) {
+    if (!is_vector_magnitude(f)) return field_values(device, point, f);
+    const VectorField v = f == Field::electric_field     ? VectorField::electric
+                          : f == Field::current_density  ? VectorField::current
+                          : f == Field::electron_current ? VectorField::electron_current
+                                                         : VectorField::hole_current;
+    auto e = element_vectors(device, geometry, point, v);
+    if (!e) return std::unexpected(std::move(e.error()));
+    return magnitudes(nodal_vectors(geometry, *e));
 }
 
 // --- region colors ------------------------------------------------------------------------------
@@ -675,17 +721,115 @@ std::expected<FieldScene, base::Error> slice_view(const device::Device& d, const
     }
     if (o.contours) contours(field, *bar, s.lines);
     s.triangles.push_back(std::move(field));
-    // The device's boundary, faint and translucent, for context.
-    TriangleBatch shell{"outline", Shading::flat, true, true, {}};
-    for (const Polygon& f : g.boundary_faces()) {
-        std::vector<Point> pts;
-        for (const SurfaceVertex& v : f.vertices) pts.push_back(v.position);
-        fan(shell, pts, {}, {0.82f, 0.85f, 0.88f, 0.12f}, polygon_normal(pts));
-    }
-    s.triangles.push_back(std::move(shell));
+    s.triangles.push_back(outline_shell(g));
     if (o.view.contacts) contact_slabs(d, g, o.view.palette, s.triangles);
     s.colorbar = std::move(*bar);
     frame(s, o.view);
+    return s;
+}
+
+std::expected<FieldScene, base::Error> iso_view(const device::Device& d, const Geometry& g,
+                                                std::span<const double> values,
+                                                std::span<const double> levels, const FieldOptions& o) {
+    if (auto c = check_view(d, g); !c) return std::unexpected(std::move(c.error()));
+    if (values.size() != d.mesh().node_count()) {
+        return std::unexpected(invalid("the field is not one value per mesh node", values.size()));
+    }
+    if (levels.empty()) return std::unexpected(invalid("an isosurface needs a level"));
+    auto bar = colorbar_for(values, o);
+    if (!bar) return std::unexpected(std::move(bar.error()));
+    for (std::size_t k = 0; k < levels.size(); ++k) {
+        if (!std::isfinite(bar->scale.transform(levels[k]))) {
+            return std::unexpected(invalid("a level is not finite on the field's scale", k));
+        }
+    }
+    if (g.dimension() == 2) {
+        FieldOptions plain = o;
+        plain.contours = false;
+        auto s = field_view(d, g, values, plain);
+        if (!s) return s;
+        std::vector<double> positions;
+        for (const double level : levels) positions.push_back(bar->scale.position(level));
+        for (const TriangleBatch& t : s->triangles) {
+            if (t.shading == Shading::field) contours(t, *bar, s->lines, positions);
+        }
+        return s;
+    }
+    FieldScene s;
+    s.dimension = 3;
+    s.title = o.title;
+    // On the scale's coordinate (BQ3), so a level lies where the colormap shows it.
+    std::vector<double> scaled(values.size());
+    for (std::size_t i = 0; i < values.size(); ++i) scaled[i] = bar->scale.transform(values[i]);
+    const bool one = levels.size() == 1;
+    for (const double level : levels) {
+        const IsoSurface iso = isosurface(g, scaled, bar->scale.transform(level));
+        // Smooth shading: each vertex's normal is the area-weighted sum of its triangles'.
+        std::vector<Point> normal(iso.vertices.size(), Point{});
+        for (const auto& t : iso.triangles) {
+            const Point& p0 = iso.vertices[t[0]].position;
+            const Point n = cross(sub(iso.vertices[t[1]].position, p0), sub(iso.vertices[t[2]].position, p0));
+            for (const std::uint32_t v : t) normal[v] = add(normal[v], n);
+        }
+        TriangleBatch batch{"isosurface", Shading::field, true, !one, {}};
+        const float position = static_cast<float>(bar->scale.position(level));
+        const Rgba tint{0.0f, 0.0f, 0.0f, one ? 1.0f : 0.55f};
+        for (const auto& t : iso.triangles) {
+            for (const std::uint32_t v : t) {
+                batch.vertices.push_back({um(iso.vertices[v].position), to_f(unit(normal[v])), position, tint});
+            }
+        }
+        if (!batch.vertices.empty()) s.triangles.push_back(std::move(batch));
+    }
+    s.triangles.push_back(outline_shell(g));
+    if (o.view.contacts) contact_slabs(d, g, o.view.palette, s.triangles);
+    s.colorbar = std::move(*bar);
+    frame(s, o.view);
+    return s;
+}
+
+void add_streamlines(FieldScene& s, std::span<const Streamline> lines, const Rgba& color) {
+    LineBatch batch{"streamlines", color, 1.5f, s.dimension == 2, {}};
+    for (const Streamline& l : lines) {
+        for (std::size_t i = 1; i < l.points.size(); ++i) {
+            batch.points.push_back(um(l.points[i - 1]));
+            batch.points.push_back(um(l.points[i]));
+        }
+    }
+    if (!batch.points.empty()) s.lines.push_back(std::move(batch));
+}
+
+void add_streamlines(FieldScene& s, std::span<const Streamline> lines, const Colorbar& colors) {
+    constexpr std::size_t bins = 64;
+    std::vector<LineBatch> batch(bins + 1);  // the last for segments without a position
+    for (std::size_t b = 0; b <= bins; ++b) {
+        const Rgb c = b < bins ? sample(colors.map, (static_cast<double>(b) + 0.5) / bins) : no_data;
+        batch[b] = {"streamlines", {c.r, c.g, c.b, 1.0f}, 2.0f, s.dimension == 2, {}};
+    }
+    for (const Streamline& l : lines) {
+        for (std::size_t i = 1; i < l.points.size(); ++i) {
+            const double m = 0.5 * (l.magnitude[i - 1] + l.magnitude[i]);
+            const double t = colors.scale.position(m);
+            const std::size_t b = std::isfinite(t) ? std::min(bins - 1, static_cast<std::size_t>(t * bins)) : bins;
+            batch[b].points.push_back(um(l.points[i - 1]));
+            batch[b].points.push_back(um(l.points[i]));
+        }
+    }
+    for (LineBatch& b : batch) {
+        if (!b.points.empty()) s.lines.push_back(std::move(b));
+    }
+}
+
+std::expected<FieldScene, base::Error> outline_view(const device::Device& d, const Geometry& g,
+                                                    const ViewOptions& o) {
+    if (auto c = check_view(d, g); !c) return std::unexpected(std::move(c.error()));
+    if (g.dimension() != 3) return std::unexpected(invalid("the outline view needs a 3D geometry"));
+    FieldScene s;
+    s.dimension = 3;
+    s.title = "Streamlines";
+    s.triangles.push_back(outline_shell(g));
+    if (o.contacts) contact_slabs(d, g, o.palette, s.triangles);
+    frame(s, o);
     return s;
 }
 

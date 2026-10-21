@@ -99,10 +99,12 @@ public:
     [[nodiscard]] double lo() const noexcept { return lo_; }
     [[nodiscard]] double hi() const noexcept { return hi_; }
     [[nodiscard]] double floor() const noexcept { return floor_; }
+    // The scale's coordinate of v, unclamped: v, log10 v (NaN for v <= 0) or the signed log; position
+    // is its affine image on [lo, hi]. Isosurfaces interpolate in it (Unit 25b, BQ3).
+    [[nodiscard]] double transform(double v) const noexcept;
 
 private:
     ColorScale(ScaleKind kind, double lo, double hi, double floor) noexcept;
-    [[nodiscard]] double transform(double v) const noexcept;
     [[nodiscard]] double inverse(double s) const noexcept;
 
     ScaleKind kind_;

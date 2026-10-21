@@ -2587,6 +2587,30 @@ composable.
 - Not in Unit 25a: |E|, |J|, isosurfaces and streamlines (25b, after Unit 45's rates); vectors, clipping, exploded
   views, filmstrips (25c); windows (26).
 
+**As built (Unit 25b, derived fields, isosurfaces and streamlines; DECISIONS.md DS1–DS8, BQ1–BQ3, BG1–BG9; accepted
+by the owner 2026-10-22):**
+- **Vectors** (`vectors.hpp`), read from results, nothing solved again: E = −∇ψ per element; Jn and Jp per element by
+  least squares on its mesh edges' densities I / A (the solver's Scharfetter–Gummel currents; semiconductor edges with
+  a positive coupling area), J = Jn + Jp (conduction current); averaged to the nodes over their control volumes
+  (tensor cells exactly: binomial(D, m) / 2^D of a Kuhn simplex for its vertex m steps along the path). Fields `E`,
+  `J`, `Jn`, `Jp` (log10) through the `field_values` overload that takes the geometry. `streamline_field` gives the
+  lines' field: zero current in insulators and no normal part on no-flux boundaries (semiconductor–insulator
+  interfaces for currents, the outer boundary away from contacts).
+- **Isosurfaces** (`geometry.hpp` `isosurface`, `scene.hpp` `iso_view`): marching tetrahedra into a watertight
+  indexed mesh oriented toward higher values, on the field's scale coordinate (BQ3); 2D draws contours at the levels.
+- **Streamlines** (`streamlines.hpp`): point location (hint, neighbours, bucket grid); adaptive Dormand–Prince 5(4)
+  at unit speed, steps at most half an element; stops at the boundary, an undefined, vanishing or reversing field,
+  the length or step limit; seeds on contacts with an equal current per line (BQ2), along segments, over planes.
+  `add_streamlines` (one color, or by \|v\| through a colorbar), `outline_view` for 3D.
+- **`nitcad plot`**: `--field E|J|Jn|Jp` (log scale floored ten decades below the maximum; a zero field on 0..1),
+  `--view iso --levels`, `--streamlines E|J|Jn|Jp --lines --from --seeds`.
+- Gates: exact E and J per element on 1D/2D/3D tensor and generated meshes, a solved resistor's \|J\| = I / area;
+  isosurface volume convergence rates 2.03 and 1.99; streamline closure to rounding, a kinked field within the
+  tolerance, equal-current seeding; 15 WARP references (4 new); 40 mutants caught. Measured on 1,053,696
+  tetrahedra: J 0.50 s, an isosurface 0.014 s, 100 lines 0.054 s after a 0.73 s locator and field.
+- Not in Unit 25b: vector glyphs, clipping, exploded views, filmstrips (25c); displacement current; E or J stored in
+  results.
+
 ## 7. Language placement (D6: C and Fortran deferred)
 
 | Component | Language | Reason |
@@ -2829,7 +2853,7 @@ built.
 | 22 | AC small-signal analysis | linalg, assemble, solve, results | **done, on `main`** (`75cc2c0`): J + iωt₀C + T(iωt₀) at a DC or quasi-static operating point, complex linear solver, admittance matrix with displacement current and a resolution bound, interface traps in the frequency domain (6.2, Unit 22) |
 | 23 | Thermal / electrothermal coupling | physics, assemble, solve | **done, on `main`** (`7300b67`, PR #30): the lattice temperature as a fourth Newton unknown (the rise τ) with an exact Jacobian; Wachutka's thermodynamic fluxes (Boltzmann and Fermi–Dirac), the heat as the energy flux's divergence with Peltier and Thomson heat, isothermal and R_th thermal contacts; T in every model the assembler has; steady sweeps, `trace_bias` (thermal-runaway folds), transients and AC; traps and BTBT refused; thermionic emission (deferred) and incomplete ionization refused (6.2, Unit 23; DECISIONS.md T1–T14, U1–U8) |
 | 24 | Analysis and extraction engine | analysis | **done, on `main`** (`4183767`): curves read from sweeps and small-signal runs; transistor, diode and breakdown figures; C-V doping profile, flat band and the conductance method; two-port Y/Z/h/S, Mason's U, k, MAG/MSG, f_T and f_max; every extraction with the points it used and resolution and extrapolation flags (6.13, Unit 24) |
-| 25 | Scientific visualization / rendering | render | **25a done** (`render/visualization`): CPU scenes, Direct3D 12 and Direct2D drawing to PNG, `nitcad plot` (6.14); 25b, 25c target |
+| 25 | Scientific visualization / rendering | render | **25a done** (`render/visualization`): CPU scenes, Direct3D 12 and Direct2D drawing to PNG, `nitcad plot` (6.14); **25b done** (`render/derived-fields`): \|E\|, \|J\|, isosurfaces, streamlines (6.14); 25c target |
 | 26 | Native Windows application and workflow | app | target; Win32 API, x64 target, Direct3D 12 / Direct2D |
 | 27 | Optimization / sensitivity / inverse-design workflows | analysis, solve | long-term target |
 | 28 | Bias step cutting (commercial-readiness programme, 11.3) | solve, results | **done, on `main`** (`06b708d`, PR #31): off by default; halving and growth from the last converged state (11.3, Unit 28; DECISIONS.md S1–S7) |
@@ -2900,7 +2924,7 @@ exists, not finished), **planned** (nothing built). Audit of 2026-10-09, against
 | Generic fields/equations | Field descriptors and the unknowns' map; the drift-diffusion and electrothermal rows as equation terms composed by equation set, behind the unchanged `DriftDiffusion` (Unit 40, 6.12.1–2) | **Verified, bit-identical, on `main`** (Unit 40; `629bed0`, PR #50; below) | Move the model data out of `DriftDiffusion` and retire it as the wrapper; derived and edge/cell fields; `EquilibriumPoisson` from the same terms |
 | Scalable linear solvers | Eigen SparseLU (default), PARDISO opt-in (Unit 18); GMRES with an ILUT preconditioner opt-in, real and complex, with a reported SparseLU fallback (Unit 44, 6.10) | **GMRES-ILUT verified, opt-in** (Unit 44, on `linalg/iterative`): 3D 9–72× faster and 8–26× less memory than SparseLU | Algebraic multigrid and block (field-split) preconditioners; parallel assembly |
 | Results and provenance | Plain-data results; run record with identity digest (6.6); sweeps persisted bit for bit (Unit 29); provenance (build, revision, platform, start, wall time) in every run record and file, transient and small-signal files, `nitcad --version` (Unit 42) | **Verified** (Unit 42, 6.6; PR #52; DECISIONS.md PV1–PV7) | A release version policy (PD5); cross-machine checksums (6.8) |
-| Visualization, GUI, batch | The `nitcad check|run|plot` batch runner over the input deck (Unit 31); the `render` layer and `nitcad plot` (Unit 25a, 6.14); rates and the mesh digest in results (Unit 45, 6.6); no GUI | **Batch runner verified, on `main`** (Unit 31; `6f67510`, PR #37); **core visualization verified, on `main`** (Unit 25a; `6d2135b`, PR #55); **rates and digest verified** (Unit 45); GUI planned | 25b (derived fields), 25c, then the GUI (Units 26, 26b) |
+| Visualization, GUI, batch | The `nitcad check|run|plot` batch runner over the input deck (Unit 31); the `render` layer and `nitcad plot` (Unit 25a, 6.14); rates and the mesh digest in results (Unit 45, 6.6); \|E\|, \|J\|, isosurfaces and streamlines (Unit 25b, 6.14); no GUI | **Batch runner verified, on `main`** (Unit 31; `6f67510`, PR #37); **core visualization verified, on `main`** (Unit 25a; `6d2135b`, PR #55); **rates and digest verified, on `main`** (Unit 45; `81622ca`, PR #56); **derived fields verified** (Unit 25b); GUI planned | 25c, then the GUI (Units 26, 26b) |
 | Validation against published/measured data | Legacy, analytic and convergence gates throughout; resistivity against dopant density (NBS SP 400-64) and the measured n_i(300 K) as benchmark decks (Unit 33, 10.1) | **Verified, on `main`** (Unit 33; `a14ac96`, PR #41): gaps found and pinned (boron mobility up to +48%, incomplete ionization at heavy doping, n_i +10%); the opt-in Masetti hole mobility (Unit 34; `e14a53f`, PR #42) brings boron to within 11% (AC3/AC5 at 1e18 accepted as documented limitations); Unit 35 (`2d1fdc7`, PR #44) makes Masetti and a published band set (n_i within the measurement's uncertainty) the defaults | A density-dependent ionization level (owner decision); breakdown and device-level benchmarks from accessible sources |
 
 **As built (Unit 28, bias step cutting; `solve::StepControl` in `solve/bias.hpp`; DECISIONS.md S1–S7):**

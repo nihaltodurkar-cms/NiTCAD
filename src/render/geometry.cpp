@@ -7,6 +7,7 @@
 #include <limits>
 #include <numbers>
 #include <string>
+#include <unordered_map>
 #include <utility>
 
 #include "NiTCAD/base/contract.hpp"
@@ -628,6 +629,80 @@ std::optional<std::array<Point, 2>> contour_segment(const std::array<Point, 3>& 
     }
     if (found != 2) return std::nullopt;
     return seg;
+}
+
+IsoSurface isosurface(const Geometry& g, std::span<const double> values, double level) {
+    IsoSurface out;
+    if (g.dimension() != 3 || g.element_count() == 0) return out;
+    const auto points = g.mesh().points();
+    // A vertex per cut edge (lo, hi), or per node (n, n) for a crossing at the node.
+    std::unordered_map<std::uint64_t, std::uint32_t> vertex_of;
+    const auto vertex = [&](NodeId i, NodeId j) -> std::uint32_t {
+        const NodeId a = std::min(i, j), b = std::max(i, j);
+        const double va = values[static_cast<std::size_t>(a)], vb = values[static_cast<std::size_t>(b)];
+        // Exactly at a node: that node.
+        NodeId at = -1;
+        if (va == level) at = a;
+        else if (vb == level) at = b;
+        const NodeId ka = at >= 0 ? at : a, kb = at >= 0 ? at : b;
+        const std::uint64_t key = (static_cast<std::uint64_t>(kb) << 32) | static_cast<std::uint32_t>(ka);
+        const auto [it, fresh] = vertex_of.try_emplace(key, static_cast<std::uint32_t>(out.vertices.size()));
+        if (!fresh) return it->second;
+        SurfaceVertex v;
+        if (at >= 0) {
+            v.position = points[static_cast<std::size_t>(at)];
+            v.at.nodes = {at, 0, 0, 0};
+            v.at.weights = {1.0, 0.0, 0.0, 0.0};
+        } else {
+            // From the lower node, so every element around the edge computes the same point.
+            const double t = (level - va) / (vb - va);
+            v.position = lerp(points[static_cast<std::size_t>(a)], points[static_cast<std::size_t>(b)], t);
+            v.at.nodes = {a, b, 0, 0};
+            v.at.weights = {1.0 - t, t, 0.0, 0.0};
+        }
+        out.vertices.push_back(v);
+        return it->second;
+    };
+    for (std::size_t e = 0; e < g.element_count(); ++e) {
+        const auto n = g.element(e);
+        std::array<double, 4> v{};
+        bool finite = true;
+        for (std::size_t k = 0; k < 4; ++k) {
+            v[k] = values[static_cast<std::size_t>(n[k])];
+            finite = finite && std::isfinite(v[k]);
+        }
+        if (!finite) continue;
+        std::array<std::size_t, 4> above{}, below{};
+        std::size_t na = 0, nb = 0;
+        for (std::size_t k = 0; k < 4; ++k) (v[k] >= level ? above[na++] : below[nb++]) = k;
+        if (na == 0 || nb == 0) continue;
+        std::vector<std::uint32_t> poly;
+        if (na == 1 || nb == 1) {
+            const std::size_t odd = na == 1 ? above[0] : below[0];
+            for (std::size_t k = 0; k < 4; ++k) {
+                if (k != odd) poly.push_back(vertex(n[odd], n[k]));
+            }
+        } else {
+            // Around the quadrilateral: each consecutive pair of cut edges shares a node.
+            poly = {vertex(n[above[0]], n[below[0]]), vertex(n[above[0]], n[below[1]]),
+                    vertex(n[above[1]], n[below[1]]), vertex(n[above[1]], n[below[0]])};
+        }
+        for (std::size_t i = 1; i + 1 < poly.size(); ++i) {
+            std::array<std::uint32_t, 3> t{poly[0], poly[i], poly[i + 1]};
+            if (t[0] == t[1] || t[1] == t[2] || t[0] == t[2]) continue;
+            const Vec& p0 = out.vertices[t[0]].position;
+            const Vec normal = cross(sub(out.vertices[t[1]].position, p0), sub(out.vertices[t[2]].position, p0));
+            // Toward higher values: sum_k (v_k - level)(x_k - p0) has the gradient's direction's sign
+            // (for a linear field its dot with the gradient is sum_k (v_k - level)^2).
+            Vec up{};
+            for (std::size_t k = 0; k < 4; ++k) {
+                up = add(up, scale(sub(points[static_cast<std::size_t>(n[k])], p0), v[k] - level));
+            }
+            if (dot(normal, up) < 0.0) std::swap(t[1], t[2]);
+            out.triangles.push_back(t);
+        }
+    }
+    return out;
 }
 
 double polygon_area(std::span<const Point> points) noexcept {

@@ -27,6 +27,7 @@
 #include "NiTCAD/device/device.hpp"
 #include "NiTCAD/render/color.hpp"
 #include "NiTCAD/render/geometry.hpp"
+#include "NiTCAD/render/streamlines.hpp"
 #include "NiTCAD/results/solution.hpp"
 
 namespace NiTCAD::render {
@@ -119,7 +120,13 @@ enum class Field : std::uint8_t {
     surface,           // the interfaces' effective volume rate (electron rows), signed
     impact_generation, // Gii: impact-ionization generation, positive
     btbt_generation,   // Gbtbt: band-to-band generation (electron rows), positive
-    last = btbt_generation,
+    // Unit 25b: magnitudes of the reconstructed vectors (vectors.hpp), averaged to the nodes; they
+    // need the geometry's elements, so only the field_values overload taking a Geometry gives them.
+    electric_field,    // |E|, V/cm
+    current_density,   // |J| = |Jn + Jp|, A/cm^2 (NaN on insulator nodes)
+    electron_current,  // |Jn|, A/cm^2
+    hole_current,      // |Jp|, A/cm^2
+    last = hole_current,
 };
 
 struct FieldInfo {
@@ -134,6 +141,12 @@ struct FieldInfo {
 // one per mesh node.
 [[nodiscard]] std::expected<std::vector<double>, base::Error> field_values(
     const device::Device& device, const results::BiasPoint& point, Field f);
+// Every field, the vector magnitudes (E, J, Jn, Jp) included. Errors as above and as
+// element_vectors (vectors.hpp).
+[[nodiscard]] std::expected<std::vector<double>, base::Error> field_values(
+    const device::Device& device, const Geometry& geometry, const results::BiasPoint& point, Field f);
+// Whether the field is a vector magnitude (needs the geometry).
+[[nodiscard]] bool is_vector_magnitude(Field f) noexcept;
 
 // --- region colors (VR8) -------------------------------------------------------------------------
 
@@ -205,6 +218,29 @@ struct FieldOptions {
                                                                std::span<const double> values,
                                                                std::span<const Plane> planes,
                                                                const FieldOptions& options = {});
+
+// Isosurfaces (Unit 25b, DS4, BQ3): 3D, the surfaces where the field equals each level, by marching
+// tetrahedra on the field's scale coordinate (ColorScale::transform: log10 for densities), each
+// colored by its level's colormap position and lit, inside the device's faint translucent outline
+// with the contacts; opaque for one level, translucent for more. 2D: the field map with contour lines
+// at the levels. Errors as field_view, and (invalid_input) no level, or a level outside the scale
+// (not finite, or not positive on log10).
+[[nodiscard]] std::expected<FieldScene, base::Error> iso_view(const device::Device& device,
+                                                             const Geometry& geometry,
+                                                             std::span<const double> values,
+                                                             std::span<const double> levels,
+                                                             const FieldOptions& options = {});
+
+// Streamlines (Unit 25b, DS5) added to a scene as line segments: in one color, or each segment colored
+// by |v| at its midpoint through the colorbar's map and scale (64 color bins); drawn over the triangles
+// in 2D and depth-tested in 3D. Points are in cm (streamlines.hpp); the scene's bounds are kept.
+void add_streamlines(FieldScene& scene, std::span<const Streamline> lines, const Rgba& color);
+void add_streamlines(FieldScene& scene, std::span<const Streamline> lines, const Colorbar& colors);
+// The context for 3D streamlines: the device's faint translucent outline and the contacts. Errors as
+// solid_view, and (invalid_input) a 2D geometry.
+[[nodiscard]] std::expected<FieldScene, base::Error> outline_view(const device::Device& device,
+                                                                 const Geometry& geometry,
+                                                                 const ViewOptions& options = {});
 
 // --- plots ---------------------------------------------------------------------------------------
 

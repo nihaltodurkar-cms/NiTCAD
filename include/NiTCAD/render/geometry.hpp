@@ -159,6 +159,22 @@ private:
                                                                   const std::array<double, 3>& v,
                                                                   double level) noexcept;
 
+// An isosurface as an indexed triangle mesh (Unit 25b, DS4): each mesh edge the surface crosses is cut
+// once, at one vertex shared by every element around the edge (a crossing exactly at a node is that
+// node's vertex), so the surface is watertight where it does not leave the domain. Triangles are
+// counterclockwise seen from the side of higher values.
+struct IsoSurface {
+    std::vector<SurfaceVertex> vertices;
+    std::vector<std::array<std::uint32_t, 3>> triangles;
+};
+
+// Marching tetrahedra: where the field, linear on each tetrahedron, equals `level`. As in
+// contour_segment a node at the level counts as above it; elements with a NaN value are skipped,
+// and triangles of zero area (two vertices at one node) dropped. Empty for a geometry that is not
+// 3D or has no elements. `values` has one entry per mesh node.
+[[nodiscard]] IsoSurface isosurface(const Geometry& geometry, std::span<const double> values,
+                                    double level);
+
 // Area of a planar polygon (any orientation) and the signed volume enclosed by triangles (positive
 // for an outward-oriented closed surface).
 [[nodiscard]] double polygon_area(std::span<const Point> points) noexcept;

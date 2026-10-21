@@ -25,6 +25,8 @@
 #include "NiTCAD/physics/semiconductor.hpp"
 #include "NiTCAD/render/image.hpp"
 #include "NiTCAD/render/scene.hpp"
+#include "NiTCAD/render/streamlines.hpp"
+#include "NiTCAD/render/vectors.hpp"
 #include "NiTCAD/solve/bias.hpp"
 
 using namespace NiTCAD;
@@ -156,6 +158,31 @@ FieldOptions field_options(const device::Device& d, const results::BiasPoint& p,
     o.title = std::string(field_info(f).title);
     o.scale = *ColorScale::fit(field_info(f).default_scale, values, 1e10);
     return o;
+}
+
+// A vector magnitude with nitcad plot's floor: values below ten decades under the largest raised to it.
+std::vector<double> magnitudes_floored(const device::Device& d, const Geometry& g, const results::BiasPoint& p,
+                                       Field f) {
+    std::vector<double> v = *field_values(d, g, p, f);
+    double top = 0.0;
+    for (const double x : v) if (std::isfinite(x)) top = std::max(top, x);
+    const double floor = std::pow(10.0, std::ceil(std::log10(top)) - 10.0);
+    for (double& x : v) if (std::isfinite(x) && x < floor) x = floor;
+    return v;
+}
+
+// Streamlines of a vector field from a contact: equal current for J, evenly for E.
+std::vector<Streamline> lines_of(const Mosfet& m, const Geometry& g, VectorField f, std::size_t contact,
+                                 std::size_t count) {
+    const auto nodal = streamline_field(m.device, g, *element_vectors(m.device, g, m.point, f), f);
+    const Locator loc(g);
+    const std::vector<double> currents =
+        f == VectorField::electric ? std::vector<double>{} : contact_node_currents(m.device, m.point, contact);
+    std::vector<Streamline> out;
+    for (const Point& seed : contact_seeds(m.device, loc, contact, count, currents)) {
+        out.push_back(trace_streamline(loc, nodal, seed));
+    }
+    return out;
 }
 
 }  // namespace
@@ -320,6 +347,43 @@ TEST_CASE("render image: the views match their WARP references (VG4)") {
         REQUIRE(s.has_value());
         check_image(*r.draw(*s, W, H), "mosfet3d_slice");
     }
+    // Unit 25b (BG4): |E| and |J| with their lines, isosurfaces, 3D current lines.
+    SECTION("2D |E| with field lines from the gate") {
+        values = magnitudes_floored(m2.device, g2, m2.point, Field::electric_field);
+        FieldOptions o;
+        o.title = std::string(field_info(Field::electric_field).title);
+        o.scale = *ColorScale::fit(ScaleKind::log10, values, 1e10);
+        auto s = field_view(m2.device, g2, values, o);
+        REQUIRE(s.has_value());
+        add_streamlines(*s, lines_of(m2, g2, VectorField::electric, 0, 16), Rgba{0.05f, 0.05f, 0.05f, 0.85f});
+        check_image(*r.draw(*s, W, H), "mosfet2d_efield_lines");
+    }
+    SECTION("2D |J| with current lines from the source") {
+        values = magnitudes_floored(m2.device, g2, m2.point, Field::current_density);
+        FieldOptions o;
+        o.title = std::string(field_info(Field::current_density).title);
+        o.scale = *ColorScale::fit(ScaleKind::log10, values, 1e10);
+        auto s = field_view(m2.device, g2, values, o);
+        REQUIRE(s.has_value());
+        add_streamlines(*s, lines_of(m2, g2, VectorField::current, 1, 16), Rgba{0.05f, 0.05f, 0.05f, 0.85f});
+        check_image(*r.draw(*s, W, H), "mosfet2d_current_lines");
+    }
+    SECTION("3D isosurfaces of n") {
+        const FieldOptions o = field_options(m3.device, m3.point, Field::electrons, values);
+        const std::vector<double> levels{1e14, 1e18};
+        const auto s = iso_view(m3.device, g3, values, levels, o);
+        REQUIRE(s.has_value());
+        check_image(*r.draw(*s, W, H), "mosfet3d_iso_n");
+    }
+    SECTION("3D current lines colored by |J|") {
+        values = magnitudes_floored(m3.device, g3, m3.point, Field::current_density);
+        const ColorScale scale = *ColorScale::fit(ScaleKind::log10, values, 1e10);
+        auto s = outline_view(m3.device, g3);
+        REQUIRE(s.has_value());
+        s->colorbar = Colorbar{Colormap::turbo, scale, std::string(field_info(Field::current_density).title)};
+        add_streamlines(*s, lines_of(m3, g3, VectorField::current, 1, 24), *s->colorbar);
+        check_image(*r.draw(*s, W, H), "mosfet3d_current_lines");
+    }
     SECTION("3D opaque oxide, perspective") {
         FieldOptions o = field_options(m3.device, m3.point, Field::potential, values);
         o.view.transparent_insulators = false;
@@ -383,4 +447,74 @@ TEST_CASE("render image: drawing benchmark (VG7)", "[.benchmark]") {
                         1.0 / per, *frame, 1e3 / *frame);
         }
     }
+}
+
+TEST_CASE("render image: derived-field benchmark (Unit 25b, BG7)", "[.benchmark]") {
+    // |E| and |J| reconstruction (elements and nodes), one isosurface, the streamline field and 100
+    // streamlines from a plane, on the 3D MOSFET and on a 3D tensor device of about 1e6 tetrahedra
+    // (smooth synthetic potential and currents). Release times in s.
+    using clock = std::chrono::steady_clock;
+    const auto seconds = [](clock::time_point t) { return std::chrono::duration<double>(clock::now() - t).count(); };
+    const auto run = [&](const char* name, const device::Device& d, const results::BiasPoint& p) {
+        const Geometry g = geometry_of(d);
+        auto t = clock::now();
+        const auto e = *element_vectors(d, g, p, VectorField::electric);
+        const auto en = nodal_vectors(g, e);
+        const double t_e = seconds(t);
+        t = clock::now();
+        const auto j = *element_vectors(d, g, p, VectorField::current);
+        const auto jn = nodal_vectors(g, j);
+        const double t_j = seconds(t);
+        t = clock::now();
+        const IsoSurface iso = isosurface(g, p.fields.potential_V, 0.5 * (*std::ranges::min_element(p.fields.potential_V) +
+                                                                          *std::ranges::max_element(p.fields.potential_V)));
+        const double t_iso = seconds(t);
+        t = clock::now();
+        const auto field = streamline_field(d, g, j, VectorField::current);
+        const Locator loc(g);
+        const double t_prep = seconds(t);
+        t = clock::now();
+        Plane plane;
+        plane.normal = {1.0, 0.0, 0.0};
+        plane.offset = 0.5 * (d.mesh().points().front()[0] + d.mesh().points().back()[0]);
+        std::size_t points = 0;
+        for (const Point& s : plane_seeds(g, plane, 100)) points += trace_streamline(loc, field, s).points.size();
+        const double t_lines = seconds(t);
+        std::printf("derived benchmark %s: %zu nodes, %zu tetrahedra; E %.3f s, J %.3f s, isosurface %.3f s "
+                    "(%zu triangles), streamline field and locator %.3f s, 100 streamlines %.3f s (%zu points)\n",
+                    name, d.mesh().node_count(), g.element_count(), t_e, t_j, t_iso, iso.triangles.size(), t_prep,
+                    t_lines, points);
+        CHECK(en.size() == jn.size());
+    };
+    const Mosfet& m3 = mosfet(true);
+    run("3D MOSFET", m3.device, m3.point);
+
+    const auto axis = uniform(0.0, 1e-4, 57);  // 56^3 cells, 6 tetrahedra each
+    mesh::Mesh m = *mesh::make_tensor_grid(axis, axis, axis);
+    auto cells = *mesh::TensorCells::create(m, axis, axis, axis);
+    const std::size_t n = m.node_count();
+    auto left = m.find_boundary("x_min")->nodes;
+    auto right = m.find_boundary("x_max")->nodes;
+    results::BiasPoint p;
+    for (const Point& x : m.points()) p.fields.potential_V.push_back(std::sin(3e4 * x[0]) * std::cos(2e4 * x[1]) + 1e4 * x[2]);
+    for (const mesh::Edge& ed : m.edges()) {
+        const Point& a = m.points()[static_cast<std::size_t>(ed.first)];
+        const Point& b = m.points()[static_cast<std::size_t>(ed.second)];
+        const Point mid{0.5 * (a[0] + b[0]), 0.5 * (a[1] + b[1]), 0.5 * (a[2] + b[2])};
+        const Point jv{1.0 + 1e4 * mid[1], std::sin(4e4 * mid[0]), 0.3};  // A/cm^2
+        const double along = (jv[0] * (b[0] - a[0]) + jv[1] * (b[1] - a[1]) + jv[2] * (b[2] - a[2])) / ed.length;
+        p.edge_current_n.push_back(along * ed.coupling_area);
+        p.edge_current_p.push_back(0.0);
+    }
+    auto d = device::Device::create({.mesh = std::move(m),
+                                     .temperature_K = 300.0,
+                                     .regions = {{"silicon", physics::silicon()}},
+                                     .node_region = std::vector<device::RegionId>(n, 0),
+                                     .donors = std::vector<double>(n, 1e16),
+                                     .acceptors = std::vector<double>(n, 0.0),
+                                     .contacts = {{"left", device::ContactKind::ohmic, std::move(left)},
+                                                  {"right", device::ContactKind::ohmic, std::move(right)}},
+                                     .cells = std::move(cells)});
+    REQUIRE(d.has_value());
+    run("1e6 tetrahedra", *d, p);
 }
