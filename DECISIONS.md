@@ -2854,6 +2854,12 @@ of current arrows in the oxide, where the elements next to the interface interpo
   wiring the tests do not observe; the mask itself is tested, and the reference shows its effect.) Unit 25c in all:
   40 of 40.
 
+**CG7 suites and numerics:** Release 22/22 and Debug 16/16 at each of the four commits (in clean worktrees), no
+warnings under `/W4 /WX`, the Debug render suite's D3D12 debug layer clean; nothing outside `render`, `nitcad plot`,
+tests, `CMakeLists.txt` and this file differs from `main` (`8256cf8`), so no numerical change. **Status:** awaiting
+the owner's acceptance; then ARCHITECTURE.md 6.14 and 11.3 as built (CG9) and, with the owner's authorization, push,
+PR and merge.
+
 ---
 
 ## New questions the advisor raised (not yet in `ARCHITECTURE.md`)
