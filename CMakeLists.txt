@@ -121,11 +121,12 @@ if(NITCAD_REQUIRE_MKL AND NOT EXISTS "${NITCAD_MKL_RUNTIME}")
 endif()
 file(TO_CMAKE_PATH "${NITCAD_MKL_RUNTIME}" NITCAD_MKL_RUNTIME_PATH)
 
-# --- linalg layer (sparse matrix, backend-neutral solver, Eigen SparseLU and PARDISO backends) ---
+# --- linalg layer (sparse matrix, backend-neutral solver, Eigen SparseLU, PARDISO and GMRES-ILUT backends) ---
 add_library(nitcad_linalg STATIC
   src/linalg/sparse_matrix.cpp
   src/linalg/linear_solver.cpp
   src/linalg/eigen_sparse_lu.cpp
+  src/linalg/eigen_ilut.cpp
   src/linalg/mkl_runtime.cpp
   src/linalg/mkl_pardiso.cpp)
 add_library(NiTCAD::linalg ALIAS nitcad_linalg)
@@ -138,6 +139,8 @@ add_executable(nitcad_linalg_test
   tests/linalg/sparse_matrix_test.cpp
   tests/linalg/linear_solver_test.cpp
   tests/linalg/pardiso_test.cpp
+  tests/linalg/gmres_kernel_test.cpp
+  tests/linalg/gmres_ilut_test.cpp
   tests/linalg/header_boundary_test.cpp
   tests/linalg/compensated_dot_test.cpp)
 target_link_libraries(nitcad_linalg_test PRIVATE NiTCAD::linalg Catch2::Catch2WithMain)

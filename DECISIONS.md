@@ -2083,7 +2083,34 @@ LG3: the agreement cases run with `none`, so a fallback cannot hide a failure; a
 LG4: also records each case's fallback count with the default setting. LG7: a further mutant, a fallback that is
 not reported.
 
-**Status:** authorized with LQ1–LQ4; no code. First in VQ6's order, before Unit 25a.
+**Status:** authorized with LQ1–LQ4; commit 1 of 3 done (2026-10-21). First in VQ6's order, before Unit 25a.
+
+**Commit 1 (GMRES and the backend, LG2), as built.** `SolverBackend::gmres_ilut` and `LinearFallback`;
+`SolverConfig` gains `restart`, `max_iterations`, `ilut_drop_tolerance`, `ilut_fill_factor`, `fallback` (validated
+for every backend); `SolveReport` gains `fell_back`. The kernel is `src/linalg/gmres.hpp` (no Eigen; MGS with one
+full reorthogonalization pass, Givens rotations, right preconditioning, x = 0 start); the preconditioner is
+`src/linalg/eigen_ilut.cpp` (Eigen 5.0.1 `IncompleteLUT`, version-asserted; a non-finite factor is a failed
+build). GMRES runs on the equilibrated system the ILUT was built from and accepts only on the componentwise backward
+error of the true iterate, measured once per cycle; a cycle ends early when the residual estimate falls below
+1/2 · β · max_backward_error / (current backward error), so a wrong aim costs a restart, never a wrong answer.
+- **Finding, amends LS4.** A singular system does not show as non-convergence. On a floating region with an
+  inconsistent right-hand side GMRES reaches an x of norm 1.1e17 with backward error 1.0e-16, exactly as Eigen
+  SparseLU does with `min_pivot_ratio = 0` (|x| 3.1e16): the componentwise backward error cannot see singularity.
+  `gmres_ilut` therefore does not detect floating regions; the device layer's topology check (`device.cpp`)
+  rejects them before any solve, so device runs are unaffected. A fallback still applies the direct pivot check.
+- **Finding, LG2's k-eigenvalue test.** Termination in k steps holds in floating point only when the minimal
+  polynomial is well conditioned: with 6 eigenvalues over four decades its terms reach 1e19 before cancelling
+  (measured) and GMRES needs a 7th step. The test uses 6 eigenvalues in [1, 13] and gets at most 6.
+- **Measured (Release, `tests/linalg`, strict mode):** nonsymmetric n = 2000 and the contacted 1D Laplacian in 1
+  iteration; the 40 × 40 2D Laplacian in 9 (forward error 3.8e-9 against SparseLU); the badly scaled coupled
+  system (rows over 40 decades) in 170 (9.7e-9); complex G + iωC over ω = 1e-6…1e3 within 3.7e-14 of SparseLU.
+- **Suites:** Release 20/20 and Debug 14/14, no warnings; `nitcad_linalg_test` +18 test cases (`gmres_kernel_test`,
+  `gmres_ilut_test`). **Mutation checks (LG7, Release): 19 of 20 caught** — skipped reorthogonalization, Givens
+  sign, stopping on the estimate, a restart keeping the old basis, left instead of right preconditioning, each of
+  the five configuration checks, the fallback unreported (two places), the fallback ignoring `none`, the operator
+  or the measure not equilibrated, the ILUT finiteness check removed, `direct_` not reset on refactorization. The
+  survivor, a Givens rotation without the conjugate of its second entry, is equivalent: that entry is the
+  Arnoldi norm, real and positive.
 
 ---
 
