@@ -16,6 +16,7 @@
 #include <cmath>
 #include <cstring>
 #include <format>
+#include <functional>
 #include <limits>
 #include <new>
 #include <optional>
@@ -118,9 +119,13 @@ View make_view(const FieldScene& s, double aspect) {
         radius = std::max(radius, std::sqrt(dotd(d, d)));
     }
     radius = std::max(radius, 1e-6);
-    const double cx = 0.5 * (x0 + x1), cy = 0.5 * (y0 + y1);
-    const double half_h = std::max({0.5 * (y1 - y0), 0.5 * (x1 - x0) / aspect, 1e-6}) / 0.92;
+    // The window's zoom and pan (Unit 26): with zoom 1 and no pan these are the fitted values exactly
+    // (a division by 1 and an addition of 0 change no bit).
+    const double half_h =
+        std::max({0.5 * (y1 - y0), 0.5 * (x1 - x0) / aspect, 1e-6}) / 0.92 / static_cast<double>(s.camera.zoom);
     const double half_w = half_h * aspect;
+    const double cx = 0.5 * (x0 + x1) - static_cast<double>(s.camera.pan[0]) * half_w;
+    const double cy = 0.5 * (y0 + y1) - static_cast<double>(s.camera.pan[1]) * half_h;
     // View coordinates: vx = right . (p - c) - cx, vy = up . (p - c) - cy, vz = forward . (p - c).
     const auto& r = v.right;
     const auto& u = v.up;
@@ -211,7 +216,34 @@ D3D12_RESOURCE_BARRIER transition(ID3D12Resource* r, D3D12_RESOURCE_STATES from,
     return b;
 }
 
+// The rectangle of a field image the 3D or 2D view fills: below the title band, left of the colorbar
+// panel, inside the 2D axes' margins (the whole image when that leaves too little).
+D2D1_RECT_F field_view_rect(const FieldScene& s, int w, int h) {
+    const float title_h = s.title.empty() ? 12.0f : 36.0f;
+    const float bar_w = s.colorbar ? 130.0f : 12.0f;
+    const bool axes = s.dimension == 2;
+    D2D1_RECT_F view{axes ? 66.0f : 12.0f, title_h, static_cast<float>(w) - bar_w, static_cast<float>(h) - (axes ? 48.0f : 12.0f)};
+    if (view.right - view.left < 16.0f || view.bottom - view.top < 16.0f) {
+        view = {0.0f, 0.0f, static_cast<float>(w), static_cast<float>(h)};
+    }
+    return view;
+}
+
 }  // namespace
+
+// --- a window's swap chain (Unit 26) ---------------------------------------------------------------
+
+struct WindowTarget::Impl {
+    HWND window = nullptr;
+    ComPtr<IDXGISwapChain3> swap;
+    std::array<ComPtr<ID3D12Resource>, 2> buffers;
+    int width = 0, height = 0;
+    // Waits for the renderer's queue: a swap chain is released only after its last present has run.
+    std::function<void()> flush;
+    ~Impl() {
+        if (flush) flush();
+    }
+};
 
 // --- the renderer -------------------------------------------------------------------------------
 
@@ -286,8 +318,9 @@ struct Renderer::Impl {
     std::expected<Image, base::Error> read_back();
     std::expected<void, base::Error> begin_2d();
     std::expected<void, base::Error> end_2d();
-    std::expected<Image, base::Error> draw_field(const FieldScene& s, int w, int h);
-    std::expected<Image, base::Error> draw_plot(const PlotScene& s, int w, int h);
+    std::expected<void, base::Error> render_field(const FieldScene& s, int w, int h);
+    std::expected<void, base::Error> render_plot(const PlotScene& s, int w, int h);
+    std::expected<void, base::Error> show(WindowTarget::Impl& target);
 };
 
 std::expected<void, base::Error> Renderer::Impl::create(const RendererOptions& o) {
@@ -740,16 +773,13 @@ void draw_colorbar(Ink& ink, IDWriteTextFormat* text, IDWriteTextFormat* minor_t
 
 }  // namespace
 
-std::expected<Image, base::Error> Renderer::Impl::draw_field(const FieldScene& s, int w, int h) {
+std::expected<void, base::Error> Renderer::Impl::render_field(const FieldScene& s, int w, int h) {
     if (auto r = ensure_targets(w, h); !r) return std::unexpected(std::move(r.error()));
     // Layout: title band, colorbar panel on the right, 2D axes margins.
     const float title_h = s.title.empty() ? 12.0f : 36.0f;
     const float bar_w = s.colorbar ? 130.0f : 12.0f;
     const bool axes = s.dimension == 2;
-    D2D1_RECT_F view{axes ? 66.0f : 12.0f, title_h, static_cast<float>(w) - bar_w, static_cast<float>(h) - (axes ? 48.0f : 12.0f)};
-    if (view.right - view.left < 16.0f || view.bottom - view.top < 16.0f) {
-        view = {0.0f, 0.0f, static_cast<float>(w), static_cast<float>(h)};
-    }
+    const D2D1_RECT_F view = field_view_rect(s, w, h);
     const double aspect = (view.right - view.left) / (view.bottom - view.top);
     const View v = make_view(s, aspect);
 
@@ -1010,16 +1040,33 @@ std::expected<Image, base::Error> Renderer::Impl::draw_field(const FieldScene& s
         if (axes) {
             // The x and y axes of the 2D map in um, along the view's bottom and left.
             const D2D1_POINT_2F p0 = project(v, s.lo, view), p1 = project(v, s.hi, view);
-            const float xl = std::min(p0.x, p1.x), xr = std::max(p0.x, p1.x);
-            const float yb = std::max(p0.y, p1.y), yt = std::min(p0.y, p1.y);
-            d2d->DrawLine({xl, yb + 6.0f}, {xr, yb + 6.0f}, ink.color(axis), 1.0f);
-            d2d->DrawLine({xl - 6.0f, yt}, {xl - 6.0f, yb}, ink.color(axis), 1.0f);
-            for (const Tick& t : linear_ticks(s.lo[0], s.hi[0], 6)) {
+            float xl = std::min(p0.x, p1.x), xr = std::max(p0.x, p1.x);
+            float yb = std::max(p0.y, p1.y), yt = std::min(p0.y, p1.y);
+            // Zoomed or panned (Unit 26): the axes span the part of the bounds in view. A fitted view
+            // holds the whole bounds, and these are the bounds' own values.
+            double x_lo = s.lo[0], x_hi = s.hi[0], y_lo = s.lo[1], y_hi = s.hi[1];
+            if (xl < view.left || xr > view.right) {
+                const auto world_x = [&](float px) { return s.lo[0] + (px - p0.x) * (s.hi[0] - s.lo[0]) / (p1.x - p0.x); };
+                x_lo = std::max(x_lo, static_cast<double>(world_x(view.left)));
+                x_hi = std::min(x_hi, static_cast<double>(world_x(view.right)));
+                xl = std::max(xl, view.left);
+                xr = std::min(xr, view.right);
+            }
+            if (yt < view.top || yb > view.bottom) {
+                const auto world_y = [&](float py) { return s.lo[1] + (py - p0.y) * (s.hi[1] - s.lo[1]) / (p1.y - p0.y); };
+                y_lo = std::max(y_lo, static_cast<double>(world_y(view.bottom)));
+                y_hi = std::min(y_hi, static_cast<double>(world_y(view.top)));
+                yb = std::min(yb, view.bottom);
+                yt = std::max(yt, view.top);
+            }
+            if (xl < xr) d2d->DrawLine({xl, yb + 6.0f}, {xr, yb + 6.0f}, ink.color(axis), 1.0f);
+            if (yt < yb) d2d->DrawLine({xl - 6.0f, yt}, {xl - 6.0f, yb}, ink.color(axis), 1.0f);
+            for (const Tick& t : x_lo < x_hi ? linear_ticks(x_lo, x_hi, 6) : std::vector<Tick>{}) {
                 const float x = project(v, {static_cast<float>(t.value), s.lo[1], 0.0f}, view).x;
                 d2d->DrawLine({x, yb + 6.0f}, {x, yb + 11.0f}, ink.color(axis), 1.0f);
                 ink.text(t.label, small_text.Get(), x, yb + 13.0f, 1, 0);
             }
-            for (const Tick& t : linear_ticks(s.lo[1], s.hi[1], 5)) {
+            for (const Tick& t : y_lo < y_hi ? linear_ticks(y_lo, y_hi, 5) : std::vector<Tick>{}) {
                 const float y = project(v, {s.lo[0], static_cast<float>(t.value), 0.0f}, view).y;
                 d2d->DrawLine({xl - 11.0f, y}, {xl - 6.0f, y}, ink.color(axis), 1.0f);
                 ink.text(t.label, small_text.Get(), xl - 14.0f, y, 2, 1);
@@ -1043,11 +1090,10 @@ std::expected<Image, base::Error> Renderer::Impl::draw_field(const FieldScene& s
             }
         }
     }
-    if (auto r = end_2d(); !r) return std::unexpected(std::move(r.error()));
-    return read_back();
+    return end_2d();
 }
 
-std::expected<Image, base::Error> Renderer::Impl::draw_plot(const PlotScene& s, int w, int h) {
+std::expected<void, base::Error> Renderer::Impl::render_plot(const PlotScene& s, int w, int h) {
     if (auto r = ensure_targets(w, h); !r) return std::unexpected(std::move(r.error()));
     if (final_state != D3D12_RESOURCE_STATE_RENDER_TARGET) {
         const auto f = transition(final_target.Get(), final_state, D3D12_RESOURCE_STATE_RENDER_TARGET);
@@ -1128,8 +1174,7 @@ std::expected<Image, base::Error> Renderer::Impl::draw_plot(const PlotScene& s, 
             }
         }
     }
-    if (auto r = end_2d(); !r) return std::unexpected(std::move(r.error()));
-    return read_back();
+    return end_2d();
 }
 
 // --- Renderer -----------------------------------------------------------------------------------
@@ -1164,7 +1209,8 @@ std::expected<void, base::Error> check_size(int w, int h) {
 std::expected<Image, base::Error> Renderer::draw(const FieldScene& scene, int width, int height) {
     if (auto r = check_size(width, height); !r) return std::unexpected(std::move(r.error()));
     try {
-        return impl_->draw_field(scene, width, height);
+        if (auto r = impl_->render_field(scene, width, height); !r) return std::unexpected(std::move(r.error()));
+        return impl_->read_back();
     } catch (const std::bad_alloc&) {
         return std::unexpected(base::Error{base::ErrorCode::resource_exhausted, "out of memory", std::nullopt});
     }
@@ -1173,7 +1219,8 @@ std::expected<Image, base::Error> Renderer::draw(const FieldScene& scene, int wi
 std::expected<Image, base::Error> Renderer::draw(const PlotScene& scene, int width, int height) {
     if (auto r = check_size(width, height); !r) return std::unexpected(std::move(r.error()));
     try {
-        return impl_->draw_plot(scene, width, height);
+        if (auto r = impl_->render_plot(scene, width, height); !r) return std::unexpected(std::move(r.error()));
+        return impl_->read_back();
     } catch (const std::bad_alloc&) {
         return std::unexpected(base::Error{base::ErrorCode::resource_exhausted, "out of memory", std::nullopt});
     }
@@ -1211,6 +1258,112 @@ std::vector<std::string> Renderer::debug_messages() const {
         }
     }
     return out;
+}
+
+// --- windows (Unit 26) ---------------------------------------------------------------------------
+
+WindowTarget::WindowTarget(std::unique_ptr<Impl> impl) noexcept : impl_(std::move(impl)) {}
+WindowTarget::WindowTarget(WindowTarget&&) noexcept = default;
+WindowTarget& WindowTarget::operator=(WindowTarget&&) noexcept = default;
+WindowTarget::~WindowTarget() = default;
+int WindowTarget::width() const noexcept { return impl_->width; }
+int WindowTarget::height() const noexcept { return impl_->height; }
+
+std::expected<void, base::Error> Renderer::Impl::show(WindowTarget::Impl& t) {
+    // The drawn image into the back buffer, then presented: the window shows what draw() reads back.
+    ID3D12Resource* back = t.buffers[t.swap->GetCurrentBackBufferIndex()].Get();
+    if (final_state != D3D12_RESOURCE_STATE_COPY_SOURCE) {
+        const auto b = transition(final_target.Get(), final_state, D3D12_RESOURCE_STATE_COPY_SOURCE);
+        list->ResourceBarrier(1, &b);
+    }
+    const auto in = transition(back, D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_COPY_DEST);
+    list->ResourceBarrier(1, &in);
+    list->CopyResource(back, final_target.Get());
+    const D3D12_RESOURCE_BARRIER out[] = {
+        transition(back, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_PRESENT),
+        transition(final_target.Get(), D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_RENDER_TARGET)};
+    list->ResourceBarrier(2, out);
+    final_state = D3D12_RESOURCE_STATE_RENDER_TARGET;
+    if (auto r = execute(); !r) return r;
+    const HRESULT hr = t.swap->Present(1, 0);
+    if (FAILED(hr)) return std::unexpected(device_error("IDXGISwapChain::Present", hr));
+    return {};
+}
+
+std::expected<WindowTarget, base::Error> Renderer::window_target(void* window, int width, int height) {
+    if (auto r = check_size(width, height); !r) return std::unexpected(std::move(r.error()));
+    auto t = std::make_unique<WindowTarget::Impl>();
+    t->window = static_cast<HWND>(window);
+    t->flush = [impl = impl_.get()] { (void)impl->wait(); };
+    DXGI_SWAP_CHAIN_DESC1 d{};
+    d.Width = static_cast<UINT>(width);
+    d.Height = static_cast<UINT>(height);
+    d.Format = color_format;
+    d.SampleDesc.Count = 1;
+    d.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
+    d.BufferCount = 2;
+    d.Scaling = DXGI_SCALING_NONE;
+    d.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
+    d.AlphaMode = DXGI_ALPHA_MODE_IGNORE;
+    ComPtr<IDXGISwapChain1> s1;
+    NITCAD_HR(impl_->factory->CreateSwapChainForHwnd(impl_->queue.Get(), t->window, &d, nullptr, nullptr, &s1),
+              "IDXGIFactory2::CreateSwapChainForHwnd");
+    NITCAD_HR(s1.As(&t->swap), "QueryInterface IDXGISwapChain3");
+    impl_->factory->MakeWindowAssociation(t->window, DXGI_MWA_NO_ALT_ENTER);
+    for (UINT i = 0; i < 2; ++i) NITCAD_HR(t->swap->GetBuffer(i, IID_PPV_ARGS(&t->buffers[i])), "IDXGISwapChain::GetBuffer");
+    t->width = width;
+    t->height = height;
+    return WindowTarget(std::move(t));
+}
+
+namespace {
+
+// The swap chain at the size: its buffers released, resized and taken again.
+std::expected<void, base::Error> fit_target(WindowTarget::Impl& t, int width, int height) {
+    if (t.width == width && t.height == height) return {};
+    for (auto& b : t.buffers) b.Reset();
+    NITCAD_HR(t.swap->ResizeBuffers(2, static_cast<UINT>(width), static_cast<UINT>(height), color_format, 0),
+              "IDXGISwapChain::ResizeBuffers");
+    for (UINT i = 0; i < 2; ++i) NITCAD_HR(t.swap->GetBuffer(i, IID_PPV_ARGS(&t.buffers[i])), "IDXGISwapChain::GetBuffer");
+    t.width = width;
+    t.height = height;
+    return {};
+}
+
+}  // namespace
+
+std::expected<void, base::Error> Renderer::present(const FieldScene& scene, WindowTarget& target, int width, int height) {
+    if (auto r = check_size(width, height); !r) return std::unexpected(std::move(r.error()));
+    try {
+        if (auto r = impl_->wait(); !r) return r;  // the swap chain's buffers are free
+        if (auto r = fit_target(*target.impl_, width, height); !r) return r;
+        if (auto r = impl_->render_field(scene, width, height); !r) return r;
+        return impl_->show(*target.impl_);
+    } catch (const std::bad_alloc&) {
+        return std::unexpected(base::Error{base::ErrorCode::resource_exhausted, "out of memory", std::nullopt});
+    }
+}
+
+std::expected<void, base::Error> Renderer::present(const PlotScene& scene, WindowTarget& target, int width, int height) {
+    if (auto r = check_size(width, height); !r) return std::unexpected(std::move(r.error()));
+    try {
+        if (auto r = impl_->wait(); !r) return r;
+        if (auto r = fit_target(*target.impl_, width, height); !r) return r;
+        if (auto r = impl_->render_plot(scene, width, height); !r) return r;
+        return impl_->show(*target.impl_);
+    } catch (const std::bad_alloc&) {
+        return std::unexpected(base::Error{base::ErrorCode::resource_exhausted, "out of memory", std::nullopt});
+    }
+}
+
+ScreenPoint screen_position(const FieldScene& scene, int width, int height, const Float3& p) {
+    const D2D1_RECT_F view = field_view_rect(scene, width, height);
+    const View v = make_view(scene, (view.right - view.left) / (view.bottom - view.top));
+    const Mat4& m = v.view_projection;
+    const float z = p[0] * m[2] + p[1] * m[6] + p[2] * m[10] + m[14];
+    const float w = p[0] * m[3] + p[1] * m[7] + p[2] * m[11] + m[15];
+    const D2D1_POINT_2F px = project(v, p, view);
+    return {px.x, px.y, w != 0.0f ? z / w : z};
 }
 
 }  // namespace NiTCAD::render

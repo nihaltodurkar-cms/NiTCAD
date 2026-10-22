@@ -1,0 +1,32 @@
+# 1D pn diode
+# A silicon pn junction swept forward: the band diagram and the I-V curve.
+#
+# The n+ side is a diffused profile from the left (erfc, 50% at 0.8 um) on a p-type body of 1e16 cm^-3.
+# Run it (F5), then look at the band diagram and the current (Curves).
+
+[mesh]
+type = tensor
+x = linspace(0, 2um, 401)
+
+[region silicon]
+material = silicon
+
+[doping]
+profile = donor erfc 1e18 axis=x center=0.8um width=0.05um
+profile = acceptor constant 1e16
+
+[contact cathode]
+kind = ohmic
+patch = x_min
+
+[contact anode]
+kind = ohmic
+patch = x_max
+
+[sweep]
+contact anode = 0 : 0.7 : 0.05
+
+[output]
+sweep = pn_diode_1d.nitsweep
+device = pn_diode_1d.nitdev
+table = pn_diode_1d.csv
