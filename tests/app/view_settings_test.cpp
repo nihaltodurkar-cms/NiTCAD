@@ -57,6 +57,13 @@ std::string variant(const std::string& from, const std::string& to) {
 }
 const Ran& mosfet_b() { return ran("views_mosfet_b", variant("work_function = 4.1", "work_function = 4.3")); }
 
+// Unit 26c: the small 3D transistor, the diode's C-V at two frequencies and its transient.
+const Ran& mosfet3d() { return ran("views_mosfet3d", app_test::mosfet3d); }
+const Ran& diode_cv() { return ran("views_diode_cv", app_test::diode_cv()); }
+const Ran& diode_transient() {
+    return ran("views_diode_transient", app_test::transient_diode() + "\n[output]\ntransient = t.nittran\ndevice = t.nitdev\n");
+}
+
 render::Renderer& warp() {
     static auto r = render::Renderer::create({.adapter = render::Adapter::warp});
     REQUIRE(r);
@@ -76,10 +83,10 @@ bool has(const std::vector<std::string>& v, const std::string& x) { return std::
 TEST_CASE("app views: names, and the views and fields a workspace offers", "[app]") {
     for (const ViewKind v : {ViewKind::solid, ViewKind::mesh, ViewKind::field, ViewKind::slice, ViewKind::iso,
                              ViewKind::bands, ViewKind::profile, ViewKind::iv, ViewKind::cv, ViewKind::current,
-                             ViewKind::quality, ViewKind::quality_histogram, ViewKind::difference}) {
+                             ViewKind::quality, ViewKind::quality_histogram, ViewKind::difference, ViewKind::exploded}) {
         CHECK(app::find_view(app::to_string(v)) == v);
     }
-    CHECK_FALSE(app::find_view("exploded"));
+    CHECK_FALSE(app::find_view("filmstrip"));  // nitcad plot's alone (Unit 26c: playback instead)
     CHECK(app::is_plot(ViewKind::iv));
     CHECK_FALSE(app::is_plot(ViewKind::field));
 
@@ -447,6 +454,258 @@ TEST_CASE("app views 26b: run B and mesh quality drawn as nitcad plot draws them
         const fs::path png = out / (std::string(name) + ".png");
         std::string args = "plot " + app_test::quoted(mosfet().deck);
         for (const std::string& a : app::plot_arguments(s, &b)) args += " \"" + a + "\"";
+        args += " --size 480x360 --adapter warp --out " + app_test::quoted(png);
+        const auto cli = app_test::nitcad(args);
+        CAPTURE(args, cli.output);
+        REQUIRE(cli.status == 0);
+        auto theirs = render::load_png(png);
+        REQUIRE(theirs);
+        const auto d = render::compare(mine, *theirs, 0);
+        REQUIRE(d);
+        CHECK(d->max_channel == 0);
+    }
+}
+
+TEST_CASE("app views 26c: arrows, streamlines, the exploded view and the curve pickers, as nitcad plot takes them (YD1-YD3)", "[app]") {
+    using V = std::vector<ViewKind>;
+    using A = std::vector<std::string>;
+    // The exploded view in 3D only, after the slices.
+    const auto views3d = app::available_views(mosfet3d().workspace);
+    REQUIRE(views3d.size() >= 5);
+    CHECK(V(views3d.begin(), views3d.begin() + 5) ==
+          V{ViewKind::solid, ViewKind::mesh, ViewKind::field, ViewKind::slice, ViewKind::exploded});
+    const auto views2d = app::available_views(mosfet().workspace);
+    CHECK(std::ranges::find(views2d, ViewKind::exploded) == views2d.end());
+
+    // nitcad plot's messages.
+    const app::Workspace& w = mosfet().workspace;
+    ViewSettings s;
+    s.kind = ViewKind::field;
+    const auto message = [&](const ViewSettings& t) {
+        auto r = app::build_scene(w, t);
+        REQUIRE_FALSE(r);
+        return r.error().message;
+    };
+    s.vectors = "B";
+    CHECK(message(s) == "--vectors is E, J, Jn or Jp");
+    s.vectors.clear();
+    s.streamlines = "x";
+    CHECK(message(s) == "--streamlines is E, J, Jn or Jp");
+    s.streamlines = "E";
+    s.lines = 20000;
+    CHECK(message(s) == "--lines needs a count from 1 to 10000");
+    s.lines = 0;
+    s.seeds = "x=1";
+    CHECK(message(s) == "a seed plane needs a 3D device");
+    s.seeds = "1,0.5";
+    CHECK(message(s) == "--seeds needs <x0>,<y0>[,<z0>]:<x1>,<y1>[,<z1>] in the device's dimension");
+    s.seeds = "x=y";
+    CHECK(message(s) == "--seeds needs a segment or x=<um>, y=<um> or z=<um>");
+    s.seeds.clear();
+    s.from = "nowhere";
+    CHECK(message(s) == "there is no contact nowhere");
+    s = {};
+    s.kind = ViewKind::field;
+    s.vectors = "E";
+    s.arrows = 200000;
+    CHECK(message(s) == "--arrows needs a count from 1 to 100000");
+    s.arrows = 0;
+    // A 1D device's field view is its profile: no device to draw them on.
+    ViewSettings one;
+    one.kind = ViewKind::field;
+    one.vectors = "E";
+    CHECK(app::build_scene(diode().workspace, one).error().message ==
+          "arrows need a 2D or 3D device and a field, slice, iso or solid view");
+    one.vectors.clear();
+    one.streamlines = "E";
+    CHECK(app::build_scene(diode().workspace, one).error().message ==
+          "streamlines need a 2D or 3D device and a field, slice or iso view");
+    // Off the field views they are left out (takes_vectors), as plot_arguments leaves them out.
+    s.kind = ViewKind::iv;
+    s.streamlines = "J";
+    CHECK(app::build_scene(w, s).has_value());
+    s = {};
+    s.kind = ViewKind::exploded;
+    CHECK(message(s) == "the exploded view needs a 3D device");
+    const app::Workspace& w3 = mosfet3d().workspace;
+    s.axis = 3;
+    CHECK(app::build_scene(w3, s).error().message == "--axis is x, y or z");
+    s.axis = 1;
+    s.gap_um = -0.1;
+    CHECK(app::build_scene(w3, s).error().message == "--gap needs a length in um, at least 0");
+    s.gap_um.reset();
+    s.vectors = "E";
+    const auto with = app::build_scene(w3, s);
+    s.vectors.clear();
+    const auto without = app::build_scene(w3, s);
+    REQUIRE(with);
+    REQUIRE(without);
+    CHECK(std::get<render::FieldScene>(*with).triangles.size() == std::get<render::FieldScene>(*without).triangles.size());
+
+    // The options of nitcad plot.
+    ViewSettings v;
+    v.kind = ViewKind::field;
+    v.field = "J";
+    v.vectors = "J";
+    v.arrows = 120;
+    v.streamlines = "E";
+    v.lines = 10;
+    v.from = "gate";
+    CHECK(app::plot_arguments(v) == A{"--view", "field", "--field", "J", "--streamlines", "E", "--lines", "10", "--from",
+                                      "gate", "--vectors", "J", "--arrows", "120"});
+    v = {};
+    v.kind = ViewKind::slice;
+    v.streamlines = "J";
+    v.seeds = "x=1";
+    CHECK(app::plot_arguments(v) == A{"--view", "slice", "--field", "potential", "--streamlines", "J", "--seeds", "x=1"});
+    ViewSettings e;
+    e.kind = ViewKind::exploded;
+    CHECK(app::plot_arguments(e) == A{"--view", "exploded"});
+    e.axis = 2;
+    e.gap_um = 0.3;
+    e.exploded_field = true;
+    e.field = "n";
+    CHECK(app::plot_arguments(e) == A{"--view", "exploded", "--field", "n", "--axis", "z", "--gap", "0.3"});
+    // Arrows and streamlines kept in a setting but left out off the field views.
+    e.vectors = "E";
+    e.streamlines = "J";
+    e.lines = 5;
+    CHECK(app::plot_arguments(e) == A{"--view", "exploded", "--field", "n", "--axis", "z", "--gap", "0.3"});
+    CHECK(app::takes_vectors(ViewKind::iso));
+    CHECK_FALSE(app::takes_vectors(ViewKind::solid));
+    // The curve pickers (YD3) are the existing options.
+    ViewSettings c;
+    c.kind = ViewKind::cv;
+    c.contact = "anode";
+    c.sense = "cathode";
+    c.frequency = 1;
+    c.log = true;
+    CHECK(app::plot_arguments(c) == A{"--view", "cv", "--contact", "anode", "--sense", "cathode", "--frequency", "1", "--log"});
+}
+
+TEST_CASE("app views 26c: arrows, streamlines, the exploded view and the curve pickers drawn as nitcad plot draws them (YG1)", "[app]") {
+    const fs::path out = app_test::scratch("views_26c_images");
+    struct Case {
+        const Ran* ran;
+        ViewSettings s;
+        const char* name;
+    };
+    std::vector<Case> cases;
+    const auto make = [](ViewKind k, std::string field = "potential") {
+        ViewSettings s;
+        s.kind = k;
+        s.field = std::move(field);
+        return s;
+    };
+    // 2D: arrows on their own magnitude and over contour levels; streamlines from a contact and from seeds.
+    {
+        ViewSettings s = make(ViewKind::field, "J");
+        s.vectors = "J";
+        cases.push_back({&mosfet(), s, "2d_arrows_J"});
+    }
+    {
+        ViewSettings s = make(ViewKind::iso, "n");
+        s.levels = {1e16};
+        s.vectors = "E";
+        s.arrows = 50;
+        cases.push_back({&mosfet(), s, "2d_iso_arrows_E"});
+    }
+    {
+        ViewSettings s = make(ViewKind::field);
+        s.streamlines = "E";
+        cases.push_back({&mosfet(), s, "2d_lines_E"});
+    }
+    {
+        ViewSettings s = make(ViewKind::field);
+        s.streamlines = "J";
+        s.lines = 6;
+        cases.push_back({&mosfet(), s, "2d_lines_J"});  // from the contact carrying the most current
+    }
+    {
+        ViewSettings s = make(ViewKind::field, "n");
+        s.streamlines = "Jn";
+        s.lines = 8;
+        s.from = "source";
+        s.vectors = "Jn";
+        s.arrows = 80;
+        cases.push_back({&mosfet(), s, "2d_lines_and_arrows_Jn"});
+    }
+    {
+        ViewSettings s = make(ViewKind::field);
+        s.streamlines = "J";
+        s.seeds = "0.2,0.8:1.8,0.8";
+        s.lines = 6;
+        cases.push_back({&mosfet(), s, "2d_lines_seeded"});
+    }
+    // 3D: colored arrows on the solid, colored lines in the outline, arrows on a slice, lines from a plane.
+    {
+        ViewSettings s = make(ViewKind::field, "J");
+        s.vectors = "J";
+        cases.push_back({&mosfet3d(), s, "3d_arrows_J"});
+    }
+    {
+        ViewSettings s = make(ViewKind::field, "E");
+        s.streamlines = "E";
+        s.lines = 12;
+        cases.push_back({&mosfet3d(), s, "3d_lines_E"});
+    }
+    {
+        // Arrows and lines of one field over its magnitude: the lines colored in the outline, the arrows dark.
+        ViewSettings s = make(ViewKind::field, "J");
+        s.vectors = "J";
+        s.arrows = 50;
+        s.streamlines = "J";
+        s.lines = 6;
+        cases.push_back({&mosfet3d(), s, "3d_lines_and_arrows_J"});
+    }
+    {
+        ViewSettings s = make(ViewKind::slice);
+        s.slices = {{2, 0.4}};
+        s.vectors = "E";
+        s.arrows = 60;
+        cases.push_back({&mosfet3d(), s, "3d_slice_arrows_E"});
+    }
+    {
+        ViewSettings s = make(ViewKind::field);
+        s.streamlines = "J";
+        s.seeds = "x=1";
+        s.lines = 9;
+        cases.push_back({&mosfet3d(), s, "3d_lines_plane"});
+    }
+    // The exploded view: the regions, and a field along x with a gap.
+    cases.push_back({&mosfet3d(), make(ViewKind::exploded), "3d_exploded"});
+    {
+        ViewSettings s = make(ViewKind::exploded, "n");
+        s.exploded_field = true;
+        s.axis = 0;
+        s.gap_um = 0.2;
+        cases.push_back({&mosfet3d(), s, "3d_exploded_n"});
+    }
+    // The curves with their contacts and frequency chosen.
+    {
+        ViewSettings s = make(ViewKind::iv);
+        s.sense = "source";
+        cases.push_back({&mosfet(), s, "iv_source"});
+    }
+    {
+        ViewSettings s = make(ViewKind::cv);
+        s.sense = "cathode";
+        s.frequency = 1;
+        cases.push_back({&diode_cv(), s, "cv_1GHz"});
+    }
+    {
+        ViewSettings s = make(ViewKind::current);
+        s.contact = "cathode";
+        cases.push_back({&diode_transient(), s, "current_cathode"});
+    }
+    for (const Case& c : cases) {
+        CAPTURE(c.name);
+        auto scene = app::build_scene(c.ran->workspace, c.s);
+        if (!scene) FAIL(scene.error().message);
+        const render::Image mine = draw(*scene, 480, 360);
+        const fs::path png = out / (std::string(c.name) + ".png");
+        std::string args = "plot " + app_test::quoted(c.ran->deck);
+        for (const std::string& a : app::plot_arguments(c.s)) args += " \"" + a + "\"";
         args += " --size 480x360 --adapter warp --out " + app_test::quoted(png);
         const auto cli = app_test::nitcad(args);
         CAPTURE(args, cli.output);

@@ -3443,6 +3443,58 @@ visibility (YD4; `render`, `nitcad plot`, `app`); 26c·3 transient playback and 
 | YG5 | The window: every new command in the menus and reachable by the keyboard; a clean D3D12 debug layer and no live graphics object after the window; per-monitor DPI for the new controls. | all |
 | YG6 | Suites as WG6 (Release and Debug at every commit, `/W4 /WX`, hand mutants caught); `app` still free of `physics` and `assemble`; no numerical change; ARCHITECTURE.md as built after acceptance. | all |
 
+**Started on the owner's word (2026-10-22, "start 26c.1 also investigate app_window").**
+
+**Commit 26c·1 (arrows, streamlines, the exploded view, the curve pickers; YD1–YD3, YG1, YG5, YG6), as built.**
+- `ViewSettings`: `vectors`, `streamlines` (E, J, Jn, Jp; empty none), `arrows`, `lines` (0: `nitcad plot`'s 300 in
+  2D, 400 in 3D; 24), `from` (a contact; empty: its choice), `seeds` (a segment or, in 3D, a plane `x=<um>`); the
+  view kind `exploded` with `axis`, `gap_um` (empty: 12% of the extent) and `exploded_field`. `build_scene` draws them
+  with `nitcad plot`'s calls, order and messages: streamlines, then arrows, then the cut line; in 3D over their own
+  magnitude the arrows on the solid device and the lines in the outline, colored by it; 3D arrows on the slices of a
+  slice view, else on the exposed boundary; seeds from the named contact, else for currents the one carrying the
+  most, for E the first gate or electrode, else the most biased. `plot_arguments` gives `--streamlines --lines
+  --from --seeds --vectors --arrows --axis --gap` (and `--field` for an exploded view showing the field).
+  `available_views` offers `exploded` in 3D, after the slices.
+- **Arrows and streamlines on the field views only** (`takes_vectors`: field, slice, iso — YD1's "on the field view"):
+  a setting keeps them, `build_scene` and `plot_arguments` leave them out on the other views, so the window and
+  `nitcad plot` agree on every view (the exploded view in particular, where `nitcad plot` would draw them where
+  the regions were before they moved).
+- The inspector: Arrows (count), Streamlines (count), Seeds from (or typed, µm) — each a list and a box side by
+  side — on the field views of a 2D or 3D run's results; Exploded along (gap, µm) and Show the field on the exploded
+  view; Swept contact (Contact on the current view: "(all)" first), Sensed contact, Frequency (the run's frequencies)
+  and Log axis on the I-V, C-V and current views. A group shows only with its views (`show_inspector_groups`; the
+  inspector lays out the shown ones). Choosing arrows or streamlines on the field view shows that vector's magnitude
+  (as `nitcad plot` without `--field`). Counts, seeds and the gap are read on Apply; an invalid count or gap leaves
+  the setting and says why in the status bar. Every new control is a tab stop (YG5); no new command. **No probe or
+  cut-line click on the exploded view** (its regions moved; `pickable`).
+- **Tests:** `view_settings_test` — the exploded view's name and place in the views; `nitcad plot`'s messages (an
+  unknown vector field, the counts' limits, a seed plane in 2D, a malformed segment or plane, an unknown contact, a
+  1D device, the exploded view's device, axis and gap); vectors left out off the field views (the exploded scene
+  unchanged); the plot arguments. **To the bit equal to `nitcad plot`'s PNGs (YG1):** 2D arrows of J over |J| and of
+  E over contour levels, streamlines of E (from the gate), of J (from the contact carrying the most), of Jn from a
+  named contact with arrows, from a typed segment; 3D colored arrows of J, colored lines of E, lines and arrows of J
+  together, arrows of E on a slice, lines from a seed plane; the exploded view with and without a field; I-V of a
+  chosen sensed contact, C-V at the second frequency, the transient current of one contact. New fixtures: a small 3D
+  MOSFET (9 × 7 × 3 nodes, about a second in Debug), the diode's C-V at 1 kHz and 1 GHz. `analysis_window_test`: the
+  inspector driven as a user would — groups shown and hidden per view, arrows of J (the map switches to |J|),
+  counts and a refused count, lines from the gate and from a plane, the exploded view (axis, field, gap, a refused
+  gap; no probe where the solid view probes), back to the field view with the lines kept; the window's images equal
+  `nitcad plot`'s for its settings; tab stops; at 200% DPI the pairs side by side; the C-V pickers (frequencies,
+  contacts, log, the default again).
+- **Mutation checks (Release):** 31 of 31 caught — view settings 19 (Jn read as Jp, the 2D arrow and line defaults,
+  colored arrows beside lines, the line color, the arrow length, 3D arrows not on the slice, the seed plane's unit,
+  `--from`'s contact, the contact carrying most, E lines not from the gate, the default gap's axis, the exploded
+  field ignored, `--axis`'s letter, iso without vectors, vectors kept off the field views, no exploded view, 3D
+  lines not colored, the arrow limit), window 12 (the map keeping its field, a count of 0, untrimmed seeds, the
+  arrows' controls on every view, a probe on the exploded view, the frequency picker, no default entry, the pairs
+  overlapping, Log and Show the field swapped, swept and sensed swapped, the exploded controls always, a negative
+  gap). Two survived at first and gained tests: 3D arrows and lines of one field together, and the exploded view's
+  probe (the first test switched probing off by toggling it).
+- **Suites (working tree, with the two changes below):** Release 27 of 27 (1,391 s), Debug 19 of 19 (2,382 s); no
+  warnings under `/W4 /WX`. The two tests strengthened after the mutants pass in Release and Debug.
+- **Found:** `nitcad plot <deck>` refused arrows and streamlines on the solid, mesh and quality views ("the results
+  hold no field to plot"); fixed apart, on the owner's word (the next commit).
+
 **Not in Unit 26c:** in-view clip handles (the owner chose sliders), the tiled filmstrip in the window, video
 export, oblique clip planes, streamtubes; the WG1 gap (deferred by the owner, Unit 26b).
 

@@ -133,6 +133,9 @@ public:
         id_run_page, id_results,
         id_view = 5001, id_field, id_point, id_scale, id_colormap, id_contours, id_edges, id_contacts, id_opaque,
         id_perspective, id_slice_axis, id_slice_at, id_clip, id_clip_box, id_levels, id_cut, id_apply, id_probe_text,
+        // Unit 26c (YD1-YD3): arrows, streamlines and their seeds; the exploded view; the curves' pickers.
+        id_arrows, id_arrow_count, id_lines, id_line_count, id_from, id_seeds, id_axis, id_gap, id_exploded_field,
+        id_swept, id_sensed, id_frequency, id_log,
         id_first_label = 5100,
     };
 
@@ -160,6 +163,10 @@ private:
     void on_inspector(int id, int code);
     void view_defaults(ViewSettings& s);
     void sync_inspector();
+    // Shows the inspector's controls that apply to the active view (Unit 26c), hiding the others.
+    void show_inspector_groups();
+    // Whether a click or hover on the view can pick a node (not on the exploded view, whose regions moved).
+    [[nodiscard]] bool pickable() const;
     void fill_tree();
     void on_tree_selection(LPARAM item);
     void update_metrics();

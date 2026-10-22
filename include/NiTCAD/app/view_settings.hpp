@@ -35,12 +35,17 @@ enum class ViewKind : unsigned char {
     quality,            // each element's angle (2D map, 3D surface or slices)
     quality_histogram,  // the elements per 5-degree bin
     difference,         // run B - run A of a field (2D map, 3D surface or slices, 1D profile)
+    // Unit 26c (YD2).
+    exploded,  // the regions moved apart along an axis (3D), the field on them or not
 };
 
 [[nodiscard]] std::string_view to_string(ViewKind v) noexcept;  // as `nitcad plot --view` names it
 [[nodiscard]] std::optional<ViewKind> find_view(std::string_view name) noexcept;
 // Whether the view draws a curve (a PlotScene) rather than the device.
 [[nodiscard]] bool is_plot(ViewKind v) noexcept;
+// Whether the view draws a setting's arrows and streamlines (Unit 26c, YD1): the field, slice and iso views;
+// the others leave them out (build_scene) and so does plot_arguments.
+[[nodiscard]] bool takes_vectors(ViewKind v) noexcept;
 
 struct ViewSettings {
     ViewKind kind = ViewKind::solid;
@@ -75,6 +80,18 @@ struct ViewSettings {
     std::string contact, sense;                  // curves: the swept and sensed contacts by name
     std::optional<std::size_t> frequency;        // C-V: the frequency index
     bool log = false;                            // curves and profiles: a log y axis
+    // Arrows and streamlines (Unit 26c, YD1) of a vector field (E, J, Jn or Jp; empty: none) over a 2D or 3D
+    // device view, as `nitcad plot --vectors --arrows --streamlines --lines --from --seeds` draw them: the counts
+    // 0 for its defaults (300 arrows in 2D, 400 in 3D; 24 lines), the lines from a contact (empty: its choice)
+    // or from typed seeds (a segment "<x0>,<y0>[,<z0>]:<x1>,<y1>[,<z1>]" or, in 3D, a plane "x=<um>").
+    std::string vectors, streamlines;
+    std::size_t arrows = 0, lines = 0;
+    std::string from, seeds;
+    // The exploded view (YD2): the axis (0 x, 1 y, 2 z), the gap in um (empty: 12% of the extent), and
+    // whether the regions show the field (`--field`) or their own colors.
+    int axis = 1;
+    std::optional<double> gap_um;
+    bool exploded_field = false;
     // The window's camera (VA8, Unit 26): zoom about the view's centre and pan in fractions of its
     // half size (render::Camera). `nitcad plot` has neither: plot_arguments leaves them out.
     float zoom = 1.0f;

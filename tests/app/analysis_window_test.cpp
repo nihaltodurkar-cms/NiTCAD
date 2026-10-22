@@ -16,6 +16,7 @@
 #include <filesystem>
 #include <functional>
 #include <string>
+#include <variant>
 #include <vector>
 
 using namespace NiTCAD;
@@ -461,4 +462,186 @@ TEST_CASE("app window 26b: run B from a result file and from the previous run; m
     CHECK_FALSE(w->run_b());
     CHECK_FALSE(w->has_previous_run());
     REQUIRE(pump_until([&] { return !w->runner().busy(); }));
+}
+
+namespace {
+
+// Unit 26c: an inspector list's entry chosen, or a box's text applied, as the user would.
+void choose(MainWindow& w, int id, const wchar_t* item) {
+    HWND list = w.child(id);
+    const LRESULT k = SendMessageW(list, CB_FINDSTRINGEXACT, static_cast<WPARAM>(-1), reinterpret_cast<LPARAM>(item));
+    REQUIRE(k != CB_ERR);
+    SendMessageW(list, CB_SETCURSEL, static_cast<WPARAM>(k), 0);
+    SendMessageW(GetParent(list), WM_COMMAND, MAKEWPARAM(id, CBN_SELCHANGE), reinterpret_cast<LPARAM>(list));
+}
+
+void click(MainWindow& w, int id) {
+    HWND b = w.child(id);
+    if ((GetWindowLongPtrW(b, GWL_STYLE) & BS_TYPEMASK) == BS_AUTOCHECKBOX) {
+        SendMessageW(b, BM_SETCHECK, SendMessageW(b, BM_GETCHECK, 0, 0) == BST_CHECKED ? BST_UNCHECKED : BST_CHECKED, 0);
+    }
+    SendMessageW(GetParent(b), WM_COMMAND, MAKEWPARAM(id, BN_CLICKED), reinterpret_cast<LPARAM>(b));
+}
+
+void apply_text(MainWindow& w, int id, const std::string& text) {
+    SetWindowTextW(w.child(id), std::wstring(text.begin(), text.end()).c_str());
+    click(w, MainWindow::id_apply);
+}
+
+bool shown(MainWindow& w, int id) { return (GetWindowLongPtrW(w.child(id), GWL_STYLE) & WS_VISIBLE) != 0; }
+
+// The window's view equals nitcad plot's image for its settings, drawn on the same adapter (WARP).
+void same_as_plot(MainWindow& w, const fs::path& deck, const fs::path& png) {
+    REQUIRE(w.scene());
+    auto mine = std::visit([&](const auto& s) { return w.renderer()->draw(s, 480, 360); }, *w.scene());
+    REQUIRE(mine);
+    std::string args = "plot " + app_test::quoted(deck);
+    for (const std::string& a : app::plot_arguments(w.settings())) args += " \"" + a + "\"";
+    args += " --size 480x360 --adapter warp --out " + app_test::quoted(png);
+    const auto cli = app_test::nitcad(args);
+    CAPTURE(args, cli.output);
+    REQUIRE(cli.status == 0);
+    auto theirs = render::load_png(png);
+    REQUIRE(theirs);
+    const auto d = render::compare(*mine, *theirs, 0);
+    REQUIRE(d);
+    CHECK(d->max_channel == 0);
+}
+
+}  // namespace
+
+TEST_CASE("app window 26c: arrows, streamlines and the exploded view in the inspector (YD1, YD2, YG1, YG5)", "[app]") {
+    const fs::path dir = app_test::scratch("window_vectors");
+    const fs::path deck = app_test::write(dir, "mosfet3d.deck", app_test::mosfet3d);
+    auto w = window();
+    REQUIRE(w->open_deck(deck));
+    REQUIRE(pump_until([&] { return w->workspace() != nullptr && !w->runner().busy(); }));
+    w->select_tab(MainWindow::tab_view);
+    // Before a run: no arrows (they need the results); the exploded view's controls with that view only.
+    CHECK_FALSE(shown(*w, MainWindow::id_arrows));
+    w->execute(Command::run);
+    REQUIRE(pump_until([&] { return !w->runner().busy() && w->workspace() && w->workspace()->has_results(); }));
+    w->select_tab(MainWindow::tab_view);
+    REQUIRE(w->settings().kind == app::ViewKind::field);
+    for (const int id : {MainWindow::id_arrows, MainWindow::id_arrow_count, MainWindow::id_lines, MainWindow::id_line_count,
+                         MainWindow::id_from, MainWindow::id_seeds}) {
+        CAPTURE(id);
+        CHECK(shown(*w, id));
+    }
+    for (const int id : {MainWindow::id_axis, MainWindow::id_gap, MainWindow::id_exploded_field, MainWindow::id_swept,
+                         MainWindow::id_sensed, MainWindow::id_frequency, MainWindow::id_log}) {
+        CAPTURE(id);
+        CHECK_FALSE(shown(*w, id));
+    }
+
+    // Arrows of J: the map shows |J|, the arrows colored by it on the solid device (YD1).
+    choose(*w, MainWindow::id_arrows, L"J");
+    CHECK(w->settings().vectors == "J");
+    CHECK(w->settings().field == "J");
+    apply_text(*w, MainWindow::id_arrow_count, "40");
+    CHECK(w->settings().arrows == 40);
+    apply_text(*w, MainWindow::id_arrow_count, "0");
+    CHECK(w->status(0) == "Arrows are a count from 1 to 100000.");
+    CHECK(w->settings().arrows == 40);
+    same_as_plot(*w, deck, dir / "arrows.png");
+    // Streamlines of E from the gate, then from a seed plane, beside the arrows.
+    choose(*w, MainWindow::id_lines, L"E");
+    CHECK(w->settings().streamlines == "E");
+    CHECK(w->settings().field == "E");
+    choose(*w, MainWindow::id_from, L"gate");
+    CHECK(w->settings().from == "gate");
+    apply_text(*w, MainWindow::id_line_count, "7");
+    CHECK(w->settings().lines == 7);
+    same_as_plot(*w, deck, dir / "lines_gate.png");
+    apply_text(*w, MainWindow::id_seeds, " x=1 ");
+    CHECK(w->settings().seeds == "x=1");
+    same_as_plot(*w, deck, dir / "lines_plane.png");
+    choose(*w, MainWindow::id_arrows, L"none");
+    CHECK(w->settings().vectors.empty());
+    CHECK(w->settings().field == "E");
+
+    // The exploded view: the arrows' controls hidden (none drawn there), its own shown.
+    choose(*w, MainWindow::id_view, L"exploded");
+    CHECK(w->settings().kind == app::ViewKind::exploded);
+    CHECK_FALSE(shown(*w, MainWindow::id_lines));
+    CHECK(shown(*w, MainWindow::id_axis));
+    CHECK(shown(*w, MainWindow::id_gap));
+    REQUIRE(w->scene());
+    same_as_plot(*w, deck, dir / "exploded.png");
+    choose(*w, MainWindow::id_axis, L"x");
+    CHECK(w->settings().axis == 0);
+    click(*w, MainWindow::id_exploded_field);
+    CHECK(w->settings().exploded_field);
+    apply_text(*w, MainWindow::id_gap, "0.2");
+    CHECK(w->settings().gap_um == 0.2);
+    apply_text(*w, MainWindow::id_gap, "-1");
+    CHECK(w->status(0) == "The gap is a length in µm, at least 0.");
+    CHECK(w->settings().gap_um == 0.2);
+    same_as_plot(*w, deck, dir / "exploded_field.png");
+    // No probe on the moved regions.
+    // (A click where the top face's centre node projects would pick it on any other view.)
+    click_at(*w, {1.0f, 1.0f, 0.4f});
+    CHECK_FALSE(w->probe());
+    choose(*w, MainWindow::id_view, L"solid");
+    click_at(*w, {1.0f, 1.0f, 0.4f});
+    CHECK(w->probe());
+    choose(*w, MainWindow::id_view, L"exploded");
+    // Back on the field view the streamlines are drawn again.
+    choose(*w, MainWindow::id_view, L"field");
+    CHECK(w->settings().streamlines == "E");
+    CHECK(shown(*w, MainWindow::id_lines));
+    same_as_plot(*w, deck, dir / "lines_again.png");
+
+    // Keyboard: every new control is a tab stop (YG5); at 200% the pairs stay side by side in the inspector.
+    for (int id = MainWindow::id_arrows; id <= MainWindow::id_log; ++id) {
+        CAPTURE(id);
+        CHECK((GetWindowLongPtrW(w->child(id), GWL_STYLE) & WS_TABSTOP) != 0);
+    }
+    RECT r{};
+    GetWindowRect(w->hwnd(), &r);
+    RECT suggested{r.left, r.top, r.left + 2 * (r.right - r.left), r.top + 2 * (r.bottom - r.top)};
+    SendMessageW(w->hwnd(), WM_DPICHANGED, MAKEWPARAM(192, 192), reinterpret_cast<LPARAM>(&suggested));
+    RECT list{}, box{}, inspector{};
+    GetWindowRect(w->child(MainWindow::id_lines), &list);
+    GetWindowRect(w->child(MainWindow::id_line_count), &box);
+    GetWindowRect(w->child(MainWindow::id_inspector), &inspector);
+    CHECK(list.right <= box.left);
+    CHECK(list.top == box.top);
+    CHECK(box.right <= inspector.right);
+    CHECK(box.bottom - box.top >= 40);  // 23 px rows at 96 dpi, doubled
+}
+
+TEST_CASE("app window 26c: the curve pickers (YD3, YG1)", "[app]") {
+    const fs::path dir = app_test::scratch("window_pickers");
+    const fs::path deck = app_test::write(dir, "cv.deck", app_test::diode_cv());
+    auto w = window();
+    REQUIRE(w->open_deck(deck));
+    REQUIRE(pump_until([&] { return w->workspace() != nullptr && !w->runner().busy(); }));
+    w->execute(Command::run);
+    REQUIRE(pump_until([&] { return !w->runner().busy() && w->workspace() && w->workspace()->has_results(); }));
+    w->select_tab(MainWindow::tab_curves);
+    REQUIRE(w->settings().kind == app::ViewKind::cv);
+    for (const int id : {MainWindow::id_swept, MainWindow::id_sensed, MainWindow::id_frequency, MainWindow::id_log}) {
+        CAPTURE(id);
+        CHECK(shown(*w, id));
+    }
+    CHECK_FALSE(shown(*w, MainWindow::id_arrows));
+    // The two frequencies, the contacts by name; the defaults first.
+    CHECK(SendMessageW(w->child(MainWindow::id_frequency), CB_GETCOUNT, 0, 0) == 2);
+    CHECK(SendMessageW(w->child(MainWindow::id_sensed), CB_GETCOUNT, 0, 0) == 3);
+    choose(*w, MainWindow::id_frequency, L"1e+09 Hz");
+    CHECK(w->settings().frequency == 1);
+    choose(*w, MainWindow::id_sensed, L"cathode");
+    CHECK(w->settings().sense == "cathode");
+    choose(*w, MainWindow::id_swept, L"anode");
+    CHECK(w->settings().contact == "anode");
+    click(*w, MainWindow::id_log);
+    CHECK(w->settings().log);
+    click(*w, MainWindow::id_log);
+    CHECK_FALSE(w->settings().log);
+    same_as_plot(*w, deck, dir / "cv.png");
+    // The default again: nitcad plot's choice.
+    choose(*w, MainWindow::id_sensed, L"(automatic)");
+    CHECK(w->settings().sense.empty());
+    same_as_plot(*w, deck, dir / "cv_default.png");
 }

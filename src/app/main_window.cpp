@@ -9,6 +9,7 @@
 #include <cmath>
 #include <charconv>
 #include <format>
+#include <tuple>
 #include <utility>
 #include <variant>
 
@@ -36,6 +37,13 @@ LPARAM tree_data(TreeKind k, int index) { return static_cast<LPARAM>((k << 16) |
 
 constexpr std::array<std::string_view, 4> scale_names{"(default)", "linear", "log", "signed-log"};
 constexpr std::array<std::string_view, 5> colormap_names{"turbo", "viridis", "cividis", "coolwarm", "soft"};
+// Unit 26c (YD1): the vector fields arrows and streamlines follow ("none" first).
+constexpr std::array<std::string_view, 5> vector_names{"none", "E", "J", "Jn", "Jp"};
+// The labels of the inspector's groups (Unit 26c), after the nine of Unit 26: their ids follow
+// id_first_label in the order made.
+constexpr int label_arrows = MainWindow::id_first_label + 9, label_lines = label_arrows + 1, label_from = label_arrows + 2,
+              label_axis = label_arrows + 3, label_swept = label_arrows + 4, label_sensed = label_arrows + 5,
+              label_frequency = label_arrows + 6;
 
 std::string format_um(double v) { return std::format("{:.3g}", v); }
 
@@ -209,11 +217,28 @@ bool MainWindow::create_children() {
     make(L"EDIT", L"", WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL, inspector_, id_clip_box, WS_EX_CLIENTEDGE);
     labelled(L"Iso levels", L"EDIT", ES_AUTOHSCROLL, id_levels);
     labelled(L"Cut line (µm)", L"EDIT", ES_AUTOHSCROLL, id_cut);
+    // Unit 26c (YD1-YD3): a drop-down list and its box side by side, shown with the views they apply to.
+    const auto paired = [&](const wchar_t* text, int list, int box) {
+        labelled(text, L"COMBOBOX", drop, list);
+        make(L"EDIT", L"", WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL, inspector_, box, WS_EX_CLIENTEDGE);
+    };
+    paired(L"Arrows (count)", id_arrows, id_arrow_count);
+    paired(L"Streamlines (count)", id_lines, id_line_count);
+    paired(L"Seeds from (or typed, µm)", id_from, id_seeds);
+    paired(L"Exploded along (gap, µm)", id_axis, id_gap);
+    make(L"BUTTON", L"Sho&w the field", WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX, inspector_, id_exploded_field);
+    labelled(L"Swept contact", L"COMBOBOX", drop, id_swept);
+    labelled(L"Sensed contact", L"COMBOBOX", drop, id_sensed);
+    labelled(L"Frequency", L"COMBOBOX", drop, id_frequency);
+    make(L"BUTTON", L"Lo&g axis", WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX, inspector_, id_log);
     make(L"BUTTON", L"&Apply", WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON, inspector_, id_apply);
     make(L"STATIC", L"", WS_VISIBLE | SS_LEFT, inspector_, id_probe_text);
     combo_fill(child(id_scale), {scale_names.begin(), scale_names.end()}, 0);
     combo_fill(child(id_colormap), {colormap_names.begin(), colormap_names.end()}, 0);
     combo_fill(child(id_slice_axis), {"none", "x", "y", "z"}, 0);
+    combo_fill(child(id_arrows), {vector_names.begin(), vector_names.end()}, 0);
+    combo_fill(child(id_lines), {vector_names.begin(), vector_names.end()}, 0);
+    combo_fill(child(id_axis), {"x", "y", "z"}, 1);
     return toolbar_ && status_ && tree_ && tabs_ && metrics_ && inspector_ && viewport_->hwnd() && deck_->hwnd() &&
            start_->hwnd() && run_page_->hwnd() && results_->hwnd();
 }
@@ -453,6 +478,32 @@ void MainWindow::layout_inspector() {
     put(id_levels, row);
     put_label();
     put(id_cut, row);
+    // Unit 26c: the groups shown for the active view (show_inspector_groups), one under the other.
+    const auto shown = [&](int id) { return (GetWindowLongPtrW(child(id), GWL_STYLE) & WS_VISIBLE) != 0; };
+    const auto put_at = [&](int label_id) {
+        MoveWindow(GetDlgItem(inspector_, label_id), pad, y, w, label_h, TRUE);
+        y += label_h;
+    };
+    const int half = std::max((w - gap) / 2, 0);
+    for (const auto& [label_id, list, box] : {std::tuple{label_arrows, id_arrows, id_arrow_count},
+                                             std::tuple{label_lines, id_lines, id_line_count},
+                                             std::tuple{label_from, id_from, id_seeds},
+                                             std::tuple{label_axis, id_axis, id_gap}}) {
+        if (!shown(list)) continue;
+        put_at(label_id);
+        MoveWindow(child(list), pad, y, half, row * 8, TRUE);
+        MoveWindow(child(box), pad + half + gap, y, w - half - gap, row, TRUE);
+        y += row + gap;
+    }
+    if (shown(id_exploded_field)) put(id_exploded_field, row);
+    for (const auto& [label_id, list] : {std::pair{label_swept, id_swept}, std::pair{label_sensed, id_sensed},
+                                        std::pair{label_frequency, id_frequency}}) {
+        if (!shown(list)) continue;
+        put_at(label_id);
+        put(list, row * 8);
+        y -= row * 8 - row;
+    }
+    if (shown(id_log)) put(id_log, row);
     MoveWindow(child(id_apply), pad, y, scaled(80, dpi_), row + gap, TRUE);
     y += row + 2 * gap;
     MoveWindow(child(id_probe_text), pad, y, w, std::max<int>(r.bottom - y - pad, 0), TRUE);
@@ -642,7 +693,8 @@ void MainWindow::refresh() {
             auto d = render::difference_field(*workspace_->device, *run_b()->device, *workspace_->geometry, *pa, *pb, *f);
             if (d) values_ = std::move(d->values);
         }
-    } else if (const auto f = render::find_field(s.field); f && !is_plot(s.kind) && s.kind != ViewKind::quality) {
+    } else if (const auto f = render::find_field(s.field);
+               f && !is_plot(s.kind) && s.kind != ViewKind::quality && s.kind != ViewKind::exploded) {
         const bool doping = *f == render::Field::net_doping || *f == render::Field::donors || *f == render::Field::acceptors;
         if (doping || workspace_->has_results()) {
             const std::size_t k = s.point.value_or(workspace_->points.empty() ? 0 : workspace_->points.size() - 1);
@@ -763,6 +815,64 @@ void MainWindow::sync_inspector() {
         for (std::size_t k = 0; k < cut_->to_um.size(); ++k) cut += (k ? "," : "") + std::format("{}", cut_->to_um[k]);
     }
     win32::set_text(child(id_cut), cut);
+    // Unit 26c (YD1-YD3).
+    const auto select = [&](int id, std::span<const std::string_view> names, const std::string& name) {
+        const auto it = std::ranges::find(names, name.empty() ? std::string_view("none") : std::string_view(name));
+        SendMessageW(child(id), CB_SETCURSEL, static_cast<WPARAM>(it == names.end() ? 0 : it - names.begin()), 0);
+    };
+    select(id_arrows, vector_names, s.vectors);
+    select(id_lines, vector_names, s.streamlines);
+    win32::set_text(child(id_arrow_count), s.arrows > 0 ? std::to_string(s.arrows) : std::string());
+    win32::set_text(child(id_line_count), s.lines > 0 ? std::to_string(s.lines) : std::string());
+    std::vector<std::string> contacts;
+    if (workspace_) {
+        for (const auto& c : workspace_->device->contacts()) contacts.push_back(c.name);
+    }
+    // A contact list with its first entry for none chosen; the setting's contact selected.
+    const auto contact_list = [&](int id, const char* first, const std::string& name) {
+        std::vector<std::string> items{first};
+        items.insert(items.end(), contacts.begin(), contacts.end());
+        const auto it = std::ranges::find(contacts, name);
+        combo_fill(child(id), items, it == contacts.end() ? 0 : static_cast<int>(it - contacts.begin()) + 1);
+    };
+    contact_list(id_from, "(automatic)", s.from);
+    win32::set_text(child(id_seeds), s.seeds);
+    SendMessageW(child(id_axis), CB_SETCURSEL, static_cast<WPARAM>(std::clamp(s.axis, 0, 2)), 0);
+    win32::set_text(child(id_gap), s.gap_um ? std::format("{}", *s.gap_um) : std::string());
+    check(id_exploded_field, s.exploded_field);
+    contact_list(id_swept, s.kind == ViewKind::current ? "(all)" : "(automatic)", s.contact);
+    contact_list(id_sensed, "(automatic)", s.sense);
+    std::vector<std::string> frequencies;
+    if (workspace_ && workspace_->small_signal) {
+        for (const double hz : workspace_->small_signal->frequency_Hz) frequencies.push_back(std::format("{:g} Hz", hz));
+    }
+    combo_fill(child(id_frequency), frequencies, static_cast<int>(s.frequency.value_or(0)));
+    check(id_log, s.log);
+    show_inspector_groups();
+}
+
+void MainWindow::show_inspector_groups() {
+    const ViewSettings& s = settings();
+    const int dim = workspace_ ? workspace_->device->mesh().dimension() : 0;
+    // Arrows and streamlines over the field views of a 2D or 3D run's results (YD1).
+    const bool vectors = tab_ == tab_view && dim >= 2 && workspace_->has_results() && takes_vectors(s.kind);
+    const bool exploded = tab_ == tab_view && s.kind == ViewKind::exploded;
+    const bool curves = tab_ == tab_curves && (s.kind == ViewKind::iv || s.kind == ViewKind::cv || s.kind == ViewKind::current);
+    const auto show = [&](std::initializer_list<int> ids, bool on) {
+        for (const int id : ids) ShowWindow(child(id), on ? SW_SHOW : SW_HIDE);  // the labels too (in the inspector)
+    };
+    show({label_arrows, id_arrows, id_arrow_count, label_lines, id_lines, id_line_count, label_from, id_from, id_seeds}, vectors);
+    show({label_axis, id_axis, id_gap, id_exploded_field}, exploded);
+    win32::set_text(GetDlgItem(inspector_, label_swept), s.kind == ViewKind::current ? "Contact" : "Swept contact");
+    show({label_swept, id_swept, id_log}, curves);
+    show({label_sensed, id_sensed}, curves && s.kind != ViewKind::current);
+    show({label_frequency, id_frequency}, curves && s.kind == ViewKind::cv);
+    layout_inspector();
+}
+
+bool MainWindow::pickable() const {
+    return scene_ && std::holds_alternative<render::FieldScene>(*scene_) && prober_ &&
+           (tab_ == tab_curves ? curve_view_ : device_view_).kind != ViewKind::exploded;
 }
 
 // A slice view starts with a plane through the middle of the device along z, an iso view with a level.
@@ -812,7 +922,62 @@ void MainWindow::on_inspector(int id, int code) {
         const bool on = Button_GetCheck(child(id)) == BST_CHECKED;
         (id == id_contours ? s.contours : id == id_edges ? s.edges : id == id_contacts ? s.contacts
                                                                       : id == id_opaque ? s.opaque : s.perspective) = on;
+    } else if ((id == id_arrows || id == id_lines) && selection) {
+        // Unit 26c (YD1): arrows or streamlines of a vector field; on the field view the map shows its own
+        // magnitude, as `nitcad plot` draws them without --field.
+        const int k = std::max(combo_index(child(id)), 0);
+        const std::string name = k == 0 ? std::string() : std::string(vector_names[static_cast<std::size_t>(k)]);
+        (id == id_arrows ? s.vectors : s.streamlines) = name;
+        if (!name.empty() && s.kind == ViewKind::field) {
+            s.field = name;
+            s.scale.clear();
+            s.range.reset();
+        }
+        sync_inspector();
+    } else if ((id == id_from || id == id_swept || id == id_sensed) && selection) {
+        // A contact, the first entry none (nitcad plot's choice, or every contact's current).
+        const auto contacts = workspace_->device->contacts();
+        const int k = combo_index(child(id));
+        const std::string name = k > 0 && k <= static_cast<int>(contacts.size()) ? contacts[static_cast<std::size_t>(k - 1)].name
+                                                                                 : std::string();
+        (id == id_from ? s.from : id == id_swept ? s.contact : s.sense) = name;
+    } else if (id == id_frequency && selection) {
+        const int k = combo_index(child(id_frequency));
+        s.frequency = k >= 0 ? std::optional<std::size_t>(static_cast<std::size_t>(k)) : std::nullopt;
+    } else if (id == id_axis && selection) {
+        s.axis = std::clamp(combo_index(child(id_axis)), 0, 2);
+    } else if (clicked && (id == id_exploded_field || id == id_log)) {
+        (id == id_log ? s.log : s.exploded_field) = Button_GetCheck(child(id)) == BST_CHECKED;
     } else if ((id == id_apply && clicked) || (id == id_clip && clicked) || (id == id_slice_axis && selection)) {
+        // Unit 26c: the arrow and line counts (empty: nitcad plot's defaults), the typed seeds and the exploded
+        // view's gap (empty: 12% of the extent), each kept as it was when not valid.
+        const auto count = [&](int box, std::size_t most, std::size_t& to, const char* what) {
+            const std::string t = win32::text_of(child(box));
+            if (t.find_first_not_of(" \t") == std::string::npos) {
+                to = 0;
+                return;
+            }
+            const auto v = numbers(t);
+            if (v.size() == 1 && v[0] >= 1.0 && v[0] <= static_cast<double>(most) && v[0] == std::floor(v[0])) {
+                to = static_cast<std::size_t>(v[0]);
+            } else {
+                set_status(status_state, std::format("{} are a count from 1 to {}.", what, most));
+            }
+        };
+        count(id_arrow_count, 100000, s.arrows, "Arrows");
+        count(id_line_count, 10000, s.lines, "Streamlines");
+        std::string seeds = win32::text_of(child(id_seeds));
+        while (!seeds.empty() && seeds.back() == ' ') seeds.pop_back();
+        while (!seeds.empty() && seeds.front() == ' ') seeds.erase(seeds.begin());
+        s.seeds = seeds;
+        const std::string gap = win32::text_of(child(id_gap));
+        if (gap.find_first_not_of(" \t") == std::string::npos) {
+            s.gap_um.reset();
+        } else if (const auto v = numbers(gap); v.size() == 1 && v[0] >= 0.0) {
+            s.gap_um = v[0];
+        } else {
+            set_status(status_state, "The gap is a length in µm, at least 0.");
+        }
         // The slice, the clipping box and the iso levels from their fields.
         const int axis = combo_index(child(id_slice_axis)) - 1;
         const std::string at = win32::text_of(child(id_slice_at));
@@ -1415,7 +1580,7 @@ void MainWindow::viewport_fit() {
 }
 
 void MainWindow::probe_at(float x, float y) {
-    if (!scene_ || !prober_) return;
+    if (!pickable()) return;
     const auto* f = std::get_if<render::FieldScene>(&*scene_);
     if (!f) return;
     const auto hit = prober_->pick(*f, viewport_->width(), viewport_->height(), x, y, values_);
@@ -1449,7 +1614,7 @@ void MainWindow::viewport_click(float x, float y) {
 }
 
 void MainWindow::cut_at(float x, float y) {
-    if (!scene_ || !prober_ || !workspace_) return;
+    if (!pickable() || !workspace_) return;
     const auto* f = std::get_if<render::FieldScene>(&*scene_);
     if (!f) return;
     const auto p = prober_->point_at(*f, viewport_->width(), viewport_->height(), x, y);
@@ -1507,7 +1672,7 @@ void MainWindow::set_cut(std::optional<ViewSettings::Cut> cut) {
 }
 
 void MainWindow::viewport_hover(float x, float y) {
-    if (!scene_ || !prober_) return;
+    if (!pickable()) return;
     const auto* f = std::get_if<render::FieldScene>(&*scene_);
     if (!f) return;
     const auto hit = prober_->pick(*f, viewport_->width(), viewport_->height(), x, y, {}, 8.0f);

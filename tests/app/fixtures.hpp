@@ -154,6 +154,63 @@ inline std::string transient_diode() {
     return diode_device + "\n[transient]\ncontact anode = step(0, 0.3, 1e-9)\nt_end = 4e-9\n";
 }
 
+// A small 3D n-channel MOSFET (Unit 26c): mosfet2d's layout on a coarse 9 x 7 x 3 mesh with a width along z,
+// two gate biases; it runs in about a second in Debug.
+inline const std::string mosfet3d = R"(# A small 3D n-channel MOSFET
+[mesh]
+type = tensor
+x = linspace(0, 2um, 9)
+y = linspace(0, 0.9um, 4) + linspace(0.9um, 0.95um, 2) + linspace(0.95um, 1um, 2)
+z = linspace(0, 0.8um, 3)
+
+[region silicon]
+material = silicon
+
+[region oxide]
+material = sio2
+box = 0 2um  0.95um 1um  0 0.8um
+
+[doping]
+profile = acceptor constant 1e16
+profile = donor gaussian 2e19 axis=y center=0.95um width=0.15um x=0:0.5um lateral=20nm
+profile = donor gaussian 2e19 axis=y center=0.95um width=0.15um x=1.5um:2um lateral=20nm
+
+[contact source]
+kind = ohmic
+patch = x_min
+box = 0 0  0.6um 0.94um  0 0.8um
+
+[contact drain]
+kind = ohmic
+patch = x_max
+box = 2um 2um  0.6um 0.94um  0 0.8um
+
+[contact gate]
+kind = electrode
+patch = y_max
+box = 0.5um 1.5um  1um 1um  0 0.8um
+electrode = metal
+work_function = 4.1
+
+[contact body]
+kind = ohmic
+patch = y_min
+
+[sweep]
+contact gate = 0 : 0.6 : 0.6
+contact drain = 0.5
+
+[output]
+sweep = mosfet3d.nitsweep
+device = mosfet3d.nitdev
+)";
+
+// The diode's small-signal run at two frequencies (Unit 26c: the C-V frequency picker).
+inline std::string diode_cv() {
+    return diode_device + "\n[small_signal]\ncontact anode = -0.4 : 0 : 0.2\nfrequencies = 1e3, 1e9\n" +
+           "\n[output]\nsmall_signal = cv.nitac\ndevice = cv.nitdev\n";
+}
+
 struct Cli {
     int status;
     std::string output;
