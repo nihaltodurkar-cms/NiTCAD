@@ -13,7 +13,7 @@ enum class Command : std::uint16_t {
     // File
     new_deck = 100, open_deck, open_result, save, save_as, recent_first, exit = recent_first + 16,
     // Edit
-    undo = 200, cut, copy, paste, select_all, find_error,
+    undo = 200, cut, copy, paste, select_all, find_error, complete,
     // Simulation (run)
     check = 300, run, stop,
     // View

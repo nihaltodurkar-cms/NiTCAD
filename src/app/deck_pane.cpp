@@ -1,6 +1,7 @@
 // The deck pane (deck_pane.hpp).
 #include "deck_pane.hpp"
 
+#include <commctrl.h>
 #include <richedit.h>
 
 #include <algorithm>
@@ -15,7 +16,8 @@ namespace {
 
 constexpr const wchar_t* panel_class = L"NiTCADDeckPane";
 constexpr const wchar_t* gutter_class = L"NiTCADGutter";
-constexpr int edit_id = 1, list_id = 2;
+constexpr int edit_id = 1, list_id = 2, completion_id = 3;
+constexpr int completion_rows = 8;
 constexpr int errors_height_96 = 72;
 
 // Rich Edit keeps '\r' paragraph ends; the document keeps '\n'.
@@ -54,7 +56,7 @@ DeckPane::DeckPane(HWND parent, Host& host, int id) : host_(host) {
     gutter_ = CreateWindowExW(0, gutter_class, L"", WS_CHILD | WS_VISIBLE, 0, 0, 16, 16, panel_, nullptr,
                               GetModuleHandleW(nullptr), this);
     edit_ = CreateWindowExW(0, MSFTEDIT_CLASS, L"",
-                            WS_CHILD | WS_VISIBLE | WS_VSCROLL | WS_HSCROLL | WS_TABSTOP | ES_MULTILINE |
+                            WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS | WS_VSCROLL | WS_HSCROLL | WS_TABSTOP | ES_MULTILINE |
                                 ES_AUTOVSCROLL | ES_AUTOHSCROLL | ES_NOHIDESEL | ES_WANTRETURN,
                             0, 0, 16, 16, panel_, reinterpret_cast<HMENU>(static_cast<INT_PTR>(edit_id)),
                             GetModuleHandleW(nullptr), nullptr);
@@ -65,10 +67,18 @@ DeckPane::DeckPane(HWND parent, Host& host, int id) : host_(host) {
                             WS_CHILD | WS_VISIBLE | WS_VSCROLL | WS_TABSTOP | LBS_NOTIFY | LBS_NOINTEGRALHEIGHT, 0, 0,
                             16, 16, panel_, reinterpret_cast<HMENU>(static_cast<INT_PTR>(list_id)),
                             GetModuleHandleW(nullptr), nullptr);
+    // The completion list floats over the editor (which clips it out), shown at the caret.
+    completion_ = CreateWindowExW(0, L"LISTBOX", L"",
+                                  WS_CHILD | WS_BORDER | WS_VSCROLL | LBS_NOTIFY |
+                                      LBS_NOINTEGRALHEIGHT,
+                                  0, 0, 16, 16, panel_, reinterpret_cast<HMENU>(static_cast<INT_PTR>(completion_id)),
+                                  GetModuleHandleW(nullptr), nullptr);
+    SetWindowSubclass(edit_, edit_proc, 1, reinterpret_cast<DWORD_PTR>(this));
     set_dpi(win32::dpi_of(parent));
 }
 
 DeckPane::~DeckPane() {
+    if (edit_) RemoveWindowSubclass(edit_, edit_proc, 1);
     if (panel_) {
         SetWindowLongPtrW(panel_, GWLP_USERDATA, 0);
         SetWindowLongPtrW(gutter_, GWLP_USERDATA, 0);
@@ -133,7 +143,238 @@ void DeckPane::set_dpi(int dpi) {
     ui_ = win32::ui_font(dpi);
     SendMessageW(edit_, WM_SETFONT, reinterpret_cast<WPARAM>(code_), TRUE);
     SendMessageW(list_, WM_SETFONT, reinterpret_cast<WPARAM>(ui_), TRUE);
+    SendMessageW(completion_, WM_SETFONT, reinterpret_cast<WPARAM>(code_), TRUE);
+    hide_completion();
     layout();
+}
+
+std::wstring DeckPane::line_text(int line) const {
+    const LRESULT start = SendMessageW(edit_, EM_LINEINDEX, static_cast<WPARAM>(line - 1), 0);
+    if (start < 0) return {};
+    const auto n = static_cast<std::size_t>(SendMessageW(edit_, EM_LINELENGTH, static_cast<WPARAM>(start), 0));
+    std::wstring w(std::max<std::size_t>(n, 1) + 1, L'\0');
+    *reinterpret_cast<WORD*>(w.data()) = static_cast<WORD>(w.size());
+    const auto got = static_cast<std::size_t>(
+        SendMessageW(edit_, EM_GETLINE, static_cast<WPARAM>(line - 1), reinterpret_cast<LPARAM>(w.data())));
+    w.resize(std::min(got, n));
+    return w;
+}
+
+std::pair<int, std::size_t> DeckPane::caret() const {
+    CHARRANGE r{};
+    SendMessageW(edit_, EM_EXGETSEL, 0, reinterpret_cast<LPARAM>(&r));
+    int line = static_cast<int>(SendMessageW(edit_, EM_EXLINEFROMCHAR, 0, r.cpMin)) + 1;
+    LRESULT start = SendMessageW(edit_, EM_LINEINDEX, static_cast<WPARAM>(line - 1), 0);
+    // After a final line end Rich Edit names the line before; the empty last line starts there.
+    if (const LRESULT next = SendMessageW(edit_, EM_LINEINDEX, static_cast<WPARAM>(line), 0); next >= 0 && r.cpMin >= next) {
+        ++line;
+        start = next;
+    }
+    const std::wstring w = line_text(line);
+    const auto n = std::min<std::size_t>(static_cast<std::size_t>(r.cpMin - start), w.size());
+    return {line, win32::narrow(w.substr(0, n)).size()};
+}
+
+LONG DeckPane::char_of(int line, std::size_t column) const {
+    const LRESULT start = SendMessageW(edit_, EM_LINEINDEX, static_cast<WPARAM>(line - 1), 0);
+    const std::string utf8 = win32::narrow(line_text(line));
+    return static_cast<LONG>(start) + static_cast<LONG>(win32::widen(utf8.substr(0, std::min(column, utf8.size()))).size());
+}
+
+void DeckPane::set_caret(int line, std::size_t column) {
+    const LONG c = char_of(line, column);
+    SendMessageW(edit_, EM_SETSEL, static_cast<WPARAM>(c), static_cast<LPARAM>(c));
+}
+
+bool DeckPane::show_completion(bool forced) {
+    const auto [line, column] = caret();
+    auto c = complete(text(), line, column);
+    if (!c || c->items.empty()) {
+        hide_completion();
+        return false;
+    }
+    if (!forced && c->from == column) {
+        // Nothing typed of the word: open only right after '[' or '='.
+        const std::string before = win32::narrow(line_text(line)).substr(0, column);
+        const auto last = before.find_last_not_of(" \t");
+        if (last == std::string::npos || (before[last] != '[' && before[last] != '=')) {
+            hide_completion();
+            return false;
+        }
+    }
+    SendMessageW(completion_, WM_SETREDRAW, FALSE, 0);
+    SendMessageW(completion_, LB_RESETCONTENT, 0, 0);
+    // The list is in the code font: the help aligned by padding the names.
+    int longest = 0;
+    HDC dc = GetDC(completion_);
+    HGDIOBJ old_font = SelectObject(dc, code_);
+    const auto text_width = [&](const std::wstring& s) {
+        SIZE size{};
+        GetTextExtentPoint32W(dc, s.c_str(), static_cast<int>(s.size()), &size);
+        return static_cast<int>(size.cx);
+    };
+    std::size_t widest = 0;
+    for (const Candidate& item : c->items) widest = std::max(widest, item.label.size());
+    for (const Candidate& item : c->items) {
+        const std::wstring row = win32::widen(item.label + std::string(widest + 2 - item.label.size(), ' ') + item.help);
+        longest = std::max(longest, text_width(row));
+        SendMessageW(completion_, LB_ADDSTRING, 0, reinterpret_cast<LPARAM>(row.c_str()));
+    }
+    SelectObject(dc, old_font);
+    ReleaseDC(completion_, dc);
+    SendMessageW(completion_, LB_SETCURSEL, 0, 0);
+    SendMessageW(completion_, WM_SETREDRAW, TRUE, 0);
+    // Below the word's start.
+    POINTL p{};
+    SendMessageW(edit_, EM_POSFROMCHAR, reinterpret_cast<WPARAM>(&p), char_of(line, c->from));
+    const int row = static_cast<int>(SendMessageW(completion_, LB_GETITEMHEIGHT, 0, 0));
+    const int rows = std::min<int>(static_cast<int>(c->items.size()), completion_rows);
+    RECT er{};
+    GetWindowRect(edit_, &er);
+    MapWindowPoints(HWND_DESKTOP, panel_, reinterpret_cast<POINT*>(&er), 2);
+    const int line_height = row;
+    const int w = std::min<int>(longest + GetSystemMetricsForDpi(SM_CXVSCROLL, static_cast<UINT>(dpi_)) + scaled(8, dpi_),
+                                er.right - er.left),
+              h = rows * row + 4;
+    int x = er.left + static_cast<int>(p.x), y = er.top + static_cast<int>(p.y) + line_height;
+    x = std::max<int>(er.left, std::min<int>(x, er.right - w));
+    if (y + h > er.bottom) y = std::max<int>(er.top, er.top + static_cast<int>(p.y) - h);
+    SetWindowPos(completion_, HWND_TOP, x, y, w, h, SWP_SHOWWINDOW | SWP_NOACTIVATE);
+    completion_shown_ = std::move(c);
+    return true;
+}
+
+void DeckPane::hide_completion() {
+    if (completion_) ShowWindow(completion_, SW_HIDE);
+    completion_shown_.reset();
+}
+
+int DeckPane::completion_selection() const {
+    return completion_shown_ ? static_cast<int>(SendMessageW(completion_, LB_GETCURSEL, 0, 0)) : -1;
+}
+
+void DeckPane::accept_completion(int index) {
+    if (!completion_shown_ || index < 0 || static_cast<std::size_t>(index) >= completion_shown_->items.size()) return;
+    const Completion c = *completion_shown_;
+    hide_completion();
+    const LONG from = char_of(c.line, c.from), to = char_of(c.line, c.to);
+    SendMessageW(edit_, EM_SETSEL, static_cast<WPARAM>(from), static_cast<LPARAM>(to));
+    const std::wstring insert = win32::widen(c.items[static_cast<std::size_t>(index)].insert);
+    SendMessageW(edit_, EM_REPLACESEL, TRUE, reinterpret_cast<LPARAM>(insert.c_str()));
+    SetFocus(edit_);
+    // A key's value has choices to offer next.
+    if (!insert.empty() && (insert.back() == L' ')) show_completion(false);
+}
+
+void DeckPane::after_typing(wchar_t typed) {
+    const bool word = (typed >= L'a' && typed <= L'z') || (typed >= L'A' && typed <= L'Z') ||
+                      (typed >= L'0' && typed <= L'9') || typed == L'_' || typed == L'.';
+    if (word || typed == L'[' || typed == L'=' || typed == L' ' || (typed == L'\b' && completion_shown_)) {
+        show_completion(false);
+    } else {
+        hide_completion();
+    }
+}
+
+void DeckPane::paint_underlines() {
+    if (diagnostics_.empty()) return;
+    HDC dc = GetDC(edit_);
+    RECT er{};
+    GetClientRect(edit_, &er);
+    HPEN pen = CreatePen(PS_SOLID, std::max(1, scaled(1, dpi_)), RGB(200, 52, 44));
+    HGDIOBJ old = SelectObject(dc, pen);
+    TEXTMETRICW tm{};
+    HGDIOBJ old_font = SelectObject(dc, code_);
+    GetTextMetricsW(dc, &tm);
+    SelectObject(dc, old_font);
+    const int step = std::max(2, scaled(2, dpi_));
+    for (const Diagnostic& d : diagnostics_) {
+        if (d.line < 1) continue;
+        const std::wstring w = line_text(d.line);
+        const auto first = w.find_first_not_of(L" \t");
+        if (first == std::wstring::npos) continue;
+        const auto last = w.find_last_not_of(L" \t");
+        const LRESULT start = SendMessageW(edit_, EM_LINEINDEX, static_cast<WPARAM>(d.line - 1), 0);
+        POINTL a{}, b{};
+        SendMessageW(edit_, EM_POSFROMCHAR, reinterpret_cast<WPARAM>(&a), start + static_cast<LPARAM>(first));
+        SendMessageW(edit_, EM_POSFROMCHAR, reinterpret_cast<WPARAM>(&b), start + static_cast<LPARAM>(last + 1));
+        if (a.y < er.top - tm.tmHeight || a.y > er.bottom) continue;
+        if (b.x <= a.x) b.x = a.x + tm.tmAveCharWidth * static_cast<LONG>(last + 1 - first);
+        // A wavy line under the text.
+        const int y = static_cast<int>(a.y) + tm.tmHeight - step;
+        std::vector<POINT> zig;
+        for (int x = static_cast<int>(a.x), k = 0; x <= static_cast<int>(b.x); x += step, ++k) {
+            zig.push_back({x, y + ((k & 1) ? step : 0)});
+        }
+        if (zig.size() > 1) Polyline(dc, zig.data(), static_cast<int>(zig.size()));
+    }
+    SelectObject(dc, old);
+    DeleteObject(pen);
+    ReleaseDC(edit_, dc);
+}
+
+LRESULT CALLBACK DeckPane::edit_proc(HWND hwnd, UINT message, WPARAM w, LPARAM l, UINT_PTR, DWORD_PTR data) {
+    auto* self = reinterpret_cast<DeckPane*>(data);
+    switch (message) {
+    case WM_KEYDOWN:
+        if (self->completion_shown_) {
+            const int n = static_cast<int>(self->completion_shown_->items.size());
+            const int at = self->completion_selection();
+            switch (w) {
+            case VK_DOWN:
+                SendMessageW(self->completion_, LB_SETCURSEL, static_cast<WPARAM>(std::min(at + 1, n - 1)), 0);
+                return 0;
+            case VK_UP:
+                SendMessageW(self->completion_, LB_SETCURSEL, static_cast<WPARAM>(std::max(at - 1, 0)), 0);
+                return 0;
+            case VK_RETURN:
+            case VK_TAB:
+                self->swallow_char_ = true;
+                self->accept_completion(at);
+                return 0;
+            case VK_ESCAPE:
+                self->swallow_char_ = true;
+                self->hide_completion();
+                return 0;
+            case VK_LEFT:
+            case VK_RIGHT:
+            case VK_HOME:
+            case VK_END:
+            case VK_PRIOR:
+            case VK_NEXT:
+                self->hide_completion();
+                break;
+            default:
+                break;
+            }
+        }
+        break;
+    case WM_GETDLGCODE:
+        // While the list is shown, Tab, Enter and Escape are the list's, not the dialog navigation's.
+        if (self->completion_shown_) return DefSubclassProc(hwnd, message, w, l) | DLGC_WANTALLKEYS;
+        break;
+    case WM_CHAR: {
+        // The character of an Enter, Tab or Escape the list took.
+        if (self->swallow_char_) {
+            self->swallow_char_ = false;
+            if (w == VK_RETURN || w == VK_TAB || w == VK_ESCAPE) return 0;
+        }
+        const LRESULT r = DefSubclassProc(hwnd, message, w, l);
+        self->after_typing(static_cast<wchar_t>(w));
+        return r;
+    }
+    case WM_KILLFOCUS:
+        if (reinterpret_cast<HWND>(w) != self->completion_) self->hide_completion();
+        break;
+    case WM_PAINT: {
+        const LRESULT r = DefSubclassProc(hwnd, message, w, l);
+        self->paint_underlines();
+        return r;
+    }
+    default:
+        break;
+    }
+    return DefSubclassProc(hwnd, message, w, l);
 }
 
 int DeckPane::gutter_width() const {
@@ -208,6 +449,10 @@ LRESULT CALLBACK DeckPane::panel_proc(HWND hwnd, UINT message, WPARAM w, LPARAM 
         }
         if (id == edit_id && (code == EN_UPDATE || code == EN_VSCROLL)) {
             InvalidateRect(self->gutter_, nullptr, TRUE);
+            return 0;
+        }
+        if (id == completion_id && code == LBN_DBLCLK) {
+            self->accept_completion(self->completion_selection());
             return 0;
         }
         if (id == list_id && code == LBN_DBLCLK) {

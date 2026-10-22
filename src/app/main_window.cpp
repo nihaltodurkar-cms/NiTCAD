@@ -85,7 +85,9 @@ std::wstring menu_text(const CommandInfo& c) {
 // --- creation -------------------------------------------------------------------------------------
 
 MainWindow::MainWindow(const WindowOptions& options)
-    : options_(options), runner_([this] { PostMessageW(hwnd_, run_message, 0, 0); }) {}
+    : options_(options),
+      runner_([this] { PostMessageW(hwnd_, run_message, 0, 0); }),
+      live_([this] { PostMessageW(hwnd_, live_message, 0, 0); }) {}
 
 std::unique_ptr<MainWindow> MainWindow::create(const WindowOptions& options) {
     INITCOMMONCONTROLSEX icc{sizeof(icc), ICC_BAR_CLASSES | ICC_TREEVIEW_CLASSES | ICC_TAB_CLASSES | ICC_STANDARD_CLASSES |
@@ -334,7 +336,7 @@ void MainWindow::update_command_states() {
     enable(Command::open_deck, !busy);
     enable(Command::new_deck, !busy);
     enable(Command::open_result, !busy);
-    enable(Command::find_error, !runner_.diagnostics().empty());
+    enable(Command::find_error, !deck_->diagnostics().empty());
     for (const Command c : {Command::fit, Command::orbit_left, Command::orbit_right, Command::orbit_up,
                             Command::orbit_down, Command::zoom_in, Command::zoom_out, Command::pan_left,
                             Command::pan_right, Command::pan_up, Command::pan_down}) {
@@ -547,12 +549,13 @@ void MainWindow::default_settings() {
     }
 }
 
-void MainWindow::set_workspace(Workspace w) {
+void MainWindow::set_workspace(Workspace w, bool keep_settings) {
     workspace_ = std::move(w);
+    preview_ = false;
     prober_.emplace(*workspace_);
     probe_.reset();
     measure_from_.reset();
-    default_settings();
+    if (!keep_settings) default_settings();
     fill_tree();
     sync_inspector();
     results_->show(&*workspace_);
@@ -770,7 +773,7 @@ void MainWindow::fill_tree() {
         return TreeView_InsertItem(tree_, &t);
     };
     const auto& d = *workspace_->device;
-    HTREEITEM device = add(TVI_ROOT, "Device", tree_data(tree_none, 0));
+    HTREEITEM device = add(TVI_ROOT, preview_ ? "Device (preview, not solved)" : "Device", tree_data(tree_none, 0));
     for (const auto& r : d.regions()) {
         add(device, r.name + (device::is_insulator(r) ? " (insulator)" : " (semiconductor)"), tree_data(tree_none, 0));
     }
@@ -974,6 +977,45 @@ void MainWindow::on_run_finished(Pending pending, RunState s) {
 void MainWindow::deck_changed() {
     document_.set_text(deck_->text());
     update_title();
+    // Checked a pause after the last edit (XD1).
+    ++edits_;
+    SetTimer(hwnd_, live_timer, live_delay_ms, nullptr);
+}
+
+void MainWindow::on_live_check() {
+    if (!live_.process()) return;
+    // Edited since: the next check (its timer is running) will tell.
+    if (live_edits_ != edits_) return;
+    const std::string text = deck_->text();
+    std::vector<Diagnostic> shown = live_.result().diagnostics;
+    for (Diagnostic& d : shown) {
+        if (const auto s = suggestion(text, d)) d.message += " (" + *s + ")";
+    }
+    deck_->set_diagnostics(shown);
+    if (!shown.empty()) {
+        set_status(status_state, shown.front().message);
+    } else if (auto plan = live_.take_plan()) {
+        // The structure preview (XD4): results stay while the deck keeps their mesh.
+        if (workspace_ && workspace_->has_results() && same_mesh(*workspace_, plan->device.mesh())) {
+            set_status(status_state, "The deck builds (the results shown are of its last run).");
+        } else if (auto w = workspace_from_structure(std::move(*plan), document_.path())) {
+            show_structure(std::move(*w));
+            set_status(status_state, "The deck builds: its structure is shown, not solved (Run, F5).");
+        } else {
+            set_status(status_state, w.error().message);
+        }
+    }
+    update_command_states();
+}
+
+void MainWindow::show_structure(Workspace w) {
+    // While editing, the view and camera stay as they were if the previous view was a preview of the
+    // same dimension.
+    const bool keep = workspace_ && preview_ &&
+                      workspace_->device->mesh().dimension() == w.device->mesh().dimension();
+    set_workspace(std::move(w), keep);
+    preview_ = true;
+    fill_tree();  // marked as a preview
 }
 
 void MainWindow::go_to_section(std::string_view kind) {
@@ -1092,10 +1134,15 @@ void MainWindow::execute(Command c) {
     case Command::paste: forward_edit(WM_PASTE); return;
     case Command::select_all: forward_edit(EM_SETSEL); return;
     case Command::find_error:
-        if (!runner_.diagnostics().empty()) {
+        if (!deck_->diagnostics().empty()) {
             select_tab(tab_deck);
-            deck_->go_to_line(runner_.diagnostics().front().line);
+            deck_->go_to_line(deck_->diagnostics().front().line);
         }
+        return;
+    case Command::complete:
+        select_tab(tab_deck);
+        SetFocus(deck_->editor());
+        if (!deck_->show_completion(true)) set_status(status_state, "Nothing to complete here.");
         return;
     case Command::check:
         if (runner_.busy()) return;
@@ -1372,9 +1419,18 @@ LRESULT MainWindow::handle(UINT message, WPARAM w, LPARAM l) {
     case run_message:
         on_run_events();
         return 0;
+    case live_message:
+        on_live_check();
+        return 0;
     case WM_TIMER:
         if (w == run_timer) {
             on_run_timer();
+            return 0;
+        }
+        if (w == live_timer) {
+            KillTimer(hwnd_, live_timer);
+            live_edits_ = edits_;
+            live_.submit(deck_->text(), document_.path());
             return 0;
         }
         break;

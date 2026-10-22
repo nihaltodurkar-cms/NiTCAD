@@ -3192,6 +3192,59 @@ construction (`mesh::Mesh`, P3), so mesh quality is a matter of element shape, n
 | XG7 | The window: every new command in the menus and reachable by the keyboard; a clean D3D12 debug layer and no live graphics object after the window; per-monitor DPI for the new controls. | all |
 | XG8 | Suites as WG6 (Release and Debug at every commit, `/W4 /WX`, hand mutants caught); `app` still free of `physics` and `assemble`; no numerical change (the deck, solver and render references unchanged); ARCHITECTURE.md as built after acceptance. | all |
 
+**Commit 26b·1 (live checking, suggestions, completion and the structure preview; XD1–XD4, XG1–XG3, XG7), as
+built.**
+- `live_check.hpp`: `LiveChecker(wake, check)` with its own `std::jthread`; `submit(text, path)` returns the check's
+  generation; the worker takes only the newest submission, so edits made while a build runs coalesce into one check
+  after it; a result is posted (wake) and `process()` on the UI thread applies it only when no newer submission exists,
+  else counts it as `dropped()`. The check is injectable (tests hold the worker on a latch). Independent of the run
+  controller: the deck is checked while a run goes on.
+- `deck_vocabulary.hpp` (XD2, XD3): 15 sections, each key with its named-key arity, repeatability, a sample value,
+  a line of help, its value choices (first and second word) and, for `[contact]`, `[mesh]` and `[solver]`, the
+  context (the selector key's value) in which it applies; `edit_distance`, `nearest` (at most min(2, max(1, ⌊n/3⌋))
+  edits, exact matches excluded), `suggestion(text, diagnostic)` from the error's own line (unknown section, key or
+  choice), and `complete(text, line, column)`: section kinds after `[` (closing it unless closed or named), the keys
+  of the caret's section not yet present (a key and " = ", or a named key and a space), value choices after `=`
+  (waveforms with their parenthesis), nothing in a comment, on a continued line, on a header's name or before the
+  first section.
+- `workspace.hpp`: `workspace_from_structure(plan, deck)` (the device and geometry, no results) and `same_mesh(w,
+  mesh)` (by the graph digest); `workspace_from_plan` uses the former.
+- The window: an edit restarts a 400 ms timer, then the deck is submitted; a result older than the text shown is not
+  applied; an error underlines its line (wavy, drawn after the Rich Edit's paint), the message with " (did you mean
+  'x'?)" goes to the status bar and Find Error; a deck that builds is shown as "Device (preview, not solved)" unless
+  the results shown are on the same mesh, keeping the view settings when the dimension is unchanged. Completion:
+  a list under the caret (Up/Down, Enter or Tab inserts, Escape closes; Left/Right/Home/End/PgUp/PgDn close),
+  opened by typing a word or `[` or `=`, and by Edit > Complete (Ctrl+Space); taking a key opens its value choices.
+- **Tests** (`tests/app/`, 11 new cases): **XG1** — errors at their lines then the plan, the check on the worker
+  thread; a held worker with five submissions: two results dropped, the newest applied; a check during a 1,601-point
+  run; in the window: a misspelt material marked at line 11 with "(did you mean 'sio2'?)" and one check for two
+  quick edits, a result older than the text not shown, `kind = omic` caught during a run; **XG2** — every vocabulary
+  key with its sample value accepted by `deck::build` in every context (more than 130 probes); every word of
+  `deck/build.hpp`'s reference that `deck::build` takes is listed (more than 100), parameter paths excepted; the
+  menus' defaults equal the vocabulary's; every key, section and choice misspelt by one edit (a letter dropped)
+  suggested back from `deck::build`'s own error; completion at each caret context; **XG3** — the preview of the 2D
+  MOSFET and a generated 3D deck drawn on WARP equal `nitcad plot`'s solid and mesh PNGs of the deck to the bit;
+  the preview follows a finer mesh in the view chosen; results kept on an edit that keeps the mesh; **XG7** —
+  completion by the keyboard in the window (Enter, Tab, Up/Down, Escape, Ctrl+Space, a double click).
+- **Finding (fixed):** `DeckPane::caret()` gave the previous line on the final empty line (Rich Edit's line index for
+  a position after the last `\r`); found by the forced-completion test.
+- **Finding (not changed):** `deck/build.hpp`'s reference omits keys `deck::build` takes (the `gmres_ilut` keys
+  `ilut_drop`, `ilut_fill`, `restart`, and the model switches by name). The vocabulary lists what `deck::build` takes,
+  so XG2's "no other" is checked against `deck::build`, not the comment.
+- **Mutation checks (Release): 29 of 29 caught, one equivalent replaced.** Vocabulary, checker and workspace (18):
+  the nearest name at 3 edits and completion inside a comment survived the first run and are caught by two added
+  checks; three mutants that failed only by `/WX` (an unused variable) were rewritten to compile and are caught.
+  Window (11): Enter's character typed after accepting, Down skipping an item, no value choices after a key, not
+  opened after `=`, typing a word opens nothing, a result older than the text applied, results dropped on any edit,
+  no suggestion, no live check, the view reset on every edit, Ctrl+Space not forced; three `/WX`-only mutants
+  rewritten as above, of which Down past the last item is equivalent (the list box refuses an index out of range)
+  and was replaced by Down skipping an item, caught by an added step on the 15-item list.
+- **Suites:** Release, the app tests (43 cases, 4,423 assertions) and the window tests (11 cases) pass, no warnings
+  under `/W4 /WX`; Debug, the app tests (121 s) pass, and the window tests (284 s) pass but for one self-test run
+  whose WG1 gap was 248.6 ms (bound 100 ms) while the solver ran; three reruns of that self-test gave 40–51 ms (the
+  26·3 record: 39 ms). The self-test makes no edit, so the live checker does not run in it; the gap is recorded as
+  an outlier of the Debug build on WARP. The clean-worktree suites at this commit are recorded with 26b·2.
+
 **Not in Unit 26b (VA7 and later):** form editors that write the deck, project management, remote runs, plugins,
 localization, an installer; completion of region parameter paths; more than two runs compared at once.
 

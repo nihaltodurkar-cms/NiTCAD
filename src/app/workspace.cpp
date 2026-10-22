@@ -148,15 +148,26 @@ std::expected<Workspace, base::Error> workspace_from_deck(const fs::path& deck_p
     return workspace_from_plan(std::move(*plan), deck_path);
 }
 
-std::expected<Workspace, base::Error> workspace_from_plan(deck::Plan plan, const fs::path& deck_path) {
+std::expected<Workspace, base::Error> workspace_from_structure(deck::Plan plan, const fs::path& deck_path) {
     Workspace w;
     w.source = deck_path;
     w.analysis = plan.analysis;
-    const deck::Outputs out = plan.outputs;
-    const deck::Analysis analysis = plan.analysis;
     w.device = std::make_unique<device::Device>(std::move(plan.device));
     if (plan.generated) w.generated = std::make_unique<mesh::GeneratedMesh>(std::move(*plan.generated));
     if (auto g = make_geometry(w); !g) return std::unexpected(std::move(g.error()));
+    return w;
+}
+
+bool same_mesh(const Workspace& w, const mesh::Mesh& m) {
+    return w.device && mesh::graph_digest(w.device->mesh()) == mesh::graph_digest(m);
+}
+
+std::expected<Workspace, base::Error> workspace_from_plan(deck::Plan plan, const fs::path& deck_path) {
+    const deck::Outputs out = plan.outputs;
+    const deck::Analysis analysis = plan.analysis;
+    auto structure = workspace_from_structure(std::move(plan), deck_path);
+    if (!structure) return std::unexpected(std::move(structure.error()));
+    Workspace w = std::move(*structure);
     // The results the deck's outputs hold, if it has run.
     using deck::Analysis;
     const fs::path file = analysis == Analysis::transient      ? out.transient
