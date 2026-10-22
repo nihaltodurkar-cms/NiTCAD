@@ -3575,6 +3575,10 @@ passed in the suite (19 of 19). WG1 stands as ruled.
   prober hiding on every view, since every view that can be probed takes hidden regions. Four survived at first and
   gained tests: the iso normals (the isosurface was a plane), the outline shell, the filmstrip's fit, and
   `nitcad plot`'s fits (now also run against the window's to-the-bit comparisons).
+- **Suites (clean worktree at `4a9d236`):** Release 27 of 27 (1,308 s), no warnings under `/W4 /WX`; Debug 18 of 19
+  (1,526 s): `render` failed after 10 s, all three of its failures `D3D12CreateDevice failed (HRESULT 0x887A0007)`
+  (DXGI_ERROR_DEVICE_RESET, before anything was drawn), while the other D3D suites of the same run passed; rerun
+  alone in the same worktree it passed (651 s).
 
 **Not in Unit 26c:** in-view clip handles (the owner chose sliders), the tiled filmstrip in the window, video
 export, oblique clip planes, streamtubes.
