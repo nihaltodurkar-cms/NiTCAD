@@ -3145,7 +3145,55 @@ camera's zoom and pan, the 2D axes in view, screen positions), `app`, `app/`, `e
 and this file differs from `main` (`e289e44`): no numerical change, and the 20 WARP references pass unchanged.
 **Status:** Unit 26 built (WG1–WG8 met on this workstation; WG4 on the hosted CI runner unverified until an
 authorized push). **Accepted by the owner 2026-10-22** ("Accept Unit 26"); ARCHITECTURE.md 6.14, 8, 11 and 11.3
-updated to "as built" (WG6). Nothing pushed.
+updated to "as built" (WG6). Merged to `main` as `e9b1d71` (PR #59, 2026-10-22).
+
+### Unit 26b — the analysis workspace (started 2026-10-22; on `app/analysis-workspace`)
+
+**Owner request:** VQ10 (live deck checking and completion, structure preview, cut lines with band diagrams, run
+comparison and difference maps, mesh quality; plan page Figures 4, 7, 8 and view 25), approved after Unit 26's
+acceptance ("start 26b", 2026-10-22). The owner's conditions of Units 25 and 26 hold: numerics and layer boundaries
+preserved, Release and Debug suites at every commit, `/W4 /WX`, hand mutants, nothing pushed or merged without
+authorization.
+
+**What exists (audited on `main` at `e9b1d71`).** The deck's reference list of sections and keys is
+`deck/build.hpp`'s comment; `deck::build` stops at the first error, `"<source>:<line>: <what>"`, and rejects an
+unknown key as `unknown key '<k>' in [<kind>]`. `app::check_deck` builds on a worker (`RunController`), which is busy
+while a run goes on. `render::Locator` finds the element holding a point with barycentric weights; band edges are
+stored per node in every result (NaN on insulator nodes); `band_plot` and `profile_plot` take a 1D mesh only.
+`Workspace` pairs results with a device by the mesh digest; `analysis` extracts the threshold. `render`'s
+`Geometry` gives the linear elements of every mesh (Kuhn tetrahedra of tensor cells). Coupling areas are positive by
+construction (`mesh::Mesh`, P3), so mesh quality is a matter of element shape, not of negative couplings.
+
+**Design (taken under VQ8–VQ14's delegation, "choose what's best for Commercial TCAD"):**
+
+| # | Choice |
+|---|---|
+| XD1 | **Live checking.** A `LiveChecker` with its own worker, separate from the run controller (editing goes on during a run): a check starts 400 ms after the last edit; each check carries a generation, and only the newest check's result is applied (a build cannot be cancelled mid-way, so an older one is discarded when it ends). The editor shows the error's line in the gutter and its message under the editor, as Check does. |
+| XD2 | **Suggestions.** An unknown section, key or value choice gets "did you mean ..." from the vocabulary (XD3): the nearest name by edit distance, at most 2 edits or a third of the name's length. |
+| XD3 | **Completion.** A deck vocabulary in `app` (`deck_vocabulary.hpp`): every section kind, its keys (with or without default), the value choices of keys that have them, and a line of help; mirroring `deck/build.hpp`'s comment, which a test reads, so the two cannot drift. Region parameter paths (`eps_r`, `electron_mobility.mu_max`, ...) are open-ended and not completed. `complete(text, line, column)` gives what fits the caret: section kinds after `[`, keys at a line's start in a section, value choices after `=`. The editor opens the list on Ctrl+Space and when a key or `[` is typed; Enter or Tab inserts. |
+| XD4 | **Structure preview.** After a live check builds, the device view shows the deck's device (regions, contacts and mesh) without solving. Results stay shown while the deck's mesh digest equals theirs; otherwise the view shows the structure, marked "preview". |
+| XD5 | **Cut lines.** `render::cut_line(geometry, a, b)`: the segment clipped by every element it crosses, so the samples are the crossings with element faces; a nodal field read there by the element's barycentric weights is exactly the piecewise-linear field along the line (kinks at the crossings only). Outside the mesh is a gap. `cut_plot` and `cut_band_plot` draw any field or the four band edges against the distance in µm. In the window: Cut line (two clicks; in 3D on the front-most surface point, the line running through the device), the plot in the Curves tab; also typed end points in µm. |
+| XD6 | **Run comparison.** A second result (a result file, or the previous run of the same deck) as run B. Curves of A and B overlaid; for transfer curves the threshold shift ΔV_th from Unit 24's extraction. A difference map B − A of a field at a bias point both runs have (equal bias values), on the same mesh (digest) only, else refused; diverging colormap (cool-warm), symmetric about 0: potential, quasi-Fermi levels and band edges in mV; densities as Δlog10 (decades); other fields linear in their units. The record of each run side by side with the settings that differ. |
+| XD7 | **Mesh quality.** Per element: in 2D the minimum angle, in 3D the minimum dihedral angle (degrees). A map on the elements (2D) or the boundary and slices (3D) and a histogram; the minimum, the median and the count below a threshold (20° in 2D, 10° in 3D) in the metrics strip. |
+
+**Commits:** 26b·1 live checking, suggestions, completion and the structure preview (XD1–XD4); 26b·2 cut lines
+(XD5); 26b·3 run comparison and mesh quality (XD6, XD7).
+
+**Acceptance gates:**
+
+| # | Gate | Commit |
+|---|---|---|
+| XG1 | Live checking: an error appears at its line after an edit without Check; a check never runs on the UI thread; a stale check's result is never applied (a deterministic test holds the worker); editing during a run checks the deck. | 26b·1 |
+| XG2 | The vocabulary equals `deck/build.hpp`'s reference (every section and key it names, no other); every listed key with a sample value gives no "unknown key" error from `deck::build`; every misspelling at one edit of a key, section or choice is suggested back; completion at each caret context gives exactly the fitting candidates. | 26b·1 |
+| XG3 | The structure preview's scene equals the solid and mesh scenes of the device `deck::build` makes (`nitcad plot` of the deck's device file) to the bit. | 26b·1 |
+| XG4 | Cut lines: exact on a linear field; the samples are the element crossings (a tensor and a generated mesh, 2D and 3D); along a 1D device equal to `band_plot`'s points; a line leaving the mesh has a gap there; the 2D and 3D MOSFETs' band diagrams from source to drain drawn on WARP as references. | 26b·2 |
+| XG5 | Comparison: B − A of a run with itself is zero; of two runs it equals the nodal difference; another mesh or a bias point not in both is refused; ΔV_th equals the difference of the extracted thresholds; a WARP reference of a difference map. | 26b·3 |
+| XG6 | Mesh quality: exact angles on equilateral, right and regular elements (60°, 45°, 70.5288°); the histogram counts every element once; the generated meshes respect their generators' minimum-angle setting in 2D. | 26b·3 |
+| XG7 | The window: every new command in the menus and reachable by the keyboard; a clean D3D12 debug layer and no live graphics object after the window; per-monitor DPI for the new controls. | all |
+| XG8 | Suites as WG6 (Release and Debug at every commit, `/W4 /WX`, hand mutants caught); `app` still free of `physics` and `assemble`; no numerical change (the deck, solver and render references unchanged); ARCHITECTURE.md as built after acceptance. | all |
+
+**Not in Unit 26b (VA7 and later):** form editors that write the deck, project management, remote runs, plugins,
+localization, an installer; completion of region parameter paths; more than two runs compared at once.
 
 ---
 
