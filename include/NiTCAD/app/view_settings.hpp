@@ -26,8 +26,8 @@ enum class ViewKind : unsigned char {
     field,    // a field: 2D map, 3D surface, 1D profile
     slice,    // a field on slice planes (3D)
     iso,      // isosurfaces (3D) or contour levels (2D)
-    bands,    // the band diagram (1D)
-    profile,  // a field along a 1D device
+    bands,    // the band diagram (1D, or along a cut line)
+    profile,  // a field along a 1D device or a cut line
     iv,       // a sweep's current against the swept bias
     cv,       // a small-signal run's capacitance against the swept bias
     current,  // a transient run's terminal currents against time
@@ -62,6 +62,12 @@ struct ViewSettings {
     std::vector<Slice> slices;
     std::optional<Clip> clip;
     std::vector<double> levels;                  // iso levels
+    // A cut line (Unit 26b, XD5), its ends in um in the device's dimension: the profile and bands views plot
+    // along it (needed in 2D and 3D), and the 2D and 3D device views draw it.
+    struct Cut {
+        std::vector<double> from_um, to_um;
+    };
+    std::optional<Cut> cut;
     std::string contact, sense;                  // curves: the swept and sensed contacts by name
     std::optional<std::size_t> frequency;        // C-V: the frequency index
     bool log = false;                            // curves and profiles: a log y axis

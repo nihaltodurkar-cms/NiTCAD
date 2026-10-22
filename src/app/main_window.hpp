@@ -112,13 +112,19 @@ public:
     [[nodiscard]] HWND child(int id) const noexcept;
     [[nodiscard]] const std::optional<ProbeHit>& probe() const noexcept { return probe_; }
     void probe_at(float x, float y);
+    // The Draw cut line tool (Unit 26b, XD5): the first click sets the line's start, the second its end.
+    void cut_at(float x, float y);
+    // The cut line, shown on the device views and plotted along in the Curves tab (profile or bands); none
+    // removes it.
+    void set_cut(std::optional<ViewSettings::Cut> cut);
+    [[nodiscard]] const std::optional<ViewSettings::Cut>& cut() const noexcept { return cut_; }
 
     // The ids of the inspector's controls and the panes (for the tests).
     enum Control : int {
         id_tree = 4000, id_tabs, id_viewport, id_deck, id_metrics, id_inspector, id_toolbar, id_status, id_start,
         id_run_page, id_results,
         id_view = 5001, id_field, id_point, id_scale, id_colormap, id_contours, id_edges, id_contacts, id_opaque,
-        id_perspective, id_slice_axis, id_slice_at, id_clip, id_clip_box, id_levels, id_apply, id_probe_text,
+        id_perspective, id_slice_axis, id_slice_at, id_clip, id_clip_box, id_levels, id_cut, id_apply, id_probe_text,
         id_first_label = 5100,
     };
 
@@ -207,7 +213,9 @@ private:
     std::optional<Scene> scene_;
     std::vector<double> values_;  // the shown field's values, for probes
     std::optional<ProbeHit> probe_, measure_from_;
-    bool probe_mode_ = true, measure_mode_ = false;
+    bool probe_mode_ = true, measure_mode_ = false, cut_mode_ = false;
+    std::optional<ViewSettings::Cut> cut_;          // Unit 26b, XD5
+    std::optional<std::vector<double>> cut_from_;  // the first click of a cut line, um
     std::optional<render::Renderer> renderer_;
     std::optional<std::string> renderer_error_;
 

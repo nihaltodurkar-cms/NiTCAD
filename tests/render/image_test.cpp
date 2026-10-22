@@ -312,6 +312,24 @@ TEST_CASE("render image: the views match their WARP references (VG4)") {
         REQUIRE(s.has_value());
         check_image(*r.draw(*s, W, H), "band_diagram");
     }
+    SECTION("band diagrams from source to drain along cut lines (Unit 26b, XG4)") {
+        // Under the oxide, through the source pocket, the channel and the drain pocket.
+        const auto c2 = cut_line(g2, {0.0, 0.87e-4, 0.0}, {2e-4, 0.87e-4, 0.0});
+        REQUIRE(c2.has_value());
+        const auto s2 = cut_band_plot(m2.device.mesh(), *c2, m2.point.bands);
+        REQUIRE(s2.has_value());
+        check_image(*r.draw(*s2, W, H), "mosfet2d_cut_bands");
+        const auto c3 = cut_line(g3, {0.0, 0.87e-4, 0.4e-4}, {2e-4, 0.87e-4, 0.4e-4});
+        REQUIRE(c3.has_value());
+        const auto s3 = cut_band_plot(m3.device.mesh(), *c3, m3.point.bands);
+        REQUIRE(s3.has_value());
+        check_image(*r.draw(*s3, W, H), "mosfet3d_cut_bands");
+        // The line drawn through the 3D device.
+        auto solid = solid_view(m3.device, g3);
+        REQUIRE(solid.has_value());
+        add_cut_line(*solid, *c3);
+        check_image(*r.draw(*solid, W, H), "mosfet3d_cut_line");
+    }
     SECTION("I-V plot") {
         analysis::Curve id{{0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6},
                            {2e-15, 4e-13, 9e-11, 2e-8, 4e-6, 6e-5, 2e-4},

@@ -370,6 +370,7 @@ add_library(nitcad_render STATIC
   src/render/scene.cpp
   src/render/vectors.cpp
   src/render/streamlines.cpp
+  src/render/cut_line.cpp
   src/render/renderer.cpp
   src/render/png.cpp
   ${NITCAD_SHADER_HEADERS})
@@ -390,6 +391,7 @@ add_executable(nitcad_render_test
   tests/render/clip_test.cpp
   tests/render/exploded_test.cpp
   tests/render/film_test.cpp
+  tests/render/cut_line_test.cpp
   tests/render/image_test.cpp
   tests/render/window_test.cpp)
 # The image test solves its MOSFETs (tests may use any layer; render itself may not).

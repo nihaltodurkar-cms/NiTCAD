@@ -819,6 +819,25 @@ void add_streamlines(FieldScene& s, std::span<const Streamline> lines, const Rgb
     if (!batch.points.empty()) s.lines.push_back(std::move(batch));
 }
 
+void add_cut_line(FieldScene& s, const CutLine& cut) {
+    const Point d{cut.b[0] - cut.a[0], cut.b[1] - cut.a[1], cut.b[2] - cut.a[2]};
+    const double length = std::sqrt(d[0] * d[0] + d[1] * d[1] + d[2] * d[2]);
+    LineBatch edge{"cut line", {0.0f, 0.0f, 0.0f, 1.0f}, 4.0f, true, {}};
+    for (std::size_t i = 1; i < cut.samples.size(); ++i) {
+        if (cut.samples[i].gap_before) continue;
+        for (const std::size_t k : {i - 1, i}) {
+            const double t = cut.samples[k].distance / length;
+            edge.points.push_back(um({cut.a[0] + t * d[0], cut.a[1] + t * d[1], cut.a[2] + t * d[2]}));
+        }
+    }
+    if (edge.points.empty()) return;
+    LineBatch line = edge;
+    line.color = {1.0f, 1.0f, 1.0f, 1.0f};
+    line.width_px = 2.0f;
+    s.lines.push_back(std::move(edge));
+    s.lines.push_back(std::move(line));
+}
+
 void add_streamlines(FieldScene& s, std::span<const Streamline> lines, const Colorbar& colors) {
     constexpr std::size_t bins = 64;
     std::vector<LineBatch> batch(bins + 1);  // the last for segments without a position
@@ -1144,64 +1163,129 @@ std::expected<PlotScene, base::Error> curve_plot(std::span<const SeriesInput> in
     return p;
 }
 
+namespace {
+
+// One curve of y against x (um), as a profile draws it; a NaN breaks the line.
+std::expected<PlotScene, base::Error> profile_against(std::vector<double> x, std::vector<double> y,
+                                                      std::string x_label, std::string y_label, AxisScale y_scale) {
+    PlotScene p;
+    p.legend = false;
+    Series s;
+    s.color = qualitative[0];
+    s.x = std::move(x);
+    s.y = std::move(y);
+    std::vector<double> xs = s.x, ys = s.y;
+    p.series.push_back(std::move(s));
+    auto xa = make_axis(std::move(x_label), AxisScale::linear, xs);
+    if (!xa) return std::unexpected(std::move(xa.error()));
+    auto ya = make_axis(std::move(y_label), y_scale, ys);
+    if (!ya) return std::unexpected(std::move(ya.error()));
+    p.x = std::move(*xa);
+    p.y = std::move(*ya);
+    return p;
+}
+
+// The four band edges against x (um), as a band diagram draws them.
+std::expected<PlotScene, base::Error> bands_against(const std::vector<double>& x,
+                                                    const std::array<std::vector<double>, 4>& bands,
+                                                    std::string x_label) {
+    PlotScene p;
+    p.title = "Band diagram";
+    constexpr std::array<std::string_view, 4> names{"Ec", "Ev", "EFn", "EFp"};
+    const std::array<Rgb, 4> colors{{{0.12f, 0.47f, 0.71f}, {0.84f, 0.15f, 0.16f},
+                                     {0.17f, 0.63f, 0.17f}, {1.0f, 0.5f, 0.06f}}};
+    std::vector<double> xs, ys;
+    for (std::size_t k = 0; k < bands.size(); ++k) {
+        Series s;
+        s.name = std::string(names[k]);
+        s.color = colors[k];
+        s.x = x;
+        s.y = bands[k];  // NaN on insulators: a gap
+        xs.insert(xs.end(), s.x.begin(), s.x.end());
+        ys.insert(ys.end(), s.y.begin(), s.y.end());
+        p.series.push_back(std::move(s));
+    }
+    auto xa = make_axis(std::move(x_label), AxisScale::linear, xs);
+    if (!xa) return std::unexpected(std::move(xa.error()));
+    auto ya = make_axis("E (eV)", AxisScale::linear, ys);
+    if (!ya) return std::unexpected(std::move(ya.error()));
+    p.x = std::move(*xa);
+    p.y = std::move(*ya);
+    return p;
+}
+
+std::expected<std::array<std::vector<double>, 4>, base::Error> band_parts(const results::BandDiagram& b, std::size_t n) {
+    std::array<std::vector<double>, 4> parts{b.conduction_eV, b.valence_eV, b.electron_fermi_eV, b.hole_fermi_eV};
+    for (const auto& v : parts) {
+        if (v.size() != n) return std::unexpected(invalid("the bands are not one value per mesh node", v.size()));
+    }
+    return parts;
+}
+
+std::vector<double> node_x_um(const mesh::Mesh& m) {
+    std::vector<double> x;
+    for (const Point& p : m.points()) x.push_back(p[0] * um_per_cm);
+    return x;
+}
+
+// The distance (um) at each sample, with a NaN point where the line runs outside the mesh, and the values
+// to go with them.
+std::vector<double> cut_x_um(const CutLine& cut) {
+    std::vector<double> x;
+    for (std::size_t i = 0; i < cut.samples.size(); ++i) {
+        if (cut.samples[i].gap_before) x.push_back(0.5 * (cut.samples[i - 1].distance + cut.samples[i].distance) * um_per_cm);
+        x.push_back(cut.samples[i].distance * um_per_cm);
+    }
+    return x;
+}
+
+std::vector<double> cut_y(const CutLine& cut, std::span<const double> field) {
+    const std::vector<double> v = cut_values(cut, field);
+    std::vector<double> y;
+    for (std::size_t i = 0; i < cut.samples.size(); ++i) {
+        if (cut.samples[i].gap_before) y.push_back(std::numeric_limits<double>::quiet_NaN());
+        y.push_back(v[i]);
+    }
+    return y;
+}
+
+constexpr const char* distance_label = "distance (\xC2\xB5m)";
+
+}  // namespace
+
 std::expected<PlotScene, base::Error> profile_plot(const mesh::Mesh& m, std::span<const double> values,
                                                    std::string y_label, AxisScale y_scale) {
     if (m.dimension() != 1) return std::unexpected(invalid("a profile needs a 1D mesh"));
     if (values.size() != m.node_count()) {
         return std::unexpected(invalid("the field is not one value per mesh node", values.size()));
     }
-    PlotScene p;
-    p.legend = false;
-    Series s;
-    s.color = qualitative[0];
-    for (std::size_t i = 0; i < values.size(); ++i) {
-        s.x.push_back(m.points()[i][0] * um_per_cm);
-        s.y.push_back(values[i]);
-    }
-    std::vector<double> xs = s.x, ys = s.y;
-    p.series.push_back(std::move(s));
-    auto x = make_axis("x (\xC2\xB5m)", AxisScale::linear, xs);
-    if (!x) return std::unexpected(std::move(x.error()));
-    auto y = make_axis(std::move(y_label), y_scale, ys);
-    if (!y) return std::unexpected(std::move(y.error()));
-    p.x = std::move(*x);
-    p.y = std::move(*y);
-    return p;
+    return profile_against(node_x_um(m), {values.begin(), values.end()}, "x (\xC2\xB5m)", std::move(y_label), y_scale);
 }
 
 std::expected<PlotScene, base::Error> band_plot(const mesh::Mesh& m, const results::BandDiagram& b) {
     if (m.dimension() != 1) return std::unexpected(invalid("a band diagram needs a 1D mesh"));
-    const std::size_t n = m.node_count();
-    for (const auto* v : {&b.conduction_eV, &b.valence_eV, &b.electron_fermi_eV, &b.hole_fermi_eV}) {
-        if (v->size() != n) return std::unexpected(invalid("the bands are not one value per mesh node", v->size()));
+    auto parts = band_parts(b, m.node_count());
+    if (!parts) return std::unexpected(std::move(parts.error()));
+    return bands_against(node_x_um(m), *parts, "x (\xC2\xB5m)");
+}
+
+std::expected<PlotScene, base::Error> cut_plot(const mesh::Mesh& m, const CutLine& cut, std::span<const double> values,
+                                               std::string y_label, AxisScale y_scale) {
+    if (values.size() != m.node_count()) {
+        return std::unexpected(invalid("the field is not one value per mesh node", values.size()));
     }
-    PlotScene p;
-    p.title = "Band diagram";
-    const std::array<std::pair<const std::vector<double>*, std::string_view>, 4> parts{
-        {{&b.conduction_eV, "Ec"}, {&b.valence_eV, "Ev"}, {&b.electron_fermi_eV, "EFn"},
-         {&b.hole_fermi_eV, "EFp"}}};
-    const std::array<Rgb, 4> colors{{{0.12f, 0.47f, 0.71f}, {0.84f, 0.15f, 0.16f},
-                                     {0.17f, 0.63f, 0.17f}, {1.0f, 0.5f, 0.06f}}};
-    std::vector<double> xs, ys;
-    for (std::size_t k = 0; k < parts.size(); ++k) {
-        Series s;
-        s.name = std::string(parts[k].second);
-        s.color = colors[k];
-        for (std::size_t i = 0; i < n; ++i) {
-            s.x.push_back(m.points()[i][0] * um_per_cm);
-            s.y.push_back((*parts[k].first)[i]);  // NaN on insulators: a gap
-        }
-        xs.insert(xs.end(), s.x.begin(), s.x.end());
-        ys.insert(ys.end(), s.y.begin(), s.y.end());
-        p.series.push_back(std::move(s));
-    }
-    auto x = make_axis("x (\xC2\xB5m)", AxisScale::linear, xs);
-    if (!x) return std::unexpected(std::move(x.error()));
-    auto y = make_axis("E (eV)", AxisScale::linear, ys);
-    if (!y) return std::unexpected(std::move(y.error()));
-    p.x = std::move(*x);
-    p.y = std::move(*y);
-    return p;
+    if (cut.samples.empty()) return std::unexpected(invalid("the cut line misses the device"));
+    return profile_against(cut_x_um(cut), cut_y(cut, values), distance_label, std::move(y_label), y_scale);
+}
+
+std::expected<PlotScene, base::Error> cut_band_plot(const mesh::Mesh& m, const CutLine& cut,
+                                                    const results::BandDiagram& b) {
+    auto parts = band_parts(b, m.node_count());
+    if (!parts) return std::unexpected(std::move(parts.error()));
+    if (cut.samples.empty()) return std::unexpected(invalid("the cut line misses the device"));
+    std::array<std::vector<double>, 4> along;
+    for (std::size_t k = 0; k < 4; ++k) along[k] = cut_y(cut, (*parts)[k]);
+    return bands_against(cut_x_um(cut), along, distance_label);
 }
 
 }  // namespace NiTCAD::render

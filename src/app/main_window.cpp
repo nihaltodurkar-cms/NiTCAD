@@ -58,8 +58,11 @@ std::string number(double v) {
     return std::format("{:.4g}", v);
 }
 
-// The views a tab offers: the device tab the field views, the curves tab the plots.
-bool belongs(ViewKind k, int tab) { return (tab == MainWindow::tab_curves) == (is_plot(k) && k != ViewKind::profile); }
+// The views a tab offers: the device tab the field views (and a 1D profile), the curves tab the plots (in 2D and
+// 3D the profile along a cut line too).
+bool belongs(ViewKind k, int tab, int dimension) {
+    return (tab == MainWindow::tab_curves) == (is_plot(k) && (k != ViewKind::profile || dimension > 1));
+}
 
 HWND make(const wchar_t* cls, const wchar_t* text, DWORD style, HWND parent, int id, DWORD ex = 0) {
     return CreateWindowExW(ex, cls, text, style | WS_CHILD, 0, 0, 10, 10, parent,
@@ -144,7 +147,8 @@ bool MainWindow::create_children() {
                               {Command::check, L"Check", false},       {Command::run, L"Run", false},
                               {Command::stop, L"Stop", false},         {Command{}, nullptr, false},
                               {Command::fit, L"Fit", false},           {Command::probe_mode, L"Probe", true},
-                              {Command::measure_mode, L"Measure", true}, {Command::perspective, L"Perspective", true}};
+                              {Command::measure_mode, L"Measure", true}, {Command::cut_line_mode, L"Cut line", true},
+                              {Command::perspective, L"Perspective", true}};
     for (const Button& b : buttons) {
         TBBUTTON t{};
         t.iBitmap = I_IMAGENONE;
@@ -201,6 +205,7 @@ bool MainWindow::create_children() {
     make(L"BUTTON", L"C&lipping box (µm)", WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX, inspector_, id_clip);
     make(L"EDIT", L"", WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL, inspector_, id_clip_box, WS_EX_CLIENTEDGE);
     labelled(L"Iso levels", L"EDIT", ES_AUTOHSCROLL, id_levels);
+    labelled(L"Cut line (µm)", L"EDIT", ES_AUTOHSCROLL, id_cut);
     make(L"BUTTON", L"&Apply", WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON, inspector_, id_apply);
     make(L"STATIC", L"", WS_VISIBLE | SS_LEFT, inspector_, id_probe_text);
     combo_fill(child(id_scale), {scale_names.begin(), scale_names.end()}, 0);
@@ -348,6 +353,7 @@ void MainWindow::update_command_states() {
     };
     check(Command::probe_mode, probe_mode_);
     check(Command::measure_mode, measure_mode_);
+    check(Command::cut_line_mode, cut_mode_);
     check(Command::perspective, settings().perspective);
 }
 
@@ -437,6 +443,8 @@ void MainWindow::layout_inspector() {
     put(id_clip_box, row);
     put_label();
     put(id_levels, row);
+    put_label();
+    put(id_cut, row);
     MoveWindow(child(id_apply), pad, y, scaled(80, dpi_), row + gap, TRUE);
     y += row + 2 * gap;
     MoveWindow(child(id_probe_text), pad, y, w, std::max<int>(r.bottom - y - pad, 0), TRUE);
@@ -534,7 +542,7 @@ void MainWindow::default_settings() {
             curve_view_.kind = k;
             break;
         }
-        if (k == ViewKind::bands) curve_view_.kind = k;
+        if (k == ViewKind::bands && dim == 1) curve_view_.kind = k;  // 2D and 3D: only along a cut line
     }
     if (curve_view_.kind == ViewKind::iv && workspace_->sweep) {
         // The current of the contact carrying the most (a gate sweep's drain), on a log axis.
@@ -555,6 +563,9 @@ void MainWindow::set_workspace(Workspace w, bool keep_settings) {
     prober_.emplace(*workspace_);
     probe_.reset();
     measure_from_.reset();
+    cut_from_.reset();
+    // A cut line stays while the device keeps its dimension (a run of the deck it was drawn on).
+    if (cut_ && cut_->from_um.size() != static_cast<std::size_t>(workspace_->device->mesh().dimension())) cut_.reset();
     if (!keep_settings) default_settings();
     fill_tree();
     sync_inspector();
@@ -577,7 +588,11 @@ void MainWindow::refresh() {
         return;
     }
     ViewSettings& s = settings();
-    auto scene = build_scene(*workspace_, s);
+    // The cut line where the view uses it: plotted along, or drawn on a 2D or 3D device view.
+    ViewSettings shown = s;
+    const bool along = s.kind == ViewKind::profile || s.kind == ViewKind::bands;
+    if (along || (!is_plot(s.kind) && workspace_->device->mesh().dimension() > 1)) shown.cut = cut_;
+    auto scene = build_scene(*workspace_, shown);
     if (!scene) {
         viewport_->show_message(scene.error().message);
         update_metrics();
@@ -646,7 +661,7 @@ void MainWindow::sync_inspector() {
     int selected = 0;
     if (workspace_) {
         for (const ViewKind k : available_views(*workspace_)) {
-            if (!belongs(k, tab_)) continue;
+            if (!belongs(k, tab_, workspace_->device->mesh().dimension())) continue;
             if (k == s.kind) selected = static_cast<int>(views.size());
             views.emplace_back(to_string(k));
         }
@@ -682,6 +697,13 @@ void MainWindow::sync_inspector() {
     std::string levels;
     for (const double v : s.levels) levels += (levels.empty() ? "" : ",") + std::format("{}", v);
     win32::set_text(child(id_levels), levels);
+    std::string cut;
+    if (cut_) {
+        for (const double v : cut_->from_um) cut += (cut.empty() ? "" : ",") + std::format("{}", v);
+        cut += ":";
+        for (std::size_t k = 0; k < cut_->to_um.size(); ++k) cut += (k ? "," : "") + std::format("{}", cut_->to_um[k]);
+    }
+    win32::set_text(child(id_cut), cut);
 }
 
 // A slice view starts with a plane through the middle of the device along z, an iso view with a level.
@@ -705,7 +727,8 @@ void MainWindow::on_inspector(int id, int code) {
     const bool clicked = code == BN_CLICKED;
     if (id == id_view && selection) {
         std::vector<ViewKind> kinds;
-        for (const ViewKind k : available_views(*workspace_)) if (belongs(k, tab_)) kinds.push_back(k);
+        const int dim = workspace_->device->mesh().dimension();
+        for (const ViewKind k : available_views(*workspace_)) if (belongs(k, tab_, dim)) kinds.push_back(k);
         const int k = combo_index(child(id_view));
         if (k >= 0 && k < static_cast<int>(kinds.size())) s.kind = kinds[static_cast<std::size_t>(k)];
         view_defaults(s);
@@ -751,6 +774,25 @@ void MainWindow::on_inspector(int id, int code) {
         }
         s.levels.clear();
         s.levels = numbers(win32::text_of(child(id_levels)));
+        // The cut line typed: "<x0>,<y0>[,<z0>]:<x1>,<y1>[,<z1>]" in um; empty removes it.
+        const std::string typed = win32::text_of(child(id_cut));
+        const auto colon = typed.find(':');
+        const std::size_t dim = static_cast<std::size_t>(workspace_->device->mesh().dimension());
+        const std::vector<double> a = colon == std::string::npos ? std::vector<double>{} : numbers(typed.substr(0, colon));
+        const std::vector<double> b = colon == std::string::npos ? std::vector<double>{} : numbers(typed.substr(colon + 1));
+        if (typed.find_first_not_of(" \t") == std::string::npos) {
+            if (cut_) {
+                set_cut(std::nullopt);
+                return;
+            }
+        } else if (a.size() == dim && b.size() == dim && a != b) {
+            if (!cut_ || cut_->from_um != a || cut_->to_um != b) {
+                set_cut(ViewSettings::Cut{a, b});
+                return;
+            }
+        } else {
+            set_status(status_state, "A cut line is <x0>,<y0>[,<z0>]:<x1>,<y1>[,<z1>] in µm, in the device's dimension.");
+        }
     } else {
         return;
     }
@@ -814,7 +856,7 @@ void MainWindow::on_tree_selection(LPARAM data) {
         const auto kinds = available_views(*workspace_);
         if (index >= static_cast<int>(kinds.size())) return;
         const ViewKind k = kinds[static_cast<std::size_t>(index)];
-        const int tab = belongs(k, tab_curves) ? tab_curves : tab_view;
+        const int tab = belongs(k, tab_curves, workspace_->device->mesh().dimension()) ? tab_curves : tab_view;
         (tab == tab_curves ? curve_view_ : device_view_).kind = k;
         tab_ = tab;
         view_defaults(tab == tab_curves ? curve_view_ : device_view_);
@@ -864,6 +906,7 @@ bool MainWindow::open_deck(const fs::path& path) {
     state_.add_recent(path);
     update_title();
     workspace_.reset();
+    cut_.reset();
     prober_.reset();
     scene_.reset();
     fill_tree();
@@ -883,6 +926,7 @@ bool MainWindow::open_result(const fs::path& result, const fs::path& device, con
         return false;
     }
     state_.add_recent(result);
+    cut_.reset();  // drawn on another device
     set_workspace(std::move(*w));
     set_status(status_state, "Opened " + result.filename().string());
     select_tab(tab_view);
@@ -1187,13 +1231,23 @@ void MainWindow::execute(Command c) {
         return;
     case Command::probe_mode:
         probe_mode_ = !probe_mode_;
-        if (probe_mode_) measure_mode_ = false;
+        if (probe_mode_) measure_mode_ = cut_mode_ = false;
         update_command_states();
         return;
     case Command::measure_mode:
         measure_mode_ = !measure_mode_;
-        if (measure_mode_) probe_mode_ = false;
+        if (measure_mode_) probe_mode_ = cut_mode_ = false;
         measure_from_.reset();
+        update_command_states();
+        return;
+    case Command::cut_line_mode:
+        cut_mode_ = !cut_mode_;
+        if (cut_mode_) probe_mode_ = measure_mode_ = false;
+        cut_from_.reset();
+        if (cut_mode_) {
+            if (tab_ != tab_view) select_tab(tab_view);
+            set_status(status_state, "Draw cut line: click the line's start, then its end.");
+        }
         update_command_states();
         return;
     case Command::next_tab: select_tab((tab_ + 1) % tab_count); return;
@@ -1270,7 +1324,66 @@ void MainWindow::probe_at(float x, float y) {
 }
 
 void MainWindow::viewport_click(float x, float y) {
-    if (probe_mode_ || measure_mode_) probe_at(x, y);
+    if (cut_mode_) cut_at(x, y);
+    else if (probe_mode_ || measure_mode_) probe_at(x, y);
+}
+
+void MainWindow::cut_at(float x, float y) {
+    if (!scene_ || !prober_ || !workspace_) return;
+    const auto* f = std::get_if<render::FieldScene>(&*scene_);
+    if (!f) return;
+    const auto p = prober_->point_at(*f, viewport_->width(), viewport_->height(), x, y);
+    if (!p) {
+        set_status(status_state, "No point of the device there.");
+        return;
+    }
+    // To the nanometre, as typed.
+    std::vector<double> at;
+    for (int k = 0; k < workspace_->device->mesh().dimension(); ++k) {
+        at.push_back(std::round((*p)[static_cast<std::size_t>(k)] * 1e3) / 1e3);
+    }
+    const auto point = [](const std::vector<double>& v) {
+        std::string t;
+        for (const double c : v) t += (t.empty() ? "" : ", ") + format_um(c);
+        return "(" + t + ") µm";
+    };
+    if (!cut_from_) {
+        cut_from_ = at;
+        const std::string text = "Cut line from " + point(at) + "\nClick its end.";
+        win32::set_text(child(id_probe_text), text);
+        set_status(status_state, text.substr(0, text.find('\n')));
+        return;
+    }
+    ViewSettings::Cut c{*cut_from_, at};
+    cut_from_.reset();
+    if (c.from_um == c.to_um) {
+        set_status(status_state, "The cut line's ends are the same point: click its start again.");
+        return;
+    }
+    win32::set_text(child(id_probe_text), "Cut line from " + point(c.from_um) + "\nto " + point(c.to_um));
+    set_cut(std::move(c));
+}
+
+void MainWindow::set_cut(std::optional<ViewSettings::Cut> cut) {
+    cut_ = std::move(cut);
+    cut_from_.reset();
+    if (!workspace_) return;
+    if (cut_ && workspace_->device->mesh().dimension() > 1) {
+        // Plotted along in the Curves tab: the band diagram once solved, else the doping.
+        if (workspace_->has_results()) {
+            curve_view_.kind = ViewKind::bands;
+        } else {
+            curve_view_.kind = ViewKind::profile;
+            curve_view_.field = "doping";
+        }
+        curve_view_.point = device_view_.point;
+        set_status(status_state, std::string("Cut line drawn: its ") +
+                                     (workspace_->has_results() ? "band diagram" : "doping") + " is in the Curves tab.");
+        select_tab(tab_curves);  // draws it
+        return;
+    }
+    sync_inspector();
+    refresh();
 }
 
 void MainWindow::viewport_hover(float x, float y) {

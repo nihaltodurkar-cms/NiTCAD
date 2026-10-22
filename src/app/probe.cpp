@@ -60,6 +60,25 @@ std::optional<ProbeHit> Prober::pick(const render::FieldScene& scene, int width,
     return best;
 }
 
+std::optional<std::array<double, 3>> Prober::point_at(const render::FieldScene& scene, int width, int height, float x,
+                                                      float y, float radius_px) const {
+    if (dimension_ == 3) {
+        const auto hit = pick(scene, width, height, x, y, {}, radius_px);
+        if (!hit) return std::nullopt;
+        return hit->position_um;
+    }
+    if (dimension_ != 2) return std::nullopt;
+    // The view of the plane is affine: invert it from where the origin and the unit points land.
+    const render::ScreenPoint o = render::screen_position(scene, width, height, {0.0f, 0.0f, 0.0f});
+    const render::ScreenPoint ex = render::screen_position(scene, width, height, {1.0f, 0.0f, 0.0f});
+    const render::ScreenPoint ey = render::screen_position(scene, width, height, {0.0f, 1.0f, 0.0f});
+    const double a = ex.x - o.x, b = ey.x - o.x, c = ex.y - o.y, d = ey.y - o.y;
+    const double det = a * d - b * c;
+    if (det == 0.0) return std::nullopt;
+    const double rx = x - o.x, ry = y - o.y;
+    return std::array<double, 3>{(rx * d - b * ry) / det, (a * ry - rx * c) / det, 0.0};
+}
+
 double distance_um(const ProbeHit& a, const ProbeHit& b) noexcept {
     const double dx = a.position_um[0] - b.position_um[0], dy = a.position_um[1] - b.position_um[1],
                  dz = a.position_um[2] - b.position_um[2];

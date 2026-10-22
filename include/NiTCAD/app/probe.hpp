@@ -34,6 +34,10 @@ public:
     [[nodiscard]] std::optional<ProbeHit> pick(const render::FieldScene& scene, int width, int height, float x,
                                                float y, std::span<const double> values = {},
                                                float radius_px = 12.0f) const;
+    // A point of the device under the pixel, um (Unit 26b, a cut line's ends): in 2D the point itself, anywhere
+    // in the view's plane; in 3D the front-most surface node within the radius (as pick).
+    [[nodiscard]] std::optional<std::array<double, 3>> point_at(const render::FieldScene& scene, int width, int height,
+                                                                float x, float y, float radius_px = 12.0f) const;
 
 private:
     const mesh::Mesh* mesh_ = nullptr;

@@ -3245,6 +3245,66 @@ built.**
   26·3 record: 39 ms). The self-test makes no edit, so the live checker does not run in it; the gap is recorded as
   an outlier of the Debug build on WARP. The clean-worktree suites at this commit are recorded with 26b·2.
 
+**Commit 26b·2 (cut lines; XD5, XG4, XG7), as built.**
+- `render/cut_line.hpp`: `cut_line(geometry, a, b)` — per element (after a bounding-box test), the barycentric weights
+  at a and b (Cramer, as `Locator`), affine along the line, give the interval where all are non-negative; a weight
+  changing by at most 1e-10 over the line is parallel to its face (a line on a face reads both elements); the
+  intervals, sorted, are joined into samples at the crossings (one where two elements meet, a `gap_before` mark
+  where the line re-enters the mesh); weights below 1e-12 are zero and the rest renormalised, so a sample on a node
+  reads that node exactly. `cut_values` reads a nodal field, skipping nodes of zero weight (a NaN on an insulator node
+  leaves the faces away from it defined).
+- `scene.hpp`: `cut_plot` and `cut_band_plot` (against "distance (µm)", a NaN point at each gap), sharing
+  `profile_plot`'s and `band_plot`'s code (their output unchanged: the references pass); `add_cut_line` (the parts
+  inside the mesh, a white 2 px line over a black 4 px one, on top of everything, so in 3D it shows through the
+  device).
+- `ViewSettings::cut` (ends in µm, in the device's dimension): the profile and bands views plot along it (needed in 2D
+  and 3D), the 2D and 3D solid, mesh, field, slice and iso views draw it, any other view refuses it; 2D and 3D
+  workspaces now offer the profile and bands views; `plot_arguments` gives `--cut`.
+- **Deviation (owner's record): `nitcad plot --cut <x0>,<y0>[,<z0>]:<x1>,<y1>[,<z1>]`** with the same rules and
+  messages. XD5 places cut lines "in the window", but VA4 has every window view drawn as `nitcad plot` draws it and
+  the WG4 test compares the two images; without the option the window's cut views could not be checked that way.
+  The seeds' segment parser became the shared `segment_um`. Also in both: a profile of the doping no longer needs
+  results (it never used them), so a cut line on an unsolved deck plots its doping.
+- The window: View > Draw cut line (Ctrl+Shift+L, a toolbar button), exclusive with Probe and Measure; two clicks on
+  the device view — in 2D the point itself (`Prober::point_at` inverts the view's affine map), **in 3D the front-most
+  surface node within 12 px (as Probe), not any point of the surface (a deviation from XD5's "front-most surface
+  point": a node is what the view can pick reliably)** — rounded to the nanometre; the Curves tab then shows the band
+  diagram along it, or the doping before a run. The inspector's "Cut line (µm)" field types or clears it (Apply). One
+  cut line per window, kept while the device keeps its dimension (a run of the deck), cleared when a deck or result
+  is opened. The Curves tab offers the profile in 2D and 3D; it starts on a band diagram only in 1D.
+- **Tests:** `cut_line_test` (6 cases) — a linear field read to 1e-12 at every sample of tensor and generated meshes
+  in 2D and 3D; the samples equal the crossings found independently by intersecting the segment with every element
+  face (segment–edge in 2D, Möller–Trumbore in 3D); a horizontal line across a row of cells: 21 samples (11 faces, 10
+  diagonals); lines along grid lines and through nodes: the nodes only; along a 1D device the cut band diagram equals
+  `band_plot` (x to 1e-12 µm, y exactly, NaN where NaN); a U-shaped mesh: the line enters at x = 0, leaves at 1 µm,
+  re-enters at 2 µm with one gap, the plot broken there, the overlay without the gap; refusals. **WARP references**
+  (`mosfet2d_cut_bands`, `mosfet3d_cut_bands`, `mosfet3d_cut_line`): source to drain 0.05 µm under the oxide.
+  `view_settings_test`: errors as `nitcad plot` reports them; the scene equals render's; the doping without results;
+  the 2D MOSFET's band diagram, a profile of n across the oxide and a map with the line **equal to `nitcad plot`'s
+  PNGs to the bit**. `run_test`: the option, the line changing the map, the refusals. The window: a typed line on the
+  unsolved deck (the doping, the profile offered), kept through a run; drawn by two clicks within 0.01 µm and
+  rounded to the nanometre; the band diagram in the Curves tab and the line on the map; typed, malformed, cleared;
+  Probe leaving the tool; a 3D preview's line between the surface nodes the clicks pick. `probe_test`: the point
+  under a pixel of a 2D view, as the window draws it (zoomed, panned) and from a turned and tilted camera.
+- **Mutation checks (Release):** 27 of 27 caught — render 11 (no parallel case, covered pieces repeated, no gap,
+  weights not snapped, not normalised, the box test excluding touching elements, zero weights read, equal ends
+  taken, no NaN point at a gap, the overlay drawn across a gap, cut bands labelled x), app 6 (a device view without
+  the line, 2D bands without a line, bands ignoring the line, `plot_arguments` repeating the start, no 2D profile
+  view, the end's dimension unchecked), CLI 1 (`nitcad plot` without the line), window 9 (the Curves tab without the
+  2D profile, a device view without the line, clicks ignoring the tool, ends not rounded, the Curves tab not shown,
+  a run dropping the line, an unsolved line plotting the potential, the 2D inverse transposed, 3D picking nothing).
+  Two survived at first and gained tests: the transposed 2D inverse (every 2D view the window builds looks straight
+  down, where the swapped terms are zero — killed by the tilted camera in `probe_test`) and the end's dimension
+  (killed by a cut whose start alone is right). A first run whose test filter matched no test was discarded; the
+  mutation script now refuses such a filter and stops if it cannot restore a file.
+- **Suites:** in the working tree, Release: render (67 cases, 109,200 assertions, the three references), app, the
+  CLI cut test and the window tests pass, no warnings under `/W4 /WX`; Debug: render (67 cases, 696 s), app (123 s),
+  the CLI and the 26b window tests (29 s) pass. Debug render tests on WARP must run alone: run beside other D3D
+  tests they failed to create a device (0x887A0007). The clean-worktree suites at 26b·1 (3077ce4): Release 27 of 27
+  (990 s); Debug 19 of 19 — render failed once beside the mutation runs (the device error above) and passed run
+  alone (61 cases, 658 s); app 110 s, window 297 s. The clean-worktree suites at this commit are recorded with
+  26b·3.
+
 **Not in Unit 26b (VA7 and later):** form editors that write the deck, project management, remote runs, plugins,
 localization, an installer; completion of region parameter paths; more than two runs compared at once.
 

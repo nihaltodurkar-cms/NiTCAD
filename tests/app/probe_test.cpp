@@ -6,6 +6,7 @@
 #include <cmath>
 #include <filesystem>
 #include <string>
+#include <utility>
 
 #include "NiTCAD/app/probe.hpp"
 #include "NiTCAD/app/view_settings.hpp"
@@ -83,6 +84,35 @@ TEST_CASE("app probe: the node under a pixel in 2D, its value; the distance betw
     REQUIRE(h1);
     CHECK(std::isnan(h0->value));  // no values given
     CHECK_THAT(app::distance_um(*h0, *h1), WithinAbs(std::sqrt(5.0), 1e-12));
+}
+
+TEST_CASE("app probe 26b: the point of a 2D view under a pixel, from any camera (XD5)", "[app]") {
+    const app::Workspace w = unrun("point2d", app_test::mosfet2d);
+    const app::Prober prober(w);
+    app::ViewSettings s;
+    s.zoom = 1.7f;
+    s.pan_x = 0.2f;
+    auto scene = app::build_scene(w, s);
+    REQUIRE(scene);
+    auto f = std::get<render::FieldScene>(*scene);
+    constexpr int W = 800, H = 600;
+    // The view the window draws (looking down -z, zoomed and panned), then one turned and tilted:
+    // there each screen coordinate depends on both x and y, so the whole inverse is needed.
+    for (const auto [azimuth, elevation] : {std::pair{0.0f, 0.0f}, std::pair{30.0f, 40.0f}}) {
+        f.camera.azimuth_deg = azimuth;
+        f.camera.elevation_deg = elevation;
+        for (const auto [x, y] : {std::pair{0.0f, 0.0f}, std::pair{1.3f, 0.87f}, std::pair{2.0f, 0.25f}}) {
+            const auto at = render::screen_position(f, W, H, {x, y, 0.0f});
+            const auto p = prober.point_at(f, W, H, at.x, at.y);
+            REQUIRE(p);
+            CHECK_THAT((*p)[0], WithinAbs(x, 1e-4));
+            CHECK_THAT((*p)[1], WithinAbs(y, 1e-4));
+            CHECK((*p)[2] == 0.0);
+        }
+    }
+    // A 1D device has no point under a pixel.
+    const app::Workspace d = unrun("point1d", app_test::diode_sweep());
+    CHECK_FALSE(app::Prober(d).point_at(f, W, H, 400.0f, 300.0f));
 }
 
 TEST_CASE("app probe: 3D picks the front-most boundary node", "[app]") {

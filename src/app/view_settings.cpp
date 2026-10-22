@@ -100,6 +100,27 @@ std::expected<Scene, base::Error> build_scene(const Workspace& w, const ViewSett
         }
         view.clip = b;
     }
+    // A cut line (Unit 26b, XD5): plotted along by the profile and bands views, drawn on 2D and 3D device views.
+    std::optional<CutLine> cut;
+    if (o.cut) {
+        const bool device_view = o.kind == ViewKind::solid || o.kind == ViewKind::mesh || o.kind == ViewKind::field ||
+                                 o.kind == ViewKind::slice || o.kind == ViewKind::iso;
+        if (o.kind != ViewKind::profile && o.kind != ViewKind::bands && !(device_view && m.dimension() >= 2)) {
+            return std::unexpected(invalid("a cut line applies to the profile and bands views and to 2D and 3D device views"));
+        }
+        const auto dim = static_cast<std::size_t>(m.dimension());
+        if (o.cut->from_um.size() != dim || o.cut->to_um.size() != dim) {
+            return std::unexpected(invalid("a cut line needs its end points in the device's dimension"));
+        }
+        Point a{}, b{};
+        for (std::size_t k = 0; k < dim; ++k) {
+            a[k] = o.cut->from_um[k] * 1e-4;
+            b[k] = o.cut->to_um[k] * 1e-4;
+        }
+        auto c = cut_line(geometry, a, b);
+        if (!c) return std::unexpected(std::move(c.error()));
+        cut = std::move(*c);
+    }
     view.transparent_insulators = !o.opaque;
     view.projection = o.perspective ? Projection::perspective : Projection::orthographic;
     if (o.azimuth) view.azimuth_deg = *o.azimuth;
@@ -155,7 +176,10 @@ std::expected<Scene, base::Error> build_scene(const Workspace& w, const ViewSett
     const auto wrap = [&](auto&& s) -> std::expected<Scene, base::Error> {
         if (!s) return std::unexpected(std::move(s.error()));
         Scene scene(std::move(*s));
-        if (auto* f = std::get_if<FieldScene>(&scene)) apply_camera(*f, o);
+        if (auto* f = std::get_if<FieldScene>(&scene)) {
+            if (cut) add_cut_line(*f, *cut);
+            apply_camera(*f, o);
+        }
         return scene;
     };
 
@@ -197,12 +221,20 @@ std::expected<Scene, base::Error> build_scene(const Workspace& w, const ViewSett
     }
     case ViewKind::profile:
     case ViewKind::bands: {
-        auto p = pick();
-        if (!p) return std::unexpected(std::move(p.error()));
-        if (o.kind == ViewKind::bands) return wrap(band_plot(m, (*p)->bands));
+        if (m.dimension() != 1 && !cut) {
+            return std::unexpected(invalid("--view " + std::string(to_string(o.kind)) + " in 2D and 3D needs --cut"));
+        }
+        if (o.kind == ViewKind::bands) {
+            auto p = pick();
+            if (!p) return std::unexpected(std::move(p.error()));
+            return wrap(cut ? cut_band_plot(m, *cut, (*p)->bands) : band_plot(m, (*p)->bands));
+        }
+        // A profile of the doping needs no results.
         auto v = values_for();
         if (!v) return std::unexpected(std::move(v.error()));
-        return wrap(profile_plot(m, *v, std::string(field_info(*field).title), o.log ? AxisScale::log10 : AxisScale::linear));
+        const AxisScale y = o.log ? AxisScale::log10 : AxisScale::linear;
+        std::string title(field_info(*field).title);
+        return wrap(cut ? cut_plot(m, *cut, *v, std::move(title), y) : profile_plot(m, *v, std::move(title), y));
     }
     case ViewKind::iv:
     case ViewKind::cv:
@@ -269,6 +301,9 @@ std::vector<ViewKind> available_views(const Workspace& w) {
     if (dim == 3 && elements) out.push_back(ViewKind::slice);
     if (dim >= 2 && elements && w.has_results()) out.push_back(ViewKind::iso);
     if (dim == 1 && w.has_results()) out.push_back(ViewKind::bands);
+    // Along a cut line (Unit 26b, XD5).
+    if (dim >= 2 && elements) out.push_back(ViewKind::profile);
+    if (dim >= 2 && elements && w.has_results()) out.push_back(ViewKind::bands);
     if (w.sweep && w.sweep->points.size() >= 2) out.push_back(ViewKind::iv);
     if (w.small_signal && w.small_signal->points.size() >= 2) out.push_back(ViewKind::cv);
     if (w.transient && w.transient->points.size() >= 2) out.push_back(ViewKind::current);
@@ -372,6 +407,14 @@ std::vector<std::string> plot_arguments(const ViewSettings& s) {
     if (!s.sense.empty()) a.insert(a.end(), {"--sense", s.sense});
     if (s.frequency) a.insert(a.end(), {"--frequency", std::to_string(*s.frequency)});
     if (s.log) a.emplace_back("--log");
+    if (s.cut) {
+        const auto end = [](const std::vector<double>& v) {
+            std::string t;
+            for (const double x : v) t += (t.empty() ? "" : ",") + std::format("{}", x);
+            return t;
+        };
+        a.insert(a.end(), {"--cut", end(s.cut->from_um) + ":" + end(s.cut->to_um)});
+    }
     return a;
 }
 

@@ -3,7 +3,7 @@
 //
 // A FieldScene is triangles and line segments in world coordinates, in micrometres (the mesh's cm
 // times 1e4), with a camera, an optional colorbar and an axis triad: the 2D maps and the 3D views.
-// A PlotScene is curves on two axes: field profiles of 1D devices, band diagrams and Unit 24's
+// A PlotScene is curves on two axes: field profiles of 1D devices and along cut lines, band diagrams and Unit 24's
 // curves (I-V, C-V, admittance against frequency, transients).
 //
 // Field triangles carry, per vertex, the colormap position of the value (ColorScale::position), so
@@ -26,6 +26,7 @@
 #include "NiTCAD/base/error.hpp"
 #include "NiTCAD/device/device.hpp"
 #include "NiTCAD/render/color.hpp"
+#include "NiTCAD/render/cut_line.hpp"
 #include "NiTCAD/render/geometry.hpp"
 #include "NiTCAD/render/streamlines.hpp"
 #include "NiTCAD/results/solution.hpp"
@@ -253,6 +254,9 @@ void add_arrows(FieldScene& scene, std::span<const Arrow> arrows, double length,
 // The 3D boundary faces not wholly on a contact: those the contact slabs leave in view (arrow sites).
 [[nodiscard]] std::vector<Polygon> exposed_boundary(const device::Device& device, const Geometry& geometry);
 void add_arrows(FieldScene& scene, std::span<const Arrow> arrows, double length, const Colorbar& colors);
+// A cut line (cut_line.hpp; Unit 26b, XD5) drawn on a 2D or 3D scene: its parts inside the mesh, white edged
+// in black, over everything (in 3D it shows through the device). The scene's bounds are kept.
+void add_cut_line(FieldScene& scene, const CutLine& cut);
 // The context for 3D streamlines: the device's faint translucent outline and the contacts. Errors as
 // solid_view, and (invalid_input) a 2D geometry.
 [[nodiscard]] std::expected<FieldScene, base::Error> outline_view(const device::Device& device,
@@ -340,5 +344,13 @@ struct SeriesInput {
 // gaps). Errors (invalid_input): not a 1D mesh, or bands not one per node.
 [[nodiscard]] std::expected<PlotScene, base::Error> band_plot(const mesh::Mesh& mesh,
                                                              const results::BandDiagram& bands);
+// Along a cut line (cut_line.hpp; Unit 26b, XD5), against the distance from its start in um, broken where
+// the line runs outside the mesh: a nodal field, as profile_plot; the four band edges, as band_plot.
+// Errors (invalid_input): values or bands not one per mesh node; a line that misses the mesh.
+[[nodiscard]] std::expected<PlotScene, base::Error> cut_plot(const mesh::Mesh& mesh, const CutLine& cut,
+                                                            std::span<const double> values, std::string y_label,
+                                                            AxisScale y_scale = AxisScale::linear);
+[[nodiscard]] std::expected<PlotScene, base::Error> cut_band_plot(const mesh::Mesh& mesh, const CutLine& cut,
+                                                                 const results::BandDiagram& bands);
 
 }  // namespace NiTCAD::render

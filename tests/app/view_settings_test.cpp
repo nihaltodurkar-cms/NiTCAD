@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <filesystem>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "NiTCAD/app/run_controller.hpp"
@@ -75,7 +76,8 @@ TEST_CASE("app views: names, and the views and fields a workspace offers", "[app
     using V = std::vector<ViewKind>;
     CHECK(app::available_views(diode().workspace) == V{ViewKind::profile, ViewKind::bands, ViewKind::iv});
     CHECK(app::available_views(mosfet().workspace) ==
-          V{ViewKind::solid, ViewKind::mesh, ViewKind::field, ViewKind::iso, ViewKind::iv});
+          V{ViewKind::solid, ViewKind::mesh, ViewKind::field, ViewKind::iso, ViewKind::profile, ViewKind::bands,
+            ViewKind::iv});  // profile and bands along a cut line (Unit 26b)
     const auto fields = app::available_fields(mosfet().workspace);
     for (const char* f : {"potential", "n", "p", "Ec", "doping", "R", "srh", "E", "J"}) CHECK(has(fields, f));
     CHECK_FALSE(has(fields, "Gii"));  // impact ionization is off: no rate stored for it
@@ -84,7 +86,7 @@ TEST_CASE("app views: names, and the views and fields a workspace offers", "[app
     auto unrun = app::workspace_from_deck(app_test::write(dir, "d.deck", app_test::mosfet2d));
     REQUIRE(unrun);
     CHECK(app::available_fields(*unrun) == std::vector<std::string>{"doping", "ND", "NA"});
-    CHECK(app::available_views(*unrun) == V{ViewKind::solid, ViewKind::mesh, ViewKind::field});
+    CHECK(app::available_views(*unrun) == V{ViewKind::solid, ViewKind::mesh, ViewKind::field, ViewKind::profile});
 }
 
 TEST_CASE("app views: errors as nitcad plot reports them", "[app]") {
@@ -204,6 +206,116 @@ TEST_CASE("app views: the same images as nitcad plot (WG4's choices)", "[app]") 
         const fs::path png = out / (std::string(c.name) + ".png");
         std::string args = "plot " + app_test::quoted(c.ran->deck);
         for (const std::string& a : app::plot_arguments(c.s)) args += " \"" + a + "\"";
+        args += " --size 480x360 --adapter warp --out " + app_test::quoted(png);
+        const auto cli = app_test::nitcad(args);
+        CAPTURE(args, cli.output);
+        REQUIRE(cli.status == 0);
+        auto theirs = render::load_png(png);
+        REQUIRE(theirs);
+        const auto d = render::compare(mine, *theirs, 0);
+        REQUIRE(d);
+        CHECK(d->max_channel == 0);
+    }
+}
+
+TEST_CASE("app views 26b: cut lines, as nitcad plot takes them (XD5, XG4)", "[app]") {
+    const app::Workspace& w = mosfet().workspace;
+    const ViewSettings::Cut channel{{0.0, 0.87}, {2.0, 0.87}};  // source to drain under the oxide, um
+    ViewSettings s;
+    s.kind = ViewKind::bands;
+    CHECK(app::build_scene(w, s).error().message == "--view bands in 2D and 3D needs --cut");
+    s.kind = ViewKind::profile;
+    CHECK(app::build_scene(w, s).error().message == "--view profile in 2D and 3D needs --cut");
+    s.kind = ViewKind::iv;
+    s.cut = channel;
+    CHECK(app::build_scene(w, s).error().message ==
+          "a cut line applies to the profile and bands views and to 2D and 3D device views");
+    s.kind = ViewKind::bands;
+    s.cut = ViewSettings::Cut{{0.0, 0.87, 0.0}, {2.0, 0.87, 0.0}};
+    CHECK(app::build_scene(w, s).error().message == "a cut line needs its end points in the device's dimension");
+    s.cut = ViewSettings::Cut{{0.0, 0.87}, {2.0, 0.87, 0.0}};  // the end alone
+    CHECK(app::build_scene(w, s).error().message == "a cut line needs its end points in the device's dimension");
+    s.cut = ViewSettings::Cut{{1.0, 0.5}, {1.0, 0.5}};
+    CHECK(app::build_scene(w, s).error().message == "a cut line needs two different end points");
+    s.cut = ViewSettings::Cut{{3.0, 0.5}, {4.0, 0.5}};
+    CHECK(app::build_scene(w, s).error().message == "the cut line misses the device");
+    ViewSettings d;
+    d.kind = ViewKind::profile;
+    d.cut = channel;
+    CHECK(app::build_scene(diode().workspace, d).error().message ==
+          "a cut line needs its end points in the device's dimension");
+
+    // The band diagram along the line is render's, at the last point.
+    s.cut = channel;
+    const auto bands = app::build_scene(w, s);
+    REQUIRE(bands);
+    const auto cut = render::cut_line(*w.geometry, {0.0, 0.87e-4, 0.0}, {2.0e-4, 0.87e-4, 0.0});
+    REQUIRE(cut);
+    const auto expected = render::cut_band_plot(w.device->mesh(), *cut, w.points.back().bands);
+    REQUIRE(expected);
+    const auto& plot = std::get<render::PlotScene>(*bands);
+    REQUIRE(plot.series.size() == 4);
+    CHECK(plot.series[0].x == expected->series[0].x);
+    CHECK(plot.series[0].y == expected->series[0].y);
+    CHECK(plot.series[0].x.size() == cut->samples.size());
+    CHECK(plot.x.label == "distance (\xC2\xB5m)");
+    // A device view draws the line over everything: two batches, black under white.
+    s.kind = ViewKind::field;
+    const auto map = app::build_scene(w, s);
+    REQUIRE(map);
+    const auto& lines = std::get<render::FieldScene>(*map).lines;
+    REQUIRE(lines.size() >= 2);
+    CHECK(lines[lines.size() - 2].name == "cut line");
+    CHECK(lines.back().name == "cut line");
+    CHECK(lines.back().on_top);
+    CHECK(lines.back().points.size() == 2 * (cut->samples.size() - 1));
+    // The doping along it needs no results.
+    const fs::path dir = app_test::scratch("views_cut_unrun");
+    auto unrun = app::workspace_from_deck(app_test::write(dir, "d.deck", app_test::mosfet2d));
+    REQUIRE(unrun);
+    ViewSettings doping;
+    doping.kind = ViewKind::profile;
+    doping.field = "doping";
+    doping.cut = channel;
+    CHECK(app::build_scene(*unrun, doping).has_value());
+    // nitcad plot's option.
+    using A = std::vector<std::string>;
+    CHECK(app::plot_arguments(s) == A{"--view", "field", "--field", "potential", "--cut", "0,0.87:2,0.87"});
+}
+
+TEST_CASE("app views 26b: cut lines drawn as nitcad plot draws them (XG4, WG4's choices)", "[app]") {
+    const fs::path out = app_test::scratch("views_cut_images");
+    const ViewSettings::Cut channel{{0.0, 0.87}, {2.0, 0.87}};
+    std::vector<std::pair<ViewSettings, const char*>> cases;
+    {
+        ViewSettings s;
+        s.kind = ViewKind::bands;
+        s.cut = channel;
+        cases.emplace_back(s, "bands");
+    }
+    {
+        ViewSettings s;
+        s.kind = ViewKind::profile;
+        s.field = "n";
+        s.log = true;
+        s.point = 2;
+        s.cut = ViewSettings::Cut{{1.0, 0.0}, {1.0, 1.0}};  // across the oxide: a gap in n
+        cases.emplace_back(s, "profile");
+    }
+    {
+        ViewSettings s;
+        s.kind = ViewKind::field;
+        s.cut = channel;
+        cases.emplace_back(s, "map");
+    }
+    for (const auto& [s, name] : cases) {
+        CAPTURE(name);
+        auto scene = app::build_scene(mosfet().workspace, s);
+        REQUIRE(scene);
+        const render::Image mine = draw(*scene, 480, 360);
+        const fs::path png = out / (std::string(name) + ".png");
+        std::string args = "plot " + app_test::quoted(mosfet().deck);
+        for (const std::string& a : app::plot_arguments(s)) args += " \"" + a + "\"";
         args += " --size 480x360 --adapter warp --out " + app_test::quoted(png);
         const auto cli = app_test::nitcad(args);
         CAPTURE(args, cli.output);

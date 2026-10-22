@@ -1,18 +1,22 @@
 // The analysis workspace in the window (Unit 26b, XG1, XG3, XG7): the deck checked while it is typed
-// (also during a run) with suggestions and the structure preview; completion by the keyboard.
+// (also during a run) with suggestions and the structure preview; completion by the keyboard; cut lines (XG4).
 #include <catch2/catch_test_macros.hpp>
 
 // The application's headers before the COM ones (objbase.h defines `interface` as a macro).
 #include "main_window.hpp"
 #include "fixtures.hpp"
+#include "NiTCAD/render/image.hpp"
 
 #include <windows.h>
 #include <richedit.h>
 
+#include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <filesystem>
 #include <functional>
 #include <string>
+#include <vector>
 
 using namespace NiTCAD;
 namespace fs = std::filesystem;
@@ -217,4 +221,154 @@ TEST_CASE("app window 26b: completion by the keyboard (XD3, XG7)", "[app]") {
     SendMessageW(w->deck().hwnd(), WM_COMMAND, MAKEWPARAM(3, LBN_DBLCLK),
                  reinterpret_cast<LPARAM>(w->deck().completion_list()));
     CHECK(w->deck().text() == "[models]\nsrh = off\nau#\n[mesh]");
+}
+
+namespace {
+
+// A click on the device view at a point of the device (um), through the viewport's own messages.
+void click_at(MainWindow& w, const render::Float3& um) {
+    REQUIRE(w.scene());
+    const auto& f = std::get<render::FieldScene>(*w.scene());
+    const auto s = render::screen_position(f, w.viewport().width(), w.viewport().height(), um);
+    const LPARAM at = MAKELPARAM(static_cast<int>(std::lround(s.x)), static_cast<int>(std::lround(s.y)));
+    SendMessageW(w.viewport().hwnd(), WM_LBUTTONDOWN, MK_LBUTTON, at);
+    SendMessageW(w.viewport().hwnd(), WM_LBUTTONUP, 0, at);
+}
+
+void apply_cut(MainWindow& w, const std::string& text) {
+    SetWindowTextW(w.child(MainWindow::id_cut), std::wstring(text.begin(), text.end()).c_str());
+    SendMessageW(GetParent(w.child(MainWindow::id_apply)), WM_COMMAND, MAKEWPARAM(MainWindow::id_apply, BN_CLICKED),
+                 reinterpret_cast<LPARAM>(w.child(MainWindow::id_apply)));
+}
+
+}  // namespace
+
+TEST_CASE("app window 26b: a cut line drawn by two clicks and typed (XD5, XG4, XG7)", "[app]") {
+    const fs::path dir = app_test::scratch("window_cut");
+    const fs::path deck = app_test::write(dir, "mosfet.deck", app_test::mosfet2d);
+    auto w = window();
+    REQUIRE(w->open_deck(deck));
+    REQUIRE(pump_until([&] { return w->workspace() != nullptr && !w->runner().busy(); }));
+    w->select_tab(MainWindow::tab_view);
+
+    // Before a run: the doping along the line, typed; the Curves tab offers the profile in 2D.
+    apply_cut(*w, "0,0.87:2,0.87");
+    REQUIRE(w->cut());
+    CHECK(w->tab() == MainWindow::tab_curves);
+    CHECK(w->settings().kind == app::ViewKind::profile);
+    CHECK(w->settings().field == "doping");
+    CHECK(SendMessageW(w->child(MainWindow::id_view), CB_FINDSTRINGEXACT, static_cast<WPARAM>(-1),
+                       reinterpret_cast<LPARAM>(L"profile")) != CB_ERR);
+    // The run keeps it on the device it was drawn on.
+    w->execute(Command::run);
+    REQUIRE(pump_until([&] { return !w->runner().busy() && w->workspace()->has_results(); }));
+    CHECK(w->cut());
+    apply_cut(*w, "");
+    w->select_tab(MainWindow::tab_view);
+
+    // The tool: two clicks on the map, from the source to the drain under the oxide.
+    w->execute(Command::cut_line_mode);
+    CHECK(w->status(0) == "Draw cut line: click the line's start, then its end.");
+    click_at(*w, {0.0f, 0.87f, 0.0f});
+    CHECK_FALSE(w->cut());
+    CHECK(w->tab() == MainWindow::tab_view);
+    click_at(*w, {2.0f, 0.87f, 0.0f});
+    REQUIRE(w->cut());
+    // A pixel is about 4 nm here: the ends within two pixels, to the nanometre.
+    for (std::size_t k = 0; k < 2; ++k) {
+        CHECK(std::abs(w->cut()->from_um[k] - (k == 0 ? 0.0 : 0.87)) <= 0.01);
+        CHECK(std::abs(w->cut()->to_um[k] - (k == 0 ? 2.0 : 0.87)) <= 0.01);
+        CHECK(w->cut()->from_um[k] == std::round(w->cut()->from_um[k] * 1e3) / 1e3);
+    }
+    // Its band diagram in the Curves tab.
+    CHECK(w->tab() == MainWindow::tab_curves);
+    CHECK(w->settings().kind == app::ViewKind::bands);
+    REQUIRE(w->scene());
+    const auto& plot = std::get<render::PlotScene>(*w->scene());
+    CHECK(plot.title == "Band diagram");
+    CHECK(plot.series.size() == 4);
+    // And on the device view, over the map.
+    w->select_tab(MainWindow::tab_view);
+    REQUIRE(w->scene());
+    CHECK(std::get<render::FieldScene>(*w->scene()).lines.back().name == "cut line");
+
+    // Typed in the inspector: the line moves; empty removes it.
+    apply_cut(*w, "0.5,0.2:1.5,0.2");
+    REQUIRE(w->cut());
+    CHECK(w->cut()->from_um == std::vector<double>{0.5, 0.2});
+    CHECK(w->cut()->to_um == std::vector<double>{1.5, 0.2});
+    CHECK(w->tab() == MainWindow::tab_curves);
+    w->select_tab(MainWindow::tab_view);
+    apply_cut(*w, "0.5,0.2");
+    CHECK(w->status(0).starts_with("A cut line is"));
+    REQUIRE(w->cut());
+    apply_cut(*w, "");
+    CHECK_FALSE(w->cut());
+    REQUIRE(w->scene());
+    const auto& lines = std::get<render::FieldScene>(*w->scene()).lines;
+    CHECK(std::ranges::none_of(lines, [](const render::LineBatch& b) { return b.name == "cut line"; }));
+    // Probe mode leaves the tool.
+    w->execute(Command::probe_mode);
+    click_at(*w, {1.0f, 0.5f, 0.0f});
+    CHECK_FALSE(w->cut());
+    CHECK(w->probe());
+}
+
+TEST_CASE("app window 26b: a cut line on a 3D preview, between surface nodes (XD5)", "[app]") {
+    const fs::path dir = app_test::scratch("window_cut3d");
+    const fs::path deck = app_test::write(dir, "resistor.deck", app_test::generate3d);
+    auto w = window();
+    REQUIRE(w->open_deck(deck));
+    REQUIRE(pump_until([&] { return w->workspace() != nullptr && !w->runner().busy(); }));
+    w->select_tab(MainWindow::tab_view);
+    w->execute(Command::cut_line_mode);
+    // Two surface nodes in front, apart on the screen: the front-most of all, then of those 60 px from it.
+    REQUIRE(w->scene());
+    const auto& f = std::get<render::FieldScene>(*w->scene());
+    const auto& m = w->workspace()->device->mesh();
+    std::vector<char> surface(m.node_count(), 0);
+    for (const render::Polygon& p : w->workspace()->geometry->boundary_faces()) {
+        for (const render::SurfaceVertex& v : p.vertices) surface[static_cast<std::size_t>(v.at.nodes[0])] = 1;
+    }
+    const auto um = [&](std::size_t i) {
+        const auto& p = m.points()[i];
+        return render::Float3{static_cast<float>(p[0] * 1e4), static_cast<float>(p[1] * 1e4), static_cast<float>(p[2] * 1e4)};
+    };
+    const auto front = [&](const std::function<bool(const render::ScreenPoint&)>& allowed) {
+        std::size_t best = 0;
+        float depth = 2.0f;
+        for (std::size_t i = 0; i < m.node_count(); ++i) {
+            if (!surface[i]) continue;
+            const auto s = render::screen_position(f, w->viewport().width(), w->viewport().height(), um(i));
+            if (allowed(s) && s.depth < depth) {
+                depth = s.depth;
+                best = i;
+            }
+        }
+        return best;
+    };
+    const std::size_t a = front([](const render::ScreenPoint&) { return true; });
+    const auto sa = render::screen_position(f, w->viewport().width(), w->viewport().height(), um(a));
+    const std::size_t b = front([&](const render::ScreenPoint& s) { return std::hypot(s.x - sa.x, s.y - sa.y) > 60.0f; });
+    REQUIRE(a != b);
+    // What each click picks: the front-most surface node within 12 px of the pixel clicked.
+    const auto picked = [&](std::size_t i) {
+        const auto s = render::screen_position(f, w->viewport().width(), w->viewport().height(), um(i));
+        const float x = std::round(s.x), y = std::round(s.y);
+        return front([&](const render::ScreenPoint& t) { return std::hypot(t.x - x, t.y - y) <= 12.0f; });
+    };
+    const std::size_t pa = picked(a), pb = picked(b);
+    click_at(*w, um(a));
+    click_at(*w, um(b));
+    REQUIRE(w->cut());
+    for (std::size_t k = 0; k < 3; ++k) {
+        CHECK(w->cut()->from_um[k] == std::round(m.points()[pa][k] * 1e4 * 1e3) / 1e3);
+        CHECK(w->cut()->to_um[k] == std::round(m.points()[pb][k] * 1e4 * 1e3) / 1e3);
+    }
+    // Not solved: the doping along it.
+    CHECK(w->tab() == MainWindow::tab_curves);
+    CHECK(w->settings().kind == app::ViewKind::profile);
+    CHECK(w->settings().field == "doping");
+    REQUIRE(w->scene());
+    CHECK(std::holds_alternative<render::PlotScene>(*w->scene()));
 }

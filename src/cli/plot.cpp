@@ -11,6 +11,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #include "NiTCAD/analysis/curve.hpp"
@@ -46,6 +47,8 @@ constexpr const char* plot_usage =
     "  curves  --contact <name> (swept)  --sense <name>  --frequency <k>  --log\n"
     "  arrows  --vectors E|J|Jn|Jp  --arrows <n> (300 in 2D, 400 in 3D)\n"
     "  clip    --clip <x0>,<y0>,<z0>:<x1>,<y1>,<z1> (um): that box removed from a 3D solid or field view\n"
+    "  cut     --cut <x0>,<y0>[,<z0>]:<x1>,<y1>[,<z1>] (um): --view profile or bands along that line (needed\n"
+    "          in 2D and 3D), or the line drawn on a 2D or 3D solid, mesh, field, slice or iso view\n"
     "  explode --view exploded [--field <f>] [--axis x|y|z (y)] [--gap <um> (12% of the extent)]\n"
     "  film    --view filmstrip --field <f> (a transient run) [--every <k>] [--columns <c> (4)]\n"
     "          (--size is each frame's, 640x480 by default)\n"
@@ -71,10 +74,36 @@ std::optional<double> number(std::string_view s) {
     return v;
 }
 
+// A segment "<x0>,<y0>[,<z0>]:<x1>,<y1>[,<z1>]" in um, as its ends in cm, each end with exactly `dimension`
+// coordinates.
+std::optional<std::pair<Point, Point>> segment_um(std::string_view s, int dimension) {
+    const auto point_of = [&](std::string_view t) -> std::optional<Point> {
+        Point q{};
+        std::size_t k = 0;
+        for (std::string_view rest = t;; ++k) {
+            const auto comma = rest.find(',');
+            const auto x = number(rest.substr(0, comma));
+            if (!x || k >= 3) return std::nullopt;
+            q[k] = *x * 1e-4;
+            if (comma == std::string_view::npos) break;
+            rest = rest.substr(comma + 1);
+        }
+        if (k + 1 != static_cast<std::size_t>(dimension)) return std::nullopt;
+        return q;
+    };
+    const auto colon = s.find(':');
+    if (colon == std::string_view::npos) return std::nullopt;
+    const auto a = point_of(s.substr(0, colon));
+    const auto b = point_of(s.substr(colon + 1));
+    if (!a || !b) return std::nullopt;
+    return std::pair{*a, *b};
+}
+
 struct Options {
     fs::path input, device, mesh, out;
     std::string view, field, scale, colormap = "turbo", contact, sense, adapter = "auto";
     std::string streamlines, from, seeds;  // Unit 25b
+    std::string cut;  // Unit 26b
     std::size_t lines = 24;
     std::string vectors;  // Unit 25c
     std::optional<Box> clip;
@@ -258,6 +287,7 @@ int plot(int argc, char** argv) {
         }
         else if (a == "--from") { if (!flag_value(o.from)) return usage("--from needs a contact"); }
         else if (a == "--seeds") { if (!flag_value(o.seeds)) return usage("--seeds needs a segment or a plane"); }
+        else if (a == "--cut") { if (!flag_value(o.cut)) return usage("--cut needs a segment"); }
         else if (a == "--lines") {
             const auto v = value();
             const auto n = v ? number(*v) : std::nullopt;
@@ -440,6 +470,20 @@ int plot(int argc, char** argv) {
         if (o.view != "solid" && o.view != "field") return fail("a clipping box applies to the solid and field views");
         view.clip = o.clip;
     }
+    // A cut line (Unit 26b, XD5): plotted along by the profile and bands views, drawn on 2D and 3D device views.
+    std::optional<CutLine> cut;
+    if (!o.cut.empty()) {
+        const bool device_view = o.view == "solid" || o.view == "mesh" || o.view == "field" || o.view == "slice" ||
+                                 o.view == "iso";
+        if (o.view != "profile" && o.view != "bands" && !(device_view && m.dimension() >= 2)) {
+            return fail("a cut line applies to the profile and bands views and to 2D and 3D device views");
+        }
+        const auto ab = segment_um(o.cut, m.dimension());
+        if (!ab) return usage("--cut needs <x0>,<y0>[,<z0>]:<x1>,<y1>[,<z1>] in the device's dimension");
+        auto c = cut_line(*geometry, ab->first, ab->second);
+        if (!c) return fail(c.error().message);
+        cut = std::move(*c);
+    }
     view.transparent_insulators = !o.opaque;
     view.projection = o.perspective ? Projection::perspective : Projection::orthographic;
     if (o.azimuth) view.azimuth_deg = *o.azimuth;
@@ -608,16 +652,20 @@ int plot(int argc, char** argv) {
         if (!s) return fail(s.error().message);
         field_scene = std::move(*s);
     } else if (o.view == "profile" || o.view == "bands") {
-        auto p = pick();
-        if (!p) return fail(p.error());
+        if (m.dimension() != 1 && !cut) return fail("--view " + o.view + " in 2D and 3D needs --cut");
         if (o.view == "bands") {
-            auto s = band_plot(m, (*p)->bands);
+            auto p = pick();
+            if (!p) return fail(p.error());
+            auto s = cut ? cut_band_plot(m, *cut, (*p)->bands) : band_plot(m, (*p)->bands);
             if (!s) return fail(s.error().message);
             plot_scene = std::move(*s);
         } else {
+            // A profile of the doping needs no results.
             auto v = values_for();
             if (!v) return fail(v.error());
-            auto s = profile_plot(m, *v, std::string(field_info(*field).title), o.log ? AxisScale::log10 : AxisScale::linear);
+            const AxisScale y = o.log ? AxisScale::log10 : AxisScale::linear;
+            std::string title(field_info(*field).title);
+            auto s = cut ? cut_plot(m, *cut, *v, std::move(title), y) : profile_plot(m, *v, std::move(title), y);
             if (!s) return fail(s.error().message);
             plot_scene = std::move(*s);
         }
@@ -701,26 +749,9 @@ int plot(int argc, char** argv) {
                 seeds = plane_seeds(*geometry, plane, o.lines);
                 if (seeds.empty()) return fail("the seed plane misses the device");
             } else {
-                // <x0>,<y0>[,<z0>]:<x1>,<y1>[,<z1>] in um.
-                const auto point_of = [&](std::string_view t) -> std::optional<Point> {
-                    Point q{};
-                    std::size_t k = 0;
-                    for (std::string_view rest = t;; ++k) {
-                        const auto comma = rest.find(',');
-                        const auto x = number(rest.substr(0, comma));
-                        if (!x || k >= 3) return std::nullopt;
-                        q[k] = *x * 1e-4;
-                        if (comma == std::string_view::npos) break;
-                        rest = rest.substr(comma + 1);
-                    }
-                    if (k + 1 != static_cast<std::size_t>(m.dimension())) return std::nullopt;
-                    return q;
-                };
-                const auto colon = s.find(':');
-                const auto a = colon == std::string_view::npos ? std::nullopt : point_of(s.substr(0, colon));
-                const auto b = colon == std::string_view::npos ? std::nullopt : point_of(s.substr(colon + 1));
-                if (!a || !b) return usage("--seeds needs <x0>,<y0>[,<z0>]:<x1>,<y1>[,<z1>] in the device's dimension");
-                seeds = segment_seeds(*a, *b, o.lines);
+                const auto ab = segment_um(s, m.dimension());
+                if (!ab) return usage("--seeds needs <x0>,<y0>[,<z0>]:<x1>,<y1>[,<z1>] in the device's dimension");
+                seeds = segment_seeds(ab->first, ab->second, o.lines);
             }
         } else {
             // From a contact: --from, else for currents the one carrying the most, for E the first
@@ -811,6 +842,8 @@ int plot(int argc, char** argv) {
             add_arrows(*field_scene, arrows, 0.8 * spacing, Rgba{0.05f, 0.05f, 0.05f, 1.0f});
         }
     }
+
+    if (cut && field_scene) add_cut_line(*field_scene, *cut);
 
     // Draw and write.
     const Adapter adapter = o.adapter == "gpu" ? Adapter::hardware : o.adapter == "warp" ? Adapter::warp : Adapter::automatic;

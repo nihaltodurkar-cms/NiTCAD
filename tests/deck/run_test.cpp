@@ -841,6 +841,59 @@ sweep = )" + tag + ".nitsweep\ndevice = " + tag + ".nitdev\n";
     CHECK(flat.output.find("needs a 3D device") != std::string::npos);
 }
 
+TEST_CASE("nitcad plot: cut lines (Unit 26b, XD5, XG4)", "[deck]") {
+    const fs::path dir = scratch("cli_plot_cut");
+    const auto write = [&](const char* name, const std::string& text) {
+        std::ofstream(dir / name, std::ios::binary) << text;
+        return "\"" + (dir / name).string() + "\"";
+    };
+    const auto out = [&](const char* name) { return "\"" + (dir / name).string() + "\""; };
+    const auto deck = [](const char* mesh, const char* tag) {
+        return std::string("[mesh]\ntype = tensor\n") + mesh + R"([region silicon]
+material = silicon
+[doping]
+profile = acceptor constant 1e17 axis=y x=-1:1um
+profile = donor constant 1e17 axis=y x=1um:3um
+[contact anode]
+kind = ohmic
+patch = x_min
+[contact cathode]
+kind = ohmic
+patch = x_max
+[sweep]
+contact anode = 0, 0.4
+[output]
+sweep = )" + tag + ".nitsweep\ndevice = " + tag + ".nitdev\n";
+    };
+    const std::string d2 = write("pn2.deck", deck("x = linspace(0, 2um, 11)\ny = linspace(0, 1um, 5)\n", "pn2"));
+    REQUIRE(cli("run " + d2).status == 0);
+    for (const auto& [args, name] : {std::pair{std::string("--view bands --cut 0,0.3:2,0.7"), "bands.png"},
+                                     std::pair{std::string("--view profile --field doping --cut 0,0.5:2,0.5"), "doping.png"},
+                                     std::pair{std::string("--field potential --cut 0,0.3:2,0.7"), "map.png"},
+                                     std::pair{std::string("--view mesh --cut 0,0.3:2,0.7"), "mesh.png"}}) {
+        const Cli c = cli("plot " + d2 + " " + args + " --adapter warp --size 400x300 --out " + out(name));
+        CAPTURE(args, c.output);
+        CHECK(c.status == 0);
+        CHECK(render::load_png(dir / name).has_value());
+    }
+    // The line changes the map.
+    REQUIRE(cli("plot " + d2 + " --field potential --adapter warp --size 400x300 --out " + out("plain.png")).status == 0);
+    CHECK(render::load_png(dir / "map.png")->rgba != render::load_png(dir / "plain.png")->rgba);
+    // Refused: no line for a 2D band diagram; a malformed line or one in another dimension (usage); a curve view;
+    // a line missing the device.
+    const Cli none = cli("plot " + d2 + " --view bands --out " + out("x.png"));
+    CHECK(none.status == 1);
+    CHECK(none.output.find("--view bands in 2D and 3D needs --cut") != std::string::npos);
+    CHECK(cli("plot " + d2 + " --view bands --cut 0,0.3 --out " + out("x.png")).status == 64);
+    CHECK(cli("plot " + d2 + " --view bands --cut 0,0.3,0:2,0.7,0 --out " + out("x.png")).status == 64);
+    const Cli curve = cli("plot " + d2 + " --view iv --cut 0,0.3:2,0.7 --out " + out("x.png"));
+    CHECK(curve.status == 1);
+    CHECK(curve.output.find("applies to the profile and bands views") != std::string::npos);
+    const Cli miss = cli("plot " + d2 + " --view bands --cut 3,0.3:4,0.7 --out " + out("x.png"));
+    CHECK(miss.status == 1);
+    CHECK(miss.output.find("misses the device") != std::string::npos);
+}
+
 TEST_CASE("nitcad plot: the exploded view (Unit 25c, CG6)", "[deck]") {
     const fs::path dir = scratch("cli_plot_exploded");
     const auto write = [&](const char* name, const std::string& text) {
@@ -853,7 +906,7 @@ TEST_CASE("nitcad plot: the exploded view (Unit 25c, CG6)", "[deck]") {
         return std::string("[mesh]\ntype = tensor\n") + mesh + "[region silicon]\nmaterial = silicon\n[region oxide]\n"
                "material = sio2\nbox = " + oxide_box + R"(
 [doping]
-profile = acceptor constant 1e17
+profile = acceptor constant 1e17 axis=y x=-1:1um
 [contact body]
 kind = ohmic
 patch = y_min
