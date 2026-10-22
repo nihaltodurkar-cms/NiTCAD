@@ -2860,6 +2860,88 @@ tests, `CMakeLists.txt` and this file differs from `main` (`8256cf8`), so no num
 **accepted by the owner (2026-10-22, "accept")**, CQ1–CQ4 with it; ARCHITECTURE.md 6.14, 11 and 11.3 as built (CG9).
 Push, PR and merge await the owner's authorization.
 
+### Unit 26 — the Windows application (authorized 2026-10-22; on `app/windows-application`)
+
+**Owner request:** VQ3/VQ6 order (25a, 45, 25b, 25c, then 26), VA1–VA8 and gates WG1–WG6 (Units 25 and 26 above),
+the detailed plan's start page, run monitor and results workspace (page Figures 3, 5, 6), VQ11 (bundled examples) and
+VQ13 (menus open the deck at a section). On 2026-10-22 the plan page was checked against this file and the repository
+and four points were raised (AQ1–AQ4); the owner ruled on them the same day and gave the go: "GO — Unit 26 is
+authorized."
+
+**What exists (audited on `main` at `e289e44`).** `solve::RunControl` (a stop token and a progress callback, 6.9);
+`deck::parse`, `deck::build` (errors `"<source>:<line>: <what>"` with the line as the context index) and `deck::run`
+(a stopped run is still a report with its completed part); `render` with off-screen D3D12/Direct2D drawing to images,
+an orthographic and a perspective camera (`--perspective`, reference `mosfet3d_opaque_perspective`, Unit 25a), slices
+(25a), the clipping box (25c); `analysis` extractors; `io` loaders. No window, no swap chain, no `app` code, no
+`examples/` directory. The layer table allows `app` everything except `physics` and `assemble` (ARCHITECTURE.md 3).
+
+**Rulings (2026-10-22):**
+
+| # | Point | Ruling |
+|---|---|---|
+| AQ1 | The planned two commits do not cover the start page, run monitor and results workspace. | **Approved: three commits.** 26·1 the app logic; 26·2 the main window; 26·3 the start page, run monitor, results workspace, the four example decks and `--self-test`. |
+| AQ2 | WG6 bounds scope to VA1–VA6, but VA1 and VA8 are Unit 26's. | **Approved:** WG6 covers VA1–VA6 and VA8–VA9; WG7 (menu navigation) and WG8 (every example deck tested) added; VA7's disposition stated explicitly (below). |
+| AQ3 | No unit owns the examples (VQ11). | **Approved:** 26·3 owns `examples/` and the four start-page decks. |
+| AQ4 | How the application is launched. | **Approved:** a separate `nitcad-app.exe`; no GUI or window code in the `nitcad` batch runner. |
+
+Owner instructions with the rulings: preserve the architecture and the acceptance rulings; verify whether hosted CI
+can open a window for `--self-test`, and if not make WG4 local-only and keep the off-screen WARP image tests in CI,
+without letting the question block the work; commits scoped to their approved responsibilities; report commit hashes,
+test results and deviations; no unrelated code or scope.
+
+**VA9 (added by AQ3, AQ4).** `nitcad-app.exe`, a `/SUBSYSTEM:WINDOWS` executable of the `app` layer (L8);
+`examples/` at the top level with four decks (1D pn diode, 2D MOSFET, 3D MOSFET, MOS capacitor) listed on the start
+page, each run by a test.
+
+**VA7's disposition (AQ2).** VA7 is the exclusion list and grants nothing: a graphical device editor (form editors that
+write the deck, VQ13), project management, remote or cluster runs, plugins, localization and an installer are not
+built in Unit 26, and no gate requires them. WG6 checks the work against VA1–VA6 and VA8–VA9 and against VA7's list.
+The detailed plan's analysis workspace (live checking and completion, structure preview, cut lines, run comparison,
+difference maps, mesh quality; page Figures 4, 7, 8) is Unit 26b (VQ10), not 26.
+
+**Implementation plan (within VA1–VA9):**
+- `app` logic, plain C++ under test (`include/NiTCAD/app/`, `src/app/`): the deck document (text, path, modified
+  flag, load and save, a check that maps `deck::parse`/`deck::build` errors to their lines); the run controller (one
+  worker `std::jthread` per run; the states idle, checking, running, stopping, done, failed; progress events queued
+  on the worker and drained on the UI thread, which a caller-supplied wake function (a posted Win32 message in the
+  window) prompts; Stop requests the token and the completed part is kept); the workspace (a run's report or a
+  result file with its device and mesh, paired by the mesh digest as `nitcad plot` does; the run record, provenance,
+  convergence history and Unit 24's figures); view settings (view, field, point, scale, range, colormap, contours,
+  edges, insulators, projection, camera, slices, clip) turned into `render` scenes with `nitcad plot`'s choices; the
+  menus' deck sections and keys (VQ13); the recent files and layout, saved per user.
+- The window (`src/app/`, `app/main.cpp`): per-monitor DPI aware v2; the workspace of Figure 1 (menu bar, tool bar,
+  scene tree, viewport tabs, metrics strip, inspector, status bar); the deck pane (Rich Edit with line numbers, errors
+  at their lines); the viewport presenting `render` scenes in a DXGI swap chain on the renderer's queue; orbit, pan,
+  zoom, fit, probe and measure (VA8). `render` gains what a window needs and no more: a swap-chain target that shows
+  the image `draw` would return, a zoom and pan on the camera (defaults leave every image unchanged), and the screen
+  position of a world point for picking.
+- 26·3: the start page (new, open, recent, examples), the run monitor (a row per point, the live convergence plot,
+  Stop), the results workspace (curves, Unit 24's figures, the run record), `examples/`, and `--self-test <deck>`.
+- **Perspective (AQ2's proposed "camera mode with a reference image")** already exists from Unit 25a (`Projection::
+  perspective`, `nitcad plot --perspective`, the WARP reference `mosfet3d_opaque_perspective`); Unit 26 only exposes it.
+
+**Acceptance gates (final):**
+
+| # | Gate | Commit |
+|---|---|---|
+| WG1 | No solve on the UI thread: during a long run the UI thread's message loop keeps running (a timer message at least every 100 ms); Stop ends the run with its completed part kept and shown. | 26·1 (logic), 26·3 (window) |
+| WG2 | A deck run in the app is bit-identical to `nitcad run` on it (`deck::run`), run identity included. | 26·1 |
+| WG3 | The app's logic under unit tests: the run state machine, document load and save, view settings; deck errors land on their lines. | 26·1 |
+| WG4 | `--self-test` passes on WARP and on the GPU and writes the same image as `nitcad plot` for the same view. On CI only if a hosted runner can open a window: the self-test exits 77 when no window or swap chain can be made, and ctest counts that as skipped; the off-screen WARP image tests run in CI regardless. | 26·3 |
+| WG5 | Per-monitor DPI re-layout, keyboard access to every command, a clean D3D12 debug layer, no leaked GPU objects. | 26·2 |
+| WG6 | Suites as VG6 (Release and Debug at every commit, `/W4 /WX`, hand mutants caught); nothing outside VA1–VA6 and VA8–VA9, nothing on VA7's list; the `app` layer's includes checked against ARCHITECTURE.md 3 (no `physics`, no `assemble`); no numerical change; ARCHITECTURE.md as built after acceptance. | all |
+| WG7 | The Device, Mesh, Physics and Simulation menus open the deck at their sections and list their keys for insertion (VQ13); inserting any listed key (with its default value) into a deck leaves a deck that `deck::build` accepts, with the same meaning. | 26·1 (logic), 26·2 (menus) |
+| WG8 | Every deck in `examples/` runs to completion in a test, and the start page lists exactly those decks. | 26·3 |
+
+**CI and WG4.** Whether a hosted `windows-2025` runner can create a window and a flip-model swap chain cannot be checked
+from this workstation and needs a CI run, which needs a push (not authorized yet). WG4's test is therefore written to
+run anywhere: where a window cannot be made it is skipped (exit 77), not failed, and the first CI run after an
+authorized push answers the question. The off-screen image tests (`nitcad_render_test`, `nitcad plot`) run in CI as
+before.
+
+**Commits (approved, AQ1):** 26·1 the app logic (WG1 logic, WG2, WG3, WG7 logic); 26·2 the main window (WG5, WG7
+menus); 26·3 the start page, run monitor, results workspace, `examples/`, `--self-test` (WG1 window, WG4, WG8).
+
 ---
 
 ## New questions the advisor raised (not yet in `ARCHITECTURE.md`)
