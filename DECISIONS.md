@@ -2942,6 +2942,67 @@ before.
 **Commits (approved, AQ1):** 26·1 the app logic (WG1 logic, WG2, WG3, WG7 logic); 26·2 the main window (WG5, WG7
 menus); 26·3 the start page, run monitor, results workspace, `examples/`, `--self-test` (WG1 window, WG4, WG8).
 
+**Commit 26·1 (the app logic; WG1 logic, WG2, WG3, WG7 logic, WG6), as built.** The `app` layer's first files
+(`include/NiTCAD/app/`, `src/app/`; CMake target `NiTCAD::app`, linked to deck, render, analysis and io), no window:
+- `document.hpp`: `DeckDocument` (open, `set_text` with the modified flag, `save` through a temporary file renamed over
+  the deck, `save_as`, the title); `check_deck` (parse and build as the file, so relative paths and messages are the
+  deck's); `error_line` (the line after "<source>:" in a message, the form every deck error has).
+- `run_controller.hpp`: `RunController` with one `std::jthread` per check or run; the worker builds (`check_deck`) and
+  runs (`deck::run` with a `RunControl` on the thread's stop token); events (built, one per Newton iteration with the
+  point's wall time, finished) are queued under a mutex and the caller's wake function is called only when the queue
+  was empty, so a fast solve posts one message per batch; `process()` applies them on the UI thread. States idle,
+  checking, running, stopping, done, failed; a run that stops early is done with its report (`stopped_early`); the
+  rows of the run monitor (one per point, its iterations, last update and residual, time) and every iteration for
+  the convergence plot; `take_results` hands the plan and report to the workspace.
+- `workspace.hpp`: `Workspace` (device and geometry at fixed addresses; results; the bias points `nitcad plot` lists,
+  transient snapshots with their currents and rates) from a run, a deck's outputs or a result file with its device
+  (and mesh) file, refused on another mesh by the mesh digest or the node count; `run_record` (mesh, points, how it
+  ended, input identity, mesh digest, settings, provenance), `convergence_history`, `extracted_figures` (Unit 24: for
+  a gate or electrode sweep, the threshold at maximum g_m, the subthreshold swing, the maximum g_m and the on/off
+  ratio of the transfer curve of the contact carrying the most current; for an ohmic sweep, the current at its last
+  bias).
+- `view_settings.hpp`: `ViewSettings` (view, field, point, scale, colormap, range, contours, edges, opaque insulators,
+  contacts, projection, azimuth and elevation, slices and the clip box in µm, iso levels, curve contacts and frequency,
+  log axis) and `build_scene`, which makes `nitcad plot`'s calls with its choices (the ten-decade floor of vector
+  magnitudes, the 0..1 scale of a zero magnitude, the swept contact) without including the command's code (AQ4);
+  `available_views`, `available_fields` (the rates only when stored), `plot_arguments` (the command's options for a
+  setting, slices and the box converted from µm exactly as the command converts them).
+- `deck_sections.hpp` (VQ13): the sections each of the Device, Mesh, Physics and Simulation menus opens, and the keys
+  with documented defaults (`[device]` 1, `[mesh]` 3 by the generator, `[models]` 16, `[solver]` 23, `[transient]` 5);
+  `find_sections` on text that need not build (comments, quotes and continuations as the syntax has them);
+  `insertable_keys` (not those present; a mesh's by its type); `insert_key` (after the section's last entry, or the
+  section added at the end, but no second analysis section).
+- `app_state.hpp`: recent files (eight, most recent first, no duplicates) and the window's layout as "key = value"
+  lines, damaged lines ignored, paths in UTF-8.
+- **Tests** (`tests/app/`, 22 cases): errors at their lines (syntax, meaning, untitled); open, save, save as, a failed
+  save keeping the path and flag; the state machine (checks, a failed build, refusals while busy, rows equal to the
+  sweep's convergence records, outputs written); **WG1** — a 1,601-point run while a hidden message-only window's
+  loop pumps a 10 ms timer: 42 timer messages, the longest gap 20–23 ms (bound 100 ms), progress in many batches;
+  Stop after three converged points: done, cancelled, the completed points kept and written; **WG2** — the 1D diode
+  and the 2D MOSFET run by the worker and by the `nitcad` executable: every field, current, setting, input identity
+  and mesh digest equal to the bit, the app's written file too; the workspace from a run, the deck's outputs and the
+  result file alike, another mesh refused by digest; the run record and history; the diode's current and the
+  MOSFET's threshold, swing, g_m and on/off ratio; ten views (solid, mesh, potential with contours, n with edges and
+  viridis at point 1, |J|, isosurfaces, I-V on a log axis, a 1D profile, a band diagram, a diode I-V) drawn on WARP
+  **equal to `nitcad plot`'s PNG for `plot_arguments` to the last bit** (max channel difference 0); **WG7** — every
+  offered key of every menu inserted into five decks (tensor 1D and 2D sweeps, generated 2D and 3D meshes, a
+  transient) builds with an unchanged fingerprint (device temperature and mesh digest, every model, Newton, step,
+  linear, equation, current, rate and transient option): 40 to 45 insertions per deck; the recent files and layout
+  round trip.
+- `app_layering` (ctest, a CMake script): no `physics` or `assemble` include in `app` (WG6).
+- **Finding (test fixture, not changed):** a profile's window along its depth axis is ignored
+  (`device/doping_profiles.hpp`), and the depth axis defaults to x, so the deck tests' 1D diode
+  (`profile = acceptor constant 1e17 x=-1:1um`, `donor ... x=1um:3um`) is uniformly compensated, not a pn junction.
+  The app tests copy that diode as a generic device; the 2D MOSFET fixture puts its pockets as Gaussians along y
+  with x windows, and the examples (26·3) avoid the pattern.
+- **Mutation checks (Release): 15 of 16 caught, 1 equivalent and removed** — error_line ignoring the source (caught once a same-length
+  source was added), save keeping the flag, one row for all points, Stop not stopping the worker, a failed run done,
+  starting while running, the digest unchecked, no ten-decade floor, edges ignored, `plot_arguments` dropping
+  `--edges`, no band view, insertion after the header, present keys offered again, a wrong default, duplicate recent
+  files; the sensed contact restricted to ohmic contacts and to contacts other than the swept one survived as
+  equivalent (a gate carries no steady current), and the condition was removed.
+- **Suites:** the app tests pass in Release (2 s) and Debug (65 s), no warnings under `/W4 /WX`.
+
 ---
 
 ## New questions the advisor raised (not yet in `ARCHITECTURE.md`)

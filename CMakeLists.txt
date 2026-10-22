@@ -514,6 +514,36 @@ add_test(NAME cli_version COMMAND nitcad --version)
 set_tests_properties(cli_version PROPERTIES PASS_REGULAR_EXPRESSION
   "^nitcad ${PROJECT_VERSION} \\(revision ([0-9a-f]+|unknown)(, modified)?, ${CMAKE_BUILD_TYPE}, MSVC [0-9.]+, Eigen [0-9]")
 
+# --- app layer (the Windows application; Unit 26, DECISIONS.md VA1-VA9, AQ1-AQ4, WG1-WG8) ---------
+# The logic, plain C++ under test (26-1): documents, the run controller, the workspace, view settings,
+# the menus' deck sections, the per-user state.
+add_library(nitcad_app STATIC
+  src/app/document.cpp
+  src/app/run_controller.cpp
+  src/app/workspace.cpp
+  src/app/view_settings.cpp
+  src/app/deck_sections.cpp
+  src/app/app_state.cpp)
+add_library(NiTCAD::app ALIAS nitcad_app)
+target_include_directories(nitcad_app PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
+target_link_libraries(nitcad_app PUBLIC NiTCAD::deck NiTCAD::render NiTCAD::analysis NiTCAD::io)
+
+add_executable(nitcad_app_test
+  tests/app/document_test.cpp
+  tests/app/run_controller_test.cpp
+  tests/app/workspace_test.cpp
+  tests/app/view_settings_test.cpp
+  tests/app/deck_sections_test.cpp
+  tests/app/app_state_test.cpp)
+target_link_libraries(nitcad_app_test PRIVATE NiTCAD::app Catch2::Catch2WithMain user32)
+# The view tests compare the app's images with nitcad plot's (WG4's choices).
+add_dependencies(nitcad_app_test nitcad)
+target_compile_definitions(nitcad_app_test PRIVATE NITCAD_CLI_PATH="$<TARGET_FILE:nitcad>")
+add_test(NAME app COMMAND nitcad_app_test)
+# WG6: app includes every layer but physics and assemble (ARCHITECTURE.md 3).
+add_test(NAME app_layering
+  COMMAND ${CMAKE_COMMAND} -DROOT=${CMAKE_CURRENT_SOURCE_DIR} -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/app/layering.cmake)
+
 # --- validation against published data (Unit 33; benchmarks/ decks) ----------------------
 add_executable(nitcad_validation_test tests/validation/published_test.cpp
   tests/baseline/trace_listener.cpp)
