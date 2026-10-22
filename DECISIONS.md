@@ -3495,6 +3495,13 @@ visibility (YD4; `render`, `nitcad plot`, `app`); 26c·3 transient playback and 
 - **Found:** `nitcad plot <deck>` refused arrows and streamlines on the solid, mesh and quality views ("the results
   hold no field to plot"); fixed apart, on the owner's word (the next commit).
 
+**Fix (owner, 2026-10-22, "fix it"): `nitcad plot` loads a deck's results for arrows and streamlines.** Reading a
+deck, `nitcad plot` loaded the results only for the views that show them, so `--vectors` or `--streamlines` on the
+solid, mesh, quality or doping views failed with "the results hold no field to plot" (a result file worked). Now
+either option loads them on any view. `run_test` gains arrows on the solid view, streamlines on the mesh view,
+arrows over the doping and 3D arrows on the quality view; the mutant that drops the options from the condition is
+caught. No change to any image the command could draw before.
+
 **Not in Unit 26c:** in-view clip handles (the owner chose sliders), the tiled filmstrip in the window, video
 export, oblique clip planes, streamtubes; the WG1 gap (deferred by the owner, Unit 26b).
 

@@ -776,7 +776,12 @@ sweep = )" + tag + ".nitsweep\ndevice = " + tag + ".nitdev\n";
           std::tuple{d2, std::string("--field n --vectors E --arrows 50"), "e2.png"},
           std::tuple{d3, std::string("--vectors J"), "j3.png"},
           std::tuple{d3, std::string("--field potential --vectors E --slice z=0.25"), "e3.png"},
-          std::tuple{d3, std::string("--vectors Jn --streamlines Jn"), "jn3.png"}}) {
+          std::tuple{d3, std::string("--vectors Jn --streamlines Jn"), "jn3.png"},
+          // Over views that need no results themselves: the deck's results loaded for them (Unit 26c).
+          std::tuple{d2, std::string("--view solid --vectors E"), "solid_e2.png"},
+          std::tuple{d2, std::string("--view mesh --streamlines J --lines 5"), "mesh_j2.png"},
+          std::tuple{d2, std::string("--view field --field doping --vectors J"), "doping_j2.png"},
+          std::tuple{d3, std::string("--view quality --vectors E --arrows 40"), "quality_e3.png"}}) {
         const Cli c = cli("plot " + deck + " " + args + " --adapter warp --size 400x300 --out " + out(name));
         CAPTURE(args, c.output);
         CHECK(c.status == 0);

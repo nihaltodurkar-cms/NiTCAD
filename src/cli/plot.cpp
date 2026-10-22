@@ -432,11 +432,13 @@ int plot(int argc, char** argv) {
         if (!built) return fail(built.error().message);
         plan = std::move(*built);
         device = &plan->device;
-        // The doping and the mesh quality need no results (a field, profile or difference of the doping).
+        // The doping and the mesh quality need no results (a field, profile or difference of the doping);
+        // arrows and streamlines always do, on any view (Unit 26c).
         const bool doping = o.field == "doping" || o.field == "ND" || o.field == "NA";
-        const bool needs_results = o.view != "solid" && o.view != "mesh" && o.view != "quality" &&
-                                   o.view != "quality-histogram" &&
-                                   !((o.view == "field" || o.view == "profile" || o.view == "difference") && doping);
+        const bool needs_results = (o.view != "solid" && o.view != "mesh" && o.view != "quality" &&
+                                    o.view != "quality-histogram" &&
+                                    !((o.view == "field" || o.view == "profile" || o.view == "difference") && doping)) ||
+                                   !o.vectors.empty() || !o.streamlines.empty();
         if (needs_results) {
             if (auto r = load_outputs(*plan, l); !r) return fail(r.error());
         }
