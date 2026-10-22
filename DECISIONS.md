@@ -3392,7 +3392,10 @@ built.**
 
 **Status:** Unit 26b built in three commits (3077ce4, 394c2e9, eb79729; XG1–XG8 met on this workstation, the WG1
 gap above open). **Accepted by the owner 2026-10-22** ("accept Unit 26b"), the WG1 gap to be investigated later;
-ARCHITECTURE.md 6.14, 8, 11 and 11.3 updated to "as built" (XG8). Nothing pushed.
+ARCHITECTURE.md 6.14, 8, 11 and 11.3 updated to "as built" (XG8). Pushed and merged to `main` as `51face0`
+(PR #60, 2026-10-22, on the owner's word, the hosted CI still running). The clean-worktree suites at `eb79729`
+(finished after the merge): Release 27 of 27 (980 s); Debug 18 of 19 (1,951 s) — `app_window` failed only on the
+WG1 gap above (the GPU self-test's message loop stalled 278.8 ms), the open item.
 
 **Not in Unit 26b (VA7 and later):** form editors that write the deck, project management, remote runs, plugins,
 localization, an installer; completion of region parameter paths; more than two runs compared at once.
