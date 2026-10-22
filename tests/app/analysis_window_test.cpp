@@ -372,3 +372,93 @@ TEST_CASE("app window 26b: a cut line on a 3D preview, between surface nodes (XD
     REQUIRE(w->scene());
     CHECK(std::holds_alternative<render::PlotScene>(*w->scene()));
 }
+
+namespace {
+
+std::wstring metrics(MainWindow& w) {
+    wchar_t text[512]{};
+    GetWindowTextW(w.child(MainWindow::id_metrics), text, 512);
+    return text;
+}
+
+std::string narrow(const std::wstring& s) {
+    std::string out(static_cast<std::size_t>(WideCharToMultiByte(CP_UTF8, 0, s.c_str(), -1, nullptr, 0, nullptr, nullptr)),
+                    '\0');
+    WideCharToMultiByte(CP_UTF8, 0, s.c_str(), -1, out.data(), static_cast<int>(out.size()), nullptr, nullptr);
+    out.pop_back();
+    return out;
+}
+
+}  // namespace
+
+TEST_CASE("app window 26b: run B from a result file and from the previous run; mesh quality (XD6, XD7, XG7)", "[app]") {
+    const fs::path dir = app_test::scratch("window_compare");
+    const fs::path deck = app_test::write(dir, "mosfet.deck", app_test::mosfet2d);
+    auto w = window();
+    REQUIRE(w->open_deck(deck));
+    REQUIRE(pump_until([&] { return w->workspace() != nullptr && !w->runner().busy(); }));
+    w->execute(Command::run);
+    REQUIRE(pump_until([&] { return !w->runner().busy() && w->workspace() && w->workspace()->has_results(); }));
+    CHECK_FALSE(w->has_previous_run());
+    CHECK_FALSE(w->run_b());
+    // The first run's files, kept as a result to compare with.
+    fs::copy_file(dir / "mosfet.nitsweep", dir / "first.nitsweep");
+    fs::copy_file(dir / "mosfet.nitdev", dir / "first.nitdev");
+
+    // Mesh quality: the map, its figures in the metrics strip (0.1 by 0.05 um cells: every triangle atan 1/2,
+    // 26.6°).
+    w->execute(Command::mesh_quality);
+    CHECK(w->tab() == MainWindow::tab_view);
+    CHECK(w->settings().kind == app::ViewKind::quality);
+    REQUIRE(w->scene());
+    CHECK(std::get<render::FieldScene>(*w->scene()).title == "Mesh quality");
+    CAPTURE(narrow(metrics(*w)));
+    CHECK(metrics(*w).find(L"Min angle 26.6°, median 26.6°, 0 below 20°") != std::wstring::npos);
+
+    // Another gate work function, run: the first run becomes the previous one.
+    replace(*w, "work_function = 4.1", "work_function = 4.3");
+    w->execute(Command::run);
+    REQUIRE(pump_until([&] { return !w->runner().busy() && w->has_previous_run(); }));
+    REQUIRE(pump_until([&] { return !w->runner().busy(); }));
+    w->execute(Command::compare_previous);
+    REQUIRE(w->run_b());
+    CHECK_FALSE(w->has_previous_run());
+    CHECK(w->status(0) == "Comparing with the previous run");
+    // The difference map, the metrics naming run B with ΔV_th, the results side by side.
+    w->select_tab(MainWindow::tab_view);
+    w->settings().kind = app::ViewKind::difference;
+    w->settings().field = "potential";
+    w->refresh();
+    REQUIRE(w->scene());
+    CHECK(std::get<render::FieldScene>(*w->scene()).colorbar->title == "\xCE\x94\xCF\x88 (mV)");
+    CHECK(metrics(*w).find(L"Run B mosfet.deck, ΔVth -") != std::wstring::npos);  // B's threshold is lower
+    w->select_tab(MainWindow::tab_results);
+    CHECK(w->results_page().figure_cell(0, 0) == L"Threshold (max gm)");
+    CHECK_FALSE(w->results_page().figure_cell(0, 5).empty());
+    CHECK(w->results_page().figure_cell(0, 6).starts_with(L"-"));
+    bool marked = false;
+    for (int r = 0; r < w->results_page().record_count(); ++r) {
+        if (w->results_page().record_cell(r, 0) == L"≠ Input identity") marked = true;
+    }
+    CHECK(marked);
+
+    // Stop comparing: the difference map goes, the previous run stays to compare with again.
+    w->execute(Command::stop_comparing);
+    CHECK_FALSE(w->run_b());
+    CHECK(w->has_previous_run());
+    w->select_tab(MainWindow::tab_view);
+    CHECK(w->settings().kind == app::ViewKind::field);
+    CHECK(metrics(*w).find(L"Run B") == std::wstring::npos);
+
+    // A result file as run B: the first run, the same mesh.
+    REQUIRE(w->compare_result(dir / "first.nitsweep", dir / "first.nitdev"));
+    REQUIRE(w->run_b());
+    CHECK(w->status(0) == "Comparing with first.nitsweep");
+    const auto& views = app::available_views(*w->workspace(), w->run_b());
+    CHECK(std::ranges::find(views, app::ViewKind::difference) != views.end());
+    // Opening another deck forgets both.
+    REQUIRE(w->open_deck(deck));
+    CHECK_FALSE(w->run_b());
+    CHECK_FALSE(w->has_previous_run());
+    REQUIRE(pump_until([&] { return !w->runner().busy(); }));
+}

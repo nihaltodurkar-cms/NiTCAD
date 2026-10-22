@@ -894,6 +894,78 @@ sweep = )" + tag + ".nitsweep\ndevice = " + tag + ".nitdev\n";
     CHECK(miss.output.find("misses the device") != std::string::npos);
 }
 
+TEST_CASE("nitcad plot: run B and mesh quality (Unit 26b, XD6, XD7, XG5)", "[deck]") {
+    const fs::path dir = scratch("cli_plot_compare");
+    const auto write = [&](const char* name, const std::string& text) {
+        std::ofstream(dir / name, std::ios::binary) << text;
+        return "\"" + (dir / name).string() + "\"";
+    };
+    const auto out = [&](const char* name) { return "\"" + (dir / name).string() + "\""; };
+    const auto deck = [](const char* x, const char* acceptors, const char* sweep, const char* tag) {
+        return std::string("[mesh]\ntype = tensor\nx = ") + x + "\ny = linspace(0, 1um, 5)\n" + R"([region silicon]
+material = silicon
+[doping]
+profile = acceptor constant )" + acceptors + R"( axis=y x=-1:1um
+profile = donor constant 1e17 axis=y x=1um:3um
+[contact anode]
+kind = ohmic
+patch = x_min
+[contact cathode]
+kind = ohmic
+patch = x_max
+[sweep]
+contact anode = )" + sweep + "\n[output]\nsweep = " + tag + ".nitsweep\ndevice = " + tag + ".nitdev\n";
+    };
+    const char* x = "linspace(0, 2um, 11)";
+    const std::string a = write("a.deck", deck(x, "1e17", "0, 0.4", "a"));
+    const std::string b = write("b.deck", deck(x, "4e17", "0, 0.4", "b"));
+    const std::string shifted = write("shifted.deck", deck(x, "1e17", "0, 0.3", "shifted"));
+    const std::string finer = write("finer.deck", deck("linspace(0, 2um, 13)", "1e17", "0, 0.4", "finer"));
+    for (const std::string& d : {a, b, shifted, finer}) REQUIRE(cli("run " + d).status == 0);
+    const auto plot = [&](const std::string& args, const char* name) {
+        const Cli c = cli("plot " + a + " " + args + " --adapter warp --size 400x300 --out " + out(name));
+        CAPTURE(args, c.output);
+        return c;
+    };
+    // Run B as a deck or as a result file (read with A's device); the curves of both runs; mesh quality.
+    for (const auto& [args, name] : {std::pair{"--view difference --compare " + b, "diff_deck.png"},
+                                     std::pair{"--view difference --compare " + out("b.nitsweep"), "diff_file.png"},
+                                     std::pair{"--view difference --field n --point 0 --compare " + b, "diff_n.png"},
+                                     std::pair{"--view iv --compare " + b, "iv.png"},
+                                     std::pair{std::string("--view quality --edges"), "quality.png"},
+                                     std::pair{std::string("--view quality-histogram"), "histogram.png"}}) {
+        CHECK(plot(args, name).status == 0);
+        CHECK(render::load_png(dir / name).has_value());
+    }
+    // The deck and its result file are the same run B.
+    CHECK(render::load_png(dir / "diff_deck.png")->rgba == render::load_png(dir / "diff_file.png")->rgba);
+    // A run beside itself draws another map than a run beside another.
+    REQUIRE(plot("--view difference --compare " + a, "self.png").status == 0);
+    CHECK(render::load_png(dir / "self.png")->rgba != render::load_png(dir / "diff_deck.png")->rgba);
+    // Refused: no run B; another mesh; no bias point at A's; a 1D device's mesh quality.
+    const Cli missing = plot("--view difference", "x.png");
+    CHECK(missing.status == 1);
+    CHECK(missing.output.find("a difference map needs run B (--compare)") != std::string::npos);
+    const Cli other = plot("--view difference --compare " + finer, "x.png");
+    CHECK(other.status == 1);
+    CHECK(other.output.find("a difference needs one mesh") != std::string::npos);
+    const Cli bias = plot("--view difference --point 1 --compare " + shifted, "x.png");
+    CHECK(bias.status == 1);
+    CHECK(bias.output.find("run B has no bias point at run A's biases") != std::string::npos);
+    CHECK(plot("--view difference --point 0 --compare " + shifted, "zero.png").status == 0);
+    const std::string d1 = write("d1.deck", "[mesh]\ntype = tensor\nx = linspace(0, 1um, 11)\n[region silicon]\n"
+                                            "material = silicon\n[doping]\nprofile = donor constant 1e16\n"
+                                            "[contact left]\nkind = ohmic\npatch = x_min\n[equilibrium]\n");
+    const Cli one = cli("plot " + d1 + " --view quality --out " + out("x.png"));
+    CHECK(one.status == 1);
+    CHECK(one.output.find("mesh quality needs a 2D or 3D mesh") != std::string::npos);
+    // Mesh quality and the doping's difference need no results.
+    const std::string unrun = write("unrun.deck", deck(x, "1e17", "0, 0.4", "unrun"));
+    CHECK(cli("plot " + unrun + " --view quality-histogram --adapter warp --out " + out("h.png")).status == 0);
+    CHECK(cli("plot " + unrun + " --view difference --field doping --compare " + b + " --adapter warp --out " +
+              out("dd.png")).status == 0);
+}
+
 TEST_CASE("nitcad plot: the exploded view (Unit 25c, CG6)", "[deck]") {
     const fs::path dir = scratch("cli_plot_exploded");
     const auto write = [&](const char* name, const std::string& text) {

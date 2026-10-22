@@ -8,6 +8,7 @@
 #include <variant>
 
 #include "NiTCAD/app/commands.hpp"
+#include "NiTCAD/app/compare.hpp"
 #include "NiTCAD/app/layout.hpp"
 #include "NiTCAD/app/run_monitor.hpp"
 #include "win32.hpp"
@@ -334,8 +335,11 @@ ResultsPage::ResultsPage(HWND parent, int id) {
     add_column(figures_, 2, L"Unit", 80);
     add_column(figures_, 3, L"Curve", 160);
     add_column(figures_, 4, L"Notes", 160);
+    add_column(figures_, 5, L"Run B", 110);  // Unit 26b, XD6
+    add_column(figures_, 6, L"B \x2212 A", 110);
     add_column(record_, 0, L"Item", 200);
     add_column(record_, 1, L"Value", 420);
+    add_column(record_, 2, L"Run B", 420);
 }
 
 ResultsPage::~ResultsPage() {
@@ -345,17 +349,26 @@ ResultsPage::~ResultsPage() {
     }
 }
 
-void ResultsPage::show(const Workspace* w) {
+void ResultsPage::show(const Workspace* w, const Workspace* b) {
     SendMessageW(figures_, LVM_DELETEALLITEMS, 0, 0);
     SendMessageW(record_, LVM_DELETEALLITEMS, 0, 0);
     if (!w) return;
+    const std::vector<FigureShift> shifts = b ? figure_shifts(*w, *b) : std::vector<FigureShift>{};
     for (const Figure& f : extracted_figures(*w)) {
         std::string notes;
         if (f.extrapolated) notes += "extrapolated";
         if (f.below_resolution) notes += std::string(notes.empty() ? "" : ", ") + "below resolution";
-        add_row(figures_, {f.name, std::format("{:.5g}", f.value), f.unit, f.curve, notes});
+        std::vector<std::string> row{f.name, std::format("{:.5g}", f.value), f.unit, f.curve, notes};
+        const auto s = std::ranges::find_if(shifts, [&](const FigureShift& x) { return x.name == f.name && x.curve == f.curve; });
+        if (s != shifts.end()) row.insert(row.end(), {std::format("{:.5g}", s->b), std::format("{:+.4g}", s->delta())});
+        add_row(figures_, row);
     }
-    for (const Line& l : run_record(*w)) add_row(record_, {l.name, l.value});
+    if (!b) {
+        for (const Line& l : run_record(*w)) add_row(record_, {l.name, l.value});
+        return;
+    }
+    // Side by side, the lines that differ marked.
+    for (const RecordRow& r : compare_records(*w, *b)) add_row(record_, {(r.differs ? "\xE2\x89\xA0 " : "") + r.name, r.a, r.b});
 }
 
 void ResultsPage::set_dpi(int dpi, HFONT font, HFONT bold) {
@@ -368,6 +381,7 @@ void ResultsPage::set_dpi(int dpi, HFONT font, HFONT bold) {
 int ResultsPage::figure_count() const { return static_cast<int>(SendMessageW(figures_, LVM_GETITEMCOUNT, 0, 0)); }
 int ResultsPage::record_count() const { return static_cast<int>(SendMessageW(record_, LVM_GETITEMCOUNT, 0, 0)); }
 std::wstring ResultsPage::figure_cell(int row, int column) const { return list_cell(figures_, row, column); }
+std::wstring ResultsPage::record_cell(int row, int column) const { return list_cell(record_, row, column); }
 
 void ResultsPage::layout() {
     RECT r{};

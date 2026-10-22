@@ -23,6 +23,7 @@
 #include "NiTCAD/mesh/tensor_grid.hpp"
 #include "NiTCAD/physics/insulator.hpp"
 #include "NiTCAD/physics/semiconductor.hpp"
+#include "NiTCAD/render/compare.hpp"
 #include "NiTCAD/render/image.hpp"
 #include "NiTCAD/render/scene.hpp"
 #include "NiTCAD/render/streamlines.hpp"
@@ -461,6 +462,18 @@ TEST_CASE("render image: the views match their WARP references (VG4)") {
         std::vector<Image> tiles;
         for (const FieldScene& sc : *scenes) tiles.push_back(*r.draw(sc, 480, 360));
         check_image(*tile_images(tiles, 3), "mosfet2d_filmstrip_n");
+    }
+    SECTION("2D difference map: the drain at 0.5 V less the drain at 0 V (Unit 26b, XG5)") {
+        const auto d = difference_field(m2.device, m2.device, g2, m2.sweep[2], m2.sweep.back(), Field::potential);
+        REQUIRE(d.has_value());
+        FieldOptions o;
+        o.title = d->title;
+        o.map = Colormap::coolwarm;
+        o.scale = difference_scale(d->values);
+        o.contours = true;
+        const auto s = field_view(m2.device, g2, d->values, o);
+        REQUIRE(s.has_value());
+        check_image(*r.draw(*s, W, H), "mosfet2d_difference_potential");
     }
     SECTION("3D opaque oxide, perspective") {
         FieldOptions o = field_options(m3.device, m3.point, Field::potential, values);

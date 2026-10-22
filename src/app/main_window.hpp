@@ -118,6 +118,14 @@ public:
     // removes it.
     void set_cut(std::optional<ViewSettings::Cut> cut);
     [[nodiscard]] const std::optional<ViewSettings::Cut>& cut() const noexcept { return cut_; }
+    // Run comparison (Unit 26b, XD6): a result file as run B beside the workspace (its device file and a
+    // generated mesh's file as open_result takes them); File > Compare with a result asks for them.
+    bool compare_result(const std::filesystem::path& result, const std::filesystem::path& device,
+                        const std::filesystem::path& mesh = {});
+    [[nodiscard]] const Workspace* run_b() const noexcept { return run_b_ ? &*run_b_ : nullptr; }
+    // The deck's results that a run (or the structure preview) replaced: Simulation > Compare with the
+    // previous run takes them as run B.
+    [[nodiscard]] bool has_previous_run() const noexcept { return previous_.has_value(); }
 
     // The ids of the inspector's controls and the panes (for the tests).
     enum Control : int {
@@ -157,6 +165,8 @@ private:
     void update_metrics();
     // A new workspace; its view settings reset unless kept (the structure preview while editing).
     void set_workspace(Workspace w, bool keep_settings = false);
+    // Run B shown beside the workspace, or none.
+    void set_run_b(std::optional<Workspace> b);
     void default_settings();
     void present_camera();
     bool confirm_discard();
@@ -208,6 +218,7 @@ private:
     Pending pending_ = Pending::none;
     std::chrono::steady_clock::time_point run_ui_updated_{};
     std::optional<Workspace> workspace_;
+    std::optional<Workspace> run_b_, previous_;  // Unit 26b, XD6
     std::optional<Prober> prober_;
     ViewSettings device_view_, curve_view_;
     std::optional<Scene> scene_;

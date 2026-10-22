@@ -3305,6 +3305,89 @@ built.**
   alone (61 cases, 658 s); app 110 s, window 297 s. The clean-worktree suites at this commit are recorded with
   26b·3.
 
+**Commit 26b·3 (run comparison and mesh quality; XD6, XD7, XG5, XG6, XG7), as built.**
+- `render/quality.hpp`: `min_angle_deg` — a triangle's smallest angle (each from atan2(|u × v|, u · v)), a
+  tetrahedron's smallest dihedral angle (π less the angle between two outward face normals, over the six face pairs);
+  0 for a degenerate element (|u × v| ≤ 1e-14 size², |6V| ≤ 1e-14 size³). `element_quality` (one angle per element,
+  2D and 3D only), `quality_summary` (minimum, median — the mean of the two middles for an even count — and the count
+  strictly below the threshold, 20° in 2D and 10° in 3D), `quality_histogram` (18 bins of 5°, every element once).
+  `scene.hpp`: `quality_view` (flat per element, 0 to the best angle — 60° in 2D, 70.53° in 3D — unless a range is
+  given; 2D with the element edges, 3D on the boundary or on slices; no contacts) and `quality_plot` (the histogram as
+  a step line and the threshold, 0 to 90°). `mesh_view`'s 3D edges now come from the shared `boundary_face_edges`
+  (its output unchanged: the references pass).
+- `render/compare.hpp`: `matching_point` (the first point of B with the same contacts, each bias within 1e-9 V);
+  `difference_field` (B − A at the nodes of A's geometry: densities in Δlog₁₀ decades, NaN unless both are positive;
+  the potential in mV; **the band edges and quasi-Fermi levels in meV** — XD6 says mV; they are energies, so meV is
+  the unit of the same number); `difference_scale` (symmetric about 0, ±1 when everything is 0 or NaN).
+- `app/compare.hpp`: `comparable` (the same mesh, by the meshes' digest), `figure_shifts` (Unit 24's figures both runs
+  have, by name and curve, B − A: ΔV_th is the threshold's), `compare_records` (A's lines in order, then the lines
+  only B has; `differs` marked).
+- `ViewSettings`: views `quality`, `quality-histogram` (2D and 3D with elements, before a run too) and `difference`
+  (offered with a run B on the same mesh). `build_scene`, `available_views` and `plot_arguments` take run B: the I-V,
+  C-V and transient-current views overlay B's curve of the same contacts (by name), the series named "(A)" and
+  "(B)"; the difference map is cool-warm unless another colormap is chosen, scaled by `difference_scale` unless a
+  range is given, a profile in 1D. The doping's difference needs no results. Refused: no run B, another mesh, no
+  bias point of B at A's biases, a contact of A that B lacks, B without the analysis the curve needs. A transient's
+  snapshots are matched by bias like any point (the first equal one). Band diagrams and profiles are not overlaid.
+- **Deviation (owner's record, as for 26b·2's `--cut`): `nitcad plot --compare <deck | result file>`** and the views
+  `quality`, `quality-histogram`, `difference`, with the same rules and messages, so the window's new views are
+  checked against `nitcad plot`'s PNGs (VA4, WG4). A result file is read with run A's device and must have its mesh
+  (the result's digest, or the node count for a file without one). A deck's B outputs are loaded as A's are (the
+  shared `load_outputs`); `nitcad plot` mesh quality and a doping difference need no results.
+- The window: File > Compare with a result... (Ctrl+Shift+C; the device and mesh files found as Open result finds
+  them), Simulation > Compare with the previous run (Ctrl+Shift+V) and Stop comparing (Ctrl+Shift+X), View > Mesh
+  quality (Ctrl+Shift+Q, 2D and 3D). The previous run is the workspace with results that a run (or the structure
+  preview) of the same deck replaced; Compare with the previous run takes it as run B, Stop comparing gives it back.
+  Opening a deck or a result forgets both. The metrics strip shows run B's name and ΔV_th when comparing, and on
+  the quality views "Min angle, median, N below T°". The Results tab adds "Run B" and "B − A" columns to the figures,
+  and the run records side by side ("≠" before a line that differs). Probing a difference map reads B − A.
+- **Tests:** `quality_test` (4 cases) — exact angles: equilateral 60°, right isosceles 45°, 30-60-90 30°, the regular
+  tetrahedron 70.5288°, a cube corner's tetrahedron acos(1/√3), a Kuhn tetrahedron 45°, degenerate 0 (collinear, coincident,
+  flat, and collinear to rounding), a sliver under 0.2°; tensor meshes 45° in 2D and 3D; generated 2D meshes at 20.7°, 25° and 30° settings: no element below
+  the setting other than those the generator reports exempt, the minimum equal to its report; the 3D generator's
+  minimum dihedral equal to its report; the histogram's bins and the summary (odd and even counts, the threshold
+  itself not below); the map and the plot. `compare_test` (render, 3 cases) — matching points (another number of
+  contacts refused, also one equal as far as A goes); a run against itself zero in every field it holds (at least
+  11); two runs: the potential's difference in mV, n's in decades, the donors' log 4, the scale symmetric. **WARP reference** `mosfet2d_difference_potential` (the drain at 0.5 V less 0 V: +500 mV in
+  the drain pocket, the depletion region between). `compare_test` (app, 2 cases) — the 2D MOSFET at gate work
+  functions 4.1 and 4.3 eV: ΔV_th equals the difference of the two extracted thresholds and is positive; the shifts
+  in A's order; the input identity marked as differing, the mesh not; a run against itself: no shift, nothing marked;
+  two meshes not comparable, their figures still compared; the diode swept from the cathode: the same figure on
+  another curve, no shift; an unsolved deck beside a run: B's lines after A's, marked. `view_settings_test`: the views offered (with and without
+  B, another mesh), the refusals, the overlay's series, the plot arguments; the quality map, the histogram, two
+  difference maps and the overlaid I-V **equal to `nitcad plot`'s PNGs to the bit**. `run_test`: B as a deck and as
+  its result file give the same image; the refusals; mesh quality and the doping difference without results. The
+  window: Mesh quality (the strip reads "Min angle 26.6°, median 26.6°, 0 below 20°": the MOSFET's 0.1 × 0.05 µm
+  cells give atan ½), a second run with another work function, Compare with the previous run (the difference map,
+  ΔV_th negative in the strip, the Results columns, the marked identity), Stop comparing (the field view back, the
+  previous run kept), a result file as run B, a new deck forgetting both. The command test covers the four new
+  commands' menus and unique accelerators.
+- **Mutation checks (Release):** 40 of 41 caught; the 41st caught in Debug only. Render 21 (a triangle's third angle
+  ignored, an angle of the wrong sign, collinear triangles not degenerate, normals not outward, the normals' angle as
+  the dihedral, a face pair skipped, the 3D threshold 20°, the even median the upper middle, the threshold itself
+  below, 90° in the first bin, bins rounded, a loose bias match, the contact count unchecked, A − B in decades, the
+  potential in V, a zero density in B read, the scale from the largest positive, the scale not symmetric, the quality
+  map's scale to 90°, every element the first's colour, the threshold line at 0), app 13 (comparable ignoring the
+  mesh, A and B swapped, figures matched by name alone, differing lines not marked, lines only B has dropped, the
+  difference offered on another mesh, the difference map in turbo, its scale fitted, `plot_arguments` without
+  `--compare`, the overlay unnamed by run, I-V without B's curve, the histogram drawn as a map, no histogram view),
+  CLI 5 (a deck B on another mesh taken, no bias-point refusal, a result file B ignored, the histogram or the doping
+  difference needing results), window 11 (no previous run kept, the previous run kept after use, Stop comparing
+  losing it, a new deck keeping run B, Mesh quality showing the field, views without run B, no ΔV_th in the strip, a
+  difference view kept without B, the 3D threshold in 2D, A − B in the Results, differing lines not marked). Four
+  survived at first and gained tests: collinear to rounding (now 0 exactly), figures matched by name alone (the
+  diode swept from the cathode: the same figure on another curve), lines only B has (an unsolved deck beside a run),
+  and the contact count — whose mutant reads past A's biases: a run B equal to A as far as A goes is now refused,
+  caught by Debug's checked `vector` (an assertion), not in Release, where the read is unchecked.
+- **Suites:** in the working tree, Release 27 of 27 (974 s); Debug 19 of 19 — `app_window` failed once in the suite
+  and passed run alone (271 s): the GPU self-test's WG1 gate saw a 226 ms gap in the message loop. A first run
+  failed the same way in Release (652 ms, `app_window_3d`), passing 4 of 4 after. **Open observation:** the first
+  GPU self-test after the GPU idles can stall the message loop past 100 ms, in 26b·2's build as well (1,623 ms, then
+  41 and 38 ms; 26b·3's: 115, then 42 and 43 ms) — a hardware-adapter wake-up, not this commit; WG1 is left as
+  ruled. No warnings under `/W4 /WX`. The tests added for the four survivors came after the suites; they pass in
+  Release and Debug (render quality and compare, app compare). The clean-worktree suites at 26b·2 (394c2e9): Release 27 of 27, Debug 19 of 19
+  (1,687 s). The clean-worktree suites at this commit are recorded with the acceptance.
+
 **Not in Unit 26b (VA7 and later):** form editors that write the deck, project management, remote runs, plugins,
 localization, an installer; completion of region parameter paths; more than two runs compared at once.
 

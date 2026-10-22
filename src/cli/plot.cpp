@@ -20,7 +20,9 @@
 #include "NiTCAD/io/device_file.hpp"
 #include "NiTCAD/io/files.hpp"
 #include "NiTCAD/mesh/mesh.hpp"
+#include "NiTCAD/render/compare.hpp"
 #include "NiTCAD/render/image.hpp"
+#include "NiTCAD/render/quality.hpp"
 #include "NiTCAD/render/scene.hpp"
 #include "NiTCAD/render/vectors.hpp"
 
@@ -35,8 +37,8 @@ constexpr const char* plot_usage =
     "usage: nitcad plot <deck | result file> [options] --out <image.png>\n"
     "  input   a deck (its device, mesh and the result files its run wrote), or a .nitsweep,\n"
     "          .nittran or .nitac file with --device <file.nitdev> [--mesh <file.nitmesh>]\n"
-    "  view    --view solid|mesh|field|slice|iso|exploded|filmstrip|iv|cv|current|bands|profile\n"
-    "          (default: field with --field, else solid)\n"
+    "  view    --view solid|mesh|field|slice|iso|exploded|filmstrip|iv|cv|current|bands|profile|\n"
+    "          quality|quality-histogram|difference (default: field with --field, else solid)\n"
     "  iso     --view iso --field <f> --levels <v>[,<v>...] (3D surfaces, 2D contours)\n"
     "  field   --field potential|n|p|Ec|Ev|Efn|Efp|T|doping|ND|NA|R|srh|auger|\n"
     "          radiative|surface|Gii|Gbtbt|E|J|Jn|Jp  --point <k> (default: last)\n"
@@ -49,6 +51,12 @@ constexpr const char* plot_usage =
     "  clip    --clip <x0>,<y0>,<z0>:<x1>,<y1>,<z1> (um): that box removed from a 3D solid or field view\n"
     "  cut     --cut <x0>,<y0>[,<z0>]:<x1>,<y1>[,<z1>] (um): --view profile or bands along that line (needed\n"
     "          in 2D and 3D), or the line drawn on a 2D or 3D solid, mesh, field, slice or iso view\n"
+    "  compare --compare <deck | result file> (run B; a result file is read with the device of run A):\n"
+    "          --view difference --field <f>: B - A at the bias point both have, on one mesh (mV for\n"
+    "          the potential, meV for energies, decades for densities); with --view iv, cv or current\n"
+    "          both runs' curves\n"
+    "  quality --view quality (each element's minimum angle, 2D, or dihedral angle, 3D; --slice in 3D)\n"
+    "          or --view quality-histogram\n"
     "  explode --view exploded [--field <f>] [--axis x|y|z (y)] [--gap <um> (12% of the extent)]\n"
     "  film    --view filmstrip --field <f> (a transient run) [--every <k>] [--columns <c> (4)]\n"
     "          (--size is each frame's, 640x480 by default)\n"
@@ -104,6 +112,7 @@ struct Options {
     std::string view, field, scale, colormap = "turbo", contact, sense, adapter = "auto";
     std::string streamlines, from, seeds;  // Unit 25b
     std::string cut;  // Unit 26b
+    fs::path compare;  // Unit 26b: run B
     std::size_t lines = 24;
     std::string vectors;  // Unit 25c
     std::optional<Box> clip;
@@ -176,6 +185,33 @@ std::expected<void, std::string> load_result(const fs::path& path, Loaded& l) {
         return std::unexpected("a result file is .nitsweep, .nittran or .nitac: " + path.string());
     }
     return {};
+}
+
+// The results a deck's run wrote, for its kind of analysis.
+std::expected<void, std::string> load_outputs(const deck::Plan& plan, Loaded& l) {
+    const deck::Outputs& out = plan.outputs;
+    using deck::Analysis;
+    const fs::path file = plan.analysis == Analysis::transient      ? out.transient
+                          : plan.analysis == Analysis::small_signal ? out.small_signal
+                          : plan.analysis == Analysis::equilibrium  ? out.checkpoint
+                                                                     : out.sweep;
+    if (file.empty()) return std::unexpected(std::string("the deck writes no result file for this view (add one to [output])"));
+    if (plan.analysis == Analysis::equilibrium) {
+        if (!fs::exists(file)) return std::unexpected("no result file " + file.string() + " (run the deck first)");
+        auto c = io::load_checkpoint(file, plan.device.mesh());
+        if (!c) return std::unexpected(c.error().message);
+        results::BiasPoint p;
+        p.fields = c->fields;
+        l.equilibrium = std::move(p);
+        return {};
+    }
+    return load_result(file, l);
+}
+
+// The mesh digest a loaded result names (0 when it names none: an equilibrium or an older file).
+std::uint64_t result_digest(const Loaded& l) {
+    return l.sweep ? l.sweep->run.mesh_digest : l.transient ? l.transient->run.mesh_digest
+           : l.small_signal ? l.small_signal->run.mesh_digest : 0;
 }
 
 std::string current_unit(int dimension) {
@@ -288,6 +324,7 @@ int plot(int argc, char** argv) {
         else if (a == "--from") { if (!flag_value(o.from)) return usage("--from needs a contact"); }
         else if (a == "--seeds") { if (!flag_value(o.seeds)) return usage("--seeds needs a segment or a plane"); }
         else if (a == "--cut") { if (!flag_value(o.cut)) return usage("--cut needs a segment"); }
+        else if (a == "--compare") { if (!flag_value(o.compare)) return usage("--compare needs a deck or a result file"); }
         else if (a == "--lines") {
             const auto v = value();
             const auto n = v ? number(*v) : std::nullopt;
@@ -395,40 +432,54 @@ int plot(int argc, char** argv) {
         if (!built) return fail(built.error().message);
         plan = std::move(*built);
         device = &plan->device;
-        const bool needs_results = o.view != "solid" && o.view != "mesh" &&
-                                   !(o.view == "field" && (o.field == "doping" || o.field == "ND" || o.field == "NA"));
+        // The doping and the mesh quality need no results (a field, profile or difference of the doping).
+        const bool doping = o.field == "doping" || o.field == "ND" || o.field == "NA";
+        const bool needs_results = o.view != "solid" && o.view != "mesh" && o.view != "quality" &&
+                                   o.view != "quality-histogram" &&
+                                   !((o.view == "field" || o.view == "profile" || o.view == "difference") && doping);
         if (needs_results) {
-            const deck::Outputs& out = plan->outputs;
-            using deck::Analysis;
-            const fs::path file = plan->analysis == Analysis::transient      ? out.transient
-                                  : plan->analysis == Analysis::small_signal ? out.small_signal
-                                  : plan->analysis == Analysis::equilibrium  ? out.checkpoint
-                                                                             : out.sweep;
-            if (file.empty()) return fail("the deck writes no result file for this view (add one to [output])");
-            if (plan->analysis == Analysis::equilibrium) {
-                if (!fs::exists(file)) return fail("no result file " + file.string() + " (run the deck first)");
-                auto c = io::load_checkpoint(file, device->mesh());
-                if (!c) return fail(c.error().message);
-                results::BiasPoint p;
-                p.fields = c->fields;
-                l.equilibrium = std::move(p);
-            } else if (auto r = load_result(file, l); !r) {
-                return fail(r.error());
-            }
+            if (auto r = load_outputs(*plan, l); !r) return fail(r.error());
         }
     }
     const mesh::Mesh& m = device->mesh();
     // Unit 45 (RQ4): a result that names its mesh must be of the device's; older results (digest 0)
     // fall back to the node count below.
     {
-        const std::uint64_t digest = l.sweep          ? l.sweep->run.mesh_digest
-                                     : l.transient    ? l.transient->run.mesh_digest
-                                     : l.small_signal ? l.small_signal->run.mesh_digest
-                                                      : 0;
+        const std::uint64_t digest = result_digest(l);
         if (digest != 0 && digest != mesh::graph_digest(m)) {
             return fail("the result was computed on another mesh: its mesh digest is not the device's");
         }
     }
+    // Run B (Unit 26b, XD6): a result file read with run A's device, or a deck with its device and results.
+    // A difference needs one mesh (the digest; for an older file, the node count).
+    Loaded lb;
+    std::optional<deck::Plan> plan_b;
+    const device::Device* device_b = nullptr;
+    bool same_mesh_b = false;
+    if (!o.compare.empty()) {
+        const std::string bext = o.compare.extension().string();
+        if (bext == ".nitsweep" || bext == ".nittran" || bext == ".nitac") {
+            if (auto r = load_result(o.compare, lb); !r) return fail(r.error());
+            device_b = device;
+            const std::uint64_t digest = result_digest(lb);
+            const auto pb = points_of(lb);
+            same_mesh_b = digest != 0 ? digest == mesh::graph_digest(m)
+                                      : !pb.empty() && pb.front().fields.potential_V.size() == m.node_count();
+        } else {
+            const auto deck_b = deck::read(o.compare);
+            if (!deck_b) return fail(deck_b.error().message);
+            auto built = deck::build(*deck_b);
+            if (!built) return fail(built.error().message);
+            plan_b = std::move(*built);
+            device_b = &plan_b->device;
+            const bool doping = o.field == "doping" || o.field == "ND" || o.field == "NA";
+            if (!(o.view == "difference" && doping)) {
+                if (auto r = load_outputs(*plan_b, lb); !r) return fail(r.error());
+            }
+            same_mesh_b = mesh::graph_digest(device_b->mesh()) == mesh::graph_digest(m);
+        }
+    }
+    const std::vector<results::BiasPoint> points_b = points_of(lb);
     const mesh::GeneratedMesh* generated = plan && plan->generated ? &*plan->generated : l.generated ? &*l.generated : nullptr;
     std::optional<Geometry> geometry;
     if (device->cells()) {
@@ -474,7 +525,7 @@ int plot(int argc, char** argv) {
     std::optional<CutLine> cut;
     if (!o.cut.empty()) {
         const bool device_view = o.view == "solid" || o.view == "mesh" || o.view == "field" || o.view == "slice" ||
-                                 o.view == "iso";
+                                 o.view == "iso" || o.view == "quality" || o.view == "difference";
         if (o.view != "profile" && o.view != "bands" && !(device_view && m.dimension() >= 2)) {
             return fail("a cut line applies to the profile and bands views and to 2D and 3D device views");
         }
@@ -674,6 +725,14 @@ int plot(int argc, char** argv) {
         std::vector<SeriesInput> series;
         std::string x_label, y_label;
         AxisScale x_scale = AxisScale::linear;
+        // Run B's curves beside run A's (Unit 26b, XD6): the contacts chosen on A, found by name in B.
+        const bool with_b = device_b != nullptr;
+        const auto in_b = [&](const std::string& name) -> std::optional<std::size_t> {
+            const std::size_t k = contact_index(*device_b, name, device_b->contacts().size());
+            if (k == device_b->contacts().size()) return std::nullopt;
+            return k;
+        };
+        const auto labelled = [&](std::string name, const char* run) { return with_b ? name + " (" + run + ")" : name; };
         if (o.view == "iv") {
             if (!l.sweep) return fail("an I-V plot needs a sweep's results");
             std::vector<std::vector<double>> biases;
@@ -682,9 +741,18 @@ int plot(int argc, char** argv) {
             const std::size_t sense = contact_index(*device, o.sense, swept);
             auto c = analysis::current_curve(*l.sweep, swept, sense);
             if (!c) return fail(c.error().message);
-            series.push_back({"I(" + contacts[sense].name + ")", std::move(*c)});
+            series.push_back({labelled("I(" + contacts[sense].name + ")", "A"), std::move(*c)});
             x_label = "V(" + contacts[swept].name + ") (V)";
             y_label = "I (" + current_unit(m.dimension()) + ")";
+            if (with_b) {
+                if (!lb.sweep) return fail("run B holds no sweep to compare");
+                const auto bs = in_b(contacts[swept].name), bn = in_b(contacts[sense].name);
+                if (!bs) return fail("run B has no contact " + contacts[swept].name);
+                if (!bn) return fail("run B has no contact " + contacts[sense].name);
+                auto cb = analysis::current_curve(*lb.sweep, *bs, *bn);
+                if (!cb) return fail(cb.error().message);
+                series.push_back({labelled("I(" + contacts[sense].name + ")", "B"), std::move(*cb)});
+            }
         } else if (o.view == "cv") {
             if (!l.small_signal) return fail("a C-V plot needs a small-signal run's results");
             std::vector<std::vector<double>> biases;
@@ -694,21 +762,45 @@ int plot(int argc, char** argv) {
             const std::size_t f = o.frequency.value_or(0);
             auto c = analysis::capacitance_curve(*l.small_signal, f, sense, swept, swept);
             if (!c) return fail(c.error().message);
-            series.push_back({"C at " + std::to_string(l.small_signal->frequency_Hz[f]) + " Hz", std::move(*c)});
+            const std::string name = "C at " + std::to_string(l.small_signal->frequency_Hz[f]) + " Hz";
+            series.push_back({labelled(name, "A"), std::move(*c)});
             x_label = "V(" + contacts[swept].name + ") (V)";
             y_label = m.dimension() == 1 ? "C (F/cm\xC2\xB2)" : m.dimension() == 2 ? "C (F/cm)" : "C (F)";
+            if (with_b) {
+                if (!lb.small_signal || f >= lb.small_signal->frequency_Hz.size() ||
+                    lb.small_signal->frequency_Hz[f] != l.small_signal->frequency_Hz[f]) {
+                    return fail("run B holds no small-signal run at this frequency to compare");
+                }
+                const auto bs = in_b(contacts[swept].name), bn = in_b(contacts[sense].name);
+                if (!bs) return fail("run B has no contact " + contacts[swept].name);
+                if (!bn) return fail("run B has no contact " + contacts[sense].name);
+                auto cb = analysis::capacitance_curve(*lb.small_signal, f, *bn, *bs, *bs);
+                if (!cb) return fail(cb.error().message);
+                series.push_back({labelled(name, "B"), std::move(*cb)});
+            }
         } else {
             if (!l.transient) return fail("a current plot needs a transient run's results");
+            if (with_b && !lb.transient) return fail("run B holds no transient run to compare");
+            const auto curve_of = [](const results::Transient& t, std::size_t c) {
+                std::vector<double> time, i;
+                for (const auto& p : t.points) {
+                    time.push_back(p.time_s);
+                    i.push_back(p.terminal_current[c]);
+                }
+                return analysis::make_curve(std::move(time), std::move(i));
+            };
             for (std::size_t k = 0; k < contacts.size(); ++k) {
                 if (!o.contact.empty() && contacts[k].name != o.contact) continue;
-                std::vector<double> t, i;
-                for (const auto& p : l.transient->points) {
-                    t.push_back(p.time_s);
-                    i.push_back(p.terminal_current[k]);
-                }
-                auto c = analysis::make_curve(std::move(t), std::move(i));
+                auto c = curve_of(*l.transient, k);
                 if (!c) return fail(c.error().message);
-                series.push_back({contacts[k].name, std::move(*c)});
+                series.push_back({labelled(contacts[k].name, "A"), std::move(*c)});
+                if (with_b) {
+                    const auto bk = in_b(contacts[k].name);
+                    if (!bk) return fail("run B has no contact " + contacts[k].name);
+                    auto cb = curve_of(*lb.transient, *bk);
+                    if (!cb) return fail(cb.error().message);
+                    series.push_back({labelled(contacts[k].name, "B"), std::move(*cb)});
+                }
             }
             x_label = "t (s)";
             y_label = "I (" + current_unit(m.dimension()) + ")";
@@ -716,6 +808,67 @@ int plot(int argc, char** argv) {
         auto s = curve_plot(series, x_label, y_label, x_scale, o.log ? AxisScale::log10 : AxisScale::linear);
         if (!s) return fail(s.error().message);
         plot_scene = std::move(*s);
+    } else if (o.view == "quality" || o.view == "quality-histogram") {
+        // Mesh quality (Unit 26b, XD7).
+        auto q = element_quality(*geometry);
+        if (!q) return fail(q.error().message);
+        if (o.view == "quality-histogram") {
+            auto s = quality_plot(*q, m.dimension());
+            if (!s) return fail(s.error().message);
+            plot_scene = std::move(*s);
+        } else {
+            FieldOptions f;
+            f.view = view;
+            f.map = *colormap;
+            if (o.range) {
+                auto s = ColorScale::create(ScaleKind::linear, o.range->first, o.range->second);
+                if (!s) return fail(s.error().message);
+                f.scale = *s;
+            }
+            auto s = quality_view(*device, *geometry, *q, o.slices, f);
+            if (!s) return fail(s.error().message);
+            field_scene = std::move(*s);
+        }
+    } else if (o.view == "difference") {
+        // Run B - run A (Unit 26b, XD6), at the bias point of B equal to A's, on one mesh.
+        if (!device_b) return fail("a difference map needs run B (--compare)");
+        if (!same_mesh_b) return fail("run B was computed on another mesh: a difference needs one mesh");
+        const bool doping = *field == Field::net_doping || *field == Field::donors || *field == Field::acceptors;
+        const results::BiasPoint none;
+        const results::BiasPoint* pa = &none;
+        const results::BiasPoint* pb = &none;
+        if (!doping) {
+            auto p = pick();
+            if (!p) return fail(p.error());
+            pa = *p;
+            const auto k = matching_point(*pa, points_b);
+            if (!k) return fail("run B has no bias point at run A's biases");
+            pb = &points_b[*k];
+        }
+        auto d = difference_field(*device, *device_b, *geometry, *pa, *pb, *field);
+        if (!d) return fail(d.error().message);
+        FieldOptions f;
+        f.view = view;
+        f.map = o.colormap == "turbo" ? Colormap::coolwarm : *colormap;  // XD6: cool-warm unless one is chosen
+        f.contours = o.contours;
+        f.title = d->title;
+        if (o.range) {
+            auto s = ColorScale::create(ScaleKind::linear, o.range->first, o.range->second);
+            if (!s) return fail(s.error().message);
+            f.scale = *s;
+        } else {
+            f.scale = difference_scale(d->values);
+        }
+        if (m.dimension() == 1) {
+            auto p = profile_plot(m, d->values, d->title);
+            if (!p) return fail(p.error().message);
+            plot_scene = std::move(*p);
+        } else {
+            auto s = m.dimension() == 3 && !o.slices.empty() ? slice_view(*device, *geometry, d->values, o.slices, f)
+                                                             : field_view(*device, *geometry, d->values, f);
+            if (!s) return fail(s.error().message);
+            field_scene = std::move(*s);
+        }
     } else {
         return usage("unknown view " + o.view);
     }

@@ -371,6 +371,8 @@ add_library(nitcad_render STATIC
   src/render/vectors.cpp
   src/render/streamlines.cpp
   src/render/cut_line.cpp
+  src/render/quality.cpp
+  src/render/compare.cpp
   src/render/renderer.cpp
   src/render/png.cpp
   ${NITCAD_SHADER_HEADERS})
@@ -392,6 +394,8 @@ add_executable(nitcad_render_test
   tests/render/exploded_test.cpp
   tests/render/film_test.cpp
   tests/render/cut_line_test.cpp
+  tests/render/quality_test.cpp
+  tests/render/compare_test.cpp
   tests/render/image_test.cpp
   tests/render/window_test.cpp)
 # The image test solves its MOSFETs (tests may use any layer; render itself may not).
@@ -533,7 +537,8 @@ add_library(nitcad_app STATIC
   src/app/examples.cpp
   src/app/run_monitor.cpp
   src/app/deck_vocabulary.cpp
-  src/app/live_check.cpp)
+  src/app/live_check.cpp
+  src/app/compare.cpp)
 add_library(NiTCAD::app ALIAS nitcad_app)
 target_include_directories(nitcad_app PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
 target_link_libraries(nitcad_app PUBLIC NiTCAD::deck NiTCAD::render NiTCAD::analysis NiTCAD::io)
@@ -551,7 +556,8 @@ add_executable(nitcad_app_test
   tests/app/examples_test.cpp
   tests/app/run_monitor_test.cpp
   tests/app/deck_vocabulary_test.cpp
-  tests/app/live_check_test.cpp)
+  tests/app/live_check_test.cpp
+  tests/app/compare_test.cpp)
 target_link_libraries(nitcad_app_test PRIVATE NiTCAD::app Catch2::Catch2WithMain user32)
 # The view tests compare the app's images with nitcad plot's (WG4's choices).
 add_dependencies(nitcad_app_test nitcad)

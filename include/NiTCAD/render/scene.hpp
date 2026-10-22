@@ -28,6 +28,7 @@
 #include "NiTCAD/render/color.hpp"
 #include "NiTCAD/render/cut_line.hpp"
 #include "NiTCAD/render/geometry.hpp"
+#include "NiTCAD/render/quality.hpp"
 #include "NiTCAD/render/streamlines.hpp"
 #include "NiTCAD/results/solution.hpp"
 
@@ -257,6 +258,17 @@ void add_arrows(FieldScene& scene, std::span<const Arrow> arrows, double length,
 // A cut line (cut_line.hpp; Unit 26b, XD5) drawn on a 2D or 3D scene: its parts inside the mesh, white edged
 // in black, over everything (in 3D it shows through the device). The scene's bounds are kept.
 void add_cut_line(FieldScene& scene, const CutLine& cut);
+// Mesh quality (quality.hpp; Unit 26b, XD7): each element in one color by its angle (element_quality), on
+// options.scale or else a fixed scale from 0 to the best angle (best_quality_deg), so maps of different meshes
+// compare: 2D the elements with their edges and the region outlines; 3D the boundary faces with their edges,
+// each face in its tetrahedron's color, or with planes the tetrahedra's sections inside the device's
+// translucent outline. No contacts: they would hide elements. Errors (invalid_input): as solid_view; angles
+// not one per element; a plane that misses the device.
+[[nodiscard]] std::expected<FieldScene, base::Error> quality_view(const device::Device& device,
+                                                                 const Geometry& geometry,
+                                                                 std::span<const double> angles,
+                                                                 std::span<const Plane> planes = {},
+                                                                 const FieldOptions& options = {});
 // The context for 3D streamlines: the device's faint translucent outline and the contacts. Errors as
 // solid_view, and (invalid_input) a 2D geometry.
 [[nodiscard]] std::expected<FieldScene, base::Error> outline_view(const device::Device& device,
@@ -352,5 +364,9 @@ struct SeriesInput {
                                                             AxisScale y_scale = AxisScale::linear);
 [[nodiscard]] std::expected<PlotScene, base::Error> cut_band_plot(const mesh::Mesh& mesh, const CutLine& cut,
                                                                  const results::BandDiagram& bands);
+// Mesh quality's histogram (quality_histogram; Unit 26b, XD7): the element count per 5-degree bin as a step
+// curve from 0 to 90 degrees, and the poor-element threshold (quality_threshold_deg) as a vertical line.
+// Errors (invalid_input): no angle; a dimension other than 2 or 3.
+[[nodiscard]] std::expected<PlotScene, base::Error> quality_plot(std::span<const double> angles, int dimension);
 
 }  // namespace NiTCAD::render

@@ -12,10 +12,11 @@ constexpr std::uint16_t vk_tab = 0x09, vk_space = 0x20, vk_f4 = 0x73, vk_f5 = 0x
 
 constexpr std::array<std::string_view, 7> bar{"&File", "&Edit", "&Device", "&Mesh", "&Physics", "&Simulation", "&View"};
 
-constexpr std::array<CommandInfo, 40> list{{
+constexpr std::array<CommandInfo, 44> list{{
     {Command::new_deck, "&File", "&New deck", {'N', true}, "Ctrl+N"},
     {Command::open_deck, "&File", "&Open deck...", {'O', true}, "Ctrl+O"},
     {Command::open_result, "&File", "Open &result...", {'R', true, true}, "Ctrl+Shift+R"},
+    {Command::compare_result, "&File", "Co&mpare with a result...", {'C', true, true}, "Ctrl+Shift+C"},
     {Command::save, "&File", "&Save", {'S', true}, "Ctrl+S"},
     {Command::save_as, "&File", "Save &as...", {'S', true, true}, "Ctrl+Shift+S"},
     {Command::exit, "&File", "E&xit", {vk_f4, false, false, true}, "Alt+F4"},
@@ -29,6 +30,8 @@ constexpr std::array<CommandInfo, 40> list{{
     {Command::check, "&Simulation", "&Check deck", {vk_f7}, "F7"},
     {Command::run, "&Simulation", "&Run", {vk_f5}, "F5"},
     {Command::stop, "&Simulation", "S&top", {vk_f5, false, true}, "Shift+F5"},
+    {Command::compare_previous, "&Simulation", "Compare with the &previous run", {'V', true, true}, "Ctrl+Shift+V"},
+    {Command::stop_comparing, "&Simulation", "Stop co&mparing", {'X', true, true}, "Ctrl+Shift+X"},
     {Command::fit, "&View", "&Fit", {}, "Home"},
     {Command::orbit_left, "&View", "Orbit &left", {}, "Left"},
     {Command::orbit_right, "&View", "Orbit &right", {}, "Right"},
@@ -44,6 +47,7 @@ constexpr std::array<CommandInfo, 40> list{{
     {Command::probe_mode, "&View", "Pro&be", {'B', true, true}, "Ctrl+Shift+B"},
     {Command::measure_mode, "&View", "&Measure", {'M', true, true}, "Ctrl+Shift+M"},
     {Command::cut_line_mode, "&View", "Dr&aw cut line", {'L', true, true}, "Ctrl+Shift+L"},
+    {Command::mesh_quality, "&View", "Mesh &quality", {'Q', true, true}, "Ctrl+Shift+Q"},
     {Command::next_tab, "&View", "Next &tab", {vk_tab, true}, "Ctrl+Tab"},
     {Command::previous_tab, "&View", "Pre&vious tab", {vk_tab, true, true}, "Ctrl+Shift+Tab"},
     {Command::next_pane, "&View", "Ne&xt pane", {vk_f6}, "F6"},

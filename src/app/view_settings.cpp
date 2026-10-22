@@ -11,7 +11,10 @@
 #include <utility>
 
 #include "NiTCAD/analysis/curve.hpp"
+#include "NiTCAD/app/compare.hpp"
 #include "NiTCAD/mesh/mesh.hpp"
+#include "NiTCAD/render/compare.hpp"
+#include "NiTCAD/render/quality.hpp"
 
 namespace NiTCAD::app {
 
@@ -19,7 +22,7 @@ namespace {
 
 using namespace NiTCAD::render;
 
-constexpr std::array<std::pair<ViewKind, std::string_view>, 10> view_names{{{ViewKind::solid, "solid"},
+constexpr std::array<std::pair<ViewKind, std::string_view>, 13> view_names{{{ViewKind::solid, "solid"},
                                                                           {ViewKind::mesh, "mesh"},
                                                                           {ViewKind::field, "field"},
                                                                           {ViewKind::slice, "slice"},
@@ -28,7 +31,10 @@ constexpr std::array<std::pair<ViewKind, std::string_view>, 10> view_names{{{Vie
                                                                           {ViewKind::profile, "profile"},
                                                                           {ViewKind::iv, "iv"},
                                                                           {ViewKind::cv, "cv"},
-                                                                          {ViewKind::current, "current"}}};
+                                                                          {ViewKind::current, "current"},
+                                                                          {ViewKind::quality, "quality"},
+                                                                          {ViewKind::quality_histogram, "quality-histogram"},
+                                                                          {ViewKind::difference, "difference"}}};
 
 base::Error invalid(std::string message) { return {base::ErrorCode::invalid_input, std::move(message), std::nullopt}; }
 
@@ -59,10 +65,10 @@ std::optional<ViewKind> find_view(std::string_view name) noexcept {
 
 bool is_plot(ViewKind v) noexcept {
     return v == ViewKind::bands || v == ViewKind::profile || v == ViewKind::iv || v == ViewKind::cv ||
-           v == ViewKind::current;
+           v == ViewKind::current || v == ViewKind::quality_histogram;
 }
 
-std::expected<Scene, base::Error> build_scene(const Workspace& w, const ViewSettings& o) {
+std::expected<Scene, base::Error> build_scene(const Workspace& w, const ViewSettings& o, const Workspace* b) {
     if (!w.device || !w.geometry) return std::unexpected(invalid("nothing is loaded"));
     const device::Device& device = *w.device;
     const Geometry& geometry = *w.geometry;
@@ -93,18 +99,19 @@ std::expected<Scene, base::Error> build_scene(const Workspace& w, const ViewSett
         if (o.kind != ViewKind::solid && o.kind != ViewKind::field) {
             return std::unexpected(invalid("a clipping box applies to the solid and field views"));
         }
-        Box b;
+        Box box;
         for (std::size_t k = 0; k < 3; ++k) {
-            b.lo[k] = o.clip->lo_um[k] * 1e-4;
-            b.hi[k] = o.clip->hi_um[k] * 1e-4;
+            box.lo[k] = o.clip->lo_um[k] * 1e-4;
+            box.hi[k] = o.clip->hi_um[k] * 1e-4;
         }
-        view.clip = b;
+        view.clip = box;
     }
     // A cut line (Unit 26b, XD5): plotted along by the profile and bands views, drawn on 2D and 3D device views.
     std::optional<CutLine> cut;
     if (o.cut) {
         const bool device_view = o.kind == ViewKind::solid || o.kind == ViewKind::mesh || o.kind == ViewKind::field ||
-                                 o.kind == ViewKind::slice || o.kind == ViewKind::iso;
+                                 o.kind == ViewKind::slice || o.kind == ViewKind::iso || o.kind == ViewKind::quality ||
+                                 o.kind == ViewKind::difference;
         if (o.kind != ViewKind::profile && o.kind != ViewKind::bands && !(device_view && m.dimension() >= 2)) {
             return std::unexpected(invalid("a cut line applies to the profile and bands views and to 2D and 3D device views"));
         }
@@ -112,12 +119,12 @@ std::expected<Scene, base::Error> build_scene(const Workspace& w, const ViewSett
         if (o.cut->from_um.size() != dim || o.cut->to_um.size() != dim) {
             return std::unexpected(invalid("a cut line needs its end points in the device's dimension"));
         }
-        Point a{}, b{};
+        Point from{}, to{};
         for (std::size_t k = 0; k < dim; ++k) {
-            a[k] = o.cut->from_um[k] * 1e-4;
-            b[k] = o.cut->to_um[k] * 1e-4;
+            from[k] = o.cut->from_um[k] * 1e-4;
+            to[k] = o.cut->to_um[k] * 1e-4;
         }
-        auto c = cut_line(geometry, a, b);
+        auto c = cut_line(geometry, from, to);
         if (!c) return std::unexpected(std::move(c.error()));
         cut = std::move(*c);
     }
@@ -173,6 +180,13 @@ std::expected<Scene, base::Error> build_scene(const Workspace& w, const ViewSett
         f.scale = *s;
         return f;
     };
+    std::vector<Plane> planes;
+    for (const auto& s : o.slices) {
+        Plane p;
+        p.normal[static_cast<std::size_t>(s.axis)] = 1.0;
+        p.offset = s.at_um * 1e-4;
+        planes.push_back(p);
+    }
     const auto wrap = [&](auto&& s) -> std::expected<Scene, base::Error> {
         if (!s) return std::unexpected(std::move(s.error()));
         Scene scene(std::move(*s));
@@ -199,13 +213,6 @@ std::expected<Scene, base::Error> build_scene(const Workspace& w, const ViewSett
         }
         if (o.kind == ViewKind::slice) {
             if (o.slices.empty()) return std::unexpected(invalid("--view slice needs --slice"));
-            std::vector<Plane> planes;
-            for (const auto& s : o.slices) {
-                Plane p;
-                p.normal[static_cast<std::size_t>(s.axis)] = 1.0;
-                p.offset = s.at_um * 1e-4;
-                planes.push_back(p);
-            }
             return wrap(slice_view(device, geometry, *v, planes, *f));
         }
         return wrap(field_view(device, geometry, *v, *f));
@@ -242,6 +249,13 @@ std::expected<Scene, base::Error> build_scene(const Workspace& w, const ViewSett
         const auto contacts = device.contacts();
         std::vector<SeriesInput> series;
         std::string x_label, y_label;
+        // The contacts are chosen on run A and found by name in run B (Unit 26b, XD6).
+        const auto in_b = [&](const std::string& name) -> std::expected<std::size_t, base::Error> {
+            const std::size_t k = contact_index(*b->device, name, b->device->contacts().size());
+            if (k == b->device->contacts().size()) return std::unexpected(invalid("run B has no contact " + name));
+            return k;
+        };
+        const auto labelled = [&](std::string name, const char* run) { return b ? name + " (" + run + ")" : name; };
         if (o.kind == ViewKind::iv) {
             if (!w.sweep) return std::unexpected(invalid("an I-V plot needs a sweep's results"));
             std::vector<std::vector<double>> biases;
@@ -250,9 +264,19 @@ std::expected<Scene, base::Error> build_scene(const Workspace& w, const ViewSett
             const std::size_t sense = contact_index(device, o.sense, swept);
             auto c = analysis::current_curve(*w.sweep, swept, sense);
             if (!c) return std::unexpected(std::move(c.error()));
-            series.push_back({"I(" + contacts[sense].name + ")", std::move(*c)});
+            series.push_back({labelled("I(" + contacts[sense].name + ")", "A"), std::move(*c)});
             x_label = "V(" + contacts[swept].name + ") (V)";
             y_label = "I (" + current_unit(m.dimension()) + ")";
+            if (b) {
+                if (!b->sweep) return std::unexpected(invalid("run B holds no sweep to compare"));
+                auto bs = in_b(contacts[swept].name);
+                if (!bs) return std::unexpected(std::move(bs.error()));
+                auto bn = in_b(contacts[sense].name);
+                if (!bn) return std::unexpected(std::move(bn.error()));
+                auto cb = analysis::current_curve(*b->sweep, *bs, *bn);
+                if (!cb) return std::unexpected(std::move(cb.error()));
+                series.push_back({labelled("I(" + contacts[sense].name + ")", "B"), std::move(*cb)});
+            }
         } else if (o.kind == ViewKind::cv) {
             if (!w.small_signal) return std::unexpected(invalid("a C-V plot needs a small-signal run's results"));
             std::vector<std::vector<double>> biases;
@@ -263,32 +287,105 @@ std::expected<Scene, base::Error> build_scene(const Workspace& w, const ViewSett
             if (f >= w.small_signal->frequency_Hz.size()) return std::unexpected(invalid("the frequency is out of range"));
             auto c = analysis::capacitance_curve(*w.small_signal, f, sense, swept, swept);
             if (!c) return std::unexpected(std::move(c.error()));
-            series.push_back({"C at " + std::to_string(w.small_signal->frequency_Hz[f]) + " Hz", std::move(*c)});
+            const std::string name = "C at " + std::to_string(w.small_signal->frequency_Hz[f]) + " Hz";
+            series.push_back({labelled(name, "A"), std::move(*c)});
             x_label = "V(" + contacts[swept].name + ") (V)";
             y_label = m.dimension() == 1 ? "C (F/cm\xC2\xB2)" : m.dimension() == 2 ? "C (F/cm)" : "C (F)";
+            if (b) {
+                if (!b->small_signal || f >= b->small_signal->frequency_Hz.size() ||
+                    b->small_signal->frequency_Hz[f] != w.small_signal->frequency_Hz[f]) {
+                    return std::unexpected(invalid("run B holds no small-signal run at this frequency to compare"));
+                }
+                auto bs = in_b(contacts[swept].name);
+                if (!bs) return std::unexpected(std::move(bs.error()));
+                auto bn = in_b(contacts[sense].name);
+                if (!bn) return std::unexpected(std::move(bn.error()));
+                auto cb = analysis::capacitance_curve(*b->small_signal, f, *bn, *bs, *bs);
+                if (!cb) return std::unexpected(std::move(cb.error()));
+                series.push_back({labelled(name, "B"), std::move(*cb)});
+            }
         } else {
             if (!w.transient) return std::unexpected(invalid("a current plot needs a transient run's results"));
+            if (b && !b->transient) return std::unexpected(invalid("run B holds no transient run to compare"));
             for (std::size_t k = 0; k < contacts.size(); ++k) {
                 if (!o.contact.empty() && contacts[k].name != o.contact) continue;
-                std::vector<double> t, i;
-                for (const auto& p : w.transient->points) {
-                    t.push_back(p.time_s);
-                    i.push_back(p.terminal_current[k]);
-                }
-                auto c = analysis::make_curve(std::move(t), std::move(i));
+                const auto curve_of = [](const results::Transient& t, std::size_t c) {
+                    std::vector<double> time, i;
+                    for (const auto& p : t.points) {
+                        time.push_back(p.time_s);
+                        i.push_back(p.terminal_current[c]);
+                    }
+                    return analysis::make_curve(std::move(time), std::move(i));
+                };
+                auto c = curve_of(*w.transient, k);
                 if (!c) return std::unexpected(std::move(c.error()));
-                series.push_back({contacts[k].name, std::move(*c)});
+                series.push_back({labelled(contacts[k].name, "A"), std::move(*c)});
+                if (b) {
+                    auto bk = in_b(contacts[k].name);
+                    if (!bk) return std::unexpected(std::move(bk.error()));
+                    auto cb = curve_of(*b->transient, *bk);
+                    if (!cb) return std::unexpected(std::move(cb.error()));
+                    series.push_back({labelled(contacts[k].name, "B"), std::move(*cb)});
+                }
             }
             x_label = "t (s)";
             y_label = "I (" + current_unit(m.dimension()) + ")";
         }
         return wrap(curve_plot(series, x_label, y_label, AxisScale::linear, o.log ? AxisScale::log10 : AxisScale::linear));
     }
+    case ViewKind::quality:
+    case ViewKind::quality_histogram: {
+        auto q = element_quality(geometry);
+        if (!q) return std::unexpected(std::move(q.error()));
+        if (o.kind == ViewKind::quality_histogram) return wrap(quality_plot(*q, m.dimension()));
+        FieldOptions f;
+        f.view = view;
+        f.map = *colormap;
+        if (o.range) {
+            auto s = ColorScale::create(ScaleKind::linear, o.range->first, o.range->second);
+            if (!s) return std::unexpected(std::move(s.error()));
+            f.scale = *s;
+        }
+        return wrap(quality_view(device, geometry, *q, planes, f));
+    }
+    case ViewKind::difference: {
+        if (!b || !b->device) return std::unexpected(invalid("a difference map needs run B (--compare)"));
+        if (!comparable(w, *b)) return std::unexpected(invalid("run B was computed on another mesh: a difference needs one mesh"));
+        const bool doping = *field == Field::net_doping || *field == Field::donors || *field == Field::acceptors;
+        const results::BiasPoint none;
+        const results::BiasPoint* pa = &none;
+        const results::BiasPoint* pb = &none;
+        if (!doping) {
+            auto p = pick();
+            if (!p) return std::unexpected(std::move(p.error()));
+            pa = *p;
+            const auto k = matching_point(*pa, b->points);
+            if (!k) return std::unexpected(invalid("run B has no bias point at run A's biases"));
+            pb = &b->points[*k];
+        }
+        auto d = difference_field(device, *b->device, geometry, *pa, *pb, *field);
+        if (!d) return std::unexpected(std::move(d.error()));
+        FieldOptions f;
+        f.view = view;
+        f.map = o.colormap == "turbo" ? Colormap::coolwarm : *colormap;  // XD6: cool-warm unless one is chosen
+        f.contours = o.contours;
+        f.title = d->title;
+        if (o.range) {
+            auto s = ColorScale::create(ScaleKind::linear, o.range->first, o.range->second);
+            if (!s) return std::unexpected(std::move(s.error()));
+            f.scale = *s;
+        } else {
+            f.scale = difference_scale(d->values);
+        }
+        if (m.dimension() == 1) return wrap(profile_plot(m, d->values, d->title));
+        if (m.dimension() == 3 && !planes.empty()) return wrap(slice_view(device, geometry, d->values, planes, f));
+        return wrap(field_view(device, geometry, d->values, f));
+    }
     }
     return std::unexpected(invalid("unknown view"));
 }
 
-std::vector<ViewKind> available_views(const Workspace& w) {
+std::vector<ViewKind> available_views(const Workspace& w, const Workspace* b) {
     std::vector<ViewKind> out;
     if (!w.device) return out;
     const int dim = w.device->mesh().dimension();
@@ -307,6 +404,12 @@ std::vector<ViewKind> available_views(const Workspace& w) {
     if (w.sweep && w.sweep->points.size() >= 2) out.push_back(ViewKind::iv);
     if (w.small_signal && w.small_signal->points.size() >= 2) out.push_back(ViewKind::cv);
     if (w.transient && w.transient->points.size() >= 2) out.push_back(ViewKind::current);
+    // Unit 26b: mesh quality (XD7) and the difference with run B (XD6).
+    if (dim >= 2 && elements) {
+        out.push_back(ViewKind::quality);
+        out.push_back(ViewKind::quality_histogram);
+    }
+    if (b && comparable(w, *b)) out.push_back(ViewKind::difference);
     return out;
 }
 
@@ -375,10 +478,13 @@ void apply_camera(FieldScene& scene, const ViewSettings& s) {
     scene.camera.pan = {s.pan_x, s.pan_y};
 }
 
-std::vector<std::string> plot_arguments(const ViewSettings& s) {
+std::vector<std::string> plot_arguments(const ViewSettings& s, const Workspace* b) {
     std::vector<std::string> a{"--view", std::string(to_string(s.kind))};
     const bool fieldish = s.kind == ViewKind::field || s.kind == ViewKind::slice || s.kind == ViewKind::iso ||
-                          s.kind == ViewKind::profile;
+                          s.kind == ViewKind::profile || s.kind == ViewKind::difference;
+    const bool uses_b = s.kind == ViewKind::difference || s.kind == ViewKind::iv || s.kind == ViewKind::cv ||
+                        s.kind == ViewKind::current;
+    if (b && uses_b) a.insert(a.end(), {"--compare", b->source.string()});
     if (fieldish) a.insert(a.end(), {"--field", s.field});
     if (s.point) a.insert(a.end(), {"--point", std::to_string(*s.point)});
     if (!s.scale.empty() && fieldish) a.insert(a.end(), {"--scale", s.scale});
