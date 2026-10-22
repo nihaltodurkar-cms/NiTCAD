@@ -27,6 +27,7 @@
 #include "NiTCAD/app/workspace.hpp"
 #include "NiTCAD/render/image.hpp"
 #include "NiTCAD/app/examples.hpp"
+#include "NiTCAD/app/live_check.hpp"
 #include "deck_pane.hpp"
 #include "pages.hpp"
 #include "viewport.hpp"
@@ -49,6 +50,11 @@ struct WindowOptions {
 inline constexpr UINT run_message = WM_APP + 1;
 // The timer that shows a run's progress while its events pause.
 inline constexpr UINT_PTR run_timer = 0x52;
+// The deck is checked a pause after the last edit (Unit 26b, XD1): the timer, the pause and the message
+// that wakes the window when a check ends.
+inline constexpr UINT_PTR live_timer = 0x53;
+inline constexpr UINT live_delay_ms = 400;
+inline constexpr UINT live_message = WM_APP + 2;
 
 class MainWindow final : public Viewport::Host,
                          public DeckPane::Host,
@@ -79,6 +85,9 @@ public:
 
     // State, for the self-test and the window tests.
     [[nodiscard]] RunController& runner() noexcept { return runner_; }
+    [[nodiscard]] LiveChecker& live_checker() noexcept { return live_; }
+    // Whether the views show the structure of the deck being edited, not solved (XD4).
+    [[nodiscard]] bool preview() const noexcept { return preview_; }
     [[nodiscard]] const DeckDocument& document() const noexcept { return document_; }
     [[nodiscard]] const Workspace* workspace() const noexcept { return workspace_ ? &*workspace_ : nullptr; }
     [[nodiscard]] ViewSettings& settings() noexcept;  // of the active view tab
@@ -103,13 +112,27 @@ public:
     [[nodiscard]] HWND child(int id) const noexcept;
     [[nodiscard]] const std::optional<ProbeHit>& probe() const noexcept { return probe_; }
     void probe_at(float x, float y);
+    // The Draw cut line tool (Unit 26b, XD5): the first click sets the line's start, the second its end.
+    void cut_at(float x, float y);
+    // The cut line, shown on the device views and plotted along in the Curves tab (profile or bands); none
+    // removes it.
+    void set_cut(std::optional<ViewSettings::Cut> cut);
+    [[nodiscard]] const std::optional<ViewSettings::Cut>& cut() const noexcept { return cut_; }
+    // Run comparison (Unit 26b, XD6): a result file as run B beside the workspace (its device file and a
+    // generated mesh's file as open_result takes them); File > Compare with a result asks for them.
+    bool compare_result(const std::filesystem::path& result, const std::filesystem::path& device,
+                        const std::filesystem::path& mesh = {});
+    [[nodiscard]] const Workspace* run_b() const noexcept { return run_b_ ? &*run_b_ : nullptr; }
+    // The deck's results that a run (or the structure preview) replaced: Simulation > Compare with the
+    // previous run takes them as run B.
+    [[nodiscard]] bool has_previous_run() const noexcept { return previous_.has_value(); }
 
     // The ids of the inspector's controls and the panes (for the tests).
     enum Control : int {
         id_tree = 4000, id_tabs, id_viewport, id_deck, id_metrics, id_inspector, id_toolbar, id_status, id_start,
         id_run_page, id_results,
         id_view = 5001, id_field, id_point, id_scale, id_colormap, id_contours, id_edges, id_contacts, id_opaque,
-        id_perspective, id_slice_axis, id_slice_at, id_clip, id_clip_box, id_levels, id_apply, id_probe_text,
+        id_perspective, id_slice_axis, id_slice_at, id_clip, id_clip_box, id_levels, id_cut, id_apply, id_probe_text,
         id_first_label = 5100,
     };
 
@@ -130,6 +153,8 @@ private:
     void set_status(int part, const std::string& text);
     void on_run_events();
     void on_run_timer();
+    void on_live_check();
+    void show_structure(Workspace w);
     enum class Pending : unsigned char { none, open, check, run };
     void on_run_finished(Pending pending, RunState state);
     void on_inspector(int id, int code);
@@ -138,7 +163,10 @@ private:
     void fill_tree();
     void on_tree_selection(LPARAM item);
     void update_metrics();
-    void set_workspace(Workspace w);
+    // A new workspace; its view settings reset unless kept (the structure preview while editing).
+    void set_workspace(Workspace w, bool keep_settings = false);
+    // Run B shown beside the workspace, or none.
+    void set_run_b(std::optional<Workspace> b);
     void default_settings();
     void present_camera();
     bool confirm_discard();
@@ -184,15 +212,21 @@ private:
 
     DeckDocument document_ = DeckDocument::untitled();
     RunController runner_;
+    LiveChecker live_;
+    std::uint64_t edits_ = 0, live_edits_ = 0;  // edits made, and the count at the last live submission
+    bool preview_ = false;
     Pending pending_ = Pending::none;
     std::chrono::steady_clock::time_point run_ui_updated_{};
     std::optional<Workspace> workspace_;
+    std::optional<Workspace> run_b_, previous_;  // Unit 26b, XD6
     std::optional<Prober> prober_;
     ViewSettings device_view_, curve_view_;
     std::optional<Scene> scene_;
     std::vector<double> values_;  // the shown field's values, for probes
     std::optional<ProbeHit> probe_, measure_from_;
-    bool probe_mode_ = true, measure_mode_ = false;
+    bool probe_mode_ = true, measure_mode_ = false, cut_mode_ = false;
+    std::optional<ViewSettings::Cut> cut_;          // Unit 26b, XD5
+    std::optional<std::vector<double>> cut_from_;  // the first click of a cut line, um
     std::optional<render::Renderer> renderer_;
     std::optional<std::string> renderer_error_;
 

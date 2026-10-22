@@ -12,6 +12,9 @@
 #include <utility>
 #include <variant>
 
+#include "NiTCAD/app/compare.hpp"
+#include "NiTCAD/render/compare.hpp"
+#include "NiTCAD/render/quality.hpp"
 #include "NiTCAD/render/scene.hpp"
 #include "win32.hpp"
 
@@ -58,8 +61,11 @@ std::string number(double v) {
     return std::format("{:.4g}", v);
 }
 
-// The views a tab offers: the device tab the field views, the curves tab the plots.
-bool belongs(ViewKind k, int tab) { return (tab == MainWindow::tab_curves) == (is_plot(k) && k != ViewKind::profile); }
+// The views a tab offers: the device tab the field views (and a 1D profile), the curves tab the plots (in 2D and
+// 3D the profile along a cut line too).
+bool belongs(ViewKind k, int tab, int dimension) {
+    return (tab == MainWindow::tab_curves) == (is_plot(k) && (k != ViewKind::profile || dimension > 1));
+}
 
 HWND make(const wchar_t* cls, const wchar_t* text, DWORD style, HWND parent, int id, DWORD ex = 0) {
     return CreateWindowExW(ex, cls, text, style | WS_CHILD, 0, 0, 10, 10, parent,
@@ -85,7 +91,9 @@ std::wstring menu_text(const CommandInfo& c) {
 // --- creation -------------------------------------------------------------------------------------
 
 MainWindow::MainWindow(const WindowOptions& options)
-    : options_(options), runner_([this] { PostMessageW(hwnd_, run_message, 0, 0); }) {}
+    : options_(options),
+      runner_([this] { PostMessageW(hwnd_, run_message, 0, 0); }),
+      live_([this] { PostMessageW(hwnd_, live_message, 0, 0); }) {}
 
 std::unique_ptr<MainWindow> MainWindow::create(const WindowOptions& options) {
     INITCOMMONCONTROLSEX icc{sizeof(icc), ICC_BAR_CLASSES | ICC_TREEVIEW_CLASSES | ICC_TAB_CLASSES | ICC_STANDARD_CLASSES |
@@ -142,7 +150,8 @@ bool MainWindow::create_children() {
                               {Command::check, L"Check", false},       {Command::run, L"Run", false},
                               {Command::stop, L"Stop", false},         {Command{}, nullptr, false},
                               {Command::fit, L"Fit", false},           {Command::probe_mode, L"Probe", true},
-                              {Command::measure_mode, L"Measure", true}, {Command::perspective, L"Perspective", true}};
+                              {Command::measure_mode, L"Measure", true}, {Command::cut_line_mode, L"Cut line", true},
+                              {Command::perspective, L"Perspective", true}};
     for (const Button& b : buttons) {
         TBBUTTON t{};
         t.iBitmap = I_IMAGENONE;
@@ -199,6 +208,7 @@ bool MainWindow::create_children() {
     make(L"BUTTON", L"C&lipping box (µm)", WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX, inspector_, id_clip);
     make(L"EDIT", L"", WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL, inspector_, id_clip_box, WS_EX_CLIENTEDGE);
     labelled(L"Iso levels", L"EDIT", ES_AUTOHSCROLL, id_levels);
+    labelled(L"Cut line (µm)", L"EDIT", ES_AUTOHSCROLL, id_cut);
     make(L"BUTTON", L"&Apply", WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON, inspector_, id_apply);
     make(L"STATIC", L"", WS_VISIBLE | SS_LEFT, inspector_, id_probe_text);
     combo_fill(child(id_scale), {scale_names.begin(), scale_names.end()}, 0);
@@ -334,7 +344,12 @@ void MainWindow::update_command_states() {
     enable(Command::open_deck, !busy);
     enable(Command::new_deck, !busy);
     enable(Command::open_result, !busy);
-    enable(Command::find_error, !runner_.diagnostics().empty());
+    enable(Command::find_error, !deck_->diagnostics().empty());
+    enable(Command::compare_result, !busy && workspace_.has_value());
+    enable(Command::compare_previous, !busy && workspace_.has_value() && previous_.has_value());
+    enable(Command::stop_comparing, run_b_.has_value());
+    enable(Command::mesh_quality, workspace_ && workspace_->device->mesh().dimension() >= 2 &&
+                                      workspace_->geometry->element_count() > 0);
     for (const Command c : {Command::fit, Command::orbit_left, Command::orbit_right, Command::orbit_up,
                             Command::orbit_down, Command::zoom_in, Command::zoom_out, Command::pan_left,
                             Command::pan_right, Command::pan_up, Command::pan_down}) {
@@ -346,6 +361,7 @@ void MainWindow::update_command_states() {
     };
     check(Command::probe_mode, probe_mode_);
     check(Command::measure_mode, measure_mode_);
+    check(Command::cut_line_mode, cut_mode_);
     check(Command::perspective, settings().perspective);
 }
 
@@ -435,6 +451,8 @@ void MainWindow::layout_inspector() {
     put(id_clip_box, row);
     put_label();
     put(id_levels, row);
+    put_label();
+    put(id_cut, row);
     MoveWindow(child(id_apply), pad, y, scaled(80, dpi_), row + gap, TRUE);
     y += row + 2 * gap;
     MoveWindow(child(id_probe_text), pad, y, w, std::max<int>(r.bottom - y - pad, 0), TRUE);
@@ -478,7 +496,7 @@ void MainWindow::select_tab(int tab) {
         run_page_->update(runner_, renderer(), true);
         break;
     case tab_results:
-        results_->show(workspace());
+        results_->show(workspace(), run_b());
         break;
     default:
         sync_inspector();
@@ -515,7 +533,7 @@ void MainWindow::default_settings() {
     device_view_ = {};
     curve_view_ = {};
     if (!workspace_) return;
-    const auto views = available_views(*workspace_);
+    const auto views = available_views(*workspace_, run_b());
     const bool results = workspace_->has_results();
     const int dim = workspace_->device->mesh().dimension();
     // The device tab: the potential (or, before a run, the regions); 1D: the potential's profile.
@@ -532,7 +550,7 @@ void MainWindow::default_settings() {
             curve_view_.kind = k;
             break;
         }
-        if (k == ViewKind::bands) curve_view_.kind = k;
+        if (k == ViewKind::bands && dim == 1) curve_view_.kind = k;  // 2D and 3D: only along a cut line
     }
     if (curve_view_.kind == ViewKind::iv && workspace_->sweep) {
         // The current of the contact carrying the most (a gate sweep's drain), on a log axis.
@@ -547,15 +565,35 @@ void MainWindow::default_settings() {
     }
 }
 
-void MainWindow::set_workspace(Workspace w) {
+void MainWindow::set_workspace(Workspace w, bool keep_settings) {
+    // The results a run (or the structure preview) of the same deck replaces: the previous run (XD6).
+    if (workspace_ && workspace_->has_results() && workspace_->source == w.source) previous_ = std::move(*workspace_);
     workspace_ = std::move(w);
+    preview_ = false;
     prober_.emplace(*workspace_);
     probe_.reset();
     measure_from_.reset();
-    default_settings();
+    cut_from_.reset();
+    // A cut line stays while the device keeps its dimension (a run of the deck it was drawn on).
+    if (cut_ && cut_->from_um.size() != static_cast<std::size_t>(workspace_->device->mesh().dimension())) cut_.reset();
+    if (!keep_settings) default_settings();
     fill_tree();
     sync_inspector();
-    results_->show(&*workspace_);
+    results_->show(&*workspace_, run_b());
+    refresh();
+}
+
+void MainWindow::set_run_b(std::optional<Workspace> b) {
+    run_b_ = std::move(b);
+    // A difference map without a run B to take it from: the field itself.
+    if (device_view_.kind == ViewKind::difference && !(workspace_ && run_b_ && comparable(*workspace_, *run_b_))) {
+        device_view_.kind = workspace_ && workspace_->device->mesh().dimension() == 1 ? ViewKind::profile : ViewKind::field;
+        device_view_.scale.clear();
+        device_view_.range.reset();
+    }
+    fill_tree();
+    sync_inspector();
+    results_->show(workspace(), run_b());
     refresh();
 }
 
@@ -574,7 +612,11 @@ void MainWindow::refresh() {
         return;
     }
     ViewSettings& s = settings();
-    auto scene = build_scene(*workspace_, s);
+    // The cut line where the view uses it: plotted along, or drawn on a 2D or 3D device view.
+    ViewSettings shown = s;
+    const bool along = s.kind == ViewKind::profile || s.kind == ViewKind::bands;
+    if (along || (!is_plot(s.kind) && workspace_->device->mesh().dimension() > 1)) shown.cut = cut_;
+    auto scene = build_scene(*workspace_, shown, run_b());
     if (!scene) {
         viewport_->show_message(scene.error().message);
         update_metrics();
@@ -583,7 +625,24 @@ void MainWindow::refresh() {
     }
     scene_ = std::move(*scene);
     // The shown field's values, for probes.
-    if (const auto f = render::find_field(s.field); f && !is_plot(s.kind)) {
+    if (s.kind == ViewKind::difference) {
+        // B - A, as the map shows it.
+        const auto f = render::find_field(s.field);
+        const bool doping = f && (*f == render::Field::net_doping || *f == render::Field::donors || *f == render::Field::acceptors);
+        const results::BiasPoint none;
+        const results::BiasPoint* pa = &none;
+        const results::BiasPoint* pb = &none;
+        if (f && !doping && !workspace_->points.empty()) {
+            const std::size_t k = std::min(s.point.value_or(workspace_->points.size() - 1), workspace_->points.size() - 1);
+            pa = &workspace_->points[k];
+            const auto j = render::matching_point(*pa, run_b()->points);
+            pb = j ? &run_b()->points[*j] : nullptr;
+        }
+        if (f && pb) {
+            auto d = render::difference_field(*workspace_->device, *run_b()->device, *workspace_->geometry, *pa, *pb, *f);
+            if (d) values_ = std::move(d->values);
+        }
+    } else if (const auto f = render::find_field(s.field); f && !is_plot(s.kind) && s.kind != ViewKind::quality) {
         const bool doping = *f == render::Field::net_doping || *f == render::Field::donors || *f == render::Field::acceptors;
         if (doping || workspace_->has_results()) {
             const std::size_t k = s.point.value_or(workspace_->points.empty() ? 0 : workspace_->points.size() - 1);
@@ -626,10 +685,28 @@ void MainWindow::update_metrics() {
             text += ", " + std::to_string(workspace_->geometry->element_count()) +
                     (m.dimension() == 3 ? " tetrahedra" : m.dimension() == 2 ? " triangles" : " segments");
         }
-        if (!values_.empty()) {
+        const ViewKind kind = settings().kind;
+        if (kind == ViewKind::quality || kind == ViewKind::quality_histogram) {
+            // XD7: the minimum, the median and the count below the threshold.
+            if (const auto angles = render::element_quality(*workspace_->geometry); angles && !angles->empty()) {
+                const auto q = render::quality_summary(*angles, m.dimension());
+                text += std::format("     Min angle {:.1f}°, median {:.1f}°, {} below {:g}°", q.min_deg, q.median_deg, q.below,
+                                    q.threshold_deg);
+            }
+        } else if (!values_.empty()) {
             double top = -1e300;
             for (const double v : values_) if (std::isfinite(v)) top = std::max(top, v);
-            text += "     Max " + settings().field + " " + number(top);
+            text += (kind == ViewKind::difference ? "     Max |B − A| " : "     Max " + settings().field + " ") +
+                    number(kind == ViewKind::difference ? render::difference_scale(values_).hi() : top);
+        }
+        if (const Workspace* b = run_b()) {
+            // XD6: run B, and the threshold shift when both runs have one.
+            text += "     Run B " + b->source.filename().string();
+            for (const FigureShift& f : figure_shifts(*workspace_, *b)) {
+                if (!f.name.starts_with("Threshold")) continue;
+                text += std::format(", ΔVth {:+.4g} {}", f.delta(), f.unit);
+                break;
+            }
         }
         if (scene_ && viewport_->last_present_ms() > 0.0) text += "     Drawn in " + std::format("{:.1f}", viewport_->last_present_ms()) + " ms";
     }
@@ -642,8 +719,8 @@ void MainWindow::sync_inspector() {
     std::vector<std::string> views;
     int selected = 0;
     if (workspace_) {
-        for (const ViewKind k : available_views(*workspace_)) {
-            if (!belongs(k, tab_)) continue;
+        for (const ViewKind k : available_views(*workspace_, run_b())) {
+            if (!belongs(k, tab_, workspace_->device->mesh().dimension())) continue;
             if (k == s.kind) selected = static_cast<int>(views.size());
             views.emplace_back(to_string(k));
         }
@@ -679,6 +756,13 @@ void MainWindow::sync_inspector() {
     std::string levels;
     for (const double v : s.levels) levels += (levels.empty() ? "" : ",") + std::format("{}", v);
     win32::set_text(child(id_levels), levels);
+    std::string cut;
+    if (cut_) {
+        for (const double v : cut_->from_um) cut += (cut.empty() ? "" : ",") + std::format("{}", v);
+        cut += ":";
+        for (std::size_t k = 0; k < cut_->to_um.size(); ++k) cut += (k ? "," : "") + std::format("{}", cut_->to_um[k]);
+    }
+    win32::set_text(child(id_cut), cut);
 }
 
 // A slice view starts with a plane through the middle of the device along z, an iso view with a level.
@@ -702,7 +786,8 @@ void MainWindow::on_inspector(int id, int code) {
     const bool clicked = code == BN_CLICKED;
     if (id == id_view && selection) {
         std::vector<ViewKind> kinds;
-        for (const ViewKind k : available_views(*workspace_)) if (belongs(k, tab_)) kinds.push_back(k);
+        const int dim = workspace_->device->mesh().dimension();
+        for (const ViewKind k : available_views(*workspace_, run_b())) if (belongs(k, tab_, dim)) kinds.push_back(k);
         const int k = combo_index(child(id_view));
         if (k >= 0 && k < static_cast<int>(kinds.size())) s.kind = kinds[static_cast<std::size_t>(k)];
         view_defaults(s);
@@ -748,6 +833,25 @@ void MainWindow::on_inspector(int id, int code) {
         }
         s.levels.clear();
         s.levels = numbers(win32::text_of(child(id_levels)));
+        // The cut line typed: "<x0>,<y0>[,<z0>]:<x1>,<y1>[,<z1>]" in um; empty removes it.
+        const std::string typed = win32::text_of(child(id_cut));
+        const auto colon = typed.find(':');
+        const std::size_t dim = static_cast<std::size_t>(workspace_->device->mesh().dimension());
+        const std::vector<double> a = colon == std::string::npos ? std::vector<double>{} : numbers(typed.substr(0, colon));
+        const std::vector<double> b = colon == std::string::npos ? std::vector<double>{} : numbers(typed.substr(colon + 1));
+        if (typed.find_first_not_of(" \t") == std::string::npos) {
+            if (cut_) {
+                set_cut(std::nullopt);
+                return;
+            }
+        } else if (a.size() == dim && b.size() == dim && a != b) {
+            if (!cut_ || cut_->from_um != a || cut_->to_um != b) {
+                set_cut(ViewSettings::Cut{a, b});
+                return;
+            }
+        } else {
+            set_status(status_state, "A cut line is <x0>,<y0>[,<z0>]:<x1>,<y1>[,<z1>] in µm, in the device's dimension.");
+        }
     } else {
         return;
     }
@@ -770,7 +874,7 @@ void MainWindow::fill_tree() {
         return TreeView_InsertItem(tree_, &t);
     };
     const auto& d = *workspace_->device;
-    HTREEITEM device = add(TVI_ROOT, "Device", tree_data(tree_none, 0));
+    HTREEITEM device = add(TVI_ROOT, preview_ ? "Device (preview, not solved)" : "Device", tree_data(tree_none, 0));
     for (const auto& r : d.regions()) {
         add(device, r.name + (device::is_insulator(r) ? " (insulator)" : " (semiconductor)"), tree_data(tree_none, 0));
     }
@@ -781,7 +885,7 @@ void MainWindow::fill_tree() {
     TreeView_Expand(tree_, device, TVE_EXPAND);
     add(TVI_ROOT, "Mesh: " + std::to_string(d.mesh().node_count()) + " nodes", tree_data(tree_none, 0));
     HTREEITEM views = add(TVI_ROOT, "Views", tree_data(tree_none, 0));
-    const auto kinds = available_views(*workspace_);
+    const auto kinds = available_views(*workspace_, run_b());
     for (std::size_t k = 0; k < kinds.size(); ++k) add(views, std::string(to_string(kinds[k])), tree_data(tree_view, static_cast<int>(k)));
     TreeView_Expand(tree_, views, TVE_EXPAND);
     HTREEITEM fields = add(TVI_ROOT, "Fields", tree_data(tree_none, 0));
@@ -808,10 +912,10 @@ void MainWindow::on_tree_selection(LPARAM data) {
         device_view_.range.reset();
         select_tab(tab_view);
     } else if (kind == tree_view) {
-        const auto kinds = available_views(*workspace_);
+        const auto kinds = available_views(*workspace_, run_b());
         if (index >= static_cast<int>(kinds.size())) return;
         const ViewKind k = kinds[static_cast<std::size_t>(index)];
-        const int tab = belongs(k, tab_curves) ? tab_curves : tab_view;
+        const int tab = belongs(k, tab_curves, workspace_->device->mesh().dimension()) ? tab_curves : tab_view;
         (tab == tab_curves ? curve_view_ : device_view_).kind = k;
         tab_ = tab;
         view_defaults(tab == tab_curves ? curve_view_ : device_view_);
@@ -861,6 +965,9 @@ bool MainWindow::open_deck(const fs::path& path) {
     state_.add_recent(path);
     update_title();
     workspace_.reset();
+    run_b_.reset();
+    previous_.reset();
+    cut_.reset();
     prober_.reset();
     scene_.reset();
     fill_tree();
@@ -880,9 +987,31 @@ bool MainWindow::open_result(const fs::path& result, const fs::path& device, con
         return false;
     }
     state_.add_recent(result);
+    cut_.reset();  // drawn on another device
+    run_b_.reset();
+    previous_.reset();
+    workspace_.reset();
     set_workspace(std::move(*w));
     set_status(status_state, "Opened " + result.filename().string());
     select_tab(tab_view);
+    return true;
+}
+
+bool MainWindow::compare_result(const fs::path& result, const fs::path& device, const fs::path& mesh) {
+    if (!workspace_) {
+        set_status(status_state, "Open a deck or a result file to compare with first.");
+        return false;
+    }
+    auto b = workspace_from_result(result, device, mesh);
+    if (!b) {
+        set_status(status_state, b.error().message);
+        MessageBoxW(hwnd_, win32::widen(b.error().message).c_str(), L"NiTCAD", MB_ICONERROR);
+        return false;
+    }
+    const bool one_mesh = comparable(*workspace_, *b);
+    set_run_b(std::move(*b));
+    set_status(status_state, "Comparing with " + result.filename().string() +
+                                 (one_mesh ? "" : " (another mesh: curves and figures only)"));
     return true;
 }
 
@@ -974,6 +1103,45 @@ void MainWindow::on_run_finished(Pending pending, RunState s) {
 void MainWindow::deck_changed() {
     document_.set_text(deck_->text());
     update_title();
+    // Checked a pause after the last edit (XD1).
+    ++edits_;
+    SetTimer(hwnd_, live_timer, live_delay_ms, nullptr);
+}
+
+void MainWindow::on_live_check() {
+    if (!live_.process()) return;
+    // Edited since: the next check (its timer is running) will tell.
+    if (live_edits_ != edits_) return;
+    const std::string text = deck_->text();
+    std::vector<Diagnostic> shown = live_.result().diagnostics;
+    for (Diagnostic& d : shown) {
+        if (const auto s = suggestion(text, d)) d.message += " (" + *s + ")";
+    }
+    deck_->set_diagnostics(shown);
+    if (!shown.empty()) {
+        set_status(status_state, shown.front().message);
+    } else if (auto plan = live_.take_plan()) {
+        // The structure preview (XD4): results stay while the deck keeps their mesh.
+        if (workspace_ && workspace_->has_results() && same_mesh(*workspace_, plan->device.mesh())) {
+            set_status(status_state, "The deck builds (the results shown are of its last run).");
+        } else if (auto w = workspace_from_structure(std::move(*plan), document_.path())) {
+            show_structure(std::move(*w));
+            set_status(status_state, "The deck builds: its structure is shown, not solved (Run, F5).");
+        } else {
+            set_status(status_state, w.error().message);
+        }
+    }
+    update_command_states();
+}
+
+void MainWindow::show_structure(Workspace w) {
+    // While editing, the view and camera stay as they were if the previous view was a preview of the
+    // same dimension.
+    const bool keep = workspace_ && preview_ &&
+                      workspace_->device->mesh().dimension() == w.device->mesh().dimension();
+    set_workspace(std::move(w), keep);
+    preview_ = true;
+    fill_tree();  // marked as a preview
 }
 
 void MainWindow::go_to_section(std::string_view kind) {
@@ -1083,6 +1251,21 @@ void MainWindow::execute(Command c) {
         open_result(r, d, m);
         return;
     }
+    case Command::compare_result: {
+        if (!workspace_) return;
+        const fs::path r = win32::open_dialog(
+            hwnd_, L"Results (*.nitsweep;*.nittran;*.nitac)\0*.nitsweep;*.nittran;*.nitac\0All files\0*.*\0",
+            L"Compare with a result file");
+        if (r.empty()) return;
+        // Its device and mesh files as Open result finds them.
+        fs::path d = fs::path(r).replace_extension(".nitdev");
+        if (!fs::exists(d)) d = win32::open_dialog(hwnd_, L"Device files (*.nitdev)\0*.nitdev\0", L"The result's device file");
+        if (d.empty()) return;
+        fs::path m = fs::path(r).replace_extension(".nitmesh");
+        if (!fs::exists(m)) m.clear();
+        compare_result(r, d, m);
+        return;
+    }
     case Command::save: save(false); return;
     case Command::save_as: save(true); return;
     case Command::exit: PostMessageW(hwnd_, WM_CLOSE, 0, 0); return;
@@ -1092,10 +1275,15 @@ void MainWindow::execute(Command c) {
     case Command::paste: forward_edit(WM_PASTE); return;
     case Command::select_all: forward_edit(EM_SETSEL); return;
     case Command::find_error:
-        if (!runner_.diagnostics().empty()) {
+        if (!deck_->diagnostics().empty()) {
             select_tab(tab_deck);
-            deck_->go_to_line(runner_.diagnostics().front().line);
+            deck_->go_to_line(deck_->diagnostics().front().line);
         }
+        return;
+    case Command::complete:
+        select_tab(tab_deck);
+        SetFocus(deck_->editor());
+        if (!deck_->show_completion(true)) set_status(status_state, "Nothing to complete here.");
         return;
     case Command::check:
         if (runner_.busy()) return;
@@ -1122,6 +1310,21 @@ void MainWindow::execute(Command c) {
         set_status(status_state, "Stopping at the solver's next safe point...");
         update_command_states();
         return;
+    case Command::compare_previous: {
+        if (!workspace_ || !previous_) return;
+        std::optional<Workspace> b = std::move(previous_);
+        previous_.reset();
+        set_run_b(std::move(b));
+        set_status(status_state, comparable(*workspace_, *run_b_) ? "Comparing with the previous run"
+                                                                  : "Comparing with the previous run (another mesh: curves and figures only)");
+        return;
+    }
+    case Command::stop_comparing:
+        // The previous run stays to compare with again.
+        if (run_b_ && !previous_ && workspace_ && run_b_->source == workspace_->source) previous_ = std::move(run_b_);
+        set_run_b(std::nullopt);
+        set_status(status_state, "Not comparing");
+        return;
     case Command::fit: viewport_fit(); return;
     case Command::orbit_left: viewport_orbit(-15.0f, 0.0f); return;
     case Command::orbit_right: viewport_orbit(15.0f, 0.0f); return;
@@ -1140,14 +1343,32 @@ void MainWindow::execute(Command c) {
         return;
     case Command::probe_mode:
         probe_mode_ = !probe_mode_;
-        if (probe_mode_) measure_mode_ = false;
+        if (probe_mode_) measure_mode_ = cut_mode_ = false;
         update_command_states();
         return;
     case Command::measure_mode:
         measure_mode_ = !measure_mode_;
-        if (measure_mode_) probe_mode_ = false;
+        if (measure_mode_) probe_mode_ = cut_mode_ = false;
         measure_from_.reset();
         update_command_states();
+        return;
+    case Command::cut_line_mode:
+        cut_mode_ = !cut_mode_;
+        if (cut_mode_) probe_mode_ = measure_mode_ = false;
+        cut_from_.reset();
+        if (cut_mode_) {
+            if (tab_ != tab_view) select_tab(tab_view);
+            set_status(status_state, "Draw cut line: click the line's start, then its end.");
+        }
+        update_command_states();
+        return;
+    case Command::mesh_quality:
+        // XD7: the minimum angle map in the device view.
+        if (!workspace_ || workspace_->device->mesh().dimension() < 2) return;
+        device_view_.kind = ViewKind::quality;
+        device_view_.scale.clear();
+        device_view_.range.reset();
+        select_tab(tab_view);
         return;
     case Command::next_tab: select_tab((tab_ + 1) % tab_count); return;
     case Command::previous_tab: select_tab((tab_ + tab_count - 1) % tab_count); return;
@@ -1223,7 +1444,66 @@ void MainWindow::probe_at(float x, float y) {
 }
 
 void MainWindow::viewport_click(float x, float y) {
-    if (probe_mode_ || measure_mode_) probe_at(x, y);
+    if (cut_mode_) cut_at(x, y);
+    else if (probe_mode_ || measure_mode_) probe_at(x, y);
+}
+
+void MainWindow::cut_at(float x, float y) {
+    if (!scene_ || !prober_ || !workspace_) return;
+    const auto* f = std::get_if<render::FieldScene>(&*scene_);
+    if (!f) return;
+    const auto p = prober_->point_at(*f, viewport_->width(), viewport_->height(), x, y);
+    if (!p) {
+        set_status(status_state, "No point of the device there.");
+        return;
+    }
+    // To the nanometre, as typed.
+    std::vector<double> at;
+    for (int k = 0; k < workspace_->device->mesh().dimension(); ++k) {
+        at.push_back(std::round((*p)[static_cast<std::size_t>(k)] * 1e3) / 1e3);
+    }
+    const auto point = [](const std::vector<double>& v) {
+        std::string t;
+        for (const double c : v) t += (t.empty() ? "" : ", ") + format_um(c);
+        return "(" + t + ") µm";
+    };
+    if (!cut_from_) {
+        cut_from_ = at;
+        const std::string text = "Cut line from " + point(at) + "\nClick its end.";
+        win32::set_text(child(id_probe_text), text);
+        set_status(status_state, text.substr(0, text.find('\n')));
+        return;
+    }
+    ViewSettings::Cut c{*cut_from_, at};
+    cut_from_.reset();
+    if (c.from_um == c.to_um) {
+        set_status(status_state, "The cut line's ends are the same point: click its start again.");
+        return;
+    }
+    win32::set_text(child(id_probe_text), "Cut line from " + point(c.from_um) + "\nto " + point(c.to_um));
+    set_cut(std::move(c));
+}
+
+void MainWindow::set_cut(std::optional<ViewSettings::Cut> cut) {
+    cut_ = std::move(cut);
+    cut_from_.reset();
+    if (!workspace_) return;
+    if (cut_ && workspace_->device->mesh().dimension() > 1) {
+        // Plotted along in the Curves tab: the band diagram once solved, else the doping.
+        if (workspace_->has_results()) {
+            curve_view_.kind = ViewKind::bands;
+        } else {
+            curve_view_.kind = ViewKind::profile;
+            curve_view_.field = "doping";
+        }
+        curve_view_.point = device_view_.point;
+        set_status(status_state, std::string("Cut line drawn: its ") +
+                                     (workspace_->has_results() ? "band diagram" : "doping") + " is in the Curves tab.");
+        select_tab(tab_curves);  // draws it
+        return;
+    }
+    sync_inspector();
+    refresh();
 }
 
 void MainWindow::viewport_hover(float x, float y) {
@@ -1372,9 +1652,18 @@ LRESULT MainWindow::handle(UINT message, WPARAM w, LPARAM l) {
     case run_message:
         on_run_events();
         return 0;
+    case live_message:
+        on_live_check();
+        return 0;
     case WM_TIMER:
         if (w == run_timer) {
             on_run_timer();
+            return 0;
+        }
+        if (w == live_timer) {
+            KillTimer(hwnd_, live_timer);
+            live_edits_ = edits_;
+            live_.submit(deck_->text(), document_.path());
             return 0;
         }
         break;

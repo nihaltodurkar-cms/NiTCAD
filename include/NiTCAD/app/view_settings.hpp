@@ -26,11 +26,15 @@ enum class ViewKind : unsigned char {
     field,    // a field: 2D map, 3D surface, 1D profile
     slice,    // a field on slice planes (3D)
     iso,      // isosurfaces (3D) or contour levels (2D)
-    bands,    // the band diagram (1D)
-    profile,  // a field along a 1D device
+    bands,    // the band diagram (1D, or along a cut line)
+    profile,  // a field along a 1D device or a cut line
     iv,       // a sweep's current against the swept bias
     cv,       // a small-signal run's capacitance against the swept bias
     current,  // a transient run's terminal currents against time
+    // Unit 26b (XD6, XD7).
+    quality,            // each element's angle (2D map, 3D surface or slices)
+    quality_histogram,  // the elements per 5-degree bin
+    difference,         // run B - run A of a field (2D map, 3D surface or slices, 1D profile)
 };
 
 [[nodiscard]] std::string_view to_string(ViewKind v) noexcept;  // as `nitcad plot --view` names it
@@ -62,6 +66,12 @@ struct ViewSettings {
     std::vector<Slice> slices;
     std::optional<Clip> clip;
     std::vector<double> levels;                  // iso levels
+    // A cut line (Unit 26b, XD5), its ends in um in the device's dimension: the profile and bands views plot
+    // along it (needed in 2D and 3D), and the 2D and 3D device views draw it.
+    struct Cut {
+        std::vector<double> from_um, to_um;
+    };
+    std::optional<Cut> cut;
     std::string contact, sense;                  // curves: the swept and sensed contacts by name
     std::optional<std::size_t> frequency;        // C-V: the frequency index
     bool log = false;                            // curves and profiles: a log y axis
@@ -86,17 +96,20 @@ using Scene = std::variant<render::FieldScene, render::PlotScene>;
 // The scene for the settings. Errors (invalid_input) as `nitcad plot` reports them: an unknown
 // field, scale or colormap; a view the device or the results do not have (no results, a 3D-only
 // view in 2D, ...); a point out of range; render's errors.
-[[nodiscard]] std::expected<Scene, base::Error> build_scene(const Workspace& w, const ViewSettings& s);
+// Run B (Unit 26b, XD6), when given: the difference view needs it (on the same mesh, at the bias point of
+// B equal to A's; refused otherwise), and the I-V, C-V and current views draw both runs' curves.
+[[nodiscard]] std::expected<Scene, base::Error> build_scene(const Workspace& w, const ViewSettings& s,
+                                                           const Workspace* b = nullptr);
 
 // The views that apply to the workspace, in menu order: by dimension, and the curve each kind of
-// result has.
-[[nodiscard]] std::vector<ViewKind> available_views(const Workspace& w);
+// result has; the difference with a run B on the same mesh.
+[[nodiscard]] std::vector<ViewKind> available_views(const Workspace& w, const Workspace* b = nullptr);
 // The fields a view can choose: every field_info key whose values the results provide (the rates
 // only when stored; the doping always).
 [[nodiscard]] std::vector<std::string> available_fields(const Workspace& w);
 
 // The options of `nitcad plot` that draw the same view (without the input, --out, --size and
-// --adapter).
-[[nodiscard]] std::vector<std::string> plot_arguments(const ViewSettings& s);
+// --adapter); with run B, `--compare <its file>` for the views that use it.
+[[nodiscard]] std::vector<std::string> plot_arguments(const ViewSettings& s, const Workspace* b = nullptr);
 
 }  // namespace NiTCAD::app

@@ -45,58 +45,9 @@ deck::Plan built(const std::string& text) {
     return std::move(*r.plan);
 }
 
-// Decks of each mesh type and analysis the menus meet.
-const std::string generate2d = R"(# A generated 2D resistor
-[mesh]
-type = generate2d
-patch left = 0 0, 0 1um
-patch right = 2um 0, 2um 1um
-max_size = 0.25um
-
-[region silicon]
-material = silicon
-polygon = 0 0, 2um 0, 2um 1um, 0 1um
-
-[doping]
-profile = donor constant 1e16
-
-[contact left]
-kind = ohmic
-patch = left
-
-[contact right]
-kind = ohmic
-patch = right
-
-[equilibrium]
-)";
-
-const std::string generate3d = R"(# A generated 3D resistor
-[mesh]
-type = generate3d
-cuboid = 0 1um 0 1um 0 1um
-max_size = 0.5um
-
-[region silicon]
-material = silicon
-
-[doping]
-profile = donor constant 1e16
-
-[contact left]
-kind = ohmic
-patch = x_min
-
-[contact right]
-kind = ohmic
-patch = x_max
-
-[equilibrium]
-)";
-
-std::string transient_diode() {
-    return app_test::diode_device + "\n[transient]\ncontact anode = step(0, 0.3, 1e-9)\nt_end = 4e-9\n";
-}
+using app_test::generate2d;
+using app_test::generate3d;
+using app_test::transient_diode;
 
 }  // namespace
 

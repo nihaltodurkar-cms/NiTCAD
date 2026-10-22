@@ -55,6 +55,13 @@ struct Workspace {
 [[nodiscard]] std::expected<Workspace, base::Error> workspace_from_deck(const std::filesystem::path& deck);
 // The same from a plan already built from the deck at that path (a check's, off the UI thread).
 [[nodiscard]] std::expected<Workspace, base::Error> workspace_from_plan(deck::Plan plan, const std::filesystem::path& deck);
+// The structure preview (Unit 26b, XD4): the plan's device and its geometry, no results (nothing read
+// from disk, nothing solved).
+[[nodiscard]] std::expected<Workspace, base::Error> workspace_from_structure(deck::Plan plan,
+                                                                            const std::filesystem::path& deck);
+// Whether the workspace's device has this mesh (the mesh digest): results shown stay valid for a deck
+// edited without changing its mesh.
+[[nodiscard]] bool same_mesh(const Workspace& w, const mesh::Mesh& m);
 // A .nitsweep, .nittran or .nitac file with its device file and, for a generated mesh, its mesh file.
 [[nodiscard]] std::expected<Workspace, base::Error> workspace_from_result(const std::filesystem::path& result,
                                                                          const std::filesystem::path& device,

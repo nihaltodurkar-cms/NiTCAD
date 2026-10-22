@@ -6,6 +6,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdio>
+#include <format>
 #include <limits>
 #include <map>
 #include <numbers>
@@ -193,6 +194,20 @@ std::vector<std::array<NodeId, 2>> element_edges(const Geometry& g) {
             for (std::size_t j = i + 1; j < v.size(); ++j) {
                 out.push_back({std::min(v[i], v[j]), std::max(v[i], v[j])});
             }
+        }
+    }
+    std::ranges::sort(out);
+    out.erase(std::unique(out.begin(), out.end()), out.end());
+    return out;
+}
+
+// Every edge of the 3D boundary faces once (3D mesh view).
+std::vector<std::array<NodeId, 2>> boundary_face_edges(const Geometry& g) {
+    std::vector<std::array<NodeId, 2>> out;
+    for (const Polygon& f : g.boundary_faces()) {
+        for (std::size_t i = 0; i < 3; ++i) {
+            const NodeId a = f.vertices[i].at.nodes[0], b = f.vertices[(i + 1) % 3].at.nodes[0];
+            out.push_back({std::min(a, b), std::max(a, b)});
         }
     }
     std::ranges::sort(out);
@@ -626,25 +641,9 @@ std::expected<FieldScene, base::Error> mesh_view(const device::Device& d, const 
     s->title = "Mesh";
     const auto points = d.mesh().points();
     LineBatch edges{"mesh", {0.15f, 0.17f, 0.2f, 0.75f}, 1.0f, g.dimension() == 2, {}};
-    if (g.dimension() == 2) {
-        for (const auto& [a, b] : element_edges(g)) {
-            edges.points.push_back(um(points[static_cast<std::size_t>(a)]));
-            edges.points.push_back(um(points[static_cast<std::size_t>(b)]));
-        }
-    } else {
-        std::vector<std::array<NodeId, 2>> list;
-        for (const Polygon& f : g.boundary_faces()) {
-            for (std::size_t i = 0; i < 3; ++i) {
-                const NodeId a = f.vertices[i].at.nodes[0], b = f.vertices[(i + 1) % 3].at.nodes[0];
-                list.push_back({std::min(a, b), std::max(a, b)});
-            }
-        }
-        std::ranges::sort(list);
-        list.erase(std::unique(list.begin(), list.end()), list.end());
-        for (const auto& [a, b] : list) {
-            edges.points.push_back(um(points[static_cast<std::size_t>(a)]));
-            edges.points.push_back(um(points[static_cast<std::size_t>(b)]));
-        }
+    for (const auto& [a, b] : g.dimension() == 2 ? element_edges(g) : boundary_face_edges(g)) {
+        edges.points.push_back(um(points[static_cast<std::size_t>(a)]));
+        edges.points.push_back(um(points[static_cast<std::size_t>(b)]));
     }
     s->lines.push_back(std::move(edges));
     return s;
@@ -819,6 +818,25 @@ void add_streamlines(FieldScene& s, std::span<const Streamline> lines, const Rgb
     if (!batch.points.empty()) s.lines.push_back(std::move(batch));
 }
 
+void add_cut_line(FieldScene& s, const CutLine& cut) {
+    const Point d{cut.b[0] - cut.a[0], cut.b[1] - cut.a[1], cut.b[2] - cut.a[2]};
+    const double length = std::sqrt(d[0] * d[0] + d[1] * d[1] + d[2] * d[2]);
+    LineBatch edge{"cut line", {0.0f, 0.0f, 0.0f, 1.0f}, 4.0f, true, {}};
+    for (std::size_t i = 1; i < cut.samples.size(); ++i) {
+        if (cut.samples[i].gap_before) continue;
+        for (const std::size_t k : {i - 1, i}) {
+            const double t = cut.samples[k].distance / length;
+            edge.points.push_back(um({cut.a[0] + t * d[0], cut.a[1] + t * d[1], cut.a[2] + t * d[2]}));
+        }
+    }
+    if (edge.points.empty()) return;
+    LineBatch line = edge;
+    line.color = {1.0f, 1.0f, 1.0f, 1.0f};
+    line.width_px = 2.0f;
+    s.lines.push_back(std::move(edge));
+    s.lines.push_back(std::move(line));
+}
+
 void add_streamlines(FieldScene& s, std::span<const Streamline> lines, const Colorbar& colors) {
     constexpr std::size_t bins = 64;
     std::vector<LineBatch> batch(bins + 1);  // the last for segments without a position
@@ -930,6 +948,70 @@ std::expected<FieldScene, base::Error> outline_view(const device::Device& d, con
     s.triangles.push_back(outline_shell(g));
     if (o.contacts) contact_slabs(d, g, o.palette, s.triangles, o.clip);
     frame(s, o);
+    return s;
+}
+
+std::expected<FieldScene, base::Error> quality_view(const device::Device& d, const Geometry& g,
+                                                    std::span<const double> angles, std::span<const Plane> planes,
+                                                    const FieldOptions& o) {
+    if (auto c = check_view(d, g); !c) return std::unexpected(std::move(c.error()));
+    if (angles.size() != g.element_count()) {
+        return std::unexpected(invalid("the mesh quality is not one angle per element", angles.size()));
+    }
+    if (g.dimension() == 2 && !planes.empty()) return std::unexpected(invalid("slices need a 3D geometry"));
+    const auto fixed = o.scale ? std::expected<ColorScale, base::Error>(*o.scale)
+                               : ColorScale::create(ScaleKind::linear, 0.0, best_quality_deg(g.dimension()));
+    if (!fixed) return std::unexpected(fixed.error());
+    const ColorScale& scale_ = *fixed;
+    const std::string title = !o.title.empty() ? o.title
+                              : g.dimension() == 2 ? "minimum angle (\xC2\xB0)"
+                                                   : "minimum dihedral angle (\xC2\xB0)";
+    FieldScene s;
+    s.dimension = g.dimension();
+    s.title = "Mesh quality";
+    // One position per polygon: the element's color, flat.
+    const auto add = [&](TriangleBatch& batch, const Polygon& p, const Point& normal) {
+        std::vector<Point> pts;
+        for (const SurfaceVertex& v : p.vertices) pts.push_back(v.position);
+        const auto at = static_cast<float>(scale_.position(angles[p.element]));
+        fan(batch, pts, std::vector<float>(pts.size(), at), {}, normal);
+    };
+    const auto points = d.mesh().points();
+    const auto edge_lines = [&](const std::vector<std::array<NodeId, 2>>& list, bool on_top) {
+        LineBatch edges{"mesh", {0.15f, 0.17f, 0.2f, 0.75f}, 1.0f, on_top, {}};
+        for (const auto& [a, b] : list) {
+            edges.points.push_back(um(points[static_cast<std::size_t>(a)]));
+            edges.points.push_back(um(points[static_cast<std::size_t>(b)]));
+        }
+        s.lines.push_back(std::move(edges));
+    };
+    if (g.dimension() == 2) {
+        TriangleBatch field{"quality", Shading::field, false, false, {}};
+        for (std::size_t e = 0; e < g.element_count(); ++e) add(field, g.element_polygon(e), {0.0, 0.0, 1.0});
+        s.triangles.push_back(std::move(field));
+        edge_lines(element_edges(g), true);
+        if (o.view.region_outlines) outlines_2d(d, g, s.lines);
+    } else if (planes.empty()) {
+        TriangleBatch field{"quality", Shading::field, true, false, {}};
+        for (const Polygon& f : g.boundary_faces()) {
+            std::vector<Point> pts;
+            for (const SurfaceVertex& v : f.vertices) pts.push_back(v.position);
+            add(field, f, polygon_normal(pts));
+        }
+        s.triangles.push_back(std::move(field));
+        edge_lines(boundary_face_edges(g), false);
+    } else {
+        TriangleBatch field{"slice", Shading::field, true, false, {}};
+        for (std::size_t k = 0; k < planes.size(); ++k) {
+            const std::vector<Polygon> polys = g.slice(planes[k]);
+            if (polys.empty()) return std::unexpected(invalid("a slice plane misses the device", k));
+            for (const Polygon& p : polys) add(field, p, planes[k].normal);
+        }
+        s.triangles.push_back(std::move(field));
+        s.triangles.push_back(outline_shell(g));
+    }
+    s.colorbar = Colorbar{o.map, scale_, title};
+    frame(s, o.view);
     return s;
 }
 
@@ -1144,63 +1226,165 @@ std::expected<PlotScene, base::Error> curve_plot(std::span<const SeriesInput> in
     return p;
 }
 
+namespace {
+
+// One curve of y against x (um), as a profile draws it; a NaN breaks the line.
+std::expected<PlotScene, base::Error> profile_against(std::vector<double> x, std::vector<double> y,
+                                                      std::string x_label, std::string y_label, AxisScale y_scale) {
+    PlotScene p;
+    p.legend = false;
+    Series s;
+    s.color = qualitative[0];
+    s.x = std::move(x);
+    s.y = std::move(y);
+    std::vector<double> xs = s.x, ys = s.y;
+    p.series.push_back(std::move(s));
+    auto xa = make_axis(std::move(x_label), AxisScale::linear, xs);
+    if (!xa) return std::unexpected(std::move(xa.error()));
+    auto ya = make_axis(std::move(y_label), y_scale, ys);
+    if (!ya) return std::unexpected(std::move(ya.error()));
+    p.x = std::move(*xa);
+    p.y = std::move(*ya);
+    return p;
+}
+
+// The four band edges against x (um), as a band diagram draws them.
+std::expected<PlotScene, base::Error> bands_against(const std::vector<double>& x,
+                                                    const std::array<std::vector<double>, 4>& bands,
+                                                    std::string x_label) {
+    PlotScene p;
+    p.title = "Band diagram";
+    constexpr std::array<std::string_view, 4> names{"Ec", "Ev", "EFn", "EFp"};
+    const std::array<Rgb, 4> colors{{{0.12f, 0.47f, 0.71f}, {0.84f, 0.15f, 0.16f},
+                                     {0.17f, 0.63f, 0.17f}, {1.0f, 0.5f, 0.06f}}};
+    std::vector<double> xs, ys;
+    for (std::size_t k = 0; k < bands.size(); ++k) {
+        Series s;
+        s.name = std::string(names[k]);
+        s.color = colors[k];
+        s.x = x;
+        s.y = bands[k];  // NaN on insulators: a gap
+        xs.insert(xs.end(), s.x.begin(), s.x.end());
+        ys.insert(ys.end(), s.y.begin(), s.y.end());
+        p.series.push_back(std::move(s));
+    }
+    auto xa = make_axis(std::move(x_label), AxisScale::linear, xs);
+    if (!xa) return std::unexpected(std::move(xa.error()));
+    auto ya = make_axis("E (eV)", AxisScale::linear, ys);
+    if (!ya) return std::unexpected(std::move(ya.error()));
+    p.x = std::move(*xa);
+    p.y = std::move(*ya);
+    return p;
+}
+
+std::expected<std::array<std::vector<double>, 4>, base::Error> band_parts(const results::BandDiagram& b, std::size_t n) {
+    std::array<std::vector<double>, 4> parts{b.conduction_eV, b.valence_eV, b.electron_fermi_eV, b.hole_fermi_eV};
+    for (const auto& v : parts) {
+        if (v.size() != n) return std::unexpected(invalid("the bands are not one value per mesh node", v.size()));
+    }
+    return parts;
+}
+
+std::vector<double> node_x_um(const mesh::Mesh& m) {
+    std::vector<double> x;
+    for (const Point& p : m.points()) x.push_back(p[0] * um_per_cm);
+    return x;
+}
+
+// The distance (um) at each sample, with a NaN point where the line runs outside the mesh, and the values
+// to go with them.
+std::vector<double> cut_x_um(const CutLine& cut) {
+    std::vector<double> x;
+    for (std::size_t i = 0; i < cut.samples.size(); ++i) {
+        if (cut.samples[i].gap_before) x.push_back(0.5 * (cut.samples[i - 1].distance + cut.samples[i].distance) * um_per_cm);
+        x.push_back(cut.samples[i].distance * um_per_cm);
+    }
+    return x;
+}
+
+std::vector<double> cut_y(const CutLine& cut, std::span<const double> field) {
+    const std::vector<double> v = cut_values(cut, field);
+    std::vector<double> y;
+    for (std::size_t i = 0; i < cut.samples.size(); ++i) {
+        if (cut.samples[i].gap_before) y.push_back(std::numeric_limits<double>::quiet_NaN());
+        y.push_back(v[i]);
+    }
+    return y;
+}
+
+constexpr const char* distance_label = "distance (\xC2\xB5m)";
+
+}  // namespace
+
 std::expected<PlotScene, base::Error> profile_plot(const mesh::Mesh& m, std::span<const double> values,
                                                    std::string y_label, AxisScale y_scale) {
     if (m.dimension() != 1) return std::unexpected(invalid("a profile needs a 1D mesh"));
     if (values.size() != m.node_count()) {
         return std::unexpected(invalid("the field is not one value per mesh node", values.size()));
     }
-    PlotScene p;
-    p.legend = false;
-    Series s;
-    s.color = qualitative[0];
-    for (std::size_t i = 0; i < values.size(); ++i) {
-        s.x.push_back(m.points()[i][0] * um_per_cm);
-        s.y.push_back(values[i]);
-    }
-    std::vector<double> xs = s.x, ys = s.y;
-    p.series.push_back(std::move(s));
-    auto x = make_axis("x (\xC2\xB5m)", AxisScale::linear, xs);
-    if (!x) return std::unexpected(std::move(x.error()));
-    auto y = make_axis(std::move(y_label), y_scale, ys);
-    if (!y) return std::unexpected(std::move(y.error()));
-    p.x = std::move(*x);
-    p.y = std::move(*y);
-    return p;
+    return profile_against(node_x_um(m), {values.begin(), values.end()}, "x (\xC2\xB5m)", std::move(y_label), y_scale);
 }
 
 std::expected<PlotScene, base::Error> band_plot(const mesh::Mesh& m, const results::BandDiagram& b) {
     if (m.dimension() != 1) return std::unexpected(invalid("a band diagram needs a 1D mesh"));
-    const std::size_t n = m.node_count();
-    for (const auto* v : {&b.conduction_eV, &b.valence_eV, &b.electron_fermi_eV, &b.hole_fermi_eV}) {
-        if (v->size() != n) return std::unexpected(invalid("the bands are not one value per mesh node", v->size()));
+    auto parts = band_parts(b, m.node_count());
+    if (!parts) return std::unexpected(std::move(parts.error()));
+    return bands_against(node_x_um(m), *parts, "x (\xC2\xB5m)");
+}
+
+std::expected<PlotScene, base::Error> cut_plot(const mesh::Mesh& m, const CutLine& cut, std::span<const double> values,
+                                               std::string y_label, AxisScale y_scale) {
+    if (values.size() != m.node_count()) {
+        return std::unexpected(invalid("the field is not one value per mesh node", values.size()));
     }
+    if (cut.samples.empty()) return std::unexpected(invalid("the cut line misses the device"));
+    return profile_against(cut_x_um(cut), cut_y(cut, values), distance_label, std::move(y_label), y_scale);
+}
+
+std::expected<PlotScene, base::Error> cut_band_plot(const mesh::Mesh& m, const CutLine& cut,
+                                                    const results::BandDiagram& b) {
+    auto parts = band_parts(b, m.node_count());
+    if (!parts) return std::unexpected(std::move(parts.error()));
+    if (cut.samples.empty()) return std::unexpected(invalid("the cut line misses the device"));
+    std::array<std::vector<double>, 4> along;
+    for (std::size_t k = 0; k < 4; ++k) along[k] = cut_y(cut, (*parts)[k]);
+    return bands_against(cut_x_um(cut), along, distance_label);
+}
+
+std::expected<PlotScene, base::Error> quality_plot(std::span<const double> angles, int dimension) {
+    if (angles.empty()) return std::unexpected(invalid("a mesh quality histogram needs an element"));
+    if (dimension != 2 && dimension != 3) return std::unexpected(invalid("mesh quality needs a 2D or 3D mesh"));
+    const QualityHistogram h = quality_histogram(angles);
     PlotScene p;
-    p.title = "Band diagram";
-    const std::array<std::pair<const std::vector<double>*, std::string_view>, 4> parts{
-        {{&b.conduction_eV, "Ec"}, {&b.valence_eV, "Ev"}, {&b.electron_fermi_eV, "EFn"},
-         {&b.hole_fermi_eV, "EFp"}}};
-    const std::array<Rgb, 4> colors{{{0.12f, 0.47f, 0.71f}, {0.84f, 0.15f, 0.16f},
-                                     {0.17f, 0.63f, 0.17f}, {1.0f, 0.5f, 0.06f}}};
-    std::vector<double> xs, ys;
-    for (std::size_t k = 0; k < parts.size(); ++k) {
-        Series s;
-        s.name = std::string(parts[k].second);
-        s.color = colors[k];
-        for (std::size_t i = 0; i < n; ++i) {
-            s.x.push_back(m.points()[i][0] * um_per_cm);
-            s.y.push_back((*parts[k].first)[i]);  // NaN on insulators: a gap
+    p.title = "Mesh quality";
+    Series bins;
+    bins.name = "elements";
+    bins.color = qualitative[0];
+    double top = 0.0;
+    for (std::size_t k = 0; k < h.counts.size(); ++k) {
+        const double lo = static_cast<double>(k) * QualityHistogram::bin_deg, count = static_cast<double>(h.counts[k]);
+        if (k == 0) {
+            bins.x.push_back(lo);
+            bins.y.push_back(0.0);
         }
-        xs.insert(xs.end(), s.x.begin(), s.x.end());
-        ys.insert(ys.end(), s.y.begin(), s.y.end());
-        p.series.push_back(std::move(s));
+        bins.x.insert(bins.x.end(), {lo, lo + QualityHistogram::bin_deg});
+        bins.y.insert(bins.y.end(), {count, count});
+        top = std::max(top, count);
     }
-    auto x = make_axis("x (\xC2\xB5m)", AxisScale::linear, xs);
-    if (!x) return std::unexpected(std::move(x.error()));
-    auto y = make_axis("E (eV)", AxisScale::linear, ys);
+    bins.x.push_back(bins.x.back());
+    bins.y.push_back(0.0);
+    const double t = quality_threshold_deg(dimension);
+    Series threshold;
+    threshold.name = std::format("threshold {} \xC2\xB0", t);
+    threshold.color = qualitative[3];
+    threshold.x = {t, t};
+    threshold.y = {0.0, top};
+    auto y = make_axis("elements", AxisScale::linear, bins.y);
     if (!y) return std::unexpected(std::move(y.error()));
-    p.x = std::move(*x);
+    p.x = Axis{dimension == 2 ? "minimum angle (\xC2\xB0)" : "minimum dihedral angle (\xC2\xB0)", AxisScale::linear,
+               0.0, 90.0, linear_ticks(0.0, 90.0, 6)};
     p.y = std::move(*y);
+    p.series = {std::move(bins), std::move(threshold)};
     return p;
 }
 

@@ -101,6 +101,59 @@ sweep = mosfet.nitsweep
 device = mosfet.nitdev
 )";
 
+// Generated 2D and 3D resistors at equilibrium, and the diode's transient.
+inline const std::string generate2d = R"(# A generated 2D resistor
+[mesh]
+type = generate2d
+patch left = 0 0, 0 1um
+patch right = 2um 0, 2um 1um
+max_size = 0.25um
+
+[region silicon]
+material = silicon
+polygon = 0 0, 2um 0, 2um 1um, 0 1um
+
+[doping]
+profile = donor constant 1e16
+
+[contact left]
+kind = ohmic
+patch = left
+
+[contact right]
+kind = ohmic
+patch = right
+
+[equilibrium]
+)";
+
+inline const std::string generate3d = R"(# A generated 3D resistor
+[mesh]
+type = generate3d
+cuboid = 0 1um 0 1um 0 1um
+max_size = 0.5um
+
+[region silicon]
+material = silicon
+
+[doping]
+profile = donor constant 1e16
+
+[contact left]
+kind = ohmic
+patch = x_min
+
+[contact right]
+kind = ohmic
+patch = x_max
+
+[equilibrium]
+)";
+
+inline std::string transient_diode() {
+    return diode_device + "\n[transient]\ncontact anode = step(0, 0.3, 1e-9)\nt_end = 4e-9\n";
+}
+
 struct Cli {
     int status;
     std::string output;

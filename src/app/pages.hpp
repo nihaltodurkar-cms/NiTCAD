@@ -111,11 +111,14 @@ public:
     ResultsPage& operator=(const ResultsPage&) = delete;
 
     [[nodiscard]] HWND hwnd() const noexcept { return panel_; }
-    void show(const Workspace* w);
+    // With run B (Unit 26b, XD6): each figure both runs have with B's value and B - A, and the records side
+    // by side, the lines that differ marked.
+    void show(const Workspace* w, const Workspace* b = nullptr);
     void set_dpi(int dpi, HFONT font, HFONT bold);
     [[nodiscard]] int figure_count() const;
     [[nodiscard]] int record_count() const;
     [[nodiscard]] std::wstring figure_cell(int row, int column) const;
+    [[nodiscard]] std::wstring record_cell(int row, int column) const;
 
 private:
     static LRESULT CALLBACK proc(HWND hwnd, UINT message, WPARAM w, LPARAM l);
