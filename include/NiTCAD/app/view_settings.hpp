@@ -50,6 +50,13 @@ enum class ViewKind : unsigned char {
 // exploded, quality and difference views; the curves ignore them (build_scene) and so does plot_arguments.
 [[nodiscard]] bool takes_hidden(ViewKind v) noexcept;
 
+// Transient playback (Unit 26c, YD5): the scale every snapshot of a transient run's field view is drawn on,
+// fitted once over all of them (film_scale) and kept while the snapshot changes.
+struct Film {
+    render::ColorScale scale;
+    double floor = 0.0;  // a vector magnitude on a log scale without a range: values below it drawn at it (0: none)
+};
+
 struct ViewSettings {
     ViewKind kind = ViewKind::solid;
     std::string field = "potential";             // field_info's key
@@ -98,6 +105,10 @@ struct ViewSettings {
     // Hidden regions (Unit 26c, YD4), by name, as `nitcad plot --hide`: left out of the device views
     // (takes_hidden) of a 2D or 3D device; the other views ignore them.
     std::vector<std::string> hidden;
+    // Playback (YD5): with a film, a transient run's field view of a 2D or 3D device (takes_film) shows its
+    // snapshot (`point`) as `nitcad plot --view filmstrip` draws that snapshot's frame (the time in the title)
+    // on the film's scale; plot_arguments gives the snapshot's field view.
+    std::optional<Film> film;
     // The window's camera (VA8, Unit 26): zoom about the view's centre and pan in fractions of its
     // half size (render::Camera). `nitcad plot` has neither: plot_arguments leaves them out.
     float zoom = 1.0f;
@@ -130,6 +141,24 @@ using Scene = std::variant<render::FieldScene, render::PlotScene>;
 // The fields a view can choose: every field_info key whose values the results provide (the rates
 // only when stored; the doping always).
 [[nodiscard]] std::vector<std::string> available_fields(const Workspace& w);
+
+// Playback (Unit 26c, YD5). Whether the settings' view plays the workspace's snapshots: the field view of a
+// transient run of a 2D or 3D device.
+[[nodiscard]] bool takes_film(const Workspace& w, const ViewSettings& s) noexcept;
+// One scale over every snapshot's field as `nitcad plot --view filmstrip --every 1` fits it (DC4): the
+// range if given, over the shown regions' nodes, a vector magnitude on a log scale floored ten decades
+// below its largest value over all. Errors (invalid_input): not takes_film; build_scene's for the field.
+[[nodiscard]] std::expected<Film, base::Error> film_scale(const Workspace& w, const ViewSettings& s);
+// The snapshot shown `elapsed_s` after playing from `from`, at playback_fps; the last one once reached. Frames
+// not drawn in time are skipped, not queued.
+inline constexpr double playback_fps = 5.0;
+[[nodiscard]] std::size_t playback_frame(std::size_t from, std::size_t count, double elapsed_s) noexcept;
+
+// The clipping box's sliders (Unit 26c, YD6): clip_steps steps over the device's extent along an axis
+// [lo_um, hi_um], a step's value rounded to the nanometre, and the step nearest a value (clamped).
+inline constexpr int clip_steps = 1000;
+[[nodiscard]] double clip_value_um(double lo_um, double hi_um, int step) noexcept;
+[[nodiscard]] int clip_step(double lo_um, double hi_um, double value_um) noexcept;
 
 // The options of `nitcad plot` that draw the same view (without the input, --out, --size and
 // --adapter); with run B, `--compare <its file>` for the views that use it.

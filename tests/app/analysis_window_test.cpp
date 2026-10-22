@@ -12,8 +12,10 @@
 #include <commctrl.h>
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cmath>
+#include <cstdio>
 #include <filesystem>
 #include <functional>
 #include <string>
@@ -754,4 +756,261 @@ TEST_CASE("app window 26c: regions hidden from the scene tree (YD4, YG1, YG5)", 
     REQUIRE(info);
     CHECK(info->menu == "&View");
     CHECK(info->accelerator.key == 'H');
+}
+
+namespace {
+
+// A slider moved by the user to a step (its notification to the inspector, as a drag ends).
+void slide(MainWindow& w, int id, int step) {
+    HWND bar = w.child(id);
+    SendMessageW(bar, TBM_SETPOS, TRUE, step);
+    SendMessageW(GetParent(bar), WM_HSCROLL, MAKEWPARAM(TB_THUMBPOSITION, step), reinterpret_cast<LPARAM>(bar));
+}
+
+int position(MainWindow& w, int id) { return static_cast<int>(SendMessageW(w.child(id), TBM_GETPOS, 0, 0)); }
+
+std::string text_of(MainWindow& w, int id) {
+    wchar_t buffer[256]{};
+    GetWindowTextW(w.child(id), buffer, 256);
+    std::string out;
+    for (const wchar_t* c = buffer; *c; ++c) out += static_cast<char>(*c < 128 ? *c : '?');
+    return out;
+}
+
+bool grayed(MainWindow& w, Command c) {
+    return (GetMenuState(GetMenu(w.hwnd()), static_cast<UINT>(c), MF_BYCOMMAND) & MF_GRAYED) != 0;
+}
+
+// The window's view equals the image at `png` (drawn on WARP at 480 x 360).
+void same_as_png(MainWindow& w, const fs::path& png) {
+    REQUIRE(w.scene());
+    auto mine = std::visit([&](const auto& s) { return w.renderer()->draw(s, 480, 360); }, *w.scene());
+    REQUIRE(mine);
+    auto theirs = render::load_png(png);
+    REQUIRE(theirs);
+    const auto d = render::compare(*mine, *theirs, 0);
+    REQUIRE(d);
+    CHECK(d->max_channel == 0);
+}
+
+}  // namespace
+
+TEST_CASE("app window 26c: playing a transient run's snapshots (YD5, YG3, YG5)", "[app]") {
+    const fs::path dir = app_test::scratch("window_playback");
+    const fs::path deck = app_test::write(dir, "mosfet.deck", app_test::mosfet2d_transient());
+    auto w = window();
+    REQUIRE(w->open_deck(deck));
+    REQUIRE(pump_until([&] { return w->workspace() != nullptr && !w->runner().busy(); }));
+    w->execute(Command::run);
+    REQUIRE(pump_until([&] { return !w->runner().busy() && w->workspace() && w->workspace()->has_results(); }));
+    w->select_tab(MainWindow::tab_view);
+    REQUIRE(w->settings().kind == app::ViewKind::field);
+    REQUIRE(w->settings().field == "potential");
+    const std::size_t n = w->workspace()->points.size();
+    REQUIRE(n >= 3);
+    // The frames nitcad plot draws for the run, each snapshot's.
+    const fs::path frames = dir / "frames";
+    const auto cli = app_test::nitcad("plot " + app_test::quoted(deck) +
+                                      " --view filmstrip --field potential --every 1 --size 480x360 --adapter warp --frames " +
+                                      app_test::quoted(frames) + " --out " + app_test::quoted(dir / "strip.png"));
+    CAPTURE(cli.output);
+    REQUIRE(cli.status == 0);
+    const auto frame = [&](std::size_t k) {
+        char name[32];
+        std::snprintf(name, sizeof name, "frame_%03zu.png", k);
+        return frames / name;
+    };
+    // The controls and the commands on a transient run's field view; the last snapshot shown, as its frame.
+    CHECK(shown(*w, MainWindow::id_time));
+    CHECK(shown(*w, MainWindow::id_play));
+    CHECK_FALSE(grayed(*w, Command::play_pause));
+    CHECK(w->settings().film.has_value());
+    CHECK(position(*w, MainWindow::id_time) == static_cast<int>(n - 1));
+    same_as_png(*w, frame(n - 1));
+    // The step keys land on the snapshot asked for.
+    w->execute(Command::snapshot_first);
+    CHECK(w->settings().point == 0u);
+    CHECK(text_of(*w, MainWindow::id_time_text).starts_with("t = 0 s (1 of "));
+    CHECK(position(*w, MainWindow::id_time) == 0);
+    same_as_png(*w, frame(0));
+    w->execute(Command::snapshot_previous);
+    CHECK(w->settings().point == 0u);
+    w->execute(Command::snapshot_next);
+    w->execute(Command::snapshot_next);
+    CHECK(w->settings().point == 2u);
+    CHECK(SendMessageW(w->child(MainWindow::id_point), CB_GETCURSEL, 0, 0) == 2);  // the point list follows
+    same_as_png(*w, frame(2));
+    w->execute(Command::snapshot_previous);
+    CHECK(w->settings().point == 1u);
+    w->execute(Command::snapshot_last);
+    CHECK(w->settings().point == n - 1);
+    w->execute(Command::snapshot_next);
+    CHECK(w->settings().point == n - 1);
+    // The slider: its snapshot shown.
+    slide(*w, MainWindow::id_time, 1);
+    CHECK(w->settings().point == 1u);
+    same_as_png(*w, frame(1));
+
+    // Play from the first: five snapshots a second to the last, every frame shown its snapshot's, and the
+    // message loop never held 100 ms (WG1).
+    w->execute(Command::snapshot_first);
+    const auto start = std::chrono::steady_clock::now();
+    w->execute(Command::play_pause);
+    CHECK(w->playing());
+    CHECK(text_of(*w, MainWindow::id_play) == "Pa&use");
+    std::vector<std::size_t> seen{0};
+    double longest_ms = 0.0;
+    MSG m;
+    while (w->playing() && std::chrono::steady_clock::now() - start < std::chrono::seconds(20)) {
+        if (PeekMessageW(&m, nullptr, 0, 0, PM_REMOVE)) {
+            const auto t0 = std::chrono::steady_clock::now();
+            TranslateMessage(&m);
+            DispatchMessageW(&m);
+            longest_ms = std::max(longest_ms,
+                                  std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count());
+        } else {
+            MsgWaitForMultipleObjects(0, nullptr, FALSE, 10, QS_ALLINPUT);
+        }
+        const std::size_t k = *w->settings().point;
+        if (k != seen.back()) {
+            // No snapshot before its time (five a second).
+            const double at = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
+            CHECK(at >= static_cast<double>(k) / app::playback_fps - 0.05);
+            seen.push_back(k);
+            same_as_png(*w, frame(k));
+        }
+    }
+    const double played_s = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
+    CAPTURE(seen, longest_ms, played_s);
+    CHECK_FALSE(w->playing());
+    CHECK(seen.back() == n - 1);
+    CHECK(std::ranges::is_sorted(seen));
+    CHECK(played_s >= static_cast<double>(n - 1) / app::playback_fps - 0.05);
+    CHECK(longest_ms < 100.0);
+    CHECK(text_of(*w, MainWindow::id_play) == "Pla&y");
+    // Play from the last starts again at the first; Pause holds the snapshot; the button and the slider pause too.
+    w->execute(Command::play_pause);
+    CHECK(w->playing());
+    CHECK(w->settings().point == 0u);
+    pump_for(0.5);
+    w->execute(Command::play_pause);
+    CHECK_FALSE(w->playing());
+    const std::size_t held = *w->settings().point;
+    CHECK(held >= 1u);
+    pump_for(0.5);
+    CHECK(w->settings().point == held);
+    same_as_png(*w, frame(held));
+    click(*w, MainWindow::id_play);
+    CHECK(w->playing());
+    slide(*w, MainWindow::id_time, 0);
+    CHECK_FALSE(w->playing());
+    CHECK(w->settings().point == 0u);
+    // Another tab pauses it.
+    w->execute(Command::play_pause);
+    CHECK(w->playing());
+    w->select_tab(MainWindow::tab_deck);
+    pump_for(0.2);
+    CHECK_FALSE(w->playing());
+    w->select_tab(MainWindow::tab_view);
+
+    // Only on the field view: not on the mesh view (the commands greyed).
+    choose(*w, MainWindow::id_view, L"mesh");
+    CHECK_FALSE(shown(*w, MainWindow::id_time));
+    CHECK(grayed(*w, Command::play_pause));
+    w->execute(Command::play_pause);
+    CHECK_FALSE(w->playing());
+    choose(*w, MainWindow::id_view, L"field");
+    CHECK(shown(*w, MainWindow::id_time));
+    // In the Simulation menu with their keys; the new controls are tab stops (YG5).
+    for (const Command c : {Command::play_pause, Command::snapshot_first, Command::snapshot_previous,
+                            Command::snapshot_next, Command::snapshot_last}) {
+        const auto* info = app::find_command(c);
+        REQUIRE(info);
+        CHECK(info->menu == "&Simulation");
+        CHECK(info->accelerator.key != 0);
+    }
+    for (const int id : {MainWindow::id_time, MainWindow::id_play}) {
+        CHECK((GetWindowLongPtrW(w->child(id), GWL_STYLE) & WS_TABSTOP) != 0);
+    }
+    // The oxide hidden: the scale fitted again over the silicon, each frame as nitcad plot --hide oxide draws it.
+    const fs::path hidden_frames = dir / "frames_no_oxide";
+    const auto hidden_cli = app_test::nitcad("plot " + app_test::quoted(deck) +
+                                             " --view filmstrip --field potential --every 1 --hide oxide --size 480x360"
+                                             " --adapter warp --frames " + app_test::quoted(hidden_frames) + " --out " +
+                                             app_test::quoted(dir / "strip_no_oxide.png"));
+    CAPTURE(hidden_cli.output);
+    REQUIRE(hidden_cli.status == 0);
+    press_space(*w, tree_item(*w, L"oxide"));
+    REQUIRE(w->settings().hidden == std::vector<std::string>{"oxide"});
+    w->execute(Command::snapshot_last);
+    char name[32];
+    std::snprintf(name, sizeof name, "frame_%03zu.png", n - 1);
+    same_as_png(*w, hidden_frames / name);
+}
+
+TEST_CASE("app window 26c: the clipping box's sliders (YD6, YG4, YG5)", "[app]") {
+    const fs::path dir = app_test::scratch("window_clip_sliders");
+    const fs::path deck = app_test::write(dir, "mosfet3d.deck", app_test::mosfet3d);
+    auto w = window();
+    REQUIRE(w->open_deck(deck));
+    REQUIRE(pump_until([&] { return w->workspace() != nullptr && !w->runner().busy(); }));
+    w->execute(Command::run);
+    REQUIRE(pump_until([&] { return !w->runner().busy() && w->workspace() && w->workspace()->has_results(); }));
+    w->select_tab(MainWindow::tab_view);
+    choose(*w, MainWindow::id_view, L"solid");
+    // Six sliders on the solid view of a 3D device, at the whole extent; no playback (a sweep).
+    for (int id = MainWindow::id_clip_x0; id <= MainWindow::id_clip_z1; ++id) {
+        CAPTURE(id);
+        CHECK(shown(*w, id));
+        CHECK(position(*w, id) == ((id - MainWindow::id_clip_x0) % 2 == 0 ? 0 : app::clip_steps));
+        CHECK((GetWindowLongPtrW(w->child(id), GWL_STYLE) & WS_TABSTOP) != 0);
+    }
+    CHECK_FALSE(shown(*w, MainWindow::id_time));
+    CHECK(grayed(*w, Command::play_pause));
+    // The low x slider at a quarter: a box over the device from x = 0.5 um, checked and typed.
+    slide(*w, MainWindow::id_clip_x0, 250);
+    REQUIRE(w->settings().clip);
+    CHECK(w->settings().clip->lo_um == std::array{0.5, 0.0, 0.0});
+    CHECK(w->settings().clip->hi_um == std::array{2.0, 1.0, 0.8});
+    CHECK(SendMessageW(w->child(MainWindow::id_clip), BM_GETCHECK, 0, 0) == BST_CHECKED);
+    CHECK(text_of(*w, MainWindow::id_clip_box) == "0.5,0,0:2,1,0.8");
+    same_as_plot(*w, deck, dir / "clip_x.png");
+    // The high z slider below the low one: the low follows.
+    slide(*w, MainWindow::id_clip_z0, 500);
+    slide(*w, MainWindow::id_clip_z1, 300);
+    CHECK(w->settings().clip->lo_um[2] == 0.24);
+    CHECK(w->settings().clip->hi_um[2] == 0.24);
+    CHECK(position(*w, MainWindow::id_clip_z0) == 300);
+    // A typed box moves the sliders to its steps; the view as nitcad plot --clip draws it.
+    apply_text(*w, MainWindow::id_clip_box, "0.2,0.1,0.1:1.5,0.75,0.6");
+    REQUIRE(w->settings().clip);
+    CHECK(position(*w, MainWindow::id_clip_x0) == 100);
+    CHECK(position(*w, MainWindow::id_clip_x1) == 750);
+    CHECK(position(*w, MainWindow::id_clip_y0) == 100);
+    CHECK(position(*w, MainWindow::id_clip_y1) == 750);
+    CHECK(position(*w, MainWindow::id_clip_z0) == 125);
+    CHECK(position(*w, MainWindow::id_clip_z1) == 750);
+    same_as_plot(*w, deck, dir / "clip_typed.png");
+    // The field view keeps them; the mesh view has none.
+    choose(*w, MainWindow::id_view, L"field");
+    CHECK(shown(*w, MainWindow::id_clip_y1));
+    slide(*w, MainWindow::id_clip_y1, 500);
+    CHECK(w->settings().clip->hi_um[1] == 0.5);
+    same_as_plot(*w, deck, dir / "clip_field.png");
+    choose(*w, MainWindow::id_view, L"mesh");
+    CHECK_FALSE(shown(*w, MainWindow::id_clip_x0));
+    // At 200% the low and high sliders stay side by side in the inspector (YG5).
+    choose(*w, MainWindow::id_view, L"solid");
+    RECT r{};
+    GetWindowRect(w->hwnd(), &r);
+    RECT suggested{r.left, r.top, r.left + 2 * (r.right - r.left), r.top + 2 * (r.bottom - r.top)};
+    SendMessageW(w->hwnd(), WM_DPICHANGED, MAKEWPARAM(192, 192), reinterpret_cast<LPARAM>(&suggested));
+    RECT low{}, high{}, inspector{};
+    GetWindowRect(w->child(MainWindow::id_clip_x0), &low);
+    GetWindowRect(w->child(MainWindow::id_clip_x1), &high);
+    GetWindowRect(w->child(MainWindow::id_inspector), &inspector);
+    CHECK(low.right <= high.left);
+    CHECK(low.top == high.top);
+    CHECK(high.right <= inspector.right);
+    CHECK(high.bottom - high.top >= 40);
 }

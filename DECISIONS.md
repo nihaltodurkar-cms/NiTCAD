@@ -3580,6 +3580,54 @@ passed in the suite (19 of 19). WG1 stands as ruled.
   (DXGI_ERROR_DEVICE_RESET, before anything was drawn), while the other D3D suites of the same run passed; rerun
   alone in the same worktree it passed (651 s).
 
+**Commit 26c·3 (transient playback and the clipping box's sliders; YD5, YD6, YG3, YG4, YG5, YG6), as built.**
+- **Playback** on the field view of a transient run of a 2D or 3D device (`app::takes_film`), the only device view
+  `nitcad plot --view filmstrip` draws. `app::film_scale` fits one scale over every snapshot as the filmstrip does
+  with `--every 1` (DC4): the range if given, over the shown regions' nodes (YD4), a vector magnitude on a log scale
+  floored ten decades below its largest value over all. The window fits it once and keeps it in
+  `ViewSettings::film`, fitting again only when the field, scale, range or hidden regions change; a new workspace
+  stops playback. With a film, `build_scene` draws the snapshot (`point`) through `render::filmstrip_scenes`, the
+  filmstrip frame's own call: the same scale, and the time in the title ("ψ (V), t = 200 ps"). `plot_arguments`
+  gives the snapshot's field view (`--point k`); no `nitcad plot` option draws one frame alone, so YG3 compares
+  with `--frames`.
+- **Controls:** in the inspector, a Snapshot slider over the snapshots, the time and "k of n" beside **Play/Pause**.
+  Simulation ▸ Play / pause snapshots (Ctrl+Shift+Space), First (Alt+Home), Previous (Alt+Left), Next (Alt+Right)
+  and Last snapshot (Alt+End), enabled while playback applies. Play starts from the snapshot shown, or from the
+  first when the last is shown, and stops at the last. Pause, a step key, the slider, the point list and another
+  tab each pause it; a step or the slider lands on the snapshot asked for. **Frames:** a 40 ms timer shows the
+  snapshot the time since Play has reached (`app::playback_frame`, five a second), so a frame drawn late skips
+  those it missed rather than queueing them, and the message loop is never held for more than a frame's drawing.
+- **Clip sliders** on the solid and field views of a 3D device: per axis a low and a high slider side by side,
+  1,000 steps over the device's extent, values rounded to the nanometre (`app::clip_value_um`, `app::clip_step`).
+  Moving one makes the box over the whole device if there was none (Clipping box checked, the box typed), sets that
+  side, and moves the axis's other side with it rather than letting them cross. A typed box (Apply) moves the
+  sliders to its nearest steps; on an extent under 1 µm a step is finer than a nanometre, so a value, not a step,
+  comes back unchanged.
+- **Tests:** `view_settings_test` — playback only on a transient field view (not a sweep, 1D or the solid view),
+  the refusals; the film holds every snapshot's own scale; a frame's title and kept scale; |J|'s floor and a range;
+  the frame draws values below the film's floor at it; `playback_frame` (five a second, a late tick skipping, the
+  last kept); the sliders' values, steps and round trips. **To the bit equal to `nitcad plot --view filmstrip
+  --every 1 --frames` (YG3)** for every snapshot of a ramped 2D MOSFET (10 snapshots): ψ with contours, |J| on its
+  log scale, n with the oxide hidden, ψ linear with the oxide hidden. `analysis_window_test`: the controls and
+  commands on the field view, the last snapshot as its frame; First, Previous (stays at the first), Next, Last
+  (stays at the last) and the slider land on their snapshot, the point list following; Play from the first runs to
+  the last, every frame shown equal to its frame and none before its time, the longest message 100 ms or less
+  (WG1); Play from the last starts again, Pause holds, the button plays, the slider and another tab pause; none on
+  the mesh view; the menu and keys, tab stops; with the oxide hidden the scale is fitted again and the frame equals
+  `--hide oxide`'s. The 3D MOSFET's sliders: six on the solid view at the whole extent, a quarter of x giving the box
+  `0.5,0,0:2,1,0.8` (checked, typed) and the view equal to `nitcad plot --clip` (YG4), the high z side moved below
+  the low one, a typed box moving the sliders to its steps, the field view keeping them and the mesh view without,
+  side by side at 200% (YG5).
+- **Mutation checks (Release):** 28 of 28 caught. App 13: the frame not floored, the film floored nine decades, over
+  hidden nodes, ignoring the range, the frame titled at t = 0 and the film on every view (both caught by the
+  `/WX` build, an unused variable), the frame fitting its own scale, the film in 1D, the frame rounded, past the
+  last, the sliders to 0.1 nm, floored and unclamped. Window 15: Play from the last staying there, playing past
+  the end, another tab or the slider leaving it playing, Previous from the first, the high side crossing the low,
+  the typed box not on the sliders, a new box empty, the film not fitted again on hiding, the button's text,
+  overlapping sliders, a frame every tick, the timer ignored, the controls on every view, the point list left
+  behind. Five survived at first and gained tests: the floor, past the last, hiding while playing, frames before
+  their time, and the point list.
+
 **Not in Unit 26c:** in-view clip handles (the owner chose sliders), the tiled filmstrip in the window, video
 export, oblique clip planes, streamtubes.
 

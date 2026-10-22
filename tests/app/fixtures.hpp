@@ -101,6 +101,23 @@ sweep = mosfet.nitsweep
 device = mosfet.nitdev
 )";
 
+// The 2D MOSFET's gate ramped (Unit 26c, YD5): 0 to 0.5 ns, each step's fields kept (at most 12 snapshots).
+inline std::string mosfet2d_transient() {
+    const std::string device = mosfet2d.substr(0, mosfet2d.find("[sweep]"));
+    return device + R"([transient]
+contact gate = ramp(0, 1, 0, 4e-10)
+contact drain = constant(0.5)
+t_end = 5e-10
+dt_initial = 1e-10
+adaptive = off
+fields_every_step = on
+
+[output]
+transient = mosfet.nittran
+device = mosfet.nitdev
+)";
+}
+
 // Generated 2D and 3D resistors at equilibrium, and the diode's transient.
 inline const std::string generate2d = R"(# A generated 2D resistor
 [mesh]

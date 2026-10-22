@@ -44,6 +44,8 @@ constexpr std::array<std::string_view, 5> vector_names{"none", "E", "J", "Jn", "
 constexpr int label_arrows = MainWindow::id_first_label + 9, label_lines = label_arrows + 1, label_from = label_arrows + 2,
               label_axis = label_arrows + 3, label_swept = label_arrows + 4, label_sensed = label_arrows + 5,
               label_frequency = label_arrows + 6;
+// Unit 26c (YD5, YD6): the snapshot slider's label and the clipping box's per axis.
+constexpr int label_time = label_arrows + 7, label_clip_x = label_arrows + 8;
 
 std::string format_um(double v) { return std::format("{:.3g}", v); }
 
@@ -234,6 +236,22 @@ bool MainWindow::create_children() {
     labelled(L"Sensed contact", L"COMBOBOX", drop, id_sensed);
     labelled(L"Frequency", L"COMBOBOX", drop, id_frequency);
     make(L"BUTTON", L"Lo&g axis", WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX, inspector_, id_log);
+    // Unit 26c (YD5): the snapshot slider, its time and Play; (YD6) a low and a high slider per axis of the box.
+    const DWORD bar = WS_VISIBLE | WS_TABSTOP | TBS_HORZ | TBS_NOTICKS;
+    make(L"STATIC", L"Snapshot", WS_VISIBLE, inspector_, label++);
+    make(TRACKBAR_CLASSW, L"", bar, inspector_, id_time);
+    make(L"STATIC", L"", WS_VISIBLE | SS_LEFT | SS_CENTERIMAGE, inspector_, id_time_text);
+    make(L"BUTTON", L"Pla&y", WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON, inspector_, id_play);
+    for (const auto& [text, low, high] : {std::tuple{L"Clip x, low and high", id_clip_x0, id_clip_x1},
+                                          std::tuple{L"Clip y, low and high", id_clip_y0, id_clip_y1},
+                                          std::tuple{L"Clip z, low and high", id_clip_z0, id_clip_z1}}) {
+        make(L"STATIC", text, WS_VISIBLE, inspector_, label++);
+        for (const int id : {low, high}) {
+            make(TRACKBAR_CLASSW, L"", bar, inspector_, id);
+            SendMessageW(child(id), TBM_SETRANGE, FALSE, MAKELPARAM(0, clip_steps));
+            SendMessageW(child(id), TBM_SETPAGESIZE, 0, clip_steps / 20);
+        }
+    }
     make(L"BUTTON", L"&Apply", WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON, inspector_, id_apply);
     make(L"STATIC", L"", WS_VISIBLE | SS_LEFT, inspector_, id_probe_text);
     combo_fill(child(id_scale), {scale_names.begin(), scale_names.end()}, 0);
@@ -379,6 +397,10 @@ void MainWindow::update_command_states() {
     enable(Command::mesh_quality, workspace_ && workspace_->device->mesh().dimension() >= 2 &&
                                       workspace_->geometry->element_count() > 0);
     enable(Command::show_regions, workspace_ && !device_view_.hidden.empty());
+    for (const Command c : {Command::play_pause, Command::snapshot_first, Command::snapshot_previous,
+                            Command::snapshot_next, Command::snapshot_last}) {
+        enable(c, can_play());
+    }
     for (const Command c : {Command::fit, Command::orbit_left, Command::orbit_right, Command::orbit_up,
                             Command::orbit_down, Command::zoom_in, Command::zoom_out, Command::pan_left,
                             Command::pan_right, Command::pan_up, Command::pan_down}) {
@@ -508,6 +530,23 @@ void MainWindow::layout_inspector() {
         y -= row * 8 - row;
     }
     if (shown(id_log)) put(id_log, row);
+    // YD5: the snapshot slider, then its time beside Play; YD6: per axis the low and the high slider side by side.
+    if (shown(id_time)) {
+        put_at(label_time);
+        put(id_time, row);
+        const int button = scaled(80, dpi_);
+        MoveWindow(child(id_time_text), pad, y, std::max(w - button - gap, 0), row, TRUE);
+        MoveWindow(child(id_play), pad + std::max(w - button, 0), y, std::min(button, w), row, TRUE);
+        y += row + gap;
+    }
+    if (shown(id_clip_x0)) {
+        for (int axis = 0; axis < 3; ++axis) {
+            put_at(label_clip_x + axis);
+            MoveWindow(child(id_clip_x0 + 2 * axis), pad, y, half, row, TRUE);
+            MoveWindow(child(id_clip_x1 + 2 * axis), pad + half + gap, y, w - half - gap, row, TRUE);
+            y += row + gap;
+        }
+    }
     MoveWindow(child(id_apply), pad, y, scaled(80, dpi_), row + gap, TRUE);
     y += row + 2 * gap;
     MoveWindow(child(id_probe_text), pad, y, w, std::max<int>(r.bottom - y - pad, 0), TRUE);
@@ -621,6 +660,8 @@ void MainWindow::default_settings() {
 }
 
 void MainWindow::set_workspace(Workspace w, bool keep_settings) {
+    play(false);  // YD5: a new workspace stops playback; its film is fitted again
+    film_key_.clear();
     // The results a run (or the structure preview) of the same deck replaces: the previous run (XD6).
     if (workspace_ && workspace_->has_results() && workspace_->source == w.source) previous_ = std::move(*workspace_);
     workspace_ = std::move(w);
@@ -673,6 +714,20 @@ void MainWindow::refresh() {
         return;
     }
     ViewSettings& s = settings();
+    // Playback (YD5): a transient run's field view on one scale over every snapshot, fitted again only when the
+    // field, its scale, range or hidden regions change.
+    if (tab_ == tab_view && takes_film(*workspace_, s)) {
+        std::string key = s.field + "|" + s.scale + "|" +
+                          (s.range ? std::format("{},{}", s.range->first, s.range->second) : std::string());
+        for (const std::string& r : s.hidden) key += "|" + r;
+        if (!s.film || key != film_key_) {
+            auto film = film_scale(*workspace_, s);
+            s.film = film ? std::optional<Film>(std::move(*film)) : std::nullopt;
+            film_key_ = std::move(key);
+        }
+    } else {
+        s.film.reset();
+    }
     // The cut line where the view uses it: plotted along, or drawn on a 2D or 3D device view.
     ViewSettings shown = s;
     const bool along = s.kind == ViewKind::profile || s.kind == ViewKind::bands;
@@ -868,7 +923,126 @@ void MainWindow::sync_inspector() {
     }
     combo_fill(child(id_frequency), frequencies, static_cast<int>(s.frequency.value_or(0)));
     check(id_log, s.log);
+    sync_clip_sliders();
+    sync_playback();
     show_inspector_groups();
+}
+
+// YD6: the box's sides on the sliders (the whole extent without a box).
+void MainWindow::sync_clip_sliders() {
+    if (!workspace_) return;
+    const ViewSettings& s = settings();
+    const auto extent = extent_um();
+    for (std::size_t axis = 0; axis < 3; ++axis) {
+        const auto [lo, hi] = extent[axis];
+        const int id = id_clip_x0 + 2 * static_cast<int>(axis);
+        SendMessageW(child(id), TBM_SETPOS, TRUE, s.clip ? clip_step(lo, hi, s.clip->lo_um[axis]) : 0);
+        SendMessageW(child(id + 1), TBM_SETPOS, TRUE, s.clip ? clip_step(lo, hi, s.clip->hi_um[axis]) : clip_steps);
+    }
+}
+
+void MainWindow::sync_playback() {
+    const ViewSettings& s = settings();
+    const std::size_t n = workspace_ ? workspace_->points.size() : 0;
+    const std::size_t k = n == 0 ? 0 : std::min(s.point.value_or(n - 1), n - 1);
+    SendMessageW(child(id_time), TBM_SETRANGE, FALSE, MAKELPARAM(0, n == 0 ? 0 : n - 1));
+    SendMessageW(child(id_time), TBM_SETPOS, TRUE, static_cast<LPARAM>(k));
+    win32::set_text(child(id_time_text), can_play() ? render::time_label(workspace_->transient->snapshots[k].time_s) +
+                                                          std::format(" ({} of {})", k + 1, n)
+                                                    : std::string());
+    win32::set_text(child(id_play), playing_ ? "Pa&use" : "Pla&y");
+    SendMessageW(child(id_point), CB_SETCURSEL, static_cast<WPARAM>(k), 0);
+}
+
+bool MainWindow::can_play() const {
+    return workspace_ && takes_film(*workspace_, device_view_) && workspace_->points.size() >= 2;
+}
+
+void MainWindow::play(bool on) {
+    if (on && !can_play()) return;
+    if (on) {
+        if (tab_ != tab_view) select_tab(tab_view);
+        const std::size_t n = workspace_->points.size();
+        // From the snapshot shown, or from the first when the last is shown.
+        const std::size_t k = std::min(device_view_.point.value_or(n - 1), n - 1);
+        play_from_ = k + 1 == n ? 0 : k;
+        play_start_ = std::chrono::steady_clock::now();
+        playing_ = true;
+        show_snapshot(play_from_);
+        SetTimer(hwnd_, playback_timer, playback_tick_ms, nullptr);
+        set_status(status_state, "Playing the snapshots.");
+    } else if (playing_) {
+        KillTimer(hwnd_, playback_timer);
+        playing_ = false;
+        set_status(status_state, "Paused.");
+    }
+    sync_playback();
+}
+
+void MainWindow::show_snapshot(std::size_t k) {
+    if (!workspace_ || workspace_->points.empty()) return;
+    device_view_.point = std::min(k, workspace_->points.size() - 1);
+    if (tab_ == tab_view) refresh();
+    sync_playback();
+}
+
+void MainWindow::on_playback_timer() {
+    if (!playing_ || !can_play() || tab_ != tab_view) {
+        play(false);
+        return;
+    }
+    const std::size_t n = workspace_->points.size();
+    const double elapsed = std::chrono::duration<double>(std::chrono::steady_clock::now() - play_start_).count();
+    const std::size_t k = playback_frame(play_from_, n, elapsed);
+    if (k != device_view_.point.value_or(n - 1)) show_snapshot(k);
+    if (k + 1 == n) play(false);
+}
+
+void MainWindow::on_slider(HWND bar) {
+    if (!workspace_) return;
+    const int position = static_cast<int>(SendMessageW(bar, TBM_GETPOS, 0, 0));
+    if (bar == child(id_time)) {
+        // A snapshot chosen: playback pauses on it.
+        play(false);
+        show_snapshot(static_cast<std::size_t>(std::max(position, 0)));
+        return;
+    }
+    const int id = GetDlgCtrlID(bar);
+    if (id < id_clip_x0 || id > id_clip_z1 || workspace_->device->mesh().dimension() != 3) return;
+    // A side of the clipping box (YD6): the box made over the whole device if there was none, the other side
+    // of the axis moved with it rather than crossed.
+    ViewSettings& s = device_view_;
+    const auto extent = extent_um();
+    if (!s.clip) {
+        ViewSettings::Clip c;
+        for (std::size_t k = 0; k < 3; ++k) {
+            c.lo_um[k] = clip_value_um(extent[k].first, extent[k].second, 0);
+            c.hi_um[k] = clip_value_um(extent[k].first, extent[k].second, clip_steps);
+        }
+        s.clip = c;
+    }
+    const auto axis = static_cast<std::size_t>((id - id_clip_x0) / 2);
+    const bool high = (id - id_clip_x0) % 2 == 1;
+    const double v = clip_value_um(extent[axis].first, extent[axis].second, position);
+    (high ? s.clip->hi_um : s.clip->lo_um)[axis] = v;
+    if (high && s.clip->lo_um[axis] > v) s.clip->lo_um[axis] = v;
+    if (!high && s.clip->hi_um[axis] < v) s.clip->hi_um[axis] = v;
+    sync_inspector();
+    refresh();
+}
+
+std::array<std::pair<double, double>, 3> MainWindow::extent_um() const {
+    std::array<std::pair<double, double>, 3> out{};
+    if (!workspace_) return out;
+    const auto& m = workspace_->device->mesh();
+    for (std::size_t k = 0; k < 3; ++k) out[k] = {1e300, -1e300};
+    for (const auto& p : m.points()) {
+        for (std::size_t k = 0; k < 3; ++k) {
+            out[k].first = std::min(out[k].first, p[k] * 1e4);
+            out[k].second = std::max(out[k].second, p[k] * 1e4);
+        }
+    }
+    return out;
 }
 
 void MainWindow::show_inspector_groups() {
@@ -887,6 +1061,12 @@ void MainWindow::show_inspector_groups() {
     show({label_swept, id_swept, id_log}, curves);
     show({label_sensed, id_sensed}, curves && s.kind != ViewKind::current);
     show({label_frequency, id_frequency}, curves && s.kind == ViewKind::cv);
+    // Playback on a transient run's field view (YD5); the box's sliders where a 3D view clips (YD6).
+    show({label_time, id_time, id_time_text, id_play}, tab_ == tab_view && can_play());
+    const bool clips = tab_ == tab_view && dim == 3 && (s.kind == ViewKind::solid || s.kind == ViewKind::field);
+    show({label_clip_x, label_clip_x + 1, label_clip_x + 2, id_clip_x0, id_clip_x1, id_clip_y0, id_clip_y1, id_clip_z0,
+          id_clip_z1},
+         clips);
     layout_inspector();
 }
 
@@ -931,6 +1111,7 @@ void MainWindow::on_inspector(int id, int code) {
         s.range.reset();
         sync_inspector();
     } else if (id == id_point && selection) {
+        if (&s == &device_view_) play(false);
         const int k = combo_index(child(id_point));
         s.point = k >= 0 ? std::optional<std::size_t>(static_cast<std::size_t>(k)) : std::nullopt;
     } else if (id == id_scale && selection) {
@@ -1016,6 +1197,7 @@ void MainWindow::on_inspector(int id, int code) {
                 s.clip = c;
             }
         }
+        sync_clip_sliders();  // YD6: the typed box on the sliders
         s.levels.clear();
         s.levels = numbers(win32::text_of(child(id_levels)));
         // The cut line typed: "<x0>,<y0>[,<z0>]:<x1>,<y1>[,<z1>]" in um; empty removes it.
@@ -1603,6 +1785,23 @@ void MainWindow::execute(Command c) {
         device_view_.range.reset();
         select_tab(tab_view);
         return;
+    case Command::play_pause: play(!playing_); return;
+    case Command::snapshot_first:
+    case Command::snapshot_previous:
+    case Command::snapshot_next:
+    case Command::snapshot_last: {
+        // YD5: a step pauses and lands on the snapshot asked for, in the device view.
+        if (!can_play()) return;
+        play(false);
+        const std::size_t n = workspace_->points.size();
+        const std::size_t k = std::min(device_view_.point.value_or(n - 1), n - 1);
+        if (tab_ != tab_view) select_tab(tab_view);
+        show_snapshot(c == Command::snapshot_first      ? 0
+                      : c == Command::snapshot_previous ? (k == 0 ? 0 : k - 1)
+                      : c == Command::snapshot_next     ? std::min(k + 1, n - 1)
+                                                        : n - 1);
+        return;
+    }
     case Command::show_regions:
         // YD4: every region shown again, the tree's boxes checked.
         if (!workspace_ || device_view_.hidden.empty()) return;
@@ -1792,7 +1991,14 @@ LRESULT CALLBACK MainWindow::panel_proc(HWND hwnd, UINT message, WPARAM w, LPARA
     if (self) {
         switch (message) {
         case WM_COMMAND:
+            if (LOWORD(w) == id_play && HIWORD(w) == BN_CLICKED) {
+                self->execute(Command::play_pause);
+                return 0;
+            }
             self->on_inspector(LOWORD(w), HIWORD(w));
+            return 0;
+        case WM_HSCROLL:  // a slider (Unit 26c, YD5, YD6)
+            if (l != 0) self->on_slider(reinterpret_cast<HWND>(l));
             return 0;
         case WM_SIZE:
             self->layout_inspector();
@@ -1915,6 +2121,10 @@ LRESULT MainWindow::handle(UINT message, WPARAM w, LPARAM l) {
             KillTimer(hwnd_, live_timer);
             live_edits_ = edits_;
             live_.submit(deck_->text(), document_.path());
+            return 0;
+        }
+        if (w == playback_timer) {
+            on_playback_timer();
             return 0;
         }
         break;

@@ -421,6 +421,28 @@ std::expected<Scene, base::Error> build_scene(const Workspace& w, const ViewSett
         return wrap(o.kind == ViewKind::solid ? solid_view(device, geometry, view) : mesh_view(device, geometry, view));
     case ViewKind::field:
     case ViewKind::slice: {
+        // Playback (Unit 26c, YD5): the snapshot as `nitcad plot --view filmstrip` draws its frame, on the film's
+        // scale with the film's floor.
+        if (o.film && o.kind == ViewKind::field && takes_film(w, o) && !colored_arrows && !colored_lines) {
+            auto p = pick();
+            if (!p) return std::unexpected(std::move(p.error()));
+            auto v = field_values(device, geometry, **p, *field);
+            if (!v) return std::unexpected(std::move(v.error()));
+            if (o.film->floor > 0.0) {
+                for (double& x : *v) if (std::isfinite(x) && x < o.film->floor) x = o.film->floor;
+            }
+            FieldOptions f;
+            f.view = view;
+            f.map = *colormap;
+            f.contours = o.contours;
+            f.title = std::string(field_info(*field).title);
+            f.scale = o.film->scale;
+            const std::size_t k = o.point.value_or(points.size() - 1);
+            const FilmFrame frame{time_label(w.transient->snapshots[k].time_s), std::move(*v)};
+            auto s = filmstrip_scenes(device, geometry, std::span<const FilmFrame>(&frame, 1), *scale_kind, f);
+            if (!s) return std::unexpected(std::move(s.error()));
+            return wrap(std::expected<FieldScene, base::Error>(std::move(s->front())));
+        }
         auto v = values_for();
         if (!v) return std::unexpected(std::move(v.error()));
         auto f = field_options(*v);
@@ -720,6 +742,81 @@ void apply_camera(FieldScene& scene, const ViewSettings& s) {
     }
     scene.camera.zoom = s.zoom;
     scene.camera.pan = {s.pan_x, s.pan_y};
+}
+
+bool takes_film(const Workspace& w, const ViewSettings& s) noexcept {
+    return s.kind == ViewKind::field && w.device && w.geometry && w.device->mesh().dimension() >= 2 && w.transient &&
+           !w.points.empty() && w.transient->snapshots.size() == w.points.size();
+}
+
+std::expected<Film, base::Error> film_scale(const Workspace& w, const ViewSettings& s) {
+    if (!takes_film(w, s)) return std::unexpected(invalid("playback needs a transient run's field view of a 2D or 3D device"));
+    const device::Device& device = *w.device;
+    const auto field = find_field(s.field);
+    if (!field) return std::unexpected(invalid("unknown field " + s.field));
+    const std::optional<ScaleKind> kind = s.scale.empty()        ? std::optional(field_info(*field).default_scale)
+                                          : s.scale == "linear"  ? std::optional(ScaleKind::linear)
+                                          : s.scale == "log"     ? std::optional(ScaleKind::log10)
+                                          : s.scale == "signed-log" ? std::optional(ScaleKind::signed_log10)
+                                                                 : std::nullopt;
+    if (!kind) return std::unexpected(invalid("unknown scale " + s.scale));
+    std::vector<std::int32_t> hidden;
+    const auto regions = device.regions();
+    for (const std::string& name : s.hidden) {
+        const auto r = std::ranges::find(regions, name, &device::Region::name);
+        if (r == regions.end()) return std::unexpected(invalid("there is no region " + name));
+        hidden.push_back(static_cast<std::int32_t>(r - regions.begin()));
+    }
+    // Every snapshot's values, as the filmstrip takes its frames (src/cli/plot.cpp).
+    std::vector<std::vector<double>> frames;
+    for (const results::BiasPoint& p : w.points) {
+        if (p.fields.potential_V.size() != device.mesh().node_count()) {
+            return std::unexpected(invalid("the result's snapshots do not belong to the device's mesh"));
+        }
+        auto v = field_values(device, *w.geometry, p, *field);
+        if (!v) return std::unexpected(std::move(v.error()));
+        frames.push_back(std::move(*v));
+    }
+    Film film{.scale = *ColorScale::create(ScaleKind::linear, 0.0, 1.0, 1e10)};
+    if (is_vector_magnitude(*field) && *kind == ScaleKind::log10 && !s.range) {
+        double top = 0.0;
+        for (const auto& f : frames) for (const double x : f) if (std::isfinite(x)) top = std::max(top, x);
+        if (top > 0.0) {
+            film.floor = std::pow(10.0, std::ceil(std::log10(top)) - 10.0);
+            for (auto& f : frames) for (double& x : f) if (std::isfinite(x) && x < film.floor) x = film.floor;
+        }
+    }
+    std::vector<double> all;
+    for (const auto& f : frames) {
+        const std::vector<double> v = shown_values(device, f, hidden);
+        all.insert(all.end(), v.begin(), v.end());
+    }
+    const bool all_zero = is_vector_magnitude(*field) &&
+                          std::ranges::none_of(all, [](double x) { return std::isfinite(x) && x != 0.0; });
+    auto scale = s.range    ? ColorScale::create(*kind, s.range->first, s.range->second, 1e10)
+                 : all_zero ? ColorScale::create(ScaleKind::linear, 0.0, 1.0, 1e10)
+                            : ColorScale::fit(*kind, all, 1e10);
+    if (!scale) return std::unexpected(std::move(scale.error()));
+    film.scale = *scale;
+    return film;
+}
+
+std::size_t playback_frame(std::size_t from, std::size_t count, double elapsed_s) noexcept {
+    if (count == 0) return 0;
+    const double steps = std::floor(std::max(elapsed_s, 0.0) * playback_fps);
+    const double k = static_cast<double>(std::min(from, count - 1)) + steps;
+    return k >= static_cast<double>(count - 1) ? count - 1 : static_cast<std::size_t>(k);
+}
+
+double clip_value_um(double lo_um, double hi_um, int step) noexcept {
+    const double t = static_cast<double>(std::clamp(step, 0, clip_steps)) / clip_steps;
+    return std::round((lo_um + t * (hi_um - lo_um)) * 1000.0) / 1000.0;
+}
+
+int clip_step(double lo_um, double hi_um, double value_um) noexcept {
+    if (!(hi_um > lo_um) || !std::isfinite(value_um)) return 0;
+    return static_cast<int>(std::clamp(std::round((value_um - lo_um) / (hi_um - lo_um) * clip_steps), 0.0,
+                                       static_cast<double>(clip_steps)));
 }
 
 std::vector<std::string> plot_arguments(const ViewSettings& s, const Workspace* b) {

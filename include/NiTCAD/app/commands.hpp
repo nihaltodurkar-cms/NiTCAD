@@ -16,6 +16,7 @@ enum class Command : std::uint16_t {
     undo = 200, cut, copy, paste, select_all, find_error, complete,
     // Simulation (run)
     check = 300, run, stop, compare_previous, stop_comparing,
+    play_pause, snapshot_first, snapshot_previous, snapshot_next, snapshot_last,  // Unit 26c (YD5)
     // View
     fit = 400, orbit_left, orbit_right, orbit_up, orbit_down, zoom_in, zoom_out, pan_left, pan_right, pan_up,
     pan_down, perspective, probe_mode, measure_mode, next_tab, previous_tab, next_pane,

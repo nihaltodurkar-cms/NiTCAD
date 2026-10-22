@@ -3,6 +3,8 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <algorithm>
+#include <cmath>
+#include <cstdio>
 #include <filesystem>
 #include <string>
 #include <utility>
@@ -63,6 +65,7 @@ const Ran& diode_cv() { return ran("views_diode_cv", app_test::diode_cv()); }
 const Ran& diode_transient() {
     return ran("views_diode_transient", app_test::transient_diode() + "\n[output]\ntransient = t.nittran\ndevice = t.nitdev\n");
 }
+const Ran& mosfet_transient() { return ran("views_mosfet_transient", app_test::mosfet2d_transient()); }
 
 render::Renderer& warp() {
     static auto r = render::Renderer::create({.adapter = render::Adapter::warp});
@@ -848,5 +851,165 @@ TEST_CASE("app views 26c: hidden regions drawn as nitcad plot draws them (YG1)",
         const auto d = render::compare(mine, *theirs, 0);
         REQUIRE(d);
         CHECK(d->max_channel == 0);
+    }
+}
+
+TEST_CASE("app views 26c: playback's scale, frames and the clipping box's sliders (YD5, YD6)", "[app]") {
+    const app::Workspace& w = mosfet_transient().workspace;
+    REQUIRE(w.transient);
+    REQUIRE(w.points.size() >= 3);
+    REQUIRE(w.points.size() <= 12);  // every snapshot a filmstrip frame (YG3)
+    ViewSettings s;
+    s.kind = ViewKind::field;
+    // Playback is for a transient run's field view of a 2D or 3D device.
+    CHECK(app::takes_film(w, s));
+    s.kind = ViewKind::solid;
+    CHECK_FALSE(app::takes_film(w, s));
+    CHECK(app::film_scale(w, s).error().message == "playback needs a transient run's field view of a 2D or 3D device");
+    s.kind = ViewKind::field;
+    CHECK_FALSE(app::takes_film(mosfet().workspace, s));      // a sweep
+    CHECK_FALSE(app::takes_film(diode_transient().workspace, s));  // 1D
+    s.field = "nonsense";
+    CHECK(app::film_scale(w, s).error().message == "unknown field nonsense");
+    s.field = "potential";
+    s.hidden = {"nitride"};
+    CHECK(app::film_scale(w, s).error().message == "there is no region nitride");
+    s.hidden.clear();
+    // One scale over every snapshot: it holds each snapshot's own.
+    const auto film = app::film_scale(w, s);
+    REQUIRE(film);
+    CHECK(film->floor == 0.0);
+    for (std::size_t k = 0; k < w.points.size(); ++k) {
+        ViewSettings one = s;
+        one.point = k;
+        const auto alone = app::build_scene(w, one);
+        REQUIRE(alone);
+        const auto& bar = std::get<render::FieldScene>(*alone).colorbar->scale;
+        CHECK(film->scale.lo() <= bar.lo());
+        CHECK(film->scale.hi() >= bar.hi());
+    }
+    // A frame: the time in its title, the film's scale kept whatever the snapshot.
+    s.film = *film;
+    s.point = 2;
+    const auto frame = app::build_scene(w, s);
+    REQUIRE(frame);
+    const auto& f = std::get<render::FieldScene>(*frame);
+    CHECK(f.title == std::string(render::field_info(render::Field::potential).title) + ", " +
+                     render::time_label(w.transient->snapshots[2].time_s));
+    CHECK(f.colorbar->scale.lo() == film->scale.lo());
+    CHECK(f.colorbar->scale.hi() == film->scale.hi());
+    // |J| on its log scale: floored ten decades below its largest value over every snapshot.
+    s.field = "J";
+    s.film.reset();
+    const auto j = app::film_scale(w, s);
+    REQUIRE(j);
+    CHECK(j->floor > 0.0);
+    CHECK(j->scale.hi() / j->floor >= 1e9);
+    // A frame draws the values below the film's floor at it: with a scale reaching far below, none lies under it.
+    {
+        ViewSettings jf = s;
+        jf.point = w.points.size() - 1;
+        const auto alone = app::build_scene(w, jf);
+        REQUIRE(alone);
+        const auto& bar = std::get<render::FieldScene>(*alone).colorbar->scale;
+        const double floor = std::sqrt(bar.lo() * bar.hi());  // within the shown values
+        jf.film = app::Film{.scale = *render::ColorScale::create(render::ScaleKind::log10, bar.lo() * 1e-6, bar.hi()),
+                            .floor = floor};
+        const auto floored = app::build_scene(w, jf);
+        REQUIRE(floored);
+        const float at = static_cast<float>(jf.film->scale.position(floor));
+        std::size_t below = 0;
+        for (const auto& b : std::get<render::FieldScene>(*floored).triangles) {
+            if (b.name == "outline") continue;
+            for (const auto& v : b.vertices) if (std::isfinite(v.value) && v.value < at - 1e-6f) ++below;
+        }
+        CHECK(below == 0u);
+    }
+    // A range given is the scale, with no floor.
+    s.range = std::pair{1e-3, 1e3};
+    const auto ranged = app::film_scale(w, s);
+    REQUIRE(ranged);
+    CHECK(ranged->floor == 0.0);
+    CHECK(ranged->scale.lo() == 1e-3);
+    CHECK(ranged->scale.hi() == 1e3);
+
+    // The snapshot due: five a second from where playing started, the last kept once reached.
+    CHECK(app::playback_frame(0, 6, 0.0) == 0);
+    CHECK(app::playback_frame(0, 6, 0.199) == 0);
+    CHECK(app::playback_frame(0, 6, 0.2) == 1);
+    CHECK(app::playback_frame(2, 6, 0.45) == 4);
+    CHECK(app::playback_frame(0, 6, 0.75) == 3);  // a late tick skips the frames it missed
+    CHECK(app::playback_frame(0, 6, 1.0) == 5);
+    CHECK(app::playback_frame(0, 6, 1.2) == 5);
+    CHECK(app::playback_frame(0, 6, 10.0) == 5);
+    CHECK(app::playback_frame(9, 6, 0.0) == 5);
+    CHECK(app::playback_frame(0, 6, -1.0) == 0);
+    CHECK(app::playback_frame(0, 0, 1.0) == 0);
+
+    // The clipping box's sliders: 1,000 steps over the extent, to the nanometre, and back.
+    CHECK(app::clip_value_um(0.0, 2.0, 0) == 0.0);
+    CHECK(app::clip_value_um(0.0, 2.0, 1000) == 2.0);
+    CHECK(app::clip_value_um(0.0, 2.0, 250) == 0.5);
+    CHECK(app::clip_value_um(0.0, 0.7, 333) == 0.233);  // 0.2331 um rounded
+    CHECK(app::clip_value_um(0.0, 2.0, -5) == 0.0);
+    CHECK(app::clip_value_um(0.0, 2.0, 2000) == 2.0);
+    CHECK(app::clip_step(0.0, 2.0, 0.5) == 250);
+    CHECK(app::clip_step(0.0, 2.0, 0.5004) == 250);
+    CHECK(app::clip_step(0.0, 2.0, -1.0) == 0);
+    CHECK(app::clip_step(0.0, 2.0, 3.0) == 1000);
+    CHECK(app::clip_step(1.0, 1.0, 1.0) == 0);
+    // Steps of a nanometre or more come back as they were; finer ones keep the box's value through the slider.
+    for (int step = 0; step <= 1000; step += 7) CHECK(app::clip_step(0.0, 2.0, app::clip_value_um(0.0, 2.0, step)) == step);
+    for (int step = 0; step <= 1000; step += 7) {
+        const double v = app::clip_value_um(0.0, 0.8, step);
+        CHECK(app::clip_value_um(0.0, 0.8, app::clip_step(0.0, 0.8, v)) == v);
+    }
+}
+
+TEST_CASE("app views 26c: every played frame equals nitcad plot's filmstrip frame of its snapshot (YG3)", "[app]") {
+    const Ran& r = mosfet_transient();
+    const app::Workspace& w = r.workspace;
+    const fs::path out = app_test::scratch("views_26c_film");
+    struct Case {
+        std::string field, scale;
+        std::vector<std::string> hidden;
+        bool contours;
+        const char* name;
+    };
+    for (const Case& c : {Case{"potential", "", {}, true, "potential"}, Case{"J", "", {}, false, "j_log"},
+                          Case{"n", "", {"oxide"}, false, "n_no_oxide"}, Case{"potential", "linear", {"oxide"}, false, "potential_linear"}}) {
+        CAPTURE(c.name);
+        ViewSettings s;
+        s.kind = ViewKind::field;
+        s.field = c.field;
+        s.scale = c.scale;
+        s.hidden = c.hidden;
+        s.contours = c.contours;
+        const auto film = app::film_scale(w, s);
+        REQUIRE(film);
+        s.film = *film;
+        const fs::path frames = out / c.name;
+        std::string args = "plot " + app_test::quoted(r.deck) + " --view filmstrip --field " + c.field + " --every 1";
+        if (!c.scale.empty()) args += " --scale " + c.scale;
+        for (const std::string& h : c.hidden) args += " --hide " + h;
+        if (c.contours) args += " --contours";
+        args += " --size 480x360 --adapter warp --frames " + app_test::quoted(frames) + " --out " +
+                app_test::quoted(out / (std::string(c.name) + ".png"));
+        const auto cli = app_test::nitcad(args);
+        CAPTURE(args, cli.output);
+        REQUIRE(cli.status == 0);
+        for (std::size_t k = 0; k < w.points.size(); ++k) {
+            CAPTURE(k);
+            s.point = k;
+            const auto scene = app::build_scene(w, s);
+            if (!scene) FAIL(scene.error().message);
+            char name[32];
+            std::snprintf(name, sizeof name, "frame_%03zu.png", k);
+            const auto theirs = render::load_png(frames / name);
+            REQUIRE(theirs);
+            const auto d = render::compare(draw(*scene, 480, 360), *theirs, 0);
+            REQUIRE(d);
+            CHECK(d->max_channel == 0);
+        }
     }
 }
