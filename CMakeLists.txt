@@ -575,6 +575,12 @@ target_compile_definitions(nitcad_app_window_test PRIVATE NITCAD_CLI_PATH="$<TAR
 # The self-test (WG4) runs nitcad-app and nitcad plot.
 add_dependencies(nitcad_app_window_test nitcad-app nitcad)
 add_test(NAME app_window COMMAND nitcad_app_window_test)
+# The 3D MOSFET example's run and self-tests (WG8, WG4) take minutes in Debug: Release only, as the other
+# slow gates (hidden tags [.examples3d] and [.selftest3d]).
+if(CMAKE_BUILD_TYPE STREQUAL "Release")
+  add_test(NAME app_examples_3d COMMAND nitcad_app_test "[examples3d]")
+  add_test(NAME app_window_3d COMMAND nitcad_app_window_test "[selftest3d]")
+endif()
 # WG6: app includes every layer but physics and assemble (ARCHITECTURE.md 3).
 add_test(NAME app_layering
   COMMAND ${CMAKE_COMMAND} -DROOT=${CMAKE_CURRENT_SOURCE_DIR} -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/app/layering.cmake)

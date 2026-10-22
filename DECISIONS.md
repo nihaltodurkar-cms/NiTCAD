@@ -3128,7 +3128,23 @@ VA3, VA5, VA9), as built.**
   self-test image differed from `nitcad plot`'s (the files left behind were equal) and WARP self-tests saw 400 to
   880 ms gaps; on reruns the GPU and WARP comparisons were exact and the gaps 19–32 ms.
 - **Suites:** the app tests (32 cases) and the window tests (8 cases, the self-test included) pass in Release and
-  Debug, no warnings under `/W4 /WX`.
+  Debug, no warnings under `/W4 /WX`. In a clean worktree at `84c34e9`: Release 25/25, Debug 19/19 — but the
+  Debug suite took 2,645 s against about 1,460 s before Unit 26, because the app and window tests ran the 3D
+  MOSFET example in Debug (about 5 minutes a run: `app` 369 s, `app_window` 982 s), too long for the CI job's 60
+  minutes.
+
+**Follow-up (the 3D example's gates in the Release suite).** As the other slow gates (`solve_mosfet`, ...), the 3D
+MOSFET's run (WG8) and its self-tests on WARP and the GPU (WG4) moved to hidden-tag cases run by the Release-only
+ctest entries `app_examples_3d` and `app_window_3d`; the Debug suite runs the other three examples and the 2D
+self-tests (WARP, the GPU, the debug layer). Debug: `app` 101 s, `app_window` 231 s; Release: `app` 3.6 s,
+`app_window` 8.6 s, `app_examples_3d` 4.2 s, `app_window_3d` 10.7 s.
+
+**Suites at every commit (clean worktrees):** `e20f6ae` (26·1) Release 24/24, Debug 18/18; `ea90185` (26·2) Release
+25/25, Debug 19/19; `84c34e9` (26·3) Release 25/25, Debug 19/19. Nothing outside `render` (the window target, the
+camera's zoom and pan, the 2D axes in view, screen positions), `app`, `app/`, `examples/`, tests, `CMakeLists.txt`
+and this file differs from `main` (`e289e44`): no numerical change, and the 20 WARP references pass unchanged.
+**Status:** Unit 26 built (WG1–WG8 met on this workstation; WG4 on the hosted CI runner unverified until an
+authorized push). Awaiting the owner's acceptance; then ARCHITECTURE.md as built (WG6). Nothing pushed.
 
 ---
 

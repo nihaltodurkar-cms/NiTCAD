@@ -66,25 +66,48 @@ TEST_CASE("app examples: a copy to run, kept once made", "[app]") {
     CHECK(fs::file_size(*again) == size);
 }
 
+namespace {
+
+// The example run by the controller to completion: every point solved, its outputs written.
+void runs_to_completion(const app::Example& e, const fs::path& dir) {
+    CAPTURE(e.path.filename().string());
+    auto copy = app::copy_example(e, dir);
+    REQUIRE(copy);
+    std::ifstream f(*copy, std::ios::binary);
+    const std::string text{std::istreambuf_iterator<char>(f), std::istreambuf_iterator<char>()};
+    app::RunController rc;
+    REQUIRE(rc.start_run(text, *copy));
+    rc.wait();
+    rc.process();
+    INFO((rc.error() ? rc.error()->message : std::string()));
+    REQUIRE(rc.state() == app::RunState::done);
+    CHECK_FALSE(rc.stopped_early());
+    const auto& r = *rc.report();
+    const std::size_t points = r.sweep ? r.sweep->points.size() : r.small_signal ? r.small_signal->points.size() : 0;
+    CHECK(points == rc.plan()->points.size());
+    CHECK(points >= 5);
+    CHECK(r.written.size() >= 3);  // the result, the device, the table
+}
+
+}  // namespace
+
+// The 3D MOSFET takes 4 s in Release and about 5 minutes in Debug: it runs in its own test, which the
+// Release suite runs (ctest app_examples_3d, hidden tag [.examples3d]), as the other slow gates do.
 TEST_CASE("app examples: every example deck runs to completion (WG8)", "[app]") {
     const fs::path dir = app_test::scratch("examples_run");
+    int ran = 0;
     for (const app::Example& e : app::list_examples(source_examples)) {
-        CAPTURE(e.path.filename().string());
-        auto copy = app::copy_example(e, dir);
-        REQUIRE(copy);
-        std::ifstream f(*copy, std::ios::binary);
-        const std::string text{std::istreambuf_iterator<char>(f), std::istreambuf_iterator<char>()};
-        app::RunController rc;
-        REQUIRE(rc.start_run(text, *copy));
-        rc.wait();
-        rc.process();
-        INFO((rc.error() ? rc.error()->message : std::string()));
-        REQUIRE(rc.state() == app::RunState::done);
-        CHECK_FALSE(rc.stopped_early());
-        const auto& r = *rc.report();
-        const std::size_t points = r.sweep ? r.sweep->points.size() : r.small_signal ? r.small_signal->points.size() : 0;
-        CHECK(points == rc.plan()->points.size());
-        CHECK(points >= 5);
-        CHECK(r.written.size() >= 3);  // the result, the device, the table
+        if (e.path.filename() == "mosfet_3d.deck") continue;
+        runs_to_completion(e, dir);
+        ++ran;
     }
+    CHECK(ran == 3);
+}
+
+TEST_CASE("app examples: the 3D MOSFET example runs to completion (WG8)", "[.examples3d]") {
+    const fs::path dir = app_test::scratch("examples_run_3d");
+    const auto examples = app::list_examples(source_examples);
+    const auto it = std::ranges::find_if(examples, [](const app::Example& e) { return e.path.filename() == "mosfet_3d.deck"; });
+    REQUIRE(it != examples.end());
+    runs_to_completion(*it, dir);
 }

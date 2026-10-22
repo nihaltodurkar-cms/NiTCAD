@@ -90,13 +90,11 @@ fs::path example(const std::string& name, const fs::path& dir) {
 
 TEST_CASE("app self-test: the window's image equals nitcad plot's, on WARP (WG1, WG4)", "[app]") {
     const fs::path dir = app_test::scratch("self_test_warp");
-    const fs::path m2 = example("mosfet_2d.deck", dir), m3 = example("mosfet_3d.deck", dir);
-    for (const auto& [deck, view] : {std::pair{m2, std::string("--view field --field potential")},
-                                     std::pair{m2, std::string("--view iv --sense drain --log")},
-                                     std::pair{m2, std::string("--view field --field n --colormap viridis --contours")},
-                                     std::pair{m3, std::string("--view field --field n")}}) {
-        CAPTURE(deck.filename().string(), view);
-        if (!same_view(deck, view, "warp", dir)) SKIP("no window or swap chain in this session (exit 77)");
+    const fs::path m2 = example("mosfet_2d.deck", dir);
+    for (const std::string view : {"--view field --field potential", "--view iv --sense drain --log",
+                                   "--view field --field n --colormap viridis --contours"}) {
+        CAPTURE(view);
+        if (!same_view(m2, view, "warp", dir)) SKIP("no window or swap chain in this session (exit 77)");
     }
     // Usage errors.
     CHECK(run(q(NITCAD_APP_PATH) + L" --self-test").status == 64);
@@ -105,17 +103,29 @@ TEST_CASE("app self-test: the window's image equals nitcad plot's, on WARP (WG1,
 
 TEST_CASE("app self-test: on the GPU too, and with the debug layer (WG4, WG5)", "[app]") {
     const fs::path dir = app_test::scratch("self_test_gpu");
-    const fs::path m3 = example("mosfet_3d.deck", dir);
+    const fs::path m2 = example("mosfet_2d.deck", dir);
     // A hardware adapter, when this machine has one.
-    const Ran probe = run(q(NITCAD_CLI_PATH) + L" plot " + q(m3) + L" --view solid --adapter gpu --size 64x64 --out " +
+    const Ran probe = run(q(NITCAD_CLI_PATH) + L" plot " + q(m2) + L" --view solid --adapter gpu --size 64x64 --out " +
                           q(dir / "probe.png"));
     if (probe.status != 0) SKIP("no Direct3D 12 hardware adapter: " + probe.output);
-    if (!same_view(m3, "--view field --field potential", "gpu", dir)) SKIP("no window or swap chain in this session");
+    if (!same_view(m2, "--view field --field potential", "gpu", dir)) SKIP("no window or swap chain in this session");
     // The debug layer (Graphics Tools): clean, and nothing left alive after the window.
-    const Ran d = run(q(NITCAD_APP_PATH) + L" --self-test " + q(m3) + L" --out " + q(dir / "debug.png") +
+    const Ran d = run(q(NITCAD_APP_PATH) + L" --self-test " + q(m2) + L" --out " + q(dir / "debug.png") +
                       L" --adapter warp --debug-layer --view solid");
     UNSCOPED_INFO(d.output);
     if (d.output.find("D3D12GetDebugInterface") != std::string::npos) SKIP("the D3D12 debug layer is not installed");
     CHECK(d.status == 0);
     CHECK(d.output.find("no graphics object outlived the window") != std::string::npos);
+}
+
+// The 3D MOSFET runs in 4 s in Release and about 5 minutes in Debug: its self-tests run in the Release
+// suite (ctest app_window_3d, hidden tag [.selftest3d]).
+TEST_CASE("app self-test: the 3D MOSFET, on WARP and on the GPU (WG4)", "[.selftest3d]") {
+    const fs::path dir = app_test::scratch("self_test_3d");
+    const fs::path m3 = example("mosfet_3d.deck", dir);
+    if (!same_view(m3, "--view field --field n", "warp", dir)) SKIP("no window or swap chain in this session (exit 77)");
+    const Ran probe = run(q(NITCAD_CLI_PATH) + L" plot " + q(m3) + L" --view solid --adapter gpu --size 64x64 --out " +
+                          q(dir / "probe.png"));
+    if (probe.status != 0) SKIP("no Direct3D 12 hardware adapter: " + probe.output);
+    CHECK(same_view(m3, "--view field --field potential", "gpu", dir));
 }
