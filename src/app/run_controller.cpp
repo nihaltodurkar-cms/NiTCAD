@@ -198,6 +198,13 @@ double RunController::elapsed_seconds() const {
     return std::chrono::duration<double>(end - started_).count();
 }
 
+std::optional<deck::Plan> RunController::take_plan() {
+    if (busy() || !plan_) return std::nullopt;
+    std::optional<deck::Plan> p = std::move(plan_);
+    plan_.reset();
+    return p;
+}
+
 std::optional<RunController::Taken> RunController::take_results() {
     if (state_ != RunState::done || !plan_ || !report_) return std::nullopt;
     Taken t{std::move(*plan_), std::move(*report_)};

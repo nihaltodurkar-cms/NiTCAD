@@ -145,13 +145,17 @@ std::expected<Workspace, base::Error> workspace_from_deck(const fs::path& deck_p
     if (!parsed) return std::unexpected(std::move(parsed.error()));
     auto plan = deck::build(*parsed);
     if (!plan) return std::unexpected(std::move(plan.error()));
+    return workspace_from_plan(std::move(*plan), deck_path);
+}
+
+std::expected<Workspace, base::Error> workspace_from_plan(deck::Plan plan, const fs::path& deck_path) {
     Workspace w;
     w.source = deck_path;
-    w.analysis = plan->analysis;
-    const deck::Outputs out = plan->outputs;
-    const deck::Analysis analysis = plan->analysis;
-    w.device = std::make_unique<device::Device>(std::move(plan->device));
-    if (plan->generated) w.generated = std::make_unique<mesh::GeneratedMesh>(std::move(*plan->generated));
+    w.analysis = plan.analysis;
+    const deck::Outputs out = plan.outputs;
+    const deck::Analysis analysis = plan.analysis;
+    w.device = std::make_unique<device::Device>(std::move(plan.device));
+    if (plan.generated) w.generated = std::make_unique<mesh::GeneratedMesh>(std::move(*plan.generated));
     if (auto g = make_geometry(w); !g) return std::unexpected(std::move(g.error()));
     // The results the deck's outputs hold, if it has run.
     using deck::Analysis;

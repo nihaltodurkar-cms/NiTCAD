@@ -1,4 +1,5 @@
-// Drawing scenes into images (Unit 25a; DECISIONS.md VR5, VR8, VQ1, VQ2, VQ4, VG4, VG7).
+// Drawing scenes into images (Unit 25a; DECISIONS.md VR5, VR8, VQ1, VQ2, VQ4, VG4, VG7), and into a
+// window's swap chain (Unit 26, VA4).
 //
 // A Renderer owns a Direct3D 12 device (a hardware adapter, or WARP, the software rasterizer that
 // ships with Windows) and draws a FieldScene or a PlotScene off screen:
@@ -55,9 +56,50 @@ struct RendererOptions {
     bool debug_layer = false;
 };
 
+// A window's swap chain on a renderer's queue (Unit 26, DECISIONS.md VA4): Renderer::present draws a
+// scene and shows it in the window, the very image draw() would return at the window's size (the
+// image is copied into the swap chain's back buffer, so the window and a PNG of the view agree).
+// Made by Renderer::window_target for a window handle (an HWND); it must not outlive its renderer.
+class WindowTarget {
+public:
+    WindowTarget(WindowTarget&&) noexcept;
+    WindowTarget& operator=(WindowTarget&&) noexcept;
+    WindowTarget(const WindowTarget&) = delete;
+    WindowTarget& operator=(const WindowTarget&) = delete;
+    ~WindowTarget();
+
+    [[nodiscard]] int width() const noexcept;
+    [[nodiscard]] int height() const noexcept;
+
+    struct Impl;  // the swap chain (renderer.cpp)
+
+private:
+    friend class Renderer;
+    explicit WindowTarget(std::unique_ptr<Impl> impl) noexcept;
+    std::unique_ptr<Impl> impl_;
+};
+
+// Where a world point (um) of a FieldScene lands in an image of the scene drawn at this size: the
+// pixel (x right, y down) and the depth in [0, 1] (nearer smaller), as draw() lays the view out.
+struct ScreenPoint {
+    float x = 0.0f;
+    float y = 0.0f;
+    float depth = 0.0f;
+};
+[[nodiscard]] ScreenPoint screen_position(const FieldScene& scene, int width, int height, const Float3& point);
+
 class Renderer {
 public:
     [[nodiscard]] static std::expected<Renderer, base::Error> create(const RendererOptions& options = {});
+
+    // A swap chain for a window (an HWND) of the given client size (16 to 16384 pixels). Errors:
+    // resource_exhausted when DXGI cannot make it (no desktop, a window that is not a window).
+    [[nodiscard]] std::expected<WindowTarget, base::Error> window_target(void* window, int width, int height);
+    // Draws the scene at the size (resizing the swap chain when it changed) and presents it.
+    [[nodiscard]] std::expected<void, base::Error> present(const FieldScene& scene, WindowTarget& target, int width,
+                                                           int height);
+    [[nodiscard]] std::expected<void, base::Error> present(const PlotScene& scene, WindowTarget& target, int width,
+                                                           int height);
 
     Renderer(Renderer&&) noexcept;
     Renderer& operator=(Renderer&&) noexcept;

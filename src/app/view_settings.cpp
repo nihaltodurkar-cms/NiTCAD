@@ -152,9 +152,11 @@ std::expected<Scene, base::Error> build_scene(const Workspace& w, const ViewSett
         f.scale = *s;
         return f;
     };
-    const auto wrap = [](auto&& s) -> std::expected<Scene, base::Error> {
+    const auto wrap = [&](auto&& s) -> std::expected<Scene, base::Error> {
         if (!s) return std::unexpected(std::move(s.error()));
-        return Scene(std::move(*s));
+        Scene scene(std::move(*s));
+        if (auto* f = std::get_if<FieldScene>(&scene)) apply_camera(*f, o);
+        return scene;
     };
 
     switch (o.kind) {
@@ -294,6 +296,48 @@ std::vector<std::string> available_fields(const Workspace& w) {
         out.emplace_back(field_info(f).key);
     }
     return out;
+}
+
+namespace {
+
+// render::ViewOptions' defaults, the angles a setting starts from.
+constexpr float default_azimuth = 35.0f, default_elevation = 25.0f;
+
+}  // namespace
+
+void orbit(ViewSettings& s, float azimuth_deg, float elevation_deg) {
+    float az = s.azimuth.value_or(default_azimuth) + azimuth_deg;
+    az = std::fmod(az, 360.0f);
+    if (az > 180.0f) az -= 360.0f;
+    if (az <= -180.0f) az += 360.0f;
+    s.azimuth = az;
+    s.elevation = std::clamp(s.elevation.value_or(default_elevation) + elevation_deg, -89.0f, 89.0f);
+}
+
+void zoom_by(ViewSettings& s, float factor) {
+    if (!(factor > 0.0f) || !std::isfinite(factor)) return;
+    s.zoom = std::clamp(s.zoom * factor, 1.0f / 16.0f, 1024.0f);
+}
+
+void pan_by(ViewSettings& s, float dx, float dy) {
+    if (!std::isfinite(dx) || !std::isfinite(dy)) return;
+    s.pan_x += dx;
+    s.pan_y += dy;
+}
+
+void fit(ViewSettings& s) {
+    s.zoom = 1.0f;
+    s.pan_x = s.pan_y = 0.0f;
+}
+
+void apply_camera(FieldScene& scene, const ViewSettings& s) {
+    if (scene.dimension == 3) {
+        scene.camera.azimuth_deg = s.azimuth.value_or(default_azimuth);
+        scene.camera.elevation_deg = s.elevation.value_or(default_elevation);
+        scene.camera.projection = s.perspective ? Projection::perspective : Projection::orthographic;
+    }
+    scene.camera.zoom = s.zoom;
+    scene.camera.pan = {s.pan_x, s.pan_y};
 }
 
 std::vector<std::string> plot_arguments(const ViewSettings& s) {

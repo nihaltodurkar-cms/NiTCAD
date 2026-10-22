@@ -53,6 +53,8 @@ struct Workspace {
 [[nodiscard]] std::expected<Workspace, base::Error> workspace_from_run(deck::Plan plan, deck::RunReport report);
 // A deck's device, and the results its outputs hold if they exist (none before the deck has run).
 [[nodiscard]] std::expected<Workspace, base::Error> workspace_from_deck(const std::filesystem::path& deck);
+// The same from a plan already built from the deck at that path (a check's, off the UI thread).
+[[nodiscard]] std::expected<Workspace, base::Error> workspace_from_plan(deck::Plan plan, const std::filesystem::path& deck);
 // A .nitsweep, .nittran or .nitac file with its device file and, for a generated mesh, its mesh file.
 [[nodiscard]] std::expected<Workspace, base::Error> workspace_from_result(const std::filesystem::path& result,
                                                                          const std::filesystem::path& device,

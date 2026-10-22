@@ -65,7 +65,21 @@ struct ViewSettings {
     std::string contact, sense;                  // curves: the swept and sensed contacts by name
     std::optional<std::size_t> frequency;        // C-V: the frequency index
     bool log = false;                            // curves and profiles: a log y axis
+    // The window's camera (VA8, Unit 26): zoom about the view's centre and pan in fractions of its
+    // half size (render::Camera). `nitcad plot` has neither: plot_arguments leaves them out.
+    float zoom = 1.0f;
+    float pan_x = 0.0f, pan_y = 0.0f;
 };
+
+// Camera moves (VA8): orbit by degrees (3D; the elevation kept within +-89), zoom by a factor (kept
+// within 1/16 to 1024), pan by fractions of the half view, and fit (zoom 1, no pan, the angles kept).
+void orbit(ViewSettings& s, float azimuth_deg, float elevation_deg);
+void zoom_by(ViewSettings& s, float factor);
+void pan_by(ViewSettings& s, float dx, float dy);
+void fit(ViewSettings& s);
+// A built scene's camera set from the settings (3D: the angles and projection; any: zoom and pan), so
+// a camera move redraws without building the scene again; build_scene applies it too.
+void apply_camera(render::FieldScene& scene, const ViewSettings& s);
 
 using Scene = std::variant<render::FieldScene, render::PlotScene>;
 

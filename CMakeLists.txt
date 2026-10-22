@@ -390,7 +390,8 @@ add_executable(nitcad_render_test
   tests/render/clip_test.cpp
   tests/render/exploded_test.cpp
   tests/render/film_test.cpp
-  tests/render/image_test.cpp)
+  tests/render/image_test.cpp
+  tests/render/window_test.cpp)
 # The image test solves its MOSFETs (tests may use any layer; render itself may not).
 target_link_libraries(nitcad_render_test PRIVATE NiTCAD::render NiTCAD::solve Catch2::Catch2WithMain)
 target_compile_definitions(nitcad_render_test PRIVATE
@@ -523,7 +524,10 @@ add_library(nitcad_app STATIC
   src/app/workspace.cpp
   src/app/view_settings.cpp
   src/app/deck_sections.cpp
-  src/app/app_state.cpp)
+  src/app/app_state.cpp
+  src/app/commands.cpp
+  src/app/layout.cpp
+  src/app/probe.cpp)
 add_library(NiTCAD::app ALIAS nitcad_app)
 target_include_directories(nitcad_app PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
 target_link_libraries(nitcad_app PUBLIC NiTCAD::deck NiTCAD::render NiTCAD::analysis NiTCAD::io)
@@ -534,12 +538,31 @@ add_executable(nitcad_app_test
   tests/app/workspace_test.cpp
   tests/app/view_settings_test.cpp
   tests/app/deck_sections_test.cpp
-  tests/app/app_state_test.cpp)
+  tests/app/app_state_test.cpp
+  tests/app/commands_test.cpp
+  tests/app/layout_test.cpp
+  tests/app/probe_test.cpp)
 target_link_libraries(nitcad_app_test PRIVATE NiTCAD::app Catch2::Catch2WithMain user32)
 # The view tests compare the app's images with nitcad plot's (WG4's choices).
 add_dependencies(nitcad_app_test nitcad)
 target_compile_definitions(nitcad_app_test PRIVATE NITCAD_CLI_PATH="$<TARGET_FILE:nitcad>")
 add_test(NAME app COMMAND nitcad_app_test)
+# The window (26-2): the main window, the view and the deck pane on Win32, in a library the window
+# tests share with the executable.
+add_library(nitcad_app_window STATIC
+  src/app/win32.cpp
+  src/app/viewport.cpp
+  src/app/deck_pane.cpp
+  src/app/main_window.cpp)
+target_link_libraries(nitcad_app_window PUBLIC NiTCAD::app comctl32 comdlg32 shell32 ole32 user32 gdi32)
+target_include_directories(nitcad_app_window PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src/app")
+# nitcad-app (AQ4): a separate GUI executable; the nitcad batch runner keeps no window code.
+add_executable(nitcad-app WIN32 app/main.cpp)
+target_link_libraries(nitcad-app PRIVATE nitcad_app_window)
+add_executable(nitcad_app_window_test tests/app/window_test.cpp)
+target_link_libraries(nitcad_app_window_test PRIVATE nitcad_app_window Catch2::Catch2WithMain dxgi dxguid)
+target_compile_definitions(nitcad_app_window_test PRIVATE NITCAD_CLI_PATH="$<TARGET_FILE:nitcad>")
+add_test(NAME app_window COMMAND nitcad_app_window_test)
 # WG6: app includes every layer but physics and assemble (ARCHITECTURE.md 3).
 add_test(NAME app_layering
   COMMAND ${CMAKE_COMMAND} -DROOT=${CMAKE_CURRENT_SOURCE_DIR} -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/app/layering.cmake)

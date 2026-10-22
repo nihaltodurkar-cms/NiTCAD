@@ -3001,7 +3001,70 @@ menus); 26·3 the start page, run monitor, results workspace, `examples/`, `--se
   `--edges`, no band view, insertion after the header, present keys offered again, a wrong default, duplicate recent
   files; the sensed contact restricted to ohmic contacts and to contacts other than the swept one survived as
   equivalent (a gate carries no steady current), and the condition was removed.
-- **Suites:** the app tests pass in Release (2 s) and Debug (65 s), no warnings under `/W4 /WX`.
+- **Suites:** the app tests pass in Release (2 s) and Debug (65 s), no warnings under `/W4 /WX`; the whole Release
+  suite in a clean worktree at `e20f6ae`: 24/24 (850 s).
+
+**Commit 26·2 (the main window; WG5, WG7 menus, VA1, VA2, VA4, VA8, VA9's executable), as built.**
+- **`render` (what a window needs, VA4):** `WindowTarget` and `Renderer::window_target(hwnd, w, h)` (a flip-model DXGI
+  swap chain on the renderer's queue), `Renderer::present(scene, target, w, h)` (the scene drawn exactly as `draw`
+  draws it, then copied into the back buffer and presented, so the window shows the PNG's pixels; the swap chain
+  resized when the size changes); `Camera::zoom` and `Camera::pan` (the fitted view magnified about its centre and
+  moved in fractions of its half size; at 1 and 0 the arithmetic is the fitted view's to the bit, and the 20 WARP
+  references pass unchanged); the 2D axes span only the part of the bounds in view (the fitted view's ticks
+  unchanged); `screen_position(scene, w, h, point)` (the pixel and depth `draw` puts a point at, for picking).
+  **Finding (fixed):** releasing a swap chain whose last present was still queued crashed under the D3D12 debug
+  layer; a `WindowTarget` now waits for the renderer's queue before it is released.
+- **App logic:** `commands.hpp` (every command with its menu, mnemonic, accelerator and its keys' text; the camera's
+  keys act in the focused view, not as accelerators, so the deck editor keeps its arrows), `layout.hpp` (the panes
+  at a DPI: sizes at 96 DPI scaled to the monitor's; the sides narrowed to keep the centre's minimum), `probe.hpp`
+  (the node drawn under a pixel: every node in 2D, the boundary surface's nodes in 3D, the front-most within 12
+  pixels; the distance between two), `ViewSettings` zoom and pan with `orbit`, `zoom_by`, `pan_by`, `fit` and
+  `apply_camera` (a camera move redraws without rebuilding the scene), `workspace_from_plan` and
+  `RunController::take_plan` (a deck opened is built on the worker, not the UI thread).
+- **The window (`src/app/`, `nitcad_app_window`; `app/main.cpp`, `nitcad-app.exe`, a `/SUBSYSTEM:WINDOWS` executable
+  separate from `nitcad`, AQ4):** per-monitor DPI aware v2, common controls 6; the workspace of the reference: the
+  menu bar File, Edit, Device, Mesh, Physics, Simulation, View; a tool bar (New, Open, Save, Check, Run, Stop, Fit,
+  Probe, Measure, Perspective); the scene tree (regions, contacts, mesh, views, fields, results); the tabs Device
+  view (with the metrics strip: extents, nodes and elements, the field's maximum, the draw time), Curves and Deck;
+  the inspector (view, field, point, scale, colormap, contours, mesh edges, contacts, opaque insulators,
+  perspective, a slice plane, the clipping box, iso levels); the status bar (state, file, adapter, the cursor's
+  node); splitters; the layout and recent files saved per user (`%APPDATA%\NiTCAD\app.ini`). The view
+  (`viewport.cpp`) presents in its swap chain: left drag orbits (3D) or pans (2D), right or middle drag pans, the
+  wheel zooms, a double click fits, a click probes or measures; keys arrows, Shift+arrows, + and -, Home. The deck
+  pane (`deck_pane.cpp`): Rich Edit with a line-number gutter (error lines in red), the check's errors below (a
+  double click or Enter goes to the line). Opening a deck checks it on the worker and shows its device (and the
+  results its outputs hold); Run (F5) runs it on the worker (WG1), the status bar following each point, and shows
+  the potential and the run's curve (the sensed contact the one carrying the most current, on a log axis). The
+  Device, Mesh, Physics and Simulation menus (VQ13, WG7) list "Go to [kind]" for their sections (greyed when the
+  deck has none) and "Insert into [kind]" with the insertable keys and their help.
+- **Tests:** `commands_test` (unique mnemonics per menu, unique accelerators, the reference's menu bar),
+  `layout_test` (the panes tile the window; at 192 DPI every pane doubles; the centre's minimum), `probe_test`
+  (2D nodes found where drawn with their values; nothing out of reach; distances; in 3D the front-most of two
+  nodes at one pixel; orbit, zoom, pan and fit limits; zoom and pan about the centre, both axes),
+  `render/window_test` (screen positions in the layout, zoom and pan; zoom 1 is the fitted image to the bit; a
+  panned view leaves the margin white; a swap chain presents field and plot scenes and follows a resize), and
+  `nitcad_app_window_test` (ctest `app_window`, hidden windows on WARP): **WG5** — every command in the built
+  menus and its keys in the accelerator table; a `WM_DPICHANGED` to 192 DPI re-lays the panes at the new scale
+  (the children where `layout_panes` puts them, 9-point fonts at 192 DPI) and back; **WG7** — the Physics menu
+  inserts `srh = on` into a new `[models]` at the caret and the deck still builds, Simulation's "Go to [sweep]"
+  moves the caret to its header, a deck error (F7) lands the caret on its line; a deck opened, run (worker),
+  shown, probed, zoomed, panned and fitted, the curves tab drawing I-V; **WG5** — with the D3D12 debug layer:
+  no message after opening, running, zooming and switching tabs, and no Direct3D or DXGI object alive once the
+  window is destroyed (the DXGI debug interface's live-object report, which sees the renderer's objects while
+  the window exists).
+- **Looked at:** `nitcad-app` on the 2D MOSFET deck on the RTX 5060 Ti: the regions and then the potential after
+  Run, the layout as the reference (tree, tabs, inspector, metrics strip, status bar); the view drawn in 3.8 ms.
+- **Mutation checks (Release): 21 of 21 caught** — zoom ignored, pan x reversed, pan y by the half width, the 2D
+  axes not clamped, screen positions without the layout, the elevation and the zoom unclamped, Fit resetting the
+  angles, pan y not applied (caught once a vertical pan was tested), the back-most node picked (caught once two
+  nodes at one pixel were tested), no pick radius, sizes not scaled by the DPI, the centre not kept at its minimum
+  (caught once a 600-pixel window was tested), a duplicate accelerator, fonts not made at the new DPI, the new DPI
+  ignored, accelerators without Shift, an inserted key not shown at its line, the curve sensing the swept gate, a
+  swap chain released before its present ran, Run doing nothing. Three mutants first failed to build (a `/WX`
+  warning, a delimiter in the substitution) and were rewritten so they compile.
+- **Suites:** the app, window and render tests pass in Release and Debug (the Debug render suite with the D3D12
+  debug layer clean), no warnings under `/W4 /WX`.
+- **Not in 26·2 (26·3):** the start page, the run monitor, the results page, `examples/`, `--self-test`.
 
 ---
 

@@ -109,6 +109,8 @@ public:
         deck::RunReport report;
     };
     [[nodiscard]] std::optional<Taken> take_results();
+    // Takes the plan of the last check out (a deck opened in the window: its device for the views).
+    [[nodiscard]] std::optional<deck::Plan> take_plan();
 
 private:
     struct Event;

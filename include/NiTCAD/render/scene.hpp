@@ -83,6 +83,11 @@ struct Camera {
     float extent_um = 1.0f;
     Projection projection = Projection::orthographic;
     float fov_deg = 35.0f;
+    // A window's zoom and pan (Unit 26, VA8): the fitted view magnified `zoom` times about its centre,
+    // moved by `pan` in fractions of the view's half width and half height (+x right, +y up). The
+    // defaults draw the fitted view, exactly as before.
+    float zoom = 1.0f;
+    std::array<float, 2> pan{};
 };
 
 struct FieldScene {
