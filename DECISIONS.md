@@ -3502,8 +3502,28 @@ either option loads them on any view. `run_test` gains arrows on the solid view,
 arrows over the doping and 3D arrows on the quality view; the mutant that drops the options from the condition is
 caught. No change to any image the command could draw before.
 
+**The WG1 gap investigated (owner, 2026-10-22, "investigate app_window"; fixes on "apply them too").** The
+self-test's message loop was logged message by message (each dispatched message, its window class and time, and the
+wait in `GetMessage` between two ticks of the 10 ms gap timer) over six runs alone and five beside six `nitcad run`
+loops. Two causes:
+1. **The desktop user's input reached the self-test's window**, which opened shown and activated over the user's
+   work: a title-bar drag (a modal move loop, 103 ms, the gap timer unseen meanwhile), clicks on buttons and lists
+   (41–65 ms each) and streams of mouse moves over the view (each a hover probe of 1–12 ms in Debug; input is taken
+   before the low-priority `WM_TIMER`, so a steady stream starves the timer: gaps up to 454 ms with the window
+   working throughout). The earlier failures (1,623, 652, 279, 249 ms) came from suites run while the workstation
+   was in use; that they were all input is likely, not proven.
+2. **The run monitor's list repainted slowly in Debug**: 30 ms alone, 118 ms under load, with no input — each cell
+   re-formatted its whole row.
+
+Fixes: `WindowOptions::input` (default true); the self-test's window is shown without activation and disabled (it
+still paints and runs its timers), so WG1 measures the window's own work. `RunPage` keeps each row's cells, formatted
+when the row changes (`PointRow` gains `==`). Tests: a window made without input is disabled, a usual one not; after
+a run every monitor cell equals the final rows' formatting. Mutants: 2 of 2 caught (rows kept stale, the window
+taking input). Afterwards the Debug GPU self-test's longest gaps were 36.1, 38.5 and 36.6 ms, and Debug `app_window`
+passed in the suite (19 of 19). WG1 stands as ruled.
+
 **Not in Unit 26c:** in-view clip handles (the owner chose sliders), the tiled filmstrip in the window, video
-export, oblique clip planes, streamtubes; the WG1 gap (deferred by the owner, Unit 26b).
+export, oblique clip planes, streamtubes.
 
 ---
 

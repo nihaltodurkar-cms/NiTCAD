@@ -118,9 +118,10 @@ std::unique_ptr<MainWindow> MainWindow::create(const WindowOptions& options) {
                              placed ? l.height : 800, nullptr, nullptr, GetModuleHandleW(nullptr), w.get());
     if (!h || !w->viewport_) return nullptr;
     if (options.show) {
-        ShowWindow(h, placed && l.maximized ? SW_SHOWMAXIMIZED : SW_SHOWNORMAL);
+        ShowWindow(h, !options.input ? SW_SHOWNOACTIVATE : placed && l.maximized ? SW_SHOWMAXIMIZED : SW_SHOWNORMAL);
         UpdateWindow(h);
     }
+    if (!options.input) EnableWindow(h, FALSE);  // a disabled window still paints and runs its timers
     return w;
 }
 

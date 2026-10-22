@@ -38,6 +38,9 @@ struct WindowOptions {
     render::Adapter adapter = render::Adapter::automatic;
     bool debug_layer = false;            // the Direct3D 12 debug layer (needs Graphics Tools)
     bool show = true;                    // shown at creation (tests make hidden windows)
+    // Activated when shown and taking mouse and keyboard input; the self-test's window does neither, so a user
+    // at the desktop cannot move, click or hover over it while it measures its message loop (WG1).
+    bool input = true;
     bool quit_on_close = true;           // post WM_QUIT when destroyed (the application's window)
     std::filesystem::path state_file;    // the per-user state; empty: not loaded or saved
     // The bundled examples (VQ11): where they are (empty: beside the executable, else the source tree's),

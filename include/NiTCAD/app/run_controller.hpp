@@ -52,6 +52,8 @@ struct PointRow {
     double time_s = 0.0;          // transient: the step's end time
     double frequency_Hz = 0.0;    // small signal: the frequency
     double seconds = 0.0;         // wall time spent on the point so far
+
+    bool operator==(const PointRow&) const = default;
 };
 
 // One Newton iteration for the live convergence plot: its number over the whole run (from 1), its

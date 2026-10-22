@@ -224,7 +224,14 @@ void RunPage::release() {
 }
 
 void RunPage::update(const RunController& runner, render::Renderer* renderer, bool force) {
-    rows_ = runner.points();
+    std::vector<PointRow> rows = runner.points();
+    cells_.resize(rows.size());
+    for (std::size_t k = 0; k < rows.size(); ++k) {
+        if (k < rows_.size() && rows[k] == rows_[k]) continue;
+        cells_[k].clear();
+        for (const std::string& c : monitor_cells(rows[k], k)) cells_[k].push_back(win32::widen(c));
+    }
+    rows_ = std::move(rows);
     SendMessageW(list_, LVM_SETITEMCOUNT, static_cast<WPARAM>(rows_.size()), LVSICF_NOSCROLL | LVSICF_NOINVALIDATEALL);
     InvalidateRect(list_, nullptr, FALSE);
     if (!rows_.empty()) SendMessageW(list_, LVM_ENSUREVISIBLE, static_cast<WPARAM>(rows_.size() - 1), FALSE);
@@ -268,10 +275,9 @@ void RunPage::set_dpi(int dpi, HFONT font) {
 int RunPage::row_count() const { return static_cast<int>(rows_.size()); }
 
 std::wstring RunPage::cell(int row, int column) const {
-    if (row < 0 || row >= static_cast<int>(rows_.size())) return {};
-    const auto cells = monitor_cells(rows_[static_cast<std::size_t>(row)], static_cast<std::size_t>(row));
-    return column >= 0 && column < static_cast<int>(cells.size()) ? win32::widen(cells[static_cast<std::size_t>(column)])
-                                                                    : std::wstring();
+    if (row < 0 || row >= static_cast<int>(cells_.size())) return {};
+    const auto& cells = cells_[static_cast<std::size_t>(row)];
+    return column >= 0 && column < static_cast<int>(cells.size()) ? cells[static_cast<std::size_t>(column)] : std::wstring();
 }
 
 void RunPage::layout() {

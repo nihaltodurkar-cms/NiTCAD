@@ -99,6 +99,9 @@ private:
     std::unique_ptr<Viewport> plot_;
     std::optional<Scene> scene_;
     std::vector<PointRow> rows_;
+    // Each row's cells, formatted when the row changes rather than at each paint (WG1: the list repaints
+    // while a run goes on; only the last row and new ones change).
+    std::vector<std::vector<std::wstring>> cells_;
     std::chrono::steady_clock::time_point plotted_{};
     int dpi_ = 96;
 };
