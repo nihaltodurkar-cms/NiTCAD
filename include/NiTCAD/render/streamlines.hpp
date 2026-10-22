@@ -98,6 +98,33 @@ struct StreamlineOptions {
 [[nodiscard]] std::vector<Point> contact_seeds(const device::Device& device, const Locator& locator,
                                                std::size_t contact, std::size_t count,
                                                std::span<const double> node_current = {});
+// --- arrows (Unit 25c, DC1) ---------------------------------------------------------------------
+
+// Where an arrow stands and what it shows: the unit direction of the field there (zero when the
+// field vanishes), |v|, the surface's unit normal (zero in 2D) and the interpolant, so any nodal
+// field can be read at the site.
+struct Arrow {
+    Point position{};
+    Point direction{};
+    double magnitude = 0.0;
+    Point normal{};
+    Interpolant at;
+};
+
+// 2D: arrows at the points of a square grid over the mesh's bounding box, its spacing chosen for
+// about `count` points inside the device (cell centres of the grid; points outside the mesh, or where
+// the field is undefined or zero, give no arrow). The grid's spacing is returned in `spacing`.
+// `excluded` (empty, or one flag per node) drops a site whose nearest node of its element (the
+// largest weight) is flagged: an insulator's for currents, which it does not carry.
+[[nodiscard]] std::vector<Arrow> grid_arrows(const Locator& locator, std::span<const Point> field,
+                                             std::size_t count, double& spacing,
+                                             std::span<const std::uint8_t> excluded = {});
+// On surface polygons (3D boundary faces, or slice sections): `count` sites spread evenly by area (a
+// stratified sample), each with its polygon's normal; spacing sqrt(area / count). `excluded` as above.
+[[nodiscard]] std::vector<Arrow> surface_arrows(const Locator& locator, std::span<const Point> field,
+                                                std::span<const Polygon> surface, std::size_t count,
+                                                double& spacing, std::span<const std::uint8_t> excluded = {});
+
 // `count` seeds evenly along the segment a-b (at the midpoints of equal parts).
 [[nodiscard]] std::vector<Point> segment_seeds(const Point& a, const Point& b, std::size_t count);
 // `count` seeds evenly by area over a plane's section of a 3D device (Geometry::slice).

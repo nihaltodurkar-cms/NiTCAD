@@ -363,6 +363,112 @@ std::vector<Polygon> Geometry::slice(const Plane& plane) const {
     return out;
 }
 
+// --- clipping box -----------------------------------------------------------------------------
+
+std::vector<std::vector<Point>> outside_box(std::span<const Point> polygon, const Box& box) {
+    std::vector<std::vector<Point>> out;
+    std::vector<Point> rest(polygon.begin(), polygon.end());
+    const double whole = measure(rest);
+    if (!(whole > 0.0)) return out;
+    const auto mix = [](const Point& a, const Point& b, double t) { return lerp(a, b, t); };
+    for (std::size_t a = 0; a < 3 && rest.size() >= 3; ++a) {
+        for (const bool upper : {false, true}) {
+            // Beyond this face: x_a < lo_a, or x_a > hi_a.
+            const auto beyond = [&](const Point& p) { return upper ? p[a] - box.hi[a] : box.lo[a] - p[a]; };
+            std::vector<Point> part = clip(rest, beyond, mix);
+            // A part lying in the face's plane (nothing strictly beyond it) belongs to the box.
+            double depth = 0.0;
+            for (const Point& p : part) depth = std::max(depth, beyond(p));
+            if (part.size() >= 3 && depth > 0.0 && measure(part) > 1e-12 * whole) out.push_back(std::move(part));
+            rest = clip(rest, [&](const Point& p) { return -beyond(p); }, mix);
+            if (rest.size() < 3) break;
+        }
+    }
+    return out;
+}
+
+std::vector<Polygon> Geometry::clipped_surface(const Box& box) const {
+    std::vector<Polygon> out;
+    if (dimension() != 3 || element_count() == 0) return out;
+    const auto with_interpolants = [&](std::vector<Point> pts, std::size_t element) {
+        Polygon p;
+        p.element = element;
+        for (const Point& x : pts) p.vertices.push_back({x, interpolant(element, x)});
+        return p;
+    };
+    // The boundary's parts outside the box.
+    for (const Polygon& f : boundary_faces()) {
+        std::vector<Point> pts;
+        for (const SurfaceVertex& v : f.vertices) pts.push_back(v.position);
+        for (auto& part : outside_box(pts, box)) out.push_back(with_interpolants(std::move(part), f.element));
+    }
+    // The cut faces: on each box face strictly inside the mesh's bounding box.
+    const auto points = mesh_->points();
+    Point lo = points[0], hi = points[0];
+    for (const Point& p : points) {
+        for (std::size_t a = 0; a < 3; ++a) lo[a] = std::min(lo[a], p[a]), hi[a] = std::max(hi[a], p[a]);
+    }
+    const auto mix = [](const Point& a, const Point& b, double t) { return lerp(a, b, t); };
+    for (std::size_t a = 0; a < 3; ++a) {
+        for (const bool upper : {false, true}) {
+            const double at = upper ? box.hi[a] : box.lo[a];
+            if (!(at > lo[a] && at < hi[a])) continue;
+            // What is left lies beyond the face; its outward normal points into the box.
+            Plane plane;
+            plane.normal[a] = upper ? -1.0 : 1.0;
+            plane.offset = upper ? -at : at;
+            for (const Polygon& s : slice(plane)) {
+                std::vector<Point> pts;
+                for (const SurfaceVertex& v : s.vertices) pts.push_back(v.position);
+                const double whole = measure(pts);
+                for (std::size_t b = 0; b < 3 && pts.size() >= 3; ++b) {
+                    if (b == a) continue;
+                    pts = clip(pts, [&](const Point& p) { return p[b] - box.lo[b]; }, mix);
+                    pts = clip(pts, [&](const Point& p) { return box.hi[b] - p[b]; }, mix);
+                }
+                if (pts.size() >= 3 && measure(pts) > 1e-12 * whole) out.push_back(with_interpolants(std::move(pts), s.element));
+            }
+        }
+    }
+    return out;
+}
+
+// --- exploded view ----------------------------------------------------------------------------
+
+std::vector<std::vector<Geometry::RegionFace>> Geometry::region_surfaces(
+    std::span<const std::int32_t> node_region) const {
+    std::vector<std::vector<RegionFace>> out;
+    if (dimension() != 3 || element_count() == 0) return out;
+    std::int32_t regions = 0;
+    for (const std::int32_t r : node_region) regions = std::max(regions, r + 1);
+    out.resize(static_cast<std::size_t>(regions));
+    for (const Polygon& f : boundary_faces()) {
+        for (OwnedPolygon& piece : owner_pieces(f)) {
+            const auto r = static_cast<std::size_t>(node_region[static_cast<std::size_t>(piece.owner)]);
+            out[r].push_back({std::move(piece.points), piece.owner, f.element});
+        }
+    }
+    const auto points = mesh_->points();
+    for (const InterfacePiece& p : interfaces(node_region)) {
+        const Vec n = [&] {
+            Vec s{};
+            for (std::size_t i = 0; i < p.points.size(); ++i) s = add(s, cross(p.points[i], p.points[(i + 1) % p.points.size()]));
+            return s;
+        }();
+        // Each side, turned away from its own node (toward the other region).
+        for (const bool a_side : {true, false}) {
+            const NodeId own = a_side ? p.node_a : p.node_b;
+            const NodeId other = a_side ? p.node_b : p.node_a;
+            std::vector<Point> pts = p.points;
+            const Vec toward = sub(points[static_cast<std::size_t>(other)], points[static_cast<std::size_t>(own)]);
+            if (dot(n, toward) < 0.0) std::ranges::reverse(pts);
+            const auto r = static_cast<std::size_t>(a_side ? p.region_a : p.region_b);
+            out[r].push_back({std::move(pts), own, p.element});
+        }
+    }
+    return out;
+}
+
 // --- control-volume pieces --------------------------------------------------------------------
 
 std::vector<OwnedPolygon> Geometry::owner_pieces(const Polygon& polygon) const {

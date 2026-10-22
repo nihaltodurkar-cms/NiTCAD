@@ -5,8 +5,10 @@
 #include <array>
 #include <cmath>
 #include <cstddef>
+#include <cstdio>
 #include <limits>
 #include <map>
+#include <numbers>
 #include <string>
 #include <utility>
 
@@ -214,7 +216,8 @@ double largest_extent_cm(const mesh::Mesh& m) {
 // Contacts as slabs of nominal thickness on their boundary (VR8): a lumped gate as its oxide (pale)
 // under the electrode, an electrode as metal, an ohmic contact as a thin metal pad.
 void contact_slabs(const device::Device& d, const Geometry& g, const Palette& palette,
-                   std::vector<TriangleBatch>& out) {
+                   std::vector<TriangleBatch>& out, const std::optional<Box>& clip = std::nullopt,
+                   std::span<const Point> contact_offset = {}) {
     const double t = 0.03 * largest_extent_cm(d.mesh());
     const auto points = d.mesh().points();
     TriangleBatch metal{"electrode", Shading::flat, g.dimension() == 3, false, {}};
@@ -248,7 +251,10 @@ void contact_slabs(const device::Device& d, const Geometry& g, const Palette& pa
             }
         }
     };
-    for (const device::Contact& contact : d.contacts()) {
+    for (std::size_t ci = 0; ci < d.contacts().size(); ++ci) {
+        const device::Contact& contact = d.contacts()[ci];
+        // The exploded view moves each contact with its region.
+        const Point off = contact_offset.empty() ? Point{} : contact_offset[ci];
         std::vector<bool> in(d.mesh().node_count(), false);
         for (const NodeId n : contact.nodes) in[static_cast<std::size_t>(n)] = true;
         const bool gate = contact.kind == device::ContactKind::gate;
@@ -260,7 +266,7 @@ void contact_slabs(const device::Device& d, const Geometry& g, const Palette& pa
         if (g.dimension() == 2) {
             for (const auto& [a, b] : boundary_edges_2d(g)) {
                 if (!in[static_cast<std::size_t>(a)] || !in[static_cast<std::size_t>(b)]) continue;
-                const Point pa = points[static_cast<std::size_t>(a)], pb = points[static_cast<std::size_t>(b)];
+                const Point pa = add(points[static_cast<std::size_t>(a)], off), pb = add(points[static_cast<std::size_t>(b)], off);
                 const Point n = unit({pb[1] - pa[1], -(pb[0] - pa[0]), 0.0});
                 const std::vector<Point> base{pa, pb};
                 if (gate) prism(oxide, base, n, 0.0, lo, oxide_color, {{0, 1}});
@@ -273,6 +279,14 @@ void contact_slabs(const device::Device& d, const Geometry& g, const Palette& pa
         for (Polygon& f : g.boundary_faces()) {
             bool all = true;
             for (const SurfaceVertex& v : f.vertices) all = all && in[static_cast<std::size_t>(v.at.nodes[0])];
+            if (all && clip) {
+                // Under a clipping box: a face whose centroid lies in the box is left out.
+                Point c{};
+                for (const SurfaceVertex& v : f.vertices) c = add(c, scale(v.position, 1.0 / 3.0));
+                bool in_box = true;
+                for (std::size_t a = 0; a < 3; ++a) in_box = in_box && c[a] >= clip->lo[a] && c[a] <= clip->hi[a];
+                all = !in_box;
+            }
             if (all) faces.push_back(std::move(f));
         }
         std::map<std::pair<NodeId, NodeId>, int> edge_count;
@@ -284,7 +298,7 @@ void contact_slabs(const device::Device& d, const Geometry& g, const Palette& pa
         }
         for (const Polygon& f : faces) {
             std::vector<Point> base;
-            for (const SurfaceVertex& v : f.vertices) base.push_back(v.position);
+            for (const SurfaceVertex& v : f.vertices) base.push_back(add(v.position, off));
             const Point n = unit(polygon_normal(base));
             std::vector<std::array<std::size_t, 2>> sides;
             for (std::size_t i = 0; i < 3; ++i) {
@@ -368,7 +382,8 @@ void solid_3d(const device::Device& d, const Geometry& g, const ViewOptions& o, 
     Batches batches(o.palette, true, o.transparent_insulators);
     TriangleBatch field_batch{"field", Shading::field, true, false, {}};
     const auto is_insulator = [&](NodeId n) { return d.is_insulator(n); };
-    for (const Polygon& face : g.boundary_faces()) {
+    // With a clipping box (Unit 25c), the surface of what is left: cut faces drawn like the boundary.
+    for (const Polygon& face : o.clip ? g.clipped_surface(*o.clip) : g.boundary_faces()) {
         std::vector<Point> pts;
         for (const SurfaceVertex& v : face.vertices) pts.push_back(v.position);
         const Point n = polygon_normal(pts);
@@ -393,13 +408,18 @@ void solid_3d(const device::Device& d, const Geometry& g, const ViewOptions& o, 
                                      d.mesh().points()[static_cast<std::size_t>(semi)]);
             Point n = polygon_normal(p.points);
             if (dot(n, toward) < 0.0) n = scale(n, -1.0);
-            if (field_scale) {
-                std::vector<float> vals;
-                for (const Point& x : p.points) vals.push_back(position_at(g, p.element, x, values, *field_scale));
-                fan(field_batch, p.points, vals, {}, n);
-            } else {
-                const Material m = material_class(d, semi, o.palette);
-                fan(batches[m], p.points, {}, material_color(m, o.palette), n);
+            std::vector<std::vector<Point>> parts;
+            if (o.clip) parts = outside_box(p.points, *o.clip);
+            else parts.push_back(p.points);
+            for (const std::vector<Point>& part : parts) {
+                if (field_scale) {
+                    std::vector<float> vals;
+                    for (const Point& x : part) vals.push_back(position_at(g, p.element, x, values, *field_scale));
+                    fan(field_batch, part, vals, {}, n);
+                } else {
+                    const Material m = material_class(d, semi, o.palette);
+                    fan(batches[m], part, {}, material_color(m, o.palette), n);
+                }
             }
         }
     }
@@ -594,7 +614,7 @@ std::expected<FieldScene, base::Error> solid_view(const device::Device& d, const
     } else {
         solid_3d(d, g, o, s, {}, nullptr);
     }
-    if (o.contacts) contact_slabs(d, g, o.palette, s.triangles);
+    if (o.contacts) contact_slabs(d, g, o.palette, s.triangles, o.clip);
     frame(s, o);
     return s;
 }
@@ -676,7 +696,7 @@ std::expected<FieldScene, base::Error> field_view(const device::Device& d, const
             }
         }
     }
-    if (o.view.contacts) contact_slabs(d, g, o.view.palette, s.triangles);
+    if (o.view.contacts) contact_slabs(d, g, o.view.palette, s.triangles, o.view.clip);
     if (o.view.mesh_edges && g.dimension() == 2) {
         LineBatch edges{"mesh", {0.15f, 0.17f, 0.2f, 0.5f}, 1.0f, true, {}};
         const auto points = d.mesh().points();
@@ -722,7 +742,7 @@ std::expected<FieldScene, base::Error> slice_view(const device::Device& d, const
     if (o.contours) contours(field, *bar, s.lines);
     s.triangles.push_back(std::move(field));
     s.triangles.push_back(outline_shell(g));
-    if (o.view.contacts) contact_slabs(d, g, o.view.palette, s.triangles);
+    if (o.view.contacts) contact_slabs(d, g, o.view.palette, s.triangles, o.view.clip);
     s.colorbar = std::move(*bar);
     frame(s, o.view);
     return s;
@@ -782,7 +802,7 @@ std::expected<FieldScene, base::Error> iso_view(const device::Device& d, const G
         if (!batch.vertices.empty()) s.triangles.push_back(std::move(batch));
     }
     s.triangles.push_back(outline_shell(g));
-    if (o.view.contacts) contact_slabs(d, g, o.view.palette, s.triangles);
+    if (o.view.contacts) contact_slabs(d, g, o.view.palette, s.triangles, o.view.clip);
     s.colorbar = std::move(*bar);
     frame(s, o.view);
     return s;
@@ -820,6 +840,86 @@ void add_streamlines(FieldScene& s, std::span<const Streamline> lines, const Col
     }
 }
 
+namespace {
+
+// The triangles of one arrow, as polygons with their outward normals (cm).
+void arrow_polygons(const FieldScene& s, const Arrow& a, double length,
+                    std::vector<std::pair<std::vector<Point>, Point>>& out) {
+    const Point d = a.direction;
+    const double head = 0.35 * length;
+    if (s.dimension == 2) {
+        const double lift = 1e-3 * length;  // in front of the map (the camera looks down -z)
+        const Point q{-d[1], d[0], 0.0};
+        const Point c{a.position[0], a.position[1], lift};
+        const Point tail = add(c, scale(d, -0.5 * length)), tip = add(c, scale(d, 0.5 * length));
+        const Point neck = add(tip, scale(d, -head));
+        const double w = 0.05 * length, hw = 0.18 * length;
+        const Point up{0.0, 0.0, 1.0};
+        out.push_back({{add(tail, scale(q, -w)), add(neck, scale(q, -w)), add(neck, scale(q, w)), add(tail, scale(q, w))}, up});
+        out.push_back({{add(neck, scale(q, -hw)), tip, add(neck, scale(q, hw))}, up});
+        return;
+    }
+    const Point c = add(a.position, scale(a.normal, 0.25 * length));
+    const Point tail = add(c, scale(d, -0.5 * length)), tip = add(c, scale(d, 0.5 * length));
+    const Point neck = add(tip, scale(d, -head));
+    // A basis (d, u, w) around the axis.
+    const Point helper = std::abs(d[0]) < 0.9 ? Point{1.0, 0.0, 0.0} : Point{0.0, 1.0, 0.0};
+    const Point u = unit(cross(d, helper)), w = cross(d, u);
+    constexpr int sides = 6;
+    const double r = 0.04 * length, cone = 0.13 * length;
+    const auto ring = [&](const Point& at, double radius, int k) {
+        const double t = 2.0 * std::numbers::pi * k / sides;
+        return add(at, add(scale(u, radius * std::cos(t)), scale(w, radius * std::sin(t))));
+    };
+    for (int k = 0; k < sides; ++k) {
+        const double t = 2.0 * std::numbers::pi * (k + 0.5) / sides;
+        const Point radial = add(scale(u, std::cos(t)), scale(w, std::sin(t)));
+        out.push_back({{ring(tail, r, k), ring(tail, r, k + 1), ring(neck, r, k + 1), ring(neck, r, k)}, radial});
+        out.push_back({{ring(neck, cone, k), ring(neck, cone, k + 1), tip}, add(radial, scale(d, cone / head))});
+        out.push_back({{ring(neck, cone, k + 1), ring(neck, cone, k), neck}, scale(d, -1.0)});  // the cone's base
+    }
+}
+
+}  // namespace
+
+std::vector<Polygon> exposed_boundary(const device::Device& d, const Geometry& g) {
+    std::vector<std::uint8_t> on_contact(d.mesh().node_count(), 0);
+    for (const device::Contact& c : d.contacts()) {
+        for (const NodeId v : c.nodes) on_contact[static_cast<std::size_t>(v)] = 1;
+    }
+    std::vector<Polygon> out;
+    for (Polygon& f : g.boundary_faces()) {
+        const bool covered = std::ranges::all_of(f.vertices, [&](const SurfaceVertex& v) {
+            return on_contact[static_cast<std::size_t>(v.at.nodes[0])] != 0;
+        });
+        if (!covered) out.push_back(std::move(f));
+    }
+    return out;
+}
+
+void add_arrows(FieldScene& s, std::span<const Arrow> arrows, double length, const Rgba& color) {
+    TriangleBatch batch{"arrows", Shading::flat, s.dimension == 3, false, {}};
+    std::vector<std::pair<std::vector<Point>, Point>> polys;
+    for (const Arrow& a : arrows) {
+        polys.clear();
+        arrow_polygons(s, a, length, polys);
+        for (const auto& [pts, n] : polys) fan(batch, pts, {}, color, n);
+    }
+    if (!batch.vertices.empty()) s.triangles.push_back(std::move(batch));
+}
+
+void add_arrows(FieldScene& s, std::span<const Arrow> arrows, double length, const Colorbar& colors) {
+    TriangleBatch batch{"arrows", Shading::field, s.dimension == 3, false, {}};
+    std::vector<std::pair<std::vector<Point>, Point>> polys;
+    for (const Arrow& a : arrows) {
+        polys.clear();
+        arrow_polygons(s, a, length, polys);
+        const float t = static_cast<float>(colors.scale.position(a.magnitude));
+        for (const auto& [pts, n] : polys) fan(batch, pts, std::vector<float>(pts.size(), t), {}, n);
+    }
+    if (!batch.vertices.empty()) s.triangles.push_back(std::move(batch));
+}
+
 std::expected<FieldScene, base::Error> outline_view(const device::Device& d, const Geometry& g,
                                                     const ViewOptions& o) {
     if (auto c = check_view(d, g); !c) return std::unexpected(std::move(c.error()));
@@ -828,8 +928,135 @@ std::expected<FieldScene, base::Error> outline_view(const device::Device& d, con
     s.dimension = 3;
     s.title = "Streamlines";
     s.triangles.push_back(outline_shell(g));
-    if (o.contacts) contact_slabs(d, g, o.palette, s.triangles);
+    if (o.contacts) contact_slabs(d, g, o.palette, s.triangles, o.clip);
     frame(s, o);
+    return s;
+}
+
+std::expected<std::vector<FieldScene>, base::Error> filmstrip_scenes(const device::Device& d, const Geometry& g,
+                                                                    std::span<const FilmFrame> frames,
+                                                                    ScaleKind kind, const FieldOptions& o) {
+    if (frames.empty()) return std::unexpected(invalid("a filmstrip needs a frame"));
+    FieldOptions shared = o;
+    if (!shared.scale) {
+        // CQ2: one scale over every frame, so a color means the same value in each.
+        std::vector<double> all;
+        for (const FilmFrame& f : frames) all.insert(all.end(), f.values.begin(), f.values.end());
+        auto s = ColorScale::fit(kind, all, 1e10);
+        if (!s) return std::unexpected(std::move(s.error()));
+        shared.scale = *s;
+    }
+    std::vector<FieldScene> out;
+    for (std::size_t k = 0; k < frames.size(); ++k) {
+        auto s = field_view(d, g, frames[k].values, shared);
+        if (!s) return std::unexpected(std::move(s.error()));
+        s->title = o.title.empty() ? frames[k].label : o.title + ", " + frames[k].label;
+        out.push_back(std::move(*s));
+    }
+    return out;
+}
+
+std::string time_label(double t) {
+    if (t == 0.0) return "t = 0 s";
+    struct Unit {
+        double scale;
+        const char* name;
+    };
+    constexpr std::array<Unit, 6> units{{{1.0, "s"}, {1e-3, "ms"}, {1e-6, "\xC2\xB5s"}, {1e-9, "ns"}, {1e-12, "ps"}, {1e-15, "fs"}}};
+    const double a = std::abs(t);
+    std::size_t u = 0;
+    while (u + 1 < units.size() && a < units[u].scale * (1.0 - 5e-4)) ++u;
+    const double v = t / units[u].scale;
+    // Three significant digits.
+    const int decimals = std::abs(v) >= 99.95 ? 0 : std::abs(v) >= 9.995 ? 1 : 2;
+    char buffer[48];
+    std::snprintf(buffer, sizeof buffer, "t = %.*f %s", decimals, v, units[u].name);
+    return buffer;
+}
+
+double default_gap(const device::Device& d, int axis) noexcept {
+    if (axis < 0 || axis > 2) return 0.0;
+    double lo = std::numeric_limits<double>::infinity(), hi = -lo;
+    for (const Point& p : d.mesh().points()) {
+        lo = std::min(lo, p[static_cast<std::size_t>(axis)]);
+        hi = std::max(hi, p[static_cast<std::size_t>(axis)]);
+    }
+    return 0.12 * (hi - lo);
+}
+
+std::expected<FieldScene, base::Error> exploded_view(const device::Device& d, const Geometry& g, int axis,
+                                                     double gap, std::span<const double> values,
+                                                     const FieldOptions& o) {
+    if (auto c = check_view(d, g); !c) return std::unexpected(std::move(c.error()));
+    if (g.dimension() != 3) return std::unexpected(invalid("the exploded view needs a 3D geometry"));
+    if (axis < 0 || axis > 2) return std::unexpected(invalid("the axis is 0, 1 or 2", static_cast<std::size_t>(std::max(axis, 0))));
+    if (!(gap >= 0.0) || !std::isfinite(gap)) return std::unexpected(invalid("the gap is a finite length, at least 0"));
+    if (!values.empty() && values.size() != d.mesh().node_count()) {
+        return std::unexpected(invalid("the field is not one value per mesh node", values.size()));
+    }
+    std::optional<Colorbar> bar;
+    if (!values.empty()) {
+        auto b = colorbar_for(values, o);
+        if (!b) return std::unexpected(std::move(b.error()));
+        bar = std::move(*b);
+    }
+    const auto regions = regions_of(d);
+    const auto points = d.mesh().points();
+    const auto ax = static_cast<std::size_t>(axis);
+    // The regions' ranks along the axis, by their mean node coordinate.
+    const std::size_t R = d.regions().size();
+    std::vector<double> mean(R, 0.0);
+    std::vector<std::size_t> count(R, 0);
+    for (std::size_t i = 0; i < points.size(); ++i) {
+        const auto r = static_cast<std::size_t>(regions[i]);
+        mean[r] += points[i][ax];
+        ++count[r];
+    }
+    std::vector<std::size_t> order;
+    for (std::size_t r = 0; r < R; ++r) {
+        if (count[r] > 0) {
+            mean[r] /= static_cast<double>(count[r]);
+            order.push_back(r);
+        }
+    }
+    std::ranges::stable_sort(order, {}, [&](std::size_t r) { return mean[r]; });
+    std::vector<Point> offset(R, Point{});
+    for (std::size_t k = 0; k < order.size(); ++k) offset[order[k]][ax] = gap * static_cast<double>(k);
+
+    FieldScene s;
+    s.dimension = 3;
+    s.title = bar ? o.title : "Exploded view";
+    const ViewOptions& view = o.view;
+    Batches batches(view.palette, true, view.transparent_insulators);
+    TriangleBatch field_batch{"field", Shading::field, true, false, {}};
+    const auto surfaces = g.region_surfaces(regions);
+    for (std::size_t r = 0; r < surfaces.size(); ++r) {
+        for (const Geometry::RegionFace& f : surfaces[r]) {
+            std::vector<Point> pts;
+            for (const Point& x : f.points) pts.push_back(add(x, offset[r]));
+            const Point n = polygon_normal(f.points);
+            if (bar && !d.is_insulator(f.owner)) {
+                std::vector<float> vals;
+                for (const Point& x : f.points) vals.push_back(position_at(g, f.element, x, values, bar->scale));
+                fan(field_batch, pts, vals, {}, n);
+            } else {
+                const Material m = material_class(d, f.owner, view.palette);
+                fan(batches[m], pts, {}, material_color(m, view.palette), n);
+            }
+        }
+    }
+    if (!field_batch.vertices.empty()) s.triangles.push_back(std::move(field_batch));
+    batches.move_into(s.triangles);
+    if (view.contacts) {
+        // Each contact moves with the region of its first node.
+        std::vector<Point> contact_offset;
+        for (const device::Contact& c : d.contacts()) {
+            contact_offset.push_back(c.nodes.empty() ? Point{} : offset[static_cast<std::size_t>(regions[static_cast<std::size_t>(c.nodes[0])])]);
+        }
+        contact_slabs(d, g, view.palette, s.triangles, std::nullopt, contact_offset);
+    }
+    if (bar) s.colorbar = std::move(*bar);
+    frame(s, view);
     return s;
 }
 

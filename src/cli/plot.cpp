@@ -34,7 +34,7 @@ constexpr const char* plot_usage =
     "usage: nitcad plot <deck | result file> [options] --out <image.png>\n"
     "  input   a deck (its device, mesh and the result files its run wrote), or a .nitsweep,\n"
     "          .nittran or .nitac file with --device <file.nitdev> [--mesh <file.nitmesh>]\n"
-    "  view    --view solid|mesh|field|slice|iso|iv|cv|current|bands|profile\n"
+    "  view    --view solid|mesh|field|slice|iso|exploded|filmstrip|iv|cv|current|bands|profile\n"
     "          (default: field with --field, else solid)\n"
     "  iso     --view iso --field <f> --levels <v>[,<v>...] (3D surfaces, 2D contours)\n"
     "  field   --field potential|n|p|Ec|Ev|Efn|Efp|T|doping|ND|NA|R|srh|auger|\n"
@@ -44,6 +44,12 @@ constexpr const char* plot_usage =
     "  3D      --slice x=<um>|y=<um>|z=<um> (repeatable)  --azimuth <deg>  --elevation <deg>\n"
     "          --perspective\n"
     "  curves  --contact <name> (swept)  --sense <name>  --frequency <k>  --log\n"
+    "  arrows  --vectors E|J|Jn|Jp  --arrows <n> (300 in 2D, 400 in 3D)\n"
+    "  clip    --clip <x0>,<y0>,<z0>:<x1>,<y1>,<z1> (um): that box removed from a 3D solid or field view\n"
+    "  explode --view exploded [--field <f>] [--axis x|y|z (y)] [--gap <um> (12% of the extent)]\n"
+    "  film    --view filmstrip --field <f> (a transient run) [--every <k>] [--columns <c> (4)]\n"
+    "          (--size is each frame's, 640x480 by default)\n"
+    "          [--frames <dir>] (each frame also as <dir>/frame_000.png, ...)\n"
     "  lines   --streamlines E|J|Jn|Jp  --lines <n> (24)  --from <contact>\n"
     "          --seeds <x0>,<y0>[,<z0>]:<x1>,<y1>[,<z1>] (um) | x=<um>|y=<um>|z=<um> (3D plane)\n"
     "  image   --size <w>x<h> (1280x960)  --adapter auto|gpu|warp\n";
@@ -70,6 +76,13 @@ struct Options {
     std::string view, field, scale, colormap = "turbo", contact, sense, adapter = "auto";
     std::string streamlines, from, seeds;  // Unit 25b
     std::size_t lines = 24;
+    std::string vectors;  // Unit 25c
+    std::optional<Box> clip;
+    std::optional<double> gap;  // um
+    int axis = 1;
+    std::size_t every = 0, columns = 0;  // filmstrip
+    fs::path frames;
+    std::size_t arrows = 0;
     std::optional<std::size_t> point, frequency;
     std::optional<std::pair<double, double>> range;
     std::vector<Plane> slices;
@@ -77,6 +90,7 @@ struct Options {
     std::optional<float> azimuth, elevation;
     bool contours = false, edges = false, opaque = false, perspective = false, log = false;
     int width = 1280, height = 960;
+    bool size_given = false;
 };
 
 // The results of a run, as the views read them.
@@ -99,6 +113,11 @@ std::vector<results::BiasPoint> points_of(const Loaded& l) {
             results::BiasPoint p;
             p.fields = s.fields;
             p.bands = s.bands;
+            // Unit 25c: with their conduction currents and rates, for |J|, lines, arrows and R.
+            p.edge_current_n = s.edge_current_n;
+            p.edge_current_p = s.edge_current_p;
+            p.rates = s.rates;
+            if (s.point < l.transient->points.size()) p.bias_V = l.transient->points[s.point].bias_V;
             out.push_back(std::move(p));
         }
     }
@@ -188,6 +207,55 @@ int plot(int argc, char** argv) {
         else if (a == "--sense") { if (!flag_value(o.sense)) return usage("--sense needs a name"); }
         else if (a == "--adapter") { if (!flag_value(o.adapter)) return usage("--adapter needs a name"); }
         else if (a == "--streamlines") { if (!flag_value(o.streamlines)) return usage("--streamlines needs E, J, Jn or Jp"); }
+        else if (a == "--vectors") { if (!flag_value(o.vectors)) return usage("--vectors needs E, J, Jn or Jp"); }
+        else if (a == "--frames") { if (!flag_value(o.frames)) return usage("--frames needs a directory"); }
+        else if (a == "--every" || a == "--columns") {
+            const auto v = value();
+            const auto n = v ? number(*v) : std::nullopt;
+            if (!n || *n < 1 || *n > 1000 || *n != std::floor(*n)) return usage(std::string(a) + " needs a count from 1 to 1000");
+            (a == "--every" ? o.every : o.columns) = static_cast<std::size_t>(*n);
+        }
+        else if (a == "--gap") {
+            const auto v = value();
+            const auto n = v ? number(*v) : std::nullopt;
+            if (!n || *n < 0.0) return usage("--gap needs a length in um, at least 0");
+            o.gap = *n;
+        } else if (a == "--axis") {
+            const auto v = value();
+            if (!v || v->size() != 1 || std::string_view("xyz").find((*v)[0]) == std::string_view::npos) {
+                return usage("--axis is x, y or z");
+            }
+            o.axis = (*v)[0] - 'x';
+        }
+        else if (a == "--clip") {
+            // <x0>,<y0>,<z0>:<x1>,<y1>,<z1> in um, lo below hi on each axis.
+            const auto v = value();
+            const auto colon = v ? v->find(':') : std::string_view::npos;
+            const auto corner = [](std::string_view t) -> std::optional<Point> {
+                Point q{};
+                for (std::size_t k = 0; k < 3; ++k) {
+                    const auto comma = t.find(',');
+                    if ((k < 2) == (comma == std::string_view::npos)) return std::nullopt;
+                    const auto x = number(t.substr(0, comma));
+                    if (!x) return std::nullopt;
+                    q[k] = *x * 1e-4;
+                    if (k < 2) t = t.substr(comma + 1);
+                }
+                return q;
+            };
+            const auto a0 = colon == std::string_view::npos ? std::nullopt : corner(v->substr(0, colon));
+            const auto a1 = colon == std::string_view::npos ? std::nullopt : corner(v->substr(colon + 1));
+            if (!a0 || !a1 || !((*a0)[0] < (*a1)[0] && (*a0)[1] < (*a1)[1] && (*a0)[2] < (*a1)[2])) {
+                return usage("--clip needs <x0>,<y0>,<z0>:<x1>,<y1>,<z1> (um) with each lo below its hi");
+            }
+            o.clip = Box{*a0, *a1};
+        }
+        else if (a == "--arrows") {
+            const auto v = value();
+            const auto n = v ? number(*v) : std::nullopt;
+            if (!n || *n < 1 || *n > 100000 || *n != std::floor(*n)) return usage("--arrows needs a count from 1 to 100000");
+            o.arrows = static_cast<std::size_t>(*n);
+        }
         else if (a == "--from") { if (!flag_value(o.from)) return usage("--from needs a contact"); }
         else if (a == "--seeds") { if (!flag_value(o.seeds)) return usage("--seeds needs a segment or a plane"); }
         else if (a == "--lines") {
@@ -247,6 +315,7 @@ int plot(int argc, char** argv) {
             const auto h = x != std::string_view::npos ? number(v->substr(x + 1)) : std::nullopt;
             if (!w || !h) return usage("--size needs <w>x<h>");
             o.width = static_cast<int>(*w);
+            o.size_given = true;
             o.height = static_cast<int>(*h);
         } else {
             return usage("unknown option " + std::string(a));
@@ -259,7 +328,14 @@ int plot(int argc, char** argv) {
         }
         if (o.field.empty()) o.field = o.streamlines;  // drawn over their own magnitude
     }
+    if (!o.vectors.empty()) {
+        if (o.vectors != "E" && o.vectors != "J" && o.vectors != "Jn" && o.vectors != "Jp") {
+            return usage("--vectors is E, J, Jn or Jp");
+        }
+        if (o.field.empty()) o.field = o.vectors;
+    }
     if (o.view.empty()) o.view = !o.slices.empty() ? "slice" : o.field.empty() ? "solid" : "field";
+    const bool field_given = !o.field.empty();  // the exploded view draws regions without one
     if (o.field.empty()) o.field = "potential";
 
     // The device, its geometry and the results.
@@ -359,12 +435,19 @@ int plot(int argc, char** argv) {
     ViewOptions view;
     view.contacts = true;
     view.mesh_edges = o.edges;
+    if (o.clip) {
+        if (m.dimension() != 3) return fail("a clipping box needs a 3D device");
+        if (o.view != "solid" && o.view != "field") return fail("a clipping box applies to the solid and field views");
+        view.clip = o.clip;
+    }
     view.transparent_insulators = !o.opaque;
     view.projection = o.perspective ? Projection::perspective : Projection::orthographic;
     if (o.azimuth) view.azimuth_deg = *o.azimuth;
     if (o.elevation) view.elevation_deg = *o.elevation;
     std::optional<FieldScene> field_scene;
     std::optional<PlotScene> plot_scene;
+    bool colored_arrows = false;  // 3D arrows on the solid, colored by their own magnitude
+    std::vector<FieldScene> film;  // a filmstrip's frames
     const auto field = find_field(o.field);
     if (!field) return usage("unknown field " + o.field);
     const auto scale_kind = [&]() -> std::optional<ScaleKind> {
@@ -422,6 +505,19 @@ int plot(int argc, char** argv) {
         auto s = o.view == "solid" ? solid_view(*device, *geometry, view) : mesh_view(*device, *geometry, view);
         if (!s) return fail(s.error().message);
         field_scene = std::move(*s);
+    } else if (!o.vectors.empty() && o.streamlines.empty() && m.dimension() == 3 && o.view == "field" &&
+               o.field == o.vectors) {
+        // 3D arrows over their own magnitude: on the solid device, colored by it.
+        auto v = values_for();
+        if (!v) return fail(v.error());
+        auto f = field_options(*v);
+        if (!f) return fail(f.error());
+        auto s = solid_view(*device, *geometry, view);
+        if (!s) return fail(s.error().message);
+        s->title = f->title;
+        s->colorbar = Colorbar{f->map, *f->scale, f->title};
+        field_scene = std::move(*s);
+        colored_arrows = true;
     } else if (!o.streamlines.empty() && m.dimension() == 3 && o.view == "field" && o.field == o.streamlines) {
         // 3D streamlines over their own magnitude: the lines, colored by it, in the device's outline.
         auto v = values_for();
@@ -461,6 +557,54 @@ int plot(int argc, char** argv) {
         auto f = field_options(*v);
         if (!f) return fail(f.error());
         auto s = iso_view(*device, *geometry, *v, o.levels, *f);
+        if (!s) return fail(s.error().message);
+        field_scene = std::move(*s);
+    } else if (o.view == "filmstrip") {
+        if (!l.transient) return fail("a filmstrip needs a transient run's results");
+        if (m.dimension() == 1) return fail("a filmstrip needs a 2D or 3D device");
+        if (points.empty()) return fail("the transient run stored no snapshots");
+        // At most 12 frames: every k-th snapshot from the first.
+        const std::size_t every = o.every > 0 ? o.every : (points.size() + 11) / 12;
+        std::vector<FilmFrame> frames;
+        for (std::size_t k = 0; k < points.size() && frames.size() < 12; k += every) {
+            if (points[k].fields.potential_V.size() != m.node_count()) {
+                return fail("the result's snapshots do not belong to the device's mesh");
+            }
+            auto v = field_values(*device, *geometry, points[k], *field);
+            if (!v) return fail(v.error().message);
+            frames.push_back({time_label(l.transient->snapshots[k].time_s), std::move(*v)});
+        }
+        // A vector magnitude on a log scale: the ten decades below the largest of all frames.
+        if (is_vector_magnitude(*field) && *scale_kind == ScaleKind::log10 && !o.range) {
+            double top = 0.0;
+            for (const FilmFrame& f : frames) for (const double x : f.values) if (std::isfinite(x)) top = std::max(top, x);
+            if (top > 0.0) {
+                const double floor = std::pow(10.0, std::ceil(std::log10(top)) - 10.0);
+                for (FilmFrame& f : frames) for (double& x : f.values) if (std::isfinite(x) && x < floor) x = floor;
+            }
+        }
+        std::vector<double> all;
+        for (const FilmFrame& f : frames) all.insert(all.end(), f.values.begin(), f.values.end());
+        auto f = field_options(all);  // CQ2: one scale over every frame
+        if (!f) return fail(f.error());
+        auto s = filmstrip_scenes(*device, *geometry, frames, *scale_kind, *f);
+        if (!s) return fail(s.error().message);
+        film = std::move(*s);
+    } else if (o.view == "exploded") {
+        if (m.dimension() != 3) return fail("the exploded view needs a 3D device");
+        const double gap = o.gap ? *o.gap * 1e-4 : default_gap(*device, o.axis);
+        std::expected<FieldScene, base::Error> s;
+        if (field_given) {
+            auto v = values_for();
+            if (!v) return fail(v.error());
+            auto f = field_options(*v);
+            if (!f) return fail(f.error());
+            s = exploded_view(*device, *geometry, o.axis, gap, *v, *f);
+        } else {
+            FieldOptions f;
+            f.view = view;
+            s = exploded_view(*device, *geometry, o.axis, gap, {}, f);
+        }
         if (!s) return fail(s.error().message);
         field_scene = std::move(*s);
     } else if (o.view == "profile" || o.view == "bands") {
@@ -625,11 +769,81 @@ int plot(int argc, char** argv) {
         }
     }
 
+    // Arrows (Unit 25c, DC1) over the view: 2D on a grid, 3D on the slices shown or the boundary.
+    if (!o.vectors.empty()) {
+        if (!field_scene || m.dimension() < 2) {
+            return fail("arrows need a 2D or 3D device and a field, slice, iso or solid view");
+        }
+        const VectorField vf = o.vectors == "E"    ? VectorField::electric
+                               : o.vectors == "J"  ? VectorField::current
+                               : o.vectors == "Jn" ? VectorField::electron_current
+                                                   : VectorField::hole_current;
+        auto p = pick();
+        if (!p) return fail(p.error());
+        auto ev = element_vectors(*device, *geometry, **p, vf);
+        if (!ev) return fail(ev.error().message);
+        const std::vector<Point> nodal = streamline_field(*device, *geometry, *ev, vf);
+        const Locator locator(*geometry);
+        const std::size_t count = o.arrows > 0 ? o.arrows : (m.dimension() == 2 ? 300 : 400);
+        // Currents: no arrows in the insulators, which carry none.
+        std::vector<std::uint8_t> insulator;
+        if (vf != VectorField::electric) {
+            for (std::size_t i = 0; i < m.node_count(); ++i) insulator.push_back(device->is_insulator(static_cast<mesh::NodeId>(i)) ? 1 : 0);
+        }
+        double spacing = 0.0;
+        std::vector<Arrow> arrows;
+        if (m.dimension() == 2) {
+            arrows = grid_arrows(locator, nodal, count, spacing, insulator);
+        } else {
+            std::vector<Polygon> surface;
+            if (o.view == "slice") {
+                for (const Plane& plane : o.slices) {
+                    for (Polygon& q : geometry->slice(plane)) surface.push_back(std::move(q));
+                }
+            } else {
+                surface = exposed_boundary(*device, *geometry);  // the contacts' slabs cover theirs
+            }
+            arrows = surface_arrows(locator, nodal, surface, count, spacing, insulator);
+        }
+        if (colored_arrows && field_scene->colorbar) {
+            add_arrows(*field_scene, arrows, 0.8 * spacing, *field_scene->colorbar);
+        } else {
+            add_arrows(*field_scene, arrows, 0.8 * spacing, Rgba{0.05f, 0.05f, 0.05f, 1.0f});
+        }
+    }
+
     // Draw and write.
     const Adapter adapter = o.adapter == "gpu" ? Adapter::hardware : o.adapter == "warp" ? Adapter::warp : Adapter::automatic;
     if (o.adapter != "gpu" && o.adapter != "warp" && o.adapter != "auto") return usage("unknown adapter " + o.adapter);
     auto renderer = Renderer::create({.adapter = adapter});
     if (!renderer) return fail(renderer.error().message);
+    if (!film.empty()) {
+        // A filmstrip: each frame drawn at the frame size (--size, else 640x480), tiled in rows of
+        // --columns (4); under --frames each is also written alone.
+        const int columns = static_cast<int>(o.columns > 0 ? std::min(o.columns, film.size()) : std::min<std::size_t>(4, film.size()));
+        const int tw = o.size_given ? o.width : 640, th = o.size_given ? o.height : 480;
+        if (!o.frames.empty()) {
+            std::error_code ec;
+            fs::create_directories(o.frames, ec);
+        }
+        std::vector<Image> tiles;
+        for (std::size_t k = 0; k < film.size(); ++k) {
+            auto t = renderer->draw(film[k], tw, th);
+            if (!t) return fail(t.error().message);
+            if (!o.frames.empty()) {
+                char name[32];
+                std::snprintf(name, sizeof name, "frame_%03zu.png", k);
+                if (auto saved = save_png(*t, o.frames / name); !saved) return fail(saved.error().message);
+            }
+            tiles.push_back(std::move(*t));
+        }
+        auto strip = tile_images(tiles, columns);
+        if (!strip) return fail(strip.error().message);
+        if (auto saved = save_png(*strip, o.out); !saved) return fail(saved.error().message);
+        std::printf("wrote %s (%dx%d, %zu frames, %s)\n", o.out.string().c_str(), strip->width, strip->height,
+                    film.size(), renderer->adapter_name().c_str());
+        return 0;
+    }
     auto image = field_scene ? renderer->draw(*field_scene, o.width, o.height) : renderer->draw(*plot_scene, o.width, o.height);
     if (!image) return fail(image.error().message);
     if (auto saved = save_png(*image, o.out); !saved) return fail(saved.error().message);

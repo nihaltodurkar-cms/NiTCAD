@@ -182,6 +182,10 @@ struct ViewOptions {
     Projection projection = Projection::orthographic;
     float azimuth_deg = 35.0f;
     float elevation_deg = 25.0f;
+    // 3D solid and field views (Unit 25c, DC2, CQ4): the box removed, its cut faces drawn like the
+    // boundary (Geometry::clipped_surface); interfaces cut alike; a contact slab's face whose centroid
+    // lies in the box is left out. Ignored in 2D.
+    std::optional<Box> clip;
 };
 
 // The regions (VR2, VR8): 2D a map of the control-volume pieces; 3D the boundary surface and the
@@ -236,11 +240,45 @@ struct FieldOptions {
 // in 2D and depth-tested in 3D. Points are in cm (streamlines.hpp); the scene's bounds are kept.
 void add_streamlines(FieldScene& scene, std::span<const Streamline> lines, const Rgba& color);
 void add_streamlines(FieldScene& scene, std::span<const Streamline> lines, const Colorbar& colors);
+// Arrows (Unit 25c, DC1, CQ1) added to a scene, each of one length (cm) and centred on its site: in 2D
+// a flat shaft and head in the plane, just in front of the map (unlit); in 3D a six-sided shaft and a
+// cone, lifted off their surface by a quarter of the length along its normal (lit). In one color, or
+// colored by |v| through the colorbar's map and scale (the scene's colorbar should be that one).
+void add_arrows(FieldScene& scene, std::span<const Arrow> arrows, double length, const Rgba& color);
+// The 3D boundary faces not wholly on a contact: those the contact slabs leave in view (arrow sites).
+[[nodiscard]] std::vector<Polygon> exposed_boundary(const device::Device& device, const Geometry& geometry);
+void add_arrows(FieldScene& scene, std::span<const Arrow> arrows, double length, const Colorbar& colors);
 // The context for 3D streamlines: the device's faint translucent outline and the contacts. Errors as
 // solid_view, and (invalid_input) a 2D geometry.
 [[nodiscard]] std::expected<FieldScene, base::Error> outline_view(const device::Device& device,
                                                                  const Geometry& geometry,
                                                                  const ViewOptions& options = {});
+
+// The exploded view (Unit 25c, DC3, CQ3), 3D: each region's closed surface (Geometry::region_surfaces)
+// and its contacts' slabs moved along `axis` (0 x, 1 y, 2 z) by `gap` cm times the region's rank in
+// the regions' order of their mean node coordinate along it (the first stays). With values (one per
+// node) the semiconductor is drawn with the field, else by region class (VR8); insulators
+// translucent as in the solid view. Errors (invalid_input): as solid_view, a 2D geometry, an axis
+// outside 0..2, a gap negative or not finite, values not one per node.
+[[nodiscard]] std::expected<FieldScene, base::Error> exploded_view(const device::Device& device,
+                                                                  const Geometry& geometry, int axis,
+                                                                  double gap,
+                                                                  std::span<const double> values = {},
+                                                                  const FieldOptions& options = {});
+// A transient filmstrip's frames (Unit 25c, DC4, CQ2): one field view per frame (2D map or 3D
+// surface, as field_view), all on one scale (options.scale, else fitted over every frame's values),
+// each titled "<options.title>, <label>". Errors as field_view, and (invalid_input) no frame.
+struct FilmFrame {
+    std::string label;           // e.g. time_label(t)
+    std::vector<double> values;  // one per node
+};
+[[nodiscard]] std::expected<std::vector<FieldScene>, base::Error> filmstrip_scenes(
+    const device::Device& device, const Geometry& geometry, std::span<const FilmFrame> frames,
+    ScaleKind kind, const FieldOptions& options = {});
+// "t = 1.25 ns": three significant digits in s, ms, us (µs), ns, ps or fs; "t = 0 s" at zero.
+[[nodiscard]] std::string time_label(double seconds);
+// CQ3's default gap: 12% of the device's extent along the axis.
+[[nodiscard]] double default_gap(const device::Device& device, int axis) noexcept;
 
 // --- plots ---------------------------------------------------------------------------------------
 

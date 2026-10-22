@@ -745,3 +745,224 @@ sweep = )" + tag + ".nitsweep\ndevice = " + tag + ".nitdev\n";
     CHECK(one.status == 1);
     CHECK(one.output.find("streamlines need a 2D or 3D device") != std::string::npos);
 }
+
+TEST_CASE("nitcad plot: arrows (Unit 25c, CG6)", "[deck]") {
+    const fs::path dir = scratch("cli_plot_arrows");
+    const auto write = [&](const char* name, const std::string& text) {
+        std::ofstream(dir / name, std::ios::binary) << text;
+        return "\"" + (dir / name).string() + "\"";
+    };
+    const auto out = [&](const char* name) { return "\"" + (dir / name).string() + "\""; };
+    const auto pn = [](const char* mesh, const char* tag, const char* doping) {
+        return std::string("[mesh]\ntype = tensor\n") + mesh + "[region silicon]\nmaterial = silicon\n[doping]\n" +
+               doping + R"([contact anode]
+kind = ohmic
+patch = x_min
+[contact cathode]
+kind = ohmic
+patch = x_max
+[sweep]
+contact anode = 0, 0.4
+[output]
+sweep = )" + tag + ".nitsweep\ndevice = " + tag + ".nitdev\n";
+    };
+    const char* lateral = "profile = acceptor constant 1e17 axis=y x=-1:1um\nprofile = donor constant 1e17 axis=y x=1um:3um\n";
+    const std::string d2 = write("pn2.deck", pn("x = linspace(0, 2um, 21)\ny = linspace(0, 1um, 6)\n", "pn2", lateral));
+    REQUIRE(cli("run " + d2).status == 0);
+    const std::string d3 = write("pn3.deck", pn("x = linspace(0, 2um, 11)\ny = linspace(0, 1um, 5)\nz = linspace(0, 0.5um, 3)\n", "pn3", lateral));
+    REQUIRE(cli("run " + d3).status == 0);
+    for (const auto& [deck, args, name] :
+         {std::tuple{d2, std::string("--vectors J"), "j2.png"},
+          std::tuple{d2, std::string("--field n --vectors E --arrows 50"), "e2.png"},
+          std::tuple{d3, std::string("--vectors J"), "j3.png"},
+          std::tuple{d3, std::string("--field potential --vectors E --slice z=0.25"), "e3.png"},
+          std::tuple{d3, std::string("--vectors Jn --streamlines Jn"), "jn3.png"}}) {
+        const Cli c = cli("plot " + deck + " " + args + " --adapter warp --size 400x300 --out " + out(name));
+        CAPTURE(args, c.output);
+        CHECK(c.status == 0);
+        CHECK(render::load_png(dir / name).has_value());
+    }
+    CHECK(cli("plot " + d2 + " --vectors B --out " + out("x.png")).status == 64);
+    CHECK(cli("plot " + d2 + " --vectors J --arrows 0 --out " + out("x.png")).status == 64);
+    const std::string d1 = write("pn1.deck", pn("x = linspace(0, 1um, 11)\n", "pn1", "profile = donor constant 1e16\n"));
+    REQUIRE(cli("run " + d1).status == 0);
+    const Cli one = cli("plot " + d1 + " --vectors J --out " + out("x.png"));
+    CHECK(one.status == 1);
+    CHECK(one.output.find("arrows need a 2D or 3D device") != std::string::npos);
+}
+
+TEST_CASE("nitcad plot: the clipping box (Unit 25c, CG6)", "[deck]") {
+    const fs::path dir = scratch("cli_plot_clip");
+    const auto write = [&](const char* name, const std::string& text) {
+        std::ofstream(dir / name, std::ios::binary) << text;
+        return "\"" + (dir / name).string() + "\"";
+    };
+    const auto out = [&](const char* name) { return "\"" + (dir / name).string() + "\""; };
+    const auto deck = [](const char* mesh, const char* tag) {
+        return std::string("[mesh]\ntype = tensor\n") + mesh + R"([region silicon]
+material = silicon
+[doping]
+profile = acceptor constant 1e17 axis=y x=-1:1um
+profile = donor constant 1e17 axis=y x=1um:3um
+[contact anode]
+kind = ohmic
+patch = x_min
+[contact cathode]
+kind = ohmic
+patch = x_max
+[sweep]
+contact anode = 0, 0.4
+[output]
+sweep = )" + tag + ".nitsweep\ndevice = " + tag + ".nitdev\n";
+    };
+    const std::string d3 = write("pn3.deck", deck("x = linspace(0, 2um, 11)\ny = linspace(0, 1um, 5)\nz = linspace(0, 0.5um, 3)\n", "pn3"));
+    REQUIRE(cli("run " + d3).status == 0);
+    for (const auto& [args, name] : {std::pair{std::string("--field n --clip 1,0.5,0.25:3,2,1"), "n.png"},
+                                     std::pair{std::string("--clip 0.5,0.2,0.1:1.5,0.8,0.4"), "solid.png"},
+                                     std::pair{std::string("--vectors J --clip 1,0.5,0.25:3,2,1"), "j.png"}}) {
+        const Cli c = cli("plot " + d3 + " " + args + " --adapter warp --size 400x300 --out " + out(name));
+        CAPTURE(args, c.output);
+        CHECK(c.status == 0);
+        CHECK(render::load_png(dir / name).has_value());
+    }
+    // The box changes the picture: the same view without it differs.
+    REQUIRE(cli("plot " + d3 + " --field n --adapter warp --size 400x300 --out " + out("n_whole.png")).status == 0);
+    CHECK(render::load_png(dir / "n.png")->rgba != render::load_png(dir / "n_whole.png")->rgba);
+    // Refused: malformed or inverted boxes (usage), a slice view, a 2D device.
+    CHECK(cli("plot " + d3 + " --clip 1,0.5:3,2 --out " + out("x.png")).status == 64);
+    CHECK(cli("plot " + d3 + " --clip 3,0.5,0.2:1,2,1 --out " + out("x.png")).status == 64);
+    const Cli slice = cli("plot " + d3 + " --field n --slice z=0.2 --clip 1,0.5,0.25:3,2,1 --out " + out("x.png"));
+    CHECK(slice.status == 1);
+    CHECK(slice.output.find("applies to the solid and field views") != std::string::npos);
+    const std::string d2 = write("pn2.deck", deck("x = linspace(0, 2um, 11)\ny = linspace(0, 1um, 5)\n", "pn2"));
+    REQUIRE(cli("run " + d2).status == 0);
+    const Cli flat = cli("plot " + d2 + " --clip 1,0.5,0:3,2,1 --out " + out("x.png"));
+    CHECK(flat.status == 1);
+    CHECK(flat.output.find("needs a 3D device") != std::string::npos);
+}
+
+TEST_CASE("nitcad plot: the exploded view (Unit 25c, CG6)", "[deck]") {
+    const fs::path dir = scratch("cli_plot_exploded");
+    const auto write = [&](const char* name, const std::string& text) {
+        std::ofstream(dir / name, std::ios::binary) << text;
+        return "\"" + (dir / name).string() + "\"";
+    };
+    const auto out = [&](const char* name) { return "\"" + (dir / name).string() + "\""; };
+    // Silicon under an oxide layer, a metal electrode on the oxide.
+    const auto deck = [](const char* mesh, const char* oxide_box, const char* gate_box, const char* tag) {
+        return std::string("[mesh]\ntype = tensor\n") + mesh + "[region silicon]\nmaterial = silicon\n[region oxide]\n"
+               "material = sio2\nbox = " + oxide_box + R"(
+[doping]
+profile = acceptor constant 1e17
+[contact body]
+kind = ohmic
+patch = y_min
+[contact gate]
+kind = electrode
+patch = y_max
+box = )" + gate_box + R"(
+electrode = metal
+work_function = 4.6
+[sweep]
+contact gate = 0, 0.5
+[output]
+sweep = )" + tag + ".nitsweep\ndevice = " + tag + ".nitdev\n";
+    };
+    const std::string d3 = write("m3.deck", deck("x = linspace(0, 1um, 6)\ny = linspace(0, 1um, 6)\nz = linspace(0, 0.4um, 3)\n",
+                                                 "0 1um  0.75um 1um  0 0.4um", "0.2um 0.8um  1um 1um  0 0.4um", "m3"));
+    const Cli run = cli("run " + d3);
+    CAPTURE(run.output);
+    REQUIRE(run.status == 0);
+    for (const auto& [args, name] : {std::pair{std::string("--view exploded"), "e.png"},
+                                     std::pair{std::string("--view exploded --gap 0"), "e0.png"},
+                                     std::pair{std::string("--view exploded --field n --axis x --gap 0.2"), "en.png"}}) {
+        const Cli c = cli("plot " + d3 + " " + args + " --adapter warp --size 400x300 --out " + out(name));
+        CAPTURE(args, c.output);
+        CHECK(c.status == 0);
+        CHECK(render::load_png(dir / name).has_value());
+    }
+    // The gap separates the layers: the default and zero gaps differ; a field replaces the region colors.
+    CHECK(render::load_png(dir / "e.png")->rgba != render::load_png(dir / "e0.png")->rgba);
+    REQUIRE(cli("plot " + d3 + " --view exploded --field n --adapter warp --size 400x300 --out " + out("ef.png")).status == 0);
+    CHECK(render::load_png(dir / "e.png")->rgba != render::load_png(dir / "ef.png")->rgba);
+    CHECK(cli("plot " + d3 + " --view exploded --axis w --out " + out("x.png")).status == 64);
+    CHECK(cli("plot " + d3 + " --view exploded --gap -1 --out " + out("x.png")).status == 64);
+    const std::string d2 = write("m2.deck", deck("x = linspace(0, 1um, 6)\ny = linspace(0, 1um, 6)\n",
+                                                 "0 1um  0.75um 1um", "0.2um 0.8um  1um 1um", "m2"));
+    REQUIRE(cli("run " + d2).status == 0);
+    const Cli flat = cli("plot " + d2 + " --view exploded --out " + out("x.png"));
+    CHECK(flat.status == 1);
+    CHECK(flat.output.find("needs a 3D device") != std::string::npos);
+}
+
+TEST_CASE("nitcad plot: transient filmstrips and transient currents (Unit 25c, CG4, CG6)", "[deck]") {
+    const fs::path dir = scratch("cli_plot_film");
+    const auto write = [&](const char* name, const std::string& text) {
+        std::ofstream(dir / name, std::ios::binary) << text;
+        return "\"" + (dir / name).string() + "\"";
+    };
+    const auto out = [&](const char* name) { return "\"" + (dir / name).string() + "\""; };
+    const std::string device = R"([mesh]
+type = tensor
+x = linspace(0, 2um, 21)
+y = linspace(0, 1um, 6)
+[region silicon]
+material = silicon
+[doping]
+profile = acceptor constant 1e17 axis=y x=-1:1um
+profile = donor constant 1e17 axis=y x=1um:3um
+[contact anode]
+kind = ohmic
+patch = x_min
+[contact cathode]
+kind = ohmic
+patch = x_max
+)";
+    const std::string tr = write("tr.deck", device + R"([transient]
+contact anode = ramp(0, 0.4, 0, 4e-10)
+t_end = 6e-10
+dt_initial = 1e-10
+adaptive = off
+fields_every_step = on
+[output]
+transient = tr.nittran
+device = tr.nitdev
+)");
+    REQUIRE(cli("run " + tr).status == 0);
+    const auto run = io::load_transient(dir / "tr.nittran");
+    REQUIRE(run.has_value());
+    const std::size_t snapshots = run->snapshots.size();
+    REQUIRE(snapshots >= 5);
+    // Every snapshot as a frame (at most 12), each also written alone; the strip is 4 frames wide.
+    const fs::path frames = dir / "frames";
+    const Cli film = cli("plot " + tr + " --view filmstrip --field n --size 200x150 --frames \"" + frames.string() +
+                         "\" --adapter warp --out " + out("film.png"));
+    CAPTURE(film.output);
+    REQUIRE(film.status == 0);
+    const std::size_t shown = std::min<std::size_t>(snapshots, 12);
+    CHECK(film.output.find(std::to_string(shown) + " frames") != std::string::npos);
+    const auto strip = render::load_png(dir / "film.png");
+    REQUIRE(strip.has_value());
+    CHECK(strip->width == 200 * static_cast<int>(std::min<std::size_t>(shown, 4)));
+    CHECK(strip->height == 150 * static_cast<int>((shown + 3) / 4));
+    std::size_t written = 0;
+    for (const auto& e : fs::directory_iterator(frames)) written += e.path().extension() == ".png";
+    CHECK(written == shown);
+    // Every 2nd, in 2 columns; |J| of the snapshots (their currents are read since Unit 25c).
+    const Cli j = cli("plot " + tr + " --view filmstrip --field J --every 2 --columns 2 --size 200x150 --adapter warp --out " +
+                      out("film_j.png"));
+    CAPTURE(j.output);
+    CHECK(j.status == 0);
+    CHECK(render::load_png(dir / "film_j.png")->width == 400);
+    const Cli lines = cli("plot " + out("tr.nittran") + " --device " + out("tr.nitdev") +
+                          " --streamlines J --adapter warp --size 400x300 --out " + out("lines.png"));
+    CAPTURE(lines.output);
+    CHECK(lines.status == 0);
+    // Refused: a sweep's results, a 1D device.
+    const std::string sw = write("sw.deck", device + "[sweep]\ncontact anode = 0, 0.2\n[output]\nsweep = sw.nitsweep\n");
+    REQUIRE(cli("run " + sw).status == 0);
+    const Cli not_transient = cli("plot " + sw + " --view filmstrip --field n --out " + out("x.png"));
+    CHECK(not_transient.status == 1);
+    CHECK(not_transient.output.find("needs a transient run's results") != std::string::npos);
+    CHECK(cli("plot " + tr + " --view filmstrip --field n --every 0 --out " + out("x.png")).status == 64);
+}
