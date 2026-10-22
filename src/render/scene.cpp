@@ -134,16 +134,60 @@ bool same_mesh(const device::Device& d, const Geometry& g) {
            d.mesh().dimension() == g.mesh().dimension();
 }
 
-std::expected<void, base::Error> check_view(const device::Device& d, const Geometry& g) {
+std::expected<void, base::Error> check_view(const device::Device& d, const Geometry& g, const ViewOptions& o) {
     if (!same_mesh(d, g)) return std::unexpected(invalid("the geometry's mesh is not the device's"));
     if (g.dimension() < 2 || g.element_count() == 0) {
         return std::unexpected(invalid("a 2D or 3D geometry with elements is needed for this view"));
+    }
+    for (const std::int32_t r : o.hidden_regions) {
+        if (r < 0 || static_cast<std::size_t>(r) >= d.regions().size()) {
+            return std::unexpected(invalid("a hidden region is not one of the device's", static_cast<std::size_t>(std::max(r, 0))));
+        }
     }
     return {};
 }
 
 std::vector<std::int32_t> regions_of(const device::Device& d) {
     return {d.node_region().begin(), d.node_region().end()};
+}
+
+// Region visibility (Unit 26c, YD4): which nodes are in a hidden region; empty when none is, so every
+// view draws exactly as before.
+struct Shown {
+    std::vector<std::uint8_t> hidden;  // per node
+    [[nodiscard]] bool any() const noexcept { return !hidden.empty(); }
+    [[nodiscard]] bool node(NodeId n) const noexcept { return hidden.empty() || hidden[static_cast<std::size_t>(n)] == 0; }
+};
+
+Shown shown_of(const device::Device& d, std::span<const std::int32_t> hidden_regions) {
+    Shown s;
+    if (hidden_regions.empty()) return s;
+    const auto region = d.node_region();
+    s.hidden.assign(region.size(), 0);
+    bool any = false;
+    for (std::size_t i = 0; i < region.size(); ++i) {
+        if (std::ranges::find(hidden_regions, static_cast<std::int32_t>(region[i])) != hidden_regions.end()) {
+            s.hidden[i] = 1;
+            any = true;
+        }
+    }
+    if (!any) s.hidden.clear();
+    return s;
+}
+
+// Segments between nodes, each drawn whole or, with a node hidden, as the shown node's half: an edge's
+// midpoint is where its two nodes' control volumes meet (tensor cells and simplices alike).
+void add_edges(LineBatch& lines, std::span<const Point> points, const std::vector<std::array<NodeId, 2>>& list,
+               const Shown& shown) {
+    for (const auto& [a, b] : list) {
+        const Point& pa = points[static_cast<std::size_t>(a)];
+        const Point& pb = points[static_cast<std::size_t>(b)];
+        const bool sa = shown.node(a), sb = shown.node(b);
+        if (!sa && !sb) continue;
+        const Point mid = scale(add(pa, pb), 0.5);
+        lines.points.push_back(um(sa ? pa : mid));
+        lines.points.push_back(um(sb ? pb : mid));
+    }
 }
 
 // The batch of each material, in the order of the Material enum.
@@ -232,7 +276,7 @@ double largest_extent_cm(const mesh::Mesh& m) {
 // under the electrode, an electrode as metal, an ohmic contact as a thin metal pad.
 void contact_slabs(const device::Device& d, const Geometry& g, const Palette& palette,
                    std::vector<TriangleBatch>& out, const std::optional<Box>& clip = std::nullopt,
-                   std::span<const Point> contact_offset = {}) {
+                   std::span<const Point> contact_offset = {}, const Shown& shown = Shown{}) {
     const double t = 0.03 * largest_extent_cm(d.mesh());
     const auto points = d.mesh().points();
     TriangleBatch metal{"electrode", Shading::flat, g.dimension() == 3, false, {}};
@@ -268,6 +312,8 @@ void contact_slabs(const device::Device& d, const Geometry& g, const Palette& pa
     };
     for (std::size_t ci = 0; ci < d.contacts().size(); ++ci) {
         const device::Contact& contact = d.contacts()[ci];
+        // A contact on hidden regions only is left out (YD4).
+        if (shown.any() && std::ranges::none_of(contact.nodes, [&](NodeId n) { return shown.node(n); })) continue;
         // The exploded view moves each contact with its region.
         const Point off = contact_offset.empty() ? Point{} : contact_offset[ci];
         std::vector<bool> in(d.mesh().node_count(), false);
@@ -328,26 +374,58 @@ void contact_slabs(const device::Device& d, const Geometry& g, const Palette& pa
     if (!metal.vertices.empty()) out.push_back(std::move(metal));
 }
 
-// The device's boundary, faint and translucent, for context in 3D.
-TriangleBatch outline_shell(const Geometry& g) {
+// The interface pieces between a shown and a hidden region (YD4), each with its shown node and turned
+// toward the hidden one: they close the shown regions where the hidden ones were.
+struct OpenedFace {
+    std::vector<Point> points;
+    NodeId owner = 0;
+    std::size_t element = 0;
+    Point normal{};
+};
+
+std::vector<OpenedFace> opened_faces(const device::Device& d, const Geometry& g, const Shown& shown) {
+    std::vector<OpenedFace> out;
+    if (!shown.any()) return out;
+    const auto points = d.mesh().points();
+    for (const InterfacePiece& p : g.interfaces(regions_of(d))) {
+        const bool sa = shown.node(p.node_a), sb = shown.node(p.node_b);
+        if (sa == sb) continue;
+        const NodeId own = sa ? p.node_a : p.node_b, other = sa ? p.node_b : p.node_a;
+        Point n = polygon_normal(p.points);
+        if (dot(n, sub(points[static_cast<std::size_t>(other)], points[static_cast<std::size_t>(own)])) < 0.0) n = scale(n, -1.0);
+        out.push_back({p.points, own, p.element, n});
+    }
+    return out;
+}
+
+// The device's boundary, faint and translucent, for context in 3D; with hidden regions, the shown
+// regions' surface.
+TriangleBatch outline_shell(const device::Device& d, const Geometry& g, const Shown& shown) {
     TriangleBatch shell{"outline", Shading::flat, true, true, {}};
+    const Rgba color{0.82f, 0.85f, 0.88f, 0.12f};
     for (const Polygon& f : g.boundary_faces()) {
         std::vector<Point> pts;
         for (const SurfaceVertex& v : f.vertices) pts.push_back(v.position);
-        fan(shell, pts, {}, {0.82f, 0.85f, 0.88f, 0.12f}, polygon_normal(pts));
+        if (!shown.any()) {
+            fan(shell, pts, {}, color, polygon_normal(pts));
+            continue;
+        }
+        const Point n = polygon_normal(pts);
+        for (const OwnedPolygon& piece : g.owner_pieces(f)) {
+            if (shown.node(piece.owner)) fan(shell, piece.points, {}, color, n);
+        }
     }
+    for (const OpenedFace& f : opened_faces(d, g, shown)) fan(shell, f.points, {}, color, f.normal);
     return shell;
 }
 
-// 2D outlines: the boundary and the interfaces between regions.
-void outlines_2d(const device::Device& d, const Geometry& g, std::vector<LineBatch>& out) {
+// 2D outlines: the boundary and the interfaces between regions; with hidden regions, the shown nodes'
+// halves of the boundary and the interfaces beside a shown region.
+void outlines_2d(const device::Device& d, const Geometry& g, std::vector<LineBatch>& out, const Shown& shown) {
     LineBatch lines{"outline", {0.12f, 0.14f, 0.16f, 1.0f}, 1.5f, true, {}};
-    const auto points = d.mesh().points();
-    for (const auto& [a, b] : boundary_edges_2d(g)) {
-        lines.points.push_back(um(points[static_cast<std::size_t>(a)]));
-        lines.points.push_back(um(points[static_cast<std::size_t>(b)]));
-    }
+    add_edges(lines, d.mesh().points(), boundary_edges_2d(g), shown);
     for (const InterfacePiece& p : g.interfaces(regions_of(d))) {
+        if (!shown.node(p.node_a) && !shown.node(p.node_b)) continue;
         lines.points.push_back(um(p.points[0]));
         lines.points.push_back(um(p.points[1]));
     }
@@ -359,6 +437,17 @@ void outlines_2d(const device::Device& d, const Geometry& g, std::vector<LineBat
 float position_at(const Geometry& g, std::size_t element, const Point& x, std::span<const double> values,
                   const ColorScale& scale_) {
     return static_cast<float>(scale_.position(interpolate(g.interpolant(element, x), values)));
+}
+
+// A polygon's pieces in the shown nodes' control volumes (YD4), carrying the field's positions.
+void shown_pieces(TriangleBatch& batch, const Geometry& g, const Polygon& p, std::span<const double> values,
+                  const ColorScale& scale_, const Shown& shown, const Point& normal) {
+    for (const OwnedPolygon& piece : g.owner_pieces(p)) {
+        if (!shown.node(piece.owner)) continue;
+        std::vector<float> vals;
+        for (const Point& x : piece.points) vals.push_back(position_at(g, p.element, x, values, scale_));
+        fan(batch, piece.points, vals, {}, normal);
+    }
 }
 
 // Contour lines at the colorbar's major ticks, or at the given colormap positions.
@@ -393,7 +482,7 @@ void contours(const TriangleBatch& field, const Colorbar& bar, std::vector<LineB
 // interface with an insulator (seen through it). With `field`, semiconductor pieces carry the
 // field's positions instead of their material color.
 void solid_3d(const device::Device& d, const Geometry& g, const ViewOptions& o, FieldScene& s,
-              std::span<const double> values, const ColorScale* field_scale) {
+              std::span<const double> values, const ColorScale* field_scale, const Shown& shown) {
     Batches batches(o.palette, true, o.transparent_insulators);
     TriangleBatch field_batch{"field", Shading::field, true, false, {}};
     const auto is_insulator = [&](NodeId n) { return d.is_insulator(n); };
@@ -403,6 +492,7 @@ void solid_3d(const device::Device& d, const Geometry& g, const ViewOptions& o, 
         for (const SurfaceVertex& v : face.vertices) pts.push_back(v.position);
         const Point n = polygon_normal(pts);
         for (const OwnedPolygon& piece : g.owner_pieces(face)) {
+            if (!shown.node(piece.owner)) continue;
             const Material m = material_class(d, piece.owner, o.palette);
             if (field_scale && (!is_insulator(piece.owner) || !o.transparent_insulators)) {
                 std::vector<float> vals;
@@ -413,10 +503,26 @@ void solid_3d(const device::Device& d, const Geometry& g, const ViewOptions& o, 
             }
         }
     }
+    // The faces a hidden region shared with a shown one, drawn as the shown side's boundary (YD4).
+    for (const OpenedFace& f : opened_faces(d, g, shown)) {
+        std::vector<std::vector<Point>> parts;
+        if (o.clip) parts = outside_box(f.points, *o.clip);
+        else parts.push_back(f.points);
+        for (const std::vector<Point>& part : parts) {
+            if (field_scale && (!is_insulator(f.owner) || !o.transparent_insulators)) {
+                std::vector<float> vals;
+                for (const Point& x : part) vals.push_back(position_at(g, f.element, x, values, *field_scale));
+                fan(field_batch, part, vals, {}, f.normal);
+            } else {
+                const Material m = material_class(d, f.owner, o.palette);
+                fan(batches[m], part, {}, material_color(m, o.palette), f.normal);
+            }
+        }
+    }
     if (o.transparent_insulators) {
         for (const InterfacePiece& p : g.interfaces(regions_of(d))) {
             const bool ia = is_insulator(p.node_a), ib = is_insulator(p.node_b);
-            if (ia == ib) continue;
+            if (ia == ib || !shown.node(p.node_a) || !shown.node(p.node_b)) continue;
             const NodeId semi = ia ? p.node_b : p.node_a;
             const NodeId ins = ia ? p.node_a : p.node_b;
             const Point toward = sub(d.mesh().points()[static_cast<std::size_t>(ins)],
@@ -608,9 +714,21 @@ std::string_view material_name(Material m) noexcept {
 
 // --- views ---------------------------------------------------------------------------------------
 
+std::vector<double> shown_values(const device::Device& d, std::span<const double> values,
+                                 std::span<const std::int32_t> hidden_regions) {
+    std::vector<double> out(values.begin(), values.end());
+    const Shown shown = shown_of(d, hidden_regions);
+    if (!shown.any() || out.size() != shown.hidden.size()) return out;
+    for (std::size_t i = 0; i < out.size(); ++i) {
+        if (shown.hidden[i] != 0) out[i] = std::numeric_limits<double>::quiet_NaN();
+    }
+    return out;
+}
+
 std::expected<FieldScene, base::Error> solid_view(const device::Device& d, const Geometry& g,
                                                   const ViewOptions& o) {
-    if (auto c = check_view(d, g); !c) return std::unexpected(std::move(c.error()));
+    if (auto c = check_view(d, g, o); !c) return std::unexpected(std::move(c.error()));
+    const Shown shown = shown_of(d, o.hidden_regions);
     FieldScene s;
     s.dimension = g.dimension();
     s.title = "Regions";
@@ -618,6 +736,7 @@ std::expected<FieldScene, base::Error> solid_view(const device::Device& d, const
         Batches batches(o.palette, false, false);
         for (std::size_t e = 0; e < g.element_count(); ++e) {
             for (const OwnedPolygon& piece : g.owner_pieces(g.element_polygon(e))) {
+                if (!shown.node(piece.owner)) continue;
                 const Material m = material_class(d, piece.owner, o.palette);
                 Rgba c = material_color(m, o.palette);
                 c.a = 1.0f;  // 2D maps are opaque
@@ -625,11 +744,11 @@ std::expected<FieldScene, base::Error> solid_view(const device::Device& d, const
             }
         }
         batches.move_into(s.triangles);
-        if (o.region_outlines) outlines_2d(d, g, s.lines);
+        if (o.region_outlines) outlines_2d(d, g, s.lines, shown);
     } else {
-        solid_3d(d, g, o, s, {}, nullptr);
+        solid_3d(d, g, o, s, {}, nullptr, shown);
     }
-    if (o.contacts) contact_slabs(d, g, o.palette, s.triangles, o.clip);
+    if (o.contacts) contact_slabs(d, g, o.palette, s.triangles, o.clip, {}, shown);
     frame(s, o);
     return s;
 }
@@ -639,21 +758,22 @@ std::expected<FieldScene, base::Error> mesh_view(const device::Device& d, const 
     auto s = solid_view(d, g, o);
     if (!s) return s;
     s->title = "Mesh";
-    const auto points = d.mesh().points();
     LineBatch edges{"mesh", {0.15f, 0.17f, 0.2f, 0.75f}, 1.0f, g.dimension() == 2, {}};
-    for (const auto& [a, b] : g.dimension() == 2 ? element_edges(g) : boundary_face_edges(g)) {
-        edges.points.push_back(um(points[static_cast<std::size_t>(a)]));
-        edges.points.push_back(um(points[static_cast<std::size_t>(b)]));
-    }
+    add_edges(edges, d.mesh().points(), g.dimension() == 2 ? element_edges(g) : boundary_face_edges(g),
+              shown_of(d, o.hidden_regions));
     s->lines.push_back(std::move(edges));
     return s;
 }
 
 namespace {
 
-std::expected<Colorbar, base::Error> colorbar_for(std::span<const double> values, const FieldOptions& o) {
+std::expected<Colorbar, base::Error> colorbar_for(const device::Device& d, std::span<const double> values,
+                                                  const FieldOptions& o) {
     if (o.scale) return Colorbar{o.map, *o.scale, o.title};
-    auto fitted = ColorScale::fit(ScaleKind::linear, values);
+    // With hidden regions, over the shown nodes (YD4).
+    const std::vector<double> shown =
+        o.view.hidden_regions.empty() ? std::vector<double>{} : shown_values(d, values, o.view.hidden_regions);
+    auto fitted = ColorScale::fit(ScaleKind::linear, shown.empty() ? values : std::span<const double>(shown));
     if (!fitted) return std::unexpected(std::move(fitted.error()));
     return Colorbar{o.map, *fitted, o.title};
 }
@@ -663,12 +783,13 @@ std::expected<Colorbar, base::Error> colorbar_for(std::span<const double> values
 std::expected<FieldScene, base::Error> field_view(const device::Device& d, const Geometry& g,
                                                   std::span<const double> values,
                                                   const FieldOptions& o) {
-    if (auto c = check_view(d, g); !c) return std::unexpected(std::move(c.error()));
+    if (auto c = check_view(d, g, o.view); !c) return std::unexpected(std::move(c.error()));
     if (values.size() != d.mesh().node_count()) {
         return std::unexpected(invalid("the field is not one value per mesh node", values.size()));
     }
-    auto bar = colorbar_for(values, o);
+    auto bar = colorbar_for(d, values, o);
     if (!bar) return std::unexpected(std::move(bar.error()));
+    const Shown shown = shown_of(d, o.view.hidden_regions);
     FieldScene s;
     s.dimension = g.dimension();
     s.title = o.title;
@@ -676,6 +797,10 @@ std::expected<FieldScene, base::Error> field_view(const device::Device& d, const
         TriangleBatch field{"field", Shading::field, false, false, {}};
         for (std::size_t e = 0; e < g.element_count(); ++e) {
             const Polygon p = g.element_polygon(e);
+            if (shown.any()) {
+                shown_pieces(field, g, p, values, bar->scale, shown, {0.0, 0.0, 1.0});
+                continue;
+            }
             std::vector<Point> pts;
             std::vector<float> vals;
             for (const SurfaceVertex& v : p.vertices) {
@@ -686,23 +811,19 @@ std::expected<FieldScene, base::Error> field_view(const device::Device& d, const
         }
         if (o.contours) contours(field, *bar, s.lines);
         s.triangles.push_back(std::move(field));
-        if (o.view.region_outlines) outlines_2d(d, g, s.lines);
+        if (o.view.region_outlines) outlines_2d(d, g, s.lines, shown);
     } else {
-        solid_3d(d, g, o.view, s, values, &bar->scale);
+        solid_3d(d, g, o.view, s, values, &bar->scale, shown);
         if (o.contours) {
             for (const TriangleBatch& t : s.triangles) {
                 if (t.shading == Shading::field) contours(t, *bar, s.lines);
             }
         }
     }
-    if (o.view.contacts) contact_slabs(d, g, o.view.palette, s.triangles, o.view.clip);
+    if (o.view.contacts) contact_slabs(d, g, o.view.palette, s.triangles, o.view.clip, {}, shown);
     if (o.view.mesh_edges && g.dimension() == 2) {
         LineBatch edges{"mesh", {0.15f, 0.17f, 0.2f, 0.5f}, 1.0f, true, {}};
-        const auto points = d.mesh().points();
-        for (const auto& [a, b] : element_edges(g)) {
-            edges.points.push_back(um(points[static_cast<std::size_t>(a)]));
-            edges.points.push_back(um(points[static_cast<std::size_t>(b)]));
-        }
+        add_edges(edges, d.mesh().points(), element_edges(g), shown);
         s.lines.push_back(std::move(edges));
     }
     s.colorbar = std::move(*bar);
@@ -714,13 +835,14 @@ std::expected<FieldScene, base::Error> slice_view(const device::Device& d, const
                                                   std::span<const double> values,
                                                   std::span<const Plane> planes,
                                                   const FieldOptions& o) {
-    if (auto c = check_view(d, g); !c) return std::unexpected(std::move(c.error()));
+    if (auto c = check_view(d, g, o.view); !c) return std::unexpected(std::move(c.error()));
     if (g.dimension() != 3) return std::unexpected(invalid("slices need a 3D geometry"));
     if (values.size() != d.mesh().node_count()) {
         return std::unexpected(invalid("the field is not one value per mesh node", values.size()));
     }
-    auto bar = colorbar_for(values, o);
+    auto bar = colorbar_for(d, values, o);
     if (!bar) return std::unexpected(std::move(bar.error()));
+    const Shown shown = shown_of(d, o.view.hidden_regions);
     FieldScene s;
     s.dimension = 3;
     s.title = o.title;
@@ -729,6 +851,10 @@ std::expected<FieldScene, base::Error> slice_view(const device::Device& d, const
         const std::vector<Polygon> polys = g.slice(planes[k]);
         if (polys.empty()) return std::unexpected(invalid("a slice plane misses the device", k));
         for (const Polygon& p : polys) {
+            if (shown.any()) {
+                shown_pieces(field, g, p, values, bar->scale, shown, planes[k].normal);
+                continue;
+            }
             std::vector<Point> pts;
             std::vector<float> vals;
             for (const SurfaceVertex& v : p.vertices) {
@@ -740,8 +866,8 @@ std::expected<FieldScene, base::Error> slice_view(const device::Device& d, const
     }
     if (o.contours) contours(field, *bar, s.lines);
     s.triangles.push_back(std::move(field));
-    s.triangles.push_back(outline_shell(g));
-    if (o.view.contacts) contact_slabs(d, g, o.view.palette, s.triangles, o.view.clip);
+    s.triangles.push_back(outline_shell(d, g, shown));
+    if (o.view.contacts) contact_slabs(d, g, o.view.palette, s.triangles, o.view.clip, {}, shown);
     s.colorbar = std::move(*bar);
     frame(s, o.view);
     return s;
@@ -750,12 +876,12 @@ std::expected<FieldScene, base::Error> slice_view(const device::Device& d, const
 std::expected<FieldScene, base::Error> iso_view(const device::Device& d, const Geometry& g,
                                                 std::span<const double> values,
                                                 std::span<const double> levels, const FieldOptions& o) {
-    if (auto c = check_view(d, g); !c) return std::unexpected(std::move(c.error()));
+    if (auto c = check_view(d, g, o.view); !c) return std::unexpected(std::move(c.error()));
     if (values.size() != d.mesh().node_count()) {
         return std::unexpected(invalid("the field is not one value per mesh node", values.size()));
     }
     if (levels.empty()) return std::unexpected(invalid("an isosurface needs a level"));
-    auto bar = colorbar_for(values, o);
+    auto bar = colorbar_for(d, values, o);
     if (!bar) return std::unexpected(std::move(bar.error()));
     for (std::size_t k = 0; k < levels.size(); ++k) {
         if (!std::isfinite(bar->scale.transform(levels[k]))) {
@@ -774,6 +900,7 @@ std::expected<FieldScene, base::Error> iso_view(const device::Device& d, const G
         }
         return s;
     }
+    const Shown shown = shown_of(d, o.view.hidden_regions);
     FieldScene s;
     s.dimension = 3;
     s.title = o.title;
@@ -793,15 +920,40 @@ std::expected<FieldScene, base::Error> iso_view(const device::Device& d, const G
         TriangleBatch batch{"isosurface", Shading::field, true, !one, {}};
         const float position = static_cast<float>(bar->scale.position(level));
         const Rgba tint{0.0f, 0.0f, 0.0f, one ? 1.0f : 0.55f};
-        for (const auto& t : iso.triangles) {
-            for (const std::uint32_t v : t) {
-                batch.vertices.push_back({um(iso.vertices[v].position), to_f(unit(normal[v])), position, tint});
+        for (std::size_t k = 0; k < iso.triangles.size(); ++k) {
+            const auto& t = iso.triangles[k];
+            if (!shown.any()) {
+                for (const std::uint32_t v : t) {
+                    batch.vertices.push_back({um(iso.vertices[v].position), to_f(unit(normal[v])), position, tint});
+                }
+                continue;
+            }
+            // With hidden regions (YD4): the triangle's pieces in the shown control volumes, each vertex's
+            // normal interpolated from the triangle's corners.
+            Polygon p{{}, iso.elements[k]};
+            for (const std::uint32_t v : t) p.vertices.push_back(iso.vertices[v]);
+            const Point& a = p.vertices[0].position;
+            const Point e1 = sub(p.vertices[1].position, a), e2 = sub(p.vertices[2].position, a);
+            const Point n = cross(e1, e2);
+            const double nn = dot(n, n);
+            for (const OwnedPolygon& piece : g.owner_pieces(p)) {
+                if (!shown.node(piece.owner)) continue;
+                std::vector<SceneVertex> corners;
+                for (const Point& x : piece.points) {
+                    const Point r = sub(x, a);
+                    const double w1 = dot(cross(r, e2), n) / nn, w2 = dot(cross(e1, r), n) / nn;
+                    const Point m = add(scale(normal[t[0]], 1.0 - w1 - w2), add(scale(normal[t[1]], w1), scale(normal[t[2]], w2)));
+                    corners.push_back({um(x), to_f(unit(m)), position, tint});
+                }
+                for (std::size_t i = 1; i + 1 < corners.size(); ++i) {
+                    batch.vertices.insert(batch.vertices.end(), {corners[0], corners[i], corners[i + 1]});
+                }
             }
         }
         if (!batch.vertices.empty()) s.triangles.push_back(std::move(batch));
     }
-    s.triangles.push_back(outline_shell(g));
-    if (o.view.contacts) contact_slabs(d, g, o.view.palette, s.triangles, o.view.clip);
+    s.triangles.push_back(outline_shell(d, g, shown));
+    if (o.view.contacts) contact_slabs(d, g, o.view.palette, s.triangles, o.view.clip, {}, shown);
     s.colorbar = std::move(*bar);
     frame(s, o.view);
     return s;
@@ -940,13 +1092,14 @@ void add_arrows(FieldScene& s, std::span<const Arrow> arrows, double length, con
 
 std::expected<FieldScene, base::Error> outline_view(const device::Device& d, const Geometry& g,
                                                     const ViewOptions& o) {
-    if (auto c = check_view(d, g); !c) return std::unexpected(std::move(c.error()));
+    if (auto c = check_view(d, g, o); !c) return std::unexpected(std::move(c.error()));
     if (g.dimension() != 3) return std::unexpected(invalid("the outline view needs a 3D geometry"));
     FieldScene s;
     s.dimension = 3;
     s.title = "Streamlines";
-    s.triangles.push_back(outline_shell(g));
-    if (o.contacts) contact_slabs(d, g, o.palette, s.triangles, o.clip);
+    const Shown shown = shown_of(d, o.hidden_regions);
+    s.triangles.push_back(outline_shell(d, g, shown));
+    if (o.contacts) contact_slabs(d, g, o.palette, s.triangles, o.clip, {}, shown);
     frame(s, o);
     return s;
 }
@@ -954,7 +1107,7 @@ std::expected<FieldScene, base::Error> outline_view(const device::Device& d, con
 std::expected<FieldScene, base::Error> quality_view(const device::Device& d, const Geometry& g,
                                                     std::span<const double> angles, std::span<const Plane> planes,
                                                     const FieldOptions& o) {
-    if (auto c = check_view(d, g); !c) return std::unexpected(std::move(c.error()));
+    if (auto c = check_view(d, g, o.view); !c) return std::unexpected(std::move(c.error()));
     if (angles.size() != g.element_count()) {
         return std::unexpected(invalid("the mesh quality is not one angle per element", angles.size()));
     }
@@ -966,23 +1119,27 @@ std::expected<FieldScene, base::Error> quality_view(const device::Device& d, con
     const std::string title = !o.title.empty() ? o.title
                               : g.dimension() == 2 ? "minimum angle (\xC2\xB0)"
                                                    : "minimum dihedral angle (\xC2\xB0)";
+    const Shown shown = shown_of(d, o.view.hidden_regions);
     FieldScene s;
     s.dimension = g.dimension();
     s.title = "Mesh quality";
-    // One position per polygon: the element's color, flat.
+    // One position per polygon: the element's color, flat; with hidden regions, on the polygon's pieces in
+    // the shown control volumes (YD4).
     const auto add = [&](TriangleBatch& batch, const Polygon& p, const Point& normal) {
+        const auto at = static_cast<float>(scale_.position(angles[p.element]));
+        if (shown.any()) {
+            for (const OwnedPolygon& piece : g.owner_pieces(p)) {
+                if (shown.node(piece.owner)) fan(batch, piece.points, std::vector<float>(piece.points.size(), at), {}, normal);
+            }
+            return;
+        }
         std::vector<Point> pts;
         for (const SurfaceVertex& v : p.vertices) pts.push_back(v.position);
-        const auto at = static_cast<float>(scale_.position(angles[p.element]));
         fan(batch, pts, std::vector<float>(pts.size(), at), {}, normal);
     };
-    const auto points = d.mesh().points();
     const auto edge_lines = [&](const std::vector<std::array<NodeId, 2>>& list, bool on_top) {
         LineBatch edges{"mesh", {0.15f, 0.17f, 0.2f, 0.75f}, 1.0f, on_top, {}};
-        for (const auto& [a, b] : list) {
-            edges.points.push_back(um(points[static_cast<std::size_t>(a)]));
-            edges.points.push_back(um(points[static_cast<std::size_t>(b)]));
-        }
+        add_edges(edges, d.mesh().points(), list, shown);
         s.lines.push_back(std::move(edges));
     };
     if (g.dimension() == 2) {
@@ -990,13 +1147,18 @@ std::expected<FieldScene, base::Error> quality_view(const device::Device& d, con
         for (std::size_t e = 0; e < g.element_count(); ++e) add(field, g.element_polygon(e), {0.0, 0.0, 1.0});
         s.triangles.push_back(std::move(field));
         edge_lines(element_edges(g), true);
-        if (o.view.region_outlines) outlines_2d(d, g, s.lines);
+        if (o.view.region_outlines) outlines_2d(d, g, s.lines, shown);
     } else if (planes.empty()) {
         TriangleBatch field{"quality", Shading::field, true, false, {}};
         for (const Polygon& f : g.boundary_faces()) {
             std::vector<Point> pts;
             for (const SurfaceVertex& v : f.vertices) pts.push_back(v.position);
             add(field, f, polygon_normal(pts));
+        }
+        // The faces the hidden regions opened, in their element's color.
+        for (const OpenedFace& f : opened_faces(d, g, shown)) {
+            const auto at = static_cast<float>(scale_.position(angles[f.element]));
+            fan(field, f.points, std::vector<float>(f.points.size(), at), {}, f.normal);
         }
         s.triangles.push_back(std::move(field));
         edge_lines(boundary_face_edges(g), false);
@@ -1008,7 +1170,7 @@ std::expected<FieldScene, base::Error> quality_view(const device::Device& d, con
             for (const Polygon& p : polys) add(field, p, planes[k].normal);
         }
         s.triangles.push_back(std::move(field));
-        s.triangles.push_back(outline_shell(g));
+        s.triangles.push_back(outline_shell(d, g, shown));
     }
     s.colorbar = Colorbar{o.map, scale_, title};
     frame(s, o.view);
@@ -1023,7 +1185,10 @@ std::expected<std::vector<FieldScene>, base::Error> filmstrip_scenes(const devic
     if (!shared.scale) {
         // CQ2: one scale over every frame, so a color means the same value in each.
         std::vector<double> all;
-        for (const FilmFrame& f : frames) all.insert(all.end(), f.values.begin(), f.values.end());
+        for (const FilmFrame& f : frames) {
+            const std::vector<double> v = shown_values(d, f.values, o.view.hidden_regions);  // YD4
+            all.insert(all.end(), v.begin(), v.end());
+        }
         auto s = ColorScale::fit(kind, all, 1e10);
         if (!s) return std::unexpected(std::move(s.error()));
         shared.scale = *s;
@@ -1069,7 +1234,7 @@ double default_gap(const device::Device& d, int axis) noexcept {
 std::expected<FieldScene, base::Error> exploded_view(const device::Device& d, const Geometry& g, int axis,
                                                      double gap, std::span<const double> values,
                                                      const FieldOptions& o) {
-    if (auto c = check_view(d, g); !c) return std::unexpected(std::move(c.error()));
+    if (auto c = check_view(d, g, o.view); !c) return std::unexpected(std::move(c.error()));
     if (g.dimension() != 3) return std::unexpected(invalid("the exploded view needs a 3D geometry"));
     if (axis < 0 || axis > 2) return std::unexpected(invalid("the axis is 0, 1 or 2", static_cast<std::size_t>(std::max(axis, 0))));
     if (!(gap >= 0.0) || !std::isfinite(gap)) return std::unexpected(invalid("the gap is a finite length, at least 0"));
@@ -1078,7 +1243,7 @@ std::expected<FieldScene, base::Error> exploded_view(const device::Device& d, co
     }
     std::optional<Colorbar> bar;
     if (!values.empty()) {
-        auto b = colorbar_for(values, o);
+        auto b = colorbar_for(d, values, o);
         if (!b) return std::unexpected(std::move(b.error()));
         bar = std::move(*b);
     }
@@ -1112,7 +1277,10 @@ std::expected<FieldScene, base::Error> exploded_view(const device::Device& d, co
     Batches batches(view.palette, true, view.transparent_insulators);
     TriangleBatch field_batch{"field", Shading::field, true, false, {}};
     const auto surfaces = g.region_surfaces(regions);
+    const Shown shown = shown_of(d, view.hidden_regions);
     for (std::size_t r = 0; r < surfaces.size(); ++r) {
+        // A hidden region is left out; the others keep their places (YD4).
+        if (std::ranges::find(view.hidden_regions, static_cast<std::int32_t>(r)) != view.hidden_regions.end()) continue;
         for (const Geometry::RegionFace& f : surfaces[r]) {
             std::vector<Point> pts;
             for (const Point& x : f.points) pts.push_back(add(x, offset[r]));
@@ -1135,7 +1303,7 @@ std::expected<FieldScene, base::Error> exploded_view(const device::Device& d, co
         for (const device::Contact& c : d.contacts()) {
             contact_offset.push_back(c.nodes.empty() ? Point{} : offset[static_cast<std::size_t>(regions[static_cast<std::size_t>(c.nodes[0])])]);
         }
-        contact_slabs(d, g, view.palette, s.triangles, std::nullopt, contact_offset);
+        contact_slabs(d, g, view.palette, s.triangles, std::nullopt, contact_offset, shown);
     }
     if (bar) s.colorbar = std::move(*bar);
     frame(s, view);

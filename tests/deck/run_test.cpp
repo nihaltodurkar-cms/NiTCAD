@@ -1096,3 +1096,96 @@ device = tr.nitdev
     CHECK(not_transient.output.find("needs a transient run's results") != std::string::npos);
     CHECK(cli("plot " + tr + " --view filmstrip --field n --every 0 --out " + out("x.png")).status == 64);
 }
+
+TEST_CASE("nitcad plot: hidden regions (Unit 26c, YD4, YG2)", "[deck]") {
+    const fs::path dir = scratch("cli_plot_hide");
+    const auto write = [&](const char* name, const std::string& text) {
+        std::ofstream(dir / name, std::ios::binary) << text;
+        return "\"" + (dir / name).string() + "\"";
+    };
+    const auto out = [&](const char* name) { return "\"" + (dir / name).string() + "\""; };
+    // Silicon under an oxide, a gate on the oxide.
+    const auto deck = [](const char* mesh, const char* box, const char* tag) {
+        return std::string("[mesh]\ntype = tensor\n") + mesh + "[region silicon]\nmaterial = silicon\n[region oxide]\nmaterial = sio2\nbox = " +
+               box + R"(
+[doping]
+profile = acceptor constant 1e16
+[contact gate]
+kind = electrode
+patch = y_max
+electrode = metal
+work_function = 4.1
+[contact body]
+kind = ohmic
+patch = y_min
+[sweep]
+contact gate = 0, 0.5
+[output]
+sweep = )" + tag + ".nitsweep\ndevice = " + tag + ".nitdev\n";
+    };
+    const std::string d2 = write("mos2.deck", deck("x = linspace(0, 1um, 6)\ny = linspace(0, 1um, 11)\n", "0 1um  0.85um 1um", "mos2"));
+    REQUIRE(cli("run " + d2).status == 0);
+    const std::string d3 = write("mos3.deck", deck("x = linspace(0, 1um, 5)\ny = linspace(0, 1um, 6)\nz = linspace(0, 0.5um, 3)\n",
+                                                   "0 1um  0.75um 1um  0 0.5um", "mos3"));
+    REQUIRE(cli("run " + d3).status == 0);
+    for (const auto& [d, args, name] :
+         {std::tuple{d2, std::string("--hide oxide"), "solid2.png"}, std::tuple{d2, std::string("--view mesh --hide silicon"), "mesh2.png"},
+          std::tuple{d2, std::string("--field potential --hide oxide --contours"), "field2.png"},
+          std::tuple{d2, std::string("--view quality --hide oxide"), "quality2.png"},
+          std::tuple{d3, std::string("--hide oxide"), "solid3.png"}, std::tuple{d3, std::string("--field n --hide oxide"), "field3.png"},
+          std::tuple{d3, std::string("--field n --slice z=0.25 --hide oxide"), "slice3.png"},
+          std::tuple{d3, std::string("--view iso --field potential --levels 0.2 --hide oxide"), "iso3.png"},
+          std::tuple{d3, std::string("--view exploded --hide silicon"), "exploded3.png"},
+          std::tuple{d3, std::string("--field n --clip 0.5,0.2,0.1:2,2,1 --hide oxide"), "clip3.png"}}) {
+        const Cli c = cli("plot " + d + " " + args + " --adapter warp --size 400x300 --out " + out(name));
+        CAPTURE(args, c.output);
+        CHECK(c.status == 0);
+        CHECK(render::load_png(dir / name).has_value());
+    }
+    // Hiding changes the picture; hiding a region twice is hiding it once.
+    REQUIRE(cli("plot " + d2 + " --adapter warp --size 400x300 --out " + out("solid2_all.png")).status == 0);
+    CHECK(render::load_png(dir / "solid2.png")->rgba != render::load_png(dir / "solid2_all.png")->rgba);
+    REQUIRE(cli("plot " + d2 + " --hide oxide --hide oxide --adapter warp --size 400x300 --out " + out("solid2_twice.png")).status == 0);
+    CHECK(render::load_png(dir / "solid2.png")->rgba == render::load_png(dir / "solid2_twice.png")->rgba);
+    // A filmstrip of the gate's ramp: one scale over the silicon's potential in every frame, as --range gives it.
+    std::string tr_text = deck("x = linspace(0, 1um, 6)\ny = linspace(0, 1um, 11)\n", "0 1um  0.85um 1um", "mos2t");
+    tr_text.erase(tr_text.find("[sweep]"));
+    const std::string tr = write("mos2t.deck", tr_text + "[transient]\ncontact gate = ramp(0, 0.5, 0, 3e-10)\nt_end = 4e-10\n"
+                                                         "dt_initial = 1e-10\nadaptive = off\nfields_every_step = on\n[output]\n"
+                                                         "transient = mos2t.nittran\ndevice = mos2t.nitdev\n");
+    REQUIRE(cli("run " + tr).status == 0);
+    const auto run = io::load_transient(dir / "mos2t.nittran");
+    const auto device = io::load_device(dir / "mos2t.nitdev");
+    REQUIRE((run && device));
+    REQUIRE(run->snapshots.size() <= 12);
+    double lo = INFINITY, hi = -INFINITY;
+    for (const auto& s : run->snapshots) {
+        for (std::size_t i = 0; i < s.fields.potential_V.size(); ++i) {
+            if (device->node_region()[i] != 0) continue;  // the silicon
+            lo = std::min(lo, s.fields.potential_V[i]);
+            hi = std::max(hi, s.fields.potential_V[i]);
+        }
+    }
+    char range[80];
+    std::snprintf(range, sizeof range, "%.17g,%.17g", lo, hi);
+    const std::string film = "plot " + tr + " --view filmstrip --field potential --hide oxide --size 200x150 --adapter warp --out ";
+    REQUIRE(cli(film + out("film_hidden.png")).status == 0);
+    REQUIRE(cli(film + out("film_range.png") + " --range " + range).status == 0);
+    CHECK(render::load_png(dir / "film_hidden.png")->rgba == render::load_png(dir / "film_range.png")->rgba);
+    // Refused: no region by that name; a curve view; a 1D device; no name (usage).
+    const Cli unknown = cli("plot " + d2 + " --hide nitride --out " + out("x.png"));
+    CHECK(unknown.status == 1);
+    CHECK(unknown.output.find("there is no region nitride") != std::string::npos);
+    const Cli curve = cli("plot " + d2 + " --view iv --hide oxide --out " + out("x.png"));
+    CHECK(curve.status == 1);
+    CHECK(curve.output.find("hidden regions apply to") != std::string::npos);
+    const std::string d1 = write("res.deck", "[mesh]\ntype = tensor\nx = linspace(0, 1um, 11)\n[region silicon]\nmaterial = silicon\n"
+                                             "[doping]\nprofile = donor constant 1e16\n[contact a]\nkind = ohmic\npatch = x_min\n"
+                                             "[contact b]\nkind = ohmic\npatch = x_max\n[sweep]\ncontact a = 0, 0.1\n[output]\n"
+                                             "sweep = res.nitsweep\ndevice = res.nitdev\n");
+    REQUIRE(cli("run " + d1).status == 0);
+    const Cli one = cli("plot " + d1 + " --field potential --hide silicon --out " + out("x.png"));
+    CHECK(one.status == 1);
+    CHECK(one.output.find("2D or 3D device") != std::string::npos);
+    CHECK(cli("plot " + d2 + " --out " + out("x.png") + " --hide").status == 64);
+}

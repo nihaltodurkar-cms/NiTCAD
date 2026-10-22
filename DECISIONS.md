@@ -3522,6 +3522,60 @@ a run every monitor cell equals the final rows' formatting. Mutants: 2 of 2 caug
 taking input). Afterwards the Debug GPU self-test's longest gaps were 36.1, 38.5 and 36.6 ms, and Debug `app_window`
 passed in the suite (19 of 19). WG1 stands as ruled.
 
+**Commit 26c·2 (region visibility; YD4, YG1, YG2, YG5, YG6), as built.**
+- `render::ViewOptions::hidden_regions` (region ids; an id not the device's is refused, "a hidden region is not one
+  of the device's"). **Hiding goes by control volume, in every view:** a node is hidden with its region, and what is
+  drawn is the shown nodes' pieces (`Geometry::owner_pieces`), so a 2D map's area and a 3D surface's enclosed volume
+  are the shown regions' control volumes. Edges are drawn as the shown node's half (an edge's midpoint is where the
+  two control volumes meet). The interface pieces between a shown and a hidden node become boundary faces of the
+  shown side, turned toward the hidden node, so the shown regions stay closed (solid, field, clipped, opaque,
+  quality, the slice and iso views' outline shell). A contact all of whose nodes are hidden is left out. Scales fit
+  over the shown nodes (`render::shown_values`: NaN on hidden nodes), in the field, slice, iso, difference and
+  filmstrip views (one scale over every frame's shown nodes). Isosurfaces are split into the shown pieces of each
+  triangle (`IsoSurface::elements` gives each triangle's element), with normals interpolated from the corners. The
+  exploded view leaves the hidden regions out and keeps the others' places. 3D quality draws the elements' pieces
+  in the shown control volumes and the opened faces in their element's color, not whole elements.
+- `nitcad plot --hide <region>` (repeatable; twice is once) on the solid, mesh, field, slice, iso, exploded,
+  quality, difference and filmstrip views of a 2D or 3D device. Refused: an unknown name ("there is no region
+  <name>"), another view or a 1D device ("hidden regions apply to the solid, mesh, field, slice, iso, exploded,
+  quality, difference and filmstrip views of a 2D or 3D device"), no name (usage).
+- The window: a check box per region in the scene tree (contacts and other items have none). Clearing a box hides the
+  region, checking it shows it again; the status bar says which. View ▸ Show every region (Ctrl+Shift+H) checks them
+  all, enabled while any is hidden. `ViewSettings::hidden` (names, in the device's order) is kept on the device views
+  (`takes_hidden`: solid, mesh, field, slice, iso, exploded, quality, difference); other views leave it out, and
+  `plot_arguments` gives `--hide` for each. The probe doesn't pick a hidden node; in 3D it picks the shown nodes of
+  the faces the hidden regions opened. A new run resets the view settings, hidden regions with them. **Without a
+  comctl32 v6 manifest the tree sends no TVN_ITEMCHANGED**, so a click or the space bar on the tree posts a message
+  that reads the boxes once the tree has toggled them. `TVS_CHECKBOXES` gives every new item a box, so the window
+  removes it from items that aren't regions.
+- **Not hidden:** arrows and streamlines (they belong to the field, not to a region); the mesh view's edges in 3D are
+  the shown halves of the domain boundary, with no edges on the opened faces.
+- **Tests:** `hidden_test` (new) — nothing hidden draws as before, and an id that is not a region's is refused; 2D:
+  the pieces' area is the silicon's control volumes (1.7 µm²), the gate is gone, outlines and mesh lie below the
+  interface, which is drawn across the device, scales are fitted over the silicon, the filmstrip has one scale over
+  shown frames, quality; 3D: the solid and field surfaces closed (volume and vector area) with either region hidden,
+  opaque and clipped too, the mesh, slices (area) with their outline closed, a curved isosurface cut at the
+  interface with its corners' normals, quality closed, exploded; `shown_values`. WARP references
+  `mosfet2d_hidden_oxide` (potential, mesh and contours) and `mosfet3d_hidden_oxide` (n). `run_test`: `nitcad plot
+  --hide` on ten 2D and 3D views, hiding changes the picture, twice is once, a filmstrip's scale is the silicon's
+  (the same as `--range` of it), the refusals. `view_settings_test`: names and refusals as `nitcad plot`'s; **to the
+  bit equal to `nitcad plot --hide` (YG1)** in 13 cases (2D solid, mesh, field, quality, iso with edges, difference
+  over run B; 3D solid, field, exploded, quality, slice, iso, clip), the difference's scale fitted over the shown
+  nodes. `probe_test`: hidden nodes not picked, the opened faces' nodes picked in 3D. `analysis_window_test`: boxes on
+  the regions only, the space bar hides and shows, the window equal to `nitcad plot --hide`, no probe where the oxide
+  was, kept on the mesh view, both hidden in the device's order, Show every region, a run resets, the menu entry.
+- **Mutation checks (Release):** 35 of 36 caught. Render 18 (an id range off by one, no node hidden, whole edges,
+  hidden edges kept, no opened faces, opened faces turned inward, the 2D interface left out, hidden contacts kept,
+  the colorbar, the filmstrip and `shown_values` over every node, iso pieces unfiltered, iso normal weights, the
+  exploded view keeping the region, a 3D interface into the hidden region, the solid, quality and outline shells
+  not closed); `nitcad plot` 6 (difference refusing `--hide`, 1D accepting it, the field, filmstrip and difference
+  fits over every node, `--hide` ignored); app 6 (difference dropping the regions, no `--hide` arguments, the field
+  and difference fits, hidden nodes picked, opened faces not picked); window 5 of 6 (contacts keeping a box, Show
+  every region doing nothing, the space bar ignored, the probe picking hidden nodes, the order). **Equivalent:** the
+  prober hiding on every view, since every view that can be probed takes hidden regions. Four survived at first and
+  gained tests: the iso normals (the isosurface was a plane), the outline shell, the filmstrip's fit, and
+  `nitcad plot`'s fits (now also run against the window's to-the-bit comparisons).
+
 **Not in Unit 26c:** in-view clip handles (the owner chose sliders), the tiled filmstrip in the window, video
 export, oblique clip planes, streamtubes.
 

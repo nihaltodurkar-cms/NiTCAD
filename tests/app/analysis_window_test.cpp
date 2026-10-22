@@ -9,6 +9,7 @@
 
 #include <windows.h>
 #include <richedit.h>
+#include <commctrl.h>
 
 #include <algorithm>
 #include <chrono>
@@ -644,4 +645,113 @@ TEST_CASE("app window 26c: the curve pickers (YD3, YG1)", "[app]") {
     choose(*w, MainWindow::id_sensed, L"(automatic)");
     CHECK(w->settings().sense.empty());
     same_as_plot(*w, deck, dir / "cv_default.png");
+}
+
+namespace {
+
+// Unit 26c (YD4): the scene tree's items under the device, by the start of their text.
+HTREEITEM tree_item(MainWindow& w, const std::wstring& prefix) {
+    HWND tree = w.child(MainWindow::id_tree);
+    for (HTREEITEM root = TreeView_GetRoot(tree); root; root = TreeView_GetNextSibling(tree, root)) {
+        for (HTREEITEM i = TreeView_GetChild(tree, root); i; i = TreeView_GetNextSibling(tree, i)) {
+            wchar_t text[128]{};
+            TVITEMW t{};
+            t.mask = TVIF_TEXT;
+            t.hItem = i;
+            t.pszText = text;
+            t.cchTextMax = 128;
+            TreeView_GetItem(tree, &t);
+            if (std::wstring(text).starts_with(prefix)) return i;
+        }
+    }
+    return nullptr;
+}
+
+int check_state(MainWindow& w, HTREEITEM item) {
+    return static_cast<int>(TreeView_GetCheckState(w.child(MainWindow::id_tree), item)) + 1;  // 0 none, 1 off, 2 on
+}
+
+// The item's box toggled by the space bar, as the user would.
+void press_space(MainWindow& w, HTREEITEM item) {
+    HWND tree = w.child(MainWindow::id_tree);
+    TreeView_SelectItem(tree, item);
+    SendMessageW(tree, WM_KEYDOWN, VK_SPACE, 0);
+    SendMessageW(tree, WM_CHAR, L' ', 0);
+    SendMessageW(tree, WM_KEYUP, VK_SPACE, 0);
+    pump_for(0.2);  // the window reads the boxes when its posted message comes
+}
+
+}  // namespace
+
+TEST_CASE("app window 26c: regions hidden from the scene tree (YD4, YG1, YG5)", "[app]") {
+    const fs::path dir = app_test::scratch("window_regions");
+    const fs::path deck = app_test::write(dir, "mosfet.deck", app_test::mosfet2d);
+    auto w = window();
+    REQUIRE(w->open_deck(deck));
+    REQUIRE(pump_until([&] { return w->workspace() != nullptr && !w->runner().busy(); }));
+    w->execute(Command::run);
+    REQUIRE(pump_until([&] { return !w->runner().busy() && w->workspace() && w->workspace()->has_results(); }));
+    w->select_tab(MainWindow::tab_view);
+    REQUIRE(w->settings().kind == app::ViewKind::field);
+    // A box on each region, checked; none on the contacts or the other items.
+    HTREEITEM silicon = tree_item(*w, L"silicon");
+    HTREEITEM oxide = tree_item(*w, L"oxide");
+    HTREEITEM gate = tree_item(*w, L"contact gate");
+    REQUIRE((silicon && oxide && gate));
+    CHECK(check_state(*w, silicon) == 2);
+    CHECK(check_state(*w, oxide) == 2);
+    CHECK(check_state(*w, gate) == 0);
+    HMENU bar = GetMenu(w->hwnd());
+    CHECK((GetMenuState(bar, static_cast<UINT>(Command::show_regions), MF_BYCOMMAND) & MF_GRAYED) != 0);
+    // A probe on the oxide's top before it is hidden.
+    click_at(*w, {1.0f, 1.0f, 0.0f});
+    REQUIRE(w->probe());
+    const auto before = w->probe()->node;
+
+    // The oxide hidden by its box: the view as nitcad plot --hide oxide draws it, no probe where it was.
+    press_space(*w, oxide);
+    CHECK(check_state(*w, oxide) == 1);
+    CHECK(w->settings().hidden == std::vector<std::string>{"oxide"});
+    CHECK(w->status(0) == "Hiding the region oxide.");
+    CHECK((GetMenuState(bar, static_cast<UINT>(Command::show_regions), MF_BYCOMMAND) & MF_GRAYED) == 0);
+    same_as_plot(*w, deck, dir / "field_no_oxide.png");
+    click_at(*w, {1.0f, 1.0f, 0.0f});
+    CHECK(w->status(0) == "No node within reach.");
+    CHECK(w->probe()->node == before);  // the last probe, kept
+    click_at(*w, {1.0f, 0.5f, 0.0f});
+    REQUIRE(w->probe());
+    CHECK(w->probe()->position_um[1] < 0.93);
+    // The setting stays on the other device views.
+    choose(*w, MainWindow::id_view, L"mesh");
+    CHECK(w->settings().hidden == std::vector<std::string>{"oxide"});
+    same_as_plot(*w, deck, dir / "mesh_no_oxide.png");
+    // The space bar on a contact gives it no box and hides nothing.
+    press_space(*w, gate);
+    CHECK(check_state(*w, gate) == 0);
+    CHECK(w->settings().hidden == std::vector<std::string>{"oxide"});
+    // Both hidden, in the device's order; the silicon shown again by its box.
+    press_space(*w, silicon);
+    CHECK(w->settings().hidden == std::vector<std::string>{"silicon", "oxide"});
+    press_space(*w, silicon);
+    CHECK(w->settings().hidden == std::vector<std::string>{"oxide"});
+    CHECK(check_state(*w, silicon) == 2);
+    // Show every region clears it and checks the boxes.
+    w->execute(Command::show_regions);
+    CHECK(w->settings().hidden.empty());
+    CHECK(check_state(*w, tree_item(*w, L"oxide")) == 2);
+    CHECK(w->status(0) == "Showing every region.");
+    same_as_plot(*w, deck, dir / "mesh_all.png");
+    // A new run resets the view settings, the hidden regions with them, and the boxes show it.
+    press_space(*w, tree_item(*w, L"oxide"));
+    CHECK(w->settings().hidden == std::vector<std::string>{"oxide"});
+    w->execute(Command::run);
+    REQUIRE(pump_until([&] { return !w->runner().busy() && w->workspace() && w->workspace()->has_results(); }));
+    w->select_tab(MainWindow::tab_view);
+    CHECK(w->settings().hidden.empty());
+    CHECK(check_state(*w, tree_item(*w, L"oxide")) == 2);
+    // In the View menu with its keys (YG5).
+    const auto* info = app::find_command(Command::show_regions);
+    REQUIRE(info);
+    CHECK(info->menu == "&View");
+    CHECK(info->accelerator.key == 'H');
 }

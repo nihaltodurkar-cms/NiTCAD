@@ -58,6 +58,8 @@ inline constexpr UINT_PTR run_timer = 0x52;
 inline constexpr UINT_PTR live_timer = 0x53;
 inline constexpr UINT live_delay_ms = 400;
 inline constexpr UINT live_message = WM_APP + 2;
+// Posted when a box in the scene tree may have changed (Unit 26c, YD4).
+inline constexpr UINT tree_check_message = WM_APP + 3;
 
 class MainWindow final : public Viewport::Host,
                          public DeckPane::Host,
@@ -172,6 +174,8 @@ private:
     [[nodiscard]] bool pickable() const;
     void fill_tree();
     void on_tree_selection(LPARAM item);
+    void sync_region_boxes();  // the regions shown as their boxes are (Unit 26c, YD4)
+    void set_region_shown(const std::string& name, bool shown);
     void update_metrics();
     // A new workspace; its view settings reset unless kept (the structure preview while editing).
     void set_workspace(Workspace w, bool keep_settings = false);

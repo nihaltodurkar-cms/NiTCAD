@@ -12,7 +12,7 @@ constexpr std::uint16_t vk_tab = 0x09, vk_space = 0x20, vk_f4 = 0x73, vk_f5 = 0x
 
 constexpr std::array<std::string_view, 7> bar{"&File", "&Edit", "&Device", "&Mesh", "&Physics", "&Simulation", "&View"};
 
-constexpr std::array<CommandInfo, 44> list{{
+constexpr std::array<CommandInfo, 45> list{{
     {Command::new_deck, "&File", "&New deck", {'N', true}, "Ctrl+N"},
     {Command::open_deck, "&File", "&Open deck...", {'O', true}, "Ctrl+O"},
     {Command::open_result, "&File", "Open &result...", {'R', true, true}, "Ctrl+Shift+R"},
@@ -48,6 +48,7 @@ constexpr std::array<CommandInfo, 44> list{{
     {Command::measure_mode, "&View", "&Measure", {'M', true, true}, "Ctrl+Shift+M"},
     {Command::cut_line_mode, "&View", "Dr&aw cut line", {'L', true, true}, "Ctrl+Shift+L"},
     {Command::mesh_quality, "&View", "Mesh &quality", {'Q', true, true}, "Ctrl+Shift+Q"},
+    {Command::show_regions, "&View", "S&how every region", {'H', true, true}, "Ctrl+Shift+H"},
     {Command::next_tab, "&View", "Next &tab", {vk_tab, true}, "Ctrl+Tab"},
     {Command::previous_tab, "&View", "Pre&vious tab", {vk_tab, true, true}, "Ctrl+Shift+Tab"},
     {Command::next_pane, "&View", "Ne&xt pane", {vk_f6}, "F6"},

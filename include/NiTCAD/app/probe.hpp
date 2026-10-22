@@ -38,11 +38,16 @@ public:
     // in the view's plane; in 3D the front-most surface node within the radius (as pick).
     [[nodiscard]] std::optional<std::array<double, 3>> point_at(const render::FieldScene& scene, int width, int height,
                                                                 float x, float y, float radius_px = 12.0f) const;
+    // Region visibility (Unit 26c, YD4): the nodes of these regions (ids) are not picked; in 3D the shown nodes
+    // of the faces they shared with shown regions are, as the view draws those faces. Empty: every region.
+    void hide(std::span<const std::int32_t> regions);
 
 private:
+    const Workspace* workspace_ = nullptr;
     const mesh::Mesh* mesh_ = nullptr;
     int dimension_ = 0;
-    std::vector<mesh::NodeId> candidates_;
+    std::vector<mesh::NodeId> all_;         // with every region shown
+    std::vector<mesh::NodeId> candidates_;  // less the hidden regions'
 };
 
 [[nodiscard]] double distance_um(const ProbeHit& a, const ProbeHit& b) noexcept;

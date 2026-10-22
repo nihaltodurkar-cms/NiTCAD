@@ -46,6 +46,9 @@ enum class ViewKind : unsigned char {
 // Whether the view draws a setting's arrows and streamlines (Unit 26c, YD1): the field, slice and iso views;
 // the others leave them out (build_scene) and so does plot_arguments.
 [[nodiscard]] bool takes_vectors(ViewKind v) noexcept;
+// Whether the view leaves out a setting's hidden regions (Unit 26c, YD4): the solid, mesh, field, slice, iso,
+// exploded, quality and difference views; the curves ignore them (build_scene) and so does plot_arguments.
+[[nodiscard]] bool takes_hidden(ViewKind v) noexcept;
 
 struct ViewSettings {
     ViewKind kind = ViewKind::solid;
@@ -92,6 +95,9 @@ struct ViewSettings {
     int axis = 1;
     std::optional<double> gap_um;
     bool exploded_field = false;
+    // Hidden regions (Unit 26c, YD4), by name, as `nitcad plot --hide`: left out of the device views
+    // (takes_hidden) of a 2D or 3D device; the other views ignore them.
+    std::vector<std::string> hidden;
     // The window's camera (VA8, Unit 26): zoom about the view's centre and pan in fractions of its
     // half size (render::Camera). `nitcad plot` has neither: plot_arguments leaves them out.
     float zoom = 1.0f;

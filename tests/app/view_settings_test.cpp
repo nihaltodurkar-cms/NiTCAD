@@ -717,3 +717,136 @@ TEST_CASE("app views 26c: arrows, streamlines, the exploded view and the curve p
         CHECK(d->max_channel == 0);
     }
 }
+
+TEST_CASE("app views 26c: hidden regions, as nitcad plot takes them (YD4)", "[app]") {
+    // The device views take them; the curves and profiles leave them out, and so do their arguments.
+    for (const ViewKind k : {ViewKind::solid, ViewKind::mesh, ViewKind::field, ViewKind::slice, ViewKind::iso,
+                             ViewKind::exploded, ViewKind::quality, ViewKind::difference}) {
+        CHECK(app::takes_hidden(k));
+    }
+    for (const ViewKind k : {ViewKind::bands, ViewKind::profile, ViewKind::iv, ViewKind::cv, ViewKind::current,
+                             ViewKind::quality_histogram}) {
+        CHECK_FALSE(app::takes_hidden(k));
+    }
+    ViewSettings s;
+    s.kind = ViewKind::field;
+    s.hidden = {"oxide", "silicon"};
+    const auto args = app::plot_arguments(s);
+    const auto first = std::ranges::find(args, std::string("--hide"));
+    REQUIRE(first != args.end());
+    CHECK(*(first + 1) == "oxide");
+    CHECK(*(first + 3) == "silicon");
+    s.kind = ViewKind::iv;
+    CHECK_FALSE(has(app::plot_arguments(s), "--hide"));
+    // Messages as nitcad plot's.
+    const app::Workspace& w = mosfet().workspace;
+    ViewSettings bad;
+    bad.kind = ViewKind::solid;
+    bad.hidden = {"nitride"};
+    CHECK(app::build_scene(w, bad).error().message == "there is no region nitride");
+    ViewSettings one_d;
+    one_d.kind = ViewKind::field;
+    one_d.hidden = {"silicon"};
+    CHECK(app::build_scene(diode().workspace, one_d).error().message.starts_with("hidden regions apply to"));
+    // A curve view ignores them; with none the scene is as before.
+    ViewSettings iv;
+    iv.kind = ViewKind::iv;
+    iv.hidden = {"nitride"};
+    CHECK(app::build_scene(w, iv).has_value());
+    ViewSettings solid;
+    solid.kind = ViewKind::solid;
+    const render::Image plain = draw(*app::build_scene(w, solid), 320, 240);
+    solid.hidden = {"oxide"};
+    const render::Image hidden = draw(*app::build_scene(w, solid), 320, 240);
+    CHECK(plain.rgba != hidden.rgba);
+    solid.hidden.clear();
+    CHECK(draw(*app::build_scene(w, solid), 320, 240).rgba == plain.rgba);
+}
+
+TEST_CASE("app views 26c: hidden regions drawn as nitcad plot draws them (YG1)", "[app]") {
+    const fs::path out = app_test::scratch("views_26c_hidden");
+    struct Case {
+        const Ran* ran;
+        ViewSettings s;
+        const char* name;
+    };
+    const auto make = [](ViewKind k, std::vector<std::string> hidden, std::string field = "potential") {
+        ViewSettings s;
+        s.kind = k;
+        s.field = std::move(field);
+        s.hidden = std::move(hidden);
+        return s;
+    };
+    std::vector<Case> cases{
+        {&mosfet(), make(ViewKind::solid, {"oxide"}), "2d_solid_no_oxide"},
+        {&mosfet(), make(ViewKind::mesh, {"silicon"}), "2d_mesh_no_silicon"},
+        {&mosfet(), make(ViewKind::field, {"oxide"}), "2d_field_no_oxide"},
+        {&mosfet(), make(ViewKind::quality, {"oxide"}), "2d_quality_no_oxide"},
+        {&mosfet3d(), make(ViewKind::solid, {"oxide"}), "3d_solid_no_oxide"},
+        {&mosfet3d(), make(ViewKind::field, {"oxide"}, "n"), "3d_field_no_oxide"},
+        {&mosfet3d(), make(ViewKind::exploded, {"silicon"}), "3d_exploded_no_silicon"},
+        {&mosfet3d(), make(ViewKind::quality, {"oxide"}), "3d_quality_no_oxide"},
+    };
+    {
+        // The difference with run B over the silicon: its scale fitted there (the gate's work function moves the
+        // oxide's potential most).
+        ViewSettings s = make(ViewKind::difference, {"oxide"});
+        auto scene = app::build_scene(mosfet().workspace, s, &mosfet_b().workspace);
+        if (!scene) FAIL(scene.error().message);
+        const render::Image mine = draw(*scene, 480, 360);
+        const fs::path png = out / "2d_difference_no_oxide.png";
+        std::string args = "plot " + app_test::quoted(mosfet().deck);
+        for (const std::string& a : app::plot_arguments(s, &mosfet_b().workspace)) args += " \"" + a + "\"";
+        args += " --size 480x360 --adapter warp --out " + app_test::quoted(png);
+        const auto cli = app_test::nitcad(args);
+        CAPTURE(args, cli.output);
+        REQUIRE(cli.status == 0);
+        const auto d = render::compare(mine, *render::load_png(png), 0);
+        REQUIRE(d);
+        CHECK(d->max_channel == 0);
+        s.hidden.clear();
+        const auto all = app::build_scene(mosfet().workspace, s, &mosfet_b().workspace);
+        REQUIRE(all);
+        CHECK(std::get<render::FieldScene>(*all).colorbar->scale.hi() !=
+              std::get<render::FieldScene>(*scene).colorbar->scale.hi());
+    }
+    {
+        ViewSettings s = make(ViewKind::iso, {"oxide"}, "potential");
+        s.levels = {0.2};
+        s.edges = true;
+        cases.push_back({&mosfet(), s, "2d_iso_no_oxide"});
+    }
+    {
+        ViewSettings s = make(ViewKind::slice, {"oxide"}, "n");
+        s.slices = {{2, 0.4}, {0, 1.0}};
+        cases.push_back({&mosfet3d(), s, "3d_slice_no_oxide"});
+    }
+    {
+        ViewSettings s = make(ViewKind::iso, {"oxide"}, "potential");
+        s.levels = {0.3};
+        cases.push_back({&mosfet3d(), s, "3d_iso_no_oxide"});
+    }
+    {
+        ViewSettings s = make(ViewKind::field, {"oxide"}, "n");
+        s.clip = ViewSettings::Clip{{1.0, 0.3, 0.3}, {3.0, 3.0, 3.0}};
+        cases.push_back({&mosfet3d(), s, "3d_clip_no_oxide"});
+    }
+    for (const Case& c : cases) {
+        CAPTURE(c.name);
+        auto scene = app::build_scene(c.ran->workspace, c.s);
+        if (!scene) FAIL(scene.error().message);
+        const render::Image mine = draw(*scene, 480, 360);
+        const fs::path png = out / (std::string(c.name) + ".png");
+        std::string args = "plot " + app_test::quoted(c.ran->deck);
+        for (const std::string& a : app::plot_arguments(c.s)) args += " \"" + a + "\"";
+        args += " --size 480x360 --adapter warp --out " + app_test::quoted(png);
+        const auto cli = app_test::nitcad(args);
+        CAPTURE(args, cli.output);
+        REQUIRE(cli.status == 0);
+        auto theirs = render::load_png(png);
+        REQUIRE(theirs);
+        const auto d = render::compare(mine, *theirs, 0);
+        REQUIRE(d);
+        CHECK(d->max_channel == 0);
+    }
+}

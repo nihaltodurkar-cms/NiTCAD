@@ -32,7 +32,7 @@ constexpr const wchar_t* panel_class = L"NiTCADInspector";
 constexpr int status_state = 0, status_file = 1, status_adapter = 2, status_cursor = 3;
 
 // The tree's item data: a kind in the high word, an index in the low.
-enum TreeKind : int { tree_none = 0, tree_field = 1, tree_view = 2 };
+enum TreeKind : int { tree_none = 0, tree_field = 1, tree_view = 2, tree_region = 3 };
 LPARAM tree_data(TreeKind k, int index) { return static_cast<LPARAM>((k << 16) | (index & 0xFFFF)); }
 
 constexpr std::array<std::string_view, 4> scale_names{"(default)", "linear", "log", "signed-log"};
@@ -178,6 +178,8 @@ bool MainWindow::create_children() {
     tree_ = make(WC_TREEVIEWW, L"", WS_VISIBLE | WS_TABSTOP | TVS_HASLINES | TVS_HASBUTTONS | TVS_LINESATROOT |
                                         TVS_SHOWSELALWAYS,
                  hwnd_, id_tree, WS_EX_CLIENTEDGE);
+    // Check boxes for the regions (Unit 26c, YD4): set after creation, as the tree view asks.
+    SetWindowLongPtrW(tree_, GWL_STYLE, GetWindowLongPtrW(tree_, GWL_STYLE) | TVS_CHECKBOXES);
     tabs_ = make(WC_TABCONTROLW, L"", WS_VISIBLE | WS_TABSTOP | WS_CLIPSIBLINGS, hwnd_, id_tabs);
     for (const wchar_t* t : {L"Start", L"Device view", L"Curves", L"Deck", L"Run monitor", L"Results"}) {
         TCITEMW item{};
@@ -376,6 +378,7 @@ void MainWindow::update_command_states() {
     enable(Command::stop_comparing, run_b_.has_value());
     enable(Command::mesh_quality, workspace_ && workspace_->device->mesh().dimension() >= 2 &&
                                       workspace_->geometry->element_count() > 0);
+    enable(Command::show_regions, workspace_ && !device_view_.hidden.empty());
     for (const Command c : {Command::fit, Command::orbit_left, Command::orbit_right, Command::orbit_up,
                             Command::orbit_down, Command::zoom_in, Command::zoom_out, Command::pan_left,
                             Command::pan_right, Command::pan_up, Command::pan_down}) {
@@ -629,6 +632,12 @@ void MainWindow::set_workspace(Workspace w, bool keep_settings) {
     // A cut line stays while the device keeps its dimension (a run of the deck it was drawn on).
     if (cut_ && cut_->from_um.size() != static_cast<std::size_t>(workspace_->device->mesh().dimension())) cut_.reset();
     if (!keep_settings) default_settings();
+    // Hidden regions stay while the device has them (YD4).
+    const auto regions = workspace_->device->regions();
+    std::erase_if(device_view_.hidden, [&](const std::string& name) {
+        return workspace_->device->mesh().dimension() < 2 ||
+               std::ranges::find(regions, name, &device::Region::name) == regions.end();
+    });
     fill_tree();
     sync_inspector();
     results_->show(&*workspace_, run_b());
@@ -676,6 +685,16 @@ void MainWindow::refresh() {
         return;
     }
     scene_ = std::move(*scene);
+    // Hidden regions are not probed (YD4).
+    std::vector<std::int32_t> hidden;
+    if (takes_hidden(s.kind)) {
+        const auto regions = workspace_->device->regions();
+        for (const std::string& name : s.hidden) {
+            const auto r = std::ranges::find(regions, name, &device::Region::name);
+            if (r != regions.end()) hidden.push_back(static_cast<std::int32_t>(r - regions.begin()));
+        }
+    }
+    prober_->hide(hidden);
     // The shown field's values, for probes.
     if (s.kind == ViewKind::difference) {
         // B - A, as the map shows it.
@@ -1029,7 +1048,9 @@ void MainWindow::on_inspector(int id, int code) {
 void MainWindow::fill_tree() {
     TreeView_DeleteAllItems(tree_);
     if (!workspace_) return;
-    const auto add = [&](HTREEITEM parent, const std::string& text, LPARAM data) {
+    // Only the regions of a 2D or 3D device have a check box (YD4): checked while shown. The tree gives every
+    // new item one, so the others' is taken away.
+    const auto add = [&](HTREEITEM parent, const std::string& text, LPARAM data, int check = 0) {
         TVINSERTSTRUCTW t{};
         t.hParent = parent;
         t.hInsertAfter = TVI_LAST;
@@ -1037,12 +1058,18 @@ void MainWindow::fill_tree() {
         const std::wstring w = win32::widen(text);
         t.item.pszText = const_cast<wchar_t*>(w.c_str());
         t.item.lParam = data;
-        return TreeView_InsertItem(tree_, &t);
+        HTREEITEM item = TreeView_InsertItem(tree_, &t);
+        TreeView_SetItemState(tree_, item, INDEXTOSTATEIMAGEMASK(check), TVIS_STATEIMAGEMASK);
+        return item;
     };
     const auto& d = *workspace_->device;
+    const bool boxes = d.mesh().dimension() >= 2;
     HTREEITEM device = add(TVI_ROOT, preview_ ? "Device (preview, not solved)" : "Device", tree_data(tree_none, 0));
-    for (const auto& r : d.regions()) {
-        add(device, r.name + (device::is_insulator(r) ? " (insulator)" : " (semiconductor)"), tree_data(tree_none, 0));
+    for (std::size_t k = 0; k < d.regions().size(); ++k) {
+        const auto& r = d.regions()[k];
+        const bool hidden = std::ranges::find(device_view_.hidden, r.name) != device_view_.hidden.end();
+        add(device, r.name + (device::is_insulator(r) ? " (insulator)" : " (semiconductor)"),
+            boxes ? tree_data(tree_region, static_cast<int>(k)) : tree_data(tree_none, 0), boxes ? (hidden ? 1 : 2) : 0);
     }
     for (const auto& c : d.contacts()) {
         const char* kind = c.kind == device::ContactKind::ohmic ? "ohmic" : c.kind == device::ContactKind::gate ? "gate" : "electrode";
@@ -1062,6 +1089,46 @@ void MainWindow::fill_tree() {
     }
     TreeView_Expand(tree_, fields, TVE_EXPAND);
     if (workspace_->has_results()) add(TVI_ROOT, "Results: " + std::to_string(workspace_->points.size()) + " points", tree_data(tree_none, 0));
+}
+
+void MainWindow::sync_region_boxes() {
+    if (!workspace_) return;
+    // The boxes as the user left them (a click or the space bar, posted): a region shown while checked; an item
+    // the space bar gave a box loses it.
+    const auto regions = workspace_->device->regions();
+    for (HTREEITEM root = TreeView_GetRoot(tree_); root; root = TreeView_GetNextSibling(tree_, root)) {
+        for (HTREEITEM item = root; item; item = item == root ? TreeView_GetChild(tree_, root) : TreeView_GetNextSibling(tree_, item)) {
+            TVITEMW t{};
+            t.mask = TVIF_PARAM | TVIF_STATE;
+            t.stateMask = TVIS_STATEIMAGEMASK;
+            t.hItem = item;
+            TreeView_GetItem(tree_, &t);
+            const int kind = static_cast<int>(t.lParam >> 16), index = static_cast<int>(t.lParam & 0xFFFF);
+            const int check = static_cast<int>((t.state & TVIS_STATEIMAGEMASK) >> 12);
+            if (kind != tree_region) {
+                if (check != 0) TreeView_SetItemState(tree_, item, INDEXTOSTATEIMAGEMASK(0), TVIS_STATEIMAGEMASK);
+            } else if (index < static_cast<int>(regions.size())) {
+                set_region_shown(regions[static_cast<std::size_t>(index)].name, check != 1);
+            }
+        }
+    }
+}
+
+void MainWindow::set_region_shown(const std::string& name, bool shown) {
+    auto& hidden = device_view_.hidden;
+    const bool was_hidden = std::ranges::find(hidden, name) != hidden.end();
+    if (shown == !was_hidden) return;
+    if (shown) {
+        std::erase(hidden, name);
+    } else {
+        // In the device's order, as the tree lists them.
+        hidden.push_back(name);
+        const auto regions = workspace_->device->regions();
+        const auto rank = [&](const std::string& n) { return std::ranges::find(regions, n, &device::Region::name) - regions.begin(); };
+        std::ranges::sort(hidden, {}, rank);
+    }
+    set_status(status_state, (shown ? "Showing the region " : "Hiding the region ") + name + ".");
+    if (tab_ == tab_view) refresh();
 }
 
 void MainWindow::on_tree_selection(LPARAM data) {
@@ -1536,6 +1603,14 @@ void MainWindow::execute(Command c) {
         device_view_.range.reset();
         select_tab(tab_view);
         return;
+    case Command::show_regions:
+        // YD4: every region shown again, the tree's boxes checked.
+        if (!workspace_ || device_view_.hidden.empty()) return;
+        device_view_.hidden.clear();
+        fill_tree();
+        set_status(status_state, "Showing every region.");
+        if (tab_ == tab_view) refresh();
+        return;
     case Command::next_tab: select_tab((tab_ + 1) % tab_count); return;
     case Command::previous_tab: select_tab((tab_ + tab_count - 1) % tab_count); return;
     case Command::next_pane: focus_next_pane(); return;
@@ -1796,6 +1871,13 @@ LRESULT MainWindow::handle(UINT message, WPARAM w, LPARAM l) {
             if (t->action != TVC_UNKNOWN) on_tree_selection(t->itemNew.lParam);
             return 0;
         }
+        // A box clicked or toggled by the space bar (YD4): the tree changes it after telling, so the boxes are
+        // read once it has.
+        if (n->hwndFrom == tree_ && (n->code == NM_CLICK || (n->code == TVN_KEYDOWN &&
+                                                             reinterpret_cast<const NMTVKEYDOWN*>(l)->wVKey == VK_SPACE))) {
+            PostMessageW(hwnd_, tree_check_message, 0, 0);
+            return 0;
+        }
         break;
     }
     case WM_INITMENUPOPUP: {
@@ -1820,6 +1902,9 @@ LRESULT MainWindow::handle(UINT message, WPARAM w, LPARAM l) {
         return 0;
     case live_message:
         on_live_check();
+        return 0;
+    case tree_check_message:
+        sync_region_boxes();
         return 0;
     case WM_TIMER:
         if (w == run_timer) {

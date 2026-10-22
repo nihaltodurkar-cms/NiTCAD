@@ -116,14 +116,24 @@ bool is_plot(ViewKind v) noexcept {
 
 bool takes_vectors(ViewKind v) noexcept { return v == ViewKind::field || v == ViewKind::slice || v == ViewKind::iso; }
 
+bool takes_hidden(ViewKind v) noexcept {
+    return v == ViewKind::solid || v == ViewKind::mesh || v == ViewKind::field || v == ViewKind::slice ||
+           v == ViewKind::iso || v == ViewKind::exploded || v == ViewKind::quality || v == ViewKind::difference;
+}
+
 std::expected<Scene, base::Error> build_scene(const Workspace& w, const ViewSettings& settings, const Workspace* b) {
-    // Arrows and streamlines on the field views only (Unit 26c, YD1).
-    const bool drop = !takes_vectors(settings.kind) && (!settings.vectors.empty() || !settings.streamlines.empty());
+    // Arrows and streamlines on the field views only (Unit 26c, YD1); hidden regions on the device views (YD4).
+    const bool drop_vectors = !takes_vectors(settings.kind) && (!settings.vectors.empty() || !settings.streamlines.empty());
+    const bool drop_hidden = !takes_hidden(settings.kind) && !settings.hidden.empty();
+    const bool drop = drop_vectors || drop_hidden;
     ViewSettings kept;
     if (drop) {
         kept = settings;
-        kept.vectors.clear();
-        kept.streamlines.clear();
+        if (drop_vectors) {
+            kept.vectors.clear();
+            kept.streamlines.clear();
+        }
+        if (drop_hidden) kept.hidden.clear();
     }
     const ViewSettings& o = drop ? kept : settings;
     if (!w.device || !w.geometry) return std::unexpected(invalid("nothing is loaded"));
@@ -185,6 +195,19 @@ std::expected<Scene, base::Error> build_scene(const Workspace& w, const ViewSett
         if (!c) return std::unexpected(std::move(c.error()));
         cut = std::move(*c);
     }
+    // Hidden regions (Unit 26c, YD4), by name, with `nitcad plot --hide`'s messages.
+    if (!o.hidden.empty()) {
+        if (m.dimension() < 2) {
+            return std::unexpected(invalid("hidden regions apply to the solid, mesh, field, slice, iso, exploded, quality, "
+                                           "difference and filmstrip views of a 2D or 3D device"));
+        }
+        const auto regions = device.regions();
+        for (const std::string& name : o.hidden) {
+            const auto r = std::ranges::find(regions, name, &device::Region::name);
+            if (r == regions.end()) return std::unexpected(invalid("there is no region " + name));
+            view.hidden_regions.push_back(static_cast<std::int32_t>(r - regions.begin()));
+        }
+    }
     view.transparent_insulators = !o.opaque;
     view.projection = o.perspective ? Projection::perspective : Projection::orthographic;
     if (o.azimuth) view.azimuth_deg = *o.azimuth;
@@ -242,9 +265,11 @@ std::expected<Scene, base::Error> build_scene(const Workspace& w, const ViewSett
         f.title = std::string(field_info(*field).title);
         const bool all_zero = is_vector_magnitude(*field) &&
                               std::ranges::none_of(values, [](double x) { return std::isfinite(x) && x != 0.0; });
+        // With hidden regions, fitted over the shown nodes (YD4).
         auto s = o.range    ? ColorScale::create(*scale_kind, o.range->first, o.range->second, 1e10)
                  : all_zero ? ColorScale::create(ScaleKind::linear, 0.0, 1.0, 1e10)
-                            : ColorScale::fit(*scale_kind, values, 1e10);
+                            : ColorScale::fit(*scale_kind, view.hidden_regions.empty() ? values
+                                                           : shown_values(device, values, view.hidden_regions), 1e10);
         if (!s) return std::unexpected(std::move(s.error()));
         f.scale = *s;
         return f;
@@ -576,7 +601,7 @@ std::expected<Scene, base::Error> build_scene(const Workspace& w, const ViewSett
             if (!s) return std::unexpected(std::move(s.error()));
             f.scale = *s;
         } else {
-            f.scale = difference_scale(d->values);
+            f.scale = difference_scale(shown_values(device, d->values, view.hidden_regions));  // YD4
         }
         if (m.dimension() == 1) return wrap(profile_plot(m, d->values, d->title));
         if (m.dimension() == 3 && !planes.empty()) return wrap(slice_view(device, geometry, d->values, planes, f));
@@ -755,6 +780,10 @@ std::vector<std::string> plot_arguments(const ViewSettings& s, const Workspace* 
     if (s.kind == ViewKind::exploded) {
         if (s.axis != 1) a.insert(a.end(), {"--axis", std::string(1, static_cast<char>('x' + s.axis))});
         if (s.gap_um) a.insert(a.end(), {"--gap", std::format("{}", *s.gap_um)});
+    }
+    // Unit 26c (YD4): the hidden regions on the device views (takes_hidden).
+    if (takes_hidden(s.kind)) {
+        for (const std::string& r : s.hidden) a.insert(a.end(), {"--hide", r});
     }
     return a;
 }
