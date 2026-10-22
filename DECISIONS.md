@@ -3381,12 +3381,18 @@ built.**
   caught by Debug's checked `vector` (an assertion), not in Release, where the read is unchecked.
 - **Suites:** in the working tree, Release 27 of 27 (974 s); Debug 19 of 19 — `app_window` failed once in the suite
   and passed run alone (271 s): the GPU self-test's WG1 gate saw a 226 ms gap in the message loop. A first run
-  failed the same way in Release (652 ms, `app_window_3d`), passing 4 of 4 after. **Open observation:** the first
-  GPU self-test after the GPU idles can stall the message loop past 100 ms, in 26b·2's build as well (1,623 ms, then
-  41 and 38 ms; 26b·3's: 115, then 42 and 43 ms) — a hardware-adapter wake-up, not this commit; WG1 is left as
-  ruled. No warnings under `/W4 /WX`. The tests added for the four survivors came after the suites; they pass in
+  failed the same way in Release (652 ms, `app_window_3d`), passing 4 of 4 after. **Open item (WG1 gap, deferred
+  by the owner for investigation, 2026-10-22):** a self-test's message loop occasionally stalls past 100 ms during
+  a run — on the GPU here, and in 26b·2's build as well (1,623 ms on a first GPU run, then 41 and 38 ms; 26b·3's:
+  115, then 42 and 43 ms), and on WARP in 26b·1's Debug suite (248.6 ms). Not caused by this commit (26b·2's build
+  shows it); the cause is not established — a first run after the adapter idles is one reading, but the WARP case
+  does not fit it. WG1 is left as ruled. No warnings under `/W4 /WX`. The tests added for the four survivors came after the suites; they pass in
   Release and Debug (render quality and compare, app compare). The clean-worktree suites at 26b·2 (394c2e9): Release 27 of 27, Debug 19 of 19
   (1,687 s). The clean-worktree suites at this commit are recorded with the acceptance.
+
+**Status:** Unit 26b built in three commits (3077ce4, 394c2e9, eb79729; XG1–XG8 met on this workstation, the WG1
+gap above open). **Accepted by the owner 2026-10-22** ("accept Unit 26b"), the WG1 gap to be investigated later;
+ARCHITECTURE.md 6.14, 8, 11 and 11.3 updated to "as built" (XG8). Nothing pushed.
 
 **Not in Unit 26b (VA7 and later):** form editors that write the deck, project management, remote runs, plugins,
 localization, an installer; completion of region parameter paths; more than two runs compared at once.

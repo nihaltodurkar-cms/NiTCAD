@@ -2659,6 +2659,27 @@ CG1–CG9; accepted by the owner 2026-10-22):**
   per-region visibility, pickers for a C-V curve's frequency and sensed contact; the MOS-C example stops at the
   onset of inversion.
 
+**As built (Unit 26b, the analysis workspace; DECISIONS.md XD1–XD7, XG1–XG8; accepted by the owner 2026-10-22):**
+- **Live checking (XD1–XD4):** `LiveChecker` checks the deck on its own thread 400 ms after the last edit (also
+  during a run), applying only the newest result; errors underlined at their lines with a "did you mean" from
+  `deck_vocabulary.hpp` (every section and key `deck::build` takes, with arity, choices and context); completion
+  of sections, keys and values (Ctrl+Space); a deck that builds is shown as a structure preview (device and mesh,
+  not solved) unless the results shown are on the same mesh.
+- **Cut lines (XD5):** `render/cut_line.hpp` samples a segment at its element crossings (2D and 3D, gaps where it
+  leaves the mesh); the profile and band views plot along it, the device views draw it. The window: View > Draw cut
+  line (two clicks; in 3D the front-most surface nodes) or typed in the inspector; `nitcad plot --cut`.
+- **Run comparison (XD6):** run B is a result file or the previous run of the same deck; curves overlaid, Unit 24's
+  figures with B − A (ΔV_th), the run records side by side, and a difference map B − A at a bias point both runs
+  have, on one mesh only (`render/compare.hpp`: cool-warm, symmetric; mV, meV or decades); `nitcad plot --compare`.
+- **Mesh quality (XD7):** `render/quality.hpp`, each element's minimum angle (2D) or dihedral angle (3D) as a map
+  and a histogram, with the minimum, median and count below 20° / 10° in the metrics strip; View > Mesh quality.
+- Gates: the window's new views equal `nitcad plot`'s PNGs to the bit (XG3–XG5); exact angles and the generators'
+  own reports (XG6); every new command in the menus with an accelerator (XG7); 4 new WARP references; 97 mutants
+  caught (one in Debug only). Open: the WG1 gap — a self-test's message loop occasionally stalls past 100 ms during
+  a run (GPU and WARP; not introduced by 26b; to be investigated, DECISIONS.md Unit 26b).
+- Not in Unit 26b: form editors, more than two runs compared, completion of region parameter paths, band and
+  profile curves overlaid for run B.
+
 ## 7. Language placement (D6: C and Fortran deferred)
 
 | Component | Language | Reason |
@@ -2738,6 +2759,7 @@ src/<layer>/...             implementations                                  (cr
 tests/<layer>/...           Catch2 tests mirroring src/                      (created per unit)
 include/NiTCAD/app/         document, run_controller, workspace, view_settings, deck_sections, commands, layout,
                             probe, examples, run_monitor, app_state                     (Unit 26)
+                            live_check, deck_vocabulary, compare                        (Unit 26b)
 src/app/                    the app logic and the window (main_window, viewport, deck_pane, pages, self_test) (Unit 26)
 tests/app/                  the app logic, the window (hidden, WARP), the self-test, layering   (Unit 26)
 app/                        main.cpp: the nitcad-app entry point                        (Unit 26)
@@ -2907,7 +2929,7 @@ built.
 | 23 | Thermal / electrothermal coupling | physics, assemble, solve | **done, on `main`** (`7300b67`, PR #30): the lattice temperature as a fourth Newton unknown (the rise τ) with an exact Jacobian; Wachutka's thermodynamic fluxes (Boltzmann and Fermi–Dirac), the heat as the energy flux's divergence with Peltier and Thomson heat, isothermal and R_th thermal contacts; T in every model the assembler has; steady sweeps, `trace_bias` (thermal-runaway folds), transients and AC; traps and BTBT refused; thermionic emission (deferred) and incomplete ionization refused (6.2, Unit 23; DECISIONS.md T1–T14, U1–U8) |
 | 24 | Analysis and extraction engine | analysis | **done, on `main`** (`4183767`): curves read from sweeps and small-signal runs; transistor, diode and breakdown figures; C-V doping profile, flat band and the conductance method; two-port Y/Z/h/S, Mason's U, k, MAG/MSG, f_T and f_max; every extraction with the points it used and resolution and extrapolation flags (6.13, Unit 24) |
 | 25 | Scientific visualization / rendering | render | **25a done** (`render/visualization`): CPU scenes, Direct3D 12 and Direct2D drawing to PNG, `nitcad plot` (6.14); **25b done** (`render/derived-fields`): \|E\|, \|J\|, isosurfaces, streamlines (6.14); **25c done** (`render/vectors-clip`): arrows, clipping box, exploded view, filmstrips (6.14) |
-| 26 | Native Windows application and workflow | app | **done** (`app/windows-application`): `nitcad-app.exe`, Win32 with Direct3D 12 / Direct2D; deck editor, runs on a worker, run monitor, results, examples, `--self-test` (6.14, Unit 26) |
+| 26 | Native Windows application and workflow | app | **done, on `main`** (`e9b1d71`, PR #59): `nitcad-app.exe`, Win32 with Direct3D 12 / Direct2D; deck editor, runs on a worker, run monitor, results, examples, `--self-test` (6.14, Unit 26); **26b done** (`app/analysis-workspace`): live checking and completion, structure preview, cut lines, run comparison, mesh quality (6.14, Unit 26b) |
 | 27 | Optimization / sensitivity / inverse-design workflows | analysis, solve | long-term target |
 | 28 | Bias step cutting (commercial-readiness programme, 11.3) | solve, results | **done, on `main`** (`06b708d`, PR #31): off by default; halving and growth from the last converged state (11.3, Unit 28; DECISIONS.md S1–S7) |
 | 29 | The io layer: files and checkpoint/restart (11.3) | io | **done, on `main`** (`f69a7a8`, PR #33): meshes, sweeps and checkpoints in a versioned, checksummed container with atomic writes; restart equals the uninterrupted sweep (6.6, Unit 29; DECISIONS.md IO1–IO7) |
@@ -2977,7 +2999,7 @@ exists, not finished), **planned** (nothing built). Audit of 2026-10-09, against
 | Generic fields/equations | Field descriptors and the unknowns' map; the drift-diffusion and electrothermal rows as equation terms composed by equation set, behind the unchanged `DriftDiffusion` (Unit 40, 6.12.1–2) | **Verified, bit-identical, on `main`** (Unit 40; `629bed0`, PR #50; below) | Move the model data out of `DriftDiffusion` and retire it as the wrapper; derived and edge/cell fields; `EquilibriumPoisson` from the same terms |
 | Scalable linear solvers | Eigen SparseLU (default), PARDISO opt-in (Unit 18); GMRES with an ILUT preconditioner opt-in, real and complex, with a reported SparseLU fallback (Unit 44, 6.10) | **GMRES-ILUT verified, opt-in** (Unit 44, on `linalg/iterative`): 3D 9–72× faster and 8–26× less memory than SparseLU | Algebraic multigrid and block (field-split) preconditioners; parallel assembly |
 | Results and provenance | Plain-data results; run record with identity digest (6.6); sweeps persisted bit for bit (Unit 29); provenance (build, revision, platform, start, wall time) in every run record and file, transient and small-signal files, `nitcad --version` (Unit 42) | **Verified** (Unit 42, 6.6; PR #52; DECISIONS.md PV1–PV7) | A release version policy (PD5); cross-machine checksums (6.8) |
-| Visualization, GUI, batch | The `nitcad check|run|plot` batch runner over the input deck (Unit 31); the `render` layer and `nitcad plot` (Unit 25a, 6.14); rates and the mesh digest in results (Unit 45, 6.6); \|E\|, \|J\|, isosurfaces and streamlines (Unit 25b, 6.14); arrows, clipping, exploded views and filmstrips (Unit 25c, 6.14); the Windows application `nitcad-app` (Unit 26, 6.14) | **Batch runner verified, on `main`** (Unit 31; `6f67510`, PR #37); **core visualization verified, on `main`** (Unit 25a; `6d2135b`, PR #55); **rates and digest verified, on `main`** (Unit 45; `81622ca`, PR #56); **derived fields verified, on `main`** (Unit 25b; `8256cf8`, PR #57); **arrows, clipping, exploded views and filmstrips verified** (Unit 25c); **the GUI verified** (Unit 26, on `app/windows-application`) | Unit 26b |
+| Visualization, GUI, batch | The `nitcad check|run|plot` batch runner over the input deck (Unit 31); the `render` layer and `nitcad plot` (Unit 25a, 6.14); rates and the mesh digest in results (Unit 45, 6.6); \|E\|, \|J\|, isosurfaces and streamlines (Unit 25b, 6.14); arrows, clipping, exploded views and filmstrips (Unit 25c, 6.14); the Windows application `nitcad-app` (Unit 26, 6.14); its analysis workspace (Unit 26b, 6.14) | **Batch runner verified, on `main`** (Unit 31; `6f67510`, PR #37); **core visualization verified, on `main`** (Unit 25a; `6d2135b`, PR #55); **rates and digest verified, on `main`** (Unit 45; `81622ca`, PR #56); **derived fields verified, on `main`** (Unit 25b; `8256cf8`, PR #57); **arrows, clipping, exploded views and filmstrips verified** (Unit 25c); **the GUI verified, on `main`** (Unit 26; `e9b1d71`, PR #59); **the analysis workspace verified** (Unit 26b, on `app/analysis-workspace`; the WG1 gap open) | the WG1 gap (investigation deferred by the owner) |
 | Validation against published/measured data | Legacy, analytic and convergence gates throughout; resistivity against dopant density (NBS SP 400-64) and the measured n_i(300 K) as benchmark decks (Unit 33, 10.1) | **Verified, on `main`** (Unit 33; `a14ac96`, PR #41): gaps found and pinned (boron mobility up to +48%, incomplete ionization at heavy doping, n_i +10%); the opt-in Masetti hole mobility (Unit 34; `e14a53f`, PR #42) brings boron to within 11% (AC3/AC5 at 1e18 accepted as documented limitations); Unit 35 (`2d1fdc7`, PR #44) makes Masetti and a published band set (n_i within the measurement's uncertainty) the defaults | A density-dependent ionization level (owner decision); breakdown and device-level benchmarks from accessible sources |
 
 **As built (Unit 28, bias step cutting; `solve::StepControl` in `solve/bias.hpp`; DECISIONS.md S1–S7):**
