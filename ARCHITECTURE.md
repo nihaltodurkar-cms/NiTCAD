@@ -2611,6 +2611,27 @@ by the owner 2026-10-22):**
 - Not in Unit 25b: vector glyphs, clipping, exploded views, filmstrips (25c); displacement current; E or J stored in
   results.
 
+**As built (Unit 25c, arrows, the clipping box, the exploded view, filmstrips; DECISIONS.md DC1–DC6, CQ1–CQ4,
+CG1–CG9; accepted by the owner 2026-10-22):**
+- **Arrows** (`streamlines.hpp` `grid_arrows`, `surface_arrows`; `scene.hpp` `add_arrows`, `exposed_boundary`): sites
+  on a centred 2D grid or spread by area over 3D surfaces (the boundary not under contacts, or slices), reading the
+  streamline field; an exclusion mask keeps current arrows out of insulators; one length; colored by \|v\| on the
+  3D solid, near-black over a field map (CQ1).
+- **Clipping box** (`geometry.hpp` `Box`, `outside_box`, `Geometry::clipped_surface`; `ViewOptions::clip`): the
+  boundary's parts outside the box and the cut faces inside the device, a closed outward surface; 3D solid and field
+  views (CQ4).
+- **Exploded view** (`Geometry::region_surfaces`, `scene.hpp` `exploded_view`): each region's closed surface and its
+  contacts moved along an axis by rank, 12% of the extent per step by default (CQ3).
+- **Filmstrips** (`filmstrip_scenes`, `time_label`, `image.hpp` `tile_images`): up to 12 frames of a transient run on
+  one scale (CQ2), frames also as separate PNGs. `nitcad plot` keeps transient snapshots' currents and rates.
+- **`nitcad plot`**: `--vectors --arrows`, `--clip`, `--view exploded --axis --gap`, `--view filmstrip --every
+  --columns --frames`.
+- Gates: closed clipped and region surfaces (volumes to 10⁻¹⁰), exact arrow directions and placement, shared
+  filmstrip scale; 20 WARP references (5 new); 40 mutants caught; Release and Debug at every commit. Measured on
+  1,053,696 tetrahedra: 400 arrows 0.61 s, a quarter-cut surface 0.67 s, the exploded view 2.0 s.
+- Not in Unit 25c: interactive clip handles and animation (26), oblique clip planes, streamtubes, magnitude-scaled
+  glyphs, video encoding.
+
 ## 7. Language placement (D6: C and Fortran deferred)
 
 | Component | Language | Reason |
@@ -2853,7 +2874,7 @@ built.
 | 22 | AC small-signal analysis | linalg, assemble, solve, results | **done, on `main`** (`75cc2c0`): J + iωt₀C + T(iωt₀) at a DC or quasi-static operating point, complex linear solver, admittance matrix with displacement current and a resolution bound, interface traps in the frequency domain (6.2, Unit 22) |
 | 23 | Thermal / electrothermal coupling | physics, assemble, solve | **done, on `main`** (`7300b67`, PR #30): the lattice temperature as a fourth Newton unknown (the rise τ) with an exact Jacobian; Wachutka's thermodynamic fluxes (Boltzmann and Fermi–Dirac), the heat as the energy flux's divergence with Peltier and Thomson heat, isothermal and R_th thermal contacts; T in every model the assembler has; steady sweeps, `trace_bias` (thermal-runaway folds), transients and AC; traps and BTBT refused; thermionic emission (deferred) and incomplete ionization refused (6.2, Unit 23; DECISIONS.md T1–T14, U1–U8) |
 | 24 | Analysis and extraction engine | analysis | **done, on `main`** (`4183767`): curves read from sweeps and small-signal runs; transistor, diode and breakdown figures; C-V doping profile, flat band and the conductance method; two-port Y/Z/h/S, Mason's U, k, MAG/MSG, f_T and f_max; every extraction with the points it used and resolution and extrapolation flags (6.13, Unit 24) |
-| 25 | Scientific visualization / rendering | render | **25a done** (`render/visualization`): CPU scenes, Direct3D 12 and Direct2D drawing to PNG, `nitcad plot` (6.14); **25b done** (`render/derived-fields`): \|E\|, \|J\|, isosurfaces, streamlines (6.14); 25c target |
+| 25 | Scientific visualization / rendering | render | **25a done** (`render/visualization`): CPU scenes, Direct3D 12 and Direct2D drawing to PNG, `nitcad plot` (6.14); **25b done** (`render/derived-fields`): \|E\|, \|J\|, isosurfaces, streamlines (6.14); **25c done** (`render/vectors-clip`): arrows, clipping box, exploded view, filmstrips (6.14) |
 | 26 | Native Windows application and workflow | app | target; Win32 API, x64 target, Direct3D 12 / Direct2D |
 | 27 | Optimization / sensitivity / inverse-design workflows | analysis, solve | long-term target |
 | 28 | Bias step cutting (commercial-readiness programme, 11.3) | solve, results | **done, on `main`** (`06b708d`, PR #31): off by default; halving and growth from the last converged state (11.3, Unit 28; DECISIONS.md S1–S7) |
@@ -2924,7 +2945,7 @@ exists, not finished), **planned** (nothing built). Audit of 2026-10-09, against
 | Generic fields/equations | Field descriptors and the unknowns' map; the drift-diffusion and electrothermal rows as equation terms composed by equation set, behind the unchanged `DriftDiffusion` (Unit 40, 6.12.1–2) | **Verified, bit-identical, on `main`** (Unit 40; `629bed0`, PR #50; below) | Move the model data out of `DriftDiffusion` and retire it as the wrapper; derived and edge/cell fields; `EquilibriumPoisson` from the same terms |
 | Scalable linear solvers | Eigen SparseLU (default), PARDISO opt-in (Unit 18); GMRES with an ILUT preconditioner opt-in, real and complex, with a reported SparseLU fallback (Unit 44, 6.10) | **GMRES-ILUT verified, opt-in** (Unit 44, on `linalg/iterative`): 3D 9–72× faster and 8–26× less memory than SparseLU | Algebraic multigrid and block (field-split) preconditioners; parallel assembly |
 | Results and provenance | Plain-data results; run record with identity digest (6.6); sweeps persisted bit for bit (Unit 29); provenance (build, revision, platform, start, wall time) in every run record and file, transient and small-signal files, `nitcad --version` (Unit 42) | **Verified** (Unit 42, 6.6; PR #52; DECISIONS.md PV1–PV7) | A release version policy (PD5); cross-machine checksums (6.8) |
-| Visualization, GUI, batch | The `nitcad check|run|plot` batch runner over the input deck (Unit 31); the `render` layer and `nitcad plot` (Unit 25a, 6.14); rates and the mesh digest in results (Unit 45, 6.6); \|E\|, \|J\|, isosurfaces and streamlines (Unit 25b, 6.14); no GUI | **Batch runner verified, on `main`** (Unit 31; `6f67510`, PR #37); **core visualization verified, on `main`** (Unit 25a; `6d2135b`, PR #55); **rates and digest verified, on `main`** (Unit 45; `81622ca`, PR #56); **derived fields verified** (Unit 25b); GUI planned | 25c, then the GUI (Units 26, 26b) |
+| Visualization, GUI, batch | The `nitcad check|run|plot` batch runner over the input deck (Unit 31); the `render` layer and `nitcad plot` (Unit 25a, 6.14); rates and the mesh digest in results (Unit 45, 6.6); \|E\|, \|J\|, isosurfaces and streamlines (Unit 25b, 6.14); arrows, clipping, exploded views and filmstrips (Unit 25c, 6.14); no GUI | **Batch runner verified, on `main`** (Unit 31; `6f67510`, PR #37); **core visualization verified, on `main`** (Unit 25a; `6d2135b`, PR #55); **rates and digest verified, on `main`** (Unit 45; `81622ca`, PR #56); **derived fields verified, on `main`** (Unit 25b; `8256cf8`, PR #57); **arrows, clipping, exploded views and filmstrips verified** (Unit 25c); GUI planned | the GUI (Units 26, 26b) |
 | Validation against published/measured data | Legacy, analytic and convergence gates throughout; resistivity against dopant density (NBS SP 400-64) and the measured n_i(300 K) as benchmark decks (Unit 33, 10.1) | **Verified, on `main`** (Unit 33; `a14ac96`, PR #41): gaps found and pinned (boron mobility up to +48%, incomplete ionization at heavy doping, n_i +10%); the opt-in Masetti hole mobility (Unit 34; `e14a53f`, PR #42) brings boron to within 11% (AC3/AC5 at 1e18 accepted as documented limitations); Unit 35 (`2d1fdc7`, PR #44) makes Masetti and a published band set (n_i within the measurement's uncertainty) the defaults | A density-dependent ionization level (owner decision); breakdown and device-level benchmarks from accessible sources |
 
 **As built (Unit 28, bias step cutting; `solve::StepControl` in `solve/bias.hpp`; DECISIONS.md S1–S7):**
