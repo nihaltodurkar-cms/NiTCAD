@@ -3144,7 +3144,8 @@ self-tests (WARP, the GPU, the debug layer). Debug: `app` 101 s, `app_window` 23
 camera's zoom and pan, the 2D axes in view, screen positions), `app`, `app/`, `examples/`, tests, `CMakeLists.txt`
 and this file differs from `main` (`e289e44`): no numerical change, and the 20 WARP references pass unchanged.
 **Status:** Unit 26 built (WG1–WG8 met on this workstation; WG4 on the hosted CI runner unverified until an
-authorized push). Awaiting the owner's acceptance; then ARCHITECTURE.md as built (WG6). Nothing pushed.
+authorized push). **Accepted by the owner 2026-10-22** ("Accept Unit 26"); ARCHITECTURE.md 6.14, 8, 11 and 11.3
+updated to "as built" (WG6). Nothing pushed.
 
 ---
 
