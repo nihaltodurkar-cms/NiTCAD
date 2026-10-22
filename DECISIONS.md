@@ -3397,6 +3397,52 @@ ARCHITECTURE.md 6.14, 8, 11 and 11.3 updated to "as built" (XG8). Nothing pushed
 **Not in Unit 26b (VA7 and later):** form editors that write the deck, project management, remote runs, plugins,
 localization, an installer; completion of region parameter paths; more than two runs compared at once.
 
+### Unit 26c — GUI catch-up (proposed 2026-10-22; on `app/gui-catch-up`)
+
+**Owner request:** "GUI catch-up" (2026-10-22), chosen after Unit 26b's acceptance: bring into the window what
+`nitcad plot` draws but the window does not, and what Units 25c and 26 left for the application. The owner's
+answers of the same day: transient snapshots as **playback only** (the tiled filmstrip stays in `nitcad plot`); the
+clip box edited by **inspector sliders** (no in-view handles); **`nitcad plot --hide <region>`** added for region
+visibility. The owner's conditions of Units 25, 26 and 26b hold: numerics and layer boundaries preserved, Release
+and Debug suites at every commit, `/W4 /WX`, hand mutants, nothing pushed or merged without authorization.
+
+**What exists (audited on `app/analysis-workspace` at `195e829`).** `nitcad plot` draws arrows (`--vectors`,
+`--arrows`, 300 in 2D and 400 in 3D), streamlines (`--streamlines`, `--lines` 24, `--from <contact>`, `--seeds` a
+line or a 3D plane), the exploded view (`--axis`, `--gap`) and filmstrips (`--every`, `--columns`, `--frames`;
+DC4: at most 12 frames on one scale fitted over all). `ViewSettings` already holds the curves' swept and sensed
+contacts, the C-V frequency and the log axis, but the inspector shows no control for them. The scene tree lists the
+regions without any action. `render::ViewOptions` has no notion of a hidden region; no `nitcad plot` option hides
+one. Units 25a (VR7) and 25c (DC4, DC6) left animation playback and interactive clip editing "to 26"; Unit 26 did
+not take them (ARCHITECTURE.md 6.14, "Not in Unit 26").
+
+**Design:**
+
+| # | Choice |
+|---|---|
+| YD1 | **Arrows and streamlines.** Inspector controls on the field view: Arrows (none, E, J, Jn, Jp) with a count; Streamlines (none, E, J, Jn, Jp) with a count and seeds from a contact or along a typed seed line (2D) or plane (3D). The same rules, defaults and messages as `nitcad plot` (the map shows the vector field's own magnitude); `ViewSettings` gains the options and `plot_arguments` gives `--vectors`, `--arrows`, `--streamlines`, `--lines`, `--from`, `--seeds`. |
+| YD2 | **Exploded view.** A 3D view kind with the axis (x, y, z) and gap (µm, default 12% of the extent) in the inspector, as `--view exploded`. |
+| YD3 | **Curve pickers.** On the I-V, C-V and current views the inspector shows the swept contact, the sensed contact, the C-V frequency and the log axis (the existing `ViewSettings` fields). |
+| YD4 | **Region visibility.** A check box per region in the scene tree hides it. `render::ViewOptions::hidden_regions`: the solid, mesh, field, slice, iso, exploded and quality views leave out a hidden region's control-volume pieces (2D) or elements and boundary faces (3D); the faces a hidden region shared with a shown one become boundary faces; contacts on hidden regions only are left out; scales are fitted over the shown regions. `nitcad plot --hide <region>` (repeatable) with the same rules; an unknown region name is refused. |
+| YD5 | **Transient playback.** On a transient run's device view: Play/Pause, a time slider over the snapshots and step keys (previous, next, first, last). The scale is fitted once over all snapshots (as DC4) and stays fixed; a frame is drawn by a timer (5 frames a second), never by a loop on the UI thread, and a frame not yet drawn is skipped rather than queued. The tiled filmstrip stays in `nitcad plot`. |
+| YD6 | **Clip box sliders.** In 3D, a low and a high slider per axis over the device's extent (1,000 steps, values rounded to the nanometre) beside the typed box; moving one updates the box and the view. |
+
+**Commits:** 26c·1 arrows, streamlines, the exploded view and the curve pickers (YD1–YD3; `app` only); 26c·2 region
+visibility (YD4; `render`, `nitcad plot`, `app`); 26c·3 transient playback and the clip sliders (YD5, YD6).
+
+**Acceptance gates:**
+
+| # | Gate | Commit |
+|---|---|---|
+| YG1 | Every new view and overlay in the window — arrows and streamlines in 2D and 3D, the exploded view, the curves with chosen contacts and frequency, hidden regions — equals `nitcad plot`'s PNG for the same options to the bit (WG4's choices). | 26c·1, 26c·2 |
+| YG2 | Region visibility: with no region hidden every scene is unchanged (the existing references pass); a hidden region's pieces, elements and contacts are absent and the shown regions' are unchanged; the shared faces close the shown regions; WARP references of the 2D and 3D MOSFETs with the oxide hidden. | 26c·2 |
+| YG3 | Playback: every frame equals the filmstrip frame of the same snapshot on the same scale to the bit; the window's message loop meets WG1 while playing; Pause, the slider and the step keys land on the snapshot asked for. | 26c·3 |
+| YG4 | Clip sliders: a slider's value and the typed box agree both ways; the view equals `nitcad plot --clip` with the slider's box. | 26c·3 |
+| YG5 | The window: every new command in the menus and reachable by the keyboard; a clean D3D12 debug layer and no live graphics object after the window; per-monitor DPI for the new controls. | all |
+| YG6 | Suites as WG6 (Release and Debug at every commit, `/W4 /WX`, hand mutants caught); `app` still free of `physics` and `assemble`; no numerical change; ARCHITECTURE.md as built after acceptance. | all |
+
+**Not in Unit 26c:** in-view clip handles (the owner chose sliders), the tiled filmstrip in the window, video
+export, oblique clip planes, streamtubes; the WG1 gap (deferred by the owner, Unit 26b).
+
 ---
 
 ## New questions the advisor raised (not yet in `ARCHITECTURE.md`)
