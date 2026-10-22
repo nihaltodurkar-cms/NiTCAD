@@ -12,7 +12,7 @@ constexpr std::uint16_t vk_tab = 0x09, vk_f4 = 0x73, vk_f5 = 0x74, vk_f6 = 0x75,
 
 constexpr std::array<std::string_view, 7> bar{"&File", "&Edit", "&Device", "&Mesh", "&Physics", "&Simulation", "&View"};
 
-constexpr std::array<CommandInfo, 35> list{{
+constexpr std::array<CommandInfo, 38> list{{
     {Command::new_deck, "&File", "&New deck", {'N', true}, "Ctrl+N"},
     {Command::open_deck, "&File", "&Open deck...", {'O', true}, "Ctrl+O"},
     {Command::open_result, "&File", "Open &result...", {'R', true, true}, "Ctrl+Shift+R"},
@@ -45,9 +45,12 @@ constexpr std::array<CommandInfo, 35> list{{
     {Command::next_tab, "&View", "Next &tab", {vk_tab, true}, "Ctrl+Tab"},
     {Command::previous_tab, "&View", "Pre&vious tab", {vk_tab, true, true}, "Ctrl+Shift+Tab"},
     {Command::next_pane, "&View", "Ne&xt pane", {vk_f6}, "F6"},
-    {Command::tab_view, "&View", "Device vie&w", {'1', true}, "Ctrl+1"},
-    {Command::tab_curves, "&View", "&Curves", {'2', true}, "Ctrl+2"},
-    {Command::tab_deck, "&View", "D&eck", {'3', true}, "Ctrl+3"},
+    {Command::tab_start, "&View", "Start pa&ge", {'1', true}, "Ctrl+1"},
+    {Command::tab_view, "&View", "Device vie&w", {'2', true}, "Ctrl+2"},
+    {Command::tab_curves, "&View", "&Curves", {'3', true}, "Ctrl+3"},
+    {Command::tab_deck, "&View", "D&eck", {'4', true}, "Ctrl+4"},
+    {Command::tab_run, "&View", "Ru&n monitor", {'5', true}, "Ctrl+5"},
+    {Command::tab_results, "&View", "Re&sults", {'6', true}, "Ctrl+6"},
 }};
 
 constexpr std::span<const CommandInfo> fixed{list};

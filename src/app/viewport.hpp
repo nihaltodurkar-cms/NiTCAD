@@ -41,6 +41,9 @@ public:
     // What to show: a scene drawn with the renderer (both outlive the next call), or a message.
     void show(render::Renderer* renderer, const Scene* scene);
     void show_message(std::string message);
+    // Makes the swap chain now (at the view's size), so a first present later does not pay for it: the
+    // run monitor prepares its plot before a run starts.
+    void prepare(render::Renderer* renderer);
     // Draws now (also on WM_PAINT and WM_SIZE). Returns the error of the last present, if any.
     void present();
     [[nodiscard]] const std::optional<std::string>& error() const noexcept { return error_; }

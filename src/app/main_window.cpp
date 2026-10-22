@@ -111,7 +111,8 @@ std::unique_ptr<MainWindow> MainWindow::create(const WindowOptions& options) {
 MainWindow::~MainWindow() {
     runner_.request_stop();
     runner_.wait();
-    if (viewport_) viewport_->release();  // the swap chain before the renderer
+    if (viewport_) viewport_->release();  // the swap chains before the renderer
+    if (run_page_) run_page_->release();
     if (hwnd_) {
         SetWindowLongPtrW(hwnd_, GWLP_USERDATA, 0);
         DestroyWindow(hwnd_);
@@ -160,7 +161,7 @@ bool MainWindow::create_children() {
                                         TVS_SHOWSELALWAYS,
                  hwnd_, id_tree, WS_EX_CLIENTEDGE);
     tabs_ = make(WC_TABCONTROLW, L"", WS_VISIBLE | WS_TABSTOP | WS_CLIPSIBLINGS, hwnd_, id_tabs);
-    for (const wchar_t* t : {L"Device view", L"Curves", L"Deck"}) {
+    for (const wchar_t* t : {L"Start", L"Device view", L"Curves", L"Deck", L"Run monitor", L"Results"}) {
         TCITEMW item{};
         item.mask = TCIF_TEXT;
         item.pszText = const_cast<wchar_t*>(t);
@@ -169,6 +170,9 @@ bool MainWindow::create_children() {
     }
     viewport_ = std::make_unique<Viewport>(hwnd_, *this, id_viewport);
     deck_ = std::make_unique<DeckPane>(hwnd_, *this, id_deck);
+    start_ = std::make_unique<StartPage>(hwnd_, *this, id_start);
+    run_page_ = std::make_unique<RunPage>(hwnd_, *this, id_run_page);
+    results_ = std::make_unique<ResultsPage>(hwnd_, id_results);
     metrics_ = make(L"STATIC", L"", WS_VISIBLE | SS_LEFTNOWORDWRAP | SS_CENTERIMAGE, hwnd_, id_metrics);
     inspector_ = CreateWindowExW(WS_EX_CONTROLPARENT, panel_class, L"", WS_CHILD | WS_VISIBLE | WS_CLIPCHILDREN, 0, 0,
                                  10, 10, hwnd_, reinterpret_cast<HMENU>(static_cast<INT_PTR>(id_inspector)),
@@ -200,7 +204,8 @@ bool MainWindow::create_children() {
     combo_fill(child(id_scale), {scale_names.begin(), scale_names.end()}, 0);
     combo_fill(child(id_colormap), {colormap_names.begin(), colormap_names.end()}, 0);
     combo_fill(child(id_slice_axis), {"none", "x", "y", "z"}, 0);
-    return toolbar_ && status_ && tree_ && tabs_ && metrics_ && inspector_ && viewport_->hwnd() && deck_->hwnd();
+    return toolbar_ && status_ && tree_ && tabs_ && metrics_ && inspector_ && viewport_->hwnd() && deck_->hwnd() &&
+           start_->hwnd() && run_page_->hwnd() && results_->hwnd();
 }
 
 HWND MainWindow::child(int id) const noexcept {
@@ -241,7 +246,7 @@ void MainWindow::fill_menu(HMENU menu, int index) {
                 AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
             }
             if (c.id == Command::fit || c.id == Command::perspective || c.id == Command::next_tab ||
-                c.id == Command::tab_view || c.id == Command::find_error) {
+                c.id == Command::tab_start || c.id == Command::find_error) {
                 AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
             }
             AppendMenuW(menu, MF_STRING, static_cast<UINT_PTR>(c.id), menu_text(c).c_str());
@@ -357,6 +362,9 @@ void MainWindow::apply_dpi(int dpi) {
     for (HWND c = GetWindow(inspector_, GW_CHILD); c; c = GetWindow(c, GW_HWNDNEXT)) set(c);
     SendMessageW(toolbar_, TB_AUTOSIZE, 0, 0);
     deck_->set_dpi(dpi);
+    start_->set_dpi(dpi, font_, bold_);
+    run_page_->set_dpi(dpi, font_);
+    results_->set_dpi(dpi, font_, bold_);
     layout();
 }
 
@@ -379,15 +387,19 @@ void MainWindow::layout() {
     place(tree_, panes_.tree);
     place(tabs_, panes_.tabs);
     place(inspector_, panes_.inspector);
-    const bool view = tab_ != tab_deck;
+    const bool view = tab_ == tab_view || tab_ == tab_curves;
     Rect page = panes_.page;
-    if (!view || tab_ == tab_curves) page.height += panes_.metrics.height;  // no metrics strip
+    if (tab_ != tab_view) page.height += panes_.metrics.height;  // the metrics strip is the device view's
+    const Rect whole{panes_.page.x, panes_.page.y, panes_.page.width, panes_.page.height + panes_.metrics.height};
     place(viewport_->hwnd(), page);
-    place(deck_->hwnd(), {panes_.page.x, panes_.page.y, panes_.page.width, panes_.page.height + panes_.metrics.height});
+    for (HWND h : {deck_->hwnd(), start_->hwnd(), run_page_->hwnd(), results_->hwnd()}) place(h, whole);
     place(metrics_, panes_.metrics);
     ShowWindow(viewport_->hwnd(), view ? SW_SHOW : SW_HIDE);
     ShowWindow(metrics_, tab_ == tab_view ? SW_SHOW : SW_HIDE);
-    ShowWindow(deck_->hwnd(), view ? SW_HIDE : SW_SHOW);
+    ShowWindow(deck_->hwnd(), tab_ == tab_deck ? SW_SHOW : SW_HIDE);
+    ShowWindow(start_->hwnd(), tab_ == tab_start ? SW_SHOW : SW_HIDE);
+    ShowWindow(run_page_->hwnd(), tab_ == tab_run ? SW_SHOW : SW_HIDE);
+    ShowWindow(results_->hwnd(), tab_ == tab_results ? SW_SHOW : SW_HIDE);
     // The tab strip is drawn over the page's top: keep the page above it in Z order.
     SetWindowPos(tabs_, HWND_BOTTOM, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
     layout_inspector();
@@ -451,16 +463,53 @@ std::string MainWindow::status(int part) const {
 ViewSettings& MainWindow::settings() noexcept { return tab_ == tab_curves ? curve_view_ : device_view_; }
 
 void MainWindow::select_tab(int tab) {
-    tab_ = std::clamp(tab, 0, 2);
+    tab_ = std::clamp(tab, 0, tab_count - 1);
     SendMessageW(tabs_, TCM_SETCURSEL, static_cast<WPARAM>(tab_), 0);
     layout();
-    if (tab_ == tab_deck) {
+    switch (tab_) {
+    case tab_deck:
         SetFocus(deck_->editor());
-    } else {
+        break;
+    case tab_start:
+        start_->set(state_.recent, examples_);
+        break;
+    case tab_run:
+        run_page_->plot().prepare(renderer());  // its swap chain before a run, not during it
+        run_page_->update(runner_, renderer(), true);
+        break;
+    case tab_results:
+        results_->show(workspace());
+        break;
+    default:
         sync_inspector();
         refresh();
+        break;
     }
 }
+
+bool MainWindow::open_example(std::size_t index) {
+    if (index >= examples_.size() || runner_.busy()) return false;
+    fs::path to = options_.examples_copy_dir;
+    if (to.empty()) {
+        to = win32::documents_dir() / L"NiTCAD" / L"examples";
+    }
+    auto copy = copy_example(examples_[index], to);
+    if (!copy) {
+        set_status(status_state, copy.error().message);
+        return false;
+    }
+    return open_deck(*copy);
+}
+
+void MainWindow::start_command(int command) { execute(static_cast<Command>(command)); }
+
+void MainWindow::start_recent(std::size_t index) { execute(static_cast<Command>(static_cast<int>(Command::recent_first) + static_cast<int>(index))); }
+
+void MainWindow::start_example(std::size_t index) {
+    if (confirm_discard()) open_example(index);
+}
+
+void MainWindow::run_page_stop() { execute(Command::stop); }
 
 void MainWindow::default_settings() {
     device_view_ = {};
@@ -506,11 +555,12 @@ void MainWindow::set_workspace(Workspace w) {
     default_settings();
     fill_tree();
     sync_inspector();
+    results_->show(&*workspace_);
     refresh();
 }
 
 void MainWindow::refresh() {
-    if (tab_ == tab_deck) return;
+    if (tab_ != tab_view && tab_ != tab_curves) return;
     scene_.reset();
     values_.clear();
     if (!workspace_) {
@@ -840,6 +890,30 @@ void MainWindow::on_run_events() {
     if (!runner_.process()) return;
     const RunState s = runner_.state();
     if (s == RunState::running || s == RunState::stopping) {
+        // The events of a fast solve arrive as fast as the window takes them; showing them costs more than
+        // taking them, so the status and the monitor follow at most every 50 ms (and on the run timer when
+        // the events pause), and the message queue stays free for input and paint (WG1).
+        if (std::chrono::steady_clock::now() - run_ui_updated_ < std::chrono::milliseconds(50)) return;
+        on_run_timer();
+        return;
+    }
+    KillTimer(hwnd_, run_timer);
+    const Pending pending = std::exchange(pending_, Pending::none);
+    run_page_->update(runner_, renderer(), true);  // before the results are taken: how the run ended
+    deck_->set_diagnostics(runner_.diagnostics());
+    on_run_finished(pending, s);
+}
+
+// The run's progress in the status bar and the run monitor: on its events (at most every 50 ms) and on
+// a timer while it runs.
+void MainWindow::on_run_timer() {
+    const RunState s = runner_.state();
+    if (s != RunState::running && s != RunState::stopping) {
+        KillTimer(hwnd_, run_timer);
+        return;
+    }
+    run_ui_updated_ = std::chrono::steady_clock::now();
+    {
         const auto& rows = runner_.points();
         std::string text = s == RunState::stopping ? "Stopping..." : "Running";
         if (!rows.empty()) {
@@ -851,11 +925,12 @@ void MainWindow::on_run_events() {
             text += std::format(", iteration {}, update {:.2g}", r.iterations, r.update);
         }
         set_status(status_state, text);
+        run_page_->update(runner_, renderer());
         update_command_states();
-        return;
     }
-    const Pending pending = std::exchange(pending_, Pending::none);
-    deck_->set_diagnostics(runner_.diagnostics());
+}
+
+void MainWindow::on_run_finished(Pending pending, RunState s) {
     if (s == RunState::failed) {
         const std::string why = runner_.error() ? runner_.error()->message : std::string("failed");
         set_status(status_state, (pending == Pending::run ? "The run failed: " : "The deck does not build: ") + why);
@@ -937,13 +1012,20 @@ void MainWindow::forward_edit(UINT message) {
 
 void MainWindow::focus_next_pane() {
     HWND focus = GetFocus();
-    const HWND page = tab_ == tab_deck ? deck_->editor() : viewport_->hwnd();
+    const HWND page = tab_ == tab_deck      ? deck_->editor()
+                      : tab_ == tab_start   ? start_->hwnd()
+                      : tab_ == tab_run     ? run_page_->hwnd()
+                      : tab_ == tab_results ? results_->hwnd()
+                                            : viewport_->hwnd();
     const HWND order[] = {tree_, page, child(id_view)};
     std::size_t k = 0;
     for (std::size_t i = 0; i < 3; ++i) {
         if (focus == order[i] || IsChild(order[i], focus) || (i == 2 && IsChild(inspector_, focus))) k = i + 1;
     }
-    SetFocus(order[k % 3]);
+    // A page that is a panel gives the focus to its first control.
+    HWND target = order[k % 3];
+    if (HWND first = GetNextDlgTabItem(target, nullptr, FALSE); first && IsChild(target, first)) target = first;
+    SetFocus(target);
 }
 
 void MainWindow::execute(Command c) {
@@ -1027,9 +1109,12 @@ void MainWindow::execute(Command c) {
         if (runner_.busy()) return;
         document_.set_text(deck_->text());
         if (document_.is_untitled() && !save(true)) return;  // a run writes its outputs beside the deck
+        select_tab(tab_run);  // the run monitor follows it (shown before the run starts)
         pending_ = Pending::run;
         runner_.start_run(document_.text(), document_.path());
         set_status(status_state, "Running...");
+        SetTimer(hwnd_, run_timer, 100, nullptr);  // the progress while the events pause
+        run_page_->update(runner_, renderer(), true);  // the last run's rows cleared
         update_command_states();
         return;
     case Command::stop:
@@ -1064,12 +1149,15 @@ void MainWindow::execute(Command c) {
         measure_from_.reset();
         update_command_states();
         return;
-    case Command::next_tab: select_tab((tab_ + 1) % 3); return;
-    case Command::previous_tab: select_tab((tab_ + 2) % 3); return;
+    case Command::next_tab: select_tab((tab_ + 1) % tab_count); return;
+    case Command::previous_tab: select_tab((tab_ + tab_count - 1) % tab_count); return;
     case Command::next_pane: focus_next_pane(); return;
     case Command::tab_view: select_tab(tab_view); return;
     case Command::tab_curves: select_tab(tab_curves); return;
     case Command::tab_deck: select_tab(tab_deck); return;
+    case Command::tab_start: select_tab(tab_start); return;
+    case Command::tab_run: select_tab(tab_run); return;
+    case Command::tab_results: select_tab(tab_results); return;
     default: return;
     }
 }
@@ -1214,7 +1302,16 @@ LRESULT MainWindow::handle(UINT message, WPARAM w, LPARAM l) {
         }
         apply_dpi(win32::dpi_of(hwnd_));
         update_title();
-        select_tab(tab_view);
+        // The bundled examples (VQ11): beside the executable, else in the source tree of this build.
+        if (options_.examples_dir.empty()) {
+            wchar_t exe[MAX_PATH]{};
+            GetModuleFileNameW(nullptr, exe, MAX_PATH);
+            examples_ = list_examples(examples_directory(fs::path(exe).parent_path(), fs::path(NITCAD_EXAMPLES_DIR)));
+        } else {
+            examples_ = list_examples(options_.examples_dir);
+        }
+        refresh();  // the view's placeholder message
+        select_tab(tab_start);
         return 0;
     }
     case WM_SIZE:
@@ -1275,6 +1372,12 @@ LRESULT MainWindow::handle(UINT message, WPARAM w, LPARAM l) {
     case run_message:
         on_run_events();
         return 0;
+    case WM_TIMER:
+        if (w == run_timer) {
+            on_run_timer();
+            return 0;
+        }
+        break;
     case WM_SETCURSOR: {
         if (reinterpret_cast<HWND>(w) == hwnd_ && LOWORD(l) == HTCLIENT) {
             POINT p;
@@ -1324,6 +1427,7 @@ LRESULT MainWindow::handle(UINT message, WPARAM w, LPARAM l) {
         if (!confirm_discard()) return 0;
         save_state();
         viewport_->release();
+        run_page_->release();
         DestroyWindow(hwnd_);
         return 0;
     case WM_DESTROY:

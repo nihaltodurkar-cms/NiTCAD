@@ -3065,6 +3065,70 @@ menus); 26·3 the start page, run monitor, results workspace, `examples/`, `--se
 - **Suites:** the app, window and render tests pass in Release and Debug (the Debug render suite with the D3D12
   debug layer clean), no warnings under `/W4 /WX`.
 - **Not in 26·2 (26·3):** the start page, the run monitor, the results page, `examples/`, `--self-test`.
+- **Suites:** the whole Release suite in a clean worktree at `ea90185`: 25/25.
+
+**Commit 26·3 (the start page, run monitor, results workspace, examples and `--self-test`; WG1 window, WG4, WG8,
+VA3, VA5, VA9), as built.**
+- **`examples/` (VQ11, AQ3):** four decks, each titled and described by its first two comment lines:
+  `pn_diode_1d.deck` (an erfc n+ profile on a 1e16 p body, swept forward to 0.7 V: the band diagram and I-V),
+  `mosfet_2d.deck` (a 2 × 1 µm n-channel MOSFET under 50 nm of oxide, Gaussian source and drain pockets, Id-Vg at
+  V_D = 0.1 V, 16 points), `mosfet_3d.deck` (the same in 3D, 0.8 µm wide, a gate sweep at V_D = 0.5 V, 5 points)
+  and `moscap_cv.deck` (a 10 nm n+ poly gate on 1e17 p silicon, small-signal C-V at 1 MHz). Run with `nitcad`:
+  0.04 s, 0.7 s, 4.4 s and under 0.1 s (Release). Looked at: the diode's junction near 0.9 µm with the
+  quasi-Fermi levels split by the bias; the MOSFET's Id-Vg from 5e-9 to 6e-2 A/cm with its subthreshold slope;
+  the MOS-C falling from the oxide capacitance (3.3e-7 F/cm²) through depletion; the 3D MOSFET's inverted
+  channel. **Deviation (the MOS-C):** the sweep stops at 0.25 V, the onset of inversion: from there the
+  drift-diffusion steady state of this 1D device did not converge (Newton at 0.5 V, also with step cutting and a
+  line search, and on a mesh graded to 0.5 nm at the oxide), its electrons coming only from generation. The deck
+  says so.
+- **App logic:** `examples.hpp` (`list_examples`, `examples_directory` beside the executable else the source tree's,
+  `copy_example` into the user's Documents\NiTCAD\examples, a copy kept once made) and `run_monitor.hpp` (the
+  monitor's columns and cells, the convergence plot of every positive update on a log axis, the progress as
+  converged bias points over the planned ones).
+- **The window:** tabs Start, Device view, Curves, Deck, Run monitor, Results (Ctrl+1 to Ctrl+6); the start page
+  (New deck, Open deck, Open result, the recent files, the examples with their descriptions; an example opens as
+  the user's copy); the run monitor (shown when Run starts: a virtual list of the rows, the progress bar, Stop, a
+  status line with how the run ended, the live convergence plot in its own swap chain, made before the run starts
+  and redrawn at most every quarter second and at most a twentieth of the time); the results page (Unit 24's
+  figures with their curve and flags, the run record and provenance).
+- **`nitcad-app --self-test <deck> --out <png> [view options]` (VA6):** opens the window (shown), checks and runs the
+  deck on the worker while its message loop runs with a 10 ms timer (the longest gap must stay under 100 ms,
+  WG1), shows the view in the window's swap chain, writes the same view's image at `--size` and closes; with
+  `--debug-layer`, also no debug message and no live graphics object after the window. Exit 0, 1, 64 (usage) or
+  77 when no window or swap chain can be made (CI, WG4).
+- **Finding (fixed):** the run monitor's plot made its swap chain on its first draw, during the run; on the GPU
+  that took about 130 ms of the UI thread (the self-test's WG1 measure caught it). The swap chain is now made when
+  the monitor is shown, before the run starts: the longest gap is 19–32 ms on the GPU and 22–30 ms on WARP for
+  the 3D example, with the plot drawn in 2–3 ms.
+- **Finding (fixed, Debug):** in Debug the solver's events arrived as fast as the slower window took them, so its
+  queue was never empty and the timer (and input) waited behind the posted messages: gaps of 2.2 to 3.2 s. The
+  window now shows a run's progress at most every 50 ms (and on a 100 ms timer while the events pause), so taking
+  an event is cheap: Debug gaps 39 ms. The self-test measures the gap while the solver runs, and reports apart
+  the loading of the results and the first view when the run ends (on the UI thread: 63 ms for the 2D MOSFET and
+  95 ms for the 3D one in Release, 110 ms and 809 ms in Debug).
+- **Tests:** `examples_test` (**WG8**: exactly the four decks, titled and described; a deck without comments; the
+  directory beside the executable; a user's copy kept; every example run by the controller to completion, its
+  points all solved and its outputs written), `run_monitor_test`, and in `nitcad_app_window_test`: the start page
+  lists exactly the examples (the bundled ones and a given directory); an example opens as a copy; Run shows the
+  monitor, which fills while the run goes on; the results page holds the threshold and the record; **WG1** — Stop
+  after three points ends the run early with the completed points kept, shown and the status saying why; every
+  tab reachable from the keyboard; **WG4** (`self_test_test`) — `nitcad-app --self-test` and `nitcad plot` on the
+  2D MOSFET (potential; n with viridis and contours; Id-Vg on a log axis) and the 3D MOSFET (n) give the same PNG
+  to the bit on WARP, and on the RTX 5060 Ti; the self-test with the debug layer passes with nothing alive after
+  the window; usage errors exit 64. A session that cannot open a window skips WG4 (exit 77): on the hosted CI
+  runner this is still unverified (it needs an authorized push), and the off-screen WARP tests run there either
+  way.
+- **Mutation checks (Release): 14 of 14 caught** — the title not read from the deck, the description from the
+  first line, the examples beside the executable ignored, a user's copy overwritten, unconverged points counted as
+  done, zero updates plotted on the log axis, the point numbered from 0, an example opened in place, Run not
+  showing the monitor, the monitor updated only at the end, the start page missing an example (the bundled ones;
+  a given directory, caught once a test gave one), the self-test's image not the plot's size, the self-test
+  ignoring the view's options (caught once a view other than the window's default was compared).
+- **Observed once, not reproduced:** while two builds, a mutation run and a suite shared the machine, one GPU
+  self-test image differed from `nitcad plot`'s (the files left behind were equal) and WARP self-tests saw 400 to
+  880 ms gaps; on reruns the GPU and WARP comparisons were exact and the gaps 19–32 ms.
+- **Suites:** the app tests (32 cases) and the window tests (8 cases, the self-test included) pass in Release and
+  Debug, no warnings under `/W4 /WX`.
 
 ---
 

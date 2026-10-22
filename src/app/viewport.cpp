@@ -63,6 +63,15 @@ void Viewport::show_message(std::string message) {
     InvalidateRect(hwnd_, nullptr, TRUE);
 }
 
+void Viewport::prepare(render::Renderer* renderer) {
+    const int w = width(), h = height();
+    if (target_ || !renderer || w < 16 || h < 16) return;
+    renderer_ = renderer;
+    auto t = renderer->window_target(hwnd_, w, h);
+    if (t) target_ = std::move(*t);
+    else error_ = t.error().message;
+}
+
 void Viewport::present() {
     const int w = width(), h = height();
     if (!renderer_ || !scene_ || w < 16 || h < 16) {

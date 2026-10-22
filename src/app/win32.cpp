@@ -2,7 +2,10 @@
 #include "win32.hpp"
 
 #include <commdlg.h>
+#include <dxgi1_3.h>
+#include <dxgidebug.h>
 #include <shlobj.h>
+#include <wrl/client.h>
 
 #include <vector>
 
@@ -71,6 +74,37 @@ std::filesystem::path state_file() {
     }
     CoTaskMemFree(folder);
     return out;
+}
+
+std::filesystem::path documents_dir() {
+    PWSTR folder = nullptr;
+    std::filesystem::path out;
+    if (SUCCEEDED(SHGetKnownFolderPath(FOLDERID_Documents, 0, nullptr, &folder))) out = folder;
+    CoTaskMemFree(folder);
+    return out;
+}
+
+int live_graphics_objects() {
+    Microsoft::WRL::ComPtr<IDXGIDebug1> debug;
+    Microsoft::WRL::ComPtr<IDXGIInfoQueue> queue;
+    if (FAILED(DXGIGetDebugInterface1(0, IID_PPV_ARGS(&debug))) || FAILED(DXGIGetDebugInterface1(0, IID_PPV_ARGS(&queue)))) {
+        return -1;
+    }
+    queue->ClearStoredMessages(DXGI_DEBUG_ALL);
+    debug->ReportLiveObjects(DXGI_DEBUG_ALL,
+                             static_cast<DXGI_DEBUG_RLO_FLAGS>(DXGI_DEBUG_RLO_DETAIL | DXGI_DEBUG_RLO_IGNORE_INTERNAL));
+    int live = 0;
+    const UINT64 n = queue->GetNumStoredMessages(DXGI_DEBUG_ALL);
+    for (UINT64 i = 0; i < n; ++i) {
+        SIZE_T size = 0;
+        queue->GetMessage(DXGI_DEBUG_ALL, i, nullptr, &size);
+        std::vector<char> buffer(size);
+        auto* m = reinterpret_cast<DXGI_INFO_QUEUE_MESSAGE*>(buffer.data());
+        if (SUCCEEDED(queue->GetMessage(DXGI_DEBUG_ALL, i, m, &size)) && std::string_view(m->pDescription).starts_with("Live ")) {
+            ++live;
+        }
+    }
+    return live;
 }
 
 std::filesystem::path open_dialog(HWND owner, const wchar_t* filter, const wchar_t* title) {

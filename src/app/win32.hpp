@@ -28,8 +28,15 @@ void set_text(HWND window, std::string_view utf8);
 bool register_class(const wchar_t* name, WNDPROC proc, HBRUSH background, HCURSOR cursor = nullptr,
                     UINT style = CS_HREDRAW | CS_VREDRAW);
 
+// The user's Documents folder (empty when unknown).
+[[nodiscard]] std::filesystem::path documents_dir();
+
 // The user's application-data file for the state (%APPDATA%\NiTCAD\app.ini), empty when unknown.
 [[nodiscard]] std::filesystem::path state_file();
+
+// Direct3D and DXGI objects still alive, as the DXGI debug interface reports them (needs the Graphics
+// Tools and a device made with the debug layer to see them); -1 when the interface is not available.
+[[nodiscard]] int live_graphics_objects();
 
 // Open and save dialogs: the chosen path, or empty when cancelled. `filter` is a double-NUL list.
 [[nodiscard]] std::filesystem::path open_dialog(HWND owner, const wchar_t* filter, const wchar_t* title);

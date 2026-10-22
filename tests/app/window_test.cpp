@@ -5,6 +5,7 @@
 
 // The application's headers before the COM ones (objbase.h defines `interface` as a macro).
 #include "main_window.hpp"
+#include "win32.hpp"
 #include "NiTCAD/app/deck_sections.hpp"
 #include "fixtures.hpp"
 
@@ -97,31 +98,6 @@ RECT client_rect_of(HWND child, HWND parent) {
     GetWindowRect(child, &r);
     MapWindowPoints(nullptr, parent, reinterpret_cast<POINT*>(&r), 2);
     return r;
-}
-
-// Live Direct3D and DXGI objects the debug layer reports, or -1 without the DXGI debug interface.
-int live_objects() {
-    Microsoft::WRL::ComPtr<IDXGIDebug1> debug;
-    Microsoft::WRL::ComPtr<IDXGIInfoQueue> queue;
-    if (FAILED(DXGIGetDebugInterface1(0, IID_PPV_ARGS(&debug))) || FAILED(DXGIGetDebugInterface1(0, IID_PPV_ARGS(&queue)))) {
-        return -1;
-    }
-    queue->ClearStoredMessages(DXGI_DEBUG_ALL);
-    debug->ReportLiveObjects(DXGI_DEBUG_ALL, static_cast<DXGI_DEBUG_RLO_FLAGS>(DXGI_DEBUG_RLO_DETAIL |
-                                                                              DXGI_DEBUG_RLO_IGNORE_INTERNAL));
-    int live = 0;
-    const UINT64 n = queue->GetNumStoredMessages(DXGI_DEBUG_ALL);
-    for (UINT64 i = 0; i < n; ++i) {
-        SIZE_T size = 0;
-        queue->GetMessage(DXGI_DEBUG_ALL, i, nullptr, &size);
-        std::vector<char> buffer(size);
-        auto* m = reinterpret_cast<DXGI_INFO_QUEUE_MESSAGE*>(buffer.data());
-        if (SUCCEEDED(queue->GetMessage(DXGI_DEBUG_ALL, i, m, &size)) &&
-            std::string_view(m->pDescription).starts_with("Live ")) {
-            ++live;
-        }
-    }
-    return live;
 }
 
 }  // namespace
@@ -266,6 +242,94 @@ TEST_CASE("app window: a deck opened, run, shown, probed; the deck menus (WG7)",
     CHECK(w->runner().diagnostics()[0].line > 0);
 }
 
+TEST_CASE("app window: the start page, the run monitor, Stop and the results (WG1, WG8, VA3, VA5)", "[app]") {
+    const fs::path copies = app_test::scratch("window_examples");
+    app::WindowOptions o;
+    o.adapter = render::Adapter::warp;
+    o.show = false;
+    o.quit_on_close = false;
+    o.examples_copy_dir = copies;
+    auto w = MainWindow::create(o);
+    REQUIRE(w);
+    // The start page lists exactly the bundled examples (WG8).
+    CHECK(w->tab() == MainWindow::tab_start);
+    const auto expected = app::list_examples(NITCAD_EXAMPLES_DIR);
+    REQUIRE(expected.size() == 4);
+    REQUIRE(w->start_page().example_count() == 4);
+    std::size_t mosfet = 4;
+    for (std::size_t k = 0; k < 4; ++k) {
+        CHECK(w->start_page().example_title(static_cast<int>(k)) == app::win32::widen(expected[k].title));
+        if (expected[k].path.filename() == "mosfet_2d.deck") mosfet = k;
+    }
+    REQUIRE(mosfet < 4);
+    // Opening an example opens a copy (the installed deck stays as shipped).
+    REQUIRE(w->open_example(mosfet));
+    REQUIRE(pump_until([&] { return w->workspace() != nullptr; }));
+    CHECK(w->document().path() == copies / "mosfet_2d.deck");
+    CHECK(fs::exists(copies / "mosfet_2d.deck"));
+
+    // Run: the run monitor follows the points; when done, the potential and the figures.
+    w->execute(Command::run);
+    CHECK(w->tab() == MainWindow::tab_run);
+    int rows_while_running = 0;
+    REQUIRE(pump_until([&] {
+        if (w->runner().busy()) rows_while_running = std::max(rows_while_running, w->run_page().row_count());
+        return !w->runner().busy();
+    }));
+    CHECK(rows_while_running > 1);  // the monitor followed the run, not only its end
+    CHECK(w->tab() == MainWindow::tab_view);
+    CHECK(w->run_page().row_count() == static_cast<int>(w->runner().points().size()));
+    CHECK(w->run_page().cell(0, 1) == L"equilibrium");
+    CHECK(w->run_page().cell(1, 2) == L"1 of 16");
+    CHECK_FALSE(w->run_page().plot().error());
+    w->select_tab(MainWindow::tab_results);
+    CHECK(w->results_page().figure_count() >= 4);
+    CHECK(w->results_page().figure_cell(0, 0) == L"Threshold (max gm)");
+    CHECK(w->results_page().figure_cell(0, 3) == L"I(drain) vs V(gate)");
+    CHECK(w->results_page().record_count() > 10);
+
+    // Stop after three points: the run ends early, its completed part kept and shown (WG1).
+    w->execute(Command::run);
+    bool asked = false;
+    REQUIRE(pump_until([&] {
+        const auto converged = std::ranges::count_if(w->runner().points(), [](const app::PointRow& r) {
+            return r.phase == solve::Phase::bias && r.converged;
+        });
+        if (!asked && converged >= 3) {
+            w->execute(Command::stop);
+            asked = true;
+        }
+        return asked && !w->runner().busy();
+    }));
+    CHECK(w->status(0).starts_with("Stopped early"));
+    REQUIRE(w->workspace());
+    REQUIRE(w->workspace()->sweep);
+    CHECK(w->workspace()->sweep->points.size() >= 3);
+    CHECK(w->workspace()->sweep->points.size() < 16);
+    CHECK(w->tab() == MainWindow::tab_view);
+    CHECK(w->scene());
+    CHECK_FALSE(w->viewport().error());
+    // Every tab can be shown, from the keyboard too.
+    for (int k = 0; k < MainWindow::tab_count; ++k) w->execute(Command::next_tab);
+    CHECK(w->tab() == MainWindow::tab_view);
+}
+
+TEST_CASE("app window: the start page lists the examples of a given directory (WG8)", "[app]") {
+    const fs::path dir = app_test::scratch("window_examples_dir");
+    app_test::write(dir, "b.deck", "# Second\n# the second deck\n");
+    app_test::write(dir, "a.deck", "# First\n# the first deck\n");
+    app::WindowOptions o;
+    o.adapter = render::Adapter::warp;
+    o.show = false;
+    o.quit_on_close = false;
+    o.examples_dir = dir;
+    auto w = MainWindow::create(o);
+    REQUIRE(w);
+    REQUIRE(w->start_page().example_count() == 2);
+    CHECK(w->start_page().example_title(0) == L"First");
+    CHECK(w->start_page().example_title(1) == L"Second");
+}
+
 TEST_CASE("app window: the debug layer stays clean and no graphics object outlives the window (WG5)", "[app]") {
     const fs::path dir = app_test::scratch("window_debug");
     const fs::path deck = app_test::write(dir, "m.deck", app_test::mosfet2d);
@@ -282,9 +346,9 @@ TEST_CASE("app window: the debug layer stays clean and no graphics object outliv
     const auto messages = w->renderer()->debug_messages();
     for (const auto& m : messages) UNSCOPED_INFO(m);
     CHECK(messages.empty());
-    const int live_with_window = live_objects();
+    const int live_with_window = app::win32::live_graphics_objects();
     if (live_with_window < 0) SKIP("the DXGI debug interface is not available");
     CHECK(live_with_window > 0);  // the counter sees the renderer's objects
     w.reset();
-    CHECK(live_objects() == 0);
+    CHECK(app::win32::live_graphics_objects() == 0);
 }

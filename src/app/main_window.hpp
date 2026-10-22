@@ -9,6 +9,7 @@
 
 #include <windows.h>
 
+#include <chrono>
 #include <filesystem>
 #include <memory>
 #include <optional>
@@ -25,7 +26,9 @@
 #include "NiTCAD/app/view_settings.hpp"
 #include "NiTCAD/app/workspace.hpp"
 #include "NiTCAD/render/image.hpp"
+#include "NiTCAD/app/examples.hpp"
 #include "deck_pane.hpp"
+#include "pages.hpp"
 #include "viewport.hpp"
 
 namespace NiTCAD::app {
@@ -36,14 +39,23 @@ struct WindowOptions {
     bool show = true;                    // shown at creation (tests make hidden windows)
     bool quit_on_close = true;           // post WM_QUIT when destroyed (the application's window)
     std::filesystem::path state_file;    // the per-user state; empty: not loaded or saved
+    // The bundled examples (VQ11): where they are (empty: beside the executable, else the source tree's),
+    // and where a user's copies go (empty: the user's Documents, NiTCAD\examples).
+    std::filesystem::path examples_dir;
+    std::filesystem::path examples_copy_dir;
 };
 
 // The posted message that wakes the window for the run controller's events.
 inline constexpr UINT run_message = WM_APP + 1;
+// The timer that shows a run's progress while its events pause.
+inline constexpr UINT_PTR run_timer = 0x52;
 
-class MainWindow final : public Viewport::Host, public DeckPane::Host {
+class MainWindow final : public Viewport::Host,
+                         public DeckPane::Host,
+                         public StartPage::Host,
+                         public RunPage::Host {
 public:
-    enum Tab : int { tab_view = 0, tab_curves = 1, tab_deck = 2 };
+    enum Tab : int { tab_start = 0, tab_view, tab_curves, tab_deck, tab_run, tab_results, tab_count };
 
     // nullptr when the window cannot be made (the reason on stderr is not available to a GUI: the
     // caller shows a message box).
@@ -74,6 +86,12 @@ public:
     [[nodiscard]] const std::optional<std::string>& renderer_error() const noexcept { return renderer_error_; }
     [[nodiscard]] Viewport& viewport() noexcept { return *viewport_; }
     [[nodiscard]] DeckPane& deck() noexcept { return *deck_; }
+    [[nodiscard]] StartPage& start_page() noexcept { return *start_; }
+    [[nodiscard]] RunPage& run_page() noexcept { return *run_page_; }
+    [[nodiscard]] ResultsPage& results_page() noexcept { return *results_; }
+    [[nodiscard]] const std::vector<Example>& examples() const noexcept { return examples_; }
+    // Opens a copy of the example (in the copies' directory), as the start page does.
+    bool open_example(std::size_t index);
     [[nodiscard]] const Panes& panes() const noexcept { return panes_; }
     [[nodiscard]] int dpi() const noexcept { return dpi_; }
     [[nodiscard]] int tab() const noexcept { return tab_; }
@@ -88,7 +106,8 @@ public:
 
     // The ids of the inspector's controls and the panes (for the tests).
     enum Control : int {
-        id_tree = 4000, id_tabs, id_viewport, id_deck, id_metrics, id_inspector, id_toolbar, id_status,
+        id_tree = 4000, id_tabs, id_viewport, id_deck, id_metrics, id_inspector, id_toolbar, id_status, id_start,
+        id_run_page, id_results,
         id_view = 5001, id_field, id_point, id_scale, id_colormap, id_contours, id_edges, id_contacts, id_opaque,
         id_perspective, id_slice_axis, id_slice_at, id_clip, id_clip_box, id_levels, id_apply, id_probe_text,
         id_first_label = 5100,
@@ -110,6 +129,9 @@ private:
     void update_title();
     void set_status(int part, const std::string& text);
     void on_run_events();
+    void on_run_timer();
+    enum class Pending : unsigned char { none, open, check, run };
+    void on_run_finished(Pending pending, RunState state);
     void on_inspector(int id, int code);
     void view_defaults(ViewSettings& s);
     void sync_inspector();
@@ -137,6 +159,11 @@ private:
     bool viewport_is_3d() const override;
     // DeckPane::Host
     void deck_changed() override;
+    // StartPage::Host and RunPage::Host
+    void start_command(int command) override;
+    void start_recent(std::size_t index) override;
+    void start_example(std::size_t index) override;
+    void run_page_stop() override;
 
     WindowOptions options_;
     HWND hwnd_ = nullptr;
@@ -144,16 +171,21 @@ private:
          inspector_ = nullptr;
     std::unique_ptr<Viewport> viewport_;
     std::unique_ptr<DeckPane> deck_;
+    std::unique_ptr<StartPage> start_;
+    std::unique_ptr<RunPage> run_page_;
+    std::unique_ptr<ResultsPage> results_;
+    std::vector<Example> examples_;
     HACCEL accelerators_ = nullptr;
     HFONT font_ = nullptr, bold_ = nullptr;
     int dpi_ = 96;
-    int tab_ = tab_view;
+    int tab_ = tab_start;
     Panes panes_;
     AppState state_;
 
     DeckDocument document_ = DeckDocument::untitled();
     RunController runner_;
-    enum class Pending : unsigned char { none, open, check, run } pending_ = Pending::none;
+    Pending pending_ = Pending::none;
+    std::chrono::steady_clock::time_point run_ui_updated_{};
     std::optional<Workspace> workspace_;
     std::optional<Prober> prober_;
     ViewSettings device_view_, curve_view_;

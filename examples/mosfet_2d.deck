@@ -1,0 +1,53 @@
+# 2D MOSFET
+# An n-channel MOSFET in cross-section: the transfer curve Id-Vg at a drain bias of 0.1 V.
+#
+# A 2 x 1 um silicon body (p-type, 1e16 cm^-3) under a 50 nm oxide, n+ source and drain pockets
+# (Gaussians in depth under the surface, windows along x), a metal gate over the channel, the body
+# contact below. The Curves tab shows Id-Vg on a log axis; the Results tab the threshold and swing.
+
+[mesh]
+type = tensor
+x = linspace(0, 2um, 41)
+y = linspace(0, 0.9um, 19) + linspace(0.9um, 0.95um, 6) + linspace(0.95um, 1um, 3)
+
+[region silicon]
+material = silicon
+
+[region oxide]
+material = sio2
+box = 0 2um  0.95um 1um
+
+[doping]
+profile = acceptor constant 1e16
+profile = donor gaussian 2e19 axis=y center=0.95um width=0.15um x=0:0.5um lateral=20nm
+profile = donor gaussian 2e19 axis=y center=0.95um width=0.15um x=1.5um:2um lateral=20nm
+
+[contact source]
+kind = ohmic
+patch = x_min
+box = 0 0  0.6um 0.94um
+
+[contact drain]
+kind = ohmic
+patch = x_max
+box = 2um 2um  0.6um 0.94um
+
+[contact gate]
+kind = electrode
+patch = y_max
+box = 0.5um 1.5um  1um 1um
+electrode = metal
+work_function = 4.1
+
+[contact body]
+kind = ohmic
+patch = y_min
+
+[sweep]
+contact gate = 0 : 1.5 : 0.1
+contact drain = 0.1
+
+[output]
+sweep = mosfet_2d.nitsweep
+device = mosfet_2d.nitdev
+table = mosfet_2d.csv

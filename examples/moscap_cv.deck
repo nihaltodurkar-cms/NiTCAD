@@ -1,0 +1,37 @@
+# MOS capacitor
+# A p-type silicon MOS capacitor (10 nm oxide, n+ polysilicon gate): small-signal C-V at 1 MHz.
+#
+# The gate is a lumped oxide on the left face (kind = gate); the body contact on the right. The gate is
+# swept from accumulation (C near the oxide capacitance) through depletion to the onset of inversion
+# (threshold near 0.2 V); the Curves tab shows C-V. Strong inversion is left out: its electrons come
+# only from generation in this 1D device, and the drift-diffusion steady state there does not converge
+# from these steps.
+
+[mesh]
+type = tensor
+x = linspace(0, 20nm, 41) + linspace(20nm, 0.5um, 97) + linspace(0.5um, 2um, 31)
+
+[region silicon]
+material = silicon
+
+[doping]
+profile = acceptor constant 1e17
+
+[contact gate]
+kind = gate
+patch = x_min
+oxide_thickness = 10nm
+electrode = n_poly
+
+[contact body]
+kind = ohmic
+patch = x_max
+
+[small_signal]
+contact gate = -2 : 0.25 : 0.125
+frequencies = 1e6
+
+[output]
+small_signal = moscap_cv.nitac
+device = moscap_cv.nitdev
+table = moscap_cv.csv

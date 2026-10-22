@@ -2,19 +2,23 @@
 // from the `nitcad` batch runner, which keeps no window code.
 //
 //   nitcad-app [<deck>] [--adapter auto|gpu|warp] [--debug-layer]
+//   nitcad-app --self-test <deck> --out <image.png> [view options]   (self_test.hpp; exit 0, 1, 64 or 77)
 //
 // Per-monitor DPI aware (v2); the common controls of version 6.
 // The application's headers come first: objbase.h defines `interface` as a macro, which a member of that
 // name in the headers they include would not survive.
 #include "main_window.hpp"
+#include "self_test.hpp"
 #include "win32.hpp"
 
 #include <windows.h>
 #include <objbase.h>
 #include <shellapi.h>
 
+#include <cstdio>
 #include <filesystem>
 #include <memory>
+#include <span>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -31,6 +35,21 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
     LPWSTR* argv = CommandLineToArgvW(GetCommandLineW(), &argc);
     std::vector<std::wstring> args(argv + 1, argv + argc);
     LocalFree(argv);
+
+    // --self-test (26-3, WG4): its report on the caller's standard output (a pipe or the console).
+    if (!args.empty() && args[0] == L"--self-test") {
+        if (!GetStdHandle(STD_OUTPUT_HANDLE) && AttachConsole(ATTACH_PARENT_PROCESS)) {
+            FILE* f = nullptr;
+            freopen_s(&f, "CONOUT$", "w", stdout);
+        }
+        auto options = app::parse_self_test(std::span<const std::wstring>(args).subspan(1));
+        int status = 64;
+        if (options) status = app::run_self_test(*options, stdout);
+        else std::fprintf(stdout, "%s\n", options.error().c_str());
+        std::fflush(stdout);
+        CoUninitialize();
+        return status;
+    }
 
     app::WindowOptions options;
     options.state_file = app::win32::state_file();
