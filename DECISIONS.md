@@ -3627,6 +3627,16 @@ passed in the suite (19 of 19). WG1 stands as ruled.
   overlapping sliders, a frame every tick, the timer ignored, the controls on every view, the point list left
   behind. Five survived at first and gained tests: the floor, past the last, hiding while playing, frames before
   their time, and the point list.
+- **Suites (clean worktree at `3d0e78a`):** Release 27 of 27 (1,013 s), no warnings under `/W4 /WX`; Debug 18 of
+  19. Tests 1–13 passed in order (767 s; the run was stopped there), tests 14–19 run six at a time (647 s):
+  `app_window` failed WG1 in the WARP self-test, the message loop's longest gap 102.1 ms (bound 100 ms; 19 of its 20
+  cases passed); rerun alone it failed the same way (125.8 ms). The WARP self-test was then run twice alone in this
+  worktree and twice in the one at `4c4b75b` (the WG1 fix, before 26c·2 and 26c·3): at `3d0e78a` both passed, every
+  gap 36.0–42.1 ms; at `4c4b75b` both failed, one view's gap 1,095.9 ms and 215.2 ms, the other views' 36.6–38.6 ms.
+  The gaps are rare single spikes on a loop that otherwise holds about 40 ms, in the build before this unit's window
+  changes as in this one, so they are not this commit's. **Open item (WG1 spikes, owner, 2026-10-23, "record as
+  is"):** the window takes no input since the WG1 fix, so the spikes have another cause, unknown; WG1 is left as
+  ruled.
 
 **Not in Unit 26c:** in-view clip handles (the owner chose sliders), the tiled filmstrip in the window, video
 export, oblique clip planes, streamtubes.
