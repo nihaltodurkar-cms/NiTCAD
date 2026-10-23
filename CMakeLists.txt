@@ -85,6 +85,20 @@ find_package(Git QUIET)
 
 # --- Scaffold test -----------------------------------------------------------------
 enable_testing()
+# One ctest entry per test source file of a Catch2 executable, `<name>.<file>` without "_test", each
+# selecting its file's tests by Catch2's file tag (-#), so ctest -j runs a long executable's files side
+# by side and each keeps Catch2's random order within it. Hidden tests stay out, as in a plain run; a
+# file whose tests are all hidden runs nothing. A test source added to the executable gets its entry.
+function(nitcad_add_file_tests name target)
+  get_target_property(sources ${target} SOURCES)
+  foreach(source IN LISTS sources)
+    if(source MATCHES "_test\\.cpp$")
+      get_filename_component(file "${source}" NAME_WE)
+      string(REGEX REPLACE "_test$" "" short "${file}")
+      add_test(NAME ${name}.${short} COMMAND ${target} "-#" "[#${file}]~[.]" --allow-running-no-tests)
+    endif()
+  endforeach()
+endfunction()
 add_executable(nitcad_scaffold_test tests/scaffold_test.cpp)
 target_link_libraries(nitcad_scaffold_test PRIVATE Catch2::Catch2WithMain)
 add_test(NAME scaffold COMMAND nitcad_scaffold_test)
@@ -191,7 +205,7 @@ add_executable(nitcad_mesh_test
 # The predicate and dual-geometry tests read the internal headers directly (Unit 16).
 target_include_directories(nitcad_mesh_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/mesh")
 target_link_libraries(nitcad_mesh_test PRIVATE NiTCAD::mesh Catch2::Catch2WithMain)
-add_test(NAME mesh COMMAND nitcad_mesh_test)
+nitcad_add_file_tests(mesh nitcad_mesh_test)
 
 # --- physics layer (silicon parameters, Caughey-Thomas, SRH, Boltzmann statistics) --
 add_library(nitcad_physics STATIC
@@ -288,7 +302,7 @@ add_executable(nitcad_assemble_test
 target_link_libraries(nitcad_assemble_test PRIVATE NiTCAD::assemble Catch2::Catch2WithMain)
 # The terms (Unit 40) are internal to the assemble layer; their own test reads them.
 target_include_directories(nitcad_assemble_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/assemble")
-add_test(NAME assemble COMMAND nitcad_assemble_test)
+nitcad_add_file_tests(assemble nitcad_assemble_test)
 
 # --- results layer (plain result data; header-only) --------------------------------
 add_library(nitcad_results INTERFACE)
@@ -403,7 +417,10 @@ add_executable(nitcad_render_test
 target_link_libraries(nitcad_render_test PRIVATE NiTCAD::render NiTCAD::solve Catch2::Catch2WithMain)
 target_compile_definitions(nitcad_render_test PRIVATE
   NITCAD_RENDER_REFERENCES="${CMAKE_CURRENT_SOURCE_DIR}/tests/render/references")
-add_test(NAME render COMMAND nitcad_render_test)
+nitcad_add_file_tests(render nitcad_render_test)
+# The image file solves its 2D and 3D MOSFETs first (about 530 s in Debug), the longest entry: started
+# first, so a run without ctest's timing record (a clean tree, CI) does not wait on it at the end.
+set_tests_properties(render.image PROPERTIES COST 600)
 # VG1: render's includes stay within base, mesh, results, analysis and device.
 add_test(NAME render_layering
   COMMAND ${CMAKE_COMMAND} -DROOT=${CMAKE_CURRENT_SOURCE_DIR} -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/render/layering.cmake)
@@ -472,7 +489,7 @@ target_include_directories(nitcad_solve_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR
 target_compile_definitions(nitcad_solve_test PRIVATE
   NITCAD_MKL_RUNTIME_PATH="${NITCAD_MKL_RUNTIME_PATH}"
   NITCAD_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}" NITCAD_GIT="${GIT_EXECUTABLE}")
-add_test(NAME solve COMMAND nitcad_solve_test)
+nitcad_add_file_tests(solve nitcad_solve_test)
 # The 2D MOSFET gates (tests/solve/mosfet_test.cpp, hidden tag [.mosfet]) take about a minute in
 # Release and far longer in Debug, so they run in the Release configuration only.
 if(CMAKE_BUILD_TYPE STREQUAL "Release")
@@ -512,7 +529,7 @@ target_compile_definitions(nitcad_deck_test PRIVATE
   NITCAD_CLI_PATH="$<TARGET_FILE:nitcad>"
   NITCAD_IO_FIXTURES="${CMAKE_CURRENT_SOURCE_DIR}/tests/io/fixtures"
   NITCAD_MKL_RUNTIME_PATH="${NITCAD_MKL_RUNTIME_PATH}")
-add_test(NAME deck COMMAND nitcad_deck_test)
+nitcad_add_file_tests(deck nitcad_deck_test)
 
 # The batch runner (`nitcad check|run <deck>`).
 add_executable(nitcad src/cli/main.cpp src/cli/plot.cpp)
@@ -565,7 +582,7 @@ add_dependencies(nitcad_app_test nitcad)
 target_compile_definitions(nitcad_app_test PRIVATE NITCAD_CLI_PATH="$<TARGET_FILE:nitcad>"
   NITCAD_EXAMPLES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/examples"
   NITCAD_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
-add_test(NAME app COMMAND nitcad_app_test)
+nitcad_add_file_tests(app nitcad_app_test)
 # The window (26-2): the main window, the view and the deck pane on Win32, in a library the window
 # tests share with the executable.
 add_library(nitcad_app_window STATIC
@@ -589,12 +606,19 @@ target_compile_definitions(nitcad_app_window_test PRIVATE NITCAD_CLI_PATH="$<TAR
   NITCAD_APP_PATH="$<TARGET_FILE:nitcad-app>" NITCAD_EXAMPLES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/examples")
 # The self-test (WG4) runs nitcad-app and nitcad plot.
 add_dependencies(nitcad_app_window_test nitcad-app nitcad)
-add_test(NAME app_window COMMAND nitcad_app_window_test)
+nitcad_add_file_tests(app_window nitcad_app_window_test)
 # The 3D MOSFET example's run and self-tests (WG8, WG4) take minutes in Debug: Release only, as the other
 # slow gates (hidden tags [.examples3d] and [.selftest3d]).
 if(CMAKE_BUILD_TYPE STREQUAL "Release")
   add_test(NAME app_examples_3d COMMAND nitcad_app_test "[examples3d]")
   add_test(NAME app_window_3d COMMAND nitcad_app_window_test "[selftest3d]")
+endif()
+# WG1 measures the UI thread's message loop against 100 ms, so these files run with no other test beside
+# them: under ctest -j the self-test's loop stalled 494 and 611 ms and its solve ran at half speed.
+set_tests_properties(app.run_controller app_window.self_test app_window.analysis_window
+  PROPERTIES RUN_SERIAL TRUE)
+if(CMAKE_BUILD_TYPE STREQUAL "Release")
+  set_tests_properties(app_window_3d PROPERTIES RUN_SERIAL TRUE)
 endif()
 # WG6: app includes every layer but physics and assemble (ARCHITECTURE.md 3).
 add_test(NAME app_layering

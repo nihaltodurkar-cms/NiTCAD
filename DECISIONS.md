@@ -3641,10 +3641,36 @@ passed in the suite (19 of 19). WG1 stands as ruled.
 **Status:** Unit 26c built in three commits (c16f8e0, 4a9d236, 3d0e78a), with the `nitcad plot` fix (3e730dd) and
 the WG1 fixes (4c4b75b); YG1–YG6 met on this workstation, the WG1 spikes above open. **Accepted by the owner
 2026-10-23** ("accept it and merge"); ARCHITECTURE.md 6.14, 11 and 11.3 updated to "as built" (YG6). Merged to
-`main` by PR #61 on the owner's word.
+`main` as `1be857e` (PR #61, 2026-10-23, on the owner's word, the hosted CI still queued).
 
 **Not in Unit 26c:** in-view clip handles (the owner chose sliders), the tiled filmstrip in the window, video
 export, oblique clip planes, streamtubes.
+
+### Parallel test suites (owner, 2026-10-23, "the test is taking too long", then "do the test-speed"; on `test/parallel-suites`)
+
+The Debug suite ran its 19 tests one after another in about 40 minutes (`solve` 769 s, `render` 741 s,
+`app_window` 410 s), on a 10-thread workstation: the presets set no job count.
+- **One ctest entry per test file** (`nitcad_add_file_tests` in CMakeLists.txt) for the seven long executables
+  (`mesh`, `assemble`, `render`, `solve`, `deck`, `app`, `app_window`): `<name>.<file>`, each running
+  `"-#" "[#<file>_test]~[.]" --allow-running-no-tests`. Catch2's sharding was not used: with the default random
+  order and no fixed seed its shards may overlap or miss tests (Catch2 3.16 warns so), and a fixed seed or
+  declaration order would give up the random order. Each file keeps it. Hidden tests stay out; the Release-only
+  hidden-tag entries are unchanged; `solve.mosfet` runs nothing (all its tests are hidden). **Coverage:** per
+  executable, the files' test-case counts sum to the plain run's: 95, 107, 78, 215, 43, 57, 20.
+- **Four jobs** in both test presets (`"execution": {"jobs": 4}`; CI's `ctest --preset` takes it). The Debug
+  suite is 2,037 s of work; four jobs already hold the rest beside its longest entry, and fewer jobs load the
+  timing gates less. `render.image` (its 2D and 3D MOSFET fixtures solve for about 530 s in Debug before any
+  view is drawn; splitting its sections would only repeat them) has `COST 600`, so it starts first without
+  ctest's timing record.
+- **The WG1 files run alone** (`RUN_SERIAL`): `app.run_controller`, `app_window.self_test`,
+  `app_window.analysis_window`, and in Release `app_window_3d`. Run beside the others (six jobs, then four),
+  the self-test passed once and failed once with gaps of 494 and 611 ms, its 16-point solve at 95 s against
+  about 42 s alone. AC9 (`solve.hole_mobility`, a cost ratio within one process) passed in parallel in every
+  run and is left parallel.
+- **Suites (working tree on `1be857e`):** Debug 99 of 99 in 947 s (was about 2,400 s); Release 107 of 107 in
+  618 s (was 1,013 s at `3d0e78a`). Not run in a clean worktree, and the hosted CI unseen.
+- Not done: restructuring `render.image` (2D and 3D views as separate test cases) to bring Debug near 10
+  minutes; worktrees run at once still share their `%TEMP%` scratch folders.
 
 ---
 
