@@ -570,3 +570,17 @@ TEST_CASE("deck build: rates = off (Unit 45, RQ1)", "[deck]") {
                              "[equilibrium]\n[solver]\nrates = maybe\n";
     CHECK(failure(head).find("t.deck:14: 'maybe' is not on or off") != std::string::npos);
 }
+
+// The decks of decks/ (heavy devices, not in the app's examples): each still reads and builds as
+// the deck format evolves. Built, not run (the FinFET sweep takes about 18 min with PARDISO).
+TEST_CASE("deck build: the FinFET deck of decks/ builds") {
+    const auto d = deck::read(fs::path(NITCAD_DECKS_DIR) / "finfet_3d.deck");
+    if (!d) FAIL(d.error().message);
+    const auto p = deck::build(*d);
+    if (!p) FAIL(p.error().message);
+    CHECK(p->device.mesh().node_count() == 45375);
+    CHECK(p->device.contacts().size() == 6);
+    CHECK(p->points.size() == 17);
+    CHECK(p->options.models.fermi_dirac);
+    CHECK(p->options.models.surface_mobility == assemble::SurfaceMobility::off);
+}
