@@ -74,6 +74,11 @@ std::expected<SelfTestOptions, std::string> parse_self_test(std::span<const std:
             const auto v = value();
             if (!v || (*v != "auto" && *v != "gpu" && *v != "warp")) return std::unexpected(std::string("--adapter is auto, gpu or warp"));
             o.adapter = *v == "gpu" ? render::Adapter::hardware : *v == "warp" ? render::Adapter::warp : render::Adapter::automatic;
+        } else if (a == "--gap-limit-ms") {
+            const auto v = value();
+            const auto n = v ? number(*v) : std::nullopt;
+            if (!n || !(*n > 0)) return std::unexpected(std::string("--gap-limit-ms needs a time in ms, more than 0"));
+            o.gap_limit_ms = *n;
         } else if (a == "--debug-layer") o.debug_layer = true;
         else if (a == "--contours") o.view.contours = true;
         else if (a == "--edges") o.view.edges = true;
@@ -167,8 +172,8 @@ int run_self_test(const SelfTestOptions& o, std::FILE* log) {
                          "monitor's plot last drawn in {:.1f} ms); the results loaded and shown {:.0f} ms after the run",
                          window->workspace()->points.size(), window->runner().elapsed_seconds(), 1e3 * longest_gap,
                          window->run_page().plot().last_present_ms(), 1e3 * after_run));
-    if (longest_gap >= 0.1) {
-        say(log, "the window did not run for 100 ms or more during the run (WG1)");
+    if (1e3 * longest_gap >= o.gap_limit_ms) {
+        say(log, std::format("the window did not run for {:g} ms or more during the run (WG1)", o.gap_limit_ms));
         return 1;
     }
     // The view, in the window and as an image.

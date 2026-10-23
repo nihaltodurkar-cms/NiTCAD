@@ -11,6 +11,7 @@
 
 #include <algorithm>
 #include <filesystem>
+#include <format>
 #include <string>
 #include <vector>
 
@@ -52,12 +53,14 @@ Ran run(const std::wstring& command) {
 
 std::wstring q(const fs::path& p) { return L"\"" + p.wstring() + L"\""; }
 std::wstring w(const std::string& s) { return std::wstring(s.begin(), s.end()); }
+// WG1's bound for the self-test (fixtures.hpp: 250 ms on the hosted CI runner).
+std::wstring gap_limit() { return L" --gap-limit-ms " + w(std::format("{:g}", app_test::wg1_limit_ms())); }
 
 // The self-test's image and nitcad plot's for one view of a deck; false when skipped (77).
 bool same_view(const fs::path& deck, const std::string& view, const std::string& adapter, const fs::path& out) {
     const fs::path app_png = out / "app.png", plot_png = out / "plot.png";
     const Ran a = run(q(NITCAD_APP_PATH) + L" --self-test " + q(deck) + L" --out " + q(app_png) + L" --size 640x480 --adapter " +
-                      w(adapter) + L" " + w(view));
+                      w(adapter) + gap_limit() + L" " + w(view));
     UNSCOPED_INFO(a.output);
     if (a.status == 77) return false;
     REQUIRE(a.status == 0);
@@ -99,6 +102,16 @@ TEST_CASE("app self-test: the window's image equals nitcad plot's, on WARP (WG1,
     // Usage errors.
     CHECK(run(q(NITCAD_APP_PATH) + L" --self-test").status == 64);
     CHECK(run(q(NITCAD_APP_PATH) + L" --self-test " + q(m2) + L" --out x.png --view bogus").status == 64);
+    CHECK(run(q(NITCAD_APP_PATH) + L" --self-test " + q(m2) + L" --out x.png --gap-limit-ms 0").status == 64);
+    CHECK(run(q(NITCAD_APP_PATH) + L" --self-test " + q(m2) + L" --out x.png --gap-limit-ms").status == 64);
+    // WG1's bound is the one given: no message loop keeps every gap under a microsecond (a 1D diode, quick;
+    // 701 points, so the run spans many 10 ms timer ticks in Release too).
+    const fs::path diode = app_test::write(dir, "diode.deck", app_test::diode_sweep("0 : 0.7 : 0.001"));
+    const Ran tight = run(q(NITCAD_APP_PATH) + L" --self-test " + q(diode) + L" --out " + q(dir / "diode.png") +
+                          L" --adapter warp --view iv --gap-limit-ms 0.001");
+    UNSCOPED_INFO(tight.output);
+    CHECK(tight.status == 1);
+    CHECK(tight.output.find("did not run for 0.001 ms or more during the run (WG1)") != std::string::npos);
 }
 
 TEST_CASE("app self-test: on the GPU too, and with the debug layer (WG4, WG5)", "[app]") {
@@ -111,7 +124,7 @@ TEST_CASE("app self-test: on the GPU too, and with the debug layer (WG4, WG5)", 
     if (!same_view(m2, "--view field --field potential", "gpu", dir)) SKIP("no window or swap chain in this session");
     // The debug layer (Graphics Tools): clean, and nothing left alive after the window.
     const Ran d = run(q(NITCAD_APP_PATH) + L" --self-test " + q(m2) + L" --out " + q(dir / "debug.png") +
-                      L" --adapter warp --debug-layer --view solid");
+                      L" --adapter warp --debug-layer --view solid" + gap_limit());
     UNSCOPED_INFO(d.output);
     if (d.output.find("D3D12GetDebugInterface") != std::string::npos) SKIP("the D3D12 debug layer is not installed");
     CHECK(d.status == 0);

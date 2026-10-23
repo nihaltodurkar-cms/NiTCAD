@@ -205,7 +205,7 @@ TEST_CASE("app run controller: the UI thread keeps running during a long run (WG
     // The run took many timer periods, and no gap between timer messages reached 100 ms.
     CAPTURE(m.timer_messages, m.longest_gap_s, rc.elapsed_seconds());
     CHECK(m.timer_messages >= 20);
-    CHECK(m.longest_gap_s < 0.1);
+    CHECK(1e3 * m.longest_gap_s < app_test::wg1_limit_ms());
     // Progress arrived while it ran, in batches (one wake per non-empty queue).
     CHECK(events > 1);
     CHECK(rc.points().size() == 1602);

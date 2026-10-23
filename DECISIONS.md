@@ -3678,8 +3678,15 @@ The Debug suite ran its 19 tests one after another in about 40 minutes (`solve` 
   26c·3 playback test's wait for its transient MOSFET run timed out: `pump_until`'s 120 s, a guard against a hang,
   is shorter than that run on the runner's Debug build. The guard in `analysis_window_test.cpp` is now 600 s; the
   file passes locally (139 s). (2) The GPU self-test (WARP on the runner) failed WG1 with a gap of 114.1 ms, its
-  solve at 69.3 s (about twice this workstation's). WG1 is left as ruled; on the runner it is an open item for
-  the owner.
+  solve at 69.3 s (about twice this workstation's).
+- **WG1 on the hosted runner (owner, 2026-10-23, "c": a looser CI-only bound):** 250 ms where the environment
+  variable `CI` is set (GitHub Actions sets it), 100 ms everywhere else, as ruled. `nitcad-app --self-test` takes
+  `--gap-limit-ms <ms>` (default 100; more than 0) and names the bound in its WG1 failure; the app does not read
+  the environment. The tests take the bound from one place, `app_test::wg1_limit_ms()` (tests/app/fixtures.hpp),
+  for all three WG1 checks: the self-tests (passed as `--gap-limit-ms`), the run controller and playback. New
+  checks: `--gap-limit-ms 0` and a missing value are usage errors (64); a 1D diode run (701 points) under a
+  0.001 ms bound fails WG1 naming it. Mutant: the bound ignored (100 ms fixed) — caught. Release: the three WG1
+  entries pass with and without `CI` set; no warnings under `/W4 /WX`.
 - Not done: restructuring `render.image` (2D and 3D views as separate test cases) to bring Debug near 10
   minutes; worktrees run at once still share their `%TEMP%` scratch folders.
 
