@@ -29,7 +29,9 @@ using app::MainWindow;
 
 namespace {
 
-bool pump_until(const std::function<bool()>& done, double seconds = 120.0) {
+// A guard against a hang, not a gate: the hosted CI runner's Debug build ran the playback test's transient
+// MOSFET for more than 120 s.
+bool pump_until(const std::function<bool()>& done, double seconds = 600.0) {
     const auto end = std::chrono::steady_clock::now() + std::chrono::duration<double>(seconds);
     MSG m;
     while (!done()) {

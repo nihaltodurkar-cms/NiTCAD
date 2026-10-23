@@ -3673,6 +3673,13 @@ The Debug suite ran its 19 tests one after another in about 40 minutes (`solve` 
   `app_window.self_test`, run alone after `render.image`, failed WG1 with one gap of 296.6 ms, its solve at the
   usual speed (16 points in 35.4 s) and the monitor's plot drawn in 1.8 ms: the WG1 spike open above (Unit 26c),
   not load.
+- **Hosted CI at `1af3b55` (PR #62; the first CI to finish since Unit 26b — PR #61's runs and `main`'s were
+  cancelled):** Release passed (21 min); Debug 97 of 99 (1,929 s), both failures in entries run alone. (1) The
+  26c·3 playback test's wait for its transient MOSFET run timed out: `pump_until`'s 120 s, a guard against a hang,
+  is shorter than that run on the runner's Debug build. The guard in `analysis_window_test.cpp` is now 600 s; the
+  file passes locally (139 s). (2) The GPU self-test (WARP on the runner) failed WG1 with a gap of 114.1 ms, its
+  solve at 69.3 s (about twice this workstation's). WG1 is left as ruled; on the runner it is an open item for
+  the owner.
 - Not done: restructuring `render.image` (2D and 3D views as separate test cases) to bring Debug near 10
   minutes; worktrees run at once still share their `%TEMP%` scratch folders.
 
