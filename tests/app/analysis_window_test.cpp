@@ -29,7 +29,9 @@ using app::MainWindow;
 
 namespace {
 
-bool pump_until(const std::function<bool()>& done, double seconds = 120.0) {
+// A guard against a hang, not a gate: the hosted CI runner's Debug build ran the playback test's transient
+// MOSFET for more than 120 s.
+bool pump_until(const std::function<bool()>& done, double seconds = 600.0) {
     const auto end = std::chrono::steady_clock::now() + std::chrono::duration<double>(seconds);
     MSG m;
     while (!done()) {
@@ -886,7 +888,7 @@ TEST_CASE("app window 26c: playing a transient run's snapshots (YD5, YG3, YG5)",
     CHECK(seen.back() == n - 1);
     CHECK(std::ranges::is_sorted(seen));
     CHECK(played_s >= static_cast<double>(n - 1) / app::playback_fps - 0.05);
-    CHECK(longest_ms < 100.0);
+    CHECK(longest_ms < app_test::wg1_limit_ms());
     CHECK(text_of(*w, MainWindow::id_play) == "Pla&y");
     // Play from the last starts again at the first; Pause holds the snapshot; the button and the slider pause too.
     w->execute(Command::play_pause);

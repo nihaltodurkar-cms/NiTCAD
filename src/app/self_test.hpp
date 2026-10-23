@@ -5,7 +5,10 @@
 //
 //   nitcad-app --self-test <deck> --out <image.png> [--view v] [--field f] [--point k] [--scale s]
 //              [--colormap c] [--contours] [--edges] [--opaque] [--perspective] [--log] [--sense c]
-//              [--contact c] [--size WxH] [--adapter auto|gpu|warp] [--debug-layer]
+//              [--contact c] [--size WxH] [--adapter auto|gpu|warp] [--debug-layer] [--gap-limit-ms ms]
+//
+// --gap-limit-ms: the longest gap allowed in the message loop during the run (default 100, WG1); the tests
+// pass 250 on the hosted CI runner (owner, 2026-10-23).
 //
 // Exit status: 0 passed; 1 failed (the reason on stdout); 64 usage; 77 no window or swap chain can be made
 // here (a session without a desktop: the test that runs it counts that as skipped).
@@ -29,6 +32,7 @@ struct SelfTestOptions {
     int width = 640, height = 480;
     render::Adapter adapter = render::Adapter::automatic;
     bool debug_layer = false;
+    double gap_limit_ms = 100.0;  // WG1
 };
 
 inline constexpr int self_test_skipped = 77;

@@ -23,7 +23,9 @@
     { "name": "release", "configurePreset": "release" }
   ],
   "testPresets": [
-    { "name": "debug",   "configurePreset": "debug",   "output": { "outputOnFailure": true } },
-    { "name": "release", "configurePreset": "release", "output": { "outputOnFailure": true } }
+    { "name": "debug",   "configurePreset": "debug",   "output": { "outputOnFailure": true },
+      "execution": { "jobs": 4 } },
+    { "name": "release", "configurePreset": "release", "output": { "outputOnFailure": true },
+      "execution": { "jobs": 4 } }
   ]
 }

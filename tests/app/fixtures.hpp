@@ -3,6 +3,7 @@
 #pragma once
 
 #include <cstdio>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <string>
@@ -16,6 +17,17 @@ inline std::filesystem::path scratch(const std::string& name) {
     std::filesystem::remove_all(dir);
     std::filesystem::create_directories(dir);
     return dir;
+}
+
+// WG1's bound on a gap in the UI thread's message loop, in ms: 100, and 250 on the hosted CI runner (the
+// environment variable CI set, as GitHub Actions sets it; owner, 2026-10-23), whose Debug build draws on
+// WARP and solves at about half this workstation's speed.
+inline double wg1_limit_ms() {
+    char* value = nullptr;
+    std::size_t length = 0;
+    const bool ci = _dupenv_s(&value, &length, "CI") == 0 && value != nullptr && *value != '\0';
+    std::free(value);
+    return ci ? 250.0 : 100.0;
 }
 
 inline std::filesystem::path write(const std::filesystem::path& dir, const std::string& name, const std::string& text) {
