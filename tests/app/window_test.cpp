@@ -31,8 +31,9 @@ using app::MainWindow;
 
 namespace {
 
-// Pumps the thread's messages until the condition holds (or the time runs out).
-bool pump_until(const std::function<bool()>& done, double seconds = 120.0) {
+// Pumps the thread's messages until the condition holds (or the time runs out). A guard against a hang, not a
+// gate: the hosted CI runner's Debug build ran the example MOSFET for more than 120 s.
+bool pump_until(const std::function<bool()>& done, double seconds = 600.0) {
     const auto end = std::chrono::steady_clock::now() + std::chrono::duration<double>(seconds);
     MSG m;
     while (!done()) {

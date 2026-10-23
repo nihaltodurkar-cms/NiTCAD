@@ -3687,6 +3687,11 @@ The Debug suite ran its 19 tests one after another in about 40 minutes (`solve` 
   checks: `--gap-limit-ms 0` and a missing value are usage errors (64); a 1D diode run (701 points) under a
   0.001 ms bound fails WG1 naming it. Mutant: the bound ignored (100 ms fixed) — caught. Release: the three WG1
   entries pass with and without `CI` set; no warnings under `/W4 /WX`.
+- **Hosted CI at `be4d95a`:** Release passed (push and pull-request runs, 21 and 28 min); the three WG1 entries
+  passed under the 250 ms bound, and the playback test under its 600 s guard. Debug 98 of 99 in both runs: in
+  `app_window.window` the wait for the example MOSFET run (the run monitor test) timed out at `window_test.cpp`'s
+  own `pump_until`, still 120 s (the entry failed at 171.5 s and 178.6 s). That guard is now 600 s, as in
+  `analysis_window_test.cpp`.
 - Not done: restructuring `render.image` (2D and 3D views as separate test cases) to bring Debug near 10
   minutes; worktrees run at once still share their `%TEMP%` scratch folders.
 
