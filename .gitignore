@@ -1,2 +1,7 @@
 build/
 graphify-out/
+# A deck's outputs, written beside it (decks/*.deck are tracked).
+decks/*.csv
+decks/*.nitsweep
+decks/*.nitdev
+decks/*_plots/

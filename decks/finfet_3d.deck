@@ -1,0 +1,157 @@
+# 3D tri-gate n-channel FinFET on SOI
+# A silicon fin 10 nm wide and 30 nm tall on a 20 nm buried oxide, wrapped on three sides by a high-k
+# gate stack (0.5 nm SiO2 interfacial layer under 1.5 nm HfO2, EOT about 0.77 nm) and a metal gate
+# 25 nm long; nitride spacers beside the gate; n+ source and drain in the fin with a 3 nm underlap.
+# The transfer curve Id-Vg in the linear regime (Vd = 50 mV); the Results tab gives V_th and the swing.
+#
+# Axes (all lengths in nm below):
+#   x  along the fin, source (x = 0) to drain (x = 85); gate from 30 to 55
+#   y  vertical: buried oxide 0-20, fin 20-50, interfacial layer 50-50.5, HfO2 50.5-52 (top gate at 52)
+#   z  across the fin: HfO2 0-1.5, interfacial layer 1.5-2, fin 2-12, interfacial layer 12-12.5,
+#      HfO2 12.5-14 (side gates at z = 0 and z = 14)
+#
+# Regions belong to nodes (a node takes the last region whose box holds it), and a material interface
+# lies halfway between two nodes, so every interface is straddled by two mesh lines and every box edge
+# sits on its interface, between them.
+#
+# The gate is three electrode contacts (top, left and right faces) swept together; a contact covers
+# one boundary patch. The side gates stop below y = 52 so no node belongs to two contacts.
+#
+# Size: 45,375 nodes. Expect a long solve; run it in a Release build. With the MKL runtime installed,
+# use the [solver] PARDISO lines below: on 6 threads the sweep takes about 18 min.
+#
+# Not predictive at this size: quantum confinement, gate tunnelling and non-local transport are absent
+# (ARCHITECTURE.md 11.3), and the mesh convergence is unchecked. Lombardi surface mobility (Unit 46) is
+# available but needs sub-nm spacing at the interfaces; it lowers the 0.8 V current by 12% on this mesh.
+
+[device]
+temperature = 300
+
+[mesh]
+type = tensor
+# Source and drain coarse (2.5 nm), the gate and junctions fine (1.25 nm).
+x = linspace(0, 20nm, 9) + linspace(20nm, 65nm, 37) + linspace(65nm, 85nm, 9)
+# Buried oxide coarse; the fin at 2 nm, 0.5 nm in its top 4 nm (the top channel); the gate stack at 0.5 nm.
+y = linspace(0, 20nm, 5) + linspace(20nm, 46nm, 14) + linspace(46nm, 50nm, 9) + linspace(50nm, 52nm, 5)
+# The fin at 1 nm, 0.5 nm next to its sidewalls (the side channels); the gate stack at 0.5 nm.
+z = linspace(0, 2nm, 5) + linspace(2nm, 3nm, 3) + linspace(3nm, 11nm, 9) + linspace(11nm, 12nm, 3) + linspace(12nm, 14nm, 5)
+# The interfaces: gate edges (spacer | HfO2), fin bottom (buried oxide), fin top and sidewalls
+# (silicon | interfacial layer) and the interfacial layer's outer faces (| HfO2).
+straddle x = 30nm 0.5nm
+straddle x = 55nm 0.5nm
+straddle y = 20nm 0.5nm
+straddle y = 50nm 0.2nm
+straddle y = 50.5nm 0.2nm
+straddle z = 1.5nm 0.2nm
+straddle z = 2nm 0.2nm
+straddle z = 12nm 0.2nm
+straddle z = 12.5nm 0.2nm
+
+# Region 0, the background: the buried oxide (everything no later box claims; in practice y < 20 nm).
+[region buried_oxide]
+material = sio2
+
+# Nitride spacers: everything above the buried oxide, outside the gate (the gate stack overrides it).
+[region spacer]
+material = insulator
+eps_r = 7.5
+box = 0 85nm  20nm 52nm  0 14nm
+
+# The high-k layer and the space the gate fills between spacers.
+[region hfo2]
+material = insulator
+eps_r = 22
+box = 30nm 55nm  20nm 52nm  0 14nm
+
+# The interfacial oxide wrapping the fin under the gate (the fin overrides its core).
+[region interfacial]
+material = sio2
+box = 30nm 55nm  20nm 50.5nm  1.5nm 12.5nm
+
+# The fin, the whole length: channel under the gate, source and drain beyond it.
+[region silicon]
+material = silicon
+box = 0 85nm  20nm 50nm  2nm 12nm
+
+[doping]
+# A lightly doped fin (doping on insulator nodes is zero).
+profile = acceptor constant 1e16
+# Source and drain: 1e20 to 3 nm short of each gate edge, an erfc fall-off of 2 nm into the channel.
+# axis=y makes the depth shape constant along y so the x window applies; the windows reach past the
+# fin's ends so the contacts see the full doping.
+profile = donor constant 1e20 axis=y x=-10nm:27nm lateral=2nm
+profile = donor constant 1e20 axis=y x=58nm:95nm lateral=2nm
+
+[contact source]
+kind = ohmic
+patch = x_min
+
+[contact drain]
+kind = ohmic
+patch = x_max
+
+# The tri-gate: TiN-like metal, work function 4.4 eV (raise it for a higher threshold).
+[contact gate_top]
+kind = electrode
+patch = y_max
+box = 30nm 55nm  52nm 52nm  0 14nm
+electrode = metal
+work_function = 4.4
+
+[contact gate_left]
+kind = electrode
+patch = z_min
+box = 30nm 55nm  20nm 51.9nm  0 0
+electrode = metal
+work_function = 4.4
+
+[contact gate_right]
+kind = electrode
+patch = z_max
+box = 30nm 55nm  20nm 51.9nm  14nm 14nm
+electrode = metal
+work_function = 4.4
+
+# The grounded substrate under the buried oxide, a weak back gate.
+[contact substrate]
+kind = electrode
+patch = y_min
+electrode = metal
+work_function = 4.6
+
+# The channel's interface under the gate: a typical fixed charge (cm^-2).
+# For interface traps, add e.g.  trap_band = acceptor 1e11 0 0.5
+[interface silicon interfacial]
+fixed_charge = 5e10
+
+[models]
+# Degenerate source and drain (1e20): Fermi-Dirac statistics.
+fermi_dirac = on
+# Short channel: velocity saturation, and Masetti electron mobility for the heavy doping.
+field_mobility = on
+electron_mobility = masetti
+# srh, auger and bgn are on by default.
+# Inversion-layer mobility (Unit 46): surface_mobility = lombardi
+
+[solver]
+# The default sparse LU spent over 45 min on the first bias point, and GMRES+ILUT (single-threaded
+# only) needed cut steps there. With the MKL runtime (Intel's NuGet redistributable), use PARDISO:
+# backend = pardiso
+# mkl = <path to mkl_rt.3.dll>
+# threads = 6
+line_search = residual
+max_cuts = 8
+
+[sweep]
+contact gate_top = 0 : 0.8 : 0.05
+contact gate_left = 0 : 0.8 : 0.05
+contact gate_right = 0 : 0.8 : 0.05
+contact drain = 0.05
+# Saturation instead: contact drain = 0.7
+# Output curve instead (one series per contact, all of one length): hold the three gates at 0.8 and
+# sweep  contact drain = 0 : 0.8 : 0.05
+
+[output]
+sweep = finfet_3d.nitsweep
+device = finfet_3d.nitdev
+table = finfet_3d.csv

@@ -533,6 +533,7 @@ target_compile_definitions(nitcad_deck_test PRIVATE
   NITCAD_CLI_PATH="$<TARGET_FILE:nitcad>"
   NITCAD_IO_FIXTURES="${CMAKE_CURRENT_SOURCE_DIR}/tests/io/fixtures"
   NITCAD_EXAMPLES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/examples"
+  NITCAD_DECKS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/decks"
   NITCAD_MKL_RUNTIME_PATH="${NITCAD_MKL_RUNTIME_PATH}")
 nitcad_add_file_tests(deck nitcad_deck_test)
 # The Lombardi device gates (tests/deck/surface_mobility_test.cpp, hidden tag [.lombardi]: MOSFET
