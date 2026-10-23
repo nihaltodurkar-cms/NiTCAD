@@ -3638,6 +3638,11 @@ passed in the suite (19 of 19). WG1 stands as ruled.
   is"):** the window takes no input since the WG1 fix, so the spikes have another cause, unknown; WG1 is left as
   ruled.
 
+**Status:** Unit 26c built in three commits (c16f8e0, 4a9d236, 3d0e78a), with the `nitcad plot` fix (3e730dd) and
+the WG1 fixes (4c4b75b); YG1–YG6 met on this workstation, the WG1 spikes above open. **Accepted by the owner
+2026-10-23** ("accept it and merge"); ARCHITECTURE.md 6.14, 11 and 11.3 updated to "as built" (YG6). Merged to
+`main` by PR #61 on the owner's word.
+
 **Not in Unit 26c:** in-view clip handles (the owner chose sliders), the tiled filmstrip in the window, video
 export, oblique clip planes, streamtubes.
 
