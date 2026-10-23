@@ -3697,6 +3697,73 @@ The Debug suite ran its 19 tests one after another in about 40 minutes (`solve` 
 
 ---
 
+### Unit 46 — Lombardi surface mobility, opt-in (started 2026-10-24; on `physics/surface-mobility`)
+
+**Owner request:** "start Lombardi surface-roughness mobility" (2026-10-24), the first of the nanoscale models of
+ARCHITECTURE.md 11.3 (found by the FinFET deck). **Owner rulings (2026-10-24):** (1) E⊥ is the field normal to the
+current, (2) the Jacobian is exact, with a wider pattern, (3) the electrothermal assembly is included, (4) the surface
+terms combine with the run's selected bulk mobility. The standing conditions hold: opt-in and bit-identical when off,
+criteria fixed before code, Release and Debug suites at every commit, `/W4 /WX`, hand mutants, nothing pushed or
+merged without authorization.
+
+**Sources read (before coding).** C. Lombardi, S. Manzini, A. Saporito, M. Vanzi, IEEE Trans. CAD 7, 1164 (1988),
+doi:10.1109/43.9186, is paywalled and was not read. The model is read from two text reproductions that cite it:
+(a) the Xyce Reference Guide (Sandia; `doc/Reference_Guide/Xyce_RG_PDE.tex` and `lombardiTbl.tex` on
+github.com/Xyce/Xyce), (b) Genius TCAD Open (`src/material/Si/Si_mob_Lombardi.cc` on
+github.com/cogenda/Genius-TCAD-Open, Medici's `.LSM` parameter names). Both give
+
+    1/mu = 1/mu_b + 1/mu_ac + 1/mu_sr,
+    mu_ac = B / E⊥ + C N^lambda / (T E⊥^(1/3)),      mu_sr = delta / E⊥^2,
+
+N the total impurity density [cm^-3], T [K], E⊥ [V/cm]. COMSOL's Semiconductor Module guide (doc.comsol.com,
+"Lombardi Surface Mobility Model") cites the paper for its silicon values; its equations are images, not read.
+
+| Coefficient | Xyce | Genius | COMSOL (as extracted) | Used |
+|---|---|---|---|---|
+| B_n [cm/s] | 4.75e7 | 4.75e7 | 4.75e7 | 4.75e7 |
+| C_n [cm^(5/3+3λ) K V^(-2/3) s^-1] | 1.74e5 | 1.74e5 | 1.74e5 | 1.74e5 |
+| λ_n | 0.125 | 0.125 | 0.125 | 0.125 |
+| δ_n [V/s] | 5.82e14 | 5.82e14 | 5.82e14 | 5.82e14 |
+| B_p [cm/s] | 9.93e6 | 9.93e6 | 9.93e7 (an extraction artefact or a misprint; two sources disagree) | 9.93e6 |
+| C_p | 8.84e5 | 8.84e5 | 8.84e5 | 8.84e5 |
+| λ_p | 0.0317 | 0.0317 | 0.0317 | 0.0317 |
+| δ_p [V/s] | 2.05e14 | 2.05e14 | 2.05e14 | 2.05e14 |
+
+The E⊥ exponent of μ_sr is 2 in both (Xyce `exn8`, `exp8`). Genius applies Canali's saturation to the Matthiessen
+sum (the low-field mobility includes the surface terms), as NiTCAD will. Lombardi's own bulk term is Masetti's
+arsenic electron set and boron hole set; by ruling (4) it is not used.
+
+**Design:**
+
+| # | Choice | Why | Trade-off |
+|---|---|---|---|
+| LD1 | `PhysicsModels::surface_mobility`: `off` (the default) or `lombardi`; the deck's `[models] surface_mobility`; the run record names it only when `lombardi`; the app's deck vocabulary lists it. | Opt-in, as Units 34, 37, 38. | — |
+| LD2 | Per edge, the field vector is the mean of the two ends' least-squares fields (the reconstruction of impact ionization: E_i = P_i Σ_k t_k E_k over the node's carrier edges, so only semiconductor fields, never an oxide's), and E⊥ = sqrt(\|E − (E·t)t\|^2 + E_0^2) with t the edge's unit vector and E_0 = 1 V/cm. | Ruling (1); exact for a uniform field at any angle; E_0 keeps B / E⊥ and δ / E⊥^2 finite and smooth where E⊥ vanishes (Genius adds 1 V/cm). | Bulk edges at an angle to a junction field are reduced too. In 1D E⊥ = E_0 (the change is below 1e-4). |
+| LD3 | Each end's low-field mobility is the Matthiessen sum of its bulk mobility (the run's selection, at its N and T) and the surface terms at its own N and T with the edge's E⊥; the edge mobility is their harmonic mean, then Canali when on (on a mixed edge each end's Canali, then the mean), as today. N is the bulk model's N (0 with `doping_mobility` off). | Ruling (4); the existing harmonic mean and Canali order unchanged. | — |
+| LD4 | Exact Jacobian: E⊥ is linear in ψ before the root, so each edge stores the coefficients g_j (D-vectors, t-projected out) over the nodes j of both ends' stencils; the carrier rows of a and b gain ψ columns of those nodes (distance 2), added to the pattern only with the model on. | Ruling (2); quadratic Newton and exact small-signal (Units 13, 19). | More nonzeros; measured and reported (LS11). |
+| LD5 | Electrothermal: the per-end mobility and its θ partial include the surface terms (∂μ_ac/∂T = −C N^λ / (T^2 E⊥^(1/3))); E⊥ is from ψ, which does not depend on θ. | Ruling (3). | — |
+| LD6 | `lombardi` is refused (invalid_input) on a device with a semiconductor region whose electron or hole Caughey–Thomas parameters are not silicon's. | The coefficients are silicon's; as Units 34, 38. | SiGe and others not offered. |
+| LD7 | Not on thermionic edges (no mobility enters them). | As Canali. | — |
+
+**Acceptance criteria, fixed before any implementation:**
+
+| # | Criterion |
+|---|---|
+| LS1 | Off (the default): every existing test and pin passes unchanged; run identities and Jacobian patterns unchanged. |
+| LS2 | μ_ac, μ_sr and the Matthiessen sum equal the formula and coefficients above, evaluated independently in the test, at E⊥ = 1e3 … 1e7 V/cm (each decade), N = 0, 1e14 … 1e20 cm⁻³ and T = 250, 300, 400 K, within 1e-12; the E⊥ and T slopes within 1e-6 of central differences. |
+| LS3 | E⊥ of a uniform field on 2D meshes (tensor and Delaunay) at 0, 30, 45 and 60° and on a 3D tensor mesh: each interior edge's E⊥ equals sqrt(\|E × t\|^2 + E_0^2) within 1e-10 relative. |
+| LS4 | The Jacobian against central differences of the residual with the model on (isothermal and electrothermal; 2D and 3D; with and without Canali): the largest relative column error at most 1e-6. Newton on the 2D MOSFET in strong inversion converges quadratically (the last three correction norms). |
+| LS5 | 1D diode: the current with `lombardi` within 1e-4 relative of the current without (E⊥ = E_0). |
+| LS6 | A long-channel n-MOSFET (Release only), Vd = 10 mV, substrate 1e16 and 1e17 cm⁻³: the effective mobility μ_eff = (L / W) g_d / Q_inv at mid-channel, against μ of LD3 evaluated at E_eff = q (Q_b + Q_inv / 2) / ε_Si and the substrate's N, within 15% for E_eff in 3e5 … 1e6 V/cm. |
+| LS7 | Universality: in LS6's devices, μ_eff of the two substrates at equal E_eff (interpolated) within 15% for E_eff in 5e5 … 1e6 V/cm. |
+| LS8 | The 2D MOSFET example's Id–Vg (Vd = 0.1 V): at Vg = 1.5 V the current with `lombardi` lies below the current without; below threshold (Vg = 0.2 V) within 10%. The ratio at 1.5 V is pinned. |
+| LS9 | The 2D MOSFET example rotated 90° (x and y exchanged): the same Id at Vg = 0.5 and 1.5 V within 1e-9 relative. |
+| LS10 | Refused on a germanium region and accepted on silicon with another parameter changed; with electrothermal and 300 K sinks within 1e-3 of the isothermal current (LS8's device, Vg = 1.5 V); small-signal conductance against DC differences within 1e-5. |
+| LS11 | Reported, not gated: the pattern's nonzeros and the 2D and 3D MOSFET examples' sweep times with and without the model; the FinFET deck's on-current with and without (the deck's mesh convergence is still open). |
+| LS12 | Full Release and Debug suites; zero warnings; hand mutants caught. |
+
+---
+
 ## New questions the advisor raised (not yet in `ARCHITECTURE.md`)
 
 None of these is decided. Each needs an owner position before the build scaffold fixes the flags.
