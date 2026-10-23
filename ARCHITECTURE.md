@@ -3140,8 +3140,11 @@ FG1–FG9):**
 - **Surface-roughness mobility** (physics, assemble). A mobility reduction with the field normal to the
   interface: Lombardi's acoustic-phonon and surface-roughness terms, combined by Matthiessen's rule with the
   doping and lateral-field mobility. Without it, inversion-layer mobility is overestimated and the current above
-  threshold is too high. It needs the normal field per edge and a distance to the nearest interface, both from the
-  interfaces of Unit 15b.
+  threshold is too high. **Built as Unit 46** (opt-in `[models] surface_mobility = lombardi`; DECISIONS.md LD1–LD8,
+  LS1–LS12). E⊥ is the field normal to the current on each edge, from the least-squares nodal fields, and has no
+  distance to an interface (no damping). The Jacobian is exact; the model works with electrothermal and is refused
+  with impact ionization. In classical drift-diffusion it needs sub-nm surface spacing to resolve the inversion layer.
+  On the FinFET deck the on-current falls by 12%.
 - **Gate tunnelling** (physics, assemble, device). Direct and Fowler–Nordheim tunnelling through gate insulators,
   as a current between the semiconductor interface and the electrode. Below about 2 nm EOT the gate leakage is
   measurable. Today an insulator carries only displacement current. A nonlocal formulation could reuse Unit 20's

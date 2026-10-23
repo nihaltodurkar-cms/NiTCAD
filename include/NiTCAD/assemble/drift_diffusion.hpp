@@ -27,6 +27,15 @@
 // field mobility, on an edge between two materials it is the harmonic mean of each end's Canali
 // mobility at the edge's field (each with its own material's parameters), on other edges the
 // Canali mobility of the harmonic mean, as Unit 13.
+// Surface mobility (Unit 46, models.surface_mobility = lombardi; DECISIONS.md LD1-LD8): each
+// carrier edge's ends take Lombardi's mobility (physics/surface_mobility.hpp), the Matthiessen
+// sum of the end's bulk mobility and the surface terms at its N and T in the edge's E_perp, before
+// the harmonic mean and Canali. E_perp = sqrt(|v|^2 + E_0^2), E_0 = 1 V/cm, with v the part of the
+// edge's field normal to the edge: the mean of the ends' fields, each reconstructed by least
+// squares from its carrier edges as for impact ionization, less its component along the edge.
+// v is linear in psi over both ends' stencils (SurfaceStencil), so the Jacobian is exact: the
+// carrier rows of a and b gain the psi columns of those nodes (with the electrothermal model the
+// heat rows too); with the model off nothing changes. In 1D v vanishes and E_perp = E_0.
 // On the edges joining the regions of an interface the device declares thermionic_emission
 // (device::Interface) the fluxes are the thermionic-emission ones of thermionic_flux.hpp instead,
 // with the same driving terms, K the harmonic mean of the ends' emission velocities
@@ -250,6 +259,7 @@
 #include "NiTCAD/physics/ionization.hpp"
 #include "NiTCAD/physics/semiconductor.hpp"
 #include "NiTCAD/physics/statistics.hpp"
+#include "NiTCAD/physics/surface_mobility.hpp"
 
 namespace NiTCAD::assemble {
 
@@ -526,7 +536,41 @@ private:
         // Positions in the Jacobian values: row a with columns of b, row b with columns of a,
         // in the order (psi, psi), (n, psi), (n, n), (p, psi), (p, p).
         std::size_t ab[5], ba[5];
+        // Lombardi (Unit 46): the ends' bulk-model impurity densities [cm^-3] and the edge's
+        // E_perp stencil, surface_stencil_[surface_first, surface_last); surface is false
+        // without the model and on thermionic edges.
+        bool surface;
+        double N_a, N_b;
+        std::size_t surface_first, surface_last;
     };
+
+    // Lombardi (Unit 46): one node j of an edge's E_perp stencil, v = sum_j g_j psi_j [V/cm per
+    // scaled psi], and the Jacobian positions of psi_j's column in the rows (electron, hole,
+    // heat) of end a ([0]) and end b ([1]); the heat rows' only with the electrothermal model.
+    struct SurfaceStencil {
+        std::size_t node;
+        double g[3];
+        std::size_t pos[2][3];
+    };
+    // An edge's E_perp [V/cm] at a state and v, the part of its field normal to it.
+    struct SurfaceField {
+        double value;
+        double v[3];
+    };
+    [[nodiscard]] SurfaceField surface_field(const EdgeTerm& e, std::span<const double> x) const;
+    // d flux / d E_perp of an edge's electron and hole fluxes, with the field they were taken in.
+    struct SurfaceSlope {
+        SurfaceField field;
+        double n, p;
+    };
+    // d E_perp / d psi_j of stencil entry j.
+    [[nodiscard]] double surface_gradient(const SurfaceField& f, const SurfaceStencil& j) const;
+    // The stencils' Jacobian positions (after the pattern is built or changed).
+    void locate_surface();
+    // Lombardi's per-end low-field mobility of an edge and its slopes: the bulk mobility mu_b at
+    // its impurity density N and temperature T [K] with the surface terms in E_perp.
+    [[nodiscard]] static physics::SurfaceMobility surface_end(physics::Carrier carrier, double mu_b,
+                                                              double N, double T, double E_perp);
 
     // The degeneracy factors of a node's electron and hole densities (Fermi-Dirac).
     struct NodeDegeneracy {
@@ -613,9 +657,12 @@ private:
     [[nodiscard]] std::vector<NodeDegeneracy> degeneracies(std::span<const double> x) const;
 
     // The electron and hole fluxes of an edge at state x, with field-dependent edge factors when
-    // the model is on and the degeneracy terms g (degeneracies(x)) when it is not empty.
+    // the model is on and the degeneracy terms g (degeneracies(x)) when it is not empty. With
+    // Lombardi on the edge (e.surface) the fluxes' partials exclude E_perp's; slope, when not
+    // nullptr, receives d flux / d E_perp (0 without the model).
     [[nodiscard]] std::pair<EdgeFlux, EdgeFlux> edge_fluxes(
-        const EdgeTerm& e, std::span<const double> x, std::span<const NodeDegeneracy> g) const;
+        const EdgeTerm& e, std::span<const double> x, std::span<const NodeDegeneracy> g,
+        SurfaceSlope* slope = nullptr) const;
 
     // Electrothermal (Unit 23; electrothermal.cpp). Per node, constant: the material (index into
     // thermal_materials_, or -1 on an insulator), its thermal data, the impurity densities the
@@ -680,9 +727,10 @@ private:
     // Per node at x under Fermi-Dirac statistics; empty under Boltzmann.
     [[nodiscard]] std::vector<NodeLevels> thermal_levels(std::span<const double> x,
                                                          std::span<const ThermalState> t) const;
+    // An edge's electron and hole fluxes with the electrothermal model; slope as edge_fluxes'.
     [[nodiscard]] std::pair<ThermalFlux, ThermalFlux> thermal_fluxes(
         std::size_t edge, std::span<const double> x, std::span<const ThermalState> t,
-        std::span<const NodeLevels> g) const;
+        std::span<const NodeLevels> g, SurfaceSlope* slope = nullptr) const;
     // The heat row's conduction term along an edge, from a to b, and its theta partials.
     struct Conduction {
         double flux, d_a, d_b;
@@ -784,6 +832,10 @@ private:
     bool srh_ = true;
     bool auger_ = true;
     bool field_mobility_ = false;
+    // Lombardi (Unit 46): on, the device's temperature [K] (isothermal) and the edges' stencils.
+    bool surface_ = false;
+    double surface_T_ = 0.0;
+    std::vector<SurfaceStencil> surface_stencil_;
     bool fermi_dirac_ = false;
     bool ionization_ = false;
     bool radiative_on_ = true;

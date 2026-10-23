@@ -893,6 +893,10 @@ std::expected<void, base::Error> Builder::models(assemble::PhysicsModels& m) con
             if (e.value == "caughey_thomas") m.electron_mobility = assemble::ElectronMobility::caughey_thomas;
             else if (e.value == "masetti") m.electron_mobility = assemble::ElectronMobility::masetti;
             else return std::unexpected(at(e.line, "electron_mobility is caughey_thomas or masetti"));
+        } else if (e.key == "surface_mobility") {
+            if (e.value == "off") m.surface_mobility = assemble::SurfaceMobility::off;
+            else if (e.value == "lombardi") m.surface_mobility = assemble::SurfaceMobility::lombardi;
+            else return std::unexpected(at(e.line, "surface_mobility is off or lombardi"));
         } else if (e.key == "ionization_levels") {
             if (e.value == "fixed") m.ionization_levels = assemble::IonizationLevels::fixed;
             else if (e.value == "altermatt") m.ionization_levels = assemble::IonizationLevels::altermatt;

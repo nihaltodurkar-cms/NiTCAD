@@ -149,6 +149,11 @@ std::vector<std::pair<std::string, double>> settings(const BiasOptions& o) {
             s.emplace_back("models.electron_mobility",
                            static_cast<double>(o.models.electron_mobility));
         }
+        // Unit 46: likewise.
+        if (o.models.surface_mobility != assemble::SurfaceMobility::off) {
+            s.emplace_back("models.surface_mobility",
+                           static_cast<double>(o.models.surface_mobility));
+        }
     }
     // Unit 37: only where it is read (with incomplete ionization, in either equation set) and not
     // the default, so the runs without it keep their identity.

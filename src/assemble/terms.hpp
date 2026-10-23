@@ -120,6 +120,10 @@ struct DriftDiffusion::Terms {
     // terms.
     static void interface_pattern(const DriftDiffusion& s, std::vector<linalg::Triplet>& t);
     static void impact_pattern(const DriftDiffusion& s, std::vector<linalg::Triplet>& t);
+    // Lombardi (Unit 46): rows 1 .. rows of both ends of every surface edge with the psi
+    // columns of its E_perp stencil (rows 2: the continuity rows; 3: and the heat row).
+    static void surface_pattern(const DriftDiffusion& s, std::vector<linalg::Triplet>& t,
+                                std::size_t rows);
 
     // Electrothermal: whether node i's heat row is an isothermal sink's Dirichlet row.
     [[nodiscard]] static bool held(const DriftDiffusion& s, const Evaluation& e,

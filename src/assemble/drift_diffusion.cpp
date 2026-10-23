@@ -1,6 +1,7 @@
 #include "NiTCAD/assemble/drift_diffusion.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <limits>
 #include <numbers>
@@ -142,6 +143,29 @@ std::expected<DriftDiffusion, base::Error> DriftDiffusion::create(
     } else if (models.electron_mobility != ElectronMobility::caughey_thomas) {
         return refuse("unknown electron mobility model");
     }
+    // Unit 46 (DECISIONS.md LD6, LD8): Lombardi's coefficients are silicon's; impact ionization
+    // reads the edge fluxes' partials, which with E_perp reach past its pattern.
+    if (models.surface_mobility == SurfaceMobility::lombardi) {
+        for (const device::Region& r : device.regions()) {
+            const auto* s = std::get_if<physics::Semiconductor>(&r.material);
+            if (s && !(s->parameters().electron_mobility ==
+                           physics::silicon_parameters.electron_mobility &&
+                       s->parameters().hole_mobility ==
+                           physics::silicon_parameters.hole_mobility)) {
+                return std::unexpected(base::Error{
+                    base::ErrorCode::invalid_input,
+                    "surface_mobility lombardi: region '" + r.name +
+                        "' does not have silicon's mobility (Lombardi's coefficients are "
+                        "silicon's)",
+                    {}});
+            }
+        }
+        if (models.impact_ionization) {
+            return refuse("surface_mobility lombardi with impact_ionization is not supported");
+        }
+    } else if (models.surface_mobility != SurfaceMobility::off) {
+        return refuse("unknown surface mobility model");
+    }
     auto scaled = detail::make_scaled_device(device, scaling, models);
     if (!scaled) return std::unexpected(std::move(scaled.error()));
     const std::size_t n = scaled->volume.size();
@@ -197,7 +221,7 @@ std::expected<DriftDiffusion, base::Error> DriftDiffusion::create(
     s.tau_p_.resize(n);
     s.auger_n_.resize(n);
     s.auger_p_.resize(n);
-    std::vector<double> mu_n(n), mu_p(n);
+    std::vector<double> mu_n(n), mu_p(n), N_bulk(n, 0.0);
     for (std::size_t i = 0; i < n; ++i) {
         const auto node = static_cast<mesh::NodeId>(i);
         if (s.insulator_[i] != 0) {  // placeholders; no carrier equation reads them
@@ -209,6 +233,7 @@ std::expected<DriftDiffusion, base::Error> DriftDiffusion::create(
         const physics::Semiconductor& m = device.material(node);
         const double N = device.total_impurity(node);
         const double N_mobility = models.doping_mobility ? N : 0.0;
+        N_bulk[i] = N_mobility;
         mu_n[i] = models.electron_mobility == ElectronMobility::masetti
                       ? physics::masetti_mobility(physics::masetti_phosphorus_silicon, N_mobility, T)
                       : physics::caughey_thomas_mobility(m, physics::Carrier::electron, N_mobility,
@@ -281,6 +306,9 @@ std::expected<DriftDiffusion, base::Error> DriftDiffusion::create(
         t.shift_n = ds + dln;
         t.shift_p = ds - dln;
         t.thermionic = e.thermionic;
+        t.surface = models.surface_mobility == SurfaceMobility::lombardi && !e.thermionic;
+        t.N_a = N_bulk[e.i];
+        t.N_b = N_bulk[e.j];
         if (t.thermionic) {
             // K = hmean(v_a, v_b) times the scaled interface area: coupling area / L_D^(D-1),
             // which is geometry length / L_D; in units of D0 / L_D (the scaled flux of v n).
@@ -304,6 +332,85 @@ std::expected<DriftDiffusion, base::Error> DriftDiffusion::create(
             t.te_ratio_nv = nva / nvb;
         }
         s.edges_.push_back(t);
+    }
+
+    if (models.surface_mobility == SurfaceMobility::lombardi) {
+        // Lombardi (Unit 46): each surface edge's E_perp stencil. Node i's field is
+        // E_i = sum_k (P_i t_k) E_k over its carrier edges k, E_k = -field_k (psi_kb - psi_ka),
+        // P_i the pseudo-inverse of sum_k t_k t_k^T (as impact ionization's); the edge's field is
+        // the ends' mean, and v its part normal to the edge, (I - t t^T) of it.
+        s.surface_ = true;
+        s.surface_T_ = T;
+        const mesh::Mesh& m = device.mesh();
+        const int D = m.dimension();
+        const std::size_t edge_count = scaled->edges.size();
+        std::vector<std::vector<std::size_t>> incident(n);
+        std::vector<std::array<double, 3>> unit(edge_count, {0.0, 0.0, 0.0});
+        for (std::size_t k = 0; k < edge_count; ++k) {
+            const detail::ScaledEdge& e = scaled->edges[k];
+            if (!e.carriers) continue;
+            incident[e.i].push_back(k);
+            incident[e.j].push_back(k);
+            const mesh::Point& pa = m.points()[e.i];
+            const mesh::Point& pb = m.points()[e.j];
+            for (int d = 0; d < D; ++d) unit[k][d] = (pb[d] - pa[d]) / e.length_cm;
+        }
+        std::vector<std::array<double, 9>> inverse(n);
+        for (std::size_t i = 0; i < n; ++i) {
+            inverse[i].fill(0.0);
+            if (s.insulator_[i] != 0 || incident[i].empty()) continue;
+            double outer[9] = {};
+            for (const std::size_t k : incident[i]) {
+                for (int r = 0; r < D; ++r) {
+                    for (int c = 0; c < D; ++c) outer[r * D + c] += unit[k][r] * unit[k][c];
+                }
+            }
+            pseudo_inverse(outer, D, inverse[i].data());
+        }
+        using Coefficient = std::pair<std::size_t, std::array<double, 3>>;
+        std::vector<Coefficient> c;
+        const auto accumulate = [&](std::size_t node, const double* w, double scale) {
+            auto it = std::ranges::find(c, node, &Coefficient::first);
+            if (it == c.end()) {
+                c.push_back({node, {0.0, 0.0, 0.0}});
+                it = c.end() - 1;
+            }
+            for (int d = 0; d < D; ++d) it->second[d] += scale * w[d];
+        };
+        const auto add_field = [&](std::size_t i) {  // half of node i's field
+            for (const std::size_t k : incident[i]) {
+                const detail::ScaledEdge& e = scaled->edges[k];
+                const double field = scaling.V_T / e.length_cm;
+                double w[3] = {};
+                for (int r = 0; r < D; ++r) {
+                    for (int q = 0; q < D; ++q) w[r] += inverse[i][r * D + q] * unit[k][q];
+                }
+                accumulate(e.j, w, -0.5 * field);
+                accumulate(e.i, w, 0.5 * field);
+            }
+        };
+        for (std::size_t k = 0; k < s.edges_.size(); ++k) {
+            EdgeTerm& t = s.edges_[k];
+            t.surface_first = t.surface_last = s.surface_stencil_.size();
+            if (!t.surface) continue;
+            c.clear();
+            add_field(t.a);
+            add_field(t.b);
+            std::ranges::sort(c, {}, &Coefficient::first);
+            const std::array<double, 3>& u = unit[k];
+            for (const auto& [node, v] : c) {
+                double along = 0.0;
+                for (int d = 0; d < D; ++d) along += v[d] * u[d];
+                SurfaceStencil j{node, {0.0, 0.0, 0.0}, {}};
+                bool zero = true;
+                for (int d = 0; d < D; ++d) {
+                    j.g[d] = v[d] - along * u[d];
+                    zero = zero && j.g[d] == 0.0;
+                }
+                if (!zero) s.surface_stencil_.push_back(j);
+            }
+            t.surface_last = s.surface_stencil_.size();
+        }
     }
 
     // The terms' own entries (terms.hpp); set_paths adds the paths' to the base again.
@@ -331,6 +438,7 @@ std::expected<DriftDiffusion, base::Error> DriftDiffusion::create(
                                        stride * t.a + edge_cols[k]);
         }
     }
+    s.locate_surface();
 
     if (models.impact_ionization) {
         // Per node with coefficients: its carrier edges and the pseudo-inverse of sum t t^T.
@@ -575,7 +683,8 @@ std::vector<DriftDiffusion::NodeDegeneracy> DriftDiffusion::degeneracies(
 }
 
 std::pair<EdgeFlux, EdgeFlux> DriftDiffusion::edge_fluxes(
-    const EdgeTerm& e, std::span<const double> x, std::span<const NodeDegeneracy> g) const {
+    const EdgeTerm& e, std::span<const double> x, std::span<const NodeDegeneracy> g,
+    SurfaceSlope* slope) const {
     // The flux functions take the driving term as psi2 - psi1; its partials are those with
     // respect to psi_a and psi_b, since ln(n_ie) and s do not depend on the state.
     const double dpsi = x[m_ * e.b] - x[m_ * e.a];
@@ -586,14 +695,15 @@ std::pair<EdgeFlux, EdgeFlux> DriftDiffusion::edge_fluxes(
         delta_n += g[e.b].n.log_gamma - g[e.a].n.log_gamma;
         delta_p -= g[e.b].p.log_gamma - g[e.a].p.log_gamma;
     }
-    // Unit edge factors when the Canali factor follows (never on a thermionic edge).
+    // Unit edge factors when the Canali or Lombardi factor follows (never on a thermionic edge).
+    const bool unit_factor = field_mobility_ || e.surface;
     EdgeFlux fn = e.thermionic ? thermionic_electron_flux(e.te_kn, delta_n, e.te_log_nc,
                                                           e.te_ratio_nc, na, nb)
-                               : sg_electron_flux(field_mobility_ ? 1.0 : e.an, 0.0, delta_n,
+                               : sg_electron_flux(unit_factor ? 1.0 : e.an, 0.0, delta_n,
                                                   na, nb);
     EdgeFlux fp = e.thermionic ? thermionic_hole_flux(e.te_kp, delta_p, e.te_log_nv,
                                                       e.te_ratio_nv, pa, pb)
-                               : sg_hole_flux(field_mobility_ ? 1.0 : e.ap, 0.0, delta_p, pa, pb);
+                               : sg_hole_flux(unit_factor ? 1.0 : e.ap, 0.0, delta_p, pa, pb);
     if (!g.empty()) {
         // d flux / d delta is d_psi2; ln gamma_n,a enters delta_n with -, ln gamma_p,a delta_p
         // with +.
@@ -602,23 +712,59 @@ std::pair<EdgeFlux, EdgeFlux> DriftDiffusion::edge_fluxes(
         fp.d_c1 += fp.d_psi2 * g[e.a].p.d_density;
         fp.d_c2 -= fp.d_psi2 * g[e.b].p.d_density;
     }
-    if (!field_mobility_ || e.thermionic) return {fn, fp};
+    if (slope != nullptr) *slope = SurfaceSlope{};
+    if (!unit_factor || e.thermionic) return {fn, fp};
     // Edge factor a(E) = a0 mu(E) / mu0, E = field |dpsi|; the flux is linear in a, so
     // d flux / d dpsi gains (flux / a) da/d dpsi. mu(E) is the Canali mobility of mu0 (Unit 13),
-    // or between two materials the harmonic mean of each end's Canali mobility (Unit 15).
+    // or between two materials the harmonic mean of each end's Canali mobility (Unit 15). With
+    // Lombardi (Unit 46) the ends' low-field mobilities first take the surface terms in E_perp,
+    // and mu0 is their harmonic mean; d_perp is d mu / d E_perp.
     const double E = e.field * std::abs(dpsi);
     const double dE = dpsi > 0.0 ? e.field : dpsi < 0.0 ? -e.field : 0.0;  // dE / d dpsi
-    const auto mobility = [&](double mu0, double mu_a, double mu_b,
+    const SurfaceField perp = e.surface ? surface_field(e, x) : SurfaceField{};
+    struct Mobility {
+        physics::FieldMobility mu;
+        double d_perp;
+    };
+    const auto mobility = [&](physics::Carrier carrier, double mu0, double mu_a, double mu_b,
                               const physics::CanaliParameters& sat_a,
                               const physics::CanaliParameters& sat_b) {
-        if (!e.mixed) return physics::canali_mobility(mu0, E, sat_a);
+        double s_a = 0.0, s_b = 0.0;  // d mu_a / d E_perp, d mu_b / d E_perp
+        if (e.surface) {
+            const physics::SurfaceMobility la = surface_end(carrier, mu_a, e.N_a, surface_T_,
+                                                            perp.value);
+            const physics::SurfaceMobility lb = surface_end(carrier, mu_b, e.N_b, surface_T_,
+                                                            perp.value);
+            mu_a = la.mobility;
+            mu_b = lb.mobility;
+            s_a = la.d_dE;
+            s_b = lb.d_dE;
+            mu0 = harmonic_mean(mu_a, mu_b);
+        }
+        const double low = mu_a + mu_b;  // d hmean / d mu_a = 2 mu_b^2 / low^2
+        const double d_mu0 =
+            e.surface ? 2.0 * (mu_b * mu_b * s_a + mu_a * mu_a * s_b) / (low * low) : 0.0;
+        if (!field_mobility_) return Mobility{{mu0, 0.0}, d_mu0};
+        if (!e.mixed) {
+            const physics::FieldMobility c = physics::canali_mobility(mu0, E, sat_a);
+            return Mobility{c, (c.mobility + E * c.d_dE) / mu0 * d_mu0};
+        }
         const physics::FieldMobility ma = physics::canali_mobility(mu_a, E, sat_a);
         const physics::FieldMobility mb = physics::canali_mobility(mu_b, E, sat_b);
         const double sum = ma.mobility + mb.mobility;
-        return physics::FieldMobility{
-            2.0 * ma.mobility * mb.mobility / sum,
-            2.0 * (mb.mobility * mb.mobility * ma.d_dE + ma.mobility * ma.mobility * mb.d_dE) /
-                (sum * sum)};
+        // Canali's mu = mu0 f(mu0 E): d mu / d mu0 = (mu + E d mu / dE) / mu0.
+        const double d_perp =
+            e.surface ? 2.0 *
+                            (mb.mobility * mb.mobility * (ma.mobility + E * ma.d_dE) / mu_a * s_a +
+                             ma.mobility * ma.mobility * (mb.mobility + E * mb.d_dE) / mu_b * s_b) /
+                            (sum * sum)
+                      : 0.0;
+        return Mobility{
+            physics::FieldMobility{
+                2.0 * ma.mobility * mb.mobility / sum,
+                2.0 * (mb.mobility * mb.mobility * ma.d_dE + ma.mobility * ma.mobility * mb.d_dE) /
+                    (sum * sum)},
+            d_perp};
     };
     const auto scaled = [&](EdgeFlux unit, double a0, double mu0, physics::FieldMobility mu) {
         const double a = a0 * (mu.mobility / mu0);
@@ -626,8 +772,56 @@ std::pair<EdgeFlux, EdgeFlux> DriftDiffusion::edge_fluxes(
         return EdgeFlux{a * unit.flux, a * unit.d_psi1 - unit.flux * da,
                         a * unit.d_psi2 + unit.flux * da, a * unit.d_c1, a * unit.d_c2};
     };
-    return {scaled(fn, e.an, e.mu_n, mobility(e.mu_n, e.mu_n_a, e.mu_n_b, e.sat_n, e.sat_n_b)),
-            scaled(fp, e.ap, e.mu_p, mobility(e.mu_p, e.mu_p_a, e.mu_p_b, e.sat_p, e.sat_p_b))};
+    const Mobility mn = mobility(physics::Carrier::electron, e.mu_n, e.mu_n_a, e.mu_n_b, e.sat_n,
+                                 e.sat_n_b);
+    const Mobility mp =
+        mobility(physics::Carrier::hole, e.mu_p, e.mu_p_a, e.mu_p_b, e.sat_p, e.sat_p_b);
+    if (slope != nullptr && e.surface) {
+        *slope = SurfaceSlope{perp, e.an * (mn.d_perp / e.mu_n) * fn.flux,
+                              e.ap * (mp.d_perp / e.mu_p) * fp.flux};
+    }
+    return {scaled(fn, e.an, e.mu_n, mn.mu), scaled(fp, e.ap, e.mu_p, mp.mu)};
+}
+
+DriftDiffusion::SurfaceField DriftDiffusion::surface_field(const EdgeTerm& e,
+                                                           std::span<const double> x) const {
+    SurfaceField f{0.0, {0.0, 0.0, 0.0}};
+    for (std::size_t k = e.surface_first; k < e.surface_last; ++k) {
+        const SurfaceStencil& j = surface_stencil_[k];
+        const double psi = x[m_ * j.node];
+        for (std::size_t d = 0; d < 3; ++d) f.v[d] += j.g[d] * psi;
+    }
+    constexpr double E0 = 1.0;  // [V/cm] (DECISIONS.md LD2)
+    f.value = std::sqrt(f.v[0] * f.v[0] + f.v[1] * f.v[1] + f.v[2] * f.v[2] + E0 * E0);
+    return f;
+}
+
+double DriftDiffusion::surface_gradient(const SurfaceField& f, const SurfaceStencil& j) const {
+    return (f.v[0] * j.g[0] + f.v[1] * j.g[1] + f.v[2] * j.g[2]) / f.value;
+}
+
+physics::SurfaceMobility DriftDiffusion::surface_end(physics::Carrier carrier, double mu_b,
+                                                     double N, double T, double E_perp) {
+    return physics::lombardi_mobility(carrier == physics::Carrier::electron
+                                          ? physics::lombardi_silicon_electrons
+                                          : physics::lombardi_silicon_holes,
+                                      mu_b, N, T, E_perp);
+}
+
+void DriftDiffusion::locate_surface() {
+    // Rows electron, hole and (electrothermal) heat of each end with psi_j's column.
+    const std::size_t rows = electrothermal() ? 3 : 2;
+    for (const EdgeTerm& e : edges_) {
+        for (std::size_t k = e.surface_first; k < e.surface_last; ++k) {
+            SurfaceStencil& j = surface_stencil_[k];
+            for (std::size_t end = 0; end < 2; ++end) {
+                const std::size_t node = end == 0 ? e.a : e.b;
+                for (std::size_t r = 0; r < rows; ++r) {
+                    j.pos[end][r] = detail::position(pattern_, m_ * node + 1 + r, m_ * j.node);
+                }
+            }
+        }
+    }
 }
 
 DriftDiffusion::NodeStorage DriftDiffusion::node_storage(
@@ -1189,7 +1383,8 @@ std::vector<DriftDiffusion::CurrentRow> DriftDiffusion::small_signal_currents(
             const EdgeTerm& e = edges_[k];
             const std::int32_t ca = contact_[e.a], cb = contact_[e.b];
             if (ca == cb || !e.carriers) continue;
-            const auto [fn, fp] = thermal_fluxes(k, x, t, l);
+            SurfaceSlope slope{};
+            const auto [fn, fp] = thermal_fluxes(k, x, t, l, &slope);
             const std::pair<std::size_t, double> d[8] = {
                 {4 * e.a, fn.d_psi[0] + fp.d_psi[0]},     {4 * e.b, fn.d_psi[1] + fp.d_psi[1]},
                 {4 * e.a + 1, fn.d_c[0]},                 {4 * e.b + 1, fn.d_c[1]},
@@ -1200,13 +1395,20 @@ std::vector<DriftDiffusion::CurrentRow> DriftDiffusion::small_signal_currents(
                 add(ca, column, value);
                 add(cb, column, -value);
             }
+            for (std::size_t j = e.surface_first; j < e.surface_last; ++j) {  // Unit 46
+                const SurfaceStencil& st = surface_stencil_[j];
+                const double value = (slope.n + slope.p) * surface_gradient(slope.field, st);
+                add(ca, 4 * st.node, value);
+                add(cb, 4 * st.node, -value);
+            }
         }
     }
     const std::vector<NodeDegeneracy> g = degeneracies(x);
     for (const EdgeTerm& e : edges_) {
         const std::int32_t ca = contact_[e.a], cb = contact_[e.b];
         if (electrothermal() || ca == cb || !e.carriers) continue;
-        const auto [fn, fp] = edge_fluxes(e, x, g);
+        SurfaceSlope slope{};
+        const auto [fn, fp] = edge_fluxes(e, x, g, &slope);
         const std::pair<std::size_t, double> d[6] = {
             {m_ * e.a, fn.d_psi1 + fp.d_psi1}, {m_ * e.b, fn.d_psi2 + fp.d_psi2},
             {m_ * e.a + 1, fn.d_c1},           {m_ * e.b + 1, fn.d_c2},
@@ -1214,6 +1416,12 @@ std::vector<DriftDiffusion::CurrentRow> DriftDiffusion::small_signal_currents(
         for (const auto& [column, value] : d) {
             add(ca, column, value);
             add(cb, column, -value);
+        }
+        for (std::size_t k = e.surface_first; k < e.surface_last; ++k) {  // Lombardi (Unit 46)
+            const SurfaceStencil& j = surface_stencil_[k];
+            const double value = (slope.n + slope.p) * surface_gradient(slope.field, j);
+            add(ca, m_ * j.node, value);
+            add(cb, m_ * j.node, -value);
         }
     }
     // The traps of an interface edge on an ohmic node (conduction_currents): rate_p - rate; and
@@ -1430,6 +1638,7 @@ void DriftDiffusion::locate_positions() {
             e.ba[k] = detail::position(pattern_, m_ * e.b + edge_rows[k], m_ * e.a + edge_cols[k]);
         }
     }
+    locate_surface();
     for (const ImpactNode& node : impact_nodes_) {
         for (std::size_t k = node.first; k < node.last; ++k) {
             ImpactEdge& ie = impact_edges_[k];

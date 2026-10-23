@@ -16,10 +16,11 @@ constexpr std::array<KeySpec, 3> mesh_keys{{{"min_angle", "20.7", "generate2d: s
                                             {"radius_edge", "2", "generate3d: largest radius-edge ratio"},
                                             {"max_nodes", "2000000", "generated meshes: node limit"}}};
 
-constexpr std::array<KeySpec, 16> model_keys{{
+constexpr std::array<KeySpec, 17> model_keys{{
     {"doping_mobility", "on", "doping-dependent mobility"},
     {"hole_mobility", "automatic", "automatic | caughey_thomas | masetti"},
     {"electron_mobility", "caughey_thomas", "caughey_thomas | masetti"},
+    {"surface_mobility", "off", "off | lombardi (inversion layers)"},
     {"field_mobility", "off", "high-field mobility (Canali)"},
     {"srh", "on", "Shockley-Read-Hall recombination"},
     {"auger", "on", "Auger recombination"},

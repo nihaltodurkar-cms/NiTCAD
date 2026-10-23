@@ -37,6 +37,11 @@ enum class ElectronMobility : std::uint8_t { caughey_thomas = 0, masetti = 1 };
 // silicon's ionization parameters. Read only with incomplete_ionization on.
 enum class IonizationLevels : std::uint8_t { fixed = 0, altermatt = 1 };
 
+// The surface mobility (Unit 46): none (the default) or Lombardi's acoustic-phonon and
+// surface-roughness terms (physics/surface_mobility.hpp) in each edge's field normal to its
+// current, combined with the bulk mobility by Matthiessen's rule; silicon only. Opt-in.
+enum class SurfaceMobility : std::uint8_t { off = 0, lombardi = 1 };
+
 struct PhysicsModels {
     // Caughey-Thomas mobility; false: the lattice mobility (Caughey-Thomas at N = 0).
     bool doping_mobility = true;
@@ -46,6 +51,8 @@ struct PhysicsModels {
     // Which doping-dependent electron mobility (Unit 38); with doping_mobility false, its N = 0
     // value.
     ElectronMobility electron_mobility = ElectronMobility::caughey_thomas;
+    // Lombardi's surface mobility (Unit 46; drift_diffusion.hpp); off by default.
+    SurfaceMobility surface_mobility = SurfaceMobility::off;
     // SRH recombination with Scharfetter lifetimes.
     bool srh = true;
     // Auger recombination (physics::auger_recombination).

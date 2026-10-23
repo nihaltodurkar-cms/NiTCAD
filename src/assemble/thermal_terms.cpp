@@ -481,6 +481,7 @@ public:
                 }
             }
         }
+        surface_pattern(s, t, 3);  // Lombardi (Unit 46); none without the model
     }
     void add(const DriftDiffusion& s, const Evaluation& ev) const override {
         const std::span<const double> x = ev.x;
@@ -533,7 +534,8 @@ public:
                 if (!held(b)) add_row(b, 3, -1.0, heat_value, heat);
                 continue;
             }
-            const auto [fn, fp] = s.thermal_fluxes(k, x, t, g);
+            SurfaceSlope slope{};
+            const auto [fn, fp] = s.thermal_fluxes(k, x, t, g, jacobian ? &slope : nullptr);
             const double gn[2][4] = {{fn.d_psi[0], fn.d_c[0], 0, fn.d_theta[0]},
                                      {fn.d_psi[1], fn.d_c[1], 0, fn.d_theta[1]}};
             const double gp[2][4] = {{fp.d_psi[0], 0, fp.d_c[0], fp.d_theta[0]},
@@ -581,6 +583,26 @@ public:
                 }
                 add_row(node, 3, sign,
                         heat_value - inv_K0 * ((en + m) * fn.flux + (ep + m) * fp.flux), grad);
+            }
+            // Lombardi (Unit 46): the fluxes' E_perp partials over the edge's stencil, in the
+            // continuity rows and, through the fluxes they carry, the heat rows.
+            if (!jacobian || !e.surface) continue;
+            for (std::size_t j = e.surface_first; j < e.surface_last; ++j) {
+                const SurfaceStencil& st = s.surface_stencil_[j];
+                const double w = s.surface_gradient(slope.field, st);
+                const double dn = slope.n * w, dp = slope.p * w;
+                for (std::size_t end = 0; end < 2; ++end) {
+                    const std::size_t node = ends[end];
+                    const double sign = end == 0 ? 1.0 : -1.0;
+                    if (s.contact_[node] < 0) {
+                        values[st.pos[end][0]] += sign * dn;
+                        values[st.pos[end][1]] += sign * dp;
+                    }
+                    if (!held(node)) {
+                        const double m = s.metal_[node];
+                        values[st.pos[end][2]] -= sign * inv_K0 * ((en + m) * dn + (ep + m) * dp);
+                    }
+                }
             }
         }
     }

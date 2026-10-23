@@ -387,6 +387,11 @@ public:
     TermInfo info() const noexcept override {
         return {"carrier fluxes", TermDomain::mesh_edges, densities, all3, false};
     }
+    // Lombardi (Unit 46): the continuity rows of both ends with the psi columns of the edge's
+    // E_perp stencil; none without the model.
+    void pattern(const DriftDiffusion& s, std::vector<linalg::Triplet>& t) const override {
+        surface_pattern(s, t, 2);
+    }
     void add(const DriftDiffusion& s, const Evaluation& ev) const override {
         const std::size_t m = s.m_;
         const std::span<double> f = ev.f, values = ev.values;
@@ -394,7 +399,23 @@ public:
         for (const EdgeTerm& e : s.edges_) {
             if (e.charged || !e.carriers) continue;
             const std::size_t a = e.a, b = e.b;
-            const auto [fn, fp] = s.edge_fluxes(e, ev.x, ev.g);
+            SurfaceSlope slope{};
+            const auto [fn, fp] = s.edge_fluxes(e, ev.x, ev.g, jacobian ? &slope : nullptr);
+            if (jacobian && e.surface) {
+                // d flux / d psi_j = d flux / d E_perp * d E_perp / d psi_j (+ at a, - at b).
+                for (std::size_t k = e.surface_first; k < e.surface_last; ++k) {
+                    const SurfaceStencil& j = s.surface_stencil_[k];
+                    const double w = s.surface_gradient(slope.field, j);
+                    if (s.contact_[a] < 0) {
+                        values[j.pos[0][0]] += slope.n * w;
+                        values[j.pos[0][1]] += slope.p * w;
+                    }
+                    if (s.contact_[b] < 0) {
+                        values[j.pos[1][0]] -= slope.n * w;
+                        values[j.pos[1][1]] -= slope.p * w;
+                    }
+                }
+            }
             if (s.contact_[a] < 0) {
                 f[m * a + 1] += fn.flux;
                 f[m * a + 2] += fp.flux;
@@ -792,6 +813,22 @@ void DriftDiffusion::Terms::impact_pattern(const DriftDiffusion& s,
                          static_cast<linalg::Index>(stride * b + 2), 0.0});
             t.push_back({static_cast<linalg::Index>(stride * a + 2),
                          static_cast<linalg::Index>(stride * b + 1), 0.0});
+        }
+    }
+}
+
+void DriftDiffusion::Terms::surface_pattern(const DriftDiffusion& s,
+                                            std::vector<linalg::Triplet>& t, std::size_t rows) {
+    const std::size_t stride = s.m_;
+    for (const EdgeTerm& e : s.edges_) {
+        for (std::size_t k = e.surface_first; k < e.surface_last; ++k) {
+            const std::size_t column = stride * s.surface_stencil_[k].node;
+            for (const std::size_t node : {e.a, e.b}) {
+                for (std::size_t r = 1; r <= rows; ++r) {
+                    t.push_back({static_cast<linalg::Index>(stride * node + r),
+                                 static_cast<linalg::Index>(column), 0.0});
+                }
+            }
         }
     }
 }
