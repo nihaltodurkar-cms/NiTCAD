@@ -483,6 +483,27 @@ TEST_CASE("render image: the views match their WARP references (VG4)") {
         REQUIRE(s.has_value());
         check_image(*r.draw(*s, W, H), "mosfet3d_opaque_perspective");
     }
+    // Unit 26c (YG2): the oxide hidden, its scale fitted over the silicon.
+    SECTION("2D potential with the oxide hidden") {
+        values = *field_values(m2.device, m2.point, Field::potential);
+        FieldOptions o;
+        o.title = std::string(field_info(Field::potential).title);
+        o.view.hidden_regions = {0};
+        o.view.mesh_edges = true;
+        o.contours = true;
+        o.scale = *ColorScale::fit(ScaleKind::linear, shown_values(m2.device, values, o.view.hidden_regions), 1e10);
+        const auto s = field_view(m2.device, g2, values, o);
+        REQUIRE(s.has_value());
+        check_image(*r.draw(*s, W, H), "mosfet2d_hidden_oxide");
+    }
+    SECTION("3D n with the oxide hidden") {
+        FieldOptions o = field_options(m3.device, m3.point, Field::electrons, values);
+        o.view.hidden_regions = {0};
+        o.scale = *ColorScale::fit(ScaleKind::log10, shown_values(m3.device, values, o.view.hidden_regions), 1e10);
+        const auto s = field_view(m3.device, g3, values, o);
+        REQUIRE(s.has_value());
+        check_image(*r.draw(*s, W, H), "mosfet3d_hidden_oxide");
+    }
     for (const std::string& m : r.debug_messages()) UNSCOPED_INFO(m);
     CHECK(r.debug_errors() == 0);
 }

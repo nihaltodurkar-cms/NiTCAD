@@ -63,6 +63,8 @@ constexpr const char* plot_usage =
     "          [--frames <dir>] (each frame also as <dir>/frame_000.png, ...)\n"
     "  lines   --streamlines E|J|Jn|Jp  --lines <n> (24)  --from <contact>\n"
     "          --seeds <x0>,<y0>[,<z0>]:<x1>,<y1>[,<z1>] (um) | x=<um>|y=<um>|z=<um> (3D plane)\n"
+    "  regions --hide <region> (repeatable): that region left out of a 2D or 3D solid, mesh, field, slice,\n"
+    "          iso, exploded, quality, difference or filmstrip view\n"
     "  image   --size <w>x<h> (1280x960)  --adapter auto|gpu|warp\n";
 
 int usage(std::string_view why) {
@@ -112,6 +114,7 @@ struct Options {
     std::string view, field, scale, colormap = "turbo", contact, sense, adapter = "auto";
     std::string streamlines, from, seeds;  // Unit 25b
     std::string cut;  // Unit 26b
+    std::vector<std::string> hide;  // Unit 26c: region names
     fs::path compare;  // Unit 26b: run B
     std::size_t lines = 24;
     std::string vectors;  // Unit 25c
@@ -324,6 +327,11 @@ int plot(int argc, char** argv) {
         else if (a == "--from") { if (!flag_value(o.from)) return usage("--from needs a contact"); }
         else if (a == "--seeds") { if (!flag_value(o.seeds)) return usage("--seeds needs a segment or a plane"); }
         else if (a == "--cut") { if (!flag_value(o.cut)) return usage("--cut needs a segment"); }
+        else if (a == "--hide") {
+            const auto v = value();
+            if (!v) return usage("--hide needs a region");
+            o.hide.emplace_back(*v);
+        }
         else if (a == "--compare") { if (!flag_value(o.compare)) return usage("--compare needs a deck or a result file"); }
         else if (a == "--lines") {
             const auto v = value();
@@ -432,11 +440,13 @@ int plot(int argc, char** argv) {
         if (!built) return fail(built.error().message);
         plan = std::move(*built);
         device = &plan->device;
-        // The doping and the mesh quality need no results (a field, profile or difference of the doping).
+        // The doping and the mesh quality need no results (a field, profile or difference of the doping);
+        // arrows and streamlines always do, on any view (Unit 26c).
         const bool doping = o.field == "doping" || o.field == "ND" || o.field == "NA";
-        const bool needs_results = o.view != "solid" && o.view != "mesh" && o.view != "quality" &&
-                                   o.view != "quality-histogram" &&
-                                   !((o.view == "field" || o.view == "profile" || o.view == "difference") && doping);
+        const bool needs_results = (o.view != "solid" && o.view != "mesh" && o.view != "quality" &&
+                                    o.view != "quality-histogram" &&
+                                    !((o.view == "field" || o.view == "profile" || o.view == "difference") && doping)) ||
+                                   !o.vectors.empty() || !o.streamlines.empty();
         if (needs_results) {
             if (auto r = load_outputs(*plan, l); !r) return fail(r.error());
         }
@@ -535,6 +545,22 @@ int plot(int argc, char** argv) {
         if (!c) return fail(c.error().message);
         cut = std::move(*c);
     }
+    // Hidden regions (Unit 26c, YD4): by name, on the device views of a 2D or 3D device.
+    if (!o.hide.empty()) {
+        const bool device_view = o.view == "solid" || o.view == "mesh" || o.view == "field" || o.view == "slice" ||
+                                 o.view == "iso" || o.view == "exploded" || o.view == "quality" ||
+                                 o.view == "difference" || o.view == "filmstrip";
+        if (!device_view || m.dimension() < 2) {
+            return fail("hidden regions apply to the solid, mesh, field, slice, iso, exploded, quality, difference "
+                        "and filmstrip views of a 2D or 3D device");
+        }
+        const auto regions = device->regions();
+        for (const std::string& name : o.hide) {
+            const auto r = std::ranges::find(regions, name, &device::Region::name);
+            if (r == regions.end()) return fail("there is no region " + name);
+            view.hidden_regions.push_back(static_cast<std::int32_t>(r - regions.begin()));
+        }
+    }
     view.transparent_insulators = !o.opaque;
     view.projection = o.perspective ? Projection::perspective : Projection::orthographic;
     if (o.azimuth) view.azimuth_deg = *o.azimuth;
@@ -588,9 +614,11 @@ int plot(int argc, char** argv) {
         // A magnitude that is zero everywhere (a quasi-static result's currents) is drawn on 0..1.
         const bool all_zero = is_vector_magnitude(*field) &&
                               std::ranges::none_of(values, [](double x) { return std::isfinite(x) && x != 0.0; });
+        // With hidden regions, fitted over the shown nodes (YD4).
         auto s = o.range    ? ColorScale::create(*scale_kind, o.range->first, o.range->second, 1e10)
                  : all_zero ? ColorScale::create(ScaleKind::linear, 0.0, 1.0, 1e10)
-                            : ColorScale::fit(*scale_kind, values, 1e10);
+                            : ColorScale::fit(*scale_kind, view.hidden_regions.empty() ? values
+                                                           : shown_values(*device, values, view.hidden_regions), 1e10);
         if (!s) return std::unexpected(s.error().message);
         f.scale = *s;
         return f;
@@ -679,7 +707,10 @@ int plot(int argc, char** argv) {
             }
         }
         std::vector<double> all;
-        for (const FilmFrame& f : frames) all.insert(all.end(), f.values.begin(), f.values.end());
+        for (const FilmFrame& f : frames) {
+            const std::vector<double> v = shown_values(*device, f.values, view.hidden_regions);  // YD4
+            all.insert(all.end(), v.begin(), v.end());
+        }
         auto f = field_options(all);  // CQ2: one scale over every frame
         if (!f) return fail(f.error());
         auto s = filmstrip_scenes(*device, *geometry, frames, *scale_kind, *f);
@@ -857,7 +888,7 @@ int plot(int argc, char** argv) {
             if (!s) return fail(s.error().message);
             f.scale = *s;
         } else {
-            f.scale = difference_scale(d->values);
+            f.scale = difference_scale(shown_values(*device, d->values, view.hidden_regions));  // YD4
         }
         if (m.dimension() == 1) {
             auto p = profile_plot(m, d->values, d->title);

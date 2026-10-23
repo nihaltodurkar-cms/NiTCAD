@@ -94,6 +94,7 @@ int run_self_test(const SelfTestOptions& o, std::FILE* log) {
     wo.debug_layer = o.debug_layer;
     wo.show = true;
     wo.quit_on_close = false;
+    wo.input = false;  // shown but not taking the desktop user's input (WG1 measures the window's own work)
     auto window = MainWindow::create(wo);
     if (!window) {
         say(log, "no window can be made here (skipped)");

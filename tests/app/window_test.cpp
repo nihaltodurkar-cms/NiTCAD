@@ -7,6 +7,7 @@
 #include "main_window.hpp"
 #include "win32.hpp"
 #include "NiTCAD/app/deck_sections.hpp"
+#include "NiTCAD/app/run_monitor.hpp"
 #include "fixtures.hpp"
 
 #include <windows.h>
@@ -281,6 +282,15 @@ TEST_CASE("app window: the start page, the run monitor, Stop and the results (WG
     CHECK(w->run_page().row_count() == static_cast<int>(w->runner().points().size()));
     CHECK(w->run_page().cell(0, 1) == L"equilibrium");
     CHECK(w->run_page().cell(1, 2) == L"1 of 16");
+    // Every cell as the final rows format it: the cells kept between paints are not stale (WG1).
+    const auto& final_rows = w->runner().points();
+    for (std::size_t r = 0; r < final_rows.size(); ++r) {
+        const auto cells = app::monitor_cells(final_rows[r], r);
+        for (std::size_t c = 0; c < cells.size(); ++c) {
+            CAPTURE(r, c);
+            CHECK(w->run_page().cell(static_cast<int>(r), static_cast<int>(c)) == app::win32::widen(cells[c]));
+        }
+    }
     CHECK_FALSE(w->run_page().plot().error());
     w->select_tab(MainWindow::tab_results);
     CHECK(w->results_page().figure_count() >= 4);
@@ -351,4 +361,21 @@ TEST_CASE("app window: the debug layer stays clean and no graphics object outliv
     CHECK(live_with_window > 0);  // the counter sees the renderer's objects
     w.reset();
     CHECK(app::win32::live_graphics_objects() == 0);
+}
+
+TEST_CASE("app window: the self-test's window takes no input (WG1)", "[app]") {
+    app::WindowOptions o;
+    o.adapter = render::Adapter::warp;
+    o.show = false;
+    o.quit_on_close = false;
+    auto usual = MainWindow::create(o);
+    REQUIRE(usual);
+    CHECK(IsWindowEnabled(usual->hwnd()));
+    // Shown without being activated and disabled: the desktop's mouse and keys do not reach it, so the
+    // message loop's gaps measure the window's own work; it still paints and runs its timers.
+    o.input = false;
+    auto quiet = MainWindow::create(o);
+    REQUIRE(quiet);
+    CHECK_FALSE(IsWindowEnabled(quiet->hwnd()));
+    quiet->refresh();
 }

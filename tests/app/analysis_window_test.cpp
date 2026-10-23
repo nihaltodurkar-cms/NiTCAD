@@ -9,13 +9,17 @@
 
 #include <windows.h>
 #include <richedit.h>
+#include <commctrl.h>
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cmath>
+#include <cstdio>
 #include <filesystem>
 #include <functional>
 #include <string>
+#include <variant>
 #include <vector>
 
 using namespace NiTCAD;
@@ -461,4 +465,552 @@ TEST_CASE("app window 26b: run B from a result file and from the previous run; m
     CHECK_FALSE(w->run_b());
     CHECK_FALSE(w->has_previous_run());
     REQUIRE(pump_until([&] { return !w->runner().busy(); }));
+}
+
+namespace {
+
+// Unit 26c: an inspector list's entry chosen, or a box's text applied, as the user would.
+void choose(MainWindow& w, int id, const wchar_t* item) {
+    HWND list = w.child(id);
+    const LRESULT k = SendMessageW(list, CB_FINDSTRINGEXACT, static_cast<WPARAM>(-1), reinterpret_cast<LPARAM>(item));
+    REQUIRE(k != CB_ERR);
+    SendMessageW(list, CB_SETCURSEL, static_cast<WPARAM>(k), 0);
+    SendMessageW(GetParent(list), WM_COMMAND, MAKEWPARAM(id, CBN_SELCHANGE), reinterpret_cast<LPARAM>(list));
+}
+
+void click(MainWindow& w, int id) {
+    HWND b = w.child(id);
+    if ((GetWindowLongPtrW(b, GWL_STYLE) & BS_TYPEMASK) == BS_AUTOCHECKBOX) {
+        SendMessageW(b, BM_SETCHECK, SendMessageW(b, BM_GETCHECK, 0, 0) == BST_CHECKED ? BST_UNCHECKED : BST_CHECKED, 0);
+    }
+    SendMessageW(GetParent(b), WM_COMMAND, MAKEWPARAM(id, BN_CLICKED), reinterpret_cast<LPARAM>(b));
+}
+
+void apply_text(MainWindow& w, int id, const std::string& text) {
+    SetWindowTextW(w.child(id), std::wstring(text.begin(), text.end()).c_str());
+    click(w, MainWindow::id_apply);
+}
+
+bool shown(MainWindow& w, int id) { return (GetWindowLongPtrW(w.child(id), GWL_STYLE) & WS_VISIBLE) != 0; }
+
+// The window's view equals nitcad plot's image for its settings, drawn on the same adapter (WARP).
+void same_as_plot(MainWindow& w, const fs::path& deck, const fs::path& png) {
+    REQUIRE(w.scene());
+    auto mine = std::visit([&](const auto& s) { return w.renderer()->draw(s, 480, 360); }, *w.scene());
+    REQUIRE(mine);
+    std::string args = "plot " + app_test::quoted(deck);
+    for (const std::string& a : app::plot_arguments(w.settings())) args += " \"" + a + "\"";
+    args += " --size 480x360 --adapter warp --out " + app_test::quoted(png);
+    const auto cli = app_test::nitcad(args);
+    CAPTURE(args, cli.output);
+    REQUIRE(cli.status == 0);
+    auto theirs = render::load_png(png);
+    REQUIRE(theirs);
+    const auto d = render::compare(*mine, *theirs, 0);
+    REQUIRE(d);
+    CHECK(d->max_channel == 0);
+}
+
+}  // namespace
+
+TEST_CASE("app window 26c: arrows, streamlines and the exploded view in the inspector (YD1, YD2, YG1, YG5)", "[app]") {
+    const fs::path dir = app_test::scratch("window_vectors");
+    const fs::path deck = app_test::write(dir, "mosfet3d.deck", app_test::mosfet3d);
+    auto w = window();
+    REQUIRE(w->open_deck(deck));
+    REQUIRE(pump_until([&] { return w->workspace() != nullptr && !w->runner().busy(); }));
+    w->select_tab(MainWindow::tab_view);
+    // Before a run: no arrows (they need the results); the exploded view's controls with that view only.
+    CHECK_FALSE(shown(*w, MainWindow::id_arrows));
+    w->execute(Command::run);
+    REQUIRE(pump_until([&] { return !w->runner().busy() && w->workspace() && w->workspace()->has_results(); }));
+    w->select_tab(MainWindow::tab_view);
+    REQUIRE(w->settings().kind == app::ViewKind::field);
+    for (const int id : {MainWindow::id_arrows, MainWindow::id_arrow_count, MainWindow::id_lines, MainWindow::id_line_count,
+                         MainWindow::id_from, MainWindow::id_seeds}) {
+        CAPTURE(id);
+        CHECK(shown(*w, id));
+    }
+    for (const int id : {MainWindow::id_axis, MainWindow::id_gap, MainWindow::id_exploded_field, MainWindow::id_swept,
+                         MainWindow::id_sensed, MainWindow::id_frequency, MainWindow::id_log}) {
+        CAPTURE(id);
+        CHECK_FALSE(shown(*w, id));
+    }
+
+    // Arrows of J: the map shows |J|, the arrows colored by it on the solid device (YD1).
+    choose(*w, MainWindow::id_arrows, L"J");
+    CHECK(w->settings().vectors == "J");
+    CHECK(w->settings().field == "J");
+    apply_text(*w, MainWindow::id_arrow_count, "40");
+    CHECK(w->settings().arrows == 40);
+    apply_text(*w, MainWindow::id_arrow_count, "0");
+    CHECK(w->status(0) == "Arrows are a count from 1 to 100000.");
+    CHECK(w->settings().arrows == 40);
+    same_as_plot(*w, deck, dir / "arrows.png");
+    // Streamlines of E from the gate, then from a seed plane, beside the arrows.
+    choose(*w, MainWindow::id_lines, L"E");
+    CHECK(w->settings().streamlines == "E");
+    CHECK(w->settings().field == "E");
+    choose(*w, MainWindow::id_from, L"gate");
+    CHECK(w->settings().from == "gate");
+    apply_text(*w, MainWindow::id_line_count, "7");
+    CHECK(w->settings().lines == 7);
+    same_as_plot(*w, deck, dir / "lines_gate.png");
+    apply_text(*w, MainWindow::id_seeds, " x=1 ");
+    CHECK(w->settings().seeds == "x=1");
+    same_as_plot(*w, deck, dir / "lines_plane.png");
+    choose(*w, MainWindow::id_arrows, L"none");
+    CHECK(w->settings().vectors.empty());
+    CHECK(w->settings().field == "E");
+
+    // The exploded view: the arrows' controls hidden (none drawn there), its own shown.
+    choose(*w, MainWindow::id_view, L"exploded");
+    CHECK(w->settings().kind == app::ViewKind::exploded);
+    CHECK_FALSE(shown(*w, MainWindow::id_lines));
+    CHECK(shown(*w, MainWindow::id_axis));
+    CHECK(shown(*w, MainWindow::id_gap));
+    REQUIRE(w->scene());
+    same_as_plot(*w, deck, dir / "exploded.png");
+    choose(*w, MainWindow::id_axis, L"x");
+    CHECK(w->settings().axis == 0);
+    click(*w, MainWindow::id_exploded_field);
+    CHECK(w->settings().exploded_field);
+    apply_text(*w, MainWindow::id_gap, "0.2");
+    CHECK(w->settings().gap_um == 0.2);
+    apply_text(*w, MainWindow::id_gap, "-1");
+    CHECK(w->status(0) == "The gap is a length in µm, at least 0.");
+    CHECK(w->settings().gap_um == 0.2);
+    same_as_plot(*w, deck, dir / "exploded_field.png");
+    // No probe on the moved regions.
+    // (A click where the top face's centre node projects would pick it on any other view.)
+    click_at(*w, {1.0f, 1.0f, 0.4f});
+    CHECK_FALSE(w->probe());
+    choose(*w, MainWindow::id_view, L"solid");
+    click_at(*w, {1.0f, 1.0f, 0.4f});
+    CHECK(w->probe());
+    choose(*w, MainWindow::id_view, L"exploded");
+    // Back on the field view the streamlines are drawn again.
+    choose(*w, MainWindow::id_view, L"field");
+    CHECK(w->settings().streamlines == "E");
+    CHECK(shown(*w, MainWindow::id_lines));
+    same_as_plot(*w, deck, dir / "lines_again.png");
+
+    // Keyboard: every new control is a tab stop (YG5); at 200% the pairs stay side by side in the inspector.
+    for (int id = MainWindow::id_arrows; id <= MainWindow::id_log; ++id) {
+        CAPTURE(id);
+        CHECK((GetWindowLongPtrW(w->child(id), GWL_STYLE) & WS_TABSTOP) != 0);
+    }
+    RECT r{};
+    GetWindowRect(w->hwnd(), &r);
+    RECT suggested{r.left, r.top, r.left + 2 * (r.right - r.left), r.top + 2 * (r.bottom - r.top)};
+    SendMessageW(w->hwnd(), WM_DPICHANGED, MAKEWPARAM(192, 192), reinterpret_cast<LPARAM>(&suggested));
+    RECT list{}, box{}, inspector{};
+    GetWindowRect(w->child(MainWindow::id_lines), &list);
+    GetWindowRect(w->child(MainWindow::id_line_count), &box);
+    GetWindowRect(w->child(MainWindow::id_inspector), &inspector);
+    CHECK(list.right <= box.left);
+    CHECK(list.top == box.top);
+    CHECK(box.right <= inspector.right);
+    CHECK(box.bottom - box.top >= 40);  // 23 px rows at 96 dpi, doubled
+}
+
+TEST_CASE("app window 26c: the curve pickers (YD3, YG1)", "[app]") {
+    const fs::path dir = app_test::scratch("window_pickers");
+    const fs::path deck = app_test::write(dir, "cv.deck", app_test::diode_cv());
+    auto w = window();
+    REQUIRE(w->open_deck(deck));
+    REQUIRE(pump_until([&] { return w->workspace() != nullptr && !w->runner().busy(); }));
+    w->execute(Command::run);
+    REQUIRE(pump_until([&] { return !w->runner().busy() && w->workspace() && w->workspace()->has_results(); }));
+    w->select_tab(MainWindow::tab_curves);
+    REQUIRE(w->settings().kind == app::ViewKind::cv);
+    for (const int id : {MainWindow::id_swept, MainWindow::id_sensed, MainWindow::id_frequency, MainWindow::id_log}) {
+        CAPTURE(id);
+        CHECK(shown(*w, id));
+    }
+    CHECK_FALSE(shown(*w, MainWindow::id_arrows));
+    // The two frequencies, the contacts by name; the defaults first.
+    CHECK(SendMessageW(w->child(MainWindow::id_frequency), CB_GETCOUNT, 0, 0) == 2);
+    CHECK(SendMessageW(w->child(MainWindow::id_sensed), CB_GETCOUNT, 0, 0) == 3);
+    choose(*w, MainWindow::id_frequency, L"1e+09 Hz");
+    CHECK(w->settings().frequency == 1);
+    choose(*w, MainWindow::id_sensed, L"cathode");
+    CHECK(w->settings().sense == "cathode");
+    choose(*w, MainWindow::id_swept, L"anode");
+    CHECK(w->settings().contact == "anode");
+    click(*w, MainWindow::id_log);
+    CHECK(w->settings().log);
+    click(*w, MainWindow::id_log);
+    CHECK_FALSE(w->settings().log);
+    same_as_plot(*w, deck, dir / "cv.png");
+    // The default again: nitcad plot's choice.
+    choose(*w, MainWindow::id_sensed, L"(automatic)");
+    CHECK(w->settings().sense.empty());
+    same_as_plot(*w, deck, dir / "cv_default.png");
+}
+
+namespace {
+
+// Unit 26c (YD4): the scene tree's items under the device, by the start of their text.
+HTREEITEM tree_item(MainWindow& w, const std::wstring& prefix) {
+    HWND tree = w.child(MainWindow::id_tree);
+    for (HTREEITEM root = TreeView_GetRoot(tree); root; root = TreeView_GetNextSibling(tree, root)) {
+        for (HTREEITEM i = TreeView_GetChild(tree, root); i; i = TreeView_GetNextSibling(tree, i)) {
+            wchar_t text[128]{};
+            TVITEMW t{};
+            t.mask = TVIF_TEXT;
+            t.hItem = i;
+            t.pszText = text;
+            t.cchTextMax = 128;
+            TreeView_GetItem(tree, &t);
+            if (std::wstring(text).starts_with(prefix)) return i;
+        }
+    }
+    return nullptr;
+}
+
+int check_state(MainWindow& w, HTREEITEM item) {
+    return static_cast<int>(TreeView_GetCheckState(w.child(MainWindow::id_tree), item)) + 1;  // 0 none, 1 off, 2 on
+}
+
+// The item's box toggled by the space bar, as the user would.
+void press_space(MainWindow& w, HTREEITEM item) {
+    HWND tree = w.child(MainWindow::id_tree);
+    TreeView_SelectItem(tree, item);
+    SendMessageW(tree, WM_KEYDOWN, VK_SPACE, 0);
+    SendMessageW(tree, WM_CHAR, L' ', 0);
+    SendMessageW(tree, WM_KEYUP, VK_SPACE, 0);
+    pump_for(0.2);  // the window reads the boxes when its posted message comes
+}
+
+}  // namespace
+
+TEST_CASE("app window 26c: regions hidden from the scene tree (YD4, YG1, YG5)", "[app]") {
+    const fs::path dir = app_test::scratch("window_regions");
+    const fs::path deck = app_test::write(dir, "mosfet.deck", app_test::mosfet2d);
+    auto w = window();
+    REQUIRE(w->open_deck(deck));
+    REQUIRE(pump_until([&] { return w->workspace() != nullptr && !w->runner().busy(); }));
+    w->execute(Command::run);
+    REQUIRE(pump_until([&] { return !w->runner().busy() && w->workspace() && w->workspace()->has_results(); }));
+    w->select_tab(MainWindow::tab_view);
+    REQUIRE(w->settings().kind == app::ViewKind::field);
+    // A box on each region, checked; none on the contacts or the other items.
+    HTREEITEM silicon = tree_item(*w, L"silicon");
+    HTREEITEM oxide = tree_item(*w, L"oxide");
+    HTREEITEM gate = tree_item(*w, L"contact gate");
+    REQUIRE((silicon && oxide && gate));
+    CHECK(check_state(*w, silicon) == 2);
+    CHECK(check_state(*w, oxide) == 2);
+    CHECK(check_state(*w, gate) == 0);
+    HMENU bar = GetMenu(w->hwnd());
+    CHECK((GetMenuState(bar, static_cast<UINT>(Command::show_regions), MF_BYCOMMAND) & MF_GRAYED) != 0);
+    // A probe on the oxide's top before it is hidden.
+    click_at(*w, {1.0f, 1.0f, 0.0f});
+    REQUIRE(w->probe());
+    const auto before = w->probe()->node;
+
+    // The oxide hidden by its box: the view as nitcad plot --hide oxide draws it, no probe where it was.
+    press_space(*w, oxide);
+    CHECK(check_state(*w, oxide) == 1);
+    CHECK(w->settings().hidden == std::vector<std::string>{"oxide"});
+    CHECK(w->status(0) == "Hiding the region oxide.");
+    CHECK((GetMenuState(bar, static_cast<UINT>(Command::show_regions), MF_BYCOMMAND) & MF_GRAYED) == 0);
+    same_as_plot(*w, deck, dir / "field_no_oxide.png");
+    click_at(*w, {1.0f, 1.0f, 0.0f});
+    CHECK(w->status(0) == "No node within reach.");
+    CHECK(w->probe()->node == before);  // the last probe, kept
+    click_at(*w, {1.0f, 0.5f, 0.0f});
+    REQUIRE(w->probe());
+    CHECK(w->probe()->position_um[1] < 0.93);
+    // The setting stays on the other device views.
+    choose(*w, MainWindow::id_view, L"mesh");
+    CHECK(w->settings().hidden == std::vector<std::string>{"oxide"});
+    same_as_plot(*w, deck, dir / "mesh_no_oxide.png");
+    // The space bar on a contact gives it no box and hides nothing.
+    press_space(*w, gate);
+    CHECK(check_state(*w, gate) == 0);
+    CHECK(w->settings().hidden == std::vector<std::string>{"oxide"});
+    // Both hidden, in the device's order; the silicon shown again by its box.
+    press_space(*w, silicon);
+    CHECK(w->settings().hidden == std::vector<std::string>{"silicon", "oxide"});
+    press_space(*w, silicon);
+    CHECK(w->settings().hidden == std::vector<std::string>{"oxide"});
+    CHECK(check_state(*w, silicon) == 2);
+    // Show every region clears it and checks the boxes.
+    w->execute(Command::show_regions);
+    CHECK(w->settings().hidden.empty());
+    CHECK(check_state(*w, tree_item(*w, L"oxide")) == 2);
+    CHECK(w->status(0) == "Showing every region.");
+    same_as_plot(*w, deck, dir / "mesh_all.png");
+    // A new run resets the view settings, the hidden regions with them, and the boxes show it.
+    press_space(*w, tree_item(*w, L"oxide"));
+    CHECK(w->settings().hidden == std::vector<std::string>{"oxide"});
+    w->execute(Command::run);
+    REQUIRE(pump_until([&] { return !w->runner().busy() && w->workspace() && w->workspace()->has_results(); }));
+    w->select_tab(MainWindow::tab_view);
+    CHECK(w->settings().hidden.empty());
+    CHECK(check_state(*w, tree_item(*w, L"oxide")) == 2);
+    // In the View menu with its keys (YG5).
+    const auto* info = app::find_command(Command::show_regions);
+    REQUIRE(info);
+    CHECK(info->menu == "&View");
+    CHECK(info->accelerator.key == 'H');
+}
+
+namespace {
+
+// A slider moved by the user to a step (its notification to the inspector, as a drag ends).
+void slide(MainWindow& w, int id, int step) {
+    HWND bar = w.child(id);
+    SendMessageW(bar, TBM_SETPOS, TRUE, step);
+    SendMessageW(GetParent(bar), WM_HSCROLL, MAKEWPARAM(TB_THUMBPOSITION, step), reinterpret_cast<LPARAM>(bar));
+}
+
+int position(MainWindow& w, int id) { return static_cast<int>(SendMessageW(w.child(id), TBM_GETPOS, 0, 0)); }
+
+std::string text_of(MainWindow& w, int id) {
+    wchar_t buffer[256]{};
+    GetWindowTextW(w.child(id), buffer, 256);
+    std::string out;
+    for (const wchar_t* c = buffer; *c; ++c) out += static_cast<char>(*c < 128 ? *c : '?');
+    return out;
+}
+
+bool grayed(MainWindow& w, Command c) {
+    return (GetMenuState(GetMenu(w.hwnd()), static_cast<UINT>(c), MF_BYCOMMAND) & MF_GRAYED) != 0;
+}
+
+// The window's view equals the image at `png` (drawn on WARP at 480 x 360).
+void same_as_png(MainWindow& w, const fs::path& png) {
+    REQUIRE(w.scene());
+    auto mine = std::visit([&](const auto& s) { return w.renderer()->draw(s, 480, 360); }, *w.scene());
+    REQUIRE(mine);
+    auto theirs = render::load_png(png);
+    REQUIRE(theirs);
+    const auto d = render::compare(*mine, *theirs, 0);
+    REQUIRE(d);
+    CHECK(d->max_channel == 0);
+}
+
+}  // namespace
+
+TEST_CASE("app window 26c: playing a transient run's snapshots (YD5, YG3, YG5)", "[app]") {
+    const fs::path dir = app_test::scratch("window_playback");
+    const fs::path deck = app_test::write(dir, "mosfet.deck", app_test::mosfet2d_transient());
+    auto w = window();
+    REQUIRE(w->open_deck(deck));
+    REQUIRE(pump_until([&] { return w->workspace() != nullptr && !w->runner().busy(); }));
+    w->execute(Command::run);
+    REQUIRE(pump_until([&] { return !w->runner().busy() && w->workspace() && w->workspace()->has_results(); }));
+    w->select_tab(MainWindow::tab_view);
+    REQUIRE(w->settings().kind == app::ViewKind::field);
+    REQUIRE(w->settings().field == "potential");
+    const std::size_t n = w->workspace()->points.size();
+    REQUIRE(n >= 3);
+    // The frames nitcad plot draws for the run, each snapshot's.
+    const fs::path frames = dir / "frames";
+    const auto cli = app_test::nitcad("plot " + app_test::quoted(deck) +
+                                      " --view filmstrip --field potential --every 1 --size 480x360 --adapter warp --frames " +
+                                      app_test::quoted(frames) + " --out " + app_test::quoted(dir / "strip.png"));
+    CAPTURE(cli.output);
+    REQUIRE(cli.status == 0);
+    const auto frame = [&](std::size_t k) {
+        char name[32];
+        std::snprintf(name, sizeof name, "frame_%03zu.png", k);
+        return frames / name;
+    };
+    // The controls and the commands on a transient run's field view; the last snapshot shown, as its frame.
+    CHECK(shown(*w, MainWindow::id_time));
+    CHECK(shown(*w, MainWindow::id_play));
+    CHECK_FALSE(grayed(*w, Command::play_pause));
+    CHECK(w->settings().film.has_value());
+    CHECK(position(*w, MainWindow::id_time) == static_cast<int>(n - 1));
+    same_as_png(*w, frame(n - 1));
+    // The step keys land on the snapshot asked for.
+    w->execute(Command::snapshot_first);
+    CHECK(w->settings().point == 0u);
+    CHECK(text_of(*w, MainWindow::id_time_text).starts_with("t = 0 s (1 of "));
+    CHECK(position(*w, MainWindow::id_time) == 0);
+    same_as_png(*w, frame(0));
+    w->execute(Command::snapshot_previous);
+    CHECK(w->settings().point == 0u);
+    w->execute(Command::snapshot_next);
+    w->execute(Command::snapshot_next);
+    CHECK(w->settings().point == 2u);
+    CHECK(SendMessageW(w->child(MainWindow::id_point), CB_GETCURSEL, 0, 0) == 2);  // the point list follows
+    same_as_png(*w, frame(2));
+    w->execute(Command::snapshot_previous);
+    CHECK(w->settings().point == 1u);
+    w->execute(Command::snapshot_last);
+    CHECK(w->settings().point == n - 1);
+    w->execute(Command::snapshot_next);
+    CHECK(w->settings().point == n - 1);
+    // The slider: its snapshot shown.
+    slide(*w, MainWindow::id_time, 1);
+    CHECK(w->settings().point == 1u);
+    same_as_png(*w, frame(1));
+
+    // Play from the first: five snapshots a second to the last, every frame shown its snapshot's, and the
+    // message loop never held 100 ms (WG1).
+    w->execute(Command::snapshot_first);
+    const auto start = std::chrono::steady_clock::now();
+    w->execute(Command::play_pause);
+    CHECK(w->playing());
+    CHECK(text_of(*w, MainWindow::id_play) == "Pa&use");
+    std::vector<std::size_t> seen{0};
+    double longest_ms = 0.0;
+    MSG m;
+    while (w->playing() && std::chrono::steady_clock::now() - start < std::chrono::seconds(20)) {
+        if (PeekMessageW(&m, nullptr, 0, 0, PM_REMOVE)) {
+            const auto t0 = std::chrono::steady_clock::now();
+            TranslateMessage(&m);
+            DispatchMessageW(&m);
+            longest_ms = std::max(longest_ms,
+                                  std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count());
+        } else {
+            MsgWaitForMultipleObjects(0, nullptr, FALSE, 10, QS_ALLINPUT);
+        }
+        const std::size_t k = *w->settings().point;
+        if (k != seen.back()) {
+            // No snapshot before its time (five a second).
+            const double at = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
+            CHECK(at >= static_cast<double>(k) / app::playback_fps - 0.05);
+            seen.push_back(k);
+            same_as_png(*w, frame(k));
+        }
+    }
+    const double played_s = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
+    CAPTURE(seen, longest_ms, played_s);
+    CHECK_FALSE(w->playing());
+    CHECK(seen.back() == n - 1);
+    CHECK(std::ranges::is_sorted(seen));
+    CHECK(played_s >= static_cast<double>(n - 1) / app::playback_fps - 0.05);
+    CHECK(longest_ms < 100.0);
+    CHECK(text_of(*w, MainWindow::id_play) == "Pla&y");
+    // Play from the last starts again at the first; Pause holds the snapshot; the button and the slider pause too.
+    w->execute(Command::play_pause);
+    CHECK(w->playing());
+    CHECK(w->settings().point == 0u);
+    pump_for(0.5);
+    w->execute(Command::play_pause);
+    CHECK_FALSE(w->playing());
+    const std::size_t held = *w->settings().point;
+    CHECK(held >= 1u);
+    pump_for(0.5);
+    CHECK(w->settings().point == held);
+    same_as_png(*w, frame(held));
+    click(*w, MainWindow::id_play);
+    CHECK(w->playing());
+    slide(*w, MainWindow::id_time, 0);
+    CHECK_FALSE(w->playing());
+    CHECK(w->settings().point == 0u);
+    // Another tab pauses it.
+    w->execute(Command::play_pause);
+    CHECK(w->playing());
+    w->select_tab(MainWindow::tab_deck);
+    pump_for(0.2);
+    CHECK_FALSE(w->playing());
+    w->select_tab(MainWindow::tab_view);
+
+    // Only on the field view: not on the mesh view (the commands greyed).
+    choose(*w, MainWindow::id_view, L"mesh");
+    CHECK_FALSE(shown(*w, MainWindow::id_time));
+    CHECK(grayed(*w, Command::play_pause));
+    w->execute(Command::play_pause);
+    CHECK_FALSE(w->playing());
+    choose(*w, MainWindow::id_view, L"field");
+    CHECK(shown(*w, MainWindow::id_time));
+    // In the Simulation menu with their keys; the new controls are tab stops (YG5).
+    for (const Command c : {Command::play_pause, Command::snapshot_first, Command::snapshot_previous,
+                            Command::snapshot_next, Command::snapshot_last}) {
+        const auto* info = app::find_command(c);
+        REQUIRE(info);
+        CHECK(info->menu == "&Simulation");
+        CHECK(info->accelerator.key != 0);
+    }
+    for (const int id : {MainWindow::id_time, MainWindow::id_play}) {
+        CHECK((GetWindowLongPtrW(w->child(id), GWL_STYLE) & WS_TABSTOP) != 0);
+    }
+    // The oxide hidden: the scale fitted again over the silicon, each frame as nitcad plot --hide oxide draws it.
+    const fs::path hidden_frames = dir / "frames_no_oxide";
+    const auto hidden_cli = app_test::nitcad("plot " + app_test::quoted(deck) +
+                                             " --view filmstrip --field potential --every 1 --hide oxide --size 480x360"
+                                             " --adapter warp --frames " + app_test::quoted(hidden_frames) + " --out " +
+                                             app_test::quoted(dir / "strip_no_oxide.png"));
+    CAPTURE(hidden_cli.output);
+    REQUIRE(hidden_cli.status == 0);
+    press_space(*w, tree_item(*w, L"oxide"));
+    REQUIRE(w->settings().hidden == std::vector<std::string>{"oxide"});
+    w->execute(Command::snapshot_last);
+    char name[32];
+    std::snprintf(name, sizeof name, "frame_%03zu.png", n - 1);
+    same_as_png(*w, hidden_frames / name);
+}
+
+TEST_CASE("app window 26c: the clipping box's sliders (YD6, YG4, YG5)", "[app]") {
+    const fs::path dir = app_test::scratch("window_clip_sliders");
+    const fs::path deck = app_test::write(dir, "mosfet3d.deck", app_test::mosfet3d);
+    auto w = window();
+    REQUIRE(w->open_deck(deck));
+    REQUIRE(pump_until([&] { return w->workspace() != nullptr && !w->runner().busy(); }));
+    w->execute(Command::run);
+    REQUIRE(pump_until([&] { return !w->runner().busy() && w->workspace() && w->workspace()->has_results(); }));
+    w->select_tab(MainWindow::tab_view);
+    choose(*w, MainWindow::id_view, L"solid");
+    // Six sliders on the solid view of a 3D device, at the whole extent; no playback (a sweep).
+    for (int id = MainWindow::id_clip_x0; id <= MainWindow::id_clip_z1; ++id) {
+        CAPTURE(id);
+        CHECK(shown(*w, id));
+        CHECK(position(*w, id) == ((id - MainWindow::id_clip_x0) % 2 == 0 ? 0 : app::clip_steps));
+        CHECK((GetWindowLongPtrW(w->child(id), GWL_STYLE) & WS_TABSTOP) != 0);
+    }
+    CHECK_FALSE(shown(*w, MainWindow::id_time));
+    CHECK(grayed(*w, Command::play_pause));
+    // The low x slider at a quarter: a box over the device from x = 0.5 um, checked and typed.
+    slide(*w, MainWindow::id_clip_x0, 250);
+    REQUIRE(w->settings().clip);
+    CHECK(w->settings().clip->lo_um == std::array{0.5, 0.0, 0.0});
+    CHECK(w->settings().clip->hi_um == std::array{2.0, 1.0, 0.8});
+    CHECK(SendMessageW(w->child(MainWindow::id_clip), BM_GETCHECK, 0, 0) == BST_CHECKED);
+    CHECK(text_of(*w, MainWindow::id_clip_box) == "0.5,0,0:2,1,0.8");
+    same_as_plot(*w, deck, dir / "clip_x.png");
+    // The high z slider below the low one: the low follows.
+    slide(*w, MainWindow::id_clip_z0, 500);
+    slide(*w, MainWindow::id_clip_z1, 300);
+    CHECK(w->settings().clip->lo_um[2] == 0.24);
+    CHECK(w->settings().clip->hi_um[2] == 0.24);
+    CHECK(position(*w, MainWindow::id_clip_z0) == 300);
+    // A typed box moves the sliders to its steps; the view as nitcad plot --clip draws it.
+    apply_text(*w, MainWindow::id_clip_box, "0.2,0.1,0.1:1.5,0.75,0.6");
+    REQUIRE(w->settings().clip);
+    CHECK(position(*w, MainWindow::id_clip_x0) == 100);
+    CHECK(position(*w, MainWindow::id_clip_x1) == 750);
+    CHECK(position(*w, MainWindow::id_clip_y0) == 100);
+    CHECK(position(*w, MainWindow::id_clip_y1) == 750);
+    CHECK(position(*w, MainWindow::id_clip_z0) == 125);
+    CHECK(position(*w, MainWindow::id_clip_z1) == 750);
+    same_as_plot(*w, deck, dir / "clip_typed.png");
+    // The field view keeps them; the mesh view has none.
+    choose(*w, MainWindow::id_view, L"field");
+    CHECK(shown(*w, MainWindow::id_clip_y1));
+    slide(*w, MainWindow::id_clip_y1, 500);
+    CHECK(w->settings().clip->hi_um[1] == 0.5);
+    same_as_plot(*w, deck, dir / "clip_field.png");
+    choose(*w, MainWindow::id_view, L"mesh");
+    CHECK_FALSE(shown(*w, MainWindow::id_clip_x0));
+    // At 200% the low and high sliders stay side by side in the inspector (YG5).
+    choose(*w, MainWindow::id_view, L"solid");
+    RECT r{};
+    GetWindowRect(w->hwnd(), &r);
+    RECT suggested{r.left, r.top, r.left + 2 * (r.right - r.left), r.top + 2 * (r.bottom - r.top)};
+    SendMessageW(w->hwnd(), WM_DPICHANGED, MAKEWPARAM(192, 192), reinterpret_cast<LPARAM>(&suggested));
+    RECT low{}, high{}, inspector{};
+    GetWindowRect(w->child(MainWindow::id_clip_x0), &low);
+    GetWindowRect(w->child(MainWindow::id_clip_x1), &high);
+    GetWindowRect(w->child(MainWindow::id_inspector), &inspector);
+    CHECK(low.right <= high.left);
+    CHECK(low.top == high.top);
+    CHECK(high.right <= inspector.right);
+    CHECK(high.bottom - high.top >= 40);
 }

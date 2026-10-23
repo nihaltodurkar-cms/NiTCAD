@@ -8,11 +8,12 @@ namespace NiTCAD::app {
 namespace {
 
 // Virtual-key codes (winuser.h), named here so this file needs no Windows header.
-constexpr std::uint16_t vk_tab = 0x09, vk_space = 0x20, vk_f4 = 0x73, vk_f5 = 0x74, vk_f6 = 0x75, vk_f7 = 0x76, vk_f8 = 0x77;
+constexpr std::uint16_t vk_tab = 0x09, vk_space = 0x20, vk_end = 0x23, vk_home = 0x24, vk_left = 0x25, vk_right = 0x27,
+                        vk_f4 = 0x73, vk_f5 = 0x74, vk_f6 = 0x75, vk_f7 = 0x76, vk_f8 = 0x77;
 
 constexpr std::array<std::string_view, 7> bar{"&File", "&Edit", "&Device", "&Mesh", "&Physics", "&Simulation", "&View"};
 
-constexpr std::array<CommandInfo, 44> list{{
+constexpr std::array<CommandInfo, 50> list{{
     {Command::new_deck, "&File", "&New deck", {'N', true}, "Ctrl+N"},
     {Command::open_deck, "&File", "&Open deck...", {'O', true}, "Ctrl+O"},
     {Command::open_result, "&File", "Open &result...", {'R', true, true}, "Ctrl+Shift+R"},
@@ -32,6 +33,12 @@ constexpr std::array<CommandInfo, 44> list{{
     {Command::stop, "&Simulation", "S&top", {vk_f5, false, true}, "Shift+F5"},
     {Command::compare_previous, "&Simulation", "Compare with the &previous run", {'V', true, true}, "Ctrl+Shift+V"},
     {Command::stop_comparing, "&Simulation", "Stop co&mparing", {'X', true, true}, "Ctrl+Shift+X"},
+    // Transient playback (Unit 26c, YD5).
+    {Command::play_pause, "&Simulation", "Pla&y / pause snapshots", {vk_space, true, true}, "Ctrl+Shift+Space"},
+    {Command::snapshot_first, "&Simulation", "&First snapshot", {vk_home, false, false, true}, "Alt+Home"},
+    {Command::snapshot_previous, "&Simulation", "Pre&vious snapshot", {vk_left, false, false, true}, "Alt+Left"},
+    {Command::snapshot_next, "&Simulation", "&Next snapshot", {vk_right, false, false, true}, "Alt+Right"},
+    {Command::snapshot_last, "&Simulation", "&Last snapshot", {vk_end, false, false, true}, "Alt+End"},
     {Command::fit, "&View", "&Fit", {}, "Home"},
     {Command::orbit_left, "&View", "Orbit &left", {}, "Left"},
     {Command::orbit_right, "&View", "Orbit &right", {}, "Right"},
@@ -48,6 +55,7 @@ constexpr std::array<CommandInfo, 44> list{{
     {Command::measure_mode, "&View", "&Measure", {'M', true, true}, "Ctrl+Shift+M"},
     {Command::cut_line_mode, "&View", "Dr&aw cut line", {'L', true, true}, "Ctrl+Shift+L"},
     {Command::mesh_quality, "&View", "Mesh &quality", {'Q', true, true}, "Ctrl+Shift+Q"},
+    {Command::show_regions, "&View", "S&how every region", {'H', true, true}, "Ctrl+Shift+H"},
     {Command::next_tab, "&View", "Next &tab", {vk_tab, true}, "Ctrl+Tab"},
     {Command::previous_tab, "&View", "Pre&vious tab", {vk_tab, true, true}, "Ctrl+Shift+Tab"},
     {Command::next_pane, "&View", "Ne&xt pane", {vk_f6}, "F6"},

@@ -9,6 +9,7 @@
 #include <cmath>
 #include <charconv>
 #include <format>
+#include <tuple>
 #include <utility>
 #include <variant>
 
@@ -31,11 +32,20 @@ constexpr const wchar_t* panel_class = L"NiTCADInspector";
 constexpr int status_state = 0, status_file = 1, status_adapter = 2, status_cursor = 3;
 
 // The tree's item data: a kind in the high word, an index in the low.
-enum TreeKind : int { tree_none = 0, tree_field = 1, tree_view = 2 };
+enum TreeKind : int { tree_none = 0, tree_field = 1, tree_view = 2, tree_region = 3 };
 LPARAM tree_data(TreeKind k, int index) { return static_cast<LPARAM>((k << 16) | (index & 0xFFFF)); }
 
 constexpr std::array<std::string_view, 4> scale_names{"(default)", "linear", "log", "signed-log"};
 constexpr std::array<std::string_view, 5> colormap_names{"turbo", "viridis", "cividis", "coolwarm", "soft"};
+// Unit 26c (YD1): the vector fields arrows and streamlines follow ("none" first).
+constexpr std::array<std::string_view, 5> vector_names{"none", "E", "J", "Jn", "Jp"};
+// The labels of the inspector's groups (Unit 26c), after the nine of Unit 26: their ids follow
+// id_first_label in the order made.
+constexpr int label_arrows = MainWindow::id_first_label + 9, label_lines = label_arrows + 1, label_from = label_arrows + 2,
+              label_axis = label_arrows + 3, label_swept = label_arrows + 4, label_sensed = label_arrows + 5,
+              label_frequency = label_arrows + 6;
+// Unit 26c (YD5, YD6): the snapshot slider's label and the clipping box's per axis.
+constexpr int label_time = label_arrows + 7, label_clip_x = label_arrows + 8;
 
 std::string format_um(double v) { return std::format("{:.3g}", v); }
 
@@ -110,9 +120,10 @@ std::unique_ptr<MainWindow> MainWindow::create(const WindowOptions& options) {
                              placed ? l.height : 800, nullptr, nullptr, GetModuleHandleW(nullptr), w.get());
     if (!h || !w->viewport_) return nullptr;
     if (options.show) {
-        ShowWindow(h, placed && l.maximized ? SW_SHOWMAXIMIZED : SW_SHOWNORMAL);
+        ShowWindow(h, !options.input ? SW_SHOWNOACTIVATE : placed && l.maximized ? SW_SHOWMAXIMIZED : SW_SHOWNORMAL);
         UpdateWindow(h);
     }
+    if (!options.input) EnableWindow(h, FALSE);  // a disabled window still paints and runs its timers
     return w;
 }
 
@@ -169,6 +180,8 @@ bool MainWindow::create_children() {
     tree_ = make(WC_TREEVIEWW, L"", WS_VISIBLE | WS_TABSTOP | TVS_HASLINES | TVS_HASBUTTONS | TVS_LINESATROOT |
                                         TVS_SHOWSELALWAYS,
                  hwnd_, id_tree, WS_EX_CLIENTEDGE);
+    // Check boxes for the regions (Unit 26c, YD4): set after creation, as the tree view asks.
+    SetWindowLongPtrW(tree_, GWL_STYLE, GetWindowLongPtrW(tree_, GWL_STYLE) | TVS_CHECKBOXES);
     tabs_ = make(WC_TABCONTROLW, L"", WS_VISIBLE | WS_TABSTOP | WS_CLIPSIBLINGS, hwnd_, id_tabs);
     for (const wchar_t* t : {L"Start", L"Device view", L"Curves", L"Deck", L"Run monitor", L"Results"}) {
         TCITEMW item{};
@@ -209,11 +222,44 @@ bool MainWindow::create_children() {
     make(L"EDIT", L"", WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL, inspector_, id_clip_box, WS_EX_CLIENTEDGE);
     labelled(L"Iso levels", L"EDIT", ES_AUTOHSCROLL, id_levels);
     labelled(L"Cut line (µm)", L"EDIT", ES_AUTOHSCROLL, id_cut);
+    // Unit 26c (YD1-YD3): a drop-down list and its box side by side, shown with the views they apply to.
+    const auto paired = [&](const wchar_t* text, int list, int box) {
+        labelled(text, L"COMBOBOX", drop, list);
+        make(L"EDIT", L"", WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL, inspector_, box, WS_EX_CLIENTEDGE);
+    };
+    paired(L"Arrows (count)", id_arrows, id_arrow_count);
+    paired(L"Streamlines (count)", id_lines, id_line_count);
+    paired(L"Seeds from (or typed, µm)", id_from, id_seeds);
+    paired(L"Exploded along (gap, µm)", id_axis, id_gap);
+    make(L"BUTTON", L"Sho&w the field", WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX, inspector_, id_exploded_field);
+    labelled(L"Swept contact", L"COMBOBOX", drop, id_swept);
+    labelled(L"Sensed contact", L"COMBOBOX", drop, id_sensed);
+    labelled(L"Frequency", L"COMBOBOX", drop, id_frequency);
+    make(L"BUTTON", L"Lo&g axis", WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX, inspector_, id_log);
+    // Unit 26c (YD5): the snapshot slider, its time and Play; (YD6) a low and a high slider per axis of the box.
+    const DWORD bar = WS_VISIBLE | WS_TABSTOP | TBS_HORZ | TBS_NOTICKS;
+    make(L"STATIC", L"Snapshot", WS_VISIBLE, inspector_, label++);
+    make(TRACKBAR_CLASSW, L"", bar, inspector_, id_time);
+    make(L"STATIC", L"", WS_VISIBLE | SS_LEFT | SS_CENTERIMAGE, inspector_, id_time_text);
+    make(L"BUTTON", L"Pla&y", WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON, inspector_, id_play);
+    for (const auto& [text, low, high] : {std::tuple{L"Clip x, low and high", id_clip_x0, id_clip_x1},
+                                          std::tuple{L"Clip y, low and high", id_clip_y0, id_clip_y1},
+                                          std::tuple{L"Clip z, low and high", id_clip_z0, id_clip_z1}}) {
+        make(L"STATIC", text, WS_VISIBLE, inspector_, label++);
+        for (const int id : {low, high}) {
+            make(TRACKBAR_CLASSW, L"", bar, inspector_, id);
+            SendMessageW(child(id), TBM_SETRANGE, FALSE, MAKELPARAM(0, clip_steps));
+            SendMessageW(child(id), TBM_SETPAGESIZE, 0, clip_steps / 20);
+        }
+    }
     make(L"BUTTON", L"&Apply", WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON, inspector_, id_apply);
     make(L"STATIC", L"", WS_VISIBLE | SS_LEFT, inspector_, id_probe_text);
     combo_fill(child(id_scale), {scale_names.begin(), scale_names.end()}, 0);
     combo_fill(child(id_colormap), {colormap_names.begin(), colormap_names.end()}, 0);
     combo_fill(child(id_slice_axis), {"none", "x", "y", "z"}, 0);
+    combo_fill(child(id_arrows), {vector_names.begin(), vector_names.end()}, 0);
+    combo_fill(child(id_lines), {vector_names.begin(), vector_names.end()}, 0);
+    combo_fill(child(id_axis), {"x", "y", "z"}, 1);
     return toolbar_ && status_ && tree_ && tabs_ && metrics_ && inspector_ && viewport_->hwnd() && deck_->hwnd() &&
            start_->hwnd() && run_page_->hwnd() && results_->hwnd();
 }
@@ -350,6 +396,11 @@ void MainWindow::update_command_states() {
     enable(Command::stop_comparing, run_b_.has_value());
     enable(Command::mesh_quality, workspace_ && workspace_->device->mesh().dimension() >= 2 &&
                                       workspace_->geometry->element_count() > 0);
+    enable(Command::show_regions, workspace_ && !device_view_.hidden.empty());
+    for (const Command c : {Command::play_pause, Command::snapshot_first, Command::snapshot_previous,
+                            Command::snapshot_next, Command::snapshot_last}) {
+        enable(c, can_play());
+    }
     for (const Command c : {Command::fit, Command::orbit_left, Command::orbit_right, Command::orbit_up,
                             Command::orbit_down, Command::zoom_in, Command::zoom_out, Command::pan_left,
                             Command::pan_right, Command::pan_up, Command::pan_down}) {
@@ -453,6 +504,49 @@ void MainWindow::layout_inspector() {
     put(id_levels, row);
     put_label();
     put(id_cut, row);
+    // Unit 26c: the groups shown for the active view (show_inspector_groups), one under the other.
+    const auto shown = [&](int id) { return (GetWindowLongPtrW(child(id), GWL_STYLE) & WS_VISIBLE) != 0; };
+    const auto put_at = [&](int label_id) {
+        MoveWindow(GetDlgItem(inspector_, label_id), pad, y, w, label_h, TRUE);
+        y += label_h;
+    };
+    const int half = std::max((w - gap) / 2, 0);
+    for (const auto& [label_id, list, box] : {std::tuple{label_arrows, id_arrows, id_arrow_count},
+                                             std::tuple{label_lines, id_lines, id_line_count},
+                                             std::tuple{label_from, id_from, id_seeds},
+                                             std::tuple{label_axis, id_axis, id_gap}}) {
+        if (!shown(list)) continue;
+        put_at(label_id);
+        MoveWindow(child(list), pad, y, half, row * 8, TRUE);
+        MoveWindow(child(box), pad + half + gap, y, w - half - gap, row, TRUE);
+        y += row + gap;
+    }
+    if (shown(id_exploded_field)) put(id_exploded_field, row);
+    for (const auto& [label_id, list] : {std::pair{label_swept, id_swept}, std::pair{label_sensed, id_sensed},
+                                        std::pair{label_frequency, id_frequency}}) {
+        if (!shown(list)) continue;
+        put_at(label_id);
+        put(list, row * 8);
+        y -= row * 8 - row;
+    }
+    if (shown(id_log)) put(id_log, row);
+    // YD5: the snapshot slider, then its time beside Play; YD6: per axis the low and the high slider side by side.
+    if (shown(id_time)) {
+        put_at(label_time);
+        put(id_time, row);
+        const int button = scaled(80, dpi_);
+        MoveWindow(child(id_time_text), pad, y, std::max(w - button - gap, 0), row, TRUE);
+        MoveWindow(child(id_play), pad + std::max(w - button, 0), y, std::min(button, w), row, TRUE);
+        y += row + gap;
+    }
+    if (shown(id_clip_x0)) {
+        for (int axis = 0; axis < 3; ++axis) {
+            put_at(label_clip_x + axis);
+            MoveWindow(child(id_clip_x0 + 2 * axis), pad, y, half, row, TRUE);
+            MoveWindow(child(id_clip_x1 + 2 * axis), pad + half + gap, y, w - half - gap, row, TRUE);
+            y += row + gap;
+        }
+    }
     MoveWindow(child(id_apply), pad, y, scaled(80, dpi_), row + gap, TRUE);
     y += row + 2 * gap;
     MoveWindow(child(id_probe_text), pad, y, w, std::max<int>(r.bottom - y - pad, 0), TRUE);
@@ -566,6 +660,8 @@ void MainWindow::default_settings() {
 }
 
 void MainWindow::set_workspace(Workspace w, bool keep_settings) {
+    play(false);  // YD5: a new workspace stops playback; its film is fitted again
+    film_key_.clear();
     // The results a run (or the structure preview) of the same deck replaces: the previous run (XD6).
     if (workspace_ && workspace_->has_results() && workspace_->source == w.source) previous_ = std::move(*workspace_);
     workspace_ = std::move(w);
@@ -577,6 +673,12 @@ void MainWindow::set_workspace(Workspace w, bool keep_settings) {
     // A cut line stays while the device keeps its dimension (a run of the deck it was drawn on).
     if (cut_ && cut_->from_um.size() != static_cast<std::size_t>(workspace_->device->mesh().dimension())) cut_.reset();
     if (!keep_settings) default_settings();
+    // Hidden regions stay while the device has them (YD4).
+    const auto regions = workspace_->device->regions();
+    std::erase_if(device_view_.hidden, [&](const std::string& name) {
+        return workspace_->device->mesh().dimension() < 2 ||
+               std::ranges::find(regions, name, &device::Region::name) == regions.end();
+    });
     fill_tree();
     sync_inspector();
     results_->show(&*workspace_, run_b());
@@ -612,6 +714,20 @@ void MainWindow::refresh() {
         return;
     }
     ViewSettings& s = settings();
+    // Playback (YD5): a transient run's field view on one scale over every snapshot, fitted again only when the
+    // field, its scale, range or hidden regions change.
+    if (tab_ == tab_view && takes_film(*workspace_, s)) {
+        std::string key = s.field + "|" + s.scale + "|" +
+                          (s.range ? std::format("{},{}", s.range->first, s.range->second) : std::string());
+        for (const std::string& r : s.hidden) key += "|" + r;
+        if (!s.film || key != film_key_) {
+            auto film = film_scale(*workspace_, s);
+            s.film = film ? std::optional<Film>(std::move(*film)) : std::nullopt;
+            film_key_ = std::move(key);
+        }
+    } else {
+        s.film.reset();
+    }
     // The cut line where the view uses it: plotted along, or drawn on a 2D or 3D device view.
     ViewSettings shown = s;
     const bool along = s.kind == ViewKind::profile || s.kind == ViewKind::bands;
@@ -624,6 +740,16 @@ void MainWindow::refresh() {
         return;
     }
     scene_ = std::move(*scene);
+    // Hidden regions are not probed (YD4).
+    std::vector<std::int32_t> hidden;
+    if (takes_hidden(s.kind)) {
+        const auto regions = workspace_->device->regions();
+        for (const std::string& name : s.hidden) {
+            const auto r = std::ranges::find(regions, name, &device::Region::name);
+            if (r != regions.end()) hidden.push_back(static_cast<std::int32_t>(r - regions.begin()));
+        }
+    }
+    prober_->hide(hidden);
     // The shown field's values, for probes.
     if (s.kind == ViewKind::difference) {
         // B - A, as the map shows it.
@@ -642,7 +768,8 @@ void MainWindow::refresh() {
             auto d = render::difference_field(*workspace_->device, *run_b()->device, *workspace_->geometry, *pa, *pb, *f);
             if (d) values_ = std::move(d->values);
         }
-    } else if (const auto f = render::find_field(s.field); f && !is_plot(s.kind) && s.kind != ViewKind::quality) {
+    } else if (const auto f = render::find_field(s.field);
+               f && !is_plot(s.kind) && s.kind != ViewKind::quality && s.kind != ViewKind::exploded) {
         const bool doping = *f == render::Field::net_doping || *f == render::Field::donors || *f == render::Field::acceptors;
         if (doping || workspace_->has_results()) {
             const std::size_t k = s.point.value_or(workspace_->points.empty() ? 0 : workspace_->points.size() - 1);
@@ -763,6 +890,189 @@ void MainWindow::sync_inspector() {
         for (std::size_t k = 0; k < cut_->to_um.size(); ++k) cut += (k ? "," : "") + std::format("{}", cut_->to_um[k]);
     }
     win32::set_text(child(id_cut), cut);
+    // Unit 26c (YD1-YD3).
+    const auto select = [&](int id, std::span<const std::string_view> names, const std::string& name) {
+        const auto it = std::ranges::find(names, name.empty() ? std::string_view("none") : std::string_view(name));
+        SendMessageW(child(id), CB_SETCURSEL, static_cast<WPARAM>(it == names.end() ? 0 : it - names.begin()), 0);
+    };
+    select(id_arrows, vector_names, s.vectors);
+    select(id_lines, vector_names, s.streamlines);
+    win32::set_text(child(id_arrow_count), s.arrows > 0 ? std::to_string(s.arrows) : std::string());
+    win32::set_text(child(id_line_count), s.lines > 0 ? std::to_string(s.lines) : std::string());
+    std::vector<std::string> contacts;
+    if (workspace_) {
+        for (const auto& c : workspace_->device->contacts()) contacts.push_back(c.name);
+    }
+    // A contact list with its first entry for none chosen; the setting's contact selected.
+    const auto contact_list = [&](int id, const char* first, const std::string& name) {
+        std::vector<std::string> items{first};
+        items.insert(items.end(), contacts.begin(), contacts.end());
+        const auto it = std::ranges::find(contacts, name);
+        combo_fill(child(id), items, it == contacts.end() ? 0 : static_cast<int>(it - contacts.begin()) + 1);
+    };
+    contact_list(id_from, "(automatic)", s.from);
+    win32::set_text(child(id_seeds), s.seeds);
+    SendMessageW(child(id_axis), CB_SETCURSEL, static_cast<WPARAM>(std::clamp(s.axis, 0, 2)), 0);
+    win32::set_text(child(id_gap), s.gap_um ? std::format("{}", *s.gap_um) : std::string());
+    check(id_exploded_field, s.exploded_field);
+    contact_list(id_swept, s.kind == ViewKind::current ? "(all)" : "(automatic)", s.contact);
+    contact_list(id_sensed, "(automatic)", s.sense);
+    std::vector<std::string> frequencies;
+    if (workspace_ && workspace_->small_signal) {
+        for (const double hz : workspace_->small_signal->frequency_Hz) frequencies.push_back(std::format("{:g} Hz", hz));
+    }
+    combo_fill(child(id_frequency), frequencies, static_cast<int>(s.frequency.value_or(0)));
+    check(id_log, s.log);
+    sync_clip_sliders();
+    sync_playback();
+    show_inspector_groups();
+}
+
+// YD6: the box's sides on the sliders (the whole extent without a box).
+void MainWindow::sync_clip_sliders() {
+    if (!workspace_) return;
+    const ViewSettings& s = settings();
+    const auto extent = extent_um();
+    for (std::size_t axis = 0; axis < 3; ++axis) {
+        const auto [lo, hi] = extent[axis];
+        const int id = id_clip_x0 + 2 * static_cast<int>(axis);
+        SendMessageW(child(id), TBM_SETPOS, TRUE, s.clip ? clip_step(lo, hi, s.clip->lo_um[axis]) : 0);
+        SendMessageW(child(id + 1), TBM_SETPOS, TRUE, s.clip ? clip_step(lo, hi, s.clip->hi_um[axis]) : clip_steps);
+    }
+}
+
+void MainWindow::sync_playback() {
+    const ViewSettings& s = settings();
+    const std::size_t n = workspace_ ? workspace_->points.size() : 0;
+    const std::size_t k = n == 0 ? 0 : std::min(s.point.value_or(n - 1), n - 1);
+    SendMessageW(child(id_time), TBM_SETRANGE, FALSE, MAKELPARAM(0, n == 0 ? 0 : n - 1));
+    SendMessageW(child(id_time), TBM_SETPOS, TRUE, static_cast<LPARAM>(k));
+    win32::set_text(child(id_time_text), can_play() ? render::time_label(workspace_->transient->snapshots[k].time_s) +
+                                                          std::format(" ({} of {})", k + 1, n)
+                                                    : std::string());
+    win32::set_text(child(id_play), playing_ ? "Pa&use" : "Pla&y");
+    SendMessageW(child(id_point), CB_SETCURSEL, static_cast<WPARAM>(k), 0);
+}
+
+bool MainWindow::can_play() const {
+    return workspace_ && takes_film(*workspace_, device_view_) && workspace_->points.size() >= 2;
+}
+
+void MainWindow::play(bool on) {
+    if (on && !can_play()) return;
+    if (on) {
+        if (tab_ != tab_view) select_tab(tab_view);
+        const std::size_t n = workspace_->points.size();
+        // From the snapshot shown, or from the first when the last is shown.
+        const std::size_t k = std::min(device_view_.point.value_or(n - 1), n - 1);
+        play_from_ = k + 1 == n ? 0 : k;
+        play_start_ = std::chrono::steady_clock::now();
+        playing_ = true;
+        show_snapshot(play_from_);
+        SetTimer(hwnd_, playback_timer, playback_tick_ms, nullptr);
+        set_status(status_state, "Playing the snapshots.");
+    } else if (playing_) {
+        KillTimer(hwnd_, playback_timer);
+        playing_ = false;
+        set_status(status_state, "Paused.");
+    }
+    sync_playback();
+}
+
+void MainWindow::show_snapshot(std::size_t k) {
+    if (!workspace_ || workspace_->points.empty()) return;
+    device_view_.point = std::min(k, workspace_->points.size() - 1);
+    if (tab_ == tab_view) refresh();
+    sync_playback();
+}
+
+void MainWindow::on_playback_timer() {
+    if (!playing_ || !can_play() || tab_ != tab_view) {
+        play(false);
+        return;
+    }
+    const std::size_t n = workspace_->points.size();
+    const double elapsed = std::chrono::duration<double>(std::chrono::steady_clock::now() - play_start_).count();
+    const std::size_t k = playback_frame(play_from_, n, elapsed);
+    if (k != device_view_.point.value_or(n - 1)) show_snapshot(k);
+    if (k + 1 == n) play(false);
+}
+
+void MainWindow::on_slider(HWND bar) {
+    if (!workspace_) return;
+    const int position = static_cast<int>(SendMessageW(bar, TBM_GETPOS, 0, 0));
+    if (bar == child(id_time)) {
+        // A snapshot chosen: playback pauses on it.
+        play(false);
+        show_snapshot(static_cast<std::size_t>(std::max(position, 0)));
+        return;
+    }
+    const int id = GetDlgCtrlID(bar);
+    if (id < id_clip_x0 || id > id_clip_z1 || workspace_->device->mesh().dimension() != 3) return;
+    // A side of the clipping box (YD6): the box made over the whole device if there was none, the other side
+    // of the axis moved with it rather than crossed.
+    ViewSettings& s = device_view_;
+    const auto extent = extent_um();
+    if (!s.clip) {
+        ViewSettings::Clip c;
+        for (std::size_t k = 0; k < 3; ++k) {
+            c.lo_um[k] = clip_value_um(extent[k].first, extent[k].second, 0);
+            c.hi_um[k] = clip_value_um(extent[k].first, extent[k].second, clip_steps);
+        }
+        s.clip = c;
+    }
+    const auto axis = static_cast<std::size_t>((id - id_clip_x0) / 2);
+    const bool high = (id - id_clip_x0) % 2 == 1;
+    const double v = clip_value_um(extent[axis].first, extent[axis].second, position);
+    (high ? s.clip->hi_um : s.clip->lo_um)[axis] = v;
+    if (high && s.clip->lo_um[axis] > v) s.clip->lo_um[axis] = v;
+    if (!high && s.clip->hi_um[axis] < v) s.clip->hi_um[axis] = v;
+    sync_inspector();
+    refresh();
+}
+
+std::array<std::pair<double, double>, 3> MainWindow::extent_um() const {
+    std::array<std::pair<double, double>, 3> out{};
+    if (!workspace_) return out;
+    const auto& m = workspace_->device->mesh();
+    for (std::size_t k = 0; k < 3; ++k) out[k] = {1e300, -1e300};
+    for (const auto& p : m.points()) {
+        for (std::size_t k = 0; k < 3; ++k) {
+            out[k].first = std::min(out[k].first, p[k] * 1e4);
+            out[k].second = std::max(out[k].second, p[k] * 1e4);
+        }
+    }
+    return out;
+}
+
+void MainWindow::show_inspector_groups() {
+    const ViewSettings& s = settings();
+    const int dim = workspace_ ? workspace_->device->mesh().dimension() : 0;
+    // Arrows and streamlines over the field views of a 2D or 3D run's results (YD1).
+    const bool vectors = tab_ == tab_view && dim >= 2 && workspace_->has_results() && takes_vectors(s.kind);
+    const bool exploded = tab_ == tab_view && s.kind == ViewKind::exploded;
+    const bool curves = tab_ == tab_curves && (s.kind == ViewKind::iv || s.kind == ViewKind::cv || s.kind == ViewKind::current);
+    const auto show = [&](std::initializer_list<int> ids, bool on) {
+        for (const int id : ids) ShowWindow(child(id), on ? SW_SHOW : SW_HIDE);  // the labels too (in the inspector)
+    };
+    show({label_arrows, id_arrows, id_arrow_count, label_lines, id_lines, id_line_count, label_from, id_from, id_seeds}, vectors);
+    show({label_axis, id_axis, id_gap, id_exploded_field}, exploded);
+    win32::set_text(GetDlgItem(inspector_, label_swept), s.kind == ViewKind::current ? "Contact" : "Swept contact");
+    show({label_swept, id_swept, id_log}, curves);
+    show({label_sensed, id_sensed}, curves && s.kind != ViewKind::current);
+    show({label_frequency, id_frequency}, curves && s.kind == ViewKind::cv);
+    // Playback on a transient run's field view (YD5); the box's sliders where a 3D view clips (YD6).
+    show({label_time, id_time, id_time_text, id_play}, tab_ == tab_view && can_play());
+    const bool clips = tab_ == tab_view && dim == 3 && (s.kind == ViewKind::solid || s.kind == ViewKind::field);
+    show({label_clip_x, label_clip_x + 1, label_clip_x + 2, id_clip_x0, id_clip_x1, id_clip_y0, id_clip_y1, id_clip_z0,
+          id_clip_z1},
+         clips);
+    layout_inspector();
+}
+
+bool MainWindow::pickable() const {
+    return scene_ && std::holds_alternative<render::FieldScene>(*scene_) && prober_ &&
+           (tab_ == tab_curves ? curve_view_ : device_view_).kind != ViewKind::exploded;
 }
 
 // A slice view starts with a plane through the middle of the device along z, an iso view with a level.
@@ -801,6 +1111,7 @@ void MainWindow::on_inspector(int id, int code) {
         s.range.reset();
         sync_inspector();
     } else if (id == id_point && selection) {
+        if (&s == &device_view_) play(false);
         const int k = combo_index(child(id_point));
         s.point = k >= 0 ? std::optional<std::size_t>(static_cast<std::size_t>(k)) : std::nullopt;
     } else if (id == id_scale && selection) {
@@ -812,7 +1123,62 @@ void MainWindow::on_inspector(int id, int code) {
         const bool on = Button_GetCheck(child(id)) == BST_CHECKED;
         (id == id_contours ? s.contours : id == id_edges ? s.edges : id == id_contacts ? s.contacts
                                                                       : id == id_opaque ? s.opaque : s.perspective) = on;
+    } else if ((id == id_arrows || id == id_lines) && selection) {
+        // Unit 26c (YD1): arrows or streamlines of a vector field; on the field view the map shows its own
+        // magnitude, as `nitcad plot` draws them without --field.
+        const int k = std::max(combo_index(child(id)), 0);
+        const std::string name = k == 0 ? std::string() : std::string(vector_names[static_cast<std::size_t>(k)]);
+        (id == id_arrows ? s.vectors : s.streamlines) = name;
+        if (!name.empty() && s.kind == ViewKind::field) {
+            s.field = name;
+            s.scale.clear();
+            s.range.reset();
+        }
+        sync_inspector();
+    } else if ((id == id_from || id == id_swept || id == id_sensed) && selection) {
+        // A contact, the first entry none (nitcad plot's choice, or every contact's current).
+        const auto contacts = workspace_->device->contacts();
+        const int k = combo_index(child(id));
+        const std::string name = k > 0 && k <= static_cast<int>(contacts.size()) ? contacts[static_cast<std::size_t>(k - 1)].name
+                                                                                 : std::string();
+        (id == id_from ? s.from : id == id_swept ? s.contact : s.sense) = name;
+    } else if (id == id_frequency && selection) {
+        const int k = combo_index(child(id_frequency));
+        s.frequency = k >= 0 ? std::optional<std::size_t>(static_cast<std::size_t>(k)) : std::nullopt;
+    } else if (id == id_axis && selection) {
+        s.axis = std::clamp(combo_index(child(id_axis)), 0, 2);
+    } else if (clicked && (id == id_exploded_field || id == id_log)) {
+        (id == id_log ? s.log : s.exploded_field) = Button_GetCheck(child(id)) == BST_CHECKED;
     } else if ((id == id_apply && clicked) || (id == id_clip && clicked) || (id == id_slice_axis && selection)) {
+        // Unit 26c: the arrow and line counts (empty: nitcad plot's defaults), the typed seeds and the exploded
+        // view's gap (empty: 12% of the extent), each kept as it was when not valid.
+        const auto count = [&](int box, std::size_t most, std::size_t& to, const char* what) {
+            const std::string t = win32::text_of(child(box));
+            if (t.find_first_not_of(" \t") == std::string::npos) {
+                to = 0;
+                return;
+            }
+            const auto v = numbers(t);
+            if (v.size() == 1 && v[0] >= 1.0 && v[0] <= static_cast<double>(most) && v[0] == std::floor(v[0])) {
+                to = static_cast<std::size_t>(v[0]);
+            } else {
+                set_status(status_state, std::format("{} are a count from 1 to {}.", what, most));
+            }
+        };
+        count(id_arrow_count, 100000, s.arrows, "Arrows");
+        count(id_line_count, 10000, s.lines, "Streamlines");
+        std::string seeds = win32::text_of(child(id_seeds));
+        while (!seeds.empty() && seeds.back() == ' ') seeds.pop_back();
+        while (!seeds.empty() && seeds.front() == ' ') seeds.erase(seeds.begin());
+        s.seeds = seeds;
+        const std::string gap = win32::text_of(child(id_gap));
+        if (gap.find_first_not_of(" \t") == std::string::npos) {
+            s.gap_um.reset();
+        } else if (const auto v = numbers(gap); v.size() == 1 && v[0] >= 0.0) {
+            s.gap_um = v[0];
+        } else {
+            set_status(status_state, "The gap is a length in µm, at least 0.");
+        }
         // The slice, the clipping box and the iso levels from their fields.
         const int axis = combo_index(child(id_slice_axis)) - 1;
         const std::string at = win32::text_of(child(id_slice_at));
@@ -831,6 +1197,7 @@ void MainWindow::on_inspector(int id, int code) {
                 s.clip = c;
             }
         }
+        sync_clip_sliders();  // YD6: the typed box on the sliders
         s.levels.clear();
         s.levels = numbers(win32::text_of(child(id_levels)));
         // The cut line typed: "<x0>,<y0>[,<z0>]:<x1>,<y1>[,<z1>]" in um; empty removes it.
@@ -863,7 +1230,9 @@ void MainWindow::on_inspector(int id, int code) {
 void MainWindow::fill_tree() {
     TreeView_DeleteAllItems(tree_);
     if (!workspace_) return;
-    const auto add = [&](HTREEITEM parent, const std::string& text, LPARAM data) {
+    // Only the regions of a 2D or 3D device have a check box (YD4): checked while shown. The tree gives every
+    // new item one, so the others' is taken away.
+    const auto add = [&](HTREEITEM parent, const std::string& text, LPARAM data, int check = 0) {
         TVINSERTSTRUCTW t{};
         t.hParent = parent;
         t.hInsertAfter = TVI_LAST;
@@ -871,12 +1240,18 @@ void MainWindow::fill_tree() {
         const std::wstring w = win32::widen(text);
         t.item.pszText = const_cast<wchar_t*>(w.c_str());
         t.item.lParam = data;
-        return TreeView_InsertItem(tree_, &t);
+        HTREEITEM item = TreeView_InsertItem(tree_, &t);
+        TreeView_SetItemState(tree_, item, INDEXTOSTATEIMAGEMASK(check), TVIS_STATEIMAGEMASK);
+        return item;
     };
     const auto& d = *workspace_->device;
+    const bool boxes = d.mesh().dimension() >= 2;
     HTREEITEM device = add(TVI_ROOT, preview_ ? "Device (preview, not solved)" : "Device", tree_data(tree_none, 0));
-    for (const auto& r : d.regions()) {
-        add(device, r.name + (device::is_insulator(r) ? " (insulator)" : " (semiconductor)"), tree_data(tree_none, 0));
+    for (std::size_t k = 0; k < d.regions().size(); ++k) {
+        const auto& r = d.regions()[k];
+        const bool hidden = std::ranges::find(device_view_.hidden, r.name) != device_view_.hidden.end();
+        add(device, r.name + (device::is_insulator(r) ? " (insulator)" : " (semiconductor)"),
+            boxes ? tree_data(tree_region, static_cast<int>(k)) : tree_data(tree_none, 0), boxes ? (hidden ? 1 : 2) : 0);
     }
     for (const auto& c : d.contacts()) {
         const char* kind = c.kind == device::ContactKind::ohmic ? "ohmic" : c.kind == device::ContactKind::gate ? "gate" : "electrode";
@@ -896,6 +1271,46 @@ void MainWindow::fill_tree() {
     }
     TreeView_Expand(tree_, fields, TVE_EXPAND);
     if (workspace_->has_results()) add(TVI_ROOT, "Results: " + std::to_string(workspace_->points.size()) + " points", tree_data(tree_none, 0));
+}
+
+void MainWindow::sync_region_boxes() {
+    if (!workspace_) return;
+    // The boxes as the user left them (a click or the space bar, posted): a region shown while checked; an item
+    // the space bar gave a box loses it.
+    const auto regions = workspace_->device->regions();
+    for (HTREEITEM root = TreeView_GetRoot(tree_); root; root = TreeView_GetNextSibling(tree_, root)) {
+        for (HTREEITEM item = root; item; item = item == root ? TreeView_GetChild(tree_, root) : TreeView_GetNextSibling(tree_, item)) {
+            TVITEMW t{};
+            t.mask = TVIF_PARAM | TVIF_STATE;
+            t.stateMask = TVIS_STATEIMAGEMASK;
+            t.hItem = item;
+            TreeView_GetItem(tree_, &t);
+            const int kind = static_cast<int>(t.lParam >> 16), index = static_cast<int>(t.lParam & 0xFFFF);
+            const int check = static_cast<int>((t.state & TVIS_STATEIMAGEMASK) >> 12);
+            if (kind != tree_region) {
+                if (check != 0) TreeView_SetItemState(tree_, item, INDEXTOSTATEIMAGEMASK(0), TVIS_STATEIMAGEMASK);
+            } else if (index < static_cast<int>(regions.size())) {
+                set_region_shown(regions[static_cast<std::size_t>(index)].name, check != 1);
+            }
+        }
+    }
+}
+
+void MainWindow::set_region_shown(const std::string& name, bool shown) {
+    auto& hidden = device_view_.hidden;
+    const bool was_hidden = std::ranges::find(hidden, name) != hidden.end();
+    if (shown == !was_hidden) return;
+    if (shown) {
+        std::erase(hidden, name);
+    } else {
+        // In the device's order, as the tree lists them.
+        hidden.push_back(name);
+        const auto regions = workspace_->device->regions();
+        const auto rank = [&](const std::string& n) { return std::ranges::find(regions, n, &device::Region::name) - regions.begin(); };
+        std::ranges::sort(hidden, {}, rank);
+    }
+    set_status(status_state, (shown ? "Showing the region " : "Hiding the region ") + name + ".");
+    if (tab_ == tab_view) refresh();
 }
 
 void MainWindow::on_tree_selection(LPARAM data) {
@@ -1370,6 +1785,31 @@ void MainWindow::execute(Command c) {
         device_view_.range.reset();
         select_tab(tab_view);
         return;
+    case Command::play_pause: play(!playing_); return;
+    case Command::snapshot_first:
+    case Command::snapshot_previous:
+    case Command::snapshot_next:
+    case Command::snapshot_last: {
+        // YD5: a step pauses and lands on the snapshot asked for, in the device view.
+        if (!can_play()) return;
+        play(false);
+        const std::size_t n = workspace_->points.size();
+        const std::size_t k = std::min(device_view_.point.value_or(n - 1), n - 1);
+        if (tab_ != tab_view) select_tab(tab_view);
+        show_snapshot(c == Command::snapshot_first      ? 0
+                      : c == Command::snapshot_previous ? (k == 0 ? 0 : k - 1)
+                      : c == Command::snapshot_next     ? std::min(k + 1, n - 1)
+                                                        : n - 1);
+        return;
+    }
+    case Command::show_regions:
+        // YD4: every region shown again, the tree's boxes checked.
+        if (!workspace_ || device_view_.hidden.empty()) return;
+        device_view_.hidden.clear();
+        fill_tree();
+        set_status(status_state, "Showing every region.");
+        if (tab_ == tab_view) refresh();
+        return;
     case Command::next_tab: select_tab((tab_ + 1) % tab_count); return;
     case Command::previous_tab: select_tab((tab_ + tab_count - 1) % tab_count); return;
     case Command::next_pane: focus_next_pane(); return;
@@ -1415,7 +1855,7 @@ void MainWindow::viewport_fit() {
 }
 
 void MainWindow::probe_at(float x, float y) {
-    if (!scene_ || !prober_) return;
+    if (!pickable()) return;
     const auto* f = std::get_if<render::FieldScene>(&*scene_);
     if (!f) return;
     const auto hit = prober_->pick(*f, viewport_->width(), viewport_->height(), x, y, values_);
@@ -1449,7 +1889,7 @@ void MainWindow::viewport_click(float x, float y) {
 }
 
 void MainWindow::cut_at(float x, float y) {
-    if (!scene_ || !prober_ || !workspace_) return;
+    if (!pickable() || !workspace_) return;
     const auto* f = std::get_if<render::FieldScene>(&*scene_);
     if (!f) return;
     const auto p = prober_->point_at(*f, viewport_->width(), viewport_->height(), x, y);
@@ -1507,7 +1947,7 @@ void MainWindow::set_cut(std::optional<ViewSettings::Cut> cut) {
 }
 
 void MainWindow::viewport_hover(float x, float y) {
-    if (!scene_ || !prober_) return;
+    if (!pickable()) return;
     const auto* f = std::get_if<render::FieldScene>(&*scene_);
     if (!f) return;
     const auto hit = prober_->pick(*f, viewport_->width(), viewport_->height(), x, y, {}, 8.0f);
@@ -1551,7 +1991,14 @@ LRESULT CALLBACK MainWindow::panel_proc(HWND hwnd, UINT message, WPARAM w, LPARA
     if (self) {
         switch (message) {
         case WM_COMMAND:
+            if (LOWORD(w) == id_play && HIWORD(w) == BN_CLICKED) {
+                self->execute(Command::play_pause);
+                return 0;
+            }
             self->on_inspector(LOWORD(w), HIWORD(w));
+            return 0;
+        case WM_HSCROLL:  // a slider (Unit 26c, YD5, YD6)
+            if (l != 0) self->on_slider(reinterpret_cast<HWND>(l));
             return 0;
         case WM_SIZE:
             self->layout_inspector();
@@ -1630,6 +2077,13 @@ LRESULT MainWindow::handle(UINT message, WPARAM w, LPARAM l) {
             if (t->action != TVC_UNKNOWN) on_tree_selection(t->itemNew.lParam);
             return 0;
         }
+        // A box clicked or toggled by the space bar (YD4): the tree changes it after telling, so the boxes are
+        // read once it has.
+        if (n->hwndFrom == tree_ && (n->code == NM_CLICK || (n->code == TVN_KEYDOWN &&
+                                                             reinterpret_cast<const NMTVKEYDOWN*>(l)->wVKey == VK_SPACE))) {
+            PostMessageW(hwnd_, tree_check_message, 0, 0);
+            return 0;
+        }
         break;
     }
     case WM_INITMENUPOPUP: {
@@ -1655,6 +2109,9 @@ LRESULT MainWindow::handle(UINT message, WPARAM w, LPARAM l) {
     case live_message:
         on_live_check();
         return 0;
+    case tree_check_message:
+        sync_region_boxes();
+        return 0;
     case WM_TIMER:
         if (w == run_timer) {
             on_run_timer();
@@ -1664,6 +2121,10 @@ LRESULT MainWindow::handle(UINT message, WPARAM w, LPARAM l) {
             KillTimer(hwnd_, live_timer);
             live_edits_ = edits_;
             live_.submit(deck_->text(), document_.path());
+            return 0;
+        }
+        if (w == playback_timer) {
+            on_playback_timer();
             return 0;
         }
         break;

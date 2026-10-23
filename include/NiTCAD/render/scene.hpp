@@ -193,7 +193,21 @@ struct ViewOptions {
     // boundary (Geometry::clipped_surface); interfaces cut alike; a contact slab's face whose centroid
     // lies in the box is left out. Ignored in 2D.
     std::optional<Box> clip;
+    // Region visibility (Unit 26c, YD4): the ids (device::Device::regions()) of regions left out of the
+    // solid, mesh, field, slice, iso, exploded and quality views. A view draws the control-volume pieces of
+    // the shown regions' nodes only: in 2D their parts of the elements, in 3D their parts of the boundary
+    // faces and of the slices and isosurfaces, and (3D) the interface pieces between a shown and a hidden
+    // region, which close the shown regions as boundary faces do; outlines and mesh edges keep the shown
+    // nodes' halves; a contact all of whose nodes are hidden is left out; a scale fitted here is fitted
+    // over the shown nodes (shown_values). Empty: every region, exactly as before. Errors (invalid_input):
+    // an id that is not a region's.
+    std::vector<std::int32_t> hidden_regions;
 };
+
+// The values with NaN on the nodes of the hidden regions: what a scale for a view with hidden regions is
+// fitted over (ColorScale::fit skips NaN). Ids out of range hide nothing.
+[[nodiscard]] std::vector<double> shown_values(const device::Device& device, std::span<const double> values,
+                                               std::span<const std::int32_t> hidden_regions);
 
 // The regions (VR2, VR8): 2D a map of the control-volume pieces; 3D the boundary surface and the
 // interfaces between regions, insulators translucent, with contacts. Errors (invalid_input): a

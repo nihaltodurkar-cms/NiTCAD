@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <limits>
 
 #include "NiTCAD/render/image.hpp"
@@ -29,6 +30,30 @@ Prober::Prober(const Workspace& w) {
         for (std::size_t i = 0; i < on.size(); ++i) {
             if (on[i]) candidates_.push_back(static_cast<mesh::NodeId>(i));
         }
+    }
+    workspace_ = &w;
+    all_ = candidates_;
+}
+
+void Prober::hide(std::span<const std::int32_t> regions) {
+    candidates_ = all_;
+    if (regions.empty() || !workspace_) return;
+    const std::vector<std::int32_t> region(workspace_->device->node_region().begin(), workspace_->device->node_region().end());
+    const auto hidden = [&](mesh::NodeId n) {
+        return std::ranges::find(regions, region[static_cast<std::size_t>(n)]) != regions.end();
+    };
+    std::erase_if(candidates_, hidden);
+    if (dimension_ != 3) return;
+    // The faces the hidden regions opened: their shown nodes.
+    std::vector<char> on(mesh_->node_count(), 0);
+    for (const mesh::NodeId n : candidates_) on[static_cast<std::size_t>(n)] = 1;
+    for (const render::InterfacePiece& p : workspace_->geometry->interfaces(region)) {
+        const bool ha = hidden(p.node_a), hb = hidden(p.node_b);
+        if (ha != hb) on[static_cast<std::size_t>(ha ? p.node_b : p.node_a)] = 1;
+    }
+    candidates_.clear();
+    for (std::size_t i = 0; i < on.size(); ++i) {
+        if (on[i]) candidates_.push_back(static_cast<mesh::NodeId>(i));
     }
 }
 

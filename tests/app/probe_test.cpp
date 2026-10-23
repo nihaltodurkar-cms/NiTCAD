@@ -3,10 +3,13 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_floating_point.hpp>
 
+#include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <filesystem>
 #include <string>
 #include <utility>
+#include <vector>
 
 #include "NiTCAD/app/probe.hpp"
 #include "NiTCAD/app/view_settings.hpp"
@@ -217,4 +220,41 @@ TEST_CASE("app view settings: zoom and pan move the picture about the view's cen
     app::apply_camera(again, s);
     CHECK(again.camera.zoom == u.camera.zoom);
     CHECK(again.camera.pan == u.camera.pan);
+}
+
+TEST_CASE("app probe 26c: hidden regions are not picked; in 3D the faces they opened are (YD4)", "[app]") {
+    for (const bool three : {false, true}) {
+        CAPTURE(three);
+        const app::Workspace w = unrun(three ? "hide3d" : "hide2d", three ? app_test::mosfet3d : app_test::mosfet2d);
+        app::Prober prober(w);
+        const std::vector<mesh::NodeId> all(prober.candidates().begin(), prober.candidates().end());
+        const auto regions = w.device->regions();
+        const auto oxide = static_cast<std::int32_t>(std::ranges::find(regions, std::string("oxide"), &device::Region::name) -
+                                                     regions.begin());
+        const std::vector<std::int32_t> hidden{oxide};
+        prober.hide(hidden);
+        const auto picked = [&](mesh::NodeId n) { return std::ranges::find(prober.candidates(), n) != prober.candidates().end(); };
+        for (std::size_t i = 0; i < w.device->mesh().node_count(); ++i) {
+            const auto n = static_cast<mesh::NodeId>(i);
+            if (w.device->node_region()[i] == oxide) CHECK_FALSE(picked(n));
+        }
+        if (three) {
+            // The silicon's top inside (x 1, y 0.9, z 0.4 um), under the oxide: picked once the oxide is hidden.
+            const auto points = w.device->mesh().points();
+            const auto inside = std::ranges::find_if(points, [](const mesh::Point& p) {
+                return std::abs(p[0] - 1e-4) < 1e-9 && std::abs(p[1] - 0.9e-4) < 1e-9 && std::abs(p[2] - 0.4e-4) < 1e-9;
+            });
+            REQUIRE(inside != points.end());
+            const auto n = static_cast<mesh::NodeId>(inside - points.begin());
+            CHECK(std::ranges::find(all, n) == all.end());
+            CHECK(picked(n));
+        } else {
+            std::size_t silicon = 0;
+            for (const auto r : w.device->node_region()) silicon += r != oxide ? 1 : 0;
+            CHECK(prober.candidates().size() == silicon);
+        }
+        // Shown again: every candidate as before.
+        prober.hide({});
+        CHECK(std::ranges::equal(prober.candidates(), all));
+    }
 }

@@ -6,7 +6,9 @@
 
 #include <algorithm>
 #include <array>
+#include <charconv>
 #include <cmath>
+#include <cstdint>
 #include <format>
 #include <utility>
 
@@ -15,6 +17,8 @@
 #include "NiTCAD/mesh/mesh.hpp"
 #include "NiTCAD/render/compare.hpp"
 #include "NiTCAD/render/quality.hpp"
+#include "NiTCAD/render/streamlines.hpp"
+#include "NiTCAD/render/vectors.hpp"
 
 namespace NiTCAD::app {
 
@@ -22,7 +26,7 @@ namespace {
 
 using namespace NiTCAD::render;
 
-constexpr std::array<std::pair<ViewKind, std::string_view>, 13> view_names{{{ViewKind::solid, "solid"},
+constexpr std::array<std::pair<ViewKind, std::string_view>, 14> view_names{{{ViewKind::solid, "solid"},
                                                                           {ViewKind::mesh, "mesh"},
                                                                           {ViewKind::field, "field"},
                                                                           {ViewKind::slice, "slice"},
@@ -34,9 +38,51 @@ constexpr std::array<std::pair<ViewKind, std::string_view>, 13> view_names{{{Vie
                                                                           {ViewKind::current, "current"},
                                                                           {ViewKind::quality, "quality"},
                                                                           {ViewKind::quality_histogram, "quality-histogram"},
-                                                                          {ViewKind::difference, "difference"}}};
+                                                                          {ViewKind::difference, "difference"},
+                                                                          {ViewKind::exploded, "exploded"}}};
 
 base::Error invalid(std::string message) { return {base::ErrorCode::invalid_input, std::move(message), std::nullopt}; }
+
+// A number as `nitcad plot` reads its options: the whole text, finite.
+std::optional<double> number(std::string_view s) {
+    double v = 0.0;
+    const auto [p, ec] = std::from_chars(s.data(), s.data() + s.size(), v);
+    if (ec != std::errc{} || p != s.data() + s.size() || !std::isfinite(v)) return std::nullopt;
+    return v;
+}
+
+// A segment "<x0>,<y0>[,<z0>]:<x1>,<y1>[,<z1>]" in um, as its ends in cm, each end with exactly `dimension`
+// coordinates (as `nitcad plot --seeds` reads it).
+std::optional<std::pair<Point, Point>> segment_um(std::string_view s, int dimension) {
+    const auto point_of = [&](std::string_view t) -> std::optional<Point> {
+        Point q{};
+        std::size_t k = 0;
+        for (std::string_view rest = t;; ++k) {
+            const auto comma = rest.find(',');
+            const auto x = number(rest.substr(0, comma));
+            if (!x || k >= 3) return std::nullopt;
+            q[k] = *x * 1e-4;
+            if (comma == std::string_view::npos) break;
+            rest = rest.substr(comma + 1);
+        }
+        if (k + 1 != static_cast<std::size_t>(dimension)) return std::nullopt;
+        return q;
+    };
+    const auto colon = s.find(':');
+    if (colon == std::string_view::npos) return std::nullopt;
+    const auto a = point_of(s.substr(0, colon));
+    const auto b = point_of(s.substr(colon + 1));
+    if (!a || !b) return std::nullopt;
+    return std::pair{*a, *b};
+}
+
+std::optional<VectorField> vector_field(const std::string& name) {
+    if (name == "E") return VectorField::electric;
+    if (name == "J") return VectorField::current;
+    if (name == "Jn") return VectorField::electron_current;
+    if (name == "Jp") return VectorField::hole_current;
+    return std::nullopt;
+}
 
 std::string current_unit(int dimension) { return dimension == 1 ? "A/cm\xC2\xB2" : dimension == 2 ? "A/cm" : "A"; }
 
@@ -68,7 +114,28 @@ bool is_plot(ViewKind v) noexcept {
            v == ViewKind::current || v == ViewKind::quality_histogram;
 }
 
-std::expected<Scene, base::Error> build_scene(const Workspace& w, const ViewSettings& o, const Workspace* b) {
+bool takes_vectors(ViewKind v) noexcept { return v == ViewKind::field || v == ViewKind::slice || v == ViewKind::iso; }
+
+bool takes_hidden(ViewKind v) noexcept {
+    return v == ViewKind::solid || v == ViewKind::mesh || v == ViewKind::field || v == ViewKind::slice ||
+           v == ViewKind::iso || v == ViewKind::exploded || v == ViewKind::quality || v == ViewKind::difference;
+}
+
+std::expected<Scene, base::Error> build_scene(const Workspace& w, const ViewSettings& settings, const Workspace* b) {
+    // Arrows and streamlines on the field views only (Unit 26c, YD1); hidden regions on the device views (YD4).
+    const bool drop_vectors = !takes_vectors(settings.kind) && (!settings.vectors.empty() || !settings.streamlines.empty());
+    const bool drop_hidden = !takes_hidden(settings.kind) && !settings.hidden.empty();
+    const bool drop = drop_vectors || drop_hidden;
+    ViewSettings kept;
+    if (drop) {
+        kept = settings;
+        if (drop_vectors) {
+            kept.vectors.clear();
+            kept.streamlines.clear();
+        }
+        if (drop_hidden) kept.hidden.clear();
+    }
+    const ViewSettings& o = drop ? kept : settings;
     if (!w.device || !w.geometry) return std::unexpected(invalid("nothing is loaded"));
     const device::Device& device = *w.device;
     const Geometry& geometry = *w.geometry;
@@ -128,6 +195,19 @@ std::expected<Scene, base::Error> build_scene(const Workspace& w, const ViewSett
         if (!c) return std::unexpected(std::move(c.error()));
         cut = std::move(*c);
     }
+    // Hidden regions (Unit 26c, YD4), by name, with `nitcad plot --hide`'s messages.
+    if (!o.hidden.empty()) {
+        if (m.dimension() < 2) {
+            return std::unexpected(invalid("hidden regions apply to the solid, mesh, field, slice, iso, exploded, quality, "
+                                           "difference and filmstrip views of a 2D or 3D device"));
+        }
+        const auto regions = device.regions();
+        for (const std::string& name : o.hidden) {
+            const auto r = std::ranges::find(regions, name, &device::Region::name);
+            if (r == regions.end()) return std::unexpected(invalid("there is no region " + name));
+            view.hidden_regions.push_back(static_cast<std::int32_t>(r - regions.begin()));
+        }
+    }
     view.transparent_insulators = !o.opaque;
     view.projection = o.perspective ? Projection::perspective : Projection::orthographic;
     if (o.azimuth) view.azimuth_deg = *o.azimuth;
@@ -145,6 +225,18 @@ std::expected<Scene, base::Error> build_scene(const Workspace& w, const ViewSett
     if (!scale_kind) return std::unexpected(invalid("unknown scale " + o.scale));
     const auto colormap = find_colormap(o.colormap);
     if (!colormap) return std::unexpected(invalid("unknown colormap " + o.colormap));
+    // Arrows and streamlines (Unit 26c, YD1), with `nitcad plot`'s messages.
+    if (!o.streamlines.empty() && !vector_field(o.streamlines)) return std::unexpected(invalid("--streamlines is E, J, Jn or Jp"));
+    if (!o.vectors.empty() && !vector_field(o.vectors)) return std::unexpected(invalid("--vectors is E, J, Jn or Jp"));
+    if (o.arrows > 100000) return std::unexpected(invalid("--arrows needs a count from 1 to 100000"));
+    if (o.lines > 10000) return std::unexpected(invalid("--lines needs a count from 1 to 10000"));
+    const std::size_t lines = o.lines > 0 ? o.lines : 24;
+    // 3D arrows or streamlines over their own magnitude: on the solid device, or the lines in its outline,
+    // colored by it.
+    const bool colored_arrows = o.kind == ViewKind::field && m.dimension() == 3 && !o.vectors.empty() &&
+                                o.streamlines.empty() && o.field == o.vectors;
+    const bool colored_lines = o.kind == ViewKind::field && m.dimension() == 3 && !o.streamlines.empty() &&
+                               o.field == o.streamlines;
 
     const auto values_for = [&]() -> std::expected<std::vector<double>, base::Error> {
         if (*field == Field::net_doping || *field == Field::donors || *field == Field::acceptors) {
@@ -173,9 +265,11 @@ std::expected<Scene, base::Error> build_scene(const Workspace& w, const ViewSett
         f.title = std::string(field_info(*field).title);
         const bool all_zero = is_vector_magnitude(*field) &&
                               std::ranges::none_of(values, [](double x) { return std::isfinite(x) && x != 0.0; });
+        // With hidden regions, fitted over the shown nodes (YD4).
         auto s = o.range    ? ColorScale::create(*scale_kind, o.range->first, o.range->second, 1e10)
                  : all_zero ? ColorScale::create(ScaleKind::linear, 0.0, 1.0, 1e10)
-                            : ColorScale::fit(*scale_kind, values, 1e10);
+                            : ColorScale::fit(*scale_kind, view.hidden_regions.empty() ? values
+                                                           : shown_values(device, values, view.hidden_regions), 1e10);
         if (!s) return std::unexpected(std::move(s.error()));
         f.scale = *s;
         return f;
@@ -187,10 +281,134 @@ std::expected<Scene, base::Error> build_scene(const Workspace& w, const ViewSett
         p.offset = s.at_um * 1e-4;
         planes.push_back(p);
     }
+    // Streamlines, then arrows, over a device view (Unit 26c, YD1), as `nitcad plot` adds them.
+    const auto overlays = [&](FieldScene* scene) -> std::expected<void, base::Error> {
+        if (!o.streamlines.empty()) {
+            if (!scene || m.dimension() < 2) {
+                return std::unexpected(invalid("streamlines need a 2D or 3D device and a field, slice or iso view"));
+            }
+            const VectorField vf = *vector_field(o.streamlines);
+            auto p = pick();
+            if (!p) return std::unexpected(std::move(p.error()));
+            auto ev = element_vectors(device, geometry, **p, vf);
+            if (!ev) return std::unexpected(std::move(ev.error()));
+            const std::vector<Point> nodal = streamline_field(device, geometry, *ev, vf);
+            const Locator locator(geometry);
+            const auto contacts = device.contacts();
+            std::vector<Point> seeds;
+            if (!o.seeds.empty()) {
+                const std::string_view s = o.seeds;
+                if (s.size() > 2 && s[1] == '=' && std::string_view("xyz").find(s[0]) != std::string_view::npos) {
+                    const auto at = number(s.substr(2));
+                    if (!at) return std::unexpected(invalid("--seeds needs a segment or x=<um>, y=<um> or z=<um>"));
+                    if (m.dimension() != 3) return std::unexpected(invalid("a seed plane needs a 3D device"));
+                    Plane plane;
+                    plane.normal[static_cast<std::size_t>(s[0] - 'x')] = 1.0;
+                    plane.offset = *at * 1e-4;
+                    seeds = plane_seeds(geometry, plane, lines);
+                    if (seeds.empty()) return std::unexpected(invalid("the seed plane misses the device"));
+                } else {
+                    const auto ab = segment_um(s, m.dimension());
+                    if (!ab) {
+                        return std::unexpected(
+                            invalid("--seeds needs <x0>,<y0>[,<z0>]:<x1>,<y1>[,<z1>] in the device's dimension"));
+                    }
+                    seeds = segment_seeds(ab->first, ab->second, lines);
+                }
+            } else {
+                // From a contact: the one named, else for currents the one carrying the most, for E the first
+                // gate or electrode, else the most biased.
+                std::size_t c = 0;
+                if (!o.from.empty()) {
+                    const device::Contact* named = device.find_contact(o.from);
+                    if (!named) return std::unexpected(invalid("there is no contact " + o.from));
+                    c = static_cast<std::size_t>(named - contacts.data());
+                } else if (vf != VectorField::electric) {
+                    double best = -1.0;
+                    for (std::size_t k = 0; k < contacts.size(); ++k) {
+                        double sum = 0.0;
+                        for (const double i : contact_node_currents(device, **p, k)) sum += i;
+                        if (std::abs(sum) > best) {
+                            best = std::abs(sum);
+                            c = k;
+                        }
+                    }
+                } else {
+                    const auto gate = std::ranges::find_if(contacts, [](const device::Contact& k) {
+                        return k.kind != device::ContactKind::ohmic;
+                    });
+                    if (gate != contacts.end()) {
+                        c = static_cast<std::size_t>(gate - contacts.begin());
+                    } else {
+                        double best = -1.0;
+                        for (std::size_t k = 0; k < contacts.size() && k < (*p)->bias_V.size(); ++k) {
+                            if (std::abs((*p)->bias_V[k]) > best) {
+                                best = std::abs((*p)->bias_V[k]);
+                                c = k;
+                            }
+                        }
+                    }
+                }
+                const std::vector<double> currents =
+                    vf == VectorField::electric ? std::vector<double>{} : contact_node_currents(device, **p, c);
+                seeds = contact_seeds(device, locator, c, lines, currents);
+            }
+            std::vector<Streamline> traced;
+            for (const Point& seed : seeds) traced.push_back(trace_streamline(locator, nodal, seed));
+            if (colored_lines && scene->colorbar) {
+                add_streamlines(*scene, traced, *scene->colorbar);
+            } else {
+                add_streamlines(*scene, traced, Rgba{0.05f, 0.05f, 0.05f, 0.85f});
+            }
+        }
+        if (!o.vectors.empty()) {
+            if (!scene || m.dimension() < 2) {
+                return std::unexpected(invalid("arrows need a 2D or 3D device and a field, slice, iso or solid view"));
+            }
+            const VectorField vf = *vector_field(o.vectors);
+            auto p = pick();
+            if (!p) return std::unexpected(std::move(p.error()));
+            auto ev = element_vectors(device, geometry, **p, vf);
+            if (!ev) return std::unexpected(std::move(ev.error()));
+            const std::vector<Point> nodal = streamline_field(device, geometry, *ev, vf);
+            const Locator locator(geometry);
+            const std::size_t count = o.arrows > 0 ? o.arrows : (m.dimension() == 2 ? 300 : 400);
+            // Currents: no arrows in the insulators, which carry none.
+            std::vector<std::uint8_t> insulator;
+            if (vf != VectorField::electric) {
+                for (std::size_t i = 0; i < m.node_count(); ++i) {
+                    insulator.push_back(device.is_insulator(static_cast<mesh::NodeId>(i)) ? 1 : 0);
+                }
+            }
+            double spacing = 0.0;
+            std::vector<Arrow> arrows;
+            if (m.dimension() == 2) {
+                arrows = grid_arrows(locator, nodal, count, spacing, insulator);
+            } else {
+                std::vector<Polygon> surface;
+                if (o.kind == ViewKind::slice) {
+                    for (const Plane& plane : planes) {
+                        for (Polygon& q : geometry.slice(plane)) surface.push_back(std::move(q));
+                    }
+                } else {
+                    surface = exposed_boundary(device, geometry);  // the contacts' slabs cover theirs
+                }
+                arrows = surface_arrows(locator, nodal, surface, count, spacing, insulator);
+            }
+            if (colored_arrows && scene->colorbar) {
+                add_arrows(*scene, arrows, 0.8 * spacing, *scene->colorbar);
+            } else {
+                add_arrows(*scene, arrows, 0.8 * spacing, Rgba{0.05f, 0.05f, 0.05f, 1.0f});
+            }
+        }
+        return {};
+    };
     const auto wrap = [&](auto&& s) -> std::expected<Scene, base::Error> {
         if (!s) return std::unexpected(std::move(s.error()));
         Scene scene(std::move(*s));
-        if (auto* f = std::get_if<FieldScene>(&scene)) {
+        auto* f = std::get_if<FieldScene>(&scene);
+        if (auto drawn = overlays(f); !drawn) return std::unexpected(std::move(drawn.error()));
+        if (f) {
             if (cut) add_cut_line(*f, *cut);
             apply_camera(*f, o);
         }
@@ -203,10 +421,40 @@ std::expected<Scene, base::Error> build_scene(const Workspace& w, const ViewSett
         return wrap(o.kind == ViewKind::solid ? solid_view(device, geometry, view) : mesh_view(device, geometry, view));
     case ViewKind::field:
     case ViewKind::slice: {
+        // Playback (Unit 26c, YD5): the snapshot as `nitcad plot --view filmstrip` draws its frame, on the film's
+        // scale with the film's floor.
+        if (o.film && o.kind == ViewKind::field && takes_film(w, o) && !colored_arrows && !colored_lines) {
+            auto p = pick();
+            if (!p) return std::unexpected(std::move(p.error()));
+            auto v = field_values(device, geometry, **p, *field);
+            if (!v) return std::unexpected(std::move(v.error()));
+            if (o.film->floor > 0.0) {
+                for (double& x : *v) if (std::isfinite(x) && x < o.film->floor) x = o.film->floor;
+            }
+            FieldOptions f;
+            f.view = view;
+            f.map = *colormap;
+            f.contours = o.contours;
+            f.title = std::string(field_info(*field).title);
+            f.scale = o.film->scale;
+            const std::size_t k = o.point.value_or(points.size() - 1);
+            const FilmFrame frame{time_label(w.transient->snapshots[k].time_s), std::move(*v)};
+            auto s = filmstrip_scenes(device, geometry, std::span<const FilmFrame>(&frame, 1), *scale_kind, f);
+            if (!s) return std::unexpected(std::move(s.error()));
+            return wrap(std::expected<FieldScene, base::Error>(std::move(s->front())));
+        }
         auto v = values_for();
         if (!v) return std::unexpected(std::move(v.error()));
         auto f = field_options(*v);
         if (!f) return std::unexpected(std::move(f.error()));
+        if (colored_arrows || colored_lines) {
+            auto s = colored_arrows ? solid_view(device, geometry, view) : outline_view(device, geometry, view);
+            if (s) {
+                s->title = f->title;
+                s->colorbar = Colorbar{f->map, *f->scale, f->title};
+            }
+            return wrap(std::move(s));
+        }
         if (m.dimension() == 1) {
             return wrap(profile_plot(m, *v, std::string(field_info(*field).title),
                                      *scale_kind == ScaleKind::log10 ? AxisScale::log10 : AxisScale::linear));
@@ -375,11 +623,28 @@ std::expected<Scene, base::Error> build_scene(const Workspace& w, const ViewSett
             if (!s) return std::unexpected(std::move(s.error()));
             f.scale = *s;
         } else {
-            f.scale = difference_scale(d->values);
+            f.scale = difference_scale(shown_values(device, d->values, view.hidden_regions));  // YD4
         }
         if (m.dimension() == 1) return wrap(profile_plot(m, d->values, d->title));
         if (m.dimension() == 3 && !planes.empty()) return wrap(slice_view(device, geometry, d->values, planes, f));
         return wrap(field_view(device, geometry, d->values, f));
+    }
+    case ViewKind::exploded: {
+        // Unit 26c (YD2): `nitcad plot --view exploded [--axis] [--gap] [--field]`.
+        if (m.dimension() != 3) return std::unexpected(invalid("the exploded view needs a 3D device"));
+        if (o.axis < 0 || o.axis > 2) return std::unexpected(invalid("--axis is x, y or z"));
+        if (o.gap_um && !(*o.gap_um >= 0.0)) return std::unexpected(invalid("--gap needs a length in um, at least 0"));
+        const double gap = o.gap_um ? *o.gap_um * 1e-4 : default_gap(device, o.axis);
+        if (!o.exploded_field) {
+            FieldOptions f;
+            f.view = view;
+            return wrap(exploded_view(device, geometry, o.axis, gap, {}, f));
+        }
+        auto v = values_for();
+        if (!v) return std::unexpected(std::move(v.error()));
+        auto f = field_options(*v);
+        if (!f) return std::unexpected(std::move(f.error()));
+        return wrap(exploded_view(device, geometry, o.axis, gap, *v, *f));
     }
     }
     return std::unexpected(invalid("unknown view"));
@@ -396,6 +661,7 @@ std::vector<ViewKind> available_views(const Workspace& w, const Workspace* b) {
     }
     out.push_back(dim == 1 ? ViewKind::profile : ViewKind::field);
     if (dim == 3 && elements) out.push_back(ViewKind::slice);
+    if (dim == 3 && elements) out.push_back(ViewKind::exploded);  // Unit 26c (YD2)
     if (dim >= 2 && elements && w.has_results()) out.push_back(ViewKind::iso);
     if (dim == 1 && w.has_results()) out.push_back(ViewKind::bands);
     // Along a cut line (Unit 26b, XD5).
@@ -478,10 +744,86 @@ void apply_camera(FieldScene& scene, const ViewSettings& s) {
     scene.camera.pan = {s.pan_x, s.pan_y};
 }
 
+bool takes_film(const Workspace& w, const ViewSettings& s) noexcept {
+    return s.kind == ViewKind::field && w.device && w.geometry && w.device->mesh().dimension() >= 2 && w.transient &&
+           !w.points.empty() && w.transient->snapshots.size() == w.points.size();
+}
+
+std::expected<Film, base::Error> film_scale(const Workspace& w, const ViewSettings& s) {
+    if (!takes_film(w, s)) return std::unexpected(invalid("playback needs a transient run's field view of a 2D or 3D device"));
+    const device::Device& device = *w.device;
+    const auto field = find_field(s.field);
+    if (!field) return std::unexpected(invalid("unknown field " + s.field));
+    const std::optional<ScaleKind> kind = s.scale.empty()        ? std::optional(field_info(*field).default_scale)
+                                          : s.scale == "linear"  ? std::optional(ScaleKind::linear)
+                                          : s.scale == "log"     ? std::optional(ScaleKind::log10)
+                                          : s.scale == "signed-log" ? std::optional(ScaleKind::signed_log10)
+                                                                 : std::nullopt;
+    if (!kind) return std::unexpected(invalid("unknown scale " + s.scale));
+    std::vector<std::int32_t> hidden;
+    const auto regions = device.regions();
+    for (const std::string& name : s.hidden) {
+        const auto r = std::ranges::find(regions, name, &device::Region::name);
+        if (r == regions.end()) return std::unexpected(invalid("there is no region " + name));
+        hidden.push_back(static_cast<std::int32_t>(r - regions.begin()));
+    }
+    // Every snapshot's values, as the filmstrip takes its frames (src/cli/plot.cpp).
+    std::vector<std::vector<double>> frames;
+    for (const results::BiasPoint& p : w.points) {
+        if (p.fields.potential_V.size() != device.mesh().node_count()) {
+            return std::unexpected(invalid("the result's snapshots do not belong to the device's mesh"));
+        }
+        auto v = field_values(device, *w.geometry, p, *field);
+        if (!v) return std::unexpected(std::move(v.error()));
+        frames.push_back(std::move(*v));
+    }
+    Film film{.scale = *ColorScale::create(ScaleKind::linear, 0.0, 1.0, 1e10)};
+    if (is_vector_magnitude(*field) && *kind == ScaleKind::log10 && !s.range) {
+        double top = 0.0;
+        for (const auto& f : frames) for (const double x : f) if (std::isfinite(x)) top = std::max(top, x);
+        if (top > 0.0) {
+            film.floor = std::pow(10.0, std::ceil(std::log10(top)) - 10.0);
+            for (auto& f : frames) for (double& x : f) if (std::isfinite(x) && x < film.floor) x = film.floor;
+        }
+    }
+    std::vector<double> all;
+    for (const auto& f : frames) {
+        const std::vector<double> v = shown_values(device, f, hidden);
+        all.insert(all.end(), v.begin(), v.end());
+    }
+    const bool all_zero = is_vector_magnitude(*field) &&
+                          std::ranges::none_of(all, [](double x) { return std::isfinite(x) && x != 0.0; });
+    auto scale = s.range    ? ColorScale::create(*kind, s.range->first, s.range->second, 1e10)
+                 : all_zero ? ColorScale::create(ScaleKind::linear, 0.0, 1.0, 1e10)
+                            : ColorScale::fit(*kind, all, 1e10);
+    if (!scale) return std::unexpected(std::move(scale.error()));
+    film.scale = *scale;
+    return film;
+}
+
+std::size_t playback_frame(std::size_t from, std::size_t count, double elapsed_s) noexcept {
+    if (count == 0) return 0;
+    const double steps = std::floor(std::max(elapsed_s, 0.0) * playback_fps);
+    const double k = static_cast<double>(std::min(from, count - 1)) + steps;
+    return k >= static_cast<double>(count - 1) ? count - 1 : static_cast<std::size_t>(k);
+}
+
+double clip_value_um(double lo_um, double hi_um, int step) noexcept {
+    const double t = static_cast<double>(std::clamp(step, 0, clip_steps)) / clip_steps;
+    return std::round((lo_um + t * (hi_um - lo_um)) * 1000.0) / 1000.0;
+}
+
+int clip_step(double lo_um, double hi_um, double value_um) noexcept {
+    if (!(hi_um > lo_um) || !std::isfinite(value_um)) return 0;
+    return static_cast<int>(std::clamp(std::round((value_um - lo_um) / (hi_um - lo_um) * clip_steps), 0.0,
+                                       static_cast<double>(clip_steps)));
+}
+
 std::vector<std::string> plot_arguments(const ViewSettings& s, const Workspace* b) {
     std::vector<std::string> a{"--view", std::string(to_string(s.kind))};
     const bool fieldish = s.kind == ViewKind::field || s.kind == ViewKind::slice || s.kind == ViewKind::iso ||
-                          s.kind == ViewKind::profile || s.kind == ViewKind::difference;
+                          s.kind == ViewKind::profile || s.kind == ViewKind::difference ||
+                          (s.kind == ViewKind::exploded && s.exploded_field);
     const bool uses_b = s.kind == ViewKind::difference || s.kind == ViewKind::iv || s.kind == ViewKind::cv ||
                         s.kind == ViewKind::current;
     if (b && uses_b) a.insert(a.end(), {"--compare", b->source.string()});
@@ -520,6 +862,25 @@ std::vector<std::string> plot_arguments(const ViewSettings& s, const Workspace* 
             return t;
         };
         a.insert(a.end(), {"--cut", end(s.cut->from_um) + ":" + end(s.cut->to_um)});
+    }
+    // Unit 26c (YD1, YD2): arrows and streamlines on the field views (takes_vectors).
+    if (takes_vectors(s.kind) && !s.streamlines.empty()) {
+        a.insert(a.end(), {"--streamlines", s.streamlines});
+        if (s.lines > 0) a.insert(a.end(), {"--lines", std::to_string(s.lines)});
+        if (!s.from.empty()) a.insert(a.end(), {"--from", s.from});
+        if (!s.seeds.empty()) a.insert(a.end(), {"--seeds", s.seeds});
+    }
+    if (takes_vectors(s.kind) && !s.vectors.empty()) {
+        a.insert(a.end(), {"--vectors", s.vectors});
+        if (s.arrows > 0) a.insert(a.end(), {"--arrows", std::to_string(s.arrows)});
+    }
+    if (s.kind == ViewKind::exploded) {
+        if (s.axis != 1) a.insert(a.end(), {"--axis", std::string(1, static_cast<char>('x' + s.axis))});
+        if (s.gap_um) a.insert(a.end(), {"--gap", std::format("{}", *s.gap_um)});
+    }
+    // Unit 26c (YD4): the hidden regions on the device views (takes_hidden).
+    if (takes_hidden(s.kind)) {
+        for (const std::string& r : s.hidden) a.insert(a.end(), {"--hide", r});
     }
     return a;
 }

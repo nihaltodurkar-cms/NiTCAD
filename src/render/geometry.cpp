@@ -806,6 +806,7 @@ IsoSurface isosurface(const Geometry& g, std::span<const double> values, double 
             }
             if (dot(normal, up) < 0.0) std::swap(t[1], t[2]);
             out.triangles.push_back(t);
+            out.elements.push_back(e);
         }
     }
     return out;

@@ -9,11 +9,14 @@
 
 #include <windows.h>
 
+#include <array>
 #include <chrono>
+#include <cstddef>
 #include <filesystem>
 #include <memory>
 #include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "NiTCAD/app/app_state.hpp"
@@ -38,6 +41,9 @@ struct WindowOptions {
     render::Adapter adapter = render::Adapter::automatic;
     bool debug_layer = false;            // the Direct3D 12 debug layer (needs Graphics Tools)
     bool show = true;                    // shown at creation (tests make hidden windows)
+    // Activated when shown and taking mouse and keyboard input; the self-test's window does neither, so a user
+    // at the desktop cannot move, click or hover over it while it measures its message loop (WG1).
+    bool input = true;
     bool quit_on_close = true;           // post WM_QUIT when destroyed (the application's window)
     std::filesystem::path state_file;    // the per-user state; empty: not loaded or saved
     // The bundled examples (VQ11): where they are (empty: beside the executable, else the source tree's),
@@ -55,6 +61,12 @@ inline constexpr UINT_PTR run_timer = 0x52;
 inline constexpr UINT_PTR live_timer = 0x53;
 inline constexpr UINT live_delay_ms = 400;
 inline constexpr UINT live_message = WM_APP + 2;
+// Posted when a box in the scene tree may have changed (Unit 26c, YD4).
+inline constexpr UINT tree_check_message = WM_APP + 3;
+// Transient playback (Unit 26c, YD5): the timer that shows the snapshot due while playing. Each tick shows the
+// snapshot the time since Play has reached (playback_frame), so a frame drawn late skips the ones it missed.
+inline constexpr UINT_PTR playback_timer = 0x54;
+inline constexpr UINT playback_tick_ms = 40;
 
 class MainWindow final : public Viewport::Host,
                          public DeckPane::Host,
@@ -126,6 +138,8 @@ public:
     // The deck's results that a run (or the structure preview) replaced: Simulation > Compare with the
     // previous run takes them as run B.
     [[nodiscard]] bool has_previous_run() const noexcept { return previous_.has_value(); }
+    // Transient playback (Unit 26c, YD5): whether the snapshots are playing.
+    [[nodiscard]] bool playing() const noexcept { return playing_; }
 
     // The ids of the inspector's controls and the panes (for the tests).
     enum Control : int {
@@ -133,6 +147,11 @@ public:
         id_run_page, id_results,
         id_view = 5001, id_field, id_point, id_scale, id_colormap, id_contours, id_edges, id_contacts, id_opaque,
         id_perspective, id_slice_axis, id_slice_at, id_clip, id_clip_box, id_levels, id_cut, id_apply, id_probe_text,
+        // Unit 26c (YD1-YD3): arrows, streamlines and their seeds; the exploded view; the curves' pickers.
+        id_arrows, id_arrow_count, id_lines, id_line_count, id_from, id_seeds, id_axis, id_gap, id_exploded_field,
+        id_swept, id_sensed, id_frequency, id_log,
+        // Unit 26c (YD5, YD6): the snapshot slider, its time and Play; the clipping box's low and high sliders.
+        id_time, id_time_text, id_play, id_clip_x0, id_clip_x1, id_clip_y0, id_clip_y1, id_clip_z0, id_clip_z1,
         id_first_label = 5100,
     };
 
@@ -160,8 +179,26 @@ private:
     void on_inspector(int id, int code);
     void view_defaults(ViewSettings& s);
     void sync_inspector();
+    // Shows the inspector's controls that apply to the active view (Unit 26c), hiding the others.
+    void show_inspector_groups();
+    // Whether a click or hover on the view can pick a node (not on the exploded view, whose regions moved).
+    [[nodiscard]] bool pickable() const;
     void fill_tree();
     void on_tree_selection(LPARAM item);
+    void sync_region_boxes();  // the regions shown as their boxes are (Unit 26c, YD4)
+    void set_region_shown(const std::string& name, bool shown);
+    // Playback (YD5): Play or Pause, a snapshot shown (pausing), the timer's tick, and the slider, time and
+    // button kept as the settings are.
+    [[nodiscard]] bool can_play() const;
+    void play(bool on);
+    void show_snapshot(std::size_t k);
+    void on_playback_timer();
+    void sync_playback();
+    void sync_clip_sliders();  // YD6: the box's sides on its sliders
+    // A slider of the inspector moved (WM_HSCROLL): the snapshot, or a side of the clipping box (YD6).
+    void on_slider(HWND bar);
+    // The device's extent along each axis, in um.
+    [[nodiscard]] std::array<std::pair<double, double>, 3> extent_um() const;
     void update_metrics();
     // A new workspace; its view settings reset unless kept (the structure preview while editing).
     void set_workspace(Workspace w, bool keep_settings = false);
@@ -229,6 +266,11 @@ private:
     std::optional<std::vector<double>> cut_from_;  // the first click of a cut line, um
     std::optional<render::Renderer> renderer_;
     std::optional<std::string> renderer_error_;
+    // Playback (YD5): playing from which snapshot since when; the settings the device view's film was fitted for.
+    bool playing_ = false;
+    std::size_t play_from_ = 0;
+    std::chrono::steady_clock::time_point play_start_{};
+    std::string film_key_;
 
     // The menus' deck sections and keys (VQ13): what each dynamic item id stands for.
     struct SectionItem {

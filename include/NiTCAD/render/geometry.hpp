@@ -193,6 +193,7 @@ private:
 struct IsoSurface {
     std::vector<SurfaceVertex> vertices;
     std::vector<std::array<std::uint32_t, 3>> triangles;
+    std::vector<std::size_t> elements;  // the element each triangle lies in (Unit 26c)
 };
 
 // Marching tetrahedra: where the field, linear on each tetrahedron, equals `level`. As in

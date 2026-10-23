@@ -392,6 +392,7 @@ add_executable(nitcad_render_test
   tests/render/arrows_test.cpp
   tests/render/clip_test.cpp
   tests/render/exploded_test.cpp
+  tests/render/hidden_test.cpp
   tests/render/film_test.cpp
   tests/render/cut_line_test.cpp
   tests/render/quality_test.cpp
