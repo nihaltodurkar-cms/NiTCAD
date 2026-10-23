@@ -3668,7 +3668,11 @@ The Debug suite ran its 19 tests one after another in about 40 minutes (`solve` 
   about 42 s alone. AC9 (`solve.hole_mobility`, a cost ratio within one process) passed in parallel in every
   run and is left parallel.
 - **Suites (working tree on `1be857e`):** Debug 99 of 99 in 947 s (was about 2,400 s); Release 107 of 107 in
-  618 s (was 1,013 s at `3d0e78a`). Not run in a clean worktree, and the hosted CI unseen.
+  618 s (was 1,013 s at `3d0e78a`). **Clean worktree at `15c1088`:** builds from scratch, Release 94 s and Debug
+  56 s (vcpkg's binary cache), no warnings under `/W4 /WX`; Release 107 of 107 in 393 s; Debug 98 of 99 in 850 s:
+  `app_window.self_test`, run alone after `render.image`, failed WG1 with one gap of 296.6 ms, its solve at the
+  usual speed (16 points in 35.4 s) and the monitor's plot drawn in 1.8 ms: the WG1 spike open above (Unit 26c),
+  not load.
 - Not done: restructuring `render.image` (2D and 3D views as separate test cases) to bring Debug near 10
   minutes; worktrees run at once still share their `%TEMP%` scratch folders.
 
