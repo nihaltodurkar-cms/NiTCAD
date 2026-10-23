@@ -3814,6 +3814,72 @@ Both are accepted as limitations of the model as specified, not defects. The cri
 
 ---
 
+### Unit 47 — quantum confinement by the modified local density approximation, opt-in (started 2026-10-24; on `physics/quantum-confinement`)
+
+**Owner request:** "do #1" (2026-10-24), MLDA quantum confinement, the second of the nanoscale models of
+ARCHITECTURE.md 11.3. **Owner rulings (2026-10-24):** (1) the density-of-states factor is applied under both
+statistics, exact MLDA under Boltzmann and Hänsch's approximation under Fermi–Dirac; (2) refused with
+electrothermal; (3) the quantization masses default to Ioffe's m_l and heavy-hole values and can be overridden in the
+deck, silicon only; (4) at a lumped-gate node (the interface at the node) the factor is its mean over the node's
+half-cell. The standing conditions hold: opt-in and bit-identical when off, criteria fixed before code, Release and
+Debug suites at every commit, `/W4 /WX`, hand mutants, nothing pushed or merged without authorization.
+
+**Sources read (before coding).** G. Paasch, H. Übensee, phys. stat. sol. (b) 113, 165 (1982), and W. Hänsch et al.,
+Solid-State Electron. 32, 839 (1989), are paywalled and were not read. The model is read from:
+(a) M. Ieong, R. Logan, J. Slinkman, "Efficient quantum correction model for multi-dimensional CMOS simulations",
+SISPAD 1998 (in4.iue.tuwien.ac.at/pdfs/sispad1998/pdfs/Ieong_34.pdf; text extracted with `pdftotext`). Its MLDA
+density, eq. (1), is an image and was not read; its text gives the ingredients (the distance z to the interface, N_c,
+the quasi-Fermi level, the zeroth-order spherical Bessel function j0, the thermal wavelength λ = ħ / sqrt(2 m kT)),
+says the expression reduces to Fermi–Dirac statistics for large z, and describes the implementation used here: the
+corrected density is turned into a quantum potential that is lumped into the band-structure parameters of the
+heterostructure current equation, so equilibrium carries no current;
+(b) S. Entner, PhD thesis, TU Wien, section 2.4.1.1 (iue.tuwien.ac.at/phd/entner/node12.html), citing Paasch–Übensee
+and Hänsch: eq. (2.106) h = 1 − exp(−(z + z_0)^2 / (ζ^2 λ^2)), (2.107) λ = ħ / sqrt(2 m* k T), (2.108)
+N_c = N_c,0 h; the correction does not depend on bias and does not move the band edges; z_0 = 0 makes the density
+of states vanish at the interface, "which causes numerical problems" (ζ = 1, z_0 = 1 nm in its figure);
+(c) Ioffe's silicon band-structure page (ioffe.ru/SVA/NSM/Semicond/Si/bandstr.html, read over HTTP): m_l = 0.98 m0,
+m_t = 0.19 m0; heavy holes 0.49 m0, light 0.16 m0.
+
+The Boltzmann reduction is derived here, not read: with the MLDA kernel 1 − j0(2 z sqrt(ε) / λ),
+
+    ∫0^∞ sqrt(ε) e^(−ε) [1 − j0(2 a sqrt(ε))] dε / (sqrt(π) / 2) = 1 − exp(−a^2),   a = z / λ,
+
+(u = sqrt(ε) and ∫0^∞ u e^(−u^2) sin(b u) du = sqrt(π) b e^(−b^2/4) / 4), which is (b) with z_0 = 0 and ζ = 1. QC2
+checks it by quadrature. With the masses of (c), λ_n = 1.2263 nm and λ_p = 1.7343 nm at 300 K (λ for m0 is
+1.2140 nm).
+
+**Design:**
+
+| # | Choice | Why | Trade-off |
+|---|---|---|---|
+| QD1 | `PhysicsModels::quantum_confinement`: `off` (the default) or `mlda`; the masses `mlda_mass_n` (default 0.98) and `mlda_mass_p` (0.49), in m0; the deck's `[models] quantum_confinement`, `mlda_mass_n`, `mlda_mass_p`; the run record names the model and both masses only when `mlda`; the app's deck vocabulary lists the keys. | Opt-in, as Units 34, 37, 38, 46; ruling (3). | — |
+| QD2 | Per semiconductor node i and carrier c, f_c,i = 1 − exp(−d_i^2 / λ_c^2), λ_c = ħ / sqrt(2 m_c m0 k T) at the device temperature; d_i the distance from the node to the nearest interface point. Interface points: the midpoint of every edge between a semiconductor node and an insulator node (where the assembler puts that interface; mesh/interfaces.hpp), and every lumped-gate node itself (d = 0). One nearest distance: at a corner the nearer interface decides. | The Boltzmann MLDA (derived above); the interfaces as the assembler already represents them. | Corners and thin bodies get a single-interface correction (no overlap of two walls' factors). Heterojunctions and contacts are not confining interfaces. |
+| QD3 | A lumped-gate node's factor is the mean of f over z in [0, ℓ/2], ℓ the node's shortest carrier edge: 1 − (sqrt(π) λ / (2 a)) erf(a / λ), a = ℓ/2. Every other node takes f at its own d. | Ruling (4); positive, no fitted parameter, the node's share of the charge converges as the mesh is refined. | On a tensor grid ℓ/2 is the box depth; on an unstructured mesh it is an estimate of it. |
+| QD4 | The factors enter only through the scaled device (`make_scaled_device`): N_c → N_c f_n and N_v → N_v f_p, band edges unchanged. With the existing fields that is n_ie → n_ie sqrt(f_n f_p), s → s + ½ ln(f_n / f_p), ln(N_c / n_ie) → + ½ ln(f_n / f_p), ln(N_v / n_ie) → + ½ ln(f_p / f_n). Every assembler (equilibrium Poisson, drift-diffusion, transient, small-signal, the quasi-static sweep), the contact values, SRH and the trap and surface-recombination terms read these, so the model needs no new unknowns, its terms are constant in the solution and the Jacobian is unchanged in form. | Ieong's lumping into band parameters; ψ stays the electrostatic potential and the gate and electrode offsets keep their meaning; equilibrium is current-free by the existing heterostructure flux (Unit 15). | Insulator nodes untouched. Band-diagram output shows unchanged band edges; the densities carry the correction. |
+| QD5 | Ruling (1): the same factors under Fermi–Dirac (the DOS form of Hänsch; Entner (2.108)). | One model for both statistics. | Under Fermi–Dirac this is Hänsch's approximation, not the j0 integral at the quasi-Fermi level; documented. |
+| QD6 | Refused (invalid_input): with electrothermal (ruling (2)); on a device with a semiconductor region whose Caughey–Thomas parameters are not silicon's (as LD6); masses not finite and positive; with `mlda` and no confining interface (no insulator node and no lumped gate). | λ is evaluated at the device temperature; the masses are silicon's. | — |
+| QD7 | The distance search: squared distances to all interface points, brute force, once per assembler construction. | Simple; measured in QC12. | O(nodes × interface points); a bucket grid only if QC12 shows it matters. |
+
+**Acceptance criteria, fixed before any implementation:**
+
+| # | Criterion |
+|---|---|
+| QC1 | Off (the default): every existing test and pin passes unchanged; run identities and Jacobian patterns unchanged. |
+| QC2 | λ against ħ / sqrt(2 m m0 k T) from the CODATA constants within 1e-14 relative (300 K: 1.2263 and 1.7343 nm within 1e-4 nm); the factor f(d) against an independent quadrature of the Boltzmann MLDA integral above, within 1e-10, at d / λ = 0.01 … 10; the half-cell mean of QD3 against quadrature within 1e-12, and it tends to f's mean as a → 0 and to 1 as a → ∞. |
+| QC3 | Distances: on 2D and 3D tensor meshes with a planar meshed oxide, each semiconductor node's d equals its distance to the interface plane within 1e-12 relative; on a 2D Delaunay mesh with a mirrored-pair interface, within 1e-12 for the nodes adjacent to the interface; at a 2D corner (two oxide walls) d is the smaller wall distance; a lumped-gate node has d = 0. |
+| QC4 | Scaled device: N_c f_n and N_v f_p reconstructed from the modified fields within 1e-14 relative at every node; band edges (node_bands) unchanged within 1e-14 V_T; insulator nodes and nodes with f = 1 bit-identical to the model off. |
+| QC5 | Equilibrium with the model on (a meshed-oxide 1D MOS-C in inversion and accumulation, the 2D MOSFET example at Vg = 1 V, both statistics): every edge current within its rounding bound (as Unit 11's BGN gate); n p = n_ie^2 f_n f_p within 1e-12 relative at every semiconductor node; SRH and surface recombination zero at equilibrium. |
+| QC6 | The Jacobian against central differences with the model on (2D, Delaunay, 3D; Boltzmann and Fermi–Dirac; with a lumped gate and with a meshed oxide): largest relative column error at most 1e-6; Newton on the 2D MOSFET in strong inversion converges quadratically. |
+| QC7 | 1D MOS-C, meshed 5 nm oxide, 1e17 p-type, surface spacing 0.05 nm (Release only): in strong inversion the electron density peaks inside the silicon at a distance between 0.3 and 2 nm (classically at the first node); the inversion charge at fixed V_G is lower than without the model; the inversion C–V gate capacitance (quasi-static) is lower than without the model; the threshold (Q_inv = 1e-7 C/cm^2) shifts up by 10–150 mV. In accumulation the hole charge is reduced likewise. |
+| QC8 | Mesh convergence (QC7's MOS-C, Release only): the inversion charge at V_G − V_FB = 2 V on surface spacings 0.2, 0.1 and 0.05 nm; the last two differ by at most 1%, and less than the first two. |
+| QC9 | A lumped-gate MOS-C against the meshed-oxide one of the same oxide capacitance (QC7's device, spacing 0.05 nm): the inversion charge at V_G − V_FB = 2 V within 5%. |
+| QC10 | 2D = 1D: a y-uniform 2D MOS-C reproduces the 1D one within 1e-12; the 2D MOSFET example rotated 90° gives the same Id at Vg = 0.5 and 1.5 V within 1e-9; small-signal conductance against DC differences within 1e-5; a transient long step equals the steady state. |
+| QC11 | Refusals: electrothermal, a germanium region, a zero or negative mass, no confining interface; accepted on silicon with another parameter changed, and with Lombardi together. |
+| QC12 | Reported, not gated: the distance search time and the sweep times of the 2D and 3D MOSFET examples with and without the model; their Id at Vg = 1.5 V (2D) and 1.2 V (3D) with and without; the FinFET deck's V_th and on-current with and without (its mesh convergence is still open); Unit 46's LS6 gap with MLDA and Lombardi together. |
+| QC13 | Full Release and Debug suites; zero warnings; hand mutants caught. |
+
+---
+
 ### Unit 48 — Schottky contacts (started 2026-10-24; on `physics/schottky-contacts`)
 
 **Owner request:** "start schottky contacts" (2026-10-24). ARCHITECTURE.md 6.4 has deferred them since Unit 12.
