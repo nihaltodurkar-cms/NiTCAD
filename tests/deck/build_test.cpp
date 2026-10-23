@@ -498,6 +498,16 @@ TEST_CASE("deck build: electron_mobility (Unit 38)", "[deck]") {
               "electron_mobility is caughey_thomas or masetti") != std::string::npos);
 }
 
+TEST_CASE("deck build: surface_mobility (Unit 46, LD1)", "[deck]") {
+    CHECK(must(diode_deck).options.models.surface_mobility == assemble::SurfaceMobility::off);
+    CHECK(must(diode_deck + "[models]\nsurface_mobility = lombardi\n").options.models.surface_mobility ==
+          assemble::SurfaceMobility::lombardi);
+    CHECK(must(diode_deck + "[models]\nsurface_mobility = off\n").options.models.surface_mobility ==
+          assemble::SurfaceMobility::off);
+    CHECK(failure(diode_deck + "[models]\nsurface_mobility = darwish\n").find(
+              "surface_mobility is off or lombardi") != std::string::npos);
+}
+
 TEST_CASE("deck build: the GMRES-ILUT keys and their run record (Unit 44, LG5)", "[deck]") {
     const std::string solver = R"(
 [solver]

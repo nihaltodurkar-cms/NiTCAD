@@ -203,7 +203,7 @@ TEST_CASE("app window 26b: completion by the keyboard (XD3, XG7)", "[app]") {
     SendMessageW(w->deck().editor(), EM_REPLACESEL, TRUE, reinterpret_cast<LPARAM>(L"\r"));
     w->execute(Command::complete);
     REQUIRE(w->deck().completion_visible());
-    CHECK(w->deck().completion()->items.size() == 15);
+    CHECK(w->deck().completion()->items.size() == 16);  // the 17 [models] keys less srh
     key(*w, VK_DOWN);
     key(*w, VK_DOWN);
     CHECK(w->deck().completion_selection() == 2);  // one item per key

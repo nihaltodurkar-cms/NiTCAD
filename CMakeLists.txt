@@ -222,7 +222,8 @@ add_library(nitcad_physics STATIC
   src/physics/interface_traps.cpp
   src/physics/impact_ionization.cpp
   src/physics/band_to_band.cpp
-  src/physics/thermal.cpp)
+  src/physics/thermal.cpp
+  src/physics/surface_mobility.cpp)
 add_library(NiTCAD::physics ALIAS nitcad_physics)
 target_include_directories(nitcad_physics PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
 target_link_libraries(nitcad_physics PUBLIC NiTCAD::base)
@@ -234,6 +235,7 @@ add_executable(nitcad_physics_test
   tests/physics/statistics_test.cpp
   tests/physics/heavy_doping_test.cpp
   tests/physics/field_mobility_test.cpp
+  tests/physics/surface_mobility_test.cpp
   tests/physics/fermi_dirac_test.cpp
   tests/physics/materials_test.cpp
   tests/physics/interface_traps_test.cpp
@@ -298,6 +300,7 @@ add_executable(nitcad_assemble_test
   tests/assemble/electrothermal_test.cpp
   tests/assemble/fields_test.cpp
   tests/assemble/terms_test.cpp
+  tests/assemble/surface_mobility_test.cpp
   tests/baseline/trace_listener.cpp)
 target_link_libraries(nitcad_assemble_test PRIVATE NiTCAD::assemble Catch2::Catch2WithMain)
 # The terms (Unit 40) are internal to the assemble layer; their own test reads them.
@@ -519,6 +522,7 @@ add_executable(nitcad_deck_test
   tests/deck/run_test.cpp
   tests/deck/analyses_test.cpp
   tests/deck/analyses_run_test.cpp
+  tests/deck/surface_mobility_test.cpp
   tests/baseline/trace_listener.cpp)
 target_include_directories(nitcad_deck_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/deck")
 # The plot tests read the images back (Unit 25a).
@@ -528,8 +532,14 @@ add_dependencies(nitcad_deck_test nitcad)
 target_compile_definitions(nitcad_deck_test PRIVATE
   NITCAD_CLI_PATH="$<TARGET_FILE:nitcad>"
   NITCAD_IO_FIXTURES="${CMAKE_CURRENT_SOURCE_DIR}/tests/io/fixtures"
+  NITCAD_EXAMPLES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/examples"
   NITCAD_MKL_RUNTIME_PATH="${NITCAD_MKL_RUNTIME_PATH}")
 nitcad_add_file_tests(deck nitcad_deck_test)
+# The Lombardi device gates (tests/deck/surface_mobility_test.cpp, hidden tag [.lombardi]: MOSFET
+# sweeps) run in the Release configuration only.
+if(CMAKE_BUILD_TYPE STREQUAL "Release")
+  add_test(NAME deck_lombardi COMMAND nitcad_deck_test "[lombardi]")
+endif()
 
 # The batch runner (`nitcad check|run <deck>`).
 add_executable(nitcad src/cli/main.cpp src/cli/plot.cpp)

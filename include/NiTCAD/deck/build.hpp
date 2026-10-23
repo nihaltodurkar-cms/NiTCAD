@@ -60,6 +60,7 @@
 //                     hole_mobility = automatic | caughey_thomas | masetti  (Units 34, 35;
 //                       automatic, the default: Masetti in silicon regions);
 //                     electron_mobility = caughey_thomas | masetti  (Unit 38; opt-in)
+//                     surface_mobility = off | lombardi  (Unit 46; opt-in)
 //                     ionization_levels = fixed | altermatt  (Unit 37; with incomplete_ionization)
 //   [solver]          equations = drift_diffusion | equilibrium_poisson; max_iterations; tol_update;
 //                     max_update; line_search = off | residual | natural; line_search.max_backtracks;

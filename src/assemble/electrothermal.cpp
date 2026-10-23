@@ -338,7 +338,7 @@ std::vector<DriftDiffusion::NodeLevels> DriftDiffusion::thermal_levels(
 std::pair<DriftDiffusion::ThermalFlux, DriftDiffusion::ThermalFlux>
 DriftDiffusion::thermal_fluxes(std::size_t k, std::span<const double> x,
                                std::span<const ThermalState> t,
-                               std::span<const NodeLevels> g) const {
+                               std::span<const NodeLevels> g, SurfaceSlope* slope) const {
     const EdgeTerm& e = edges_[k];
     const ThermalEdge& te = thermal_edges_[k];
     const std::size_t a = e.a, b = e.b;
@@ -465,14 +465,46 @@ DriftDiffusion::thermal_fluxes(std::size_t k, std::span<const double> x,
     };
     const double base_n = dpsi + e.shift_n - te.log_nc;
     const double base_p = dpsi + e.shift_p + te.log_nv - (t[b].gap - t[a].gap);
-    const Mobility mu_n =
-        mobility(t[a].mu_n, t[a].d_mu_n, t[b].mu_n, t[b].d_mu_n, e.sat_n, e.sat_n_b);
-    const Mobility mu_p =
-        mobility(t[a].mu_p, t[a].d_mu_p, t[b].mu_p, t[b].d_mu_p, e.sat_p, e.sat_p_b);
-    return {carrier(1.0, te.r_n, mu_n, x[4 * a + 1], x[4 * b + 1], base_n, te.log_nc, 0.0, 0.0,
-                    xn),
-            carrier(-1.0, te.r_p, mu_p, x[4 * a + 2], x[4 * b + 2], base_p, -te.log_nv,
-                    t[a].d_gap, -t[b].d_gap, xp)};
+    if (slope != nullptr) *slope = SurfaceSlope{};
+    if (!e.surface) {
+        const Mobility mu_n =
+            mobility(t[a].mu_n, t[a].d_mu_n, t[b].mu_n, t[b].d_mu_n, e.sat_n, e.sat_n_b);
+        const Mobility mu_p =
+            mobility(t[a].mu_p, t[a].d_mu_p, t[b].mu_p, t[b].d_mu_p, e.sat_p, e.sat_p_b);
+        return {carrier(1.0, te.r_n, mu_n, x[4 * a + 1], x[4 * b + 1], base_n, te.log_nc, 0.0,
+                        0.0, xn),
+                carrier(-1.0, te.r_p, mu_p, x[4 * a + 2], x[4 * b + 2], base_p, -te.log_nv,
+                        t[a].d_gap, -t[b].d_gap, xp)};
+    }
+    // Lombardi (Unit 46): each end's low-field mobility is its bulk mobility with the surface
+    // terms at its own T in the edge's E_perp; d mu_end / d theta = (mu_end / mu_b)^2 d mu_b /
+    // d theta + T0 d mu_end / dT. The edge mobility is linear in its ends' changes, so its
+    // E_perp slope is mobility() with the ends' E_perp slopes in place of their theta slopes.
+    const SurfaceField perp = surface_field(e, x);
+    const auto with_surface = [&](physics::Carrier c, double mu_a, double d_mu_a, double mu_b,
+                                  double d_mu_b, const physics::CanaliParameters& sat_a,
+                                  const physics::CanaliParameters& sat_b) {
+        const physics::SurfaceMobility la = surface_end(c, mu_a, e.N_a, ta * T0_, perp.value);
+        const physics::SurfaceMobility lb = surface_end(c, mu_b, e.N_b, tb * T0_, perp.value);
+        const Mobility m = mobility(la.mobility, la.d_dbulk * d_mu_a + T0_ * la.d_dT,
+                                    lb.mobility, lb.d_dbulk * d_mu_b + T0_ * lb.d_dT, sat_a,
+                                    sat_b);
+        const Mobility s = mobility(la.mobility, la.d_dE, lb.mobility, lb.d_dE, sat_a, sat_b);
+        return std::pair{m, s.d_a + s.d_b};
+    };
+    const auto [mu_n, perp_n] = with_surface(physics::Carrier::electron, t[a].mu_n, t[a].d_mu_n,
+                                             t[b].mu_n, t[b].d_mu_n, e.sat_n, e.sat_n_b);
+    const auto [mu_p, perp_p] = with_surface(physics::Carrier::hole, t[a].mu_p, t[a].d_mu_p,
+                                             t[b].mu_p, t[b].d_mu_p, e.sat_p, e.sat_p_b);
+    const ThermalFlux fn =
+        carrier(1.0, te.r_n, mu_n, x[4 * a + 1], x[4 * b + 1], base_n, te.log_nc, 0.0, 0.0, xn);
+    const ThermalFlux fp = carrier(-1.0, te.r_p, mu_p, x[4 * a + 2], x[4 * b + 2], base_p,
+                                   -te.log_nv, t[a].d_gap, -t[b].d_gap, xp);
+    // The flux is linear in the edge mobility: d flux / d E_perp = flux / mu d mu / d E_perp.
+    if (slope != nullptr) {
+        *slope = SurfaceSlope{perp, fn.flux / mu_n.value * perp_n, fp.flux / mu_p.value * perp_p};
+    }
+    return {fn, fp};
 }
 
 DriftDiffusion::Conduction DriftDiffusion::conduction(std::size_t k,
