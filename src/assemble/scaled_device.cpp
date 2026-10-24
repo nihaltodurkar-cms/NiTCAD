@@ -6,6 +6,7 @@
 #include <utility>
 #include <variant>
 
+#include "NiTCAD/assemble/quantum_confinement.hpp"
 #include "NiTCAD/base/constants.hpp"
 #include "NiTCAD/base/contract.hpp"
 #include "NiTCAD/physics/bandgap_narrowing.hpp"
@@ -148,6 +149,28 @@ std::expected<ScaledDevice, base::Error> make_scaled_device(const device::Device
             gate_terms[i].offset += s.band_shift[i];
         }
     }
+    // Unit 47 (DECISIONS.md QD2-QD4): after the gate offsets, which take the material's own s.
+    // N_c -> N_c f_n and N_v -> N_v f_p with the band edges in place: n_ie sqrt(f_n f_p), and
+    // delta = 1/2 ln(f_n / f_p) added to s and ln(N_c / n_ie), taken from ln(N_v / n_ie).
+    std::vector<double> level_shift;
+    if (models.quantum_confinement == QuantumConfinement::mlda) {
+        auto factors = mlda_factors(device, models);
+        if (!factors) return std::unexpected(std::move(factors.error()));
+        level_shift.assign(n, 0.0);
+        for (std::size_t i = 0; i < n; ++i) {
+            if (s.insulator[i] != 0) continue;
+            const double fn = factors->f_n[i], fp = factors->f_p[i];
+            if (fn == 1.0 && fp == 1.0) continue;  // far from every interface: unchanged
+            const double delta = 0.5 * std::log(fn / fp);
+            s.n_ie[i] *= std::sqrt(fn * fp);
+            s.band_shift[i] += delta;
+            s.log_dos_n[i] += delta;
+            s.log_dos_p[i] -= delta;
+            level_shift[i] = delta;
+        }
+    } else if (models.quantum_confinement != QuantumConfinement::off) {
+        return std::unexpected(invalid("unknown quantum confinement model"));
+    }
     s.gates = GateNodes(std::move(gate), std::move(gate_terms), scaling.V_T);
     s.edges.reserve(m.edges().size());
     const auto node_region = device.node_region();
@@ -226,6 +249,7 @@ std::expected<ScaledDevice, base::Error> make_scaled_device(const device::Device
                                    f.recombination_velocity_p_cm_s, range[k].first,
                                    range[k].second, cw * (f.fixed_charge_cm2 - acceptors),
                                    cw * (f.fixed_charge_cm2 + donors)});
+        if (!level_shift.empty()) interface_edges.back().level_shift = level_shift[sem];
     }
     s.interfaces =
         InterfaceEdges(std::move(interface_edges), std::move(levels), interfaces.size());

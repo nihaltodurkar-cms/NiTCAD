@@ -313,6 +313,52 @@ TEST_CASE("surface mobility: long-channel effective mobility, 1e16 substrate (LS
     within_model(1e16);
 }
 
+// Unit 47 (DECISIONS.md QC12), reported, not gated: LS6's gap with MLDA quantum confinement on as
+// well, which moves the inversion electrons off the interface and narrows the field spread. At the
+// default tol_update (1e-8) the 1e17 sweep stops where Newton's correction stalls near 3e-8 with
+// the residual at rounding; a sweep that stops reports why and its last iterations, and is run
+// again at tol_update 1e-7 for the gaps.
+TEST_CASE("surface mobility: LS6 with MLDA quantum confinement (Unit 47, QC12)", "[.mlda]") {
+    for (const auto& [NA, text] : {std::pair{1e16, "1e16"}, std::pair{1e17, "1e17"}}) {
+        deck::Plan p = must(long_mosfet(text));
+        p.options.models.quantum_confinement = assemble::QuantumConfinement::mlda;
+        p.options.models.surface_mobility = lombardi;
+        p.outputs = {};
+        auto report = deck::run(p);
+        if (!report) FAIL(report.error().message);
+        REQUIRE(report->sweep.has_value());
+        if (const results::Sweep& s = *report->sweep; s.stopped) {
+            std::printf("QC12 LS6 with MLDA, N_A %.0e: stopped after %zu of %zu points: %s\n", NA,
+                        s.points.size(), p.points.size(), s.stopped->message.c_str());
+            if (s.unfinished) {
+                const auto& it = s.unfinished->iterations;
+                for (std::size_t k = it.size() < 12 ? 0 : it.size() - 12; k < it.size(); ++k) {
+                    std::printf("QC12 LS6 with MLDA, unfinished iteration %d: correction %.3e, "
+                                "residual %.3e, step %.3f\n",
+                                it[k].iteration, it[k].update, it[k].residual, it[k].step);
+                }
+            }
+            p.options.newton.tol_update = 1e-7;
+            report = deck::run(p);
+            if (!report) FAIL(report.error().message);
+            REQUIRE(report->sweep.has_value());
+            REQUIRE_FALSE(report->sweep->stopped.has_value());
+            std::printf("QC12 LS6 with MLDA, N_A %.0e: at tol_update 1e-7 all %zu points\n", NA,
+                        report->sweep->points.size());
+        }
+        double worst = 0.0;
+        for (const Effective& e : effective(p, *report->sweep, NA)) {
+            const double m = model(e.E_eff, NA);
+            std::printf("QC12 LS6 with MLDA, N_A %.0e: E_eff %.4e V/cm, mu_eff %.2f, model %.2f, "
+                        "gap %+.2f%%\n",
+                        NA, e.E_eff, e.mu, m, 100.0 * (e.mu / m - 1.0));
+            if (e.E_eff >= 3e5 && e.E_eff <= 1e6) worst = std::max(worst, std::abs(e.mu / m - 1.0));
+        }
+        std::printf("QC12 LS6 with MLDA, N_A %.0e: worst gap in 3e5 .. 1e6 V/cm %.2f%%\n", NA,
+                    100.0 * worst);
+    }
+}
+
 TEST_CASE("surface mobility: the 2D MOSFET example, reflected, electrothermal, small signal "
           "(LS8-LS11)",
           "[.lombardi]") {

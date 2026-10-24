@@ -897,6 +897,16 @@ std::expected<void, base::Error> Builder::models(assemble::PhysicsModels& m) con
             if (e.value == "off") m.surface_mobility = assemble::SurfaceMobility::off;
             else if (e.value == "lombardi") m.surface_mobility = assemble::SurfaceMobility::lombardi;
             else return std::unexpected(at(e.line, "surface_mobility is off or lombardi"));
+        } else if (e.key == "quantum_confinement") {
+            if (e.value == "off") m.quantum_confinement = assemble::QuantumConfinement::off;
+            else if (e.value == "mlda") m.quantum_confinement = assemble::QuantumConfinement::mlda;
+            else return std::unexpected(at(e.line, "quantum_confinement is off or mlda"));
+        } else if (e.key == "mlda_mass_n") {
+            NITCAD_DECK_TRY(v, num(e));
+            m.mlda_mass_n = v;
+        } else if (e.key == "mlda_mass_p") {
+            NITCAD_DECK_TRY(v, num(e));
+            m.mlda_mass_p = v;
         } else if (e.key == "ionization_levels") {
             if (e.value == "fixed") m.ionization_levels = assemble::IonizationLevels::fixed;
             else if (e.value == "altermatt") m.ionization_levels = assemble::IonizationLevels::altermatt;
