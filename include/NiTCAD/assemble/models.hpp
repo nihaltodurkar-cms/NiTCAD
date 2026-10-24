@@ -4,6 +4,7 @@
 
 #include <cstdint>
 
+#include "NiTCAD/physics/quantum_confinement.hpp"
 #include "NiTCAD/physics/semiconductor.hpp"
 
 namespace NiTCAD::assemble {
@@ -42,6 +43,12 @@ enum class IonizationLevels : std::uint8_t { fixed = 0, altermatt = 1 };
 // current, combined with the bulk mobility by Matthiessen's rule; silicon only. Opt-in.
 enum class SurfaceMobility : std::uint8_t { off = 0, lombardi = 1 };
 
+// Quantum confinement (Unit 47): none (the default) or the modified local density approximation
+// (physics/quantum_confinement.hpp): each band's density of states times
+// f = 1 - exp(-d^2 / lambda^2), d the distance to the nearest insulator interface; silicon only,
+// isothermal only. Opt-in.
+enum class QuantumConfinement : std::uint8_t { off = 0, mlda = 1 };
+
 struct PhysicsModels {
     // Caughey-Thomas mobility; false: the lattice mobility (Caughey-Thomas at N = 0).
     bool doping_mobility = true;
@@ -53,6 +60,13 @@ struct PhysicsModels {
     ElectronMobility electron_mobility = ElectronMobility::caughey_thomas;
     // Lombardi's surface mobility (Unit 46; drift_diffusion.hpp); off by default.
     SurfaceMobility surface_mobility = SurfaceMobility::off;
+    // MLDA quantum confinement (Unit 47; scaled_device.hpp): the density of states of each band
+    // reduced near insulator interfaces; off by default.
+    QuantumConfinement quantum_confinement = QuantumConfinement::off;
+    // Its quantization masses [m0] (Unit 47, QD1): silicon's longitudinal electron and heavy-hole
+    // masses by default. Read only with quantum_confinement on.
+    double mlda_mass_n = physics::mlda_silicon_electron_mass;
+    double mlda_mass_p = physics::mlda_silicon_hole_mass;
     // SRH recombination with Scharfetter lifetimes.
     bool srh = true;
     // Auger recombination (physics::auger_recombination).

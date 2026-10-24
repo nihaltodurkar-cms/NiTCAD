@@ -71,6 +71,10 @@ struct InterfaceEdge {
     double velocity_n, velocity_p;        // s_n, s_p [cm/s]
     std::size_t first_level, last_level;  // the interface's levels in InterfaceEdges::levels()
     double charge_low, charge_high;       // bounds of Q (fixed charge, all traps charged one way)
+    // Added to every level's tau (Unit 47): with MLDA the semiconductor node's n_ie and band shift
+    // carry its confinement factors, and +1/2 ln(f_n / f_p) keeps each level where it was declared
+    // against the band edges (n1 = f_n n_ie e^tau, p1 = f_p n_ie e^-tau). 0 without MLDA.
+    double level_shift = 0.0;
 };
 
 // The equilibrium interface of an edge at its end potentials: psi_I, the half-edge fluxes into the

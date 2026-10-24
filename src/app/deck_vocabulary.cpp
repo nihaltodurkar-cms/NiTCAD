@@ -28,6 +28,7 @@ constexpr std::array<std::string_view, 3> btbt_nonlocal{"off", "kane", "direct_w
 constexpr std::array<std::string_view, 3> hole_mobility{"automatic", "caughey_thomas", "masetti"};
 constexpr std::array<std::string_view, 2> electron_mobility{"caughey_thomas", "masetti"};
 constexpr std::array<std::string_view, 2> surface_mobility{"off", "lombardi"};
+constexpr std::array<std::string_view, 2> quantum_confinement{"off", "mlda"};
 constexpr std::array<std::string_view, 2> ionization_levels{"fixed", "altermatt"};
 constexpr std::array<std::string_view, 2> equations{"drift_diffusion", "equilibrium_poisson"};
 constexpr std::array<std::string_view, 3> line_search{"off", "residual", "natural"};
@@ -110,11 +111,14 @@ constexpr std::array<KeyInfo, 4> thermal_contact_keys{{
     {"resistance", 0, false, "<K cm^2/W>", "resistance: the thermal resistance", {}, {}, {}},
 }};
 
-constexpr std::array<KeyInfo, 17> model_keys{{
+constexpr std::array<KeyInfo, 20> model_keys{{
     {"doping_mobility", 0, false, "on", "doping-dependent mobility", on_off, {}, {}},
     {"hole_mobility", 0, false, "automatic", "automatic | caughey_thomas | masetti", hole_mobility, {}, {}},
     {"electron_mobility", 0, false, "caughey_thomas", "caughey_thomas | masetti", electron_mobility, {}, {}},
     {"surface_mobility", 0, false, "off", "off | lombardi (inversion layers)", surface_mobility, {}, {}},
+    {"quantum_confinement", 0, false, "off", "off | mlda (near insulators)", quantum_confinement, {}, {}},
+    {"mlda_mass_n", 0, false, "0.98", "mlda: electron quantization mass, m0", {}, {}, {}},
+    {"mlda_mass_p", 0, false, "0.49", "mlda: hole quantization mass, m0", {}, {}, {}},
     {"field_mobility", 0, false, "off", "high-field mobility (Canali)", on_off, {}, {}},
     {"srh", 0, false, "on", "Shockley-Read-Hall recombination", on_off, {}, {}},
     {"auger", 0, false, "on", "Auger recombination", on_off, {}, {}},
