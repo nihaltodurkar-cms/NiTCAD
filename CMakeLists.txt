@@ -223,7 +223,8 @@ add_library(nitcad_physics STATIC
   src/physics/impact_ionization.cpp
   src/physics/band_to_band.cpp
   src/physics/thermal.cpp
-  src/physics/surface_mobility.cpp)
+  src/physics/surface_mobility.cpp
+  src/physics/quantum_confinement.cpp)
 add_library(NiTCAD::physics ALIAS nitcad_physics)
 target_include_directories(nitcad_physics PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
 target_link_libraries(nitcad_physics PUBLIC NiTCAD::base)
@@ -236,6 +237,7 @@ add_executable(nitcad_physics_test
   tests/physics/heavy_doping_test.cpp
   tests/physics/field_mobility_test.cpp
   tests/physics/surface_mobility_test.cpp
+  tests/physics/quantum_confinement_test.cpp
   tests/physics/fermi_dirac_test.cpp
   tests/physics/materials_test.cpp
   tests/physics/interface_traps_test.cpp
@@ -269,6 +271,7 @@ add_test(NAME device COMMAND nitcad_device_test)
 add_library(nitcad_assemble STATIC
   src/assemble/scaling.cpp
   src/assemble/scaled_device.cpp
+  src/assemble/quantum_confinement.cpp
   src/assemble/gate.cpp
   src/assemble/interface_edges.cpp
   src/assemble/contact_bias.cpp
@@ -301,6 +304,7 @@ add_executable(nitcad_assemble_test
   tests/assemble/fields_test.cpp
   tests/assemble/terms_test.cpp
   tests/assemble/surface_mobility_test.cpp
+  tests/assemble/quantum_confinement_test.cpp
   tests/baseline/trace_listener.cpp)
 target_link_libraries(nitcad_assemble_test PRIVATE NiTCAD::assemble Catch2::Catch2WithMain)
 # The terms (Unit 40) are internal to the assemble layer; their own test reads them.
@@ -460,6 +464,7 @@ add_executable(nitcad_solve_test
   tests/solve/newton_test.cpp
   tests/solve/equilibrium_test.cpp
   tests/solve/bias_test.cpp
+  tests/solve/quantum_confinement_test.cpp
   tests/solve/step_control_test.cpp
   tests/solve/sweep_test.cpp
   tests/solve/heavy_doping_test.cpp
@@ -505,6 +510,8 @@ if(CMAKE_BUILD_TYPE STREQUAL "Release")
   add_test(NAME solve_btbt COMMAND nitcad_solve_test "[btbt]")
   # And the device gates on generated 2D meshes (tests/solve/unstructured_test.cpp, [.unstructured]).
   add_test(NAME solve_unstructured COMMAND nitcad_solve_test "[unstructured]")
+  # And the MLDA MOS-C gates (tests/solve/quantum_confinement_test.cpp, [.mlda]; Unit 47).
+  add_test(NAME solve_mlda COMMAND nitcad_solve_test "[mlda]")
 endif()
 
 # --- deck layer (the text input deck, its meaning and the batch runner; Unit 31) ----------
@@ -523,6 +530,7 @@ add_executable(nitcad_deck_test
   tests/deck/analyses_test.cpp
   tests/deck/analyses_run_test.cpp
   tests/deck/surface_mobility_test.cpp
+  tests/deck/quantum_confinement_test.cpp
   tests/baseline/trace_listener.cpp)
 target_include_directories(nitcad_deck_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/deck")
 # The plot tests read the images back (Unit 25a).
@@ -540,6 +548,8 @@ nitcad_add_file_tests(deck nitcad_deck_test)
 # sweeps) run in the Release configuration only.
 if(CMAKE_BUILD_TYPE STREQUAL "Release")
   add_test(NAME deck_lombardi COMMAND nitcad_deck_test "[lombardi]")
+  # And the MLDA example gates (tests/deck/quantum_confinement_test.cpp, [.mlda]; Unit 47).
+  add_test(NAME deck_mlda COMMAND nitcad_deck_test "[mlda]")
 endif()
 
 # The batch runner (`nitcad check|run <deck>`).

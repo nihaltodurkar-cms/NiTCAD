@@ -59,7 +59,7 @@ InterfaceEquilibrium InterfaceEdges::equilibrium(const InterfaceEdge& e, double 
         for (std::size_t k = e.first_level; k < e.last_level; ++k) {
             const InterfaceLevel& l = levels_[k];
             const physics::FermiOccupancy f =
-                physics::fermi_occupancy(l.tau - (psi + s.band_shift));
+                physics::fermi_occupancy(l.tau + e.level_shift - (psi + s.band_shift));
             q += l.density_cm2 * (l.donor ? f.empty : -f.occupied);
             dq -= l.density_cm2 * f.d_eta;
         }
@@ -101,8 +101,8 @@ InterfaceEdges::Charge InterfaceEdges::charge_at(const InterfaceEdge& e, double 
         const double w = step->weight;
         for (std::size_t k = e.first_level; k < e.last_level; ++k) {
             const InterfaceLevel& l = levels_[k];
-            const double n1 = s.n_ie * std::exp(gn.log_gamma + l.tau);
-            const double p1 = s.n_ie * std::exp(gp.log_gamma - l.tau);
+            const double n1 = s.n_ie * std::exp(gn.log_gamma + l.tau + e.level_shift);
+            const double p1 = s.n_ie * std::exp(gp.log_gamma - l.tau - e.level_shift);
             const double dn1 = n1 * gn.d_density, dp1 = p1 * gp.d_density;
             const double occ = l.cn * n + l.cp * p1;
             const double D = l.cn * (n + n1) + l.cp * (p + p1);
@@ -125,8 +125,8 @@ InterfaceEdges::Charge InterfaceEdges::charge_at(const InterfaceEdge& e, double 
     }
     for (std::size_t k = e.first_level; step == nullptr && k < e.last_level; ++k) {
         const InterfaceLevel& l = levels_[k];
-        const double n1 = s.n_ie * std::exp(gn.log_gamma + l.tau);
-        const double p1 = s.n_ie * std::exp(gp.log_gamma - l.tau);
+        const double n1 = s.n_ie * std::exp(gn.log_gamma + l.tau + e.level_shift);
+        const double p1 = s.n_ie * std::exp(gp.log_gamma - l.tau - e.level_shift);
         const physics::TrapKinetics t = physics::trap_kinetics(
             n, p, n1, n1 * gn.d_density, p1, p1 * gp.d_density, l.cn, l.cp);
         // Donor N (1 - f), acceptor -N f; d(1 - f) = -df.
@@ -175,8 +175,8 @@ InterfaceEdges::ChargeSmallSignal InterfaceEdges::charge_small_signal(
         // As charge_at's time step, linearized about the steady occupancy f: the occupancy moves
         // by df = (f_n dn + f_p dp), (1 / w + D) f_n = cn - f cn (1 + dn1), likewise f_p.
         const InterfaceLevel& l = levels_[k];
-        const double n1 = s.n_ie * std::exp(gn.log_gamma + l.tau);
-        const double p1 = s.n_ie * std::exp(gp.log_gamma - l.tau);
+        const double n1 = s.n_ie * std::exp(gn.log_gamma + l.tau + e.level_shift);
+        const double p1 = s.n_ie * std::exp(gp.log_gamma - l.tau - e.level_shift);
         const double dn1 = n1 * gn.d_density, dp1 = p1 * gp.d_density;
         const double D = l.cn * (n + n1) + l.cp * (p + p1);
         const double f = physics::trap_kinetics(n, p, n1, dn1, p1, dp1, l.cn, l.cp).occupied;
