@@ -3908,30 +3908,33 @@ case in `tests/deck/surface_mobility_test.cpp` (also under `deck_mlda`).
 | QC9 | Met: lumped 4.86099e-7 against meshed 4.86096e-7 C/cm² (ratio 1.0000). |
 | QC10 | Met. The y-uniform 2D MOS-C equals the 1D one within 1e-12 at every bias; the reflected 2D MOSFET example (x and y exchanged, as LS9) gives the same Id at Vg = 0.5 and 1.5 V within 1e-9; small-signal g_d and g_m match DC central differences to 8 digits (6.07386027e-1 and 7.14614488e-2); a 1D MOS-C transient step to −1.5 V ends at the DC state (ψ within 1e-9 V, p within 1e-7). |
 | QC11 | Met: electrothermal, germanium, zero and negative masses, no confining interface and (QD8) a thermionic interface are refused with a `quantum_confinement mlda:` message, the same from the equilibrium and drift-diffusion assemblers; accepted on silicon with another parameter changed, and with Lombardi. |
-| QC12 | 2D MOSFET example: the nearest silicon node is 5.00 nm from the oxide (its surface spacing), where f_n = 1 − 6e-8 and f_p = 1 − 2.5e-4, so the electron current Id(1.5 V) is unchanged to 6 digits (ratio 1.000000); sweep 0.69 s off, 0.68 s on. 3D example: 4.16 s off and on, Id(1.2 V) ratio 1.000000. The examples' meshes do not resolve the 1–2 nm confinement layer, so the model has no effect on them. FinFET deck (45,375 nodes, nearest silicon node 0.100 nm from the oxide): distance search 0.064 s. **The FinFET sweep with MLDA stops at Vg = 0.35 V** (point 7 of 17) after 104 min, PARDISO on 6 threads with other builds running: "no convergence with the step cut to 2^-8". Points 0–6 needed 3, 3, 5, 4, 0, 19 and 8 bias sub-steps; without the model the sweep cut only at points 0, 5 and 10 and took 18 min. Up to 0.3 V the drain current is 0.77–0.84 of the classical one (0.791 at 0.2 V). V_th and the on-current at 0.8 V are not available (limitations below). LS6 with MLDA and Lombardi: the 1e16 gap is +5.2% at 3.4e5 V/cm, +13.5% at 7.4e5, +18.7% at 9.0e5 and +21.6% at 9.9e5 (without MLDA: +5.4% at 3.5e5, +14.4% at 7.5e5, +20.0% at 9.2e5, and 21.6% at 9.6e5 with 0.25 V steps). The 1e17 gap is +0.8% at 3.2e5 and +10.5% at 9.7e5 (without MLDA: +0.8% at 3.3e5, +11.7% at 9.8e5). The 1e17 sweep stops at the default tolerance (limitations below); its gaps are from a rerun at `tol_update = 1e-7`. MLDA lowers the gap by about 1 point, so it does not explain LS6's 1e16 miss: the Jensen bias remains. |
+| QC12 | 2D MOSFET example: the nearest silicon node is 5.00 nm from the oxide (its surface spacing), where f_n = 1 − 6e-8 and f_p = 1 − 2.5e-4, so the electron current Id(1.5 V) is unchanged to 6 digits (ratio 1.000000); sweep 0.69 s off, 0.68 s on. 3D example: 4.16 s off and on, Id(1.2 V) ratio 1.000000. The examples' meshes do not resolve the 1–2 nm confinement layer, so the model has no effect on them. FinFET deck (45,375 nodes, nearest silicon node 0.100 nm from the oxide): distance search 0.064 s. FinFET sweep with MLDA (Vd = 50 mV, the deck's Fermi–Dirac statistics so QD5's form, PARDISO on 6 threads, `line_search = natural`; with the deck's `residual` test it stops at 0.35 V, see limitations): 6.7 min, no step cuts. Id against the classical run: ratio 0.83 at 0 V, 0.79 at 0.2 V, 0.77 at 0.35 V (the least), 0.92 at 0.5 V, 0.974 at 0.8 V (on-current 1.835e-5 A against 1.883e-5 A). The threshold at a constant 1 µA rises by about 10 mV (0.257 V against 0.247 V, interpolated in ln Id). LS6 with MLDA and Lombardi: the 1e16 gap is +5.2% at 3.4e5 V/cm, +13.5% at 7.4e5, +18.7% at 9.0e5 and +21.6% at 9.9e5 (without MLDA: +5.4% at 3.5e5, +14.4% at 7.5e5, +20.0% at 9.2e5, and 21.6% at 9.6e5 with 0.25 V steps). The 1e17 gap is +0.8% at 3.2e5 and +10.5% at 9.7e5 (without MLDA: +0.8% at 3.3e5, +11.7% at 9.8e5). The 1e17 sweep stops at the default tolerance (limitations below); its gaps are from a rerun at `tol_update = 1e-7`. MLDA lowers the gap by about 1 point, so it does not explain LS6's 1e16 miss: the Jensen bias remains. |
 | QC13 | Met. Release (115 tests, with `solve_mlda` and `deck_mlda`) and Debug (104) suites pass; zero warnings under `/W4 /WX` in both. One existing pin changed with the vocabulary, not loosened: the app's `[models]` completion on an empty line lists 19 keys (20 less `srh`), not 16. Hand mutants, 16 of 16 caught: the trap level shift dropped (QC4); the band shift, n_ie scaling, ln(N_c / n_ie) sign and ln(N_v / n_ie) shift each removed (QC4); the lumped-gate mean over the full cell instead of the half (QC3); the interface point at the insulator node instead of the edge midpoint (QC3); λ without the 2 (QC2); the sign of the mean's series (QC2); the electrothermal, silicon and thermionic refusals each removed (QC11; the electrothermal one survived a weak message check at first, and the test was tightened); the masses not recorded (QC1); the deck's `mlda_mass_p` written into `mlda_mass_n` (QC1); lumped-gate nodes not marked as half cells (QC9); the model not applied in the scaled device (QC7). |
 
 **Limitations found (for the owner):**
-- **Newton's correction floor with the model on fine meshes.** The 1e17 long-channel MOSFET of LS6 (0.05 nm at
-  the surface) with MLDA and Lombardi together stops at Vg = 1.5 V at the default `tol_update` (1e-8): the
-  residual is at rounding (3–4e-11) and the largest scaled correction stays between 1.4e-8 and 3.5e-8 at full steps
-  for 100 iterations. 0.1 V gate steps stop at 0.6 V instead. Either model alone converges in 7–21 iterations per
-  point, and the Jacobian with both on passes the FD gate (QD10), so the derivative is not the cause. At
-  `tol_update = 1e-7` the sweep converges in 7 iterations per point. DriftDiffusion measures density corrections
-  relative to the density, so the floor fits the rounding of a very small density (as QC5's minority density).
-  This is a hypothesis: the node was not identified. **The FinFET with MLDA alone shows the same floor,
-  higher.** At the failing step Newton converges quadratically for four iterations (corrections 5.5e2, 5.5, 0.68,
-  1.0e-2, with the residual down to 4.8e-13). The correction then stalls near 4e-7 with the residual at rounding
-  (4.5e-13). The residual line search cannot find a decrease there, so it cuts the step to 1/256, and the bias
-  step is cut until it gives up. A rerun at `tol_update = 1e-7` (below the floor) needed more iterations, not
-  fewer (304 by point 1), and was stopped. At the last converged point the smallest hole density is 1.6e-35
-  cm⁻³. The 2D example and the 1D and 2D MOS-Cs converge in 7–8 iterations per point with the model, and the
-  model's terms are constant in the solution (QD4), so what raises the floor has to be found in how the scaled
-  densities near the interface enter the relative update measure. **For the owner**, as Unit 36's floor was:
-  find the node and variable, then choose between rescaling, a convergence test that accepts a stalled
-  correction at a rounding residual, or leaving it documented. Until then MLDA alone converges at default settings on
-  the MOS-Cs, both long-channel MOSFETs and the examples. With Lombardi, the 1e17 long channel needs
-  `tol_update = 1e-7`, and the FinFET deck does not finish.
+- **Two Newton stalls, diagnosed (2026-10-24, owner: "yes" to finding the node and variable).** Neither is in
+  the model. A scratch probe restarted Newton from a saved converged point at the next bias and listed the
+  largest scaled corrections by node and unknown (`DriftDiffusion::update_size`'s measure).
+  - **The FinFET: the residual line search at a rounding residual.** From point 6 (0.30 V) with the gate 0.2 mV
+    higher (the run's last cut, 2^-8 of the step), full Newton steps converge in 6 iterations: corrections 3.0e2,
+    8.1, 0.15, 1.4e-3, 3.4e-7, 2.8e-9. From iteration 5 the residual is at rounding (4.5e-13), while a correction
+    of 3.4e-7 is still left on holes of about 1e-3 cm⁻³ in the n+ source and drain next to the oxide, below the
+    density floor. The deck's `line_search = residual` Armijo test sees only noise there, rejects the step,
+    backtracks to 1/256 and never finishes the iteration. The run with the residual test was the one reported
+    first: it stopped at Vg = 0.35 V after 104 min. A rerun at `tol_update = 1e-7` was worse (304 iterations by
+    point 1) and was stopped. **The same deck with `line_search = natural` runs all 17 points in 6.7 min, 8–15
+    iterations per point, with no cuts.** Its currents equal those of the residual-test run at the points both
+    solved, to 5 digits.
+  - **The 1e17 long channel with Lombardi: the minority-hole floor in uncontacted n+.** At the step from 1.0 to
+    1.5 V the corrections settle at 1.7–3.8e-8 with the residual at rounding (3.3e-11), at full steps. They sit on
+    minority holes (p 10–20 cm⁻³) in the n+ pockets under the oxide, above the contacts' boxes (y 1.99–2.0 µm),
+    uniform down whole columns: those holes are nearly decoupled, so rounding sets their correction. **With MLDA
+    off the same step stalls at 1.4–2.2e-8**, so the floor exists with Lombardi alone. Lombardi-only sweeps pass
+    the 1e-8 test or not by margin, and MLDA moves the floor a little.
+  - **What changes here:** the FinFET deck's comment says to use `line_search = natural` with MLDA. The solver is
+    unchanged. **Proposed as a separate unit, for the owner:** (a) the residual line search takes the full step
+    when the residual is already at its rounding level; (b) a ruling on the minority-density floor (a floor
+    relative to the local majority density, or documented). Both change every model's behaviour.
 - **QC5's n p relation on the drift-diffusion state** (above): 3.26e-12 against 1e-12, rounding of a minority
   density of 1e-4 cm⁻³.
 - **The examples' meshes do not resolve the layer.** The 2D and 3D MOSFET examples' surface spacing (5 nm) is

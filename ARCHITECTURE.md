@@ -3189,10 +3189,12 @@ FG1–FG9):**
   leaves the band edges and trap levels in place; both statistics (Hänsch's form under Fermi–Dirac); refused with
   electrothermal, thermionic interfaces and non-silicon regions. On a 5 nm-oxide MOS-C the inversion peak moves
   0.8 nm into the silicon and the threshold rises 26 mV. It needs a surface spacing well below λ (about 1.2 nm):
-  the examples' first nodes, 5 nm from the oxide, see no change. **Open:** on fine surface meshes Newton's
-  relative correction stalls above `tol_update` once the residual reaches rounding. The FinFET deck with MLDA stops
-  at Vg = 0.35 V, and the 1e17 long channel with Lombardi as well needs `tol_update = 1e-7` (DECISIONS.md Unit 47,
-  limitations; for the owner).
+  the examples' first nodes, 5 nm from the oxide, see no change. On the FinFET deck (0.1 nm at the interfaces) it
+  lowers the 0.8 V current by 2.6% and the 1 µA threshold rises 10 mV; that run needs `line_search = natural`.
+  **Open (a solver unit proposed, for the owner):** the residual line search rejects needed steps once the
+  residual is at rounding, which stops the FinFET deck with MLDA at 0.35 V. Minority holes in uncontacted n+ under
+  an oxide leave a correction floor of 1–4e-8 with Lombardi, with or without MLDA (DECISIONS.md Unit 47,
+  limitations).
 - **Surface-roughness mobility** (physics, assemble). A mobility reduction with the field normal to the
   interface: Lombardi's acoustic-phonon and surface-roughness terms, combined by Matthiessen's rule with the
   doping and lateral-field mobility. Without it, inversion-layer mobility is overestimated and the current above
