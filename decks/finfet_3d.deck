@@ -20,9 +20,11 @@
 # Size: 45,375 nodes. Expect a long solve; run it in a Release build. With the MKL runtime installed,
 # use the [solver] PARDISO lines below: on 6 threads the sweep takes about 18 min.
 #
-# Not predictive at this size: quantum confinement, gate tunnelling and non-local transport are absent
-# (ARCHITECTURE.md 11.3), and the mesh convergence is unchecked. Lombardi surface mobility (Unit 46) is
-# available but needs sub-nm spacing at the interfaces; it lowers the 0.8 V current by 12% on this mesh.
+# Not predictive at this size: gate tunnelling and non-local transport are absent (ARCHITECTURE.md
+# 11.3), and the mesh convergence is unchecked. Lombardi surface mobility (Unit 46) is available but
+# needs sub-nm spacing at the interfaces; it lowers the 0.8 V current by 12% on this mesh. MLDA quantum
+# confinement (Unit 47) is available too: it lowers the 0.8 V current by 2.6% and the 1 uA threshold
+# rises 10 mV.
 
 [device]
 temperature = 300
@@ -132,6 +134,7 @@ field_mobility = on
 electron_mobility = masetti
 # srh, auger and bgn are on by default.
 # Inversion-layer mobility (Unit 46): surface_mobility = lombardi
+# Quantum confinement (Unit 47): quantum_confinement = mlda
 
 [solver]
 # The default sparse LU spent over 45 min on the first bias point, and GMRES+ILUT (single-threaded

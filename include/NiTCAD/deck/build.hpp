@@ -61,6 +61,8 @@
 //                       automatic, the default: Masetti in silicon regions);
 //                     electron_mobility = caughey_thomas | masetti  (Unit 38; opt-in)
 //                     surface_mobility = off | lombardi  (Unit 46; opt-in)
+//                     quantum_confinement = off | mlda  (Unit 47; opt-in); mlda_mass_n,
+//                       mlda_mass_p = <m / m0>  (defaults 0.98, 0.49)
 //                     ionization_levels = fixed | altermatt  (Unit 37; with incomplete_ionization)
 //   [solver]          equations = drift_diffusion | equilibrium_poisson; max_iterations; tol_update;
 //                     max_update; line_search = off | residual | natural; line_search.max_backtracks;
