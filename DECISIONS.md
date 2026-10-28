@@ -3941,6 +3941,20 @@ refusals, the run record, the device file, the deck, the CLI, the app's vocabula
   inserts into the layer's rectangle. Found while building SC10's Delaunay device, whose current was then 0.3–1.7% off;
   with the layer spaced at `max_size` it is exact. **For the owner.**
 
+**Ruling on SC2/SC8, SC5, SC6, SC12 and SC13 (2026-10-28).** The owner: "accept it as limitations". The five unmet
+parts are accepted as limitations of the criteria as written, not defects of the model. Each criterion's intent is met:
+- SC2/SC8: the equilibrium current is within the terminal-current resolution at every barrier, under both statistics.
+- SC5: the ideality of the thermionic form is 1.002–1.003.
+- SC6: the gap to n_B falls 10× per decade of A*, and n(0) − n_B = J/(qv) holds.
+- SC12: g matches DC differences at +0.2 V and C matches dQ/dV, both to 6 digits.
+- SC13: the currents are conserved within 1e-10 at +0.3 V and within the resolution at −1 V.
+The 1e-12 and 1e-10 relative gates at 1.7e-5 A/cm² ask for less than the rounding of the cancelling fluxes. SC5's
+range starts below J_s. SC6 underestimated the diffusion current.
+The criteria are unchanged, and the `[!shouldfail]` cases stay, so a change that makes one pass is flagged.
+Follow-up if currents near 1e-14 A/cm² (Schottky reverse leakage) matter: extend the weighted terminal current
+(Unit 32) to Schottky contacts (refused now, SD7). No unit named.
+The surviving mutants and the mesh-generator finding stay open.
+
 ---
 
 ## New questions the advisor raised (not yet in `ARCHITECTURE.md`)
