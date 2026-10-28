@@ -2360,6 +2360,8 @@ Unstructured meshes are not implemented initially. The mesh architecture must st
   - The MOSFET acceptance gate passes (k = 1.5 unchanged) with a structured boundary layer, the hybrid tensor strip
     (`MeshOptions2D::layers`; DECISIONS.md U14); isotropic triangles alone did not pass. No bisector corner nodes
     (U15); 1D meshes need a verified tensor chain or `certify_interfaces_1d` (U16).
+  - Unit 49: a layer's columns may be coarser than h. The boundary fill no longer adds nodes between a column at an
+    edge or patch end and its neighbour, and those columns' edge nodes are the given points.
 - **Commit 6, the 3D generator** (DECISIONS.md "3D generator, commit 6"):
   - `mesh::generate_mesh(Geometry3D, MeshOptions3D)` meshes convex polyhedra. It is built on `Triangulation3D` (exact
     Bowyer–Watson, BRIO order) and Shewchuk-style refinement, where each face keeps a 2D Delaunay triangulation of its

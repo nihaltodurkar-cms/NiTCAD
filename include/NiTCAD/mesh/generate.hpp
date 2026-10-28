@@ -71,7 +71,8 @@ struct Geometry2D {
 // segment's direction and n the inward normal of its boundary edge. The lattice's rectangles are
 // Delaunay (all ties), so its dual is exactly the tensor grid's box method; refinement never
 // inserts into the layer's rectangle and does not judge triangles of layer nodes alone. Patch
-// ends on the segment are added to `along`.
+// ends on the segment are added to `along`. The edge carries only the columns, however coarse
+// against h; the columns at `a`, `b` and patch ends are those points exactly (Unit 49).
 // Rules (invalid_input otherwise): the segment inside one boundary edge; `along` strictly
 // increasing from 0 to the segment's length (to 1e-12 relative); `offsets` strictly increasing and
 // positive; the lattice inside the polygon owning the edge; layers not overlapping; no interface
