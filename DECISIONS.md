@@ -4111,9 +4111,7 @@ The criteria below are kept as fixed, with RC2's and RC6's conditions as this ru
 - RC4, RC9: `drift_diffusion_test`: off, the minority p = 1e-19 of n = 1 is measured against itself; on, against
   ε × 1, against ε × 1e-3 at a node whose majority is 1e-3, with holes as the majority likewise; above ε of the
   majority and for the majority, against itself. `build_test`: the key reads on and off, off by default.
-- RC5: Release 112/112 and Debug 103/103, `solve.heterojunction` included (a second Release run failed
-  `app.live_check` once at `dropped() == 1`, under `-j 6` load; alone it passed 20 of 20. Unit 50 does not touch
-  the app's checker: a timing race in that test, a finding for later). Unit 30's `[.diode_jumps]` and
+- RC5: Release 112/112 and Debug 103/103, `solve.heterojunction` included. Unit 30's `[.diode_jumps]` and
   `[.line_search]` benchmarks: outcomes and iteration counts identical to `main` (`c288391`, built from the same
   tree with the changes stashed). The residual test's MOSFET 0/10 stays 0/10: that case is damping-limited, not a
   rounding floor. **Finding, not Unit 50's:** `main` no longer matches Unit 30's MOSFET record (natural test 2/10
@@ -4127,6 +4125,11 @@ The criteria below are kept as fixed, with RC2's and RC6's conditions as this ru
   every-row case fails; M3 (floor removed): RC4 fails (and RC2, measured with the floor always on); M4 (floor from
   the largest density in the device): RC4 fails at the 1e-3 node; M5 (floor whatever the switch): RC4's off case
   and `solve.heterojunction` fail. All caught.
+- Found on the way, fixed here: `app.live_check`'s stale-result case (XG1) failed once locally under `-j 6` and
+  once on CI (`dropped() == 1` read 0). The test waited for its check function to return, but the worker posts
+  the result after that, so `process()` could run before it. The test now waits on the checker's wake, called
+  after the result is posted; a 50 ms delay injected before the post fails the old test every time and passes the
+  new one; the app tests pass 20 times under `-j 6` (Release) and 5 (Debug). The checker is unchanged.
 
 ---
 
