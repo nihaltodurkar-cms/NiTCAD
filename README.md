@@ -8,6 +8,30 @@ Every model is validated before it lands: analytic and limiting cases, published
 checks, dimensional-reduction identities, convergence studies and hand mutation tests. The design and the evidence
 for each unit are in [`ARCHITECTURE.md`](ARCHITECTURE.md) and [`DECISIONS.md`](DECISIONS.md).
 
+![The NiTCAD application with the 3D MOSFET example: the device tree, the electrostatic potential on the device, and the view settings](docs/images/app.png)
+
+## Gallery
+
+Rendered with `nitcad plot` from the decks in `examples/`.
+
+**3D**: an n-channel MOSFET (`examples/mosfet_3d.deck`, 1,911 nodes) at V<sub>G</sub> = 1.2 V, V<sub>D</sub> = 0.5 V.
+
+| Electrostatic potential | Electron density, a quarter clipped away |
+|---|---|
+| ![3D MOSFET potential](docs/images/mosfet_3d_potential.png) | ![3D MOSFET electron density with a clipping box](docs/images/mosfet_3d_n_clip.png) |
+
+**2D**: an n-channel MOSFET in cross-section (`examples/mosfet_2d.deck`): 50 nm oxide, V<sub>D</sub> = 0.1 V.
+
+| Electron density at V<sub>G</sub> = 1.5 V | Transfer curve I<sub>D</sub>–V<sub>G</sub> |
+|---|---|
+| ![2D MOSFET electron density](docs/images/mosfet_2d_n.png) | ![2D MOSFET Id-Vg](docs/images/mosfet_2d_idvg.png) |
+
+**1D**: a pn diode (`examples/pn_diode_1d.deck`) and a MOS capacitor (`examples/moscap_cv.deck`).
+
+| pn diode band diagram at 0.7 V forward | MOS capacitor C–V at 1 MHz |
+|---|---|
+| ![1D pn diode band diagram](docs/images/diode_1d_bands.png) | ![MOS capacitor C-V](docs/images/moscap_cv.png) |
+
 ## Capabilities
 
 **Physics**
