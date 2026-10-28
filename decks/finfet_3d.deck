@@ -24,7 +24,7 @@
 # 11.3), and the mesh convergence is unchecked. Lombardi surface mobility (Unit 46) is available but
 # needs sub-nm spacing at the interfaces; it lowers the 0.8 V current by 12% on this mesh. MLDA quantum
 # confinement (Unit 47) is available too: it lowers the 0.8 V current by 2.6% and the 1 uA threshold
-# rises 10 mV. With it, set line_search = natural below (DECISIONS.md Unit 47, limitations).
+# rises 10 mV.
 
 [device]
 temperature = 300
@@ -134,7 +134,7 @@ field_mobility = on
 electron_mobility = masetti
 # srh, auger and bgn are on by default.
 # Inversion-layer mobility (Unit 46): surface_mobility = lombardi
-# Quantum confinement (Unit 47): quantum_confinement = mlda, with line_search = natural below
+# Quantum confinement (Unit 47): quantum_confinement = mlda
 
 [solver]
 # The default sparse LU spent over 45 min on the first bias point, and GMRES+ILUT (single-threaded
@@ -142,8 +142,6 @@ electron_mobility = masetti
 # backend = pardiso
 # mkl = <path to mkl_rt.3.dll>
 # threads = 6
-# With quantum_confinement = mlda use natural: once the residual is at rounding the residual test
-# rejects the steps still needed, and the sweep stops at 0.35 V; natural runs in 6.7 min.
 line_search = residual
 max_cuts = 8
 
