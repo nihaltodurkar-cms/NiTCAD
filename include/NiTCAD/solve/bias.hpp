@@ -83,6 +83,11 @@ struct BiasOptions {
     // (Unit 45; results::RateFields; DECISIONS.md RQ1): on by default, off to save memory and file
     // size. They are read from the state after it converged and change nothing in the solve.
     bool store_rates = true;
+    // The minority floor (Unit 50; assemble::DriftDiffusion::set_minority_floor; DECISIONS.md
+    // RD2): Newton's update size measures each density against at least eps of the larger density
+    // at its node, so a deep minority's rounding does not hold a point. Off by default: a material
+    // whose minorities converge (4H-SiC) can stall with it on.
+    bool minority_floor = false;
     // Electrothermal (models.electrothermal, Unit 23): per bias point, the temperature of each
     // thermal contact in K, in the device's thermal-contact order; empty: the device's own at
     // every point. Read only with the model on.

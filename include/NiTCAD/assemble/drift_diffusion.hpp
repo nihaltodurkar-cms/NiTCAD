@@ -167,7 +167,9 @@
 //   entries; without paths the pattern is unchanged. The geometry's own dependence on psi is not
 //   in the Jacobian (frozen; ARCHITECTURE.md 6.2).
 // With any generation model on, update_size measures densities against 1e-8 of the largest (as
-// impact ionization, Unit 19).
+// impact ionization, Unit 19). With set_minority_floor on (Unit 50, DECISIONS.md RD2; off by
+// default) every density is also measured against at least eps of the larger density at its node:
+// a deep minority's correction is rounding there.
 //
 // Electrothermal coupling (Unit 23, models.electrothermal; DECISIONS.md T1-T14; legacy thermal.py,
 // thermal_grid.py). Each node has a fourth unknown, the scaled temperature rise
@@ -445,6 +447,10 @@ public:
     static constexpr double matters = 1e-10;
 
     // Newton hooks (see the header comment).
+    // The minority floor (Unit 50, DECISIONS.md RD2; off by default): with it on, update_size
+    // measures every density against at least eps of the larger density at its node.
+    void set_minority_floor(bool on) noexcept { minority_floor_ = on; }
+    [[nodiscard]] bool minority_floor() const noexcept { return minority_floor_; }
     [[nodiscard]] double update_size(std::span<const double> x,
                                      std::span<const double> dx) const;
     void apply_update(std::span<double> x, std::span<const double> dx, double max_update) const;
@@ -829,6 +835,7 @@ private:
     std::vector<PathLayout> layouts_;
     std::vector<linalg::Triplet> base_triplets_;
     bool generation_ = false;  // any generation model on
+    bool minority_floor_ = false;  // Unit 50 RD2, set_minority_floor
     int dimension_ = 1;
     double generation_scale_ = 0.0;        // 1 / R0: [cm^-3 s^-1] to the rows' scaled rate
     double impact_resolution_ = 0.0;       // models.impact_current_resolution

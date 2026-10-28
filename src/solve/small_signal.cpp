@@ -65,6 +65,7 @@ std::expected<results::SmallSignal, base::Error> solve_small_signal_unobserved(
     if (!solver) return std::unexpected(std::move(solver.error()));
     auto system = assemble::DriftDiffusion::create(device, *scaling, steady.models);
     if (!system) return std::unexpected(std::move(system.error()));
+    system->set_minority_floor(steady.minority_floor);
 
     // The operating points. sweep_bias checks the points and the initial state.
     auto sweep = sweep_bias(device, points, steady, initial, control);

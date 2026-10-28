@@ -69,6 +69,8 @@
 //                     max_backward_error; max_refinement_steps; min_pivot_ratio; Ns = <cm^-3>;
 //                     weighted_current = on | off  (Unit 32: the weighted terminal current)
 //                     rates = on | off  (Unit 45: store the generation-recombination rates; on)
+//                     minority_floor = on | off  (Unit 50: densities against eps of the node's
+//                       majority in the update size; off)
 //   [equilibrium]     (empty) the analysis is the equilibrium solve, or
 //   [sweep]           contact <name> = <series>  (a series: one value held at every point, a comma
 //                       list or first : last : step; all series longer than one value have the

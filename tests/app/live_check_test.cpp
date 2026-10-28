@@ -56,26 +56,30 @@ TEST_CASE("app live check: errors at their lines, then the plan, off the UI thre
 }
 
 TEST_CASE("app live check: a stale check's result is never applied (XG1)", "[app]") {
-    // Each check waits inside the worker until the test lets that call go; the test knows when it ended.
+    // Each check waits inside the worker until the test lets that call go. The test knows a result
+    // is posted from the wake, which the worker calls after posting it: the check returning is
+    // earlier, and process() run in between finds nothing (it failed so on CI, under load).
     std::mutex m;
     std::condition_variable cv;
-    int started = 0, released = 0, ended = 0;
-    app::LiveChecker live({}, [&](const std::string& text, const fs::path& path) {
-        int call = 0;
-        {
-            std::unique_lock lock(m);
-            call = ++started;
+    int started = 0, released = 0, posted = 0;
+    app::LiveChecker live(
+        [&] {
+            {
+                std::scoped_lock lock(m);
+                ++posted;
+            }
             cv.notify_all();
-            cv.wait(lock, [&] { return released >= call; });
-        }
-        auto r = app::check_deck(text, path);
-        {
-            std::scoped_lock lock(m);
-            ended = call;
-        }
-        cv.notify_all();
-        return r;
-    });
+        },
+        [&](const std::string& text, const fs::path& path) {
+            int call = 0;
+            {
+                std::unique_lock lock(m);
+                call = ++started;
+                cv.notify_all();
+                cv.wait(lock, [&] { return released >= call; });
+            }
+            return app::check_deck(text, path);
+        });
     const auto until = [&](auto done) {
         std::unique_lock lock(m);
         cv.wait(lock, done);
@@ -94,7 +98,7 @@ TEST_CASE("app live check: a stale check's result is never applied (XG1)", "[app
     // Edited while the first check runs: the newer text is what the user sees.
     live.submit(app_test::diode_sweep(), {});
     let_go(1);
-    until([&] { return ended == 1; });
+    until([&] { return posted == 1; });
     // The first check's result has arrived and is dropped: the error it found is not shown.
     CHECK_FALSE(live.process());
     CHECK(live.applied() == 0);

@@ -131,7 +131,7 @@ constexpr std::array<KeyInfo, 17> model_keys{{
     {"electrothermal", 0, false, "off", "lattice heat equation", on_off, {}, {}},
 }};
 
-constexpr std::array<KeyInfo, 25> solver_keys{{
+constexpr std::array<KeyInfo, 26> solver_keys{{
     {"equations", 0, false, "drift_diffusion", "drift_diffusion | equilibrium_poisson", equations, {}, {}},
     {"max_iterations", 0, false, "100", "Newton iterations per point", {}, {}, {}},
     {"tol_update", 0, false, "1e-8", "convergence: largest scaled update", {}, {}, {}},
@@ -157,6 +157,7 @@ constexpr std::array<KeyInfo, 25> solver_keys{{
     {"Ns", 0, false, "<cm^-3>", "the density scale", {}, {}, {}},
     {"weighted_current", 0, false, "off", "weighted terminal current", on_off, {}, {}},
     {"rates", 0, false, "on", "store generation-recombination rates", on_off, {}, {}},
+    {"minority_floor", 0, false, "off", "densities against eps of the majority", on_off, {}, {}},
 }};
 
 constexpr std::array<KeyInfo, 3> sweep_keys{{

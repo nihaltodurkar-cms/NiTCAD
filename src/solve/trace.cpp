@@ -292,6 +292,7 @@ std::expected<results::Sweep, base::Error> trace_bias_unobserved(const device::D
     }
     auto system = assemble::DriftDiffusion::create(device, *scaling, steady.models);
     if (!system) return std::unexpected(std::move(system.error()));
+    system->set_minority_floor(steady.minority_floor);
     assemble::DriftDiffusion& dd = *system;
     // Unit 32: the weighted current of every traced point (the first comes from sweep_bias).
     std::optional<detail::WeightedCurrents> weighted;

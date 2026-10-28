@@ -218,6 +218,48 @@ TEST_CASE("drift-diffusion: update hooks measure the full correction and keep de
     REQUIRE(system.update_size(y, dy) == 1e-16 / 1e-15);
 }
 
+TEST_CASE("drift-diffusion: with the minority floor on a minority density is measured against eps of the node's majority (Unit 50 RC4)") {
+    const auto d = diode(*mesh::make_tensor_grid(graded_axis(5)));
+    auto system = *DriftDiffusion::create(d, *assemble::make_scaling(d));
+    constexpr double eps = std::numeric_limits<double>::epsilon();
+    std::vector<double> x(system.unknowns(), 1.0);
+    std::vector<double> dx(system.unknowns(), 0.0);
+    // Off by default (the owner's ruling): node 2's minority, p = 1e-19 of n = 1, is measured
+    // against itself, as before Unit 50.
+    REQUIRE_FALSE(system.minority_floor());
+    x[8] = 1e-19;
+    dx[8] = 1e-27;
+    REQUIRE(system.update_size(x, dx) == 1e-27 / 1e-19);
+    system.set_minority_floor(true);
+    // Node 2: n = 1 (the majority), p = 1e-19 (minority, above the global floor 1e-20 of the
+    // largest, below eps of the majority): measured against eps * 1.
+    x[8] = 1e-19;
+    dx[8] = 1e-27;
+    REQUIRE(system.update_size(x, dx) == 1e-27 / eps);
+    // The majority's own correction, against itself.
+    dx[8] = 0.0;
+    dx[7] = 1e-9;
+    REQUIRE(system.update_size(x, dx) == 1e-9);
+    // A minority above eps of the majority, against itself as before.
+    x[8] = 1e-12;
+    dx[7] = 0.0;
+    dx[8] = 1e-21;
+    REQUIRE(system.update_size(x, dx) == 1e-21 / 1e-12);
+    // The floor follows the node's own majority, not the device's largest density: node 3 with
+    // n = 1e-3 and p = 1e-21 measures p against eps * 1e-3 (2.2e-19; the global floor is 1e-20,
+    // eps of the largest 2.2e-16).
+    x[10] = 1e-3;
+    x[11] = 1e-21;
+    dx[8] = 0.0;
+    dx[11] = 1e-30;
+    REQUIRE(system.update_size(x, dx) == 1e-30 / (eps * 1e-3));
+    // Holes as the majority: n measured against eps * p.
+    x[13] = 1e-20;
+    dx[11] = 0.0;
+    dx[13] = 1e-27;
+    REQUIRE(system.update_size(x, dx) == 1e-27 / eps);
+}
+
 TEST_CASE("drift-diffusion: biases are validated and stamped on the contacts") {
     const auto d = diode(*mesh::make_tensor_grid(graded_axis(5)));
     const auto scaling = *assemble::make_scaling(d);
