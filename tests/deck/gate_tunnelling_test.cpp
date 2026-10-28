@@ -7,6 +7,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -160,13 +161,16 @@ double relative(double a, double b) { return std::abs(a - b) / std::abs(b); }
 // the vacuum level depth - psi at the surface, the gate's E_FG + phi_m with E_FG = -V_G; the range
 // from max(E_c, E_c,G) (n+ poly: E_c,G = E_FG) to the barrier top. A one-way flux (GR2, GR9) puts
 // the other side's level far below the band, so only `from` supplies.
+// At another node than 0 (a gate at x_max): that node's material, the vacuum level from the
+// reference node's intrinsic level.
 enum class Supply { both, semiconductor, electrode };
-double ecb_of_state(const deck::Plan& p, const results::BiasPoint& b, Supply from = Supply::both) {
-    const physics::Semiconductor& si = p.device.material(0);
+double ecb_of_state(const deck::Plan& p, const results::BiasPoint& b, Supply from = Supply::both,
+                    std::size_t node = 0) {
+    const physics::Semiconductor& si = p.device.material(static_cast<mesh::NodeId>(node));
     const device::GateStack& g = p.device.contacts()[gate].gate;
     const physics::InsulatorParameters& ox = physics::silicon_dioxide_tunnelling_parameters;
-    const double depth = physics::intrinsic_level_depth_eV(si, T);
-    const double vac_s = depth - b.fields.potential_V[0];
+    const double depth = physics::intrinsic_level_depth_eV(p.device.material(p.device.reference_node()), T);
+    const double vac_s = depth - b.fields.potential_V[node];
     const double FG = -b.bias_V[gate];
     const double vac_g = FG + assemble::gate_work_function_eV(g, si, T);
     const physics::BarrierSegment seg{vac_s - ox.electron_affinity_eV,
@@ -175,8 +179,8 @@ double ecb_of_state(const deck::Plan& p, const results::BiasPoint& b, Supply fro
     const double richardson = base::q_C *
                               physics::emission_velocity_cm_s(si, physics::Carrier::electron, T) *
                               physics::conduction_band_dos(si, T) / (T * T);
-    const double low = std::max(b.bands.conduction_eV[0], FG);
-    const double Fn = b.bands.electron_fermi_eV[0];
+    const double low = std::max(b.bands.conduction_eV[node], FG);
+    const double Fn = b.bands.electron_fermi_eV[node];
     return physics::tsu_esaki_current(std::span(&seg, 1),
                                       {low, std::numeric_limits<double>::infinity()},
                                       from == Supply::electrode ? Fn - 1e3 : Fn,
@@ -231,6 +235,62 @@ TEST_CASE("Gate tunnelling: a self-consistent MOS capacitor from -2 to +2 V (GC8
         }
     }
     std::printf("GC8 conservation without generation-recombination: worst %.3e relative\n", worst);
+}
+
+// GC8's comparison where the band shift is not zero (GD1): the gate at x_max over 100 nm of
+// germanium, the reference node (node 0) silicon, so the gate node's E_c is the vacuum level less
+// germanium's affinity, not silicon's.
+TEST_CASE("Gate tunnelling: GC8's ECB on a germanium surface, off the reference material",
+          "[gate_tunnelling]") {
+    // GR5 as GC9: the near-singular capacitor (its inversion electrons almost float), here with
+    // the gate at the far end of the ordering, trips the floating-region guard, so it is off.
+    deck::Plan p = must(R"(
+[device]
+temperature = 300
+
+[mesh]
+type = tensor
+x = linspace(0, 950nm, 96) + linspace(950nm, 998nm, 97) + linspace(998nm, 1um, 201)
+
+[region silicon]
+material = silicon
+
+[region germanium]
+material = germanium
+box = 900nm 1um
+
+[doping]
+profile = acceptor constant 5e17
+
+[contact gate]
+kind = gate
+patch = x_max
+oxide_thickness = 1.5nm
+electrode = n_poly
+tunnelling = on
+
+[contact substrate]
+kind = ohmic
+patch = x_min
+
+[sweep]
+contact gate = 0
+)");
+    p.options.linear.min_pivot_ratio = 0.0;
+    const std::size_t top = p.device.mesh().node_count() - 1;
+    REQUIRE(p.device.reference_node() == 0);
+    REQUIRE(p.device.material(static_cast<mesh::NodeId>(top)).parameters().electron_affinity_eV !=
+            p.device.material(0).parameters().electron_affinity_eV);
+    const results::Sweep s = sweep(p, steps(0.0, 1.5, 0.25));
+    for (const results::BiasPoint& b : s.points) {
+        if (b.bias_V[gate] == 0.0) continue;
+        const double J = ecb_of_state(p, b, Supply::both, top);
+        const double one_way = std::max(std::abs(ecb_of_state(p, b, Supply::semiconductor, top)),
+                                        std::abs(ecb_of_state(p, b, Supply::electrode, top)));
+        CAPTURE(b.bias_V[gate], J, one_way, b.tunnelling_ecb[gate]);
+        CHECK(b.tunnelling_ecb[gate] != 0.0);
+        CHECK(std::abs(b.tunnelling_ecb[gate] - J) <= 1e-12 * one_way);
+    }
 }
 
 // Quadratic, as SC11: in the asymptotic window each correction at most the square of the last.
@@ -413,6 +473,203 @@ TEST_CASE("Gate tunnelling: a 3D corner node takes one path per face (GC11)", "[
     CHECK(relative(Ic[0], width * Ia[0]) <= 1e-9);
     CHECK(relative(Ic[1], width * Ib[1]) <= 1e-9);
     CHECK(relative(Ic[0] + Ic[1], width * (Ia[0] + Ib[1])) <= 1e-9);
+}
+
+// GD2: a path ends where it meets a semiconductor node. Along x, electrode | 1.5 nm SiO2 |
+// silicon A | 1.5 nm SiO2 | silicon B (A contacted on its y_max face, so it does not float): A
+// tunnels to the gate, B's path meets A, so B has none. At fixed states, moving B's potential
+// leaves the gate's tunnelling current unchanged; moving A's does not.
+TEST_CASE("Gate tunnelling: no path through a semiconductor (GD2)", "[gate_tunnelling]") {
+    const deck::Plan p = must(R"(
+[device]
+temperature = 300
+
+[mesh]
+type = tensor
+x = linspace(0, 20nm, 401)
+y = linspace(0, 1nm, 3)
+
+[region oxide]
+material = sio2
+
+[region silicon_a]
+material = silicon
+box = 1.5nm 3nm  0 1nm
+
+[region silicon_b]
+material = silicon
+box = 4.5nm 20nm  0 1nm
+
+[doping]
+profile = acceptor constant 5e17
+
+[contact gate]
+kind = electrode
+patch = x_min
+electrode = n_poly
+tunnelling = on
+
+[contact substrate]
+kind = ohmic
+patch = x_max
+
+[contact a]
+kind = ohmic
+patch = y_max
+box = 1.5nm 3nm  1nm 1nm
+
+[sweep]
+contact gate = 0
+)");
+    const auto scaling = *assemble::make_scaling(p.device);
+    auto system = *assemble::DriftDiffusion::create(p.device, scaling, p.options.models);
+    REQUIRE(system.set_bias(std::vector<double>{1.0, 0.0, 0.0}).has_value());
+    const auto points = p.device.mesh().points();
+    const auto current = [&](double shift_a, double shift_b) {
+        std::vector<double> psi(points.size(), 0.0);
+        for (std::size_t i = 0; i < points.size(); ++i) {
+            if (p.device.is_insulator(static_cast<mesh::NodeId>(i))) continue;
+            psi[i] = points[i][0] < 4e-7 ? shift_a : shift_b;
+        }
+        const auto t = system.gate_tunnelling_currents(system.state_from_potential(psi));
+        return t.ecb[gate] + t.hvb[gate] + t.evb[gate];
+    };
+    const double base = current(0.0, 0.0);
+    CHECK(base != 0.0);
+    CHECK(current(0.0, 3.0) == base);
+    CHECK(current(3.0, 0.0) != base);
+}
+
+// GD5, GD6, GD10: each process tunnels with its own mass. A lumped gate's stack with unequal masses
+// (deck keys), at one fixed state (the equilibrium potential under 3 V, where all three processes
+// carry current); raising one mass changes its own process's current and leaves the others' exact.
+TEST_CASE("Gate tunnelling: each process takes its own mass (GD5, GD6, GD10)", "[gate_tunnelling]") {
+    const auto plan = [](double mn, double mp, double mevb) {
+        char text[2048];
+        std::snprintf(text, sizeof text, R"(
+[device]
+temperature = 300
+
+[mesh]
+type = tensor
+x = linspace(0, 2nm, 201) + linspace(2nm, 50nm, 97) + linspace(50nm, 1um, 96)
+
+[region silicon]
+material = silicon
+
+[doping]
+profile = acceptor constant 5e17
+
+[contact gate]
+kind = gate
+patch = x_min
+oxide_thickness = 1.5nm
+electrode = n_poly
+tunnelling = on
+oxide_affinity = 1.05
+oxide_band_gap = 9.0
+oxide_mass_n = %g
+oxide_mass_p = %g
+oxide_mass_evb = %g
+
+[contact substrate]
+kind = ohmic
+patch = x_max
+
+[sweep]
+contact gate = 0
+)",
+                      mn, mp, mevb);
+        return must(text);
+    };
+    const deck::Plan base = plan(0.40, 0.60, 0.50);
+    const auto eq = solve::solve_equilibrium(base.device);
+    REQUIRE(eq.has_value());
+    const auto currents = [&](const deck::Plan& p) {
+        const auto scaling = *assemble::make_scaling(p.device);
+        auto system = *assemble::DriftDiffusion::create(p.device, scaling, p.options.models);
+        REQUIRE(system.set_bias(std::vector<double>{3.0, 0.0}).has_value());
+        std::vector<double> psi(eq->fields.potential_V);
+        for (double& v : psi) v /= scaling.V_T;
+        const auto t = system.gate_tunnelling_currents(system.state_from_potential(psi));
+        return std::array<double, 3>{t.ecb[gate], t.hvb[gate], t.evb[gate]};
+    };
+    const std::array<double, 3> b = currents(base);
+    CAPTURE(b[0], b[1], b[2]);
+    for (const double v : b) REQUIRE(v != 0.0);
+    const std::array<double, 3> raised[3] = {currents(plan(0.45, 0.60, 0.50)),
+                                             currents(plan(0.40, 0.65, 0.50)),
+                                             currents(plan(0.40, 0.60, 0.55))};
+    for (std::size_t k = 0; k < 3; ++k) {      // the mass raised: ECB's, HVB's, EVB's
+        for (std::size_t j = 0; j < 3; ++j) {  // the process
+            CAPTURE(k, j, raised[k][j]);
+            if (j == k) CHECK(std::abs(raised[k][j]) < std::abs(b[j]));
+            else CHECK(raised[k][j] == b[j]);
+        }
+    }
+}
+
+// GD10: an insulator region's band-data keys, each into its own field (five distinct values).
+TEST_CASE("Gate tunnelling: an insulator region's band data from the deck (GD10)", "[gate_tunnelling]") {
+    const deck::Plan p = must(R"(
+[device]
+temperature = 300
+
+[mesh]
+type = tensor
+x = linspace(0, 1.45nm, 30) + linspace(1.495nm, 1.505nm, 2) + linspace(1.505nm, 1um, 101)
+
+[region hfo2]
+material = insulator
+eps_r = 22
+electron_affinity_eV = 2.55
+band_gap_eV = 5.7
+tunnel_mass_n = 0.18
+tunnel_mass_p = 0.21
+tunnel_mass_evb = 0.24
+
+[region silicon]
+material = silicon
+box = 1.5nm 2um
+
+[doping]
+profile = acceptor constant 5e17
+
+[contact gate]
+kind = electrode
+patch = x_min
+electrode = metal
+work_function = 4.4
+tunnelling = on
+
+[contact substrate]
+kind = ohmic
+patch = x_max
+
+[sweep]
+contact gate = 0
+)");
+    const device::Region& r = p.device.regions()[0];
+    REQUIRE(r.name == "hfo2");
+    const physics::InsulatorParameters& b = std::get<physics::Insulator>(r.material).parameters();
+    CHECK(b.eps_r == 22.0);
+    CHECK(b.electron_affinity_eV == 2.55);
+    CHECK(b.band_gap_eV == 5.7);
+    CHECK(b.tunnel_mass_n == 0.18);
+    CHECK(b.tunnel_mass_p == 0.21);
+    CHECK(b.tunnel_mass_evb == 0.24);
+}
+
+// GD9: the weighted terminal current (Unit 32) has no tunnelling term, so it is refused.
+TEST_CASE("Gate tunnelling: the weighted current is refused (GD9)", "[gate_tunnelling]") {
+    deck::Plan p = must(deck_of({}));
+    p.options.weighted_current = true;
+    const std::vector<std::vector<double>> points{{0.1, 0.0}};
+    const auto s = solve::sweep_bias(p.device, points, p.options);
+    REQUIRE_FALSE(s.has_value());
+    INFO(s.error().message);
+    CHECK(s.error().code == base::ErrorCode::invalid_input);
+    CHECK(s.error().message.find("gate tunnelling") != std::string::npos);
 }
 
 TEST_CASE("Gate tunnelling: the small-signal conductance and a transient (GC12)",

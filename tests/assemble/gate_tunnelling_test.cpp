@@ -396,6 +396,20 @@ TEST_CASE("gate tunnelling assemble: GC6 EVB needs the bands crossed") {
     REQUIRE(at(-1.0) == 0.0);
     REQUIRE(at(0.05) == 0.0);
     REQUIRE(at(3.0) != 0.0);
+    // GD6, GD7: the rows carry -T_n and +T_p, and T_n - T_p is the reported EVB current (both of
+    // its directions with the signs that make them add). Deep inversion: the semiconductor's
+    // valence electrons into the gate (the hole row only); strong accumulation: the gate's valence
+    // electrons into the semiconductor's conduction band (the electron row only).
+    for (const double vg : {3.0, -3.0}) {
+        const std::vector<double> bias{vg, 0.0};
+        const auto x = probe(system, d_on, s, models, bias, 0, false);
+        const std::vector<double> rows = tunnel_rows(d_on, d_off, bias, x, models);
+        REQUIRE(system.set_bias(bias).has_value());
+        const double evb = system.gate_tunnelling_currents(x).evb[0];
+        CAPTURE(vg, rows[1], rows[2], evb);
+        REQUIRE(rows[vg > 0.0 ? 2 : 1] != 0.0);
+        REQUIRE(std::abs(-(rows[1] + rows[2]) - evb) <= 1e-12 * std::abs(evb));
+    }
 }
 
 TEST_CASE("gate tunnelling assemble: GC13 refusals") {

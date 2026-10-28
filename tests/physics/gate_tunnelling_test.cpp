@@ -191,8 +191,10 @@ TEST_CASE("gate tunnelling: the current's partials against central differences")
     const double T = 300.0, A = 120.0;
     std::vector<BarrierSegment> b{{2.9, 2.6, 0.5 * nm, 0.5}, {1.4, 0.6, 1.5 * nm, 0.2}};
     struct Case { double El, Eh, F1, F2; };
+    // The last case's levels put the barrier top (2.9) below the supply cut: the range ends there.
     for (const Case c : {Case{0.0, inf, -0.2, -1.2}, Case{0.0, 0.5, 0.1, -0.9},
-                         Case{-0.4, inf, -0.3, 0.2}, Case{0.0, inf, 1.0, 0.9}}) {
+                         Case{-0.4, inf, -0.3, 0.2}, Case{0.0, inf, 1.0, 0.9},
+                         Case{0.0, inf, 2.5, 1.9}}) {
         std::vector<double> dW(4, 0.0);
         const TunnelCurrent J = tsu_esaki_current(b, {c.El, c.Eh}, c.F1, c.F2, T, A, dW);
         const auto at = [&](double El, double Eh, double F1, double F2, const std::vector<BarrierSegment>& bb) {
@@ -224,6 +226,25 @@ TEST_CASE("gate tunnelling: insulator band data") {
     REQUIRE(has_band_data(silicon_dioxide_tunnelling_parameters));
     REQUIRE(evb_mass(silicon_dioxide_tunnelling_parameters) == 0.50);
     REQUIRE(Insulator::create(silicon_dioxide_tunnelling_parameters).has_value());
+    // GD5's SiO2 values (Gehring 2003; masses by owner ruling): every other test takes them from
+    // this constant, so only here would a changed value show.
+    REQUIRE(silicon_dioxide_tunnelling_parameters.electron_affinity_eV == 1.05);
+    REQUIRE(silicon_dioxide_tunnelling_parameters.band_gap_eV == 9.0);
+    REQUIRE(silicon_dioxide_tunnelling_parameters.tunnel_mass_n == 0.50);
+    REQUIRE(silicon_dioxide_tunnelling_parameters.tunnel_mass_p == 0.50);
+    REQUIRE(silicon_dioxide_tunnelling_parameters.eps_r == silicon_dioxide_parameters.eps_r);
+    // Unequal masses: EVB takes the electron mass unless its own is given.
+    InsulatorParameters q = silicon_dioxide_tunnelling_parameters;
+    q.tunnel_mass_n = 0.4;
+    q.tunnel_mass_p = 0.6;
+    REQUIRE(evb_mass(q) == 0.4);
+    q.tunnel_mass_evb = 0.3;
+    REQUIRE(evb_mass(q) == 0.3);
+    q.tunnel_mass_p = 0.0;
+    REQUIRE_FALSE(has_band_data(q));
+    q.tunnel_mass_p = 0.6;
+    q.tunnel_mass_n = 0.0;
+    REQUIRE_FALSE(has_band_data(q));
     InsulatorParameters p = silicon_dioxide_parameters;
     p.band_gap_eV = 5.7;  // gap without masses
     auto e = Insulator::create(p);

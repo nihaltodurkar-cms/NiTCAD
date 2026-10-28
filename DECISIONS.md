@@ -4465,6 +4465,39 @@ A/cm² in accumulation, where the current comes from the gate (the measured ECB 
   its 2D device's current; equal to the printed seven digits (8.949119e-10 and 1.002478e-09 A), within 1e-9.
   Mutant: a node keeping only its first tunnel (the corner losing its second face's path) fails by 8.7e-4.
 
+**GC17's hand mutants, as run (2026-10-29).** 22 mutants, each built in Release and run against the gate
+tunnelling tests (physics, assemble, deck), then reverted. All are caught; none is recorded as equivalent. Seven
+first survived and each gap was closed with a test before the mutant was run again:
+
+| Row | Mutant | Caught by |
+|---|---|---|
+| GD1 | E_c without the band shift | survived (all-silicon tests: the shift is 0); new: GC8's ECB on a germanium surface with the gate at x_max, off the reference material |
+| GD1 | the lumped gate's vacuum level +0.1 eV | GC8, GC15 |
+| GD2 | the corner node keeps one tunnel | GC11 in 3D |
+| GD2 | the lumped oxide 1.1 t_ox | GC8 |
+| GD2 | an electrode path continuing through semiconductor nodes | survived; new: no path through a semiconductor (fixed states, electrode / SiO₂ / Si / SiO₂ / Si) |
+| GD3 | the transmission e^(−S) for e^(−2S) | GC3 slopes |
+| GD3 | the turning-point segment's action halved | GC3 FN slope, the current's partials |
+| GD3 | the two-sided segment's end partials swapped | the segment and current partials |
+| GD4 | the supply cut at 10 kT | GC5 |
+| GD4 | no derivative through the barrier top at the top cut | survived (no case reached that cut); new: a fifth partials case with the levels near the top |
+| GD4 | an end root shared across a discontinuous step | GC5, the current's partials |
+| GD4 | the supply logistic's branches swapped | the current's partials |
+| GD5 | EVB's mass falling back to the hole mass | survived (every insulator had equal masses); new: unequal masses in the band data test, and SiO₂'s ruled values pinned |
+| GD6 | EVB's semiconductor-valence direction with the wrong sign | survived (only != 0 was checked); new: GC6 at +3 V, the rows −T_n and +T_p against the reported EVB current |
+| GD6 | EVB's gate-valence direction with the wrong sign | GC6 at −3 V (added with the one above) |
+| GD6 | HVB with the electron mass | new: each process takes its own mass (fixed state, unequal masses through the gate's keys) |
+| GD7 | HVB's terminal current with the wrong sign | GC10 |
+| GD8 | `on` without EVB | the assemble tests (GC7 stacks) |
+| GD9 | no electrothermal refusal | GC13 |
+| GD9 | no weighted-current refusal | survived; new: the weighted current refused with gate tunnelling |
+| GD10 | the gate's `oxide_mass_n` and `oxide_mass_p` swapped | each process takes its own mass |
+| GD10 | a region's `electron_affinity_eV` into its band gap | survived (only the hidden FinFET case uses region keys); new: an insulator region's band data from the deck |
+
+The germanium case needs the floating-region guard off, as GC9 (GR5): with the gate at x_max the capacitor's
+near-singularity meets the guard. A lumped `n_poly` gate takes its work function from the channel's material (the
+gate electrostatics' convention, `assemble::gate_work_function_eV`), so on germanium it is an n+ germanium gate.
+
 ---
 
 ## New questions the advisor raised (not yet in `ARCHITECTURE.md`)
