@@ -4016,6 +4016,71 @@ bit-identical; no deck or example uses layers (only the generator tests, SC10 an
 - BC6: 3/3 caught. The merge reverted to the single pass (BC1, BC2: 19 failures); an exact break replacing a
   lattice one (BC3); the bottom node as `a + t u` (BC3).
 
+### Unit 50 — Newton at the rounding floor: the residual line search and the minority-density floor (started 2026-10-28; on `solve/rounding-floors`)
+
+**Owner request:** "solver unit" (2026-10-28): the unit Unit 47 proposed after diagnosing two Newton stalls
+(DECISIONS.md Unit 47 on `physics/quantum-confinement`, PR #66): (a) the residual line search at a rounding
+residual (the FinFET with MLDA stalled at 0.35 V); (b) the minority-density floor (the 1e17 long channel with
+Lombardi chatters at 1–4e-8).
+
+**Reproduced on `main` (before code), one device for both.** Unit 46's 1e17 long-channel n-MOSFET
+(`surface_mobility_test.cpp`, Vg 0–6.5 V in 0.5 V, Vd = 10 mV) with Lombardi, Release:
+- Default options: all 14 points, 55 s, but at 0.5, 2.5, 3.5, 4.0, 4.5 and 5.5 V the corrections chatter at
+  1.0–3.8e-8 for up to 14 iterations and finish only when one dips below 1e-8. The largest correction is always
+  a minority hole in an n+ pocket: p = 2.1–2.8e-19 of the scaled majority (about 27 cm⁻³ against 1e20), its
+  correction 1–7e-27 of the majority, so 1–4e-8 of p. The global floor (1e-20 of the largest density) is below p,
+  so these count.
+- `line_search = residual`: no point solves (100 iterations at Vg = 0). From iteration 4 the largest |F| is
+  3e-11, rounding of the large rows, while one minority-hole node (p = 2.75e-20) still needs a factor of 8.7; the
+  Armijo test on Σ F² sees only the large rows' noise, takes 2^-10-ish steps, and p creeps by 0.6% an iteration.
+- Measured against each row's own scale s_i = Σ_j |J_ij x_j| (the size of the terms it sums), that hole row's
+  residual is 1.5e14 times ε s_i: it is not rounding, only invisible in Σ F². Converged states sit at
+  0.9–7.5 ε s_i; the chattering states at about 1e3 ε s_i on the minority rows (the solve's rounding, not the rows').
+- Prototypes (environment-switched, not committed): Armijo on Σ (F_i / s_i)² alone stalls the equilibrium
+  solve at 2^-10 steps (the clipped step is not a descent direction for it, Unit 30's finding); passing a trial
+  that satisfies Armijo on **either** merit solves all 14 points. Measuring n and p against
+  max(density, global floor, ε max(n, p) at the node) converges every point quadratically to 3e-11–1.4e-10, 47 s,
+  drain currents equal to the default run's within 1e-11 (11 of 14 bit-identical).
+
+**Owner rulings (2026-10-28, all as recommended):** (1) the residual test passes a trial on either merit, or
+when every row is within 64 ε of its scale; (2) the floor ε × the node's majority density, on by default;
+(3) in scope: the FinFET deck as a regression, a recheck of Unit 48's rounding-limited criteria (report only),
+and a retest of PR #66's FinFET with MLDA and the residual test once this merges.
+
+**Design.**
+- RD1 (`solve::newton_solve`, residual test only): at each searched iteration, s_i = Σ_j |J_ij x_j| from J and x
+  at the iterate (1 where it is 0). A trial passes when Σ F² or Σ (F_i / s_i)² falls by the Armijo factor
+  (1 − 2 α λ), or every |F_i(trial)| ≤ 64 ε s_i. Every trial the old test passed still passes, so a run changes
+  only where the old test rejected the full step. The best trial (none passing) is ranked on the scaled merit.
+  The natural test and runs without a search are unchanged.
+- RD2 (`DriftDiffusion::update_size`): a density correction is measured against max(density, global floor,
+  ε max(n, p) at that node), ε = 2^-52. A minority density below ε of the majority at its node does not change
+  the node's charge in double, and its correction is resolved only to the solve's rounding there. Majority
+  densities (≥ the minority) are measured as before. Insulator nodes and θ unchanged.
+- RD3: no new option or deck key; run identities unchanged (the settings are). Results move within the
+  convergence tolerance.
+
+**Criteria (fixed before code).**
+- RC1: the long channel with Lombardi and `line_search = residual` solves all 14 points (0 before).
+- RC2: the long channel with Lombardi, default options: every point converges with no more than 2 iterations
+  whose correction lies in [1e-8, 1e-4) (up to 13 before), and its drain currents equal the old run's within
+  1e-9 relative.
+- RC3: `newton_test`: a two-row system with rows scaled 1e20 apart, at a state where the large row is at rounding
+  and the small row needs a real correction, converges with the residual test (and fails without RD1); a
+  trial at rounding in every row passes; the Unit 30 cases are unchanged.
+- RC4: `update_size`: a minority density below ε of the majority at its node is measured against ε × majority;
+  above it, and for the majority, against the density as before; insulator nodes unchanged.
+- RC5: Release and Debug suites pass. Unit 30's hidden diode-jump and MOSFET line-search benchmarks: every
+  outcome (converged or not) as recorded in Unit 30 for the natural test; the residual test's recorded failures
+  may only become successes.
+- RC6: the FinFET deck (residual test, PARDISO, 6 threads) solves 17/17 before and after, drain currents within
+  1e-6 relative.
+- RC7 (report only): Unit 48's `[!shouldfail]` SC2/SC8 and SC13 rerun and their values recorded.
+- RC8: hand mutants: the scaled merit dropped (RC1 fails), the at-rounding pass dropped (an RC3 case fails), the
+  floor removed (RC2, RC4 fail), the floor taken from the global largest density instead of the node's (RC4
+  fails).
+- After merge (follow-up, recorded here): PR #66 rebased; its FinFET with MLDA and `line_search = residual` rerun.
+
 ---
 
 ## New questions the advisor raised (not yet in `ARCHITECTURE.md`)
