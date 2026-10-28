@@ -577,21 +577,33 @@ struct Generator {
                 }
             }
             L.top = L.offsets.back();
+            // The lattice inside the owning polygon, clear of other layers and of interface bands.
+            const auto corner = [&](double t, double off) {
+                return Point{L.a[0] + t * L.u[0] + off * L.n[0], L.a[1] + t * L.u[1] + off * L.n[1], 0.0};
+            };
+            // Each column's node on the edge: the given point where there is one, the segment's ends
+            // and patch ends (Unit 49 BD2), so the edge, a patch and the lattice share it.
+            std::vector<Point> bottom;
+            for (const double t : L.along) bottom.push_back(corner(t, 0.0));
+            bottom.front() = in.a;
+            bottom.back() = in.b;
             // Patch ends on the segment become lattice columns.
             for (const PatchSegment& p : g.patches) {
                 for (const Point& q : {p.a, p.b}) {
                     if (predicates::orient2d(in.a, in.b, q) != 0 || !within(q, in.a, in.b)) continue;
                     const double t = dist(in.a, q);
                     const auto it = std::ranges::lower_bound(L.along, t);
-                    const bool near = (it != L.along.end() && std::abs(*it - t) <= 1e-12 * L.len) ||
-                                      (it != L.along.begin() && std::abs(*(it - 1) - t) <= 1e-12 * L.len);
-                    if (!near) L.along.insert(it, t);
+                    const auto i = static_cast<std::size_t>(it - L.along.begin());
+                    if (it != L.along.end() && std::abs(*it - t) <= 1e-12 * L.len) {
+                        bottom[i] = q;
+                    } else if (it != L.along.begin() && std::abs(*(it - 1) - t) <= 1e-12 * L.len) {
+                        bottom[i - 1] = q;
+                    } else {
+                        L.along.insert(it, t);
+                        bottom.insert(bottom.begin() + static_cast<std::ptrdiff_t>(i), q);
+                    }
                 }
             }
-            // The lattice inside the owning polygon, clear of other layers and of interface bands.
-            const auto corner = [&](double t, double off) {
-                return Point{L.a[0] + t * L.u[0] + off * L.n[0], L.a[1] + t * L.u[1] + off * L.n[1], 0.0};
-            };
             for (const double t : {0.0, L.len}) {
                 for (const double off : {0.0, L.top}) {
                     const auto r = region_at(corner(t, off));
@@ -619,8 +631,9 @@ struct Generator {
             }
             // Lattice nodes. The bottom row is on the boundary edge; side nodes that fall exactly on
             // another boundary edge are pinned there.
-            for (const double t : L.along) {
-                const Point p0 = corner(t, 0.0);
+            for (std::size_t i = 0; i < L.along.size(); ++i) {
+                const double t = L.along[i];
+                const Point& p0 = bottom[i];
                 add(p0, NodeKind::layer, L.region);
                 pinned.push_back({p0, *edge});
                 for (const double off : L.offsets) {
@@ -671,13 +684,20 @@ struct Generator {
                 if (pin.edge == edge) t.push_back({dist(e.a, pin.p), NodeKind::layer, pin.p});
             }
             std::ranges::sort(t, [](const Break& l, const Break& r) { return l.x < r.x; });
-            std::vector<Break> filled;
-            const double h = region_size(polys[e.poly].region);
+            // Coincident breaks merge first, whatever their order: a lattice break wins (its point is
+            // the given one where there is one, Unit 49 BD2), else an exact one (Unit 49 BD1).
+            std::vector<Break> merged;
             for (const Break& b : t) {
-                if (!filled.empty() && b.x - filled.back().x <= 1e-12 * len) {
-                    if (b.kind == NodeKind::layer || b.exact) filled.back() = b;  // keep the exact one
+                if (!merged.empty() && b.x - merged.back().x <= 1e-12 * len) {
+                    const Break& kept = merged.back();
+                    if (kept.kind != NodeKind::layer && (b.kind == NodeKind::layer || b.exact)) merged.back() = b;
                     continue;
                 }
+                merged.push_back(b);
+            }
+            std::vector<Break> filled;
+            const double h = region_size(polys[e.poly].region);
+            for (const Break& b : merged) {
                 // Between two lattice nodes the layer sets the spacing: no fill (U14).
                 if (!filled.empty() && !(b.kind == NodeKind::layer && filled.back().kind == NodeKind::layer)) {
                     const double gap = b.x - filled.back().x;

@@ -508,8 +508,8 @@ constexpr double delaunay_width = 1e-4;  // [cm]
 
 // SC10's 2D Delaunay diode (mesh::generate_mesh): a structured boundary layer on the contact with
 // the 1D mesh's spacing to 1 um, past the depletion layer at -1 V (0.45 um) and its Debye tail,
-// 0.1 um along it, and the generator's triangles beyond (max_size 0.1 um); the region is the
-// deck's silicon (the Unit 35 defaults), from `p`.
+// 0.5 um along it (coarser than max_size: Unit 49), and the generator's triangles beyond
+// (max_size 0.1 um); the region is the deck's silicon (the Unit 35 defaults), from `p`.
 device::Device delaunay_diode(const deck::Plan& p) {
     const double W = delaunay_width, length = 2e-4;
     std::vector<double> x = deck_test::linspace(0.0, 2e-5, 201);
@@ -524,8 +524,7 @@ device::Device delaunay_diode(const deck::Plan& p) {
                        {{"x_min", {0, 0, 0}, {0, W, 0}}, {"x_max", {length, 0, 0}, {length, W, 0}}}};
     mesh::MeshOptions2D o;
     o.max_size = 1e-5;
-    // Along the contact at max_size (a coarser lattice has its edge split by the refinement).
-    o.layers = {{{0, 0, 0}, {0, W, 0}, deck_test::linspace(0.0, W, 11), offsets}};
+    o.layers = {{{0, 0, 0}, {0, W, 0}, deck_test::linspace(0.0, W, 3), offsets}};
     auto generated = mesh::generate_mesh(g, o);
     if (!generated) FAIL(generated.error().message);
     mesh::Mesh m = std::move(generated->mesh);

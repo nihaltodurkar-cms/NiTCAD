@@ -8,6 +8,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <algorithm>
 #include <array>
 #include <string>
 #include <vector>
@@ -424,4 +425,79 @@ TEST_CASE("generator: boundary layers take patch ends as columns, and refuse bad
     const auto outer = generate_mesh(square, nested);
     REQUIRE_FALSE(outer.has_value());
     CHECK(outer.error().message.find("overlap") != std::string::npos);
+}
+
+// Unit 49 (BC1, BC2): a layer on a whole boundary edge with its columns coarser than h. Each end
+// column coincides with a domain corner and a patch end; the boundary fill once filled the gap
+// from such an end to the next column at h, and the fill nodes joined the first row with slivers.
+TEST_CASE("generator: no boundary fill between a layer's columns coarser than h (Unit 49)", "[mesh][generate]") {
+    const double W = 1e-4, length = 2e-4, row = 1e-7;
+    std::vector<double> offsets;
+    for (int i = 1; i <= 200; ++i) offsets.push_back(i * row);
+    for (int i = 1; i <= 80; ++i) offsets.push_back(2e-5 + i * 1e-6);
+    for (const int columns : {3, 5}) {
+        std::vector<double> along;
+        for (int i = 0; i < columns; ++i) along.push_back(W * i / (columns - 1));
+        const double dt = W / (columns - 1);
+        Geometry2D g{{rect(0, 0, length, W, 0)}, {{"x_min", {0, 0, 0}, {0, W, 0}}, {"x_max", {length, 0, 0}, {length, W, 0}}}};
+        MeshOptions2D o;
+        o.max_size = 1e-5;
+        o.layers = {{{0, 0, 0}, {0, W, 0}, along, offsets}};
+        const auto m = generate_mesh(g, o);
+        REQUIRE(m.has_value());
+        INFO(columns << " columns");
+        std::size_t on_edge = 0;
+        for (const Point& p : m->simplices.points) {
+            if (p[0] > offsets.back() * (1 + 1e-12)) continue;
+            // Every node in the layer's rectangle is a lattice node (BC2), those on the edge only its columns (BC1).
+            const bool in_row = p[0] == 0.0 || std::ranges::any_of(offsets, [&](double v) { return std::abs(p[0] - v) <= 1e-12 * W; });
+            const bool in_column = std::ranges::any_of(along, [&](double v) { return std::abs(p[1] - v) <= 1e-12 * W; });
+            CHECK((in_row && in_column));
+            on_edge += p[0] == 0.0 ? 1 : 0;
+        }
+        CHECK(on_edge == along.size());
+        for (std::size_t i = 0; i < m->mesh.node_count(); ++i) {
+            const Point& p = m->mesh.points()[i];
+            if (p[0] != 0.0) continue;
+            const bool end = p[1] == 0.0 || p[1] == W;
+            CHECK(close(m->mesh.volumes()[i], (end ? 0.5 : 1.0) * dt * 0.5 * row, 1e-12));
+        }
+        CHECK(close(total(m->mesh.boundary()[0].areas), W, 1e-12));
+    }
+    // The U14 square: a layer on the whole bottom edge, columns 0.25 apart, h 0.1.
+    Geometry2D g{{rect(0, 0, 1, 1, 0)}, {{"bottom", {0, 0, 0}, {1, 0, 0}}}};
+    MeshOptions2D o;
+    o.max_size = 0.1;
+    o.layers = {{{0, 0, 0}, {1, 0, 0}, {0, 0.25, 0.5, 0.75, 1}, {0.05, 0.1, 0.2}}};
+    const auto m = generate_mesh(g, o);
+    REQUIRE(m.has_value());
+    std::size_t on_edge = 0;
+    for (const Point& p : m->simplices.points) on_edge += p[1] == 0.0 ? 1 : 0;
+    CHECK(on_edge == 5);
+}
+
+// Unit 49 (BC3): a column's node on the edge is the given point, the layer's end and a patch end,
+// although a + t u differs from it in the last bit; no second node next to it.
+TEST_CASE("generator: a layer's end and patch-end columns are the given points (Unit 49)", "[mesh][generate]") {
+    const Point a{0.2, 0, 0}, b{0.9, 0, 0}, q{0.4, 0, 0};
+    // The case: the lattice's own construction, a + t u, misses b in the last bit.
+    const double len = std::hypot(b[0] - a[0], b[1] - a[1]);
+    REQUIRE(a[0] + len * ((b[0] - a[0]) / len) != b[0]);
+    Geometry2D g{{rect(0, 0, 1, 1, 0)}, {{"mid", q, b}}};
+    MeshOptions2D o;
+    o.max_size = 0.1;
+    o.layers = {{a, b, {0, 0.7}, {0.05}}};
+    const auto m = generate_mesh(g, o);
+    REQUIRE(m.has_value());
+    for (const Point& given : {a, b, q}) {
+        INFO(given[0]);
+        std::size_t exact = 0, near = 0;
+        for (const Point& p : m->simplices.points) {
+            exact += (p[0] == given[0] && p[1] == given[1]) ? 1 : 0;
+            near += std::hypot(p[0] - given[0], p[1] - given[1]) <= 1e-9 * 0.7 ? 1 : 0;
+        }
+        CHECK(exact == 1);
+        CHECK(near == 1);
+    }
+    CHECK(close(total(m->mesh.boundary()[0].areas), 0.5, 1e-12));
 }

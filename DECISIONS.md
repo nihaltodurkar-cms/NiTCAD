@@ -3939,7 +3939,8 @@ refusals, the run record, the device file, the deck, the CLI, the app's vocabula
   `max_size` (0.5 µm against 0.1 µm), `generate_mesh` split the layer's own boundary segment and joined the new nodes to
   the layer with sliver triangles (contact-node volumes 9e-11 cm² against 2.5e-12), although U14 says refinement never
   inserts into the layer's rectangle. Found while building SC10's Delaunay device, whose current was then 0.3–1.7% off;
-  with the layer spaced at `max_size` it is exact. **For the owner.**
+  with the layer spaced at `max_size` it is exact. **For the owner.** Fixed in Unit 49 (below): the cause was the
+  boundary fill, not refinement.
 
 **Ruling on SC2/SC8, SC5, SC6, SC12 and SC13 (2026-10-28).** The owner: "accept it as limitations". The five unmet
 parts are accepted as limitations of the criteria as written, not defects of the model. Each criterion's intent is met:
@@ -3953,7 +3954,7 @@ range starts below J_s. SC6 underestimated the diffusion current.
 The criteria are unchanged, and the `[!shouldfail]` cases stay, so a change that makes one pass is flagged.
 Follow-up if currents near 1e-14 A/cm² (Schottky reverse leakage) matter: extend the weighted terminal current
 (Unit 32) to Schottky contacts (refused now, SD7). No unit named.
-The surviving mutants and the mesh-generator finding stay open.
+The surviving mutants and the mesh-generator finding stay open (the finding: Unit 49).
 
 ### Unit 49 — boundary fill between a structured layer's columns (started 2026-10-28; on `mesh/boundary-layer-split`)
 
@@ -3994,6 +3995,26 @@ no coarser than h the fill adds nothing, so SC10 at 0.1 µm was exact.
 - BC5: every existing test passes unchanged, Release and Debug; the meshes of the examples and decks without layers
   are bit-identical (run identities unchanged).
 - BC6: hand mutants: the merge rule reverted (fails BC1), the exact bottom point reverted (fails BC3).
+
+**As built.** `place_boundary` merges coincident breaks in a pass of their own before the fill: a lattice break is
+kept, else an exact one. A first attempt kept the single pass and only fixed the merged break's kind; the fill had
+already run when the first coincident (`boundary`) break arrived, and BC1 still failed (7 nodes for 3 columns).
+`read_layers` gives each column its node on the edge: `a`, `b` and patch ends exactly, `a + t u` elsewhere.
+Without layer breaks the merge keeps what the old rule kept and the fill is unchanged, so meshes without layers are
+bit-identical; no deck or example uses layers (only the generator tests, SC10 and the U14 MOSFET in
+`tests/solve/unstructured_test.cpp`).
+
+**Results.**
+- BC1, BC2: met. SC10's geometry at 3 and 5 columns: the contact carries exactly the columns, every node in the
+  layer's rectangle is a lattice node, contact volumes (Δt/2 or Δt) × 5e-8 to 1e-12. The U14 square: 5 nodes on
+  the bottom edge, its 5 columns.
+- BC3: met. Layer (0.2, 0)–(0.9, 0), whose `a + len u` misses 0.9 in the last bit, with a patch end at 0.4: `a`,
+  `b` and the patch end are each one node, bit-identical, none other within 7e-10; patch length 0.5 to 1e-12.
+- BC4: met. SC10's Delaunay device at 3 columns (0.5 µm) matches the 1D current per area at −1 V and +0.2 V within
+  SC10's 1e-6; the deck test now uses it and drops the workaround.
+- BC5: met. Release 112/112, Debug 103/103 (the U14 MOSFET gate included).
+- BC6: 3/3 caught. The merge reverted to the single pass (BC1, BC2: 19 failures); an exact break replacing a
+  lattice one (BC3); the bottom node as `a + t u` (BC3).
 
 ---
 
