@@ -255,3 +255,70 @@ TEST_CASE("line search: invalid options are errors") {
         CHECK(r.error().code == ErrorCode::invalid_input);
     }
 }
+
+namespace {
+
+// Two decoupled rows of very different scales (Unit 50, RD1): F_0 = 1e14 (x_0 - 1e7) + noise(x_1),
+// a row of scale |J x| = 1e21 holding a perturbation the Jacobian leaves out, and x_0 = 1e7, where
+// its correction (about 1e-10, below half an ulp of 1e7) cannot move it: the row stays at its
+// rounding, as a device's large rows do. F_1 = c (d + curvature d^2), d = x_1 - target, a row 1e21
+// smaller or more that needs a real correction (a minority density). J = diag(1e14, F_1').
+struct TwoScales {
+    std::function<double(double)> noise;
+    double c = 1.0;
+    double target = 1e-3;
+    double curvature = 0.0;  // F_1 = c (d + curvature d^2), d = x_1 - target
+
+    std::size_t unknowns() const { return 2; }
+    linalg::SparseMatrix make_jacobian() const {
+        const std::array<linalg::Triplet, 2> t{linalg::Triplet{0, 0, 0.0}, linalg::Triplet{1, 1, 0.0}};
+        return *linalg::SparseMatrix::from_triplets(2, 2, t);
+    }
+    void evaluate(std::span<const double> x, std::span<double> r, linalg::SparseMatrix& j) const {
+        r[0] = 1e14 * (x[0] - 1e7) + noise(x[1]);
+        const double d = x[1] - target;
+        r[1] = c * (d + curvature * d * d);
+        j.values()[0] = 1e14;
+        j.values()[1] = c * (1.0 + 2.0 * curvature * d);
+    }
+};
+
+}  // namespace
+
+TEST_CASE("line search: the residual test sees a small row past the large rows' rounding (Unit 50)") {
+    // From x = (1e7, 0): the large row sits at 1e4 and grows by 2e-4 of itself as x_1 rises by
+    // 1e-3, so the first full step raises sum F^2 by about 5e4 while the small row's share, 8.1e-7,
+    // falls: the plain Armijo test rejects every trial and the iteration would creep by 2^-10 of
+    // its step. The small row is curved (curvature 100), so the step leaves it at 1.3e-4, far
+    // above its rounding: only the row-scaled merit, (1e4 / 1e21)^2 + (9e-4 / 1)^2 (|J x| of the
+    // small row is 0, taken as 1) falling to about 1.6e-8, can pass it.
+    TwoScales system{[](double y) { return 1e4 * (1.0 + 0.2 * y); }};
+    system.curvature = 100.0;
+    auto s = solver();
+    results::ConvergenceRecord record;
+    std::vector<double> x{1e7, 0.0};
+    auto o = searched(100, solve::LineSearchTest::residual);
+    o.tol_update = 1e-6;
+    REQUIRE(solve::newton_solve(system, x, o, s, record).has_value());
+    CHECK(x[0] == 1e7);  // pinned at its rounding
+    CHECK(std::abs(x[1] - 1e-3) <= 1e-9);
+    CHECK(record.iterations.front().step == 1.0);
+    CHECK(record.iterations.size() <= 5);
+}
+
+TEST_CASE("line search: a trial with every row at its rounding passes the residual test (Unit 50)") {
+    // The small row is c = 1e-30 times (x_1 - 1): at x_1 = 0 its residual, 1e-30, is within 64 eps
+    // of its scale (|J x| = 0, taken as 1), yet its correction is 1. The full step zeroes it while
+    // the large row's perturbation grows from 1e4 to 1.01e6, still within 64 eps of its scale
+    // 1e21 (2.8e7): neither merit falls, and the trial passes as rounding in every row.
+    const TwoScales system{[](double y) { return 1e4 * (1.0 + 100.0 * y); }, 1e-30, 1.0};
+    auto s = solver();
+    results::ConvergenceRecord record;
+    std::vector<double> x{1e7, 0.0};
+    auto o = searched(100, solve::LineSearchTest::residual);
+    o.tol_update = 1e-6;
+    REQUIRE(solve::newton_solve(system, x, o, s, record).has_value());
+    CHECK(x[1] == 1.0);
+    CHECK(record.iterations.front().step == 1.0);
+    CHECK(record.iterations.size() == 2);
+}

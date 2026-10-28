@@ -51,7 +51,15 @@ namespace NiTCAD::solve {
 // search, and its F and J are reused by the next iteration. Off by default: every existing run is
 // unchanged.
 // What a trial must achieve:
-// - residual: the Armijo test on m(x) = sum_i F_i(x)^2, m(trial) <= (1 - 2 alpha lambda) m(x);
+// - residual: the Armijo test on m(x) = sum_i F_i(x)^2, m(trial) <= (1 - 2 alpha lambda) m(x), or
+//   the same test on the row-scaled m_s(x) = sum_i (F_i(x) / s_i)^2, or every row at its rounding,
+//   |F_i(trial)| <= 64 eps s_i (Unit 50, DECISIONS.md RD1). s_i = sum_j |J_ij x_j| at the iterate
+//   (1 where that is 0), the size of the terms row i sums. Near a solution m is the rounding of
+//   the largest rows, and a row many decades smaller that still needs a real correction (a
+//   minority density) is invisible in it; m_s sees it. Far from a solution the damped step need
+//   not decrease m_s (measured: Armijo on m_s alone stalls an equilibrium solve), so m stays.
+//   Trials are ranked on m when none passes, so an iteration differs from the plain test's only
+//   where a trial passes that it rejected;
 // - natural (the default): Deuflhard's natural monotonicity test, affine-invariant and so blind to
 //   the very different scales of the rows: the simplified correction at the trial,
 //   dx_bar = J(x)^-1 F(trial) with the factorization already made (one back-substitution, no
@@ -160,13 +168,20 @@ template <NewtonSystem System>
     // Line search work (LineSearch): the iterate, the damped update, a trial's residual and its
     // simplified correction.
     std::vector<double> x0, x1, f_trial, dx_bar;
+    std::vector<double> scale;  // the residual test's row scales s_i (LineSearch)
     if (search.enabled) {
         f_trial.resize(n);
         dx_bar.resize(n);
+        if (search.test == LineSearchTest::residual) scale.resize(n);
     }
     const auto merit = [n](std::span<const double> r) {
         double m = 0.0;
         for (std::size_t i = 0; i < n; ++i) m += r[i] * r[i];
+        return std::isfinite(m) ? m : std::numeric_limits<double>::infinity();
+    };
+    const auto scaled_merit = [n](std::span<const double> r, std::span<const double> s) {
+        double m = 0.0;
+        for (std::size_t i = 0; i < n; ++i) m += (r[i] / s[i]) * (r[i] / s[i]);
         return std::isfinite(m) ? m : std::numeric_limits<double>::infinity();
     };
     bool evaluated = false;  // f and jacobian already hold F and J at x (an accepted trial)
@@ -221,6 +236,22 @@ template <NewtonSystem System>
             x1.assign(x.begin(), x.end());
             const double m0 = merit(f);
             const bool natural = search.test == LineSearchTest::natural;
+            double m0_scaled = 0.0;
+            if (!natural) {
+                // s_i = sum_j |J_ij x_j| at the iterate (jacobian still holds J(x)).
+                const auto offsets = jacobian.row_offsets();
+                const auto columns = jacobian.col_indices();
+                const auto values = jacobian.values();
+                for (std::size_t r = 0; r < n; ++r) {
+                    double s = 0.0;
+                    for (auto k = static_cast<std::size_t>(offsets[r]);
+                         k < static_cast<std::size_t>(offsets[r + 1]); ++k) {
+                        s += std::abs(values[k] * x0[static_cast<std::size_t>(columns[k])]);
+                    }
+                    scale[r] = s > 0.0 && std::isfinite(s) ? s : 1.0;
+                }
+                m0_scaled = scaled_merit(f, scale);
+            }
             // A trial's figure (smaller is better) and whether it passes the test.
             const auto judge = [&](double lambda) -> std::pair<double, bool> {
                 if (natural) {
@@ -237,7 +268,16 @@ template <NewtonSystem System>
                     return {size, size <= (1.0 - 0.25 * lambda) * update};
                 }
                 const double m = merit(f_trial);
-                return {m, m <= (1.0 - 2.0 * search.sufficient_decrease * lambda) * m0};
+                const double k = 1.0 - 2.0 * search.sufficient_decrease * lambda;
+                if (m <= k * m0) return {m, true};
+                // The row-scaled merit, or every row at its rounding (Unit 50, RD1).
+                if (scaled_merit(f_trial, scale) <= k * m0_scaled) return {m, true};
+                for (std::size_t i = 0; i < n; ++i) {
+                    if (!(std::abs(f_trial[i]) <= 64.0 * std::numeric_limits<double>::epsilon() * scale[i])) {
+                        return {m, false};
+                    }
+                }
+                return {m, true};
             };
             double lambda = 1.0, best_lambda = 1.0;
             double best = std::numeric_limits<double>::infinity();

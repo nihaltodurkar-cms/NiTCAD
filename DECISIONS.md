@@ -4051,20 +4051,36 @@ and a retest of PR #66's FinFET with MLDA and the residual test once this merges
 - RD1 (`solve::newton_solve`, residual test only): at each searched iteration, s_i = Σ_j |J_ij x_j| from J and x
   at the iterate (1 where it is 0). A trial passes when Σ F² or Σ (F_i / s_i)² falls by the Armijo factor
   (1 − 2 α λ), or every |F_i(trial)| ≤ 64 ε s_i. Every trial the old test passed still passes, so a run changes
-  only where the old test rejected the full step. The best trial (none passing) is ranked on the scaled merit.
-  The natural test and runs without a search are unchanged.
-- RD2 (`DriftDiffusion::update_size`): a density correction is measured against max(density, global floor,
-  ε max(n, p) at that node), ε = 2^-52. A minority density below ε of the majority at its node does not change
-  the node's charge in double, and its correction is resolved only to the solve's rounding there. Majority
-  densities (≥ the minority) are measured as before. Insulator nodes and θ unchanged.
-- RD3: no new option or deck key; run identities unchanged (the settings are). Results move within the
-  convergence tolerance.
+  only where the old test rejected the full step. The best trial (none passing) is ranked on Σ F², as before
+  (corrected as built: the first text said the scaled merit). The natural test and runs without a search are
+  unchanged.
+- RD2 (`DriftDiffusion::update_size`, **opt-in**, see the second ruling below): a density correction is measured
+  against max(density, global floor, ε max(n, p) at that node), ε = 2^-52. A minority density below ε of the
+  majority at its node does not change the node's charge in double, and its correction is resolved only to the
+  solve's rounding there. Majority densities (≥ the minority) are measured as before. Insulator nodes and θ
+  unchanged. Off, `update_size` is the old one.
+- RD3 (as ruled the second time): `solve::BiasOptions::minority_floor` (off), set on the system by
+  `DriftDiffusion::set_minority_floor` wherever a bias, trace, transient or small-signal solve builds one (and
+  on the sweep's retry system without generation); the deck key `[solver] minority_floor = on | off`; recorded
+  in the run's settings only when on, so the identities of runs without it are unchanged. The app's deck
+  vocabulary offers the key.
+
+**Found in the suites with the floor on by default (2026-10-28), and the second ruling.** `solve.heterojunction`
+failed in Release and Debug: its 4H-SiC p-n diode (incomplete ionization, 0.5 V steps to 3 V) stopped at 3.0 V
+after 100 iterations. On `main` that point already needs 69 iterations, swinging to 1e12, but there Newton
+resolves SiC's minorities (about 1e-35 cm⁻³, far below ε of the majority) quadratically, so RD2's premise (such
+a minority's correction is rounding) does not hold in general; with the floor its corrections no longer count
+and the point wanders. The current at 1.5 V moved from 5.9e-13 to −1.19e-12 A/cm², below the test's
+resolution. **Owner ruling (2026-10-28, as recommended): make the floor opt-in**, behind a solver option and a
+`[solver]` deck key, off by default, so every existing run stays bit-identical, SiC included; the long channel
+and similar MOSFET decks turn it on, and RC2 runs with it on. RD1 stays on wherever the residual test is used.
+The criteria below are kept as fixed, with RC2's and RC6's conditions as this ruling sets them; RC9 is added.
 
 **Criteria (fixed before code).**
 - RC1: the long channel with Lombardi and `line_search = residual` solves all 14 points (0 before).
-- RC2: the long channel with Lombardi, default options: every point converges with no more than 2 iterations
-  whose correction lies in [1e-8, 1e-4) (up to 13 before), and its drain currents equal the old run's within
-  1e-9 relative.
+- RC2: the long channel with Lombardi, default options (with `minority_floor` on, per the second ruling): every
+  point converges with no more than 2 iterations whose correction lies in [1e-8, 1e-4) (up to 13 before), and
+  its drain currents equal the old run's within 1e-9 relative.
 - RC3: `newton_test`: a two-row system with rows scaled 1e20 apart, at a state where the large row is at rounding
   and the small row needs a real correction, converges with the residual test (and fails without RD1); a
   trial at rounding in every row passes; the Unit 30 cases are unchanged.
@@ -4074,12 +4090,43 @@ and a retest of PR #66's FinFET with MLDA and the residual test once this merges
   outcome (converged or not) as recorded in Unit 30 for the natural test; the residual test's recorded failures
   may only become successes.
 - RC6: the FinFET deck (residual test, PARDISO, 6 threads) solves 17/17 before and after, drain currents within
-  1e-6 relative.
+  1e-6 relative (after: the same deck, so `minority_floor` off, per the second ruling).
 - RC7 (report only): Unit 48's `[!shouldfail]` SC2/SC8 and SC13 rerun and their values recorded.
 - RC8: hand mutants: the scaled merit dropped (RC1 fails), the at-rounding pass dropped (an RC3 case fails), the
   floor removed (RC2, RC4 fail), the floor taken from the global largest density instead of the node's (RC4
-  fails).
+  fails); added with the second ruling: the floor applied whatever the switch (RC9 fails).
+- RC9 (added with the second ruling): with `minority_floor` off, the default, `update_size` measures a minority
+  below ε of its node's majority against itself (as before); `solve.heterojunction` passes; the deck key reads
+  `on` and `off` and defaults to off.
 - After merge (follow-up, recorded here): PR #66 rebased; its FinFET with MLDA and `line_search = residual` rerun.
+
+**As built (2026-10-28, Release and Debug, this machine).** Every criterion met.
+- RC1: the long channel with Lombardi, `line_search = residual`: 14/14 points with the floor off and with it on
+  (0 before).
+- RC2: with `minority_floor` on, every point has at most 2 iterations in [1e-8, 1e-4); drain currents within 1e-9 of
+  the 14 recorded before the change. Hidden test `[.lombardi]`, Release (the three sweeps: 145 s).
+- RC3: `newton_test`: the two-scale system (rows 1e14 apart, the large one at rounding) converges with the residual
+  test in at most 5 iterations from a full first step; a trial at rounding in every row passes (2 iterations); the
+  Unit 30 cases unchanged.
+- RC4, RC9: `drift_diffusion_test`: off, the minority p = 1e-19 of n = 1 is measured against itself; on, against
+  ε × 1, against ε × 1e-3 at a node whose majority is 1e-3, with holes as the majority likewise; above ε of the
+  majority and for the majority, against itself. `build_test`: the key reads on and off, off by default.
+- RC5: Release 112/112 and Debug 103/103, `solve.heterojunction` included (a second Release run failed
+  `app.live_check` once at `dropped() == 1`, under `-j 6` load; alone it passed 20 of 20. Unit 50 does not touch
+  the app's checker: a timing race in that test, a finding for later). Unit 30's `[.diode_jumps]` and
+  `[.line_search]` benchmarks: outcomes and iteration counts identical to `main` (`c288391`, built from the same
+  tree with the changes stashed). The residual test's MOSFET 0/10 stays 0/10: that case is damping-limited, not a
+  rounding floor. **Finding, not Unit 50's:** `main` no longer matches Unit 30's MOSFET record (natural test 2/10
+  against 10/10; ARCHITECTURE.md 11.3 "As built (Unit 50)").
+- RC6: FinFET deck (residual test, PARDISO, 6 threads, floor off): 17/17 before and after; currents within 9.5e-12
+  relative (point 0 within 7e-11); Newton iterations 428 → 182; point 0's substeps 3 → 1; wall time 28 → 10.6 min.
+- RC7 (report only): SC2/SC8 9.5e-15, 1.4e-14, 5.6e-14, 2.9e-8 A/cm²; SC13 2.2e-15 A/cm; SC12 1.25e-4; SC6
+  1.00395; SC5 0.4276: all as recorded in Unit 48 (the default path is unchanged). These are rounding of the
+  current itself, not a Newton floor; the minority floor does not bear on them.
+- RC8: M1 (scaled merit dropped): the RC3 two-scale case and RC1 fail; M2 (at-rounding pass dropped): the RC3
+  every-row case fails; M3 (floor removed): RC4 fails (and RC2, measured with the floor always on); M4 (floor from
+  the largest density in the device): RC4 fails at the 1e-3 node; M5 (floor whatever the switch): RC4's off case
+  and `solve.heterojunction` fail. All caught.
 
 ---
 

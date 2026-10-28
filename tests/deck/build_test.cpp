@@ -571,6 +571,12 @@ TEST_CASE("deck build: rates = off (Unit 45, RQ1)", "[deck]") {
     CHECK(failure(head).find("t.deck:14: 'maybe' is not on or off") != std::string::npos);
 }
 
+TEST_CASE("deck build: minority_floor (Unit 50, RD2)", "[deck]") {
+    CHECK_FALSE(must(diode_deck).options.minority_floor);
+    CHECK(must(diode_deck + "[solver]\nminority_floor = on\n").options.minority_floor);
+    CHECK_FALSE(must(diode_deck + "[solver]\nminority_floor = off\n").options.minority_floor);
+}
+
 // The decks of decks/ (heavy devices, not in the app's examples): each still reads and builds as
 // the deck format evolves. Built, not run (the FinFET sweep takes about 18 min with PARDISO).
 TEST_CASE("deck build: the FinFET deck of decks/ builds") {

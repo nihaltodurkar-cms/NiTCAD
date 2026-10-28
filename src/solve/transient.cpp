@@ -237,6 +237,7 @@ std::expected<results::Transient, base::Error> solve_transient_unobserved(
     if (!solver) return std::unexpected(std::move(solver.error()));
     auto system = assemble::DriftDiffusion::create(device, *scaling, steady.models);
     if (!system) return std::unexpected(std::move(system.error()));
+    system->set_minority_floor(steady.minority_floor);
     if (thermal) (void)system->set_thermal_bias(thermal_bias);  // checked
     const assemble::DriftDiffusion& dd = *system;
 

@@ -36,7 +36,7 @@ constexpr std::array<KeySpec, 17> model_keys{{
     {"electrothermal", "off", "lattice heat equation"},
 }};
 
-constexpr std::array<KeySpec, 23> solver_keys{{
+constexpr std::array<KeySpec, 24> solver_keys{{
     {"equations", "drift_diffusion", "drift_diffusion | equilibrium_poisson"},
     {"max_iterations", "100", "Newton iterations per point"},
     {"tol_update", "1e-8", "convergence: largest scaled update"},
@@ -60,6 +60,7 @@ constexpr std::array<KeySpec, 23> solver_keys{{
     {"linear_fallback", "sparse_lu", "gmres_ilut: sparse_lu | none"},
     {"weighted_current", "off", "weighted terminal current"},
     {"rates", "on", "store generation-recombination rates"},
+    {"minority_floor", "off", "densities against eps of the majority"},
 }};
 
 constexpr std::array<KeySpec, 5> transient_keys{{{"integrator", "bdf2", "bdf2 | backward_euler"},

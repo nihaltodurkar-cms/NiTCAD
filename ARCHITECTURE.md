@@ -3132,6 +3132,26 @@ top of Unit 28; DECISIONS.md L1–L6):**
   needs the system's unknown layout), Gummel or pseudo-transient fallbacks, a line search inside `trace_bias`'s
   corrector (it has its own loop).
 
+**As built (Unit 50, Newton at the rounding floor; branch `solve/rounding-floors`; DECISIONS.md Unit 50, RD1–RD3,
+RC1–RC9):**
+- **Residual test (RD1, wherever `line_search = residual`):** each searched iteration takes the row scales
+  s_i = Σ_j |J_ij x_j| (1 where zero or not finite). A trial passes when Σ F² **or** Σ (F_i / s_i)² falls by the
+  Armijo factor, or when every |F_i| ≤ 64 ε s_i (the trial is at rounding in every row). Every trial the old test
+  passed still passes; the best trial (none passing) is still ranked on Σ F². The natural test is unchanged.
+- **Minority floor (RD2, opt-in):** `BiasOptions::minority_floor` / `[solver] minority_floor = on` /
+  `DriftDiffusion::set_minority_floor`: `update_size` measures each density against at least ε of the larger
+  density at its node. Off by default (owner ruling 2026-10-28): 4H-SiC's minorities (about 1e-35 cm⁻³) converge
+  quadratically without it, and with it on the SiC diode stalled at 3 V. Recorded in the run settings only when on.
+- **Measured (Release, this machine):** the 1e17 long channel with Lombardi solves 14/14 with the residual test
+  (0/14 before), and with the floor on converges with at most 2 iterations in [1e-8, 1e-4) per point (up to 13
+  before), currents within 1e-9 of the old run's; the FinFET deck (residual test, PARDISO, 6 threads, floor off)
+  17/17 before and after, currents within 9.5e-12, 182 Newton iterations against 428, 10.6 min against 28 min.
+  Unit 30's diode-jump and MOSFET benchmarks give the same outcomes and iteration counts as `main`.
+- **Finding (not Unit 50's):** on `main` the Unit 30 MOSFET benchmark no longer matches its record: the natural
+  test solves 2/10 (10/10 recorded) and natural search with step cutting 10/10 in 252 iterations (416 recorded);
+  step cutting alone (its own 12-minute case) was not rerun. The defaults changed since Unit 30 (presumably Units
+  35 and 38; not bisected), so the table above is Unit 30's historical record, not the current behaviour.
+
 **As built (Unit 40, generic fields and equations; on `main` as `629bed0`, PR #50; DECISIONS.md FE1–FE7,
 FG1–FG9):**
 - **Commits.** Commit 0 added the measurement tools (an assembly trace and an assembly benchmark). Then came

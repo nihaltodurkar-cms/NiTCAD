@@ -2,10 +2,12 @@
 // within 1e-4 (E_perp = E_0) and the run record; and, Release only (hidden tag [.lombardi]): the
 // effective mobility of long-channel n-MOSFETs against the model at E_eff and its universality, the
 // 2D MOSFET example's Id-Vg, the example reflected (x and y exchanged), the electrothermal limit and
-// the small-signal conductances, with the pattern and sweep times reported.
+// the small-signal conductances, with the pattern and sweep times reported; and the long channel
+// past the minority rounding floor (Unit 50).
 #include <catch2/catch_test_macros.hpp>
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cmath>
 #include <complex>
@@ -23,6 +25,7 @@
 #include "NiTCAD/deck/run.hpp"
 #include "NiTCAD/physics/mobility.hpp"
 #include "NiTCAD/physics/surface_mobility.hpp"
+#include "NiTCAD/solve/newton.hpp"
 #include "NiTCAD/solve/small_signal.hpp"
 #include "fixtures.hpp"
 
@@ -435,4 +438,38 @@ TEST_CASE("surface mobility: the 2D MOSFET example below threshold within 10% (L
     const double ratio = on.points[sub].terminal_current[1] / off.points[sub].terminal_current[1];
     std::printf("LS8 Id(0.2 V) ratio %.4f\n", ratio);
     CHECK(std::abs(ratio - 1.0) <= 0.10);
+}
+
+// Unit 50 (RC1, RC2; DECISIONS.md RD1, RD2): the 1e17 long channel with Lombardi, where minority
+// holes in the n+ pockets (2.7e-19 of the electrons) set a rounding floor. With the minority floor
+// on (opt-in) and otherwise default options each point converges without chattering above the
+// tolerance, its drain current equal to the current before Unit 50 (recorded below, Release, this
+// machine); with the residual line search as well every point solves (none did before).
+TEST_CASE("surface mobility: the long channel converges past the minority rounding floor (Unit 50)",
+          "[.lombardi]") {
+    constexpr std::array<double, 14> before{
+        5.1301549888304837e-10, 0.00018426809546428683, 0.001585448292749148, 0.0029335061273558266,
+        0.0041126887024053004,  0.0051331463263241403,  0.0060143872798963825, 0.0067764951805582129,
+        0.0074378601235738605,  0.0080144771468285518,  0.0085198801065484997, 0.0089653496180598057,
+        0.0093602177692615161,  0.0097121831802286628};
+    deck::Plan plan = must(long_mosfet("1e17"));
+    plan.options.minority_floor = true;  // opt-in (RD2)
+    const auto plain = sweep(plan, lombardi);
+    REQUIRE(plain.points.size() == before.size());
+    for (std::size_t k = 0; k < before.size(); ++k) {
+        const auto& p = plain.points[k];
+        std::size_t chatter = 0;
+        for (const auto& it : p.convergence.iterations) chatter += it.update >= 1e-8 && it.update < 1e-4 ? 1 : 0;
+        CAPTURE(k, chatter, p.convergence.iterations.size(), p.terminal_current[1], before[k]);
+        CHECK(chatter <= 2);
+        CHECK(std::abs(p.terminal_current[1] / before[k] - 1.0) <= 1e-9);
+    }
+    plan.options.newton.line_search.enabled = true;
+    plan.options.newton.line_search.test = solve::LineSearchTest::residual;
+    const auto searched = sweep(plan, lombardi);
+    CHECK(searched.points.size() == before.size());
+    // RC1 as fixed: the residual line search alone, the floor off (the default).
+    plan.options.minority_floor = false;
+    const auto searched_alone = sweep(plan, lombardi);
+    CHECK(searched_alone.points.size() == before.size());
 }

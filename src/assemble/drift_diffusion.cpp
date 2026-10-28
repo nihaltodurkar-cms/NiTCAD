@@ -1064,6 +1064,14 @@ double DriftDiffusion::update_size(std::span<const double> x, std::span<const do
     // that floor (-9.8 V). Densities below 1e-8 of the largest, the legacy's floor for its
     // impact-ionization paths, are measured against it then.
     const double floor = (generation_ ? 1e-8 : 1e-20) * largest;
+    // A minority density below eps of the majority at its node does not change the node's charge
+    // in double, and the solve resolves its correction only to its own rounding there: measured on
+    // Unit 46's long channel, holes at 2.7e-19 of the n+ electrons kept corrections of 1-4e-8 of
+    // themselves for up to 14 iterations. With the minority floor on (opt-in: SiC's minorities,
+    // near 1e-35 cm^-3, converge quadratically without it and the floor stalls its diode at 3 V)
+    // it is measured against eps of the majority (Unit 50, DECISIONS.md RD2); the majority, never
+    // below it, as before.
+    constexpr double eps = std::numeric_limits<double>::epsilon();
     double size = 0.0;
     for (std::size_t i = 0; i < node_count(); ++i) {
         if (insulator_[i] != 0) {
@@ -1071,9 +1079,10 @@ double DriftDiffusion::update_size(std::span<const double> x, std::span<const do
             continue;
         }
         const double n = x[m_ * i + 1], p = x[m_ * i + 2];
+        const double local = minority_floor_ ? std::max(floor, eps * std::max(n, p)) : floor;
         size = std::max({size, std::abs(dx[m_ * i]),
-                         n > 0.0 ? std::abs(dx[m_ * i + 1]) / std::max(n, floor) : infinity,
-                         p > 0.0 ? std::abs(dx[m_ * i + 2]) / std::max(p, floor) : infinity});
+                         n > 0.0 ? std::abs(dx[m_ * i + 1]) / std::max(n, local) : infinity,
+                         p > 0.0 ? std::abs(dx[m_ * i + 2]) / std::max(p, local) : infinity});
     }
     if (electrothermal()) {  // theta, an absolute bound in units of T0 (T10)
         for (std::size_t i = 0; i < node_count(); ++i) {

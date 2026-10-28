@@ -179,6 +179,7 @@ std::vector<std::pair<std::string, double>> settings(const BiasOptions& o) {
     if (o.Ns_override) s.emplace_back("scaling.Ns_override", *o.Ns_override);
     // Unit 32: recorded only when on, so the runs without it keep their identity.
     if (o.weighted_current) s.emplace_back("weighted_current", 1.0);
+    if (o.minority_floor) s.emplace_back("minority_floor", 1.0);  // Unit 50: likewise
     return s;
 }
 
