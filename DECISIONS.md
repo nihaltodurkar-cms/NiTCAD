@@ -4264,6 +4264,83 @@ The criteria below are kept as fixed, with RC2's and RC6's conditions as this ru
   after the result is posted; a 50 ms delay injected before the post fails the old test every time and passes the
   new one; the app tests pass 20 times under `-j 6` (Release) and 5 (Debug). The checker is unchanged.
 
+### Unit 51 — gate tunnelling (started 2026-10-28; on `physics/gate-tunnelling`)
+
+**Owner request:** "start GATE tunneling" (2026-10-28). ARCHITECTURE.md 11.3 lists gate tunnelling as Planned (the
+nanoscale gap found by the FinFET deck). Numbered 51 because Units 47 (PR #66) and 50 (PR #71) are not merged; this
+branch starts from `main` (`7a11d26`).
+**Owner rulings (2026-10-28):** (1) both gate kinds tunnel: a lumped `gate` locally through its t_ox, and an
+`electrode` on a meshed insulator along a straight path through the meshed stack (tensor grids); (2) self-consistent:
+a boundary flux in the continuity rows with an exact Jacobian, counted in the gate's terminal current; (3) the
+Tsu–Esaki energy integral with a WKB transmission through the trapezoidal or piecewise multi-layer barrier; (4) three
+processes: conduction-band electrons (ECB), valence-band holes (HVB) and valence-band electrons (EVB); (5) SiO₂ gets
+built-in, cited band data; any other insulator must give its band data in the deck, else the tunnelling gate is
+refused; (6) validation against closed forms, plus a measured J–V comparison only if an accessible source turns up;
+(7) excluded and refused: electrothermal, the weighted terminal current (Unit 32), electrode tunnelling on an
+unstructured mesh; not built: image-force lowering. The standing conditions hold: no change to any device without
+tunnelling switched on, criteria fixed before code, Release and Debug suites at every commit, `/W4 /WX`, hand
+mutants, nothing pushed or merged without authorization.
+
+**Sources read (before coding).**
+- A. Gehring, "Simulation of Tunneling in Semiconductor Devices", dissertation, TU Wien, 2003 (open access,
+  iue.tuwien.ac.at/phd/gehring): §3.2 (the Tsu–Esaki formula J = (4π m q / h³) ∫ TC(E_x) N(E_x) dE_x, parabolic
+  bands, conserved parallel momentum, and the ECB, HVB and EVB energy limits), §3.3.1 (the Fermi–Dirac supply
+  N = kT ln[(1 + e^((E_F1 − E)/kT)) / (1 + e^((E_F2 − E)/kT))]), §3.5.1 (the WKB transmission
+  exp(−(2/ħ) ∫ √(2 m_diel (W − E)) dx) between classical turning points, and its direct and Fowler–Nordheim closed
+  forms for a linear barrier), §4.2.2 (a stack is evaluated once per path, its current returned to the end nodes'
+  continuity rows or the contact's current), §5.1.2 (SiO₂ barriers of 3.2 eV for electrons and 4.65 eV for holes
+  in its simulations; ECB, HVB and EVB in n- and pMOS) and Table 5.1 (permittivity, gap and band offsets to silicon
+  of nine dielectrics; SiO₂ 3.9, 9.0, 3.0, 4.9 eV; HfO₂ 25, 5.7, 1.5, 3.1 eV; from Leroy 2003, Wilk 2001). Its
+  equations are images; their structure was read from the text and is re-derived below.
+- Electron tunnelling mass in SiO₂: Brar, Wilk and Seabaugh, Appl. Phys. Lett. 69, 2728 (1996), 0.30 m₀ with a
+  parabolic dispersion and 0.41 m₀ with a non-parabolic one, from 1.6–3.5 nm oxides (abstract only, via a search
+  summary; the paper is paywalled). Hole mass: Yang et al., IEEE Trans. Electron Devices 47, 2161 (2000),
+  0.51 m₀ parabolic, fitted to p⁺-poly pMOSFETs with 1.23–2.16 nm oxides (abstract only). Both are to be confirmed
+  against a readable copy before the defaults are fixed in code (GD5).
+- Legacy: `workbench/physics/tunneling.py` (M12-S1): Fowler–Nordheim and a rectangular WKB transmission as
+  diagnostics at the solved oxide field, not self-consistent. OLD / NEW / REASON:
+  - OLD: J_FN = (A/φ) E² e^(−B φ^(3/2) / E) with the free-electron mass, evaluated after the solve.
+  - NEW: the Tsu–Esaki integral with the insulator's tunnelling mass, in the residual and Jacobian.
+  - REASON: rulings 2 and 3; FN misses direct tunnelling, the regime below about 3 nm, and a diagnostic does not
+    conserve current.
+
+**Design:**
+
+| # | Choice | Why | Trade-off |
+|---|---|---|---|
+| GD1 | Energies on one scale per node: the semiconductor's E_c, E_v (from ψ, χ, the band shift, as `band_edges`), its quasi-Fermi levels E_Fn, E_Fp (from n and p through the node's statistics, Boltzmann or the inverse F_1/2); the electrode's Fermi level E_FG = −q V_G. The barrier is the vacuum level minus χ_ox: at the semiconductor end E_c + χ_s − χ_ox, at the electrode end E_FG + φ_m − χ_ox, the insulator's valence edge E_g,ox below it. | Endpoint vacuum levels make the lumped barrier exact for a fixed interface charge (it changes the field, not the ends) and need no V_ox. | — |
+| GD2 | Lumped gate (ruling 1): one linear segment of length t_ox between the two ends of GD1, the gate stack's insulator band data (GD5). Electrode (ruling 1): from each semiconductor node with a face on an insulator, a straight path along that face's grid axis, node to node through insulator nodes, ending at a node of an `electrode` contact; no path if it meets a semiconductor node, the mesh boundary or no electrode. Each mesh edge on the path is one linear segment between its nodes' vacuum levels with the band data of the edge's region. A node with insulator faces on several axes has one path per face, each weighted by that face's area. | Tensor grids make the normal a grid line (no locator); a piecewise-linear barrier is exact for the box method's linear potential along an edge, and per-edge band data gives multi-layer stacks (HfO₂ on SiO₂). | A path is frozen geometry (as Unit 20's); a curved or oblique interface is out (unstructured refused, ruling 7). |
+| GD3 | WKB: TC(E) = exp(−(2/ħ) Σ_segments ∫ √(2 m (W(x) − E)) dx) over the segments where W > E, each integral in closed form, (2/(3s)) [(W − E)^(3/2)] between the segment's ends or turning point, s the segment's slope (the limit √(W − E) L when s = 0). Electron barriers W = E_c,ox(x) with the insulator's electron mass; hole barriers W = E − E_v,ox(x) mirrored, with its hole mass; EVB electrons see the conduction-band barrier with the insulator's EVB mass (default its electron mass). Above the barrier's highest point no energy is integrated. | Closed form per segment: no spatial quadrature, exact derivatives. | No over-barrier (thermionic) current: negligible for 3 eV barriers, not for a low-offset high-k at high field; recorded. No image force (ruling 7), no quasi-bound states (Tsu–Esaki's continuum overestimates inversion current, Gehring §3.2); recorded. |
+| GD4 | Tsu–Esaki: J = (A* T / k) ∫ TC(E) N(E) dE, N(E) = kT ln[(1 + e^((E_F,s − E)/kT)) / (1 + e^((E_FG − E)/kT))], A* the semiconductor carrier's Richardson constant (`physics::emission_velocity_cm_s`'s: the material's, or its density-of-states mass). Limits per process (Gehring §3.2): ECB from max(E_c,s, E_c,G) to the barrier top, E_F,s = E_Fn; HVB from the barrier bottom to min(E_v,s, E_v,G), mirrored, E_F,s = E_Fp; EVB between E_c,G and E_v,s (electrons from the semiconductor's valence band to the gate's conduction band) and between E_c,s and E_v,G (the reverse pair), E_F of a valence band its E_Fp. A metal electrode has no band edges: no lower limit for ECB, no upper for HVB, and no EVB (its exchange with the valence band is HVB). Polysilicon: degenerate silicon, E_c,G = E_FG (n⁺) or E_v,G = E_FG (p⁺), the other edge E_g,Si(T) away (as `electrode_work_function_eV`). The integral is a fixed composite Gauss–Legendre rule (4 points, panels of at most kT/2), no adaptivity. | (4π m q k² / h³) = A*: one prefactor shared with Schottky and thermionic emission. A fixed rule keeps the residual smooth and its Jacobian the exact derivative of the discrete sum (moving limits through the panel map). | Hundreds of WKB evaluations per node per assembly; GC14 bounds the cost. |
+| GD5 | Insulator band data: `InsulatorParameters` gains χ_ox, E_g,ox and the tunnelling masses (electron, hole, EVB), 0 meaning absent. SiO₂'s: χ_ox = 1.05 eV (Δ E_c = 3.0 eV to silicon's χ = 4.05, Gehring Table 5.1), E_g,ox = 9.0 eV, m_n = 0.30, m_p = 0.51 (sources above, parabolic). A lumped gate stack takes SiO₂'s unless it gives its own; a stack whose permittivity is not 3.9 must give its own. An electrode path crossing an insulator without band data is refused. | Ruling 5. | The SiO₂ masses are fitted values tied to their barriers; any change is an owner ruling. |
+| GD6 | Rows: the semiconductor node's electron row gains the ECB and EVB fluxes into the gate (carriers leave the node when the semiconductor side's supply is the larger) times the face area; the hole row gains the HVB flux and the EVB flux as a hole flux (an electron leaving the valence band leaves a hole). The Poisson row is unchanged. The partials reach ψ, n and p of the node and ψ of every insulator node on its paths, and the electrode's bias (`bias_derivative`). The pattern gains the path entries at creation. | Ruling 2; Gehring §4.2.2: the current returns to the end nodes' continuity rows and the contact. | Path entries widen the electron and hole rows of gate-interface nodes. |
+| GD7 | Currents: the gate's (or electrode's) conduction current is the sum of its nodes' (or paths') tunnelling fluxes, in `terminal_currents`' sign; its charge is unchanged. Transient and small-signal take the term's partials (no storage of its own). | Conservation: the semiconductor contacts carry the same current through the edges. | — |
+| GD8 | Switch: per contact, `tunnelling = off` (the default) or a list of processes, `ecb`, `hvb`, `evb` (`on` = all three). With it off the term is not created: residual, Jacobian pattern and values, run identities and device files are those of `main`. | Ruling 4 with opt-out per process for comparison; GC1. | — |
+| GD9 | Refused (invalid_input): with `electrothermal`; with the weighted terminal current; electrode tunnelling on a device without `DeviceDescription::cells` (unstructured); a crossed insulator without band data; masses or E_g,ox not finite and positive. | Ruling 7. | Follow-ups recorded in ARCHITECTURE 11.3. |
+| GD10 | The deck: `[contact name] tunnelling = …`; on a gate contact optional `oxide_affinity`, `oxide_band_gap`, `oxide_mass_n`, `oxide_mass_p`, `oxide_mass_evb`; on an insulator region `affinity`, `band_gap`, `tunnel_mass_n`, `tunnel_mass_p`, `tunnel_mass_evb`. The device file stores them; the run record names the processes and band data; `BiasPoint` gains the per-contact tunnelling current by process; the app vocabulary and CLI name the keys. | Deck parity; the per-process currents are what a user compares to measurements. | The device file's format version rises if the stored contact or insulator needs it. |
+
+**Acceptance criteria, fixed before any implementation:**
+
+| # | Criterion |
+|---|---|
+| GC1 | Tunnelling off (and every existing deck): every existing test and pin passes unchanged; residuals, Jacobian patterns and values, run identities and the Unit 40 traces unchanged; a device file without tunnelling is byte-identical to `main`'s. |
+| GC2 | WKB closed forms: for linear, rectangular and three-layer piecewise-linear barriers, with and without a turning point inside a segment, TC against a 2000-panel Gauss–Legendre quadrature of the same integrand within 1e-10 relative; the rectangular barrier equals exp(−2 √(2 m (W − E)) d / ħ) within 1e-13. A two-layer stack of identical band data equals one layer of the summed thickness within 1e-13. |
+| GC3 | Fowler–Nordheim limit: ECB from a degenerate source through a single SiO₂ layer at 10–14 MV/cm, slope of ln(J/E_ox²) against 1/E_ox equal to −4 √(2 m_n) (qΦ_B)^(3/2) / (3 q ħ) within 2%. Direct regime: at a fixed oxide voltage of 0.5 V, the slope of ln J against t_ox over 1.2–2.0 nm equals −2 κ̄ of the trapezoid (its mean-barrier WKB exponent per length) within 3%. |
+| GC4 | Supply and equilibrium: the supply equals its Boltzmann closed form within 1e-12 where both levels are 10 kT below E; at thermal equilibrium (every process, n- and p-substrate, metal and both polysilicon electrodes, both statistics) the tunnelling current is zero within 1e-14 of its value at 1 V. |
+| GC5 | Quadrature: halving the panel width changes J by at most 1e-6 relative at every GC3, GC4 and GC10 point. |
+| GC6 | Energy limits: EVB is exactly zero while E_c,G > E_v,s (and the reverse pair's condition) and positive past it; ECB to a metal and HVB to a metal have no gate-side limit; a polysilicon gate's limits follow its edges (checked on a 1D n⁺-poly nMOS at −1 … +2 V). |
+| GC7 | Jacobian: against central differences of the residual with tunnelling on (1D lumped gate; 2D and 3D tensor electrode stacks of one and two layers; Boltzmann and Fermi–Dirac; each process alone and all three), the largest relative column error at most 1e-6, the off-node ψ columns of the path included. Newton converges quadratically on GC8's device at +1.5 V. |
+| GC8 | Self-consistent MOS capacitor (1D, p-Si 5e17, n⁺ poly, 1.5 nm SiO₂, lumped, V_G = −2 … +2 V by 0.1 V): every point converges; the gate current equals the substrate contact's current within 1e-10 relative; the ECB current at each point equals the GD4 integral evaluated on the solution's own band edges and quasi-Fermi levels within 1e-12. |
+| GC9 | Lumped against meshed: the same capacitor with the oxide meshed (0.05 nm spacing, an `electrode` n⁺ poly) gives the lumped gate current within 2% at +1 V and +2 V. |
+| GC10 | Polarity and dominance: on GC8's nMOS in inversion ECB is the largest process; on its pMOS mirror (n-Si 5e17, p⁺ poly) in inversion HVB is; the per-process currents carry the signs of GD6. |
+| GC11 | Geometry: a 2D tensor-grid device uniform across the gate gives the 1D current per unit area within 1e-9 relative; a 3D tri-gate fin node at a corner takes one path per face, each with its face's area (checked against the sum of two separately built 2D devices within 1e-9). |
+| GC12 | Dynamics: the small-signal conductance at 1 Hz against DC differences of the gate current within 1e-5 (GC8, +1.5 V); after a gate step the total currents of all contacts sum to zero within 1e-10 relative at every time step. |
+| GC13 | Refusals of GD9 and of a negative or absent required band datum, a gate stack with permittivity ≠ 3.9 and no band data, an unknown process name: each invalid_input with the offending value in its context. |
+| GC14 | Cost: on the FinFET deck, assembly time with all three processes at most 1.5 times without (median of 31, Release, P-core pinned as Unit 40). The FinFET sweep with tunnelling converges at every point that converges without it. |
+| GC15 | The deck, device file (round trip), run record, `BiasPoint` currents, CLI and app vocabulary carry GD10's keys and results. |
+| GC16 | Reported, not gated: GC8's I_G–V_G against a measured ultrathin-oxide J–V if an accessible source is found (then its tolerance is ruled before the comparison is run); the FinFET deck's gate current against its drain current. |
+| GC17 | Full Release and Debug suites; zero warnings; hand mutants on each GD row caught or recorded as equivalent. |
+
 ---
 
 ## New questions the advisor raised (not yet in `ARCHITECTURE.md`)
