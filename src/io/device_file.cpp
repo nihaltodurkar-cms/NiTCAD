@@ -29,10 +29,13 @@ namespace region_key {
 constexpr std::uint16_t name = 1, kind = 2, parameters = 3;  // kind 0 semiconductor, 1 insulator
 }
 namespace contact_key {
-constexpr std::uint16_t name = 1, kind = 2, nodes = 3, gate = 4, electrode = 5;
+constexpr std::uint16_t name = 1, kind = 2, nodes = 3, gate = 4, electrode = 5, schottky = 6;
 constexpr std::uint16_t gate_boundary = 1, gate_thickness = 2, gate_permittivity = 3,
                         gate_electrode = 4, gate_work_function = 5, gate_fixed_charge = 6;
 constexpr std::uint16_t electrode_kind = 1, electrode_work_function = 2;
+constexpr std::uint16_t schottky_boundary = 1, schottky_by_work_function = 2,
+                        schottky_work_function = 3, schottky_barrier = 4, schottky_richardson_n = 5,
+                        schottky_richardson_p = 6;
 }  // namespace contact_key
 namespace interface_key {
 constexpr std::uint16_t region_a = 1, region_b = 2, transport = 3, fixed_charge = 4, traps = 5,
@@ -226,6 +229,16 @@ Writer write_contact(const device::Contact& c) {
         e.f64(contact_key::electrode_work_function, c.electrode.work_function_eV);
         w.record(contact_key::electrode, e);
     }
+    if (c.kind == device::ContactKind::schottky) {  // Unit 48: a new optional record
+        Writer s;
+        s.text(contact_key::schottky_boundary, c.schottky.boundary);
+        s.u64(contact_key::schottky_by_work_function, c.schottky.by_work_function ? 1 : 0);
+        s.f64(contact_key::schottky_work_function, c.schottky.work_function_eV);
+        s.f64(contact_key::schottky_barrier, c.schottky.barrier_eV);
+        s.f64(contact_key::schottky_richardson_n, c.schottky.richardson_n);
+        s.f64(contact_key::schottky_richardson_p, c.schottky.richardson_p);
+        w.record(contact_key::schottky, s);
+    }
     return w;
 }
 
@@ -271,6 +284,18 @@ std::expected<device::Contact, base::Error> read_contact(const Reader& r) {
                                                                "electrode kind"));
         NITCAD_IO_TRY(work_function, e.f64(contact_key::electrode_work_function));
         c.electrode = {ekind, work_function};
+    }
+    if (r.has(contact_key::schottky)) {
+        NITCAD_IO_TRY(s, r.record(contact_key::schottky));
+        NITCAD_IO_TRY(boundary, s.text(contact_key::schottky_boundary));
+        NITCAD_IO_TRY(by_work_function, s.u64(contact_key::schottky_by_work_function));
+        if (by_work_function > 1) return std::unexpected(corrupt("unknown Schottky barrier kind"));
+        NITCAD_IO_TRY(work_function, s.f64(contact_key::schottky_work_function));
+        NITCAD_IO_TRY(barrier, s.f64(contact_key::schottky_barrier));
+        NITCAD_IO_TRY(richardson_n, s.f64(contact_key::schottky_richardson_n));
+        NITCAD_IO_TRY(richardson_p, s.f64(contact_key::schottky_richardson_p));
+        c.schottky = {std::move(boundary), by_work_function == 1, work_function, barrier,
+                      richardson_n, richardson_p};
     }
     return c;
 }

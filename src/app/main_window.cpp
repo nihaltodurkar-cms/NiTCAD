@@ -1254,7 +1254,10 @@ void MainWindow::fill_tree() {
             boxes ? tree_data(tree_region, static_cast<int>(k)) : tree_data(tree_none, 0), boxes ? (hidden ? 1 : 2) : 0);
     }
     for (const auto& c : d.contacts()) {
-        const char* kind = c.kind == device::ContactKind::ohmic ? "ohmic" : c.kind == device::ContactKind::gate ? "gate" : "electrode";
+        const char* kind = c.kind == device::ContactKind::ohmic      ? "ohmic"
+                           : c.kind == device::ContactKind::gate     ? "gate"
+                           : c.kind == device::ContactKind::schottky ? "schottky"
+                                                                     : "electrode";
         add(device, "contact " + c.name + " (" + kind + ")", tree_data(tree_none, 0));
     }
     TreeView_Expand(tree_, device, TVE_EXPAND);

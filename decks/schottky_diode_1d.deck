@@ -1,0 +1,41 @@
+# 1D silicon Schottky diode
+# A metal contact on n-type silicon (1e16 donors, 2 um), electron barrier 0.7 eV, ohmic back contact;
+# swept from -1 V to +0.4 V. Thermionic emission at the metal for both carriers (Unit 48), with the
+# effective Richardson constants of Sze & Ng for silicon (110 and 30 A cm^-2 K^-2). Without the
+# richardson keys the emission velocity is the material's own (A* from the density of states).
+#
+# Against the thermionic form J = A* T^2 exp(-0.7 eV / kT) (exp(V / V_T) - 1): the forward current
+# follows it with an ideality near 1.00; the field's lowering of the barrier (image force) and
+# tunnelling through it are not modelled (ARCHITECTURE.md 11.3), so the reverse current stays flat.
+#
+# The mesh is 1 nm in the first 0.2 um, where the depletion layer and the barrier's field are.
+
+[device]
+temperature = 300
+
+[mesh]
+type = tensor
+x = linspace(0, 0.2um, 201) + linspace(0.2um, 2um, 181)
+
+[region silicon]
+material = silicon
+
+[doping]
+profile = donor constant 1e16
+
+[contact anode]
+kind = schottky
+patch = x_min
+barrier = 0.7
+richardson_n = 110
+richardson_p = 30
+
+[contact cathode]
+kind = ohmic
+patch = x_max
+
+[sweep]
+contact anode = -1 : 0.4 : 0.05
+
+[output]
+table = schottky_diode_1d.csv

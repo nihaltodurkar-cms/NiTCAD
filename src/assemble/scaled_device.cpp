@@ -12,6 +12,7 @@
 #include "NiTCAD/physics/interface_traps.hpp"
 #include "NiTCAD/physics/ionization.hpp"
 #include "NiTCAD/physics/semiconductor.hpp"
+#include "NiTCAD/physics/thermionic_emission.hpp"
 
 namespace NiTCAD::assemble::detail {
 
@@ -114,6 +115,10 @@ std::expected<ScaledDevice, base::Error> make_scaled_device(const device::Device
     std::vector<GateTerm> gate_terms(n, GateTerm{0.0, 0.0, 0.0});
     s.electrode.assign(n, -1);
     s.electrode_potential.assign(n, 0.0);
+    s.schottky.assign(n, -1);
+    s.schottky_eta.assign(n, 0.0);
+    s.schottky_kn.assign(n, 0.0);
+    s.schottky_kp.assign(n, 0.0);
     const auto contacts = device.contacts();
     for (std::size_t c = 0; c < contacts.size(); ++c) {
         const device::Contact& contact = contacts[c];
@@ -121,6 +126,39 @@ std::expected<ScaledDevice, base::Error> make_scaled_device(const device::Device
         if (contact.kind == device::ContactKind::ohmic) {
             for (const mesh::NodeId v : contact.nodes) {
                 s.contact[static_cast<std::size_t>(v)] = static_cast<std::int32_t>(c);
+            }
+            continue;
+        }
+        if (contact.kind == device::ContactKind::schottky) {
+            // The device has checked that every node is on the patch (both lists increase).
+            const device::SchottkyBarrier& b = contact.schottky;
+            const mesh::BoundaryPatch* patch = m.find_boundary(b.boundary);
+            NITCAD_EXPECTS(patch != nullptr);
+            std::size_t k = 0;
+            for (const mesh::NodeId v : contact.nodes) {
+                while (patch->nodes[k] < v) ++k;
+                const auto i = static_cast<std::size_t>(v);
+                const physics::Semiconductor& material = device.material(v);
+                const double barrier =
+                    b.by_work_function
+                        ? b.work_function_eV - material.parameters().electron_affinity_eV
+                        : b.barrier_eV;
+                if (!(barrier >= 0.0 && barrier <= physics::band_gap_eV(material, T))) {
+                    return std::unexpected(
+                        invalid("Schottky contact '" + contact.name +
+                                    "': the electron barrier is outside [0, Eg(T)] at a node",
+                                i));
+                }
+                // v A in the units of the scaled fluxes, as a thermionic edge's K.
+                const double area = patch->areas[k] / (coupling_scale * scaling.D0);
+                s.schottky[i] = static_cast<std::int32_t>(c);
+                s.schottky_eta[i] = s.log_dos_n[i] - barrier / scaling.V_T;
+                s.schottky_kn[i] = physics::emission_velocity_cm_s(
+                                       material, physics::Carrier::electron, T, b.richardson_n) *
+                                   area;
+                s.schottky_kp[i] = physics::emission_velocity_cm_s(
+                                       material, physics::Carrier::hole, T, b.richardson_p) *
+                                   area;
             }
             continue;
         }

@@ -78,6 +78,7 @@ const char* kind_name(NiTCAD::device::ContactKind k) {
     case NiTCAD::device::ContactKind::ohmic: return "ohmic";
     case NiTCAD::device::ContactKind::gate: return "gate";
     case NiTCAD::device::ContactKind::electrode: return "electrode";
+    case NiTCAD::device::ContactKind::schottky: return "schottky";
     }
     return "?";
 }

@@ -716,6 +716,9 @@ std::expected<device::Contact, base::Error> Builder::contact(const Section& s,
     const Entry* kind = nullptr;
     std::vector<const Entry*> boxes;
     bool gate_keys = false;
+    const Entry* work_function = nullptr;
+    const Entry* barrier = nullptr;
+    bool schottky_keys = false;
     for (const Entry& e : s.entries) {
         if (e.key == "kind") kind = &e;
         else if (e.key == "patch") patch = &e;
@@ -744,6 +747,20 @@ std::expected<device::Contact, base::Error> Builder::contact(const Section& s,
             NITCAD_DECK_TRY(v, num(e));
             c.gate.work_function_eV = v;
             c.electrode.work_function_eV = v;
+            c.schottky.work_function_eV = v;
+            work_function = &e;
+        } else if (e.key == "barrier") {  // Unit 48
+            NITCAD_DECK_TRY(v, num(e));
+            c.schottky.barrier_eV = v;
+            barrier = &e;
+        } else if (e.key == "richardson_n") {
+            NITCAD_DECK_TRY(v, num(e));
+            c.schottky.richardson_n = v;
+            schottky_keys = true;
+        } else if (e.key == "richardson_p") {
+            NITCAD_DECK_TRY(v, num(e));
+            c.schottky.richardson_p = v;
+            schottky_keys = true;
         } else {
             return std::unexpected(unknown(e, s));
         }
@@ -752,9 +769,21 @@ std::expected<device::Contact, base::Error> Builder::contact(const Section& s,
     if (kind->value == "ohmic") c.kind = device::ContactKind::ohmic;
     else if (kind->value == "gate") c.kind = device::ContactKind::gate;
     else if (kind->value == "electrode") c.kind = device::ContactKind::electrode;
-    else return std::unexpected(at(kind->line, "kind is ohmic, gate or electrode"));
+    else if (kind->value == "schottky") c.kind = device::ContactKind::schottky;
+    else return std::unexpected(at(kind->line, "kind is ohmic, gate, electrode or schottky"));
     if (gate_keys && c.kind != device::ContactKind::gate) {
         return std::unexpected(at(s.line, "oxide_thickness, oxide_permittivity and fixed_charge are for a gate"));
+    }
+    if ((barrier || schottky_keys) && c.kind != device::ContactKind::schottky) {
+        return std::unexpected(at(s.line, "barrier, richardson_n and richardson_p are for a Schottky contact"));
+    }
+    if (c.kind == device::ContactKind::schottky) {
+        // Exactly one of the barrier and the work function (SD1).
+        if ((barrier != nullptr) == (work_function != nullptr)) {
+            return std::unexpected(at(s.line, "[contact " + s.name + "] needs exactly one of 'barrier' and 'work_function'"));
+        }
+        c.schottky.by_work_function = work_function != nullptr;
+        c.schottky.boundary = patch ? patch->value : std::string{};
     }
     if (!patch) return std::unexpected(at(s.line, "[contact " + s.name + "] needs 'patch'"));
     const mesh::BoundaryPatch* b = d.mesh.find_boundary(patch->value);

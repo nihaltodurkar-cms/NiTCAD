@@ -793,6 +793,12 @@ private:
     std::vector<physics::DopantLevels> levels_;  // dopant levels in units of kT
     std::vector<double> radiative_;              // B [cm^3/s]
     std::vector<std::int32_t> contact_;   // ohmic contact index per node, or -1
+    // Unit 48: the Schottky contact index per node, or -1; eta_B, K_n and K_p per node
+    // (scaled_device.hpp); and the contact whose terminal current and charge a node's edges count
+    // toward (ohmic or Schottky), or -1.
+    std::vector<std::int32_t> schottky_;
+    std::vector<double> schottky_eta_, schottky_kn_, schottky_kp_;
+    std::vector<std::int32_t> owner_;
     std::vector<char> insulator_;         // 1 on insulator nodes
     std::vector<std::int32_t> electrode_; // electrode contact index per node, or -1
     std::vector<double> electrode_potential_;  // psi_E at zero bias
@@ -804,7 +810,8 @@ private:
 
     [[nodiscard]] InterfaceStatistics statistics(std::size_t node) const noexcept;
     std::vector<device::ContactKind> kinds_;  // per contact
-    std::vector<double> psi0_, n0_, p0_;  // Dirichlet values per node (contact nodes only)
+    // Dirichlet values per node (contact nodes only); on a Schottky node psi_S, n_B and p_B.
+    std::vector<double> psi0_, n0_, p0_;
     std::vector<EdgeTerm> edges_;
     std::vector<std::size_t> block_;      // per node, 9 positions of its 3x3 diagonal block
     std::vector<ImpactNode> impact_nodes_;

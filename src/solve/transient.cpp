@@ -257,7 +257,10 @@ std::expected<results::Transient, base::Error> solve_transient_unobserved(
         if (device.is_insulator(static_cast<mesh::NodeId>(i))) measure[i] = Measure::potential;
     }
     for (const device::Contact& c : contacts) {
-        if (c.kind == device::ContactKind::gate) continue;  // box rows
+        // Box rows; a Schottky node's continuity rows too (its psi is held, its error 0).
+        if (c.kind == device::ContactKind::gate || c.kind == device::ContactKind::schottky) {
+            continue;
+        }
         for (const mesh::NodeId i : c.nodes) measure[static_cast<std::size_t>(i)] = Measure::none;
     }
     // Electrothermal: the temperature rise of every node off the isothermal sinks, absolute in

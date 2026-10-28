@@ -20,7 +20,7 @@ constexpr std::array<std::string_view, 9> materials{"silicon", "silicon_legacy",
                                                     "sic_4h",  "algaas",         "sio2",      "insulator"};
 constexpr std::array<std::string_view, 2> dopants{"donor", "acceptor"};
 constexpr std::array<std::string_view, 3> shapes{"constant", "gaussian", "erfc"};
-constexpr std::array<std::string_view, 3> contact_kinds{"ohmic", "gate", "electrode"};
+constexpr std::array<std::string_view, 4> contact_kinds{"ohmic", "gate", "electrode", "schottky"};
 constexpr std::array<std::string_view, 3> electrodes{"n_poly", "p_poly", "metal"};
 constexpr std::array<std::string_view, 2> transports{"drift_diffusion", "thermionic"};
 constexpr std::array<std::string_view, 2> thermal_kinds{"isothermal", "resistance"};
@@ -78,15 +78,18 @@ constexpr std::array<KeyInfo, 1> doping_keys{{
      shapes, {}},
 }};
 
-constexpr std::array<KeyInfo, 8> contact_keys{{
-    {"kind", 0, false, "ohmic", "ohmic | gate | electrode", contact_kinds, {}, {}},
+constexpr std::array<KeyInfo, 11> contact_keys{{
+    {"kind", 0, false, "ohmic", "ohmic | gate | electrode | schottky", contact_kinds, {}, {}},
     {"patch", 0, false, "<boundary patch>", "the boundary patch the contact lies on", {}, {}, {}},
     {"box", 0, true, "<lo hi> per dimension", "only the patch's nodes inside the box", {}, {}, {}},
     {"oxide_thickness", 0, false, "<length>", "gate: the oxide's thickness", {}, {}, "gate"},
     {"oxide_permittivity", 0, false, "3.9", "gate: the oxide's relative permittivity", {}, {}, "gate"},
     {"fixed_charge", 0, false, "0", "gate: oxide fixed charge, cm^-2", {}, {}, "gate"},
     {"electrode", 0, false, "n_poly", "gate, electrode: n_poly | p_poly | metal", electrodes, {}, "gate electrode"},
-    {"work_function", 0, false, "<eV>", "gate, electrode: a metal's work function, eV", {}, {}, "gate electrode"},
+    {"work_function", 0, false, "<eV>", "gate, electrode, schottky: a metal's work function, eV", {}, {}, "gate electrode schottky"},
+    {"barrier", 0, false, "<eV>", "schottky: the electron barrier height, eV", {}, {}, "schottky"},
+    {"richardson_n", 0, false, "0", "schottky: electron Richardson constant, A/(cm^2 K^2); 0 the material's", {}, {}, "schottky"},
+    {"richardson_p", 0, false, "0", "schottky: hole Richardson constant, A/(cm^2 K^2); 0 the material's", {}, {}, "schottky"},
 }};
 
 constexpr std::array<KeyInfo, 8> interface_keys{{

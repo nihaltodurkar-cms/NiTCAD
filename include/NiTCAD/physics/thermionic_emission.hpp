@@ -27,4 +27,10 @@ namespace NiTCAD::physics {
 [[nodiscard]] double emission_velocity_cm_s(const Semiconductor& m, Carrier carrier,
                                             double temperature_K);
 
+// The same with an effective Richardson constant richardson [A / (cm^2 K^2)] in place of the
+// material's when it is positive (a Schottky contact's, Unit 48); 0 gives the overload above.
+// Preconditions (NITCAD_EXPECTS): temperature_K finite and positive, richardson finite and >= 0.
+[[nodiscard]] double emission_velocity_cm_s(const Semiconductor& m, Carrier carrier,
+                                            double temperature_K, double richardson);
+
 }  // namespace NiTCAD::physics
