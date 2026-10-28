@@ -79,7 +79,7 @@ constexpr std::array<KeyInfo, 1> doping_keys{{
      shapes, {}},
 }};
 
-constexpr std::array<KeyInfo, 11> contact_keys{{
+constexpr std::array<KeyInfo, 17> contact_keys{{
     {"kind", 0, false, "ohmic", "ohmic | gate | electrode | schottky", contact_kinds, {}, {}},
     {"patch", 0, false, "<boundary patch>", "the boundary patch the contact lies on", {}, {}, {}},
     {"box", 0, true, "<lo hi> per dimension", "only the patch's nodes inside the box", {}, {}, {}},
@@ -91,6 +91,12 @@ constexpr std::array<KeyInfo, 11> contact_keys{{
     {"barrier", 0, false, "<eV>", "schottky: the electron barrier height, eV", {}, {}, "schottky"},
     {"richardson_n", 0, false, "0", "schottky: electron Richardson constant, A/(cm^2 K^2); 0 the material's", {}, {}, "schottky"},
     {"richardson_p", 0, false, "0", "schottky: hole Richardson constant, A/(cm^2 K^2); 0 the material's", {}, {}, "schottky"},
+    {"tunnelling", 0, false, "off", "gate, electrode: off | on | a list of ecb, hvb, evb (gate tunnelling)", {}, {}, "gate electrode"},
+    {"oxide_affinity", 0, false, "0", "gate: the oxide's electron affinity, eV (tunnelling; 0: SiO2's)", {}, {}, "gate"},
+    {"oxide_band_gap", 0, false, "0", "gate: the oxide's band gap, eV (tunnelling)", {}, {}, "gate"},
+    {"oxide_mass_n", 0, false, "0", "gate: electron tunnelling mass, m0", {}, {}, "gate"},
+    {"oxide_mass_p", 0, false, "0", "gate: hole tunnelling mass, m0", {}, {}, "gate"},
+    {"oxide_mass_evb", 0, false, "0", "gate: valence-band electron tunnelling mass, m0 (0: the electron's)", {}, {}, "gate"},
 }};
 
 constexpr std::array<KeyInfo, 8> interface_keys{{

@@ -470,7 +470,9 @@ TEST_CASE("app vocabulary: completion at the caret (XD3, XG2)", "[app]") {
         CHECK(s->items[0].insert == "contact ");
         // Contact keys by kind.
         CHECK(labels(app::complete("[contact a]\nkind = ohmic\n\n", 3, 0)) == V{"patch", "box"});
-        CHECK(labels(app::complete("[contact a]\nkind = gate\no\n", 3, 1)) == V{"oxide_thickness", "oxide_permittivity"});
+        CHECK(labels(app::complete("[contact a]\nkind = gate\no\n", 3, 1)) ==
+              V{"oxide_thickness", "oxide_permittivity", "oxide_affinity", "oxide_band_gap",
+                "oxide_mass_n", "oxide_mass_p", "oxide_mass_evb"});  // Unit 51 (GD10) added five
         // The word at the caret is replaced whole.
         const auto mid = app::complete("[solver]\nmax_iter = 5\n", 2, 4);
         REQUIRE(mid);

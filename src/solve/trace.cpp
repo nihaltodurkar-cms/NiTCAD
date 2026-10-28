@@ -54,7 +54,7 @@ public:
           solver_(*linalg::LinearSolver::create(config)),  // checked by the caller
           bias_(std::move(bias)), contact_(contact), V_T_(V_T) {
         jacobian_ = dd.make_jacobian();
-        if (dd.electrothermal()) {
+        if (dd.bias_nonlinear()) {
             structural_.assign(dd.unknowns(), 0);
             for (const std::size_t r : dd.bias_rows(contact)) structural_[r] = 1;
         }
@@ -84,7 +84,7 @@ public:
                                                               std::span<double> f,
                                                               results::ConvergenceRecord& record) {
         const std::size_t n = dd_->unknowns();
-        const bool thermal = dd_->electrothermal();
+        const bool thermal = dd_->bias_nonlinear();
         if (thermal) {  // the rows at lambda itself, dF at x (per unit lambda)
             bias_[contact_] = y[n] * V_T_;
             (void)dd_->set_bias(bias_);  // finite

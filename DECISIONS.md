@@ -4343,6 +4343,96 @@ mutants, nothing pushed or merged without authorization.
 | GC16 | Reported, not gated: GC8's I_G–V_G against a measured ultrathin-oxide J–V if an accessible source is found (then its tolerance is ruled before the comparison is run); the FinFET deck's gate current against its drain current. |
 | GC17 | Full Release and Debug suites; zero warnings; hand mutants on each GD row caught or recorded as equivalent. |
 
+**Owner rulings on the criteria (AskUserQuestion, 2026-10-28), after the first deck-level runs.** Measured on GC8's
+capacitor (lumped, all processes, the deck defaults): its gate current is SRH-generation-limited (2.98e-9 A/cm² at
++0.5 V, 8.59e-9 at +2 V); the inversion electrons' quasi-Fermi level lies 1.2e-6 to 9.6e-5 eV above the gate's; the
+substrate's `terminal_current_resolution` is 1.5e-5 to 8.7e-7 A/cm², so its current (−3.04e-9, −9.11e-9) is not
+resolved. With SRH and Auger off the gate current is 5.6e-12 A/cm² and the two currents agree to about 1e-7.
+
+| # | Ruling |
+|---|---|
+| GR1 | GC8's conservation check (gate current against the substrate's) runs with SRH and Auger recombination off, so the current is tunnelling-limited and resolved at the substrate; tolerance as GC8 (1e-10 relative), else its measured value goes back to the owner. The rest of GC8 keeps the deck defaults. |
+| GR2 | GC8's ECB recomputation: \|ΔJ\| ≤ 1e-12 × the one-way flux, the GD4 integral with the electrode's supply removed (only the semiconductor side supplying), which is the scale the rounding of the inputs resolves; the net current near quasi-equilibrium is a small difference of the two one-way fluxes. |
+| GR3 | GC12's small-signal conductance is compared at 0 Hz (not 1 Hz) with the DC difference, same device and 1e-5: the capacitor's inversion layer responds in about 10³ s, so 1 Hz is its high-frequency response (G = 6.5e-8 against the DC 3.2e-9 S/cm², physical). |
+| GR4 | GC9's meshed oxide (31 oxide nodes at 0.05 nm) trips `min_pivot_ratio` (1e-11; measured 6.7e-13 at the next silicon node's electrons, scaling with the tunnel entries; 2.7e-4 for the lumped gate and for paths of at most 6 nodes). With the guard off Newton converges in 5–9 iterations and the meshed current is the lumped one within 6e-5. Investigate the elimination first (ordering, structural entries) and fix it in the assembler or solver if possible; ask again if not. |
+
+**GR4 investigation (2026-10-28).** A dense partial-pivoting LU of the same equilibrated Jacobian at the equilibrium
+state gives pivot ratios of 2.7e-4 to 3.5e-4 in natural order, and the dense factors estimate ‖A⁻¹‖ (equilibrated,
+max norm over sign vectors): meshed without tunnelling 5.7e18, meshed with HVB only 5.7e18, meshed with all processes
+1.2e14; lumped without 8.4e17, lumped with all 1.2e14. The capacitor's Jacobian is near-singular with or without
+tunnelling: the inversion electrons are almost floating (their link to the substrate contact through the depletion
+region is exponentially weak; only generation and the tunnel current anchor them), and tunnelling improves the
+conditioning by about four orders. Eigen's SparseLU pivots partially over each column's structural rows
+(`SparseLU_pivotL.h`, threshold 1.0), so its smallest pivot is genuine for its COLAMD order; the path's row changes
+that order, which exposes the near-singularity to the `min_pivot_ratio` guard, a floating-region detector whose
+verdict depends on the order (it passes the equally conditioned lumped device). Without tunnelling the meshed device
+passes the guard at 0 V and then does not converge at +0.5 V. No assembler or solver defect: the path entries change
+the ordering, not the conditioning. Returned to the owner.
+
+| # | Ruling |
+|---|---|
+| GR5 | GC9's meshed device runs with `[solver] min_pivot_ratio = 0`; recorded as a limitation: a tunnelling MOS capacitor without a minority-carrier contact is near-singular and may trip the guard (lower it, or give the inversion layer a source). |
+
+**Measured after GR1–GR5, and ruled (AskUserQuestion, 2026-10-28).** GR1's setup (SRH and Auger off): gate and
+substrate agree to about 2e-10 relative in inversion; in accumulation an absolute floor of 7.6e-10 A/cm², the same with
+Newton's `tol_update` at 1e-8 and 1e-12 (the substrate terminal current's rounding of cancelling hole fluxes at
+p = 5e17; 37% of the 2.6e-10 A/cm² at −0.1 V). GR3's 0 Hz admittance: Y_GG against the DC difference 4e-6 relative at
+−1.0 V; at +1.5 V unresolved: +2.7e-9 to −4.8e-8 S/cm² against the DC 3.19e-9 as the linear solve's backward error goes
+from 1.4e-11 to 1.7e-16, the solver's own reported resolution 6e-7 to 8e-7 S/cm² (the gate current there is a 1e-5
+cancellation between its bias term and the inversion electrons, which follow the gate). GC12's transient (1.4 → 1.5 V,
+GR1's setup), the worst relative sum over steps with a current above 1e-3 A/cm²: 2.5e-8 without tunnelling (the
+transient's own floor), 6.1e-8 with it. GR2 as worded scales by the semiconductor side's one-way flux, about 1e-16
+A/cm² in accumulation, where the current comes from the gate (the measured ECB agreement there is 6e-17 A/cm² on
+0.126).
+
+| # | Ruling |
+|---|---|
+| GR6 | GC8's conservation (GR1's setup): \|I_G + I_sub\| ≤ 1e-10 \|I_G\| + 1e-9 A/cm². |
+| GR7 | GC12's small-signal comparison (GR3, 0 Hz) at −1.0 V (accumulation), within 1e-5. The 0 Hz gate admittance of a generation-limited capacitor in inversion is recorded as unresolved; its reported resolution covers the miss. |
+| GR8 | GC12's transient: \|Σ I\| ≤ 1e-7 × max \|I\| at each step with max \|I\| > 1e-3 A/cm² (GR1's setup applied to the transient). |
+| GR9 | GR2's scale is the larger of the two one-way fluxes (the semiconductor's side supplying alone, and the electrode's alone). |
+
+**Slice 2 (device, assembly, deck, files, record, app, CLI), as built.**
+- `device::Contact::tunnelling` (`TunnelProcess` bits; 0 off) and `GateStack`'s oxide band data (`oxide_affinity_eV`,
+  `oxide_band_gap_eV`, `oxide_mass_n`, `oxide_mass_p`, `oxide_mass_evb`; 0 absent). The device refuses tunnelling on
+  anything but a gate or an electrode, unknown process bits, a partial or non-finite band-data set, and a tunnelling
+  gate whose permittivity is not 3.9 without band data (GD9).
+- `physics::silicon_dioxide_tunnelling_parameters` holds SiO₂'s band data; `silicon_dioxide_parameters` is unchanged
+  and the assembler substitutes the tunnelling set for it, so device files and run identities without tunnelling are
+  unchanged (GC1).
+- `assemble/gate_tunnels.cpp`: a lumped gate gives one tunnel per gate node (one piece of t_ox, its patch area); an
+  electrode gives one per semiconductor–insulator grid edge whose straight grid line through the insulator reaches one
+  of its nodes (the edge's coupling area). The barrier starts at the first edge's midpoint (the box method's interface;
+  the semiconductor's half is not barrier), with the permittivity-weighted potential there; an edge between two
+  insulator materials is split at its midpoint the same way. Electrode paths need `DeviceDescription::cells` (else
+  invalid_input). Each process's value and gradient are carried over the local columns (ψ, n, p of the node, ψ of each
+  path node, a lumped gate's bias), so the Jacobian is the exact derivative of the discrete flux.
+- The term `GateTunnelling` (continuity rows, global domain) adds −T_n to the electron row and +T_p to the hole row;
+  the pattern gains the path's ψ columns in both. `terminal_currents` adds T_n − T_p to the tunnel's contact;
+  `small_signal_currents` its partials and a lumped gate's bias term; `bias_derivative(contact, x)` the lumped bias
+  partials. A lumped tunnelling gate makes dF/dV depend on the state: `bias_nonlinear()`, read by the bordered trace and
+  the small-signal forcing.
+- Refusals (GD9): electrothermal with tunnelling (`DriftDiffusion::create`), the weighted terminal current
+  (`weighted_current.cpp`).
+- Deck: `[contact] tunnelling = off | on | ecb, hvb, evb` and the gate keys `oxide_affinity`, `oxide_band_gap`,
+  `oxide_mass_n`, `oxide_mass_p`, `oxide_mass_evb`. An insulator region's band data uses the parameter names, as every
+  material parameter key does (`electron_affinity_eV`, `band_gap_eV`, `tunnel_mass_n`, `tunnel_mass_p`,
+  `tunnel_mass_evb`), not GD10's shorter names.
+- Device file: contact key 7 (`tunnelling`) and gate-record keys 7–11 (band data), insulator-parameter keys 2–6, each
+  written only when nonzero, so files without tunnelling are byte-identical (format version unchanged).
+- Run record: insulator band data and each tunnelling contact's processes and gate band data hashed only when present;
+  each tunnelling contact named as the setting `tunnelling.<contact>` (its process bits).
+- `BiasPoint::tunnelling_ecb`, `_hvb`, `_evb` (per contact, terminal_current's unit and sign; empty without
+  tunnelling), sweep-file keys 19–21; the CLI's sweep table gains `<contact> ECB A`, `HVB A`, `EVB A` per tunnelling
+  contact; the app vocabulary names the six contact keys (the gate's `o…` completion test now lists the five oxide
+  keys).
+- Tests: `tests/assemble/gate_tunnelling_test.cpp` (GC6, GC7 Jacobians, equilibrium, bias and small-signal partials,
+  GC13); `tests/deck/gate_tunnelling_test.cpp` (GC7 Newton, GC8, GC9, GC10, GC11 in 2D, GC12, GC15). Measured: GC8
+  ECB against the integral on the solution's bands 6e-17 A/cm² on 0.126 (accumulation); GC9 0.000% and 0.006%;
+  GC12 4e-6 (−1 V) and the transient 6.1e-8; GC7 corrections 1.0e-2, 3.5e-5, 2.5e-11. With Newton's `tol_update` at
+  1e-12 (not the deck's 1e-8) the same transient's sum reaches 1.4e-4 (an absolute 2e-7 A/cm² while the currents decay
+  through 1 A/cm²); not investigated.
+
 ---
 
 ## New questions the advisor raised (not yet in `ARCHITECTURE.md`)

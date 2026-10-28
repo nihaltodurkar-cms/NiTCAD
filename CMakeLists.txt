@@ -281,6 +281,7 @@ add_library(nitcad_assemble STATIC
   src/assemble/drift_diffusion.cpp
   src/assemble/electrothermal.cpp
   src/assemble/tunnel_paths.cpp
+  src/assemble/gate_tunnels.cpp
   src/assemble/observer.cpp
   src/assemble/fields.cpp
   src/assemble/terms.cpp
@@ -308,6 +309,7 @@ add_executable(nitcad_assemble_test
   tests/assemble/surface_mobility_test.cpp
   tests/assemble/schottky_test.cpp
   tests/assemble/quantum_confinement_test.cpp
+  tests/assemble/gate_tunnelling_test.cpp
   tests/baseline/trace_listener.cpp)
 target_link_libraries(nitcad_assemble_test PRIVATE NiTCAD::assemble Catch2::Catch2WithMain)
 # The terms (Unit 40) are internal to the assemble layer; their own test reads them.
@@ -535,6 +537,7 @@ add_executable(nitcad_deck_test
   tests/deck/surface_mobility_test.cpp
   tests/deck/schottky_test.cpp
   tests/deck/quantum_confinement_test.cpp
+  tests/deck/gate_tunnelling_test.cpp
   tests/baseline/trace_listener.cpp)
 target_include_directories(nitcad_deck_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/deck")
 # The plot tests read the images back (Unit 25a).

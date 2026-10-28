@@ -87,6 +87,7 @@ std::expected<results::SmallSignal, base::Error> solve_small_signal_unobserved(
     run.contacts = contacts;
     run.frequency_Hz = frequencies;
 
+    const bool forcing_at_state = thermal || system->bias_nonlinear();  // Unit 51 too
     // The forcing -dF/dV of each contact (with the electrothermal model it depends on the
     // operating point: set there).
     std::vector<std::vector<Complex>> forcing(contacts, std::vector<Complex>(n));
@@ -96,7 +97,7 @@ std::expected<results::SmallSignal, base::Error> solve_small_signal_unobserved(
             for (std::size_t q = 0; q < n; ++q) forcing[j][q] = -d[q];
         }
     };
-    if (!thermal) set_forcing(std::vector<double>(n, 0.0));  // the state is not read
+    if (!forcing_at_state) set_forcing(std::vector<double>(n, 0.0));  // the state is not read
     linalg::ComplexSparseMatrix a = system->make_small_signal_matrix();
     std::vector<std::vector<Complex>> response(contacts, std::vector<Complex>(n));
     std::vector<Complex> product(n);  // A dx, for the residual
@@ -108,7 +109,7 @@ std::expected<results::SmallSignal, base::Error> solve_small_signal_unobserved(
         std::vector<double> x(n);
         detail::scaled_state(*system, dc.fields, *scaling, x);
         system->stamp_contacts(x);
-        if (thermal) set_forcing(x);
+        if (forcing_at_state) set_forcing(x);
         // Nonlocal tunnelling: the paths at the operating point, frozen (their geometry's own
         // dependence on the state is not in the small-signal matrix; ARCHITECTURE.md 6.2).
         if (system->tunnelling()) {

@@ -1,4 +1,4 @@
-// The run records of a bias sweep, a transient run, a small-signal run and a trace (ARCHITECTURE.md
+﻿// The run records of a bias sweep, a transient run, a small-signal run and a trace (ARCHITECTURE.md
 // 6.6): an identity digest of every input, the options as named settings, and the provenance
 // (Unit 42), which is not part of the identity.
 #include <bit>
@@ -191,9 +191,10 @@ std::vector<std::pair<std::string, double>> settings(const BiasOptions& o) {
     return s;
 }
 
-// The device and the named settings, in the order the sweep's record has always hashed them.
+// The device and the named settings, in the order the sweep's record has always hashed them;
+// appends the device's own named settings (gate tunnelling) to `named`.
 void device_and_settings(Digest& d, const device::Device& device, const BiasOptions& options,
-                         const std::vector<std::pair<std::string, double>>& named) {
+                         std::vector<std::pair<std::string, double>>& named) {
     const mesh::Mesh& m = device.mesh();
     d.integer(static_cast<std::uint64_t>(m.dimension()));
     d.integer(m.node_count());
@@ -218,7 +219,15 @@ void device_and_settings(Digest& d, const device::Device& device, const BiasOpti
         d.text(r.name);
         if (device::is_insulator(r)) {  // tagged; a semiconductor region hashes as before
             d.text("insulator");
-            d.real(std::get<physics::Insulator>(r.material).parameters().eps_r);
+            const physics::InsulatorParameters& ip =
+                std::get<physics::Insulator>(r.material).parameters();
+            d.real(ip.eps_r);
+            if (physics::has_band_data(ip)) {  // Unit 51: hashed only when given, so a digest stays put
+                for (const double v : {ip.electron_affinity_eV, ip.band_gap_eV, ip.tunnel_mass_n,
+                                       ip.tunnel_mass_p, ip.tunnel_mass_evb}) {
+                    d.real(v);
+                }
+            }
             continue;
         }
         material(d, std::get<physics::Semiconductor>(r.material).parameters());
@@ -254,6 +263,17 @@ void device_and_settings(Digest& d, const device::Device& device, const BiasOpti
                                                : c.schottky.barrier_eV);
             d.real(c.schottky.richardson_n);
             d.real(c.schottky.richardson_p);
+        }
+        if (c.tunnelling != 0) {  // Unit 51: hashed only when on, so a digest stays put
+            d.text("tunnelling");
+            d.integer(c.tunnelling);
+            if (c.kind == device::ContactKind::gate) {
+                for (const double v : {c.gate.oxide_affinity_eV, c.gate.oxide_band_gap_eV,
+                                       c.gate.oxide_mass_n, c.gate.oxide_mass_p,
+                                       c.gate.oxide_mass_evb}) {
+                    d.real(v);
+                }
+            }
         }
     }
     // Interface charge and traps act on Poisson (both equation sets), recombination on the
@@ -360,6 +380,13 @@ void device_and_settings(Digest& d, const device::Device& device, const BiasOpti
             d.integer(static_cast<std::uint64_t>(f.transport));
         }
     }
+    // Unit 51 (GD10): each tunnelling contact's processes (device::TunnelProcess bits), named so a
+    // record says which ran; only for such contacts, so other records are unchanged.
+    for (const device::Contact& c : device.contacts()) {
+        if (c.tunnelling != 0) {
+            named.emplace_back("tunnelling." + c.name, static_cast<double>(c.tunnelling));
+        }
+    }
     d.integer(named.size());
     for (const auto& [name, value] : named) {
         d.text(name);
@@ -391,7 +418,7 @@ results::RunRecord make_run_record(const device::Device& device, const BiasOptio
                                    std::span<const std::vector<double>> points,
                                    const results::NodeFields* initial) {
     Digest d;
-    const auto named = settings(options);
+    auto named = settings(options);
     device_and_settings(d, device, options, named);
     d.integer(points.size());
     for (const auto& p : points) d.reals(p);

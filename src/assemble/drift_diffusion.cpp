@@ -232,6 +232,15 @@ std::expected<DriftDiffusion, base::Error> DriftDiffusion::create(
     s.gates_ = std::move(scaled->gates);
     s.kinds_ = std::move(scaled->kinds);
     s.contact_count_ = device.contacts().size();
+    s.temperature_K_ = T;
+    // Unit 51 (DECISIONS.md GD9): gate tunnelling is isothermal.
+    if (std::ranges::any_of(device.contacts(),
+                            [](const device::Contact& c) { return c.tunnelling != 0; })) {
+        if (models.electrothermal) {
+            return refuse("gate tunnelling with the electrothermal model is not supported");
+        }
+        if (auto e = s.make_gate_tunnels(device, scaling)) return std::unexpected(std::move(*e));
+    }
     s.rate_scale_ = scaling.Ns / scaling.R0;
     s.Ns_ = scaling.Ns;
     s.auger_ = models.auger;
@@ -451,6 +460,7 @@ std::expected<DriftDiffusion, base::Error> DriftDiffusion::create(
             }
         }
     }
+    s.locate_gate_tunnels();
     for (EdgeTerm& t : s.edges_) {
         for (std::size_t k = 0; k < 5; ++k) {
             t.ab[k] = detail::position(s.pattern_, stride * t.a + edge_rows[k],
@@ -1154,6 +1164,16 @@ std::vector<double> DriftDiffusion::terminal_currents(std::span<const double> x)
         if (ca >= 0) terminal[static_cast<std::size_t>(ca)] += total;  // leaves contact a
         if (cb >= 0) terminal[static_cast<std::size_t>(cb)] -= total;  // flows into contact b
     }
+    // Gate tunnelling (Unit 51, GD7): what a tunnel's node sends into the device through its
+    // edges, T_n - T_p, enters through its gate.
+    if (!gate_tunnels_.empty()) {
+        const std::vector<NodeDegeneracy> g = degeneracies(x);
+        GateTunnelFlux flux;
+        for (const GateTunnel& t : gate_tunnels_) {
+            gate_tunnel_flux(t, x, g, flux);
+            terminal[static_cast<std::size_t>(t.contact)] += flux.T_n - flux.T_p;
+        }
+    }
     detail::observe("terminal_currents", terminal);
     return terminal;
 }
@@ -1487,6 +1507,23 @@ std::vector<DriftDiffusion::CurrentRow> DriftDiffusion::small_signal_currents(
             add(cs, columns[c], -s * t.d_flux_semiconductor[c]);
         }
     }
+    // Gate tunnelling (Unit 51): the linearized T_n - T_p of each tunnel, a lumped gate's own
+    // bias among its columns.
+    if (!gate_tunnels_.empty()) {
+        GateTunnelFlux flux;
+        for (const GateTunnel& t : gate_tunnels_) {
+            gate_tunnel_flux(t, x, g, flux);
+            for (std::size_t c = 0; c < 3; ++c) {
+                add(t.contact, m_ * t.node + c, flux.d_n[c] - flux.d_p[c]);
+            }
+            for (std::size_t k = 0; k < t.nodes.size(); ++k) {
+                add(t.contact, m_ * t.nodes[k], flux.d_n[3 + k] - flux.d_p[3 + k]);
+            }
+            if (t.lumped) {
+                rows[static_cast<std::size_t>(t.contact)].bias += flux.d_n[3] - flux.d_p[3];
+            }
+        }
+    }
     // Displacement: s times the contact charges (contact_charges).
     for (std::size_t i = 0; i < node_count(); ++i) {
         if (!gates_.on_gate(i)) continue;
@@ -1667,6 +1704,7 @@ void DriftDiffusion::set_paths(TunnelPaths paths) {
 }
 
 void DriftDiffusion::locate_positions() {
+    locate_gate_tunnels();
     for (std::size_t i = 0; i < node_count(); ++i) {
         for (std::size_t r = 0; r < 3; ++r) {
             for (std::size_t c = 0; c < 3; ++c) {

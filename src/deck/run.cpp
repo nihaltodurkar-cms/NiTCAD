@@ -60,6 +60,17 @@ std::expected<void, base::Error> write_table(const std::filesystem::path& path,
             text += "," + c.name + " weighted resolution A";
         }
     }
+    // Gate tunnelling (Unit 51, GD10): each tunnelling contact's current by process.
+    const bool tunnelling = !sweep.points.empty() && !sweep.points.front().tunnelling_ecb.empty();
+    std::vector<std::size_t> tunnels;
+    for (std::size_t c = 0; c < device.contacts().size(); ++c) {
+        if (tunnelling && device.contacts()[c].tunnelling != 0) tunnels.push_back(c);
+    }
+    for (const std::size_t c : tunnels) {
+        for (const char* what : {" ECB A", " HVB A", " EVB A"}) {
+            text += "," + device.contacts()[c].name + what;
+        }
+    }
     text += ",substeps\n";
     for (std::size_t k = 0; k < sweep.points.size(); ++k) {
         const results::BiasPoint& p = sweep.points[k];
@@ -69,6 +80,10 @@ std::expected<void, base::Error> write_table(const std::filesystem::path& path,
         if (weighted) {
             for (const double i : p.weighted_current) text += "," + format(i);
             for (const double i : p.weighted_current_resolution) text += "," + format(i);
+        }
+        for (const std::size_t c : tunnels) {
+            text += "," + format(p.tunnelling_ecb[c]) + "," + format(p.tunnelling_hvb[c]) + "," +
+                    format(p.tunnelling_evb[c]);
         }
         text += "," + std::to_string(p.bias_substeps) + "\n";
     }

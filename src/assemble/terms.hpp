@@ -157,6 +157,7 @@ struct DriftDiffusion::Terms {
     class ImpactGeneration;
     class LocalTunnelling;
     class PathTunnelling;
+    class GateTunnelling;
     // Electrothermal (thermal_terms.cpp; PoissonCharge is shared).
     class HeatSinks;
     class LatticeStorage;
