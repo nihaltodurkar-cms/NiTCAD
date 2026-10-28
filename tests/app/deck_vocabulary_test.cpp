@@ -65,6 +65,13 @@ Base base_for(std::string_view kind, std::string_view context) {
     if (kind == "contact") {
         if (context == "gate") return {read_file(std::filesystem::path(NITCAD_EXAMPLES_DIR) / "moscap_cv.deck"), "contact gate"};
         if (context == "electrode") return {app_test::mosfet2d, "contact gate"};
+        if (context == "schottky") {
+            // The diode with a Schottky anode (Unit 48).
+            std::string t = diode;
+            const std::string ohmic = "[contact anode]\nkind = ohmic\n";
+            t.replace(t.find(ohmic), ohmic.size(), "[contact anode]\nkind = schottky\nbarrier = 0.7\n");
+            return {t, "contact anode"};
+        }
         return {diode, "contact anode"};
     }
     if (kind == "region") return {diode, "region silicon"};
@@ -491,4 +498,28 @@ TEST_CASE("app vocabulary: completion at the caret (XD3, XG2)", "[app]") {
     CHECK_FALSE(app::complete("ty\n[mesh]\n", 1, 2));
     CHECK_FALSE(app::complete("[mesh]  \n", 1, 8));
     CHECK_FALSE(app::complete("[mesh]\n", 5, 0));
+}
+
+TEST_CASE("app vocabulary: the Schottky kind in the deck, the app and the CLI (Unit 48, SC15)", "[app]") {
+    const app::SectionInfo* contact = app::find_section_info("contact");
+    REQUIRE(contact != nullptr);
+    const app::KeyInfo* kind = app::find_key_info(*contact, "kind", "");
+    REQUIRE(kind != nullptr);
+    CHECK(std::ranges::find(kind->choices, std::string_view{"schottky"}) != kind->choices.end());
+    for (const std::string_view key : {"barrier", "richardson_n", "richardson_p", "work_function"}) {
+        CAPTURE(key);
+        CHECK(app::find_key_info(*contact, key, "schottky") != nullptr);
+        if (key != "work_function") CHECK(app::find_key_info(*contact, key, "ohmic") == nullptr);
+    }
+    std::string text = app_test::diode_sweep();
+    const std::string ohmic = "[contact anode]\nkind = ohmic\n";
+    text.replace(text.find(ohmic), ohmic.size(), "[contact anode]\nkind = schottky\nbarrier = 0.7\n");
+    const auto r = app::check_deck(text, {});
+    REQUIRE(r.plan);
+    CHECK(r.plan->device.contacts()[0].kind == device::ContactKind::schottky);
+    const auto deck = app_test::write(app_test::scratch("vocabulary_schottky"), "sbd.deck", text);
+    const auto cli = app_test::nitcad("check " + app_test::quoted(deck));
+    CAPTURE(cli.output);
+    REQUIRE(cli.status == 0);
+    CHECK(cli.output.find("contact anode: schottky, 1 nodes") != std::string::npos);
 }

@@ -11,8 +11,9 @@
 namespace NiTCAD::assemble {
 
 // bias_V holds one bias in V per contact, in the order of `kinds`. Errors (invalid_input): the
-// sizes differ; a bias is not finite; with thermal_equilibrium, an ohmic contact's bias is not 0
-// (thermal equilibrium has one Fermi level, that of the ohmic contacts; only gates may be biased).
+// sizes differ; a bias is not finite; with thermal_equilibrium, an ohmic or Schottky contact's bias
+// is not 0 (thermal equilibrium has one Fermi level, that of the ohmic and Schottky contacts; only
+// gates and electrodes may be biased).
 // The context index is the contact and the value its bias.
 [[nodiscard]] std::expected<void, base::Error> check_contact_bias(
     std::span<const device::ContactKind> kinds, std::span<const double> bias_V,

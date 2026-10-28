@@ -142,6 +142,7 @@ struct DriftDiffusion::Terms {
                                  double k, double rate, double d_n, double d_p, double d_t);
 
     class ContactRows;
+    class SchottkyRows;
     class InsulatorRows;
     class PoissonCharge;
     class Ionization;

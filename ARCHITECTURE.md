@@ -106,7 +106,7 @@ solver implementation.
 |---|---|---|
 | Region | geometry, material, doping and applicable equations | Implemented in `device`; a region is of a semiconductor or, since Unit 15b, of an insulator (Poisson only) |
 | Interface | shared boundary between regions with interface laws | Semiconductor heterointerfaces since Unit 15 (band offsets through the band shift, permittivity steps, thermionic emission); semiconductor-insulator interfaces since Unit 15b (fixed charge, traps, surface recombination); the Unit 12 gate is a lumped oxide on a boundary patch |
-| Contact / boundary | named boundary set plus physical boundary condition | Ohmic contacts, gate contacts on a lumped oxide (Unit 12) and electrodes on a meshed insulator (Unit 15b) implemented; Schottky contacts deferred |
+| Contact / boundary | named boundary set plus physical boundary condition | Ohmic contacts, gate contacts on a lumped oxide (Unit 12), electrodes on a meshed insulator (Unit 15b) and Schottky contacts (Unit 48; no image-force lowering or tunnelling) implemented |
 | Field | named physical quantity with location, units and applicability | Unknown fields since Unit 40 (6.12.1): `Field` descriptors (name, units, node location, region applicability) and the `DofMap` that places their unknowns; derived fields and edge, face and cell fields are target |
 | Equation | residual/Jacobian contribution associated with fields and domains | Equation terms since Unit 40 (6.12.2): the drift-diffusion and electrothermal rows are terms with declared fields and domains, composed by equation set from the device and the models; internal to `assemble`; other assemblers (`EquilibriumPoisson`) not yet built from them |
 | Model | pure constitutive law with exact derivatives | Implemented for current local physics |
@@ -1515,7 +1515,7 @@ thermionic emission, meshed insulators in a later unit):**
 ### 6.4 Contact description
 
 A contact is a named set of boundary nodes with a type. First unit: ohmic, with the charge-neutral equilibrium boundary
-value. Gate contacts on a lumped oxide came with Unit 12 (below); Schottky contacts are deferred. Contact boundary
+value. Gate contacts on a lumped oxide came with Unit 12 (below); Schottky contacts with Unit 48 (below). Contact boundary
 conditions are residual and Jacobian rows, so contact handling lives in `assemble`, and terminal current is computed
 from fluxes in `assemble`/`solve`. It is not an `analysis` quantity.
 
@@ -1640,6 +1640,30 @@ by the owner with constraints on units, signs and exclusions):**
   −Q_s, the semiconductor charge, and its C = dQ_g/dV_G leaves out the traps' response, which a measured quasi-static
   C-V contains. NiTCAD reports the electrode's own charge. The legacy's φ_s(V_G), which the trap term does shape
   correctly, is the one reproduced (6.2, Unit 15b).
+
+**As built (Unit 48, Schottky contacts; owner request and rulings 2026-10-24; DECISIONS.md SD1–SD9, SC1–SC17):**
+- `ContactKind::schottky` with `Contact::schottky` (`SchottkyBarrier`): the boundary patch (its face areas are the
+  contact areas), exactly one of a metal work function (Φ_Bn = φ_m − χ of the node's material) or the electron barrier
+  Φ_Bn, and effective Richardson constants for electrons and holes (0: the material's emission velocity,
+  `physics::emission_velocity_cm_s`, as at thermionic heterointerfaces). The device checks the values and the patch; the
+  assembler refuses Φ_Bn outside [0, E_g(T)] at a node. Φ_Bp = E_g − Φ_Bn; band-gap narrowing lowers the hole barrier
+  only.
+- Rows (Crowell–Sze thermionic emission for both carriers, from Masszi 1983, eqs 35–36): ψ is Dirichlet at
+  ψ_S = V/V_T + η_B − s, η_B = ln(N_c/n_ie) − Φ_Bn/kT, and n_B, p_B are the node's own densities at η_B under either
+  statistics, so equilibrium carries no current; the continuity rows keep every box term and gain −K_n (n − n_B) and
+  +K_p (p − p_B), K = v A in the thermionic edges' scaling. The term `SchottkyRows` (6.12.2) is the last of the isothermal
+  table and overwrites the node's Poisson row. Equilibrium Poisson holds ψ_S; thermal equilibrium needs every Schottky
+  contact at 0 V. The topology check counts a Schottky contact as a carrier contact.
+- Currents: a Schottky contact's conduction current is the edge flux leaving its nodes, as an ohmic contact's (in steady
+  state the emission sum); in transients and small signal the nodes' stored charge counts in the contact's charge, so the
+  total currents are conserved (DECISIONS.md, Unit 48 as built: the SD5 deviation).
+- Refused (invalid_input): with the electrothermal model, on a device with a thermionic-emission interface, with the
+  weighted terminal current (Unit 32).
+- Deck `kind = schottky` with `barrier` or `work_function` and `richardson_n`, `richardson_p`; the device file stores
+  the contact as a new optional record (no format version change); the run identity hashes the barrier; the CLI and app
+  name the kind; render draws it as a metal contact. Example deck: `decks/schottky_diode_1d.deck`.
+- Not built (SD9): image-force lowering, thermionic-field emission and tunnelling through the barrier, traps of the
+  contact, a temperature-dependent work function. Without them the reverse current of a Schottky diode stays flat.
 
 ### 6.5 Input representation
 

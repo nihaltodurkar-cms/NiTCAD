@@ -81,6 +81,38 @@ public:
     }
 };
 
+// A Schottky contact node (Unit 48, DECISIONS.md SD3), last in the table: its Poisson row becomes
+// psi - psi_S, replacing what the Poisson terms added (assigned: the row's Jacobian values are
+// cleared first); its continuity rows keep every box term and lose the carriers emitted into the
+// metal, -K_n (n - n_B) in the electron row and +K_p (p - p_B) in the hole row (the sign of a
+// recombination: a sink of electrons and holes).
+class DriftDiffusion::Terms::SchottkyRows final : public Term {
+public:
+    TermInfo info() const noexcept override {
+        return {"Schottky contact rows", TermDomain::nodes, all3, all3, false};
+    }
+    void add(const DriftDiffusion& s, const Evaluation& ev) const override {
+        const std::size_t m = s.m_;
+        const std::span<const linalg::Index> rows = s.pattern_.row_offsets();
+        for (std::size_t i = 0; i < s.node_count(); ++i) {
+            if (s.schottky_[i] < 0) continue;
+            const double psi = ev.x[m * i], n = ev.x[m * i + 1], p = ev.x[m * i + 2];
+            const double kn = s.schottky_kn_[i], kp = s.schottky_kp_[i];
+            ev.f[m * i] = psi - s.psi0_[i];
+            ev.f[m * i + 1] -= kn * (n - s.n0_[i]);
+            ev.f[m * i + 2] += kp * (p - s.p0_[i]);
+            if (!ev.jacobian()) continue;
+            const auto r = static_cast<std::size_t>(rows[m * i]);
+            const auto r1 = static_cast<std::size_t>(rows[m * i + 1]);
+            std::fill(ev.values.begin() + static_cast<std::ptrdiff_t>(r),
+                      ev.values.begin() + static_cast<std::ptrdiff_t>(r1), 0.0);
+            at(s, ev, i, 0, 0) = 1.0;
+            at(s, ev, i, 1, 1) -= kn;
+            at(s, ev, i, 2, 2) += kp;
+        }
+    }
+};
+
 // An insulator node: no charge, no carriers (n and p held at 0); an electrode holds psi
 // (assigned).
 class DriftDiffusion::Terms::InsulatorRows final : public Term {
@@ -760,6 +792,9 @@ std::span<const CompositionEntry> DriftDiffusion::Terms::isothermal_table() {
     const auto interfaces = [](const DriftDiffusion& s, M) {
         return !s.interfaces_.edges().empty();
     };
+    const auto schottky = [](const DriftDiffusion& s, M) {
+        return std::ranges::any_of(s.schottky_, [](std::int32_t c) { return c >= 0; });
+    };
     static const CompositionEntry table[] = {
         {+E::contacts, contacts, &make_term<ContactRows>},
         {+E::oxide, insulators, &make_term<InsulatorRows>},
@@ -783,6 +818,7 @@ std::span<const CompositionEntry> DriftDiffusion::Terms::isothermal_table() {
         {+E::generation,
          [](const DriftDiffusion&, M m) { return m.btbt_nonlocal != NonlocalTunnelling::off; },
          &make_term<PathTunnelling>},
+        {+E::contacts, schottky, &make_term<SchottkyRows>},
     };
     return table;
 }

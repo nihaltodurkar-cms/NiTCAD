@@ -25,4 +25,13 @@ double emission_velocity_cm_s(const Semiconductor& m, Carrier carrier, double te
     return emission_velocity_cm_s(N, temperature_K);
 }
 
+double emission_velocity_cm_s(const Semiconductor& m, Carrier carrier, double temperature_K,
+                              double richardson) {
+    NITCAD_EXPECTS(std::isfinite(richardson) && richardson >= 0.0);
+    if (richardson == 0.0) return emission_velocity_cm_s(m, carrier, temperature_K);
+    const double N = carrier == Carrier::electron ? conduction_band_dos(m, temperature_K)
+                                                  : valence_band_dos(m, temperature_K);
+    return richardson * temperature_K * temperature_K / (base::q_C * N);  // [cm/s]
+}
+
 }  // namespace NiTCAD::physics

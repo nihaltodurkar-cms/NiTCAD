@@ -238,6 +238,14 @@ void device_and_settings(Digest& d, const device::Device& device, const BiasOpti
                 d.real(c.electrode.work_function_eV);
             }
         }
+        if (c.kind == device::ContactKind::schottky) {  // Unit 48
+            d.text(c.schottky.boundary);
+            d.integer(c.schottky.by_work_function ? 1 : 0);
+            d.real(c.schottky.by_work_function ? c.schottky.work_function_eV
+                                               : c.schottky.barrier_eV);
+            d.real(c.schottky.richardson_n);
+            d.real(c.schottky.richardson_p);
+        }
     }
     // Interface charge and traps act on Poisson (both equation sets), recombination on the
     // continuity equations; hashed only when an interface has them, so a device without keeps its

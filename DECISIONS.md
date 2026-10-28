@@ -3886,6 +3886,61 @@ without authorization.
 | SC16 | Reported, not gated: an example Schottky-diode deck's I–V (n-Si, Φ_Bn = 0.7 eV) against the closed-form A* T² e^(−Φ_Bn/kT)(e^(V/V_T) − 1); the reverse current with the material's default velocity against A* = 110. |
 | SC17 | Full Release and Debug suites; zero warnings; hand mutants caught. |
 
+**As built (2026-10-28).** `device` (the kind, `SchottkyBarrier`, its checks; `check_on_patch` factored out of the
+gate's check, messages unchanged), `physics::emission_velocity_cm_s` (an overload taking the contact's Richardson
+constant), the scaled device (per node the contact, η_B and K_n, K_p), `DriftDiffusion` (ψ_S, n_B and p_B in
+`set_bias`, the contact owner of every node for currents and charges, the small-signal and transient paths), the
+`SchottkyRows` term (last in the isothermal table), `EquilibriumPoisson`, the thermal-equilibrium bias check, the
+refusals, the run record, the device file, the deck, the CLI, the app's vocabulary and workspace. Tests:
+`tests/assemble/schottky_test.cpp` (SC1's pattern, SC11's FD gate, SC13's topology, SC14), `tests/deck/schottky_test.cpp`
+(SC2–SC16), the app vocabulary's Schottky case (SC15: vocabulary and CLI). Example deck: `decks/schottky_diode_1d.deck`.
+
+| # | Added or changed in the build | Why |
+|---|---|---|
+| SD5′ | A Schottky contact's conduction current is the edge flux leaving its nodes, as an ohmic contact's, not the emission sum; its charge (transient and small signal) includes the nodes' stored charge. | One bookkeeping for both kinds. In steady state the edge flux equals the emission sum (recombination cancels between the carriers; SC7 checks it carrier by carrier with recombination off); in transients the stored charge of the contact's half cells moves into the contact charge, and the total currents are unchanged (SC12). |
+| SD3′ | The hole row gains +K_p (p − p_B), not −K_p. | The hole row is written with the opposite sign to the electron row; physically the same (holes leave when p > p_B). |
+| SD8′ | The device file stores the contact as a new optional record (contact key 6); the format version is unchanged. | A reader of `main` never meets the record on a device without a Schottky contact; such files are byte-identical to `main`'s (SC1). |
+| SD8″ | The example deck is in `decks/`, not `examples/`. | The app's examples pin exactly four decks (WG8); `decks/` holds decks outside it (as the FinFET). |
+| SD4′ | Correction to SD4's trade-off note: silicon's default velocity (2.6e6 cm/s) is about 1.2× the A* = 110 velocity (2.16e6 cm/s; an equivalent A* of about 132), not half. | Measured (SC16): the default gives 1.185× the reverse current of A* = 110. Not a criterion; the design text was wrong. |
+| — | The small-signal interface loop skips its Poisson-row additions on Schottky nodes; trap conduction additions stay ohmic-only. | The Schottky node's Poisson row is Dirichlet. |
+| — | The app vocabulary gains `barrier`, `richardson_n`, `richardson_p` (context `schottky`) and `work_function` in that context; its misspelling test gained a Schottky base deck for the new context. | Suggestions draw from the keys of the contact's own kind; no existing pin changed. |
+
+**Results:**
+
+| # | Result |
+|---|---|
+| SC1 | Met. Every existing test passes unchanged. On `main` (`e8719fb`, built in a worktree) and the branch the four example decks give byte-identical device files, identical result tables (17 digits) and identical run identities. An ohmic contact made Schottky leaves the Jacobian pattern unchanged (1D, 2D, 3D). |
+| SC2 | **Partly not met.** n = n_B and p = p_B within 1e-12 (n-Si and p-Si, 0.7 and 0.4 eV, Boltzmann and Fermi–Dirac); the band bending within 1e-9; the equilibrium current within the terminal-current resolution. **The equilibrium current is not within 1e-12 of SC5's reverse current (1.7e-17 A/cm²):** it is 9.5e-15 A/cm² (Boltzmann, 0.7 eV), 1.4e-14 and 5.6e-14 (Fermi–Dirac, 0.7 and 0.4 eV), 2.9e-8 (Fermi–Dirac, 0.05 eV). Cause: the rounding of the contact edge's two opposing fluxes (q D n / h, about 5e5 A/cm² on 1 nm edges, 2e8 in the 0.05 eV accumulation layer), inside the resolution (9e-8 A/cm² at 0.7 eV). The criterion did not allow for rounding. `[!shouldfail]`, unchanged. **For the owner.** |
+| SC3 | Met. E_s 38,068.5 V/cm against the first integral's 38,065.1 (9e-5). C–V: N_D 9.9999e15 (1e-5); intercept 0.468479 V against V_bi − kT/q = 0.468429 (0.05 mV). |
+| SC4 | Met: the series law equals the current to 6 printed digits at every bias, n-Si and p-Si. |
+| SC5 | **Saturation met; ideality not met.** Reverse at −1 V 0.975 (n-Si) and 0.978 (p-Si) of A* T² e^(−Φ_B/kT). **The ideality over 1e-6 … 1e-2 A/cm² is 0.43 … 1.00003 (n) and 0.43 … 1.002 (p).** J_s = 1.7e-5 A/cm² lies inside the range, so near V = 0 the form J_s (e^(V/V_T) − 1) itself gives d V / d(V_T ln J) < 1: the criterion's range assumed J ≫ J_s. With the −1 removed, J / (1 − e^(−V/V_T)), the ideality is 1.0018–1.0026 (n) and 1.0017–1.0028 (p), reported. `[!shouldfail]`, unchanged. **For the owner.** |
+| SC6 | **Monotone met; the limit not met.** The current rises from 3.56e-3 to 0.618 A/cm² over A* = 10 … 1e9 at +0.2 V; n(0) − n_B = J/(q v) within 1e-6 (tested). **At A* = 1e9, n(0)/n_B = 1.00395, not within 1e-3.** Cause: the diffusion-limited current at +0.2 V (0.618 A/cm²) is 17× the thermionic one, so even v = 2e13 cm/s leaves 4e-3; the criterion underestimated it (about A* ≥ 4e9 would meet it). `[!shouldfail]`, unchanged. **For the owner.** |
+| SC7 | Met (recombination off, so the contact's half cell adds nothing to its edge current): the hole current 9.95011e-6 A/cm² equals q v_p (p − p_B) within 1e-10 of the current; the carriers sum to the terminal current within 1e-10. |
+| SC8 | n = N_c F_1/2(−Φ_Bn/kT) within 1e-10 at 0.05 and 0.7 eV; the I–V within 1e-3 of Boltzmann's at −1 … +0.3 V. The equilibrium current's 1e-12: not met, as SC2. |
+| SC9 | Met within 1e-12. |
+| SC10 | Met. 2D and 3D tensor within 1e-9 of the 1D current per area. 2D Delaunay (3,306 nodes, `mesh::generate_mesh`: a structured boundary layer on the contact with the 1D spacing to 1 µm and 0.1 µm along it, generated triangles beyond) within 1e-6, recombination off: the box method reproduces a 1D solution exactly where it is linear in x on any Delaunay mesh, so the quasi-neutral body then needs no matching mesh. |
+| SC11 | Met. The FD gate's worst column error is 3.4e-11 over the 16 cases (Delaunay and 3D tensor; Boltzmann and Fermi–Dirac; ±Canali; ±band-gap narrowing). Newton at +0.3 V on SC5's device: corrections 50.9, 17.4, 1.12, 1.35e-4, 2.35e-11, 2.9e-15; gated as each correction in the asymptotic window (below 1e-2, next above 1e-13) at most the square of the previous (2.35e-11 ≤ 1.8e-8). The three-point order estimate of LS4 gives 0.58 on the last three (the last is rounding) and 1.73 without it (its first, 1.12, outside the window); the measure is stated in the test. |
+| SC12 | **Capacitance and conservation met; the −1 V conductance not met.** C = 2.37723e-8 F/cm² against dQ/dV, 6 digits; after a −1 V step the total currents sum to zero within 5.3e-11 of the run's largest current over 208 steps (a 1 ns ramp instead, measured first: 2.3e-9). Added: g at +0.2 V against DC differences within 1e-5 (6 digits); every column and row of Y within the reported resolution. **At −1 V, g = 1.4947e-7 S/cm² is not within 1e-5 of the DC difference:** the DC current (1.7e-5 A/cm²) is resolved to about 1e-6 of itself and the admittance to 2.0e-10 S/cm² (1.3e-3 of g), as Unit 22 found for the ohmic diode at low bias. `[!shouldfail]`, unchanged. **For the owner.** |
+| SC13 | **Met at forward bias; not at −1 V.** At +0.3 V (1.7 A/cm²) the terminal currents of 2D tensor and Delaunay devices sum to zero within 1e-10, as do a 1D back-to-back Schottky device's; a device whose only contact is a Schottky contact passes the topology check and assembles. **At −1 V the 2D sum is 2.2e-15 A/cm (1.3e-6 of the reverse current; the 1D device the same):** the rounding of the cancelling edge fluxes, about 2e-11 A/cm² per area, inside the resolution. 1e-10 relative holds above about 1 A/cm². `[!shouldfail]`, unchanged. **For the owner.** |
+| SC14 | Met: electrothermal, a thermionic-emission interface, the weighted current, both and neither of `barrier` and `work_function`, Φ_Bn above E_g and below 0 (by the work function), negative Richardson constants (each carrier), an insulator node, a missing patch and a node off its patch, the Schottky keys on an ohmic contact and an unknown kind; each invalid_input. |
+| SC15 | Met. The deck reads the kind and keys; the device file round-trips two Schottky contacts unchanged; the run identity changes with the barrier, with the barrier given as a work function, and between an ohmic and a Schottky anode; `nitcad check` prints `contact anode: schottky`; the app's vocabulary lists the kind and its keys only in its context; a `[small_signal]` deck analysis over a Schottky bias runs through `deck::run` (C falls with reverse bias). Render needed no change (a Schottky contact is drawn as a metal contact, as an electrode); not separately tested. |
+| SC16 | Reported. `decks/schottky_diode_1d.deck` against A* T² e^(−0.7 eV/kT)(e^(V/V_T) − 1): reverse 0.975 at −1 V to 0.958 at −0.05 V (the diffusion term of the series law); forward 0.953 at 0.05 V, 0.940 at 0.2 V, 0.917 at 0.3 V and 0.694 at 0.4 V (the body's series resistance). The default velocity's reverse current at −1 V is 1.99061e-5 A/cm² against 1.67924e-5 with A* = 110 (1.185; SD4′). |
+| SC17 | Release (112 tests) and Debug (103) suites pass, zero warnings; no existing pin changed. Hand mutants: 16 of 18 caught. Caught: the emission term's Jacobian (SC11 gate, Newton); the hole emission sign; the Poisson row not cleared; ψ_S without the band shift and equilibrium Poisson's ψ_S without it (both equivalent on a single-material device, where s = 0 at the reference material's contact: caught after a heterojunction case was added, the Schottky contact on the shifted material); the contact owner ohmic-only (currents); the bias derivative (C–V, small signal); the device file's Richardson constant; the run record's barrier; the deck's exactly-one rule; the velocity ignoring A*; the thermal-equilibrium bias check (a direct case added); η_B's sign; the Richardson check; the electrothermal and weighted-current refusals. **Survived, for the owner:** (1) the small-signal interface loop adding its Poisson-row terms on a Schottky node: reached only when a Schottky node lies on a semiconductor–insulator interface with traps, which no test builds; (2) the transient error measure skipping a Schottky node's carriers: it changes only the step-size choice, not a result the tests can tell apart. Added in the build, as the mutants found: the band-gap-narrowing equilibrium at 1e18, the shifted-material case and the direct bias-check case. |
+
+**Limitations found (for the owner):**
+- **Rounding at small currents.** The relative gates at the equilibrium and reverse currents (SC2, SC8, SC13 at
+  −1 V) and the −1 V conductance (SC12) ask for more than the state resolves: the edge fluxes that cancel in a 1.7e-5
+  A/cm² current are about 5e5 A/cm² on 1 nm edges. The weighted terminal current (Unit 32) is the tool for these
+  currents, and it is refused with a Schottky contact (SD7).
+- **SC5 and SC6 criteria** assumed J ≫ J_s over the ideality range and a diffusion-limited current near the
+  thermionic one. The model behaves as the theory says; the criteria's ranges do not fit this device.
+- **No image-force lowering or tunnelling** (SD9): the reverse current stays flat with bias.
+- **Mesh generator (Unit 16, not changed here):** with a boundary layer whose spacing along the segment exceeds
+  `max_size` (0.5 µm against 0.1 µm), `generate_mesh` split the layer's own boundary segment and joined the new nodes to
+  the layer with sliver triangles (contact-node volumes 9e-11 cm² against 2.5e-12), although U14 says refinement never
+  inserts into the layer's rectangle. Found while building SC10's Delaunay device, whose current was then 0.3–1.7% off;
+  with the layer spaced at `max_size` it is exact. **For the owner.**
+
 ---
 
 ## New questions the advisor raised (not yet in `ARCHITECTURE.md`)

@@ -957,7 +957,7 @@ int plot(int argc, char** argv) {
                 }
             } else {
                 const auto gate = std::ranges::find_if(contacts, [](const device::Contact& k) {
-                    return k.kind != device::ContactKind::ohmic;
+                    return k.kind == device::ContactKind::gate || k.kind == device::ContactKind::electrode;
                 });
                 if (gate != contacts.end()) {
                     c = static_cast<std::size_t>(gate - contacts.begin());

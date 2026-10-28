@@ -34,7 +34,7 @@ namespace NiTCAD::assemble {
 enum class EquationSet : unsigned {
     poisson = 1u << 0,     // the electrostatic potential's equation, semiconductor and oxide
     continuity = 1u << 1,  // electron and hole continuity: transport, recombination, storage
-    contacts = 1u << 2,    // the ohmic contacts' Dirichlet rows
+    contacts = 1u << 2,    // the ohmic contacts' Dirichlet rows; the Schottky contacts' rows
     oxide = 1u << 3,       // insulator nodes: no carriers, an electrode's potential
     gate = 1u << 4,        // lumped gates' oxide coupling
     interfaces = 1u << 5,  // declared interfaces: charge, traps, surface recombination

@@ -45,6 +45,11 @@ std::expected<EquilibriumPoisson, base::Error> EquilibriumPoisson::create(
             p.contact_[i] = 1;
             p.psi0_[i] = p.electrode_potential_[i];
         }
+        if (scaled->schottky[i] >= 0) {  // Unit 48: psi_S at zero bias (SD2, SD6)
+            p.contact_[i] = 1;
+            p.psi0_[i] = scaled->schottky_eta[i] - p.band_shift_[i];
+            continue;
+        }
         if (scaled->contact[i] < 0) continue;
         p.contact_[i] = 1;
         const physics::NeutralEquilibrium e = detail::neutral_equilibrium(

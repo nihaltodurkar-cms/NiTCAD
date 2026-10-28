@@ -170,6 +170,19 @@ std::expected<DriftDiffusion, base::Error> DriftDiffusion::create(
     if (!scaled) return std::unexpected(std::move(scaled.error()));
     const std::size_t n = scaled->volume.size();
     const double T = scaling.temperature_K;
+    // Unit 48 (DECISIONS.md SD7): a Schottky contact is isothermal and on a device without
+    // thermionic heterointerfaces.
+    if (std::ranges::any_of(scaled->schottky, [](std::int32_t c) { return c >= 0; })) {
+        if (models.electrothermal) {
+            return refuse("a Schottky contact with the electrothermal model is not supported");
+        }
+        if (std::ranges::any_of(scaled->edges,
+                                [](const detail::ScaledEdge& e) { return e.thermionic; })) {
+            return refuse(
+                "a Schottky contact on a device with a thermionic-emission interface is not "
+                "supported");
+        }
+    }
     if (nonlocal) {
         for (const detail::ScaledEdge& e : scaled->edges) {
             if (e.carriers && e.interface) {
@@ -204,6 +217,14 @@ std::expected<DriftDiffusion, base::Error> DriftDiffusion::create(
     s.ionization_ = models.incomplete_ionization;
     s.radiative_on_ = models.radiative;
     s.contact_ = std::move(scaled->contact);
+    s.schottky_ = std::move(scaled->schottky);
+    s.schottky_eta_ = std::move(scaled->schottky_eta);
+    s.schottky_kn_ = std::move(scaled->schottky_kn);
+    s.schottky_kp_ = std::move(scaled->schottky_kp);
+    s.owner_.resize(n);
+    for (std::size_t i = 0; i < n; ++i) {
+        s.owner_[i] = s.contact_[i] >= 0 ? s.contact_[i] : s.schottky_[i];
+    }
     s.insulator_ = std::move(scaled->insulator);
     s.electrode_ = std::move(scaled->electrode);
     s.electrode_potential_ = std::move(scaled->electrode_potential);
@@ -587,6 +608,14 @@ std::expected<void, base::Error> DriftDiffusion::set_bias(std::span<const double
                        electrode_potential_[i];
             continue;
         }
+        if (schottky_[i] >= 0) {  // SD2: psi_S, and n_B, p_B at eta_B (bias-independent)
+            const double eta = schottky_eta_[i];
+            psi0_[i] =
+                bias_V[static_cast<std::size_t>(schottky_[i])] / V_T_ + eta - band_shift_[i];
+            n0_[i] = detail::density(fermi_dirac_, n_ie_[i], log_dos_n_[i], eta).density;
+            p0_[i] = detail::density(fermi_dirac_, n_ie_[i], log_dos_p_[i], -eta).density;
+            continue;
+        }
         if (contact_[i] < 0) continue;
         const double bias = bias_V[static_cast<std::size_t>(contact_[i])] / V_T_;
         if (electrothermal()) {
@@ -651,6 +680,7 @@ void DriftDiffusion::stamp_contacts(std::span<double> x) const {
             x[m_ * i + 1] = x[m_ * i + 2] = 0.0;
             continue;
         }
+        if (schottky_[i] >= 0) x[m_ * i] = psi0_[i];  // its densities are unknowns
         if (contact_[i] < 0) continue;
         x[m_ * i] = psi0_[i];
         x[m_ * i + 1] = n0_[i];
@@ -979,7 +1009,7 @@ std::vector<double> DriftDiffusion::contact_charges(std::span<const double> x,
     std::vector<double> charge = gates_.charges(x, m_, contact_count_);
     if (electrothermal()) add_gate_shift(x, charge);
     const auto owner = [&](std::size_t i) {
-        return contact_[i] >= 0 ? contact_[i] : electrode_[i];
+        return owner_[i] >= 0 ? owner_[i] : electrode_[i];
     };
     for (const EdgeTerm& e : edges_) {
         const std::int32_t ca = owner(e.a), cb = owner(e.b);
@@ -1109,7 +1139,7 @@ std::vector<double> DriftDiffusion::terminal_currents(std::span<const double> x)
     const auto currents = edge_currents(x);
     std::vector<double> terminal(contact_count_, 0.0);
     for (std::size_t k = 0; k < edges_.size(); ++k) {
-        const std::int32_t ca = contact_[edges_[k].a], cb = contact_[edges_[k].b];
+        const std::int32_t ca = owner_[edges_[k].a], cb = owner_[edges_[k].b];
         if (ca == cb) continue;  // both inside one contact, or both in the device
         const double total = currents[k].first + currents[k].second;
         if (ca >= 0) terminal[static_cast<std::size_t>(ca)] += total;  // leaves contact a
@@ -1159,7 +1189,7 @@ std::vector<double> DriftDiffusion::terminal_current_resolution(std::span<const 
     const double eps8 = 8.0 * std::numeric_limits<double>::epsilon();
     double bound = 0.0;
     for (std::size_t i = 0; i < n; ++i) {
-        if (contact_[i] >= 0) {
+        if (owner_[i] >= 0) {
             bound += eps8 * terms[i];  // the terminal current's own sum
             continue;
         }
@@ -1168,7 +1198,9 @@ std::vector<double> DriftDiffusion::terminal_current_resolution(std::span<const 
     }
     std::vector<double> resolution(contact_count_, 0.0);
     for (std::size_t c = 0; c < contact_count_; ++c) {
-        if (kinds_[c] == device::ContactKind::ohmic) resolution[c] = bound;
+        if (kinds_[c] == device::ContactKind::ohmic || kinds_[c] == device::ContactKind::schottky) {
+            resolution[c] = bound;
+        }
     }
     detail::observe("terminal_current_resolution", resolution);
     return resolution;
@@ -1337,11 +1369,12 @@ void DriftDiffusion::small_signal_matrix(std::span<const double> x, std::complex
             values[interface_np_[k].second] += t.d_flux_insulator[3];
         }
         if (contact_[sn] >= 0) continue;
-        values[so[0]] += t.d_flux_semiconductor[0];
+        const bool poisson = schottky_[sn] < 0;  // a Schottky node's Poisson row is Dirichlet
+        if (poisson) values[so[0]] += t.d_flux_semiconductor[0];
         values[so[1]] -= t.d_rate[0];
         values[so[2]] += t.d_rate_p[0];
         for (std::size_t c = 1; c < 4; ++c) {
-            at(sn, 0, c - 1) += t.d_flux_semiconductor[c];
+            if (poisson) at(sn, 0, c - 1) += t.d_flux_semiconductor[c];
             at(sn, 1, c - 1) -= t.d_rate[c];
             at(sn, 2, c - 1) += t.d_rate_p[c];
         }
@@ -1355,8 +1388,9 @@ std::vector<double> DriftDiffusion::bias_derivative(std::size_t contact) const {
     std::vector<double> d(unknowns(), 0.0);
     for (std::size_t i = 0; i < node_count(); ++i) {
         // A Dirichlet row psi - psi0 with psi0 = V / V_T + const; a gate row G (psi_G - psi),
-        // psi_G = V / V_T - offset. An ohmic node's densities do not depend on the bias.
-        if (contact_[i] == c || electrode_[i] == c) {
+        // psi_G = V / V_T - offset. An ohmic node's densities, and a Schottky node's n_B and
+        // p_B, do not depend on the bias.
+        if (contact_[i] == c || electrode_[i] == c || schottky_[i] == c) {
             d[m_ * i] = -1.0 / V_T_;
         } else if (gates_.on_gate(i) && gates_.contact(i) == contact) {
             d[m_ * i] = gates_.term(i).coupling / V_T_;
@@ -1381,7 +1415,7 @@ std::vector<DriftDiffusion::CurrentRow> DriftDiffusion::small_signal_currents(
         const std::vector<NodeLevels> l = thermal_levels(x, t);
         for (std::size_t k = 0; k < edges_.size(); ++k) {
             const EdgeTerm& e = edges_[k];
-            const std::int32_t ca = contact_[e.a], cb = contact_[e.b];
+            const std::int32_t ca = owner_[e.a], cb = owner_[e.b];
             if (ca == cb || !e.carriers) continue;
             SurfaceSlope slope{};
             const auto [fn, fp] = thermal_fluxes(k, x, t, l, &slope);
@@ -1405,7 +1439,7 @@ std::vector<DriftDiffusion::CurrentRow> DriftDiffusion::small_signal_currents(
     }
     const std::vector<NodeDegeneracy> g = degeneracies(x);
     for (const EdgeTerm& e : edges_) {
-        const std::int32_t ca = contact_[e.a], cb = contact_[e.b];
+        const std::int32_t ca = owner_[e.a], cb = owner_[e.b];
         if (electrothermal() || ca == cb || !e.carriers) continue;
         SurfaceSlope slope{};
         const auto [fn, fp] = edge_fluxes(e, x, g, &slope);
@@ -1427,7 +1461,7 @@ std::vector<DriftDiffusion::CurrentRow> DriftDiffusion::small_signal_currents(
     // The traps of an interface edge on an ohmic node (conduction_currents): rate_p - rate; and
     // the charge of a contact node on an interface edge: minus its half-edge flux.
     const auto owner = [&](std::size_t i) {
-        return contact_[i] >= 0 ? contact_[i] : electrode_[i];
+        return owner_[i] >= 0 ? owner_[i] : electrode_[i];
     };
     const Complex inv_weight = s / (rate_scale_ * Ns_);
     for (std::size_t k = 0; k < interfaces_.edges().size(); ++k) {

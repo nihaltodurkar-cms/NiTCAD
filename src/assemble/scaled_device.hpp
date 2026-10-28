@@ -62,12 +62,23 @@ struct ScaledDevice {
     // shifted by -V, with psi referenced as above (the vacuum level is -psi V_T + depth).
     std::vector<std::int32_t> electrode;
     std::vector<double> electrode_potential;
+    // Per node (Unit 48, DECISIONS.md SD1-SD4): the index of its Schottky contact, or -1; the
+    // reduced potential eta_B = ln(Nc / n_ie) - Phi_Bn / kT at which the conduction band lies
+    // Phi_Bn above the metal's Fermi level (psi_S = V / V_T + eta_B - s; n_B and p_B are the
+    // node's densities at eta_B, under either statistics); and the emission coefficients
+    // K = v A / (L_D^(D-2) D0) of electrons and holes (A the node's face area on the patch), in
+    // the units of the scaled fluxes, as a thermionic edge's. 0 off a Schottky contact.
+    std::vector<std::int32_t> schottky;
+    std::vector<double> schottky_eta;
+    std::vector<double> schottky_kn;
+    std::vector<double> schottky_kp;
     InterfaceEdges interfaces;           // interface charge, traps, recombination (per edge)
     std::vector<device::ContactKind> kinds;  // per contact, in device.contacts() order
     std::vector<ScaledEdge> edges;       // in mesh edge order
 };
 
-// Errors (invalid_input): scaling.temperature_K differs from the device's. An edge between
+// Errors (invalid_input): scaling.temperature_K differs from the device's; a Schottky contact's
+// Phi_Bn outside [0, Eg(T)] at one of its nodes. An edge between
 // materials whose parameters differ is a heterointerface (ScaledEdge::interface): the interface
 // lies at the edge's midpoint, each node's control volume is of its own material, and the edge's
 // permittivity is the harmonic mean of the ends' (legacy Device1D, _eps_tilde_edge), which is the

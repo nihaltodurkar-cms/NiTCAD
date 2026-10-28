@@ -23,6 +23,11 @@ std::expected<void, base::Error> check_contact_bias(std::span<const device::Cont
                 base::ErrorCode::invalid_input,
                 "thermal equilibrium needs every ohmic contact at 0 V", at});
         }
+        if (thermal_equilibrium && kinds[c] == device::ContactKind::schottky && bias_V[c] != 0.0) {
+            return std::unexpected(base::Error{
+                base::ErrorCode::invalid_input,
+                "thermal equilibrium needs every Schottky contact at 0 V", at});
+        }
     }
     return {};
 }

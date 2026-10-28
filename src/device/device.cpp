@@ -105,6 +105,25 @@ std::optional<base::Error> check_nodes(const DeviceDescription& d) {
 }
 
 // The gate stack of a gate contact; the nodes are checked to be on its boundary patch.
+// Every node of contact c lies on the boundary patch it names.
+std::optional<base::Error> check_on_patch(const DeviceDescription& d, std::size_t c,
+                                          const std::string& where, const std::string& boundary) {
+    const mesh::BoundaryPatch* patch = d.mesh.find_boundary(boundary);
+    if (patch == nullptr) {
+        return invalid(where + "no mesh boundary patch '" + boundary + "'", c);
+    }
+    // Both lists are strictly increasing.
+    auto it = patch->nodes.begin();
+    for (const mesh::NodeId v : d.contacts[c].nodes) {
+        while (it != patch->nodes.end() && *it < v) ++it;
+        if (it == patch->nodes.end() || *it != v) {
+            return invalid(where + "node is not on boundary patch '" + boundary + "'", c,
+                           static_cast<double>(v));
+        }
+    }
+    return std::nullopt;
+}
+
 std::optional<base::Error> check_gate(const DeviceDescription& d, std::size_t c) {
     const Contact& contact = d.contacts[c];
     const GateStack& g = contact.gate;
@@ -134,20 +153,30 @@ std::optional<base::Error> check_gate(const DeviceDescription& d, std::size_t c)
     if (!std::isfinite(g.fixed_charge_cm2)) {
         return invalid(where + "fixed oxide charge is not finite", c, g.fixed_charge_cm2);
     }
-    const mesh::BoundaryPatch* patch = d.mesh.find_boundary(g.boundary);
-    if (patch == nullptr) {
-        return invalid(where + "no mesh boundary patch '" + g.boundary + "'", c);
+    return check_on_patch(d, c, where, g.boundary);
+}
+
+// A Schottky contact (Unit 48): the barrier given one way, finite and in range, the Richardson
+// constants finite and >= 0, every node on its patch. Phi_Bn <= Eg(T) is checked by assemble, at
+// the temperature of the run.
+std::optional<base::Error> check_schottky(const DeviceDescription& d, std::size_t c) {
+    const Contact& contact = d.contacts[c];
+    const SchottkyBarrier& b = contact.schottky;
+    const std::string where = "Schottky contact '" + contact.name + "': ";
+    if (b.by_work_function) {
+        if (!(std::isfinite(b.work_function_eV) && b.work_function_eV > 0.0)) {
+            return invalid(where + "work function is not finite and positive", c,
+                           b.work_function_eV);
+        }
+    } else if (!(std::isfinite(b.barrier_eV) && b.barrier_eV >= 0.0)) {
+        return invalid(where + "barrier is not finite and >= 0", c, b.barrier_eV);
     }
-    // Both lists are strictly increasing.
-    auto it = patch->nodes.begin();
-    for (const mesh::NodeId v : contact.nodes) {
-        while (it != patch->nodes.end() && *it < v) ++it;
-        if (it == patch->nodes.end() || *it != v) {
-            return invalid(where + "node is not on boundary patch '" + g.boundary + "'", c,
-                           static_cast<double>(v));
+    for (const double a : {b.richardson_n, b.richardson_p}) {
+        if (!(std::isfinite(a) && a >= 0.0)) {
+            return invalid(where + "Richardson constant is not finite and >= 0", c, a);
         }
     }
-    return std::nullopt;
+    return check_on_patch(d, c, where, b.boundary);
 }
 
 std::optional<base::Error> check_contacts(const DeviceDescription& d) {
@@ -164,7 +193,7 @@ std::optional<base::Error> check_contacts(const DeviceDescription& d) {
             return invalid("contact name is empty or repeated", c);
         }
         if (contact.kind != ContactKind::ohmic && contact.kind != ContactKind::gate &&
-            contact.kind != ContactKind::electrode) {
+            contact.kind != ContactKind::electrode && contact.kind != ContactKind::schottky) {
             return invalid("unknown contact kind", c);
         }
         if (contact.nodes.empty()) return invalid("contact '" + contact.name + "' has no nodes", c);
@@ -198,6 +227,9 @@ std::optional<base::Error> check_contacts(const DeviceDescription& d) {
         if (contact.kind == ContactKind::gate) {
             if (auto e = check_gate(d, c)) return e;
         }
+        if (contact.kind == ContactKind::schottky) {
+            if (auto e = check_schottky(d, c)) return e;
+        }
         if (contact.kind == ContactKind::electrode) {
             const Electrode& el = contact.electrode;
             const std::string where = "electrode '" + contact.name + "': ";
@@ -218,7 +250,9 @@ std::optional<base::Error> check_contacts(const DeviceDescription& d) {
 // connected part of the mesh graph an ohmic contact or an electrode node (ARCHITECTURE.md 6.10,
 // the topology gate for Unit 6; Unit 15b). A gate or an electrode fixes no carrier density, so on
 // its own it leaves the continuity equations of its part singular; carriers do not cross an edge
-// to an insulator. Without insulators the two rules are one.
+// to an insulator. Without insulators the two rules are one. A Schottky contact (Unit 48, SD6)
+// counts as an ohmic one in both rules: it fixes the potential and exchanges carriers with a
+// positive velocity. (The messages keep their wording.)
 std::optional<base::Error> check_topology(const DeviceDescription& d) {
     const std::size_t n = d.mesh.node_count();
     Components semiconductor(n), whole(n);
@@ -233,7 +267,7 @@ std::optional<base::Error> check_topology(const DeviceDescription& d) {
         if (contact.kind == ContactKind::gate) continue;
         for (const mesh::NodeId v : contact.nodes) {
             potential[static_cast<std::size_t>(whole.root(v))] = true;
-            if (contact.kind == ContactKind::ohmic) {
+            if (contact.kind == ContactKind::ohmic || contact.kind == ContactKind::schottky) {
                 carriers[static_cast<std::size_t>(semiconductor.root(v))] = true;
             }
         }

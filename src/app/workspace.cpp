@@ -308,7 +308,8 @@ std::vector<Figure> extracted_figures(const Workspace& w) {
     };
     const int dim = w.device->mesh().dimension();
     const std::string current_unit = dim == 1 ? "A/cm\xC2\xB2" : dim == 2 ? "A/cm" : "A";
-    if (contacts[swept].kind != device::ContactKind::ohmic) {
+    if (contacts[swept].kind != device::ContactKind::ohmic &&
+        contacts[swept].kind != device::ContactKind::schottky) {
         // A transfer curve: the contact carrying the most current at the last point is sensed (the swept
         // gate or electrode carries none in a steady state).
         std::size_t sense = swept;
