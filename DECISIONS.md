@@ -4429,7 +4429,7 @@ A/cm² in accumulation, where the current comes from the gate (the measured ECB 
   contact; the app vocabulary names the six contact keys (the gate's `o…` completion test now lists the five oxide
   keys).
 - Tests: `tests/assemble/gate_tunnelling_test.cpp` (GC6, GC7 Jacobians, equilibrium, bias and small-signal partials,
-  GC13); `tests/deck/gate_tunnelling_test.cpp` (GC7 Newton, GC8, GC9, GC10, GC11 in 2D, GC12, GC15). Measured: GC8
+  GC13); `tests/deck/gate_tunnelling_test.cpp` (GC7 Newton, GC8, GC9, GC10, GC11 in 2D and 3D, GC12, GC15; hidden: GC14 cost and sweep, GC16). Measured: GC8
   ECB against the integral on the solution's bands 6e-17 A/cm² on 0.126 (accumulation); GC9 0.000% and 0.006%;
   GC12 4e-6 (−1 V) and the transient 6.1e-8; GC7 corrections 1.0e-2, 3.5e-5, 2.5e-11. With Newton's `tol_update` at
   1e-12 (not the deck's 1e-8) the same transient's sum reaches 1.4e-4 (an absolute 2e-7 A/cm² while the currents decay
@@ -4451,6 +4451,19 @@ A/cm² in accumulation, where the current comes from the gate (the measured ECB 
 - Measured (FinFET, Release, P-core pinned 0x3C3, median of 31): evaluate 13.2 ms without, 15.7 ms with (1.195×);
   residual 9.6 and 13.6 ms (1.42×). Steps: 5.6× (slice 2), 4.7× (bit-identical arithmetic), 1.8× (threads after the
   other terms), 1.2× (threads alongside them).
+
+**GC14's sweep, GC16 and GC11 in 3D, as measured (2026-10-29).**
+- GC14 (`[.gate_tunnelling_finfet_sweep]`, PARDISO on 6 threads, the deck's residual line search): without tunnelling
+  17 of 17 points, with all three gates tunnelling (HfO₂ band data of GR10) 17 of 17. Both sweeps together took
+  69.8 min.
+- GC16, reported: the FinFET's gate current against its drain current at V_D = 50 mV. I_G is −3.5 fA at 0 V
+  (−1.6e-5 of I_D), 2.1e-6 to 5.3e-6 of I_D from 0.05 to 0.4 V, and rises to 2.29 nA against 18.8 µA at 0.8 V
+  (1.22e-4). No measured ultrathin-oxide J–V source was found, so that comparison is not run.
+- GC11 in 3D (`tests/deck/gate_tunnelling_test.cpp`): a silicon corner with 1.5 nm of SiO₂ on two faces and an
+  n+ poly gate on each, against the same section in 2D with one gate tunnelling per device, at one fixed state
+  (the section's equilibrium potential under 1.5 V on both gates, copied along z). Each 3D gate carries 1 µm times
+  its 2D device's current; equal to the printed seven digits (8.949119e-10 and 1.002478e-09 A), within 1e-9.
+  Mutant: a node keeping only its first tunnel (the corner losing its second face's path) fails by 8.7e-4.
 
 ---
 

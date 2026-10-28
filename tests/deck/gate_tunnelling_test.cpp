@@ -2,7 +2,7 @@
 // lumped n+ polysilicon gate over 1.5 nm of SiO2, self-consistent from -2 to +2 V, its ECB current
 // against the Tsu-Esaki integral on the solution's own bands; the same capacitor with the oxide
 // meshed; the processes' polarity and dominance on the nMOS and its pMOS mirror; a 2D device
-// against 1D; the small-signal conductance against DC differences and a transient's conservation;
+// against 1D, and a 3D corner's two paths against two 2D devices; the small-signal conductance against DC differences and a transient's conservation;
 // and the deck, device file, run record and sweep file.
 #include <catch2/catch_test_macros.hpp>
 
@@ -14,6 +14,7 @@
 #include <sstream>
 #include <fstream>
 #include <limits>
+#include <map>
 #include <string>
 #include <utility>
 #include <vector>
@@ -309,6 +310,109 @@ TEST_CASE("Gate tunnelling: a 2D device uniform across the gate gives the 1D cur
         CAPTURE(one.points[k].bias_V[gate], I1, I2);
         CHECK(relative(I2, I1) <= 1e-9);
     }
+}
+
+namespace {
+
+// GC11 in 3D: silicon from 1.5 nm on x and on y with 1.5 nm of SiO2 before it on both (an L around
+// the corner; the oxide's corner block, 0 to 1.5 nm on both, belongs to no contact) and an n+ poly
+// gate on each face; in 3D the same section along z over 1 um. a and b: the gates' tunnelling.
+std::string corner_deck(int dimension, const char* a, const char* b) {
+    const char* axis = "linspace(0, 1.45nm, 30) + linspace(1.495nm, 1.505nm, 2) + "
+                       "linspace(1.505nm, 3.505nm, 21) + linspace(3.505nm, 51.505nm, 25)";
+    const char* z_mesh = dimension == 3 ? "z = linspace(0, 1um, 3)\n" : "";
+    const char* z = dimension == 3 ? "  0 1um" : "";
+    char text[4096];
+    std::snprintf(text, sizeof text, R"(
+[device]
+temperature = 300
+
+[mesh]
+type = tensor
+x = %s
+y = %s
+%s
+[region oxide]
+material = sio2
+
+[region silicon]
+material = silicon
+box = 1.5nm 1um  1.5nm 1um%s
+
+[doping]
+profile = acceptor constant 5e17
+
+[contact gate_a]
+kind = electrode
+patch = x_min
+box = 0 0  1.5nm 51.505nm%s
+electrode = n_poly
+tunnelling = %s
+
+[contact gate_b]
+kind = electrode
+patch = y_min
+box = 1.5nm 51.505nm  0 0%s
+electrode = n_poly
+tunnelling = %s
+
+[contact substrate]
+kind = ohmic
+patch = x_max
+box = 51.505nm 51.505nm  1.5nm 51.505nm%s
+
+[sweep]
+contact gate_a = 0
+contact gate_b = 0
+)",
+                  axis, axis, z_mesh, z, z, a, z, b, z);
+    return text;
+}
+
+}  // namespace
+
+// At one fixed state, so the comparison is geometric only: the 2D section's equilibrium potential
+// with both gates at 1.5 V (state_from_potential), copied along z in 3D. Each 2D device tunnels
+// through one gate, so its corner node has one path; the 3D device's corner node has both, each
+// with its own face's area, and each 3D gate carries 1 um times its 2D device's current.
+TEST_CASE("Gate tunnelling: a 3D corner node takes one path per face (GC11)", "[gate_tunnelling]") {
+    const deck::Plan a = must(corner_deck(2, "on", "off"));
+    const deck::Plan b = must(corner_deck(2, "off", "on"));
+    const deck::Plan c = must(corner_deck(3, "on", "on"));
+    const auto eq = solve::solve_equilibrium(a.device);
+    REQUIRE(eq.has_value());
+    // Per contact, the tunnelling current at the potential psi_V [A in 3D, A/cm in 2D].
+    const auto currents = [](const deck::Plan& p, std::vector<double> psi) {
+        const auto scaling = *assemble::make_scaling(p.device);
+        auto system = *assemble::DriftDiffusion::create(p.device, scaling, p.options.models);
+        REQUIRE(system.set_bias(std::vector<double>{1.5, 1.5, 0.0}).has_value());
+        for (double& v : psi) v /= scaling.V_T;
+        const auto t = system.gate_tunnelling_currents(system.state_from_potential(psi));
+        const double unit = scaling.J0 * std::pow(scaling.L_D, p.device.mesh().dimension() - 1);
+        std::vector<double> I;
+        for (std::size_t k = 0; k < t.ecb.size(); ++k) I.push_back((t.ecb[k] + t.hvb[k] + t.evb[k]) * unit);
+        return I;
+    };
+    std::map<std::pair<double, double>, double> section;
+    const auto points = a.device.mesh().points();
+    for (std::size_t i = 0; i < points.size(); ++i) {
+        section[{points[i][0], points[i][1]}] = eq->fields.potential_V[i];
+    }
+    std::vector<double> psi3;
+    for (const mesh::Point& q : c.device.mesh().points()) psi3.push_back(section.at({q[0], q[1]}));
+    const std::vector<double> Ia = currents(a, eq->fields.potential_V);
+    const std::vector<double> Ib = currents(b, eq->fields.potential_V);
+    const std::vector<double> Ic = currents(c, psi3);
+    constexpr double width = 1e-4;  // [cm]
+    std::printf("GC11 3D corner: gate_a %.6e A (2D x 1 um %.6e), gate_b %.6e A (%.6e)\n", Ic[0],
+                width * Ia[0], Ic[1], width * Ib[1]);
+    CHECK(Ia[0] > 0.0);
+    CHECK(Ia[1] == 0.0);
+    CHECK(Ib[0] == 0.0);
+    CHECK(Ib[1] > 0.0);
+    CHECK(relative(Ic[0], width * Ia[0]) <= 1e-9);
+    CHECK(relative(Ic[1], width * Ib[1]) <= 1e-9);
+    CHECK(relative(Ic[0] + Ic[1], width * (Ia[0] + Ib[1])) <= 1e-9);
 }
 
 TEST_CASE("Gate tunnelling: the small-signal conductance and a transient (GC12)",
