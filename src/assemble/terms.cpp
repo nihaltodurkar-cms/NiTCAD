@@ -781,9 +781,12 @@ public:
     }
     void add(const DriftDiffusion& s, const Evaluation& ev) const override {
         const std::size_t m = s.m_;
-        GateTunnelFlux flux;
-        for (const GateTunnel& g : s.gate_tunnels_) {
-            s.gate_tunnel_flux(g, ev.x, ev.g, flux);
+        std::vector<GateTunnelFlux> own;
+        if (ev.tunnels == nullptr) s.gate_tunnel_fluxes(ev.x, ev.g, own);
+        const std::vector<GateTunnelFlux>& fluxes = ev.tunnels != nullptr ? ev.tunnels->finish() : own;
+        for (std::size_t t = 0; t < s.gate_tunnels_.size(); ++t) {
+            const GateTunnel& g = s.gate_tunnels_[t];
+            const GateTunnelFlux& flux = fluxes[t];
             const std::size_t i = g.node;
             ev.f[m * i + 1] -= flux.T_n;
             ev.f[m * i + 2] += flux.T_p;

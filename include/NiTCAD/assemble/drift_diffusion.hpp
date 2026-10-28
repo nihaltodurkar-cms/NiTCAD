@@ -717,6 +717,14 @@ private:
     void locate_gate_tunnels();
     void gate_tunnel_flux(const GateTunnel& t, std::span<const double> x,
                           std::span<const NodeDegeneracy> g, GateTunnelFlux& out) const;
+    // Every tunnel's flux at x, out[k] gate_tunnels_[k]'s, the tunnels shared among threads (the
+    // first threading inside assembly, GR11). Each flux is computed whole by one thread, so the
+    // values do not depend on the thread count; callers add them in tunnel order.
+    void gate_tunnel_fluxes(std::span<const double> x, std::span<const NodeDegeneracy> g,
+                            std::vector<GateTunnelFlux>& out) const;
+    // The same, started on worker threads when an assembly starts and collected by the gate
+    // tunnelling term, so the other terms add theirs meanwhile (terms.hpp).
+    class GateTunnelJob;
 
     // Per node at state x under Fermi-Dirac statistics; empty under Boltzmann.
     [[nodiscard]] std::vector<NodeDegeneracy> degeneracies(std::span<const double> x) const;

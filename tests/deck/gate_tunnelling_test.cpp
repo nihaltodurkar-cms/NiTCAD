@@ -9,26 +9,34 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
+#include <filesystem>
+#include <sstream>
 #include <fstream>
 #include <limits>
 #include <string>
 #include <utility>
 #include <vector>
 
+#include "NiTCAD/assemble/drift_diffusion.hpp"
 #include "NiTCAD/assemble/gate.hpp"
+#include "NiTCAD/assemble/scaling.hpp"
 #include "NiTCAD/base/constants.hpp"
 #include "NiTCAD/deck/build.hpp"
 #include "NiTCAD/deck/run.hpp"
 #include "NiTCAD/device/device.hpp"
 #include "NiTCAD/io/device_file.hpp"
 #include "NiTCAD/io/files.hpp"
+#include "NiTCAD/linalg/mkl_runtime.hpp"
 #include "NiTCAD/physics/gate_tunnelling.hpp"
 #include "NiTCAD/physics/insulator.hpp"
 #include "NiTCAD/physics/semiconductor.hpp"
 #include "NiTCAD/physics/thermionic_emission.hpp"
 #include "NiTCAD/solve/bias.hpp"
+#include "NiTCAD/solve/equilibrium.hpp"
 #include "NiTCAD/solve/small_signal.hpp"
 #include "NiTCAD/solve/transient.hpp"
+#include "../solve/assembly_timing.hpp"
 #include "fixtures.hpp"
 
 using namespace NiTCAD;
@@ -441,3 +449,102 @@ box = 0 0.2nm
                     "gate EVB A,substeps");
 }
 
+
+namespace {
+
+// The FinFET deck of decks/ with its three gates tunnelling through the interfacial SiO2 (the
+// built-in band data) and the HfO2 (GR10); with mkl, PARDISO on 6 threads.
+std::string finfet_text(bool tunnelling, const char* mkl = nullptr) {
+    std::ifstream in(std::filesystem::path(NITCAD_DECKS_DIR) / "finfet_3d.deck");
+    std::stringstream ss;
+    ss << in.rdbuf();
+    std::string text = ss.str();
+    const auto replace_all = [&](const std::string& from, const std::string& to) {
+        int count = 0;
+        for (auto at = text.find(from); at != std::string::npos; at = text.find(from, at + to.size())) {
+            text.replace(at, from.size(), to);
+            ++count;
+        }
+        return count;
+    };
+    REQUIRE(replace_all("eps_r = 22\n", "eps_r = 22\nelectron_affinity_eV = 2.55\nband_gap_eV = 5.7\n"
+                                        "tunnel_mass_n = 0.18\ntunnel_mass_p = 0.18\n") == 1);
+    if (tunnelling) REQUIRE(replace_all("work_function = 4.4\n", "work_function = 4.4\ntunnelling = on\n") == 3);
+    if (mkl != nullptr) {
+        REQUIRE(replace_all("# backend = pardiso\n", "backend = pardiso\nmkl = " + std::string(mkl) +
+                                                         "\nthreads = 6\n") == 1);
+    }
+    return text;
+}
+
+deck::Plan finfet(bool tunnelling, const char* mkl = nullptr) {
+    return must(finfet_text(tunnelling, mkl), NITCAD_DECKS_DIR);
+}
+
+}  // namespace
+
+// GC14 (hidden; run pinned to the P cores as Unit 40's gates): assembly with all three processes
+// at most 1.5 times without, at the equilibrium potential under the sweep's last bias.
+TEST_CASE("Gate tunnelling: FinFET assembly cost (GC14)", "[.gate_tunnelling_finfet]") {
+    double evaluate[2] = {}, residual[2] = {};
+    for (const bool on : {false, true}) {
+        const deck::Plan p = finfet(on);
+        const auto eq = solve::solve_equilibrium(p.device);
+        REQUIRE(eq.has_value());
+        const auto scaling = *assemble::make_scaling(p.device);
+        auto system = *assemble::DriftDiffusion::create(p.device, scaling, p.options.models);
+        REQUIRE(system.set_bias(p.points.back()).has_value());
+        std::vector<double> psi(eq->fields.potential_V);
+        for (double& v : psi) v /= scaling.V_T;
+        const AssemblyTiming t = time_assembly(on ? "FinFET, gate tunnelling" : "FinFET",
+                                               system, system.state_from_potential(psi));
+        evaluate[on ? 1 : 0] = t.evaluate_us;
+        residual[on ? 1 : 0] = t.residual_us;
+    }
+    std::printf("GC14 evaluate ratio %.3f, residual ratio %.3f\n", evaluate[1] / evaluate[0],
+                residual[1] / residual[0]);
+    CHECK(evaluate[1] <= 1.5 * evaluate[0]);
+}
+
+// GC14 and GC16 (hidden; about 40 min with PARDISO, NITCAD_MKL the path of mkl_rt.3.dll): the
+// sweep with tunnelling converges at every point that converges without it; the gate current
+// against the drain current, reported.
+TEST_CASE("Gate tunnelling: the FinFET sweep (GC14, GC16)", "[.gate_tunnelling_finfet_sweep]") {
+    char* value = nullptr;
+    std::size_t length = 0;
+    const bool given = _dupenv_s(&value, &length, "NITCAD_MKL") == 0 && value != nullptr;
+    const std::string mkl = given ? value : "";
+    std::free(value);
+    if (mkl.empty()) SKIP("NITCAD_MKL not set");
+    if (auto loaded = linalg::load_mkl_runtime(mkl); !loaded) FAIL(loaded.error().message);
+    results::Sweep runs[2];
+    for (const bool on : {false, true}) {
+        const deck::Plan p = finfet(on, mkl.c_str());
+        auto s = solve::sweep_bias(p.device, p.points, p.options);
+        if (!s) FAIL(s.error().message);
+        results::Sweep& r = runs[on ? 1 : 0];
+        r = std::move(*s);
+        const std::string stopped = r.stopped ? ", stopped: " + r.stopped->message : "";
+        std::printf("GC14 FinFET %s: %zu of %zu points%s\n", on ? "with tunnelling" : "without",
+                    r.points.size(), p.points.size(), stopped.c_str());
+    }
+    CHECK(runs[1].points.size() >= runs[0].points.size());
+    const deck::Plan p = finfet(true);
+    const auto index = [&](const std::string& name) {
+        std::size_t c = 0;
+        while (c < p.device.contacts().size() && p.device.contacts()[c].name != name) ++c;
+        INFO("contact " << name);
+        REQUIRE(c < p.device.contacts().size());
+        return c;
+    };
+    const std::size_t drain = index("drain");
+    for (const results::BiasPoint& b : runs[1].points) {
+        double I_G = 0.0;
+        for (const char* g : {"gate_top", "gate_left", "gate_right"}) {
+            I_G += b.terminal_current[index(g)];
+        }
+        std::printf("GC16 V_G %.2f V: I_D %.4e A, I_G %.4e A (%.2e of I_D)\n",
+                    b.bias_V[index("gate_top")], b.terminal_current[drain], I_G,
+                    I_G / b.terminal_current[drain]);
+    }
+}

@@ -8,10 +8,16 @@
 // an electrode's Fermi level -V (its node's psi_E - electrode_potential, times -V_T) and a lumped
 // gate's -V_G. The insulator's conduction edge is the vacuum level less its affinity, its valence
 // edge E_g,ox lower (GD1). A hole process runs on the mirrored scale (physics/gate_tunnelling.hpp).
+#include <windows.h>
+
 #include <algorithm>
+#include <atomic>
+#include <bit>
 #include <cmath>
+#include <cstdint>
 #include <limits>
 #include <string>
+#include <thread>
 #include <variant>
 
 #include "NiTCAD/assemble/drift_diffusion.hpp"
@@ -22,6 +28,7 @@
 #include "NiTCAD/physics/insulator.hpp"
 #include "NiTCAD/physics/thermionic_emission.hpp"
 #include "scaled_device.hpp"
+#include "terms.hpp"
 
 namespace NiTCAD::assemble {
 
@@ -243,12 +250,29 @@ void DriftDiffusion::gate_tunnel_flux(const GateTunnel& t, std::span<const doubl
     out.d_n.assign(K, 0.0);
     out.d_p.assign(K, 0.0);
 
-    // A quantity linear in the local columns near x: its value and gradient.
+    // A quantity linear in the local columns near x: its value and gradient. The gradients live in
+    // one arena per thread (the fluxes run on several threads, GR11), so a flux allocates nothing
+    // once the arena has grown: the node's five levels, the electrode's two edges, four negated
+    // ones and a vacuum level per point; then the barrier's segments and their partials.
     struct Q {
         double v;
-        std::vector<double> d;
+        double* d;
     };
-    const auto zero = [K](double v) { return Q{v, std::vector<double>(K, 0.0)}; };
+    thread_local std::vector<double> arena;
+    thread_local std::vector<physics::BarrierSegment> segments;
+    arena.assign((11 + t.points.size()) * K + 2 * t.pieces.size(), 0.0);
+    segments.resize(t.pieces.size());
+    std::size_t used = 0;
+    const auto zero = [&](double v) {
+        Q q{v, arena.data() + used};
+        used += K;
+        return q;
+    };
+    const auto copy = [&](const Q& from) {
+        Q q = zero(from.v);
+        std::copy_n(from.d, K, q.d);
+        return q;
+    };
     const double V_T = V_T_;
     const double psi = x[m_ * i], n = x[m_ * i + 1], p = x[m_ * i + 2];
     const double s = band_shift_[i], nie = n_ie_[i];
@@ -280,25 +304,25 @@ void DriftDiffusion::gate_tunnel_flux(const GateTunnel& t, std::span<const doubl
         return col == 0 ? psi : x[m_ * t.nodes[col - 3]];
     };
     // Vacuum level of each point.
-    std::vector<Q> vac;
-    vac.reserve(t.points.size());
+    thread_local std::vector<Q> vac;
+    vac.clear();
     for (std::size_t k = 0; k < t.points.size(); ++k) {
         if (t.lumped && k == 1) {
-            Q q = zero(FG.v + t.work_function_eV);
-            q.d = FG.d;
-            vac.push_back(std::move(q));
+            Q q = copy(FG);
+            q.v += t.work_function_eV;
+            vac.push_back(q);
             continue;
         }
         const TunnelPoint& pt = t.points[k];
         Q q = zero(t.depth_eV - V_T * (pt.w * column_psi(pt.a) + (1.0 - pt.w) * column_psi(pt.b)));
         q.d[pt.a] -= V_T * pt.w;
         q.d[pt.b] -= V_T * (1.0 - pt.w);
-        vac.push_back(std::move(q));
+        vac.push_back(q);
     }
     // The electrode's band edges: a metal has none (+-infinity), polysilicon is degenerate.
     constexpr double inf = std::numeric_limits<double>::infinity();
     const bool metal = t.electrode == device::GateElectrode::metal;
-    Q EcG = FG, EvG = FG;
+    Q EcG = copy(FG), EvG = copy(FG);
     if (metal) {
         EcG.v = -inf;
         EvG.v = inf;
@@ -307,16 +331,15 @@ void DriftDiffusion::gate_tunnel_flux(const GateTunnel& t, std::span<const doubl
     } else {
         EcG.v += t.gate_gap_eV;
     }
-    const auto negate = [](Q q) {
-        q.v = -q.v;
-        for (double& d : q.d) d = -d;
+    const auto negate = [&](const Q& from) {
+        Q q = zero(-from.v);
+        for (std::size_t k = 0; k < K; ++k) q.d[k] = -from.d[k];
         return q;
     };
     const auto larger = [](const Q& a, const Q& b) -> const Q& { return b.v > a.v ? b : a; };
 
     enum class Band { conduction, valence };
-    std::vector<physics::BarrierSegment> segments(t.pieces.size());
-    std::vector<double> dW(2 * t.pieces.size());
+    const std::span<double> dW(arena.data() + (11 + t.points.size()) * K, 2 * t.pieces.size());
     // One process: the barrier on its scale (mirrored for holes), the range [low, high] (high
     // infinite: the barrier top), the Fermi levels; adds J to `value` and its gradient times `sign`
     // and `coupling` to `grad`.
@@ -375,6 +398,56 @@ void DriftDiffusion::gate_tunnel_flux(const GateTunnel& t, std::span<const doubl
     }
 }
 
+namespace {
+
+// The processors the process may run on (its affinity, as the P-core pinning of Unit 40's timing
+// sets it), else the machine's.
+std::size_t available_processors() {
+    DWORD_PTR process = 0, system = 0;
+    if (GetProcessAffinityMask(GetCurrentProcess(), &process, &system) != 0 && process != 0) {
+        return static_cast<std::size_t>(std::popcount(static_cast<std::uint64_t>(process)));
+    }
+    return std::max(1u, std::thread::hardware_concurrency());
+}
+
+// Tunnels per chunk a thread claims at a time: small enough that threads on slower cores (a
+// hybrid CPU's E cores) take fewer of them.
+constexpr std::size_t tunnel_chunk = 16;
+
+}  // namespace
+
+DriftDiffusion::GateTunnelJob::GateTunnelJob(const DriftDiffusion& s, std::span<const double> x,
+                                             std::span<const NodeDegeneracy> g)
+    : s_(s), x_(x), g_(g), out_(s.gate_tunnels_.size()),
+      chunks_((s.gate_tunnels_.size() + tunnel_chunk - 1) / tunnel_chunk) {
+    // The calling thread joins in at finish(), so one fewer worker than processors; at least two
+    // chunks each, else the threads' start costs more than they save.
+    const std::size_t threads = std::min(available_processors(), chunks_ / 2);
+    for (std::size_t t = 1; t < threads; ++t) workers_.emplace_back([this] { work(); });
+}
+
+void DriftDiffusion::GateTunnelJob::work() {
+    for (std::size_t c = next_++; c < chunks_; c = next_++) {
+        const std::size_t end = std::min(out_.size(), (c + 1) * tunnel_chunk);
+        for (std::size_t k = c * tunnel_chunk; k < end; ++k) {
+            s_.gate_tunnel_flux(s_.gate_tunnels_[k], x_, g_, out_[k]);
+        }
+    }
+}
+
+std::vector<DriftDiffusion::GateTunnelFlux>& DriftDiffusion::GateTunnelJob::finish() {
+    work();
+    for (std::jthread& w : workers_) w.join();
+    workers_.clear();
+    return out_;
+}
+
+void DriftDiffusion::gate_tunnel_fluxes(std::span<const double> x, std::span<const NodeDegeneracy> g,
+                                        std::vector<GateTunnelFlux>& out) const {
+    GateTunnelJob job(*this, x, g);
+    out = std::move(job.finish());
+}
+
 DriftDiffusion::GateTunnellingCurrents DriftDiffusion::gate_tunnelling_currents(
     std::span<const double> x) const {
     NITCAD_EXPECTS(x.size() == unknowns());
@@ -384,9 +457,11 @@ DriftDiffusion::GateTunnellingCurrents DriftDiffusion::gate_tunnelling_currents(
     out.hvb.assign(contact_count_, 0.0);
     out.evb.assign(contact_count_, 0.0);
     const std::vector<NodeDegeneracy> g = degeneracies(x);
-    GateTunnelFlux flux;
-    for (const GateTunnel& t : gate_tunnels_) {
-        gate_tunnel_flux(t, x, g, flux);
+    std::vector<GateTunnelFlux> fluxes;
+    gate_tunnel_fluxes(x, g, fluxes);
+    for (std::size_t k = 0; k < gate_tunnels_.size(); ++k) {
+        const GateTunnel& t = gate_tunnels_[k];
+        const GateTunnelFlux& flux = fluxes[k];
         // T_n - T_p = c (J_ecb - J_hvb + J_evb): EVB's two directions enter T_p and T_n with the
         // signs that make both add.
         const auto c = static_cast<std::size_t>(t.contact);

@@ -1168,10 +1168,11 @@ std::vector<double> DriftDiffusion::terminal_currents(std::span<const double> x)
     // edges, T_n - T_p, enters through its gate.
     if (!gate_tunnels_.empty()) {
         const std::vector<NodeDegeneracy> g = degeneracies(x);
-        GateTunnelFlux flux;
-        for (const GateTunnel& t : gate_tunnels_) {
-            gate_tunnel_flux(t, x, g, flux);
-            terminal[static_cast<std::size_t>(t.contact)] += flux.T_n - flux.T_p;
+        std::vector<GateTunnelFlux> fluxes;
+        gate_tunnel_fluxes(x, g, fluxes);
+        for (std::size_t k = 0; k < gate_tunnels_.size(); ++k) {
+            const auto c = static_cast<std::size_t>(gate_tunnels_[k].contact);
+            terminal[c] += fluxes[k].T_n - fluxes[k].T_p;
         }
     }
     detail::observe("terminal_currents", terminal);

@@ -13,10 +13,14 @@ namespace NiTCAD::physics {
 
 namespace {
 
-// ln(1 + e^x) without overflow, and its derivative 1 / (1 + e^-x).
-double softplus(double x) noexcept { return std::max(x, 0.0) + std::log1p(std::exp(-std::abs(x))); }
-double logistic(double x) noexcept {
-    return x >= 0.0 ? 1.0 / (1.0 + std::exp(-x)) : std::exp(x) / (1.0 + std::exp(x));
+// ln(1 + e^x) without overflow, and its derivative 1 / (1 + e^-x), from one exponential e^-|x|.
+struct Softplus {
+    double value;
+    double derivative;
+};
+Softplus softplus(double x) noexcept {
+    const double e = std::exp(-std::abs(x));
+    return {std::max(x, 0.0) + std::log1p(e), x >= 0.0 ? 1.0 / (1.0 + e) : e / (1.0 + e)};
 }
 
 // 4-point Gauss-Legendre on [-1, 1].
@@ -35,15 +39,17 @@ double wkb_action_scale() noexcept {
     return std::sqrt(2.0 * base::m0_kg * base::q_C) / base::hbar_J_s * 1e-2;
 }
 
-SegmentAction segment_action(double a, double b, double L) noexcept {
+namespace {
+
+// segment_action with the ends' roots sqrt(a+), sqrt(b+) given (adjacent segments share an end, so a
+// barrier's roots are taken once per point), one division per segment.
+SegmentAction action_of_roots(double a, double b, double sa, double sb, double L) noexcept {
     if (a <= 0.0 && b <= 0.0) return {0.0, 0.0, 0.0};
     if (a > 0.0 && b > 0.0) {
         // Both ends inside: dividing a^(3/2) - b^(3/2) by a - b = (sqrt a - sqrt b)(sqrt a + sqrt b)
         // leaves forms without cancellation, exact at a == b:
         //     g = (2/3) (a + sqrt(a b) + b) / (sqrt a + sqrt b)
         //     dg/da = (sqrt a + 2 sqrt b) / (3 (sqrt a + sqrt b)^2), dg/db symmetrically.
-        const double sa = std::sqrt(a);
-        const double sb = std::sqrt(b);
         const double s = sa + sb;
         return {L * (2.0 / 3.0) * (a + sa * sb + b) / s, L * (sa + 2.0 * sb) / (3.0 * s * s),
                 L * (2.0 * sa + sb) / (3.0 * s * s)};
@@ -54,13 +60,22 @@ SegmentAction segment_action(double a, double b, double L) noexcept {
     const bool a_inside = a > 0.0;
     const double c = a_inside ? a : b;
     const double o = a_inside ? b : a;
-    const double sc = std::sqrt(c);
+    const double sc = a_inside ? sa : sb;
     const double w = c - o;
     const double g = (2.0 / 3.0) * c * sc / w;
+    const double value = L * g;
     const double d_inside = L * sc * (c - 3.0 * o) / (3.0 * w * w);
     const double d_outside = L * g / w;
-    return a_inside ? SegmentAction{L * g, d_inside, d_outside}
-                    : SegmentAction{L * g, d_outside, d_inside};
+    return a_inside ? SegmentAction{value, d_inside, d_outside}
+                    : SegmentAction{value, d_outside, d_inside};
+}
+
+double root(double a) noexcept { return a > 0.0 ? std::sqrt(a) : 0.0; }
+
+}  // namespace
+
+SegmentAction segment_action(double a, double b, double L) noexcept {
+    return action_of_roots(a, b, root(a), root(b), L);
 }
 
 double wkb_exponent(std::span<const BarrierSegment> barrier, double E, double* d_E,
@@ -91,9 +106,9 @@ double wkb_transmission(std::span<const BarrierSegment> barrier, double E) {
 Supply tsu_esaki_supply(double E, double F1, double F2, double kT) noexcept {
     const double x1 = (F1 - E) / kT;
     const double x2 = (F2 - E) / kT;
-    const double s1 = logistic(x1);
-    const double s2 = logistic(x2);
-    return {kT * (softplus(x1) - softplus(x2)), s1, -s2, s2 - s1};
+    const Softplus s1 = softplus(x1);
+    const Softplus s2 = softplus(x2);
+    return {kT * (s1.value - s2.value), s1.derivative, -s2.derivative, s2.derivative - s1.derivative};
 }
 
 TunnelCurrent tsu_esaki_current(std::span<const BarrierSegment> barrier, TunnelRange range,
@@ -129,16 +144,40 @@ TunnelCurrent tsu_esaki_current(std::span<const BarrierSegment> barrier, TunnelR
     const double h = span / static_cast<double>(n);
     const double prefactor = richardson / (base::k_B_eV_per_K * base::k_B_eV_per_K);
 
-    std::vector<double> dS_dW(d_W.empty() ? 0 : d_W.size());
+    // wkb_exponent's sum inlined, its per-segment factor scale sqrt(m) taken once.
+    const std::size_t m = barrier.size();
+    const double scale = wkb_action_scale();
+    // Scratch on the stack for the usual few segments (the flux runs on several threads, GR11).
+    constexpr std::size_t inline_segments = 32;
+    std::array<double, 3 * inline_segments> stack;
+    std::vector<double> heap;
+    if (m > inline_segments) heap.resize(3 * m);
+    const std::span<double> scratch = m > inline_segments ? std::span<double>(heap)
+                                                          : std::span<double>(stack).first(3 * m);
+    const std::span<double> c = scratch.first(m);
+    const std::span<double> dS_dW = scratch.subspan(m, d_W.empty() ? 0 : 2 * m);
+    for (std::size_t k = 0; k < m; ++k) c[k] = scale * std::sqrt(barrier[k].mass_m0);
     double J = 0.0, dF1 = 0.0, dF2 = 0.0, dEl = 0.0, dEh = 0.0;
     for (std::size_t p = 0; p < n; ++p) {
         for (std::size_t j = 0; j < gl_x.size(); ++j) {
             const double t = (static_cast<double>(p) + 0.5 * (1.0 + gl_x[j])) / static_cast<double>(n);
             const double E = El + span * t;
             const double w = prefactor * 0.5 * h * gl_w[j];
-            std::fill(dS_dW.begin(), dS_dW.end(), 0.0);
-            double dS_dE = 0.0;
-            const double S = wkb_exponent(barrier, E, &dS_dE, dS_dW);
+            double S = 0.0, dS_dE = 0.0;
+            double r1 = 0.0;
+            for (std::size_t k = 0; k < m; ++k) {
+                const BarrierSegment& s = barrier[k];
+                const double a = s.W0_eV - E, b = s.W1_eV - E;
+                const double r0 = k > 0 && s.W0_eV == barrier[k - 1].W1_eV ? r1 : root(a);
+                r1 = root(b);
+                const SegmentAction g = action_of_roots(a, b, r0, r1, s.length_cm);
+                S += c[k] * g.value;
+                dS_dE -= c[k] * (g.d_a + g.d_b);
+                if (!dS_dW.empty()) {
+                    dS_dW[2 * k] = c[k] * g.d_a;
+                    dS_dW[2 * k + 1] = c[k] * g.d_b;
+                }
+            }
             const double TC = std::exp(-2.0 * S);
             const Supply N = tsu_esaki_supply(E, F1, F2, kT);
             const double f = TC * N.value;

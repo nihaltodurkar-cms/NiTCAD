@@ -4391,6 +4391,8 @@ A/cm² in accumulation, where the current comes from the gate (the measured ECB 
 | GR7 | GC12's small-signal comparison (GR3, 0 Hz) at −1.0 V (accumulation), within 1e-5. The 0 Hz gate admittance of a generation-limited capacitor in inversion is recorded as unresolved; its reported resolution covers the miss. |
 | GR8 | GC12's transient: \|Σ I\| ≤ 1e-7 × max \|I\| at each step with max \|I\| > 1e-3 A/cm² (GR1's setup applied to the transient). |
 | GR9 | GR2's scale is the larger of the two one-way fluxes (the semiconductor's side supplying alone, and the electrode's alone). |
+| GR10 | The FinFET deck's HfO₂ band data for GC14 and GC16 (AskUserQuestion, 2026-10-28): gap 5.7 eV and affinity 2.55 eV (conduction offset 1.5 eV to silicon's 4.05; Gehring Table 5.1), tunnelling masses 0.18 m₀ for electrons and holes (owner ruling: no accessible source found for 0.18; the open-access measurement found, Monaghan et al., Solid-State Electronics 2009, https://research.ucc.ie/en/publications/determination-of-electron-effective-mass-and-electron-affinity-in/, gives 0.11 ± 0.03 m₀ and an affinity of 2.0 ± 0.25 eV). The interfacial SiO₂ takes the built-in set. |
+| GR11 | GC14's cost (AskUserQuestion, 2026-10-28): the tunnels' fluxes are computed on threads, the first threading inside assembly; each flux is computed whole by one thread and added in tunnel order, so the result does not depend on the thread count. The baseline (without tunnelling) stays single-threaded. Measured before the ruling, single-threaded: 4.7× (about 1,300 tunnels × 2 processes × 320 quadrature points × about 10 segments, near 55 ns a point). |
 
 **Slice 2 (device, assembly, deck, files, record, app, CLI), as built.**
 - `device::Contact::tunnelling` (`TunnelProcess` bits; 0 off) and `GateStack`'s oxide band data (`oxide_affinity_eV`,
@@ -4432,6 +4434,23 @@ A/cm² in accumulation, where the current comes from the gate (the measured ECB 
   GC12 4e-6 (−1 V) and the transient 6.1e-8; GC7 corrections 1.0e-2, 3.5e-5, 2.5e-11. With Newton's `tol_update` at
   1e-12 (not the deck's 1e-8) the same transient's sum reaches 1.4e-4 (an absolute 2e-7 A/cm² while the currents decay
   through 1 A/cm²); not investigated.
+
+**GC14's cost, as built (GR11).**
+- `physics::tsu_esaki_current` takes the WKB sum inline: each segment's factor scale·√m once per call, each end's root
+  once per point (adjacent segments share an end), the supply's softplus and logistic from one exponential, scratch on
+  the stack. Bit-identical to slice 2 (the same operations on the same values): GC7's Newton corrections are unchanged.
+  A variant with one division per segment instead of two (about 7% faster) changed the rounding and GC7 then failed
+  (corrections 3.1e-3, 6.8e-5 at +1.5 V): the capacitor's near-singular Jacobian (GR4) makes GC7's sequence depend
+  on the last bit of the barrier action. Not adopted; recorded as a sensitivity of GC7.
+- `DriftDiffusion::GateTunnelJob` (`terms.hpp`, `gate_tunnels.cpp`): `Composition::assemble` starts it before the
+  terms, worker threads (the process's affinity count less one, at least two 16-tunnel chunks each) claim chunks of
+  tunnels in turn, the other terms add theirs meanwhile, and the `GateTunnelling` term's `finish()` has the assembling
+  thread take the remaining chunks, joins the workers and scatters the fluxes in tunnel order. `gate_tunnel_fluxes`
+  (terminal and per-process currents) runs the same job at once. Each flux's local gradients live in a per-thread
+  arena (no allocation once grown).
+- Measured (FinFET, Release, P-core pinned 0x3C3, median of 31): evaluate 13.2 ms without, 15.7 ms with (1.195×);
+  residual 9.6 and 13.6 ms (1.42×). Steps: 5.6× (slice 2), 4.7× (bit-identical arithmetic), 1.8× (threads after the
+  other terms), 1.2× (threads alongside them).
 
 ---
 
