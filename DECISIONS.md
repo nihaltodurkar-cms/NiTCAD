@@ -4746,6 +4746,10 @@ against Unit 14's drift-diffusion within 1e-6.
   the miss is 1.5e-4, without the contact terms 8.9e-2. The per-step identity is algebraic (an assembly test closes
   it within 1e-12 at arbitrary states).
 
+**Slice 5 scope, owner ruling (2026-10-29: "Dont take the FinFET case, it will take long").** EC12 (the FinFET deck's
+17-point sweep with energy balance, its on-current change and wall time) is not run in Unit 52: not measured, not
+claimed. Slice 5 is EC9 (refinement), EC17 (hand mutants), EC19 (cost on 1D, 2D, 3D) and ARCHITECTURE.
+
 **Questions for the owner before code (proposal's recommended answer first):**
 - EQ1 τ_w for silicon: 0.35 ps / 0.4 ps (Triebl), or another cited pair.
 - EQ2 `field_mobility = on` with energy balance: refused (ED4), or silently replaced by the T-driven law.
