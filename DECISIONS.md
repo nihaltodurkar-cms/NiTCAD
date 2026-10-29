@@ -4466,6 +4466,15 @@ A/cm² in accumulation, where the current comes from the gate (the measured ECB 
   its 2D device's current; equal to the printed seven digits (8.949119e-10 and 1.002478e-09 A), within 1e-9.
   Mutant: a node keeping only its first tunnel (the corner losing its second face's path) fails by 8.7e-4.
 
+**GC1's traces, as measured (2026-10-29, after the rebase and GR12).** Unit 42's PG1 method: the Unit 40 assembly
+traces of `main` (`329f203`) and of this branch, Release, each run pinned to the P cores from its start, in
+declaration order, with the MKL runtime loaded, over the default cases of the assemble, solve, deck and validation
+executables and the hidden `[mosfet]`, `[transient]`, `[breakdown]`, `[btbt]`, `[unstructured]`, `[mlda]` (solve
+and deck) and `[lombardi]` entries. Every one of `main`'s 469 test-case blocks is byte-identical in the branch's
+traces (assemble 127, solve 220, deck 73, MOSFET 11, breakdown 7, transient 6, BTBT 3, unstructured 3, solve MLDA 4,
+deck MLDA 2, Lombardi 5, validation 8). The only blocks without a counterpart are this unit's 19 new test cases.
+With tunnelling off nothing the assembler computes changed, including the threaded assembly (GR11).
+
 **GC17's hand mutants, as run (2026-10-29).** 23 mutants (the last for GR12's refusal, after the rebase), each built in Release and run against the gate
 tunnelling tests (physics, assemble, deck), then reverted. All are caught; none is recorded as equivalent. Seven
 first survived and each gap was closed with a test before the mutant was run again:
