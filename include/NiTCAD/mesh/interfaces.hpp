@@ -13,10 +13,17 @@
 // boundary the circumcentres of the boundary facets around e and e's midpoint):
 //   deviation(F) = min over the declared pieces P separating A and B of max over v in V(F) of
 //   dist(v, P).
-// Each piece is convex (a segment, or a planar convex polygon), so dist(., P) is convex, and F lies
-// in the convex hull of V(F): max over V(F) of dist(., P) bounds it over all of F. The minimum over
-// pieces makes deviation(F) an upper bound on the largest distance from F to the interface (exact
-// where one piece is nearest everywhere on F; an over-estimate near a bend, the safe direction).
+// For a convex piece (a segment, or a planar convex polygon) dist(., P) is convex, and F lies in
+// the convex hull of V(F): max over V(F) of dist(., P) bounds it over all of F. A non-convex
+// planar polygon (3D; Unit 53, FD9) is measured by the plane distance when the hull of V(F)'s
+// projection lies in the polygon (tested exactly; axis-aligned pieces, whose projection is exact),
+// by the plane distance plus the grown reach when it lies in the polygon grown outward by 1e-6 s
+// (mitred; the reach its largest vertex displacement), for face vertices rounded just across a
+// feature line; and otherwise by the min over the triangles of its ear-clip decomposition of max
+// over V(F) (an upper bound; always for oblique pieces).
+// The minimum over pieces makes deviation(F) an upper bound on the largest distance from F to the
+// interface (exact where one piece is nearest everywhere on F; an over-estimate near a bend, the
+// safe direction).
 // Corner zones: the points within 2 s of a piece's relative boundary (a segment's end points; a
 // polygon's edges), s the declared resolution. A face is in a zone when its midpoint or any vertex
 // is. Acceptance:
@@ -45,7 +52,8 @@
 namespace NiTCAD::mesh {
 
 struct InterfacePiece {
-    // 2D: a segment, two points. 3D: a planar convex polygon, at least three points in order.
+    // 2D: a segment, two points. 3D: a planar simple polygon (convex, or not: FD9), at least three
+    // points in order.
     std::vector<Point> vertices;
     std::int32_t region_a = 0;
     std::int32_t region_b = 0;
@@ -67,7 +75,7 @@ struct InterfaceReport {
 // Errors:
 // - invalid_input: node_region not one per node, or a region negative; dual not of these
 //   simplices; resolution not finite and positive; a piece with the wrong vertex count, a
-//   non-finite vertex, equal or negative regions, or (3D) not planar, convex and non-degenerate
+//   non-finite vertex, equal or negative regions, or (3D) not planar, simple and non-degenerate
 //   (the index names the piece);
 // - degenerate_mesh, the rule not established (the index is the edge's first node, both nodes in
 //   the message): regions joined with no declared piece between them; a face outside the corner

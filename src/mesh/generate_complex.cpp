@@ -18,6 +18,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <deque>
+#include <limits>
 #include <map>
 #include <memory>
 #include <numeric>
@@ -30,6 +31,7 @@
 #include "NiTCAD/mesh/complex.hpp"
 #include "NiTCAD/mesh/generate.hpp"
 #include "complex_index.hpp"
+#include "complex_interfaces.hpp"
 #include "dual_geometry.hpp"
 #include "predicates.hpp"
 #include "triangulation2d.hpp"
@@ -144,7 +146,13 @@ struct Subsegment {
     int b = 0;
     int edge = 0;
     bool alive = true;
-    int face = -1;  // a patch edge: its face, judged in face coordinates
+    int face = -1;        // a patch edge: its face, judged in face coordinates
+    bool locked = false;  // across an interface crossing: never split (its midpoint is on the interface)
+};
+
+struct Trace {
+    detail::InterfaceTrace geometry;
+    std::vector<double> params;  // the pair positions along it
 };
 
 }  // namespace
@@ -167,12 +175,6 @@ std::expected<GeneratedMesh, base::Error> generate_mesh(const PolyhedralGeometry
     const ComplexIndex& cx = *made;
     const PolyhedralGeometry& g = cx.geometry();
     const std::vector<Point>& P = g.vertices;
-    for (std::size_t f = 0; f < cx.facets().size(); ++f) {
-        if (cx.facets()[f].kind == FacetKind::interface) {
-            return std::unexpected(invalid("material interfaces in a complex are not supported yet (Unit 53, slice 3)", f));
-        }
-    }
-    const std::int32_t region = g.volumes[0].region;
 
     // The boundary's faces: coplanar boundary facets joined across shared edges.
     std::vector<std::size_t> boundary;
@@ -316,6 +318,39 @@ std::expected<GeneratedMesh, base::Error> generate_mesh(const PolyhedralGeometry
         }
     }
 
+    // Regions and their sizes.
+    std::int32_t max_region = 0;
+    for (const ComplexVolume& v : g.volumes) max_region = std::max(max_region, v.region);
+    std::vector<double> region_h(static_cast<std::size_t>(max_region) + 1, options.max_size);
+    for (std::size_t r = 0; r < region_h.size() && r < options.region_max_size.size(); ++r) {
+        if (options.region_max_size[r] > 0.0) region_h[r] = std::min(region_h[r], options.region_max_size[r]);
+    }
+    double smallest_region_h = std::numeric_limits<double>::infinity();
+    for (const ComplexVolume& v : g.volumes) smallest_region_h = std::min(smallest_region_h, region_h[static_cast<std::size_t>(v.region)]);
+
+    // Interfaces (FD7): pieces, traces, crossings and the rules.
+    detail::InterfaceLayout layout;
+    {
+        detail::InterfaceInput in;
+        in.complex = &cx;
+        in.face_of = face_of;
+        for (const Face& f : faces) {
+            in.face_plane.push_back(f.plane);
+            auto& tris = in.face_triangles.emplace_back();
+            for (const std::size_t fct : f.facets) {
+                for (const auto& t : cx.facets()[fct].triangles) tris.push_back({P[t[0]], P[t[1]], P[t[2]]});
+            }
+        }
+        for (const DomainEdge& e : edges) in.chains.push_back({e.chain, e.faces, e.face});
+        in.region_size = region_h;
+        in.resolution = options.interface_resolution;
+        auto read = detail::read_interfaces(in);
+        if (!read) return std::unexpected(std::move(read.error()));
+        layout = std::move(*read);
+    }
+    const double res = options.interface_resolution;
+    const bool has_interfaces = !layout.pieces.empty();
+
     // The complex's vertices that bound a face: those on a domain edge or a patch edge.
     std::vector<std::vector<int>> vertex_edges(P.size());
     for (std::size_t e = 0; e < edges.size(); ++e) {
@@ -336,7 +371,8 @@ std::expected<GeneratedMesh, base::Error> generate_mesh(const PolyhedralGeometry
     std::vector<Point> corner_points;
     std::vector<std::size_t> corner_ids;
     for (std::size_t v = 0; v < P.size(); ++v) {
-        if (!vertex_edges[v].empty()) {
+        // A vertex on an interface (a crossing) is never a node: nodes at +- s/2 replace it.
+        if (!vertex_edges[v].empty() && layout.on_interface[v] == 0) {
             corner_points.push_back(P[v]);
             corner_ids.push_back(v);
         }
@@ -419,18 +455,94 @@ std::expected<GeneratedMesh, base::Error> generate_mesh(const PolyhedralGeometry
         segment_queue.push_back(k);
     };
 
+    const auto node_cap = [&]() { return tri.vertex_count() - 4 >= options.max_nodes; };
     std::vector<int> vertex_of(P.size(), -1);
     for (const std::size_t i : detail::brio_order(corner_points)) {
         const std::size_t v = corner_ids[i];
         vertex_of[v] = insert(P[v], vertex_faces[v], vertex_edges[v], -1);
     }
     const int corner_end = static_cast<int>(tri.vertex_count());
-    for (std::size_t e = 0; e < edges.size(); ++e) {
-        const auto& c = edges[e].chain;
-        for (std::size_t k = 0; k + 1 < c.size(); ++k) {
-            add_segment(vertex_of[c[k]], vertex_of[c[k + 1]], static_cast<int>(e), edges[e].face);
+
+    // Interface nodes (M7, FD7): no node on an interface and none at its feature lines or points.
+    std::vector<char> interface_node;
+    const auto mark_interface = [&](int v) {
+        if (static_cast<std::size_t>(v) >= interface_node.size()) interface_node.resize(static_cast<std::size_t>(v) + 1, 0);
+        interface_node[static_cast<std::size_t>(v)] = 1;
+    };
+    const auto snap = [&](const Face& f, Point p) {
+        if (f.axis >= 0) p[static_cast<std::size_t>(f.axis)] = f.plane[0][static_cast<std::size_t>(f.axis)];
+        return p;
+    };
+    // On each crossed domain edge: nodes at +- s/2 from the crossing, toward the chain's start and end.
+    std::map<std::pair<int, std::size_t>, std::array<int, 2>> crossing_nodes;
+    for (const detail::InterfaceCrossing& c : layout.crossings) {
+        const DomainEdge& de = edges[static_cast<std::size_t>(c.chain)];
+        const Point& X = P[de.chain[c.position]];
+        const Point& A = P[de.chain.front()];
+        const Point& B = P[de.chain.back()];
+        const Point ed = detail::scale(1.0 / dist3(A, B), detail::sub(B, A));
+        std::array<int, 2> ends{};
+        for (std::size_t side = 0; side < 2; ++side) {
+            Point x = detail::add(X, detail::scale(side == 0 ? -0.5 * res : 0.5 * res, ed));
+            for (std::size_t a = 0; a < 3; ++a) {
+                if (A[a] == B[a]) x[a] = A[a];
+            }
+            if (node_cap()) return std::unexpected(exhausted());
+            ends[side] = insert(x, {de.faces[0], de.faces[1]}, {c.chain}, -1);
+            mark_interface(ends[side]);
+        }
+        crossing_nodes[{c.chain, c.position}] = ends;
+    }
+    // Along each trace: pairs at +- s/2 within the face, graded from each end.
+    std::vector<Trace> traces;
+    for (const detail::InterfaceTrace& tg : layout.traces) {
+        Trace tr{tg, detail::trace_positions(tg.start, tg.dir, tg.length, res)};
+        const Face& f = faces[static_cast<std::size_t>(tg.face)];
+        for (const double t : tr.params) {
+            const Point c = detail::add(tg.start, detail::scale(t, tg.dir));
+            for (const double sign : {-0.5, 0.5}) {
+                if (node_cap()) return std::unexpected(exhausted());
+                mark_interface(insert(snap(f, detail::add(c, detail::scale(sign * res, tg.normal))), {tg.face}, {}, -1));
+            }
+        }
+        traces.push_back(std::move(tr));
+    }
+    // The pair set P of each piece, mirrored at +- s/2.
+    for (const detail::InterfacePieceLayout& pc : layout.pieces) {
+        const auto pairs = detail::pair_set(pc, res, options.max_nodes);
+        if (!pairs) return std::unexpected(invalid("the pair set of an interface could not be meshed: " + pairs.error().message, pc.facets[0]));
+        for (const Point& a : *pairs) {
+            for (const double sign : {-0.5, 0.5}) {
+                if (node_cap()) return std::unexpected(exhausted());
+                mark_interface(insert(pc.to_world(a, sign * res), {}, {}, -1));
+            }
         }
     }
+    // The subsegments along each chain; the one across a crossing is locked.
+    for (std::size_t e = 0; e < edges.size(); ++e) {
+        const auto& c = edges[e].chain;
+        std::vector<int> nodes;
+        std::vector<std::size_t> locked_at;
+        for (std::size_t k = 0; k < c.size(); ++k) {
+            const auto it = crossing_nodes.find({static_cast<int>(e), k});
+            if (it == crossing_nodes.end()) {
+                nodes.push_back(vertex_of[c[k]]);
+                continue;
+            }
+            locked_at.push_back(nodes.size());
+            nodes.push_back(it->second[0]);
+            nodes.push_back(it->second[1]);
+        }
+        const std::size_t first = segments.size();
+        for (std::size_t k = 0; k + 1 < nodes.size(); ++k) add_segment(nodes[k], nodes[k + 1], static_cast<int>(e), edges[e].face);
+        for (const std::size_t k : locked_at) segments[first + k].locked = true;
+    }
+    const auto is_interface = [&](int v) {
+        return static_cast<std::size_t>(v) < interface_node.size() && interface_node[static_cast<std::size_t>(v)] != 0;
+    };
+    const auto in_band = [&](const Point& x) {
+        return std::ranges::any_of(layout.pieces, [&](const detail::InterfacePieceLayout& pc) { return pc.distance(x) < layout.band; });
+    };
     const auto is_corner = [&](int v) { return v >= 4 && v < corner_end; };
     const auto common_face = [&](std::initializer_list<int> vs) -> int {
         const std::vector<int>& first = faces_of[static_cast<std::size_t>(*vs.begin())];
@@ -483,6 +595,7 @@ std::expected<GeneratedMesh, base::Error> generate_mesh(const PolyhedralGeometry
         return present;
     };
     const auto segment_encroached = [&](const Subsegment& s) {
+        if (s.locked) return false;
         if (s.face >= 0) return !in_face_triangulation(faces[static_cast<std::size_t>(s.face)], s.a, s.b, true);
         const DomainEdge& de = edges[static_cast<std::size_t>(s.edge)];
         for (const int fi : de.faces) {
@@ -525,10 +638,10 @@ std::expected<GeneratedMesh, base::Error> generate_mesh(const PolyhedralGeometry
         }
         return false;
     };
-    const auto node_cap = [&]() { return tri.vertex_count() - 4 >= options.max_nodes; };
 
     const auto split_segment = [&](int k) -> std::optional<base::Error> {
         const Subsegment s = segments[static_cast<std::size_t>(k)];
+        if (s.locked) return std::nullopt;
         const Point& A = tri.point(s.a);
         const Point& B = tri.point(s.b);
         const double len = dist3(A, B);
@@ -570,13 +683,45 @@ std::expected<GeneratedMesh, base::Error> generate_mesh(const PolyhedralGeometry
         }
         Point c = detail::triangle_circumcentre({tri.point(v[0]), tri.point(v[1]), tri.point(v[2])});
         if (f.axis >= 0) c[static_cast<std::size_t>(f.axis)] = f.plane[0][static_cast<std::size_t>(f.axis)];
+        if (has_interfaces && in_band(c)) {
+            // Near a trace: a new trace pair at the projection instead (M11), unless one is already
+            // within s / 2 along the trace; then c itself, judged by P4.
+            Trace* best = nullptr;
+            double best_d = 0.0;
+            for (Trace& tr : traces) {
+                if (tr.geometry.face != fi) continue;
+                const Point r = detail::sub(c, tr.geometry.start);
+                const double along = std::clamp(detail::dot3(r, tr.geometry.dir), 0.0, tr.geometry.length);
+                const double dd = dist3(c, detail::add(tr.geometry.start, detail::scale(along, tr.geometry.dir)));
+                if (best == nullptr || dd < best_d) {
+                    best = &tr;
+                    best_d = dd;
+                }
+            }
+            if (best != nullptr && best_d < layout.band) {
+                const auto& tg = best->geometry;
+                const double t = std::clamp(detail::dot3(detail::sub(c, tg.start), tg.dir), 1.5 * res, tg.length - 1.5 * res);
+                const bool near = std::ranges::any_of(best->params, [&](double x) { return std::abs(x - t) < 0.5 * res; });
+                if (!near) {
+                    if (node_cap()) return exhausted();
+                    const Point centre = detail::add(tg.start, detail::scale(t, tg.dir));
+                    for (const double sign : {-0.5, 0.5}) {
+                        mark_interface(insert(snap(f, detail::add(centre, detail::scale(sign * res, tg.normal))), {fi}, {}, tri.vertex_tet(v[0])));
+                    }
+                    best->params.push_back(t);
+                    ++report.facet_splits;
+                    return std::nullopt;
+                }
+            }
+            ++report.band_facet_points;
+        }
         const Point cl = f.to_local(c);
         std::vector<int> hit;
         int nearest = -1;
         double nearest_d = 0.0;
         for (std::size_t k = 0; k < segments.size(); ++k) {
             const Subsegment& s = segments[k];
-            if (!s.alive) continue;
+            if (!s.alive || s.locked) continue;
             const DomainEdge& de = edges[static_cast<std::size_t>(s.edge)];
             if (de.faces[0] != fi && de.faces[1] != fi) continue;
             const Point& A = tri.point(s.a);
@@ -607,15 +752,9 @@ std::expected<GeneratedMesh, base::Error> generate_mesh(const PolyhedralGeometry
         ++report.facet_splits;
         return std::nullopt;
     };
-    const auto region_size = [&](std::int32_t r) {
-        double h = options.max_size;
-        if (r >= 0 && static_cast<std::size_t>(r) < options.region_max_size.size() && options.region_max_size[static_cast<std::size_t>(r)] > 0.0) {
-            h = std::min(h, options.region_max_size[static_cast<std::size_t>(r)]);
-        }
-        return h;
-    };
-    const auto size_at = [&](const Point& p) {
-        double h = region_size(region);
+    // h at p for a region size h_r (the boxes may lower it).
+    const auto size_at = [&](const Point& p, double h_r) {
+        double h = h_r;
         for (const SizeBox& b : options.boxes) {
             if (p[0] >= b.lo[0] && p[0] <= b.hi[0] && p[1] >= b.lo[1] && p[1] <= b.hi[1] && p[2] >= b.lo[2] && p[2] <= b.hi[2]) {
                 h = std::min(h, b.max_size);
@@ -623,11 +762,16 @@ std::expected<GeneratedMesh, base::Error> generate_mesh(const PolyhedralGeometry
         }
         return h;
     };
-    const auto in_domain = [&](const Point& p) {
+    // The region size at a point strictly inside the domain or on an internal facet (the smaller
+    // of the two regions on an interface), or nothing outside or on the boundary.
+    const auto domain_size = [&](const Point& p) -> std::optional<double> {
         const auto l = cx.locate(p);
-        if (l.kind == ComplexIndex::Location::Kind::inside) return true;
-        return l.kind == ComplexIndex::Location::Kind::on_facet &&
-               cx.facets()[static_cast<std::size_t>(l.index)].kind != FacetKind::boundary;
+        const auto h_of_volume = [&](int vol) { return region_h[static_cast<std::size_t>(g.volumes[static_cast<std::size_t>(vol)].region)]; };
+        if (l.kind == ComplexIndex::Location::Kind::inside) return h_of_volume(l.index);
+        if (l.kind != ComplexIndex::Location::Kind::on_facet) return std::nullopt;
+        const auto& fc = cx.facets()[static_cast<std::size_t>(l.index)];
+        if (fc.kind == FacetKind::boundary) return std::nullopt;
+        return std::min(h_of_volume(fc.volumes[0]), h_of_volume(fc.volumes[1]));
     };
 
     for (std::size_t t = 0; t < tri.tet_slots(); ++t) {
@@ -670,10 +814,21 @@ std::expected<GeneratedMesh, base::Error> generate_mesh(const PolyhedralGeometry
             for (std::size_t j = i + 1; j < 4; ++j) shortest = std::min(shortest, dist3(p[i], p[j]));
         }
         const Point centroid = detail::scale(0.25, detail::add(detail::add(p[0], p[1]), detail::add(p[2], p[3])));
-        if (!(radius > bound * shortest) && !(radius > size_factor * size_at(centroid))) continue;
+        const bool poor = radius > bound * shortest;
+        if (!poor && !(radius > size_factor * size_at(centroid, smallest_region_h))) continue;
         // Only tetrahedra inside the domain are refined (outside ones are dropped at extraction).
-        if (!in_domain(centroid)) continue;
+        const auto h_here = domain_size(centroid);
+        if (!h_here) continue;
+        if (!poor && !(radius > size_factor * size_at(centroid, *h_here))) continue;
+        if (std::ranges::all_of(tt.v, [&](int x) { return is_interface(x); })) {
+            ++report.exempt_tetrahedra;  // pair nodes only (M11)
+            continue;
+        }
         const Point cc = detail::tetrahedron_circumcentre(p);
+        if (has_interfaces && in_band(cc)) {
+            ++report.exempt_tetrahedra;  // no circumcentre in a protected band (M7)
+            continue;
+        }
         const int start = tri.locate(cc, t);
         const auto cav = tri.cavity(cc, start);
         std::vector<int> seg_hit;
@@ -683,7 +838,7 @@ std::expected<GeneratedMesh, base::Error> generate_mesh(const PolyhedralGeometry
             for (std::size_t i = 0; i < 4; ++i) {
                 for (std::size_t j = i + 1; j < 4; ++j) {
                     const auto it = segment_at.find({std::min(cv[i], cv[j]), std::max(cv[i], cv[j])});
-                    if (it == segment_at.end()) continue;
+                    if (it == segment_at.end() || segments[static_cast<std::size_t>(it->second)].locked) continue;
                     const Point& A = tri.point(cv[i]);
                     const Point& B = tri.point(cv[j]);
                     if (detail::dot3(detail::sub(A, cc), detail::sub(B, cc)) < 0.0 && std::ranges::find(seg_hit, it->second) == seg_hit.end()) {
@@ -720,7 +875,7 @@ std::expected<GeneratedMesh, base::Error> generate_mesh(const PolyhedralGeometry
             tet_queue.push_back(t);
             continue;
         }
-        if (!in_domain(cc)) {
+        if (!domain_size(cc)) {
             ++report.exempt_tetrahedra;
             continue;
         }
@@ -859,8 +1014,53 @@ std::expected<GeneratedMesh, base::Error> generate_mesh(const PolyhedralGeometry
     report.tetrahedra = sm.cells.size() / 4;
     report.min_dihedral_deg = min_dihedral_all;
     report.max_radius_edge = max_ratio;
-    std::vector<std::int32_t> node_region(sm.points.size(), region);
-    return GeneratedMesh{std::move(*dual), std::move(sm), std::move(node_region), std::nullopt, report};
+    // Regions (FD6). Without interfaces, the one region (slice 2). Otherwise each node located
+    // exactly; a node on an interface facet is a generator bug. A node on an oblique boundary face
+    // is rounded off it and may locate just outside: it takes the region beside the nearest
+    // boundary facet, within 1e-9 of the domain's extent (pairs lie s / 2 from any interface).
+    std::vector<std::int32_t> node_region(sm.points.size(), g.volumes[0].region);
+    if (has_interfaces) {
+        const double extent = std::max({hi[0] - lo[0], hi[1] - lo[1], hi[2] - lo[2]});
+        for (std::size_t i = 0; i < sm.points.size(); ++i) {
+            const Point& p = sm.points[i];
+            const auto l = cx.locate(p);
+            int vol = -1;
+            if (l.kind == ComplexIndex::Location::Kind::inside) {
+                vol = l.index;
+            } else if (l.kind == ComplexIndex::Location::Kind::on_facet) {
+                const auto& fc = cx.facets()[static_cast<std::size_t>(l.index)];
+                if (fc.kind == FacetKind::interface) return std::unexpected(degenerate("a generated node lies on an interface"));
+                vol = fc.volumes[0];
+            } else {
+                double nearest = 1e-9 * extent;
+                for (const detail::IndexedFacet& fc : cx.facets()) {
+                    if (fc.kind != FacetKind::boundary) continue;
+                    for (const auto& t : fc.triangles) {
+                        const double d = detail::triangle_distance(p, P[t[0]], P[t[1]], P[t[2]]);
+                        if (d <= nearest) {
+                            nearest = d;
+                            vol = fc.volumes[0];
+                        }
+                    }
+                }
+            }
+            if (vol < 0) return std::unexpected(degenerate("a generated node could not be located in the domain"));
+            node_region[i] = g.volumes[static_cast<std::size_t>(vol)].region;
+        }
+    }
+    for (std::size_t v = 4; v < tri.vertex_count(); ++v) report.interface_nodes += is_interface(static_cast<int>(v)) ? 1 : 0;
+    std::optional<InterfaceCertificate> certificate;
+    if (has_interfaces) {
+        InterfaceSet set{{}, res};
+        for (const detail::InterfacePieceLayout& pc : layout.pieces) set.pieces.push_back({pc.polygon, pc.region_a, pc.region_b});
+        auto cert = certify_interfaces(sm, *dual, node_region, set);
+        if (!cert) {
+            return std::unexpected(base::Error{ErrorCode::degenerate_mesh, "the generated mesh did not meet P4: " + cert.error().message,
+                                               cert.error().context});
+        }
+        certificate = std::move(*cert);
+    }
+    return GeneratedMesh{std::move(*dual), std::move(sm), std::move(node_region), std::move(certificate), report};
 }
 
 }  // namespace NiTCAD::mesh

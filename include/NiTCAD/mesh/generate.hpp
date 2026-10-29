@@ -251,7 +251,26 @@ struct MeshOptions3D {
 // facets of one patch has the sum of its areas on both.
 //
 // Additional rules (invalid_input): the domain's boundary a manifold surface (every boundary edge
-// in exactly two boundary facets); no interface facets yet (slice 3 adds them).
+// in exactly two boundary facets).
+//
+// Interfaces (FD7-FD9): facets between volumes of different regions. A piece is a maximal
+// connected set of coplanar interface facets of one region pair: a simple polygon, possibly
+// non-convex, without holes. Its edges are feature lines (bends, junctions of three or more
+// regions, traces where it meets the outer boundary) and their meeting points feature points.
+// With interfaces, interface_resolution s is required, and (invalid_input, the index an interface
+// facet): every sector about a feature line at least 60 degrees, also within a boundary face
+// about a feature point; feature lines and traces at least 6 s long; unrelated features, pieces
+// (thin layers), boundary faces a piece does not meet, and domain edges at least 4 s apart; every
+// piece wide enough for its 1.5 s inset. Unsupported, and refused: holes, pinched pieces, a piece
+// ending on a domain edge, two pieces ending on the boundary along one line, a trace at a domain
+// corner, a feature line on a domain edge other than a single crossing, a patch edge meeting an
+// interface (slice 4). Placement: each piece's pair set (the 2D generator's nodes in its 1.5 s
+// inset at min(h of both regions, 4 s)) mirrored at +-s/2; pairs along each trace in the boundary
+// face; a pair at each crossing of a domain edge, the domain-edge segment across it never split.
+// Rows along every feature line sit on one lattice (multiples of 1.5 s along the line), so the
+// pieces meeting there align. No node is inserted in a protected band; tetrahedra of interface
+// nodes only, or with the circumcentre in a band, are exempt from the quality bound. The result
+// carries the P4 certificate (check_interfaces; degenerate_mesh if it fails).
 //
 // Refinement as the convex generator, over the boundary's faces (maximal connected sets of
 // coplanar boundary facets, possibly non-convex, with holes) and its domain edges (chains of facet

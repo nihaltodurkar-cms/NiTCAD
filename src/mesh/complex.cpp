@@ -15,6 +15,7 @@
 
 #include "NiTCAD/mesh/complex.hpp"
 #include "complex_index.hpp"
+#include "polygon2d.hpp"
 #include "predicates.hpp"
 
 namespace NiTCAD::mesh {
@@ -26,136 +27,21 @@ using detail::FacetKind;
 using detail::IndexedFacet;
 using predicates::orient2d;
 using predicates::orient3d;
+using detail::collinear;
+using detail::cross_properly_2d;
+using detail::ear_clip;
+using detail::in_triangle_2d;
+using detail::on_segment_2d;
+using detail::polygon_turn;
+using detail::project;
+using detail::simple_2d;
+using detail::strictly_inside_2d;
 
 base::Error invalid(std::string message, std::optional<std::size_t> index = std::nullopt) {
     return {base::ErrorCode::invalid_input, std::move(message), base::ErrorContext{.index = index, .value = std::nullopt}};
 }
 
 bool finite(const Point& p) { return std::isfinite(p[0]) && std::isfinite(p[1]) && std::isfinite(p[2]); }
-
-// The point in the plane of the two coordinates other than `drop`, cyclically.
-Point project(const Point& p, int drop) {
-    return {p[static_cast<std::size_t>((drop + 1) % 3)], p[static_cast<std::size_t>((drop + 2) % 3)], 0.0};
-}
-
-// Collinear in 3D, exactly: collinear in all three coordinate projections.
-bool collinear(const Point& a, const Point& b, const Point& c) {
-    for (int k = 0; k < 3; ++k) {
-        if (orient2d(project(a, k), project(b, k), project(c, k)) != 0) return false;
-    }
-    return true;
-}
-
-// Whether x lies in the closed 2D triangle abc (non-degenerate).
-bool in_triangle_2d(const Point& a, const Point& b, const Point& c, const Point& x) {
-    const int o1 = orient2d(a, b, x);
-    const int o2 = orient2d(b, c, x);
-    const int o3 = orient2d(c, a, x);
-    return (o1 >= 0 && o2 >= 0 && o3 >= 0) || (o1 <= 0 && o2 <= 0 && o3 <= 0);
-}
-
-// Whether x lies on the closed 2D segment ab (a != b).
-bool on_segment_2d(const Point& a, const Point& b, const Point& x) {
-    if (orient2d(a, b, x) != 0) return false;
-    for (std::size_t k = 0; k < 2; ++k) {
-        if (x[k] < std::min(a[k], b[k]) || x[k] > std::max(a[k], b[k])) return false;
-    }
-    return true;
-}
-
-// Whether the open 2D segments ab and cd cross at one point interior to both (not collinear).
-bool cross_properly_2d(const Point& a, const Point& b, const Point& c, const Point& d) {
-    const int o1 = orient2d(a, b, c);
-    const int o2 = orient2d(a, b, d);
-    const int o3 = orient2d(c, d, a);
-    const int o4 = orient2d(c, d, b);
-    return o1 * o2 < 0 && o3 * o4 < 0;
-}
-
-// Whether the closed 2D segments ab and cd intersect at all.
-bool segments_meet_2d(const Point& a, const Point& b, const Point& c, const Point& d) {
-    return cross_properly_2d(a, b, c, d) || on_segment_2d(a, b, c) || on_segment_2d(a, b, d) ||
-           on_segment_2d(c, d, a) || on_segment_2d(c, d, b);
-}
-
-// Whether a simple 2D polygon is traversed counterclockwise: the turn at its lexicographically
-// smallest vertex (never zero for a simple polygon without reversals).
-int polygon_turn(const std::vector<Point>& q) {
-    std::size_t m = 0;
-    for (std::size_t i = 1; i < q.size(); ++i) {
-        if (q[i][0] < q[m][0] || (q[i][0] == q[m][0] && q[i][1] < q[m][1])) m = i;
-    }
-    const std::size_t n = q.size();
-    return orient2d(q[(m + n - 1) % n], q[m], q[(m + 1) % n]);
-}
-
-// Whether a 2D polygon is simple: consecutive edges meet only at their shared vertex (collinear
-// continuation allowed, reversal not), other edges not at all.
-bool simple_2d(const std::vector<Point>& q) {
-    const std::size_t n = q.size();
-    for (std::size_t i = 0; i < n; ++i) {
-        const Point& a = q[i];
-        const Point& b = q[(i + 1) % n];
-        const Point& c = q[(i + 2) % n];
-        if (orient2d(a, b, c) == 0 && predicates::dot_sign(b, a, c) >= 0) return false;  // a reversal
-        for (std::size_t j = i + 2; j < n; ++j) {
-            if (i == 0 && j == n - 1) continue;  // consecutive through vertex 0
-            if (segments_meet_2d(a, b, q[j], q[(j + 1) % n])) return false;
-        }
-    }
-    return true;
-}
-
-// Whether p lies strictly inside a simple 2D polygon (crossing number with the half-open rule;
-// points on the boundary are not inside).
-bool strictly_inside_2d(const std::vector<Point>& q, const Point& p) {
-    const std::size_t n = q.size();
-    bool in = false;
-    for (std::size_t i = 0; i < n; ++i) {
-        const Point& a = q[i];
-        const Point& b = q[(i + 1) % n];
-        if (on_segment_2d(a, b, p)) return false;
-        if ((a[1] > p[1]) != (b[1] > p[1])) {
-            const int o = orient2d(a, b, p);
-            if (b[1] > a[1] ? o > 0 : o < 0) in = !in;
-        }
-    }
-    return in;
-}
-
-// Ear clipping of a simple 2D polygon with `turn` its orientation: an ear is a strictly convex
-// vertex whose triangle (closed) holds no other remaining vertex, so no triangle is degenerate.
-// Returns local index triples in the polygon's orientation, or nothing if no ear is found.
-std::optional<std::vector<std::array<std::size_t, 3>>> ear_clip(const std::vector<Point>& q, int turn) {
-    std::vector<std::size_t> left(q.size());
-    for (std::size_t i = 0; i < q.size(); ++i) left[i] = i;
-    std::vector<std::array<std::size_t, 3>> out;
-    while (left.size() > 3) {
-        bool found = false;
-        const std::size_t n = left.size();
-        for (std::size_t k = 0; k < n && !found; ++k) {
-            const std::size_t a = left[(k + n - 1) % n];
-            const std::size_t b = left[k];
-            const std::size_t c = left[(k + 1) % n];
-            if (orient2d(q[a], q[b], q[c]) != turn) continue;
-            bool empty = true;
-            for (const std::size_t v : left) {
-                if (v != a && v != b && v != c && in_triangle_2d(q[a], q[b], q[c], q[v])) {
-                    empty = false;
-                    break;
-                }
-            }
-            if (!empty) continue;
-            out.push_back({a, b, c});
-            left.erase(left.begin() + static_cast<std::ptrdiff_t>(k));
-            found = true;
-        }
-        if (!found) return std::nullopt;
-    }
-    if (orient2d(q[left[0]], q[left[1]], q[left[2]]) != turn) return std::nullopt;
-    out.push_back({left[0], left[1], left[2]});
-    return out;
-}
 
 std::uint64_t splitmix64(std::uint64_t x) {
     x += 0x9E3779B97F4A7C15ull;

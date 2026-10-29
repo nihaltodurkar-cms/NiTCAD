@@ -14,6 +14,8 @@
 #include <vector>
 
 #include "dual_geometry.hpp"
+#include "polygon2d.hpp"
+#include "predicates.hpp"
 
 namespace NiTCAD::mesh {
 
@@ -42,12 +44,99 @@ double segment_distance(const Point& x, const Point& a, const Point& b) {
     return detail::distance(x, foot);
 }
 
-// A piece prepared for distance queries: a segment, or a convex polygon with its unit normal.
+// A piece prepared for distance queries: a segment, or a convex polygon with its unit normal, or
+// (Unit 53, FD9) a planar simple non-convex polygon with its convex decomposition.
 struct Piece {
     std::vector<Point> v;
     Vec3 normal{0.0, 0.0, 0.0};
     std::int32_t a = 0;
     std::int32_t b = 0;
+    // Non-convex polygons only (empty `parts` for segments and convex polygons).
+    std::vector<Piece> parts;  // the ear-clipped triangles, each a convex piece
+    int axis = -1;             // the coordinate constant on every vertex, or -1 (oblique)
+    std::vector<Point> flat;   // axis >= 0: the vertices with that coordinate dropped (exact)
+    std::vector<Point> grown;  // axis >= 0: `flat` grown outward by a mitred offset (rounded coordinates)
+    double grown_reach = 0.0;  // the largest distance from a vertex of `grown` to the polygon
+
+    // FD9: max over V of the distance to the polygon. For an axis-aligned polygon whose exact 2D
+    // projection contains the convex hull of V's projection, the orthogonal projection of every
+    // point of that hull lies in the polygon, so the nearest point of the polygon to each is on
+    // the plane and the distance is the plane distance, linear in the point: its max over the
+    // hull is attained at a point of V. When the hull lies only in the grown polygon, every point
+    // of it is within grown_reach of the polygon in the plane (the grown polygon's farthest
+    // points from it are its vertices), so the distance is at most the plane distance plus
+    // grown_reach: this covers face vertices rounded just outside a feature line, where the exact
+    // test fails by an ulp (they lie in corner zones, judged against s). Otherwise the
+    // decomposition's min over parts of max over V (an upper bound, as for several pieces of one
+    // pair). Oblique non-convex polygons always take the decomposition: their orthogonal
+    // projection is not exact.
+    [[nodiscard]] double nonconvex_deviation(const std::vector<Point>& V) const {
+        if (axis >= 0) {
+            const auto ax = static_cast<std::size_t>(axis);
+            double worst = 0.0;
+            for (const Point& x : V) worst = std::max(worst, std::abs(x[ax] - v[0][ax]));
+            if (hull_inside(V, flat)) return worst;
+            if (!grown.empty() && hull_inside(V, grown)) return worst + grown_reach;
+        }
+        double best = std::numeric_limits<double>::infinity();
+        for (const Piece& t : parts) {
+            double worst = 0.0;
+            for (const Point& x : V) worst = std::max(worst, t.distance(x));
+            best = std::min(best, worst);
+        }
+        return best;
+    }
+    // Whether the convex hull of V's projection lies in the closed projected polygon `poly`,
+    // exactly: every hull vertex in it and no polygon edge meeting the hull's open interior (if
+    // the hull had an interior point outside, the segment from a hull vertex to it would cross
+    // the polygon's boundary inside the hull). A hull with no interior is not judged (false).
+    [[nodiscard]] bool hull_inside(const std::vector<Point>& V, const std::vector<Point>& poly) const {
+        std::vector<Point> q;
+        for (const Point& x : V) q.push_back(detail::project(x, axis));
+        std::ranges::sort(q, [](const Point& x, const Point& y) { return x[0] < y[0] || (x[0] == y[0] && x[1] < y[1]); });
+        q.erase(std::unique(q.begin(), q.end()), q.end());
+        if (q.size() < 3) return false;
+        // Andrew's monotone chain, counterclockwise, collinear points dropped (exact orient2d).
+        std::vector<Point> h(2 * q.size());
+        std::size_t k = 0;
+        for (std::size_t i = 0; i < q.size(); ++i) {
+            while (k >= 2 && predicates::orient2d(h[k - 2], h[k - 1], q[i]) <= 0) --k;
+            h[k++] = q[i];
+        }
+        for (std::size_t i = q.size() - 1, t = k + 1; i-- > 0;) {
+            while (k >= t && predicates::orient2d(h[k - 2], h[k - 1], q[i]) <= 0) --k;
+            h[k++] = q[i];
+        }
+        h.resize(k - 1);
+        if (h.size() < 3) return false;
+        for (const Point& x : h) {
+            if (!detail::inside_closed_2d(poly, x)) return false;
+        }
+        const std::size_t n = poly.size();
+        for (std::size_t i = 0; i < n; ++i) {
+            const Point& p = poly[i];
+            const Point& r = poly[(i + 1) % n];
+            // Separated from the open hull by a hull edge's line, or by the edge's own line.
+            bool separated = false;
+            for (std::size_t j = 0; j < h.size() && !separated; ++j) {
+                const Point& c = h[j];
+                const Point& d = h[(j + 1) % h.size()];
+                separated = predicates::orient2d(c, d, p) <= 0 && predicates::orient2d(c, d, r) <= 0;
+            }
+            if (!separated) {
+                bool left = true;
+                bool right = true;
+                for (const Point& c : h) {
+                    const int o = predicates::orient2d(p, r, c);
+                    left = left && o >= 0;
+                    right = right && o <= 0;
+                }
+                separated = left || right;
+            }
+            if (!separated) return false;
+        }
+        return true;
+    }
 
     [[nodiscard]] bool separates(std::int32_t x, std::int32_t y) const noexcept {
         return (a == x && b == y) || (a == y && b == x);
@@ -149,9 +238,11 @@ std::expected<InterfaceReport, base::Error> check_interfaces(const SimplexMesh& 
             }
             const double len = norm(normal);
             bool ok = len > 0.0 && extent > 0.0;
+            bool planar = ok;
             if (ok) {
                 for (double& c : normal) c /= len;
                 for (const Point& a : p.v) ok = ok && std::abs(dot(minus(a, p.v[0]), normal)) <= 1e-12 * extent;
+                planar = ok;
                 for (std::size_t i = 0; i < p.v.size() && ok; ++i) {
                     const Point& a = p.v[i];
                     const Point& b = p.v[(i + 1) % p.v.size()];
@@ -159,11 +250,79 @@ std::expected<InterfaceReport, base::Error> check_interfaces(const SimplexMesh& 
                     ok = dot(cross(minus(b, a), minus(c, b)), normal) > 0.0;
                 }
             }
+            p.normal = normal;
+            if (!ok && planar) {
+                // FD9: not convex by the rule above (which keeps every polygon it accepts on the
+                // original path), but planar and simple in the exact projection dropping the
+                // normal's largest component; decomposed by ear clipping.
+                int drop = 0;
+                for (int c = 1; c < 3; ++c) {
+                    if (std::abs(normal[static_cast<std::size_t>(c)]) > std::abs(normal[static_cast<std::size_t>(drop)])) drop = c;
+                }
+                std::vector<Point> q;
+                for (const Point& a : p.v) q.push_back(detail::project(a, drop));
+                std::optional<std::vector<std::array<std::size_t, 3>>> ears;
+                if (detail::simple_2d(q)) ears = detail::ear_clip(q, detail::polygon_turn(q));
+                if (ears) {
+                    ok = true;
+                    for (const auto& t : *ears) {
+                        Piece part{{p.v[t[0]], p.v[t[1]], p.v[t[2]]}, {0.0, 0.0, 0.0}, p.a, p.b};
+                        const Vec3 tn = cross(minus(part.v[1], part.v[0]), minus(part.v[2], part.v[0]));
+                        const double sign = dot(tn, normal) < 0.0 ? -1.0 : 1.0;
+                        const double tl = norm(tn);
+                        ok = ok && tl > 0.0;
+                        if (!ok) break;
+                        // Oriented with the polygon's normal (distance() needs counterclockwise).
+                        if (sign < 0.0) std::swap(part.v[1], part.v[2]);
+                        part.normal = normal;
+                        p.parts.push_back(std::move(part));
+                    }
+                    for (int c = 0; c < 3 && ok; ++c) {
+                        const auto cc = static_cast<std::size_t>(c);
+                        if (std::ranges::all_of(p.v, [&](const Point& a) { return a[cc] == p.v[0][cc]; })) {
+                            p.axis = c;
+                            for (const Point& a : p.v) p.flat.push_back(detail::project(a, c));
+                        }
+                    }
+                    if (p.axis >= 0) {
+                        // Grown outward by 1e-6 s: each edge's line moved out, consecutive lines
+                        // met (a collinear vertex moved along its edge's normal).
+                        const double grow = 1e-6 * res;
+                        const int turn = detail::polygon_turn(p.flat);
+                        const std::size_t m = p.flat.size();
+                        const auto outward = [&](const Point& a, const Point& b) {
+                            const double dx = b[0] - a[0];
+                            const double dy = b[1] - a[1];
+                            const double len = std::hypot(dx, dy);
+                            return turn > 0 ? Point{dy / len, -dx / len, 0.0} : Point{-dy / len, dx / len, 0.0};
+                        };
+                        for (std::size_t i = 0; i < m; ++i) {
+                            const Point& pa = p.flat[(i + m - 1) % m];
+                            const Point& pb = p.flat[i];
+                            const Point& pc = p.flat[(i + 1) % m];
+                            const Point n1 = outward(pa, pb);
+                            const Point n2 = outward(pb, pc);
+                            const Point d1{pb[0] - pa[0], pb[1] - pa[1], 0.0};
+                            const Point d2{pc[0] - pb[0], pc[1] - pb[1], 0.0};
+                            const double den = d1[0] * d2[1] - d1[1] * d2[0];
+                            Point g{pb[0] + grow * n2[0], pb[1] + grow * n2[1], 0.0};
+                            if (predicates::orient2d(pa, pb, pc) != 0) {
+                                const Point q1{pa[0] + grow * n1[0], pa[1] + grow * n1[1], 0.0};
+                                const Point q2{pb[0] + grow * n2[0], pb[1] + grow * n2[1], 0.0};
+                                const double t = ((q2[0] - q1[0]) * d2[1] - (q2[1] - q1[1]) * d2[0]) / den;
+                                g = {q1[0] + t * d1[0], q1[1] + t * d1[1], 0.0};
+                            }
+                            p.grown.push_back(g);
+                            p.grown_reach = std::max(p.grown_reach, detail::distance(g, pb));
+                        }
+                        if (!detail::simple_2d(p.grown)) p.grown.clear();  // then the path is not taken
+                    }
+                }
+            }
             if (!ok) {
                 return std::unexpected(error(ErrorCode::invalid_input,
-                                             "interface polygon is not planar, convex and non-degenerate", k));
+                                             "interface polygon is not planar, simple and non-degenerate", k));
             }
-            p.normal = normal;
         }
         pieces.push_back(std::move(p));
     }
@@ -269,6 +428,10 @@ std::expected<InterfaceReport, base::Error> check_interfaces(const SimplexMesh& 
         for (const Piece& p : pieces) {
             if (!p.separates(ra, rb)) continue;
             declared = true;
+            if (!p.parts.empty()) {
+                deviation = std::min(deviation, p.nonconvex_deviation(vertices));
+                continue;
+            }
             double worst = 0.0;
             for (const Point& v : vertices) worst = std::max(worst, p.distance(v));
             deviation = std::min(deviation, worst);

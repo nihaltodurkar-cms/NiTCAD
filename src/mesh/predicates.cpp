@@ -230,6 +230,34 @@ const auto cos60_formula = [](const auto& p) {
     return four * d * d - (ux * ux + uy * uy) * (vx * vx + vy * vy);
 };
 
+// 3D angle at p[0] between the rays to p[1] and p[2]: the dot product (degree 2) and
+// 4 (u.v)^2 - |u|^2 |v|^2 (degree 4).
+const auto dot3_formula = [](const auto& p) { return dot3(sub(p[1], p[0]), sub(p[2], p[0])); };
+const auto cos60_3d_formula = [](const auto& p) {
+    using T = Scalar<decltype(p)>;
+    const auto u = sub(p[1], p[0]);
+    const auto v = sub(p[2], p[0]);
+    const T d = dot3(u, v);
+    return constant<T>(4) * d * d - dot3(u, u) * dot3(v, v);
+};
+
+// The dihedral sector at the line p[0] p[1] between the half-planes through p[2] and p[3]. With
+// e = p[1] - p[0], the half-planes' normals e x (p[k] - p[0]) are their in-plane perpendiculars to
+// the line turned by 90 degrees about e, so the angle between them is the sector's (in [0, 180]):
+// their dot product (degree 4) and 4 (n2.n3)^2 - |n2|^2 |n3|^2 (degree 8).
+const auto dihedral_dot_formula = [](const auto& p) {
+    const auto e = sub(p[1], p[0]);
+    return dot3(cross(e, sub(p[2], p[0])), cross(e, sub(p[3], p[0])));
+};
+const auto dihedral_cos60_formula = [](const auto& p) {
+    using T = Scalar<decltype(p)>;
+    const auto e = sub(p[1], p[0]);
+    const auto n2 = cross(e, sub(p[2], p[0]));
+    const auto n3 = cross(e, sub(p[3], p[0]));
+    const T d = dot3(n2, n3);
+    return constant<T>(4) * d * d - dot3(n2, n2) * dot3(n3, n3);
+};
+
 // The perturbed sign: the base sign, else the first nonzero lifted-value cofactor in decreasing id
 // order (the point with the largest id carries the dominant perturbation).
 template <std::size_t K, class Base, class Cofactor>
@@ -296,6 +324,20 @@ int dot_sign(const Point& o, const Point& a, const Point& b) {
 bool angle_below_60(const Point& o, const Point& a, const Point& b) {
     const std::array<Point, 3> p{o, a, b};
     return sign_of(p, 2, true, dot_formula) > 0 && sign_of(p, 2, true, cos60_formula) > 0;
+}
+int dot_sign_3d(const Point& o, const Point& a, const Point& b) {
+    return sign_of(std::array<Point, 3>{o, a, b}, 3, true, dot3_formula);
+}
+int dihedral_dot_sign(const Point& a, const Point& b, const Point& p, const Point& q) {
+    return sign_of(std::array<Point, 4>{a, b, p, q}, 3, true, dihedral_dot_formula);
+}
+bool angle_below_60_3d(const Point& o, const Point& a, const Point& b) {
+    const std::array<Point, 3> p{o, a, b};
+    return sign_of(p, 3, true, dot3_formula) > 0 && sign_of(p, 3, true, cos60_3d_formula) > 0;
+}
+bool dihedral_below_60(const Point& a, const Point& b, const Point& p, const Point& q) {
+    const std::array<Point, 4> x{a, b, p, q};
+    return sign_of(x, 3, true, dihedral_dot_formula) > 0 && sign_of(x, 3, true, dihedral_cos60_formula) > 0;
 }
 
 int incircle_perturbed(const std::array<Point, 4>& p, const std::array<NodeId, 4>& id) {

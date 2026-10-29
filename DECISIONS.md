@@ -4640,6 +4640,90 @@ MeshOptions3D)` in `src/mesh/generate_complex.cpp`; `tests/mesh/generate_complex
   row. This is the open WG1 spike (ARCHITECTURE 11.3, cause unknown); the application does not call the new
   generator.
 
+**Slice 3 (2026-10-30): interfaces with bends, junction lines and points; P4 for non-convex pieces**
+(`src/mesh/complex_interfaces.{hpp,cpp}` (FD7 layout and rules), `src/mesh/polygon2d.{hpp,cpp}` (the 2D polygon
+helpers, moved from `complex.cpp`), `generate_complex.cpp`, `interfaces.cpp` (FD9), new exact predicates
+`dot_sign_3d`, `dihedral_dot_sign`, `angle_below_60_3d`, `dihedral_below_60`;
+`tests/mesh/generate_complex_interfaces_test.cpp`, 5 cases, and one FD9 case in `interfaces_test.cpp`):
+- FD7 as built. A piece is a union-find group of coplanar interface facets of one region pair; its loop is the edges
+  used once. Feature lines are classified as trace or interior. Every dihedral sector about a line is sorted exactly
+  (orient3d and the sign of the dihedral dot product) and checked against 60° exactly; the exterior sector of a trace
+  is skipped. Feature points: crossings of domain edges (a single piece, both arms on the edge's two faces, 60° to the
+  edge, no domain-edge vertex within 4 s) and trace junctions inside a face (60° in the face).
+- Placement as built:
+  - each piece's pair set is the 2D generator's nodes in its 1.5 s inset at min(h of both regions, 4 s);
+  - each trace gets pairs at ± s/2 in its face;
+  - each crossing gets a pair at ± s/2 along the domain edge, and the domain-edge segment across the crossing is
+    locked (never split, never encroached).
+  An encroached subfacet whose circumcentre is in the band gets a new trace pair at the projection on the nearest
+  trace of its face. A tetrahedron of interface nodes only, or with its circumcentre in the band, is exempt. Node
+  regions come from exact `locate` (FD6); a node on an interface facet is `degenerate_mesh`. Sizes per region: a
+  point on an interface takes the smaller h.
+- **Changed from FD7, for review:** FD7's "graded 1.5 s, 3 s toward the inset polygon's corners" is replaced by a
+  **line lattice**. Rows along every feature line sit at multiples of 1.5 s in a sign-canonical coordinate along the
+  line, and the trace pairs and the pair sets' inset-edge nodes use that lattice. So the pieces meeting at a line
+  (a bend, the three of a junction) have aligned rows, and near the line the nodes are an extrusion of the 2D
+  cross-section. The graded rule left the rows misaligned at the gated fin's T-junction (P4b failed); densifying the
+  inset boundary made it worse. Crossings get no corner nodes (U15).
+- **Added rules, for review** (cautious defaults; the owner was asked and has not yet ruled):
+  - the 4 s separation also applies between pieces that do not touch (a layer thinner than 4 s; parallel pieces) and
+    between a piece and a boundary face it does not meet;
+  - refused: holes in a piece, a pinched piece, a piece too narrow for its 1.5 s inset, a trace at a domain corner, a
+    feature line on a domain edge other than a single crossing;
+  - refused for now: a patch edge meeting an interface (slice 4 lifts it, FD8);
+  - an oblique non-convex piece always takes FD9's decomposition (its orthogonal projection is not exact).
+- **FD9 as built, with one addition for review.** A polygon the convex rule accepts stays on the original path, byte
+  for byte. Otherwise the polygon must be planar and simple in the projection dropping the normal's largest component,
+  and it is ear-clipped. For an axis-aligned piece, the exact hull test (monotone chain, every hull vertex in the
+  closed polygon, no polygon edge meeting the open hull) gives the plane distance. **Added:** a second hull test
+  against the polygon grown outward by 1e-6 s (mitred) gives the plane distance plus the grown reach. Without it,
+  the gated fin failed P4b: face vertices rounded 1e-16 outside a feature line fell to the decomposition (0.11). Such
+  faces are in corner zones and judged against s, so the reach (≈ 1e-6 s) is immaterial. Otherwise the
+  decomposition's min over parts. Direct test (`interfaces_test.cpp`): an L-shaped piece and its notch on a lattice
+  whose Voronoi lines fall on the L's edges is accepted; without the notch piece it is refused; a bowtie is refused.
+  Two hand mutants checked now (FC13 proper is slice 6):
+  - hull path disabled: the L case fails, and so does one `[complex_interfaces]` assertion;
+  - hull test always true: the notch refusal fails.
+- **FC1 by construction, not by a digest dump.** `generate2d.cpp`, `generate3d.cpp` and the tensor path are not
+  touched; `predicates.cpp` only gains functions. In `interfaces.cpp`, every polygon `main` accepts runs the same
+  operations in the same order (`parts` empty), so every existing report and certificate is unchanged. Only the
+  refusal text changed, "convex" → "simple", and no existing test matched it.
+- **Fixed in slice 2's code:** with interfaces every node is located, and a node on an oblique boundary face can
+  round just outside the domain. It now takes the region beside the nearest boundary facet within 1e-9 of the
+  domain's extent. Meshes without interfaces keep slice 2's single region and never call `locate` (the first full
+  Release run failed two slice-2 cases on this, the tapered fin and FC5).
+- FC6 measured (Release, s = 0.1, liner t = 0.7, h = 0.5). Pins are regression bounds from these measurements:
+
+  | Mesh | Nodes | Flat deviation (P4a ratio) | Corner deviation | Pin | Slivers |
+  |---|---|---|---|---|---|
+  | Liner fin, 90° bends, junction lines at the feet | 1469 | 0 | 0.286 s | ≤ 0.32 s | 71 |
+  | Tapered fin, 85°/95° | 1456 | 1.4e-3 | 0.141 s | ≤ 0.16 s | 115 |
+  | Gated fin, inverted-U pieces, junction points | 3417 | 0 | 0.411 s | ≤ 0.45 s | 262 |
+  | 60.5° sector | 725 | 2.2e-3 | 0.446 s | ≤ 0.49 s | 50 |
+
+  For the liner fin, 1032 of its nodes are interface nodes. The worst corner faces: on the liner fin, at the end
+  face where the liner's outer corner line meets it; on the gated fin, at the junction point of a liner corner line
+  and the gate-edge plane. Both runs of the liner fin are bit-identical.
+- The gated fin is 3417 nodes, over FD15's 2e3 ctest guideline. It stays in ctest because it is the only FC6 junction
+  point fixture; its Debug time is below, under FC14's budget.
+- FC2/FC6 refusals tested: no resolution, 59.5°, an interface ending on a domain edge, two interfaces ending along one
+  line, a thin layer, near a parallel face, a short trace, a short feature line, a hole, unrelated features within
+  4 s, a feature within 4 s of a domain edge, a domain-edge vertex within 4 s of a crossing, a patch edge on a trace.
+  **Not yet reached by a fixture, kept as defensive rules (mutated in slice 6):**
+  - a pinched piece;
+  - a trace at a domain corner;
+  - a feature line on a domain edge (more than a single crossing);
+  - traces meeting in a face under 60°;
+  - a trace meeting a domain edge under 60°;
+  - a piece too narrow for its inset.
+  An extrusion's cell grid reaches these awkwardly, and some may need the API complex.
+- Suites:
+  - Release 122/122. The first full run failed the two slice-2 cases above; after the fix, all pass.
+  - Debug 111/111, total 912 s (4 jobs).
+  - FC14: the new `mesh.generate_complex_interfaces` takes 85.0 s in Debug, and `mesh.interfaces` 17.8 s including
+    the FD9 case (0.56 s in Release). That is within the 120 s growth budget but uses most of it, mainly the gated
+    fin. Slice 4's fixtures must move a case to `[.benchmark]` if they would exceed it.
+
 ---
 
 ## New questions the advisor raised (not yet in `ARCHITECTURE.md`)

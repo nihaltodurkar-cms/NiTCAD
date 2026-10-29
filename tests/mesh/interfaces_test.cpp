@@ -405,6 +405,44 @@ TEST_CASE("P4 in 3D: a planar interface, and a broken mirror", "[mesh][interface
     }
 }
 
+TEST_CASE("P4 in 3D: a non-convex piece (Unit 53, FD9)", "[mesh][interfaces]") {
+    // The unit cube split at z = 0.5 by mirrored pairs at every column of a 3 x 3 lattice (0, 0.25,
+    // 1), the interface declared as an L-shaped piece with its reflex corner at (0.625, 0.625) and
+    // the square in its notch: the lattice's Voronoi lines fall on the L's edges, so every face
+    // lies in the L or in the notch. Faces inside the L but outside a triangle of any decomposition
+    // (the column at (0.25, 0.25) spans [0.125, 0.625]^2) are measured to the plane.
+    Layout L;
+    L.dim = 3;
+    for (const double z : {0.0, 0.5 - 0.5 * s, 0.5 + 0.5 * s, 1.0}) {
+        for (const double y : {0.0, 0.25, 1.0}) {
+            for (const double x : {0.0, 0.25, 1.0}) L.add3(x, y, z, z < 0.5 ? 0 : 1);
+        }
+    }
+    const double c = 0.625;
+    const InterfacePiece ell{{{0, 0, 0.5}, {1, 0, 0.5}, {1, c, 0.5}, {c, c, 0.5}, {c, 1, 0.5}, {0, 1, 0.5}}, 0, 1};
+    const InterfacePiece notch{{{c, c, 0.5}, {1, c, 0.5}, {1, 1, 0.5}, {c, 1, 0.5}}, 0, 1};
+    SECTION("the L and its notch") {
+        const auto r = check(L, {ell, notch});
+        REQUIRE(r.has_value());
+        CHECK(r->cross_faces > 0);
+        CHECK(r->max_flat_deviation <= 1.0);
+        CHECK(r->max_corner_deviation == 0.0);
+    }
+    SECTION("without the notch piece, faces over the notch fail the hull test and are measured") {
+        const auto r = check(L, {ell});
+        REQUIRE_FALSE(r.has_value());
+        CHECK(r.error().code == ErrorCode::degenerate_mesh);
+        CHECK(r.error().message.find("P4") != std::string::npos);
+    }
+    SECTION("a self-intersecting polygon is refused") {
+        const InterfacePiece bowtie{{{0, 0, 0.5}, {1, 1, 0.5}, {1, 0, 0.5}, {0, 1, 0.5}}, 0, 1};
+        const auto r = check(L, {bowtie});
+        REQUIRE_FALSE(r.has_value());
+        CHECK(r.error().code == ErrorCode::invalid_input);
+        CHECK(r.error().message.find("simple") != std::string::npos);
+    }
+}
+
 TEST_CASE("P4b: the corner threshold is the resolution", "[mesh][interfaces]") {
     // The bisector-rule corner (its largest corner deviation is 0.0249, 0.80 s) checked against
     // a smaller declared resolution: accepted at 0.026, refused by P4b at 0.024, the deviating

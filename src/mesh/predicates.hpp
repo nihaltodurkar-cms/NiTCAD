@@ -87,6 +87,16 @@ namespace NiTCAD::mesh::predicates {
 // |a - o|^2 |b - o|^2.
 [[nodiscard]] int dot_sign(const Point& o, const Point& a, const Point& b);
 [[nodiscard]] bool angle_below_60(const Point& o, const Point& a, const Point& b);
+// The same in 3D: the sign of (a - o) . (b - o), and whether the angle at o between the rays to a
+// and b is below 60 degrees.
+[[nodiscard]] int dot_sign_3d(const Point& o, const Point& a, const Point& b);
+// The sign of the cosine of the dihedral angle between the half-planes bounded by the line ab and
+// containing p and q (both off the line): + below 90 degrees, 0 at 90, - above.
+[[nodiscard]] int dihedral_dot_sign(const Point& a, const Point& b, const Point& p, const Point& q);
+[[nodiscard]] bool angle_below_60_3d(const Point& o, const Point& a, const Point& b);
+// Whether the dihedral angle (in [0, 180]) between the half-planes bounded by the line ab and
+// containing p and q (both off the line) is below 60 degrees, exactly (Unit 53, FD7).
+[[nodiscard]] bool dihedral_below_60(const Point& a, const Point& b, const Point& p, const Point& q);
 [[nodiscard]] int in_diametral_sphere(const Point& a, const Point& b, const Point& c,
                                       const Point& p);
 
