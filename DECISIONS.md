@@ -4589,6 +4589,31 @@ and Debug suites at every commit, `/W4 /WX`; hand mutants; nothing pushed or mer
 **Owner answers (2026-10-29), design and criteria approved:** FQ1 approved as written; FQ2 a failed FC9 stays
 `[!shouldfail]` with its measurement for a ruling, the threshold never loosened; FQ3 FC8 at the 0.5 V gate only.
 
+**Slice 1 (2026-10-29): the complex, the extrusion and node location** (`include/NiTCAD/mesh/complex.hpp`,
+`src/mesh/complex_index.hpp`, `src/mesh/complex.cpp`; `tests/mesh/complex_test.cpp`, 5 cases):
+- `check_complex` and `detail::ComplexIndex` implement FD1 exactly (orient2d/orient3d only). Facets are triangulated by
+  ear clipping in a one-to-one coordinate projection, a strictly convex ear holding no other vertex, so collinear facet
+  vertices never give a flat triangle. The pairwise facet test is the triangle-pair rule "the intersection lies in the
+  convex hull of the shared vertices", checked edge against triangle both ways; the argument (the intersection of two
+  triangles is convex and its boundary lies on their edges) is in `complex.cpp`.
+- **Added to FD1, for review:** volumes with disjoint surfaces must not nest (a vertex of one, not shared, located
+  against the other). FD1's facet test alone does not see a volume inside another.
+- FD6: `locate` gives on a facet (closed), inside a volume, or outside. A segment that meets a triangle's edge or vertex
+  is degenerate and is replaced by the next of a fixed splitmix64 sequence of far points, so the result is exact and
+  deterministic. Checked on a quarter-step lattice through two cubes, which hits every tie with their planes and edges.
+- FD2: `extrude` checks the tiling itself (whole shared edges in opposite directions, no vertex inside another cell or
+  inside another cell's edge, no crossing, no collinear overlap), so its messages name the cell. It then builds one
+  volume per non-void (cell, section) and passes the result through `check_complex`. A patch box takes the boundary
+  facets inside it that no earlier box took. A box that takes none is refused.
+- Not testable by construction, kept as defensive rules (mutated in slice 6): "not orientable" (an embedded closed
+  edge-manifold surface is orientable) and "zero volume" (a flat closed surface fails the facet test first).
+  "Pinched at a vertex" is reachable only through a connected surface that touches itself at a vertex; no fixture
+  builds one yet.
+- Suites: Debug 109/109; Release 119/120 in the full `-j 6` run. `app.live_check` failed once; its output was cut off
+  by my log filter, so the failing case is unknown. It then passed alone, and 15 times in a row with the app tests
+  under `-j 6`. It does not link the new code (mesh layer only). Unit 50 fixed one race in this test (XG1), so this
+  may be another; it is recorded open, not retried away.
+
 ---
 
 ## New questions the advisor raised (not yet in `ARCHITECTURE.md`)
