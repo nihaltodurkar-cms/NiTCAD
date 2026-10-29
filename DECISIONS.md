@@ -4664,6 +4664,50 @@ could not be met for a reason in the criterion, not the model. The rulings repla
   their edges' carrier fluxes, which take no carrier temperature. EC15 tests the refusal with its message; support
   is a follow-up in ARCHITECTURE 11.3.
 
+**Found before slice 3's code, ruled by the owner (2026-10-29).**
+- **ED8's flux as ruled ("Derived form").** Read literally (Scharfetter–Gummel in the pressure θ n g, g = F_{3/2}/F_{1/2},
+  δ gaining Δ ln g) the edge is not exact at equilibrium: zero flux would need δ/g_e + Δ ln g = δ + Δ ln γ, which an
+  edge mean g_e does not give, so EC5 (1e-12) would fail by the discretization error. From the same continuum
+  J = μ (n ∇E_c + k ∇(n T g)): with w = θ n, J/(μ k T_L) = ∇w + w (∇e_c/θ − ∇ ln γ + (5/2)(g − 1) ∇ ln θ), so the
+  edge is ED2's flux in w with
+      d = ±δ/θ_e + Δ ln γ − (5/2)(g_e − 1) Δ ln θ   (+ electrons, − holes in the electron form; Δ = b − a),
+  γ Unit 14's degeneracy factor (F_{1/2}(η) e^{−η}), g_e and θ_e the edge's means. The energy flux, with the
+  Fermi–Dirac enthalpy (5/2) k T g per particle (ED8's factor (5/2) g in both κ and the convective term), is
+  c g_e times the same flux in v = θ² n with the same d (the continuum reduces to it exactly). At θ = 1 it is Unit 14's
+  flux exactly; with Boltzmann statistics (γ = g = 1) slice 2's.
+- **η of a hot carrier ("Nc at T_n").** n = N_c(T_L) θ^{3/2} F_{1/2}(η): γ and g are evaluated at the density
+  n θ^{−3/2} (Unit 14's degeneracy of it), so heating lowers the degeneracy and both carry τ partials; the (5/2) in
+  d comes from this choice (N_c at T_L would give 1). Below n θ^{−3/2}/N = 1e-6 g takes its series
+  1 + 2^{−5/2} v + (1/8 − 2·3^{−5/2}) v², as Unit 14's γ.
+- ED3's relaxation and ED7's recombination energy stay as written ((3/2) k (T − T_L) per carrier and (3/2) k T U), with
+  either statistics; EC7's identity is algebraic in them.
+- **ED6 as built:** E_eff at a node from the node's own low-field mobility, relaxation time and Canali parameters
+  (Lombardi with impact ionization stays refused, so the node's bulk mobility); the generation is Unit 19's
+  α(E) |j|²/m per carrier with E_eff(T) in place of the field along the current, and +(3/2) k T G in each energy row
+  (ED7's II as negative U).
+- **Lombardi** (ruling 4) comes with slice 3, as slice 2's code noted: the edge's low-field mobility takes the
+  surface terms in E_perp before μ(T), and the E_perp stencil reaches the energy rows too.
+
+**Criteria defects found building slice 3, ruled by the owner (2026-10-29).**
+- **EC3's generation half ("Bulk state, 1e-3").** In the solved resistors α = A e^{−B/E} amplifies E_eff's error by
+  B/E (about 120 at 1e4 V/cm): 3.9% at 1e16 electrons, where T is right to 2.4e-4 (inside EC3's 1e-3), 2.6e-4 at
+  1e16 holes, the other four ≤ 4.7e-6; at 1e3 V/cm α is 0 in both. α there is about 1e-48 per cm. Ruling: the generation half is gated
+  at EC3's 1e5 V/cm discrete bulk state: each interior node's assembled generation equals the field-driven model's
+  (Unit 19 with Canali's mobility) at the same ψ, n, p within 1e-3; measured ≤ 2.0e-9 over the six resistors. The
+  solved resistors' ratios α(E_eff(T))/α(E) are printed.
+- **EC5 at a degenerate n side ("Gate T, ψ, n; print p").** EC5 stays gated in full on its p 1e17 / n 2e17 diode, in
+  both statistics (worst 7.5e-15). With the n side at 2e19, T, ψ and n agree within 2e-15, but the minority holes
+  (about 1e-21 of the electrons) miss 1e-12 in both statistics (Boltzmann 1.18e-12, Fermi–Dirac 2.64e-12), the
+  solve's resolution of them: T, ψ and n are gated there and p printed.
+
+**Slice 3 as built (measured 2026-10-29).** EC6 (FD, impact ionization with either statistics, Lombardi with either,
+the held first stage): every column within 1e-6 in 1D, 2D and 3D. At θ = 1 the continuity rows and currents equal
+drift-diffusion's within 1e-13 with Fermi–Dirac and with Lombardi. A hot degenerate carrier at constant pressure
+across an edge (θ 1.5 to 1.6, η_a = −3, 2, 6) carries flux at most 3.7e-5 of its opposing terms (exactly 0 under
+Boltzmann); with N_c at T_L (coefficient 1 for 5/2) it misses by 7.6e-4. EC7 with Fermi–Dirac (n side 2e19, 1D, 2D,
+3D) closes within 3e-16 of the largest term with the residual. EC4's diode double limit with Fermi–Dirac (n side 2e19)
+against Unit 14's drift-diffusion within 1e-6.
+
 **Questions for the owner before code (proposal's recommended answer first):**
 - EQ1 τ_w for silicon: 0.35 ps / 0.4 ps (Triebl), or another cited pair.
 - EQ2 `field_mobility = on` with energy balance: refused (ED4), or silently replaced by the T-driven law.

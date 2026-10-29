@@ -9,10 +9,13 @@
 //   with the driving term delta / theta_e (delta the isothermal one, band and BGN steps included);
 //       Fn = A (w_b B(d) - w_a B(-d)),   Fp = -A (w_b B(-d) - w_a B(d)),   d = delta / theta_e,
 //   the isothermal fluxes at theta = 1. Fn is the electrons' flow into a, Fp minus the holes'.
+//   Fermi-Dirac (ED8 as ruled 2026-10-29): d gains Delta ln gamma - (5/2)(g_e - 1) Delta ln theta,
+//   gamma Unit 14's degeneracy factor and g = F_{3/2} / F_{1/2}, both at the density
+//   n theta^(-3/2) (N_c at T_n), g_e the edge's mean; at theta = 1 Unit 14's flux exactly.
 // - Energy flux into a (ED3, c = 5/2, EQ3): S = -kappa grad T - c (k T / q) J with
 //   kappa = c (k^2 / q) n mu T is, with v = theta^2 n, c times the same flux in v:
 //       S_n = c A (v_b B(d) - v_a B(-d)),   S_p = c A (v_b B(-d) - v_a B(d)),
-//   so a uniform theta carries c theta per particle.
+//   so a uniform theta carries c theta per particle. Fermi-Dirac: c g_e times it, the same d.
 // - Joule heating: an edge's carriers gain the band edge's drop times their flow,
 //   -delta F (electrons and holes alike in this sign convention), half into each end's box, so
 //   the summed sources are the total J.E exactly.
@@ -36,9 +39,13 @@
 #include <vector>
 
 #include "NiTCAD/assemble/bernoulli.hpp"
+#include "NiTCAD/base/constants.hpp"
 #include "NiTCAD/base/contract.hpp"
 #include "NiTCAD/physics/energy_balance.hpp"
+#include "NiTCAD/physics/fermi_dirac.hpp"
+#include "NiTCAD/physics/impact_ionization.hpp"
 #include "NiTCAD/physics/recombination.hpp"
+#include "NiTCAD/physics/statistics.hpp"
 #include "composition.hpp"
 #include "scaled_device.hpp"
 #include "terms.hpp"
@@ -48,6 +55,8 @@ namespace NiTCAD::assemble {
 namespace {
 
 constexpr double energy_flux_factor = 2.5;  // c = 5/2 + r, r = 0 (EQ3)
+
+double harmonic_mean(double a, double b) { return 2.0 * a * b / (a + b); }
 constexpr FieldId all5[] = {FieldId::potential, FieldId::electrons, FieldId::holes,
                             FieldId::electron_temperature, FieldId::hole_temperature};
 constexpr FieldId energies[] = {FieldId::electron_temperature, FieldId::hole_temperature};
@@ -63,6 +72,43 @@ constexpr double relaxation_floor = 1e-10;
 struct Relaxing {
     double n, n_n, n_p, p, p_n, p_p;
 };
+
+// A hot carrier's degeneracy (ED8 as ruled, "Nc at T_n"): n = N theta^(3/2) F_{1/2}(eta), so
+// Unit 14's ln gamma and g = F_{3/2} / F_{1/2} at the density nu = c theta^(-3/2), with their
+// partials in c and tau. Boltzmann: 0 and 1.
+struct HotDegeneracy {
+    double lg, lg_c, lg_t;  // ln gamma
+    double g, g_c, g_t;     // F_{3/2} / F_{1/2}
+};
+
+HotDegeneracy hot_degeneracy(double c, double tau, double n_ie, double log_dos) {
+    const double theta = 1.0 + tau;
+    const double s = 1.0 / (theta * std::sqrt(theta));
+    const double nu = c * s, nu_t = -1.5 * nu / theta;  // d nu / d tau
+    const double N = n_ie * std::exp(log_dos);
+    const double v = nu / N;
+    double lg, lg_nu, g, g_nu;
+    if (v < 1e-6) {
+        // As physics::fermi_dirac_degeneracy's series; g = 1 + 2^(-5/2) v + (1/8 - 2 3^(-5/2)) v^2.
+        const physics::Degeneracy D = physics::fermi_dirac_degeneracy(n_ie, log_dos, nu);
+        lg = D.log_gamma;
+        lg_nu = D.d_density;
+        constexpr double k1 = 0.17677669529663688110;    // 2^(-5/2)
+        constexpr double k2 = -0.0033000598199168200;   // 1/8 - 2 3^(-5/2)
+        g = 1.0 + v * (k1 + k2 * v);
+        g_nu = (k1 + 2.0 * k2 * v) / N;
+    } else {
+        const double x = physics::inverse_fermi_half(v);
+        const physics::LogDegeneracy L1 = physics::log_degeneracy(x);
+        const physics::LogDegeneracy L3 = physics::log_degeneracy_three_halves(x);
+        const double x_nu = 1.0 / (nu * (1.0 + L1.d_eta));  // d ln nu / d x = F_{-1/2} / F_{1/2}
+        lg = L1.value;
+        lg_nu = L1.d_eta * x_nu;
+        g = std::exp(L3.value - L1.value);
+        g_nu = g * (L3.d_eta - L1.d_eta) * x_nu;
+    }
+    return {lg, lg_nu * s, lg_nu * nu_t, g, g_nu * s, g_nu * nu_t};
+}
 
 Relaxing relaxing(double n, double p, double doping) {
     const double d = std::abs(doping);
@@ -152,35 +198,79 @@ std::pair<DriftDiffusion::EnergyFlux, DriftDiffusion::EnergyFlux> DriftDiffusion
     const double tna = x[5 * a + 3], tnb = x[5 * b + 3];
     const double tpa = x[5 * a + 4], tpb = x[5 * b + 4];
     const double TL = temperature_K_;
-    // The edge factor A = (an / mu_edge) mu(T_e) and dA / dtau of either end (the mean's half).
+    // The edge factor A = (an / mu_edge) mu(T_e), dA / dtau of either end (the mean's half) and
+    // dA / dE_perp. Lombardi (Unit 46): the ends' low-field mobilities first take the surface
+    // terms in E_perp, and an edge in one material takes mu(T) of their harmonic mean, as
+    // edge_fluxes' mu0.
     struct Factor {
-        double A, d_t;
+        double A, d_t, d_perp;
     };
-    const auto factor = [&](double a0, double mu_edge, double mu_a, double mu_b, double rise,
-                            double relax_a, double relax_b, const physics::CanaliParameters& sat_a,
+    const SurfaceField perp = e.surface ? surface_field(e, x) : SurfaceField{};
+    const auto factor = [&](physics::Carrier carrier, double a0, double mu_edge, double mu_a,
+                            double mu_b, double rise, double relax_a, double relax_b,
+                            const physics::CanaliParameters& sat_a,
                             const physics::CanaliParameters& sat_b) {
         const double scale = a0 / mu_edge;
+        double s_a = 0.0, s_b = 0.0;  // d mu_a / d E_perp, d mu_b / d E_perp
+        if (e.surface) {
+            const physics::SurfaceMobility la =
+                surface_end(carrier, mu_a, e.N_a, surface_T_, perp.value);
+            const physics::SurfaceMobility lb =
+                surface_end(carrier, mu_b, e.N_b, surface_T_, perp.value);
+            mu_a = la.mobility;
+            mu_b = lb.mobility;
+            s_a = la.d_dE;
+            s_b = lb.d_dE;
+        }
         if (!e.mixed) {
-            const auto m = physics::carrier_temperature_mobility(mu_edge, rise, relax_a, sat_a);
-            return Factor{scale * m.mobility, scale * m.d_rise * 0.5 * TL};
+            double mu0 = mu_edge, d_mu0 = 0.0;
+            if (e.surface) {
+                const double low = mu_a + mu_b;
+                mu0 = harmonic_mean(mu_a, mu_b);
+                d_mu0 = 2.0 * (mu_b * mu_b * s_a + mu_a * mu_a * s_b) / (low * low);
+            }
+            const auto m = physics::carrier_temperature_mobility(mu0, rise, relax_a, sat_a);
+            return Factor{scale * m.mobility, scale * m.d_rise * 0.5 * TL,
+                          scale * m.d_mu0 * d_mu0};
         }
         const auto ma = physics::carrier_temperature_mobility(mu_a, rise, relax_a, sat_a);
         const auto mb = physics::carrier_temperature_mobility(mu_b, rise, relax_b, sat_b);
         const double sum = ma.mobility + mb.mobility;
         const double h = 2.0 * ma.mobility * mb.mobility / sum;
-        const double dh = (2.0 * mb.mobility * mb.mobility * ma.d_rise +
-                           2.0 * ma.mobility * ma.mobility * mb.d_rise) /
-                          (sum * sum);
-        return Factor{scale * h, scale * dh * 0.5 * TL};
+        // d h / d mu_a(T) = 2 mu_b(T)^2 / sum^2, and b likewise.
+        const double ha = 2.0 * mb.mobility * mb.mobility / (sum * sum);
+        const double hb = 2.0 * ma.mobility * ma.mobility / (sum * sum);
+        return Factor{scale * h, scale * (ha * ma.d_rise + hb * mb.d_rise) * 0.5 * TL,
+                      scale * (ha * ma.d_mu0 * s_a + hb * mb.d_mu0 * s_b)};
     };
     // One carrier: sign +1 electrons, -1 holes (the hole flux is the electron form at -d,
-    // negated). c_a, c_b its densities, t_a, t_b its rises, delta its driving term.
+    // negated). c_a, c_b its densities, t_a, t_b its rises, delta its driving term, h_a, h_b its
+    // ends' degeneracy (Fermi-Dirac; Boltzmann leaves d and the energy factor as slice 2's).
     const auto carrier = [&](double sign, double c_a, double c_b, double t_a, double t_b,
-                             double delta, const Factor& F) {
+                             double delta, const Factor& F, const HotDegeneracy& h_a,
+                             const HotDegeneracy& h_b) {
         EnergyFlux r{};
         const double ta = 1.0 + t_a, tb = 1.0 + t_b;
         const double th = 1.0 + 0.5 * (t_a + t_b);
-        const double d = sign * delta / th;
+        const double d0 = sign * delta / th;
+        // ED8 as ruled: d = d0 + Delta ln gamma - (5/2)(g_e - 1) Delta ln theta, the energy flux
+        // c g_e times the flux in v. L and its partials in each end's density and rise.
+        double L = 0.0, G = 1.0, L_c[2] = {0.0, 0.0}, L_t[2] = {0.0, 0.0};
+        double G_c[2] = {0.0, 0.0}, G_t[2] = {0.0, 0.0};
+        if (fermi_dirac_) {
+            const double ge = 0.5 * (h_a.g + h_b.g), dlt = std::log(tb / ta);
+            G = ge;
+            L = h_b.lg - h_a.lg - 2.5 * (ge - 1.0) * dlt;
+            L_c[0] = -h_a.lg_c - 1.25 * h_a.g_c * dlt;
+            L_c[1] = h_b.lg_c - 1.25 * h_b.g_c * dlt;
+            L_t[0] = -h_a.lg_t - 1.25 * h_a.g_t * dlt + 2.5 * (ge - 1.0) / ta;
+            L_t[1] = h_b.lg_t - 1.25 * h_b.g_t * dlt - 2.5 * (ge - 1.0) / tb;
+            G_c[0] = 0.5 * h_a.g_c;
+            G_c[1] = 0.5 * h_b.g_c;
+            G_t[0] = 0.5 * h_a.g_t;
+            G_t[1] = 0.5 * h_b.g_t;
+        }
+        const double d = d0 + L;
         const double bp = bernoulli(d), bm = bernoulli(-d);
         const double dp = bernoulli_derivative(d), dm = bernoulli_derivative(-d);
         const double wa = c_a * ta, wb = c_b * tb, va = wa * ta, vb = wb * tb;
@@ -188,32 +278,44 @@ std::pair<DriftDiffusion::EnergyFlux, DriftDiffusion::EnergyFlux> DriftDiffusion
         const double P = wb * bp - wa * bm, Q = vb * bp - va * bm;
         const double Pd = wb * dp + wa * dm, Qd = vb * dp + va * dm;
         const double A = F.A, c = energy_flux_factor;
-        const double dd_psi = sign / th;     // d d / d psi_b (minus at a)
-        const double dd_t = -0.5 * d / th;  // d d / d tau of either end
-        // Particle flux sign A P; energy flux into a c A Q (both carriers).
+        const double dd_psi = sign / th;  // d d / d psi_b (minus at a)
+        const double dd_t[2] = {-0.5 * d0 / th + L_t[0], -0.5 * d0 / th + L_t[1]};
+        // Particle flux sign A P; energy flux into a c G A Q (both carriers).
         r.flux = sign * A * P;
         r.d_psi[1] = sign * A * Pd * dd_psi;
         r.d_psi[0] = -r.d_psi[1];
-        r.d_c[0] = sign * A * (-ta * bm);
-        r.d_c[1] = sign * A * (tb * bp);
-        r.d_t[0] = sign * (F.d_t * P + A * (-c_a * bm) + A * Pd * dd_t);
-        r.d_t[1] = sign * (F.d_t * P + A * (c_b * bp) + A * Pd * dd_t);
-        r.energy = c * A * Q;
-        r.e_psi[1] = c * A * Qd * dd_psi;
+        r.d_c[0] = sign * A * (-ta * bm + Pd * L_c[0]);
+        r.d_c[1] = sign * A * (tb * bp + Pd * L_c[1]);
+        r.d_t[0] = sign * (F.d_t * P + A * (-c_a * bm) + A * Pd * dd_t[0]);
+        r.d_t[1] = sign * (F.d_t * P + A * (c_b * bp) + A * Pd * dd_t[1]);
+        r.energy = c * G * A * Q;
+        r.e_psi[1] = c * G * A * Qd * dd_psi;
         r.e_psi[0] = -r.e_psi[1];
-        r.e_c[0] = c * A * (-ta * ta * bm);
-        r.e_c[1] = c * A * (tb * tb * bp);
-        r.e_t[0] = c * (F.d_t * Q + A * (-2.0 * c_a * ta * bm) + A * Qd * dd_t);
-        r.e_t[1] = c * (F.d_t * Q + A * (2.0 * c_b * tb * bp) + A * Qd * dd_t);
+        r.e_c[0] = c * (G_c[0] * A * Q + G * A * (-ta * ta * bm + Qd * L_c[0]));
+        r.e_c[1] = c * (G_c[1] * A * Q + G * A * (tb * tb * bp + Qd * L_c[1]));
+        r.e_t[0] = c * (G_t[0] * A * Q +
+                        G * (F.d_t * Q + A * (-2.0 * c_a * ta * bm) + A * Qd * dd_t[0]));
+        r.e_t[1] = c * (G_t[1] * A * Q +
+                        G * (F.d_t * Q + A * (2.0 * c_b * tb * bp) + A * Qd * dd_t[1]));
         r.delta = delta;
+        r.d_perp = sign * F.d_perp * P;
+        r.e_perp = c * G * F.d_perp * Q;
         return r;
     };
-    const Factor Fn = factor(e.an, e.mu_n, e.mu_n_a, e.mu_n_b, 0.5 * (tna + tnb) * TL,
-                             relax_n_[a], relax_n_[b], e.sat_n, e.sat_n_b);
-    const Factor Fp = factor(e.ap, e.mu_p, e.mu_p_a, e.mu_p_b, 0.5 * (tpa + tpb) * TL,
-                             relax_p_[a], relax_p_[b], e.sat_p, e.sat_p_b);
-    return {carrier(1.0, na, nb, tna, tnb, dpsi + e.shift_n, Fn),
-            carrier(-1.0, pa, pb, tpa, tpb, dpsi + e.shift_p, Fp)};
+    const Factor Fn = factor(physics::Carrier::electron, e.an, e.mu_n, e.mu_n_a, e.mu_n_b,
+                             0.5 * (tna + tnb) * TL, relax_n_[a], relax_n_[b], e.sat_n, e.sat_n_b);
+    const Factor Fp = factor(physics::Carrier::hole, e.ap, e.mu_p, e.mu_p_a, e.mu_p_b,
+                             0.5 * (tpa + tpb) * TL, relax_p_[a], relax_p_[b], e.sat_p, e.sat_p_b);
+    constexpr HotDegeneracy boltzmann{0.0, 0.0, 0.0, 1.0, 0.0, 0.0};
+    HotDegeneracy hna = boltzmann, hnb = boltzmann, hpa = boltzmann, hpb = boltzmann;
+    if (fermi_dirac_) {
+        hna = hot_degeneracy(na, tna, n_ie_[a], log_dos_n_[a]);
+        hnb = hot_degeneracy(nb, tnb, n_ie_[b], log_dos_n_[b]);
+        hpa = hot_degeneracy(pa, tpa, n_ie_[a], log_dos_p_[a]);
+        hpb = hot_degeneracy(pb, tpb, n_ie_[b], log_dos_p_[b]);
+    }
+    return {carrier(1.0, na, nb, tna, tnb, dpsi + e.shift_n, Fn, hna, hnb),
+            carrier(-1.0, pa, pb, tpa, tpb, dpsi + e.shift_p, Fp, hpa, hpb)};
 }
 
 void DriftDiffusion::hold_temperatures(std::span<const double> x) {
@@ -343,6 +445,11 @@ public:
     TermInfo info() const noexcept override {
         return {"energy-balance fluxes", TermDomain::mesh_edges, transport_rows, all5, false};
     }
+    // Lombardi (Unit 46): the four transport rows of both ends with the psi columns of the
+    // edge's E_perp stencil; none without the model.
+    void pattern(const DriftDiffusion& s, std::vector<linalg::Triplet>& t) const override {
+        surface_pattern(s, t, 4);
+    }
     void add(const DriftDiffusion& s, const Evaluation& ev) const override {
         const std::span<double> f = ev.f, values = ev.values;
         const bool jacobian = ev.jacobian();
@@ -352,6 +459,9 @@ public:
             if (e.charged || !e.carriers) continue;
             const EnergyEdge& pos = s.energy_edges_[k];
             const auto [fn, fp] = s.energy_fluxes(k, ev.x);
+            // Lombardi: d / d psi_j = d / d E_perp * d E_perp / d psi_j over the stencil.
+            const SurfaceField perp =
+                jacobian && e.surface ? s.surface_field(e, ev.x) : SurfaceField{};
             // Per carrier: its continuity row, its energy row, its density and rise columns.
             const struct {
                 const EnergyFlux& r;
@@ -374,6 +484,17 @@ public:
                     if (s.contact_[node] >= 0) continue;
                     const double sign = q == 0 ? 1.0 : -1.0;
                     f[5 * node + c.row] += sign * r.flux;
+                    if (jacobian && e.surface) {
+                        // The continuity row; the energy row too when released. Joule is
+                        // linear in the edge factor as the fluxes are.
+                        const double ep = sign * r.e_perp - 0.5 * r.delta * r.d_perp;
+                        for (std::size_t j = e.surface_first; j < e.surface_last; ++j) {
+                            const SurfaceStencil& st = s.surface_stencil_[j];
+                            const double w = s.surface_gradient(perp, st);
+                            values[st.pos[q][c.row - 1]] += sign * r.d_perp * w;
+                            if (!held) values[st.pos[q][c.erow - 1]] += ep * w;
+                        }
+                    }
                     if (held) {  // the energy rows are tau - tau_held (EnergyRows)
                         if (!jacobian) continue;
                         const auto entry = [&](std::size_t o, std::size_t col) -> double& {
@@ -409,11 +530,155 @@ public:
     }
 };
 
+// Impact ionization driven by the carrier temperatures (ED6 as built): at each node that ionizes,
+// per carrier G_c = alpha_c(E_eff(T_c)) |j_c|^2 / m_c / q, Unit 19's current reconstruction and
+// resolution (ImpactGeneration in terms.cpp) with E_eff(T_c) of the node's own low-field mobility,
+// relaxation time and Canali parameters in place of the field along the current. +V G in the
+// electron row, -V G in the hole row and +(3/2) V theta_c G in each energy row (ED7: the
+// generated carriers take the mean energy, II as negative U). In a uniform field E_eff = E, so it
+// is the field-driven generation (EC3). While the temperatures are held, the continuity rows only.
+class DriftDiffusion::Terms::EnergyImpact final : public Term {
+public:
+    TermInfo info() const noexcept override {
+        return {"impact ionization (energy balance)", TermDomain::global, transport_rows, all5,
+                false};
+    }
+    // The full 5 x 5 blocks of every carrier edge (energy balance) hold its entries.
+    void add(const DriftDiffusion& s, const Evaluation& ev) const override {
+        if (s.impact_nodes_.empty()) return;
+        const std::span<const double> x = ev.x;
+        const std::span<double> f = ev.f, values = ev.values;
+        const bool jacobian = ev.jacobian();
+        const bool held = !s.held_.empty();
+        const int D = s.dimension_;
+        const double TL = s.temperature_K_;
+        std::vector<std::pair<EnergyFlux, EnergyFlux>> flux(s.edges_.size());
+        for (std::size_t k = 0; k < s.edges_.size(); ++k) {
+            if (s.edges_[k].carriers) flux[k] = s.energy_fluxes(k, x);
+        }
+        constexpr double q = base::q_C;
+        constexpr double floor2 = impact_current_floor * impact_current_floor;
+        const double rho2 = s.impact_resolution_ * s.impact_resolution_;
+        for (const ImpactNode& node : s.impact_nodes_) {
+            const std::size_t i = node.node;
+            const double count = static_cast<double>(node.last - node.first);
+            // The current densities at the node and their resolutions R, as Unit 19's.
+            double jn[3] = {}, jp[3] = {}, R[2] = {0.0, 0.0};
+            for (std::size_t k = node.first; k < node.last; ++k) {
+                const ImpactEdge& ie = s.impact_edges_[k];
+                const EdgeTerm& e = s.edges_[ie.edge];
+                const double delta = x[5 * e.b] - x[5 * e.a];
+                const double root = std::sqrt(1.0 + delta * delta);
+                R[0] += ie.current * e.an * (x[5 * e.a + 1] + x[5 * e.b + 1]) * root / count;
+                R[1] += ie.current * e.ap * (x[5 * e.a + 2] + x[5 * e.b + 2]) * root / count;
+                for (int r = 0; r < D; ++r) {
+                    double w = 0.0;  // (P t_k)_r
+                    for (int c = 0; c < D; ++c) w += node.inverse[r * D + c] * ie.t[c];
+                    jn[r] += w * ie.current * flux[ie.edge].first.flux;
+                    jp[r] += w * ie.current * flux[ie.edge].second.flux;
+                }
+            }
+            // Per carrier, w = |j|^2 / m, m = sqrt(|j|^2 + eps^2):
+            //     dG/dj   = alpha j (|j|^2 + 2 eps^2) / m^3 / q,
+            //     dG/dR   = -alpha |j|^2 / m^3 / q rho^2 R,
+            //     dG/dtau = alpha'(E_eff) dE_eff/dtau w / q.
+            double G = 0.0, dj[2][3] = {}, dR[2] = {0.0, 0.0}, dt[2] = {0.0, 0.0};
+            for (int c = 0; c < 2; ++c) {
+                const double* j = c == 0 ? jn : jp;
+                double mag2 = 0.0;
+                for (int r = 0; r < D; ++r) mag2 += j[r] * j[r];
+                const double eps2 = floor2 + rho2 * R[c] * R[c];
+                const double m = std::sqrt(mag2 + eps2);
+                const physics::CarrierTemperatureMobility hot =
+                    physics::carrier_temperature_mobility(
+                        c == 0 ? node.mu_n : node.mu_p, x[5 * i + 3 + c] * TL,
+                        c == 0 ? s.relax_n_[i] : s.relax_p_[i],
+                        c == 0 ? node.sat_n : node.sat_p);
+                const physics::ImpactIonizationRate a = physics::impact_ionization_coefficient(
+                    c == 0 ? node.n : node.p, node.gamma, hot.field);
+                if (a.alpha == 0.0 && a.d_dE == 0.0) continue;
+                const double w = mag2 / m;
+                G += a.alpha * w / q;
+                dt[c] = a.d_dE * hot.field_d_rise * TL * w / q;
+                const double m3 = m * m * m;
+                for (int r = 0; r < D; ++r) {
+                    dj[c][r] = a.alpha * j[r] * (mag2 + 2.0 * eps2) / m3 / q;
+                }
+                dR[c] = -a.alpha * mag2 / m3 / q * rho2 * R[c];
+            }
+            const double k_row = s.volume_[i] * s.generation_scale_;
+            const double theta_n = 1.0 + x[5 * i + 3], theta_p = 1.0 + x[5 * i + 4];
+            f[5 * i + 1] += k_row * G;
+            f[5 * i + 2] -= k_row * G;
+            if (!held) {
+                f[5 * i + 3] += 1.5 * k_row * theta_n * G;
+                f[5 * i + 4] += 1.5 * k_row * theta_p * G;
+            }
+            if (!jacobian) continue;
+            // Each row's factor on dG: electron, hole and (released) the two energy rows.
+            const double factor[4] = {k_row, -k_row, 1.5 * k_row * theta_n, 1.5 * k_row * theta_p};
+            const std::size_t rows = held ? 2 : 4;
+            const auto add_entry = [&](std::size_t node_j, std::size_t col, std::size_t edge,
+                                       double v) {
+                for (std::size_t r = 0; r < rows; ++r) {
+                    if (node_j == i) {
+                        at(s, ev, i, 1 + r, col) += factor[r] * v;
+                        continue;
+                    }
+                    const EnergyEdge& pos = s.energy_edges_[edge];
+                    values[(s.edges_[edge].a == i ? pos.ab : pos.ba)[5 * (1 + r) + col]] +=
+                        factor[r] * v;
+                }
+            };
+            add_entry(i, 3, 0, dt[0]);
+            add_entry(i, 4, 0, dt[1]);
+            if (!held) {
+                at(s, ev, i, 3, 3) += 1.5 * k_row * G;
+                at(s, ev, i, 4, 4) += 1.5 * k_row * G;
+            }
+            for (std::size_t k = node.first; k < node.last; ++k) {
+                const ImpactEdge& ie = s.impact_edges_[k];
+                const EdgeTerm& e = s.edges_[ie.edge];
+                const EnergyFlux& fn = flux[ie.edge].first;
+                const EnergyFlux& fp = flux[ie.edge].second;
+                double wn = 0.0, wp = 0.0;  // dG / d(edge current component)
+                for (int r = 0; r < D; ++r) {
+                    double w = 0.0;
+                    for (int c = 0; c < D; ++c) w += node.inverse[r * D + c] * ie.t[c];
+                    wn += w * dj[0][r];
+                    wp += w * dj[1][r];
+                }
+                wn *= ie.current;
+                wp *= ie.current;
+                // R's partials through this edge, as Unit 19's.
+                const double delta = x[5 * e.b] - x[5 * e.a];
+                const double root = std::sqrt(1.0 + delta * delta);
+                const double rn = ie.current * e.an / count, rp = ie.current * e.ap / count;
+                const double sn = x[5 * e.a + 1] + x[5 * e.b + 1];
+                const double sp = x[5 * e.a + 2] + x[5 * e.b + 2];
+                const double dpsi = (dR[0] * rn * sn + dR[1] * rp * sp) * delta / root;
+                for (std::size_t o = 0; o < 2; ++o) {
+                    const std::size_t end = o == 0 ? e.a : e.b;
+                    add_entry(end, 0, ie.edge,
+                              wn * fn.d_psi[o] + wp * fp.d_psi[o] + (o == 0 ? -dpsi : dpsi));
+                    add_entry(end, 1, ie.edge, wn * fn.d_c[o] + dR[0] * rn * root);
+                    add_entry(end, 2, ie.edge, wp * fp.d_c[o] + dR[1] * rp * root);
+                    add_entry(end, 3, ie.edge, wn * fn.d_t[o]);
+                    add_entry(end, 4, ie.edge, wp * fp.d_t[o]);
+                }
+            }
+        }
+    }
+};
+
 std::shared_ptr<const TermAccess::Term> DriftDiffusion::Terms::energy_rows() {
     return std::make_shared<const EnergyRows>();
 }
 std::shared_ptr<const TermAccess::Term> DriftDiffusion::Terms::energy_fluxes() {
     return std::make_shared<const EnergyFluxes>();
+}
+std::shared_ptr<const TermAccess::Term> DriftDiffusion::Terms::energy_impact() {
+    return std::make_shared<const EnergyImpact>();
 }
 
 }  // namespace NiTCAD::assemble

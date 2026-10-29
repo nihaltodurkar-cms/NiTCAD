@@ -1,6 +1,8 @@
-// Energy-balance transport, solved (Unit 52; DECISIONS.md ED1-ED13): equilibrium (EC5), the
-// uniform-field limit at 1e3 and 1e4 V/cm (EC3), the drift-diffusion limit (EC4), current
-// conservation (EC8) and velocity overshoot in Aste and Vahldieck's ballistic diode (EC10).
+// Energy-balance transport, solved (Unit 52; DECISIONS.md ED1-ED14): equilibrium (EC5, Boltzmann
+// and Fermi-Dirac), the energy budget (EC7, both statistics), the uniform-field limit at 1e3 and
+// 1e4 V/cm (EC3, with impact ionization's ratio printed), the drift-diffusion limit (EC4, both
+// statistics), current conservation (EC8) and velocity overshoot in Aste and Vahldieck's
+// ballistic diode (EC10).
 #include <catch2/catch_test_macros.hpp>
 
 #include <algorithm>
@@ -20,6 +22,7 @@
 #include "NiTCAD/mesh/tensor_grid.hpp"
 #include "NiTCAD/physics/energy_balance.hpp"
 #include "NiTCAD/physics/field_mobility.hpp"
+#include "NiTCAD/physics/impact_ionization.hpp"
 #include "NiTCAD/physics/mobility.hpp"
 #include "NiTCAD/physics/semiconductor.hpp"
 #include "NiTCAD/solve/bias.hpp"
@@ -62,10 +65,11 @@ device::Device line(double length_cm, int nodes, Doping doping,
     return std::move(*d);
 }
 
-solve::BiasOptions options(bool energy, bool field = false) {
+solve::BiasOptions options(bool energy, bool field = false, bool fermi_dirac = false) {
     solve::BiasOptions o;
     o.models.energy_balance = energy;
     o.models.field_mobility = field;
+    o.models.fermi_dirac = fermi_dirac;
     o.step_control.max_cuts = 20;
     return o;
 }
@@ -105,21 +109,37 @@ void conserved(const results::BiasPoint& p) {
 }  // namespace
 
 TEST_CASE("energy balance: equilibrium is drift-diffusion's with the lattice temperature (EC5)") {
-    const device::Device d = line(1e-4, 101, [](double x) { return x < 0.5e-4 ? -1e17 : 2e17; });
-    const results::Sweep eb = sweep(d, {0.0}, options(true));
-    const results::Sweep dd = sweep(d, {0.0}, options(false));
-    const results::NodeFields& f = eb.points[0].fields;
-    const results::NodeFields& g = dd.points[0].fields;
-    for (std::size_t i = 0; i < f.n_cm3.size(); ++i) {
-        CAPTURE(i);
-        REQUIRE(std::abs(f.electron_temperature_K[i] - 300.0) <= 1e-12 * 300.0);
-        REQUIRE(std::abs(f.hole_temperature_K[i] - 300.0) <= 1e-12 * 300.0);
-        REQUIRE(std::abs(f.potential_V[i] - g.potential_V[i]) <=
-                1e-12 * std::max(1.0, std::abs(g.potential_V[i])));
-        REQUIRE(std::abs(f.n_cm3[i] - g.n_cm3[i]) <= 1e-12 * g.n_cm3[i]);
-        REQUIRE(std::abs(f.p_cm3[i] - g.p_cm3[i]) <= 1e-12 * g.p_cm3[i]);
+    // Boltzmann and Fermi-Dirac (against Unit 14's drift-diffusion), with an n side at 2e17 and,
+    // degenerate, at 2e19 cm^-3 (T, psi and n gated there; the minority p printed, as ruled).
+    for (const bool fd : {false, true}) {
+        for (const double n_side : {2e17, 2e19}) {
+            CAPTURE(fd, n_side);
+            const device::Device d =
+                line(1e-4, 101, [&](double x) { return x < 0.5e-4 ? -1e17 : n_side; });
+            const results::Sweep eb = sweep(d, {0.0}, options(true, false, fd));
+            const results::Sweep dd = sweep(d, {0.0}, options(false, false, fd));
+            const results::NodeFields& f = eb.points[0].fields;
+            const results::NodeFields& g = dd.points[0].fields;
+            double t = 0.0, psi = 0.0, n = 0.0, p = 0.0;  // the worst of each, relative
+            for (std::size_t i = 0; i < f.n_cm3.size(); ++i) {
+                t = std::max({t, std::abs(f.electron_temperature_K[i] - 300.0) / 300.0,
+                              std::abs(f.hole_temperature_K[i] - 300.0) / 300.0});
+                psi = std::max(psi, std::abs(f.potential_V[i] - g.potential_V[i]) /
+                                        std::max(1.0, std::abs(g.potential_V[i])));
+                n = std::max(n, std::abs(f.n_cm3[i] - g.n_cm3[i]) / g.n_cm3[i]);
+                p = std::max(p, std::abs(f.p_cm3[i] - g.p_cm3[i]) / g.p_cm3[i]);
+            }
+            std::printf("EC5 %s n side %.0e: T %.3e, psi %.3e, n %.3e, p %.3e\n",
+                        fd ? "FD" : "Boltzmann", n_side, t, psi, n, p);
+            CHECK(t <= 1e-12);
+            CHECK(psi <= 1e-12);
+            CHECK(n <= 1e-12);
+            // At 2e19 the minority holes are about 1e-21 of the electrons, below the solve's
+            // resolution of them in either statistics (ruled 2026-10-29): printed only.
+            if (n_side == 2e17) CHECK(p <= 1e-12);
+            REQUIRE(g.electron_temperature_K.empty());
+        }
     }
-    REQUIRE(g.electron_temperature_K.empty());
 }
 
 TEST_CASE("energy balance: the steady energy budget closes (EC7)") {
@@ -127,9 +147,12 @@ TEST_CASE("energy balance: the steady energy budget closes (EC7)") {
     // pairs' gap and thermal energy and the contact terms (energy flux into the contacts, the
     // contact edges' half Joule heat, minus the Peltier term), within 1e-9 of the largest term.
     // A forward-biased pn diode (p 1e17 below 0.5 um, n 2e17 above, 1 um) in 1D, 2D and 3D; the
-    // state is rebuilt from the solution's fields.
-    for (const int D : {1, 2, 3}) {
-        CAPTURE(D);
+    // state is rebuilt from the solution's fields. Boltzmann, and Fermi-Dirac with the n side at
+    // 2e19 (ED8 as ruled), whose fluxes carry the degeneracy terms.
+    for (const auto [D, fd] : {std::pair{1, false}, std::pair{2, false}, std::pair{3, false},
+                               std::pair{1, true}, std::pair{2, true}, std::pair{3, true}}) {
+        CAPTURE(D, fd);
+        const double n_side = fd ? 2e19 : 2e17;
         const auto x = uniform(0.0, 1e-4, D == 3 ? 41 : 81);
         const auto y = uniform(0.0, 0.2e-4, 4);
         mesh::Mesh m = D == 1   ? *mesh::make_tensor_grid(x)
@@ -141,7 +164,7 @@ TEST_CASE("energy balance: the steady energy budget closes (EC7)") {
             if (m.points()[i][0] < 0.5e-4) {
                 acceptors[i] = 1e17;
             } else {
-                donors[i] = 2e17;
+                donors[i] = n_side;
             }
         }
         const auto left = m.find_boundary("x_min")->nodes, right = m.find_boundary("x_max")->nodes;
@@ -155,9 +178,10 @@ TEST_CASE("energy balance: the steady energy budget closes (EC7)") {
                                                          {"cathode", device::ContactKind::ohmic, right}}});
         REQUIRE(made.has_value());
         const device::Device& d = *made;
-        const results::Sweep s = sweep(d, {-0.3, -0.6, -0.8}, options(true));
+        const results::Sweep s = sweep(d, {-0.3, -0.6, -0.8}, options(true, false, fd));
         const auto scaling = *assemble::make_scaling(d);
-        auto dd = assemble::DriftDiffusion::create(d, scaling, {.energy_balance = true});
+        auto dd = assemble::DriftDiffusion::create(d, scaling,
+                                                   {.fermi_dirac = fd, .energy_balance = true});
         REQUIRE(dd.has_value());
         for (const results::BiasPoint& b : s.points) {
             REQUIRE(dd->set_bias(b.bias_V).has_value());
@@ -176,9 +200,10 @@ TEST_CASE("energy balance: the steady energy budget closes (EC7)") {
             const double scale = std::max({std::abs(e.input), std::abs(e.relaxation),
                                            std::abs(e.recombination), std::abs(e.contact_flux),
                                            std::abs(e.contact_joule), std::abs(e.peltier)});
-            std::printf("EC7 %dD %.1f V: input %.6e relax %.6e rec %.6e cflux %.6e cjoule %.6e "
+            std::printf("EC7 %dD %s %.1f V: input %.6e relax %.6e rec %.6e cflux %.6e cjoule %.6e "
                         "peltier %.6e residual %.3e; miss %.3e, miss with residual %.3e\n",
-                        D, b.bias_V[1], e.input, e.relaxation, e.recombination, e.contact_flux,
+                        D, fd ? "FD" : "B", b.bias_V[1], e.input, e.relaxation, e.recombination,
+                        e.contact_flux,
                         e.contact_joule, e.peltier, e.residual, (e.input - out) / scale,
                         (e.input - out - e.residual) / scale);
             // The residual's share: at most the power a continuity imbalance of the state's current
@@ -207,7 +232,10 @@ TEST_CASE("energy balance: a uniform field gives Canali's velocity and the local
     // practical length (1e17: E from 2.3e4 to 1.6e5 V/cm across 3 um, 6% across the middle third
     // of 30 um), so 1e5 V/cm is the discrete bulk check of tests/assemble/energy_balance_test.cpp.
     // mu0 is drift-diffusion's own (constant mobility) at the same bias, so the comparison does
-    // not restate the doping mobility models.
+    // not restate the doping mobility models. The generation half (ED6) is printed: alpha at
+    // E_eff(T) against alpha at the field, which amplifies E_eff's error by B/E (about 120 at
+    // 1e4 V/cm; 3.9% at 1e16 electrons, where T is right to 2.4e-4). Ruled 2026-10-29: it is
+    // gated at the 1e5 V/cm discrete bulk state (tests/assemble/energy_balance_test.cpp).
     const double L = 3e-4;
     for (const double N : {1e16, 1e17, 1e18}) {
         for (const bool electrons : {true, false}) {
@@ -218,6 +246,12 @@ TEST_CASE("energy balance: a uniform field gives Canali's velocity and the local
                                               : physics::Carrier::hole);
             const double tau_w = electrons ? physics::silicon_energy_relaxation.tau_n_s
                                            : physics::silicon_energy_relaxation.tau_p_s;
+            const physics::ImpactIonizationParameters& ii =
+                physics::silicon().parameters().impact_ionization;
+            const physics::ImpactIonizationCoefficients& ionization =
+                electrons ? ii.electron : ii.hole;
+            const double gamma =
+                physics::impact_ionization_temperature_factor(ii.phonon_energy_eV, 300.0);
             // 1e3 and 1e4 V/cm, with the points between as continuation.
             const auto biases = {0.1, 0.3, 1.0, 3.0};
             const results::Sweep eb = sweep(d, biases, options(true));
@@ -227,7 +261,7 @@ TEST_CASE("energy balance: a uniform field gives Canali's velocity and the local
                 const results::BiasPoint& r = dd.points[k];
                 conserved(p);
                 const double J = std::abs(p.terminal_current[0]), Jr = std::abs(r.terminal_current[0]);
-                double worst_v = 0.0, worst_T = 0.0;
+                double worst_v = 0.0, worst_T = 0.0, worst_g = 0.0;
                 for (std::size_t i = 100; i < 200; ++i) {
                     const auto& f = p.fields;
                     const double E = std::abs(f.potential_V[i + 1] - f.potential_V[i]) / 1e-6;  // 10 nm nodes
@@ -245,10 +279,21 @@ TEST_CASE("energy balance: a uniform field gives Canali's velocity and the local
                     const double T_expected = 300.0 + 2.0 / 3.0 * tau_w * v * E / k_over_q;
                     worst_v = std::max(worst_v, std::abs(v - expected) / expected);
                     worst_T = std::max(worst_T, std::abs(Te - T_expected) / T_expected);
+                    // With impact ionization (ED6) both models multiply the same current, so the
+                    // generations' ratio is alpha(E_eff(T)) / alpha(E); at 1e3 V/cm both are 0.
+                    const double E_eff =
+                        physics::carrier_temperature_mobility(mu0, Te - 300.0, tau_w, sat).field;
+                    const double a_eb =
+                        physics::impact_ionization_coefficient(ionization, gamma, E_eff).alpha;
+                    const double a_dd =
+                        physics::impact_ionization_coefficient(ionization, gamma, E).alpha;
+                    REQUIRE((a_dd > 0.0 || a_eb == 0.0));
+                    if (a_dd > 0.0) worst_g = std::max(worst_g, std::abs(a_eb / a_dd - 1.0));
                 }
-                UNSCOPED_INFO("N " << N << (electrons ? " n" : " p") << " point " << k
-                                   << ": velocity " << worst_v << ", temperature " << worst_T);
-                CAPTURE(N, electrons, k, worst_v, worst_T);
+                std::printf("EC3 N %.0e %s, %.0e V/cm: velocity %.3e, temperature %.3e, "
+                            "generation %.3e\n",
+                            N, electrons ? "n" : "p", p.bias_V[1] / L, worst_v, worst_T, worst_g);
+                CAPTURE(N, electrons, k, worst_v, worst_T, worst_g);
                 REQUIRE(worst_v <= 1e-3);
                 REQUIRE(worst_T <= 1e-3);
             }
@@ -264,19 +309,27 @@ TEST_CASE("energy balance: the drift-diffusion limit (EC4, tau_w -> 0 and v_sat 
     p.energy_relaxation = {.tau_n_s = 1e-18, .tau_p_s = 1e-18};
     p.electron_saturation.v_sat_cm_s = 1e30;
     p.hole_saturation.v_sat_cm_s = 1e30;
-    const auto doping = [](double x) { return x < 0.5e-4 ? -1e17 : 2e17; };
-    const device::Device eb_device = line(1e-4, 101, doping, *physics::Semiconductor::create(p));
-    const device::Device dd_device = line(1e-4, 101, doping);
-    // Forward (the n side negative): the reverse currents lie below the resolution (EC8's note).
-    const auto biases = {-0.2, -0.4, -0.6, -0.7, -0.8};
-    const results::Sweep eb = sweep(eb_device, biases, options(true));
-    const results::Sweep dd = sweep(dd_device, biases, options(false));
-    for (std::size_t k = 0; k < eb.points.size(); ++k) {
-        conserved(eb.points[k]);
-        const double a = eb.points[k].terminal_current[1], b = dd.points[k].terminal_current[1];
-        UNSCOPED_INFO("point " << k << ": relative difference " << std::abs(a - b) / std::abs(b));
-        CAPTURE(k, a, b);
-        REQUIRE(std::abs(a - b) <= 1e-6 * std::abs(b));
+    // Fermi-Dirac against Unit 14's drift-diffusion, with the n side degenerate (2e19).
+    for (const bool fd : {false, true}) {
+        CAPTURE(fd);
+        const double n_side = fd ? 2e19 : 2e17;
+        const auto doping = [&](double x) { return x < 0.5e-4 ? -1e17 : n_side; };
+        const device::Device eb_device =
+            line(1e-4, 101, doping, *physics::Semiconductor::create(p));
+        const device::Device dd_device = line(1e-4, 101, doping);
+        // Forward (the n side negative): the reverse currents lie below the resolution (EC8's
+        // note).
+        const auto biases = {-0.2, -0.4, -0.6, -0.7, -0.8};
+        const results::Sweep eb = sweep(eb_device, biases, options(true, false, fd));
+        const results::Sweep dd = sweep(dd_device, biases, options(false, false, fd));
+        for (std::size_t k = 0; k < eb.points.size(); ++k) {
+            conserved(eb.points[k]);
+            const double a = eb.points[k].terminal_current[1], b = dd.points[k].terminal_current[1];
+            UNSCOPED_INFO((fd ? "FD" : "Boltzmann") << " point " << k << ": relative difference "
+                                                    << std::abs(a - b) / std::abs(b));
+            CAPTURE(k, a, b);
+            REQUIRE(std::abs(a - b) <= 1e-6 * std::abs(b));
+        }
     }
 }
 

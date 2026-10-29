@@ -109,8 +109,8 @@ std::expected<DriftDiffusion, base::Error> DriftDiffusion::create(
         return refuse("nonlocal tunnelling needs the device's tensor cells");
     }
     // Unit 52 (DECISIONS.md ED11, EQ2): the model combinations energy balance refuses; the
-    // device's (contacts, interfaces, materials) in make_energy_balance. Impact ionization,
-    // Fermi-Dirac statistics and Lombardi's mobility come with slice 3.
+    // device's (contacts, interfaces, materials) in make_energy_balance. Lombardi with impact
+    // ionization stays refused below, as without the model.
     if (models.energy_balance) {
         if (models.electrothermal) {
             return refuse("energy balance with the electrothermal model is not supported");
@@ -121,15 +121,6 @@ std::expected<DriftDiffusion, base::Error> DriftDiffusion::create(
         }
         if (models.btbt_local || nonlocal) {
             return refuse("energy balance with band-to-band tunnelling is not supported");
-        }
-        if (models.impact_ionization) {
-            return refuse("energy balance with impact ionization is not supported yet");
-        }
-        if (models.fermi_dirac) {
-            return refuse("energy balance with Fermi-Dirac statistics is not supported yet");
-        }
-        if (models.surface_mobility != SurfaceMobility::off) {
-            return refuse("energy balance with surface mobility is not supported yet");
         }
     }
     // Unit 34: Masetti's coefficients are boron-doped silicon's, so every semiconductor region must
@@ -534,7 +525,9 @@ std::expected<DriftDiffusion, base::Error> DriftDiffusion::create(
             }
             ImpactNode node{i, s.impact_edges_.size(), 0, {}, ii.electron, ii.hole,
                             physics::impact_ionization_temperature_factor(ii.phonon_energy_eV, T),
-                            ii.phonon_energy_eV};
+                            ii.phonon_energy_eV, mu_n[i], mu_p[i],
+                            physics::saturation(mat, physics::Carrier::electron),
+                            physics::saturation(mat, physics::Carrier::hole)};
             double outer[9] = {};
             for (const std::size_t k : incident[i]) {
                 const detail::ScaledEdge& e = scaled->edges[k];
@@ -901,8 +894,9 @@ physics::SurfaceMobility DriftDiffusion::surface_end(physics::Carrier carrier, d
 }
 
 void DriftDiffusion::locate_surface() {
-    // Rows electron, hole and (electrothermal) heat of each end with psi_j's column.
-    const std::size_t rows = electrothermal() ? 3 : 2;
+    // Rows electron, hole and (electrothermal) heat of each end with psi_j's column; with energy
+    // balance (stride 5, Unit 52) electron, hole, tau_n and tau_p.
+    const std::size_t rows = m_ == 5 ? 4 : electrothermal() ? 3 : 2;
     for (const EdgeTerm& e : edges_) {
         for (std::size_t k = e.surface_first; k < e.surface_last; ++k) {
             SurfaceStencil& j = surface_stencil_[k];

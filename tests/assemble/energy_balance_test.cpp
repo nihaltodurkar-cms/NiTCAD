@@ -1,9 +1,10 @@
-// Energy-balance transport in the drift-diffusion assembler (Unit 52; DECISIONS.md ED1-ED13): the
-// finite-difference Jacobian gate of the five-unknown system (EC6, Boltzmann) in 1D, 2D and 3D,
-// across a material step and into an oxide; at tau = 0 the continuity rows and currents of
-// drift-diffusion; equilibrium tau = 0 exactly (EC5's assembly half); the uniform bulk state of
-// Canali's velocity at 1e5 V/cm (EC3, as ruled 2026-10-29); and the inputs the model refuses
-// (ED11, EC15).
+// Energy-balance transport in the drift-diffusion assembler (Unit 52; DECISIONS.md ED1-ED14): the
+// finite-difference Jacobian gate of the five-unknown system (EC6: Boltzmann, Fermi-Dirac, impact
+// ionization, Lombardi) in 1D, 2D and 3D, across a material step and into an oxide; a hot
+// degenerate carrier at constant pressure (ED8 as ruled); at tau = 0 the continuity rows and
+// currents of drift-diffusion; equilibrium tau = 0 exactly (EC5's assembly half); the uniform bulk
+// state of Canali's velocity and the field-driven generation at 1e5 V/cm (EC3, as ruled); and the
+// inputs the model refuses (ED11, EC15).
 #include <catch2/catch_test_macros.hpp>
 
 #include <algorithm>
@@ -22,6 +23,7 @@
 #include "NiTCAD/device/device.hpp"
 #include "NiTCAD/mesh/tensor_grid.hpp"
 #include "NiTCAD/physics/energy_balance.hpp"
+#include "NiTCAD/physics/fermi_dirac.hpp"
 #include "NiTCAD/physics/field_mobility.hpp"
 #include "NiTCAD/physics/insulator.hpp"
 #include "NiTCAD/physics/mobility.hpp"
@@ -234,11 +236,46 @@ double fd_jacobian_error(const DriftDiffusion& dd, std::vector<double> x, bool r
 }
 
 DriftDiffusion make(const device::Device& d, const assemble::Scaling& s, const Options& o,
-                    bool energy = true) {
-    auto dd = DriftDiffusion::create(d, s, models(energy));
+                    const assemble::PhysicsModels& m) {
+    auto dd = DriftDiffusion::create(d, s, m);
     if (!dd) FAIL(dd.error().message);
     REQUIRE(dd->set_bias(biases(o)).has_value());
     return std::move(*dd);
+}
+
+DriftDiffusion make(const device::Device& d, const assemble::Scaling& s, const Options& o,
+                    bool energy = true) {
+    return make(d, s, o, models(energy));
+}
+
+// The heated state with degenerate and dilute carriers (slice 3, Fermi-Dirac): n from 1e16 to
+// 1e20 cm^-3 and p from 1e19 down to 1e10 along x (both sides of N_c and of the 1e-6 N series
+// switch), the rises as heated's.
+std::vector<double> degenerate(const DriftDiffusion& dd, const device::Device& d,
+                               const assemble::Scaling& s, double noise, std::uint64_t seed) {
+    std::vector<double> x = heated(dd, d, s, noise, seed);
+    Noise z{seed + 100};
+    for (std::size_t i = 0; i < dd.node_count(); ++i) {
+        if (d.is_insulator(static_cast<mesh::NodeId>(i))) continue;
+        const double u = d.mesh().points()[i][0] / 1e-4;
+        x[5 * i + 1] = std::pow(10.0, 16.0 + 4.0 * u) / s.Ns * (1.0 + noise * z.next());
+        x[5 * i + 2] = std::pow(10.0, 19.0 - 9.0 * u) / s.Ns * (1.0 + noise * z.next());
+    }
+    return x;
+}
+
+// The heated state hot enough to ionize: theta_n to 20 and theta_p to 15 along x.
+std::vector<double> ionizing(const DriftDiffusion& dd, const device::Device& d,
+                             const assemble::Scaling& s, double noise, std::uint64_t seed) {
+    std::vector<double> x = heated(dd, d, s, noise, seed);
+    Noise z{seed + 200};
+    for (std::size_t i = 0; i < dd.node_count(); ++i) {
+        if (d.is_insulator(static_cast<mesh::NodeId>(i))) continue;
+        const double u = d.mesh().points()[i][0] / 1e-4;
+        x[5 * i + 3] = (1.0 + 19.0 * u) * (1.0 + noise * z.next()) - 1.0;
+        x[5 * i + 4] = (1.0 + 14.0 * u) * (1.0 + noise * z.next()) - 1.0;
+    }
+    return x;
 }
 
 }  // namespace
@@ -283,30 +320,183 @@ TEST_CASE("energy balance: the Jacobian against finite differences (EC6, Boltzma
     }
 }
 
-TEST_CASE("energy balance: at tau = 0 the continuity rows and currents are drift-diffusion's") {
-    for (const Options o : {Options{.D = 1, .nodes = 13, .hetero = true}, Options{.D = 2, .nodes = 7}}) {
+TEST_CASE("energy balance: the Jacobian against finite differences (EC6, Fermi-Dirac)") {
+    const Options cases[] = {{.D = 1, .nodes = 13},
+                             {.D = 1, .nodes = 13, .hetero = true},
+                             {.D = 2, .nodes = 7, .oxide = true},
+                             {.D = 3, .nodes = 5}};
+    for (const Options& o : cases) {
+        CAPTURE(o.D, o.hetero, o.oxide);
         const device::Device d = diode(o);
         const auto s = *assemble::make_scaling(d);
-        const DriftDiffusion eb = make(d, s, o), dd = make(d, s, o, false);
-        std::vector<double> x5 = heated(eb, d, s, 0.05, 7);
-        std::vector<double> x3(dd.unknowns());
-        for (std::size_t i = 0; i < dd.node_count(); ++i) {
-            x5[5 * i + 3] = x5[5 * i + 4] = 0.0;
-            for (std::size_t r = 0; r < 3; ++r) x3[3 * i + r] = x5[5 * i + r];
+        const DriftDiffusion dd = make(d, s, o, {.fermi_dirac = true, .energy_balance = true});
+        for (const std::uint64_t seed : {1u, 2u}) {
+            REQUIRE(fd_jacobian_error(dd, degenerate(dd, d, s, 0.05, seed), true) <= 1e-6);
         }
-        std::vector<double> f5(eb.unknowns()), f3(dd.unknowns());
-        eb.residual(x5, f5);
-        dd.residual(x3, f3);
-        for (std::size_t i = 0; i < dd.node_count(); ++i) {
-            for (std::size_t r = 0; r < 3; ++r) {
-                CAPTURE(i, r);
-                REQUIRE(std::abs(f5[5 * i + r] - f3[3 * i + r]) <=
-                        1e-13 * std::max(1.0, std::abs(f3[3 * i + r])));
+    }
+}
+
+TEST_CASE("energy balance: the Jacobian against finite differences (EC6, impact ionization)") {
+    const Options cases[] = {{.D = 1, .nodes = 13},
+                             {.D = 1, .nodes = 13, .hetero = true},
+                             {.D = 2, .nodes = 7, .oxide = true},
+                             {.D = 3, .nodes = 5}};
+    for (const Options& o : cases) {
+        CAPTURE(o.D, o.hetero, o.oxide);
+        const device::Device d = diode(o);
+        const auto s = *assemble::make_scaling(d);
+        for (const bool fd : {false, true}) {
+            CAPTURE(fd);
+            DriftDiffusion dd = make(
+                d, s, o, {.fermi_dirac = fd, .impact_ionization = true, .energy_balance = true});
+            const DriftDiffusion off = make(d, s, o, {.fermi_dirac = fd, .energy_balance = true});
+            const std::vector<double> x = ionizing(dd, d, s, 0.05, 3);
+            // The generation is there: some continuity row moves by more than 1e-3 of its size.
+            std::vector<double> on(dd.unknowns()), without(dd.unknowns());
+            dd.residual(x, on);
+            off.residual(x, without);
+            double moved = 0.0;
+            for (std::size_t i = 0; i < dd.node_count(); ++i) {
+                const double r = std::abs(on[5 * i + 1] - without[5 * i + 1]);
+                moved = std::max(moved, r / std::max(std::abs(without[5 * i + 1]), 1e-300));
             }
+            UNSCOPED_INFO("largest relative change of an electron row " << moved);
+            REQUIRE(moved > 1e-3);
+            REQUIRE(fd_jacobian_error(dd, x, true) <= 1e-6);
+            // Held (ED12's first stage): the continuity rows only.
+            dd.hold_temperatures(x);
+            REQUIRE(fd_jacobian_error(dd, x, true) <= 1e-6);
         }
-        const auto c5 = eb.terminal_currents(x5), c3 = dd.terminal_currents(x3);
-        for (std::size_t k = 0; k < c3.size(); ++k) {
-            REQUIRE(std::abs(c5[k] - c3[k]) <= 1e-13 * std::abs(c3[k]));
+    }
+}
+
+TEST_CASE("energy balance: the Jacobian against finite differences (EC6, Lombardi)") {
+    // Surface edges along the oxide: the E_perp stencil reaches every transport row of both ends.
+    const Options cases[] = {{.D = 2, .nodes = 7, .oxide = true},
+                             {.D = 2, .nodes = 9, .oxide = true},
+                             {.D = 3, .nodes = 5, .oxide = true}};
+    for (const Options& o : cases) {
+        CAPTURE(o.D, o.nodes);
+        const device::Device d = diode(o);
+        const auto s = *assemble::make_scaling(d);
+        for (const bool fd : {false, true}) {
+            CAPTURE(fd);
+            DriftDiffusion dd = make(d, s, o,
+                                     {.surface_mobility = assemble::SurfaceMobility::lombardi,
+                                      .fermi_dirac = fd,
+                                      .energy_balance = true});
+            const std::vector<double> x = fd ? degenerate(dd, d, s, 0.05, 5)
+                                             : heated(dd, d, s, 0.05, 5);
+            REQUIRE(fd_jacobian_error(dd, x, true) <= 1e-6);
+            dd.hold_temperatures(x);
+            REQUIRE(fd_jacobian_error(dd, x, true) <= 1e-6);
+        }
+    }
+}
+
+TEST_CASE("energy balance: a hot degenerate carrier at constant pressure carries no flux (ED8)") {
+    // One contact (x_min), no recombination: the last node's electron row is the last edge's
+    // flux alone. A flat band, theta from 1.5 to 1.6 across that edge, and n_b at the pressure of
+    // n_a: N theta^(5/2) F_{3/2}(eta) equal at both ends, n = N theta^(3/2) F_{1/2}(eta). The
+    // continuum flux is 0; the edge's is 0 to the third order of its differences (and exactly 0
+    // under Boltzmann statistics). A wrong sign or factor on the (5/2)(g_e - 1) Delta ln theta
+    // term misses by about (g - 1) Delta ln theta.
+    const int nodes = 5;
+    mesh::Mesh m = *mesh::make_tensor_grid(uniform(0.0, 0.1e-4, nodes));
+    auto d = device::Device::create({.mesh = std::move(m),
+                                     .temperature_K = 300.0,
+                                     .regions = {{"silicon", physics::silicon()}},
+                                     .node_region = std::vector<device::RegionId>(nodes, 0),
+                                     .donors = std::vector<double>(nodes, 0.0),
+                                     .acceptors = std::vector<double>(nodes, 0.0),
+                                     .contacts = {{"a", device::ContactKind::ohmic, {0}}}});
+    REQUIRE(d.has_value());
+    const auto s = *assemble::make_scaling(*d);
+    const double N = physics::conduction_band_dos(physics::silicon(), 300.0);
+    for (const bool fd : {false, true}) {
+        for (const double eta_a : {-3.0, 2.0, 6.0}) {
+            CAPTURE(fd, eta_a);
+            auto dd = DriftDiffusion::create(*d, s,
+                                             {.srh = false,
+                                              .auger = false,
+                                              .bgn = false,
+                                              .fermi_dirac = fd,
+                                              .radiative = false,
+                                              .energy_balance = true});
+            REQUIRE(dd.has_value());
+            REQUIRE(dd->set_bias(std::vector<double>{0.0}).has_value());
+            const double ta = 1.5, tb = 1.6;
+            // Boltzmann: F_j(eta) = e^eta.
+            const auto F32 = [&](double eta) {
+                return fd ? physics::fermi_three_halves(eta).value : std::exp(eta);
+            };
+            const auto F12 = [&](double eta) {
+                return fd ? physics::fermi_half(eta).value : std::exp(eta);
+            };
+            const double target = std::pow(ta, 2.5) * F32(eta_a) / std::pow(tb, 2.5);
+            double eta_b = eta_a;  // Newton on ln F_{3/2}(eta_b) = ln target, dlnF32/deta = F12/F32
+            for (int k = 0; k < 60; ++k) {
+                eta_b -= (std::log(F32(eta_b)) - std::log(target)) * F32(eta_b) / F12(eta_b);
+            }
+            std::vector<double> x(dd->unknowns(), 0.0);
+            for (std::size_t i = 0; i < static_cast<std::size_t>(nodes); ++i) {
+                const bool last = i == static_cast<std::size_t>(nodes - 1);
+                const double theta = last ? tb : ta, eta = last ? eta_b : eta_a;
+                x[5 * i + 1] = N * std::pow(theta, 1.5) * F12(eta) / s.Ns;
+                x[5 * i + 2] = 1e3 / s.Ns;
+                x[5 * i + 3] = i == 0 ? 0.0 : theta - 1.0;
+                x[5 * i + 4] = 0.0;
+            }
+            std::vector<double> f(dd->unknowns());
+            auto jacobian = dd->make_jacobian();
+            dd->evaluate(x, f, jacobian);
+            const auto j = dense(jacobian);
+            const std::size_t row = 5 * (nodes - 1) + 1, col = row;  // the last node's n
+            const double scale = std::abs(j[row][col] * x[col]);  // one of the opposing terms
+            const double miss = std::abs(f[row]) / scale;
+            UNSCOPED_INFO((fd ? "FD" : "Boltzmann") << " eta_a " << eta_a << ": flux / term "
+                                                    << miss);
+            REQUIRE(miss <= (fd ? 1e-4 : 1e-14));
+        }
+    }
+}
+
+TEST_CASE("energy balance: at tau = 0 the continuity rows and currents are drift-diffusion's") {
+    // Boltzmann and Fermi-Dirac (Unit 14's flux, ED8 as ruled); Lombardi along an oxide.
+    const Options cases[] = {{.D = 1, .nodes = 13, .hetero = true},
+                             {.D = 2, .nodes = 7},
+                             {.D = 2, .nodes = 7, .oxide = true}};
+    for (const Options& o : cases) {
+        for (const bool fd : {false, true}) {
+            CAPTURE(o.D, o.oxide, fd);
+            const device::Device d = diode(o);
+            const auto s = *assemble::make_scaling(d);
+            const assemble::SurfaceMobility surface =
+                o.oxide ? assemble::SurfaceMobility::lombardi : assemble::SurfaceMobility::off;
+            const DriftDiffusion eb = make(
+                d, s, o, {.surface_mobility = surface, .fermi_dirac = fd, .energy_balance = true});
+            const DriftDiffusion dd =
+                make(d, s, o, {.surface_mobility = surface, .fermi_dirac = fd});
+            std::vector<double> x5 = fd ? degenerate(eb, d, s, 0.05, 7) : heated(eb, d, s, 0.05, 7);
+            std::vector<double> x3(dd.unknowns());
+            for (std::size_t i = 0; i < dd.node_count(); ++i) {
+                x5[5 * i + 3] = x5[5 * i + 4] = 0.0;
+                for (std::size_t r = 0; r < 3; ++r) x3[3 * i + r] = x5[5 * i + r];
+            }
+            std::vector<double> f5(eb.unknowns()), f3(dd.unknowns());
+            eb.residual(x5, f5);
+            dd.residual(x3, f3);
+            for (std::size_t i = 0; i < dd.node_count(); ++i) {
+                for (std::size_t r = 0; r < 3; ++r) {
+                    CAPTURE(i, r);
+                    REQUIRE(std::abs(f5[5 * i + r] - f3[3 * i + r]) <=
+                            1e-13 * std::max(1.0, std::abs(f3[3 * i + r])));
+                }
+            }
+            const auto c5 = eb.terminal_currents(x5), c3 = dd.terminal_currents(x3);
+            for (std::size_t k = 0; k < c3.size(); ++k) {
+                REQUIRE(std::abs(c5[k] - c3[k]) <= 1e-13 * std::abs(c3[k]));
+            }
         }
     }
 }
@@ -317,22 +507,25 @@ TEST_CASE("energy balance: equilibrium has tau = 0 in every energy row") {
     const Options o{.D = 2, .nodes = 9, .oxide = true};
     const device::Device d = diode(o);
     const auto s = *assemble::make_scaling(d);
-    auto dd = DriftDiffusion::create(d, s, models());
-    REQUIRE(dd.has_value());
-    REQUIRE(dd->set_bias(std::vector<double>{0.0, 0.0}).has_value());
-    // Any potential with the equilibrium densities (one Fermi level): the charge-neutral one. The
-    // fluxes vanish analytically; numerically to the rounding of their opposing terms.
-    const auto poisson = *assemble::EquilibriumPoisson::create(d, s);
-    auto x = dd->state_from_potential(poisson.charge_neutral_potential());
-    std::vector<double> f(dd->unknowns());
-    dd->residual(x, f);
-    const auto terms = dd->edge_flux_terms(x);
-    const double scale = *std::ranges::max_element(terms);
-    REQUIRE(scale > 0.0);
-    for (std::size_t i = 0; i < dd->node_count(); ++i) {
-        CAPTURE(i);
-        REQUIRE(std::abs(f[5 * i + 3]) <= 1e-13 * scale);
-        REQUIRE(std::abs(f[5 * i + 4]) <= 1e-13 * scale);
+    for (const bool fd : {false, true}) {
+        CAPTURE(fd);
+        auto dd = DriftDiffusion::create(d, s, {.fermi_dirac = fd, .energy_balance = true});
+        REQUIRE(dd.has_value());
+        REQUIRE(dd->set_bias(std::vector<double>{0.0, 0.0}).has_value());
+        // Any potential with the equilibrium densities (one Fermi level): the charge-neutral one.
+        // The fluxes vanish analytically; numerically to the rounding of their opposing terms.
+        const auto poisson = *assemble::EquilibriumPoisson::create(d, s);
+        auto x = dd->state_from_potential(poisson.charge_neutral_potential());
+        std::vector<double> f(dd->unknowns());
+        dd->residual(x, f);
+        const auto terms = dd->edge_flux_terms(x);
+        const double scale = *std::ranges::max_element(terms);
+        REQUIRE(scale > 0.0);
+        for (std::size_t i = 0; i < dd->node_count(); ++i) {
+            CAPTURE(i);
+            REQUIRE(std::abs(f[5 * i + 3]) <= 1e-13 * scale);
+            REQUIRE(std::abs(f[5 * i + 4]) <= 1e-13 * scale);
+        }
     }
 }
 
@@ -413,6 +606,39 @@ TEST_CASE("energy balance: the uniform bulk state of Canali's velocity is exact 
             }
             UNSCOPED_INFO("N " << N << (donors ? " n" : " p") << ": worst row " << worst);
             REQUIRE(worst <= 1e-12);
+            // EC3's impact ionization (ED6) at the same state: the generation each interior
+            // node's electron row gains equals the field-driven model's (Unit 19 with Canali's
+            // mobility) at the state's psi, n, p, within 1e-3. E_eff(T) = E there.
+            constexpr auto ct = assemble::HoleMobility::caughey_thomas;
+            auto eb_ii = DriftDiffusion::create(
+                *d, s, {.hole_mobility = ct, .impact_ionization = true, .energy_balance = true});
+            auto dd_ii = DriftDiffusion::create(
+                *d, s, {.hole_mobility = ct, .field_mobility = true, .impact_ionization = true});
+            auto dd_off =
+                DriftDiffusion::create(*d, s, {.hole_mobility = ct, .field_mobility = true});
+            REQUIRE((eb_ii.has_value() && dd_ii.has_value() && dd_off.has_value()));
+            for (DriftDiffusion* q : {&*eb_ii, &*dd_ii, &*dd_off}) {
+                REQUIRE(q->set_bias(std::vector<double>{0.0, E * 0.4e-4}).has_value());
+            }
+            std::vector<double> x3(dd_ii->unknowns());
+            for (std::size_t i = 0; i < n; ++i) {
+                for (std::size_t r = 0; r < 3; ++r) x3[3 * i + r] = x[5 * i + r];
+            }
+            std::vector<double> f_eb(eb_ii->unknowns()), f_dd(dd_ii->unknowns()),
+                f_off(dd_off->unknowns());
+            eb_ii->residual(x, f_eb);
+            dd_ii->residual(x3, f_dd);
+            dd_off->residual(x3, f_off);
+            double generation = 0.0;
+            for (std::size_t i = 1; i + 1 < n; ++i) {
+                const double g_eb = f_eb[5 * i + 1] - f[5 * i + 1];
+                const double g_dd = f_dd[3 * i + 1] - f_off[3 * i + 1];
+                CAPTURE(i, g_eb, g_dd);
+                REQUIRE(g_dd > 0.0);
+                generation = std::max(generation, std::abs(g_eb - g_dd) / g_dd);
+            }
+            UNSCOPED_INFO("N " << N << ": worst generation " << generation);
+            REQUIRE(generation <= 1e-3);
         }
     }
 }

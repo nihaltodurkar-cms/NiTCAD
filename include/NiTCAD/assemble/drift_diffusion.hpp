@@ -596,11 +596,12 @@ private:
 
     // Lombardi (Unit 46): one node j of an edge's E_perp stencil, v = sum_j g_j psi_j [V/cm per
     // scaled psi], and the Jacobian positions of psi_j's column in the rows (electron, hole,
-    // heat) of end a ([0]) and end b ([1]); the heat rows' only with the electrothermal model.
+    // heat) of end a ([0]) and end b ([1]); the heat rows' only with the electrothermal model;
+    // with energy balance (Unit 52) the rows electron, hole, tau_n and tau_p.
     struct SurfaceStencil {
         std::size_t node;
         double g[3];
-        std::size_t pos[2][3];
+        std::size_t pos[2][4];
     };
     // An edge's E_perp [V/cm] at a state and v, the part of its field normal to it.
     struct SurfaceField {
@@ -657,6 +658,10 @@ private:
         physics::ImpactIonizationCoefficients n, p;
         double gamma;  // the temperature factor of the node's material
         double phonon_eV;  // its optical-phonon energy (gamma at the node's T, electrothermal)
+        // Energy balance (Unit 52, ED6): the node's low-field mobilities [cm^2/(V s)] and Canali
+        // parameters, for E_eff(T) at the node.
+        double mu_n, mu_p;
+        physics::CanaliParameters sat_n, sat_p;
     };
     struct ImpactEdge {
         std::size_t edge;
@@ -968,10 +973,12 @@ private:
     // and its energy flux into end a [k T_L units], each with partials in psi, the density and
     // the temperature rise of ends a ([0]) and b ([1]); delta the edge's driving term (the band
     // edge's drop from b to a in k T_L, sign as the flux's), for the Joule term -delta flux / 2.
+    // Lombardi (surface edges): d_perp and e_perp, the fluxes' partials in the edge's E_perp.
     struct EnergyFlux {
         double flux, d_psi[2], d_c[2], d_t[2];
         double energy, e_psi[2], e_c[2], e_t[2];
         double delta;
+        double d_perp, e_perp;
     };
     [[nodiscard]] std::pair<EnergyFlux, EnergyFlux> energy_fluxes(std::size_t k,
                                                                   std::span<const double> x) const;
