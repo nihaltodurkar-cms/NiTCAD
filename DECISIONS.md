@@ -4724,6 +4724,15 @@ helpers, moved from `complex.cpp`), `generate_complex.cpp`, `interfaces.cpp` (FD
     the FD9 case (0.56 s in Release). That is within the 120 s growth budget but uses most of it, mainly the gated
     fin. Slice 4's fixtures must move a case to `[.benchmark]` if they would exceed it.
 
+**Owner ruling on slice 3 (2026-10-30), "choose recommended":** every slice-3 item marked "for review" is accepted as
+built:
+- the line lattice replaces FD7's graded rows;
+- the added rules stand: the 4 s separation for thin layers, parallel pieces and nearby boundary faces; refusals of
+  holes, pinched and too-narrow pieces, traces at domain corners, and feature lines on domain edges other than a single
+  crossing;
+- oblique non-convex pieces always take FD9's decomposition;
+- FD9's grown-polygon path stays.
+
 ---
 
 ## New questions the advisor raised (not yet in `ARCHITECTURE.md`)
