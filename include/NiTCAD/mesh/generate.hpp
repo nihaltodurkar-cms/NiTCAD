@@ -43,6 +43,7 @@
 #include <vector>
 
 #include "NiTCAD/base/error.hpp"
+#include "NiTCAD/mesh/complex.hpp"
 #include "NiTCAD/mesh/interfaces.hpp"
 #include "NiTCAD/mesh/mesh.hpp"
 #include "NiTCAD/mesh/simplex_mesh.hpp"
@@ -238,6 +239,34 @@ struct MeshOptions3D {
 // reached, or refinement did not settle within its iteration cap); degenerate_mesh (the generated
 // mesh failed the boundary check or an import check).
 [[nodiscard]] std::expected<GeneratedMesh, base::Error> generate_mesh(const Geometry3D& geometry,
+                                                                     const MeshOptions3D& options);
+
+
+// The 3D generator over a polyhedral complex (Unit 53; DECISIONS.md FD3-FD5): non-convex domains.
+//
+// Input: a complex (complex.hpp, check_complex's rules). Output as generate_mesh(Geometry3D): a
+// boundary-conforming Delaunay tetrahedralization, every boundary triangle Gabriel (P2) and inside
+// one boundary facet, its box-method graph and the region of every node. Boundary patches are the
+// facets' patch names, a patch over any number of facets (FD3); a node on an edge between two
+// facets of one patch has the sum of its areas on both.
+//
+// Additional rules (invalid_input): the domain's boundary a manifold surface (every boundary edge
+// in exactly two boundary facets); no interface facets yet (slice 3 adds them).
+//
+// Refinement as the convex generator, over the boundary's faces (maximal connected sets of
+// coplanar boundary facets, possibly non-convex, with holes) and its domain edges (chains of facet
+// edges where two faces meet) and patch edges (facet edges inside a face between different
+// patches). A subsegment is also encroached when it is missing from the 2D triangulation of a
+// face it bounds, so a non-convex face's boundary is recovered by splitting. Only tetrahedra
+// inside the domain are refined. Termination at radius_edge = 2 for input angles of at least 90
+// degrees (reflex included) is cited (Shewchuk 1998, FD5, to verify for non-convex input);
+// otherwise heuristic, capped by max_nodes. Extraction: the tetrahedra a flood fill from the
+// bounding tetrahedra cannot reach across subfacets; then the checks: every boundary triangle in
+// one face, the volume and every face's area equal to the complex's within 1e-12, P0-P3 and P5.
+//
+// Errors: invalid_input (check_complex's rules, the options, the rules above); resource_exhausted
+// (max_nodes, or the iteration cap); degenerate_mesh (a postcondition failed).
+[[nodiscard]] std::expected<GeneratedMesh, base::Error> generate_mesh(const PolyhedralGeometry& geometry,
                                                                      const MeshOptions3D& options);
 
 }  // namespace NiTCAD::mesh

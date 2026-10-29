@@ -4614,6 +4614,32 @@ and Debug suites at every commit, `/W4 /WX`; hand mutants; nothing pushed or mer
   under `-j 6`. It does not link the new code (mesh layer only). Unit 50 fixed one race in this test (XG1), so this
   may be another; it is recorded open, not retried away.
 
+**Slice 2 (2026-10-30): non-convex single-region meshing and multi-facet patches** (`generate_mesh(PolyhedralGeometry,
+MeshOptions3D)` in `src/mesh/generate_complex.cpp`; `tests/mesh/generate_complex_test.cpp`, 5 cases):
+- FD12 as built: a separate generator file. `generate3d.cpp` is not touched, so FC1 holds for the convex path by
+  construction. The new file repeats the convex generator's refinement loop, about 400 lines. Merging the two is
+  deferred until the interface code (slice 3) shows what they share.
+- Faces are the maximal connected sets of coplanar boundary facets: non-convex and with holes (a fin's footprint on a
+  slab top). Domain edges are chains of collinear facet edges where two faces meet. Patch edges are facet edges inside
+  a face between different patches. A facet edge between facets of one patch in one face is not a mesh constraint.
+- **Added to FD4, for review:** a domain-edge subsegment is also encroached when it is missing from the 2D
+  triangulation of either face it bounds (a reflex edge of a non-convex face can be absent there while present in
+  3D). Only tetrahedra whose centroid is in the domain are refined (exact `locate`). Both are needed only for
+  non-convex input.
+- **Added rule:** the boundary must be a manifold surface (an edge in four boundary facets is refused, `invalid_input`).
+- Extraction: a flood fill from the bounding tetrahedra; it stops at triangles inside one face and skips tetrahedra flat
+  on a face. Then: every boundary triangle inside one face; the volume (1e-12); every face's area (1e-12, new); then
+  `make_dual_mesh`.
+- Measured (Release, `max_size` 0.45–0.8 on O(1) shapes): L-prism 346 nodes, U-channel 725, pocket 886. FC5 linear-field
+  deviation at most 1.6e-15 relative on every axis of the L, U, T and pocket shapes, and on the tapered fin's axis.
+  FC4: the three-facet gate patch's node areas match the per-plane 2D duals within 1e-12 (8.0 total). FC3: P0–P3 and P5
+  (`make_dual_mesh`), plus a Gabriel recheck in the test, on all six shapes, including the 86° tapered fin (heuristic)
+  and a non-convex L facet given directly.
+- Suites: Release 121/121. Debug 109/110: `app_window.self_test` failed on the WG1 gate (the message loop's longest
+  gap 110.7 ms, limit 100 ms, Microsoft Basic Render Driver). Run alone it failed once more, then passed twice in a
+  row. This is the open WG1 spike (ARCHITECTURE 11.3, cause unknown); the application does not call the new
+  generator.
+
 ---
 
 ## New questions the advisor raised (not yet in `ARCHITECTURE.md`)
