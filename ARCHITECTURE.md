@@ -2474,6 +2474,9 @@ The exact equation sets remain deferred until their units are requested.
   - Diode = Poisson + continuity + contacts.
   - MOS adds oxide, gate and interfaces.
   - Thermal adds heat and the θ unknown.
+  - Energy balance (Unit 52) adds the τ_n and τ_p unknowns after ψ, n, p and three terms: the energy rows
+    (relaxation, recombination energy, storage), the edges' particle and energy fluxes with Joule heating (in
+    place of the carrier fluxes), and impact ionization at the carrier temperatures.
 - **The wrapper.** `DriftDiffusion` keeps every public signature and evaluates through its composition.
 - **The order of additions is fixed.** Every entry of F and J receives its contributions in the pre-unit order
   (DECISIONS.md FE3). The refactor was gated bit for bit: pinned traces of every value the suites see, identical
@@ -3084,7 +3087,7 @@ exists, not finished), **planned** (nothing built). Audit of 2026-10-09, against
 | Results and provenance | Plain-data results; run record with identity digest (6.6); sweeps persisted bit for bit (Unit 29); provenance (build, revision, platform, start, wall time) in every run record and file, transient and small-signal files, `nitcad --version` (Unit 42) | **Verified** (Unit 42, 6.6; PR #52; DECISIONS.md PV1–PV7) | A release version policy (PD5); cross-machine checksums (6.8) |
 | Visualization, GUI, batch | The `nitcad check|run|plot` batch runner over the input deck (Unit 31); the `render` layer and `nitcad plot` (Unit 25a, 6.14); rates and the mesh digest in results (Unit 45, 6.6); \|E\|, \|J\|, isosurfaces and streamlines (Unit 25b, 6.14); arrows, clipping, exploded views and filmstrips (Unit 25c, 6.14); the Windows application `nitcad-app` (Unit 26, 6.14); its analysis workspace (Unit 26b, 6.14); the 25b/25c views, region visibility, playback and clip sliders in the window (Unit 26c, 6.14) | **Batch runner verified, on `main`** (Unit 31; `6f67510`, PR #37); **core visualization verified, on `main`** (Unit 25a; `6d2135b`, PR #55); **rates and digest verified, on `main`** (Unit 45; `81622ca`, PR #56); **derived fields verified, on `main`** (Unit 25b; `8256cf8`, PR #57); **arrows, clipping, exploded views and filmstrips verified** (Unit 25c); **the GUI verified, on `main`** (Unit 26; `e9b1d71`, PR #59); **the analysis workspace verified, on `main`** (Unit 26b; `51face0`, PR #60); **the GUI catch-up verified** (Unit 26c, PR #61; the WG1 spikes open) | the WG1 spikes (cause unknown; the input cause fixed in Unit 26c) |
 | Validation against published/measured data | Legacy, analytic and convergence gates throughout; resistivity against dopant density (NBS SP 400-64) and the measured n_i(300 K) as benchmark decks (Unit 33, 10.1) | **Verified, on `main`** (Unit 33; `a14ac96`, PR #41): gaps found and pinned (boron mobility up to +48%, incomplete ionization at heavy doping, n_i +10%); the opt-in Masetti hole mobility (Unit 34; `e14a53f`, PR #42) brings boron to within 11% (AC3/AC5 at 1e18 accepted as documented limitations); Unit 35 (`2d1fdc7`, PR #44) makes Masetti and a published band set (n_i within the measurement's uncertainty) the defaults | A density-dependent ionization level (owner decision); breakdown and device-level benchmarks from accessible sources |
-| Nanoscale device physics | Classical drift-diffusion: carriers peak at the insulator interface (MLDA moves the peak inside, opt-in, Unit 47), mobility from doping (Masetti) and lateral field (Canali); Lombardi surface mobility opt-in (Unit 46); gate tunnelling through insulators opt-in (Unit 51, 6.4) | **Lombardi surface mobility verified, opt-in, on `main`** (Unit 46; `51c2da9`, PR #64); **MLDA quantum confinement verified, opt-in, on `main`** (Unit 47; `329f203`, PR #66); **gate tunnelling verified, opt-in** (Unit 51, on `physics/gate-tunnelling`); the rest **planned** (gap found by the FinFET deck, 2026-10-23; below) | Non-local transport, density-gradient confinement (below); no unit named |
+| Nanoscale device physics | Classical drift-diffusion: carriers peak at the insulator interface (MLDA moves the peak inside, opt-in, Unit 47), mobility from doping (Masetti) and lateral field (Canali); Lombardi surface mobility opt-in (Unit 46); gate tunnelling through insulators opt-in (Unit 51, 6.4) | **Lombardi surface mobility verified, opt-in, on `main`** (Unit 46; `51c2da9`, PR #64); **MLDA quantum confinement verified, opt-in, on `main`** (Unit 47; `329f203`, PR #66); **gate tunnelling verified, opt-in** (Unit 51, on `physics/gate-tunnelling`); **energy balance verified, opt-in** (Unit 52, on `physics/energy-balance`; not run on the FinFET deck); the rest **planned** (gap found by the FinFET deck, 2026-10-23; below) | Energy balance with the refused combinations (below), density-gradient confinement; no unit named |
 
 **As built (Unit 28, bias step cutting; `solve::StepControl` in `solve/bias.hpp`; DECISIONS.md S1–S7):**
 - When a sweep point does not converge, the bias step to it is retried from the last converged state, halved until a
@@ -3246,7 +3249,19 @@ FG1–FG9):**
 - **Non-local transport** (equations, physics). Energy balance or hydrodynamic carrier temperatures (6.12.2's
   `Hydrodynamic` composition; excluded from Unit 23 by T14). Drift-diffusion has no velocity overshoot, so it
   underestimates the current of channels below about 50 nm. Ballistic and quasi-ballistic limits lie past this
-  class of model.
+  class of model. **Built as Unit 52** (opt-in `[models] energy_balance = on`; DECISIONS.md ED1–ED14, EC1–EC19;
+  on `physics/energy-balance`): energy balance, not the full hydrodynamic model (no convective term). Both carrier
+  temperatures are Newton unknowns (stride 5) with an exact Jacobian. Particle and energy fluxes are
+  Scharfetter–Gummel fluxes in θn and θ²n (c = 5/2). The mobility reproduces Canali's v(E) in a uniform field.
+  Relaxation times are constant per material (silicon 0.35/0.4 ps). Impact ionization is driven by the carrier
+  temperature. Works with Boltzmann and Fermi–Dirac, SRH/Auger/radiative, Masetti and Lombardi, MLDA, transient
+  and small signal. Each bias point starts in two stages (ψ, n, p at the held temperatures, then coupled).
+  Measured: 1.93 v_s peak velocity in Aste and Vahldieck's 0.3 µm ballistic diode (their 1.87 with a
+  T-dependent τ_w); second order under refinement with graded junctions, first order at abrupt ones (as
+  drift-diffusion); per Newton iteration 3.8–5.8× drift-diffusion's cost in 2D and 3D, dominated by the
+  factorization. Refused: electrothermal, thermionic and charged/trapped interfaces, surface recombination,
+  gate tunnelling, BTBT, the weighted current, Schottky contacts, `field_mobility`. Not run: the FinFET deck
+  (owner ruling). Follow-ups: those combinations, a T-dependent τ_w, the E_g sink of impact ionization.
 - **Also open for this deck.** A mesh-convergence check: the same sweep on a finer mesh, with V_th, swing and
   on-current compared. Not a model, but needed before any of these models is gated on the FinFET.
 

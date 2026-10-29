@@ -4750,6 +4750,76 @@ against Unit 14's drift-diffusion within 1e-6.
 17-point sweep with energy balance, its on-current change and wall time) is not run in Unit 52: not measured, not
 claimed. Slice 5 is EC9 (refinement), EC17 (hand mutants), EC19 (cost on 1D, 2D, 3D) and ARCHITECTURE.
 
+**EC9's diode, a criteria defect ruled by the owner (2026-10-29, "Graded 5 nm, gate 1.5").** Measured first on
+EC10's diode at 1 V on h = 1 nm, h/2, h/4 and h/8 (nested meshes, the junctions on nodes). The abrupt junctions,
+sampled at nodes, make every model first order: energy balance's current converges at order 1.01 (differences 2723,
+1349, 671 A/cm²), its peak T_n at 0.79 and then 0.98, its peak velocity at 1.51 and then 1.08 (the 1.51 is
+pre-asymptotic); drift-diffusion with Canali's current at 1.0 too (1578, 785, 391). The junction node's doping
+averaged cuts the error tenfold but stays first order (the edge mobilities beside it are still wrong). With the
+junctions erfc-graded over 5 nm the scheme's own order shows: current 2.00, peak velocity 2.45, peak T_n 2.00
+(10 nm: 2.00, 2.83, 1.74). Ruling: EC9 is gated on the diode with its junctions erfc-graded over 5 nm (h, h/2,
+h/4, observed order ≥ 1.5 for the current, the peak velocity J/(q n) and the peak T_n over the nodes); the abrupt
+diode's orders and drift-diffusion's are printed as the evidence that the first order is the junction's.
+
+**EC19, measured (2026-10-29; Release, P-core pinned 0x3C3; `[.assembly_benchmark]` in
+`tests/solve/energy_balance_test.cpp`).** EC7's forward pn diode at −0.6 V; per Newton iteration the assembly
+(evaluate, median of 31) and the default backend's (SparseLU) numeric refactorization and solve (best of 3; the
+pattern's analysis is once per sweep). Iterations are the sweep's (−0.2, −0.4, −0.6 V) recorded ones: energy
+balance's leave out ED12's first stage, as ruled.
+
+| Mesh | Model | Unknowns | Assembly | Refactorization | Solve | Sweep |
+|---|---|---|---|---|---|---|
+| 1D, 2001 | energy balance | 10,005 | 0.375 ms | 4.17 ms | 0.30 ms | 10 it., 0.16 s |
+| | drift-diffusion | 6,003 | 0.094 ms | 1.80 ms | 0.15 ms | 18 it., 0.05 s |
+| | drift-diffusion + Canali | 6,003 | 0.219 ms | 1.80 ms | 0.15 ms | 30 it., 0.34 s |
+| 2D, 201 × 51 | energy balance | 51,255 | 5.88 ms | 946 ms | 19.8 ms | 10 it., 25.0 s |
+| | drift-diffusion | 30,753 | 1.03 ms | 164 ms | 5.2 ms | 18 it., 3.3 s |
+| | drift-diffusion + Canali | 30,753 | 1.82 ms | 177 ms | 5.8 ms | 19 it., 273 s |
+| 3D, 41 × 11 × 11 | energy balance | 24,805 | 2.83 ms | 2,130 ms | 17.8 ms | 9 it., 56.9 s |
+| | drift-diffusion | 14,883 | 0.58 ms | 567 ms | 7.3 ms | 18 it., 10.6 s |
+| | drift-diffusion + Canali | 14,883 | 1.11 ms | 564 ms | 6.5 ms | 24 it., 15.8 s |
+
+The factorization dominates in 2D and 3D: energy balance's 5 × 5 blocks make it 5.8× (2D) and 3.8× (3D) drift-
+diffusion's; assembly is 4–6× and stays below 1% of an iteration there. The 2D drift-diffusion + Canali sweep's
+273 s is its step cutting (Unit 28; the erratic Canali convergence recorded with EC11), not this unit. A first 3D
+mesh of 41 × 21 × 21 (92,005 energy-balance unknowns) did not finish its sweep in 35 min on SparseLU and was stopped;
+PARDISO or GMRES-ILUT (6.10) is the route for 3D energy balance at that size.
+
+**EC17's hand mutants, as run (2026-10-29).** 19 mutants, at least one per design row (ED1–ED14), each built in
+Release and run against the energy-balance tests (physics, F_3/2, assemble, the visible solve cases, deck, io; the
+run-record mutants with the whole deck suite), then reverted. 15 were caught at once; 4 survived, and each gap was
+closed with a test before the mutant was run again:
+
+| Row | Mutant | Caught by |
+|---|---|---|
+| ED1 | ohmic contact nodes' temperatures free (relaxation rows) | assemble |
+| ED1 | τ_n and τ_p swapped in the unknowns' map | assemble, solve |
+| ED2 | d = δ (no 1/θ_e) | assemble (EC6), solve |
+| ED3 | c = 2 for 5/2 | survived (EC7's identity is algebraic in c; EC10 gates only > 1.3 v_s); new: a uniform θ carries c θ per particle, both carriers (3.75 within 2e-10) |
+| ED3 | Joule heat 0.45 to each end | assemble, solve |
+| ED4 | the power balance's 3/2 as 1 | physics, assemble, solve |
+| ED4 | the mobility's rise partial doubled | assemble, solve |
+| ED5 | electrons given the holes' default relaxation time | assemble, solve |
+| ED6 | the ionization energy term without θ_n | assemble |
+| ED6 | holes ionizing at the electron temperature | assemble |
+| ED7 | no recombination energy in the energy rows | assemble, solve |
+| ED8 | (5/2)(g_e − 1) Δ ln θ with 1 for 5/2 | assemble |
+| ED9 | W = n θ g for (3/2) n θ g, its partials alike | survived (EC13's budget uses the same storage; the end state does not depend on it); new: the step history's W_n, W_p against (3/2) n θ F_{3/2}/F_{1/2} at hot nodes, both statistics |
+| ED10 | `models.energy_balance` named with the model off | deck |
+| ED11 | the thermionic-interface refusal removed | assemble |
+| ED12 | the two-stage start removed | survived (only the hidden MOSFET sweeps needed it); new: without step cutting, the pn diode to −0.8 V and +5 V in one step and the ballistic diode 0.5 then 1 V (4, 4, 17 iterations; each fails at a singular pivot without the first stage) |
+| ED13 | T_n not written to the result file | deck, io |
+| ED13 | the identity digesting τ_p for τ_n | survived (the deck test changed both or τ_p); new: changing either time alone changes the identity |
+| ED14 | relaxation floor 0 | assemble |
+
+Run again with the new tests: all four caught (ED3a by assemble and solve, ED9 by assemble, ED12 by solve, ED13b by
+deck), so 19 of 19; none is recorded as equivalent.
+
+**Slice 5 as built (2026-10-29).** EC9 as ruled (graded 5 nm: orders 2.00, 2.45, 2.00), EC17 (19 of 19), EC19 reported
+(above), ARCHITECTURE 6.12.2 and 11.3 as built. EC18: Release (121 tests) and Debug (110) suites pass, zero
+warnings under `/W4 /WX`; no existing pin changed. EC12 not run (owner ruling). Unit 52's criteria are then all met
+or ruled, for the owner's acceptance.
+
 **Questions for the owner before code (proposal's recommended answer first):**
 - EQ1 τ_w for silicon: 0.35 ps / 0.4 ps (Triebl), or another cited pair.
 - EQ2 `field_mobility = on` with energy balance: refused (ED4), or silently replaced by the T-driven law.

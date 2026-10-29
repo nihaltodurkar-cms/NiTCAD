@@ -541,6 +541,14 @@ TEST_CASE("deck build: energy_balance, the relaxation times and the run record (
     CHECK(record(on).input_identity != record(off).input_identity);
     CHECK(record(given).input_identity != record(on).input_identity);
     CHECK(record(given_off).input_identity == record(off).input_identity);
+    // Each carrier's time on its own (EC17: a digest of tau_p twice survived the checks above).
+    for (const char* other : {"energy_relaxation.tau_n_s = 0.31e-12\nenergy_relaxation.tau_p_s = 0.45e-12",
+                              "energy_relaxation.tau_n_s = 0.3e-12\nenergy_relaxation.tau_p_s = 0.46e-12"}) {
+        std::string changed = diode_deck;
+        changed.replace(changed.find("material = silicon"), 18, std::string("material = silicon\n") + other);
+        CAPTURE(other);
+        CHECK(record(must(changed + "[models]\nenergy_balance = on\n")).input_identity != record(given).input_identity);
+    }
 }
 
 TEST_CASE("deck build: the GMRES-ILUT keys and their run record (Unit 44, LG5)", "[deck]") {

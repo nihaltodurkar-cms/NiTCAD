@@ -478,6 +478,89 @@ TEST_CASE("energy balance: a hot degenerate carrier at constant pressure carries
 
 namespace {
 
+// ED3's and ED9's factors (EC17: c = 2 and W = n theta each survived every other test): a 5-node
+// bar with one contact (x_min), no recombination, and relaxation times of 1 ms, so the last
+// node's rows are its edge's fluxes alone to about 2e-10 (measured).
+device::Device factor_bar() {
+    physics::SemiconductorParameters p = physics::silicon_parameters;
+    p.energy_relaxation = {.tau_n_s = 1e-3, .tau_p_s = 1e-3};
+    mesh::Mesh m = *mesh::make_tensor_grid(uniform(0.0, 0.1e-4, 5));
+    return *device::Device::create({.mesh = std::move(m),
+                                    .temperature_K = 300.0,
+                                    .regions = {{"silicon", *physics::Semiconductor::create(p)}},
+                                    .node_region = std::vector<device::RegionId>(5, 0),
+                                    .donors = std::vector<double>(5, 0.0),
+                                    .acceptors = std::vector<double>(5, 0.0),
+                                    .contacts = {{"a", device::ContactKind::ohmic, {0}}}});
+}
+
+constexpr assemble::PhysicsModels factor_models(bool fd) {
+    return {.srh = false, .auger = false, .bgn = false, .fermi_dirac = fd, .radiative = false,
+            .energy_balance = true};
+}
+
+}  // namespace
+
+TEST_CASE("energy balance: a uniform temperature carries c theta per particle (ED3: c = 5/2)") {
+    // A flat band and theta = 1.5 across the last edge, the densities rising along it: the energy
+    // flux is c theta = 3.75 times the particle flux (S_n = -c theta F_n in the hole form), with
+    // no Joule heat (delta = 0).
+    const device::Device d = factor_bar();
+    const auto s = *assemble::make_scaling(d);
+    auto dd = DriftDiffusion::create(d, s, factor_models(false));
+    REQUIRE(dd.has_value());
+    REQUIRE(dd->set_bias(std::vector<double>{0.0}).has_value());
+    std::vector<double> x(dd->unknowns(), 0.0);
+    for (std::size_t i = 0; i < 5; ++i) {
+        x[5 * i + 1] = (1.0 + static_cast<double>(i)) * 1e16 / s.Ns;
+        x[5 * i + 2] = (1.0 + 0.5 * static_cast<double>(i)) * 1e16 / s.Ns;
+        x[5 * i + 3] = x[5 * i + 4] = i == 0 ? 0.0 : 0.5;
+    }
+    std::vector<double> f(dd->unknowns());
+    dd->residual(x, f);
+    const double electrons = f[5 * 4 + 3] / f[5 * 4 + 1], holes = f[5 * 4 + 4] / f[5 * 4 + 2];
+    UNSCOPED_INFO("energy / particle flux: electrons " << electrons << ", holes " << holes);
+    REQUIRE(std::abs(electrons - 3.75) <= 1e-9 * 3.75);
+    REQUIRE(std::abs(holes + 3.75) <= 1e-9 * 3.75);
+}
+
+TEST_CASE("energy balance: the stored thermal energy is (3/2) n k T (ED9)") {
+    // The step history's W_n and W_p against (3/2) n theta g, g = F_{3/2} / F_{1/2} at the density
+    // n theta^(-3/2) (1 with Boltzmann), at degenerate and non-degenerate hot nodes.
+    const device::Device d = factor_bar();
+    const auto s = *assemble::make_scaling(d);
+    const double Nc = physics::conduction_band_dos(physics::silicon(), 300.0);
+    const double Nv = physics::valence_band_dos(physics::silicon(), 300.0);
+    for (const bool fd : {false, true}) {
+        CAPTURE(fd);
+        auto dd = DriftDiffusion::create(d, s, factor_models(fd));
+        REQUIRE(dd.has_value());
+        std::vector<double> x(dd->unknowns(), 0.0);
+        const double eta[5] = {-4.0, -1.0, 1.0, 3.0, 6.0}, theta[5] = {1.0, 1.2, 1.7, 2.5, 4.0};
+        double expected_n[5], expected_p[5];
+        for (std::size_t i = 0; i < 5; ++i) {
+            const double t = theta[i];
+            const double F12 = fd ? physics::fermi_half(eta[i]).value : std::exp(eta[i]);
+            const double F32 = fd ? physics::fermi_three_halves(eta[i]).value : std::exp(eta[i]);
+            const double n = Nc * std::pow(t, 1.5) * F12, p = Nv * std::pow(t, 1.5) * F12;
+            x[5 * i + 1] = n / s.Ns;
+            x[5 * i + 2] = p / s.Ns;
+            x[5 * i + 3] = x[5 * i + 4] = t - 1.0;
+            expected_n[i] = 1.5 * x[5 * i + 1] * t * F32 / F12;
+            expected_p[i] = 1.5 * x[5 * i + 2] * t * F32 / F12;
+        }
+        const std::vector<double> w = dd->storage(x);
+        REQUIRE(w.size() == 4 * 5);
+        for (std::size_t i = 0; i < 5; ++i) {
+            CAPTURE(i, w[4 * i + 2], expected_n[i], w[4 * i + 3], expected_p[i]);
+            REQUIRE(std::abs(w[4 * i + 2] - expected_n[i]) <= 1e-12 * expected_n[i]);
+            REQUIRE(std::abs(w[4 * i + 3] - expected_p[i]) <= 1e-12 * expected_p[i]);
+        }
+    }
+}
+
+namespace {
+
 // The 2D cases of the slice 4 gates take Lombardi (surface edges along the oxide) with it.
 assemble::PhysicsModels slice4_models(const Options& o, bool fd) {
     assemble::PhysicsModels m{.fermi_dirac = fd, .energy_balance = true};

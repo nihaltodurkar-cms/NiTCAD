@@ -2,7 +2,8 @@
 // and Fermi-Dirac), the energy budget (EC7, both statistics), the uniform-field limit at 1e3 and
 // 1e4 V/cm (EC3, with impact ionization's ratio printed), the drift-diffusion limit (EC4, both
 // statistics), current conservation (EC8) and velocity overshoot in Aste and Vahldieck's
-// ballistic diode (EC10); slice 4: a bias step in time (EC13) and the admittance at 0 Hz (EC14).
+// ballistic diode (EC10) and its refinement (EC9); slice 4: a bias step in time (EC13) and the
+// admittance at 0 Hz (EC14).
 #include <catch2/catch_test_macros.hpp>
 
 #include <algorithm>
@@ -30,7 +31,9 @@
 #include "NiTCAD/solve/small_signal.hpp"
 #include "NiTCAD/solve/transient.hpp"
 #include "NiTCAD/solve/waveform.hpp"
+#include "assembly_timing.hpp"
 #include "legacy_graded_mesh.hpp"
+#include "solver_timing.hpp"
 
 using namespace NiTCAD;
 
@@ -422,6 +425,54 @@ TEST_CASE("energy balance: velocity overshoot in the ballistic diode (EC10)") {
     REQUIRE(v_eb > v_dd);
 }
 
+TEST_CASE("energy balance: the ballistic diode converges under refinement (EC9)") {
+    // EC9 as ruled 2026-10-29: EC10's diode at 1 V with its junctions erfc-graded over 5 nm, on
+    // h = 1 nm (EC10's mesh), h/2 and h/4 (nested). The current, the peak velocity J / (q n) and
+    // the peak T_n over the nodes converge with observed order log2(|f_h - f_h/2| / |f_h/2 -
+    // f_h/4|) >= 1.5 (measured 2.00, 2.45, 2.00). EC10's abrupt junctions, sampled at nodes, make
+    // every model first order (drift-diffusion with Canali too): printed, with drift-diffusion's.
+    const physics::Semiconductor si = ballistic_silicon();
+    const auto biases = {0.05, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0};
+    const auto graded = [](double x) {
+        constexpr double w = 5e-7;
+        return 2e15 + (1e18 - 2e15) * 0.5 *
+                          (std::erfc((x - 0.1e-4) / w) + std::erfc((0.2e-4 - x) / w));
+    };
+    struct Levels {
+        double J[3], v[3], T[3];
+    };
+    const auto refine = [&](const char* name, auto doping, bool energy) {
+        Levels f{};
+        for (int r = 0; r < 3; ++r) {
+            const device::Device d = line(0.3e-4, 300 * (1 << r) + 1, doping, si);
+            const results::Sweep s = sweep(d, biases, energy ? options(true) : options(false, true));
+            const results::BiasPoint& b = s.points.back();
+            conserved(b);
+            f.J[r] = std::abs(b.terminal_current[0]);
+            for (std::size_t i = 0; i < b.fields.n_cm3.size(); ++i) {
+                f.v[r] = std::max(f.v[r], f.J[r] / (q * b.fields.n_cm3[i]));
+                if (energy) f.T[r] = std::max(f.T[r], b.fields.electron_temperature_K[i]);
+            }
+            std::printf("EC9 %s h/%d: J %.8e A/cm2, peak velocity %.8f v_s, peak T_n %.4f K\n",
+                        name, 1 << r, f.J[r], f.v[r] / 1.03e7, f.T[r]);
+        }
+        return f;
+    };
+    const auto order = [](const double (&f)[3]) {
+        return std::log2(std::abs(f[0] - f[1]) / std::abs(f[1] - f[2]));
+    };
+    const Levels abrupt = refine("abrupt", ballistic_doping, true);
+    const Levels abrupt_dd = refine("abrupt, DD + Canali", ballistic_doping, false);
+    std::printf("EC9 abrupt orders (printed): J %.3f, velocity %.3f, T_n %.3f; DD + Canali J %.3f\n",
+                order(abrupt.J), order(abrupt.v), order(abrupt.T), order(abrupt_dd.J));
+    const Levels g = refine("graded 5 nm", graded, true);
+    std::printf("EC9 graded orders: J %.3f, velocity %.3f, T_n %.3f\n", order(g.J), order(g.v),
+                order(g.T));
+    REQUIRE(order(g.J) >= 1.5);
+    REQUIRE(order(g.v) >= 1.5);
+    REQUIRE(order(g.T) >= 1.5);
+}
+
 namespace {
 
 // The legacy MOSFET of electrothermal_test.cpp (n+ source and drain, N_A 1e17, 5 nm oxide, n+
@@ -728,4 +779,94 @@ TEST_CASE("energy balance: the weighted terminal current is refused (ED11, EC15)
     CAPTURE(s.error().message);
     REQUIRE(s.error().code == base::ErrorCode::invalid_input);
     REQUIRE(s.error().message.find("energy-balance") != std::string::npos);
+}
+
+TEST_CASE("energy balance: cost per Newton iteration in 1D, 2D and 3D (EC19)", "[.assembly_benchmark]") {
+    // EC19: EC7's forward pn diode (p 1e17 / n 2e17, 1 um) at -0.6 V on 1D (2001 nodes), 2D
+    // (201 x 51) and 3D (41 x 11 x 11): per Newton iteration, the assembly (evaluate, residual and
+    // Jacobian; median of 31) and the linear solve (the default backend's refactorization and solve,
+    // best of 3; the pattern's analysis is once per sweep) at the solved state, energy balance
+    // against drift-diffusion (constant mobility and Canali). The sweep's Newton iterations and
+    // wall time are printed beside them. Reported, not gated.
+    for (const int D : {1, 2, 3}) {
+        CAPTURE(D);
+        const auto x = uniform(0.0, 1e-4, D == 1 ? 2001 : D == 2 ? 201 : 41);
+        const auto y = uniform(0.0, 0.2e-4, D == 2 ? 51 : 11);
+        mesh::Mesh m = D == 1   ? *mesh::make_tensor_grid(x)
+                       : D == 2 ? *mesh::make_tensor_grid(x, y)
+                                : *mesh::make_tensor_grid(x, y, y);
+        const std::size_t n = m.node_count();
+        std::vector<double> donors(n, 0.0), acceptors(n, 0.0);
+        for (std::size_t i = 0; i < n; ++i) (m.points()[i][0] < 0.5e-4 ? acceptors : donors)[i] =
+            m.points()[i][0] < 0.5e-4 ? 1e17 : 2e17;
+        const auto left = m.find_boundary("x_min")->nodes, right = m.find_boundary("x_max")->nodes;
+        auto made = device::Device::create({.mesh = std::move(m),
+                                            .temperature_K = 300.0,
+                                            .regions = {{"silicon", physics::silicon()}},
+                                            .node_region = std::vector<device::RegionId>(n, 0),
+                                            .donors = std::move(donors),
+                                            .acceptors = std::move(acceptors),
+                                            .contacts = {{"anode", device::ContactKind::ohmic, left},
+                                                         {"cathode", device::ContactKind::ohmic, right}}});
+        REQUIRE(made.has_value());
+        const device::Device& d = *made;
+        const auto scaling = *assemble::make_scaling(d);
+        const std::vector<double> bias{0.0, -0.6};
+        for (const auto [name, o] : {std::pair{"energy balance", options(true)},
+                                     std::pair{"drift-diffusion", options(false)},
+                                     std::pair{"drift-diffusion + Canali", options(false, true)}}) {
+            const auto t0 = std::chrono::steady_clock::now();
+            const results::Sweep s = sweep(d, {-0.2, -0.4, -0.6}, o);
+            const double wall =
+                std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+            std::size_t iterations = 0;
+            for (const results::BiasPoint& p : s.points) iterations += p.convergence.iterations.size();
+            auto system = *assemble::DriftDiffusion::create(d, scaling, o.models);
+            REQUIRE(system.set_bias(bias).has_value());
+            const std::vector<double> state = o.models.energy_balance
+                                                  ? scaled(s.points.back().fields, scaling)
+                                                  : scaled_state(system, s.points.back().fields, scaling);
+            const std::string label = std::to_string(D) + "D " + name;
+            const AssemblyTiming a = time_assembly(label.c_str(), system, state);
+            std::vector<double> f(system.unknowns());
+            linalg::SparseMatrix j = system.make_jacobian();
+            system.evaluate(state, f, j);
+            const SolverTiming l = time_solver(j, f, o.linear);
+            std::printf("EC19 %s: %zu unknowns; per iteration: assembly %.3f ms, refactorization "
+                        "%.3f ms, solve %.3f ms (first factorization %.3f ms); sweep %zu iterations, "
+                        "%.3f s\n",
+                        label.c_str(), system.unknowns(), 1e-3 * a.evaluate_us, 1e3 * l.refactor_s,
+                        1e3 * l.solve_s, 1e3 * l.first_s, iterations, wall);
+            std::fflush(stdout);
+        }
+    }
+}
+
+TEST_CASE("energy balance: large bias steps converge from the two-stage start (ED12)") {
+    // ED12 as ruled 2026-10-29: each point first converges psi, n and p at the held carrier
+    // temperatures. Without step cutting, the pn diode (p 1e17 / n 2e17, 1 um) reaches -0.8 V and
+    // +5 V from equilibrium in one step, and the ballistic diode 0.5 V then 1 V. Measured: 4, 4
+    // and 17 iterations; without the first stage (EC17's mutant) each fails at a singular pivot.
+    const auto pn = [](double x) { return x < 0.5e-4 ? -1e17 : 2e17; };
+    const device::Device diode = line(1e-4, 101, pn);
+    const device::Device ballistic = line(0.3e-4, 301, ballistic_doping, ballistic_silicon());
+    const struct {
+        const device::Device& d;
+        std::vector<double> V;
+    } cases[] = {{diode, {-0.8}}, {diode, {5.0}}, {ballistic, {0.5, 1.0}}};
+    for (const auto& c : cases) {
+        solve::BiasOptions o = options(true);
+        o.step_control.max_cuts = 0;
+        std::vector<std::vector<double>> points;
+        for (const double v : c.V) points.push_back({0.0, v});
+        CAPTURE(c.V);
+        const auto s = solve::sweep_bias(c.d, points, o);
+        REQUIRE(s.has_value());
+        if (s->stopped) FAIL(s->stopped->message);
+        REQUIRE(s->points.size() == c.V.size());
+        for (const results::BiasPoint& p : s->points) {
+            REQUIRE(p.bias_substeps == 0);
+            conserved(p);
+        }
+    }
 }
