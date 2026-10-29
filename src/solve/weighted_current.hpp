@@ -56,6 +56,9 @@ inline std::optional<base::Error> check_weighted_current(const BiasOptions& opti
         return invalid("weighted_current does not support nonlocal tunnelling: its pairs are not "
                        "carried along the mesh edges (DECISIONS.md W6)");
     }
+    if (options.models.energy_balance) {  // Unit 52, DECISIONS.md ED11
+        return invalid("weighted_current does not support the energy-balance model");
+    }
     return std::nullopt;
 }
 

@@ -41,7 +41,7 @@ constexpr const char* plot_usage =
     "          quality|quality-histogram|difference (default: field with --field, else solid)\n"
     "  iso     --view iso --field <f> --levels <v>[,<v>...] (3D surfaces, 2D contours)\n"
     "  field   --field potential|n|p|Ec|Ev|Efn|Efp|T|doping|ND|NA|R|srh|auger|\n"
-    "          radiative|surface|Gii|Gbtbt|E|J|Jn|Jp  --point <k> (default: last)\n"
+    "          radiative|surface|Gii|Gbtbt|E|J|Jn|Jp|Tn|Tp  --point <k> (default: last)\n"
     "          --scale linear|log|signed-log  --range <lo>,<hi>\n"
     "          --colormap turbo|viridis|cividis|coolwarm|soft  --contours  --edges  --opaque\n"
     "  3D      --slice x=<um>|y=<um>|z=<um> (repeatable)  --azimuth <deg>  --elevation <deg>\n"

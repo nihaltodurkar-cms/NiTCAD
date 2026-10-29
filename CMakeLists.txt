@@ -225,7 +225,8 @@ add_library(nitcad_physics STATIC
   src/physics/thermal.cpp
   src/physics/surface_mobility.cpp
   src/physics/quantum_confinement.cpp
-  src/physics/gate_tunnelling.cpp)
+  src/physics/gate_tunnelling.cpp
+  src/physics/energy_balance.cpp)
 add_library(NiTCAD::physics ALIAS nitcad_physics)
 target_include_directories(nitcad_physics PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
 target_link_libraries(nitcad_physics PUBLIC NiTCAD::base)
@@ -248,7 +249,8 @@ add_executable(nitcad_physics_test
   tests/physics/masetti_test.cpp
   tests/physics/band_set_test.cpp
   tests/physics/ionization_density_test.cpp
-  tests/physics/gate_tunnelling_test.cpp)
+  tests/physics/gate_tunnelling_test.cpp
+  tests/physics/energy_balance_test.cpp)
 target_link_libraries(nitcad_physics_test PRIVATE NiTCAD::physics Catch2::Catch2WithMain)
 add_test(NAME physics COMMAND nitcad_physics_test)
 
@@ -280,6 +282,7 @@ add_library(nitcad_assemble STATIC
   src/assemble/equilibrium_poisson.cpp
   src/assemble/drift_diffusion.cpp
   src/assemble/electrothermal.cpp
+  src/assemble/energy_balance.cpp
   src/assemble/tunnel_paths.cpp
   src/assemble/gate_tunnels.cpp
   src/assemble/observer.cpp
@@ -304,6 +307,7 @@ add_executable(nitcad_assemble_test
   tests/assemble/impact_ionization_test.cpp
   tests/assemble/band_to_band_test.cpp
   tests/assemble/electrothermal_test.cpp
+  tests/assemble/energy_balance_test.cpp
   tests/assemble/fields_test.cpp
   tests/assemble/terms_test.cpp
   tests/assemble/surface_mobility_test.cpp
@@ -486,6 +490,7 @@ add_executable(nitcad_solve_test
   tests/solve/impact_ionization_test.cpp
   tests/solve/btbt_test.cpp
   tests/solve/electrothermal_test.cpp
+  tests/solve/energy_balance_test.cpp
   tests/solve/restart_test.cpp
   tests/solve/weighted_current_test.cpp
   tests/solve/hole_mobility_test.cpp

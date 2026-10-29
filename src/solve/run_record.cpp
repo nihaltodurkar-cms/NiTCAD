@@ -154,6 +154,8 @@ std::vector<std::pair<std::string, double>> settings(const BiasOptions& o) {
             s.emplace_back("models.surface_mobility",
                            static_cast<double>(o.models.surface_mobility));
         }
+        // Unit 52: likewise.
+        if (o.models.energy_balance) s.emplace_back("models.energy_balance", 1.0);
     }
     // Unit 47: in either equation set, only when on (with its masses), so the runs without it keep
     // their identity.
@@ -371,6 +373,18 @@ void device_and_settings(Digest& d, const device::Device& device, const BiasOpti
         d.integer(options.thermal_bias_K.size());
         for (const auto& p : options.thermal_bias_K) d.reals(p);
     }
+    // Each region's energy relaxation times as given (0: silicon's), with energy balance only
+    // (Unit 52, ED13; a run without keeps its digest).
+    if (options.equations == Equations::drift_diffusion && options.models.energy_balance) {
+        d.text("energy_balance");
+        for (const device::Region& r : device.regions()) {
+            if (device::is_insulator(r)) continue;
+            const physics::EnergyRelaxationParameters& e =
+                std::get<physics::Semiconductor>(r.material).parameters().energy_relaxation;
+            d.real(e.tau_n_s);
+            d.real(e.tau_p_s);
+        }
+    }
     // Interface transport acts on the continuity equations only.
     if (options.equations == Equations::drift_diffusion) {
         d.integer(device.interfaces().size());
@@ -398,9 +412,10 @@ void device_and_settings(Digest& d, const device::Device& device, const BiasOpti
     }
 }
 
-// The temperature only with the electrothermal model (Unit 23), which alone reads it.
+// The temperature only with the electrothermal model (Unit 23), which alone reads it; the carrier
+// temperatures only with energy balance (Unit 52), likewise.
 void initial_state(Digest& d, const results::NodeFields* initial, bool densities,
-                   bool temperature = false) {
+                   bool temperature = false, bool carrier_temperatures = false) {
     d.integer(initial != nullptr ? 1 : 0);
     if (initial != nullptr) {
         d.reals(initial->potential_V);
@@ -409,6 +424,10 @@ void initial_state(Digest& d, const results::NodeFields* initial, bool densities
             d.reals(initial->p_cm3);
         }
         if (temperature) d.reals(initial->temperature_K);
+        if (carrier_temperatures) {
+            d.reals(initial->electron_temperature_K);
+            d.reals(initial->hole_temperature_K);
+        }
     }
 }
 
@@ -424,7 +443,8 @@ results::RunRecord make_run_record(const device::Device& device, const BiasOptio
     for (const auto& p : points) d.reals(p);
     // The quasi-static sweep reads only the potential.
     const bool transport = options.equations == Equations::drift_diffusion;
-    initial_state(d, initial, transport, transport && options.models.electrothermal);
+    initial_state(d, initial, transport, transport && options.models.electrothermal,
+                  transport && options.models.energy_balance);
     return {d.value(), named, provenance(), mesh::graph_digest(device.mesh())};
 }
 
@@ -453,7 +473,7 @@ results::RunRecord make_run_record(const device::Device& device, const Transient
         d.integer(static_cast<std::uint64_t>(w.kind()));
         d.reals(w.parameters());
     }
-    initial_state(d, initial, true);
+    initial_state(d, initial, true, false, options.steady.models.energy_balance);
     return {d.value(), named, provenance(), mesh::graph_digest(device.mesh())};
 }
 
@@ -474,7 +494,9 @@ results::RunRecord make_run_record(const device::Device& device,
     for (const auto& p : points) d.reals(p);
     d.reals(options.frequencies_Hz);
     d.reals(options.field_frequencies_Hz);
-    initial_state(d, initial, options.steady.equations == Equations::drift_diffusion);
+    const bool transport = options.steady.equations == Equations::drift_diffusion;
+    initial_state(d, initial, transport, false,
+                  transport && options.steady.models.energy_balance);
     return {d.value(), named, provenance(), mesh::graph_digest(device.mesh())};
 }
 
@@ -492,7 +514,7 @@ results::RunRecord make_run_record(const device::Device& device, const TraceOpti
     named.emplace_back("trace.density_floor_cm3", options.density_floor_cm3);
     device_and_settings(d, device, options.steady, named);
     d.reals(options.start_V);
-    initial_state(d, initial, true);
+    initial_state(d, initial, true, false, options.steady.models.energy_balance);
     return {d.value(), named, provenance(), mesh::graph_digest(device.mesh())};
 }
 

@@ -12,8 +12,13 @@ std::shared_ptr<const DriftDiffusion::Composition> DriftDiffusion::Composition::
     // the temperature rise last (node-interleaved; insulator nodes keep their n and p, held at
     // 0, DECISIONS.md FD5).
     const Field fields[] = {potential_field, electron_field, hole_field, temperature_field};
-    c->dofs_ = DofMap::node_interleaved(std::span(fields).first(models.electrothermal ? 4 : 3),
-                                        s.node_count());
+    // With energy balance (Unit 52) the carrier temperature rises instead, tau_n then tau_p.
+    const Field energy[] = {potential_field, electron_field, hole_field,
+                            electron_temperature_field, hole_temperature_field};
+    c->dofs_ = models.energy_balance
+                   ? DofMap::node_interleaved(energy, s.node_count())
+                   : DofMap::node_interleaved(std::span(fields).first(models.electrothermal ? 4 : 3),
+                                              s.node_count());
     for (const CompositionEntry& e :
          models.electrothermal ? Terms::thermal_table() : Terms::isothermal_table()) {
         if (!e.active(s, models)) continue;

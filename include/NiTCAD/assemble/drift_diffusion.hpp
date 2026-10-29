@@ -296,6 +296,44 @@ public:
 
     // Electrothermal (Unit 23; see the header comment). Whether the model is on.
     [[nodiscard]] bool electrothermal() const noexcept { return m_ == 4; }
+    // Energy balance (Unit 52, models.energy_balance): tau_n and tau_p are the fourth and fifth
+    // unknowns of every node.
+    [[nodiscard]] bool energy_balance() const noexcept { return energy_balance_; }
+    // The carriers' energy budget of state x (Unit 52, EC7 as ruled 2026-10-29), in the units of
+    // electrical_power (k T_L per scaled particle flux): in a steady state
+    //     input = relaxation + recombination + contact_flux + contact_joule - peltier + residual
+    // to rounding, summed over the semiconductor nodes off the ohmic contacts:
+    // - input: sum_c V_c I_c (electrical_power);
+    // - relaxation: V k (3/2) (n tau_n / tau_wn + p tau_p / tau_wp), the power to the lattice;
+    // - recombination: V k U (E_c - E_v + (3/2)(theta_n + theta_p)), each recombined pair's gap
+    //   and thermal energy (U the continuity rows' net rate);
+    // - contact_flux: the energy flux the edges carry into the ohmic contact nodes (where tau = 0);
+    // - contact_joule: the half of the Joule heat of the contact edges no energy row keeps;
+    // - peltier: sum over the contact nodes of the carriers' band-edge energy above their Fermi
+    //   level times their flow into the device, (E_c + V) D_n + (E_v + V) D_p;
+    // - residual: the Newton residual's power, sum of the energy rows' residuals and of E_c and
+    //   E_v times the continuity rows' (zero for an exact solution).
+    // After a time step (Unit 52, EC13) the balance is the step's: input is the conduction
+    // power, recombination counts the rates alone, and two terms store energy:
+    //     input = ... + residual + thermal_storage + carrier_storage
+    // - thermal_storage: V rate (W_n + W_p - their history), the carriers' thermal energy (ED9);
+    // - carrier_storage: V rate (E_c (S_n - c_n) - E_v (S_p - c_p)), the band-edge energy of the
+    //   carriers stored (the continuity rows' storage terms, at the step's band edges).
+    // Both are 0 without a step. Preconditions (NITCAD_EXPECTS): the model is on and the
+    // temperatures are not held; x has unknowns() entries; step's spans of evaluate's sizes.
+    struct EnergyPowers {
+        double input, relaxation, recombination, contact_flux, contact_joule, peltier, residual;
+        double thermal_storage = 0.0, carrier_storage = 0.0;
+    };
+    [[nodiscard]] EnergyPowers energy_powers(std::span<const double> x,
+                                             const TimeStep* step = nullptr) const;
+    // The two-stage start of a bias point (Unit 52, ED12 as ruled 2026-10-29): hold_temperatures
+    // makes every energy row tau - tau_held = 0, tau_held the rises of state x (so psi, n and p are
+    // solved at the given carrier temperatures), until release_temperatures. Precondition
+    // (NITCAD_EXPECTS): the model is on; x has unknowns() entries.
+    void hold_temperatures(std::span<const double> x);
+    void release_temperatures() noexcept { held_.clear(); }
+    [[nodiscard]] bool temperatures_held() const noexcept { return !held_.empty(); }
     // The temperature of each thermal contact in K (isothermal: its own; resistance: the ambient
     // behind it), in the order of device.thermal_contacts(); initially the device's values.
     // Errors (invalid_input, the index the thermal contact, the value it): the size is not the
@@ -322,7 +360,8 @@ public:
     // With a time step, the heat rows' storage terms are in the balance.
     [[nodiscard]] std::vector<double> thermal_contact_heat(std::span<const double> x,
                                                            const TimeStep* step = nullptr) const;
-    // The power the ohmic contacts deliver, sum_c V_c I_c, in the same units.
+    // The power the ohmic contacts deliver, sum_c V_c I_c, in the same units (also with energy
+    // balance, Unit 52).
     [[nodiscard]] double electrical_power(std::span<const double> x) const;
     // The Joule part of each carrier edge's heat (Jn, Jp), in the same units: each flux times the
     // drop of its quasi-Fermi level along it, theta_e (ln(w_b / w_a) - delta_n) for electrons and
@@ -355,8 +394,9 @@ public:
     // A BDF time step (see the header comment): rate = 1 / (beta h), h in units of time_scale();
     // storage holds c_n and c_p of every node (storage_width() node_count() entries, node i from
     // storage_width() i; read only off the contacts and insulators), and with the electrothermal
-    // model c of the rise tau third (read off the isothermal sinks); traps c of every trap slot
-    // (trap_slots() entries).
+    // model c of the rise tau third (read off the isothermal sinks), with energy balance c of the
+    // carriers' thermal energies W_n and W_p third and fourth (Unit 52, ED9); traps c of every
+    // trap slot (trap_slots() entries).
     struct TimeStep {
         double rate;
         std::span<const double> storage;
@@ -372,7 +412,7 @@ public:
     void residual(std::span<const double> x, const TimeStep& step,
                   std::span<double> residual) const;
     // (S_n, S_p) of every node at state x, scaled (0 on insulator nodes), with the electrothermal
-    // model (S_n, S_p, tau).
+    // model (S_n, S_p, tau), with energy balance (S_n, S_p, W_n, W_p).
     [[nodiscard]] std::vector<double> storage(std::span<const double> x) const;
     [[nodiscard]] std::size_t storage_width() const noexcept { return m_ - 1; }
     // The occupancy f of every trap slot at state x: after `step`, or without one the steady
@@ -566,11 +606,12 @@ private:
 
     // Lombardi (Unit 46): one node j of an edge's E_perp stencil, v = sum_j g_j psi_j [V/cm per
     // scaled psi], and the Jacobian positions of psi_j's column in the rows (electron, hole,
-    // heat) of end a ([0]) and end b ([1]); the heat rows' only with the electrothermal model.
+    // heat) of end a ([0]) and end b ([1]); the heat rows' only with the electrothermal model;
+    // with energy balance (Unit 52) the rows electron, hole, tau_n and tau_p.
     struct SurfaceStencil {
         std::size_t node;
         double g[3];
-        std::size_t pos[2][3];
+        std::size_t pos[2][4];
     };
     // An edge's E_perp [V/cm] at a state and v, the part of its field normal to it.
     struct SurfaceField {
@@ -608,6 +649,13 @@ private:
     };
     [[nodiscard]] NodeStorage node_storage(std::size_t i, std::span<const double> x,
                                            std::span<const NodeDegeneracy> g) const;
+    // Energy balance (Unit 52, ED9): the thermal energy the carriers of a semiconductor node store
+    // per volume, W = (3/2) c theta g in units of k T_L Ns (g = F_{3/2} / F_{1/2} at c theta^(-3/2)
+    // with Fermi-Dirac, 1 with Boltzmann), and its partials in the density and the rise.
+    struct EnergyStorage {
+        double n, n_c, n_t, p, p_c, p_t;
+    };
+    [[nodiscard]] EnergyStorage energy_storage(std::size_t i, std::span<const double> x) const;
     // The trap step of interface edge k, or nullptr without a step.
     [[nodiscard]] std::optional<TrapStep> trap_step(std::size_t k, const TimeStep* step) const;
     // The interface of edge k at state x.
@@ -627,6 +675,10 @@ private:
         physics::ImpactIonizationCoefficients n, p;
         double gamma;  // the temperature factor of the node's material
         double phonon_eV;  // its optical-phonon energy (gamma at the node's T, electrothermal)
+        // Energy balance (Unit 52, ED6): the node's low-field mobilities [cm^2/(V s)] and Canali
+        // parameters, for E_eff(T) at the node.
+        double mu_n, mu_p;
+        physics::CanaliParameters sat_n, sat_p;
     };
     struct ImpactEdge {
         std::size_t edge;
@@ -923,6 +975,33 @@ private:
     bool ionization_ = false;
     bool radiative_on_ = true;
     linalg::SparseMatrix pattern_;
+
+    // Energy balance (Unit 52; energy_balance.cpp). Per node the energy relaxation times [s] (0
+    // off the semiconductor); per mesh edge (parallel to edges_) those of its ends and the
+    // positions of its full 5 x 5 blocks, row a with the columns of b (ab) and row b with a's (ba).
+    bool energy_balance_ = false;
+    std::vector<double> relax_n_, relax_p_;
+    std::vector<double> held_;  // hold_temperatures: tau_n, tau_p per node (empty: not held)
+    struct EnergyEdge {
+        std::size_t ab[25], ba[25];
+    };
+    std::vector<EnergyEdge> energy_edges_;
+    // One carrier's particle flux on an edge (the continuity rows' quantity, edge_fluxes' sign)
+    // and its energy flux into end a [k T_L units], each with partials in psi, the density and
+    // the temperature rise of ends a ([0]) and b ([1]); delta the edge's driving term (the band
+    // edge's drop from b to a in k T_L, sign as the flux's), for the Joule term -delta flux / 2.
+    // Lombardi (surface edges): d_perp and e_perp, the fluxes' partials in the edge's E_perp.
+    struct EnergyFlux {
+        double flux, d_psi[2], d_c[2], d_t[2];
+        double energy, e_psi[2], e_c[2], e_t[2];
+        double delta;
+        double d_perp, e_perp;
+    };
+    [[nodiscard]] std::pair<EnergyFlux, EnergyFlux> energy_fluxes(std::size_t k,
+                                                                  std::span<const double> x) const;
+    // Creation of the energy-balance data after the pattern; errors as create's.
+    [[nodiscard]] std::optional<base::Error> make_energy_balance(const device::Device& device,
+                                                                 const PhysicsModels& models);
 };
 
 }  // namespace NiTCAD::assemble

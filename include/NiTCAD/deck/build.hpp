@@ -32,8 +32,8 @@
 //                       (silicon: Couderc et al.'s band set, Unit 35; silicon_legacy: the legacy's)
 //                     <parameter> = <value>   (a material parameter by its C++ member path, e.g.
 //                       eps_r, electron_mobility.mu_max, thermal.conductivity_W_cmK,
-//                       passler_gap.Theta_K; DK7; the density-of-states mass fits are not
-//                       overridable here)
+//                       passler_gap.Theta_K, energy_relaxation.tau_n_s (Unit 52); DK7; the
+//                       density-of-states mass fits are not overridable here)
 //                     tensor meshes: box = <lo hi> per dimension (repeatable; a region without boxes
 //                       is the background, at most one; later regions override earlier ones, DK8)
 //                     generate2d: polygon = <x y>, ... (repeatable)
@@ -63,6 +63,7 @@
 //                     surface_mobility = off | lombardi  (Unit 46; opt-in)
 //                     quantum_confinement = off | mlda  (Unit 47; opt-in); mlda_mass_n,
 //                       mlda_mass_p = <m / m0>  (defaults 0.98, 0.49)
+//                     energy_balance = on | off  (Unit 52; opt-in: carrier temperatures)
 //                     ionization_levels = fixed | altermatt  (Unit 37; with incomplete_ionization)
 //   [solver]          equations = drift_diffusion | equilibrium_poisson; max_iterations; tol_update;
 //                     max_update; line_search = off | residual | natural; line_search.max_backtracks;

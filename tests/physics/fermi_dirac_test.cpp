@@ -207,3 +207,71 @@ TEST_CASE("Fermi-Dirac: a NaN argument gives NaN") {
 }
 
 
+
+// F_{3/2} (Unit 52, DECISIONS.md ED8; EC2: within 1e-14 relative over eta in [-40, 60]).
+
+TEST_CASE("Fermi-Dirac: the F_3/2 reference methods agree with each other and the closed form") {
+    for (const double eta : {-12.5, -5.0, -2.000001, -1.2345, -1.0001}) {
+        CAPTURE(eta);
+        const reference::DD s = reference::fermi_three_halves_series(eta);
+        const reference::DD q = reference::fermi_three_halves_quadrature(eta);
+        REQUIRE(std::abs((s - q).value()) <= 1e-26 * std::abs(s.value()));
+    }
+    // F_{3/2}(0) = (1 - 2^(-3/2)) zeta(5/2).
+    const reference::DD f0 =
+        (reference::DD(1.0) - reference::DD(1.0) / (reference::DD(2.0) * reference::sqrt(2.0))) *
+        reference::zeta(2.5);
+    REQUIRE(std::abs((reference::fermi_three_halves(0.0) - f0).value()) <= 1e-26);
+}
+
+TEST_CASE("Fermi-Dirac: F_3/2 and its derivative against double-double references") {
+    double worst_value = 0.0, worst_derivative = 0.0;
+    for (const double eta : points) {
+        CAPTURE(eta);
+        const double f32 = reference::fermi_three_halves(eta).value();
+        const double f12 = reference::fermi_half(eta).value();
+        const FermiIntegral f = fermi_three_halves(eta);
+        worst_value = std::max(worst_value, relative(f.value, f32));
+        worst_derivative = std::max(worst_derivative, relative(f.derivative, f12));
+        if (eta >= -40.0 && eta <= 60.0) REQUIRE(relative(f.value, f32) <= 1e-14);
+        REQUIRE(relative(f.value, f32) <= 2e-14);
+        // The derivative is the interpolant's own, as fermi_half's.
+        REQUIRE(relative(f.derivative, f12) <= (eta <= 15.0 ? 2e-13 : 5e-12));
+    }
+    UNSCOPED_INFO("worst relative error: F_3/2 " << worst_value << ", F_1/2 " << worst_derivative);
+}
+
+TEST_CASE("Fermi-Dirac: F_3/2's derivative is that of its value, continuous through the joins") {
+    double worst = 0.0;
+    for (double eta = -30.0; eta <= 120.0; eta += 0.0731) {
+        for (const double at : {eta, -2.0 + 1e-7 * eta, 40.0 + 1e-7 * eta}) {
+            const double h = 1e-4;
+            const double fd =
+                (fermi_three_halves(at + h).value - fermi_three_halves(at - h).value) / (2.0 * h);
+            const double error = relative(fd, fermi_three_halves(at).derivative);
+            worst = std::max(worst, error);
+            CAPTURE(at);
+            REQUIRE(error <= 1e-8);
+        }
+    }
+    UNSCOPED_INFO("worst derivative mismatch " << worst);
+    for (const double join : {-2.0, 40.0}) {
+        CAPTURE(join);
+        const double below = std::nextafter(join, -1e9), above = std::nextafter(join, 1e9);
+        const LogDegeneracy a = log_degeneracy_three_halves(below);
+        const LogDegeneracy b = log_degeneracy_three_halves(above);
+        REQUIRE(std::abs(a.value - b.value) <= 4.0 * eps * std::max(1.0, std::abs(join)));
+        // Measured 7.8e-16 at -2: the rounding of the quadratures' F_{1/2} / F_{3/2} in the table.
+        REQUIRE(std::abs(a.d_eta - b.d_eta) <= 1e-15);
+    }
+    // ln gamma_{3/2} is consistent with the value, and F_{3/2} -> e^eta.
+    for (const double eta : {-40.0, -5.0, 0.0, 3.3, 39.9, 41.0}) {
+        CAPTURE(eta);
+        const LogDegeneracy L = log_degeneracy_three_halves(eta);
+        const FermiIntegral f = fermi_three_halves(eta);
+        REQUIRE(std::abs(L.value - (std::log(f.value) - eta)) <= 1e-14 * std::max(1.0, eta));
+        REQUIRE(std::abs((1.0 + L.d_eta) * f.value - f.derivative) <= 1e-15 * f.derivative);
+    }
+    REQUIRE(relative(fermi_three_halves(-40.0).value, std::exp(-40.0)) <= 2e-16);
+    REQUIRE(std::isnan(fermi_three_halves(std::numeric_limits<double>::quiet_NaN()).value));
+}

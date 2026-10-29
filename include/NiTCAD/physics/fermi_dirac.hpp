@@ -50,6 +50,17 @@ struct LogDegeneracy {
 // ln gamma(eta) and its derivative, finite for every finite eta. A NaN eta gives NaN.
 [[nodiscard]] LogDegeneracy log_degeneracy(double eta) noexcept;
 
+// F_{3/2} (Unit 52; the energy-balance model's pressure and energy flux under Fermi-Dirac
+// statistics, DECISIONS.md ED8), normalized the same way (F_{3/2} -> e^eta, dF_{3/2}/deta =
+// F_{1/2}), by the same three pieces: the series below -2, a quintic Hermite table of
+// ln gamma_{3/2} = ln F_{3/2} - eta on (-2, 40], built on first use, and Sommerfeld above. The
+// derivative returned is that of the function evaluated (an F_{1/2} consistent with it, not
+// fermi_half's). Accuracy measured in tests/physics/fermi_dirac_test.cpp.
+[[nodiscard]] FermiIntegral fermi_three_halves(double eta) noexcept;
+
+// ln gamma_{3/2}(eta) = ln F_{3/2}(eta) - eta and its derivative F_{1/2} / F_{3/2} - 1.
+[[nodiscard]] LogDegeneracy log_degeneracy_three_halves(double eta) noexcept;
+
 // The eta with F_{1/2}(eta) = nu (of the function above, to rounding). Safeguarded Newton on
 // ln F_{1/2}(eta) = ln nu, typically 2-5 evaluations. Precondition (NITCAD_EXPECTS): nu is finite
 // and positive.

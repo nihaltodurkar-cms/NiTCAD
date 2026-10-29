@@ -21,6 +21,10 @@ struct NodeFields {
     // device's uniform temperature). In an initial state, empty starts every node at the device's
     // reference temperature.
     std::vector<double> temperature_K;
+    // The electron and hole temperatures in K with the energy-balance model (Unit 52); empty
+    // without it. In an initial state, empty starts every node at the lattice temperature.
+    std::vector<double> electron_temperature_K;
+    std::vector<double> hole_temperature_K;
 };
 
 // Per mesh node, the band diagram in eV, measured from the equilibrium Fermi level (the Fermi level

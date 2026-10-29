@@ -81,6 +81,10 @@ std::expected<results::SmallSignal, base::Error> solve_small_signal_unobserved(
     const std::size_t m = slot.block;
     const bool thermal = steady.models.electrothermal;
     const double T0 = scaling->temperature_K;
+    const bool energy = system->energy_balance();  // Unit 52: the carrier temperatures' slots
+    const std::size_t rise_n =
+        system->dofs().slot(assemble::FieldId::electron_temperature).value_or(0);
+    const std::size_t rise_p = system->dofs().slot(assemble::FieldId::hole_temperature).value_or(0);
 
     results::SmallSignal run;
     run.run = make_run_record(device, options, points, initial);
@@ -190,13 +194,17 @@ std::expected<results::SmallSignal, base::Error> solve_small_signal_unobserved(
             if (std::ranges::find(options.field_frequencies_Hz, frequencies[k]) !=
                 options.field_frequencies_Hz.end()) {
                 for (std::size_t j = 0; j < contacts; ++j) {
-                    results::SmallSignalFields fields{frequencies[k], j, {}, {}, {}, {}};
+                    results::SmallSignalFields fields{frequencies[k], j, {}, {}, {}, {}, {}, {}};
                     for (std::size_t i = 0; i < nodes; ++i) {
                         const std::span<const Complex> r(response[j].data() + m * i, m);
                         fields.potential.push_back(r[slot.potential] * scaling->V_T);
                         fields.n_cm3.push_back(r[slot.electrons] * scaling->Ns);
                         fields.p_cm3.push_back(r[slot.holes] * scaling->Ns);
                         if (thermal) fields.temperature_K.push_back(r[slot.temperature] * T0);
+                        if (energy) {  // Unit 52: T = T_L (1 + tau) per carrier
+                            fields.electron_temperature_K.push_back(r[rise_n] * T0);
+                            fields.hole_temperature_K.push_back(r[rise_p] * T0);
+                        }
                     }
                     point.fields.push_back(std::move(fields));
                 }

@@ -6,6 +6,7 @@
 #include <cmath>
 #include <cstdio>
 #include <filesystem>
+#include <memory>
 #include <string>
 #include <utility>
 #include <vector>
@@ -102,6 +103,20 @@ TEST_CASE("app views: names, and the views and fields a workspace offers", "[app
     const auto fields = app::available_fields(mosfet().workspace);
     for (const char* f : {"potential", "n", "p", "Ec", "doping", "R", "srh", "E", "J"}) CHECK(has(fields, f));
     CHECK_FALSE(has(fields, "Gii"));  // impact ionization is off: no rate stored for it
+    // Unit 52 (EC16): the carrier temperatures only in a result that has them (energy balance).
+    CHECK_FALSE(has(fields, "Tn"));
+    CHECK_FALSE(has(fields, "Tp"));
+    {
+        app::Workspace hot;  // the transistor's device and points, its last point heated
+        hot.device = std::make_unique<device::Device>(*mosfet().workspace.device);
+        hot.points = mosfet().workspace.points;
+        const std::size_t nodes = hot.device->mesh().node_count();
+        hot.points.back().fields.electron_temperature_K.assign(nodes, 450.0);
+        hot.points.back().fields.hole_temperature_K.assign(nodes, 310.0);
+        const auto with = app::available_fields(hot);
+        CHECK(has(with, "Tn"));
+        CHECK(has(with, "Tp"));
+    }
     // Before a run: the doping only.
     const fs::path dir = app_test::scratch("views_unrun");
     auto unrun = app::workspace_from_deck(app_test::write(dir, "d.deck", app_test::mosfet2d));

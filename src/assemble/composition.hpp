@@ -40,6 +40,7 @@ enum class EquationSet : unsigned {
     interfaces = 1u << 5,  // declared interfaces: charge, traps, surface recombination
     generation = 1u << 6,  // impact ionization, band-to-band tunnelling
     heat = 1u << 7,        // the lattice heat equation and its thermal contacts
+    energy = 1u << 8,      // the carriers' energy-balance equations (Unit 52)
 };
 using EquationSets = unsigned;
 // One set as a bit set.

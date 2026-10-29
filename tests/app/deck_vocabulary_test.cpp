@@ -286,7 +286,7 @@ TEST_CASE("app vocabulary: every key deck/build.hpp names that deck::build takes
     REQUIRE(words.size() == app::deck_vocabulary().size());
     // A region's material parameters by member path are open-ended and not completed (XD3).
     const std::set<std::string> parameters{"eps_r", "electron_mobility.mu_max", "thermal.conductivity_W_cmK",
-                                           "passler_gap.Theta_K"};
+                                           "passler_gap.Theta_K", "energy_relaxation.tau_n_s"};
     int taken = 0;
     for (const auto& [section, list] : words) {
         const app::SectionInfo* s = app::find_section_info(section);

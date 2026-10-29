@@ -508,6 +508,49 @@ TEST_CASE("deck build: surface_mobility (Unit 46, LD1)", "[deck]") {
               "surface_mobility is off or lombardi") != std::string::npos);
 }
 
+TEST_CASE("deck build: energy_balance, the relaxation times and the run record (Unit 52, EC16)", "[deck]") {
+    CHECK_FALSE(must(diode_deck).options.models.energy_balance);
+    const deck::Plan on = must(diode_deck + "[models]\nenergy_balance = on\n");
+    CHECK(on.options.models.energy_balance);
+    // Each region's relaxation times by their member paths (ED5: deck overridable per region).
+    std::string tau = diode_deck;
+    tau.replace(tau.find("material = silicon"), 18,
+                "material = silicon\nenergy_relaxation.tau_n_s = 0.3e-12\nenergy_relaxation.tau_p_s = 0.45e-12");
+    const deck::Plan given = must(tau + "[models]\nenergy_balance = on\n");
+    const auto& e =
+        std::get<physics::Semiconductor>(given.device.regions()[0].material).parameters().energy_relaxation;
+    CHECK(e.tau_n_s == 0.3e-12);
+    CHECK(e.tau_p_s == 0.45e-12);
+    CHECK(failure(tau + "[models]\nenergy_balance = maybe\n").find("'maybe' is not on or off") != std::string::npos);
+    std::string negative = diode_deck;
+    negative.replace(negative.find("material = silicon"), 18,
+                     "material = silicon\nenergy_relaxation.tau_n_s = -1e-12");
+    CHECK(failure(negative).find("tau_n_s") != std::string::npos);
+    // The run record names the model, and its identity reads the relaxation times only when on.
+    const auto record = [](const deck::Plan& p) {
+        return solve::make_run_record(p.device, p.options, p.points);
+    };
+    const auto named = [](const results::RunRecord& r) {
+        return std::ranges::any_of(r.settings,
+                                   [](const auto& s) { return s.first == "models.energy_balance"; });
+    };
+    const deck::Plan off = must(diode_deck);
+    const deck::Plan given_off = must(tau);
+    CHECK(named(record(on)));
+    CHECK_FALSE(named(record(off)));
+    CHECK(record(on).input_identity != record(off).input_identity);
+    CHECK(record(given).input_identity != record(on).input_identity);
+    CHECK(record(given_off).input_identity == record(off).input_identity);
+    // Each carrier's time on its own (EC17: a digest of tau_p twice survived the checks above).
+    for (const char* other : {"energy_relaxation.tau_n_s = 0.31e-12\nenergy_relaxation.tau_p_s = 0.45e-12",
+                              "energy_relaxation.tau_n_s = 0.3e-12\nenergy_relaxation.tau_p_s = 0.46e-12"}) {
+        std::string changed = diode_deck;
+        changed.replace(changed.find("material = silicon"), 18, std::string("material = silicon\n") + other);
+        CAPTURE(other);
+        CHECK(record(must(changed + "[models]\nenergy_balance = on\n")).input_identity != record(given).input_identity);
+    }
+}
+
 TEST_CASE("deck build: the GMRES-ILUT keys and their run record (Unit 44, LG5)", "[deck]") {
     const std::string solver = R"(
 [solver]
