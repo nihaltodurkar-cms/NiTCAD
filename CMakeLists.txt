@@ -225,7 +225,8 @@ add_library(nitcad_physics STATIC
   src/physics/thermal.cpp
   src/physics/surface_mobility.cpp
   src/physics/quantum_confinement.cpp
-  src/physics/gate_tunnelling.cpp)
+  src/physics/gate_tunnelling.cpp
+  src/physics/energy_balance.cpp)
 add_library(NiTCAD::physics ALIAS nitcad_physics)
 target_include_directories(nitcad_physics PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
 target_link_libraries(nitcad_physics PUBLIC NiTCAD::base)
@@ -248,7 +249,8 @@ add_executable(nitcad_physics_test
   tests/physics/masetti_test.cpp
   tests/physics/band_set_test.cpp
   tests/physics/ionization_density_test.cpp
-  tests/physics/gate_tunnelling_test.cpp)
+  tests/physics/gate_tunnelling_test.cpp
+  tests/physics/energy_balance_test.cpp)
 target_link_libraries(nitcad_physics_test PRIVATE NiTCAD::physics Catch2::Catch2WithMain)
 add_test(NAME physics COMMAND nitcad_physics_test)
 

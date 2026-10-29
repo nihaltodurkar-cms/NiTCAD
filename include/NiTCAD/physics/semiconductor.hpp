@@ -165,6 +165,16 @@ struct DensityOfStatesMassParameters {
     bool operator==(const DensityOfStatesMassParameters&) const = default;
 };
 
+// Energy relaxation times of the energy-balance model (Unit 52; energy_balance.hpp; DECISIONS.md
+// ED5) [s], constant. 0 (the default): not given; the model then takes silicon's cited values in
+// a region with silicon's mobility and refuses any other.
+struct EnergyRelaxationParameters {
+    double tau_n_s = 0.0;
+    double tau_p_s = 0.0;
+
+    bool operator==(const EnergyRelaxationParameters&) const = default;
+};
+
 struct SemiconductorParameters {
     double eps_r;                   // relative permittivity
     double Eg0_eV;                  // band gap at 0 K
@@ -188,6 +198,7 @@ struct SemiconductorParameters {
     ThermalParameters thermal{};                      // Unit 23; conductivity 0: none
     PasslerGapParameters passler_gap{};               // Unit 35; alpha 0: Varshni
     DensityOfStatesMassParameters dos_mass{};         // Unit 35; all 0: (T / 300)^(3/2)
+    EnergyRelaxationParameters energy_relaxation{};   // Unit 52; 0: not given
 
     bool operator==(const SemiconductorParameters&) const = default;
 };

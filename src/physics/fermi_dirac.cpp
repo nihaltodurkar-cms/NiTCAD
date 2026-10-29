@@ -178,9 +178,9 @@ const Table& table() {
     return t;
 }
 
-// -2 < eta <= 40: quintic Hermite interpolation on the cell holding eta.
-Core interpolate(double eta) {
-    const Table& t = table();
+// -2 < eta <= 40: quintic Hermite interpolation on the cell holding eta, in table t (ln gamma of
+// F_{1/2}, or of F_{3/2} below).
+Core interpolate(const Table& t, double eta) {
     const double position = (eta - series_limit) / step;
     const auto i = std::min(static_cast<std::size_t>(position), table_size - 2);
     const double u = (eta - (series_limit + static_cast<double>(i) * step)) / step;
@@ -206,8 +206,118 @@ Core interpolate(double eta) {
 
 Core core(double eta) {
     if (eta <= series_limit) return series(eta);
-    if (eta <= table_limit) return interpolate(eta);
+    if (eta <= table_limit) return interpolate(table(), eta);
     if (eta > table_limit) return sommerfeld(eta);
+    constexpr double nan = std::numeric_limits<double>::quiet_NaN();
+    return {nan, nan, nan};
+}
+
+// F_{3/2} (Unit 52, DECISIONS.md ED8), the same three pieces for gamma_{3/2} = F_{3/2} / e^eta,
+// whose derivative is F_{1/2} / F_{3/2} - 1.
+
+// eta <= -2: F_{3/2} = x S2 and F_{1/2} = x S1, S2 = sum (-1)^(k+1) x^(k-1) / k^(5/2):
+// ln gamma = log1p(S2 - 1), d ln gamma = (S1 - S2) / S2.
+Core series_three_halves(double eta) {
+    const double x = std::exp(eta);
+    double tail2 = 0.0, tail12 = 0.0;  // S2 - 1 and S1 - S2
+    double power = 1.0, sign = 1.0;
+    for (int k = 2; k <= 60; ++k) {
+        power *= x;
+        sign = -sign;
+        const double root = std::sqrt(static_cast<double>(k));
+        const double k32 = 1.0 / (k * root);
+        const double k52 = k32 / k;
+        tail2 += sign * power * k52;
+        tail12 += sign * power * (k32 - k52);
+        if (!(power > 1e-17 * x)) break;
+    }
+    const double log_gamma = std::log1p(tail2);
+    return {eta + log_gamma, log_gamma, tail12 / (1.0 + tail2)};
+}
+
+// eta > 40: F_{3/2} = B eta^(5/2) S, B = 8 / (15 sqrt(pi)), S = 1 + sum_k c'_k u^k with
+// c'_k = c_k (5/2) / (5/2 - 2k) (the product in c_k runs over 5/2 - m instead of 3/2 - m);
+// F_{1/2} = B eta^(3/2) (5/2 S - sum 2k c'_k u^k).
+Core sommerfeld_three_halves(double eta) {
+    static constexpr std::array<double, 10> c{
+        1.233700550136169827354,   1.065411933184401657274,  9.701518554959126805969,
+        242.715048146678318261,    11865.69174544562355668,  958843.3951441106180105,
+        115801357.4749065758053,   19542370099.72680073539,  4392197855056.560499082,
+        1268250756252705.624397};
+    const double B = 8.0 / 15.0 * std::numbers::inv_sqrtpi;
+    const double u = 1.0 / (eta * eta);
+    double S = 0.0, D = 0.0;
+    for (std::size_t k = c.size(); k-- > 0;) {
+        const double kk = static_cast<double>(k + 1);
+        const double ck = c[k] * 2.5 / (2.5 - 2.0 * kk);
+        S = (S + ck) * u;
+        D = (D + 2.0 * kk * ck) * u;
+    }
+    S += 1.0;
+    const double log_f = std::log(B) + 2.5 * std::log(eta) + std::log(S);
+    return {log_f, log_f - eta, (2.5 * S - D) / (eta * S) - 1.0};
+}
+
+// The table of ln gamma_{3/2}: value ln F_{3/2} - eta, slope F_{1/2} / F_{3/2} - 1, curvature
+// F_{-1/2} / F_{3/2} - (F_{1/2} / F_{3/2})^2, by the quadratures of build_table with
+// F_{3/2} = (4 / (3 sqrt(pi))) Integral t^(3/2) s dt added.
+Table build_table_three_halves() {
+    const Rule rule = gauss_legendre();
+    constexpr double rpi = std::numbers::inv_sqrtpi;
+    const auto fermi = [](double x) {
+        const double e = std::exp(-std::abs(x));
+        const double d = 1.0 / (1.0 + e);
+        return x > 0.0 ? e * d : d;
+    };
+    Table t;
+    t.value.resize(table_size);
+    t.slope.resize(table_size);
+    t.curvature.resize(table_size);
+    for (std::size_t i = 0; i < table_size; ++i) {
+        const double eta = series_limit + static_cast<double>(i) * step;
+        Sum f32, f12, fm12;
+        for (std::size_t q = 0; q < rule.x.size(); ++q) {  // t = sigma^2, sigma in [0, 1]
+            const double sigma = 0.5 * (1.0 + rule.x[q]);
+            const double w = 0.5 * rule.w[q];
+            const double s = fermi(sigma * sigma - eta);
+            const double s2 = sigma * sigma;
+            f32.add(w * 8.0 / 3.0 * rpi * s2 * s2 * s);
+            f12.add(w * 4.0 * rpi * s2 * s);
+            fm12.add(w * 2.0 * rpi * s);
+        }
+        const double t_max = std::max(eta, 0.0) + 40.0;
+        const int panels = static_cast<int>(std::ceil((t_max - 1.0) / 2.0));
+        const double width = (t_max - 1.0) / panels;
+        for (int k = 0; k < panels; ++k) {
+            const double mid = 1.0 + (k + 0.5) * width;
+            for (std::size_t q = 0; q < rule.x.size(); ++q) {
+                const double tt = mid + 0.5 * width * rule.x[q];
+                const double w = 0.5 * width * rule.w[q];
+                const double root = std::sqrt(tt);
+                const double s = fermi(tt - eta);
+                f32.add(w * 4.0 / 3.0 * rpi * tt * root * s);
+                f12.add(w * 2.0 * rpi * root * s);
+                fm12.add(w * rpi * s / root);
+            }
+        }
+        const double f = f32.value();
+        const double r1 = f12.value() / f;
+        t.value[i] = std::log(f) - eta;
+        t.slope[i] = r1 - 1.0;
+        t.curvature[i] = fm12.value() / f - r1 * r1;
+    }
+    return t;
+}
+
+const Table& table_three_halves() {
+    static const Table t = build_table_three_halves();
+    return t;
+}
+
+Core core_three_halves(double eta) {
+    if (eta <= series_limit) return series_three_halves(eta);
+    if (eta <= table_limit) return interpolate(table_three_halves(), eta);
+    if (eta > table_limit) return sommerfeld_three_halves(eta);
     constexpr double nan = std::numeric_limits<double>::quiet_NaN();
     return {nan, nan, nan};
 }
@@ -225,6 +335,18 @@ FermiIntegral fermi_half(double eta) noexcept {
 
 LogDegeneracy log_degeneracy(double eta) noexcept {
     const Core c = core(eta);
+    return {c.log_gamma, c.d_log_gamma};
+}
+
+FermiIntegral fermi_three_halves(double eta) noexcept {
+    const Core c = core_three_halves(eta);
+    const double value =
+        eta <= table_limit ? std::exp(eta) * std::exp(c.log_gamma) : std::exp(c.log_f);
+    return {value, value * (1.0 + c.d_log_gamma)};
+}
+
+LogDegeneracy log_degeneracy_three_halves(double eta) noexcept {
+    const Core c = core_three_halves(eta);
     return {c.log_gamma, c.d_log_gamma};
 }
 

@@ -4587,6 +4587,20 @@ Release and Debug suites at every commit, `/W4 /WX`, hand mutants, nothing pushe
 **Owner answers (2026-10-29), design and criteria approved:** EQ1 0.35 ps and 0.4 ps (Triebl); EQ2 refused; EQ3
 c = 5/2 (r = 0), not the recommended material r (ED3 and ED8 changed to it before code); EQ4 the five slices.
 
+**Found before code, ruled by the owner (2026-10-29): β = 1.** Exact Canali reproduction makes x = μ₀E_eff/v_sat
+grow like √a near T_L (a ∝ T − T_L), so for β < 2 dμ/dT is infinite at T = T_L and μ is undefined below it (β = 2 is
+analytic through T_L: y = x² = a (a + √(a² + 4))/2). Ruling: regularize. For β ≠ 2, x is exact for a ≥ a₀ = 1e-8
+(about 5 µK of hole heating in silicon), the cubic c₂a² + c₃a³ matching the exact value and slope at a₀ below it, and
+0 for a ≤ 0, so μ is C¹ and equals μ₀ for cooled carriers; β = 2's mobility takes the analytic form everywhere (cooled
+carriers faster, as Hänsch). The effective field takes the regularized x for every β (it feeds only impact
+ionization, zero to all orders there). Measured: the regularization moves silicon holes' mobility by at most
+3.7e-5 μ₀, only below a₀.
+
+**ED5 as built:** `SemiconductorParameters::energy_relaxation` defaults to 0 (not given) and silicon's set does not
+carry it, so device files and run identities without the model are unchanged (EC1); silicon's cited values
+(`physics::silicon_energy_relaxation`) apply to regions with silicon's mobility that give none, as Lombardi's and
+MLDA's silicon checks.
+
 **Questions for the owner before code (proposal's recommended answer first):**
 - EQ1 τ_w for silicon: 0.35 ps / 0.4 ps (Triebl), or another cited pair.
 - EQ2 `field_mobility = on` with energy balance: refused (ED4), or silently replaced by the T-driven law.
