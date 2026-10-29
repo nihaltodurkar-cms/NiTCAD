@@ -97,9 +97,8 @@ std::optional<base::Error> DriftDiffusion::make_energy_balance(const device::Dev
         if (f.transport == device::InterfaceTransport::thermionic_emission) {
             return refuse("energy balance with thermionic interfaces is not supported");
         }
-        // Not in DECISIONS.md ED11 before code (found building slice 2): an interface's charge,
-        // traps and surface recombination act on its edges' carrier fluxes, which take no
-        // carrier temperature yet.
+        // ED11 as amended (ruled 2026-10-29): an interface's charge, traps and surface
+        // recombination act on its edges' carrier fluxes, which take no carrier temperature.
         if (device::has_interface_charge_or_recombination(f)) {
             return refuse("energy balance with interface charge, traps or surface recombination "
                           "is not supported");

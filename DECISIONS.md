@@ -4619,6 +4619,10 @@ could not be met for a reason in the criterion, not the model. The rulings repla
   first-order τ_w heating, since with v_sat = 1e30 the channel's drift velocity is unclamped (T_n − T_L about 4e-4 T_L).
   At τ_w = 1e-20 it is exactly 100× smaller, 1.23e-8 (49 Newton iterations, no substeps). Ruled 2026-10-29: the
   MOSFET half uses τ_w = 1e-20 at 1e-6; the diode stays at 1e-18.
+  **Unresolved currents (ruled 2026-10-29, "Skip below resolution"):** on the gate ramp the source and drain
+  currents lie below drift-diffusion's own `terminal_current_resolution`, so a relative comparison there compares
+  rounding. EC4 compares only currents above the drift-diffusion reference's resolution (EC8's resolution) and
+  prints how many it skipped. Measured: 12 of 42 currents skipped, worst 1.23e-8 over the other 30.
 - **EC8.** The terminal currents' sum is the Newton residual's: on EC4's diode at −0.4 V, 2.1e-10 A/cm² of 4.4e-4
   with energy balance and 1.2e-10 with plain drift-diffusion, against a resolution of 2.3e-7. Ruling:
   |Σ I| ≤ max(1e-10 · largest, terminal_current_resolution).
@@ -4655,9 +4659,10 @@ could not be met for a reason in the criterion, not the model. The rulings repla
     depletion is about 1e7 cm⁻³ and the node relaxes to T_L; neutral regions, where the majority is about the
     doping, are unchanged. Measured: Vd = 0.6 V in 7 coupled iterations (it diverged), and the whole 21-point
     sweep in 80 s with one substep. The floor's partial in the majority is 0 where the doping sets it.
-- **ED11, found building slice 2 (not in the row before code; reported to the owner, not yet ruled):** interface
-  charge, traps and surface recombination are refused with energy balance: they act on their edges' carrier fluxes,
-  which take no carrier temperature.
+- **ED11 amended (found building slice 2, not in the row before code; ruled 2026-10-29, "Refuse, add to ED11"):**
+  interface charge, traps and surface recombination are refused with energy balance (invalid_input): they act on
+  their edges' carrier fluxes, which take no carrier temperature. EC15 tests the refusal with its message; support
+  is a follow-up in ARCHITECTURE 11.3.
 
 **Questions for the owner before code (proposal's recommended answer first):**
 - EQ1 τ_w for silicon: 0.35 ps / 0.4 ps (Triebl), or another cited pair.

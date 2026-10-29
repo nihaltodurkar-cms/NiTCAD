@@ -442,18 +442,24 @@ TEST_CASE("energy balance: the MOSFET's drift-diffusion limit (EC4)", "[.mosfet]
                                            options(true));
     const results::Sweep dd = mosfet_sweep(mosfet(6e-5), options(false));
     double worst = 0.0;
+    std::size_t skipped = 0;
     for (std::size_t k = 0; k < eb.points.size(); ++k) {
         conserved(eb.points[k]);
         for (const std::size_t c : {std::size_t{0}, std::size_t{1}}) {  // source, drain
             const double a = eb.points[k].terminal_current[c], b = dd.points[k].terminal_current[c];
-            // A current below drift-diffusion's resolution (the gate ramp's) is not resolved.
-            if (std::abs(b) <= dd.points[k].terminal_current_resolution[c]) continue;
+            // A current below drift-diffusion's resolution (the gate ramp's) is not resolved and
+            // is skipped (ruled 2026-10-29).
+            if (std::abs(b) <= dd.points[k].terminal_current_resolution[c]) {
+                ++skipped;
+                continue;
+            }
             CAPTURE(k, c, a, b);
             worst = std::max(worst, std::abs(a - b) / std::abs(b));
             REQUIRE(std::abs(a - b) <= 1e-6 * std::abs(b));
         }
     }
-    std::printf("EC4 MOSFET: worst relative difference %.3e\n", worst);
+    std::printf("EC4 MOSFET: worst relative difference %.3e, %zu of %zu currents unresolved (skipped)\n",
+                worst, skipped, 2 * eb.points.size());
 }
 
 TEST_CASE("energy balance: MOSFET channel length (EC11)", "[.mosfet]") {
