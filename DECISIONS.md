@@ -4601,6 +4601,64 @@ carry it, so device files and run identities without the model are unchanged (EC
 (`physics::silicon_energy_relaxation`) apply to regions with silicon's mobility that give none, as Lombardi's and
 MLDA's silicon checks.
 
+**Criteria defects found building slice 2, ruled by the owner (2026-10-29).** Measured first; each criterion as written
+could not be met for a reason in the criterion, not the model. The rulings replace the rows above where they differ.
+- **EC3 at 1e5 V/cm.** The middle third of a 3 µm resistor is not uniform at 1e5 V/cm: the carriers enter cold at the
+  contact, and in velocity saturation (dv/dE ≈ 0.6 cm²/Vs) the space charge that adjusts the field is not screened
+  (1e17 electrons: E from 2.3e4 to 1.6e5 V/cm across 3 µm; a 30 µm resistor approaches 1.1e5 V/cm but still varies
+  6% across its middle third). Misses at 1e5 V/cm: up to 1.4% velocity, 4% temperature (1e16 electrons); 1e3 and 1e4
+  V/cm pass (worst 2.4e-4). Drift-diffusion with Canali is exactly uniform because its contact matches the bulk.
+  Ruling: at 1e5 V/cm a discrete bulk check: the exact uniform state (neutral densities, E uniform, each carrier's
+  rise at the local balance) leaves every interior row zero within 1e-12 of its terms (Σ_c |J_rc x_c|); measured
+  2.8e-16. The solved resistors stay at 1e3 and 1e4 V/cm, at 1e-3.
+- **EC4.** τ_w → 0 alone tends to drift-diffusion with Canali's μ(E), not constant mobility; against drift-diffusion
+  with Canali it still differs by 1–2% in a forward diode (energy balance evaluates Canali at the power-balance field,
+  drift-diffusion at its driving field). Ruling: EC4 is the double limit τ_w = 1e-18 s with v_sat = 1e30 cm/s against
+  constant-mobility drift-diffusion within 1e-6 (measured 1.3e-8 on the diode); the τ_w-only comparison is printed.
+  The MOSFET half (L = 0.6 µm) at 1e-18 misses: 6.8e-7 at Vd = 0.1 V rising to 1.23e-6 at 1.5 V. That is the
+  first-order τ_w heating, since with v_sat = 1e30 the channel's drift velocity is unclamped (T_n − T_L about 4e-4 T_L).
+  At τ_w = 1e-20 it is exactly 100× smaller, 1.23e-8 (49 Newton iterations, no substeps). Ruled 2026-10-29: the
+  MOSFET half uses τ_w = 1e-20 at 1e-6; the diode stays at 1e-18.
+- **EC8.** The terminal currents' sum is the Newton residual's: on EC4's diode at −0.4 V, 2.1e-10 A/cm² of 4.4e-4
+  with energy balance and 1.2e-10 with plain drift-diffusion, against a resolution of 2.3e-7. Ruling:
+  |Σ I| ≤ max(1e-10 · largest, terminal_current_resolution).
+- **EC10.** Drift-diffusion's J/(q n) reaches 1.34 v_s at the drain junction (diffusion adds to drift), so "never
+  exceeds 1.0001 v_s" is wrong. Ruling: drift-diffusion's drift velocity μ_C(E)·E ≤ v_s on every edge, and energy
+  balance's peak exceeds drift-diffusion's J/(q n) peak (1.93 against 1.34 v_s).
+- **EC7.** Σ V_c I_c is not relaxation plus recombination: the recombined pairs carry their gap (E_c − E_v), and the
+  ohmic contacts carry the Peltier term (E_c + V) D_n + (E_v + V) D_p, the energy flux into the contact nodes (τ = 0
+  there) and the contact edges' half Joule heat. Ruling: `DriftDiffusion::energy_powers` returns each term and the
+  Newton residual's power; the identity with the residual closes within 1e-9 of the largest term (measured ≤ 8e-16,
+  1D/2D/3D at −0.3, −0.6, −0.8 V), and |residual| ≤ max(1e-9 · largest term, the current resolution times the largest
+  |E_c|, |E_v|) (measured at least 500× inside). Without the residual the miss is ≤ 1.9e-10 at −0.6 and −0.8 V and
+  3.4e-6 at −0.3 V. Measured too: the relaxation power is negative in the forward diode (carriers climbing the
+  junction cool below T_L and draw heat from the lattice; the Peltier term carries it out).
+- **Newton on the EC11 MOSFET (found 2026-10-29).** The energy-balance sweep of the 2 µm MOSFET did not finish
+  (one point 210 iterations, the first drain step past 5,000 at residual 1e-11). Traced from the equilibrium start to
+  Vg = 0.25 V: (1) the first iterate after a bias step carries spurious currents whose Joule heat throws T_n to about
+  1600 K in the drain, and the coupled iteration then diverges (corrections to 1e19); (2) a carrier far below its
+  node's majority (holes at 1.6e-5 cm⁻³ against 3e17 electrons) has an energy row that scales with its density,
+  so its temperature is numerically undetermined (τ of 30–70 seen) and the update test never passes. At the
+  converged first point the Newton step is 5e-15: the system is regular at the solution. Rulings:
+  - **ED12 as ruled:** every bias point starts in two stages: ψ, n, p converged with τ held at the point's start
+    (`DriftDiffusion::hold_temperatures`: every energy row τ − τ_held), then the coupled system. At the first point
+    τ_held = 0, so its first stage is drift-diffusion, ED12's original rule. The first stage's iterations are not
+    recorded or reported.
+  - **ED14 (new): the relaxation floor.** Each carrier relaxes with density max(c, 1e-10 · max(n, p)) in the
+    relaxation term, so a carrier below 1e-10 of its node's majority is held at T_L; elsewhere the physics is
+    unchanged. `energy_powers` counts it in the relaxation power.
+  - **ED14 amended (ruled 2026-10-29, "Floor on |doping| too"):** the floor is 1e-10 · max(n, p, |N_D − N_A|).
+    Found on the 2 µm MOSFET at Vd = 0.6 V: a depleted node under the gate near the drain (y 22.5 nm,
+    n 3e12, p 2 cm⁻³) had a floor of 300 cm⁻³, below the hole energy fluxes from its neighbours (whose holes rise
+    steeply into the substrate). Newton asked for θ_p < 0 there; the update limit halved θ_p every iteration and
+    the update doubled, with the residual at its 1e-10 rounding floor. Referenced to the doping, the floor in
+    depletion is about 1e7 cm⁻³ and the node relaxes to T_L; neutral regions, where the majority is about the
+    doping, are unchanged. Measured: Vd = 0.6 V in 7 coupled iterations (it diverged), and the whole 21-point
+    sweep in 80 s with one substep. The floor's partial in the majority is 0 where the doping sets it.
+- **ED11, found building slice 2 (not in the row before code; reported to the owner, not yet ruled):** interface
+  charge, traps and surface recombination are refused with energy balance: they act on their edges' carrier fluxes,
+  which take no carrier temperature.
+
 **Questions for the owner before code (proposal's recommended answer first):**
 - EQ1 τ_w for silicon: 0.35 ps / 0.4 ps (Triebl), or another cited pair.
 - EQ2 `field_mobility = on` with energy balance: refused (ED4), or silently replaced by the T-driven law.

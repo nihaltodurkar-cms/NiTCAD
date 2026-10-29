@@ -282,6 +282,7 @@ add_library(nitcad_assemble STATIC
   src/assemble/equilibrium_poisson.cpp
   src/assemble/drift_diffusion.cpp
   src/assemble/electrothermal.cpp
+  src/assemble/energy_balance.cpp
   src/assemble/tunnel_paths.cpp
   src/assemble/gate_tunnels.cpp
   src/assemble/observer.cpp
@@ -306,6 +307,7 @@ add_executable(nitcad_assemble_test
   tests/assemble/impact_ionization_test.cpp
   tests/assemble/band_to_band_test.cpp
   tests/assemble/electrothermal_test.cpp
+  tests/assemble/energy_balance_test.cpp
   tests/assemble/fields_test.cpp
   tests/assemble/terms_test.cpp
   tests/assemble/surface_mobility_test.cpp
@@ -488,6 +490,7 @@ add_executable(nitcad_solve_test
   tests/solve/impact_ionization_test.cpp
   tests/solve/btbt_test.cpp
   tests/solve/electrothermal_test.cpp
+  tests/solve/energy_balance_test.cpp
   tests/solve/restart_test.cpp
   tests/solve/weighted_current_test.cpp
   tests/solve/hole_mobility_test.cpp

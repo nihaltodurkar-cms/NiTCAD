@@ -76,6 +76,17 @@ inline void scaled_state(const assemble::DriftDiffusion& system, const results::
                 f.temperature_K.empty() ? 0.0 : (f.temperature_K[i] - T0) / T0;
         }
     }
+    if (system.energy_balance()) {  // Unit 52: tau_n, tau_p (0 when the fields carry none)
+        const std::size_t sn = *system.dofs().slot(assemble::FieldId::electron_temperature);
+        const std::size_t sp = *system.dofs().slot(assemble::FieldId::hole_temperature);
+        for (std::size_t i = 0; i < system.node_count(); ++i) {
+            x[k.block * i + sn] = f.electron_temperature_K.empty()
+                                      ? 0.0
+                                      : (f.electron_temperature_K[i] - T0) / T0;
+            x[k.block * i + sp] =
+                f.hole_temperature_K.empty() ? 0.0 : (f.hole_temperature_K[i] - T0) / T0;
+        }
+    }
 }
 
 // The generation-recombination rates of a drift-diffusion state (Unit 45): the system's mechanisms
@@ -135,6 +146,15 @@ inline void drift_diffusion_point(const assemble::DriftDiffusion& system,
         }
         point.thermal_contact_heat = system.thermal_contact_heat(x);
         for (double& P : point.thermal_contact_heat) P *= scaling.V_T * current_scale;
+    }
+    if (system.energy_balance()) {  // Unit 52: T = T_L (1 + tau) per carrier
+        const double TL = scaling.temperature_K;
+        const std::size_t sn = *system.dofs().slot(assemble::FieldId::electron_temperature);
+        const std::size_t sp = *system.dofs().slot(assemble::FieldId::hole_temperature);
+        for (std::size_t i = 0; i < nodes; ++i) {
+            point.fields.electron_temperature_K.push_back(TL + TL * x[k.block * i + sn]);
+            point.fields.hole_temperature_K.push_back(TL + TL * x[k.block * i + sp]);
+        }
     }
     point.bands = band_diagram(system.band_edges(x), scaling.V_T);
     point.terminal_current = system.terminal_currents(x);

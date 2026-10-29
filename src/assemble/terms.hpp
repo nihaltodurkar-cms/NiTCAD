@@ -176,6 +176,12 @@ struct DriftDiffusion::Terms {
     class ThermalInterfaces;
     class ThermalEdges;
     class ThermalImpact;
+    // Energy balance (Unit 52; energy_balance.cpp): the energy rows' node terms, and the edges'
+    // carrier and energy fluxes in place of CarrierFluxes.
+    class EnergyRows;
+    class EnergyFluxes;
+    [[nodiscard]] static std::shared_ptr<const Term> energy_rows();
+    [[nodiscard]] static std::shared_ptr<const Term> energy_fluxes();
 };
 
 // The gate tunnels' fluxes at one state (GR11; gate_tunnels.cpp): worker threads start on them at

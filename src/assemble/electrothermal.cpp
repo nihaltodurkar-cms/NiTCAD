@@ -712,7 +712,7 @@ std::vector<double> DriftDiffusion::thermal_contact_heat(std::span<const double>
 }
 
 double DriftDiffusion::electrical_power(std::span<const double> x) const {
-    NITCAD_EXPECTS(electrothermal() && x.size() == unknowns());
+    NITCAD_EXPECTS((electrothermal() || energy_balance_) && x.size() == unknowns());
     const std::vector<double> I = terminal_currents(x);
     double power = 0.0;
     for (std::size_t c = 0; c < I.size(); ++c) power += contact_bias_[c] * I[c];

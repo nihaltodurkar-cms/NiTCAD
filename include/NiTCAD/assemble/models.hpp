@@ -121,6 +121,11 @@ struct PhysicsModels {
     // leaves through the device's thermal contacts. Drift-diffusion only. Off by default; off,
     // every result is that of the isothermal device at its temperature.
     bool electrothermal = false;
+    // Energy-balance transport (Unit 52; DECISIONS.md ED1-ED13; energy_balance.cpp): the electron
+    // and hole temperature rises are a fourth and fifth unknown per node, with the energy-flux
+    // equations, Stratton's currents and the carrier-temperature mobility of
+    // physics/energy_balance.hpp. Off by default; off, every result is drift-diffusion's.
+    bool energy_balance = false;
 };
 
 }  // namespace NiTCAD::assemble
