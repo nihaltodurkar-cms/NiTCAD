@@ -696,6 +696,11 @@ std::vector<std::string> available_fields(const Workspace& w) {
                 !field_values(*w.device, *last, f).has_value()) {
                 continue;
             }
+            // Unit 52: the carrier temperatures only when the result has them (energy balance).
+            if ((f == Field::electron_temperature || f == Field::hole_temperature) &&
+                !field_values(*w.device, *last, f).has_value()) {
+                continue;
+            }
         }
         out.emplace_back(field_info(f).key);
     }

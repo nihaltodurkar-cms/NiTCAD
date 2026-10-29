@@ -16,7 +16,7 @@ constexpr std::array<KeySpec, 3> mesh_keys{{{"min_angle", "20.7", "generate2d: s
                                             {"radius_edge", "2", "generate3d: largest radius-edge ratio"},
                                             {"max_nodes", "2000000", "generated meshes: node limit"}}};
 
-constexpr std::array<KeySpec, 20> model_keys{{
+constexpr std::array<KeySpec, 21> model_keys{{
     {"doping_mobility", "on", "doping-dependent mobility"},
     {"hole_mobility", "automatic", "automatic | caughey_thomas | masetti"},
     {"electron_mobility", "caughey_thomas", "caughey_thomas | masetti"},
@@ -37,6 +37,7 @@ constexpr std::array<KeySpec, 20> model_keys{{
     {"btbt_local", "off", "local band-to-band tunnelling"},
     {"btbt_nonlocal", "off", "off | kane | direct_wkb"},
     {"electrothermal", "off", "lattice heat equation"},
+    {"energy_balance", "off", "carrier temperatures (energy balance)"},
 }};
 
 constexpr std::array<KeySpec, 24> solver_keys{{

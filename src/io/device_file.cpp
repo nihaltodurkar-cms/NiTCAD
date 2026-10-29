@@ -140,6 +140,14 @@ void semiconductor_fields(P& p, F&& f) {
     }
 }
 
+// Unit 52: the energy relaxation times, written only when given (nonzero), so a device without
+// them is written as before (EC1); absent, they stay 0 (not given).
+template <class P>
+auto energy_relaxation_fields(P& p) {
+    return std::array<std::pair<std::uint16_t, decltype(&p.energy_relaxation.tau_n_s)>, 2>{
+        {{68, &p.energy_relaxation.tau_n_s}, {69, &p.energy_relaxation.tau_p_s}}};
+}
+
 constexpr std::uint16_t thermal_record_key = 100;
 
 // A writer visitor: doubles by bit pattern, bools as 0 / 1.
@@ -188,6 +196,9 @@ Writer write_region(const device::Region& region) {
     if (const auto* s = std::get_if<physics::Semiconductor>(&region.material)) {
         w.u64(region_key::kind, 0);
         semiconductor_fields(s->parameters(), Put{p});
+        for (const auto& [key, v] : energy_relaxation_fields(s->parameters())) {
+            if (*v != 0.0) p.f64(key, *v);
+        }
         p.record(thermal_record_key, write_thermal(s->parameters().thermal));
     } else {
         const auto& i = std::get<physics::Insulator>(region.material).parameters();
@@ -212,6 +223,11 @@ std::expected<device::Region, base::Error> read_region(const Reader& r) {
         physics::SemiconductorParameters s{};
         semiconductor_fields(s, Get{p, error});
         if (error) return std::unexpected(std::move(*error));
+        for (const auto& [key, target] : energy_relaxation_fields(s)) {
+            if (!p.has(key)) continue;
+            NITCAD_IO_TRY(v, p.f64(key));
+            *target = v;
+        }
         s.thermal = thermal;
         NITCAD_IO_TRY(material, physics::Semiconductor::create(s));
         return device::Region{std::move(name), std::move(material)};

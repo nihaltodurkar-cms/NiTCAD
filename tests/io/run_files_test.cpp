@@ -54,7 +54,9 @@ bool same(const std::vector<std::complex<double>>& a, const std::vector<std::com
 
 bool same(const results::NodeFields& a, const results::NodeFields& b) {
     return same(a.potential_V, b.potential_V) && same(a.n_cm3, b.n_cm3) && same(a.p_cm3, b.p_cm3) &&
-           same(a.temperature_K, b.temperature_K);
+           same(a.temperature_K, b.temperature_K) &&
+           same(a.electron_temperature_K, b.electron_temperature_K) &&
+           same(a.hole_temperature_K, b.hole_temperature_K);
 }
 
 bool same(const results::BandDiagram& a, const results::BandDiagram& b) {
@@ -102,7 +104,12 @@ results::NodeFields fields(double s, bool thermal) {
             .n_cm3 = {1e17, nan, tiny},
             .p_cm3 = {inf, -inf, 1e3},
             .temperature_K = thermal ? std::vector<double>{300.0, 301.5, 302.0}
-                                     : std::vector<double>{}};
+                                     : std::vector<double>{},
+            // Unit 52: with the thermal fixture the carrier temperatures too.
+            .electron_temperature_K = thermal ? std::vector<double>{300.0, 2.5e3, nan}
+                                              : std::vector<double>{},
+            .hole_temperature_K = thermal ? std::vector<double>{-0.0, 300.25, 310.0}
+                                          : std::vector<double>{}};
 }
 
 results::Provenance provenance() {
@@ -233,7 +240,14 @@ results::SmallSignal small_signal(bool stopped) {
                             .n_cm3 = {{1e10, nan}, {-0.0, 0.0}},
                             .p_cm3 = {{inf, 1.0}, {0.0, -inf}},
                             .temperature_K = k == 1 ? std::vector<std::complex<double>>{{1e-3, 2e-3}, {0.0, 0.0}}
-                                                    : std::vector<std::complex<double>>{}});
+                                                    : std::vector<std::complex<double>>{},
+                            // Unit 52: the carrier temperatures' amplitudes at point 1 only.
+                            .electron_temperature_K =
+                                k == 1 ? std::vector<std::complex<double>>{{5.0, nan}, {0.5, 0.25}}
+                                       : std::vector<std::complex<double>>{},
+                            .hole_temperature_K =
+                                k == 1 ? std::vector<std::complex<double>>{{-0.0, 1e-9}, {inf, 0.0}}
+                                       : std::vector<std::complex<double>>{}});
         s.points.push_back(std::move(p));
     }
     if (stopped) {
@@ -277,6 +291,8 @@ void check(const results::SmallSignal& a, const results::SmallSignal& b) {
             CHECK(same(x.fields[f].n_cm3, y.fields[f].n_cm3));
             CHECK(same(x.fields[f].p_cm3, y.fields[f].p_cm3));
             CHECK(same(x.fields[f].temperature_K, y.fields[f].temperature_K));
+            CHECK(same(x.fields[f].electron_temperature_K, y.fields[f].electron_temperature_K));
+            CHECK(same(x.fields[f].hole_temperature_K, y.fields[f].hole_temperature_K));
         }
     }
     CHECK(same(a.stopped, b.stopped));

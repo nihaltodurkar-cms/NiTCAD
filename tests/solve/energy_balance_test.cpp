@@ -2,12 +2,13 @@
 // and Fermi-Dirac), the energy budget (EC7, both statistics), the uniform-field limit at 1e3 and
 // 1e4 V/cm (EC3, with impact ionization's ratio printed), the drift-diffusion limit (EC4, both
 // statistics), current conservation (EC8) and velocity overshoot in Aste and Vahldieck's
-// ballistic diode (EC10).
+// ballistic diode (EC10); slice 4: a bias step in time (EC13) and the admittance at 0 Hz (EC14).
 #include <catch2/catch_test_macros.hpp>
 
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <complex>
 #include <cstddef>
 #include <cstdio>
 #include <string>
@@ -26,6 +27,9 @@
 #include "NiTCAD/physics/mobility.hpp"
 #include "NiTCAD/physics/semiconductor.hpp"
 #include "NiTCAD/solve/bias.hpp"
+#include "NiTCAD/solve/small_signal.hpp"
+#include "NiTCAD/solve/transient.hpp"
+#include "NiTCAD/solve/waveform.hpp"
 #include "legacy_graded_mesh.hpp"
 
 using namespace NiTCAD;
@@ -105,6 +109,22 @@ void conserved(const results::BiasPoint& p) {
     }
     REQUIRE(std::abs(sum) <= std::max(1e-10 * largest, resolution));
 }
+
+// Aste and Vahldieck's ballistic diode (arXiv physics/0312021): n+ 1e18 / n 2e15 / n+ 1e18,
+// 0.1 um each; mu0(N) = 80 + 1350 / (1 + (N / 1.12e17)^0.72), v_s = 1.03e7 cm/s, beta = 2; this
+// unit's constant tau_w (silicon's).
+physics::Semiconductor ballistic_silicon() {
+    physics::SemiconductorParameters p = physics::silicon_parameters;
+    p.electron_mobility.mu_min = 80.0;
+    p.electron_mobility.mu_max = 1430.0;
+    p.electron_mobility.N_ref = 1.12e17;
+    p.electron_mobility.alpha = 0.72;
+    p.electron_saturation = {.v_sat_cm_s = 1.03e7, .beta = 2.0};
+    p.energy_relaxation = physics::silicon_energy_relaxation;
+    return *physics::Semiconductor::create(p);
+}
+
+double ballistic_doping(double x) { return x < 0.1e-4 || x > 0.2e-4 ? 1e18 : 2e15; }
 
 }  // namespace
 
@@ -353,15 +373,8 @@ TEST_CASE("energy balance: velocity overshoot in the ballistic diode (EC10)") {
     // Aste and Vahldieck, arXiv physics/0312021: n+ 1e18 / n 2e15 / n+ 1e18, 0.1 um each, 1 V;
     // mu0(N) = 80 + 1350 / (1 + (N / 1.12e17)^0.72), v_s = 1.03e7 cm/s, beta = 2. This unit's
     // constant tau_w (silicon's), c = 5/2. 1 nm nodes.
-    physics::SemiconductorParameters p = physics::silicon_parameters;
-    p.electron_mobility.mu_min = 80.0;
-    p.electron_mobility.mu_max = 1430.0;
-    p.electron_mobility.N_ref = 1.12e17;
-    p.electron_mobility.alpha = 0.72;
-    p.electron_saturation = {.v_sat_cm_s = 1.03e7, .beta = 2.0};
-    p.energy_relaxation = physics::silicon_energy_relaxation;
-    const physics::Semiconductor si = *physics::Semiconductor::create(p);
-    const auto doping = [](double x) { return x < 0.1e-4 || x > 0.2e-4 ? 1e18 : 2e15; };
+    const physics::Semiconductor si = ballistic_silicon();
+    const auto doping = ballistic_doping;
     const device::Device d = line(0.3e-4, 301, doping, si);
     const auto biases = {0.05, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0};
     const results::Sweep eb = sweep(d, biases, options(true));
@@ -535,4 +548,184 @@ TEST_CASE("energy balance: MOSFET channel length (EC11)", "[.mosfet]") {
     }
     REQUIRE(std::abs(ratio[0] - 1.0) <= 0.05);
     REQUIRE(ratio[1] > 1.0);
+}
+
+namespace {
+
+// The scaled state of a solved point's fields (the energy-balance stride, psi n p tau_n tau_p).
+std::vector<double> scaled(const results::NodeFields& f, const assemble::Scaling& s) {
+    const std::size_t n = f.potential_V.size();
+    const double TL = s.temperature_K;
+    std::vector<double> x(5 * n);
+    for (std::size_t i = 0; i < n; ++i) {
+        x[5 * i] = f.potential_V[i] / s.V_T;
+        x[5 * i + 1] = f.n_cm3[i] / s.Ns;
+        x[5 * i + 2] = f.p_cm3[i] / s.Ns;
+        x[5 * i + 3] = (f.electron_temperature_K[i] - TL) / TL;
+        x[5 * i + 4] = (f.hole_temperature_K[i] - TL) / TL;
+    }
+    return x;
+}
+
+double relative(double a, double b) { return std::abs(a - b) / std::max(std::abs(b), 1e-300); }
+
+}  // namespace
+
+TEST_CASE("energy balance: a bias step in time (EC13)") {
+    // The ballistic diode (EC10's, 1 nm nodes) from its steady state at 0.5 V, the drain stepped to
+    // 1 V at 0.1 ps, run to 1 ns with backward Euler (adaptive, every step's fields kept).
+    // (1) The end state equals the 1 V steady state within 1e-8 relative: the current, psi
+    // (against its largest value), and n, p, T_n and T_p per node.
+    // (2) Energy: over the run the conduction power's integral equals the integrals of EC7's terms
+    // (relaxation, recombination, the contact terms as ruled) plus the change in stored energy (the
+    // carriers' thermal energy and the band-edge energy of the carriers stored), within 1e-6 of the
+    // largest; each step's balance from energy_powers at the step's state and history.
+    const physics::Semiconductor si = ballistic_silicon();
+    const device::Device d = line(0.3e-4, 301, ballistic_doping, si);
+    const solve::BiasOptions steady = options(true);
+    const results::Sweep dc = sweep(d, {0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0}, steady);
+    const results::BiasPoint& start = dc.points[4];
+    const results::BiasPoint& end = dc.points.back();
+    REQUIRE(start.bias_V[1] == 0.5);
+    solve::TransientOptions o;
+    o.steady = steady;
+    o.integrator = solve::Integrator::backward_euler;
+    o.t_end_s = 1e-9;
+    o.dt_initial_s = 1e-16;
+    o.dt_min_s = 1e-22;
+    o.fields_every_step = true;
+    const std::vector<solve::Waveform> waveforms{solve::Waveform::constant(0.0),
+                                                 *solve::Waveform::step(0.5, 1.0, 1e-13)};
+    const auto clock = std::chrono::steady_clock::now();
+    auto run = solve::solve_transient(d, waveforms, o, &start.fields);
+    const double wall =
+        std::chrono::duration<double>(std::chrono::steady_clock::now() - clock).count();
+    REQUIRE(run.has_value());
+    if (run->stopped) FAIL(run->stopped->message);
+    const results::TransientSnapshot& last = run->snapshots.back();
+    REQUIRE(last.time_s == 1e-9);
+    std::printf("EC13: %zu steps (%zu rejected), %.1f s\n", run->points.size() - 1,
+                run->rejected_steps, wall);
+
+    // (1) The end state.
+    double psi_max = 0.0;
+    for (const double v : end.fields.potential_V) psi_max = std::max(psi_max, std::abs(v));
+    double worst_psi = 0.0, worst_n = 0.0, worst_tn = 0.0, worst_p = 0.0, worst_tp = 0.0;
+    for (std::size_t i = 0; i < end.fields.potential_V.size(); ++i) {
+        worst_psi = std::max(worst_psi, std::abs(last.fields.potential_V[i] -
+                                                 end.fields.potential_V[i]) / psi_max);
+        worst_n = std::max(worst_n, relative(last.fields.n_cm3[i], end.fields.n_cm3[i]));
+        worst_p = std::max(worst_p, relative(last.fields.p_cm3[i], end.fields.p_cm3[i]));
+        worst_tn = std::max(worst_tn, relative(last.fields.electron_temperature_K[i],
+                                               end.fields.electron_temperature_K[i]));
+        worst_tp = std::max(worst_tp, relative(last.fields.hole_temperature_K[i],
+                                               end.fields.hole_temperature_K[i]));
+    }
+    const double current =
+        relative(run->points.back().conduction_current[1], end.terminal_current[1]);
+    std::printf("EC13 end state: current %.3e, psi %.3e, n %.3e, T_n %.3e, p %.3e, T_p %.3e\n",
+                current, worst_psi, worst_n, worst_tn, worst_p, worst_tp);
+    REQUIRE(current <= 1e-8);
+    REQUIRE(worst_psi <= 1e-8);
+    REQUIRE(worst_n <= 1e-8);
+    REQUIRE(worst_tn <= 1e-8);
+    REQUIRE(worst_p <= 1e-8);
+    REQUIRE(worst_tp <= 1e-8);
+
+    // (2) The energy budget, step by step.
+    const auto scaling = *assemble::make_scaling(d);
+    auto dd = assemble::DriftDiffusion::create(d, scaling, steady.models);
+    REQUIRE(dd.has_value());
+    const double t0 = dd->time_scale();
+    double input = 0.0, relaxation = 0.0, recombination = 0.0, contacts = 0.0;
+    double stored_thermal = 0.0, stored_carriers = 0.0, residual = 0.0;
+    for (std::size_t k = 1; k < run->snapshots.size(); ++k) {
+        const results::TransientSnapshot& now = run->snapshots[k];
+        const results::TimePoint& p = run->points[now.point];
+        REQUIRE(run->snapshots[k - 1].point + 1 == now.point);
+        REQUIRE(p.order == 1);
+        REQUIRE(dd->set_bias(p.bias_V).has_value());
+        const std::vector<double> x = scaled(now.fields, scaling);
+        const std::vector<double> history =
+            dd->storage(scaled(run->snapshots[k - 1].fields, scaling));
+        const assemble::DriftDiffusion::TimeStep step{t0 / p.step_s, history, {}};
+        const auto e = dd->energy_powers(x, &step);
+        const double h = p.step_s;
+        input += h * e.input;
+        relaxation += h * e.relaxation;
+        recombination += h * e.recombination;
+        contacts += h * (e.contact_flux + e.contact_joule - e.peltier);
+        stored_thermal += h * e.thermal_storage;
+        stored_carriers += h * e.carrier_storage;
+        residual += h * e.residual;
+    }
+    const double out = relaxation + recombination + contacts + stored_thermal + stored_carriers;
+    const double scale = std::max({std::abs(input), std::abs(relaxation), std::abs(recombination),
+                                   std::abs(contacts), std::abs(stored_thermal),
+                                   std::abs(stored_carriers)});
+    std::printf("EC13 energy (scaled x s): input %.6e relax %.6e rec %.6e contacts %.6e "
+                "thermal %.6e carriers %.6e residual %.3e; miss %.3e\n",
+                input, relaxation, recombination, contacts, stored_thermal, stored_carriers,
+                residual, (input - out) / scale);
+    // The stored energy is resolved: without it the budget would miss by 10 times the gate.
+    REQUIRE(std::abs(stored_thermal + stored_carriers) > 1e-5 * scale);
+    REQUIRE(std::abs(input - out) <= 1e-6 * scale);
+}
+
+TEST_CASE("energy balance: the admittance at 0 Hz is the DC slope (EC14)") {
+    // Y_i1 at 0 Hz against the central difference of the DC sweep's currents at V +- 1e-4 V,
+    // within 1e-5 relative: the ballistic diode at 0.3 V and 1 V (drain), and a 1D pn diode
+    // (p 1e17 / n 2e17, 1 um) forward at 0.6 V, Boltzmann and Fermi-Dirac.
+    struct Case {
+        const char* name;
+        device::Device device;
+        double V;  // the right contact's bias
+        bool fd;
+    };
+    const auto pn = [](double x) { return x < 0.5e-4 ? -1e17 : 2e17; };
+    const Case cases[] = {
+        {"ballistic 0.3 V", line(0.3e-4, 301, ballistic_doping, ballistic_silicon()), 0.3, false},
+        {"ballistic 1 V", line(0.3e-4, 301, ballistic_doping, ballistic_silicon()), 1.0, false},
+        {"pn forward", line(1e-4, 201, pn), -0.6, false},
+        {"pn forward, Fermi-Dirac", line(1e-4, 201, pn), -0.6, true},
+    };
+    constexpr double dV = 1e-4;
+    for (const Case& c : cases) {
+        CAPTURE(c.name);
+        const solve::BiasOptions steady = options(true, false, c.fd);
+        const double sign = c.V > 0.0 ? 1.0 : -1.0;
+        std::vector<std::vector<double>> points;
+        for (int k = 1; 0.1 * k < std::abs(c.V) - 1e-9; ++k) points.push_back({0.0, sign * 0.1 * k});
+        const std::size_t at = points.size();
+        for (const double v : {c.V - dV, c.V, c.V + dV}) points.push_back({0.0, v});
+        auto dc = solve::sweep_bias(c.device, points, steady);
+        REQUIRE(dc.has_value());
+        if (dc->stopped) FAIL(dc->stopped->message);
+        const solve::SmallSignalOptions ac{.steady = steady, .frequencies_Hz = {0.0}};
+        const std::vector<std::vector<double>> operating{{0.0, c.V}};
+        auto y = solve::solve_small_signal(c.device, operating, ac);
+        REQUIRE(y.has_value());
+        if (y->stopped) FAIL(y->stopped->message);
+        for (std::size_t i = 0; i < 2; ++i) {
+            const double slope = (dc->points[at + 2].terminal_current[i] -
+                                  dc->points[at].terminal_current[i]) / (2.0 * dV);
+            const std::complex<double> Y = y->admittance(0, 0, i, 1);
+            std::printf("EC14 %s: Y_%zu1 %.10e%+.3ei, DC slope %.10e, relative %.3e\n", c.name, i,
+                        Y.real(), Y.imag(), slope, relative(Y.real(), slope));
+            CAPTURE(i, Y.real(), Y.imag(), slope);
+            REQUIRE(Y.imag() == 0.0);
+            REQUIRE(relative(Y.real(), slope) <= 1e-5);
+        }
+    }
+}
+
+TEST_CASE("energy balance: the weighted terminal current is refused (ED11, EC15)") {
+    const device::Device d = line(1e-4, 21, [](double) { return 1e17; });
+    solve::BiasOptions o = options(true);
+    o.weighted_current = true;
+    const auto s = solve::sweep_bias(d, ramp({0.1}), o);
+    REQUIRE_FALSE(s.has_value());
+    CAPTURE(s.error().message);
+    REQUIRE(s.error().code == base::ErrorCode::invalid_input);
+    REQUIRE(s.error().message.find("energy-balance") != std::string::npos);
 }

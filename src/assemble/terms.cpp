@@ -290,14 +290,14 @@ public:
     }
     void add(const DriftDiffusion& s, const Evaluation& ev) const override {
         if (ev.step == nullptr) return;
-        const std::size_t m = s.m_;
+        const std::size_t m = s.m_, w = s.storage_width();  // w 4 with energy balance
         for (std::size_t i = 0; i < s.node_count(); ++i) {
             if (!semiconductor(s, i)) continue;
             const double V = s.volume_[i];
             const NodeStorage st = s.node_storage(i, ev.x, ev.g);
             const double k = V * ev.step->rate;
-            ev.f[m * i + 1] -= k * (st.n - ev.step->storage[2 * i]);
-            ev.f[m * i + 2] += k * (st.p - ev.step->storage[2 * i + 1]);
+            ev.f[m * i + 1] -= k * (st.n - ev.step->storage[w * i]);
+            ev.f[m * i + 2] += k * (st.p - ev.step->storage[w * i + 1]);
             if (ev.jacobian()) {
                 at(s, ev, i, 1, 1) -= k * st.d_n;
                 at(s, ev, i, 2, 2) += k * st.d_p;
@@ -932,8 +932,7 @@ void DriftDiffusion::Terms::evaluate(const DriftDiffusion& s, const Term& t,
                                      std::span<double> f, linalg::SparseMatrix& jacobian) {
     NITCAD_EXPECTS(x.size() == s.unknowns() && f.size() == s.unknowns());
     NITCAD_EXPECTS(jacobian.has_same_pattern(s.pattern_));
-    const std::size_t per_node = s.electrothermal() ? 3 : 2;  // storage entries
-    NITCAD_EXPECTS(step == nullptr || (step->storage.size() == per_node * s.node_count() &&
+    NITCAD_EXPECTS(step == nullptr || (step->storage.size() == s.storage_width() * s.node_count() &&
                                        step->traps.size() == s.trap_slots()));
     const std::span<double> values = jacobian.values();
     std::ranges::fill(f, 0.0);

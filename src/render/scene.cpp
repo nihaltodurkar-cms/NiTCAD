@@ -578,6 +578,8 @@ FieldInfo field_info(Field f) noexcept {
         case Field::current_density: return {"J", "|J| (A/cm\xC2\xB2)", ScaleKind::log10};
         case Field::electron_current: return {"Jn", "|Jn| (A/cm\xC2\xB2)", ScaleKind::log10};
         case Field::hole_current: return {"Jp", "|Jp| (A/cm\xC2\xB2)", ScaleKind::log10};
+        case Field::electron_temperature: return {"Tn", "Tn (K)", ScaleKind::linear};
+        case Field::hole_temperature: return {"Tp", "Tp (K)", ScaleKind::linear};
     }
     return {"?", "?", ScaleKind::linear};
 }
@@ -651,6 +653,16 @@ std::expected<std::vector<double>, base::Error> field_values(const device::Devic
         case Field::hole_current:
             return std::unexpected(invalid(std::string(field_info(f).key) +
                                            " is reconstructed on the mesh's elements: it needs the geometry"));
+        case Field::electron_temperature:
+        case Field::hole_temperature: {
+            const std::vector<double>& v = f == Field::electron_temperature ? point.fields.electron_temperature_K
+                                                                            : point.fields.hole_temperature_K;
+            if (v.empty()) {
+                return std::unexpected(invalid("the result holds no " + std::string(field_info(f).key) +
+                                               " (solved with [models] energy_balance = on)"));
+            }
+            return take(v);
+        }
     }
     return std::unexpected(invalid("unknown field"));
 }

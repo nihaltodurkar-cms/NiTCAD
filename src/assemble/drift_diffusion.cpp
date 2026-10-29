@@ -962,7 +962,7 @@ void DriftDiffusion::assemble(std::span<const double> x, std::span<double> f,
         return;
     }
     NITCAD_EXPECTS(x.size() == unknowns() && f.size() == unknowns());
-    NITCAD_EXPECTS(step == nullptr || (step->storage.size() == 2 * node_count() &&
+    NITCAD_EXPECTS(step == nullptr || (step->storage.size() == storage_width() * node_count() &&
                                        step->traps.size() == trap_slots()));
     // The terms in assembly order (composition.hpp).
     const std::vector<NodeDegeneracy> g = degeneracies(x);
@@ -999,7 +999,6 @@ void observe_step(const DriftDiffusion::TimeStep& step) {
 
 void DriftDiffusion::evaluate(std::span<const double> x, const TimeStep& step,
                               std::span<double> residual, linalg::SparseMatrix& jacobian) const {
-    NITCAD_EXPECTS(!energy_balance_);  // Unit 52: transients come with slice 4
     NITCAD_EXPECTS(jacobian.has_same_pattern(pattern_));
     const std::span<double> values = jacobian.values();
     std::fill(values.begin(), values.end(), 0.0);
@@ -1012,7 +1011,6 @@ void DriftDiffusion::evaluate(std::span<const double> x, const TimeStep& step,
 
 void DriftDiffusion::residual(std::span<const double> x, const TimeStep& step,
                               std::span<double> residual) const {
-    NITCAD_EXPECTS(!energy_balance_);  // Unit 52: transients come with slice 4
     assemble(x, residual, {}, &step);
     observe_step(step);
     detail::observe("residual.x", x);
@@ -1039,6 +1037,11 @@ std::vector<double> DriftDiffusion::storage(std::span<const double> x) const {
         const NodeStorage st = node_storage(i, x, g);
         s[w * i] = st.n;
         s[w * i + 1] = st.p;
+        if (energy_balance_) {  // Unit 52 (ED9): the carriers' thermal energies W_n, W_p
+            const EnergyStorage e = energy_storage(i, x);
+            s[w * i + 2] = e.n;
+            s[w * i + 3] = e.p;
+        }
     }
     detail::observe("storage", s);
     return s;
@@ -1414,7 +1417,6 @@ linalg::ComplexSparseMatrix DriftDiffusion::make_small_signal_matrix() const {
 
 void DriftDiffusion::small_signal_matrix(std::span<const double> x, std::complex<double> s,
                                          linalg::ComplexSparseMatrix& a) const {
-    NITCAD_EXPECTS(!energy_balance_);  // Unit 52: small-signal comes with slice 4
     NITCAD_EXPECTS(x.size() == unknowns());
     NITCAD_EXPECTS(a.rows() == pattern_.rows() &&
                    std::ranges::equal(a.row_offsets(), pattern_.row_offsets()) &&
@@ -1439,6 +1441,13 @@ void DriftDiffusion::small_signal_matrix(std::span<const double> x, std::complex
         const NodeStorage st = node_storage(i, x, g);
         at(i, 1, 1) -= s * (volume_[i] * st.d_n);
         at(i, 2, 2) += s * (volume_[i] * st.d_p);
+        if (energy_balance_) {  // Unit 52 (ED9): the energy rows' storage, -V s dW
+            const EnergyStorage w = energy_storage(i, x);
+            at(i, 3, 1) -= s * (volume_[i] * w.n_c);
+            at(i, 3, 3) -= s * (volume_[i] * w.n_t);
+            at(i, 4, 2) -= s * (volume_[i] * w.p_c);
+            at(i, 4, 4) -= s * (volume_[i] * w.p_t);
+        }
     }
     // The traps' weight Ns / s_physical, s_physical = s / t0.
     const Complex inv_weight = s / (rate_scale_ * Ns_);
@@ -1528,10 +1537,36 @@ std::vector<DriftDiffusion::CurrentRow> DriftDiffusion::small_signal_currents(
             }
         }
     }
+    if (energy_balance_) {  // Unit 52: Stratton's fluxes with the rise columns
+        for (std::size_t k = 0; k < edges_.size(); ++k) {
+            const EdgeTerm& e = edges_[k];
+            const std::int32_t ca = owner_[e.a], cb = owner_[e.b];
+            if (ca == cb || !e.carriers) continue;
+            const auto [fn, fp] = energy_fluxes(k, x);
+            const std::pair<std::size_t, double> d[10] = {
+                {5 * e.a, fn.d_psi[0] + fp.d_psi[0]}, {5 * e.b, fn.d_psi[1] + fp.d_psi[1]},
+                {5 * e.a + 1, fn.d_c[0]},             {5 * e.b + 1, fn.d_c[1]},
+                {5 * e.a + 2, fp.d_c[0]},             {5 * e.b + 2, fp.d_c[1]},
+                {5 * e.a + 3, fn.d_t[0]},             {5 * e.b + 3, fn.d_t[1]},
+                {5 * e.a + 4, fp.d_t[0]},             {5 * e.b + 4, fp.d_t[1]}};
+            for (const auto& [column, value] : d) {
+                add(ca, column, value);
+                add(cb, column, -value);
+            }
+            if (!e.surface) continue;
+            const SurfaceField perp = surface_field(e, x);  // Lombardi (Unit 46)
+            for (std::size_t j = e.surface_first; j < e.surface_last; ++j) {
+                const SurfaceStencil& st = surface_stencil_[j];
+                const double value = (fn.d_perp + fp.d_perp) * surface_gradient(perp, st);
+                add(ca, 5 * st.node, value);
+                add(cb, 5 * st.node, -value);
+            }
+        }
+    }
     const std::vector<NodeDegeneracy> g = degeneracies(x);
     for (const EdgeTerm& e : edges_) {
         const std::int32_t ca = owner_[e.a], cb = owner_[e.b];
-        if (electrothermal() || ca == cb || !e.carriers) continue;
+        if (electrothermal() || energy_balance_ || ca == cb || !e.carriers) continue;
         SurfaceSlope slope{};
         const auto [fn, fp] = edge_fluxes(e, x, g, &slope);
         const std::pair<std::size_t, double> d[6] = {

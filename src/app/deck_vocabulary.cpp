@@ -117,7 +117,7 @@ constexpr std::array<KeyInfo, 4> thermal_contact_keys{{
     {"resistance", 0, false, "<K cm^2/W>", "resistance: the thermal resistance", {}, {}, {}},
 }};
 
-constexpr std::array<KeyInfo, 20> model_keys{{
+constexpr std::array<KeyInfo, 21> model_keys{{
     {"doping_mobility", 0, false, "on", "doping-dependent mobility", on_off, {}, {}},
     {"hole_mobility", 0, false, "automatic", "automatic | caughey_thomas | masetti", hole_mobility, {}, {}},
     {"electron_mobility", 0, false, "caughey_thomas", "caughey_thomas | masetti", electron_mobility, {}, {}},
@@ -139,6 +139,7 @@ constexpr std::array<KeyInfo, 20> model_keys{{
     {"btbt_local", 0, false, "off", "local band-to-band tunnelling", on_off, {}, {}},
     {"btbt_nonlocal", 0, false, "off", "off | kane | direct_wkb", btbt_nonlocal, {}, {}},
     {"electrothermal", 0, false, "off", "lattice heat equation", on_off, {}, {}},
+    {"energy_balance", 0, false, "off", "carrier temperatures (energy balance)", on_off, {}, {}},
 }};
 
 constexpr std::array<KeyInfo, 26> solver_keys{{

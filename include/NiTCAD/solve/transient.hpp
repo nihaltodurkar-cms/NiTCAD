@@ -94,6 +94,12 @@ struct TransientOptions {
 // at T0. A fully adiabatic device is well posed in time. Errors as sweep_bias's electrothermal input checks (thermal_bias_K at most
 // one list); a step whose temperature leaves a material's range stops the run (non_convergence).
 // Each TimePoint carries the heat leaving through each thermal contact.
+// Energy balance (steady.models.energy_balance, Unit 52; DECISIONS.md ED9, ED12): the energy rows
+// store the carriers' thermal energy (3/2) n k T_n (Fermi-Dirac: times F_{3/2} / F_{1/2}); the
+// error estimate measures each carrier's temperature rise off the contacts (absolute, in units of
+// the lattice temperature); the state at t = 0 is solved in sweep_bias's two stages (psi, n and p
+// at the starting carrier temperatures, initial->electron_temperature_K and hole_temperature_K or
+// the lattice's, then the coupled system); each snapshot carries T_n and T_p.
 [[nodiscard]] std::expected<results::Transient, base::Error> solve_transient(
     const device::Device& device, std::span<const Waveform> waveforms,
     const TransientOptions& options, const results::NodeFields* initial = nullptr,

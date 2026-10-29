@@ -263,6 +263,8 @@ namespace mesh_key = detail::mesh_key;
 
 namespace fields_key {
 constexpr std::uint16_t potential = 1, n = 2, p = 3, temperature = 4;
+// Unit 52: the carrier temperatures, absent without energy balance.
+constexpr std::uint16_t electron_temperature = 5, hole_temperature = 6;
 }
 namespace rates_key {  // Unit 45
 constexpr std::uint16_t srh = 1, auger = 2, radiative = 3, impact = 4, interface_n = 5, interface_p = 6,
@@ -336,6 +338,8 @@ constexpr std::uint16_t dc = 1, admittance = 2, pivot_ratio = 3, backward_error 
 }
 namespace ac_fields_key {
 constexpr std::uint16_t frequency = 1, contact = 2, potential = 3, n = 4, p = 5, temperature = 6;
+// Unit 52: the carrier temperatures' amplitudes, absent without energy balance.
+constexpr std::uint16_t electron_temperature = 7, hole_temperature = 8;
 }
 
 Writer write_fields(const results::NodeFields& f) {
@@ -344,6 +348,10 @@ Writer write_fields(const results::NodeFields& f) {
     w.f64s(fields_key::n, f.n_cm3);
     w.f64s(fields_key::p, f.p_cm3);
     w.f64s(fields_key::temperature, f.temperature_K);
+    if (!f.electron_temperature_K.empty()) {
+        w.f64s(fields_key::electron_temperature, f.electron_temperature_K);
+    }
+    if (!f.hole_temperature_K.empty()) w.f64s(fields_key::hole_temperature, f.hole_temperature_K);
     return w;
 }
 
@@ -353,10 +361,14 @@ std::expected<results::NodeFields, base::Error> read_fields(const Reader& r) {
     NITCAD_IO_TRY(n, r.f64s_or_empty(fields_key::n));
     NITCAD_IO_TRY(p, r.f64s_or_empty(fields_key::p));
     NITCAD_IO_TRY(temperature, r.f64s_or_empty(fields_key::temperature));
+    NITCAD_IO_TRY(electron_temperature, r.f64s_or_empty(fields_key::electron_temperature));
+    NITCAD_IO_TRY(hole_temperature, r.f64s_or_empty(fields_key::hole_temperature));
     f.potential_V = std::move(potential);
     f.n_cm3 = std::move(n);
     f.p_cm3 = std::move(p);
     f.temperature_K = std::move(temperature);
+    f.electron_temperature_K = std::move(electron_temperature);
+    f.hole_temperature_K = std::move(hole_temperature);
     return f;
 }
 
@@ -848,6 +860,12 @@ Writer write_ac_fields(const results::SmallSignalFields& f) {
     w.f64s(k::n, interleaved(f.n_cm3));
     w.f64s(k::p, interleaved(f.p_cm3));
     w.f64s(k::temperature, interleaved(f.temperature_K));
+    if (!f.electron_temperature_K.empty()) {
+        w.f64s(k::electron_temperature, interleaved(f.electron_temperature_K));
+    }
+    if (!f.hole_temperature_K.empty()) {
+        w.f64s(k::hole_temperature, interleaved(f.hole_temperature_K));
+    }
     return w;
 }
 
@@ -863,10 +881,14 @@ std::expected<results::SmallSignalFields, base::Error> read_ac_fields(const Read
     NITCAD_IO_TRY(n, read_complexes(r, k::n));
     NITCAD_IO_TRY(p, read_complexes(r, k::p));
     NITCAD_IO_TRY(temperature, read_complexes(r, k::temperature));
+    NITCAD_IO_TRY(electron_temperature, read_complexes(r, k::electron_temperature));
+    NITCAD_IO_TRY(hole_temperature, read_complexes(r, k::hole_temperature));
     f.potential = std::move(potential);
     f.n_cm3 = std::move(n);
     f.p_cm3 = std::move(p);
     f.temperature_K = std::move(temperature);
+    f.electron_temperature_K = std::move(electron_temperature);
+    f.hole_temperature_K = std::move(hole_temperature);
     return f;
 }
 
@@ -1150,8 +1172,10 @@ std::expected<Checkpoint, base::Error> load_checkpoint(const std::filesystem::pa
     NITCAD_IO_TRY(fields, read_fields(fields_record));
     const std::size_t n = m.node_count();
     const auto sized = [n](const std::vector<double>& v) { return v.size() == n; };
+    const auto optional = [&](const std::vector<double>& v) { return v.empty() || sized(v); };
     if (!sized(fields.potential_V) || !sized(fields.n_cm3) || !sized(fields.p_cm3) ||
-        !(fields.temperature_K.empty() || sized(fields.temperature_K))) {
+        !optional(fields.temperature_K) || !optional(fields.electron_temperature_K) ||
+        !optional(fields.hole_temperature_K)) {
         return std::unexpected(corrupt("checkpoint fields do not have one value per node"));
     }
     c.fields = std::move(fields);

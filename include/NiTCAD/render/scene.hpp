@@ -133,7 +133,10 @@ enum class Field : std::uint8_t {
     current_density,   // |J| = |Jn + Jp|, A/cm^2 (NaN on insulator nodes)
     electron_current,  // |Jn|, A/cm^2
     hole_current,      // |Jp|, A/cm^2
-    last = hole_current,
+    // Unit 52: the carrier temperatures of energy balance, K; an error when the result holds none.
+    electron_temperature,  // T_n
+    hole_temperature,      // T_p
+    last = hole_temperature,
 };
 
 struct FieldInfo {

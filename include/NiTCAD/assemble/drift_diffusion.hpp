@@ -313,11 +313,20 @@ public:
     //   level times their flow into the device, (E_c + V) D_n + (E_v + V) D_p;
     // - residual: the Newton residual's power, sum of the energy rows' residuals and of E_c and
     //   E_v times the continuity rows' (zero for an exact solution).
-    // Preconditions (NITCAD_EXPECTS): the model is on; x has unknowns() entries.
+    // After a time step (Unit 52, EC13) the balance is the step's: input is the conduction
+    // power, recombination counts the rates alone, and two terms store energy:
+    //     input = ... + residual + thermal_storage + carrier_storage
+    // - thermal_storage: V rate (W_n + W_p - their history), the carriers' thermal energy (ED9);
+    // - carrier_storage: V rate (E_c (S_n - c_n) - E_v (S_p - c_p)), the band-edge energy of the
+    //   carriers stored (the continuity rows' storage terms, at the step's band edges).
+    // Both are 0 without a step. Preconditions (NITCAD_EXPECTS): the model is on and the
+    // temperatures are not held; x has unknowns() entries; step's spans of evaluate's sizes.
     struct EnergyPowers {
         double input, relaxation, recombination, contact_flux, contact_joule, peltier, residual;
+        double thermal_storage = 0.0, carrier_storage = 0.0;
     };
-    [[nodiscard]] EnergyPowers energy_powers(std::span<const double> x) const;
+    [[nodiscard]] EnergyPowers energy_powers(std::span<const double> x,
+                                             const TimeStep* step = nullptr) const;
     // The two-stage start of a bias point (Unit 52, ED12 as ruled 2026-10-29): hold_temperatures
     // makes every energy row tau - tau_held = 0, tau_held the rises of state x (so psi, n and p are
     // solved at the given carrier temperatures), until release_temperatures. Precondition
@@ -385,8 +394,9 @@ public:
     // A BDF time step (see the header comment): rate = 1 / (beta h), h in units of time_scale();
     // storage holds c_n and c_p of every node (storage_width() node_count() entries, node i from
     // storage_width() i; read only off the contacts and insulators), and with the electrothermal
-    // model c of the rise tau third (read off the isothermal sinks); traps c of every trap slot
-    // (trap_slots() entries).
+    // model c of the rise tau third (read off the isothermal sinks), with energy balance c of the
+    // carriers' thermal energies W_n and W_p third and fourth (Unit 52, ED9); traps c of every
+    // trap slot (trap_slots() entries).
     struct TimeStep {
         double rate;
         std::span<const double> storage;
@@ -402,7 +412,7 @@ public:
     void residual(std::span<const double> x, const TimeStep& step,
                   std::span<double> residual) const;
     // (S_n, S_p) of every node at state x, scaled (0 on insulator nodes), with the electrothermal
-    // model (S_n, S_p, tau).
+    // model (S_n, S_p, tau), with energy balance (S_n, S_p, W_n, W_p).
     [[nodiscard]] std::vector<double> storage(std::span<const double> x) const;
     [[nodiscard]] std::size_t storage_width() const noexcept { return m_ - 1; }
     // The occupancy f of every trap slot at state x: after `step`, or without one the steady
@@ -639,6 +649,13 @@ private:
     };
     [[nodiscard]] NodeStorage node_storage(std::size_t i, std::span<const double> x,
                                            std::span<const NodeDegeneracy> g) const;
+    // Energy balance (Unit 52, ED9): the thermal energy the carriers of a semiconductor node store
+    // per volume, W = (3/2) c theta g in units of k T_L Ns (g = F_{3/2} / F_{1/2} at c theta^(-3/2)
+    // with Fermi-Dirac, 1 with Boltzmann), and its partials in the density and the rise.
+    struct EnergyStorage {
+        double n, n_c, n_t, p, p_c, p_t;
+    };
+    [[nodiscard]] EnergyStorage energy_storage(std::size_t i, std::span<const double> x) const;
     // The trap step of interface edge k, or nullptr without a step.
     [[nodiscard]] std::optional<TrapStep> trap_step(std::size_t k, const TimeStep* step) const;
     // The interface of edge k at state x.

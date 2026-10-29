@@ -27,6 +27,10 @@
 //   on an ohmic contact node and an insulator node tau = 0 (ED1). No other boundary carries
 //   energy. While hold_temperatures is on, every energy row is tau - tau_held (ED12's first
 //   stage) and the edges add to the continuity rows only.
+// - Time steps and small signal (ED9): the energy row of a semiconductor node off the contacts
+//   stores -V rate (W - c_W), W = (3/2) c theta g the carriers' thermal energy (energy_storage;
+//   g = 1 with Boltzmann), as the continuity rows store their carriers; the small-signal matrix
+//   takes -V s dW. The step's history holds W_n and W_p after S_n and S_p (storage width 4).
 // - Mobility (ED4): mu(T) of physics/energy_balance.hpp at the edge's mean rise, of the edge's
 //   low-field mobility (between two materials the harmonic mean of each end's) with node a's
 //   relaxation time and Canali parameters (each end's on a two-material edge).
@@ -318,6 +322,24 @@ std::pair<DriftDiffusion::EnergyFlux, DriftDiffusion::EnergyFlux> DriftDiffusion
             carrier(-1.0, pa, pb, tpa, tpb, dpsi + e.shift_p, Fp, hpa, hpb)};
 }
 
+DriftDiffusion::EnergyStorage DriftDiffusion::energy_storage(std::size_t i,
+                                                             std::span<const double> x) const {
+    // W = (3/2) c theta g per carrier, the pressure's (3/2) (ED8).
+    const auto one = [&](double c, double tau, double log_dos, double& w, double& w_c,
+                         double& w_t) {
+        const double theta = 1.0 + tau;
+        HotDegeneracy h{0.0, 0.0, 0.0, 1.0, 0.0, 0.0};
+        if (fermi_dirac_) h = hot_degeneracy(c, tau, n_ie_[i], log_dos);
+        w = 1.5 * c * theta * h.g;
+        w_c = 1.5 * theta * (h.g + c * h.g_c);
+        w_t = 1.5 * c * (h.g + theta * h.g_t);
+    };
+    EnergyStorage s{};
+    one(x[5 * i + 1], x[5 * i + 3], log_dos_n_[i], s.n, s.n_c, s.n_t);
+    one(x[5 * i + 2], x[5 * i + 4], log_dos_p_[i], s.p, s.p_c, s.p_t);
+    return s;
+}
+
 void DriftDiffusion::hold_temperatures(std::span<const double> x) {
     NITCAD_EXPECTS(energy_balance_ && x.size() == unknowns());
     held_.resize(2 * node_count());
@@ -332,11 +354,20 @@ void DriftDiffusion::hold_temperatures(std::span<const double> x) {
 // -sum_e delta F is, by parts with delta = -(E_b - E_a) per carrier, -sum_i (E_c D_n + E_v D_p)
 // over all nodes (D the flux sums of the continuity rows): the gap energy of the recombined pairs
 // off the contacts, and at the contacts sum_c V_c I_c plus the Peltier term.
-DriftDiffusion::EnergyPowers DriftDiffusion::energy_powers(std::span<const double> x) const {
+// After a time step the continuity rows' terms are V k U plus the storage V rate (S - c): the
+// storage's band-edge energy is carrier_storage, the energy rows' own storage thermal_storage.
+DriftDiffusion::EnergyPowers DriftDiffusion::energy_powers(std::span<const double> x,
+                                                           const TimeStep* step) const {
     NITCAD_EXPECTS(energy_balance_ && held_.empty() && x.size() == unknowns());
     const std::size_t nodes = node_count();
     std::vector<double> f(unknowns());
-    residual(x, f);
+    if (step != nullptr) {
+        residual(x, *step, f);
+    } else {
+        residual(x, f);
+    }
+    const std::vector<NodeDegeneracy> g = step != nullptr ? degeneracies(x)
+                                                          : std::vector<NodeDegeneracy>{};
     const BandEdges bands = band_edges(x);
     EnergyPowers p{electrical_power(x), 0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
     std::vector<double> dn(nodes, 0.0), dp(nodes, 0.0);
@@ -367,7 +398,18 @@ DriftDiffusion::EnergyPowers DriftDiffusion::energy_powers(std::span<const doubl
         }
         const double n = x[5 * i + 1], h = x[5 * i + 2];
         const double tn = x[5 * i + 3], tp = x[5 * i + 4];
-        const double ku = dn[i] - f[5 * i + 1];  // V k U, the electron row's term
+        double ku = dn[i] - f[5 * i + 1];  // V k U, the electron row's term
+        if (step != nullptr) {
+            const double ks = volume_[i] * step->rate;
+            const NodeStorage st = node_storage(i, x, g);
+            const EnergyStorage w = energy_storage(i, x);
+            const double sn = ks * (st.n - step->storage[4 * i]);
+            const double sp = ks * (st.p - step->storage[4 * i + 1]);
+            ku -= sn;
+            p.carrier_storage += bands.conduction[i] * sn - bands.valence[i] * sp;
+            p.thermal_storage +=
+                ks * (w.n - step->storage[4 * i + 2] + w.p - step->storage[4 * i + 3]);
+        }
         const double k = volume_[i] * rate_scale_;
         const Relaxing rel = relaxing(n, h, doping_[i]);
         p.relaxation += 1.5 * k * (rel.n * tn / relax_n_[i] + rel.p * tp / relax_p_[i]);
@@ -427,13 +469,25 @@ public:
             const double rn = 1.5 / s.relax_n_[i], rp = 1.5 / s.relax_p_[i];
             ev.f[5 * i + 3] = -k * (rn * rel.n * tn + 1.5 * (1.0 + tn) * u);
             ev.f[5 * i + 4] = -k * (rp * rel.p * tp + 1.5 * (1.0 + tp) * u);
+            if (jacobian) {
+                at(s, ev, i, 3, 1) = -k * (rn * rel.n_n * tn + 1.5 * (1.0 + tn) * u_n);
+                at(s, ev, i, 3, 2) = -k * (rn * rel.n_p * tn + 1.5 * (1.0 + tn) * u_p);
+                at(s, ev, i, 3, 3) = -k * (rn * rel.n + 1.5 * u);
+                at(s, ev, i, 4, 1) = -k * (rp * rel.p_n * tp + 1.5 * (1.0 + tp) * u_n);
+                at(s, ev, i, 4, 2) = -k * (rp * rel.p_p * tp + 1.5 * (1.0 + tp) * u_p);
+                at(s, ev, i, 4, 4) = -k * (rp * rel.p + 1.5 * u);
+            }
+            if (ev.step == nullptr) continue;
+            // ED9: a time step stores -V rate (W - c_W), as the continuity rows' storage.
+            const EnergyStorage w = s.energy_storage(i, x);
+            const double ks = s.volume_[i] * ev.step->rate;
+            ev.f[5 * i + 3] -= ks * (w.n - ev.step->storage[4 * i + 2]);
+            ev.f[5 * i + 4] -= ks * (w.p - ev.step->storage[4 * i + 3]);
             if (!jacobian) continue;
-            at(s, ev, i, 3, 1) = -k * (rn * rel.n_n * tn + 1.5 * (1.0 + tn) * u_n);
-            at(s, ev, i, 3, 2) = -k * (rn * rel.n_p * tn + 1.5 * (1.0 + tn) * u_p);
-            at(s, ev, i, 3, 3) = -k * (rn * rel.n + 1.5 * u);
-            at(s, ev, i, 4, 1) = -k * (rp * rel.p_n * tp + 1.5 * (1.0 + tp) * u_n);
-            at(s, ev, i, 4, 2) = -k * (rp * rel.p_p * tp + 1.5 * (1.0 + tp) * u_p);
-            at(s, ev, i, 4, 4) = -k * (rp * rel.p + 1.5 * u);
+            at(s, ev, i, 3, 1) -= ks * w.n_c;
+            at(s, ev, i, 3, 3) -= ks * w.n_t;
+            at(s, ev, i, 4, 2) -= ks * w.p_c;
+            at(s, ev, i, 4, 4) -= ks * w.p_t;
         }
     }
 };

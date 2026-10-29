@@ -4708,6 +4708,44 @@ Boltzmann); with N_c at T_L (coefficient 1 for 5/2) it misses by 7.6e-4. EC7 wit
 3D) closes within 3e-16 of the largest term with the residual. EC4's diode double limit with Fermi–Dirac (n side 2e19)
 against Unit 14's drift-diffusion within 1e-6.
 
+**Slice 4 as built (2026-10-29; owner: "start slice 4: transient and small-signal analyses").**
+- **ED9.** Each energy row of a semiconductor node off the contacts stores −V rate (W − c_W), W = (3/2) c θ g the
+  carriers' thermal energy (g = F_{3/2}/F_{1/2} at c θ^{−3/2}, ED8 as ruled; 1 with Boltzmann); a step's history holds
+  S_n, S_p, W_n, W_p per node (storage width 4). The small-signal matrix takes −V s dW; the small-signal current rows
+  take the rise columns and Lombardi's E_perp stencil. `energy_powers` takes an optional time step and returns the
+  stored power in two more terms (thermal_storage, carrier_storage; below).
+- **Transient** (`solve_transient`): the state at t = 0 in ED12's two stages; the error estimate measures each
+  carrier's rise off the contacts (absolute, in units of T_L, as the electrothermal model's); snapshots carry T_n, T_p.
+  **Small signal:** the fields carry the carrier temperatures' amplitudes (K/V).
+- **ED13 / EC16.** Result files: T_n, T_p under new keys (fields 5, 6; small-signal fields 7, 8), written only when
+  present. Device files: the relaxation times under keys 68, 69, written only when given (nonzero), so a file without
+  them is the file of before (a test checks the 36-byte difference). Run record: `models.energy_balance` named and each
+  region's relaxation times (as given; 0 = silicon's) and the initial carrier temperatures in the identity, only when
+  on. Deck: `[models] energy_balance = on | off`; `energy_relaxation.tau_n_s`, `.tau_p_s` per region. `nitcad plot`
+  and the application: fields `Tn`, `Tp` (an error naming `energy_balance` when a result has none; the application
+  lists them only then).
+- **Measured.** EC6 mass: every column within 1e-6 (1D, 1D across a material step, 2D with the oxide and Lombardi, 2D
+  with a gate, 3D; Boltzmann and Fermi–Dirac; rates t0/τ_w and 100 t0/τ_w). The small-signal matrix equals the time
+  step's Jacobian at s = rate, and at s = iω the steady Jacobian plus iω times the storage's, within 1e-12 of the
+  largest entry. The current rows against central differences of the terminal currents within 1e-6 of the row's
+  largest entry (beyond the rounding of the current's terms, as EC6's relative steps). EC13 on the ballistic diode
+  (0.5 → 1 V at 0.1 ps, backward Euler to 1 ns, 183 steps, 0.4 s): the end state within 9.4e-15 (current), 1.5e-16
+  (ψ), 1.0e-15 (n), 2.3e-9 (p), 8.5e-16 (T_n), 1.7e-15 (T_p) of the 1 V steady state; the energy budget below misses
+  by 5.5e-14. EC14 at 0 Hz against the DC central difference (±0.1 mV): the ballistic diode at 0.3 V and 1 V within
+  6.7e-9 and 7.9e-10; a forward pn diode at 0.6 V within 2.5e-6 with both statistics, which is the central
+  difference's own truncation, (ΔV/V_T)²/6 = 2.5e-6. EC15: every ED11 refusal with its message (gate tunnelling,
+  nonlocal BTBT, the weighted current and Lombardi with impact ionization added).
+- **EC13's energy half: ruled 2026-10-29, accepted as built** (owner, "Accept as built"). Read literally ("input energy equals relaxation plus
+  recombination energy plus the change in stored energy") it misses, for EC7's reasons and one more. Built and gated
+  at 1e-6: the integral of the conduction power Σ_c V_c I_c equals the integrals of EC7's terms as ruled (relaxation,
+  recombination, the energy flux into the contacts, the contact edges' half Joule heat, minus the Peltier term) plus
+  the change in stored energy, taken as two terms: the carriers' thermal energy (ΔW, ED9) and the band-edge energy of
+  the carriers stored, V rate (E_c ΔS_n − E_v ΔS_p) at each step's band edges (the continuity rows' storage; a step
+  that stores carriers moves their potential energy as well as their thermal energy). Measured over the run, in
+  units of the input: thermal energy 2.2e-4, band-edge energy 1.5e-4, contact terms 8.9e-2; without the band-edge term
+  the miss is 1.5e-4, without the contact terms 8.9e-2. The per-step identity is algebraic (an assembly test closes
+  it within 1e-12 at arbitrary states).
+
 **Questions for the owner before code (proposal's recommended answer first):**
 - EQ1 τ_w for silicon: 0.35 ps / 0.4 ps (Triebl), or another cited pair.
 - EQ2 `field_mobility = on` with energy balance: refused (ED4), or silently replaced by the T-driven law.
