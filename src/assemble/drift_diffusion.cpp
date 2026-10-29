@@ -233,11 +233,15 @@ std::expected<DriftDiffusion, base::Error> DriftDiffusion::create(
     s.kinds_ = std::move(scaled->kinds);
     s.contact_count_ = device.contacts().size();
     s.temperature_K_ = T;
-    // Unit 51 (DECISIONS.md GD9): gate tunnelling is isothermal.
+    // Unit 51 (DECISIONS.md GD9): gate tunnelling is isothermal, and not validated with quantum
+    // confinement (MLDA moves the surface quasi-Fermi level the supply reads; owner ruling 2026-10-29).
     if (std::ranges::any_of(device.contacts(),
                             [](const device::Contact& c) { return c.tunnelling != 0; })) {
         if (models.electrothermal) {
             return refuse("gate tunnelling with the electrothermal model is not supported");
+        }
+        if (models.quantum_confinement != QuantumConfinement::off) {
+            return refuse("gate tunnelling with quantum confinement is not supported");
         }
         if (auto e = s.make_gate_tunnels(device, scaling)) return std::unexpected(std::move(*e));
     }

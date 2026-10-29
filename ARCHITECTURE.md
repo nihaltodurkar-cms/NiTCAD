@@ -1686,15 +1686,16 @@ GC1–GC17):**
   their sum (per-process currents in `BiasPoint::tunnelling_ecb`, `_hvb`, `_evb`). Equilibrium carries none.
 - Cost (GR11): each assembly computes the tunnel fluxes on worker threads alongside the other terms, bit-identical
   at any thread count; on the FinFET, evaluation costs 1.2× and the residual 1.4× those without tunnelling.
-- Refused (invalid_input): with the electrothermal model, with the weighted terminal current (Unit 32), an electrode
-  path on a mesh without tensor cells, tunnelling on an ohmic or Schottky contact.
+- Refused (invalid_input): with the electrothermal model, with quantum confinement (MLDA, Unit 47: not validated
+  together; GR12), with the weighted terminal current (Unit 32), an electrode path on a mesh without tensor cells,
+  tunnelling on an ohmic or Schottky contact.
 - Deck keys on the contact and insulator region; the device file stores them as optional records (no format version
   change); the run record hashes them when present; the CLI table and app name the per-process currents.
 - Validated analytically (no measured J–V source was accessible): Fowler–Nordheim and direct-tunnelling slopes; the
   self-consistent capacitor's current against the integral on its own bands to 1e-12 of the one-way flux, also on a
   germanium surface; meshed against lumped oxide within 2%; 2D and 3D against 1D and 2D within 1e-9; small-signal
   conductance and a transient's charge balance; the FinFET sweep converges at every point with tunnelling as without
-  it, with I_G/I_D from 2e-6 near threshold to 1.2e-4 at 0.8 V. 22 hand mutants, all caught.
+  it, with I_G/I_D from 2e-6 near threshold to 1.2e-4 at 0.8 V. 23 hand mutants, all caught.
 - Not built (owner exclusions): electrothermal tunnelling, a tunnelling term in the weighted current, paths on
   unstructured meshes, image-force lowering.
 

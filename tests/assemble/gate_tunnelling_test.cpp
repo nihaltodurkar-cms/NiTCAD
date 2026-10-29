@@ -467,6 +467,14 @@ TEST_CASE("gate tunnelling assemble: GC13 refusals") {
     assemble::PhysicsModels thermal;
     thermal.electrothermal = true;
     require_invalid(DriftDiffusion::create(d, s, thermal), "electrothermal");
+    {  // quantum confinement (owner ruling 2026-10-29: not validated together)
+        assemble::PhysicsModels mlda;
+        mlda.quantum_confinement = assemble::QuantumConfinement::mlda;
+        const auto made = DriftDiffusion::create(d, s, mlda);
+        require_invalid(made, "quantum confinement");
+        REQUIRE(made.error().message.find("gate tunnelling with quantum confinement") !=
+                std::string::npos);
+    }
     Mos no_cells;
     no_cells.cells = false;
     const device::Device dc = stack(no_cells);

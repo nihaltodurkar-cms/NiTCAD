@@ -4393,6 +4393,7 @@ A/cm² in accumulation, where the current comes from the gate (the measured ECB 
 | GR9 | GR2's scale is the larger of the two one-way fluxes (the semiconductor's side supplying alone, and the electrode's alone). |
 | GR10 | The FinFET deck's HfO₂ band data for GC14 and GC16 (AskUserQuestion, 2026-10-28): gap 5.7 eV and affinity 2.55 eV (conduction offset 1.5 eV to silicon's 4.05; Gehring Table 5.1), tunnelling masses 0.18 m₀ for electrons and holes (owner ruling: no accessible source found for 0.18; the open-access measurement found, Monaghan et al., Solid-State Electronics 2009, https://research.ucc.ie/en/publications/determination-of-electron-effective-mass-and-electron-affinity-in/, gives 0.11 ± 0.03 m₀ and an affinity of 2.0 ± 0.25 eV). The interfacial SiO₂ takes the built-in set. |
 | GR11 | GC14's cost (AskUserQuestion, 2026-10-28): the tunnels' fluxes are computed on threads, the first threading inside assembly; each flux is computed whole by one thread and added in tunnel order, so the result does not depend on the thread count. The baseline (without tunnelling) stays single-threaded. Measured before the ruling, single-threaded: 4.7× (about 1,300 tunnels × 2 processes × 320 quadrature points × about 10 segments, near 55 ns a point). |
+| GR12 | Gate tunnelling with quantum confinement (owner, 2026-10-29, after the rebase onto `main` brought Unit 47): refused (invalid_input) as GD9's exclusions, tested in GC13. MLDA moves the surface quasi-Fermi level by −kT ln f_n, which the supply reads, so the same density tunnels more; neither unit validated the pair. A later unit may rule on the supply under confinement and lift the refusal. |
 
 **Slice 2 (device, assembly, deck, files, record, app, CLI), as built.**
 - `device::Contact::tunnelling` (`TunnelProcess` bits; 0 off) and `GateStack`'s oxide band data (`oxide_affinity_eV`,
@@ -4465,7 +4466,7 @@ A/cm² in accumulation, where the current comes from the gate (the measured ECB 
   its 2D device's current; equal to the printed seven digits (8.949119e-10 and 1.002478e-09 A), within 1e-9.
   Mutant: a node keeping only its first tunnel (the corner losing its second face's path) fails by 8.7e-4.
 
-**GC17's hand mutants, as run (2026-10-29).** 22 mutants, each built in Release and run against the gate
+**GC17's hand mutants, as run (2026-10-29).** 23 mutants (the last for GR12's refusal, after the rebase), each built in Release and run against the gate
 tunnelling tests (physics, assemble, deck), then reverted. All are caught; none is recorded as equivalent. Seven
 first survived and each gap was closed with a test before the mutant was run again:
 
@@ -4491,6 +4492,7 @@ first survived and each gap was closed with a test before the mutant was run aga
 | GD8 | `on` without EVB | the assemble tests (GC7 stacks) |
 | GD9 | no electrothermal refusal | GC13 |
 | GD9 | no weighted-current refusal | survived; new: the weighted current refused with gate tunnelling |
+| GD9 (GR12) | no quantum-confinement refusal | GC13 (added with the refusal; checks the message) |
 | GD10 | the gate's `oxide_mass_n` and `oxide_mass_p` swapped | each process takes its own mass |
 | GD10 | a region's `electron_affinity_eV` into its band gap | survived (only the hidden FinFET case uses region keys); new: an insulator region's band data from the deck |
 
