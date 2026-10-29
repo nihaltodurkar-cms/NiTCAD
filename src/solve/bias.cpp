@@ -361,6 +361,19 @@ std::expected<results::Sweep, base::Error> sweep_bias_unobserved(const device::D
                        if (auto ok = system->set_thermal_bias(temperatures); !ok) return ok;
                    }
                    system->stamp_contacts(x);
+                   // Energy balance (Unit 52, ED12 as ruled 2026-10-29): psi, n and p are first
+                   // converged at the carrier temperatures the point starts from (tau = 0 at the
+                   // first point: drift-diffusion), then the coupled system from there. A step's
+                   // first iterate carries spurious currents whose Joule heat would otherwise
+                   // throw the temperatures far off. The first stage's iterations are neither
+                   // recorded nor reported.
+                   if (system->energy_balance()) {
+                       system->hold_temperatures(x);
+                       results::ConvergenceRecord held;
+                       auto first = newton_solve(*system, x, newton, *solver, held, control.stop);
+                       system->release_temperatures();
+                       if (!first) return first;
+                   }
                    const std::vector<double> stamped = x;
                    // With nonlocal tunnelling the paths are re-traced until they agree with the
                    // solution (relocation.hpp); they carry over from the previous point.

@@ -250,6 +250,10 @@ std::expected<results::Transient, base::Error> solve_transient_unobserved(
     const double charge_scale = detail::charge_scale(*scaling, D);
     const double t0 = dd.time_scale();  // seconds per scaled time
     const double density_ref = options.density_ref_cm3 / scaling->Ns;
+    // Energy balance (Unit 52): the carrier temperature rises' slots.
+    const bool energy = dd.energy_balance();
+    const std::size_t rise_n = dd.dofs().slot(assemble::FieldId::electron_temperature).value_or(0);
+    const std::size_t rise_p = dd.dofs().slot(assemble::FieldId::hole_temperature).value_or(0);
 
     // What the error estimate measures per node: the carriers of a semiconductor node off the
     // contacts, the potential alone of an insulator node, nothing on a Dirichlet node.
@@ -326,6 +330,20 @@ std::expected<results::Transient, base::Error> solve_transient_unobserved(
         }
         std::vector<double> held(nodes);
         for (std::size_t i = 0; hold && i < nodes; ++i) held[i] = x[m * i + slot.temperature];
+        // Energy balance (Unit 52, ED12 as ruled): psi, n and p first at the carrier temperatures
+        // of the start (the lattice's from equilibrium, or the given ones), as sweep_bias's
+        // points; the first stage's iterations are not recorded.
+        if (dd.energy_balance()) {
+            system->hold_temperatures(x);
+            results::ConvergenceRecord unused;
+            auto held_stage = newton_solve(dd, x, steady.newton, *solver, unused, control.stop);
+            system->release_temperatures();
+            if (!held_stage) {
+                run.stopped = std::move(held_stage.error());
+                run.unfinished = std::move(unused);
+                return run;
+            }
+        }
         if (auto ok = detail::solve_relocating(
                 *system, x,
                 [&] {
@@ -360,6 +378,10 @@ std::expected<results::Transient, base::Error> solve_transient_unobserved(
             snap.fields.p_cm3[i] = s.x[m * i + slot.holes] * scaling->Ns;
             if (thermal) {
                 snap.fields.temperature_K.push_back(T0 + T0 * s.x[m * i + slot.temperature]);
+            }
+            if (energy) {  // Unit 52: T = T_L (1 + tau) per carrier
+                snap.fields.electron_temperature_K.push_back(T0 + T0 * s.x[m * i + rise_n]);
+                snap.fields.hole_temperature_K.push_back(T0 + T0 * s.x[m * i + rise_p]);
             }
         }
         snap.bands = detail::band_diagram(dd.band_edges(s.x), scaling->V_T);
@@ -528,6 +550,11 @@ std::expected<results::Transient, base::Error> solve_transient_unobserved(
                 for (const std::size_t k : {m * i + slot.electrons, m * i + slot.holes}) {
                     const double e = factor * (next.x[k] - predicted(&State::x, k));
                     err = std::max(err, std::abs(e) / (std::abs(next.x[k]) + density_ref));
+                }
+                // Energy balance: each carrier's rise, absolute in units of T_L (as the lattice's).
+                for (std::size_t k = 0; energy && k < 2; ++k) {
+                    const std::size_t r = m * i + (k == 0 ? rise_n : rise_p);
+                    err = std::max(err, std::abs(factor * (next.x[r] - predicted(&State::x, r))));
                 }
             }
             for (std::size_t k = 0; k < next.traps.size(); ++k) {

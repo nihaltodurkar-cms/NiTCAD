@@ -24,6 +24,8 @@ enum class FieldId {
     electrons,    // n: the electron density
     holes,        // p: the hole density
     temperature,  // tau = (T - T0) / T0: the lattice temperature rise (electrothermal, Unit 23)
+    electron_temperature,  // tau_n = (T_n - T_L) / T_L (energy balance, Unit 52)
+    hole_temperature,      // tau_p = (T_p - T_L) / T_L
 };
 
 enum class FieldLocation { node };
@@ -50,6 +52,13 @@ inline constexpr Field hole_field{FieldId::holes, "holes", "Ns", FieldLocation::
                                   FieldDomain::semiconductor};
 inline constexpr Field temperature_field{FieldId::temperature, "temperature rise", "T0",
                                          FieldLocation::node, true, FieldDomain::all};
+inline constexpr Field electron_temperature_field{FieldId::electron_temperature,
+                                                  "electron temperature rise", "T_L",
+                                                  FieldLocation::node, true,
+                                                  FieldDomain::semiconductor};
+inline constexpr Field hole_temperature_field{FieldId::hole_temperature, "hole temperature rise",
+                                              "T_L", FieldLocation::node, true,
+                                              FieldDomain::semiconductor};
 
 class DofMap {
 public:

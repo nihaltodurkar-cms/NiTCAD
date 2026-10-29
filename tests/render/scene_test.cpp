@@ -361,6 +361,17 @@ TEST_CASE("render scene: field values from a bias point, and material classes") 
     CHECK(field_values(m.device, p, Field::potential)->at(3) == 0.25);
     CHECK(field_values(m.device, p, Field::valence_band)->at(0) == -0.6);
     CHECK(field_values(m.device, p, Field::temperature)->at(5) == 300.0);
+    // Unit 52: the carrier temperatures, an error that says so without energy balance.
+    CHECK(field_values(m.device, p, Field::electron_temperature).error().message.find("energy_balance") !=
+          std::string::npos);
+    CHECK_FALSE(field_values(m.device, p, Field::hole_temperature).has_value());
+    p.fields.electron_temperature_K.assign(n, 300.0);
+    p.fields.electron_temperature_K[4] = 812.5;
+    p.fields.hole_temperature_K.assign(n, 301.0);
+    CHECK(field_values(m.device, p, Field::electron_temperature)->at(4) == 812.5);
+    CHECK(field_values(m.device, p, Field::hole_temperature)->at(2) == 301.0);
+    CHECK(find_field("Tn") == Field::electron_temperature);
+    CHECK(find_field("Tp") == Field::hole_temperature);
     const auto net = *field_values(m.device, p, Field::net_doping);
     for (std::size_t i = 0; i < n; ++i) {
         CHECK(net[i] == m.device.donors()[i] - m.device.acceptors()[i]);

@@ -252,6 +252,8 @@ std::expected<Semiconductor, base::Error> Semiconductor::create(
         {"ionization.", "acceptor_degeneracy", p.ionization.acceptor_degeneracy, positive},
         {"richardson.", "electron", p.richardson.electron, non_negative},
         {"richardson.", "hole", p.richardson.hole, non_negative},
+        {"energy_relaxation.", "tau_n_s", p.energy_relaxation.tau_n_s, non_negative},  // Unit 52
+        {"energy_relaxation.", "tau_p_s", p.energy_relaxation.tau_p_s, non_negative},
     };
     for (const auto& c : unit15) {
         if (auto e = check(c.group, c.field, c.value, c.bound)) {

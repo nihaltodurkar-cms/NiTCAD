@@ -80,6 +80,10 @@ results::Sweep full_sweep() {
         results::BiasPoint p;
         p.bias_V = {0.1 * k, -0.0};
         p.fields = {{1.0 / 3.0, 2.0}, {1e17, 1e3}, {1e3, 1e17}, {300.0, 300.5}};
+        if (k == 1) {  // Unit 52: the carrier temperatures, absent at point 0
+            p.fields.electron_temperature_K = {300.0, 1234.5678};
+            p.fields.hole_temperature_K = {300.0000000000001, 301.0};
+        }
         p.bands = {{0.5, 0.6}, {-0.6, -0.5}, {0.0, -0.1}, {0.0, std::nan("")}};
         p.terminal_current = {1e-3, -1e-3};
         p.terminal_current_resolution = {1e-12, 1e-12};
@@ -109,6 +113,8 @@ void check_same(const results::BiasPoint& a, const results::BiasPoint& b) {
     CHECK(same_bits(a.fields.n_cm3, b.fields.n_cm3));
     CHECK(same_bits(a.fields.p_cm3, b.fields.p_cm3));
     CHECK(same_bits(a.fields.temperature_K, b.fields.temperature_K));
+    CHECK(same_bits(a.fields.electron_temperature_K, b.fields.electron_temperature_K));
+    CHECK(same_bits(a.fields.hole_temperature_K, b.fields.hole_temperature_K));
     CHECK(same_bits(a.bands.conduction_eV, b.bands.conduction_eV));
     CHECK(same_bits(a.bands.valence_eV, b.bands.valence_eV));
     CHECK(same_bits(a.bands.electron_fermi_eV, b.bands.electron_fermi_eV));

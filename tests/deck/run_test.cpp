@@ -328,6 +328,103 @@ adaptive = off
     CHECK(astop.output.find("nitcad: the small-signal run stopped after 1 of 2 point(s)") != std::string::npos);
 }
 
+
+TEST_CASE("deck run: energy balance through the runner and its files (Unit 52, EC16)", "[deck]") {
+    // A sweep, a transient and a small-signal run of the diode with [models] energy_balance = on
+    // and its own relaxation times: every result carries T_n and T_p; each file reads back with
+    // them bit for bit and saves again byte for byte; the device file keeps the relaxation times.
+    const fs::path dir = scratch("run_energy_balance");
+    std::string device = diode_device;
+    device.replace(device.find("material = silicon"), 18,
+                   "material = silicon\nenergy_relaxation.tau_n_s = 0.3e-12\nenergy_relaxation.tau_p_s = 0.45e-12");
+    device += "[models]\nenergy_balance = on\n";
+    const auto bytes = [](const fs::path& p) {
+        std::ifstream f(p, std::ios::binary);
+        return std::vector<char>(std::istreambuf_iterator<char>(f), {});
+    };
+    const std::size_t nodes = 201;
+    const auto heated = [&](const results::NodeFields& f) {
+        CHECK(f.electron_temperature_K.size() == nodes);
+        CHECK(f.hole_temperature_K.size() == nodes);
+        return !f.electron_temperature_K.empty() &&
+               *std::ranges::max_element(f.electron_temperature_K) > 300.0;
+    };
+    {
+        const deck::Plan plan = must(device + "[sweep]\ncontact anode = 0 : 0.6 : 0.2\n"
+                                              "[output]\nsweep = s.nitsweep\ndevice = s.nitdev\n", dir);
+        const auto report = deck::run(plan);
+        if (!report) FAIL(report.error().message);
+        REQUIRE(report->sweep.has_value());
+        REQUIRE_FALSE(report->sweep->stopped.has_value());
+        CHECK(heated(report->sweep->points.back().fields));
+        const auto loaded = io::load_sweep(dir / "s.nitsweep");
+        REQUIRE(loaded.has_value());
+        for (std::size_t k = 0; k < loaded->points.size(); ++k) {
+            const results::NodeFields& a = report->sweep->points[k].fields;
+            const results::NodeFields& b = loaded->points[k].fields;
+            CHECK(same_bits(a.electron_temperature_K, b.electron_temperature_K));
+            CHECK(same_bits(a.hole_temperature_K, b.hole_temperature_K));
+        }
+        REQUIRE(io::save_sweep(dir / "again.nitsweep", *loaded).has_value());
+        CHECK(bytes(dir / "again.nitsweep") == bytes(dir / "s.nitsweep"));
+        const auto d = io::load_device(dir / "s.nitdev");
+        REQUIRE(d.has_value());
+        const auto& e =
+            std::get<physics::Semiconductor>(d->regions()[0].material).parameters().energy_relaxation;
+        CHECK(e.tau_n_s == 0.3e-12);
+        CHECK(e.tau_p_s == 0.45e-12);
+        CHECK(solve::make_run_record(*d, plan.options, plan.points).input_identity ==
+              report->sweep->run.input_identity);
+    }
+    {
+        const deck::Plan plan = must(device + "[transient]\ncontact anode = ramp(0, 0.4, 0, 2e-11)\n"
+                                              "t_end = 4e-11\ndt_initial = 1e-13\n"
+                                              "[output]\ntransient = t.nittran\n", dir);
+        const auto report = deck::run(plan);
+        if (!report) FAIL(report.error().message);
+        REQUIRE(report->transient.has_value());
+        if (report->transient->stopped) FAIL(report->transient->stopped->message);
+        CHECK(heated(report->transient->snapshots.back().fields));
+        const auto loaded = io::load_transient(dir / "t.nittran");
+        REQUIRE(loaded.has_value());
+        REQUIRE(loaded->snapshots.size() == report->transient->snapshots.size());
+        for (std::size_t k = 0; k < loaded->snapshots.size(); ++k) {
+            CHECK(same_bits(loaded->snapshots[k].fields.electron_temperature_K,
+                            report->transient->snapshots[k].fields.electron_temperature_K));
+            CHECK(same_bits(loaded->snapshots[k].fields.hole_temperature_K,
+                            report->transient->snapshots[k].fields.hole_temperature_K));
+        }
+        REQUIRE(io::save_transient(dir / "again.nittran", *loaded).has_value());
+        CHECK(bytes(dir / "again.nittran") == bytes(dir / "t.nittran"));
+    }
+    {
+        const deck::Plan plan = must(device + "[small_signal]\ncontact anode = 0.4\n"
+                                              "frequencies = 0, 1e9\nfield_frequencies = 1e9\n"
+                                              "[output]\nsmall_signal = a.nitac\n", dir);
+        const auto report = deck::run(plan);
+        if (!report) FAIL(report.error().message);
+        REQUIRE(report->small_signal.has_value());
+        if (report->small_signal->stopped) FAIL(report->small_signal->stopped->message);
+        const results::SmallSignalPoint& p = report->small_signal->points.front();
+        CHECK(heated(p.dc.fields));
+        REQUIRE_FALSE(p.fields.empty());
+        for (const results::SmallSignalFields& f : p.fields) {
+            CHECK(f.electron_temperature_K.size() == nodes);
+            CHECK(f.hole_temperature_K.size() == nodes);
+        }
+        const auto loaded = io::load_small_signal(dir / "a.nitac");
+        REQUIRE(loaded.has_value());
+        const auto& lf = loaded->points.front().fields;
+        REQUIRE(lf.size() == p.fields.size());
+        for (std::size_t k = 0; k < lf.size(); ++k) {
+            CHECK(lf[k].electron_temperature_K == p.fields[k].electron_temperature_K);
+            CHECK(lf[k].hole_temperature_K == p.fields[k].hole_temperature_K);
+        }
+        REQUIRE(io::save_small_signal(dir / "again.nitac", *loaded).has_value());
+        CHECK(bytes(dir / "again.nitac") == bytes(dir / "a.nitac"));
+    }
+}
+
 TEST_CASE("deck run: a stopped transient writes its accepted steps (Unit 43)", "[deck]") {
     const fs::path dir = scratch("run_transient_stopped");
     const deck::Plan plan = must(diode_device + R"(

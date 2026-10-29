@@ -139,6 +139,34 @@ inline DD fermi_one_quadrature(double eta) {
     return sum;
 }
 inline DD fermi_one_series(double eta) { return detail::fermi_series(eta, 2.0); }
+
+// F_{3/2} (Unit 52): the series below eta = -1, otherwise 8 / (3 sqrt(pi)) int u^4 f du (t = u^2),
+// on fermi_half's panels.
+inline DD fermi_three_halves_quadrature(double eta) {
+    const double U = std::sqrt(std::max(eta, 0.0) + 120.0);
+    const double width = std::min(0.25, pi().hi / (4.0 * std::sqrt(std::max(eta, 1.0))));
+    const int panels = static_cast<int>(std::ceil(U / width));
+    const GaussLegendre& g = detail::gl20();
+    DD sum = 0.0;
+    for (int p = 0; p < panels; ++p) {
+        const DD a = DD(U) * DD(p) / DD(panels), b = DD(U) * DD(p + 1.0) / DD(panels);
+        const DD half = (b - a) / DD(2.0), mid = (a + b) / DD(2.0);
+        for (std::size_t i = 0; i < g.x.size(); ++i) {
+            for (const double sign : {-1.0, 1.0}) {
+                const DD u = mid + DD(sign) * half * g.x[i];
+                const DD y = u * u - DD(eta);
+                if (y.hi > 300.0) continue;
+                const DD u2 = u * u;
+                sum += g.w[i] * half * u2 * u2 / (DD(1.0) + exp(y));
+            }
+        }
+    }
+    return DD(8.0) / (DD(3.0) * sqrt(pi())) * sum;
+}
+inline DD fermi_three_halves_series(double eta) { return detail::fermi_series(eta, 2.5); }
+inline DD fermi_three_halves(double eta) {
+    return eta < -1.0 ? fermi_three_halves_series(eta) : fermi_three_halves_quadrature(eta);
+}
 inline DD fermi_one(double eta) {
     return eta < -1.0 ? fermi_one_series(eta) : fermi_one_quadrature(eta);
 }

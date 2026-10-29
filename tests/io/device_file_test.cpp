@@ -86,11 +86,13 @@ Device rich_device() {
                           {physics::TrapType::acceptor, 2e10, 0.2, 1e-15, 1e-15}};
     oxide.traps.bands = {{physics::TrapType::acceptor, 1e11, 0.0, 0.4, 1e-16, 2e-16}};
     oxide.traps.thermal_velocity_n_cm_s = 2.3e7;
+    auto algaas = *physics::algaas_parameters(0.3);
+    algaas.energy_relaxation = {.tau_n_s = 0.30000000000000004e-12, .tau_p_s = 0.25e-12};  // Unit 52
     auto d = Device::create(
         {.mesh = std::move(m),
          .temperature_K = 301.5,
          .regions = {{"silicon", physics::silicon()},
-                     {"algaas", *physics::Semiconductor::create(*physics::algaas_parameters(0.3))},
+                     {"algaas", *physics::Semiconductor::create(algaas)},
                      {"oxide", *physics::Insulator::create(oxide_params)}},
          .node_region = std::move(region),
          .donors = std::move(donors),
@@ -382,4 +384,40 @@ TEST_CASE("device file: a loaded description is validated and versioned by key",
         REQUIRE_FALSE(r.has_value());
         CHECK(r.error().message.find("repeated") != std::string::npos);
     }
+}
+
+TEST_CASE("device file: energy relaxation times are written only when given (Unit 52, EC1)",
+          "[io][device_file]") {
+    // A region without them (0, not given) writes no key for them, so a device file without the
+    // model is the file of before; with them, two more fields (key, length, value: 18 bytes each).
+    const fs::path dir = scratch("device_energy_relaxation");
+    const auto make = [](physics::EnergyRelaxationParameters e) {
+        physics::SemiconductorParameters p = physics::silicon_parameters;
+        p.energy_relaxation = e;
+        auto m = *mesh::make_tensor_grid(std::vector<double>{0.0, 0.5e-4, 1e-4});
+        auto d = Device::create({.mesh = std::move(m),
+                                 .temperature_K = 300.0,
+                                 .regions = {{"si", *physics::Semiconductor::create(p)}},
+                                 .node_region = {0, 0, 0},
+                                 .donors = {1e17, 1e17, 1e17},
+                                 .acceptors = {0.0, 0.0, 0.0},
+                                 .contacts = {{"a", ContactKind::ohmic, {0}},
+                                              {"b", ContactKind::ohmic, {2}}}});
+        if (!d) FAIL(d.error().message);
+        return std::move(*d);
+    };
+    REQUIRE(io::save_device(dir / "without.nitdev", make({})).has_value());
+    REQUIRE(io::save_device(dir / "with.nitdev", make({.tau_n_s = 0.35e-12, .tau_p_s = 0.4e-12}))
+                .has_value());
+    CHECK(bytes_of(dir / "with.nitdev").size() == bytes_of(dir / "without.nitdev").size() + 36);
+    const auto back = io::load_device(dir / "with.nitdev");
+    REQUIRE(back.has_value());
+    const auto& e =
+        std::get<physics::Semiconductor>(back->regions()[0].material).parameters().energy_relaxation;
+    CHECK(e.tau_n_s == 0.35e-12);
+    CHECK(e.tau_p_s == 0.4e-12);
+    const auto none = io::load_device(dir / "without.nitdev");
+    REQUIRE(none.has_value());
+    CHECK(std::get<physics::Semiconductor>(none->regions()[0].material).parameters().energy_relaxation ==
+          physics::EnergyRelaxationParameters{});
 }

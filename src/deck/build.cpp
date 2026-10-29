@@ -61,6 +61,7 @@ using namespace detail;
     X(impact_ionization.phonon_energy_eV) X(band_to_band.A_per_cm3_s)                          \
     X(band_to_band.B_V_per_cm) X(band_to_band.electron_mass) X(band_to_band.hole_mass)         \
     X(passler_gap.alpha_eV_per_K) X(passler_gap.Theta_K) X(passler_gap.Delta)                  \
+    X(energy_relaxation.tau_n_s) X(energy_relaxation.tau_p_s)                                  \
     NITCAD_THERMAL_PARAMETERS(X)
 
 double* semiconductor_parameter(physics::SemiconductorParameters& p, std::string_view name) {
@@ -950,7 +951,8 @@ std::expected<void, base::Error> Builder::models(assemble::PhysicsModels& m) con
         {"incomplete_ionization", &assemble::PhysicsModels::incomplete_ionization},
         {"impact_ionization", &assemble::PhysicsModels::impact_ionization},
         {"btbt_local", &assemble::PhysicsModels::btbt_local},
-        {"electrothermal", &assemble::PhysicsModels::electrothermal}};
+        {"electrothermal", &assemble::PhysicsModels::electrothermal},
+        {"energy_balance", &assemble::PhysicsModels::energy_balance}};
     for (const Entry& e : s->entries) {
         if (const auto it = switches.find(e.key); it != switches.end()) {
             NITCAD_DECK_TRY(v, flag(e));
