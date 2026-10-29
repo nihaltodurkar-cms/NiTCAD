@@ -4509,6 +4509,90 @@ The germanium case needs the floating-region guard off, as GC9 (GR5): with the g
 near-singularity meets the guard. A lumped `n_poly` gate takes its work function from the channel's material (the
 gate electrostatics' convention, `assemble::gate_work_function_eV`), so on germanium it is an n+ germanium gate.
 
+### Unit 52 — energy-balance transport (proposed 2026-10-29; on `physics/energy-balance`)
+
+**Owner request:** "Start B" (2026-10-29): the non-local transport model that ARCHITECTURE.md 11.3 lists as Planned
+(the nanoscale gap found by the FinFET deck; excluded from Unit 23 by T14). The branch starts from `main` (`cb3f9de`).
+**Owner rulings (2026-10-29):** (1) energy balance: carrier temperatures with an energy-flux equation, no convective
+(momentum) term; not the full hydrodynamic model; (2) both carriers, T_n and T_p, always together when the model is on;
+(3) a carrier-temperature mobility that reproduces Canali's v(E) in a uniform field, and impact ionization driven by
+the carrier temperature; (4) supported with Boltzmann and Fermi–Dirac statistics, SRH, Auger and radiative
+recombination, Masetti and Lombardi mobility, MLDA, transient and small-signal analyses; refused with electrothermal,
+thermionic interfaces, gate tunnelling, band-to-band tunnelling, the weighted terminal current and Schottky contacts.
+The standing conditions hold: no change to any device without the model switched on, criteria fixed before code,
+Release and Debug suites at every commit, `/W4 /WX`, hand mutants, nothing pushed or merged without authorization.
+
+**Sources read (before coding).**
+- T. Grasser, dissertation, TU Wien (open access, iue.tuwien.ac.at/phd/grasser), §3.2.1–3.2.2: the carrier-temperature
+  mobility after Hänsch, μ = μ_LIS / (1 + α ΔT), α = 3 k μ_LIS / (2 q τ_ε v_sat²), and the energy relaxation time
+  as a constant or a Monte Carlo fit (the fit's constants are not on the page).
+- A. Triebl, dissertation, TU Wien (iue.tuwien.ac.at/phd/triebl, node17): constant energy relaxation times, typically
+  0.35 ps for electrons and 0.4 ps for holes in silicon, sometimes used as a fitting parameter.
+- A. Aste and R. Vahldieck, "Time-domain simulation of the full hydrodynamic model", arXiv physics/0312021 (open
+  access): the energy-balance model as most commercial simulators solve it (current
+  j = −(e/m) τ_p (n E + ∇(n k T / e)), energy ∇·((5/2) n k T v) − ∇·(κ ∇T) = −e n v E − (3/2) n k (T − T_L)/τ_w,
+  κ = (5/2 + r) n k² μ T / e), and the 0.3 µm silicon ballistic diode benchmark (n⁺ 1e18 / n 2e15 / n⁺ 1e18, 0.1 µm
+  each, 1 V, m = 0.26 m₀, v_s = 1.03e7 cm/s, Caughey–Thomas μ₀(N) with μ_min 80, μ_max 1430, N_ref 1.12e17, 0.72,
+  β = 2): peak velocity 1.87 v_s with energy balance, 2.61 v_s with the full model. Its τ_w is
+  temperature-dependent (Baccarani–Wordeman) and r = −2.1, unlike this unit, so its number is reported, not gated.
+- Legacy: `pytcad/hydrodynamic.py` (M29): a local closure after the solve (no energy flux, no Newton unknown, no
+  feedback into the current). OLD / NEW / REASON:
+  - OLD: T_n from q μ E² = (3/2) k (T_n − T_L)/τ_w evaluated at the solved field, post-processing only.
+  - NEW: T_n and T_p as Newton unknowns with the energy flux, self-consistent, exact Jacobian.
+  - REASON: ruling 1; without the flux term the closure cannot produce overshoot, the effect the unit exists for.
+  Its round trip (temperature to effective field to the field-driven ionization) is kept as ED6's construction.
+
+**Design:**
+
+| # | Choice | Why | Trade-off |
+|---|---|---|---|
+| ED1 | Unknowns: the scaled temperature rises τ_n = (T_n − T_L)/T_L and τ_p, interleaved after ψ, n, p (stride 5, `DriftDiffusion::dofs()` names them); insulator nodes hold them at 0 like n and p. Ohmic contacts: τ = 0 (carriers at the lattice temperature). Every other boundary, semiconductor–insulator interfaces included: no energy flux. Heterointerfaces without thermionic emission: T continuous (one unknown per node). | τ rather than θ for resolution, as Unit 23's U1. | Stride 5 doubles the edge blocks' size (25 vs 9 entries). |
+| ED2 | Particle current (Stratton, energy-independent momentum relaxation): J_n = μ_n(T_n) (n ∇E_c + k ∇(n T_n)), holes mirrored. Discretised as Unit 23's flux with r = 0: Scharfetter–Gummel in w = θ_n n, the edge's mean θ_n,e in δ and in the coefficient. At θ_n = 1 it is the isothermal flux. | The form Aste–Vahldieck call the commercial one; reuses Unit 23's tested scheme. | The edge-mean temperature is second order, not Tang's exponential fit. |
+| ED3 | Energy: ∂((3/2) n k T_n)/∂t + ∇·S_n = J_n·E − (3/2) n k (T_n − T_L)/τ_w,n − (3/2) k T_n U_net, S_n = −κ_n ∇T_n − c_n (k T_n / q) J_n, κ_n = c_n (k²/q) n μ_n T_n, c = 5/2 + r with r the material's thermopower exponent (silicon −1/2, so c = 2). S_n is one Scharfetter–Gummel flux in n θ_n² with the same δ and the coefficient c V_T. The Joule term on each edge is the edge current times its E_c difference, half to each end's box, so the summed sources equal Σ V_c I_c exactly. | κ by Wiedemann–Franz as all three sources; the edge split makes discrete energy conservation exact (EC7). | r is one number per material, not fitted to Monte Carlo. |
+| ED4 | Mobility (ruling 3): an effective field E_eff(T) solves the uniform-field balance q τ_w μ_C(E) E² = (3/2) k (T − T_L), μ_C Canali's law of the edge's low-field mobility (Caughey–Thomas or Masetti, Lombardi by Matthiessen's rule); μ(T) = μ_C(E_eff(T)) at the edge's mean T. β = 1: closed form; β > 1: Newton to round-off; the partial through the implicit-function rule. The Canali parameters therefore enter through T, and `field_mobility = on` with energy balance is refused (counted twice). For β = 1 this is Hänsch's form up to the factor in its denominator. | Exact Canali v(E) in a uniform field for every β (EC3); silicon electrons have β = 2, which Hänsch's form does not reproduce. | One scalar Newton per edge and carrier per evaluation. |
+| ED5 | Energy relaxation times: constant per material and carrier, `energy_relaxation_time_n/p` [s]; silicon 0.35 ps (electrons) and 0.4 ps (holes), Triebl. Another semiconductor without them is refused, none invented. Deck overridable per region. | Cited typical values; ruling 3 needs τ_w in ED4 and ED6 too. | No T-dependent τ_w (Aste–Vahldieck's): a follow-up. |
+| ED6 | Impact ionization (ruling 3): the existing coefficients α(E) evaluated at E_eff(T_n) (and T_p) of the node, the generation α_n |J_n| + α_p |J_p| as Unit 19, the lattice temperature factor unchanged. In a uniform field E_eff = E, so it equals the field-driven model (EC3). No extra E_g energy sink per ionization event. | The legacy's round trip, now self-consistent; non-local by construction (a carrier ionizes where it is hot, not where the field is). | Without the E_g sink T is overestimated near breakdown; recorded as a limitation. |
+| ED7 | Recombination energy: −(3/2) k T_n U_net in the electron energy row and −(3/2) k T_p U_net in the hole's (SRH, Auger, radiative, II as negative U). | The carriers removed take their mean energy. | — |
+| ED8 | Fermi–Dirac (ruling 4): pressure n k T F_{3/2}(η)/F_{1/2}(η) in the current (Unit 14's ν-factor generalised: δ gains Δ ln of the ratio), stored energy (3/2) times the pressure, the energy-flux factor c F_{r+3/2}/F_{r+1/2} = 2 F₁/F₀ for r = −1/2 (Unit 23's, `fermi_orders_zero_one`); r ≠ −1/2 with Fermi–Dirac refused, as T3. New: F_{3/2} with double-double references (C++). | Every Boltzmann formula is the η → −∞ limit (EC2). | — |
+| ED9 | Transient and small-signal: the storage terms of ED3 in the mass matrix; the AC system takes the term's partials. | Ruling 4. | — |
+| ED10 | Switch: `[models] energy_balance = off | on` (both carriers, ruling 2). Off: no term is created, the stride stays 3; residuals, Jacobian patterns and values, run identities, device files and the Unit 40 traces are those of `main`. | GC1's pattern. | — |
+| ED11 | Refused (invalid_input) with: electrothermal, thermionic interfaces, gate tunnelling, local or nonlocal BTBT, the weighted terminal current, Schottky contacts (ruling 4); `field_mobility = on` (ED4); Fermi–Dirac with r ≠ −1/2 (ED8); a semiconductor without τ_w (ED5); Lombardi with impact ionization stays refused as on `main`. | Ruling 4. | Follow-ups in ARCHITECTURE 11.3. |
+| ED12 | Start and continuation: a sweep's first point starts from the drift-diffusion (field_mobility off) solution with τ = 0; later points as every sweep; bias step cutting (Unit 28) and the line search (Unit 30) apply unchanged. | Equilibrium is exactly τ = 0 (EC5). | — |
+| ED13 | Results: T_n and T_p as nodal fields in `BiasPoint`, transient and small-signal results, the result files, `nitcad plot` and the application's field list; the run record names the model and each region's τ_w. | Needed to see overshoot (EC10). | Result files gain two fields only when on. |
+
+**Acceptance criteria, fixed before any implementation:**
+
+| # | Criterion |
+|---|---|
+| EC1 | Model off (and every existing deck): every existing test and pin passes unchanged; residuals, Jacobian patterns and values, run identities, device files and the Unit 40 traces byte-identical to `main`. |
+| EC2 | Physics functions: E_eff(T) inverts the uniform-field balance to 1e-13 relative for β = 1 and 2 over 1e2–1e6 V/cm and τ_w 0.1–1 ps; β = 1 closed form against the Newton solve within 1e-14; F_{3/2} against double-double references within 1e-14 relative over η ∈ [−40, 60]; every partial against a central difference within 1e-7 relative. |
+| EC3 | Uniform-field limit: 1D silicon resistors (1e16, 1e17, 1e18 cm⁻³, both carriers) at 1e3–1e5 V/cm, at least 50 energy relaxation lengths v_sat τ_w long: in the middle third the velocity J/(q n) equals Canali's v(E) within 1e-3, T equals T_L + (2/3) q τ_w v E / k within 1e-3, and with impact ionization on the generation equals the field-driven model's within 1e-3. |
+| EC4 | Drift-diffusion limit: τ_w = 1e-18 s: the diode's and the 2D MOSFET's terminal currents equal drift-diffusion's (field mobility off) within 1e-6 relative over their sweeps. |
+| EC5 | Equilibrium: at zero bias |τ_n|, |τ_p| ≤ 1e-12 at every node, and the solution's ψ, n, p equal drift-diffusion's within 1e-12 relative. |
+| EC6 | Jacobian: assembled against central differences on 1D, 2D and 3D devices; Boltzmann and Fermi–Dirac; with impact ionization, Lombardi, MLDA, Masetti; the transient mass: every entry within 1e-6 relative (or 1e-12 of the row scale). |
+| EC7 | Energy conservation, steady state: Σ_c V_c I_c equals the summed relaxation power plus the recombination energy terms within 1e-9 relative (1D, 2D, 3D; Boltzmann and Fermi–Dirac). |
+| EC8 | Current conservation: terminal currents sum to zero within 1e-10 relative of the largest. |
+| EC9 | Refinement: the ballistic diode of EC10 on h, h/2, h/4: the peak velocity and peak T_n converge with an observed order ≥ 1.5. |
+| EC10 | Overshoot (Aste–Vahldieck's diode, their mobility and v_s, this unit's constant τ_w): at 1 V the peak electron velocity exceeds 1.3 v_s and lies in the n region within 30 nm of the drain junction; drift-diffusion with Canali on the same mesh never exceeds 1.0001 v_s. Their 1.87 v_s is reported beside ours, not gated (different τ_w and r). |
+| EC11 | Channel length: a 2D MOSFET at L = 2 µm: energy balance and drift-diffusion with Canali agree within 5% in saturation; at L = 0.1 µm the energy-balance current is larger. Both reported. |
+| EC12 | FinFET deck: with energy balance the Id–Vg sweep converges at all 17 points; the on-current change and the wall time against drift-diffusion are reported (cost, no gate on the effect's size). |
+| EC13 | Transient: a bias step on the ballistic diode ends within 1e-8 relative of the steady state; over the step, input energy equals relaxation plus recombination energy plus the change in stored energy within 1e-6. |
+| EC14 | Small-signal: at 0 Hz the admittance equals the DC sweep's dI/dV (central difference) within 1e-5 relative. |
+| EC15 | Every ED11 refusal tested with its message. |
+| EC16 | Deck, device file, results and run record: T_n, T_p and τ_w round-trip byte-identical; `nitcad plot` and the application show T_n and T_p. |
+| EC17 | Hand mutants: at least one per design row (ED1–ED13), every survivor closed by a new test. |
+| EC18 | Release and Debug suites pass at every commit, `/W4 /WX`. |
+| EC19 | Cost reported: assembly and solve time per Newton iteration for 1D, 2D, 3D against drift-diffusion. |
+
+**Questions for the owner before code (proposal's recommended answer first):**
+- EQ1 τ_w for silicon: 0.35 ps / 0.4 ps (Triebl), or another cited pair.
+- EQ2 `field_mobility = on` with energy balance: refused (ED4), or silently replaced by the T-driven law.
+- EQ3 Energy-flux factor c = 5/2 + r: the material's thermopower r (silicon c = 2, consistent with Unit 23), or c = 5/2
+  (r = 0). Aste–Vahldieck note that smaller c suppresses spurious overshoot; c changes EC10's peak.
+- EQ4 Build order: slice 1 physics (ED4, ED5, ED8 functions; EC2), slice 2 Boltzmann assembly and steady sweeps
+  (EC1, EC3–EC8, EC10, EC11), slice 3 impact ionization and Fermi–Dirac, slice 4 transient, AC, deck, files, app
+  (EC13–EC16), slice 5 FinFET, refinement, mutants, ARCHITECTURE (EC9, EC12, EC17, EC19).
+
 ---
 
 ## New questions the advisor raised (not yet in `ARCHITECTURE.md`)
