@@ -153,6 +153,15 @@ inline void drift_diffusion_point(const assemble::DriftDiffusion& system,
         point.tunnel_paths.push_back(
             {s.start, s.length_cm, s.field_V_per_cm, s.rate_cm3_s, s.reached});
     }
+    if (system.gate_tunnelling()) {  // Unit 51
+        auto t = system.gate_tunnelling_currents(x);
+        for (std::vector<double>* v : {&t.ecb, &t.hvb, &t.evb}) {
+            for (double& I : *v) I *= current_scale;
+        }
+        point.tunnelling_ecb = std::move(t.ecb);
+        point.tunnelling_hvb = std::move(t.hvb);
+        point.tunnelling_evb = std::move(t.evb);
+    }
 }
 
 }  // namespace NiTCAD::solve::detail

@@ -1,5 +1,6 @@
 #include "NiTCAD/io/device_file.hpp"
 
+#include <array>
 #include <cstdint>
 #include <limits>
 #include <optional>
@@ -29,9 +30,12 @@ namespace region_key {
 constexpr std::uint16_t name = 1, kind = 2, parameters = 3;  // kind 0 semiconductor, 1 insulator
 }
 namespace contact_key {
-constexpr std::uint16_t name = 1, kind = 2, nodes = 3, gate = 4, electrode = 5, schottky = 6;
+constexpr std::uint16_t name = 1, kind = 2, nodes = 3, gate = 4, electrode = 5, schottky = 6,
+                        tunnelling = 7;  // Unit 51: written only when nonzero
 constexpr std::uint16_t gate_boundary = 1, gate_thickness = 2, gate_permittivity = 3,
-                        gate_electrode = 4, gate_work_function = 5, gate_fixed_charge = 6;
+                        gate_electrode = 4, gate_work_function = 5, gate_fixed_charge = 6,
+                        gate_affinity = 7, gate_band_gap = 8, gate_mass_n = 9, gate_mass_p = 10,
+                        gate_mass_evb = 11;  // Unit 51: written only when nonzero
 constexpr std::uint16_t electrode_kind = 1, electrode_work_function = 2;
 constexpr std::uint16_t schottky_boundary = 1, schottky_by_work_function = 2,
                         schottky_work_function = 3, schottky_barrier = 4, schottky_richardson_n = 5,
@@ -59,6 +63,18 @@ void thermal_fields(T& t, F&& f) {
     f(3, t.heat_capacity_J_cm3K);
     f(4, t.thermopower_exponent_n);
     f(5, t.thermopower_exponent_p);
+}
+
+// An insulator's gate-tunnelling band data with its keys in the parameters record (Unit 51; key 1
+// is eps_r, the thermal record its own key).
+template <class P>
+auto insulator_band(P& p) {
+    using T = decltype(&p.band_gap_eV);
+    return std::array<std::pair<std::uint16_t, T>, 5>{{{2, &p.electron_affinity_eV},
+                                                       {3, &p.band_gap_eV},
+                                                       {4, &p.tunnel_mass_n},
+                                                       {5, &p.tunnel_mass_p},
+                                                       {6, &p.tunnel_mass_evb}}};
 }
 
 // Every semiconductor parameter with its key. The keys are the format: never renumber one; a new
@@ -177,6 +193,9 @@ Writer write_region(const device::Region& region) {
         const auto& i = std::get<physics::Insulator>(region.material).parameters();
         w.u64(region_key::kind, 1);
         p.f64(1, i.eps_r);
+        for (const auto& [key, v] : insulator_band(i)) {  // Unit 51: written only when nonzero
+            if (*v != 0.0) p.f64(key, *v);
+        }
         p.record(thermal_record_key, write_thermal(i.thermal));
     }
     w.record(region_key::parameters, p);
@@ -202,6 +221,11 @@ std::expected<device::Region, base::Error> read_region(const Reader& r) {
         NITCAD_IO_TRY(eps_r, p.f64(1));
         i.eps_r = eps_r;
         i.thermal = thermal;
+        for (const auto& [key, target] : insulator_band(i)) {
+            if (!p.has(key)) continue;
+            NITCAD_IO_TRY(v, p.f64(key));
+            *target = v;
+        }
         NITCAD_IO_TRY(material, physics::Insulator::create(i));
         return device::Region{std::move(name), std::move(material)};
     }
@@ -221,6 +245,15 @@ Writer write_contact(const device::Contact& c) {
         g.u64(contact_key::gate_electrode, static_cast<std::uint64_t>(c.gate.electrode));
         g.f64(contact_key::gate_work_function, c.gate.work_function_eV);
         g.f64(contact_key::gate_fixed_charge, c.gate.fixed_charge_cm2);
+        const std::pair<std::uint16_t, double> band[] = {
+            {contact_key::gate_affinity, c.gate.oxide_affinity_eV},
+            {contact_key::gate_band_gap, c.gate.oxide_band_gap_eV},
+            {contact_key::gate_mass_n, c.gate.oxide_mass_n},
+            {contact_key::gate_mass_p, c.gate.oxide_mass_p},
+            {contact_key::gate_mass_evb, c.gate.oxide_mass_evb}};
+        for (const auto& [key, v] : band) {
+            if (v != 0.0) g.f64(key, v);
+        }
         w.record(contact_key::gate, g);
     }
     if (c.kind == device::ContactKind::electrode) {
@@ -239,6 +272,7 @@ Writer write_contact(const device::Contact& c) {
         s.f64(contact_key::schottky_richardson_p, c.schottky.richardson_p);
         w.record(contact_key::schottky, s);
     }
+    if (c.tunnelling != 0) w.u64(contact_key::tunnelling, c.tunnelling);  // Unit 51
     return w;
 }
 
@@ -277,7 +311,21 @@ std::expected<device::Contact, base::Error> read_contact(const Reader& r) {
         NITCAD_IO_TRY(fixed_charge, g.f64(contact_key::gate_fixed_charge));
         c.gate = {std::move(boundary), thickness, permittivity, electrode, work_function,
                   fixed_charge};
+        const std::pair<std::uint16_t, double*> band[] = {
+            {contact_key::gate_affinity, &c.gate.oxide_affinity_eV},
+            {contact_key::gate_band_gap, &c.gate.oxide_band_gap_eV},
+            {contact_key::gate_mass_n, &c.gate.oxide_mass_n},
+            {contact_key::gate_mass_p, &c.gate.oxide_mass_p},
+            {contact_key::gate_mass_evb, &c.gate.oxide_mass_evb}};
+        for (const auto& [key, target] : band) {
+            if (!g.has(key)) continue;
+            NITCAD_IO_TRY(v, g.f64(key));
+            *target = v;
+        }
     }
+    NITCAD_IO_TRY(tunnelling, r.u64_or(contact_key::tunnelling, 0));
+    if (tunnelling > 255) return std::unexpected(corrupt("unknown tunnelling processes"));
+    c.tunnelling = static_cast<std::uint8_t>(tunnelling);
     if (r.has(contact_key::electrode)) {
         NITCAD_IO_TRY(e, r.record(contact_key::electrode));
         NITCAD_IO_TRY(ekind, enumerator<device::GateElectrode>(e, contact_key::electrode_kind,

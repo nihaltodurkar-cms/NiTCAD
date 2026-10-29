@@ -106,7 +106,7 @@ solver implementation.
 |---|---|---|
 | Region | geometry, material, doping and applicable equations | Implemented in `device`; a region is of a semiconductor or, since Unit 15b, of an insulator (Poisson only) |
 | Interface | shared boundary between regions with interface laws | Semiconductor heterointerfaces since Unit 15 (band offsets through the band shift, permittivity steps, thermionic emission); semiconductor-insulator interfaces since Unit 15b (fixed charge, traps, surface recombination); the Unit 12 gate is a lumped oxide on a boundary patch |
-| Contact / boundary | named boundary set plus physical boundary condition | Ohmic contacts, gate contacts on a lumped oxide (Unit 12), electrodes on a meshed insulator (Unit 15b) and Schottky contacts (Unit 48; no image-force lowering or tunnelling) implemented |
+| Contact / boundary | named boundary set plus physical boundary condition | Ohmic contacts, gate contacts on a lumped oxide (Unit 12), electrodes on a meshed insulator (Unit 15b) and Schottky contacts (Unit 48; no image-force lowering or tunnelling) implemented; tunnelling through the gate insulator on gates and electrodes, opt-in (Unit 51) |
 | Field | named physical quantity with location, units and applicability | Unknown fields since Unit 40 (6.12.1): `Field` descriptors (name, units, node location, region applicability) and the `DofMap` that places their unknowns; derived fields and edge, face and cell fields are target |
 | Equation | residual/Jacobian contribution associated with fields and domains | Equation terms since Unit 40 (6.12.2): the drift-diffusion and electrothermal rows are terms with declared fields and domains, composed by equation set from the device and the models; internal to `assemble`; other assemblers (`EquilibriumPoisson`) not yet built from them |
 | Model | pure constitutive law with exact derivatives | Implemented for current local physics |
@@ -1665,6 +1665,40 @@ by the owner with constraints on units, signs and exclusions):**
 - Not built (SD9): image-force lowering, thermionic-field emission and tunnelling through the barrier, traps of the
   contact, a temperature-dependent work function. Without them the reverse current of a Schottky diode stays flat.
 
+**As built (Unit 51, gate tunnelling; owner request and rulings 2026-10-28, GR1–GR11; DECISIONS.md GD1–GD10,
+GC1–GC17):**
+- Physics (`physics/gate_tunnelling.hpp`): the WKB transmission through piecewise-linear barrier segments, each
+  segment's action in closed form with exact partials; the Tsu–Esaki current with a Fermi–Dirac supply on both sides,
+  a fixed composite 4-point Gauss–Legendre rule (panels ≤ kT/2), the range cut at the barrier top or 40 kT above the
+  highest level, and exact partials in the levels, the range ends and every barrier end.
+- Insulator band data (`InsulatorParameters`): affinity, band gap, electron, hole and EVB tunnelling masses, 0 meaning
+  absent. SiO₂'s are built in (χ 1.05 eV, E_g 9.0 eV, 0.50 m₀ for both carriers; owner ruling); any other insulator
+  must give its own, and a path through an insulator without them is refused.
+- Barriers (`assemble/gate_tunnels.cpp`): a lumped gate (Unit 12) tunnels through one t_ox segment with the stack's
+  band data (SiO₂'s by default, or the contact's `oxide_*` keys); an `electrode` on a meshed insulator (Unit 15b)
+  through a straight tensor-grid path from each semiconductor node with an insulator face, node to node through
+  insulator nodes to the electrode, one segment per edge with its region's band data (stacks such as HfO₂ on SiO₂).
+  A node with insulator faces on several axes has one path per face, each with its face's area. Paths are frozen
+  geometry. No image-force lowering.
+- Processes, per contact (`tunnelling = off | on | ecb, hvb, evb`): conduction-band electrons (ECB), valence-band
+  holes (HVB) and valence-band electrons (EVB, polysilicon gates only). Self-consistent: the semiconductor node's
+  electron and hole rows carry the fluxes with an exact Jacobian over the path's columns; the terminal current is
+  their sum (per-process currents in `BiasPoint::tunnelling_ecb`, `_hvb`, `_evb`). Equilibrium carries none.
+- Cost (GR11): each assembly computes the tunnel fluxes on worker threads alongside the other terms, bit-identical
+  at any thread count; on the FinFET, evaluation costs 1.2× and the residual 1.4× those without tunnelling.
+- Refused (invalid_input): with the electrothermal model, with quantum confinement (MLDA, Unit 47: not validated
+  together; GR12), with the weighted terminal current (Unit 32), an electrode path on a mesh without tensor cells,
+  tunnelling on an ohmic or Schottky contact.
+- Deck keys on the contact and insulator region; the device file stores them as optional records (no format version
+  change); the run record hashes them when present; the CLI table and app name the per-process currents.
+- Validated analytically (no measured J–V source was accessible): Fowler–Nordheim and direct-tunnelling slopes; the
+  self-consistent capacitor's current against the integral on its own bands to 1e-12 of the one-way flux, also on a
+  germanium surface; meshed against lumped oxide within 2%; 2D and 3D against 1D and 2D within 1e-9; small-signal
+  conductance and a transient's charge balance; the FinFET sweep converges at every point with tunnelling as without
+  it, with I_G/I_D from 2e-6 near threshold to 1.2e-4 at 0.8 V. 23 hand mutants, all caught.
+- Not built (owner exclusions): electrothermal tunnelling, a tunnelling term in the weighted current, paths on
+  unstructured meshes, image-force lowering.
+
 ### 6.5 Input representation
 
 The authoritative input is the in-memory C++ `device` description plus a solver-options struct. An
@@ -3050,7 +3084,7 @@ exists, not finished), **planned** (nothing built). Audit of 2026-10-09, against
 | Results and provenance | Plain-data results; run record with identity digest (6.6); sweeps persisted bit for bit (Unit 29); provenance (build, revision, platform, start, wall time) in every run record and file, transient and small-signal files, `nitcad --version` (Unit 42) | **Verified** (Unit 42, 6.6; PR #52; DECISIONS.md PV1–PV7) | A release version policy (PD5); cross-machine checksums (6.8) |
 | Visualization, GUI, batch | The `nitcad check|run|plot` batch runner over the input deck (Unit 31); the `render` layer and `nitcad plot` (Unit 25a, 6.14); rates and the mesh digest in results (Unit 45, 6.6); \|E\|, \|J\|, isosurfaces and streamlines (Unit 25b, 6.14); arrows, clipping, exploded views and filmstrips (Unit 25c, 6.14); the Windows application `nitcad-app` (Unit 26, 6.14); its analysis workspace (Unit 26b, 6.14); the 25b/25c views, region visibility, playback and clip sliders in the window (Unit 26c, 6.14) | **Batch runner verified, on `main`** (Unit 31; `6f67510`, PR #37); **core visualization verified, on `main`** (Unit 25a; `6d2135b`, PR #55); **rates and digest verified, on `main`** (Unit 45; `81622ca`, PR #56); **derived fields verified, on `main`** (Unit 25b; `8256cf8`, PR #57); **arrows, clipping, exploded views and filmstrips verified** (Unit 25c); **the GUI verified, on `main`** (Unit 26; `e9b1d71`, PR #59); **the analysis workspace verified, on `main`** (Unit 26b; `51face0`, PR #60); **the GUI catch-up verified** (Unit 26c, PR #61; the WG1 spikes open) | the WG1 spikes (cause unknown; the input cause fixed in Unit 26c) |
 | Validation against published/measured data | Legacy, analytic and convergence gates throughout; resistivity against dopant density (NBS SP 400-64) and the measured n_i(300 K) as benchmark decks (Unit 33, 10.1) | **Verified, on `main`** (Unit 33; `a14ac96`, PR #41): gaps found and pinned (boron mobility up to +48%, incomplete ionization at heavy doping, n_i +10%); the opt-in Masetti hole mobility (Unit 34; `e14a53f`, PR #42) brings boron to within 11% (AC3/AC5 at 1e18 accepted as documented limitations); Unit 35 (`2d1fdc7`, PR #44) makes Masetti and a published band set (n_i within the measurement's uncertainty) the defaults | A density-dependent ionization level (owner decision); breakdown and device-level benchmarks from accessible sources |
-| Nanoscale device physics | Classical drift-diffusion only: carriers peak at the insulator interface, mobility from doping (Masetti) and lateral field (Canali), no current through insulators; band-to-band tunnelling (Unit 20) is the only tunnelling | **Planned** (gap found by the FinFET deck, 2026-10-23; below); **Lombardi surface mobility verified, opt-in, on `main`** (Unit 46; `51c2da9`, PR #64); **MLDA quantum confinement verified, opt-in** (Unit 47, on `physics/quantum-confinement`) | Gate tunnelling, non-local transport, density-gradient confinement (below); no unit named |
+| Nanoscale device physics | Classical drift-diffusion: carriers peak at the insulator interface (MLDA moves the peak inside, opt-in, Unit 47), mobility from doping (Masetti) and lateral field (Canali); Lombardi surface mobility opt-in (Unit 46); gate tunnelling through insulators opt-in (Unit 51, 6.4) | **Lombardi surface mobility verified, opt-in, on `main`** (Unit 46; `51c2da9`, PR #64); **MLDA quantum confinement verified, opt-in, on `main`** (Unit 47; `329f203`, PR #66); **gate tunnelling verified, opt-in** (Unit 51, on `physics/gate-tunnelling`); the rest **planned** (gap found by the FinFET deck, 2026-10-23; below) | Non-local transport, density-gradient confinement (below); no unit named |
 
 **As built (Unit 28, bias step cutting; `solve::StepControl` in `solve/bias.hpp`; DECISIONS.md S1–S7):**
 - When a sweep point does not converge, the bias step to it is retried from the last converged state, halved until a
@@ -3205,8 +3239,10 @@ FG1–FG9):**
   On the FinFET deck the on-current falls by 12%.
 - **Gate tunnelling** (physics, assemble, device). Direct and Fowler–Nordheim tunnelling through gate insulators,
   as a current between the semiconductor interface and the electrode. Below about 2 nm EOT the gate leakage is
-  measurable. Today an insulator carries only displacement current. A nonlocal formulation could reuse Unit 20's
-  path machinery: WKB through the insulator, tensor-grid paths.
+  measurable. **Built as Unit 51** (opt-in, per contact `tunnelling = on` or a list of `ecb`, `hvb`, `evb`;
+  DECISIONS.md GD1–GD10, GC1–GC17; 6.4): Tsu–Esaki with WKB through a lumped oxide or straight tensor-grid paths
+  through meshed insulators, self-consistent with an exact Jacobian. On the FinFET deck (HfO₂ band data by owner
+  ruling) the gate current is 2e-6 of the drain current near threshold and 1.2e-4 at 0.8 V.
 - **Non-local transport** (equations, physics). Energy balance or hydrodynamic carrier temperatures (6.12.2's
   `Hydrodynamic` composition; excluded from Unit 23 by T14). Drift-diffusion has no velocity overshoot, so it
   underestimates the current of channels below about 50 nm. Ballistic and quasi-ballistic limits lie past this

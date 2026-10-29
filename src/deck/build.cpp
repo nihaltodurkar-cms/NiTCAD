@@ -76,6 +76,12 @@ double* insulator_parameter(physics::InsulatorParameters& p, std::string_view na
     if (name == #path) return &p.path;
     NITCAD_X(eps_r)
     NITCAD_THERMAL_PARAMETERS(NITCAD_X)
+    // Unit 51 (GD5, GD10): gate-tunnelling band data.
+    NITCAD_X(electron_affinity_eV)
+    NITCAD_X(band_gap_eV)
+    NITCAD_X(tunnel_mass_n)
+    NITCAD_X(tunnel_mass_p)
+    NITCAD_X(tunnel_mass_evb)
 #undef NITCAD_X
     return nullptr;
 }
@@ -761,6 +767,47 @@ std::expected<device::Contact, base::Error> Builder::contact(const Section& s,
             NITCAD_DECK_TRY(v, num(e));
             c.schottky.richardson_p = v;
             schottky_keys = true;
+        } else if (e.key == "tunnelling") {  // Unit 51 (GD8): off, on, or processes
+            std::uint8_t processes = 0;
+            std::string word;
+            const auto take = [&]() -> bool {
+                if (word.empty()) return true;
+                if (word == "off") {
+                } else if (word == "on") {
+                    processes |= device::all_tunnel_processes;
+                } else if (word == "ecb") {
+                    processes |= static_cast<std::uint8_t>(device::TunnelProcess::ecb);
+                } else if (word == "hvb") {
+                    processes |= static_cast<std::uint8_t>(device::TunnelProcess::hvb);
+                } else if (word == "evb") {
+                    processes |= static_cast<std::uint8_t>(device::TunnelProcess::evb);
+                } else {
+                    return false;
+                }
+                word.clear();
+                return true;
+            };
+            for (const char ch : e.value + ",") {
+                if (ch == ',' || ch == ' ' || ch == '\t') {
+                    if (!take()) {
+                        return std::unexpected(at(e.line, "tunnelling is off, on, or a list of ecb, hvb and evb"));
+                    }
+                } else {
+                    word.push_back(ch);
+                }
+            }
+            c.tunnelling = processes;
+        } else if (e.key == "oxide_affinity" || e.key == "oxide_band_gap" ||
+                   e.key == "oxide_mass_n" || e.key == "oxide_mass_p" ||
+                   e.key == "oxide_mass_evb") {  // Unit 51 (GD5)
+            NITCAD_DECK_TRY(v, num(e));
+            double& target = e.key == "oxide_affinity"   ? c.gate.oxide_affinity_eV
+                             : e.key == "oxide_band_gap" ? c.gate.oxide_band_gap_eV
+                             : e.key == "oxide_mass_n"   ? c.gate.oxide_mass_n
+                             : e.key == "oxide_mass_p"   ? c.gate.oxide_mass_p
+                                                         : c.gate.oxide_mass_evb;
+            target = v;
+            gate_keys = true;
         } else {
             return std::unexpected(unknown(e, s));
         }

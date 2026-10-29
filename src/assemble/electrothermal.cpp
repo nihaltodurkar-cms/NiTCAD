@@ -626,6 +626,18 @@ std::vector<double> DriftDiffusion::bias_derivative(std::size_t contact,
     NITCAD_EXPECTS(x.size() == unknowns());
     std::vector<double> d = bias_derivative(contact);
     if (!electrothermal()) {
+        // Gate tunnelling through a lumped gate (Unit 51): its node's rows -T_n and +T_p read the
+        // gate's bias (per volt).
+        if (!gate_tunnels_.empty()) {
+            const std::vector<NodeDegeneracy> g = degeneracies(x);
+            GateTunnelFlux flux;
+            for (const GateTunnel& t : gate_tunnels_) {
+                if (!t.lumped || static_cast<std::size_t>(t.contact) != contact) continue;
+                gate_tunnel_flux(t, x, g, flux);
+                d[m_ * t.node + 1] -= flux.d_n[3];
+                d[m_ * t.node + 2] += flux.d_p[3];
+            }
+        }
         detail::observe("bias_derivative.state", d);
         return d;
     }
@@ -667,7 +679,17 @@ std::vector<std::size_t> DriftDiffusion::bias_rows(std::size_t contact) const {
             rows.push_back(4 * i + 3);
         }
     }
+    for (const GateTunnel& t : gate_tunnels_) {  // Unit 51: a lumped gate's tunnelling rows
+        if (!t.lumped || t.contact != c) continue;
+        rows.push_back(m_ * t.node + 1);
+        rows.push_back(m_ * t.node + 2);
+    }
     return rows;
+}
+
+bool DriftDiffusion::bias_nonlinear() const noexcept {
+    return electrothermal() ||
+           std::ranges::any_of(gate_tunnels_, [](const GateTunnel& t) { return t.lumped; });
 }
 
 std::vector<double> DriftDiffusion::thermal_contact_heat(std::span<const double> x,

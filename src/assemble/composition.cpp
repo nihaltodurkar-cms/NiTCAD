@@ -1,5 +1,6 @@
 #include "composition.hpp"
 
+#include <optional>
 #include <utility>
 
 namespace NiTCAD::assemble {
@@ -30,9 +31,17 @@ void DriftDiffusion::Composition::pattern(const DriftDiffusion& s,
 
 void DriftDiffusion::Composition::assemble(const DriftDiffusion& s, const Terms::Evaluation& e,
                                            bool interfaces) const {
+    // Gate tunnelling's fluxes start on worker threads now and the other terms add theirs
+    // meanwhile; the gate tunnelling term collects them (GR11).
+    std::optional<GateTunnelJob> tunnels;
+    Terms::Evaluation ev = e;
+    if (!s.gate_tunnels_.empty() && ev.tunnels == nullptr) {
+        tunnels.emplace(s, e.x, e.g);
+        ev.tunnels = &*tunnels;
+    }
     for (const std::shared_ptr<const Term>& t : terms_) {
         if (!interfaces && t->info().domain == TermDomain::interface_edges) continue;
-        t->add(s, e);
+        t->add(s, ev);
     }
 }
 

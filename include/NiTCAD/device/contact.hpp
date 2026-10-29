@@ -46,7 +46,24 @@ struct GateStack {
     GateElectrode electrode = GateElectrode::n_poly;
     double work_function_eV = 0.0;             // phi_m of a metal electrode; finite and positive
     double fixed_charge_cm2 = 0.0;             // Q_f: fixed positive oxide charge at the interface
+    // The oxide's band data for gate tunnelling (Unit 51, DECISIONS.md GD5), as
+    // physics::InsulatorParameters': all 0 (the default) takes SiO2's, which only a stack of
+    // permittivity 3.9 may; given, the gap and both masses are positive (EVB mass 0: the electron
+    // mass). Read only when the contact tunnels.
+    double oxide_affinity_eV = 0.0;
+    double oxide_band_gap_eV = 0.0;
+    double oxide_mass_n = 0.0;
+    double oxide_mass_p = 0.0;
+    double oxide_mass_evb = 0.0;
 };
+
+// Gate tunnelling processes (Unit 51, DECISIONS.md GD4, GD8): conduction-band electrons, valence-band
+// holes and valence-band electrons, as bits of Contact::tunnelling.
+enum class TunnelProcess : std::uint8_t { ecb = 1, hvb = 2, evb = 4 };
+inline constexpr std::uint8_t all_tunnel_processes = 7;
+[[nodiscard]] constexpr bool tunnels(std::uint8_t processes, TunnelProcess p) noexcept {
+    return (processes & static_cast<std::uint8_t>(p)) != 0;
+}
 
 // The electrode of an `electrode` contact. A polysilicon electrode is degenerately doped silicon:
 // phi_m = chi or chi + Eg(T) of physics::silicon_parameters (it has no semiconductor under it to
@@ -79,6 +96,9 @@ struct Contact {
     GateStack gate{};                 // read only when kind == ContactKind::gate
     Electrode electrode{};            // read only when kind == ContactKind::electrode
     SchottkyBarrier schottky{};       // read only when kind == ContactKind::schottky
+    // Gate tunnelling (Unit 51): the TunnelProcess bits this gate or electrode exchanges with the
+    // semiconductor; 0 (the default) none. Only a gate or an electrode may set it.
+    std::uint8_t tunnelling = 0;
 };
 
 // A thermal contact (Unit 23, the electrothermal model; legacy thermal.ThermalBC): a heat sink on

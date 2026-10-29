@@ -25,10 +25,12 @@
 // ionization.
 #pragma once
 
+#include <atomic>
 #include <cstdint>
 #include <memory>
 #include <span>
 #include <string_view>
+#include <thread>
 #include <vector>
 
 #include "NiTCAD/assemble/drift_diffusion.hpp"
@@ -68,6 +70,9 @@ struct DriftDiffusion::Terms {
         std::span<const ThermalState> thermal = {};
         std::span<const NodeLevels> levels = {};
         bool sinks = true;
+        // The gate tunnels' fluxes at x under way (Composition::assemble); nullptr: the gate
+        // tunnelling term computes them itself.
+        GateTunnelJob* tunnels = nullptr;
         [[nodiscard]] bool jacobian() const noexcept { return !values.empty(); }
     };
 
@@ -157,6 +162,7 @@ struct DriftDiffusion::Terms {
     class ImpactGeneration;
     class LocalTunnelling;
     class PathTunnelling;
+    class GateTunnelling;
     // Electrothermal (thermal_terms.cpp; PoissonCharge is shared).
     class HeatSinks;
     class LatticeStorage;
@@ -170,6 +176,31 @@ struct DriftDiffusion::Terms {
     class ThermalInterfaces;
     class ThermalEdges;
     class ThermalImpact;
+};
+
+// The gate tunnels' fluxes at one state (GR11; gate_tunnels.cpp): worker threads start on them at
+// construction, claiming chunks of tunnels in turn; finish() has the calling thread take chunks too
+// until none is left, waits for the workers and returns the fluxes, one per tunnel. Each flux is
+// computed whole by one thread, so they do not depend on the thread count. Destruction waits for
+// the workers when finish() was not called.
+class DriftDiffusion::GateTunnelJob {
+public:
+    GateTunnelJob(const DriftDiffusion& s, std::span<const double> x,
+                  std::span<const NodeDegeneracy> g);
+    GateTunnelJob(const GateTunnelJob&) = delete;
+    GateTunnelJob& operator=(const GateTunnelJob&) = delete;
+    ~GateTunnelJob() = default;
+    [[nodiscard]] std::vector<GateTunnelFlux>& finish();
+
+private:
+    void work();
+    const DriftDiffusion& s_;
+    std::span<const double> x_;
+    std::span<const NodeDegeneracy> g_;
+    std::vector<GateTunnelFlux> out_;
+    std::size_t chunks_;
+    std::atomic<std::size_t> next_{0};
+    std::vector<std::jthread> workers_;  // last: joined before the rest is destroyed
 };
 
 class DriftDiffusion::Term {

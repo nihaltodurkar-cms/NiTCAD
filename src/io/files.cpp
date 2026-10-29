@@ -285,6 +285,8 @@ constexpr std::uint16_t bias = 1, fields = 2, bands = 3, current = 4, resolution
                         thermal_heat = 14, substeps = 15, weighted = 16,
                         weighted_resolution = 17;  // Unit 32: absent when off
 constexpr std::uint16_t rates = 18;                // Unit 45: absent when not stored
+constexpr std::uint16_t tunnelling_ecb = 19, tunnelling_hvb = 20,
+                        tunnelling_evb = 21;       // Unit 51: absent without gate tunnelling
 }
 namespace run_key {
 constexpr std::uint16_t identity = 1, setting = 2, name = 1, value = 2;
@@ -475,6 +477,11 @@ Writer write_point(const results::BiasPoint& p) {
         w.f64s(point_key::weighted_resolution, p.weighted_current_resolution);
     }
     if (!p.rates.net_n.empty()) w.record(point_key::rates, write_rates(p.rates));
+    if (!p.tunnelling_ecb.empty()) {
+        w.f64s(point_key::tunnelling_ecb, p.tunnelling_ecb);
+        w.f64s(point_key::tunnelling_hvb, p.tunnelling_hvb);
+        w.f64s(point_key::tunnelling_evb, p.tunnelling_evb);
+    }
     return w;
 }
 
@@ -544,6 +551,12 @@ std::expected<results::BiasPoint, base::Error> read_point(const Reader& r) {
         NITCAD_IO_TRY(rates, read_rates(rr));
         p.rates = std::move(rates);
     }
+    NITCAD_IO_TRY(ecb, r.f64s_or_empty(point_key::tunnelling_ecb));
+    NITCAD_IO_TRY(hvb, r.f64s_or_empty(point_key::tunnelling_hvb));
+    NITCAD_IO_TRY(evb, r.f64s_or_empty(point_key::tunnelling_evb));
+    p.tunnelling_ecb = std::move(ecb);
+    p.tunnelling_hvb = std::move(hvb);
+    p.tunnelling_evb = std::move(evb);
     return p;
 }
 

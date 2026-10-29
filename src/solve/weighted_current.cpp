@@ -17,6 +17,13 @@ std::expected<WeightedCurrents, base::Error> WeightedCurrents::create(
             base::ErrorCode::invalid_input,
             "the weighted terminal current with a Schottky contact is not supported", {}});
     }
+    // Unit 51 (DECISIONS.md GD9): no tunnelling term in the weighted current yet.
+    if (std::ranges::any_of(device.contacts(),
+                            [](const device::Contact& c) { return c.tunnelling != 0; })) {
+        return std::unexpected(base::Error{
+            base::ErrorCode::invalid_input,
+            "the weighted terminal current with gate tunnelling is not supported", {}});
+    }
     // The Laplace problem is an M-matrix whose conductances span many decades: its pivot ratio says
     // nothing about singularity (every part of it is tied to an ohmic contact by the device's
     // topology check), so the pivot test is off for it.

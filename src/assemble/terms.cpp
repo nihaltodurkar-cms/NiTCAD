@@ -760,6 +760,49 @@ public:
     }
 };
 
+// Gate tunnelling (Unit 51, DECISIONS.md GD6): each tunnel's sinks, -T_n in its node's electron
+// row and +T_p in its hole row (the signs of the Schottky emission), reading the node's psi, n and
+// p and the psi of its path's nodes.
+class DriftDiffusion::Terms::GateTunnelling final : public Term {
+public:
+    TermInfo info() const noexcept override {
+        return {"gate tunnelling", TermDomain::global, densities, all3, false};
+    }
+    void pattern(const DriftDiffusion& s, std::vector<linalg::Triplet>& t) const override {
+        const std::size_t stride = s.m_;
+        for (const GateTunnel& g : s.gate_tunnels_) {
+            for (const std::size_t v : g.nodes) {
+                for (const std::size_t r : {std::size_t{1}, std::size_t{2}}) {
+                    t.push_back({static_cast<linalg::Index>(stride * g.node + r),
+                                 static_cast<linalg::Index>(stride * v), 0.0});
+                }
+            }
+        }
+    }
+    void add(const DriftDiffusion& s, const Evaluation& ev) const override {
+        const std::size_t m = s.m_;
+        std::vector<GateTunnelFlux> own;
+        if (ev.tunnels == nullptr) s.gate_tunnel_fluxes(ev.x, ev.g, own);
+        const std::vector<GateTunnelFlux>& fluxes = ev.tunnels != nullptr ? ev.tunnels->finish() : own;
+        for (std::size_t t = 0; t < s.gate_tunnels_.size(); ++t) {
+            const GateTunnel& g = s.gate_tunnels_[t];
+            const GateTunnelFlux& flux = fluxes[t];
+            const std::size_t i = g.node;
+            ev.f[m * i + 1] -= flux.T_n;
+            ev.f[m * i + 2] += flux.T_p;
+            if (!ev.jacobian()) continue;
+            for (std::size_t c = 0; c < 3; ++c) {
+                at(s, ev, i, 1, c) -= flux.d_n[c];
+                at(s, ev, i, 2, c) += flux.d_p[c];
+            }
+            for (std::size_t k = 0; k < g.nodes.size(); ++k) {
+                ev.values[g.pos_n[k]] -= flux.d_n[3 + k];
+                ev.values[g.pos_p[k]] += flux.d_p[3 + k];
+            }
+        }
+    }
+};
+
 std::shared_ptr<const DriftDiffusion::Term> DriftDiffusion::Terms::poisson_charge() {
     return std::make_shared<PoissonCharge>();
 }
@@ -818,6 +861,8 @@ std::span<const CompositionEntry> DriftDiffusion::Terms::isothermal_table() {
         {+E::generation,
          [](const DriftDiffusion&, M m) { return m.btbt_nonlocal != NonlocalTunnelling::off; },
          &make_term<PathTunnelling>},
+        {+E::continuity, [](const DriftDiffusion& s, M) { return !s.gate_tunnels_.empty(); },
+         &make_term<GateTunnelling>},
         {+E::contacts, schottky, &make_term<SchottkyRows>},
     };
     return table;

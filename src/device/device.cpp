@@ -153,6 +153,28 @@ std::optional<base::Error> check_gate(const DeviceDescription& d, std::size_t c)
     if (!std::isfinite(g.fixed_charge_cm2)) {
         return invalid(where + "fixed oxide charge is not finite", c, g.fixed_charge_cm2);
     }
+    // Unit 51 (GD5): the oxide's band data, each finite and >= 0; given at all, complete; absent,
+    // only an SiO2 stack (permittivity 3.9) may tunnel on SiO2's.
+    const double band[] = {g.oxide_affinity_eV, g.oxide_band_gap_eV, g.oxide_mass_n,
+                           g.oxide_mass_p, g.oxide_mass_evb};
+    bool any = false;
+    for (const double v : band) {
+        if (!(std::isfinite(v) && v >= 0.0)) {
+            return invalid(where + "oxide band data is not finite and >= 0", c, v);
+        }
+        any = any || v != 0.0;
+    }
+    if (any && !(positive(g.oxide_band_gap_eV) && positive(g.oxide_mass_n) &&
+                 positive(g.oxide_mass_p))) {
+        return invalid(where + "oxide band data needs a positive band gap and positive electron "
+                               "and hole tunnelling masses",
+                       c, g.oxide_band_gap_eV);
+    }
+    if (contact.tunnelling != 0 && !any && g.oxide_relative_permittivity != 3.9) {
+        return invalid(where + "a tunnelling gate whose oxide is not SiO2 (permittivity 3.9) needs "
+                               "its band data",
+                       c, g.oxide_relative_permittivity);
+    }
     return check_on_patch(d, c, where, g.boundary);
 }
 
@@ -197,6 +219,16 @@ std::optional<base::Error> check_contacts(const DeviceDescription& d) {
             return invalid("unknown contact kind", c);
         }
         if (contact.nodes.empty()) return invalid("contact '" + contact.name + "' has no nodes", c);
+        if (contact.tunnelling != 0 && contact.kind != ContactKind::gate &&
+            contact.kind != ContactKind::electrode) {
+            return invalid("contact '" + contact.name +
+                               "': only a gate or an electrode may tunnel",
+                           c);
+        }
+        if ((contact.tunnelling & ~all_tunnel_processes) != 0) {
+            return invalid("contact '" + contact.name + "': unknown tunnelling process", c,
+                           static_cast<double>(contact.tunnelling));
+        }
         for (std::size_t k = 0; k < contact.nodes.size(); ++k) {
             const mesh::NodeId v = contact.nodes[k];
             if (v < 0 || static_cast<std::size_t>(v) >= n ||

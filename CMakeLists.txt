@@ -224,7 +224,8 @@ add_library(nitcad_physics STATIC
   src/physics/band_to_band.cpp
   src/physics/thermal.cpp
   src/physics/surface_mobility.cpp
-  src/physics/quantum_confinement.cpp)
+  src/physics/quantum_confinement.cpp
+  src/physics/gate_tunnelling.cpp)
 add_library(NiTCAD::physics ALIAS nitcad_physics)
 target_include_directories(nitcad_physics PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
 target_link_libraries(nitcad_physics PUBLIC NiTCAD::base)
@@ -246,7 +247,8 @@ add_executable(nitcad_physics_test
   tests/physics/thermal_test.cpp
   tests/physics/masetti_test.cpp
   tests/physics/band_set_test.cpp
-  tests/physics/ionization_density_test.cpp)
+  tests/physics/ionization_density_test.cpp
+  tests/physics/gate_tunnelling_test.cpp)
 target_link_libraries(nitcad_physics_test PRIVATE NiTCAD::physics Catch2::Catch2WithMain)
 add_test(NAME physics COMMAND nitcad_physics_test)
 
@@ -279,6 +281,7 @@ add_library(nitcad_assemble STATIC
   src/assemble/drift_diffusion.cpp
   src/assemble/electrothermal.cpp
   src/assemble/tunnel_paths.cpp
+  src/assemble/gate_tunnels.cpp
   src/assemble/observer.cpp
   src/assemble/fields.cpp
   src/assemble/terms.cpp
@@ -306,6 +309,7 @@ add_executable(nitcad_assemble_test
   tests/assemble/surface_mobility_test.cpp
   tests/assemble/schottky_test.cpp
   tests/assemble/quantum_confinement_test.cpp
+  tests/assemble/gate_tunnelling_test.cpp
   tests/baseline/trace_listener.cpp)
 target_link_libraries(nitcad_assemble_test PRIVATE NiTCAD::assemble Catch2::Catch2WithMain)
 # The terms (Unit 40) are internal to the assemble layer; their own test reads them.
@@ -533,6 +537,7 @@ add_executable(nitcad_deck_test
   tests/deck/surface_mobility_test.cpp
   tests/deck/schottky_test.cpp
   tests/deck/quantum_confinement_test.cpp
+  tests/deck/gate_tunnelling_test.cpp
   tests/baseline/trace_listener.cpp)
 target_include_directories(nitcad_deck_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/deck")
 # The plot tests read the images back (Unit 25a).

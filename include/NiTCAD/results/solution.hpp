@@ -138,6 +138,12 @@ struct BiasPoint {
     // from this state (the adjoint estimate of the Newton residual's effect) plus the rounding of
     // the weighted edge currents. Zero for a gate.
     std::vector<double> weighted_current_resolution;
+    // Gate tunnelling (Unit 51, GD10; empty without it): per contact, the part of terminal_current
+    // carried by conduction-band electrons, valence-band holes and valence-band electrons (same
+    // unit and sign; zero off a tunnelling gate). Their sum is the gate's terminal current.
+    std::vector<double> tunnelling_ecb;
+    std::vector<double> tunnelling_hvb;
+    std::vector<double> tunnelling_evb;
 };
 
 }  // namespace NiTCAD::results

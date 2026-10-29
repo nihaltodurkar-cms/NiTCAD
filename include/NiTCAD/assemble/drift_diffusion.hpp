@@ -409,6 +409,20 @@ public:
     [[nodiscard]] std::vector<double> bias_derivative(std::size_t contact,
                                                       std::span<const double> x) const;
     [[nodiscard]] std::vector<std::size_t> bias_rows(std::size_t contact) const;
+    // Whether dF / dV depends on the state (bias_derivative's x overload must be used): with the
+    // electrothermal model, and with gate tunnelling through a lumped gate (Unit 51), whose
+    // tunnelling current depends on the gate's bias exponentially. The rows bias_rows names then
+    // include the tunnelling nodes' continuity rows.
+    [[nodiscard]] bool bias_nonlinear() const noexcept;
+    // Gate tunnelling (Unit 51, GD10): whether any contact tunnels, and per contact the part of
+    // its terminal current each process carries at state x (scaled as terminal_currents; zero off
+    // a tunnelling contact). They sum to the tunnelling part of terminal_currents. Empty vectors
+    // without gate tunnelling. Precondition (NITCAD_EXPECTS): x has unknowns() entries.
+    [[nodiscard]] bool gate_tunnelling() const noexcept { return !gate_tunnels_.empty(); }
+    struct GateTunnellingCurrents {
+        std::vector<double> ecb, hvb, evb;
+    };
+    [[nodiscard]] GateTunnellingCurrents gate_tunnelling_currents(std::span<const double> x) const;
     // The small-signal total current entering through a contact, conduction plus s times its
     // charge (conduction_currents and contact_charges, linearized about the steady state x):
     //     dI = sum_k values[k] dx[columns[k]] + bias dV,
@@ -659,6 +673,59 @@ private:
     // The Jacobian positions every term uses, after the pattern changed (set_paths).
     void locate_positions();
 
+    // Gate tunnelling (Unit 51; gate_tunnels.cpp, DECISIONS.md GD1-GD8). One tunnel per
+    // semiconductor node of a tunnelling gate (lumped) or per semiconductor-to-insulator edge whose
+    // straight grid line reaches a tunnelling electrode. The barrier's points are vacuum levels
+    // depth - V_T psi at psi = w psi_a + (1 - w) psi_b of two local columns (a == b: one node), or
+    // (lumped == true, the last point) the gate's own, -V_G + phi_m. Local columns: 0, 1, 2 the
+    // node's psi, n, p; 3 + k the psi of nodes[k]; the bias of a lumped gate after them.
+    struct TunnelPoint {
+        std::size_t a, b;
+        double w;
+    };
+    struct TunnelPiece {
+        std::size_t p0, p1;   // points
+        double length_cm;
+        double affinity_eV, gap_eV, mass_n, mass_p, mass_evb;
+    };
+    struct GateTunnel {
+        std::size_t node;
+        std::int32_t contact;
+        std::uint8_t processes;
+        bool lumped;
+        device::GateElectrode electrode;
+        double work_function_eV;  // phi_m of the electrode
+        double gate_gap_eV;       // a polysilicon electrode's E_g(T)
+        double coupling;          // scaled particle flow per A/cm^2: A / (q Ns L_D^(D-2) D0)
+        double richardson_n, richardson_p;  // A* of the node's bands [A/(cm^2 K^2)]
+        double depth_eV;          // the reference material's intrinsic-level depth
+        std::vector<std::size_t> nodes;  // path nodes, the electrode node last (empty: lumped)
+        std::vector<TunnelPoint> points;
+        std::vector<TunnelPiece> pieces;
+        // Jacobian positions of the node's electron and hole rows with the psi of each path node.
+        std::vector<std::size_t> pos_n, pos_p;
+    };
+    // A tunnel's row terms at x: the scaled sinks T_n (electron row: -T_n) and T_p (hole row:
+    // +T_p), the gate's terminal current T_n - T_p, and their partials per local column.
+    struct GateTunnelFlux {
+        double T_n = 0.0, T_p = 0.0;
+        std::vector<double> d_n, d_p;
+        double J_ecb = 0.0, J_hvb = 0.0, J_evb = 0.0;  // [A/cm^2], diagnostics
+    };
+    [[nodiscard]] std::optional<base::Error> make_gate_tunnels(const device::Device& device,
+                                                               const Scaling& scaling);
+    void locate_gate_tunnels();
+    void gate_tunnel_flux(const GateTunnel& t, std::span<const double> x,
+                          std::span<const NodeDegeneracy> g, GateTunnelFlux& out) const;
+    // Every tunnel's flux at x, out[k] gate_tunnels_[k]'s, the tunnels shared among threads (the
+    // first threading inside assembly, GR11). Each flux is computed whole by one thread, so the
+    // values do not depend on the thread count; callers add them in tunnel order.
+    void gate_tunnel_fluxes(std::span<const double> x, std::span<const NodeDegeneracy> g,
+                            std::vector<GateTunnelFlux>& out) const;
+    // The same, started on worker threads when an assembly starts and collected by the gate
+    // tunnelling term, so the other terms add theirs meanwhile (terms.hpp).
+    class GateTunnelJob;
+
     // Per node at state x under Fermi-Dirac statistics; empty under Boltzmann.
     [[nodiscard]] std::vector<NodeDegeneracy> degeneracies(std::span<const double> x) const;
 
@@ -834,6 +901,8 @@ private:
     TunnelPaths paths_;
     std::vector<PathLayout> layouts_;
     std::vector<linalg::Triplet> base_triplets_;
+    std::vector<GateTunnel> gate_tunnels_;  // Unit 51; empty without a tunnelling contact
+    double temperature_K_ = 0.0;
     bool generation_ = false;  // any generation model on
     bool minority_floor_ = false;  // Unit 50 RD2, set_minority_floor
     int dimension_ = 1;
