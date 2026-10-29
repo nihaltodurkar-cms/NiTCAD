@@ -4586,6 +4586,9 @@ and Debug suites at every commit, `/W4 /WX`; hand mutants; nothing pushed or mer
 - FQ2: FC9's pre-stated failure path (`[!shouldfail]` and a ruling, no threshold change): agreed?
 - FQ3: FC8's bias point (0.5 V gate, inversion) only, or a C–V sweep (−0.5 to 1 V) with the order gates at each point?
 
+**Owner answers (2026-10-29), design and criteria approved:** FQ1 approved as written; FQ2 a failed FC9 stays
+`[!shouldfail]` with its measurement for a ruling, the threshold never loosened; FQ3 FC8 at the 0.5 V gate only.
+
 ---
 
 ## New questions the advisor raised (not yet in `ARCHITECTURE.md`)
