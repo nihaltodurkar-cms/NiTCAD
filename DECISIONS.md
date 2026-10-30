@@ -5252,6 +5252,115 @@ layers and FD14's generation digest are each fixed in code, not accepted as limi
   tetrahedron, not only those not exempt as its comment says (a near-degenerate one gave `inf` in a coarse
   miniature).
 
+**Slice 6 plan, owner ruling (2026-10-30), "recommended" on SQ1–SQ5:**
+- SQ1 (FC9): the generated reduced deck (about 280000 nodes at s = 0.08 nm) cannot meet "at most the reduced tensor
+  mesh's nodes" (a tensor mesh whose 2× reference solves in about an hour has some 2e4 nodes). Run everything
+  anyway: the reduced tensor deck, its 2× reference and the generated sweep, and record node counts and accuracy;
+  FC9 stays `[!shouldfail]` under FQ2 for a ruling, its threshold unchanged.
+- SQ2 (FC10): the shaped deck's full 0–0.8 V sweep at 50 mV, PARDISO on 6 threads, Release.
+- SQ3 (FC8): the fixture's layers thicker than the deck's (meshable at h / 4), and s refined with h (corner zones
+  are accurate to s only, so a fixed s would stall the orders).
+- SQ4 (FC12, FD15): profile the generator; fix the hot spot if it is local, every mesh bit-identical; report the
+  rest against FD15's budget. Larger rework is a later unit.
+- SQ5 (FC8, **a change to the criterion**): as written, ohmic contacts on the fin's end faces leave the 2D
+  cross-section's fin floating (refused by `Device::create`) and make the 3D field non-uniform along the axis (the
+  ohmic Dirichlet value at the ends against the gated cross-section's bending), so no 2D reference exists. Instead:
+  a bulk-style fin reaching the domain's bottom face, an ohmic body contact on that face (parallel to the axis, as
+  the Unit 16 diode's contacts were), end faces Neumann, oxide beside the fin; the same in 2D (an edge contact).
+  Gates, thresholds and the 0.5 V gate unchanged. As built the silicon is one cell, a substrate under the fin
+  reaching the whole bottom face (the 2D generator refuses a patch end within 3 s of an interface junction, so a
+  body patch ending at the fin's foot has no 2D reference), so the body patch has no straddled edge.
+
+**Slice 6, second owner ruling (2026-10-30), "recommended" on SQ6–SQ7, after FC8's first measurement:**
+- SQ6 (FD4, FD7, a generator defect FC8 found): `generate_complex.cpp` exempted every tetrahedron whose four
+  vertices are interface nodes from refinement (inherited from the convex generator's M11, whose planar slabs never
+  face each other across a thin layer). In a layer between two interfaces (HfO2, STI) the tetrahedra spanning it are
+  all pair nodes and were never split, so the layer did not refine with h: an error floor (FC8's H1 and L2 orders
+  about 0 on every fixture with a second insulator interface; the longest HfO2 edge 2.39 nm at h = 2 nm and 2.37 nm
+  at h = 1 nm). **Fixed in slice 6**: the pair-only exemption is dropped in the complex generator only (the band
+  test still protects every interface; the convex generator is unchanged, FC1); every complex mesh changes, so the
+  mesh suites, the decks, FC9 and FC10 are re-run and the regression bounds re-pinned from new measurements.
+- SQ7 (FC8, **a change to the criterion**): a wrapped gate bends 266° at the fin's foot, a corner where the solution
+  behaves as r^0.68, so no quasi-uniform mesh reaches H1 ≥ 0.9 or L2 ≥ 1.5 (`generate2d` itself measured H1 0.86,
+  L2 1.15 and 1.36 there). FC8's gate is a flat top face over an oxide fill; the interfacial oxide and HfO2 stay
+  wrapped on the tapered fin, with their junctions and traces. Thresholds unchanged. The wrapped-gate case stays as
+  a reported, ungated measurement.
+
+**Slice 6, measured after SQ6 (2026-10-30; nothing committed yet):**
+- FD12 pin: the convex generator's prism digest `0x5d1a9279d2a27672` (h 0.3) was read on `main` (85ad670) in a
+  scratch worktree with the same check added; equal. The complex pocket digest `0x6c05e45d2f27a5df` (h 0.45) is
+  pinned from this branch (FD15). The full mesh suite passes (123 cases) with the SQ6 fix and the FC12 changes below.
+- FC10 (shaped deck, **before** SQ6, so to be re-run): 271,461 nodes, 1,615,300 tetrahedra, certified; equilibrium
+  and 17/17 points converged; 0–0.8 V, I_D 1.33e-10 to 1.65e-5 A, swing about 62–63 mV/dec; sweep 3,866 s, total
+  5,104 s. FC9's tensor parts (mesh-independent): coarse 9,367 nodes 17/17 in 25 s; reference 45,375 nodes 17/17 in
+  1,007 s, I_D(0.8 V) 1.897e-5 A. FC9's generated part and FC10 are still to run on the SQ6 meshes.
+- FC8, flat gate (gated), **fails** on the SQ6 meshes. Nodes 10,322 / 25,696 / 95,569 at (h, s) = (2, 0.16),
+  (1, 0.08), (0.5, 0.04) nm. H1 2.64e-2, 1.96e-2, 2.02e-2 (orders 0.43, −0.04); L2 orders 1.02, 0.47; gate
+  charge orders 0.91, 2.17. Wrapped gate (reported, SQ7): H1 0.55, −0.10; L2 0.87, 0.92; Q 0.85, 2.72.
+  What the diagnosis has established (`generate2d` on the same fixture at (h/k, s/k), k = 1, 2, 4, 8, against the
+  same reference: H1 orders 1.37, 0.72, 0.87, L2 2.28, 1.56, 1.77, so the fixture and the reference are sound):
+  - The floor is a patch of about +5 mV of constant height in the 1 nm interfacial oxide around the fin's two top
+    corners, its width shrinking with h; region 2 holds 15%, 28% and 76% of H1² at the three sizes. The worst 2D
+    error at h = 0.5 nm is 0.69 mV.
+  - It needs a permittivity contrast: with every region but the gate fill doped silicon, the orders are H1 0.66,
+    0.86 and L2 1.32, 1.62 (still rising). Either contrast alone keeps it (HfO2 at eps 3.9: H1 0.44, −0.56;
+    silicon at eps 3.9: H1 0.49, 0.40), both at the inner (silicon) corner.
+  - Ruled out: space charge (undoped, H1 0.46, region 2 flat); dual volumes (each region's within 1e-6 of its exact
+    volume, 2D and 3D); negative couplings (none); edge permittivity (the harmonic mean against the series value
+    along each edge: 0.48% of the coupling weight off at h = 0.5 nm, falling with h, matching 2D near the corners);
+    the slice-5 band (the slice-3 spacing min(h, 4 s) made region 2 worse, 1.29e-10 against 4.25e-11 at h = 1 nm);
+    refinement points beside the corner lines (none within 2 bands of any piece edge: H1 2.02e-2 unchanged).
+  - Unlike `generate2d`, which leaves the oxide sector at the corner empty (no node within 0.9 nm), the 3D
+    generator puts refinement nodes there at r ≈ 0.3–0.5 nm, and the error peaks on them; removing those alone did
+    not help.
+- FC12 profile (temporary phase timers, removed), reduced deck at 297,758 nodes: 1,357 s, of which refinement
+  1,251 s. The facet queue took 925 s: 34M pops, 1,659 splits, about 110 pops per node, almost all no-ops; then
+  point location for region sizes (176–200 s, a linear scan of the complex's facets) and the band test (31 s).
+  Three local changes, every measured mesh bit-identical (the mesh suite's pins; the three FC8 meshes' graph digests
+  `70d9496af5218f26`, `1635249205dfbfe6`, `fa8da46bf15a8fdc` equal against a build without them):
+  `Triangulation3D::tets_with_face` stops the face's tetrahedra search at the second; `ComplexIndex::locate` skips a
+  facet outside its bounding box (a point on the closed facet lies in it, and a triangle's box lies in its facet's);
+  `subfacet` caches each face triangle's centroid test by its local vertices in stored order (the same arithmetic).
+  Refinement on the reduced deck fell to 490 s (about 600 s in all, 2.3×); FC8 at h = 0.5 nm from 136 s to about
+  85 s. The rest against FD15's 30 s per 1e5 nodes (about 200 s per 1e5 on the deck): the redundant facet-queue
+  entries (de-duplicating them may change the order of splits, so not provably bit-identical) and the linear
+  facet scan.
+
+**Slice 6, third owner ruling (2026-10-30), on SQ8–SQ9:**
+- SQ8 (FC8): keep investigating the corner error before the rest of the slice; a generator fix comes back for a
+  ruling.
+- SQ9 (FC12): keep the three bit-identical changes, confirm the digests on the mesh suites and decks, and report
+  the remainder against FD15 for a later unit.
+
+**Review of slices 1–6 (2026-10-30, owner "fix"; nothing committed yet):** a code review of the branch against
+`main` found nine items; each is fixed or measured as below. Every change leaves the meshes bit-identical: the mesh
+suite's pins, seven interface fixtures and an 88,835-node gated liner fin (graph digests equal against a build
+without the change), and the three FC8 meshes (`70d9496af5218f26`, `1635249205dfbfe6`, `fa8da46bf15a8fdc`, as
+recorded above). Release 127/127.
+- **Deck stations matched exactly** (`build.cpp`): a range end spelled `300nm` against a station `0.3um` was "not a
+  station". The range ends now take the nearest station within 1e-12 of the stations' scale; `mesh::extrude`'s
+  patch boxes hold vertices within 1e-12 of the extrusion's extent. New deck test (lowest spelling for the station,
+  highest for a box face); both exact-comparison mutants fail it.
+- **Extraction's centroid test** (`generate_complex.cpp`): it summed `q/3` per vertex while refinement's
+  `subfacet` used `(a+b+c)/3`, so a centroid within rounding of a face's boundary could be judged differently.
+  Extraction now asks `subfacet` for any triangle of the face triangulation (the old test remains for others). No
+  test: no fixture puts a centroid within an ulp of a face edge.
+- **The centroid cache grew without bound** (an `unordered_map` keyed by packed vertex ids, uncached above 2^21
+  vertices): now a memo per triangle slot holding the vertices it was taken with.
+- **The run record of a reloaded mesh** said "file" next to an extrude3d generation digest: a file mesh with a
+  digest now records `extrude3d`, the generator the digest belongs to (FD14 deck test extended).
+- **GUI vocabulary**: `patch` in an extrude3d `[mesh]` offered generate2d's `<x y>, <x y>`; it now has its own
+  entry `<x0 y0 z0 x1 y1 z1>` (new test); the `radius_edge` menu text names extrude3d.
+- **Duplicated code**: one walk around a vertex (`Triangulation3D::walk_around`) now serves `incident`,
+  `tets_with_face` and the new allocation-free `tets_with_edge` (`segment_encroached`). The generator uses
+  `polygon2d.hpp`'s exact `collinear` and `in_triangle_2d`. Its `circumcentre_fast` and `min_dihedral` are **not**
+  copies of `generate3d`'s (other arithmetic order and formula); sharing them would change every mesh, so they stay.
+- **The volume-overlap check** copied every vertex of the complex per pair of volumes: `ComplexIndex::locate` now
+  takes a facet list (private), the same tests in the same order.
+- **Facet-queue de-duplication** (a "queued" flag per face triangle slot): built and measured, bit-identical on
+  every mesh above, but no faster (88,835 nodes: 26.6 / 24.0 s with it, 24.1 / 22.7 s without), so not kept.
+  The redundant pops are cheap since the FC12 caches; the deck's remaining time is elsewhere (not yet profiled).
+
 ---
 
 ## New questions the advisor raised (not yet in `ARCHITECTURE.md`)

@@ -97,7 +97,7 @@ struct ExtrudedGeometry {
     std::vector<double> stations;  // cm
     std::vector<ExtrusionCell> cells;
     std::vector<std::vector<std::int32_t>> regions;  // [cell][section]
-    std::vector<PatchBox> patches;                   // boundary facets inside a box take its name
+    std::vector<PatchBox> patches;                   // boundary facets inside a box (to rounding) take its name
     std::string default_patch = "boundary";
 };
 

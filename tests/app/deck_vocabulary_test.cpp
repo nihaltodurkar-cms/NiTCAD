@@ -530,3 +530,17 @@ TEST_CASE("app vocabulary: the Schottky kind in the deck, the app and the CLI (U
     REQUIRE(cli.status == 0);
     CHECK(cli.output.find("contact anode: schottky, 1 nodes") != std::string::npos);
 }
+
+TEST_CASE("app vocabulary: a mesh patch's form follows the mesh type (Unit 53, FD13)", "[app]") {
+    const app::SectionInfo* mesh = app::find_section_info("mesh");
+    REQUIRE(mesh != nullptr);
+    const app::KeyInfo* extruded = app::find_key_info(*mesh, "patch far", "extrude3d");
+    REQUIRE(extruded != nullptr);
+    CHECK(extruded->value == "<x0 y0 z0 x1 y1 z1>");
+    const app::KeyInfo* planar = app::find_key_info(*mesh, "patch far", "generate2d");
+    REQUIRE(planar != nullptr);
+    CHECK(planar->value == "<x y>, <x y>");
+    const app::KeyInfo* faced = app::find_key_info(*mesh, "patch x_min far", "generate3d");
+    REQUIRE(faced != nullptr);
+    CHECK(faced->value == "<x y z>, ...");
+}

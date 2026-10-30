@@ -178,6 +178,14 @@ std::expected<ComplexIndex, base::Error> ComplexIndex::create(PolyhedralGeometry
         const auto ears = ear_clip(q, polygon_turn(q));
         if (!ears) return std::unexpected(invalid("a facet could not be triangulated", f));
         for (const auto& e : *ears) F.triangles.push_back({v[e[0]], v[e[1]], v[e[2]]});
+        F.lo = P[v[0]];
+        F.hi = P[v[0]];
+        for (const std::size_t i : v) {
+            for (std::size_t k = 0; k < 3; ++k) {
+                F.lo[k] = std::min(F.lo[k], P[i][k]);
+                F.hi[k] = std::max(F.hi[k], P[i][k]);
+            }
+        }
     }
 
     // Volumes: closed, oriented, manifold, non-zero; each facet on one or two volumes.
@@ -361,16 +369,7 @@ std::expected<ComplexIndex, base::Error> ComplexIndex::create(PolyhedralGeometry
             if (!overlap) continue;
             const auto it = std::ranges::find_if(vverts[a], [&](std::size_t i) { return !vverts[b].contains(i); });
             if (it == vverts[a].end()) continue;
-            ComplexIndex only_b;
-            only_b.g_.vertices = P;
-            only_b.lo_ = out.lo_;
-            only_b.hi_ = out.hi_;
-            for (const std::size_t f : g.volumes[b].facets) {
-                IndexedFacet F = out.facets_[f];
-                F.volumes = {0, -1};
-                only_b.facets_.push_back(std::move(F));
-            }
-            const Location l = only_b.locate(P[*it]);
+            const Location l = out.locate(P[*it], &g.volumes[b].facets);
             if (l.kind != Location::Kind::outside) return std::unexpected(invalid("two volumes overlap", std::max(a, b)));
         }
     }
@@ -396,10 +395,17 @@ std::expected<ComplexIndex, base::Error> ComplexIndex::create(PolyhedralGeometry
     return out;
 }
 
-ComplexIndex::Location ComplexIndex::locate(const Point& p) const {
+ComplexIndex::Location ComplexIndex::locate(const Point& p) const { return locate(p, nullptr); }
+
+ComplexIndex::Location ComplexIndex::locate(const Point& p, const std::vector<std::size_t>* only) const {
     const std::vector<Point>& P = g_.vertices;
-    for (std::size_t f = 0; f < facets_.size(); ++f) {
+    const std::size_t count = only ? only->size() : facets_.size();
+    const auto facet_at = [&](std::size_t i) { return only ? (*only)[i] : i; };
+    for (std::size_t i = 0; i < count; ++i) {
+        const std::size_t f = facet_at(i);
         const IndexedFacet& F = facets_[f];
+        // A point on the closed facet lies in its bounding box.
+        if (p[0] < F.lo[0] || p[0] > F.hi[0] || p[1] < F.lo[1] || p[1] > F.hi[1] || p[2] < F.lo[2] || p[2] > F.hi[2]) continue;
         if (orient3d(P[F.plane[0]], P[F.plane[1]], P[F.plane[2]], p) != 0) continue;
         const Point x = project(p, F.drop);
         for (const auto& t : F.triangles) {
@@ -424,8 +430,11 @@ ComplexIndex::Location ComplexIndex::locate(const Point& p) const {
         }
         std::vector<int> parity;
         bool degenerate = false;
-        for (std::size_t f = 0; f < facets_.size() && !degenerate; ++f) {
-            const IndexedFacet& F = facets_[f];
+        for (std::size_t i = 0; i < count && !degenerate; ++i) {
+            const IndexedFacet& F = facets_[facet_at(i)];
+            bool facet_apart = false;  // the triangles' boxes lie in the facet's
+            for (std::size_t k = 0; k < 3; ++k) facet_apart = facet_apart || F.hi[k] < slo[k] || F.lo[k] > shi[k];
+            if (facet_apart) continue;
             for (const auto& t : F.triangles) {
                 const Point& a = P[t[0]];
                 const Point& b = P[t[1]];
@@ -449,7 +458,7 @@ ComplexIndex::Location ComplexIndex::locate(const Point& p) const {
                     continue;
                 }
                 if (s1 != s2 || s2 != s3) continue;
-                for (const int v : F.volumes) {
+                for (const int v : only ? std::array<int, 2>{0, -1} : F.volumes) {
                     if (v < 0) continue;
                     if (parity.size() <= static_cast<std::size_t>(v)) parity.resize(static_cast<std::size_t>(v) + 1, 0);
                     parity[static_cast<std::size_t>(v)] ^= 1;
@@ -632,7 +641,14 @@ std::expected<PolyhedralGeometry, base::Error> extrude(const ExtrudedGeometry& x
             }
         }
     }
-    // Patches on the boundary facets.
+    // Patches on the boundary facets. A box face within rounding of the extrusion's extent of a
+    // facet vertex holds it: 20nm and 0.02um are one position though their doubles may differ in
+    // the last place.
+    double extent = 0.0;
+    for (const Point& p : g.vertices) {
+        for (std::size_t c = 0; c < 3; ++c) extent = std::max(extent, std::abs(p[c]));
+    }
+    const double box_tol = 1e-12 * extent;
     std::vector<bool> used(x.patches.size(), false);
     for (std::size_t f = 0; f < g.facets.size(); ++f) {
         if (facet_volumes[f].size() != 1) continue;
@@ -642,7 +658,7 @@ std::expected<PolyhedralGeometry, base::Error> extrude(const ExtrudedGeometry& x
             const bool inside = std::ranges::all_of(g.facets[f].vertices, [&](std::size_t i) {
                 const Point& p = g.vertices[i];
                 for (std::size_t c = 0; c < 3; ++c) {
-                    if (p[c] < b.lo[c] || p[c] > b.hi[c]) return false;
+                    if (p[c] < b.lo[c] - box_tol || p[c] > b.hi[c] + box_tol) return false;
                 }
                 return true;
             });

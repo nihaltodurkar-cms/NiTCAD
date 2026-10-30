@@ -13,7 +13,7 @@ constexpr std::array<KeySpec, 1> device_keys{{{"temperature", "300", "lattice te
 
 // [mesh]: only a generated mesh's options with defaults; the size keys have none.
 constexpr std::array<KeySpec, 3> mesh_keys{{{"min_angle", "20.7", "generate2d: smallest triangle angle, degrees"},
-                                            {"radius_edge", "2", "generate3d: largest radius-edge ratio"},
+                                            {"radius_edge", "2", "generate3d, extrude3d: largest radius-edge ratio"},
                                             {"max_nodes", "2000000", "generated meshes: node limit"}}};
 
 constexpr std::array<KeySpec, 21> model_keys{{

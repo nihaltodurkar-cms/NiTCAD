@@ -257,6 +257,8 @@ TEST_CASE("generator 3D: the same input gives the same mesh", "[mesh][generate3d
     CHECK(a->simplices.cells == b->simplices.cells);
     CHECK(a->simplices.facets == b->simplices.facets);
     CHECK(graph_digest(a->mesh) == graph_digest(b->mesh));
+    // Pinned (Unit 53 FC1, FC13: the convex generator stays bit-identical to main).
+    CHECK(graph_digest(a->mesh) == 0x5d1a9279d2a27672ull);
 }
 
 TEST_CASE("generator 3D: refusals", "[mesh][generate3d]") {

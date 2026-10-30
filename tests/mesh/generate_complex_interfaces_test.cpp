@@ -286,6 +286,11 @@ TEST_CASE("complex interfaces: the FD7 rules are refused (FC2, FC6)", "[mesh][co
         const auto x = grid({0.0, 2.0}, {0.0, 1.0, 1.3, 2.3}, {0.0, 1.0}, [](double, double v, std::size_t) { return v < 1.0 ? 0 : v < 1.3 ? 1 : 2; });
         refused(x, o, "within 4 s");
     }
+    SECTION("a layer 3.5 s thick") {
+        // Between 3 s and 4 s, so a rule loosened to 3 s accepts it (FC13).
+        const auto x = grid({0.0, 2.0}, {0.0, 1.0, 1.35, 2.35}, {0.0, 1.0}, [](double, double v, std::size_t) { return v < 1.0 ? 0 : v < 1.35 ? 1 : 2; });
+        refused(x, o, "within 4 s");
+    }
     SECTION("an interface within 4 s of a parallel boundary face") {
         const auto x = grid({0.0, 2.0}, {0.0, 0.3, 2.0}, {0.0, 1.0}, [](double, double v, std::size_t) { return v < 0.3 ? 0 : 1; });
         refused(x, o, "within 4 s");
@@ -316,4 +321,22 @@ TEST_CASE("complex interfaces: the FD7 rules are refused (FC2, FC6)", "[mesh][co
     SECTION("a domain-edge vertex within 4 s of a crossing") { refused(slabs({0.0, 1.0, 1.2, 2.0}, 1.0), o, "within 4 s of an interface crossing"); }
     // A patch edge on a trace, refused here in slice 3, is meshed since slice 4
     // (generate_complex_patches_test.cpp).
+}
+
+// FD11 (FC13): a region's own h is honoured: the slab of region 1 at half the global h holds more
+// nodes than without it, and the other slab's count is about unchanged.
+TEST_CASE("complex interfaces: a per-region size refines that region only (FD11)", "[mesh][complex_interfaces]") {
+    const auto x = grid({0.0, 2.0}, {0.0, 1.0, 2.0}, {0.0, 1.0}, [](double, double v, std::size_t) { return v < 1.0 ? 0 : 1; });
+    MeshOptions3D o = options(0.5, 0.1);
+    const auto count = [](const GeneratedMesh& m, std::int32_t r) {
+        return static_cast<std::size_t>(std::ranges::count(m.node_region, r));
+    };
+    const GeneratedMesh plain = mesh_of(x, o);
+    o.region_max_size = {0.0, 0.25};
+    const GeneratedMesh fine = mesh_of(x, o);
+    REQUIRE(fine.certificate.has_value());
+    UNSCOPED_INFO("region 1 nodes " << count(plain, 1) << " -> " << count(fine, 1) << ", region 0 " << count(plain, 0)
+                                    << " -> " << count(fine, 0));
+    CHECK(count(fine, 1) > 2 * count(plain, 1));
+    CHECK(count(fine, 0) < 2 * count(plain, 0));
 }

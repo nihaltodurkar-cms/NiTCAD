@@ -27,10 +27,10 @@
 //                     cell <name> = <u v>, <u v>, ...      (repeatable: a conforming tiling of the cross-section;
 //                       u, v follow the axis cyclically: x gives (y, z), y (z, x), z (x, y))
 //                     patch <name> = <x0 y0 z0 x1 y1 z1>   (repeatable: the whole boundary facets inside
-//                       the closed box form the patch; a box selecting none is an error; the rest are "boundary")
+//                       the closed box, to rounding, form the patch; a box selecting none is an error; the rest are "boundary")
 //                     max_size, interface_resolution, radius_edge, max_nodes, box as generate3d
 //                     region extrusions are given in the region sections (extrude = <cells> <t_lo>:<t_hi>,
-//                       the ends being stations; a cell and section assigned twice is an error, an
+//                       the ends being stations, to rounding; a cell and section assigned twice is an error, an
 //                       unassigned one is void)
 //     file:           path = <file>                        (a generated mesh file carries its node
 //                       regions and certificate; a plain mesh file is a one-region mesh)
@@ -155,7 +155,7 @@ struct Outputs {
 struct Plan {
     device::Device device;
     std::optional<mesh::GeneratedMesh> generated;  // the mesh the deck generated or loaded, if any
-    std::string mesh_type;                         // the [mesh] type, as written (Unit 53, FD14)
+    std::string mesh_type;                         // the [mesh] type, as written; extrude3d for a file mesh with a generation digest (Unit 53, FD14)
     Analysis analysis = Analysis::sweep;
     // Models, solver and, for a sweep or a small-signal run, the thermal contacts' temperature per
     // point (for a transient or a trace, one list held for the run).

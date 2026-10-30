@@ -34,6 +34,7 @@
 #include "complex_index.hpp"
 #include "complex_interfaces.hpp"
 #include "dual_geometry.hpp"
+#include "polygon2d.hpp"
 #include "predicates.hpp"
 #include "triangulation2d.hpp"
 #include "triangulation3d.hpp"
@@ -44,7 +45,9 @@ namespace NiTCAD::mesh {
 namespace {
 
 using detail::ComplexIndex;
+using detail::collinear;
 using detail::FacetKind;
+using detail::in_triangle_2d;
 using detail::Triangulation2D;
 using detail::Triangulation3D;
 using ErrorCode = base::ErrorCode;
@@ -56,22 +59,6 @@ base::Error degenerate(std::string message) { return {ErrorCode::degenerate_mesh
 base::Error exhausted() { return {ErrorCode::resource_exhausted, "max_nodes reached", std::nullopt}; }
 
 double dist3(const Point& a, const Point& b) { return std::sqrt(detail::dot3(detail::sub(a, b), detail::sub(a, b))); }
-
-bool collinear(const Point& a, const Point& b, const Point& c) {
-    for (int k = 0; k < 3; ++k) {
-        const auto i = static_cast<std::size_t>((k + 1) % 3);
-        const auto j = static_cast<std::size_t>((k + 2) % 3);
-        if (predicates::orient2d({a[i], a[j], 0.0}, {b[i], b[j], 0.0}, {c[i], c[j], 0.0}) != 0) return false;
-    }
-    return true;
-}
-
-bool in_triangle_2d(const Point& a, const Point& b, const Point& c, const Point& x) {
-    const int o1 = predicates::orient2d(a, b, x);
-    const int o2 = predicates::orient2d(b, c, x);
-    const int o3 = predicates::orient2d(c, a, x);
-    return (o1 >= 0 && o2 >= 0 && o3 >= 0) || (o1 <= 0 && o2 <= 0 && o3 <= 0);
-}
 
 Point circumcentre_fast(const Point& a, const Point& b, const Point& c, const Point& d) {
     const Point u = detail::sub(b, a);
@@ -116,6 +103,14 @@ struct Face {
     std::unique_ptr<Triangulation2D> tri;
     std::vector<int> global;
     std::map<int, int> local;
+    // subfacet()'s containment test of a face triangle's centroid, by triangle slot (FC12). A memo
+    // holds for the vertices it was taken with, in stored order: the same arithmetic gives the same
+    // answer, and a reused slot with other vertices is tested again.
+    struct CentroidMemo {
+        std::array<int, 3> v{-1, -1, -1};
+        bool inside = false;
+    };
+    std::vector<CentroidMemo> centroid_inside;
 
     [[nodiscard]] Point to_local(const Point& p) const {
         if (axis >= 0) {
@@ -599,16 +594,7 @@ std::expected<GeneratedMesh, base::Error> generate_mesh(const PolyhedralGeometry
             });
         });
     };
-    const auto tets_with = [&](int a, int b, int c) {
-        std::vector<int> out;
-        for (const int t : tri.incident(a)) {
-            const auto& v = tri.tet(t).v;
-            if (std::ranges::find(v, b) == v.end()) continue;
-            if (c >= 0 && std::ranges::find(v, c) == v.end()) continue;
-            out.push_back(t);
-        }
-        return out;
-    };
+    std::vector<int> around_edge;  // segment_encroached's tetrahedra, kept between calls
     // Whether the face triangulation holds the edge ab (3D vertices) with an apex inside the face
     // on at least one side; for a patch edge, also no apex strictly inside its diametral circle.
     const auto in_face_triangulation = [&](const Face& f, int a, int b, bool judge_circle) -> bool {
@@ -637,11 +623,11 @@ std::expected<GeneratedMesh, base::Error> generate_mesh(const PolyhedralGeometry
         for (const int fi : de.faces) {
             if (!in_face_triangulation(faces[static_cast<std::size_t>(fi)], s.a, s.b, false)) return true;
         }
-        const std::vector<int> around = tets_with(s.a, s.b, -1);
-        if (around.empty()) return true;
+        tri.tets_with_edge(s.a, s.b, around_edge);
+        if (around_edge.empty()) return true;
         const Point& A = tri.point(s.a);
         const Point& B = tri.point(s.b);
-        for (const int t : around) {
+        for (const int t : around_edge) {
             for (const int x : tri.tet(t).v) {
                 if (x == s.a || x == s.b || tri.is_super(x)) continue;
                 const Point& X = tri.point(x);
@@ -651,22 +637,29 @@ std::expected<GeneratedMesh, base::Error> generate_mesh(const PolyhedralGeometry
         return false;
     };
     const auto subfacet = [&](int fi, int t) -> std::optional<std::array<int, 3>> {
-        const Face& f = faces[static_cast<std::size_t>(fi)];
+        Face& f = faces[static_cast<std::size_t>(fi)];
         const auto& tr = f.tri->triangle(t);
         if (!tr.alive || f.tri->is_super(tr.v[0]) || f.tri->is_super(tr.v[1]) || f.tri->is_super(tr.v[2])) return std::nullopt;
         const std::array<int, 3> v{f.global[static_cast<std::size_t>(tr.v[0])], f.global[static_cast<std::size_t>(tr.v[1])],
                                    f.global[static_cast<std::size_t>(tr.v[2])]};
         if (on_one_edge({v[0], v[1], v[2]})) return std::nullopt;
-        const Point& a = f.tri->point(tr.v[0]);
-        const Point& b = f.tri->point(tr.v[1]);
-        const Point& c = f.tri->point(tr.v[2]);
-        if (!f.contains_local({(a[0] + b[0] + c[0]) / 3.0, (a[1] + b[1] + c[1]) / 3.0, 0.0})) return std::nullopt;
+        const auto inside = [&] {
+            const Point& a = f.tri->point(tr.v[0]);
+            const Point& b = f.tri->point(tr.v[1]);
+            const Point& c = f.tri->point(tr.v[2]);
+            return f.contains_local({(a[0] + b[0] + c[0]) / 3.0, (a[1] + b[1] + c[1]) / 3.0, 0.0});
+        };
+        if (static_cast<std::size_t>(t) >= f.centroid_inside.size()) f.centroid_inside.resize(f.tri->triangle_slots());
+        Face::CentroidMemo& memo = f.centroid_inside[static_cast<std::size_t>(t)];
+        if (memo.v != tr.v) memo = {tr.v, inside()};
+        if (!memo.inside) return std::nullopt;
         return v;
     };
     const auto facet_encroached = [&](const std::array<int, 3>& v) {
-        const std::vector<int> around = tets_with(v[0], v[1], v[2]);
-        if (around.empty()) return true;
+        const std::array<int, 2> around = tri.tets_with_face(v[0], v[1], v[2]);
+        if (around[0] < 0) return true;
         for (const int t : around) {
+            if (t < 0) continue;
             for (const int x : tri.tet(t).v) {
                 if (x == v[0] || x == v[1] || x == v[2] || tri.is_super(x)) continue;
                 if (predicates::in_diametral_sphere(tri.point(v[0]), tri.point(v[1]), tri.point(v[2]), tri.point(x)) > 0) return true;
@@ -856,10 +849,9 @@ std::expected<GeneratedMesh, base::Error> generate_mesh(const PolyhedralGeometry
         const auto h_here = domain_size(centroid);
         if (!h_here) continue;
         if (!poor && !(radius > size_factor * size_at(centroid, *h_here))) continue;
-        if (std::ranges::all_of(tt.v, [&](int x) { return is_interface(x); })) {
-            ++report.exempt_tetrahedra;  // pair nodes only (M11)
-            continue;
-        }
+        // A tetrahedron of pair nodes only is not exempt (owner ruling SQ6): across a layer between two
+        // interfaces such tetrahedra span the layer, and exempting them (M11, the convex generator's rule)
+        // left the layer unrefined. The band test below is what protects each interface.
         const Point cc = detail::tetrahedron_circumcentre(p);
         if (has_interfaces && in_band(cc)) {
             ++report.exempt_tetrahedra;  // no circumcentre in a protected band (M7)
@@ -926,6 +918,17 @@ std::expected<GeneratedMesh, base::Error> generate_mesh(const PolyhedralGeometry
         const int fi = common_face({fv[0], fv[1], fv[2]});
         if (fi < 0 || on_one_edge({fv[0], fv[1], fv[2]})) return false;
         const Face& f = faces[static_cast<std::size_t>(fi)];
+        // A triangle of the face triangulation takes subfacet()'s own test, so that refinement and
+        // extraction cannot disagree on a centroid within rounding of the face's boundary.
+        const auto la = f.local.find(fv[0]);
+        const auto lb = f.local.find(fv[1]);
+        const auto lc = f.local.find(fv[2]);
+        if (la != f.local.end() && lb != f.local.end() && lc != f.local.end()) {
+            for (const auto& [x, y] : {std::pair{la->second, lb->second}, std::pair{lb->second, la->second}}) {
+                const auto t = f.tri->triangle_with_edge(x, y);
+                if (t && std::ranges::contains(f.tri->triangle(*t).v, lc->second)) return subfacet(fi, *t).has_value();
+            }
+        }
         Point c{0, 0, 0};
         for (const int v : fv) {
             const Point q = f.to_local(tri.point(v));

@@ -70,12 +70,21 @@ public:
     [[nodiscard]] const std::vector<int>& created() const noexcept { return created_; }
     // The alive tetrahedra incident to vertex v.
     [[nodiscard]] std::vector<int> incident(int v) const;
+    // The alive tetrahedra holding the triangle abc (at most two; -1 for none), found by walking the
+    // tetrahedra around a and stopping at the second.
+    [[nodiscard]] std::array<int, 2> tets_with_face(int a, int b, int c) const;
+    // The alive tetrahedra holding the edge ab, into out (cleared first), in walk order.
+    void tets_with_edge(int a, int b, std::vector<int>& out) const;
     // The id the tie-break uses for vertex v.
     [[nodiscard]] NodeId tie_id(int v) const noexcept;
 
 private:
     [[nodiscard]] bool in_sphere(int t, const Point& p, int pid) const;
     int new_tet(const std::array<int, 4>& v);
+    // Visits the alive tetrahedra around vertex v (a walk across faces holding v) until visit(t)
+    // returns false.
+    template <class Visit>
+    void walk_around(int v, Visit&& visit) const;
 
     std::vector<Point> points_;
     std::vector<Tetrahedron> tets_;
@@ -83,6 +92,7 @@ private:
     std::vector<int> vertex_tet_;  // an alive tetrahedron incident to each vertex
     mutable std::vector<std::uint32_t> mark_;  // per tetrahedron slot: the stamp of the last search
     mutable std::uint32_t stamp_ = 0;
+    mutable std::vector<int> walk_;  // walk_around's stack, kept between calls
     std::vector<int> created_;
     int last_ = 0;
 };

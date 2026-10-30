@@ -209,20 +209,21 @@ int Triangulation3D::insert(const Point& p) {
     return insert(p, cavity(p, t));
 }
 
-std::vector<int> Triangulation3D::incident(int v) const {
-    std::vector<int> out;
+template <class Visit>
+void Triangulation3D::walk_around(int v, Visit&& visit) const {
     const int start = vertex_tet_[static_cast<std::size_t>(v)];
-    if (start < 0) return out;
+    if (start < 0) return;
     if (++stamp_ == 0) {
         std::ranges::fill(mark_, 0u);
         stamp_ = 1;
     }
-    std::vector<int> stack{start};
+    std::vector<int>& stack = walk_;
+    stack.assign(1, start);
     mark_[static_cast<std::size_t>(start)] = stamp_;
     while (!stack.empty()) {
         const int t = stack.back();
         stack.pop_back();
-        out.push_back(t);
+        if (!visit(t)) return;
         const Tetrahedron& tt = tets_[static_cast<std::size_t>(t)];
         for (std::size_t i = 0; i < 4; ++i) {
             if (tt.v[i] == v) continue;  // the face opposite v does not hold v
@@ -232,8 +233,36 @@ std::vector<int> Triangulation3D::incident(int v) const {
             stack.push_back(nb);
         }
     }
+}
+
+std::vector<int> Triangulation3D::incident(int v) const {
+    std::vector<int> out;
+    walk_around(v, [&](int t) {
+        out.push_back(t);
+        return true;
+    });
     std::ranges::sort(out);
     return out;
+}
+
+std::array<int, 2> Triangulation3D::tets_with_face(int a, int b, int c) const {
+    std::array<int, 2> out{-1, -1};
+    std::size_t found = 0;
+    walk_around(a, [&](int t) {
+        const auto& v = tets_[static_cast<std::size_t>(t)].v;
+        if (std::ranges::find(v, b) != v.end() && std::ranges::find(v, c) != v.end()) out[found++] = t;
+        return found < 2;
+    });
+    return out;
+}
+
+void Triangulation3D::tets_with_edge(int a, int b, std::vector<int>& out) const {
+    out.clear();
+    walk_around(a, [&](int t) {
+        const auto& v = tets_[static_cast<std::size_t>(t)].v;
+        if (std::ranges::find(v, b) != v.end()) out.push_back(t);
+        return true;
+    });
 }
 
 namespace {

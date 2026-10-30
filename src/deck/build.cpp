@@ -228,7 +228,7 @@ private:
     const Deck& d_;
     std::vector<RegionSpec> regions_;
     MeshType type_ = MeshType::tensor;
-    std::string type_name_;  // the [mesh] type as written
+    std::string type_name_;  // the [mesh] type as written (extrude3d for a file mesh from a complex)
     std::optional<mesh::GeneratedMesh> generated_;
 };
 
@@ -665,10 +665,18 @@ std::expected<void, base::Error> Builder::extruded_3d(const Section& s) {
             if (range.size() != 2) return std::unexpected(at(e->line, "the range is <t_lo>:<t_hi>"));
             NITCAD_DECK_TRY(lo, lift(e->line, length(range[0])));
             NITCAD_DECK_TRY(hi, lift(e->line, length(range[1])));
+            // The nearest station within rounding of the stations' span: 30nm and 0.03um are one
+            // position though their doubles may differ in the last place.
             const auto station = [&](double t) -> std::optional<std::size_t> {
-                const auto it = std::find(x.stations.begin(), x.stations.end(), t);
-                if (it == x.stations.end()) return std::nullopt;
-                return static_cast<std::size_t>(it - x.stations.begin());
+                if (x.stations.empty()) return std::nullopt;
+                const auto [lo_it, hi_it] = std::ranges::minmax_element(x.stations);
+                const double tol = 1e-12 * std::max(*hi_it - *lo_it, std::max(std::abs(*lo_it), std::abs(*hi_it)));
+                std::optional<std::size_t> best;
+                for (std::size_t i = 0; i < x.stations.size(); ++i) {
+                    if (std::abs(x.stations[i] - t) > tol) continue;
+                    if (!best || std::abs(x.stations[i] - t) < std::abs(x.stations[*best] - t)) best = i;
+                }
+                return best;
             };
             const auto a = station(lo);
             const auto b = station(hi);
@@ -711,6 +719,9 @@ std::expected<void, base::Error> Builder::file_mesh(const Section& s, device::De
     auto generated = io::load_generated_mesh(file(*path));
     if (generated) {
         generated_ = std::move(*generated);
+        // A generation digest belongs to the complex generator, which a deck reaches as extrude3d:
+        // the run record names that generator, not "file" (FD14).
+        if (generated_->generation_digest != 0) type_name_ = "extrude3d";
         return {};
     }
     if (generated.error().message.find("plain mesh") == std::string::npos) {

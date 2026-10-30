@@ -489,6 +489,7 @@ add_executable(nitcad_solve_test
   tests/solve/mosfet_test.cpp
   tests/solve/unstructured_test.cpp
   tests/solve/unstructured3d_test.cpp
+  tests/solve/complex_convergence_test.cpp
   tests/solve/field_mobility_test.cpp
   tests/solve/fermi_dirac_test.cpp
   tests/solve/heterojunction_test.cpp
@@ -551,6 +552,7 @@ add_executable(nitcad_deck_test
   tests/deck/schottky_test.cpp
   tests/deck/quantum_confinement_test.cpp
   tests/deck/gate_tunnelling_test.cpp
+  tests/deck/complex_finfet_test.cpp
   tests/baseline/trace_listener.cpp)
 target_include_directories(nitcad_deck_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/deck")
 # The plot tests read the images back (Unit 25a).

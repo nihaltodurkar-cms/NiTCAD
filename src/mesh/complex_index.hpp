@@ -22,6 +22,7 @@ struct IndexedFacet {
     int drop = 0;                        // the coordinate dropped to project the facet one to one
     std::vector<std::array<std::size_t, 3>> triangles;  // vertex indices, in the facet's orientation
     int patch = -1;                      // a boundary facet's index in ComplexReport::patches
+    Point lo{}, hi{};                    // its bounding box (a filter before the exact tests)
 };
 
 class ComplexIndex {
@@ -46,6 +47,10 @@ public:
     [[nodiscard]] Location locate(const Point& p) const;
 
 private:
+    // locate among the listed facets only, as the surface of one volume (index 0), or among all
+    // facets (only null). The volume-overlap check asks this of each volume's own facets.
+    [[nodiscard]] Location locate(const Point& p, const std::vector<std::size_t>* only) const;
+
     PolyhedralGeometry g_;
     std::vector<IndexedFacet> facets_;
     ComplexReport report_;

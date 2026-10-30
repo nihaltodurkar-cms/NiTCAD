@@ -697,6 +697,25 @@ TEST_CASE("deck build: an extrude3d mesh is a certified two-region mesh with nam
     CHECK(m.find_boundary("boundary") != nullptr);
 }
 
+TEST_CASE("deck build: an extrude3d position spelled in other units is the same station or box face", "[deck][extrude]") {
+    // 0.3um, 300nm and 3e-5 (cm) need not round to one double. The station takes the lowest
+    // spelling, the box face the highest (so an exact test would miss the facets at the station),
+    // the ranges the others.
+    std::vector<std::pair<double, std::string>> spellings{{0.3 * 1e-4, "0.3um"}, {300.0 * 1e-7, "300nm"}, {3e-5, "3e-5"}};
+    std::ranges::sort(spellings);
+    REQUIRE(spellings.front().first < spellings.back().first);
+    std::string text = changed(extruded_head, "stations = 0, 1um", "stations = 0, " + spellings[0].second);
+    text = changed(text, "extrude = a 0:1um", "extrude = a 0:" + spellings[1].second);
+    text = changed(text, "extrude = b 0:1um", "extrude = b 0:" + spellings[2].second);
+    text = changed(text, "interface_resolution = 0.1um", "interface_resolution = 0.04um");  // the 6 s rule on 0.3 um
+    // A box whose lower x face is the end station: it holds the two end facets.
+    text = changed(text, "patch top =", "patch far = " + spellings[2].second + " -1um -1um 1um 2um 2um\npatch top =");
+    const deck::Plan p = must(text);
+    const auto* far = p.device.mesh().find_boundary("far");
+    REQUIRE(far != nullptr);
+    CHECK(std::abs(std::accumulate(far->areas.begin(), far->areas.end(), 0.0) - 1e-8) < 1e-20);
+}
+
 TEST_CASE("deck build: every extrude3d mistake names its line", "[deck][extrude]") {
     const auto expect = [](const std::string& message, const std::string& what) {
         INFO(message);
@@ -758,6 +777,16 @@ TEST_CASE("deck run: the run record names the extrude3d mesh and its generation 
     const auto mesh = io::load_generated_mesh(dir / "m.nitmesh");
     if (!mesh) FAIL(mesh.error().message);
     CHECK(mesh->generation_digest == p.generated->generation_digest);
+    // The saved mesh read back as a file mesh: the record names the generator its digest belongs to.
+    const std::string tail = extruded_head.substr(extruded_head.find("[doping]"));
+    const deck::Plan reread = must("[mesh]\ntype = file\npath = m.nitmesh\n[region lower]\nmaterial = silicon\n[region upper]\nmaterial = silicon\n" +
+                                       changed(tail, "[equilibrium]\n", "[sweep]\ncontact top = 0 : 0.05 : 0.05\n[output]\nsweep = r.nitsweep\n"),
+                                   dir);
+    CHECK(reread.mesh_type == "extrude3d");
+    const auto rerun = deck::run(reread);
+    if (!rerun) FAIL(rerun.error().message);
+    CHECK(rerun->sweep->run.mesh_type == "extrude3d");
+    CHECK(rerun->sweep->run.mesh_generation_digest == p.generated->generation_digest);
     // A run on any other mesh records neither.
     const auto plain = deck::run(must(deck_test::diode_device + "[sweep]\ncontact anode = 0 : 0.1 : 0.1\n"));
     REQUIRE(plain.has_value());

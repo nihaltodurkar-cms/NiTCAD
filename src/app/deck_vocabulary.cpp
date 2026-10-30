@@ -39,13 +39,14 @@ constexpr std::array<std::string_view, 6> waveforms{"constant", "step", "ramp", 
 
 constexpr std::array<KeyInfo, 1> device_keys{{{"temperature", 0, false, "300", "lattice temperature, K", {}, {}, {}}}};
 
-constexpr std::array<KeyInfo, 21> mesh_keys{{
+constexpr std::array<KeyInfo, 22> mesh_keys{{
     {"type", 0, false, "tensor", "tensor | generate2d | generate3d | extrude3d | file", mesh_types, {}, {}},
     {"x", 0, false, "<axis>", "tensor: x nodes, lengths or linspace(a, b, n) pieces joined by +", {}, {}, "tensor"},
     {"y", 0, false, "<axis>", "tensor: y nodes", {}, {}, "tensor"},
     {"z", 0, false, "<axis>", "tensor: z nodes", {}, {}, "tensor"},
     {"straddle", 1, true, "<position> <spacing>", "tensor: a material interface on axis x, y or z", {}, {}, "tensor"},
-    {"patch", 1, true, "<x y>, <x y>", "generate2d: a boundary patch; extrude3d: patch <name> = <x0 y0 z0 x1 y1 z1>, the boundary facets in the box", {}, {}, "generate2d extrude3d"},
+    {"patch", 1, true, "<x y>, <x y>", "generate2d: a boundary patch", {}, {}, "generate2d"},
+    {"patch", 1, true, "<x0 y0 z0 x1 y1 z1>", "extrude3d: the boundary facets in the box", {}, {}, "extrude3d"},
     {"patch", 2, true, "<x y z>, ...", "generate3d: patch <face> <name>, a polygon tiling the face", {}, {},
      "generate3d"},
     {"max_size", 0, false, "<length>", "generated meshes: largest element size", {}, {}, "generate2d generate3d extrude3d"},

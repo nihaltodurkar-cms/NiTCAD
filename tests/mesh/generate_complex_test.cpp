@@ -267,6 +267,8 @@ TEST_CASE("complex generator: the same input gives the same mesh", "[mesh][compl
     CHECK(a.simplices.points == b.simplices.points);
     CHECK(a.simplices.cells == b.simplices.cells);
     CHECK(graph_digest(a.mesh) == graph_digest(b.mesh));
+    // Pinned (FC13, FD15): a change of insertion order or of any refinement rule changes it.
+    CHECK(graph_digest(a.mesh) == 0x6c05e45d2f27a5dfull);
 }
 
 TEST_CASE("complex generator: a patch over three facets has their summed areas (FC4)", "[mesh][complex_generate]") {
@@ -383,6 +385,8 @@ TEST_CASE("complex generator: refusals", "[mesh][complex_generate]") {
         CHECK(generate_mesh(*g, o).error().code == ErrorCode::invalid_input);
         o.radius_edge = 2.0;
         o.max_nodes = 20;
-        CHECK(generate_mesh(*g, o).error().code == ErrorCode::resource_exhausted);
+        const auto capped = generate_mesh(*g, o);
+        CHECK(capped.error().code == ErrorCode::resource_exhausted);
+        CHECK(capped.error().message == "max_nodes reached");  // not the iteration cap (FC13)
     }
 }
