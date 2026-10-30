@@ -109,7 +109,7 @@ struct PatchBoundary {
 
 struct PatchBoundarySet {
     std::vector<PatchBoundary> boundaries;
-    std::vector<Point> zone_centres;  // where patch boundaries meet traces, domain edges or each other
+    std::vector<Point> zone_centres;  // where patch boundaries meet traces, domain edges or each other, or turn on a trace
     std::vector<double> patch_area;   // the geometric area of each patch [cm^2], one per patch name
     double resolution = 0.0;          // s [cm]
 };

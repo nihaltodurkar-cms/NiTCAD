@@ -567,9 +567,7 @@ std::expected<PatchBoundaryReport, base::Error> check_patch_boundaries(const Sim
     const std::size_t nf = s.facets.size() / 3;
     // Where a failing piece is: its edge's midpoint and the two patches (for the message).
     const auto where = [&](const Point& m, std::int32_t pa, std::int32_t pb) {
-        char at[96];
-        std::snprintf(at, sizeof at, " at (%.6g, %.6g, %.6g) cm", m[0], m[1], m[2]);
-        return std::string(at) + " between '" + s.patch_names[static_cast<std::size_t>(pa)] + "' and '" +
+        return point_text(m) + " between '" + s.patch_names[static_cast<std::size_t>(pa)] + "' and '" +
                s.patch_names[static_cast<std::size_t>(pb)] + "'";
     };
     for (std::size_t f = 0; f < nf; ++f) {

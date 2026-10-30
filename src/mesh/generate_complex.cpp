@@ -1155,7 +1155,8 @@ std::expected<GeneratedMesh, base::Error> generate_mesh(const PolyhedralGeometry
         }
         auto cert = certify_interfaces(sm, *dual, node_region, set, patch_set ? &*patch_set : nullptr);
         if (!cert) {
-            return std::unexpected(base::Error{ErrorCode::degenerate_mesh, "the generated mesh did not meet P4: " + cert.error().message,
+            return std::unexpected(base::Error{ErrorCode::degenerate_mesh,
+                                               "the generated mesh did not meet the interface certificate (P4, P6): " + cert.error().message,
                                                cert.error().context});
         }
         certificate = std::move(*cert);
