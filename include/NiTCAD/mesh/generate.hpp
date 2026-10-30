@@ -126,6 +126,8 @@ struct GeneratedMesh {
     std::vector<std::int32_t> node_region;
     std::optional<InterfaceCertificate> certificate;  // present with two or more regions
     MeshReport report;
+    // generation_digest of the complex and options (Unit 53, FD14); 0 for the other generators.
+    std::uint64_t generation_digest = 0;
 };
 
 // Errors: invalid_input (the geometry or option rules above); resource_exhausted (max_nodes
@@ -298,5 +300,11 @@ struct MeshOptions3D {
 // (max_nodes, or the iteration cap); degenerate_mesh (a postcondition failed).
 [[nodiscard]] std::expected<GeneratedMesh, base::Error> generate_mesh(const PolyhedralGeometry& geometry,
                                                                      const MeshOptions3D& options);
+
+// A 64-bit FNV-1a digest of a complex and the options it is meshed with (Unit 53, FD14): the
+// vertices (doubles by bit pattern), facets with their patch names, volumes with their regions,
+// and every MeshOptions3D field. generate_mesh(PolyhedralGeometry) stores it in the result, so a
+// generated mesh names what it was generated from; equal inputs give equal digests on any machine.
+[[nodiscard]] std::uint64_t generation_digest(const PolyhedralGeometry& geometry, const MeshOptions3D& options);
 
 }  // namespace NiTCAD::mesh

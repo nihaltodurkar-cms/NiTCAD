@@ -14,6 +14,7 @@
 // what it reaches is outside the domain.
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -1161,7 +1162,54 @@ std::expected<GeneratedMesh, base::Error> generate_mesh(const PolyhedralGeometry
         }
         certificate = std::move(*cert);
     }
-    return GeneratedMesh{std::move(*dual), std::move(sm), std::move(node_region), std::move(certificate), report};
+    return GeneratedMesh{std::move(*dual), std::move(sm), std::move(node_region), std::move(certificate), report,
+                         generation_digest(geometry, options)};
+}
+
+std::uint64_t generation_digest(const PolyhedralGeometry& geometry, const MeshOptions3D& options) {
+    // FNV-1a 64 over little-endian 8-byte words, as graph_digest; text byte by byte.
+    std::uint64_t h = 0xcbf29ce484222325ULL;
+    const auto word = [&](std::uint64_t v) {
+        for (int i = 0; i < 8; ++i) {
+            h ^= (v >> (8 * i)) & 0xffU;
+            h *= 0x100000001b3ULL;
+        }
+    };
+    const auto real = [&](double d) { word(std::bit_cast<std::uint64_t>(d)); };
+    const auto point = [&](const Point& p) {
+        for (const double c : p) real(c);
+    };
+    word(geometry.vertices.size());
+    for (const Point& p : geometry.vertices) point(p);
+    word(geometry.facets.size());
+    for (const ComplexFacet& f : geometry.facets) {
+        word(f.vertices.size());
+        for (const std::size_t v : f.vertices) word(v);
+        word(f.patch.size());
+        for (const char c : f.patch) {
+            h ^= static_cast<std::uint64_t>(static_cast<unsigned char>(c));
+            h *= 0x100000001b3ULL;
+        }
+    }
+    word(geometry.volumes.size());
+    for (const ComplexVolume& v : geometry.volumes) {
+        word(v.facets.size());
+        for (const std::size_t f : v.facets) word(f);
+        word(static_cast<std::uint64_t>(static_cast<std::int64_t>(v.region)));
+    }
+    real(options.max_size);
+    word(options.region_max_size.size());
+    for (const double s : options.region_max_size) real(s);
+    real(options.interface_resolution);
+    word(options.boxes.size());
+    for (const SizeBox& b : options.boxes) {
+        point(b.lo);
+        point(b.hi);
+        real(b.max_size);
+    }
+    real(options.radius_edge);
+    word(options.max_nodes);
+    return h;
 }
 
 }  // namespace NiTCAD::mesh

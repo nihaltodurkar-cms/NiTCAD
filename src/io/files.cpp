@@ -133,7 +133,8 @@ constexpr std::uint16_t dimension = 1, points = 2, volumes = 3, endpoints = 4, l
                         // A generated mesh (M14), absent in plain mesh files:
                         cells = 9, facets = 10, facet_patch = 11, node_region = 12, report = 13,
                         certificate = 14,
-                        facet_corner_patch = 15;  // Unit 53 (FD8): absent without per-corner patches
+                        facet_corner_patch = 15,  // Unit 53 (FD8): absent without per-corner patches
+                        generation_digest = 16;   // Unit 53 (FD14): absent unless generated from a complex
 constexpr std::uint16_t patch_name = 1, patch_nodes = 2, patch_areas = 3;
 }  // namespace mesh_key
 
@@ -319,6 +320,8 @@ namespace run_key {
 constexpr std::uint16_t identity = 1, setting = 2, name = 1, value = 2;
 constexpr std::uint16_t provenance = 3;   // Unit 42; absent in older files
 constexpr std::uint16_t mesh_digest = 4;  // Unit 45; absent in older files (0: unknown)
+constexpr std::uint16_t mesh_generation = 5;  // Unit 53 (FD14); absent unless the mesh came from a complex
+constexpr std::uint16_t generation_type = 1, generation_digest = 2;
 }
 namespace provenance_key {
 constexpr std::uint16_t version = 1, revision = 2, dirty = 3, build_type = 4, compiler = 5,
@@ -664,6 +667,12 @@ Writer write_run(const results::RunRecord& run) {
     }
     w.record(run_key::provenance, write_provenance(run.provenance));
     if (run.mesh_digest != 0) w.u64(run_key::mesh_digest, run.mesh_digest);
+    if (run.mesh_generation_digest != 0) {
+        Writer g;
+        g.text(run_key::generation_type, run.mesh_type);
+        g.u64(run_key::generation_digest, run.mesh_generation_digest);
+        w.record(run_key::mesh_generation, g);
+    }
     return w;
 }
 
@@ -685,6 +694,13 @@ std::expected<results::RunRecord, base::Error> read_run(const Reader& r) {
     if (r.has(run_key::mesh_digest)) {
         NITCAD_IO_TRY(digest, r.u64(run_key::mesh_digest));
         run.mesh_digest = digest;
+    }
+    if (r.has(run_key::mesh_generation)) {
+        NITCAD_IO_TRY(g, r.record(run_key::mesh_generation));
+        NITCAD_IO_TRY(type, g.text(run_key::generation_type));
+        NITCAD_IO_TRY(digest, g.u64(run_key::generation_digest));
+        run.mesh_type = std::move(type);
+        run.mesh_generation_digest = digest;
     }
     return run;
 }
@@ -1067,6 +1083,7 @@ std::expected<void, base::Error> save_generated_mesh(const std::filesystem::path
     }
     w.record(mesh_key::report, rep);
     if (m.certificate) w.record(mesh_key::certificate, detail::write_certificate(*m.certificate));
+    if (m.generation_digest != 0) w.u64(mesh_key::generation_digest, m.generation_digest);
     return write_file(path, Content::mesh, w);
 }
 
@@ -1132,7 +1149,8 @@ std::expected<mesh::GeneratedMesh, base::Error> load_generated_mesh(const std::f
         report.max_radius_edge = q3[0];
         report.min_dihedral_deg = q3[1];
     }
-    return mesh::GeneratedMesh{std::move(m), std::move(s), std::move(node_region), std::move(certificate), report};
+    NITCAD_IO_TRY(generation, r.u64_or(mesh_key::generation_digest, 0));
+    return mesh::GeneratedMesh{std::move(m), std::move(s), std::move(node_region), std::move(certificate), report, generation};
 }
 
 std::expected<void, base::Error> save_sweep(const std::filesystem::path& path,

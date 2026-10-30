@@ -102,6 +102,10 @@ void describe(const NiTCAD::deck::Plan& plan) {
             std::printf("generated: %zu triangles, %zu exempt, smallest angle %.2f deg\n", r.triangles,
                         r.exempt_triangles, r.min_angle_deg);
         }
+        if (plan.generated->generation_digest != 0) {
+            std::printf("generation digest: %016llx (%s)\n",
+                        static_cast<unsigned long long>(plan.generated->generation_digest), plan.mesh_type.c_str());
+        }
         if (const auto* c = d.interface_certificate()) {
             std::printf("certificate: P4 %zu cross faces (%zu in corner zones)", c->report.cross_faces,
                         c->report.corner_faces);

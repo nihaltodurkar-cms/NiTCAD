@@ -2,6 +2,7 @@
 // certificate round-trip; a plain mesh, a stale certificate and inconsistent simplices are refused.
 #include <catch2/catch_test_macros.hpp>
 
+#include <cstdint>
 #include <filesystem>
 #include <vector>
 
@@ -143,7 +144,42 @@ TEST_CASE("io: a complex-generated mesh round-trips with its corner patches and 
     CHECK(a.area_error == b.area_error);
     CHECK(a.zone_length == b.zone_length);
     CHECK(mesh::certifies(*back->certificate, back->mesh, back->node_region));
+    // The generation digest (FD14) is the complex's and options', and round-trips.
+    CHECK(m.generation_digest == mesh::generation_digest(*geometry, o));
+    CHECK(m.generation_digest != 0);
+    CHECK(back->generation_digest == m.generation_digest);
     fs::remove_all(dir);
+}
+
+TEST_CASE("io: the generation digest names the complex and every option (Unit 53, FD14)", "[io][generate]") {
+    mesh::ExtrudedGeometry x;
+    x.axis = 0;
+    x.stations = {0.0, 1.0};
+    x.cells.push_back({"c", {{0.0, 0.0, 0.0}, {1.0, 0.0, 0.0}, {1.0, 1.0, 0.0}, {0.0, 1.0, 0.0}}});
+    x.regions.push_back({0});
+    x.patches = {{"low", {-1.0, -1.0, -1.0}, {2.0, 2.0, 0.0}}};
+    const auto g = mesh::extrude(x);
+    REQUIRE(g.has_value());
+    mesh::MeshOptions3D o;
+    o.max_size = 0.5;
+    const std::uint64_t d = mesh::generation_digest(*g, o);
+    CHECK(d == mesh::generation_digest(*g, o));
+    // Each input changes it, also those that do not change the mesh (max_nodes, an unused region size).
+    const auto with = [&](auto change) {
+        mesh::PolyhedralGeometry h = *g;
+        mesh::MeshOptions3D p = o;
+        change(h, p);
+        return mesh::generation_digest(h, p);
+    };
+    CHECK(with([](mesh::PolyhedralGeometry& h, mesh::MeshOptions3D&) { h.vertices[0][2] = 1e-12; }) != d);
+    CHECK(with([](mesh::PolyhedralGeometry& h, mesh::MeshOptions3D&) { h.facets[0].patch += "x"; }) != d);
+    CHECK(with([](mesh::PolyhedralGeometry& h, mesh::MeshOptions3D&) { h.volumes[0].region = 1; }) != d);
+    CHECK(with([](mesh::PolyhedralGeometry&, mesh::MeshOptions3D& p) { p.max_size = 0.25; }) != d);
+    CHECK(with([](mesh::PolyhedralGeometry&, mesh::MeshOptions3D& p) { p.region_max_size = {0.5}; }) != d);
+    CHECK(with([](mesh::PolyhedralGeometry&, mesh::MeshOptions3D& p) { p.interface_resolution = 0.1; }) != d);
+    CHECK(with([](mesh::PolyhedralGeometry&, mesh::MeshOptions3D& p) { p.boxes = {{{0, 0, 0}, {1, 1, 1}, 0.5}}; }) != d);
+    CHECK(with([](mesh::PolyhedralGeometry&, mesh::MeshOptions3D& p) { p.radius_edge = 2.5; }) != d);
+    CHECK(with([](mesh::PolyhedralGeometry&, mesh::MeshOptions3D& p) { p.max_nodes = 1000; }) != d);
 }
 
 TEST_CASE("io: a generated 3D mesh round-trips with its patches, regions, certificate and 3D report",
@@ -165,9 +201,11 @@ TEST_CASE("io: a generated 3D mesh round-trips with its patches, regions, certif
     const auto m = mesh::generate_mesh(g, o);
     REQUIRE(m.has_value());
     REQUIRE(m->certificate.has_value());
+    CHECK(m->generation_digest == 0);  // FD14: the convex generator's files gain no record
     REQUIRE(io::save_generated_mesh(dir / "g3.ntc", *m).has_value());
     const auto back = io::load_generated_mesh(dir / "g3.ntc");
     REQUIRE(back.has_value());
+    CHECK(back->generation_digest == 0);
     CHECK(back->mesh.dimension() == 3);
     CHECK(mesh::graph_digest(back->mesh) == mesh::graph_digest(m->mesh));
     CHECK(back->simplices.cells == m->simplices.cells);

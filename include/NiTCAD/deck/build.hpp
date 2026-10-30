@@ -124,6 +124,7 @@
 #include <expected>
 #include <filesystem>
 #include <optional>
+#include <string>
 #include <vector>
 
 #include "NiTCAD/base/error.hpp"
@@ -154,6 +155,7 @@ struct Outputs {
 struct Plan {
     device::Device device;
     std::optional<mesh::GeneratedMesh> generated;  // the mesh the deck generated or loaded, if any
+    std::string mesh_type;                         // the [mesh] type, as written (Unit 53, FD14)
     Analysis analysis = Analysis::sweep;
     // Models, solver and, for a sweep or a small-signal run, the thermal contacts' temperature per
     // point (for a transient or a trace, one list held for the run).

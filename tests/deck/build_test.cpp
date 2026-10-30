@@ -12,6 +12,7 @@
 #include <vector>
 
 #include "NiTCAD/deck/build.hpp"
+#include "NiTCAD/deck/run.hpp"
 #include "NiTCAD/device/doping_profiles.hpp"
 #include "NiTCAD/io/files.hpp"
 #include "NiTCAD/mesh/generate.hpp"
@@ -729,6 +730,39 @@ TEST_CASE("deck build: the run identity covers the extruded complex (FC11)", "[d
                                          "extrude = b 0:1um", "extrude = b 0:1.02um");
     CHECK(id(a) != id(must(longer)));
     CHECK(id(a) != id(must(changed(changed(extruded_head, "patch top =", "patch roof ="), "patch = top", "patch = roof"))));
+}
+
+TEST_CASE("deck run: the run record names the extrude3d mesh and its generation digest (FD14)", "[deck][extrude]") {
+    const fs::path dir = deck_test::scratch("extrude_generation");
+    const std::string swept = changed(extruded_head, "[equilibrium]\n",
+                                      "[sweep]\ncontact top = 0 : 0.05 : 0.05\n[output]\nsweep = s.nitsweep\nmesh = m.nitmesh\n");
+    const deck::Plan p = must(swept, dir);
+    REQUIRE(p.generated.has_value());
+    CHECK(p.mesh_type == "extrude3d");
+    CHECK(p.generated->generation_digest != 0);
+    // max_nodes changes the generation digest, not the mesh, so not the run identity.
+    const deck::Plan capped = must(changed(swept, "max_size = 0.5um\n", "max_size = 0.5um\nmax_nodes = 100000\n"), dir);
+    CHECK(capped.generated->generation_digest != p.generated->generation_digest);
+    CHECK(solve::make_run_record(capped.device, capped.options, capped.points).input_identity ==
+          solve::make_run_record(p.device, p.options, p.points).input_identity);
+
+    const auto report = deck::run(p);
+    if (!report) FAIL(report.error().message);
+    REQUIRE(report->sweep.has_value());
+    CHECK(report->sweep->run.mesh_type == "extrude3d");
+    CHECK(report->sweep->run.mesh_generation_digest == p.generated->generation_digest);
+    const auto sweep = io::load_sweep(dir / "s.nitsweep");
+    if (!sweep) FAIL(sweep.error().message);
+    CHECK(sweep->run.mesh_type == "extrude3d");
+    CHECK(sweep->run.mesh_generation_digest == p.generated->generation_digest);
+    const auto mesh = io::load_generated_mesh(dir / "m.nitmesh");
+    if (!mesh) FAIL(mesh.error().message);
+    CHECK(mesh->generation_digest == p.generated->generation_digest);
+    // A run on any other mesh records neither.
+    const auto plain = deck::run(must(deck_test::diode_device + "[sweep]\ncontact anode = 0 : 0.1 : 0.1\n"));
+    REQUIRE(plain.has_value());
+    CHECK(plain->sweep->run.mesh_type.empty());
+    CHECK(plain->sweep->run.mesh_generation_digest == 0);
 }
 
 // Unit 53 slice 5: the extruded FinFET deck of decks/ meshes and is certified (P4 and P6). About four

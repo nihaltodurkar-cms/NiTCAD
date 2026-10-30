@@ -182,6 +182,13 @@ std::expected<RunReport, base::Error> run(const Plan& plan, const solve::RunCont
         report.written.push_back(p);
         return {};
     };
+    // FD14: a run on a mesh generated from a complex names the mesh type and its generation digest.
+    const auto stamp = [&plan](results::RunRecord& run) {
+        if (plan.generated && plan.generated->generation_digest != 0) {
+            run.mesh_type = plan.mesh_type;
+            run.mesh_generation_digest = plan.generated->generation_digest;
+        }
+    };
     const Outputs& out = plan.outputs;
     if (!out.device.empty()) {
         if (auto r = written(out.device, io::save_device(out.device, plan.device)); !r) return std::unexpected(r.error());
@@ -204,7 +211,8 @@ std::expected<RunReport, base::Error> run(const Plan& plan, const solve::RunCont
             results::BiasPoint point;
             point.bias_V = zero.front();
             point.fields = eq->fields;
-            const auto record = solve::make_run_record(plan.device, plan.options, zero);
+            auto record = solve::make_run_record(plan.device, plan.options, zero);
+            stamp(record);
             auto r = io::save_checkpoint(out.checkpoint, plan.device.mesh(), record, point);
             if (auto w = written(out.checkpoint, std::move(r)); !w) return std::unexpected(w.error());
         }
@@ -218,6 +226,7 @@ std::expected<RunReport, base::Error> run(const Plan& plan, const solve::RunCont
         o.steady = plan.options;
         auto t = solve::solve_transient(plan.device, plan.waveforms, o, nullptr, control);
         if (!t) return std::unexpected(std::move(t.error()));
+        stamp(t->run);
         if (!out.transient.empty()) {
             if (auto w = written(out.transient, io::save_transient(out.transient, *t)); !w) return std::unexpected(w.error());
         }
@@ -232,6 +241,7 @@ std::expected<RunReport, base::Error> run(const Plan& plan, const solve::RunCont
         o.steady = plan.options;
         auto s = solve::solve_small_signal(plan.device, plan.points, o, nullptr, control);
         if (!s) return std::unexpected(std::move(s.error()));
+        stamp(s->run);
         if (!out.small_signal.empty()) {
             if (auto w = written(out.small_signal, io::save_small_signal(out.small_signal, *s)); !w) return std::unexpected(w.error());
         }
@@ -250,6 +260,7 @@ std::expected<RunReport, base::Error> run(const Plan& plan, const solve::RunCont
         o.steady = plan.options;
         auto s = solve::trace_bias(plan.device, o, nullptr, control);
         if (!s) return std::unexpected(std::move(s.error()));
+        stamp(s->run);
         if (!out.sweep.empty()) {
             if (auto w = written(out.sweep, io::save_sweep(out.sweep, *s)); !w) return std::unexpected(w.error());
         }
@@ -291,6 +302,7 @@ std::expected<RunReport, base::Error> run(const Plan& plan, const solve::RunCont
     }
     auto sweep = solve::sweep_bias(plan.device, points, options, restart ? &restart->fields : nullptr, control);
     if (!sweep) return std::unexpected(std::move(sweep.error()));
+    stamp(sweep->run);
     if (!out.sweep.empty()) {
         if (auto w = written(out.sweep, io::save_sweep(out.sweep, *sweep)); !w) return std::unexpected(w.error());
     }

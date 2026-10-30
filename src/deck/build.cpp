@@ -228,6 +228,7 @@ private:
     const Deck& d_;
     std::vector<RegionSpec> regions_;
     MeshType type_ = MeshType::tensor;
+    std::string type_name_;  // the [mesh] type as written
     std::optional<mesh::GeneratedMesh> generated_;
 };
 
@@ -736,6 +737,7 @@ std::expected<void, base::Error> Builder::build_mesh(device::DeviceDescription& 
     else if (type->value == "extrude3d") type_ = MeshType::extrude3d;
     else if (type->value == "file") type_ = MeshType::file;
     else return std::unexpected(at(type->line, "unknown mesh type '" + type->value + "'"));
+    type_name_ = type->value;
     if (type_ != MeshType::extrude3d) {
         for (const RegionSpec& g : regions_) {
             if (!g.extrudes.empty()) return std::unexpected(at(g.extrudes.front()->line, "extrude is for an extrude3d mesh"));
@@ -1524,7 +1526,7 @@ std::expected<Plan, base::Error> Builder::run() {
     }
     auto device = device::Device::create(std::move(d));
     if (!device) return std::unexpected(located(1, "device", std::move(device.error())));
-    Plan plan{.device = std::move(*device), .generated = std::move(generated_)};
+    Plan plan{.device = std::move(*device), .generated = std::move(generated_), .mesh_type = type_name_};
     NITCAD_DECK_CHECK(models(plan.options.models));
     NITCAD_DECK_CHECK(solver(plan));
     NITCAD_DECK_CHECK(analysis(plan));
