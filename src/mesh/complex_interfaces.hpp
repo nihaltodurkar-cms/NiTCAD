@@ -51,7 +51,8 @@ struct InterfacePieceLayout {
     Point normal{};                 // unit; (u, w, normal) right-handed for oblique pieces
     std::vector<Point> local;       // the corners in the frame
     std::vector<Point> inset;       // the polygon inset by 1.5 s, in the frame
-    double spacing = 0.0;           // pair spacing: min(h of both regions, 4 s)
+    double spacing = 0.0;           // pair spacing: min(h of both regions, max(4 s, L of the clearance))
+    double band = 0.0;              // its protected band b = sqrt(spacing^2 / 3 + s^2 / 4)
 
     [[nodiscard]] Point to_local(const Point& p) const;
     // The point at frame coordinates l, offset along the normal (exact on the axis for axis pieces).

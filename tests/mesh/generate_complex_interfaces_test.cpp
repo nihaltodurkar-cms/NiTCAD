@@ -229,6 +229,31 @@ TEST_CASE("complex interfaces: a 60.5 degree sector at a trace (FC6)", "[mesh][c
     WARN("60.5 degrees");
 }
 
+// The shaped FinFET deck's gate edge in small (Unit 53, owner ruling on slice 5): a tapered fin wrapped
+// by a liner and a fill, two sections; in the second the liner and the fill are other regions,
+// so at the station between them the liner's U-shaped ring is a non-convex piece beside the fill's coplanar
+// piece, both against the first section's region, with oblique (about 104 and 256 degree) corners.
+// Face vertices there lie a few hundredths of s outside the ring's outer edge; the decomposition
+// bound alone fails P4b here (mutant checked), as in decks/finfet_3d_shaped.deck (1.1 s in its
+// miniature); the grown polygons bound it (DECISIONS.md, Unit 53, the coarser offsets).
+TEST_CASE("complex interfaces: a tapered liner ring at a gate edge (P4b, the shaped deck's corner)", "[mesh][complex_interfaces]") {
+    const double s = 0.16;
+    ExtrudedGeometry x;
+    x.axis = 0;
+    x.stations = {0.0, 1.0, 2.0};
+    x.cells = {
+        {"base", {P2(3.3, 0), P2(4, 0), P2(4, 1), P2(4, 2), P2(4, 4), P2(4, 5), P2(4, 6), P2(3.3, 6)}},
+        {"fin", {P2(4, 2), P2(6, 2.5), P2(6, 3.5), P2(4, 4)}},
+        {"liner", {P2(4, 1), P2(7, 1.5), P2(7, 4.5), P2(4, 5), P2(4, 4), P2(6, 3.5), P2(6, 2.5), P2(4, 2)}},
+        {"fill", {P2(4, 0), P2(7.7, 0), P2(7.7, 6), P2(4, 6), P2(4, 5), P2(7, 4.5), P2(7, 1.5), P2(4, 1)}},
+    };
+    // Regions: 0 the base, 1 the first section's liner and fill, 2 the gate fill, 3 the gate liner, 4 the fin.
+    x.regions = {{0, 0}, {4, 4}, {1, 3}, {1, 2}};
+    const auto m = mesh_of(x, options(2.0, s));
+    check_certified(m, s, 2.0 * (0.7 * 6.0 + 3.7 * 6.0));
+    WARN("tapered liner ring");
+}
+
 TEST_CASE("complex interfaces: the FD7 rules are refused (FC2, FC6)", "[mesh][complex_interfaces]") {
     const double s = 0.1;
     const MeshOptions3D o = options(0.5, s);

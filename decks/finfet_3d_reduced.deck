@@ -4,21 +4,21 @@
 # generator from cells instead of a tensor grid: every interface is a mesh line of its own, and the whole
 # wrapped gate is one boundary patch.
 #
-# The stack is thicker than finfet_3d.deck's (1 nm SiO2 and 2 nm HfO2, EOT about 1.2 nm, against 0.5 nm
-# and 1.5 nm): the generator needs every feature line at least 6 s long, so interface_resolution s is
-# at most a sixth of the thinnest layer, and 0.5 nm layers (s = 0.08 nm) did not mesh within 200000 nodes
-# (DECISIONS.md, Unit 53 slice 5).
+# The stack is finfet_3d.deck's (0.5 nm SiO2, 1.5 nm HfO2). The generator needs every feature line at
+# least 6 s long, so interface_resolution s is at most a sixth of the thinnest layer: s = 0.08 nm. Pairs
+# along each interface are spaced by its clearance to the next one (DECISIONS.md, Unit 53, the owner's
+# ruling on slice 5), not by 4 s, which is what makes 0.5 nm layers mesh.
 #
 # Axes (lengths in nm): x along the fin, source (x = 0) to drain (x = 85), the gate from 30 to 55;
-# the cross-section is (y, z): y vertical (buried oxide 0-20, fin 20-50, interfacial layer to 51, HfO2
-# to 53), z across (0-16, the fin 3-13).
+# the cross-section is (y, z): y vertical (buried oxide 0-20, fin 20-50, interfacial layer to 50.5, HfO2
+# to 52), z across (0-14, the fin 2-12).
 #
 # Three sections along x: source side (0-30), under the gate (30-55), drain side (55-85). The two layers
 # are nitride outside the gate; under the gate they are the interfacial oxide and HfO2. A layer is one
 # cell (a U-shaped polygon): two cells of one region meeting on a boundary face would put a vertex on an
 # interface trace, which the straddled-trace construction does not support.
 #
-# A mesh takes several minutes in Release. See finfet_3d.deck for the solver notes.
+# The mesh takes about 20 minutes in Release (about 280000 nodes). See finfet_3d.deck for the solver notes.
 
 [device]
 temperature = 300
@@ -28,17 +28,17 @@ type = extrude3d
 axis = x
 stations = 0, 30nm, 55nm, 85nm
 # Cells in (y, z); the box's top edge is split where the cells above it meet it.
-cell box = 0 0, 20nm 0, 20nm 2nm, 20nm 3nm, 20nm 13nm, 20nm 14nm, 20nm 16nm, 0 16nm
-cell fin = 20nm 3nm, 50nm 3nm, 50nm 13nm, 20nm 13nm
-cell il = 20nm 2nm, 51nm 2nm, 51nm 14nm, 20nm 14nm, 20nm 13nm, 50nm 13nm, 50nm 3nm, 20nm 3nm
-cell hk = 20nm 0, 53nm 0, 53nm 16nm, 20nm 16nm, 20nm 14nm, 51nm 14nm, 51nm 2nm, 20nm 2nm
+cell box = 0 0, 20nm 0, 20nm 1.5nm, 20nm 2nm, 20nm 12nm, 20nm 12.5nm, 20nm 14nm, 0 14nm
+cell fin = 20nm 2nm, 50nm 2nm, 50nm 12nm, 20nm 12nm
+cell il = 20nm 1.5nm, 50.5nm 1.5nm, 50.5nm 12.5nm, 20nm 12.5nm, 20nm 12nm, 50nm 12nm, 50nm 2nm, 20nm 2nm
+cell hk = 20nm 0, 52nm 0, 52nm 14nm, 20nm 14nm, 20nm 12.5nm, 50.5nm 12.5nm, 50.5nm 1.5nm, 20nm 1.5nm
 # Boundary patches: the first box that holds a whole facet names it; the rest are "boundary".
-patch source = 0 20nm 3nm  0 50nm 13nm
-patch drain = 85nm 20nm 3nm  85nm 50nm 13nm
-patch gate = 30nm 20nm 0  55nm 53nm 16nm
-patch substrate = 0 0 0  85nm 0 16nm
+patch source = 0 20nm 2nm  0 50nm 12nm
+patch drain = 85nm 20nm 2nm  85nm 50nm 12nm
+patch gate = 30nm 20nm 0  55nm 52nm 14nm
+patch substrate = 0 0 0  85nm 0 14nm
 max_size = 8nm
-interface_resolution = 0.16nm
+interface_resolution = 0.08nm
 
 # Region 0: the buried oxide.
 [region buried_oxide]

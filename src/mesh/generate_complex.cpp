@@ -577,7 +577,7 @@ std::expected<GeneratedMesh, base::Error> generate_mesh(const PolyhedralGeometry
         return static_cast<std::size_t>(v) < interface_node.size() && interface_node[static_cast<std::size_t>(v)] != 0;
     };
     const auto in_band = [&](const Point& x) {
-        return std::ranges::any_of(layout.pieces, [&](const detail::InterfacePieceLayout& pc) { return pc.distance(x) < layout.band; });
+        return std::ranges::any_of(layout.pieces, [&](const detail::InterfacePieceLayout& pc) { return pc.distance(x) < pc.band; });
     };
     const auto is_corner = [&](int v) { return v >= 4 && v < corner_end; };
     const auto common_face = [&](std::initializer_list<int> vs) -> int {
@@ -734,7 +734,7 @@ std::expected<GeneratedMesh, base::Error> generate_mesh(const PolyhedralGeometry
                     best_d = dd;
                 }
             }
-            if (best != nullptr && best_d < layout.band) {
+            if (best != nullptr && best_d < layout.pieces[static_cast<std::size_t>(best->geometry.piece)].band) {
                 const auto& tg = best->geometry;
                 const double t = std::clamp(detail::dot3(detail::sub(c, tg.start), tg.dir), 1.5 * res, tg.length - 1.5 * res);
                 const bool near = std::ranges::any_of(best->params, [&](double x) { return std::abs(x - t) < 0.5 * res; });

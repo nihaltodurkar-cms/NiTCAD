@@ -5205,6 +5205,53 @@ built:
   totals vary run to run, so FC14's 120 s is not re-measured per test). Slice 5's new cases are small (the fixtures
   mesh in under a second); the two FinFET decks are hidden `[.benchmark]` cases.
 
+**Owner ruling on slice 5's open items (2026-10-30), "fix them":** the shaped deck's P4b failure, the thicker
+layers and FD14's generation digest are each fixed in code, not accepted as limitations.
+- **FD14, the generation digest** (`6ec2286`): `mesh::generation_digest` (FNV-1a over the complex's vertices,
+  facets with patch names, volumes with regions, and every `MeshOptions3D` field), stored in `GeneratedMesh` by
+  the complex generator only (0 for the others), written as optional mesh-file key 16 (other generated files
+  unchanged). The run record gains the mesh type and that digest as an optional record (key 5), set by the deck
+  runner for every analysis on a complex-generated mesh; `nitcad check` prints it, the application's run panel
+  shows it. It is not part of the input identity: `max_nodes`, for one, changes the digest and not the mesh
+  (tested).
+- **P4b at the tapered ring: a check bound, not a mesh defect.** Reproduced in 2.6 s by a 3-section miniature
+  deck; the regression test `complex interfaces: a tapered liner ring at a gate edge` is a two-section reduction
+  of it (0.7 s Release, 13.7 s Debug: FC14's Debug growth, about 102 s after slice 4, is to be re-measured in
+  slice 6). At the station plane the interfacial ring (a
+  non-convex piece) meets the coplanar HfO2 piece at oblique corners (about 94 and 266 degrees); a dual face
+  there has vertices up to 0.04 s outside the ring's outer edge, so the exact hull test and the 1e-6 s grown
+  polygon both fail, and the decomposition bound (min over ear triangles of max over V) is 1.1 s because the
+  face straddles a diagonal of the decomposition, while the outermost vertex is 0.006 nm (0.04 s) outside the ring
+  and the others inside it. Fixed in
+  `check_interfaces` (`Piece::nonconvex_deviation`): mitred offsets of 1e-6, 1e-3, 1e-2, 0.1 and 0.25 s, each
+  kept only when simple with every edge in its source edge's direction; the smallest holding the hull bounds
+  the deviation by the plane distance plus its reach; the 1e-6 s offset returns at once as before, a coarser one
+  is taken with the decomposition bound as min of two upper bounds. Mutant (the 1e-6 s offset only): the new
+  test fails P4b. With this alone the slice-5 shaped deck (1 nm / 2 nm, s = 0.16 nm) certifies: 125304 nodes,
+  753187 tetrahedra, 51001 slivers, P4 54201 faces (12493 in zones), P6 6108 pieces, 3 min 9 s Release.
+- **Thin layers: pair spacing from the clearance.** The cost at small s was the pair spacing min(h, 4 s) over
+  every piece, a cap the band argument does not need: a piece's pairs keep its dual faces on it while no other
+  node is nearer to its plane than b = sqrt(R^2 + s^2 / 4), R <= L / sqrt 3. Each piece's clearance d (its
+  distance to the pieces and boundary faces FD7's 4 s rule checks) now sets L = min(h of both regions,
+  max(4 s, (sqrt 3 / 2) sqrt(d^2 - s^2))), whose band is d / 2 when above 4 s; the band is per piece (the
+  generator's insertion and exemption tests and the trace pairs use their piece's). Below d = 4.73 s the spacing
+  is slice 3's. All mesh fixtures still certify with their pinned deviations.
+- **The decks are back on `finfet_3d.deck`'s stack (SQc as approved):** 0.5 nm SiO2, 1.5 nm HfO2, the domain
+  0-85 x 0-52 x 0-14 nm, the fin z 2-12 (the shaped one tapered to z 4-10 at its top), s = 0.08 nm (FD7's 6 s on
+  the ring's 0.5 nm edges). Both mesh and certify (P4, P6), Release, the two run side by side:
+  - `finfet_3d_reduced.deck`: 279935 nodes, 1626836 tetrahedra, 87683 slivers, largest radius–edge 119, P4 126603
+    faces (25562 in zones), P6 13146 pieces (198 in zones), 20 min 18 s.
+  - `finfet_3d_shaped.deck`: 271461 nodes, 1615300 tetrahedra, 117961 slivers, largest radius–edge 2314, P4 123081
+    faces (25122 in zones), P6 12832 pieces (166 in zones), 20 min 46 s.
+  The shaped deck's hidden test is no longer `[!shouldfail]`. **Cost, for slice 6:** about 430 s per 1e5 nodes,
+  some 14× FD15's 30 s (two meshes sharing the machine), and over twice the slice-5 meshes' nodes; FC9's "at most
+  the reduced tensor mesh's nodes" and FC12 are measured there, not assumed. The thin layer's two interfaces are
+  0.5 nm apart, so their spacing is about 0.43 nm (4 s would be 0.32 nm).
+- Seen while measuring, not changed (both as the convex generator on `main`): `MeshReport::exempt_tetrahedra`
+  counts each exemption during refinement, so it can exceed the tetrahedra; `max_radius_edge` is over every kept
+  tetrahedron, not only those not exempt as its comment says (a near-degenerate one gave `inf` in a coarse
+  miniature).
+
 ---
 
 ## New questions the advisor raised (not yet in `ARCHITECTURE.md`)

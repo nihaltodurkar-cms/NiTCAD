@@ -765,7 +765,7 @@ TEST_CASE("deck run: the run record names the extrude3d mesh and its generation 
     CHECK(plain->sweep->run.mesh_generation_digest == 0);
 }
 
-// Unit 53 slice 5: the extruded FinFET deck of decks/ meshes and is certified (P4 and P6). About four
+// Unit 53 slice 5: the extruded FinFET deck of decks/ meshes and is certified (P4 and P6). About twenty
 // minutes in Release, so hidden; run it by name.
 TEST_CASE("deck build: the reduced extruded FinFET deck meshes and is certified", "[.benchmark][deck][extrude]") {
     const auto d = deck::read(fs::path(NITCAD_DECKS_DIR) / "finfet_3d_reduced.deck");
@@ -781,9 +781,9 @@ TEST_CASE("deck build: the reduced extruded FinFET deck meshes and is certified"
     UNSCOPED_INFO("nodes " << p->device.mesh().node_count() << ", slivers " << p->generated->report.slivers);
 }
 
-// The tapered deck does not certify yet (DECISIONS.md, Unit 53 slice 5: P4b at the interfacial ring's top
-// corner, 1.5 s at s = 0.16 nm and again at s = 0.1 nm). Kept as the measurement for FC10's ruling.
-TEST_CASE("deck build: the shaped extruded FinFET deck meshes and is certified", "[.benchmark][!shouldfail][deck][extrude]") {
+// The tapered deck (FC10's mesh): certified since the owner's ruling on slice 5 (DECISIONS.md: the P4b bound at the
+// interfacial ring's oblique corners). About twenty minutes in Release, so hidden; run it by name.
+TEST_CASE("deck build: the shaped extruded FinFET deck meshes and is certified", "[.benchmark][deck][extrude]") {
     const auto d = deck::read(fs::path(NITCAD_DECKS_DIR) / "finfet_3d_shaped.deck");
     if (!d) FAIL(d.error().message);
     const auto p = deck::build(*d);

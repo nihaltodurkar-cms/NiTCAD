@@ -350,8 +350,6 @@ std::expected<InterfaceLayout, base::Error> read_interfaces(const InterfaceInput
             std::ranges::reverse(pc.local);
             std::ranges::reverse(pc.loop);
         }
-        pc.spacing = std::min({h_of(pc.region_a), h_of(pc.region_b), 4.0 * s});
-        out.band = std::max(out.band, std::sqrt(pc.spacing * pc.spacing / 3.0 + s * s / 4.0));
     }
 
     // Feature lines: the sectors about every piece edge, and the traces.
@@ -594,6 +592,8 @@ std::expected<InterfaceLayout, base::Error> read_interfaces(const InterfaceInput
         for (const std::size_t f : out.pieces[k].facets) piece_vertices[k].insert(g.facets[f].vertices.begin(), g.facets[f].vertices.end());
     }
     const auto parallel = [](const Point& n1, const Point& n2) { return norm3(cross(n1, n2)) <= 1e-12; };
+    // Each piece's clearance: its distance to the pieces and boundary faces checked here.
+    std::vector<double> clearance(out.pieces.size(), std::numeric_limits<double>::infinity());
     for (std::size_t i = 0; i < out.pieces.size(); ++i) {
         const InterfacePieceLayout& A = out.pieces[i];
         for (std::size_t j = i + 1; j < out.pieces.size(); ++j) {
@@ -615,6 +615,8 @@ std::expected<InterfaceLayout, base::Error> read_interfaces(const InterfaceInput
                 }
             }
             if (!(d >= 4.0 * s)) return std::unexpected(invalid("two interfaces within 4 s (a layer thinner than 4 s, or unrelated interfaces)", B.facets[0]));
+            clearance[i] = std::min(clearance[i], d);
+            clearance[j] = std::min(clearance[j], d);
         }
         for (std::size_t fi = 0; fi < in.face_plane.size(); ++fi) {
             bool touching = false;
@@ -634,7 +636,22 @@ std::expected<InterfaceLayout, base::Error> read_interfaces(const InterfaceInput
                 }
             }
             if (!(d >= 4.0 * s)) return std::unexpected(invalid("an interface within 4 s of a boundary face it does not meet", A.facets[0]));
+            clearance[i] = std::min(clearance[i], d);
         }
+    }
+    // Pair spacing (Unit 53, owner: the thin-layer ruling): min(h of both regions, max(4 s, L_d)),
+    // L_d = (sqrt 3 / 2) sqrt(d^2 - s^2) for the clearance d, the spacing whose band
+    // b = sqrt(L^2 / 3 + s^2 / 4) is d / 2, so the bands of two pieces d apart do not overlap.
+    // At d = 4 s, L_d < 4 s and the slice-3 spacing holds; a thin layer far thicker than 4 s
+    // (when s is set by a short feature line) gets pairs as far apart as its thickness allows, a
+    // piece with nothing near it h apart. The band is the piece's own.
+    for (std::size_t k = 0; k < out.pieces.size(); ++k) {
+        InterfacePieceLayout& pc = out.pieces[k];
+        const double d = clearance[k];
+        const double by_clearance = std::isfinite(d) ? 0.5 * std::sqrt(3.0) * std::sqrt(d * d - s * s) : std::numeric_limits<double>::infinity();
+        pc.spacing = std::min({h_of(pc.region_a), h_of(pc.region_b), std::max(4.0 * s, by_clearance)});
+        pc.band = std::sqrt(pc.spacing * pc.spacing / 3.0 + s * s / 4.0);
+        out.band = std::max(out.band, pc.band);
     }
 
     // The inset polygons (1.5 s): each offset edge keeps its direction and the result is simple.

@@ -56,30 +56,46 @@ struct Piece {
     std::vector<Piece> parts;  // the ear-clipped triangles, each a convex piece
     int axis = -1;             // the coordinate constant on every vertex, or -1 (oblique)
     std::vector<Point> flat;   // axis >= 0: the vertices with that coordinate dropped (exact)
-    std::vector<Point> grown;  // axis >= 0: `flat` grown outward by a mitred offset (rounded coordinates)
-    double grown_reach = 0.0;  // the largest distance from a vertex of `grown` to the polygon
+    // axis >= 0: `flat` grown outward by mitred offsets of increasing size (rounded coordinates),
+    // each with its reach, the largest distance from one of its vertices to the polygon's vertex
+    // it came from; an offset whose polygon is not simple is left out.
+    struct Grown {
+        std::vector<Point> poly;
+        double reach = 0.0;
+        bool ulp = false;  // the 1e-6 s offset
+    };
+    std::vector<Grown> grown;
 
     // FD9: max over V of the distance to the polygon. For an axis-aligned polygon whose exact 2D
     // projection contains the convex hull of V's projection, the orthogonal projection of every
     // point of that hull lies in the polygon, so the nearest point of the polygon to each is on
     // the plane and the distance is the plane distance, linear in the point: its max over the
-    // hull is attained at a point of V. When the hull lies only in the grown polygon, every point
-    // of it is within grown_reach of the polygon in the plane (the grown polygon's farthest
-    // points from it are its vertices), so the distance is at most the plane distance plus
-    // grown_reach: this covers face vertices rounded just outside a feature line, where the exact
-    // test fails by an ulp (they lie in corner zones, judged against s). Otherwise the
-    // decomposition's min over parts of max over V (an upper bound, as for several pieces of one
-    // pair). Oblique non-convex polygons always take the decomposition: their orthogonal
-    // projection is not exact.
+    // hull is attained at a point of V. When the hull lies only in a grown polygon, every point
+    // of it is within that offset's reach of the polygon in the plane (the grown polygon's farthest
+    // points from it are its vertices), so the distance is at most the plane distance plus the
+    // reach; the smallest offset holding the hull gives the bound. The 1e-6 s offset covers face
+    // vertices rounded just outside a feature line, where the exact test fails by an ulp; the
+    // larger ones (up to s / 4) face vertices a small fraction of s outside a piece's edge where
+    // it meets a coplanar piece at an oblique corner (Unit 53 slice 5: the tapered ring). Both lie
+    // in corner zones, judged against s. Otherwise, and as a second bound, the decomposition's
+    // min over parts of max over V (an upper bound, as for several pieces of one pair: too large
+    // when V straddles a diagonal of the decomposition). Oblique non-convex polygons always take
+    // the decomposition: their orthogonal projection is not exact.
     [[nodiscard]] double nonconvex_deviation(const std::vector<Point>& V) const {
+        double grown_bound = std::numeric_limits<double>::infinity();
         if (axis >= 0) {
             const auto ax = static_cast<std::size_t>(axis);
             double worst = 0.0;
             for (const Point& x : V) worst = std::max(worst, std::abs(x[ax] - v[0][ax]));
             if (hull_inside(V, flat)) return worst;
-            if (!grown.empty() && hull_inside(V, grown)) return worst + grown_reach;
+            for (std::size_t k = 0; k < grown.size(); ++k) {
+                if (!hull_inside(V, grown[k].poly)) continue;
+                if (grown[k].ulp) return worst + grown[k].reach;  // as slice 3
+                grown_bound = worst + grown[k].reach;
+                break;
+            }
         }
-        double best = std::numeric_limits<double>::infinity();
+        double best = grown_bound;
         for (const Piece& t : parts) {
             double worst = 0.0;
             for (const Point& x : V) worst = std::max(worst, t.distance(x));
@@ -291,10 +307,12 @@ std::expected<InterfaceReport, base::Error> check_interfaces(const SimplexMesh& 
                             for (const Point& a : p.v) p.flat.push_back(detail::project(a, c));
                         }
                     }
-                    if (p.axis >= 0) {
-                        // Grown outward by 1e-6 s: each edge's line moved out, consecutive lines
-                        // met (a collinear vertex moved along its edge's normal).
-                        const double grow = 1e-6 * res;
+                    for (const double fraction : {1e-6, 1e-3, 1e-2, 0.1, 0.25}) {
+                        if (p.axis < 0) break;
+                        // Grown outward by a fraction of s: each edge's line moved out, consecutive
+                        // lines met (a collinear vertex moved along its edge's normal).
+                        const double grow = fraction * res;
+                        Piece::Grown grown{.ulp = fraction == 1e-6};
                         const int turn = detail::polygon_turn(p.flat);
                         const std::size_t m = p.flat.size();
                         const auto outward = [&](const Point& a, const Point& b) {
@@ -319,10 +337,20 @@ std::expected<InterfaceReport, base::Error> check_interfaces(const SimplexMesh& 
                                 const double t = ((q2[0] - q1[0]) * d2[1] - (q2[1] - q1[1]) * d2[0]) / den;
                                 g = {q1[0] + t * d1[0], q1[1] + t * d1[1], 0.0};
                             }
-                            p.grown.push_back(g);
-                            p.grown_reach = std::max(p.grown_reach, detail::distance(g, pb));
+                            grown.poly.push_back(g);
+                            grown.reach = std::max(grown.reach, detail::distance(g, pb));
                         }
-                        if (!detail::simple_2d(p.grown)) p.grown.clear();  // then the path is not taken
+                        // Kept when simple with every edge in its source edge's direction (an offset
+                        // larger than an edge's mitre setbacks would reverse it: then not taken).
+                        bool kept = detail::simple_2d(grown.poly);
+                        for (std::size_t i = 0; i < m && kept; ++i) {
+                            const Point& a0 = p.flat[i];
+                            const Point& a1 = p.flat[(i + 1) % m];
+                            const Point& g0 = grown.poly[i];
+                            const Point& g1 = grown.poly[(i + 1) % m];
+                            kept = (a1[0] - a0[0]) * (g1[0] - g0[0]) + (a1[1] - a0[1]) * (g1[1] - g0[1]) > 0.0;
+                        }
+                        if (kept) p.grown.push_back(std::move(grown));
                     }
                 }
             }
