@@ -289,9 +289,6 @@ TEST_CASE("complex interfaces: the FD7 rules are refused (FC2, FC6)", "[mesh][co
         refused(x, o, "feature within 4 s of a domain edge");
     }
     SECTION("a domain-edge vertex within 4 s of a crossing") { refused(slabs({0.0, 1.0, 1.2, 2.0}, 1.0), o, "within 4 s of an interface crossing"); }
-    SECTION("a patch edge on an interface trace (slice 4)") {
-        auto x = slabs({0.0, 1.0, 2.0}, 1.0);
-        x.patches = {{"low", {-1.0, 0.0, -1.0}, {2.0, 0.0, 1.0}}};
-        refused(x, o, "a patch edge meets an interface");
-    }
+    // A patch edge on a trace, refused here in slice 3, is meshed since slice 4
+    // (generate_complex_patches_test.cpp).
 }

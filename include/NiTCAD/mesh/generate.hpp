@@ -263,14 +263,25 @@ struct MeshOptions3D {
 // (thin layers), boundary faces a piece does not meet, and domain edges at least 4 s apart; every
 // piece wide enough for its 1.5 s inset. Unsupported, and refused: holes, pinched pieces, a piece
 // ending on a domain edge, two pieces ending on the boundary along one line, a trace at a domain
-// corner, a feature line on a domain edge other than a single crossing, a patch edge meeting an
-// interface (slice 4). Placement: each piece's pair set (the 2D generator's nodes in its 1.5 s
-// inset at min(h of both regions, 4 s)) mirrored at +-s/2; pairs along each trace in the boundary
-// face; a pair at each crossing of a domain edge, the domain-edge segment across it never split.
+// corner, a feature line on a domain edge other than a single crossing. Placement: each piece's
+// pair set (the 2D generator's nodes in its 1.5 s inset at min(h of both regions, 4 s)) mirrored
+// at +-s/2; pairs along each trace in the boundary face; a pair at each crossing of a domain edge,
+// the domain-edge segment across it never split.
 // Rows along every feature line sit on one lattice (multiples of 1.5 s along the line), so the
 // pieces meeting there align. No node is inserted in a protected band; tetrahedra of interface
 // nodes only, or with the circumcentre in a band, are exempt from the quality bound. The result
 // carries the P4 certificate (check_interfaces; degenerate_mesh if it fails).
+//
+// Patches at traces (FD8, slice 4). A patch edge on a trace is not a mesh edge: the trace pairs
+// straddle it, and each boundary triangle's corner gives its piece to the patch of the facets
+// holding its node (SimplexMesh::facet_corner_patch, set only when some corner differs from its
+// triangle). A patch edge crossing a trace, or ending on one, stays constrained: nodes at +-s/2
+// along it (one at an end), the segment across never split, no trace pair within 0.75 s. Rules
+// there (invalid_input): sectors at least 60 degrees, the patch edge's other vertices at least
+// 4 s away, no domain edge or second patch edge through the point; a patch edge at least 4 s from
+// a feature it does not meet. Wherever a patch edge meets an interface the certificate carries P6
+// (check_patch_boundaries): every patch edge declared, zones at the straddled runs' ends and where
+// patch edges meet traces. The convex generator keeps its refusal (DECISIONS.md SQ1).
 //
 // Refinement as the convex generator, over the boundary's faces (maximal connected sets of
 // coplanar boundary facets, possibly non-convex, with holes) and its domain edges (chains of facet

@@ -112,7 +112,7 @@ Device rich_device() {
 }
 
 // A 1D silicon diode with a lumped gate on a graph mesh, whose two regions need a P4 certificate.
-Device certified_device() {
+Device certified_device(bool p6 = false) {
     std::vector<mesh::Point> p;
     std::vector<mesh::Edge> e;
     for (int i = 0; i < 5; ++i) p.push_back({1e-4 * i, 0, 0});
@@ -123,6 +123,7 @@ Device certified_device() {
     const std::vector<device::RegionId> region{0, 0, 1, 1, 1};
     const std::vector<mesh::InterfacePoint1D> at{{1.5e-4, 0, 1}};
     auto certificate = *mesh::certify_interfaces_1d(m, region, at);
+    if (p6) certificate.patches.emplace();  // a P6 report (Unit 53, FD10), only to test the save refusal
     auto d = Device::create(
         {.mesh = std::move(m),
          .temperature_K = 300.0,
@@ -304,6 +305,12 @@ TEST_CASE("device file: foreign and damaged files are refused", "[io][device_fil
     const fs::path file = dir / "d.nitdev";
     REQUIRE(io::save_device(file, d).has_value());
 
+    SECTION("a certificate with a P6 report: refused until Unit 53 slice 5 (DECISIONS.md SQ4)") {
+        const auto r = io::save_device(dir / "p6.nitdev", certified_device(true));
+        REQUIRE_FALSE(r.has_value());
+        CHECK(r.error().code == ErrorCode::invalid_input);
+        CHECK_FALSE(fs::exists(dir / "p6.nitdev"));
+    }
     SECTION("a mesh file is not a device file") {
         const fs::path mfile = dir / "m.nitmesh";
         REQUIRE(io::save_mesh(mfile, d.mesh()).has_value());

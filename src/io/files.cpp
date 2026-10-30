@@ -1015,6 +1015,10 @@ bool narrow(const std::vector<std::int64_t>& v, std::vector<std::int32_t>& out) 
 
 std::expected<void, base::Error> save_generated_mesh(const std::filesystem::path& path,
                                                      const mesh::GeneratedMesh& m) {
+    if (!m.simplices.facet_corner_patch.empty() || (m.certificate && m.certificate->patches)) {
+        // Unit 53 slice 4 (DECISIONS.md SQ4): never written without them; the records are slice 5's (FD14).
+        return std::unexpected(invalid("a generated mesh with per-corner patches or a P6 report cannot be saved yet (Unit 53 slice 5)"));
+    }
     Writer w = write_mesh(m.mesh);
     w.i64s(mesh_key::cells, wide(m.simplices.cells));
     w.i64s(mesh_key::facets, wide(m.simplices.facets));

@@ -5053,6 +5053,91 @@ built:
 - oblique non-convex pieces always take FD9's decomposition;
 - FD9's grown-polygon path stays.
 
+**Slice 4 plan, owner ruling (2026-10-30), "choose recommended" (SQ1–SQ6):**
+- SQ1: `generate3d.cpp` keeps its refusal "an interface cuts a face that carries patches"; FD8's sentence lifting it
+  is amended to the complex generator only (FD12, FC1: the convex generator is not touched). The same geometry is
+  meshed through the complex API.
+- SQ2: `SimplexMesh` gains an optional per-corner patch (`facet_corner_patch`, D entries per listed facet; empty means
+  `facet_patch` for every corner). `make_dual_mesh` gives each corner's boundary piece to its corner's patch. Under
+  FD8 (a) a boundary triangle straddles the trace, and the boundary between a mirror pair's pieces is their
+  bisector, the trace, so the split is exact; P6 judges the rest. Empty, the importer runs as before (FC1).
+- SQ3: FD10's requirement is enforced when the certificate is issued: `certify_interfaces` refuses simplices with
+  per-corner patches unless a patch-boundary set is given, so every certificate of such a mesh carries P6.
+  `graph_digest` covers the boundary patches, so `Device::create`'s digest check keeps the certificate tied to them.
+- SQ4: until slice 5 (FD14), writing a generated mesh with per-corner patches or a P6 report is refused, never
+  written without them.
+- SQ5: FD8 (b) covers every point where a constrained patch edge meets a trace: a crossing, and a patch edge ending
+  on a trace (a T, the straddled part continuing). Rules as a domain-edge crossing: sectors at least 60°, 4 s
+  separation, not at a domain corner.
+- SQ6: FC7's "zone length" is the length of declared patch boundary inside the 2 s zones.
+
+**Slice 4 (2026-10-30): patches at traces and P6** (FD8, FD10; FC7, FC2 for the FD8 rules).
+- **Baseline first:** the main merge `8f30ac0`, never built before its push, passes Release 124/124 (779 s) and Debug
+  113/113 (1181 s, 4 jobs).
+- **FD8 (a), as built.** In `generate_complex.cpp` a facet edge between two patches of one face that is also an edge
+  of an interface facet is recorded as a straddled patch edge and left out of the chains, so it is never a
+  subsegment. The trace pairs and the line lattice are unchanged. On a face with a straddled edge each boundary
+  triangle's corner takes the patch of the face triangles (closed, in face coordinates) holding its node; when they
+  disagree (a node on a constrained patch edge), the triangle's own patch (the centroid's, as before). The corners go
+  into `SimplexMesh::facet_corner_patch` only when some corner differs from its triangle, so every mesh without a
+  straddled edge is built and imported exactly as before (FC1 by construction).
+- **FD8 (b), as built (SQ5).** In `read_interfaces` a patch chain through an interface loop vertex is a crossing
+  (`InterfaceCrossing`, its position 0 or last for a patch edge ending on the trace). Refused: a domain chain or a
+  second patch chain through the point; anything other than one piece whose two trace arms lie in the patch edge's
+  face; a sector under 60 degrees between a trace arm and the patch edge; a patch-edge vertex within 4 s of the point.
+  The generator puts nodes at +-s/2 along the patch edge (one at an end, inserted in the patch edge's one face), the
+  segment across never split, as at a domain-edge crossing; on the trace through the point no lattice pair within
+  0.75 s, and the point's position is kept among the trace's positions so refinement adds none within s / 2.
+- **Added rule, for review:** a patch edge must be at least 4 s from every feature line it does not meet (the domain
+  edges' rule extended to patch edges; their subsegments would otherwise be encroached by the pairs).
+- **FD10, P6, as built** (`check_patch_boundaries`, `interfaces.hpp`): per listed boundary triangle, each edge whose
+  corners carry different patches; the piece from the edge's midpoint to the triangle's circumcentre; deviation min
+  over the declared boundaries of those two patches of max over the piece's two ends; zones of 2 s about declared
+  centres; P4a's tolerance outside, s inside; patches meeting with no declared boundary refused. Reported: each
+  patch's area error and its zone length (sampled at 64 points per zone radius; a report, not judged). The generator
+  declares every patch edge (straddled and constrained) and puts zone centres at the ends of straddled runs, where
+  they meet a chain, and where patch edges meet traces. It runs P6 only where a patch edge meets an interface
+  (straddled or crossing), so every slice-1 to slice-3 certificate is unchanged.
+- **SQ3 as built:** `certify_interfaces(…, const PatchBoundarySet* = nullptr)` refuses simplices with per-corner
+  patches without a set; the set enters `interfaces_digest` only when given (existing digests unchanged).
+- **SQ4 as built:** `save_generated_mesh` refuses per-corner patches or a P6 report; `save_device` refuses a
+  certificate with a P6 report; both before anything is written (tested).
+- **SQ1:** `generate3d.cpp` not touched.
+- **FC7 measured** (Release, s = 0.1, h = 0.5; slabs 2 × 2 split at z = 1). Pins are regression bounds:
+
+  | Mesh | Nodes | P6 pieces (in zones) | P6 flat / corner | P4 corner | Area error | s × zone length |
+  |---|---|---|---|---|---|---|
+  | Patch edge on a trace (a) | 350 | 28 (13) | 0 / 0 | 0 | 0 | 0.04 |
+  | Patch edge crossing a trace, patch over two regions (b, c) | 536 | 0 | 0 / 0 | 0 | 0 | 0.04 |
+  | Patch edge ending on a trace (a, b) | 539 | 26 (11) | 0 / 0 | 0.25 s | −0.00125 | 0.06 |
+
+  The straddled boundaries are exact even in their zones: the trace pairs are mirrored to the trace's ends. In the
+  T case the P4 corner deviation and the area error are likely the patch edge's end node, s / 2 from the trace with no
+  mirror (not traced). In case (b) the patch edge stays constrained, so no triangle straddles a boundary and P6 has
+  no pieces; its report (areas, zone length) is still issued.
+- **Refusals tested (FC2):** under 60 degrees (a cell edge at 53 degrees on the end face), a patch-edge vertex 0.2
+  from the meeting point, a patch edge 0.2 from a parallel trace. The first fixture used 0.3 and 1.7, whose chain
+  was not exactly collinear and split at the crossing (another refusal fired); exact coordinates fixed it.
+  Not reached by a fixture, kept as defensive rules (mutated in slice 6): a domain edge or second patch edge through
+  the point; trace arms in another face.
+- **Direct tests:** `simplex_mesh_test.cpp` (corner patches equal to the facet's give the same graph digest; a corner
+  patch moves exactly its corners' pieces; size and index refusals); `interfaces_test.cpp` (P6 on a mirrored
+  straddled trace: exact, areas exact, zone length 4 s; a face node moved 0.002 refused outside a zone and accepted in
+  one; no declared boundary refused; certification without a set refused; the set changes the digest).
+- **Hand mutants now** (FC13 proper is slice 6), each killed:
+  - corner patch always the triangle's: 2 `[complex_patches]` cases fail;
+  - P6 zones never matched: 2 test cases fail (of the `[complex_patches]` and direct P6 cases run);
+  - certification without a set allowed: 1 test case fails.
+  A first form of the second (zone radius 0) hung the zone-length sampler (an infinite step count), not a valid
+  mutant; replaced.
+- Suites (2026-10-30, after the mutants were restored):
+  - Release 125/125, 723 s (4 jobs); `mesh.generate_complex_patches` 0.50 s.
+  - Debug 114/114, 995 s (4 jobs; the baseline took 1181 s, so totals vary run to run).
+  - FC14: the new `mesh.generate_complex_patches` takes 9.0 s in Debug, and `mesh.interfaces` grew from 17.8 s to
+    26.1 s (the direct P6 case, brute-force Delaunay). Slice 4 adds about 17 s, so Unit 53's growth is about 102 s of
+    the 120 s budget (slice 3's 85 s plus this). Slices 5 and 6 have about 18 s left: their larger fixtures go to
+    `[.benchmark]`.
+
 ---
 
 ## New questions the advisor raised (not yet in `ARCHITECTURE.md`)

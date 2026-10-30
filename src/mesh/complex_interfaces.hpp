@@ -5,8 +5,9 @@
 // A piece is a maximal connected union of coplanar interface facets of one region pair: a planar
 // simple polygon (holes refused). Its edges are feature lines: a bend (two pieces of one pair), a
 // junction (three or more regions), or a trace (the piece meets the outer boundary, which must be
-// planar across it). Feature points: where feature lines meet, and where a trace crosses a domain
-// edge.
+// planar across it). Feature points: where feature lines meet, where a trace crosses a domain
+// edge, and where a constrained patch edge crosses a trace or ends on it (FD8 b). A patch edge
+// lying on a trace is not a chain (FD8 a): the generator leaves it out.
 #pragma once
 
 #include <array>
@@ -68,7 +69,8 @@ struct InterfaceTrace {
     double length = 0.0;
 };
 
-// A trace crossing a domain edge at chains[chain].chain[position] (never inserted as a node).
+// A trace crossing a domain edge, or meeting a patch edge (crossing it, or the patch edge ending
+// there: position 0 or last), at chains[chain].chain[position] (never inserted as a node).
 struct InterfaceCrossing {
     int chain = 0;
     std::size_t position = 0;

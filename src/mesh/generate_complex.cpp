@@ -261,6 +261,20 @@ std::expected<GeneratedMesh, base::Error> generate_mesh(const PolyhedralGeometry
     // Domain edges (faces meeting) and patch edges (patches meeting inside a face), each a chain
     // of collinear facet edges with one key; a chain continues through a vertex only when exactly
     // two pieces of its key meet there and they are collinear.
+    // A patch edge on an interface trace is straddled, not a chain (FD8 a).
+    std::set<std::pair<std::size_t, std::size_t>> interface_edges;
+    for (std::size_t f = 0; f < cx.facets().size(); ++f) {
+        if (cx.facets()[f].kind != FacetKind::interface) continue;
+        const auto& v = g.facets[f].vertices;
+        for (std::size_t i = 0; i < v.size(); ++i) interface_edges.insert({std::min(v[i], v[(i + 1) % v.size()]), std::max(v[i], v[(i + 1) % v.size()])});
+    }
+    struct PatchEdge {
+        std::pair<std::size_t, std::size_t> e;
+        std::array<int, 2> patches;
+        int face;
+        bool straddled;
+    };
+    std::vector<PatchEdge> patch_edges;
     std::vector<DomainEdge> edges;
     {
         std::map<std::array<int, 3>, std::vector<std::pair<std::size_t, std::size_t>>> pieces;  // key: faces, patch-edge face
@@ -270,7 +284,9 @@ std::expected<GeneratedMesh, base::Error> generate_mesh(const PolyhedralGeometry
             if (fa != fb) {
                 pieces[{std::min(fa, fb), std::max(fa, fb), -1}].push_back(e);
             } else if (cx.facets()[fs[0]].patch != cx.facets()[fs[1]].patch) {
-                pieces[{fa, fa, fa}].push_back(e);
+                const bool straddled = interface_edges.contains(e);
+                patch_edges.push_back({e, {cx.facets()[fs[0]].patch, cx.facets()[fs[1]].patch}, fa, straddled});
+                if (!straddled) pieces[{fa, fa, fa}].push_back(e);
             }
         }
         for (const auto& [key, list] : pieces) {
@@ -473,7 +489,9 @@ std::expected<GeneratedMesh, base::Error> generate_mesh(const PolyhedralGeometry
         if (f.axis >= 0) p[static_cast<std::size_t>(f.axis)] = f.plane[0][static_cast<std::size_t>(f.axis)];
         return p;
     };
-    // On each crossed domain edge: nodes at +- s/2 from the crossing, toward the chain's start and end.
+    // On each crossed domain edge or patch edge: nodes at +- s/2 from the crossing, toward the
+    // chain's start and end (a patch edge ending on a trace, FD8 b: only the side it runs to, the
+    // other -1).
     std::map<std::pair<int, std::size_t>, std::array<int, 2>> crossing_nodes;
     for (const detail::InterfaceCrossing& c : layout.crossings) {
         const DomainEdge& de = edges[static_cast<std::size_t>(c.chain)];
@@ -481,22 +499,37 @@ std::expected<GeneratedMesh, base::Error> generate_mesh(const PolyhedralGeometry
         const Point& A = P[de.chain.front()];
         const Point& B = P[de.chain.back()];
         const Point ed = detail::scale(1.0 / dist3(A, B), detail::sub(B, A));
-        std::array<int, 2> ends{};
+        const std::vector<int> on_faces = de.face >= 0 ? std::vector<int>{de.face} : std::vector<int>{de.faces[0], de.faces[1]};
+        std::array<int, 2> ends{-1, -1};
         for (std::size_t side = 0; side < 2; ++side) {
+            if ((side == 0 && c.position == 0) || (side == 1 && c.position + 1 == de.chain.size())) continue;
             Point x = detail::add(X, detail::scale(side == 0 ? -0.5 * res : 0.5 * res, ed));
             for (std::size_t a = 0; a < 3; ++a) {
                 if (A[a] == B[a]) x[a] = A[a];
             }
             if (node_cap()) return std::unexpected(exhausted());
-            ends[side] = insert(x, {de.faces[0], de.faces[1]}, {c.chain}, -1);
+            ends[side] = insert(x, on_faces, {c.chain}, -1);
             mark_interface(ends[side]);
         }
         crossing_nodes[{c.chain, c.position}] = ends;
     }
-    // Along each trace: pairs at +- s/2 within the face, graded from each end.
+    // Along each trace: pairs at +- s/2 within the face, graded from each end. Where a patch edge
+    // meets the trace (FD8 b), its nodes stand in for a pair: no lattice pair within 0.75 s of it,
+    // and its position is kept so that refinement adds none within s / 2.
     std::vector<Trace> traces;
     for (const detail::InterfaceTrace& tg : layout.traces) {
         Trace tr{tg, detail::trace_positions(tg.start, tg.dir, tg.length, res)};
+        std::vector<double> met;
+        for (const detail::InterfaceCrossing& c : layout.crossings) {
+            const DomainEdge& de = edges[static_cast<std::size_t>(c.chain)];
+            if (de.face != tg.face) continue;
+            const Point r = detail::sub(P[de.chain[c.position]], tg.start);
+            const double t = detail::dot3(r, tg.dir);
+            if (t > 0.0 && t < tg.length && dist3(detail::add(tg.start, detail::scale(t, tg.dir)), P[de.chain[c.position]]) <= 1e-9 * tg.length) {
+                met.push_back(t);
+            }
+        }
+        std::erase_if(tr.params, [&](double p) { return std::ranges::any_of(met, [&](double t) { return std::abs(p - t) < 0.75 * res; }); });
         const Face& f = faces[static_cast<std::size_t>(tg.face)];
         for (const double t : tr.params) {
             const Point c = detail::add(tg.start, detail::scale(t, tg.dir));
@@ -505,6 +538,7 @@ std::expected<GeneratedMesh, base::Error> generate_mesh(const PolyhedralGeometry
                 mark_interface(insert(snap(f, detail::add(c, detail::scale(sign * res, tg.normal))), {tg.face}, {}, -1));
             }
         }
+        tr.params.insert(tr.params.end(), met.begin(), met.end());
         traces.push_back(std::move(tr));
     }
     // The pair set P of each piece, mirrored at +- s/2.
@@ -529,9 +563,10 @@ std::expected<GeneratedMesh, base::Error> generate_mesh(const PolyhedralGeometry
                 nodes.push_back(vertex_of[c[k]]);
                 continue;
             }
-            locked_at.push_back(nodes.size());
-            nodes.push_back(it->second[0]);
-            nodes.push_back(it->second[1]);
+            if (it->second[0] >= 0 && it->second[1] >= 0) locked_at.push_back(nodes.size());
+            for (const int v : it->second) {
+                if (v >= 0) nodes.push_back(v);
+            }
         }
         const std::size_t first = segments.size();
         for (std::size_t k = 0; k + 1 < nodes.size(); ++k) add_segment(nodes[k], nodes[k + 1], static_cast<int>(e), edges[e].face);
@@ -965,6 +1000,24 @@ std::expected<GeneratedMesh, base::Error> generate_mesh(const PolyhedralGeometry
         max_ratio = std::max(max_ratio, dist3(circumcentre_fast(p[0], p[1], p[2], p[3]), p[0]) / shortest);
     }
     std::vector<double> face_area(faces.size(), 0.0);
+    // FD8 (a): on a face with a straddled patch edge, each corner takes the patch of the facets
+    // holding its node, unless those differ (a node on a patch edge): then the triangle's.
+    std::vector<char> straddled_face(faces.size(), 0);
+    for (const PatchEdge& pe : patch_edges) {
+        if (pe.straddled) straddled_face[static_cast<std::size_t>(pe.face)] = 1;
+    }
+    std::vector<std::int32_t> corner_patch;
+    bool corners_differ = false;
+    const auto patch_of_node = [&](const Face& f, const Point& p, int fallback) {
+        const Point q = f.to_local(p);
+        int found = -1;
+        for (std::size_t k = 0; k < f.local_tris.size(); ++k) {
+            if (!in_triangle_2d(f.local_tris[k][0], f.local_tris[k][1], f.local_tris[k][2], q)) continue;
+            if (found >= 0 && found != f.local_patch[k]) return fallback;
+            found = f.local_patch[k];
+        }
+        return found >= 0 ? found : fallback;
+    };
     for (std::size_t t = 0; t < tri.tet_slots(); ++t) {
         if (kept[t] == 0) continue;
         const auto& tt = tri.tet(static_cast<int>(t));
@@ -987,11 +1040,17 @@ std::expected<GeneratedMesh, base::Error> generate_mesh(const PolyhedralGeometry
             const int patch = f.local_patch[static_cast<std::size_t>(at)];
             for (const int v : fv) sm.facets.push_back(static_cast<NodeId>(renumber[static_cast<std::size_t>(v)]));
             sm.facet_patch.push_back(patch);
+            for (const int v : fv) {
+                const int cp = straddled_face[static_cast<std::size_t>(fi)] != 0 ? patch_of_node(f, tri.point(v), patch) : patch;
+                corners_differ = corners_differ || cp != patch;
+                corner_patch.push_back(cp);
+            }
             const Point& A = tri.point(fv[0]);
             const Point n = detail::cross(detail::sub(tri.point(fv[1]), A), detail::sub(tri.point(fv[2]), A));
             face_area[static_cast<std::size_t>(fi)] += 0.5 * std::sqrt(detail::dot3(n, n));
         }
     }
+    if (corners_differ) sm.facet_corner_patch = std::move(corner_patch);
     double volume = 0.0;
     for (const double v : cx.report().volume) volume += v;
     if (!(std::abs(kept_volume - volume) <= 1e-12 * volume)) {
@@ -1053,7 +1112,40 @@ std::expected<GeneratedMesh, base::Error> generate_mesh(const PolyhedralGeometry
     if (has_interfaces) {
         InterfaceSet set{{}, res};
         for (const detail::InterfacePieceLayout& pc : layout.pieces) set.pieces.push_back({pc.polygon, pc.region_a, pc.region_b});
-        auto cert = certify_interfaces(sm, *dual, node_region, set);
+        // P6 (FD10) wherever a patch edge meets an interface (FD8 a or b): every patch edge
+        // declared; zones where a straddled run ends or meets a chain, and where a patch edge
+        // meets a trace.
+        std::optional<PatchBoundarySet> patch_set;
+        const bool patch_crossing = std::ranges::any_of(layout.crossings, [&](const detail::InterfaceCrossing& c) {
+            return edges[static_cast<std::size_t>(c.chain)].face >= 0;
+        });
+        if (patch_crossing || std::ranges::any_of(patch_edges, &PatchEdge::straddled)) {
+            PatchBoundarySet& ps = patch_set.emplace();
+            ps.resolution = res;
+            std::map<std::size_t, int> straddled_degree;
+            for (const PatchEdge& pe : patch_edges) {
+                ps.boundaries.push_back({P[pe.e.first], P[pe.e.second], pe.patches[0], pe.patches[1]});
+                if (pe.straddled) {
+                    ++straddled_degree[pe.e.first];
+                    ++straddled_degree[pe.e.second];
+                }
+            }
+            for (const auto& [v, d] : straddled_degree) {
+                if (d != 2 || !vertex_edges[v].empty()) ps.zone_centres.push_back(P[v]);
+            }
+            for (const detail::InterfaceCrossing& c : layout.crossings) {
+                const DomainEdge& de = edges[static_cast<std::size_t>(c.chain)];
+                if (de.face >= 0) ps.zone_centres.push_back(P[de.chain[c.position]]);
+            }
+            ps.patch_area.assign(sm.patch_names.size(), 0.0);
+            for (const std::size_t f : boundary) {
+                for (const auto& t : cx.facets()[f].triangles) {
+                    const Point n = detail::cross(detail::sub(P[t[1]], P[t[0]]), detail::sub(P[t[2]], P[t[0]]));
+                    ps.patch_area[static_cast<std::size_t>(cx.facets()[f].patch)] += 0.5 * std::sqrt(detail::dot3(n, n));
+                }
+            }
+        }
+        auto cert = certify_interfaces(sm, *dual, node_region, set, patch_set ? &*patch_set : nullptr);
         if (!cert) {
             return std::unexpected(base::Error{ErrorCode::degenerate_mesh, "the generated mesh did not meet P4: " + cert.error().message,
                                                cert.error().context});

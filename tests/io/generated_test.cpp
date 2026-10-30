@@ -94,6 +94,19 @@ TEST_CASE("io: generated-mesh refusals", "[io][generate]") {
         REQUIRE_FALSE(r.has_value());
         CHECK(r.error().message.find("simplices") != std::string::npos);
     }
+    SECTION("per-corner patches or a P6 report: refused until Unit 53 slice 5 (DECISIONS.md SQ4)") {
+        mesh::GeneratedMesh m = two_regions();
+        mesh::GeneratedMesh corners = m;
+        corners.simplices.facet_corner_patch.assign(corners.simplices.facets.size(), 0);
+        auto r = io::save_generated_mesh(dir / "corners.ntc", corners);
+        REQUIRE_FALSE(r.has_value());
+        CHECK(r.error().code == ErrorCode::invalid_input);
+        CHECK_FALSE(fs::exists(dir / "corners.ntc"));
+        m.certificate->patches.emplace();
+        r = io::save_generated_mesh(dir / "p6.ntc", m);
+        REQUIRE_FALSE(r.has_value());
+        CHECK(r.error().message.find("slice 5") != std::string::npos);
+    }
     fs::remove_all(dir);
 }
 

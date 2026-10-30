@@ -490,10 +490,35 @@ std::expected<InterfaceLayout, base::Error> read_interfaces(const InterfaceInput
             }
             continue;
         }
-        for (const int c : chains) {
-            if (in.chains[static_cast<std::size_t>(c)].face >= 0) {
-                return std::unexpected(invalid("a patch edge meets an interface (patches at interface traces: Unit 53 slice 4)", f0));
+        // FD8 (b), DECISIONS.md SQ5: a constrained patch edge meeting a trace inside its face,
+        // crossing it or ending on it; the rules of a domain-edge crossing.
+        const auto patch_chain = std::ranges::find_if(chains, [&](int c) { return in.chains[static_cast<std::size_t>(c)].face >= 0; });
+        if (patch_chain != chains.end()) {
+            const BoundaryChain& pch = in.chains[static_cast<std::size_t>(*patch_chain)];
+            if (chains.size() != 1) {
+                return std::unexpected(invalid("a patch edge meets an interface trace at a domain edge or another patch edge (unsupported)", f0));
             }
+            if (pieces.size() != 1 || arms.size() != 2 || arms[0].face != pch.face || arms[1].face != pch.face) {
+                return std::unexpected(invalid("a patch edge meets an interface other than at a single trace in its face (unsupported)", f0));
+            }
+            const auto pos = static_cast<std::size_t>(std::ranges::find(pch.chain, x) - pch.chain.begin());
+            std::vector<std::size_t> along;  // the chain's vertices beside x
+            if (pos > 0) along.push_back(pch.chain[pos - 1]);
+            if (pos + 1 < pch.chain.size()) along.push_back(pch.chain[pos + 1]);
+            for (const Arm& r : arms) {
+                for (const std::size_t e : along) {
+                    if (predicates::angle_below_60_3d(P[x], P[r.to], P[e])) {
+                        return std::unexpected(invalid("a patch edge meets an interface trace at under 60 degrees", f0));
+                    }
+                }
+            }
+            for (const std::size_t e : along) {
+                if (!(dist(P[x], P[e]) >= 4.0 * s)) {
+                    return std::unexpected(invalid("a patch-edge vertex within 4 s of where a patch edge meets an interface trace", f0));
+                }
+            }
+            out.crossings.push_back({*patch_chain, pos});
+            continue;
         }
         const BoundaryChain& ch = in.chains[static_cast<std::size_t>(chains[0])];
         const auto pos = static_cast<std::size_t>(std::ranges::find(ch.chain, x) - ch.chain.begin());
@@ -554,9 +579,12 @@ std::expected<InterfaceLayout, base::Error> read_interfaces(const InterfaceInput
             }
         }
         for (const BoundaryChain& ch : in.chains) {
-            if (ch.face >= 0 || share(sides[i].vertices, ch.chain)) continue;
+            if (share(sides[i].vertices, ch.chain)) continue;
             if (!(segment_segment(sides[i].a, sides[i].b, P[ch.chain.front()], P[ch.chain.back()]) >= 4.0 * s)) {
-                return std::unexpected(invalid("an interface feature within 4 s of a domain edge", out.pieces[sides[i].piece].facets[0]));
+                // A patch edge (slice 4) as a domain edge: its subsegments must stay clear of the pairs.
+                return std::unexpected(invalid(ch.face >= 0 ? "a patch edge within 4 s of an interface feature it does not meet"
+                                                            : "an interface feature within 4 s of a domain edge",
+                                               out.pieces[sides[i].piece].facets[0]));
             }
         }
     }

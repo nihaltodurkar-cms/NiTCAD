@@ -47,6 +47,9 @@ struct SimplexMesh {
     std::vector<NodeId> facets;             // dimension node ids per listed boundary facet
     std::vector<std::int32_t> facet_patch;  // per listed facet, an index into patch_names
     std::vector<std::string> patch_names;   // the boundary patches of the result, in this order
+    // Optional (Unit 53, FD8; DECISIONS.md SQ2): per listed facet, dimension entries, the patch of
+    // each corner's boundary piece, in the order of `facets`. Empty: facet_patch for every corner.
+    std::vector<std::int32_t> facet_corner_patch;
 };
 
 // What make_dual_mesh did besides building the graph.
@@ -58,12 +61,12 @@ struct DualMeshReport {
 };
 
 // Errors (the context index names the entry the message names):
-// - invalid_input: dimension not 2 or 3; no points or no cells; cells, facets or facet_patch sized
-//   inconsistently; a coordinate not finite or nonzero beyond the dimension (node); a cell node out
-//   of range or repeated in the cell (cell); the same cell listed twice (cell); a node in no cell
-//   (node); a patch name empty or repeated (patch); a facet node out of range or repeated, a patch
-//   index out of range, a facet listed twice, or a listed facet that is not a boundary facet (a
-//   face of exactly one cell) (facet);
+// - invalid_input: dimension not 2 or 3; no points or no cells; cells, facets, facet_patch or a
+//   non-empty facet_corner_patch sized inconsistently; a coordinate not finite or nonzero beyond
+//   the dimension (node); a cell node out of range or repeated in the cell (cell); the same cell
+//   listed twice (cell); a node in no cell (node); a patch name empty or repeated (patch); a facet
+//   node out of range or repeated, a patch or corner patch index out of range, a facet listed
+//   twice, or a listed facet that is not a boundary facet (a face of exactly one cell) (facet);
 // - degenerate_mesh: a flat cell (P0, cell); a facet shared by more than two cells, or two cells
 //   on the same side of their shared facet (cell); not locally Delaunay (P1, cell); a boundary
 //   facet with a node strictly inside its diametral circle or sphere (P2, the cell owning the

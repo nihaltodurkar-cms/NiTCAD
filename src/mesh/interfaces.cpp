@@ -484,7 +484,12 @@ void digest_word(std::uint64_t& h, std::uint64_t v) {
     }
 }
 
-std::uint64_t interfaces_digest(const InterfaceSet& set) {
+void digest_point(std::uint64_t& h, const Point& p) {
+    for (const double c : p) digest_word(h, std::bit_cast<std::uint64_t>(c));
+}
+
+// Without a patch set, the words of Unit 16 (existing digests unchanged).
+std::uint64_t interfaces_digest(const InterfaceSet& set, const PatchBoundarySet* patches) {
     std::uint64_t h = 0xcbf29ce484222325ULL;
     digest_word(h, std::bit_cast<std::uint64_t>(set.resolution));
     digest_word(h, set.pieces.size());
@@ -492,14 +497,137 @@ std::uint64_t interfaces_digest(const InterfaceSet& set) {
         digest_word(h, static_cast<std::uint64_t>(static_cast<std::uint32_t>(p.region_a)));
         digest_word(h, static_cast<std::uint64_t>(static_cast<std::uint32_t>(p.region_b)));
         digest_word(h, p.vertices.size());
-        for (const Point& v : p.vertices) {
-            for (const double c : v) digest_word(h, std::bit_cast<std::uint64_t>(c));
+        for (const Point& v : p.vertices) digest_point(h, v);
+    }
+    if (patches != nullptr) {
+        digest_word(h, std::bit_cast<std::uint64_t>(patches->resolution));
+        digest_word(h, patches->boundaries.size());
+        for (const PatchBoundary& b : patches->boundaries) {
+            digest_point(h, b.a);
+            digest_point(h, b.b);
+            digest_word(h, static_cast<std::uint64_t>(static_cast<std::uint32_t>(b.patch_a)));
+            digest_word(h, static_cast<std::uint64_t>(static_cast<std::uint32_t>(b.patch_b)));
         }
+        digest_word(h, patches->zone_centres.size());
+        for (const Point& z : patches->zone_centres) digest_point(h, z);
+        digest_word(h, patches->patch_area.size());
+        for (const double a : patches->patch_area) digest_word(h, std::bit_cast<std::uint64_t>(a));
     }
     return h;
 }
 
 }  // namespace
+
+std::expected<PatchBoundaryReport, base::Error> check_patch_boundaries(const SimplexMesh& s, const Mesh& dual,
+                                                                       const PatchBoundarySet& patches) {
+    using base::ErrorCode;
+    if (s.dimension != 3 || dual.dimension() != 3 || dual.node_count() != s.points.size() ||
+        !std::ranges::equal(dual.points(), s.points) || s.facets.size() % 3 != 0 ||
+        s.facet_patch.size() != s.facets.size() / 3 ||
+        (!s.facet_corner_patch.empty() && s.facet_corner_patch.size() != s.facets.size())) {
+        return std::unexpected(error(ErrorCode::invalid_input, "the dual mesh is not built from these 3D simplices", std::nullopt));
+    }
+    const double res = patches.resolution;
+    if (!(std::isfinite(res) && res > 0.0)) {
+        return std::unexpected(error(ErrorCode::invalid_input, "patch resolution must be finite and positive", std::nullopt, res));
+    }
+    const std::size_t np = s.patch_names.size();
+    if (patches.patch_area.size() != np ||
+        !std::ranges::all_of(patches.patch_area, [](double a) { return std::isfinite(a) && a >= 0.0; })) {
+        return std::unexpected(error(ErrorCode::invalid_input, "patch_area needs one finite non-negative area per patch", std::nullopt));
+    }
+    const auto finite = [](const Point& p) { return std::isfinite(p[0]) && std::isfinite(p[1]) && std::isfinite(p[2]); };
+    for (std::size_t k = 0; k < patches.boundaries.size(); ++k) {
+        const PatchBoundary& b = patches.boundaries[k];
+        if (!finite(b.a) || !finite(b.b) || !(detail::distance(b.a, b.b) > 0.0) || b.patch_a < 0 || b.patch_b < 0 ||
+            static_cast<std::size_t>(b.patch_a) >= np || static_cast<std::size_t>(b.patch_b) >= np || b.patch_a == b.patch_b) {
+            return std::unexpected(error(ErrorCode::invalid_input,
+                                         "patch boundary: an end not finite, degenerate, or patches out of range or equal", k));
+        }
+    }
+    for (std::size_t k = 0; k < patches.zone_centres.size(); ++k) {
+        if (!finite(patches.zone_centres[k])) {
+            return std::unexpected(error(ErrorCode::invalid_input, "patch zone centre not finite", k));
+        }
+    }
+    const double zone = zone_radius * res;
+    const auto in_zone = [&](const Point& x) {
+        return std::ranges::any_of(patches.zone_centres, [&](const Point& z) { return detail::distance(x, z) <= zone; });
+    };
+    const auto magnitude = [](const Point& p) { return std::max({std::abs(p[0]), std::abs(p[1]), std::abs(p[2])}); };
+
+    PatchBoundaryReport report;
+    const std::size_t nf = s.facets.size() / 3;
+    for (std::size_t f = 0; f < nf; ++f) {
+        std::array<std::int32_t, 3> cp{};
+        for (std::size_t k = 0; k < 3; ++k) cp[k] = s.facet_corner_patch.empty() ? s.facet_patch[f] : s.facet_corner_patch[3 * f + k];
+        if (cp[0] == cp[1] && cp[1] == cp[2]) continue;
+        const std::array<Point, 3> q{s.points[static_cast<std::size_t>(s.facets[3 * f])],
+                                     s.points[static_cast<std::size_t>(s.facets[3 * f + 1])],
+                                     s.points[static_cast<std::size_t>(s.facets[3 * f + 2])]};
+        const Point c = detail::triangle_circumcentre(q);
+        for (std::size_t i = 0; i < 3; ++i) {
+            const std::size_t j = (i + 1) % 3;
+            if (cp[i] == cp[j]) continue;
+            const Point m{0.5 * (q[i][0] + q[j][0]), 0.5 * (q[i][1] + q[j][1]), 0.5 * (q[i][2] + q[j][2])};
+            double deviation = std::numeric_limits<double>::infinity();
+            for (const PatchBoundary& b : patches.boundaries) {
+                if (!((b.patch_a == cp[i] && b.patch_b == cp[j]) || (b.patch_a == cp[j] && b.patch_b == cp[i]))) continue;
+                deviation = std::min(deviation, std::max(segment_distance(m, b.a, b.b), segment_distance(c, b.a, b.b)));
+            }
+            if (!std::isfinite(deviation)) {
+                return std::unexpected(error(ErrorCode::degenerate_mesh,
+                                             "patches '" + s.patch_names[static_cast<std::size_t>(cp[i])] + "' and '" +
+                                                 s.patch_names[static_cast<std::size_t>(cp[j])] +
+                                                 "' meet with no declared boundary between them (P6)",
+                                             f));
+            }
+            ++report.cross_pieces;
+            if (in_zone(m) || in_zone(c)) {
+                ++report.corner_pieces;
+                report.max_corner_deviation = std::max(report.max_corner_deviation, deviation);
+                if (!(deviation <= res)) {
+                    return std::unexpected(error(ErrorCode::degenerate_mesh,
+                                                 "a boundary dual piece in a patch zone deviates beyond s from its patch boundary (P6)",
+                                                 f, deviation));
+                }
+                continue;
+            }
+            const double tolerance = flat_relative * detail::distance(q[i], q[j]) +
+                                     flat_rounding * std::max({magnitude(m), magnitude(c), magnitude(q[i]), magnitude(q[j])});
+            report.max_flat_deviation = std::max(report.max_flat_deviation, deviation / tolerance);
+            if (!(deviation <= tolerance)) {
+                return std::unexpected(error(ErrorCode::degenerate_mesh,
+                                             "a boundary dual piece deviates from its patch boundary (P6)", f, deviation));
+            }
+        }
+    }
+
+    // Areas, and the declared boundary inside the zones (each boundary sampled finely enough
+    // for a report: 64 steps per zone radius).
+    report.area_error.assign(np, 0.0);
+    report.zone_length.assign(np, 0.0);
+    for (std::size_t p = 0; p < np; ++p) {
+        double area = 0.0;
+        if (const BoundaryPatch* bp = dual.find_boundary(s.patch_names[p])) {
+            for (const double a : bp->areas) area += a;
+        }
+        report.area_error[p] = area - patches.patch_area[p];
+    }
+    for (const PatchBoundary& b : patches.boundaries) {
+        const double len = detail::distance(b.a, b.b);
+        const auto steps = static_cast<std::size_t>(std::ceil(64.0 * len / zone));
+        double inside = 0.0;
+        for (std::size_t k = 0; k < steps; ++k) {
+            const double t = (static_cast<double>(k) + 0.5) / static_cast<double>(steps);
+            const Point x{b.a[0] + t * (b.b[0] - b.a[0]), b.a[1] + t * (b.b[1] - b.a[1]), b.a[2] + t * (b.b[2] - b.a[2])};
+            if (in_zone(x)) inside += len / static_cast<double>(steps);
+        }
+        report.zone_length[static_cast<std::size_t>(b.patch_a)] += inside;
+        report.zone_length[static_cast<std::size_t>(b.patch_b)] += inside;
+    }
+    return report;
+}
 
 std::uint64_t region_digest(std::span<const std::int32_t> node_region) {
     std::uint64_t h = 0xcbf29ce484222325ULL;
@@ -512,13 +640,24 @@ std::uint64_t region_digest(std::span<const std::int32_t> node_region) {
 
 std::expected<InterfaceCertificate, base::Error> certify_interfaces(
     const SimplexMesh& simplices, const Mesh& dual, std::span<const std::int32_t> node_region,
-    const InterfaceSet& interfaces) {
+    const InterfaceSet& interfaces, const PatchBoundarySet* patches) {
+    if (!simplices.facet_corner_patch.empty() && patches == nullptr) {
+        return std::unexpected(error(base::ErrorCode::invalid_input,
+                                     "simplices with per-corner patches need a patch-boundary set (P6, FD10)", std::nullopt));
+    }
     auto report = check_interfaces(simplices, dual, node_region, interfaces);
     if (!report) return std::unexpected(std::move(report.error()));
+    std::optional<PatchBoundaryReport> p6;
+    if (patches != nullptr) {
+        auto checked = check_patch_boundaries(simplices, dual, *patches);
+        if (!checked) return std::unexpected(std::move(checked.error()));
+        p6 = std::move(*checked);
+    }
     return InterfaceCertificate{.mesh_digest = graph_digest(dual),
                                 .region_digest = region_digest(node_region),
-                                .interfaces_digest = interfaces_digest(interfaces),
-                                .report = *report};
+                                .interfaces_digest = interfaces_digest(interfaces, patches),
+                                .report = *report,
+                                .patches = std::move(p6)};
 }
 
 bool certifies(const InterfaceCertificate& c, const Mesh& mesh,
