@@ -226,9 +226,9 @@ std::vector<KeySpec> insertable_keys(const SectionLocation& section) {
     for (const KeySpec& k : spec->keys) {
         if (std::ranges::any_of(section.entries, [&](const auto& e) { return e.key == k.key; })) continue;
         if (section.kind == "mesh") {
-            if (type != "generate2d" && type != "generate3d") continue;
+            if (type != "generate2d" && type != "generate3d" && type != "extrude3d") continue;
             if (k.key == "min_angle" && type != "generate2d") continue;
-            if (k.key == "radius_edge" && type != "generate3d") continue;
+            if (k.key == "radius_edge" && type == "generate2d") continue;
         }
         out.push_back(k);
     }

@@ -1122,16 +1122,24 @@ std::expected<GeneratedMesh, base::Error> generate_mesh(const PolyhedralGeometry
         if (patch_crossing || std::ranges::any_of(patch_edges, &PatchEdge::straddled)) {
             PatchBoundarySet& ps = patch_set.emplace();
             ps.resolution = res;
-            std::map<std::size_t, int> straddled_degree;
+            std::map<std::size_t, std::vector<std::size_t>> straddled_ends;  // vertex -> the other ends of its straddled edges
             for (const PatchEdge& pe : patch_edges) {
                 ps.boundaries.push_back({P[pe.e.first], P[pe.e.second], pe.patches[0], pe.patches[1]});
                 if (pe.straddled) {
-                    ++straddled_degree[pe.e.first];
-                    ++straddled_degree[pe.e.second];
+                    straddled_ends[pe.e.first].push_back(pe.e.second);
+                    straddled_ends[pe.e.second].push_back(pe.e.first);
                 }
             }
-            for (const auto& [v, d] : straddled_degree) {
-                if (d != 2 || !vertex_edges[v].empty()) ps.zone_centres.push_back(P[v]);
+            for (const auto& [v, ends] : straddled_ends) {
+                // A run's end, a chain meeting it, or a corner of the run (two traces crossing on the face).
+                bool zone = ends.size() != 2 || !vertex_edges[v].empty();
+                if (!zone) {
+                    const Point n = detail::cross(detail::sub(P[ends[0]], P[v]), detail::sub(P[ends[1]], P[v]));
+                    const double a = std::sqrt(detail::dot3(detail::sub(P[ends[0]], P[v]), detail::sub(P[ends[0]], P[v])));
+                    const double b = std::sqrt(detail::dot3(detail::sub(P[ends[1]], P[v]), detail::sub(P[ends[1]], P[v])));
+                    zone = std::sqrt(detail::dot3(n, n)) > 1e-9 * a * b;
+                }
+                if (zone) ps.zone_centres.push_back(P[v]);
             }
             for (const detail::InterfaceCrossing& c : layout.crossings) {
                 const DomainEdge& de = edges[static_cast<std::size_t>(c.chain)];

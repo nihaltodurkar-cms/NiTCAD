@@ -1,0 +1,122 @@
+# 3D tri-gate FinFET with a tapered fin, as a sectioned extrusion (Unit 53; FC10)
+# The layout of finfet_3d.deck (a 10 nm x 30 nm silicon fin on a 20 nm buried oxide, wrapped on three sides
+# by an interfacial oxide and HfO2, a 25 nm metal gate, nitride spacers) meshed by the conforming Delaunay
+# generator from cells instead of a tensor grid: every interface is a mesh line of its own, and the whole
+# wrapped gate is one boundary patch.
+#
+# The stack is thicker than finfet_3d.deck's (1 nm SiO2 and 2 nm HfO2, EOT about 1.2 nm, against 0.5 nm
+# and 1.5 nm): the generator needs every feature line at least 6 s long, so interface_resolution s is
+# at most a sixth of the thinnest layer, and 0.5 nm layers (s = 0.08 nm) did not mesh within 200000 nodes
+# (DECISIONS.md, Unit 53 slice 5).
+#
+# The fin is tapered: 10 nm wide at its foot (z 3-13) and 6 nm at its top (z 5-11), a sidewall angle of 3.8 degrees;
+# the interfacial layer follows it, and the HfO2 fills the rest of the gate box (as finfet_3d.deck does), so it
+# is thicker at the top of the fin (about 4 nm) than at its foot (2 nm). The domain is the box 0-85 x 0-53 x 0-16.
+#
+# Axes (lengths in nm): x along the fin, source (x = 0) to drain (x = 85), the gate from 30 to 55;
+# the cross-section is (y, z): y vertical (buried oxide 0-20, fin 20-50, interfacial layer to 51, HfO2
+# to 53), z across (0-16, the fin 3-13).
+#
+# Three sections along x: source side (0-30), under the gate (30-55), drain side (55-85). The two layers
+# are nitride outside the gate; under the gate they are the interfacial oxide and HfO2. A layer is one
+# cell (a U-shaped polygon): two cells of one region meeting on a boundary face would put a vertex on an
+# interface trace, which the straddled-trace construction does not support.
+#
+# A mesh takes several minutes in Release. See finfet_3d.deck for the solver notes.
+
+[device]
+temperature = 300
+
+[mesh]
+type = extrude3d
+axis = x
+stations = 0, 30nm, 55nm, 85nm
+# Cells in (y, z); the box's top edge is split where the cells above it meet it.
+cell box = 0 0, 20nm 0, 20nm 2nm, 20nm 3nm, 20nm 13nm, 20nm 14nm, 20nm 16nm, 0 16nm
+cell fin = 20nm 3nm, 50nm 5nm, 50nm 11nm, 20nm 13nm
+cell il = 20nm 2nm, 51nm 4nm, 51nm 12nm, 20nm 14nm, 20nm 13nm, 50nm 11nm, 50nm 5nm, 20nm 3nm
+cell hk = 20nm 0, 53nm 0, 53nm 16nm, 20nm 16nm, 20nm 14nm, 51nm 12nm, 51nm 4nm, 20nm 2nm
+# Boundary patches: the first box that holds a whole facet names it; the rest are "boundary".
+patch source = 0 20nm 3nm  0 50nm 13nm
+patch drain = 85nm 20nm 3nm  85nm 50nm 13nm
+patch gate = 30nm 20nm 0  55nm 53nm 16nm
+patch substrate = 0 0 0  85nm 0 16nm
+max_size = 8nm
+interface_resolution = 0.16nm
+
+# Region 0: the buried oxide.
+[region buried_oxide]
+material = sio2
+extrude = box 0:85nm
+
+# Region 1: nitride spacers around the fin, outside the gate.
+[region spacer]
+material = insulator
+eps_r = 7.5
+extrude = il hk 0:30nm
+extrude = il hk 55nm:85nm
+
+# Region 2: the high-k layer under the gate.
+[region hfo2]
+material = insulator
+eps_r = 22
+extrude = hk 30nm:55nm
+
+# Region 3: the interfacial oxide wrapping the fin under the gate.
+[region interfacial]
+material = sio2
+extrude = il 30nm:55nm
+
+# Region 4: the fin, the whole length: channel under the gate, source and drain beyond it.
+[region silicon]
+material = silicon
+extrude = fin 0:85nm
+
+[doping]
+profile = acceptor constant 1e16
+# Source and drain: 1e20 to 3 nm short of each gate edge, an erfc fall-off of 2 nm into the channel.
+profile = donor constant 1e20 axis=y x=-10nm:27nm lateral=2nm
+profile = donor constant 1e20 axis=y x=58nm:95nm lateral=2nm
+
+[contact source]
+kind = ohmic
+patch = source
+
+[contact drain]
+kind = ohmic
+patch = drain
+
+# The tri-gate: one contact over the three faces (one boundary patch).
+[contact gate]
+kind = electrode
+patch = gate
+electrode = metal
+work_function = 4.4
+
+# The grounded substrate under the buried oxide, a weak back gate.
+[contact substrate]
+kind = electrode
+patch = substrate
+electrode = metal
+work_function = 4.6
+
+[interface silicon interfacial]
+fixed_charge = 5e10
+
+[models]
+fermi_dirac = on
+field_mobility = on
+electron_mobility = masetti
+
+[solver]
+line_search = residual
+max_cuts = 8
+
+[sweep]
+contact gate = 0 : 0.8 : 0.05
+contact drain = 0.05
+
+[output]
+sweep = finfet_3d_shaped.nitsweep
+device = finfet_3d_shaped.nitdev
+table = finfet_3d_shaped.csv

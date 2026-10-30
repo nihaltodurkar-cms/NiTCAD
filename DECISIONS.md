@@ -5138,6 +5138,73 @@ built:
     the 120 s budget (slice 3's 85 s plus this). Slices 5 and 6 have about 18 s left: their larger fixtures go to
     `[.benchmark]`.
 
+**Slice 5 plan, owner ruling (2026-10-30), "choose recommended" (SQa–SQd):**
+- SQa: one mesh and device file format; the corner-patch array and the P6 report are new optional records, so files
+  without them read and write byte-identically (FC1). The SQ4 refusals are lifted.
+- SQb: `patch <name> = box <lo> <hi>` selects the whole boundary facets inside the closed box (FD13); a box that
+  selects none is an error with its deck line.
+- SQc: the shaped deck keeps `finfet_3d.deck`'s dimensions and materials, the fin tapered about 5°, and its 50 mV
+  Id–Vg sweep (FC10 has no accuracy gate).
+- SQd: slice 5 builds and certifies both decks (the shaped one and FC9's reduced one) without solving; the solves are
+  slice 6's FC9 and FC10.
+
+**Slice 5 (2026-10-30): deck, io, run record, application, the two FinFET decks** (FD13, FD14; FC11).
+- **Deck** (`src/deck/build.cpp`, `include/NiTCAD/deck/build.hpp`): `type = extrude3d` with `axis`, `stations`,
+  `cell <name> = <u v>, ...`, `patch <name> = <x0 y0 z0 x1 y1 z1>`, the `generate3d` meshing keys (now one shared
+  function), and `extrude = <cells> <t_lo>:<t_hi>` in a region. Refused with the deck line: a bad axis, no axis,
+  stations or cell, an unknown cell, a range whose ends are not stations or not increasing, a (cell, section)
+  assigned twice, `box`/`polygon`/`seed` in an extrusion's region, `extrude` in any other mesh type. A patch box
+  that selects nothing is `extrude`'s own error (SQb), located at the `[mesh]` section (the library gives the box's
+  index, not its line); the deck-level check written first was never reached and was removed.
+- **io** (`src/io/files.cpp`, `device_file.cpp`): optional records, so older files are unchanged (SQa). The mesh file
+  gains `facet_corner_patch` (key 15); the certificate record gains the P6 report (keys 4–7: counts, deviations,
+  per-patch area error and zone length). The SQ4 refusals are gone. `load_generated_mesh` rebuilds the dual from the
+  stored corner patches before comparing digests. Tests: a complex-generated mesh with corner patches round-trips
+  (`generated_test`), and the device file round-trips a certificate with a P6 report byte for byte
+  (`device_file_test`).
+- **Run record:** not changed. The run identity already hashes the whole built mesh (points, edges, boundary patches
+  and areas), so any change to the complex or its options that changes the mesh changes the identity (tested: a
+  moved station, a renamed patch). FD14's separate "generation digest over the complex and options" is not built:
+  the same mesh gives the same solve, and the digest would only add the options that do not change the mesh.
+  **For review.** `nitcad check` now also prints the generated mesh's counts and the certificate (tetrahedra,
+  slivers, exempt, smallest dihedral, largest radius–edge; P4 faces and P6 pieces), and `fail` prints the error's
+  index and value.
+- **Application:** the vocabulary (`deck_vocabulary.cpp`) and the section menu (`deck_sections.cpp`) know the new
+  type and keys (the vocabulary test builds every key against an extrude3d fixture and checks the reference header
+  in both directions); the workspace renders the mesh as any generated 3D mesh, unchanged.
+- **A slice 4 defect found by the first real geometry, fixed:** a corner of a straddled patch boundary (the patch
+  turns a corner where two interface traces cross on a face) is a P6 zone; it was not, because only run ends and
+  chain meetings were. A single gate patch on a side face failed P6 by s / 2 at the corners. Fixed in
+  `generate_complex.cpp` (a degree-2 vertex whose two straddled edges are not collinear is a zone centre); new test
+  `complex patches: a patch corner where two traces cross`. P4b and P6 messages now say where (the edge's midpoint
+  and the two patches).
+- **Limitation found, not fixed:** two cells of one region that meet on a boundary face leave a complex vertex on an
+  interface trace (the seam's end). The straddled construction assumes no node on a trace, and P6 then fails by
+  s / 4 beside the vertex (reproduced with a slab split into two cells at a trace; one cell passes). The decks use
+  one U-shaped cell per layer for this reason. A mesher that removed such vertices, or an `extrude` that merged
+  same-region neighbours, would lift it; neither is built.
+- **The decks, and a sizing finding.** With the reference deck's layers (0.5 nm SiO2, 1.5 nm HfO2) the generator
+  needs s ≤ 0.083 nm: the interfacial layer's end ring at each station has 0.5 nm edges, and FD7 wants every feature
+  line at least 6 s. That did not mesh within 200000 nodes (50 s to reach the cap). Both decks therefore use 1 nm
+  SiO2 and 2 nm HfO2 (EOT about 1.2 nm) at s = 0.16 nm, which is **a change from SQc** (the dimensions of
+  `finfet_3d.deck`), flagged for review.
+  - `decks/finfet_3d_reduced.deck` (rectangular fin, box domain, one gate patch over three faces): meshes and is
+    certified (P4 and P6) in 4 min 8 s Release: 129187 nodes, 753953 tetrahedra, 33707 slivers (dihedral below 5°),
+    smallest dihedral 0.00°, largest radius–edge 41.0, P4 55768 faces (12611 in zones), P6 6244 pieces (150 in
+    zones). Far over FD15's 30 s at 1e5 nodes and with poor tetrahedra: reported, not hidden.
+  - `decks/finfet_3d_shaped.deck` (fin tapered 3.8°, the interfacial layer following it): **does not certify.** P4b
+    fails at (30, 50.76, 11.775) nm, the top corner of the interfacial ring on the x = 30 plane: deviation 0.241 nm
+    = 1.5 s against s = 0.16 nm. At s = 0.1 nm (21 min, the ring now 10 s thick) it fails at the same corner,
+    (30, 50.85, 11.86) nm, by 0.151 nm = 1.5 s again, so the error scales with s and is not an overlap of zones:
+    a corner defect of the tapered ring (right-angle rings, as in the reduced deck, pass). Not diagnosed further;
+    the deck stays as the measurement, in a hidden `[!shouldfail]` test, for an owner ruling (FC10 is slice 6).
+    Two layouts were refused first for FD7 reasons: an HfO2 outer face that bends where the buried oxide's
+    interface ends (an interface may not end on a domain edge), and a void fill beside the gate (the interface
+    plane then abuts a coplanar boundary face).
+- **Suites** (2026-10-30, `/W4 /WX`, 4 jobs): Release 125/125 (739 s), Debug 114/114 (1119 s; slice 4's was 995 s, and
+  totals vary run to run, so FC14's 120 s is not re-measured per test). Slice 5's new cases are small (the fixtures
+  mesh in under a second); the two FinFET decks are hidden `[.benchmark]` cases.
+
 ---
 
 ## New questions the advisor raised (not yet in `ARCHITECTURE.md`)

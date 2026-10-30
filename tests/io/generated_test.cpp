@@ -6,7 +6,9 @@
 #include <vector>
 
 #include "NiTCAD/io/files.hpp"
+#include "NiTCAD/mesh/complex.hpp"
 #include "NiTCAD/mesh/generate.hpp"
+#include "NiTCAD/mesh/interfaces.hpp"
 #include "NiTCAD/mesh/tensor_grid.hpp"
 
 using namespace NiTCAD;
@@ -94,19 +96,53 @@ TEST_CASE("io: generated-mesh refusals", "[io][generate]") {
         REQUIRE_FALSE(r.has_value());
         CHECK(r.error().message.find("simplices") != std::string::npos);
     }
-    SECTION("per-corner patches or a P6 report: refused until Unit 53 slice 5 (DECISIONS.md SQ4)") {
-        mesh::GeneratedMesh m = two_regions();
-        mesh::GeneratedMesh corners = m;
-        corners.simplices.facet_corner_patch.assign(corners.simplices.facets.size(), 0);
-        auto r = io::save_generated_mesh(dir / "corners.ntc", corners);
-        REQUIRE_FALSE(r.has_value());
-        CHECK(r.error().code == ErrorCode::invalid_input);
-        CHECK_FALSE(fs::exists(dir / "corners.ntc"));
-        m.certificate->patches.emplace();
-        r = io::save_generated_mesh(dir / "p6.ntc", m);
-        REQUIRE_FALSE(r.has_value());
-        CHECK(r.error().message.find("slice 5") != std::string::npos);
+    fs::remove_all(dir);
+}
+
+TEST_CASE("io: a complex-generated mesh round-trips with its corner patches and P6 report (Unit 53, FD14)",
+          "[io][generate]") {
+    const fs::path dir = fs::temp_directory_path() / "nitcad_io_generated_complex_test";
+    fs::create_directories(dir);
+    // Two slabs along x, 2 wide and 2 high, the interface at z = 1; the patch "low" is the side face below it,
+    // so its edge lies on the interface trace and boundary triangles straddle it (FD8 a).
+    mesh::ExtrudedGeometry x;
+    x.axis = 0;
+    x.stations = {0.0, 1.0};
+    const double v[3] = {0.0, 1.0, 2.0};
+    for (int j = 0; j < 2; ++j) {
+        x.cells.push_back({"c" + std::to_string(j),
+                           {{0.0, v[j], 0.0}, {2.0, v[j], 0.0}, {2.0, v[j + 1], 0.0}, {0.0, v[j + 1], 0.0}}});
+        x.regions.push_back({j});
     }
+    x.patches = {{"low", {-1.0, 0.0, -1.0}, {3.0, 0.0, 1.0}}};
+    const auto geometry = mesh::extrude(x);
+    REQUIRE(geometry.has_value());
+    mesh::MeshOptions3D o;
+    o.max_size = 0.5;
+    o.interface_resolution = 0.1;
+    auto generated = mesh::generate_mesh(*geometry, o);
+    REQUIRE(generated.has_value());
+    const mesh::GeneratedMesh& m = *generated;
+    REQUIRE_FALSE(m.simplices.facet_corner_patch.empty());
+    REQUIRE(m.certificate.has_value());
+    REQUIRE(m.certificate->patches.has_value());
+
+    REQUIRE(io::save_generated_mesh(dir / "g.ntc", m).has_value());
+    const auto back = io::load_generated_mesh(dir / "g.ntc");
+    if (!back) FAIL(back.error().message);
+    CHECK(back->simplices.facet_corner_patch == m.simplices.facet_corner_patch);
+    CHECK(mesh::graph_digest(back->mesh) == mesh::graph_digest(m.mesh));
+    REQUIRE(back->certificate.has_value());
+    REQUIRE(back->certificate->patches.has_value());
+    const mesh::PatchBoundaryReport& a = *m.certificate->patches;
+    const mesh::PatchBoundaryReport& b = *back->certificate->patches;
+    CHECK(a.cross_pieces == b.cross_pieces);
+    CHECK(a.corner_pieces == b.corner_pieces);
+    CHECK(a.max_flat_deviation == b.max_flat_deviation);
+    CHECK(a.max_corner_deviation == b.max_corner_deviation);
+    CHECK(a.area_error == b.area_error);
+    CHECK(a.zone_length == b.zone_length);
+    CHECK(mesh::certifies(*back->certificate, back->mesh, back->node_region));
     fs::remove_all(dir);
 }
 

@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <limits>
 #include <map>
+#include <optional>
 #include <set>
 #include <string>
 #include <string_view>
@@ -14,6 +15,7 @@
 
 #include "NiTCAD/device/doping_profiles.hpp"
 #include "NiTCAD/io/files.hpp"
+#include "NiTCAD/mesh/complex.hpp"
 #include "NiTCAD/mesh/tensor_cells.hpp"
 #include "NiTCAD/mesh/tensor_grid.hpp"
 #include "NiTCAD/physics/insulator.hpp"
@@ -89,7 +91,7 @@ double* insulator_parameter(physics::InsulatorParameters& p, std::string_view na
 
 // --- the builder -------------------------------------------------------------------------------
 
-enum class MeshType { tensor, generate2d, generate3d, file };
+enum class MeshType { tensor, generate2d, generate3d, extrude3d, file };
 
 // lo and hi per dimension, inclusive (DK8).
 struct Box {
@@ -106,6 +108,7 @@ struct RegionSpec {
     const Section* section = nullptr;
     std::optional<device::Region> region;
     std::vector<const Entry*> boxes, polygons, seeds;
+    std::vector<const Entry*> extrudes;  // Unit 53 (FD13): extrude3d meshes
 };
 
 class Builder {
@@ -195,6 +198,9 @@ private:
     std::expected<void, base::Error> tensor_mesh(const Section& s, device::DeviceDescription& d);
     std::expected<void, base::Error> generated_2d(const Section& s);
     std::expected<void, base::Error> generated_3d(const Section& s);
+    std::expected<void, base::Error> extruded_3d(const Section& s);
+    // The meshing keys generate3d and extrude3d share; true when `e` was one of them.
+    std::expected<bool, base::Error> option_3d(const Entry& e, mesh::MeshOptions3D& o) const;
     std::expected<void, base::Error> file_mesh(const Section& s, device::DeviceDescription& d);
     std::expected<void, base::Error> doping(device::DeviceDescription& d) const;
     std::expected<device::Contact, base::Error> contact(const Section& s,
@@ -300,6 +306,7 @@ std::expected<RegionSpec, base::Error> Builder::region(const Section& s) const {
         if (e.key == "box") { spec.boxes.push_back(&e); continue; }
         if (e.key == "polygon") { spec.polygons.push_back(&e); continue; }
         if (e.key == "seed") { spec.seeds.push_back(&e); continue; }
+        if (e.key == "extrude") { spec.extrudes.push_back(&e); continue; }
         if (auto* sp = std::get_if<physics::SemiconductorParameters>(&params)) {
             if (e.key == "band_to_band.direct_gap") {
                 NITCAD_DECK_TRY(v, flag(e));
@@ -538,23 +545,9 @@ std::expected<void, base::Error> Builder::generated_3d(const Section& s) {
             NITCAD_DECK_TRY(p, points(e, e.value, 3));
             if (p.size() != 3) return std::unexpected(at(e.line, "a plane is three points"));
             g.interfaces.push_back({{p[0], p[1], p[2]}});
-        } else if (e.key == "max_size") {
-            NITCAD_DECK_TRY(v, len(e));
-            o.max_size = v;
-        } else if (e.key == "interface_resolution") {
-            NITCAD_DECK_TRY(v, len(e));
-            o.interface_resolution = v;
-        } else if (e.key == "radius_edge") {
-            NITCAD_DECK_TRY(v, num(e));
-            o.radius_edge = v;
-        } else if (e.key == "max_nodes") {
-            NITCAD_DECK_TRY(v, count(e, 1, std::numeric_limits<int>::max()));
-            o.max_nodes = static_cast<std::size_t>(v);
-        } else if (e.key == "box") {
-            NITCAD_DECK_TRY(b, lengths(e, e.value, 7));
-            o.boxes.push_back({{b[0], b[1], b[2]}, {b[3], b[4], b[5]}, b[6]});
         } else {
-            return std::unexpected(unknown(e, s));
+            NITCAD_DECK_TRY(taken, option_3d(e, o));
+            if (!taken) return std::unexpected(unknown(e, s));
         }
     }
     if (cuboid && g.domain.faces.size() != 6) {
@@ -589,6 +582,114 @@ std::expected<void, base::Error> Builder::generated_3d(const Section& s) {
     }
     auto m = mesh::generate_mesh(g, o);
     if (!m) return std::unexpected(located(s.line, "[mesh] generate3d", std::move(m.error())));
+    generated_ = std::move(*m);
+    return {};
+}
+
+std::expected<bool, base::Error> Builder::option_3d(const Entry& e, mesh::MeshOptions3D& o) const {
+    if (e.key == "max_size") {
+        NITCAD_DECK_TRY(v, len(e));
+        o.max_size = v;
+    } else if (e.key == "interface_resolution") {
+        NITCAD_DECK_TRY(v, len(e));
+        o.interface_resolution = v;
+    } else if (e.key == "radius_edge") {
+        NITCAD_DECK_TRY(v, num(e));
+        o.radius_edge = v;
+    } else if (e.key == "max_nodes") {
+        NITCAD_DECK_TRY(v, count(e, 1, std::numeric_limits<int>::max()));
+        o.max_nodes = static_cast<std::size_t>(v);
+    } else if (e.key == "box") {
+        NITCAD_DECK_TRY(b, lengths(e, e.value, 7));
+        o.boxes.push_back({{b[0], b[1], b[2]}, {b[3], b[4], b[5]}, b[6]});
+    } else {
+        return false;
+    }
+    return true;
+}
+
+// Unit 53 (DECISIONS.md FD13): a sectioned extrusion. `[mesh]` gives the axis, the stations, the
+// cells and the patch boxes; each region assigns its cells per section with `extrude`.
+std::expected<void, base::Error> Builder::extruded_3d(const Section& s) {
+    mesh::ExtrudedGeometry x;
+    mesh::MeshOptions3D o;
+    const Entry* axis_entry = nullptr;
+    const Entry* stations_entry = nullptr;
+    for (const Entry& e : s.entries) {
+        if (e.key == "type") continue;
+        if (e.key == "axis") {
+            if (e.value != "x" && e.value != "y" && e.value != "z") return std::unexpected(at(e.line, "axis is x, y or z"));
+            axis_entry = &e;
+            x.axis = e.value == "x" ? 0 : e.value == "y" ? 1 : 2;
+        } else if (e.key == "stations") {
+            stations_entry = &e;
+            for (const std::string_view item : items(e.value)) {
+                for (const std::string_view t : tokens(item)) {
+                    NITCAD_DECK_TRY(v, lift(e.line, length(t)));
+                    x.stations.push_back(v);
+                }
+            }
+        } else if (e.key.starts_with("cell ")) {
+            const auto w = tokens(e.key);
+            if (w.size() != 2) return std::unexpected(at(e.line, "a cell is 'cell <name>'"));
+            NITCAD_DECK_TRY(polygon, points(e, e.value, 2));
+            x.cells.push_back({std::string(w[1]), std::move(polygon)});
+        } else if (e.key.starts_with("patch ")) {
+            const auto w = tokens(e.key);
+            if (w.size() != 2) return std::unexpected(at(e.line, "a patch is 'patch <name> = <x0 y0 z0 x1 y1 z1>'"));
+            NITCAD_DECK_TRY(b, lengths(e, e.value, 6));
+            if (b[0] > b[3] || b[1] > b[4] || b[2] > b[5]) return std::unexpected(at(e.line, "a box needs lo <= hi on each axis"));
+            x.patches.push_back({std::string(w[1]), {b[0], b[1], b[2]}, {b[3], b[4], b[5]}});
+        } else {
+            NITCAD_DECK_TRY(taken, option_3d(e, o));
+            if (!taken) return std::unexpected(unknown(e, s));
+        }
+    }
+    if (!axis_entry) return std::unexpected(at(s.line, "an extrude3d mesh needs 'axis'"));
+    if (!stations_entry) return std::unexpected(at(s.line, "an extrude3d mesh needs 'stations'"));
+    if (x.cells.empty()) return std::unexpected(at(s.line, "an extrude3d mesh needs at least one 'cell'"));
+    const std::size_t sections = x.stations.size() > 1 ? x.stations.size() - 1 : 0;
+    x.regions.assign(x.cells.size(), std::vector<std::int32_t>(sections, mesh::ExtrudedGeometry::void_region));
+    // region extrude = <cells> <t_lo>:<t_hi>; the range runs between two stations.
+    for (std::size_t r = 0; r < regions_.size(); ++r) {
+        const RegionSpec& spec = regions_[r];
+        if (!spec.boxes.empty() || !spec.polygons.empty() || !spec.seeds.empty()) {
+            return std::unexpected(at((!spec.boxes.empty() ? spec.boxes : !spec.polygons.empty() ? spec.polygons : spec.seeds).front()->line,
+                                      "an extrude3d mesh takes extrude in its regions"));
+        }
+        for (const Entry* e : spec.extrudes) {
+            const auto w = tokens(e->value);
+            if (w.size() < 2) return std::unexpected(at(e->line, "extrude is '<cells> <t_lo>:<t_hi>'"));
+            const auto range = items(w.back(), ':');
+            if (range.size() != 2) return std::unexpected(at(e->line, "the range is <t_lo>:<t_hi>"));
+            NITCAD_DECK_TRY(lo, lift(e->line, length(range[0])));
+            NITCAD_DECK_TRY(hi, lift(e->line, length(range[1])));
+            const auto station = [&](double t) -> std::optional<std::size_t> {
+                const auto it = std::find(x.stations.begin(), x.stations.end(), t);
+                if (it == x.stations.end()) return std::nullopt;
+                return static_cast<std::size_t>(it - x.stations.begin());
+            };
+            const auto a = station(lo);
+            const auto b = station(hi);
+            if (!a || !b) return std::unexpected(at(e->line, "the range's ends must be stations"));
+            if (*a >= *b) return std::unexpected(at(e->line, "the range needs t_lo < t_hi"));
+            for (std::size_t k = 0; k + 1 < w.size(); ++k) {
+                const auto c = std::find_if(x.cells.begin(), x.cells.end(), [&](const mesh::ExtrusionCell& cell) { return cell.name == w[k]; });
+                if (c == x.cells.end()) return std::unexpected(at(e->line, "no cell named '" + std::string(w[k]) + "'"));
+                auto& row = x.regions[static_cast<std::size_t>(c - x.cells.begin())];
+                for (std::size_t j = *a; j < *b; ++j) {
+                    if (row[j] != mesh::ExtrudedGeometry::void_region) {
+                        return std::unexpected(at(e->line, "cell '" + std::string(w[k]) + "' is already assigned in section " + std::to_string(j)));
+                    }
+                    row[j] = static_cast<std::int32_t>(r);
+                }
+            }
+        }
+    }
+    auto complex = mesh::extrude(x);
+    if (!complex) return std::unexpected(located(s.line, "[mesh] extrude3d", std::move(complex.error())));
+    auto m = mesh::generate_mesh(*complex, o);
+    if (!m) return std::unexpected(located(s.line, "[mesh] extrude3d", std::move(m.error())));
     generated_ = std::move(*m);
     return {};
 }
@@ -632,10 +733,17 @@ std::expected<void, base::Error> Builder::build_mesh(device::DeviceDescription& 
     if (type->value == "tensor") type_ = MeshType::tensor;
     else if (type->value == "generate2d") type_ = MeshType::generate2d;
     else if (type->value == "generate3d") type_ = MeshType::generate3d;
+    else if (type->value == "extrude3d") type_ = MeshType::extrude3d;
     else if (type->value == "file") type_ = MeshType::file;
     else return std::unexpected(at(type->line, "unknown mesh type '" + type->value + "'"));
+    if (type_ != MeshType::extrude3d) {
+        for (const RegionSpec& g : regions_) {
+            if (!g.extrudes.empty()) return std::unexpected(at(g.extrudes.front()->line, "extrude is for an extrude3d mesh"));
+        }
+    }
     std::expected<void, base::Error> made;
     switch (type_) {
+    case MeshType::extrude3d: made = extruded_3d(s); break;
     case MeshType::tensor: made = tensor_mesh(s, d); break;
     case MeshType::generate2d: made = generated_2d(s); break;
     case MeshType::generate3d: made = generated_3d(s); break;

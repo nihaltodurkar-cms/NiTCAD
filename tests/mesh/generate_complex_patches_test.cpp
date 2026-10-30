@@ -167,6 +167,27 @@ TEST_CASE("complex patches: a patch edge ending on a trace (FC7, FD8 a, b)", "[m
     WARN("patch edge ending on a trace");
 }
 
+TEST_CASE("complex patches: a patch corner where two traces cross (Unit 53 slice 5)", "[mesh][complex_patches]") {
+    const double s = 0.1;
+    // A block (y in [2, 5]) on a slab (y in [0, 2]); the block is region 1 except for x in [1, 2], where it is
+    // region 2. On the side face z = 0 the patch is the rectangle x in [1, 2], y in [2, 5]: its edges x = 1 and
+    // x = 2 lie on the traces of the block's two interfaces and its edge y = 2 on the trace of the slab's, so it
+    // turns a corner at each point where two traces cross. A corner of a straddled run is a P6 zone (it
+    // was not, and the corner pieces failed P6 by s / 4).
+    const auto x = [&] {
+        auto g = grid({0.0, 2.0, 5.0}, {0.0, 3.0}, {0.0, 1.0, 2.0, 3.0},
+                      [](double u, double, std::size_t k) { return u < 2.0 ? 0 : k == 1 ? 2 : 1; });
+        g.patches = {{"gate", {1.0, 2.0, 0.0}, {2.0, 5.0, 0.0}}};
+        return g;
+    }();
+    const auto m = mesh_of(x, options(0.5, s));
+    check_certified(m, s, {{"gate", 3.0}}, true);
+    CHECK(m.certificate->patches->corner_pieces > 0);
+    // The patch's four corners: two on the slab's trace, two where the block's traces meet the domain edge.
+    CHECK(m.certificate->patches->max_corner_deviation <= s);
+    WARN("patch corner at a trace crossing");
+}
+
 TEST_CASE("complex patches: without a patch edge at an interface, no P6 (FC1)", "[mesh][complex_patches]") {
     const auto m = mesh_of(slabs({0.0, 1.0}), options(0.5, 0.1));
     REQUIRE(m.certificate.has_value());

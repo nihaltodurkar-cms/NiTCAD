@@ -15,7 +15,7 @@ namespace {
 using Words = std::span<const std::string_view>;
 
 constexpr std::array<std::string_view, 2> on_off{"on", "off"};
-constexpr std::array<std::string_view, 4> mesh_types{"tensor", "generate2d", "generate3d", "file"};
+constexpr std::array<std::string_view, 5> mesh_types{"tensor", "generate2d", "generate3d", "extrude3d", "file"};
 constexpr std::array<std::string_view, 9> materials{"silicon", "silicon_legacy", "germanium", "gaas", "ingaas",
                                                     "sic_4h",  "algaas",         "sio2",      "insulator"};
 constexpr std::array<std::string_view, 2> dopants{"donor", "acceptor"};
@@ -39,37 +39,41 @@ constexpr std::array<std::string_view, 6> waveforms{"constant", "step", "ramp", 
 
 constexpr std::array<KeyInfo, 1> device_keys{{{"temperature", 0, false, "300", "lattice temperature, K", {}, {}, {}}}};
 
-constexpr std::array<KeyInfo, 18> mesh_keys{{
-    {"type", 0, false, "tensor", "tensor | generate2d | generate3d | file", mesh_types, {}, {}},
+constexpr std::array<KeyInfo, 21> mesh_keys{{
+    {"type", 0, false, "tensor", "tensor | generate2d | generate3d | extrude3d | file", mesh_types, {}, {}},
     {"x", 0, false, "<axis>", "tensor: x nodes, lengths or linspace(a, b, n) pieces joined by +", {}, {}, "tensor"},
     {"y", 0, false, "<axis>", "tensor: y nodes", {}, {}, "tensor"},
     {"z", 0, false, "<axis>", "tensor: z nodes", {}, {}, "tensor"},
     {"straddle", 1, true, "<position> <spacing>", "tensor: a material interface on axis x, y or z", {}, {}, "tensor"},
-    {"patch", 1, true, "<x y>, <x y>", "generate2d: a boundary patch", {}, {}, "generate2d"},
+    {"patch", 1, true, "<x y>, <x y>", "generate2d: a boundary patch; extrude3d: patch <name> = <x0 y0 z0 x1 y1 z1>, the boundary facets in the box", {}, {}, "generate2d extrude3d"},
     {"patch", 2, true, "<x y z>, ...", "generate3d: patch <face> <name>, a polygon tiling the face", {}, {},
      "generate3d"},
-    {"max_size", 0, false, "<length>", "generated meshes: largest element size", {}, {}, "generate2d generate3d"},
+    {"max_size", 0, false, "<length>", "generated meshes: largest element size", {}, {}, "generate2d generate3d extrude3d"},
     {"interface_resolution", 0, false, "<length>", "generated meshes: element size at interfaces", {}, {},
-     "generate2d generate3d"},
+     "generate2d generate3d extrude3d"},
     {"min_angle", 0, false, "20.7", "generate2d: smallest triangle angle, degrees", {}, {}, "generate2d"},
-    {"radius_edge", 0, false, "2", "generate3d: largest radius-edge ratio", {}, {}, "generate3d"},
-    {"max_nodes", 0, false, "2000000", "generated meshes: node limit", {}, {}, "generate2d generate3d"},
+    {"radius_edge", 0, false, "2", "generate3d, extrude3d: largest radius-edge ratio", {}, {}, "generate3d extrude3d"},
+    {"max_nodes", 0, false, "2000000", "generated meshes: node limit", {}, {}, "generate2d generate3d extrude3d"},
     {"box", 0, true, "<lo> <hi> <h>", "generated meshes: a smaller size h inside a box", {}, {},
-     "generate2d generate3d"},
+     "generate2d generate3d extrude3d"},
     {"vertex", 0, true, "<x y z>", "generate3d: a domain vertex, numbered from 0", {}, {}, "generate3d"},
     {"face", 1, true, "<i j k ...>", "generate3d: a domain face by its vertices, also a patch", {}, {},
      "generate3d"},
     {"cuboid", 0, false, "<x0 x1 y0 y1 z0 z1>", "generate3d: a box domain with faces x_min ... z_max", {}, {},
      "generate3d"},
     {"plane", 0, true, "<x y z>, <x y z>, <x y z>", "generate3d: a planar interface", {}, {}, "generate3d"},
+    {"axis", 0, false, "x", "extrude3d: the extrusion axis, x | y | z", {}, {}, "extrude3d"},
+    {"stations", 0, false, "<lengths>", "extrude3d: increasing positions along the axis", {}, {}, "extrude3d"},
+    {"cell", 1, true, "<u v>, <u v>, ...", "extrude3d: a cross-section cell polygon (axis x: y, z)", {}, {}, "extrude3d"},
     {"path", 0, false, "<file>", "file: a mesh file", {}, {}, "file"},
 }};
 
-constexpr std::array<KeyInfo, 5> region_keys{{
+constexpr std::array<KeyInfo, 6> region_keys{{
     {"material", 0, false, "silicon", "the region's material (algaas takes its Al fraction)", materials, {}, {}},
     {"box", 0, true, "<lo hi> per dimension", "tensor meshes: the region's box", {}, {}, {}},
     {"polygon", 0, true, "<x y>, ...", "generate2d: the region's polygon", {}, {}, {}},
     {"seed", 0, true, "<x y z>", "generate3d with planes: a point inside the region", {}, {}, {}},
+    {"extrude", 0, true, "<cells> <t_lo>:<t_hi>", "extrude3d: cells filled in the sections between two stations", {}, {}, {}},
     {"band_to_band.direct_gap", 0, false, "off", "direct-gap band-to-band tunnelling", on_off, {}, {}},
 }};
 

@@ -123,7 +123,8 @@ Device certified_device(bool p6 = false) {
     const std::vector<device::RegionId> region{0, 0, 1, 1, 1};
     const std::vector<mesh::InterfacePoint1D> at{{1.5e-4, 0, 1}};
     auto certificate = *mesh::certify_interfaces_1d(m, region, at);
-    if (p6) certificate.patches.emplace();  // a P6 report (Unit 53, FD10), only to test the save refusal
+    // A P6 report (Unit 53, FD10), invented: only the round trip is tested.
+    if (p6) certificate.patches = mesh::PatchBoundaryReport{12, 5, 0.25, 1.5e-8, {0.0, -2.5e-12, 1e-13}, {0.0, 4e-7, 1e-7}};
     auto d = Device::create(
         {.mesh = std::move(m),
          .temperature_K = 300.0,
@@ -224,6 +225,15 @@ void check_same(const Device& a, const Device& b) {
         CHECK(x.report.corner_faces == y.report.corner_faces);
         CHECK(x.report.max_flat_deviation == y.report.max_flat_deviation);
         CHECK(x.report.max_corner_deviation == y.report.max_corner_deviation);
+        REQUIRE(x.patches.has_value() == y.patches.has_value());
+        if (x.patches) {
+            CHECK(x.patches->cross_pieces == y.patches->cross_pieces);
+            CHECK(x.patches->corner_pieces == y.patches->corner_pieces);
+            CHECK(x.patches->max_flat_deviation == y.patches->max_flat_deviation);
+            CHECK(x.patches->max_corner_deviation == y.patches->max_corner_deviation);
+            CHECK(same_bits(x.patches->area_error, y.patches->area_error));
+            CHECK(same_bits(x.patches->zone_length, y.patches->zone_length));
+        }
     }
 }
 
@@ -285,7 +295,7 @@ void silicon_keys(io::detail::Writer& p, int skip = 0) {
 
 TEST_CASE("device file: every field round-trips bit for bit", "[io][device_file]") {
     const fs::path dir = scratch("device_round_trip");
-    for (const Device& d : {rich_device(), certified_device()}) {
+    for (const Device& d : {rich_device(), certified_device(), certified_device(true)}) {
         const fs::path first = dir / "first.nitdev";
         const fs::path second = dir / "second.nitdev";
         REQUIRE(io::save_device(first, d).has_value());
@@ -305,12 +315,6 @@ TEST_CASE("device file: foreign and damaged files are refused", "[io][device_fil
     const fs::path file = dir / "d.nitdev";
     REQUIRE(io::save_device(file, d).has_value());
 
-    SECTION("a certificate with a P6 report: refused until Unit 53 slice 5 (DECISIONS.md SQ4)") {
-        const auto r = io::save_device(dir / "p6.nitdev", certified_device(true));
-        REQUIRE_FALSE(r.has_value());
-        CHECK(r.error().code == ErrorCode::invalid_input);
-        CHECK_FALSE(fs::exists(dir / "p6.nitdev"));
-    }
     SECTION("a mesh file is not a device file") {
         const fs::path mfile = dir / "m.nitmesh";
         REQUIRE(io::save_mesh(mfile, d.mesh()).has_value());

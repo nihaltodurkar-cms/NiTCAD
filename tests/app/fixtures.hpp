@@ -179,6 +179,35 @@ patch = x_max
 [equilibrium]
 )";
 
+// A sectioned-extrusion resistor (Unit 53): one cell, one section, the end faces as patches.
+inline const std::string extrude3d = R"(# An extruded 3D resistor
+[mesh]
+type = extrude3d
+axis = x
+stations = 0, 1um
+cell c = 0 0, 1um 0, 1um 1um, 0 1um
+patch x_min = -1um -1um -1um 0 2um 2um
+patch x_max = 1um -1um -1um 2um 2um 2um
+max_size = 0.5um
+
+[region silicon]
+material = silicon
+extrude = c 0:1um
+
+[doping]
+profile = donor constant 1e16
+
+[contact left]
+kind = ohmic
+patch = x_min
+
+[contact right]
+kind = ohmic
+patch = x_max
+
+[equilibrium]
+)";
+
 inline std::string transient_diode() {
     return diode_device + "\n[transient]\ncontact anode = step(0, 0.3, 1e-9)\nt_end = 4e-9\n";
 }

@@ -41,6 +41,7 @@ Base base_for(std::string_view kind, std::string_view context) {
     if (kind == "mesh") {
         if (context == "generate2d") return {app_test::generate2d, "mesh"};
         if (context == "generate3d") return {app_test::generate3d, "mesh"};
+        if (context == "extrude3d") return {app_test::extrude3d, "mesh"};
         if (context == "file") {
             // The generated 2D resistor's mesh, saved once.
             static const std::filesystem::path file = [] {
@@ -137,6 +138,10 @@ std::map<std::string, std::string> samples() {
             {"path", "\"missing.nitmesh\""},
             {"polygon", "0 0, 1um 0, 1um 1um"},
             {"seed", "0 0 0"},
+            {"axis", "x"},
+            {"stations", "0, 1um"},
+            {"cell", "0 0, 1um 0, 1um 1um"},
+            {"extrude", "c 0:1um"},
             {"profile", "donor constant 1e15"},
             {"oxide_thickness", "10nm"},
             {"work_function", "4.1"},

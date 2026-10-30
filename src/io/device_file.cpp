@@ -473,10 +473,6 @@ std::expected<device::ThermalContact, base::Error> read_thermal_contact(const Re
 
 std::expected<void, base::Error> save_device(const std::filesystem::path& path,
                                              const device::Device& d) {
-    if (const mesh::InterfaceCertificate* c = d.interface_certificate(); c != nullptr && c->patches) {
-        // Unit 53 slice 4 (DECISIONS.md SQ4): never written without it; the record is slice 5's (FD14).
-        return std::unexpected(detail::invalid("a device whose certificate carries a P6 report cannot be saved yet (Unit 53 slice 5)"));
-    }
     Writer w;
     w.record(device_key::mesh, detail::write_mesh(d.mesh()));
     w.f64(device_key::temperature, d.temperature_K());

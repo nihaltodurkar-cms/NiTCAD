@@ -47,6 +47,7 @@ deck::Plan built(const std::string& text) {
 
 using app_test::generate2d;
 using app_test::generate3d;
+using app_test::extrude3d;
 using app_test::transient_diode;
 
 }  // namespace
@@ -89,6 +90,7 @@ TEST_CASE("app deck sections: the menus and the keys they offer", "[app]") {
     CHECK(keys_of(app_test::diode_device, "mesh").empty());  // a tensor mesh: none
     CHECK(keys_of(generate2d, "mesh") == K{"min_angle", "max_nodes"});
     CHECK(keys_of(generate3d, "mesh") == K{"radius_edge", "max_nodes"});
+    CHECK(keys_of(extrude3d, "mesh") == K{"radius_edge", "max_nodes"});
     // A key the section has is not offered again.
     const std::string with = app_test::diode_device + "[solver]\nmax_iterations = 50\n";
     const auto solver = keys_of(with, "solver");
@@ -119,7 +121,7 @@ TEST_CASE("app deck sections: inserting a key", "[app]") {
 }
 
 TEST_CASE("app deck sections: every offered key keeps the deck's meaning (WG7)", "[app]") {
-    for (const std::string& text : {app_test::diode_sweep(), app_test::mosfet2d, generate2d, generate3d,
+    for (const std::string& text : {app_test::diode_sweep(), app_test::mosfet2d, generate2d, generate3d, extrude3d,
                                     transient_diode()}) {
         CAPTURE(text.substr(0, text.find('\n')));
         const std::string reference = fingerprint(built(text));

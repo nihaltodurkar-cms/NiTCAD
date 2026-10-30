@@ -633,3 +633,126 @@ TEST_CASE("deck build: the FinFET deck of decks/ builds") {
     CHECK(p->options.models.fermi_dirac);
     CHECK(p->options.models.surface_mobility == assemble::SurfaceMobility::off);
 }
+
+// Unit 53 (DECISIONS.md FD13, FC11): the sectioned extrusion.
+namespace {
+
+// Two stacked slabs along x, 1 um wide (y) and 1 um high (z), the interface at z = 0.5 um.
+const std::string extruded_head = R"([mesh]
+type = extrude3d
+axis = x
+stations = 0, 1um
+cell a = 0 0, 1um 0, 1um 0.5um, 0 0.5um
+cell b = 0 0.5um, 1um 0.5um, 1um 1um, 0 1um
+patch bottom = -1um -1um -1um 2um 2um 0
+patch top = -1um -1um 1um 2um 2um 2um
+max_size = 0.5um
+interface_resolution = 0.1um
+[region lower]
+material = silicon
+extrude = a 0:1um
+[region upper]
+material = silicon
+extrude = b 0:1um
+[doping]
+profile = acceptor constant 1e16 z=0:0.5um
+profile = donor constant 1e16 z=0.5um:1um
+[contact bottom]
+kind = ohmic
+patch = bottom
+[contact top]
+kind = ohmic
+patch = top
+[equilibrium]
+)";
+
+// The deck with `from` replaced by `to` (which must occur once).
+std::string changed(std::string text, const std::string& from, const std::string& to) {
+    const auto at = text.find(from);
+    REQUIRE(at != std::string::npos);
+    text.replace(at, from.size(), to);
+    return text;
+}
+
+}  // namespace
+
+TEST_CASE("deck build: an extrude3d mesh is a certified two-region mesh with named patches", "[deck][extrude]") {
+    const deck::Plan p = must(extruded_head);
+    REQUIRE(p.generated.has_value());
+    const auto& m = p.device.mesh();
+    CHECK(m.dimension() == 3);
+    REQUIRE(p.device.interface_certificate() != nullptr);
+    CHECK(p.device.regions().size() == 2);
+    for (std::size_t i = 0; i < m.node_count(); ++i) {
+        const double z = m.points()[i][2];
+        if (std::abs(z - 0.5e-4) > 1e-9) CHECK(p.device.node_region()[i] == (z > 0.5e-4 ? 1 : 0));
+    }
+    for (const char* name : {"bottom", "top"}) {
+        const auto* b = m.find_boundary(name);
+        REQUIRE(b != nullptr);
+        CHECK(std::abs(std::accumulate(b->areas.begin(), b->areas.end(), 0.0) - 1e-8) < 1e-20);
+    }
+    // The unnamed side faces keep the default patch name.
+    CHECK(m.find_boundary("boundary") != nullptr);
+}
+
+TEST_CASE("deck build: every extrude3d mistake names its line", "[deck][extrude]") {
+    const auto expect = [](const std::string& message, const std::string& what) {
+        INFO(message);
+        CHECK(message.find(what) != std::string::npos);
+    };
+    expect(failure(changed(extruded_head, "axis = x\n", "")), "t.deck:1: an extrude3d mesh needs 'axis'");
+    expect(failure(changed(extruded_head, "stations = 0, 1um\n", "")), "needs 'stations'");
+    expect(failure(changed(extruded_head, "axis = x", "axis = w")), "t.deck:3: axis is x, y or z");
+    expect(failure(changed(extruded_head, "extrude = a 0:1um", "extrude = c 0:1um")), "no cell named 'c'");
+    expect(failure(changed(extruded_head, "extrude = a 0:1um", "extrude = a 0:0.5um")), "the range's ends must be stations");
+    expect(failure(changed(extruded_head, "extrude = a 0:1um", "extrude = a 1um:0")), "needs t_lo < t_hi");
+    expect(failure(changed(extruded_head, "extrude = b 0:1um", "extrude = b 0:1um\nextrude = a 0:1um")),
+           "cell 'a' is already assigned in section 0");
+    expect(failure(changed(extruded_head, "patch top = -1um -1um 1um 2um 2um 2um", "patch top = -1um -1um 3um 2um 2um 4um")),
+           "t.deck:1: [mesh] extrude3d: a patch box selects no boundary facet");
+    expect(failure(changed(extruded_head, "material = silicon\nextrude = a 0:1um", "material = silicon\nbox = 0 1um\nextrude = a 0:1um")),
+           "an extrude3d mesh takes extrude in its regions");
+    expect(failure(changed(extruded_head, "type = extrude3d\naxis = x\nstations = 0, 1um\ncell a = 0 0, 1um 0, 1um 0.5um, 0 0.5um\n"
+                                          "cell b = 0 0.5um, 1um 0.5um, 1um 1um, 0 1um\n",
+                           "type = generate3d\ncuboid = 0 1um 0 1um 0 1um\n")),
+           "extrude is for an extrude3d mesh");
+}
+
+TEST_CASE("deck build: the run identity covers the extruded complex (FC11)", "[deck][extrude]") {
+    const deck::Plan a = must(extruded_head);
+    const deck::Plan again = must(extruded_head);
+    const auto id = [](const deck::Plan& p) { return solve::make_run_record(p.device, p.options, p.points).input_identity; };
+    CHECK(id(a) == id(again));  // deterministic: the same complex and options, the same mesh
+    // A moved station and a renamed patch each change it.
+    const std::string longer = changed(changed(changed(extruded_head, "stations = 0, 1um", "stations = 0, 1.02um"), "extrude = a 0:1um", "extrude = a 0:1.02um"),
+                                         "extrude = b 0:1um", "extrude = b 0:1.02um");
+    CHECK(id(a) != id(must(longer)));
+    CHECK(id(a) != id(must(changed(changed(extruded_head, "patch top =", "patch roof ="), "patch = top", "patch = roof"))));
+}
+
+// Unit 53 slice 5: the extruded FinFET deck of decks/ meshes and is certified (P4 and P6). About four
+// minutes in Release, so hidden; run it by name.
+TEST_CASE("deck build: the reduced extruded FinFET deck meshes and is certified", "[.benchmark][deck][extrude]") {
+    const auto d = deck::read(fs::path(NITCAD_DECKS_DIR) / "finfet_3d_reduced.deck");
+    if (!d) FAIL(d.error().message);
+    const auto p = deck::build(*d);
+    if (!p) FAIL(p.error().message);
+    REQUIRE(p->generated.has_value());
+    const auto* c = p->device.interface_certificate();
+    REQUIRE(c != nullptr);
+    CHECK(c->patches.has_value());
+    CHECK(p->device.contacts().size() == 4);
+    CHECK(p->device.mesh().find_boundary("gate") != nullptr);
+    UNSCOPED_INFO("nodes " << p->device.mesh().node_count() << ", slivers " << p->generated->report.slivers);
+}
+
+// The tapered deck does not certify yet (DECISIONS.md, Unit 53 slice 5: P4b at the interfacial ring's top
+// corner, 1.5 s at s = 0.16 nm and again at s = 0.1 nm). Kept as the measurement for FC10's ruling.
+TEST_CASE("deck build: the shaped extruded FinFET deck meshes and is certified", "[.benchmark][!shouldfail][deck][extrude]") {
+    const auto d = deck::read(fs::path(NITCAD_DECKS_DIR) / "finfet_3d_shaped.deck");
+    if (!d) FAIL(d.error().message);
+    const auto p = deck::build(*d);
+    if (!p) FAIL(p.error().message);
+    CHECK(p->device.interface_certificate() != nullptr);
+}

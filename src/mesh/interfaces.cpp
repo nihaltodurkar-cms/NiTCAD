@@ -6,6 +6,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
 #include <limits>
 #include <optional>
 #include <string>
@@ -166,6 +167,12 @@ struct Piece {
 base::Error error(base::ErrorCode code, std::string message, std::optional<std::size_t> index,
                   std::optional<double> value = std::nullopt) {
     return {code, std::move(message), base::ErrorContext{.index = index, .value = value}};
+}
+
+std::string point_text(const Point& p) {
+    char at[96];
+    std::snprintf(at, sizeof at, " at (%.6g, %.6g, %.6g) cm", p[0], p[1], p[2]);
+    return at;
 }
 
 std::string pair_text(NodeId a, NodeId b) {
@@ -455,7 +462,7 @@ std::expected<InterfaceReport, base::Error> check_interfaces(const SimplexMesh& 
             if (!(deviation <= res)) {
                 return std::unexpected(error(ErrorCode::degenerate_mesh,
                                              "interface rule (P4b): the dual face of edge " + pair_text(a, b) +
-                                                 " in a corner zone deviates beyond the resolution",
+                                                 " in a corner zone deviates beyond the resolution" + point_text(mid),
                                              static_cast<std::size_t>(a), deviation));
             }
         } else {
@@ -558,6 +565,13 @@ std::expected<PatchBoundaryReport, base::Error> check_patch_boundaries(const Sim
 
     PatchBoundaryReport report;
     const std::size_t nf = s.facets.size() / 3;
+    // Where a failing piece is: its edge's midpoint and the two patches (for the message).
+    const auto where = [&](const Point& m, std::int32_t pa, std::int32_t pb) {
+        char at[96];
+        std::snprintf(at, sizeof at, " at (%.6g, %.6g, %.6g) cm", m[0], m[1], m[2]);
+        return std::string(at) + " between '" + s.patch_names[static_cast<std::size_t>(pa)] + "' and '" +
+               s.patch_names[static_cast<std::size_t>(pb)] + "'";
+    };
     for (std::size_t f = 0; f < nf; ++f) {
         std::array<std::int32_t, 3> cp{};
         for (std::size_t k = 0; k < 3; ++k) cp[k] = s.facet_corner_patch.empty() ? s.facet_patch[f] : s.facet_corner_patch[3 * f + k];
@@ -588,7 +602,7 @@ std::expected<PatchBoundaryReport, base::Error> check_patch_boundaries(const Sim
                 report.max_corner_deviation = std::max(report.max_corner_deviation, deviation);
                 if (!(deviation <= res)) {
                     return std::unexpected(error(ErrorCode::degenerate_mesh,
-                                                 "a boundary dual piece in a patch zone deviates beyond s from its patch boundary (P6)",
+                                                 "a boundary dual piece in a patch zone deviates beyond s from its patch boundary (P6)" + where(m, cp[i], cp[j]),
                                                  f, deviation));
                 }
                 continue;
@@ -598,7 +612,7 @@ std::expected<PatchBoundaryReport, base::Error> check_patch_boundaries(const Sim
             report.max_flat_deviation = std::max(report.max_flat_deviation, deviation / tolerance);
             if (!(deviation <= tolerance)) {
                 return std::unexpected(error(ErrorCode::degenerate_mesh,
-                                             "a boundary dual piece deviates from its patch boundary (P6)", f, deviation));
+                                             "a boundary dual piece deviates from its patch boundary (P6)" + where(m, cp[i], cp[j]), f, deviation));
             }
         }
     }
