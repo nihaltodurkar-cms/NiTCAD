@@ -3637,6 +3637,11 @@ passed in the suite (19 of 19). WG1 stands as ruled.
   changes as in this one, so they are not this commit's. **Open item (WG1 spikes, owner, 2026-10-23, "record as
   is"):** the window takes no input since the WG1 fix, so the spikes have another cause, unknown; WG1 is left as
   ruled.
+- **Owner ruling 2026-10-31 (on Unit 53's Debug suite, "opt 1"):** the debug-layer self-test (WG4, WG5:
+  WARP, `--debug-layer`, Debug) failed WG1 with one 104.6 ms gap, run serially, and passed alone. A WG1 failure
+  ends the self-test before the debug layer's messages and the live objects are read, so the spike hid WG5. That
+  one run now takes `--gap-limit-ms 1000`: it gates WG5, and WG1 stays gated at `wg1_limit_ms()` (100 ms, 250 ms on
+  the hosted runner) by every other self-test. The spikes' cause stays open; WG1 is not raised.
 
 **Status:** Unit 26c built in three commits (c16f8e0, 4a9d236, 3d0e78a), with the `nitcad plot` fix (3e730dd) and
 the WG1 fixes (4c4b75b); YG1–YG6 met on this workstation, the WG1 spikes above open. **Accepted by the owner
