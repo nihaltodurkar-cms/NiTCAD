@@ -5772,7 +5772,8 @@ meshes (mesh, slice and quality views checked by eye on both FinFET decks).
   nodes outside every lattice; closed by a new UC1 pin, two U14 layers near a corner, 215 nodes, digest
   `1c2949ce70fe860a` measured identical on `fea05e5`; the mutant gives 210 nodes); UD13 the cost row has no output
   to mutate (argued equivalent; measured by UC11).
-- Suites: Release 128/129 (618 s): `solve_mosfet` crashed (SEGFAULT, after 577 s, no assertion output); re-run alone it passes (12 passed, 1 skipped, 561 assertions). This slice changes no solver or library code (tests, docs and one deck only), and no such crash is recorded before; not reproduced, cause unknown, reported. Debug 118/118 (1,141 s). Debug growth this slice, re-timed serially: `mesh.generate_swept` 32.2 s (+0.8 s, the `max_nodes` check), `deck.build` 15.1 s, `mesh.generate2d` 2.6 s; Unit 54 at about 56 s of UC13's 60 s.
+- Suites: Release 128/129 (618 s): `solve_mosfet` crashed (SEGFAULT, after 577 s, no assertion output); re-run alone it passes (12 passed, 1 skipped, 561 assertions). This slice changes no solver or library code (tests, docs and one deck only), and no such crash is recorded before; not reproduced, cause unknown, reported. Debug 118/118 (1,141 s).
+- **CI (owner, 2026-10-31: "raise the Debug job's timeout-minutes from 60 to 90").** PR #74's last Debug job (run 41176925433) reached the 60-minute limit with 114 of 116 tests passed and none failed, and was cancelled; the previous run took 50 minutes. `.github/workflows/ci.yml` now gives the Debug preset 90 minutes and Release 60. Debug growth this slice, re-timed serially: `mesh.generate_swept` 32.2 s (+0.8 s, the `max_nodes` check), `deck.build` 15.1 s, `mesh.generate2d` 2.6 s; Unit 54 at about 56 s of UC13's 60 s.
 
 ---
 

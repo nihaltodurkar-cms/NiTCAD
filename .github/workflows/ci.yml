@@ -31,7 +31,9 @@ jobs:
   build-test:
     name: ${{ matrix.preset }}
     runs-on: windows-2025
-    timeout-minutes: 60
+    # Debug 90 minutes (owner, 2026-10-31: PR #74's Debug job reached 60 minutes with 114 of 116 tests
+    # passed and was cancelled); Release 60.
+    timeout-minutes: ${{ matrix.preset == 'debug' && 90 || 60 }}
     strategy:
       fail-fast: false
       matrix:
