@@ -5659,6 +5659,72 @@ prepared in four passes, `parse_signed`, `link_corners`, `straddle_signed`, `fin
   refusal case; fixed, and the mesh suites re-run 17/17 in both builds). UC7 re-run: "failed as expected", the same
   numbers. Debug growth: `mesh.generate2d_layers` 0.22 s to 2.5 s (UC13 budget 60 s; about 42 s used).
 
+**Slice 4 (2026-10-31): deck, io, run record, application; the two FinFET decks as swept decks** (UD9-UD11; UC10, UC2
+part). `[mesh] type = extrude3d` takes `sweep = on | off` (default off, Unit 53's generator unchanged); with it,
+`lines` (an axis, as a tensor deck's, required), `straddle = <station> <width>` (repeatable), `layer = <u v>, <u v>
+along=<axis> lines=<axis> [straddle=<length>]` (repeatable), `min_angle`, `max_size`, `interface_resolution`,
+`max_nodes` and `box` (`src/deck/build.cpp`: `option_swept`, `layer`; the axis parser now takes a line and a text, so
+`lines`, `along=` and `lines=` share it; `include/NiTCAD/deck/build.hpp` documents the keys). `nitcad check` prints
+the swept counts (axis lines, prisms, tetrahedra, layers, corner blocks, the cross-section's smallest angle) and the
+generation digest; the run record, the mesh file and a file mesh read back name the generator as for Unit 53 (FD14
+unchanged). The application's vocabulary knows the four keys (and `min_angle` for extrude3d); its mesh menu offers
+`sweep` for an extrude3d deck, and `min_angle` instead of `radius_edge` once it is on. `nitcad plot` draws the swept
+meshes (mesh, slice and quality views checked by eye on both FinFET decks).
+- **Added, for review:**
+  (a) **A generator defect fixed (slice 2's code):** a layer whose base line holds two or more collinear interface
+  chains (three regions meeting along one line: the fin, the interfacial layer and the HfO2 on the buried oxide's top)
+  placed one straddle pair per chain and refused the duplicates as "two interface straddles overlap or touch". One
+  pair at the shared offset straddles every chain on the line exactly, so equal straddle centres (within the
+  layer's tolerance) are now placed once, for lines and for columns. Only inputs refused before change (UC1). Test:
+  three regions meeting at a T on the layer's line give the tensor lattice exactly (flat 0, corner within 1e-12);
+  with the merge disabled the test fails with the old refusal (mutant killed).
+  (b) P4a's failure message gives the edge's midpoint, as P4b's does (it found the cause in the shaped deck, below).
+  (c) `MeshReport` gains `prisms`, `axis_lines`, `layers`, `corner_blocks` (swept meshes only; corner blocks counted
+  as end points two signed layers share). The mesh file's report carries them as an optional key (5), written only
+  when `prisms` is nonzero, so every other generated file is byte-identical.
+  (d) Under `sweep = on`, `box` is the cross-section's (u0 v0 u1 v1 h, as generate2d's) and `max_nodes` counts the 3D
+  nodes (the 2D cap keeps its default); `radius_edge` is refused there, and `lines`, `straddle`, `layer` and
+  `min_angle` are refused without it, each with its line.
+  (e) The run record's mesh type stays `extrude3d` for both generators; the digest tells them apart (the swept
+  digest is tagged and covers the lines, straddles and layers).
+  (f) `layer`'s value is split at its options' names (`along=`, `lines=`, `straddle=`, at parenthesis depth 0): the
+  base's two points before the first, each value running to the next name. Unknown, repeated, empty or missing
+  options are refused with the line.
+  (g) `along` must still end at the base's length within 1e-12 (slice 2's rule); a tapered side is sqrt(904) nm long,
+  which the shaped deck writes as `30.0665927567458nm`. A symbolic end (say `end`) would be kinder; not added.
+- **The decks.** `decks/finfet_3d_swept.deck` (the reduced fin, UC8's mesh) and `decks/finfet_3d_shaped_swept.deck`
+  (the tapered fin, UC9's), the devices, regions, patches, doping and analysis of Unit 53's two decks; lines 2.5 nm
+  apart along the fin, the gate edges straddled by 0.5 nm; h = 4 nm in the cross-section; s = 0.08 nm (the 6 s rule
+  applies to every interface piece, covered or not, and the interfacial layer's piece on the box is 0.5 nm).
+  - Reduced: four layers wrap the fin (both sides, the top, the foot on the buried oxide), right-angle corners, lines
+    from 3 nm into the silicon to the gate (2 nm out; 2 nm into the box at the foot): every interface of the
+    cross-section lies inside the frame. 50,061 nodes (1,353 per cross-section x 37 lines), 3.5 s in Release; P4
+    flat deviation 0, corner 1.1e-14 cm, P6 present. **Five times UC8's budget (9,367 nodes)**: the four corner
+    blocks alone hold 4 x 13 x 13 nodes per section. Slice 5 measures UC8 and tunes the lines first; the risk stated
+    in UC8 stands.
+  - Shaped: the interfacial layer's outer face is not parallel to the fin's side (0.5 nm wide horizontally at the
+    foot, 0.533 nm at the top), so no layer line can follow it: the layers run from 2 nm into the silicon to 0.1 nm
+    out and the interfacial | HfO2 interface keeps the 2D generator's mirrored pairs; oblique corners (93.8 degrees at
+    the top, 86.2 at the foot). 71,188 nodes, 5.3 s, certified with P6 (Unit 53's generator: 288,729 nodes, about
+    20 minutes).
+  - **Found while building them (UD7):** with columns 3 nm apart the shaped deck failed P4a: the lattice's thin
+    rectangles (rows 0.1-0.6 nm apart) have circumcircles reaching 1.5 nm, past its last row to the pairs 0.36 nm
+    beyond, so Delaunay dropped the lattice's edges there and an edge ran from a pair straight across it. UD7's
+    grading has to hold along the layer too: columns no farther apart than the gap to the nearest node outside.
+    Both decks use 0.5-1 nm columns. UD7 reports rather than enforces this, as written; nothing checks it yet.
+- Tests: the deck builds the generator's mesh from the keys exactly (the same digest, graph and regions as
+  `generate_swept` on hand-built inputs; each layer line a row of nodes; a cross-section box refines; sweep = off is
+  Unit 53's), every mistake with its line (22 cases), the run record, mesh file and file mesh round trip, the run
+  identity changed by lines, a layer's straddle and its lines, not by max_nodes; io: a swept mesh with a partial gate
+  patch round-trips (corner patches, P6, swept counts, digest), the swept digest changes with each of 24 inputs and
+  is not the complex's; app: the vocabulary and menu (WG7 with a swept resistor); both FinFET decks build and
+  certify (8.6 s in Release; hidden, below).
+- Suites: Release 129/129 (845 s), Debug 118/118 (1,086 s). The FinFET decks' test was visible in that Debug run and
+  took `deck.build` from about 10 s to 285 s, so it is `[.benchmark]` (run by name); re-run, `deck.build` takes 15.5 s
+  in Debug and 0.7 s in Release. Debug growth this slice: about 5.5 s in `deck.build` and 7 s in `app.deck_sections`
+  (WG7's swept resistor); Unit 54 at about 55 s of UC13's 60 s. UC7 re-run in Release after the straddle merge:
+  "failed as expected", the same numbers (H1 1.49, 0.86; L2 2.28, 1.63; gate charge 1.83, 1.59).
+
 ---
 
 ## New questions the advisor raised (not yet in `ARCHITECTURE.md`)

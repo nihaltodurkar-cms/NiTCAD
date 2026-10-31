@@ -12,9 +12,10 @@ namespace {
 constexpr std::array<KeySpec, 1> device_keys{{{"temperature", "300", "lattice temperature, K"}}};
 
 // [mesh]: only a generated mesh's options with defaults; the size keys have none.
-constexpr std::array<KeySpec, 3> mesh_keys{{{"min_angle", "20.7", "generate2d: smallest triangle angle, degrees"},
+constexpr std::array<KeySpec, 4> mesh_keys{{{"min_angle", "20.7", "generate2d, extrude3d with sweep: smallest triangle angle, degrees"},
                                             {"radius_edge", "2", "generate3d, extrude3d: largest radius-edge ratio"},
-                                            {"max_nodes", "2000000", "generated meshes: node limit"}}};
+                                            {"max_nodes", "2000000", "generated meshes: node limit"},
+                                            {"sweep", "off", "extrude3d: on sweeps a 2D cross-section mesh along the axis"}}};
 
 constexpr std::array<KeySpec, 21> model_keys{{
     {"doping_mobility", "on", "doping-dependent mobility"},
@@ -220,15 +221,19 @@ std::vector<KeySpec> insertable_keys(const SectionLocation& section) {
     if (!spec) return out;
     // A mesh's options depend on its type.
     std::string type;
+    bool swept = false;  // extrude3d with sweep = on: the cross-section's 2D options (Unit 54)
     for (const auto& e : section.entries) {
         if (e.key == "type") type = e.value;
+        if (e.key == "sweep") swept = e.value == "on" || e.value == "yes" || e.value == "true";
     }
+    const bool two_d = type == "generate2d" || (type == "extrude3d" && swept);
     for (const KeySpec& k : spec->keys) {
         if (std::ranges::any_of(section.entries, [&](const auto& e) { return e.key == k.key; })) continue;
         if (section.kind == "mesh") {
             if (type != "generate2d" && type != "generate3d" && type != "extrude3d") continue;
-            if (k.key == "min_angle" && type != "generate2d") continue;
-            if (k.key == "radius_edge" && type == "generate2d") continue;
+            if (k.key == "min_angle" && !two_d) continue;
+            if (k.key == "radius_edge" && two_d) continue;
+            if (k.key == "sweep" && type != "extrude3d") continue;
         }
         out.push_back(k);
     }

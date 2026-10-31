@@ -502,7 +502,7 @@ std::expected<InterfaceReport, base::Error> check_interfaces(const SimplexMesh& 
             if (!(deviation <= tolerance)) {
                 return std::unexpected(error(ErrorCode::degenerate_mesh,
                                              "interface rule (P4a): the dual face of edge " + pair_text(a, b) +
-                                                 " is not on the interface",
+                                                 " is not on the interface" + point_text(mid),
                                              static_cast<std::size_t>(a), deviation));
             }
         }

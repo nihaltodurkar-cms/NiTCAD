@@ -504,6 +504,36 @@ TEST_CASE("signed layer: a strip with a layer straddling its interface is the te
     CHECK(again->simplices.cells == m->simplices.cells);
 }
 
+TEST_CASE("signed layer: collinear interfaces on one line share a straddle (UC6, slice 4)", "[mesh][generate][layers]") {
+    // Three regions meet at (0.5, 0.5): two below y = 0.5, side by side, and one above. The line y = 0.5
+    // is two interface chains (0 | 2 and 1 | 2), one straddle pair serving both; the interface
+    // x = 0.5 below it crosses the layer and is straddled by columns. The mesh is the lattice alone
+    // (until slice 4 the second chain's straddle was refused as overlapping the first's).
+    const double s = 1.0 / 64.0;
+    const Geometry2D g{{rect(0, 0, 0.5, 0.5, 0), rect(0.5, 0, 1, 0.5, 1), {{{0, 0.5, 0}, {0.5, 0.5, 0}, {1, 0.5, 0}, {1, 1, 0}, {0, 1, 0}}, 2}},
+                       {{"top", {0, 1, 0}, {1, 1, 0}}}};
+    MeshOptions2D o;
+    o.max_size = 0.1;
+    o.interface_resolution = s;
+    BoundaryLayer layer;
+    layer.a = {0, 0.5, 0};
+    layer.b = {1, 0.5, 0};
+    layer.along = {0, 0.25, 0.75, 1};
+    layer.lines = {-0.5, -0.25, -0.1, 0.1, 0.25, 0.5};
+    o.layers = {layer};
+    const auto m = generate_mesh(g, o);
+    INFO((m ? std::string("ok") : m.error().message));
+    REQUIRE(m.has_value());
+    const Lattice L(layer.a, layer.b, {0, 0.25, 0.5 - 0.5 * s, 0.5 + 0.5 * s, 0.75, 1},
+                    {-0.5, -0.25, -0.1, -0.5 * s, 0.5 * s, 0.1, 0.25, 0.5});
+    CHECK(m->mesh.node_count() == L.along.size() * L.lines.size());
+    CHECK(check_tensor(*m, L, true, true) == L.lines.size());
+    REQUIRE(m->certificate.has_value());
+    INFO("flat " << m->certificate->report.max_flat_deviation << " corner " << m->certificate->report.max_corner_deviation);
+    CHECK(m->certificate->report.max_flat_deviation <= 1e-9);
+    CHECK(m->certificate->report.max_corner_deviation <= 1e-12);  // the junction's faces lie on the lines
+}
+
 TEST_CASE("signed layer: a three-layer gate stack under one lattice (UC6)", "[mesh][generate][layers]") {
     // Si (y < 10), a 0.5-thick oxide, a 1.5-thick high-k layer to the top boundary at y = 12; the
     // layer's base the Si interface, its lines from 3 below it to the boundary. Both interfaces are

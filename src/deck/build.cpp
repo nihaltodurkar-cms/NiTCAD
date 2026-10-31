@@ -193,7 +193,8 @@ private:
 
     std::expected<void, base::Error> check_sections() const;
     std::expected<RegionSpec, base::Error> region(const Section& s) const;
-    std::expected<std::vector<double>, base::Error> axis(const Entry& e) const;
+    std::expected<std::vector<double>, base::Error> axis(int line, std::string_view value) const;
+    std::expected<std::vector<double>, base::Error> axis(const Entry& e) const { return axis(e.line, e.value); }
     std::expected<void, base::Error> build_mesh(device::DeviceDescription& d);
     std::expected<void, base::Error> tensor_mesh(const Section& s, device::DeviceDescription& d);
     std::expected<void, base::Error> generated_2d(const Section& s);
@@ -201,6 +202,9 @@ private:
     std::expected<void, base::Error> extruded_3d(const Section& s);
     // The meshing keys generate3d and extrude3d share; true when `e` was one of them.
     std::expected<bool, base::Error> option_3d(const Entry& e, mesh::MeshOptions3D& o) const;
+    // The swept mesh's keys (Unit 54, UD9, UD10); true when `e` was one of them.
+    std::expected<bool, base::Error> option_swept(const Entry& e, mesh::SweptOptions& o) const;
+    std::expected<mesh::BoundaryLayer, base::Error> layer(const Entry& e) const;
     std::expected<void, base::Error> file_mesh(const Section& s, device::DeviceDescription& d);
     std::expected<void, base::Error> doping(device::DeviceDescription& d) const;
     std::expected<device::Contact, base::Error> contact(const Section& s,
@@ -341,9 +345,8 @@ std::expected<RegionSpec, base::Error> Builder::region(const Section& s) const {
 
 // Pieces joined by '+': linspace(a, b, n) or a comma list of lengths. A '+' right after an
 // exponent's 'e' belongs to the number.
-std::expected<std::vector<double>, base::Error> Builder::axis(const Entry& e) const {
+std::expected<std::vector<double>, base::Error> Builder::axis(int line, std::string_view v) const {
     std::vector<std::string_view> pieces;
-    const std::string_view v = e.value;
     std::size_t start = 0;
     int depth = 0;
     for (std::size_t i = 0; i < v.size(); ++i) {
@@ -362,20 +365,20 @@ std::expected<std::vector<double>, base::Error> Builder::axis(const Entry& e) co
     };
     for (const std::string_view piece : pieces) {
         if (piece.starts_with("linspace(")) {
-            if (!piece.ends_with(")")) return std::unexpected(at(e.line, "linspace( without ')'"));
+            if (!piece.ends_with(")")) return std::unexpected(at(line, "linspace( without ')'"));
             const auto args = items(piece.substr(9, piece.size() - 10));
-            if (args.size() != 3) return std::unexpected(at(e.line, "linspace takes (first, last, count)"));
-            NITCAD_DECK_TRY(a, lift(e.line, length(args[0])));
-            NITCAD_DECK_TRY(b, lift(e.line, length(args[1])));
-            NITCAD_DECK_TRY(n, lift(e.line, integer(args[2])));
-            if (n < 2 || n > 10'000'000) return std::unexpected(at(e.line, "linspace needs a count of at least 2"));
+            if (args.size() != 3) return std::unexpected(at(line, "linspace takes (first, last, count)"));
+            NITCAD_DECK_TRY(a, lift(line, length(args[0])));
+            NITCAD_DECK_TRY(b, lift(line, length(args[1])));
+            NITCAD_DECK_TRY(n, lift(line, integer(args[2])));
+            if (n < 2 || n > 10'000'000) return std::unexpected(at(line, "linspace needs a count of at least 2"));
             for (long long k = 0; k < n; ++k) {
                 append(k == n - 1 ? b : a + (b - a) * static_cast<double>(k) / static_cast<double>(n - 1));
             }
             continue;
         }
         for (const std::string_view item : items(piece)) {
-            NITCAD_DECK_TRY(x, lift(e.line, length(item)));
+            NITCAD_DECK_TRY(x, lift(line, length(item)));
             append(x);
         }
     }
@@ -609,15 +612,115 @@ std::expected<bool, base::Error> Builder::option_3d(const Entry& e, mesh::MeshOp
     return true;
 }
 
+std::expected<bool, base::Error> Builder::option_swept(const Entry& e, mesh::SweptOptions& o) const {
+    mesh::MeshOptions2D& c = o.section;
+    if (e.key == "max_size") {
+        NITCAD_DECK_TRY(v, len(e));
+        c.max_size = v;
+    } else if (e.key == "interface_resolution") {
+        NITCAD_DECK_TRY(v, len(e));
+        c.interface_resolution = v;
+    } else if (e.key == "min_angle") {
+        NITCAD_DECK_TRY(v, num(e));
+        c.min_angle_deg = v;
+    } else if (e.key == "max_nodes") {  // the 3D nodes (UD9)
+        NITCAD_DECK_TRY(v, count(e, 1, std::numeric_limits<int>::max()));
+        o.max_nodes = static_cast<std::size_t>(v);
+    } else if (e.key == "box") {  // in the cross-section: u0 v0 u1 v1 h
+        NITCAD_DECK_TRY(b, lengths(e, e.value, 5));
+        c.boxes.push_back({{b[0], b[1], 0.0}, {b[2], b[3], 0.0}, b[4]});
+    } else if (e.key == "lines") {
+        NITCAD_DECK_TRY(v, axis(e));
+        o.lines = std::move(v);
+    } else if (e.key == "straddle") {  // <station> <width>
+        NITCAD_DECK_TRY(b, lengths(e, e.value, 2));
+        o.straddles.push_back({b[0], b[1]});
+    } else if (e.key == "layer") {
+        NITCAD_DECK_TRY(l, layer(e));
+        c.layers.push_back(std::move(l));
+    } else {
+        return false;
+    }
+    return true;
+}
+
+// layer = <u v>, <u v> along=<lengths> lines=<signed lengths> [straddle=<length>] (UD10): the
+// base's end points, then the options, each value running to the next option's name; along and
+// lines are axes (lengths, linspace pieces joined by '+'), lines signed (positive to the left of
+// the base's direction).
+std::expected<mesh::BoundaryLayer, base::Error> Builder::layer(const Entry& e) const {
+    const std::string_view v = e.value;
+    struct Option {
+        std::string_view name;
+        std::size_t name_at = 0, value_at = 0;
+    };
+    std::vector<Option> found;
+    int depth = 0;
+    const auto word = [](char ch) {
+        return (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9') || ch == '_';
+    };
+    for (std::size_t i = 0; i < v.size(); ++i) {
+        if (v[i] == '(') ++depth;
+        if (v[i] == ')') --depth;
+        if (v[i] != '=' || depth != 0) continue;
+        std::size_t k = i;
+        while (k > 0 && word(v[k - 1])) --k;
+        found.push_back({v.substr(k, i - k), k, i + 1});
+    }
+    if (found.empty()) {
+        return std::unexpected(at(e.line, "a layer is '<u v>, <u v> along=<lengths> lines=<signed lengths> [straddle=<length>]'"));
+    }
+    mesh::BoundaryLayer l;
+    NITCAD_DECK_TRY(ab, points(e, trimmed(v.substr(0, found.front().name_at)), 2));
+    if (ab.size() != 2) return std::unexpected(at(e.line, "a layer's base is two points"));
+    l.a = ab[0];
+    l.b = ab[1];
+    bool along = false, lines = false, straddle = false;
+    for (std::size_t i = 0; i < found.size(); ++i) {
+        const Option& p = found[i];
+        const std::size_t end = i + 1 < found.size() ? found[i + 1].name_at : v.size();
+        const std::string_view text = trimmed(v.substr(p.value_at, end - p.value_at));
+        bool* seen = p.name == "along" ? &along : p.name == "lines" ? &lines : p.name == "straddle" ? &straddle : nullptr;
+        if (!seen) {
+            return std::unexpected(at(e.line, "unknown layer option '" + std::string(p.name) + "=' (along=, lines=, straddle=)"));
+        }
+        if (*seen) return std::unexpected(at(e.line, "a second '" + std::string(p.name) + "=' in a layer"));
+        *seen = true;
+        if (text.empty()) return std::unexpected(at(e.line, "the layer option '" + std::string(p.name) + "=' needs a value"));
+        if (p.name == "straddle") {
+            NITCAD_DECK_TRY(sv, lift(e.line, length(text)));
+            l.straddle = sv;
+        } else {
+            NITCAD_DECK_TRY(vals, axis(e.line, text));
+            (p.name == "along" ? l.along : l.lines) = std::move(vals);
+        }
+    }
+    if (!along || !lines) return std::unexpected(at(e.line, "a layer needs along= and lines="));
+    return l;
+}
+
 // Unit 53 (DECISIONS.md FD13): a sectioned extrusion. `[mesh]` gives the axis, the stations, the
 // cells and the patch boxes; each region assigns its cells per section with `extrude`.
+//
+// Unit 54 (UD9, UD10): `sweep = on` selects the swept mesh (mesh::generate_swept), whose keys are
+// lines, straddle, layer and min_angle, with box in the cross-section's (u, v); radius_edge is the
+// Delaunay generator's and refused there, and the swept keys are refused without it.
 std::expected<void, base::Error> Builder::extruded_3d(const Section& s) {
     mesh::ExtrudedGeometry x;
     mesh::MeshOptions3D o;
+    mesh::SweptOptions sw;
     const Entry* axis_entry = nullptr;
     const Entry* stations_entry = nullptr;
+    const Entry* lines_entry = nullptr;
+    bool sweep = false;
     for (const Entry& e : s.entries) {
-        if (e.key == "type") continue;
+        if (e.key != "sweep") continue;
+        NITCAD_DECK_TRY(on, flag(e));
+        sweep = on;
+    }
+    static const std::set<std::string_view> swept_keys{"lines", "straddle", "layer", "min_angle"};
+    for (const Entry& e : s.entries) {
+        if (e.key == "type" || e.key == "sweep") continue;
         if (e.key == "axis") {
             if (e.value != "x" && e.value != "y" && e.value != "z") return std::unexpected(at(e.line, "axis is x, y or z"));
             axis_entry = &e;
@@ -641,7 +744,19 @@ std::expected<void, base::Error> Builder::extruded_3d(const Section& s) {
             NITCAD_DECK_TRY(b, lengths(e, e.value, 6));
             if (b[0] > b[3] || b[1] > b[4] || b[2] > b[5]) return std::unexpected(at(e.line, "a box needs lo <= hi on each axis"));
             x.patches.push_back({std::string(w[1]), {b[0], b[1], b[2]}, {b[3], b[4], b[5]}});
+        } else if (sweep) {
+            if (e.key == "radius_edge") {
+                return std::unexpected(at(e.line, "radius_edge is for sweep = off: a swept mesh's cross-section is meshed "
+                                                  "in 2D (min_angle)"));
+            }
+            if (e.key == "lines") {
+                if (lines_entry) return std::unexpected(at(e.line, "a second 'lines'"));
+                lines_entry = &e;
+            }
+            NITCAD_DECK_TRY(taken, option_swept(e, sw));
+            if (!taken) return std::unexpected(unknown(e, s));
         } else {
+            if (swept_keys.contains(e.key)) return std::unexpected(at(e.line, "'" + e.key + "' is for a swept mesh (sweep = on)"));
             NITCAD_DECK_TRY(taken, option_3d(e, o));
             if (!taken) return std::unexpected(unknown(e, s));
         }
@@ -649,6 +764,7 @@ std::expected<void, base::Error> Builder::extruded_3d(const Section& s) {
     if (!axis_entry) return std::unexpected(at(s.line, "an extrude3d mesh needs 'axis'"));
     if (!stations_entry) return std::unexpected(at(s.line, "an extrude3d mesh needs 'stations'"));
     if (x.cells.empty()) return std::unexpected(at(s.line, "an extrude3d mesh needs at least one 'cell'"));
+    if (sweep && !lines_entry) return std::unexpected(at(s.line, "a swept extrude3d mesh (sweep = on) needs 'lines'"));
     const std::size_t sections = x.stations.size() > 1 ? x.stations.size() - 1 : 0;
     x.regions.assign(x.cells.size(), std::vector<std::int32_t>(sections, mesh::ExtrudedGeometry::void_region));
     // region extrude = <cells> <t_lo>:<t_hi>; the range runs between two stations.
@@ -694,6 +810,12 @@ std::expected<void, base::Error> Builder::extruded_3d(const Section& s) {
                 }
             }
         }
+    }
+    if (sweep) {
+        auto m = mesh::generate_swept(x, sw);
+        if (!m) return std::unexpected(located(s.line, "[mesh] extrude3d (sweep)", std::move(m.error())));
+        generated_ = std::move(*m);
+        return {};
     }
     auto complex = mesh::extrude(x);
     if (!complex) return std::unexpected(located(s.line, "[mesh] extrude3d", std::move(complex.error())));

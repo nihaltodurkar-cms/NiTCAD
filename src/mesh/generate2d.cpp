@@ -892,6 +892,14 @@ struct Generator {
         };
         const std::vector<Point> region = L.polygon();
         std::vector<double> extra_lines, extra_along;
+        // Collinear chains (a junction on one line: three regions meeting along it) share one straddle:
+        // a centre within tol of one already placed adds nothing (Unit 54 slice 4).
+        std::vector<double> line_centres, column_centres;
+        const auto placed = [&](std::vector<double>& centres, double x) {
+            if (std::ranges::any_of(centres, [&](double y) { return std::abs(x - y) <= tol; })) return true;
+            centres.push_back(x);
+            return false;
+        };
         for (Chain& c : chains) {
             if (partners(c)) continue;
             const auto [ts, os] = L.coords(c.start);
@@ -908,8 +916,10 @@ struct Generator {
                     if (!free_of(S.lines, d - 0.5 * si, d + 0.5 * si)) {
                         return bad("a line inside the straddle of an interface parallel to the base, near " + where(c.start));
                     }
-                    extra_lines.push_back(d - 0.5 * si);
-                    extra_lines.push_back(d + 0.5 * si);
+                    if (!placed(line_centres, d)) {
+                        extra_lines.push_back(d - 0.5 * si);
+                        extra_lines.push_back(d + 0.5 * si);
+                    }
                     const double x0 = std::abs(t0 - ts), x1 = std::abs(t1 - ts);
                     c.covered.push_back({std::min(x0, x1), std::max(x0, x1)});
                     covered = true;
@@ -928,9 +938,11 @@ struct Generator {
                     if (!free_of(S.along, tc - 0.5 * si, tc + 0.5 * si)) {
                         return bad("a column inside the straddle of an interface across the layer, near " + where(c.start));
                     }
-                    extra_along.push_back(tc - 0.5 * si);
-                    extra_along.push_back(tc + 0.5 * si);
-                    S.column_straddles.push_back({tc - 0.5 * si, tc + 0.5 * si});
+                    if (!placed(column_centres, tc)) {
+                        extra_along.push_back(tc - 0.5 * si);
+                        extra_along.push_back(tc + 0.5 * si);
+                        S.column_straddles.push_back({tc - 0.5 * si, tc + 0.5 * si});
+                    }
                     const double x0 = std::abs(o0 - os), x1 = std::abs(o1 - os);
                     c.covered.push_back({std::min(x0, x1), std::max(x0, x1)});
                     covered = true;

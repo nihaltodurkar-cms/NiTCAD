@@ -208,6 +208,37 @@ patch = x_max
 [equilibrium]
 )";
 
+// The same resistor as a swept mesh (Unit 54, UD10): the cross-section meshed in 2D, five lines.
+inline const std::string extrude3d_swept = R"(# A swept 3D resistor
+[mesh]
+type = extrude3d
+axis = x
+stations = 0, 1um
+cell c = 0 0, 1um 0, 1um 1um, 0 1um
+patch x_min = -1um -1um -1um 0 2um 2um
+patch x_max = 1um -1um -1um 2um 2um 2um
+max_size = 0.5um
+sweep = on
+lines = linspace(0, 1um, 5)
+
+[region silicon]
+material = silicon
+extrude = c 0:1um
+
+[doping]
+profile = donor constant 1e16
+
+[contact left]
+kind = ohmic
+patch = x_min
+
+[contact right]
+kind = ohmic
+patch = x_max
+
+[equilibrium]
+)";
+
 inline std::string transient_diode() {
     return diode_device + "\n[transient]\ncontact anode = step(0, 0.3, 1e-9)\nt_end = 4e-9\n";
 }

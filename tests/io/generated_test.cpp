@@ -4,6 +4,7 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <utility>
 #include <vector>
 
 #include "NiTCAD/io/files.hpp"
@@ -180,6 +181,126 @@ TEST_CASE("io: the generation digest names the complex and every option (Unit 53
     CHECK(with([](mesh::PolyhedralGeometry&, mesh::MeshOptions3D& p) { p.boxes = {{{0, 0, 0}, {1, 1, 1}, 0.5}}; }) != d);
     CHECK(with([](mesh::PolyhedralGeometry&, mesh::MeshOptions3D& p) { p.radius_edge = 2.5; }) != d);
     CHECK(with([](mesh::PolyhedralGeometry&, mesh::MeshOptions3D& p) { p.max_nodes = 1000; }) != d);
+}
+
+// Unit 54 (UD11, UC10): the gated fin of the swept-mesh tests (a slab, a fin and an overlayer whose region
+// changes under the gate, x in [1, 2]), its gate patch ending at the straddled stations.
+namespace {
+
+std::pair<mesh::ExtrudedGeometry, mesh::SweptOptions> swept_gated_fin() {
+    const auto P = [](double u, double v) { return mesh::Point{u, v, 0.0}; };
+    mesh::ExtrudedGeometry x;
+    x.axis = 0;
+    x.stations = {0.0, 1.0, 2.0, 3.0};
+    x.cells = {{"slab", {P(0, 0), P(1, 0), P(1, 1), P(1, 2), P(1, 3), P(0, 3)}},
+               {"fin", {P(1, 1), P(2, 1), P(2, 2), P(1, 2)}},
+               {"over", {P(1, 0), P(2.5, 0), P(2.5, 3), P(1, 3), P(1, 2), P(2, 2), P(2, 1), P(1, 1)}}};
+    x.regions = {{0, 0, 0}, {1, 1, 1}, {2, 3, 2}};
+    x.patches = {{"gate", {1.0, 1.0, 0.0}, {2.0, 2.5, 3.0}}};
+    mesh::SweptOptions o;
+    o.section.max_size = 0.3;
+    o.section.interface_resolution = 0.04;
+    o.lines = {0.0, 0.3, 0.6, 0.85, 1.5, 2.15, 2.4, 2.7, 3.0};
+    o.straddles = {{1.0, 0.1}, {2.0, 0.1}};
+    return {x, o};
+}
+
+}  // namespace
+
+TEST_CASE("io: a swept mesh round-trips with its corner patches, P6 report, swept counts and digest (Unit 54, UD11)",
+          "[io][generate]") {
+    const fs::path dir = fs::temp_directory_path() / "nitcad_io_generated_swept_test";
+    fs::create_directories(dir);
+    const auto [x, o] = swept_gated_fin();
+    auto generated = mesh::generate_swept(x, o);
+    if (!generated) FAIL(generated.error().message);
+    const mesh::GeneratedMesh& m = *generated;
+    REQUIRE_FALSE(m.simplices.facet_corner_patch.empty());
+    REQUIRE(m.certificate.has_value());
+    REQUIRE(m.certificate->patches.has_value());
+    CHECK(m.report.axis_lines == o.lines.size() + 2 * o.straddles.size());
+    CHECK(m.report.prisms * 3 == m.report.tetrahedra);
+
+    REQUIRE(io::save_generated_mesh(dir / "s.ntc", m).has_value());
+    const auto back = io::load_generated_mesh(dir / "s.ntc");
+    if (!back) FAIL(back.error().message);
+    CHECK(mesh::graph_digest(back->mesh) == mesh::graph_digest(m.mesh));
+    CHECK(back->simplices.cells == m.simplices.cells);
+    CHECK(back->simplices.facet_corner_patch == m.simplices.facet_corner_patch);
+    CHECK(back->node_region == m.node_region);
+    REQUIRE(back->certificate.has_value());
+    REQUIRE(back->certificate->patches.has_value());
+    CHECK(back->certificate->patches->cross_pieces == m.certificate->patches->cross_pieces);
+    CHECK(mesh::certifies(*back->certificate, back->mesh, back->node_region));
+    CHECK(back->report.prisms == m.report.prisms);
+    CHECK(back->report.axis_lines == m.report.axis_lines);
+    CHECK(back->report.layers == m.report.layers);
+    CHECK(back->report.corner_blocks == m.report.corner_blocks);
+    CHECK(back->report.tetrahedra == m.report.tetrahedra);
+    CHECK(back->generation_digest == mesh::generation_digest(x, o));
+    // Another generator's file carries no swept counts (the record is absent, its bytes unchanged).
+    REQUIRE(io::save_generated_mesh(dir / "t.ntc", mesh::GeneratedMesh{m.mesh, m.simplices, m.node_region, m.certificate,
+                                                                         mesh::MeshReport{.nodes = m.report.nodes}, 0})
+                .has_value());
+    const auto plain = io::load_generated_mesh(dir / "t.ntc");
+    if (!plain) FAIL(plain.error().message);
+    CHECK(plain->report.prisms == 0);
+    CHECK(fs::file_size(dir / "t.ntc") < fs::file_size(dir / "s.ntc"));
+    fs::remove_all(dir);
+}
+
+TEST_CASE("io: the swept generation digest names the extrusion and every swept option (Unit 54, UD11)", "[io][generate]") {
+    const auto [x, o] = swept_gated_fin();
+    const std::uint64_t d = mesh::generation_digest(x, o);
+    CHECK(d == mesh::generation_digest(x, o));
+    const auto with = [&, &x = x, &o = o](auto change) {
+        mesh::ExtrudedGeometry h = x;
+        mesh::SweptOptions p = o;
+        change(h, p);
+        return mesh::generation_digest(h, p);
+    };
+    using G = mesh::ExtrudedGeometry;
+    using S = mesh::SweptOptions;
+    CHECK(with([](G& h, S&) { h.axis = 1; }) != d);
+    CHECK(with([](G& h, S&) { h.stations[1] = 1.01; }) != d);
+    CHECK(with([](G& h, S&) { h.cells[1].name = "core"; }) != d);
+    CHECK(with([](G& h, S&) { h.cells[1].polygon[0][0] = 1.01; }) != d);
+    CHECK(with([](G& h, S&) { h.regions[2][1] = 2; }) != d);
+    CHECK(with([](G& h, S&) { h.patches[0].hi[0] = 2.1; }) != d);
+    CHECK(with([](G& h, S&) { h.default_patch = "side"; }) != d);
+    CHECK(with([](G&, S& p) { p.lines[1] = 0.31; }) != d);
+    CHECK(with([](G&, S& p) { p.straddles[0].width = 0.12; }) != d);
+    CHECK(with([](G&, S& p) { p.straddles[0].station = 1.1; }) != d);
+    CHECK(with([](G&, S& p) { p.max_nodes = 1000; }) != d);
+    CHECK(with([](G&, S& p) { p.section.max_size = 0.25; }) != d);
+    CHECK(with([](G&, S& p) { p.section.region_max_size = {0.3}; }) != d);
+    CHECK(with([](G&, S& p) { p.section.interface_resolution = 0.05; }) != d);
+    CHECK(with([](G&, S& p) { p.section.min_angle_deg = 25; }) != d);
+    CHECK(with([](G&, S& p) { p.section.max_nodes = 1000; }) != d);
+    CHECK(with([](G&, S& p) { p.section.boxes = {{{0, 0, 0}, {1, 1, 0}, 0.1}}; }) != d);
+    mesh::BoundaryLayer l;
+    l.a = {1, 1, 0};
+    l.b = {2, 1, 0};
+    l.along = {0, 1};
+    l.lines = {-0.1, 0.1};
+    const std::uint64_t layered = with([&](G&, S& p) { p.section.layers = {l}; });
+    CHECK(layered != d);
+    const auto layer_with = [&](auto change) {
+        mesh::BoundaryLayer k = l;
+        change(k);
+        return with([&](G&, S& p) { p.section.layers = {k}; });
+    };
+    using L = mesh::BoundaryLayer;
+    CHECK(layer_with([](L& k) { k.a[0] = 1.01; }) != layered);
+    CHECK(layer_with([](L& k) { k.b[1] = 1.01; }) != layered);
+    CHECK(layer_with([](L& k) { k.along = {0, 0.5, 1}; }) != layered);
+    CHECK(layer_with([](L& k) { k.lines = {-0.1, 0.12}; }) != layered);
+    CHECK(layer_with([](L& k) { k.offsets = {0.1}; }) != layered);
+    CHECK(layer_with([](L& k) { k.straddle = 0.02; }) != layered);
+    // The swept digest is not the complex's (FD14) for the same extrusion.
+    const auto complex = mesh::extrude(x);
+    REQUIRE(complex.has_value());
+    CHECK(mesh::generation_digest(*complex, mesh::MeshOptions3D{}) != d);
 }
 
 TEST_CASE("io: a generated 3D mesh round-trips with its patches, regions, certificate and 3D report",

@@ -152,6 +152,11 @@ struct MeshReport {
     std::size_t slivers = 0;            // tetrahedra with a dihedral angle below 5 degrees
     std::size_t flat_dropped = 0;       // tetrahedra dropped with all four vertices on one face
     std::size_t band_facet_points = 0;  // subfacet circumcentres inserted within an interface band (judged by P4)
+    // Swept meshes only (Unit 54, UD10); 0 for the other generators.
+    std::size_t prisms = 0;         // cross-section triangles times axis intervals, three tetrahedra each
+    std::size_t axis_lines = 0;     // the lines along the axis, straddles included
+    std::size_t layers = 0;         // the cross-section's structured layers
+    std::size_t corner_blocks = 0;  // where two layers' bases meet (UD6)
 };
 
 struct GeneratedMesh {

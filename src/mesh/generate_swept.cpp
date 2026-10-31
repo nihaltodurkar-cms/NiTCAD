@@ -443,6 +443,21 @@ std::expected<GeneratedMesh, base::Error> generate_swept(const ExtrudedGeometry&
     report.interface_nodes = m2->report.interface_nodes * nl;
     report.exempt_triangles = m2->report.exempt_triangles;
     report.min_angle_deg = m2->report.min_angle_deg;
+    report.prisms = report.tetrahedra / 3;
+    report.axis_lines = nl;
+    report.layers = options.section.layers.size();
+    // A corner block per end point two signed layers share (the 2D generator has accepted them).
+    const auto& layers = options.section.layers;
+    for (std::size_t i = 0; i < layers.size(); ++i) {
+        for (std::size_t j = i + 1; j < layers.size(); ++j) {
+            if (layers[i].lines.empty() || layers[j].lines.empty()) continue;
+            for (const Point& p : {layers[i].a, layers[i].b}) {
+                for (const Point& q : {layers[j].a, layers[j].b}) {
+                    if (p[0] == q[0] && p[1] == q[1]) ++report.corner_blocks;
+                }
+            }
+        }
+    }
 
     std::optional<InterfaceCertificate> certificate;
     // Certified with interfaces, and wherever corners carry patches (FD10: such a mesh is certified
