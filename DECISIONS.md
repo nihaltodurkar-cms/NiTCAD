@@ -5435,6 +5435,10 @@ wrapped-gate case stays reported (SQ7). A later unit may take it up; the cause i
 - **Suites** (2026-10-31, `/W4 /WX`, 6 jobs, before the FC14 cuts): Release 127/127 (804 s), Debug 116/116
   (1,071 s). After the cuts, the changed mesh tests pass in Release (18 cases) and Debug.
 
+**Owner ruling on FC9 and FC14 (2026-10-31), "skip FC9 and FC14":** both accepted as limitations. FC9 stays
+`[!shouldfail]` with its measurement and threshold unchanged; FC14's Debug growth stays at about 146 s, no case moved
+to `[.benchmark]`. Unit 53 is ready for review with FC8, FC9 and FC14 unmet and accepted.
+
 ---
 
 ## New questions the advisor raised (not yet in `ARCHITECTURE.md`)
