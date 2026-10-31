@@ -88,7 +88,7 @@ struct Geometry2D {
 //   its offset d, and no given line may lie in that closed interval or outside it on neither side;
 // - every interface across the lattice (perpendicular to the base) gets columns at t +- s_i / 2,
 //   strictly inside (0, length), with no given column in that interval.
-// Interfaces meeting the lattice at other angles are refused (corner blocks: slice 3). No mirrored
+// Interfaces meeting the lattice at other angles are refused (but see corners, below). No mirrored
 // pairs are placed on an interface's covered part; its uncovered parts get pairs graded from each
 // end (1.5 s, 3 s from a feature, 1.5 s from a layer's edge) and must be long enough for them. A
 // boundary parallel to the base inside the lattice must be one of the lines and a boundary across
@@ -96,6 +96,20 @@ struct Geometry2D {
 // projected onto it); a domain vertex on such a line lies on a column, a patch end inside the
 // lattice on a line (it becomes a column, outside every straddle); the lattice inside the domain.
 // The separation rules (4 s) apply to the interfaces' uncovered parts only.
+//
+// Corners (Unit 54, DECISIONS.md UD6, slice 3): two layers with signed lines whose bases share an
+// end point c (exactly) form a corner block. Their bases' angle at c must lie in [60, 120] degrees,
+// and they must span the same offsets (first and last lines, signs matched across the corner's
+// bisector). Each layer's region is cut at the bisector through c and reaches past its base end to
+// it; there its columns are the other layer's lines (with straddles) where they cross the bisector,
+// t = t_c + kappa o (kappa = +-(1 + cos)/sin of the angle; +-1 at a right angle, exactly for axis-
+// aligned bases), and its nodes on the other layer's side are dropped (those on the bisector kept
+// by the lower-indexed layer). At a right angle the two lattices and the corner square are one
+// tensor lattice; at other angles each keeps mirrored columns on its own side, and the bends near
+// the bisector are judged by P4b. Refused: a third layer at one end; the given columns between
+// the corner's innermost column and the end (the end's own column is dropped); two corners of one
+// layer overlapping; an interface across the layer, or a patch end, inside a corner. Triangles of
+// these layers' nodes alone are exempt from refinement only where their centroid lies in a lattice.
 struct BoundaryLayer {
     Point a;
     Point b;

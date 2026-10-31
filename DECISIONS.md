@@ -5604,6 +5604,61 @@ UC5 in `tests/solve/complex_convergence_test.cpp`):
   short, a domain vertex between columns, an oblique interface, a patch end between lines.
 - Suites: Release 129/129, Debug 118/118. Debug growth: `mesh.generate2d_layers` 0.22 s (UC13 budget 60 s; 40 s used by slice 1).
 
+**Slice 3 (2026-10-31): corner blocks, right-angle and oblique** (`src/mesh/generate2d.cpp`: the signed layers are
+prepared in four passes, `parse_signed`, `link_corners`, `straddle_signed`, `finish_signed`; `Layer` gains a region
+(`tmin`, `tmax`, `cuts`, `polygon`); the header documents the corner rules; 3 cases in
+`tests/mesh/generate2d_layers_test.cpp`; UC7 in `tests/solve/complex_convergence_test.cpp`):
+- **Changed from UD6 as written, for review (the oblique block).** UD6 put a parallelogram of crossing lines at an
+  oblique corner. Its pairs across each interface are offset along it by s tan(angle - 90 degrees) as far from the
+  corner as the other layer's lines reach (2-3 nm), far outside P4's corner zone (2 s from a piece's end), so P4a
+  would refuse every such mesh. Built instead, one rule for every angle in [60, 120]: a **mitred corner**. Each
+  layer's region is cut at the corner's bisector and reaches past its base end up to it; there its columns are the
+  other layer's lines (with their straddles) where they cross the bisector, t = t_c + kappa o, kappa =
+  +-(1 + cos)/sin of the angle; each layer keeps its nodes on its own side (the lower-indexed layer those on the
+  bisector). Its columns stay perpendicular to its base, so its pairs are mirrored right up to the bisector, and only
+  the bends near it are judged by P4b. At a right angle kappa is +-1 (exactly, for axis-aligned bases) and the two
+  lattices and the corner square are UD6's single tensor lattice, as UD6 prescribed.
+- **Added, for review:**
+  (a) The two layers at a corner must span the same offsets (equal first and last lines, signs matched across the
+  bisector), so the cut regions close on it with no gap or overlap.
+  (b) A layer's given columns must stop before the corner (refused strictly between its innermost corner column and
+  the base end); the end's own column, which `along` must still contain, is dropped.
+  (c) Refused: three layers at one end, the two corners of one layer overlapping, an interface across the layer or a
+  patch end inside a corner.
+  (d) Triangles of signed layers' nodes alone are exempt from refinement only where their centroid lies in a lattice
+  (U14 exempts all of them). A gap enclosed by lattices, as the fin's core between its three layers, is otherwise
+  never refined. U14's layers (`offsets`) keep U14's rule (UC1).
+  (e) A signed layer's base is on its edges' line within 1e-12 of its length (it was exact): a base end inside an
+  oblique edge is a rounded point.
+  (f) Layers must not overlap or touch, tested on their regions (separating axes; it was a vertex test that missed two
+  crossing lattices); a corner's two layers touch along its bisector.
+  (g) The signed layers' nodes now follow every U14 layer's (they are prepared after them).
+- **Measured (UC6):** the rectangular fin (top and both sides, two right-angle corners, three interfaces, different
+  lines on top and sides): every node of the frame at its formula bit for bit (a corner node at its owning layer's),
+  no other node inside the frame, 348 top-band and 179 side-band nodes equal to the tensor box method within 1e-12
+  (rectangle diagonals zero), P4 flat 2.0e-3 of the tolerance, corner 1.8e-15. The tapered fin (5 degrees, substrate,
+  floor and wrap of uniform thickness, five layers, four 95-degree corners at the top and the foot, no pair left):
+  flat 6.6e-3, corner 2.7e-15 with one set of lines, and 2.7e-15 too with other lines on the sides (the straddles about
+  each bend are the same on both layers).
+- **UC7 fails its H1 threshold (for an owner ruling).** FC8's flat-gate cross-section, layers on the fin's top and
+  sides (from y = 14 nm; 93.6-degree corners; 2 nm into the silicon to 4 nm out), lines and columns divided by k,
+  against the layered mesh at k = 16 (319,605 nodes, 199 s): H1 orders 1.49, **0.86**; L2 2.28, 1.63; gate charge
+  1.83, 1.59 (Unit 53's unlayered 3D FC8: H1 0.43, -0.04). The corner deviation is 3.4e-4 nm at every level (the wrap
+  is 0.998 nm thick on the sides, 1 nm on top, so the bends sit just off the bisector; well within s). By zone, the H1
+  error squared converges at order 1.10 in the corner blocks, 0.99 in the rest of the lattices and 1.01 at the
+  (unlayered) fin feet; the miss is the HfO2's outer bends at (3.375, 10) and (16.625, 10) nm, re-entrant corners
+  with a permittivity contrast (22 against 3.9) that no layer covers, at order 0.66 (and the region beyond them).
+  The case is `[!shouldfail]`, its thresholds unchanged.
+- Refusals (UC2 part, one test): the spans differing, a given column inside a corner at either end, three layers at
+  one end, a layer's two corners overlapping, a 135-degree corner, an interface across a layer inside an oblique
+  corner, a patch end inside a corner.
+- **Owner ruling (2026-10-31): "choose recommended":** the mitred corner accepted in place of UD6's parallelogram;
+  additions (a)-(g) accepted as written; UC7's H1 miss accepted as a limitation (the unlayered HfO2 bends), the case
+  staying `[!shouldfail]` with its thresholds unchanged.
+- Suites: Release 129/129, Debug 118/118 (the Debug run found a test polygon missing a shared vertex in one new
+  refusal case; fixed, and the mesh suites re-run 17/17 in both builds). UC7 re-run: "failed as expected", the same
+  numbers. Debug growth: `mesh.generate2d_layers` 0.22 s to 2.5 s (UC13 budget 60 s; about 42 s used).
+
 ---
 
 ## New questions the advisor raised (not yet in `ARCHITECTURE.md`)

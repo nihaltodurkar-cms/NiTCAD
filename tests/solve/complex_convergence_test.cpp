@@ -188,7 +188,7 @@ struct Reference {
     }
 };
 
-Reference build_2d(Gate kind, double h, double s) {
+Reference build_2d(Gate kind, double h, double s, std::vector<mesh::BoundaryLayer> layers = {}) {
     const Section sec = section(kind);
     mesh::Geometry2D g;
     g.polygons = {{sec.silicon, 0}, {sec.sti_left, 1}, {sec.sti_right, 1}, {sec.interfacial, 2}, {sec.hfo2, 3}};
@@ -200,6 +200,7 @@ Reference build_2d(Gate kind, double h, double s) {
     mesh::MeshOptions2D o;
     o.max_size = h;
     o.interface_resolution = s;
+    o.layers = std::move(layers);
     const auto t0 = std::chrono::steady_clock::now();
     auto gm = mesh::generate_mesh(g, o);
     INFO((gm.has_value() ? std::string() : gm.error().message));
@@ -216,8 +217,9 @@ Reference build_2d(Gate kind, double h, double s) {
         make_device(kind, *out.mesh, out.mesh->mesh.find_boundary("body")->nodes, sorted_unique(std::move(gate)));
     out.solution = solve_gated(d, 1.0);
     const double secs = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
-    std::printf("2D h %.4g nm, s %.4g nm: %zu nodes, gate charge %.6e C/cm, %.1f s\n", h / nm, s / nm,
-                out.mesh->mesh.node_count(), out.solution.gate_charge, secs);
+    std::printf("2D h %.4g nm, s %.4g nm%s: %zu nodes, gate charge %.6e C/cm, %.1f s\n", h / nm, s / nm,
+                o.layers.empty() ? "" : " with layers", out.mesh->mesh.node_count(), out.solution.gate_charge, secs);
+    std::fflush(stdout);
     // The bucket grid: cells 4 h, each triangle in every bucket its bounding box meets.
     out.cell = 4.0 * h;
     out.nx = static_cast<std::size_t>(std::ceil(20 * nm / out.cell)) + 1;
@@ -318,7 +320,134 @@ std::array<double, 3> orders(const std::vector<std::array<double, 3>>& err, std:
     return o;
 }
 
+// UC7's layers on the flat-gate fin at level k (DECISIONS.md Unit 54): the fin's top (7, 20) to
+// (13, 20) and its sides from y = 14 to the top corners (93.6 degrees, corner blocks, UD6), lines
+// from 2 nm into the silicon to 4 nm out (through the 1 nm interfacial oxide, the 2 nm HfO2 and
+// into the fill). Lines are uniform between the interfaces' straddles (the generator's, at
+// d +- s / 2), 0.25 nm apart in the silicon and the oxide and 0.5 nm beyond, divided by k; the
+// given columns 0.5 nm apart, divided by k, stopping 2 nm from each corner (the corners' own
+// columns are the other layer's lines there).
+std::vector<mesh::BoundaryLayer> fin_layers(int k, double s) {
+    const auto P = [](double x, double y) { return mesh::Point{x * nm, y * nm, 0.0}; };
+    // Lines with interfaces at offsets d1 < d2 [cm]: lo, the gaps between the straddles filled.
+    const auto lines = [&](double d1, double d2) {
+        const std::array<std::array<double, 3>, 4> gaps{{{-2 * nm, -0.5 * s, 0.25 * nm},
+                                                         {0.5 * s, d1 - 0.5 * s, 0.25 * nm},
+                                                         {d1 + 0.5 * s, d2 - 0.5 * s, 0.5 * nm},
+                                                         {d2 + 0.5 * s, 4 * nm, 0.5 * nm}}};
+        std::vector<double> v;
+        for (std::size_t g = 0; g < gaps.size(); ++g) {
+            const auto [x0, x1, step] = gaps[g];
+            const int n = std::max(2, static_cast<int>(std::ceil((x1 - x0) / (step / k))));
+            for (int i = 0; i <= n; ++i) {
+                if ((i == 0 && g != 0) || (i == n && g + 1 != gaps.size())) continue;  // the straddles are the generator's
+                v.push_back(i == n ? x1 : x0 + (x1 - x0) * i / n);
+            }
+        }
+        return v;
+    };
+    const auto spaced = [&](double t0, double t1) {  // columns from t0 to t1, 0.5 nm / k apart
+        const int n = static_cast<int>(std::lround((t1 - t0) / (0.5 * nm / k)));
+        std::vector<double> v;
+        for (int i = 0; i <= n; ++i) v.push_back(i == n ? t1 : t0 + (t1 - t0) * i / n);
+        return v;
+    };
+    // The sides' interfaces at their normal offsets (0.998 and 2.994 nm: the wrap is 1 and 2 nm
+    // wide horizontally).
+    const mesh::Point a_l = P(6.625, 14), c_l = P(7, 20), c_r = P(13, 20), a_r = P(13.375, 14);
+    const double side_len = std::hypot(c_l[0] - a_l[0], c_l[1] - a_l[1]);
+    const double ux = (c_l[0] - a_l[0]) / side_len, uy = (c_l[1] - a_l[1]) / side_len;
+    const auto side_offset = [&](const mesh::Point& p) { return (p[0] - a_l[0]) * -uy + (p[1] - a_l[1]) * ux; };
+    const std::vector<double> side = lines(side_offset(P(6.0625, 21)), side_offset(P(4.1875, 23)));
+    const std::vector<double> top_lines = lines(1 * nm, 3 * nm);
+    std::vector<double> top_along{0.0};
+    for (const double t : spaced(2 * nm, 4 * nm)) top_along.push_back(t);
+    top_along.push_back(6 * nm);
+    std::vector<double> left_along = spaced(0.0, 4 * nm);
+    left_along.push_back(side_len);
+    std::vector<double> right_along{0.0};
+    for (const double t : spaced(side_len - 4 * nm, side_len)) right_along.push_back(t);
+    const auto layer = [](mesh::Point a, mesh::Point b, std::vector<double> along, std::vector<double> l) {
+        mesh::BoundaryLayer x;
+        x.a = a;
+        x.b = b;
+        x.along = std::move(along);
+        x.lines = std::move(l);
+        return x;
+    };
+    return {layer(c_l, c_r, top_along, top_lines), layer(a_l, c_l, left_along, side), layer(c_r, a_r, right_along, side)};
+}
+
 }  // namespace
+
+// UC7 (DECISIONS.md Unit 54): FC8's flat-gate cross-section in 2D with layers on the fin's top and
+// sides and corner blocks at its top corners: discrete H1 order of the potential >= 0.9, relative
+// L2 >= 1.5, gate charge >= 0.9 (Unit 16's thresholds) at (h, s, lines / k) for k = 1, 2, 4
+// against the layered mesh at k = 16 (4x finer). Reported beside Unit 53's FC8 measurement (the
+// unlayered 3D ladder: H1 0.43, -0.04). Hidden: run explicitly in Release.
+//
+// Measured (2026-10-31): H1 1.49, 0.86; L2 2.28, 1.63; gate charge 1.83, 1.59. The H1 order misses
+// 0.9 on the second step. By zone (the H1 error squared, reported below), the layered parts converge
+// at order 1.0-1.1 (the corner blocks 1.10, the rest of the lattices 0.99) and the unlayered fin
+// feet at 1.01; the miss is the HfO2's outer bends at (3.375, 10) and (16.625, 10), re-entrant
+// corners with a permittivity contrast (22 against 3.9) no layer covers, at order 0.66, and the
+// region beyond them. Owner ruling 2026-10-31 ("choose recommended"): an accepted limitation, [!shouldfail]
+// with its thresholds unchanged.
+TEST_CASE("layers convergence: the flat-gate fin's cross-section with corner blocks (UC7)",
+          "[.layers_convergence][!shouldfail]") {
+    std::vector<Reference> levels;
+    for (const int k : {1, 2, 4}) levels.push_back(build_2d(Gate::flat, h0 / k, s0 / k, fin_layers(k, s0 / k)));
+    const Reference ref = build_2d(Gate::flat, h0 / 16, s0 / 16, fin_layers(16, s0 / 16));
+    std::vector<std::array<double, 3>> err;
+    // The H1 error squared by zone: the top corners' blocks, the rest of the lattices, the HfO2's
+    // outer bends, the fin's feet, the sides below the lattices, the rest.
+    constexpr std::array<const char*, 6> names{"corner blocks", "lattices", "HfO2 bends", "feet", "sides", "rest"};
+    std::vector<std::array<double, 6>> zones;
+    for (std::size_t i = 0; i < levels.size(); ++i) {
+        const int k = 1 << i;
+        const Reference& m = levels[i];
+        REQUIRE(m.mesh->certificate.has_value());
+        const auto& r = m.mesh->certificate->report;
+        err.push_back(errors(m.mesh->mesh, m.solution, ref, 1.0));
+        const auto& mm = m.mesh->mesh;
+        std::vector<double> e(mm.node_count());
+        for (std::size_t q = 0; q < e.size(); ++q) e[q] = m.solution.psi[q] - ref.at(mm.points()[q][0], mm.points()[q][1]);
+        std::array<double, 6> zone{};
+        for (const mesh::Edge& ed : mm.edges()) {
+            const auto& p = mm.points()[static_cast<std::size_t>(ed.first)];
+            const auto& q = mm.points()[static_cast<std::size_t>(ed.second)];
+            const double x = 0.5 * (p[0] + q[0]) / nm, y = 0.5 * (p[1] + q[1]) / nm;
+            const double de = e[static_cast<std::size_t>(ed.second)] - e[static_cast<std::size_t>(ed.first)];
+            std::size_t z = 5;
+            if (y > 19 && (std::abs(x - 7) < 2.5 || std::abs(x - 13) < 2.5)) {
+                z = 0;
+            } else if (y > 13) {
+                z = 1;
+            } else if (std::abs(y - 10) < 2 && (std::abs(x - 3.375) < 2 || std::abs(x - 16.625) < 2)) {
+                z = 2;
+            } else if (y > 6 && y < 10 && (std::abs(x - 6) < 2 || std::abs(x - 14) < 2)) {
+                z = 3;
+            } else if (y > 8) {
+                z = 4;
+            }
+            zone[z] += ed.coupling_area * de * de / ed.length;
+        }
+        zones.push_back(zone);
+        std::printf("UC7 k %d: %zu nodes, P4 flat %.3e, corner %.3e nm; H1 %.4e, L2 %.4e, gate charge error %.4e\n", k,
+                    m.mesh->mesh.node_count(), r.max_flat_deviation, r.max_corner_deviation / nm, err.back()[0],
+                    err.back()[1], err.back()[2]);
+        std::fflush(stdout);
+    }
+    for (std::size_t k = 1; k < err.size(); ++k) {
+        std::printf("UC7 H1 orders by zone %zu:", k);
+        for (std::size_t z = 0; z < names.size(); ++z) std::printf(" %s %.2f", names[z], 0.5 * std::log2(zones[k - 1][z] / zones[k][z]));
+        std::printf("\n");
+        const auto o = orders(err, k, "UC7");
+        CHECK(o[0] >= 0.9);
+        CHECK(o[1] >= 1.5);
+        CHECK(o[2] >= 0.9);
+    }
+}
 
 TEST_CASE("complex convergence: a gated tapered fin uniform along its axis against its 2D cross-section (FC8)",
           "[.complex_convergence][!shouldfail]") {

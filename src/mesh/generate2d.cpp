@@ -139,6 +139,14 @@ struct Chain {
     std::vector<std::array<double, 2>> covered;  // parts a layer with signed lines covers (UD5), from start
 };
 
+// A cut of a layer's region at a corner (UD6): the corner's bisector through c; the layer's side
+// is side(p) >= 0, m the unit normal of the bisector toward the layer's base.
+struct Cut {
+    Point c;
+    Point m;
+    [[nodiscard]] double side(const Point& p) const { return (p[0] - c[0]) * m[0] + (p[1] - c[1]) * m[1]; }
+};
+
 // A structured boundary layer, prepared (U14).
 struct Layer {
     Point a;
@@ -147,6 +155,9 @@ struct Layer {
     double len = 0.0;
     double lo = 0.0;   // the smallest offset: 0 for a boundary layer, the first line for signed lines
     double top = 0.0;  // the largest offset
+    double tmin = 0.0;  // the region along the segment: [0, len], reaching past an end with a corner (UD6)
+    double tmax = 0.0;
+    std::vector<Cut> cuts;  // at its corners (UD6): the region is the rectangle on its side of each
     std::vector<double> along;
     std::vector<double> offsets;
     std::int32_t region = 0;
@@ -155,32 +166,90 @@ struct Layer {
     [[nodiscard]] Point corner(double t, double off) const {
         return {a[0] + t * u[0] + off * n[0], a[1] + t * u[1] + off * n[1], 0.0};
     }
-    // Whether p lies in the layer's rectangle, widened by `slack` on every side.
+    [[nodiscard]] std::array<double, 2> coords(const Point& p) const {
+        const double dx = p[0] - a[0], dy = p[1] - a[1];
+        return {dx * u[0] + dy * u[1], dx * n[0] + dy * n[1]};
+    }
+    // Whether p lies in the layer's region, widened by `slack` on every side.
     [[nodiscard]] bool contains(const Point& p, double slack) const {
         const double t = (p[0] - a[0]) * u[0] + (p[1] - a[1]) * u[1];
         const double off = (p[0] - a[0]) * n[0] + (p[1] - a[1]) * n[1];
-        return t >= -slack && t <= len + slack && off >= lo - slack && off <= top + slack;
+        return t >= tmin - slack && t <= tmax + slack && off >= lo - slack && off <= top + slack &&
+               std::ranges::all_of(cuts, [&](const Cut& c) { return c.side(p) >= -slack; });
     }
     [[nodiscard]] std::array<Point, 4> box() const {
         return {corner(0, lo), corner(len, lo), corner(len, top), corner(0, top)};
     }
+    // The region, a convex polygon counterclockwise in (t, o): the rectangle clipped by the cuts.
+    [[nodiscard]] std::vector<Point> polygon() const {
+        std::vector<Point> v{corner(tmin, lo), corner(tmax, lo), corner(tmax, top), corner(tmin, top)};
+        for (const Cut& c : cuts) {
+            std::vector<Point> out;
+            for (std::size_t i = 0; i < v.size(); ++i) {
+                const Point& p = v[i];
+                const Point& q = v[(i + 1) % v.size()];
+                const double sp = c.side(p), sq = c.side(q);
+                if (sp >= 0.0) out.push_back(p);
+                if ((sp >= 0.0) != (sq >= 0.0)) {
+                    const double f = sp / (sp - sq);
+                    out.push_back({p[0] + f * (q[0] - p[0]), p[1] + f * (q[1] - p[1]), 0.0});
+                }
+            }
+            v = std::move(out);
+        }
+        return v;
+    }
 };
 
-// A lattice node waiting to be added after the interface pairs (the node order of U14 kept).
-struct LatticeNode {
-    Point p;
-    std::int32_t region;  // hint, or -1
+// Whether two convex polygons are apart by more than `gap` along one of their edge normals (a
+// negative gap lets them touch, or overlap by up to -gap).
+bool apart(const std::vector<Point>& p, const std::vector<Point>& q, double gap) {
+    for (const std::vector<Point>* poly : {&p, &q}) {
+        for (std::size_t i = 0; i < poly->size(); ++i) {
+            const Point& a = (*poly)[i];
+            const Point& b = (*poly)[(i + 1) % poly->size()];
+            const double l = dist(a, b);
+            if (!(l > 0.0)) continue;
+            const double nx = (b[1] - a[1]) / l, ny = (a[0] - b[0]) / l;
+            double p0 = std::numeric_limits<double>::infinity(), p1 = -p0, q0 = p0, q1 = -p0;
+            for (const Point& x : p) {
+                p0 = std::min(p0, x[0] * nx + x[1] * ny);
+                p1 = std::max(p1, x[0] * nx + x[1] * ny);
+            }
+            for (const Point& x : q) {
+                q0 = std::min(q0, x[0] * nx + x[1] * ny);
+                q1 = std::max(q1, x[0] * nx + x[1] * ny);
+            }
+            if (q0 - p1 > gap || p0 - q1 > gap) return true;
+        }
+    }
+    return false;
+}
+
+// An open half-plane in a layer's (t, o) coordinates: a t + b o < c.
+struct HalfPlane {
+    double a;
+    double b;
+    double c;
 };
 
-// Whether the segment pq meets the open rectangle (0, len) x (lo, hi) in a layer's (t, o)
-// coordinates (Liang-Barsky).
-bool meets_open_box(std::array<double, 2> p, std::array<double, 2> q, double len, double lo, double hi) {
+// The layer's region as open half-planes in its (t, o) coordinates.
+std::vector<HalfPlane> open_region(const Layer& L) {
+    std::vector<HalfPlane> h{{-1.0, 0.0, -L.tmin}, {1.0, 0.0, L.tmax}, {0.0, -1.0, -L.lo}, {0.0, 1.0, L.top}};
+    for (const Cut& c : L.cuts) {
+        // side(a + t u + o n) = side(a) + t (u . m) + o (n . m) > 0.
+        h.push_back({-(L.u[0] * c.m[0] + L.u[1] * c.m[1]), -(L.n[0] * c.m[0] + L.n[1] * c.m[1]), c.side(L.a)});
+    }
+    return h;
+}
+
+// Whether the segment pq (in (t, o)) meets the intersection of the open half-planes (Liang-Barsky).
+bool meets_open(std::array<double, 2> p, std::array<double, 2> q, const std::vector<HalfPlane>& planes) {
     double e0 = 0.0, e1 = 1.0;
-    const double dt = q[0] - p[0], dov = q[1] - p[1];
-    const std::array<std::pair<double, double>, 4> sides{std::pair{-dt, p[0]}, std::pair{dt, len - p[0]},
-                                                         std::pair{-dov, p[1] - lo}, std::pair{dov, hi - p[1]}};
-    for (const auto& [num, den] : sides) {
-        // The segment is inside this side where num * e < den.
+    for (const HalfPlane& h : planes) {
+        // The segment is inside this half-plane where num * e < den.
+        const double num = h.a * (q[0] - p[0]) + h.b * (q[1] - p[1]);
+        const double den = h.c - h.a * p[0] - h.b * p[1];
         if (num == 0.0) {
             if (den <= 0.0) return false;
             continue;
@@ -195,6 +264,38 @@ bool meets_open_box(std::array<double, 2> p, std::array<double, 2> q, double len
     }
     return e0 < e1;
 }
+
+// A lattice node waiting to be added after the interface pairs (the node order of U14 kept).
+struct LatticeNode {
+    Point p;
+    std::int32_t region;  // hint, or -1
+    bool signed_lines = false;  // of a layer with signed lines (UD5)
+};
+
+// A layer with signed lines while it is prepared (UD5, UD6).
+struct SignedLayer {
+    std::size_t k = 0;  // its index in the options
+    Layer L;
+    Point b{};
+    std::vector<double> along;  // the given columns; the crossing straddles and corner columns added
+    std::vector<double> lines;  // the given lines; the straddles added
+    double si = 0.0;
+    double tol = 0.0;
+    bool a_on_boundary = false;
+    bool b_on_boundary = false;
+    std::vector<std::array<double, 2>> column_straddles;
+    std::optional<std::size_t> layer_index;  // in Generator::layers, once finished
+    // A corner at an end (UD6): [0] at a (t = 0), [1] at b (t = len).
+    struct End {
+        std::optional<std::size_t> partner;  // index into Generator::signed_layers
+        Cut cut{};
+        double kappa = 0.0;  // the partner's line o is this layer's column tc + kappa o
+        double tc = 0.0;
+        double span = 0.0;   // the corner's innermost column: the given columns stop before it
+        bool owner = false;  // keeps the nodes on the bisector
+    };
+    std::array<End, 2> ends;
+};
 
 // A point that must be a node of a given boundary edge, exactly as given.
 struct Pinned {
@@ -226,6 +327,8 @@ struct Generator {
     std::vector<Pinned> pinned;  // layer nodes on boundary edges
     std::vector<LatticeNode> lattice;      // layer nodes, added after the interface pairs
     std::vector<Point> covered_junctions;  // junctions inside a layer with signed lines: no straddle there
+    std::vector<SignedLayer> signed_layers;  // while they are prepared (UD5, UD6)
+    std::vector<char> signed_node;           // per initial node: of a layer with signed lines
 
     // The region at p (a polygon containing it, on its boundary counted), or nullopt outside.
     [[nodiscard]] std::optional<std::int32_t> region_at(const Point& p) const {
@@ -630,33 +733,39 @@ struct Generator {
                 add(Point{p[0] + 0.5 * s * uy, p[1] - 0.5 * s * ux, 0.0}, NodeKind::interface_node);  // right
             }
         }
-        for (const LatticeNode& n : lattice) add(n.p, NodeKind::layer, n.region);
+        for (const LatticeNode& n : lattice) add(n.p, NodeKind::layer, n.region, n.signed_lines);
         return std::nullopt;
     }
 
-    // A layer with signed lines (UD5): validation, the straddles, the chains it covers and its
-    // lattice nodes (pending until finish_interfaces).
-    std::optional<base::Error> read_signed_layer(std::size_t k, const BoundaryLayer& in) {
+    // Layers with signed lines (UD5, UD6) are prepared in four passes once every layer is read:
+    // parse_signed (each alone), link_corners (the corners where two meet), straddle_signed (the
+    // interfaces' straddles and the chains each covers), finish_signed (corner columns, the
+    // boundary, the domain, overlaps, and the lattice nodes, pending until finish_interfaces).
+    std::optional<base::Error> parse_signed(std::size_t k, const BoundaryLayer& in) {
         const auto bad = [&](const std::string& what) { return invalid("layer: " + what, k); };
         if (!in.offsets.empty()) return bad("give offsets (a boundary layer) or lines (signed), not both");
         if (!(std::isfinite(in.straddle) && in.straddle >= 0.0)) return bad("straddle not finite and >= 0");
-        Layer L;
+        SignedLayer S;
+        S.k = k;
+        S.b = in.b;
+        Layer& L = S.L;
         L.a = in.a;
         L.len = dist(in.a, in.b);
+        L.tmax = L.len;
         L.u = {(in.b[0] - in.a[0]) / L.len, (in.b[1] - in.a[1]) / L.len, 0.0};
         L.n = {-L.u[1], L.u[0], 0.0};  // the left normal
         // The base: covered by boundary and interface edges on its line (a straight run of them,
-        // through junctions and features).
+        // through junctions and features); on the line within 1e-12 of its length, since a base
+        // end inside an oblique edge is a rounded point.
+        const double line_tol = 1e-12 * L.len;
         std::vector<std::array<double, 2>> cover;
-        bool a_on_boundary = false, b_on_boundary = false;
         const auto collect = [&](const PolyEdge& e, bool boundary) {
-            if (predicates::orient2d(in.a, in.b, e.a) != 0 || predicates::orient2d(in.a, in.b, e.b) != 0) return;
-            const double ta = (e.a[0] - in.a[0]) * L.u[0] + (e.a[1] - in.a[1]) * L.u[1];
-            const double tb = (e.b[0] - in.a[0]) * L.u[0] + (e.b[1] - in.a[1]) * L.u[1];
-            cover.push_back({std::min(ta, tb), std::max(ta, tb)});
+            const auto pa = L.coords(e.a), pb = L.coords(e.b);
+            if (!(std::abs(pa[1]) <= line_tol && std::abs(pb[1]) <= line_tol)) return;
+            cover.push_back({std::min(pa[0], pb[0]), std::max(pa[0], pb[0])});
             if (boundary) {
-                a_on_boundary = a_on_boundary || within(in.a, e.a, e.b);
-                b_on_boundary = b_on_boundary || within(in.b, e.a, e.b);
+                S.a_on_boundary = S.a_on_boundary || within(in.a, e.a, e.b);
+                S.b_on_boundary = S.b_on_boundary || within(in.b, e.a, e.b);
             }
         };
         for (const PolyEdge& e : boundary_edges) collect(e, true);
@@ -670,47 +779,133 @@ struct Generator {
             return bad("the base is not covered by boundary or interface edges on its line");
         }
         L.region = -1;
-        std::vector<double> along = in.along;
-        if (along.size() < 2 || along.front() != 0.0 || !(std::abs(along.back() - L.len) <= 1e-12 * L.len)) {
+        S.along = in.along;
+        if (S.along.size() < 2 || S.along.front() != 0.0 || !(std::abs(S.along.back() - L.len) <= 1e-12 * L.len)) {
             return bad("along must run from 0 to the segment's length");
         }
-        along.back() = L.len;
-        for (std::size_t i = 1; i < along.size(); ++i) {
-            if (!(along[i] > along[i - 1])) return bad("along not strictly increasing");
+        S.along.back() = L.len;
+        for (std::size_t i = 1; i < S.along.size(); ++i) {
+            if (!(S.along[i] > S.along[i - 1])) return bad("along not strictly increasing");
         }
-        std::vector<double> lines = in.lines;
-        if (lines.size() < 2) return bad("at least two lines");
-        for (std::size_t i = 0; i < lines.size(); ++i) {
-            if (!(std::isfinite(lines[i]) && (i == 0 || lines[i] > lines[i - 1]))) return bad("lines not finite and strictly increasing");
+        S.lines = in.lines;
+        if (S.lines.size() < 2) return bad("at least two lines");
+        for (std::size_t i = 0; i < S.lines.size(); ++i) {
+            if (!(std::isfinite(S.lines[i]) && (i == 0 || S.lines[i] > S.lines[i - 1]))) {
+                return bad("lines not finite and strictly increasing");
+            }
         }
-        L.lo = lines.front();
-        L.top = lines.back();
-        const double tol = 1e-12 * std::max({L.len, std::abs(L.lo), std::abs(L.top)});
-        const double si = in.straddle > 0.0 ? in.straddle : s;
-        const auto coords = [&](const Point& p) {
-            const double dx = p[0] - L.a[0], dy = p[1] - L.a[1];
-            return std::array<double, 2>{dx * L.u[0] + dy * L.u[1], dx * L.n[0] + dy * L.n[1]};
-        };
+        L.lo = S.lines.front();
+        L.top = S.lines.back();
+        S.tol = 1e-12 * std::max({L.len, std::abs(L.lo), std::abs(L.top)});
+        S.si = in.straddle > 0.0 ? in.straddle : s;
+        signed_layers.push_back(std::move(S));
+        return std::nullopt;
+    }
+
+    // Corners (UD6): two layers sharing a base end, their bases at an angle in [60, 120] degrees,
+    // spanning the same offsets on each side. Each layer's region is cut at the corner's bisector,
+    // and its columns there become the other layer's lines mapped onto its base (finish_signed).
+    std::optional<base::Error> link_corners() {
+        const auto dot = [](const Point& p, const Point& q) { return p[0] * q[0] + p[1] * q[1]; };
+        for (std::size_t i = 0; i < signed_layers.size(); ++i) {
+            for (std::size_t j = i + 1; j < signed_layers.size(); ++j) {
+                for (std::size_t ei = 0; ei < 2; ++ei) {
+                    for (std::size_t ej = 0; ej < 2; ++ej) {
+                        SignedLayer& A = signed_layers[i];
+                        SignedLayer& B = signed_layers[j];
+                        const Point c = ei == 0 ? A.L.a : A.b;
+                        if (!same(c, ej == 0 ? B.L.a : B.b)) continue;
+                        const auto bad = [&](const std::string& what) { return invalid("layer: " + what + ", at " + where(c), B.k); };
+                        if (A.ends[ei].partner || B.ends[ej].partner) return bad("three or more layers meet at one end");
+                        // e: out of each base at the corner.
+                        const double sa = ei == 0 ? -1.0 : 1.0, sb = ej == 0 ? -1.0 : 1.0;
+                        const Point ea{sa * A.L.u[0], sa * A.L.u[1], 0.0}, eb{sb * B.L.u[0], sb * B.L.u[1], 0.0};
+                        const double cosine = dot(ea, eb);
+                        if (!(std::abs(cosine) <= 0.5)) return bad("a corner's angle outside [60, 120] degrees");
+                        const double ean = dot(ea, B.L.n), ebn = dot(eb, A.L.n);
+                        // A point on the bisector at offset o from one base is at r o from the other.
+                        const double r = (ean > 0.0) == (ebn > 0.0) ? 1.0 : -1.0;
+                        const double tol = std::max(A.tol, B.tol);
+                        if (!(std::abs(A.L.lo - std::min(r * B.L.lo, r * B.L.top)) <= tol &&
+                              std::abs(A.L.top - std::max(r * B.L.lo, r * B.L.top)) <= tol)) {
+                            return bad("the two layers at a corner do not span the same offsets (their first and last lines)");
+                        }
+                        const double wl = std::hypot(ea[0] + eb[0], ea[1] + eb[1]);
+                        const Point w{-(ea[0] + eb[0]) / wl, -(ea[1] + eb[1]) / wl, 0.0};  // into the angle
+                        const double along_w = -dot(ea, w);
+                        Point m{-ea[0] - along_w * w[0], -ea[1] - along_w * w[1], 0.0};  // toward A's base
+                        const double ml = std::hypot(m[0], m[1]);
+                        m = {m[0] / ml, m[1] / ml, 0.0};
+                        // B's line o crosses the bisector where A's column is tc + kappa o (and back).
+                        A.ends[ei] = {j, Cut{c, m}, sa * (1.0 + cosine) / ean, ei == 0 ? 0.0 : A.L.len, 0.0, true};
+                        B.ends[ej] = {i, Cut{c, {-m[0], -m[1], 0.0}}, sb * (1.0 + cosine) / ebn, ej == 0 ? 0.0 : B.L.len, 0.0, false};
+                    }
+                }
+            }
+        }
+        for (SignedLayer& S : signed_layers) {
+            for (std::size_t e = 0; e < 2; ++e) {
+                SignedLayer::End& E = S.ends[e];
+                if (!E.partner) continue;
+                const SignedLayer& P = signed_layers[*E.partner];
+                const double x0 = E.tc + E.kappa * P.L.lo, x1 = E.tc + E.kappa * P.L.top;
+                if (e == 0) {
+                    E.span = std::max(x0, x1);
+                    S.L.tmin = std::min({0.0, x0, x1});
+                } else {
+                    E.span = std::min(x0, x1);
+                    S.L.tmax = std::max({S.L.len, x0, x1});
+                }
+                S.L.cuts.push_back(E.cut);
+            }
+            if (S.ends[0].partner && S.ends[1].partner && !(S.ends[0].span < S.ends[1].span - S.tol)) {
+                return invalid("layer: the corners at its two ends overlap", S.k);
+            }
+        }
+        return std::nullopt;
+    }
+
+    // The straddles (UD5): interfaces parallel to the base inside the region by lines, interfaces
+    // across it by columns; the chains a corner's other layer straddles are left to it.
+    std::optional<base::Error> straddle_signed(SignedLayer& S) {
+        const auto bad = [&](const std::string& what) { return invalid("layer: " + what, S.k); };
+        const Layer& L = S.L;
+        const double tol = S.tol, si = S.si;
         const auto free_of = [&](const std::vector<double>& v, double x0, double x1) {
             return std::ranges::none_of(v, [&](double x) { return x >= x0 - tol && x <= x1 + tol; });
         };
-        const std::array<Point, 4> box = L.box();
-        // Interfaces: parallel ones inside the lattice straddled by lines, crossing ones by columns.
+        // The given columns' span: from the first column (or a corner's) to the last (or a corner's).
+        const double g0 = S.ends[0].partner ? S.ends[0].span : 0.0;
+        const double g1 = S.ends[1].partner ? S.ends[1].span : L.len;
+        const auto partners = [&](const Chain& c) {
+            for (const SignedLayer::End& E : S.ends) {
+                if (!E.partner) continue;
+                const SignedLayer& P = signed_layers[*E.partner];
+                const auto [ts, os] = P.L.coords(c.start);
+                const auto [te, oe] = P.L.coords(c.end);
+                if (std::abs(os - oe) <= P.tol && os >= P.L.lo - P.tol && os <= P.L.top + P.tol &&
+                    std::min(ts, te) < P.L.tmax - P.tol && std::max(ts, te) > P.L.tmin + P.tol) {
+                    return true;
+                }
+            }
+            return false;
+        };
+        const std::vector<Point> region = L.polygon();
         std::vector<double> extra_lines, extra_along;
-        std::vector<std::array<double, 2>> column_straddles;
         for (Chain& c : chains) {
-            const auto [ts, os] = coords(c.start);
-            const auto [te, oe] = coords(c.end);
+            if (partners(c)) continue;
+            const auto [ts, os] = L.coords(c.start);
+            const auto [te, oe] = L.coords(c.end);
             bool covered = false;
             if (std::abs(os - oe) <= tol && os >= L.lo - tol && os <= L.top + tol) {
-                const double t0 = std::max(std::min(ts, te), 0.0), t1 = std::min(std::max(ts, te), L.len);
+                const double t0 = std::max(std::min(ts, te), L.tmin), t1 = std::min(std::max(ts, te), L.tmax);
                 if (t1 - t0 > tol) {
                     const double d = 0.5 * (os + oe);
                     if (!(d - 0.5 * si > L.lo && d + 0.5 * si < L.top)) {
                         return bad("an interface parallel to the base needs a line beyond its straddle on each side, near " +
                                    where(c.start));
                     }
-                    if (!free_of(lines, d - 0.5 * si, d + 0.5 * si)) {
+                    if (!free_of(S.lines, d - 0.5 * si, d + 0.5 * si)) {
                         return bad("a line inside the straddle of an interface parallel to the base, near " + where(c.start));
                     }
                     extra_lines.push_back(d - 0.5 * si);
@@ -719,20 +914,23 @@ struct Generator {
                     c.covered.push_back({std::min(x0, x1), std::max(x0, x1)});
                     covered = true;
                 }
-            } else if (std::abs(ts - te) <= tol && ts >= -tol && ts <= L.len + tol) {
+            } else if (std::abs(ts - te) <= tol && ts >= L.tmin - tol && ts <= L.tmax + tol) {
                 const double o0 = std::max(std::min(os, oe), L.lo), o1 = std::min(std::max(os, oe), L.top);
                 if (o1 - o0 > tol) {
                     const double tc = 0.5 * (ts + te);
-                    if (!(tc - 0.5 * si > 0.0 && tc + 0.5 * si < L.len)) {
+                    if (!(tc - 0.5 * si > g0 && tc + 0.5 * si < g1)) {
+                        if ((S.ends[0].partner && tc - 0.5 * si <= g0) || (S.ends[1].partner && tc + 0.5 * si >= g1)) {
+                            return bad("an interface across the layer inside a corner, near " + where(c.start));
+                        }
                         return bad("an interface across the layer on or within its straddle of the first or last column, "
                                    "near " + where(c.start));
                     }
-                    if (!free_of(along, tc - 0.5 * si, tc + 0.5 * si)) {
+                    if (!free_of(S.along, tc - 0.5 * si, tc + 0.5 * si)) {
                         return bad("a column inside the straddle of an interface across the layer, near " + where(c.start));
                     }
                     extra_along.push_back(tc - 0.5 * si);
                     extra_along.push_back(tc + 0.5 * si);
-                    column_straddles.push_back({tc - 0.5 * si, tc + 0.5 * si});
+                    S.column_straddles.push_back({tc - 0.5 * si, tc + 0.5 * si});
                     const double x0 = std::abs(o0 - os), x1 = std::abs(o1 - os);
                     c.covered.push_back({std::min(x0, x1), std::max(x0, x1)});
                     covered = true;
@@ -740,13 +938,15 @@ struct Generator {
             }
             if (covered) continue;
             bool meets = L.contains(c.start, 0.0) || L.contains(c.end, 0.0);
-            for (std::size_t i = 0; i < 4; ++i) meets = meets || segments_conflict(c.start, c.end, box[i], box[(i + 1) % 4]);
+            for (std::size_t i = 0; i < region.size(); ++i) {
+                meets = meets || segments_conflict(c.start, c.end, region[i], region[(i + 1) % region.size()]);
+            }
             if (meets) {
                 return bad("an interface meets the lattice neither parallel nor perpendicular to its base, or only at its "
                            "edge, near " + where(c.start));
             }
-            for (std::size_t i = 0; i < 4; ++i) {
-                if (segment_segment_distance(c.start, c.end, box[i], box[(i + 1) % 4]) < c.band) {
+            for (std::size_t i = 0; i < region.size(); ++i) {
+                if (segment_segment_distance(c.start, c.end, region[i], region[(i + 1) % region.size()]) < c.band) {
                     return bad("an interface within its protected band of the layer");
                 }
             }
@@ -759,8 +959,42 @@ struct Generator {
             }
             return true;
         };
-        if (!merge(lines, extra_lines)) return bad("two interface straddles overlap or touch");
-        if (!merge(along, extra_along)) return bad("two interface straddles overlap or touch");
+        if (!merge(S.lines, extra_lines)) return bad("two interface straddles overlap or touch");
+        if (!merge(S.along, extra_along)) return bad("two interface straddles overlap or touch");
+        return std::nullopt;
+    }
+
+    // Corner columns, patch ends, the boundary and the domain, overlaps, and the lattice nodes.
+    std::optional<base::Error> finish_signed(SignedLayer& S) {
+        const auto bad = [&](const std::string& what) { return invalid("layer: " + what, S.k); };
+        Layer& L = S.L;
+        const double tol = S.tol;
+        std::vector<double>& along = S.along;
+        std::vector<double>& lines = S.lines;
+        // At a corner the columns are the other layer's lines (with its straddles) where they cross
+        // the bisector; the given columns stop before them (the one at the end is dropped).
+        for (std::size_t e = 0; e < 2; ++e) {
+            const SignedLayer::End& E = S.ends[e];
+            if (!E.partner) continue;
+            std::vector<double> kept;
+            for (const double t : along) {
+                const bool inside = e == 1 ? (t > E.span + tol && t < L.len - tol) : (t < E.span - tol && t > tol);
+                if (inside) {
+                    return bad("a given column inside a corner (its columns there are the other layer's lines), at " +
+                               where(L.corner(t, 0.0)));
+                }
+                if (e == 1 ? t >= E.span - tol : t <= E.span + tol) continue;
+                kept.push_back(t);
+            }
+            for (const double x : signed_layers[*E.partner].lines) kept.push_back(E.tc + E.kappa * x);
+            std::ranges::sort(kept);
+            along = std::move(kept);
+        }
+        const double g0 = S.ends[0].partner ? S.ends[0].span : 0.0;
+        const double g1 = S.ends[1].partner ? S.ends[1].span : L.len;
+        const auto in_corner = [&](double t) {
+            return (S.ends[0].partner && t < g0 + tol) || (S.ends[1].partner && t > g1 - tol);
+        };
         // Patch ends inside the lattice lie on a line and become columns.
         struct Exact {
             double t;
@@ -768,17 +1002,18 @@ struct Generator {
             Point p;
         };
         std::vector<Exact> exact;
-        if (a_on_boundary) exact.push_back({0.0, 0.0, in.a});
-        if (b_on_boundary) exact.push_back({L.len, 0.0, in.b});
+        if (S.a_on_boundary) exact.push_back({0.0, 0.0, L.a});
+        if (S.b_on_boundary) exact.push_back({L.len, 0.0, S.b});
         for (const PatchSegment& ps : g.patches) {
             for (const Point& q : {ps.a, ps.b}) {
-                const auto [t, off] = coords(q);
-                if (t < -tol || t > L.len + tol || off < L.lo - tol || off > L.top + tol) continue;
+                if (!L.contains(q, tol)) continue;
+                const auto [t, off] = L.coords(q);
+                if (in_corner(t)) return bad("a patch end inside a corner, at " + where(q));
                 if (std::ranges::none_of(lines, [&](double x) { return std::abs(x - off) <= tol; })) {
                     return bad("a patch end inside the lattice is not on one of its lines, at " + where(q));
                 }
                 if (std::ranges::none_of(along, [&](double x) { return std::abs(x - t) <= tol; })) {
-                    for (const auto& cs : column_straddles) {
+                    for (const auto& cs : S.column_straddles) {
                         if (t >= cs[0] - tol && t <= cs[1] + tol) return bad("a patch end inside an interface straddle, at " + where(q));
                     }
                     along.insert(std::ranges::lower_bound(along, t), t);
@@ -805,23 +1040,24 @@ struct Generator {
             }
             return std::nullopt;
         };
+        const std::vector<HalfPlane> open = open_region(L);
         for (std::size_t e = 0; e < boundary_edges.size(); ++e) {
             const PolyEdge& be = boundary_edges[e];
-            const auto p = coords(be.a), q = coords(be.b);
+            const auto p = L.coords(be.a), q = L.coords(be.b);
             if (std::abs(p[1] - q[1]) <= tol) {
-                const double t0 = std::max(std::min(p[0], q[0]), 0.0), t1 = std::min(std::max(p[0], q[0]), L.len);
+                const double t0 = std::max(std::min(p[0], q[0]), L.tmin), t1 = std::min(std::max(p[0], q[0]), L.tmax);
                 if (!(t1 - t0 > tol && p[1] >= L.lo - tol && p[1] <= L.top + tol)) continue;
                 const auto j = find(lines, p[1]);
                 if (!j) return bad("a boundary parallel to the base inside the lattice is not one of its lines, near " + where(be.a));
                 for (const auto& [v, x] : {std::pair{be.a, p[0]}, std::pair{be.b, q[0]}}) {
-                    if (x > tol && x < L.len - tol && !is_junction(v) && !find(along, x)) {
+                    if (x > L.tmin + tol && x < L.tmax - tol && !is_junction(v) && !find(along, x)) {
                         return bad("a domain vertex on a line of the lattice is not on one of its columns, at " + where(v));
                     }
                 }
                 on.push_back({e, true, *j, t0, t1});
             } else if (std::abs(p[0] - q[0]) <= tol) {
                 const double o0 = std::max(std::min(p[1], q[1]), L.lo), o1 = std::min(std::max(p[1], q[1]), L.top);
-                if (!(o1 - o0 > tol && p[0] >= -tol && p[0] <= L.len + tol)) continue;
+                if (!(o1 - o0 > tol && p[0] >= L.tmin - tol && p[0] <= L.tmax + tol)) continue;
                 const auto i = find(along, p[0]);
                 if (!i) return bad("a boundary across the lattice is not one of its columns, near " + where(be.a));
                 for (const auto& [v, x] : {std::pair{be.a, p[1]}, std::pair{be.b, q[1]}}) {
@@ -830,34 +1066,45 @@ struct Generator {
                     }
                 }
                 on.push_back({e, false, *i, o0, o1});
-            } else if (meets_open_box(p, q, L.len, L.lo, L.top)) {
+            } else if (meets_open(p, q, open)) {
                 return bad("the lattice leaves the domain (a boundary edge crosses it), near " + where(be.a));
             }
         }
-        // Inside the domain: every lattice cell's centre in some polygon.
+        // Inside the domain: every lattice cell's centre on the layer's side of its corners in some
+        // polygon.
         for (std::size_t i = 0; i + 1 < along.size(); ++i) {
             for (std::size_t j = 0; j + 1 < lines.size(); ++j) {
                 const Point m = L.corner(0.5 * (along[i] + along[i + 1]), 0.5 * (lines[j] + lines[j + 1]));
+                if (!L.contains(m, 0.0)) continue;
                 if (std::ranges::none_of(polys, [&](const Poly& q) { return point_in_polygon(m, q.v) >= 0; })) {
                     return bad("the lattice leaves the domain, near " + where(m));
                 }
             }
         }
-        for (const Layer& other : layers) {
-            for (const Point& p : box) {
-                if (other.contains(p, 0.0)) return bad("layers overlap");
-            }
-            for (const Point& p : other.box()) {
-                if (L.contains(p, 0.0)) return bad("layers overlap");
-            }
+        // Other layers: apart, a corner's two layers touching along its bisector.
+        const std::vector<Point> region = L.polygon();
+        for (std::size_t li = 0; li < layers.size(); ++li) {
+            const bool partner = std::ranges::any_of(S.ends, [&](const SignedLayer::End& E) {
+                return E.partner && signed_layers[*E.partner].layer_index == li;
+            });
+            if (!apart(region, layers[li].polygon(), partner ? -tol : tol)) return bad("layers overlap");
         }
         for (const Point& j : junctions) {
             if (L.contains(j, tol)) covered_junctions.push_back(j);
         }
+        // A node near a corner's bisector belongs to one of its layers: the owner keeps those on it.
+        const auto keep = [&](const Point& p) {
+            return std::ranges::all_of(S.ends, [&](const SignedLayer::End& E) {
+                if (!E.partner) return true;
+                const double side = E.cut.side(p);
+                return E.owner ? side >= -tol : side > tol;
+            });
+        };
         // The nodes; those on a boundary edge pinned to it, exactly where a point is given.
         for (std::size_t i = 0; i < along.size(); ++i) {
             for (std::size_t j = 0; j < lines.size(); ++j) {
                 Point p = L.corner(along[i], lines[j]);
+                if (!keep(p)) continue;
                 std::vector<std::size_t> edges;
                 for (const OnBoundary& r : on) {
                     const bool hit = r.line ? (r.index == j && along[i] >= r.from - tol && along[i] <= r.to + tol)
@@ -865,7 +1112,7 @@ struct Generator {
                     if (hit) edges.push_back(r.edge);
                 }
                 if (edges.empty()) {
-                    lattice.push_back({p, -1});
+                    lattice.push_back({p, -1, true});
                     continue;
                 }
                 const auto given = std::ranges::find_if(exact, [&](const Exact& x) {
@@ -896,23 +1143,25 @@ struct Generator {
                     snapped = q;
                 }
                 p = *snapped;
-                lattice.push_back({p, polys[boundary_edges[edges.front()].poly].region});
+                lattice.push_back({p, polys[boundary_edges[edges.front()].poly].region, true});
                 for (const std::size_t e : edges) pinned.push_back({p, e});
             }
         }
-        L.along = std::move(along);
-        L.offsets = std::move(lines);
-        layers.push_back(std::move(L));
+        L.along = along;
+        L.offsets = lines;
+        S.layer_index = layers.size();
+        layers.push_back(L);
         return std::nullopt;
     }
 
-    void add(const Point& p, NodeKind k, std::int32_t region_hint = -1) {
+    void add(const Point& p, NodeKind k, std::int32_t region_hint = -1, bool signed_lines = false) {
         for (const Point& q : nodes) {
             if (same(p, q)) return;
         }
         nodes.push_back(p);
         kind.push_back(k);
         hint.push_back(region_hint);
+        signed_node.push_back(signed_lines ? 1 : 0);
     }
 
     // Structured boundary layers (U14): validation and their lattice nodes.
@@ -925,7 +1174,7 @@ struct Generator {
             }
             if (same(in.a, in.b)) return bad("zero length");
             if (!in.lines.empty()) {
-                if (auto e = read_signed_layer(k, in)) return e;
+                if (auto e = parse_signed(k, in)) return e;
                 continue;
             }
             std::optional<std::size_t> edge;
@@ -941,6 +1190,7 @@ struct Generator {
             Layer L;
             L.a = in.a;
             L.len = dist(in.a, in.b);
+            L.tmax = L.len;
             L.u = {(in.b[0] - in.a[0]) / L.len, (in.b[1] - in.a[1]) / L.len, 0.0};
             const double el = dist(be.a, be.b);
             L.n = {-(be.b[1] - be.a[1]) / el, (be.b[0] - be.a[0]) / el, 0.0};  // the interior is on the left
@@ -1030,6 +1280,13 @@ struct Generator {
                 }
             }
             layers.push_back(std::move(L));
+        }
+        if (auto e = link_corners()) return e;
+        for (SignedLayer& S : signed_layers) {
+            if (auto e = straddle_signed(S)) return e;
+        }
+        for (SignedLayer& S : signed_layers) {
+            if (auto e = finish_signed(S)) return e;
         }
         return std::nullopt;
     }
@@ -1162,6 +1419,7 @@ std::expected<GeneratedMesh, base::Error> generate_mesh(const Geometry2D& geomet
     Triangulation2D tri(lo, hi);
     std::vector<NodeKind> kind{NodeKind::free, NodeKind::free, NodeKind::free};  // super vertices
     std::vector<std::int32_t> region{-1, -1, -1};
+    std::vector<char> signed_vertex{0, 0, 0};  // a node of a layer with signed lines (UD7)
     const auto record = [&](int v, NodeKind k, const Point& p, std::int32_t hinted) {
         if (static_cast<std::size_t>(v) >= kind.size()) {
             kind.resize(static_cast<std::size_t>(v) + 1, NodeKind::free);
@@ -1174,6 +1432,8 @@ std::expected<GeneratedMesh, base::Error> generate_mesh(const Geometry2D& geomet
     };
     for (const std::size_t i : hilbert_order(gen.nodes)) {
         const int v = tri.insert(gen.nodes[i]);
+        if (static_cast<std::size_t>(v) >= signed_vertex.size()) signed_vertex.resize(static_cast<std::size_t>(v) + 1, 0);
+        signed_vertex[static_cast<std::size_t>(v)] = gen.signed_node[i];
         if (!record(v, gen.kind[i], gen.nodes[i], gen.hint[i])) {
             return std::unexpected(base::Error{ErrorCode::degenerate_mesh,
                                                "a generated node is outside the domain or on an interface at " +
@@ -1346,7 +1606,14 @@ std::expected<GeneratedMesh, base::Error> generate_mesh(const Geometry2D& geomet
         const bool all_layer = kind[static_cast<std::size_t>(tr.v[0])] == NodeKind::layer &&
                                kind[static_cast<std::size_t>(tr.v[1])] == NodeKind::layer &&
                                kind[static_cast<std::size_t>(tr.v[2])] == NodeKind::layer;
-        if (all_interface || all_layer) {
+        // Triangles of lattice nodes alone are the lattice's (U14); of nodes of signed layers alone,
+        // only where the centroid lies in a lattice: a gap enclosed by lattices is refined (UD7).
+        const auto is_signed = [&](int v) {
+            return static_cast<std::size_t>(v) < signed_vertex.size() && signed_vertex[static_cast<std::size_t>(v)] != 0;
+        };
+        const bool lattice_own =
+            all_layer && (!is_signed(tr.v[0]) || !is_signed(tr.v[1]) || !is_signed(tr.v[2]) || in_layer(centroid));
+        if (all_interface || lattice_own) {
             ++report.exempt_triangles;
             continue;
         }
