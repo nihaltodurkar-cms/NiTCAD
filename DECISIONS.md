@@ -5527,6 +5527,32 @@ FD7–FD10 (interfaces, patches and their checks), M7 (mirrored pairs), M3 (the 
   (a tapered fin's layers then stop short of its corners, which get ordinary interface pairs)?
 - UQ4: UD4's refusal of voids next to filled cells across a station: accepted for this unit?
 
+**Owner answers (2026-10-31), design and criteria approved:** UQ1 route A (swept meshes); UQ2 UD1–UD13 and UC1–UC13
+approved as written, start slice 1; UQ3 oblique corner blocks in this unit; UQ4 voids next to filled cells refused.
+
+**Slice 1 (2026-10-31): the swept mesh without layers** (`mesh::generate_swept`, `generation_digest(ExtrudedGeometry,
+SweptOptions)` in `generate.hpp`; `src/mesh/generate_swept.cpp`; `tests/mesh/generate_swept_test.cpp`, 4 cases;
+UC5 in `tests/solve/complex_convergence_test.cpp`):
+- UD1 as designed: M₂ from `generate_mesh(Geometry2D)`, node (p, j) = j·n₂ + p, three tetrahedra per prism by the
+  global-index rule, lateral boundary quads cut on the same diagonal, then `make_dual_mesh` and its checks. The
+  extrusion is validated by `extrude` and indexed by `ComplexIndex`; boundary facets' patches are found again by
+  their exact vertex sets, so the patch rule stays `extrude`'s alone.
+- UD2: a 2D region per distinct (regions per section, both end patches, the set of lateral patches per section).
+- UD3/UD4 as designed. **Added, for review:** a station where a lateral patch changes may also be an axis line
+  (the patch edge is then a mesh line, exact, no straddle); a lateral patch change at a cross-section vertex where
+  the boundary is straight and one 2D region continues is refused (M₂ has no node there).
+- UD8: the certificate covers the complex's interface facets as pieces at resolution s; P6 with every edge between
+  boundary facets of different patches declared and conservative zones at their ends. **Added, for review:** a swept
+  mesh is also certified when it has per-corner patches but no interface (two 2D regions of one 3D region meeting
+  on a patched face), per FD10/SQ3.
+- Measured: P4 on the gated fin (two straddled stations, three regions, a partial gate patch): flat 7.3e-4 of the
+  tolerance, corner deviation 2.2e-16 (the product is exact at junction lines too, as UD8 argues); P6 flat 1.3e-3;
+  the gate patch's area exact to 3e-15. UC3 (rectangle, L-shape, tapered fin with an oxide wrap): every volume and
+  coupling equal to the product within 1e-12, prism diagonals zero. UC4: every axis within 1e-12. **UC5:** the
+  flat-gate fin of FC8, 796 2D nodes × 3 lines: potential equal to the 2D solve within 1.1e-16 V of 0.71 V, gate
+  charge per length within 3.9e-16.
+- Suites: Release 128/128, Debug 117/117. Debug growth: `mesh.generate_swept` 31.4 s, UC5 about 8.5 s (UC13 budget 60 s).
+
 ---
 
 ## New questions the advisor raised (not yet in `ARCHITECTURE.md`)

@@ -307,4 +307,59 @@ struct MeshOptions3D {
 // generated mesh names what it was generated from; equal inputs give equal digests on any machine.
 [[nodiscard]] std::uint64_t generation_digest(const PolyhedralGeometry& geometry, const MeshOptions3D& options);
 
+
+// The swept mesh of an extrusion (Unit 54; DECISIONS.md UD1-UD4, UD8): the cross-section meshed by
+// the 2D generator and swept along the axis on a set of lines, every prism split into three
+// tetrahedra by the global-index rule (each quad face cut on the diagonal through its smallest
+// node). The product of a 2D Delaunay triangulation and a 1D grid is Delaunay, with ties exactly
+// inside each prism, and its dual is the product of the two duals: a node's volume is its 2D area
+// times its line's dual length, so the box method is exact by construction, fine across the
+// section and coarse along the axis.
+//
+// The cross-section (UD2): one 2D polygon per non-void cell. Cells alike in every respect that the
+// sweep sees (their region in every section, their patches on both end stations and the set of
+// patches on their lateral boundary in every section) share a 2D region, so the edges between them
+// are internal; every other cell edge is a 2D interface, straddled by the 2D generator's mirrored
+// pairs (its rules apply: 6 s, 4 s, 60 degrees).
+//
+// The axis (UD3): `lines` strictly increasing, the first and last exactly the first and last
+// station. Every interior station where some cell changes region needs an AxisStraddle: lines at
+// station +- width/2 are added, and no given line may lie in the closed interval between them. A
+// station where a lateral boundary patch changes is straddled or is a line. A node's region is its
+// cell's region in the section holding its line.
+//
+// Rules (invalid_input; the index names the cell, line, straddle or station): those of extrude;
+// each cell void in every section or in none (UD4: no void next to a filled cell across a station);
+// the lines and straddles as above; a straddle at an interior station, of finite positive width,
+// its lines inside the neighbouring sections, at most one per station; a lateral patch change at a
+// cross-section vertex only where the boundary turns or two 2D regions meet; with any interface,
+// section.interface_resolution s positive. The 2D generator's errors come back with "the
+// cross-section: " in front.
+//
+// The result as generate_mesh(PolyhedralGeometry): the simplices with their boundary triangles and
+// patches (per corner where a straddled patch edge runs through a triangle, FD8 a), the dual, node
+// regions, and with interfaces the certificate (P4 over the complex's interface facets at
+// resolution s; P6 when corners carry patches). Errors: invalid_input; resource_exhausted (more
+// than max_nodes nodes); degenerate_mesh (a postcondition failed).
+struct AxisStraddle {
+    double station = 0.0;  // cm, an interior station
+    double width = 0.0;    // cm, the distance between the two lines
+};
+
+struct SweptOptions {
+    // The cross-section's options in its (u, v) coordinates (boxes and layers too), except that
+    // region_max_size is indexed by the extrusion's regions: a 2D region takes the smallest over the
+    // regions of its sections. max_nodes there caps the 2D mesh.
+    MeshOptions2D section;
+    std::vector<double> lines;  // cm, along the axis
+    std::vector<AxisStraddle> straddles;
+    std::size_t max_nodes = 2'000'000;  // 3D nodes
+};
+
+[[nodiscard]] std::expected<GeneratedMesh, base::Error> generate_swept(const ExtrudedGeometry& geometry,
+                                                                      const SweptOptions& options);
+
+// A 64-bit FNV-1a digest of an extrusion and its swept options (UD11): every field of both.
+[[nodiscard]] std::uint64_t generation_digest(const ExtrudedGeometry& geometry, const SweptOptions& options);
+
 }  // namespace NiTCAD::mesh

@@ -336,3 +336,60 @@ TEST_CASE("complex convergence: the same fin under a wrapped gate, reported (FC8
     const auto err = ladder(Gate::wrapped, "FC8 wrapped");
     for (std::size_t k = 1; k < err.size(); ++k) (void)orders(err, k, "FC8 wrapped");
 }
+
+// UC5 (DECISIONS.md Unit 54): the flat-gate fin above, swept along z on three lines (Unit 54's swept
+// mesh), against an equilibrium solve on the very 2D mesh it was swept from. The product dual
+// (UD1) makes the uniform extension of the 2D discrete solution solve the 3D discrete equations, so
+// the potential on every line equals the 2D one, and the gate charge per unit length the 2D charge,
+// within the solver's tolerance.
+TEST_CASE("swept mesh: a fin uniform along the axis solves as its 2D cross-section (UC5)", "[solve][swept]") {
+    const Section sec = section(Gate::flat);
+    mesh::ExtrudedGeometry x;
+    x.axis = 2;
+    x.stations = {0.0, length};
+    x.cells = {{"silicon", sec.silicon}, {"sti_left", sec.sti_left}, {"sti_right", sec.sti_right},
+               {"interfacial", sec.interfacial}, {"hfo2", sec.hfo2}, {"fill", sec.fill}};
+    x.regions = {{0}, {1}, {1}, {2}, {3}, {4}};
+    x.patches = {{"body", {0, 0, 0}, {20 * nm, 0, length}}, {"gate", {0, top, 0}, {20 * nm, top, length}}};
+    mesh::SweptOptions o;
+    o.section.max_size = 2 * nm;
+    o.section.interface_resolution = 0.16 * nm;
+    o.lines = {0.0, 0.5 * length, length};
+    const auto gm = mesh::generate_swept(x, o);
+    INFO((gm.has_value() ? std::string() : gm.error().message));
+    REQUIRE(gm.has_value());
+    REQUIRE(gm->certificate.has_value());
+    const device::Device d3 = make_device(Gate::flat, *gm, gm->mesh.find_boundary("body")->nodes, gm->mesh.find_boundary("gate")->nodes);
+    const Solution u3 = solve_gated(d3, length);
+
+    // The same cross-section mesh, from the same polygons, 2D regions and options (UD2).
+    mesh::Geometry2D g2;
+    g2.polygons = {{sec.silicon, 0}, {sec.sti_left, 1}, {sec.sti_right, 1}, {sec.interfacial, 2}, {sec.hfo2, 3}, {sec.fill, 4}};
+    g2.patches = {{"body", sec.silicon[0], sec.silicon[1]}, {"gate", sec.gate[0][0], sec.gate[0][1]}};
+    const auto m2 = mesh::generate_mesh(g2, o.section);
+    REQUIRE(m2.has_value());
+    const std::size_t n2 = m2->mesh.node_count();
+    REQUIRE(gm->mesh.node_count() == 3 * n2);
+    std::vector<mesh::NodeId> body, gate;
+    for (std::size_t i = 0; i < n2; ++i) {
+        const auto& p = m2->mesh.points()[i];
+        REQUIRE(p[0] == gm->mesh.points()[i][0]);
+        REQUIRE(p[1] == gm->mesh.points()[i][1]);
+        if (p[1] == 0.0) body.push_back(static_cast<mesh::NodeId>(i));
+        if (p[1] == top) gate.push_back(static_cast<mesh::NodeId>(i));
+    }
+    const device::Device d2 = make_device(Gate::flat, *m2, body, gate);
+    const Solution u2 = solve_gated(d2, 1.0);
+    double worst = 0.0, scale = 0.0;
+    for (std::size_t j = 0; j < 3; ++j) {
+        for (std::size_t i = 0; i < n2; ++i) {
+            worst = std::max(worst, std::abs(u3.psi[j * n2 + i] - u2.psi[i]));
+            scale = std::max(scale, std::abs(u2.psi[i]));
+        }
+    }
+    const double charge = std::abs(u3.gate_charge - u2.gate_charge) / std::abs(u2.gate_charge);
+    std::printf("UC5: %zu 2D nodes x 3 lines; potential deviation %.3e V of %.3e; gate charge %.6e against %.6e C/cm (%.3e)\n",
+                n2, worst, scale, u3.gate_charge, u2.gate_charge, charge);
+    CHECK(worst <= 1e-9 * scale);
+    CHECK(charge <= 1e-9);
+}
