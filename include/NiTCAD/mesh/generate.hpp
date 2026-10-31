@@ -78,11 +78,31 @@ struct Geometry2D {
 // increasing from 0 to the segment's length (to 1e-12 relative); `offsets` strictly increasing and
 // positive; the lattice inside the polygon owning the edge; layers not overlapping; no interface
 // within its protected band of a layer.
+//
+// A layer with signed lines (Unit 54, DECISIONS.md UD5, UD7): `lines` given instead of `offsets`.
+// The base [a, b] is covered by boundary and interface edges on its line; u its direction and n
+// its left normal (whatever side the domain is on); the nodes are a + t u + o n for t in `along`
+// and o in `lines` (signed, at least two), plus these straddles added by the generator, with
+// s_i = straddle (0: interface_resolution):
+// - every interface parallel to the base and inside the lattice gets lines at d +- s_i / 2 about
+//   its offset d, and no given line may lie in that closed interval or outside it on neither side;
+// - every interface across the lattice (perpendicular to the base) gets columns at t +- s_i / 2,
+//   strictly inside (0, length), with no given column in that interval.
+// Interfaces meeting the lattice at other angles are refused (corner blocks: slice 3). No mirrored
+// pairs are placed on an interface's covered part; its uncovered parts get pairs graded from each
+// end (1.5 s, 3 s from a feature, 1.5 s from a layer's edge) and must be long enough for them. A
+// boundary parallel to the base inside the lattice must be one of the lines and a boundary across
+// it one of the columns (their nodes lie on the edge: polygon vertices and patch ends exactly, else
+// projected onto it); a domain vertex on such a line lies on a column, a patch end inside the
+// lattice on a line (it becomes a column, outside every straddle); the lattice inside the domain.
+// The separation rules (4 s) apply to the interfaces' uncovered parts only.
 struct BoundaryLayer {
     Point a;
     Point b;
     std::vector<double> along;    // [cm] positions from a toward b
     std::vector<double> offsets;  // [cm] distances into the domain
+    std::vector<double> lines;    // [cm] signed offsets, positive to the left of a -> b (UD5)
+    double straddle = 0.0;        // [cm] s_i; 0: interface_resolution
 };
 
 struct SizeBox {

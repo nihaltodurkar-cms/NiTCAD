@@ -573,6 +573,8 @@ std::uint64_t generation_digest(const ExtrudedGeometry& x, const SweptOptions& o
         point(l.b);
         reals(l.along);
         reals(l.offsets);
+        reals(l.lines);
+        real(l.straddle);
     }
     real(s.interface_resolution);
     real(s.min_angle_deg);

@@ -205,6 +205,7 @@ add_executable(nitcad_mesh_test
   tests/mesh/interfaces_test.cpp
   tests/mesh/origin_test.cpp
   tests/mesh/generate2d_test.cpp
+  tests/mesh/generate2d_layers_test.cpp
   tests/mesh/triangulation3d_test.cpp
   tests/mesh/generate3d_test.cpp
   tests/mesh/complex_test.cpp

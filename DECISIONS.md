@@ -5553,6 +5553,57 @@ UC5 in `tests/solve/complex_convergence_test.cpp`):
   charge per length within 3.9e-16.
 - Suites: Release 128/128, Debug 117/117. Debug growth: `mesh.generate_swept` 31.4 s, UC5 about 8.5 s (UC13 budget 60 s).
 
+**Slice 2 (2026-10-31): 2D layers on interfaces with signed lines and straddles** (`BoundaryLayer::lines` and
+`straddle` in `generate.hpp`; `read_signed_layer` and `finish_interfaces` in `src/mesh/generate2d.cpp`;
+`tests/mesh/generate2d_layers_test.cpp`, 4 cases):
+- UD5 as designed. A layer gives `lines` (signed offsets, positive to the left of a → b) in place of `offsets`. The
+  generator adds the straddles itself, as UD3 does on the axis: lines at d ± s_i/2 about every interface parallel to
+  the base inside the lattice, and columns at t ± s_i/2 about every interface across it (strictly inside the first and
+  last columns). A given line or column inside a straddle is refused, and so is a parallel interface without a line
+  beyond its straddle on each side. Interfaces meeting the lattice at any other angle are refused until slice 3. A
+  covered chain gets no pairs there. Boundaries parallel to the base inside the lattice must be lines, and boundaries
+  across it columns. Their nodes are pinned to the edge: a polygon vertex or patch end exactly; on an axis-aligned
+  edge only the constant coordinate is set; on an oblique edge the node is projected.
+- UD7 as designed: refinement stays out of the rectangle, triangles of layer nodes only are exempt, and there is no
+  boundary fill between lattice nodes.
+- U14's node order is kept: the pairs are placed after the layers are validated (`finish_interfaces`), and both kinds
+  of layer add their nodes after the pairs, as U14 did. The `offsets` path is unchanged, and every existing mesh test
+  and pin passes (UC1).
+- **Added, for review:**
+  (a) The base is any segment covered by boundary and interface edges on its line. A crossing interface splits the
+  boundary edge at its junction, so "inside one boundary edge" would refuse a boundary layer that an interface
+  crosses.
+  (b) In signed mode n is always the left normal of a → b, so a boundary base must have the domain on its left, or
+  use negative lines.
+  (c) The uncovered part of a covered chain gets pairs graded 1.5 s from the layer's edge and 1.5 s, 3 s from a
+  feature, and is refused if it is too short for them. The 6 s rule still applies to whole chains.
+  (d) The 4 s separation rules are measured between uncovered parts only. They now run after the layers, so for an
+  input that breaks both a separation rule and a layer rule, the layer error comes first.
+  (e) A junction inside a signed layer gets no boundary straddle: the lattice's columns or lines straddle it.
+  (f) A patch end inside the lattice must lie on a line (it becomes a column, outside every straddle). A domain vertex
+  on a lattice line must lie on a column (or be a straddled junction), and one on a lattice column on a line.
+  (g) The "too short" refusal is a chain's rule and carries no layer index.
+  **Owner ruling (2026-10-31): "choose recommended": (a)-(g) accepted as written.**
+- **Measured (UC6 part):** a strip with its interface straddled by one lattice covering the square: the mesh is the
+  lattice alone (40 nodes, no pairs), every node and coupling equals the tensor box method within 1e-12, the
+  rectangles' diagonals have zero coupling, P4 flat deviation 0. The three-layer stack (Si, 0.5, 1.5 to the
+  boundary, s = 0.1): both interfaces straddled, the top boundary a line; P4 flat 0, corner 0. A boundary layer
+  crossed by an interface: columns at 0.5 ± s/2, no junction straddle, the pairs resuming 1.5 s above the lattice;
+  P4 flat 0, corner 0.
+- **Exactness holds where the lattice is Delaunay whatever lies outside** (UD7's grading, reported and not enforced).
+  A row matches the tensor values to 1e-12 when every rectangle next to it has its circumdisc inside the lattice, or
+  the lattice ends on the boundary on that side. In the stack (columns 2.5, lowest rows 1.0 and 0.8 apart, h = 2),
+  the lowest row's rectangles reach the refined Si: rows 0–1 differ by up to 9% in volume, and rows 2 and up are
+  exact. The test checks exactly the rows the circumdisc rule admits and pins how many there are.
+- Digest: `generation_digest(ExtrudedGeometry, SweptOptions)` also covers `lines` and `straddle`. Slice 1's swept
+  digests change; none was pinned.
+- Refusals (UC2 part, one test): both offsets and lines, a negative straddle, a base off the edges, fewer than two
+  lines, unordered lines or columns, `along` not reaching the end, a line inside a straddle, no line beyond a
+  straddle, the protected band, the lattice leaving the domain, a boundary inside the lattice that is not a line, a
+  column inside a crossing's straddle, a crossing within its straddle of the first column, an uncovered part too
+  short, a domain vertex between columns, an oblique interface, a patch end between lines.
+- Suites: Release 129/129, Debug 118/118. Debug growth: `mesh.generate2d_layers` 0.22 s (UC13 budget 60 s; 40 s used by slice 1).
+
 ---
 
 ## New questions the advisor raised (not yet in `ARCHITECTURE.md`)
