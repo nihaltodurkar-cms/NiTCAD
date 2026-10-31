@@ -5439,6 +5439,94 @@ wrapped-gate case stays reported (SQ7). A later unit may take it up; the cause i
 `[!shouldfail]` with its measurement and threshold unchanged; FC14's Debug growth stays at about 146 s, no case moved
 to `[.benchmark]`. Unit 53 is ready for review with FC8, FC9 and FC14 unmet and accepted.
 
+### Unit 54 — 3D structured boundary layers: swept meshes with structured cross-section layers (proposed 2026-10-31; on `mesh/structured-layers-3d`)
+
+**Owner request:** "Implement 3D structured boundary layers (item 5)" (2026-10-31): ARCHITECTURE.md 11.3, FinFET
+geometry and meshing, item 5. The branch starts from `mesh/finfet-geometry` `3f08827` (Unit 53, PR #74, not yet
+merged), whose complex, extrusion and deck it extends. The standing conditions hold: no change to any existing mesh,
+device or result; criteria fixed before code; Release and Debug suites at every commit, `/W4 /WX`; hand mutants;
+nothing pushed or merged without authorization.
+
+**Why this unit.** Unit 53's FC9 failed: the generated reduced FinFET (about 2.9e5 isotropic nodes at s = 0.08 nm) is
+13.9% low in on-current, 31 mV low in V_T and 28% low in max g_m against the 2× tensor reference (45,375 nodes), while
+the coarse tensor mesh (9,367 nodes) is within 1.2%. The 2D MOSFET met the same rule only with a structured layer
+(U14). Isotropic tetrahedra at the inversion layer's scale (0.1–0.2 nm normal to the interface) pay that spacing
+along the interface and along the fin too; a tensor mesh does not. A FinFET channel needs two anisotropies: (a) fine
+normal to the gate stack, coarse along it in the cross-section; (b) fine in the cross-section, coarse along the fin.
+
+**The question that shapes the design (UQ1, below).** Two routes give anisotropic layers in 3D:
+- **Route A, swept meshes (recommended).** For an `extrude3d` geometry, mesh the cross-section in 2D (with structured
+  layers there) and sweep it along the axis on a 1D line set. The product of a 2D Delaunay triangulation and a 1D grid
+  is Delaunay, and its Voronoi dual is the product of the two duals, so the box method is exact by construction
+  (argument in UD1). Anisotropy (b) comes free; (a) is U14's 2D layer extended to interfaces and corners. It covers
+  both FinFET decks (no void sections) and every extrusion without voids next to filled cells. It does not cover
+  general complexes (the API's `PolyhedralGeometry`).
+- **Route B, layers inside the 3D Delaunay generator.** A tensor slab on a planar facet or interface piece, embedded in
+  Unit 53's conforming refinement, with blocks at corners and junction lines. General, but each slab's circumspheres
+  reach past its last row, so the surrounding refinement must be fenced (U14's 2D rule, now with 3D corner and line
+  junctions), and termination and P4 at the slab edges are new work. Larger (XL) and riskier; an extruded FinFET
+  would still want route A's cross-section layers.
+
+The design below is route A. If the owner picks route B, the design is redone before code.
+
+**Sources.** The Voronoi diagram of a Cartesian product of point sets under the product (Euclidean) metric is the
+product of the factors' diagrams (elementary; written out in UD1). U14 and Unit 49 (2D layers), FD2 (the extrusion),
+FD7–FD10 (interfaces, patches and their checks), M7 (mirrored pairs), M3 (the box method's conditions).
+
+**Design:**
+
+| # | Choice | Evidence | Why | Trade-off |
+|---|---|---|---|---|
+| UD1 | **The swept mesh** (`mesh::generate_swept(ExtrudedGeometry, SweptOptions)`, API and deck): the cross-section mesh M₂ from the 2D generator; axis lines t₀ < … < t_m; nodes (p, t_j) for every 2D node p and line t_j inside the domain; each prism (triangle × [t_j, t_{j+1}]) split into three tetrahedra by the global-index rule (every quad face cut on the diagonal through its smallest node index), so neighbouring prisms conform. The tetrahedra go through `make_dual_mesh` and its checks (P0–P3, P5) like every generated mesh. **Argument:** a prism's six vertices lie on the sphere centred at (c, t_{j+½}) with radius √(R² + Δ²/4), c and R the triangle's circumcircle; a node (q, t_k) of any other prism is outside or on it, since \|q − c\| ≥ R (M₂ Delaunay) and \|t_k − t_{j+½}\| ≥ Δ/2. So the tetrahedralization is Delaunay with ties exactly inside each prism, and its dual is V₂(p) × [t_{j−½}, t_{j+½}]: volumes A₂(p)·Δt_j, in-plane couplings (ℓ₂/d₂)·Δt_j, axial couplings A₂(p)/Δ. | Proven (above); P1 holds with the ties decided exactly by the perturbed insphere. Checked: UC3 compares every volume and coupling with the product formula. | Fine in the cross-section, coarse along the fin, the box method exact; no new 3D refinement. | Extrusions only. Tie diagonals give zero-area dual faces (rounding judged by P3's τ, as with 2D layers). |
+| UD2 | **The cross-section** is meshed with one 2D polygon per cell. Cells with the same region in every section (the same column of regions) share a 2D region, so their common edges are internal; every other cell edge is a 2D interface (M7 pairs at ±s/2; the 2D rules: 6 s, 4 s, 60°). Every lateral interface of any section is then straddled in M₂. | M7, U12, U15 (2D; proven away from features). | Every section's lateral interfaces are among the straddled cell edges. | Some nodes straddle a line that is an interface only in another section. |
+| UD3 | **Axis lines:** given by the user (lengths); the two end stations are lines exactly; every interior station where some cell changes region is **straddled**: lines at station ± w/2 (w given per station, as the tensor deck's `straddle`), no line strictly between them. A station where nothing changes needs nothing. A node's 3D region is its 2D cell's region in the section holding its line. | M7 in 1D: the dual face between the two lines is the station plane. | The gate edges (spacer \| HfO₂ at x = 30 and 55 nm) are exact interfaces. | — |
+| UD4 | **Refused in this unit** (`invalid_input`, naming the cell and section): a void (cell, section) next to a filled one across a station; that boundary would need nodes on the station for some cells and straddles for others. A cell void along the whole axis is simply not meshed. | — | Both FinFET decks have none. | Raised source/drain ending mid-axis next to void needs Unit 53's generator or a later unit. |
+| UD5 | **2D structured layers on interfaces** (U14 extended; `BoundaryLayer` gains signed lines): a layer is a base segment (a boundary segment, as now, or an interface segment: a chain of collinear cell edges), positions `along` it, and **signed normal lines** (offsets from the base, positive to its left, negative to its right). Every interface parallel to the base inside the layer's span is straddled by two lines at ± s_i/2 about it with no line between (s_i a layer option, default s); a boundary parallel to the base inside the span is a line exactly; the lattice lies inside the domain. Cell edges crossing the layer (normal to the base) meet it only between two straddling columns: `along` straddles each crossing likewise. No M7 pairs are placed on an interface piece a layer covers; the lattice replaces them there. | As U14: the lattice's rectangles are Delaunay ties, its dual the tensor box method; a straddled interface lies on the dual face midway (P4a exact). | The gate stack (0.5 nm SiO₂, 1.5 nm HfO₂) and the inversion layer under it in one lattice, as the tensor deck's `straddle` lines do. | The user writes the lines (as for the tensor deck); `linspace` and straddles help. |
+| UD6 | **Corners where two layers meet** (the fin's top corners, its foot): at a **right angle** the corner square is the tensor product of the two layers' normal lines (a corner block), and each layer's `along` starts with the other's lines, so the three lattices are one tensor lattice: exact. At **other angles in [60°, 120°]** (the tapered fin's 95° top, 85° foot) a parallelogram block: nodes where lines parallel to one layer cross lines parallel to the other, Delaunay-triangulated; its interface bends are straddled to s by construction, but its dual faces tilt by the angle's departure from 90°, so P4b judges it as a corner zone. Below 60° or above 120°: refused. | Right angle: proven (tensor). Other angles: heuristic, checked by P4b (corner deviation ≤ s, measured and pinned). | The channel wraps the fin's corners; the 2D MOSFET had none. | Tapered corners accurate to s, like Unit 53's feature zones. |
+| UD7 | **Between layers and the rest:** refinement never inserts into a layer's or block's region and does not judge triangles of lattice nodes alone (U14); the last row should be graded to the neighbouring h (reported, not enforced: a coarse last row makes slivers, as Unit 49 found). Boundary fill between lattice columns keeps Unit 49's rule. | U14, Unit 49. | Reuses the tested 2D machinery. | — |
+| UD8 | **Interfaces and patches in 3D:** the product mesh is certified with Unit 53's checks (P4 over the 3D pieces, P6 over patch edges). Lateral pieces are exact wherever M₂ is (UD2, UD5), station pieces exact (UD3); where a lateral piece meets a station piece (a junction line) each dual face lies within one section, so the product of the 2D and 1D straddles is exact there too, measured. A patch over part of the axis (the gate, 30–55 nm on HfO₂'s outer faces) ends at a straddled station: FD8 (a), exact. A patch ending at a station that is not straddled is refused. | Proven by the product structure; checked by P4/P6 as for every multi-region mesh. | The certificate `Device::create` requires, unchanged. | — |
+| UD9 | **Options** (`SweptOptions`): the 2D options (h, per-region h, boxes, s, minimum angle, `max_nodes` counted over the 3D nodes) plus the axis `lines`, per-station `straddle` widths, and the layers (UD5), corner blocks inferred where two layers' bases meet. | — | — | — |
+| UD10 | **Deck:** in `[mesh] type = extrude3d`, `sweep = on` selects UD1 (off: Unit 53's generator, unchanged); `lines = <lengths>` (`linspace(...)` and `+` as in the tensor deck); `straddle = <station> <width>`; `layer = <y z> <y z> along=<lengths> lines=<signed lengths> [straddle=<length>]`, the endpoints exact cross-section points on cell edges. `nitcad check` reports nodes, prisms, tetrahedra and layers. | As FD13: exact inputs, nothing computed by intersection. | — | — |
+| UD11 | **io, run record, app:** a swept mesh is a generated 3D mesh (simplices, regions, patches, certificate) for files, run records (the generation digest also covers lines, straddles and layers) and the application; FD14 applies unchanged. | — | — | — |
+| UD12 | **Existing paths:** the 2D generator without layers on interfaces, Unit 53's generator, the convex generator and the tensor path stay bit-identical (UC1). | — | — | — |
+| UD13 | **Cost:** M₂'s cost plus a linear product; budget 1e5 nodes ≤ 10 s Release (M₂ about 1e3–1e4 nodes). | — | — | — |
+
+**Acceptance criteria, fixed before any implementation:**
+
+| # | Criterion |
+|---|---|
+| UC1 | Nothing changes: every existing test and pin passes; every mesh of the 2D generator (boundary layers included), Unit 53's generator, the convex generator and the tensor path keeps its graph, region and certificate digests; every existing deck's run identity and device file byte-identical (`sweep` off). |
+| UC2 | Refusals: every UD3, UD4, UD5, UD6, UD8 and UD10 rule refused with its code, index or deck line, and message (one test each). |
+| UC3 | Product exactness: on swept meshes of a rectangle, a tapered-fin cross-section and an L-shape, every node volume equals A₂(p)·Δt_j and every coupling the product formula within 1e-12 relative; P0–P3, P5; two runs bit-identical. |
+| UC4 | Linear field: u = a·x_k for each axis, Dirichlet on the faces normal to x_k, Neumann elsewhere: conjugate gradients on the swept dual give u at every node within 1e-12 of its range. |
+| UC5 | Uniform-along-the-axis equality: a gated tapered fin, uniform along its axis, swept from a 2D mesh: the 3D equilibrium potential on every line equals the 2D solve on M₂ within 1e-9 relative, and the gate charge per unit length within 1e-9. |
+| UC6 | 2D layers on interfaces (UD5, UD6): a two-material strip with a layer straddling the interface; a three-layer stack (Si, 0.5 nm, 1.5 nm, boundary); a rectangular fin with right-angle corner blocks; a tapered fin with 95°/85° blocks. Every lattice node bit-identical to its formula; the rectangular parts' dual equal to the tensor box method within 1e-12; P4 certified: flat deviations within P4a, corner deviations ≤ s, measured and pinned. |
+| UC7 | 2D accuracy: FC8's cross-section (the flat gate) with layers: discrete H1 potential order ≥ 0.9, L2 ≥ 1.5, gate charge order ≥ 0.9 (Unit 16's thresholds) against a 4× finer layered reference; reported beside Unit 53's FC8 measurement. |
+| UC8 | **The reduced FinFET (FC9 re-run; the unit's gate):** the swept deck with layers has at most the coarse tensor mesh's 9,367 nodes; against the 2× tensor reference (45,375 nodes, already measured), I_D at every V_G above the current resolution, V_T, max g_m and the swing satisfy \|Q_gen − Q_ref\| ≤ 1.5 \|Q_tensor − Q_ref\| + f (FC9's rule, unchanged); every point converges. Risk stated before the run: if it fails, it stays `[!shouldfail]` with its measurement for an owner ruling; the threshold is never loosened. |
+| UC9 | The shaped FinFET (tapered, wrapped stack, spacers) as a swept deck with layers: certified; the 0–0.8 V sweep converges at every point; nodes, mesh and solve time reported beside Unit 53's FC10 run (288,729 nodes, 3,099 s), and its on-current, V_T and swing compared with that run. No accuracy gate (no reference). |
+| UC10 | Deck, io, run record, app: the vocabulary checked by `nitcad check` with line numbers; a swept mesh round-trips with patches, regions and certificate; the run identity covers lines, straddles and layers; `nitcad plot` and the application show it. |
+| UC11 | Cost: mesh time at about 1e4 and 1e5 nodes against UD13. |
+| UC12 | Hand mutants: at least one per design row (UD1–UD13), each survivor closed by a test or argued equivalent. |
+| UC13 | Release and Debug suites pass at every commit, `/W4 /WX`; the Debug suite grows by ≤ 60 s (Unit 53 overran its budget); larger cases go to `[.benchmark]`. |
+
+**Slices** (each a local commit with both suites green):
+1. The swept mesh without layers: product, tetrahedra, regions, straddled stations, certificate (UD1–UD4, UD8, UD12;
+   UC1, UC2 part, UC3–UC5).
+2. 2D layers on interfaces with signed lines and straddles (UD5, UD7; UC6 part).
+3. Corner blocks, right-angle and oblique (UD6; UC6, UC7).
+4. Deck, io, run record, application; the two FinFET decks as swept decks (UD9–UD11; UC10).
+5. Gates and cost: UC8, UC9, UC11, mutants UC12, ARCHITECTURE 6.11 and 11.3.
+
+**Size:** L to XL (5 slices; slices 2 and 3 are the bulk, in `generate2d.cpp`).
+
+**Owner questions (UQ):**
+- UQ1: route A (swept meshes for extrusions, structured layers in the cross-section) as designed, or route B (layers
+  inside the general 3D generator)?
+- UQ2: approve UD1–UD13 and UC1–UC13 as written?
+- UQ3: UD6's oblique corner blocks (heuristic, judged by P4b as corner zones) in this unit, or right-angle corners only
+  (a tapered fin's layers then stop short of its corners, which get ordinary interface pairs)?
+- UQ4: UD4's refusal of voids next to filled cells across a station: accepted for this unit?
+
 ---
 
 ## New questions the advisor raised (not yet in `ARCHITECTURE.md`)
