@@ -246,6 +246,17 @@ TEST_CASE("io: a swept mesh round-trips with its corner patches, P6 report, swep
     if (!plain) FAIL(plain.error().message);
     CHECK(plain->report.prisms == 0);
     CHECK(fs::file_size(dir / "t.ntc") < fs::file_size(dir / "s.ntc"));
+    // The four swept counts are distinct fields (this mesh has no layers): distinct values read back in place.
+    mesh::GeneratedMesh counted = m;
+    counted.report.layers = 3;
+    counted.report.corner_blocks = 2;
+    REQUIRE(io::save_generated_mesh(dir / "c.ntc", counted).has_value());
+    const auto counts = io::load_generated_mesh(dir / "c.ntc");
+    if (!counts) FAIL(counts.error().message);
+    CHECK(counts->report.prisms == m.report.prisms);
+    CHECK(counts->report.axis_lines == m.report.axis_lines);
+    CHECK(counts->report.layers == 3);
+    CHECK(counts->report.corner_blocks == 2);
     fs::remove_all(dir);
 }
 

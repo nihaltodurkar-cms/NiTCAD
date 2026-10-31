@@ -966,7 +966,8 @@ TEST_CASE("deck run: a swept mesh's run record, files and identity (UC10, UD11)"
 // with P6 where the gate patch ends at the straddled stations; a few seconds each in Release but minutes in Debug
 // (UC13), so hidden; run it by name.
 TEST_CASE("deck build: the swept FinFET decks mesh and are certified", "[.benchmark][deck][extrude][swept]") {
-    for (const char* name : {"finfet_3d_swept.deck", "finfet_3d_shaped_swept.deck"}) {
+    for (const auto& [name, axis_lines] :
+         {std::pair{"finfet_3d_swept.deck", std::size_t{25}}, std::pair{"finfet_3d_shaped_swept.deck", std::size_t{37}}}) {
         CAPTURE(name);
         const auto d = deck::read(fs::path(NITCAD_DECKS_DIR) / name);
         if (!d) FAIL(d.error().message);
@@ -976,7 +977,7 @@ TEST_CASE("deck build: the swept FinFET decks mesh and are certified", "[.benchm
         const auto& r = p->generated->report;
         CHECK(r.layers == 4);
         CHECK(r.corner_blocks == 4);
-        CHECK(r.axis_lines == 37);
+        CHECK(r.axis_lines == axis_lines);
         const auto* c = p->device.interface_certificate();
         REQUIRE(c != nullptr);
         CHECK(c->patches.has_value());

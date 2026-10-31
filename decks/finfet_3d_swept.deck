@@ -16,10 +16,16 @@
 # and the box's top under the stack inside the foot's corner blocks. The HfO2's outer faces (the gate)
 # are lines of the frame. Lines are signed offsets from each base, positive outward from the fin: the
 # bases run around the fin so that outward is to their left. The given columns (along) stop short of
-# the corner blocks, whose own columns are the other layer's lines; they are 1 nm apart, as the lines at the
-# lattices' inner edge, so no rectangle's circumcircle reaches past the lattice (UD7's grading).
+# the corner blocks, whose own columns are the other layer's lines.
 #
-# The axis: lines 2.5 nm apart, the gate edges straddled by 0.5 nm (as finfet_3d.deck's straddle x).
+# Resolution (UC8: at most the coarse tensor mesh's 9,367 nodes): the frame takes the coarse tensor
+# mesh's lines where they cross it (complex_finfet_test.cpp, tensor_text): 1 nm normal lines, the
+# stack's interfaces straddled by 0.2 nm and the foot by 0.5 nm, columns about 5 nm apart. The rest of
+# the cross-section (the fin's core, the buried oxide, the spacers) is unstructured at up to 8 nm.
+# 332 nodes per cross-section, 8,300 in all.
+#
+# The axis: the coarse tensor mesh's x lines (2.5 nm from 20 to 65 nm, the gate edges straddled by
+# 0.5 nm) but 10 nm apart in the 1e20 source and drain beyond 20 and 65 nm (5 nm there in the tensor).
 
 [device]
 temperature = 300
@@ -38,22 +44,20 @@ patch drain = 85nm 20nm 2nm  85nm 50nm 12nm
 patch gate = 30nm 20nm 0  55nm 52nm 14nm
 patch substrate = 0 0 0  85nm 0 14nm
 sweep = on
-lines = linspace(0, 27.5nm, 12) + linspace(32.5nm, 52.5nm, 9) + linspace(57.5nm, 85nm, 12)
+lines = linspace(0, 20nm, 3) + linspace(22.5nm, 27.5nm, 3) + linspace(32.5nm, 52.5nm, 9) + \
+        linspace(57.5nm, 62.5nm, 3) + linspace(65nm, 85nm, 3)
 straddle = 30nm 0.5nm
 straddle = 55nm 0.5nm
-max_size = 4nm
+max_size = 8nm
 interface_resolution = 0.08nm
 # The frame, clockwise in (y, z): the top (z from 12 down to 2), the side at z = 2 (y from 50 down to 20),
 # the foot (z from 2 to 12), the side at z = 12 (y from 20 up to 50). Lines from 3 nm into the silicon to
-# the gate (2 nm out) on the top and sides, 2 nm into the buried oxide at the foot.
-layer = 50nm 12nm, 50nm 2nm along=0, 4nm, 5nm, 6nm, 10nm \
-        lines=-3nm, -2nm, -1.2nm, -0.6nm, -0.25nm, 0.25nm, 1nm, 1.5nm, 2nm
-layer = 50nm 2nm, 20nm 2nm along=0 + linspace(4nm, 26nm, 23) + 30nm \
-        lines=-3nm, -2nm, -1.2nm, -0.6nm, -0.25nm, 0.25nm, 1nm, 1.5nm, 2nm
-layer = 20nm 2nm, 20nm 12nm along=0, 4nm, 5nm, 6nm, 10nm \
-        lines=-3nm, -2nm, -1.2nm, -0.6nm, -0.25nm, 0.25nm, 1nm, 2nm
-layer = 20nm 12nm, 50nm 12nm along=0 + linspace(4nm, 26nm, 23) + 30nm \
-        lines=-3nm, -2nm, -1.2nm, -0.6nm, -0.25nm, 0.25nm, 1nm, 1.5nm, 2nm
+# the gate (2 nm out) on the top and sides, 2 nm into the buried oxide at the foot; the generator adds the
+# straddles (+-0.1 nm about offsets 0 and 0.5 on the top and sides, +-0.25 nm about the foot).
+layer = 50nm 12nm, 50nm 2nm along=0, 5nm, 10nm lines=-3nm, -2nm, -1nm, 1nm, 2nm straddle=0.2nm
+layer = 50nm 2nm, 20nm 2nm along=0 + linspace(5nm, 25nm, 5) + 30nm lines=-3nm, -1nm, 1nm, 2nm straddle=0.2nm
+layer = 20nm 2nm, 20nm 12nm along=0, 5nm, 10nm lines=-3nm, 2nm straddle=0.5nm
+layer = 20nm 12nm, 50nm 12nm along=0 + linspace(5nm, 25nm, 5) + 30nm lines=-3nm, -1nm, 1nm, 2nm straddle=0.2nm
 
 [region buried_oxide]
 material = sio2

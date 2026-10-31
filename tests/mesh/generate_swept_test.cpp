@@ -3,9 +3,11 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
 #include <map>
 #include <string>
 #include <utility>
@@ -381,7 +383,11 @@ TEST_CASE("swept mesh: refusals (UC2, slice 1)", "[mesh][swept]") {
     SECTION("max_nodes") {
         const auto x = box();
         auto o = options_for(x, 0.3, 7);
-        o.max_nodes = 50;
+        // The cap counts the 3D nodes: the mesh's own count passes, one fewer is refused.
+        const std::size_t n = swept(x, o).mesh.node_count();
+        o.max_nodes = n;
+        CHECK(generate_swept(x, o).has_value());
+        o.max_nodes = n - 1;
         refused(x, o, ErrorCode::resource_exhausted, "max_nodes");
     }
     SECTION("the cross-section's own errors are named") {
@@ -389,5 +395,32 @@ TEST_CASE("swept mesh: refusals (UC2, slice 1)", "[mesh][swept]") {
         auto o = options_for(x, 0.4, 3);
         o.section.interface_resolution = 0.4;  // features shorter than 6 s
         refused(x, o, ErrorCode::invalid_input, "the cross-section: ");
+    }
+}
+
+// UC11 (UD13: 1e5 nodes in at most 10 s in Release): the gated fin, its two stations straddled and its gate
+// patch partial, at about 1e4 and 1e5 nodes; generation with every check and the certificate (P4, P6) timed.
+// (h, s) avoid the 2D generator's P2 refusals on this cross-section at (0.06, 0.04), (0.035, 0.02) and (0.03,
+// 0.02), present before Unit 53 (DECISIONS.md, Unit 54 slice 5). Hidden; run it by name in Release.
+TEST_CASE("swept mesh: cost at about 1e4 and 1e5 nodes (UC11)", "[.benchmark][mesh][swept]") {
+    const auto x = gated_fin();
+    for (const auto& [h, lines] : {std::pair{0.1, std::size_t{2}}, std::pair{0.05, std::size_t{6}}}) {
+        SweptOptions o;
+        o.section.max_size = h;
+        o.section.interface_resolution = 0.04;
+        // `lines` per unit length, the stations 1 and 2 straddled by 0.05 (no line inside a straddle).
+        for (std::size_t k = 0; k <= 3 * lines; ++k) {
+            const double t = static_cast<double>(k) / static_cast<double>(lines);
+            if (std::abs(t - 1.0) < 0.5 / static_cast<double>(lines) || std::abs(t - 2.0) < 0.5 / static_cast<double>(lines)) continue;
+            o.lines.push_back(t);
+        }
+        o.straddles = {{1.0, 0.05}, {2.0, 0.05}};
+        const auto start = std::chrono::steady_clock::now();
+        const auto m = swept(x, o);
+        const double seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
+        REQUIRE(m.certificate.has_value());
+        REQUIRE(m.certificate->patches.has_value());
+        std::printf("swept UC11: %zu nodes (%zu axis lines, %zu per section), %zu tetrahedra in %.2f s\n", m.report.nodes,
+                    m.report.axis_lines, m.report.nodes / m.report.axis_lines, m.report.tetrahedra, seconds);
     }
 }

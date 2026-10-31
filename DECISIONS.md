@@ -5725,6 +5725,55 @@ meshes (mesh, slice and quality views checked by eye on both FinFET decks).
   (WG7's swept resistor); Unit 54 at about 55 s of UC13's 60 s. UC7 re-run in Release after the straddle merge:
   "failed as expected", the same numbers (H1 1.49, 0.86; L2 2.28, 1.63; gate charge 1.83, 1.59).
 
+**Slice 5 (2026-10-31): gates and cost** (UC8, UC9, UC11, UC12; `tests/deck/complex_finfet_test.cpp` `[.uc8]`,
+`[.uc9]`, FC9's comparison factored into `compare_to_tensor`, unchanged; `tests/mesh/generate_swept_test.cpp`
+`[.benchmark]` UC11):
+- **The reduced swept deck tuned to UC8's budget before any solve.** `decks/finfet_3d_swept.deck` takes the coarse
+  tensor mesh's lines where they cross the frame (1 nm normal lines; the stack's interfaces straddled by 0.2 nm, the
+  foot's by 0.5 nm; columns about 5 nm apart on the sides and top), the rest of the cross-section unstructured at up
+  to 8 nm, and the coarse tensor mesh's axis except 10 nm (not 5 nm) spacing in the 1e20 source and drain beyond 20
+  and 65 nm: 332 nodes per cross-section × 25 lines = **8,300 nodes** (budget 9,367), certified, generation digest
+  `3b758bc4fbfd407a`. Slice 4's lines (50,061 nodes) are gone.
+- **UC8 fails, for an owner ruling (the risk stated before the run).** Release, PARDISO on 6 threads; every run
+  converged (17/17). Coarse tensor 9,367 nodes (sweep 15 s), reference 45,375 (491 s), swept 8,300 (build 1 s,
+  sweep 17 s). **Within their bounds:** V_T 0.2275 against 0.2310 V (bound 6.3 mV, error 3.4 mV), max g_m 7.42e-5
+  against 7.63e-5 A/V (−2.7%; the tensor −2.1%), the swing 64.63 against 64.89 mV/dec; I_D at 12 of 17 points,
+  0.8 V among them (1.916e-5 against 1.897e-5 A, +1.0%; the tensor +1.2%). **Outside:** I_D at 0, 0.05 and 0.1 V
+  (−3.4%, −2.7%, −1.7%; the tensor −1.8%, −1.1%, −0.14%) and at 0.4 and 0.5 V (−1.1%, −0.6%; the tensor −0.6%,
+  −0.3%). At 0.1, 0.4 and 0.5 V the tensor's own error is near a sign change, so the bound there is small. Against
+  FC9's generated mesh (297,758 nodes: −13.9% in on-current, V_T 31 mV low, max g_m −28%), the swept mesh has
+  1/36 of the nodes and is about as accurate as the coarse tensor mesh, but not uniformly closer, as UC8 requires.
+- **One retry, stated before it was run:** the fin's core (between the lattices) unstructured at 8 nm, where the
+  tensor mesh has lines about 2 nm apart, while subthreshold current flows through the whole fin. A cross-section
+  box at 2 nm over the core (9,300 nodes) made it worse: I_D outside its bound at 9 of 17 points, subthreshold
+  now +6.7% (0 V) high, on-current +0.2%; V_T, max g_m and the swing still within. The subthreshold current moves
+  by several percent either way with the core's resolution, so neither mesh resolves it at this size. No further
+  tuning against the reference; the deck is the first one, the case `[!shouldfail]` with its rule unchanged.
+- **UC9:** **met.** `decks/finfet_3d_shaped_swept.deck` (`[.uc9]`, Release, PARDISO on 6 threads, alone on the machine): 71,188 nodes, 406,080 tetrahedra, certified (P4, P6); 17 of 17 points converged, one bias sub-step; build 5 s, sweep 892 s (FC10: 288,729 nodes, build 454 s, sweep 3,099 s). I_D 1.559e-10 A at 0 V to 1.575e-5 A at 0.8 V (FC10: 1.94e-10 to 1.37e-5 A, so the swept mesh is 15% higher in on-current and 20% lower in off-current); V_T (max g_m) 0.227 V; swing 64.3 mV/dec (FC10 about 62 mV/dec from 0 to 0.15 V; FC10 recorded no V_T). No reference exists for this shape, so neither run is known to be the closer; on the reduced fin (UC8) the swept mesh is within about 1% of the reference in on-current, the generated one 13.9% low.
+- **UC11 met.** The gated fin (two straddled stations, a partial gate patch, P4 and P6), Release, idle machine,
+  twice: 13,086 nodes (1,454 per section × 9 lines) in 0.90 s; **116,508 nodes** (5,548 × 21) in **8.0 s** (UD13's
+  budget 10 s per 1e5).
+- **A 2D generator defect found (not fixed; for review).** At (h, s) = (0.06, 0.04), (0.035, 0.02) and (0.03, 0.02)
+  on the gated fin's cross-section (no layers), `generate_mesh(Geometry2D)` refuses its own result: "boundary facet
+  is not Gabriel (P2)". The other 17 of 20 (h, s) pairs tried mesh. The same inputs fail identically on `fea05e5`
+  (before Units 53 and 54), so the defect predates this unit; it refuses rather than returns a bad mesh. UC11 avoids
+  those inputs (noted in the test). The cause is not diagnosed.
+- **UC12, hand mutants (one per design row; Release, the mesh, deck and io tests):** UD1 a prism's third
+  tetrahedron on the wrong diagonal (killed: UC3, UC4, the certificate); UD2 the lateral patches dropped from the 2D
+  region signature (killed: the gated fin's patches); UD3 the region-change straddle not required (killed: the
+  refusal); UD4 the void rule off (killed: the refusal); UD5 a parallel interface's upper straddle line at 0.6 s_i
+  (killed: six layer cases); UD6 the mitre's kappa with 1 − cos (killed: the tapered fin; right angles unchanged);
+  UD7 refinement allowed into a lattice (killed: seven cases); UD8 P6 skipped (killed: two); UD9 `max_nodes` against
+  the section's nodes (**survived**: the test's cap of 50 was below either count; closed: the cap at the mesh's own
+  count passes and one fewer is refused); UD10 the deck's layer `straddle=` ignored (killed: the deck tests); UD11
+  the digest without a layer's straddle (killed: the digest test); the mesh file's corner blocks written as the
+  layer count (**survived**: the round-tripped mesh has neither; closed: distinct counts saved and read back in
+  place); UD12 U14's layers given the signed layers' exemption rule (**survived**: no test had a triangle of layer
+  nodes outside every lattice; closed by a new UC1 pin, two U14 layers near a corner, 215 nodes, digest
+  `1c2949ce70fe860a` measured identical on `fea05e5`; the mutant gives 210 nodes); UD13 the cost row has no output
+  to mutate (argued equivalent; measured by UC11).
+- Suites: Release 128/129 (618 s): `solve_mosfet` crashed (SEGFAULT, after 577 s, no assertion output); re-run alone it passes (12 passed, 1 skipped, 561 assertions). This slice changes no solver or library code (tests, docs and one deck only), and no such crash is recorded before; not reproduced, cause unknown, reported. Debug 118/118 (1,141 s). Debug growth this slice, re-timed serially: `mesh.generate_swept` 32.2 s (+0.8 s, the `max_nodes` check), `deck.build` 15.1 s, `mesh.generate2d` 2.6 s; Unit 54 at about 56 s of UC13's 60 s.
+
 ---
 
 ## New questions the advisor raised (not yet in `ARCHITECTURE.md`)
