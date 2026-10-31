@@ -3309,7 +3309,7 @@ FG1–FG9):**
 - **MSVC support lifecycle** (Microsoft C++ blog, "New Release Cadence and Support Lifecycle for MSVC Build Tools",
   fetched 2026-10-02 [verified: the page's stated policy]): a new MSVC release every six months (May and
   November) with 9 months of support; each second November release is LTS with 3 years of support. 14.50
-  (November 2025) is the LTS release; 14.51 (May 2026) is a regular release; 14.52 (November 2026) is the next LTS.
+  (November 2025) is the LTS release; 14.51 (May 2026) is a regular release; 14.52 (November 2026) is a regular release: **corrected 2026-10-31**, this read "the next LTS", which contradicts the stated policy (14.50 the LTS, so the next November LTS is November 2027); Microsoft's versioning page lists 14.52 as Standard, its RC available and general availability expected November 2026 with Visual Studio 18.12 (Q11, amended).
   The page gives no end dates. The end dates used in this document (about February 2027 for 14.51, about
   November 2028 for 14.50) are **[derived]** from those periods.
 
@@ -3369,7 +3369,7 @@ architecture; historical branch names remain only where they are useful to expla
 | Q4 | `ErrorCode` enum (seven values) plus `Error` struct (6.7). |
 | Q5 | No second backend in Unit 3; neutrality proved by a header-boundary build check and interface-only tests (6.10). |
 | Q10 | CI design direction: a GitHub-hosted Windows runner, toolset selected with `vcvarsall.bat x64 -vcvars_ver=14.51`, exact versions asserted (compiler 19.51.36260, SDK 10.0.26100.0, CMake 4.3.1, Ninja 1.13.2), vcpkg `files` binary cache saved with `actions/cache` and keyed on baseline, triplet, toolset and manifest hash. **Design only, not verified:** runner contents, `vcvars_ver` selection on a runner and the cache behaviour were not run. Implemented in `.github/workflows/ci.yml` on branch `architecture/ci-workflow` (the CI unit, not Unit 1); **not yet run on a runner**, first run done, see section 9. |
-| Q11 | Move to an LTS toolset when MSVC 14.52 LTS is released (expected November 2026), no later than 60 days after, and before 14.51 support ends (about February 2027, derived). Re-run V1 and V4, run the full suite, update the CI assertions and cache key, on one dedicated branch. |
+| Q11 | **Amended 2026-10-31 (owner, option A):** 14.52 is a Standard release, not LTS (Microsoft's versioning page; the LTS is 14.50, to November 2028). Move to 14.52 when it is generally available (expected November 2026, Visual Studio 18.12), switching `/std:c++23preview` to `/std:c++23`, no later than 60 days after and before 14.51 support ends (about February 2027, derived); the toolset moves again at later releases. Originally: move to an LTS toolset when "MSVC 14.52 LTS" is released. Re-run V1 and V4, run the full suite, update the CI assertions and cache key, on one dedicated branch. |
 | R4 | Boltzmann carrier statistics initially; Fermi–Dirac for parabolic bands added at Unit 14 on the owner's request (section 5, item 9); other statistics deferred until requested. |
 | D1 | MSVC is the Windows C++23 toolchain (C++ compiler only; Fortran is D6). Toolset pin per Q9. |
 | Q6 | `/std:c++23preview` set explicitly; `/std:c++latest` not used. The build verifies `_MSVC_LANG` and the C++23 feature macros and fails configuration if the C++23 flag is ignored or invalid (9). |

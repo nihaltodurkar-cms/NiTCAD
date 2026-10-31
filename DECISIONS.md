@@ -20,7 +20,7 @@ Already decided and not repeated here: D1–D6, D8, R1, R4, Q6–Q9 (see `ARCHIT
 | Q4 | `Error` categories and shape | `enum class ErrorCode` (7 values) + `struct Error` with optional context | Unit 2 |
 | Q5 | Test-only second backend in Unit 3 | No; prove neutrality with a header-boundary build check and interface-only tests | Unit 3 |
 | Q10 | CI toolset and cache design | GitHub-hosted Windows runner, `vcvars_ver` selection, assert exact versions, `files` binary cache | CI unit |
-| Q11 | Move to an LTS toolset | Trigger on 14.52 LTS release, migrate within 60 days, re-run V1/V4 | 14.52 release |
+| Q11 | Move to MSVC 14.52 (amended 2026-10-31: a Standard release, not LTS) | Trigger on 14.52 general availability, migrate within 60 days, `/std:c++23`, re-run V1/V4 | 14.52 release |
 
 ---
 
@@ -125,6 +125,16 @@ Already decided and not repeated here: D1–D6, D8, R1, R4, Q6–Q9 (see `ARCHIT
 - **Risks:** the 14.52 release date and its C++23 completeness are **[unverified]**. `_MSVC_LANG` under a stable flag may differ from 202302L, so the gate must accept the new value deliberately.
 - **Needed before:** 14.52 release, and before 14.51 end of support.
 - **Owner decision:** [x] accept (2026-10-02)  [ ] change  [ ] defer
+- **Amendment (2026-10-31, owner: option A).** Checked when the owner asked to implement Q11: 14.52 is not
+  released (release candidate, the last preview; general availability expected November 2026 with Visual Studio
+  18.12; this machine has 14.51.36231, Visual Studio 18.10.3), and Microsoft's versioning page lists it as a
+  **Standard** release, not LTS; the LTS is 14.50 (support to November 2028). The premise "14.52 LTS" was a
+  derivation error (ARCHITECTURE.md section 12, corrected). The RC makes `/std:c++23` production-ready. Options put to
+  the owner: A, wait for 14.52 general availability and migrate per the steps above with `/std:c++23` (chosen); B,
+  move to 14.50 LTS now (untested, C++23 features at risk); C, test the 14.52 RC on a throwaway branch first. The
+  trigger, 60-day window and re-verification steps stand; the toolset moves again at later releases, since 14.52
+  is not long-term. Sources: learn.microsoft.com/cpp/overview/compiler-versions; the C++ Team Blog, "MSVC Build
+  Tools Version 14.52 Release Candidate Now Available".
 
 ---
 
