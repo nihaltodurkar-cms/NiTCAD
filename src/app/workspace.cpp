@@ -239,6 +239,9 @@ std::vector<Line> run_record(const Workspace& w) {
     out.push_back({"Ended", stopped ? "stopped early: " + stopped->message : std::string("completed")});
     out.push_back({"Input identity", hex(r->input_identity)});
     out.push_back({"Mesh digest", r->mesh_digest != 0 ? hex(r->mesh_digest) : std::string("not recorded")});
+    if (r->mesh_generation_digest != 0) {
+        out.push_back({"Mesh generation", r->mesh_type + ", " + hex(r->mesh_generation_digest)});
+    }
     out.push_back({"Settings", std::to_string(r->settings.size())});
     const results::Provenance& p = r->provenance;
     out.push_back({"Version", p.version});

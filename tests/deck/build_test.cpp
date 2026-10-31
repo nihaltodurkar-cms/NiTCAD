@@ -12,6 +12,7 @@
 #include <vector>
 
 #include "NiTCAD/deck/build.hpp"
+#include "NiTCAD/deck/run.hpp"
 #include "NiTCAD/device/doping_profiles.hpp"
 #include "NiTCAD/io/files.hpp"
 #include "NiTCAD/mesh/generate.hpp"
@@ -632,4 +633,194 @@ TEST_CASE("deck build: the FinFET deck of decks/ builds") {
     CHECK(p->points.size() == 17);
     CHECK(p->options.models.fermi_dirac);
     CHECK(p->options.models.surface_mobility == assemble::SurfaceMobility::off);
+}
+
+// Unit 53 (DECISIONS.md FD13, FC11): the sectioned extrusion.
+namespace {
+
+// Two stacked slabs along x, 1 um wide (y) and 1 um high (z), the interface at z = 0.5 um.
+const std::string extruded_head = R"([mesh]
+type = extrude3d
+axis = x
+stations = 0, 1um
+cell a = 0 0, 1um 0, 1um 0.5um, 0 0.5um
+cell b = 0 0.5um, 1um 0.5um, 1um 1um, 0 1um
+patch bottom = -1um -1um -1um 2um 2um 0
+patch top = -1um -1um 1um 2um 2um 2um
+max_size = 0.5um
+interface_resolution = 0.1um
+[region lower]
+material = silicon
+extrude = a 0:1um
+[region upper]
+material = silicon
+extrude = b 0:1um
+[doping]
+profile = acceptor constant 1e16 z=0:0.5um
+profile = donor constant 1e16 z=0.5um:1um
+[contact bottom]
+kind = ohmic
+patch = bottom
+[contact top]
+kind = ohmic
+patch = top
+[equilibrium]
+)";
+
+// The deck with `from` replaced by `to` (which must occur once).
+std::string changed(std::string text, const std::string& from, const std::string& to) {
+    const auto at = text.find(from);
+    REQUIRE(at != std::string::npos);
+    text.replace(at, from.size(), to);
+    return text;
+}
+
+}  // namespace
+
+TEST_CASE("deck build: an extrude3d mesh is a certified two-region mesh with named patches", "[deck][extrude]") {
+    const deck::Plan p = must(extruded_head);
+    REQUIRE(p.generated.has_value());
+    const auto& m = p.device.mesh();
+    CHECK(m.dimension() == 3);
+    REQUIRE(p.device.interface_certificate() != nullptr);
+    CHECK(p.device.regions().size() == 2);
+    for (std::size_t i = 0; i < m.node_count(); ++i) {
+        const double z = m.points()[i][2];
+        if (std::abs(z - 0.5e-4) > 1e-9) CHECK(p.device.node_region()[i] == (z > 0.5e-4 ? 1 : 0));
+    }
+    for (const char* name : {"bottom", "top"}) {
+        const auto* b = m.find_boundary(name);
+        REQUIRE(b != nullptr);
+        CHECK(std::abs(std::accumulate(b->areas.begin(), b->areas.end(), 0.0) - 1e-8) < 1e-20);
+    }
+    // The unnamed side faces keep the default patch name.
+    CHECK(m.find_boundary("boundary") != nullptr);
+}
+
+TEST_CASE("deck build: an extrude3d position spelled in other units is the same station or box face", "[deck][extrude]") {
+    // 0.3um, 300nm and 3e-5 (cm) need not round to one double. The station takes the lowest
+    // spelling, the box face the highest (so an exact test would miss the facets at the station),
+    // the ranges the others.
+    std::vector<std::pair<double, std::string>> spellings{{0.3 * 1e-4, "0.3um"}, {300.0 * 1e-7, "300nm"}, {3e-5, "3e-5"}};
+    std::ranges::sort(spellings);
+    REQUIRE(spellings.front().first < spellings.back().first);
+    std::string text = changed(extruded_head, "stations = 0, 1um", "stations = 0, " + spellings[0].second);
+    text = changed(text, "extrude = a 0:1um", "extrude = a 0:" + spellings[1].second);
+    text = changed(text, "extrude = b 0:1um", "extrude = b 0:" + spellings[2].second);
+    text = changed(text, "interface_resolution = 0.1um", "interface_resolution = 0.04um");  // the 6 s rule on 0.3 um
+    // A box whose lower x face is the end station: it holds the two end facets.
+    text = changed(text, "patch top =", "patch far = " + spellings[2].second + " -1um -1um 1um 2um 2um\npatch top =");
+    const deck::Plan p = must(text);
+    const auto* far = p.device.mesh().find_boundary("far");
+    REQUIRE(far != nullptr);
+    CHECK(std::abs(std::accumulate(far->areas.begin(), far->areas.end(), 0.0) - 1e-8) < 1e-20);
+}
+
+TEST_CASE("deck build: every extrude3d mistake names its line", "[deck][extrude]") {
+    const auto expect = [](const std::string& message, const std::string& what) {
+        INFO(message);
+        CHECK(message.find(what) != std::string::npos);
+    };
+    expect(failure(changed(extruded_head, "axis = x\n", "")), "t.deck:1: an extrude3d mesh needs 'axis'");
+    expect(failure(changed(extruded_head, "stations = 0, 1um\n", "")), "needs 'stations'");
+    expect(failure(changed(extruded_head, "axis = x", "axis = w")), "t.deck:3: axis is x, y or z");
+    expect(failure(changed(extruded_head, "extrude = a 0:1um", "extrude = c 0:1um")), "no cell named 'c'");
+    expect(failure(changed(extruded_head, "extrude = a 0:1um", "extrude = a 0:0.5um")), "the range's ends must be stations");
+    expect(failure(changed(extruded_head, "extrude = a 0:1um", "extrude = a 1um:0")), "needs t_lo < t_hi");
+    expect(failure(changed(extruded_head, "extrude = a 0:1um", "extrude = a 1um:1um")), "needs t_lo < t_hi");  // FC13
+    expect(failure(changed(extruded_head, "cell a = 0 0, 1um 0, 1um 0.5um, 0 0.5um\ncell b = 0 0.5um, 1um 0.5um, 1um 1um, 0 1um\n", "")),
+           "t.deck:1: an extrude3d mesh needs at least one 'cell'");
+    expect(failure(changed(extruded_head, "patch top = -1um -1um 1um 2um 2um 2um", "patch top = -1um -1um 2um 2um 2um 1um")),
+           "a box needs lo <= hi on each axis");
+    expect(failure(changed(extruded_head, "extrude = b 0:1um", "extrude = b 0:1um\nextrude = a 0:1um")),
+           "cell 'a' is already assigned in section 0");
+    expect(failure(changed(extruded_head, "patch top = -1um -1um 1um 2um 2um 2um", "patch top = -1um -1um 3um 2um 2um 4um")),
+           "t.deck:1: [mesh] extrude3d: a patch box selects no boundary facet");
+    expect(failure(changed(extruded_head, "material = silicon\nextrude = a 0:1um", "material = silicon\nbox = 0 1um\nextrude = a 0:1um")),
+           "an extrude3d mesh takes extrude in its regions");
+    expect(failure(changed(extruded_head, "type = extrude3d\naxis = x\nstations = 0, 1um\ncell a = 0 0, 1um 0, 1um 0.5um, 0 0.5um\n"
+                                          "cell b = 0 0.5um, 1um 0.5um, 1um 1um, 0 1um\n",
+                           "type = generate3d\ncuboid = 0 1um 0 1um 0 1um\n")),
+           "extrude is for an extrude3d mesh");
+}
+
+TEST_CASE("deck build: the run identity covers the extruded complex (FC11)", "[deck][extrude]") {
+    const deck::Plan a = must(extruded_head);
+    const deck::Plan again = must(extruded_head);
+    const auto id = [](const deck::Plan& p) { return solve::make_run_record(p.device, p.options, p.points).input_identity; };
+    CHECK(id(a) == id(again));  // deterministic: the same complex and options, the same mesh
+    // A moved station and a renamed patch each change it.
+    const std::string longer = changed(changed(changed(extruded_head, "stations = 0, 1um", "stations = 0, 1.02um"), "extrude = a 0:1um", "extrude = a 0:1.02um"),
+                                         "extrude = b 0:1um", "extrude = b 0:1.02um");
+    CHECK(id(a) != id(must(longer)));
+    CHECK(id(a) != id(must(changed(changed(extruded_head, "patch top =", "patch roof ="), "patch = top", "patch = roof"))));
+}
+
+TEST_CASE("deck run: the run record names the extrude3d mesh and its generation digest (FD14)", "[deck][extrude]") {
+    const fs::path dir = deck_test::scratch("extrude_generation");
+    const std::string swept = changed(extruded_head, "[equilibrium]\n",
+                                      "[sweep]\ncontact top = 0 : 0.05 : 0.05\n[output]\nsweep = s.nitsweep\nmesh = m.nitmesh\n");
+    const deck::Plan p = must(swept, dir);
+    REQUIRE(p.generated.has_value());
+    CHECK(p.mesh_type == "extrude3d");
+    CHECK(p.generated->generation_digest != 0);
+    // max_nodes changes the generation digest, not the mesh, so not the run identity.
+    const deck::Plan capped = must(changed(swept, "max_size = 0.5um\n", "max_size = 0.5um\nmax_nodes = 100000\n"), dir);
+    CHECK(capped.generated->generation_digest != p.generated->generation_digest);
+    CHECK(solve::make_run_record(capped.device, capped.options, capped.points).input_identity ==
+          solve::make_run_record(p.device, p.options, p.points).input_identity);
+
+    const auto report = deck::run(p);
+    if (!report) FAIL(report.error().message);
+    REQUIRE(report->sweep.has_value());
+    CHECK(report->sweep->run.mesh_type == "extrude3d");
+    CHECK(report->sweep->run.mesh_generation_digest == p.generated->generation_digest);
+    const auto sweep = io::load_sweep(dir / "s.nitsweep");
+    if (!sweep) FAIL(sweep.error().message);
+    CHECK(sweep->run.mesh_type == "extrude3d");
+    CHECK(sweep->run.mesh_generation_digest == p.generated->generation_digest);
+    const auto mesh = io::load_generated_mesh(dir / "m.nitmesh");
+    if (!mesh) FAIL(mesh.error().message);
+    CHECK(mesh->generation_digest == p.generated->generation_digest);
+    // The saved mesh read back as a file mesh: the record names the generator its digest belongs to.
+    const std::string tail = extruded_head.substr(extruded_head.find("[doping]"));
+    const deck::Plan reread = must("[mesh]\ntype = file\npath = m.nitmesh\n[region lower]\nmaterial = silicon\n[region upper]\nmaterial = silicon\n" +
+                                       changed(tail, "[equilibrium]\n", "[sweep]\ncontact top = 0 : 0.05 : 0.05\n[output]\nsweep = r.nitsweep\n"),
+                                   dir);
+    CHECK(reread.mesh_type == "extrude3d");
+    const auto rerun = deck::run(reread);
+    if (!rerun) FAIL(rerun.error().message);
+    CHECK(rerun->sweep->run.mesh_type == "extrude3d");
+    CHECK(rerun->sweep->run.mesh_generation_digest == p.generated->generation_digest);
+    // A run on any other mesh records neither.
+    const auto plain = deck::run(must(deck_test::diode_device + "[sweep]\ncontact anode = 0 : 0.1 : 0.1\n"));
+    REQUIRE(plain.has_value());
+    CHECK(plain->sweep->run.mesh_type.empty());
+    CHECK(plain->sweep->run.mesh_generation_digest == 0);
+}
+
+// Unit 53 slice 5: the extruded FinFET deck of decks/ meshes and is certified (P4 and P6). About twenty
+// minutes in Release, so hidden; run it by name.
+TEST_CASE("deck build: the reduced extruded FinFET deck meshes and is certified", "[.benchmark][deck][extrude]") {
+    const auto d = deck::read(fs::path(NITCAD_DECKS_DIR) / "finfet_3d_reduced.deck");
+    if (!d) FAIL(d.error().message);
+    const auto p = deck::build(*d);
+    if (!p) FAIL(p.error().message);
+    REQUIRE(p->generated.has_value());
+    const auto* c = p->device.interface_certificate();
+    REQUIRE(c != nullptr);
+    CHECK(c->patches.has_value());
+    CHECK(p->device.contacts().size() == 4);
+    CHECK(p->device.mesh().find_boundary("gate") != nullptr);
+    UNSCOPED_INFO("nodes " << p->device.mesh().node_count() << ", slivers " << p->generated->report.slivers);
+}
+
+// The tapered deck (FC10's mesh): certified since the owner's ruling on slice 5 (DECISIONS.md: the P4b bound at the
+// interfacial ring's oblique corners). About twenty minutes in Release, so hidden; run it by name.
+TEST_CASE("deck build: the shaped extruded FinFET deck meshes and is certified", "[.benchmark][deck][extrude]") {
+    const auto d = deck::read(fs::path(NITCAD_DECKS_DIR) / "finfet_3d_shaped.deck");
+    if (!d) FAIL(d.error().message);
+    const auto p = deck::build(*d);
+    if (!p) FAIL(p.error().message);
+    CHECK(p->device.interface_certificate() != nullptr);
 }

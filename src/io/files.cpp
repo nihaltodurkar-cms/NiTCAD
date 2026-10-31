@@ -132,7 +132,9 @@ constexpr std::uint16_t dimension = 1, points = 2, volumes = 3, endpoints = 4, l
                         couplings = 6, patch = 7, origin = 8,  // origin: absent in older files
                         // A generated mesh (M14), absent in plain mesh files:
                         cells = 9, facets = 10, facet_patch = 11, node_region = 12, report = 13,
-                        certificate = 14;
+                        certificate = 14,
+                        facet_corner_patch = 15,  // Unit 53 (FD8): absent without per-corner patches
+                        generation_digest = 16;   // Unit 53 (FD14): absent unless generated from a complex
 constexpr std::uint16_t patch_name = 1, patch_nodes = 2, patch_areas = 3;
 }  // namespace mesh_key
 
@@ -218,6 +220,8 @@ std::expected<mesh::Mesh, base::Error> read_mesh(const Reader& r) {
 
 namespace certificate_key {
 constexpr std::uint16_t digests = 1, counts = 2, deviations = 3;
+// Unit 53 (FD10): the P6 report, absent when the mesh has no per-corner patches.
+constexpr std::uint16_t patch_counts = 4, patch_deviations = 5, patch_area_error = 6, patch_zone_length = 7;
 }  // namespace certificate_key
 
 Writer write_certificate(const mesh::InterfaceCertificate& c) {
@@ -231,6 +235,16 @@ Writer write_certificate(const mesh::InterfaceCertificate& c) {
                                       static_cast<std::int64_t>(c.report.corner_faces)});
     cw.f64s(certificate_key::deviations,
             std::vector<double>{c.report.max_flat_deviation, c.report.max_corner_deviation});
+    if (c.patches) {
+        const mesh::PatchBoundaryReport& p = *c.patches;
+        cw.i64s(certificate_key::patch_counts,
+                std::vector<std::int64_t>{static_cast<std::int64_t>(p.cross_pieces),
+                                          static_cast<std::int64_t>(p.corner_pieces)});
+        cw.f64s(certificate_key::patch_deviations,
+                std::vector<double>{p.max_flat_deviation, p.max_corner_deviation});
+        cw.f64s(certificate_key::patch_area_error, p.area_error);
+        cw.f64s(certificate_key::patch_zone_length, p.zone_length);
+    }
     return cw;
 }
 
@@ -241,12 +255,24 @@ std::expected<mesh::InterfaceCertificate, base::Error> read_certificate(const Re
     if (digests.size() != 3 || ccounts.size() != 2 || deviations.size() != 2) {
         return std::unexpected(corrupt("certificate sizes"));
     }
-    return mesh::InterfaceCertificate{.mesh_digest = std::bit_cast<std::uint64_t>(digests[0]),
-                                      .region_digest = std::bit_cast<std::uint64_t>(digests[1]),
-                                      .interfaces_digest = std::bit_cast<std::uint64_t>(digests[2]),
-                                      .report = {static_cast<std::size_t>(ccounts[0]),
-                                                 static_cast<std::size_t>(ccounts[1]), deviations[0],
-                                                 deviations[1]}};
+    mesh::InterfaceCertificate c{.mesh_digest = std::bit_cast<std::uint64_t>(digests[0]),
+                                 .region_digest = std::bit_cast<std::uint64_t>(digests[1]),
+                                 .interfaces_digest = std::bit_cast<std::uint64_t>(digests[2]),
+                                 .report = {static_cast<std::size_t>(ccounts[0]),
+                                            static_cast<std::size_t>(ccounts[1]), deviations[0],
+                                            deviations[1]}};
+    if (cr.has(certificate_key::patch_counts)) {
+        NITCAD_IO_TRY(pcounts, cr.i64s(certificate_key::patch_counts));
+        NITCAD_IO_TRY(pdev, cr.f64s(certificate_key::patch_deviations));
+        NITCAD_IO_TRY(area_error, cr.f64s(certificate_key::patch_area_error));
+        NITCAD_IO_TRY(zone_length, cr.f64s(certificate_key::patch_zone_length));
+        if (pcounts.size() != 2 || pdev.size() != 2 || area_error.size() != zone_length.size()) {
+            return std::unexpected(corrupt("patch boundary report sizes"));
+        }
+        c.patches = mesh::PatchBoundaryReport{static_cast<std::size_t>(pcounts[0]), static_cast<std::size_t>(pcounts[1]),
+                                              pdev[0], pdev[1], std::move(area_error), std::move(zone_length)};
+    }
+    return c;
 }
 
 }  // namespace detail
@@ -294,6 +320,8 @@ namespace run_key {
 constexpr std::uint16_t identity = 1, setting = 2, name = 1, value = 2;
 constexpr std::uint16_t provenance = 3;   // Unit 42; absent in older files
 constexpr std::uint16_t mesh_digest = 4;  // Unit 45; absent in older files (0: unknown)
+constexpr std::uint16_t mesh_generation = 5;  // Unit 53 (FD14); absent unless the mesh came from a complex
+constexpr std::uint16_t generation_type = 1, generation_digest = 2;
 }
 namespace provenance_key {
 constexpr std::uint16_t version = 1, revision = 2, dirty = 3, build_type = 4, compiler = 5,
@@ -639,6 +667,12 @@ Writer write_run(const results::RunRecord& run) {
     }
     w.record(run_key::provenance, write_provenance(run.provenance));
     if (run.mesh_digest != 0) w.u64(run_key::mesh_digest, run.mesh_digest);
+    if (run.mesh_generation_digest != 0) {
+        Writer g;
+        g.text(run_key::generation_type, run.mesh_type);
+        g.u64(run_key::generation_digest, run.mesh_generation_digest);
+        w.record(run_key::mesh_generation, g);
+    }
     return w;
 }
 
@@ -660,6 +694,13 @@ std::expected<results::RunRecord, base::Error> read_run(const Reader& r) {
     if (r.has(run_key::mesh_digest)) {
         NITCAD_IO_TRY(digest, r.u64(run_key::mesh_digest));
         run.mesh_digest = digest;
+    }
+    if (r.has(run_key::mesh_generation)) {
+        NITCAD_IO_TRY(g, r.record(run_key::mesh_generation));
+        NITCAD_IO_TRY(type, g.text(run_key::generation_type));
+        NITCAD_IO_TRY(digest, g.u64(run_key::generation_digest));
+        run.mesh_type = std::move(type);
+        run.mesh_generation_digest = digest;
     }
     return run;
 }
@@ -1019,6 +1060,9 @@ std::expected<void, base::Error> save_generated_mesh(const std::filesystem::path
     w.i64s(mesh_key::cells, wide(m.simplices.cells));
     w.i64s(mesh_key::facets, wide(m.simplices.facets));
     w.i64s(mesh_key::facet_patch, wide(m.simplices.facet_patch));
+    if (!m.simplices.facet_corner_patch.empty()) {
+        w.i64s(mesh_key::facet_corner_patch, wide(m.simplices.facet_corner_patch));
+    }
     w.i64s(mesh_key::node_region, wide(m.node_region));
     Writer rep;
     const mesh::MeshReport& r = m.report;
@@ -1039,6 +1083,7 @@ std::expected<void, base::Error> save_generated_mesh(const std::filesystem::path
     }
     w.record(mesh_key::report, rep);
     if (m.certificate) w.record(mesh_key::certificate, detail::write_certificate(*m.certificate));
+    if (m.generation_digest != 0) w.u64(mesh_key::generation_digest, m.generation_digest);
     return write_file(path, Content::mesh, w);
 }
 
@@ -1066,6 +1111,12 @@ std::expected<mesh::GeneratedMesh, base::Error> load_generated_mesh(const std::f
     if (!narrow(cells, s.cells) || !narrow(facets, s.facets) || !narrow(facet_patch, s.facet_patch) ||
         !narrow(regions, node_region)) {
         return std::unexpected(corrupt("generated mesh index out of range"));
+    }
+    if (r.has(mesh_key::facet_corner_patch)) {
+        NITCAD_IO_TRY(corner_patch, r.i64s(mesh_key::facet_corner_patch));
+        if (!narrow(corner_patch, s.facet_corner_patch)) {
+            return std::unexpected(corrupt("generated mesh index out of range"));
+        }
     }
     for (const mesh::BoundaryPatch& b : m.boundary()) s.patch_names.push_back(b.name);
     auto dual = mesh::make_dual_mesh(s);
@@ -1098,7 +1149,8 @@ std::expected<mesh::GeneratedMesh, base::Error> load_generated_mesh(const std::f
         report.max_radius_edge = q3[0];
         report.min_dihedral_deg = q3[1];
     }
-    return mesh::GeneratedMesh{std::move(m), std::move(s), std::move(node_region), std::move(certificate), report};
+    NITCAD_IO_TRY(generation, r.u64_or(mesh_key::generation_digest, 0));
+    return mesh::GeneratedMesh{std::move(m), std::move(s), std::move(node_region), std::move(certificate), report, generation};
 }
 
 std::expected<void, base::Error> save_sweep(const std::filesystem::path& path,

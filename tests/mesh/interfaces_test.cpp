@@ -405,6 +405,44 @@ TEST_CASE("P4 in 3D: a planar interface, and a broken mirror", "[mesh][interface
     }
 }
 
+TEST_CASE("P4 in 3D: a non-convex piece (Unit 53, FD9)", "[mesh][interfaces]") {
+    // The unit cube split at z = 0.5 by mirrored pairs at every column of a 3 x 3 lattice (0, 0.25,
+    // 1), the interface declared as an L-shaped piece with its reflex corner at (0.625, 0.625) and
+    // the square in its notch: the lattice's Voronoi lines fall on the L's edges, so every face
+    // lies in the L or in the notch. Faces inside the L but outside a triangle of any decomposition
+    // (the column at (0.25, 0.25) spans [0.125, 0.625]^2) are measured to the plane.
+    Layout L;
+    L.dim = 3;
+    for (const double z : {0.0, 0.5 - 0.5 * s, 0.5 + 0.5 * s, 1.0}) {
+        for (const double y : {0.0, 0.25, 1.0}) {
+            for (const double x : {0.0, 0.25, 1.0}) L.add3(x, y, z, z < 0.5 ? 0 : 1);
+        }
+    }
+    const double c = 0.625;
+    const InterfacePiece ell{{{0, 0, 0.5}, {1, 0, 0.5}, {1, c, 0.5}, {c, c, 0.5}, {c, 1, 0.5}, {0, 1, 0.5}}, 0, 1};
+    const InterfacePiece notch{{{c, c, 0.5}, {1, c, 0.5}, {1, 1, 0.5}, {c, 1, 0.5}}, 0, 1};
+    SECTION("the L and its notch") {
+        const auto r = check(L, {ell, notch});
+        REQUIRE(r.has_value());
+        CHECK(r->cross_faces > 0);
+        CHECK(r->max_flat_deviation <= 1.0);
+        CHECK(r->max_corner_deviation == 0.0);
+    }
+    SECTION("without the notch piece, faces over the notch fail the hull test and are measured") {
+        const auto r = check(L, {ell});
+        REQUIRE_FALSE(r.has_value());
+        CHECK(r.error().code == ErrorCode::degenerate_mesh);
+        CHECK(r.error().message.find("P4") != std::string::npos);
+    }
+    SECTION("a self-intersecting polygon is refused") {
+        const InterfacePiece bowtie{{{0, 0, 0.5}, {1, 1, 0.5}, {1, 0, 0.5}, {0, 1, 0.5}}, 0, 1};
+        const auto r = check(L, {bowtie});
+        REQUIRE_FALSE(r.has_value());
+        CHECK(r.error().code == ErrorCode::invalid_input);
+        CHECK(r.error().message.find("simple") != std::string::npos);
+    }
+}
+
 TEST_CASE("P4b: the corner threshold is the resolution", "[mesh][interfaces]") {
     // The bisector-rule corner (its largest corner deviation is 0.0249, 0.80 s) checked against
     // a smaller declared resolution: accepted at 0.026, refused by P4b at 0.024, the deviating
@@ -460,5 +498,92 @@ TEST_CASE("P4: every vertex of a boundary dual face counts", "[mesh][interfaces]
         const auto r = check_interfaces(m, *dual, region, InterfaceSet{pieces, 0.2});
         REQUIRE_FALSE(r.has_value());
         CHECK(r.error().message.find("P4") != std::string::npos);
+    }
+}
+
+TEST_CASE("P6 in 3D: a patch boundary on a trace, straddled by mirrored pairs (Unit 53, FD8, FD10)", "[mesh][interfaces]") {
+    // The unit cube split at z = 0.5 (pair planes at 0.5 -+ s/2); on the face y = 0 the corners
+    // above the interface take a patch "top": its boundary is the trace z = 0.5, y = 0, which no
+    // mesh edge lies on. `shift` moves the face node (0.3, 0, 0.5 + s/2) along x.
+    const auto mesh = [](double shift) {
+        SimplexMesh m;
+        m.dimension = 3;
+        for (const double z : {0.0, 0.5 - 0.5 * s, 0.5 + 0.5 * s, 1.0}) {
+            for (const double y : {0.0, 0.3, 1.0}) {
+                for (const double x : {0.0, 0.3, 1.0}) {
+                    const bool moved = x == 0.3 && y == 0.0 && z > 0.5 && z < 1.0;
+                    m.points.push_back({moved ? x + shift : x, y, z});
+                }
+            }
+        }
+        m.cells = brute_delaunay(3, m.points);
+        tag_box_boundary(m, {0, 0, 0}, {1, 1, 1});
+        m.patch_names.push_back("top");
+        for (std::size_t f = 0; f < m.facet_patch.size(); ++f) {
+            for (std::size_t k = 0; k < 3; ++k) {
+                const Point& p = m.points[static_cast<std::size_t>(m.facets[3 * f + k])];
+                m.facet_corner_patch.push_back(m.facet_patch[f] == 2 && p[2] > 0.5 ? 6 : m.facet_patch[f]);
+            }
+        }
+        return m;
+    };
+    PatchBoundarySet set;
+    set.boundaries = {{{0, 0, 0.5}, {1, 0, 0.5}, 2, 6}};
+    set.zone_centres = {{0, 0, 0.5}, {1, 0, 0.5}};
+    set.patch_area = {1, 1, 0.5, 1, 1, 1, 0.5};
+    set.resolution = s;
+    SECTION("mirrored: exact outside the zones, the areas exact") {
+        const SimplexMesh m = mesh(0.0);
+        const auto dual = make_dual_mesh(m);
+        REQUIRE(dual.has_value());
+        const auto r = check_patch_boundaries(m, *dual, set);
+        REQUIRE(r.has_value());
+        CHECK(r->cross_pieces > r->corner_pieces);
+        CHECK(r->max_flat_deviation <= 1.0);
+        CHECK(std::abs(r->area_error[2]) <= 1e-14);
+        CHECK(std::abs(r->area_error[6]) <= 1e-14);
+        CHECK(std::abs(r->zone_length[6] - 4.0 * s) <= 1e-12);  // 2 s at each end
+    }
+    SECTION("a face node moved off its mirror is refused outside the zones, accepted in one") {
+        const SimplexMesh m = mesh(0.002);
+        const auto dual = make_dual_mesh(m);
+        REQUIRE(dual.has_value());
+        const auto r = check_patch_boundaries(m, *dual, set);
+        REQUIRE_FALSE(r.has_value());
+        CHECK(r.error().code == ErrorCode::degenerate_mesh);
+        CHECK(r.error().message.find("P6") != std::string::npos);
+        PatchBoundarySet zoned = set;
+        zoned.zone_centres.push_back({0.3, 0, 0.5});
+        zoned.resolution = 0.5;  // the lattice is coarse: the moved node's pieces reach 0.3 away
+        const auto z = check_patch_boundaries(m, *dual, zoned);
+        REQUIRE(z.has_value());
+        CHECK(z->max_corner_deviation > 0.0);
+        CHECK(z->max_corner_deviation <= s);
+    }
+    SECTION("patches meeting with no declared boundary, and certification without P6") {
+        const SimplexMesh m = mesh(0.0);
+        const auto dual = make_dual_mesh(m);
+        REQUIRE(dual.has_value());
+        PatchBoundarySet none = set;
+        none.boundaries.clear();
+        const auto r = check_patch_boundaries(m, *dual, none);
+        REQUIRE_FALSE(r.has_value());
+        CHECK(r.error().message.find("no declared boundary") != std::string::npos);
+        std::vector<std::int32_t> region;
+        for (const Point& p : m.points) region.push_back(p[2] < 0.5 ? 0 : 1);
+        const InterfaceSet plane{{{{{0, 0, 0.5}, {1, 0, 0.5}, {1, 1, 0.5}, {0, 1, 0.5}}, 0, 1}}, s};
+        const auto bare = certify_interfaces(m, *dual, region, plane);
+        REQUIRE_FALSE(bare.has_value());
+        CHECK(bare.error().code == ErrorCode::invalid_input);
+        const auto full = certify_interfaces(m, *dual, region, plane, &set);
+        REQUIRE(full.has_value());
+        REQUIRE(full->patches.has_value());
+        CHECK(certifies(*full, *dual, region));
+        // The patch set is in the digest: another set gives another digest.
+        PatchBoundarySet other = set;
+        other.zone_centres.pop_back();
+        const auto second = certify_interfaces(m, *dual, region, plane, &other);
+        REQUIRE(second.has_value());
+        CHECK(second->interfaces_digest != full->interfaces_digest);
     }
 }

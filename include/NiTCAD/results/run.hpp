@@ -53,6 +53,11 @@ struct RunRecord {
     // Not part of input_identity (which covers the mesh already); 0 when unknown (a file written
     // before Unit 45).
     std::uint64_t mesh_digest = 0;
+    // For a mesh generated from a polyhedral complex (Unit 53, FD14): the deck's mesh type (e.g.
+    // "extrude3d") and mesh::generation_digest of the complex and options. Empty and 0 otherwise;
+    // not part of input_identity.
+    std::string mesh_type;
+    std::uint64_t mesh_generation_digest = 0;
 };
 
 struct Sweep {

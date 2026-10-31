@@ -155,6 +155,10 @@ std::expected<Mesh, base::Error> make_dual_mesh(const SimplexMesh& s, DualMeshRe
                                      "dimension",
                                      std::nullopt));
     }
+    if (!s.facet_corner_patch.empty() && s.facet_corner_patch.size() != s.facets.size()) {
+        return std::unexpected(error(ErrorCode::invalid_input,
+                                     "facet_corner_patch needs one entry per facet node", std::nullopt));
+    }
     const std::vector<Point>& pts = s.points;
     const std::size_t n = pts.size();
     const auto node_count = static_cast<NodeId>(n);
@@ -293,6 +297,8 @@ std::expected<Mesh, base::Error> make_dual_mesh(const SimplexMesh& s, DualMeshRe
     const std::size_t listed_count = s.facets.size() / D;
     // Per topological boundary facet (in `boundary` order), its patch or -1.
     std::vector<std::int32_t> boundary_patch(boundary.size(), -1);
+    // With facet_corner_patch (FD8): per topological boundary facet, each key node's patch.
+    std::vector<std::array<std::int32_t, 3>> boundary_corner_patch;
     {
         std::vector<std::pair<Key, std::size_t>> listed(listed_count);
         for (std::size_t f = 0; f < listed_count; ++f) {
@@ -317,6 +323,13 @@ std::expected<Mesh, base::Error> make_dual_mesh(const SimplexMesh& s, DualMeshRe
                 return std::unexpected(
                     error(ErrorCode::invalid_input, "facet patch index out of range", f));
             }
+            for (std::size_t k = 0; k < D && !s.facet_corner_patch.empty(); ++k) {
+                const std::int32_t cp = s.facet_corner_patch[f * D + k];
+                if (cp < 0 || static_cast<std::size_t>(cp) >= s.patch_names.size()) {
+                    return std::unexpected(
+                        error(ErrorCode::invalid_input, "facet corner patch index out of range", f));
+                }
+            }
             listed[f] = {key, f};
         }
         std::ranges::sort(listed);
@@ -335,7 +348,17 @@ std::expected<Mesh, base::Error> make_dual_mesh(const SimplexMesh& s, DualMeshRe
                                              "exactly one cell)",
                                              f));
             }
-            boundary_patch[static_cast<std::size_t>(it - boundary.begin())] = s.facet_patch[f];
+            const auto at = static_cast<std::size_t>(it - boundary.begin());
+            boundary_patch[at] = s.facet_patch[f];
+            if (!s.facet_corner_patch.empty()) {
+                // In key order: the corner patch of the listed node equal to key[k].
+                if (boundary_corner_patch.empty()) boundary_corner_patch.assign(boundary.size(), {-1, -1, -1});
+                for (std::size_t k = 0; k < D; ++k) {
+                    for (std::size_t j = 0; j < D; ++j) {
+                        if (s.facets[f * D + j] == key[k]) boundary_corner_patch[at][k] = s.facet_corner_patch[f * D + j];
+                    }
+                }
+            }
         }
     }
 
@@ -488,7 +511,8 @@ std::expected<Mesh, base::Error> make_dual_mesh(const SimplexMesh& s, DualMeshRe
             for (std::size_t c = 0; c < 3; ++c) closure[i][c] += piece[k] * normal[c];
             closure_magnitude[i] += std::abs(piece[k]);
             if (boundary_patch[f] >= 0) {
-                patch_pieces.push_back({boundary_patch[f], b.key[k], piece[k]});
+                const std::int32_t patch = boundary_corner_patch.empty() ? boundary_patch[f] : boundary_corner_patch[f][k];
+                patch_pieces.push_back({patch, b.key[k], piece[k]});
             }
         }
     }

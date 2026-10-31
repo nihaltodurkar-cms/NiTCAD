@@ -64,6 +64,11 @@ void print_provenance(const NiTCAD::results::Provenance& p) {
 
 int fail(const NiTCAD::base::Error& e) {
     std::fprintf(stderr, "nitcad: %s\n", e.message.c_str());
+    if (e.context && e.context->index) {
+        std::fprintf(stderr, "  (index %zu", *e.context->index);
+        if (e.context->value) std::fprintf(stderr, ", value %g", *e.context->value);
+        std::fputs(")\n", stderr);
+    }
     return 1;
 }
 
@@ -87,6 +92,30 @@ void describe(const NiTCAD::deck::Plan& plan) {
     const auto& d = plan.device;
     std::printf("mesh: %dD, %zu nodes, %zu edges\n", d.mesh().dimension(), d.mesh().node_count(),
                 d.mesh().edges().size());
+    if (plan.generated) {
+        const auto& r = plan.generated->report;
+        if (d.mesh().dimension() == 3) {
+            std::printf("generated: %zu tetrahedra, %zu slivers, %zu exempt, smallest dihedral %.2f deg, "
+                        "largest radius-edge %.3f\n",
+                        r.tetrahedra, r.slivers, r.exempt_tetrahedra, r.min_dihedral_deg, r.max_radius_edge);
+        } else {
+            std::printf("generated: %zu triangles, %zu exempt, smallest angle %.2f deg\n", r.triangles,
+                        r.exempt_triangles, r.min_angle_deg);
+        }
+        if (plan.generated->generation_digest != 0) {
+            std::printf("generation digest: %016llx (%s)\n",
+                        static_cast<unsigned long long>(plan.generated->generation_digest), plan.mesh_type.c_str());
+        }
+        if (const auto* c = d.interface_certificate()) {
+            std::printf("certificate: P4 %zu cross faces (%zu in corner zones)", c->report.cross_faces,
+                        c->report.corner_faces);
+            if (c->patches) {
+                std::printf("; P6 %zu patch-boundary pieces (%zu in zones)", c->patches->cross_pieces,
+                            c->patches->corner_pieces);
+            }
+            std::putchar('\n');
+        }
+    }
     for (const auto& r : d.regions()) {
         std::printf("region %s (%s)\n", r.name.c_str(),
                     NiTCAD::device::is_insulator(r) ? "insulator" : "semiconductor");

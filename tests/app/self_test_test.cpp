@@ -122,9 +122,13 @@ TEST_CASE("app self-test: on the GPU too, and with the debug layer (WG4, WG5)", 
                           q(dir / "probe.png"));
     if (probe.status != 0) SKIP("no Direct3D 12 hardware adapter: " + probe.output);
     if (!same_view(m2, "--view field --field potential", "gpu", dir)) SKIP("no window or swap chain in this session");
-    // The debug layer (Graphics Tools): clean, and nothing left alive after the window.
+    // The debug layer (Graphics Tools): clean, and nothing left alive after the window. This run is WG5's, not
+    // WG1's: WARP under the debug layer in Debug is the slowest set-up there is (a 104.6 ms gap measured
+    // 2026-10-31, serial), and a WG1 failure ends the self-test before the debug layer's messages and the live
+    // objects are read. So the gap bound here is loose; WG1 is gated by the other self-tests at wg1_limit_ms()
+    // (owner ruling 2026-10-31, DECISIONS.md Unit 26c).
     const Ran d = run(q(NITCAD_APP_PATH) + L" --self-test " + q(m2) + L" --out " + q(dir / "debug.png") +
-                      L" --adapter warp --debug-layer --view solid" + gap_limit());
+                      L" --adapter warp --debug-layer --view solid --gap-limit-ms 1000");
     UNSCOPED_INFO(d.output);
     if (d.output.find("D3D12GetDebugInterface") != std::string::npos) SKIP("the D3D12 debug layer is not installed");
     CHECK(d.status == 0);

@@ -41,6 +41,7 @@ Base base_for(std::string_view kind, std::string_view context) {
     if (kind == "mesh") {
         if (context == "generate2d") return {app_test::generate2d, "mesh"};
         if (context == "generate3d") return {app_test::generate3d, "mesh"};
+        if (context == "extrude3d") return {app_test::extrude3d, "mesh"};
         if (context == "file") {
             // The generated 2D resistor's mesh, saved once.
             static const std::filesystem::path file = [] {
@@ -137,6 +138,10 @@ std::map<std::string, std::string> samples() {
             {"path", "\"missing.nitmesh\""},
             {"polygon", "0 0, 1um 0, 1um 1um"},
             {"seed", "0 0 0"},
+            {"axis", "x"},
+            {"stations", "0, 1um"},
+            {"cell", "0 0, 1um 0, 1um 1um"},
+            {"extrude", "c 0:1um"},
             {"profile", "donor constant 1e15"},
             {"oxide_thickness", "10nm"},
             {"work_function", "4.1"},
@@ -524,4 +529,18 @@ TEST_CASE("app vocabulary: the Schottky kind in the deck, the app and the CLI (U
     CAPTURE(cli.output);
     REQUIRE(cli.status == 0);
     CHECK(cli.output.find("contact anode: schottky, 1 nodes") != std::string::npos);
+}
+
+TEST_CASE("app vocabulary: a mesh patch's form follows the mesh type (Unit 53, FD13)", "[app]") {
+    const app::SectionInfo* mesh = app::find_section_info("mesh");
+    REQUIRE(mesh != nullptr);
+    const app::KeyInfo* extruded = app::find_key_info(*mesh, "patch far", "extrude3d");
+    REQUIRE(extruded != nullptr);
+    CHECK(extruded->value == "<x0 y0 z0 x1 y1 z1>");
+    const app::KeyInfo* planar = app::find_key_info(*mesh, "patch far", "generate2d");
+    REQUIRE(planar != nullptr);
+    CHECK(planar->value == "<x y>, <x y>");
+    const app::KeyInfo* faced = app::find_key_info(*mesh, "patch x_min far", "generate3d");
+    REQUIRE(faced != nullptr);
+    CHECK(faced->value == "<x y z>, ...");
 }

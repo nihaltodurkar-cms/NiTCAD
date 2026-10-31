@@ -13,10 +13,17 @@
 // boundary the circumcentres of the boundary facets around e and e's midpoint):
 //   deviation(F) = min over the declared pieces P separating A and B of max over v in V(F) of
 //   dist(v, P).
-// Each piece is convex (a segment, or a planar convex polygon), so dist(., P) is convex, and F lies
-// in the convex hull of V(F): max over V(F) of dist(., P) bounds it over all of F. The minimum over
-// pieces makes deviation(F) an upper bound on the largest distance from F to the interface (exact
-// where one piece is nearest everywhere on F; an over-estimate near a bend, the safe direction).
+// For a convex piece (a segment, or a planar convex polygon) dist(., P) is convex, and F lies in
+// the convex hull of V(F): max over V(F) of dist(., P) bounds it over all of F. A non-convex
+// planar polygon (3D; Unit 53, FD9) is measured by the plane distance when the hull of V(F)'s
+// projection lies in the polygon (tested exactly; axis-aligned pieces, whose projection is exact),
+// by the plane distance plus the grown reach when it lies in the polygon grown outward by 1e-6 s
+// (mitred; the reach its largest vertex displacement), for face vertices rounded just across a
+// feature line; and otherwise by the min over the triangles of its ear-clip decomposition of max
+// over V(F) (an upper bound; always for oblique pieces).
+// The minimum over pieces makes deviation(F) an upper bound on the largest distance from F to the
+// interface (exact where one piece is nearest everywhere on F; an over-estimate near a bend, the
+// safe direction).
 // Corner zones: the points within 2 s of a piece's relative boundary (a segment's end points; a
 // polygon's edges), s the declared resolution. A face is in a zone when its midpoint or any vertex
 // is. Acceptance:
@@ -35,6 +42,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <expected>
+#include <optional>
 #include <span>
 #include <vector>
 
@@ -45,7 +53,8 @@
 namespace NiTCAD::mesh {
 
 struct InterfacePiece {
-    // 2D: a segment, two points. 3D: a planar convex polygon, at least three points in order.
+    // 2D: a segment, two points. 3D: a planar simple polygon (convex, or not: FD9), at least three
+    // points in order.
     std::vector<Point> vertices;
     std::int32_t region_a = 0;
     std::int32_t region_b = 0;
@@ -67,7 +76,7 @@ struct InterfaceReport {
 // Errors:
 // - invalid_input: node_region not one per node, or a region negative; dual not of these
 //   simplices; resolution not finite and positive; a piece with the wrong vertex count, a
-//   non-finite vertex, equal or negative regions, or (3D) not planar, convex and non-degenerate
+//   non-finite vertex, equal or negative regions, or (3D) not planar, simple and non-degenerate
 //   (the index names the piece);
 // - degenerate_mesh, the rule not established (the index is the edge's first node, both nodes in
 //   the message): regions joined with no declared piece between them; a face outside the corner
@@ -77,25 +86,77 @@ struct InterfaceReport {
     const InterfaceSet& interfaces);
 
 
+// P6, patch boundaries (Unit 53; DECISIONS.md FD8, FD10): whether the boundary areas of a 3D mesh
+// whose patch edges are not all mesh edges are split along the declared patch boundaries. Under
+// FD8 (a) a patch edge lies on an interface trace and boundary triangles straddle it; each corner's
+// boundary piece goes to its own patch (SimplexMesh::facet_corner_patch). On every listed boundary
+// triangle, each edge whose two corners carry different patches has a boundary dual piece in the
+// triangle: the segment from the edge's midpoint to the triangle's circumcentre, the boundary
+// between the corners' pieces. Its deviation is min over the declared boundaries of its two
+// patches of max over its two end points of the distance (an upper bound, as P4's). Zones: the
+// points within 2 s of a declared zone centre; a piece is in a zone when either end point is.
+// Acceptance: outside the zones deviation <= 1e-12 L_e + 1e-13 X (P4a's tolerance, L_e the edge,
+// X the largest coordinate magnitude of the piece's ends and the edge's nodes); inside, <= s; two
+// patches meeting on a triangle need a declared boundary between them. Reported, not judged:
+// each patch's area (the dual's) against its geometric area, and the length of its declared
+// boundary inside the zones.
+struct PatchBoundary {
+    Point a{};
+    Point b{};
+    std::int32_t patch_a = 0;  // indices into SimplexMesh::patch_names, patch_a != patch_b
+    std::int32_t patch_b = 0;
+};
+
+struct PatchBoundarySet {
+    std::vector<PatchBoundary> boundaries;
+    std::vector<Point> zone_centres;  // where patch boundaries meet traces, domain edges or each other, or turn on a trace
+    std::vector<double> patch_area;   // the geometric area of each patch [cm^2], one per patch name
+    double resolution = 0.0;          // s [cm]
+};
+
+struct PatchBoundaryReport {
+    std::size_t cross_pieces = 0;       // boundary dual pieces between corners of different patches
+    std::size_t corner_pieces = 0;      // of those, the pieces in a zone
+    double max_flat_deviation = 0.0;    // outside the zones, deviation / its tolerance (<= 1)
+    double max_corner_deviation = 0.0;  // inside the zones [cm] (<= s)
+    std::vector<double> area_error;     // per patch: the dual's area minus the geometric [cm^2]
+    std::vector<double> zone_length;    // per patch: its declared boundary inside the zones [cm]
+};
+
+// `dual` must be make_dual_mesh(simplices) of a 3D mesh. Errors:
+// - invalid_input: not 3D or dual not of these simplices; resolution not finite and positive;
+//   patch_area not one finite non-negative entry per patch; a boundary or zone centre not finite,
+//   a boundary degenerate or its patches out of range or equal (the index names it);
+// - degenerate_mesh, the rule not established (the index is the listed facet): two patches meet
+//   with no declared boundary between them; a piece outside the zones deviating beyond its
+//   tolerance; a piece in a zone deviating beyond s.
+[[nodiscard]] std::expected<PatchBoundaryReport, base::Error> check_patch_boundaries(const SimplexMesh& simplices,
+                                                                                     const Mesh& dual,
+                                                                                     const PatchBoundarySet& patches);
+
 // A record that check_interfaces established P4 for one mesh, one node-region assignment and one
 // set of declared interfaces (DECISIONS.md U2). Device::create requires a matching one for a
 // multi-region device on a mesh that is not a tensor grid; a certificate whose digests do not
-// match the device's mesh and node regions is stale and refused.
+// match the device's mesh and node regions is stale and refused. With P6 checked as well (Unit 53,
+// FD10), its report; the mesh digest covers the boundary patches.
 struct InterfaceCertificate {
     std::uint64_t mesh_digest = 0;        // graph_digest of the dual mesh
     std::uint64_t region_digest = 0;      // region_digest of the node regions
-    std::uint64_t interfaces_digest = 0;  // the declared pieces and resolution
+    std::uint64_t interfaces_digest = 0;  // the declared pieces and resolution (and patch set, with P6)
     InterfaceReport report;
+    std::optional<PatchBoundaryReport> patches;  // P6 (FD10)
 };
 
 // FNV-1a 64 of a node-region assignment (count, then each region as a 64-bit word).
 [[nodiscard]] std::uint64_t region_digest(std::span<const std::int32_t> node_region);
 
-// check_interfaces, and on success the certificate of what it checked. Errors: those of
-// check_interfaces.
+// check_interfaces (and check_patch_boundaries when `patches` is given), and on success the
+// certificate of what it checked. Errors: those of the checks; invalid_input when the simplices
+// carry per-corner patches and `patches` is null (FD10: such a mesh is certified with P6 or not
+// at all, DECISIONS.md SQ3).
 [[nodiscard]] std::expected<InterfaceCertificate, base::Error> certify_interfaces(
     const SimplexMesh& simplices, const Mesh& dual, std::span<const std::int32_t> node_region,
-    const InterfaceSet& interfaces);
+    const InterfaceSet& interfaces, const PatchBoundarySet* patches = nullptr);
 
 // Whether the certificate was issued for this mesh and these node regions.
 [[nodiscard]] bool certifies(const InterfaceCertificate& c, const Mesh& mesh,

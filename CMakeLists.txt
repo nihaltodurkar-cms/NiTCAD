@@ -185,7 +185,11 @@ add_library(nitcad_mesh STATIC
   src/mesh/triangulation2d.cpp
   src/mesh/triangulation3d.cpp
   src/mesh/generate2d.cpp
-  src/mesh/generate3d.cpp)
+  src/mesh/generate3d.cpp
+  src/mesh/polygon2d.cpp
+  src/mesh/complex.cpp
+  src/mesh/complex_interfaces.cpp
+  src/mesh/generate_complex.cpp)
 add_library(NiTCAD::mesh ALIAS nitcad_mesh)
 target_include_directories(nitcad_mesh PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
 target_link_libraries(nitcad_mesh PUBLIC NiTCAD::base)
@@ -201,7 +205,11 @@ add_executable(nitcad_mesh_test
   tests/mesh/origin_test.cpp
   tests/mesh/generate2d_test.cpp
   tests/mesh/triangulation3d_test.cpp
-  tests/mesh/generate3d_test.cpp)
+  tests/mesh/generate3d_test.cpp
+  tests/mesh/complex_test.cpp
+  tests/mesh/generate_complex_test.cpp
+  tests/mesh/generate_complex_interfaces_test.cpp
+  tests/mesh/generate_complex_patches_test.cpp)
 # The predicate and dual-geometry tests read the internal headers directly (Unit 16).
 target_include_directories(nitcad_mesh_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/mesh")
 target_link_libraries(nitcad_mesh_test PRIVATE NiTCAD::mesh Catch2::Catch2WithMain)
@@ -481,6 +489,7 @@ add_executable(nitcad_solve_test
   tests/solve/mosfet_test.cpp
   tests/solve/unstructured_test.cpp
   tests/solve/unstructured3d_test.cpp
+  tests/solve/complex_convergence_test.cpp
   tests/solve/field_mobility_test.cpp
   tests/solve/fermi_dirac_test.cpp
   tests/solve/heterojunction_test.cpp
@@ -543,6 +552,7 @@ add_executable(nitcad_deck_test
   tests/deck/schottky_test.cpp
   tests/deck/quantum_confinement_test.cpp
   tests/deck/gate_tunnelling_test.cpp
+  tests/deck/complex_finfet_test.cpp
   tests/baseline/trace_listener.cpp)
 target_include_directories(nitcad_deck_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/deck")
 # The plot tests read the images back (Unit 25a).

@@ -43,6 +43,7 @@
 #include <vector>
 
 #include "NiTCAD/base/error.hpp"
+#include "NiTCAD/mesh/complex.hpp"
 #include "NiTCAD/mesh/interfaces.hpp"
 #include "NiTCAD/mesh/mesh.hpp"
 #include "NiTCAD/mesh/simplex_mesh.hpp"
@@ -125,6 +126,8 @@ struct GeneratedMesh {
     std::vector<std::int32_t> node_region;
     std::optional<InterfaceCertificate> certificate;  // present with two or more regions
     MeshReport report;
+    // generation_digest of the complex and options (Unit 53, FD14); 0 for the other generators.
+    std::uint64_t generation_digest = 0;
 };
 
 // Errors: invalid_input (the geometry or option rules above); resource_exhausted (max_nodes
@@ -239,5 +242,69 @@ struct MeshOptions3D {
 // mesh failed the boundary check or an import check).
 [[nodiscard]] std::expected<GeneratedMesh, base::Error> generate_mesh(const Geometry3D& geometry,
                                                                      const MeshOptions3D& options);
+
+
+// The 3D generator over a polyhedral complex (Unit 53; DECISIONS.md FD3-FD5): non-convex domains.
+//
+// Input: a complex (complex.hpp, check_complex's rules). Output as generate_mesh(Geometry3D): a
+// boundary-conforming Delaunay tetrahedralization, every boundary triangle Gabriel (P2) and inside
+// one boundary facet, its box-method graph and the region of every node. Boundary patches are the
+// facets' patch names, a patch over any number of facets (FD3); a node on an edge between two
+// facets of one patch has the sum of its areas on both.
+//
+// Additional rules (invalid_input): the domain's boundary a manifold surface (every boundary edge
+// in exactly two boundary facets).
+//
+// Interfaces (FD7-FD9): facets between volumes of different regions. A piece is a maximal
+// connected set of coplanar interface facets of one region pair: a simple polygon, possibly
+// non-convex, without holes. Its edges are feature lines (bends, junctions of three or more
+// regions, traces where it meets the outer boundary) and their meeting points feature points.
+// With interfaces, interface_resolution s is required, and (invalid_input, the index an interface
+// facet): every sector about a feature line at least 60 degrees, also within a boundary face
+// about a feature point; feature lines and traces at least 6 s long; unrelated features, pieces
+// (thin layers), boundary faces a piece does not meet, and domain edges at least 4 s apart; every
+// piece wide enough for its 1.5 s inset. Unsupported, and refused: holes, pinched pieces, a piece
+// ending on a domain edge, two pieces ending on the boundary along one line, a trace at a domain
+// corner, a feature line on a domain edge other than a single crossing. Placement: each piece's
+// pair set (the 2D generator's nodes in its 1.5 s inset at min(h of both regions, 4 s)) mirrored
+// at +-s/2; pairs along each trace in the boundary face; a pair at each crossing of a domain edge,
+// the domain-edge segment across it never split.
+// Rows along every feature line sit on one lattice (multiples of 1.5 s along the line), so the
+// pieces meeting there align. No node is inserted in a protected band; tetrahedra of interface
+// nodes only, or with the circumcentre in a band, are exempt from the quality bound. The result
+// carries the P4 certificate (check_interfaces; degenerate_mesh if it fails).
+//
+// Patches at traces (FD8, slice 4). A patch edge on a trace is not a mesh edge: the trace pairs
+// straddle it, and each boundary triangle's corner gives its piece to the patch of the facets
+// holding its node (SimplexMesh::facet_corner_patch, set only when some corner differs from its
+// triangle). A patch edge crossing a trace, or ending on one, stays constrained: nodes at +-s/2
+// along it (one at an end), the segment across never split, no trace pair within 0.75 s. Rules
+// there (invalid_input): sectors at least 60 degrees, the patch edge's other vertices at least
+// 4 s away, no domain edge or second patch edge through the point; a patch edge at least 4 s from
+// a feature it does not meet. Wherever a patch edge meets an interface the certificate carries P6
+// (check_patch_boundaries): every patch edge declared, zones at the straddled runs' ends and where
+// patch edges meet traces. The convex generator keeps its refusal (DECISIONS.md SQ1).
+//
+// Refinement as the convex generator, over the boundary's faces (maximal connected sets of
+// coplanar boundary facets, possibly non-convex, with holes) and its domain edges (chains of facet
+// edges where two faces meet) and patch edges (facet edges inside a face between different
+// patches). A subsegment is also encroached when it is missing from the 2D triangulation of a
+// face it bounds, so a non-convex face's boundary is recovered by splitting. Only tetrahedra
+// inside the domain are refined. Termination at radius_edge = 2 for input angles of at least 90
+// degrees (reflex included) is cited (Shewchuk 1998, FD5, to verify for non-convex input);
+// otherwise heuristic, capped by max_nodes. Extraction: the tetrahedra a flood fill from the
+// bounding tetrahedra cannot reach across subfacets; then the checks: every boundary triangle in
+// one face, the volume and every face's area equal to the complex's within 1e-12, P0-P3 and P5.
+//
+// Errors: invalid_input (check_complex's rules, the options, the rules above); resource_exhausted
+// (max_nodes, or the iteration cap); degenerate_mesh (a postcondition failed).
+[[nodiscard]] std::expected<GeneratedMesh, base::Error> generate_mesh(const PolyhedralGeometry& geometry,
+                                                                     const MeshOptions3D& options);
+
+// A 64-bit FNV-1a digest of a complex and the options it is meshed with (Unit 53, FD14): the
+// vertices (doubles by bit pattern), facets with their patch names, volumes with their regions,
+// and every MeshOptions3D field. generate_mesh(PolyhedralGeometry) stores it in the result, so a
+// generated mesh names what it was generated from; equal inputs give equal digests on any machine.
+[[nodiscard]] std::uint64_t generation_digest(const PolyhedralGeometry& geometry, const MeshOptions3D& options);
 
 }  // namespace NiTCAD::mesh

@@ -15,6 +15,7 @@
 #include <cstdint>
 #include <limits>
 #include <map>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -587,4 +588,57 @@ TEST_CASE("M2: the cancellation term decides when pieces dwarf the edge", "[mesh
     CHECK_FALSE(edge_kept(0.0));
     CHECK_FALSE(edge_kept(2e-9));  // total ~1e-9: above tau L, within tau sum |pieces|
     CHECK(edge_kept(2e-7));        // total ~1e-7: kept
+}
+
+TEST_CASE("per-corner patches (Unit 53, FD8): each corner's boundary piece goes to its patch", "[mesh][simplex]") {
+    // Two boxes along x; on the face y = 0, corners with x < 1 take a new patch "left".
+    SimplexMesh s = kuhn_boxes({0.0, 1.0, 2.0}, {0.0, 1.0}, {0.0, 1.0});
+    const auto plain = make_dual_mesh(s);
+    REQUIRE(plain.has_value());
+    SECTION("all corners as the facet: the same mesh") {
+        s.facet_corner_patch.clear();
+        for (std::size_t f = 0; f < s.facet_patch.size(); ++f) s.facet_corner_patch.insert(s.facet_corner_patch.end(), 3, s.facet_patch[f]);
+        const auto m = make_dual_mesh(s);
+        REQUIRE(m.has_value());
+        CHECK(graph_digest(*m) == graph_digest(*plain));
+    }
+    SECTION("a corner patch moves exactly its corners' pieces") {
+        s.patch_names.push_back("left");
+        const auto left = static_cast<std::int32_t>(s.patch_names.size() - 1);
+        for (std::size_t f = 0; f < s.facet_patch.size(); ++f) {
+            for (std::size_t k = 0; k < 3; ++k) {
+                const Point& p = s.points[static_cast<std::size_t>(s.facets[3 * f + k])];
+                s.facet_corner_patch.push_back(s.facet_patch[f] == 2 && p[0] < 1.0 ? left : s.facet_patch[f]);
+            }
+        }
+        const auto m = make_dual_mesh(s);
+        REQUIRE(m.has_value());
+        const BoundaryPatch* y_min = plain->find_boundary("y_min");
+        const BoundaryPatch* a = m->find_boundary("y_min");
+        const BoundaryPatch* b = m->find_boundary("left");
+        REQUIRE((y_min != nullptr && a != nullptr && b != nullptr));
+        // Per node: the plain area splits between the two patches by the node's side.
+        std::map<NodeId, double> sum;
+        for (const BoundaryPatch* p : {a, b}) {
+            for (std::size_t i = 0; i < p->nodes.size(); ++i) sum[p->nodes[i]] += p->areas[i];
+        }
+        for (std::size_t i = 0; i < y_min->nodes.size(); ++i) {
+            CHECK(std::abs(sum[y_min->nodes[i]] - y_min->areas[i]) <= 1e-14);
+        }
+        for (const NodeId v : b->nodes) CHECK(s.points[static_cast<std::size_t>(v)][0] < 1.0);
+        for (const NodeId v : a->nodes) CHECK(s.points[static_cast<std::size_t>(v)][0] >= 1.0);
+    }
+    SECTION("refused: wrong size, an index out of range") {
+        s.facet_corner_patch.assign(s.facets.size() - 1, 0);
+        auto m = make_dual_mesh(s);
+        REQUIRE_FALSE(m.has_value());
+        CHECK(m.error().code == NiTCAD::base::ErrorCode::invalid_input);
+        s.facet_corner_patch.assign(s.facets.size(), 0);
+        s.facet_corner_patch[4] = static_cast<std::int32_t>(s.patch_names.size());
+        m = make_dual_mesh(s);
+        REQUIRE_FALSE(m.has_value());
+        CHECK(m.error().code == NiTCAD::base::ErrorCode::invalid_input);
+        REQUIRE(m.error().context.has_value());
+        CHECK(m.error().context->index == std::optional<std::size_t>{1});
+    }
 }
