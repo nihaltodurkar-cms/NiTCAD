@@ -799,6 +799,194 @@ TEST_CASE("deck run: the run record names the extrude3d mesh and its generation 
     CHECK(plain->sweep->run.mesh_generation_digest == 0);
 }
 
+
+// Unit 54 (DECISIONS.md UD9-UD11, UC10): the swept mesh from a deck.
+namespace {
+
+// The two slabs swept: five lines, a layer straddling the interface z = 0.5 um (u, v = y, z).
+// (Built without changed(): its REQUIRE may not run before main.)
+const std::string swept_head = [] {
+    std::string t = extruded_head;
+    const std::string after = "interface_resolution = 0.1um\n";
+    t.insert(t.find(after) + after.size(),
+             "sweep = on\nlines = linspace(0, 1um, 5)\n"
+             "layer = 0 0.5um, 1um 0.5um along=linspace(0, 1um, 5) lines=-0.3um, -0.2um + 0.2um, 0.3um straddle=0.05um\n");
+    return t;
+}();
+
+// What the swept deck says, built by hand.
+std::pair<mesh::ExtrudedGeometry, mesh::SweptOptions> swept_by_hand() {
+    const double um = 1e-4;
+    mesh::ExtrudedGeometry x;
+    x.axis = 0;
+    x.stations = {0.0, 1 * um};
+    x.cells = {{"a", {{0, 0, 0}, {1 * um, 0, 0}, {1 * um, 0.5 * um, 0}, {0, 0.5 * um, 0}}},
+               {"b", {{0, 0.5 * um, 0}, {1 * um, 0.5 * um, 0}, {1 * um, 1 * um, 0}, {0, 1 * um, 0}}}};
+    x.regions = {{0}, {1}};
+    x.patches = {{"bottom", {-1 * um, -1 * um, -1 * um}, {2 * um, 2 * um, 0}}, {"top", {-1 * um, -1 * um, 1 * um}, {2 * um, 2 * um, 2 * um}}};
+    mesh::SweptOptions o;
+    o.section.max_size = 0.5 * um;
+    o.section.interface_resolution = 0.1 * um;
+    const auto linspace = [](double a, double b, int n) {
+        std::vector<double> v;
+        for (int k = 0; k < n; ++k) v.push_back(k == n - 1 ? b : a + (b - a) * static_cast<double>(k) / static_cast<double>(n - 1));
+        return v;
+    };
+    o.lines = linspace(0, 1 * um, 5);
+    mesh::BoundaryLayer l;
+    l.a = {0, 0.5 * um, 0};
+    l.b = {1 * um, 0.5 * um, 0};
+    l.along = linspace(0, 1 * um, 5);
+    l.lines = {-0.3 * um, -0.2 * um, 0.2 * um, 0.3 * um};
+    l.straddle = 0.05 * um;
+    o.section.layers = {l};
+    return {x, o};
+}
+
+}  // namespace
+
+TEST_CASE("deck build: sweep = on gives the swept mesh of the deck's extrusion and options (UC10)", "[deck][extrude][swept]") {
+    const deck::Plan p = must(swept_head);
+    REQUIRE(p.generated.has_value());
+    CHECK(p.mesh_type == "extrude3d");
+    const auto [x, o] = swept_by_hand();
+    const auto m = mesh::generate_swept(x, o);
+    if (!m) FAIL(m.error().message);
+    // Every value read as written: the same digest, so the same inputs, and the same mesh.
+    CHECK(p.generated->generation_digest == mesh::generation_digest(x, o));
+    CHECK(mesh::graph_digest(p.device.mesh()) == mesh::graph_digest(m->mesh));
+    CHECK(p.generated->node_region == m->node_region);
+    REQUIRE(p.device.interface_certificate() != nullptr);
+    const auto& r = p.generated->report;
+    CHECK(r.axis_lines == 5);
+    CHECK(r.prisms * 3 == r.tetrahedra);
+    CHECK(r.prisms % 4 == 0);  // the cross-section's triangles times four intervals
+    CHECK(r.layers == 1);
+    CHECK(r.corner_blocks == 0);
+    CHECK(p.device.regions().size() == 2);
+    // Each layer line, with the straddles at +-0.025 um, is a row of nodes at its z.
+    for (const double z : {0.2, 0.3, 0.475, 0.525, 0.7, 0.8}) {
+        const auto n = std::ranges::count_if(p.device.mesh().points(), [&](const mesh::Point& q) { return std::abs(q[2] - z * 1e-4) < 1e-16; });
+        CAPTURE(z);
+        CHECK(n == 25);  // 5 along the base times 5 axis lines
+    }
+    // A box in the cross-section refines it; sweep = off is Unit 53's generator, unchanged (UC1).
+    const deck::Plan boxed = must(changed(swept_head, "max_size = 0.5um\n", "max_size = 0.5um\nbox = 0 0 1um 0.2um 0.1um\n"));
+    CHECK(boxed.device.mesh().node_count() > p.device.mesh().node_count());
+    const deck::Plan off = must(changed(extruded_head, "max_size = 0.5um\n", "max_size = 0.5um\nsweep = off\n"));
+    CHECK(off.generated->report.prisms == 0);
+    CHECK(off.generated->generation_digest == must(extruded_head).generated->generation_digest);
+}
+
+TEST_CASE("deck build: every swept-mesh mistake names its line (UC2, UD10)", "[deck][extrude][swept]") {
+    const auto expect = [](const std::string& message, const std::string& what) {
+        INFO(message);
+        CHECK(message.find(what) != std::string::npos);
+    };
+    // The swept keys without sweep = on, each on line 10.
+    for (const char* entry : {"lines = 0, 1um", "straddle = 0.5um 0.1um", "layer = 0 0.5um, 1um 0.5um along=0, 1um lines=-0.1um, 0.1um",
+                              "min_angle = 25"}) {
+        const std::string key = std::string(entry).substr(0, std::string(entry).find(' '));
+        expect(failure(changed(extruded_head, "max_size = 0.5um\n", "max_size = 0.5um\n" + std::string(entry) + "\n")),
+               "t.deck:10: '" + key + "' is for a swept mesh (sweep = on)");
+    }
+    expect(failure(changed(swept_head, "sweep = on\n", "sweep = on\nradius_edge = 2\n")), "t.deck:12: radius_edge is for sweep = off");
+    expect(failure(changed(swept_head, "lines = linspace(0, 1um, 5)\n", "")), "t.deck:1: a swept extrude3d mesh (sweep = on) needs 'lines'");
+    expect(failure(changed(swept_head, "lines = linspace(0, 1um, 5)\n", "lines = 0, 1um\nlines = 0, 1um\n")), "t.deck:13: a second 'lines'");
+    expect(failure(changed(swept_head, "sweep = on", "sweep = maybe")), "t.deck:11: 'maybe' is not on or off");
+    expect(failure(changed(swept_head, "sweep = on\n", "sweep = on\nbox = 0 0 0 1um 1um 1um 0.1um\n")), "t.deck:12: 'box' needs 5 lengths, has 7");
+    expect(failure(changed(swept_head, "sweep = on\n", "sweep = on\nstraddle = 0.5um\n")), "t.deck:12: 'straddle' needs 2 lengths, has 1");
+    expect(failure(changed(swept_head, "lines = linspace(0, 1um, 5)", "lines = linspace(0, 1um, 1)")), "t.deck:12: linspace needs a count");
+    // The layer's form, on line 13.
+    const std::string layer = swept_head.substr(swept_head.find("layer = "), swept_head.find('\n', swept_head.find("layer = ")) - swept_head.find("layer = "));
+    const auto with_layer = [&](const std::string& l) { return failure(changed(swept_head, layer, l)); };
+    expect(with_layer("layer = 0 0.5um, 1um 0.5um"), "t.deck:13: a layer is '<u v>, <u v> along=");
+    expect(with_layer("layer = 0 0.5um along=0, 1um lines=-0.1um, 0.1um"), "t.deck:13: a layer's base is two points");
+    expect(with_layer("layer = 0 0.5um, 1um along=0, 1um lines=-0.1um, 0.1um"), "t.deck:13: a point needs 2 coordinates");
+    expect(with_layer("layer = 0 0.5um, 1um 0.5um along=0, 1um lines=-0.1um, 0.1um width=1um"), "t.deck:13: unknown layer option 'width='");
+    expect(with_layer("layer = 0 0.5um, 1um 0.5um along=0, 1um along=0, 1um lines=-0.1um, 0.1um"), "t.deck:13: a second 'along=' in a layer");
+    expect(with_layer("layer = 0 0.5um, 1um 0.5um along=0, 1um"), "t.deck:13: a layer needs along= and lines=");
+    expect(with_layer("layer = 0 0.5um, 1um 0.5um along= lines=-0.1um, 0.1um"), "t.deck:13: the layer option 'along=' needs a value");
+    expect(with_layer("layer = 0 0.5um, 1um 0.5um along=0, 1um lines=-0.1qq, 0.1um"), "t.deck:13: '-0.1qq' is not a number");
+    expect(with_layer("layer = 0 0.5um, 1um 0.5um along=0, 1um lines=-0.1um, 0.1um straddle=wide"), "t.deck:13: 'wide' is not a number");
+    // The generators' refusals, located at [mesh]: the sweep's own and the cross-section's.
+    const auto at_mesh = failure(changed(swept_head, "sweep = on\n", "sweep = on\nstraddle = 0 0.1um\n"));
+    expect(at_mesh, "t.deck:1: [mesh] extrude3d (sweep): ");
+    const auto section = with_layer("layer = 0 0.5um, 1um 0.5um along=0, 1um lines=-0.6um, 0.3um");
+    expect(section, "t.deck:1: [mesh] extrude3d (sweep): the cross-section: ");
+}
+
+TEST_CASE("deck run: a swept mesh's run record, files and identity (UC10, UD11)", "[deck][extrude][swept]") {
+    const fs::path dir = deck_test::scratch("swept_generation");
+    const std::string run_text = changed(swept_head, "[equilibrium]\n",
+                                         "[sweep]\ncontact top = 0 : 0.05 : 0.05\n[output]\nsweep = s.nitsweep\nmesh = m.nitmesh\n");
+    const deck::Plan p = must(run_text, dir);
+    REQUIRE(p.generated.has_value());
+    const auto id = [](const deck::Plan& q) { return solve::make_run_record(q.device, q.options, q.points).input_identity; };
+    // The identity covers the lines, the straddles and the layers through the mesh they make; max_nodes
+    // changes the generation digest only.
+    CHECK(id(p) == id(must(run_text, dir)));
+    CHECK(id(p) != id(must(changed(run_text, "lines = linspace(0, 1um, 5)", "lines = linspace(0, 1um, 6)"), dir)));
+    CHECK(id(p) != id(must(changed(run_text, "straddle=0.05um", "straddle=0.04um"), dir)));
+    CHECK(id(p) != id(must(changed(run_text, "lines=-0.3um, -0.2um", "lines=-0.35um, -0.2um"), dir)));
+    const deck::Plan capped = must(changed(run_text, "sweep = on\n", "sweep = on\nmax_nodes = 100000\n"), dir);
+    CHECK(capped.generated->generation_digest != p.generated->generation_digest);
+    CHECK(id(capped) == id(p));
+
+    const auto report = deck::run(p);
+    if (!report) FAIL(report.error().message);
+    REQUIRE(report->sweep.has_value());
+    CHECK(report->sweep->run.mesh_type == "extrude3d");
+    CHECK(report->sweep->run.mesh_generation_digest == p.generated->generation_digest);
+    const auto sweep = io::load_sweep(dir / "s.nitsweep");
+    if (!sweep) FAIL(sweep.error().message);
+    CHECK(sweep->run.mesh_generation_digest == p.generated->generation_digest);
+    // The mesh file: the swept report, regions and certificate come back.
+    const auto mesh = io::load_generated_mesh(dir / "m.nitmesh");
+    if (!mesh) FAIL(mesh.error().message);
+    CHECK(mesh->generation_digest == p.generated->generation_digest);
+    CHECK(mesh->report.prisms == p.generated->report.prisms);
+    CHECK(mesh->report.axis_lines == 5);
+    CHECK(mesh->report.layers == 1);
+    CHECK(mesh->node_region == p.generated->node_region);
+    REQUIRE(mesh->certificate.has_value());
+    // Read back as a file mesh, the run names the generator its digest belongs to.
+    const std::string tail = swept_head.substr(swept_head.find("[doping]"));
+    const deck::Plan reread = must("[mesh]\ntype = file\npath = m.nitmesh\n[region lower]\nmaterial = silicon\n[region upper]\nmaterial = silicon\n" +
+                                       changed(tail, "[equilibrium]\n", "[sweep]\ncontact top = 0 : 0.05 : 0.05\n[output]\nsweep = r.nitsweep\n"),
+                                   dir);
+    CHECK(reread.mesh_type == "extrude3d");
+    CHECK(id(reread) == id(p));
+    const auto rerun = deck::run(reread);
+    if (!rerun) FAIL(rerun.error().message);
+    CHECK(rerun->sweep->run.mesh_generation_digest == p.generated->generation_digest);
+}
+
+// Unit 54 slice 4: the two FinFET decks as swept decks (UC8's and UC9's meshes) build and are certified,
+// with P6 where the gate patch ends at the straddled stations; a few seconds each in Release but minutes in Debug
+// (UC13), so hidden; run it by name.
+TEST_CASE("deck build: the swept FinFET decks mesh and are certified", "[.benchmark][deck][extrude][swept]") {
+    for (const auto& [name, axis_lines] :
+         {std::pair{"finfet_3d_swept.deck", std::size_t{25}}, std::pair{"finfet_3d_shaped_swept.deck", std::size_t{37}}}) {
+        CAPTURE(name);
+        const auto d = deck::read(fs::path(NITCAD_DECKS_DIR) / name);
+        if (!d) FAIL(d.error().message);
+        const auto p = deck::build(*d);
+        if (!p) FAIL(p.error().message);
+        REQUIRE(p->generated.has_value());
+        const auto& r = p->generated->report;
+        CHECK(r.layers == 4);
+        CHECK(r.corner_blocks == 4);
+        CHECK(r.axis_lines == axis_lines);
+        const auto* c = p->device.interface_certificate();
+        REQUIRE(c != nullptr);
+        CHECK(c->patches.has_value());
+        CHECK(p->device.contacts().size() == 4);
+        CHECK(p->device.regions().size() == 5);
+        UNSCOPED_INFO(name << ": nodes " << p->device.mesh().node_count() << ", cross-section " << r.nodes / r.axis_lines
+                           << ", P4 flat " << c->report.max_flat_deviation << ", corner " << c->report.max_corner_deviation);
+    }
+}
 // Unit 53 slice 5: the extruded FinFET deck of decks/ meshes and is certified (P4 and P6). About twenty
 // minutes in Release, so hidden; run it by name.
 TEST_CASE("deck build: the reduced extruded FinFET deck meshes and is certified", "[.benchmark][deck][extrude]") {

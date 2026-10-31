@@ -29,6 +29,20 @@
 //                     patch <name> = <x0 y0 z0 x1 y1 z1>   (repeatable: the whole boundary facets inside
 //                       the closed box, to rounding, form the patch; a box selecting none is an error; the rest are "boundary")
 //                     max_size, interface_resolution, radius_edge, max_nodes, box as generate3d
+//                     sweep = on | off                     (default off; Unit 54, UD10) on: the swept mesh
+//                       (mesh::generate_swept): the cross-section meshed in 2D and swept along the axis, with
+//                       lines = <axis>                     (required: as a tensor axis; the first and last
+//                         the end stations exactly)
+//                       straddle = <station> <width>       (repeatable: lines at station +- width/2, required at
+//                         every interior station where a cell changes region)
+//                       layer = <u v>, <u v> along=<axis> lines=<axis> [straddle=<length>]
+//                                                          (repeatable: a structured layer on the base from the
+//                         first point to the second, its lines signed, positive to the base's left; straddle the
+//                         width about each interface it covers, default interface_resolution; two layers whose
+//                         bases share an end point form a corner block)
+//                       max_size, interface_resolution, min_angle as generate2d; max_nodes over the 3D nodes;
+//                       box = <u0 v0 u1 v1 h> in the cross-section; radius_edge refused. Off: lines, straddle,
+//                       layer and min_angle refused.
 //                     region extrusions are given in the region sections (extrude = <cells> <t_lo>:<t_hi>,
 //                       the ends being stations, to rounding; a cell and section assigned twice is an error, an
 //                       unassigned one is void)

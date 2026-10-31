@@ -1039,6 +1039,7 @@ namespace {
 
 namespace report_key {
 constexpr std::uint16_t counts = 1, min_angle = 2, counts_3d = 3, quality_3d = 4;  // 3D: optional
+constexpr std::uint16_t counts_swept = 5;  // Unit 54 (UD11): swept meshes only, absent otherwise
 }  // namespace report_key
 
 std::vector<std::int64_t> wide(std::span<const std::int32_t> v) { return {v.begin(), v.end()}; }
@@ -1080,6 +1081,11 @@ std::expected<void, base::Error> save_generated_mesh(const std::filesystem::path
                                            static_cast<std::int64_t>(r.flat_dropped),
                                            static_cast<std::int64_t>(r.band_facet_points)});
         rep.f64s(report_key::quality_3d, std::vector<double>{r.max_radius_edge, r.min_dihedral_deg});
+    }
+    if (r.prisms != 0) {
+        rep.i64s(report_key::counts_swept,
+                 std::vector<std::int64_t>{static_cast<std::int64_t>(r.prisms), static_cast<std::int64_t>(r.axis_lines),
+                                           static_cast<std::int64_t>(r.layers), static_cast<std::int64_t>(r.corner_blocks)});
     }
     w.record(mesh_key::report, rep);
     if (m.certificate) w.record(mesh_key::certificate, detail::write_certificate(*m.certificate));
@@ -1148,6 +1154,16 @@ std::expected<mesh::GeneratedMesh, base::Error> load_generated_mesh(const std::f
         report.band_facet_points = static_cast<std::size_t>(c3[5]);
         report.max_radius_edge = q3[0];
         report.min_dihedral_deg = q3[1];
+    }
+    if (rep.has(report_key::counts_swept)) {
+        NITCAD_IO_TRY(cs, rep.i64s(report_key::counts_swept));
+        if (cs.size() != 4 || std::ranges::any_of(cs, [](std::int64_t v) { return v < 0; })) {
+            return std::unexpected(corrupt("generated mesh swept report"));
+        }
+        report.prisms = static_cast<std::size_t>(cs[0]);
+        report.axis_lines = static_cast<std::size_t>(cs[1]);
+        report.layers = static_cast<std::size_t>(cs[2]);
+        report.corner_blocks = static_cast<std::size_t>(cs[3]);
     }
     NITCAD_IO_TRY(generation, r.u64_or(mesh_key::generation_digest, 0));
     return mesh::GeneratedMesh{std::move(m), std::move(s), std::move(node_region), std::move(certificate), report, generation};

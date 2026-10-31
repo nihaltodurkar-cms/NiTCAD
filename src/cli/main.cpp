@@ -94,7 +94,13 @@ void describe(const NiTCAD::deck::Plan& plan) {
                 d.mesh().edges().size());
     if (plan.generated) {
         const auto& r = plan.generated->report;
-        if (d.mesh().dimension() == 3) {
+        if (r.prisms != 0) {
+            // A swept mesh (Unit 54, UD10): the cross-section's quality, the product's counts.
+            std::printf("swept: %zu axis lines, %zu prisms, %zu tetrahedra; %zu layers, %zu corner blocks; "
+                        "cross-section smallest angle %.2f deg (%zu exempt)\n",
+                        r.axis_lines, r.prisms, r.tetrahedra, r.layers, r.corner_blocks, r.min_angle_deg,
+                        r.exempt_triangles);
+        } else if (d.mesh().dimension() == 3) {
             std::printf("generated: %zu tetrahedra, %zu slivers, %zu exempt, smallest dihedral %.2f deg, "
                         "largest radius-edge %.3f\n",
                         r.tetrahedra, r.slivers, r.exempt_tetrahedra, r.min_dihedral_deg, r.max_radius_edge);

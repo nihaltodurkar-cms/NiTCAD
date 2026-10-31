@@ -1,0 +1,124 @@
+# 3D tri-gate FinFET with a tapered fin, as a swept mesh with structured layers (Unit 54; UC9's deck)
+# finfet_3d_shaped.deck's device (a fin 10 nm wide at its foot and 6 nm at its top, a 0.5 nm interfacial
+# layer following it, HfO2 filling the rest of the gate box, nitride spacers), meshed by sweeping a 2D
+# cross-section mesh along the fin (DECISIONS.md, Unit 54, UD1-UD10).
+#
+# Axes (lengths in nm): x along the fin, source (x = 0) to drain (x = 85), the gate from 30 to 55;
+# the cross-section is (u, v) = (y, z): y vertical (buried oxide 0-20, fin 20-50, interfacial layer to
+# 50.5, HfO2 to 52), z across (0-14, the fin 2-12 at its foot, 4-10 at its top).
+#
+# The cross-section: four structured layers wrap the fin (its sides, its top and its foot), lines from
+# 2 nm into the silicon to 0.1 nm out, the silicon's interfaces straddled by two lines at +-s/2. The
+# corners are oblique (93.8 degrees at the top, 86.2 at the foot): corner blocks cut at the bisector,
+# judged as corner zones by P4b (UD6). The interfacial layer's outer face is not parallel to the fin's
+# side (the layer is 0.5 nm wide horizontally at the foot and 0.53 nm at the top), so the layers stop
+# inside it and that interface keeps the 2D generator's mirrored pairs at s, as do the HfO2's interfaces.
+# s = 0.08 nm: every interface piece at least 6 s long (the 0.5 nm interfacial layer on the box).
+#
+# The axis: lines 2.5 nm apart, the gate edges straddled by 0.5 nm.
+
+[device]
+temperature = 300
+
+[mesh]
+type = extrude3d
+axis = x
+stations = 0, 30nm, 55nm, 85nm
+# Cells in (y, z), as finfet_3d_shaped.deck.
+cell box = 0 0, 20nm 0, 20nm 1.5nm, 20nm 2nm, 20nm 12nm, 20nm 12.5nm, 20nm 14nm, 0 14nm
+cell fin = 20nm 2nm, 50nm 4nm, 50nm 10nm, 20nm 12nm
+cell il = 20nm 1.5nm, 50.5nm 3.5nm, 50.5nm 10.5nm, 20nm 12.5nm, 20nm 12nm, 50nm 10nm, 50nm 4nm, 20nm 2nm
+cell hk = 20nm 0, 52nm 0, 52nm 14nm, 20nm 14nm, 20nm 12.5nm, 50.5nm 10.5nm, 50.5nm 3.5nm, 20nm 1.5nm
+patch source = 0 20nm 2nm  0 50nm 12nm
+patch drain = 85nm 20nm 2nm  85nm 50nm 12nm
+patch gate = 30nm 20nm 0  55nm 52nm 14nm
+patch substrate = 0 0 0  85nm 0 14nm
+sweep = on
+lines = linspace(0, 27.5nm, 12) + linspace(32.5nm, 52.5nm, 9) + linspace(57.5nm, 85nm, 12)
+straddle = 30nm 0.5nm
+straddle = 55nm 0.5nm
+max_size = 4nm
+interface_resolution = 0.08nm
+# The frame, clockwise in (y, z): the top (z from 10 down to 4), the side from (50, 4) to the foot (20, 2),
+# the foot (z from 2 to 12), the side from (20, 12) to (50, 10). The given columns stop short of the corner
+# blocks (about 2 nm from each corner); along runs from 0 to the base's length, on a side sqrt(904) nm (to 1e-12).
+layer = 50nm 10nm, 50nm 4nm along=0 + linspace(2nm, 4nm, 5) + 6nm lines=-2nm, -1.2nm, -0.6nm, -0.25nm, 0.1nm
+layer = 50nm 4nm, 20nm 2nm along=0 + linspace(2nm, 27.5nm, 52) + 30.0665927567458nm lines=-2nm, -1.2nm, -0.6nm, -0.25nm, 0.1nm
+layer = 20nm 2nm, 20nm 12nm along=0 + linspace(2.5nm, 7.5nm, 11) + 10nm lines=-2nm, -1.2nm, -0.6nm, -0.25nm, 0.1nm
+layer = 20nm 12nm, 50nm 10nm along=0 + linspace(2.5nm, 27.5nm, 51) + 30.0665927567458nm lines=-2nm, -1.2nm, -0.6nm, -0.25nm, 0.1nm
+
+[region buried_oxide]
+material = sio2
+extrude = box 0:85nm
+
+# Region 1: nitride spacers around the fin, outside the gate.
+[region spacer]
+material = insulator
+eps_r = 7.5
+extrude = il hk 0:30nm
+extrude = il hk 55nm:85nm
+
+# Region 2: the high-k layer under the gate.
+[region hfo2]
+material = insulator
+eps_r = 22
+extrude = hk 30nm:55nm
+
+# Region 3: the interfacial oxide wrapping the fin under the gate.
+[region interfacial]
+material = sio2
+extrude = il 30nm:55nm
+
+# Region 4: the fin, the whole length: channel under the gate, source and drain beyond it.
+[region silicon]
+material = silicon
+extrude = fin 0:85nm
+
+[doping]
+profile = acceptor constant 1e16
+# Source and drain: 1e20 to 3 nm short of each gate edge, an erfc fall-off of 2 nm into the channel.
+profile = donor constant 1e20 axis=y x=-10nm:27nm lateral=2nm
+profile = donor constant 1e20 axis=y x=58nm:95nm lateral=2nm
+
+[contact source]
+kind = ohmic
+patch = source
+
+[contact drain]
+kind = ohmic
+patch = drain
+
+# The tri-gate: one contact over the three faces (one boundary patch).
+[contact gate]
+kind = electrode
+patch = gate
+electrode = metal
+work_function = 4.4
+
+# The grounded substrate under the buried oxide, a weak back gate.
+[contact substrate]
+kind = electrode
+patch = substrate
+electrode = metal
+work_function = 4.6
+
+[interface silicon interfacial]
+fixed_charge = 5e10
+
+[models]
+fermi_dirac = on
+field_mobility = on
+electron_mobility = masetti
+
+[solver]
+line_search = residual
+max_cuts = 8
+
+[sweep]
+contact gate = 0 : 0.8 : 0.05
+contact drain = 0.05
+
+[output]
+sweep = finfet_3d_shaped_swept.nitsweep
+device = finfet_3d_shaped_swept.nitdev
+table = finfet_3d_shaped_swept.csv

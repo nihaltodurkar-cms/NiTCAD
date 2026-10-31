@@ -501,3 +501,18 @@ TEST_CASE("generator: a layer's end and patch-end columns are the given points (
     }
     CHECK(close(total(m->mesh.boundary()[0].areas), 0.5, 1e-12));
 }
+
+// UC1 (Unit 54): two U14 layers near the square's corner, on the bottom and left edges. Delaunay joins
+// their nodes across the corner by triangles of layer nodes lying in neither lattice, which U14 exempts
+// from refinement; signed layers exempt only triangles inside a lattice (Unit 54 slice 3, addition (d)),
+// and U14's layers keep U14's rule. Pinned: the digest measured before Unit 53 (fea05e5), unchanged since.
+TEST_CASE("generator: two boundary layers near a corner keep U14's mesh (Unit 54, UC1)", "[mesh][generate]") {
+    Geometry2D g{{rect(0, 0, 1, 1, 0)}, {}};
+    MeshOptions2D o;
+    o.max_size = 0.1;
+    o.layers = {{{0.3, 0, 0}, {1, 0, 0}, {0, 0.35, 0.7}, {0.05, 0.1}}, {{0, 0.3, 0}, {0, 1, 0}, {0, 0.35, 0.7}, {0.05, 0.1}}};
+    const auto m = generate_mesh(g, o);
+    REQUIRE(m.has_value());
+    CHECK(m->mesh.node_count() == 215);
+    CHECK(graph_digest(m->mesh) == 0x1c2949ce70fe860aULL);
+}

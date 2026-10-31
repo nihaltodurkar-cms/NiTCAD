@@ -2428,8 +2428,25 @@ Unstructured meshes are not implemented initially. The mesh architecture must st
     interfacial oxide at the fin's top corners, only with a permittivity contrast (H1 orders 0.43, −0.04); accepted
     as a limitation (owner, 2026-10-31), the test `[!shouldfail]` with its thresholds unchanged. The wrapped gate's
     266° corner caps any quasi-uniform mesh (SQ7, reported). FC9, FC10 and cost (FC12): 11.3.
-- Not yet: 3D structured boundary layers, an independent Voronoi-clipping check, layers on curved or crossing
-  boundaries, abrupt doping junctions off region boundaries (11.3, items 5 and 6).
+- **Unit 54, 3D structured boundary layers by swept meshes** (DECISIONS.md Unit 54, UD1–UD13, UC1–UC13; on
+  `mesh/structured-layers-3d`):
+  - `generate_swept(ExtrudedGeometry, SweptOptions)`: the cross-section meshed once in 2D and repeated on axis lines
+    (stations where a region changes straddled), each prism split into three tetrahedra by the global-index rule.
+    The product of a 2D Delaunay mesh and a 1D grid is Delaunay, and its dual is the product of the two duals, so
+    the box method is exact by construction (UC3, UC4, UC5 to 1e-12). Extrusions only, no void next to a filled
+    cell across a station.
+  - 2D structured layers on interfaces: signed lines from a base segment, interfaces parallel to it straddled by
+    the generator, crossings straddled by columns; corner blocks where two layers meet, right-angle (one tensor
+    lattice, exact) or mitred at the bisector for 60°–120° (P4b judges the bends). U14's layers are unchanged.
+  - Deck `extrude3d` with `sweep = on`, `lines`, `straddle`, `layer`; io, run record (the swept digest) and the
+    application as for Unit 53. `decks/finfet_3d_swept.deck` (8,300 nodes) and `decks/finfet_3d_shaped_swept.deck`
+    (71,188 nodes) mesh in seconds.
+  - Gates: UC1–UC6 and UC9–UC12 met (cost 1.17e5 nodes in 8.0 s). **UC7 fails** H1 at one level (0.86 against 0.9:
+    the unlayered HfO₂ bends), accepted as a limitation. **UC8 fails** (the reduced FinFET against the tensor
+    reference): V_T, max g_m, the swing and the on-current within their bounds, I_D at 5 of 17 points outside
+    (subthreshold and two points where the tensor's own error changes sign); accepted as a limitation (owner, 2026-10-31). UC9 (the shaped deck): 11.3.
+- Not yet: an independent Voronoi-clipping check, layers on curved or crossing boundaries, 3D layers on
+  non-extruded geometry, abrupt doping junctions off region boundaries (11.3, item 6).
 
 ### 6.12 Long-term computational architecture
 
@@ -3098,7 +3115,7 @@ exists, not finished), **planned** (nothing built). Audit of 2026-10-09, against
 |---|---|---|---|
 | Robust nonlinear solving | Newton with componentwise clipping (6.2); the generation-free retry (Units 19, 20); arc-length `trace_bias` (Unit 19) | **Bias step cutting verified, on `main`** (Unit 28, below; `06b708d`, PR #31); **Newton line search verified, opt-in, on `main`** (Unit 30, below; `f3e2811`, PR #32) | A natural-test norm monotone in reverse bias; a Gummel or pseudo-transient fallback |
 | Input/output, checkpoint/restart | The `io` layer (approved 2026-10-09): versioned, checksummed, atomic files for meshes, sweeps and checkpoints; device files and the text input deck (Unit 31) | **Verified, on `main`** (Unit 29, 6.6; `f69a7a8`, PR #33); **device files and the deck verified, on `main`** (Unit 31, 6.5; `6f67510`, PR #37); **transient and small-signal files verified** (Unit 42, 6.6; PR #52); **transient, small-signal and trace deck analyses verified** (Unit 43, 6.5; PR #53) | Restart of transient and trace runs; a run started from a checkpoint (`initial`); unit suffixes on times |
-| Geometry and unstructured 3D meshing | `Mesh::from_parts` accepts any valid node/edge/volume graph; besides the tensor-grid producer, Unit 16 added the 2D and 3D Delaunay generators and the simplex import (checked duals P0–P5, P4-certified interfaces, contact patches, structured 2D boundary layers); nonlocal BTBT still needs tensor cells (6.11, M16) | **Verified, on `main`** (Unit 16, 6.11; `a09cf43`, PR #35); **non-convex 3D meshing built** (Unit 53, 6.11; on `mesh/finfet-geometry`): sectioned extrusions, junction lines, patches at traces; FC8 (flat gate) fails, accepted as a limitation; FC9 fails, accepted as a limitation | 3D boundary layers (item 5 below); FC8's corner error; abrupt junctions off region boundaries; an unstructured locator for nonlocal BTBT (M16) |
+| Geometry and unstructured 3D meshing | `Mesh::from_parts` accepts any valid node/edge/volume graph; besides the tensor-grid producer, Unit 16 added the 2D and 3D Delaunay generators and the simplex import (checked duals P0–P5, P4-certified interfaces, contact patches, structured 2D boundary layers); nonlocal BTBT still needs tensor cells (6.11, M16) | **Verified, on `main`** (Unit 16, 6.11; `a09cf43`, PR #35); **non-convex 3D meshing built** (Unit 53, 6.11; on `mesh/finfet-geometry`): sectioned extrusions, junction lines, patches at traces; FC8 (flat gate) fails, accepted as a limitation; FC9 fails, accepted as a limitation; **3D structured layers built** (Unit 54, 6.11; on `mesh/structured-layers-3d`): swept meshes of extrusions with 2D layers; UC7 accepted as a limitation, UC8 fails at 5 of 17 I_D points, accepted as a limitation (owner, 2026-10-31) | 3D layers on non-extruded geometry; the 2D generator's P2 refusals (Unit 54 slice 5); FC8's corner error; abrupt junctions off region boundaries; an unstructured locator for nonlocal BTBT (M16) |
 | Low-current accuracy | `terminal_current_resolution` reports the floor (Unit 15); the weighted terminal current with an adjoint error estimate (Unit 32, 6.6) | **Verified, on `main`** (Unit 32; `6e54c69`, PR #39): the MOSFET off state resolved at every Vg, sub-floor diode currents on the ideal-diode law to 0.1% | Weighted transient and small-signal currents; a path term for nonlocal tunnelling |
 | Generic fields/equations | Field descriptors and the unknowns' map; the drift-diffusion and electrothermal rows as equation terms composed by equation set, behind the unchanged `DriftDiffusion` (Unit 40, 6.12.1–2) | **Verified, bit-identical, on `main`** (Unit 40; `629bed0`, PR #50; below) | Move the model data out of `DriftDiffusion` and retire it as the wrapper; derived and edge/cell fields; `EquilibriumPoisson` from the same terms |
 | Scalable linear solvers | Eigen SparseLU (default), PARDISO opt-in (Unit 18); GMRES with an ILUT preconditioner opt-in, real and complex, with a reported SparseLU fallback (Unit 44, 6.10) | **GMRES-ILUT verified, opt-in** (Unit 44, on `linalg/iterative`): 3D 9–72× faster and 8–26× less memory than SparseLU | Algebraic multigrid and block (field-split) preconditioners; parallel assembly |
@@ -3304,7 +3321,10 @@ FG1–FG9):**
   spacers: patched faces cut by interfaces (deferred in U7).
 - **5. 3D structured boundary layers** (mesh). The 2D MOSFET gate passed only with a structured layer under the gate
   (U14); a fin's channel lies along its sidewalls and top, so thin anisotropic layers on those faces and around the
-  fin's corners.
+  fin's corners. **Built as Unit 54** (swept meshes of extrusions with 2D layers in the cross-section; 6.11; on
+  `mesh/structured-layers-3d`, 2026-10-31): FC9's comparison re-run as UC8 with 8,300 nodes (FC9's mesh had
+  297,758) is about as accurate as the coarse tensor mesh (on-current +1.0% against its +1.2%) but not within the
+  bound at 5 of 17 I_D points; accepted as a limitation (owner, 2026-10-31). UC9: met: the shaped deck converges at all 17 points with 71,188 nodes (sweep 892 s, against FC10's 288,729 and 3,099 s); its on-current is 15% above FC10's (no reference for this shape).
 - **6. Abrupt doping junctions** (mesh; U9, smaller). Junctions not on a region boundary are resolved only to h;
   pair-straddled doping interfaces. Analytic profiles are already sampled (M15).
 - **7. External mesh import** (not a shortcut). The simplex import refuses meshes that are not Delaunay with Gabriel

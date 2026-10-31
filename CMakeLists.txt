@@ -189,7 +189,8 @@ add_library(nitcad_mesh STATIC
   src/mesh/polygon2d.cpp
   src/mesh/complex.cpp
   src/mesh/complex_interfaces.cpp
-  src/mesh/generate_complex.cpp)
+  src/mesh/generate_complex.cpp
+  src/mesh/generate_swept.cpp)
 add_library(NiTCAD::mesh ALIAS nitcad_mesh)
 target_include_directories(nitcad_mesh PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
 target_link_libraries(nitcad_mesh PUBLIC NiTCAD::base)
@@ -204,12 +205,14 @@ add_executable(nitcad_mesh_test
   tests/mesh/interfaces_test.cpp
   tests/mesh/origin_test.cpp
   tests/mesh/generate2d_test.cpp
+  tests/mesh/generate2d_layers_test.cpp
   tests/mesh/triangulation3d_test.cpp
   tests/mesh/generate3d_test.cpp
   tests/mesh/complex_test.cpp
   tests/mesh/generate_complex_test.cpp
   tests/mesh/generate_complex_interfaces_test.cpp
-  tests/mesh/generate_complex_patches_test.cpp)
+  tests/mesh/generate_complex_patches_test.cpp
+  tests/mesh/generate_swept_test.cpp)
 # The predicate and dual-geometry tests read the internal headers directly (Unit 16).
 target_include_directories(nitcad_mesh_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/mesh")
 target_link_libraries(nitcad_mesh_test PRIVATE NiTCAD::mesh Catch2::Catch2WithMain)

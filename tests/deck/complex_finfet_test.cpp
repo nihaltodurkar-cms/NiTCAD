@@ -150,18 +150,18 @@ bool within(const char* what, double gen, double tensor, double ref) {
     return ok;
 }
 
-}  // namespace
-
-TEST_CASE("complex FinFET: the reduced deck against a coarse tensor mesh and its 2x reference (FC9)",
-          "[.fc9][!shouldfail]") {
+// FC9's comparison of the deck `name` (meshed by a generator, its gate contact "gate") with the coarse
+// tensor mesh and its 2x reference: every point converged, the rule for every quantity, and at most the
+// coarse tensor mesh's nodes. UC8 (Unit 54) is the same comparison for the swept deck.
+void compare_to_tensor(const char* name) {
     const std::string mkl = mkl_path();
     if (mkl.empty()) SKIP("NITCAD_MKL not set");
     if (auto loaded = linalg::load_mkl_runtime(mkl); !loaded) FAIL(loaded.error().message);
     const Run tensor = run("FC9 coarse tensor", tensor_text(false, mkl), "gate_top");
     const Run ref = run("FC9 tensor reference", tensor_text(true, mkl), "gate_top");
-    std::string generated = read_deck("finfet_3d_reduced.deck");
+    std::string generated = read_deck(name);
     replace_once(generated, "[solver]\n", "[solver]\n" + pardiso(mkl));
-    const Run gen = run("FC9 generated", generated, "gate");
+    const Run gen = run(std::string("FC9 generated (") + name + ")", generated, "gate");
     CHECK(tensor.converged == tensor.requested);
     CHECK(ref.converged == ref.requested);
     CHECK(gen.converged == gen.requested);
@@ -192,14 +192,46 @@ TEST_CASE("complex FinFET: the reduced deck against a coarse tensor mesh and its
     CHECK(gen.nodes <= tensor.nodes);
 }
 
-TEST_CASE("complex FinFET: the shaped deck's sweep converges at every point (FC10)", "[.fc10]") {
+// The shaped deck `name` solved: every point converges; on-current, V_T and swing printed.
+Run shaped_sweep(const char* label, const char* name) {
     const std::string mkl = mkl_path();
     if (mkl.empty()) SKIP("NITCAD_MKL not set");
     if (auto loaded = linalg::load_mkl_runtime(mkl); !loaded) FAIL(loaded.error().message);
-    std::string shaped = read_deck("finfet_3d_shaped.deck");
+    std::string shaped = read_deck(name);
     replace_once(shaped, "[solver]\n", "[solver]\n" + pardiso(mkl));
-    const Run r = run("FC10 shaped", shaped, "gate");
+    const Run r = run(label, shaped, "gate");
     CHECK(r.converged == r.requested);
+    const auto vt = analysis::threshold_max_gm(r.transfer, 0.05);
+    const auto ss = analysis::subthreshold_swing(r.transfer);
+    std::printf("%s: I_D(%.2f V) %.6e A, V_T (max g_m) %.4f V, swing %.2f mV/dec\n", label, r.transfer.x.back(),
+                r.transfer.y.back(), vt ? vt->value : std::nan(""), ss ? ss->value : std::nan(""));
+    std::fflush(stdout);
+    return r;
+}
+
+}  // namespace
+
+TEST_CASE("complex FinFET: the reduced deck against a coarse tensor mesh and its 2x reference (FC9)",
+          "[.fc9][!shouldfail]") {
+    compare_to_tensor("finfet_3d_reduced.deck");
+}
+
+// UC8 (Unit 54, the unit's gate): FC9's comparison, unchanged, for the swept deck with structured layers.
+// Measured (DECISIONS.md, Unit 54 slice 5): 8,300 nodes, every point converged; V_T, max g_m and the swing within
+// their bounds, I_D at 0.8 V +1.0% (the coarse tensor +1.2%); I_D outside its bound at 0, 0.05, 0.1, 0.4 and 0.5 V.
+// Accepted as a limitation (owner, 2026-10-31); [!shouldfail], the rule unchanged.
+TEST_CASE("complex FinFET: the swept deck against a coarse tensor mesh and its 2x reference (UC8)", "[.uc8][!shouldfail]") {
+    compare_to_tensor("finfet_3d_swept.deck");
+}
+
+TEST_CASE("complex FinFET: the shaped deck's sweep converges at every point (FC10)", "[.fc10]") {
+    shaped_sweep("FC10 shaped", "finfet_3d_shaped.deck");
+}
+
+// UC9 (Unit 54): the shaped deck as a swept deck; certified (the build refuses otherwise), every point
+// converges; nodes, times, on-current, V_T and swing printed beside FC10's run (no accuracy gate).
+TEST_CASE("complex FinFET: the shaped swept deck's sweep converges at every point (UC9)", "[.uc9]") {
+    shaped_sweep("UC9 shaped swept", "finfet_3d_shaped_swept.deck");
 }
 
 // The two decks' meshes pinned (SQ9): the graph digests measured on this branch after SQ6 and equal

@@ -78,11 +78,45 @@ struct Geometry2D {
 // increasing from 0 to the segment's length (to 1e-12 relative); `offsets` strictly increasing and
 // positive; the lattice inside the polygon owning the edge; layers not overlapping; no interface
 // within its protected band of a layer.
+//
+// A layer with signed lines (Unit 54, DECISIONS.md UD5, UD7): `lines` given instead of `offsets`.
+// The base [a, b] is covered by boundary and interface edges on its line; u its direction and n
+// its left normal (whatever side the domain is on); the nodes are a + t u + o n for t in `along`
+// and o in `lines` (signed, at least two), plus these straddles added by the generator, with
+// s_i = straddle (0: interface_resolution):
+// - every interface parallel to the base and inside the lattice gets lines at d +- s_i / 2 about
+//   its offset d, and no given line may lie in that closed interval or outside it on neither side;
+// - every interface across the lattice (perpendicular to the base) gets columns at t +- s_i / 2,
+//   strictly inside (0, length), with no given column in that interval.
+// Interfaces meeting the lattice at other angles are refused (but see corners, below). No mirrored
+// pairs are placed on an interface's covered part; its uncovered parts get pairs graded from each
+// end (1.5 s, 3 s from a feature, 1.5 s from a layer's edge) and must be long enough for them. A
+// boundary parallel to the base inside the lattice must be one of the lines and a boundary across
+// it one of the columns (their nodes lie on the edge: polygon vertices and patch ends exactly, else
+// projected onto it); a domain vertex on such a line lies on a column, a patch end inside the
+// lattice on a line (it becomes a column, outside every straddle); the lattice inside the domain.
+// The separation rules (4 s) apply to the interfaces' uncovered parts only.
+//
+// Corners (Unit 54, DECISIONS.md UD6, slice 3): two layers with signed lines whose bases share an
+// end point c (exactly) form a corner block. Their bases' angle at c must lie in [60, 120] degrees,
+// and they must span the same offsets (first and last lines, signs matched across the corner's
+// bisector). Each layer's region is cut at the bisector through c and reaches past its base end to
+// it; there its columns are the other layer's lines (with straddles) where they cross the bisector,
+// t = t_c + kappa o (kappa = +-(1 + cos)/sin of the angle; +-1 at a right angle, exactly for axis-
+// aligned bases), and its nodes on the other layer's side are dropped (those on the bisector kept
+// by the lower-indexed layer). At a right angle the two lattices and the corner square are one
+// tensor lattice; at other angles each keeps mirrored columns on its own side, and the bends near
+// the bisector are judged by P4b. Refused: a third layer at one end; the given columns between
+// the corner's innermost column and the end (the end's own column is dropped); two corners of one
+// layer overlapping; an interface across the layer, or a patch end, inside a corner. Triangles of
+// these layers' nodes alone are exempt from refinement only where their centroid lies in a lattice.
 struct BoundaryLayer {
     Point a;
     Point b;
     std::vector<double> along;    // [cm] positions from a toward b
     std::vector<double> offsets;  // [cm] distances into the domain
+    std::vector<double> lines;    // [cm] signed offsets, positive to the left of a -> b (UD5)
+    double straddle = 0.0;        // [cm] s_i; 0: interface_resolution
 };
 
 struct SizeBox {
@@ -118,6 +152,11 @@ struct MeshReport {
     std::size_t slivers = 0;            // tetrahedra with a dihedral angle below 5 degrees
     std::size_t flat_dropped = 0;       // tetrahedra dropped with all four vertices on one face
     std::size_t band_facet_points = 0;  // subfacet circumcentres inserted within an interface band (judged by P4)
+    // Swept meshes only (Unit 54, UD10); 0 for the other generators.
+    std::size_t prisms = 0;         // cross-section triangles times axis intervals, three tetrahedra each
+    std::size_t axis_lines = 0;     // the lines along the axis, straddles included
+    std::size_t layers = 0;         // the cross-section's structured layers
+    std::size_t corner_blocks = 0;  // where two layers' bases meet (UD6)
 };
 
 struct GeneratedMesh {
@@ -306,5 +345,60 @@ struct MeshOptions3D {
 // and every MeshOptions3D field. generate_mesh(PolyhedralGeometry) stores it in the result, so a
 // generated mesh names what it was generated from; equal inputs give equal digests on any machine.
 [[nodiscard]] std::uint64_t generation_digest(const PolyhedralGeometry& geometry, const MeshOptions3D& options);
+
+
+// The swept mesh of an extrusion (Unit 54; DECISIONS.md UD1-UD4, UD8): the cross-section meshed by
+// the 2D generator and swept along the axis on a set of lines, every prism split into three
+// tetrahedra by the global-index rule (each quad face cut on the diagonal through its smallest
+// node). The product of a 2D Delaunay triangulation and a 1D grid is Delaunay, with ties exactly
+// inside each prism, and its dual is the product of the two duals: a node's volume is its 2D area
+// times its line's dual length, so the box method is exact by construction, fine across the
+// section and coarse along the axis.
+//
+// The cross-section (UD2): one 2D polygon per non-void cell. Cells alike in every respect that the
+// sweep sees (their region in every section, their patches on both end stations and the set of
+// patches on their lateral boundary in every section) share a 2D region, so the edges between them
+// are internal; every other cell edge is a 2D interface, straddled by the 2D generator's mirrored
+// pairs (its rules apply: 6 s, 4 s, 60 degrees).
+//
+// The axis (UD3): `lines` strictly increasing, the first and last exactly the first and last
+// station. Every interior station where some cell changes region needs an AxisStraddle: lines at
+// station +- width/2 are added, and no given line may lie in the closed interval between them. A
+// station where a lateral boundary patch changes is straddled or is a line. A node's region is its
+// cell's region in the section holding its line.
+//
+// Rules (invalid_input; the index names the cell, line, straddle or station): those of extrude;
+// each cell void in every section or in none (UD4: no void next to a filled cell across a station);
+// the lines and straddles as above; a straddle at an interior station, of finite positive width,
+// its lines inside the neighbouring sections, at most one per station; a lateral patch change at a
+// cross-section vertex only where the boundary turns or two 2D regions meet; with any interface,
+// section.interface_resolution s positive. The 2D generator's errors come back with "the
+// cross-section: " in front.
+//
+// The result as generate_mesh(PolyhedralGeometry): the simplices with their boundary triangles and
+// patches (per corner where a straddled patch edge runs through a triangle, FD8 a), the dual, node
+// regions, and with interfaces the certificate (P4 over the complex's interface facets at
+// resolution s; P6 when corners carry patches). Errors: invalid_input; resource_exhausted (more
+// than max_nodes nodes); degenerate_mesh (a postcondition failed).
+struct AxisStraddle {
+    double station = 0.0;  // cm, an interior station
+    double width = 0.0;    // cm, the distance between the two lines
+};
+
+struct SweptOptions {
+    // The cross-section's options in its (u, v) coordinates (boxes and layers too), except that
+    // region_max_size is indexed by the extrusion's regions: a 2D region takes the smallest over the
+    // regions of its sections. max_nodes there caps the 2D mesh.
+    MeshOptions2D section;
+    std::vector<double> lines;  // cm, along the axis
+    std::vector<AxisStraddle> straddles;
+    std::size_t max_nodes = 2'000'000;  // 3D nodes
+};
+
+[[nodiscard]] std::expected<GeneratedMesh, base::Error> generate_swept(const ExtrudedGeometry& geometry,
+                                                                      const SweptOptions& options);
+
+// A 64-bit FNV-1a digest of an extrusion and its swept options (UD11): every field of both.
+[[nodiscard]] std::uint64_t generation_digest(const ExtrudedGeometry& geometry, const SweptOptions& options);
 
 }  // namespace NiTCAD::mesh

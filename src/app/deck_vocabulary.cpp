@@ -39,7 +39,7 @@ constexpr std::array<std::string_view, 6> waveforms{"constant", "step", "ramp", 
 
 constexpr std::array<KeyInfo, 1> device_keys{{{"temperature", 0, false, "300", "lattice temperature, K", {}, {}, {}}}};
 
-constexpr std::array<KeyInfo, 22> mesh_keys{{
+constexpr std::array<KeyInfo, 26> mesh_keys{{
     {"type", 0, false, "tensor", "tensor | generate2d | generate3d | extrude3d | file", mesh_types, {}, {}},
     {"x", 0, false, "<axis>", "tensor: x nodes, lengths or linspace(a, b, n) pieces joined by +", {}, {}, "tensor"},
     {"y", 0, false, "<axis>", "tensor: y nodes", {}, {}, "tensor"},
@@ -52,7 +52,8 @@ constexpr std::array<KeyInfo, 22> mesh_keys{{
     {"max_size", 0, false, "<length>", "generated meshes: largest element size", {}, {}, "generate2d generate3d extrude3d"},
     {"interface_resolution", 0, false, "<length>", "generated meshes: element size at interfaces", {}, {},
      "generate2d generate3d extrude3d"},
-    {"min_angle", 0, false, "20.7", "generate2d: smallest triangle angle, degrees", {}, {}, "generate2d"},
+    {"min_angle", 0, false, "20.7", "generate2d, extrude3d with sweep: smallest triangle angle, degrees", {}, {},
+     "generate2d extrude3d"},
     {"radius_edge", 0, false, "2", "generate3d, extrude3d: largest radius-edge ratio", {}, {}, "generate3d extrude3d"},
     {"max_nodes", 0, false, "2000000", "generated meshes: node limit", {}, {}, "generate2d generate3d extrude3d"},
     {"box", 0, true, "<lo> <hi> <h>", "generated meshes: a smaller size h inside a box", {}, {},
@@ -66,6 +67,12 @@ constexpr std::array<KeyInfo, 22> mesh_keys{{
     {"axis", 0, false, "x", "extrude3d: the extrusion axis, x | y | z", {}, {}, "extrude3d"},
     {"stations", 0, false, "<lengths>", "extrude3d: increasing positions along the axis", {}, {}, "extrude3d"},
     {"cell", 1, true, "<u v>, <u v>, ...", "extrude3d: a cross-section cell polygon (axis x: y, z)", {}, {}, "extrude3d"},
+    {"sweep", 0, false, "off", "extrude3d: on sweeps a 2D cross-section mesh along the axis", on_off, {}, "extrude3d"},
+    {"lines", 0, false, "<axis>", "extrude3d with sweep: the lines along the axis, as a tensor axis", {}, {}, "extrude3d"},
+    {"straddle", 0, true, "<station> <width>", "extrude3d with sweep: lines straddling an interior station", {}, {},
+     "extrude3d"},
+    {"layer", 0, true, "<u v>, <u v> along=<axis> lines=<axis>", "extrude3d with sweep: a structured layer on a base",
+     {}, {}, "extrude3d"},
     {"path", 0, false, "<file>", "file: a mesh file", {}, {}, "file"},
 }};
 
