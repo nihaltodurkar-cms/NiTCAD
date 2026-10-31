@@ -5734,7 +5734,7 @@ meshes (mesh, slice and quality views checked by eye on both FinFET decks).
   to 8 nm, and the coarse tensor mesh's axis except 10 nm (not 5 nm) spacing in the 1e20 source and drain beyond 20
   and 65 nm: 332 nodes per cross-section × 25 lines = **8,300 nodes** (budget 9,367), certified, generation digest
   `3b758bc4fbfd407a`. Slice 4's lines (50,061 nodes) are gone.
-- **UC8 fails, for an owner ruling (the risk stated before the run).** Release, PARDISO on 6 threads; every run
+- **UC8 fails (the risk stated before the run); accepted as a limitation by the owner (2026-10-31: "UC8 accept the limitation").** Release, PARDISO on 6 threads; every run
   converged (17/17). Coarse tensor 9,367 nodes (sweep 15 s), reference 45,375 (491 s), swept 8,300 (build 1 s,
   sweep 17 s). **Within their bounds:** V_T 0.2275 against 0.2310 V (bound 6.3 mV, error 3.4 mV), max g_m 7.42e-5
   against 7.63e-5 A/V (−2.7%; the tensor −2.1%), the swing 64.63 against 64.89 mV/dec; I_D at 12 of 17 points,
@@ -5749,6 +5749,9 @@ meshes (mesh, slice and quality views checked by eye on both FinFET decks).
   now +6.7% (0 V) high, on-current +0.2%; V_T, max g_m and the swing still within. The subthreshold current moves
   by several percent either way with the core's resolution, so neither mesh resolves it at this size. No further
   tuning against the reference; the deck is the first one, the case `[!shouldfail]` with its rule unchanged.
+  **Owner ruling (2026-10-31): "UC8 accept the limitation".** The swept reduced deck stays as measured (8,300
+  nodes), the case stays `[.uc8][!shouldfail]` with FC9's rule unchanged; the subthreshold and near-sign-change I_D
+  misses are a recorded limitation of this mesh size.
 - **UC9:** **met.** `decks/finfet_3d_shaped_swept.deck` (`[.uc9]`, Release, PARDISO on 6 threads, alone on the machine): 71,188 nodes, 406,080 tetrahedra, certified (P4, P6); 17 of 17 points converged, one bias sub-step; build 5 s, sweep 892 s (FC10: 288,729 nodes, build 454 s, sweep 3,099 s). I_D 1.559e-10 A at 0 V to 1.575e-5 A at 0.8 V (FC10: 1.94e-10 to 1.37e-5 A, so the swept mesh is 15% higher in on-current and 20% lower in off-current); V_T (max g_m) 0.227 V; swing 64.3 mV/dec (FC10 about 62 mV/dec from 0 to 0.15 V; FC10 recorded no V_T). No reference exists for this shape, so neither run is known to be the closer; on the reduced fin (UC8) the swept mesh is within about 1% of the reference in on-current, the generated one 13.9% low.
 - **UC11 met.** The gated fin (two straddled stations, a partial gate patch, P4 and P6), Release, idle machine,
   twice: 13,086 nodes (1,454 per section × 9 lines) in 0.90 s; **116,508 nodes** (5,548 × 21) in **8.0 s** (UD13's

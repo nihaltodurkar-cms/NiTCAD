@@ -219,7 +219,7 @@ TEST_CASE("complex FinFET: the reduced deck against a coarse tensor mesh and its
 // UC8 (Unit 54, the unit's gate): FC9's comparison, unchanged, for the swept deck with structured layers.
 // Measured (DECISIONS.md, Unit 54 slice 5): 8,300 nodes, every point converged; V_T, max g_m and the swing within
 // their bounds, I_D at 0.8 V +1.0% (the coarse tensor +1.2%); I_D outside its bound at 0, 0.05, 0.1, 0.4 and 0.5 V.
-// [!shouldfail] for an owner ruling, the rule unchanged.
+// Accepted as a limitation (owner, 2026-10-31); [!shouldfail], the rule unchanged.
 TEST_CASE("complex FinFET: the swept deck against a coarse tensor mesh and its 2x reference (UC8)", "[.uc8][!shouldfail]") {
     compare_to_tensor("finfet_3d_swept.deck");
 }
