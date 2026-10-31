@@ -727,6 +727,11 @@ TEST_CASE("deck build: every extrude3d mistake names its line", "[deck][extrude]
     expect(failure(changed(extruded_head, "extrude = a 0:1um", "extrude = c 0:1um")), "no cell named 'c'");
     expect(failure(changed(extruded_head, "extrude = a 0:1um", "extrude = a 0:0.5um")), "the range's ends must be stations");
     expect(failure(changed(extruded_head, "extrude = a 0:1um", "extrude = a 1um:0")), "needs t_lo < t_hi");
+    expect(failure(changed(extruded_head, "extrude = a 0:1um", "extrude = a 1um:1um")), "needs t_lo < t_hi");  // FC13
+    expect(failure(changed(extruded_head, "cell a = 0 0, 1um 0, 1um 0.5um, 0 0.5um\ncell b = 0 0.5um, 1um 0.5um, 1um 1um, 0 1um\n", "")),
+           "t.deck:1: an extrude3d mesh needs at least one 'cell'");
+    expect(failure(changed(extruded_head, "patch top = -1um -1um 1um 2um 2um 2um", "patch top = -1um -1um 2um 2um 2um 1um")),
+           "a box needs lo <= hi on each axis");
     expect(failure(changed(extruded_head, "extrude = b 0:1um", "extrude = b 0:1um\nextrude = a 0:1um")),
            "cell 'a' is already assigned in section 0");
     expect(failure(changed(extruded_head, "patch top = -1um -1um 1um 2um 2um 2um", "patch top = -1um -1um 3um 2um 2um 4um")),

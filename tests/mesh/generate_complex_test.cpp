@@ -263,11 +263,8 @@ TEST_CASE("complex generator: the same input gives the same mesh", "[mesh][compl
     MeshOptions3D o;
     o.max_size = 0.45;
     const auto a = mesh_of(pocket(), o);
-    const auto b = mesh_of(pocket(), o);
-    CHECK(a.simplices.points == b.simplices.points);
-    CHECK(a.simplices.cells == b.simplices.cells);
-    CHECK(graph_digest(a.mesh) == graph_digest(b.mesh));
-    // Pinned (FC13, FD15): a change of insertion order or of any refinement rule changes it.
+    // Pinned (FC13, FD15): a change of insertion order or of any refinement rule changes it, and a
+    // second run in this process or another gives it again (one mesh, not two, for FC14).
     CHECK(graph_digest(a.mesh) == 0x6c05e45d2f27a5dfull);
 }
 

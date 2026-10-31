@@ -3,9 +3,11 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
 #include <functional>
 #include <string>
 #include <vector>
@@ -14,6 +16,7 @@
 #include "NiTCAD/mesh/generate.hpp"
 #include "NiTCAD/mesh/interfaces.hpp"
 #include "NiTCAD/mesh/mesh.hpp"
+#include "complex_index.hpp"
 
 using namespace NiTCAD::mesh;
 using NiTCAD::base::ErrorCode;
@@ -194,9 +197,9 @@ TEST_CASE("complex interfaces: a liner wrapped on a fin, its feet on the slab (F
     // meets it (a facet point in the band next to the trace junction).
     CHECK(m.certificate->report.max_corner_deviation <= 0.32 * s);
     CHECK(m.report.nodes <= 2000);
-    const auto again = mesh_of(x, options(0.5, s));
-    CHECK(std::ranges::equal(again.mesh.points(), m.mesh.points()));
-    CHECK(again.node_region == m.node_region);
+    // Pinned: the same input gives the same mesh, in one run and across runs (FD15); the regions follow
+    // from the points exactly (FD6). One mesh, not two, for FC14.
+    CHECK(graph_digest(m.mesh) == 0xfffed114cf3222c1ull);
     WARN("liner fin");
 }
 
@@ -292,13 +295,24 @@ TEST_CASE("complex interfaces: the FD7 rules are refused (FC2, FC6)", "[mesh][co
         // A layer that ends anywhere meets another rule first (a domain-edge crossing, a short trace or feature
         // line). A closed shell around a core, inside the domain, does not: its inner and outer bend lines are
         // t sqrt 2 = 4.95 s apart, so only its parallel faces, 3.5 s apart, are refused (FC13: the rule loosened
-        // to 3 s accepts it).
-        const std::vector<double> b{0.0, 1.0, 1.35, 3.35, 3.7, 4.7};
-        const auto x = grid(b, b, b, [](double u, double v, std::size_t k) {
-            const bool core = in(u, 1.35, 3.35) && in(v, 1.35, 3.35) && k == 2;
-            const bool shell = in(u, 1.0, 3.7) && in(v, 1.0, 3.7) && k >= 1 && k <= 3;
-            return core ? 2 : shell ? 1 : 0;
-        });
+        // to 3 s accepts it). Nine cells (the core, two rings of four trapezoids), not a grid: a 5 x 5 grid's
+        // 125 volumes took 13 s in Debug (FC14).
+        ExtrudedGeometry x;
+        x.axis = 0;
+        x.stations = {0.0, 0.5, 0.85, 1.85, 2.2, 2.7};
+        const auto ring = [&x](const std::string& name, double a, double b, double c, double d) {
+            // Between the squares [a, b]^2 (inner) and [c, d]^2 (outer).
+            x.cells.push_back(quad(name + "_lo", P2(c, c), P2(d, c), P2(b, a), P2(a, a)));
+            x.cells.push_back(quad(name + "_r", P2(d, c), P2(d, d), P2(b, b), P2(b, a)));
+            x.cells.push_back(quad(name + "_hi", P2(d, d), P2(c, d), P2(a, b), P2(b, b)));
+            x.cells.push_back(quad(name + "_l", P2(c, d), P2(c, c), P2(a, a), P2(a, b)));
+        };
+        x.cells.push_back(quad("core", P2(0.85, 0.85), P2(1.85, 0.85), P2(1.85, 1.85), P2(0.85, 1.85)));
+        ring("shell", 0.85, 1.85, 0.5, 2.2);
+        ring("outer", 0.5, 2.2, 0.0, 2.7);
+        x.regions = {{0, 1, 2, 1, 0}};
+        for (int i = 0; i < 4; ++i) x.regions.push_back({0, 1, 1, 1, 0});
+        for (int i = 0; i < 4; ++i) x.regions.push_back({0, 0, 0, 0, 0});
         refused(x, o, "two interfaces within 4 s");
     }
     SECTION("an interface within 4 s of a parallel boundary face") {
@@ -353,4 +367,30 @@ TEST_CASE("complex interfaces: a per-region size refines that region only (FD11)
                                     << " -> " << count(fine, 0));
     CHECK(count(fine, 1) > 2 * count(plain, 1));
     CHECK(count(fine, 0) < 2 * count(plain, 0));
+}
+
+// FC12 (FD15's budget, measured, not promised: 1e5 nodes in 30 s Release): mesh time and exact node
+// location (FD6, every node located against the whole complex) on the gated liner fin, at about
+// 1e4 and 1e5 nodes.
+TEST_CASE("complex interfaces: cost at about 1e4 and 1e5 nodes (FC12)", "[.benchmark][mesh][complex_interfaces]") {
+    const auto g = extrude(liner_fin(0.7, true));
+    REQUIRE(g);
+    const auto index = detail::ComplexIndex::create(*g);
+    REQUIRE(index);
+    for (const auto& [h, s] : {std::pair{0.25, 0.05}, std::pair{0.12, 0.025}}) {
+        const auto t0 = std::chrono::steady_clock::now();
+        const auto m = generate_mesh(*g, options(h, s));
+        const double mesh_s = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+        REQUIRE(m);
+        const auto t1 = std::chrono::steady_clock::now();
+        std::size_t inside = 0;
+        for (const Point& p : m->simplices.points) {
+            inside += index->locate(p).kind == detail::ComplexIndex::Location::Kind::inside ? 1 : 0;
+        }
+        const double locate_s = std::chrono::duration<double>(std::chrono::steady_clock::now() - t1).count();
+        std::printf("FC12 h %.3g, s %.3g: %zu nodes (%zu inside a volume), %zu tetrahedra; mesh %.2f s, locate %.2f s; "
+                    "%.1f s per 1e5 nodes\n",
+                    h, s, m->report.nodes, inside, m->report.tetrahedra, mesh_s, locate_s,
+                    mesh_s * 1e5 / static_cast<double>(m->report.nodes));
+    }
 }

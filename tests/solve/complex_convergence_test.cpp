@@ -19,6 +19,11 @@
 // boundary face would put a vertex on a trace, a slice-5 limitation), and it reaches the whole
 // bottom face so the 2D body patch has no end at an interface junction (refused by generate2d).
 // Hidden: beyond the ctest node budget (M13), run explicitly in Release.
+//
+// FC8 fails on the flat gate (H1 orders 0.43, -0.04; L2 1.02, 0.47; gate charge 0.91, 2.17): an
+// error floor of about 5 mV in the interfacial oxide at the fin's top corners, present only with a
+// permittivity contrast. Owner ruling 2026-10-31 ("skip fc8"): an accepted limitation, the case
+// [!shouldfail] with its thresholds unchanged (DECISIONS.md Unit 53, slice 6).
 #include <catch2/catch_test_macros.hpp>
 
 #include <algorithm>
@@ -316,7 +321,7 @@ std::array<double, 3> orders(const std::vector<std::array<double, 3>>& err, std:
 }  // namespace
 
 TEST_CASE("complex convergence: a gated tapered fin uniform along its axis against its 2D cross-section (FC8)",
-          "[.complex_convergence]") {
+          "[.complex_convergence][!shouldfail]") {
     const auto err = ladder(Gate::flat, "FC8");
     for (std::size_t k = 1; k < err.size(); ++k) {
         const auto o = orders(err, k, "FC8");

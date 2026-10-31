@@ -5366,6 +5366,75 @@ recorded above). Release 127/127.
   every mesh above, but no faster (88,835 nodes: 26.6 / 24.0 s with it, 24.1 / 22.7 s without), so not kept.
   The redundant pops are cheap since the FC12 caches; the deck's remaining time is elsewhere (not yet profiled).
 
+**Owner ruling on FC8 (2026-10-31), "skip fc8":** the investigation (SQ8) stops. FC8's flat-gate case fails and
+is an **accepted limitation**: the test stays `[!shouldfail]` with its thresholds unchanged and its measurement
+above (H1 orders 0.43, −0.04; L2 1.02, 0.47; gate charge 0.91, 2.17 at (h, s) = (2, 0.16), (1, 0.08),
+(0.5, 0.04) nm). What is known: a constant-height error of about 5 mV in the 1 nm interfacial oxide at the fin's
+two top corners, present only with a permittivity contrast; `generate2d` on the same fixture converges. The
+wrapped-gate case stays reported (SQ7). A later unit may take it up; the cause is not found.
+
+**Slice 6, completed (2026-10-31):**
+- **FC13, hand mutants** (Release, a separate build tree; each mutant built and run against its suite's tests):
+  - Before this session (2026-10-31): FD1, FD2, FD3, FD6 and FD7's sector rule killed; FD5 (the node-cap test
+    stopped by the corner count, `max_nodes` 20 below the L-prism's 24 vertices), FD7 (4 s loosened to 3 s: the
+    thin-layer and near-boundary cases were refused first by the crossing rule), FD11 (a region's h) and FD12/FD15
+    (no pins) survived; each closed by a new or corrected test (`b4667ff`; FD12 and FD15 digest pins `019da1f`).
+  - FD13 (deck): the duplicate (cell, section) check, t_lo < t_hi, a patch box's lo <= hi, the station tolerance,
+    "needs at least one cell": five mutants. Three survived (`t_lo == t_hi`, the box's z only, no cells); new
+    deck tests close them; all five killed.
+  - FD14 (digest, io, run record): the volume region and radius–edge dropped from the generation digest, the
+    mesh file's digest record, the deck's `extrude3d` type name for a file mesh, the run record's digest: all five
+    killed by the existing tests.
+  - FD4 (extraction): the patch-of-node fallback (a node in two patches' triangles) killed. **Two survivors,
+    argued**: the flood fill's skip of flat tetrahedra and `is_subfacet`'s rejection of a triangle with three
+    vertices on one complex edge. Both concern zero-volume tetrahedra (all four vertices on one face, or three on
+    one edge). A flat tetrahedron's triangles lie in its face's plane; where the face is convex around them, each
+    is a subfacet (its centroid is in the face), so the flood cannot cross it with or without the guard. Only a
+    flat tetrahedron spanning a reflex notch of a non-convex face could let the flood through, and then interior
+    tetrahedra are lost and the volume check (kept volume against the complex's within 1e-12) refuses the mesh
+    (`degenerate_mesh`): without the guards a difference is a refusal, never a wrong mesh. No fixture reaches
+    them; kept as defensive guards.
+  - FD8, FD9, FD10: mutated in slices 3–4 (above), each killed.
+- **FC12, cost** (Release; new `[.benchmark]` test on the gated liner fin, measured while FC10 ran on 6 threads):
+  14,562 nodes in 4.00 s and 88,835 nodes in 23.89 s, about 27 s per 1e5 nodes, **within FD15's 30 s**; exact
+  location of every node against the whole complex (FD6) 0.15 s and 1.11 s. The FinFET decks are slower per node
+  (about 130 and 160 s per 1e5: the reduced deck built in 384 s at 297,758 nodes, the shaped in 454 s at 288,729, mesh, certificate and device together): their thin layers at s = 0.08 nm put most nodes in interface bands, where the facet
+  queue and the per-node region size dominate (the SQ9 profile above); a later unit.
+- **SQ9 on the decks** (the three FC12 speedups and the review fixes bit-identical): a scratch build of `71e6e98`
+  with only SQ6 applied (and a digest print) against this branch's head:
+  the reduced deck `d5a99737270489bf` (297,758 nodes) and the shaped deck `719a79d9189eba8a` (288,729 nodes) on
+  both: **bit-identical**. Pinned in a new hidden test (`[.fc_digests]`, `tests/deck/complex_finfet_test.cpp`). The
+  pre-speedup build meshed each deck in about 21 min (sharing the machine with FC10).
+- **FC10 on the SQ6 meshes** (`[.fc10]`, Release, PARDISO on 6 threads): **met**. 288,729 nodes, 1,695,931 tetrahedra, 45,214
+  slivers, certified (P4 123,121 cross faces, P6 12,968 patch-boundary pieces); 17 of 17 points converged, one bias
+  sub-step; build 454 s, sweep 3,099 s. I_D 1.94e-10 A at 0 V to 1.37e-5 A at 0.8 V; about 62 mV/dec from 0 to
+  0.15 V. Against the pre-SQ6 run (1.33e-10 to 1.65e-5 A) the on-current is 17% lower and the off-current 46% higher:
+  the thin layers now refine (SQ6), which changes the mesh everywhere near the gate stack. No reference exists for
+  this shape (no accuracy gate).
+- **FC9 on the SQ6 meshes** (`[.fc9][!shouldfail]`, Release, PARDISO on 6 threads): **fails, as pre-stated (FQ2)**. Every
+  run converged (17/17 each). Coarse tensor 9,367 nodes (sweep 14 s), tensor reference 45,375 nodes (488 s),
+  generated 297,758 nodes (build 384 s, sweep 2,190 s). Generated against the reference: I_D at 0.8 V 1.634e-5
+  against 1.897e-5 A (−13.9%; the coarse tensor +1.2%), at 0 V 2.56e-10 against 2.18e-10 A (+17%); V_T 0.200 against
+  0.231 V; max g_m 5.48e-5 against 7.63e-5 A/V (−28%); the swing 64.4 against 64.9 mV/dec, the only quantity within
+  its bound. The node rule fails by 32×. The generated mesh is further from the reference than the tensor mesh
+  with 1/32 of its nodes: a systematic shift (lower drive, earlier turn-on), not a resolution floor. Candidates,
+  not diagnosed: the missing structured layer under the gate (item 5, the risk stated before the run) and the
+  FC8 corner error at the fin's top corners. **For an owner ruling** (FQ2: pull item 5 in, or change the gate; the
+  threshold is not loosened).
+- **FC14**: **not met; open for an owner ruling.** Re-measured serially in Debug (2026-10-31): `[complex_generate]`
+  38.0 s, `[complex_interfaces]` 67.0 s, `[complex_patches]` 17.6 s, `[complex]` 7.9 s, the deck's `[extrude]`
+  6.4 s, and `mesh.interfaces` about 9 s more than before the unit: about 146 s against the 120 s budget. Slice 4's
+  "about 102 s" counted slices 3 and 4 only; slices 1 and 2 (`mesh.complex`, `mesh.generate_complex`, about 50 s)
+  were never added in. Cut in this slice without losing a check: the FC13 closed-shell fixture built from nine cells
+  instead of a 5 × 5 grid (13.2 s to 3.6 s Debug; the 4 s → 3 s mutant still killed), and the two determinism
+  cases mesh once against a pinned digest instead of twice (the pocket `0x6c05e45d2f27a5df`, the liner fin
+  `0xfffed114cf3222c1`, new). The remaining 26 s needs a gate case moved to `[.benchmark]` (then run in neither
+  ctest suite): the largest are the gated section with junction points and non-convex pieces (FC6, FD9; 22.7 s),
+  the liner fin (FC6; about 7 s now), FC5's linear field (13.3 s), the tapered ring (8.6 s) and the trace-crossing
+  patch corner (9.6 s). Or the budget is raised.
+- **Suites** (2026-10-31, `/W4 /WX`, 6 jobs, before the FC14 cuts): Release 127/127 (804 s), Debug 116/116
+  (1,071 s). After the cuts, the changed mesh tests pass in Release (18 cases) and Debug.
+
 ---
 
 ## New questions the advisor raised (not yet in `ARCHITECTURE.md`)

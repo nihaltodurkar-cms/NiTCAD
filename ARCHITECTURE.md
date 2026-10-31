@@ -2410,9 +2410,26 @@ Unstructured meshes are not implemented initially. The mesh architecture must st
     the 3D io round trip.
   - Speed: 1.29e5 nodes in 15.9 s (target met), after U18 made the exact integers allocation-free up to 24 limbs
     with bit-identical results (23 s before).
-- Not yet: non-convex 3D domains, 3D interface junction lines, 3D structured boundary layers, an independent
-  Voronoi-clipping check, layers on curved or crossing boundaries. The FinFET geometry scope over these is recorded in
-  11.3 ("FinFET geometry and meshing", planned).
+- **Unit 53, non-convex 3D meshing** (DECISIONS.md Unit 53, FD1–FD15, FC1–FC14; on `mesh/finfet-geometry`):
+  - `mesh::PolyhedralGeometry` (a piecewise linear complex: planar simple facets, each region a closed polyhedron),
+    validated exactly; `mesh::extrude` builds one from a sectioned extrusion (cells of a cross-section tiling,
+    assigned a region per section), the deck's `extrude3d`. Exact point location by ray parity (FD6).
+  - `generate_mesh(PolyhedralGeometry, MeshOptions3D)`: conforming Delaunay refinement extending the convex
+    generator; missing boundary is recovered by Steiner points (no constrained faces), so every boundary triangle is
+    Gabriel (P2). Extraction is a flood fill from the bounding tetrahedra across non-subfacets. A patch may span
+    facets (FD3).
+  - Interfaces with bends, junction lines and points, and non-convex pieces: straddled pair sets per piece, corner
+    zones on feature lines, the FD7 rules (sectors at least 60°, feature lines at least 6 s, features 4 s apart);
+    P4 checks non-convex pieces (FD9). Patch edges may lie on or cross interface traces; the new P6 check certifies
+    the patch boundaries (FD8, FD10).
+  - io and run record: the generation digest over the complex and options (FD14). The convex generator, the 2D
+    generator and the tensor path are unchanged (FC1: pinned digests).
+  - Gates: FC1–FC7, FC11 and FC13 met. **FC8 fails** for the flat gate: an error floor of about 5 mV in the
+    interfacial oxide at the fin's top corners, only with a permittivity contrast (H1 orders 0.43, −0.04); accepted
+    as a limitation (owner, 2026-10-31), the test `[!shouldfail]` with its thresholds unchanged. The wrapped gate's
+    266° corner caps any quasi-uniform mesh (SQ7, reported). FC9, FC10 and cost (FC12): 11.3.
+- Not yet: 3D structured boundary layers, an independent Voronoi-clipping check, layers on curved or crossing
+  boundaries, abrupt doping junctions off region boundaries (11.3, items 5 and 6).
 
 ### 6.12 Long-term computational architecture
 
@@ -3081,7 +3098,7 @@ exists, not finished), **planned** (nothing built). Audit of 2026-10-09, against
 |---|---|---|---|
 | Robust nonlinear solving | Newton with componentwise clipping (6.2); the generation-free retry (Units 19, 20); arc-length `trace_bias` (Unit 19) | **Bias step cutting verified, on `main`** (Unit 28, below; `06b708d`, PR #31); **Newton line search verified, opt-in, on `main`** (Unit 30, below; `f3e2811`, PR #32) | A natural-test norm monotone in reverse bias; a Gummel or pseudo-transient fallback |
 | Input/output, checkpoint/restart | The `io` layer (approved 2026-10-09): versioned, checksummed, atomic files for meshes, sweeps and checkpoints; device files and the text input deck (Unit 31) | **Verified, on `main`** (Unit 29, 6.6; `f69a7a8`, PR #33); **device files and the deck verified, on `main`** (Unit 31, 6.5; `6f67510`, PR #37); **transient and small-signal files verified** (Unit 42, 6.6; PR #52); **transient, small-signal and trace deck analyses verified** (Unit 43, 6.5; PR #53) | Restart of transient and trace runs; a run started from a checkpoint (`initial`); unit suffixes on times |
-| Geometry and unstructured 3D meshing | `Mesh::from_parts` accepts any valid node/edge/volume graph; besides the tensor-grid producer, Unit 16 added the 2D and 3D Delaunay generators and the simplex import (checked duals P0–P5, P4-certified interfaces, contact patches, structured 2D boundary layers); nonlocal BTBT still needs tensor cells (6.11, M16) | **Verified, on `main`** (Unit 16, 6.11; `a09cf43`, PR #35) | Non-convex 3D domains, 3D interface junction lines, interfaces across patched faces and 3D boundary layers (U7; scoped below, "FinFET geometry and meshing", planned); an unstructured locator for nonlocal BTBT (M16) |
+| Geometry and unstructured 3D meshing | `Mesh::from_parts` accepts any valid node/edge/volume graph; besides the tensor-grid producer, Unit 16 added the 2D and 3D Delaunay generators and the simplex import (checked duals P0–P5, P4-certified interfaces, contact patches, structured 2D boundary layers); nonlocal BTBT still needs tensor cells (6.11, M16) | **Verified, on `main`** (Unit 16, 6.11; `a09cf43`, PR #35); **non-convex 3D meshing built** (Unit 53, 6.11; on `mesh/finfet-geometry`): sectioned extrusions, junction lines, patches at traces; FC8 (flat gate) fails, accepted as a limitation; FC9 fails, for a ruling (below) | 3D boundary layers (item 5 below; FC9's ruling); FC8's corner error; abrupt junctions off region boundaries; an unstructured locator for nonlocal BTBT (M16) |
 | Low-current accuracy | `terminal_current_resolution` reports the floor (Unit 15); the weighted terminal current with an adjoint error estimate (Unit 32, 6.6) | **Verified, on `main`** (Unit 32; `6e54c69`, PR #39): the MOSFET off state resolved at every Vg, sub-floor diode currents on the ideal-diode law to 0.1% | Weighted transient and small-signal currents; a path term for nonlocal tunnelling |
 | Generic fields/equations | Field descriptors and the unknowns' map; the drift-diffusion and electrothermal rows as equation terms composed by equation set, behind the unchanged `DriftDiffusion` (Unit 40, 6.12.1–2) | **Verified, bit-identical, on `main`** (Unit 40; `629bed0`, PR #50; below) | Move the model data out of `DriftDiffusion` and retire it as the wrapper; derived and edge/cell fields; `EquilibriumPoisson` from the same terms |
 | Scalable linear solvers | Eigen SparseLU (default), PARDISO opt-in (Unit 18); GMRES with an ILUT preconditioner opt-in, real and complex, with a reported SparseLU fallback (Unit 44, 6.10) | **GMRES-ILUT verified, opt-in** (Unit 44, on `linalg/iterative`): 3D 9–72× faster and 8–26× less memory than SparseLU | Algebraic multigrid and block (field-split) preconditioners; parallel assembly |
@@ -3266,7 +3283,7 @@ FG1–FG9):**
 - **Also open for this deck.** A mesh-convergence check: the same sweep on a finer mesh, with V_th, swing and
   on-current compared. Not a model, but needed before any of these models is gated on the FinFET.
 
-**FinFET geometry and meshing (scope recorded 2026-10-29 at the owner's request; planned, no unit named):**
+**FinFET geometry and meshing (scope recorded 2026-10-29 at the owner's request; items 1–4 built as Unit 53, below):**
 - **How found.** Compared against an annotated 3D FinFET: tapered fin, a high-k stack and metal gate wrapped on three
   sides, faceted sidewall spacers, raised source and drain, STI and buried oxide on a substrate. Today's deck takes
   boxes (tensor mesh) or one convex polyhedron (`generate3d`), so the existing FinFET deck is a staircase of boxes.
@@ -3297,6 +3314,23 @@ FG1–FG9):**
   do not affect the solve but degrade rendering (M10).
 - **Proposed order.** Items 1–3 first, enough for a straight fin with its gate stack wrapped on three sides, gated
   against the tensor FinFET deck where the shapes coincide; items 4 and 5 next. Not yet approved as a unit.
+- **Built as Unit 53** (DECISIONS.md FD1–FD15, FC1–FC14; on `mesh/finfet-geometry`, 2026-10-31; 6.11): items 1–4.
+  The deck's `extrude3d` (cells × stations); `decks/finfet_3d_reduced.deck` (the tensor deck's shape) and
+  `decks/finfet_3d_shaped.deck` (tapered fin, wrapped stack, spacers, raised source and drain, STI/BOX) mesh at
+  s = 0.08 nm to about 3e5 nodes, certified (P4, P6).
+  - FC10 met: the shaped deck's 0–0.8 V sweep converges at all 17 points (288,729 nodes; mesh 454 s, sweep 3,099 s
+    with PARDISO on 6 threads).
+  - FC9 fails, as pre-stated (FQ2): every run converges, but against the 2× tensor reference the generated reduced
+    deck is 13.9% low in on-current, 31 mV low in V_T and 28% low in max g_m (the swing within its bound), while a
+    tensor mesh with 1/32 of its nodes is within 1.2%; and the node rule fails by 32×. Not diagnosed; candidates
+    are item 5 (no structured layer under the gate, the stated risk) and FC8's corner error. **Open for an owner
+    ruling** (pull item 5 in, or change the gate).
+  - FC8 fails for a flat gate (an error floor at the fin's top corners in the interfacial oxide, only with a
+    permittivity contrast): accepted as a limitation (owner, 2026-10-31).
+  - Cost (FC12): about 27 s per 1e5 nodes on a gated liner fin (FD15's budget 30 s), but 130–160 s per 1e5 on the
+    FinFET decks, whose nodes are mostly in interface bands: the facet queue and the region-size scan, a later unit.
+  - FC14's Debug budget (120 s) is exceeded: the unit's tests add about 146 s in Debug. **Open for an owner
+    ruling** (move a gate case to `[.benchmark]`, or raise the budget).
 
 ## 12. Legacy facts: verified, derived and unverified
 

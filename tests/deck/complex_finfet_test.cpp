@@ -8,6 +8,7 @@
 //   and the generated mesh at most the coarse tensor mesh's nodes. FQ2's pre-stated failure path:
 //   the generated mesh has about 30 times those nodes (SQ1), so the case is [!shouldfail] with its
 //   measurement, the threshold unchanged.
+// - [.fc_digests]: the two decks' mesh digests (SQ9).
 // - [.fc10] FC10: decks/finfet_3d_shaped.deck meshes, is certified, and its sweep converges at
 //   every point; nodes, slivers, mesh and solve times printed (no accuracy gate).
 #include <catch2/catch_test_macros.hpp>
@@ -199,4 +200,16 @@ TEST_CASE("complex FinFET: the shaped deck's sweep converges at every point (FC1
     replace_once(shaped, "[solver]\n", "[solver]\n" + pardiso(mkl));
     const Run r = run("FC10 shaped", shaped, "gate");
     CHECK(r.converged == r.requested);
+}
+
+// The two decks' meshes pinned (SQ9): the graph digests measured on this branch after SQ6 and equal
+// to a build without the FC12 speedups and the review fixes (DECISIONS.md Unit 53, slice 6). Hidden:
+// about 7 minutes each in Release.
+TEST_CASE("complex FinFET: the two decks' meshes are pinned", "[.fc_digests]") {
+    for (const auto& [name, digest] : {std::pair{"finfet_3d_reduced.deck", 0xd5a99737270489bfULL},
+                                       std::pair{"finfet_3d_shaped.deck", 0x719a79d9189eba8aULL}}) {
+        const deck::Plan p = deck_test::must(read_deck(name), NITCAD_DECKS_DIR);
+        INFO(name);
+        CHECK(mesh::graph_digest(p.device.mesh()) == digest);
+    }
 }
