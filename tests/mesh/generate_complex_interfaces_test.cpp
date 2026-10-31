@@ -282,20 +282,34 @@ TEST_CASE("complex interfaces: the FD7 rules are refused (FC2, FC6)", "[mesh][co
     const auto slabs = [](std::vector<double> zb, double length) {
         return grid({0.0, 2.0}, std::move(zb), {0.0, length}, [](double, double v, std::size_t) { return v < 1.0 ? 0 : 1; });
     };
-    SECTION("a layer thinner than 4 s") {
+    // A layer ending on the boundary: its two crossings of each side edge are within 4 s, refused by the crossing
+    // rule before the layer rule is reached (FC13 found this; the closed shell below reaches the layer rule).
+    SECTION("a layer thinner than 4 s, ending on the boundary") {
         const auto x = grid({0.0, 2.0}, {0.0, 1.0, 1.3, 2.3}, {0.0, 1.0}, [](double, double v, std::size_t) { return v < 1.0 ? 0 : v < 1.3 ? 1 : 2; });
-        refused(x, o, "within 4 s");
+        refused(x, o, "a domain-edge vertex within 4 s of an interface crossing");
     }
-    SECTION("a layer 3.5 s thick") {
-        // Between 3 s and 4 s, so a rule loosened to 3 s accepts it (FC13).
-        const auto x = grid({0.0, 2.0}, {0.0, 1.0, 1.35, 2.35}, {0.0, 1.0}, [](double, double v, std::size_t) { return v < 1.0 ? 0 : v < 1.35 ? 1 : 2; });
-        refused(x, o, "within 4 s");
+    SECTION("a closed shell 3.5 s thick") {
+        // A layer that ends anywhere meets another rule first (a domain-edge crossing, a short trace or feature
+        // line). A closed shell around a core, inside the domain, does not: its inner and outer bend lines are
+        // t sqrt 2 = 4.95 s apart, so only its parallel faces, 3.5 s apart, are refused (FC13: the rule loosened
+        // to 3 s accepts it).
+        const std::vector<double> b{0.0, 1.0, 1.35, 3.35, 3.7, 4.7};
+        const auto x = grid(b, b, b, [](double u, double v, std::size_t k) {
+            const bool core = in(u, 1.35, 3.35) && in(v, 1.35, 3.35) && k == 2;
+            const bool shell = in(u, 1.0, 3.7) && in(v, 1.0, 3.7) && k >= 1 && k <= 3;
+            return core ? 2 : shell ? 1 : 0;
+        });
+        refused(x, o, "two interfaces within 4 s");
     }
     SECTION("an interface within 4 s of a parallel boundary face") {
-        const auto x = grid({0.0, 2.0}, {0.0, 0.3, 2.0}, {0.0, 1.0}, [](double, double v, std::size_t) { return v < 0.3 ? 0 : 1; });
-        refused(x, o, "within 4 s");
+        // An enclosed box whose lower face is 3.5 s above the boundary face v = 0, which it does not meet. (A
+        // slab reaching the side faces is refused by the crossing rule first.)
+        const auto x = grid({0.0, 1.0, 2.0, 3.0}, {0.0, 0.35, 1.35, 2.35}, {0.0, 1.0, 2.0, 3.0},
+                            [](double u, double v, std::size_t k) { return in(u, 1.0, 2.0) && in(v, 0.35, 1.35) && k == 1 ? 1 : 0; });
+        refused(x, o, "an interface within 4 s of a boundary face it does not meet");
     }
-    SECTION("a trace shorter than 6 s") { refused(slabs({0.0, 1.0, 2.0}, 0.5), o, "shorter than 6 s"); }
+    // The full message: the feature-line rule refuses a short trace too when the trace rule is loosened (FC13).
+    SECTION("a trace shorter than 6 s") { refused(slabs({0.0, 1.0, 2.0}, 0.5), o, "an interface trace on the boundary is shorter than 6 s"); }
     SECTION("a feature line shorter than 6 s") {
         const auto x = grid({0.0, 1.0, 1.5, 2.5}, {0.0, 1.0, 1.5, 2.5}, {0.0, 1.0, 1.5, 2.5},
                             [](double u, double v, std::size_t k) { return in(u, 1.0, 1.5) && in(v, 1.0, 1.5) && k == 1 ? 1 : 0; });

@@ -384,7 +384,8 @@ TEST_CASE("complex generator: refusals", "[mesh][complex_generate]") {
         o.radius_edge = 1.0;
         CHECK(generate_mesh(*g, o).error().code == ErrorCode::invalid_input);
         o.radius_edge = 2.0;
-        o.max_nodes = 20;
+        // Above the L-prism's 24 corner vertices, so refinement's own cap stops it, not the corner count (FC13).
+        o.max_nodes = 30;
         const auto capped = generate_mesh(*g, o);
         CHECK(capped.error().code == ErrorCode::resource_exhausted);
         CHECK(capped.error().message == "max_nodes reached");  // not the iteration cap (FC13)

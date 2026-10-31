@@ -27,6 +27,7 @@
 #include "NiTCAD/analysis/dc.hpp"
 #include "NiTCAD/deck/build.hpp"
 #include "NiTCAD/linalg/mkl_runtime.hpp"
+#include "NiTCAD/mesh/mesh.hpp"
 #include "NiTCAD/solve/bias.hpp"
 #include "fixtures.hpp"
 
@@ -123,8 +124,9 @@ Run run(const std::string& label, const std::string& text, const char* gate) {
                 s->stopped ? ", stopped: " : "", s->stopped ? s->stopped->message.c_str() : "");
     if (p.generated) {
         const auto& g = p.generated->report;
-        std::printf("%s: %zu tetrahedra, %zu slivers, min dihedral %.2f deg\n", label.c_str(), g.tetrahedra,
-                    g.slivers, g.min_dihedral_deg);
+        std::printf("%s: %zu tetrahedra, %zu slivers, min dihedral %.2f deg, mesh digest %016llx\n", label.c_str(),
+                    g.tetrahedra, g.slivers, g.min_dihedral_deg,
+                    static_cast<unsigned long long>(mesh::graph_digest(p.device.mesh())));
     }
     auto c = analysis::current_curve(*s, contact_index(p, gate), contact_index(p, "drain"));
     if (!c) FAIL(label << ": " << c.error().message);
