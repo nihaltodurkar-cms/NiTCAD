@@ -76,6 +76,8 @@ hydrodynamic/energy-balance transport, 3D structured boundary layers.
 
 ## Building
 
+Starting from a clean machine? See [`INSTALL.md`](INSTALL.md) for the full step-by-step setup.
+
 From a Visual Studio x64 developer prompt:
 
 ```bat
