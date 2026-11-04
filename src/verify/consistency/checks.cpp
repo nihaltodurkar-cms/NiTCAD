@@ -1,4 +1,4 @@
-// Physical-consistency checks C1, C2, C4, C12 (Unit 55, TVR-1, DECISIONS 11.6). See checks.hpp.
+// Physical-consistency checks C1-C5, C12 (Unit 55, TVR-1, DECISIONS 11.6). See checks.hpp.
 #include "NiTCAD/verify/consistency/checks.hpp"
 
 #include <algorithm>
@@ -190,6 +190,13 @@ ReferenceInfo check_info(std::string_view id) {
     } else if (id == "C4") {
         r.equations = {15};
         r.form = "|sum_k I_k| <= sum_k res_k";
+    } else if (id == "C5") {
+        r.equations = {9, 15};
+        r.form = "|sum_c V_c I_c - sum_k H_k| <= E_max sum_c res_c + 64 eps (sum_c |V_c I_c| + sum_k |H_k|)";
+        r.assumptions = {"steady state (a BiasPoint)",
+                         "global balance only: the per-node heat is not in the results (listed gap)",
+                         "no Schottky contact, gate tunnelling or energy balance (refused with the model)"};
+        r.applicability = {"electrothermal on", "thermal_contact_heat present"};
     } else if (id == "C12") {
         r.equations = {2, 4, 9, 10};
         r.form = "n, p > 0; T > 0; occupancy in [0, 1]";
@@ -308,6 +315,64 @@ CheckResult check_c4(const results::BiasPoint& point, const mesh::Mesh& m, const
         kcl("weighted currents", point.weighted_current, point.weighted_current_resolution);
     }
     return finish("C4", info, {}, std::move(parts));
+}
+
+// The steady energy balance (owner rulings 2026-11-04, DECISIONS 11.13): the power the contacts deliver against
+// the heat leaving through the thermal contacts, to Unit 23's U8 scale restated in result quantities.
+CheckResult check_c5(const results::BiasPoint& point, const mesh::Mesh& m, const DeviceData& d) {
+    const ReferenceInfo info = check_info("C5");
+    CheckResult out;
+    out.id = "C5";
+    const std::array<Predicate, 2> predicates{
+        Predicate{"electrothermal on", d.electrothermal ? 1.0 : 0.0, 1.0, d.electrothermal},
+        Predicate{"thermal_contact_heat present", static_cast<double>(point.thermal_contact_heat.size()), 1.0,
+                  !point.thermal_contact_heat.empty()}};
+    if (!applicable(info, predicates, out)) return out;
+    const char* name = "global energy balance";
+    const std::size_t nc = d.contacts.size();
+    const std::size_t nn = m.node_count();
+    std::string missing;
+    if (!sized(point.bias_V, nc) || !sized(point.terminal_current, nc) ||
+        !sized(point.terminal_current_resolution, nc)) {
+        missing = "biases, currents or resolutions not stored";
+    } else if (point.thermal_contact_heat.size() != d.thermal_contacts) {
+        missing = "thermal_contact_heat not one per thermal contact";
+    } else if (!sized(point.bands.conduction_eV, nn) || !sized(point.bands.valence_eV, nn)) {
+        missing = "bands not stored";
+    } else if (!sized(point.fields.temperature_K, nn)) {
+        missing = "lattice temperature not stored";
+    } else if (!sized(d.thermopower_n, nn) || !sized(d.thermopower_p, nn)) {
+        missing = "thermopower exponents not in the device data";
+    }
+    if (!missing.empty()) return finish("C5", info, predicates, {not_evaluated_part(name, missing)});
+
+    DD power(0.0), heat(0.0), magnitude(0.0), resolution(0.0);
+    double e_max = 0.0;
+    for (std::size_t c = 0; c < nc; ++c) {
+        const DD vi = DD(point.bias_V[c]) * DD(point.terminal_current[c]);
+        power += vi;
+        magnitude += DD(std::abs(vi.to_double()));
+        resolution += DD(point.terminal_current_resolution[c]);
+        e_max = std::max(e_max, std::abs(point.bias_V[c]));
+    }
+    for (double h : point.thermal_contact_heat) {
+        heat += DD(h);
+        magnitude += DD(std::abs(h));
+    }
+    double t_max = 0.0, r_max = 0.0;
+    for (std::size_t i = 0; i < nn; ++i) {
+        t_max = std::max(t_max, point.fields.temperature_K[i]);
+        if (d.insulator[i] != 0) continue;
+        e_max = std::max({e_max, std::abs(point.bands.conduction_eV[i]), std::abs(point.bands.valence_eV[i])});
+        r_max = std::max({r_max, std::abs(d.thermopower_n[i] + 2.5), std::abs(d.thermopower_p[i] + 2.5)});
+    }
+    e_max += r_max * base::k_B_eV_per_K * t_max;
+    const double residual = std::abs((power - heat).to_double());
+    const double tolerance =
+        e_max * resolution.to_double() + rounding_factor * DBL_EPSILON * magnitude.to_double();
+    Worst w(name);
+    w.add(residual, tolerance, "sum over contacts");
+    return finish("C5", info, predicates, {w.done("")});
 }
 
 CheckResult check_c12(const results::NodeFields& f, const results::BiasPoint* point, const mesh::Mesh& m,
@@ -625,6 +690,8 @@ std::vector<std::string> validate(const DeviceData& d, const mesh::Mesh& m) {
     if (d.relative_permittivity.size() != n) p.push_back("permittivity not one per node");
     if (d.insulator.size() != n) p.push_back("insulator flags not one per node");
     if (d.region.size() != n) p.push_back("regions not one per node");
+    if (!d.thermopower_n.empty() && d.thermopower_n.size() != n) p.push_back("thermopower (n) not one per node");
+    if (!d.thermopower_p.empty() && d.thermopower_p.size() != n) p.push_back("thermopower (p) not one per node");
     for (const auto& c : d.contacts) {
         if (c.name.empty()) p.push_back("contact name empty");
         for (auto node : c.nodes) {

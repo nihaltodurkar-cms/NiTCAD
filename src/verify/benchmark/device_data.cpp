@@ -2,6 +2,7 @@
 #include "NiTCAD/verify/benchmark/device_data.hpp"
 
 #include <cstdint>
+#include <variant>
 
 #include "NiTCAD/base/constants.hpp"
 
@@ -29,10 +30,17 @@ consistency::DeviceData device_data(const device::Device& device) {
     const std::size_t n = m.node_count();
     d.relative_permittivity.resize(n);
     d.insulator.resize(n);
+    d.thermopower_n.assign(n, 0.0);
+    d.thermopower_p.assign(n, 0.0);
     for (std::size_t i = 0; i < n; ++i) {
         const auto node = static_cast<mesh::NodeId>(i);
         d.relative_permittivity[i] = device.relative_permittivity(node);
         d.insulator[i] = device.is_insulator(node) ? 1 : 0;
+        const auto& material = device.regions()[static_cast<std::size_t>(device.node_region()[i])].material;
+        if (const auto* s = std::get_if<physics::Semiconductor>(&material)) {
+            d.thermopower_n[i] = s->parameters().thermal.thermopower_exponent_n;
+            d.thermopower_p[i] = s->parameters().thermal.thermopower_exponent_p;
+        }
     }
     for (const auto& c : device.contacts()) {
         consistency::ContactData k;
@@ -79,6 +87,7 @@ consistency::DeviceData device_data(const device::Device& device) {
 consistency::DeviceData device_data(const device::Device& device, const assemble::PhysicsModels& models) {
     consistency::DeviceData d = device_data(device);
     d.incomplete_ionization = models.incomplete_ionization;
+    d.electrothermal = models.electrothermal;
     return d;
 }
 

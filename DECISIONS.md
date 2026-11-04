@@ -6670,6 +6670,22 @@ implementation, so they went to the owner before a test ran:
   that contact. Global neutrality: Σ space charge + every stored electrode, gate, fixed and trapped charge + each
   ohmic or Schottky contact's charge taken as its cells' Gauss flux is 0, which makes it a sum of the other parts'
   residuals; it is computed separately and labelled that way.
+- **C5 tolerance (owner ruling before code, 2026-11-04).** The results store no thermal residual of their own
+  (`ConvergenceRecord` mixes every row), and "the thermal residual's stated scale" has more than one reading.
+  Ruling: Unit 23's U8 scale restated in result quantities, \|Σ_c V_c I_c − Σ_k H_k\| ≤ E_max Σ_c R_c +
+  64ε (Σ_c \|V_c I_c\| + Σ_k \|H_k\|), H_k = `thermal_contact_heat`, R_c = `terminal_current_resolution`, E_max =
+  max(\|V_c\|; \|E_c\|, \|E_v\| on semiconductor nodes) + max \|r + 5/2\| k T_max, r the thermopower exponents of
+  the device's semiconductors (copied into `DeviceData`, a material constant like the permittivity) and T_max the
+  largest stored lattice temperature. No separate Newton term: U8 measured the Newton tolerance well inside E_max R_I.
+  (U8 itself used 3kT, which assumes r + 5/2 ≤ 3.) A reading made before measurement.
+- **C5 volume heat (owner ruling before code, 2026-11-04).** The per-node heat ∫H dV is not in the results;
+  if it were a part of the check, C5 would always be NOT EVALUATED. Ruling: C5 judges the global balance only; the
+  local part is a listed gap in the contract (an assumption) and in the as-built notes, not a part.
+- **C5 scope (owner ruling before code, 2026-11-04).** Steady `BiasPoint`s only (a transient is outside "steady");
+  predicates "electrothermal on" (the run's model, in `DeviceData`) and "`thermal_contact_heat` present". The pass
+  and defect tests use an electrothermal pn diode built in the test file (an isothermal and an R_th sink, as U8); the
+  three TVR-1 decks are NOT APPLICABLE (model off). The solver refuses energy balance, Schottky contacts and gate
+  tunnelling with the model, so Σ V_c I_c covers every current-carrying contact.
 
 **11.14 As-built (branch `verify/reference-numerics`, local).**
 
@@ -7062,7 +7078,44 @@ interior-edge skip (it changes the Newton term), one end's face Newton term, the
 Newton term. Final 25 of 25 caught. A first version of that test kept a pointer into a temporary result; it passed
 in Release and crashed in Debug, and was fixed before the final mutation run. Ctest `verify_consistency.gauss`:
 Release 0.07 s, Debug 1.62 s (verify suites Debug 5.59 s, 17 tests).
-Remaining in §11.6: C5–C11 and the TVB-32 runs on the three decks.
+
+*Consistency, C5 steady energy balance (§11.6 and the three C5 rulings of §11.13; `check_c5` for a `BiasPoint` in
+`src/verify/consistency/checks.cpp`; tests `tests/verify/consistency/energy_test.cpp`).* \|Σ_c V_c I_c − Σ_k H_k\|,
+summed in double-double, against E_max Σ_c R_c + 64ε (Σ_c \|V_c I_c\| + Σ_k \|H_k\|) as ruled. Predicates
+"electrothermal on" (`DeviceData::electrothermal`, the run's model) and "`thermal_contact_heat` present" (else NOT
+APPLICABLE); NOT EVALUATED when biases, currents, resolutions, one heat per thermal contact, the bands, the lattice
+temperature or the thermopower exponents are missing. `DeviceData` gained the model flag and per-node thermopower
+exponents r_n, r_p (0 on insulator nodes), copied by `benchmark::device_data`. The per-node heat is a listed gap
+in the contract's assumptions, not a part. Contract: class D, I2, PD, equations G9 and G15.
+
+Measured (Release) on an electrothermal 1D pn diode written in the test (1 µm, n 1e17 | p 1e17 by an erfc step,
+41 nodes, isothermal sink at x_min, R_th 1e-3 K cm²/W at x_max, anode on the p side at x_max; default Newton
+tolerance): 0, 0.3, 0.5, 0.7, 0.8 V pass at 2.7e-4, 9.7e-5, 1.6e-4, 4.3e-4, 7.0e-4 of the bound (0.8 V: 1.31 kW/cm²,
+residual 4.2e-11 W/cm², bound 5.9e-8). `examples/pn_diode_1d.deck` at 0.3 V is NOT APPLICABLE ("electrothermal
+on"), as are the other two TVR-1 decks (model off). Injected defects, each failing: a sink's heat ±2 × the bound,
+the R_th sink's heat dropped, the anode current moved by 2 × bound / V, the heats' sign flipped, a NaN heat, and
+with the resolutions zeroed (the rounding term alone) a 1e-12 relative imbalance. A test restates the ruled
+tolerance independently and holds the reported one to it, with each term moved alone (r_n, r_p with \|r + 5/2\|,
+T_max, an insulator node's band skipped, a contact voltage above every band energy); another holds the benchmark
+copy to silicon's r = −1/2 on every node.
+
+**Finding (for the owner): the ruled C5 bound omits the heat rows' Newton stopping error.** On the same bar fully
+compensated (N_D = N_A = 1e17, a resistor, R_c ≈ 5e-15 A/cm², so E_max R ≈ 1e-14 W/cm²) with the anode at x_min
+next to the isothermal sink, at the default tolerance (1e-8) the 0.8 V point misses: residual 2.89e-14 against
+1.61e-14 W/cm² (1.8 ×), last Newton update 1.30e-9; 0.5 and 0.7 V reach 0.51 and 0.40 of the bound (updates 2.1e-9,
+1.3e-9). At tolerance 1e-12 the same points end with updates near 5e-15 and sit at 4.9e-4, 3.9e-4, 6.7e-4. By U1's
+identity (Σ K₀ f_T = −Σ V I at any state) the imbalance is the heat rows' residual, which E_max R covers only where
+R is large (U8's devices). With the anode at x_max the resistor passes (≤ 1.5e-3). The tolerance is unchanged
+(TVM2); the hidden case `[.finding]` "Finding C5: the compensated resistor at the default Newton tolerance" reports
+both tolerances and fails at the miss. Option B of the question (a Newton term from u_last through the heat rows)
+would cover it; that needs K₀ and the edge thermal conductances in `DeviceData`.
+
+Mutations (26, built, run, restored): 24 of `check_c5` (predicates, each NOT EVALUATED input, signs of power and
+heat, each magnitude, resolution and E_max term, r with and without 5/2 and \|·\|, T_max, the insulator skip, the
+rounding term, a signed residual, a doubled bound) and 2 of the benchmark copy (model flag, r_n); first run 26 of
+26 caught. Ctest `verify_consistency.energy`: Release 0.02 s, Debug 0.36 s (verify suites Debug 6.08 s, 18 tests;
+Release 18/18).
+Remaining in §11.6: C6–C11 and the TVB-32 runs on the three decks.
 
 ---
 

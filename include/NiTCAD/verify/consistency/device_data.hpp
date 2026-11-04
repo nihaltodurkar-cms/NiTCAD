@@ -51,6 +51,11 @@ struct DeviceData {
     bool interface_traps = false;               // any declared interface carries traps
     bool interface_fixed_charge = false;        // any declared interface carries a fixed charge
     bool incomplete_ionization = false;         // the run's model (the results store no ionized densities)
+    bool electrothermal = false;                // the run's model (C5's predicate)
+    // The thermopower exponents r of each node's semiconductor (tau ~ E^r; 0 on insulator nodes), a material
+    // constant C5's tolerance reads (the energy a carrier carries, E_c + (r + 5/2) k T); empty when not copied.
+    std::vector<double> thermopower_n;
+    std::vector<double> thermopower_p;
     std::size_t thermal_contacts = 0;
 };
 

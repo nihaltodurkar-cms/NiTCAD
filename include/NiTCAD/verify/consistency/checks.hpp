@@ -23,6 +23,12 @@
 //       charge (gate_charge, q Q_f A, q sigma_f A, interface_trap_charge); global neutrality is the sum of
 //       those residuals with each contact's charge from its cells' flux. NOT EVALUATED with incomplete
 //       ionization (the ionized densities are not stored) or without a Newton record.
+//   C5  steady energy balance with the electrothermal model: |sum_c V_c I_c - sum_k H_k| <= E_max sum_c R_c +
+//       64 eps (sum_c |V_c I_c| + sum_k |H_k|), H_k the heat leaving through thermal contact k, R_c the terminal
+//       resolutions, E_max = max(|V_c|; |E_c|, |E_v| on semiconductor nodes) + max |r + 5/2| k T_max (Unit 23's
+//       U8 scale restated; owner ruling, DECISIONS 11.13). The global balance only: the per-node heat is not in
+//       the results (a listed gap, not a part). NOT APPLICABLE with the model off or no thermal_contact_heat; a
+//       BiasPoint is steady by type.
 //   C12 n, p > 0 on semiconductor nodes; every stored temperature > 0; trap occupancies are not stored, so that
 //       part is NOT EVALUATED when the device has interface traps (and vacuous without).
 // Each outcome is from contract.hpp's judge: NOT APPLICABLE when a predicate is false (named, with its value),
@@ -66,6 +72,7 @@ struct CheckResult {
 [[nodiscard]] CheckResult check_c3(const results::BiasPoint& point, const mesh::Mesh& m, const DeviceData& d);
 [[nodiscard]] CheckResult check_c3(const results::EquilibriumResult& eq, const mesh::Mesh& m, const DeviceData& d);
 [[nodiscard]] CheckResult check_c4(const results::BiasPoint& point, const mesh::Mesh& m, const DeviceData& d);
+[[nodiscard]] CheckResult check_c5(const results::BiasPoint& point, const mesh::Mesh& m, const DeviceData& d);
 [[nodiscard]] CheckResult check_c12(const results::NodeFields& fields, const results::BiasPoint* point,
                                     const mesh::Mesh& m, const DeviceData& d);
 
