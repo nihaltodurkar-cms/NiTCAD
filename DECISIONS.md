@@ -6640,6 +6640,12 @@ implementation, so they went to the owner before a test ran:
   three-grid ratio computed, reported and labelled "identically f₁/f₂". (3) p̂ from solutions only at constant r
   (ratios equal to 1e-12 relative), else `not_evaluated` ("non-constant r"); the non-constant form (Celik et al.,
   ASME JFE 2008) waits until its source is read and graded.
+- **Contract readings (owner rulings before code, 2026-11-04).** (1) Every comparison against a PC reference,
+  criterion met or missed, reports `finding` ("provenance insufficient") with its measured values: a PC source can
+  neither pass nor fail the code. (2) The types also enforce §2.1 and §3.3: an I0 reference cannot pass (`finding`,
+  "regression pin, not evidence"); a contract is invalid when an E reference is not PA or PD with two methods, an
+  E reference graded I1 names no second I1/I2 cross-check, an A reference states no known approximation error, or
+  a required field is empty; a comparison against an invalid contract is `not_evaluated` with the problem named.
 
 **11.14 As-built (branch `verify/reference-numerics`, local).**
 
@@ -6923,6 +6929,29 @@ refused it through p̂ ≤ 0; the test now checks the reason); the order-spread 
 (no case had one failing alone; one of each added); ε_int accumulated in double (no cancelling input; 1 + 2⁻⁶⁰ − 1
 added); L∞ without abs (no negative maximum; added). Final: 31 of 31 caught. Ctest `verify.metrics`: Release
 < 0.01 s, Debug 0.01 s (verify suite Debug 2.97 s). VR4 met.
+
+*Contract and outcomes (§11.4; `include/NiTCAD/verify/reference/contract.hpp`, `src/verify/reference/contract.cpp`,
+in `nitcad_verify_reference`, namespace `NiTCAD::verify`).* Plain data: `ReferenceClass` (E–X), `Independence`
+(I0–I3), `Provenance` (PA–PD), `Outcome` (pass, finding, fail, NOT APPLICABLE, NOT EVALUATED), `Predicate`,
+`Quantity`, `ReferenceInfo` (the §3.3 fields, with `second_method` for E-with-PD's two methods and E-with-I1's
+cross-check) and `Comparison`; `validate` for each, returning the problems by name. `judge(info, predicates, met,
+criterion)` applies, in order: the contract (invalid → NOT EVALUATED, problems named); predicate validity; every
+listed applicability predicate supplied (else NOT EVALUATED, the name given); every supplied predicate holding (else
+NOT APPLICABLE, "name = value (threshold t)", whether or not the criterion was met); then I0 → finding "regression
+pin, not evidence"; PC → finding "provenance insufficient"; else pass or fail. `missing_input` builds a NOT
+EVALUATED with the input named. Numbers in reasons are the shortest round-trip form (`std::to_chars`; a first
+`%g` loop printed 700 as "7e+02", caught by the test). The I0 rule is applied before PC, so an I0 PC reference
+reports the I0 reason. Choice: a predicate the caller supplies beyond the contract's list still refuses when false
+(the consistency checks add their own); PC remains a valid grade to hold (the E rule makes it invalid for E only).
+
+Tests (7 cases, 137 assertions): a filled contract passes or fails on the criterion; 17 single-field corruptions
+each give exactly one named problem and NOT EVALUATED; the E/A rules satisfied by what they ask for (PD with a
+second method, I1 with a cross-check, A with an error, PB for M); applicability refusals; **PC cannot pass or fail
+(VR3)**; I0 likewise, applicability still first; quantity, missing-input and outcome validation. Mutations (20,
+built, run, restored): 20 of 20 caught (one first failed to build under /WX, an unused variable, and was rewritten
+as an always-false condition). Ctest `verify.contract`: Release 0.01 s, Debug 0.02 s (verify suite Debug 3.96 s,
+13 tests). VR3's second half is met here; its first half (every TVR-1 reference carries a filled contract) is met
+when TVB-01–03 and the TVB-32 checks are written with their contracts.
 
 ---
 
