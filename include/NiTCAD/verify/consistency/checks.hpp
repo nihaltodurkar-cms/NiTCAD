@@ -48,6 +48,10 @@
 //       ohmic contact's charge): Im Y_ij(f1)/omega1 against D4 of gate_charge, tolerance as the conductance's plus
 //       resolution/omega1 and the omega^2 term from the two lowest nonzero frequencies. Kramers-Kronig on
 //       (Y_ii - Y_ii(0))/(j omega) is a diagnostic, never judged (owner rulings, DECISIONS 11.13).
+//   C10 limit continuity: over a caller-supplied x_k -> 0 (>= 3 values, else NOT APPLICABLE), the difference to
+//       the limit model (a terminal current or the potential's L-infinity) above its floor at every value (else
+//       NOT EVALUATED), and each observed rate between successive values within 0.2 of the stated one (owner
+//       ruling, DECISIONS 11.13). The differences are reported as diagnostics.
 //   C12 n, p > 0 on semiconductor nodes; every stored temperature > 0; trap occupancies are not stored, so that
 //       part is NOT EVALUATED when the device has interface traps (and vacuous without).
 // Each outcome is from contract.hpp's judge: NOT APPLICABLE when a predicate is false (named, with its value),
@@ -56,6 +60,7 @@
 
 #include <array>
 #include <cstddef>
+#include <cstdint>
 #include <string>
 #include <vector>
 
@@ -119,6 +124,24 @@ struct DcStencil {
 };
 [[nodiscard]] CheckResult check_c9(const results::SmallSignal& run, std::size_t point, const DcStencil& stencil,
                                    const mesh::Mesh& m, const DeviceData& d);
+
+// C10's series: the limit parameter x_k -> 0, a model result per value, and one limit-model result (or one per
+// value, when the limit model's device moves with x, as the doping in Fermi-Dirac -> Boltzmann). The results live
+// in the caller's storage.
+enum class LimitQuantity : std::uint8_t {
+    terminal_current,  // |I - I_limit| at `contact`; floor: the two resolutions
+    potential,         // max over nodes |psi - psi_limit|; floor: 64 eps max |psi|
+};
+struct LimitSeries {
+    std::string parameter;  // its name and unit, for the report
+    std::vector<double> x;
+    std::vector<const results::BiasPoint*> model;
+    std::vector<const results::BiasPoint*> limit;
+    LimitQuantity quantity = LimitQuantity::terminal_current;
+    std::size_t contact = 0;
+    double stated_rate = 1.0;  // derived before measurement (DECISIONS 11.13)
+};
+[[nodiscard]] CheckResult check_c10(const LimitSeries& series, const mesh::Mesh& m, const DeviceData& d);
 [[nodiscard]] CheckResult check_c12(const results::NodeFields& fields, const results::BiasPoint* point,
                                     const mesh::Mesh& m, const DeviceData& d);
 

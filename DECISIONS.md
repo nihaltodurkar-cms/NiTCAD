@@ -7332,6 +7332,43 @@ away from the band edges, where this Im C̃ is small; a diagnostic, listed. 28 o
 `verify_consistency.low_frequency`: Release 0.09 s, Debug 2.75 s (verify suites Debug 26.7 s, 21 tests; Release
 21/21).
 
+*Consistency, C10 limit continuity (§11.6 and the C10 ruling of §11.13; `check_c10` with a `LimitSeries` in
+`src/verify/consistency/checks.cpp`; tests `tests/verify/consistency/limits_test.cpp`).* The values sorted
+ascending; per value the difference (a contact's current, or the potential's L∞, in double-double) against its
+floor; the observed rates between neighbours from `reference::observed_orders_from_errors`, each \|p − p_stated\|
+against 0.2, the worst pair named ("tau_w [s] = 1e-15 .. 1e-14 (rate …)"); the differences and floors reported as
+diagnostics. NOT APPLICABLE under 3 values; NOT EVALUATED (each guard naming itself) for model or limit counts, a
+result missing, a value not finite and positive or repeated, the stated rate not finite and positive, the contact
+out of range, currents or potentials not stored, a difference not above its floor, or a rate the metrics library
+refuses. **Departure from the ruling's wording, for the owner:** the series takes one limit result *or one per
+value*. The Fermi–Dirac → Boltzmann demonstration needs it, since its limit model's device moves with the doping
+(the ruling's "one limit-model result" fits demonstrations (i) and (iii) only). Contract: class D, I2, PD,
+equations G1–G3, applicability "limit parameter swept (>= 3 values)".
+
+Measured (Release; rates derived in §11.13 before measuring, all stated 1):
+(i) energy balance → drift-diffusion, 1 µm diode 1e17/2e17 (101 nodes) at 0.6 V, v_sat = 1e30 for both carriers,
+τ_w = 1e-14, 1e-15, 1e-16 s against drift-diffusion with the default silicon: \|ΔI\| 1.42e-3, 1.68e-4, 1.71e-5 A/cm²
+(floors 5.4e-7); rates 0.929 (1e-15 .. 1e-14) and 0.992. Pass; the coarser pair's 0.07 is the next order showing.
+(ii) Fermi–Dirac → Boltzmann, symmetric diode N/N, 10 µm (201 nodes), 0 V, N = 1e15, 1e16, 1e17: max \|Δψ\| 3.6361e-7,
+3.6361e-6, 3.6359e-5 V (floors 4e-15 to 6e-15); rates 1.000000 and 0.999978. The coefficient implies a density of
+states of 2.514e19 cm⁻³ in V_T N/(2^{3/2} N_DOS) (reported, not judged; not cross-checked against the material's N_c,
+N_v).
+(iii) electrothermal → isothermal, 1 µm diode 1e17/1e17 (41 nodes) with isothermal sinks at 300 K at both ends,
+0.7 V, κ scaled by 1, 10, 100 (x = 1/scale) against the isothermal device: \|ΔI\| 1.1508e-4, 1.1508e-5, 1.1508e-6
+A/cm² (floors 6e-8); rates 0.999996 and 1.000000.
+
+Defects, each failing: stated rates 0.75 and 1.25; the middle value's difference doubled (rates 1.30 and 0.70); the
+largest value's alone doubled (only the last pair moves, to 1.23, named 1e-15 .. 1e-14); the FD study's first point's
+largest node difference doubled. A difference of 1.8 × one resolution (below the two together) is NOT EVALUATED.
+
+Mutations (18, built, run, restored): the predicate's 3, each guard, the sort, the per-value limit, the floor's
+second resolution, the floor test, the potential's maximum (last node only), the 0.2 widened and narrowed, a signed
+rate difference, only the first rate judged, the null guard. First run 14 caught; four guards survived because the
+metrics library or a later size check refuses the same input with another reason (repeated values, x ≤ 0, the
+contact) or nothing reaches them (the rate); closed by tests that assert each guard's own reason and a zero rate.
+18 of 18 caught. Ctest `verify_consistency.limits`: Release 0.05 s, Debug 1.25 s (verify suites Debug 28.8 s, 22
+tests; Release 22/22).
+
 ---
 
 ## New questions the advisor raised (not yet in `ARCHITECTURE.md`)

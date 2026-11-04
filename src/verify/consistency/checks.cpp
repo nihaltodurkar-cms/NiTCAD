@@ -1,4 +1,4 @@
-// Physical-consistency checks C1-C7, C12 (Unit 55, TVR-1, DECISIONS 11.6). See checks.hpp.
+// Physical-consistency checks C1-C7, C9, C10, C12 (Unit 55, TVR-1, DECISIONS 11.6). See checks.hpp.
 #include "NiTCAD/verify/consistency/checks.hpp"
 
 #include <algorithm>
@@ -16,6 +16,7 @@
 
 #include "NiTCAD/base/constants.hpp"
 #include "NiTCAD/verify/reference/double_double.hpp"
+#include "NiTCAD/verify/reference/metrics.hpp"
 
 namespace NiTCAD::verify::consistency {
 
@@ -225,6 +226,13 @@ ReferenceInfo check_info(std::string_view id) {
                          "ohmic rows' capacitance not evaluated (their charge is not stored)",
                          "Kramers-Kronig is a diagnostic, never judged",
                          "a stencil not about the AC point is NOT EVALUATED (a missing input, not a predicate)"};
+    } else if (id == "C10") {
+        r.equations = {1, 2, 3};
+        r.form = "|p_k - p_stated| <= 0.2 for the observed rates of |q - q_limit| over x_k -> 0";
+        r.assumptions = {"the stated rate is derived before measurement (DECISIONS 11.13)",
+                         "the sequence is in the asymptotic range of the limit (judged, not assumed: a miss fails)",
+                         "one limit result, or one per value when the limit model's device moves with x"};
+        r.applicability = {"limit parameter swept (>= 3 values)"};
     } else if (id == "C12") {
         r.equations = {2, 4, 9, 10};
         r.form = "n, p > 0; T > 0; occupancy in [0, 1]";
@@ -792,6 +800,90 @@ CheckResult check_c9(const results::SmallSignal& run, std::size_t point, const D
         }
     }
     CheckResult r = finish("C9", info, {}, std::move(parts));
+    r.diagnostics = std::move(out.diagnostics);
+    return r;
+}
+
+// Limit continuity (owner ruling 2026-11-04, DECISIONS 11.13): the difference to the limit model at each value of
+// the limit parameter, its floor, and the observed rates between successive values against the stated one.
+CheckResult check_c10(const LimitSeries& s, const mesh::Mesh& m, const DeviceData& d) {
+    const ReferenceInfo info = check_info("C10");
+    const char* name = "observed rate";
+    const std::size_t n = s.x.size();
+    const std::array<Predicate, 1> predicates{
+        Predicate{"limit parameter swept (>= 3 values)", static_cast<double>(n), 3.0, n >= 3}};
+    CheckResult out;
+    out.id = "C10";
+    if (!applicable(info, predicates, out)) return out;
+    const auto missing = [&](const std::string& why) {
+        return finish("C10", info, predicates, {not_evaluated_part(name, why)});
+    };
+    if (s.model.size() != n) return missing("not one model result per value");
+    if (s.limit.size() != 1 && s.limit.size() != n) return missing("not one limit result, or one per value");
+    if (!(std::isfinite(s.stated_rate) && s.stated_rate > 0.0)) return missing("stated rate not finite and positive");
+    for (std::size_t k = 0; k < n; ++k) {
+        if (s.model[k] == nullptr || s.limit[s.limit.size() == 1 ? 0 : k] == nullptr) return missing("a result missing");
+        if (!(std::isfinite(s.x[k]) && s.x[k] > 0.0)) return missing("a value not finite and positive");
+    }
+    std::vector<std::size_t> order(n);
+    for (std::size_t k = 0; k < n; ++k) order[k] = k;
+    std::sort(order.begin(), order.end(), [&](std::size_t a, std::size_t b) { return s.x[a] < s.x[b]; });
+    for (std::size_t q = 1; q < n; ++q) {
+        if (!(s.x[order[q]] > s.x[order[q - 1]])) return missing("values not distinct");
+    }
+    const bool current = s.quantity == LimitQuantity::terminal_current;
+    if (current && s.contact >= d.contacts.size()) return missing("contact out of range");
+    const std::size_t nn = m.node_count();
+
+    std::vector<double> h, e;
+    for (const std::size_t k : order) {
+        const results::BiasPoint& a = *s.model[k];
+        const results::BiasPoint& b = *s.limit[s.limit.size() == 1 ? 0 : k];
+        double diff = 0.0, floor = 0.0;
+        if (current) {
+            const std::size_t c = s.contact;
+            if (a.terminal_current.size() <= c || b.terminal_current.size() <= c ||
+                a.terminal_current_resolution.size() <= c || b.terminal_current_resolution.size() <= c) {
+                return missing("terminal currents or resolutions not stored");
+            }
+            diff = std::abs((DD(a.terminal_current[c]) - DD(b.terminal_current[c])).to_double());
+            floor = a.terminal_current_resolution[c] + b.terminal_current_resolution[c];
+        } else {
+            if (!sized(a.fields.potential_V, nn) || !sized(b.fields.potential_V, nn)) {
+                return missing("potentials not one per node");
+            }
+            double scale = 0.0;
+            for (std::size_t i = 0; i < nn; ++i) {
+                diff = std::max(diff, std::abs((DD(a.fields.potential_V[i]) - DD(b.fields.potential_V[i])).to_double()));
+                scale = std::max({scale, std::abs(a.fields.potential_V[i]), std::abs(b.fields.potential_V[i])});
+            }
+            floor = rounding_factor * DBL_EPSILON * scale;
+        }
+        out.diagnostics.push_back({current ? "current difference" : "potential difference", diff, floor,
+                                   s.parameter + " = " + number(s.x[k]),
+                                   current ? "|I - I_limit| at contact " + d.contacts[s.contact].name +
+                                                 "; scale: the two resolutions"
+                                           : "max |psi - psi_limit|; scale: 64 eps max |psi|"});
+        if (!(diff > floor)) {
+            CheckResult r = missing("difference not above its floor at " + s.parameter + " = " + number(s.x[k]));
+            r.diagnostics = std::move(out.diagnostics);
+            return r;
+        }
+        h.push_back(s.x[k]);
+        e.push_back(diff);
+    }
+    const std::vector<reference::Metric> orders = reference::observed_orders_from_errors(h, e);
+    Worst w(name);
+    for (std::size_t q = 0; q < orders.size(); ++q) {
+        if (orders[q].status != reference::MetricStatus::ok) {
+            CheckResult r = missing("observed rate not evaluated: " + std::string(orders[q].reason));
+            r.diagnostics = std::move(out.diagnostics);
+            return r;
+        }
+        w.add(std::abs(orders[q].value - s.stated_rate), 0.2,
+              s.parameter + " = " + number(h[q]) + " .. " + number(h[q + 1]) + " (rate " + number(orders[q].value) + ")");
+    }
+    CheckResult r = finish("C10", info, predicates, {w.done("")});
     r.diagnostics = std::move(out.diagnostics);
     return r;
 }
