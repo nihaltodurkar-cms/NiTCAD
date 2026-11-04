@@ -142,11 +142,14 @@ add_custom_command(
           src/verify/reference/tanh_sinh.cpp
           include/NiTCAD/verify/reference/brent.hpp
           include/NiTCAD/verify/reference/dopri5.hpp
+          include/NiTCAD/verify/reference/chebyshev.hpp
+          src/verify/reference/chebyshev.cpp
   COMMENT "verify/reference include boundary (VR2)")
 add_custom_target(nitcad_verify_reference_boundary
   DEPENDS "${CMAKE_BINARY_DIR}/verify_reference_boundary.stamp")
 add_library(nitcad_verify_reference STATIC src/verify/reference/double_double.cpp
-  src/verify/reference/gauss_kronrod.cpp src/verify/reference/tanh_sinh.cpp)
+  src/verify/reference/gauss_kronrod.cpp src/verify/reference/tanh_sinh.cpp
+  src/verify/reference/chebyshev.cpp)
 add_library(NiTCAD::verify_reference ALIAS nitcad_verify_reference)
 target_include_directories(nitcad_verify_reference PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
 add_dependencies(nitcad_verify_reference nitcad_verify_reference_boundary)
@@ -158,7 +161,8 @@ add_executable(nitcad_verify_test
   tests/verify/reference/gauss_kronrod_test.cpp
   tests/verify/reference/tanh_sinh_test.cpp
   tests/verify/reference/brent_test.cpp
-  tests/verify/reference/dopri5_test.cpp)
+  tests/verify/reference/dopri5_test.cpp
+  tests/verify/reference/chebyshev_test.cpp)
 target_link_libraries(nitcad_verify_test PRIVATE NiTCAD::verify_reference Catch2::Catch2WithMain)
 nitcad_add_file_tests(verify nitcad_verify_test)
 add_test(NAME verify_reference_boundary

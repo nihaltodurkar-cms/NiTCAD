@@ -6575,6 +6575,21 @@ implementation, so they went to the owner before a test ran:
   (1e22 u_dd); it was replaced. Ruling: dopri5.f's interpolant, graded PB on dopri5.f plus the tests' independent
   derivation (the eight conditions for all θ, b(1) = b, b′(0) = e₁, b′(1) = e₇); the Boost form is asserted to be a
   different order-4 extension equal at θ = 0, ½, 1. Recorded as a finding about the sources.
+- **TC7 readings (owner rulings before measurement).** The error is the fine-grid interpolant's (201 points per
+  subdomain, Clenshaw on the Chebyshev coefficients), the nodal error printed. The decay rule: on N = 4, 8, 16,
+  32, 64 per subdomain, each doubling reduces the error by ≥ 10³ or brings it to the floor; once there it stays;
+  the floor is reached by N = 64. Interfaces: the discrete mismatches of u and εu′ at the finest N, and the errors
+  of u(c) and of each side's εu′(c) against exact under the decay rule. The problem, fixed before measuring:
+  [−1, 0] ∪ [0, 1], ε = 1 and 10, u = eˣ and cos 3x + sin(3x)/30 (u(0) = εu′(0) = 1 on both sides).
+- **TC7 floors (owner rulings after measurement).** No correct second-order collocation reaches 64 u_dd·max\|u\| ≈
+  3e-30: the error fell geometrically (5.9e-2, 1.2e-5, 2.5e-15, 8.5e-27 at N = 4 … 24) onto a rounding plateau of
+  ≈ 10³ u_dd at N = 28–32, 6.8e3 at 64 and 3.9e4 at 128, with the coefficient tail at 1e-32 (Boyd §7.7: condition
+  O(N⁴); eq. (7.31)). The interface flux, formed from nodal values, loses a further ≈ N² (2e-28 to 1.4e-27 against
+  64 u_dd·max\|εu′\| ≈ 9.5e-29). Ruling: the floors are 64 u_dd·max\|u\|·N² for u and u(c), and 64 u_dd·max\|εu′\|·N²
+  for the flux mismatch and the flux errors; the u-continuity mismatch stays at 64 u_dd·max\|u\|. Also approved:
+  two of the implementer's own added tests had tolerances (8 u_dd) that ignored the N-term summation and the k
+  products forming xᵏ; they are (N + 8) u_dd·Σ\|D_ij\| (Higham's γ_N) for the (6.6) diagonal against Theorem 7
+  (measured 9.3 u_dd·Σ against 8 before) and (N + 2k + 8) u_dd·Σ\|D_ij x_jᵏ\| for D·xᵏ (23.9 before).
 
 **11.14 As-built (branch `verify/reference-numerics`, local).**
 
@@ -6729,6 +6744,36 @@ selection only; no test judges efficiency): the exponent 1/4 for 1/5 − 0.75β;
 (err² ≤ 1 ⇔ err ≤ 1); acceptance at err ≤ 10 (no accepted step here has err in (1, 10]); the scale without
 \|y₁\|; Lund stabilization removed; HINIT returning 10⁻⁶. Ctest `verify.dopri5`: Release 0.03 s, Debug 0.30 s
 (verify suite Debug 2.28 s).
+
+*TC7 — Chebyshev collocation with domain splitting (`include/NiTCAD/verify/reference/chebyshev.hpp`,
+`src/verify/reference/chebyshev.cpp`).* Sources read before code: Trefethen, *Spectral Methods in MATLAB*, chapter
+6 (the author's sample-chapter PDF, rendered page by page: Theorem 7, (6.3)–(6.6), cheb.m, the printed cheb(1) …
+cheb(5)), the online cheb.m and p13.m, the errata list; Boyd, *Chebyshev and Fourier Spectral Methods* (2nd ed.,
+2000), §§22.1–22.4 (patching, (22.3)–(22.5)) and §7.7 (conditioning). PA. The differentiation matrix is cheb.m's
+((6.5) off the diagonal, (6.6) on it), with two exact identities in place of cheb.m's arithmetic: x_j =
+sin(π(N − 2j)/2N) and x_i − x_j = −2 sin((i + j)π/2N) sin((i − j)π/2N) (sin by an internal Taylor series on
+[−π/2, π/2]); D² = D·D. The two-domain solve collocates −ε(2/L)²D²u = f at interior points, Dirichlet at the outer
+ends and Boyd's patching with (22.5b) written for the flux ε_L u_L′ = ε_R u_R′; Gaussian elimination with partial
+pivoting in double-double, after exact power-of-two row equilibration. The equilibration was added after the
+first measurement (the unscaled solve left the u-continuity row's residual at 2e-28, rising to 2e-26 at N = 128,
+because collocation rows carry entries of order N⁴); it is a solve-quality change, not a tolerance. U_ref: the
+last two Chebyshev coefficients' magnitude per subdomain (heuristic, reported only).
+
+Measured (Release): cheb(1) … cheb(5) within 3.6e-5 of the printed 4-decimal values; nodes 1.22 u_dd from the
+test's own cos; the (6.6) diagonal 0.23 of its bound; D·xᵏ 0.12 of its bound; Chebyshev coefficients of T_k 0.66
+u_dd; Clenshaw on T₅ 1.25 u_dd; a 6 × 6 integer system 0.58 u_dd. The ε-jump problem, N = 4 … 64: interpolant
+error 5.93e-2, 1.24e-5, 2.49e-15, 4.74e-29, 3.35e-28 (floors 5.1e-29 … 1.3e-26); u(0) the same; left flux
+5.91e-2 … 2.26e-29, 3.72e-28, right 2.29e-28, 3.63e-28 (floors 1.5e-27 … 3.9e-25); at N = 64 the u mismatch 0 and
+the flux mismatch 7.3e-28. p13.m's problem split at 0: 6.08e-2, 3.94e-5, 8.10e-14, 4.07e-30, 3.34e-28 (floors
+1.1e-28 … 2.7e-26). Invalid problems (N < 2, c outside (a, b), no f) refused.
+
+Mutations (built, run, reverted; tests failing of 6): caught — the diagonal left 0 (4); c_j/c_i (4); x_i − x_j's
+sign (3); nodes from 2N + 1 (4); the coefficient end-halving dropped (3); Clenshaw's last step with 2ξ (3); no
+pivoting (1); the flux row's sign (2); the continuity row's sign (2); the left scale not squared (2); ε_left in
+the right collocation rows (1); no equilibration (1, the u-continuity mismatch); the sin series stopped at 2⁻⁶⁰ (4);
+the left flux with the right scale (1); the right piece evaluated with the left coefficients (2). **Survived:** the
+tail estimate from one coefficient instead of two (the estimate is reported, not judged). Ctest
+`verify.chebyshev`: Release 0.08 s, Debug 0.68 s (verify suite Debug 3.18 s).
 
 ---
 
