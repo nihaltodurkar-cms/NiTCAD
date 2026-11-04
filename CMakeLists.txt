@@ -123,6 +123,36 @@ add_dependencies(nitcad_base_test nitcad_contract_probe)
 target_compile_definitions(nitcad_base_test PRIVATE
   NITCAD_CONTRACT_PROBE_PATH="$<TARGET_FILE:nitcad_contract_probe>")
 
+# --- verify/reference: the independent reference numerics (Unit 55, TVR-1; DECISIONS 11.2, TVD-19) ---
+# Depends on the standard library only (and may use base's constants). tests/verify/boundary.cmake checks
+# its include graph before it compiles, so a forbidden include fails the build (VR2), and again under ctest.
+set(NITCAD_VERIFY_REFERENCE_ALLOWED "verify/reference,base")
+add_custom_command(
+  OUTPUT "${CMAKE_BINARY_DIR}/verify_reference_boundary.stamp"
+  COMMAND ${CMAKE_COMMAND} -DROOT=${CMAKE_CURRENT_SOURCE_DIR} -DLAYER=reference
+          -DALLOWED=${NITCAD_VERIFY_REFERENCE_ALLOWED}
+          -DSTAMP=${CMAKE_BINARY_DIR}/verify_reference_boundary.stamp
+          -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/verify/boundary.cmake
+  DEPENDS tests/verify/boundary.cmake
+          include/NiTCAD/verify/reference/double_double.hpp
+          src/verify/reference/double_double.cpp
+  COMMENT "verify/reference include boundary (VR2)")
+add_custom_target(nitcad_verify_reference_boundary
+  DEPENDS "${CMAKE_BINARY_DIR}/verify_reference_boundary.stamp")
+add_library(nitcad_verify_reference STATIC src/verify/reference/double_double.cpp)
+add_library(NiTCAD::verify_reference ALIAS nitcad_verify_reference)
+target_include_directories(nitcad_verify_reference PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
+add_dependencies(nitcad_verify_reference nitcad_verify_reference_boundary)
+
+add_executable(nitcad_verify_test
+  tests/verify/reference/double_double_test.cpp
+  tests/verify/reference/header_boundary_test.cpp)
+target_link_libraries(nitcad_verify_test PRIVATE NiTCAD::verify_reference Catch2::Catch2WithMain)
+nitcad_add_file_tests(verify nitcad_verify_test)
+add_test(NAME verify_reference_boundary
+  COMMAND ${CMAKE_COMMAND} -DROOT=${CMAKE_CURRENT_SOURCE_DIR} -DLAYER=reference
+          -DALLOWED=${NITCAD_VERIFY_REFERENCE_ALLOWED} -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/verify/boundary.cmake)
+
 # --- MKL runtime for the PARDISO tests (Unit 18) ------------------------------------
 # MKL is optional and never linked: the mkl_pardiso backend loads mkl_rt at run time from a path
 # the program gives (linalg/mkl_runtime.hpp). The tests take that path from this cache variable;

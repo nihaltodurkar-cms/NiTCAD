@@ -6512,6 +6512,62 @@ implementation on `verify/reference-numerics`, one commit per TC group, local on
 the documentation is not on main until this branch is merged, the implementation branch starts from this branch's
 commit (so the design it implements travels with it). Implementation starts when the owner says go.
 
+**11.13 Amendments to the frozen criteria (owner rulings 2026-11-04, before any measurement).** The owner
+said go on 2026-11-04 ("start TVR-1"). Two TC1 criteria could not be met by any correct double-double
+implementation, so they went to the owner before a test ran:
+- **TC1 exp identities.** exp(log x) = x and exp(a + b) = exp a · exp b are ill-conditioned: a double-double
+  y = log x carries only about 2⁻¹⁰⁶\|y\| absolute precision, and exp multiplies it by \|y\| (≈ 170 u_dd at
+  x = 1e300 for a correctly rounded log). Ruling: the tolerance is 8 u_dd × the identity's condition number,
+  max(1, \|ln x\|) and max(1, \|a\| + \|b\|), over the full range. (√x)² = x and (x / y) · y = x stay at 8 u_dd.
+- **TC1 constants "to 32 digits".** A double-double holds about 31.9 digits; half a unit in the 32nd digit of
+  ln 2 is 7.2e-33 relative, below what a correctly rounded double-double can always reach. Ruling: \|c − L\| ≤
+  1 u_dd · \|L\| against the 40-digit OEIS literal, compared exactly with big integers.
+- **Domain (recorded, not a ruling).** Double-double precision exists only where the lo part is a normal
+  double; the TC1 ranges are \|x\| ∈ [1e-280, 1e280] (quotients and intermediates too). The first run used
+  1e-300 and failed there by subnormal lo parts, not by the arithmetic; the header's stated domain was wrong
+  and was corrected.
+
+**11.14 As-built (branch `verify/reference-numerics`, local).**
+
+*TC1 — double-double (`nitcad_verify_reference`: `include/NiTCAD/verify/reference/double_double.hpp`,
+`src/verify/reference/double_double.cpp`).* Sources read in full before code: Hida, Li and Bailey, "Library for
+Double-Double and Quad-Double Arithmetic" (8 May 2008; Algorithms 3, 4, 7; §4.2 sqrt; §5.1 exp; §5.2 log) and
+the QD library source (`include/qd/inline.h`, `include/qd/dd_inline.h`, `src/dd_real.cpp`, scibuilder/QD mirror)
+for ieee_add (Briggs–Kahan), the FMA product and accurate_div, which the report does not print. Not read:
+Dekker 1971 (paywalled), the ARITH-15 paper (its PDF fonts do not extract), Joldes–Muller–Popescu 2017 (HAL's
+bot wall), so no published double-double error bound is cited; grade PB. Choices: sqrt by the report's Newton on
+x⁻² (three steps; QD's source uses Karp's trick, the existing test helper one Newton step on x); exp with k = 256
+(the report; QD's source uses 512); log by three Newton steps (the report; QD's source one) and, for \|a − 1\| <
+1/8, 2 atanh((a − 1)/(a + 1)) by series so log is accurate relative to itself near its zero; π by Gauss's
+formula 48 atan(1/18) + 32 atan(1/57) − 20 atan(1/239), ln 2 = 4 acoth 7 + 2 acoth 17 (derived in the source:
+2 ln(4/3) + ln(9/8)), e = exp(1), √2 = sqrt(2). A first ln 2 formula written from memory (18 acoth 26 − 2 acoth
+4801 + 8 acoth 8749) was wrong by 5e-11 and the constant test failed on it, as it should; the first ln 2
+literal also had a dropped digit (a transcription error, caught by the same test and re-read against OEIS's
+b-file).
+
+Measured (Release, 10⁴ points each): constants π 0.30, e 0.016, ln 2 0.11, √2 0.24 u_dd (limit 1);
+(√x)² = x 1.65 u_dd; (x / y) · y = x 0.86 u_dd; exp(log x) = x 0.34 u_dd per unit condition number;
+exp(a + b) 0.81 per unit; added expm1(2x) identity 1.38 u_dd and expm1(log(1 + d)) = d 1.41 u_dd (limit 8 each);
+two_sum, quick_two_sum, two_prod exact on all 10⁴ integer-scaled cases; added double-double + under cancellation
+and × against the exact integer result, all within 8 u_dd. Added tests are additions only; no frozen tolerance
+moved.
+
+Mutations (each built and run, then reverted): two_sum without (b − v) — 7 tests fail; ieee_add without t.lo —
+survived the identity tests (the term is ≈ 0.25 u_dd without cancellation), which is why the cancellation test
+was added; it then fails; two_prod without the FMA error — at least 8 fail (output truncated at 8); × without a.lo·b.hi — 8 fail; ÷ keeping only q1
+— 6 fail; ÷ without q3 — **survives** (q1 + q2 is already within ≈ 1 u_dd; detecting it needs a tolerance below
+the frozen 8 u_dd, not set); exp squaring 7 times instead of 8 — 5 fail; sqrt with no Newton step — 2 fail; sqrt
+with the Newton factor 1/4 — 2 fail (one Newton step instead of three is not a defect: from a double start one
+step already converges quadratically, and it passes); log's atanh branch without the factor 2 — 2 fail; log with
+one Newton step — 1 fails; π's series not alternating — 1 fails.
+
+VR2 for this library: `tests/verify/boundary.cmake` runs as a build step before `nitcad_verify_reference`
+compiles (and again as the ctest `verify_reference_boundary`); adding `#include "NiTCAD/physics/…"` to the
+source, and separately `#include <Eigen/Core>` to the header, each failed the build at that step (shown once,
+2026-11-04); `tests/verify/reference/header_boundary_test.cpp` checks Eigen's include path at compile time.
+Ctest entries `verify.double_double`, `verify.header_boundary`, `verify_reference_boundary`: Release 0.16 s,
+Debug 0.94 s.
+
 ---
 
 ## New questions the advisor raised (not yet in `ARCHITECTURE.md`)
