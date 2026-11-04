@@ -6726,6 +6726,53 @@ implementation, so they went to the owner before a test ran:
   is not exactly 0 or the thermal contacts are not at one temperature (C1's predicates); NOT EVALUATED when the
   resolution or admittance is missing or the point index is past the run's points. No magnetic field by
   construction (NiTCAD has none), as C1's generation.
+- **C9 DC part (owner ruling before code, 2026-11-04).** The caller supplies four DC points about the AC point,
+  contact j at V − 2h, V − h, V + h, V + 2h (every other bias equal). Conductance, every row i: Re Y_ij at f = 0
+  against D4 = (8(I(+h) − I(−h)) − (I(+2h) − I(−2h))) / (12h); tolerance (8(r₋₁ + r₊₁) + r₋₂ + r₊₂) / (12h) (r the
+  points' `terminal_current_resolution`) + \|D4 − D2\| (D2 = (I(+h) − I(−h)) / (2h), the stated truncation
+  estimate) + 64ε Σ\|terms\| / (12h) + `resolution[0][j]`; f = 0 not among the frequencies: NOT EVALUATED.
+  Capacitance, gate and electrode rows only (the DC results store no ohmic contact's charge; those rows NOT
+  EVALUATED): Im Y_ij(f₁) / ω₁ at the smallest nonzero frequency against D4 of `gate_charge[i]`; tolerance \|D4 − D2\|
+  of the charge + 64ε Σ\|terms\| / (12h) + `resolution[k₁][j]` / ω₁ + the ω² term \|C(f₂) − C(f₁)\| f₁² / (f₂² − f₁²)
+  from the two lowest nonzero frequencies (fewer than two: NOT EVALUATED). The stencil not about the AC point
+  (a bias off V + m h by more than 4ε\|V + m h\|, or another bias different): NOT EVALUATED. The DC points' Newton
+  error in the charge is not in the bound (a miss is a finding).
+- **C9 Kramers–Kronig (owner ruling before code, 2026-11-04; diagnostic only, never judged).** On C̃(ω) =
+  (Y_ii(ω) − Y_ii(0)) / (jω) for each diagonal entry (causal in the e^{jωt} convention, finite at 0, → the
+  geometric capacitance at ∞): Re C̃(ω) − C̃(∞) = −(2/π) P∫₀^∞ ω′ Im C̃(ω′) / (ω′² − ω²) dω′ (sign checked on
+  1/(1 + jωτ)). Over the sampled band [a, b] the singular part is integrated in closed form and the regular part by
+  the trapezoid rule in ln ω′; C̃(∞) is fixed at the highest interior sample (singly subtracted); the miss is
+  reported at the other interior samples beside a tail estimate (2/π)(\|Im C̃(a)\| a² / (3ω²) + \|Im C̃(b)\| ω² /
+  (3b²)) at ω and at the reference. Requires f = 0, ≥ 8 nonzero samples per decade and ≥ 4 decades; else the
+  diagnostic says why and gives no value.
+- **C10 limit continuity (owner ruling before code, 2026-11-04).** Generic: a caller-supplied x_k → 0 (≥ 3
+  values, else NOT APPLICABLE "limit parameter swept (≥ 3 values)"), one model result per x_k and one limit-model
+  result, a stated rate p. The difference e_k is one contact's \|I_k − I_lim\| (floor: the two resolutions) or
+  max_i \|ψ_k,i − ψ_lim,i\| (floor: 64ε max \|ψ\|); any e_k not above its floor: NOT EVALUATED. The observed rates
+  between successive x_k (metrics' `observed_orders_from_errors`) each within 0.2 of p. Demonstrations, rates
+  derived here before measurement:
+  (i) energy balance → drift-diffusion as τ_w → 0 with v_sat → ∞ (EC4's limit): with v_sat infinite Unit 52's
+  mobility is μ₀ at any T_n, and the local balance gives T_n − T_L = (2/3)(q/k) τ_w μ₀ E² + O(τ_w²); the current's
+  departure from drift-diffusion is the thermal diffusion ∇(n k T_n / q) less its lattice value, linear in
+  T_n − T_L: p = 1 in τ_w.
+  (ii) Fermi–Dirac → Boltzmann as N → 0: F_{1/2}(η) = e^η − e^{2η} / 2^{3/2} + …, so at neutrality n = N gives
+  η_FD − η_B = N / (2^{3/2} N_c) + O(N²): the potential of a symmetric pn diode at 0 V moves by V_T N / (2^{3/2}
+  N_c) on each side: p = 1 in N (the next term is N / N_c smaller).
+  (iii) electrothermal → isothermal as κ → ∞ with every thermal contact an isothermal sink at the device
+  temperature: the lattice heat equation is linear in κ for a fixed source, so T − T₀ = O(1/κ), and the current's
+  change (mobility, n_ie, thermoelectric terms ∝ ∇T) is linear in T − T₀: p = 1 in 1/κ.
+  MLDA → classical and Lombardi → bulk are listed for TVR-2/TVR-5 with their benchmarks.
+- **C11 symmetry and invariance (owner ruling before code, 2026-11-04).** The caller supplies a node map and a
+  contact map from result A (mesh, device) to result B. Predicates (else NOT APPLICABLE, "the map is a symmetry of
+  the device", the first failing item named): the maps are bijections; doping, permittivity, region and insulator
+  flags equal under the map, exactly; each edge of A maps to an edge of B with length within 64ε relative and
+  coupling area within 64ε of the largest coupling at its ends; volumes within 64ε relative; contact kinds and node
+  sets correspond; biases equal under the contact map, exactly. Tolerances: terminal currents \|I_A − I_B\| ≤
+  res_A + res_B + 64ε max(\|I_A\|, \|I_B\|); gate charges 64ε max\|Q\| + the C3-style Newton term (Σ over the
+  contact's edges C_f · 2 V_T, plus a lumped gate's C_ox A V_T, times u_A + u_B). Ruled before measurement
+  (§11.6's 64ε relative alone is below two separate solves' Newton and resolution level). Devices: a 1D
+  n+–n–n+ resistor mirrored (nodes reversed, contacts and biases swapped) and a 2D generated unstructured mesh
+  rotated by 30° and translated, rebuilt by `make_dual_mesh`.
 
 **11.14 As-built (branch `verify/reference-numerics`, local).**
 
@@ -7231,6 +7278,59 @@ diagnostic dropped and always added; the first and the last frequency skipped. 2
 run. Ctest `verify_consistency.reciprocity`: Release 0.05 s, Debug 0.99 s (verify suites Debug 19.0 s, 20 tests;
 Release 20/20).
 Remaining in §11.6: C8–C11 and the TVB-32 runs on the three decks (C7's deck runs are in its test).
+
+*Consistency, C9 time–frequency consistency at low frequency (§11.6 and the two C9 rulings of §11.13; `check_c9`
+with a `DcStencil` in `src/verify/consistency/checks.cpp`; tests `tests/verify/consistency/low_frequency_test.cpp`).*
+Two judged parts. Conductance, every row i of the stencil's column j: \|Re Y_ij(0) − D4\| against (8(r₋₁ + r₊₁) +
+r₋₂ + r₊₂)/(12h) + \|D4 − D2\| + 64ε Σ\|terms\|/(12h) + `resolution[0][j]` (the differences of currents in
+double-double). Capacitance, gate and electrode rows: \|Im Y_ij(f₁)/ω₁ − D4(Q)\| against \|D4 − D2\| + 64ε
+Σ\|terms\|/(12h) + `resolution[k₁][j]`/ω₁ + \|C(f₂) − C(f₁)\| f₁²/(f₂² − f₁²), f₁ < f₂ the two lowest nonzero
+frequencies (sorted, any order given). With ohmic rows present the diagnostic "ohmic rows' capacitance" says they
+are not evaluated; with no gate the part is NOT EVALUATED and so is the check (a check is not passed on part of
+itself). NOT EVALUATED besides: a point index past the run's, admittance or resolution not sized, the stencil's
+contact, step or points invalid or not at V + m h (4ε) with the other biases equal, f = 0 absent (conductance),
+fewer than two nonzero frequencies (capacitance), currents or gate charges not stored. Kramers–Kronig as ruled,
+per diagonal entry, as a diagnostic (value: the worst miss; scale: the tail estimate at f and f_ref); not estimated
+(with the reason) without f = 0, with fewer than three nonzero samples, under 4 decades or under 8 per decade (the
+widest step between neighbours). (Y − Y(0))/(jω) is written as (b − ja)/ω: MSVC's complex division warns of a
+divide by zero under `/WX`.) Contract: class D, I2, PD, equation G14, no applicability predicate (a stencil not
+about the point is a missing input, not a predicate: the contract requires every listed predicate supplied).
+
+Measured (Release). `examples/moscap_cv.deck` at gate −0.5 V (depletion), stencil on the gate, h = 2 mV,
+frequencies 0 and 100 Hz – 1 THz at 8 per decade: conductance worst 2.4e-6 of its bound (Y(body, gate));
+capacitance C(100 Hz) = 1.2565982309863e-7 F/cm² against D4 1.2565982309375e-7 (3.9e-11 relative), bound 4.4e-12
+(3.5e-5 of C), dominated by resolution/ω₁. From 1 Hz the bound was 3.7e-10 (3e-3 of C): the resolution's rounding
+part does not fall with ω, so f₁ is chosen where resolution/ω₁ is small (recorded in the test). Kramers–Kronig on
+the MOS-C: worst miss 8.3e-10 F/cm² (6.6e-3 of C) at 5.6 GHz against a tail estimate 4.6e-10 (f_ref 750 GHz).
+`examples/pn_diode_1d.deck` at 0.5 V, stencil on the anode, h = 1 mV: conductance worst residual 1.9e-6 against
+6.1e-3 S/cm² (G = 4.80 S/cm²; the bound 1.3e-3 of G, dominated by the DC resolution term ~1/h, balanced near
+h = 1 mV by \|D4 − D2\| ~ h²: 1.6e-2 at 0.3 mV, measured); capacitance NOT EVALUATED (no gate), so C9 NOT
+EVALUATED. The AC resolution is 1.2e-5 of the diode's conductance bound; on the MOS-C gate row (no DC current,
+resolution 0) it is the whole bound. Synthetic Debye admittance G₀ + jω(C∞ + ΔC/(1 + jωτ)), 1e-4/τ – 1e4/τ at 8 per
+decade: Kramers–Kronig miss 1.9e-3 ΔC; a real bump of 0.1 ΔC at one sample is seen at 0.10 ΔC.
+
+**Limit of the ruled bound (for the owner):** the ω² term is estimated from C(f₁) itself, so an error in the f₁
+sample alone raises the bound by f₁²/(f₂² − f₁²) = 1.29 (8 per decade) times the error and is never caught: a
+change of 3 × the bound at f₁ alone passes (tested and recorded as passing). An error common to the low frequencies
+(every Im Y scaled) is caught. Defects (each failing): Re Y(body, gate) at 0 Hz by 2 × the body row's bound (named);
+Im Y(gate, gate) scaled to move C(f₁) by 3 × the bound; a DC gate charge at V + h and a DC current at V − h moved by
+6h × the bound (D4 moves 8/12h, \|D4 − D2\| at most 2/12h of a change: residual ≥ 3 against a bound ≤ 2). The bounds
+at their edge: 0.99 passes and 1.01 fails for the diode's anode conductance (the bound restated in the test), the
+MOS-C gate row's conductance (the AC resolution alone) and the gate capacitance (Im Y scaled).
+
+Mutations (29, built, run, restored): D4's weight and denominator, D2 for D4, each term of both bounds (the
+truncation, the resolution weights, the AC resolution, the ω² term, resolution/ω₁ without ω₁), imaginary for real,
+the transposed entry, C from Re Y, C at 2ω₁, the f = 0 test, the stencil offsets, its slack (1e10 ε), the null-point
+and contact guards, the sort of the frequencies, every row as a gate, the two-frequency, charge and ohmic-diagnostic
+guards; Kramers–Kronig's sign, its d ln ω, the decade and per-decade rules, Y(0) not subtracted, the conversion's
+sign, the closed-form singular part dropped. First run: 20 caught, 6 survived, 3 refused to build (an unused
+variable under `/WX`; rewritten as 0 × the term). The survivors were closed by tests and then caught: the bound
+edges (truncation, resolution weights, AC resolution), a step 1e-9 relative off (slack), a contact past the device's
+with every point at the AC biases (the guard), G₀ in the synthetic admittance (Y(0) subtraction). **One survives:**
+the singular part dropped. Near-equivalent on the Debye test: P∫₀^∞ dω′/(ω′² − ω²) = 0, so the closed form is small
+away from the band edges, where this Im C̃ is small; a diagnostic, listed. 28 of 29 caught. Ctest
+`verify_consistency.low_frequency`: Release 0.09 s, Debug 2.75 s (verify suites Debug 26.7 s, 21 tests; Release
+21/21).
 
 ---
 

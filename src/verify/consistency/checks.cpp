@@ -8,6 +8,8 @@
 #include <charconv>
 #include <cmath>
 #include <complex>
+#include <numbers>
+#include <vector>
 #include <span>
 #include <string_view>
 #include <utility>
@@ -214,6 +216,15 @@ ReferenceInfo check_info(std::string_view id) {
                          "the resolution omits the operating point's Newton stopping error and the matrix rounding",
                          "with two contacts the symmetry follows from conservation (reported as a diagnostic)"};
         r.applicability = {"all biases 0", "thermal contacts at one temperature"};
+    } else if (id == "C9") {
+        r.equations = {14};
+        r.form = "Re Y(0) = D4 of I; Im Y(f1)/omega1 = D4 of Q_gate; Kramers-Kronig on (Y - Y(0))/(j omega) diagnostic";
+        r.assumptions = {"the small-signal system is linear (the DC stencil's h is the amplitude)",
+                         "|D4 - D2| stands for the truncation error of D4",
+                         "the DC points' Newton error in the gate charge is not in the bound",
+                         "ohmic rows' capacitance not evaluated (their charge is not stored)",
+                         "Kramers-Kronig is a diagnostic, never judged",
+                         "a stencil not about the AC point is NOT EVALUATED (a missing input, not a predicate)"};
     } else if (id == "C12") {
         r.equations = {2, 4, 9, 10};
         r.form = "n, p > 0; T > 0; occupancy in [0, 1]";
@@ -563,6 +574,225 @@ CheckResult check_c7(const results::SmallSignal& run, std::size_t point, const m
                                  "Y_01 = Y_10 follows from zero column sums (C4) and zero row sums (gauge "
                                  "invariance): this pass shows conservation, not reciprocity"});
     }
+    return r;
+}
+
+namespace {
+
+// The fourth- and second-order central differences of q at h from its values at V - 2h, V - h, V + h, V + 2h,
+// with 64 eps of the fourth-order form's terms.
+struct Difference {
+    double d4, d2, rounding;
+};
+Difference central(const std::array<double, 4>& q, double h) {
+    const DD inner = DD(q[2]) - DD(q[1]), outer = DD(q[3]) - DD(q[0]);
+    const double d4 = (DD(8.0) * inner - outer).to_double() / (12.0 * h);
+    const double d2 = inner.to_double() / (2.0 * h);
+    const double terms = 8.0 * (std::abs(q[1]) + std::abs(q[2])) + std::abs(q[0]) + std::abs(q[3]);
+    return {d4, d2, rounding_factor * DBL_EPSILON * terms / (12.0 * h)};
+}
+
+// Kramers-Kronig on g(omega) = (Y_ii(omega) - Y_ii(0)) / (j omega) for one diagonal entry (owner ruling, DECISIONS
+// 11.13): Re g(w) - g(inf) = -(2/pi) P int_0^inf w' Im g(w') / (w'^2 - w^2) dw', over the sampled band, the singular
+// part in closed form and the regular part by the trapezoid rule in ln w'; g(inf) fixed at the highest interior
+// sample. Returns the worst miss at the other interior samples and the tail estimate there.
+Diagnostic kramers_kronig(std::span<const double> w, std::span<const std::complex<double>> g, const std::string& who) {
+    const std::size_t n = w.size();
+    const double a = w.front(), b = w.back();
+    std::vector<double> u(n), wu(n);
+    for (std::size_t m = 0; m < n; ++m) {
+        u[m] = g[m].imag();
+        wu[m] = w[m] * u[m];
+    }
+    const auto band_integral = [&](std::size_t t) {
+        const double x = w[t];
+        // The regular part (w' u(w') - x u(x)) / (w'^2 - x^2), its value at w' = x from the neighbours' slope.
+        double sum = 0.0;
+        double prev = 0.0;
+        for (std::size_t m = 0; m < n; ++m) {
+            const double phi = m == t ? ((wu[t + 1] - wu[t - 1]) / (w[t + 1] - w[t - 1])) / (2.0 * x)
+                                      : (wu[m] - wu[t]) / ((w[m] - x) * (w[m] + x));
+            const double f = phi * w[m];  // d w' = w' d ln w'
+            if (m > 0) sum += 0.5 * (f + prev) * std::log(w[m] / w[m - 1]);
+            prev = f;
+        }
+        const double singular = wu[t] / (2.0 * x) * (std::log((b - x) / (b + x)) - std::log((x - a) / (x + a)));
+        return -(2.0 / std::numbers::pi) * (sum + singular);
+    };
+    const auto tail = [&](double x) {
+        return (2.0 / std::numbers::pi) * (std::abs(u.front()) * a * a / (3.0 * x * x) +
+                                           std::abs(u.back()) * x * x / (3.0 * b * b));
+    };
+    const std::size_t r = n - 2;  // the reference: the highest interior sample
+    const double k_ref = band_integral(r);
+    Diagnostic out{"Kramers-Kronig", 0.0, 0.0, who, ""};
+    double worst = -1.0;
+    for (std::size_t t = 1; t < r; ++t) {
+        const double miss = std::abs((g[t].real() - g[r].real()) - (band_integral(t) - k_ref));
+        if (miss > worst) {
+            worst = miss;
+            out.value = miss;
+            out.scale = tail(w[t]) + tail(w[r]);
+            out.where = who + ", f = " + number(w[t] / (2.0 * std::numbers::pi)) + " Hz";
+        }
+    }
+    out.note = "|Re C~(f) - Re C~(f_ref) - (K(f) - K(f_ref))|, C~ = (Y_ii - Y_ii(0))/(j omega), f_ref = " +
+               number(w[r] / (2.0 * std::numbers::pi)) + " Hz; scale: the tail estimate at f and f_ref";
+    return out;
+}
+
+}  // namespace
+
+// Time-frequency consistency at low frequency (owner rulings 2026-11-04, DECISIONS 11.13).
+CheckResult check_c9(const results::SmallSignal& run, std::size_t point, const DcStencil& s, const mesh::Mesh& m,
+                     const DeviceData& d) {
+    (void)m;
+    const ReferenceInfo info = check_info("C9");
+    const char* conductance = "conductance (Re Y at f = 0)";
+    const char* capacitance = "capacitance (gate and electrode rows)";
+    const std::size_t nc = d.contacts.size(), nf = run.frequency_Hz.size();
+    const auto missing_all = [&](const std::string& why) {
+        return finish("C9", info, {}, {not_evaluated_part(conductance, why), not_evaluated_part(capacitance, why)});
+    };
+    if (point >= run.points.size()) return missing_all("point index past the run's points");
+    const results::SmallSignalPoint& p = run.points[point];
+    if (run.contacts != nc || p.admittance.size() != nf || p.resolution.size() != nf) {
+        return missing_all("admittance or resolution not one per frequency and contact");
+    }
+    for (std::size_t k = 0; k < nf; ++k) {
+        if (p.admittance[k].size() != nc * nc || p.resolution[k].size() != nc) {
+            return missing_all("admittance or resolution not sized to the contacts at " + at("frequency", k));
+        }
+    }
+    // The stencil: about the AC point's biases, contact j at V + m h.
+    const std::size_t j = s.contact;
+    const double h = s.h_V;
+    if (j >= nc || !(std::isfinite(h) && h > 0.0) || p.dc.bias_V.size() != nc) {
+        return missing_all("stencil contact, step or the AC point's biases invalid");
+    }
+    constexpr std::array<double, 4> offsets{-2.0, -1.0, 1.0, 2.0};
+    for (std::size_t q = 0; q < 4; ++q) {
+        const results::BiasPoint* b = s.points[q];
+        if (b == nullptr || b->bias_V.size() != nc) return missing_all("stencil point missing or not sized");
+        for (std::size_t c = 0; c < nc; ++c) {
+            const double want = c == j ? p.dc.bias_V[c] + offsets[q] * h : p.dc.bias_V[c];
+            const double slack = c == j ? 4.0 * DBL_EPSILON * (std::abs(p.dc.bias_V[c]) + std::abs(offsets[q]) * h) : 0.0;
+            if (!(std::abs(b->bias_V[c] - want) <= slack)) {
+                return missing_all("stencil not about the AC point at " + at("stencil point", q) + ", contact " +
+                                   d.contacts[c].name);
+            }
+        }
+    }
+    std::vector<CheckPart> parts;
+    CheckResult out;
+
+    // Conductance, every row.
+    std::size_t k0 = nf;
+    for (std::size_t k = 0; k < nf; ++k) {
+        if (run.frequency_Hz[k] == 0.0) k0 = k;
+    }
+    bool currents = true;
+    for (const auto* b : s.points) {
+        currents = currents && b->terminal_current.size() == nc && b->terminal_current_resolution.size() == nc;
+    }
+    if (k0 == nf) {
+        parts.push_back(not_evaluated_part(conductance, "f = 0 not among the frequencies"));
+    } else if (!currents) {
+        parts.push_back(not_evaluated_part(conductance, "DC currents or resolutions not stored"));
+    } else {
+        Worst w(conductance);
+        for (std::size_t i = 0; i < nc; ++i) {
+            std::array<double, 4> I{}, r{};
+            for (std::size_t q = 0; q < 4; ++q) {
+                I[q] = s.points[q]->terminal_current[i];
+                r[q] = s.points[q]->terminal_current_resolution[i];
+            }
+            const Difference D = central(I, h);
+            const double res = (8.0 * (r[1] + r[2]) + r[0] + r[3]) / (12.0 * h);
+            const double tol = res + std::abs(D.d4 - D.d2) + D.rounding + p.resolution[k0][j];
+            w.add(std::abs(p.admittance[k0][i * nc + j].real() - D.d4), tol,
+                  "Y(" + d.contacts[i].name + ", " + d.contacts[j].name + ")");
+        }
+        parts.push_back(w.done("no contacts"));
+    }
+
+    // Capacitance, gate and electrode rows: the two lowest nonzero frequencies.
+    std::vector<std::size_t> nonzero;
+    for (std::size_t k = 0; k < nf; ++k) {
+        if (run.frequency_Hz[k] > 0.0) nonzero.push_back(k);
+    }
+    std::sort(nonzero.begin(), nonzero.end(),
+              [&](std::size_t x, std::size_t y) { return run.frequency_Hz[x] < run.frequency_Hz[y]; });
+    std::vector<std::size_t> gates;
+    for (std::size_t i = 0; i < nc; ++i) {
+        if (d.contacts[i].kind == ContactKind::gate || d.contacts[i].kind == ContactKind::electrode) gates.push_back(i);
+    }
+    bool charges = true;
+    for (const auto* b : s.points) charges = charges && b->gate_charge.size() == nc;
+    if (gates.empty()) {
+        parts.push_back(not_evaluated_part(capacitance, "no gate or electrode (no ohmic contact's charge is stored)"));
+    } else if (nonzero.size() < 2) {
+        parts.push_back(not_evaluated_part(capacitance, "fewer than two nonzero frequencies (the omega^2 term)"));
+    } else if (!charges) {
+        parts.push_back(not_evaluated_part(capacitance, "DC gate charges not stored"));
+    } else {
+        const std::size_t k1 = nonzero[0], k2 = nonzero[1];
+        const double f1 = run.frequency_Hz[k1], f2 = run.frequency_Hz[k2];
+        const double w1 = 2.0 * std::numbers::pi * f1, w2 = 2.0 * std::numbers::pi * f2;
+        Worst w(capacitance);
+        for (const std::size_t i : gates) {
+            std::array<double, 4> Q{};
+            for (std::size_t q = 0; q < 4; ++q) Q[q] = s.points[q]->gate_charge[i];
+            const Difference D = central(Q, h);
+            const double c1 = p.admittance[k1][i * nc + j].imag() / w1;
+            const double c2 = p.admittance[k2][i * nc + j].imag() / w2;
+            const double omega2 = std::abs(c2 - c1) * f1 * f1 / (f2 * f2 - f1 * f1);
+            const double tol = std::abs(D.d4 - D.d2) + D.rounding + p.resolution[k1][j] / w1 + omega2;
+            w.add(std::abs(c1 - D.d4), tol,
+                  "C(" + d.contacts[i].name + ", " + d.contacts[j].name + ") at f = " + number(f1) + " Hz");
+        }
+        parts.push_back(w.done(""));
+        if (gates.size() < nc) {
+            out.diagnostics.push_back({"ohmic rows' capacitance", std::nan(""), std::nan(""), "",
+                                       "not evaluated: the DC results store no ohmic contact's charge"});
+        }
+    }
+
+    // Kramers-Kronig, each diagonal entry (diagnostic).
+    std::string kk_missing;
+    double per_decade = 0.0, decades = 0.0;
+    if (k0 == nf) {
+        kk_missing = "f = 0 not among the frequencies";
+    } else if (nonzero.size() < 3) {
+        kk_missing = "fewer than three nonzero frequencies";
+    } else {
+        decades = std::log10(run.frequency_Hz[nonzero.back()] / run.frequency_Hz[nonzero.front()]);
+        double widest = 0.0;
+        for (std::size_t q = 1; q < nonzero.size(); ++q) {
+            widest = std::max(widest, run.frequency_Hz[nonzero[q]] / run.frequency_Hz[nonzero[q - 1]]);
+        }
+        per_decade = 1.0 / std::log10(widest);
+        if (decades < 4.0) kk_missing = "fewer than 4 decades (" + number(decades) + ")";
+        else if (per_decade < 8.0 * (1.0 - 1e-12)) kk_missing = "fewer than 8 samples per decade (" + number(per_decade) + ")";
+    }
+    if (!kk_missing.empty()) {
+        out.diagnostics.push_back({"Kramers-Kronig", std::nan(""), std::nan(""), "", "not estimated: " + kk_missing});
+    } else {
+        std::vector<double> w;
+        for (const std::size_t k : nonzero) w.push_back(2.0 * std::numbers::pi * run.frequency_Hz[k]);
+        for (std::size_t i = 0; i < nc; ++i) {
+            std::vector<std::complex<double>> g;
+            const std::complex<double> y0 = p.admittance[k0][i * nc + i];
+            for (std::size_t q = 0; q < nonzero.size(); ++q) {
+                // (Y - Y(0)) / (j omega), written out: (a + j b) / (j omega) = b / omega - j a / omega.
+                const std::complex<double> dy = p.admittance[nonzero[q]][i * nc + i] - y0;
+                g.emplace_back(dy.imag() / w[q], -dy.real() / w[q]);
+            }
+            out.diagnostics.push_back(kramers_kronig(w, g, "contact " + d.contacts[i].name));
+        }
+    }
+    CheckResult r = finish("C9", info, {}, std::move(parts));
+    r.diagnostics = std::move(out.diagnostics);
     return r;
 }
 

@@ -41,12 +41,21 @@
 //       bias not exactly 0 or thermal contacts at more than one temperature (C1's predicates). Every model is
 //       judged (owner rulings, DECISIONS 11.13). With two contacts the symmetry follows from zero column and row
 //       sums, so a diagnostic says the pass shows conservation, not reciprocity. No magnetic field exists.
+//   C9  time-frequency consistency at low frequency, from four DC points about the AC point (DcStencil):
+//       conductance, every row: Re Y_ij(0) against the fourth-order central difference D4 of the DC currents,
+//       tolerance the difference's resolution term + |D4 - D2| (the stated truncation estimate) + 64 eps of its
+//       terms + the column's AC resolution; capacitance, gate and electrode rows only (the DC results store no
+//       ohmic contact's charge): Im Y_ij(f1)/omega1 against D4 of gate_charge, tolerance as the conductance's plus
+//       resolution/omega1 and the omega^2 term from the two lowest nonzero frequencies. Kramers-Kronig on
+//       (Y_ii - Y_ii(0))/(j omega) is a diagnostic, never judged (owner rulings, DECISIONS 11.13).
 //   C12 n, p > 0 on semiconductor nodes; every stored temperature > 0; trap occupancies are not stored, so that
 //       part is NOT EVALUATED when the device has interface traps (and vacuous without).
 // Each outcome is from contract.hpp's judge: NOT APPLICABLE when a predicate is false (named, with its value),
 // NOT EVALUATED when an input is missing, else pass or fail.
 #pragma once
 
+#include <array>
+#include <cstddef>
 #include <string>
 #include <vector>
 
@@ -101,6 +110,15 @@ struct CheckResult {
 // Point `point` of a small-signal run, all its frequencies.
 [[nodiscard]] CheckResult check_c7(const results::SmallSignal& run, std::size_t point, const mesh::Mesh& m,
                                    const DeviceData& d);
+
+// C9's DC points about the AC point: contact `contact` at V - 2h, V - h, V + h, V + 2h, every other bias equal.
+struct DcStencil {
+    std::size_t contact = 0;
+    double h_V = 0.0;
+    std::array<const results::BiasPoint*, 4> points{};
+};
+[[nodiscard]] CheckResult check_c9(const results::SmallSignal& run, std::size_t point, const DcStencil& stencil,
+                                   const mesh::Mesh& m, const DeviceData& d);
 [[nodiscard]] CheckResult check_c12(const results::NodeFields& fields, const results::BiasPoint* point,
                                     const mesh::Mesh& m, const DeviceData& d);
 
