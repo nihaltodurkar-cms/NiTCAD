@@ -6556,6 +6556,25 @@ implementation, so they went to the owner before a test ran:
   read as 4 u_dd absolute (f′(0) = 1 sets the scale). All three roots use t = u_dd, for which Brent's (2.18),
   6ε\|ζ\| + 2t, guarantees 2 u_dd at 0; the other two roots are judged relative, as frozen. Open to the owner if
   another reading was meant.
+- **TC6 readings (owner rulings before measurement).** "Global error proportional to the tolerance over four
+  decades": the least-squares slope of log err against log tol (rtol = atol = tol, five tolerances a decade apart)
+  in [0.96, 1.04], the frozen order band 5.0 ± 0.2 divided by 5 (h ∝ tol^{1/5}). "Dense output order 4": the
+  continuous extension's order as HNW define it, one step from exact data, the error at θ ∈ {¼, ½, ¾} falling as
+  h^{5.0 ± 0.2} (a global dense error reads ≈ 5, since the step values are 5th order; it is printed, not judged).
+  Addition approved: the nonlinear y′ = y², y(0) = ½ (linear problems see only the tall-tree conditions), under the
+  same bands, and the 17 order conditions of order ≤ 5 checked on the tableau.
+- **TC6 ladders (owner rulings after measurement).** With the ladders chosen before measuring (fixed N = 16 … 128;
+  tol = 1e-10 … 1e-14): the oscillator's coarsest pair read 4.794 (h = 0.39), y′ = y² read 1.46 / 4.24 / 4.70
+  (preasymptotic: 4.86 / 4.94 / 4.97 at N = 128 … 1024) and its slope 0.918 (0.99 over 1e-14 … 1e-18); y′ = y passed
+  both. Ruling: one ladder for all three problems, N = 128, 256, 512, 1024, and tol = 1e-14 … 1e-18; the band is
+  unchanged.
+- **TC6 dense output (owner ruling after measurement).** The two reproductions print different interpolants:
+  dopri5.f's (degree 4 in θ, attributed there to Shampine 1986) and Boost.Odeint's (degree 5, cited there to HNW
+  pp. 191–192). Both satisfy the eight order-4 conditions to 0.28 u_dd; they coincide at θ = 0, ½, 1 and differ
+  elsewhere by ≈ 1e-4·θ²(1 − θ)²(θ − ½) per weight. A test written to assert their agreement was wrong and failed
+  (1e22 u_dd); it was replaced. Ruling: dopri5.f's interpolant, graded PB on dopri5.f plus the tests' independent
+  derivation (the eight conditions for all θ, b(1) = b, b′(0) = e₁, b′(1) = e₇); the Boost form is asserted to be a
+  different order-4 extension equal at θ = 0, ½, 1. Recorded as a finding about the sources.
 
 **11.14 As-built (branch `verify/reference-numerics`, local).**
 
@@ -6679,6 +6698,37 @@ every test function the acceptance test p < \|s q\|/2 already rejects the crawli
 reaches Brent's worst case; and the relative term 2ε\|b\| of the tolerance dropped — double-double resolves steps
 far below u_dd·\|b\|, so termination and counts are unchanged here. Ctest `verify.brent`: Release and Debug
 0.01 s (verify suite Debug 1.90 s).
+
+*TC6 — Dormand–Prince 5(4) with dense output (`include/NiTCAD/verify/reference/dopri5.hpp`, header only).*
+Sources read before code: Hairer and Wanner's DOPRI5 (Fortran, 25 April 1996, corrected 8 August 2005; the code
+of HNW I, 2nd ed., §II.5), in the copy shipped with SciPy 1.10.0 (`scipy/integrate/dop/dopri5.f`; the authors'
+page refused the download), all of DOPCOR, HINIT, CONTD5 and CDOPRI; and Boost.Odeint's `runge_kutta_dopri5.hpp`
+(Ahnert and Mulansky), whose tableau and 4th-order weights agree with dopri5.f's E_i = b_i − b̂_i. Not read:
+Dormand and Prince 1980 (ScienceDirect refused), Shampine 1986 (AMS bot wall), HNW's book. PB, as §11.13 rules.
+DOPCOR is followed line by line in double-double with UROUND = u_dd (t and h double-double; the error norm and
+step factors double); deviations: no stiffness detection, no SOLOUT call at the initial point, the last step lands
+on tend exactly. A fixed-step driver (t_k = t0 + k h) serves the order tests.
+
+Measured (Release): tableau against Boost 0 u_dd (c, a), e against b − b̂ 0.09 u_dd; row sums 0.63 u_dd; the 17
+order-≤ 5 conditions of b 0.28 u_dd; b̂'s 8 order-≤ 4 conditions 0.15 u_dd and an order-5 residual 8.1e-4 (its
+order is real); b(θ)'s 8 conditions at θ = 0.1 … 1 0.28 u_dd, b(1) = b exactly, end slopes 0.05 u_dd. Fixed-step
+orders (N = 128 → 256 → 512 → 1024): y′ = y 4.990 / 4.995 / 4.998; oscillator on [0, 2π] 4.997 / 4.999 / 5.000;
+y′ = y² 4.864 / 4.935 / 4.968. Continuous order (h = 2⁻³ … 2⁻⁷): y′ = y 3.86–3.98, oscillator 4.00, y′ = y² 4.11–4.01.
+Proportionality slopes over 1e-14 … 1e-18: 0.998, 1.000, 0.991, every run `ok`, landing on tend exactly, nfcn =
+6·nstep + 2. Global dense error at mid-steps (printed only): orders 4.87–5.11. Added tests: y′ = 5t⁴ exact to
+0.20 u_dd and y′ = 6t⁵ not (7.5e-7), since no autonomous problem sees the stage times; a first step h0 = 1 rejected
+4 times (not counted, as dopri5.f) with the final error 5.3e-15 against 5.2e-15 from HINIT's step; refusal of
+rtol = atol = 0 and of t0 = tend; nmax = 3 → `too_many_steps`; a backward run; the dense output covering [t0, tend]
+without gaps, once per accepted step.
+
+Mutations (built, run, reverted; tests failing of 11): caught — a₅₂ = −25361/2187 (7); e₅ = −17254/339200 (5);
+d₄'s numerator +1 (3); CONT(4) with +h k₇ (2); stage times t instead of t + c_i h (1, the t⁵ addition only);
+no FSAL reuse in the adaptive loop (3); no last-step clip (2); a rejected step keeping h (1, `too_many_steps`); e₇
+dropped (5); the fixed-step t_k rounded to double (1); θ₁ = θ (2); CONT(3) from k₇ (2). **Survived** (step-size
+selection only; no test judges efficiency): the exponent 1/4 for 1/5 − 0.75β; the norm without its square root
+(err² ≤ 1 ⇔ err ≤ 1); acceptance at err ≤ 10 (no accepted step here has err in (1, 10]); the scale without
+\|y₁\|; Lund stabilization removed; HINIT returning 10⁻⁶. Ctest `verify.dopri5`: Release 0.03 s, Debug 0.30 s
+(verify suite Debug 2.28 s).
 
 ---
 
