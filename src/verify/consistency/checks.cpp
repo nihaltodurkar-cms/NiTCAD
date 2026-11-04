@@ -1,4 +1,4 @@
-// Physical-consistency checks C1-C5, C12 (Unit 55, TVR-1, DECISIONS 11.6). See checks.hpp.
+// Physical-consistency checks C1-C7, C12 (Unit 55, TVR-1, DECISIONS 11.6). See checks.hpp.
 #include "NiTCAD/verify/consistency/checks.hpp"
 
 #include <algorithm>
@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <charconv>
 #include <cmath>
+#include <complex>
 #include <span>
 #include <string_view>
 #include <utility>
@@ -204,6 +205,15 @@ ReferenceInfo check_info(std::string_view id) {
                          "bookkeeping only: the solver forms I_disp from the same stored contact charges",
                          "the trapezoidal integral against the summed local error is a diagnostic, not judged"};
         r.applicability = {"transient with a gate or electrode"};
+    } else if (id == "C7") {
+        r.equations = {14};
+        r.form = "|Y_ij - Y_ji| <= res_i + res_j at every frequency (unnormalized)";
+        r.assumptions = {"no magnetic field (none exists in NiTCAD)",
+                         "every model judged; discrete reciprocity derived only for drift-diffusion with SG fluxes, "
+                         "recombination and traps (a miss under another model is a finding on its discretization)",
+                         "the resolution omits the operating point's Newton stopping error and the matrix rounding",
+                         "with two contacts the symmetry follows from conservation (reported as a diagnostic)"};
+        r.applicability = {"all biases 0", "thermal contacts at one temperature"};
     } else if (id == "C12") {
         r.equations = {2, 4, 9, 10};
         r.form = "n, p > 0; T > 0; occupancy in [0, 1]";
@@ -497,6 +507,62 @@ CheckResult check_c6(const results::Transient& run, const mesh::Mesh& m, const D
     }
     CheckResult r = finish("C6", info, predicates, std::move(parts));
     r.diagnostics = std::move(out.diagnostics);
+    return r;
+}
+
+// Reciprocity at equilibrium (owner rulings 2026-11-04, DECISIONS 11.13): Y_ij against Y_ji at every frequency,
+// to the two columns' resolutions (each bounds its column's currents' miss).
+CheckResult check_c7(const results::SmallSignal& run, std::size_t point, const mesh::Mesh& m, const DeviceData& d) {
+    (void)m;
+    const ReferenceInfo info = check_info("C7");
+    const char* name = "admittance symmetry";
+    if (point >= run.points.size()) {
+        return finish("C7", info, {}, {not_evaluated_part(name, "point index past the run's points")});
+    }
+    const results::SmallSignalPoint& p = run.points[point];
+    const std::array<Predicate, 2> predicates{zero_bias(p.dc), one_thermal_temperature(p.dc)};
+    CheckResult out;
+    out.id = "C7";
+    if (!applicable(info, predicates, out)) return out;
+
+    const std::size_t nc = d.contacts.size(), nf = run.frequency_Hz.size();
+    std::string missing;
+    if (run.contacts != nc) {
+        missing = "the run's contacts are not the device's";
+    } else if (p.admittance.size() != nf || p.resolution.size() != nf) {
+        missing = "admittance or resolution not one per frequency";
+    } else {
+        for (std::size_t k = 0; k < nf && missing.empty(); ++k) {
+            if (p.admittance[k].size() != nc * nc || p.resolution[k].size() != nc) {
+                missing = "admittance or resolution not sized to the contacts at " + at("frequency", k);
+            }
+        }
+    }
+    if (!missing.empty()) return finish("C7", info, predicates, {not_evaluated_part(name, missing)});
+
+    Worst w(name);
+    for (std::size_t k = 0; k < nf; ++k) {
+        const auto& y = p.admittance[k];
+        const auto& res = p.resolution[k];
+        for (std::size_t i = 0; i < nc; ++i) {
+            for (std::size_t j = 0; j < i; ++j) {
+                const std::complex<double> a = y[i * nc + j], b = y[j * nc + i];
+                // The parts' differences exactly in double-double, then the modulus.
+                const double re = (DD(a.real()) - DD(b.real())).to_double();
+                const double im = (DD(a.imag()) - DD(b.imag())).to_double();
+                w.add(std::hypot(re, im), res[i] + res[j],
+                      "f = " + number(run.frequency_Hz[k]) + " Hz, Y(" + d.contacts[i].name + ", " +
+                          d.contacts[j].name + ")");
+            }
+        }
+    }
+    CheckResult r = finish("C7", info, predicates, {w.done(nf == 0 ? "no frequencies" : "fewer than two contacts")});
+    if (nc == 2) {
+        r.diagnostics.push_back({"two contacts", r.parts.front().residual, r.parts.front().tolerance,
+                                 r.parts.front().where,
+                                 "Y_01 = Y_10 follows from zero column sums (C4) and zero row sums (gauge "
+                                 "invariance): this pass shows conservation, not reciprocity"});
+    }
     return r;
 }
 

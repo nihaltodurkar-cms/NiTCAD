@@ -36,6 +36,11 @@
 //       exactly (owner rulings, DECISIONS 11.13). Diagnostics, not judged: the trapezoidal integral of I_disp
 //       against Q_N - Q_0 per contact with sum_k error_ratio_k rtol |dQ_k| beside it, and the cumulative identity.
 //       The identity checks bookkeeping, not charge physics (the solver forms I_disp from the same stored Q).
+//   C7  reciprocity (Onsager) of the admittance at equilibrium: |Y_ij - Y_ji| <= resolution[k][i] +
+//       resolution[k][j] at every frequency k of the point (f = 0 included), unnormalized; NOT APPLICABLE at a
+//       bias not exactly 0 or thermal contacts at more than one temperature (C1's predicates). Every model is
+//       judged (owner rulings, DECISIONS 11.13). With two contacts the symmetry follows from zero column and row
+//       sums, so a diagnostic says the pass shows conservation, not reciprocity. No magnetic field exists.
 //   C12 n, p > 0 on semiconductor nodes; every stored temperature > 0; trap occupancies are not stored, so that
 //       part is NOT EVALUATED when the device has interface traps (and vacuous without).
 // Each outcome is from contract.hpp's judge: NOT APPLICABLE when a predicate is false (named, with its value),
@@ -46,6 +51,7 @@
 #include <vector>
 
 #include "NiTCAD/mesh/mesh.hpp"
+#include "NiTCAD/results/small_signal.hpp"
 #include "NiTCAD/results/solution.hpp"
 #include "NiTCAD/results/transient.hpp"
 #include "NiTCAD/verify/consistency/device_data.hpp"
@@ -92,6 +98,9 @@ struct CheckResult {
 [[nodiscard]] CheckResult check_c4(const results::BiasPoint& point, const mesh::Mesh& m, const DeviceData& d);
 [[nodiscard]] CheckResult check_c5(const results::BiasPoint& point, const mesh::Mesh& m, const DeviceData& d);
 [[nodiscard]] CheckResult check_c6(const results::Transient& run, const mesh::Mesh& m, const DeviceData& d);
+// Point `point` of a small-signal run, all its frequencies.
+[[nodiscard]] CheckResult check_c7(const results::SmallSignal& run, std::size_t point, const mesh::Mesh& m,
+                                   const DeviceData& d);
 [[nodiscard]] CheckResult check_c12(const results::NodeFields& fields, const results::BiasPoint* point,
                                     const mesh::Mesh& m, const DeviceData& d);
 

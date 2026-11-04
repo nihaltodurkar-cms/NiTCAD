@@ -669,7 +669,8 @@ add_executable(nitcad_verify_consistency_test
   tests/verify/consistency/dc_checks_test.cpp
   tests/verify/consistency/gauss_test.cpp
   tests/verify/consistency/energy_test.cpp
-  tests/verify/consistency/transient_test.cpp)
+  tests/verify/consistency/transient_test.cpp
+  tests/verify/consistency/reciprocity_test.cpp)
 target_link_libraries(nitcad_verify_consistency_test PRIVATE NiTCAD::verify_benchmark NiTCAD::deck
   Catch2::Catch2WithMain)
 target_compile_definitions(nitcad_verify_consistency_test PRIVATE

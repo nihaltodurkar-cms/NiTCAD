@@ -6704,6 +6704,28 @@ implementation, so they went to the owner before a test ran:
   `solve_transient` through the API (the deck is not edited): a gate waveform with a ramp and a step breakpoint
   (backward Euler restarts and variable-step BDF2), and a run with the backward-Euler integrator; defects injected
   on the result. The three TVR-1 decks are not transients: NOT APPLICABLE.
+- **C7 tolerance (owner ruling before code, 2026-11-04).** §11.6's frozen bound as it stands: \|Y_ij − Y_ji\| ≤
+  `resolution[k][i]` + `resolution[k][j]`, compared unnormalized (the same inequality as §11.6's ratio to max\|Y\|,
+  without the division, so a zero matrix is judged). The resolution covers the AC solve's residual and the rounding
+  of the current sums; it does not cover the operating point's distance from exact equilibrium (the Newton stopping
+  error of C1 and C5) or the assembled matrix's rounding. No term is added for them before measurement; a miss is a
+  finding for the owner. (The existing `tests/solve/small_signal_test.cpp:345` measured at most 0.06 of the bound.)
+- **C7 models (owner ruling before code, 2026-11-04).** Every model is judged, no model predicate: Onsager
+  reciprocity holds physically for each model at equilibrium. Discretely it is derived only for drift-diffusion with
+  SG fluxes, recombination and traps (the linearized operator is symmetric in the quasi-Fermi variables); a miss under
+  the electrothermal model, energy balance, Fermi–Dirac or gate tunnelling is a fail, recorded as a finding on the
+  discretization (TVM2: nothing exempted in advance).
+- **C7 devices (owner ruling before code, 2026-11-04).** With two contacts, zero column sums (C4) and zero row sums
+  (gauge invariance) force Y_01 = Y_10, so a two-contact pass shows conservation, not reciprocity. The three TVR-1
+  decks are run with a zero-bias AC point added through the API and a two-contact result carries a diagnostic saying
+  so; the reciprocity evidence is a three-contact 2D MOS (gate, source, substrate; as `small_signal_test`'s `mos2d`)
+  built in the test file: the pass at 0 V, and the same device biased judged with the predicate bypassed on a copy
+  (the defect: a biased device is not reciprocal).
+- **C7 shape (owner ruling before code, 2026-11-04).** `check_c7(SmallSignal, point, mesh, DeviceData)`: every
+  frequency of the point (f = 0 included) as one part, the worst (frequency, i < j) named. NOT APPLICABLE when a bias
+  is not exactly 0 or the thermal contacts are not at one temperature (C1's predicates); NOT EVALUATED when the
+  resolution or admittance is missing or the point index is past the run's points. No magnetic field by
+  construction (NiTCAD has none), as C1's generation.
 
 **11.14 As-built (branch `verify/reference-numerics`, local).**
 
@@ -7172,7 +7194,43 @@ lies between 64ε\|Q\| and the full bound), skipping the last point (a defect th
 scale (scale proportional to rtol). Final run on the final tests (rtol 1e-2): 24 of 24 caught. The benchmark copy of the tunnelling flag survives: equivalent on every device
 here (no tunnelling gate in TVR-1), listed. Ctest `verify_consistency.transient`: Release 0.68 s, Debug 17.1 s
 (verify suites Debug 22.8 s, 19 tests; Release 19/19).
-Remaining in §11.6: C7–C11 and the TVB-32 runs on the three decks.
+
+*Consistency, C7 reciprocity at equilibrium (§11.6 and the four C7 rulings of §11.13; `check_c7` for one point of
+a `results::SmallSignal` in `src/verify/consistency/checks.cpp`; tests `tests/verify/consistency/reciprocity_test.cpp`).*
+At every frequency k of the point and each pair i > j, \|Y_ij − Y_ji\| (the real and imaginary differences exact in
+double-double, then the modulus) against `resolution[k][i]` + `resolution[k][j]`; one part, the worst frequency and
+pair named ("f = 1e+08 Hz, Y(source, gate)"). NOT APPLICABLE at a bias not exactly 0 or thermal contacts at more
+than one temperature (C1's predicates, from the point's `dc`); NOT EVALUATED for a point index past the run's
+points, the run's contact count not the device's, admittance or resolution not one per frequency or not sized to
+the contacts. With two contacts the result carries the diagnostic "two contacts" (the worst residual and bound,
+and the note that zero column and row sums force Y_01 = Y_10). Contract: class D, I2, PD, equation G14, the
+assumptions as ruled (no magnetic field; every model judged; the resolution's two omissions; the two-contact limit).
+`checks.hpp` now includes `results/small_signal.hpp` (inside the layer's boundary; VR2's check passes).
+
+Measured (Release; frequencies 0, 1e2, 1e5, 1e8, 1e11, 1e13 Hz; worst \|Y_ij − Y_ji\| / (res_i + res_j)):
+the three-contact 2D MOS (`small_signal_test`'s `mos2d` copied into the test: a meshed metal gate, a source on an n+
+pocket, the substrate; fixed charge, two trap levels, a trap band and surface recombination at the interface) at 0 V
+**0.245** at f = 0, Y(source, gate) (`tests/solve/small_signal_test.cpp:345` measures the same 0.245 and 102 today;
+its comment's "0.06" and "114" are stale from Unit 22, not edited here, listed for the owner); the largest off-diagonal \|Y\| at 1e13 Hz is about 5e12 times the largest resolution, so the check is not
+vacuous. The same device at (−0.4, 0, 0.1) V is NOT APPLICABLE; judged with the biases relabelled 0 on a copy it
+fails at **102 ×** the bound (100 Hz, Y(source, gate)): a biased device is not reciprocal. The three TVR-1 decks
+with a zero-bias AC point added through the API (their own options; the decks not edited): `pn_diode_1d` 0.044,
+`moscap_cv` 0.235 (1e8 Hz, Y(body, gate)), `schottky_diode_1d` 0.029, each with the two-contact diagnostic.
+
+Injected defects, each failing: Y(source, gate) moved by i·2(res_0 + res_2) at 1e8 Hz (named); Y(gate, substrate)
+by 2(res_0 + res_1), real, at f = 0 (named); a NaN admittance. A symmetric change of 5(res_0 + res_2) to both
+entries passes. The bound itself: on a symmetrized copy, an asymmetry of 0.99 (res_i + res_j) at the pair and
+frequency with the most nearly equal resolutions (1e13 Hz, (source, substrate), the smaller 0.498 of the sum) passes
+and 1.01 fails.
+
+Mutations (20, built, run, restored): the point-index guard; each predicate; each NOT EVALUATED input (contact
+count, admittance count, resolution count, inner sizes); the bound as res_i alone, res_j alone, doubled; adjacent
+pairs skipped; Y_ij against itself; the real or the imaginary part dropped (first written as an unused variable,
+which `/WX` refused to build, then rewritten as 0 × the part); the names swapped; the frequency label; the
+diagnostic dropped and always added; the first and the last frequency skipped. 20 of 20 caught on the first built
+run. Ctest `verify_consistency.reciprocity`: Release 0.05 s, Debug 0.99 s (verify suites Debug 19.0 s, 20 tests;
+Release 20/20).
+Remaining in §11.6: C8–C11 and the TVB-32 runs on the three decks (C7's deck runs are in its test).
 
 ---
 
