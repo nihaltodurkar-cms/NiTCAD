@@ -170,6 +170,8 @@ double intrinsic_shift(double T = 300.0) {
 }  // namespace
 
 TEST_CASE("mos: the gate contact reproduces the legacy MOS-C solve, moved by the intrinsic level") {
+    // TVR-0 label (DECISIONS.md Unit 55 §10, C-8): a port of the legacy MOS-C (regression); the
+    // independent check is insulator_test's exact MOS-C solution.
     const Curve& c = fixture_curve();
     const LegacyMOSCapacitor& m = legacy();
     const double shift = intrinsic_shift();

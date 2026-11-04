@@ -169,6 +169,8 @@ solve::TraceOptions reverse_trace(double end_V, double current_limit, double tau
 
 TEST_CASE("impact ionization: the reverse current follows the local model's balance",
           "[.breakdown]") {
+    // TVR-0 label (DECISIONS.md Unit 55 §10, C-2): discrete consistency with this code's own
+    // alpha(E) on its own field and densities, not a theory comparison.
     // Lifetimes of 10 ps put the generation current (1e-3 to 1e-1 A/cm^2) well above the state's
     // current resolution (1e-4), so the multiplied current is resolved at every bias. The
     // simulated current against J (1 - I_n) = J_n0 + J_p0 e^-phi(W) + q integral g e^-phi on its
@@ -202,6 +204,8 @@ TEST_CASE("impact ionization: the reverse current follows the local model's bala
 
 TEST_CASE("impact ionization: avalanche breakdown at the ionization-integral condition",
           "[.breakdown]") {
+    // TVR-0 label (DECISIONS.md Unit 55 §10, C-2): the ionization-integral condition is discrete
+    // consistency with this code's own alpha(E); the analytic one-sided V_BR is the independent part.
     // The primary check: breakdown is where the electron ionization integral on the simulated
     // field profile reaches 1, and there the simulated current runs away. One-sided junctions
     // (N = 1e16 and 2e16 under n+ 1e19) with 10 ps lifetimes, so the current is resolved all the

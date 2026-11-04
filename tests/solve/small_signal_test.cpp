@@ -230,6 +230,8 @@ TEST_CASE("small signal: input errors") {
 }
 
 TEST_CASE("small signal: MOS capacitor RC response, meshed oxide and lumped gate") {
+    // TVR-0 label (DECISIONS.md Unit 55 §10, C-4): inter-analysis consistency; R uses this code's
+    // mobility, so it is not a theory comparison for R or C.
     // 10 nm of oxide over 100 um of 1e16 p-silicon, accumulated at -2 V (Unit 21's fixture):
     // Y = 1 / (1 / (i omega C) + R / (1 + i omega R C_g)), tau = R (C + C_g) = 5.0 ns, from
     // omega tau = 1e-4 to 100: measured 6.7e-4 (meshed and lumped; Unit 21 measured the step
@@ -269,6 +271,8 @@ TEST_CASE("small signal: MOS capacitor RC response, meshed oxide and lumped gate
 }
 
 TEST_CASE("small signal: dielectric relaxation behind a thick oxide") {
+    // TVR-0 label (DECISIONS.md Unit 55 §10, C-4): inter-analysis consistency; R uses this code's
+    // mobility.
     // 100 um of oxide over 10 um of 1e16 p-silicon (Unit 21's fixture): the corner at
     // omega = 1 / (R (C + C_g)), 1.03 times the dielectric relaxation rate: measured 1.3e-4.
     const double L = 1e-3, N_A = 1e16;
@@ -679,6 +683,8 @@ std::vector<Complex> transient_admittance(const device::Device& d, double V0, do
 }  // namespace
 
 TEST_CASE("small signal: a MOS capacitor in inversion, high frequency and its limit") {
+    // TVR-0 label (DECISIONS.md Unit 55 §10, C-4): inter-analysis consistency on this code's DC
+    // state, not a theory comparison for C.
     // 10 nm of oxide on 2 um of 1e16 p-silicon, metal gate 4.1 eV, at 1.5 V (strong inversion).
     // The operating point is the quasi-static one (drift-diffusion cannot reach it, Unit 12); the
     // small-signal system is drift-diffusion. At 1 MHz the minority carriers, supplied only by
@@ -703,6 +709,8 @@ TEST_CASE("small signal: a MOS capacitor in inversion, high frequency and its li
 }
 
 TEST_CASE("small signal: a gated diode gives the low-frequency capacitance") {
+    // TVR-0 label (DECISIONS.md Unit 55 §10, C-4): inter-analysis consistency (AC against this
+    // code's quasi-static dQ/dV).
     // With an n+ source beside the gate the inversion layer is fed through the channel, and from
     // 10 Hz to 100 kHz the gate capacitance is the quasi-static dQ/dV (measured to below 1e-6,
     // the difference's own error) in accumulation, depletion and inversion. It is resolved from
@@ -781,6 +789,7 @@ TEST_CASE("small signal: analysis::conductance_peak finds the trap level (Unit 2
 }
 
 TEST_CASE("small signal: transient sine responses converge to the admittance", "[.transient]") {
+    // TVR-0 label (DECISIONS.md Unit 55 §10, C-4): inter-analysis consistency (transient vs AC).
     // A 1 mV sine through Unit 21's transient run, eight periods in fixed BDF2 steps, the
     // fundamental of the last period: it converges to Y at second order (ratio 4 per halving).
     // The accumulated MOS-C at omega tau = 1 (RC): 2.3e-4, 5.8e-5, 1.5e-5 at 200, 400, 800 steps

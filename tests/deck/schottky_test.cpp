@@ -285,6 +285,8 @@ double series_law(const deck::Plan& p, const results::BiasPoint& b, char type, d
 
 TEST_CASE("Schottky: the thermionic-diffusion series law on the solution's potential (SC4)",
           "[schottky]") {
+    // TVR-0 label (DECISIONS.md Unit 55 §10, C-3): the law is evaluated on the computed potential,
+    // a consistency check, not a closed-form comparison (SC3 and SC5 are).
     for (const char type : {'n', 'p'}) {
         Diode d{.type = type};
         const deck::Plan p = plan_of(d, {.recombination = false});

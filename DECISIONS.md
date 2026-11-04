@@ -5788,6 +5788,15 @@ correctness of simulation results." Ten requirements (R1–R10 below) and five d
 research and design proposal. Do not write implementation code or modify existing architecture. Prioritise theoretical
 rigour, physical validity, numerical accuracy and independent verification over simply achieving passing tests."
 
+**Owner rulings (2026-10-31):** "Approve TVQ1–TVQ6 with the following conditions: 1. Consistency checks must support
+`NOT APPLICABLE` where physical assumptions do not apply. 2. Error decomposition must account for interactions between
+error sources; do not assume contributions are strictly additive. 3. Every theoretical reference must have documented
+provenance, independent derivation and verification. For TVQ4, prefer an independently implemented symmetric
+tridiagonal eigensolver, with Eigen used as a secondary cross-check. Start with TVR-0 (existing validation audit)."
+Where each condition lands: (1) §4.4 outcomes and §5.1 (TVD-16); (2) §4.1 and §4.3 (TVD-17); (3) §3.3 and §2.2
+(TVD-18); TVQ4 in TVB-30 and TVD-3. The TVR-0 audit is §10 below. "Documentation and research only. No implementation
+code, architecture changes or commits until review."
+
 **Scope of this entry.** A proposal only: no code, no change to ARCHITECTURE.md, no change to any existing test, gate or
 tolerance. It plans an addition (a new `verify` layer and its reference library) that consumes results through the
 public API, as ARCHITECTURE 6.12.6 already foresees ("a future verification layer … consumes results rather than
@@ -5910,7 +5919,17 @@ reports an error estimate, which becomes the reference's uncertainty U_ref.
   L ≫ depletion depths; WKB κd ≫ 1). **A comparison outside its applicability is refused, not failed** (TVD-6);
 - *outputs*: named quantities with units and U_ref (the reference's own numerical uncertainty);
 - *known approximation error* (A class): an analytic bound or an estimate, with its source, or "measured" when an E
-  reference for the same case exists and the difference E − A is reported.
+  reference for the same case exists and the difference E − A is reported;
+- **provenance, derivation and verification (owner condition 3, TVD-18):** (i) *provenance*: the primary source
+  (authors, journal, year, equation and table numbers) and how it was accessed, graded **PA** (primary read in full),
+  **PB** (primary inaccessible; two or more independent reproductions read and agreeing), **PC** (one secondary
+  reproduction), **PD** (derived here from the governing equations, no external source); (ii) *independent
+  derivation*: the steps from the governing equations (G1–G15) to the formula used, written out in the reference's
+  documentation, by someone other than the author of the code it checks where possible, with every approximation named;
+  (iii) *verification*: L0 evidence (a second method agreeing, the source's printed values reproduced, limits checked).
+  An **E** reference must be PA or PD-with-two-methods; an **A** or **M** reference may be PB with the grade printed in
+  every report line; **PC is never enough on its own** (it is marked "provenance insufficient" and cannot pass a
+  criterion).
 
 **3.4 Extensibility (R10).** Adding a theory is: one reference model (contract above) in `verify/reference`, its L0
 tests, and catalogue entries; nothing else changes. A checklist (TVD-12) gates each addition: source read and cited,
@@ -5928,6 +5947,19 @@ Unit 15/32), e_ref the reference's own error (U_ref), e_approx the approximation
 any parameter mismatch (zero by construction, §2.2). The framework estimates each (§4.3) and reports them beside the
 discrepancy, so that a failure points at a term.
 
+**The terms are not assumed additive or independent (owner condition 2, TVD-17).** The decomposition above is a
+bookkeeping identity only where each term is defined as a difference between two computations that differ in one
+factor; it is not a statement that the factors act independently. They interact: the Newton stopping error depends on
+the mesh (the residual's scale changes with h); rounding grows as h shrinks (the current resolution of Units 15 and 32);
+an A-reference's approximation error depends on the regime the mesh resolves; the observed order depends on whether
+iterative error is below discretization error. Hence: (a) each term is estimated *at the state actually compared*, never
+transplanted from another mesh or tolerance; (b) interactions are measured, not assumed away, by a factorial ladder on
+the factors that matter for the benchmark (at least the 2×2 design h ∈ {h, h/2} × tol ∈ {tol, tol/100}; time step added
+for transients), the interaction effect being e(h/2, tol/100) − e(h/2, tol) − e(h, tol/100) + e(h, tol), reported as
+ε_int; (c) the combined bound is U = Σ_k \|U_k\| + \|ε_int\| (a conservative sum of magnitudes, not a root-sum-square,
+which would assume independence), and a benchmark whose ε_int exceeds 10% of U reports "interacting errors" and cannot
+pass an E criterion until the dominant interaction is resolved (e.g. the tolerance tightened until e_iter ≪ e_disc).
+
 **4.2 Metrics (TVD-7):**
 
 | Metric | Definition | Used for |
@@ -5943,8 +5975,10 @@ discrepancy, so that a failure points at a term.
 | Reciprocity, passivity | \|Y_ij − Y_ji\| / max\|Y\|; the smallest eigenvalue of (Y + Yᴴ)/2 ≥ −tol | small signal at equilibrium |
 | Validation metric (X) | the comparison error against the data's stated uncertainty (ASME V&V 20 form: E = S − D, u_val from u_num, u_input, u_D) | L5 (Unit 33 catalogue) |
 
-**4.3 Numerical uncertainty U_num.** U_num = U_disc (GCI) + U_time (the same on a time-step ladder) + U_iter + U_lin
-(the linear solver's backward error times the condition estimate where available) + U_round (current resolution).
+**4.3 Numerical uncertainty U_num.** The components: U_disc (GCI), U_time (the same on a time-step ladder), U_iter,
+U_lin (the linear solver's backward error times the condition estimate where available), U_round (current resolution);
+combined by §4.1's rule, U_num = Σ \|U_k\| + \|ε_int\|, with ε_int from the factorial ladder (not a plain sum of
+independently estimated terms).
 Each benchmark reports all five; a benchmark without its ladder reports U_num as "not estimated", and cannot pass an
 E or A criterion (TVD-8).
 
@@ -5960,14 +5994,20 @@ E or A criterion (TVD-8).
 | P | Within the published plot's reading uncertainty; a miss is a finding. |
 | X | Unit 33's existing pins, unchanged. |
 
-**Outcomes:** pass; **finding** (a measured, pinned discrepancy with its attribution and an owner ruling, as Units 33,
-48 and 54 did); fail. **Rule TVM2 (priority over passing tests):** a criterion is never widened to make a run pass;
-a reference is never adjusted toward the simulation; a model parameter is never tuned to a benchmark (Unit 33's V-rules
-carried over).
+**Outcomes (owner condition 1, TVD-16):** pass; **finding** (a measured, pinned discrepancy with its attribution and an
+owner ruling, as Units 33, 48 and 54 did); fail; **NOT APPLICABLE** (an applicability predicate of the reference or
+check is false for this device or state; the report names the predicate and its measured value, e.g. "C7 reciprocity:
+NOT APPLICABLE, bias ≠ 0"); **NOT EVALUATED** (the inputs to decide applicability are missing, e.g. no ladder). NOT
+APPLICABLE is never counted as a pass, and a benchmark whose every check is NOT APPLICABLE is reported as unverified.
+**Rule TVM2 (priority over passing tests):** a criterion is never widened to make a run pass; a reference is never
+adjusted toward the simulation; a model parameter is never tuned to a benchmark (Unit 33's V-rules carried over).
 
 #### 5. Physical consistency, conservation and numerical convergence (R6)
 
-**5.1 Consistency checks (`verify/consistency`, run on any result, not only benchmarks).**
+**5.1 Consistency checks (`verify/consistency`, run on any result, not only benchmarks).** Each check carries its
+applicability predicates (the "Holds when" column, evaluated on the device, models and state); where one is false the
+outcome is NOT APPLICABLE with the predicate named (TVD-16), e.g. C1/C2 off equilibrium, C7 under bias or a magnetic
+field, C8 with active generation, C9 outside the linear regime, C10 when the limit parameter is not swept.
 
 | # | Check | Class | Holds when |
 |---|---|---|---|
@@ -5993,9 +6033,11 @@ for BDF2); Newton-tolerance ladders (the iterative error must be ≤ 1/10 of U_d
 linear-solver checks (backward error, and SparseLU vs PARDISO vs GMRES agreement to their stated accuracy).
 
 **5.3 Expected orders (stated with their evidence, not assumed).** For the box method with Scharfetter–Gummel fluxes
-on admissible (Delaunay–Voronoi) meshes: first order in the discrete H1 seminorm is proven for elliptic problems
-(Eymard, Gallouët and Herbin's finite-volume analysis); second order in L2 and at nodes is typical on smooth solutions
-and is proven on uniform tensor meshes, but not guaranteed on general unstructured meshes. Abrupt doping and material
+on admissible (Delaunay–Voronoi) meshes: first order in the discrete H1 seminorm is stated to be proven for elliptic
+problems (Eymard, Gallouët and Herbin's finite-volume analysis); second order in L2 and at nodes is typical on smooth
+solutions and on uniform tensor meshes, but not guaranteed on general unstructured meshes. **[unverified, TVR-0
+§10.6]:** the theorem's text, number and hypotheses have not been read (the open copy, hal-02100732, refused automated
+access on 2026-10-31); these orders are working assumptions until it is read. Abrupt doping and material
 interfaces resolved only to h reduce orders (Unit 52 measured first order at abrupt junctions). Hence: E criteria use
 p_th = 1 for H1 on unstructured families, p_th = 2 for L2/L∞ on tensor families and on smooth manufactured solutions;
 L2 orders on unstructured families are reported, and gated only where a family's order is first established by a
@@ -6038,7 +6080,7 @@ reference's U_ref and the target mesh before any simulation is run, then frozen.
 | TVB-27 | Lattice heat: Kirchhoff slab (T-dependent κ); Joule-heated resistor | G9 | E | Kirchhoff transform (existing U4 gate, re-homed); parabolic T for constant κ | T(x), p̂ | E | P2 |
 | TVB-28 | Thermoelectric identities: Seebeck, Peltier, energy identity | G9 | E (thermodynamic) | Existing DC7 values re-homed | S, Π, energy residual | E/D | P2 |
 | TVB-29 | Cylindrical and spherical pn junctions (curved 3D unstructured) | G1, G4 | E (semi-analytic) | Radial Poisson–Boltzmann by Chebyshev collocation | V_bi, E_max, C_j | E | P3 |
-| TVB-30 | MLDA vs 1D Schrödinger–Poisson (effective mass, infinite and finite barrier) | G13 | H | Independent 1D Schrödinger–Poisson (dense symmetric eigensolver in the reference; Eigen allowed as a third-party numerical library, grade I2) | inversion charge centroid, ΔV_T, C_g | H: model-form error recorded vs field and doping | P3 |
+| TVB-30 | MLDA vs 1D Schrödinger–Poisson (effective mass, infinite and finite barrier) | G13 | H | Independent 1D Schrödinger–Poisson: the finite-difference Hamiltonian is symmetric tridiagonal, solved by an eigensolver written in the reference (bisection on Sturm sequences for the eigenvalues, inverse iteration for the vectors, in double-double; I3), with Eigen's `SelfAdjointEigenSolver` as a secondary cross-check only (owner ruling on TVQ4) | inversion charge centroid, ΔV_T, C_g | H: model-form error recorded vs field and doping | P3 |
 | TVB-31 | Model-implementation catalogue: Caughey–Thomas, Masetti, Canali, Lombardi, Slotboom, Couderc band set, Auger, radiative, vOdM, Kane, MLDA factor, Tsu–Esaki supply function | G4–G8, G12, G13 | M | Formulas re-coded from the cited papers (I1); source tables | relative error over parameter grids | M (1e-13; tables to printed digits) | P1 |
 | TVB-32 | Consistency suite C1–C12 on every P1/P2 benchmark device | all | D/E | §5.1 | residuals | D/E per check | P1 |
 | TVB-33 | Published numerical: Aste–Vahldieck ballistic diode (energy balance) | G10 | P | The paper's plotted peak velocity | peak v | P (existing Unit 52 measurement re-homed) | P3 |
@@ -6093,8 +6135,12 @@ from measured data (no accessible source, Units 36–39 plan); optical generatio
 | TVD-13 | Tiers: `fast` (D, M, small E; Debug-safe, ≤ 60 s added), `full` (Release, all P1–P2), `nightly` (3D ladders, P3). Release-only like Unit 33's `validation` ctest. | CI cost |
 | TVD-14 | Existing tests are not moved or changed; the audit (TVR-0) labels them and links them from the catalogue; re-homing a check into `verify` happens only with the original gate kept. | "Do not modify existing architecture" |
 | TVD-15 | Dependencies listed, not designed here: a test-only manufactured-source equation term (TVB-14), transient initial excess state (exists; TVB-19). | Scope |
+| TVD-16 | Outcomes include NOT APPLICABLE (predicate named, measured value printed) and NOT EVALUATED; neither counts as a pass (owner condition 1). | Assumptions are checked, not presumed |
+| TVD-17 | Error terms estimated at the compared state; interactions measured by a factorial ladder; combined as a sum of magnitudes plus the measured interaction; large interactions block E passes (owner condition 2). | No assumed additivity |
+| TVD-18 | Every reference carries provenance grade PA–PD, a written independent derivation and L0 verification; E references PA or PD with two methods; PC insufficient (owner condition 3). | Traceable references |
 
-**Owner questions (rulings needed before Unit 55's implementation proposal):**
+**Owner questions (ruled 2026-10-31: all approved with conditions 1–3; TVQ4 amended to an in-reference symmetric
+tridiagonal eigensolver with Eigen as a secondary cross-check; see the rulings at the top of this entry):**
 
 | # | Question | Recommendation |
 |---|---|---|
@@ -6132,6 +6178,339 @@ Fundamentals*; Nicollian and Brews, *MOS Physics and Technology*; Pao and Sah (S
 Brews (Solid-State Electronics 21, 1978); Gundlach (Solid-State Electronics 9, 1966); Simmons (J. Appl. Phys. 34,
 1963); Crowell and Sze (Solid-State Electronics 9, 1966); Blakemore (Solid-State Electronics 25, 1982); Dekker
 (Numer. Math. 18, 1971); and the sources of each M-class model as already cited in DECISIONS.md.
+
+#### 10. TVR-0: audit of the existing validation (research; 2026-10-31 to 2026-11-04; nothing changed, nothing committed)
+
+**10.1 Scope and method.** The suite has 1,163 test cases; the 627 in `tests/physics`, `assemble`, `solve`, `analysis`,
+`validation` and `device` were listed (name and line), and every one whose name or header claims a theoretical,
+analytic, exact, published or convergence reference was read at its reference computation (about 90 cases, in
+`equilibrium`, `bias`, `heterojunction`, `insulator`, `small_signal`, `impact_ionization`, `electrothermal`,
+`energy_balance`, `unstructured`, `transient`, `weighted_current`, `quantum_confinement`, `mosfet`, `deck/schottky` and
+the `physics` model tests), together with the shared reference helpers `tests/physics/references.hpp` and
+`reference_arithmetic.hpp` and the legacy ports `tests/solve/legacy_*.hpp`. The rest (Jacobian, refusal, record,
+cost, cancellation and I/O cases) were classified from their names and headers only; they are discrete-consistency or
+software checks, not theory comparisons. `app`, `render`, `io`, `deck` vocabulary, `linalg` and `mesh` were out of
+scope except the mesh convergence gates. Independence grades are those of §2.1; classes those of §1.2; provenance grades
+those of §3.3.
+
+**10.2 What exists, by kind.**
+
+| Kind | Representative cases (file:line) | Class / grade | Assessment |
+|---|---|---|---|
+| K1 Discrete consistency | FD-Jacobian gates (every `assemble` file); zero current at equilibrium (`bias:318`, `heterojunction:191`); KCL and Gauss (`mos:343`, `insulator:382`, `transient:365`, `transient:533`); SG constant current (`bias:331`); Laplace exact on a Voronoi dual (`unstructured:69`); y-uniform reduction to 1D (about 20 cases); reciprocity at equilibrium (`small_signal:341`); Y(0) = DC slope (`small_signal:369`); energy identities (`electrothermal:547`, `energy_balance:712`); div J = qU (`rates:171`) | D; I0 by nature | **Sound and strong.** Correctly framed as consistency, tolerances tied to rounding or the current resolution. Missing: passivity (C8), Kramers–Kronig (C9), limit continuity as a systematic check (C10, present only for EB → DD, `energy_balance:327`). |
+| K2 Exact with an independent formula | Exact MOS-C first integral with traps and fixed charge, second order shown (`insulator:256`, `:287`, `:325`); heterojunction first integral (`heterojunction:147`); Kirchhoff transform (`electrothermal:138`, `:1013`); step-heated rod series (`electrothermal:1334`); self-heated resistor ODE (`electrothermal:650`); Seebeck/Peltier integrals (`:387`, `:417`, `:743`, `:783`); uniform-field EB, BTBT, II (`assemble/energy_balance:812`, `assemble/band_to_band:285`, `assemble/impact_ionization:214`); Fermi–Dirac integrals and Bernoulli in double-double (`physics/fermi_dirac:69`, `assemble/flux:27`) | E; formula I1–I3, **inputs often I0** | **The strongest part of the suite.** The double-double library (`reference_arithmetic.hpp`) was checked here: two_sum/two_prod by FMA, exp by ln 2 and 2⁻¹⁰ reduction with a 12-term Taylor series and ten squarings, log by Newton on exp, Gauss–Legendre by Newton on Pₙ, Bernoulli numbers B₂–B₂₀ and the Euler–Maclaurin ζ: all correct as written; the stated ~1e-30 accuracy is consistent with the 2¹⁰ squaring amplification of a ~1e-32 series. Weakness: the "exact" side often takes n_i, N_c, mobilities or ionization coefficients from NiTCAD's own physics functions (15 of the `solve` test files do), so an error in those functions cancels (C-9 below). |
+| K3 Approximate theory | Depletion-approximation peak field (`equilibrium:156`); ideal-diode law (`bias:165`); reverse-leakage exponent (`bias:284`); depletion capacitance and C–V doping profile (`small_signal:856`, `:878`); Shockley diffusion admittance (`small_signal:994`); single-level conductance method (`small_signal:735`); one-sided breakdown (`impact_ionization:203`); long-channel swing bracket (`mosfet:222`); surface-recombination diode (`insulator:602`); trap emission rate (`transient:385`); Schottky SC3, SC5 (`deck/schottky:198`, `:362`) | A; I1 | Mostly correctly reasoned, but approximation errors are asserted rather than measured, tolerances are often far wider than the numerical error, and two are mis-classified (I-1, I-5 below). |
+| K4 Empirical models | Masetti (`physics/masetti`), Couderc band set (`band_set`), Altermatt levels (`ionization_density`), Lombardi (`surface_mobility`), van Overstraeten–de Man (`physics/impact_ionization`), Canali, Caughey–Thomas, Slotboom, Kane, MLDA factor; Thurber fits (`validation/published:160`) | M; I1 | Formulas re-coded from DECISIONS.md, not from the implementation's structs (good). **Provenance is often secondary** (C-10). |
+| K5 Self-convergence | Unstructured 2D/3D orders against a 4× finer tensor solve (`unstructured:119`, `unstructured3d:302`); abrupt diode against NiTCAD's 1D solve (`unstructured:200`); MOSFET rule against the tensor MOSFET (`unstructured:356`); FinFET/complex convergence (`complex_convergence:396`, `:452`); time orders against NiTCAD's own fine run (`transient:209`, `electrothermal:1334` time part); `bias:257`; `mosfet:499`; QC8; EC9 | L3 solution verification; I0 | Legitimate as solution verification, but **not code verification**: a defect common to both discretizations (same SG fluxes, same physics) is invisible (C-5). No GCI safety factor or asymptotic-range check anywhere (I-7). |
+| K6 Legacy / cross-code regression | J(0.5 V) = 1.280e-2 (`bias:144`); legacy MOS-C port and P1–P9 (`mos:172`, `mos:328`–`:584`, `legacy_moscap.hpp`); legacy turn-off (`transient:718`); legacy G-PARABOLA (`electrothermal:602`); legacy MOSFET bands (`mosfet:222`) | Regression; "I0-lineage" | Useful continuity pins; **not theoretical evidence** (C-7, C-8). |
+| K7 Published numerical / measured | Aste–Vahldieck ballistic diode (`energy_balance:375`); Unit 33 benchmarks (`validation/published`) | P; X | EC10 compares different models (I-8). Unit 33 is a careful X baseline (out of TVR-0's scope beyond provenance). |
+
+**No manufactured-solution test exists** (no file mentions one): there is no code verification of the coupled
+drift-diffusion system against an exact solution on unstructured meshes (§10.5).
+
+**10.3 Self-referencing or circular validations.** Severity: **H** (a check presented as verification that cannot
+detect the error class it names), **M** (partly circular, mitigated elsewhere), **L** (labelling only).
+
+| # | Case | Circularity | Sev. | Mitigation present? |
+|---|---|---|---|---|
+| C-1 | `equilibrium:92` "built-in potential within 2e-3 V (legacy gate)", listed in ARCHITECTURE 10 as a validation criterion | Measures ψ(last) − ψ(first), two Dirichlet contact values: it tests the contact formula, not the solve (the file's own header says so, and so does the ARCHITECTURE 10 row); and the expected V_bi is built from NiTCAD's `effective_intrinsic_density` (`built_in()`, `equilibrium:83`), so a wrong n_ie passes | M (the n_ie circularity; the not-a-solve-gate limitation is already disclosed) | The solve is checked by `equilibrium:130` and `:156`; the ARCH 10 row already states that it "does not test the solve" and points to the peak-field gate |
+| C-2 | `impact_ionization:203` "the primary check": breakdown where the ionization integral on the *simulated* field reaches 1; `impact_ionization:170` current balance | Both integrate NiTCAD's own α(E) over NiTCAD's own field and densities: they verify that the solver's runaway is the model's own criterion (a discrete consistency), not that the field or α is right | M | The analytic one-sided V_BR (A class) is the independent part, also with NiTCAD's α; α itself is checked against the paper's fit magnitudes (`physics/impact_ionization:22`) |
+| C-3 | Schottky SC4 "series law on the solution's own potential" (`deck/schottky:286`) | The reference is evaluated on the computed potential | M | SC3 and SC5 compare with closed forms |
+| C-4 | `small_signal:232`, `:271` (RC), `:681` (HF C), `:705` (gated diode LF C), `:783` (transient vs AC) | The "expected" C is NiTCAD's own quasi-static dQ/dV, or `frozen_minority_capacitance` re-solved on NiTCAD's DC state; R uses NiTCAD's `masetti_mobility` | M | These are valuable *inter-analysis consistency* checks (C9-type) and should be labelled so; none is a theory comparison for C |
+| C-5 | All K5 self-convergence gates | The reference is NiTCAD's own finer (tensor or 1D) solve with the same fluxes and physics | M | `insulator:256` (exact MOS-C) and `heterojunction:147` are true exact comparisons, but in 1D only |
+| C-6 | `transient:209`, `electrothermal:1334` time orders | Against NiTCAD's own 5120- or 1280-step run | L | `electrothermal:1334`'s spatial part is against the exact series |
+| C-7 | `bias:144` J(0.5 V) = 1.280e-2 within 1% (ARCHITECTURE 10) | The number is the legacy pytcad simulator's output for the same algorithm: a cross-version regression pin. The test notes the short-base analytic value 1.321e-2 (3.2% away) but does not compare with it | M | `bias:165` compares with the analytic law (I-2) |
+| C-8 | `mos:172` and the P1–P9 MOS-C gates | A port of the legacy MOS-C (independent residual and Newton, but the legacy's algorithm, mesh and shared material functions); P1 checks the legacy's own discrete rows | L | `insulator:256` (exact) covers the same physics independently |
+| C-9 | References whose inputs come from the code under test: `physics::intrinsic_density`, `effective_intrinsic_density`, `caughey_thomas_mobility`, `masetti_mobility`, `impact_ionization_coefficient`, `conduction_band_dos`, `band_gap_eV` inside expected values (15 `solve` files; most in `heterojunction`, `insulator`, `impact_ionization`, `electrothermal`, `small_signal`); and `references.hpp`'s material formulas, evaluated in double-double "from this code's parameter sets" | An error in a parameter table or a derived-quantity function appears on both sides and cancels | M | L1 tests of those functions exist (`semiconductor:64` n_i, `band_set:72`, `mobility:18`, `masetti`), but several take their parameters from the code's own structs too (`mobility_test`, `heavy_doping_test` via `references.hpp`), so a wrong *parameter value* in `legacy_silicon` is caught only where a literal from a source is compared (`mobility:18`, `semiconductor:64`) |
+| C-10 | M-class provenance (§3.3 grades): Masetti 1983 (paywalled; three reproductions, **PB**); Masetti phosphorus μ_max = 1414 (one reproduction, **PC**, DECISIONS Unit 38 limitations); Altermatt 2006 (paywalled, not read, **PB/PC**); Lombardi 1988 (paywalled; two text reproductions, equations as images not read, **PB**); MLDA (Paasch–Übensee, paywalled; density equation an image, the Boltzmann reduction derived here, **PD** for the reduction); Schottky references (equations as images not read); Thurber (OCR, some coefficients reconstructed, DECISIONS Unit 33); Sze–Gibbons breakdown (not read, V6) | The tests verify agreement with DECISIONS.md's transcription of secondary reproductions, not with the primary source | M (PC: H) | Recorded honestly in DECISIONS.md; not surfaced in the tests or ARCHITECTURE 10 |
+
+**10.4 Incorrect or insufficient reference calculations.** Each derived here and checked against the test's own
+measurements; none is a defect in NiTCAD's solver, but several are defects in what the tests claim.
+
+- **I-1 `equilibrium:156` treats an exact solution as an approximation, and its measured gap is the metric's bias
+  (insufficient).** For a *symmetric* abrupt junction (N_A = N_D = N, Boltzmann, constant ε and n_ie), the first
+  integral of Poisson's equation on the n side, with u = (ψ − ψ_bulk)/V_T, is
+  E² = (2qV_T/ε)[N(e^u − 1 − u) + p_n(e^{−u} − 1 + u)], p_n = n_ie²/N. By symmetry the junction sits at
+  u_j = −V_bi/(2V_T), and since e^{V_bi/2V_T} = N/n_ie, p_n e^{−u_j} = n_ie. Hence
+  E_j² = (2qN/ε)(V_bi/2 − V_T + V_T e^{−V_bi/2V_T}) + O(qn_ieV_T/ε)
+  = (qN/ε)(V_bi − 2V_T)·(1 + O(n_ie/N) + O(e^{−V_bi/2V_T})), which is the test's "depletion approximation with the
+  2 V_T correction" exactly, up to relative terms of 1e-6 (1e16) to 1e-8 (1e18). So the reference is class E for the
+  symmetric cases, and its 0.5% tolerance is 3–50 times the measured differences. Those differences (0.01%, 0.10%,
+  0.17% at 1e16, 1e17, 1e18) are numerical: the metric, the largest edge difference quotient, is the mean field over
+  the junction's first edge, low by (qN/ε)(h/2) with h = 1e-8 cm, i.e. 0.02%, 0.07%, 0.21% of E_j: the same size as
+  the measured gaps. The asymmetric case (1e18/1e16, asserted only as "> 1.2× the approximation") is a genuine A-class
+  failure of the approximation (the heavy side's majority tail spills a charge comparable to the depletion charge into
+  the light side; first-integral estimate here: the field rises well above the depletion value, consistent with the
+  measured +39%) and is exactly computable by the same first integral (already coded in `heterojunction:116`).
+- **I-2 `bias:165` ideal-diode law: inconsistent assumptions inside a wide band (insufficient).** The reference is the
+  short-base Shockley current, but (a) SRH is on (legacy options), so the depletion-region recombination current
+  (Sah–Noyce–Shockley), which the formula omits, is in the simulated current; (b) the neutral widths use the
+  *zero-bias* depletion width (0.147 µm here) while the comparison is at 0.5 V (0.093 µm), a 2.9% change of J_s; (c) D
+  comes from NiTCAD's `caughey_thomas_mobility` (C-9). The ±15% band absorbs all three without measuring any. The
+  ideality check (±0.02 from 0.3 V) is sound.
+- **I-3 `bias:284` reverse leakage exponent in (0.5, 1.5) (insufficient).** For SNS generation in the depletion region
+  J ∝ W ∝ (V_bi − V)^{1/2}, so the expected exponent is 0.5 (plus small terms from the neutral regions' diffusion
+  current); the window also admits an exponent of 1, which no mechanism here predicts. V_bi is hard-coded (0.83 V).
+- **I-4 `bias:257` two meshes, 3% (insufficient as solution verification).** No order, no Fs = 3 GCI (two-grid
+  factor, NPARC), no third mesh.
+- **I-5 `small_signal:856` depletion capacitance: the 0.88% is attributed, not shown.** For the 1e19/1e16 junction at
+  −2 V the candidate terms are of the right size ((L_D/W)² ≈ 0.45%, the p⁺ side's penetration 0.1%, the heavy side's
+  majority tail), but the exact dQ/dV from the first integral (as in I-1) would settle it; tolerance 1.5%.
+- **I-6 `mosfet:222` legacy bands.** V_th ∈ (−0.5, 1.5) V and SS ∈ (55, 120) mV/dec are qualitative; the added
+  swing bracket (depletion capacitance at φ_s = φ_F and 2φ_F) is a sound A-class interval. No Pao–Sah or charge-sheet
+  reference exists.
+- **I-7 Order estimates against a finite reference (`unstructured:119`, `unstructured3d:302`, FC8, UC7).** Orders are
+  measured against a tensor solve 4× finer than the finest mesh. If that reference converges at first order in H1, its
+  own error is about a quarter of the finest unstructured mesh's, which biases the observed order; the bias is not
+  estimated, and no asymptotic-range check (NPARC's GCI₂₃ / (r^p GCI₁₂) ≈ 1) is made. An exact (manufactured) solution
+  removes the question.
+- **I-8 `energy_balance:375` (EC10) compares different models.** Read in Aste and Vahldieck's arXiv text (v1 HTML):
+  their energy-balance result of 1.87 v_s uses the Baccarani–Wordeman *temperature-dependent* τ_w (their eqs 15–16) and
+  a mobility with μ_min 80, Δμ = 1430 − μ_min, N_ref 1.12e17, exponent 0.72 (their eq 36, consistent with the test's
+  80 + 1350/(1 + (N/1.12e17)^0.72)); NiTCAD uses a constant τ_w (documented in ARCHITECTURE 11.3). **The test comment's
+  "beta = 2" is not in the source text read** (no β appears; their field dependence enters through τ_p(T)). β = 2 is a
+  model input, not only a comment: the fixture sets the Caughey–Thomas field exponent `.beta = 2.0`
+  (`energy_balance:125`), and both comments that list it as the source's (`energy_balance:117`, `:377`) attribute
+  NiTCAD's parameter choice to the paper. The gate (peak > 1.3 v_s, located in the last 30 nm of the n region) is
+  qualitative, which is appropriate for a model mismatch, but neither comment should cite the source for β.
+- **I-9 `small_signal:994` Shockley admittance: correct and now quantified.** Shockley (BSTJ 28, 1949, eq 4.24 and §4.1–
+  4.2, read in the archive.org OCR) gives (1 + iωτ_p)^{1/2} for the *hole-diffusion term* A_p only, for a long, uniform
+  n region, a narrow transition region, low injection and body recombination; the full junction admittance (eq 4.23)
+  adds the electron term and the transition capacitance. The test normalizes the real part, which removes C_T, and
+  attributes its 3.2e-3 to the electrons injected into the p⁺ side. Estimated here: the electron (short-base, transit
+  W_p²/2D_n ≈ 2 ns ≪ τ) share of G₀ is about 7.6e-3 (D_n ≈ 2.6 cm²/s at 1e19, W_p = 1 µm, L_p ≈ 34 µm), which shifts
+  the normalized ratio by ≈ 7.6e-3 × (1 − 1/Re√(1+3i)) ≈ 2.4e-3 at ωτ = 3: the attribution holds in size.
+- **I-10 `small_signal:735` conductance method: verified.** Nicollian and Goetzberger (BSTJ 46, 1967, §4.3, OCR):
+  "G_p/ω goes through a maximum when ωτ = 1 … The value of G_p/ω at the maximum is C_s/2"; their eq (17) itself is
+  illegible in the OCR, so the full curve's form is consistent with, not quoted from, the source.
+
+**10.5 Missing theoretical coverage (against §6's catalogue).** Already present in some form, to be catalogued and
+re-homed (with the original gates kept, TVD-14): TVB-02/03 (`references.hpp`), TVB-06, 08, 09, 11, 12, 13, 22, 24,
+27, 28 (K2 above), 16, 17, 18, 21, 23 (K3, with I-1–I-6), 31 (K4), 33, 34 (K7). **Missing entirely:** manufactured
+solutions for Poisson and drift-diffusion on any mesh (TVB-04, 14); curved-geometry exact solutions on unstructured
+meshes (TVB-05, 29); the exact pn-junction first integral as the reference for depletion tests (TVB-07: the code exists
+for heterojunctions only); Pao–Sah / charge sheet (TVB-20); Haynes–Shockley (TVB-19); exact Airy-function tunnelling
+transmission against WKB (TVB-25); Schrödinger–Poisson against MLDA (TVB-30); passivity, Kramers–Kronig and systematic
+limit continuity (C8–C10); any GCI with safety factor and asymptotic-range check; any error-interaction measurement
+(owner condition 2).
+
+**10.6 Literature verification log (TVR-0).** Read 2026-10-31 by an automated fetch of open copies; quotes kept in
+the session record.
+
+| Source | Accessed | Status | Effect |
+|---|---|---|---|
+| NASA NPARC, "Examining Spatial (Grid) Convergence" | Read (HTML; equations as images, worked forms as text) | **Verified:** Fs = 1.25 for three or more grids and 3.0 for two; the asymptotic check GCI₂₃ ≈ r^p GCI₁₂ (worked ratio 1.002); p from three grids at constant r (worked form) | §4.2's GCI and asymptotic check stand; I-4, I-7 |
+| Shockley, BSTJ 28, 435 (1949) | Read (OCR) | **Verified with scope:** (1 + iωτ_p)^{1/2} is the hole-diffusion admittance A_p; assumptions §4.1–4.2 as in I-9; total admittance eq 4.23 | I-9; TVB-18 must use eq 4.23's full form |
+| Nicollian and Goetzberger, BSTJ 46, 1055 (1967) | Read (OCR) | **Peak verified** (§4.3); single-level formula eq (17) illegible; continuum peak location not found in the text | I-10; TVB-22 keeps the single-level form, continuum deferred |
+| Aste and Vahldieck, arXiv physics/0312021 | Read (HTML v1; PDF not extractable) | **Verified:** device, μ₀(N), v_s, T-dependent τ_w (eqs 15–16), 2.61 v_s (HDM) and 1.87 v_s (EBM) at 1 V; **β not stated**; peak position only in a figure | I-8; TVB-33 |
+| Salari and Knupp, SAND2000-1444 | **Not accessible** (OSTI refused connections) | Not verified | §5.2's MMS method stands on the general literature only; to be read before TVR-2 |
+| Eymard, Gallouët, Herbin, *Finite Volume Methods* | **Not accessible** (bot challenge) | Not verified | §5.3's orders marked [unverified]; to be read before TVR-2 |
+| Masetti 1983; Altermatt 2006; Lombardi 1988; Paasch–Übensee (MLDA); Sze–Gibbons 1966; Pao–Sah 1966; Brews 1978; Gundlach 1966; Simmons 1963; Crowell–Sze 1966 | Not attempted in TVR-0 (paywalled per DECISIONS.md, or needed only in later phases) | — | C-10; each phase reads its sources before its proposal |
+
+**10.7 Prioritised corrections and recommendations.** None changes an existing test, tolerance or ARCHITECTURE.md
+without a ruling; tightening is done by *adding* criteria, never by editing a passing gate silently (TVM2).
+
+| Pri | # | Recommendation | Kind | Addresses |
+|---|---|---|---|---|
+| P0 | R-1 | Relabel, in ARCHITECTURE 10 and the tests' comments, every K5/K6/C-1–C-8 check by what it is (consistency, self-convergence, legacy regression); keep them as pins. ARCHITECTURE 10's "Built-in potential" row already states it does not test the solve; it gains only the n_ie circularity (C-1). The "Diode J(0.5 V)" row already records the analytic 1.321e-2; it gains the label "legacy cross-version regression, not theory verification" (C-7). | Documentation (needs approval: architecture text) | C-1–C-8 |
+| P0 | R-2 | Correct this proposal's unread claims: §5.3's Eymard–Gallouët–Herbin orders (done here, marked [unverified]); obtain and read EGH and Salari–Knupp before TVR-2. | Documentation; source acquisition | 10.6 |
+| P0 | R-3 | Provenance register: for every M/A reference, the PA–PD grade, the sources actually read, and the transcription path (DECISIONS → test); surface PB/PC grades in test output and ARCHITECTURE 10.1. Ask the owner for the paywalled primaries (Masetti, Altermatt, Lombardi, Paasch–Übensee, Sze–Gibbons, Pao–Sah) where obtainable. | Documentation; source acquisition | C-10, owner condition 3 |
+| P1 | R-4 | Exact first-integral references for the pn junction: equilibrium field and potential (symmetric and asymmetric), and dQ/dV at reverse bias; a bias-free field metric (D at the junction from the dual-face flux, or the edge field extrapolated with the known slope ρ/ε); tolerances from U_num on a ladder. Added beside `equilibrium:156` and `small_signal:856`, which stay. | New references (TVR-2) | I-1, I-5 |
+| P1 | R-5 | Diode family with consistent assumptions: SRH off for the Shockley comparison (or SNS added), W(V) not W(0), parameters from the benchmark spec; the reverse-leakage exponent against the SNS integral; keep `bias:165`, `:284` as they are. | New references (TVR-4) | I-2, I-3 |
+| P1 | R-6 | Manufactured solutions (Poisson, then coupled drift-diffusion) on tensor, 2D, 3D and swept meshes, with the TVQ3 hook; orders with NPARC's GCI and asymptotic check; the K5 gates kept as solution verification. | New references (TVR-2) | C-5, I-7, 10.5 |
+| P1 | R-7 | Input independence: reference-side parameter sets written from the sources (or DECISIONS.md's transcriptions, with their grade), never the implementation's structs or derived-quantity functions, for every K2/K3 reference; where sharing is deliberate (code verification of one term), say so in the test. | Reference rework (TVR-1/2) | C-9 |
+| P2 | R-8 | EC10: remove the source attribution of β = 2 from both comments (`energy_balance:117`, `:377`), record β = 2 (`:125`) as NiTCAD's parameter choice, state the model mismatch (constant vs T-dependent τ_w), keep the qualitative gate; a reference-only Baccarani–Wordeman τ_w would make a P-class comparison meaningful. | Documentation; optional reference | I-8 |
+| P2 | R-9 | Shockley admittance with the electron term and C_T (eq 4.23), so the 3.2e-3 becomes a predicted, not attributed, residual. | Reference (TVR-4) | I-9 |
+| P2 | R-10 | Pao–Sah and charge-sheet references for the long-channel MOSFET (sources to be read first). | New reference (TVR-4) | I-6 |
+| P2 | R-11 | Consistency suite additions: passivity, Kramers–Kronig (diagnostic, band-limited), limit continuity sweeps; every check with NOT APPLICABLE predicates. | New checks (TVR-1) | 10.5, owner condition 1 |
+| P2 | R-12 | Error-interaction ladders (h × tol, and Δt for transients) on the P1 benchmarks. | Method (TVR-2) | Owner condition 2 |
+
+**10.8 Questions for the owner (before TVR-1).**
+- TVR0-Q1: Approve R-1's relabelling (a documentation change to ARCHITECTURE 10 and test comments only)?
+- TVR0-Q2: Can the paywalled primaries in R-3 be supplied (PDFs placed locally), so the PB/PC references can be raised
+  to PA? Without them, those M-class references stay "provenance PB/PC" in every report.
+- TVR0-Q3: R-7 changes how existing references obtain their inputs. Apply it to new references only (recommended),
+  or also rework existing tests' expected values (each such change would be its own reviewed commit)?
+- TVR0-Q4: Proceed to TVR-1 (reference numerics, metrics, report, consistency suite) as the next proposal?
+
+**Owner rulings (2026-11-04):** "TVR0-Q1 to Q4 in §10.8, choose recommended." Read as:
+- **Q1 approved:** R-1's relabelling (ARCHITECTURE 10 rows and test comments, documentation only; no test, gate or
+  tolerance changes), as amended by the review: the "Built-in potential" row gains only the n_ie circularity, the
+  "Diode J(0.5 V)" row the legacy-regression label, and the EC10 comments lose the β attribution (R-8).
+- **Q2:** no recommendation was stated; the default holds. The PB/PC references keep their grade in every report
+  until the owner supplies the primaries; supplying them stays open.
+- **Q3 ruled as recommended:** R-7 (input independence) applies to new references only; existing tests' expected
+  values are not reworked.
+- **Q4 approved:** TVR-1 (reference numerics, metrics, report, consistency suite) is the next proposal.
+
+**10.9 Applied under Q1 (2026-11-04, uncommitted).** ARCHITECTURE 10's "Built-in potential" row gains the n_ie
+circularity (C-1) and the "Diode J(0.5 V)" row the legacy-regression label (C-7). A one- to three-line comment
+"TVR-0 label (DECISIONS.md Unit 55 §10, …)" is added at the top of 19 test cases: `equilibrium:92` (C-1);
+`bias:144` (C-7), `:257` (I-4); `impact_ionization:170`, `:203` (C-2); `deck/schottky:286` (C-3); `small_signal:232`,
+`:271`, `:681`, `:705`, `:783` (C-4); `unstructured:119`, `:200`, `:356`, `unstructured3d:302`,
+`complex_convergence:396` (C-5); `transient:209` (C-6); `mosfet:222` (I-6); `mos:172` (C-8). The EC10 comments
+(`energy_balance:117`, `:377`) no longer attribute β = 2 to the source (R-8). Comment-only: no test, gate,
+tolerance or code line changed (checked on the diff: every added or removed test line is a comment). Not labelled:
+`electrothermal:602` (G-PARABOLA compares with an exact parabola; the audit's K6 listing reflects its legacy origin,
+not a circularity) and the K5 gates named only in passing (`mosfet:499`, `complex_convergence:452`,
+`electrothermal:1334`), left for the catalogue links of TVR-1.
+
+#### 11. TVR-1 (Unit 55a) proposal: reference numerics, metrics, contract, report, consistency suite
+
+**Status:** design for review (2026-11-04). No code until the owner rules TVR1-Q1–Q6 below and says go. Branch
+`verify/theoretical-validation` (the proposal), implementation on a new branch per unit.
+
+**11.1 Scope.** In: (a) the `verify/reference` numerics of §3.2 with their L0 tests; (b) the reference-model contract
+(§3.3) as types; (c) the metrics of §4.2 as one library; (d) outcomes (§4.4, TVD-16) and the verification report
+(TVD-11); (e) `nitcad verify`; (f) `verify/consistency` C1–C12 (§5.1, R-11) with applicability predicates; (g) the
+catalogue entries TVB-01, 02, 03 and 32; (h) the catalogue links for the existing tests labelled in TVR-0. Out: mesh
+and tolerance ladders and GCI driving (`verify/study`, TVR-2, though the GCI *formulas* are in (c)); the TVQ3 MMS hook
+(TVR-2); device benchmarks other than TVB-01–03; the Sturm/inverse-iteration eigensolver (TVQ4 ruling; first needed by
+TVB-30 in TVR-5, so built there with its own L0 tests); any change to existing tests, gates, tolerances or the solver.
+
+**11.2 Libraries and dependency rules (TVD-19).**
+
+| Target | Depends on | Never includes | Enforced by |
+|---|---|---|---|
+| `nitcad_verify_reference` | the standard library; `base`'s constants (except TVB-01, whose reference holds its own CODATA literals) | `physics`, `assemble`, `solve`, `mesh`, `device`, `linalg`, `results`, Eigen | link list + a header-boundary test (`#if __has_include` / `#ifdef` guards, as `tests/linalg/header_boundary_test.cpp`) |
+| `nitcad_verify_consistency` | `results`, `mesh` (dual volumes, edges, couplings), `device` (doping, permittivity, contacts) read-only; `verify_reference` (metrics, small eigenproblems) | `physics`, `assemble`, `solve`, `linalg` | the same |
+| `nitcad_verify_report` | `verify_reference`, `results` (Provenance), `io` (checksummed records) | `physics`, `assemble`, `solve` | link list |
+| `nitcad_verify_benchmark` | everything (it runs NiTCAD: the subject of the check) | — | — |
+| `nitcad` (cli) | adds `verify` | — | — |
+
+The consistency layer judges NiTCAD's results using only the results, the mesh and the device: it never re-evaluates
+NiTCAD's physics, so a consistency check cannot be satisfied by the same function that produced the result. Where a
+check would need physics (n_ie for np = n_ie², the rates' own scales) it is restated in quantities the results carry
+(below), or it is NOT EVALUATED.
+
+**11.3 Reference numerics and their L0 criteria (frozen before code).** Each primitive cites its source and is graded
+PA–PD (§3.3). Tolerances are in units of u_dd = 2⁻¹⁰⁴ ≈ 4.9e-32 (double-double unit roundoff) or ε = 2⁻⁵² for double.
+
+| # | Primitive | Source (to be read in full before code) | L0 criteria |
+|---|---|---|---|
+| TC1 | Double-double arithmetic: two_sum, two_prod (FMA), +, −, ×, ÷, sqrt; exp, expm1, log, pow | Dekker (Numer. Math. 18, 1971); Hida, Li and Bailey (QD library report, 2000) | Constants π, e, ln 2, √2 to 32 digits against literals from OEIS A000796, A001113, A002162, A002193 (PA); identities exp(log x) = x, exp(a + b) = exp a · exp b, (√x)² = x, (x / y) · y = x to 8 u_dd relative on 10⁴ log-spaced points over each function's range; error-free transformations exact (hi + lo reproduces the exact sum/product, checked by an integer-exact construction) |
+| TC2 | Cross-check with the existing test helper | `tests/physics/reference_arithmetic.hpp` (TVR-0: correct as written) | The new library and the existing header agree to 2 u_dd on the TC1 grid. The header is not changed or included by the new library (TVD-14); the agreement test lives in the verify tests. (TVR1-Q1) |
+| TC3 | Gauss–Kronrod 7/15, adaptive, with error estimate | Piessens et al., QUADPACK (1983); the qk15 nodes and weights from netlib's public QUADPACK source (PA) | Nodes and weights to their printed digits; monomials xᵏ on [−1, 1] exact to 4 u_dd for k ≤ 22 (the 15-point Kronrod rule's degree 3n + 1) and not for k = 24 (shows the degree is real); adaptive: on ten integrals with closed forms (smooth, peaked, oscillatory), the true error ≤ the reported estimate in every case, and ≤ the requested tolerance |
+| TC4 | tanh–sinh (double-exponential) quadrature | Takahasi and Mori (1974); Bailey, Jeyabalan and Li (2005) | ∫₀¹ x^{−1/2} = 2, ∫₀¹ ln x = −1, ∫₀¹ x^{−1/2} ln x = −4, ∫₀^∞ e^{−x²} = √π/2 to 16 u_dd; the error estimate bounds the true error on each |
+| TC5 | Bracketed Brent root finding | Brent, *Algorithms for Minimization without Derivatives* (1973), ch. 4 | Roots of x³ − 2x − 5 (Newton's cubic, root known to 40 digits, PA from the literature), cos x − x, and e^x − 1 near 0 to 4 u_dd; refuses an unbracketed interval; iteration count within Brent's bound |
+| TC6 | Dormand–Prince 5(4) with dense output | Dormand and Prince (J. Comput. Appl. Math. 6, 1980); Hairer, Nørsett and Wanner, vol. I | Tableau to printed digits; observed order 5.0 ± 0.2 on y′ = y and the harmonic oscillator at fixed steps; adaptive global error proportional to the tolerance over four decades; dense output order 4 |
+| TC7 | Chebyshev collocation with domain splitting | Trefethen, *Spectral Methods in MATLAB* (2000); Boyd, *Chebyshev and Fourier Spectral Methods* (2001) | −(εu′)′ = f on two subdomains with an ε jump and an exact piecewise solution: error decays geometrically (each doubling of N reduces it by ≥ 10³ until it reaches 64 u_dd·max\|u\|); interface conditions (continuity of u and εu′) hold to the same level |
+| TC8 | Complex-step differentiation (double) | Squire and Trapp (SIAM Rev. 40, 1998); Martins, Sturdza and Alonso (2003) | Derivatives of e^x, sin x, x^{3/2}, and a nested composite to 4ε relative at h = 1e-200; agreement with the analytic derivative where one exists |
+| TC9 | Small Hermitian eigenproblems (n ≤ 16): cyclic Jacobi | Golub and Van Loan, *Matrix Computations* (4th ed.), §8.5 | Known spectra (diagonal, rank-one updates, the Hilbert matrix's smallest eigenvalue to its published digits); residual ‖Av − λv‖ ≤ 8nε‖A‖; used only by C8 (passivity) |
+
+Each primitive reports an error estimate, which the contract carries as U_ref. **Mutation requirement (house
+practice):** each L0 test set must fail on at least one deliberate corruption of its primitive (a wrong weight, a
+dropped lo term, a wrong tableau entry), recorded in the as-built.
+
+**11.4 Contract and outcome types.** `verify::ReferenceInfo` (id, class E/D/A/M/H/P/X, independence grade I0–I3,
+provenance grade PA–PD, citation with equation numbers, version, the G1–G15 subset, assumptions, applicability
+predicates); `verify::Predicate` (name, evaluated value, threshold, holds); `verify::Quantity` (name, unit, value,
+U_ref); `verify::Outcome` = pass | finding | fail | not_applicable | not_evaluated, with the predicate or missing input
+named for the last two (TVD-16). A reference graded PC cannot produce `pass` (TVD-18): its comparisons report
+`finding` with "provenance insufficient". These are plain data types with no behaviour beyond validation of their own
+fields.
+
+**11.5 Metrics library (TVD-7).** The formulas of §4.2: relative error with floor; log error with floors; discrete
+L∞, dual-volume L2 and dual-face H1 norms (from `mesh` geometry, in the consistency/benchmark layers; the reference
+layer only gets vectors and weights); observed order from three errors, or from three solutions at constant r;
+asymptotic-range check; GCI with F_s = 1.25 (≥ 3 grids) and 3.0 (2 grids); the factorial interaction contrast ε_int
+of §4.1 and the combination U = Σ\|U_k\| + \|ε_int\|. **L0 criteria:** exact recovery of p from synthetic e_k = C hᵏᵖ
+(to 1e-12); the NPARC page's worked example reproduced to its printed digits (verified source, §10.6); ε_int = 0 for
+an additive synthetic e(h, tol) and the exact cross-term for a multiplicative one; GCI refused (`not_evaluated`) when
+the three solutions are not monotone or p̂ ≤ 0.
+
+**11.6 Consistency suite (`verify/consistency`).** Each check is a function of (result, mesh, device) returning an
+Outcome, the measured residual, the tolerance and the predicates. Tolerances use quantities the result already
+carries; none is set after a run.
+
+| # | Restated in result quantities | Predicates (else NOT APPLICABLE) | Tolerance (frozen) |
+|---|---|---|---|
+| C1 | Terminal and edge currents zero; quasi-Fermi levels flat and equal (F_n = F_p everywhere, which is np = n_ie² under the run's own statistics, with no physics call) | all biases 0; no optical or prescribed generation; no transient | currents ≤ their `terminal_current_resolution`; edges ≤ that resolution; \|F_n − F_p\| ≤ 64ε·max(\|E_c\|, \|E_v\|, V_T) per node |
+| C2 | Each stored mechanism's rate integrates to nothing measurable: q∫\|R_k\| dV ≤ the smallest terminal resolution | C1's predicates; rates stored (else NOT EVALUATED) | as stated (a rate below it cannot drive a resolved current) |
+| C3 | Dual-cell Gauss law: Σ_faces ε_f (A_f/d_f)(ψ_i − ψ_j) = the cell's charge q(p − n + N_D − N_A)V_i plus interface and trap charge; global neutrality with electrode charges | converged state; Boltzmann or FD doping fully ionized, or ionized densities available (else NOT EVALUATED for incomplete ionization, which the results do not store) | the Newton tolerance scaled as the solver states it, plus 64ε times the largest face flux |
+| C4 | Σ terminal currents = 0 (DC); with displacement current (transient; AC column sums) | — | Σ of the contacts' resolutions (DC, transient); `resolution[k][j]` (AC) |
+| C5 | Σ I V = boundary heat + stored energy rate (electrothermal) | electrothermal on; steady; `thermal_contact_heat` present | the thermal residual's stated scale; NOT EVALUATED where the volume heat terms are not in the results (listed gap) |
+| C6 | Gate charge: ∫ I_g dt = ΔQ_g by the run's own quadrature order | transient with a gate | the step's local error estimate summed |
+| C7 | \|Y_ij − Y_ji\| / max\|Y\| | all biases 0; no magnetic field (none in NiTCAD); AC | (resolution_i + resolution_j) / max\|Y\| |
+| C8 | λ_min((Y + Yᴴ)/2) ≥ −tol, by TC9 | all biases 0 | ‖resolution column‖ |
+| C9 | Re Y(ω_min) = dI/dV and Im Y(ω_min)/ω_min = dQ/dV from a pair of DC points the caller supplies; band-limited Kramers–Kronig on a log-spaced Y(ω) | linear regime (the caller states the amplitude); for KK at least 8 points per decade over ≥ 4 decades | DC part: the DC points' resolution plus the finite-difference error (stated); **KK: diagnostic only**, reported as a measured value with the tail-truncation estimate, never pass/fail |
+| C10 | Difference to the limit model decays at the stated rate over a caller-supplied sequence | the limit parameter is swept (≥ 3 values) | rate within 0.2 of the stated one |
+| C11 | Mirrored or rigidly moved devices: the caller supplies the node map; terminal quantities equal | the map is a symmetry of the device (checked on doping and geometry) | 64ε relative |
+| C12 | n, p > 0; T > 0; occupancies in [0, 1] | always | exact |
+
+**Each check must be shown to detect what it claims:** a defect-injection test per check (a corrupted current, a
+shifted F_n on one node, a broken Y symmetry, a negative density, a dropped interface charge) fails it, and real solves
+of three existing decks (`examples/pn_diode_1d.deck` (DC sweep), `examples/moscap_cv.deck` (small-signal C–V, two
+contacts), `decks/schottky_diode_1d.deck` (DC sweep)) pass it or report NOT APPLICABLE with the right predicate. C7
+and C8 need an AC point at zero bias: where the C–V sweep has none, the benchmark adds one through the API (the deck
+is not edited). These real-solve runs are the TVB-32 entries of TVR-1; later phases add their
+benchmark devices.
+
+**11.7 Report and CLI (TVD-11).** The report is written in `io`'s checksummed record conventions (Unit 42
+provenance: build, commit, dirty flag, platform, thread count) and a CSV summary: per benchmark, the reference's
+identity and grades, each quantity with q_sim, q_ref, U_ref, the U_num components and ε_int (or "not estimated"), the
+metric, the criterion, the outcome and its reason. Two runs on one machine and thread count give bit-identical reports
+except the wall time (the same rule as Unit 42's digest). `nitcad verify [--tier fast|full|nightly] [--id TVB-…]
+[--report <file>]` follows the runner's existing convention (`src/cli/main.cpp`): 0 when no benchmark fails, 1 on any
+`fail` or a run or I/O failure (the reason on stderr), 64 on usage; `finding`,
+`not_applicable` and `not_evaluated` do not change the exit code but are counted in the summary line, and an
+all-`not_applicable` benchmark is printed as "unverified". (TVR1-Q4.)
+
+**11.8 Catalogue entries in TVR-1.** TVB-01 (constants, bit-equal to CODATA 2018 decimal strings typed from NIST's
+table, PA); TVB-02 (F_{1/2}, F_{−1/2}, F_{3/2} and the inverse against TC3/TC4 double-double quadrature, ≤ 1e-12
+relative over η ∈ [−40, 40], with Blakemore's approximation as a printed-digits cross-check); TVB-03 (Bernoulli
+B(x) ≤ 4ε relative); TVB-32 as above. The existing double-double gates (`physics/fermi_dirac:69`, `assemble/flux:27`)
+stay as they are; TVB-02/03 are new and their agreement with the existing ones is recorded, not asserted (TVD-14).
+The TVR-0 labels are linked from the catalogue as `existing: <file:line> (kind, class, grade)`.
+
+**11.9 Tiers and cost (TVD-13).** All of TVR-1 is `fast` (Debug-safe): the L0 tests are scalar, the consistency
+checks are linear passes over results, and the three deck solves are 1D. Budget ≤ 60 s added in Debug; measured at
+build and recorded. A new ctest `verify` runs in both configurations.
+
+**11.10 Acceptance criteria (VR1–VR10, frozen for review).**
+- VR1: TC1–TC9 pass their L0 criteria, each with its recorded mutation.
+- VR2: the header-boundary tests for `verify_reference` and `verify_consistency` fail to compile when a forbidden
+  header is included (shown once by a deliberate include, recorded) and pass otherwise.
+- VR3: every reference in TVR-1 carries a filled contract; a PC-graded test reference cannot pass (a test proves it).
+- VR4: the metrics' L0 criteria (§11.5) pass, including the NPARC worked example.
+- VR5: each of C1–C12 fails on its injected defect and passes or is NOT APPLICABLE (with the right predicate) on the
+  three decks; C2, C3, C5 report NOT EVALUATED where the input is missing, not pass.
+- VR6: TVB-01–03 pass at their frozen tolerances; any miss is a finding for the owner, and no tolerance moves (TVM2).
+- VR7: two report runs bit-identical except wall time.
+- VR8: `nitcad verify` exit codes as §11.7, tested.
+- VR9: no existing test, gate, tolerance or source line outside the new targets, `CMakeLists.txt` and `src/cli`
+  changes (checked on the diff).
+- VR10: added Debug time ≤ 60 s; Release and Debug suites green.
+
+**11.11 Design choices.**
+
+| # | Choice | Why |
+|---|---|---|
+| TVD-19 | The dependency table of §11.2, with header-boundary tests for the two independent layers. | Independence enforced, not promised |
+| TVD-20 | Consistency checks are restated in quantities the results carry; where impossible they are NOT EVALUATED, never computed by calling NiTCAD's physics. | A check that calls the checked code is I0 |
+| TVD-21 | Kramers–Kronig is diagnostic only. | Band-limited data make a KK pass/fail a tuning exercise |
+| TVD-22 | The eigensolver of TVQ4 is built in TVR-5 with TVB-30; TVR-1 has only the n ≤ 16 Jacobi for C8. | Build each primitive where it is first used and tested |
+| TVD-23 | `finding`, `not_applicable` and `not_evaluated` do not fail the CLI; `fail` does. | A finding needs an owner ruling, not a red build |
+
+**11.12 Questions for the owner.**
+
+| # | Question | Recommendation |
+|---|---|---|
+| TVR1-Q1 | Double-double: a new library in `verify/reference`, with the existing test helper left untouched and cross-checked (TC2), or move the existing tests onto the new library? | New library + cross-check; deduplicate later only by ruling |
+| TVR1-Q2 | Source acquisition before code: QUADPACK (netlib), Dormand–Prince 1980, Brent 1973, Takahasi–Mori 1974, Hida–Li–Bailey, Golub–Van Loan §8.5. Open copies will be fetched and read; may the paywalled ones (Dormand–Prince, Takahasi–Mori) be supplied, or graded PB from two reproductions? | Fetch open copies; PB where two agreeing reproductions are read, the grade printed |
+| TVR1-Q3 | C2's tolerance as the integrated bound q∫\|R_k\| dV ≤ the smallest terminal resolution (computable now), rather than a per-node bound needing a new per-mechanism scale in `results` (a change to existing code)? | Integrated bound now; per-node scale only if a later unit needs it |
+| TVR1-Q4 | CLI exit codes as §11.7 (fail → 1, as the runner's failures; finding, NOT APPLICABLE, NOT EVALUATED → 0, counted; usage 64)? | Yes |
+| TVR1-Q5 | The three decks for TVB-32 (`examples/pn_diode_1d`, `examples/moscap_cv`, `decks/schottky_diode_1d`), with a zero-bias AC point added through the API for C7/C8? | Yes; TVR-2 adds its benchmark devices |
+| TVR1-Q6 | Branch `verify/reference-numerics` from main after the TVR-0 and §11 documentation is committed, one commit per TC group, local only until you authorise a push? | Yes |
+
+**Owner rulings (2026-11-04):** "choose recommended". Q1: a new double-double library in `verify/reference`, the
+existing helper untouched and cross-checked (TC2); deduplication only by later ruling. Q2: open copies fetched and
+read; a paywalled source is graded PB where two agreeing reproductions are read, the grade printed. Q3: C2's
+integrated bound; no change to `results`. Q4: exit codes as §11.7. Q5: the three decks, with a zero-bias AC point
+added through the API. Q6: the TVR-0 and §11 documentation committed locally on `verify/theoretical-validation`;
+implementation on `verify/reference-numerics`, one commit per TC group, local only until a push is authorised. Since
+the documentation is not on main until this branch is merged, the implementation branch starts from this branch's
+commit (so the design it implements travels with it). Implementation starts when the owner says go.
 
 ---
 

@@ -301,6 +301,8 @@ TEST_CASE("unstructured 3D: Kuhn-split boxes give the tensor grid's diode solve"
 
 TEST_CASE("unstructured 3D: a z-uniform diode on generated meshes converges at the predefined orders",
           "[.unstructured3d]") {
+    // TVR-0 label (DECISIONS.md Unit 55 §10, C-5, I-7): solution verification against this code's
+    // finer tensor solve, not code verification; no GCI or asymptotic-range check.
     std::vector<std::array<double, 3>> err;
     for (const double h : {1e-5, 5e-6, 2.5e-6}) {
         mesh::Geometry3D g;
