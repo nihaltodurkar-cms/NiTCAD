@@ -6646,6 +6646,14 @@ implementation, so they went to the owner before a test ran:
   "regression pin, not evidence"); a contract is invalid when an E reference is not PA or PD with two methods, an
   E reference graded I1 names no second I1/I2 cross-check, an A reference states no known approximation error, or
   a required field is empty; a comparison against an invalid contract is `not_evaluated` with the problem named.
+- **C1 (owner ruling after measurement, 2026-11-04).** On `examples/pn_diode_1d.deck` at 0 V the drift-diffusion
+  point's \|F_n − F_p\| was 1.4695e-14 eV at node 112 against the frozen 64ε·max(\|E_c\|, \|E_v\|, V_T) =
+  1.4395e-14 eV (2 % over); the equilibrium solve's own result was at 3.5e-4 of the bound. The point had taken one
+  Newton iteration with a last scaled update of 5.67e-13, and V_T·5.67e-13 = 1.47e-14 eV: the split is the Newton
+  stopping error, which C1's frozen tolerance omitted and C3's includes. Ruling: at a drift-diffusion point the
+  per-node tolerance is 64ε·max(\|E_c\|, \|E_v\|, V_T) + V_T·u_last, u_last the result's last Newton update (a
+  quantity it carries; NOT EVALUATED without a Newton record); the equilibrium solve's result is judged on the
+  quasi-Fermi part alone at 64ε (u_last = 0). Recorded as a change after measurement.
 
 **11.14 As-built (branch `verify/reference-numerics`, local).**
 
@@ -6952,6 +6960,51 @@ built, run, restored): 20 of 20 caught (one first failed to build under /WX, an 
 as an always-false condition). Ctest `verify.contract`: Release 0.01 s, Debug 0.02 s (verify suite Debug 3.96 s,
 13 tests). VR3's second half is met here; its first half (every TVR-1 reference carries a filled contract) is met
 when TVB-01–03 and the TVB-32 checks are written with their contracts.
+
+*Consistency, DC checks C1, C2, C4, C12 (§11.6; `include/NiTCAD/verify/consistency/{device_data,checks}.hpp`,
+`src/verify/consistency/checks.cpp` as `nitcad_verify_consistency`; `verify/benchmark/device_data` as
+`nitcad_verify_benchmark`).* **Deviation from §11.2's table, an implementer's choice under the owner's "choose
+recommended" (2026-11-04), open for review:** `device::Device`'s header includes `physics` headers (its regions
+hold `physics::Semiconductor`), so a consistency layer that included `device` would reach `physics`
+transitively. The layer reads a plain `DeviceData` (doping, permittivity, insulator flags, contacts, whether
+interfaces carry traps or fixed charge) that the benchmark layer copies from the device; its allowed includes are
+verify/consistency, verify/reference, results, mesh and base. VR2 for this layer: `tests/verify/boundary.cmake`
+before it compiles (direct includes) and `tests/verify/consistency/header_boundary_test.cpp` (transitive: one type
+of physics, assemble, solve, linalg and device is first declared as a variable of the same name, so any path
+that reaches that layer's header fails to compile; the Eigen include-path check is not made there because the
+test links the deck). Shown once each, restored: `#include "NiTCAD/device/device.hpp"` in `checks.hpp` stopped the
+build at the boundary step; `physics/semiconductor.hpp` placed before the consistency headers in the test gave
+C2061/C4430 at `semiconductor.hpp:452`.
+
+Each check fills a contract (`check_info`: class D, I2, PD, the §11.6 row as citation and derivation) and is
+judged through `judge`: applicability first (NOT APPLICABLE with the predicate and value, e.g. "all biases 0 =
+0.3 (threshold 0)"), then parts (each with its worst residual, tolerance and location); any failing part fails the
+check; else any NOT EVALUATED part makes the check NOT EVALUATED (a check is not passed on the parts it could
+evaluate alone); else pass. C1: zero-bias and one-thermal-temperature predicates; terminal currents against their
+own resolutions; each edge's electron and hole current against the smallest nonzero contact resolution (the
+reading of "edges ≤ that resolution", a choice); the quasi-Fermi part as ruled above. C2: each stored mechanism's
+q Σ\|R\|V in double-double against the smallest nonzero resolution; NOT EVALUATED with no rate stored. C4: \|Σ I\| ≤
+Σ resolution, and for the weighted current when present; NOT EVALUATED without currents. C12: n, p > 0 on
+semiconductor nodes, every stored temperature (lattice, carrier, thermal contacts, device) > 0, exact; trap
+occupancies are not in the results, so that part is NOT EVALUATED when an interface has traps.
+
+Measured on `examples/pn_diode_1d.deck` (anode 0 V and 0.3 V set through the API; Release): C1 at 0 V pass —
+terminal currents 2.2e-6 of their resolution (2.80e-6 A/cm²), edge currents 2.6e-3 (worst electron edge 123),
+quasi-Fermi 0.51 of the ruled bound at node 112; the equilibrium solve's C1 3.5e-4 (node 191); C1 and C2 at 0.3 V
+NOT APPLICABLE with the bias named; C2 at 0 V pass (SRH 1.4e-19, Auger 9.4e-23, radiative 0 of the resolution);
+C4 pass at both points (1.1e-6, 1.3e-4); C12 pass. Injected defects, each failing its check at the named
+location: a terminal current at twice its resolution (contact anode), one hole edge current at 1.01 × the bound
+(edge 150), F_n shifted 1e-12 eV (node 200) and, on the equilibrium result, F_p shifted 1e-13 eV (node 50); a
+recombination of 2 × the resolution at one node, and a ±2 × pair that cancels in a signed sum; a current
+corrupted by 3 Σ resolution, a NaN current; a negative, NaN or zero density (n and p), a zero temperature. NOT
+EVALUATED shown for missing bands, a missing Newton record, no stored rates, missing currents and interface traps.
+
+Mutations of `checks.cpp` (24, built, run, restored; one malformed pattern dropped before the run): first run 20
+caught, 4 survived, each a test gap closed and then caught: C2 without \|·\| and without the volume (the injected
+defect failed either way; a ±pair and a below-threshold rate added), C12 with n ≥ 0 (no zero electron density;
+added), a NaN residual passing (no NaN residual reached a comparison; a NaN current added). Final: 24 of 24
+caught. Ctest `verify_consistency.dc_checks`: Release 0.02 s, Debug 0.37 s (verify suites Debug 4.01 s, 16 tests).
+Remaining in §11.6: C3, C5–C11 and the TVB-32 runs on the three decks.
 
 ---
 

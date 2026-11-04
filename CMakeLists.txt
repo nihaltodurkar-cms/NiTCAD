@@ -634,6 +634,48 @@ if(CMAKE_BUILD_TYPE STREQUAL "Release")
   add_test(NAME deck_mlda COMMAND nitcad_deck_test "[mlda]")
 endif()
 
+# --- verify/consistency: physical-consistency checks on results (Unit 55, TVR-1; DECISIONS 11.2, 11.6) ---
+# Reads results, mesh and a plain-data device view only; never physics, assemble, solve, linalg or device
+# (device's header includes physics). Its include graph is checked before it compiles (VR2) and again under
+# ctest; tests/verify/consistency/header_boundary_test.cpp checks the transitive graph.
+set(NITCAD_VERIFY_CONSISTENCY_ALLOWED "verify/consistency,verify/reference,results,mesh,base")
+add_custom_command(
+  OUTPUT "${CMAKE_BINARY_DIR}/verify_consistency_boundary.stamp"
+  COMMAND ${CMAKE_COMMAND} -DROOT=${CMAKE_CURRENT_SOURCE_DIR} -DLAYER=consistency
+          -DALLOWED=${NITCAD_VERIFY_CONSISTENCY_ALLOWED}
+          -DSTAMP=${CMAKE_BINARY_DIR}/verify_consistency_boundary.stamp
+          -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/verify/boundary.cmake
+  DEPENDS tests/verify/boundary.cmake
+          include/NiTCAD/verify/consistency/device_data.hpp
+          include/NiTCAD/verify/consistency/checks.hpp
+          src/verify/consistency/checks.cpp
+  COMMENT "verify/consistency include boundary (VR2)")
+add_custom_target(nitcad_verify_consistency_boundary
+  DEPENDS "${CMAKE_BINARY_DIR}/verify_consistency_boundary.stamp")
+add_library(nitcad_verify_consistency STATIC src/verify/consistency/checks.cpp)
+add_library(NiTCAD::verify_consistency ALIAS nitcad_verify_consistency)
+target_include_directories(nitcad_verify_consistency PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
+target_link_libraries(nitcad_verify_consistency PUBLIC NiTCAD::results NiTCAD::mesh NiTCAD::verify_reference)
+add_dependencies(nitcad_verify_consistency nitcad_verify_consistency_boundary)
+
+# --- verify/benchmark: runs NiTCAD (the subject of the checks) and feeds the consistency layer ---
+add_library(nitcad_verify_benchmark STATIC src/verify/benchmark/device_data.cpp)
+add_library(NiTCAD::verify_benchmark ALIAS nitcad_verify_benchmark)
+target_include_directories(nitcad_verify_benchmark PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
+target_link_libraries(nitcad_verify_benchmark PUBLIC NiTCAD::device NiTCAD::verify_consistency)
+
+add_executable(nitcad_verify_consistency_test
+  tests/verify/consistency/header_boundary_test.cpp
+  tests/verify/consistency/dc_checks_test.cpp)
+target_link_libraries(nitcad_verify_consistency_test PRIVATE NiTCAD::verify_benchmark NiTCAD::deck
+  Catch2::Catch2WithMain)
+target_compile_definitions(nitcad_verify_consistency_test PRIVATE
+  NITCAD_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
+nitcad_add_file_tests(verify_consistency nitcad_verify_consistency_test)
+add_test(NAME verify_consistency_boundary
+  COMMAND ${CMAKE_COMMAND} -DROOT=${CMAKE_CURRENT_SOURCE_DIR} -DLAYER=consistency
+          -DALLOWED=${NITCAD_VERIFY_CONSISTENCY_ALLOWED} -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/verify/boundary.cmake)
+
 # The batch runner (`nitcad check|run <deck>`).
 add_executable(nitcad src/cli/main.cpp src/cli/plot.cpp)
 target_link_libraries(nitcad PRIVATE NiTCAD::deck NiTCAD::render)
