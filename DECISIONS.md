@@ -6624,6 +6624,22 @@ implementation, so they went to the owner before a test ran:
   refuses non-Hermitian input and n > 16; ascending eigenvalues with eigenvectors. Added tests: ‖VᴴV − I‖ ≤ 8nε,
   FH's (42), rank-one updates D + ρzzᴴ against the secular equation solved by Brent in double-double, a complex
   unitary similarity of a known diagonal.
+- **Metrics readings (owner rulings before code, 2026-11-04).** Source re-read: NPARC "Examining Spatial (Grid)
+  Convergence" (grc.nasa.gov, updated 10 Feb 2021) with its VERIFY run `prD.do`/`prD.out`. Recomputed in double,
+  the worked example gives p̂ = 1.7861696, f_{h=0} = 0.9713003, GCI₁₂ = 0.1030826 %, GCI₂₃ = 0.3562493 %, all
+  agreeing with the page's printed digits; the page's asymptotic ratio 1.002019 does not (exact 1.0020237): it
+  is the quotient of the page's own rounded intermediates (0.356249 / (3.44898 × 0.103083) = 1.0020189). VERIFY's
+  output (p = 1.78618479, ratio 0.997980) disagrees with the exact values in the fifth digit, consistent with
+  single precision. (1) The L0 test holds p̂, f_{h=0} (and its increment 0.00080), GCI₁₂ and GCI₂₃ to half a unit
+  of the page's last printed digit; the ratio is checked twice: from the page's rounded intermediates it must give
+  1.002019, and the exact value 1.0020237 is recorded as the page's rounding. VERIFY's output is logged as single
+  precision and not used. (2) **Finding against §4.2 / NPARC:** with exactly three grids and p̂ from those grids,
+  GCI₂₃ / (r^p̂ GCI₁₂) = f₁/f₂ identically (because (f₂ − f₃)/(f₁ − f₂) = r^p̂), so it tests only that the two
+  finest solutions are close. Ruling: the asymptotic-range check needs ≥ 4 grids: successive p̂ within 0.1, and,
+  as a second test, the GCI ratio within 10 % of 1; with three grids it is `not_evaluated` ("needs 4 grids"), the
+  three-grid ratio computed, reported and labelled "identically f₁/f₂". (3) p̂ from solutions only at constant r
+  (ratios equal to 1e-12 relative), else `not_evaluated` ("non-constant r"); the non-constant form (Celik et al.,
+  ASME JFE 2008) waits until its source is read and graded.
 
 **11.14 As-built (branch `verify/reference-numerics`, local).**
 
@@ -6875,6 +6891,38 @@ a_pq not skipped (3, NaN). **Survived:** a′_pq not set to 0, and the diagonal'
 residues are at rounding level and the next sweep removes them (eigenvalues are read from the real part). With
 TC9, VR1's L0 set (TC1–TC9, each with a recorded mutation) is complete. Ctest `verify.jacobi_eigen`: Release 0.02
 s, Debug 0.12 s (verify suite Debug 3.17 s).
+
+*Metrics (§11.5; `include/NiTCAD/verify/reference/metrics.hpp`, `src/verify/reference/metrics.cpp`, in
+`nitcad_verify_reference`).* Source read before code: NPARC "Examining Spatial (Grid) Convergence" with VERIFY's
+`prD.do`/`prD.out` (PA for the formulas printed in text and the worked example; the page's equation images carry
+no content of their own). In double, finest grid first: relative error with floor and log error with floors
+(`not_evaluated` at or below a floor); L∞, dual-volume L2 and dual-face H1 (the value returned is √Σ c_e Δe²; §4.2
+writes the sum, its square), summed in double-double with exact power-of-two scaling; orders from errors (any
+ratio) and from three solutions (constant r); Richardson; GCI (F_s 1.25 / 3.0, relative to the finer solution, a
+fraction); `grid_convergence` over N ≥ 3 grids, refusing (`not_evaluated`, with the reason) non-constant r (1e-12
+relative), a zero difference, non-monotone solutions over the whole set, any p̂_k ≤ 0 and a zero solution; the
+asymptotic check per the ruling (≥ 4 grids: spread of successive p̂ ≤ 0.1 and ρ_k = GCI_{k+2,k+3}(p̂_k) /
+(r^{p̂_k} GCI_{k+1,k+2}(p̂_k)) within 10 % of 1; ρ_k = r^{p̂_{k+1} − p̂_k} f_{k+1}/f_{k+2}, so it is not the
+three-grid identity; the implementer's choice of pairs, open to the owner); ε_int summed exactly in double-double
+before one rounding; U = Σ\|U_k\| + \|ε_int\|, interacting when \|ε_int\| > 0.1 U.
+
+Measured (Release): NPARC p̂ = 1.7861696, f_{h=0} = 0.9713003 (increment 0.0008003), GCI₁₂ = 0.1030826 %, GCI₂₃ =
+0.3562493 %, each within half a unit of the printed digit; the page's ratio recomputed from its rounded
+intermediates 1.0020189 (prints 1.002019); the study's three-grid ratio equals f₁/f₂ = 1.0020237 to 4ε; the
+asymptotic check `not_evaluated` ("needs 4 grids"). Synthetic orders p ∈ {1, 1.5, 2, 4} (errors, r ∈ {2, 1.5, √2,
+1.1} and a non-constant set) and p ∈ {1, 1.5, 2, 3} (solutions) recovered to 1e-12; Richardson recovers f* to
+1e-12. Corrections to my own test inputs, before any tolerance was considered (none moved): a power-law set
+f = 1 + 1e-5 h² cancelled to 1.3e-12 in p̂ and was replaced by the exact dyadic f = 1 + 2⁻²⁰h²; an expected
+ρ deviation named the wrong pair (1 − f₃/f₄ for 1 − f₂/f₃); a "ratio out of range" input with ρ = 0.917
+(miscomputed as 0.84) was replaced by C = 2⁻⁵ (ρ = 0.75).
+
+Mutations (31, built, run, restored; test cases failing of 10): first run 25 caught, 5 survived, 1 did not build
+(an unused loop variable under /WX; rewritten as an always-false condition, then caught). Survivors, each a test
+gap closed by a new assertion and then caught: the stand-alone non-monotone refusal removed (the NaN order still
+refused it through p̂ ≤ 0; the test now checks the reason); the order-spread test and the ratio test each ignored
+(no case had one failing alone; one of each added); ε_int accumulated in double (no cancelling input; 1 + 2⁻⁶⁰ − 1
+added); L∞ without abs (no negative maximum; added). Final: 31 of 31 caught. Ctest `verify.metrics`: Release
+< 0.01 s, Debug 0.01 s (verify suite Debug 2.97 s). VR4 met.
 
 ---
 
