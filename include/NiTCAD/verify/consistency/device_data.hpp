@@ -21,6 +21,22 @@ struct ContactData {
     std::string name;
     ContactKind kind = ContactKind::ohmic;
     std::vector<mesh::NodeId> nodes;
+    // A lumped gate (kind gate) only: each node's face area on the gate's patch [cm^(D-1)], in parallel with
+    // nodes; the oxide's capacitance per area eps_0 eps_ox / t_ox [F/cm^2]; its fixed oxide charge Q_f [cm^-2].
+    std::vector<double> gate_areas;
+    double oxide_capacitance_F_cm2 = 0.0;
+    double gate_fixed_charge_cm2 = 0.0;
+};
+
+// A declared interface between two regions (device order, as results::BiasPoint::interface_trap_charge).
+struct InterfaceData {
+    std::int32_t region_a = -1;
+    std::int32_t region_b = -1;
+    // Whether its insulator-semiconductor edges carry the interface model (a fixed charge, traps or surface
+    // recombination); such an edge's flux is split at an interface potential the results do not store.
+    bool charged = false;
+    double fixed_charge_cm2 = 0.0;   // sigma_f [cm^-2], the charge is q sigma_f
+    double trap_density_cm2 = 0.0;   // total trap sheet density (levels, and bands' D_it times their width)
 };
 
 struct DeviceData {
@@ -29,9 +45,12 @@ struct DeviceData {
     std::vector<double> acceptors;              // N_A per node [cm^-3]
     std::vector<double> relative_permittivity;  // per node
     std::vector<std::uint8_t> insulator;        // 1 on insulator nodes
+    std::vector<std::int32_t> region;           // per node, indexing the device's regions
     std::vector<ContactData> contacts;          // device contact order
+    std::vector<InterfaceData> interfaces;      // device interface order
     bool interface_traps = false;               // any declared interface carries traps
     bool interface_fixed_charge = false;        // any declared interface carries a fixed charge
+    bool incomplete_ionization = false;         // the run's model (the results store no ionized densities)
     std::size_t thermal_contacts = 0;
 };
 

@@ -15,7 +15,14 @@
 //       construction; a BiasPoint is a steady state, so "no transient" holds by type.)
 //   C2  at C1's predicates, each stored mechanism's q sum_i |R_k,i| V_i <= the smallest nonzero terminal
 //       resolution (owner ruling TVR1-Q3); NOT EVALUATED when no rate is stored.
-//   C4  DC: |sum_k I_k| <= sum_k resolution_k, and the same for the weighted current when present.
+//   C3  dual-cell Gauss law, at a converged state: for each cell sum_f C_f (psi_j - psi_i) + q V_i (p - n + N_D -
+//       N_A) = 0, C_f = eps_0 eps_f A_f / d_f with eps_f the harmonic mean of the ends' permittivities; tolerance
+//       64 eps s_i + N_i u_last (s_i the row's operand scale, N_i its change over the last Newton update; owner
+//       ruling, DECISIONS 11.13). Ohmic and Schottky contact cells are skipped (their charge is not stored);
+//       each lumped gate, meshed electrode and charged interface is one group whose sum includes its stored
+//       charge (gate_charge, q Q_f A, q sigma_f A, interface_trap_charge); global neutrality is the sum of
+//       those residuals with each contact's charge from its cells' flux. NOT EVALUATED with incomplete
+//       ionization (the ionized densities are not stored) or without a Newton record.
 //   C12 n, p > 0 on semiconductor nodes; every stored temperature > 0; trap occupancies are not stored, so that
 //       part is NOT EVALUATED when the device has interface traps (and vacuous without).
 // Each outcome is from contract.hpp's judge: NOT APPLICABLE when a predicate is false (named, with its value),
@@ -56,6 +63,8 @@ struct CheckResult {
 // The equilibrium solve's form: the quasi-Fermi part only, 64 eps (no Newton term).
 [[nodiscard]] CheckResult check_c1(const results::EquilibriumResult& eq, const mesh::Mesh& m, const DeviceData& d);
 [[nodiscard]] CheckResult check_c2(const results::BiasPoint& point, const mesh::Mesh& m, const DeviceData& d);
+[[nodiscard]] CheckResult check_c3(const results::BiasPoint& point, const mesh::Mesh& m, const DeviceData& d);
+[[nodiscard]] CheckResult check_c3(const results::EquilibriumResult& eq, const mesh::Mesh& m, const DeviceData& d);
 [[nodiscard]] CheckResult check_c4(const results::BiasPoint& point, const mesh::Mesh& m, const DeviceData& d);
 [[nodiscard]] CheckResult check_c12(const results::NodeFields& fields, const results::BiasPoint* point,
                                     const mesh::Mesh& m, const DeviceData& d);

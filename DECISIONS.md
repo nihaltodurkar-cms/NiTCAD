@@ -6654,6 +6654,22 @@ implementation, so they went to the owner before a test ran:
   per-node tolerance is 64ε·max(\|E_c\|, \|E_v\|, V_T) + V_T·u_last, u_last the result's last Newton update (a
   quantity it carries; NOT EVALUATED without a Newton record); the equilibrium solve's result is judged on the
   quasi-Fermi part alone at 64ε (u_last = 0). Recorded as a change after measurement.
+- **C3 tolerance (owner ruling before code, 2026-11-04).** "64ε times the largest face flux" leaves out the charge
+  term q V (p − n + N_D − N_A), whose operands cancel in a neutral cell, where the face fluxes are near 0 (C1's
+  lesson). Ruling: a cell's tolerance is 64ε s_i + N_i u_last, with s_i = Σ_f C_f (\|ψ_i\| + \|ψ_j\|) +
+  q V_i (n_i + p_i + N_D,i + N_A,i) (Unit 50's row scale Σ_j \|J_ij x_j\|, plus the doping) and the Newton term
+  N_i = Σ_f C_f · 2 V_T + q V_i (n_i + p_i), from the result's last scaled update u_last (ψ in V_T, densities
+  relative), as in C1's ruling; C_f = ε₀ ε_f A_f / d_f, ε_f the harmonic mean of the end permittivities (the
+  discretization's own). NOT EVALUATED without a Newton record. A reading made before measurement.
+- **C3 cells not restated alone (owner ruling before code, 2026-11-04).** Ohmic and Schottky contact nodes are
+  Dirichlet rows; their charge is the contact's and is not stored: they are skipped. Each lumped gate and each
+  meshed electrode is checked as a group: Σ over its cells, plus its stored `gate_charge` (and, for a lumped gate,
+  q Q_f × its patch area), is 0. Each charged interface (fixed charge, traps or surface recombination) likewise:
+  Σ over the nodes of its edges (whose interface potential is not stored), plus q σ_f × its area plus its stored
+  `interface_trap_charge`, is 0. Groups that share a node are one group; a group containing a contact node joins
+  that contact. Global neutrality: Σ space charge + every stored electrode, gate, fixed and trapped charge + each
+  ohmic or Schottky contact's charge taken as its cells' Gauss flux is 0, which makes it a sum of the other parts'
+  residuals; it is computed separately and labelled that way.
 
 **11.14 As-built (branch `verify/reference-numerics`, local).**
 
@@ -7004,7 +7020,49 @@ caught, 4 survived, each a test gap closed and then caught: C2 without \|·\| an
 defect failed either way; a ±pair and a below-threshold rate added), C12 with n ≥ 0 (no zero electron density;
 added), a NaN residual passing (no NaN residual reached a comparison; a NaN current added). Final: 24 of 24
 caught. Ctest `verify_consistency.dc_checks`: Release 0.02 s, Debug 0.37 s (verify suites Debug 4.01 s, 16 tests).
-Remaining in §11.6: C3, C5–C11 and the TVB-32 runs on the three decks.
+
+*Consistency, C3 dual-cell Gauss law (§11.6 and the two C3 rulings of §11.13; `check_c3` for a `BiasPoint` and an
+`EquilibriumResult` in `src/verify/consistency/checks.cpp`; tests `tests/verify/consistency/gauss_test.cpp`).*
+Restated from the discretization as read (`src/assemble/scaled_device.cpp`, `terms.cpp`, `gate.hpp`,
+`interface_edges.hpp`): the Poisson variable is `potential_V` / V_T (band shifts enter the bands, not the flux); an
+edge's coupling is ε₀ ε_f A/d with ε_f the harmonic mean of its ends' permittivities; a semiconductor row's charge is
+V (p − n + N_D − N_A); a lumped gate adds G(ψ_G − ψ) + q Q_f A per node and stores Σ G(ψ_G − ψ) as `gate_charge`; a
+charged interface's edge is two half-edges whose fluxes sum to the sheet charge q σ_f A + trapped (stored per
+interface, without σ_f). `DeviceData` gained per-node regions, per-interface region pair, `charged`, σ_f and total
+trap density (levels plus D_it × band width), per-gate face areas, C_ox = ε₀ ε_ox / t_ox and Q_f, and the run's
+`incomplete_ionization` flag (`benchmark::device_data(device, models)`). Groups by disjoint sets: each contact's
+nodes, each charged edge's ends, each charged interface's edges. Predicate "converged state" (else NOT APPLICABLE);
+NOT EVALUATED with incomplete ionization, missing fields, no Newton record, or gate or trap charges not stored
+(then the groups and the global part both). Choices: a charged edge adds 2 ε_max (A/d)(\|ψ_a\| + \|ψ_b\|) to the
+rounding scale (its half-edge conductances; ψ_I is not stored), a group's stored charges add their magnitudes, a
+lumped gate adds 2 C_ox A \|ψ\| to the scale and C_ox A V_T to the Newton term, a trapped interface 2 q N_t A
+(occupancy moves by at most 2u for an update u); the p-poly gate's electrothermal shift is not in the Newton term
+(a listed gap: no TVR-1 deck has it).
+
+Measured (Release; worst residual / tolerance): pn diode 0 V and 0.3 V pass (worst cell 0.0019, 0.0059); pn equilibrium (0.0084)
+pass; MOS capacitor at gate 0, −0.5, −1, 0.25 V pass (cells ≤ 0.0067, the gate group ≤ 0.0071); Schottky diode at
+0, −0.5, 0.2 V pass (≤ 0.0083), the anode's charge from its cells' flux −3.9e-8 C/cm² at 0 V; a 1D silicon/oxide
+stack written in the test (electrode, interface σ_f 5e11, a trap level and band) at gate 0, ±0.05 V and
+equilibrium pass (interface group ≤ 1.0e-3); the same stack without the interface (harmonic mean in use), a moscap
+with Q_f 3e11 under its gate, and a 2D oxide device (11 × 9, many charged edges, from `build_test`) at equilibrium
+pass (≤ 7.9e-4). Injected defects, each failing at the named place: ψ + 1e-9 V (node 200), n and p moved 1e-6
+(node 150), gate charge dropped, an extra or dropped Q_f, interface trap charge dropped (1D and 2D), σ_f dropped,
+electrode charge dropped, ψ + 1e-9 V on a 2D interface node; a contact cell's corruption is not judged (skipped).
+A test restates the ruled tolerance independently and holds the reported one to it (1e-9 relative) for a cell
+(with and without u_last), the lumped gate and the trapped interface.
+
+**Finding (not chased, for the owner):** the 1D silicon/oxide stack's DC sweep with a 0.25 V step on the electrode
+stops at the second point: "Newton iteration 3: pivot ratio below min_pivot_ratio: the matrix is singular to working
+precision"; ±0.05 V steps converge. The test uses the converging points; the deck is in the test file.
+
+Mutations of the C3 code (25, built, run, restored): first run 17 caught, 6 survived, 2 malformed by the runner (a
+`||` in the pattern split its `|`-separated fields; rewritten without it, then caught). Survivors, closed by the
+ruled-tolerance test and then caught: the rounding scale without the charge term, one end's face scale, the
+interior-edge skip (it changes the Newton term), one end's face Newton term, the trap Newton term, the gate oxide
+Newton term. Final 25 of 25 caught. A first version of that test kept a pointer into a temporary result; it passed
+in Release and crashed in Debug, and was fixed before the final mutation run. Ctest `verify_consistency.gauss`:
+Release 0.07 s, Debug 1.62 s (verify suites Debug 5.59 s, 17 tests).
+Remaining in §11.6: C5–C11 and the TVB-32 runs on the three decks.
 
 ---
 

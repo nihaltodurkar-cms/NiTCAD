@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <array>
 #include <cfloat>
+#include <cstdint>
 #include <charconv>
 #include <cmath>
 #include <span>
@@ -180,6 +181,12 @@ ReferenceInfo check_info(std::string_view id) {
         r.form = "q sum_i |R_k,i| V_i <= min nonzero res";
         r.assumptions = {"as C1"};
         r.applicability = {"all biases 0", "thermal contacts at one temperature"};
+    } else if (id == "C3") {
+        r.equations = {1};
+        r.form = "sum_f C_f (psi_j - psi_i) + q V (p - n + N_D - N_A) + stored charges = 0 per cell or group";
+        r.assumptions = {"dopants fully ionized (Boltzmann or Fermi-Dirac statistics)",
+                         "the interface model only on charged interfaces' insulator-semiconductor edges"};
+        r.applicability = {"converged state"};
     } else if (id == "C4") {
         r.equations = {15};
         r.form = "|sum_k I_k| <= sum_k res_k";
@@ -343,6 +350,272 @@ CheckResult check_c12(const results::NodeFields& f, const results::BiasPoint* po
     return finish("C12", info, {}, std::move(parts));
 }
 
+namespace {
+
+// Disjoint sets over the nodes (path halving, union by index): the groups of 11.13's C3 ruling.
+struct Groups {
+    std::vector<std::size_t> parent;
+    explicit Groups(std::size_t n) : parent(n) {
+        for (std::size_t i = 0; i < n; ++i) parent[i] = i;
+    }
+    std::size_t find(std::size_t i) {
+        while (parent[i] != i) i = parent[i] = parent[parent[i]];
+        return i;
+    }
+    void unite(std::size_t a, std::size_t b) {
+        a = find(a);
+        b = find(b);
+        if (a != b) parent[std::max(a, b)] = std::min(a, b);
+    }
+};
+
+// The declared interface of an edge whose flux the interface model splits (an insulator-semiconductor edge
+// between the regions of a charged interface), or -1: the same edges the assembler marks (scaled_device.cpp).
+std::int32_t charged_interface(const DeviceData& d, std::size_t a, std::size_t b) {
+    if (d.insulator[a] == d.insulator[b]) return -1;
+    const std::int32_t ra = d.region[a], rb = d.region[b];
+    if (ra == rb) return -1;
+    for (std::size_t k = 0; k < d.interfaces.size(); ++k) {
+        const InterfaceData& f = d.interfaces[k];
+        if ((f.region_a == ra && f.region_b == rb) || (f.region_a == rb && f.region_b == ra)) {
+            return f.charged ? static_cast<std::int32_t>(k) : -1;
+        }
+    }
+    return -1;
+}
+
+// One cell or group's Gauss balance: the residual sum (flux in across its boundary + its space charge + the
+// stored charges inside it), its rounding scale and its Newton term.
+struct Balance {
+    DD residual{0.0};
+    double scale = 0.0;
+    double newton = 0.0;
+    bool grouped = false;   // a gate, an electrode or a charged interface is in it
+    std::int32_t contact = -1;  // an ohmic or Schottky contact it belongs to (skipped), else -1
+    std::size_t first = 0;      // its lowest node, for the location
+    std::string members;        // what it holds, for the location
+};
+
+struct Inputs {
+    const results::NodeFields& fields;
+    const std::vector<double>& gate_charge;
+    const std::vector<double>& interface_trap_charge;
+    const results::ConvergenceRecord& convergence;
+};
+
+CheckResult c3(const Inputs& in, const mesh::Mesh& m, const DeviceData& d) {
+    const ReferenceInfo info = check_info("C3");
+    const std::array<Predicate, 1> pred{
+        Predicate{"converged state", in.convergence.converged ? 1.0 : 0.0, 1.0, in.convergence.converged}};
+    CheckResult out;
+    out.id = "C3";
+    if (!applicable(info, pred, out)) return out;
+    const std::size_t nn = m.node_count(), nc = d.contacts.size();
+    const auto& f = in.fields;
+    std::vector<CheckPart> parts;
+    const char* const cells = "cells";
+    if (d.incomplete_ionization) {
+        parts.push_back(not_evaluated_part(cells, "incomplete ionization: the ionized densities are not stored"));
+        return finish("C3", info, pred, std::move(parts));
+    }
+    if (!sized(f.potential_V, nn) || !sized(f.n_cm3, nn) || !sized(f.p_cm3, nn)) {
+        parts.push_back(not_evaluated_part(cells, "potential or densities not stored"));
+        return finish("C3", info, pred, std::move(parts));
+    }
+    if (in.convergence.iterations.empty()) {
+        parts.push_back(not_evaluated_part(cells, "no Newton record (the stopping term)"));
+        return finish("C3", info, pred, std::move(parts));
+    }
+    const double u = in.convergence.iterations.back().update;
+    if (!(std::isfinite(u) && u >= 0.0)) {
+        parts.push_back(not_evaluated_part(cells, "Newton update not finite and >= 0"));
+        return finish("C3", info, pred, std::move(parts));
+    }
+    const double vt = base::k_B_eV_per_K * d.temperature_K;  // V_T in V
+    const auto vol = m.volumes();
+    const auto edges = m.edges();
+    const auto& psi = f.potential_V;
+
+    // The groups: each contact's nodes, each charged edge's ends, each charged interface's edges together.
+    Groups g(nn);
+    std::vector<std::int32_t> node_contact(nn, -1);
+    for (std::size_t k = 0; k < nc; ++k) {
+        const auto& nodes = d.contacts[k].nodes;
+        for (std::size_t j = 0; j < nodes.size(); ++j) {
+            const auto i = static_cast<std::size_t>(nodes[j]);
+            node_contact[i] = static_cast<std::int32_t>(k);
+            g.unite(i, static_cast<std::size_t>(nodes[0]));
+        }
+    }
+    std::vector<std::int32_t> edge_interface(edges.size(), -1);
+    std::vector<std::int64_t> interface_node(d.interfaces.size(), -1);
+    std::vector<double> interface_area(d.interfaces.size(), 0.0);
+    for (std::size_t e = 0; e < edges.size(); ++e) {
+        const auto a = static_cast<std::size_t>(edges[e].first), b = static_cast<std::size_t>(edges[e].second);
+        const std::int32_t k = charged_interface(d, a, b);
+        if (k < 0) continue;
+        edge_interface[e] = k;
+        interface_area[static_cast<std::size_t>(k)] += edges[e].coupling_area;
+        g.unite(a, b);
+        auto& first = interface_node[static_cast<std::size_t>(k)];
+        if (first < 0) first = static_cast<std::int64_t>(a);
+        g.unite(a, static_cast<std::size_t>(first));
+    }
+
+    // Balances, one per root.
+    std::vector<std::int64_t> slot(nn, -1);
+    std::vector<Balance> bal;
+    std::vector<std::size_t> owner(nn);
+    for (std::size_t i = 0; i < nn; ++i) {
+        const std::size_t r = g.find(i);
+        if (slot[r] < 0) {
+            slot[r] = static_cast<std::int64_t>(bal.size());
+            bal.emplace_back();
+            bal.back().first = i;
+        }
+        owner[i] = static_cast<std::size_t>(slot[r]);
+    }
+    const double q = base::q_C;
+    for (std::size_t i = 0; i < nn; ++i) {
+        Balance& b = bal[owner[i]];
+        const std::int32_t k = node_contact[i];
+        if (k >= 0) {
+            const ContactKind kind = d.contacts[static_cast<std::size_t>(k)].kind;
+            if (kind == ContactKind::ohmic || kind == ContactKind::schottky) b.contact = k;
+            else b.grouped = true;
+        }
+        if (d.insulator[i] != 0) continue;
+        // q V (p - n + N_D - N_A), summed exactly in double-double.
+        const double V = vol[i];
+        DD rho = DD(f.p_cm3[i]) - DD(f.n_cm3[i]) + DD(d.donors[i]) - DD(d.acceptors[i]);
+        b.residual += rho * DD(q * V);
+        b.scale += q * V * (f.n_cm3[i] + f.p_cm3[i] + d.donors[i] + d.acceptors[i]);
+        b.newton += q * V * (f.n_cm3[i] + f.p_cm3[i]);
+    }
+    for (std::size_t e = 0; e < edges.size(); ++e) {
+        const auto a = static_cast<std::size_t>(edges[e].first), b = static_cast<std::size_t>(edges[e].second);
+        const double ea = d.relative_permittivity[a], eb = d.relative_permittivity[b];
+        const double eps = ea == eb ? ea : 2.0 * ea * eb / (ea + eb);  // the discretization's harmonic mean
+        const double C = base::eps0_F_per_cm * eps * edges[e].coupling_area / edges[e].length;
+        double mag = C * (std::abs(psi[a]) + std::abs(psi[b]));
+        if (edge_interface[e] >= 0) {
+            // The two half-edges (conductance 2 eps_end c) at an interface potential between the ends.
+            mag += 2.0 * base::eps0_F_per_cm * std::max(ea, eb) * edges[e].coupling_area / edges[e].length *
+                   (std::abs(psi[a]) + std::abs(psi[b]));
+        }
+        Balance& ba = bal[owner[a]];
+        Balance& bb = bal[owner[b]];
+        ba.scale += mag;
+        bb.scale += mag;
+        if (owner[a] == owner[b]) continue;  // inside one group: cancels in its sum
+        const DD flux = reference::two_prod(C, psi[b]) - reference::two_prod(C, psi[a]);  // into a
+        ba.residual += flux;
+        bb.residual -= flux;
+        ba.newton += 2.0 * C * vt;
+        bb.newton += 2.0 * C * vt;
+    }
+    // The stored charges.
+    bool gate_missing = false, trap_missing = false;
+    for (std::size_t k = 0; k < nc; ++k) {
+        const ContactData& c = d.contacts[k];
+        if ((c.kind != ContactKind::gate && c.kind != ContactKind::electrode) || c.nodes.empty()) continue;
+        Balance& b = bal[owner[static_cast<std::size_t>(c.nodes[0])]];
+        b.members += (b.members.empty() ? "" : ", ") + std::string(c.kind == ContactKind::gate ? "gate " : "electrode ") + c.name;
+        if (in.gate_charge.size() != nc) {
+            gate_missing = true;
+            continue;
+        }
+        const double Q = in.gate_charge[k];
+        b.residual += DD(Q);
+        b.scale += std::abs(Q);
+        if (c.kind == ContactKind::gate) {
+            DD area(0.0);
+            for (std::size_t j = 0; j < c.nodes.size() && j < c.gate_areas.size(); ++j) {
+                const double A = c.gate_areas[j];
+                area += DD(A);
+                const double cox = c.oxide_capacitance_F_cm2 * A;
+                b.scale += 2.0 * cox * std::abs(psi[static_cast<std::size_t>(c.nodes[j])]);
+                b.newton += cox * vt;
+            }
+            const double S = q * c.gate_fixed_charge_cm2 * area.to_double();
+            b.residual += DD(S);
+            b.scale += std::abs(S);
+        }
+    }
+    for (std::size_t k = 0; k < d.interfaces.size(); ++k) {
+        if (interface_node[k] < 0) continue;
+        Balance& b = bal[owner[static_cast<std::size_t>(interface_node[k])]];
+        b.grouped = true;
+        b.members += (b.members.empty() ? "" : ", ") + std::string("interface ") + std::to_string(k);
+        const InterfaceData& fi = d.interfaces[k];
+        const double S = q * fi.fixed_charge_cm2 * interface_area[k];
+        b.residual += DD(S);
+        b.scale += std::abs(S);
+        if (in.interface_trap_charge.size() != d.interfaces.size()) {
+            if (fi.trap_density_cm2 > 0.0) trap_missing = true;
+            continue;
+        }
+        const double Qt = in.interface_trap_charge[k];
+        b.residual += DD(Qt);
+        // Occupancy moves at most 2 u per trap for a scaled update u (the interface level moves at most u, the
+        // densities by a factor e^(+-u)): the Newton term, and the traps' own rounding.
+        const double Nt = q * fi.trap_density_cm2 * interface_area[k];
+        b.scale += std::abs(Qt) + Nt;
+        b.newton += 2.0 * Nt;
+    }
+
+    // Parts: the cells alone, the groups, and global neutrality (the sum of every evaluated residual, with each
+    // skipped contact's charge taken as its cells' Gauss flux).
+    Worst wc(cells), wg("groups");
+    DD total(0.0);
+    double total_tol = 0.0;
+    std::size_t groups = 0;
+    std::string contact_charges;
+    for (const Balance& b : bal) {
+        const double tol = rounding_factor * DBL_EPSILON * b.scale + b.newton * u;
+        if (b.contact >= 0) {
+            // The contact's charge balances its cells: minus their residual (reported, not judged).
+            contact_charges += (contact_charges.empty() ? "" : ", ") + d.contacts[static_cast<std::size_t>(b.contact)].name +
+                               " " + number(-b.residual.to_double());
+            continue;
+        }
+        total += b.residual;
+        total_tol += tol;
+        const double r = std::abs(b.residual.to_double());
+        if (b.grouped) {
+            ++groups;
+            wg.add(r, tol, "group at node " + std::to_string(b.first) + " (" + b.members + ")");
+        } else {
+            wc.add(r, tol, at("node", b.first));
+        }
+    }
+    parts.push_back(wc.done("no cell restated alone"));
+    if (gate_missing) parts.push_back(not_evaluated_part("groups", "gate charges not stored"));
+    else if (trap_missing) parts.push_back(not_evaluated_part("groups", "interface trap charges not stored"));
+    else if (groups > 0) parts.push_back(wg.done(""));
+    if (gate_missing || trap_missing) {
+        // A stored charge is missing from the sum as from its group.
+        parts.push_back(not_evaluated_part("global neutrality (sum of the other parts' residuals)",
+                                           gate_missing ? "gate charges not stored" : "interface trap charges not stored"));
+    } else {
+        Worst w("global neutrality (sum of the other parts' residuals)");
+        w.add(std::abs(total.to_double()), total_tol,
+              "device; contact charges from their cells' flux: " + (contact_charges.empty() ? "none" : contact_charges));
+        parts.push_back(w.done(""));
+    }
+    return finish("C3", info, pred, std::move(parts));
+}
+
+}  // namespace
+
+CheckResult check_c3(const results::BiasPoint& point, const mesh::Mesh& m, const DeviceData& d) {
+    return c3({point.fields, point.gate_charge, point.interface_trap_charge, point.convergence}, m, d);
+}
+
+CheckResult check_c3(const results::EquilibriumResult& eq, const mesh::Mesh& m, const DeviceData& d) {
+    return c3({eq.fields, eq.gate_charge, eq.interface_trap_charge, eq.convergence}, m, d);
+}
+
 std::vector<std::string> validate(const DeviceData& d, const mesh::Mesh& m) {
     std::vector<std::string> p;
     const std::size_t n = m.node_count();
@@ -351,10 +624,23 @@ std::vector<std::string> validate(const DeviceData& d, const mesh::Mesh& m) {
     if (d.acceptors.size() != n) p.push_back("acceptors not one per node");
     if (d.relative_permittivity.size() != n) p.push_back("permittivity not one per node");
     if (d.insulator.size() != n) p.push_back("insulator flags not one per node");
+    if (d.region.size() != n) p.push_back("regions not one per node");
     for (const auto& c : d.contacts) {
         if (c.name.empty()) p.push_back("contact name empty");
         for (auto node : c.nodes) {
             if (node < 0 || static_cast<std::size_t>(node) >= n) p.push_back("contact " + c.name + " node out of range");
+        }
+        if (c.kind == ContactKind::gate) {
+            if (c.gate_areas.size() != c.nodes.size()) p.push_back("gate " + c.name + " areas not one per node");
+            if (!(std::isfinite(c.oxide_capacitance_F_cm2) && c.oxide_capacitance_F_cm2 > 0.0)) {
+                p.push_back("gate " + c.name + " oxide capacitance not finite and positive");
+            }
+            if (!std::isfinite(c.gate_fixed_charge_cm2)) p.push_back("gate " + c.name + " fixed charge not finite");
+        }
+    }
+    for (const auto& f : d.interfaces) {
+        if (!std::isfinite(f.fixed_charge_cm2) || !(std::isfinite(f.trap_density_cm2) && f.trap_density_cm2 >= 0.0)) {
+            p.push_back("interface charge or trap density not finite");
         }
     }
     return p;

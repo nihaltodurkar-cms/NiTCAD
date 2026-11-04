@@ -2,11 +2,15 @@
 // depends on everything; this is the one place a device::Device meets verify/consistency.
 #pragma once
 
+#include "NiTCAD/assemble/models.hpp"
 #include "NiTCAD/device/device.hpp"
 #include "NiTCAD/verify/consistency/device_data.hpp"
 
 namespace NiTCAD::verify::benchmark {
 
 [[nodiscard]] consistency::DeviceData device_data(const device::Device& device);
+// With the run's models (the incomplete-ionization flag C3 reads).
+[[nodiscard]] consistency::DeviceData device_data(const device::Device& device,
+                                                  const assemble::PhysicsModels& models);
 
 }  // namespace NiTCAD::verify::benchmark
