@@ -6612,6 +6612,18 @@ implementation, so they went to the owner before a test ran:
   (14)'s next term predicts when f‴ and f⁽⁵⁾ share a sign (for eˣ: estimate h²/6 − 5h⁴/120, true h²/6 − h⁴/120).
   Ruling: the primitive reports 1.25·\|d(2h) − d(h)\|/3 (F_s of §11.5), and the test adds estimate ≤ 1.25·(1 +
   1e-3)·true so the estimate cannot be arbitrarily loose.
+- **TC9 readings (owner rulings before measurement, 2026-11-04).** Golub and Van Loan (a book) and Fettis and
+  Caslin (Math. Comp. 21, 1967, the printed Hilbert eigenvalues; AMS 403) were not available. (1) The Hilbert
+  reference is OEIS A076823's exact integer coefficients of det(H_n)⁻¹·det(xI − H_n) (PA data), evaluated in
+  double-double, with λ_min and λ_max found by TC5's Brent: an independent derivation (TVD-18) in place of
+  "published digits". (2) Eigenvalues are judged absolutely, \|λ̂ − λ\| ≤ 8nε‖A‖₂ (the frozen residual's unit;
+  Weyl's bound for a backward-stable method), since no double method reaches λ_min(H_n) to its digits; H_n is
+  integer-scaled (L·H_n, L = lcm(1, …, 2n − 1), so the input is exact) for n = 3 … 10, and λ_min's relative error
+  is printed. (3) Scope: complex Hermitian (std::complex<double>), n ≤ 16, Forsythe and Henrici's rotation (6) with
+  (43)–(44) and \|φ\| ≤ π/4, cyclic by rows (III_r) until off(A) ≤ ε‖A‖_F, at most 50 sweeps (else not_converged);
+  refuses non-Hermitian input and n > 16; ascending eigenvalues with eigenvectors. Added tests: ‖VᴴV − I‖ ≤ 8nε,
+  FH's (42), rank-one updates D + ρzzᴴ against the secular equation solved by Brent in double-double, a complex
+  unitary similarity of a known diagonal.
 
 **11.14 As-built (branch `verify/reference-numerics`, local).**
 
@@ -6832,6 +6844,37 @@ check used the library's own constant, so it scaled with the mutation; it now us
 **Survived:** the value taken from the 2h evaluation — at h = 1e-200 Re f(x + 2ih) = Re f(x + ih) exactly, an
 equivalent mutant at the default step. Ctest `verify.complex_step`: Release 0.02 s, Debug 0.05 s (verify suite
 Debug 3.15 s).
+
+*TC9 — small Hermitian eigenproblems by cyclic Jacobi (`include/NiTCAD/verify/reference/jacobi_eigen.hpp`, header
+only).* Source read before code: Forsythe and Henrici, Trans. AMS 94 (1960), in a scan (pages.mtu.edu; rendered
+page by page): §1 (the cyclic orders (III_r), (III_c), condition (IV), the unitary form (5)–(6), Theorems 1–4), §2.1
+(Lemma 1, (10)–(14)), §2.5 ((41), (42)) and §3.1 (Theorems 5 and 6, (43)–(50)); not read: the proofs of §§2.2–2.4
+and §3.2 (singular values, not used). Golub and Van Loan (book) and Fettis and Caslin 1967 (AMS 403) not read;
+Demmel and Veselić's LAWN 15 was downloaded but not read (not cited by TC9). PA on Forsythe and Henrici. The
+rotation is FH (6) with α = δ = 0, β = θ, γ = −θ (a_pq = r e^{iθ}), φ from (44) as the smaller root t = tan φ, so
+\|φ\| ≤ π/4 ((IV) with J = [−π/4, π/4], Theorem 3); cyclic by rows; a zero a_pq skipped; a′_pq set to 0 and the
+diagonal to its real part after each rotation; stop at off(A) ≤ ε‖A‖_F; U_ref = the final off(A) (Weyl; rotation
+rounding not included). A first version guarded τ² overflow with t = 1/(2τ) for \|τ\| > 1e150; no test could reach
+it and without it t = 0 (error below rounding), so it was removed. The Hilbert coefficients are in
+`tests/verify/reference/hilbert_charpoly_oeis.hpp`, generated from the b-file by awk (no digits typed); λ_min by
+the first sign change upward from 1e-20 on a 200-per-decade grid, λ_max downward from 3.2, each polished by Brent
+(t = 1e-45) in double-double.
+
+Measured (Release; units nε‖A‖₂, limit 8): L·H_n, n = 3 … 10 (3–6 sweeps): λ_min ≤ 0.012, λ_max ≤ 0.89, residual ≤
+0.92, orthogonality ≤ 2.24 nε (limit 8); λ_min(H_n) = 9.67023e-5 (n = 4) … 1.09315e-13 (n = 10), relative errors
+4.3e-15 … 1.3e-4 (printed only: far better than the absolute bound, as Demmel and Veselić's relative-accuracy
+result for definite matrices would predict, not judged here). D ± zzᴴ, n = 8 and 16 (5 sweeps): eigenvalues ≤ 1.00,
+residual ≤ 1.02, orthogonality ≤ 3.36; I + zzᴴ (n = 7, the multiple eigenvalue) 0.08; M D Mᴴ, n = 6 and 16 (5, 6
+sweeps) ≤ 0.71; FH (42) 0.04 in one sweep; a diagonal matrix exact, sorted, 0 sweeps; refusals of n = 0, n = 17, a
+size mismatch, a non-Hermitian pair, an imaginary diagonal (1e-300), NaN; the 16 × 16 ones matrix accepted.
+
+Mutations (built, run, restored; test cases failing of 8): caught — τ's sign flipped (5); the larger root, \|φ\| > π/4
+(4); the phase factors swapped (3); V not rotated in p (5); V with the wrong phase (3); A's columns with the wrong
+phase (3); stop at 1e-8 (3); no sort (5); no Hermitian check (1); n = 17 accepted (1); a one-sweep cap (3); zero
+a_pq not skipped (3, NaN). **Survived:** a′_pq not set to 0, and the diagonal's imaginary residue kept — both
+residues are at rounding level and the next sweep removes them (eigenvalues are read from the real part). With
+TC9, VR1's L0 set (TC1–TC9, each with a recorded mutation) is complete. Ctest `verify.jacobi_eigen`: Release 0.02
+s, Debug 0.12 s (verify suite Debug 3.17 s).
 
 ---
 
