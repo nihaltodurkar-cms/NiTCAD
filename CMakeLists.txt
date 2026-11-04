@@ -671,6 +671,7 @@ add_executable(nitcad_verify_consistency_test
   tests/verify/consistency/energy_test.cpp
   tests/verify/consistency/transient_test.cpp
   tests/verify/consistency/reciprocity_test.cpp
+  tests/verify/consistency/passivity_test.cpp
   tests/verify/consistency/low_frequency_test.cpp
   tests/verify/consistency/limits_test.cpp
   tests/verify/consistency/symmetry_test.cpp)

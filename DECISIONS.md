@@ -6773,6 +6773,15 @@ implementation, so they went to the owner before a test ran:
   (§11.6's 64ε relative alone is below two separate solves' Newton and resolution level). Devices: a 1D
   n+–n–n+ resistor mirrored (nodes reversed, contacts and biases swapped) and a 2D generated unstructured mesh
   rotated by 30° and translated, rebuilt by `make_dual_mesh`.
+- **C8 passivity (owner rulings before code, 2026-11-04).** Per frequency k of a point, H = (Y + Yᴴ)/2 formed
+  exactly Hermitian (H_ii = Re Y_ii, H_ji = conj H_ij), its eigenvalues by TC9's Jacobi; λ_min ≥ −tol with tol =
+  √n ‖resolution[k]‖₂ (Weyl: an error E with \|E_ij\| ≤ r_j has ‖E‖₂ ≤ ‖E‖_F = √n ‖r‖₂) + 8nε‖H‖₂ (TC9's frozen
+  accuracy) + the final off(A). Predicates C7's (every bias exactly 0, thermal contacts at one temperature);
+  every frequency, f = 0 included; one part per point, the worst frequency named. More than 16 contacts (TC9's
+  scope): NOT EVALUATED. Devices: C7's 3-contact mos2d copy and the three decks at equilibrium; defects at
+  2 × tol and the bound's edge (0.99 / 1.01); with two contacts a diagnostic (with zero row and column sums
+  λ = {0, 2 Re Y_00}, so C8 reduces to Re Y_00 ≥ 0). Y's null vector (1, …, 1) puts λ_min near 0 by conservation;
+  the check is that it does not fall below −tol.
 - **Findings and departures of C5, C9, C10 and C11 (owner, "choose recommended", 2026-11-04).** None changes a
   tolerance (TVM2). C5: the heat rows' missing Newton term is accepted as a listed limitation; the hidden
   `[.finding]` case stays; option B (K₀ and the edge thermal conductances in `DeviceData`) is deferred, not
@@ -7431,6 +7440,46 @@ two oxide nodes, so ε_h is ε_ox either way. 23 of 24 caught. Ctest `verify_con
 tests; Release 23/23).
 
 Remaining in §11.6: C8 (passivity) and the TVB-32 runs on the three decks.
+
+*Consistency, C8 passivity at equilibrium (§11.6 and the C8 ruling of §11.13; `check_c8` in
+`src/verify/consistency/checks.cpp`; tests `tests/verify/consistency/passivity_test.cpp`).* Per frequency: H formed
+exactly Hermitian (H_ii = Re Y_ii; H_ij = (Y_ij + conj Y_ji)/2, H_ji its conjugate); `reference::jacobi_eigen`;
+residual max(0, −λ_min) against √n ‖resolution[k]‖₂ + 8nε max\|λ\| + off(A); one part, the worst frequency named
+("f = 1e+08 Hz"). A non-finite H or resolution term fails (it does not reach the eigensolver, which would refuse it
+as invalid input). NOT EVALUATED: a point index past the run's, the run's contacts not the device's, no contacts,
+more than 16, admittance or resolution not one per frequency or not sized to the contacts, the eigensolver not
+converged (unreachable on the tests' inputs: n ≤ 16, finite, Hermitian by construction). Diagnostics: the smallest
+eigenvalue over the frequencies with its tolerance and frequency; with two contacts the note that the pass shows
+Re Y_00 ≥ 0. Contract: class D, I2, PD, equation G14, C7's two applicability predicates. Forming H rounds each entry
+once (≤ ε\|H_ij\|, so ≤ √n ε ‖H‖₂ in norm), inside the ruled 8nε‖H‖₂.
+
+Measured (Release). C7's mos2d at 0 V, frequencies 0, 1e2, 1e5, 1e8, 1e11, 1e13 Hz: worst residual 7.1e-14 against
+1.24e-12 (0.057) at 0 Hz. **Vacuous at 0 and 100 Hz (recorded):** jωC is symmetric and drops out of (Y + Yᴴ)/2, and
+the equilibrium conduction (gate current 0, the source junction at zero bias) is below the resolution: λ_max 8.8e-13
+against the resolution term 1.24e-12 at 0 Hz (0.71), 0.89 at 100 Hz. From 1e5 Hz λ_max is 1.7e4, 4.9e6, 2.0e9 and
+5.3e10 times the resolution term; the test pins both bands. Decks at a zero-bias AC point (frequencies as C7's):
+`pn_diode_1d` 1.0e-7 against 8.7e-6 at 1e5 Hz (0.012); `moscap_cv` 1.13e-7 against 5.46e-7 at 1e8 Hz (0.21);
+`schottky_diode_1d` 1.6e-9 against 8.3e-8 at 1e8 Hz (0.020); each with the two-contacts diagnostic. On the decks the
+smallest eigenvalue is negative at those levels (column and row sums zero only to the resolution). Defects, each
+failing at the named frequency: Re Y(gate, gate) lowered by 6 × the tolerance at 1e8 Hz, at 0 Hz and at 1e13 Hz (along
+the null vector u = (1, 1, 1)/√3, uᴴHu falls by δ/3); a NaN entry. A real skew change of 1e3 × that (Y_20 + d,
+Y_02 − d) leaves H unchanged and passes. The bound at its edge on a synthetic Y = aP − c uuᵀ (eigenvalues −c, a, a;
+a = 10 × the resolution term): c = 0.99 × the bound passes, 1.01 fails; with the resolution zeroed, Y = aP (λ_min 0
+to rounding) passes.
+
+Mutations (24, built, run, restored, each confined to `check_c8`'s lines): √n dropped; the 8nε term dropped; off(A)
+dropped; the resolution's 1-norm for its 2-norm; λ_max for λ_min; the residual 0; H without the conjugate; H from the
+lower triangle alone; the diagonal kept complex; each predicate forced true; the 16-contact, no-contact, eigensolver
+status and finiteness guards; the two-contacts diagnostic at three; the smallest-eigenvalue tracking reversed; the
+first and the last frequency skipped; the point, contact-count, resolution-size and frequency-count guards; the
+diagnostic's tolerance as the resolution term alone. First run: 21 caught, 3 survived; the diagnostic's tolerance
+was closed by a test (the defect's diagnostic equals its part) and then caught. **Two survive, argued:** off(A)
+dropped (Jacobi stops at off ≤ ε‖H‖_F ≤ √n ε‖H‖₂, below the 8nε‖H‖₂ beside it, so no input at the edge tells them
+apart); the eigensolver's status guard (non-convergence in 50 sweeps is not constructible for n ≤ 16, and every other
+refusal is guarded before the call). 22 of 24 caught. Ctest `verify_consistency.passivity`: Release 0.06 s, Debug
+1.26 s (verify suites at -j 6: Debug 18.8 s, 24 tests; Release 24/24).
+
+Remaining in §11.6: the TVB-32 runs on the three decks. C1–C12 are built.
 
 ---
 

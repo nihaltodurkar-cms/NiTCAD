@@ -41,6 +41,10 @@
 //       bias not exactly 0 or thermal contacts at more than one temperature (C1's predicates). Every model is
 //       judged (owner rulings, DECISIONS 11.13). With two contacts the symmetry follows from zero column and row
 //       sums, so a diagnostic says the pass shows conservation, not reciprocity. No magnetic field exists.
+//   C8  passivity at equilibrium: at every frequency k, lambda_min of H = (Y + Y^H)/2 (TC9's Jacobi) >= -(sqrt(n)
+//       ||resolution[k]||_2 + 8 n eps ||H||_2 + the final off-diagonal norm); C7's predicates; more than 16
+//       contacts NOT EVALUATED (owner rulings, DECISIONS 11.13). The smallest eigenvalue is a diagnostic; with two
+//       contacts a diagnostic says the pass shows Re Y_00 >= 0.
 //   C9  time-frequency consistency at low frequency, from four DC points about the AC point (DcStencil):
 //       conductance, every row: Re Y_ij(0) against the fourth-order central difference D4 of the DC currents,
 //       tolerance the difference's resolution term + |D4 - D2| (the stated truncation estimate) + 64 eps of its
@@ -119,6 +123,8 @@ struct CheckResult {
 [[nodiscard]] CheckResult check_c6(const results::Transient& run, const mesh::Mesh& m, const DeviceData& d);
 // Point `point` of a small-signal run, all its frequencies.
 [[nodiscard]] CheckResult check_c7(const results::SmallSignal& run, std::size_t point, const mesh::Mesh& m,
+                                   const DeviceData& d);
+[[nodiscard]] CheckResult check_c8(const results::SmallSignal& run, std::size_t point, const mesh::Mesh& m,
                                    const DeviceData& d);
 
 // C9's DC points about the AC point: contact `contact` at V - 2h, V - h, V + h, V + 2h, every other bias equal.

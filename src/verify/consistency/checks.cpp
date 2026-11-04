@@ -1,4 +1,4 @@
-// Physical-consistency checks C1-C7, C9-C12 (Unit 55, TVR-1, DECISIONS 11.6). See checks.hpp.
+// Physical-consistency checks C1-C12 (Unit 55, TVR-1, DECISIONS 11.6). See checks.hpp.
 #include "NiTCAD/verify/consistency/checks.hpp"
 
 #include <algorithm>
@@ -8,6 +8,7 @@
 #include <charconv>
 #include <cmath>
 #include <complex>
+#include <limits>
 #include <numbers>
 #include <vector>
 #include <span>
@@ -16,6 +17,7 @@
 
 #include "NiTCAD/base/constants.hpp"
 #include "NiTCAD/verify/reference/double_double.hpp"
+#include "NiTCAD/verify/reference/jacobi_eigen.hpp"
 #include "NiTCAD/verify/reference/metrics.hpp"
 
 namespace NiTCAD::verify::consistency {
@@ -216,6 +218,14 @@ ReferenceInfo check_info(std::string_view id) {
                          "recombination and traps (a miss under another model is a finding on its discretization)",
                          "the resolution omits the operating point's Newton stopping error and the matrix rounding",
                          "with two contacts the symmetry follows from conservation (reported as a diagnostic)"};
+        r.applicability = {"all biases 0", "thermal contacts at one temperature"};
+    } else if (id == "C8") {
+        r.equations = {14};
+        r.form = "lambda_min((Y + Y^H)/2) >= -(sqrt(n) ||res||_2 + 8 n eps ||H||_2 + off) at every frequency";
+        r.assumptions = {"the resolution bounds each column's entries (Weyl through the Frobenius norm)",
+                         "TC9's Jacobi, n <= 16, its accuracy 8 n eps ||H||_2 plus the final off-diagonal norm",
+                         "the resolution omits the operating point's Newton stopping error",
+                         "Y's null vector (1, ..., 1) puts lambda_min near 0 by conservation"};
         r.applicability = {"all biases 0", "thermal contacts at one temperature"};
     } else if (id == "C9") {
         r.equations = {14};
@@ -587,6 +597,96 @@ CheckResult check_c7(const results::SmallSignal& run, std::size_t point, const m
                                  r.parts.front().where,
                                  "Y_01 = Y_10 follows from zero column sums (C4) and zero row sums (gauge "
                                  "invariance): this pass shows conservation, not reciprocity"});
+    }
+    return r;
+}
+
+
+// Passivity at equilibrium (owner rulings 2026-11-04, DECISIONS 11.13): the Hermitian part of Y at every frequency
+// positive semidefinite to the Weyl bound of the columns' resolutions and TC9's accuracy.
+CheckResult check_c8(const results::SmallSignal& run, std::size_t point, const mesh::Mesh& m, const DeviceData& d) {
+    (void)m;
+    const ReferenceInfo info = check_info("C8");
+    const char* name = "passivity";
+    if (point >= run.points.size()) {
+        return finish("C8", info, {}, {not_evaluated_part(name, "point index past the run's points")});
+    }
+    const results::SmallSignalPoint& p = run.points[point];
+    const std::array<Predicate, 2> predicates{zero_bias(p.dc), one_thermal_temperature(p.dc)};
+    CheckResult out;
+    out.id = "C8";
+    if (!applicable(info, predicates, out)) return out;
+
+    const std::size_t nc = d.contacts.size(), nf = run.frequency_Hz.size();
+    std::string missing;
+    if (run.contacts != nc) {
+        missing = "the run's contacts are not the device's";
+    } else if (nc == 0) {
+        missing = "no contacts";
+    } else if (nc > reference::jacobi_max_n) {
+        missing = "more than 16 contacts (TC9's scope)";
+    } else if (p.admittance.size() != nf || p.resolution.size() != nf) {
+        missing = "admittance or resolution not one per frequency";
+    } else {
+        for (std::size_t k = 0; k < nf && missing.empty(); ++k) {
+            if (p.admittance[k].size() != nc * nc || p.resolution[k].size() != nc) {
+                missing = "admittance or resolution not sized to the contacts at " + at("frequency", k);
+            }
+        }
+    }
+    if (!missing.empty()) return finish("C8", info, predicates, {not_evaluated_part(name, missing)});
+
+    Worst w(name);
+    double lowest = std::numeric_limits<double>::infinity(), lowest_tol = 0.0;
+    std::string lowest_at;
+    for (std::size_t k = 0; k < nf; ++k) {
+        const auto& y = p.admittance[k];
+        const auto& res = p.resolution[k];
+        const std::string where = "f = " + number(run.frequency_Hz[k]) + " Hz";
+        // H = (Y + Y^H)/2, exactly Hermitian by construction.
+        std::vector<std::complex<double>> h(nc * nc);
+        bool finite = true;
+        for (std::size_t i = 0; i < nc; ++i) {
+            h[i * nc + i] = {y[i * nc + i].real(), 0.0};
+            for (std::size_t j = 0; j < i; ++j) {
+                const std::complex<double> hij = 0.5 * (y[i * nc + j] + std::conj(y[j * nc + i]));
+                h[i * nc + j] = hij;
+                h[j * nc + i] = std::conj(hij);
+            }
+        }
+        for (const auto& z : h) finite = finite && std::isfinite(z.real()) && std::isfinite(z.imag());
+        double r2 = 0.0;
+        for (const double r : res) r2 += r * r;
+        const double weyl = std::sqrt(static_cast<double>(nc)) * std::sqrt(r2);
+        if (!finite || !std::isfinite(weyl)) {
+            w.add(std::numeric_limits<double>::quiet_NaN(), weyl, where);
+            continue;
+        }
+        const reference::JacobiResult e = reference::jacobi_eigen(std::move(h), nc);
+        if (e.status != reference::JacobiStatus::ok) {
+            return finish("C8", info, predicates,
+                          {not_evaluated_part(name, "the eigensolver did not converge at " + at("frequency", k))});
+        }
+        const double lmin = e.eigenvalues.front();
+        const double norm = std::max(std::abs(lmin), std::abs(e.eigenvalues.back()));
+        const double tol = weyl + 8.0 * static_cast<double>(nc) * DBL_EPSILON * norm + e.off_norm;
+        w.add(lmin < 0.0 ? -lmin : 0.0, tol, where);
+        if (lmin < lowest) {
+            lowest = lmin;
+            lowest_tol = tol;
+            lowest_at = where;
+        }
+    }
+    CheckResult r = finish("C8", info, predicates, {w.done("no frequencies")});
+    if (nf > 0 && std::isfinite(lowest)) {
+        r.diagnostics.push_back({"smallest eigenvalue", lowest, lowest_tol, lowest_at,
+                                 "lambda_min of (Y + Y^H)/2 over the frequencies, against its tolerance"});
+    }
+    if (nc == 2) {
+        r.diagnostics.push_back({"two contacts", r.parts.front().residual, r.parts.front().tolerance,
+                                 r.parts.front().where,
+                                 "with zero row and column sums the eigenvalues are 0 and 2 Re Y_00: this pass "
+                                 "shows Re Y_00 >= 0"});
     }
     return r;
 }
