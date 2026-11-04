@@ -6782,6 +6782,18 @@ implementation, so they went to the owner before a test ran:
   2 × tol and the bound's edge (0.99 / 1.01); with two contacts a diagnostic (with zero row and column sums
   λ = {0, 2 Re Y_00}, so C8 reduces to Re Y_00 ≥ 0). Y's null vector (1, …, 1) puts λ_min near 0 by conservation;
   the check is that it does not fall below −tol.
+- **TVB-32 deck runs (owner rulings before code, 2026-11-04).** Scope: every check whose inputs the deck's own run
+  supplies: C1–C5 and C12 at every operating point (the sweeps' points and the C–V run's DC points) and C1, C3 on
+  the equilibrium solve; C7–C8 at every C–V point and at the zero-bias AC point added through the API (TVR1-Q5).
+  C6, C9, C10 and C11 are listed as "input not produced by the deck" (their real-solve evidence is in their own
+  tests). Acceptance: the expected outcome of each check at each point is fixed here, before any run; any other
+  outcome fails the test and is a finding (TVM2). Frozen expectations (default models: no electrothermal, complete
+  ionization, rates stored, no interface traps):
+  C1, C2: pass where every bias is exactly 0 and the thermal contacts are at one temperature, else NOT APPLICABLE
+  ("all biases 0"); C1 on the equilibrium: pass. C3: pass at every point and on the equilibrium (the Schottky and
+  ohmic contact cells skipped by rule; the MOS-C gate a group). C4: pass. C5: NOT APPLICABLE ("electrothermal on").
+  C12: pass. C7, C8: pass at a point whose biases are exactly 0, else NOT APPLICABLE ("all biases 0"); with two
+  contacts each carries its two-contacts diagnostic.
 - **Findings and departures of C5, C9, C10 and C11 (owner, "choose recommended", 2026-11-04).** None changes a
   tolerance (TVM2). C5: the heat rows' missing Newton term is accepted as a listed limitation; the hidden
   `[.finding]` case stays; option B (K₀ and the edge thermal conductances in `DeviceData`) is deferred, not
