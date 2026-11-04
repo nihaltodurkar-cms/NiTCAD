@@ -6773,6 +6773,13 @@ implementation, so they went to the owner before a test ran:
   (§11.6's 64ε relative alone is below two separate solves' Newton and resolution level). Devices: a 1D
   n+–n–n+ resistor mirrored (nodes reversed, contacts and biases swapped) and a 2D generated unstructured mesh
   rotated by 30° and translated, rebuilt by `make_dual_mesh`.
+- **Findings and departures of C5, C9, C10 and C11 (owner, "choose recommended", 2026-11-04).** None changes a
+  tolerance (TVM2). C5: the heat rows' missing Newton term is accepted as a listed limitation; the hidden
+  `[.finding]` case stays; option B (K₀ and the edge thermal conductances in `DeviceData`) is deferred, not
+  refused. C9: the ω² term's blindness to an f₁-only error is accepted as a listed limitation of the ruled bound.
+  C10: one limit result or one per value, accepted. C11: the 2D symmetric MOS mirror device is accepted in place
+  of the 1D resistor; the 30° rotation alone stands in for the ruled rotation with translation; the generated
+  mesh's corner tie (P2 refusal under rounding motions) is listed as a Unit 16 question, deferred.
 
 **11.14 As-built (branch `verify/reference-numerics`, local).**
 
