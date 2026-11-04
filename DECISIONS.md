@@ -6552,6 +6552,10 @@ implementation, so they went to the owner before a test ran:
   u_dd. Ruling: keep the published 10^d unchanged and add one documented term, E = max(10^d, 8 u_dd · h Σ\|w f\|)
   (TC1's 8 u_dd guarantee times the computed ∫\|f\|) for n ≥ 3; a deviation from the sources, recorded in the
   header. Consequence: no relative tolerance below ≈ 8 u_dd is reachable.
+- **TC5 "e^x − 1 near 0 to 4 u_dd" (reading, not a ruling).** The root is 0, where a relative error is undefined;
+  read as 4 u_dd absolute (f′(0) = 1 sets the scale). All three roots use t = u_dd, for which Brent's (2.18),
+  6ε\|ζ\| + 2t, guarantees 2 u_dd at 0; the other two roots are judged relative, as frozen. Open to the owner if
+  another reading was meant.
 
 **11.14 As-built (branch `verify/reference-numerics`, local).**
 
@@ -6647,6 +6651,34 @@ floor removed (the bound test fails, as measured before the ruling); 2d1 dropped
 and were caught after additions: d4 replaced by d3 (no frozen integrand makes d4 bind once n = 3; the x^{−0.9}
 test catches it) and trusting levels 1–2 (no test had a loose tolerance; the loose-tolerance test catches it).
 Ctest `verify.tanh_sinh`: Release 0.03 s, Debug 0.16 s (verify suite Debug 1.88 s).
+
+*TC5 — Brent's zero (`include/NiTCAD/verify/reference/brent.hpp`, header only).* Source read before code:
+Brent, *Algorithms for Minimization without Derivatives* (1973), chapter 4, in the author's scan
+(maths-people.anu.edu.au/~brent/pd/rpb011i.pdf; image-only, rendered page by page): the ALGOL 60 procedure
+*zero* (§6, pp. 58–59), the tolerance (2.9) δ = 2ε\|b\| + t, the error bound (2.18), the evaluation bound
+(3.2)–(3.4) (k + 1)² − 2, and Table 4.1 (p. 55). PA. netlib `go/zeroin.f` was compared; it uses 2ε\|b\| + tol/2
+and is not followed there. The translation is line by line in double-double with macheps = u_dd; additions:
+refusal when f(a), f(b) have the same nonzero sign (zero "assumes" otherwise; zeroin.f checks), and a stop at
+twice (3.4) so an excess is reported, not looped. Roots' digits: Wallis's number (OEIS A007493, 64 digits) and
+the Dottie number (A003957, 68 digits), PA, compared exactly. cos is not in the library; the test uses a local
+Taylor series, checked by cos² + sin² = 1 (1.06 u_dd) and cos x = 2cos²(x/2) − 1 (1.88 u_dd) on [−1, 1].
+
+Measured (Release, t = u_dd): x³ − 2x − 5 on [2, 3] 0.0074 u_dd in 10 evaluations (bound 10 607); cos x − x on
+[0, 1] 0.16 u_dd in 10 (bound 11 023); e^x − 1 on [−1, 2] \|ζ̂\| = 1.6e-13 u_dd in 13 (bound 11 447); an
+interval without a sign change refused after 2 evaluations. Added tests: the smooth roots in ≤ ¼ of bisection's
+k + 1 (10 of 103 and 105); Brent's own example (2.1), on which Dekker's procedure takes ≈ 256 steps, in 21
+(bound 79); Table 4.1's x⁹ rows in 78 and 191 evaluations against the published 81 and 189 (IBM 360,
+macheps = 16⁻¹³), asserted within ±5% — a band set after that measurement, to separate mutations the frozen
+criteria do not; the x¹⁹ row is not used (x¹⁹ underflows in double below \|x\| ≈ 1e-16; Brent ran it with
+zero2's extended exponent). Mutations (built, run, reverted): caught — the (b − a) sign in inverse quadratic
+interpolation; no minimum step of tol; no swap keeping \|f(b)\| smallest; interpolation always accepted; m =
+c − b; the bracket check removed; the bound as k² − 2; linear interpolation without its factor 2; the int/ext
+branch inverted; e taken from the last step. Before the added tests only the last four of these (m, bracket,
+bound, branch) were caught. **Survived:** forced bisection removed (both triggers, or only \|e\| < tol) — on
+every test function the acceptance test p < \|s q\|/2 already rejects the crawling steps, and no tested function
+reaches Brent's worst case; and the relative term 2ε\|b\| of the tolerance dropped — double-double resolves steps
+far below u_dd·\|b\|, so termination and counts are unchanged here. Ctest `verify.brent`: Release and Debug
+0.01 s (verify suite Debug 1.90 s).
 
 ---
 

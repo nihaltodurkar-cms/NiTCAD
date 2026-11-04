@@ -5,6 +5,7 @@
 
 #include "NiTCAD/verify/reference/double_double.hpp"
 #include "NiTCAD/verify/reference/gauss_kronrod.hpp"
+#include "NiTCAD/verify/reference/brent.hpp"
 #include "NiTCAD/verify/reference/tanh_sinh.hpp"
 
 #if __has_include(<Eigen/Core>)
