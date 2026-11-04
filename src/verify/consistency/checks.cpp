@@ -1,4 +1,4 @@
-// Physical-consistency checks C1-C7, C9, C10, C12 (Unit 55, TVR-1, DECISIONS 11.6). See checks.hpp.
+// Physical-consistency checks C1-C7, C9-C12 (Unit 55, TVR-1, DECISIONS 11.6). See checks.hpp.
 #include "NiTCAD/verify/consistency/checks.hpp"
 
 #include <algorithm>
@@ -233,6 +233,12 @@ ReferenceInfo check_info(std::string_view id) {
                          "the sequence is in the asymptotic range of the limit (judged, not assumed: a miss fails)",
                          "one limit result, or one per value when the limit model's device moves with x"};
         r.applicability = {"limit parameter swept (>= 3 values)"};
+    } else if (id == "C11") {
+        r.equations = {1, 2, 3, 15};
+        r.form = "|I_A - I_B| <= res_A + res_B + 64 eps max|I|; |Q_A - Q_B| <= 64 eps max|Q| + Newton term";
+        r.assumptions = {"the caller's map, checked to be a symmetry of the device (geometry to 64 eps)",
+                         "two separate solves: their Newton and resolution levels, not rounding alone"};
+        r.applicability = {"the map is a symmetry of the device"};
     } else if (id == "C12") {
         r.equations = {2, 4, 9, 10};
         r.form = "n, p > 0; T > 0; occupancy in [0, 1]";
@@ -886,6 +892,176 @@ CheckResult check_c10(const LimitSeries& s, const mesh::Mesh& m, const DeviceDat
     CheckResult r = finish("C10", info, predicates, {w.done("")});
     r.diagnostics = std::move(out.diagnostics);
     return r;
+}
+
+namespace {
+
+// Why the map is not a symmetry of the device (the first failing item), or empty (owner ruling, DECISIONS 11.13).
+std::string symmetry_failure(const results::BiasPoint& a, const mesh::Mesh& ma, const DeviceData& da,
+                             const results::BiasPoint& b, const mesh::Mesh& mb, const DeviceData& db,
+                             const SymmetryMap& map) {
+    const std::size_t n = ma.node_count(), nc = da.contacts.size();
+    if (mb.node_count() != n || map.node.size() != n) return "node counts differ or the node map is not one per node";
+    if (db.contacts.size() != nc || map.contact.size() != nc) return "contact counts differ or the contact map is not one per contact";
+    if (!validate(da, ma).empty() || !validate(db, mb).empty()) return "device data not consistent with its mesh";
+    std::vector<std::uint8_t> hit(n, 0);
+    for (std::size_t i = 0; i < n; ++i) {
+        const auto j = map.node[i];
+        if (j < 0 || static_cast<std::size_t>(j) >= n || hit[static_cast<std::size_t>(j)] != 0) {
+            return "the node map is not a bijection (" + at("node", i) + ")";
+        }
+        hit[static_cast<std::size_t>(j)] = 1;
+    }
+    std::vector<std::uint8_t> chit(nc, 0);
+    for (std::size_t c = 0; c < nc; ++c) {
+        const std::size_t k = map.contact[c];
+        if (k >= nc || chit[k] != 0) return "the contact map is not a bijection (contact " + da.contacts[c].name + ")";
+        chit[k] = 1;
+    }
+    const double tol = rounding_factor * DBL_EPSILON;
+    for (std::size_t i = 0; i < n; ++i) {
+        const auto j = static_cast<std::size_t>(map.node[i]);
+        if (da.donors[i] != db.donors[j] || da.acceptors[i] != db.acceptors[j]) return "doping differs at " + at("node", i);
+        if (da.relative_permittivity[i] != db.relative_permittivity[j]) return "permittivity differs at " + at("node", i);
+        if (da.insulator[i] != db.insulator[j] || da.region[i] != db.region[j]) return "region differs at " + at("node", i);
+        const double va = ma.volumes()[i], vb = mb.volumes()[j];
+        if (!(std::abs(va - vb) <= tol * std::max(va, vb))) return "volume differs at " + at("node", i);
+    }
+    // Edges: B's by their (mapped) ends; each of A's must map onto one, its length within 64 eps relative and its
+    // coupling within 64 eps of the largest coupling at its ends.
+    const auto ea = ma.edges(), eb = mb.edges();
+    if (ea.size() != eb.size()) return "edge counts differ (" + std::to_string(ea.size()) + ", " + std::to_string(eb.size()) + ")";
+    std::vector<std::vector<std::pair<mesh::NodeId, std::size_t>>> by_node(n);
+    std::vector<double> largest(n, 0.0);
+    for (std::size_t e = 0; e < eb.size(); ++e) {
+        by_node[static_cast<std::size_t>(eb[e].first)].push_back({eb[e].second, e});
+        for (const auto v : {eb[e].first, eb[e].second}) {
+            largest[static_cast<std::size_t>(v)] = std::max(largest[static_cast<std::size_t>(v)], eb[e].coupling_area);
+        }
+    }
+    std::vector<double> largest_a(n, 0.0);
+    for (const auto& e : ea) {
+        for (const auto v : {e.first, e.second}) {
+            largest_a[static_cast<std::size_t>(v)] = std::max(largest_a[static_cast<std::size_t>(v)], e.coupling_area);
+        }
+    }
+    for (std::size_t e = 0; e < ea.size(); ++e) {
+        auto u = map.node[static_cast<std::size_t>(ea[e].first)], w = map.node[static_cast<std::size_t>(ea[e].second)];
+        if (u > w) std::swap(u, w);
+        const mesh::Edge* match = nullptr;
+        for (const auto& [other, k] : by_node[static_cast<std::size_t>(u)]) {
+            if (other == w) match = &eb[k];
+        }
+        if (match == nullptr) return "no image of " + at("edge", e);
+        if (!(std::abs(ea[e].length - match->length) <= tol * std::max(ea[e].length, match->length))) {
+            return "length differs at " + at("edge", e);
+        }
+        const double scale = std::max({largest_a[static_cast<std::size_t>(ea[e].first)],
+                                       largest_a[static_cast<std::size_t>(ea[e].second)], largest[static_cast<std::size_t>(u)],
+                                       largest[static_cast<std::size_t>(w)]});
+        if (!(std::abs(ea[e].coupling_area - match->coupling_area) <= tol * scale)) {
+            return "coupling differs at " + at("edge", e);
+        }
+    }
+    for (std::size_t c = 0; c < nc; ++c) {
+        const ContactData& x = da.contacts[c];
+        const ContactData& y = db.contacts[map.contact[c]];
+        if (x.kind != y.kind) return "contact kind differs (" + x.name + ")";
+        std::vector<mesh::NodeId> image;
+        for (const auto v : x.nodes) image.push_back(map.node[static_cast<std::size_t>(v)]);
+        std::sort(image.begin(), image.end());
+        std::vector<mesh::NodeId> own = y.nodes;
+        std::sort(own.begin(), own.end());
+        if (image != own) return "contact nodes do not correspond (" + x.name + ")";
+    }
+    if (a.bias_V.size() != nc || b.bias_V.size() != nc) return "biases not one per contact";
+    for (std::size_t c = 0; c < nc; ++c) {
+        if (a.bias_V[c] != b.bias_V[map.contact[c]]) return "bias differs (" + da.contacts[c].name + ")";
+    }
+    return {};
+}
+
+// The C3-style Newton term of a contact's charge per unit scaled update: sum over its edges of C_f 2 V_T, plus a
+// lumped gate's C_ox A V_T (DECISIONS 11.13, C11).
+double charge_newton_term(const ContactData& c, const mesh::Mesh& m, const DeviceData& d) {
+    const double vt = base::k_B_eV_per_K * d.temperature_K;
+    std::vector<std::uint8_t> member(m.node_count(), 0);
+    for (const auto v : c.nodes) member[static_cast<std::size_t>(v)] = 1;
+    double term = 0.0;
+    for (const auto& e : m.edges()) {
+        const auto i = static_cast<std::size_t>(e.first), j = static_cast<std::size_t>(e.second);
+        if (member[i] == 0 && member[j] == 0) continue;
+        const double ei = d.relative_permittivity[i], ej = d.relative_permittivity[j];
+        const double eps = 2.0 * ei * ej / (ei + ej);
+        term += base::eps0_F_per_cm * eps * e.coupling_area / e.length * 2.0 * vt;
+    }
+    if (c.kind == ContactKind::gate) {
+        for (std::size_t k = 0; k < c.nodes.size() && k < c.gate_areas.size(); ++k) {
+            term += c.oxide_capacitance_F_cm2 * c.gate_areas[k] * vt;
+        }
+    }
+    return term;
+}
+
+}  // namespace
+
+// Symmetry and invariance (owner ruling 2026-11-04, DECISIONS 11.13): terminal quantities of two results related
+// by a symmetry of the device, the map supplied by the caller and checked first.
+CheckResult check_c11(const results::BiasPoint& a, const mesh::Mesh& ma, const DeviceData& da,
+                      const results::BiasPoint& b, const mesh::Mesh& mb, const DeviceData& db, const SymmetryMap& map) {
+    const ReferenceInfo info = check_info("C11");
+    const std::string why = symmetry_failure(a, ma, da, b, mb, db, map);
+    const std::array<Predicate, 1> predicates{
+        Predicate{"the map is a symmetry of the device", why.empty() ? 1.0 : 0.0, 1.0, why.empty()}};
+    CheckResult out;
+    out.id = "C11";
+    if (!applicable(info, predicates, out)) {
+        out.comparison.reason += ": " + why;
+        return out;
+    }
+    const std::size_t nc = da.contacts.size();
+    std::vector<CheckPart> parts;
+    const char* currents = "terminal currents";
+    if (!sized(a.terminal_current, nc) || !sized(b.terminal_current, nc) || !sized(a.terminal_current_resolution, nc) ||
+        !sized(b.terminal_current_resolution, nc)) {
+        parts.push_back(not_evaluated_part(currents, "currents or resolutions not stored"));
+    } else {
+        Worst w(currents);
+        for (std::size_t c = 0; c < nc; ++c) {
+            const std::size_t k = map.contact[c];
+            const double ia = a.terminal_current[c], ib = b.terminal_current[k];
+            w.add(std::abs((DD(ia) - DD(ib)).to_double()),
+                  a.terminal_current_resolution[c] + b.terminal_current_resolution[k] +
+                      rounding_factor * DBL_EPSILON * std::max(std::abs(ia), std::abs(ib)),
+                  "contact " + da.contacts[c].name + " -> " + db.contacts[k].name);
+        }
+        parts.push_back(w.done("no contacts"));
+    }
+    bool gated = false;
+    for (const auto& c : da.contacts) gated = gated || c.kind == ContactKind::gate || c.kind == ContactKind::electrode;
+    if (gated) {
+        const char* charges = "gate charges";
+        if (!sized(a.gate_charge, nc) || !sized(b.gate_charge, nc)) {
+            parts.push_back(not_evaluated_part(charges, "gate charges not stored"));
+        } else if (a.convergence.iterations.empty() || b.convergence.iterations.empty()) {
+            parts.push_back(not_evaluated_part(charges, "no Newton record (the stopping term)"));
+        } else {
+            const double u = a.convergence.iterations.back().update + b.convergence.iterations.back().update;
+            Worst w(charges);
+            for (std::size_t c = 0; c < nc; ++c) {
+                const ContactData& x = da.contacts[c];
+                if (x.kind != ContactKind::gate && x.kind != ContactKind::electrode) continue;
+                const std::size_t k = map.contact[c];
+                const double qa = a.gate_charge[c], qb = b.gate_charge[k];
+                w.add(std::abs((DD(qa) - DD(qb)).to_double()),
+                      rounding_factor * DBL_EPSILON * std::max(std::abs(qa), std::abs(qb)) +
+                          charge_newton_term(x, ma, da) * u,
+                      "contact " + x.name + " -> " + db.contacts[k].name);
+            }
+            parts.push_back(w.done(""));
+        }
+    }
+    return finish("C11", info, predicates, std::move(parts));
 }
 
 CheckResult check_c12(const results::NodeFields& f, const results::BiasPoint* point, const mesh::Mesh& m,

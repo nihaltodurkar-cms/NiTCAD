@@ -7369,6 +7369,62 @@ contact) or nothing reaches them (the rate); closed by tests that assert each gu
 18 of 18 caught. Ctest `verify_consistency.limits`: Release 0.05 s, Debug 1.25 s (verify suites Debug 28.8 s, 22
 tests; Release 22/22).
 
+*Consistency, C11 symmetry and invariance (§11.6 and the C11 ruling of §11.13; `check_c11` with a `SymmetryMap` in
+`src/verify/consistency/checks.cpp`; tests `tests/verify/consistency/symmetry_test.cpp`).* The predicate "the map is
+a symmetry of the device" is evaluated as ruled, in this order, the first failing item named in the NOT APPLICABLE
+reason: node and contact counts; both device data consistent with their meshes; the node map, then the contact map,
+a bijection; per node doping, permittivity, region and insulator flag exactly, the volume to 64ε relative; edge
+counts; each of A's edges has an image (by its mapped ends), its length to 64ε relative and its coupling to 64ε of
+the largest coupling at its four ends (A's and B's); contact kinds and node sets; biases exactly. Two judged parts:
+terminal currents (\|I_A − I_B\| in double-double against res_A + res_B + 64ε max\|I\|, the worst named
+"contact drain -> source"); gate charges, only with a gate or meshed electrode, against 64ε max\|Q\| + (Σ over the
+contact's edges ε₀ ε_h A/d · 2V_T, plus a lumped gate's C_ox A V_T) (u_A + u_B), NOT EVALUATED without a Newton
+record or stored charges. Contract: class D, I2, PD, applicability "the map is a symmetry of the device".
+
+**Departures from the ruled devices, for the owner.** (1) The mirror device is a 2D symmetric MOS structure, not
+the ruled 1D n+–n–n+ resistor: oxide on [−5 nm, 0), p-silicon 1e17 to 120 nm, n+ pockets 1e19 under the source
+(y < 0.75 µm) and the drain (y > 2.25 µm) to 30 nm, width 3 µm (7 lines), a meshed metal gate (4.4 eV) on all of
+x_min, a fixed interface charge 3e11 cm⁻²; contacts gate, substrate, source, drain; A at (1.0, 0, 0, 0.1) V, B at
+(1.0, 0, 0.1, 0) V, contact map {0, 1, 3, 2}, node map y → W − y by coordinates. It exercises what the resistor
+cannot: a gate charge, four contacts and a contact map that is not the identity. (2) **The ruled rotation by 30°
+with a translation cannot be run on a generated mesh: `make_dual_mesh` refuses it** ("boundary facet is not Gabriel
+(P2): node 53 is strictly inside its diametral sphere"), and so does any translation alone. The generated mesh of
+[0, 2e-4] × [0, 1e-4] cm (`max_size` L/12) has a square cell at the corner (L, H): nodes 19 (the corner), 20 and 21
+(along the two sides) and 53 (the diagonal) are exactly cocircular, so 53 lies exactly on the diametral circles of
+the boundary facets (19, 20) and (19, 21) (measured: (a − p)·(b − p) = 0 in double-double; the predicate returns 0,
+a tie, which P2 accepts). Moving the nodes by any motion that rounds the coordinates breaks the tie, and the
+translation (3.7e-4, −1.3e-4) and the rotation with it break it inward. Exact motions keep it: the quarter turns
+(−y, x), (−x, −y), (y, −x) are accepted; a dyadic translation is not exact on the generated interior nodes. The
+30° rotation about the origin alone is accepted, so the test runs that: an observation about this mesh's rounding,
+not a property of the motion. This is not a predicate defect (the predicates are exact; P2 is right about the
+moved coordinates); it is that generated meshes are Gabriel only by a tie at domain corners, so rigid motion of a
+generated mesh is not robust under `make_dual_mesh`. A Unit 16 question for the owner (tie-free corners in the
+generator, or a moved mesh repaired rather than refused); no Unit 16 code was changed.
+
+Measured (Release). Mirror: currents worst residual 1.6e-14 A/cm against 6.8e-12 (drain → source; the drain current
+is above 1e3 × the bound), gate charges bit-identical (residual 0 against 2.2e-26 C/cm, whose Newton term is
+restated in the test and matched to 1e-12 relative). Rotation, the generated pn diode (acceptors 1e17 for x < L/2,
+donors 1e17 above, ohmic contacts on x = 0 and x = L) forward at 0.4 V: I = 2.4995e-8 A/cm, residual 1.4e-17 against
+1.07e-12. Both pass. NOT APPLICABLE, each with its item named: one node's donors (×(1 + 1e-12)), permittivity,
+region, insulator flag; a bias off by 1e-12 V; a contact map {0, 1, 2, 2}; two nodes mapped to one; the identity
+node map (contact nodes do not correspond); a contact kind; B's mesh rebuilt by `Mesh::from_parts` with one volume
+(×(1 + 1e-12)), one edge length (×(1 + 1e-13), inside `from_parts`' 1e-12) or one coupling (×(1 + 1e-12)) changed;
+the unchanged mesh rebuilt passes. Defects: B's source current moved by twice its pair's bound fails, named; the gate
+charge by twice the part's bound fails; no Newton record leaves the charges and the check NOT EVALUATED.
+
+Mutations (24, built, run, restored): each predicate item disabled (doping, permittivity, region and insulator
+together and each alone, volume, node and contact bijection, length, coupling, contact kind, contact nodes, bias);
+the current bound ×4 on the resolutions, B's current at A's contact index; the charge part's Newton term dropped,
+V_T for 2V_T, only edges with both ends on the contact, the arithmetic for the harmonic mean, u_B dropped, 64ε ×4;
+no part for gates; the reason's item dropped; the Newton-record guard. First run (22): 15 caught, 4 survived
+(region, length, contact kind, harmonic mean), 3 refused to build (unused variables under `/WX`; rewritten as
+0 × the operands). The survivors were closed by the from_parts, region, insulator and kind tests, and the Newton
+term by its restatement. **One survives:** the harmonic mean, equivalent here: every edge at the meshed gate joins
+two oxide nodes, so ε_h is ε_ox either way. 23 of 24 caught. Ctest `verify_consistency.symmetry`: Release 0.07 s, Debug 1.83 s (verify suites at -j 6: Debug 18.7 s, 23
+tests; Release 23/23).
+
+Remaining in §11.6: C8 (passivity) and the TVB-32 runs on the three decks.
+
 ---
 
 ## New questions the advisor raised (not yet in `ARCHITECTURE.md`)

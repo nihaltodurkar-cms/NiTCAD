@@ -52,6 +52,11 @@
 //       the limit model (a terminal current or the potential's L-infinity) above its floor at every value (else
 //       NOT EVALUATED), and each observed rate between successive values within 0.2 of the stated one (owner
 //       ruling, DECISIONS 11.13). The differences are reported as diagnostics.
+//   C11 symmetry and invariance: two results related by a caller-supplied node and contact map, checked first to
+//       be a symmetry of the device (bijections; doping, permittivity, regions equal; edges, lengths, couplings
+//       and volumes to 64 eps; contacts and biases corresponding; else NOT APPLICABLE with the first failing item);
+//       terminal currents to res_A + res_B + 64 eps max |I|, gate charges to 64 eps max |Q| plus the C3-style
+//       Newton term (owner ruling, DECISIONS 11.13).
 //   C12 n, p > 0 on semiconductor nodes; every stored temperature > 0; trap occupancies are not stored, so that
 //       part is NOT EVALUATED when the device has interface traps (and vacuous without).
 // Each outcome is from contract.hpp's judge: NOT APPLICABLE when a predicate is false (named, with its value),
@@ -142,6 +147,15 @@ struct LimitSeries {
     double stated_rate = 1.0;  // derived before measurement (DECISIONS 11.13)
 };
 [[nodiscard]] CheckResult check_c10(const LimitSeries& series, const mesh::Mesh& m, const DeviceData& d);
+
+// C11's maps from result A's device to result B's: node i of A is node[i] of B, contact c of A is contact[c] of B.
+struct SymmetryMap {
+    std::vector<mesh::NodeId> node;
+    std::vector<std::size_t> contact;
+};
+[[nodiscard]] CheckResult check_c11(const results::BiasPoint& a, const mesh::Mesh& ma, const DeviceData& da,
+                                    const results::BiasPoint& b, const mesh::Mesh& mb, const DeviceData& db,
+                                    const SymmetryMap& map);
 [[nodiscard]] CheckResult check_c12(const results::NodeFields& fields, const results::BiasPoint* point,
                                     const mesh::Mesh& m, const DeviceData& d);
 
