@@ -14,6 +14,8 @@
 // Ranges are where double-double precision exists (lo normal): |x| in [1e-280, 1e280], quotients too.
 #include "NiTCAD/verify/reference/double_double.hpp"
 
+#include "exact_integer.hpp"
+
 #include <catch2/catch_test_macros.hpp>
 
 #include <algorithm>
@@ -28,147 +30,10 @@
 namespace ref = NiTCAD::verify::reference;
 using ref::DD;
 using ref::u_dd;
+using namespace exact;  // NOLINT: the test is about exact integers
 
 namespace {
 
-// ---- exact integers --------------------------------------------------------------------------
-
-// Non-negative big integer in base 2^32 (little-endian limbs).
-struct Big {
-    std::vector<std::uint32_t> w;
-
-    static Big from_u64(std::uint64_t v) {
-        Big b;
-        while (v != 0) {
-            b.w.push_back(static_cast<std::uint32_t>(v));
-            v >>= 32;
-        }
-        return b;
-    }
-    void trim() {
-        while (!w.empty() && w.back() == 0) w.pop_back();
-    }
-    void mul_small(std::uint32_t m) {
-        std::uint64_t carry = 0;
-        for (auto& limb : w) {
-            const std::uint64_t t = static_cast<std::uint64_t>(limb) * m + carry;
-            limb = static_cast<std::uint32_t>(t);
-            carry = t >> 32;
-        }
-        if (carry != 0) w.push_back(static_cast<std::uint32_t>(carry));
-    }
-    void add_small(std::uint32_t a) {
-        std::uint64_t carry = a;
-        for (std::size_t i = 0; carry != 0; ++i) {
-            if (i == w.size()) w.push_back(0);
-            const std::uint64_t t = static_cast<std::uint64_t>(w[i]) + carry;
-            w[i] = static_cast<std::uint32_t>(t);
-            carry = t >> 32;
-        }
-    }
-    void shl(int bits) {
-        if (w.empty()) return;
-        const int limbs = bits / 32;
-        const int rest = bits % 32;
-        w.insert(w.begin(), static_cast<std::size_t>(limbs), 0u);
-        if (rest != 0) {
-            std::uint32_t carry = 0;
-            for (std::size_t i = static_cast<std::size_t>(limbs); i < w.size(); ++i) {
-                const std::uint32_t next = w[i] >> (32 - rest);
-                w[i] = (w[i] << rest) | carry;
-                carry = next;
-            }
-            if (carry != 0) w.push_back(carry);
-        }
-    }
-    [[nodiscard]] double to_double() const {
-        double v = 0.0;
-        for (std::size_t i = w.size(); i-- > 0;) v = v * 4294967296.0 + w[i];
-        return v;
-    }
-};
-
-int cmp(const Big& a, const Big& b) {
-    if (a.w.size() != b.w.size()) return a.w.size() < b.w.size() ? -1 : 1;
-    for (std::size_t i = a.w.size(); i-- > 0;)
-        if (a.w[i] != b.w[i]) return a.w[i] < b.w[i] ? -1 : 1;
-    return 0;
-}
-Big add(const Big& a, const Big& b) {
-    Big r;
-    std::uint64_t carry = 0;
-    for (std::size_t i = 0; i < std::max(a.w.size(), b.w.size()) || carry != 0; ++i) {
-        const std::uint64_t t = carry + (i < a.w.size() ? a.w[i] : 0u) + (i < b.w.size() ? b.w[i] : 0u);
-        r.w.push_back(static_cast<std::uint32_t>(t));
-        carry = t >> 32;
-    }
-    r.trim();
-    return r;
-}
-// a - b for a >= b.
-Big sub(const Big& a, const Big& b) {
-    Big r = a;
-    std::int64_t borrow = 0;
-    for (std::size_t i = 0; i < r.w.size(); ++i) {
-        std::int64_t t = static_cast<std::int64_t>(r.w[i]) - borrow - (i < b.w.size() ? b.w[i] : 0u);
-        borrow = t < 0 ? 1 : 0;
-        if (t < 0) t += 4294967296LL;
-        r.w[i] = static_cast<std::uint32_t>(t);
-    }
-    r.trim();
-    return r;
-}
-
-// Signed big integer.
-struct SBig {
-    Big mag;
-    bool neg = false;
-};
-SBig sadd(const SBig& a, const SBig& b) {
-    if (a.neg == b.neg) return {add(a.mag, b.mag), a.neg};
-    const int c = cmp(a.mag, b.mag);
-    if (c == 0) return {};
-    return c > 0 ? SBig{sub(a.mag, b.mag), a.neg} : SBig{sub(b.mag, a.mag), b.neg};
-}
-bool operator==(const SBig& a, const SBig& b) {
-    if (a.mag.w.empty() && b.mag.w.empty()) return true;
-    return a.neg == b.neg && cmp(a.mag, b.mag) == 0;
-}
-
-// d = M 2^k with M an integer of at most 53 bits (M = 0 for d = 0).
-struct Scaled {
-    std::int64_t m = 0;
-    int k = 0;
-};
-Scaled decompose(double d) {
-    if (d == 0.0) return {};
-    int k = 0;
-    const double f = std::frexp(d, &k);
-    Scaled s{static_cast<std::int64_t>(std::ldexp(f, 53)), k - 53};
-    while (s.m % 2 == 0) {  // odd M: the largest k with d on the grid 2^k
-        s.m /= 2;
-        ++s.k;
-    }
-    return s;
-}
-// M 2^(k - base) as a signed big integer, k >= base.
-SBig to_big(std::int64_t m, int k, int base) {
-    SBig r{Big::from_u64(static_cast<std::uint64_t>(m < 0 ? -m : m)), m < 0};
-    r.mag.shl(k - base);
-    return r;
-}
-// |m1 m2| exactly.
-Big product(std::int64_t m1, std::int64_t m2) {
-    Big r = Big::from_u64(static_cast<std::uint64_t>(m1 < 0 ? -m1 : m1));
-    const auto b = static_cast<std::uint64_t>(m2 < 0 ? -m2 : m2);
-    // r * b by two 32-bit halves.
-    Big lo = r;
-    lo.mul_small(static_cast<std::uint32_t>(b));
-    Big hi = r;
-    hi.mul_small(static_cast<std::uint32_t>(b >> 32));
-    hi.shl(32);
-    return add(lo, hi);
-}
 
 // ---- helpers ---------------------------------------------------------------------------------
 
@@ -379,42 +244,6 @@ TEST_CASE("TC1 (added): double-double * within 8 u_dd of the exact product (inte
     CHECK(failures == 0);
 }
 
-namespace {
-
-// |c - L| <= 2^-104 |L| exactly, where L is the decimal literal (digits with one '.').
-// With c = C 2^E (E < 0) and L = N / 10^d: 2^104 |C 10^d - N 2^-E| <= N 2^-E. Returns the measured
-// |c - L| / |L| in u_dd (approximate, for the record) through `measured`.
-bool within_one_udd(const DD& c, std::string_view literal, double& measured) {
-    Big n;
-    int d = 0;
-    bool after_point = false;
-    for (const char ch : literal) {
-        if (ch == '.') {
-            after_point = true;
-            continue;
-        }
-        n.mul_small(10);
-        n.add_small(static_cast<std::uint32_t>(ch - '0'));
-        if (after_point) ++d;
-    }
-    const Scaled h = decompose(c.hi);
-    const Scaled l = decompose(c.lo);
-    const int base = std::min(h.k, c.lo == 0.0 ? h.k : l.k);
-    REQUIRE(base < 0);
-    SBig cbig = sadd(to_big(h.m, h.k, base), to_big(l.m, l.k, base));
-    REQUIRE_FALSE(cbig.neg);
-    for (int i = 0; i < d; ++i) cbig.mag.mul_small(10);  // C 10^d
-    Big n_scaled = n;
-    n_scaled.shl(-base);  // N 2^-E
-    const int c_vs_n = cmp(cbig.mag, n_scaled);
-    Big diff = c_vs_n >= 0 ? sub(cbig.mag, n_scaled) : sub(n_scaled, cbig.mag);
-    measured = diff.to_double() / n_scaled.to_double() / u_dd;
-    diff.shl(104);
-    return cmp(diff, n_scaled) <= 0;
-}
-
-}  // namespace
-
 TEST_CASE("TC1: constants within 1 u_dd of OEIS's digits (exact comparison)") {
     struct Case {
         const char* name;
@@ -428,10 +257,9 @@ TEST_CASE("TC1: constants within 1 u_dd of OEIS's digits (exact comparison)") {
         {"sqrt 2 (A002193)", ref::sqrt2(), "1.4142135623730950488016887242096980785696"},
     };
     for (const auto& c : cases) {
-        double measured = 0.0;
-        const bool ok = within_one_udd(c.value, c.oeis, measured);
-        INFO(c.name << ": |c - L| / L = " << measured << " u_dd");
-        CHECK(ok);
+        const auto r = compare_with_literal(c.value, c.oeis, 1);
+        INFO(c.name << ": |c - L| / L = " << r.measured_udd << " u_dd");
+        CHECK(r.within);
     }
 }
 

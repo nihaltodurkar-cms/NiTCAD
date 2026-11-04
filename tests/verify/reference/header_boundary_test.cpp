@@ -4,6 +4,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include "NiTCAD/verify/reference/double_double.hpp"
+#include "NiTCAD/verify/reference/gauss_kronrod.hpp"
 
 #if __has_include(<Eigen/Core>)
 #error "Eigen's include path reaches nitcad_verify_reference consumers"

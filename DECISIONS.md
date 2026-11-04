@@ -6538,6 +6538,10 @@ implementation, so they went to the owner before a test ran:
   degrades near x = 1, to double precision for \|x − 1\| < 2⁻⁵³ (8e15 u_dd measured). Its pow inherits \|b\| times
   that. Whether any existing gate evaluates the helper's log or pow near 1 at a relative tolerance is not yet
   audited; open for a ruling (no existing test or gate changed).
+- **TC3 "nodes and weights to their printed digits" (after measurement).** dqk15.f prints 33 digits, beyond a
+  double-double's. Measured: nodes ≤ 0.14 u_dd; Gauss weights ≤ 0.95 u_dd (after replacing 1 − x² by
+  (1 − x)(1 + x), which had cost wg(1) 1.76 u_dd near x = 0.949); Kronrod weights 0.04–2.41 u_dd, from an 8 × 8
+  moment solve. Ruling: nodes 1 u_dd (as the TC1 constants), weights 4 u_dd (TC3's own monomial unit).
 
 **11.14 As-built (branch `verify/reference-numerics`, local).**
 
@@ -6588,6 +6592,26 @@ grids): +, −, ×, ÷ 0 u_dd (bit-identical: the same published algorithms); sq
 squaring 7 times (exp/expm1 and log/pow fail); log's atanh without the factor 2 (log/pow fails). A probe that
 judged pow against repeated squaring was discarded: the squarings' own error doubles each step, so it was not
 an adequate reference.
+
+*TC3 — Gauss–Kronrod 7/15 (`include/NiTCAD/verify/reference/gauss_kronrod.hpp`,
+`src/verify/reference/gauss_kronrod.cpp`).* Sources read before code: netlib `quadpack/dqk15.f` (data statements,
+the error estimate) and `quadpack/dqage.f` (the adaptive driver), Piessens and de Doncker. The rule is computed, not
+typed: Gauss nodes by Newton on P₇; Kronrod nodes as the roots of the Stieltjes polynomial E₈ = P₈ + Σ c_j P_j
+(j = 0, 2, 4, 6) fixed by ∫ P₇ E₈ P_k = 0 (k = 1, 3, 5, 7; the integrals by a 16-point Gauss–Legendre rule, exact
+for their degree 22), bracketed between the Gauss nodes and polished by Newton; Kronrod weights by exactness for
+P₀ … P₁₄. The 33 printed digits are used only by the test. dqk15's estimate and dqage's loop are followed line by
+line with ε = u_dd; deviations: the largest-error interval by linear search (not dqpsrt), the running error sum
+in double-double (in double its drift, ≈ 2⁻⁵³ of the first errors, swamped a 1e-24 target and went negative —
+the first run reported negative estimates), and the bad-integrand endpoint test in double-double.
+
+Measured (Release): nodes ≤ 0.14 u_dd, Gauss weights ≤ 0.95, Kronrod weights ≤ 2.41 against the printed digits;
+xᵏ on [−1, 1] within 1.64 u_dd for even k ≤ 22, 1.5e24 u_dd at k = 24, odd k exactly 0; ten adaptive integrals at
+ε_rel = 1e-24 (eˣ, 1/(1+x), 1/(1+x²), √x, log(1+x) on [0, 1]; 1/(x + 1e-6); 1/(\|x − 0.3\| + 1e-4); T₄₀ and T₁₀₀ on
+[−1, 1]; e^(−50x)): all status ok, true error ≤ estimate ≤ tolerance, 1 to 542 intervals (T₁₀₀), largest true error
+3.4e-27 (the kink). Mutations, each caught: one Kronrod weight × (1 + 1e-20) (3 of 4 tests fail); a wrong
+Stieltjes condition (k = 9 for 7; 3 fail); the error exponent 3 for 1.5, the raw estimate 1000× too small, and the
+error sum rounded to double each step (the adaptive test fails on each). Ctest `verify.gauss_kronrod`: Release
+< 0.1 s, Debug 0.17 s.
 
 ---
 
