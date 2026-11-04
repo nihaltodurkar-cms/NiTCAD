@@ -6542,6 +6542,16 @@ implementation, so they went to the owner before a test ran:
   double-double's. Measured: nodes ≤ 0.14 u_dd; Gauss weights ≤ 0.95 u_dd (after replacing 1 − x² by
   (1 − x)(1 + x), which had cost wg(1) 1.76 u_dd near x = 0.949); Kronrod weights 0.04–2.41 u_dd, from an 8 × 8
   moment solve. Ruling: nodes 1 u_dd (as the TC1 constants), weights 4 u_dd (TC3's own monomial unit).
+- **TC4 secondary epsilon (after measurement).** With BJL's usual ε₂ = ε₁² (weights to ≈ 1e-63) the endpoint term
+  d4 of the published estimate stays at ≈ 7e-29 for ∫₀¹ x^{−1/2} ln x, above its 16 u_dd tolerance (3.2e-30), so
+  the run ended `limit_reached` with a true error of 4.7 u_dd. Bailey's 2006 note allows ε₂ = ε₁ⁿ for any n ≥ 2.
+  Ruling: n = 3 (weights to ≈ 1e-94, abscissa distances to ≈ 1e-96, inside the double-double domain).
+- **TC4 "the error estimate bounds the true error on each" (after measurement).** With n = 3 the published
+  estimate fell below the true error twice: ln x 4.36e-32 against 4.37e-32, x^{−1/2} ln x 1.36e-31 against
+  2.89e-31. Its floor d3 = ε₁ · max\|w f\| assumes f exact to ε₁; here log and sqrt are themselves accurate to a few
+  u_dd. Ruling: keep the published 10^d unchanged and add one documented term, E = max(10^d, 8 u_dd · h Σ\|w f\|)
+  (TC1's 8 u_dd guarantee times the computed ∫\|f\|) for n ≥ 3; a deviation from the sources, recorded in the
+  header. Consequence: no relative tolerance below ≈ 8 u_dd is reachable.
 
 **11.14 As-built (branch `verify/reference-numerics`, local).**
 
@@ -6612,6 +6622,31 @@ xᵏ on [−1, 1] within 1.64 u_dd for even k ≤ 22, 1.5e24 u_dd at k = 24, odd
 Stieltjes condition (k = 9 for 7; 3 fail); the error exponent 3 for 1.5, the raw estimate 1000× too small, and the
 error sum rounded to double each step (the adaptive test fails on each). Ctest `verify.gauss_kronrod`: Release
 < 0.1 s, Debug 0.17 s.
+
+*TC4 — tanh–sinh (`include/NiTCAD/verify/reference/tanh_sinh.hpp`, `src/verify/reference/tanh_sinh.cpp`).*
+Takahasi and Mori (1974) is paywalled and was not read; graded PB under TVR1-Q2 from two open reproductions read
+in full before code, which agree on everything used: Bailey, Jeyabalan and Li, Experimental Mathematics 14 (2005)
+317–329, §§3–5 (QUADTS), and Bailey, "Tanh-sinh high-precision quadrature" (19 Jan 2006), §§2–4. As they describe
+it: x_j = tanh u₂, w_j = u₁ / cosh² u₂, u₁ = π/2 cosh hj, u₂ = π/2 sinh hj; level k uses h = 2⁻ᵏ from level 1,
+later levels evaluate only the odd-indexed abscissae; 1 − x_j stored as 1 / (e^{u₂} cosh u₂) and [a, b] mapped
+in double-double (their secondary-precision scaling); their heuristic estimate E = 10^d, d = min(0, max(d1²/d2,
+2d1, d3, d4)), E = 1 for n ≤ 2, 0 when S_n = S_{n−1}, with ε₁ = u_dd and d not rounded (optional in both). Two
+owner rulings after measurement (§11.13): ε₂ = ε₁³ (the note's n ≥ 2 family) and the 8 u_dd · ∫\|f\| rounding
+floor. Infinite intervals are mapped by the caller, as BJL do: ∫₀^∞ e^{−x²} by x = 1/s − 1. The table (finest
+level 10, 5 056 to 5 119 pairs: j·2⁻¹⁰ up to t ≈ 4.95) is computed once.
+
+Measured (Release, ε_rel = 16 u_dd): ∫₀¹ x^{−1/2} = 2 0.49 u_dd (estimate 7.9e-31, true 4.9e-32); ∫₀¹ ln x = −1
+0.89 u_dd (3.9e-31 / 4.4e-32); ∫₀¹ x^{−1/2} ln x = −4 1.47 u_dd (1.6e-30 / 2.9e-31); ∫₀^∞ e^{−x²} = √π/2 0.42 u_dd
+(3.5e-31 / 1.8e-32); all status ok at level 4 (159 evaluations) except e^{−x²} at level 6 (633); added ∫₋₁¹ 1 and
+∫₀¹ eˣ within 0.11 u_dd. Every estimate ≥ 2.6× the true error and ≤ ½ the tolerance. Added: ∫₀¹ x^{−0.9}, which
+the table cannot resolve (tail ≈ 10 (r y)^{0.1} ≈ 2e-9), ends `limit_reached` at level 10 with estimate 5.0e-8 ≥
+true error 2.2e-9 (d4 reports it); a loose tolerance still runs three levels. Mutations (each built, run,
+reverted), all caught: w = u₁ / cosh u₂; y = 1 − tanh u₂ (cancels); u₂ from cosh t; ε₂ = ε₁² and ε₂ = 1e-40;
+later levels re-adding the even points; h off by 2; the right point b + dx; the left point a + dx/2; the rounding
+floor removed (the bound test fails, as measured before the ruling); 2d1 dropped. Two survived the first test set
+and were caught after additions: d4 replaced by d3 (no frozen integrand makes d4 bind once n = 3; the x^{−0.9}
+test catches it) and trusting levels 1–2 (no test had a loose tolerance; the loose-tolerance test catches it).
+Ctest `verify.tanh_sinh`: Release 0.03 s, Debug 0.16 s (verify suite Debug 1.88 s).
 
 ---
 
