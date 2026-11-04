@@ -143,6 +143,7 @@ add_custom_command(
           include/NiTCAD/verify/reference/brent.hpp
           include/NiTCAD/verify/reference/dopri5.hpp
           include/NiTCAD/verify/reference/chebyshev.hpp
+          include/NiTCAD/verify/reference/complex_step.hpp
           src/verify/reference/chebyshev.cpp
   COMMENT "verify/reference include boundary (VR2)")
 add_custom_target(nitcad_verify_reference_boundary
@@ -162,7 +163,8 @@ add_executable(nitcad_verify_test
   tests/verify/reference/tanh_sinh_test.cpp
   tests/verify/reference/brent_test.cpp
   tests/verify/reference/dopri5_test.cpp
-  tests/verify/reference/chebyshev_test.cpp)
+  tests/verify/reference/chebyshev_test.cpp
+  tests/verify/reference/complex_step_test.cpp)
 target_link_libraries(nitcad_verify_test PRIVATE NiTCAD::verify_reference Catch2::Catch2WithMain)
 nitcad_add_file_tests(verify nitcad_verify_test)
 add_test(NAME verify_reference_boundary

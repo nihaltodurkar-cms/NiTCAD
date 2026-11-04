@@ -6590,6 +6590,28 @@ implementation, so they went to the owner before a test ran:
   two of the implementer's own added tests had tolerances (8 u_dd) that ignored the N-term summation and the k
   products forming xᵏ; they are (N + 8) u_dd·Σ\|D_ij\| (Higham's γ_N) for the (6.6) diagonal against Theorem 7
   (measured 9.3 u_dd·Σ against 8 before) and (N + 2k + 8) u_dd·Σ\|D_ij x_jᵏ\| for D·xᵏ (23.9 before).
+- **TC8 readings (owner rulings before measurement, 2026-11-04).** (1) The reference is the analytic derivative
+  evaluated in double-double (TC1's exp, sqrt; sin and cos by a test-local series after reduction by the library's
+  π, checked by sin² + cos² = 1 and a double-angle identity, as TC5), so 4ε judges the complex step and not the
+  reference. (2) Points: the composite is Lyness and Moler's f = eˣ/√(sin³x + cos³x) (Martins, Kroo and Alonso
+  2000, (15)) at its published point x = 1.5, and 10³ points each of eˣ on [−200, 200], sin x on [−2π, 2π], x^{3/2}
+  log-spaced on [1e-50, 1e50] and the composite on [0, 1.5] (ranges where f′·h stays a normal double); 4ε relative
+  is judged where \|f′\| ≥ 0.01·max\|f′\| over the grid and printed elsewhere (a relative error is unbounded at a
+  zero of f′, and the double input's own position error dominates there). (3) U_ref is Richardson's truncation
+  estimate \|d(2h) − d(h)\|/3 (from (14), d(h) = f′ − h²f‴/6 + O(h⁴)), labelled "truncation only; the rounding of
+  f is not estimated"; it is tested at h = 1e-3, where it must bound the true error, and at h = 1e-200, where it
+  must be at rounding level (≤ 4ε\|d\|). (4) Scope: `complex_step(f, x, h)` plus the functions Table 5 marks as
+  new definitions (abs, max, min, sign, dim; choices on real parts), refusing h ≤ 0, non-finite or subnormal h and
+  non-finite x. Choice recorded before measuring: x^{3/2} is evaluated as z·√z, not pow(z, 1.5), because a pow
+  formed as exp(1.5 log z) carries the condition number \|1.5 ln x\| (TC1), up to 170 on this range; pow is printed.
+- **TC8 (owner rulings after measurement, 2026-11-04).** (1) The 0.01·max\|f′\| rule judged only 12 of 1 000 points
+  of eˣ and 40 of x^{3/2} (f′ spans ≈ 170 decades there; the implementer's own count check caught it), with every
+  point within 1.58ε. Ruling: functions whose f′ has no zero on the range (eˣ, x^{3/2}) are judged at every point;
+  the 0.01·max rule stays for sin and the composite; 4ε unchanged. (2) At h = 1e-3 the leading-order Richardson
+  estimate fell below the true error by O(h²) relative (eˣ 2.0e-7, x^{3/2} 1.8e-7, composite 3.9e-6; sin above), as
+  (14)'s next term predicts when f‴ and f⁽⁵⁾ share a sign (for eˣ: estimate h²/6 − 5h⁴/120, true h²/6 − h⁴/120).
+  Ruling: the primitive reports 1.25·\|d(2h) − d(h)\|/3 (F_s of §11.5), and the test adds estimate ≤ 1.25·(1 +
+  1e-3)·true so the estimate cannot be arbitrarily loose.
 
 **11.14 As-built (branch `verify/reference-numerics`, local).**
 
@@ -6774,6 +6796,42 @@ the right collocation rows (1); no equilibration (1, the u-continuity mismatch);
 the left flux with the right scale (1); the right piece evaluated with the left coefficients (2). **Survived:** the
 tail estimate from one coefficient instead of two (the estimate is reported, not judged). Ctest
 `verify.chebyshev`: Release 0.08 s, Debug 0.68 s (verify suite Debug 3.18 s).
+
+*TC8 — complex-step differentiation in double (`include/NiTCAD/verify/reference/complex_step.hpp`, header only).*
+Squire and Trapp (1998) and Martins, Sturdza and Alonso (ACM TOMS 2003) refused automated download (WVU repository
+and ResearchGate 403, Academia.edu walled) and were not read. Graded PB under TVR1-Q2 on the same authors' two
+precursors, read in full (aero-comlab.stanford.edu/Papers, rendered page by page): Martins, Kroo and Alonso, AIAA
+2000-0689 ((11)–(14); the Lyness–Moler function (15) at x = 1.5; the step range to ≈ 1e-307; (19)–(20) and Table
+5), and Martins, Sturdza and Alonso, AIAA 2001-0921 ((1)–(9): the arcsin and sin pitfalls, the linearised
+definitions). Neither prints the derivative's digits at 1.5, so the reference is the analytic derivative in
+double-double (owner ruling). `complex_step(f, x, h = 1e-200)` returns Im f(x + ih)/h, Re f(x + ih), and the
+Richardson truncation estimate 1.25·\|d(2h) − d(h)\|/3 (two evaluations); it refuses non-finite x and h that is not
+a positive normal double or whose 2h overflows, and reports `non_finite` when f does. `cs::abs`, `max`, `min`,
+`sign`, `dim` are Table 5's new definitions (branches on real parts; abs takes +z at 0; sign's magnitude by (20),
+where the Table writes \|x₁\|). The test's double-double sin and cos reduce by kπ/2 with the library's π and sum
+Taylor series on \|r\| ≤ π/4.
+
+Measured (Release, h = 1e-200, ε = 2⁻⁵²): the composite at 1.5 0.40ε (f′ = 4.05343…), its value 0.81ε (addition);
+eˣ on [−200, 200] 1.58ε (1 000 judged); sin on [−2π, 2π] 0.98ε (994 judged; 6 near cos x = 0 printed, 0.24ε);
+x^{3/2} as z·√z on [1e-50, 1e50] 1.24ε (1 000 judged); the composite on [0, 1.5] 2.42ε (1 000 judged). Printed
+only: pow(z, 1.5) 113ε at x = 2e-50 (the exp–log condition number, as predicted before measuring). Richardson at h
+= 1e-3: estimate/true = 1.25 (3 printed digits) for all four; at 1e-200 the estimate is 0. Observed order of
+the truncation (composite, h = 2⁻⁴ … 2⁻⁶) 1.996, 1.999 (band 2 ± 0.1, an addition). Test-local sin, cos: sin² + cos²
+− 1 1.0 u_dd, sin 2x − 2 sin x cos x 1.13 u_dd (limit 4). Table 5: abs −1 / +1 / +1 (right derivative at 0) at x =
+−2, 2, 0; the modulus std::abs gives 0; max, min (ties to z₁), sign and dim give their branch derivatives. Refusals:
+h = 0, −1e-200, NaN, ∞, 1e-310, DBL_MAX and x = NaN, ∞; h = DBL_MIN accepted. Martins' lower limit shown: eˣ at x
+= −700 returns status ok with derivative 0 (e⁻⁷⁰⁰·1e-200 underflows inside f; the primitive cannot detect it, as
+the header says). The 2001 pitfalls reproduced: arcsin by −i log(iz + √(1 − z²)) and sin by (e^{iz} − e^{−iz})/2i
+both return a derivative far from exact; MSVC's std::asin agrees with 1/√0.75 at 0.5 to the 6 printed digits (not judged).
+
+Mutations (built, run, restored; test cases failing of 8): caught — derivative Im/(2h) (5); Richardson /4 for /3,
+the second step at h, d(2h) divided by h, F_s = 1 (1 each, the bound); abs with x ≤ 0 taking −z, max and min ties
+to z₂, sign without (20), dim without its branch (1 each); subnormal h accepted, 2h overflow accepted, no
+non-finite check (1 each); value = 0 (1, after the value check was added). F_s = 2 first **survived**: the upper
+check used the library's own constant, so it scaled with the mutation; it now uses the ruled 1.25 and fails it.
+**Survived:** the value taken from the 2h evaluation — at h = 1e-200 Re f(x + 2ih) = Re f(x + ih) exactly, an
+equivalent mutant at the default step. Ctest `verify.complex_step`: Release 0.02 s, Debug 0.05 s (verify suite
+Debug 3.15 s).
 
 ---
 
