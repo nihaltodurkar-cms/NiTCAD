@@ -6526,6 +6526,18 @@ implementation, so they went to the owner before a test ran:
   double; the TC1 ranges are \|x\| ∈ [1e-280, 1e280] (quotients and intermediates too). The first run used
   1e-300 and failed there by subnormal lo parts, not by the arithmetic; the header's stated domain was wrong
   and was corrected.
+- **TC2 log and pow (after measurement; two rulings).** The first TC2 run missed 2 u_dd on log (2.9 u_dd at
+  x = 0.94) and pow (128 u_dd where \|b ln a\| ≈ 267). The log difference was attributed to the helper: on
+  expm1(log(1 + d)) = d (\|d\| ∈ [1e-30, 0.1], conditioned by 1) the new log's worst error is 1.41 u_dd and the
+  helper's 8e15 u_dd at d = −5.8e-17. Ruling 1: log is compared absolutely, \|Δ\| ≤ 2 u_dd · max(1, \|ln x\|) (the
+  helper's guarantee), pow relative to 2 u_dd · max(1, \|b ln a\|). The rerun still missed pow (8.3 per unit at
+  a = 1.024): the helper's absolute log error is multiplied by \|b\| inside exp(b log a). Ruling 2: pow relative
+  to 2 u_dd · max(1, \|b\|, \|b ln a\|).
+- **New TVR-0 finding I-11 (the helper, `tests/physics/reference_arithmetic.hpp`, unchanged per TVD-14).** Its
+  log is Newton on exp from std::log(hi) and is accurate to ≈ u_dd *absolutely*; relative to its own value it
+  degrades near x = 1, to double precision for \|x − 1\| < 2⁻⁵³ (8e15 u_dd measured). Its pow inherits \|b\| times
+  that. Whether any existing gate evaluates the helper's log or pow near 1 at a relative tolerance is not yet
+  audited; open for a ruling (no existing test or gate changed).
 
 **11.14 As-built (branch `verify/reference-numerics`, local).**
 
@@ -6567,6 +6579,15 @@ source, and separately `#include <Eigen/Core>` to the header, each failed the bu
 2026-11-04); `tests/verify/reference/header_boundary_test.cpp` checks Eigen's include path at compile time.
 Ctest entries `verify.double_double`, `verify.header_boundary`, `verify_reference_boundary`: Release 0.16 s,
 Debug 0.94 s.
+
+*TC2 — cross-check with the test helper (`tests/verify/reference/cross_check_test.cpp`).* The test includes the
+helper; the library does not (the boundary step would refuse it). Measured (Release, 10⁴ points each, TC1
+grids): +, −, ×, ÷ 0 u_dd (bit-identical: the same published algorithms); sqrt 0.76; exp 0.42; expm1 1.65; log
+0.25 absolute (after ruling 1); pow 0.93 per unit max(1, \|b\|, \|b ln a\|) (after ruling 2); π 0.16; ln 2 0
+(limit 2 each). Mutations of the new library, each caught by TC2: sqrt Newton factor 1/4 (sqrt fails); exp
+squaring 7 times (exp/expm1 and log/pow fail); log's atanh without the factor 2 (log/pow fails). A probe that
+judged pow against repeated squaring was discarded: the squarings' own error doubles each step, so it was not
+an adequate reference.
 
 ---
 

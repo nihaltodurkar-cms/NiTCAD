@@ -146,7 +146,8 @@ add_dependencies(nitcad_verify_reference nitcad_verify_reference_boundary)
 
 add_executable(nitcad_verify_test
   tests/verify/reference/double_double_test.cpp
-  tests/verify/reference/header_boundary_test.cpp)
+  tests/verify/reference/header_boundary_test.cpp
+  tests/verify/reference/cross_check_test.cpp)
 target_link_libraries(nitcad_verify_test PRIVATE NiTCAD::verify_reference Catch2::Catch2WithMain)
 nitcad_add_file_tests(verify nitcad_verify_test)
 add_test(NAME verify_reference_boundary
