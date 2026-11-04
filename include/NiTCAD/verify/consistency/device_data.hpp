@@ -26,6 +26,9 @@ struct ContactData {
     std::vector<double> gate_areas;
     double oxide_capacitance_F_cm2 = 0.0;
     double gate_fixed_charge_cm2 = 0.0;
+    // A gate or electrode that exchanges carriers with the semiconductor by gate tunnelling (Unit 51): its
+    // conduction current is not 0 (C6).
+    bool tunnelling = false;
 };
 
 // A declared interface between two regions (device order, as results::BiasPoint::interface_trap_charge).

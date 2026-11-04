@@ -52,6 +52,7 @@ consistency::DeviceData device_data(const device::Device& device) {
             case device::ContactKind::schottky: k.kind = consistency::ContactKind::schottky; break;
         }
         k.nodes = c.nodes;
+        k.tunnelling = c.tunnelling != 0;
         if (c.kind == device::ContactKind::gate) {
             // The face area of each node on the gate's patch (both lists increase), as the gate term reads it.
             const mesh::BoundaryPatch* patch = m.find_boundary(c.gate.boundary);

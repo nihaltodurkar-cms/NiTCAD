@@ -6686,6 +6686,24 @@ implementation, so they went to the owner before a test ran:
   and defect tests use an electrothermal pn diode built in the test file (an isothermal and an R_th sink, as U8); the
   three TVR-1 decks are NOT APPLICABLE (model off). The solver refuses energy balance, Schottky contacts and gate
   tunnelling with the model, so Σ V_c I_c covers every current-carrying contact.
+- **C6 reading (owner ruling before code, 2026-11-04).** The solver forms each step's displacement current from the
+  stored contact charges by that step's own formula (`src/solve/transient.cpp:598`: backward Euler after a start or
+  breakpoint, variable-step BDF2 otherwise), and `error_ratio` is a max-norm of scaled ψ, densities and traps over
+  rtol, not a charge: "the step's local error estimate summed" cannot be put in charge units from the results.
+  Ruling: judged, per accepted step k and contact c, β h_k I_disp,k = Q_k − α₁ Q_{k−1} + α₂ Q_{k−2}, with the
+  coefficients derived independently (BE: β = α₁ = 1, α₂ = 0; BDF2 with w = h_k / h_{k−1}: β = (1 + w)/(1 + 2w),
+  α₁ = (1 + w)²/(1 + 2w), α₂ = w²/(1 + 2w)), the order and steps from the `TimePoint`s; tolerance 64ε times the sum of
+  the operands' magnitudes. The cumulative sums are reported. Not judged: the trapezoidal ∫I dt against Q_N − Q_0
+  per contact, with Σ_k error_ratio_k · rtol · \|ΔQ_k\| beside it, a diagnostic (as C9's Kramers–Kronig). Stated
+  limit: the identity checks the bookkeeping (formula, order, restarts, scaling), not the charge physics, since the
+  solver derives I_disp from the same stored Q.
+- **C6 contacts (owner ruling before code, 2026-11-04).** The displacement identity on every contact; for each
+  gate and meshed electrode also conduction current = 0 and terminal = displacement current, exactly. Predicate:
+  a transient with a gate or electrode (else NOT APPLICABLE).
+- **C6 test device (owner ruling before code, 2026-11-04).** `examples/moscap_cv.deck` loaded and run with
+  `solve_transient` through the API (the deck is not edited): a gate waveform with a ramp and a step breakpoint
+  (backward Euler restarts and variable-step BDF2), and a run with the backward-Euler integrator; defects injected
+  on the result. The three TVR-1 decks are not transients: NOT APPLICABLE.
 
 **11.14 As-built (branch `verify/reference-numerics`, local).**
 
@@ -7115,7 +7133,46 @@ heat, each magnitude, resolution and E_max term, r with and without 5/2 and \|·
 rounding term, a signed residual, a doubled bound) and 2 of the benchmark copy (model flag, r_n); first run 26 of
 26 caught. Ctest `verify_consistency.energy`: Release 0.02 s, Debug 0.36 s (verify suites Debug 6.08 s, 18 tests;
 Release 18/18).
-Remaining in §11.6: C6–C11 and the TVB-32 runs on the three decks.
+
+*Consistency, C6 transient charge bookkeeping (§11.6 and the three C6 rulings of §11.13; `check_c6` for a
+`results::Transient` in `src/verify/consistency/checks.cpp`; tests `tests/verify/consistency/transient_test.cpp`).*
+Per accepted step k ≥ 1 and contact c, β h_k I_disp − (Q_k − α₁ Q_{k−1} + α₂ Q_{k−2}) in double-double against
+64ε (\|Q_k\| + \|α₁ Q_{k−1}\| + \|α₂ Q_{k−2}\| + β h_k \|I_disp\|), the coefficients derived in the check (BE; BDF2 from
+the quadratic through the last three times, w = h_k / h_{k−1} from the stored steps). Gates and meshed electrodes
+without gate tunnelling: \|I_cond\| + \|I_term − I_disp\| = 0 at every point, exactly (`ContactData::tunnelling` added,
+copied by `benchmark::device_data`). NOT APPLICABLE without a gate or electrode; NOT EVALUATED with fewer than two
+points, charges or currents not one per contact, an order other than 1 or 2 (or 2 without two earlier points), or a
+step not positive. `CheckResult` gained `diagnostics` (name, value, scale, where, note; never judged): per contact
+the cumulative identity and the trapezoidal ∫I_disp dt − (Q_N − Q_0) beside Σ error_ratio · rtol · \|ΔQ_k\| (rtol
+from the run record's `transient.rtol`; NaN with a note when absent; steps without an estimate counted). Contract:
+class D, I2, PD, equations G1 and G15, the bookkeeping limit in its assumptions.
+
+Measured (Release) on `examples/moscap_cv.deck` through `solve_transient` (gate 0 → −0.5 V over 100 ps, held,
+jump to 0.1 V at 200 ps; body 0; t_end 400 ps; rtol 1e-2 in the test to keep the Debug cost down, VR10): BDF2 run
+160 points (6 BE, 153 BDF2, 2 BE restarts after BDF2), identity worst 0.26 of its bound; backward-Euler run 251
+points, worst 0.0067; the gate part exactly 0 on both. At the default rtol (1e-3) the runs had 280 and 679 points
+(worst 0.43 and 0.0072) and C6 took 35 s in Debug. Diagnostics: the cumulative identity is at rounding (≤ 1e-21
+against \|Σ ΔQ\| ≈ 6e-9 C/cm²). **The trapezoidal integral is off by about a quarter of the gate's charge change**
+(−1.6e-9 against Q_N − Q_0 ≈ 6e-9 C/cm² with BDF2; −5.2e-10 with BE; the summed error scale 7e-10 to 9e-10), the
+body nearly the opposite. The likely cause, not chased: the 0.6 V jump at 200 ps. The step after it (backward
+Euler) carries the whole jump of Q as I_disp = ΔQ / h, which a trapezoid halves. That is the reason the judged part
+uses the step's own formula; the diagnostic is reported as measured. A pn-diode transient
+(`examples/pn_diode_1d.deck`, anode ramp) is NOT APPLICABLE ("transient with a gate or electrode").
+
+Injected defects, each failing its part: the gate's I_disp at the first BDF2 step moved by twice the bound (a
+1e-9 relative change there sits below the rounding of Q, since that step's ΔQ is small against Q: the first form of
+this defect passed and was resized against the bound), the body's at the first BE step 1e-9, a charge 1e-9 (also at
+the last point), a BDF2 step relabelled BE, the previous step 1e-6 longer, a NaN charge; a gate conduction current
+of 1e-300, a gate terminal current one ulp off its displacement current; a tunnelling gate's conduction current is
+not judged. Meshed electrode: the gate relabelled an electrode is judged the same way.
+
+Mutations (25): 24 of `check_c6`, first run 20 caught; survivors closed by tests and then caught: the electrode
+kind in the predicate (relabelled electrode), the β h \|I\| term in the bound (a two-point case whose residual 100ε
+lies between 64ε\|Q\| and the full bound), skipping the last point (a defect there), rtol ignored in the diagnostic
+scale (scale proportional to rtol). Final run on the final tests (rtol 1e-2): 24 of 24 caught. The benchmark copy of the tunnelling flag survives: equivalent on every device
+here (no tunnelling gate in TVR-1), listed. Ctest `verify_consistency.transient`: Release 0.68 s, Debug 17.1 s
+(verify suites Debug 22.8 s, 19 tests; Release 19/19).
+Remaining in §11.6: C7–C11 and the TVB-32 runs on the three decks.
 
 ---
 

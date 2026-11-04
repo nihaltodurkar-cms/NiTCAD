@@ -197,6 +197,13 @@ ReferenceInfo check_info(std::string_view id) {
                          "global balance only: the per-node heat is not in the results (listed gap)",
                          "no Schottky contact, gate tunnelling or energy balance (refused with the model)"};
         r.applicability = {"electrothermal on", "thermal_contact_heat present"};
+    } else if (id == "C6") {
+        r.equations = {1, 15};
+        r.form = "beta h I_disp = Q_k - a1 Q_k-1 + a2 Q_k-2 per step (BE, variable-step BDF2); gate conduction 0";
+        r.assumptions = {"the step's formula from its stored order and steps (BE after a start or breakpoint)",
+                         "bookkeeping only: the solver forms I_disp from the same stored contact charges",
+                         "the trapezoidal integral against the summed local error is a diagnostic, not judged"};
+        r.applicability = {"transient with a gate or electrode"};
     } else if (id == "C12") {
         r.equations = {2, 4, 9, 10};
         r.form = "n, p > 0; T > 0; occupancy in [0, 1]";
@@ -373,6 +380,124 @@ CheckResult check_c5(const results::BiasPoint& point, const mesh::Mesh& m, const
     Worst w(name);
     w.add(residual, tolerance, "sum over contacts");
     return finish("C5", info, predicates, {w.done("")});
+}
+
+// Transient charge bookkeeping (owner rulings 2026-11-04, DECISIONS 11.13). The BDF coefficients are derived here
+// from the formulas' definitions, not read from the solver: backward Euler y_k - y_k-1 = h f_k; variable-step BDF2
+// from the quadratic through (t_k-2, t_k-1, t_k) differentiated at t_k, scaled so the y_k coefficient is 1.
+CheckResult check_c6(const results::Transient& run, const mesh::Mesh& m, const DeviceData& d) {
+    (void)m;
+    const ReferenceInfo info = check_info("C6");
+    CheckResult out;
+    out.id = "C6";
+    double gates = 0.0;
+    for (const auto& c : d.contacts) {
+        if (c.kind == ContactKind::gate || c.kind == ContactKind::electrode) gates += 1.0;
+    }
+    const std::array<Predicate, 1> predicates{
+        Predicate{"transient with a gate or electrode", gates, 1.0, gates > 0.0}};
+    if (!applicable(info, predicates, out)) return out;
+
+    const char* identity = "displacement identity";
+    const std::size_t nc = d.contacts.size();
+    const auto& pts = run.points;
+    if (pts.size() < 2) return finish("C6", info, predicates, {not_evaluated_part(identity, "fewer than two time points")});
+    for (std::size_t k = 0; k < pts.size(); ++k) {
+        const auto& p = pts[k];
+        if (!sized(p.contact_charge, nc) || !sized(p.displacement_current, nc) || !sized(p.conduction_current, nc) ||
+            !sized(p.terminal_current, nc)) {
+            return finish("C6", info, predicates,
+                          {not_evaluated_part(identity, "charges or currents not one per contact at " + at("point", k))});
+        }
+    }
+
+    struct Coefficients {
+        double beta, a1, a2;
+    };
+    Worst w(identity);
+    std::vector<DD> lhs_sum(nc, DD(0.0)), rhs_sum(nc, DD(0.0));
+    for (std::size_t k = 1; k < pts.size(); ++k) {
+        const auto& p = pts[k];
+        const double h = p.step_s;
+        Coefficients f{};
+        if (p.order == 1) {
+            f = {1.0, 1.0, 0.0};
+        } else if (p.order == 2 && k >= 2 && pts[k - 1].step_s > 0.0) {
+            const double r = h / pts[k - 1].step_s;  // the step ratio
+            const double den = 1.0 + 2.0 * r;
+            f = {(1.0 + r) / den, (1.0 + r) * (1.0 + r) / den, r * r / den};
+        } else {
+            return finish("C6", info, predicates,
+                          {not_evaluated_part(identity, "order " + std::to_string(p.order) +
+                                                            " without its earlier steps at " + at("point", k))});
+        }
+        if (!(h > 0.0)) {
+            return finish("C6", info, predicates, {not_evaluated_part(identity, "step not positive at " + at("point", k))});
+        }
+        for (std::size_t c = 0; c < nc; ++c) {
+            const DD lhs = DD(f.beta) * DD(h) * DD(p.displacement_current[c]);
+            DD rhs = DD(p.contact_charge[c]) - DD(f.a1) * DD(pts[k - 1].contact_charge[c]);
+            double operands = std::abs(p.contact_charge[c]) + std::abs(f.a1 * pts[k - 1].contact_charge[c]) +
+                              std::abs(lhs.to_double());
+            if (p.order == 2) {
+                rhs += DD(f.a2) * DD(pts[k - 2].contact_charge[c]);
+                operands += std::abs(f.a2 * pts[k - 2].contact_charge[c]);
+            }
+            lhs_sum[c] += lhs;
+            rhs_sum[c] += rhs;
+            w.add(std::abs((lhs - rhs).to_double()), rounding_factor * DBL_EPSILON * operands,
+                  at("point", k) + ", contact " + d.contacts[c].name);
+        }
+    }
+    std::vector<CheckPart> parts{w.done("")};
+
+    // Gates and electrodes without gate tunnelling: no conduction current; terminal = displacement, exactly.
+    Worst g("gate and electrode currents");
+    bool any_gate = false;
+    for (std::size_t c = 0; c < nc; ++c) {
+        const auto& k = d.contacts[c];
+        if ((k.kind != ContactKind::gate && k.kind != ContactKind::electrode) || k.tunnelling) continue;
+        any_gate = true;
+        for (std::size_t i = 0; i < pts.size(); ++i) {
+            const auto& p = pts[i];
+            const double r = std::abs(p.conduction_current[c]) + std::abs(p.terminal_current[c] - p.displacement_current[c]);
+            g.add(r, 0.0, at("point", i) + ", contact " + k.name);
+        }
+    }
+    if (any_gate) parts.push_back(g.done(""));
+
+    // Diagnostics (not judged): the cumulative identity and the trapezoidal integral per contact.
+    double rtol = std::nan("");
+    for (const auto& [name, value] : run.run.settings) {
+        if (name == "transient.rtol") rtol = value;
+    }
+    for (std::size_t c = 0; c < nc; ++c) {
+        const std::string& name = d.contacts[c].name;
+        out.diagnostics.push_back({"cumulative identity", (lhs_sum[c] - rhs_sum[c]).to_double(),
+                                   std::abs(rhs_sum[c].to_double()), "contact " + name,
+                                   "sum_k beta h I_disp - sum_k (Q_k - a1 Q_k-1 + a2 Q_k-2)"});
+        DD trapezoid(0.0);
+        double budget = 0.0;
+        std::size_t unestimated = 0;
+        for (std::size_t k = 1; k < pts.size(); ++k) {
+            trapezoid += DD(0.5) * DD(pts[k].step_s) *
+                         (DD(pts[k].displacement_current[c]) + DD(pts[k - 1].displacement_current[c]));
+            if (std::isnan(pts[k].error_ratio)) {
+                ++unestimated;
+            } else {
+                budget += pts[k].error_ratio * rtol * std::abs(pts[k].contact_charge[c] - pts[k - 1].contact_charge[c]);
+            }
+        }
+        const DD dq = DD(pts.back().contact_charge[c]) - DD(pts.front().contact_charge[c]);
+        out.diagnostics.push_back(
+            {"trapezoidal integral", (trapezoid - dq).to_double(), budget, "contact " + name,
+             "integral of I_disp dt - (Q_N - Q_0); scale sum error_ratio rtol |dQ_k| over " +
+                 std::to_string(pts.size() - 1 - unestimated) + " estimated steps (" + std::to_string(unestimated) +
+                 " without an estimate)" + (std::isnan(rtol) ? "; rtol not in the run record" : "")});
+    }
+    CheckResult r = finish("C6", info, predicates, std::move(parts));
+    r.diagnostics = std::move(out.diagnostics);
+    return r;
 }
 
 CheckResult check_c12(const results::NodeFields& f, const results::BiasPoint* point, const mesh::Mesh& m,

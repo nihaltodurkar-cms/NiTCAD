@@ -29,6 +29,13 @@
 //       U8 scale restated; owner ruling, DECISIONS 11.13). The global balance only: the per-node heat is not in
 //       the results (a listed gap, not a part). NOT APPLICABLE with the model off or no thermal_contact_heat; a
 //       BiasPoint is steady by type.
+//   C6  transient charge bookkeeping, per accepted step k and contact c: beta h_k I_disp = Q_k - a1 Q_k-1 + a2 Q_k-2
+//       by the step's own formula (backward Euler; variable-step BDF2 with w = h_k / h_k-1: beta = (1 + w)/(1 + 2w),
+//       a1 = (1 + w)^2/(1 + 2w), a2 = w^2/(1 + 2w)), tolerance 64 eps times the operands' magnitudes; each gate and
+//       meshed electrode without gate tunnelling carries conduction current 0 and terminal = displacement current,
+//       exactly (owner rulings, DECISIONS 11.13). Diagnostics, not judged: the trapezoidal integral of I_disp
+//       against Q_N - Q_0 per contact with sum_k error_ratio_k rtol |dQ_k| beside it, and the cumulative identity.
+//       The identity checks bookkeeping, not charge physics (the solver forms I_disp from the same stored Q).
 //   C12 n, p > 0 on semiconductor nodes; every stored temperature > 0; trap occupancies are not stored, so that
 //       part is NOT EVALUATED when the device has interface traps (and vacuous without).
 // Each outcome is from contract.hpp's judge: NOT APPLICABLE when a predicate is false (named, with its value),
@@ -40,6 +47,7 @@
 
 #include "NiTCAD/mesh/mesh.hpp"
 #include "NiTCAD/results/solution.hpp"
+#include "NiTCAD/results/transient.hpp"
 #include "NiTCAD/verify/consistency/device_data.hpp"
 #include "NiTCAD/verify/reference/contract.hpp"
 
@@ -56,10 +64,20 @@ struct CheckPart {
     std::string reason;                         // for NOT EVALUATED, the missing input
 };
 
+// A measured value reported beside a check and never judged (DECISIONS 11.13, C6; TVD-21).
+struct Diagnostic {
+    std::string name;
+    double value = 0.0;  // the measured difference
+    double scale = 0.0;  // the quantity it is read against (NaN when not available)
+    std::string where;
+    std::string note;
+};
+
 struct CheckResult {
     std::string id;  // "C1", ...
     Comparison comparison;
     std::vector<CheckPart> parts;
+    std::vector<Diagnostic> diagnostics;
 };
 
 // The contract of each check (class D, I2: a separate restatement of a discrete property, same arithmetic).
@@ -73,6 +91,7 @@ struct CheckResult {
 [[nodiscard]] CheckResult check_c3(const results::EquilibriumResult& eq, const mesh::Mesh& m, const DeviceData& d);
 [[nodiscard]] CheckResult check_c4(const results::BiasPoint& point, const mesh::Mesh& m, const DeviceData& d);
 [[nodiscard]] CheckResult check_c5(const results::BiasPoint& point, const mesh::Mesh& m, const DeviceData& d);
+[[nodiscard]] CheckResult check_c6(const results::Transient& run, const mesh::Mesh& m, const DeviceData& d);
 [[nodiscard]] CheckResult check_c12(const results::NodeFields& fields, const results::BiasPoint* point,
                                     const mesh::Mesh& m, const DeviceData& d);
 
