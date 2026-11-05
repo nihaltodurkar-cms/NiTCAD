@@ -5,6 +5,8 @@
 //                         provenance (Unit 42)
 //   nitcad plot <deck or result file> ... --out <image.png>
 //                         draw a view or a curve of a deck's results (Unit 25a; plot.hpp)
+//   nitcad verify [--tier fast|full|nightly] [--id <id>] [--report <file>]
+//                         run the verification benchmarks of TVR-1 (Unit 55; verify.hpp, its own exit status)
 //   nitcad --version      print the build: version, git revision, build type, compiler, Eigen
 //
 // Exit status: 0 done; 1 the deck, the run or the plot failed (the message on stderr); 2 a sweep,
@@ -24,7 +26,9 @@
 #include "NiTCAD/deck/run.hpp"
 #include "NiTCAD/deck/syntax.hpp"
 #include "NiTCAD/solve/provenance.hpp"
+#include "NiTCAD/verify/benchmark/registry.hpp"
 #include "plot.hpp"
+#include "verify.hpp"
 
 namespace {
 
@@ -41,6 +45,7 @@ BOOL WINAPI on_console_event(DWORD event) {
 int usage() {
     std::fputs("usage: nitcad check <deck>\n       nitcad run <deck>\n"
                "       nitcad plot <deck or result file> [options] --out <image.png>\n"
+               "       nitcad verify [--tier fast|full|nightly] [--id <id>] [--report <file>]\n"
                "       nitcad --version\n",
                stderr);
     return 64;
@@ -168,6 +173,9 @@ int main(int argc, char** argv) {
         return 0;
     }
     if (argc >= 2 && std::string_view(argv[1]) == "plot") return NiTCAD::cli::plot(argc, argv);
+    if (argc >= 2 && std::string_view(argv[1]) == "verify") {
+        return NiTCAD::cli::verify(argc, argv, NiTCAD::verify::benchmark::benchmarks());
+    }
     if (argc != 3) return usage();
     const std::string_view command = argv[1];
     if (command != "check" && command != "run") return usage();

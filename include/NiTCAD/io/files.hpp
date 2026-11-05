@@ -46,6 +46,7 @@ enum class Content : std::uint32_t {
     device = 4,
     transient = 5,     // Unit 42
     small_signal = 6,  // Unit 42
+    verify_report = 7, // Unit 55 TVR-1 (io/verify_report.hpp; DECISIONS 11.13 RC-Q3)
 };
 
 // A 64-bit FNV-1a digest of the mesh graph (dimension, points, volumes, edges, boundary patches;

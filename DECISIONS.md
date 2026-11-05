@@ -7641,6 +7641,40 @@ serial Debug 49.6 s, within §11.9's 60 s.
 TVB-01–03 complete (§11.8). Findings for the owner: (i) ħ truncation, (ii) F₋½ widened, (iii) B(x) for
 709.78 < x < 715; none changes code in TVR-1. Next in §11: the report and CLI (§11.7).
 
+*Report and CLI (§11.7, RC-Q1–Q7).* **Benchmarks as library functions (RC-Q1):** `verify/benchmark/registry.hpp`
+(`benchmarks()`: TVB-01, 02, 03, 32, all fast; `run_tvb01/02/03/32`), sources `src/verify/benchmark/{registry,
+tvb01,tvb02,tvb03,tvb32}.cpp`; `tvb32.hpp`'s `tvb32_entries()` keeps the per-check results for the test. The tests now
+call these and hold their outcomes to the frozen expectations: `tests/verify/benchmark/{constants,bernoulli,
+fermi_dirac}_test.cpp` and `tests/verify/consistency/decks_test.cpp` (same per-check worst ratios as before the move:
+pn C1 0.506, C3 0.0085; Schottky C3 0.0097; MOS-C C8 0.0056; entries 92/176/162). TVB-02's
+test reads the library's `q_ref`/`u_ref` instead of recomputing the references (the series and TVD-14 checks compare
+in double, the half-ulp within the 1e-15 budget). **Known findings (RC-Q2):** `known_findings()` holds (i) TVB-01
+"hbar" everywhere, (ii) TVB-02 "F_-1/2" everywhere, (iii) TVB-03 "B(x)" for x > ln DBL_MAX; `apply_known_findings`
+turns a fail in the region into `finding` with the ruling cited and adds the "no longer reproduces" note when a region
+holds no fail. **io (RC-Q3):** `io::Content::verify_report = 7`, `include/NiTCAD/io/verify_report.hpp` (plain data:
+io does not see the verify layer) and `src/io/verify_report.cpp` (the existing container's `write_file`/`read_file`;
+keys local to the kind; text lists as one-field records); existing io code and tests unchanged. **Report
+(RC-Q4):** `make_report` (identity and grades as "class independence provenance; citation; version", U_num "not
+estimated", the two build-time evidence lines) and `report_csv` (one row per comparison, RFC-4180 quoting, numbers by
+`std::to_chars`); threads 1 (the deck solves use the default Eigen backend). **Decks (RC-Q5):** CMake writes
+`build/<cfg>/generated/verify_decks.hpp` from the three decks (raw strings, `file(CONFIGURE)` so an unchanged deck
+does not rebuild; the decks are configure dependencies). **CLI (RC-Q6):** `src/cli/verify.{hpp,cpp}`, dispatched from
+`main.cpp` (usage line and header added); a line per benchmark (overall outcome, counts, notes), the summary line,
+`--report <file>` writes the report and `<file>.csv`. **VR7/VR8 (RC-Q7):** `tests/cli/verify_probe.cpp` (the shipped
+registry plus `TVB-TEST-FAIL`; `compare a b` with the clock cleared) and `tests/cli/verify_exit.cmake`; ctests
+`verify_cli.{finding_is_0, unknown_id, unknown_tier, unknown_option, unwritable_report, injected_fail,
+reproducible_tvb32}`; in-process `tests/verify/benchmark/registry_test.cpp` (6 cases: registry, known-finding region
+and other-benchmark isolation, stale note, overall and summary, CSV quoting, io round trip and VR7 with TVB-01/03).
+
+Measured. `nitcad verify` (Release): TVB-01 finding (12 comparisons; 1 finding, 11 pass), TVB-02 finding (1296; 82
+finding, 1214 pass), TVB-03 finding (13 026; 602 NA, 104 finding, 12 320 pass), TVB-32 pass (430; 220 NA, 210 pass);
+"verify: 4 benchmarks; 1 pass, 3 finding, 0 fail, ..."; exit 0; CSV 14 764 rows. Shown to detect what they claim:
+`verify` exiting 0 on a fail fails `verify_cli.injected_fail`; a report field that varies run to run fails
+`verify_cli.reproducible_tvb32`. Verify ctests 36/36 in Release (4.8 s) and Debug. **VR10 miss, for the owner:**
+the serial Debug verify run is 63.2 s against §11.9's 60 s; `verify_cli.reproducible_tvb32` (two TVB-32 runs) takes
+11.7 s of it (others: `verify_benchmark.fermi_dirac` 18.7 s, `verify_consistency.transient` 13.1 s). The budget is
+not moved (TVM2).
+
 ---
 
 ## New questions the advisor raised (not yet in `ARCHITECTURE.md`)

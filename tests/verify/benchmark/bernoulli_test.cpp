@@ -11,6 +11,7 @@
 // 709.78): fail (finding (iii) of 11.13). The hidden [.finding] case asserts pass everywhere and fails. B' is recorded
 // as a diagnostic, not judged (TB-Q7).
 #include "NiTCAD/assemble/bernoulli.hpp"
+#include "NiTCAD/verify/benchmark/registry.hpp"
 #include "NiTCAD/verify/reference/bernoulli.hpp"
 #include "NiTCAD/verify/reference/contract.hpp"
 #include "NiTCAD/verify/reference/double_double.hpp"
@@ -32,26 +33,6 @@ namespace {
 constexpr double eps = std::numeric_limits<double>::epsilon();
 constexpr double criterion = 4.0 * eps;
 constexpr double reference_budget = 1e-3 * criterion;
-
-v::ReferenceInfo info() {
-    v::ReferenceInfo r;
-    r.id = "TVB-03";
-    r.cls = v::ReferenceClass::E;
-    r.independence = v::Independence::I3;
-    r.provenance = v::Provenance::PA;
-    r.citation =
-        "definition B(x) = x / (e^x - 1); Bernoulli numbers B_2k, OEIS A000367 and A002445 b-files "
-        "(oeis.org, read 2026-11-05)";
-    r.version = "OEIS b-files n = 1..17";
-    r.equations = {3};  // the Scharfetter-Gummel flux of G3
-    r.form = "x / expm1(x) in double-double; scaled x e^-r 2^-m above 670; -x below -670";
-    r.assumptions = {"none: B is defined by its formula"};
-    r.applicability = {"B(x) a normal double"};
-    r.derivation = "verify/reference/bernoulli.hpp";
-    r.verification = "TC1 (expm1, exp, ln 2); series vs direct; B(-x) = B(x) + x; scaled vs direct";
-    r.second_method = "the generating-function series with OEIS's exact B_2k, |x| <= 1/2";
-    return r;
-}
 
 std::vector<double> grid() {
     std::vector<double> g{0.0};
@@ -81,14 +62,8 @@ struct Judged {
 
 std::vector<Judged> judge_all() {
     std::vector<Judged> out;
-    for (const double x : grid()) {
-        const ref::ScaledDD b = ref::bernoulli_direct(x);
-        const v::Predicate normal{"B(x) a normal double", ref::is_normal_double(b) ? 1.0 : 0.0, 1.0,
-                                  ref::is_normal_double(b)};
-        const double sim = NiTCAD::assemble::bernoulli(x);
-        const double e = normal.holds ? ref::relative_error(sim, b) : 0.0;
-        const v::Predicate pred[] = {normal};
-        out.push_back({x, e, v::judge(info(), pred, e <= criterion, "relative error <= 4 eps")});
+    for (const auto& c : NiTCAD::verify::benchmark::run_tvb03().comparisons) {
+        out.push_back({c.parameter, c.metric, c.comparison});
     }
     return out;
 }
@@ -153,8 +128,9 @@ TEST_CASE("TVB-03: assemble::bernoulli against the reference (frozen outcomes)")
         }
         ++judged;
         if (expm1_overflows(j.x)) {
-            CHECK(j.c.outcome == Outcome::fail);
-            if (j.c.outcome == Outcome::fail) {
+            // Finding (iii), frozen as a fail; reported as a known finding (RC-Q2).
+            CHECK(j.c.outcome == Outcome::finding);
+            if (j.c.outcome == Outcome::finding) {
                 if (failed++ == 0) first_fail = j.x;
                 last_fail = j.x;
             }
