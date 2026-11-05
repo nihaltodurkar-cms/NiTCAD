@@ -114,8 +114,10 @@ void conserved(const results::BiasPoint& p) {
 }
 
 // Aste and Vahldieck's ballistic diode (arXiv physics/0312021): n+ 1e18 / n 2e15 / n+ 1e18,
-// 0.1 um each; mu0(N) = 80 + 1350 / (1 + (N / 1.12e17)^0.72), v_s = 1.03e7 cm/s, beta = 2; this
-// unit's constant tau_w (silicon's).
+// 0.1 um each; mu0(N) = 80 + 1350 / (1 + (N / 1.12e17)^0.72), v_s = 1.03e7 cm/s; this
+// unit's constant tau_w (silicon's), not their temperature-dependent Baccarani-Wordeman tau_w. beta = 2
+// (the Caughey-Thomas field exponent below) is this code's choice: the paper states no beta (DECISIONS
+// Unit 55 §10, I-8).
 physics::Semiconductor ballistic_silicon() {
     physics::SemiconductorParameters p = physics::silicon_parameters;
     p.electron_mobility.mu_min = 80.0;
@@ -374,8 +376,9 @@ TEST_CASE("energy balance: tau_w -> 0 alone, against drift-diffusion with Canali
 
 TEST_CASE("energy balance: velocity overshoot in the ballistic diode (EC10)") {
     // Aste and Vahldieck, arXiv physics/0312021: n+ 1e18 / n 2e15 / n+ 1e18, 0.1 um each, 1 V;
-    // mu0(N) = 80 + 1350 / (1 + (N / 1.12e17)^0.72), v_s = 1.03e7 cm/s, beta = 2. This unit's
-    // constant tau_w (silicon's), c = 5/2. 1 nm nodes.
+    // mu0(N) = 80 + 1350 / (1 + (N / 1.12e17)^0.72), v_s = 1.03e7 cm/s. This unit's
+    // constant tau_w (silicon's, not the paper's T-dependent one), c = 5/2, and beta = 2 (this code's
+    // choice; the paper states none: DECISIONS Unit 55 §10, I-8). 1 nm nodes.
     const physics::Semiconductor si = ballistic_silicon();
     const auto doping = ballistic_doping;
     const device::Device d = line(0.3e-4, 301, doping, si);

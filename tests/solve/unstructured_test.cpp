@@ -117,6 +117,9 @@ TEST_CASE("unstructured: Laplace in an oxide is exact on a Voronoi dual", "[solv
 }
 
 TEST_CASE("unstructured: a smooth-doped diode converges at the predefined orders", "[.unstructured]") {
+    // TVR-0 label (DECISIONS.md Unit 55 §10, C-5, I-7): solution verification against this code's
+    // 4x finer tensor solve (same fluxes and physics), not code verification; no GCI or
+    // asymptotic-range check.
     const double W = 2e-4, H = 1e-4;
     // Acceptors 1e16 everywhere; a donor Gaussian from the right edge (sigma 30 um... 3e-5 cm),
     // limited in y by an erfc window: a 2D junction with smooth doping.
@@ -198,6 +201,7 @@ TEST_CASE("unstructured: a smooth-doped diode converges at the predefined orders
 }
 
 TEST_CASE("unstructured: an abrupt diode against the 1D reference, versus a tensor grid", "[.unstructured]") {
+    // TVR-0 label (DECISIONS.md Unit 55 §10, C-5): self-convergence against this code's 1D solve.
     // N_A = N_D = 1e17, junction at x = 1e-4 of a 2e-4 long, 2e-5 wide bar; forward 0.5 V.
     const double L = 2e-4, Wd = 2e-5;
     const std::vector<device::Region> regions{{"silicon", physics::silicon()}};
@@ -354,6 +358,7 @@ bool accepted(double q_u, double q_t, double q_ref) {
 // meshes put the contact edges exactly at Lsd and Lsd + Lg (mosfet_x_axis). Measured 2026-10-14:
 // 9342 nodes against 9490; every quantity within the predefined k = 1.5 rule.
 TEST_CASE("unstructured: the MOSFET against the tensor MOSFET (predefined k = 1.5)", "[.unstructured]") {
+    // TVR-0 label (DECISIONS.md Unit 55 §10, C-5): self-convergence against this code's tensor solve.
     const double L = 2 * Lsd + Lg;
     mesh::Geometry2D g{{rect(0, 0, L, depth, 0)},
                        {{"source", {0, 0, 0}, {Lsd, 0, 0}}, {"channel", {Lsd, 0, 0}, {Lsd + Lg, 0, 0}},

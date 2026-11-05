@@ -1,0 +1,30 @@
+# Runs a command and requires its exit status (VR8, DECISIONS Unit 55 11.7 and RC-Q7). -DEXE=<program>
+# -DARGS=<arguments separated by |> -DEXPECT=<status>; optional -DREPORT=<path>: the report and its CSV must then exist afterwards
+# (and are removed first); optional -DREPEAT_COMPARE=<probe>: the command is run twice into REPORT and REPORT.2 and
+# `<probe> compare` must find the two reports equal except the clock (VR7).
+string(REPLACE "|" ";" ARGS "${ARGS}")
+if(DEFINED REPORT)
+  file(REMOVE "${REPORT}" "${REPORT}.csv" "${REPORT}.2" "${REPORT}.2.csv")
+endif()
+execute_process(COMMAND "${EXE}" ${ARGS} RESULT_VARIABLE rc OUTPUT_VARIABLE out ERROR_VARIABLE err)
+message("${out}${err}")
+if(NOT rc EQUAL EXPECT)
+  message(FATAL_ERROR "exit status ${rc}, expected ${EXPECT}")
+endif()
+if(DEFINED REPORT AND EXPECT EQUAL 0)
+  if(NOT EXISTS "${REPORT}" OR NOT EXISTS "${REPORT}.csv")
+    message(FATAL_ERROR "report or CSV not written: ${REPORT}")
+  endif()
+endif()
+if(DEFINED REPEAT_COMPARE)
+  string(REPLACE "${REPORT}" "${REPORT}.2" ARGS2 "${ARGS}")
+  execute_process(COMMAND "${EXE}" ${ARGS2} RESULT_VARIABLE rc2)
+  if(NOT rc2 EQUAL EXPECT)
+    message(FATAL_ERROR "second run: exit status ${rc2}")
+  endif()
+  execute_process(COMMAND "${REPEAT_COMPARE}" compare "${REPORT}" "${REPORT}.2" RESULT_VARIABLE rc3
+                  ERROR_VARIABLE err3)
+  if(NOT rc3 EQUAL 0)
+    message(FATAL_ERROR "the two reports differ (VR7): ${err3}")
+  endif()
+endif()

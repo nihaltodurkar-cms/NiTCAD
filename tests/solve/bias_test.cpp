@@ -142,6 +142,8 @@ TEST_CASE("bias: the ported legacy graded_mesh follows the legacy specification"
 }
 
 TEST_CASE("bias: J(0.5 V) = 1.280e-2 A/cm^2 within 1% (section 10 gate)") {
+    // TVR-0 label (DECISIONS.md Unit 55 §10, C-7): a legacy cross-version regression pin, not
+    // theory verification (the short-base analytic value is 1.321e-2, 3.2% away).
     const auto d = diode_1d(gate_mesh());
     const std::vector<double> bias{0.5, 0.0};
     const auto s = solve::solve_bias(d, bias, legacy);
@@ -255,6 +257,7 @@ TEST_CASE("bias: the analysis extractors read the diode's ideality (Unit 24)") {
 }
 
 TEST_CASE("bias: a 2x finer mesh moves J(0.5 V) by less than 3% (legacy g4)") {
+    // TVR-0 label (DECISIONS.md Unit 55 §10, I-4): two-mesh self-convergence; no order, no GCI.
     const std::vector<double> bias{0.5, 0.0};
     const double coarse = solve::solve_bias(diode_1d(gate_mesh()), bias, legacy)->terminal_current[0];
     const auto fine_mesh = legacy_graded_mesh(2e-4, 1e-4, 5e-9, 5e-7);

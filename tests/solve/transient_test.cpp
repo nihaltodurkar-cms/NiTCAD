@@ -207,6 +207,7 @@ TEST_CASE("transient: GMRES-ILUT gives Eigen SparseLU's switch-on (Unit 44)", "[
 }
 
 TEST_CASE("transient: measured order of backward Euler and BDF2", "[.transient]") {
+    // TVR-0 label (DECISIONS.md Unit 55 §10, C-6): time order against this code's own 5120-step run.
     // Fixed steps over a smooth turn-on ramp (0 to 0.6 V in 1 ns); the error of the anode's total
     // current and charge at 1 ns against a BDF2 run of 5120 steps. Measured ratios per halving:
     // backward Euler 1.92, 1.96, 1.98, 1.99; BDF2 3.33, 3.60, 3.78, 3.90 (its first two steps are

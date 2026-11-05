@@ -395,6 +395,7 @@ std::vector<mesh::BoundaryLayer> fin_layers(int k, double s) {
 // with its thresholds unchanged.
 TEST_CASE("layers convergence: the flat-gate fin's cross-section with corner blocks (UC7)",
           "[.layers_convergence][!shouldfail]") {
+    // TVR-0 label (DECISIONS.md Unit 55 §10, C-5): self-convergence against this code's own levels.
     std::vector<Reference> levels;
     for (const int k : {1, 2, 4}) levels.push_back(build_2d(Gate::flat, h0 / k, s0 / k, fin_layers(k, s0 / k)));
     const Reference ref = build_2d(Gate::flat, h0 / 16, s0 / 16, fin_layers(16, s0 / 16));

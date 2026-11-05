@@ -123,6 +123,67 @@ add_dependencies(nitcad_base_test nitcad_contract_probe)
 target_compile_definitions(nitcad_base_test PRIVATE
   NITCAD_CONTRACT_PROBE_PATH="$<TARGET_FILE:nitcad_contract_probe>")
 
+# --- verify/reference: the independent reference numerics (Unit 55, TVR-1; DECISIONS 11.2, TVD-19) ---
+# Depends on the standard library only (and may use base's constants). tests/verify/boundary.cmake checks
+# its include graph before it compiles, so a forbidden include fails the build (VR2), and again under ctest.
+set(NITCAD_VERIFY_REFERENCE_ALLOWED "verify/reference,base")
+add_custom_command(
+  OUTPUT "${CMAKE_BINARY_DIR}/verify_reference_boundary.stamp"
+  COMMAND ${CMAKE_COMMAND} -DROOT=${CMAKE_CURRENT_SOURCE_DIR} -DLAYER=reference
+          -DALLOWED=${NITCAD_VERIFY_REFERENCE_ALLOWED}
+          -DSTAMP=${CMAKE_BINARY_DIR}/verify_reference_boundary.stamp
+          -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/verify/boundary.cmake
+  DEPENDS tests/verify/boundary.cmake
+          include/NiTCAD/verify/reference/double_double.hpp
+          src/verify/reference/double_double.cpp
+          include/NiTCAD/verify/reference/gauss_kronrod.hpp
+          src/verify/reference/gauss_kronrod.cpp
+          include/NiTCAD/verify/reference/tanh_sinh.hpp
+          src/verify/reference/tanh_sinh.cpp
+          include/NiTCAD/verify/reference/brent.hpp
+          include/NiTCAD/verify/reference/dopri5.hpp
+          include/NiTCAD/verify/reference/chebyshev.hpp
+          include/NiTCAD/verify/reference/complex_step.hpp
+          include/NiTCAD/verify/reference/jacobi_eigen.hpp
+          src/verify/reference/chebyshev.cpp
+          include/NiTCAD/verify/reference/metrics.hpp
+          src/verify/reference/metrics.cpp
+          include/NiTCAD/verify/reference/contract.hpp
+          include/NiTCAD/verify/reference/codata2018.hpp
+          include/NiTCAD/verify/reference/bernoulli.hpp
+          include/NiTCAD/verify/reference/fermi_dirac.hpp
+          src/verify/reference/fermi_dirac.cpp
+          src/verify/reference/contract.cpp
+  COMMENT "verify/reference include boundary (VR2)")
+add_custom_target(nitcad_verify_reference_boundary
+  DEPENDS "${CMAKE_BINARY_DIR}/verify_reference_boundary.stamp")
+add_library(nitcad_verify_reference STATIC src/verify/reference/double_double.cpp
+  src/verify/reference/gauss_kronrod.cpp src/verify/reference/tanh_sinh.cpp
+  src/verify/reference/chebyshev.cpp src/verify/reference/metrics.cpp
+  src/verify/reference/contract.cpp src/verify/reference/fermi_dirac.cpp)
+add_library(NiTCAD::verify_reference ALIAS nitcad_verify_reference)
+target_include_directories(nitcad_verify_reference PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
+add_dependencies(nitcad_verify_reference nitcad_verify_reference_boundary)
+
+add_executable(nitcad_verify_test
+  tests/verify/reference/double_double_test.cpp
+  tests/verify/reference/header_boundary_test.cpp
+  tests/verify/reference/cross_check_test.cpp
+  tests/verify/reference/gauss_kronrod_test.cpp
+  tests/verify/reference/tanh_sinh_test.cpp
+  tests/verify/reference/brent_test.cpp
+  tests/verify/reference/dopri5_test.cpp
+  tests/verify/reference/chebyshev_test.cpp
+  tests/verify/reference/complex_step_test.cpp
+  tests/verify/reference/jacobi_eigen_test.cpp
+  tests/verify/reference/metrics_test.cpp
+  tests/verify/reference/contract_test.cpp)
+target_link_libraries(nitcad_verify_test PRIVATE NiTCAD::verify_reference Catch2::Catch2WithMain)
+nitcad_add_file_tests(verify nitcad_verify_test)
+add_test(NAME verify_reference_boundary
+  COMMAND ${CMAKE_COMMAND} -DROOT=${CMAKE_CURRENT_SOURCE_DIR} -DLAYER=reference
+          -DALLOWED=${NITCAD_VERIFY_REFERENCE_ALLOWED} -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/verify/boundary.cmake)
+
 # --- MKL runtime for the PARDISO tests (Unit 18) ------------------------------------
 # MKL is optional and never linked: the mkl_pardiso backend loads mkl_rt at run time from a path
 # the program gives (linalg/mkl_runtime.hpp). The tests take that path from this cache variable;
@@ -359,7 +420,8 @@ add_test(NAME analysis COMMAND nitcad_analysis_test)
 add_library(nitcad_io STATIC
   src/io/record.cpp
   src/io/files.cpp
-  src/io/device_file.cpp)
+  src/io/device_file.cpp
+  src/io/verify_report.cpp)
 add_library(NiTCAD::io ALIAS nitcad_io)
 target_include_directories(nitcad_io PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
 target_link_libraries(nitcad_io PUBLIC NiTCAD::base NiTCAD::mesh NiTCAD::device NiTCAD::results)
@@ -577,11 +639,121 @@ if(CMAKE_BUILD_TYPE STREQUAL "Release")
   add_test(NAME deck_mlda COMMAND nitcad_deck_test "[mlda]")
 endif()
 
+# --- verify/consistency: physical-consistency checks on results (Unit 55, TVR-1; DECISIONS 11.2, 11.6) ---
+# Reads results, mesh and a plain-data device view only; never physics, assemble, solve, linalg or device
+# (device's header includes physics). Its include graph is checked before it compiles (VR2) and again under
+# ctest; tests/verify/consistency/header_boundary_test.cpp checks the transitive graph.
+set(NITCAD_VERIFY_CONSISTENCY_ALLOWED "verify/consistency,verify/reference,results,mesh,base")
+add_custom_command(
+  OUTPUT "${CMAKE_BINARY_DIR}/verify_consistency_boundary.stamp"
+  COMMAND ${CMAKE_COMMAND} -DROOT=${CMAKE_CURRENT_SOURCE_DIR} -DLAYER=consistency
+          -DALLOWED=${NITCAD_VERIFY_CONSISTENCY_ALLOWED}
+          -DSTAMP=${CMAKE_BINARY_DIR}/verify_consistency_boundary.stamp
+          -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/verify/boundary.cmake
+  DEPENDS tests/verify/boundary.cmake
+          include/NiTCAD/verify/consistency/device_data.hpp
+          include/NiTCAD/verify/consistency/checks.hpp
+          src/verify/consistency/checks.cpp
+  COMMENT "verify/consistency include boundary (VR2)")
+add_custom_target(nitcad_verify_consistency_boundary
+  DEPENDS "${CMAKE_BINARY_DIR}/verify_consistency_boundary.stamp")
+add_library(nitcad_verify_consistency STATIC src/verify/consistency/checks.cpp)
+add_library(NiTCAD::verify_consistency ALIAS nitcad_verify_consistency)
+target_include_directories(nitcad_verify_consistency PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
+target_link_libraries(nitcad_verify_consistency PUBLIC NiTCAD::results NiTCAD::mesh NiTCAD::verify_reference)
+add_dependencies(nitcad_verify_consistency nitcad_verify_consistency_boundary)
+
+# --- verify/benchmark: runs NiTCAD (the subject of the checks) and feeds the consistency layer ---
+# The three TVB-32 decks embedded at build time (DECISIONS 11.13 RC-Q5), read by deck::parse.
+set(NITCAD_VERIFY_DECKS examples/pn_diode_1d.deck decks/schottky_diode_1d.deck examples/moscap_cv.deck)
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${NITCAD_VERIFY_DECKS})
+set(_decks_header "// Generated by CMakeLists.txt from the TVB-32 decks; do not edit.\n#pragma once\n")
+string(APPEND _decks_header "namespace NiTCAD::verify::benchmark::decks {\n")
+foreach(_deck IN LISTS NITCAD_VERIFY_DECKS)
+  file(READ "${CMAKE_CURRENT_SOURCE_DIR}/${_deck}" _text)
+  get_filename_component(_name "${_deck}" NAME_WE)
+  string(APPEND _decks_header "inline constexpr const char* ${_name} = R\"NITCADDECK(${_text})NITCADDECK\";\n")
+endforeach()
+string(APPEND _decks_header "}  // namespace NiTCAD::verify::benchmark::decks\n")
+file(CONFIGURE OUTPUT "${CMAKE_BINARY_DIR}/generated/verify_decks.hpp" CONTENT "${_decks_header}" @ONLY)
+add_library(nitcad_verify_benchmark STATIC src/verify/benchmark/device_data.cpp
+  src/verify/benchmark/registry.cpp src/verify/benchmark/tvb01.cpp src/verify/benchmark/tvb02.cpp
+  src/verify/benchmark/tvb03.cpp src/verify/benchmark/tvb32.cpp)
+add_library(NiTCAD::verify_benchmark ALIAS nitcad_verify_benchmark)
+target_include_directories(nitcad_verify_benchmark PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
+target_link_libraries(nitcad_verify_benchmark PUBLIC NiTCAD::device NiTCAD::verify_consistency NiTCAD::deck
+  NiTCAD::io NiTCAD::physics)
+target_include_directories(nitcad_verify_benchmark PRIVATE "${CMAKE_BINARY_DIR}/generated")
+
+add_executable(nitcad_verify_consistency_test
+  tests/verify/consistency/header_boundary_test.cpp
+  tests/verify/consistency/dc_checks_test.cpp
+  tests/verify/consistency/gauss_test.cpp
+  tests/verify/consistency/energy_test.cpp
+  tests/verify/consistency/transient_test.cpp
+  tests/verify/consistency/reciprocity_test.cpp
+  tests/verify/consistency/passivity_test.cpp
+  tests/verify/consistency/low_frequency_test.cpp
+  tests/verify/consistency/limits_test.cpp
+  tests/verify/consistency/symmetry_test.cpp
+  tests/verify/consistency/decks_test.cpp)
+target_link_libraries(nitcad_verify_consistency_test PRIVATE NiTCAD::verify_benchmark NiTCAD::deck
+  Catch2::Catch2WithMain)
+target_compile_definitions(nitcad_verify_consistency_test PRIVATE
+  NITCAD_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
+nitcad_add_file_tests(verify_consistency nitcad_verify_consistency_test)
+add_test(NAME verify_consistency_boundary
+  COMMAND ${CMAKE_COMMAND} -DROOT=${CMAKE_CURRENT_SOURCE_DIR} -DLAYER=consistency
+          -DALLOWED=${NITCAD_VERIFY_CONSISTENCY_ALLOWED} -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/verify/boundary.cmake)
+
+# TVB-01-03, the L0 device benchmarks of TVR-1 (DECISIONS 11.8): the code under test (base, physics,
+# assemble's header-only Bernoulli function) against the independent references of verify/reference.
+add_executable(nitcad_verify_benchmark_test
+  tests/verify/benchmark/constants_test.cpp
+  tests/verify/benchmark/bernoulli_test.cpp
+  tests/verify/benchmark/fermi_dirac_test.cpp
+  tests/verify/benchmark/registry_test.cpp)
+target_link_libraries(nitcad_verify_benchmark_test PRIVATE NiTCAD::verify_benchmark
+  Catch2::Catch2WithMain)
+nitcad_add_file_tests(verify_benchmark nitcad_verify_benchmark_test)
+
 # The batch runner (`nitcad check|run <deck>`).
-add_executable(nitcad src/cli/main.cpp src/cli/plot.cpp)
-target_link_libraries(nitcad PRIVATE NiTCAD::deck NiTCAD::render)
+add_executable(nitcad src/cli/main.cpp src/cli/plot.cpp src/cli/verify.cpp)
+target_link_libraries(nitcad PRIVATE NiTCAD::deck NiTCAD::render NiTCAD::verify_benchmark)
 # `nitcad --version` names the build (Unit 42, PV6): a 40-digit revision, or unknown without git.
 add_test(NAME cli_version COMMAND nitcad --version)
+# `nitcad verify` (Unit 55 TVR-1, DECISIONS 11.7 and RC-Q6/RC-Q7): exit statuses (VR8) and reproducible reports (VR7).
+add_executable(nitcad_verify_probe tests/cli/verify_probe.cpp src/cli/verify.cpp)
+target_include_directories(nitcad_verify_probe PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/cli")
+target_link_libraries(nitcad_verify_probe PRIVATE NiTCAD::verify_benchmark)
+set(_vx ${CMAKE_CURRENT_SOURCE_DIR}/tests/cli/verify_exit.cmake)
+set(_vr ${CMAKE_BINARY_DIR}/verify_cli)
+foreach(_case
+    "finding_is_0|$<TARGET_FILE:nitcad>|verify|--id|TVB-01|--report|${_vr}_tvb01.nvr|0|${_vr}_tvb01.nvr"
+    "unknown_id|$<TARGET_FILE:nitcad>|verify|--id|TVB-99|64|"
+    "unknown_tier|$<TARGET_FILE:nitcad>|verify|--tier|weekly|64|"
+    "unknown_option|$<TARGET_FILE:nitcad>|verify|--bogus|x|64|"
+    "unwritable_report|$<TARGET_FILE:nitcad>|verify|--id|TVB-03|--report|${_vr}_missing_dir/r.nvr|1|"
+    "injected_fail|$<TARGET_FILE:nitcad_verify_probe>|verify|--id|TVB-TEST-FAIL|1|")
+  string(REPLACE "|" ";" _parts "${_case}")
+  list(POP_FRONT _parts _name _exe)
+  list(POP_BACK _parts _report _expect)
+  string(REPLACE ";" "|" _args "${_parts}")
+  set(_extra "")
+  if(_report)
+    set(_extra "-DREPORT=${_report}")
+  endif()
+  add_test(NAME verify_cli.${_name}
+    COMMAND ${CMAKE_COMMAND} -DEXE=${_exe} "-DARGS=${_args}" -DEXPECT=${_expect} ${_extra} -P ${_vx})
+endforeach()
+# VR7 through the CLI on TVB-01 and TVB-03 (owner ruling 2026-11-05, option A: TVB-32's two deck runs put the Debug
+# verify run over §11.9's 60 s).
+foreach(_id TVB-01 TVB-03)
+  string(REPLACE "-" "" _short "${_id}")
+  add_test(NAME verify_cli.reproducible_${_short}
+    COMMAND ${CMAKE_COMMAND} -DEXE=$<TARGET_FILE:nitcad> "-DARGS=verify|--id|${_id}|--report|${_vr}_${_short}_r.nvr"
+            -DEXPECT=0 -DREPORT=${_vr}_${_short}_r.nvr -DREPEAT_COMPARE=$<TARGET_FILE:nitcad_verify_probe> -P ${_vx})
+endforeach()
 set_tests_properties(cli_version PROPERTIES PASS_REGULAR_EXPRESSION
   "^nitcad ${PROJECT_VERSION} \\(revision ([0-9a-f]+|unknown)(, modified)?, ${CMAKE_BUILD_TYPE}, MSVC [0-9.]+, Eigen [0-9]")
 

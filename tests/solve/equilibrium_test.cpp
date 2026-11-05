@@ -90,6 +90,8 @@ double built_in(double NA, double ND, double T) {
 }  // namespace
 
 TEST_CASE("equilibrium: built-in potential within 2e-3 V (legacy gate)") {
+    // TVR-0 label (DECISIONS.md Unit 55 §10, C-1): a contact-formula check, not a solve gate; the
+    // expected V_bi uses this code's effective_intrinsic_density, so an n_ie error cancels.
     for (const double T : {300.0, 400.0}) {
         const auto x = junction_axis();
         const auto d = diode(*mesh::make_tensor_grid(x), 1e17, 1e17, T);

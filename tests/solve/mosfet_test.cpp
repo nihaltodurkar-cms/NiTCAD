@@ -221,6 +221,8 @@ double vth_max_gm(const std::vector<double>& Vg, const std::vector<double>& Id, 
 
 TEST_CASE("mosfet: Id-Vg threshold, on/off ratio, swing and monotonic rise (legacy gates)",
           "[.mosfet]") {
+    // TVR-0 label (DECISIONS.md Unit 55 §10, I-6): legacy qualitative bands (regression); the swing
+    // bracket is the approximate-theory part.
     // One sweep serves the legacy tests test_mosfet_vth_matches_moscap_landmark (Vg -1 to 1 V in
     // 0.1 V steps) and test_id_vg_monotonic_above_threshold (0.3 to 1.5 V in 0.1 V steps).
     const auto Vg = linspace(-1.0, 1.5, 26);
