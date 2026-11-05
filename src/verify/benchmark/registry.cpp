@@ -1,7 +1,11 @@
 // The benchmark registry, known findings, summary and report (Unit 55, TVR-1; registry.hpp).
 #include "NiTCAD/verify/benchmark/registry.hpp"
 
+#include "NiTCAD/base/constants.hpp"
+#include "NiTCAD/physics/semiconductor.hpp"
+
 #include <array>
+#include <cfloat>
 #include <charconv>
 #include <cmath>
 #include <utility>
@@ -10,7 +14,7 @@ namespace NiTCAD::verify::benchmark {
 
 namespace {
 
-constexpr std::array<Benchmark, 10> shipped{{
+constexpr std::array<Benchmark, 15> shipped{{
     {"TVB-01", "Constants and thermal voltage against CODATA 2018", Tier::fast, [](Tier) { return run_tvb01(); }},
     {"TVB-02", "Fermi-Dirac integrals F_1/2, F_-1/2, F_3/2 and the inverse of F_1/2", Tier::fast,
      [](Tier) { return run_tvb02(); }},
@@ -21,6 +25,16 @@ constexpr std::array<Benchmark, 10> shipped{{
     {"TVB-11", "Uniform resistor with ohmic contacts", Tier::fast, [](Tier) { return run_tvb11(); }},
     {"TVB-12", "Scharfetter-Gummel constant-field exactness", Tier::fast, [](Tier) { return run_tvb12(); }},
     {"TVB-14", "Full drift-diffusion manufactured solution", Tier::fast, &run_tvb14},
+    {"TVB-31.01", "Legacy silicon band set: Varshni gap and power-law densities of states", Tier::fast,
+     [](Tier) { return run_tvb31_01(); }},
+    {"TVB-31.02", "Passler band gap (Couderc et al. 2014, eq (10), Table I)", Tier::fast,
+     [](Tier) { return run_tvb31_02(); }},
+    {"TVB-31.03", "Couderc density-of-states mass fits and Nc(T), Nv(T)", Tier::fast,
+     [](Tier) { return run_tvb31_03(); }},
+    {"TVB-31.04", "Intrinsic density, intrinsic level and d ln n_i / dT on both silicon sets", Tier::fast,
+     [](Tier) { return run_tvb31_04(); }},
+    {"TVB-31.05", "Slotboom band-gap narrowing and n_ie (documented and published forms)", Tier::fast,
+     [](Tier) { return run_tvb31_05(); }},
     {"TVB-32", "The consistency suite C1-C12 on the three TVR-1 decks", Tier::fast, [](Tier) { return run_tvb32(); }},
 }};
 
@@ -40,7 +54,23 @@ constexpr std::string_view finding_v =
     "DECISIONS Unit 55 14.11 CV-Q21 (known finding): an H1 order above the band on the frozen 3-level 3D ladders is "
     "pre-asymptotic (2D generated falls toward 1 as h shrinks); the finest-level H1 still gates";
 
-constexpr std::array<KnownFinding, 15> findings{{
+// Finding (vi) (DECISIONS Unit 55 15.13, MI-Q12): intrinsic_density forms sqrt(Nc Nv) e^(-Eg / 2kT), whose second
+// factor is subnormal (Eg / 2kT > -ln DBL_MIN) at about 9.1-9.6 K while n_i is still a normal double.
+bool ni_factor_subnormal(const physics::Semiconductor& m, double T) {
+    return T > 0.0 && physics::band_gap_eV(m, T) / (2.0 * base::thermal_voltage(T)) > -std::log(DBL_MIN);
+}
+bool legacy_ni_region(double T) { return ni_factor_subnormal(physics::legacy_silicon(), T); }
+bool default_ni_region(double T) { return ni_factor_subnormal(physics::silicon(), T); }
+
+constexpr std::string_view finding_vi =
+    "DECISIONS Unit 55 15.13 MI-Q12 (known finding): intrinsic_density multiplies sqrt(Nc Nv) by a subnormal "
+    "e^(-Eg / 2kT) near 9 K, losing digits of a normal n_i; fix proposed separately (MI-Q10)";
+
+constexpr std::string_view finding_f1 =
+    "DECISIONS Unit 55 15.4 F1 and 15.8 MI-Q4 (documented departure): bandgap_narrowing.hpp subtracts E0 sqrt(1/2) "
+    "above N0 and cuts to 0 at or below it; the published Slotboom form has neither";
+
+constexpr std::array<KnownFinding, 18> findings{{
     {"TVB-02", "F_-1/2", &everywhere, "(ii)",
      "DECISIONS 11.13 TVB-02 finding (ii) widened (option A), accepted as a limitation (Unit 56, 13): F_-1/2 "
      "misses from eta = 13.76, a quadrature-rounding floor of the derivative-consistent table"},
@@ -58,6 +88,9 @@ constexpr std::array<KnownFinding, 15> findings{{
     {"TVB-14", "phi_n H1 order, 3D swept", &everywhere, "(v)", finding_v},
     {"TVB-14", "phi_p H1 order, 3D generated", &everywhere, "(v)", finding_v},
     {"TVB-14", "phi_p H1 order, 3D swept", &everywhere, "(v)", finding_v},
+    {"TVB-31.04", "legacy: n_i", &legacy_ni_region, "(vi)", finding_vi},
+    {"TVB-31.04", "default: n_i", &default_ni_region, "(vi)", finding_vi},
+    {"TVB-31.05", "published form", &everywhere, "(F1)", finding_f1},
 }};
 
 bool starts_with(std::string_view s, std::string_view prefix) { return s.substr(0, prefix.size()) == prefix; }

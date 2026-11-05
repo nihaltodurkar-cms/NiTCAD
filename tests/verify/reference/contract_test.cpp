@@ -162,6 +162,26 @@ TEST_CASE("a PC reference cannot pass or fail (VR3)", "[verify][contract]") {
     }
 }
 
+TEST_CASE("an L reference cannot pass or fail, and is no E grade (Unit 55 15.8, MI-Q5)", "[verify][contract]") {
+    auto r = filled();
+    r.cls = v::ReferenceClass::M;
+    r.provenance = v::Provenance::L;
+    REQUIRE(v::validate(r).empty());
+    CHECK(v::to_string(v::Provenance::L) == "L");
+    for (const bool met : {true, false}) {
+        const auto c = v::judge(r, holds, met, "bit-equal");
+        CHECK(c.outcome == Outcome::finding);
+        CHECK(c.reason ==
+              std::string("provenance insufficient (L: legacy, no source read): bit-equal ") + (met ? "met" : "missed"));
+        CHECK(v::validate(c).empty());
+    }
+    auto e = filled();
+    e.provenance = v::Provenance::L;
+    const auto problems = v::validate(e);
+    REQUIRE(problems.size() == 1);
+    CHECK(contains(problems[0], "graded L (needs PA or PD)"));
+}
+
 TEST_CASE("an I0 reference cannot pass or fail", "[verify][contract]") {
     auto r = filled();
     r.cls = v::ReferenceClass::M;

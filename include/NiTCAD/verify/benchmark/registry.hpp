@@ -53,7 +53,8 @@ struct Benchmark {
     BenchmarkResult (*run)(Tier);  // at the requested tier (a ladder may grow with it; CV-Q9)
 };
 
-// The shipped benchmarks: TVR-1 (TVB-01, 02, 03, 32) and TVR-2 (TVB-04, 11, 12), in id order.
+// The shipped benchmarks: TVR-1 (TVB-01, 02, 03, 32), TVR-2 (TVB-04, 07, 09, 11, 12, 14) and TVR-3 (TVB-31.xx), in
+// id order.
 [[nodiscard]] std::span<const Benchmark> benchmarks();
 
 // The MKL PARDISO threads of the benchmark solves that use it (TVB-04's 3D levels; DECISIONS Unit 55 14.9), set by
@@ -71,6 +72,12 @@ void set_pardiso_threads(int threads);
 [[nodiscard]] BenchmarkResult run_tvb14(Tier tier);  // fast: 1D tensor; full: + 2D/3D tensor, 2D/3D generated, swept
 [[nodiscard]] BenchmarkResult run_tvb11();  // TVR-2 (DECISIONS Unit 55 14)
 [[nodiscard]] BenchmarkResult run_tvb12();
+// TVR-3 (DECISIONS Unit 55 15): TVB-31, the model-implementation catalogue.
+[[nodiscard]] BenchmarkResult run_tvb31_01();  // legacy band set
+[[nodiscard]] BenchmarkResult run_tvb31_02();  // Passler gap
+[[nodiscard]] BenchmarkResult run_tvb31_03();  // Couderc DOS mass fits
+[[nodiscard]] BenchmarkResult run_tvb31_04();  // n_i, intrinsic level, d ln n_i / dT
+[[nodiscard]] BenchmarkResult run_tvb31_05();  // Slotboom narrowing and n_ie
 [[nodiscard]] BenchmarkResult run_tvb32();
 
 struct KnownFinding {
@@ -81,7 +88,7 @@ struct KnownFinding {
     std::string_view ruling;             // where it is recorded
 };
 
-// Findings (i)-(iii) of DECISIONS 11.13.
+// Findings (i)-(iii) of DECISIONS 11.13, (iv)-(v) of 14.9 and 14.11, and the documented departures of 15.4 (F1).
 [[nodiscard]] std::span<const KnownFinding> known_findings();
 
 // Applies a table of known findings to a result (fail -> finding inside a region; the stale note).

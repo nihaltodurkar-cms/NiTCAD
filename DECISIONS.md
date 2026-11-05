@@ -8586,6 +8586,85 @@ Mutations: 20 mutants of `special_functions.cpp`.
 Tests: all 44 non-`full` verify ctests pass in Release, and `verify.special_functions` takes 0.18 s. The Debug cost
 is measured at close-out (MI-Q9's 8 s allowance).
 
+**15.13 Step 3 as built: TVB-31.01–31.05, the band set and narrowing (2026-11-06).**
+
+Files:
+- `verify/reference/model_band.hpp`: the source formulas, templated on the scalar (double-double for values, complex
+  double for complex step). Varshni; the power-law N(T); Pässler as Couderc eq (10); Couderc's mass fits and N(T);
+  ln n_i, n_i, E_c − E_i and d ln n_i/dT; Slotboom in both forms; n_ie. k is CODATA 2018's exact k/q.
+- `verify/reference/decimal.hpp`: the register's printed decimals, read as the correctly rounded double and exactly
+  as M·10^e in double-double.
+- `verify/reference/condition.hpp`: S(q) = Σ|xᵢ ∂q/∂xᵢ| by double-double central differences, step 2⁻²⁷|xᵢ|.
+- `verify/benchmark/tvb31_common.{hpp,cpp}`: 15.9's value rule, U_ref = 2⁻⁸⁰(|q_ref| + S) with TB-Q4, the register
+  table check, and the register-built parameter sets of the formula check (15.2).
+- `verify/benchmark/tvb31_band.cpp`: entries TVB-31.01–31.05.
+- Tests: `tests/verify/reference/model_band_test.cpp` and `tests/verify/benchmark/tvb31_band_test.cpp`.
+- The contract gains grade **L** (MI-Q5). It is treated as PC, with the reason "provenance insufficient (L: legacy,
+  no source read)", and it is not a valid E grade. `contract_test` pins both.
+
+L0 (`model_band_test`):
+- Every analytic derivative the entries judge NiTCAD's partials against agrees with complex step to 64 ε S. These
+  are dEg/dT for both gaps, d ln N/dT for both DOS forms, dM/dT, and d ln n_i/dT and d ln n_ie/dT for both sets. They
+  are checked at 16 points a decade over 1–600 K. Each truncation estimate is below 1e-3 of its bound.
+- Identities checked: Eg(0) = Eg0; Pässler's leading χ² term at 1 K; n_i² = Nc Nv e^(−Eg/kT); N(300 K) = N300; the
+  documented Slotboom form equals the published one minus E0√½; k within CODATA's printed truncation.
+
+Grids and judgements:
+- **T grids:** 64 points a decade over the source's range (31.01 and the legacy half of 31.04: 1–500 K; 31.02,
+  31.03 and the default half of 31.04: 1–400 K, Couderc's fits), plus 300 K. Two points beyond the range are
+  reported `not_applicable`.
+- **N grid:** 64 a decade over 1e14–1e21 cm⁻³, plus N0, its `nextafter` neighbours and N0(1 + 10⁻ʲ) for
+  j = 1–12. The last set was added after mutant M-cut (below). Out of range: 1e13, 3e21, 1e22.
+- **Cuts:** Slotboom's cut at N0 is judged by the value rule against the documented reference, which is 0 there, so
+  NiTCAD must return exactly 0.
+- **n_i** is judged where it is a normal double; below about 9.1 K it is `not_applicable`.
+- **Couderc's printed n_i** (eq (15)) is a separate fit, so no printed value is judged in these entries.
+- **Inputs:** the formula check runs NiTCAD's functions on the shipped sets with the register's printed values
+  written over their fields. The reference reads those decimals exactly. The intrinsic level's depth takes the shipped
+  χ (grade L) as an input.
+
+Outcomes (Release, first run):
+
+| Entry | Pass | Finding | Not applicable |
+|---|---|---|---|
+| 31.01 | every value and slope; 5 PB table rows | 2: eps_r and χ, grade L | 12 (beyond 500 K) |
+| 31.02 | all; 4 PA rows | 0 | 4 |
+| 31.03 | all; 8 PA rows | 0 | 16 |
+| 31.04 | all but 2 | 2: n_i at 9.31 K, both sets, known finding (vi) | beyond range, and n_i below 9.1 K |
+| 31.05 | the documented form throughout; 2 PB rows | the published form at every in-range point: known finding (F1) | 18 |
+
+- **(vi), new (MI-Q12).** `physics::intrinsic_density` forms sqrt(Nc Nv)·e^(−Eg/2kT). Where Eg/2kT exceeds
+  −ln DBL_MIN = 708.4 (about 9.1–9.6 K for silicon), the second factor is subnormal while n_i itself (about 1e-300)
+  is still normal, so digits are lost. Measured: 1.2e3 and 6.8e3 of the bound at 9.31 K. Physically it does not
+  matter, but it is a miss under the frozen rule.
+  - **MI-Q12.** (A) Record (vi) as a known finding over the region where the factor is subnormal (`registry.cpp`
+    computes the region from each set's own gap), and propose separately the fix exp(½ ln(Nc Nv) − Eg/2kT)
+    (MI-Q10: no NiTCAD change in TVR-3). (B) Leave it a fail.
+  - **Ruling (owner, "choose recommended", 2026-11-06): A.** The frozen criterion is unchanged; the test records the
+    two findings and allows a pass at the region's edge (9.65 K passes).
+- **(F1)** is confirmed as 15.10 recorded. The published form misses by E0√½ = 4.89 meV in ΔE_g, about 9.9 % in n_ie
+  at 300 K, and E0√½/(2kT²) in the slope. The documented form passes at every point, including the cut.
+- **The BGN values** match Klaassen et al. 1992 (PB), so their table rows pass. The header's attribution of them to
+  Slotboom remains the F1 attribution item for the owner.
+
+Mutations:
+- **Reference** (`model_band.hpp`): 17 mutants.
+  - 11 caught on the first run.
+  - 5 survivors were below the criterion's 1e-13 floor (relative changes of 1e-15 to 1e-14). The same five at 1e-12
+    (n_ie's exponent at 1e-10, where S is large) are all caught.
+  - M6 (the Pässler exponent formed as the double 1/6) changes values by about 1e-17. It is a double-double guard the
+    double-rounded criterion cannot see by design.
+- **NiTCAD** (code under test, restored after each run): 16 mutants of `semiconductor.cpp`, `thermal.cpp`,
+  `temperature.hpp` and `bandgap_narrowing.cpp`. These covered the gap, the DOS, n_i, the depth, the three slopes,
+  the narrowing and its cut.
+  - All are caught except M-cut, N0 moved to 1.001·N0. Between the cut's `nextafter` neighbour and the next grid
+    point (3 % above N0) nothing was judged, so the points N0(1 + 10⁻ʲ) were added. With them, M-cut and a 1e-7 shift
+    are both caught. Adding points tightens and widens nothing.
+- **Baseline:** mutation baselines exclude nothing. The runs started only once (vi) was recorded and the suite was
+  green; the first reference run, made against a red baseline, was discarded.
+
+Cost: `[tvb31]` takes 0.24 s in Release. Debug is timed at close-out.
+
 ---
 
 ## New questions the advisor raised (not yet in `ARCHITECTURE.md`)
