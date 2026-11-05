@@ -7959,6 +7959,19 @@ References are analytic (U_ref at rounding) or computed in double-double, with U
   - For studies against an exact solution, the check is therefore the order spread alone.
   - This is narrower than TVR-1's two-test form. It is recorded here and not hidden.
 - Tests: `tests/verify/study/study_test.cpp`, 7 cases. They cover exact orders at r = 2 and r = 1.7, the band edges, 3 levels without the check, a drifting ladder that is not judged, the CV-Q8 boundary, invalid input, and the mean spacing in 1D, 2D and 3D.
+
+*Step 3, TVB-12 and TVB-11 (D class).*
+- **Change to step 1 (14.3 said `shared_ptr`).** `PhysicsModels::manufactured` is a non-owning `const ManufacturedSources*`. A `shared_ptr` member made `PhysicsModels` a non-literal type and broke the existing `constexpr PhysicsModels` uses (`tests/solve/heterojunction_test.cpp:87`, `tests/assemble/energy_balance_test.cpp:497`). The caller keeps the sources alive through the solve; the hook tests and the benchmarks own them and pass `.get()`.
+- `src/verify/benchmark/tvb12.cpp`, as frozen in 14.4/14.7:
+  - 1D, 64 nodes on [0, 1 µm]; N_D 1e18 at the left contact node, 1e15 at the right, 1e16 inside; constant mobilities, no G−R, no BGN, Boltzmann.
+  - The contact values come from an equilibrium solve. The bias puts |Δψ/V_T| per edge at 0.01, 1, 10 and 40. The exact n and p are written without overflow, and the TVQ3 charge n − p − (N_D − N_A) makes ψ linear the discrete Poisson solution.
+  - Each solve starts from the exact state perturbed by 1e-3.
+  - Result (Release): every nodal n and p error is between 9e-16 and 3.4e-14, against 64εN² = 5.8e-11. 8/8 pass.
+- `src/verify/benchmark/tvb11.cpp`: uniform N_D = 1e16, V = 0.1 V, 1D N = 32 and 128 and 2D 32 × 32 (per unit width, width 1 µm); μ the material's mu_max. Besides the 14.7 criterion, the current comparison also requires the two contact currents to have opposite signs.
+  - Result (Release): current errors 1.2e-14 to 2.3e-14, ψ-linearity about 1e-16; criteria 1.46e-11 (N = 32) to 2.33e-10 (N = 128). 6/6 pass.
+- Registry: 6 shipped benchmarks; TVB-11 and TVB-12 are `fast`. CV-Q9 put TVR-2 in `full` with one coarse case per benchmark in `fast`. These two are already single, coarse D-class runs (26 s is the whole serial Debug `nitcad verify`), so each is its own fast case. `registry_test` now expects 6 ids (was 4); this is the registry's own list, not a moved expectation of a benchmark.
+- `tests/verify/benchmark/code_verification_test.cpp` (`[tvr2]`): both benchmarks, every comparison pass (frozen outcomes).
+- Time: the verify ctests take 39/39 in Release. Serial Debug takes 58.2 s against the 60 s budget (VR10; it was 57.4 s), so the fast tier has under 2 s left. TVB-04, 07, 09 and 14 go in `full` only, per CV-Q9.
 ---
 
 ## New questions the advisor raised (not yet in `ARCHITECTURE.md`)

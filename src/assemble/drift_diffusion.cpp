@@ -104,7 +104,7 @@ std::expected<DriftDiffusion, base::Error> DriftDiffusion::create(
     };
     // Manufactured sources (verification only, TVQ3): one entry per node or none, finite; the
     // isothermal drift-diffusion rows only.
-    if (const auto& ms = models.manufactured) {
+    if (const ManufacturedSources* ms = models.manufactured) {
         const std::size_t nodes = device.mesh().node_count();
         for (const std::vector<double>* v : {&ms->charge_cm3, &ms->electron_generation, &ms->hole_generation}) {
             if (!v->empty() && v->size() != nodes) {

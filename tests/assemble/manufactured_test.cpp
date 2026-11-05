@@ -139,7 +139,8 @@ TEST_CASE("manufactured sources: the rows they enter, their scaling, no Jacobian
         const auto plain = *DriftDiffusion::create(d, s);
         PhysicsModels models;
         const double S = 3e15, Gn = 2e20, Gp = 5e19;
-        models.manufactured = sources(nodes, S, Gn, Gp);
+        const auto owned = sources(nodes, S, Gn, Gp);  // the system does not own its sources
+        models.manufactured = owned.get();
         const auto dd = *DriftDiffusion::create(d, s, models);
         const auto list = names(dd);
         // One node term, after storage, before the edge terms.
@@ -201,7 +202,7 @@ TEST_CASE("manufactured sources: an empty vector leaves its rows alone (TVQ3)", 
     PhysicsModels models;
     auto ms = std::make_shared<ManufacturedSources>();
     ms->electron_generation.assign(nodes, 1e20);
-    models.manufactured = ms;
+    models.manufactured = ms.get();
     const auto dd = *DriftDiffusion::create(d, s, models);
     const auto x = probe(plain, nodes);
     const Evaluated a = evaluate(plain, x), b = evaluate(dd, x);
@@ -219,14 +220,15 @@ TEST_CASE("manufactured sources: refused where not defined (TVQ3)", "[manufactur
     PhysicsModels m;
     auto wrong = std::make_shared<ManufacturedSources>();
     wrong->charge_cm3.assign(nodes - 1, 0.0);
-    m.manufactured = wrong;
+    m.manufactured = wrong.get();
     CHECK(refused(m));
     auto nan = std::make_shared<ManufacturedSources>();
     nan->hole_generation.assign(nodes, 0.0);
     nan->hole_generation[3] = std::numeric_limits<double>::quiet_NaN();
-    m.manufactured = nan;
+    m.manufactured = nan.get();
     CHECK(refused(m));
-    m.manufactured = sources(nodes, 1.0, 1.0, 1.0);
+    const auto owned = sources(nodes, 1.0, 1.0, 1.0);
+    m.manufactured = owned.get();
     m.electrothermal = true;
     CHECK(refused(m));
     m.electrothermal = false;

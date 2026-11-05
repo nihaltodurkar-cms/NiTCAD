@@ -3,7 +3,6 @@
 #pragma once
 
 #include <cstdint>
-#include <memory>
 #include <vector>
 
 #include "NiTCAD/physics/quantum_confinement.hpp"
@@ -145,8 +144,9 @@ struct PhysicsModels {
     // Verification only (DECISIONS.md Unit 55 14.3, TVQ3): manufactured-solution sources added to
     // the drift-diffusion rows, for code verification by the method of manufactured solutions. Not
     // in the deck vocabulary and not a physical model. Null (the default): no term, every result
-    // bit-identical to a build without it.
-    std::shared_ptr<const ManufacturedSources> manufactured;
+    // bit-identical to a build without it. Not owned: the sources must outlive every system created
+    // with these models (a raw pointer keeps PhysicsModels a literal type, usable in constexpr).
+    const ManufacturedSources* manufactured = nullptr;
 };
 
 }  // namespace NiTCAD::assemble

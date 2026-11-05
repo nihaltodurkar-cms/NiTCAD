@@ -32,8 +32,8 @@ constexpr bench::KnownFinding table[] = {{"TVB-X", "q", &above_ten, "(z)", "a ru
 
 TEST_CASE("registry: the shipped benchmarks of TVR-1, all fast") {
     const auto b = bench::benchmarks();
-    REQUIRE(b.size() == 4);
-    const char* ids[] = {"TVB-01", "TVB-02", "TVB-03", "TVB-32"};
+    REQUIRE(b.size() == 6);  // TVR-1 plus TVR-2's TVB-11 and TVB-12 (DECISIONS Unit 55 14)
+    const char* ids[] = {"TVB-01", "TVB-02", "TVB-03", "TVB-11", "TVB-12", "TVB-32"};
     for (std::size_t i = 0; i < b.size(); ++i) {
         CHECK(b[i].id == ids[i]);
         CHECK(b[i].tier == bench::Tier::fast);

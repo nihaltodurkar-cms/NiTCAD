@@ -60,6 +60,8 @@ struct Benchmark {
 [[nodiscard]] BenchmarkResult run_tvb01();
 [[nodiscard]] BenchmarkResult run_tvb02();
 [[nodiscard]] BenchmarkResult run_tvb03();
+[[nodiscard]] BenchmarkResult run_tvb11();  // TVR-2 (DECISIONS Unit 55 14)
+[[nodiscard]] BenchmarkResult run_tvb12();
 [[nodiscard]] BenchmarkResult run_tvb32();
 
 struct KnownFinding {
