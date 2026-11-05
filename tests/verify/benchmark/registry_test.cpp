@@ -39,8 +39,9 @@ TEST_CASE("registry: the shipped benchmarks, each starting in the fast tier") {
         CHECK(b[i].tier == bench::Tier::fast);
         CHECK(b[i].run != nullptr);
     }
-    // (iii) and (i) fixed in Unit 56 (FQ4, FQ1); (ii); TVB-04 (iv) in 2D and 3D (CV-Q12)
-    REQUIRE(bench::known_findings().size() == 3);
+    // (iii) and (i) fixed in Unit 56 (FQ4, FQ1); (ii); TVB-04 (iv) in 2D and 3D (CV-Q12); TVB-14 (iv), 6 (CV-Q20),
+    // and (v), 6 (CV-Q21)
+    REQUIRE(bench::known_findings().size() == 15);
 }
 
 TEST_CASE("registry: a known finding turns a fail inside its region into finding, and only there") {

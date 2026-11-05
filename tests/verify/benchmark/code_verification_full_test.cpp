@@ -107,10 +107,10 @@ TEST_CASE("TVB-14 full tier: tensor ladders and the unstructured families (froze
                     c.comparison.reason.c_str());
     }
     REQUIRE(r.comparisons.size() == 45);  // tensor 1D, 2D, 3D: 9 each; generated 2D, 3D, swept: 6 each
-    // Measured 2026-11-05 (DECISIONS Unit 55 14.8 step 8; the misses are with the owner, 14.11 CV-Q20, CV-Q21):
-    // every tensor order 1.997-2.000; finest L2 1D 1.9e-5-3.2e-5 (pass), 2D 1.1e-4-2.1e-4 and 3D 6.7e-4-1.4e-3 (fail,
-    // the pattern of TVB-04's finding (iv)); 2D generated H1 orders 1.71, 1.27, 1.09 for psi (spread > 0.1: not in the
-    // asymptotic range); 3D generated and swept H1 p-hat 1.52-1.97, above [0.8, 1.3] (fail); every finest H1 <= 7.7e-3.
+    // Measured 2026-11-05 (DECISIONS Unit 55 14.8 step 8; rulings 14.11 CV-Q20 A and CV-Q21 A):
+    // every tensor order 1.997-2.000; finest L2 1D 1.9e-5-3.2e-5 (pass), 2D 1.1e-4-2.1e-4 and 3D 6.7e-4-1.4e-3 (finding (iv)
+    // extended from TVB-04); 2D generated H1 orders 1.71, 1.27, 1.09 for psi (spread > 0.1: not in the
+    // asymptotic range); 3D generated and swept H1 p-hat 1.52-1.97, above [0.8, 1.3] (finding (v)); every finest H1 <= 7.7e-3.
     for (const char* field : {"psi", "phi_n", "phi_p"}) {
         CAPTURE(field);
         const std::string f(field);
@@ -120,11 +120,11 @@ TEST_CASE("TVB-14 full tier: tensor ladders and the unstructured families (froze
             CHECK(outcome_of(r, f + " Linf order, " + family) == Outcome::pass);
         }
         CHECK(outcome_of(r, f + " L2 finest, 1D tensor") == Outcome::pass);
-        CHECK(outcome_of(r, f + " L2 finest, 2D tensor") == Outcome::fail);
-        CHECK(outcome_of(r, f + " L2 finest, 3D tensor") == Outcome::fail);
+        CHECK(outcome_of(r, f + " L2 finest, 2D tensor") == Outcome::finding);  // (iv), CV-Q20
+        CHECK(outcome_of(r, f + " L2 finest, 3D tensor") == Outcome::finding);
         CHECK(outcome_of(r, f + " H1 order, 2D generated") == Outcome::not_evaluated);
-        CHECK(outcome_of(r, f + " H1 order, 3D generated") == Outcome::fail);
-        CHECK(outcome_of(r, f + " H1 order, 3D swept") == Outcome::fail);
+        CHECK(outcome_of(r, f + " H1 order, 3D generated") == Outcome::finding);  // (v), CV-Q21
+        CHECK(outcome_of(r, f + " H1 order, 3D swept") == Outcome::finding);
         for (const char* family : {"2D generated", "3D generated", "3D swept"}) {
             CAPTURE(family);
             CHECK(outcome_of(r, f + " H1 finest, " + family) == Outcome::pass);

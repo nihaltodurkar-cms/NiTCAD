@@ -32,12 +32,32 @@ constexpr std::string_view finding_iv =
     "DECISIONS Unit 55 14.9 CV-Q12 (known finding): the frozen 1e-4 against the frozen ladders, whose 2D and 3D "
     "finest spacings are 2x and 4x the 1D finest; the orders pass";
 
-constexpr std::array<KnownFinding, 3> findings{{
+constexpr std::string_view finding_iv_tvb14 =
+    "DECISIONS Unit 55 14.11 CV-Q20 (known finding (iv) extended to TVB-14): the frozen 1e-4 against the frozen 2D "
+    "and 3D tensor ladders; the orders pass";
+
+constexpr std::string_view finding_v =
+    "DECISIONS Unit 55 14.11 CV-Q21 (known finding): an H1 order above the band on the frozen 3-level 3D ladders is "
+    "pre-asymptotic (2D generated falls toward 1 as h shrinks); the finest-level H1 still gates";
+
+constexpr std::array<KnownFinding, 15> findings{{
     {"TVB-02", "F_-1/2", &everywhere, "(ii)",
      "DECISIONS 11.13 TVB-02 finding (ii) widened (option A), accepted as a limitation (Unit 56, 13): F_-1/2 "
      "misses from eta = 13.76, a quadrature-rounding floor of the derivative-consistent table"},
     {"TVB-04", "psi L2 finest, 2D tensor", &everywhere, "(iv)", finding_iv},
     {"TVB-04", "psi L2 finest, 3D tensor", &everywhere, "(iv)", finding_iv},
+    {"TVB-14", "psi L2 finest, 2D tensor", &everywhere, "(iv)", finding_iv_tvb14},
+    {"TVB-14", "psi L2 finest, 3D tensor", &everywhere, "(iv)", finding_iv_tvb14},
+    {"TVB-14", "phi_n L2 finest, 2D tensor", &everywhere, "(iv)", finding_iv_tvb14},
+    {"TVB-14", "phi_n L2 finest, 3D tensor", &everywhere, "(iv)", finding_iv_tvb14},
+    {"TVB-14", "phi_p L2 finest, 2D tensor", &everywhere, "(iv)", finding_iv_tvb14},
+    {"TVB-14", "phi_p L2 finest, 3D tensor", &everywhere, "(iv)", finding_iv_tvb14},
+    {"TVB-14", "psi H1 order, 3D generated", &everywhere, "(v)", finding_v},
+    {"TVB-14", "psi H1 order, 3D swept", &everywhere, "(v)", finding_v},
+    {"TVB-14", "phi_n H1 order, 3D generated", &everywhere, "(v)", finding_v},
+    {"TVB-14", "phi_n H1 order, 3D swept", &everywhere, "(v)", finding_v},
+    {"TVB-14", "phi_p H1 order, 3D generated", &everywhere, "(v)", finding_v},
+    {"TVB-14", "phi_p H1 order, 3D swept", &everywhere, "(v)", finding_v},
 }};
 
 bool starts_with(std::string_view s, std::string_view prefix) { return s.substr(0, prefix.size()) == prefix; }

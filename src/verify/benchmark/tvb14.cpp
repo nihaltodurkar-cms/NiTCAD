@@ -33,6 +33,8 @@
 // Reference independence I1: psi_c, n_c and p_c are NiTCAD's equilibrium contact values, the mobilities, lifetimes and
 // permittivity the material's parameters (input data); the rest is analytic. Second method: the analytic gradients and
 // Laplacians of the three fields, and the gradient of n, against complex-step derivatives at run time.
+// Limitation (CV-Q22, ruled A): with L = 1 um and the Scharfetter lifetimes (diffusion length about 50 um), SRH is
+// 2e-6 to 6e-6 of the hole source; TVB-14 exercises it but does not gate it below that weight.
 #include <algorithm>
 #include <cmath>
 #include <complex>
@@ -589,6 +591,9 @@ BenchmarkResult run_tvb14(Tier tier) {
         judge_family(r, f, c, ph);
         if (r.run_error) return r;
     }
+    r.notes.push_back("limitation (DECISIONS Unit 55 14.11 CV-Q22): SRH is on, but on this 1 um device its rate is "
+                      "2e-6 to 6e-6 of the hole source (max|R| / max|G_p| per level above), so TVB-14 does not gate "
+                      "an SRH error below about that weight");
     apply_known_findings(r, known_findings());
     return r;
 }
