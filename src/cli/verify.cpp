@@ -1,7 +1,9 @@
 // `nitcad verify` (verify.hpp).
 #include "verify.hpp"
 
+#include <charconv>
 #include <chrono>
+#include <cstdint>
 #include <cstdio>
 #include <exception>
 #include <fstream>
@@ -11,6 +13,7 @@
 #include <vector>
 
 #include "NiTCAD/io/verify_report.hpp"
+#include "NiTCAD/linalg/mkl_runtime.hpp"
 #include "NiTCAD/solve/provenance.hpp"
 
 namespace NiTCAD::cli {
@@ -21,7 +24,8 @@ namespace bench = verify::benchmark;
 
 int usage(std::span<const bench::Benchmark> registry, const std::string& why) {
     std::fprintf(stderr, "nitcad verify: %s\nusage: nitcad verify [--tier fast|full|nightly] [--id <id>] "
-                         "[--report <file>]\nknown ids:", why.c_str());
+                         "[--report <file>]\n                     [--mkl <mkl_rt.dll>] [--threads <n>]\nknown ids:",
+                 why.c_str());
     for (const auto& b : registry) std::fprintf(stderr, " %.*s", static_cast<int>(b.id.size()), b.id.data());
     std::fputs("\n", stderr);
     return 64;
@@ -44,19 +48,42 @@ void print(const bench::BenchmarkResult& r) {
 }  // namespace
 
 int verify(int argc, char** argv, std::span<const bench::Benchmark> registry) {
-    std::string tier = "fast", id, report;
+    std::string tier = "fast", id, report, mkl, threads_text = "1";
     for (int i = 2; i < argc; ++i) {
         const std::string_view a = argv[i];
-        if (i + 1 >= argc || (a != "--tier" && a != "--id" && a != "--report")) {
+        if (i + 1 >= argc || (a != "--tier" && a != "--id" && a != "--report" && a != "--mkl" &&
+                            a != "--threads")) {
             return usage(registry, "unknown or incomplete option '" + std::string(a) + "'");
         }
-        std::string& target = a == "--tier" ? tier : a == "--id" ? id : report;
+        std::string& target = a == "--tier"     ? tier
+                               : a == "--id"     ? id
+                               : a == "--report" ? report
+                               : a == "--mkl"    ? mkl
+                                                 : threads_text;
         target = argv[++i];
     }
     if (tier != "fast" && tier != "full" && tier != "nightly") return usage(registry, "unknown tier '" + tier + "'");
+    int threads = 0;
+    const auto [end, ec] = std::from_chars(threads_text.data(), threads_text.data() + threads_text.size(), threads);
+    if (ec != std::errc{} || end != threads_text.data() + threads_text.size() || threads < 1 || threads > 1024) {
+        return usage(registry, "--threads must be 1 to 1024, not '" + threads_text + "'");
+    }
+    bench::set_pardiso_threads(threads);
+    if (!mkl.empty()) {  // PARDISO for the solves that use it (TVB-04's 3D levels)
+        if (const auto loaded = linalg::load_mkl_runtime(mkl); !loaded) {
+            return usage(registry, "--mkl: " + loaded.error().message);
+        }
+    }
+    const bench::Tier level =
+        tier == "fast" ? bench::Tier::fast : tier == "full" ? bench::Tier::full : bench::Tier::nightly;
     std::vector<const bench::Benchmark*> selected;
     for (const auto& b : registry) {
-        if (id.empty() || b.id == id) selected.push_back(&b);  // every TVR-1 benchmark is in every tier
+        if (!id.empty() && b.id != id) continue;
+        if (b.tier > level) {  // a benchmark runs in its own tier and those above it (CV-Q9)
+            if (!id.empty()) return usage(registry, "'" + id + "' is not in tier " + tier);
+            continue;
+        }
+        selected.push_back(&b);
     }
     if (selected.empty()) return usage(registry, "unknown id '" + id + "'");
 
@@ -66,7 +93,7 @@ int verify(int argc, char** argv, std::span<const bench::Benchmark> registry) {
     for (const bench::Benchmark* b : selected) {
         bench::BenchmarkResult r;
         try {
-            r = b->run();
+            r = b->run(level);
         } catch (const std::exception& e) {
             r.id = std::string(b->id);
             r.title = std::string(b->title);
@@ -87,8 +114,10 @@ int verify(int argc, char** argv, std::span<const bench::Benchmark> registry) {
         }
     }
     if (!report.empty()) {
-        // The benchmarks run on one thread: the deck solves use the default Eigen backend, not PARDISO (RC-Q4).
-        const io::VerifyReport rep = bench::make_report(results, provenance, 1, tier);
+        // The deck solves use the default Eigen backend on one thread (RC-Q4); with --mkl, the PARDISO solves (TVB-04's
+        // 3D levels) use --threads.
+        const std::uint32_t used = linalg::loaded_mkl_runtime() ? static_cast<std::uint32_t>(threads) : 1;
+        const io::VerifyReport rep = bench::make_report(results, provenance, used, tier);
         if (const auto saved = io::save_verify_report(report, rep); !saved) {
             std::fprintf(stderr, "nitcad verify: %s\n", saved.error().message.c_str());
             return 1;

@@ -30,16 +30,17 @@ constexpr bench::KnownFinding table[] = {{"TVB-X", "q", &above_ten, "(z)", "a ru
 
 }  // namespace
 
-TEST_CASE("registry: the shipped benchmarks of TVR-1, all fast") {
+TEST_CASE("registry: the shipped benchmarks, each starting in the fast tier") {
     const auto b = bench::benchmarks();
-    REQUIRE(b.size() == 6);  // TVR-1 plus TVR-2's TVB-11 and TVB-12 (DECISIONS Unit 55 14)
-    const char* ids[] = {"TVB-01", "TVB-02", "TVB-03", "TVB-11", "TVB-12", "TVB-32"};
+    REQUIRE(b.size() == 7);  // TVR-1 plus TVR-2's TVB-04, TVB-11 and TVB-12 (DECISIONS Unit 55 14)
+    const char* ids[] = {"TVB-01", "TVB-02", "TVB-03", "TVB-04", "TVB-11", "TVB-12", "TVB-32"};
     for (std::size_t i = 0; i < b.size(); ++i) {
         CHECK(b[i].id == ids[i]);
         CHECK(b[i].tier == bench::Tier::fast);
         CHECK(b[i].run != nullptr);
     }
-    REQUIRE(bench::known_findings().size() == 1);  // (iii) and (i) fixed in Unit 56 (FQ4, FQ1)
+    // (iii) and (i) fixed in Unit 56 (FQ4, FQ1); (ii); TVB-04 (iv) in 2D and 3D (CV-Q12)
+    REQUIRE(bench::known_findings().size() == 3);
 }
 
 TEST_CASE("registry: a known finding turns a fail inside its region into finding, and only there") {

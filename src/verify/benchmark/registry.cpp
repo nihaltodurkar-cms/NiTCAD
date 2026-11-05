@@ -10,21 +10,31 @@ namespace NiTCAD::verify::benchmark {
 
 namespace {
 
-constexpr std::array<Benchmark, 6> shipped{{
-    {"TVB-01", "Constants and thermal voltage against CODATA 2018", Tier::fast, &run_tvb01},
-    {"TVB-02", "Fermi-Dirac integrals F_1/2, F_-1/2, F_3/2 and the inverse of F_1/2", Tier::fast, &run_tvb02},
-    {"TVB-03", "The Bernoulli function B(x) = x / (e^x - 1)", Tier::fast, &run_tvb03},
-    {"TVB-11", "Uniform resistor with ohmic contacts", Tier::fast, &run_tvb11},
-    {"TVB-12", "Scharfetter-Gummel constant-field exactness", Tier::fast, &run_tvb12},
-    {"TVB-32", "The consistency suite C1-C12 on the three TVR-1 decks", Tier::fast, &run_tvb32},
+constexpr std::array<Benchmark, 7> shipped{{
+    {"TVB-01", "Constants and thermal voltage against CODATA 2018", Tier::fast, [](Tier) { return run_tvb01(); }},
+    {"TVB-02", "Fermi-Dirac integrals F_1/2, F_-1/2, F_3/2 and the inverse of F_1/2", Tier::fast,
+     [](Tier) { return run_tvb02(); }},
+    {"TVB-03", "The Bernoulli function B(x) = x / (e^x - 1)", Tier::fast, [](Tier) { return run_tvb03(); }},
+    {"TVB-04", "Poisson manufactured solution with a dielectric jump", Tier::fast, &run_tvb04},
+    {"TVB-11", "Uniform resistor with ohmic contacts", Tier::fast, [](Tier) { return run_tvb11(); }},
+    {"TVB-12", "Scharfetter-Gummel constant-field exactness", Tier::fast, [](Tier) { return run_tvb12(); }},
+    {"TVB-32", "The consistency suite C1-C12 on the three TVR-1 decks", Tier::fast, [](Tier) { return run_tvb32(); }},
 }};
+
+int pardiso_thread_count = 1;
 
 bool everywhere(double) { return true; }
 
-constexpr std::array<KnownFinding, 1> findings{{
+constexpr std::string_view finding_iv =
+    "DECISIONS Unit 55 14.9 CV-Q12 (known finding): the frozen 1e-4 against the frozen ladders, whose 2D and 3D "
+    "finest spacings are 2x and 4x the 1D finest; the orders pass";
+
+constexpr std::array<KnownFinding, 3> findings{{
     {"TVB-02", "F_-1/2", &everywhere, "(ii)",
      "DECISIONS 11.13 TVB-02 finding (ii) widened (option A), accepted as a limitation (Unit 56, 13): F_-1/2 "
      "misses from eta = 13.76, a quadrature-rounding floor of the derivative-consistent table"},
+    {"TVB-04", "psi L2 finest, 2D tensor", &everywhere, "(iv)", finding_iv},
+    {"TVB-04", "psi L2 finest, 3D tensor", &everywhere, "(iv)", finding_iv},
 }};
 
 bool starts_with(std::string_view s, std::string_view prefix) { return s.substr(0, prefix.size()) == prefix; }
@@ -48,6 +58,9 @@ std::string csv_field(std::string_view s) {
 
 std::span<const Benchmark> benchmarks() { return shipped; }
 std::span<const KnownFinding> known_findings() { return findings; }
+
+void set_pardiso_threads(int threads) { pardiso_thread_count = threads; }
+int pardiso_threads() { return pardiso_thread_count; }
 
 void apply_known_findings(BenchmarkResult& r, std::span<const KnownFinding> table) {
     for (const KnownFinding& k : table) {

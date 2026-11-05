@@ -7972,6 +7972,44 @@ References are analytic (U_ref at rounding) or computed in double-double, with U
 - Registry: 6 shipped benchmarks; TVB-11 and TVB-12 are `fast`. CV-Q9 put TVR-2 in `full` with one coarse case per benchmark in `fast`. These two are already single, coarse D-class runs (26 s is the whole serial Debug `nitcad verify`), so each is its own fast case. `registry_test` now expects 6 ids (was 4); this is the registry's own list, not a moved expectation of a benchmark.
 - `tests/verify/benchmark/code_verification_test.cpp` (`[tvr2]`): both benchmarks, every comparison pass (frozen outcomes).
 - Time: the verify ctests take 39/39 in Release. Serial Debug takes 58.2 s against the 60 s budget (VR10; it was 57.4 s), so the fast tier has under 2 s left. TVB-04, 07, 09 and 14 go in `full` only, per CV-Q9.
+
+*Step 4, TVB-04 (tensor families) and tier selection.*
+- **Tiers.** `Benchmark::run` takes the requested tier, and `Benchmark::tier` is the lowest tier a benchmark runs in. `nitcad verify --tier t` runs every benchmark whose tier is at or below t. With `--id`, a benchmark above t is refused with exit 64. The TVR-1 and TVB-11/12 entries ignore the tier.
+  - CLI tests: `verify_cli.below_tier` and `verify_cli.at_tier`, on the probe's test-only `TVB-TEST-FULL`.
+- **Construction** (`src/verify/benchmark/tvb04.cpp`), as 14.4 with CV-Q2 A:
+  - SiO2 on [−L, 0] with a metal electrode at −L, and p-Si (N_A = 1e17) on [0, L] with an ohmic contact at L; L = 50 nm.
+  - The interface lies at the midpoint of the edges that join the regions (`straddle_interface`, as the decks do it).
+  - ψ = ψ_c + A g(x/L) h(y/L) h(z/L), with A = 0.2 V. g = (1−u)e^{2u} in Si and (1+u)e^{βu} in SiO2, with β = (ε_si/ε_ox)(α−1) − 1, so D·n is continuous. h = 1 + cos(πv)/2, which has zero normal flux on the sides.
+  - Equilibrium Boltzmann carriers make every SG flux vanish. The TVQ3 charge is S = −εΔψ/q + n − p − N.
+  - The electrode is biased so that its potential equals ψ_c.
+  - The analytic g′, g″, h′ and h″ are checked against complex-step derivatives on every run (the second method).
+- **Tier placement.** fast: 1D N = 32…256. full (and nightly): + 2D tensor 16²…128² and 3D tensor 8³…64³. Per the 14.7 ladder column and CV-Q13 (14.9), this is in full despite TVD-13's "nightly: 3D ladders".
+- **3D solves (CV-Q15).** The 3D levels use MKL PARDISO. With Eigen SparseLU, 64³ (786k unknowns) held 26 GB and had not finished after 15 minutes, so that run was stopped.
+  - `nitcad verify --mkl <mkl_rt.dll> --threads <n>` loads the runtime and sets PARDISO's threads; the report's `threads` field records n when MKL is loaded.
+  - Without MKL, the 3D family's three comparisons are `not_evaluated`, with the missing input named.
+  - Side effect: without MKL, TVR-1's stale-finding check prints "known finding (iv) no longer reproduces" for the 3D entry, because its region holds no fail. The note is wrong in that case and is left as is.
+- **Full-tier test (CV-Q16).** `tests/verify/benchmark/code_verification_full_test.cpp` (`verify_full.tvb04`, label `full`, run serially) exists only with `NITCAD_VERIFY_FULL_TIER=ON` in Release, and takes the runtime from `NITCAD_MKL_RUNTIME`. CI does not set the option. Run it with `ctest -L full`.
+- **Results (Release).**
+  - 1D: L2 p̂ = 2.001 and L∞ p̂ = 1.989; order spreads 5e-4 and 0.024; finest L2 7.1e-5 ≤ 1e-4. Pass.
+  - 2D tensor: L2 p̂ = 2.002 and L∞ p̂ = 1.972; spreads 0.008 and 0.071. Both orders pass. **Finest L2 (128²) is 2.88e-4 > 1e-4: fail**, brought to the owner (CV-Q12), and now known finding (iv).
+  - U_iter/e ≤ 4e-11 at every level.
+- 3D tensor (PARDISO, 6 threads):
+  - L2: 0.118, 0.0228, 0.00501, 0.00117; orders 1.93, 1.99, 2.00, with p̂ = 2.001 and spread 0.068. Pass.
+  - L∞: orders 1.60, 1.84, 1.93; spread 0.23 > 0.1. **Not evaluated** (outside the asymptotic range, CV-Q14). The reason is stated as such, not as a missing input.
+  - Finest L2 1.17e-3: known finding (iv).
+- `verify_full.tvb04`: every frozen outcome held; overall `not_evaluated`; 710.8 s.
+- Time: TVB-04 fast takes 0.17 s in Debug. In Release, 1D + 2D takes 2.1 s, and 64³ takes 709 s at about 20 GB.
+- The verify ctests pass in Release and Debug (41/41). Serial Debug takes 59.5 s against the 60 s budget (VR10), so the fast tier is at its limit. The fast cases 14.7 still lists (TVB-07's coarsest two levels, TVB-09's one bias) go to the owner if they take it over 60 s.
+
+**14.9 Owner rulings after the TVB-04 run (2026-11-05).**
+
+| # | Question | Ruling |
+|---|---|---|
+| CV-Q12 | 2D tensor's finest L2 is 2.88e-4 against the frozen 1e-4, with both orders passing. The frozen ladders put 2D's finest h at L/63 and 3D's at L/31, against 1D's L/127, so at p̂ = 2 the frozen tolerance is reachable only on 1D. Known finding, a 256² level added after the run, or fail? | **Known finding (iv).** The criterion and ladders stay as frozen; "psi L2 finest, 2D tensor" and "… 3D tensor" are counted as `finding` with this ruling cited. The orders still gate. Nothing is widened. |
+| CV-Q13 | 3D tensor (8³…64³): full, as the 14.7 ladder column reads, or nightly, as TVD-13 reads? | **Full.** |
+| CV-Q14 | For studies against an exact solution, the asymptotic-range check is the order spread (≤ 0.1) alone (14.8 step 2). Confirm? | **Confirmed.** |
+| CV-Q15 | Eigen SparseLU cannot hold 64³ (above). PARDISO, GMRES-ILUT, or keep Eigen? | **PARDISO for the 3D levels.** |
+| CV-Q16 | With PARDISO, 64³ takes 709 s on 6 threads at about 20 GB, more than a CI runner (16 GB, 4 vCPU) holds. Full-tier ctest local only, move 64³ to nightly, or keep it in CI? | **Option 1: local only.** The full tier stays as ruled; its ctest is opt-in and not run in CI. |
 ---
 
 ## New questions the advisor raised (not yet in `ARCHITECTURE.md`)

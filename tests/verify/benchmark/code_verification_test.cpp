@@ -1,6 +1,6 @@
 // TVR-2 code-verification benchmarks (DECISIONS Unit 55 14.4, criteria 14.7, frozen before code): their frozen
-// expected outcomes. TVB-11 (uniform resistor) and TVB-12 (Scharfetter-Gummel at constant field) are D-class:
-// every comparison passes, to 64 eps N^2.
+// expected outcomes. TVB-04 (Poisson MMS) is E-class, its fast tier the 1D ladder. TVB-11 (uniform resistor) and
+// TVB-12 (Scharfetter-Gummel at constant field) are D-class: every comparison passes, to 64 eps N^2.
 #include <catch2/catch_test_macros.hpp>
 
 #include <cstdio>
@@ -34,4 +34,8 @@ TEST_CASE("TVB-11: the uniform resistor, to rounding (frozen outcome: pass)", "[
 
 TEST_CASE("TVB-12: Scharfetter-Gummel exact at constant field (frozen outcome: pass)", "[tvr2]") {
     require_all_pass(bench::run_tvb12(), 8);  // n and p at Peclet 0.01, 1, 10, 40
+}
+
+TEST_CASE("TVB-04: Poisson MMS with a dielectric jump, 1D tensor ladder (frozen outcome: pass)", "[tvr2]") {
+    require_all_pass(bench::run_tvb04(bench::Tier::fast), 3);  // L2 and Linf orders, finest L2
 }
