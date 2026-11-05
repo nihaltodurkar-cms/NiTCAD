@@ -7817,6 +7817,12 @@ stacked on that branch and will be rebased onto main once #76 merges.
   - The text of known-finding entry (ii) records the acceptance.
   - Physics code is unchanged. TVB-02 and its tests are unchanged, and the hidden `[.finding]` case still fails
     by design.
+
+*Unit 56 close-out.* Full suites on e5e9847, run in parallel (-j 6): Release 166/166 (805 s), Debug 155/155 (1070 s).
+In `nitcad verify`, TVB-01 and TVB-03 pass, TVB-02 reports the accepted finding (ii), and TVB-32 is unchanged.
+The unit is stacked on PR #76. It will be rebased onto main once #76 merges, then offered as its own PR on the
+owner's word.
+
 ---
 
 ## New questions the advisor raised (not yet in `ARCHITECTURE.md`)
