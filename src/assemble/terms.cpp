@@ -306,6 +306,33 @@ public:
     }
 };
 
+// Manufactured-solution sources (verification only; models.hpp ManufacturedSources, TVQ3): +V S/Ns
+// in the Poisson row (extra positive charge, as the doping enters PoissonCharge), +V G_n/R0 in the
+// electron row and -V G_p/R0 in the hole row (generation, as ImpactGeneration). Independent of
+// the state: no Jacobian entries. Contact and electrode rows are boundary rows and are skipped.
+class DriftDiffusion::Terms::Manufactured final : public Term {
+public:
+    TermInfo info() const noexcept override {
+        return {"manufactured source", TermDomain::nodes, all3, {}, false};  // no partials
+    }
+    void add(const DriftDiffusion& s, const Evaluation& ev) const override {
+        const ManufacturedSources& ms = *s.manufactured_;
+        const std::size_t m = s.m_;
+        const double to_rate = s.rate_scale_ / s.Ns_;  // 1 / R0
+        for (std::size_t i = 0; i < s.node_count(); ++i) {
+            if (s.contact_[i] >= 0) continue;
+            const double V = s.volume_[i];
+            if (s.insulator_[i] != 0) {
+                if (s.electrode_[i] < 0 && !ms.charge_cm3.empty()) ev.f[m * i] += V * (ms.charge_cm3[i] / s.Ns_);
+                continue;
+            }
+            if (!ms.charge_cm3.empty()) ev.f[m * i] += V * (ms.charge_cm3[i] / s.Ns_);
+            if (!ms.electron_generation.empty()) ev.f[m * i + 1] += V * (ms.electron_generation[i] * to_rate);
+            if (!ms.hole_generation.empty()) ev.f[m * i + 2] -= V * (ms.hole_generation[i] * to_rate);
+        }
+    }
+};
+
 // The declared interfaces' half-edge fluxes, fixed and trapped charge and surface recombination
 // (interface_edges.hpp): the insulator node's Poisson row, then the semiconductor node's rows.
 class DriftDiffusion::Terms::Interfaces final : public Term {
@@ -851,6 +878,8 @@ std::span<const CompositionEntry> DriftDiffusion::Terms::isothermal_table() {
         {+E::continuity, [](const DriftDiffusion&, M m) { return m.radiative; },
          &make_term<Radiative>},
         {+E::continuity, always, &make_term<Storage>},
+        {E::poisson | E::continuity, [](const DriftDiffusion&, M m) { return m.manufactured != nullptr; },
+         &make_term<Manufactured>},
         {+E::energy, [](const DriftDiffusion&, M m) { return m.energy_balance; }, &energy_rows},
         {+E::interfaces, interfaces, &make_term<Interfaces>},
         {+E::poisson, always, &make_term<PoissonFlux>},

@@ -102,6 +102,22 @@ std::expected<DriftDiffusion, base::Error> DriftDiffusion::create(
     const auto refuse = [](const char* message) {
         return std::unexpected(base::Error{base::ErrorCode::invalid_input, message, {}});
     };
+    // Manufactured sources (verification only, TVQ3): one entry per node or none, finite; the
+    // isothermal drift-diffusion rows only.
+    if (const auto& ms = models.manufactured) {
+        const std::size_t nodes = device.mesh().node_count();
+        for (const std::vector<double>* v : {&ms->charge_cm3, &ms->electron_generation, &ms->hole_generation}) {
+            if (!v->empty() && v->size() != nodes) {
+                return refuse("manufactured sources need one value per mesh node");
+            }
+            if (!std::ranges::all_of(*v, [](double y) { return std::isfinite(y); })) {
+                return refuse("manufactured sources must be finite");
+            }
+        }
+        if (models.electrothermal || models.energy_balance) {
+            return refuse("manufactured sources are for the isothermal drift-diffusion rows only");
+        }
+    }
     if (nonlocal && models.btbt_local) {
         return refuse("btbt_local and btbt_nonlocal would count the same tunnelling twice");
     }
@@ -262,6 +278,7 @@ std::expected<DriftDiffusion, base::Error> DriftDiffusion::create(
     }
     s.rate_scale_ = scaling.Ns / scaling.R0;
     s.Ns_ = scaling.Ns;
+    s.manufactured_ = models.manufactured;
     s.auger_ = models.auger;
     s.V_T_ = scaling.V_T;
     s.srh_ = models.srh;

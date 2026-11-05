@@ -156,6 +156,7 @@ struct DriftDiffusion::Terms {
     class Auger;
     class Radiative;
     class Storage;
+    class Manufactured;
     class Interfaces;
     class PoissonFlux;
     class CarrierFluxes;

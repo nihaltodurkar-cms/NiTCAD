@@ -7932,6 +7932,19 @@ criteria commit.
 References are analytic (U_ref at rounding) or computed in double-double, with U_ref ≤ tolerance/10 checked by
 §4.4 E (c). The TB-Q4 rule applies: a reference whose uncertainty exceeds 1e-3 of the criterion is
 `not_evaluated`.
+
+**14.8 As built.**
+
+*Step 1, the hook (CV-Q4).*
+- `assemble::ManufacturedSources` and `PhysicsModels::manufactured` (`models.hpp`); the node term `manufactured source` after `storage` (`terms.cpp`).
+- `DriftDiffusion::create` refuses a source vector of the wrong size or with non-finite values, and refuses the hook with electrothermal or energy balance.
+- `tests/assemble/manufactured_test.cpp` (4 cases) checks:
+  - absent, the composition, F and J are equal to the plain system's;
+  - present, the term alone writes +V S/Ns, +V G_n/R0 and −V G_p/R0 within 1e-14, skips contact and electrode rows, puts charge on interior oxide nodes, and adds no Jacobian values;
+  - an empty vector leaves its rows bit-equal;
+  - the refusals.
+- Measuring the term as a difference of two full residuals is wrong: the later flux terms cancel, so their rounding shows (2.2e-14 relative was seen). The test therefore evaluates the term alone.
+- assemble tests: 154/154 pass (Release).
 ---
 
 ## New questions the advisor raised (not yet in `ARCHITECTURE.md`)
