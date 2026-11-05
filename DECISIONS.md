@@ -8116,6 +8116,47 @@ References are analytic (U_ref at rounding) or computed in double-double, with U
   - `registry_test` expects 9 ids.
   - The verify ctests pass in Release and Debug (43/43). Serial Debug takes 61.7–62.4 s against the 75 s budget of CV-Q19.
 
+*Step 8, TVB-14 (full drift-diffusion manufactured solution).*
+- **Construction** (`src/verify/benchmark/tvb14.cpp`, as its header states):
+  - n-Si with N_D = 1e16 on [0, L]^D, L = 1 µm. Ohmic contacts at x = 0 (0 V) and x = L (V_R = 0.1 V); the sides are natural.
+  - The exact state is ψ − ψ_c = V_R u + A b(u)H, φ_n = V_R u + a_n bH and φ_p = V_R u + a_p bH, where:
+    - b = 4u(1 − u);
+    - H = h(v)h(w), with h = 1 + (3v² − 2v³)/2 (h′ = 0 on the sides);
+    - A = 0.1 V, a_n = 0.08 V and a_p = 0.15 V.
+  - n and p are Boltzmann densities about NiTCAD's contact values.
+  - Sources: the hook's S, G_n and G_p from the exact state in double-double. G_n = R + μ_n(∇n·∇φ_n + nΔφ_n) and G_p = R − μ_p(∇p·∇φ_p + pΔφ_p).
+    - R is SRH with the material's Scharfetter lifetimes at N_D, and n_ie² = n_c p_c.
+    - The mobilities are constant (μ_max).
+    - Auger, radiative, BGN and Fermi–Dirac are off.
+  - Errors: NiTCAD's φ_n and φ_p come from its ψ, n and p.
+    - Normalisers (14.7): for ψ, max|ψ − ψ_eq| + V_T. For φ_n and φ_p, the same norm of the exact field. H1 is relative to the exact seminorm (CV-Q17).
+  - Second method, run on every call: complex-step derivatives check the fields' gradients and Laplacians and ∇n (1D, 2D and 3D forms) to 1e-12.
+  - Meshes: tensor N³ uniform per axis, h = L/(N − 1). The generated families use one region (the 3D generator refuses region seeds without interfaces), with h = (L^D/N)^(1/D).
+- **Fast-tier family.** 14.4's families column says "1D and 2D tensor" for fast, but 14.7's frozen ladder column says "as TVB-04" (1D only in fast). 14.7 is the frozen one, so fast is 1D N = 32…256 (9 comparisons). The difference between the two sections is recorded here.
+- **The sign convention** of G_n and G_p against the hook (+V G_n/R0 in the electron row, −V G_p/R0 in the hole row) is confirmed by the result: every 1D order is 1.998–2.000.
+- **Results (Release, full tier, 15.6 min, 6 PARDISO threads).** 45 comparisons: 30 pass, 12 fail, 3 not evaluated.
+  - Tensor orders, every field and norm: 1D 1.998–2.000, 2D 1.985–2.000, 3D 1.930–2.004. Spreads are ≤ 0.051. All 18 pass.
+  - Finest L2:
+    - 1D: 1.9e-5, 3.2e-5 and 1.9e-5 (ψ, φ_n, φ_p): pass.
+    - 2D at 128²: 1.13e-4, 2.11e-4 and 1.18e-4: **fail**.
+    - 3D at 64³: 6.7e-4, 1.43e-3 and 7.8e-4: **fail**.
+    - This is the pattern of TVB-04's finding (iv). At p̂ = 2, 1e-4 needs about 2D 180² and 3D 170³ on this solution.
+  - 2D generated (h_max L/128…L/16):
+    - H1 orders, finest pair first: ψ 1.09, 1.27, 1.71; φ_n 1.22, 1.53, 1.90; φ_p 1.07, 1.28, 1.57. The spreads are 0.29–0.44 > 0.1, so all three are `not_evaluated` (outside the asymptotic range).
+    - Finest H1 is 5.8e-4 to 1.05e-3: pass.
+    - The L2 orders are 2.03–2.15 (reported).
+  - 3D generated and swept (L/32…L/8, 3 levels, judged on the finest pair):
+    - H1 p̂ for ψ, φ_n and φ_p: generated 1.86, 1.93, 1.52; swept 1.91, 1.97, 1.58. All six are above [0.8, 1.3]: **fail**.
+    - Finest H1 is 3.4e-3 to 7.7e-3: pass.
+    - The L2 orders are 2.07–2.13 (reported).
+  - U_iter ≤ 6e-14 at every level, so the CV-Q8 rule is met everywhere.
+  - The SRH weight max|R|/max|G_p| is 2e-6 to 6e-6 at every level (see CV-Q22).
+- **Tests.**
+  - The fast case is in `code_verification_test.cpp` (9, pass).
+  - `verify_full.tvb14` (label `full`, TIMEOUT 3600, RUN_SERIAL) freezes the 45 measured outcomes, the fails included, pending 14.11.
+  - `registry_test` expects 10 ids.
+  - The verify ctests pass in Release (47/47 with the `full` label: `verify_full.tvb14` 959 s, `verify_full.tvb04` 1413 s, unchanged outcomes) and in Debug (43/43). Serial Debug takes 61.2–61.7 s against the 75 s budget of CV-Q19 (`code_verification`, which holds every TVR-2 fast case, takes 2.25 s).
+
 **14.9 Owner rulings after the TVB-04 run (2026-11-05).**
 
 | # | Question | Ruling |
@@ -8133,6 +8174,15 @@ References are analytic (U_ref at rounding) or computed in double-double, with U
 | # | Question | Options | Ruling |
 |---|---|---|---|
 | CV-Q19 | Serial Debug verify is 62.6–64.5 s against VR10's 60 s. The tree before step 6 was already at 60.45 s, and TVB-09/14 fast cases are still to come. | (A) Raise VR10 to 75 s for serial Debug, stated with the measured spread. (B) Move TVB-07's fast case (and later TVB-09's) to `full`, which departs from 14.7's ladder column. (C) Keep 60 s and shorten an existing fast test (the largest are TVB-02's `fermi_dirac`, 21–22 s, and C-transient, 15 s), which touches TVR-1's frozen tests. | **A** (owner, "choose recommended", 2026-11-05). From step 6 on, the serial Debug verify budget is 75 s, measured as before (`ctest -R verify`, Debug, serial, the `full` label excluded). VR10's 60 s stays the record of TVR-1's acceptance (11.10) and is not edited. The reason: the budget had no headroom with or without TVR-2, and A changes no frozen criterion or ladder. |
+
+**14.11 Owner questions after step 8 (2026-11-05).** Nothing was widened or re-run to pass (TVM2). Each case is a miss, recorded as `fail` or `not_evaluated` until ruled.
+
+| # | Question | Options | Recommendation |
+|---|---|---|---|
+| CV-Q20 | TVB-14's 2D and 3D tensor finest L2 (six comparisons) miss 1e-4: 1.1e-4–2.1e-4 in 2D and 6.7e-4–1.4e-3 in 3D. Every order passes at 1.93–2.00. This is CV-Q12's situation on a second benchmark. | (A) Extend known finding (iv) to TVB-14's six comparisons. The criterion and ladder stay; the orders still gate. (B) Add finer levels: 256² is feasible, but 3D would need about 170³, which does not fit 32 GB. (C) Keep them as fail. | **A**, for the reason CV-Q12 gave. |
+| CV-Q21 | TVB-14's unstructured H1 orders: 3D generated and swept p̂ is 1.52–1.97, above [0.8, 1.3] (six fails). 2D generated is outside the asymptotic range (three `not_evaluated`), with orders falling 1.71 → 1.27 → 1.09 toward 1 as h shrinks. The 3D ladders end at L/32, where 2D's pairs were still 1.5–1.9. So this reads as pre-asymptotic super-convergence of the H1 error on these meshes, not an inconsistency. Every finest H1 passes, and every L2 order is ≈ 2. | (A) Record a known finding (v) for the six 3D fails: an H1 order above the band on the frozen 3-level 3D ladders is pre-asymptotic, and the finest-level accuracy still gates. 2D generated stays `not_evaluated`, as 14.7 prescribes. (B) Add an L/64 3D level: about 0.9M nodes and 2.7M unknowns, which does not fit 32 GB with PARDISO. (C) Keep them as fail. | **A.** An order above the theoretical one is not evidence of a defect. The band's upper edge exists to catch a mis-specified p_th, and the tensor families gate the scheme's order cleanly. |
+| CV-Q22 | SRH is on, as 14.4 requires, but on a 1 µm device with Scharfetter lifetimes (diffusion length about 50 µm) R is only 2e-6–6e-6 of the hole source. TVB-14 therefore exercises SRH but cannot detect an error in it below about that weight. | (A) Record it as a limitation of TVB-14's construction. A device near the diffusion length, or a short-lifetime material, would gate SRH, and that belongs to a later TVR. (B) Add now a second, long-device TVB-14 variant (new criteria to freeze). | **A.** It changes no frozen item; the limitation is stated where TVB-14's results are reported. |
+
 ---
 
 ## New questions the advisor raised (not yet in `ARCHITECTURE.md`)

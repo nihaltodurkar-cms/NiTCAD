@@ -699,7 +699,7 @@ file(CONFIGURE OUTPUT "${CMAKE_BINARY_DIR}/generated/verify_decks.hpp" CONTENT "
 add_library(nitcad_verify_benchmark STATIC src/verify/benchmark/device_data.cpp
   src/verify/benchmark/registry.cpp src/verify/benchmark/tvb01.cpp src/verify/benchmark/tvb02.cpp
   src/verify/benchmark/tvb03.cpp src/verify/benchmark/tvb04.cpp src/verify/benchmark/tvb07.cpp
-  src/verify/benchmark/tvb09.cpp
+  src/verify/benchmark/tvb09.cpp src/verify/benchmark/tvb14.cpp
   src/verify/benchmark/tvb11.cpp
   src/verify/benchmark/tvb12.cpp src/verify/benchmark/tvb32.cpp)
 add_library(NiTCAD::verify_benchmark ALIAS nitcad_verify_benchmark)
@@ -755,6 +755,8 @@ if(NITCAD_VERIFY_FULL_TIER AND CMAKE_BUILD_TYPE STREQUAL "Release")
   set_tests_properties(verify_full.tvb07 PROPERTIES LABELS full TIMEOUT 600)
   add_test(NAME verify_full.tvb09 COMMAND nitcad_verify_full_test "[tvb09_full]")
   set_tests_properties(verify_full.tvb09 PROPERTIES LABELS full TIMEOUT 600)
+  add_test(NAME verify_full.tvb14 COMMAND nitcad_verify_full_test "[tvb14_full]")
+  set_tests_properties(verify_full.tvb14 PROPERTIES LABELS full TIMEOUT 3600 RUN_SERIAL TRUE)
 endif()
 
 # The batch runner (`nitcad check|run <deck>`).

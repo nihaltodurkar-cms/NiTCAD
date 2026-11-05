@@ -49,3 +49,8 @@ TEST_CASE("TVB-07: the equilibrium pn junction, fast tier (frozen outcome: pass)
 TEST_CASE("TVB-09: the MOS capacitor, fast tier at one bias (frozen outcome: pass)", "[tvr2]") {
     require_all_pass(bench::run_tvb09(bench::Tier::fast), 7);  // V_FB at 4 levels; Q_s order, Q_s and C_LF finest
 }
+
+TEST_CASE("TVB-14: full drift-diffusion MMS, fast tier 1D (frozen outcome: pass)", "[tvr2]") {
+    // psi, phi_n and phi_p: L2 and Linf orders, then each one's finest L2
+    require_all_pass(bench::run_tvb14(bench::Tier::fast), 9);
+}

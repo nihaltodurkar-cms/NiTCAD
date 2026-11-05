@@ -1,4 +1,4 @@
-// The full tier of TVR-2 (DECISIONS Unit 55 14.7, rulings CV-Q12-CV-Q16 in 14.9): TVB-04 on the tensor ladders and
+// The full tier of TVR-2 (DECISIONS Unit 55 14.7, rulings CV-Q12-CV-Q16 in 14.9): TVB-04 and TVB-14 on the tensor ladders and
 // the 2D generated, 3D generated and swept families, against its frozen expected outcomes. The 3D levels use MKL
 // PARDISO; the test takes the runtime from NITCAD_MKL_RUNTIME_PATH. Local only (owner ruling, option 1): 64^3 takes
 // about 12 minutes on 6 threads and 20 GB, more than a CI runner holds, and the 3D generated and swept ladders about
@@ -90,4 +90,44 @@ TEST_CASE("TVB-09 full tier: the V_G grid at N = 64 ... 512 (frozen outcomes)", 
         CHECK(c.comparison.outcome == (flat_band ? Outcome::not_applicable : Outcome::pass));
     }
     CHECK(bench::overall(r) == Outcome::pass);
+}
+
+TEST_CASE("TVB-14 full tier: tensor ladders and the unstructured families (frozen outcomes)",
+          "[tvr2_full][tvb14_full]") {
+    const std::string mkl = NITCAD_MKL_RUNTIME_PATH;
+    if (mkl.empty()) SKIP("NITCAD_MKL_RUNTIME is not set: the 3D levels need PARDISO");
+    REQUIRE(NiTCAD::linalg::load_mkl_runtime(mkl).has_value());
+    bench::set_pardiso_threads(6);
+    const bench::BenchmarkResult r = bench::run_tvb14(bench::Tier::full);
+    INFO("run error: " << r.run_error.value_or("none"));
+    REQUIRE_FALSE(r.run_error.has_value());
+    for (const auto& n : r.notes) std::printf("note: %s\n", n.c_str());
+    for (const auto& c : r.comparisons) {
+        std::printf("TVB-14 %s: %.4g (%s) %s\n", c.quantity.c_str(), c.metric, c.criterion.c_str(),
+                    c.comparison.reason.c_str());
+    }
+    REQUIRE(r.comparisons.size() == 45);  // tensor 1D, 2D, 3D: 9 each; generated 2D, 3D, swept: 6 each
+    // Measured 2026-11-05 (DECISIONS Unit 55 14.8 step 8; the misses are with the owner, 14.11 CV-Q20, CV-Q21):
+    // every tensor order 1.997-2.000; finest L2 1D 1.9e-5-3.2e-5 (pass), 2D 1.1e-4-2.1e-4 and 3D 6.7e-4-1.4e-3 (fail,
+    // the pattern of TVB-04's finding (iv)); 2D generated H1 orders 1.71, 1.27, 1.09 for psi (spread > 0.1: not in the
+    // asymptotic range); 3D generated and swept H1 p-hat 1.52-1.97, above [0.8, 1.3] (fail); every finest H1 <= 7.7e-3.
+    for (const char* field : {"psi", "phi_n", "phi_p"}) {
+        CAPTURE(field);
+        const std::string f(field);
+        for (const char* family : {"1D tensor", "2D tensor", "3D tensor"}) {
+            CAPTURE(family);
+            CHECK(outcome_of(r, f + " L2 order, " + family) == Outcome::pass);
+            CHECK(outcome_of(r, f + " Linf order, " + family) == Outcome::pass);
+        }
+        CHECK(outcome_of(r, f + " L2 finest, 1D tensor") == Outcome::pass);
+        CHECK(outcome_of(r, f + " L2 finest, 2D tensor") == Outcome::fail);
+        CHECK(outcome_of(r, f + " L2 finest, 3D tensor") == Outcome::fail);
+        CHECK(outcome_of(r, f + " H1 order, 2D generated") == Outcome::not_evaluated);
+        CHECK(outcome_of(r, f + " H1 order, 3D generated") == Outcome::fail);
+        CHECK(outcome_of(r, f + " H1 order, 3D swept") == Outcome::fail);
+        for (const char* family : {"2D generated", "3D generated", "3D swept"}) {
+            CAPTURE(family);
+            CHECK(outcome_of(r, f + " H1 finest, " + family) == Outcome::pass);
+        }
+    }
 }

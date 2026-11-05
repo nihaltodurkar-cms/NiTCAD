@@ -68,6 +68,7 @@ void set_pardiso_threads(int threads);
 [[nodiscard]] BenchmarkResult run_tvb04(Tier tier);  // fast: 1D; full and nightly: + 2D and 3D tensor
 [[nodiscard]] BenchmarkResult run_tvb07(Tier tier);  // fast: N = 64, 128 (V_bi only); full: + 256, 512 and the E gates
 [[nodiscard]] BenchmarkResult run_tvb09(Tier tier);  // fast: one bias (V_FB + 1.5 V); full: the V_G grid
+[[nodiscard]] BenchmarkResult run_tvb14(Tier tier);  // fast: 1D tensor; full: + 2D/3D tensor, 2D/3D generated, swept
 [[nodiscard]] BenchmarkResult run_tvb11();  // TVR-2 (DECISIONS Unit 55 14)
 [[nodiscard]] BenchmarkResult run_tvb12();
 [[nodiscard]] BenchmarkResult run_tvb32();

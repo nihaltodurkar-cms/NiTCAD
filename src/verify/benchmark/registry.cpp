@@ -10,7 +10,7 @@ namespace NiTCAD::verify::benchmark {
 
 namespace {
 
-constexpr std::array<Benchmark, 9> shipped{{
+constexpr std::array<Benchmark, 10> shipped{{
     {"TVB-01", "Constants and thermal voltage against CODATA 2018", Tier::fast, [](Tier) { return run_tvb01(); }},
     {"TVB-02", "Fermi-Dirac integrals F_1/2, F_-1/2, F_3/2 and the inverse of F_1/2", Tier::fast,
      [](Tier) { return run_tvb02(); }},
@@ -20,6 +20,7 @@ constexpr std::array<Benchmark, 9> shipped{{
     {"TVB-09", "MOS capacitor on a uniform substrate", Tier::fast, &run_tvb09},
     {"TVB-11", "Uniform resistor with ohmic contacts", Tier::fast, [](Tier) { return run_tvb11(); }},
     {"TVB-12", "Scharfetter-Gummel constant-field exactness", Tier::fast, [](Tier) { return run_tvb12(); }},
+    {"TVB-14", "Full drift-diffusion manufactured solution", Tier::fast, &run_tvb14},
     {"TVB-32", "The consistency suite C1-C12 on the three TVR-1 decks", Tier::fast, [](Tier) { return run_tvb32(); }},
 }};
 
