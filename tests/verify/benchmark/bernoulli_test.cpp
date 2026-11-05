@@ -7,9 +7,9 @@
 // The subnormal range is a diagnostic. The reference counts only where its uncertainty is <= 1e-3 of the criterion
 // (the TB-Q4 rule): the series and the direct method agree to that on |x| <= 1/2, the identity B(-x) = B(x) + x holds
 // to it on (1/2, 670], and the scaled form agrees with the direct one to it on [600, 670].
-// Frozen expected outcome: pass at every judged point except where std::expm1(x) overflows (x > ln DBL_MAX =
-// 709.78): fail (finding (iii) of 11.13). The hidden [.finding] case asserts pass everywhere and fails. B' is recorded
-// as a diagnostic, not judged (TB-Q7).
+// Frozen expected outcome: pass at every judged point. Until Unit 56 the points where std::expm1(x) overflows (x >
+// ln DBL_MAX = 709.78) failed (finding (iii) of 11.13); FQ4 fixed them (DECISIONS Unit 55 12). B' is recorded
+// as a diagnostic, not judged (TB-Q7), except above ln DBL_MAX (FQ5).
 #include "NiTCAD/assemble/bernoulli.hpp"
 #include "NiTCAD/verify/benchmark/registry.hpp"
 #include "NiTCAD/verify/reference/bernoulli.hpp"
@@ -115,8 +115,7 @@ TEST_CASE("TVB-03: the reference's methods agree to 1e-3 of the criterion") {
 
 TEST_CASE("TVB-03: assemble::bernoulli against the reference (frozen outcomes)") {
     double worst = 0.0, worst_x = 0.0, worst_subnormal = 0.0;
-    int judged = 0, refused = 0, failed = 0;
-    double first_fail = 0.0, last_fail = 0.0;
+    int judged = 0, refused = 0;
     for (const Judged& j : judge_all()) {
         CAPTURE(j.x, j.error, j.c.reason);
         if (j.c.outcome == Outcome::not_applicable) {
@@ -127,25 +126,15 @@ TEST_CASE("TVB-03: assemble::bernoulli against the reference (frozen outcomes)")
             continue;
         }
         ++judged;
-        if (expm1_overflows(j.x)) {
-            // Finding (iii), frozen as a fail; reported as a known finding (RC-Q2).
-            CHECK(j.c.outcome == Outcome::finding);
-            if (j.c.outcome == Outcome::finding) {
-                if (failed++ == 0) first_fail = j.x;
-                last_fail = j.x;
-            }
-        } else {
-            CHECK(j.c.outcome == Outcome::pass);
-            if (j.error > worst) {
-                worst = j.error;
-                worst_x = j.x;
-            }
+        CHECK(j.c.outcome == Outcome::pass);
+        if (j.error > worst) {
+            worst = j.error;
+            worst_x = j.x;
         }
     }
-    UNSCOPED_INFO("judged " << judged << ", worst " << worst / eps << " eps at x = " << worst_x << "; finding (iii): "
-                            << failed << " fails on [" << first_fail << ", " << last_fail << "]; subnormal range: "
-                            << refused << " points, worst relative " << worst_subnormal);
-    REQUIRE(failed > 0);
+    UNSCOPED_INFO("judged " << judged << ", worst " << worst / eps << " eps at x = " << worst_x
+                            << "; subnormal range: " << refused << " points, worst relative " << worst_subnormal);
+    REQUIRE(judged > 0);
 }
 
 TEST_CASE("TVB-03: B' diagnostic (recorded, not judged)") {
@@ -172,9 +161,26 @@ TEST_CASE("TVB-03: B' diagnostic (recorded, not judged)") {
     REQUIRE(std::isfinite(worst));
 }
 
-TEST_CASE("TVB-03 finding (iii): B within 4 eps where std::expm1 overflows", "[.finding]") {
-    for (const Judged& j : judge_all()) {
-        CAPTURE(j.x, j.error);
-        if (j.c.outcome != Outcome::not_applicable) CHECK(j.c.outcome == Outcome::pass);
+// Unit 56, FQ5 (DECISIONS Unit 55 12): B' where std::expm1 overflows, within the 4 eps of TVB-03, wherever B' is a
+// normal double. Reference: B' = B (1 - B - x) / x with B scaled (bernoulli_direct); B < 2^-1000 there, so the B in
+// 1 - B - x is below the double-double rounding of 1 - x and is dropped.
+TEST_CASE("TVB-03 (Unit 56): B' within 4 eps where std::expm1 overflows") {
+    double worst = 0.0, worst_x = 0.0;
+    int judged = 0;
+    for (const double x : grid()) {
+        if (!expm1_overflows(x)) continue;
+        const ref::ScaledDD b = ref::bernoulli_direct(x);
+        const ref::ScaledDD d{b.mantissa * (ref::DD(1.0) - ref::DD(x)) / ref::DD(x), b.exponent};
+        if (!ref::is_normal_double(d)) continue;
+        ++judged;
+        const double e = ref::relative_error(NiTCAD::assemble::bernoulli_derivative(x), d);
+        CAPTURE(x, e);
+        CHECK(e <= criterion);
+        if (e > worst) {
+            worst = e;
+            worst_x = x;
+        }
     }
+    UNSCOPED_INFO("B' above ln DBL_MAX: judged " << judged << ", worst " << worst / eps << " eps at x = " << worst_x);
+    REQUIRE(judged > 0);
 }

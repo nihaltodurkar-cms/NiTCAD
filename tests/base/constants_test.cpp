@@ -10,7 +10,7 @@ TEST_CASE("constants: values are the pinned CODATA 2018 numbers") {
     REQUIRE(q_C == 1.602176634e-19);
     REQUIRE(k_B_J_per_K == 1.380649e-23);
     REQUIRE(eps0_F_per_cm == 8.8541878128e-14);  // 8.8541878128e-12 F/m
-    REQUIRE(hbar_J_s == 1.054571817e-34);
+    REQUIRE(hbar_J_s == 1.0545718176461565e-34);  // h / 2 pi correctly rounded (Unit 56, FQ1; was 1.054571817e-34)
     REQUIRE(m0_kg == 9.1093837015e-31);
 }
 

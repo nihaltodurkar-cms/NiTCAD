@@ -307,7 +307,10 @@ TEST_CASE("Gate tunnelling: Newton converges quadratically at +1.5 V (GC7)", "[g
     for (std::size_t k = 1; k < iterations.size(); ++k) {
         const double before = iterations[k - 1].update, after = iterations[k].update;
         std::printf("GC7 iteration %d: correction %.3e\n", iterations[k].iteration, after);
-        if (before >= 1e-2 || after <= 1e-13) continue;
+        // Below the sweep's tol_update (1e-12) a correction is at the rounding floor, not in the window
+        // (1e-13 until Unit 56; owner ruling 2026-11-05: with the correct hbar the last correction is
+        // 3.77e-13, was 3.24e-14; DECISIONS Unit 55 13).
+        if (before >= 1e-2 || after <= 1e-12) continue;
         CAPTURE(k, before, after);
         CHECK(after <= before * before);
         ++pairs;
@@ -368,7 +371,9 @@ TEST_CASE("Gate tunnelling: a 2D device uniform across the gate gives the 1D cur
         const double I1 = one.points[k].terminal_current[gate];
         const double I2 = two.points[k].terminal_current[gate] / 1e-4;  // per 1 um width
         CAPTURE(one.points[k].bias_V[gate], I1, I2);
-        CHECK(relative(I2, I1) <= 1e-9);
+        // 2e-9, was 1e-9 (owner ruling 2026-11-05, Unit 56, DECISIONS Unit 55 13): at 0.25 V the agreement
+        // is 1.24e-9 with the correct hbar (7.84e-10 before); tol_update 1e-12 does not converge in 2D.
+        CHECK(relative(I2, I1) <= 2e-9);
     }
 }
 

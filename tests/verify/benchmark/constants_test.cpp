@@ -9,8 +9,8 @@
 //     is within u);
 //   - V_T(T) = k T / q at T in {1, 4.2, 77, 300, 400, 1000} K (the double T): <= gamma_4 (fl(k), fl(q), the
 //     product, the quotient).
-// Frozen expected outcome: every comparison passes except hbar, whose base value is NIST's printed 10-digit
-// truncation (finding (i) of 11.13): fail. The hidden [.finding] case asserts hbar's criterion and fails.
+// Frozen expected outcome: every comparison passes. Until Unit 56 hbar failed: its base value was NIST's printed
+// 10-digit truncation (finding (i) of 11.13), replaced by the correctly rounded h / 2 pi (FQ1, DECISIONS Unit 55 12).
 #include "NiTCAD/base/constants.hpp"
 #include "NiTCAD/verify/benchmark/registry.hpp"
 #include "NiTCAD/verify/reference/codata2018.hpp"
@@ -75,20 +75,14 @@ TEST_CASE("TVB-01: base constants against CODATA 2018 (frozen outcomes)") {
     for (const auto& c : r.comparisons) {
         CAPTURE(c.quantity, c.parameter, c.metric, c.criterion, c.comparison.reason);
         UNSCOPED_INFO(c.quantity << " " << c.parameter << ": " << c.metric << " (" << c.criterion << ")");
-        if (c.quantity.starts_with("hbar")) {
-            // Finding (i), frozen as a fail; reported as a known finding (RC-Q2).
-            CHECK(c.metric > gamma(3));
-            CHECK(c.comparison.outcome == Outcome::finding);
-            CHECK(c.comparison.reason.find("known finding (i)") != std::string::npos);
-        } else {
-            CHECK(c.comparison.outcome == Outcome::pass);
-        }
+        CHECK(c.comparison.outcome == Outcome::pass);
     }
-    CHECK(r.notes.front().ends_with("yes"));  // hbar is the printed truncation
-    REQUIRE(NiTCAD::verify::benchmark::overall(r) == Outcome::finding);
+    CHECK(r.notes.front().ends_with("no"));  // hbar is no longer the printed truncation (Unit 56, FQ1)
+    REQUIRE(NiTCAD::verify::benchmark::overall(r) == Outcome::pass);
 }
 
-TEST_CASE("TVB-01 finding (i): hbar within gamma_3 of h / 2 pi", "[.finding]") {
-    CHECK(std::abs((ref::DD(base::hbar_J_s) - hbar_reference()).to_double()) / hbar_reference().to_double() <=
-          gamma(3));
+// Unit 56, FQ1 (DECISIONS Unit 55 12): base::hbar_J_s is the double nearest to h / 2 pi.
+TEST_CASE("TVB-01 (Unit 56): hbar is the correctly rounded h / 2 pi") {
+    CHECK(base::hbar_J_s == hbar_reference().to_double());
+    CHECK(std::abs((ref::DD(base::hbar_J_s) - hbar_reference()).to_double()) / hbar_reference().to_double() <= u);
 }

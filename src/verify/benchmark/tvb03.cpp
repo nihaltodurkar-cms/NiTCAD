@@ -3,7 +3,7 @@
 // Code under test: assemble::bernoulli (header-only). Reference: verify/reference/bernoulli.hpp. Criterion (frozen):
 // <= 4 eps relative wherever B(x) is a normal double (the applicability predicate), on a logarithmic grid of
 // +-[1e-300, 745] (20 points a decade), x = 0, +-1e-2 and their neighbouring doubles, every 0.05 on [700, 745].
-// Fails where std::expm1 overflows: finding (iii).
+// Finding (iii) (B = 0 where std::expm1 overflows) was fixed in Unit 56 (DECISIONS Unit 55 12, FQ4).
 #include <cfloat>
 #include <cmath>
 #include <limits>

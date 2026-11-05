@@ -7759,6 +7759,70 @@ The frozen criteria do not move (TVM2).
   - runs the ctests of the touched areas.
 - Both full suites run before the unit is offered.
 - Nothing is pushed without the owner's word.
+#### 13. Unit 56: the fixes of findings (i)–(iii) (on `physics/reference-findings`)
+
+**Rulings:** FQ0–FQ6 are approved as recommended (owner, "go", 2026-11-05, after "what do you recommend"). In the
+same instruction the owner authorised pushing `verify/reference-numerics` and opening the TVR-1 PR (#76). Unit 56 is
+stacked on that branch and will be rebased onto main once #76 merges.
+
+*As built, finding (iii) (FQ4, FQ5):*
+- `assemble::bernoulli` and `bernoulli_derivative` above x = 709 return `(x·h)·h` and `((1 − x)·h)·h`, with
+  h = e^(−x/2). The code path below 709 is unchanged, so every value there stays bit-identical.
+- TVB-03 now passes at all 12424 judged points, worst 1.19 eps at x = 713.6. The 602 subnormal points remain
+  not applicable.
+- The new B′ case on (ln DBL_MAX, 745] judges 104 points, worst 1.20 eps at x = 713.8.
+- Known-findings entry (iii) is removed, and the table has 2 entries.
+- The frozen TVB-03 expectation in `tests/verify/benchmark/bernoulli_test.cpp` changes from "finding where expm1
+  overflows" to "pass everywhere". The hidden `[.finding]` case is gone: it is now the visible case.
+- `registry_test` expects TVB-03 to report `pass` and the table to hold 2 entries.
+- Ctests: verify 37/37, assemble 18/18 (Release).
+
+*As built, finding (i) (FQ1):*
+- `base::hbar_J_s` is now `1.0545718176461565e-34`, the correctly rounded h/2π.
+  - TVB-01 passes 12/12. The new case checks that it is the double nearest the double-double h/2π.
+  - Known-findings entry (i) is removed, leaving 1 entry.
+- Existing expectations that moved; each is listed here with old and new values:
+  - `tests/base/constants_test.cpp:13` pinned the old literal; it now pins the new one.
+  - `tests/physics/quantum_confinement_test.cpp` QC2 wrote out the old ħ in its reference; it now uses h/2π.
+  - Three cases sit at the rounding floor. They were ruled by the owner on 2026-11-05, choosing the recommended
+    option each time:
+    - `tests/solve/quantum_confinement_test.cpp` QC5 (reported, not gated, but a solve that does not converge
+      fails it): with the model on at V_G = −2 V, the equilibrium solve no longer reaches tol_update 1e-13
+      within 100 iterations, though it does with the old ħ. It converges at 2e-13, so tol_update is raised from
+      1e-13 to 2e-13.
+    - `tests/deck/gate_tunnelling_test.cpp` GC7: the last correction is 3.77e-13, against 3.24e-14 with the old
+      ħ. The window cutoff is raised from 1e-13 to the sweep's tol_update of 1e-12.
+    - GC11: at 0.25 V the 1D/2D agreement is 1.24e-9, against 7.84e-10 with the old ħ. The bound goes from 1e-9
+      to 2e-9. tol_update 1e-12 does not converge in 2D.
+  - A 6e-10 change in ħ alters GC7's Newton path visibly (iteration 2: 1.03e-2 → 1.61e-2). The gate-tunnelling
+    capacitor is near-singular (GR5), which is the likely reason. Recorded, not investigated.
+- Release suite with (i) and (iii): 163/166. The three failures were base, solve_mlda and gate_tunnelling,
+  before the edits above; after them all three pass, as do physics 2/2 and verify 37/37.
+
+*Finding (ii): FQ2 falsified; accepted as a limitation (owner, 2026-11-05, the recommended option, after measurement).*
+- Step 0.01 made F₋½ worse: worst 2.28e-11 with 91 misses, against 2.0e-11 with 82 at step 0.025.
+- The error is not interpolation. F₋½ is the slope of the tabulated ln F½, and the slope term d0·(y0 − y1)/step
+  turns the quadratures' relative error (about 3e-15 per node) into F₋½'s relative error, scaled by about
+  η/(1.5·step).
+- A prototype stored per-cell differences ln(f₍ᵢ₊₁₎/fᵢ) − Δη instead of the rounded ln γ, to avoid ln γ's
+  rounding at its magnitude (|ln γ| ≈ η). It halved the worst error to 1.1e-11 but raised the misses to 104.
+  Reverted, not committed.
+- Meeting 1e-12 would need a table built above double precision. That is a new design and was not taken.
+- Where F₋½ is used: only as a derivative, in the Jacobian entries of `physics/statistics.cpp` and in the
+  energy-balance degenerate terms (`assemble/energy_balance.cpp:108`). It exceeds 1e-12 only above η ≈ 14
+  (n ≳ 1e21 cm⁻³ in silicon).
+- Done:
+  - FQ3: the accuracy statement in `physics/fermi_dirac.hpp` now gives the mid-cell values measured by TVB-02:
+    7e-14 up to η = 5, 2.1e-12 up to 15, 4.3e-12 up to 25, 2.0e-11 up to 40. F½ is within 1e-14.
+  - The text of known-finding entry (ii) records the acceptance.
+  - Physics code is unchanged. TVB-02 and its tests are unchanged, and the hidden `[.finding]` case still fails
+    by design.
+
+*Unit 56 close-out.* Full suites on e5e9847, run in parallel (-j 6): Release 166/166 (805 s), Debug 155/155 (1070 s).
+In `nitcad verify`, TVB-01 and TVB-03 pass, TVB-02 reports the accepted finding (ii), and TVB-32 is unchanged.
+The unit is stacked on PR #76. It will be rebased onto main once #76 merges, then offered as its own PR on the
+owner's word.
+
 ---
 
 ## New questions the advisor raised (not yet in `ARCHITECTURE.md`)
