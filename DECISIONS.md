@@ -8392,6 +8392,40 @@ TVR-1/2).**
 | MI-Q10 | Findings: no code, table or attribution in NiTCAD is changed in TVR-3. Each confirmed item of 15.4, and each miss, goes to the owner as a finding with a fix proposal, as §12 did | Yes |
 | MI-Q11 | Unit and branch: Unit 55c on `verify/model-implementation`, stacked on PR #78 and rebased on `main` after it merges. Order of work as 15.6 | Yes |
 
+**15.8 Rulings (owner, "choose recommended", 2026-11-06).** MI-Q1 through MI-Q11 are approved as recommended:
+- The scope is table 15.3, with 15.1's exclusions.
+- §4.4's M criterion is amended for TVR-3 to 15.5's condition-scaled form, for values and partials alike.
+- Every returned partial is judged.
+- Documented departures (F1, F6) are checked against both forms.
+- Grade **L** (legacy, no source read) is added and treated as PC. Tag **C** (NiTCAD's own choice) is pinned, not
+  verified.
+- Step 1 aims at PB from open reproductions. The primaries of MI-Q6 are welcome whenever supplied.
+- The grids are 15.5's.
+- Trap-band quadrature and the neutral-equilibrium roots are judged. The Tsu–Esaki quadrature is reported only.
+- TVB-31 goes in `fast`, with an 8 s Debug allowance.
+- No NiTCAD change is made in TVR-3.
+- Unit 55c, on this branch.
+
+**15.9 Criteria (frozen 2026-11-06, before code; TVM2: never widened after a run).** Notation: ε = 2⁻⁵²; q_ref is
+the double-double reference rounded to double; S(q) = Σᵢ |xᵢ ∂q/∂xᵢ| over the model's inputs, from the reference's
+derivatives.
+
+| Check | Criterion | Outcome rules |
+|---|---|---|
+| Value (every entry) | \|q_sim − q_ref\| ≤ max(1e-13 \|q_ref\|, 64 ε S(q)) at every grid point inside the source's range | Any point over: fail (or finding, under grade L/PC, per 11.4's contract). Out of range: `not_applicable`, value reported |
+| Partials | The same rule for each returned partial, with S of that partial from double-double central differences of the reference's analytic derivative. Each analytic derivative is first checked at L0 against complex step to 64 ε S | As for values |
+| Documented cuts | NiTCAD returns exactly 0 where the code documents a cut. That passes if \|q_ref\| there is ≤ \|q_ref\| at the cut's threshold. Both `nextafter` neighbours of every cut and switch point are judged by the value rule | A non-zero inside a cut, or a zero outside one: fail |
+| Parameter register | Each shipped parameter is bit-equal to the correctly rounded parse of the source's printed decimal | A mismatch is a finding, recorded with its source line. Grade L or PC: finding at best. Tag C: pinned to the ruling's value |
+| Printed values | The reference, and NiTCAD, reproduce the source's printed computed values to half a unit in the last printed digit | Miss: finding |
+| Documented departures (F1, F6) | The documented form: the value rule. The published form: the value rule | The published-form miss is a finding with its attribution |
+| Grid density | ≥ 64 points per decade (or per unit for linear variables, ≥ 256 points over the range), plus switch points, their neighbours, and zeros | — |
+| 31.16 trap band, 31.19 roots | The value rule against a double-double reference: an adaptive Gauss–Kronrod integral (TC3) of the occupancy, and a Brent root (TC5) | As for values |
+| 31.25 Tsu–Esaki current | Relative difference from a double-double adaptive integral, reported per point; no pass/fail until an owner threshold | `finding`-free `diagnostic` |
+| Cost | TVB-31 adds ≤ 8 s to the serial Debug verify (idle machine). Beyond that, MI-Q9's fast/full split applies, with no change to the criteria | — |
+
+References carry U_ref from their double-double evaluation. By the TB-Q4 rule, a reference whose U_ref exceeds 1e-3 of
+the bound at a point is `not_evaluated` there.
+
 ---
 
 ## New questions the advisor raised (not yet in `ARCHITECTURE.md`)
