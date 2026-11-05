@@ -7493,6 +7493,31 @@ refusal is guarded before the call). 22 of 24 caught. Ctest `verify_consistency.
 
 Remaining in §11.6: the TVB-32 runs on the three decks. C1–C12 are built.
 
+*TVB-32, the consistency suite on the three decks (§11.6, TVR1-Q5 and the TVB-32 ruling of §11.13; tests
+`tests/verify/consistency/decks_test.cpp`).* Each deck read and built as `nitcad run` does, its outputs cleared
+(nothing written), run by `deck::run`; the device data from `benchmark::device_data` with the plan's models. Every
+operating point gets C1–C5 and C12, the equilibrium solve C1 and C3, every C–V point and the added zero-bias AC point
+(`solve_small_signal` with the deck's own frequency, 1 MHz) C7 and C8. Each result is held to the frozen
+expectation; a failed or NOT EVALUATED part also fails the test. C6, C9, C10 and C11: not run, input not produced by
+the deck.
+
+Measured (Release), every outcome as frozen, no finding:
+
+| Deck | Results | C1 | C2 | C3 | C4 | C5 | C12 | C7 | C8 |
+|---|---|---|---|---|---|---|---|---|---|
+| `pn_diode_1d` (sweep 0–0.7 V, 15 points) | 15 + equilibrium | 2 pass (0 V, equilibrium), 14 NA; worst 0.51 (0 V, quasi-Fermi, node 112) | 1 pass, 14 NA; 1.4e-19 | 16 pass; 0.0085 | 15 pass; 4.9e-4 | 15 NA | 15 pass | — | — |
+| `schottky_diode_1d` (sweep −1–0.4 V, 29 points) | 29 + equilibrium | 2 pass, 28 NA; 0.0096 | 1 pass, 28 NA; 7.4e-18 | 30 pass; 0.0097 | 29 pass; 3.1e-4 | 29 NA | 29 pass | — | — |
+| `moscap_cv` (gate −2–2 V, 17 points, 1 MHz) + the added AC point | 18 + equilibrium | 3 pass, 18 NA; 0.013 | 2 pass, 18 NA; 1.5e-15 | 21 pass; 0.0082 | 20 pass; 1.1e-13 | 20 NA | 20 pass | 2 pass, 18 NA; 0.17 | 2 pass, 18 NA; 0.0056 |
+
+The sweeps' grid values hit 0 V exactly (−1 + 20 × 0.05 and −2 + 16 × 0.125), so the zero-bias points are judged,
+not NOT APPLICABLE by rounding. Every zero-bias C7 and C8 carries its two-contacts diagnostic. Ctest
+`verify_consistency.decks`: Release 0.16 s, Debug 5.9 s. Verify suites: Release 25/25, Debug 25/25; serial Debug
+30.7 s, within §11.9's 60 s budget.
+
+§11.6 complete: C1–C12 built and TVB-32 run. Open for the owner: the listed limitations of §11.13's
+"choose recommended" ruling; C3's 0.25 V electrode-step singular pivot finding; the stale comment at
+`tests/solve/small_signal_test.cpp:345`. Next in §11: TVB-01–03 (§11.8) and the report/CLI (§11.7).
+
 ---
 
 ## New questions the advisor raised (not yet in `ARCHITECTURE.md`)

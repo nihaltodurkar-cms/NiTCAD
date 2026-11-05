@@ -674,7 +674,8 @@ add_executable(nitcad_verify_consistency_test
   tests/verify/consistency/passivity_test.cpp
   tests/verify/consistency/low_frequency_test.cpp
   tests/verify/consistency/limits_test.cpp
-  tests/verify/consistency/symmetry_test.cpp)
+  tests/verify/consistency/symmetry_test.cpp
+  tests/verify/consistency/decks_test.cpp)
 target_link_libraries(nitcad_verify_consistency_test PRIVATE NiTCAD::verify_benchmark NiTCAD::deck
   Catch2::Catch2WithMain)
 target_compile_definitions(nitcad_verify_consistency_test PRIVATE
