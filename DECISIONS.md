@@ -8524,10 +8524,12 @@ recommended and proceed").**
 - **Methods** (sources DLMF §4.24, §4.26, §7.6, §7.9, §25.12; PA, open):
   - log1p: 2 atanh(x/(2 + x)) by series for |x| < 1/8.
   - erf: the series of positive terms 2/√π e^{−x²} Σ 2ⁿx^{2n+1}/(2n+1)!! (DLMF 7.6.2) for x < 3, and erfc by the
-    continued fraction (DLMF 7.9.2) for x ≥ 3.
+    even-part continued fraction √π e^{x²} erfc x = 2x/(2x² + 1 − 1·2/(2x² + 5 − 3·4/(2x² + 9 − ⋯))) (DLMF 7.9.2, read
+    2026-11-06) for x ≥ 3.
   - atan: Newton on tan from std::atan, with sin and cos by Taylor.
   - asin(x) = atan2(x, √((1 − x)(1 + x))).
-  - li2: the series, the Landen identity (DLMF 25.12.2 with 25.12.5), reflection (25.12.6) and inversion (25.12.4).
+  - li2: the series (DLMF 25.12.1), the Landen identity (25.12.3), reflection (25.12.6) and inversion (25.12.4),
+    all read 2026-11-06.
 - **Criteria** (u_dd = 2⁻¹⁰⁴; U_ref is the quadrature's own error estimate, added to the bound):
 
 | Check | Bound |
@@ -8535,7 +8537,7 @@ recommended and proceed").**
 | erf(1) against OEIS A099286's 40 digits; tanh(1) against A073744's; exact comparison (TC1's method) | 4 u_dd relative |
 | li2(−1) = −π²/12, li2(½) = π²/12 − ½ ln²2, li2(1) = π²/6; atan(1) = π/4; asin(½) = π/6; sin(π/6) = ½; cos(π/4) = √2/2 | 8 u_dd relative |
 | erf(x) against qag15 of (2/√π) e^{−t²} over [0, x], 64 points on (0, 6] | 16 u_dd relative + U_ref |
-| erfc(x) against qag15 of (2/√π) e^{−t²} over [x, x + 15], 64 points on [3, 26] | 16 u_dd relative + U_ref |
+| erfc(x) against qag15 of (2/√π) e^{−t²} over [x, x + 15], 64 points on [3, 25] (amended before any run: the first draft said [3, 26], but erfc(26) ≈ 5e-296 is below double-double's normal range of 1e-280, `double_double.hpp`) | 16 u_dd relative + U_ref |
 | atan(x) against qag15 of 1/(1 + t²) over [0, x], 64 points on (0, 20] | 16 u_dd relative + U_ref |
 | li2(x) against −qag15 of ln(1 − t)/t over [0, x], 64 points on [−20, 0.99] | 16 u_dd relative + U_ref |
 | log1p(x) against x − x²/2 + x³/3 − x⁴/4, for \|x\| ≤ 1e-9 | 4 u_dd relative |
@@ -8545,6 +8547,44 @@ recommended and proceed").**
 | sin²y + cos²y = 1 for \|y\| ≤ 1; sin(asin x) = x for \|x\| ≤ 1; atan(x) + atan(1/x) = π/2 for x > 0 | 8, 16, 8 u_dd |
 
 A miss is brought to the owner. It is not met by widening a bound (TVM2).
+
+**15.12 Step 2 as built (2026-11-06).** The files are `include/NiTCAD/verify/reference/special_functions.hpp`,
+`src/verify/reference/special_functions.cpp` and `tests/verify/reference/special_functions_test.cpp`.
+
+Every 15.11 check passes on its first run (Release):
+
+| Check | Measured worst | Bound |
+|---|---|---|
+| erf(1), tanh(1) against OEIS | 0.50, 0.23 u_dd | 4 |
+| Special values (li2 at −1, ½, 1; atan 1; asin ½; sin π/6; cos π/4) | 0.64 u_dd | 8 |
+| erf against Gauss–Kronrod on (0, 6] | 2.5 u_dd | 16 + U_ref |
+| erfc against Gauss–Kronrod on [3, 25] | 85 u_dd (within U_ref) | 16 + U_ref |
+| atan on (0, 20]; li2 on [−20, 0.99] | 0.99; 1.5 u_dd | 16 + U_ref |
+| log1p against Taylor | 0.43 u_dd | 4 |
+| expm1∘log1p; log1p_exp antisymmetry; tanh doubling | 1.2; 0.11; 0.96 | 16; 8; 16 |
+| sin² + cos²; sin∘asin; atan x + atan 1/x | each ≤ 1 u_dd | 8; 16; 8 |
+
+Two notes on the build:
+- **The erfc figure.** The 85 u_dd grows like x²/8. That is `exp`'s documented error at argument x² (TC1: "a few
+  u_dd plus |x|/8 u_dd"), which both erfc and the integrand inherit. A diagnostic with the integral in 0.25-wide
+  pieces agrees to 0.4 u_dd at x = 3 and 28 u_dd at x = 25. Nothing points at the continued fraction.
+- **The domains of sin and cos** are |x| ≤ 2, not 15.11's ≤ 1, so that sin(asin x) can be formed up to π/2. No bound
+  changed.
+
+Mutations: 20 mutants of `special_functions.cpp`.
+- 17 were caught on the first run. M16 (atan2's x < 0 branch), M17 (asin's (1 − x)(1 + x) written 1 − x²) and M20
+  (erfc below 3) survived.
+- Two checks were added (none loosened):
+  - atan2 at three left-half-plane points, to 8 u_dd: 0.21 u_dd worst;
+  - erfc on [0, 2.99] against Gauss–Kronrod, **absolutely**, to 16 u_dd + U_ref: 2.1 u_dd worst.
+- After the additions, 19 of 20 are caught. M17 is equivalent for every input the references use: for a
+  double-valued x the double-double x² is exact, so 1 − x² equals (1 − x)(1 + x).
+- **Found by M20 and now documented in the header:** below x = 3, erfc is 1 − erf. It is accurate absolutely, not
+  relatively; its relative error grows by erf/erfc, which is 4.5e4 at x = 3. No TVB-31 reference uses erfc there.
+  MLDA's mean factor uses erf.
+
+Tests: all 44 non-`full` verify ctests pass in Release, and `verify.special_functions` takes 0.18 s. The Debug cost
+is measured at close-out (MI-Q9's 8 s allowance).
 
 ---
 

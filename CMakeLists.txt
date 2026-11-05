@@ -158,6 +158,9 @@ add_custom_command(
           src/verify/reference/pn_junction.cpp
           include/NiTCAD/verify/reference/first_integral.hpp
           src/verify/reference/first_integral.cpp
+          include/NiTCAD/verify/reference/special_functions.hpp
+          src/verify/reference/special_functions.cpp
+          include/NiTCAD/verify/reference/model_parameters.hpp
           include/NiTCAD/verify/reference/mos_capacitor.hpp
           src/verify/reference/mos_capacitor.cpp
   COMMENT "verify/reference include boundary (VR2)")
@@ -168,7 +171,7 @@ add_library(nitcad_verify_reference STATIC src/verify/reference/double_double.cp
   src/verify/reference/chebyshev.cpp src/verify/reference/metrics.cpp
   src/verify/reference/contract.cpp src/verify/reference/fermi_dirac.cpp
   src/verify/reference/pn_junction.cpp src/verify/reference/first_integral.cpp
-  src/verify/reference/mos_capacitor.cpp)
+  src/verify/reference/mos_capacitor.cpp src/verify/reference/special_functions.cpp)
 add_library(NiTCAD::verify_reference ALIAS nitcad_verify_reference)
 target_include_directories(nitcad_verify_reference PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
 add_dependencies(nitcad_verify_reference nitcad_verify_reference_boundary)
@@ -187,7 +190,8 @@ add_executable(nitcad_verify_test
   tests/verify/reference/metrics_test.cpp
   tests/verify/reference/contract_test.cpp
   tests/verify/reference/pn_junction_test.cpp
-  tests/verify/reference/mos_capacitor_test.cpp)
+  tests/verify/reference/mos_capacitor_test.cpp
+  tests/verify/reference/special_functions_test.cpp)
 target_link_libraries(nitcad_verify_test PRIVATE NiTCAD::verify_reference Catch2::Catch2WithMain)
 nitcad_add_file_tests(verify nitcad_verify_test)
 add_test(NAME verify_reference_boundary
