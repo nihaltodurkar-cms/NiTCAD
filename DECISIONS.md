@@ -8001,6 +8001,36 @@ References are analytic (U_ref at rounding) or computed in double-double, with U
 - Time: TVB-04 fast takes 0.17 s in Debug. In Release, 1D + 2D takes 2.1 s, and 64³ takes 709 s at about 20 GB.
 - The verify ctests pass in Release and Debug (41/41). Serial Debug takes 59.5 s against the 60 s budget (VR10), so the fast tier is at its limit. The fast cases 14.7 still lists (TVB-07's coarsest two levels, TVB-09's one bias) go to the owner if they take it over 60 s.
 
+*Step 5, TVB-04 (unstructured families).*
+- **Meshes** (`src/verify/benchmark/tvb04.cpp`). Each family uses the same domain as the tensor families, [−L, L] × [0, L]^(D−1), with the same manufactured ψ.
+  - Patches `x_min` (electrode) and `x_max` (ohmic).
+  - Size bound h_max = L/k. Interface resolution s = h_max, the straddle width, as the tensor axis's L/n_side.
+  - 2D generated: `generate_mesh(Geometry2D)`, two rectangles that meet at x = 0, k = 16, 32, 64, 128.
+  - 3D generated: `generate_mesh(Geometry3D)`, a box with the planar interface x = 0 and one seed per slab, k = 8, 16, 32.
+  - 3D swept: `generate_swept`. The (x, y) cross-section (the interface lies in it) is swept along z on uniform lines h_max apart, k = 8, 16, 32.
+  - The device takes each generated mesh's P4 certificate. Node regions are the generator's, and are checked against the side of x = 0. A node on x = 0 is refused, since the interface is straddled.
+  - h for the order study is (V/N)^(1/D) with V = 2L^D (CV-Q7). The 3D levels use PARDISO (CV-Q15).
+- **Norm.** The discrete H1 seminorm is Σ_edges coupling_area (e_i − e_j)²/length (as in `complex_convergence_test.cpp`). It is relative to the same seminorm of the exact ψ. **Interpretation for the owner:** 14.7's potential-scale normaliser (A + V_T) is a voltage, so it is not used for a gradient norm. The seminorm of the exact ψ does not see ψ_c, which is the problem that rule avoids.
+- **Comparisons.** Each family records "psi H1 order, …" (p_th 1, band [0.8, 1.3]) and "psi H1 finest, …" (≤ 1e-2). The L2 and L∞ orders are in the notes, marked "reported, not gated". TVB-04's full tier now has 15 comparisons (was 9).
+- **Results (Release, PARDISO 6 threads for 3D).**
+
+  | Family | Nodes (coarse → fine) | H1 orders (coarse → fine) | p̂ | Finest H1 | L2 orders (reported) | Outcome |
+  |---|---|---|---|---|---|---|
+  | 2D generated | 1 087 → 68 406 | 1.21, 1.11, 1.08 (spread 0.099) | 1.08 | 7.9e-4 | 2.29, 1.86, 2.18 | pass, pass |
+  | 3D generated | 3 985 → 224 485 | 1.52, 1.29 | 1.29 | 3.3e-3 | 2.05, 2.03 | pass, pass |
+  | 3D swept | 2 538 → 143 550 | 1.45, 1.23 | 1.23 | 3.3e-3 | 1.90, 2.25 | pass, pass |
+
+  - U_iter/e ≤ 6.3e-14 at every level.
+  - 3 levels, so the asymptotic-range check is `not_evaluated` and p̂ is the finest pair (14.7).
+- **Observations, not findings:**
+  - The H1 orders fall toward 1 as the mesh is refined, from above. The coarse pairs (1.52, 1.45) lie outside the band. With 3 levels only the finest pair is judged.
+  - 3D generated's p̂ = 1.29 is 0.01 below the band's top.
+  - 2D's spread of 0.099 is 0.001 under the 0.1 limit.
+  - A fourth 3D level would settle both. It is not in the frozen ladder, and it is not added.
+- **Full-tier test.** `verify_full.tvb04` expects the 15 outcomes: the tensor ones as before, and the six unstructured ones pass.
+  - Time: the 3D generated and swept ladders take about 13 minutes together; `verify_full.tvb04` passes (19 assertions) in 1505 s. It is still local only (CV-Q16).
+- The verify ctests pass in Release and Debug (41/41; the fast tier is unchanged). Serial Debug takes 59.6 s against the 60 s budget (VR10).
+
 **14.9 Owner rulings after the TVB-04 run (2026-11-05).**
 
 | # | Question | Ruling |
