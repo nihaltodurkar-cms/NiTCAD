@@ -7686,6 +7686,79 @@ within 60 s. The serial Debug time varies by a few seconds from run to run (63.2
 previous set), so the margin is about 3 s. Full suites (parallel, -j 6): Release 166/166 (823 s), Debug 155/155
 (1091 s). VR1–VR10 met; TVR-1 complete. Open for the owner: findings (i)–(iii) (no code changed in TVR-1, VR9).
 
+
+#### 12. Findings (i)–(iii): causes and fix proposals (proposed 2026-11-05; rulings before code)
+
+TVR-1 changed no code under test (VR9). Each fix below is its own code change, so these rulings come before any of
+it. Proposed vehicle (FQ0): one small unit, Unit 56, on `physics/reference-findings`, branched from
+`verify/reference-numerics` so that TVB-01/02/03 judge the fixes. Each fixed finding's known-findings entry is
+removed in the same commit. RC-Q2 makes a stale entry report "no longer reproduces", so a missed removal shows up.
+The frozen criteria do not move (TVM2).
+
+**Finding (i): ħ off by 6.13e-10 (TVB-01).**
+- Cause: `include/NiTCAD/base/constants.hpp:21` stores `1.054571817e-34`. That is CODATA 2018's printed ħ, rounded to
+  10 significant figures. ħ = h/2π with h = 6.62607015e-34 exact, so ħ = 1.054 571 817 646 156 5…e-34. The
+  comment "(exact)" is wrong: the value is exact, the stored decimal is not.
+- FQ1 (recommended A):
+  - A: replace the literal with the correctly rounded double `1.0545718176461565e-34`, with a comment giving
+    h/2π. TVB-01 checks it to its γ_n bound.
+  - B: compute `h_J_s / (2π)` in constexpr, adding `h_J_s = 6.62607015e-34`. This can be up to about 1.5 ulp
+    off, where A is correctly rounded.
+- Effect: the 10 uses (band-to-band, gate tunnelling, MLDA, the thermal γ_ii) move by 6.1e-10 relative. Any
+  existing expectation that moves is reported to the owner with its old and new values. None is re-baselined
+  silently.
+
+**Finding (ii): F₋½ misses 1e-12 from η ≈ 13.76, worst 2.0e-11 at η = 38.5 (TVB-02).**
+- Cause: F₋½ is returned as F½·(1 + d lnγ/dη), with the slope taken from the quintic Hermite interpolant of lnγ.
+  - The interpolant's derivative error is O(h⁵), with step h = 0.025.
+  - As η grows, 1 + d lnγ/dη ≈ 3/(2η). The slope's absolute error is therefore amplified about η/1.5 times
+    (≈ 26 at η = 38.5) into F₋½'s relative error.
+  - TVB-02's grid sits at 0.49 of a table cell, where the interpolation error is largest. The existing gate
+    (`tests/physics/fermi_dirac_test.cpp:79`, 5e-12 above η = 15) samples elsewhere in the cell. So the
+    header's "3e-12 up to 40" is optimistic.
+- FQ2 (recommended A):
+  - A: reduce `step` in `src/physics/fermi_dirac.cpp` from 0.025 to 0.01. This applies to both the F½ and F₃/₂
+    tables, which share the constant.
+    - Expected slope error is about 2.5⁵ ≈ 98 times smaller, so the worst case becomes about 2e-13: a 5× margin
+      on 1e-12.
+    - Each table grows from 1681 to 4201 nodes (about 100 KB each).
+    - The one-time build cost per process grows about 2.5×. It will be measured and reported. If it is
+      material for a short run, that comes back to the owner.
+  - B: step 0.0125, about 32× smaller. The margin is only about 1.6×, too thin.
+  - C: interpolate F₋½ separately. Rejected: it breaks the Unit 14 property that the returned derivative is
+    exactly that of the returned value, which is what the Newton Jacobian relies on.
+- FQ3 (recommended): correct the accuracy statements in `include/NiTCAD/physics/fermi_dirac.hpp` to the values
+  measured after the change. Leave `fermi_dirac_test.cpp`'s bounds as they are (they only get looser than the new
+  accuracy). TVB-02 is the mid-cell gate.
+- Effect: F½ and F₃/₂ values in (-2, 40] change at rounding level (~1e-15). Fermi-Dirac results can move in their
+  last digits. Moved expectations are handled as in FQ1.
+
+**Finding (iii): B(x) = 0 on x ∈ (709.78, 714.95] (TVB-03, 104 fails).**
+- Cause: `include/NiTCAD/assemble/bernoulli.hpp:30` returns `x / std::expm1(x)`. `expm1` overflows to inf above
+  ln DBL_MAX = 709.78, so B returns 0 while x·e⁻ˣ is still a normal double. The header's "B(x) = 0 once x e^-x
+  underflows" is wrong on that interval. `bernoulli_derivative` has the same defect: there it should return
+  (1 − x)e⁻ˣ. TVB-03 does not compare B′.
+- FQ4 (recommended A):
+  - A: for x > 709, return B = (x·e^(−x/2))·e^(−x/2) and B′ = ((1 − x)·e^(−x/2))·e^(−x/2).
+    - x/2 is exact, and each factor stays normal.
+    - The bound is about 2 ulp from `exp` plus 1 ulp from the products. That is under the 4 eps criterion; the
+      measured worst case will be reported.
+    - Below 709 the code path is unchanged, so every existing result stays bit-identical.
+  - B: use the same form for all x > 40. It is equally accurate, but it changes values at ulp level in
+    (40, 709] for no gain.
+  - C: accept the finding as a limitation. In the Scharfetter-Gummel flux, x > 709 means a 709 kT (18 V at 300 K)
+    drop across one edge, where both 0 and 1e-308 are effectively zero.
+- FQ5 (recommended): add a B′ case to the unit's tests on (709, 745], against a double-double reference of B′ built
+  like TVB-03's scaled form. TVB-03 itself stays frozen.
+
+**Order and acceptance (FQ6, recommended):**
+- Order: (iii), then (i), then (ii), one commit each.
+- Each commit:
+  - removes its known-findings entry;
+  - shows the benchmark passing;
+  - runs the ctests of the touched areas.
+- Both full suites run before the unit is offered.
+- Nothing is pushed without the owner's word.
 ---
 
 ## New questions the advisor raised (not yet in `ARCHITECTURE.md`)
