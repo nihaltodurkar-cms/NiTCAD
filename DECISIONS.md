@@ -8079,6 +8079,43 @@ References are analytic (U_ref at rounding) or computed in double-double, with U
   - Step 6 adds 0.8 s of L0 tests (after cutting the ODE steps and collocation degrees) and 0.9 s for TVB-07's fast case.
   - TVB-09's fast case (14.7) and TVB-14's are still to come.
 
+
+*Step 7, TVB-09 (MOS capacitor) and the shared first integral.*
+- **Refactor, before TVB-09:** the one-sided first integral (G, the neutral bulk, Φ_b and the profile inversion) moved from `pn_junction.cpp` to `verify/reference/first_integral.{hpp,cpp}`. TVB-07 and TVB-09 both use it. The TVB-07 results and its L0 tests are bit-identical after the move (the same I3 numbers).
+- **Reference** (`verify/reference/mos_capacitor.{hpp,cpp}`):
+  - Kingston–Neustadter: Q_s = −sgn(t) √(2qεV_T Φ_b(u_s)), and V_G = V_FB + V_T t − Q_s/C_ox, with u_s(V_G) by Brent in double-double.
+  - C_LF = C_s C_ox/(C_s + C_ox), with C_s taken analytically (its flat-band limit at t = 0). As the second method, it is also taken by complex step on a complex-double Q_s, where |t| ≥ ½. Every run checks the two against each other to 1e-10 (measured agreement is better).
+  - V_FB = φ_m − χ − (E_g/2 + (V_T/2) ln(N_c/N_v)) + V_T u_b − qQ_f/C_ox.
+  - L0 tests (`tests/verify/reference/mos_capacitor_test.cpp`, 6 cases, 82 assertions):
+    - at flat band, Q_s = 0 and C_LF = 1/(1/C_ox + L_D/ε) to 1e-12;
+    - the V_G round trip holds to 1e-25;
+    - the depletion charge −√(2qεN_A V_T(t − 1 + e^−t)) holds to 1e-6. Two expectations in the test were mine and wrong, and were fixed before the commit: the first omitted the e^−t term (2.5 % at t ≈ 3), and the second took V_FB + 1.5 V for strong inversion when it is moderate (0.79 C_ox);
+    - C_LF agrees with a double-double central difference of the reference's own Q_G to 1e-9, and with the complex step to 1e-10. It exceeds 0.9 C_ox in strong accumulation (V_FB − 1) and strong inversion (V_FB + 2);
+    - V_FB is exact on data where it is exact by construction (u_b = −1);
+    - the flat profile holds, a negative distance is refused, and bad inputs are refused.
+- **Benchmark** (`src/verify/benchmark/tvb09.cpp`), as its header states:
+  - p-Si with N_A = 1e17 and depth 0.5 µm; a metal gate (4.7 eV) on a lumped 10 nm SiO₂ with Q_f = 5e10 cm⁻²; an ohmic substrate.
+  - The solve is Equations::equilibrium_poisson (the quasi-static state; drift-diffusion cannot reach inversion on a MOS-C, bias.hpp). It uses Boltzmann statistics and no BGN.
+  - **Mesh, a design choice the criteria do not fix:** the N of the frozen ladder (64…512) are graded exponentially toward the gate, x = d(e^{aξ} − 1)/(e^a − 1) with a = 6.2. The first spacing is 0.1 nm at N = 64. The reason: the accumulation and inversion layers are under 1 nm, so a uniform mesh could not be in the asymptotic range there. h is the ξ spacing.
+  - NiTCAD's side:
+    - Q_s = −(Q_G + qQ_f);
+    - C_LF is a Richardson-extrapolated central difference (4 and 2 mV) of NiTCAD's quasi-static Q_G at the finest level. Its uncertainty |D(h/2) − D(h)|/3 must be at most 1e-4 relative;
+    - V_FB = V_G − ψ_s − Q_G/C_ox + ψ_b − qQ_f/C_ox at V_G = V_FB(ref), at every level.
+  - The V_G grid is V_FB + {−1, −0.5, −0.2, −0.05, 0, 0.05, 0.2, 0.5, 1, 1.5, 2} V, swept from flat band downward and upward. Points with |Q_s| < 1e-3 of the grid's range are `not_applicable`, with the predicate named.
+  - U_ref is the infinite-depth tail at x = d relative to the band bending: 1.3e-15, against 1e-6.
+  - Fast tier: V_FB + 1.5 V with all four levels (7 comparisons). Full tier: the grid (37).
+- **Results (Release, full tier, 0.12 s):**
+  - V_FB = −0.3544794900599644 V at every level, equal to the reference: pass (D).
+  - Q_s orders at every applicable V_G are 1.997–2.000, with spreads ≤ 0.002: pass.
+  - Finest Q_s is 1.8e-6 to 5.6e-6, and finest C_LF is 1.5e-6 to 6.1e-6, against 1e-3: pass. The C_LF difference uncertainty is ≤ 7.9e-6.
+  - At V_FB itself (Q_s = 0), the three comparisons are `not_applicable`.
+  - 34 pass and 3 not applicable; overall pass.
+- **Tests.**
+  - The fast case is in `code_verification_test.cpp` (7, pass).
+  - `verify_full.tvb09` (label `full`) freezes the 37 outcomes.
+  - `registry_test` expects 9 ids.
+  - The verify ctests pass in Release and Debug (43/43). Serial Debug takes 61.7–62.4 s against the 75 s budget of CV-Q19.
+
 **14.9 Owner rulings after the TVB-04 run (2026-11-05).**
 
 | # | Question | Ruling |
@@ -8091,11 +8128,11 @@ References are analytic (U_ref at rounding) or computed in double-double, with U
 | CV-Q17 | The unstructured families' H1 error: normalised by the exact ψ's discrete H1 seminorm (recommended; the potential scale A + V_T is a voltage, not a gradient norm), or literally by A + V_T? | **Recommended: the exact ψ's H1 seminorm** (owner, "choose recommended", 2026-11-05). |
 | CV-Q18 | Close margins after step 5 (3D generated p̂ 1.29 against 1.3; 2D spread 0.099 against 0.1; the coarse 3D pairs above the band). Add a fourth 3D level, or keep the frozen ladders (recommended)? | **Recommended: keep the frozen ladders**; nothing added or widened (TVM2). |
 
-**14.10 Open owner question (2026-11-05, after step 6).**
+**14.10 Owner ruling after step 6 (2026-11-05).**
 
-| # | Question | Options | Recommendation |
+| # | Question | Options | Ruling |
 |---|---|---|---|
-| CV-Q19 | Serial Debug verify is 62.6–64.5 s against VR10's 60 s. The tree before step 6 was already at 60.45 s, and TVB-09/14 fast cases are still to come. | (A) Raise VR10 to 75 s for serial Debug, stated with the measured spread. (B) Move TVB-07's fast case (and later TVB-09's) to `full`, which departs from 14.7's ladder column. (C) Keep 60 s and shorten an existing fast test (the largest are TVB-02's `fermi_dirac`, 21–22 s, and C-transient, 15 s), which touches TVR-1's frozen tests. | **A.** The budget has no headroom with or without TVR-2. A and B leave every frozen criterion as it is, and A also keeps the frozen ladders. |
+| CV-Q19 | Serial Debug verify is 62.6–64.5 s against VR10's 60 s. The tree before step 6 was already at 60.45 s, and TVB-09/14 fast cases are still to come. | (A) Raise VR10 to 75 s for serial Debug, stated with the measured spread. (B) Move TVB-07's fast case (and later TVB-09's) to `full`, which departs from 14.7's ladder column. (C) Keep 60 s and shorten an existing fast test (the largest are TVB-02's `fermi_dirac`, 21–22 s, and C-transient, 15 s), which touches TVR-1's frozen tests. | **A** (owner, "choose recommended", 2026-11-05). From step 6 on, the serial Debug verify budget is 75 s, measured as before (`ctest -R verify`, Debug, serial, the `full` label excluded). VR10's 60 s stays the record of TVR-1's acceptance (11.10) and is not edited. The reason: the budget had no headroom with or without TVR-2, and A changes no frozen criterion or ladder. |
 ---
 
 ## New questions the advisor raised (not yet in `ARCHITECTURE.md`)

@@ -2,6 +2,8 @@
 // Poisson-Boltzmann by its first integral (Unit 55, TVR-2, TVB-07; DECISIONS Unit 55 6, 14.4), with an independent
 // cross-check by Chebyshev collocation (I3).
 //
+// The one-sided first integral and its profile are first_integral.hpp's (shared with TVB-09).
+//
 // Problem. p side x < 0 (acceptors N_A), n side x > 0 (donors N_D), the doping step at x = 0; reduced potential
 // u = psi / V_T with n = n_i e^u and p = n_i e^-u, and
 //     u'' = (q / (eps V_T)) (n - p - N_D)  (x > 0),     u'' = (q / (eps V_T)) (n - p + N_A)  (x < 0),

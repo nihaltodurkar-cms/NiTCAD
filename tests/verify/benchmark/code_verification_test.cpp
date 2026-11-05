@@ -1,6 +1,7 @@
 // TVR-2 code-verification benchmarks (DECISIONS Unit 55 14.4, criteria 14.7, frozen before code): their frozen
 // expected outcomes. TVB-04 (Poisson MMS) is E-class, its fast tier the 1D ladder; TVB-07 (pn junction) runs V_bi
-// (D) on its coarsest two levels in fast. TVB-11 (uniform resistor) and
+// (D) on its coarsest two levels in fast, and TVB-09 (MOS capacitor) its ladder at one bias. TVB-11 (uniform
+// resistor) and
 // TVB-12 (Scharfetter-Gummel at constant field) are D-class: every comparison passes, to 64 eps N^2.
 #include <catch2/catch_test_macros.hpp>
 
@@ -43,4 +44,8 @@ TEST_CASE("TVB-04: Poisson MMS with a dielectric jump, 1D tensor ladder (frozen 
 
 TEST_CASE("TVB-07: the equilibrium pn junction, fast tier (frozen outcome: pass)", "[tvr2]") {
     require_all_pass(bench::run_tvb07(bench::Tier::fast), 2);  // V_bi to 64 eps at N = 64 and 128 (orders not judged)
+}
+
+TEST_CASE("TVB-09: the MOS capacitor, fast tier at one bias (frozen outcome: pass)", "[tvr2]") {
+    require_all_pass(bench::run_tvb09(bench::Tier::fast), 7);  // V_FB at 4 levels; Q_s order, Q_s and C_LF finest
 }

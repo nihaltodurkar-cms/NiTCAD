@@ -75,3 +75,19 @@ TEST_CASE("TVB-07 full tier: N = 64 ... 512 (frozen outcomes)", "[tvb07_full]") 
     }
     CHECK(bench::overall(r) == Outcome::pass);
 }
+
+TEST_CASE("TVB-09 full tier: the V_G grid at N = 64 ... 512 (frozen outcomes)", "[tvb09_full]") {
+    const bench::BenchmarkResult r = bench::run_tvb09(bench::Tier::full);
+    REQUIRE_FALSE(r.run_error.has_value());
+    for (const auto& n : r.notes) UNSCOPED_INFO("note: " << n);
+    // V_FB at 4 levels, then per V_G (11) the Q_s order and the finest Q_s and C_LF. At V_G = V_FB, Q_s = 0: its
+    // three are not_applicable (|Q_s| below 1e-3 of the range). Measured: orders 1.997-2.000, finest Q_s 2e-6 to
+    // 6e-6, C_LF 1.5e-6 to 6e-6.
+    REQUIRE(r.comparisons.size() == 37);
+    for (const auto& c : r.comparisons) {
+        CAPTURE(c.quantity, c.metric, c.comparison.reason);
+        const bool flat_band = c.quantity.ends_with("V_G - V_FB = 0 V");
+        CHECK(c.comparison.outcome == (flat_band ? Outcome::not_applicable : Outcome::pass));
+    }
+    CHECK(bench::overall(r) == Outcome::pass);
+}

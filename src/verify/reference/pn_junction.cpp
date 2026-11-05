@@ -6,53 +6,11 @@
 #include <utility>
 
 #include "NiTCAD/verify/reference/chebyshev.hpp"
-#include "NiTCAD/verify/reference/tanh_sinh.hpp"
+#include "NiTCAD/verify/reference/first_integral.hpp"
 
 namespace NiTCAD::verify::reference {
 
 namespace {
-
-// G(t) = e^t - 1 - t: the Taylor series sum_{k >= 2} t^k / k! for |t| < 1/4 (positive terms for t > 0, alternating
-// and decreasing for t < 0, so no cancellation beyond a factor 1 + O(t)); expm1(t) - t elsewhere, where the
-// difference loses at most a factor of about 8.
-DD G(const DD& t) {
-    if (std::abs(t.hi) < 0.25) {
-        DD term = t * t * DD(0.5), sum = term;
-        for (int k = 3; k < 60; ++k) {
-            term = term * t / DD(static_cast<double>(k));
-            sum += term;
-            if (std::abs(term.hi) <= 0x1p-110 * std::abs(sum.hi)) break;
-        }
-        return sum;
-    }
-    return expm1(t) - t;
-}
-
-// asinh(a) for a > 0 as log(a + sqrt(a^2 + 1)); returns e^asinh(a) as well.
-std::pair<DD, DD> asinh_and_exp(const DD& a) {
-    const DD e = a + sqrt(a * a + DD(1.0));
-    return {log(e), e};
-}
-
-struct Side {
-    DD u_b;     // bulk level
-    DD n_b, p_b;
-    DD N;       // |net doping|
-    double sign;  // +1: n side (u increases with x toward u_b), -1: p side
-    // Phi_b / N at tail t = |u - u_b|: (1/2) (du/dx_hat)^2 with x_hat = x / debye. Taken from t itself, never from
-    // u - u_b (which cancels to about u_dd |u_b| / t relative when t is small, and made x(s) noisy at 1e-18).
-    [[nodiscard]] DD phi_tail(const DD& t) const {
-        const DD d = sign > 0 ? -t : t;  // u - u_b
-        return (n_b * G(d) + p_b * G(-d)) / N;
-    }
-    // u at tail t: the bulk side of the junction.
-    [[nodiscard]] DD u_at(const DD& t) const { return sign > 0 ? u_b - t : u_b + t; }
-    // k(s) = e^s / |du/dx_hat| at t = e^s.
-    [[nodiscard]] DD k(const DD& s) const {
-        const DD t = exp(s);
-        return t / sqrt(ldexp(phi_tail(t), 1));
-    }
-};
 
 bool positive_finite(double v) { return std::isfinite(v) && v > 0.0; }
 
@@ -65,23 +23,20 @@ std::expected<PnJunction, std::string> pn_junction(const PnJunctionInput& in) {
     }
     PnJunction j;
     j.in = in;
-    const DD ni(in.ni_cm3), VT(in.thermal_voltage_V);
-    const auto [an, en] = asinh_and_exp(DD(in.donors_cm3) / (ni * DD(2.0)));
-    const auto [ap, ep] = asinh_and_exp(DD(in.acceptors_cm3) / (ni * DD(2.0)));
-    j.u_n = an;
-    j.u_p = -ap;
-    j.n_n = ni * en;  // n_i e^{u_n}
-    j.p_n = ni / en;
-    j.p_p = ni * ep;  // n_i e^{-u_p}
-    j.n_p = ni / ep;
+    const DD VT(in.thermal_voltage_V);
+    const NeutralBulk n = neutral_bulk(in.ni_cm3, in.donors_cm3);
+    const NeutralBulk p = neutral_bulk(in.ni_cm3, -in.acceptors_cm3);
+    j.u_n = n.u_b;
+    j.u_p = p.u_b;
+    j.n_n = n.n_b;
+    j.p_n = n.p_b;
+    j.n_p = p.n_b;
+    j.p_p = p.p_b;
     j.psi_n = VT * j.u_n;
     j.psi_p = VT * j.u_p;
     j.built_in_V = j.psi_n - j.psi_p;
-    const DD Nn(in.donors_cm3), Np(in.acceptors_cm3);
-    // Phi_n(u) - Phi_p(u) in cm^-3 (both sides' first integrals, unscaled).
-    const auto mismatch = [&](const DD& u) {
-        return (j.n_n * G(u - j.u_n) + j.p_n * G(j.u_n - u)) - (j.n_p * G(u - j.u_p) + j.p_p * G(j.u_p - u));
-    };
+    // Phi_n(u) - Phi_p(u) in cm^-3: u and eps u' continuous at x = 0.
+    const auto mismatch = [&](const DD& u) { return first_integral_phi(n, u) - first_integral_phi(p, u); };
     const double t = u_dd * (std::abs(j.u_n.hi) + std::abs(j.u_p.hi));
     const BrentResult b = brent_zero(mismatch, j.u_p, j.u_n, t);
     if (b.status != BrentStatus::ok) return std::unexpected("pn_junction: Brent did not converge for u_j");
@@ -89,76 +44,35 @@ std::expected<PnJunction, std::string> pn_junction(const PnJunctionInput& in) {
     j.brent_evaluations = b.evaluations;
     j.psi_j = VT * j.u_j;
     const DD eps(in.eps_F_per_cm), q(in.q_C);
-    const DD phi_j = j.n_n * G(j.u_j - j.u_n) + j.p_n * G(j.u_n - j.u_j);
-    j.field_max_V_per_cm = VT * sqrt(DD(2.0) * q * phi_j / (eps * VT));
-    j.depletion_n_cm = eps * j.field_max_V_per_cm / (q * Nn);
-    j.depletion_p_cm = eps * j.field_max_V_per_cm / (q * Np);
-    j.debye_n_cm = sqrt(eps * VT / (q * Nn));
-    j.debye_p_cm = sqrt(eps * VT / (q * Np));
+    j.field_max_V_per_cm = VT * sqrt(DD(2.0) * q * first_integral_phi(n, j.u_j) / (eps * VT));
+    j.depletion_n_cm = eps * j.field_max_V_per_cm / (q * n.doping);
+    j.depletion_p_cm = eps * j.field_max_V_per_cm / (q * p.doping);
+    j.debye_n_cm = sqrt(eps * VT / (q * n.doping));
+    j.debye_p_cm = sqrt(eps * VT / (q * p.doping));
     return j;
 }
 
 std::expected<std::vector<PnPoint>, std::string> pn_potential(const PnJunction& j, std::span<const double> x_cm) {
     std::vector<PnPoint> out(x_cm.size());
     const DD VT(j.in.thermal_voltage_V);
-    for (const double sign : {1.0, -1.0}) {
-        const Side side = sign > 0 ? Side{j.u_n, j.n_n, j.p_n, DD(j.in.donors_cm3), 1.0}
-                                   : Side{j.u_p, j.n_p, j.p_p, DD(j.in.acceptors_cm3), -1.0};
-        const DD debye = sign > 0 ? j.debye_n_cm : j.debye_p_cm;
-        // This side's points by increasing distance from the junction.
-        std::vector<std::size_t> order;
+    for (const bool n_side : {true, false}) {
+        const NeutralBulk bulk = n_side ? neutral_bulk(j.in.ni_cm3, j.in.donors_cm3)
+                                        : neutral_bulk(j.in.ni_cm3, -j.in.acceptors_cm3);
+        std::vector<std::size_t> index;
+        std::vector<double> distance;
         for (std::size_t i = 0; i < x_cm.size(); ++i) {
-            if (sign > 0 ? x_cm[i] >= 0.0 : x_cm[i] < 0.0) order.push_back(i);
-        }
-        std::sort(order.begin(), order.end(),
-                  [&](std::size_t a, std::size_t b) { return std::abs(x_cm[a]) < std::abs(x_cm[b]); });
-        // X(s) = int_s^{s_j} k: the scaled distance from the junction. Start at the junction.
-        const DD s_j = log(sign > 0 ? j.u_n - j.u_j : j.u_j - j.u_p);
-        DD s_prev = s_j, X_prev(0.0);
-        for (const std::size_t i : order) {
-            const DD target = DD(std::abs(x_cm[i])) / debye;
-            // Safeguarded Newton on F(s) = X(s) - target, decreasing in s: bracket [lo, hi] with F(lo) >= 0 >= F(hi).
-            DD hi = s_prev, lo;
-            bool have_lo = false;
-            DD s = s_prev, X = X_prev;
-            int it = 0;
-            for (; it < 200; ++it) {
-                const DD F = X - target;
-                if (!(F > DD(0.0))) hi = s;
-                if (!(F < DD(0.0))) {
-                    lo = s;
-                    have_lo = true;
-                }
-                const DD k = side.k(s);
-                if (std::abs(F.hi) <= 1e-22 * std::max(1.0, std::abs(target.hi))) break;  // far below any criterion (1e-7)
-                if (have_lo && !(lo < hi)) {  // the bracket has closed above the tolerance: X(s) is noisier than it
-                    return std::unexpected("pn_potential: the Newton bracket closed with |X - x| = " +
-                                           std::to_string(std::abs(F.hi)) + " at x = " + std::to_string(x_cm[i]));
-                }
-                DD next = s + F / k;  // dX/ds = -k
-                const bool inside = next < hi && (!have_lo || lo < next);
-                if (!inside) next = have_lo ? ldexp(lo + hi, -1) : hi - DD(1.0);
-                // X at next, integrated from the last accepted point s_prev.
-                const auto integrand = [&](const DD& sig) { return side.k(sig); };
-                const bool down = next < s_prev;
-                const TanhSinhResult q = down ? tanh_sinh(integrand, next, s_prev, 1e-28, 1e-26)
-                                              : tanh_sinh(integrand, s_prev, next, 1e-28, 1e-26);
-                if (q.status != TanhSinhStatus::ok) {
-                    return std::unexpected("pn_potential: tanh-sinh did not converge at x = " +
-                                           std::to_string(x_cm[i]));
-                }
-                X = down ? X_prev + q.value : X_prev - q.value;
-                s = next;
+            if (n_side ? x_cm[i] >= 0.0 : x_cm[i] < 0.0) {
+                index.push_back(i);
+                distance.push_back(std::abs(x_cm[i]));
             }
-            if (it == 200) return std::unexpected("pn_potential: Newton did not converge at x = " + std::to_string(x_cm[i]));
-            s_prev = s;
-            X_prev = X;
-            const DD tail = exp(s);
-            out[i] = {VT * side.u_at(tail), tail};
         }
+        const auto prof = bulk_profile(bulk, j.u_j, n_side ? j.debye_n_cm : j.debye_p_cm, distance);
+        if (!prof) return std::unexpected("pn_potential: " + prof.error());
+        for (std::size_t k = 0; k < index.size(); ++k) out[index[k]] = {VT * (*prof)[k].u, (*prof)[k].tail};
     }
     return out;
 }
+
 
 namespace {
 
