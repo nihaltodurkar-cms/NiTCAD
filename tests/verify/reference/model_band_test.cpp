@@ -64,7 +64,7 @@ void check_derivative(const char* what, double T, Fc&& f_complex, const DD& d_an
     const auto cs = ref::complex_step(f_complex, T);
     REQUIRE(cs.status == ref::ComplexStepStatus::ok);
     const double S = ref::condition_sum(d_of, inputs);
-    const double bound = 64.0 * eps * S;
+    const double bound = std::fmax(1e-13 * std::abs(d_analytic.to_double()), 64.0 * eps * S);  // 15.9 in full (MI-Q13)
     const double diff = std::abs(d_analytic.to_double() - cs.derivative);
     INFO(what << " at T = " << T << ": analytic " << d_analytic.to_double() << ", complex step " << cs.derivative
               << ", |diff| " << diff << ", bound " << bound);

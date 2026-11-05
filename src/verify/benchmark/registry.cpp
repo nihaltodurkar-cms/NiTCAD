@@ -14,7 +14,7 @@ namespace NiTCAD::verify::benchmark {
 
 namespace {
 
-constexpr std::array<Benchmark, 15> shipped{{
+constexpr std::array<Benchmark, 20> shipped{{
     {"TVB-01", "Constants and thermal voltage against CODATA 2018", Tier::fast, [](Tier) { return run_tvb01(); }},
     {"TVB-02", "Fermi-Dirac integrals F_1/2, F_-1/2, F_3/2 and the inverse of F_1/2", Tier::fast,
      [](Tier) { return run_tvb02(); }},
@@ -35,6 +35,11 @@ constexpr std::array<Benchmark, 15> shipped{{
      [](Tier) { return run_tvb31_04(); }},
     {"TVB-31.05", "Slotboom band-gap narrowing and n_ie (documented and published forms)", Tier::fast,
      [](Tier) { return run_tvb31_05(); }},
+    {"TVB-31.06", "Caughey-Thomas doping and temperature mobility", Tier::fast, &run_tvb31_06},
+    {"TVB-31.07", "Masetti doping mobility (boron and phosphorus)", Tier::fast, &run_tvb31_07},
+    {"TVB-31.08", "Canali field-dependent mobility", Tier::fast, &run_tvb31_08},
+    {"TVB-31.09", "Lombardi surface mobility and its partials", Tier::fast, &run_tvb31_09},
+    {"TVB-31.10", "Energy-balance carrier-temperature mobility and effective field", Tier::fast, &run_tvb31_10},
     {"TVB-32", "The consistency suite C1-C12 on the three TVR-1 decks", Tier::fast, [](Tier) { return run_tvb32(); }},
 }};
 
@@ -70,7 +75,19 @@ constexpr std::string_view finding_f1 =
     "DECISIONS Unit 55 15.4 F1 and 15.8 MI-Q4 (documented departure): bandgap_narrowing.hpp subtracts E0 sqrt(1/2) "
     "above N0 and cuts to 0 at or below it; the published Slotboom form has neither";
 
-constexpr std::array<KnownFinding, 18> findings{{
+constexpr std::string_view finding_f6 =
+    "DECISIONS Unit 55 15.4 F6 and 15.8 MI-Q4 (documented departure): mobility.hpp scales Masetti's mu_max by "
+    "(T / 300)^gamma (tag C); the published 300 K form has no temperature dependence";
+
+// Finding (vii) (DECISIONS Unit 55 15.14, MI-Q14): carrier_temperature_mobility forms d mu / d mu0 = m + m_a a and
+// d E_eff / d mu0 = v_sat (x_a a - x) / mu0^2, which cancel as a grows (both tend to 0 while each term stays O(m)).
+bool a_from_20(double a) { return a >= 20.0; }
+
+constexpr std::string_view finding_vii =
+    "DECISIONS Unit 55 15.14 MI-Q14 (known finding): the mu0 partials of the energy-balance mobility and field are "
+    "formed by differences that cancel for a >= about 20 (absolute error about eps m); fix proposed separately";
+
+constexpr std::array<KnownFinding, 25> findings{{
     {"TVB-02", "F_-1/2", &everywhere, "(ii)",
      "DECISIONS 11.13 TVB-02 finding (ii) widened (option A), accepted as a limitation (Unit 56, 13): F_-1/2 "
      "misses from eta = 13.76, a quadrature-rounding floor of the derivative-consistent table"},
@@ -91,6 +108,13 @@ constexpr std::array<KnownFinding, 18> findings{{
     {"TVB-31.04", "legacy: n_i", &legacy_ni_region, "(vi)", finding_vi},
     {"TVB-31.04", "default: n_i", &default_ni_region, "(vi)", finding_vi},
     {"TVB-31.05", "published form", &everywhere, "(F1)", finding_f1},
+    {"TVB-31.07", "published form", &everywhere, "(F6)", finding_f6},
+    {"TVB-31.10", "beta 1 dmu/dmu0", &a_from_20, "(vii)", finding_vii},
+    {"TVB-31.10", "beta 1.5 dmu/dmu0", &a_from_20, "(vii)", finding_vii},
+    {"TVB-31.10", "beta 2 dmu/dmu0", &a_from_20, "(vii)", finding_vii},
+    {"TVB-31.10", "beta 1 dE_eff/dmu0", &a_from_20, "(vii)", finding_vii},
+    {"TVB-31.10", "beta 1.5 dE_eff/dmu0", &a_from_20, "(vii)", finding_vii},
+    {"TVB-31.10", "beta 2 dE_eff/dmu0", &a_from_20, "(vii)", finding_vii},
 }};
 
 bool starts_with(std::string_view s, std::string_view prefix) { return s.substr(0, prefix.size()) == prefix; }

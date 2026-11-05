@@ -78,6 +78,11 @@ void set_pardiso_threads(int threads);
 [[nodiscard]] BenchmarkResult run_tvb31_03();  // Couderc DOS mass fits
 [[nodiscard]] BenchmarkResult run_tvb31_04();  // n_i, intrinsic level, d ln n_i / dT
 [[nodiscard]] BenchmarkResult run_tvb31_05();  // Slotboom narrowing and n_ie
+[[nodiscard]] BenchmarkResult run_tvb31_06(Tier tier);  // Caughey-Thomas (tiers: grid density, MI-Q9)
+[[nodiscard]] BenchmarkResult run_tvb31_07(Tier tier);  // Masetti
+[[nodiscard]] BenchmarkResult run_tvb31_08(Tier tier);  // Canali
+[[nodiscard]] BenchmarkResult run_tvb31_09(Tier tier);  // Lombardi
+[[nodiscard]] BenchmarkResult run_tvb31_10(Tier tier);  // energy-balance mobility
 [[nodiscard]] BenchmarkResult run_tvb32();
 
 struct KnownFinding {

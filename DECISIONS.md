@@ -8665,6 +8665,72 @@ Mutations:
 
 Cost: `[tvb31]` takes 0.24 s in Release. Debug is timed at close-out.
 
+**15.14 Step 4 as built: TVB-31.06–31.10, mobility (2026-11-06).**
+
+Files:
+- `verify/reference/model_mobility.hpp`: Caughey–Thomas with the documented μ_max(T); Masetti (both sets);
+  Canali and its right-hand slope at E = 0; Lombardi and its three partials; the energy-balance balance root (closed
+  forms for β = 1 and 2, otherwise Newton), the owner's regularization, and the six returned quantities.
+- `condition.hpp` gains a vector form, so one evaluation per perturbation serves several quantities.
+- `verify/benchmark/tvb31_mobility.cpp`: entries TVB-31.06–31.10. The run functions take the tier, which sets grid
+  density (`per_decade`, 64 in every tier until the close-out timing; MI-Q9).
+- The register gains `laws`: the printed T-laws behind its law_300K rows. The table check judges a shipped value
+  against the law at 300 K to the law's printed digits, i.e. the sum of the value's changes for half a unit in the
+  last digit of the coefficient and of the exponent.
+- Tests: `tests/verify/reference/model_mobility_test.cpp`, `tests/verify/benchmark/tvb31_mobility_test.cpp`, and the
+  shared `tvb31_check.hpp`.
+
+L0:
+- Every analytic partial agrees with complex step: CT and Masetti dμ/dT, Canali dμ/dE, and Lombardi's
+  dμ/dE, dμ/dT and dμ/dμ_b.
+- 31.10's root is a double-double iteration, so its second method is Brent's zero (TC5). They agree to 1e-27
+  relative over a = 1e-8–1e6 for β = 1, 1.5 and 2. The partials are checked against double-double central
+  differences, and x and dx/da are continuous across a0.
+- **MI-Q13 (an L0 reading, ruled "choose recommended" 2026-11-06, A).** 15.9 says each analytic derivative is checked
+  "against complex step to 64 ε S". For dμ/dμ_b ≈ 1, S(d) is about 1e-4·|d|, so 64 ε S is below complex step's own
+  rounding of about ε|d|. That check cannot be met by a correct derivative. (A) Apply 15.9's partial rule in full,
+  max(1e-13 |d|, 64 ε S), which is "the same rule" as for values. (B) Leave the bare 64 ε S and report such points
+  `not_evaluated`. **A.** It is applied in both L0 files (`model_band_test` had passed under the bare form).
+  Nothing in the benchmark changes: there the rule was always the full one.
+
+Outcomes (Release, first run):
+
+| Entry | Pass | Finding | Not applicable |
+|---|---|---|---|
+| 31.06 | every value and slope; 2 PB T-exponent rows | 8: the grade-L CT rows (F3) | 12 |
+| 31.07 | μ at 300 K and the documented slopes and T sweep; 17 PB rows | the published-form slope at every in-range N (F6); 2 tag-C T-exponent pins | 22 |
+| 31.08 | everything with the shipped and the law parameters; the 2 v_sat rows | 2: β_n = 2 and β_p = 1 against the laws' 1.109 and 1.213 (F2) | 8 |
+| 31.09 | all; 8 PB rows | 0 | 32 |
+| 31.10 | all but (vii); 2 PA τ_w rows | the tag-C a0 pin; (vii) | 36 |
+
+- **(F2), now judged.** The electron v_sat of 1.07e7 is within Jacoboni's law at 300 K (1.0705e7, ±3.4e5 for the
+  law's printed digits). So is the hole v_sat 8.37e6, within ±2.7e5 of 8.344e6. The β values of 2 and 1 are outside
+  Canali's β(T) at 300 K and are register findings. Both β sets pass the formula check.
+- **(vii), new (MI-Q14).** `carrier_temperature_mobility` forms ∂μ/∂μ0 = m + m_a·a and ∂E_eff/∂μ0 =
+  v_sat(x_a·a − x)/μ0². Both cancel as a grows: each tends to 0 while its terms stay O(m). From a ≈ 25 (β = 2) up to
+  a ≈ 1100 (β = 1), and through the range above that, the error is up to 1e8 times the bound. It is about ε·m in
+  absolute terms, so harmless beside the Jacobian's O(m) entries, but a miss of a well-conditioned partial.
+  - **MI-Q14.** (A) Record (vii) as a known finding for a ≥ 20 on those two partials, and propose separately the
+    cancellation-free forms (MI-Q10). (B) Leave them failing.
+  - **Ruling (owner, "choose recommended", 2026-11-06): A.** The test allows a pass inside the region.
+- **Register corrections, made before any outcome depended on them.**
+  - 31.08's electron law value was typed 1.0704e7 in step 1. The arithmetic gives 1.53e9·300^−0.87 = 1.07052e7, so
+    the row is now 1.0705e7. The table check refuses (`not_evaluated`) a law_300K row that does not round its law,
+    which is how it was found. The F2 bullet of 15.10 should read 1.0705e7.
+  - 31.10's tag-C row named `energy_balance.canali_beta`, which binds no NiTCAD field. The ruling it cites (Unit 52,
+    "β = 1") fixes the regularization threshold a0 = 1e-8, and the row is rebound to that.
+
+Mutations:
+- 13 of `model_mobility.hpp`: all caught.
+- 13 of NiTCAD's `mobility.cpp`, `thermal.cpp` (the CT slope), `field_mobility.cpp`, `surface_mobility.cpp` and
+  `energy_balance.cpp`. 12 caught on the first run. The survivor moved the a ≤ 0 cut to a ≤ 1e-30: the positive grid
+  started at 1e-12. Points a = 1e-20, 1e-40 and 1e-100 were added, and it and a 1e-90 variant are caught.
+
+Cost: 31.10 took 11.8 s in Release on the first run, from re-solving the root once per quantity and per
+perturbation. With the vector condition sums and a double Newton start before the double-double steps it takes
+0.61 s. All of `[tvb31]` takes 1.65 s in Release. That puts the Debug figure above the 8 s allowance (MI-Q9); the
+fast/full split is settled at close-out against the measured Debug time.
+
 ---
 
 ## New questions the advisor raised (not yet in `ARCHITECTURE.md`)

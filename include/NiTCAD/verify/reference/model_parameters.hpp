@@ -128,9 +128,9 @@ inline constexpr std::array rows{
         "Allpix; Palankovski prints -1.98", ""},
     Row{"31.07", "masetti_phosphorus_silicon.T_exponent", "-2.5", "", Kind::choice, Grade::C, "as boron (F6)", ""},
     // 31.08 Canali (F2).
-    Row{"31.08", "legacy_silicon.electron_saturation.v_sat_cm_s", "1.0704e7", "cm/s", Kind::law_300K, Grade::PB,
+    Row{"31.08", "legacy_silicon.electron_saturation.v_sat_cm_s", "1.0705e7", "cm/s", Kind::law_300K, Grade::PB,
         "Jacoboni et al., Solid-State Electron. 20, 77 (1977), Table 5, v_m = 1.53e9 T^-0.87, as Allpix",
-        "1.53e9 * 300^-0.87 = 1.0704e7; Canali's own eq 2a, 1.43e9 T^-0.87, gives 1.0005e7 (F2)"},
+        "1.53e9 * 300^-0.87 = 1.07052e7 (step 1 had 1.0704e7; corrected in step 4, 15.14); Canali's own eq 2a, 1.43e9 T^-0.87, gives 1.0005e7 (F2)"},
     Row{"31.08", "legacy_silicon.hole_saturation.v_sat_cm_s", "8.345e6", "cm/s", Kind::law_300K, Grade::PB,
         "Canali 1975 / Jacoboni 1977 Table 5, v_m = 1.62e8 T^-0.52, as Allpix",
         "1.62e8 * 300^-0.52 = 8.345e6; shipped 8.37e6 (F2)"},
@@ -155,8 +155,9 @@ inline constexpr std::array rows{
         "A. Triebl, PhD thesis, TU Wien 2012, sec. 4.3.1 (\"typical values\", citing Vasicek 2009)", ""},
     Row{"31.10", "energy_relaxation.hole", "0.4e-12", "s", Kind::printed, Grade::PA,
         "Triebl 2012, sec. 4.3.1 (citing Palankovski 2000)", ""},
-    Row{"31.10", "energy_balance.canali_beta", "1", "", Kind::choice, Grade::C, "owner ruling 2026-10-29 (Unit 52)",
-        ""},
+    Row{"31.10", "energy_balance_regularization", "1e-8", "", Kind::choice, Grade::C,
+        "owner ruling 2026-10-29 (Unit 52, \"beta = 1\": regularize below a0 = 1e-8)",
+        "rebound in step 4 (15.14): the row named energy_balance.canali_beta, which binds no field; the ruling fixes a0"},
     // 31.11 Scharfetter lifetimes.
     Row{"31.11", "legacy_silicon.lifetime.tau_n0", "", "s", Kind::printed, Grade::L, "not found",
         "Genius ships 1e-7; Xyce 3.95e-4 (Weaver-Nasby)"},
@@ -232,6 +233,22 @@ inline constexpr std::array rows{
     // 31.27 MLDA quantization masses.
     Row{"31.27", "mlda_silicon_electron_mass", "0.98", "m0", Kind::printed, Grade::PC, "Ioffe (Unit 47)", ""},
     Row{"31.27", "mlda_silicon_hole_mass", "0.49", "m0", Kind::printed, Grade::PC, "Ioffe (Unit 47)", ""},
+};
+
+// The printed temperature laws behind the law_300K rows: value(T) = coefficient T^exponent, typed from the source
+// (Allpix Squared 3.3 manual's Canali section, Jacoboni et al. 1977 Table 5). The table check judges the shipped
+// value against the law at 300 K to the law's printed digits: the sum of the value's changes for half a unit in
+// the last printed digit of each (15.9 "Parameter register" with the law_300K kind above).
+struct Law {
+    std::string_view binding;
+    std::string_view coefficient;
+    std::string_view exponent;
+};
+inline constexpr std::array laws{
+    Law{"legacy_silicon.electron_saturation.v_sat_cm_s", "1.53e9", "-0.87"},
+    Law{"legacy_silicon.hole_saturation.v_sat_cm_s", "1.62e8", "-0.52"},
+    Law{"legacy_silicon.electron_saturation.beta", "2.57e-2", "0.66"},
+    Law{"legacy_silicon.hole_saturation.beta", "0.46", "0.17"},
 };
 
 }  // namespace NiTCAD::verify::reference::model_parameters

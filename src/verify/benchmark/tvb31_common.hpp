@@ -41,13 +41,11 @@ using ref::DD;
 inline constexpr double eps = DBL_EPSILON;
 inline constexpr std::string_view value_criterion = "|q_sim - q_ref| <= max(1e-13 |q_ref|, 64 eps S(q)) (15.9)";
 
-template <std::size_t N, class F>
-[[nodiscard]] ComparisonRecord value_check(const ReferenceInfo& info, std::string quantity, std::string unit,
-                                           double parameter, double q_sim, F&& f, const std::array<DD, N>& x,
-                                           const std::vector<Predicate>& predicates) {
-    const DD q = f(x);
+// The value rule on a reference value q and its condition sum S (computed by the caller).
+[[nodiscard]] inline ComparisonRecord value_record(const ReferenceInfo& info, std::string quantity, std::string unit,
+                                                   double parameter, double q_sim, const DD& q, double S,
+                                                   const std::vector<Predicate>& predicates) {
     const double q_ref = q.to_double();
-    const double S = ref::condition_sum(f, x);
     const double bound = std::fmax(1e-13 * std::abs(q_ref), 64.0 * eps * S);
     const double u_ref = 0x1p-80 * (std::abs(q_ref) + S);
     const double diff = std::abs((DD(q_sim) - q).hi);
@@ -62,6 +60,14 @@ template <std::size_t N, class F>
     }
     c.comparison = judge(info, predicates, std::isfinite(q_sim) && diff <= bound, c.criterion);
     return c;
+}
+
+template <std::size_t N, class F>
+[[nodiscard]] ComparisonRecord value_check(const ReferenceInfo& info, std::string quantity, std::string unit,
+                                           double parameter, double q_sim, F&& f, const std::array<DD, N>& x,
+                                           const std::vector<Predicate>& predicates) {
+    return value_record(info, std::move(quantity), std::move(unit), parameter, q_sim, f(x), ref::condition_sum(f, x),
+                        predicates);
 }
 
 // The NiTCAD field a register binding names ("legacy_silicon.Eg0_eV", "silicon.dos_mass.valence[3]"), in `p`;
@@ -87,6 +93,40 @@ void table_checks(BenchmarkResult& r, std::string_view entry);
 // not_applicable by the range predicate).
 [[nodiscard]] std::vector<double> temperature_grid(double lo, double hi, std::initializer_list<double> beyond);
 
+// lo, lo 10^(1/per), ..., hi (both ends included), per points a decade.
+[[nodiscard]] std::vector<double> log_grid(double lo, double hi, int per);
+
+// Points a decade on the dense grids: 64 (15.5) in every tier unless the close-out's Debug timing moves them
+// (MI-Q9).
+[[nodiscard]] int per_decade(Tier tier);
+
 [[nodiscard]] Predicate in_range(std::string name, double value, double lo, double hi);
+
+// An M reference contract for an entry (I1, G-equations `equations`, the register as version).
+[[nodiscard]] inline ReferenceInfo entry_info(std::string id, Provenance g, std::string citation, std::string form,
+                                              std::vector<std::string> applicability, std::vector<int> equations,
+                                              std::string derivation, std::string verification) {
+    ReferenceInfo r;
+    r.id = std::move(id);
+    r.cls = ReferenceClass::M;
+    r.independence = Independence::I1;
+    r.provenance = g;
+    r.citation = std::move(citation);
+    r.version = "register rows of verify/reference/model_parameters.hpp (DECISIONS 15.10)";
+    r.equations = std::move(equations);
+    r.form = std::move(form);
+    r.assumptions = {"parameters: the register's printed decimals, exact in double-double"};
+    r.applicability = std::move(applicability);
+    r.derivation = std::move(derivation);
+    r.verification = std::move(verification);
+    return r;
+}
+
+// A predicate that holds at exactly 0 or inside [lo, hi].
+[[nodiscard]] inline Predicate zero_or_in_range(std::string name, double value, double lo, double hi) {
+    Predicate p = in_range(std::move(name), value, lo, hi);
+    if (value == 0.0) p.holds = true;
+    return p;
+}
 
 }  // namespace NiTCAD::verify::benchmark::tvb31

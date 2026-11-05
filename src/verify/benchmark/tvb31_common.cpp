@@ -2,6 +2,11 @@
 #include "tvb31_common.hpp"
 
 #include <bit>
+#include <utility>
+
+#include "NiTCAD/physics/energy_balance.hpp"
+#include "NiTCAD/physics/mobility.hpp"
+#include "NiTCAD/physics/surface_mobility.hpp"
 #include <charconv>
 #include <cstdint>
 #include <stdexcept>
@@ -46,6 +51,42 @@ std::string_view grade_name(reg::Grade g) {
     return "?";
 }
 
+// Shipped values outside the semiconductor sets (the Masetti and Lombardi sets, the energy-balance constants).
+std::optional<double> other_shipped_value(std::string_view binding) {
+    const auto masetti = [](const physics::MasettiParameters& m, std::string_view g) -> std::optional<double> {
+        if (g == "mu_min1") return m.mu_min1;
+        if (g == "mu_min2") return m.mu_min2;
+        if (g == "mu_max") return m.mu_max;
+        if (g == "mu_1") return m.mu_1;
+        if (g == "P_c") return m.P_c;
+        if (g == "C_r") return m.C_r;
+        if (g == "C_s") return m.C_s;
+        if (g == "alpha") return m.alpha;
+        if (g == "beta") return m.beta;
+        if (g == "T_exponent") return m.T_exponent;
+        return std::nullopt;
+    };
+    const auto lombardi = [](const physics::LombardiParameters& l, std::string_view g) -> std::optional<double> {
+        if (g == "B") return l.B;
+        if (g == "C") return l.C;
+        if (g == "lambda") return l.lambda;
+        if (g == "delta") return l.delta;
+        return std::nullopt;
+    };
+    const auto tail = [binding](std::string_view prefix) -> std::optional<std::string_view> {
+        if (!starts_with(binding, prefix)) return std::nullopt;
+        return binding.substr(prefix.size());
+    };
+    if (const auto g = tail("masetti_boron_silicon.")) return masetti(physics::masetti_boron_silicon, *g);
+    if (const auto g = tail("masetti_phosphorus_silicon.")) return masetti(physics::masetti_phosphorus_silicon, *g);
+    if (const auto g = tail("lombardi_silicon_electrons.")) return lombardi(physics::lombardi_silicon_electrons, *g);
+    if (const auto g = tail("lombardi_silicon_holes.")) return lombardi(physics::lombardi_silicon_holes, *g);
+    if (binding == "energy_relaxation.electron") return physics::silicon_energy_relaxation.tau_n_s;
+    if (binding == "energy_relaxation.hole") return physics::silicon_energy_relaxation.tau_p_s;
+    if (binding == "energy_balance_regularization") return physics::energy_balance_regularization;
+    return std::nullopt;
+}
+
 }  // namespace
 
 double* bound_field(physics::SemiconductorParameters& p, std::string_view binding, std::string_view set) {
@@ -66,6 +107,22 @@ double* bound_field(physics::SemiconductorParameters& p, std::string_view bindin
     if (const int k = index_of(f, "dos_mass.valence"); k >= 0) return &p.dos_mass.valence[k];
     if (f == "bandgap_narrowing.E0_eV") return &p.bandgap_narrowing.E0_eV;
     if (f == "bandgap_narrowing.N0") return &p.bandgap_narrowing.N0;
+    for (const auto& [name, c] : {std::pair{"electron_mobility.", &p.electron_mobility}, std::pair{"hole_mobility.", &p.hole_mobility}}) {
+        if (!starts_with(f, name)) continue;
+        const std::string_view g = f.substr(std::string_view(name).size());
+        if (g == "mu_min") return &c->mu_min;
+        if (g == "mu_max") return &c->mu_max;
+        if (g == "N_ref") return &c->N_ref;
+        if (g == "alpha") return &c->alpha;
+        if (g == "T_exponent") return &c->T_exponent;
+    }
+    for (const auto& [name, c] :
+         {std::pair{"electron_saturation.", &p.electron_saturation}, std::pair{"hole_saturation.", &p.hole_saturation}}) {
+        if (!starts_with(f, name)) continue;
+        const std::string_view g = f.substr(std::string_view(name).size());
+        if (g == "v_sat_cm_s") return &c->v_sat_cm_s;
+        if (g == "beta") return &c->beta;
+    }
     return nullptr;
 }
 
@@ -74,6 +131,7 @@ std::optional<double> shipped_value(std::string_view binding) {
     physics::SemiconductorParameters si = physics::silicon_parameters;
     if (const double* v = bound_field(legacy, binding, "legacy_silicon")) return *v;
     if (const double* v = bound_field(si, binding, "silicon")) return *v;
+    if (const auto v = other_shipped_value(binding)) return v;
     return std::nullopt;
 }
 
@@ -97,6 +155,50 @@ DD register_dd(std::string_view binding) {
     throw std::invalid_argument("register: no printed value for " + std::string(binding));
 }
 
+namespace {
+
+double half_unit(std::string_view printed) { return 0.5 * std::pow(10.0, ref::decimal::parse(printed).exponent); }
+
+// A law_300K row: the shipped value against coefficient 300^exponent, to the change of the law's value for half a
+// unit in the last printed digit of the coefficient and of the exponent (summed). A mismatch is a register finding.
+ComparisonRecord law_check(const ReferenceInfo& info, const reg::Row& row, double shipped, const std::string& quantity) {
+    const auto law = std::find_if(reg::laws.begin(), reg::laws.end(),
+                                  [&](const reg::Law& l) { return l.binding == row.binding; });
+    ComparisonRecord c{quantity, std::string(row.unit), 300.0, shipped, 0.0, 0.0, 0.0, "", {}};
+    if (law == reg::laws.end()) {
+        c.criterion = "law of the law_300K row known";
+        c.comparison = missing_input("the law of " + std::string(row.binding));
+        return c;
+    }
+    const DD A = ref::decimal::to_dd(law->coefficient);
+    const DD e = ref::decimal::to_dd(law->exponent);
+    const DD v = A * pow(DD(300.0), e);
+    const double value = v.to_double();
+    const double tol = std::abs(value / A.to_double()) * half_unit(law->coefficient) +
+                       std::abs(value * std::log(300.0)) * half_unit(law->exponent);
+    c.q_ref = value;
+    c.metric = std::abs(shipped - value) / tol;
+    c.criterion = "within the law " + std::string(law->coefficient) + " T^" + std::string(law->exponent) +
+                  " at 300 K to its printed digits (+-" + shortest(tol) + ")";
+    // The register's own 300 K value must round the law (a check of the register, not of NiTCAD).
+    if (std::abs(ref::decimal::to_double(row.source_value) - value) > half_unit(row.source_value)) {
+        c.comparison.outcome = Outcome::not_evaluated;
+        c.comparison.reason = "the register's law_300K value " + std::string(row.source_value) + " does not round the law";
+        return c;
+    }
+    const bool met = c.metric <= 1.0;
+    c.comparison = judge(info, {}, met, c.criterion);
+    if (c.comparison.outcome == Outcome::fail) {
+        c.comparison.outcome = Outcome::finding;
+        c.comparison.reason = "register mismatch (15.9; grade " + std::string(grade_name(row.grade)) + "): shipped " +
+                              shortest(shipped) + ", law at 300 K " + shortest(value) + " (" + std::string(row.source) +
+                              ")";
+    }
+    return c;
+}
+
+}  // namespace
+
 void table_checks(BenchmarkResult& r, std::string_view entry) {
     for (const reg::Row& row : reg::rows) {
         if (row.entry != entry) continue;
@@ -113,6 +215,10 @@ void table_checks(BenchmarkResult& r, std::string_view entry) {
             ComparisonRecord c{quantity, std::string(row.unit), 0.0, 0.0, 0.0, 0.0, 0.0, "binding resolved", {}};
             c.comparison = missing_input("the register binding " + std::string(row.binding));
             r.comparisons.push_back(std::move(c));
+            continue;
+        }
+        if (row.kind == reg::Kind::law_300K) {
+            r.comparisons.push_back(law_check(info, row, *shipped, quantity));
             continue;
         }
         const bool printed = !row.source_value.empty();
@@ -151,6 +257,18 @@ std::vector<double> temperature_grid(double lo, double hi, std::initializer_list
     for (const double b : beyond) g.push_back(b);
     return g;
 }
+
+std::vector<double> log_grid(double lo, double hi, int per) {
+    std::vector<double> g;
+    const int first = static_cast<int>(std::ceil(per * std::log10(lo) - 1e-9));
+    const int last = static_cast<int>(std::floor(per * std::log10(hi) + 1e-9));
+    for (int i = first; i <= last; ++i) g.push_back(std::pow(10.0, static_cast<double>(i) / per));
+    if (g.empty() || g.front() != lo) g.insert(g.begin(), lo);
+    if (g.back() != hi) g.push_back(hi);
+    return g;
+}
+
+int per_decade(Tier) { return 64; }
 
 Predicate in_range(std::string name, double value, double lo, double hi) {
     return Predicate{std::move(name), value, value < lo ? lo : hi, value >= lo && value <= hi};

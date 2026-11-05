@@ -35,4 +35,22 @@ template <std::size_t N, class F>
     return s;
 }
 
+// The same for a vector-valued f: std::array<DD, N> -> std::array<DD, K>, one evaluation per perturbation.
+template <std::size_t K, std::size_t N, class F>
+[[nodiscard]] std::array<double, K> condition_sums(F&& f, const std::array<DD, N>& x) {
+    std::array<double, K> s{};
+    for (std::size_t i = 0; i < N; ++i) {
+        if (x[i].hi == 0.0) continue;
+        const DD h = ldexp(abs(x[i]), condition_step_log2);
+        std::array<DD, N> up = x;
+        std::array<DD, N> down = x;
+        up[i] = x[i] + h;
+        down[i] = x[i] - h;
+        const std::array<DD, K> fu = f(up);
+        const std::array<DD, K> fd = f(down);
+        for (std::size_t k = 0; k < K; ++k) s[k] += std::abs((x[i] * ((fu[k] - fd[k]) / ldexp(h, 1))).hi);
+    }
+    return s;
+}
+
 }  // namespace NiTCAD::verify::reference
