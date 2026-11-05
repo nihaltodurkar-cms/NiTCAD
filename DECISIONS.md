@@ -7564,6 +7564,31 @@ double, the truncated printed ħ and k/q below their exact values by less than o
 Mutations (9, built, run, restored): a digit of q, k, ε₀, m₀ or h; 10^n by a rounded product; the exponent's
 point offset dropped; the shift ignored; every point counted as a leading digit: 9 of 9 caught.
 
+*TVB-03, the Bernoulli function (§11.8, TB-Q9; `include/NiTCAD/verify/reference/bernoulli.hpp`,
+`tests/verify/benchmark/bernoulli_test.cpp`).* Source read before code: OEIS A000367 and A002445 b-files
+(B₂ₖ numerators and denominators, n = k, offset 0 = B₀; A000367's title "Numerators of Bernoulli numbers B_2n");
+B₂…B₃₄ typed (every numerator exact in a double). Direct method x / expm1(x) in double-double for |x| ≤ 670;
+above, the scaled form (x e^−r)·2^−m, r = x − m ln 2, so B is held below the smallest double; below −670, −x.
+Second method: the series 1 − x/2 + Σ B₂ₖ x^2k / (2k)!, k ≤ 17, |x| ≤ 1/2. Values are returned as a double-double
+times 2^e and rounded only in the comparison. Contract: E, I3, PA, G3, applicability "B(x) a normal double".
+Choice: the TB-Q4 rule (reference uncertainty ≤ 1e-3 of the criterion) applied to TVB-03's self-checks too.
+
+Measured (Release), every outcome as frozen. Reference self-checks: series vs direct 0.88 u_dd, B(−x) = B(x) + x
+0.31 u_dd, scaled vs direct on [600, 670] 188 u_dd (r's absolute error ~|x| u_dd from m ln 2 becomes e^−r's relative
+error; the direct exp carries ~|x|/8 u_dd too), all ≪ the 8.9e-19 budget; B(1) = 1/(e − 1) to 0. Code: 12 424 points
+judged, worst 0.99 ε at x = −0.794 (criterion 4 ε); 602 points refused as subnormal B (diagnostic, worst relative 1:
+the code returns 0). **Finding (iii), confirmed:** 104 fails on [709.80, 714.95], where std::expm1 overflows and
+`assemble::bernoulli` returns 0 while B is a normal double (outcome fail, as frozen; hidden `[.finding]` case fails
+with 104). x/ΔV_T ≈ 710 is an 18 V drop on one edge at 300 K; the fix (the scaled form, or x e^−x for x > 709) is
+for the owner (VR9). B′ diagnostic: worst 3.2e-14 relative (146 ε) at x = 1.12e-2, just above the series switch,
+consistent with the header's "about 1e-13" (the subtraction 1 − x − B).
+Mutations (14, built, run, restored): reference — B₁₂'s numerator, B₆'s denominator, the series' −x/2 sign, the
+scaled exponent, the negative tail, the normal floor, the comparison's scaling, the factorial: caught; B₂₄'s
+numerator and B₃₄'s denominator survive (their terms are below u_dd at |x| ≤ 1/2, under the budget by ~10¹³), the
+B′ series order survives (diagnostic, not asserted). Code — x/(e^x − 1) for expm1, 1/12 → 1/12.1: caught; the
+series switch moved to 0.1 survives (the series is still within 4 ε there: equivalent under the criterion).
+11 of 14 caught, 3 explained.
+
 ---
 
 ## New questions the advisor raised (not yet in `ARCHITECTURE.md`)

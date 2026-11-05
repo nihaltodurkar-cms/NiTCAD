@@ -150,6 +150,7 @@ add_custom_command(
           src/verify/reference/metrics.cpp
           include/NiTCAD/verify/reference/contract.hpp
           include/NiTCAD/verify/reference/codata2018.hpp
+          include/NiTCAD/verify/reference/bernoulli.hpp
           src/verify/reference/contract.cpp
   COMMENT "verify/reference include boundary (VR2)")
 add_custom_target(nitcad_verify_reference_boundary
@@ -689,7 +690,8 @@ add_test(NAME verify_consistency_boundary
 # TVB-01-03, the L0 device benchmarks of TVR-1 (DECISIONS 11.8): the code under test (base, physics,
 # assemble's header-only Bernoulli function) against the independent references of verify/reference.
 add_executable(nitcad_verify_benchmark_test
-  tests/verify/benchmark/constants_test.cpp)
+  tests/verify/benchmark/constants_test.cpp
+  tests/verify/benchmark/bernoulli_test.cpp)
 target_link_libraries(nitcad_verify_benchmark_test PRIVATE NiTCAD::verify_reference NiTCAD::physics
   Catch2::Catch2WithMain)
 nitcad_add_file_tests(verify_benchmark nitcad_verify_benchmark_test)
