@@ -8474,7 +8474,44 @@ Status of 15.4's items after these reads:
     L).
   - Scharfetter lifetimes: the form is cited to Fossum et al. The values 1e-5, 3e-6 and 5e16 are not found (L).
 
-Still to read in step 1: Caughey–Thomas and Baccarani–Ostoja values; Dziewior–Schmid; the hole v_sat 8.37e6; the
+**Second batch (2026-11-06).**
+
+| Source read | What it gives (as printed) |
+|---|---|
+| Esseni, Pala, Palestri, Alper, Rollo, Semicond. Sci. Technol. 32, 083005 (2017), open access (CC BY 3.0), pp. 4–5; PDF rendered locally | eq (8): G_T = e²\|F\|²√m_r / (18π ħ² √E_G) · exp(−π √m_r E_G^{3/2} / (2ħe\|F\|)). eq (9): κ = √(m_r E_G (1 − α²))/ħ, α = −m₀/(2m_r) + 2√((m₀/(2m_r))((E − E_V)/E_G − ½) + m₀²/(16m_r²) + ¼). eq (11): G_T(E) = \|dE_V/dx\| e/(36ħ) (∫dx/κ)⁻¹ [1 − exp(−k_m² ∫dx/κ)] exp(−2∫κ dx) (f_c − f_v). eq (12): k_m² = min(2m_v(E_MAX − E)/ħ², 2m_c(E − E_min)/ħ²). m_r⁻¹ = m_c⁻¹ + m_v⁻¹ |
+| Genius TCAD Open, `src/material/Si` (raw files) | BGN: V0 6.92e-3 eV, N0 1.3e17, CON 0.5, EgNarrow = V0(x + √(x² + CON)), **nothing subtracted**. Auger 2.8e-31, 9.9e-32 (uncited). NSRHN = NSRHP = 5e16 but TAUN0 = TAUP0 = 1e-7. NC300 2.86e19, NV300 3.10e19 (comment: Green 1990). Dopants: B 0.045 eV, g 4; P 0.045 eV, g 2. Analytic mobility 55.24/1429.23/1.072e17/0.73 (e), 49.70/479.37/1.606e17/0.70 (h); β 2 and 1, uncited. OP_PH_EN 0.063 eV. τ_w 6.8e-13 and 2.0e-13 s. Its BTBT A and B were seen only in a fetch summary (unverified) |
+| Xyce reference guide tables and `N_DEV_Material*.C` | Caughey–Thomas Si as Genius's analytic set. Arora exponents −2.33 (exn2) and −2.23 (exp2). Auger 2.8e-31, 9.9e-32. Lifetimes from Weaver–Nasby (3.95e-4 s and 3.52e-5 s, N_ref 7.1e15). E_g(T) = 1.17 − 4.73e-4 T²/(T + 636), cited to Thurmond (1975). Slotboom "from the Medici manual": 9e-3, 1e17, 0.5. N_v 2.66e19 |
+| Triebl, PhD thesis, TU Wien 2012, §4.3.1 | "The energy relaxation time is often assumed to be constant, with typical values τ_E,n = 0.35 ps [Vasicek 2009] and τ_E,p = 0.4 ps [Palankovski 2000]" |
+
+Effect:
+- **31.22 is PA.** NiTCAD's κ, α (with u = m₀/(2m_r)), the path rate and k_m² match eqs (9), (11) and (12)
+  term for term. Its uniform-field rate matches eq (8) (`band_to_band.cpp:157`, in SI with |dE_V/dx| in J/m). One
+  printed sign is inconsistent: eq (11) has (f_c − f_v), while eq (2) has (f_v − f_c) with f_v = 1, f_c = 0. NiTCAD
+  takes the latter, which makes it pure generation. This is recorded as a misprint, not a finding.
+- **F1's form reaches PB.** Genius prints Tidy3D's form with nothing subtracted. Xyce attributes 9 meV / 1e17 to the
+  Medici manual's Slotboom.
+- **Auger values reach PB** (three reproductions). None of them cites Dziewior–Schmid.
+- **Legacy N_c and N_v reach PB** (Green 1990, via Genius and Palankovski). The Varshni set reaches PB (Thurmond 1975,
+  via Xyce and Palankovski).
+- **F3 is still open after four codes and two theses.** None prints 92/1360/1.3e17/0.91 or 47.7/495/6.3e16/0.76, so
+  the grade stays L.
+- **The lifetimes** 1e-5 and 3e-6 are still not found (L). N_ref = 5e16 is in Genius, uncited (PC).
+- **τ_w** is PA as the code cites it (Triebl's "typical values").
+
+**The register** is `include/NiTCAD/verify/reference/model_parameters.hpp`: 104 rows typed from these reads.
+- Each row carries its grade (MI-Q5 L and C included) and its source locator.
+- Its silicon, Masetti, Lombardi, Altermatt, Canali-law, vOdM, Kane, thermal, SiO₂ and MLDA rows cover every
+  shipped silicon model parameter, except the thermopower exponents (−½, a theory value, 31.29) and fields shipped as 0 meaning "not modelled" (radiative B, Richardson constants).
+- Fields with no source read (ε_r, χ, the Caughey–Thomas sets, lifetimes, the Kane pair, ρc, SiO₂ ε_r) are rows with
+  an empty value and grade L.
+- The non-silicon sets (31.31) and the radiative coefficients (31.14) are read in step 9, where they are used. This
+  is a reordering of 15.6 that changes no criterion.
+
+Remaining source acquisition (open copies exhausted; the MI-Q6 primaries would settle these): Caughey–Thomas 1967 and
+Baccarani–Ostoja 1975 (F3), the lifetime set, Dziewior–Schmid 1977, the Kane pair's origin (F5), and the γ(T) primary
+(F4).
+
+Superseded list (first batch): Caughey–Thomas and Baccarani–Ostoja values; Dziewior–Schmid; the hole v_sat 8.37e6; the
 Scharfetter values; the Kane pair's origin; Esseni et al. 2017; the dopant levels and degeneracies; radiative
 coefficients; the SiO₂ ε_r; the non-silicon material sets; Triebl's τ_w (§3.3 provenance for 31.10's inputs). Then the
 register file itself.
