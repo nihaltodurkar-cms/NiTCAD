@@ -19,9 +19,7 @@ constexpr std::array<Benchmark, 4> shipped{{
 
 bool everywhere(double) { return true; }
 
-constexpr std::array<KnownFinding, 2> findings{{
-    {"TVB-01", "hbar", &everywhere, "(i)",
-     "DECISIONS 11.13 TVB-01-03: base::hbar_J_s is NIST's printed truncation of h / 2 pi"},
+constexpr std::array<KnownFinding, 1> findings{{
     {"TVB-02", "F_-1/2", &everywhere, "(ii)",
      "DECISIONS 11.13 TVB-02 finding (ii) widened (option A): F_-1/2 misses from eta = 13.76"},
 }};

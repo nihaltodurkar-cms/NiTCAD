@@ -7776,6 +7776,28 @@ stacked on that branch and will be rebased onto main once #76 merges.
   overflows" to "pass everywhere". The hidden `[.finding]` case is gone: it is now the visible case.
 - `registry_test` expects TVB-03 to report `pass` and the table to hold 2 entries.
 - Ctests: verify 37/37, assemble 18/18 (Release).
+
+*As built, finding (i) (FQ1):*
+- `base::hbar_J_s` is now `1.0545718176461565e-34`, the correctly rounded h/2π.
+  - TVB-01 passes 12/12. The new case checks that it is the double nearest the double-double h/2π.
+  - Known-findings entry (i) is removed, leaving 1 entry.
+- Existing expectations that moved; each is listed here with old and new values:
+  - `tests/base/constants_test.cpp:13` pinned the old literal; it now pins the new one.
+  - `tests/physics/quantum_confinement_test.cpp` QC2 wrote out the old ħ in its reference; it now uses h/2π.
+  - Three cases sit at the rounding floor. They were ruled by the owner on 2026-11-05, choosing the recommended
+    option each time:
+    - `tests/solve/quantum_confinement_test.cpp` QC5 (reported, not gated, but a solve that does not converge
+      fails it): with the model on at V_G = −2 V, the equilibrium solve no longer reaches tol_update 1e-13
+      within 100 iterations, though it does with the old ħ. It converges at 2e-13, so tol_update is raised from
+      1e-13 to 2e-13.
+    - `tests/deck/gate_tunnelling_test.cpp` GC7: the last correction is 3.77e-13, against 3.24e-14 with the old
+      ħ. The window cutoff is raised from 1e-13 to the sweep's tol_update of 1e-12.
+    - GC11: at 0.25 V the 1D/2D agreement is 1.24e-9, against 7.84e-10 with the old ħ. The bound goes from 1e-9
+      to 2e-9. tol_update 1e-12 does not converge in 2D.
+  - A 6e-10 change in ħ alters GC7's Newton path visibly (iteration 2: 1.03e-2 → 1.61e-2). The gate-tunnelling
+    capacitor is near-singular (GR5), which is the likely reason. Recorded, not investigated.
+- Release suite with (i) and (iii): 163/166. The three failures were base, solve_mlda and gate_tunnelling,
+  before the edits above; after them all three pass, as do physics 2/2 and verify 37/37.
 ---
 
 ## New questions the advisor raised (not yet in `ARCHITECTURE.md`)

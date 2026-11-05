@@ -3,7 +3,7 @@
 // Code under test: base/constants.hpp. Reference: verify/reference/codata2018.hpp (NIST's printed strings, PA).
 // Criteria (frozen): q, k, eps0 (F/cm) and m0 bit-equal to the correctly rounded double of the printed decimal;
 // hbar = h / 2 pi and k / q within gamma_3, V_T(T) = k T / q within gamma_4 of the exact double-double values,
-// gamma_n = n u / (1 - n u), u = 2^-53. hbar fails: finding (i).
+// gamma_n = n u / (1 - n u), u = 2^-53. Finding (i) (hbar the printed truncation) was fixed in Unit 56 (FQ1).
 #include <bit>
 #include <cmath>
 #include <cstdint>

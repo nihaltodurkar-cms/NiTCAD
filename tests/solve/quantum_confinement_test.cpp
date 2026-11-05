@@ -220,7 +220,10 @@ TEST_CASE("quantum confinement: n p at equilibrium with and without the model (Q
         for (const double vg : {-2.0, 1.5}) {
             solve::BiasOptions o;
             o.models = models(on);
-            o.newton.tol_update = 1e-13;
+            // 2e-13, was 1e-13 (owner ruling 2026-11-05, Unit 56, DECISIONS Unit 55 13): with the correctly
+            // rounded hbar (FQ1) the model-on V_G = -2 V equilibrium solve stalls between 1e-13 and 2e-13, at
+            // the rounding floor; it converges at 2e-13.
+            o.newton.tol_update = 2e-13;
             solve::BiasOptions qs = o;
             qs.equations = solve::Equations::equilibrium_poisson;
             const std::vector<double> bias{vg, 0.0};

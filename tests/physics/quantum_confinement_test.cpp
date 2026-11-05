@@ -62,10 +62,11 @@ TEST_CASE("quantum confinement: silicon's quantization masses (Unit 47)") {
 }
 
 TEST_CASE("quantum confinement: the thermal wavelength (QC2)") {
-    // hbar / sqrt(2 m k T) from the CODATA 2018 values written out here.
+    // hbar / sqrt(2 m k T) from the CODATA 2018 values written out here; hbar = h / 2 pi (until Unit 56 this
+    // copied the printed truncation 1.054571817e-34; FQ1, DECISIONS Unit 55 12).
     for (double m : {0.49, 0.98, 1.0, 0.19}) {
         for (double T : {250.0, 300.0, 400.0}) {
-            const long double ref = 1.054571817e-34L /
+            const long double ref = 1.0545718176461565e-34L /
                                     std::sqrt(2.0L * m * 9.1093837015e-31L * 1.380649e-23L * T) *
                                     100.0L;
             CHECK(close(mlda_wavelength_cm(m, T), static_cast<double>(ref), 1e-14));

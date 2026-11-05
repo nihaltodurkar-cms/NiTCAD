@@ -39,7 +39,7 @@ TEST_CASE("registry: the shipped benchmarks of TVR-1, all fast") {
         CHECK(b[i].tier == bench::Tier::fast);
         CHECK(b[i].run != nullptr);
     }
-    REQUIRE(bench::known_findings().size() == 2);  // (iii) fixed in Unit 56 (FQ4)
+    REQUIRE(bench::known_findings().size() == 1);  // (iii) and (i) fixed in Unit 56 (FQ4, FQ1)
 }
 
 TEST_CASE("registry: a known finding turns a fail inside its region into finding, and only there") {
@@ -134,7 +134,7 @@ TEST_CASE("registry: the report round-trips through io, and two runs are equal e
     b.provenance.wall_s = a.provenance.wall_s;
     CHECK(a == b);
     REQUIRE(a.benchmarks.size() == 2);
-    CHECK(a.benchmarks[0].outcome == "finding");
+    CHECK(a.benchmarks[0].outcome == "pass");  // TVB-01: finding (i) fixed in Unit 56 (FQ1)
     CHECK(a.benchmarks[1].outcome == "pass");  // TVB-03: finding (iii) fixed in Unit 56 (FQ4)
     CHECK(a.reference_evidence.size() == 2);
 
