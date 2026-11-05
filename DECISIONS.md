@@ -7798,6 +7798,25 @@ stacked on that branch and will be rebased onto main once #76 merges.
     capacitor is near-singular (GR5), which is the likely reason. Recorded, not investigated.
 - Release suite with (i) and (iii): 163/166. The three failures were base, solve_mlda and gate_tunnelling,
   before the edits above; after them all three pass, as do physics 2/2 and verify 37/37.
+
+*Finding (ii): FQ2 falsified; accepted as a limitation (owner, 2026-11-05, the recommended option, after measurement).*
+- Step 0.01 made F₋½ worse: worst 2.28e-11 with 91 misses, against 2.0e-11 with 82 at step 0.025.
+- The error is not interpolation. F₋½ is the slope of the tabulated ln F½, and the slope term d0·(y0 − y1)/step
+  turns the quadratures' relative error (about 3e-15 per node) into F₋½'s relative error, scaled by about
+  η/(1.5·step).
+- A prototype stored per-cell differences ln(f₍ᵢ₊₁₎/fᵢ) − Δη instead of the rounded ln γ, to avoid ln γ's
+  rounding at its magnitude (|ln γ| ≈ η). It halved the worst error to 1.1e-11 but raised the misses to 104.
+  Reverted, not committed.
+- Meeting 1e-12 would need a table built above double precision. That is a new design and was not taken.
+- Where F₋½ is used: only as a derivative, in the Jacobian entries of `physics/statistics.cpp` and in the
+  energy-balance degenerate terms (`assemble/energy_balance.cpp:108`). It exceeds 1e-12 only above η ≈ 14
+  (n ≳ 1e21 cm⁻³ in silicon).
+- Done:
+  - FQ3: the accuracy statement in `physics/fermi_dirac.hpp` now gives the mid-cell values measured by TVB-02:
+    7e-14 up to η = 5, 2.1e-12 up to 15, 4.3e-12 up to 25, 2.0e-11 up to 40. F½ is within 1e-14.
+  - The text of known-finding entry (ii) records the acceptance.
+  - Physics code is unchanged. TVB-02 and its tests are unchanged, and the hidden `[.finding]` case still fails
+    by design.
 ---
 
 ## New questions the advisor raised (not yet in `ARCHITECTURE.md`)

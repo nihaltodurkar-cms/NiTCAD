@@ -14,9 +14,13 @@
 //   Gauss-Legendre quadratures of F_{1/2}, F_{-1/2} and F_{-3/2};
 // - eta > 40: the Sommerfeld expansion F_{1/2} = 4 / (3 sqrt(pi)) eta^(3/2) (1 + sum_k c_k eta^-2k)
 //   with ten terms, whose residual falls like e^-eta (3.7e-18 at eta = 40).
-// Measured against double-double references (tests/physics/fermi_dirac_test.cpp): F_{1/2} within
-// 1.5e-15 relative everywhere; F_{-1/2} within 1.3e-13 up to eta = 15 and 3e-12 up to 40, where
-// the slope F_{-1/2} / F_{1/2} has fallen to 0.04, and 1e-14 above. The derivatives returned are
+// Measured against double-double references (tests/physics/fermi_dirac_test.cpp; and TVB-02, which
+// samples mid-cell, DECISIONS Unit 55 12-13): F_{1/2} within 1e-14 relative everywhere (1.5e-15 up
+// to eta = 15); F_{-1/2} within 7e-14 up to eta = 5, 2.1e-12 up to 15, 4.3e-12 up to 25 and 2.0e-11
+// up to 40, and 1e-14 above. F_{-1/2} is the slope of the tabulated ln F_{1/2}, so the quadratures'
+// relative error (about 3e-15 per node) over the change of ln F_{1/2} across a cell sets a floor of
+// about 3e-15 eta / (1.5 step), which no step removes (finding (ii) of TVB-02, accepted as a
+// limitation 2026-11-05; a smaller step makes it worse). The derivatives returned are
 // those of the function evaluated (the interpolant's own derivative inside the table), so a
 // Jacobian built from them matches finite differences of the residual. ln gamma is continuously
 // differentiable; at the joins its value jumps by rounding (1e-17 at -2, an ulp of 40 at 40) and

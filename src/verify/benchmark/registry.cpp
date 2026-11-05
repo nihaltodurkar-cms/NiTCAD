@@ -21,7 +21,8 @@ bool everywhere(double) { return true; }
 
 constexpr std::array<KnownFinding, 1> findings{{
     {"TVB-02", "F_-1/2", &everywhere, "(ii)",
-     "DECISIONS 11.13 TVB-02 finding (ii) widened (option A): F_-1/2 misses from eta = 13.76"},
+     "DECISIONS 11.13 TVB-02 finding (ii) widened (option A), accepted as a limitation (Unit 56, 13): F_-1/2 "
+     "misses from eta = 13.76, a quadrature-rounding floor of the derivative-consistent table"},
 }};
 
 bool starts_with(std::string_view s, std::string_view prefix) { return s.substr(0, prefix.size()) == prefix; }
