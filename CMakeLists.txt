@@ -154,13 +154,16 @@ add_custom_command(
           include/NiTCAD/verify/reference/fermi_dirac.hpp
           src/verify/reference/fermi_dirac.cpp
           src/verify/reference/contract.cpp
+          include/NiTCAD/verify/reference/pn_junction.hpp
+          src/verify/reference/pn_junction.cpp
   COMMENT "verify/reference include boundary (VR2)")
 add_custom_target(nitcad_verify_reference_boundary
   DEPENDS "${CMAKE_BINARY_DIR}/verify_reference_boundary.stamp")
 add_library(nitcad_verify_reference STATIC src/verify/reference/double_double.cpp
   src/verify/reference/gauss_kronrod.cpp src/verify/reference/tanh_sinh.cpp
   src/verify/reference/chebyshev.cpp src/verify/reference/metrics.cpp
-  src/verify/reference/contract.cpp src/verify/reference/fermi_dirac.cpp)
+  src/verify/reference/contract.cpp src/verify/reference/fermi_dirac.cpp
+  src/verify/reference/pn_junction.cpp)
 add_library(NiTCAD::verify_reference ALIAS nitcad_verify_reference)
 target_include_directories(nitcad_verify_reference PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
 add_dependencies(nitcad_verify_reference nitcad_verify_reference_boundary)
@@ -177,7 +180,8 @@ add_executable(nitcad_verify_test
   tests/verify/reference/complex_step_test.cpp
   tests/verify/reference/jacobi_eigen_test.cpp
   tests/verify/reference/metrics_test.cpp
-  tests/verify/reference/contract_test.cpp)
+  tests/verify/reference/contract_test.cpp
+  tests/verify/reference/pn_junction_test.cpp)
 target_link_libraries(nitcad_verify_test PRIVATE NiTCAD::verify_reference Catch2::Catch2WithMain)
 nitcad_add_file_tests(verify nitcad_verify_test)
 add_test(NAME verify_reference_boundary
@@ -688,7 +692,8 @@ string(APPEND _decks_header "}  // namespace NiTCAD::verify::benchmark::decks\n"
 file(CONFIGURE OUTPUT "${CMAKE_BINARY_DIR}/generated/verify_decks.hpp" CONTENT "${_decks_header}" @ONLY)
 add_library(nitcad_verify_benchmark STATIC src/verify/benchmark/device_data.cpp
   src/verify/benchmark/registry.cpp src/verify/benchmark/tvb01.cpp src/verify/benchmark/tvb02.cpp
-  src/verify/benchmark/tvb03.cpp src/verify/benchmark/tvb04.cpp src/verify/benchmark/tvb11.cpp
+  src/verify/benchmark/tvb03.cpp src/verify/benchmark/tvb04.cpp src/verify/benchmark/tvb07.cpp
+  src/verify/benchmark/tvb11.cpp
   src/verify/benchmark/tvb12.cpp src/verify/benchmark/tvb32.cpp)
 add_library(NiTCAD::verify_benchmark ALIAS nitcad_verify_benchmark)
 target_include_directories(nitcad_verify_benchmark PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
@@ -737,8 +742,10 @@ if(NITCAD_VERIFY_FULL_TIER AND CMAKE_BUILD_TYPE STREQUAL "Release")
   add_executable(nitcad_verify_full_test tests/verify/benchmark/code_verification_full_test.cpp)
   target_link_libraries(nitcad_verify_full_test PRIVATE NiTCAD::verify_benchmark Catch2::Catch2WithMain)
   target_compile_definitions(nitcad_verify_full_test PRIVATE NITCAD_MKL_RUNTIME_PATH="${NITCAD_MKL_RUNTIME_PATH}")
-  add_test(NAME verify_full.tvb04 COMMAND nitcad_verify_full_test)
+  add_test(NAME verify_full.tvb04 COMMAND nitcad_verify_full_test "[tvb04_full]")
   set_tests_properties(verify_full.tvb04 PROPERTIES LABELS full TIMEOUT 3600 RUN_SERIAL TRUE)
+  add_test(NAME verify_full.tvb07 COMMAND nitcad_verify_full_test "[tvb07_full]")
+  set_tests_properties(verify_full.tvb07 PROPERTIES LABELS full TIMEOUT 600)
 endif()
 
 # The batch runner (`nitcad check|run <deck>`).

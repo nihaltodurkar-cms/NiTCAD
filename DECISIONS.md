@@ -8031,6 +8031,54 @@ References are analytic (U_ref at rounding) or computed in double-double, with U
   - Time: the 3D generated and swept ladders take about 13 minutes together; `verify_full.tvb04` passes (19 assertions) in 1505 s. It is still local only (CV-Q16).
 - The verify ctests pass in Release and Debug (41/41; the fast tier is unchanged). Serial Debug takes 59.6 s against the 60 s budget (VR10).
 
+
+*Step 6, TVB-07 (equilibrium abrupt pn junction).*
+- **Reference** (`include/NiTCAD/verify/reference/pn_junction.hpp`, `src/verify/reference/pn_junction.cpp`, in the reference layer: standard library and base only, VR2).
+  - u_n = asinh(N_D/2n_i) and u_p = −asinh(N_A/2n_i), in double-double. **Note:** the catalogue's V_T ln(N_A N_D/n_i²) is their majority-carrier limit. It differs by about (n_i/N)² relative, 7e-14 here, above the 64 ε = 1.4e-14 of the D criterion. So the exact neutral levels are the reference. This is the same V_bi the catalogue names, written exactly, and the criterion is unchanged.
+  - First integral on each side: ½u′² = (q/εV_T)[n_b G(t) + p_b G(−t)], with G(t) = e^t − 1 − t (series for |t| < ¼). u_j is found by Brent on Φ_n = Φ_p. E_max = V_T u′(0).
+  - x(ψ) uses tanh-sinh in s = ln|u − u_b|, whose integrand tends to the Debye length, so there is no endpoint singularity. Its inverse is a safeguarded Newton in s.
+  - **One defect found and fixed before the L0 tests passed:** recomputing the tail as (u_b − t) − u_b cancelled to about 1e-18 relative, so x(s) was noisy and Newton's bracket closed. Φ is now taken from t directly, and a closed bracket is an error, not a silent stop.
+  - **I3, a second method:** Chebyshev collocation of the finite-domain problem. It uses 4 + 4 pieces, patching u and u′, damped Newton, and a dense LU in double. It shares no code with the first integral.
+  - L0 tests (`tests/verify/reference/pn_junction_test.cpp`, 6 cases, 44 assertions):
+    - symmetric doping gives u_j = 0 and an odd profile;
+    - the junction condition holds to 6e-32, re-evaluated with G = expm1 − t;
+    - bulk neutrality and mass action hold to 1e-30;
+    - the profile agrees with the ODE, shot from (u_j, E_max) by dopri5 in double-double on each side to the depletion edge plus 3 L_D, to 1e-15 of V_bi (measured 0 at double precision);
+    - E_max agrees with the depletion approximation (with the −2V_T correction) to 1e-3, on junctions depleted on both sides. A 1:100 junction is not, by ~46 %, and is not a case;
+    - collocation at degrees 40 and 48 agrees to 1.3e-13 V, and with the first integral to the contact tail;
+    - bad inputs are refused.
+- **Benchmark** (`src/verify/benchmark/tvb07.cpp`).
+  - Silicon on [−1, 1] µm with N_A = 1e16 (x < 0), N_D = 2e16 (x > 0) and ohmic contacts at both ends, at equilibrium (Boltzmann, no BGN).
+  - The N nodes are uniform with N even, so the step sits on the middle edge's dual face.
+  - E_max is the middle edge's difference quotient, against |ψ′(0)|.
+  - Inputs q, ε_si, V_T and n_i are NiTCAD's material data (I1).
+  - Every run cross-checks the collocation (degree 32) against the first integral on the 64-node grid. The two differ by 1.539e-10 V, which is the predicted truncation V_T t at the contacts (1.539e-10 V). So the reference's uncertainty is measured, not assumed.
+  - U_ref (truncation, relative to V_bi) is 2.1e-10, against the TB-Q4 limit of 1e-7.
+  - Registered as TVB-07, tier fast. Fast runs N = 64 and 128 with V_bi only (2 comparisons). Full runs N = 64…512 (8 comparisons).
+- **Results (Release, full tier):**
+
+  | N | V_bi | ψ L∞ / V_bi | E_max relative | U_iter |
+  |---|---|---|---|---|
+  | 64 | 0.7339546843440443 | 4.19e-3 | 2.86e-3 | 1.7e-16 |
+  | 128 | same | 1.06e-3 | 7.04e-4 | 1.4e-16 |
+  | 256 | same | 2.67e-4 | 1.74e-4 | 1.4e-16 |
+  | 512 | same | 6.68e-5 | 4.35e-5 | 2.1e-16 |
+
+  - V_bi is 1 ulp from the reference 0.7339546843440442 at every level: pass (D).
+  - ψ L∞ orders are 1.99, 1.98 and 1.96 (spread 0.020), so p̂ = 1.96: pass.
+  - E_max orders are 2.000, 2.000 and 2.001 (spread 0.0009): pass.
+  - On the finest level, ψ L∞ is 6.7e-5 ≤ 1e-4 (pass) and E_max is 4.3e-5 ≤ 1e-3 (pass). 8/8 pass, in 0.41 s.
+  - Reported: the depletion edges are ε E_max/(qN), x_p = 0.2425 µm and x_n = 0.1213 µm, and ψ_j = 0.1227 V.
+- **Tests.**
+  - `code_verification_test.cpp` gets the fast case (2 comparisons, pass).
+  - `code_verification_full_test.cpp` gets the full case (8, pass) as `verify_full.tvb07` (label `full`, 0.4 s). `verify_full.tvb04` now runs only its own tag.
+  - `registry_test` expects 8 ids (was 7).
+  - The verify ctests pass in Release (42/42) and Debug (42/42).
+- **Time (VR10), for the owner (CV-Q19).** Serial Debug verify takes 62.6–64.5 s over two runs, against the 60 s budget.
+  - On the same day the tree without step 6 measured 60.45 s, so it had no headroom left. Run-to-run spread is about ±1 s.
+  - Step 6 adds 0.8 s of L0 tests (after cutting the ODE steps and collocation degrees) and 0.9 s for TVB-07's fast case.
+  - TVB-09's fast case (14.7) and TVB-14's are still to come.
+
 **14.9 Owner rulings after the TVB-04 run (2026-11-05).**
 
 | # | Question | Ruling |
@@ -8040,6 +8088,14 @@ References are analytic (U_ref at rounding) or computed in double-double, with U
 | CV-Q14 | For studies against an exact solution, the asymptotic-range check is the order spread (≤ 0.1) alone (14.8 step 2). Confirm? | **Confirmed.** |
 | CV-Q15 | Eigen SparseLU cannot hold 64³ (above). PARDISO, GMRES-ILUT, or keep Eigen? | **PARDISO for the 3D levels.** |
 | CV-Q16 | With PARDISO, 64³ takes 709 s on 6 threads at about 20 GB, more than a CI runner (16 GB, 4 vCPU) holds. Full-tier ctest local only, move 64³ to nightly, or keep it in CI? | **Option 1: local only.** The full tier stays as ruled; its ctest is opt-in and not run in CI. |
+| CV-Q17 | The unstructured families' H1 error: normalised by the exact ψ's discrete H1 seminorm (recommended; the potential scale A + V_T is a voltage, not a gradient norm), or literally by A + V_T? | **Recommended: the exact ψ's H1 seminorm** (owner, "choose recommended", 2026-11-05). |
+| CV-Q18 | Close margins after step 5 (3D generated p̂ 1.29 against 1.3; 2D spread 0.099 against 0.1; the coarse 3D pairs above the band). Add a fourth 3D level, or keep the frozen ladders (recommended)? | **Recommended: keep the frozen ladders**; nothing added or widened (TVM2). |
+
+**14.10 Open owner question (2026-11-05, after step 6).**
+
+| # | Question | Options | Recommendation |
+|---|---|---|---|
+| CV-Q19 | Serial Debug verify is 62.6–64.5 s against VR10's 60 s. The tree before step 6 was already at 60.45 s, and TVB-09/14 fast cases are still to come. | (A) Raise VR10 to 75 s for serial Debug, stated with the measured spread. (B) Move TVB-07's fast case (and later TVB-09's) to `full`, which departs from 14.7's ladder column. (C) Keep 60 s and shorten an existing fast test (the largest are TVB-02's `fermi_dirac`, 21–22 s, and C-transient, 15 s), which touches TVR-1's frozen tests. | **A.** The budget has no headroom with or without TVR-2. A and B leave every frozen criterion as it is, and A also keeps the frozen ladders. |
 ---
 
 ## New questions the advisor raised (not yet in `ARCHITECTURE.md`)

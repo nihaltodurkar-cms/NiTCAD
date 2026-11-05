@@ -27,7 +27,8 @@ Outcome outcome_of(const bench::BenchmarkResult& r, const std::string& quantity)
 
 }  // namespace
 
-TEST_CASE("TVB-04 full tier: tensor ladders and the unstructured families (frozen outcomes)", "[tvr2_full]") {
+TEST_CASE("TVB-04 full tier: tensor ladders and the unstructured families (frozen outcomes)",
+          "[tvr2_full][tvb04_full]") {
     const std::string mkl = NITCAD_MKL_RUNTIME_PATH;
     if (mkl.empty()) SKIP("NITCAD_MKL_RUNTIME is not set: the 3D levels need PARDISO");
     REQUIRE(NiTCAD::linalg::load_mkl_runtime(mkl).has_value());
@@ -60,4 +61,17 @@ TEST_CASE("TVB-04 full tier: tensor ladders and the unstructured families (froze
         CHECK(outcome_of(r, std::string("psi H1 finest, ") + family) == Outcome::pass);
     }
     CHECK(bench::overall(r) == Outcome::not_evaluated);
+}
+
+TEST_CASE("TVB-07 full tier: N = 64 ... 512 (frozen outcomes)", "[tvb07_full]") {
+    const bench::BenchmarkResult r = bench::run_tvb07(bench::Tier::full);
+    REQUIRE_FALSE(r.run_error.has_value());
+    for (const auto& n : r.notes) UNSCOPED_INFO("note: " << n);
+    // V_bi at 4 levels; psi Linf and E_max orders (measured 1.96 and 2.00); psi Linf finest 6.7e-5, E_max 4.3e-5.
+    REQUIRE(r.comparisons.size() == 8);
+    for (const auto& c : r.comparisons) {
+        CAPTURE(c.quantity, c.metric, c.comparison.reason);
+        CHECK(c.comparison.outcome == Outcome::pass);
+    }
+    CHECK(bench::overall(r) == Outcome::pass);
 }
