@@ -10,7 +10,10 @@
 // - otherwise B = x / expm1(x) and B' = (1 - x - B) / expm1(x), from B'(x) = B(x)(1 - B(-x)) / x,
 //   the identity above and B / x = 1 / expm1(x); the subtraction loses at most about 2 digits near
 //   |x| = 1e-2.
-// No clipping: expm1 gives B(x) = -x for very negative x and B(x) = 0 once x e^-x underflows.
+// - x > 709 (where std::expm1 overflows above ln DBL_MAX = 709.78): B = (x e^(-x/2)) e^(-x/2) and
+//   B' = ((1 - x) e^(-x/2)) e^(-x/2); e^-x is below 2^-1000 there, so 1 / (1 - e^-x) is 1 to rounding, and the
+//   half-exponent keeps each factor normal (DECISIONS Unit 55 12, FQ4; finding (iii) of TVB-03).
+// No clipping: expm1 gives B(x) = -x for very negative x; B(x) underflows gradually as x e^-x does.
 // OLD: the legacy clipped x to [-700, 700], so B(-1000) was 700 instead of 1000, and used the
 // series only below 1e-4, where B' lost about 4 digits to cancellation.
 #pragma once
@@ -26,6 +29,10 @@ namespace NiTCAD::assemble {
         return 1.0 - 0.5 * x +
                x2 * (1.0 / 12.0 + x2 * (-1.0 / 720.0 + x2 * (1.0 / 30240.0 - x2 / 1209600.0)));
     }
+    if (x > 709.0) {
+        const double h = std::exp(-0.5 * x);
+        return (x * h) * h;
+    }
     return x / std::expm1(x);
 }
 
@@ -35,6 +42,10 @@ namespace NiTCAD::assemble {
         // -1/2 + x/6 - x^3/180 + x^5/5040 - x^7/151200
         return -0.5 +
                x * (1.0 / 6.0 + x2 * (-1.0 / 180.0 + x2 * (1.0 / 5040.0 - x2 / 151200.0)));
+    }
+    if (x > 709.0) {
+        const double h = std::exp(-0.5 * x);
+        return ((1.0 - x) * h) * h;
     }
     const double em1 = std::expm1(x);
     return (1.0 - x - x / em1) / em1;

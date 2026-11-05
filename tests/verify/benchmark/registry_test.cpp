@@ -39,7 +39,7 @@ TEST_CASE("registry: the shipped benchmarks of TVR-1, all fast") {
         CHECK(b[i].tier == bench::Tier::fast);
         CHECK(b[i].run != nullptr);
     }
-    REQUIRE(bench::known_findings().size() == 3);
+    REQUIRE(bench::known_findings().size() == 2);  // (iii) fixed in Unit 56 (FQ4)
 }
 
 TEST_CASE("registry: a known finding turns a fail inside its region into finding, and only there") {
@@ -135,7 +135,7 @@ TEST_CASE("registry: the report round-trips through io, and two runs are equal e
     CHECK(a == b);
     REQUIRE(a.benchmarks.size() == 2);
     CHECK(a.benchmarks[0].outcome == "finding");
-    CHECK(a.benchmarks[1].outcome == "finding");
+    CHECK(a.benchmarks[1].outcome == "pass");  // TVB-03: finding (iii) fixed in Unit 56 (FQ4)
     CHECK(a.reference_evidence.size() == 2);
 
     const auto path = std::filesystem::temp_directory_path() / "nitcad_verify_report_test.nvr";

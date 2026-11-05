@@ -7759,6 +7759,23 @@ The frozen criteria do not move (TVM2).
   - runs the ctests of the touched areas.
 - Both full suites run before the unit is offered.
 - Nothing is pushed without the owner's word.
+#### 13. Unit 56: the fixes of findings (i)–(iii) (on `physics/reference-findings`)
+
+**Rulings:** FQ0–FQ6 are approved as recommended (owner, "go", 2026-11-05, after "what do you recommend"). In the
+same instruction the owner authorised pushing `verify/reference-numerics` and opening the TVR-1 PR (#76). Unit 56 is
+stacked on that branch and will be rebased onto main once #76 merges.
+
+*As built, finding (iii) (FQ4, FQ5):*
+- `assemble::bernoulli` and `bernoulli_derivative` above x = 709 return `(x·h)·h` and `((1 − x)·h)·h`, with
+  h = e^(−x/2). The code path below 709 is unchanged, so every value there stays bit-identical.
+- TVB-03 now passes at all 12424 judged points, worst 1.19 eps at x = 713.6. The 602 subnormal points remain
+  not applicable.
+- The new B′ case on (ln DBL_MAX, 745] judges 104 points, worst 1.20 eps at x = 713.8.
+- Known-findings entry (iii) is removed, and the table has 2 entries.
+- The frozen TVB-03 expectation in `tests/verify/benchmark/bernoulli_test.cpp` changes from "finding where expm1
+  overflows" to "pass everywhere". The hidden `[.finding]` case is gone: it is now the visible case.
+- `registry_test` expects TVB-03 to report `pass` and the table to hold 2 entries.
+- Ctests: verify 37/37, assemble 18/18 (Release).
 ---
 
 ## New questions the advisor raised (not yet in `ARCHITECTURE.md`)

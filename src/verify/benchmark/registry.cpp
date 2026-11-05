@@ -2,7 +2,6 @@
 #include "NiTCAD/verify/benchmark/registry.hpp"
 
 #include <array>
-#include <cfloat>
 #include <charconv>
 #include <cmath>
 #include <utility>
@@ -19,15 +18,12 @@ constexpr std::array<Benchmark, 4> shipped{{
 }};
 
 bool everywhere(double) { return true; }
-bool expm1_overflows(double x) { return x > std::log(DBL_MAX); }
 
-constexpr std::array<KnownFinding, 3> findings{{
+constexpr std::array<KnownFinding, 2> findings{{
     {"TVB-01", "hbar", &everywhere, "(i)",
      "DECISIONS 11.13 TVB-01-03: base::hbar_J_s is NIST's printed truncation of h / 2 pi"},
     {"TVB-02", "F_-1/2", &everywhere, "(ii)",
      "DECISIONS 11.13 TVB-02 finding (ii) widened (option A): F_-1/2 misses from eta = 13.76"},
-    {"TVB-03", "B(x)", &expm1_overflows, "(iii)",
-     "DECISIONS 11.13 TVB-01-03: assemble::bernoulli returns 0 where std::expm1 overflows"},
 }};
 
 bool starts_with(std::string_view s, std::string_view prefix) { return s.substr(0, prefix.size()) == prefix; }
