@@ -7945,6 +7945,20 @@ References are analytic (U_ref at rounding) or computed in double-double, with U
   - the refusals.
 - Measuring the term as a difference of two full residuals is wrong: the later flux terms cancel, so their rounding shows (2.2e-14 relative was seen). The test therefore evaluates the term alone.
 - assemble tests: 154/154 pass (Release).
+
+*Step 2, `verify/study` (CV-Q6–Q8).*
+- What it is: `nitcad_verify_study`, which depends only on `mesh` and `verify_reference`; the benchmarks run the solves.
+- What it computes:
+  - `order_study`: the observed orders from errors against the exact solution, with p̂ from the finest pair.
+  - The CV-Q8 rule: U_iter ≤ e/10 at every level, else the order is not evaluated.
+  - The asymptotic check from 4 levels.
+  - `judge_order` against [p_th − 0.2, p_th + 0.3].
+  - `mean_spacing` = (V/N)^(1/D).
+- **Interpretation for the owner (14.7, "TVR-1's asymptotic check applies").** TVR-1's check has two tests: the order spread (≤ 0.1), and the GCI ratio ρ_k ≈ 1.
+  - The GCI ratio is relative to a nonzero solution value. Applied to errors that converge to 0, it gives ρ_k = r^−p (0.25 at second order), so every ladder would fail it.
+  - For studies against an exact solution, the check is therefore the order spread alone.
+  - This is narrower than TVR-1's two-test form. It is recorded here and not hidden.
+- Tests: `tests/verify/study/study_test.cpp`, 7 cases. They cover exact orders at r = 2 and r = 1.7, the band edges, 3 levels without the check, a drifting ladder that is not judged, the CV-Q8 boundary, invalid input, and the mean spacing in 1D, 2D and 3D.
 ---
 
 ## New questions the advisor raised (not yet in `ARCHITECTURE.md`)

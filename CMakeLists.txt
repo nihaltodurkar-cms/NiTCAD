@@ -664,6 +664,15 @@ target_include_directories(nitcad_verify_consistency PUBLIC "${CMAKE_CURRENT_SOU
 target_link_libraries(nitcad_verify_consistency PUBLIC NiTCAD::results NiTCAD::mesh NiTCAD::verify_reference)
 add_dependencies(nitcad_verify_consistency nitcad_verify_consistency_boundary)
 
+# --- verify/study (Unit 55 TVR-2, DECISIONS Unit 55 14): order studies against exact solutions; numbers only ---
+add_library(nitcad_verify_study STATIC src/verify/study/study.cpp)
+add_library(NiTCAD::verify_study ALIAS nitcad_verify_study)
+target_include_directories(nitcad_verify_study PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
+target_link_libraries(nitcad_verify_study PUBLIC NiTCAD::mesh NiTCAD::verify_reference)
+add_executable(nitcad_verify_study_test tests/verify/study/study_test.cpp)
+target_link_libraries(nitcad_verify_study_test PRIVATE NiTCAD::verify_study Catch2::Catch2WithMain)
+nitcad_add_file_tests(verify_study nitcad_verify_study_test)
+
 # --- verify/benchmark: runs NiTCAD (the subject of the checks) and feeds the consistency layer ---
 # The three TVB-32 decks embedded at build time (DECISIONS 11.13 RC-Q5), read by deck::parse.
 set(NITCAD_VERIFY_DECKS examples/pn_diode_1d.deck decks/schottky_diode_1d.deck examples/moscap_cv.deck)
