@@ -149,6 +149,7 @@ add_custom_command(
           include/NiTCAD/verify/reference/metrics.hpp
           src/verify/reference/metrics.cpp
           include/NiTCAD/verify/reference/contract.hpp
+          include/NiTCAD/verify/reference/codata2018.hpp
           src/verify/reference/contract.cpp
   COMMENT "verify/reference include boundary (VR2)")
 add_custom_target(nitcad_verify_reference_boundary
@@ -684,6 +685,14 @@ nitcad_add_file_tests(verify_consistency nitcad_verify_consistency_test)
 add_test(NAME verify_consistency_boundary
   COMMAND ${CMAKE_COMMAND} -DROOT=${CMAKE_CURRENT_SOURCE_DIR} -DLAYER=consistency
           -DALLOWED=${NITCAD_VERIFY_CONSISTENCY_ALLOWED} -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/verify/boundary.cmake)
+
+# TVB-01-03, the L0 device benchmarks of TVR-1 (DECISIONS 11.8): the code under test (base, physics,
+# assemble's header-only Bernoulli function) against the independent references of verify/reference.
+add_executable(nitcad_verify_benchmark_test
+  tests/verify/benchmark/constants_test.cpp)
+target_link_libraries(nitcad_verify_benchmark_test PRIVATE NiTCAD::verify_reference NiTCAD::physics
+  Catch2::Catch2WithMain)
+nitcad_add_file_tests(verify_benchmark nitcad_verify_benchmark_test)
 
 # The batch runner (`nitcad check|run <deck>`).
 add_executable(nitcad src/cli/main.cpp src/cli/plot.cpp)

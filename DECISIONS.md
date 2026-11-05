@@ -7545,6 +7545,25 @@ not NOT APPLICABLE by rounding. Every zero-bias C7 and C8 carries its two-contac
 "choose recommended" ruling; C3's 0.25 V electrode-step singular pivot finding; the stale comment at
 `tests/solve/small_signal_test.cpp:345`. Next in §11: TVB-01–03 (§11.8) and the report/CLI (§11.7).
 
+*TVB-01, constants and thermal voltage (§11.8, TB-Q1–Q3; `include/NiTCAD/verify/reference/codata2018.hpp`,
+`tests/verify/benchmark/constants_test.cpp`, new executable `nitcad_verify_benchmark_test`, ctests
+`verify_benchmark.*`).* Source read before code: NIST's `allascii_2018.txt` (header "2018 CODATA adjustment"); the
+seven lines typed as printed, digit groups and "..." kept. The reference converts the printed digits itself:
+`shifted_decimal` moves the exponent in the string (F m⁻¹ → F cm⁻¹ by −2), `to_double` is `std::from_chars`, and
+`to_dd` forms M·10^e with 10^n exact as a double-double (10²² · 10^(n−22) by `two_prod`, n ≤ 44), one rounding.
+Contract: E, I3, PA, G1 and G4.
+
+Measured (Release), every outcome as frozen. q, k, ε₀ (F/cm), m₀: bit-equal to the printed decimals. k/q [eV/K]
+1.58e-16 relative (γ₃ = 3.33e-16). V_T at 1, 4.2, 77, 300, 400, 1000 K: 1.58e-16, 1.83e-16, 1.20e-16, 1.14e-16,
+1.14e-16, 1.14e-16 (γ₄ = 4.44e-16). **Finding (i), confirmed:** `base::hbar_J_s` is 6.13e-10 relative below
+h/2π (bit-equal to NIST's printed truncation 1.054571817e-34, a diagnostic); outcome fail, as frozen; the hidden
+`[.finding]` case asserts γ₃ and fails. Not changed (VR9): the fix (the literal 1.0545718176461565e-34, or
+h / 2π in base) and its effect on band-to-band, gate tunnelling and quantum confinement are for the owner.
+Reference self-checks: exponent shift and parsing, 10^n exact for 23 ≤ n ≤ 44, `to_dd` rounding to `from_chars`'s
+double, the truncated printed ħ and k/q below their exact values by less than one unit of their last digit.
+Mutations (9, built, run, restored): a digit of q, k, ε₀, m₀ or h; 10^n by a rounded product; the exponent's
+point offset dropped; the shift ignored; every point counted as a leading digit: 9 of 9 caught.
+
 ---
 
 ## New questions the advisor raised (not yet in `ARCHITECTURE.md`)
