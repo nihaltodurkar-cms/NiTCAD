@@ -8516,6 +8516,36 @@ Scharfetter values; the Kane pair's origin; Esseni et al. 2017; the dopant level
 coefficients; the SiO₂ ε_r; the non-silicon material sets; Triebl's τ_w (§3.3 provenance for 31.10's inputs). Then the
 register file itself.
 
+**15.11 Step 2: L0 criteria for the new double-double functions (frozen 2026-11-06, before code; owner "choose
+recommended and proceed").**
+- **Functions:** `log1p`, `log1p_exp` (ln(1 + eˣ)), `tanh`, `erf`, `erfc`, `sin` and `cos` (for |x| ≤ 1), `atan`,
+  `atan2`, `asin` and `li2` (real x ≤ 1). They go in `verify/reference/special_functions`, and depend on
+  `double_double` only.
+- **Methods** (sources DLMF §4.24, §4.26, §7.6, §7.9, §25.12; PA, open):
+  - log1p: 2 atanh(x/(2 + x)) by series for |x| < 1/8.
+  - erf: the series of positive terms 2/√π e^{−x²} Σ 2ⁿx^{2n+1}/(2n+1)!! (DLMF 7.6.2) for x < 3, and erfc by the
+    continued fraction (DLMF 7.9.2) for x ≥ 3.
+  - atan: Newton on tan from std::atan, with sin and cos by Taylor.
+  - asin(x) = atan2(x, √((1 − x)(1 + x))).
+  - li2: the series, the Landen identity (DLMF 25.12.2 with 25.12.5), reflection (25.12.6) and inversion (25.12.4).
+- **Criteria** (u_dd = 2⁻¹⁰⁴; U_ref is the quadrature's own error estimate, added to the bound):
+
+| Check | Bound |
+|---|---|
+| erf(1) against OEIS A099286's 40 digits; tanh(1) against A073744's; exact comparison (TC1's method) | 4 u_dd relative |
+| li2(−1) = −π²/12, li2(½) = π²/12 − ½ ln²2, li2(1) = π²/6; atan(1) = π/4; asin(½) = π/6; sin(π/6) = ½; cos(π/4) = √2/2 | 8 u_dd relative |
+| erf(x) against qag15 of (2/√π) e^{−t²} over [0, x], 64 points on (0, 6] | 16 u_dd relative + U_ref |
+| erfc(x) against qag15 of (2/√π) e^{−t²} over [x, x + 15], 64 points on [3, 26] | 16 u_dd relative + U_ref |
+| atan(x) against qag15 of 1/(1 + t²) over [0, x], 64 points on (0, 20] | 16 u_dd relative + U_ref |
+| li2(x) against −qag15 of ln(1 − t)/t over [0, x], 64 points on [−20, 0.99] | 16 u_dd relative + U_ref |
+| log1p(x) against x − x²/2 + x³/3 − x⁴/4, for \|x\| ≤ 1e-9 | 4 u_dd relative |
+| expm1(log1p(x)) = x, for x ∈ (−0.9, 10] log-spaced both signs | 16 u_dd relative |
+| log1p_exp(x) − log1p_exp(−x) = x, for \|x\| ≤ 600 | 8 u_dd · max(1, \|x\|) absolute |
+| tanh(2x) = 2t/(1 + t²), with t = tanh(x), for \|x\| ∈ [1e-20, 40] | 16 u_dd relative |
+| sin²y + cos²y = 1 for \|y\| ≤ 1; sin(asin x) = x for \|x\| ≤ 1; atan(x) + atan(1/x) = π/2 for x > 0 | 8, 16, 8 u_dd |
+
+A miss is brought to the owner. It is not met by widening a bound (TVM2).
+
 ---
 
 ## New questions the advisor raised (not yet in `ARCHITECTURE.md`)
