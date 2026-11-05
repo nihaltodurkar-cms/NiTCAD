@@ -7899,6 +7899,39 @@ criteria commit.
 | CV-Q9 | Tiers and time: TVR-1's fast tier already takes 57.4 s of the 60 s serial Debug budget (VR10). TVR-2 goes in `full`, plus one coarse case per benchmark in `fast`. The fast tier's budget is kept by moving nothing else in. The full tier gets its own ctest label and the existing ctest timeouts | Yes |
 | CV-Q10 | Criteria freeze: the tolerance on the finest mesh per benchmark and the D-class constant c, in a separate commit after these rulings and before code | Yes |
 | CV-Q11 | Unit numbering and branch: Unit 55b, on `verify/code-verification` | Yes |
+
+**14.6 Rulings (owner, "choose recommended", 2026-11-05).** CV-Q1 through CV-Q11 are approved as recommended:
+- TVB-04 is a Poisson–Boltzmann MMS with an oxide region.
+- TVB-05 and 06 are deferred to TVR-4. Their dependency, insulator-only devices (`device.cpp:75`, `:472`), is
+  recorded as TVD-15 does its dependencies.
+- The hook is built as 14.3 describes, and sources are lumped.
+- The §5.3 orders are gated, with the theorem's citation marked [unverified].
+- The ladders are 14.5's CV-Q7, and the iterative-error rule is CV-Q8.
+- The fast/full split is CV-Q9.
+- The criteria are frozen below (14.7) before any code.
+
+**14.7 Criteria (frozen 2026-11-05, before code; TVM2: never widened after a run).** Notation:
+- ε = 2^-52.
+- N is the number of nodes along the current path (1D) or per axis (tensor).
+- Relative norms are normalised by the same norm of the exact solution. For ψ the normaliser is the potential
+  scale: V_bi for TVB-07, and max|ψ_exact − ψ_eq| + V_T for TVB-04 and TVB-14.
+- p̂ comes from §4.2's observed order on successive pairs. The asymptotic-range check of TVR-1 applies with ≥ 4
+  levels; with 3 levels it is `not_evaluated` and p̂ is judged on the finest pair.
+- No order is computed unless U_iter ≤ U_disc/10 (CV-Q8). If that cannot be met, the outcome is `not_evaluated`
+  and the case is brought to the owner.
+
+| ID | D criterion | E (a) order | E (b) accuracy on the finest level | Ladder (fast / full) |
+|---|---|---|---|---|
+| TVB-11 | relative \|I − I_ref\| and nodal ψ in L∞, each ≤ 64 ε N² (N²: the 1D Laplacian's condition) | — | — | 1D N = 32, 128 / + 2D 32² |
+| TVB-12 | nodal n relative ≤ 64 ε N², at Péclet numbers \|ΔΨ/V_T\| per edge ∈ {0.01, 1, 10, 40} | — | — | 1D N = 64 (fast) |
+| TVB-04 | — | tensor L2 and L∞: p̂ ∈ [1.8, 2.3]; unstructured H1: p̂ ∈ [0.8, 1.3]; unstructured L2 reported | tensor L2 relative ≤ 1e-4; unstructured H1 relative ≤ 1e-2 | 1D N = 32, 64, 128, 256 / + 2D tensor 16²…128², 3D tensor 8³…64³, 2D generated 4 levels, 3D generated and swept 3 levels |
+| TVB-07 | V_bi (contact ψ difference) relative ≤ 64 ε | ψ L∞ and E_max: p̂ ∈ [1.8, 2.3] | ψ L∞ relative ≤ 1e-4; E_max relative ≤ 1e-3 | 1D N = 64, 128, 256, 512 (fast: the coarsest two, order not judged) |
+| TVB-09 | V_FB relative ≤ 64 ε | Q_s(V_G): p̂ ∈ [1.8, 2.3] at each V_G | Q_s relative ≤ 1e-3; C_LF relative ≤ 1e-3; on a V_G grid from accumulation to strong inversion, with \|Q_s\| ≥ 1e-3 of its range (below that, `not_applicable`, predicate named) | 1D N = 64…512 (fast: one bias) |
+| TVB-14 | — | as TVB-04, for ψ, φ_n and φ_p | as TVB-04, for each of the three | as TVB-04 |
+
+References are analytic (U_ref at rounding) or computed in double-double, with U_ref ≤ tolerance/10 checked by
+§4.4 E (c). The TB-Q4 rule applies: a reference whose uncertainty exceeds 1e-3 of the criterion is
+`not_evaluated`.
 ---
 
 ## New questions the advisor raised (not yet in `ARCHITECTURE.md`)
