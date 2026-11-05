@@ -7823,6 +7823,82 @@ In `nitcad verify`, TVB-01 and TVB-03 pass, TVB-02 reports the accepted finding 
 The unit is stacked on PR #76. It will be rebased onto main once #76 merges, then offered as its own PR on the
 owner's word.
 
+
+#### 14. TVR-2 (Unit 55b) proposal: code verification core (proposed 2026-11-05; on `verify/code-verification`; rulings before code)
+
+TVR-2 follows the roadmap in §9 and catalogue §6: TVB-04, 05, 06, 07, 09, 11, 12 and 14, the TVQ3 hook, and the
+`verify/study` driver. This section proposes how to build them. It also reports one place where the plan does not
+fit the code (CV-Q3). The criteria (§4.4) are frozen in a criteria commit after these rulings and before any code
+(TVM2).
+
+**14.1 Scope.** In:
+- (a) `verify/study`: mesh ladders per family, the Newton-tolerance check, and GCI driving. The formulas are
+  TVR-1's `verify/reference/metrics`.
+- (b) The TVQ3 manufactured-source hook in `assemble` (approved with TVQ1–TVQ6 on 2026-10-31).
+- (c) The references, each with L0 tests:
+  - manufactured solutions and their sources;
+  - the equilibrium pn junction first integral (TVB-07);
+  - the Kingston–Neustadter MOS charge (TVB-09);
+  - the resistor (TVB-11);
+  - the constant-field exponential (TVB-12).
+- (d) The benchmarks, registered in TVR-1's registry with tiers, and their tests.
+
+Out:
+- TVB-05 and 06, if CV-Q3 rules B.
+- Unit 17's use of the studies (TVR-6).
+- Any change to the existing tests, gates, tolerances or solver beyond (b) and a ruled CV-Q3.
+
+**14.2 A finding before code: TVQ3's premise is false.** TVQ3 states that the hook "is the only change to existing
+code the framework needs for its P1 set". That is not so:
+- `src/device/device.cpp:75` refuses a device with no semiconductor region ("device needs at least one
+  semiconductor region").
+- `Device::Device` (`device.cpp:472`) chooses its reference node assuming a semiconductor node exists.
+- So the capacitors of TVB-05 (coaxial, spherical) and TVB-06 (dielectric stack), which are pure dielectrics
+  between electrodes, cannot be built.
+- TVB-04's "linear Poisson" is affected for the same reason.
+
+CV-Q2 and CV-Q3 rule on this.
+
+**14.3 The hook (TVQ3; design for ruling CV-Q4).**
+- `PhysicsModels` gains `std::shared_ptr<const ManufacturedSources> manufactured`, null by default.
+  - It holds per-node physical sources: a charge density for the Poisson row [C/cm³], and electron and hole
+    generation for the continuity rows [cm⁻³ s⁻¹].
+  - The sources do not depend on the state, so they add no Jacobian entries.
+- It enters as one node term, `manufactured source`, after `storage` in the Unit 40 composition order, and is
+  active only when the pointer is set.
+- When absent, the composition is unchanged, so every existing result stays bit-identical. A test asserts that F
+  and J are bit-equal with the pointer null and with no term.
+- It is not in the deck vocabulary, and the header documents it as verification-only.
+- The equilibrium-Poisson assembler gets no hook: every MMS case runs the drift-diffusion system (14.4).
+
+**14.4 The benchmarks.** Each has its reference, mesh families, norms and p_th per §5.3. Tolerances are frozen in the
+criteria commit.
+
+| ID | Construction | Reference | Families (fast / full tier) | Judged |
+|---|---|---|---|---|
+| TVB-04 | Poisson MMS. Per CV-Q2 A: Poisson–Boltzmann with a silicon/oxide ε jump on a planar interface. ψ_exact = ψ_eq(N) + a smooth bump vanishing at the contacts. The Poisson source is the exact charge residual, and the continuity rows hold to rounding at equilibrium. | Analytic, with derivatives checked by complex step | 1D tensor / 2D and 3D tensor, 2D generated, 3D generated, swept | L∞ and L2 (p_th 2, tensor); H1 (p_th 1, unstructured); L2 on unstructured families reported only |
+| TVB-05, 06 | Capacitors (CV-Q3) | C = 2πεL/ln(b/a); 4πε ab/(b−a); series ε | — | per CV-Q3 |
+| TVB-07 | Equilibrium abrupt pn junction, Boltzmann, 1D, with the junction on a dual-cell face | First integral: E(ψ) in closed form, x(ψ) by tanh–sinh, ψ_j by Brent; Chebyshev collocation as the I3 cross-check | 1D tensor ladder (fast) | V_bi to rounding (D); E_max and ψ(x) in L∞, p_th 2; depletion edges reported |
+| TVB-09 | MOS-C, uniform substrate, 1D, Boltzmann, lumped gate | Kingston–Neustadter F(ψ_s) in closed form; V_G = V_FB + ψ_s − Q_s/C_ox; C_LF by complex step | 1D tensor ladder | Q_s(V_G) and C_LF relative error, with p̂; V_FB to rounding |
+| TVB-11 | Uniform resistor, ohmic contacts | I = q μ N A V / L | 1D and 2D tensor | D: to c·ε, c = 64 |
+| TVB-12 | SG constant-field exactness: 1D, no G−R; the hook's Poisson source makes ψ linear and n exponential | The exact discrete solution | 1D, several Péclet numbers | D: nodal n to c·ε |
+| TVB-14 | Full drift-diffusion MMS: ψ, φ_n and φ_p smooth; Boltzmann, SRH on; the three sources taken from the exact state | Analytic; sources in double-double, derivatives checked by complex step | 1D and 2D tensor / 2D and 3D tensor, 2D generated, 3D generated, swept | ψ, φ_n and φ_p in L2 and L∞ (p_th 2, tensor) and H1 (p_th 1, unstructured) |
+
+**14.5 Owner questions (recommendations in the last column).**
+
+| # | Question | Recommendation |
+|---|---|---|
+| CV-Q1 | Order of work: hook, then study driver, then TVB-12 and 11, then 04, then 07 and 09, then 14. One commit each, with its references' L0 tests first? | Yes |
+| CV-Q2 | TVB-04's form: (A) a Poisson–Boltzmann MMS with an oxide region (the semiconductor path; no device change), or (B) the linear Poisson the catalogue names, which needs CV-Q3 A? | A. It exercises the same operator and ε jump, with the carriers' charge exact in the source |
+| CV-Q3 | Capacitors TVB-05 and 06. (A) A narrow device change: allow insulator-only devices whose every component has an electrode, with the reference node chosen among electrode nodes. This touches existing code; it gets its own tests and leaves current devices bit-identical. (B) Defer both to TVR-4 and record the dependency, as TVD-15 does. (C) Model the plates as degenerate semiconductor: rejected, not exact | B. TVB-04 already covers the Poisson operator and the unstructured families, and B keeps TVQ3 the only change to existing code |
+| CV-Q4 | The hook as designed in 14.3: per-node, state-independent sources, one node term after storage, null by default, not in the deck | As 14.3 |
+| CV-Q5 | Source discretisation: the scheme's own lumping S(x_i)·V_i (the way doping charge enters), or dual-cell quadrature? | Lumping. It is the scheme's own consistency, O(h²) on a smooth S |
+| CV-Q6 | Orders: use §5.3's working assumptions (p_th 2 for L2/L∞ on tensor, 1 for H1 on unstructured) and gate them per §4.4 E, while the Eymard–Gallouët–Herbin theorem is still unread? | Yes. The report marks the citation [unverified]. A miss is a fail, and goes to the owner before any criterion moves |
+| CV-Q7 | Ladders, r = 2: 4 levels for tensor in 1D, 2D and 3D; 4 levels for 2D generated; 3 levels for 3D generated and swept (full tier). Unstructured h = (V/N)^(1/D) | Yes |
+| CV-Q8 | Iterative error: U_iter is the final Newton correction propagated to the metric. It must be ≤ U_disc/10 before an order is computed (§5.2). A rounding-floor stall (as in Unit 56) goes to the owner, not to a looser tolerance | Yes |
+| CV-Q9 | Tiers and time: TVR-1's fast tier already takes 57.4 s of the 60 s serial Debug budget (VR10). TVR-2 goes in `full`, plus one coarse case per benchmark in `fast`. The fast tier's budget is kept by moving nothing else in. The full tier gets its own ctest label and the existing ctest timeouts | Yes |
+| CV-Q10 | Criteria freeze: the tolerance on the finest mesh per benchmark and the D-class constant c, in a separate commit after these rulings and before code | Yes |
+| CV-Q11 | Unit numbering and branch: Unit 55b, on `verify/code-verification` | Yes |
 ---
 
 ## New questions the advisor raised (not yet in `ARCHITECTURE.md`)
