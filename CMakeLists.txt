@@ -151,6 +151,8 @@ add_custom_command(
           include/NiTCAD/verify/reference/contract.hpp
           include/NiTCAD/verify/reference/codata2018.hpp
           include/NiTCAD/verify/reference/bernoulli.hpp
+          include/NiTCAD/verify/reference/fermi_dirac.hpp
+          src/verify/reference/fermi_dirac.cpp
           src/verify/reference/contract.cpp
   COMMENT "verify/reference include boundary (VR2)")
 add_custom_target(nitcad_verify_reference_boundary
@@ -158,7 +160,7 @@ add_custom_target(nitcad_verify_reference_boundary
 add_library(nitcad_verify_reference STATIC src/verify/reference/double_double.cpp
   src/verify/reference/gauss_kronrod.cpp src/verify/reference/tanh_sinh.cpp
   src/verify/reference/chebyshev.cpp src/verify/reference/metrics.cpp
-  src/verify/reference/contract.cpp)
+  src/verify/reference/contract.cpp src/verify/reference/fermi_dirac.cpp)
 add_library(NiTCAD::verify_reference ALIAS nitcad_verify_reference)
 target_include_directories(nitcad_verify_reference PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
 add_dependencies(nitcad_verify_reference nitcad_verify_reference_boundary)
@@ -691,7 +693,8 @@ add_test(NAME verify_consistency_boundary
 # assemble's header-only Bernoulli function) against the independent references of verify/reference.
 add_executable(nitcad_verify_benchmark_test
   tests/verify/benchmark/constants_test.cpp
-  tests/verify/benchmark/bernoulli_test.cpp)
+  tests/verify/benchmark/bernoulli_test.cpp
+  tests/verify/benchmark/fermi_dirac_test.cpp)
 target_link_libraries(nitcad_verify_benchmark_test PRIVATE NiTCAD::verify_reference NiTCAD::physics
   Catch2::Catch2WithMain)
 nitcad_add_file_tests(verify_benchmark nitcad_verify_benchmark_test)

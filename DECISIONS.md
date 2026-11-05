@@ -6828,6 +6828,12 @@ implementation, so they went to the owner before a test ran:
   Bernoulli numbers, scaled exponent (DD × 2^m) above x = 670; B on (709.78, ~715) misses (finding (iii)).
   Layout: `codata2018.hpp`, `fermi_dirac.{hpp,cpp}`, `bernoulli.hpp` in `nitcad_verify_reference`; tests in
   `tests/verify/benchmark/`, judged through `judge()` with filled contracts (VR3's first half).
+- **TVB-02 finding (ii) widened (owner, "choose recommended", 2026-11-05, option A, after measurement).** The frozen
+  "F₋½ passes for η ≤ 15" was not met: F₋½ misses from η = 13.76 (82 of 324 points, worst 2.0e-11 at η = 38.5), against
+  the 3e-12 the header records. The expectation is not moved silently: the visible case now requires pass for F½, F₃/₂
+  and the inverse and records F₋½'s outcomes; the hidden `[.finding]` case still asserts 1e-12 everywhere. No code
+  change (VR9); the inaccurate accuracy statements of `physics/fermi_dirac.hpp` and the sampled existing gate
+  (`tests/physics/fermi_dirac_test.cpp:79`) are listed for the owner.
 
 **11.14 As-built (branch `verify/reference-numerics`, local).**
 
@@ -7588,6 +7594,37 @@ numerator and B₃₄'s denominator survive (their terms are below u_dd at |x| �
 B′ series order survives (diagnostic, not asserted). Code — x/(e^x − 1) for expm1, 1/12 → 1/12.1: caught; the
 series switch moved to 0.1 survives (the series is still within 4 ε there: equivalent under the criterion).
 11 of 14 caught, 3 explained.
+
+*TVB-02, Fermi–Dirac integrals and the inverse (§11.8, TB-Q4–Q8; `include/NiTCAD/verify/reference/fermi_dirac.hpp`,
+`src/verify/reference/fermi_dirac.cpp`, `tests/verify/benchmark/fermi_dirac_test.cpp`).* Sources read before code:
+DLMF §25.12 (v1.2.8): 25.12.14 (definition, 1/Γ(s+1), s > −1), 25.12.16 (F_s = −Li_{s+1}(−e^x)), 25.12.10 (Li
+series); OEIS A078434 (ζ(3/2)), A059750 (digits of −ζ(1/2)), A247041 (ζ(5/2)), 40 digits each (A059750 and A247041
+state OFFSET 1,2 for a 1.xxx value; the point placed as their EXAMPLE lines show). Form: t = u², cut at
+U = √(η + 100), split at √η for η > 0; tail bounded by integration by parts. **Correction during build:** the first
+draft's bound used the p ≥ 1 recurrence for p = 0 (F₋½), where the coefficient (p − 1)/2 is negative and the
+inequality reverses; the added test that integrates the omitted tail [U, √(η + 200)] caught it (actual tail above the
+bound at η = −40); the bound is now e^−U²/(2U) for p = 0. Primary tanh-sinh, second method adaptive Gauss–Kronrod,
+epsrel 1e-27 a piece; U_ref = max(|TS − GK|, TS estimate) + tail bound. Inverse: Brent on F½,ref(η) = ν in
+double-double, bracket ±1e-10·max(1, |η|) around the code's answer (widened ×100 until it brackets), t = 1e-18·scale.
+Contract: E, I3, PA, G4, second method named. Grid: 320 points (the ruling's "321" counted 40.0123, outside the
+range) plus −2 ± 1e-9, 40 − 1e-9, 0.
+
+Measured (Release). Reference: uncertainty ≤ 1e-15 relative at every point (the budget); series for η ≤ −2 and ζ
+anchors (1.8, 0.6, 0.1 u_dd) agree; tail bound holds at η = −40, −2, 0, 20, 40 for each order; TVD-14, recorded: the
+existing gate's helper (`tests/physics/references.hpp`) agrees to 1.0e-16 (F½) and 9.4e-17 (F₋½) everywhere.
+Code: F½ worst 9.8e-15, F₃/₂ 6.4e-15, inverse 8.4e-15 (1296 Brent evaluations): pass. **Finding (ii), widened:**
+F₋½ (`fermi_half().derivative`) misses at 82 points from η = 13.76, 2.1e-12 worst up to 15, 2.0e-11 at 38.5; the
+header's "1.3e-13 up to 15, 3e-12 up to 40" and the existing gate's 2e-13/5e-12 hold only at that gate's points. The
+grid's offset (η_k ≡ 0.0123 mod 0.025) puts every point at 0.49 of the code's table cell, near where the quintic
+Hermite derivative's error peaks; the existing points are scattered. Diagnostic: F₃/₂'s derivative vs F½ 8.4e-12.
+Mutations (12, built, run, restored): F½'s normalisation, the cut L = 30, the tail bound zeroed, the p = 0 draft
+bound, F₃/₂'s power, the η = 0 factor, the logistic branch, the series' alternation and stop, a 1e-14 integrand
+factor, epsrel 1e-10: caught; no split at √η survives (accuracy holds without it: equivalent). 11 of 12.
+Ctest `verify_benchmark.fermi_dirac`: Release 2.7 s, Debug 18.6 s. Verify suites 28/28 in both configurations;
+serial Debug 49.6 s, within §11.9's 60 s.
+
+TVB-01–03 complete (§11.8). Findings for the owner: (i) ħ truncation, (ii) F₋½ widened, (iii) B(x) for
+709.78 < x < 715; none changes code in TVR-1. Next in §11: the report and CLI (§11.7).
 
 ---
 

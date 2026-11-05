@@ -86,7 +86,8 @@ struct Decimal {
 [[nodiscard]] inline std::string shifted_decimal(const PrintedConstant& c, int shift = 0) {
     const Decimal d = parse(c.value);
     std::string s = d.digits.substr(0, static_cast<std::size_t>(d.point));
-    if (static_cast<std::size_t>(d.point) < d.digits.size()) s += "." + d.digits.substr(static_cast<std::size_t>(d.point));
+    const auto point = static_cast<std::size_t>(d.point);
+    if (point < d.digits.size()) s += "." + d.digits.substr(point);
     return s + "e" + std::to_string(d.exponent + shift);
 }
 
