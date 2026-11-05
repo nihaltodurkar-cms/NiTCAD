@@ -8185,6 +8185,37 @@ References are analytic (U_ref at rounding) or computed in double-double, with U
 | CV-Q21 | TVB-14's unstructured H1 orders: 3D generated and swept p̂ is 1.52–1.97, above [0.8, 1.3] (six fails). 2D generated is outside the asymptotic range (three `not_evaluated`), with orders falling 1.71 → 1.27 → 1.09 toward 1 as h shrinks. The 3D ladders end at L/32, where 2D's pairs were still 1.5–1.9. So this reads as pre-asymptotic super-convergence of the H1 error on these meshes, not an inconsistency. Every finest H1 passes, and every L2 order is ≈ 2. | (A) Record a known finding (v) for the six 3D fails: an H1 order above the band on the frozen 3-level 3D ladders is pre-asymptotic, and the finest-level accuracy still gates. 2D generated stays `not_evaluated`, as 14.7 prescribes. (B) Add an L/64 3D level: about 0.9M nodes and 2.7M unknowns, which does not fit 32 GB with PARDISO. (C) Keep them as fail. | **A.** Known finding (v) (`finding_v`): the six 3D H1 orders count as `finding`, and 2D generated stays `not_evaluated`. An order above the theoretical one is not evidence of a defect: the band's upper edge exists to catch a mis-specified p_th, and the tensor families gate the scheme's order cleanly. |
 | CV-Q22 | SRH is on, as 14.4 requires, but on a 1 µm device with Scharfetter lifetimes (diffusion length about 50 µm) R is only 2e-6–6e-6 of the hole source. TVB-14 therefore exercises SRH but cannot detect an error in it below about that weight. | (A) Record it as a limitation of TVB-14's construction. A device near the diffusion length, or a short-lifetime material, would gate SRH, and that belongs to a later TVR. (B) Add now a second, long-device TVB-14 variant (new criteria to freeze). | **A.** Recorded as a limitation in `tvb14.cpp`'s header and as a note on every TVB-14 result. It changes no frozen item. |
 
+**14.12 TVR-2 close-out (2026-11-06).**
+
+| Benchmark | Fast tier | Full tier (local, MKL, 6 threads) |
+|---|---|---|
+| TVB-11 resistor (D) | 6 pass | — |
+| TVB-12 SG exactness (D) | 8 pass | — |
+| TVB-04 Poisson MMS | 3 pass | 15: 12 pass, 2 finding (iv) (CV-Q12), 1 not evaluated (3D L∞ spread, CV-Q14); 1413 s |
+| TVB-07 pn junction | 2 pass | 8 pass; 0.4 s |
+| TVB-09 MOS-C | 7 pass | 37: 34 pass, 3 not applicable (V_G = V_FB); 0.1 s |
+| TVB-14 drift-diffusion MMS | 9 pass | 45: 30 pass, 12 finding ((iv) CV-Q20, (v) CV-Q21), 3 not evaluated (2D generated spread); 959–999 s |
+
+- **Fast tier:** `nitcad verify --tier fast` reports 10 benchmarks: 9 pass and 1 finding (TVB-02 (ii), TVR-1's). There are no fails or run errors.
+- **Full tier:** the four `full` ctests pass against their frozen outcomes (Release, 2026-11-05).
+- **Tests:**
+  - All 47 verify ctests pass in Release, including `full`.
+  - All 43 pass in Debug.
+  - Serial Debug on an idle machine takes 61.3–62.7 s (three runs), within CV-Q19's 75 s. The 71–80 s of step 8 was machine load.
+- **Scope (14.1) against what was built:**
+  - (a) `verify/study` builds ladders, applies the iterative-error rule and runs the order studies.
+    - "GCI driving" is not used: every TVR-2 benchmark has an exact solution, so the studies judge errors against it.
+    - TVR-1's GCI (`verify/reference/metrics`) applies when no exact solution exists. No TVR-2 study is of that kind.
+    - The asymptotic check against an exact solution is the order spread alone (step 2, CV-Q14).
+  - (b) The TVQ3 hook is the only change to existing code (step 1).
+  - (c) The references have their L0 tests.
+  - (d) The benchmarks are registered in the fast tier, with full-tier tests.
+  - TVB-05 and 06 are deferred to TVR-4 (CV-Q3 B).
+- **Recorded for later phases:**
+  - The SRH weight in TVB-14 (CV-Q22): a device near the diffusion length would gate SRH.
+  - The full tier is local only (CV-Q16).
+  - 14.4's fast-tier families column differs from 14.7's frozen ladder column for TVB-14; 14.7 governs (step 8).
+
 ---
 
 ## New questions the advisor raised (not yet in `ARCHITECTURE.md`)
