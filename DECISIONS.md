@@ -8420,11 +8420,64 @@ derivatives.
 | Documented departures (F1, F6) | The documented form: the value rule. The published form: the value rule | The published-form miss is a finding with its attribution |
 | Grid density | ≥ 64 points per decade (or per unit for linear variables, ≥ 256 points over the range), plus switch points, their neighbours, and zeros | — |
 | 31.16 trap band, 31.19 roots | The value rule against a double-double reference: an adaptive Gauss–Kronrod integral (TC3) of the occupancy, and a Brent root (TC5) | As for values |
-| 31.25 Tsu–Esaki current | Relative difference from a double-double adaptive integral, reported per point; no pass/fail until an owner threshold | `finding`-free `diagnostic` |
+| 31.25 Tsu–Esaki current | Relative difference from a double-double adaptive integral, reported per point; no pass/fail until an owner threshold | `diagnostic` only (never pass, fail or finding) |
 | Cost | TVB-31 adds ≤ 8 s to the serial Debug verify (idle machine). Beyond that, MI-Q9's fast/full split applies, with no change to the criteria | — |
 
 References carry U_ref from their double-double evaluation. By the TB-Q4 rule, a reference whose U_ref exceeds 1e-3 of
 the bound at a point is `not_evaluated` there.
+
+**15.10 Step 1: reading log (in progress, 2026-11-06).** The pages were read by automated fetch of open copies.
+"Repro" means an open reproduction, not the primary. No grade is raised to PA from these reads.
+
+| Source read | What it gives (as printed) |
+|---|---|
+| Tidy3D `SlotboomBandGapNarrowing` (docs.flexcompute.com) | ΔE_g = V₁[ln(N/N₂) + √(ln²(N/N₂) + C₂)] for N ≥ min_N (1e15), else 0. **No constant is subtracted.** Example silicon set: 6.92e-3 V, 1.3e17, 0.5. Cites *Unified apparent bandgap narrowing in n- and p-type silicon*, Solid-State Electron. 35, 125 (1992) |
+| COMSOL 6.3 Semiconductor Module, Band Gap Narrowing | Its silicon library uses "the updated material properties due to Klassen and others … rather than the original properties". The equation is an image and was not read |
+| Palankovski, PhD thesis, TU Wien 2000, Table 3.15 | Slotboom silicon: E_ref 0.009 eV, C_ref 1e17 cm⁻³; cites Slotboom and de Graaff, Solid-State Electron. 19, 857 (1976) |
+| Allpix Squared 3.3 manual, mobility | Canali, silicon. Electrons: v_m = 1.43e9 T^−0.87 cm/s (Canali eq 2a); the Jacoboni–Canali table gives 1.53e9 T^−0.87; β_e = 2.57e-2 T^0.66. Holes: v_m = 1.62e8 T^−0.52; β_h = 0.46 T^0.17 (Jacoboni et al., Solid-State Electron. 20, 77 (1977), Table 5). Masetti B and P sets agree with NiTCAD's to the printed digits. Arora: μ₀ = 7.40e8 T^−2.33 (e), 1.36e8 T^−2.23 (h) |
+| Allpix Squared 3.3 manual, impact ionization | vOdM coefficients from the 1970 abstract: E₀ 4.0e5 V/cm; e 7.03e5 /cm, 1.231e6 V/cm; h low 1.582e6, 2.036e6; h high 6.71e5, 1.693e6. γ(T) is the tanh ratio "following the Synopsys Sentaurus TCAD user manual", with ħω 0.063 eV. "T₀ … is never stated explicitly [in the original work]; a value of T₀ = 300 K is assumed" |
+| Palankovski, Tables 3.5, 3.8, 3.20, 3.27, 3.31, 3.36 | κ = 148 W/(K m) (T/300)^−1.3 (refs Ng, Sze). Varshni Si: E_g0 1.1695 (reported 1.17), α 4.73e-4, β 636 (refs Singh, Sze). Green's N_C,V(T) polynomial (Green, J. Appl. Phys. 67, 2944 (1990)) gives 2.86e19 and 3.10e19 at 300 K (my sum). DD high-field β: Si 2.0 (n), 1.0 (p), uncited. Quay v_sat: 1.0e7 and 7.04e6 cm/s. Auger Si: 2.8e-31, 9.9e-32 cm⁶/s, uncited |
+| Gritsch, PhD thesis, TU Wien, §4.7 | The "Scharfetter relation" τ = τ_min + (τ_max − τ_min)/(1 + (N/N_ref)^γ), cited to Fossum and Lee (1982) and Fossum et al. (1983). No silicon values printed |
+| Jiao et al., J. Semicond. 34, 092002 (2013), Table 1 | Si BTBT (A, B, P): direct 1.35e20 cm⁻³s⁻¹, 101 MV/cm, 2; indirect 3.29e15, 23.8 MV/cm, 2.5; Sentaurus (Hurkx) defaults 4e14, 19 MV/cm, 2.5 |
+| Ayalew, PhD thesis, TU Wien, §3.3.3 | The Canali form with a T-law; SiC numbers only. Cites Canali et al., IEEE TED 22, 1045 (1975) |
+
+Status of 15.4's items after these reads:
+- **F1 confirmed.** One reproduction prints the published form (Tidy3D), and it has no −√½ term. COMSOL's equation
+  is an image, and Palankovski's was not reported. This makes it **PC** for the form, with a second reproduction still
+  needed. On the values, three reproductions agree (**PB**): 6.92 meV and 1.3e17 are the 1992 refit (Tidy3D, COMSOL),
+  and 9 meV and 1e17 are the 1976 values (Palankovski). NiTCAD's header attributes the 1992 values to "Slotboom (de
+  Graaff)", which is an attribution finding. The legacy offset stays a documented departure (MI-Q4).
+- **F2 confirmed (PB).**
+  - Canali's β at 300 K is 0.0257·300^0.66 = 1.109 for electrons and 0.46·300^0.17 = 1.213 for holes (Allpix).
+  - β = 2 and 1 appear in Palankovski uncited, as the generic DD high-field exponents, not as Canali's.
+  - The electron v_sat of 1.07e7 is the Jacoboni–Canali law (1.53e9·300^−0.87 = 1.0704e7). Canali's own eq 2a gives
+    1.43e9·300^−0.87 = 1.0005e7.
+  - The hole v_sat from the shared law, 1.62e8·300^−0.52 = 8.345e6, differs from the shipped 8.37e6 by 0.30 %. No read
+    source prints 8.37e6.
+- **F3 open.** No source read prints NiTCAD's Caughey–Thomas sets. One search result attributes a 1360/92/1.3e17/0.91
+  electron set to Baccarani and Ostoja (not read). The T exponents −2.33 and −2.23 are Arora's (Allpix), applied to
+  μ_max. In Arora's model they apply to μ₀ in a different form.
+- **F4 confirmed.** Every reproduction read takes γ(T) from the Sentaurus manual, and none from a primary. Allpix
+  states that the original vOdM paper gives no T₀. The factor is a tag **C** (a NiTCAD choice) until a primary is
+  found. vOdM's coefficients agree with Allpix's reproduction of the 1970 abstract (one reproduction, PC). NiTCAD's
+  electron switch at 5e5 V/cm is immaterial, since both branches are equal.
+- **F5 strengthened.** The pair 3.5e21 cm⁻³s⁻¹ with 1.03e8 V/cm appears in none of Jiao et al.'s three silicon sets.
+  Sentaurus's Hurkx defaults are 4e14, 1.9e7 V/cm and P = 2.5, a different form from NiTCAD's F². The attribution
+  to Hurkx et al.'s Table I is unsupported by every source read: grade **L**.
+- **F6 unchanged.** The Masetti sets match Allpix (a second reproduction for phosphorus). This could raise P's μ_max =
+  1414 from PC to PB: Allpix and the earlier Palankovski Table 3.24 make two.
+- **Other entries:**
+  - Varshni silicon: one reproduction (Palankovski, citing Sze and Singh), PC.
+  - Legacy N_c and N_v are Green's 1990 polynomial at 300 K (one reproduction, PC).
+  - Auger: values reproduced uncited. Dziewior–Schmid unconfirmed (L for the attribution, PC for the values).
+  - κ: 1.48 W/(cm K) is reproduced, but the exponent is printed as −1.3, not 1.33 (a 0.03 difference, origin unknown,
+    L).
+  - Scharfetter lifetimes: the form is cited to Fossum et al. The values 1e-5, 3e-6 and 5e16 are not found (L).
+
+Still to read in step 1: Caughey–Thomas and Baccarani–Ostoja values; Dziewior–Schmid; the hole v_sat 8.37e6; the
+Scharfetter values; the Kane pair's origin; Esseni et al. 2017; the dopant levels and degeneracies; radiative
+coefficients; the SiO₂ ε_r; the non-silicon material sets; Triebl's τ_w (§3.3 provenance for 31.10's inputs). Then the
+register file itself.
 
 ---
 
