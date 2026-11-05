@@ -6849,6 +6849,11 @@ implementation, so they went to the owner before a test ran:
   summary on stdout only. RC-Q7: VR8 as a ctest on the built exe: 0 for pass/finding/NA/NE, 64 usage, 1 for an
   unwritable report path and for an injected fail from a test-only registry entry `TVB-TEST-FAIL` compiled only into
   a test build, never into the shipped CLI.
+- **VR10 (owner, "choose recommended", 2026-11-05, option A, after measurement).** The CLI-level VR7 test runs on
+  TVB-01 and TVB-03 (`verify_cli.reproducible_TVB01`, `_TVB03`) instead of TVB-32, whose two deck runs (11.7 s in Debug)
+  put the serial Debug verify run at 63.2 s against §11.9's 60 s. The budget is not moved. TVB-32's report was shown
+  reproducible once (Release and Debug, 2026-11-05) and is no longer asserted at the CLI level; the in-process VR7
+  case covers TVB-01 and TVB-03 as well.
 
 **11.14 As-built (branch `verify/reference-numerics`, local).**
 
@@ -7674,6 +7679,12 @@ finding, 1214 pass), TVB-03 finding (13 026; 602 NA, 104 finding, 12 320 pass), 
 the serial Debug verify run is 63.2 s against §11.9's 60 s; `verify_cli.reproducible_tvb32` (two TVB-32 runs) takes
 11.7 s of it (others: `verify_benchmark.fermi_dirac` 18.7 s, `verify_consistency.transient` 13.1 s). The budget is
 not moved (TVM2).
+
+*VR10 after the ruling (option A).* `verify_cli.reproducible_tvb32` replaced by `verify_cli.reproducible_TVB01` and
+`_TVB03` (Debug 0.06 s and 2.2 s). Verify ctests 37/37 in Release (4.9 s) and Debug; serial Debug verify run 57.4 s,
+within 60 s. The serial Debug time varies by a few seconds from run to run (63.2 s and 66.7 s were measured for the
+previous set), so the margin is about 3 s. Full suites (parallel, -j 6): Release 166/166 (823 s), Debug 155/155
+(1091 s). VR1–VR10 met; TVR-1 complete. Open for the owner: findings (i)–(iii) (no code changed in TVR-1, VR9).
 
 ---
 

@@ -746,9 +746,14 @@ foreach(_case
   add_test(NAME verify_cli.${_name}
     COMMAND ${CMAKE_COMMAND} -DEXE=${_exe} "-DARGS=${_args}" -DEXPECT=${_expect} ${_extra} -P ${_vx})
 endforeach()
-add_test(NAME verify_cli.reproducible_tvb32
-  COMMAND ${CMAKE_COMMAND} -DEXE=$<TARGET_FILE:nitcad> "-DARGS=verify|--id|TVB-32|--report|${_vr}_tvb32.nvr"
-          -DEXPECT=0 -DREPORT=${_vr}_tvb32.nvr -DREPEAT_COMPARE=$<TARGET_FILE:nitcad_verify_probe> -P ${_vx})
+# VR7 through the CLI on TVB-01 and TVB-03 (owner ruling 2026-11-05, option A: TVB-32's two deck runs put the Debug
+# verify run over §11.9's 60 s).
+foreach(_id TVB-01 TVB-03)
+  string(REPLACE "-" "" _short "${_id}")
+  add_test(NAME verify_cli.reproducible_${_short}
+    COMMAND ${CMAKE_COMMAND} -DEXE=$<TARGET_FILE:nitcad> "-DARGS=verify|--id|${_id}|--report|${_vr}_${_short}_r.nvr"
+            -DEXPECT=0 -DREPORT=${_vr}_${_short}_r.nvr -DREPEAT_COMPARE=$<TARGET_FILE:nitcad_verify_probe> -P ${_vx})
+endforeach()
 set_tests_properties(cli_version PROPERTIES PASS_REGULAR_EXPRESSION
   "^nitcad ${PROJECT_VERSION} \\(revision ([0-9a-f]+|unknown)(, modified)?, ${CMAKE_BUILD_TYPE}, MSVC [0-9.]+, Eigen [0-9]")
 
