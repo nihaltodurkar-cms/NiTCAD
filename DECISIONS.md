@@ -8216,6 +8216,182 @@ References are analytic (U_ref at rounding) or computed in double-double, with U
   - The full tier is local only (CV-Q16).
   - 14.4's fast-tier families column differs from 14.7's frozen ladder column for TVB-14; 14.7 governs (step 8).
 
+#### 15. TVR-3 (Unit 55c) proposal: the model-implementation catalogue (proposed 2026-11-06; on `verify/model-implementation`; rulings before code)
+
+**Owner request (2026-11-06):** "start TVR-3 (55c)". TVR-3 is §9's third phase: TVB-31, an M-class check (§1.2, §4.4)
+of every model in NiTCAD. This section proposes how. It also reports, before any code, places where the code's cited
+source and the code may not agree (15.4). The criteria are frozen in a separate commit after these rulings and before
+any code (TVM2).
+
+**Branch.** `verify/model-implementation`, from `verify/code-verification` at `a4ed488` (PR #78, not merged): TVR-3
+uses TVR-1's registry and contract and TVR-2's registry entries. It is rebased on `main` once #78 merges. Local only.
+
+**15.1 Scope.** In:
+- (a) `verify/reference/models`: a separate re-coding (I1) of each model formula in 15.3, written from the source, not
+  from NiTCAD's code or structs. Base-only, as all of `verify/reference` (TVD-19; the header-boundary test applies).
+- (b) The parameter register: every model parameter NiTCAD ships, typed as a decimal string from its source, with
+  the source, equation or table number and the provenance grade (§3.3, PA–PD). It is data in `verify/reference`, so
+  NiTCAD's material tables never feed the reference (§2.2).
+- (c) The double-double functions the formulas need beyond TC1/TC2: tanh, erf, asin, log1p and ln(1 + eˣ), and the
+  dilogarithm (for F₁). Each gets L0 tests against DLMF identities and published values, as TC1–TC9 did.
+- (d) TVB-31's entries in the registry, one per model (TVB-31.01 …), in the `fast` tier, with their tests.
+
+Out:
+- The Fermi–Dirac integrals F_{1/2}, F_{3/2} and their inverse (TVB-02), the Bernoulli function (TVB-03) and the
+  constants (TVB-01). These are already verified in TVR-1.
+- Physics as assembled: the SG flux, the heterojunction and Schottky boundary terms, the BTBT path search, the
+  gate-tunnelling coupling. These are TVR-4/TVR-5 benchmarks.
+- Any change to NiTCAD's code, tables, tests, gates or tolerances. A miss is recorded as a finding, and any fix is
+  proposed separately (as Unit 56 did for findings (i)–(iii)).
+
+**15.2 What an M check compares.** For each model and each point of its grid (15.5):
+- **The value** NiTCAD's physics function returns, against the reference evaluated in double-double and rounded.
+- **Every partial derivative NiTCAD returns** (`d_dE`, `d_dn`, the thermal slopes, …), against the reference's
+  analytic derivative. Each reference derivative is checked at L0 by complex step (TC8) on the reference's own formula,
+  so a Newton-facing derivative is verified against the source and not only against NiTCAD's FD-Jacobian gates (which
+  are I0, K1).
+- **The parameters** (the register, (b)), bit-equal to the correctly rounded parse of the source's printed decimal.
+- **The source's printed values**, where it prints computed results (e.g. Couderc's n_i at stated temperatures), to
+  half a unit in the last printed digit (the NPARC ruling of 11.5).
+
+The benchmark side calls NiTCAD's public physics functions with parameters from the register, so that a formula
+error and a table error are told apart:
+- formula check: NiTCAD's function with the register's parameters vs. the reference;
+- table check: NiTCAD's shipped material set vs. the register.
+
+**15.3 The models (the catalogue's "every model").** Grades are what DECISIONS.md and the headers record today; step 1
+re-reads each source. "Legacy" means the value or form came from the legacy code and no source for it has been read in
+this repository. That is weaker than PC, and is listed as a grade of its own (MI-Q5).
+
+| Entry | Model (function) | Source the code cites | Class | Grade today | Grid (stated range) |
+|---|---|---|---|---|---|
+| 31.01 | Varshni E_g(T) (`band_gap_eV`, legacy set) | Varshni form; silicon values legacy | M | legacy | T 1–500 K (header) |
+| 31.02 | Pässler E_g(T) (default set) | Couderc et al. 2014 eq (10), Table I | M | PA (Unit 35) | 1–400 K |
+| 31.03 | DOS mass fits, N_c(T), N_v(T) | Couderc eqs (4), (5), (18), (19) | M | PA | 1–400 K |
+| 31.04 | n_i(T), E_c − E_i, d ln n_i/dT, dE_g/dT, d ln N/dT (`thermal.hpp`) | derived (PD) | E (formula) | PD | 1–500 K |
+| 31.05 | Slotboom BGN and n_ie | Slotboom (de Graaff); values legacy | M | legacy | N 1e14–1e21 cm⁻³ |
+| 31.06 | Caughey–Thomas μ(N, T) and dμ/dT | Caughey–Thomas 1967; values legacy | M | legacy | N 0, 1e13–1e21; T 200–500 K |
+| 31.07 | Masetti μ(N, T), dμ/dT (B, P) | Masetti 1983 eq (1), (4), Table I | M | PB (B), PC (P μ_max) | N 0, 1e13–1e21 |
+| 31.08 | Canali μ(E), dμ/dE | Canali 1975; v_sat, β legacy | M | legacy | E 0, 1e-2–1e6 V/cm |
+| 31.09 | Lombardi μ and its four partials | Lombardi 1988 | M | PB | E⊥ 1–1e7 V/cm; N; T |
+| 31.10 | Carrier-temperature mobility, E_eff (Unit 52) | derived from Canali (PD) | E (formula) | PD | a −1e-3…1e6; β ∈ {1, 2, 1.5} |
+| 31.11 | Scharfetter lifetimes τ(N) | legacy | M | legacy | N 0, 1e13–1e21 |
+| 31.12 | SRH R and partials (Boltzmann and FD E) | Shockley–Read, Hall 1952 | M (form) | standard form; not read | n, p over 1e-10…1e21 with np/E across 1 |
+| 31.13 | Auger R and partials | Dziewior–Schmid values (legacy) | M | legacy | as 31.12 |
+| 31.14 | Radiative R (B per material) | Ioffe; nextnano (GaAs) | M | PC | as 31.12 |
+| 31.15 | Interface-trap occupancy and rate | Shockley–Read form (Unit 15b) | M (form) | PD from SRH | x, n, p, n₁, p₁ |
+| 31.16 | Trap-band quadrature (`trap_band_levels`) | 6-point Gauss–Legendre, panels ≤ kT | E (in-model numerics) | PD | bands up to the gap, 200–500 K |
+| 31.17 | Incomplete ionization N_D⁺, N_A⁻ | standard form; 45 meV, g = 2, 4 legacy | M | legacy | η −40…40, depth 0–0.3 eV |
+| 31.18 | Altermatt–Schenk E_dop(N), b(N) | Schenk et al. SISPAD 2006 eqs (1), (5), Table I | M | PA (SISPAD), JAP not read | N 1e14–1e21 |
+| 31.19 | Neutral equilibria (Boltzmann, FD, ionized) | root of a closed form | E (in-model numerics) | PD | net doping ±1e21; compensated |
+| 31.20 | vOdM α(E), dα/dE; γ(T), dγ/dT | vOdM 1970; γ "Sentaurus' form" | M | legacy (values), unread (γ) | E 1e4–1e7 V/cm and branch switch; T 200–500 K |
+| 31.21 | Kane G(F), dG/dF | Hurkx–Klaassen–Knuvers 1992 Table I (values) | M | legacy (attribution unread) | F 1e4–1e7 V/cm |
+| 31.22 | Direct-gap WKB BTBT: κ(δ), its antiderivatives, segment integrals, path rate, eq (8) | Esseni et al. 2017 §2.1 eqs (8), (9), (11), (12) | M | not recorded | u > 1; δ ∈ [0, 1]; F |
+| 31.23 | WKB segment action, transmission | Gehring 2003 §3.5.1 (closed-form integral) | E (formula) | PA (open thesis) | a, b across 0 and a = b |
+| 31.24 | Tsu–Esaki supply N(E) and partials | Gehring §3.2, 3.3.1 | M (form) | PA | (E − F)/kT −60…60 |
+| 31.25 | Tsu–Esaki current (4-point GL quadrature) | Gehring | E (in-model numerics) | PA | MI-Q8 |
+| 31.26 | Thermionic emission velocity (both forms), dv/dT | Richardson law, mass from N (PD) | E (formula) | PD | T 200–500 K |
+| 31.27 | MLDA λ, f(z), mean factor and its series | Paasch–Übensee; Hänsch (via Ieong, Entner) | M; mean factor E (formula) | PB (form), PD (mean) | z/λ 0–10; a/λ 1e-8–1e3 |
+| 31.28 | κ(T) power law, ρc | legacy; Ioffe; NIST-JANAF | M | legacy / PC | 200–600 K |
+| 31.29 | Thermopower factor h(x), F₋₁, F₀, F₁ | Wachutka 1990; Lundstrom §3.4; F_j exact | E (special functions) | PD + DLMF | x −750…750 |
+| 31.30 | SiO₂ data: ε_r, gap, offset, masses, κ | legacy 3.9; Gehring Table 5.1; owner ruling (masses) | M (table) | legacy / PA / choice | — |
+| 31.31 | Material sets: Ge, GaAs, In₀.₅₃Ga₀.₄₇As, 4H-SiC, Al_xGa₁₋ₓAs(x) | Adachi; Ioffe; legacy | M (table) | legacy / PC | x ∈ [0, 0.45] |
+
+Classes in this table: M is §1.2's empirical model. "E (formula)" is an exact consequence derived here (PD): by the
+contract of 11.4 it needs a second method, so each such reference has two:
+- the closed form against quadrature (TC3/TC4) of the integral it solves (31.23, 31.27 mean, 31.29), or
+- against the root (TC5) of the equation it inverts (31.10, 31.19), or
+- against complex-step differentiation of the reference's value (the derivatives in 31.04, 31.26).
+
+"E (in-model numerics)" is a numerical approximation inside a model (31.16, 31.19, 31.25), judged against a
+double-double reference integral or root.
+
+**15.4 Found before code (from the headers and from recollection; each to be confirmed by reading the source in step
+1, so none is yet a finding).**
+- **(F1) Slotboom offset.** `bandgap_narrowing.hpp` adds −√½ to Slotboom's form so that ΔE_g is 0 at N₀. The
+  published form (ΔE_g = E₀[ln(N/N₀) + √(ln²(N/N₀) + ½)]) has no such term. Above N₀ the difference is a constant
+  E₀√½ = 4.89 meV, about 9.9 % in n_ie at 300 K. The header records it as the legacy's, so it is a documented
+  departure, not a defect. Separately, E₀ = 6.92 meV and N₀ = 1.3e17 cm⁻³ are, as I recall, Klaassen, Slotboom and
+  de Graaff's 1992 refit (Solid-State Electron. 35, 125), not the 1976–77 Slotboom–de Graaff values (9 meV, 1e17).
+- **(F2) Canali β.** `field_mobility.hpp` attributes silicon's β = 2 (electrons) and 1 (holes) to Canali et al. 1975.
+  As I recall, Canali's fit is β_n = 1.109 (T/300)^0.66 and β_p = 1.213 (T/300)^0.17, and β = 2 and 1 are Caughey and
+  Thomas's 1967 field-dependent fit. Canali's v_sat law, as I recall it (1.53e9 T^−0.87 and 1.62e8 T^−0.52 cm/s),
+  gives 1.0704e7 cm/s for electrons at 300 K, which agrees with the shipped 1.07e7. It gives 8.345e6 cm/s for holes,
+  against the shipped 8.37e6 (0.3 %).
+- **(F3) Caughey–Thomas silicon values.** The electron set (92, 1360, 1.3e17, 0.91) is, as I recall, Baccarani and
+  Ostoja's (1975). The hole set (47.7, 495, 6.3e16, 0.76) is Caughey and Thomas's. The temperature exponents (−2.33,
+  −2.23) are Arora, Hauser and Roulston's (1982). None of these sources is cited or has been read.
+- **(F4) The impact-ionization temperature factor** cites "Sentaurus' vanOverstraetendeMan model". That manual is
+  proprietary and not citable as provenance. Its primary source needs finding, or the factor is graded a NiTCAD choice.
+- **(F5) The Kane pair** (3.5e21 cm⁻³ s⁻¹, 1.03e8 V/cm) is attributed to Hurkx, Klaassen and Knuvers 1992, Table I.
+  Its form and units have not been checked against that table.
+- **(F6) Masetti's** μ_max(T) exponents are stated in the header not to be Masetti's. They are a NiTCAD choice, and
+  phosphorus μ_max = 1414 is PC (C-10). Both are already recorded.
+
+(F1) and (F6) are documented departures. (F2)–(F5) are attribution questions. Under MI-Q4, a documented departure is
+checked twice:
+- the code against its own documented form (an implementation check, which should pass);
+- the code against the published form (a miss here becomes a finding with its attribution).
+
+**15.5 Grids and the criterion.**
+- **Grids.** Each model's grid spans the source's stated range (table 15.3), log-spaced where the variable is, at
+  ≥ 64 points per decade. Each grid also includes:
+  - every switch point of the code: vOdM's branch field, Slotboom's N₀, MLDA's series switch, the F_j switch at
+    |x| = 1, the regularization a₀ of 31.10, and each underflow cut;
+  - the double neighbours on each side of every switch point (`nextafter`);
+  - zeros of the value where the model has them (np = E for 31.12–31.15).
+  Outside the stated range, points are evaluated and reported as `not_applicable` ("outside the source's range",
+  §4.4 M), never as passes.
+- **Criterion (MI-Q2).** §4.4 fixes M at 1e-13 relative. That cannot hold where the formula itself is
+  ill-conditioned. For example, exp(−B/E) at B/E = 700 amplifies a 1-ulp input error 700 times (1.6e-13), and np − E
+  near equilibrium cancels. TC1's ruling scaled the exp identities by their condition number for the same reason. The
+  proposal:
+
+      |q_sim − q_ref| ≤ max(1e-13 |q_ref|, 64 ε Σᵢ |xᵢ ∂q/∂xᵢ|)
+
+  - The sum runs over the inputs, so it is the absolute form of the condition number κ|q|, from the reference's own
+    derivatives.
+  - It is 1e-13 relative wherever κ ≤ 7, and it holds at a zero of q (where relative error is undefined).
+  - The same rule applies to each partial derivative. Its κ uses the reference's second derivatives, taken by
+    double-double central differences of the analytic first derivatives (a tolerance scale only, not a judged
+    quantity).
+- **Documented cuts** (MI-Q7). Examples: α = 0 where γB/E > 700, G = 0 where B/F > 700, ΔE_g = 0 at N ≤ N₀. These are
+  judged as cuts. NiTCAD's 0 passes when the reference's value at that point is below the documented threshold's
+  value. The miss of a cut that sits in the wrong place is caught by the switch-point neighbours.
+- **In-model numerics** (31.16, 31.19, 31.25). The criteria are in MI-Q8.
+
+**15.6 Order of work (one commit each, L0 tests before the benchmark that uses them; mutation runs per commit as in
+TVR-1/2).**
+1. Sources and the register. Read each source in 15.3 (primaries where open, otherwise two independent open
+   reproductions for PB: TU Wien theses, Xyce, Genius, DEVSIM, Allpix Squared, Silvaco's public manual, nextnano,
+   Ioffe). Write the register with grades, and record 15.4's items as confirmed or withdrawn. Documentation and data
+   only.
+2. Double-double tanh, erf, asin, log1p and ln(1 + eˣ), and Li₂, with L0 tests.
+3. Band set and narrowing: 31.01–31.05.
+4. Mobility: 31.06–31.10.
+5. Recombination and traps: 31.11–31.16.
+6. Statistics and ionization: 31.17–31.19.
+7. Generation: 31.20–31.22.
+8. Tunnelling, emission, MLDA, thermal: 31.23–31.29.
+9. Material tables: 31.30, 31.31, and every shipped set against the register.
+10. Close-out: outcomes, the provenance summary (R-3's register surfaced in the report), Debug re-timed, full suites.
+
+**15.7 Owner questions (recommendations in the last column).**
+
+| # | Question | Recommendation |
+|---|---|---|
+| MI-Q1 | Scope: table 15.3 as "every model", with the exclusions of 15.1 (TVB-01–03 already done; assembled physics in TVR-4/5)? | Yes |
+| MI-Q2 | Criterion: amend §4.4 M from a fixed 1e-13 relative to 15.5's max(1e-13 \|q\|, 64 ε Σ\|xᵢ ∂q/∂xᵢ\|), for values and partials alike? (A) As proposed. (B) Keep a fixed 1e-13 and report the ill-conditioned points as `not_evaluated` | A. It is 1e-13 wherever the formula is well-conditioned, and B would leave the underflow edges and equilibrium unjudged |
+| MI-Q3 | Judge every partial NiTCAD returns against the reference's analytic derivative, itself checked by complex step? | Yes. They are what Newton uses, and today only I0 FD gates check them |
+| MI-Q4 | Where the code documents a departure from its source (F1, F6), check against both the documented form (pass expected) and the published form (a miss is a finding)? | Yes |
+| MI-Q5 | Provenance grades: (A) add a grade **L** ("legacy: no source read"), treated as PC: such an entry cannot pass and is a finding until step 1 reaches PB or better; NiTCAD's own choices (owner rulings, e.g. the SiO₂ masses, EB β = 2, Masetti's T exponents) get a tag **C** and are pinned to the ruling, not verified. (B) Treat legacy values as PB | A. B would credit the legacy code as a source |
+| MI-Q6 | Sources: step 1 aims at PB from open reproductions, and the owner supplies primaries where they can (TVR0-Q2, still open). Priority list: Caughey–Thomas 1967, Baccarani–Ostoja 1975, Arora et al. 1982, Canali et al. 1975, Slotboom–de Graaff 1976/77 and Klaassen et al. 1992, Dziewior–Schmid 1977, van Overstraeten–de Man 1970, Hurkx et al. 1992, Masetti et al. 1983, Lombardi et al. 1988, Paasch–Übensee 1982, Hänsch et al. 1989, Altermatt et al. 2006, Esseni et al. 2017, Varshni 1967, Green 1990. | Yes. Grades are raised whenever a primary arrives |
+| MI-Q7 | Grids per 15.5: the source's range at ≥ 64 points per decade, switch points and their neighbours, zeros; out of range `not_applicable`; documented cuts judged as cuts? | Yes |
+| MI-Q8 | In-model numerics: (a) trap-band quadrature (31.16) and the neutral-equilibrium roots (31.19) under 15.5's criterion against double-double references; (b) the Tsu–Esaki current quadrature (31.25) **measured and reported without pass/fail** (as §4.4 H), with a threshold set by the owner afterwards. Its integrand has kinks where a turning point crosses a segment end, so a frozen 4-point GL accuracy has no stated bound to judge against | Yes |
+| MI-Q9 | Tier and cost: all of TVB-31 in `fast`. TVR-3 adds at most 8 s to the serial Debug verify (61–63 s of the 75 s of CV-Q19). Beyond that, the dense grids move to `full` and `fast` keeps every switch point and one point per decade | Yes |
+| MI-Q10 | Findings: no code, table or attribution in NiTCAD is changed in TVR-3. Each confirmed item of 15.4, and each miss, goes to the owner as a finding with a fix proposal, as §12 did | Yes |
+| MI-Q11 | Unit and branch: Unit 55c on `verify/model-implementation`, stacked on PR #78 and rebased on `main` after it merges. Order of work as 15.6 | Yes |
+
 ---
 
 ## New questions the advisor raised (not yet in `ARCHITECTURE.md`)
