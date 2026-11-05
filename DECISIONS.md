@@ -6801,6 +6801,33 @@ implementation, so they went to the owner before a test ran:
   C10: one limit result or one per value, accepted. C11: the 2D symmetric MOS mirror device is accepted in place
   of the 1D resistor; the 30° rotation alone stands in for the ruled rotation with translation; the generated
   mesh's corner tie (P2 refusal under rounding motions) is listed as a Unit 16 question, deferred.
+- **TVB-01–03 (owner rulings before code, "choose recommended", 2026-11-05; TB-Q1–Q9).** Three misses were
+  predicted before any run, from the code and its recorded measurements, and are frozen here as expected findings
+  (no source outside the new targets changes, VR9; no tolerance moves, TVM2): (i) `base::hbar_J_s` is NIST's
+  printed 10-digit truncation 1.054571817e-34 of the exact h/2π = 1.0545718176461565…e-34 (≈ 6.1e-10 relative;
+  the header's "(exact)" is wrong); (ii) F₋½ = `fermi_half().derivative` is recorded at 3e-12 relative on
+  (15, 40] (`tests/physics/fermi_dirac_test.cpp:79`) against TVB-02's 1e-12; (iii) `assemble::bernoulli` returns
+  0 for x > 709.78 (std::expm1 overflows) where B(x) is a normal double up to x ≈ 715.
+  TB-Q1: q, k, ε₀ and m₀ bit-equal to NIST's printed CODATA 2018 decimals; ħ = h/2π and k/q computed in
+  double-double from the exact h, k, q and judged by TB-Q2; ħ misses (finding (i)). TB-Q2: the a-priori
+  rounding bound γₙ = n u/(1 − n u), u = 2⁻⁵³: γ₃ for k in eV/K and for ħ (h's rounding, 2π's, the quotient's), γ₄ for
+  V_T(T) at T ∈ {1, 4.2, 77, 300, 400, 1000} K. TB-Q3: source NIST's archived CODATA 2018 table, read before code
+  (PA); SI-to-cm conversion by shifting the decimal exponent of the typed string (exact). TB-Q4: TVB-02
+  reference from DLMF §25.12 (F_j(x) = Γ(j+1)⁻¹ ∫₀^∞ t^j / (e^{t−x} + 1) dt, PA), t = u², split at t = η when
+  η > 0, tail cut with a written bound; primary tanh-sinh (TC4), second method adaptive Gauss–Kronrod (TC3),
+  cross-checked against the polylogarithm series −Li_{j+1}(−e^η) (DLMF 25.12.16) for η ≤ −2; the reference
+  counts only if its uncertainty is ≤ 1e-3 of the criterion. TB-Q5: Blakemore (paywalled) replaced by the exact
+  anchors F_j(0) = (1 − 2⁻ʲ) ζ(j+1), ζ(3/2), ζ(1/2), ζ(5/2) typed from OEIS. TB-Q6: a hidden `[.finding]` case
+  asserts ≤ 1e-12 everywhere; the visible case requires pass for F½, F₃/₂ and the inverse and that F₋½'s
+  misses lie only at η > 15. TB-Q7: inverse reference η by Brent (TC5) in double-double on F_ref(η) = ν for each
+  double ν; metric |Δη| / max(1, |η|) ≤ 1e-12; F₃/₂'s derivative and B′ recorded as diagnostics only. TB-Q8:
+  321 η points (step 0.25 from −40 + 0.0123) plus −2 ± 1e-9, 40 − 1e-9 and 0; if Debug exceeds the remaining
+  VR10 budget the Gauss–Kronrod cross-check runs at every 4th point (fixed now). TB-Q9: TVB-03 on a logarithmic
+  grid of ±[1e-300, 745] including ±1e-2 and its neighbouring doubles; ≤ 4ε relative where B is a normal double,
+  the subnormal range a diagnostic; reference x/expm1 in double-double, second method the series from exact
+  Bernoulli numbers, scaled exponent (DD × 2^m) above x = 670; B on (709.78, ~715) misses (finding (iii)).
+  Layout: `codata2018.hpp`, `fermi_dirac.{hpp,cpp}`, `bernoulli.hpp` in `nitcad_verify_reference`; tests in
+  `tests/verify/benchmark/`, judged through `judge()` with filled contracts (VR3's first half).
 
 **11.14 As-built (branch `verify/reference-numerics`, local).**
 
