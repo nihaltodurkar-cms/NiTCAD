@@ -6834,6 +6834,21 @@ implementation, so they went to the owner before a test ran:
   and the inverse and records F₋½'s outcomes; the hidden `[.finding]` case still asserts 1e-12 everywhere. No code
   change (VR9); the inaccurate accuracy statements of `physics/fermi_dirac.hpp` and the sampled existing gate
   (`tests/physics/fermi_dirac_test.cpp:79`) are listed for the owner.
+- **Report and CLI (owner rulings before code, "choose recommended", 2026-11-05; RC-Q1–Q7).** RC-Q1: TVB-01/02/03/32
+  move into `nitcad_verify_benchmark` as registered functions (id, tier, run → comparisons); the tests call them and
+  assert the frozen outcomes; the TC1–TC9, metric and contract L0 tests stay in ctest and are named in the report as
+  the reference's build-time evidence, not re-run. RC-Q2: a frozen known-findings table (benchmark, quantity,
+  ruled region, DECISIONS reference) reports a `fail` inside a ruled region as `finding` (counted, exit 0, TVD-23);
+  any other fail stays `fail`; a known finding that no longer reproduces is reported as pass with the note "known
+  finding (x) no longer reproduces: remove the entry". RC-Q3: VR9 exception, narrow: `io::Content::verify_report = 7`
+  with `save_verify_report` / `load_verify_report` (a new io header and source; existing io code and tests
+  unchanged), plus a CSV summary beside it (`<report>.csv`). RC-Q4: the thread count in the report's own header, not
+  in `results::Provenance`; VR7 compares two loaded reports with `started_utc` and `wall_s` cleared. RC-Q5: the three
+  TVB-32 decks embedded at build time (a generated header), read by `deck::parse(text)`. RC-Q6: an unknown `--id` is
+  usage (64) listing the known ids; `--tier full|nightly` run the same set as `fast` in TVR-1; no `--report` → the
+  summary on stdout only. RC-Q7: VR8 as a ctest on the built exe: 0 for pass/finding/NA/NE, 64 usage, 1 for an
+  unwritable report path and for an injected fail from a test-only registry entry `TVB-TEST-FAIL` compiled only into
+  a test build, never into the shipped CLI.
 
 **11.14 As-built (branch `verify/reference-numerics`, local).**
 
