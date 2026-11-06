@@ -150,3 +150,23 @@ TEST_CASE("TVB-05 nightly tier: the coaxial capacitor with its factorial (frozen
     CHECK(r.comparisons[1].comparison.outcome == Outcome::pass);
     CHECK(bench::overall(r) == Outcome::not_evaluated);
 }
+
+// TVB-19 (dielectric relaxation and the Haynes-Shockley pulse; E, 16.8 frozen; construction 16.41) in the nightly
+// tier: its 16 runs per ladder at N = 2049 and 4097 take about 9 minutes, past tvr4_full's 120 s (16.7, DT-Q9).
+// 16 comparisons: for the decay rate and the pulse's area, centre and width, the orders in dt (BDF2, backward Euler)
+// and in h, and the finest accuracy. Frozen outcome, set before its first run: every comparison passes. Found on the
+// first run (16.41): 10 pass, 3 not_evaluated, 3 fail; DT-Q36 open.
+TEST_CASE("TVB-19 nightly tier: linear transients (frozen outcome: pass)", "[tvb19_full]") {
+    const bench::BenchmarkResult r = bench::run_tvb19(bench::Tier::full);
+    REQUIRE_FALSE(r.run_error.has_value());
+    for (const auto& n : r.notes) std::printf("TVB-19 note: %s\n", n.c_str());
+    for (const auto& c : r.comparisons) {
+        std::printf("TVB-19 [%s] %s: %.4g (%s) %s\n", std::string(to_string(c.comparison.outcome)).c_str(),
+                    c.quantity.c_str(), c.metric, c.criterion.c_str(), c.comparison.reason.c_str());
+    }
+    REQUIRE(r.comparisons.size() == 16);
+    for (const auto& c : r.comparisons) {
+        CAPTURE(c.quantity);
+        CHECK(c.comparison.outcome == Outcome::pass);
+    }
+}

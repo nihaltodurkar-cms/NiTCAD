@@ -10563,6 +10563,77 @@ changed. Each mutant was applied to the Release build, the frozen case run, and 
 **Recommendation: A.** The miss is the U_num estimate at one point, not an error: that point's |C_sim − C_ref| is
 5.3e-13, the same as its neighbours.
 
+**16.41 Step 10 as built: linear_transient and TVB-19. DT-Q36 open.** (Step 9, Pao–Sah, is taken after the lighter
+steps; 16.10's order is otherwise kept.)
+- **`verify/reference/linear_transient`** (PD, base-free):
+  - `dielectric_relaxation_time`: τ_d = ε/(q μ N) in dd. With σ = q(μ_n n_0 + μ_p p_0), the benchmark passes μ = 1
+    and N = σ/q.
+  - `relaxation_second_method`: Dormand–Prince with 4000 fixed steps on dQ/dt = −Q/τ_d, against the exponential, to
+    5 τ_d. The largest difference is 3.1e-19.
+  - `haynes_shockley_moments`: the moments of a drifting, spreading, decaying Gaussian (σ, D, v, τ), integrated over
+    the source's time profile. Its age a lies on [t − t_off, t − t_on] with the weight e^{−a/τ}, so the moments are
+    those of a truncated exponential, in closed form:
+    - area = G σ √(2π) e^{−a₁/τ} m₀;
+    - centre = x₀ + v⟨a⟩;
+    - width² = σ² + 2D⟨a⟩ + v² Var(a).
+  - **Departure from 16.3:** the plan's second method was the PDE by method of lines with Dormand–Prince. It is
+    instead Gauss–Kronrod on the three age integrals. A method-of-lines solution would carry its own spatial error,
+    at the level being judged. The quadrature checks the closed forms independently: it agrees to 4.5e-33, 4.3e-31
+    and 7.5e-29 at the benchmark's point. The Gaussian step (variances add under drift and diffusion) is checked by
+    L0's limit cases, not by the second method.
+- **L0** (`linear_transient_test`, 4 cases, 40 assertions, 0.16 s Debug): τ_d by hand; the second method; the
+  uniform-age limit (τ = ∞); the moments' equations at τ finite against a direct quadrature; the short-pulse limit; the
+  refusals.
+- **TVB-19** (`tvb19.cpp`, registered after TVB-18; 49 benchmarks). The construction is as in the file header, from
+  16.2 (m) and 16.8. Injection uses the TVQ3 hook's time profile (DT-Q3 A).
+  - **Tier:** the full tier takes 438 s in Release: 16 runs per case, at N up to 4097, with fixed steps. That is past
+    `tvr4_full`'s 120 s. It therefore runs in the local nightly tier, as `verify_full.tvb19` (DT-Q9: heavier ladders
+    local). The fast tier has no comparisons.
+- **Frozen outcome, set before the first run:** every comparison passes (16).
+- **TVB-19's run: 10 pass, 3 not_evaluated, 3 fail.** The frozen nightly case fails, pending DT-Q36.
+  - The finest accuracies all pass: decay rate 2.87e-5, area 5.6e-7, centre 4.1e-5 of the drift length, width
+    8.5e-5, each against 1e-3. The backward-Euler orders pass (0.98–1.00). BDF2's dt orders pass for area and centre
+    (2.000).
+  - **Fail: the h order of the decay rate, area and centre** (p̂ = −0.0028, 3.2e-7, 2.0e-8). These quantities have
+    no h error at the ladder's resolution. Their error is flat in h to 2e-8 of itself, and the error that exists is
+    the time step's. The finite-volume sums conserve the integral, and the first moment under a uniform field. p̂
+    is then undefined, and `judge_order` reports it as missed.
+  - **Not evaluated: the decay rate's BDF2 dt order** (0.907 on the finest pair; 2.00 and 2.02 coarser). This is a
+    floor of 2.86e-5 that neither h (2e-8) nor the tolerance (identical at tol/100) moves. Nor does dt below dt₀:
+    the factorial's dt₀/2 state gives 2.92e-5.
+    - A temporary diagnostic (not committed) varied the amplitude and N. At amplitude 1 and 0.25, N = 513 and 2049,
+      rate·τ_d − 1 = 2.76e-5 and 2.87e-5, then 7.06e-5 and 7.46e-5. That fits c + d/amplitude, with c ≈ 1.4e-5 and
+      d ≈ 1.4e-5.
+    - The floor is not nonlinearity, which would grow with the amplitude, and not Newton.
+    - The cause is not identified. It is reported as found: not a finding, and inside the accuracy criterion by
+      35×.
+  - **Not evaluated: the pulse width's BDF2 dt order (1.06) and h order (1.54).** Each ladder reaches the other
+    parameter's floor. The width's finest error is mostly spatial (e(h/2) = 4.46e-5 against e(h) = 8.54e-5), so the
+    dt ladder at the finest h flattens. The h ladder at dt₀ flattens on the time error.
+  - The factorials are evaluated and non-interacting for all four quantities (|ε_int| ≤ 1.2e-7).
+  - A cosmetic defect: the (h, dt) factorial's note keeps the shared formatter's labels "tol" and "tol/100" for dt₀
+    and dt₀/2. It is left as is, to keep the run's output frozen.
+- **Mutation:**
+  - `linear_transient` (12 mutants: τ_d, the second method's rate, m₀, m₁ and Var's forms, the decay weight's age,
+    the √(2π), the 2D, the centre's mean age, the uniform-age limit, the mean age's end, the refusal): 12 caught.
+  - TVB-19: each mutant run takes about 7.5 minutes. It is judged by any change in the 16 printed comparison
+    lines, because the frozen case is red. 3 mutants: the decay rate's τ_d scale (1e-4), the drift velocity's
+    mobility (μ_p at 1e14 instead of 1e15) and the linearity predicate's threshold. All 3 caught.
+  - The reduced set is a departure from the other steps' full mutation runs, made for cost. The judging code is
+    shared with TVB-10's pattern, whose 14 mutants ran in 16.40.
+
+**DT-Q36 (TVB-19's frozen outcome).**
+- (A) Record as found, as DT-Q20 A and DT-Q35 A do: the frozen case pins the 10 passes (their bounds to 1e-6), the 3
+  not_evaluated with their reasons, and the 3 h-order fails as fails with the reason above. Criteria, ladders and
+  construction are unchanged.
+- (B) Change the judging after the run (TVM2):
+  - judge each one-parameter order on errors with the other parameter's part removed by Richardson;
+  - judge the h-exact quantities as exactness (|e(h) − e(2h)| ≤ U_iter-based bound) instead of an order.
+  This would turn the 3 fails into passes and probably 2 of the not_evaluated as well.
+
+**Recommendation: A** for TVR-4. The fails are a property of the construction: the quantities chosen have no h error.
+They are not errors in NiTCAD. B is the better design, but it changes criteria after seeing their results.
+
 ---
 
 ## New questions the advisor raised (not yet in `ARCHITECTURE.md`)

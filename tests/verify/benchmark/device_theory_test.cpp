@@ -299,3 +299,9 @@ TEST_CASE("TVB-10: nothing in the fast tier", "[tvr4]") {
     REQUIRE_FALSE(r.run_error.has_value());
     REQUIRE(r.comparisons.empty());
 }
+
+TEST_CASE("TVB-19: nothing in the fast tier", "[tvr4]") {
+    const auto r = bench::run_tvb19(bench::Tier::fast);
+    REQUIRE_FALSE(r.run_error.has_value());
+    REQUIRE(r.comparisons.empty());
+}

@@ -181,6 +181,8 @@ add_custom_command(
           include/NiTCAD/verify/reference/diode.hpp
           include/NiTCAD/verify/reference/admittance.hpp
           include/NiTCAD/verify/reference/mos_hf.hpp
+          include/NiTCAD/verify/reference/linear_transient.hpp
+          src/verify/reference/linear_transient.cpp
           src/verify/reference/mos_hf.cpp
           src/verify/reference/diode.cpp
   COMMENT "verify/reference include boundary (VR2)")
@@ -194,7 +196,8 @@ add_library(nitcad_verify_reference STATIC src/verify/reference/double_double.cp
   src/verify/reference/mos_capacitor.cpp src/verify/reference/special_functions.cpp
   src/verify/reference/capacitor.cpp src/verify/reference/minority_diffusion.cpp
   src/verify/reference/qe_junction.cpp src/verify/reference/diode.cpp
-  src/verify/reference/admittance.cpp src/verify/reference/mos_hf.cpp)
+  src/verify/reference/admittance.cpp src/verify/reference/mos_hf.cpp
+  src/verify/reference/linear_transient.cpp)
 add_library(NiTCAD::verify_reference ALIAS nitcad_verify_reference)
 target_include_directories(nitcad_verify_reference PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
 add_dependencies(nitcad_verify_reference nitcad_verify_reference_boundary)
@@ -227,7 +230,8 @@ add_executable(nitcad_verify_test
   tests/verify/reference/qe_junction_test.cpp
   tests/verify/reference/diode_test.cpp
   tests/verify/reference/admittance_test.cpp
-  tests/verify/reference/mos_hf_test.cpp)
+  tests/verify/reference/mos_hf_test.cpp
+  tests/verify/reference/linear_transient_test.cpp)
 target_link_libraries(nitcad_verify_test PRIVATE NiTCAD::verify_reference Catch2::Catch2WithMain)
 nitcad_add_file_tests(verify nitcad_verify_test)
 add_test(NAME verify_reference_boundary
@@ -745,6 +749,7 @@ add_library(nitcad_verify_benchmark STATIC src/verify/benchmark/device_data.cpp
   src/verify/benchmark/tvb15.cpp src/verify/benchmark/tvb16.cpp src/verify/benchmark/tvb17.cpp
   src/verify/benchmark/tvb18.cpp
   src/verify/benchmark/tvb10.cpp
+  src/verify/benchmark/tvb19.cpp
   src/verify/benchmark/tvb31_common.cpp src/verify/benchmark/tvb31_band.cpp
   src/verify/benchmark/tvb31_mobility.cpp
   src/verify/benchmark/tvb31_recombination.cpp
@@ -830,6 +835,9 @@ if(NITCAD_VERIFY_FULL_TIER AND CMAKE_BUILD_TYPE STREQUAL "Release")
   # TVB-05's (h, tol) factorial at M = 512 (DECISIONS Unit 55 16.30), about 10 minutes.
   add_test(NAME verify_full.tvb05 COMMAND nitcad_verify_full_test "[tvb05_full]")
   set_tests_properties(verify_full.tvb05 PROPERTIES LABELS full TIMEOUT 1800)
+  # TVB-19, linear transients (DECISIONS Unit 55 16.42), about 9 minutes.
+  add_test(NAME verify_full.tvb19 COMMAND nitcad_verify_full_test "[tvb19_full]")
+  set_tests_properties(verify_full.tvb19 PROPERTIES LABELS full TIMEOUT 1800)
 endif()
 
 # The batch runner (`nitcad check|run <deck>`).
