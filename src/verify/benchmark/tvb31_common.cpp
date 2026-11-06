@@ -6,6 +6,7 @@
 
 #include "NiTCAD/physics/energy_balance.hpp"
 #include "NiTCAD/physics/impact_ionization.hpp"
+#include "NiTCAD/physics/quantum_confinement.hpp"
 #include "NiTCAD/physics/ionization.hpp"
 #include "NiTCAD/physics/mobility.hpp"
 #include "NiTCAD/physics/surface_mobility.hpp"
@@ -97,6 +98,8 @@ std::optional<double> other_shipped_value(std::string_view binding) {
         return physics::impact_ionization_temperature_factor(
             physics::legacy_silicon_parameters.impact_ionization.phonon_energy_eV, 300.0);
     }
+    if (binding == "mlda_silicon_electron_mass") return physics::mlda_silicon_electron_mass;
+    if (binding == "mlda_silicon_hole_mass") return physics::mlda_silicon_hole_mass;
     if (binding == "energy_relaxation.electron") return physics::silicon_energy_relaxation.tau_n_s;
     if (binding == "energy_relaxation.hole") return physics::silicon_energy_relaxation.tau_p_s;
     if (binding == "energy_balance_regularization") return physics::energy_balance_regularization;
@@ -138,6 +141,9 @@ double* bound_field(physics::SemiconductorParameters& p, std::string_view bindin
     if (f == "impact_ionization.phonon_energy_eV") return &p.impact_ionization.phonon_energy_eV;
     if (f == "band_to_band.A_per_cm3_s") return &p.band_to_band.A_per_cm3_s;
     if (f == "band_to_band.B_V_per_cm") return &p.band_to_band.B_V_per_cm;
+    if (f == "thermal.conductivity_W_cmK") return &p.thermal.conductivity_W_cmK;
+    if (f == "thermal.conductivity_exponent") return &p.thermal.conductivity_exponent;
+    if (f == "thermal.heat_capacity_J_cm3K") return &p.thermal.heat_capacity_J_cm3K;
     if (f == "ionization.donor_eV") return &p.ionization.donor_eV;
     if (f == "ionization.acceptor_eV") return &p.ionization.acceptor_eV;
     if (f == "ionization.donor_degeneracy") return &p.ionization.donor_degeneracy;

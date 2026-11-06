@@ -6,7 +6,8 @@
 //     input. The same function judges a partial: f is then the reference's analytic derivative (15.9, "Partials").
 //     U_ref = 2^-80 (|q_ref| + S(q)): double-double evaluation (u_dd = 2^-104 per operation, a few dozen operations)
 //     with margin for exp's subnormal low part near an underflow edge. By TB-Q4 a point where U_ref exceeds 1e-3 of
-//     the bound is not_evaluated.
+//     the bound is not_evaluated. Below 2^-969 the low part is subnormal: U_ref is floored at its spacing 2^-1074
+//     (MI-Q19).
 //   - table_check: one register row (verify/reference/model_parameters.hpp) against the shipped field it binds,
 //     bit-equal to the correctly rounded parse of the printed decimal (15.9, "Parameter register"). A mismatch is a
 //     finding recorded with its source; grade L and PC are findings at best (the contract); tag C is pinned (I0).
@@ -47,7 +48,10 @@ inline constexpr std::string_view value_criterion = "|q_sim - q_ref| <= max(1e-1
                                                    const std::vector<Predicate>& predicates) {
     const double q_ref = q.to_double();
     const double bound = std::fmax(1e-13 * std::abs(q_ref), 64.0 * eps * S);
-    const double u_ref = 0x1p-80 * (std::abs(q_ref) + S);
+    // Below 2^-969 the double-double's low part is subnormal: its spacing 2^-1074 (and a subnormal q_ref's own
+    // rounding) floors U_ref (DECISIONS Unit 55 15.18, MI-Q19).
+    const double u_floor = q_ref != 0.0 && std::abs(q_ref) < 0x1p-969 ? 0x1p-1074 : 0.0;
+    const double u_ref = std::fmax(0x1p-80 * (std::abs(q_ref) + S), u_floor);
     const double diff = std::abs((DD(q_sim) - q).hi);
     ComparisonRecord c{std::move(quantity), std::move(unit), parameter, q_sim, q_ref, u_ref,
                        bound > 0.0 ? diff / bound : (diff == 0.0 ? 0.0 : INFINITY), std::string(value_criterion), {}};

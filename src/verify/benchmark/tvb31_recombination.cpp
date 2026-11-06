@@ -100,7 +100,7 @@ BenchmarkResult run_tvb31_11(Tier tier) {
                                "the Scharfetter relation tau_min + (tau_max - tau_min) / (1 + (N/N_ref)^gamma) as "
                                "Gritsch's thesis sec. 4.7 prints it (Fossum and Lee 1982), read 2026-11-06; NiTCAD's "
                                "form is its tau_min = 0, gamma = 1 case",
-                               "tau = tau0 / (1 + N / N_ref)", {std::string(n_range)}, {6},
+                               "tau = tau0 / (1 + N / N_ref)", {std::string(n_range)}, {7},
                                "verify/reference/model_recombination.hpp", std::string(verification));
     r.info.assumptions.push_back("tau_n0, tau_p0: the shipped values (grade L); N_ref: the register (PC)");
     const ReferenceInfo inf = r.info;
@@ -193,7 +193,7 @@ BenchmarkResult run_tvb31_12(Tier tier) {
                                "derived here from the capture-emission kinetics of one mid-gap level (Shockley and "
                                "Read 1952, Hall 1952; the standard form, the papers not read)",
                                "R = (n p - E) / (tau_p (n + n_ie) + tau_n (p + n_ie)), the chain through E",
-                               {std::string(c_range)}, {6}, "verify/reference/model_recombination.hpp",
+                               {std::string(c_range)}, {7}, "verify/reference/model_recombination.hpp",
                                std::string(verification));
     const ReferenceInfo inf = r.info;
     const SiliconAt300 si = silicon_at_300();
@@ -227,7 +227,7 @@ BenchmarkResult run_tvb31_13(Tier tier) {
                                "derived here from detailed balance (a rate proportional to the process's carriers, "
                                "less its reverse at the equilibrium product); Cn, Cp as Palankovski Table 3.36 prints "
                                "them (Dziewior and Schmid 1977, not read)",
-                               "R = (Cn n + Cp p)(n p - E), the chain through E", {std::string(c_range)}, {6},
+                               "R = (Cn n + Cp p)(n p - E), the chain through E", {std::string(c_range)}, {7},
                                "verify/reference/model_recombination.hpp", std::string(verification));
     const ReferenceInfo inf = r.info;
     const SiliconAt300 si = silicon_at_300();
@@ -253,7 +253,8 @@ BenchmarkResult run_tvb31_14(Tier tier) {
     r.info = tvb31::entry_info(r.id, Provenance::PD,
                                "derived here from detailed balance; B per material as shipped (the coefficients are "
                                "read in step 9)",
-                               "R = B (n p - E)", {std::string(c_range)}, {6}, "verify/reference/model_recombination.hpp",
+                               "R = B (n p - E)", {std::string(c_range)}, {7},
+                               "verify/reference/model_recombination.hpp",
                                std::string(verification));
     r.info.assumptions.push_back("B: the shipped value of each material with a non-zero B");
     const ReferenceInfo inf = r.info;
@@ -291,7 +292,7 @@ BenchmarkResult run_tvb31_15(Tier tier) {
                                "form, Unit 15b)",
                                "f = (cn n + cp p1) / D, U / N_t = cn cp (n p - n1 p1) / D, D = cn (n + n1) + cp (p + "
                                "p1); f_eq = 1 / (1 + e^x)",
-                               {std::string(c_range), std::string(x_range)}, {6},
+                               {std::string(c_range), std::string(x_range)}, {7},
                                "verify/reference/model_recombination.hpp", std::string(verification));
     // Each half judged under its own applicability.
     ReferenceInfo occ_inf = r.info;
@@ -360,7 +361,7 @@ BenchmarkResult run_tvb31_16(Tier tier) {
                                "the occupied density of a uniform band, integral of D f((E - E_F) / kT) dE, by "
                                "adaptive Gauss-Kronrod in double-double (TC3, MI-Q8); in-model numerics",
                                "sum_i D_i f((E_i - E_F) / kT) over trap_band_levels against the integral",
-                               {std::string(ef_range), std::string(t_range)}, {6},
+                               {std::string(ef_range), std::string(t_range)}, {7},
                                "verify/reference/model_recombination.hpp", std::string(verification));
     r.info.assumptions.push_back("kT: the reference's CODATA k_B / q times T; NiTCAD's base::thermal_voltage");
     const ReferenceInfo inf = r.info;

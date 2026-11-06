@@ -1,6 +1,7 @@
 // Shared outcome check of the TVB-31 entry tests (Unit 55, TVR-3): no run error and no stale-finding note; every
 // comparison well formed; a pass is never an expected finding (unless `pass_allowed` says the region may pass at its
-// edge); a finding is always expected; fail and not_evaluated are refused. Returns the counts.
+// edge); a finding is always expected; fail is refused, and not_evaluated unless the caller allows it (TB-Q4). Returns
+// the counts.
 #pragma once
 
 #include "NiTCAD/verify/benchmark/registry.hpp"
@@ -16,13 +17,17 @@ namespace v = NiTCAD::verify;
 namespace bench = NiTCAD::verify::benchmark;
 
 struct Counts {
-    int pass = 0, finding = 0, not_applicable = 0, other = 0;
+    int pass = 0, finding = 0, not_applicable = 0, not_evaluated = 0, other = 0;
 };
 
 inline bool starts_with(std::string_view s, std::string_view p) { return s.substr(0, p.size()) == p; }
 
-template <class Expected>
-Counts check(const bench::BenchmarkResult& r, Expected&& expected_finding, bool pass_allowed = false) {
+inline bool never(const bench::ComparisonRecord&) { return false; }
+
+// `allowed_not_evaluated` names the comparisons that may be not_evaluated (TB-Q4; none by default).
+template <class Expected, class AllowedNE = bool (*)(const bench::ComparisonRecord&)>
+Counts check(const bench::BenchmarkResult& r, Expected&& expected_finding, bool pass_allowed = false,
+             AllowedNE allowed_not_evaluated = never) {
     INFO(r.id);
     CHECK_FALSE(r.run_error.has_value());
     CHECK(r.notes.empty());
@@ -42,9 +47,17 @@ Counts check(const bench::BenchmarkResult& r, Expected&& expected_finding, bool 
                 ++n.finding;
                 break;
             case v::Outcome::not_applicable: ++n.not_applicable; break;
+            case v::Outcome::not_evaluated:
+                if (allowed_not_evaluated(c)) {
+                    ++n.not_evaluated;
+                    break;
+                }
+                ++n.other;
+                FAIL_CHECK("not_evaluated where none is expected");
+                break;
             default:
                 ++n.other;
-                FAIL_CHECK("fail or not_evaluated");
+                FAIL_CHECK("fail");
                 break;
         }
     }

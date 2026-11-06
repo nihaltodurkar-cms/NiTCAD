@@ -8985,6 +8985,139 @@ caught:
 - 8 of `model_generation.hpp`, caught by its L0: dα/dE, dγ/dT, sinh → cosh, both antiderivatives, the g(z) series,
   eq (8)'s 18π², and the Kronrod bracket · (1 + 1e-9).
 
+**15.18 Step 8 as built: TVB-31.23–31.29, tunnelling, emission, MLDA and thermal (2026-11-06).**
+
+Files:
+- `verify/reference/model_tunnelling.hpp`:
+  - Gehring's segment action L·g(a, b) with its partials (rationalized where both ends are inside, the
+    turning-point form otherwise);
+  - the exponent S(E), dS/dE and TC = e^(−2S);
+  - the supply N(E) with its logistic partials;
+  - the current, as an adaptive Gauss–Kronrod integral between every barrier end inside NiTCAD's cut range.
+- `verify/reference/model_thermal.hpp`:
+  - the emission velocity in both forms, with dv/dT through N(T);
+  - MLDA's λ, f and the mean factor (its series below a/λ = ¼);
+  - the conductivity power law;
+  - F₋₁, F₀ and F₁ (Li₂'s inversion above 0; e^x scaled by 2^512 below x = −600, outside double-double's domain);
+  - h, and dh/dx in a cancellation-free form, 2(S₀² − S₁S₋₁)/S₀². The numerator is summed as Σcₙ(−z)ⁿ with
+    constant cₙ = Σᵢ[1/((i+1)(n−i+1)) − 1/(i+1)²], so dh/dx → e^x/2 without cancellation. The first draft took
+    2 − 2·product in double-double, which is itself only rounding below x ≈ −69; this was found by analysis
+    before the first run.
+- `verify/benchmark/tvb31_tunnelling.cpp` (31.23–31.25) and `tvb31_thermal.cpp` (31.26–31.29).
+  - `bound_field` gains the three thermal fields, and `other_shipped_value` the two MLDA masses.
+  - The check helper `tvb31_check.hpp` accepts a named set of `not_evaluated` comparisons (TB-Q4).
+- Tests: `model_tunnelling_test.cpp` and `model_thermal_test.cpp` (207 assertions together, after the mutation runs),
+  `tvb31_tunnelling_test.cpp`, `tvb31_thermal_test.cpp`. The registry holds 39 benchmarks.
+- **G-tag correction.** Steps 5–7 copied mobility's G6 into every entry. They now carry their own governing
+  equation: recombination G7, statistics G4, generation G8 (31.22 G8 and G12). This is a label only; no outcome
+  moves.
+
+Grids:
+- 31.23:
+  - L·g and both partials at the 13 × 13 pairs of a, b ∈ {−1, −1e-3, −1e-12, 0, 1e-12, 1e-6, 1e-3, 0.1, 0.5, 1, 2,
+    3.1, 5} eV, and at a(1 ± 10^-k) about a = 1e-3, 0.5 and 3.1 eV (k = 1–15), with L = 1.5 nm;
+  - √(2m₀q)/ħ;
+  - S, dS/dE and TC of four barriers over E −1 to 3.5 eV in 1/64 eV, plus every barrier end and its neighbours:
+    rectangular 3.1 eV, trapezoidal 3.1 → 2.1 eV, Fowler–Nordheim triangular 3.1 → −0.9 eV (all 1.5 nm, 0.5 m₀),
+    and a two-layer 1 nm (0.5 m₀) + 2 nm (0.18 m₀) stack.
+- 31.24: N and its three partials at 300 K, with x₁ = (F₁ − E)/kT from −64 to 64 in steps of ⅛, for F₁ − F₂ ∈ {0,
+  1e-9, 1e-3, 0.1, 1} eV. |x| > 60 for either level is not applicable.
+- 31.25: the four barriers at 300 and 400 K, for F₁ − F₂ ∈ {0.01, 0.1, 0.5, 1} eV with E_low = 0.
+  - None of those barriers has an end inside the cut range. After the first run, one barrier whose ends (0.8 and
+    0.3 eV) lie inside it was added, to exercise MI-Q8's kinks. These are diagnostics only, so no criterion moves.
+- 31.26:
+  - v(N, T) at N 1e15–1e21 and T 200, 300 and 500 K;
+  - v and dv/dT of both carriers at T 200–500 K (150 and 600 K beyond), on the legacy and Couderc sets, each with
+    the density-of-states form and with test Richardson constants of 120 A/(cm² K²) (no shipped set has any);
+  - the Schottky overload's v.
+- 31.27:
+  - λ for both masses at T 200–500 K;
+  - f at z/λ 0–12 in steps of 1/64;
+  - the mean factor at a/λ 1e-8–1e3, with the switch ½ and its neighbours.
+- 31.28: κ and dκ/dT on the register's printed values (1.48 W/(cm K), 1.3) at T 200–600 K, and the three register
+  rows.
+- 31.29: F₋₁, F₀, F₁, h and dh/dx at x −750..750 in steps of ¼, at −2..2 in 1/1024, and at the switch points ±1 with
+  their neighbours; ±760 lie beyond the range.
+
+Outcomes (Release, 0.9 s for the seven):
+
+| Entry | Pass | Finding | Not evaluated | Not applicable |
+|---|---|---|---|---|
+| 31.23 | 4471 (every comparison) | 0 | 0 | 0 |
+| 31.24 | 16553 | 1295: (xiv) | 0 | 2652 |
+| 31.25 | — (41 diagnostic notes, MI-Q8) | — | — | — |
+| 31.26 | 1603 | 0 | 0 | 92 |
+| 31.27 | 1405 | 2: the PC quantization masses | 0 | 130 |
+| 31.28 | 66 | 3: 1.48 (PC), the exponent's mismatch (1.33 against the printed 1.3), the heat capacity (L) | 0 | 4 |
+| 31.29 | 47166 | 2828: (xiii) | 516: the underflow tail (MI-Q19) | 10 |
+
+- **31.25 diagnostics (MI-Q8, for the owner's threshold).** NiTCAD's composite 4-point Gauss–Legendre agrees with
+  the double-double integral:
+  - to 1.1e-13 relative or better, wherever no barrier end lies inside the range (32 points);
+  - to 1.2e-9 at 300 K and 2.8e-8 at 400 K, on the kinked barrier (the turning point crossing a segment end).
+- **MI-Q19 (TB-Q4 below 2^-969, ruled before the first run).**
+  - The rule: where |q_ref| < 2^-969, the double-double's low part is subnormal, so its uncertainty is at least the
+    subnormal spacing 2^-1074. It is not 2^-80|q|, and a subnormal q_ref's own rounding is of the same size.
+  - (A) Floor U_ref at 2^-1074 there, in the shared `value_record`. TB-Q4 then makes such a point not_evaluated
+    wherever that exceeds 1e-3 of the bound. (B) Leave subnormal points judged by the value rule, which no double
+    can meet below the subnormal spacing.
+  - **Ruling (owner standing instruction, "choose recommended", 2026-11-06): A.**
+  - Effect beyond step 8: 260 points of 31.15's occupancy tail at η = −745 (f_eq and df_eq/dη, about 1e-313 to
+    5e-324) move from pass (bit-equal) to not_evaluated. Its frozen test now names them, and its other outcomes are
+    unchanged (101017 pass, 6305 (ix), 40380 not applicable). No other entry moves.
+  - By TB-Q4, an entry with any not_evaluated point is not_evaluated overall: 31.15 and 31.29 report so. `nitcad
+    verify` does not fail on it.
+- **MI-Q20 (an entry grade).** 31.28's power law is the legacy's documented form. One reproduction (Palankovski) is
+  PC. (A) Judge the formula as PD (the documented form, checked as written, as MI-Q17's γ), with the grades on the
+  register rows. (B) PC for the whole entry.
+  - **Ruling (owner standing instruction, "choose recommended", 2026-11-06): A.** It was ruled before the first run.
+- **(xiii), new (MI-Q21, ruled before the first run, from the shipped form).** `fermi_dirac_thermal_diffusion`'s
+  dh/dx = 2 − 2F₁F₋₁/F₀² cancels as x → −∞, where dh/dx → e^x/2. The absolute error is about ε, so the relative
+  error exceeds 1e-13 below x ≈ −6.
+  - Classification: the rounding floor T = 4 (two terms of size 2).
+  - All 2828 misses lie within it, between x ≈ −6 and the underflow tail.
+  - Fix, proposed separately (MI-Q10): the series form above, or 2(F₀² − F₁F₋₁)/F₀² with its leading cancellation
+    removed. The effect is an absolute 1e-16 in a thermal diffusion factor of ½.
+  - **Ruling: A** (record and classify), as for (viii)–(xii).
+- **(xiv), new (MI-Q22, ruled after the first run found it).** `tsu_esaki_supply`'s dN/dE = σ(x₂) − σ(x₁) cancels
+  where both levels are many kT above E (both σ → 1).
+  - The misses are at x₁ ≥ 7.75. For example, at F₁ − F₂ = 1e-9 the shipped value is exactly 0 against −2.9e-17.
+  - Classification: the floor T = σ(x₁) + σ(x₂). All 1295 misses lie within it.
+  - Fix, proposed separately: (e^(−x₁) − e^(−x₂))/((1 + e^(−x₁))(1 + e^(−x₂))) through expm1. The effect is an
+    absolute ε in the current's energy partials.
+  - **Ruling (owner standing instruction, "choose recommended", 2026-11-06): A.** The frozen 31.24 test now names
+    the region; the criterion is unchanged (TVM2).
+
+Mutations (after a green baseline; filter `TVB-31.23*,...,TVB-31.29*` on `nitcad_verify_benchmark_test`). There
+were 18 one-literal NiTCAD mutants, each reverted by `git checkout`, and **all 18 were caught**:
+- T01–T08, `gate_tunnelling.cpp`:
+  - both inside partials;
+  - the outside g;
+  - the turning-point partials;
+  - the scale (1e-10);
+  - dS/dE;
+  - the supply's dN/dF₂;
+  - the log1p;
+- T09–T10, `thermionic_emission.cpp`: the density-of-states form; the Richardson form;
+- T11, T12, T16–T18, `thermal.cpp`:
+  - dv/dT's ⅓;
+  - the fit-less ½;
+  - dκ/dT;
+  - F₁'s π²/6;
+  - h's 1.5;
+- T13–T15, `quantum_confinement.cpp`: λ's 100; the mean factor's switch ½ → 0.01; its series truncated at 6
+  terms.
+
+`git status src/physics` is clean afterwards.
+
+Reference mutants, against the L0 `[model_tunnelling],[model_thermal]`: 10, restored from a backup copy.
+- In the first run, 8 were caught. Two survived: R01 (the scale's 100 → 100.0000001) and R03 (TC's −2 →
+  −2.0000001). Nothing in the L0 pinned either.
+- An L0 case was added: the scale against another arrangement of its constants, and a rectangular barrier's S and
+  TC against κL√(V − E) and e^(−2S). Both mutants are now caught.
+- The L0 is 207 assertions in 8 cases.
+
+
 ---
 
 ## New questions the advisor raised (not yet in `ARCHITECTURE.md`)

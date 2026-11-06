@@ -95,6 +95,13 @@ void set_pardiso_threads(int threads);
 [[nodiscard]] BenchmarkResult run_tvb31_20(Tier tier);  // impact ionization
 [[nodiscard]] BenchmarkResult run_tvb31_21(Tier tier);  // Kane band-to-band
 [[nodiscard]] BenchmarkResult run_tvb31_22(Tier tier);  // direct-gap WKB band-to-band
+[[nodiscard]] BenchmarkResult run_tvb31_23(Tier tier);  // WKB action and transmission
+[[nodiscard]] BenchmarkResult run_tvb31_24(Tier tier);  // Tsu-Esaki supply
+[[nodiscard]] BenchmarkResult run_tvb31_25(Tier tier);  // Tsu-Esaki current (diagnostic)
+[[nodiscard]] BenchmarkResult run_tvb31_26(Tier tier);  // thermionic emission velocity
+[[nodiscard]] BenchmarkResult run_tvb31_27(Tier tier);  // MLDA
+[[nodiscard]] BenchmarkResult run_tvb31_28(Tier tier);  // lattice conductivity
+[[nodiscard]] BenchmarkResult run_tvb31_29(Tier tier);  // Fermi orders and thermopower factor
 [[nodiscard]] BenchmarkResult run_tvb32();
 
 struct KnownFinding {

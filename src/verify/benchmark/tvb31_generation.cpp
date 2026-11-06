@@ -113,7 +113,7 @@ BenchmarkResult run_tvb31_20(Tier tier) {
                                "583 (1970), as Allpix Squared 3.3 and Sentaurus print it (MI-Q17); gamma(T) the tanh "
                                "ratio (Sentaurus' form, tag C: the 300 K pin a register row)",
                                "alpha = gamma A exp(-gamma B / E); gamma = tanh(hw / 2kT0) / tanh(hw / 2kT), T0 = 300 K",
-                               {std::string(e_range), std::string(t_range)}, {6},
+                               {std::string(e_range), std::string(t_range)}, {8},
                                "verify/reference/model_generation.hpp", std::string(verification));
     const ReferenceInfo inf = r.info;
     ReferenceInfo ginf = r.info;
@@ -195,7 +195,7 @@ BenchmarkResult run_tvb31_21(Tier tier) {
     r.info = tvb31::entry_info(r.id, Provenance::PB,
                                "the Kane form G = A F^2 exp(-B / F) as Hurkx, Klaassen and Knuvers 1992 and Sentaurus' "
                                "public summaries print it; the shipped (A, B) unattributed (F5, grade L)",
-                               "G = A F^2 exp(-B / F); dG/dF = G (2 + B / F) / F", {std::string(e_range)}, {6},
+                               "G = A F^2 exp(-B / F); dG/dF = G (2 + B / F) / F", {std::string(e_range)}, {8},
                                "verify/reference/model_generation.hpp", std::string(verification));
     r.info.assumptions.push_back("A, B: the shipped values (grade L, F5)");
     const ReferenceInfo inf = r.info;
@@ -239,7 +239,7 @@ BenchmarkResult run_tvb31_22(Tier tier) {
                                "and partials, the uniform-field rate (8)",
                                {std::string(d_range), std::string(seg_range), std::string(f_range),
                                 std::string(path_range)},
-                               {6},
+                               {8, 12},
                                "verify/reference/model_generation.hpp", std::string(verification));
     r.info.assumptions.push_back("test bands (no shipped material has direct-gap masses); NiTCAD's base constants");
     ReferenceInfo dinf = r.info;

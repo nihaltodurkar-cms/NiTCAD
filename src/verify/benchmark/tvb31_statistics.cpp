@@ -66,7 +66,7 @@ BenchmarkResult run_tvb31_17(Tier) {
                                "band (the standard form, as Genius reproduces it); the bound fraction b of "
                                "Schenk, Altermatt, Schmithuesen, SISPAD 2006, eq (3)",
                                "N_ion = N ((1 - b) + b / (1 + g e^(eta + E/kT))); complete ionization at E <= 0",
-                               {std::string(eta_range), std::string(depth_range)}, {6},
+                               {std::string(eta_range), std::string(depth_range)}, {4},
                                "verify/reference/model_statistics.hpp", std::string(verification));
     const ReferenceInfo inf = r.info;
     const double kT = base::thermal_voltage(300.0);
@@ -124,7 +124,7 @@ BenchmarkResult run_tvb31_18(Tier tier) {
                                "Schenk, Altermatt, Schmithuesen, SISPAD 2006, pp. 51-54, eqs (1), (5), Table I (read "
                                "in Unit 37)",
                                "E_dop(N) = E_dop0 / (1 + (N/N_ref)^c), b(N) = 1 / (1 + (N/N_b)^d)",
-                               {std::string(n_range)}, {6}, "verify/reference/model_statistics.hpp",
+                               {std::string(n_range)}, {4}, "verify/reference/model_statistics.hpp",
                                std::string(verification));
     const ReferenceInfo inf = r.info;
     std::vector<double> grid{0.0};
@@ -160,7 +160,7 @@ BenchmarkResult run_tvb31_19(Tier tier) {
                                "the root in eta of n - p - N_D+ + N_A- = 0 (statistics.hpp, ionization.hpp), by Brent "
                                "(TC5) in double-double; F_1/2 the TVB-02 reference; in-model numerics (MI-Q8)",
                                "n(eta) - p(eta) = N_D+(eta) - N_A-(eta), n = n_ie e^eta or n_ie e^g F_1/2(eta - g)",
-                               {std::string(c_range)}, {6}, "verify/reference/model_statistics.hpp",
+                               {std::string(c_range)}, {4}, "verify/reference/model_statistics.hpp",
                                std::string(verification));
     const ReferenceInfo inf = r.info;
     const physics::Semiconductor& m = physics::legacy_silicon();

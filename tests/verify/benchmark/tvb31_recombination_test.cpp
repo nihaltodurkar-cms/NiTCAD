@@ -11,6 +11,8 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <cmath>
+
 using tvb31_test::check;
 using tvb31_test::starts_with;
 namespace bench = NiTCAD::verify::benchmark;
@@ -70,9 +72,13 @@ TEST_CASE("TVB-31.15: trap occupancy and kinetics (frozen outcomes)", "[verify][
             return starts_with(c.quantity, "df/dn (") || starts_with(c.quantity, "df/dp (") ||
                    starts_with(c.quantity, "dU/dn (") || starts_with(c.quantity, "dU/dp (");
         },
-        true);
+        true,
+        // TB-Q4 with the U_ref floor of 15.18 (MI-Q19, step 8): where |q_ref| < 2^-969 the double-double reference's
+        // low part is subnormal, so the occupancy's underflow tail at eta = -745 is not_evaluated (it passed before,
+        // bit-equal).
+        [](const bench::ComparisonRecord& c) { return c.q_ref != 0.0 && std::abs(c.q_ref) < 0x1p-969; });
     CHECK(r.comparisons.size() == 3u * 3004 + 10u * 1985 * 7);
-    CHECK(n.pass + n.finding + n.not_applicable == static_cast<int>(r.comparisons.size()));
+    CHECK(n.pass + n.finding + n.not_applicable + n.not_evaluated == static_cast<int>(r.comparisons.size()));
     CHECK(n.finding > 0);
     CHECK(n.not_applicable >= 3 * 20);
 }

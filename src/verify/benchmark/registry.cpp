@@ -14,7 +14,7 @@ namespace NiTCAD::verify::benchmark {
 
 namespace {
 
-constexpr std::array<Benchmark, 32> shipped{{
+constexpr std::array<Benchmark, 39> shipped{{
     {"TVB-01", "Constants and thermal voltage against CODATA 2018", Tier::fast, [](Tier) { return run_tvb01(); }},
     {"TVB-02", "Fermi-Dirac integrals F_1/2, F_-1/2, F_3/2 and the inverse of F_1/2", Tier::fast,
      [](Tier) { return run_tvb02(); }},
@@ -52,6 +52,13 @@ constexpr std::array<Benchmark, 32> shipped{{
     {"TVB-31.20", "van Overstraeten-de Man impact ionization and its temperature factor", Tier::fast, &run_tvb31_20},
     {"TVB-31.21", "Kane band-to-band generation", Tier::fast, &run_tvb31_21},
     {"TVB-31.22", "Direct-gap WKB band-to-band functions", Tier::fast, &run_tvb31_22},
+    {"TVB-31.23", "WKB segment action, exponent and transmission", Tier::fast, &run_tvb31_23},
+    {"TVB-31.24", "Tsu-Esaki supply function and its partials", Tier::fast, &run_tvb31_24},
+    {"TVB-31.25", "Tsu-Esaki current quadrature (diagnostic, MI-Q8)", Tier::fast, &run_tvb31_25},
+    {"TVB-31.26", "Thermionic emission velocity and its temperature derivative", Tier::fast, &run_tvb31_26},
+    {"TVB-31.27", "MLDA wavelength, factor and mean factor", Tier::fast, &run_tvb31_27},
+    {"TVB-31.28", "Lattice thermal conductivity power law", Tier::fast, &run_tvb31_28},
+    {"TVB-31.29", "Fermi orders -1, 0, 1 and the thermopower factor", Tier::fast, &run_tvb31_29},
     {"TVB-32", "The consistency suite C1-C12 on the three TVR-1 decks", Tier::fast, [](Tier) { return run_tvb32(); }},
 }};
 
