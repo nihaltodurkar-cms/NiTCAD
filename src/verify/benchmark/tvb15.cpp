@@ -26,7 +26,9 @@
 //       in L-infinity, judged on the smallest-G triple, in [0.8, 1.3];
 //   (b) the G -> 0 limit by Richardson with that order, v_0 = v(g0) - (v(2 g0) - v(g0)) / (2^p - 1), agrees with the
 //       E solve's v at the same mesh within the E comparison's U on that mesh. That U is U_disc (the GCI of the
-//       finest pair, F_s = 1.25, §4.3) + U_iter + U_ref.
+//       finest pair, F_s = 1.25, §4.3) + U_iter + U_ref + |eps_int|.
+// The (h, tol) factorial (16.2 (p), DT-Q23 A) at the E solve's N = 512: tol = 1e-12, 1e-14 and N = 512, 1023; eps_int
+// enters U_E, and above 10 % of U_E it blocks the E passes (DECISIONS 4.1 (c)).
 // Iterative error (CV-Q8): the final Newton correction, which for a density is relative to itself, propagated to
 // Delta n: U_iter = update (1 + n0 / max Delta n). On the injection ladder the largest U_iter must be below a tenth of
 // the smallest difference it orders, else both A comparisons are not_evaluated.
@@ -36,6 +38,7 @@
 #include <expected>
 #include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "NiTCAD/base/constants.hpp"
@@ -57,7 +60,7 @@ namespace {
 constexpr double L_cm = 1e-1, NA = 1e16, sigma_cm = 1e-2, T = 300.0;
 constexpr double e_peak = 5e-9, a_peak = 1e-3;          // reference peaks / N_A
 constexpr double e_predicate = 1e-8, a_predicate = 1e-1;  // max Delta n / N_A
-constexpr double e_tolerance = 1e-4;
+constexpr double e_tolerance = 1e-4, tol_newton = 1e-12;
 
 ReferenceInfo info() {
     ReferenceInfo r;
@@ -116,14 +119,14 @@ device::Device bar(int N) {
                                                  {"right", device::ContactKind::ohmic, std::move(right)}}});
 }
 
-solve::BiasOptions options() {
+solve::BiasOptions options(double tol = tol_newton) {
     solve::BiasOptions o;
     o.models.srh = true;
     o.models.auger = o.models.radiative = false;
     o.models.bgn = false;
     o.models.fermi_dirac = false;
     o.models.hole_mobility = assemble::HoleMobility::caughey_thomas;
-    o.newton.tol_update = 1e-12;
+    o.newton.tol_update = tol;
     return o;
 }
 
@@ -135,7 +138,8 @@ struct Solved {
 
 // Delta n = n(G) - n(0) at every node, G scaled from the unit-peak generation by G0.
 std::expected<Solved, std::string> solve_level(const device::Device& d, const std::vector<double>& n_eq,
-                                               const reference::MinorityProblem& unit, double G0, double n0) {
+                                               const reference::MinorityProblem& unit, double G0, double n0,
+                                               double tol = tol_newton) {
     const std::size_t n = d.mesh().node_count();
     assemble::ManufacturedSources ms;
     for (std::size_t i = 0; i < n; ++i) {
@@ -143,7 +147,7 @@ std::expected<Solved, std::string> solve_level(const device::Device& d, const st
         ms.electron_generation.push_back(G0 * std::exp(-0.5 * z * z));
     }
     ms.hole_generation = ms.electron_generation;
-    solve::BiasOptions o = options();
+    solve::BiasOptions o = options(tol);
     o.models.manufactured = &ms;  // alive through the solve
     const auto s = solve::solve_bias(d, std::vector<double>{0.0, 0.0}, o);
     if (!s) return std::unexpected(s.error().message);
@@ -161,6 +165,24 @@ double linf(const std::vector<double>& a) {
     double m = 0.0;
     for (const double v : a) m = std::max(m, std::abs(v));
     return m;
+}
+
+// The E error (relative Delta n in L-infinity) at N nodes with Newton tolerance tol: the factorial's extra levels.
+std::expected<double, std::string> e_error(int N, double tol, const reference::MinorityProblem& unit, double G0,
+                                           double u1, double n0) {
+    const device::Device d = bar(N);
+    const auto eq = solve::solve_bias(d, std::vector<double>{0.0, 0.0}, options(tol));
+    if (!eq) return std::unexpected("N = " + std::to_string(N) + ": equilibrium: " + eq.error().message);
+    const auto s = solve_level(d, eq->fields.n_cm3, unit, G0, n0, tol);
+    if (!s) return std::unexpected("N = " + std::to_string(N) + ": " + s.error());
+    double worst = 0.0;
+    for (std::size_t i = 0; i < s->dn.size(); ++i) {
+        const double x = d.mesh().points()[i][0];
+        const bool end = x <= 0.0 || x >= L_cm;
+        const double u = end ? 0.0 : reference::minority_excess(unit, std::clamp(x, 0.0, L_cm)).value.hi;
+        worst = std::max(worst, std::abs(s->dn[i] - G0 * u));
+    }
+    return worst / (G0 * u1);
 }
 
 }  // namespace
@@ -282,7 +304,26 @@ BenchmarkResult run_tvb15(Tier tier) {
     const double r_h = levels[1].h / levels[0].h;
     const double u_disc = reference::gci_safety_factor_three_grids * std::abs(levels[1].error - levels[0].error) /
                           (std::pow(r_h, p_hat) - 1.0);
-    const double u_E = u_disc + fine.u_iter + u_ref;
+    // The (h, tol) factorial at N = 512 (16.2 (p), DT-Q23 A): tol = 1e-12 and 1e-14, h / 2 at N = 1023. eps_int enters
+    // U_E (DECISIONS 4.1 (c)), and above 10 % of it blocks both E passes.
+    double fac_e[3] = {0.0, 0.0, 0.0};
+    {
+        int k = 0;
+        for (const auto& [N, tol] : {std::pair{512, 0.01 * tol_newton}, std::pair{1023, tol_newton},
+                                     std::pair{1023, 0.01 * tol_newton}}) {
+            const auto e = e_error(N, tol, unit, gE, u1, in.n0);
+            if (!e) {
+                r.run_error = e.error() + " (factorial)";
+                return r;
+            }
+            fac_e[k++] = *e;
+        }
+    }
+    const std::vector<double> parts{u_disc, fine.u_iter, u_ref};
+    const Factorial fac = factorial(fine.error, fac_e[0], fac_e[1], fac_e[2], parts);
+    r.notes.push_back("E " + fac.note + " (U_disc " + shortest(u_disc) + ")");
+    for (ComparisonRecord& c : r.comparisons) block_if_interacting(c, fac);
+    const double u_E = fac.ok ? fac.u : u_disc + fine.u_iter + u_ref;
 
     // A: the injection ladder at N = 512.
     ReferenceInfo a_info = r.info;
@@ -326,12 +367,14 @@ BenchmarkResult run_tvb15(Tier tier) {
     const double limit_gap = linf(v0_minus_E);
     r.notes.push_back("A orders in G (smallest G first): " + shortest(a_orders[0]) + " " + shortest(a_orders[1]) +
                       "; |v_0 - v_E| " + shortest(limit_gap) + " against U_E " + shortest(u_E) + " (U_disc " +
-                      shortest(u_disc) + ", U_iter " + shortest(fine.u_iter) + ", U_ref " + shortest(u_ref) + ")");
+                      shortest(u_disc) + ", U_iter " + shortest(fine.u_iter) + ", U_ref " + shortest(u_ref) +
+                      ", |eps_int| " + shortest(std::abs(fac.eps_int)) + ")");
     const bool a_applies = max_ratio <= a_predicate;
     // CV-Q8 on the ladder: the iterative error below a tenth of the smallest difference it orders.
     const bool a_iterated = a_iter <= 0.1 * diff_norm.front();
     const std::string a_order_band = "departure order in G in [0.8, 1.3]; max Delta n / N_A <= 1e-1";
-    const std::string a_limit = "G -> 0 limit agrees with the E solve within its U (U_disc + U_iter + U_ref)";
+    const std::string a_limit =
+        "G -> 0 limit agrees with the E solve within its U (U_disc + U_iter + U_ref + |eps_int|)";
     ComparisonRecord ao{"departure order in G (A)", "1", 4.0, p_G, 1.0, u_ref, p_G, a_order_band, {}};
     ComparisonRecord al{"G -> 0 limit vs the E solve (A)", "1", 512.0, limit_gap, 0.0, u_ref, limit_gap,
                        a_limit + " = " + shortest(u_E), {}};

@@ -10064,7 +10064,7 @@ are independent) is tested directly rather than argued.
   - The three finest-accuracy comparisons pass (5.65e-5, 3.96e-5, 2.48e-5 against ≤ 1e-3), and the overall outcome is not_evaluated.
   - The frozen expected outcome in `device_theory_test` now states this (each order not_evaluated with p̂ in [1.8, 2.3], each finest pass), so `verify_benchmark.tvr4_full` asserts it and passes.
   - 16.8 (criteria and ladder) and TVB-17's construction (16.27) are unchanged.
-- Mutation (TVB-17 benchmark, against the new expected outcome): 12 of 12 caught. The mutants were the DT-Q4 thresholds (electron and hole), the density cut, the U_ref gate, C_ref's sign, the tolerance, a 1 % scale on C, h, the frequency (1e11 Hz), N_D, p_th and the finest-accuracy judgement.
+- Mutation (TVB-17 benchmark, against the new expected outcome): 12 of 12 caught. **Invalid, corrected in 16.30:** the filter matched no test; the rerun gives 11 of 12. The mutants were the DT-Q4 thresholds (electron and hole), the density cut, the U_ref gate, C_ref's sign, the tolerance, a 1 % scale on C, h, the frequency (1e11 Hz), N_D, p_th and the finest-accuracy judgement.
 - `verify_benchmark.tvr4_full` passes.
 
 **16.29 Found before step 6's code: two gaps (owner questions DT-Q23, DT-Q24).**
@@ -10093,6 +10093,41 @@ are independent) is tested directly rather than argued.
 - (B) Report n and the exponent as diagnostics only. J(V) at each bias is already gated by the log error.
 
 **Recommendation: A.** 16.18 (f) says the exponent is judged, and this rule is the one already frozen for S. ε_x is conservative (a sum of magnitudes).
+
+**16.30 Rulings DT-Q23 and DT-Q24** (owner, "choose recommended for commercial TCAD", 2026-11-06), and the factorial fix as built.
+- **DT-Q23: A.** The (h, tol) factorial is added to TVB-05, TVB-15 and TVB-17 before step 6, and is required of every later E/A benchmark.
+- **DT-Q24: A.** TVB-16's ideality and reverse exponent are judged by 16.19's rule applied to the derivative (16.29).
+- **The helper** (`benchmark::factorial`, `block_if_interacting`, registry.hpp) wraps `reference::interaction_contrast` and `combine_uncertainty`.
+  - An E pass becomes not_evaluated with interacting errors, or when the factorial was not evaluated (4.3).
+  - Fail, finding and not_applicable outcomes are kept.
+  - L0 tests are in `registry_test`.
+- **Results.** tol is the Newton `tol_update`, 1e-12 → 1e-14. U at (h, tol) = U_disc (GCI of the finest pair, F_s 1.25) + U_iter + U_ref.
+
+  | Benchmark | levels (h, h/2) | ε_int | U | interacting |
+  |---|---|---|---|---|
+  | TVB-17, −0.5 V | N = 512, 1024 | 8.0e-13 | 7.06e-5 | no |
+  | TVB-17, −1 V | N = 512, 1024 | −1.3e-12 | 4.95e-5 | no |
+  | TVB-17, −2 V | N = 512, 1024 | −1.7e-12 | 3.11e-5 | no |
+  | TVB-15 E | N = 512, 1023 | 0 (tol/100 rounds to the same state) | 1.02e-5 | no |
+  | TVB-05 | M = 256, 512 | 0 (the AC solve is linear and direct) | 4.61e-5 | no |
+
+  - TVB-15's A limit is now judged against U_E with |ε_int| included. Its frozen outcomes are unchanged.
+  - TVB-17's frozen outcome (16.28) is unchanged.
+- **TVB-05's h/2 level is beyond 16.7's CI budget.**
+  - At M = 512 (131k nodes), mesh generation takes 70 s and each solve about 190 s. tvr4_full is 45 s locally without it.
+  - Under 16.7, it runs in the `nightly` tier: the local `verify_full.tvb05`, registered with NITCAD_VERIFY_FULL_TIER. There the frozen outcome is: order not_evaluated (16.24), finest pass, ε_int reported and not interacting.
+  - In `full` (and so in tvr4_full on CI), the factorial is not evaluated. TVB-05's finest accuracy is therefore held at not_evaluated: "the (h, tol) factorial was not evaluated". Its error, 3.7e-5, is still printed and asserted ≤ 1e-3.
+  - This is the one frozen outcome that changes: TVB-05's finest pass in `full` becomes not_evaluated. TVB-05's overall outcome was already not_evaluated.
+- **Found in my own mutation runs: 16.28's "12 of 12 caught" was invalid.**
+  - Those mutants were run with the test's full name as the Catch2 filter. That name contains a comma, which Catch2 reads as a separator, so no test matched. The binary then exited non-zero, and every mutant counted as caught.
+  - Rerun with a comma-free filter (`TVB-17*`): 11 of 12 benchmark mutants are caught. The survivor is p_th = 1: the order is never judged (16.28), so p_th cannot be observed.
+  - Of the 4 factorial-wiring mutants, 3 are caught. The survivor inflates U_disc 1e9-fold: with no interaction, U's size cannot be observed.
+  - No other mutation run in TVR-4 used a filter with a comma. Those runs used tags or comma-free wildcards, checked against this session's transcript.
+  - TVB-15's 3 wiring mutants are all caught.
+  - In the helper, 6 of 7 mutants are caught after one added check (a not_applicable outcome kept). The survivor, `ok = value == value`, is equivalent, since the value is finite whenever the status is ok.
+- **Checks.**
+  - `verify_benchmark.tvr4_full` passes in 45.2 s (36.6 s before), and `verify_full.tvb05` in 652 s (local; run alongside other work).
+  - `[registry]` passes. Debug serial verify passes 64/64 in 75.5, 74.3 and 74.3 s (72.5 s at step 5). The fast tier is unchanged, and the slowest tests (fermi_dirac 21.6 s, consistency.transient 15.3 s) are untouched. So this is the machine's spread, but the 75 s budget now has under 1 s of margin, for the close-out (step 14).
 
 
 

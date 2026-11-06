@@ -144,4 +144,21 @@ struct Summary {
 // The shortest round-trip form of a double (std::to_chars), as the contract's reasons print numbers.
 [[nodiscard]] std::string shortest(double x);
 
+// The 2x2 (h, tol) factorial at a benchmark's finest level (DECISIONS 4.1 (b), (c); Unit 55 16.2 (p), DT-Q23 A).
+// The four errors are the comparison's own metric at (h, tol), (h, tol / 100), (h / 2, tol) and (h / 2, tol / 100),
+// and the components are the other U terms at (h, tol). eps_int = e(h/2, tol/100) - e(h/2, tol) - e(h, tol/100) +
+// e(h, tol); U = sum |U_k| + |eps_int|; interacting when |eps_int| > 10 % of U. Any input not finite: not ok.
+struct Factorial {
+    bool ok = false;
+    double eps_int = 0.0, u = 0.0;
+    bool interacting = false;
+    std::string note;  // the four errors, eps_int and U, for the result's notes
+};
+[[nodiscard]] Factorial factorial(double e_h_tol, double e_h_tolfine, double e_hfine_tol, double e_hfine_tolfine,
+                                  std::span<const double> components);
+
+// 4.1 (c): with interacting errors (or a factorial that is not ok) an E comparison cannot pass. A pass becomes
+// not_evaluated with the reason; any other outcome is kept.
+void block_if_interacting(ComparisonRecord& c, const Factorial& f);
+
 }  // namespace NiTCAD::verify::benchmark

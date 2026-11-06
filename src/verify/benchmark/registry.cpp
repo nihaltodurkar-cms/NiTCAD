@@ -3,6 +3,7 @@
 
 #include "NiTCAD/base/constants.hpp"
 #include "NiTCAD/physics/semiconductor.hpp"
+#include "NiTCAD/verify/reference/metrics.hpp"
 
 #include <array>
 #include <cfloat>
@@ -274,6 +275,42 @@ std::string shortest(double x) {
     char buf[64];
     const auto r = std::to_chars(buf, buf + sizeof buf, x);
     return std::string(buf, r.ptr);
+}
+
+Factorial factorial(double e_h_tol, double e_h_tolfine, double e_hfine_tol, double e_hfine_tolfine,
+                    std::span<const double> components) {
+    Factorial f;
+    f.note = "factorial (h, tol): e(h, tol) " + shortest(e_h_tol) + ", e(h, tol/100) " + shortest(e_h_tolfine) +
+             ", e(h/2, tol) " + shortest(e_hfine_tol) + ", e(h/2, tol/100) " + shortest(e_hfine_tolfine);
+    const reference::Metric c = reference::interaction_contrast(e_h_tol, e_h_tolfine, e_hfine_tol, e_hfine_tolfine);
+    if (c.status != reference::MetricStatus::ok) {
+        f.note += "; not evaluated (" + std::string(c.reason) + ")";
+        return f;
+    }
+    const reference::CombinedUncertainty u = reference::combine_uncertainty(components, c.value);
+    if (u.status != reference::MetricStatus::ok) {
+        f.note += "; not evaluated (" + std::string(u.reason) + ")";
+        return f;
+    }
+    f.ok = true;
+    f.eps_int = c.value;
+    f.u = u.value;
+    f.interacting = u.interacting;
+    f.note += "; eps_int " + shortest(f.eps_int) + ", U " + shortest(f.u);
+    if (f.interacting) f.note += ", interacting errors";
+    return f;
+}
+
+void block_if_interacting(ComparisonRecord& c, const Factorial& f) {
+    if (c.comparison.outcome != Outcome::pass) return;
+    if (!f.ok) {
+        c.comparison = Comparison{Outcome::not_evaluated, "the (h, tol) factorial was not evaluated", {}};
+    } else if (f.interacting) {
+        c.comparison = Comparison{Outcome::not_evaluated,
+                                  "interacting errors: |eps_int| " + shortest(std::abs(f.eps_int)) +
+                                      " above 10 % of U " + shortest(f.u) + " (DECISIONS 4.1 (c))",
+                                  {}};
+    }
 }
 
 }  // namespace NiTCAD::verify::benchmark

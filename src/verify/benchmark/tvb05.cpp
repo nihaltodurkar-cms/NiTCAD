@@ -11,6 +11,9 @@
 // Criteria (E, frozen 16.8): p-hat of the relative error of C in [1.8, 2.3] with the asymptotic check (4 levels);
 // on the finest level, relative error <= 1e-3. C = -Im Y_ab / omega at 1 MHz. The AC solve is linear and direct,
 // so the iterative error is the linear solve's backward error (relative).
+// The (h, tol) factorial (16.2 (p), DT-Q23 A) at M = 256: tol = 1e-12, 1e-14 and M = 256, 512; eps_int enters U, and
+// above 10 % of U it blocks both E passes (DECISIONS 4.1 (c)). Nightly tier only (M = 512 is about 4 minutes a solve);
+// in full it is not evaluated, so the finest pass is held at not_evaluated.
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
@@ -26,6 +29,7 @@
 #include "NiTCAD/solve/small_signal.hpp"
 #include "NiTCAD/verify/benchmark/registry.hpp"
 #include "NiTCAD/verify/reference/capacitor.hpp"
+#include "NiTCAD/verify/reference/metrics.hpp"
 #include "NiTCAD/verify/study/study.hpp"
 
 namespace NiTCAD::verify::benchmark {
@@ -33,6 +37,7 @@ namespace NiTCAD::verify::benchmark {
 namespace {
 
 constexpr double a_cm = 1e-4, b_cm = 2e-4, eps_ox = 3.9, frequency_Hz = 1e6;
+constexpr double tol_newton = 1e-12;  // the operating point's Newton tolerance (the factorial's tol)
 
 ReferenceInfo info() {
     ReferenceInfo r;
@@ -55,8 +60,9 @@ struct Level {
     double h = 0.0, error = 0.0, u_iter = 0.0, C = 0.0;
 };
 
-// The annulus as M sectors and its 2M boundary patches; the electrodes' nodes from those patches.
-std::expected<Level, std::string> run_level(int M, double C_ref) {
+// The annulus as M sectors and its 2M boundary patches; the electrodes' nodes from those patches. One level per Newton
+// tolerance in tols, on one mesh.
+std::expected<std::vector<Level>, std::string> run_levels(int M, double C_ref, const std::vector<double>& tols) {
     std::vector<mesh::Point> inner(static_cast<std::size_t>(M)), outer(static_cast<std::size_t>(M));
     for (int l = 0; l < M; ++l) {
         const double t = 2.0 * std::numbers::pi * l / M;
@@ -99,16 +105,22 @@ std::expected<Level, std::string> run_level(int M, double C_ref) {
     const auto d = device::Device::create(std::move(dd));
     if (!d) return std::unexpected("M = " + std::to_string(M) + ": " + d.error().message);
     const std::vector<std::vector<double>> points{{0.0, 1.0}};
-    const auto s = solve::solve_small_signal(*d, points, {.frequencies_Hz = {frequency_Hz}});
-    if (!s || s->stopped) {
-        return std::unexpected("M = " + std::to_string(M) + ": " + (s ? s->stopped->message : s.error().message));
+    std::vector<Level> out;
+    for (const double tol : tols) {
+        solve::SmallSignalOptions o{.frequencies_Hz = {frequency_Hz}};
+        o.steady.newton.tol_update = tol;
+        const auto s = solve::solve_small_signal(*d, points, o);
+        if (!s || s->stopped) {
+            return std::unexpected("M = " + std::to_string(M) + ": " + (s ? s->stopped->message : s.error().message));
+        }
+        Level lv;
+        lv.h = spacing;
+        lv.C = -s->admittance(0, 0, 0, 1).imag() / (2.0 * std::numbers::pi * frequency_Hz);
+        lv.error = std::abs(lv.C - C_ref) / C_ref;
+        lv.u_iter = s->points[0].backward_error[0];
+        out.push_back(lv);
     }
-    Level lv;
-    lv.h = spacing;
-    lv.C = -s->admittance(0, 0, 0, 1).imag() / (2.0 * std::numbers::pi * frequency_Hz);
-    lv.error = std::abs(lv.C - C_ref) / C_ref;
-    lv.u_iter = s->points[0].backward_error[0];
-    return lv;
+    return out;
 }
 
 }  // namespace
@@ -126,11 +138,12 @@ BenchmarkResult run_tvb05(Tier tier) {
     const double C_ref = reference::coaxial_capacitance(a_cm, b_cm, eps_ox).hi;
     std::vector<Level> levels;  // finest first
     for (const int M : {256, 128, 64, 32}) {
-        const auto lv = run_level(M, C_ref);
-        if (!lv) {
-            r.run_error = lv.error();
+        const auto lvs = run_levels(M, C_ref, {tol_newton});
+        if (!lvs) {
+            r.run_error = lvs.error();
             return r;
         }
+        const Level* lv = &lvs->front();
         r.notes.push_back("M = " + std::to_string(M) + ": h = " + shortest(lv->h) + " cm, C = " + shortest(lv->C) +
                           " F/cm, relative error " + shortest(lv->error) + ", backward error " +
                           shortest(lv->u_iter));
@@ -154,6 +167,29 @@ BenchmarkResult run_tvb05(Tier tier) {
                         accuracy, {}};
     ca.comparison = judge(r.info, {}, levels.front().error <= 1e-3, accuracy);
     r.comparisons.push_back(std::move(ca));
+    // The (h, tol) factorial at M = 256 (16.2 (p), DT-Q23 A): the operating point's Newton tol and tol / 100, M = 256
+    // and 512. U at (h, tol): U_disc (GCI of the finest pair with p-hat, F_s = 1.25) and U_iter (U_ref is rounding).
+    // M = 512 takes about 4 minutes per solve (131k nodes; 16.30), beyond 16.7's 120 s for tvr4_full on CI. So it runs
+    // in the nightly tier (the local verify_full.tvb05); in full the factorial is not evaluated and the finest pass is
+    // held at not_evaluated (4.3: without its ladder U_num is not estimated).
+    const double u_disc = reference::gci_safety_factor_three_grids * std::abs(levels[1].error - levels[0].error) /
+                          (std::pow(levels[1].h / levels[0].h, st.observed) - 1.0);
+    Factorial fac;
+    if (tier < Tier::nightly) {
+        fac.note = "factorial (h, tol): not evaluated in this tier (M = 512 runs in nightly; 16.7, 16.30)";
+    } else {
+        const auto at_h = run_levels(256, C_ref, {0.01 * tol_newton});
+        const auto at_h2 = run_levels(512, C_ref, {tol_newton, 0.01 * tol_newton});
+        if (!at_h || !at_h2) {
+            r.run_error = (at_h ? at_h2.error() : at_h.error()) + " (factorial)";
+            return r;
+        }
+        const std::vector<double> parts{u_disc, levels.front().u_iter};
+        fac = factorial(levels.front().error, at_h->front().error, (*at_h2)[0].error, (*at_h2)[1].error, parts);
+        fac.note += " (U_disc " + shortest(u_disc) + ")";
+    }
+    r.notes.push_back(fac.note);
+    for (ComparisonRecord& c : r.comparisons) block_if_interacting(c, fac);
     apply_known_findings(r, known_findings());
     return r;
 }

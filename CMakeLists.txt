@@ -814,6 +814,9 @@ if(NITCAD_VERIFY_FULL_TIER AND CMAKE_BUILD_TYPE STREQUAL "Release")
   set_tests_properties(verify_full.tvb09 PROPERTIES LABELS full TIMEOUT 600)
   add_test(NAME verify_full.tvb14 COMMAND nitcad_verify_full_test "[tvb14_full]")
   set_tests_properties(verify_full.tvb14 PROPERTIES LABELS full TIMEOUT 3600 RUN_SERIAL TRUE)
+  # TVB-05's (h, tol) factorial at M = 512 (DECISIONS Unit 55 16.30), about 10 minutes.
+  add_test(NAME verify_full.tvb05 COMMAND nitcad_verify_full_test "[tvb05_full]")
+  set_tests_properties(verify_full.tvb05 PROPERTIES LABELS full TIMEOUT 1800)
 endif()
 
 # The batch runner (`nitcad check|run <deck>`).

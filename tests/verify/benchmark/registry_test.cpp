@@ -158,3 +158,45 @@ TEST_CASE("registry: the report round-trips through io, and two runs are equal e
     CHECK(*loaded == a);
     std::filesystem::remove(path);
 }
+
+// The (h, tol) factorial helper (DECISIONS 4.1 (b), (c); Unit 55 16.2 (p), DT-Q23 A).
+TEST_CASE("registry: the (h, tol) factorial and its block on an E pass", "[registry]") {
+    using namespace NiTCAD::verify;
+    // Additive errors: e = a(h) + b(tol) has no interaction.
+    const std::vector<double> parts{1e-4, 2e-6};
+    const auto add = benchmark::factorial(1e-3 + 1e-7, 1e-3 + 1e-9, 2.5e-4 + 1e-7, 2.5e-4 + 1e-9, parts);
+    REQUIRE(add.ok);
+    CHECK(std::abs(add.eps_int) <= 1e-18);
+    CHECK_FALSE(add.interacting);
+    CHECK(std::abs(add.u - (1e-4 + 2e-6 + std::abs(add.eps_int))) <= 1e-19);
+    // An interaction: the tolerance effect grows on the finer mesh. eps_int = -(4e-5 - 1e-5),
+    // U = 3e-5 + 1e-4 + 2e-6.
+    const auto mix = benchmark::factorial(1e-3, 1e-3 - 1e-5, 2.5e-4, 2.5e-4 - 4e-5, parts);
+    REQUIRE(mix.ok);
+    CHECK(std::abs(mix.eps_int - (-3e-5)) <= 1e-18);
+    CHECK(std::abs(mix.u - 1.32e-4) <= 1e-18);
+    CHECK(mix.interacting);
+    CHECK(mix.note.find("interacting errors") != std::string::npos);
+    // The block: a pass becomes not_evaluated; a fail is kept; nothing changes without an interaction.
+    benchmark::ComparisonRecord c;
+    c.comparison = Comparison{Outcome::pass, "", {}};
+    benchmark::block_if_interacting(c, add);
+    CHECK(c.comparison.outcome == Outcome::pass);
+    benchmark::block_if_interacting(c, mix);
+    CHECK(c.comparison.outcome == Outcome::not_evaluated);
+    CHECK(c.comparison.reason.find("interacting errors") != std::string::npos);
+    c.comparison = Comparison{Outcome::fail, "x", {}};
+    benchmark::block_if_interacting(c, mix);
+    CHECK(c.comparison.outcome == Outcome::fail);
+    c.comparison = Comparison{Outcome::not_applicable, "predicate", {}};
+    benchmark::block_if_interacting(c, mix);
+    CHECK(c.comparison.outcome == Outcome::not_applicable);
+    CHECK(c.comparison.reason == "predicate");
+    // Not finite: not ok, and a pass is not kept.
+    const auto bad = benchmark::factorial(std::nan(""), 1.0, 1.0, 1.0, parts);
+    CHECK_FALSE(bad.ok);
+    c.comparison = Comparison{Outcome::pass, "", {}};
+    benchmark::block_if_interacting(c, bad);
+    CHECK(c.comparison.outcome == Outcome::not_evaluated);
+    CHECK_FALSE(benchmark::factorial(1.0, 1.0, 1.0, 1.0, std::vector<double>{INFINITY}).ok);
+}

@@ -131,3 +131,22 @@ TEST_CASE("TVB-14 full tier: tensor ladders and the unstructured families (froze
         }
     }
 }
+
+// TVB-05 in the nightly tier (DECISIONS Unit 55 16.7, 16.30; DT-Q20 A, DT-Q23 A): the ladder M = 32 ... 256 and the
+// (h, tol) factorial at M = 256 (M = 512, about 4 minutes a solve). The order stays not_evaluated (16.24); the finest
+// accuracy passes with eps_int reported and not interacting.
+TEST_CASE("TVB-05 nightly tier: the coaxial capacitor with its factorial (frozen outcomes)", "[tvb05_full]") {
+    const bench::BenchmarkResult r = bench::run_tvb05(bench::Tier::nightly);
+    REQUIRE_FALSE(r.run_error.has_value());
+    bool reported = false;
+    for (const auto& n : r.notes) {
+        std::printf("TVB-05 note: %s\n", n.c_str());
+        reported = reported || (n.find("eps_int") != std::string::npos && n.find("interacting") == std::string::npos);
+    }
+    CHECK(reported);
+    REQUIRE(r.comparisons.size() == 2);
+    CHECK(r.comparisons[0].comparison.outcome == Outcome::not_evaluated);
+    CHECK(r.comparisons[0].comparison.reason == "not in the asymptotic range");
+    CHECK(r.comparisons[1].comparison.outcome == Outcome::pass);
+    CHECK(bench::overall(r) == Outcome::not_evaluated);
+}

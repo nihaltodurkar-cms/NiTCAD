@@ -43,7 +43,9 @@ TEST_CASE("TVB-06: the dielectric stack, full tier (frozen outcome: pass)", "[.t
 // ctest verify_benchmark.tvr4_full (hidden tag), as tvb31_full. Recorded as found (16.24, DT-Q20 A): the finest
 // accuracy passes; the order is not_evaluated, its successive orders 2.0545, 2.0825, 2.1846 spreading 0.102 > 0.1
 // (the M = 32 pair), with p-hat 2.054 in the band. Neither the criteria nor the ladder changed (TVM2).
-TEST_CASE("TVB-05: the coaxial capacitor, full tier (frozen outcome: order not_evaluated, accuracy pass)",
+// The (h, tol) factorial (16.2 (p), DT-Q23 A) needs M = 512, about 4 minutes a solve, so it runs only in the nightly
+// tier (verify_full.tvb05, local; 16.30). In full the finest accuracy is therefore held at not_evaluated (4.3).
+TEST_CASE("TVB-05: the coaxial capacitor, full tier (frozen outcome: order and accuracy not_evaluated)",
           "[.tvr4_full]") {
     const auto r = bench::run_tvb05(bench::Tier::full);
     if (r.run_error) FAIL(*r.run_error);
@@ -59,7 +61,9 @@ TEST_CASE("TVB-05: the coaxial capacitor, full tier (frozen outcome: order not_e
     CHECK(order.comparison.reason == "not in the asymptotic range");
     CHECK(order.metric >= 1.8);  // p-hat itself is in the band
     CHECK(order.metric <= 2.3);
-    CHECK(finest.comparison.outcome == Outcome::pass);
+    CHECK(finest.metric <= 1e-3);  // the accuracy itself (3.7e-5), not judged without the factorial
+    CHECK(finest.comparison.outcome == Outcome::not_evaluated);
+    CHECK(finest.comparison.reason == "the (h, tol) factorial was not evaluated");
     CHECK(bench::overall(r) == Outcome::not_evaluated);
 }
 

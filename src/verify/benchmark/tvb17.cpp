@@ -24,14 +24,18 @@
 //   - (b) finest relative error <= 1e-3;
 //   - U_ref <= 1e-4 (a tenth of (b)).
 // U_iter (CV-Q8): the operating point's final Newton correction and the AC solve's backward error, the larger.
+// The (h, tol) factorial (16.2 (p), DT-Q23 A) at N = 512: tol = 1e-12 and 1e-14, N = 512 and 1024. eps_int enters U
+// (U_disc + U_iter + U_ref + |eps_int|), and above 10 % of U it blocks both E passes (DECISIONS 4.1 (c)).
 // Reported: the depletion form eps / W (with -2 V_T) against the QE C (qe_junction.hpp: equal up to terms
 // exponentially small in the barrier).
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
+#include <expected>
 #include <numbers>
 #include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "NiTCAD/base/constants.hpp"
@@ -40,6 +44,7 @@
 #include "NiTCAD/physics/semiconductor.hpp"
 #include "NiTCAD/solve/small_signal.hpp"
 #include "NiTCAD/verify/benchmark/registry.hpp"
+#include "NiTCAD/verify/reference/metrics.hpp"
 #include "NiTCAD/verify/reference/pn_junction.hpp"
 #include "NiTCAD/verify/reference/qe_junction.hpp"
 #include "NiTCAD/verify/study/study.hpp"
@@ -49,7 +54,7 @@ namespace NiTCAD::verify::benchmark {
 namespace {
 
 constexpr double L = 1.5e-4, NA = 1e16, ND = 2e16, T = 300.0, frequency_Hz = 1e3;
-constexpr double tolerance = 1e-3;
+constexpr double tolerance = 1e-3, tol_newton = 1e-12;
 
 ReferenceInfo info() {
     ReferenceInfo r;
@@ -103,7 +108,6 @@ solve::BiasOptions options() {
     o.models.srh = o.models.auger = o.models.radiative = false;
     o.models.bgn = false;
     o.models.fermi_dirac = false;
-    o.newton.tol_update = 1e-12;
     return o;
 }
 
@@ -160,17 +164,16 @@ BenchmarkResult run_tvb17(Tier tier) {
         r.notes.push_back(at + ": C_QE " + shortest(C_ref) + " F/cm^2, complex step differs by " +
                           shortest(std::abs(*cs - C_ref) / C_ref) + ", contact tail " + shortest(tail) +
                           "; eps / W (-2 V_T) differs by " + shortest(dep));
-        std::vector<Level> levels;  // finest first
-        bool applicable = true;
-        double worst_drop = 0.0;
-        for (const int N : {512, 256, 128, 64}) {
+        // One level at N nodes and Newton tolerance tol (the factorial reruns it at tol / 100 and 2N).
+        const auto run_level = [&](int N, double tol) -> std::expected<Level, std::string> {
             const device::Device d = diode(N);
             const std::vector<std::vector<double>> points{{V, 0.0}};
             solve::SmallSignalOptions o{.steady = options(), .frequencies_Hz = {frequency_Hz}};
+            o.steady.newton.tol_update = tol;
             const auto s = solve::solve_small_signal(d, points, o);
             if (!s || s->stopped) {
-                r.run_error = at + ", N = " + std::to_string(N) + ": " + (s ? s->stopped->message : s.error().message);
-                return r;
+                return std::unexpected(at + ", N = " + std::to_string(N) + ": " +
+                                       (s ? s->stopped->message : s.error().message));
             }
             const auto& dc = s->points[0].dc;
             Level lv;
@@ -195,12 +198,23 @@ BenchmarkResult run_tvb17(Tier tier) {
             }
             lv.drop_n = nhi - nlo;  // eV, i.e. V for a unit charge
             lv.drop_p = phi - plo;
-            worst_drop = std::max({worst_drop, lv.drop_n, lv.drop_p});
-            applicable = applicable && lv.drop_n <= 1e-3 * VT && lv.drop_p <= 1e-3 * VT;
-            r.notes.push_back(at + ", N = " + std::to_string(N) + ": C " + shortest(lv.C) + ", relative error " +
-                              shortest(lv.error) + ", U_iter " + shortest(lv.u_iter) + ", quasi-Fermi drops " +
-                              shortest(lv.drop_n) + " (n) and " + shortest(lv.drop_p) + " (p) V");
-            levels.push_back(lv);
+            return lv;
+        };
+        std::vector<Level> levels;  // finest first
+        bool applicable = true;
+        double worst_drop = 0.0;
+        for (const int N : {512, 256, 128, 64}) {
+            const auto lv = run_level(N, tol_newton);
+            if (!lv) {
+                r.run_error = lv.error();
+                return r;
+            }
+            worst_drop = std::max({worst_drop, lv->drop_n, lv->drop_p});
+            applicable = applicable && lv->drop_n <= 1e-3 * VT && lv->drop_p <= 1e-3 * VT;
+            r.notes.push_back(at + ", N = " + std::to_string(N) + ": C " + shortest(lv->C) + ", relative error " +
+                              shortest(lv->error) + ", U_iter " + shortest(lv->u_iter) + ", quasi-Fermi drops " +
+                              shortest(lv->drop_n) + " (n) and " + shortest(lv->drop_p) + " (p) V");
+            levels.push_back(*lv);
         }
         std::vector<double> hs, es, us;
         for (const Level& l : levels) {
@@ -213,6 +227,26 @@ BenchmarkResult run_tvb17(Tier tier) {
         std::string orders;
         for (const double p : st.orders) orders += " " + shortest(p);
         r.notes.push_back(at + ": orders (finest pair first):" + orders + "; spread " + shortest(st.order_spread));
+        // The (h, tol) factorial at N = 512 (16.2 (p), DT-Q23 A); h / 2 is N = 1024 (N even keeps x = 0 a face).
+        // U at (h, tol): U_disc (GCI of the finest pair with p-hat, F_s = 1.25), U_iter, U_ref.
+        const double u_disc = reference::gci_safety_factor_three_grids * std::abs(levels[1].error - levels[0].error) /
+                              (std::pow(levels[1].h / levels[0].h, st.observed) - 1.0);
+        double fac_e[3] = {0.0, 0.0, 0.0};
+        {
+            int k = 0;
+            for (const auto& [N, tol] : {std::pair{512, 0.01 * tol_newton}, std::pair{1024, tol_newton},
+                                         std::pair{1024, 0.01 * tol_newton}}) {
+                const auto lv = run_level(N, tol);
+                if (!lv) {
+                    r.run_error = lv.error() + " (factorial)";
+                    return r;
+                }
+                fac_e[k++] = lv->error;
+            }
+        }
+        const std::vector<double> parts{u_disc, levels.front().u_iter, u_ref};
+        const Factorial fac = factorial(levels.front().error, fac_e[0], fac_e[1], fac_e[2], parts);
+        r.notes.push_back(at + ": " + fac.note + " (U_disc " + shortest(u_disc) + ")");
         const std::optional<std::string> excluded = [&]() -> std::optional<std::string> {
             if (!applicable) return std::nullopt;
             if (u_ref > 0.1 * tolerance) return "U_ref " + shortest(u_ref) + " above a tenth of the tolerance";
@@ -233,6 +267,8 @@ BenchmarkResult run_tvb17(Tier tier) {
             co.comparison =
                 v.judged ? judge(r.info, {}, v.pass, band) : Comparison{Outcome::not_evaluated, v.reason, {}};
             ca.comparison = judge(r.info, {}, levels.front().error <= tolerance, accuracy);
+            block_if_interacting(co, fac);
+            block_if_interacting(ca, fac);
         }
         r.comparisons.push_back(std::move(co));
         r.comparisons.push_back(std::move(ca));
