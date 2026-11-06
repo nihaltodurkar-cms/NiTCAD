@@ -76,6 +76,7 @@ void set_pardiso_threads(int threads);
 [[nodiscard]] BenchmarkResult run_tvb05(Tier tier);  // full only: M = 32 ... 256 sectors, 2D generated
 [[nodiscard]] BenchmarkResult run_tvb06(Tier tier);  // fast: 1D N = 32, 128; full: + 2D 32 x 32
 [[nodiscard]] BenchmarkResult run_tvb15(Tier tier);  // full only: 1D N = 64 ... 512 and the injection ladder
+[[nodiscard]] BenchmarkResult run_tvb16(Tier tier);  // full only: three 1D diodes, N = 128 ... 1024, both polarities
 [[nodiscard]] BenchmarkResult run_tvb17(Tier tier);  // full only: 1D N = 64 ... 512 at V = -0.5, -1, -2 V
 // TVR-3 (DECISIONS Unit 55 15): TVB-31, the model-implementation catalogue.
 [[nodiscard]] BenchmarkResult run_tvb31_01();  // legacy band set

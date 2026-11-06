@@ -116,3 +116,26 @@ TEST_CASE("TVB-17: nothing in the fast tier", "[tvr4]") {
     REQUIRE_FALSE(r.run_error.has_value());
     REQUIRE(r.comparisons.empty());
 }
+
+// TVB-16 (ideal diode, three configurations; A, 16.19 frozen; DT-Q24 A, DT-Q25 A; construction 16.31) is full tier
+// only (16.7). Frozen outcome: every J and derivative comparison passes.
+TEST_CASE("TVB-16: the ideal diode, full tier (frozen outcome: pass)", "[.tvr4_full]") {
+    const auto r = bench::run_tvb16(bench::Tier::full);
+    if (r.run_error) FAIL(*r.run_error);
+    for (const auto& n : r.notes) UNSCOPED_INFO("note: " << n);
+    for (const auto& c : r.comparisons) {
+        std::printf("TVB-16 %s: %.4g (%s) %s\n", c.quantity.c_str(), c.metric, c.criterion.c_str(),
+                    c.comparison.reason.c_str());
+    }
+    REQUIRE(r.comparisons.size() == 41);
+    for (const auto& c : r.comparisons) {
+        CAPTURE(c.quantity, c.metric, c.criterion, c.comparison.reason);
+        CHECK(c.comparison.outcome == Outcome::pass);
+    }
+}
+
+TEST_CASE("TVB-16: nothing in the fast tier", "[tvr4]") {
+    const auto r = bench::run_tvb16(bench::Tier::fast);
+    REQUIRE_FALSE(r.run_error.has_value());
+    REQUIRE(r.comparisons.empty());
+}

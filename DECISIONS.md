@@ -10180,6 +10180,52 @@ are independent) is tested directly rather than argued.
 
 **Recommendation: A.** It is the first-order term 16.18 (f) asks for, and equals the frozen text in forward bias, where that text applies. Nothing else in 16.19 changes.
 
+**16.32 Ruling DT-Q25** (owner, "choose recommended and write", 2026-11-06), **and step 6b as built: TVB-16. DT-Q26 and DT-Q27 open.**
+- **DT-Q25: A.** ε_φ = e^v/|e^v − 1| × Δφ/V_T, with Δφ the larger quasi-Fermi drop between the reference's edges.
+- **As built**, as planned in 16.31:
+  - `tvb16.cpp`: three configurations, the ladder N = 128 … 1024, and the factorial at N = 1024/2048 with tol 1e-12/1e-14.
+  - DT-Q24's derivative comparisons: 4 idealities per configuration, and 3 reverse exponents per (ii) configuration. 41 comparisons in all.
+  - Registered in `full` (46 benchmarks). The case is in `device_theory_test` [.tvr4_full], with the frozen expected outcome "every comparison passes". It runs in 9.7 s (Release).
+  - **Found while running (my construction, not NiTCAD).** A factorial tol/100 state that Newton cannot reach no longer aborts the run. Per DT-Q23 A it is recorded with its last update, and the comparison is not_evaluated. Newton stalls at 1e-14 at −5 V (last updates 1.4e-14 and 7.3e-14 to 2.0e-13) and at 0.5 V in (ii) short.
+- **Results** (first run, nothing changed after it): 20 pass, 15 not_evaluated, 6 fail. The frozen outcome is unmet, so `verify_benchmark.tvr4_full` fails.
+  - (i) no G−R, short base: all 9 pass. Log errors are 2.4e-6 to 6.4e-3, against bounds of 1.3e-2 to 2.1e-2. The ideality errors are 2.5e-6 to 3.7e-3.
+  - (ii) short:
+    - J passes at 0.4–0.6 V and at −0.5 to −2 V.
+    - not_evaluated at 0.2 and 0.3 V: the three-grid differences oscillate, so there is no GCI.
+    - not_evaluated at −5 V: the factorial's tol/100 was not reached.
+    - The derivatives pass where both of their J values are estimated.
+  - (ii) long: the 6 fails are J at 0.5 and 0.6 V and at −1 and −2 V, the 0.5–0.6 V ideality, and the −1 to −2 V exponent. They come from two causes:
+    - **(a) Ohmic drop in the 500 µm neutral bases (forward bias).**
+      - The deviation is converged in the mesh: e(h) and e(h/2) are −2.945e-3 and −2.928e-3 at 0.5 V, and −12.383 % and −12.384 % at 0.6 V. It is not discretization.
+      - The majority current crosses both bases, whose series resistance is R = Σ W′/(q N μ_maj) ≈ 0.05 × (1.54 + 0.27) ≈ 0.090 Ω·cm². At 0.6 V the estimate J R / V_T ≈ 0.17 gives about −15 %, against −12.4 % measured; at 0.5 V it gives 0.40 %, against 0.29 %. Near the junction part of the current is minority current, so the true drop is smaller than this estimate.
+      - Shockley's law assumes the whole of V falls across the junction. 16.18 (f)'s three ε_J terms have no series-resistance term. In the 5 µm devices the term is about 2e-4 of J at 0.6 V, which is why they pass.
+    - **(b) U_disc is underestimated (reverse bias).**
+      - At −1 and −2 V the error falls as h²: e(h/2)/e(h) = 0.249 in the factorial, so J_sim tends to J_ref.
+      - But the three-grid order on N = 1024/512/256 of the graded mesh is 3.80 and 2.71, and the GCI with that order is about 4× smaller than the error it should bound.
+      - §4.2 says an order outside the asymptotic range "is not reported as an order". The benchmark computes the GCI without that check.
+- The DT-Q5 cross-check, printed only: the W(V) short-base law on bias:144's inputs gives 1.2786e-2 A/cm² at 0.5 V, against its W(0) value of 1.321e-2. bias:144's legacy pin is 1.280e-2.
+- The TVB-16 benchmark mutation run waits for the rulings, as for DT-Q22.
+
+**DT-Q26 (U_disc outside the asymptotic range).**
+- (A) Apply §4.2's asymptotic check (successive orders within 0.1 on the 4 levels) to every J and derivative ladder.
+  - Outside the range, the order is not reported, U_num is "not estimated" and the comparison is not_evaluated (§4.3).
+  - This is §4.2's existing rule, which the code left out. How many comparisons it leaves judged has not been measured.
+- (B) Outside the range, use Roache's two-grid GCI with the assumed order: F_s = 3.0 and p = p_th = 2 on the finest pair, N = 2048 and 1024 (already solved for the factorial).
+  - This changes 16.31's U_num definition after a run.
+- (C) Keep it as run: the −1 and −2 V long-base fails stand, as found.
+
+**Recommendation: A.** It is the rule §4.2 already states, and it introduces no new choice.
+
+**DT-Q27 (the series resistance missing from ε_J).**
+- (A) Record it as found. 16.18 (f)'s ε_J omits the neutral bases' ohmic drop, which dominates the long base at ≥ 0.5 V.
+  - The three forward comparisons it affects (J at 0.5 and 0.6 V, the 0.5–0.6 V ideality) become findings, through the known-findings table citing this entry, with the estimate above printed.
+  - This is about the reference's approximation, not NiTCAD.
+- (B) Add a fourth named first-order term, ε_R = J_ref R_base / V_T, with R_base computed from the spec, and rerun.
+  - This adds to a frozen criterion after a run (TVM2), so it needs your explicit authorization.
+- (C) Make the long base's forward points NOT APPLICABLE where J R_base / V_T > 1e-3 (a new predicate). Also a change after the run.
+
+**Recommendation: A** for TVR-4: the frozen criterion stands, and the omission is recorded with its measured size. B would be the right design for a later revision of 16.18 (f), as its own ruling before any run.
+
 
 
 ---

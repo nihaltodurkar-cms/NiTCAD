@@ -1,13 +1,10 @@
-// L0 for the ideal-diode reference (DECISIONS     // Deep reverse: |U| <= n_i / (tau_n + tau_p) (the denominator is at least n_i (tau_p + tau_n) and the excess
-    // magnitude below n_i^2), and nearly equal where n, p << n_i. That excludes, near each edge, the zone where the
-    // majority density is above n_i: within phi = V_T ln(N / n_i) of the bulk potential, which the depletion
-    // approximation puts at sqrt(2 eps phi / (q N)) from the edge. So J_gen ~ q n_i sum W_eff / (tau_n + tau_p), to
-    // about L_D / W_eff (the edges' own smearing).nit 55 16.2 (d), 16.3, TVB-16):
+// L0 for the ideal-diode reference (DECISIONS Unit 55 16.2 (d), 16.3, TVB-16):
 //   - without SRH: the short-base law with the QE edges, recomputed here from qe_junction's charge (another code
 //     path for the edges) and pn_junction's bulks;
 //   - with SRH: the coth law's long- and short-base limits;
-//   - SNS: Gauss-Kronrod against tanh-sinh in u, the change of variable against the x-space integral (pn_potential), its sign, its exact 1 / tau scaling, and at deep reverse bias the
-//     generation bound q n_i (x_p + x_n) / (tau_n + tau_p), which it approaches;
+//   - SNS: Gauss-Kronrod against tanh-sinh in u, the change of variable against the x-space integral (pn_potential),
+//     its sign, its exact 1 / tau scaling, and at deep reverse bias the generation bound
+//     q n_i (x_p + x_n) / (tau_n + tau_p) and the depletion-approximation estimate below it;
 //   - zero current at zero bias; the refusals.
 #include <catch2/catch_test_macros.hpp>
 
@@ -130,7 +127,10 @@ TEST_CASE("diode: the SNS current, two methods, sign, 1 / tau scaling, reverse g
         CHECK(rel(2.0 * h->sns_A_per_cm2.to_double(), sns) <= 1e-20 + 1e-15);
     }
     // Deep reverse: |U| <= n_i / (tau_n + tau_p) (the denominator is at least n_i (tau_p + tau_n) and the excess
-    // magnitude below n_i^2), and nearly equal where n, p << n_i, which is most of the region at -5 V.
+    // magnitude below n_i^2), and nearly equal where n, p << n_i. That excludes, near each edge, the zone where the
+    // majority density is above n_i: within phi = V_T ln(N / n_i) of the bulk potential, which the depletion
+    // approximation puts at sqrt(2 eps phi / (q N)) from the edge. So J_gen ~ q n_i sum W_eff / (tau_n + tau_p), to
+    // about L_D / W_eff (the edges' own smearing).
     const auto d = diode_current(in, -5.0);
     REQUIRE(d.has_value());
     const double q = in.junction.q_C, ni = in.junction.ni_cm3;
