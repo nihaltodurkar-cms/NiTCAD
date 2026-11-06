@@ -14,7 +14,7 @@ namespace NiTCAD::verify::benchmark {
 
 namespace {
 
-constexpr std::array<Benchmark, 29> shipped{{
+constexpr std::array<Benchmark, 32> shipped{{
     {"TVB-01", "Constants and thermal voltage against CODATA 2018", Tier::fast, [](Tier) { return run_tvb01(); }},
     {"TVB-02", "Fermi-Dirac integrals F_1/2, F_-1/2, F_3/2 and the inverse of F_1/2", Tier::fast,
      [](Tier) { return run_tvb02(); }},
@@ -49,6 +49,9 @@ constexpr std::array<Benchmark, 29> shipped{{
     {"TVB-31.17", "Incomplete ionization", Tier::fast, &run_tvb31_17},
     {"TVB-31.18", "Altermatt-Schenk density-dependent dopant level", Tier::fast, &run_tvb31_18},
     {"TVB-31.19", "Charge-neutral equilibria (Boltzmann, Fermi-Dirac, ionized)", Tier::fast, &run_tvb31_19},
+    {"TVB-31.20", "van Overstraeten-de Man impact ionization and its temperature factor", Tier::fast, &run_tvb31_20},
+    {"TVB-31.21", "Kane band-to-band generation", Tier::fast, &run_tvb31_21},
+    {"TVB-31.22", "Direct-gap WKB band-to-band functions", Tier::fast, &run_tvb31_22},
     {"TVB-32", "The consistency suite C1-C12 on the three TVR-1 decks", Tier::fast, [](Tier) { return run_tvb32(); }},
 }};
 

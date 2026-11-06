@@ -62,6 +62,21 @@ inline constexpr std::string_view value_criterion = "|q_sim - q_ref| <= max(1e-1
     return c;
 }
 
+// A documented cut (15.9, "Documented cuts"): NiTCAD returns exactly 0 where the code documents a cut, and that passes
+// if |q_ref| there is at most |q_ref| at the cut's threshold. q is the uncut reference value at the point, q_threshold
+// its value at the threshold.
+[[nodiscard]] inline ComparisonRecord cut_record(const ReferenceInfo& info, std::string quantity, std::string unit,
+                                                 double parameter, double q_sim, const DD& q, const DD& q_threshold,
+                                                 const std::vector<Predicate>& predicates) {
+    const double q_ref = q.to_double();
+    ComparisonRecord c{std::move(quantity), std::move(unit), parameter, q_sim, q_ref, 0x1p-80 * std::abs(q_ref),
+                       q_sim == 0.0 ? 0.0 : INFINITY,
+                       "documented cut: q_sim = 0 and |q_ref| <= |q_ref at the threshold| (15.9)", {}};
+    const bool ok = q_sim == 0.0 && std::abs(q.hi) <= std::abs(q_threshold.hi);
+    c.comparison = judge(info, predicates, ok, c.criterion);
+    return c;
+}
+
 template <std::size_t N, class F>
 [[nodiscard]] ComparisonRecord value_check(const ReferenceInfo& info, std::string quantity, std::string unit,
                                            double parameter, double q_sim, F&& f, const std::array<DD, N>& x,

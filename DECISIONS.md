@@ -8882,6 +8882,109 @@ Mutations:
   1 − e·d for d on y ≤ 0, which is the same number to rounding (an equivalent mutant). Step 5's runs used
   `TVB-31.1*`, which matches the ten entries 31.10–31.19, and stand.
 
+**15.17 Step 7 as built: TVB-31.20–31.22, impact ionization and band-to-band generation (2026-11-06).**
+
+Files:
+- `verify/reference/model_generation.hpp`:
+  - vOdM α = γA exp(−γB/E) with dα/dE; γ(T) = tanh(h/300)/tanh(h/T), h = ħω/2k, with dγ/dT; Kane G = AF² exp(−B/F)
+    with dG/dF.
+  - The direct-gap WKB functions of Esseni et al. (2017):
+    - the edge-safe α and cos θ (1 ± α by their rationalized forms);
+    - κ (eq 9), and its antiderivatives in δ for κ and 1/κ;
+    - the segment integrals with Leibniz partials.
+  - Segment brackets:
+    - For D ≥ 1e-2 the brackets D f(v_max) − ∫f are closed form.
+    - Below 1e-2 they are tanh–sinh of the difference.
+    - Where the in-gap part lies within 1e-3 of its distance to the nearer edge, one Kronrod-15 rule computes both the
+      brackets and the integrals. That interior rule was added after the first run, when tanh–sinh's estimate stalled
+      at D = 1e-13 (a reference defect, not a NiTCAD one); the L0 checks it against tanh–sinh at D = 1e-5 and against
+      the D → 0 limit.
+  - The path rate (eq 11) and its partials; dG/dI_ik takes the bracket 1 − e^(−z)(1 + z) by its series for z < 1.
+  - eq (8).
+- `verify/benchmark/tvb31_generation.cpp`: entries TVB-31.20–31.22.
+  - `bound_field` gains the vOdM coefficients, the phonon energy and the Kane pair.
+  - `other_shipped_value` gains `impact_ionization.gamma_at_300K`, NiTCAD's γ at 300 K.
+  - `tvb31_common.hpp` gains `cut_record`, 15.9's documented-cut rule: q_sim = 0 and |q_ref| ≤ |q_ref at the
+    threshold|.
+- The register's 31.20 tag-C row is rebound to `impact_ionization.gamma_at_300K = 1`. It pins T₀ = 300 K through its
+  consequence: γ(300 K) = tanh(x)/tanh(x) is exactly 1. The row replaces the unbindable "T₀" of 15.10; the form stays
+  F4's.
+- Tests: `tests/verify/reference/model_generation_test.cpp` (412 assertions) and
+  `tests/verify/benchmark/tvb31_generation_test.cpp`. The registry holds 32 benchmarks.
+
+Grids:
+- 31.20, legacy silicon with the register's printed coefficients:
+  - γ and dγ/dT at T 200–500 K on 64 points a decade, plus 300 K, and 150 and 600 K beyond.
+  - α and dα/dE for both carriers at T 200, 300 and 500 K, over:
+    - E 0 and 1e4–1e7 V/cm, and 1e8 beyond;
+    - the switch field and its neighbouring doubles;
+    - the cut field γB/700 with its neighbours and γB/700·(1 ± 10^-j), j = 1–12.
+  - The cut and switch points are judged wherever they fall.
+- 31.21: the same field grid with the shipped Kane pair (grade L) and the cut B/700.
+- 31.22, two test bands (no shipped material has direct-gap masses): u = 14.9 (E_g 1.42 eV, m_r 0.0335 m₀) and u = 1.5
+  (0.5 eV, m₀/3).
+  - κ and both antiderivatives at δ in steps of 1/1024, at 10^-k and 1 − 10^-k (k = 1–15), and at −0.5 and 1.5.
+  - Segments with L = 1e-8 m: 90 ordered pairs of ten endpoints in and around the gap, and 96 near-coincident pairs
+    v, v + 10^-k (k = 3–14) about v = 1e-6, 0.3, 0.6 and 0.999999, in both directions.
+  - eq (8) at F 1e7–1e10 V/m, and at 1e6, where the exponent exceeds 700.
+- The path rate at 672 points: F ±1e7–1e9 V/m, I_k 0–340, I_ik 0 and 1e-20–1e-14 m², and z = k_m² I_ik from 1e-10 to
+  800.
+
+Outcomes (Release, 0.6 s for the three):
+
+| Entry | Pass | Finding | Not applicable |
+|---|---|---|---|
+| 31.20 | 2745, incl. the PB phonon-energy row and every cut point | 8: the seven vOdM coefficients (PC, F4) and the tag-C γ(300 K) pin (I0) | 16 |
+| 31.21 | 442, incl. every cut point | 2: the Kane pair (grade L, F5) | 2 |
+| 31.22 | 11314 | 994: (xi) 866, (xii) 128 | 14 |
+
+- **MI-Q17 (an entry grade).** 31.20's form was first written as PC, which would have made every α comparison a
+  finding. The form α = A exp(−B/E) is the one printed by Allpix Squared and by Sentaurus's summary (two
+  reproductions, so PB); only the coefficients are PC (one reproduction of the abstract, F4). γ(T) is a NiTCAD choice
+  (tag C), so its comparisons are PD: its documented form, checked as written.
+  - (A) PB for the form, PD for γ's comparisons, with the pins on the register rows. (B) PC for the whole entry.
+  - **Ruling (owner standing instruction, "choose recommended", 2026-11-06): A.** It was ruled before the first run.
+- **(xi), new (MI-Q18).** `wkb_segment` forms I = L(K(hi) − K(lo))/D and its partials L(f(v) ∓ dK/D)/D.
+  - Mechanism: K is about u·π/4 times scale/(2uħ) at each end. A short segment therefore loses ε·K/(κD) relative in
+    the value and ε·K/(κD²) in the partials. Example: I_k over [0, 1e-9] is off by 0.3% (9.8e-7 absolute, against
+    64ε·T = 1.4e-6).
+  - Below D = 1e-10 the documented midpoint rule takes over. It truncates L f″D²/24 in the value and drops the
+    ±L f″D/12 of each partial, which is 2e-6 relative at δ = 1e-6, D = 1e-11.
+  - Classification:
+    - for D ≥ 1e-10, the rounding floor with T = L(K_t(hi) + K_t(lo))/D (the partials add L·f(v)/D and divide by D),
+      where K_t and G_t are the sizes of the antiderivatives' terms;
+    - below 1e-10, twice the midpoint rule's leading truncation plus 64ε|q_ref|, with f″ by double-double central
+      differences.
+  - Every miss falls within one of the two bounds.
+- **(xii), new (MI-Q18).** `wkb_path_rate`'s dG/dI_ik = pre·t·(k_m² e/I_ik − (1 − e)/I_ik²) cancels as z → 0
+  (relative ε/z²). Floor: T = pre·t·(k_m² e (1 + z)/I_ik + (1 − e)/I_ik²). All 128 misses (z = 1e-10 and 1e-4) are
+  within it.
+- Fixes proposed separately (MI-Q10):
+  - for (xi), the brackets by quadrature or Taylor series of the difference below D ≈ 1e-2, and the midpoint partials
+    with their ±f″D/12 term;
+  - for (xii), the series of 1 − e^(−z)(1 + z) for z < 1, as the reference uses.
+  - The practical effect is small: mesh segments in δ are rarely below 1e-4, and z ≪ 1 means a path with almost no
+    final states.
+- **MI-Q18.** (A) Record (xi) and (xii) as known findings, classified as above, and propose the fixes separately. (B)
+  Leave them failing.
+  - **Ruling (owner standing instruction, "choose recommended", 2026-11-06): A.**
+  - The frozen 31.22 test, written before the first run, expected no findings. It now names the two regions; the
+    criterion is unchanged (TVM2).
+- **31.20 and 31.21 met their frozen outcomes on the first run.**
+
+Mutations, each run after a green baseline with the exact filter `TVB-31.20*,TVB-31.21*,TVB-31.22*`; all 23 are
+caught:
+- 15 of NiTCAD's code:
+  - `impact_ionization.cpp`: the switch's ≥ → >, the cut at 699, γ dropped from α, dα/dE · (1 + 1e-12), and
+    T₀ = 300.0000001;
+  - `thermal.cpp`: the slope zeroed above 400 K;
+  - `band_to_band.cpp`:
+    - Kane: dG/dF's x · (1 + 1e-12) and the cut at 701;
+    - the WKB functions: S's ¼ + 1e-10, K's c³/3.0000001, G's 0.9999999·c, the midpoint switch at D < 1e-4, in_lo
+      with ≥ 0, I_k · (1 + 1e-12) in the path rate, and eq (8)'s E_g^1.5000000001.
+- 8 of `model_generation.hpp`, caught by its L0: dα/dE, dγ/dT, sinh → cosh, both antiderivatives, the g(z) series,
+  eq (8)'s 18π², and the Kronrod bracket · (1 + 1e-9).
+
 ---
 
 ## New questions the advisor raised (not yet in `ARCHITECTURE.md`)

@@ -208,8 +208,9 @@ inline constexpr std::array rows{
         "as above (E0)", "the electron switch, 5e5, is immaterial: both electron branches are equal"},
     Row{"31.20", "legacy_silicon.impact_ionization.phonon_energy_eV", "0.063", "eV", Kind::printed, Grade::PB,
         "Allpix; Genius OP_PH_EN", ""},
-    Row{"31.20", "impact_ionization.temperature_factor_form", "", "", Kind::choice, Grade::C,
-        "Sentaurus manual only (F4); T0 = 300 K assumed (Allpix)", ""},
+    Row{"31.20", "impact_ionization.gamma_at_300K", "1", "", Kind::choice, Grade::C,
+        "Sentaurus manual only (F4); T0 = 300 K assumed (Allpix)",
+        "pins T0 = 300 K through its consequence gamma(300 K) = 1 (bit-exact: tanh(x) / tanh(x)); the form is F4's"},
     // 31.21 Kane pair (F5).
     Row{"31.21", "legacy_silicon.band_to_band.A_per_cm3_s", "", "cm^-3 s^-1", Kind::printed, Grade::L,
         "not found: none of Jiao et al. 2013 Table 1's silicon sets or Sentaurus' Hurkx defaults (4e14)", "F5"},

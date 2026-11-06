@@ -92,6 +92,9 @@ void set_pardiso_threads(int threads);
 [[nodiscard]] BenchmarkResult run_tvb31_17(Tier tier);  // incomplete ionization
 [[nodiscard]] BenchmarkResult run_tvb31_18(Tier tier);  // Altermatt-Schenk levels
 [[nodiscard]] BenchmarkResult run_tvb31_19(Tier tier);  // neutral equilibria
+[[nodiscard]] BenchmarkResult run_tvb31_20(Tier tier);  // impact ionization
+[[nodiscard]] BenchmarkResult run_tvb31_21(Tier tier);  // Kane band-to-band
+[[nodiscard]] BenchmarkResult run_tvb31_22(Tier tier);  // direct-gap WKB band-to-band
 [[nodiscard]] BenchmarkResult run_tvb32();
 
 struct KnownFinding {

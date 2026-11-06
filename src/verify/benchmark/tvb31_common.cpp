@@ -5,6 +5,7 @@
 #include <utility>
 
 #include "NiTCAD/physics/energy_balance.hpp"
+#include "NiTCAD/physics/impact_ionization.hpp"
 #include "NiTCAD/physics/ionization.hpp"
 #include "NiTCAD/physics/mobility.hpp"
 #include "NiTCAD/physics/surface_mobility.hpp"
@@ -92,6 +93,10 @@ std::optional<double> other_shipped_value(std::string_view binding) {
     };
     if (const auto g = tail("altermatt_phosphorus.")) return altermatt(physics::altermatt_phosphorus, *g);
     if (const auto g = tail("altermatt_boron.")) return altermatt(physics::altermatt_boron, *g);
+    if (binding == "impact_ionization.gamma_at_300K") {
+        return physics::impact_ionization_temperature_factor(
+            physics::legacy_silicon_parameters.impact_ionization.phonon_energy_eV, 300.0);
+    }
     if (binding == "energy_relaxation.electron") return physics::silicon_energy_relaxation.tau_n_s;
     if (binding == "energy_relaxation.hole") return physics::silicon_energy_relaxation.tau_p_s;
     if (binding == "energy_balance_regularization") return physics::energy_balance_regularization;
@@ -123,6 +128,16 @@ double* bound_field(physics::SemiconductorParameters& p, std::string_view bindin
     if (f == "lifetime.N_ref") return &p.lifetime.N_ref;
     if (f == "auger.Cn") return &p.auger.Cn;
     if (f == "auger.Cp") return &p.auger.Cp;
+    if (f == "impact_ionization.electron.A") return &p.impact_ionization.electron.A_low_per_cm;
+    if (f == "impact_ionization.electron.B") return &p.impact_ionization.electron.B_low_V_per_cm;
+    if (f == "impact_ionization.hole.A_low") return &p.impact_ionization.hole.A_low_per_cm;
+    if (f == "impact_ionization.hole.B_low") return &p.impact_ionization.hole.B_low_V_per_cm;
+    if (f == "impact_ionization.hole.A_high") return &p.impact_ionization.hole.A_high_per_cm;
+    if (f == "impact_ionization.hole.B_high") return &p.impact_ionization.hole.B_high_V_per_cm;
+    if (f == "impact_ionization.hole.switch") return &p.impact_ionization.hole.switch_V_per_cm;
+    if (f == "impact_ionization.phonon_energy_eV") return &p.impact_ionization.phonon_energy_eV;
+    if (f == "band_to_band.A_per_cm3_s") return &p.band_to_band.A_per_cm3_s;
+    if (f == "band_to_band.B_V_per_cm") return &p.band_to_band.B_V_per_cm;
     if (f == "ionization.donor_eV") return &p.ionization.donor_eV;
     if (f == "ionization.acceptor_eV") return &p.ionization.acceptor_eV;
     if (f == "ionization.donor_degeneracy") return &p.ionization.donor_degeneracy;
