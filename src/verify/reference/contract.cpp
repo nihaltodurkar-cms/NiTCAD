@@ -37,6 +37,7 @@ std::string_view to_string(Provenance g) {
         case Provenance::PB: return "PB";
         case Provenance::PC: return "PC";
         case Provenance::PD: return "PD";
+        case Provenance::L: return "L";
     }
     return "?";
 }
@@ -171,6 +172,11 @@ Comparison judge(const ReferenceInfo& info, std::span<const Predicate> predicate
     if (info.provenance == Provenance::PC) {
         c.outcome = Outcome::finding;
         c.reason = "provenance insufficient (PC): " + verdict;
+        return c;
+    }
+    if (info.provenance == Provenance::L) {
+        c.outcome = Outcome::finding;
+        c.reason = "provenance insufficient (L: legacy, no source read): " + verdict;
         return c;
     }
     c.outcome = criterion_met ? Outcome::pass : Outcome::fail;

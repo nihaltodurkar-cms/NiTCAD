@@ -3004,6 +3004,16 @@ currents (about 21% high); doping outside the benchmarked range, other temperatu
 dopants; and breakdown, MOS C-V, high-field, transient and small-signal behaviour, which no published benchmark yet
 covers.
 
+**Model-implementation provenance (Unit 55 TVR-3, `verify/model-implementation`; DECISIONS.md Unit 55 15.20).**
+TVB-31 checks every model function against double-double references (M class), plus the shipped parameter sets
+against a register typed from the sources (`verify/reference/model_parameters.hpp`).
+- Grades are surfaced in `nitcad verify`'s report, per entry and per register row:
+  - entries: PA 7, PB 9, PD 15;
+  - register rows: PA 29, PB 41, PC 62, L 55 (no source read; a finding until one is), C 6 (pinned choices).
+- TVB-31 reports no fail. Its findings are rounding floors in some partials, documented departures (F1, F6), and
+  register mismatches, including the non-silicon sets against the Ioffe NSM archive.
+- No physics was changed.
+
 ## 11. Build order and long-term capability roadmap
 
 Each implemented unit is one branch, is independently tested, and is merged only on the owner's instruction. The table

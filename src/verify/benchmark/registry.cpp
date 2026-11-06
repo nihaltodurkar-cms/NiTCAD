@@ -1,7 +1,11 @@
 // The benchmark registry, known findings, summary and report (Unit 55, TVR-1; registry.hpp).
 #include "NiTCAD/verify/benchmark/registry.hpp"
 
+#include "NiTCAD/base/constants.hpp"
+#include "NiTCAD/physics/semiconductor.hpp"
+
 #include <array>
+#include <cfloat>
 #include <charconv>
 #include <cmath>
 #include <utility>
@@ -10,7 +14,7 @@ namespace NiTCAD::verify::benchmark {
 
 namespace {
 
-constexpr std::array<Benchmark, 10> shipped{{
+constexpr std::array<Benchmark, 41> shipped{{
     {"TVB-01", "Constants and thermal voltage against CODATA 2018", Tier::fast, [](Tier) { return run_tvb01(); }},
     {"TVB-02", "Fermi-Dirac integrals F_1/2, F_-1/2, F_3/2 and the inverse of F_1/2", Tier::fast,
      [](Tier) { return run_tvb02(); }},
@@ -21,6 +25,42 @@ constexpr std::array<Benchmark, 10> shipped{{
     {"TVB-11", "Uniform resistor with ohmic contacts", Tier::fast, [](Tier) { return run_tvb11(); }},
     {"TVB-12", "Scharfetter-Gummel constant-field exactness", Tier::fast, [](Tier) { return run_tvb12(); }},
     {"TVB-14", "Full drift-diffusion manufactured solution", Tier::fast, &run_tvb14},
+    {"TVB-31.01", "Legacy silicon band set: Varshni gap and power-law densities of states", Tier::fast,
+     [](Tier) { return run_tvb31_01(); }},
+    {"TVB-31.02", "Passler band gap (Couderc et al. 2014, eq (10), Table I)", Tier::fast,
+     [](Tier) { return run_tvb31_02(); }},
+    {"TVB-31.03", "Couderc density-of-states mass fits and Nc(T), Nv(T)", Tier::fast,
+     [](Tier) { return run_tvb31_03(); }},
+    {"TVB-31.04", "Intrinsic density, intrinsic level and d ln n_i / dT on both silicon sets", Tier::fast,
+     [](Tier) { return run_tvb31_04(); }},
+    {"TVB-31.05", "Slotboom band-gap narrowing and n_ie (documented and published forms)", Tier::fast,
+     [](Tier) { return run_tvb31_05(); }},
+    {"TVB-31.06", "Caughey-Thomas doping and temperature mobility", Tier::fast, &run_tvb31_06},
+    {"TVB-31.07", "Masetti doping mobility (boron and phosphorus)", Tier::fast, &run_tvb31_07},
+    {"TVB-31.08", "Canali field-dependent mobility", Tier::fast, &run_tvb31_08},
+    {"TVB-31.09", "Lombardi surface mobility and its partials", Tier::fast, &run_tvb31_09},
+    {"TVB-31.10", "Energy-balance carrier-temperature mobility and effective field", Tier::fast, &run_tvb31_10},
+    {"TVB-31.11", "Scharfetter doping-dependent lifetimes", Tier::fast, &run_tvb31_11},
+    {"TVB-31.12", "Shockley-Read-Hall recombination and its partials", Tier::fast, &run_tvb31_12},
+    {"TVB-31.13", "Auger recombination and its partials", Tier::fast, &run_tvb31_13},
+    {"TVB-31.14", "Radiative recombination and its partials", Tier::fast, &run_tvb31_14},
+    {"TVB-31.15", "Interface-trap occupancy and capture-emission rate", Tier::fast, &run_tvb31_15},
+    {"TVB-31.16", "Trap-band quadrature (trap_band_levels)", Tier::fast, &run_tvb31_16},
+    {"TVB-31.17", "Incomplete ionization", Tier::fast, &run_tvb31_17},
+    {"TVB-31.18", "Altermatt-Schenk density-dependent dopant level", Tier::fast, &run_tvb31_18},
+    {"TVB-31.19", "Charge-neutral equilibria (Boltzmann, Fermi-Dirac, ionized)", Tier::fast, &run_tvb31_19},
+    {"TVB-31.20", "van Overstraeten-de Man impact ionization and its temperature factor", Tier::fast, &run_tvb31_20},
+    {"TVB-31.21", "Kane band-to-band generation", Tier::fast, &run_tvb31_21},
+    {"TVB-31.22", "Direct-gap WKB band-to-band functions", Tier::fast, &run_tvb31_22},
+    {"TVB-31.23", "WKB segment action, exponent and transmission", Tier::fast, &run_tvb31_23},
+    {"TVB-31.24", "Tsu-Esaki supply function and its partials", Tier::fast, &run_tvb31_24},
+    {"TVB-31.25", "Tsu-Esaki current quadrature (diagnostic, MI-Q8)", Tier::fast, &run_tvb31_25},
+    {"TVB-31.26", "Thermionic emission velocity and its temperature derivative", Tier::fast, &run_tvb31_26},
+    {"TVB-31.27", "MLDA wavelength, factor and mean factor", Tier::fast, &run_tvb31_27},
+    {"TVB-31.28", "Lattice thermal conductivity power law", Tier::fast, &run_tvb31_28},
+    {"TVB-31.29", "Fermi orders -1, 0, 1 and the thermopower factor", Tier::fast, &run_tvb31_29},
+    {"TVB-31.30", "SiO2 data", Tier::fast, &run_tvb31_30},
+    {"TVB-31.31", "Non-silicon material sets", Tier::fast, &run_tvb31_31},
     {"TVB-32", "The consistency suite C1-C12 on the three TVR-1 decks", Tier::fast, [](Tier) { return run_tvb32(); }},
 }};
 
@@ -40,7 +80,35 @@ constexpr std::string_view finding_v =
     "DECISIONS Unit 55 14.11 CV-Q21 (known finding): an H1 order above the band on the frozen 3-level 3D ladders is "
     "pre-asymptotic (2D generated falls toward 1 as h shrinks); the finest-level H1 still gates";
 
-constexpr std::array<KnownFinding, 15> findings{{
+// Finding (vi) (DECISIONS Unit 55 15.13, MI-Q12): intrinsic_density forms sqrt(Nc Nv) e^(-Eg / 2kT), whose second
+// factor is subnormal (Eg / 2kT > -ln DBL_MIN) at about 9.1-9.6 K while n_i is still a normal double.
+bool ni_factor_subnormal(const physics::Semiconductor& m, double T) {
+    return T > 0.0 && physics::band_gap_eV(m, T) / (2.0 * base::thermal_voltage(T)) > -std::log(DBL_MIN);
+}
+bool legacy_ni_region(double T) { return ni_factor_subnormal(physics::legacy_silicon(), T); }
+bool default_ni_region(double T) { return ni_factor_subnormal(physics::silicon(), T); }
+
+constexpr std::string_view finding_vi =
+    "DECISIONS Unit 55 15.13 MI-Q12 (known finding): intrinsic_density multiplies sqrt(Nc Nv) by a subnormal "
+    "e^(-Eg / 2kT) near 9 K, losing digits of a normal n_i; fix proposed separately (MI-Q10)";
+
+constexpr std::string_view finding_f1 =
+    "DECISIONS Unit 55 15.4 F1 and 15.8 MI-Q4 (documented departure): bandgap_narrowing.hpp subtracts E0 sqrt(1/2) "
+    "above N0 and cuts to 0 at or below it; the published Slotboom form has neither";
+
+constexpr std::string_view finding_f6 =
+    "DECISIONS Unit 55 15.4 F6 and 15.8 MI-Q4 (documented departure): mobility.hpp scales Masetti's mu_max by "
+    "(T / 300)^gamma (tag C); the published 300 K form has no temperature dependence";
+
+// Finding (vii) (DECISIONS Unit 55 15.14, MI-Q14): carrier_temperature_mobility forms d mu / d mu0 = m + m_a a and
+// d E_eff / d mu0 = v_sat (x_a a - x) / mu0^2, which cancel as a grows (both tend to 0 while each term stays O(m)).
+bool a_from_20(double a) { return a >= 20.0; }
+
+constexpr std::string_view finding_vii =
+    "DECISIONS Unit 55 15.14 MI-Q14 (known finding): the mu0 partials of the energy-balance mobility and field are "
+    "formed by differences that cancel for a >= about 20 (absolute error about eps m); fix proposed separately";
+
+constexpr std::array<KnownFinding, 25> findings{{
     {"TVB-02", "F_-1/2", &everywhere, "(ii)",
      "DECISIONS 11.13 TVB-02 finding (ii) widened (option A), accepted as a limitation (Unit 56, 13): F_-1/2 "
      "misses from eta = 13.76, a quadrature-rounding floor of the derivative-consistent table"},
@@ -58,6 +126,16 @@ constexpr std::array<KnownFinding, 15> findings{{
     {"TVB-14", "phi_n H1 order, 3D swept", &everywhere, "(v)", finding_v},
     {"TVB-14", "phi_p H1 order, 3D generated", &everywhere, "(v)", finding_v},
     {"TVB-14", "phi_p H1 order, 3D swept", &everywhere, "(v)", finding_v},
+    {"TVB-31.04", "legacy: n_i", &legacy_ni_region, "(vi)", finding_vi},
+    {"TVB-31.04", "default: n_i", &default_ni_region, "(vi)", finding_vi},
+    {"TVB-31.05", "published form", &everywhere, "(F1)", finding_f1},
+    {"TVB-31.07", "published form", &everywhere, "(F6)", finding_f6},
+    {"TVB-31.10", "beta 1 dmu/dmu0", &a_from_20, "(vii)", finding_vii},
+    {"TVB-31.10", "beta 1.5 dmu/dmu0", &a_from_20, "(vii)", finding_vii},
+    {"TVB-31.10", "beta 2 dmu/dmu0", &a_from_20, "(vii)", finding_vii},
+    {"TVB-31.10", "beta 1 dE_eff/dmu0", &a_from_20, "(vii)", finding_vii},
+    {"TVB-31.10", "beta 1.5 dE_eff/dmu0", &a_from_20, "(vii)", finding_vii},
+    {"TVB-31.10", "beta 2 dE_eff/dmu0", &a_from_20, "(vii)", finding_vii},
 }};
 
 bool starts_with(std::string_view s, std::string_view prefix) { return s.substr(0, prefix.size()) == prefix; }

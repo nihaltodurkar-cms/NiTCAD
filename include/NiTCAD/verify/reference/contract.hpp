@@ -11,7 +11,8 @@
 //     and hold (else not_applicable, the predicate and its measured value named) before the criterion is judged;
 //     a comparison outside its applicability is refused, not failed (TVD-6);
 //   - an I0 reference cannot pass or fail: finding, "regression pin, not evidence" (2.1);
-//   - a PC reference cannot pass or fail: finding, "provenance insufficient" (3.3, TVD-18).
+//   - a PC reference cannot pass or fail: finding, "provenance insufficient" (3.3, TVD-18); nor can an L reference
+//     (legacy value or form, no source read; MI-Q5 of Unit 55 15.8, treated as PC).
 // not_applicable and not_evaluated never count as a pass (TVD-16).
 #pragma once
 
@@ -24,7 +25,7 @@ namespace NiTCAD::verify {
 
 enum class ReferenceClass { E, D, A, M, H, P, X };  // DECISIONS 1.2
 enum class Independence { I0, I1, I2, I3 };          // DECISIONS 2.1
-enum class Provenance { PA, PB, PC, PD };            // DECISIONS 3.3
+enum class Provenance { PA, PB, PC, PD, L };         // DECISIONS 3.3; L: legacy, no source read (Unit 55 15.8, MI-Q5)
 enum class Outcome { pass, finding, fail, not_applicable, not_evaluated };  // DECISIONS 4.4
 
 inline constexpr int governing_equation_count = 15;  // G1-G15 (DECISIONS 1.3)
