@@ -83,6 +83,12 @@ void set_pardiso_threads(int threads);
 [[nodiscard]] BenchmarkResult run_tvb31_08(Tier tier);  // Canali
 [[nodiscard]] BenchmarkResult run_tvb31_09(Tier tier);  // Lombardi
 [[nodiscard]] BenchmarkResult run_tvb31_10(Tier tier);  // energy-balance mobility
+[[nodiscard]] BenchmarkResult run_tvb31_11(Tier tier);  // Scharfetter lifetimes
+[[nodiscard]] BenchmarkResult run_tvb31_12(Tier tier);  // SRH
+[[nodiscard]] BenchmarkResult run_tvb31_13(Tier tier);  // Auger
+[[nodiscard]] BenchmarkResult run_tvb31_14(Tier tier);  // radiative
+[[nodiscard]] BenchmarkResult run_tvb31_15(Tier tier);  // trap occupancy and kinetics
+[[nodiscard]] BenchmarkResult run_tvb31_16(Tier tier);  // trap-band quadrature
 [[nodiscard]] BenchmarkResult run_tvb32();
 
 struct KnownFinding {

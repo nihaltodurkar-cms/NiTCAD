@@ -14,7 +14,7 @@ namespace NiTCAD::verify::benchmark {
 
 namespace {
 
-constexpr std::array<Benchmark, 20> shipped{{
+constexpr std::array<Benchmark, 26> shipped{{
     {"TVB-01", "Constants and thermal voltage against CODATA 2018", Tier::fast, [](Tier) { return run_tvb01(); }},
     {"TVB-02", "Fermi-Dirac integrals F_1/2, F_-1/2, F_3/2 and the inverse of F_1/2", Tier::fast,
      [](Tier) { return run_tvb02(); }},
@@ -40,6 +40,12 @@ constexpr std::array<Benchmark, 20> shipped{{
     {"TVB-31.08", "Canali field-dependent mobility", Tier::fast, &run_tvb31_08},
     {"TVB-31.09", "Lombardi surface mobility and its partials", Tier::fast, &run_tvb31_09},
     {"TVB-31.10", "Energy-balance carrier-temperature mobility and effective field", Tier::fast, &run_tvb31_10},
+    {"TVB-31.11", "Scharfetter doping-dependent lifetimes", Tier::fast, &run_tvb31_11},
+    {"TVB-31.12", "Shockley-Read-Hall recombination and its partials", Tier::fast, &run_tvb31_12},
+    {"TVB-31.13", "Auger recombination and its partials", Tier::fast, &run_tvb31_13},
+    {"TVB-31.14", "Radiative recombination and its partials", Tier::fast, &run_tvb31_14},
+    {"TVB-31.15", "Interface-trap occupancy and capture-emission rate", Tier::fast, &run_tvb31_15},
+    {"TVB-31.16", "Trap-band quadrature (trap_band_levels)", Tier::fast, &run_tvb31_16},
     {"TVB-32", "The consistency suite C1-C12 on the three TVR-1 decks", Tier::fast, [](Tier) { return run_tvb32(); }},
 }};
 

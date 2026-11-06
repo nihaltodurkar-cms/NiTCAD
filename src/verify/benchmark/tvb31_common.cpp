@@ -107,6 +107,11 @@ double* bound_field(physics::SemiconductorParameters& p, std::string_view bindin
     if (const int k = index_of(f, "dos_mass.valence"); k >= 0) return &p.dos_mass.valence[k];
     if (f == "bandgap_narrowing.E0_eV") return &p.bandgap_narrowing.E0_eV;
     if (f == "bandgap_narrowing.N0") return &p.bandgap_narrowing.N0;
+    if (f == "lifetime.tau_n0") return &p.lifetime.tau_n0;
+    if (f == "lifetime.tau_p0") return &p.lifetime.tau_p0;
+    if (f == "lifetime.N_ref") return &p.lifetime.N_ref;
+    if (f == "auger.Cn") return &p.auger.Cn;
+    if (f == "auger.Cp") return &p.auger.Cp;
     for (const auto& [name, c] : {std::pair{"electron_mobility.", &p.electron_mobility}, std::pair{"hole_mobility.", &p.hole_mobility}}) {
         if (!starts_with(f, name)) continue;
         const std::string_view g = f.substr(std::string_view(name).size());

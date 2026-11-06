@@ -8731,6 +8731,91 @@ perturbation. With the vector condition sums and a double Newton start before th
 0.61 s. All of `[tvb31]` takes 1.65 s in Release. That puts the Debug figure above the 8 s allowance (MI-Q9); the
 fast/full split is settled at close-out against the measured Debug time.
 
+**15.15 Step 5 as built: TVB-31.11–31.16, recombination and traps (2026-11-06).**
+
+Files:
+- `verify/reference/model_recombination.hpp`:
+  - the Scharfetter lifetime;
+  - SRH, Auger and radiative, each with dR/dn and dR/dp and the chain through E (E's partials are inputs);
+  - the trap kinetics of one level (f, 1 − f, U/N_t and four partials);
+  - the equilibrium occupancy;
+  - the trap-band density in closed form, D kT[ln(1 + e^−u_lo) − ln(1 + e^−u_hi)], and by adaptive Gauss–Kronrod (TC3).
+- `verify/benchmark/tvb31_recombination.cpp`: entries TVB-31.11–31.16. `bound_field` gains the lifetime and Auger
+  fields.
+- Tests: `tests/verify/reference/model_recombination_test.cpp`, `tests/verify/benchmark/tvb31_recombination_test.cpp`.
+
+Grids:
+- 31.12–31.15: n on the 1e-10–1e21 log grid (1985 points), with p = r·E/n for r ∈ {1e-6, 1, 1e6}. r = 1 gives the
+  zero. Points with p outside the range are `not_applicable`.
+- 31.12 and 31.13: the Boltzmann E and the Fermi–Dirac E of `statistics.hpp`.
+- 31.14: the four shipped non-zero B values. GaAs is also run with the Fermi–Dirac E, added after mutation (below).
+- 31.15:
+  - `fermi_occupancy` over x ∈ [−750, 750] in steps of ½, plus 0 and its neighbours; |x| > 745 is
+    `not_applicable`;
+  - the kinetics at levels τ ∈ {−20, 0, 20} × r, plus one level with dn1/dn and dp1/dp non-zero.
+- 31.16: four bands up to the gap, both densities. E_F runs −0.5..0.5 eV in 1/256 at 300 K, and T runs 200–500 K at
+  E_F 0 and 0.25 eV.
+
+L0:
+- **A defect in the first reference, fixed before any benchmark run.** The partials were first written by the bare
+  quotient rule, (A·D − B·C)/D², and that form cancels when one capture term dominates D. At n = 1e-10, p = 1e36 the
+  SRH terms agree to 1e-26 relative, below even double-double. The reference now uses the expanded forms, in which the
+  cancellation is symbolic:
+  - SRH: dR/dn = (τ_n p(p + n_ie) + τ_p(p n_ie + E) − E_n D)/D²;
+  - trap: df/dn = c_n(emp − n1′·occ)/D², and dU/dn = c_p(p + p1)·df/dn;
+  - and the mirrors of both for p.
+- Complex step is forward-mode differentiation of the formula as written, so it inherits the same cancellation. The
+  second method therefore differentiates algebraically equal value forms that are free of it:
+  - SRH as n/τ_n − [n τ_p(n + n_ie)/τ_n + n n_ie + E]/D, or its mirror, chosen by real parts;
+  - the smaller of f and 1 − f;
+  - U in its hole or electron capture form.
+- h is scaled to the input (1e-30|x|). At the default 1e-200 these small rates underflow in the imaginary part.
+- SRH agrees with the Brent root (TC5) of the capture–emission balance. The trap U agrees with c_n(n(1 − f) − n1·f).
+  f + (1 − f) = 1. The band closed form agrees with Gauss–Kronrod to 1e-26 relative plus the quadrature's estimate.
+
+Outcomes (Release):
+
+| Entry | Pass | Finding | Not applicable |
+|---|---|---|---|
+| 31.11 | 1028 | 3: τ_n0 and τ_p0 (L), N_ref (PC) | 2 |
+| 31.12 | 23646 | 1644: (viii) | 10440 |
+| 31.13 | 25292, incl. the 2 PB Auger rows (bit-equal) | 0 | 10440 |
+| 31.14 | 63225 | 0 | 26100 |
+| 31.15 | 101277 | 6305: (ix) | 40380 |
+| 31.16 | 2488: the 6-point Gauss–Legendre panels ≤ kT meet the value rule everywhere | 0 | 48 |
+
+- **(viii) and (ix), new (MI-Q15).** NiTCAD's `srh_recombination` and `trap_kinetics` form their partials by the bare
+  quotient rule, the form the reference had to drop. The miss is up to about 800 times the bound:
+  - SRH, at np/E = 1e6 from n ≈ 1.2e5, and marginally (1.3–1.7 times the bound) with the degenerate Fermi–Dirac E at
+    n ≥ 9e20;
+  - the trap partials, wherever f or 1 − f is near 1 or one capture term dominates.
+  The absolute errors are rounding of the shipped form, about ε times its terms.
+  - **MI-Q15.** (A) Record both as known findings, and propose the expanded forms separately (MI-Q10). (B) Leave
+    them failing.
+  - **Ruling (owner standing instruction, "choose recommended", 2026-11-06): A.**
+  - **Region, as built.** The first version used parameter regions: n ≥ 1e5 for SRH, and everywhere for the trap
+    partials. Mutation showed that "everywhere" absorbed real defects: a dropped dp1/dp factor became a finding. The
+    finding is now defined by its mechanism, inside the entry:
+    - a partial that misses the value rule is (viii) or (ix) only where |q_sim − q_ref| ≤ 64 ε T, with T =
+      (|A|·D + |B·C|)/D² the size of the shipped form's terms;
+    - a larger miss, such as a wrong term (of order T), stays a fail.
+    Every miss of the first run is within the floor. The pass criterion is unchanged (TVM2). The registry's
+    known-finding table stays at 25 entries, and the entries emit a stale note if their finding stops reproducing.
+
+Mutations:
+- 15 of `model_recombination.hpp`. 12 were caught on the first run. Two survivors were closed by new L0 checks: the
+  Scharfetter lifetime (exact at N = 0 and N_ref), and the trap U against its capture form. A sub-floor ×(1 + 1e-20)
+  on the band closed form is caught at 1e-12.
+- 19 of NiTCAD's `recombination.hpp/.cpp` and `interface_traps.hpp/.cpp`. 14 were caught on the first run (one by a
+  build failure, rerun in a compilable form and caught). The survivors:
+  - B(p − E_n) → B·p: 31.14 had only the Boltzmann E. GaAs's Fermi–Dirac case was added, and it is caught.
+  - Three mutants of the dn1/dn and dp1/dp terms were absorbed by the "everywhere" region. They are caught under the
+    floor rule above.
+  - A 1e-12 shift of the Gauss–Legendre nodes was sub-floor. It is caught at 1e-9.
+
+Cost (Release): 31.11–31.14 take 0.5 s, 31.15 0.4 s and 31.16 1.1 s, about 2 s in all. The fast/full split
+(MI-Q9) is settled at close-out.
+
 ---
 
 ## New questions the advisor raised (not yet in `ARCHITECTURE.md`)
