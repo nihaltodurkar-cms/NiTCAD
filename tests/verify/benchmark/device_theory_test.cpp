@@ -67,3 +67,16 @@ TEST_CASE("TVB-05: nothing in the fast tier", "[tvr4]") {
     REQUIRE_FALSE(r.run_error.has_value());
     REQUIRE(r.comparisons.empty());
 }
+
+// TVB-15 (minority diffusion with SRH, the TVQ3 hook's G) is E (linear model, low injection) + A (injection ladder),
+// full tier only (16.7): the order and finest accuracy of Delta n pass, and the departure's order in G and its
+// G -> 0 limit pass (16.8, 16.19).
+TEST_CASE("TVB-15: minority diffusion, full tier (frozen outcome: pass)", "[.tvr4_full]") {
+    require_all_pass(bench::run_tvb15(bench::Tier::full), 4);
+}
+
+TEST_CASE("TVB-15: nothing in the fast tier", "[tvr4]") {
+    const auto r = bench::run_tvb15(bench::Tier::fast);
+    REQUIRE_FALSE(r.run_error.has_value());
+    REQUIRE(r.comparisons.empty());
+}

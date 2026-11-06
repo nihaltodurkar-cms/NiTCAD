@@ -14,7 +14,7 @@ namespace NiTCAD::verify::benchmark {
 
 namespace {
 
-constexpr std::array<Benchmark, 43> shipped{{
+constexpr std::array<Benchmark, 44> shipped{{
     {"TVB-01", "Constants and thermal voltage against CODATA 2018", Tier::fast, [](Tier) { return run_tvb01(); }},
     {"TVB-02", "Fermi-Dirac integrals F_1/2, F_-1/2, F_3/2 and the inverse of F_1/2", Tier::fast,
      [](Tier) { return run_tvb02(); }},
@@ -27,6 +27,7 @@ constexpr std::array<Benchmark, 43> shipped{{
     {"TVB-11", "Uniform resistor with ohmic contacts", Tier::fast, [](Tier) { return run_tvb11(); }},
     {"TVB-12", "Scharfetter-Gummel constant-field exactness", Tier::fast, [](Tier) { return run_tvb12(); }},
     {"TVB-14", "Full drift-diffusion manufactured solution", Tier::fast, &run_tvb14},
+    {"TVB-15", "Neutral-region minority diffusion with SRH", Tier::full, &run_tvb15},
     {"TVB-31.01", "Legacy silicon band set: Varshni gap and power-law densities of states", Tier::fast,
      [](Tier) { return run_tvb31_01(); }},
     {"TVB-31.02", "Passler band gap (Couderc et al. 2014, eq (10), Table I)", Tier::fast,

@@ -9978,6 +9978,42 @@ are independent) is tested directly rather than argued.
 - Mutation: 16 mutants (2 models, 6 term, 5 validation, 3 transient), all caught. They include evaluating w at the step's start, dropping the restart, and `upper_bound` for `lower_bound`.
 - Suite: Release, the whole suite (`full` label and app tests excluded, −j 4): 174/174 pass.
 
+**16.26 Step 4 as built: minority_diffusion and TVB-15.**
+- `verify/reference/minority_diffusion` (PD, base-free):
+  - `srh_linear_inverse_lifetime`: 1/τ = (n₀ + p₀) / (τ_p(n₀ + n_ie) + τ_n(p₀ + n_ie)).
+  - `minority_green`: the Dirichlet Green's function of −D u'' + u/τ, in an overflow-free exponential form.
+  - `minority_excess`: the Green's-function integral of a Gaussian G, split at s = x, by qag15 in double-double to 0.5e-28.
+  - `minority_collocation` (the second method): 8 pieces of degree 40, patched in u and u′, as a dense double-double LU.
+- L0 tests (`verify.minority_diffusion`, 0.5 s in Debug):
+  - the lifetime against a double-double difference quotient of the full SRH rate (≤ 1e-14);
+  - the Green's function against its sinh form (≤ 64 u_dd), its symmetry and its derivative jump −1/D;
+  - the integral against the infinite-domain erfc closed form on a bar with kL = 200 (≤ 1e-25);
+  - the collocation against the integral (≤ 1e-22 of the peak), its tail estimate, and the throws.
+- TVB-15 (full tier only, 16.7):
+  - The bar: silicon, N_A = 1e16, L = 1 mm, ohmic ends, SRH only.
+  - G is a Gaussian, σ = 100 µm, at L/2, through the TVQ3 hook.
+  - Inputs (I1): D = μ_n V_T = 32.26 cm²/s and τ = 8.333e-6 s, giving a diffusion length of 164 µm.
+  - The reference: I3 agreement 2.0e-28 of the peak; U_ref 2.0e-28.
+  - **E (16.8): pass.** p̂ = 1.9993 (orders 1.9993, 1.9987, 1.9952; spread 0.0035). The finest error (N = 512) is 8.14e-6 against 1e-4. Max Δn/N_A = 5.0e-9 on every level (predicate 1e-8). U_iter ≤ 9.5e-16.
+  - **A (16.19): pass.** The injection ladder at N = 512, g₀ for a peak of 1e-3 N_A:
+    - the departure's order in G is 0.995 (then 0.990), in [0.8, 1.3];
+    - the G → 0 limit by Richardson differs from the E solve by 2.93e-6, within U_E = 1.02e-5 (U_disc by the finest pair's GCI, F_s = 1.25, + U_iter + U_ref);
+    - max Δn/N_A at 8 g₀ is 8.0e-3 (applicability 1e-1);
+    - the ladder's U_iter is ≤ 2.9e-15, below a tenth of the smallest difference (CV-Q8, applied to the ladder).
+  - The A record states its approximation error as measured (the `contract` rule for A).
+- Construction change before commit (no criterion or ladder touched, TVM2):
+  - The first build used L = 100 µm and σ = 10 µm. It passed all four comparisons (E 6.0e-6, p̂ 1.999; A order 0.997, limit 2.8e-6 within 7.6e-6).
+  - A mutation then showed that a bar shorter than the diffusion length barely depends on τ.
+  - The bar was lengthened to the spec's "long" (about 6 diffusion lengths, the same σ/L) and the run above was repeated.
+- Mutation:
+  - reference: 9 mutants, all caught. The tail-estimate mutant survived until the test asserted the estimate is computed.
+  - benchmark: 13 mutants, all caught, including τ × 1.01, D × 1.01, G × 1.001, the predicates, the limit bound, the ladder's CV-Q8 rule and the U_ref gate.
+  - One mutant, τ = τ_n in place of the linearization, survives. It is a relative 1e-6 change (n_ie/p₀), below the 1e-4 tolerance, so the benchmark cannot resolve it. This is recorded, not hidden.
+- Timing and suites:
+  - Release `verify_benchmark.tvr4_full` (TVB-05, TVB-06 2D, TVB-15) passes in 35.6 s, inside 16.7's 120 s.
+  - Debug serial verify passes, 63/63 in 71.7 s.
+  - `registry`: 44 benchmarks, TVB-15 in `full`.
+
 
 
 ---
