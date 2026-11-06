@@ -728,7 +728,8 @@ add_library(nitcad_verify_benchmark STATIC src/verify/benchmark/device_data.cpp
   src/verify/benchmark/tvb31_statistics.cpp
   src/verify/benchmark/tvb31_generation.cpp
   src/verify/benchmark/tvb31_tunnelling.cpp
-  src/verify/benchmark/tvb31_thermal.cpp)
+  src/verify/benchmark/tvb31_thermal.cpp
+  src/verify/benchmark/tvb31_materials.cpp)
 add_library(NiTCAD::verify_benchmark ALIAS nitcad_verify_benchmark)
 target_include_directories(nitcad_verify_benchmark PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
 target_link_libraries(nitcad_verify_benchmark PUBLIC NiTCAD::device NiTCAD::verify_consistency NiTCAD::deck
@@ -770,7 +771,8 @@ add_executable(nitcad_verify_benchmark_test
   tests/verify/benchmark/tvb31_statistics_test.cpp
   tests/verify/benchmark/tvb31_generation_test.cpp
   tests/verify/benchmark/tvb31_tunnelling_test.cpp
-  tests/verify/benchmark/tvb31_thermal_test.cpp)
+  tests/verify/benchmark/tvb31_thermal_test.cpp
+  tests/verify/benchmark/tvb31_materials_test.cpp)
 target_link_libraries(nitcad_verify_benchmark_test PRIVATE NiTCAD::verify_benchmark
   Catch2::Catch2WithMain)
 nitcad_add_file_tests(verify_benchmark nitcad_verify_benchmark_test)

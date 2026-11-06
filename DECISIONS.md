@@ -9117,6 +9117,168 @@ Reference mutants, against the L0 `[model_tunnelling],[model_thermal]`: 10, rest
   TC against κL√(V − E) and e^(−2S). Both mutants are now caught.
 - The L0 is 207 assertions in 8 cases.
 
+**15.19 Step 9: material tables, sources, criteria and rulings (frozen 2026-11-06, before code).**
+
+Sources read for 31.31 and the radiative coefficients:
+- The Ioffe NSM archive pages (http://www.ioffe.ru/SVA/NSM/Semicond/<material>/), read 2026-11-06 over plain
+  HTTP; the fetch tool refused the host's certificate chain.
+  - Ge, GaAs and GaInAs: `basic`, `bandstr`, `electric` and `thermal`.
+  - SiC: the same four, plus `ebasic` and `recombination`.
+  - AlGaAs: `basic`, `bandstr`, `ebasic` and `recomb`.
+- The values are typed into the register as printed. Highlights:
+
+  | Material | Printed values |
+  |---|---|
+  | Ge | ε 16.2; E_g = 0.742 − 4.8e-4 T²/(T + 235); N_c 1.0e19; N_v 5.0e18; χ 4.0; μ ≤ 3900 and ≤ 1900; μ_n ≈ 4.9e7 T^-1.66 and μ_p ≈ 1.05e9 T^-2.33; B 6.41e-14; Auger ~1e-30; P 0.013 and B 0.011 eV |
+  | GaAs | ε 12.9; E_g = 1.519 − 5.405e-4 T²/(T + 204); N_c 4.7e17; N_v 9.0e18; χ 4.07; μ ≤ 8500 and ≤ 400; B 7.2e-10 at 300 K (Varshni 1967); Auger ~1e-30; Si donor ~0.006 and C acceptor ~0.02 eV (Milnes 1973) |
+  | Ga₀.₄₇In₀.₅₃As | ε 13.9; E_g 0.74 eV (300 K), with Paul et al.'s E_g(x, T) and no Varshni pair; N_c 2.1e17; N_v 7.7e18; χ 4.5; μ < 12·10³ and < 300; B 0.96e-10; Auger 7e-29 |
+  | 4H-SiC | No ε of its own ("the value of 6H-SiC is usually used"); E_g 3.23 eV (300 K) and E_g(0) − 6.5e-4 T²/(T + 1300); N_c ≈ 3.25e15 T^(3/2) and N_v ≈ 4.8e15 T^(3/2); μ ≤ 900 and ≤ 120; longest lifetimes τ_p 6.0e-7 s (n-type) and τ_n 1e-9 s (p-type); B 1.5e-12; C_n 5.0e-31 and C_p 2.0e-31 (Galeskas 1997); κ 3.7 W/(cm K); density 3.211 g/cm³; specific heat 0.69 J/(g K) (6H, "usually used") |
+  | Al_xGa₁₋ₓAs | ε 12.90 − 2.84x; E_g 1.424 + 1.247x (x < 0.45, 300 K); N_c 2.5e19 (0.063 + 0.083x)^(3/2) (x < 0.41); N_v 2.5e19 (0.51 + 0.25x)^(3/2); χ 4.07 − 1.1x (x < 0.45); μ_n 8·10³ − 2.2·10⁴x + 10⁴x² (0 < x < 0.45); μ_p 370 − 970x + 740x²; B ~1.8e-10 |
+
+- Not printed there: Ge and GaAs saturation velocities (figures only); SiC's χ and its N and Al levels (the code
+  cites Ayalew's thesis, not read); any Canali β. These rows are grade L.
+
+Questions (owner standing instruction, "choose recommended", 2026-11-06; each ruled A before the first run):
+- **MI-Q23 (composition laws).** AlGaAs's fields are functions of x, and Ioffe prints them as laws in x.
+  - (A) Judge NiTCAD's `algaas_parameters(x)` at x = 0, 0.05, …, 0.45 against each printed law, evaluated in
+    double-double. The tolerance is the law's change for half a unit in the last printed digit of each coefficient,
+    summed: law_check's NPARC rule (11.5) carried to a polynomial, and for the (a + bx)^(3/2) forms by their
+    first-order sensitivity. Points beyond a law's printed range are not_applicable. The 300 K gap is judged as
+    NiTCAD's E_g(300 K) of the set.
+  - (B) Register the coefficients and compare them bit-equal. NiTCAD stores no coefficients, only the function.
+  - **Ruling: A.**
+- **MI-Q24 (grades of the Ioffe values).**
+  - (A) PA where NiTCAD's code cites the Ioffe database for that value, as it does for the radiative coefficients of
+    Ge, InGaAs, 4H-SiC and AlGaAs. Otherwise PC: one compilation, against the code's "handbook (Adachi)" or another
+    unread citation.
+  - A value printed with a qualifier is typed as its printed number, with the qualifier in the row's note: ~, ≤ and
+    < (a mobility bound is the lattice mobility, μ_max).
+  - (B) PC for all.
+  - **Ruling: A.**
+- **MI-Q25 ("every shipped set against the register").** A field of a non-silicon set counts as covered when one of
+  these holds:
+  - it has a 31.31 row;
+  - it is 0 (not modelled, or the default form);
+  - it is bit-equal to the legacy silicon value (inherited, and judged by that row).
+
+  A frozen test asserts that every field the resolver knows is covered, for Ge, GaAs, InGaAs and 4H-SiC.
+  AlGaAs's fields are GaAs's except those judged by MI-Q23.
+  - **Ruling: A.** (B) would list the uncovered fields without asserting.
+- **MI-Q26 (31.30's offset row).** Step 1's row "conduction_offset_eV" binds no shipped field: NiTCAD stores
+  χ_ox = 1.05, which is silicon's χ less Gehring's offset.
+  - (A) Rebind it as the χ_ox row. Its grade is L, because its input, silicon's χ 4.05, is L; Gehring's PA offset 3.0
+    goes in the note.
+  - Split the masses row into tunnel_mass_n and tunnel_mass_p, both tag C.
+  - Add L rows for SiO₂'s κ 0.014 and ρc 1.628, whose inputs were not read.
+  - (B) Leave the row unresolved (not_evaluated).
+  - **Ruling: A.** 31.30 had not run.
+
+Frozen expected outcomes (31.30, 31.31):
+- No run error, fail or not_evaluated.
+- Register rows:
+  - pass only where the grade is PA and the value matches: SiO₂'s gap, and the radiative coefficients of InGaAs,
+    4H-SiC and AlGaAs;
+  - Ge's PA radiative row is a finding (a register mismatch, 6.4e-14 against 6.41e-14);
+  - every other row is a finding (PC, L or C).
+- Composition comparisons: findings (PC). Not_applicable where x lies beyond a law's printed range (N_c above 0.41).
+- Coverage: no uncovered field.
+
+**15.19 as built (2026-11-06).**
+
+Files:
+- `verify/reference/model_parameters.hpp`:
+  - the 31.30 block revised by MI-Q26, now 7 rows;
+  - 86 rows for 31.31;
+  - the 7 AlGaAs `composition_laws`.
+- `tvb31_common`:
+  - `bound_field` resolves `radiative_cm3_s`;
+  - `shipped_value` resolves the four constant sets, SiO₂ (`insulator_value`) and AlGaAs's B;
+  - `non_silicon_sets()` and `field_names()` serve the coverage rule.
+- `verify/benchmark/tvb31_materials.cpp`: `run_tvb31_30` and `run_tvb31_31`.
+- `tests/verify/benchmark/tvb31_materials_test.cpp`.
+- The registry holds 41 benchmarks.
+
+Outcomes (Release, first run as frozen; under 0.1 s for the two):
+
+| Entry | Pass | Finding | Not applicable | Not evaluated |
+|---|---|---|---|---|
+| 31.30 | 1 (the gap 9.0, PA) | 6 (ε_r, χ_ox, κ, ρc: L; both masses: C, pinned and matching) | 0 | 0 |
+| 31.31 | 3 (B of InGaAs, 4H-SiC, AlGaAs: PA) | 152 | 1 (AlGaAs N_c at x = 0.45) | 0: every field is covered (MI-Q25) |
+
+31.31's 152 findings break down as follows.
+
+Printed values met: 21 PC rows.
+- Ge: ε, β, and both μ bounds.
+- GaAs: ε, E_g0, α, β, N_c, χ, both μ bounds, C_n (~1e-30) and B 7.2e-10.
+- InGaAs: ε, N_c, N_v and both μ bounds.
+- 4H-SiC: the hole μ bound 120 and κ 3.7.
+
+Printed values missed: 26 rows, NiTCAD's value against the printed one.
+
+| Material | Misses |
+|---|---|
+| Ge | E_g0 0.744 / 0.742; α 4.774e-4 / 4.8e-4 (NiTCAD's pair is Thurmond 1975's, not read); N_c 1.04e19 / 1.0e19; N_v 6.0e18 / 5.0e18; χ 4.13 / 4.0; T exponents −2.33 / −1.66 (electrons) and −2.23 / −2.33 (holes); Auger 2.8e-31 and 9.9e-32 / ~1e-30 (silicon's values carried over); P 0.012 / 0.013 eV; B 0.0104 / 0.011 eV; B_rad 6.4e-14 / 6.41e-14 (PA: a register mismatch in the coefficient the code cites Ioffe for) |
+| GaAs | N_v 7.0e18 / 9.0e18; C_p 1e-31 / ~1e-30; Si 0.0058 / ~0.006 and C 0.0263 / ~0.02 eV (NiTCAD cites PRB 43, 14734, not read) |
+| InGaAs | χ 4.55 / 4.5; Auger 1e-30 and 1e-31 / 7e-29 |
+| 4H-SiC | α 3.3e-4 / 6.5e-4 and β 0 / 1300 K (NiTCAD's own comment calls its Varshni pair "tuned only to E_g(300 K)"; with β = 0 it gives E_g(300 K) = 3.201 eV against the printed 3.23); μ_n bound 950 / 900; τ_n0 5e-7 / ~1e-9 and τ_p0 5e-7 / ~6.0e-7 (the longest measured lifetimes); Auger 2.8e-31 and 9.9e-32 / 5.0e-31 and 2.0e-31 (silicon's values carried over) |
+
+Other findings:
+- **L, 36 rows:** no value read, findings by MI-Q5.
+- **Composition laws, 69 points (PC):** 4 lie within the printed digits: ε, χ and μ_n at x = 0, and N_c at x = 0.15,
+  where the two curves cross. The other 65 do not. At x = 0.45:
+
+  | Quantity | NiTCAD | Ioffe's law |
+  |---|---|---|
+  | ε | 11.73 | 11.62 |
+  | E_g(300 K) | 1.9836 | 1.9852 (1.5 meV lower at every x: the GaAs Varshni E_g(300 K) is 1.4225 against the printed 1.424) |
+  | χ | 3.69 | 3.58 (the default share 0.68 against Ioffe's 0.88) |
+  | N_v | 6.1e18 | 1.23e19 (NiTCAD's slope falls, Ioffe's rises) |
+  | μ_n | 6025 | 125 |
+  | μ_p | 332 | 83 |
+
+  NiTCAD's own comment calls these scalings crude; their range, x ≤ 0.45, runs past Ioffe's N_c range x < 0.41 (the
+  Γ–X crossover).
+
+These are table findings (MI-Q10): they are reported, and none is fixed in TVR-3. The fix proposals go to the owner
+together:
+- Ge: the band set, Auger, and the dopant levels (two sources disagree: Ioffe against NiTCAD's uncited 12.0 / 10.4 meV).
+- GaAs: N_v.
+- InGaAs: χ and Auger.
+- 4H-SiC: the Varshni pair, the lifetimes and Auger.
+- AlGaAs: the composition laws.
+
+Their effect on results is material-specific, and silicon is untouched.
+
+Test tightening (after the first run, TVM2 allows it). A PC or L row is a finding whether it matches or not, so the
+frozen counts could not see a changed value. The test now pins the split in the table above:
+- 21 PC rows met and 25 missed;
+- 1 PA mismatch;
+- 36 L rows;
+- 4 law points met.
+
+L rows carry no value, so a change to an L-graded shipped value is invisible by design until a source is read.
+
+Mutations (after a green baseline; filter `TVB-31.30*,TVB-31.31*` on `nitcad_verify_benchmark_test`). There were
+11 one-literal changes to shipped values, each reverted by `git checkout`, and 10 were caught:
+- M01: Ge ε 16.2 → 16.3 (PC met → missed);
+- M02: GaAs N_v 7.0e18 → 9.0e18 (missed → met);
+- M03: InGaAs B (PA pass → finding);
+- M04: 4H-SiC κ;
+- M05: the SiO₂ gap (PA);
+- M06: the SiO₂ hole mass (tag C: the pin fails);
+- M07: AlGaAs ε slope 2.6 → 2.84 (law points met);
+- M09: Ge's hole N_ref (no row, ≠ silicon: coverage not_evaluated, MI-Q25);
+- M10: AlGaAs B (PA).
+
+**M08 survived:** AlGaAs N_c slope 0.5 → 0.6.
+- No point changes between met and missed. The one met point, x = 0.15, stays within its ±1.6e16 tolerance.
+- A law comparison is a finding (PC) either way, so it can only see a change that crosses the printed digits.
+- This is recorded as the limit of a PC law check, not closed by a regression pin on NiTCAD's own numbers (that would
+  be I0 evidence).
+
+`git status src/physics include/NiTCAD/physics` is clean afterwards.
+
+
 
 ---
 

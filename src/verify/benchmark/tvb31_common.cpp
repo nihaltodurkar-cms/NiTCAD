@@ -6,6 +6,7 @@
 
 #include "NiTCAD/physics/energy_balance.hpp"
 #include "NiTCAD/physics/impact_ionization.hpp"
+#include "NiTCAD/physics/insulator.hpp"
 #include "NiTCAD/physics/quantum_confinement.hpp"
 #include "NiTCAD/physics/ionization.hpp"
 #include "NiTCAD/physics/mobility.hpp"
@@ -106,6 +107,24 @@ std::optional<double> other_shipped_value(std::string_view binding) {
     return std::nullopt;
 }
 
+// SiO2: silicon_dioxide.* and silicon_dioxide_tunnelling.*.
+std::optional<double> insulator_value(std::string_view binding) {
+    for (const auto& [name, p] : {std::pair{std::string_view("silicon_dioxide."), &physics::silicon_dioxide_parameters},
+                                  std::pair{std::string_view("silicon_dioxide_tunnelling."),
+                                            &physics::silicon_dioxide_tunnelling_parameters}}) {
+        if (!starts_with(binding, name)) continue;
+        const std::string_view f = binding.substr(name.size());
+        if (f == "eps_r") return p->eps_r;
+        if (f == "band_gap_eV") return p->band_gap_eV;
+        if (f == "electron_affinity_eV") return p->electron_affinity_eV;
+        if (f == "tunnel_mass_n") return p->tunnel_mass_n;
+        if (f == "tunnel_mass_p") return p->tunnel_mass_p;
+        if (f == "thermal.conductivity_W_cmK") return p->thermal.conductivity_W_cmK;
+        if (f == "thermal.heat_capacity_J_cm3K") return p->thermal.heat_capacity_J_cm3K;
+    }
+    return std::nullopt;
+}
+
 }  // namespace
 
 double* bound_field(physics::SemiconductorParameters& p, std::string_view binding, std::string_view set) {
@@ -141,6 +160,7 @@ double* bound_field(physics::SemiconductorParameters& p, std::string_view bindin
     if (f == "impact_ionization.phonon_energy_eV") return &p.impact_ionization.phonon_energy_eV;
     if (f == "band_to_band.A_per_cm3_s") return &p.band_to_band.A_per_cm3_s;
     if (f == "band_to_band.B_V_per_cm") return &p.band_to_band.B_V_per_cm;
+    if (f == "radiative_cm3_s") return &p.radiative_cm3_s;
     if (f == "thermal.conductivity_W_cmK") return &p.thermal.conductivity_W_cmK;
     if (f == "thermal.conductivity_exponent") return &p.thermal.conductivity_exponent;
     if (f == "thermal.heat_capacity_J_cm3K") return &p.thermal.heat_capacity_J_cm3K;
@@ -172,6 +192,12 @@ std::optional<double> shipped_value(std::string_view binding) {
     physics::SemiconductorParameters si = physics::silicon_parameters;
     if (const double* v = bound_field(legacy, binding, "legacy_silicon")) return *v;
     if (const double* v = bound_field(si, binding, "silicon")) return *v;
+    for (const auto& [set, params] : non_silicon_sets()) {
+        physics::SemiconductorParameters p = params;
+        if (const double* v = bound_field(p, binding, set)) return *v;
+    }
+    if (const auto v = insulator_value(binding)) return v;
+    if (binding == "algaas.radiative_cm3_s") return physics::algaas_parameters(0.0)->radiative_cm3_s;
     if (const auto v = other_shipped_value(binding)) return v;
     return std::nullopt;
 }
@@ -313,6 +339,71 @@ int per_decade(Tier) { return 64; }
 
 Predicate in_range(std::string name, double value, double lo, double hi) {
     return Predicate{std::move(name), value, value < lo ? lo : hi, value >= lo && value <= hi};
+}
+
+}  // namespace NiTCAD::verify::benchmark::tvb31
+
+namespace NiTCAD::verify::benchmark::tvb31 {
+
+std::array<NamedSet, 4> non_silicon_sets() {
+    return {NamedSet{"germanium", physics::germanium_parameters},
+            NamedSet{"gallium_arsenide", physics::gallium_arsenide_parameters},
+            NamedSet{"indium_gallium_arsenide", physics::indium_gallium_arsenide_parameters},
+            NamedSet{"silicon_carbide_4h", physics::silicon_carbide_4h_parameters}};
+}
+
+std::vector<std::string_view> field_names() {
+    std::vector<std::string_view> f{"eps_r",
+                                    "Eg0_eV",
+                                    "varshni_alpha_eV_per_K",
+                                    "varshni_beta_K",
+                                    "Nc300",
+                                    "Nv300",
+                                    "electron_affinity_eV",
+                                    "passler_gap.alpha_eV_per_K",
+                                    "passler_gap.Theta_K",
+                                    "passler_gap.Delta",
+                                    "dos_mass.conduction[0]",
+                                    "dos_mass.conduction[1]",
+                                    "dos_mass.conduction[2]",
+                                    "dos_mass.conduction[3]",
+                                    "dos_mass.valence[0]",
+                                    "dos_mass.valence[1]",
+                                    "dos_mass.valence[2]",
+                                    "dos_mass.valence[3]",
+                                    "bandgap_narrowing.E0_eV",
+                                    "bandgap_narrowing.N0",
+                                    "lifetime.tau_n0",
+                                    "lifetime.tau_p0",
+                                    "lifetime.N_ref",
+                                    "auger.Cn",
+                                    "auger.Cp",
+                                    "impact_ionization.electron.A",
+                                    "impact_ionization.electron.B",
+                                    "impact_ionization.hole.A_low",
+                                    "impact_ionization.hole.B_low",
+                                    "impact_ionization.hole.A_high",
+                                    "impact_ionization.hole.B_high",
+                                    "impact_ionization.hole.switch",
+                                    "impact_ionization.phonon_energy_eV",
+                                    "band_to_band.A_per_cm3_s",
+                                    "band_to_band.B_V_per_cm",
+                                    "radiative_cm3_s",
+                                    "thermal.conductivity_W_cmK",
+                                    "thermal.conductivity_exponent",
+                                    "thermal.heat_capacity_J_cm3K",
+                                    "ionization.donor_eV",
+                                    "ionization.acceptor_eV",
+                                    "ionization.donor_degeneracy",
+                                    "ionization.acceptor_degeneracy"};
+    static const std::array<std::string_view, 14> carriers{
+        "electron_mobility.mu_min",  "electron_mobility.mu_max",         "electron_mobility.N_ref",
+        "electron_mobility.alpha",   "electron_mobility.T_exponent",     "hole_mobility.mu_min",
+        "hole_mobility.mu_max",      "hole_mobility.N_ref",              "hole_mobility.alpha",
+        "hole_mobility.T_exponent",  "electron_saturation.v_sat_cm_s",   "electron_saturation.beta",
+        "hole_saturation.v_sat_cm_s", "hole_saturation.beta"};
+    f.insert(f.end(), carriers.begin(), carriers.end());
+    return f;
 }
 
 }  // namespace NiTCAD::verify::benchmark::tvb31

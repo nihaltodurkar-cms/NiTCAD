@@ -94,8 +94,20 @@ template <std::size_t N, class F>
 [[nodiscard]] double* bound_field(physics::SemiconductorParameters& p, std::string_view binding,
                                   std::string_view set);
 
-// The shipped value of a binding: legacy_silicon_parameters or silicon_parameters.
+// The shipped value of a binding: legacy_silicon_parameters, silicon_parameters, a non-silicon set, SiO2 or
+// another shipped constant.
 [[nodiscard]] std::optional<double> shipped_value(std::string_view binding);
+
+// The non-silicon constant sets by register name (15.19): germanium, gallium_arsenide, indium_gallium_arsenide,
+// silicon_carbide_4h.
+struct NamedSet {
+    std::string_view name;
+    physics::SemiconductorParameters params;
+};
+[[nodiscard]] std::array<NamedSet, 4> non_silicon_sets();
+
+// Every field name bound_field resolves (the coverage rule of 15.19, MI-Q25).
+[[nodiscard]] std::vector<std::string_view> field_names();
 
 // `base` (the shipped set named `set`) with the printed register values of `entries` written over their fields.
 [[nodiscard]] physics::SemiconductorParameters register_parameters(physics::SemiconductorParameters base,
