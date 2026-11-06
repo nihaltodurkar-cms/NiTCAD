@@ -20,8 +20,9 @@
 //   - e^v / |e^v - 1| x Delta phi / V_T, Delta phi the larger quasi-Fermi drop between the edges;
 //   - short base only: 3 L_D / W' (the edge's definition), the larger side.
 // U_num = U_disc (Roache's three-grid GCI on N = 1024, 512, 256, F_s = 1.25, with the measured ratios;
-// not estimated outside the asymptotic range: the orders of 1024-512-256 and 512-256-128 within 0.1, 4.2, DT-Q26 A) + the
-// resolution + |eps_int| (the (h, tol) factorial at N = 1024: N = 2048, tol = 1e-12 and 1e-14; 16.2 (p)).
+// not estimated outside the asymptotic range: the orders of 1024-512-256 and 512-256-128 within 0.1, 4.2, DT-Q26 A),
+// or the two-grid estimate on N = 2048, 1024 (F_s = 3, p_th = 2) where the order on 2048-1024-512 is within 2 +- 0.5
+// (DT-Q28 B, DT-Q32 A); the larger; not estimated where neither) + the resolution + |eps_int| (the (h, tol) factorial at N = 1024: N = 2048, tol = 1e-12 and 1e-14; 16.2 (p)).
 // U_ref = the SNS second-method difference + its quadrature estimate (+ the double's rounding).
 // Derivatives (DT-Q24 A), between consecutive biases: the ideality n = Delta V / (V_T Delta ln J) (forward) and, in
 // (ii), the reverse exponent x = Delta ln|J| / Delta ln(V_bi - V). |x_sim - x_ref| <= U_num,x + U_ref,x + eps_x, with
@@ -219,11 +220,10 @@ std::expected<std::vector<Point>, std::string> solve_level(const Config& c, int 
     return out;
 }
 
-// U_disc by the shared rule (registry.hpp's u_disc: DT-Q26 A, DT-Q28 B), with the orders and the reason.
-std::optional<double> disc_of(const double h[4], const double f[4], double h_half, double f_half, double e_h,
-                              double e_h_half, double& order, double& order2, std::string& how) {
-    const Discretization d = u_disc(std::span<const double, 4>(h, 4), std::span<const double, 4>(f, 4), h_half, f_half,
-                                    e_h, e_h_half);
+// U_disc by the shared rule (registry.hpp's u_disc: DT-Q26 A, DT-Q28 B, DT-Q32 A), with the orders and the reason.
+std::optional<double> disc_of(const double h[4], const double f[4], double h_half, double f_half, double& order,
+                              double& order2, std::string& how) {
+    const Discretization d = u_disc(std::span<const double, 4>(h, 4), std::span<const double, 4>(f, 4), h_half, f_half);
     order = d.order;
     order2 = d.order_coarse;
     how = d.how;
@@ -313,7 +313,7 @@ BenchmarkResult run_tvb16(Tier tier) {
         // The ladder (finest first) and the factorial's three extra states.
         std::vector<std::vector<Point>> lv;
         double hs[4];
-        const double h_factorial = 2.0 / (factorial_N - 1);  // the two-grid pair's h/2 (DT-Q28 B)
+        const double h_factorial = 2.0 / (factorial_N - 1);  // the two-grid pair's h/2 (DT-Q28 B, DT-Q32 A)
         for (int k = 0; k < 4; ++k) {
             const auto s = solve_level(c, ladder[k], tol_newton, refs, VT, false);
             if (!s) {
@@ -350,7 +350,7 @@ BenchmarkResult run_tvb16(Tier tier) {
             double p = 0.0, p2 = 0.0;
             std::string why_d;
             const auto e = [&](double J) { return J / Jref - 1.0; };
-            const auto ud = disc_of(hs, f, h_factorial, fac[1][b].J, e(fine.J), e(fac[1][b].J), p, p2, why_d);
+            const auto ud = disc_of(hs, f, h_factorial, fac[1][b].J, p, p2, why_d);
             const std::vector<double> parts{ud ? *ud / std::abs(Jref) : 0.0, fine.res / std::abs(Jref)};
             const Factorial fc = factorial(e(fine.J), e(fac[0][b].J), e(fac[1][b].J), e(fac[2][b].J), parts);
             std::string stalled;
@@ -405,7 +405,7 @@ BenchmarkResult run_tvb16(Tier tier) {
                 double p = 0.0, p2 = 0.0;
                 std::string why_d;
                 const double x_h2 = x_of(fac[1][a].J, fac[1][z].J);
-                const auto ud = disc_of(hs, f, h_factorial, x_h2, x_sim - x_ref, x_h2 - x_ref, p, p2, why_d);
+                const auto ud = disc_of(hs, f, h_factorial, x_h2, p, p2, why_d);
                 const double res_x =
                     share * (lv[0][a].res / std::abs(lv[0][a].J) + lv[0][z].res / std::abs(lv[0][z].J));
                 const std::vector<double> parts{ud ? *ud : 0.0, res_x};

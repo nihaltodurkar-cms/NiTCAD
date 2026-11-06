@@ -204,69 +204,80 @@ TEST_CASE("registry: the (h, tol) factorial and its block on an E pass", "[regis
     CHECK_FALSE(benchmark::factorial(1.0, 1.0, 1.0, 1.0, std::vector<double>{INFINITY}).ok);
 }
 
-// The shared U_disc rule (DECISIONS 4.2, 4.3; Unit 55 DT-Q26 A, DT-Q28 B) on exact sequences f(h) = c + a h^p.
+// The shared U_disc rule (DECISIONS 4.2, 4.3; Unit 55 DT-Q26 A, DT-Q28 B, DT-Q32 A) on exact sequences f(h) = c + a h^p.
 TEST_CASE("registry: U_disc, the in-range GCI and the two-grid fallback", "[registry]") {
     const double c = 1.0, a = 1e-3, h0 = 0.01;
     const std::array<double, 4> h{h0, 2 * h0, 4 * h0, 8 * h0};
     const auto quad = [&](double x) { return c + a * x * x; };
+    // f(h/2) giving the finest triple (h/2, h, 2h) the observed order q: f0 - f(h/2) = (f1 - f0) / 2^q.
+    const auto half_for = [&](double q) { return quad(h0) - 3.0 * a * h0 * h0 / std::pow(2.0, q); };
+    const double tol = 1e-8 * a * h0 * h0;  // f ~ 1 + 1e-7: the differences keep ~8 digits
     // Order 2 everywhere: GCI = 1.25 |f1 - f0| / 3 = 1.25 a h0^2; two-grid = 3 |f(h/2) - f0| 4/3 = 3 a h0^2.
     {
         const std::array<double, 4> f{quad(h[0]), quad(h[1]), quad(h[2]), quad(h[3])};
-        const auto d = bench::u_disc(h, f, h0 / 2, quad(h0 / 2), quad(h0) - c, quad(h0 / 2) - c);
+        const auto d = bench::u_disc(h, f, h0 / 2, quad(h0 / 2));
         REQUIRE(d.u.has_value());
-        CHECK(std::abs(d.order - 2.0) <= 1e-9);
-        CHECK(std::abs(d.order_coarse - 2.0) <= 1e-9);
-        CHECK(std::abs(*d.u - 3.0 * a * h0 * h0) <= 1e-8 * a * h0 * h0);  // f ~ 1 + 1e-7: the differences keep ~8 digits
+        CHECK(std::abs(d.order - 2.0) <= 1e-6);
+        CHECK(std::abs(d.order_coarse - 2.0) <= 1e-6);
+        CHECK(std::abs(d.order_fine - 2.0) <= 1e-6);
+        CHECK(std::abs(*d.u - 3.0 * a * h0 * h0) <= tol);
         CHECK(d.how == "two-grid (> GCI)");
-        // The ratio outside 0.25 +- 0.05 (errors halving): only the GCI is kept.
-        const auto g = bench::u_disc(h, f, h0 / 2, quad(h0 / 2), 1e-3, 0.5e-3);
+        // The finest triple at order 1 (f(h/2) off the h^2 line): only the GCI is kept.
+        const auto g = bench::u_disc(h, f, h0 / 2, half_for(1.0));
         REQUIRE(g.u.has_value());
-        CHECK(std::abs(*g.u - 1.25 * a * h0 * h0) <= 1e-8 * a * h0 * h0);  // f ~ 1 + 1e-7: the differences keep ~8 digits
-        CHECK(g.how.rfind("GCI; two-grid: e(h/2)/e(h) 0.5 outside", 0) == 0);
-        // No error at h: no two-grid.
-        CHECK(bench::u_disc(h, f, h0 / 2, quad(h0 / 2), 0.0, 0.0).how.rfind("GCI; two-grid", 0) == 0);
+        CHECK(std::abs(g.order_fine - 1.0) <= 1e-6);
+        CHECK(std::abs(*g.u - 1.25 * a * h0 * h0) <= tol);
+        CHECK(g.how.rfind("GCI; two-grid: finest-triple order 1", 0) == 0);
+        // At order 3: not kept either.
+        CHECK(bench::u_disc(h, f, h0 / 2, half_for(3.0)).how.rfind("GCI; two-grid: finest-triple order 3", 0) == 0);
+        // f(h/2) past f(h)'s side of the limit: the finest triple oscillates.
+        const auto o = bench::u_disc(h, f, h0 / 2, quad(h0) + a * h0 * h0);
+        CHECK(o.how == "GCI; two-grid: the finest triple oscillates or has no positive order");
     }
-    // Order 2 on the finest triple, a coarsest level off the h^2 line: out of range; with a bad ratio, nothing.
+    // Order 2 on the finest triples, a coarsest level off the h^2 line: out of range; the two-grid estimate stands in.
     {
         const std::array<double, 4> f{quad(h[0]), quad(h[1]), quad(h[2]), c + 2.0 * a * h[3] * h[3]};
-        const auto d = bench::u_disc(h, f, h0 / 2, quad(h0 / 2), 1e-3, 0.5e-3);
+        const auto e = bench::u_disc(h, f, h0 / 2, quad(h0 / 2));
+        REQUIRE(e.u.has_value());
+        CHECK(std::abs(*e.u - 3.0 * a * h0 * h0) <= tol);
+        CHECK(e.how.rfind("two-grid; outside the asymptotic range (orders 2", 0) == 0);
+        // With the finest triple at order 1 as well: nothing.
+        const auto d = bench::u_disc(h, f, h0 / 2, half_for(1.0));
         CHECK_FALSE(d.u.has_value());
         CHECK(d.how.rfind("outside the asymptotic range (orders 2", 0) == 0);
-        CHECK(d.how.find("; two-grid: e(h/2)/e(h) 0.5") != std::string::npos);
-        // With a ratio of 1/4 the two-grid estimate stands in.
-        const auto e = bench::u_disc(h, f, h0 / 2, quad(h0 / 2), 1e-3, 0.25e-3);
-        REQUIRE(e.u.has_value());
-        CHECK(std::abs(*e.u - 3.0 * a * h0 * h0) <= 1e-8 * a * h0 * h0);  // f ~ 1 + 1e-7: the differences keep ~8 digits
-        CHECK(e.how.rfind("two-grid; outside the asymptotic range", 0) == 0);
+        CHECK(d.how.find("; two-grid: finest-triple order 1") != std::string::npos);
     }
     // Orders 2 and about 2.3 (the coarsest level 30 % further off): outside 0.1, though within 1.
     {
         const std::array<double, 4> f{quad(h[0]), quad(h[1]), quad(h[2]), c + 1.3 * a * h[3] * h[3]};
-        const auto d = bench::u_disc(h, f, h0 / 2, quad(h0 / 2), 1e-3, 0.5e-3);
+        const auto d = bench::u_disc(h, f, h0 / 2, half_for(1.0));
         CHECK(d.order_coarse - d.order > 0.1);
         CHECK(d.order_coarse - d.order < 1.0);
         CHECK_FALSE(d.u.has_value());
         CHECK(d.how.rfind("outside the asymptotic range", 0) == 0);
     }
-    // A ratio just outside the band (0.31): not kept; just inside (0.29): kept.
+    // The band's edges: orders 1.45 and 2.55 not kept, 1.55 and 2.45 kept, at 4 |f(h/2) - f0|.
     {
-        const std::array<double, 4> f{1.0, 1.1, 1.05, 1.2};  // no three-grid estimate
-        CHECK_FALSE(bench::u_disc(h, f, h0 / 2, 1.0, 1e-3, 0.31e-3).u.has_value());
-        CHECK(bench::u_disc(h, f, h0 / 2, 1.0, 1e-3, 0.29e-3).u.has_value());
-        CHECK(bench::u_disc(h, f, h0 / 2, 1.0, 1e-3, 0.21e-3).u.has_value());
-        CHECK_FALSE(bench::u_disc(h, f, h0 / 2, 1.0, 1e-3, 0.19e-3).u.has_value());
+        const std::array<double, 4> f{quad(h[0]), quad(h[1]), quad(h[2]), quad(h[1])};  // no three-grid estimate
+        CHECK_FALSE(bench::u_disc(h, f, h0 / 2, half_for(1.45)).u.has_value());
+        CHECK_FALSE(bench::u_disc(h, f, h0 / 2, half_for(2.55)).u.has_value());
+        for (const double q : {1.55, 2.45}) {
+            const auto d = bench::u_disc(h, f, h0 / 2, half_for(q));
+            REQUIRE(d.u.has_value());
+            CHECK(std::abs(*d.u - 4.0 * 3.0 * a * h0 * h0 / std::pow(2.0, q)) <= tol);
+        }
     }
     // The coarser triple oscillates: no order there.
     {
         const std::array<double, 4> f{quad(h[0]), quad(h[1]), quad(h[2]), quad(h[1])};
-        const auto d = bench::u_disc(h, f, h0 / 2, quad(h0 / 2), 1e-3, 0.5e-3);
+        const auto d = bench::u_disc(h, f, h0 / 2, half_for(1.0));
         CHECK_FALSE(d.u.has_value());
         CHECK(d.how.rfind("asymptotic check: no order on the coarser triple", 0) == 0);
     }
-    // The finest triple oscillates.
+    // The finest triple of the ladder oscillates.
     {
         const std::array<double, 4> f{1.0, 1.1, 1.05, 1.2};
-        const auto d = bench::u_disc(h, f, h0 / 2, 1.0, 1e-3, 0.5e-3);
+        const auto d = bench::u_disc(h, f, h0 / 2, 1.0);
         CHECK_FALSE(d.u.has_value());
         CHECK(d.how.rfind("GCI: oscillatory or a non-positive order", 0) == 0);
     }

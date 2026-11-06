@@ -10406,6 +10406,36 @@ are independent) is tested directly rather than argued.
 **Recommendation: A.** A 2.7 % capacitance difference that grows with bias is either a reference term missing at forward bias or a NiTCAD defect. Both matter commercially, and the two are distinguishable from charges already on hand.
 
 
+**16.37 DT-Q32 A and DT-Q33 A (authorized: owner "go ahead", 2026-11-06, in reply to "authorize DT-Q32 A, DT-Q33 A"); TVB-16 re-frozen; the C_j excess explained. DT-Q34 open.**
+- **DT-Q32 A applied** (a post-run change, authorized as above). The shared `u_disc` now gates the two-grid estimate on the discretization itself: the observed order on N = 2048/1024/512 (the factorial's (h/2, tol) state and ladder levels 0, 1), within 2 +- 0.5, with differences of one sign. The rest of DT-Q28 B is unchanged (F_s = 3, p_th = 2, the larger of the two, nothing where neither is kept). `u_disc` takes no reference errors any more; `Discretization` gains `order_fine`.
+  - `registry_test`'s U_disc case is rewritten for the gate: exact order 2 gives the two-grid estimate; finest-triple orders 1 and 3 are not kept; an oscillating finest triple; band edges 1.45/1.55/2.45/2.55; the spread cases. 50 assertions pass.
+- **TVB-16 rerun and re-frozen as found:** 19 pass, 3 findings (x), 19 not_evaluated.
+  - The 3 findings are J (ii) long base at 0.5 V and 0.6 V and the ideality between them: the series-resistance finding, as DT-Q27 A intended.
+  - The not_evaluated points: the finest-triple order outside 2 +- 0.5 (0.65–4.9) or oscillating, with the three-grid GCI also out of range; or a factorial state not reached.
+  - The frozen case pins the 19 bounds to 1e-6.
+- **TVB-18 rerun:** 51 pass, 1 fail, 11 not_evaluated.
+  - The fail is |Y| at 0.45 V, ωτ = 100: 1.53e-2 against a bound of 1.29e-2.
+  - The not_evaluated points are all at 0.35 V: 8 |Y| and Re Y points whose differences change sign, and 3 arg Y points whose bound takes |Y|'s U_num.
+  - The frozen case ("every comparison passes") is unchanged and still fails. It is not re-frozen pending DT-Q34. `tvr4_full` fails on TVB-18 only. The default verify suite passes, 68 of 68 outside `tvr4_full`.
+- **DT-Q33 A, the investigation** (a temporary diagnostic, reverted; no criterion changed). Using NiTCAD's own quasi-static (f = 0) small-signal fields at N = 1024 and 2048, 0.1–0.45 V:
+  - **The depletion charge agrees.** −dQ_n/dV, the n half's net charge response (depletion plus tail), equals qe_junction's C_j to about 1e-4. The excess is not in the QE charge.
+  - **The base storage agrees.** The minority storage in each base, times the short base's 2/3, matches the reference's Im(Y_fixed + Y_edge)/ω.
+  - **The cause.** The terminal current at x = 0 is exactly iωC_j + J_n(0) + J_p(0). The reference takes the minority currents at the depletion edges, x_p and x_n, not at x = 0. So it omits the minority carriers stored inside the depletion region, C_SCR = q(∫_0^x_n ∂p/∂V dx + ∫_x_p^0 ∂n/∂V dx). Its in-phase counterpart, the SNS recombination, is in ε_Y; this quadrature term is not.
+  - **The measure.** At N = 2048, (Im Y_sim/ω − C_ref,total) / C_SCR is 1.021, 1.008, 1.002 and 0.9996 at 0.30, 0.35, 0.40 and 0.45 V. At lower bias the residual is a few 1e-12 F/cm², and it falls with h: 1.31 → 1.09 at 0.1 → 0.2 V for N = 2048, against 2.14 and 1.33 at N = 1024.
+  - So the excess is a term the reference omits, not a NiTCAD defect. C_SCR / C_j is 0.64 %, 1.29 % and 2.70 % at 0.35, 0.40 and 0.45 V.
+
+**DT-Q34 (the depletion region's minority storage, missing from TVB-18's reference).**
+- (A) **Reference correction:** add iωC_SCR to the reference.
+  - C_SCR is computed in the QE model, in double-double: p and n are referred to the flat quasi-Fermi levels, x(u) comes from the first integral by quadrature, and the integrals run between the charge-balance edges and the metallurgical junction.
+  - The second method is complex step on the same integrals, with admittance_test cases.
+  - A post-run change to the reference; needs your **authorize**. TVB-18 would then be frozen as found after one rerun.
+- (B) Add C_SCR/C_j to ε_Y as a named approximation term (a post-run widening; needs **authorize**).
+- (C) Keep the reference; record a known finding on TVB-18 |Y| at forward bias where C_SCR decides the outcome (the one point), with this cause.
+
+**Recommendation: A.** The term is physical and computable in the same QE model. Adding it tightens the check of NiTCAD instead of widening a bound, and the diagnostic shows NiTCAD agrees with it to under 1 % at 0.35–0.45 V.
+
+**Not done yet** (after DT-Q34): freeze TVB-18 and run its mutants ("TVB-18*"); the mutants of the new gate ([registry]) and "TVB-16*"; then step 8 (TVB-10).
+
 ---
 
 ## New questions the advisor raised (not yet in `ARCHITECTURE.md`)

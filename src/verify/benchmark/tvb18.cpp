@@ -1,5 +1,6 @@
 // TVB-18, the diode's small-signal admittance at forward bias (DECISIONS Unit 55 §6, 16.2 (l), 16.4; A-class criteria
-// 16.18 (g), 16.19, frozen; DT-Q16, DT-Q26 A, DT-Q28 B; construction and DT-Q29 A, DT-Q30 A, DT-Q31 A, 16.34-16.35).
+// 16.18 (g), 16.19, frozen; DT-Q16, DT-Q26 A, DT-Q28 B, DT-Q32 A; construction and DT-Q29 A, DT-Q30 A, DT-Q31 A,
+// 16.34-16.37).
 //
 // Code under test: the drift-diffusion operating point and solve_small_signal on TVB-16's (ii) short diode: abrupt
 // 1D silicon, N_A = 1e16 cm^-3 (x < 0, the anode at x_min) and N_D = 2e16 cm^-3, 5 um per side, ohmic contacts,
@@ -17,9 +18,9 @@
 // (DT-Q25 A) + J_SNS / J_diff + 3 L_D / |L_eff|] (16.18 (g)), the larger base's L_D / |L_eff|, measured on the
 // N = 1024 state. Applicable (else NOT APPLICABLE): |L_eff| >= 30 L_D on both bases and eps_Y <= 0.1 |Y_ref|.
 // U_num per quantity = U_disc (DT-Q26 A, DT-Q28 B: the in-range three-grid GCI on 1024-512-256 with the asymptotic
-// check on 512-256-128, and the two-grid estimate on N = 2048, 1024 with F_s = 3, p_th = 2 where e(h/2)/e(h) is within
-// 0.25 +- 0.05; the larger; not estimated where neither) + the admittance resolution + |eps_int| (the (h, tol)
-// factorial at N = 1024: N = 2048, tol = 1e-12 and 1e-14). U_ref = the Riccati second-method difference + w |C_j -
+// check on 512-256-128, and the two-grid estimate on N = 2048, 1024 with F_s = 3, p_th = 2 where the order observed on
+// 2048-1024-512 is within 2 +- 0.5 (DT-Q32 A); the larger; not estimated where neither) + the admittance resolution
+// + |eps_int| (the (h, tol) factorial at N = 1024: N = 2048, tol = 1e-12 and 1e-14). U_ref = the Riccati second-method difference + w |C_j -
 // C_j,complex step| (+ the double's rounding).
 #include <algorithm>
 #include <cmath>
@@ -64,7 +65,7 @@ ReferenceInfo info() {
     r.independence = Independence::I1;
     r.provenance = Provenance::PA;
     r.citation = "Shockley, BSTJ 28 (1949) eq 4.23 (the finite base and the edges' motion derived, PD)";
-    r.version = "DECISIONS Unit 55 16.2 (l), 16.3, 16.18 (g), 16.19, 16.34, 16.35; DT-Q28 B, DT-Q29-Q31 A";
+    r.version = "DECISIONS Unit 55 16.2 (l), 16.3, 16.18 (g), 16.19, 16.34, 16.35, 16.37; DT-Q28 B, DT-Q29-Q31 A, DT-Q32 A";
     r.equations = {1, 2, 3, 7};
     r.form = "Y = sum q D n0 e^v / V_T kappa coth(kappa W') + edge motion + i w C_j, kappa = sqrt((1/tau + i w) / D)";
     r.assumptions = {"low injection (measured)", "quasi-equilibrium across the depletion region (measured)",
@@ -194,11 +195,10 @@ std::expected<std::vector<Point>, std::string> solve_level(int N, double tol, co
     return out;
 }
 
-// U_disc by the shared rule (registry.hpp's u_disc: DT-Q26 A, DT-Q28 B), with the orders and the reason.
-std::optional<double> disc_of(const double h[4], const double f[4], double h_half, double f_half, double e_h,
-                              double e_h_half, double& order, double& order2, std::string& how) {
-    const Discretization d = u_disc(std::span<const double, 4>(h, 4), std::span<const double, 4>(f, 4), h_half, f_half,
-                                    e_h, e_h_half);
+// U_disc by the shared rule (registry.hpp's u_disc: DT-Q26 A, DT-Q28 B, DT-Q32 A), with the orders and the reason.
+std::optional<double> disc_of(const double h[4], const double f[4], double h_half, double f_half, double& order,
+                              double& order2, std::string& how) {
+    const Discretization d = u_disc(std::span<const double, 4>(h, 4), std::span<const double, 4>(f, 4), h_half, f_half);
     order = d.order;
     order2 = d.order_coarse;
     how = d.how;
@@ -333,7 +333,7 @@ BenchmarkResult run_tvb18(Tier tier) {
                 const double q_h2 = q_of(fac[1][b].Y[k]);
                 double p = 0.0, p2 = 0.0;
                 std::string how;
-                const auto ud = disc_of(hs, f, h_factorial, q_h2, q_sim - q_ref, q_h2 - q_ref, p, p2, how);
+                const auto ud = disc_of(hs, f, h_factorial, q_h2, p, p2, how);
                 const std::vector<double> parts{ud ? *ud : 0.0, res_q};
                 const Factorial fc = factorial(q_sim - q_ref, q_of(fac[0][b].Y[k]) - q_ref, q_h2 - q_ref,
                                                q_of(fac[2][b].Y[k]) - q_ref, parts);

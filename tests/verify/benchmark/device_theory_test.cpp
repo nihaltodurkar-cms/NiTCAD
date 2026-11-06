@@ -124,7 +124,7 @@ TEST_CASE("TVB-17: nothing in the fast tier", "[tvr4]") {
 
 // TVB-16 (ideal diode, three configurations; A, 16.19 frozen; DT-Q24 A, DT-Q25 A; construction 16.31) is full tier
 // only (16.7). Frozen outcome: as found (16.35), 13 pass and 28 not_evaluated.
-TEST_CASE("TVB-16: the ideal diode, full tier (frozen outcome: as found, 16.35)", "[.tvr4_full]") {
+TEST_CASE("TVB-16: the ideal diode, full tier (frozen outcome: as found, 16.37)", "[.tvr4_full]") {
     const auto r = bench::run_tvb16(bench::Tier::full);
     if (r.run_error) FAIL(*r.run_error);
     for (const auto& n : r.notes) std::printf("TVB-16 note: %s\n", n.c_str());
@@ -133,30 +133,38 @@ TEST_CASE("TVB-16: the ideal diode, full tier (frozen outcome: as found, 16.35)"
                     c.quantity.c_str(), c.metric, c.criterion.c_str(), c.comparison.reason.c_str());
     }
     REQUIRE(r.comparisons.size() == 41);
-    // Frozen as found after DT-Q26 A, DT-Q27 A and DT-Q28 B (DECISIONS Unit 55 16.35): these pass; every other
-    // comparison is not_evaluated (U_disc not estimated: outside the asymptotic range, and e(h/2)/e(h) outside
-    // 0.25 +- 0.05, mostly ~1 where the reference's approximation dominates; or a factorial state not reached).
-    // The passes' bounds as found (16.35), to 1e-6: they pin U_num's wiring (U_disc, the factorial, eps), whose
-    // changes the outcomes alone do not show (the margins are wide).
+    // Frozen as found after DT-Q32 A (DECISIONS Unit 55 16.37): these pass; the long base at 0.5 and 0.6 V are known
+    // finding (x) (DT-Q27 A); every other comparison is not_evaluated (U_disc not estimated: outside the asymptotic
+    // range and the finest-triple order outside 2 +- 0.5 or oscillating; or a factorial state not reached).
+    // The passes' bounds as found, to 1e-6: they pin U_num's wiring (U_disc, the factorial, eps).
+    const std::vector<std::string> findings{"J (ii) SRH, long base, V = 0.5 V", "J (ii) SRH, long base, V = 0.6 V",
+                                            "ideality (ii) SRH, long base, V = 0.5 .. 0.6 V"};
     const std::vector<std::pair<std::string, double>> passing{
-        {"J (i) no G-R, short base, V = 0.2 V", 0.012956453614200322},
-        {"J (ii) SRH, short base, V = 0.2 V", 0.013001366108984726},
-        {"J (ii) SRH, short base, V = 0.3 V", 0.012898606490823996},
-        {"J (ii) SRH, short base, V = -0.5 V", 0.012390844382866391},
+        {"J (i) no G-R, short base, V = 0.2 V", 0.012969149188851229},
+        {"J (i) no G-R, short base, V = 0.3 V", 0.012900968947520106},
+        {"J (i) no G-R, short base, V = 0.4 V", 0.01284897206434447},
+        {"J (i) no G-R, short base, V = 0.5 V", 0.012984518235497101},
+        {"J (i) no G-R, short base, V = 0.6 V", 0.02062468841401274},
+        {"ideality (i) no G-R, short base, V = 0.2 .. 0.3 V", 0.015638331230131353},
+        {"ideality (i) no G-R, short base, V = 0.3 .. 0.4 V", 0.015576529070217962},
+        {"ideality (i) no G-R, short base, V = 0.4 .. 0.5 V", 0.015640656838250177},
+        {"ideality (i) no G-R, short base, V = 0.5 .. 0.6 V", 0.02048675753687821},
+        {"J (ii) SRH, short base, V = 0.5 V", 0.012982402586626456},
+        {"J (ii) SRH, short base, V = 0.6 V", 0.02062463318097297},
         {"J (ii) SRH, short base, V = -1 V", 0.012000282544006202},
         {"J (ii) SRH, short base, V = -2 V", 0.011961397873277196},
-        {"reverse exponent (ii) SRH, short base, V = -0.5 .. -1 V", 0.23971656960196636},
-        {"reverse exponent (ii) SRH, short base, V = -1 .. -2 V", 0.13223141088057097},
+        {"ideality (ii) SRH, short base, V = 0.5 .. 0.6 V", 0.020490327411534195},
+        {"J (ii) SRH, long base, V = 0.4 V", 0.0003116398018498728},
         {"J (ii) SRH, long base, V = -0.5 V", 0.0008452570169339834},
         {"J (ii) SRH, long base, V = -1 V", 0.0004328477970241768},
         {"J (ii) SRH, long base, V = -2 V", 0.00022225934829510192},
-        {"reverse exponent (ii) SRH, long base, V = -0.5 .. -1 V", 0.0027973850856005764},
-        {"reverse exponent (ii) SRH, long base, V = -1 .. -2 V", 0.0010660415503881706}};
+        {"reverse exponent (ii) SRH, long base, V = -0.5 .. -1 V", 0.0027973850856005764}};
     for (const auto& c : r.comparisons) {
         CAPTURE(c.quantity, c.metric, c.criterion, c.comparison.reason);
         const auto it = std::find_if(passing.begin(), passing.end(), [&](const auto& p) { return p.first == c.quantity; });
         const bool pass = it != passing.end();
-        CHECK(c.comparison.outcome == (pass ? Outcome::pass : Outcome::not_evaluated));
+        const bool finding = std::find(findings.begin(), findings.end(), c.quantity) != findings.end();
+        CHECK(c.comparison.outcome == (pass ? Outcome::pass : finding ? Outcome::finding : Outcome::not_evaluated));
         if (pass) {
             const double bound = std::stod(c.criterion.substr(c.criterion.rfind("= ") + 2));
             CHECK(std::abs(bound - it->second) <= 1e-6 * it->second);

@@ -349,12 +349,11 @@ std::optional<double> three_grid(const double* h, const double* f, double& order
     return reference::gci_safety_factor_three_grids * std::abs(e21) / (std::pow(r21, p) - 1.0);
 }
 
-constexpr double assumed_order = 2.0, ratio_centre = 0.25, ratio_band = 0.05;  // DT-Q28 B
+constexpr double assumed_order = 2.0, order_band = 0.5;  // DT-Q28 B, the gate DT-Q32 A
 
 }  // namespace
 
-Discretization u_disc(std::span<const double, 4> h, std::span<const double, 4> f, double h_half, double f_half,
-                      double e_h, double e_h_half) {
+Discretization u_disc(std::span<const double, 4> h, std::span<const double, 4> f, double h_half, double f_half) {
     Discretization d;
     std::optional<double> u3;
     std::string w3;
@@ -371,12 +370,15 @@ Discretization u_disc(std::span<const double, 4> h, std::span<const double, 4> f
     }
     std::optional<double> u2;
     std::string w2;
-    const double ratio = e_h_half / e_h;
-    if (e_h != 0.0 && std::abs(ratio - ratio_centre) <= ratio_band) {
+    const double hf[3] = {h_half, h[0], h[1]}, ff[3] = {f_half, f[0], f[1]};
+    const auto c = three_grid(hf, ff, d.order_fine);
+    if (c && (*c == 0.0 || std::abs(d.order_fine - assumed_order) <= order_band)) {
         const double rp = std::pow(h[0] / h_half, assumed_order);
         u2 = reference::gci_safety_factor_two_grids * std::abs(f_half - f[0]) * rp / (rp - 1.0);
+    } else if (!c) {
+        w2 = "two-grid: the finest triple oscillates or has no positive order";
     } else {
-        w2 = "two-grid: e(h/2)/e(h) " + shortest(ratio) + " outside 0.25 +- 0.05";
+        w2 = "two-grid: finest-triple order " + shortest(d.order_fine) + " outside 2 +- 0.5";
     }
     if (u3 && u2) {
         d.how = *u3 >= *u2 ? "GCI (>= two-grid)" : "two-grid (> GCI)";
