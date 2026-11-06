@@ -38,10 +38,28 @@ TEST_CASE("TVB-06: the dielectric stack, full tier (frozen outcome: pass)", "[.t
     require_all_pass(bench::run_tvb06(bench::Tier::full), 9);  // + 2D 32 x 32
 }
 
-// TVB-05 (coaxial capacitor, 2D generated, M = 32 ... 256 sectors) is E-class and full tier only (16.7): its order
-// and finest accuracy pass. Release-only ctest verify_benchmark.tvr4_full (hidden tag), as tvb31_full.
-TEST_CASE("TVB-05: the coaxial capacitor, full tier (frozen outcome: pass)", "[.tvr4_full]") {
-    require_all_pass(bench::run_tvb05(bench::Tier::full), 2);  // the order of C and C on the finest level
+// TVB-05 (coaxial capacitor, 2D generated, M = 32 ... 256 sectors) is E-class and full tier only (16.7). Release-only
+// ctest verify_benchmark.tvr4_full (hidden tag), as tvb31_full. Recorded as found (16.24, DT-Q20 A): the finest
+// accuracy passes; the order is not_evaluated, its successive orders 2.0545, 2.0825, 2.1846 spreading 0.102 > 0.1
+// (the M = 32 pair), with p-hat 2.054 in the band. Neither the criteria nor the ladder changed (TVM2).
+TEST_CASE("TVB-05: the coaxial capacitor, full tier (frozen outcome: order not_evaluated, accuracy pass)",
+          "[.tvr4_full]") {
+    const auto r = bench::run_tvb05(bench::Tier::full);
+    if (r.run_error) FAIL(*r.run_error);
+    for (const auto& n : r.notes) UNSCOPED_INFO("note: " << n);
+    REQUIRE(r.comparisons.size() == 2);
+    const auto& order = r.comparisons[0];
+    const auto& finest = r.comparisons[1];
+    CAPTURE(order.metric, order.comparison.reason, finest.metric);
+    std::printf("TVB-05 %s: %.4f (%s)\n", order.quantity.c_str(), order.metric, order.comparison.reason.c_str());
+    std::printf("TVB-05 %s: %.3e (%s)\n", finest.quantity.c_str(), finest.metric, finest.criterion.c_str());
+    CHECK(order.quantity == "C order");
+    CHECK(order.comparison.outcome == Outcome::not_evaluated);
+    CHECK(order.comparison.reason == "not in the asymptotic range");
+    CHECK(order.metric >= 1.8);  // p-hat itself is in the band
+    CHECK(order.metric <= 2.3);
+    CHECK(finest.comparison.outcome == Outcome::pass);
+    CHECK(bench::overall(r) == Outcome::not_evaluated);
 }
 
 TEST_CASE("TVB-05: nothing in the fast tier", "[tvr4]") {

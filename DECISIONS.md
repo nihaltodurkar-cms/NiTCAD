@@ -9947,6 +9947,15 @@ are independent) is tested directly rather than argued.
 
 **Recommendation: A.** It is the smallest change that keeps the save–load round trip honest. B can follow if a deck ever needs an insulator-only device.
 
+**16.24 Rulings DT-Q20 and DT-Q21** (owner, "choose recommended", 2026-11-06).
+- **DT-Q20: A.** TVB-05 is recorded as found.
+  - The order comparison is not_evaluated: p̂ = 2.054 is in the band, but the spread is 0.1021, from the M = 32 pair.
+  - The finest-accuracy comparison passes, and the overall outcome is not_evaluated.
+  - The frozen expected outcome in `device_theory_test` now states this, so `verify_benchmark.tvr4_full` asserts it.
+  - 16.8 (criteria and ladder) is unchanged.
+- **DT-Q21: A.** `save_device` keeps refusing an insulator-only device, and the device-file format is unchanged.
+  Widening the format (B) waits until a deck needs an insulator-only device.
+
 
 
 ---
