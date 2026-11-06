@@ -2,8 +2,12 @@
 
 #include <algorithm>
 #include <cmath>
+#include <utility>
+#include <vector>
 
 #include "NiTCAD/verify/reference/dopri5.hpp"
+#include "NiTCAD/verify/reference/first_integral.hpp"
+#include "NiTCAD/verify/reference/gauss_kronrod.hpp"
 #include "NiTCAD/verify/reference/minority_diffusion.hpp"
 #include "NiTCAD/verify/reference/pn_junction.hpp"
 #include "NiTCAD/verify/reference/qe_junction.hpp"
@@ -103,7 +107,115 @@ std::expected<CD, std::string> riccati(const CD& kappa, const DD& base) {
     return CD{DD(1.0), DD(0.0)} / CD{z.re * l, z.im * l};
 }
 
+// Gauss-Kronrod in u for C_SCR and the second method's charges: far below any criterion (C_SCR is a few percent of C_j)
+// and of the second method's rounding (1e-16 / h), and cheap enough for the Debug budget (CV-Q19).
+constexpr double scr_epsrel = 1e-20;
+
+// The QE junction at the reduced bias v (frame of diode.hpp: n = m e^u, p = m e^-u).
+struct ScrFrame {
+    DD m, u_j;
+    NeutralBulk bn, bp;
+    PnJunction jm;
+};
+std::expected<ScrFrame, std::string> scr_frame(const PnJunctionInput& j, const DD& v) {
+    PnJunctionInput shifted = j;
+    shifted.ni_cm3 = (DD(j.ni_cm3) * exp(ldexp(v, -1))).to_double();
+    const auto jm = pn_junction(shifted);
+    if (!jm) return std::unexpected("diode_admittance: C_SCR at bias: " + jm.error());
+    return ScrFrame{DD(shifted.ni_cm3), jm->u_j, neutral_bulk(shifted.ni_cm3, j.donors_cm3),
+                    neutral_bulk(shifted.ni_cm3, -j.acceptors_cm3), *jm};
+}
+
+// The levels at the distances -x_p and x_n from the junction (pn_potential, frame of f).
+std::expected<std::pair<DD, DD>, std::string> scr_levels(const PnJunctionInput& j, const ScrFrame& f, const DD& xp,
+                                                         const DD& xn) {
+    const std::vector<double> at{-xp.to_double(), xn.to_double()};
+    const auto u = pn_potential(f.jm, at);
+    if (!u) return std::unexpected("diode_admittance: C_SCR edge potential: " + u.error());
+    const DD VT(j.thermal_voltage_V);
+    return std::pair<DD, DD>{(*u)[0].psi_V / VT, (*u)[1].psi_V / VT};
+}
+
+// q times the minority carriers between the levels u_ep (p side) and u_en (n side) of frame f [C/cm^2].
+std::expected<DD, std::string> scr_charge(const PnJunctionInput& j, const ScrFrame& f, const DD& u_ep,
+                                          const DD& u_en) {
+    const DD q(j.q_C), VT(j.thermal_voltage_V);
+    const DD k = ldexp(q / (DD(j.eps_F_per_cm) * VT), 1);
+    const auto on_n = [&](const DD& u) { return f.m * exp(-u) / sqrt(k * first_integral_phi(f.bn, u)); };
+    const auto on_p = [&](const DD& u) { return f.m * exp(u) / sqrt(k * first_integral_phi(f.bp, u)); };
+    const AdaptiveResult rn = qag15(on_n, f.u_j, u_en, 0.0, scr_epsrel);
+    const AdaptiveResult rp = qag15(on_p, u_ep, f.u_j, 0.0, scr_epsrel);
+    if (rn.status != QuadratureStatus::ok || rp.status != QuadratureStatus::ok) {
+        return std::unexpected("diode_admittance: C_SCR second-method quadrature did not converge");
+    }
+    return q * (rn.value + rp.value);
+}
+
+// C_SCR = q (int_0^x_n dp/dV|_x dx + int_-x_p^0 dn/dV|_x dx) (DECISIONS Unit 55 16.38, DT-Q34 A; derived in
+// admittance.hpp).
+std::expected<DD, std::string> scr_storage(const PnJunctionInput& j, double bias_V) {
+    const DD q(j.q_C), VT(j.thermal_voltage_V), v = DD(bias_V) / VT;
+    const auto f = scr_frame(j, v);
+    if (!f) return std::unexpected(f.error());
+    const DD xp = f->jm.depletion_p_cm, xn = f->jm.depletion_n_cm;
+    const auto edges = scr_levels(j, *f, xp, xn);
+    if (!edges) return std::unexpected(edges.error());
+    const auto [u_ep, u_en] = *edges;
+    const DD m = f->m, uj = f->u_j;
+    const DD k = ldexp(q / (DD(j.eps_F_per_cm) * VT), 1);  // u'^2 = k Phi
+    const DD NA(j.acceptors_cm3), ND(j.donors_cm3), four_m2 = ldexp(m * m, 2);
+    const DD duj = (sqrt(NA * NA + four_m2) - sqrt(ND * ND + four_m2)) / ldexp(NA + ND, 1);  // du_j/dv
+    // b(s) = d/dv (k Phi(s))^(-1/2) at fixed s, with dPhi/dv = (n + p - n_b - p_b) / 2.
+    const auto b = [&](const NeutralBulk& bulk, const DD& s) {
+        const DD kphi = k * first_integral_phi(bulk, s);
+        const DD dphi = ldexp(m * (exp(s) + exp(-s)) - (bulk.n_b + bulk.p_b), -1);
+        return -ldexp(k * dphi, -1) / (kphi * sqrt(kphi));
+    };
+    const DD sj = sqrt(k * first_integral_phi(f->bn, uj));
+    // One integrand per side: (1/2) carrier / sqrt(k Phi) + b(s) times the carriers beyond s (closed form).
+    // n side: holes p = m e^-u from u_j to u_en; p side: electrons n = m e^u from u_ep to u_j.
+    const auto on_n = [&](const DD& u) {
+        const DD p = m * exp(-u);
+        return ldexp(p, -1) / sqrt(k * first_integral_phi(f->bn, u)) + b(f->bn, u) * (p - m * exp(-u_en));
+    };
+    const auto on_p = [&](const DD& u) {
+        const DD n = m * exp(u);
+        return ldexp(n, -1) / sqrt(k * first_integral_phi(f->bp, u)) + b(f->bp, u) * (n - m * exp(u_ep));
+    };
+    const AdaptiveResult rn = qag15(on_n, uj, u_en, 0.0, scr_epsrel);
+    const AdaptiveResult rp = qag15(on_p, u_ep, uj, 0.0, scr_epsrel);
+    if (rn.status != QuadratureStatus::ok || rp.status != QuadratureStatus::ok) {
+        return std::unexpected("diode_admittance: C_SCR quadrature did not converge");
+    }
+    const DD Pe = m * (exp(-uj) - exp(-u_en));  // int p du over the n side
+    const DD Ne = m * (exp(uj) - exp(u_ep));    // int n du over the p side
+    const DD per_v = rn.value + rp.value + (-duj / sj) * Pe + (duj / sj) * Ne;
+    return q * per_v / VT;
+}
+
 }  // namespace
+
+// Second method (admittance.hpp): the charge between the fixed positions -x_p, x_n (at V) as a function of the bias,
+// differenced by Richardson's 4-point rule in v (h = 1e-3: truncation ~h^4, rounding of m to double ~1e-16 / h).
+std::expected<double, std::string> scr_storage_second_method(const PnJunctionInput& j, double bias_V) {
+    const DD VT(j.thermal_voltage_V), v = DD(bias_V) / VT;
+    const auto f = scr_frame(j, v);
+    if (!f) return std::unexpected(f.error());
+    const DD xp = f->jm.depletion_p_cm, xn = f->jm.depletion_n_cm;
+    const DD h(1e-3);
+    DD g[4];
+    const double steps[4] = {-2.0, -1.0, 1.0, 2.0};
+    for (int i = 0; i < 4; ++i) {
+        const auto fi = scr_frame(j, v + DD(steps[i]) * h);
+        if (!fi) return std::unexpected(fi.error());
+        const auto ui = scr_levels(j, *fi, xp, xn);
+        if (!ui) return std::unexpected(ui.error());
+        const auto gi = scr_charge(j, *fi, ui->first, ui->second);
+        if (!gi) return std::unexpected(gi.error());
+        g[i] = *gi;
+    }
+    return ((DD(8.0) * (g[2] - g[1]) - (g[3] - g[0])) / (DD(12.0) * h) / VT).to_double();
+}
 
 std::expected<DiodeAdmittance, std::string> diode_admittance(const DiodeInput& in, double bias_V,
                                                             std::span<const double> omegas_rad_s) {
@@ -121,6 +233,9 @@ std::expected<DiodeAdmittance, std::string> diode_admittance(const DiodeInput& i
     DiodeAdmittance out;
     out.dc = *dc;
     out.capacitance_F_per_cm2 = qe->capacitance_F_per_cm2;
+    const auto scr = scr_storage(j, bias_V);
+    if (!scr) return std::unexpected(scr.error());
+    out.scr_storage_F_per_cm2 = *scr;
     const DD q(j.q_C), VT(j.thermal_voltage_V), v = DD(bias_V) / VT;
     const DD ev = exp(v), em1 = reference::expm1(v);
     SideData p{&in.p_side, eq->n_p, DD(0.0), dc->base_p_cm, out.capacitance_F_per_cm2 / (q * DD(j.acceptors_cm3))};
@@ -177,7 +292,9 @@ std::expected<DiodeAdmittance, std::string> diode_admittance(const DiodeInput& i
         const CD cap{DD(0.0), DD(w) * out.capacitance_F_per_cm2};
         pt.capacitive = to_complex(cap);
         pt.shockley = to_complex(sum_fixed + cap);
-        pt.total = to_complex(sum_fixed + cap + sum_edge);
+        const CD scr_cap{DD(0.0), DD(w) * out.scr_storage_F_per_cm2};
+        pt.scr_storage = to_complex(scr_cap);
+        pt.total = to_complex(sum_fixed + cap + sum_edge + scr_cap);
         pt.second_method_difference = std::abs(to_complex(sum_fixed + DD(-1.0) * sum_riccati));
         out.points.push_back(pt);
     }

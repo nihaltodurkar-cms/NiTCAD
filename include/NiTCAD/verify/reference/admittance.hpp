@@ -23,9 +23,28 @@
 //
 // Capacitive: i w C_j, the QE junction's capacitance at V.
 //
-// Total: Y = sum over the sides (Y_fixed + Y_edge) + i w C_j. Shockley's form is reported without Y_edge. Not here:
-// the depletion region's recombination (SNS), the neutral bases' ohmic impedance, high injection; their sizes are
-// the benchmark's (16.18 (g)).
+// Depletion-region minority storage (DECISIONS Unit 55 16.37-16.38, DT-Q34 A; derived here, PD): the minority
+// currents above are taken at the edges x_p, x_n, so the minority carriers stored between the edges and the junction
+// add i w C_SCR, with
+//     C_SCR = q ( int_0^x_n dp/dV|_x dx + int_-x_p^0 dn/dV|_x dx )
+// over the QE profile at V (the region fixed at V's edges; the edges' own motion is in Y_edge). In the frame
+// n = m e^u, p = m e^-u (diode.hpp) with u'^2 = k Phi_b(u), k = 2 q / (eps V_T), the distance from the junction is
+// x(u) = int_{u_j}^u dw / sqrt(k Phi_n) on the n side; at fixed x, du/dv = -(dx/dv|_u) sqrt(k Phi), so
+// dp/dv|_x = p (1/2 + A(u) sqrt(k Phi)) with A(u) = dx/dv|_u = -(du_j/dv) / sqrt(k Phi(u_j)) + int_{u_j}^u b(s) ds,
+// b = d(k Phi)^(-1/2)/dv. Exchanging the order of the double integral leaves single integrals in u:
+//     C_SCR,n = (q / V_T) [ (1/2) int p / sqrt(k Phi) du - (du_j/dv) / sqrt(k Phi(u_j)) P + int b(s) (P - P(s)) ds ],
+// P(s) = int_{u_j}^s p du = m (e^-u_j - e^-s) in closed form, P = P(u_en); the p side is the mirror (n = m e^u,
+// the sign of the u_j term reversed, P replaced by m (e^s - e^u_ep)). Closed forms (derived here): with dm/dv = m/2,
+//     dPhi_b/dv|_u = (n + p - n_b - p_b) / 2,   du_j/dv = (sqrt(N_A^2 + 4 m^2) - sqrt(N_D^2 + 4 m^2)) / (2 (N_A + N_D))
+// (from Phi_b = n + p - (n_b + p_b) - C (u - u_b), C = n_b - p_b). Gauss-Kronrod in u, in double-double.
+// Second method (a departure from DT-Q34 A's "complex step", recorded in 16.38: the profile and its root have no
+// complex extension here): the minority charge between the fixed positions -x_p, x_n as a function of the bias,
+// each value by the same QE profile and quadrature, differenced by Richardson's 4-point rule in v
+// (scr_storage_second_method; the L0 test and TVB-18's notes compare the two).
+//
+// Total: Y = sum over the sides (Y_fixed + Y_edge) + i w (C_j + C_SCR). Shockley's form is reported without Y_edge
+// and C_SCR. Not here: the depletion region's recombination (SNS), the neutral bases' ohmic impedance, high
+// injection; their sizes are the benchmark's (16.18 (g)).
 //
 // Second method for Y_fixed: the Riccati form of the same ODE, w(y) = du / du', w' = 1 - kappa^2 w^2, w(0) = 0,
 // integrated from the contact to the edge by Dormand-Prince in double-double (stable in that direction: the root
@@ -56,14 +75,16 @@ struct AdmittancePoint {
     double omega_rad_s = 0.0;
     AdmittanceSide p, n;
     std::complex<double> capacitive;  // i w C_j
+    std::complex<double> scr_storage; // i w C_SCR (the depletion region's minority storage)
     std::complex<double> shockley;    // sum Y_fixed + i w C_j (eq 4.23 at the edges of V)
-    std::complex<double> total;       // shockley + sum Y_edge
+    std::complex<double> total;       // shockley + sum Y_edge + i w C_SCR
     double second_method_difference = 0.0;  // |sum Y_fixed - sum Y_fixed,riccati| [S/cm^2]
 };
 
 struct DiodeAdmittance {
     DiodeCurrent dc;                     // diode_current at the bias
     DD capacitance_F_per_cm2;            // C_j
+    DD scr_storage_F_per_cm2;            // C_SCR
     double base_rate_p_cm_per_V = 0.0;   // dW'_p / dV
     double base_rate_n_cm_per_V = 0.0;   // dW'_n / dV
     double lifetime_p_s = 0.0;           // the minority lifetime of each base (0 without srh)
@@ -75,5 +96,10 @@ struct DiodeAdmittance {
 // (the short-base limit); the second method not converging.
 [[nodiscard]] std::expected<DiodeAdmittance, std::string> diode_admittance(const DiodeInput& in, double bias_V,
                                                                           std::span<const double> omegas_rad_s);
+
+// C_SCR by the second method (above): the fixed-region minority charge differenced in the bias [F/cm^2]. Separate
+// from diode_admittance, which computes C_SCR by the first method only (the second costs four more QE profiles; the
+// Debug budget, CV-Q19). Errors: those of the QE junction, and a quadrature not converging.
+[[nodiscard]] std::expected<double, std::string> scr_storage_second_method(const PnJunctionInput& in, double bias_V);
 
 }  // namespace NiTCAD::verify::reference

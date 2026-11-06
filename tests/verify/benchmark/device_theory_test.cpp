@@ -179,9 +179,12 @@ TEST_CASE("TVB-16: nothing in the fast tier", "[tvr4]") {
 }
 
 // TVB-18 (the diode's admittance at forward bias, 5 um bases; A, 16.19 frozen; DT-Q29-Q31 A; construction 16.34) is
-// full tier only (16.7). Frozen outcome, set before its first run: every comparison passes (63: |Y|, Re Y, arg Y at
-// 3 biases x 7 frequencies).
-TEST_CASE("TVB-18: the diode admittance, full tier (frozen outcome: pass)", "[.tvr4_full]") {
+// full tier only (16.7). 63 comparisons: |Y|, Re Y, arg Y at 3 biases x 7 frequencies. Frozen outcome: as found after the
+// DT-Q34 A reference correction (i w C_SCR, DECISIONS Unit 55 16.38): no fail; at 0.35 V |Y|, Re Y and arg Y at
+// w tau_p = 0.001 .. 0.1 and Re Y at 1 and 10 are not_evaluated (U_num not estimated: differences changing sign, or
+// arg Y's bound taking |Y|'s U_num); every other comparison passes. (Set before its first run: every comparison
+// passes; that run's one fail was the reference's omission, DT-Q33 A.)
+TEST_CASE("TVB-18: the diode admittance, full tier (frozen outcome: as found, 16.38)", "[.tvr4_full]") {
     const auto r = bench::run_tvb18(bench::Tier::full);
     if (r.run_error) FAIL(*r.run_error);
     for (const auto& n : r.notes) std::printf("TVB-18 note: %s\n", n.c_str());
@@ -190,10 +193,21 @@ TEST_CASE("TVB-18: the diode admittance, full tier (frozen outcome: pass)", "[.t
                     c.quantity.c_str(), c.metric, c.criterion.c_str(), c.comparison.reason.c_str());
     }
     REQUIRE(r.comparisons.size() == 63);
+    const auto not_evaluated = [](const std::string& q) {
+        if (q.find("V = 0.35 V") == std::string::npos) return false;
+        for (const char* w : {"w tau_p = 0.001", "w tau_p = 0.01", "w tau_p = 0.1"}) {
+            if (q.ends_with(w)) return true;
+        }
+        return q.starts_with("Re Y") && (q.ends_with("w tau_p = 1") || q.ends_with("w tau_p = 10"));
+    };
+    int evaluated = 0;
     for (const auto& c : r.comparisons) {
         CAPTURE(c.quantity, c.metric, c.criterion, c.comparison.reason);
-        CHECK(c.comparison.outcome == Outcome::pass);
+        const bool ne = not_evaluated(c.quantity);
+        evaluated += ne ? 0 : 1;
+        CHECK(c.comparison.outcome == (ne ? Outcome::not_evaluated : Outcome::pass));
     }
+    CHECK(evaluated == 52);
 }
 
 TEST_CASE("TVB-18: nothing in the fast tier", "[tvr4]") {

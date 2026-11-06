@@ -3,7 +3,9 @@
 //     double-double central difference, with SRH and without;
 //   - the long-base limit G_0 sqrt(1 + i w tau) (W' = 40 L) and the short-base series 1/W' + kappa^2 W' / 3;
 //   - the Riccati second method against the closed form over about 1e-3 <= w tau <= 1e4;
-//   - the capacitive term i w C_j with qe_junction's C_j; the edge motion's size; the refusals.
+//   - the capacitive term i w C_j with qe_junction's C_j; the edge motion's size; the refusals;
+//   - the depletion region's minority storage C_SCR (DT-Q34 A): positive, growing with forward bias, against its
+//     second method (the fixed-region charge differenced in the bias), negligible at reverse bias.
 #include <catch2/catch_test_macros.hpp>
 
 #include <cmath>
@@ -163,10 +165,40 @@ TEST_CASE("admittance: the capacitive term and the totals", "[admittance]") {
         CHECK(pt.capacitive == std::complex<double>(0.0, pt.omega_rad_s * qe->capacitance_F_per_cm2.to_double()));
         const std::complex<double> s = pt.p.fixed_edge + pt.n.fixed_edge + pt.capacitive;
         CHECK(rel(pt.shockley, s) <= 1e-15);
-        CHECK(rel(pt.total, s + pt.p.edge_motion + pt.n.edge_motion) <= 1e-15);
+        CHECK(pt.scr_storage == std::complex<double>(0.0, pt.omega_rad_s * y->scr_storage_F_per_cm2.to_double()));
+        CHECK(rel(pt.total, s + pt.p.edge_motion + pt.n.edge_motion + pt.scr_storage) <= 1e-15);
         CHECK(pt.shockley.imag() > 0.0);  // capacitive and diffusive susceptance both positive
         CHECK(std::abs(1.0 / pt.p.effective_length_cm) > 0.0);
     }
+}
+
+TEST_CASE("admittance: the depletion region's minority storage C_SCR (DT-Q34 A)", "[admittance]") {
+    // Without SRH (no SNS quadrature in diode_current; C_SCR does not depend on the lifetimes).
+    const DiodeInput in = input(false, 5e-4);
+    const std::vector<double> w{1e6};
+    double last = 0.0;
+    for (const double V : {0.35, 0.45}) {  // two biases: the Debug budget (CV-Q19)
+        CAPTURE(V);
+        const auto y = diode_admittance(in, V, w);
+        REQUIRE(y.has_value());
+        const double c = y->scr_storage_F_per_cm2.to_double(), cj = y->capacitance_F_per_cm2.to_double();
+        CHECK(c > 0.0);
+        CHECK(c > last);  // the stored minorities grow with forward bias
+        last = c;
+        CHECK(c < 0.05 * cj);  // a correction of a few percent at most here (16.37: 0.6-2.7 % for TVB-18)
+        if (V == 0.45) {  // the second method: the fixed-region charge, differenced in the bias
+            const auto s = scr_storage_second_method(in.junction, V);
+            REQUIRE(s.has_value());
+            CHECK(std::abs(*s - c) <= 1e-9 * c);
+        }
+    }
+    // Deep reverse bias: no minorities to store.
+    const auto r = diode_admittance(in, -2.0, w);
+    REQUIRE(r.has_value());
+    CHECK(r->scr_storage_F_per_cm2.to_double() < 1e-9 * r->capacitance_F_per_cm2.to_double());
+    const auto s = scr_storage_second_method(in.junction, -2.0);
+    REQUIRE(s.has_value());
+    CHECK(std::abs(*s - r->scr_storage_F_per_cm2.to_double()) <= 1e-9 * r->capacitance_F_per_cm2.to_double());
 }
 
 TEST_CASE("admittance: refusals", "[admittance]") {

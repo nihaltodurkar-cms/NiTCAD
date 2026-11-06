@@ -258,6 +258,16 @@ BenchmarkResult run_tvb18(Tier tier) {
             return r;
         }
         cs_diff.push_back(std::abs(*cs - y->capacitance_F_per_cm2.to_double()));
+        // The depletion region's minority storage (DT-Q34 A, 16.38) and its second method.
+        const auto scr2 = reference::scr_storage_second_method(in.junction, V);
+        if (!scr2) {
+            r.run_error = "V = " + shortest(V) + ": reference C_SCR second method: " + scr2.error();
+            return r;
+        }
+        const double scr = y->scr_storage_F_per_cm2.to_double();
+        r.notes.push_back("V = " + shortest(V) + " V: C_SCR " + shortest(scr) + " F/cm^2 (" +
+                          shortest(scr / y->capacitance_F_per_cm2.to_double()) + " of C_j); second method differs by " +
+                          shortest(std::abs(*scr2 - scr)) + " F/cm^2");
         refs.push_back(std::move(*y));
     }
     r.notes.push_back("tau_p " + shortest(tau_p) + " s, tau_n " + shortest(base0->lifetime_n_s) +

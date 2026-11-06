@@ -10436,6 +10436,23 @@ are independent) is tested directly rather than argued.
 
 **Not done yet** (after DT-Q34): freeze TVB-18 and run its mutants ("TVB-18*"); the mutants of the new gate ([registry]) and "TVB-16*"; then step 8 (TVB-10).
 
+**16.38 DT-Q34 A (authorized: owner "go A", 2026-11-06): the reference gains i w C_SCR; TVB-18 frozen as found.**
+- **The correction** (a post-run change to the reference, authorized). `verify/reference/admittance` adds i w C_SCR to Y_ref's total. C_SCR = q(∫_0^{x_n} ∂p/∂V|_x dx + ∫_{−x_p}^0 ∂n/∂V|_x dx) over the QE profile at V, between the charge-balance edges and the junction. Shockley's form is reported without it. The new fields are `DiodeAdmittance::scr_storage_F_per_cm2` and `scr_second_method_difference`, and `AdmittancePoint::scr_storage`.
+  - **Derivation** (PD; `admittance.hpp`). At fixed x, ∂u/∂v = −(∂x/∂v|_u)·√(kΦ). Exchanging the order of the double integral leaves single integrals in u, and the inner minority integral is closed-form. The closed forms are ∂Φ_b/∂v|_u = (n + p − n_b − p_b)/2 (from Φ_b = n + p − (n_b + p_b) − C(u − u_b)) and du_j/dv = (√(N_A² + 4m²) − √(N_D² + 4m²)) / (2(N_A + N_D)). The integrals use Gauss-Kronrod in u, in double-double.
+  - **Departure, second method.** DT-Q34 A named complex step on the same integrals. The QE profile (`pn_potential`'s Newton inversion and Brent's root) has no complex extension here, so the second method is a different one: the minority charge between the fixed positions −x_p and x_n (at V), evaluated as a function of the bias and differenced by Richardson's 4-point rule in v (h = 1e-3). It shares the profile and quadrature, but not the differentiation or the change of variables. The difference is reported.
+- **L0** (`admittance_test`, a new case). At 0.35 and 0.45 V, C_SCR is positive, grows with bias, and stays below 5 % of C_j. Its second method agrees to within 1e-9 relative at 0.45 V. At −2 V, C_SCR is below 1e-9 C_j and the second method agrees. The totals case now includes the term. 8 cases, 167 assertions pass.
+  - **Cost (CV-Q19).** In the first build every `diode_admittance` call also ran the second method. That took `verify.admittance` from 1.45 to 5.2 s, and serial Debug verify to 80.6 s, against the 75 s budget.
+    - The second method is now its own function, `scr_storage_second_method`, called by the L0 test and by TVB-18's notes. `diode_admittance` keeps only the first method, with its two integrals per side merged into one quadrature.
+    - The new case is trimmed to 2 forward biases, and the quadratures run at 1e-20. That is still far below any criterion: C_SCR is a few percent of C_j.
+    - Now `verify.admittance` takes 2.1 s, and serial Debug verify passes 66/66 in 74.2 and 74.6 s.
+  - Mutation, on the final code: 8 mutants (the ½ factor, the u_j-term sign, the n and p sides' b-term each dropped, du_j/dv swapped, ∂Φ/∂v's ½, the second method's difference rule, the total without the term). All 8 are caught.
+- **TVB-18's notes** report C_SCR per bias: 0.632 %, 1.28 % and 2.69 % of C_j at 0.35, 0.40 and 0.45 V. This agrees with 16.37's diagnostic (0.64, 1.29 and 2.70 %). The second method differs by about 1e-23 F/cm², 1e-14 relative.
+- **Suites.** Release verify passes 74/74, the local full tier included (2622 s; `verify_full.tvb04` 1272 s); this ran before the restructure. After the restructure: `[admittance]`, `[tvr4_full]` and serial Debug verify pass again.
+- **TVB-18 rerun: 52 pass, 11 not_evaluated, 0 fail** (it was 51/11/1). The |Y| miss at 0.45 V, ωτ = 100, is gone. The 11 not_evaluated points are unchanged: at 0.35 V, |Y|, Re Y and arg Y at ωτ_p = 0.001–0.1, and Re Y at 1 and 10, where U_num is not estimated.
+  - **Frozen as found** (DT-Q34 A): `device_theory_test`'s TVB-18 case pins those 11 as not_evaluated and the other 52 as pass. The criteria are unchanged; only the reference moved.
+  - `tvr4_full` passes: 6 cases, 170 assertions (Release).
+- **Not done yet:** the mutants of TVB-18's own code ("TVB-18*"), of the DT-Q32 gate ([registry]) and of "TVB-16*"; then step 8 (TVB-10).
+
 ---
 
 ## New questions the advisor raised (not yet in `ARCHITECTURE.md`)
