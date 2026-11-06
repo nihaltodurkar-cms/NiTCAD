@@ -1,7 +1,8 @@
 // The VR8 test build of `nitcad verify` (DECISIONS Unit 55 11.13 RC-Q7): the shipped registry plus the test-only
-// entry TVB-TEST-FAIL, whose one comparison fails, so the exit status of a fail can be shown; it is compiled only into
-// this executable, never into nitcad. Also `verify_probe compare <a> <b>`: 0 when two saved reports are equal with
-// provenance.started_utc and wall_s cleared (VR7, RC-Q4), 1 otherwise or when one cannot be loaded.
+// entry TVB-TEST-FAIL, whose one comparison fails, so the exit status of a fail can be shown, and the same entry in
+// the full tier as TVB-TEST-FULL, to show tier selection (CV-Q9: refused below its tier, run at it). Both are compiled
+// only into this executable, never into nitcad. Also `verify_probe compare <a> <b>`: 0 when two saved reports are
+// equal with provenance.started_utc and wall_s cleared (VR7, RC-Q4), 1 otherwise or when one cannot be loaded.
 #include <cstdio>
 #include <string_view>
 #include <vector>
@@ -15,7 +16,7 @@ namespace v = NiTCAD::verify;
 
 namespace {
 
-bench::BenchmarkResult always_fails() {
+bench::BenchmarkResult always_fails(bench::Tier) {
     bench::BenchmarkResult r;
     r.id = "TVB-TEST-FAIL";
     r.title = "test-only: one comparison that fails";
@@ -57,6 +58,8 @@ int main(int argc, char** argv) {
     if (argc == 4 && std::string_view(argv[1]) == "compare") return compare(argv[2], argv[3]);
     std::vector<bench::Benchmark> registry(bench::benchmarks().begin(), bench::benchmarks().end());
     registry.push_back({"TVB-TEST-FAIL", "test-only: one comparison that fails", bench::Tier::fast, &always_fails});
+    registry.push_back(
+        {"TVB-TEST-FULL", "test-only: the failing entry in the full tier", bench::Tier::full, &always_fails});
     if (argc >= 2 && std::string_view(argv[1]) == "verify") return NiTCAD::cli::verify(argc, argv, registry);
     std::fputs("usage: verify_probe verify ... | verify_probe compare <a> <b>\n", stderr);
     return 64;

@@ -49,17 +49,28 @@ struct BenchmarkResult {
 struct Benchmark {
     std::string_view id;
     std::string_view title;
-    Tier tier;
-    BenchmarkResult (*run)();
+    Tier tier;  // the lowest tier it runs in: `nitcad verify --tier t` runs every benchmark with tier <= t
+    BenchmarkResult (*run)(Tier);  // at the requested tier (a ladder may grow with it; CV-Q9)
 };
 
-// The shipped benchmarks of TVR-1: TVB-01, TVB-02, TVB-03, TVB-32 (all fast).
+// The shipped benchmarks: TVR-1 (TVB-01, 02, 03, 32) and TVR-2 (TVB-04, 11, 12), in id order.
 [[nodiscard]] std::span<const Benchmark> benchmarks();
+
+// The MKL PARDISO threads of the benchmark solves that use it (TVB-04's 3D levels; DECISIONS Unit 55 14.9), set by
+// `nitcad verify --threads`; 1 by default. Those solves need the MKL runtime loaded (`--mkl`).
+void set_pardiso_threads(int threads);
+[[nodiscard]] int pardiso_threads();
 
 // The benchmark functions, for the tests.
 [[nodiscard]] BenchmarkResult run_tvb01();
 [[nodiscard]] BenchmarkResult run_tvb02();
 [[nodiscard]] BenchmarkResult run_tvb03();
+[[nodiscard]] BenchmarkResult run_tvb04(Tier tier);  // fast: 1D; full and nightly: + 2D and 3D tensor
+[[nodiscard]] BenchmarkResult run_tvb07(Tier tier);  // fast: N = 64, 128 (V_bi only); full: + 256, 512 and the E gates
+[[nodiscard]] BenchmarkResult run_tvb09(Tier tier);  // fast: one bias (V_FB + 1.5 V); full: the V_G grid
+[[nodiscard]] BenchmarkResult run_tvb14(Tier tier);  // fast: 1D tensor; full: + 2D/3D tensor, 2D/3D generated, swept
+[[nodiscard]] BenchmarkResult run_tvb11();  // TVR-2 (DECISIONS Unit 55 14)
+[[nodiscard]] BenchmarkResult run_tvb12();
 [[nodiscard]] BenchmarkResult run_tvb32();
 
 struct KnownFinding {

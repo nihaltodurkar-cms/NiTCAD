@@ -959,6 +959,7 @@ private:
     bool minority_floor_ = false;  // Unit 50 RD2, set_minority_floor
     int dimension_ = 1;
     double generation_scale_ = 0.0;        // 1 / R0: [cm^-3 s^-1] to the rows' scaled rate
+    const ManufacturedSources* manufactured_ = nullptr;  // models.manufactured (TVQ3), not owned
     double impact_resolution_ = 0.0;       // models.impact_current_resolution
     std::size_t contact_count_ = 0;
     double rate_scale_ = 0.0;             // Ns / R0: scaled SRH call to R / R0

@@ -154,13 +154,21 @@ add_custom_command(
           include/NiTCAD/verify/reference/fermi_dirac.hpp
           src/verify/reference/fermi_dirac.cpp
           src/verify/reference/contract.cpp
+          include/NiTCAD/verify/reference/pn_junction.hpp
+          src/verify/reference/pn_junction.cpp
+          include/NiTCAD/verify/reference/first_integral.hpp
+          src/verify/reference/first_integral.cpp
+          include/NiTCAD/verify/reference/mos_capacitor.hpp
+          src/verify/reference/mos_capacitor.cpp
   COMMENT "verify/reference include boundary (VR2)")
 add_custom_target(nitcad_verify_reference_boundary
   DEPENDS "${CMAKE_BINARY_DIR}/verify_reference_boundary.stamp")
 add_library(nitcad_verify_reference STATIC src/verify/reference/double_double.cpp
   src/verify/reference/gauss_kronrod.cpp src/verify/reference/tanh_sinh.cpp
   src/verify/reference/chebyshev.cpp src/verify/reference/metrics.cpp
-  src/verify/reference/contract.cpp src/verify/reference/fermi_dirac.cpp)
+  src/verify/reference/contract.cpp src/verify/reference/fermi_dirac.cpp
+  src/verify/reference/pn_junction.cpp src/verify/reference/first_integral.cpp
+  src/verify/reference/mos_capacitor.cpp)
 add_library(NiTCAD::verify_reference ALIAS nitcad_verify_reference)
 target_include_directories(nitcad_verify_reference PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
 add_dependencies(nitcad_verify_reference nitcad_verify_reference_boundary)
@@ -177,7 +185,9 @@ add_executable(nitcad_verify_test
   tests/verify/reference/complex_step_test.cpp
   tests/verify/reference/jacobi_eigen_test.cpp
   tests/verify/reference/metrics_test.cpp
-  tests/verify/reference/contract_test.cpp)
+  tests/verify/reference/contract_test.cpp
+  tests/verify/reference/pn_junction_test.cpp
+  tests/verify/reference/mos_capacitor_test.cpp)
 target_link_libraries(nitcad_verify_test PRIVATE NiTCAD::verify_reference Catch2::Catch2WithMain)
 nitcad_add_file_tests(verify nitcad_verify_test)
 add_test(NAME verify_reference_boundary
@@ -386,6 +396,7 @@ add_executable(nitcad_assemble_test
   tests/assemble/schottky_test.cpp
   tests/assemble/quantum_confinement_test.cpp
   tests/assemble/gate_tunnelling_test.cpp
+  tests/assemble/manufactured_test.cpp
   tests/baseline/trace_listener.cpp)
 target_link_libraries(nitcad_assemble_test PRIVATE NiTCAD::assemble Catch2::Catch2WithMain)
 # The terms (Unit 40) are internal to the assemble layer; their own test reads them.
@@ -663,6 +674,15 @@ target_include_directories(nitcad_verify_consistency PUBLIC "${CMAKE_CURRENT_SOU
 target_link_libraries(nitcad_verify_consistency PUBLIC NiTCAD::results NiTCAD::mesh NiTCAD::verify_reference)
 add_dependencies(nitcad_verify_consistency nitcad_verify_consistency_boundary)
 
+# --- verify/study (Unit 55 TVR-2, DECISIONS Unit 55 14): order studies against exact solutions; numbers only ---
+add_library(nitcad_verify_study STATIC src/verify/study/study.cpp)
+add_library(NiTCAD::verify_study ALIAS nitcad_verify_study)
+target_include_directories(nitcad_verify_study PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
+target_link_libraries(nitcad_verify_study PUBLIC NiTCAD::mesh NiTCAD::verify_reference)
+add_executable(nitcad_verify_study_test tests/verify/study/study_test.cpp)
+target_link_libraries(nitcad_verify_study_test PRIVATE NiTCAD::verify_study Catch2::Catch2WithMain)
+nitcad_add_file_tests(verify_study nitcad_verify_study_test)
+
 # --- verify/benchmark: runs NiTCAD (the subject of the checks) and feeds the consistency layer ---
 # The three TVB-32 decks embedded at build time (DECISIONS 11.13 RC-Q5), read by deck::parse.
 set(NITCAD_VERIFY_DECKS examples/pn_diode_1d.deck decks/schottky_diode_1d.deck examples/moscap_cv.deck)
@@ -678,11 +698,14 @@ string(APPEND _decks_header "}  // namespace NiTCAD::verify::benchmark::decks\n"
 file(CONFIGURE OUTPUT "${CMAKE_BINARY_DIR}/generated/verify_decks.hpp" CONTENT "${_decks_header}" @ONLY)
 add_library(nitcad_verify_benchmark STATIC src/verify/benchmark/device_data.cpp
   src/verify/benchmark/registry.cpp src/verify/benchmark/tvb01.cpp src/verify/benchmark/tvb02.cpp
-  src/verify/benchmark/tvb03.cpp src/verify/benchmark/tvb32.cpp)
+  src/verify/benchmark/tvb03.cpp src/verify/benchmark/tvb04.cpp src/verify/benchmark/tvb07.cpp
+  src/verify/benchmark/tvb09.cpp src/verify/benchmark/tvb14.cpp
+  src/verify/benchmark/tvb11.cpp
+  src/verify/benchmark/tvb12.cpp src/verify/benchmark/tvb32.cpp)
 add_library(NiTCAD::verify_benchmark ALIAS nitcad_verify_benchmark)
 target_include_directories(nitcad_verify_benchmark PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
 target_link_libraries(nitcad_verify_benchmark PUBLIC NiTCAD::device NiTCAD::verify_consistency NiTCAD::deck
-  NiTCAD::io NiTCAD::physics)
+  NiTCAD::io NiTCAD::physics NiTCAD::verify_study)
 target_include_directories(nitcad_verify_benchmark PRIVATE "${CMAKE_BINARY_DIR}/generated")
 
 add_executable(nitcad_verify_consistency_test
@@ -712,10 +735,29 @@ add_executable(nitcad_verify_benchmark_test
   tests/verify/benchmark/constants_test.cpp
   tests/verify/benchmark/bernoulli_test.cpp
   tests/verify/benchmark/fermi_dirac_test.cpp
-  tests/verify/benchmark/registry_test.cpp)
+  tests/verify/benchmark/registry_test.cpp
+  tests/verify/benchmark/code_verification_test.cpp)
 target_link_libraries(nitcad_verify_benchmark_test PRIVATE NiTCAD::verify_benchmark
   Catch2::Catch2WithMain)
 nitcad_add_file_tests(verify_benchmark nitcad_verify_benchmark_test)
+
+# The full tier of TVR-2 (DECISIONS Unit 55 14.9): TVB-04's 3D tensor ladder to 64^3 with PARDISO, about 12 minutes on 6
+# threads and 20 GB. Local only (owner ruling, option 1): opt in with NITCAD_VERIFY_FULL_TIER=ON in a Release build,
+# and run it with `ctest -L full`. CI does not set it.
+option(NITCAD_VERIFY_FULL_TIER "Register the local-only full-tier verification test (ctest label full)" OFF)
+if(NITCAD_VERIFY_FULL_TIER AND CMAKE_BUILD_TYPE STREQUAL "Release")
+  add_executable(nitcad_verify_full_test tests/verify/benchmark/code_verification_full_test.cpp)
+  target_link_libraries(nitcad_verify_full_test PRIVATE NiTCAD::verify_benchmark Catch2::Catch2WithMain)
+  target_compile_definitions(nitcad_verify_full_test PRIVATE NITCAD_MKL_RUNTIME_PATH="${NITCAD_MKL_RUNTIME_PATH}")
+  add_test(NAME verify_full.tvb04 COMMAND nitcad_verify_full_test "[tvb04_full]")
+  set_tests_properties(verify_full.tvb04 PROPERTIES LABELS full TIMEOUT 3600 RUN_SERIAL TRUE)
+  add_test(NAME verify_full.tvb07 COMMAND nitcad_verify_full_test "[tvb07_full]")
+  set_tests_properties(verify_full.tvb07 PROPERTIES LABELS full TIMEOUT 600)
+  add_test(NAME verify_full.tvb09 COMMAND nitcad_verify_full_test "[tvb09_full]")
+  set_tests_properties(verify_full.tvb09 PROPERTIES LABELS full TIMEOUT 600)
+  add_test(NAME verify_full.tvb14 COMMAND nitcad_verify_full_test "[tvb14_full]")
+  set_tests_properties(verify_full.tvb14 PROPERTIES LABELS full TIMEOUT 3600 RUN_SERIAL TRUE)
+endif()
 
 # The batch runner (`nitcad check|run <deck>`).
 add_executable(nitcad src/cli/main.cpp src/cli/plot.cpp src/cli/verify.cpp)
@@ -734,7 +776,9 @@ foreach(_case
     "unknown_tier|$<TARGET_FILE:nitcad>|verify|--tier|weekly|64|"
     "unknown_option|$<TARGET_FILE:nitcad>|verify|--bogus|x|64|"
     "unwritable_report|$<TARGET_FILE:nitcad>|verify|--id|TVB-03|--report|${_vr}_missing_dir/r.nvr|1|"
-    "injected_fail|$<TARGET_FILE:nitcad_verify_probe>|verify|--id|TVB-TEST-FAIL|1|")
+    "injected_fail|$<TARGET_FILE:nitcad_verify_probe>|verify|--id|TVB-TEST-FAIL|1|"
+    "below_tier|$<TARGET_FILE:nitcad_verify_probe>|verify|--id|TVB-TEST-FULL|64|"
+    "at_tier|$<TARGET_FILE:nitcad_verify_probe>|verify|--tier|full|--id|TVB-TEST-FULL|1|")
   string(REPLACE "|" ";" _parts "${_case}")
   list(POP_FRONT _parts _name _exe)
   list(POP_BACK _parts _report _expect)

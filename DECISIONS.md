@@ -7823,6 +7823,399 @@ In `nitcad verify`, TVB-01 and TVB-03 pass, TVB-02 reports the accepted finding 
 The unit is stacked on PR #76. It will be rebased onto main once #76 merges, then offered as its own PR on the
 owner's word.
 
+
+#### 14. TVR-2 (Unit 55b) proposal: code verification core (proposed 2026-11-05; on `verify/code-verification`; rulings before code)
+
+TVR-2 follows the roadmap in §9 and catalogue §6: TVB-04, 05, 06, 07, 09, 11, 12 and 14, the TVQ3 hook, and the
+`verify/study` driver. This section proposes how to build them. It also reports one place where the plan does not
+fit the code (CV-Q3). The criteria (§4.4) are frozen in a criteria commit after these rulings and before any code
+(TVM2).
+
+**14.1 Scope.** In:
+- (a) `verify/study`: mesh ladders per family, the Newton-tolerance check, and GCI driving. The formulas are
+  TVR-1's `verify/reference/metrics`.
+- (b) The TVQ3 manufactured-source hook in `assemble` (approved with TVQ1–TVQ6 on 2026-10-31).
+- (c) The references, each with L0 tests:
+  - manufactured solutions and their sources;
+  - the equilibrium pn junction first integral (TVB-07);
+  - the Kingston–Neustadter MOS charge (TVB-09);
+  - the resistor (TVB-11);
+  - the constant-field exponential (TVB-12).
+- (d) The benchmarks, registered in TVR-1's registry with tiers, and their tests.
+
+Out:
+- TVB-05 and 06, if CV-Q3 rules B.
+- Unit 17's use of the studies (TVR-6).
+- Any change to the existing tests, gates, tolerances or solver beyond (b) and a ruled CV-Q3.
+
+**14.2 A finding before code: TVQ3's premise is false.** TVQ3 states that the hook "is the only change to existing
+code the framework needs for its P1 set". That is not so:
+- `src/device/device.cpp:75` refuses a device with no semiconductor region ("device needs at least one
+  semiconductor region").
+- `Device::Device` (`device.cpp:472`) chooses its reference node assuming a semiconductor node exists.
+- So the capacitors of TVB-05 (coaxial, spherical) and TVB-06 (dielectric stack), which are pure dielectrics
+  between electrodes, cannot be built.
+- TVB-04's "linear Poisson" is affected for the same reason.
+
+CV-Q2 and CV-Q3 rule on this.
+
+**14.3 The hook (TVQ3; design for ruling CV-Q4).**
+- `PhysicsModels` gains `std::shared_ptr<const ManufacturedSources> manufactured`, null by default.
+  - It holds per-node physical sources: a charge density for the Poisson row [C/cm³], and electron and hole
+    generation for the continuity rows [cm⁻³ s⁻¹].
+  - The sources do not depend on the state, so they add no Jacobian entries.
+- It enters as one node term, `manufactured source`, after `storage` in the Unit 40 composition order, and is
+  active only when the pointer is set.
+- When absent, the composition is unchanged, so every existing result stays bit-identical. A test asserts that F
+  and J are bit-equal with the pointer null and with no term.
+- It is not in the deck vocabulary, and the header documents it as verification-only.
+- The equilibrium-Poisson assembler gets no hook: every MMS case runs the drift-diffusion system (14.4).
+
+**14.4 The benchmarks.** Each has its reference, mesh families, norms and p_th per §5.3. Tolerances are frozen in the
+criteria commit.
+
+| ID | Construction | Reference | Families (fast / full tier) | Judged |
+|---|---|---|---|---|
+| TVB-04 | Poisson MMS. Per CV-Q2 A: Poisson–Boltzmann with a silicon/oxide ε jump on a planar interface. ψ_exact = ψ_eq(N) + a smooth bump vanishing at the contacts. The Poisson source is the exact charge residual, and the continuity rows hold to rounding at equilibrium. | Analytic, with derivatives checked by complex step | 1D tensor / 2D and 3D tensor, 2D generated, 3D generated, swept | L∞ and L2 (p_th 2, tensor); H1 (p_th 1, unstructured); L2 on unstructured families reported only |
+| TVB-05, 06 | Capacitors (CV-Q3) | C = 2πεL/ln(b/a); 4πε ab/(b−a); series ε | — | per CV-Q3 |
+| TVB-07 | Equilibrium abrupt pn junction, Boltzmann, 1D, with the junction on a dual-cell face | First integral: E(ψ) in closed form, x(ψ) by tanh–sinh, ψ_j by Brent; Chebyshev collocation as the I3 cross-check | 1D tensor ladder (fast) | V_bi to rounding (D); E_max and ψ(x) in L∞, p_th 2; depletion edges reported |
+| TVB-09 | MOS-C, uniform substrate, 1D, Boltzmann, lumped gate | Kingston–Neustadter F(ψ_s) in closed form; V_G = V_FB + ψ_s − Q_s/C_ox; C_LF by complex step | 1D tensor ladder | Q_s(V_G) and C_LF relative error, with p̂; V_FB to rounding |
+| TVB-11 | Uniform resistor, ohmic contacts | I = q μ N A V / L | 1D and 2D tensor | D: to c·ε, c = 64 |
+| TVB-12 | SG constant-field exactness: 1D, no G−R; the hook's Poisson source makes ψ linear and n exponential | The exact discrete solution | 1D, several Péclet numbers | D: nodal n to c·ε |
+| TVB-14 | Full drift-diffusion MMS: ψ, φ_n and φ_p smooth; Boltzmann, SRH on; the three sources taken from the exact state | Analytic; sources in double-double, derivatives checked by complex step | 1D and 2D tensor / 2D and 3D tensor, 2D generated, 3D generated, swept | ψ, φ_n and φ_p in L2 and L∞ (p_th 2, tensor) and H1 (p_th 1, unstructured) |
+
+**14.5 Owner questions (recommendations in the last column).**
+
+| # | Question | Recommendation |
+|---|---|---|
+| CV-Q1 | Order of work: hook, then study driver, then TVB-12 and 11, then 04, then 07 and 09, then 14. One commit each, with its references' L0 tests first? | Yes |
+| CV-Q2 | TVB-04's form: (A) a Poisson–Boltzmann MMS with an oxide region (the semiconductor path; no device change), or (B) the linear Poisson the catalogue names, which needs CV-Q3 A? | A. It exercises the same operator and ε jump, with the carriers' charge exact in the source |
+| CV-Q3 | Capacitors TVB-05 and 06. (A) A narrow device change: allow insulator-only devices whose every component has an electrode, with the reference node chosen among electrode nodes. This touches existing code; it gets its own tests and leaves current devices bit-identical. (B) Defer both to TVR-4 and record the dependency, as TVD-15 does. (C) Model the plates as degenerate semiconductor: rejected, not exact | B. TVB-04 already covers the Poisson operator and the unstructured families, and B keeps TVQ3 the only change to existing code |
+| CV-Q4 | The hook as designed in 14.3: per-node, state-independent sources, one node term after storage, null by default, not in the deck | As 14.3 |
+| CV-Q5 | Source discretisation: the scheme's own lumping S(x_i)·V_i (the way doping charge enters), or dual-cell quadrature? | Lumping. It is the scheme's own consistency, O(h²) on a smooth S |
+| CV-Q6 | Orders: use §5.3's working assumptions (p_th 2 for L2/L∞ on tensor, 1 for H1 on unstructured) and gate them per §4.4 E, while the Eymard–Gallouët–Herbin theorem is still unread? | Yes. The report marks the citation [unverified]. A miss is a fail, and goes to the owner before any criterion moves |
+| CV-Q7 | Ladders, r = 2: 4 levels for tensor in 1D, 2D and 3D; 4 levels for 2D generated; 3 levels for 3D generated and swept (full tier). Unstructured h = (V/N)^(1/D) | Yes |
+| CV-Q8 | Iterative error: U_iter is the final Newton correction propagated to the metric. It must be ≤ U_disc/10 before an order is computed (§5.2). A rounding-floor stall (as in Unit 56) goes to the owner, not to a looser tolerance | Yes |
+| CV-Q9 | Tiers and time: TVR-1's fast tier already takes 57.4 s of the 60 s serial Debug budget (VR10). TVR-2 goes in `full`, plus one coarse case per benchmark in `fast`. The fast tier's budget is kept by moving nothing else in. The full tier gets its own ctest label and the existing ctest timeouts | Yes |
+| CV-Q10 | Criteria freeze: the tolerance on the finest mesh per benchmark and the D-class constant c, in a separate commit after these rulings and before code | Yes |
+| CV-Q11 | Unit numbering and branch: Unit 55b, on `verify/code-verification` | Yes |
+
+**14.6 Rulings (owner, "choose recommended", 2026-11-05).** CV-Q1 through CV-Q11 are approved as recommended:
+- TVB-04 is a Poisson–Boltzmann MMS with an oxide region.
+- TVB-05 and 06 are deferred to TVR-4. Their dependency, insulator-only devices (`device.cpp:75`, `:472`), is
+  recorded as TVD-15 does its dependencies.
+- The hook is built as 14.3 describes, and sources are lumped.
+- The §5.3 orders are gated, with the theorem's citation marked [unverified].
+- The ladders are 14.5's CV-Q7, and the iterative-error rule is CV-Q8.
+- The fast/full split is CV-Q9.
+- The criteria are frozen below (14.7) before any code.
+
+**14.7 Criteria (frozen 2026-11-05, before code; TVM2: never widened after a run).** Notation:
+- ε = 2^-52.
+- N is the number of nodes along the current path (1D) or per axis (tensor).
+- Relative norms are normalised by the same norm of the exact solution. For ψ the normaliser is the potential
+  scale: V_bi for TVB-07, and max|ψ_exact − ψ_eq| + V_T for TVB-04 and TVB-14.
+- p̂ comes from §4.2's observed order on successive pairs. The asymptotic-range check of TVR-1 applies with ≥ 4
+  levels; with 3 levels it is `not_evaluated` and p̂ is judged on the finest pair.
+- No order is computed unless U_iter ≤ U_disc/10 (CV-Q8). If that cannot be met, the outcome is `not_evaluated`
+  and the case is brought to the owner.
+
+| ID | D criterion | E (a) order | E (b) accuracy on the finest level | Ladder (fast / full) |
+|---|---|---|---|---|
+| TVB-11 | relative \|I − I_ref\| and nodal ψ in L∞, each ≤ 64 ε N² (N²: the 1D Laplacian's condition) | — | — | 1D N = 32, 128 / + 2D 32² |
+| TVB-12 | nodal n relative ≤ 64 ε N², at Péclet numbers \|ΔΨ/V_T\| per edge ∈ {0.01, 1, 10, 40} | — | — | 1D N = 64 (fast) |
+| TVB-04 | — | tensor L2 and L∞: p̂ ∈ [1.8, 2.3]; unstructured H1: p̂ ∈ [0.8, 1.3]; unstructured L2 reported | tensor L2 relative ≤ 1e-4; unstructured H1 relative ≤ 1e-2 | 1D N = 32, 64, 128, 256 / + 2D tensor 16²…128², 3D tensor 8³…64³, 2D generated 4 levels, 3D generated and swept 3 levels |
+| TVB-07 | V_bi (contact ψ difference) relative ≤ 64 ε | ψ L∞ and E_max: p̂ ∈ [1.8, 2.3] | ψ L∞ relative ≤ 1e-4; E_max relative ≤ 1e-3 | 1D N = 64, 128, 256, 512 (fast: the coarsest two, order not judged) |
+| TVB-09 | V_FB relative ≤ 64 ε | Q_s(V_G): p̂ ∈ [1.8, 2.3] at each V_G | Q_s relative ≤ 1e-3; C_LF relative ≤ 1e-3; on a V_G grid from accumulation to strong inversion, with \|Q_s\| ≥ 1e-3 of its range (below that, `not_applicable`, predicate named) | 1D N = 64…512 (fast: one bias) |
+| TVB-14 | — | as TVB-04, for ψ, φ_n and φ_p | as TVB-04, for each of the three | as TVB-04 |
+
+References are analytic (U_ref at rounding) or computed in double-double, with U_ref ≤ tolerance/10 checked by
+§4.4 E (c). The TB-Q4 rule applies: a reference whose uncertainty exceeds 1e-3 of the criterion is
+`not_evaluated`.
+
+**14.8 As built.**
+
+*Step 1, the hook (CV-Q4).*
+- `assemble::ManufacturedSources` and `PhysicsModels::manufactured` (`models.hpp`); the node term `manufactured source` after `storage` (`terms.cpp`).
+- `DriftDiffusion::create` refuses a source vector of the wrong size or with non-finite values, and refuses the hook with electrothermal or energy balance.
+- `tests/assemble/manufactured_test.cpp` (4 cases) checks:
+  - absent, the composition, F and J are equal to the plain system's;
+  - present, the term alone writes +V S/Ns, +V G_n/R0 and −V G_p/R0 within 1e-14, skips contact and electrode rows, puts charge on interior oxide nodes, and adds no Jacobian values;
+  - an empty vector leaves its rows bit-equal;
+  - the refusals.
+- Measuring the term as a difference of two full residuals is wrong: the later flux terms cancel, so their rounding shows (2.2e-14 relative was seen). The test therefore evaluates the term alone.
+- assemble tests: 154/154 pass (Release).
+
+*Step 2, `verify/study` (CV-Q6–Q8).*
+- What it is: `nitcad_verify_study`, which depends only on `mesh` and `verify_reference`; the benchmarks run the solves.
+- What it computes:
+  - `order_study`: the observed orders from errors against the exact solution, with p̂ from the finest pair.
+  - The CV-Q8 rule: U_iter ≤ e/10 at every level, else the order is not evaluated.
+  - The asymptotic check from 4 levels.
+  - `judge_order` against [p_th − 0.2, p_th + 0.3].
+  - `mean_spacing` = (V/N)^(1/D).
+- **Interpretation for the owner (14.7, "TVR-1's asymptotic check applies").** TVR-1's check has two tests: the order spread (≤ 0.1), and the GCI ratio ρ_k ≈ 1.
+  - The GCI ratio is relative to a nonzero solution value. Applied to errors that converge to 0, it gives ρ_k = r^−p (0.25 at second order), so every ladder would fail it.
+  - For studies against an exact solution, the check is therefore the order spread alone.
+  - This is narrower than TVR-1's two-test form. It is recorded here and not hidden.
+- Tests: `tests/verify/study/study_test.cpp`, 7 cases. They cover exact orders at r = 2 and r = 1.7, the band edges, 3 levels without the check, a drifting ladder that is not judged, the CV-Q8 boundary, invalid input, and the mean spacing in 1D, 2D and 3D.
+
+*Step 3, TVB-12 and TVB-11 (D class).*
+- **Change to step 1 (14.3 said `shared_ptr`).** `PhysicsModels::manufactured` is a non-owning `const ManufacturedSources*`. A `shared_ptr` member made `PhysicsModels` a non-literal type and broke the existing `constexpr PhysicsModels` uses (`tests/solve/heterojunction_test.cpp:87`, `tests/assemble/energy_balance_test.cpp:497`). The caller keeps the sources alive through the solve; the hook tests and the benchmarks own them and pass `.get()`.
+- `src/verify/benchmark/tvb12.cpp`, as frozen in 14.4/14.7:
+  - 1D, 64 nodes on [0, 1 µm]; N_D 1e18 at the left contact node, 1e15 at the right, 1e16 inside; constant mobilities, no G−R, no BGN, Boltzmann.
+  - The contact values come from an equilibrium solve. The bias puts |Δψ/V_T| per edge at 0.01, 1, 10 and 40. The exact n and p are written without overflow, and the TVQ3 charge n − p − (N_D − N_A) makes ψ linear the discrete Poisson solution.
+  - Each solve starts from the exact state perturbed by 1e-3.
+  - Result (Release): every nodal n and p error is between 9e-16 and 3.4e-14, against 64εN² = 5.8e-11. 8/8 pass.
+- `src/verify/benchmark/tvb11.cpp`: uniform N_D = 1e16, V = 0.1 V, 1D N = 32 and 128 and 2D 32 × 32 (per unit width, width 1 µm); μ the material's mu_max. Besides the 14.7 criterion, the current comparison also requires the two contact currents to have opposite signs.
+  - Result (Release): current errors 1.2e-14 to 2.3e-14, ψ-linearity about 1e-16; criteria 1.46e-11 (N = 32) to 2.33e-10 (N = 128). 6/6 pass.
+- Registry: 6 shipped benchmarks; TVB-11 and TVB-12 are `fast`. CV-Q9 put TVR-2 in `full` with one coarse case per benchmark in `fast`. These two are already single, coarse D-class runs (26 s is the whole serial Debug `nitcad verify`), so each is its own fast case. `registry_test` now expects 6 ids (was 4); this is the registry's own list, not a moved expectation of a benchmark.
+- `tests/verify/benchmark/code_verification_test.cpp` (`[tvr2]`): both benchmarks, every comparison pass (frozen outcomes).
+- Time: the verify ctests take 39/39 in Release. Serial Debug takes 58.2 s against the 60 s budget (VR10; it was 57.4 s), so the fast tier has under 2 s left. TVB-04, 07, 09 and 14 go in `full` only, per CV-Q9.
+
+*Step 4, TVB-04 (tensor families) and tier selection.*
+- **Tiers.** `Benchmark::run` takes the requested tier, and `Benchmark::tier` is the lowest tier a benchmark runs in. `nitcad verify --tier t` runs every benchmark whose tier is at or below t. With `--id`, a benchmark above t is refused with exit 64. The TVR-1 and TVB-11/12 entries ignore the tier.
+  - CLI tests: `verify_cli.below_tier` and `verify_cli.at_tier`, on the probe's test-only `TVB-TEST-FULL`.
+- **Construction** (`src/verify/benchmark/tvb04.cpp`), as 14.4 with CV-Q2 A:
+  - SiO2 on [−L, 0] with a metal electrode at −L, and p-Si (N_A = 1e17) on [0, L] with an ohmic contact at L; L = 50 nm.
+  - The interface lies at the midpoint of the edges that join the regions (`straddle_interface`, as the decks do it).
+  - ψ = ψ_c + A g(x/L) h(y/L) h(z/L), with A = 0.2 V. g = (1−u)e^{2u} in Si and (1+u)e^{βu} in SiO2, with β = (ε_si/ε_ox)(α−1) − 1, so D·n is continuous. h = 1 + cos(πv)/2, which has zero normal flux on the sides.
+  - Equilibrium Boltzmann carriers make every SG flux vanish. The TVQ3 charge is S = −εΔψ/q + n − p − N.
+  - The electrode is biased so that its potential equals ψ_c.
+  - The analytic g′, g″, h′ and h″ are checked against complex-step derivatives on every run (the second method).
+- **Tier placement.** fast: 1D N = 32…256. full (and nightly): + 2D tensor 16²…128² and 3D tensor 8³…64³. Per the 14.7 ladder column and CV-Q13 (14.9), this is in full despite TVD-13's "nightly: 3D ladders".
+- **3D solves (CV-Q15).** The 3D levels use MKL PARDISO. With Eigen SparseLU, 64³ (786k unknowns) held 26 GB and had not finished after 15 minutes, so that run was stopped.
+  - `nitcad verify --mkl <mkl_rt.dll> --threads <n>` loads the runtime and sets PARDISO's threads; the report's `threads` field records n when MKL is loaded.
+  - Without MKL, the 3D family's three comparisons are `not_evaluated`, with the missing input named.
+  - Side effect: without MKL, TVR-1's stale-finding check prints "known finding (iv) no longer reproduces" for the 3D entry, because its region holds no fail. The note is wrong in that case and is left as is.
+- **Full-tier test (CV-Q16).** `tests/verify/benchmark/code_verification_full_test.cpp` (`verify_full.tvb04`, label `full`, run serially) exists only with `NITCAD_VERIFY_FULL_TIER=ON` in Release, and takes the runtime from `NITCAD_MKL_RUNTIME`. CI does not set the option. Run it with `ctest -L full`.
+- **Results (Release).**
+  - 1D: L2 p̂ = 2.001 and L∞ p̂ = 1.989; order spreads 5e-4 and 0.024; finest L2 7.1e-5 ≤ 1e-4. Pass.
+  - 2D tensor: L2 p̂ = 2.002 and L∞ p̂ = 1.972; spreads 0.008 and 0.071. Both orders pass. **Finest L2 (128²) is 2.88e-4 > 1e-4: fail**, brought to the owner (CV-Q12), and now known finding (iv).
+  - U_iter/e ≤ 4e-11 at every level.
+- 3D tensor (PARDISO, 6 threads):
+  - L2: 0.118, 0.0228, 0.00501, 0.00117; orders 1.93, 1.99, 2.00, with p̂ = 2.001 and spread 0.068. Pass.
+  - L∞: orders 1.60, 1.84, 1.93; spread 0.23 > 0.1. **Not evaluated** (outside the asymptotic range, CV-Q14). The reason is stated as such, not as a missing input.
+  - Finest L2 1.17e-3: known finding (iv).
+- `verify_full.tvb04`: every frozen outcome held; overall `not_evaluated`; 710.8 s.
+- Time: TVB-04 fast takes 0.17 s in Debug. In Release, 1D + 2D takes 2.1 s, and 64³ takes 709 s at about 20 GB.
+- The verify ctests pass in Release and Debug (41/41). Serial Debug takes 59.5 s against the 60 s budget (VR10), so the fast tier is at its limit. The fast cases 14.7 still lists (TVB-07's coarsest two levels, TVB-09's one bias) go to the owner if they take it over 60 s.
+
+*Step 5, TVB-04 (unstructured families).*
+- **Meshes** (`src/verify/benchmark/tvb04.cpp`). Each family uses the same domain as the tensor families, [−L, L] × [0, L]^(D−1), with the same manufactured ψ.
+  - Patches `x_min` (electrode) and `x_max` (ohmic).
+  - Size bound h_max = L/k. Interface resolution s = h_max, the straddle width, as the tensor axis's L/n_side.
+  - 2D generated: `generate_mesh(Geometry2D)`, two rectangles that meet at x = 0, k = 16, 32, 64, 128.
+  - 3D generated: `generate_mesh(Geometry3D)`, a box with the planar interface x = 0 and one seed per slab, k = 8, 16, 32.
+  - 3D swept: `generate_swept`. The (x, y) cross-section (the interface lies in it) is swept along z on uniform lines h_max apart, k = 8, 16, 32.
+  - The device takes each generated mesh's P4 certificate. Node regions are the generator's, and are checked against the side of x = 0. A node on x = 0 is refused, since the interface is straddled.
+  - h for the order study is (V/N)^(1/D) with V = 2L^D (CV-Q7). The 3D levels use PARDISO (CV-Q15).
+- **Norm.** The discrete H1 seminorm is Σ_edges coupling_area (e_i − e_j)²/length (as in `complex_convergence_test.cpp`). It is relative to the same seminorm of the exact ψ. **Interpretation for the owner:** 14.7's potential-scale normaliser (A + V_T) is a voltage, so it is not used for a gradient norm. The seminorm of the exact ψ does not see ψ_c, which is the problem that rule avoids.
+- **Comparisons.** Each family records "psi H1 order, …" (p_th 1, band [0.8, 1.3]) and "psi H1 finest, …" (≤ 1e-2). The L2 and L∞ orders are in the notes, marked "reported, not gated". TVB-04's full tier now has 15 comparisons (was 9).
+- **Results (Release, PARDISO 6 threads for 3D).**
+
+  | Family | Nodes (coarse → fine) | H1 orders (coarse → fine) | p̂ | Finest H1 | L2 orders (reported) | Outcome |
+  |---|---|---|---|---|---|---|
+  | 2D generated | 1 087 → 68 406 | 1.21, 1.11, 1.08 (spread 0.099) | 1.08 | 7.9e-4 | 2.29, 1.86, 2.18 | pass, pass |
+  | 3D generated | 3 985 → 224 485 | 1.52, 1.29 | 1.29 | 3.3e-3 | 2.05, 2.03 | pass, pass |
+  | 3D swept | 2 538 → 143 550 | 1.45, 1.23 | 1.23 | 3.3e-3 | 1.90, 2.25 | pass, pass |
+
+  - U_iter/e ≤ 6.3e-14 at every level.
+  - 3 levels, so the asymptotic-range check is `not_evaluated` and p̂ is the finest pair (14.7).
+- **Observations, not findings:**
+  - The H1 orders fall toward 1 as the mesh is refined, from above. The coarse pairs (1.52, 1.45) lie outside the band. With 3 levels only the finest pair is judged.
+  - 3D generated's p̂ = 1.29 is 0.01 below the band's top.
+  - 2D's spread of 0.099 is 0.001 under the 0.1 limit.
+  - A fourth 3D level would settle both. It is not in the frozen ladder, and it is not added.
+- **Full-tier test.** `verify_full.tvb04` expects the 15 outcomes: the tensor ones as before, and the six unstructured ones pass.
+  - Time: the 3D generated and swept ladders take about 13 minutes together; `verify_full.tvb04` passes (19 assertions) in 1505 s. It is still local only (CV-Q16).
+- The verify ctests pass in Release and Debug (41/41; the fast tier is unchanged). Serial Debug takes 59.6 s against the 60 s budget (VR10).
+
+
+*Step 6, TVB-07 (equilibrium abrupt pn junction).*
+- **Reference** (`include/NiTCAD/verify/reference/pn_junction.hpp`, `src/verify/reference/pn_junction.cpp`, in the reference layer: standard library and base only, VR2).
+  - u_n = asinh(N_D/2n_i) and u_p = −asinh(N_A/2n_i), in double-double. **Note:** the catalogue's V_T ln(N_A N_D/n_i²) is their majority-carrier limit. It differs by about (n_i/N)² relative, 7e-14 here, above the 64 ε = 1.4e-14 of the D criterion. So the exact neutral levels are the reference. This is the same V_bi the catalogue names, written exactly, and the criterion is unchanged.
+  - First integral on each side: ½u′² = (q/εV_T)[n_b G(t) + p_b G(−t)], with G(t) = e^t − 1 − t (series for |t| < ¼). u_j is found by Brent on Φ_n = Φ_p. E_max = V_T u′(0).
+  - x(ψ) uses tanh-sinh in s = ln|u − u_b|, whose integrand tends to the Debye length, so there is no endpoint singularity. Its inverse is a safeguarded Newton in s.
+  - **One defect found and fixed before the L0 tests passed:** recomputing the tail as (u_b − t) − u_b cancelled to about 1e-18 relative, so x(s) was noisy and Newton's bracket closed. Φ is now taken from t directly, and a closed bracket is an error, not a silent stop.
+  - **I3, a second method:** Chebyshev collocation of the finite-domain problem. It uses 4 + 4 pieces, patching u and u′, damped Newton, and a dense LU in double. It shares no code with the first integral.
+  - L0 tests (`tests/verify/reference/pn_junction_test.cpp`, 6 cases, 44 assertions):
+    - symmetric doping gives u_j = 0 and an odd profile;
+    - the junction condition holds to 6e-32, re-evaluated with G = expm1 − t;
+    - bulk neutrality and mass action hold to 1e-30;
+    - the profile agrees with the ODE, shot from (u_j, E_max) by dopri5 in double-double on each side to the depletion edge plus 3 L_D, to 1e-15 of V_bi (measured 0 at double precision);
+    - E_max agrees with the depletion approximation (with the −2V_T correction) to 1e-3, on junctions depleted on both sides. A 1:100 junction is not, by ~46 %, and is not a case;
+    - collocation at degrees 40 and 48 agrees to 1.3e-13 V, and with the first integral to the contact tail;
+    - bad inputs are refused.
+- **Benchmark** (`src/verify/benchmark/tvb07.cpp`).
+  - Silicon on [−1, 1] µm with N_A = 1e16 (x < 0), N_D = 2e16 (x > 0) and ohmic contacts at both ends, at equilibrium (Boltzmann, no BGN).
+  - The N nodes are uniform with N even, so the step sits on the middle edge's dual face.
+  - E_max is the middle edge's difference quotient, against |ψ′(0)|.
+  - Inputs q, ε_si, V_T and n_i are NiTCAD's material data (I1).
+  - Every run cross-checks the collocation (degree 32) against the first integral on the 64-node grid. The two differ by 1.539e-10 V, which is the predicted truncation V_T t at the contacts (1.539e-10 V). So the reference's uncertainty is measured, not assumed.
+  - U_ref (truncation, relative to V_bi) is 2.1e-10, against the TB-Q4 limit of 1e-7.
+  - Registered as TVB-07, tier fast. Fast runs N = 64 and 128 with V_bi only (2 comparisons). Full runs N = 64…512 (8 comparisons).
+- **Results (Release, full tier):**
+
+  | N | V_bi | ψ L∞ / V_bi | E_max relative | U_iter |
+  |---|---|---|---|---|
+  | 64 | 0.7339546843440443 | 4.19e-3 | 2.86e-3 | 1.7e-16 |
+  | 128 | same | 1.06e-3 | 7.04e-4 | 1.4e-16 |
+  | 256 | same | 2.67e-4 | 1.74e-4 | 1.4e-16 |
+  | 512 | same | 6.68e-5 | 4.35e-5 | 2.1e-16 |
+
+  - V_bi is 1 ulp from the reference 0.7339546843440442 at every level: pass (D).
+  - ψ L∞ orders are 1.99, 1.98 and 1.96 (spread 0.020), so p̂ = 1.96: pass.
+  - E_max orders are 2.000, 2.000 and 2.001 (spread 0.0009): pass.
+  - On the finest level, ψ L∞ is 6.7e-5 ≤ 1e-4 (pass) and E_max is 4.3e-5 ≤ 1e-3 (pass). 8/8 pass, in 0.41 s.
+  - Reported: the depletion edges are ε E_max/(qN), x_p = 0.2425 µm and x_n = 0.1213 µm, and ψ_j = 0.1227 V.
+- **Tests.**
+  - `code_verification_test.cpp` gets the fast case (2 comparisons, pass).
+  - `code_verification_full_test.cpp` gets the full case (8, pass) as `verify_full.tvb07` (label `full`, 0.4 s). `verify_full.tvb04` now runs only its own tag.
+  - `registry_test` expects 8 ids (was 7).
+  - The verify ctests pass in Release (42/42) and Debug (42/42).
+- **Time (VR10), for the owner (CV-Q19).** Serial Debug verify takes 62.6–64.5 s over two runs, against the 60 s budget.
+  - On the same day the tree without step 6 measured 60.45 s, so it had no headroom left. Run-to-run spread is about ±1 s.
+  - Step 6 adds 0.8 s of L0 tests (after cutting the ODE steps and collocation degrees) and 0.9 s for TVB-07's fast case.
+  - TVB-09's fast case (14.7) and TVB-14's are still to come.
+
+
+*Step 7, TVB-09 (MOS capacitor) and the shared first integral.*
+- **Refactor, before TVB-09:** the one-sided first integral (G, the neutral bulk, Φ_b and the profile inversion) moved from `pn_junction.cpp` to `verify/reference/first_integral.{hpp,cpp}`. TVB-07 and TVB-09 both use it. The TVB-07 results and its L0 tests are bit-identical after the move (the same I3 numbers).
+- **Reference** (`verify/reference/mos_capacitor.{hpp,cpp}`):
+  - Kingston–Neustadter: Q_s = −sgn(t) √(2qεV_T Φ_b(u_s)), and V_G = V_FB + V_T t − Q_s/C_ox, with u_s(V_G) by Brent in double-double.
+  - C_LF = C_s C_ox/(C_s + C_ox), with C_s taken analytically (its flat-band limit at t = 0). As the second method, it is also taken by complex step on a complex-double Q_s, where |t| ≥ ½. Every run checks the two against each other to 1e-10 (measured agreement is better).
+  - V_FB = φ_m − χ − (E_g/2 + (V_T/2) ln(N_c/N_v)) + V_T u_b − qQ_f/C_ox.
+  - L0 tests (`tests/verify/reference/mos_capacitor_test.cpp`, 6 cases, 82 assertions):
+    - at flat band, Q_s = 0 and C_LF = 1/(1/C_ox + L_D/ε) to 1e-12;
+    - the V_G round trip holds to 1e-25;
+    - the depletion charge −√(2qεN_A V_T(t − 1 + e^−t)) holds to 1e-6. Two expectations in the test were mine and wrong, and were fixed before the commit: the first omitted the e^−t term (2.5 % at t ≈ 3), and the second took V_FB + 1.5 V for strong inversion when it is moderate (0.79 C_ox);
+    - C_LF agrees with a double-double central difference of the reference's own Q_G to 1e-9, and with the complex step to 1e-10. It exceeds 0.9 C_ox in strong accumulation (V_FB − 1) and strong inversion (V_FB + 2);
+    - V_FB is exact on data where it is exact by construction (u_b = −1);
+    - the flat profile holds, a negative distance is refused, and bad inputs are refused.
+- **Benchmark** (`src/verify/benchmark/tvb09.cpp`), as its header states:
+  - p-Si with N_A = 1e17 and depth 0.5 µm; a metal gate (4.7 eV) on a lumped 10 nm SiO₂ with Q_f = 5e10 cm⁻²; an ohmic substrate.
+  - The solve is Equations::equilibrium_poisson (the quasi-static state; drift-diffusion cannot reach inversion on a MOS-C, bias.hpp). It uses Boltzmann statistics and no BGN.
+  - **Mesh, a design choice the criteria do not fix:** the N of the frozen ladder (64…512) are graded exponentially toward the gate, x = d(e^{aξ} − 1)/(e^a − 1) with a = 6.2. The first spacing is 0.1 nm at N = 64. The reason: the accumulation and inversion layers are under 1 nm, so a uniform mesh could not be in the asymptotic range there. h is the ξ spacing.
+  - NiTCAD's side:
+    - Q_s = −(Q_G + qQ_f);
+    - C_LF is a Richardson-extrapolated central difference (4 and 2 mV) of NiTCAD's quasi-static Q_G at the finest level. Its uncertainty |D(h/2) − D(h)|/3 must be at most 1e-4 relative;
+    - V_FB = V_G − ψ_s − Q_G/C_ox + ψ_b − qQ_f/C_ox at V_G = V_FB(ref), at every level.
+  - The V_G grid is V_FB + {−1, −0.5, −0.2, −0.05, 0, 0.05, 0.2, 0.5, 1, 1.5, 2} V, swept from flat band downward and upward. Points with |Q_s| < 1e-3 of the grid's range are `not_applicable`, with the predicate named.
+  - U_ref is the infinite-depth tail at x = d relative to the band bending: 1.3e-15, against 1e-6.
+  - Fast tier: V_FB + 1.5 V with all four levels (7 comparisons). Full tier: the grid (37).
+- **Results (Release, full tier, 0.12 s):**
+  - V_FB = −0.3544794900599644 V at every level, equal to the reference: pass (D).
+  - Q_s orders at every applicable V_G are 1.997–2.000, with spreads ≤ 0.002: pass.
+  - Finest Q_s is 1.8e-6 to 5.6e-6, and finest C_LF is 1.5e-6 to 6.1e-6, against 1e-3: pass. The C_LF difference uncertainty is ≤ 7.9e-6.
+  - At V_FB itself (Q_s = 0), the three comparisons are `not_applicable`.
+  - 34 pass and 3 not applicable; overall pass.
+- **Tests.**
+  - The fast case is in `code_verification_test.cpp` (7, pass).
+  - `verify_full.tvb09` (label `full`) freezes the 37 outcomes.
+  - `registry_test` expects 9 ids.
+  - The verify ctests pass in Release and Debug (43/43). Serial Debug takes 61.7–62.4 s against the 75 s budget of CV-Q19.
+
+*Step 8, TVB-14 (full drift-diffusion manufactured solution).*
+- **Construction** (`src/verify/benchmark/tvb14.cpp`, as its header states):
+  - n-Si with N_D = 1e16 on [0, L]^D, L = 1 µm. Ohmic contacts at x = 0 (0 V) and x = L (V_R = 0.1 V); the sides are natural.
+  - The exact state is ψ − ψ_c = V_R u + A b(u)H, φ_n = V_R u + a_n bH and φ_p = V_R u + a_p bH, where:
+    - b = 4u(1 − u);
+    - H = h(v)h(w), with h = 1 + (3v² − 2v³)/2 (h′ = 0 on the sides);
+    - A = 0.1 V, a_n = 0.08 V and a_p = 0.15 V.
+  - n and p are Boltzmann densities about NiTCAD's contact values.
+  - Sources: the hook's S, G_n and G_p from the exact state in double-double. G_n = R + μ_n(∇n·∇φ_n + nΔφ_n) and G_p = R − μ_p(∇p·∇φ_p + pΔφ_p).
+    - R is SRH with the material's Scharfetter lifetimes at N_D, and n_ie² = n_c p_c.
+    - The mobilities are constant (μ_max).
+    - Auger, radiative, BGN and Fermi–Dirac are off.
+  - Errors: NiTCAD's φ_n and φ_p come from its ψ, n and p.
+    - Normalisers (14.7): for ψ, max|ψ − ψ_eq| + V_T. For φ_n and φ_p, the same norm of the exact field. H1 is relative to the exact seminorm (CV-Q17).
+  - Second method, run on every call: complex-step derivatives check the fields' gradients and Laplacians and ∇n (1D, 2D and 3D forms) to 1e-12.
+  - Meshes: tensor N³ uniform per axis, h = L/(N − 1). The generated families use one region (the 3D generator refuses region seeds without interfaces), with h = (L^D/N)^(1/D).
+- **Fast-tier family.** 14.4's families column says "1D and 2D tensor" for fast, but 14.7's frozen ladder column says "as TVB-04" (1D only in fast). 14.7 is the frozen one, so fast is 1D N = 32…256 (9 comparisons). The difference between the two sections is recorded here.
+- **The sign convention** of G_n and G_p against the hook (+V G_n/R0 in the electron row, −V G_p/R0 in the hole row) is confirmed by the result: every 1D order is 1.998–2.000.
+- **Results (Release, full tier, 15.6 min, 6 PARDISO threads).** 45 comparisons: 30 pass, 12 fail, 3 not evaluated.
+  - Tensor orders, every field and norm: 1D 1.998–2.000, 2D 1.985–2.000, 3D 1.930–2.004. Spreads are ≤ 0.051. All 18 pass.
+  - Finest L2:
+    - 1D: 1.9e-5, 3.2e-5 and 1.9e-5 (ψ, φ_n, φ_p): pass.
+    - 2D at 128²: 1.13e-4, 2.11e-4 and 1.18e-4: **fail**.
+    - 3D at 64³: 6.7e-4, 1.43e-3 and 7.8e-4: **fail**.
+    - This is the pattern of TVB-04's finding (iv). At p̂ = 2, 1e-4 needs about 2D 180² and 3D 170³ on this solution.
+  - 2D generated (h_max L/128…L/16):
+    - H1 orders, finest pair first: ψ 1.09, 1.27, 1.71; φ_n 1.22, 1.53, 1.90; φ_p 1.07, 1.28, 1.57. The spreads are 0.29–0.44 > 0.1, so all three are `not_evaluated` (outside the asymptotic range).
+    - Finest H1 is 5.8e-4 to 1.05e-3: pass.
+    - The L2 orders are 2.03–2.15 (reported).
+  - 3D generated and swept (L/32…L/8, 3 levels, judged on the finest pair):
+    - H1 p̂ for ψ, φ_n and φ_p: generated 1.86, 1.93, 1.52; swept 1.91, 1.97, 1.58. All six are above [0.8, 1.3]: **fail**.
+    - Finest H1 is 3.4e-3 to 7.7e-3: pass.
+    - The L2 orders are 2.07–2.13 (reported).
+  - U_iter ≤ 6e-14 at every level, so the CV-Q8 rule is met everywhere.
+  - The SRH weight max|R|/max|G_p| is 2e-6 to 6e-6 at every level (see CV-Q22).
+- **Tests.**
+  - The fast case is in `code_verification_test.cpp` (9, pass).
+  - `verify_full.tvb14` (label `full`, TIMEOUT 3600, RUN_SERIAL) freezes the 45 measured outcomes. Since the 14.11 rulings, those are 30 pass, 12 `finding` (six (iv), six (v)) and 3 `not_evaluated`, and every result carries the CV-Q22 limitation note. The re-run after the rulings passed in 999 s (48 assertions).
+  - `registry_test` expects 15 known findings (was 3).
+  - **Debug time after the rulings, for the owner.** Four serial runs took 74.6, 71.2, 80.1 and 77.1 s, against 61.2–61.7 s an hour earlier on the same code apart from the finding table. Two of these exceed the 75 s budget. The increase is in TVR-1 tests that this step does not touch: `fermi_dirac` 25.6 s (was 21–22) and C-transient 22.5 s (was 15). `code_verification`, which holds every TVR-2 fast case, is unchanged at 2.4 s. The machine was under load after the full-tier runs, and the hybrid CPU schedules unpinned tests unevenly (Unit 41). Not re-run pinned; no budget change made.
+  - `registry_test` expects 10 ids.
+  - The verify ctests pass in Release (47/47 with the `full` label: `verify_full.tvb14` 959 s, `verify_full.tvb04` 1413 s, unchanged outcomes) and in Debug (43/43). Serial Debug takes 61.2–61.7 s against the 75 s budget of CV-Q19 (`code_verification`, which holds every TVR-2 fast case, takes 2.25 s).
+
+**14.9 Owner rulings after the TVB-04 run (2026-11-05).**
+
+| # | Question | Ruling |
+|---|---|---|
+| CV-Q12 | 2D tensor's finest L2 is 2.88e-4 against the frozen 1e-4, with both orders passing. The frozen ladders put 2D's finest h at L/63 and 3D's at L/31, against 1D's L/127, so at p̂ = 2 the frozen tolerance is reachable only on 1D. Known finding, a 256² level added after the run, or fail? | **Known finding (iv).** The criterion and ladders stay as frozen; "psi L2 finest, 2D tensor" and "… 3D tensor" are counted as `finding` with this ruling cited. The orders still gate. Nothing is widened. |
+| CV-Q13 | 3D tensor (8³…64³): full, as the 14.7 ladder column reads, or nightly, as TVD-13 reads? | **Full.** |
+| CV-Q14 | For studies against an exact solution, the asymptotic-range check is the order spread (≤ 0.1) alone (14.8 step 2). Confirm? | **Confirmed.** |
+| CV-Q15 | Eigen SparseLU cannot hold 64³ (above). PARDISO, GMRES-ILUT, or keep Eigen? | **PARDISO for the 3D levels.** |
+| CV-Q16 | With PARDISO, 64³ takes 709 s on 6 threads at about 20 GB, more than a CI runner (16 GB, 4 vCPU) holds. Full-tier ctest local only, move 64³ to nightly, or keep it in CI? | **Option 1: local only.** The full tier stays as ruled; its ctest is opt-in and not run in CI. |
+| CV-Q17 | The unstructured families' H1 error: normalised by the exact ψ's discrete H1 seminorm (recommended; the potential scale A + V_T is a voltage, not a gradient norm), or literally by A + V_T? | **Recommended: the exact ψ's H1 seminorm** (owner, "choose recommended", 2026-11-05). |
+| CV-Q18 | Close margins after step 5 (3D generated p̂ 1.29 against 1.3; 2D spread 0.099 against 0.1; the coarse 3D pairs above the band). Add a fourth 3D level, or keep the frozen ladders (recommended)? | **Recommended: keep the frozen ladders**; nothing added or widened (TVM2). |
+
+**14.10 Owner ruling after step 6 (2026-11-05).**
+
+| # | Question | Options | Ruling |
+|---|---|---|---|
+| CV-Q19 | Serial Debug verify is 62.6–64.5 s against VR10's 60 s. The tree before step 6 was already at 60.45 s, and TVB-09/14 fast cases are still to come. | (A) Raise VR10 to 75 s for serial Debug, stated with the measured spread. (B) Move TVB-07's fast case (and later TVB-09's) to `full`, which departs from 14.7's ladder column. (C) Keep 60 s and shorten an existing fast test (the largest are TVB-02's `fermi_dirac`, 21–22 s, and C-transient, 15 s), which touches TVR-1's frozen tests. | **A** (owner, "choose recommended", 2026-11-05). From step 6 on, the serial Debug verify budget is 75 s, measured as before (`ctest -R verify`, Debug, serial, the `full` label excluded). VR10's 60 s stays the record of TVR-1's acceptance (11.10) and is not edited. The reason: the budget had no headroom with or without TVR-2, and A changes no frozen criterion or ladder. |
+
+**14.11 Owner rulings after step 8 (2026-11-05; owner, "choose recommended").** Nothing was widened or re-run to pass (TVM2). Each case was a miss, recorded as `fail` or `not_evaluated` until ruled; all three are ruled A.
+
+| # | Question | Options | Ruling |
+|---|---|---|---|
+| CV-Q20 | TVB-14's 2D and 3D tensor finest L2 (six comparisons) miss 1e-4: 1.1e-4–2.1e-4 in 2D and 6.7e-4–1.4e-3 in 3D. Every order passes at 1.93–2.00. This is CV-Q12's situation on a second benchmark. | (A) Extend known finding (iv) to TVB-14's six comparisons. The criterion and ladder stay; the orders still gate. (B) Add finer levels: 256² is feasible, but 3D would need about 170³, which does not fit 32 GB. (C) Keep them as fail. | **A.** The six count as `finding` (iv) with this ruling cited (`registry.cpp`, `finding_iv_tvb14`), for the reason CV-Q12 gave. The orders still gate. |
+| CV-Q21 | TVB-14's unstructured H1 orders: 3D generated and swept p̂ is 1.52–1.97, above [0.8, 1.3] (six fails). 2D generated is outside the asymptotic range (three `not_evaluated`), with orders falling 1.71 → 1.27 → 1.09 toward 1 as h shrinks. The 3D ladders end at L/32, where 2D's pairs were still 1.5–1.9. So this reads as pre-asymptotic super-convergence of the H1 error on these meshes, not an inconsistency. Every finest H1 passes, and every L2 order is ≈ 2. | (A) Record a known finding (v) for the six 3D fails: an H1 order above the band on the frozen 3-level 3D ladders is pre-asymptotic, and the finest-level accuracy still gates. 2D generated stays `not_evaluated`, as 14.7 prescribes. (B) Add an L/64 3D level: about 0.9M nodes and 2.7M unknowns, which does not fit 32 GB with PARDISO. (C) Keep them as fail. | **A.** Known finding (v) (`finding_v`): the six 3D H1 orders count as `finding`, and 2D generated stays `not_evaluated`. An order above the theoretical one is not evidence of a defect: the band's upper edge exists to catch a mis-specified p_th, and the tensor families gate the scheme's order cleanly. |
+| CV-Q22 | SRH is on, as 14.4 requires, but on a 1 µm device with Scharfetter lifetimes (diffusion length about 50 µm) R is only 2e-6–6e-6 of the hole source. TVB-14 therefore exercises SRH but cannot detect an error in it below about that weight. | (A) Record it as a limitation of TVB-14's construction. A device near the diffusion length, or a short-lifetime material, would gate SRH, and that belongs to a later TVR. (B) Add now a second, long-device TVB-14 variant (new criteria to freeze). | **A.** Recorded as a limitation in `tvb14.cpp`'s header and as a note on every TVB-14 result. It changes no frozen item. |
+
+**14.12 TVR-2 close-out (2026-11-06).**
+
+| Benchmark | Fast tier | Full tier (local, MKL, 6 threads) |
+|---|---|---|
+| TVB-11 resistor (D) | 6 pass | — |
+| TVB-12 SG exactness (D) | 8 pass | — |
+| TVB-04 Poisson MMS | 3 pass | 15: 12 pass, 2 finding (iv) (CV-Q12), 1 not evaluated (3D L∞ spread, CV-Q14); 1413 s |
+| TVB-07 pn junction | 2 pass | 8 pass; 0.4 s |
+| TVB-09 MOS-C | 7 pass | 37: 34 pass, 3 not applicable (V_G = V_FB); 0.1 s |
+| TVB-14 drift-diffusion MMS | 9 pass | 45: 30 pass, 12 finding ((iv) CV-Q20, (v) CV-Q21), 3 not evaluated (2D generated spread); 959–999 s |
+
+- **Fast tier:** `nitcad verify --tier fast` reports 10 benchmarks: 9 pass and 1 finding (TVB-02 (ii), TVR-1's). There are no fails or run errors.
+- **Full tier:** the four `full` ctests pass against their frozen outcomes (Release, 2026-11-05).
+- **Tests:**
+  - All 47 verify ctests pass in Release, including `full`.
+  - All 43 pass in Debug.
+  - Serial Debug on an idle machine takes 61.3–62.7 s (three runs), within CV-Q19's 75 s. The 71–80 s of step 8 was machine load.
+- **Scope (14.1) against what was built:**
+  - (a) `verify/study` builds ladders, applies the iterative-error rule and runs the order studies.
+    - "GCI driving" is not used: every TVR-2 benchmark has an exact solution, so the studies judge errors against it.
+    - TVR-1's GCI (`verify/reference/metrics`) applies when no exact solution exists. No TVR-2 study is of that kind.
+    - The asymptotic check against an exact solution is the order spread alone (step 2, CV-Q14).
+  - (b) The TVQ3 hook is the only change to existing code (step 1).
+  - (c) The references have their L0 tests.
+  - (d) The benchmarks are registered in the fast tier, with full-tier tests.
+  - TVB-05 and 06 are deferred to TVR-4 (CV-Q3 B).
+- **Recorded for later phases:**
+  - The SRH weight in TVB-14 (CV-Q22): a device near the diffusion length would gate SRH.
+  - The full tier is local only (CV-Q16).
+  - 14.4's fast-tier families column differs from 14.7's frozen ladder column for TVB-14; 14.7 governs (step 8).
+
 ---
 
 ## New questions the advisor raised (not yet in `ARCHITECTURE.md`)

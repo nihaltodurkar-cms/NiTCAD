@@ -10,19 +10,54 @@ namespace NiTCAD::verify::benchmark {
 
 namespace {
 
-constexpr std::array<Benchmark, 4> shipped{{
-    {"TVB-01", "Constants and thermal voltage against CODATA 2018", Tier::fast, &run_tvb01},
-    {"TVB-02", "Fermi-Dirac integrals F_1/2, F_-1/2, F_3/2 and the inverse of F_1/2", Tier::fast, &run_tvb02},
-    {"TVB-03", "The Bernoulli function B(x) = x / (e^x - 1)", Tier::fast, &run_tvb03},
-    {"TVB-32", "The consistency suite C1-C12 on the three TVR-1 decks", Tier::fast, &run_tvb32},
+constexpr std::array<Benchmark, 10> shipped{{
+    {"TVB-01", "Constants and thermal voltage against CODATA 2018", Tier::fast, [](Tier) { return run_tvb01(); }},
+    {"TVB-02", "Fermi-Dirac integrals F_1/2, F_-1/2, F_3/2 and the inverse of F_1/2", Tier::fast,
+     [](Tier) { return run_tvb02(); }},
+    {"TVB-03", "The Bernoulli function B(x) = x / (e^x - 1)", Tier::fast, [](Tier) { return run_tvb03(); }},
+    {"TVB-04", "Poisson manufactured solution with a dielectric jump", Tier::fast, &run_tvb04},
+    {"TVB-07", "Equilibrium abrupt pn junction", Tier::fast, &run_tvb07},
+    {"TVB-09", "MOS capacitor on a uniform substrate", Tier::fast, &run_tvb09},
+    {"TVB-11", "Uniform resistor with ohmic contacts", Tier::fast, [](Tier) { return run_tvb11(); }},
+    {"TVB-12", "Scharfetter-Gummel constant-field exactness", Tier::fast, [](Tier) { return run_tvb12(); }},
+    {"TVB-14", "Full drift-diffusion manufactured solution", Tier::fast, &run_tvb14},
+    {"TVB-32", "The consistency suite C1-C12 on the three TVR-1 decks", Tier::fast, [](Tier) { return run_tvb32(); }},
 }};
+
+int pardiso_thread_count = 1;
 
 bool everywhere(double) { return true; }
 
-constexpr std::array<KnownFinding, 1> findings{{
+constexpr std::string_view finding_iv =
+    "DECISIONS Unit 55 14.9 CV-Q12 (known finding): the frozen 1e-4 against the frozen ladders, whose 2D and 3D "
+    "finest spacings are 2x and 4x the 1D finest; the orders pass";
+
+constexpr std::string_view finding_iv_tvb14 =
+    "DECISIONS Unit 55 14.11 CV-Q20 (known finding (iv) extended to TVB-14): the frozen 1e-4 against the frozen 2D "
+    "and 3D tensor ladders; the orders pass";
+
+constexpr std::string_view finding_v =
+    "DECISIONS Unit 55 14.11 CV-Q21 (known finding): an H1 order above the band on the frozen 3-level 3D ladders is "
+    "pre-asymptotic (2D generated falls toward 1 as h shrinks); the finest-level H1 still gates";
+
+constexpr std::array<KnownFinding, 15> findings{{
     {"TVB-02", "F_-1/2", &everywhere, "(ii)",
      "DECISIONS 11.13 TVB-02 finding (ii) widened (option A), accepted as a limitation (Unit 56, 13): F_-1/2 "
      "misses from eta = 13.76, a quadrature-rounding floor of the derivative-consistent table"},
+    {"TVB-04", "psi L2 finest, 2D tensor", &everywhere, "(iv)", finding_iv},
+    {"TVB-04", "psi L2 finest, 3D tensor", &everywhere, "(iv)", finding_iv},
+    {"TVB-14", "psi L2 finest, 2D tensor", &everywhere, "(iv)", finding_iv_tvb14},
+    {"TVB-14", "psi L2 finest, 3D tensor", &everywhere, "(iv)", finding_iv_tvb14},
+    {"TVB-14", "phi_n L2 finest, 2D tensor", &everywhere, "(iv)", finding_iv_tvb14},
+    {"TVB-14", "phi_n L2 finest, 3D tensor", &everywhere, "(iv)", finding_iv_tvb14},
+    {"TVB-14", "phi_p L2 finest, 2D tensor", &everywhere, "(iv)", finding_iv_tvb14},
+    {"TVB-14", "phi_p L2 finest, 3D tensor", &everywhere, "(iv)", finding_iv_tvb14},
+    {"TVB-14", "psi H1 order, 3D generated", &everywhere, "(v)", finding_v},
+    {"TVB-14", "psi H1 order, 3D swept", &everywhere, "(v)", finding_v},
+    {"TVB-14", "phi_n H1 order, 3D generated", &everywhere, "(v)", finding_v},
+    {"TVB-14", "phi_n H1 order, 3D swept", &everywhere, "(v)", finding_v},
+    {"TVB-14", "phi_p H1 order, 3D generated", &everywhere, "(v)", finding_v},
+    {"TVB-14", "phi_p H1 order, 3D swept", &everywhere, "(v)", finding_v},
 }};
 
 bool starts_with(std::string_view s, std::string_view prefix) { return s.substr(0, prefix.size()) == prefix; }
@@ -46,6 +81,9 @@ std::string csv_field(std::string_view s) {
 
 std::span<const Benchmark> benchmarks() { return shipped; }
 std::span<const KnownFinding> known_findings() { return findings; }
+
+void set_pardiso_threads(int threads) { pardiso_thread_count = threads; }
+int pardiso_threads() { return pardiso_thread_count; }
 
 void apply_known_findings(BenchmarkResult& r, std::span<const KnownFinding> table) {
     for (const KnownFinding& k : table) {

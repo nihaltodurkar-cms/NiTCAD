@@ -3,6 +3,7 @@
 #pragma once
 
 #include <cstdint>
+#include <vector>
 
 #include "NiTCAD/physics/quantum_confinement.hpp"
 #include "NiTCAD/physics/semiconductor.hpp"
@@ -10,6 +11,20 @@
 namespace NiTCAD::assemble {
 
 enum class NonlocalTunnelling : std::uint8_t { off, kane, direct_wkb };
+
+// Manufactured-solution sources (verification only; PhysicsModels::manufactured; DECISIONS.md
+// Unit 55 14.3, TVQ3), one value per mesh node, independent of the state (no Jacobian entries) and
+// lumped as the doping is (times the node's box volume, CV-Q5):
+//   charge_cm3           extra net positive charge / q [cm^-3], in the Poisson row of every node
+//                        that is not a contact or electrode node (semiconductor and insulator);
+//   electron_generation  [cm^-3 s^-1], in the electron row of every semiconductor node off contacts;
+//   hole_generation      [cm^-3 s^-1], in the hole row of the same nodes.
+// Each vector is empty (no source in that row) or has one entry per node.
+struct ManufacturedSources {
+    std::vector<double> charge_cm3;
+    std::vector<double> electron_generation;
+    std::vector<double> hole_generation;
+};
 
 // The doping-dependent hole mobility (Units 34, 35): the material's Caughey-Thomas (the legacy),
 // Masetti's boron-doped silicon fit (physics/mobility.hpp), which needs every semiconductor region
@@ -126,6 +141,12 @@ struct PhysicsModels {
     // equations, Stratton's currents and the carrier-temperature mobility of
     // physics/energy_balance.hpp. Off by default; off, every result is drift-diffusion's.
     bool energy_balance = false;
+    // Verification only (DECISIONS.md Unit 55 14.3, TVQ3): manufactured-solution sources added to
+    // the drift-diffusion rows, for code verification by the method of manufactured solutions. Not
+    // in the deck vocabulary and not a physical model. Null (the default): no term, every result
+    // bit-identical to a build without it. Not owned: the sources must outlive every system created
+    // with these models (a raw pointer keeps PhysicsModels a literal type, usable in constexpr).
+    const ManufacturedSources* manufactured = nullptr;
 };
 
 }  // namespace NiTCAD::assemble

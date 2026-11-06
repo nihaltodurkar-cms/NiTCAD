@@ -6,6 +6,7 @@
 //   nitcad plot <deck or result file> ... --out <image.png>
 //                         draw a view or a curve of a deck's results (Unit 25a; plot.hpp)
 //   nitcad verify [--tier fast|full|nightly] [--id <id>] [--report <file>]
+//                 [--mkl <mkl_rt.dll>] [--threads <n>]   (PARDISO for TVB-04's 3D levels)
 //                         run the verification benchmarks of TVR-1 (Unit 55; verify.hpp, its own exit status)
 //   nitcad --version      print the build: version, git revision, build type, compiler, Eigen
 //
@@ -46,6 +47,7 @@ int usage() {
     std::fputs("usage: nitcad check <deck>\n       nitcad run <deck>\n"
                "       nitcad plot <deck or result file> [options] --out <image.png>\n"
                "       nitcad verify [--tier fast|full|nightly] [--id <id>] [--report <file>]\n"
+               "                     [--mkl <mkl_rt.dll>] [--threads <n>]\n"
                "       nitcad --version\n",
                stderr);
     return 64;
