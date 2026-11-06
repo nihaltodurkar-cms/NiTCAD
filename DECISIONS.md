@@ -10481,6 +10481,88 @@ changed. Each mutant was applied to the Release build, the frozen case run, and 
   - (h, tol/100) swapped with (h/2, tol): ε_int is symmetric in them.
 - Release `[registry]` (53 assertions) and the TVB-16/18 frozen cases pass after the restores.
 
+**16.40 Step 8 as built: mos_hf and TVB-10. DT-Q35 open.**
+- **`verify/reference/mos_hf`** (PD, base-free; p-type substrates only, an n-type one is refused):
+  - The redistribution model of 16.18 (b): the electrons at one quasi-Fermi level shifted by v, Φ(t, v) =
+    p_b G(−t) + n_b e^{−v} G(t). This is 16.17's reproduction (2) with χ = 0. Its double zero at t = 0 keeps
+    Q_n = −q ∫ n_b e^{−v} expm1(s)/g ds finite. Reproduction (1) is not used (16.17's finding).
+  - C_s,HF = −(1/V_T)(∂Q_s/∂t + ∂Q_s/∂v · dv/dt), with dv/dt = −(∂Q_n/∂t)/(∂Q_n/∂v). The partials are analytic, and
+    ∂Q_n/∂v is a Gauss–Kronrod quadrature in dd.
+  - **Departure from 16.18 (b):** the plan named complex step for the partials. They are analytic instead, so the
+    second method (Q_s along Q_n held fixed by Brent, Richardson central differences, δ = 1e-3) is independent of
+    them.
+  - 16.18 (b)'s "V frozen" diagnostic is C_LF itself: v held at 0 means the electrons follow the substrate. The
+    benchmark prints C_LF beside C_HF instead.
+  - Deep depletion: Φ_dd = N_A G(−t), with V_G by Brent. The second method is the quadrature of the charge density
+    over the profile.
+- **L0** (`mos_hf_test`, 5 cases, 71 assertions, 0.25 s Debug):
+  - v = 0 is KN's charge (1e-28);
+  - Q_s = Q_p + Q_n by quadrature, inversion and accumulation, v ≠ 0 (1e-24);
+  - depletion C_HF = C_LF (1e-6); the strong-inversion plateau within 1 %, and inside ±10 % of ε/W_max;
+  - deep depletion: its second method (1e-24), the round trip (1e-25), KN in depletion (1e-8), and smaller |Q|
+    with larger band bending in strong inversion;
+  - the refusals.
+  - The second method takes 0.7 s in Debug against CV-Q19's exhausted budget. It is therefore not run in L0.
+    TVB-10 runs it at all six gate biases and stops with a run error unless it agrees to 1e-15 C. The agreement
+    found is 1e-17 to 1e-28 relative (6.8e-28 F/cm² at 2 V).
+- **TVB-10** (`tvb10.cpp`, full tier, registered after TVB-09; 48 benchmarks). TVB-09's MOS-C, now with SRH on,
+  Caughey–Thomas mobility and no field mobility.
+  - HF (A): the operating point is `equilibrium_poisson`, as `small_signal.hpp` prescribes for inversion. The small
+    signal runs at 1e5, 10^5.5 and 1e6 Hz, and C = Im Y_gg/ω is judged at 10^5.5 Hz. The ladder is N = 512…64, with
+    N = 1024 as h/2. U_disc comes from the shared `u_disc`, and the (h, tol) factorial runs at N = 512.
+  - Deep depletion (E): a gate ramp from V_FB to V_FB + 4 V in 100 µs, BDF2 with fixed 1 µs steps, at Newton
+    tolerance 1e-10 (1e-12 for the factorial's tol/100 state). Q_s is judged at 1, 2, 3 and 4 V. The factorials are
+    (h, tol) and (h, Δt) at N = 512, with Δt/2 the finer step.
+- **Construction changes before commit** (no criterion, ladder or expected outcome touched; as TVB-15's, 16.26):
+  - The first build used a 1 µs ramp with adaptive steps (rtol 1e-6, factorial rtol 1e-8). The factorial's
+    adaptive runs took more than 45 minutes and were killed.
+  - Fixed steps of 10 ns made the run 2 s. That run found the holes' lag behind the ramp: Q_s at a ramp 10× slower
+    differed by 1.7e-6. That is comparable to the finest mesh error (3.7e-6), and it bent the 1 V order to 2.46.
+  - The ramp became 100 µs. That is still deep depletion: generation needs about 0.1 s, and the electrons' charge
+    measured at 4 V is 6.5e-7 of |Q_s|.
+  - The Newton tolerance became 1e-10, because tol/100 = 1e-14 fell below the rounding floor at 1 µs steps
+    (Newton failed at t = 41 µs).
+  - The deep-depletion truncation uses the bound 4 e^{−(d − W)/L_D} (at most 3e-10). `bulk_profile` cannot take a
+    deep-depletion band bending: it would include the inversion layer.
+- **Frozen outcome, set before the first run:** every comparison passes (14 comparisons).
+- **TVB-10's run: 13 pass, 1 not_evaluated, 0 fail.** 4.3 s in Release. The frozen case fails, so `tvr4_full`
+  fails, pending DT-Q35.
+  - HF C_HF passes at V_G − V_FB = 0.2, 0.5, 1, 1.5 and 2.5 V, with |C_sim − C_ref| = 4.3e-13 to 1.0e-12 F/cm²
+    (5.6e-6 to 1.2e-5 relative). ε_HF, the spread over the decade, is 9e-18 to 1.2e-12, far inside 1e-3 C.
+  - **2 V is not_evaluated.** The three-grid GCI is outside the asymptotic range (orders 2.108, 2.005), and the
+    finest triple oscillates. The (h/2, tol) state is not converged in C: e(h/2, tol) = 1.43e-11 against
+    e(h/2, tol/100) = 4.26e-12.
+  - Deep depletion: all 8 comparisons pass. p̂ = 2.001, 1.975, 1.941 and 1.903 (spread ≤ 0.071). The finest errors
+    are 5.6e-6 to 6.4e-6. U_iter is ≤ 1.2e-12, U_dt ≤ 5.1e-11 and ε_int ≤ 1.6e-12. The orders' drift toward 1.9 at
+    high V_G follows the electrons' growing charge (1.6e-8 to 6.5e-7); the slower ramp's departure is 7.8e-8 to
+    4.8e-6.
+  - **Observation (not a finding, no criterion involved):** in strong inversion NiTCAD's reported small-signal
+    resolution is 3.2e-10 to 4.7e-9 F/cm² (up to 6 % of C). The actual agreement with the reference is 5e-13. The
+    resolution dominates U_num there, so the HF bounds at 1.5–2.5 V are 100–1000× wider than the error.
+- **Mutation:**
+  - `mos_hf` (10 mutants: Φ's shift, Φ_v's form, the ½ in Φ_v/2Φ, dv/dt's sign, Richardson, the deep-depletion
+    charge and density, dQ_n/dt's sign, the v-term): 9 caught.
+    - The Φ_v mutant first survived the 1e-9 second-method bound. The bound was tightened to 1e-15 (the agreement
+      found is ~1e-17), and it was then caught.
+    - The survivor (dQ_n/dt's sign, which acts only in accumulation) is equivalent: the term it re-signs is about
+      1e-17 of C there.
+    - After the second method moved into TVB-10, the Φ_v and Richardson mutants were rerun against TVB-10. Its
+      self-check catches both.
+  - TVB-10 (14 mutants): judged by any change in its 14 printed comparison lines, because the frozen case is
+    already red. 12 caught. The 2 survivors are equivalent:
+    - U_dt dropped: it enters only the factorial's interaction test, which is far from its threshold;
+    - the factorial's argument order: ε_int is symmetric in it.
+
+**DT-Q35 (TVB-10's frozen outcome).**
+- (A) Record as found, as DT-Q20 A did: the 2 V HF point is not_evaluated with its reason (the h/2 state's tolerance
+  sensitivity), and the other 13 pass. The frozen case then pins those outcomes and the passes' bounds to 1e-6.
+  Criteria, ladder and construction are unchanged.
+- (B) Tighten the HF Newton tolerance to 1e-14 (factorial 1e-16, if reachable) and rerun. That changes the
+  construction after a run (TVM2), and 1e-16 is probably below the rounding floor.
+
+**Recommendation: A.** The miss is the U_num estimate at one point, not an error: that point's |C_sim − C_ref| is
+5.3e-13, the same as its neighbours.
+
 ---
 
 ## New questions the advisor raised (not yet in `ARCHITECTURE.md`)

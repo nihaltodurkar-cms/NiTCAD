@@ -279,3 +279,23 @@ TEST_CASE("TVB-18: nothing in the fast tier", "[tvr4]") {
     REQUIRE_FALSE(r.run_error.has_value());
     REQUIRE(r.comparisons.empty());
 }
+
+// TVB-10 (the MOS capacitor's HF C-V, A, and deep depletion, E; criteria 16.8 and 16.19, frozen; construction 16.40) is
+// full tier only (16.7). 14 comparisons: C_HF at 6 gate biases; Q_s order and finest accuracy at 4. Frozen outcome,
+// set before its first run: every comparison passes.
+TEST_CASE("TVB-10: the MOS capacitor HF C-V and deep depletion, full tier (frozen outcome: pass)", "[.tvr4_full]") {
+    const auto r = bench::run_tvb10(bench::Tier::full);
+    if (r.run_error) FAIL(*r.run_error);
+    for (const auto& n : r.notes) std::printf("TVB-10 note: %s\n", n.c_str());
+    for (const auto& c : r.comparisons) {
+        std::printf("TVB-10 [%s] %s: %.4g (%s) %s\n", std::string(to_string(c.comparison.outcome)).c_str(),
+                    c.quantity.c_str(), c.metric, c.criterion.c_str(), c.comparison.reason.c_str());
+    }
+    require_all_pass(r, 14);
+}
+
+TEST_CASE("TVB-10: nothing in the fast tier", "[tvr4]") {
+    const auto r = bench::run_tvb10(bench::Tier::fast);
+    REQUIRE_FALSE(r.run_error.has_value());
+    REQUIRE(r.comparisons.empty());
+}
