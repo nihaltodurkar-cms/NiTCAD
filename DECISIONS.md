@@ -10782,6 +10782,35 @@ at the field, and the criterion is unchanged.
 **Recommendation: B.** The resistor's floor is the benchmark's own reference assumption (n = N), like DT-Q37's V/L,
 and the fix keeps the criterion. The slab and Π are DT-Q36's class and should follow its ruling.
 
+**16.44 Step 13: TVB-32 on the TVR-4 devices. Scope and frozen expectations, written before code and before any run
+(TVM2).**
+- **Scope.** Each TVR-4 benchmark already built (TVB-05, 06, 10, 13, 15, 16, 17, 18, 19, 27, 28) exposes a
+  `tvbXX_consistency()` that runs the checks on its own device (its own builder and models) at the coarsest level
+  of its ladder.
+  - The operating points are the benchmark's own, plus the zero-bias point where the benchmark has none.
+  - TVB-20 and 21 join with step 9.
+- **Checks:**
+  - C1–C5 and C12 at every DC point (a small-signal run's DC points included);
+  - C1 and C3 on the equilibrium solve, for devices with a semiconductor region;
+  - C7 and C8 at every small-signal point;
+  - C6 on every transient run (TVB-10's deep depletion, TVB-19's two cases);
+  - C9 on TVB-18's diode at 0.40 V, from a DC stencil of h = 1 mV, with f = 0 among the frequencies;
+  - C10 and C11 are not run: no TVR-4 benchmark builds a limit series or a symmetry map. Listed in the notes.
+- **Tier.** TVB-32's fast tier is unchanged (the three decks). The full tier adds these entries. The frozen case runs
+  in `tvr4_full` as `[.tvr4_full]`.
+- **Frozen expectations** (11.13's rule, unchanged):
+  - C1, C2, C7, C8: pass where every bias is exactly 0 and the thermal contacts are at one temperature, else NOT
+    APPLICABLE naming the predicate.
+  - C1 and C3 on the equilibrium: pass. C3, C4 and C12: pass. C6 and C9: pass.
+  - C5: NOT APPLICABLE ("electrothermal on") with the model off; pass with it on (TVB-27, 28), with 11.13's
+    Newton-term limitation printed.
+  - A failed or NOT EVALUATED part, and any other outcome, is a finding to the owner (DT-Q11: not fixed in TVR-4).
+- **Prediction, not an expectation** (written before the run): TVB-15's zero-bias point carries the TVQ3 hook's
+  manufactured generation. C1's header says "NiTCAD has no optical or prescribed generation, so that predicate
+  holds by construction", and the hook makes that untrue. C1 and C2 at that point are therefore expected to fail
+  (the generated carriers leave through both contacts). If they do, that is a finding against C1's predicate list
+  (11.6), not against the solver.
+
 ---
 
 ## New questions the advisor raised (not yet in `ARCHITECTURE.md`)
