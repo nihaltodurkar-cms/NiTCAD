@@ -10323,6 +10323,87 @@ are independent) is tested directly rather than argued.
 
 **Recommendation: A.** It makes the benchmark test what it is named for, at all frequencies.
 
+**16.35 Rulings DT-Q28 B (authorized), DT-Q29 A, DT-Q30 A, DT-Q31 A** (owner, "choose recommended" 2026-11-06, and "Authorize B" on DT-Q28, asked separately because B widens U_num after TVB-16's run, TVM2)**; DT-Q28 B applied; TVB-16's frozen outcome.**
+- **DT-Q28: B, authorized.** In `tvb16.cpp`, `u_disc()` is the larger of:
+  - the in-range three-grid GCI (DT-Q26 A);
+  - Roache's two-grid estimate of the N = 1024 value, F_s |f(h/2) − f(h)| r^p/(r^p − 1) with F_s = 3 (`gci_safety_factor_two_grids`) and p = p_th = 2 on N = 2048 and 1024 (the factorial's (h/2, tol) state). It is used only where the measured e(h/2)/e(h), the errors against the reference, is within 0.25 ± 0.05.
+
+  If neither applies, U_disc is not estimated, and the reason names both causes. This holds for J and for the derivatives. The note prints which estimate was used.
+- **DT-Q29: A.** TVB-18 is built on the 5 µm base only. The 500 µm base is recorded as not buildable under 16.18 (g) on NiTCAD's silicon (16.34's table).
+- **DT-Q30: A.** Y_ref is the total, with Y_edge. Shockley's fixed-edge form is printed beside it.
+- **DT-Q31: A.** TVB-18 also judges Re Y, by the same rule. That makes 63 comparisons.
+- **TVB-16 rerun** (Release, first run after DT-Q28 B, nothing changed after it): **13 pass, 28 not_evaluated, 0 fail.** `verify_benchmark.tvr4_full` passes, with the frozen outcome set to this result: the 13 passing comparisons are listed in `device_theory_test`, and every other one must be not_evaluated.
+  - **Pass:**
+    - (i) J at 0.2 V (three-grid in range);
+    - (ii) short: J at 0.2, 0.3, −0.5, −1 and −2 V, and the −0.5..−1 and −1..−2 V reverse exponents;
+    - (ii) long: J at −0.5, −1 and −2 V, and the same two exponents.
+    - The −2 V long-base J, 16.33's fail, now passes with the two-grid estimate (5.1e-4 against an error of 1.7e-4; 16.33's three-grid 1.15e-4 is the smaller of the two).
+  - **not_evaluated, by cause:**
+    - Most have e(h/2)/e(h) ≈ 1 (for example 1.0002 at 0.6 V and 1.011 at 0.5 V in (ii) short). There, the error against the reference is the reference's approximation (ε_J's terms, and in the long base finding (x)'s ohmic drop), not mesh error. The order test can't be applied and the fallback correctly declines.
+    - Others have ratios far from 1/4 (−0.79, 2.19, 0.50, 1.66: errors at rounding or resolution level that change sign).
+    - At −5 V, the factorial's tol/100 states were not reached (DT-Q23 A).
+    - Some derivatives are not_evaluated because one of their J values is.
+  - Finding (x) still classifies nothing: no long-base forward point is judged.
+- **What TVB-16 now verifies:** reverse-bias J and its voltage exponent in both bases with SRH, and the low-forward J in the short base. In forward bias in the short bases, NiTCAD's J agrees with the reference within the bounds (log errors 2.4e-6 to 6.4e-3 against 1.3e-2 to 2.1e-2), but the discretization error can't be separated from the reference's approximation, so those points stay not_evaluated. The long base's forward J at 0.5 and 0.6 V would exceed its bounds (1.3e-3 and 5.7e-2 against 3.4e-4 and 7.3e-3: finding (x)'s ohmic drop), and is not_evaluated for the same reason. This is recorded as TVB-16's reach, not as a finding.
+
+
+
+**16.36 Step 7b as built: TVB-18; the shared U_disc rule; TVB-16's mutation run. DT-Q32 and DT-Q33 open.**
+- **The shared U_disc rule** (`registry.hpp`'s `u_disc`, beside `factorial`): the in-range three-grid GCI (DT-Q26 A), Roache's two-grid estimate gated as DT-Q28 B, and the larger of the two. TVB-16's local copy is replaced by it, and TVB-18 uses it. TVB-16's outcomes and its 13 pinned bounds are identical after the move. There are 8 unit cases in `registry_test` on exact sequences c + a h^p: values, orders, each reason, the band's edges, and the spread between 0.1 and 1.
+- **TVB-16's mutation run** ("TVB-16*", 14 mutants): 8 caught. The 6 survivors each change U_num or ε but no outcome, because the 13 passes have wide margins:
+  - M1, assumed order 4;
+  - M3, F_s = 1;
+  - M7, the coarser-triple check removed;
+  - M8, h/2 halved;
+  - M11, ε_φ dropped;
+  - M12, the GCI denominator's sign.
+
+  Changes made:
+  - the frozen test now pins the 13 passes' bounds to 1e-6;
+  - the rule moved to the registry, with unit tests.
+
+  Rerun, the 6 survivors and 7 mutants of the shared rule: all caught. The spread and band survivors were caught after the two added cases.
+- **TVB-18** (`tvb18.cpp`, registered after TVB-17, full tier, 47 benchmarks), as planned in 16.34 under DT-Q29–Q31 A:
+  - 5 µm bases, the ladder 1024 … 128 and the factorial at 2048. Biases 0.35, 0.40 and 0.45 V. ωτ_p = 1e-3 … 1e3 with τ_p = 8.33 µs.
+  - |Y|, Re Y and arg Y of Y₁₁, 63 comparisons.
+  - The phase bound is asin((U_num,|Y| + U_ref + ε_Y)/|Y_ref|): the largest angle a complex error of the bound's size can produce (16.19's bound read on the complex value).
+  - The frozen expected outcome, set before the first run, is "every comparison passes". The case is in `device_theory_test` [.tvr4_full], and the run takes 0.5 s in Release.
+- **TVB-18's first run** (nothing changed after it): **1 pass, 62 not_evaluated.** `tvr4_full` fails on TVB-18.
+  - U_disc is not estimated at 62 points:
+    - three-grid outside the range at 37, no coarser order at 18, oscillatory at 7;
+    - the two-grid gate is refused everywhere, with e(h/2)/e(h) = 0.97–1.0.
+  - The level-to-level differences are 1e-6 to 4e-4 of |Y|. The error against the reference (1e-3 to 3e-2) is the reference's approximation and NiTCAD's model departures, not mesh error. So the gate's ratio is about 1 wherever ε_Y dominates.
+  - This is a flaw in the gate I proposed in DT-Q28 B, not in NiTCAD. It is also why TVB-16's forward points are not_evaluated (16.35).
+- **Two physical observations from the same run:**
+  - **(a) Series resistance:** at ωτ = 1e3, Re Y_sim / Re Y_ref = 7.0, 2.0 and 1.19 at 0.35, 0.40 and 0.45 V. The excess matches ω²C_j²R (R = 8.8e-4 Ω·cm², 16.34). This is the term DT-Q29 kept out of reach. Re Y's bound is ε_Y|Y_ref| in absolute terms, so it covers it.
+  - **(b) C_j above the QE reference:** Im Y_sim / Im Y_ref = 1.0068, 1.0133 and 1.0272 at 0.35, 0.40 and 0.45 V, the same at ωτ = 1e-3 and 1e3 (Im Y ≈ ωC_j throughout, since the short base's diffusion susceptance is about 1e-3 of it).
+    - The excess roughly doubles every 50 mV and is converged in the mesh (e(h/2)/e(h) ≈ 1). At reverse bias TVB-17's C agrees to about 1e-5.
+    - None of ε_Y's named terms has this dependence. Δφ/V_T is 4.7e-3, flat in V. J_SNS/J_diff falls with V.
+    - Not explained yet.
+- **Diagnostic** (a temporary build, reverted): the observed order on the finest triple N = 2048/1024/512 (the factorial's (h/2, tol) state with levels 0 and 1).
+  - In TVB-18 the median order is 2.04 (range −0.9 to 2.41), and 7 of 63 change sign.
+  - With the two-grid estimate gated on that order instead (within 2 ± 0.5, differences of one sign):
+    - **TVB-18 would be 54 pass, 1 fail, 8 not_evaluated.** The fail is |Y| at 0.45 V, ωτ = 100: error 1.53e-2 against a bound of 1.29e-2, from (b). The 8 are |Y| and Re Y at 0.35 V with ωτ ≤ 10, where the differences change sign.
+    - **TVB-16's J would be 14 pass, 2 fail, 7 not_evaluated.** The 2 fails are the long base at 0.5 and 0.6 V, inside finding (x)'s region, so they become findings as DT-Q27 intended. TVB-16's derivatives were not measured.
+
+**DT-Q32 (the two-grid gate).**
+- (A) **Gate the two-grid estimate on the discretization itself:** the observed order on N = 2048/1024/512 within p_th ± 0.5, with successive differences of one sign, instead of e(h/2)/e(h) against the reference. The rest of DT-Q28 B (F_s = 3, p_th = 2, the larger of the two, not estimated where neither) is unchanged.
+  - Applied to TVB-16 and TVB-18. Both have run, so this is a post-run change (TVM2) and needs your **authorize**.
+  - The ±0.5 band is mine. 4.2's 0.1 spread is the three-grid rule, which these ladders don't meet.
+- (B) **Keep DT-Q28 B as ruled.** TVB-18 is frozen as found (1 pass / 62 not_evaluated), and TVB-16 stays at 16.35.
+- (C) **The two-grid estimate with F_s = 3 and no gate.** That gives TVB-18 62 pass / 1 fail, but no check that p_th = 2 holds (the 7 sign changes included).
+
+**Recommendation: A.** It is what DT-Q28 B meant to test, whether the mesh error falls as h², measured where it can be. B leaves both benchmarks verifying almost nothing, and C trusts p_th without looking.
+
+**DT-Q33 (C_j above the QE reference at forward bias, 0.7–2.7 %).**
+- (A) **Investigate before TVB-18's frozen outcome is set.** This is a diagnostic only, with no criterion change:
+  - NiTCAD's quasi-static capacitance −dQ/dV from its own DC states (the charge in the depletion region and in each neutral base, separately), against qe_junction's Q(V) and the reference's diffusion charge;
+  - whether the excess sits in the depletion region (the QE model's charge) or in the bases (charge the reference does not have).
+
+  I report the result and propose either a reference correction (as its own ruling) or a finding.
+- (B) Record it now as a known finding on TVB-18's |Y| where it decides the outcome (one point under DT-Q32 A), cause unknown.
+
+**Recommendation: A.** A 2.7 % capacitance difference that grows with bias is either a reference term missing at forward bias or a NiTCAD defect. Both matter commercially, and the two are distinguishable from charges already on hand.
 
 
 ---

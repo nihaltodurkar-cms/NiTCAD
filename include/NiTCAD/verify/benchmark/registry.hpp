@@ -78,6 +78,7 @@ void set_pardiso_threads(int threads);
 [[nodiscard]] BenchmarkResult run_tvb15(Tier tier);  // full only: 1D N = 64 ... 512 and the injection ladder
 [[nodiscard]] BenchmarkResult run_tvb16(Tier tier);  // full only: three 1D diodes, N = 128 ... 1024, both polarities
 [[nodiscard]] BenchmarkResult run_tvb17(Tier tier);  // full only: 1D N = 64 ... 512 at V = -0.5, -1, -2 V
+[[nodiscard]] BenchmarkResult run_tvb18(Tier tier);  // full only: 1D N = 128 ... 1024, 3 biases x 7 frequencies
 // TVR-3 (DECISIONS Unit 55 15): TVB-31, the model-implementation catalogue.
 [[nodiscard]] BenchmarkResult run_tvb31_01();  // legacy band set
 [[nodiscard]] BenchmarkResult run_tvb31_02();  // Passler gap
@@ -161,5 +162,21 @@ struct Factorial {
 // 4.1 (c): with interacting errors (or a factorial that is not ok) an E comparison cannot pass. A pass becomes
 // not_evaluated with the reason; any other outcome is kept.
 void block_if_interacting(ComparisonRecord& c, const Factorial& f);
+
+// U_disc of a finest-level value on a 4-level ladder (DECISIONS 4.2, 4.3; Unit 55 16.33 DT-Q26 A, 16.35 DT-Q28 B),
+// finest first, h the spacings (non-constant ratios allowed):
+//   - the three-grid GCI (Roache, F_s = 1.25) on levels 0-1-2, kept only in the asymptotic range: its order and
+//     that of levels 1-2-3 both exist and agree within 0.1;
+//   - the two-grid estimate of the level-0 value, F_s |f(h/2) - f(h)| r^p / (r^p - 1), F_s = 3 and p = p_th = 2, on
+//     the pair (h, f[0]) and (h_half, f_half), kept only where e(h/2) / e(h) (errors against the reference) is
+//     within 0.25 +- 0.05;
+//   - the larger of the kept ones; nothing where neither is kept. `how` names what was used, or why nothing was.
+struct Discretization {
+    std::optional<double> u;
+    double order = 0.0, order_coarse = 0.0;  // the two three-grid orders (0 where not formed)
+    std::string how;
+};
+[[nodiscard]] Discretization u_disc(std::span<const double, 4> h, std::span<const double, 4> f, double h_half,
+                                    double f_half, double e_h, double e_h_half);
 
 }  // namespace NiTCAD::verify::benchmark

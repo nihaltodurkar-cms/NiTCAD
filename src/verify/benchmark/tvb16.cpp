@@ -32,6 +32,7 @@
 #include <cstddef>
 #include <expected>
 #include <optional>
+#include <span>
 #include <string>
 #include <utility>
 #include <vector>
@@ -218,44 +219,15 @@ std::expected<std::vector<Point>, std::string> solve_level(const Config& c, int 
     return out;
 }
 
-// Roache's three-grid GCI (F_s = 1.25) with non-constant ratios, finest first; absolute. nullopt: not estimated
-// (oscillatory or a non-positive order). Sets the order.
-std::optional<double> gci(const double h[3], const double f[3], double& order) {
-    const double e21 = f[1] - f[0], e32 = f[2] - f[1];
-    if (e21 == 0.0 && e32 == 0.0) {
-        order = 0.0;
-        return 0.0;
-    }
-    if (!(e32 / e21 > 0.0)) return std::nullopt;
-    const double r21 = h[1] / h[0], r32 = h[2] / h[1];
-    double p = 2.0;
-    for (int it = 0; it < 200; ++it) {
-        const double q = std::log((std::pow(r21, p) - 1.0) / (std::pow(r32, p) - 1.0));
-        p = std::abs(std::log(std::abs(e32 / e21)) + q) / std::log(r21);
-    }
-    order = p;
-    if (!(std::isfinite(p) && p > 0.0)) return std::nullopt;
-    return reference::gci_safety_factor_three_grids * std::abs(e21) / (std::pow(r21, p) - 1.0);
-}
-
-// U_disc with §4.2's asymptotic check (DT-Q26 A): the three-grid orders of levels 0-1-2 and 1-2-3 agree within 0.1,
-// else U_disc is not estimated (why says which). Sets both orders.
-std::optional<double> disc(const double h[4], const double f[4], double& order, double& order2, std::string& why) {
-    const auto u = gci(h, f, order);
-    const auto u2 = gci(h + 1, f + 1, order2);
-    if (!u) {
-        why = "GCI: oscillatory or a non-positive order";
-        return std::nullopt;
-    }
-    if (!u2) {
-        why = "asymptotic check: no order on the coarser triple";
-        return std::nullopt;
-    }
-    if (std::abs(order - order2) > reference::asymptotic_order_spread) {
-        why = "outside the asymptotic range (orders " + shortest(order) + ", " + shortest(order2) + ")";
-        return std::nullopt;
-    }
-    return u;
+// U_disc by the shared rule (registry.hpp's u_disc: DT-Q26 A, DT-Q28 B), with the orders and the reason.
+std::optional<double> disc_of(const double h[4], const double f[4], double h_half, double f_half, double e_h,
+                              double e_h_half, double& order, double& order2, std::string& how) {
+    const Discretization d = u_disc(std::span<const double, 4>(h, 4), std::span<const double, 4>(f, 4), h_half, f_half,
+                                    e_h, e_h_half);
+    order = d.order;
+    order2 = d.order_coarse;
+    how = d.how;
+    return d.u;
 }
 
 }  // namespace
@@ -341,6 +313,7 @@ BenchmarkResult run_tvb16(Tier tier) {
         // The ladder (finest first) and the factorial's three extra states.
         std::vector<std::vector<Point>> lv;
         double hs[4];
+        const double h_factorial = 2.0 / (factorial_N - 1);  // the two-grid pair's h/2 (DT-Q28 B)
         for (int k = 0; k < 4; ++k) {
             const auto s = solve_level(c, ladder[k], tol_newton, refs, VT, false);
             if (!s) {
@@ -376,8 +349,8 @@ BenchmarkResult run_tvb16(Tier tier) {
             const double f[4] = {lv[0][b].J, lv[1][b].J, lv[2][b].J, lv[3][b].J};
             double p = 0.0, p2 = 0.0;
             std::string why_d;
-            const auto ud = disc(hs, f, p, p2, why_d);
             const auto e = [&](double J) { return J / Jref - 1.0; };
+            const auto ud = disc_of(hs, f, h_factorial, fac[1][b].J, e(fine.J), e(fac[1][b].J), p, p2, why_d);
             const std::vector<double> parts{ud ? *ud / std::abs(Jref) : 0.0, fine.res / std::abs(Jref)};
             const Factorial fc = factorial(e(fine.J), e(fac[0][b].J), e(fac[1][b].J), e(fac[2][b].J), parts);
             std::string stalled;
@@ -397,7 +370,7 @@ BenchmarkResult run_tvb16(Tier tier) {
                               shortest(refs[b].sns_A_per_cm2.to_double()) +
                               "), J_sim " + shortest(fine.J) + "; eps_J/J: low injection " + shortest(fine.low) +
                               ", quasi-Fermi " + shortest(fine.phi) + ", edge " + shortest(edge) + "; U_num/J " +
-                              shortest(unum[b]) + " (GCI orders " + shortest(p) + ", " + shortest(p2) + ", resolution/J " +
+                              shortest(unum[b]) + " (U_disc: " + why_d + "; GCI orders " + shortest(p) + ", " + shortest(p2) + ", resolution/J " +
                               shortest(fine.res / std::abs(Jref)) + "), U_ref/J " + shortest(uref[b]) + "; " + fc.note +
                               stalled);
             ComparisonRecord cr{"J " + at_v, "A/cm^2", V, fine.J, Jref, uref[b] * std::abs(Jref), metric,
@@ -431,7 +404,8 @@ BenchmarkResult run_tvb16(Tier tier) {
                                      x_of(lv[3][a].J, lv[3][z].J)};
                 double p = 0.0, p2 = 0.0;
                 std::string why_d;
-                const auto ud = disc(hs, f, p, p2, why_d);
+                const double x_h2 = x_of(fac[1][a].J, fac[1][z].J);
+                const auto ud = disc_of(hs, f, h_factorial, x_h2, x_sim - x_ref, x_h2 - x_ref, p, p2, why_d);
                 const double res_x =
                     share * (lv[0][a].res / std::abs(lv[0][a].J) + lv[0][z].res / std::abs(lv[0][z].J));
                 const std::vector<double> parts{ud ? *ud : 0.0, res_x};
@@ -443,7 +417,7 @@ BenchmarkResult run_tvb16(Tier tier) {
                 const std::string name = std::string(ideality ? "ideality " : "reverse exponent ") + c.name + ", V = " +
                                          shortest(Va) + " .. " + shortest(Vz) + " V";
                 r.notes.push_back(name + ": x_ref " + shortest(x_ref) + ", x_sim " + shortest(x_sim) + ", U_num " +
-                                  shortest(fc.ok ? fc.u : 0.0) + " (GCI orders " + shortest(p) + ", " + shortest(p2) + "), U_ref " +
+                                  shortest(fc.ok ? fc.u : 0.0) + " (U_disc: " + why_d + "; GCI orders " + shortest(p) + ", " + shortest(p2) + "), U_ref " +
                                   shortest(uref_x) + ", eps_x " + shortest(eps_x) + "; " + fc.note);
                 ComparisonRecord cr{name, "1", Va, x_sim, x_ref, uref_x, metric,
                                     "|x_sim - x_ref| <= U_num + U_ref + eps_x = " + shortest(bound), {}};

@@ -5,17 +5,19 @@
 #include "NiTCAD/physics/semiconductor.hpp"
 #include "NiTCAD/verify/reference/metrics.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cfloat>
 #include <charconv>
 #include <cmath>
+#include <optional>
 #include <utility>
 
 namespace NiTCAD::verify::benchmark {
 
 namespace {
 
-constexpr std::array<Benchmark, 46> shipped{{
+constexpr std::array<Benchmark, 47> shipped{{
     {"TVB-01", "Constants and thermal voltage against CODATA 2018", Tier::fast, [](Tier) { return run_tvb01(); }},
     {"TVB-02", "Fermi-Dirac integrals F_1/2, F_-1/2, F_3/2 and the inverse of F_1/2", Tier::fast,
      [](Tier) { return run_tvb02(); }},
@@ -31,6 +33,7 @@ constexpr std::array<Benchmark, 46> shipped{{
     {"TVB-15", "Neutral-region minority diffusion with SRH", Tier::full, &run_tvb15},
     {"TVB-16", "Ideal diode: long and short base, Sah-Noyce-Shockley current", Tier::full, &run_tvb16},
     {"TVB-17", "Depletion capacitance at reverse bias", Tier::full, &run_tvb17},
+    {"TVB-18", "Diode small-signal admittance at forward bias", Tier::full, &run_tvb18},
     {"TVB-31.01", "Legacy silicon band set: Varshni gap and power-law densities of states", Tier::fast,
      [](Tier) { return run_tvb31_01(); }},
     {"TVB-31.02", "Passler band gap (Couderc et al. 2014, eq (10), Table I)", Tier::fast,
@@ -322,6 +325,72 @@ void block_if_interacting(ComparisonRecord& c, const Factorial& f) {
                                       " above 10 % of U " + shortest(f.u) + " (DECISIONS 4.1 (c))",
                                   {}};
     }
+}
+
+namespace {
+
+// Roache's three-grid GCI (F_s = 1.25) with non-constant ratios, finest first; absolute. nullopt: oscillatory or a
+// non-positive order. Sets the order (Roache's fixed-point iteration).
+std::optional<double> three_grid(const double* h, const double* f, double& order) {
+    const double e21 = f[1] - f[0], e32 = f[2] - f[1];
+    if (e21 == 0.0 && e32 == 0.0) {
+        order = 0.0;
+        return 0.0;
+    }
+    if (!(e32 / e21 > 0.0)) return std::nullopt;
+    const double r21 = h[1] / h[0], r32 = h[2] / h[1];
+    double p = 2.0;
+    for (int it = 0; it < 200; ++it) {
+        const double q = std::log((std::pow(r21, p) - 1.0) / (std::pow(r32, p) - 1.0));
+        p = std::abs(std::log(std::abs(e32 / e21)) + q) / std::log(r21);
+    }
+    order = p;
+    if (!(std::isfinite(p) && p > 0.0)) return std::nullopt;
+    return reference::gci_safety_factor_three_grids * std::abs(e21) / (std::pow(r21, p) - 1.0);
+}
+
+constexpr double assumed_order = 2.0, ratio_centre = 0.25, ratio_band = 0.05;  // DT-Q28 B
+
+}  // namespace
+
+Discretization u_disc(std::span<const double, 4> h, std::span<const double, 4> f, double h_half, double f_half,
+                      double e_h, double e_h_half) {
+    Discretization d;
+    std::optional<double> u3;
+    std::string w3;
+    const auto a = three_grid(h.data(), f.data(), d.order);
+    const auto b = three_grid(h.data() + 1, f.data() + 1, d.order_coarse);
+    if (!a) {
+        w3 = "GCI: oscillatory or a non-positive order";
+    } else if (!b) {
+        w3 = "asymptotic check: no order on the coarser triple";
+    } else if (std::abs(d.order - d.order_coarse) > reference::asymptotic_order_spread) {
+        w3 = "outside the asymptotic range (orders " + shortest(d.order) + ", " + shortest(d.order_coarse) + ")";
+    } else {
+        u3 = a;
+    }
+    std::optional<double> u2;
+    std::string w2;
+    const double ratio = e_h_half / e_h;
+    if (e_h != 0.0 && std::abs(ratio - ratio_centre) <= ratio_band) {
+        const double rp = std::pow(h[0] / h_half, assumed_order);
+        u2 = reference::gci_safety_factor_two_grids * std::abs(f_half - f[0]) * rp / (rp - 1.0);
+    } else {
+        w2 = "two-grid: e(h/2)/e(h) " + shortest(ratio) + " outside 0.25 +- 0.05";
+    }
+    if (u3 && u2) {
+        d.how = *u3 >= *u2 ? "GCI (>= two-grid)" : "two-grid (> GCI)";
+        d.u = std::max(*u3, *u2);
+    } else if (u3) {
+        d.how = "GCI; " + w2;
+        d.u = u3;
+    } else if (u2) {
+        d.how = "two-grid; " + w3;
+        d.u = u2;
+    } else {
+        d.how = w3 + "; " + w2;
+    }
+    return d;
 }
 
 }  // namespace NiTCAD::verify::benchmark
