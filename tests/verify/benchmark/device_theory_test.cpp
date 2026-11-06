@@ -200,14 +200,78 @@ TEST_CASE("TVB-18: the diode admittance, full tier (frozen outcome: as found, 16
         }
         return q.starts_with("Re Y") && (q.ends_with("w tau_p = 1") || q.ends_with("w tau_p = 10"));
     };
+    // The passes' bounds as found, to 1e-6 (as TVB-16's, 16.36): they pin U_num's wiring (U_disc, the factorial,
+    // eps_Y, U_ref).
+    const std::vector<std::pair<std::string, double>> passing{
+        {"|Y| V = 0.35 V, w tau_p = 1", 8.808578696416149e-05},
+        {"arg Y V = 0.35 V, w tau_p = 1", 0.014832918846696491},
+        {"|Y| V = 0.35 V, w tau_p = 10", 0.0008383929445536035},
+        {"arg Y V = 0.35 V, w tau_p = 10", 0.017068339655162565},
+        {"|Y| V = 0.35 V, w tau_p = 100", 0.012940053191018656},
+        {"Re Y V = 0.35 V, w tau_p = 100", 0.01218796097561107},
+        {"arg Y V = 0.35 V, w tau_p = 100", 0.026406683468167724},
+        {"|Y| V = 0.35 V, w tau_p = 1000", 0.2763215294156682},
+        {"Re Y V = 0.35 V, w tau_p = 1000", 0.2688630994753438},
+        {"arg Y V = 0.35 V, w tau_p = 1000", 0.05641374563828519},
+        {"|Y| V = 0.4 V, w tau_p = 0.001", 0.0002339523335332707},
+        {"Re Y V = 0.4 V, w tau_p = 0.001", 0.00023395233147367267},
+        {"arg Y V = 0.4 V, w tau_p = 0.001", 0.010109126866218723},
+        {"|Y| V = 0.4 V, w tau_p = 0.01", 0.0002339514578328694},
+        {"Re Y V = 0.4 V, w tau_p = 0.01", 0.00023395125187305386},
+        {"arg Y V = 0.4 V, w tau_p = 0.01", 0.010109062490821455},
+        {"|Y| V = 0.4 V, w tau_p = 0.1", 0.00023404158423036216},
+        {"Re Y V = 0.4 V, w tau_p = 0.1", 0.00023402099349257191},
+        {"arg Y V = 0.4 V, w tau_p = 0.1", 0.010110303533754503},
+        {"|Y| V = 0.4 V, w tau_p = 1", 0.00024311714675549916},
+        {"Re Y V = 0.4 V, w tau_p = 1", 0.00024110992216568887},
+        {"arg Y V = 0.4 V, w tau_p = 1", 0.010237231943646619},
+        {"|Y| V = 0.4 V, w tau_p = 10", 0.0007738890490044848},
+        {"Re Y V = 0.4 V, w tau_p = 10", 0.0006915658285820066},
+        {"arg Y V = 0.4 V, w tau_p = 10", 0.013320211768472834},
+        {"|Y| V = 0.4 V, w tau_p = 100", 0.012221447409990777},
+        {"Re Y V = 0.4 V, w tau_p = 100", 0.011322861583325365},
+        {"arg Y V = 0.4 V, w tau_p = 100", 0.022913256758529853},
+        {"|Y| V = 0.4 V, w tau_p = 1000", 0.28187994411004363},
+        {"Re Y V = 0.4 V, w tau_p = 1000", 0.27296328488109567},
+        {"arg Y V = 0.4 V, w tau_p = 1000", 0.05291925488939189},
+        {"|Y| V = 0.45 V, w tau_p = 0.001", 0.0013796196410596588},
+        {"Re Y V = 0.45 V, w tau_p = 0.001", 0.00137961964066477},
+        {"arg Y V = 0.45 V, w tau_p = 0.001", 0.008642224599368788},
+        {"|Y| V = 0.45 V, w tau_p = 0.01", 0.0013796235262199786},
+        {"Re Y V = 0.45 V, w tau_p = 0.01", 0.0013796234867318779},
+        {"arg Y V = 0.45 V, w tau_p = 0.01", 0.008642248344870075},
+        {"|Y| V = 0.45 V, w tau_p = 0.1", 0.0013796937420468888},
+        {"Re Y V = 0.45 V, w tau_p = 0.1", 0.0013796897931653415},
+        {"arg Y V = 0.45 V, w tau_p = 0.1", 0.008642628944188506},
+        {"|Y| V = 0.45 V, w tau_p = 1", 0.0013880049117046638},
+        {"Re Y V = 0.45 V, w tau_p = 1", 0.0013876102942143344},
+        {"arg Y V = 0.45 V, w tau_p = 1", 0.008688737458754295},
+        {"|Y| V = 0.45 V, w tau_p = 10", 0.0018167462270400497},
+        {"Re Y V = 0.45 V, w tau_p = 10", 0.0017797293975423622},
+        {"arg Y V = 0.45 V, w tau_p = 10", 0.010665824791732422},
+        {"|Y| V = 0.45 V, w tau_p = 100", 0.013186925602938966},
+        {"Re Y V = 0.45 V, w tau_p = 100", 0.012159244195724592},
+        {"arg Y V = 0.45 V, w tau_p = 100", 0.021436684973540406},
+        {"|Y| V = 0.45 V, w tau_p = 1000", 0.30621993551079657},
+        {"Re Y V = 0.45 V, w tau_p = 1000", 0.295663707607053},
+        {"arg Y V = 0.45 V, w tau_p = 1000", 0.05155669754630884},
+    };
     int evaluated = 0;
     for (const auto& c : r.comparisons) {
         CAPTURE(c.quantity, c.metric, c.criterion, c.comparison.reason);
         const bool ne = not_evaluated(c.quantity);
         evaluated += ne ? 0 : 1;
         CHECK(c.comparison.outcome == (ne ? Outcome::not_evaluated : Outcome::pass));
+        if (!ne) {
+            const auto it =
+                std::find_if(passing.begin(), passing.end(), [&](const auto& p) { return p.first == c.quantity; });
+            REQUIRE(it != passing.end());
+            const double bound = std::stod(c.criterion.substr(c.criterion.rfind("= ") + 2));
+            CHECK(std::abs(bound - it->second) <= 1e-6 * it->second);
+        }
     }
     CHECK(evaluated == 52);
+    CHECK(passing.size() == 52);
 }
 
 TEST_CASE("TVB-18: nothing in the fast tier", "[tvr4]") {

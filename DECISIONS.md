@@ -10453,6 +10453,34 @@ are independent) is tested directly rather than argued.
   - `tvr4_full` passes: 6 cases, 170 assertions (Release).
 - **Not done yet:** the mutants of TVB-18's own code ("TVB-18*"), of the DT-Q32 gate ([registry]) and of "TVB-16*"; then step 8 (TVB-10).
 
+**16.39 Step 7's mutation runs (owner "complete TVR-4 in one go", 2026-11-06).** No criterion, reference or outcome
+changed. Each mutant was applied to the Release build, the frozen case run, and the file restored.
+- **TVB-18's frozen case now pins its 52 passes' bounds to 1e-6**, as TVB-16's does (16.36). The outcomes were already
+  pinned; the bounds were not, so U_num and ε_Y mutants could only be caught through an outcome change. This is test
+  strengthening only (the values are those of 16.38's run).
+- **TVB-18\*** (17 mutants: both applicability constants, each ε_Y term dropped or rescaled, L_eff's min, U_ref's
+  complex-step term, the phase bound's U_num, the factorial's states, the resolution, the edge densities' doping,
+  the quasi-Fermi factor, both h's, Y₁₂ for Y₁₁, the judge's bound): **13 caught.** The 4 survivors are equivalent on
+  this data:
+  - U_ref's ω|C_j − C_j,cs| term (U_ref is 3e-18 S/cm², below the pins' 1e-6);
+  - the factorial's (h/2, tol/100) state for (h/2, tol), and (h, tol) for (h, tol/100): Newton converges past both
+    tolerances, and the states are bit-identical (ε_int = 0 at every point);
+  - the bound halved: the largest metric/bound is 0.143.
+- **[registry], the DT-Q32 gate** (11 mutants: the band, its `<=`, the two-grid order and safety factor, the triple's
+  h and f, the flat-triple clause, the oscillation test, max for min, the u2-only branch, the two-grid difference):
+  **9 caught, then 10.** The flat-triple clause (`*c == 0.0`) survived; a `registry_test` case was added (finest
+  triple exactly flat, the ladder's GCI refused: the two-grid estimate is kept and is 0), and the rerun caught it. The
+  `<=` → `<` mutant is equivalent: the iterated order never lands exactly on 1.5 or 2.5.
+- **TVB-16\*** under the DT-Q32 gate (14 mutants: h/2, each ε_J term, the edge factor, the resolution, U_ref's
+  quadrature term, U_num in the bound, the derivatives' ε and resolution, the factorial's h/2 state, h, the
+  derivative share, the applicability predicate, the factorial's argument order): **11 caught.** One mutant (the
+  quasi-Fermi factor to 1) did not compile (unused variable, warnings as errors); its replacement was caught. The 3
+  survivors are equivalent:
+  - U_ref's quadrature term (U_ref/J is the 1e-15 floor at every bias);
+  - the predicate forced true: ε_J ≤ 0.1 J_ref holds at every point of this data;
+  - (h, tol/100) swapped with (h/2, tol): ε_int is symmetric in them.
+- Release `[registry]` (53 assertions) and the TVB-16/18 frozen cases pass after the restores.
+
 ---
 
 ## New questions the advisor raised (not yet in `ARCHITECTURE.md`)

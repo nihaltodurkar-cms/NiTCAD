@@ -281,4 +281,13 @@ TEST_CASE("registry: U_disc, the in-range GCI and the two-grid fallback", "[regi
         CHECK_FALSE(d.u.has_value());
         CHECK(d.how.rfind("GCI: oscillatory or a non-positive order", 0) == 0);
     }
+    // The finest triple (h/2, h, 2h) exactly flat, the ladder's three-grid estimate refused: the two-grid estimate is
+    // kept and is zero (no observed order to gate; the [registry] mutation run of 16.39).
+    {
+        const std::array<double, 4> f{1.0, 1.0, 1.5, 1.2};
+        const auto d = bench::u_disc(h, f, h0 / 2, 1.0);
+        REQUIRE(d.u.has_value());
+        CHECK(*d.u == 0.0);
+        CHECK(d.how.rfind("two-grid; ", 0) == 0);
+    }
 }
