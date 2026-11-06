@@ -5,6 +5,7 @@
 // the Release-only ctest verify_benchmark.tvr4_full with TVB-05.
 #include <catch2/catch_test_macros.hpp>
 
+#include <cstddef>
 #include <cstdio>
 
 #include "NiTCAD/verify/benchmark/registry.hpp"
@@ -81,10 +82,29 @@ TEST_CASE("TVB-15: nothing in the fast tier", "[tvr4]") {
     REQUIRE(r.comparisons.empty());
 }
 
-// TVB-17 (depletion capacitance against the QE model, DT-Q4's predicate) is E, full tier only (16.7): at each of
-// V = -0.5, -1, -2 V the order and finest accuracy of C_j pass (16.8).
-TEST_CASE("TVB-17: depletion capacitance, full tier (frozen outcome: pass)", "[.tvr4_full]") {
-    require_all_pass(bench::run_tvb17(bench::Tier::full), 6);
+// TVB-17 (depletion capacitance against the QE model, DT-Q4's predicate) is E, full tier only (16.7). Recorded as
+// found (16.28, DT-Q22 A): at each of V = -0.5, -1, -2 V the finest accuracy of C_j passes, and the order is
+// not_evaluated (spread 0.13-0.23 from the N = 64 pair, h about the Debye length) with p-hat in the band. Neither
+// criteria, ladder nor construction changed (TVM2).
+TEST_CASE("TVB-17: depletion capacitance, full tier (frozen outcome: orders not_evaluated, accuracy pass)",
+          "[.tvr4_full]") {
+    const auto r = bench::run_tvb17(bench::Tier::full);
+    if (r.run_error) FAIL(*r.run_error);
+    for (const auto& n : r.notes) UNSCOPED_INFO("note: " << n);
+    REQUIRE(r.comparisons.size() == 6);
+    for (std::size_t k = 0; k < 6; k += 2) {
+        const auto& order = r.comparisons[k];
+        const auto& finest = r.comparisons[k + 1];
+        CAPTURE(order.quantity, order.metric, order.comparison.reason, finest.quantity, finest.metric);
+        std::printf("%s: %.4f (%s)\n", order.quantity.c_str(), order.metric, order.comparison.reason.c_str());
+        std::printf("%s: %.3e (%s)\n", finest.quantity.c_str(), finest.metric, finest.criterion.c_str());
+        CHECK(order.comparison.outcome == Outcome::not_evaluated);
+        CHECK(order.comparison.reason == "not in the asymptotic range");
+        CHECK(order.metric >= 1.8);
+        CHECK(order.metric <= 2.3);
+        CHECK(finest.comparison.outcome == Outcome::pass);
+    }
+    CHECK(bench::overall(r) == Outcome::not_evaluated);
 }
 
 TEST_CASE("TVB-17: nothing in the fast tier", "[tvr4]") {

@@ -10058,6 +10058,15 @@ are independent) is tested directly rather than argued.
 
 **Recommendation: A.** It matches DT-Q20 and leaves 16.8 untouched. The finest pairs show the scheme's order cleanly at every bias.
 
+**16.28 Ruling DT-Q22** (owner, "choose recommended", 2026-11-06).
+- **DT-Q22: A.** TVB-17 is recorded as found, as DT-Q20 A.
+  - At each of V = −0.5, −1 and −2 V, the C_j order comparison is not_evaluated ("not in the asymptotic range"): p̂ is 1.9986, 2.0003 and 2.0002 (finest pair), in the band, with spreads 0.225, 0.183 and 0.133 from the N = 64 pair.
+  - The three finest-accuracy comparisons pass (5.65e-5, 3.96e-5, 2.48e-5 against ≤ 1e-3), and the overall outcome is not_evaluated.
+  - The frozen expected outcome in `device_theory_test` now states this (each order not_evaluated with p̂ in [1.8, 2.3], each finest pass), so `verify_benchmark.tvr4_full` asserts it and passes.
+  - 16.8 (criteria and ladder) and TVB-17's construction (16.27) are unchanged.
+- Mutation (TVB-17 benchmark, against the new expected outcome): 12 of 12 caught. The mutants were the DT-Q4 thresholds (electron and hole), the density cut, the U_ref gate, C_ref's sign, the tolerance, a 1 % scale on C, h, the frequency (1e11 Hz), N_D, p_th and the finest-accuracy judgement.
+- `verify_benchmark.tvr4_full` passes.
+
 
 
 ---
