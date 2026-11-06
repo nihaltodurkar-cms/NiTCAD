@@ -178,6 +178,8 @@ add_custom_command(
           src/verify/reference/minority_diffusion.cpp
           include/NiTCAD/verify/reference/qe_junction.hpp
           src/verify/reference/qe_junction.cpp
+          include/NiTCAD/verify/reference/diode.hpp
+          src/verify/reference/diode.cpp
   COMMENT "verify/reference include boundary (VR2)")
 add_custom_target(nitcad_verify_reference_boundary
   DEPENDS "${CMAKE_BINARY_DIR}/verify_reference_boundary.stamp")
@@ -188,7 +190,7 @@ add_library(nitcad_verify_reference STATIC src/verify/reference/double_double.cp
   src/verify/reference/pn_junction.cpp src/verify/reference/first_integral.cpp
   src/verify/reference/mos_capacitor.cpp src/verify/reference/special_functions.cpp
   src/verify/reference/capacitor.cpp src/verify/reference/minority_diffusion.cpp
-  src/verify/reference/qe_junction.cpp)
+  src/verify/reference/qe_junction.cpp src/verify/reference/diode.cpp)
 add_library(NiTCAD::verify_reference ALIAS nitcad_verify_reference)
 target_include_directories(nitcad_verify_reference PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
 add_dependencies(nitcad_verify_reference nitcad_verify_reference_boundary)
@@ -218,7 +220,8 @@ add_executable(nitcad_verify_test
   tests/verify/reference/model_thermal_test.cpp
   tests/verify/reference/capacitor_test.cpp
   tests/verify/reference/minority_diffusion_test.cpp
-  tests/verify/reference/qe_junction_test.cpp)
+  tests/verify/reference/qe_junction_test.cpp
+  tests/verify/reference/diode_test.cpp)
 target_link_libraries(nitcad_verify_test PRIVATE NiTCAD::verify_reference Catch2::Catch2WithMain)
 nitcad_add_file_tests(verify nitcad_verify_test)
 add_test(NAME verify_reference_boundary
@@ -796,6 +799,8 @@ if(CMAKE_BUILD_TYPE STREQUAL "Release")
   add_test(NAME verify_benchmark.tvb31_full COMMAND nitcad_verify_benchmark_test "[tvb31_full]")
   # TVR-4's full-tier frozen outcomes (DECISIONS Unit 55 16.7, DT-Q9): TVB-05.
   add_test(NAME verify_benchmark.tvr4_full COMMAND nitcad_verify_benchmark_test "[tvr4_full]")
+  # The diode reference's x-space check of its change of variable (DECISIONS Unit 55 16.31): 15 s in Debug.
+  add_test(NAME verify.diode_profile COMMAND nitcad_verify_test "[.diode_profile]")
 endif()
 
 # The full tier of TVR-2 (DECISIONS Unit 55 14.9): TVB-04's 3D tensor ladder to 64^3 with PARDISO, about 12 minutes on 6

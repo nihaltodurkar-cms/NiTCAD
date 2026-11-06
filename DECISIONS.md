@@ -10129,6 +10129,57 @@ are independent) is tested directly rather than argued.
   - `verify_benchmark.tvr4_full` passes in 45.2 s (36.6 s before), and `verify_full.tvb05` in 652 s (local; run alongside other work).
   - `[registry]` passes. Debug serial verify passes 64/64 in 75.5, 74.3 and 74.3 s (72.5 s at step 5). The fast tier is unchanged, and the slowest tests (fermi_dirac 21.6 s, consistency.transient 15.3 s) are untouched. So this is the machine's spread, but the 75 s budget now has under 1 s of margin, for the close-out (step 14).
 
+**16.31 Step 6a as built: the diode reference (`verify/reference/diode`); DT-Q25 open before TVB-16's code.**
+- **`diode_current(in, V)`** builds on TVR-2's equilibrium junction at m = n_i e^(v/2) (qe_junction's shift identity):
+  - edges x_p = Q/(qN_A) and x_n = Q/(qN_D) from pn_junction at m, and bases W′ = L − x;
+  - Shockley's finite-base law q(e^v − 1)[D n₀/L coth(W′/L)] per side, with L = √(Dτ) and 1/τ SRH's exact linearization at the bulk. Without SRH it is the short-base law q(e^v − 1) D n₀/W′;
+  - the SNS current q∫U dx over [−x_p, x_n] on the reference's QE profile, as ∫U(u)/|u′(u)| du by Gauss–Kronrod in u, each side with its own lifetimes;
+  - second method: tanh-sinh on the same integrals (16.3). The change of variable is checked at L0 against U(x) integrated in x with u(x) from pn_potential.
+- **L0 (`diode_test`)**:
+  - no SRH: the short-base law with edges recomputed from qe_junction's charge, to 1e-13;
+  - long base (50 L) and short base (W′/L ~ 1e-6) limits of the coth law;
+  - L against √(Dτ_n) on the p side and √(Dτ_p) on the n side;
+  - the reported bulk minorities; SNS: the two quadratures agree; the sign; the exact 1/τ scaling;
+  - at −5 V: below the bound q n_i(x_p + x_n)/(τ_n + τ_p), and within 10 % (measured 3.9 %) of the depletion-approximation estimate q n_i ΣW_eff/(τ_n + τ_p);
+  - the x-space integral agrees to 1e-8;
+  - zero current at zero bias, and the refusals.
+- **Found while building (my errors, fixed before commit):**
+  - (a) The n side's SRH linearization got its electron and hole densities swapped, so the hole lifetime came out as about τ_n. The added n-side length check catches it.
+  - (b) A first second method integrated in x with a pn_potential solve per abscissa. It took 40 s in Release and 275 s in Debug, and passed vacuously: tanh-sinh's error estimate is absolute and capped at 1, meant for integrals of order one (tanh_sinh.hpp). Unscaled integrals of about 1e10 stop it at level 3, which is what happened.
+    - Now every tanh-sinh integrand is scaled to order one.
+    - The x-space check (2.2 s in Release, 15 s in Debug) is hidden ([.diode_profile]) and run by the Release-only ctest `verify.diode_profile`, to keep within CV-Q19's Debug budget.
+    - The SNS L0 case runs two biases (0.86 s → about 0.4 s in Debug).
+- Mutation: 20 of 20 caught. One survivor (the reported n_p0) was caught after a check was added.
+- Release verify passes 68/68 (`verify.diode_profile` 2.1 s). Debug serial verify passes 65/65 in 73.0 s (`verify.diode` 0.70 s).
+
+**TVB-16's construction, planned (my choices; nothing has run).**
+- (i) Silicon, N_A = 1e16 for x < 0 and N_D = 2e16 for x > 0, 5 µm per side, so that 3L_D/W′ ≈ 0.025.
+  - SRH, Auger and radiative off; Boltzmann statistics; no band-gap narrowing; no field mobility.
+  - Caughey–Thomas mobility for both carriers. Holes are set to it explicitly, since the default is automatic Masetti.
+  - Uniform nodes N = 128, 256, 512, 1024 (N even, so x = 0 is a face), with the factorial at N = 1024 and 2048.
+  - Forward bias 0.2–0.6 V in steps of 0.1 V.
+- (ii) short: the same device with SRH on (Scharfetter lifetimes at the local doping). Forward as (i), and reverse at −0.5, −1, −2 and −5 V.
+- (ii) long: 500 µm per side, about 3 L_n and 10 L_p.
+  - Nodes x = L sinh(βξ)/sinh β with ξ uniform and β = 7.5: the junction spacing is 8 nm at N = 1024. Same ladder.
+- J_sim is the weighted terminal current (Unit 32), and its resolution goes into U_num.
+  - U_num = GCI of J (Roache's three-grid form with the measured ratios, since h(N) ∝ 1/(N − 1) is not exactly constant-ratio) + the resolution + |ε_int|.
+  - U_ref = the SNS second-method difference + the quadrature estimate.
+- The inputs are NiTCAD's material data (I1), printed as the spec values (R-7): D = μ V_T with Caughey–Thomas μ at the side's doping, and Scharfetter τ.
+- The legacy short-base value 1.321e-2 (DT-Q5) is printed as a cross-check, not gated.
+
+**DT-Q25 (16.18 (f)'s quasi-Fermi term in reverse bias).**
+- 16.18 (f) writes the term as Δφ/V_T, "the measured quasi-Fermi drop across the depletion region", as a first-order term.
+  - In forward bias, J ∝ e^{(φ_p − φ_n)/V_T} at the edges, so the term is Δφ/V_T.
+  - In reverse, the minority carriers' quasi-Fermi levels fall by about |V| across the region where their density is negligible. Read literally, the term is then about 20–200, so every reverse point would be NOT APPLICABLE and the reverse exponent, which 16.18 (f) says is judged, could not be.
+  - The first-order sensitivity of both J_diff and J_SNS to a drop Δφ is e^v/|e^v − 1| × Δφ/V_T. This holds because both are ∝ (np − n_i²) at the edge or in the region, and np carries the e^{Δφ/V_T}.
+- (A) Use ε_φ = e^v/|e^v − 1| × Δφ/V_T.
+  - Δφ is the larger of |φ_n(x_n) − φ_n(−x_p)| and |φ_p(x_n) − φ_p(−x_p)|, interpolated at the reference's edges.
+  - In forward bias this is Δφ/V_T to within e^{−v} (4.6e-4 at 0.2 V). In reverse it is ≈ e^v Δφ/V_T.
+- (B) The literal Δφ/V_T: all reverse points NOT APPLICABLE, and the reverse exponent recorded as not judgeable.
+- (C) Measure the drop only where the carrier's density exceeds 1e-6 of the local doping (DT-Q4's predicate). In forward bias this would exclude the minority edge itself (n(−x_p) ≈ 2e7 cm⁻³ at 0.2 V, against 1e10) and understate the term where it was written.
+
+**Recommendation: A.** It is the first-order term 16.18 (f) asks for, and equals the frozen text in forward bias, where that text applies. Nothing else in 16.19 changes.
+
 
 
 ---
