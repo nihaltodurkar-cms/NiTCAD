@@ -10258,6 +10258,71 @@ are independent) is tested directly rather than argued.
 
 **Recommendation: B.** A benchmark that judges 1 of 41 points does not verify the diode. Roache's F_s = 3 two-grid estimate with an assumed order is the documented practice when the observed order cannot be trusted (Roache, Verification and Validation in Computational Science and Engineering, 1998: F_s = 3 for two grids). The condition that e(h/2)/e(h) be near 1/4 keeps it from being applied blindly. It is a post-run change, so it needs your "authorize". A is the strict reading of TVM2.
 
+**16.34 Step 7a as built: the admittance reference (`verify/reference/admittance`); DT-Q29–DT-Q31 open before TVB-18's code.** TVB-18's code also waits for DT-Q28, because its U_num follows the same GCI rule.
+- **`diode_admittance(in, V, ω list)`** builds on diode.hpp's operating point (the QE edges at V, the bases W′, U₀ = n₀(e^v − 1)). Per base, with κ = √((1/τ + iω)/D) (1/τ is SRH's linearization, or 0 without SRH) and L_eff = 1/κ:
+  - **Y_fixed = q D n₀ e^v/V_T · κ coth(κW′):** Shockley eq 4.23 with the finite base (PA; the coth form PD). It is G₀√(1 + iωτ) for a long base and the short-base series for a short one.
+  - **Y_edge = q D U₀ (dW′/dV) [u₀″/U₀ − κ coth(κW′) u₀′/U₀]:** the depletion edges' motion, with dW′/dV = C_j/(qN). This is derived here (PD) and is not in eq 4.23. At ω = 0, Y_fixed + Y_edge is d J_diff/dV of diode.hpp (its W(V) edges) exactly.
+  - **iω C_j,** with qe_junction's C_j at V.
+  - The **Shockley total** (ΣY_fixed + iωC_j) and the **total** (adding ΣY_edge) are both reported.
+  - Complex double-double is written locally, with cos and sin reduced by 2π and halved, an expm1 without cancellation, and coth for Re z > 0.
+  - **Second method** for Y_fixed: the Riccati form w = δu/δu′, w′ = 1 − κ²w², integrated by Dormand–Prince in double-double from the contact (w = 0) to the edge, in y/|L_eff| over at most 20 |L_eff| (the contact's influence is e^−40). The difference is reported.
+  - **A departure from 16.3, made in the build:** 16.3 names complex Chebyshev collocation as the second method. At high ωτ the base holds up to about 100 |L_eff|. Collocation would then need about 10 patches and a dense double-double solve of about 500 unknowns per frequency (about 1 s each), or a block-banded solver that does not exist. The Riccati form is a different formulation of the same ODE, independent of the closed form, and costs milliseconds. Your call if collocation is wanted anyway.
+- **L0 (`admittance_test`, 7 cases, 151 assertions):**
+  - at ω = 0, the total against a Richardson-extrapolated double-double difference of diode_current's J_diff, to 1e-9: with and without SRH, and for 5 µm and 500 µm bases. The edge term is resolved, between 1e-9 and 1e-2 of G;
+  - the long-base limit at W′ = 40 L, to 1e-13;
+  - the short-base series 1/W′ + κ²W′/3 − κ⁴W′³/45;
+  - the Riccati method against the closed form over ωτ ≈ 8e-4 … 8e3, to 1e-12;
+  - the edge term at ω > 0, against a second algebraic form built from Y_fixed;
+  - iωC_j and the sums; the refusals.
+- **Mutation:** 24 mutants, 22 caught on the first run. The survivors:
+  - M22 (the sign of the edge term's imaginary part, which was checked only at ω = 0) is caught after adding the ω > 0 case;
+  - M10 (the square root's branch for Re z < 0) was unreachable, since Re κ² ≥ 0. It is removed, and the precondition is stated.
+- **Timing:**
+  - Release: the 7 cases take 0.36 s.
+  - Debug: `verify.admittance` takes 1.45 s. I trimmed the SRH biases in the ω = 0 case and removed duplicate operating-point calls to get it there.
+  - The serial Debug verify run measured 95.4 s (66/66 pass), but with a game using about 56 % of the CPU: every unchanged test was 20–35 % slower than in 16.27 (fermi_dirac 21.3 → 25.4 s). The idle estimate is 72.5 + 1.45 ≈ 74.0 s against CV-Q19's 75 s, to be remeasured on an idle machine before close-out (step 14).
+
+**Measured sizes for TVB-18's construction** (the reference itself, NiTCAD's spec values as TVB-16, τ_p = 8.33 µs the p base's minority lifetime, R = ΣW′/(qNμ_maj) with Caughey–Thomas μ_maj 405 and 1157 cm²/Vs). This was a temporary diagnostic, not committed.
+
+| base | V | SNS/J_diff | \|Y\|R at ωτ = 1e-3 / 1 / 1e3 / 1e4 | \|Y_edge\|/\|Y\| at low ω | iωC_j share of \|Y\| at ωτ = 1 |
+|---|---|---|---|---|---|
+| 5 µm | 0.35 | 6.3e-3 | 2.9e-6 / 5.2e-6 / 4.3e-3 / 4.3e-2 | 1.3e-3 | 0.82 |
+| 5 µm | 0.40 | 2.7e-3 | 2.0e-5 / 2.1e-5 / 4.6e-3 / 4.6e-2 | 1.4e-3 | 0.22 |
+| 5 µm | 0.45 | 1.2e-3 | 1.4e-4 / 1.4e-4 / 5.1e-3 / 5.1e-2 | 1.5e-3 | 0.036 |
+| 500 µm | 0.50 | 1.3e-2 | 4.0e-3 / 4.6e-3 / 0.65 / 5.9 | 3e-7 | 0.12 |
+| 500 µm | 0.55 | 5.9e-3 | 2.8e-2 / 3.1e-2 / 1.3 / 8.1 | 3e-7 | 0.021 |
+| 500 µm | 0.60 | 2.6e-3 | 0.19 / 0.21 / 5.5 / 21 | 4e-7 | 3.3e-3 |
+
+- The neutral bases' series resistance enters Y as about |Y|R, and at high ω it is mostly ωC_jR. Neither Y_ref nor 16.18 (g)'s ε_Y contains it (finding (x)'s cause, now in AC).
+- In the 500 µm base, every bias that meets 16.2 (l)'s SNS ≤ 1e-2 has |Y|R ≥ 4e-3 at low ω, and above 0.6 at ωτ = 1e3. The product (SNS)² × G₀R does not depend on V, so no bias satisfies both.
+- In the 5 µm base, |Y|R ≤ 1.4e-4 up to ωτ = 1 and ≈ 5e-3 at ωτ = 1e3, against ε_Y's 3L_D/|L_eff| = 2.4e-2 there.
+
+**TVB-18's construction, planned (my choices; nothing has run)**, assuming DT-Q29 A:
+- The 5 µm device of TVB-16 (ii) short (SRH on, uniform nodes, ladder 1024 … 128, the factorial at 2048), at forward biases 0.35, 0.40 and 0.45 V.
+- ωτ_p ∈ {1e-3, 1e-2, 1e-1, 1, 10, 1e2, 1e3}, from NiTCAD's `solve_small_signal` (f = ω/2π). Y_sim is Y₁₁ of the anode, A/(V cm²).
+- |Y| and arg Y are judged by 16.19's rule, with ε_Y from 16.18 (g) measured on the solved state (Δn/N, the DT-Q25 ε_φ, J_SNS/J_diff, 3L_D/|L_eff|) and applicability |L_eff| ≥ 30 L_D (≥ 4.2 here) and ε_Y ≤ 0.1|Y_ref|.
+- U_ref is the Riccati difference plus C_j's complex-step difference. U_num follows DT-Q26 and DT-Q28.
+- 42 comparisons (3 biases × 7 frequencies × magnitude and phase); with DT-Q31 A, 63.
+
+**DT-Q29 (the 500 µm base cannot meet 16.18 (g)).**
+- (A) Build TVB-18 on the 5 µm base only, at 0.35–0.45 V. Record the long base as not buildable under 16.18 (g) on NiTCAD's silicon, with the table above. The √(1 + iωτ) behaviour is then seen only partly: at ωτ = 1e3, |L_eff| ≈ W′, the transition from short to long base.
+- (B) Keep the long base and add the bases' impedance to Y_ref: Y = 1/(1/Y_j + Z_R), with Z_R from the reference's own minority profile (the majority current's ohmic drop). This is new reference physics and changes 16.3 and 16.18 (g) after their freeze (before any run). It is first-order only where |Y|R ≪ 1: it neglects the minority carriers' drift in the ohmic field, which is of the same order. So the long base above ωτ ≈ 1 would still be outside it.
+- (C) Keep the frozen plan and run it. The long base fails like TVB-16's (x), and the fails become findings.
+
+**Recommendation: A.** The table shows the long base fails for a reason 16.18 (g) does not budget, before anything is run. A avoids building a known finding, and B's extension would not hold where the long base matters.
+
+**DT-Q30 (the edge motion in Y_ref).**
+- (A) Y_ref = the total, with Y_edge. Its ω = 0 limit is d J_ref/dV of TVB-16's own reference, which uses W(V) edges (DT-Q5), and it is checked at L0. Shockley's fixed-edge form is printed beside it.
+- (B) Y_ref = eq 4.23 with fixed edges, 16.3's literal form. Y_edge (1.3–1.5e-3 of |Y| in the 5 µm base) is then an unnamed difference inside ε_Y.
+
+**Recommendation: A.** It is the exact linearization of the reference's own DC model and adds no new approximation. I-9's "eq 4.23's full form" (both carriers, plus C_T) is kept, and extended consistently with the W(V) edges.
+
+**DT-Q31 (what magnitude and phase test at high ω).** In the 5 µm base at 0.35–0.40 V, iωC_j is 0.2–0.8 of |Y| at ωτ = 1, and nearly all of it at 1e3. There, magnitude and phase mostly re-test C_j (TVB-17's quantity) and see the diffusion admittance only weakly.
+- (A) Also judge Re Y, the diffusion conductance G(ω), which C_j does not enter, by the same rule: |Re Y_sim − Re Y_ref| ≤ U_num + U_ref + ε_Y. This adds 21 comparisons and widens nothing.
+- (B) Magnitude and phase only, as 16.4 states.
+
+**Recommendation: A.** It makes the benchmark test what it is named for, at all frequencies.
+
 
 
 ---
