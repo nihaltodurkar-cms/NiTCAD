@@ -317,3 +317,24 @@ TEST_CASE("TVB-19: nothing in the fast tier", "[tvr4]") {
     REQUIRE_FALSE(r.run_error.has_value());
     REQUIRE(r.comparisons.empty());
 }
+
+// TVB-27 (lattice heat, E; 16.8 frozen; construction 16.43) and TVB-28 (thermoelectric identities, E and D) are full
+// tier only (16.7). TVB-27: the order and the finest accuracy of T for the Kirchhoff slab and the self-heated
+// resistor (4). TVB-28: the same for S and Pi, and C5's energy residual on four states (8). Frozen outcome, set before
+// the first run: every comparison passes. Found on the first run (16.43): TVB-27 2 pass, 2 not_evaluated (the slab
+// exact in h; the resistor floored by the reference's n = N); TVB-28 6 pass, 1 not_evaluated (S), 1 fail (Pi's order,
+// exact in h); DT-Q38 open.
+TEST_CASE("TVB-27: lattice heat, full tier (frozen outcome: pass)", "[.tvr4_full]") {
+    require_all_pass(bench::run_tvb27(bench::Tier::full), 4);
+}
+
+TEST_CASE("TVB-28: thermoelectric identities, full tier (frozen outcome: pass)", "[.tvr4_full]") {
+    require_all_pass(bench::run_tvb28(bench::Tier::full), 8);
+}
+
+TEST_CASE("TVB-27 and TVB-28: nothing in the fast tier", "[tvr4]") {
+    for (const auto& r : {bench::run_tvb27(bench::Tier::fast), bench::run_tvb28(bench::Tier::fast)}) {
+        REQUIRE_FALSE(r.run_error.has_value());
+        REQUIRE(r.comparisons.empty());
+    }
+}

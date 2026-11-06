@@ -10707,6 +10707,81 @@ They are not errors in NiTCAD. B is the better design, but it changes criteria a
 **Recommendation: A.** V/L is wrong for this device: the contact layers take part of the voltage. 16.4 names T_n(E)
 at the field, and the criterion is unchanged.
 
+**16.43 Step 12 as built: thermal_slab, TVB-27 and TVB-28. DT-Q38 open.**
+- **`verify/reference/thermal_slab`** (PD, base-free; κ = κ₃₀₀ (T/300)^−a, Unit 23 T11's form):
+  - `kirchhoff` / `kirchhoff_inverse` in dd; `slab_temperature` (u linear in x).
+  - `self_heated_resistor`: (κT′)′ = −J²/(qμN) − (3/2)(k/q) J T′ with n = N, T = T_amb at both ends and
+    J = −qNV/∫dx/μ. Solved in dd: Dormand–Prince on (u, u′, ∫dx/μ) at fixed steps, Brent on u′(0), the secant
+    on J. Second method: Kirchhoff-form finite differences on 2¹⁴ and 2¹⁵ cells (Newton, double), Richardson.
+    After the first run its κ integral was moved from dd to a double closed form (no outcome changed: 51 s to
+    3.2 s for TVB-27, the difference still 1.1e-11 K).
+  - `seebeck_rise`: the closed form for Nc ∝ T^{3/2}, with Gauss–Kronrod as the second method (7.7e-34 eV);
+    `peltier_coefficient` = −(kT/q)((5/2 + r) − ln(N/Nc(T))).
+- **L0** (`thermal_slab_test`, 5 cases, 29 assertions): the Kirchhoff round trip (1e-29 K) and du/dT = κ; the
+  slab's ends and sag (T(L/2) < 350 K); the constant-coefficient resistor against its closed form in dd (1e-12 K)
+  and its steps-halving; the Seebeck second method and sign, the Peltier coefficient; the refusals. Two L0
+  expectations of mine were wrong in the first draft (the sag's direction; the closed form evaluated in double
+  lost 1e-9 K to cancellation) and were fixed before any NiTCAD run.
+- **TVB-27 and TVB-28** (`tvb27.cpp`, Tier full, registered after TVB-19; 52 benchmarks). 1D ladder N = 512, 256,
+  128, 64 with the (h, tol) factorial at N = 1024.
+  - TVB-27: the slab (10 µm, 300/400 K ends, default silicon) and the self-heated resistor (10 µm, N_D = 1e17,
+    4 V, default silicon). The resistor reference is solved once over every ladder's node set.
+  - TVB-28 on the legacy silicon set (chosen before the run: Nc ∝ T^{3/2}, so S and Π are closed forms; the
+    default Couderc set has no closed form): S as the open-circuit E_Fn rise on a 100 µm bar 300 → 400 K; Π as the
+    odd part of the contact heat per current at ±1 mV; C5 on four states (the resistor at 4 V, the Seebeck bar,
+    Peltier ±1 mV) with 11.13's Newton-term limitation printed.
+  - **Construction change after a run error** (no outcome seen): Newton's 1e-12 tolerance with the factorial's
+    tol/100 = 1e-14 did not converge at N = 512. tol_newton = 1e-10.
+- **Frozen outcome, set before the first run:** every comparison passes.
+- **TVB-27's run: 2 pass, 2 not_evaluated** (3.2 s Release). The frozen case fails, so `tvr4_full` fails, pending
+  DT-Q38.
+  - The slab is exact: errors 2.8e-16 at every level, so its order is 0 and "not in the asymptotic range".
+    Accuracy passes.
+  - The resistor's errors are flat at 1.66e-6, 1.55e-6, 1.14e-6 and 7.3e-7 relative (orders −0.09, −0.44,
+    −0.63). Accuracy passes (≤ 1e-4); the order is not_evaluated.
+  - **Cause, measured with temporary runs (not committed):** the floor is the reference's n = N assumption. The
+    mobility gradient puts a space charge δn/N of about 4e-5 into NiTCAD's solution, scaling as 1/L². On the
+    legacy set the floor halves (the Couderc T·M′/M Thomson term is the other half). On the legacy set at 100 µm
+    the errors are 2.25e-6, 5.8e-7, 1.41e-7 and 2.9e-8, orders 1.93, 2.04 and 2.26: clean second order.
+  - This is a construction error of the benchmark (n = N is this step's reference), not a finding.
+  - An observation, not a finding: `tests/solve/electrothermal_test.cpp:652` says the 10 µm resistor's space charge
+    is "some 1e-8" of N_D; at 4 V it is nearer 4e-5. Its tolerance holds either way.
+- **TVB-28's run: 6 pass, 1 not_evaluated, 1 fail** (0.22 s Release).
+  - S: accuracy 2.06e-9 passes. Its errors are 2.06e-9, 7.15e-9, 2.77e-8 and 1.11e-7, orders 1.79, 1.94 and 1.99
+    (finest pair first). The finest pair is 0.01 below the window; not_evaluated.
+  - **Fail: Π's order.** Π is exact in h (errors 4.721e-10 at every level, from Newton). That is the class of
+    DT-Q36 (an h-exact quantity judged by an order).
+  - Π's accuracy 4.7e-10 passes.
+  - C5 passes on all four states: residual/bound 5.2e-5 (resistor), 9.7e-3 (Seebeck), 6.7e-6 and 6.6e-6
+    (Peltier ±1 mV).
+- **Time:** both are full tier; `tvr4_full` grows by about 3.4 s in Release.
+- **Mutation:**
+  - `thermal_slab` L0 (17 mutants: the transform's two 300s and κ's exponent sign, the Joule factor, the Thomson
+    3/2, ∫dx/μ, J's relation sign, the mobility denominator, the dense evaluation, the halved-step shot, the slab's
+    interpolation, Seebeck's A, its 3/2 and the integrand's Nc exponent, the Peltier factor, two refusals): 15
+    caught. The survivors:
+    - κ's exponent sign: the L0 resistor has constant κ (a = 0). Caught in TVB-27 (A1).
+    - the V = 0 refusal: still refused, by the shooting's empty bracket.
+  - TVB-27 (12 mutants, judged by the printed comparison, failure, reason and note lines since the frozen case is
+    red): 9 caught (κ's sign, the FD Thomson term, the Richardson step, the slab's end, the voltage, the second
+    method's gate, the relative scale, the accuracy criterion, the node positions). The survivors:
+    - the FD Newton Jacobian's mobility term (equivalent: only the convergence rate changes);
+    - u_iter = 0 (equivalent here: e(h, tol) = e(h, tol/100) exactly);
+    - p_th 2 → 1 (not observable while both orders are not_evaluated).
+  - TVB-28 (10 mutants): 9 caught (T1, the rise's offset, Π's T, Π's sign, the odd part, the GK gate, the material
+    set, the thermopower exponent, C5's metric). The survivor: C5's outcome forced to pass, the same outcome as
+    found (C5's bound is TVR-2's, mutated there).
+
+**DT-Q38 (TVB-27 and TVB-28's non-passes).**
+- (A) Record as found, as DT-Q36 A: the frozen cases pin the 8 passes, the 3 not_evaluated and Π's order fail with
+  their reasons. The resistor's cause stays in the notes.
+- (B) Construction change for the resistor only (TVM2): 100 µm on the legacy set, measured orders 1.93/2.04/2.26,
+  so it would pass. The slab, S and Π stay as found (A).
+- (C) B, plus judge the h-exact quantities (slab, Π) as exactness, as DT-Q36 B.
+
+**Recommendation: B.** The resistor's floor is the benchmark's own reference assumption (n = N), like DT-Q37's V/L,
+and the fix keeps the criterion. The slab and Π are DT-Q36's class and should follow its ruling.
+
 ---
 
 ## New questions the advisor raised (not yet in `ARCHITECTURE.md`)
