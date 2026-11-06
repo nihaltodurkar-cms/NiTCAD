@@ -9724,6 +9724,135 @@ approved as recommended, on the plan as reviewed in 16.15:
 - TVR-5 is split into 5a and 5b. Each gets its own proposal and criteria freeze.
 - No code was written with this plan. Step 1 (reading and derivations) is next, on the owner's "go".
 
+**16.17 Step 1: reading log (owner "go", 2026-11-06).** Open copies were fetched with curl and rendered page by
+page (WinRT PDF render). Nothing was taken from memory without a source line below.
+
+| Source | How read | Grade | What it settles |
+|---|---|---|---|
+| Haynes and Shockley, Phys. Rev. 81, 835 (1951) | Scan pp. 835–838 (ibm1401.computerhistory.org) | PA (model statement); formula PD | §III: with the emitter current small enough that conductivity modulation is neglected, the pulse fronts have "the customary integral of the error function" shape. Diffusion spreads them equally ahead and behind. Footnote 9: recombination multiplies by exp(−t/τ). §VI: N = N₀ exp(−t/τ). This is the linear drift–diffusion–decay equation under low injection. Its Gaussian Green's function is derived here (PD), and conductivity modulation (Herring, BSTJ 28, 401) is the departure that the low-injection predicate excludes. |
+| Pao and Sah, Solid-State Electronics 9, 927 (1966) | Primary paywalled. (1) H.-S. P. Wong, Stanford EE 316 slides 3-8 to 3-11 (hosted at dunham.ece.uw.edu); (2) Galup-Montoro, Schneider and Cunha, NSTI-Nanotech 2007, 474, eqs 1–2 | PB | Both give I_D = (μW/L)∫_{V_S}^{V_D}(−Q_I(V))dV. (1) gives Q_I = −q∫_{ψ_B}^{ψ_s}(n_i²/N_a)e^{(ψ−V)/V_T}/E(ψ,V)dψ, **with the inner lower limit ψ_B (the bulk Fermi potential), not 0**, and E² = (2kTN_a/ε)[(e^{−ψ/V_T} + ψ/V_T − 1) + (n_i²/N_a²)(e^{−V/V_T}(e^{ψ/V_T} − 1) − ψ/V_T)]. (2) uses the same double integral. Slide 3-11's V_G equation is an approximation (the slide says so), and is not used. |
+| Brews, Solid-State Electronics 21, 345 (1978) | Primary paywalled. Galup-Montoro et al. 2007, eqs 5, 7, 9, 10a, 10b; the EE 316 slide 3-13 gives only the strong-inversion pinned form | PC, used as PD (16.18 (e)) | The charge sheet Q_I(φ_s) = −C_ox(V_G − V_FB − φ_s − γ√(φ_s − φ_t)) (eq 7), and the current as drift plus diffusion (eq 9) integrated between the source and drain surface potentials φ_s0 and φ_sL (eqs 10a, 10b). The surface potential comes from eq 5, which carries an author-dependent term χ(φ_s) "to circumvent some (numerical) problems … near the flat-band condition". |
+| Brews, J. Appl. Phys. 45, 1276 (1974) (HF capacitance) | Abstract only (scilit) | PC on the premise; model PD | The HF capacitance of an inverted MOS-C keeps the total minority charge at its DC value, but lets the minority carriers move inside the inversion layer with a constant quasi-Fermi level across it. This is 16.2 (g)'s redistribution limit, which the plan derived independently. Brews reports a 7% error from neglecting that motion (strong inversion, 1e13 cm⁻³). Baccarani and Severi (IEEE, 1974) found ≤ 5% for practical dopings. |
+| Sah, Noyce and Shockley, Proc. IRE 45, 1228 (1957) | Paywalled; abstract only | — (attribution only) | The reference does not use their closed-form approximations. It integrates U(ψ) of the spec's SRH over the QE profile, which is the definition (PD). |
+| Shockley, BSTJ 28 (1949) | Read in TVR-0 | PA | Unchanged (I-9). |
+| Wachutka (1990) | Not needed | — | TVB-28's reference is NiTCAD's own T2/T4 model equations (DECISIONS Unit 23), derived to S and Π here (PD), as DC7 did. 31.29 already carries the thermopower function (PD). |
+| Nicollian and Brews, *MOS Physics and Technology*; Taur and Ning | Not reached | — | Not needed after Brews 1974's abstract and the two Pao–Sah reproductions; listed so they are not later cited as read. |
+
+**Found in reading: the two Pao–Sah reproductions differ in the bulk term, and the difference is Galup-Montoro's
+χ.**
+- Reproduction (1) has the electron term (n_i²/N_a²)(e^{−V}(e^{ψ} − 1) − ψ), in units of V_T.
+- Reproduction (2), eq 5 with χ = 0, has e^{−V}(e^{ψ} − ψ − 1).
+- They differ by (n_i²/N_a²)(1 − e^{−V})ψ. For V > 0 that term makes E² negative for 0 < ψ < ψ* ≈ 2(n_i²/N_a²)(1 −
+  e^{−V}) V_T, which is about 5e-16 V at N_a = 1e17. So form (1) is undefined near the bulk, and the inner integral
+  of n/E would diverge logarithmically there.
+- Physically, Pao–Sah's slice gives the electrons the channel's quasi-Fermi level V down to the bulk. In the bulk
+  they are in fact at the substrate's level. Both the cutoff at ψ_B and χ are ways of not counting those electrons.
+- NiTCAD solves the full problem, so the reference must bound the ambiguity, not choose between the forms. 16.18 (d)
+  does that.
+
+**16.18 Step 1: derivations (PD; each with the second method its code step will run at L0).**
+
+*(a) TVB-13, the energy-balance boundary layer λ.* Linearize ED2, ED3 and Poisson about the uniform state (n = N,
+field E₀, T_h with E_eff(T_h) = E₀, current J). Use modes e^{sx} with δJ = 0, unknown amplitudes (δψ, δn, δT), μ =
+μ(T_h), μ′ = dμ/dT, κ = (5/2)(k²/q)Nμ T_h and G = (3/2)kN/τ_w:
+- current: μqE₀ δn + μ′qE₀N δT − μNq s δψ + μk(T_h s δn + N s δT) = 0;
+- Poisson: ε s² δψ = q δn;
+- energy: (−κs² − (5/2)(k/q)J s + G) δT + J s δψ + (3/2)k(T_h − T_L)/τ_w δn = 0.
+
+Eliminating δψ gives s · P(s) = 0, with the quartic
+P(s) = [μkT_h s² + μqE₀ s − μNq²/ε](−κs² − (5/2)(k/q)Js + G) − (μ′qE₀N + μkNs)(Jq/ε + (3/2)k(T_h − T_L)s/τ_w).
+- λ = 2/min|Re s| over P's four roots: the slowest mode, times 2 for safety.
+- T_n is judged on the nodes with e^{−d/λ} ≤ 1e-13, d the distance to the nearer contact.
+- The roots come from the quartic's companion matrix. The reference has no non-symmetric eigensolver, so the code
+  step uses Durand–Kerner in dd, with its own L0 test.
+- Second method: the linearized ODE is solved by Chebyshev collocation on a long interval, and its decay fitted.
+- The signs follow ED2/ED3's conventions. The second method is what catches a sign slip, and it runs before the
+  predicate is used.
+
+*(b) TVB-10 HF, the redistribution limit.* Q_s(ψ_s, V) is TVB-09's KN charge with the electrons at a quasi-Fermi
+level V that is uniform across the layer (E² as in reproduction (1), with V; holes at equilibrium). HF keeps
+Q_n(ψ_s, V) at its DC value, so δV = −(∂Q_n/∂ψ_s / ∂Q_n/∂V) δψ_s, and
+C_s,HF = −(∂Q_s/∂ψ_s + ∂Q_s/∂V · δV/δψ_s), C_HF = (1/C_ox + 1/C_s,HF)⁻¹.
+- The partials come by complex step on the reference.
+- Second method: a central difference in dd on Q_s along the constrained path, Q_n held fixed by Brent.
+- Limits: in depletion C_s,HF → the depletion capacitance (Q_n → 0); with "V frozen" in place of "Q_n fixed" it is
+  the simpler formula Brews improved on, and the reference's report prints the difference.
+- ε_approx: the formula is exact for its limit. The departure from the limit is frequency-dependent, so it is measured
+  as the spread of NiTCAD's C over the judged decade: ε_HF = max |C(f_i) − C(f_j)| over three frequencies spanning a
+  decade, with the predicate ε_HF ≤ 1e-3 C (else NOT APPLICABLE, "not on the HF plateau").
+
+*(c) TVB-15 A: the injection ladder (replaces a hand-set ε_approx; DT-Q14).* DD departs from the linear model by
+O(Δn/N_A): the ambipolar field and the SRH nonlinearity, both first order. Rather than bound the constant, run DD at
+G = g₀ × {1, 2, 4, 8} with g₀ giving max Δn/N_A = 1e-3. Then:
+- the departure e(G) = ‖Δn_sim/G − Δn_lin/G‖∞ must have an observed order in G within [0.8, 1.3];
+- its extrapolation to G → 0 must agree with the E comparison's limit within that comparison's U.
+
+This measures the approximation error's order rather than assuming a constant. A departure of any other order is a
+finding.
+
+*(d) TVB-20 and 21: the channel-length limit (replaces a hand-set ε_approx; DT-Q13).* Pao–Sah is the L → ∞ limit of
+the 2D problem at fixed W/L scaling: the gradual-channel error falls with L, and the source and drain ends add
+ΔL/L. So run NiTCAD's long-channel MOSFET at L = L₀ × {1, 2, 4, 8} (L₀ ≥ 20 × the maximum depletion depth), with
+Q(L) = I_D L/W. Then:
+- the observed order of Q(L) in 1/L must lie in [0.8, 1.3], with the asymptotic check (order spread ≤ 0.1 on four
+  lengths);
+- Q_∞ by Richardson, with U_L = the GCI of the ladder;
+- ε_approx = U_L + ε_cutoff, where ε_cutoff = |I_PS(cutoff ψ_B) − I_PS(cutoff ψ_B/2)| + |I_PS(form 1) − I_PS(form 2)|,
+  from the reference itself (16.17's finding);
+- applicability: V_G with ψ_s(V_S) ≥ ψ_B + 3V_T (weak inversion and above). Deeper subthreshold is NOT APPLICABLE,
+  because there the bulk ambiguity is not small. Constant μ, no field mobility, no Lombardi, Boltzmann, no BGN.
+
+S (TVB-21) is taken from the same ladder: d log₁₀ I/dV_G by a dd central difference on the reference, and the
+ladder's Q_∞ at the V_G grid.
+- Second method for the reference: Galup-Montoro's eq 4, g_d = −(μW/L)Q_I(V_D), against a dd difference of I_D in V_D.
+  It is an identity of the double integral.
+
+*(e) Brews' charge sheet (second A, diagnostic).* Integrating eq 9 with eq 7 between φ_s0 and φ_sL gives eqs 10a
+and 10b. That integration is redone here (PD), and the second method is quadrature of eq 9 in dd. It is reported
+beside Pao–Sah, as Brews himself compared it, and is never gated.
+
+*(f) TVB-16 ε_approx (first-order terms, each measured or computed, summed as magnitudes per TVD-17).*
+ε_J = J_ref × [ max(Δn/N) at the two depletion edges (measured on the solved state) + Δφ/V_T (the measured
+quasi-Fermi drop across the depletion region) + 3L_D/(W − x_edge) (the edge's definition; short base only) ].
+- Applicability: ε_J ≤ 0.1 J_ref (else NOT APPLICABLE).
+- Metric: the log error, with q_floor the current resolution (Units 15 and 32).
+- In (ii) the SNS integral is part of J_ref, and the reverse exponent is judged as d ln|J|/d ln(V_bi − V) against the
+  reference's own exponent.
+
+*(g) TVB-18 ε_approx.* ε_Y = |Y_ref| × [ max(Δn/N) + Δφ/V_T + J_SNS/J_diff (the depletion recombination eq 4.23
+omits) + 3L_D/|L_eff(ω)| ], with L_eff = √(Dτ/(1 + iωτ)).
+- Applicability: |L_eff(ω)| ≥ 30 L_D and ε_Y ≤ 0.1 |Y_ref|.
+- Second method for the reference: the linearized minority ODE solved directly by complex Chebyshev collocation.
+
+*(h) TVB-19 references (E).* Dielectric relaxation: Q(t) = Q₀e^{−t/τ_d} exactly for the linear majority equation.
+Haynes–Shockley: Δp(x, t) = (G₀/√(4πDt)) exp(−(x − x₀ − μE t)²/(4Dt) − t/τ), convolved with the source's spatial
+Gaussian (closed form: the variances add) and its time profile (Gauss–Kronrod in dd). Second method: the PDE by
+method of lines with Dormand–Prince.
+
+**16.19 Proposed A-class criteria (frozen on the owner's ruling, DT-Q13–Q17, before any code that runs them).**
+
+| ID | Criterion | Applicability (else NOT APPLICABLE, predicate and value printed) |
+|---|---|---|
+| TVB-10 HF | \|C_sim − C_ref\| ≤ U_num + U_ref + ε_HF; ε_HF from 16.18 (b) | plateau spread ≤ 1e-3 C; strong inversion and depletion V_G grid |
+| TVB-15 A | departure order in G ∈ [0.8, 1.3]; the G → 0 extrapolation agrees with the E comparison within its U | max Δn/N_A ≤ 1e-1 at the largest G |
+| TVB-16 | log error ≤ log₁₀(1 + (U_num + U_ref + ε_J)/J_ref) | ε_J ≤ 0.1 J_ref; V ∈ [0.2, 0.6] V forward, [−5, −0.5] V reverse ((ii) only) |
+| TVB-18 | \|Y_sim − Y_ref\| ≤ U_num + U_ref + ε_Y, magnitude and phase | 16.18 (g) |
+| TVB-20 | the L-ladder order ∈ [0.8, 1.3], asymptotic check passed; \|Q_∞ − Q_PS\| ≤ U_num + U_ref + ε_approx; ε_approx ≤ 1e-2 Q_PS (else NOT EVALUATED) | 16.18 (d) |
+| TVB-21 | \|S_∞ − S_PS\| ≤ U_num + U_ref + ε_approx (the same rule on the derivative) | as TVB-20, at V_D ≤ 3V_T |
+
+**16.20 Owner questions from step 1 (recommendations in the last column).**
+
+| # | Question | Recommendation |
+|---|---|---|
+| DT-Q13 | TVB-20/21: judge NiTCAD's channel-length limit (four lengths, Richardson) against Pao–Sah, with ε_approx = the ladder's GCI + the reference's own bulk-term ambiguity, instead of a hand-set gradual-channel bound? | Yes. It measures the approximation's order instead of assuming its size |
+| DT-Q14 | TVB-15 A as an injection ladder (order in G, G → 0 limit = the E case) instead of a constant times Δn/N? | Yes, for the same reason |
+| DT-Q15 | TVB-13: λ from the linearized quartic (16.18 (a)), × 2, with a Durand–Kerner root finder added to the reference (L0-tested) and the Chebyshev decay fit as the second method? | Yes |
+| DT-Q16 | TVB-16/18: ε_approx as the sum of the named first-order terms of 16.18 (f), (g), each measured on the solved state or computed in the reference, with ε ≤ 0.1 of the reference as the applicability bound? | Yes. No source states a bound; each term is a named mechanism |
+| DT-Q17 | TVB-10 HF: the redistribution limit (Brews 1974's premise, abstract only; derived here), ε from the measured plateau spread? | Yes. The "frozen V" variant printed as a diagnostic |
+| DT-Q18 | Provenance: Pao–Sah PB (two reproductions agreeing on the double integral); Brews 1978 PC used only as PD with quadrature; SNS PD (the definition); Brews 1974 PD with the abstract recorded? | Yes |
+
+Step 1 is complete apart from these rulings. Nothing in 16.8's frozen D/E criteria changed.
+
 
 
 ---
