@@ -193,6 +193,7 @@ BenchmarkResult run_tvb31_27(Tier tier) {
     }
     const double lam = physics::mlda_wavelength_cm(physics::mlda_silicon_electron_mass, 300.0);
     for (int i = 0; i <= 768; ++i) {
+        if (!tvb31::keep(i, 768, tier)) continue;
         const double z = (i / 64.0) * lam;
         const A2 x{DD(z), DD(lam)};
         r.comparisons.push_back(value_record(zinf, "f(z)", "1", z / lam, physics::mlda_factor(z, lam), ff(x),
@@ -244,7 +245,7 @@ BenchmarkResult run_tvb31_28(Tier) {
     return r;
 }
 
-BenchmarkResult run_tvb31_29(Tier) {
+BenchmarkResult run_tvb31_29(Tier tier) {
     BenchmarkResult r;
     r.id = "TVB-31.29";
     r.title = "Fermi orders -1, 0, 1 and the thermopower factor";
@@ -259,8 +260,12 @@ BenchmarkResult run_tvb31_29(Tier) {
     r.info.second_method = "tanh-sinh quadrature of the next lower order; central differences of h (L0)";
     const ReferenceInfo inf = r.info;
     std::vector<double> xs;
-    for (int i = -3000; i <= 3000; ++i) xs.push_back(i / 4.0);
-    for (int i = -2048; i <= 2048; ++i) xs.push_back(i / 1024.0);
+    for (int i = -3000; i <= 3000; ++i) {
+        if (tvb31::keep(i + 3000, 6000, tier)) xs.push_back(i / 4.0);
+    }
+    for (int i = -2048; i <= 2048; ++i) {
+        if (tvb31::keep(i + 2048, 4096, tier)) xs.push_back(i / 1024.0);
+    }
     for (const double s : {-1.0, 1.0}) {
         xs.push_back(std::nextafter(s, -INFINITY));
         xs.push_back(std::nextafter(s, INFINITY));

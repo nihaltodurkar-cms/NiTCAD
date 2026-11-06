@@ -335,7 +335,7 @@ std::vector<double> log_grid(double lo, double hi, int per) {
     return g;
 }
 
-int per_decade(Tier) { return 64; }
+int per_decade(Tier tier) { return tier == Tier::fast ? 1 : 64; }
 
 Predicate in_range(std::string name, double value, double lo, double hi) {
     return Predicate{std::move(name), value, value < lo ? lo : hi, value >= lo && value <= hi};

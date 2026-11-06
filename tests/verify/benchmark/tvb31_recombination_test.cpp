@@ -21,18 +21,18 @@ namespace {
 bool none(const bench::ComparisonRecord&) { return false; }
 }  // namespace
 
-TEST_CASE("TVB-31.11: Scharfetter lifetimes (frozen outcomes)", "[verify][tvb31]") {
-    const auto r = bench::run_tvb31_11(bench::Tier::fast);
+TEST_CASE("TVB-31.11: Scharfetter lifetimes (frozen outcomes)", "[verify][.tvb31_full]") {
+    const auto r = bench::run_tvb31_11(bench::Tier::full);
     const auto n = check(r, [](const bench::ComparisonRecord& c) { return starts_with(c.quantity, "parameter "); });
     CHECK(n.finding == 3);
     CHECK(n.not_applicable == 2);
     CHECK(n.pass == 2 * 514);
 }
 
-TEST_CASE("TVB-31.12: SRH (frozen outcomes)", "[verify][tvb31]") {
+TEST_CASE("TVB-31.12: SRH (frozen outcomes)", "[verify][.tvb31_full]") {
     // Known finding (viii) (15.15, MI-Q15, ruled after the first run found it): the partials, where their error is
     // within the shipped quotient-rule form's rounding floor (they pass where nothing cancels).
-    const auto r = bench::run_tvb31_12(bench::Tier::fast);
+    const auto r = bench::run_tvb31_12(bench::Tier::full);
     const auto n = check(
         r,
         [](const bench::ComparisonRecord& c) {
@@ -46,26 +46,26 @@ TEST_CASE("TVB-31.12: SRH (frozen outcomes)", "[verify][tvb31]") {
     CHECK(n.pass > n.not_applicable);
 }
 
-TEST_CASE("TVB-31.13: Auger (frozen outcomes)", "[verify][tvb31]") {
-    const auto r = bench::run_tvb31_13(bench::Tier::fast);
+TEST_CASE("TVB-31.13: Auger (frozen outcomes)", "[verify][.tvb31_full]") {
+    const auto r = bench::run_tvb31_13(bench::Tier::full);
     const auto n = check(r, none);
     CHECK(r.comparisons.size() == 2u * 3 * 1985 * 3 + 2);
     CHECK(n.pass + n.not_applicable == static_cast<int>(r.comparisons.size()));
     CHECK(n.not_applicable > 0);
 }
 
-TEST_CASE("TVB-31.14: radiative (frozen outcomes)", "[verify][tvb31]") {
-    const auto r = bench::run_tvb31_14(bench::Tier::fast);
+TEST_CASE("TVB-31.14: radiative (frozen outcomes)", "[verify][.tvb31_full]") {
+    const auto r = bench::run_tvb31_14(bench::Tier::full);
     const auto n = check(r, none);
     CHECK(r.comparisons.size() == 5u * 3 * 1985 * 3);  // four materials, GaAs with both E
     CHECK(n.pass + n.not_applicable == static_cast<int>(r.comparisons.size()));
     CHECK(n.not_applicable > 0);
 }
 
-TEST_CASE("TVB-31.15: trap occupancy and kinetics (frozen outcomes)", "[verify][tvb31]") {
+TEST_CASE("TVB-31.15: trap occupancy and kinetics (frozen outcomes)", "[verify][.tvb31_full]") {
     // Known finding (ix) (15.15, MI-Q15, ruled after the first run found it): the four trap_kinetics partials, where
     // their error is within the shipped form's rounding floor (they pass where nothing cancels).
-    const auto r = bench::run_tvb31_15(bench::Tier::fast);
+    const auto r = bench::run_tvb31_15(bench::Tier::full);
     const auto n = check(
         r,
         [](const bench::ComparisonRecord& c) {
@@ -83,8 +83,8 @@ TEST_CASE("TVB-31.15: trap occupancy and kinetics (frozen outcomes)", "[verify][
     CHECK(n.not_applicable >= 3 * 20);
 }
 
-TEST_CASE("TVB-31.16: trap-band quadrature (frozen outcomes)", "[verify][tvb31]") {
-    const auto r = bench::run_tvb31_16(bench::Tier::fast);
+TEST_CASE("TVB-31.16: trap-band quadrature (frozen outcomes)", "[verify][.tvb31_full]") {
+    const auto r = bench::run_tvb31_16(bench::Tier::full);
     const auto n = check(r, none);
     CHECK(r.comparisons.size() == 4u * 2 * (257 + 2 + 2 * (27 + 2)));
     CHECK(n.not_applicable == 4 * 2 * (2 + 2 * 2));

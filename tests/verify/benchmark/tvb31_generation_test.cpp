@@ -22,8 +22,8 @@ using tvb31_test::check;
 using tvb31_test::starts_with;
 namespace bench = NiTCAD::verify::benchmark;
 
-TEST_CASE("TVB-31.20: van Overstraeten-de Man (frozen outcomes)", "[verify][tvb31]") {
-    const auto r = bench::run_tvb31_20(bench::Tier::fast);
+TEST_CASE("TVB-31.20: van Overstraeten-de Man (frozen outcomes)", "[verify][.tvb31_full]") {
+    const auto r = bench::run_tvb31_20(bench::Tier::full);
     const auto n = check(r, [](const bench::ComparisonRecord& c) {
         return starts_with(c.quantity, "parameter ") && !c.quantity.ends_with("phonon_energy_eV");
     });
@@ -33,8 +33,8 @@ TEST_CASE("TVB-31.20: van Overstraeten-de Man (frozen outcomes)", "[verify][tvb3
     CHECK(n.pass == static_cast<int>(r.comparisons.size()) - 8 - n.not_applicable);
 }
 
-TEST_CASE("TVB-31.21: Kane (frozen outcomes)", "[verify][tvb31]") {
-    const auto r = bench::run_tvb31_21(bench::Tier::fast);
+TEST_CASE("TVB-31.21: Kane (frozen outcomes)", "[verify][.tvb31_full]") {
+    const auto r = bench::run_tvb31_21(bench::Tier::full);
     const auto n = check(r, [](const bench::ComparisonRecord& c) { return starts_with(c.quantity, "parameter "); });
     CHECK(r.comparisons.size() == 222u * 2 + 2);
     CHECK(n.finding == 2);
@@ -42,11 +42,11 @@ TEST_CASE("TVB-31.21: Kane (frozen outcomes)", "[verify][tvb31]") {
     CHECK(n.pass == static_cast<int>(r.comparisons.size()) - 4);
 }
 
-TEST_CASE("TVB-31.22: direct-gap WKB (frozen outcomes)", "[verify][tvb31]") {
+TEST_CASE("TVB-31.22: direct-gap WKB (frozen outcomes)", "[verify][.tvb31_full]") {
     // Known findings (xi) and (xii) (15.17, MI-Q18, ruled after the first run found them): wkb_segment's short
     // segments (the antiderivative difference's rounding floor; below D = 1e-10 the midpoint rule's truncation) and
     // wkb_path_rate's dG/dI_ik as z -> 0 (its rounding floor). Each region also passes where the miss is small.
-    const auto r = bench::run_tvb31_22(bench::Tier::fast);
+    const auto r = bench::run_tvb31_22(bench::Tier::full);
     const auto n = check(
         r,
         [](const bench::ComparisonRecord& c) {

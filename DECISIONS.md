@@ -9278,6 +9278,114 @@ Mutations (after a green baseline; filter `TVB-31.30*,TVB-31.31*` on `nitcad_ver
 
 `git status src/physics include/NiTCAD/physics` is clean afterwards.
 
+**15.20 Step 10: TVR-3 close-out (2026-11-06).**
+
+**Debug cost and MI-Q9's split.** At step 9's end, the serial Debug verify (`ctest -R verify -LE full`, Debug,
+serial) took 153.6 s. TVR-3's tests were about 91 s of that, against MI-Q9's allowance of 8 s and CV-Q19's 75 s
+budget; 31.19 alone was 45 s. MI-Q9, ruled before code, applies: the dense grids move to `full`, and `fast` keeps
+every switch point and one point a decade.
+- `tvb31::per_decade(tier)` is 1 in fast and 64 in full and nightly.
+- `tvb31::keep(k, n, tier)` keeps every 16th point and the last of a linear grid in fast. It is used in 31.05's
+  explicit grid, 31.16's E_F, 31.17's η and depth sweeps, 31.22's d grid, 31.23's E, 31.24's x, 31.27's z, and 31.29's
+  x grids.
+- Four entries thin a set of non-switch points in fast:
+  - 31.22's segment ends: the gap edges and their neighbours, not the interior ends 0.05–0.75. Its near-coincident
+    pairs keep k = 3, 8 and 14, and its path z keeps 1e-10, 1 and 800.
+  - 31.19's compensated offsets keep k = 1, 6 and 12.
+  - 31.25 runs at 300 K and F₁ − F₂ = 0.1 and 1 eV.
+- Every switch point, its `nextafter` neighbours, and every documented cut and range edge is added outside these grids,
+  in every tier.
+- Each fast point is therefore a point of the full grid, with the same comparison and outcome there.
+- `nitcad verify` (default tier fast) runs the thinned grids. `--tier full` runs the frozen ones.
+
+**MI-Q27 (where the frozen dense tests run).** Ruled A (owner standing instruction, "choose recommended",
+2026-11-06).
+- (A) As built:
+  - The frozen tests of 31.06–31.31 call `Tier::full`. They carry the hidden Catch2 tag `[.tvb31_full]`, so the
+    per-file ctests skip them.
+  - The Release-only ctest `verify_benchmark.tvb31_full` runs them, with exactly their frozen counts. CI's release
+    preset runs it in 11.7 s.
+  - Both builds run `tvb31_fast_test.cpp`. It holds the frozen tests' per-comparison rules without their counts: no
+    run error or fail, not_evaluated only by TB-Q4, notes only 31.25's diagnostics or a staleness note, and at least
+    one comparison per entry but 31.25. A staleness note is allowed in fast, because a thinned grid may miss a
+    finding's region; staleness is judged in full.
+  - 31.01–31.05 take no tier, and their frozen tests run in both builds.
+- (B) The `full` ctest label, which is local only (TVR-2's NITCAD_VERIFY_FULL_TIER). CI would never see the frozen
+  TVB-31 outcomes.
+- No criterion or expected outcome changed (TVM2): the full grids are the frozen ones.
+
+Measured afterwards (serial Debug verify, the machine otherwise idle):
+- 69.89 s overall, against CV-Q19's 75 s.
+- TVR-3's share is 7.88 s, against MI-Q9's 8 s:
+
+  | Tests | Time (s) |
+  |---|---|
+  | The seven L0 `model_*` tests | 2.08 |
+  | `tvb31_band` | 1.36 |
+  | `tvb31_fast` | 4.37 |
+  | The seven per-file ctests, now empty | 0.07 |
+
+**Suites:**
+- Debug: `ctest -R verify -LE full`, 60/60 pass.
+- Release, `ctest -j 6`, everything: 190 of 195 passed and none failed.
+  - Claude Code stopped the run when the machine ran critically low on memory.
+  - It was starting `verify_full.tvb04`, TVR-2's local-only full-tier ladder (about 20 GB). It runs only because
+    this build tree sets NITCAD_VERIFY_FULL_TIER.
+  - Not run: `verify_full.tvb04`, `app.run_controller`, `app_window.analysis_window`, `app_window.self_test` and
+    `app_window_3d`. None touches TVR-3's code.
+  - `verify_benchmark.tvb31_full`, `tvb31_fast`, and every other verify, physics, solve and deck test passed.
+
+**TVB-31 outcomes (fast tier, `nitcad verify --id`), 31 entries:**
+- pass, 9: 31.02, 31.03, 31.09, 31.13, 31.14, 31.16, 31.18, 31.23 and 31.26;
+- finding, 19: 31.01, 31.04–31.08, 31.10–31.12, 31.17, 31.19–31.22, 31.24, 31.27, 31.28, 31.30 and 31.31;
+- not evaluated, 2: 31.15 and 31.29 (TB-Q4's subnormal points, MI-Q19);
+- unverified, 1: 31.25 (diagnostics only, MI-Q8).
+- No entry fails.
+
+**Provenance summary (R-3).** The grade of each entry is printed in the report's `reference` text; each register row's
+is printed in its comparison's reason.
+- Entries: PA 7 (31.02, 31.03, 31.18, 31.22–31.25); PB 9 (31.01, 31.06–31.09, 31.11, 31.20, 31.21, 31.27); PD 15 (the
+  rest, which are derived here and checked against a second method or by the value rule on the register's numbers).
+- Register (`model_parameters.hpp`), 193 rows: 29 PA, 41 PB, 62 PC, 55 L, 6 C; and 7 composition laws (PC).
+- The L rows are the parameters with no source read. MI-Q6's primaries would raise them:
+  - Caughey–Thomas and Baccarani–Ostoja (F3);
+  - the lifetime set;
+  - Dziewior–Schmid;
+  - the Kane pair's origin (F5);
+  - γ(T) (F4);
+  - ε_r and χ;
+  - the non-silicon saturation velocities and SiC's levels.
+
+**Findings for the owner (MI-Q10: none fixed in TVR-3; each with a fix proposal in its section).** The rounding-floor
+and cancellation findings, each a partial or value losing digits where its shipped form cancels:
+
+| Finding | Where | Section |
+|---|---|---|
+| (vi) | n_i near 9 K | 15.13 |
+| (vii) | the energy-balance μ₀ partials | 15.14 |
+| (viii) | the SRH partials | 15.15 |
+| (ix) | the trap-kinetics partials | 15.15 |
+| (x) | the FD neutral η floor | 15.16 |
+| (xi) | wkb_segment's short segments, and its midpoint truncation below D = 1e-10 | 15.17 |
+| (xii) | the path's dG/dI_ik as z → 0 | 15.17 |
+| (xiii) | dh/dx as x → −∞ | 15.18 |
+| (xiv) | dN/dE where both levels lie well above E | 15.18 |
+
+Their effects are absolute errors of order ε in quantities of order 1, or relative digits lost in partials near
+degenerate inputs. No device result changes visibly.
+
+Other findings:
+- **Documented departures, the code against the published form (15.4, MI-Q4):**
+  - F1: Slotboom's subtraction and cut.
+  - F6: Masetti's T-scaled μ_max.
+- **Attribution questions:** F2–F5 (15.4, 15.10).
+- **Register mismatches:**
+  - silicon: 15.10–15.18 (for example, the conductivity exponent 1.33 against the printed 1.3);
+  - SiO₂ and the non-silicon sets: 15.19 (26 rows, and AlGaAs's laws).
+
+**Next.** Unit 55's later phases (TVR-4/5) are not started. Every commit is local, on `verify/model-implementation`,
+stacked on PR #78, which is open and not merged. Pushing, opening a PR or merging needs the owner's authorization.
+
 
 
 ---

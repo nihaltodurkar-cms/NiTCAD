@@ -101,7 +101,7 @@ void judge_barrier(BenchmarkResult& r, const ReferenceInfo& inf, const TestBarri
 
 }  // namespace
 
-BenchmarkResult run_tvb31_23(Tier) {
+BenchmarkResult run_tvb31_23(Tier tier) {
     BenchmarkResult r;
     r.id = "TVB-31.23";
     r.title = "WKB segment action, exponent and transmission";
@@ -147,7 +147,9 @@ BenchmarkResult run_tvb31_23(Tier) {
     // Barriers.
     for (const TestBarrier& b : barriers()) {
         std::vector<double> Es;
-        for (int i = -64; i <= 224; ++i) Es.push_back(i / 64.0);
+        for (int i = -64; i <= 224; ++i) {
+            if (tvb31::keep(i + 64, 288, tier)) Es.push_back(i / 64.0);
+        }
         for (const auto& s : b.segments) {
             for (const double w : {s.W0_eV, s.W1_eV}) {
                 for (const double e : {w, std::nextafter(w, -INFINITY), std::nextafter(w, INFINITY)}) Es.push_back(e);
@@ -165,7 +167,7 @@ BenchmarkResult run_tvb31_23(Tier) {
     return r;
 }
 
-BenchmarkResult run_tvb31_24(Tier) {
+BenchmarkResult run_tvb31_24(Tier tier) {
     BenchmarkResult r;
     r.id = "TVB-31.24";
     r.title = "Tsu-Esaki supply function and its partials";
@@ -182,6 +184,7 @@ BenchmarkResult run_tvb31_24(Tier) {
     for (const double dF : {0.0, 1e-9, 1e-3, 0.1, 1.0}) {
         const double F2 = F1 - dF;
         for (int i = -512; i <= 512; ++i) {
+            if (!tvb31::keep(i + 512, 1024, tier)) continue;
             const double E = F1 - (i / 8.0) * kT;
             const physics::Supply s = physics::tsu_esaki_supply(E, F1, F2, kT);
             const A4 x{DD(E), DD(F1), DD(F2), DD(kT)};
@@ -204,7 +207,7 @@ BenchmarkResult run_tvb31_24(Tier) {
     return r;
 }
 
-BenchmarkResult run_tvb31_25(Tier) {
+BenchmarkResult run_tvb31_25(Tier tier) {
     BenchmarkResult r;
     r.id = "TVB-31.25";
     r.title = "Tsu-Esaki current quadrature (diagnostic, MI-Q8)";
@@ -225,7 +228,9 @@ BenchmarkResult run_tvb31_25(Tier) {
         std::vector<mt::Segment> seg;
         for (const auto& s : b.segments) seg.push_back({DD(s.W0_eV), DD(s.W1_eV), DD(s.length_cm), DD(s.mass_m0)});
         for (const double T : {300.0, 400.0}) {
+            if (tier == Tier::fast && T != 300.0) continue;  // MI-Q9 (15.20): 300 K only in fast
             for (const double V : {0.01, 0.1, 0.5, 1.0}) {
+                if (tier == Tier::fast && (V == 0.01 || V == 0.5)) continue;  // and F1 - F2 0.1 and 1 eV
                 const double F1 = 0.1, F2 = F1 - V;
                 const physics::TunnelCurrent J =
                     physics::tsu_esaki_current(b.segments, {0.0, INFINITY}, F1, F2, T, 120.0);

@@ -57,7 +57,7 @@ constexpr std::string_view verification = "model_statistics_test: d/d eta agains
 
 }  // namespace
 
-BenchmarkResult run_tvb31_17(Tier) {
+BenchmarkResult run_tvb31_17(Tier tier) {
     BenchmarkResult r;
     r.id = "TVB-31.17";
     r.title = "Incomplete ionization";
@@ -77,12 +77,16 @@ BenchmarkResult run_tvb31_17(Tier) {
     };
     std::vector<Point> pts;
     for (const double depth : {0.0, -1.0, 0.045, 0.1, 0.3}) {  // -1: the next double above 0 in kT units
-        for (int i = -160; i <= 160; ++i) pts.push_back({i / 4.0, depth, false});
+        for (int i = -160; i <= 160; ++i) {
+            if (tvb31::keep(i + 160, 320, tier)) pts.push_back({i / 4.0, depth, false});
+        }
         pts.push_back({-50.0, depth, false});
         pts.push_back({50.0, depth, false});
     }
     for (const double eta : {-40.0, -5.0, 0.0, 5.0, 40.0}) {
-        for (int i = 0; i <= 256; ++i) pts.push_back({eta, 0.3 * i / 256.0, true});
+        for (int i = 0; i <= 256; ++i) {
+            if (tvb31::keep(i, 256, tier)) pts.push_back({eta, 0.3 * i / 256.0, true});
+        }
         pts.push_back({eta, 0.35, true});
     }
     const std::array<std::string, 2> units{"cm^-3", "cm^-3"};
@@ -244,6 +248,7 @@ BenchmarkResult run_tvb31_19(Tier tier) {
             const double NA = 1e17;
             if (!run(lab + ", compensated", NA, NA, model, fd, 0.0)) return r;
             for (int k = 1; k <= 12; ++k) {
+                if (tier == Tier::fast && k != 1 && k != 6 && k != 12) continue;  // MI-Q9 (15.20)
                 for (const double s : {1.0, -1.0}) {
                     const double ND = NA * (1.0 + s * std::pow(10.0, -k));
                     if (!run(lab + ", compensated", ND, NA, model, fd, ND - NA)) return r;

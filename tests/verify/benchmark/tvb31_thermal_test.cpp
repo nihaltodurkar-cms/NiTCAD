@@ -23,16 +23,16 @@ using tvb31_test::never;
 using tvb31_test::starts_with;
 namespace bench = NiTCAD::verify::benchmark;
 
-TEST_CASE("TVB-31.26: emission velocity (frozen outcomes)", "[verify][tvb31]") {
-    const auto r = bench::run_tvb31_26(bench::Tier::fast);
+TEST_CASE("TVB-31.26: emission velocity (frozen outcomes)", "[verify][.tvb31_full]") {
+    const auto r = bench::run_tvb31_26(bench::Tier::full);
     const auto n = check(r, never);
     CHECK(r.comparisons.size() == 3u * 385 + 2 * (90 + 60) + 2 * (60 + 60));
     CHECK(n.not_applicable == 2 * (6 + 4) + 2 * (18 + 18));
     CHECK(n.pass == static_cast<int>(r.comparisons.size()) - n.not_applicable);
 }
 
-TEST_CASE("TVB-31.27: MLDA (frozen outcomes)", "[verify][tvb31]") {
-    const auto r = bench::run_tvb31_27(bench::Tier::fast);
+TEST_CASE("TVB-31.27: MLDA (frozen outcomes)", "[verify][.tvb31_full]") {
+    const auto r = bench::run_tvb31_27(bench::Tier::full);
     const auto n = check(r, [](const bench::ComparisonRecord& c) { return starts_with(c.quantity, "parameter "); });
     CHECK(r.comparisons.size() == 56u + 769 + 710 + 2);
     CHECK(n.finding == 2);
@@ -40,8 +40,8 @@ TEST_CASE("TVB-31.27: MLDA (frozen outcomes)", "[verify][tvb31]") {
     CHECK(n.pass == static_cast<int>(r.comparisons.size()) - 2 - n.not_applicable);
 }
 
-TEST_CASE("TVB-31.28: lattice conductivity (frozen outcomes)", "[verify][tvb31]") {
-    const auto r = bench::run_tvb31_28(bench::Tier::fast);
+TEST_CASE("TVB-31.28: lattice conductivity (frozen outcomes)", "[verify][.tvb31_full]") {
+    const auto r = bench::run_tvb31_28(bench::Tier::full);
     const auto n = check(r, [](const bench::ComparisonRecord& c) { return starts_with(c.quantity, "parameter "); });
     CHECK(r.comparisons.size() == 35u * 2 + 3);
     CHECK(n.finding == 3);
@@ -49,8 +49,8 @@ TEST_CASE("TVB-31.28: lattice conductivity (frozen outcomes)", "[verify][tvb31]"
     CHECK(n.pass == static_cast<int>(r.comparisons.size()) - 3 - 4);
 }
 
-TEST_CASE("TVB-31.29: Fermi orders and h (frozen outcomes)", "[verify][tvb31]") {
-    const auto r = bench::run_tvb31_29(bench::Tier::fast);
+TEST_CASE("TVB-31.29: Fermi orders and h (frozen outcomes)", "[verify][.tvb31_full]") {
+    const auto r = bench::run_tvb31_29(bench::Tier::full);
     const auto n = check(
         r, [](const bench::ComparisonRecord& c) { return c.quantity == "dh/dx" && c.parameter < -1.0; }, true,
         [](const bench::ComparisonRecord& c) {

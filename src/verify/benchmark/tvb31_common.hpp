@@ -127,9 +127,11 @@ void table_checks(BenchmarkResult& r, std::string_view entry);
 // lo, lo 10^(1/per), ..., hi (both ends included), per points a decade.
 [[nodiscard]] std::vector<double> log_grid(double lo, double hi, int per);
 
-// Points a decade on the dense grids: 64 (15.5) in every tier unless the close-out's Debug timing moves them
-// (MI-Q9).
+// Points a decade on the dense log grids (MI-Q9, applied at the close-out, 15.20): 64 (15.5) in full and nightly, one
+// in fast. keep(k, n, tier) thins a linear grid of n + 1 points the same way: every point in full, every 16th and
+// the last in fast. Switch points and their neighbours are added outside these grids in every tier.
 [[nodiscard]] int per_decade(Tier tier);
+[[nodiscard]] inline bool keep(int k, int n, Tier tier) { return tier != Tier::fast || k % 16 == 0 || k == n; }
 
 [[nodiscard]] Predicate in_range(std::string name, double value, double lo, double hi);
 

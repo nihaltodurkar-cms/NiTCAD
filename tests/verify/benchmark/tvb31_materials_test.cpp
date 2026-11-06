@@ -24,16 +24,16 @@ bool pa_match(const bench::ComparisonRecord& c) {
 }
 }  // namespace
 
-TEST_CASE("TVB-31.30: SiO2 data (frozen outcomes)", "[verify][tvb31]") {
-    const auto r = bench::run_tvb31_30(bench::Tier::fast);
+TEST_CASE("TVB-31.30: SiO2 data (frozen outcomes)", "[verify][.tvb31_full]") {
+    const auto r = bench::run_tvb31_30(bench::Tier::full);
     const auto n = check(r, [](const bench::ComparisonRecord& c) { return !pa_match(c); });
     CHECK(r.comparisons.size() == 7u);
     CHECK(n.pass == 1);
     CHECK(n.finding == 6);
 }
 
-TEST_CASE("TVB-31.31: non-silicon material sets (frozen outcomes)", "[verify][tvb31]") {
-    const auto r = bench::run_tvb31_31(bench::Tier::fast);
+TEST_CASE("TVB-31.31: non-silicon material sets (frozen outcomes)", "[verify][.tvb31_full]") {
+    const auto r = bench::run_tvb31_31(bench::Tier::full);
     const auto n = check(r, [](const bench::ComparisonRecord& c) {
         return starts_with(c.quantity, "composition ") || (starts_with(c.quantity, "parameter ") && !pa_match(c));
     });

@@ -22,17 +22,17 @@ using tvb31_test::never;
 using tvb31_test::starts_with;
 namespace bench = NiTCAD::verify::benchmark;
 
-TEST_CASE("TVB-31.23: WKB action (frozen outcomes)", "[verify][tvb31]") {
-    const auto r = bench::run_tvb31_23(bench::Tier::fast);
+TEST_CASE("TVB-31.23: WKB action (frozen outcomes)", "[verify][.tvb31_full]") {
+    const auto r = bench::run_tvb31_23(bench::Tier::full);
     const auto n = check(r, never);
     CHECK(r.comparisons.size() == 304u * 3 + 1 + (3 * 295 + 301) * 3);
     CHECK(n.pass == static_cast<int>(r.comparisons.size()));
 }
 
-TEST_CASE("TVB-31.24: Tsu-Esaki supply (frozen outcomes)", "[verify][tvb31]") {
+TEST_CASE("TVB-31.24: Tsu-Esaki supply (frozen outcomes)", "[verify][.tvb31_full]") {
     // Known finding (xiv) (15.18, MI-Q22, ruled after the first run found it): dN/dE within the rounding floor of
     // sigma(x2) - sigma(x1) where both levels are many kT above E; it passes elsewhere.
-    const auto r = bench::run_tvb31_24(bench::Tier::fast);
+    const auto r = bench::run_tvb31_24(bench::Tier::full);
     const auto n =
         check(r, [](const bench::ComparisonRecord& c) { return starts_with(c.quantity, "dN/dE"); }, true);
     CHECK(r.comparisons.size() == 5u * 1025 * 4);
@@ -50,8 +50,8 @@ TEST_CASE("TVB-31.24: Tsu-Esaki supply (frozen outcomes)", "[verify][tvb31]") {
     CHECK(n.pass + n.finding == static_cast<int>(r.comparisons.size()) - na);
 }
 
-TEST_CASE("TVB-31.25: Tsu-Esaki current (diagnostic, frozen outcomes)", "[verify][tvb31]") {
-    const auto r = bench::run_tvb31_25(bench::Tier::fast);
+TEST_CASE("TVB-31.25: Tsu-Esaki current (diagnostic, frozen outcomes)", "[verify][.tvb31_full]") {
+    const auto r = bench::run_tvb31_25(bench::Tier::full);
     CHECK_FALSE(r.run_error.has_value());
     CHECK(r.comparisons.empty());
     REQUIRE(r.notes.size() == 41u);  // 33 as frozen, and 8 of the kinked barrier added after the first run

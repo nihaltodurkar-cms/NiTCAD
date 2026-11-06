@@ -772,10 +772,16 @@ add_executable(nitcad_verify_benchmark_test
   tests/verify/benchmark/tvb31_generation_test.cpp
   tests/verify/benchmark/tvb31_tunnelling_test.cpp
   tests/verify/benchmark/tvb31_thermal_test.cpp
-  tests/verify/benchmark/tvb31_materials_test.cpp)
+  tests/verify/benchmark/tvb31_materials_test.cpp
+  tests/verify/benchmark/tvb31_fast_test.cpp)
 target_link_libraries(nitcad_verify_benchmark_test PRIVATE NiTCAD::verify_benchmark
   Catch2::Catch2WithMain)
 nitcad_add_file_tests(verify_benchmark nitcad_verify_benchmark_test)
+# TVB-31's dense grids (the frozen outcomes of DECISIONS Unit 55 15.13-15.19) in the full tier, Release only: in
+# Debug they took 89 s against MI-Q9's 8 s (15.20). Debug and Release both run the fast tier (tvb31_fast_test).
+if(CMAKE_BUILD_TYPE STREQUAL "Release")
+  add_test(NAME verify_benchmark.tvb31_full COMMAND nitcad_verify_benchmark_test "[tvb31_full]")
+endif()
 
 # The full tier of TVR-2 (DECISIONS Unit 55 14.9): TVB-04's 3D tensor ladder to 64^3 with PARDISO, about 12 minutes on 6
 # threads and 20 GB. Local only (owner ruling, option 1): opt in with NITCAD_VERIFY_FULL_TIER=ON in a Release build,

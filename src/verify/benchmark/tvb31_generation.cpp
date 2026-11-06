@@ -262,7 +262,9 @@ BenchmarkResult run_tvb31_22(Tier tier) {
         auto ref_band = [](const DD& g, const DD& mr) { return mg::Band{g, mr}; };
         // kappa and the antiderivatives.
         std::vector<double> ds;
-        for (int i = 0; i <= 1024; ++i) ds.push_back(i / 1024.0);
+        for (int i = 0; i <= 1024; ++i) {
+            if (tvb31::keep(i, 1024, tier)) ds.push_back(i / 1024.0);
+        }
         for (int k = 1; k <= 15; ++k) {
             ds.push_back(std::pow(10.0, -k));
             ds.push_back(1.0 - std::pow(10.0, -k));
@@ -293,13 +295,17 @@ BenchmarkResult run_tvb31_22(Tier tier) {
         };
         std::vector<Pair> pairs;
         const std::array<double, 10> ends{-0.2, 0.0, 1e-9, 0.05, 0.3, 0.5, 0.75, 0.999, 1.0, 1.3};
+        // Fast tier (MI-Q9, 15.20): the gap edges and their neighbours only, not the interior ends 0.05-0.75.
+        auto interior = [](double e) { return e > 0.01 && e < 0.9; };
         for (const double a : ends) {
             for (const double b : ends) {
+                if (tier == Tier::fast && (interior(a) || interior(b))) continue;
                 if (a != b) pairs.push_back({a, b});
             }
         }
         for (const double base : {1e-6, 0.3, 0.6, 0.999999}) {
             for (int k = 3; k <= 14; ++k) {
+                if (tier == Tier::fast && k != 3 && k != 8 && k != 14) continue;
                 pairs.push_back({base, base + std::pow(10.0, -k)});
                 pairs.push_back({base + std::pow(10.0, -k), base});
             }
@@ -393,6 +399,7 @@ BenchmarkResult run_tvb31_22(Tier tier) {
         for (const double Ik : {0.0, 0.1, 1.0, 10.0, 100.0, 340.0}) {
             for (const double Iik : {0.0, 1e-20, 1e-17, 1e-14}) {
                 for (const double z : {1e-10, 1e-4, 0.5, 1.0, 3.0, 50.0, 800.0}) {
+                    if (tier == Tier::fast && z != 1e-10 && z != 1.0 && z != 800.0) continue;  // MI-Q9 (15.20)
                     const double slope = F * base::q_C, km2 = Iik > 0.0 ? z / Iik : z;
                     const physics::WkbPathRate s = physics::wkb_path_rate(slope, Ik, Iik, km2);
                     const A4 x{DD(slope), DD(Ik), DD(Iik), DD(km2)};

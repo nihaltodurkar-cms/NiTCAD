@@ -15,8 +15,8 @@ using tvb31_test::check;
 using tvb31_test::starts_with;
 namespace bench = NiTCAD::verify::benchmark;
 
-TEST_CASE("TVB-31.17: incomplete ionization (frozen outcomes)", "[verify][tvb31]") {
-    const auto r = bench::run_tvb31_17(bench::Tier::fast);
+TEST_CASE("TVB-31.17: incomplete ionization (frozen outcomes)", "[verify][.tvb31_full]") {
+    const auto r = bench::run_tvb31_17(bench::Tier::full);
     const auto n = check(r, [](const bench::ComparisonRecord& c) { return starts_with(c.quantity, "parameter "); });
     CHECK(r.comparisons.size() == 6u * 2905 * 2 + 4);
     CHECK(n.finding == 4);
@@ -24,18 +24,18 @@ TEST_CASE("TVB-31.17: incomplete ionization (frozen outcomes)", "[verify][tvb31]
     CHECK(n.pass == static_cast<int>(r.comparisons.size()) - 4 - n.not_applicable);
 }
 
-TEST_CASE("TVB-31.18: Altermatt-Schenk levels (frozen outcomes)", "[verify][tvb31]") {
-    const auto r = bench::run_tvb31_18(bench::Tier::fast);
+TEST_CASE("TVB-31.18: Altermatt-Schenk levels (frozen outcomes)", "[verify][.tvb31_full]") {
+    const auto r = bench::run_tvb31_18(bench::Tier::full);
     const auto n = check(r, [](const bench::ComparisonRecord&) { return false; });
     CHECK(r.comparisons.size() == 2u * 451 * 2 + 10);
     CHECK(n.not_applicable == 4);
     CHECK(n.pass == static_cast<int>(r.comparisons.size()) - 4);
 }
 
-TEST_CASE("TVB-31.19: neutral equilibria (frozen outcomes)", "[verify][tvb31]") {
+TEST_CASE("TVB-31.19: neutral equilibria (frozen outcomes)", "[verify][.tvb31_full]") {
     // Known finding (x) (15.16, MI-Q16, ruled after the first run found it): the Fermi-Dirac complete-ionization eta
     // within the residual's rounding floor, where |eta| is small; it passes elsewhere.
-    const auto r = bench::run_tvb31_19(bench::Tier::fast);
+    const auto r = bench::run_tvb31_19(bench::Tier::full);
     const auto n = check(
         r, [](const bench::ComparisonRecord& c) { return starts_with(c.quantity, "eta (Fermi-Dirac, complete)"); },
         true);

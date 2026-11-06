@@ -371,7 +371,9 @@ BenchmarkResult run_tvb31_16(Tier tier) {
         double EF, T;
     };
     std::vector<Point> pts;
-    for (int i = -128; i <= 128; ++i) pts.push_back({i / 256.0, 300.0});
+    for (int i = -128; i <= 128; ++i) {
+        if (tvb31::keep(i + 128, 256, tier)) pts.push_back({i / 256.0, 300.0});
+    }
     pts.push_back({-0.6, 300.0});
     pts.push_back({0.6, 300.0});
     for (const double EF : {0.0, 0.25}) {
