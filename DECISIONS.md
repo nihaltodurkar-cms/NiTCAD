@@ -9853,6 +9853,44 @@ method of lines with Dormand–Prince.
 
 Step 1 is complete apart from these rulings. Nothing in 16.8's frozen D/E criteria changed.
 
+**16.21 Rulings on step 1 (owner "go" after the recommendations, 2026-11-06).** DT-Q13 through DT-Q18 are approved
+as recommended. The A-class criteria of 16.19 are **frozen** from this commit, before any code that runs them (TVM2).
+
+**16.22 Step 2, the reach of DT-Q2 A, measured before any change (16.2 (o)): it exceeds the ruled bound.** Removing
+`device.cpp:75` and choosing an electrode node as the reference node is not enough. Four places in `assemble` take
+a *semiconductor* from `Device::reference_node()`:
+- `scaling.cpp:20`: the material behind the density and potential scales;
+- `scaled_device.cpp:74`: the intrinsic-level depth that fixes the potential's reference;
+- `gate_tunnels.cpp:64`: the same depth;
+- `electrothermal.cpp:111`: κ_ref, by the reference node's region.
+
+An insulator-only device needs a new source for each: for example a `DeviceDescription::reference_material`, a
+semiconductor used only for scales, plus refusals of tunnelling and electrothermal. That touches `device` and three
+or four `assemble` files. 16.2 (o) says to stop for the owner, so step 2 has stopped here. No code is written.
+
+**A route that needs no change to NiTCAD (found while measuring).** `check_topology` (`device.cpp:281`) already
+accepts a mesh of several connected parts: each part needs an ohmic contact or an electrode. So the benchmark device
+can be the **capacitor component plus a disjoint silicon island** (a short n-type bar with one ohmic contact):
+- The island supplies the reference node, and hence every scale, unchanged.
+- No edge joins the two parts, so the box method's Poisson rows of the capacitor see nothing of the island. The
+  electrodes' charges are exactly the capacitor's.
+- Assembling the mesh: the two SimplexMeshes are concatenated with offset node ids (a test-side helper in `verify`,
+  with its own test: each part's dual equals its own dual alone), then passed through `make_dual_mesh`.
+  `make_dual_mesh` has no connectivity rule (`simplex_mesh.hpp:63`), and its P2 check only bites if the island sits
+  inside a boundary facet's diametral circle, so the island is placed far away. `certify_interfaces` then certifies
+  the union.
+- In 1D, a graph mesh of the two chains with `certify_interfaces_1d`, which judges only edges joining two regions.
+- TVB-06's frozen "2D tensor" family: each rectangle is split into two right triangles. Their circumcentres are the
+  rectangle centres, so the dual is the tensor box method. The test asserts that equality before the benchmark uses it.
+- Risk, to be measured in this route's first commit: whether the 2D generator accepts the coaxial annulus (sectors
+  of one region whose union has a hole). If it does not, TVB-05 needs the owner again.
+
+**DT-Q19.** (A) DT-Q2 A as ruled, widened: `reference_material` in `device` plus the `assemble` changes above, each
+bit-identical for devices with a semiconductor, with their own tests. (A′) The disjoint-island fixture: no NiTCAD
+change at all; the union helper and its test live in `verify`. (B) TVB-05/06 unbuildable. **Recommendation: A′.** It
+is exact by construction (no shared edge), keeps NiTCAD untouched as CV-Q3 intended, and its one assumption (the parts
+are independent) is tested directly rather than argued.
+
 
 
 ---
