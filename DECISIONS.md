@@ -10878,6 +10878,66 @@ and the fix keeps the criterion. The slab and Π are DT-Q36's class and should f
 
 **Recommendation: A.** DT-Q11 keeps findings out of TVR-4. The contract classes are what C2, C6, C9 and C12 state.
 
+**16.46 Step 9: pao_sah, TVB-20 and TVB-21. The reference and the construction, recorded before any NiTCAD run of
+the benchmark (TVM2).**
+- **`verify/reference/pao_sah`** (PB through the two reproductions of 16.17; base-free):
+  - The field E(ψ, V) in both forms of 16.17, with exact bulk densities (`neutral_bulk`).
+  - ψ_s(V) by Brent in dd from V_G − V_FB = ψ_s + εE(ψ_s, V)/C_ox.
+  - Q_I(V) by adaptive Gauss–Kronrod in dd from c ψ_B to ψ_s; Q = μ ∫₀^{V_D} (−Q_I) dV by Gauss–Kronrod.
+  - **The primary reference is form 1 with c = 1** (Wong's reproduction, the one that states its limits). The
+    other form and c = 1/2 enter only as ε_cutoff (16.18 (d)).
+  - At c ψ_B > 0 the inner integrand is finite (16.18 (n)).
+  - The second method (16.18 (d)): g_d against a fourth-order difference of Q in V_D at the dyadic step 2⁻¹⁷. It
+    is run at L0 and at TVB-20's run time; above 1e-10 it is a run error.
+  - Brews' charge sheet (16.18 (e)), with ψ_s at both ends from the same gate equation instead of Brews' χ-modified
+    eq 5. A diagnostic only; its closed form is checked against Gauss–Kronrod.
+  - Quadrature tolerances: 1e-24 (inner) and 1e-22 (outer), relative. The quadrature estimate enters U_ref.
+- **L0** (`pao_sah_test`, 5 cases, 62 assertions):
+  - at V = 0, ψ_s against TVB-09's Kingston–Neustadter reference (separate code), 1e-24 relative, both forms;
+  - the bulk ambiguity in strong inversion: the forms within 1e-10 of Q, the cutoffs within 1e-8;
+  - the identity at weak and strong inversion, 1e-12;
+  - the linear-region limit, 1e-3;
+  - the subthreshold slope against the depletion formula, 5 %;
+  - the charge sheet within 5 % in strong inversion, and its second method, 1e-24;
+  - the refusals.
+- **Corrections to my own L0 expectations before any NiTCAD run:**
+  - The identity needed a fourth-order stencil: the central difference's (h/V_T)²/6 is 2.5e-6.
+  - It needed a dyadic step, because the double rounding of V_D ± h gave a 2.7e-12 floor.
+  - The cutoff bound was 1e-10 by my guess; the estimate n_i V_T / (E(ψ_B) N_inv) ≈ 2e-9 (measured 5.6e-10)
+    makes it 1e-8.
+- **L0 time:** the ambiguity and identity cases take 1.5 s in Release, against CV-Q19's Debug budget. They are
+  hidden (`[.pao_sah_release]`) and run in the Release-only ctest `verify.pao_sah_release`, as `diode_profile`
+  does. The identity also runs at TVB-20's run time.
+- **Construction** (`tvb20.cpp`; 16.2 (i), 16.18 (d)):
+  - **Device.** A uniform p-substrate, N_A = 1e17. Abrupt n+ source and drain boxes, 1e19, 0.5 µm wide and
+    0.1 µm deep. Depth 1 µm, with the body contact on the bottom.
+  - **Gate.** A lumped gate over the channel: t_ox = 10 nm, ε_ox 3.9, metal 4.5 eV, no fixed charge.
+  - **Physics.** 300 K, default silicon. Constant mobility: doping, field and surface mobility off, so μ_n is
+    μ_max. Boltzmann, no BGN, SRH, Auger and radiative off. Weighted terminal current (Unit 32).
+  - **Lengths.** L = L0 × {1, 2, 4, 8} with L0 = 2.5 µm (W_dmax ≈ 0.11 µm, so L0 ≥ 20 W_dmax).
+  - **Mesh, x.** Spacings 2 nm at the junction edges, growing ×1.2 up to 50 nm in the source and drain and up to
+    L/40 in the channel.
+  - **Mesh, y.** 0.2 nm at the surface, growing ×1.15 up to 40 nm.
+  - **Factorial.** At 8 L0: tol 1e-12 and 1e-14, and h/2 (every spacing halved, the ratios square-rooted).
+  - **U_disc** is the two-grid GCI (F_s 3, p 2) of h against h/2. U_iter = |Q(tol) − Q(tol/100)|.
+  - **Bias points.** Q = |I_D| L.
+    - V_D = 50 mV at V_G = 0.45, 0.6, 0.8, 1.2, 1.6 and 2.0 V.
+    - V_D = 0.5 V at V_G = 0.6, 0.8, 1.2, 1.6 and 2.0 V.
+    - Each V_D is swept in V_G from equilibrium.
+    - A point is NOT APPLICABLE where the reference's ψ_s(V_S) < ψ_B + 3V_T.
+  - **TVB-21.** S at V_G = 0.4, 0.5 and 0.6 V, V_D = 50 mV, from the stencil V_G ± 20 mV. The same stencil is
+    used on NiTCAD's ladder and on the reference. The depletion formula is printed (DT-Q6).
+  - **Judging.** The order in 1/L comes from the ladder's three differences (finest pair), with the spread of its
+    two values as the asymptotic check. Q_∞ is Richardson's at the finest pair, and U_L its three-grid GCI.
+  - **The accuracy needs the order.** It is NOT EVALUATED unless the order is a pass (Q_∞ is not established
+    otherwise), or when ε_approx > 1e-2 Q_PS.
+  - V_T and g_m are named in §6's catalogue row but not in 16.19's frozen criteria, so they are not judged.
+- **Tier:** nightly (`verify_full.tvb20`, NITCAD_VERIFY_FULL_TIER, as TVB-19). Registered in full, like TVB-19.
+- **Frozen outcome, set before the first run:** every comparison passes, except those at points below ψ_B + 3V_T,
+  which are NOT APPLICABLE by that predicate. 22 comparisons for TVB-20, 6 for TVB-21.
+- TVB-32 adds TVB-20's device at L0 (the V_D = 50 mV sweep from zero bias, and the equilibrium) under 16.44's
+  rule.
+
 ---
 
 ## New questions the advisor raised (not yet in `ARCHITECTURE.md`)

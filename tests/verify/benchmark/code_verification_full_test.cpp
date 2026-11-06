@@ -170,3 +170,30 @@ TEST_CASE("TVB-19 nightly tier: linear transients (frozen outcome: pass)", "[tvb
         CHECK(c.comparison.outcome == Outcome::pass);
     }
 }
+
+// TVB-20 and TVB-21 (the long-channel MOSFET against Pao-Sah, and its swing; A, 16.19 frozen; construction 16.46) in
+// the nightly tier: NiTCAD's L ladder (L0 ... 8 L0) and the (h, tol) factorial with the h/2 mesh at 8 L0. TVB-20: for
+// each judged (V_G, V_D), the order in 1/L and the limit against Pao-Sah; TVB-21: the same for S at three gate
+// biases. Frozen outcome, set before the first run: every comparison passes, except those whose point is below
+// psi_B + 3 V_T, which are NOT APPLICABLE by that predicate.
+TEST_CASE("TVB-20 and TVB-21 nightly tier: Pao-Sah and the swing (frozen outcome: pass)", "[tvb20_full]") {
+    for (const bench::BenchmarkResult& r : {bench::run_tvb20(bench::Tier::full), bench::run_tvb21(bench::Tier::full)}) {
+        INFO(r.id);
+        CHECK_FALSE(r.run_error.has_value());
+        if (r.run_error) std::printf("%s run error: %s\n", r.id.c_str(), r.run_error->c_str());
+        for (const auto& n : r.notes) std::printf("%s note: %s\n", r.id.c_str(), n.c_str());
+        for (const auto& c : r.comparisons) {
+            std::printf("%s [%s] %s: %.4g (%s) %s\n", r.id.c_str(), std::string(to_string(c.comparison.outcome)).c_str(),
+                        c.quantity.c_str(), c.metric, c.criterion.c_str(), c.comparison.reason.c_str());
+        }
+        CHECK(r.comparisons.size() == (r.id == "TVB-20" ? 22u : 6u));
+        for (const auto& c : r.comparisons) {
+            CAPTURE(c.quantity, c.comparison.reason);
+            if (c.comparison.outcome == Outcome::not_applicable) {
+                CHECK(c.comparison.reason.find("psi_s(V_S) >= psi_B + 3 V_T") != std::string::npos);
+            } else {
+                CHECK(c.comparison.outcome == Outcome::pass);
+            }
+        }
+    }
+}

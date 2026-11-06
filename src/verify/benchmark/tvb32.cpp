@@ -82,7 +82,7 @@ Tvb32Run tvb32_tvr4_entries() {
     Tvb32Run all;
     for (Tvb32Run (*f)() : {&tvb05_consistency, &tvb06_consistency, &tvb10_consistency, &tvb13_consistency,
                             &tvb15_consistency, &tvb16_consistency, &tvb17_consistency, &tvb18_consistency,
-                            &tvb19_consistency, &tvb27_consistency, &tvb28_consistency}) {
+                            &tvb19_consistency, &tvb20_consistency, &tvb27_consistency, &tvb28_consistency}) {
         Tvb32Run one = f();
         for (Tvb32Entry& e : one.entries) all.entries.push_back(std::move(e));
         if (one.run_error) {

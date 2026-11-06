@@ -65,6 +65,7 @@ struct Tvb32Collector {
 [[nodiscard]] Tvb32Run tvb17_consistency();
 [[nodiscard]] Tvb32Run tvb18_consistency();
 [[nodiscard]] Tvb32Run tvb19_consistency();
+[[nodiscard]] Tvb32Run tvb20_consistency();  // with step 9 (16.46)
 [[nodiscard]] Tvb32Run tvb27_consistency();
 [[nodiscard]] Tvb32Run tvb28_consistency();
 // All of them, in that order; a run error stops the list at that benchmark.

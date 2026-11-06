@@ -185,7 +185,9 @@ add_custom_command(
           include/NiTCAD/verify/reference/energy_layer.hpp
           src/verify/reference/energy_layer.cpp
           include/NiTCAD/verify/reference/thermal_slab.hpp
+          include/NiTCAD/verify/reference/pao_sah.hpp
           src/verify/reference/thermal_slab.cpp
+          src/verify/reference/pao_sah.cpp
           src/verify/reference/linear_transient.cpp
           src/verify/reference/mos_hf.cpp
           src/verify/reference/diode.cpp
@@ -202,7 +204,8 @@ add_library(nitcad_verify_reference STATIC src/verify/reference/double_double.cp
   src/verify/reference/qe_junction.cpp src/verify/reference/diode.cpp
   src/verify/reference/admittance.cpp src/verify/reference/mos_hf.cpp
   src/verify/reference/linear_transient.cpp src/verify/reference/energy_layer.cpp
-  src/verify/reference/thermal_slab.cpp)
+  src/verify/reference/thermal_slab.cpp
+  src/verify/reference/pao_sah.cpp)
 add_library(NiTCAD::verify_reference ALIAS nitcad_verify_reference)
 target_include_directories(nitcad_verify_reference PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
 add_dependencies(nitcad_verify_reference nitcad_verify_reference_boundary)
@@ -238,7 +241,8 @@ add_executable(nitcad_verify_test
   tests/verify/reference/mos_hf_test.cpp
   tests/verify/reference/linear_transient_test.cpp
   tests/verify/reference/energy_layer_test.cpp
-  tests/verify/reference/thermal_slab_test.cpp)
+  tests/verify/reference/thermal_slab_test.cpp
+  tests/verify/reference/pao_sah_test.cpp)
 target_link_libraries(nitcad_verify_test PRIVATE NiTCAD::verify_reference Catch2::Catch2WithMain)
 nitcad_add_file_tests(verify nitcad_verify_test)
 add_test(NAME verify_reference_boundary
@@ -756,7 +760,7 @@ add_library(nitcad_verify_benchmark STATIC src/verify/benchmark/device_data.cpp
   src/verify/benchmark/tvb15.cpp src/verify/benchmark/tvb16.cpp src/verify/benchmark/tvb17.cpp
   src/verify/benchmark/tvb18.cpp
   src/verify/benchmark/tvb10.cpp
-  src/verify/benchmark/tvb19.cpp src/verify/benchmark/tvb13.cpp src/verify/benchmark/tvb27.cpp
+  src/verify/benchmark/tvb19.cpp src/verify/benchmark/tvb13.cpp src/verify/benchmark/tvb27.cpp src/verify/benchmark/tvb20.cpp
   src/verify/benchmark/tvb31_common.cpp src/verify/benchmark/tvb31_band.cpp
   src/verify/benchmark/tvb31_mobility.cpp
   src/verify/benchmark/tvb31_recombination.cpp
@@ -821,6 +825,8 @@ if(CMAKE_BUILD_TYPE STREQUAL "Release")
   add_test(NAME verify_benchmark.tvr4_full COMMAND nitcad_verify_benchmark_test "[tvr4_full]")
   # The diode reference's x-space check of its change of variable (DECISIONS Unit 55 16.31): 15 s in Debug.
   add_test(NAME verify.diode_profile COMMAND nitcad_verify_test "[.diode_profile]")
+  # The Pao-Sah reference's bulk-ambiguity and conductance-identity cases (DECISIONS Unit 55 16.46): 1.5 s Release.
+  add_test(NAME verify.pao_sah_release COMMAND nitcad_verify_test "[.pao_sah_release]")
 endif()
 
 # The full tier of TVR-2 (DECISIONS Unit 55 14.9): TVB-04's 3D tensor ladder to 64^3 with PARDISO, about 12 minutes on 6
@@ -845,6 +851,10 @@ if(NITCAD_VERIFY_FULL_TIER AND CMAKE_BUILD_TYPE STREQUAL "Release")
   # TVB-19, linear transients (DECISIONS Unit 55 16.42), about 9 minutes.
   add_test(NAME verify_full.tvb19 COMMAND nitcad_verify_full_test "[tvb19_full]")
   set_tests_properties(verify_full.tvb19 PROPERTIES LABELS full TIMEOUT 1800)
+  # TVB-20 and TVB-21, the long-channel MOSFET against Pao-Sah (DECISIONS Unit 55 16.46): the L ladder and the
+  # factorial's h/2 mesh at 8 L0.
+  add_test(NAME verify_full.tvb20 COMMAND nitcad_verify_full_test "[tvb20_full]")
+  set_tests_properties(verify_full.tvb20 PROPERTIES LABELS full TIMEOUT 3600)
 endif()
 
 # The batch runner (`nitcad check|run <deck>`).

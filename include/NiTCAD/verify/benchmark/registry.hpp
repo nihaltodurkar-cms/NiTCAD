@@ -84,6 +84,8 @@ void set_pardiso_threads(int threads);
 [[nodiscard]] BenchmarkResult run_tvb17(Tier tier);  // full only: 1D N = 64 ... 512 at V = -0.5, -1, -2 V
 [[nodiscard]] BenchmarkResult run_tvb18(Tier tier);  // full only: 1D N = 128 ... 1024, 3 biases x 7 frequencies
 [[nodiscard]] BenchmarkResult run_tvb19(Tier tier);  // full only: relaxation and Haynes-Shockley, dt and h ladders
+[[nodiscard]] BenchmarkResult run_tvb20(Tier tier);  // full only (nightly ctest): Pao-Sah on the L ladder
+[[nodiscard]] BenchmarkResult run_tvb21(Tier tier);  // full only (nightly ctest): the swing, TVB-20's ladder
 // TVR-3 (DECISIONS Unit 55 15): TVB-31, the model-implementation catalogue.
 [[nodiscard]] BenchmarkResult run_tvb31_01();  // legacy band set
 [[nodiscard]] BenchmarkResult run_tvb31_02();  // Passler gap
