@@ -2,7 +2,9 @@
 // DECISIONS.md Unit 55 14.3, TVQ3, CV-Q4): absent, the composition and every residual and Jacobian
 // value are those of the system without it; present, it adds V S / Ns to the Poisson rows,
 // +V G_n / R0 to the electron rows and -V G_p / R0 to the hole rows of the nodes off the boundary
-// rows, nothing to the Jacobian, and is refused where it is not defined.
+// rows, nothing to the Jacobian, and is refused where it is not defined. Its time profile (16.3,
+// DT-Q3 A) scales every source by w at the step's end time, w(0) without a step, and a profile of
+// ones is bit-identical to none.
 #include <catch2/catch_test_macros.hpp>
 
 #include <algorithm>
@@ -234,4 +236,119 @@ TEST_CASE("manufactured sources: refused where not defined (TVQ3)", "[manufactur
     m.electrothermal = false;
     m.energy_balance = true;
     CHECK(refused(m));
+}
+
+// The time profile (DECISIONS.md Unit 55 16.3, DT-Q3 A): w(t) piecewise constant and
+// left-continuous on its jump times, 1 without a profile.
+TEST_CASE("manufactured sources: the profile's weight w(t) (DT-Q3 A)", "[manufactured]") {
+    ManufacturedSources ms;
+    CHECK(assemble::manufactured_weight(ms, 0.0) == 1.0);
+    CHECK(assemble::manufactured_weight(ms, 1.0) == 1.0);
+    ms.profile_times_s = {1e-9, 2e-9};
+    ms.profile_weights = {0.0, 3.0, 0.5};
+    CHECK(assemble::manufactured_weight(ms, 0.0) == 0.0);  // the steady state at t = 0
+    CHECK(assemble::manufactured_weight(ms, 0.5e-9) == 0.0);
+    CHECK(assemble::manufactured_weight(ms, 1e-9) == 0.0);  // left-continuous: (0, tau_0] has w_0
+    CHECK(assemble::manufactured_weight(ms, 1.5e-9) == 3.0);
+    CHECK(assemble::manufactured_weight(ms, 2e-9) == 3.0);
+    CHECK(assemble::manufactured_weight(ms, 2.5e-9) == 0.5);
+    CHECK(assemble::manufactured_weight(ms, 1.0) == 0.5);
+}
+
+TEST_CASE("manufactured sources: the profile scales every source at the step's end time (DT-Q3 A)",
+          "[manufactured]") {
+    for (const int D : {1, 2}) {
+        CAPTURE(D);
+        const device::Device d = mos(D);
+        const std::size_t nodes = d.mesh().node_count();
+        const auto s = *assemble::make_scaling(d);
+        const auto plain = *DriftDiffusion::create(d, s);
+        const auto base = sources(nodes, 3e15, 2e20, 5e19);
+        auto profiled = std::make_shared<ManufacturedSources>(*base);
+        profiled->profile_times_s = {1e-9, 2e-9};
+        profiled->profile_weights = {0.0, 3.0, -0.5};
+        auto ones = std::make_shared<ManufacturedSources>(*base);  // a profile of 1s: bit-identical
+        ones->profile_times_s = {1e-9};
+        ones->profile_weights = {1.0, 1.0};
+        PhysicsModels m1, mw, m_ones;
+        m1.manufactured = base.get();
+        mw.manufactured = profiled.get();
+        m_ones.manufactured = ones.get();
+        const auto dd1 = *DriftDiffusion::create(d, s, m1);
+        const auto ddw = *DriftDiffusion::create(d, s, mw);
+        const auto dd_ones = *DriftDiffusion::create(d, s, m_ones);
+        const auto x = probe(plain, nodes);
+        const auto term_of = [](const DriftDiffusion& dd) {
+            const auto& terms = assemble::TermAccess::Terms::list(dd);
+            return std::ranges::find_if(terms, [](const auto& t) { return t->info().name == "manufactured source"; })
+                ->get();
+        };
+        const auto term_f = [&](const DriftDiffusion& dd, const DriftDiffusion::TimeStep* step) {
+            std::vector<double> f(dd.unknowns());
+            auto j = dd.make_jacobian();
+            assemble::TermAccess::Terms::evaluate(dd, *term_of(dd), x, step, f, j);
+            return f;
+        };
+        const std::vector<double> storage = dd1.storage(x);
+        const std::vector<double> traps(dd1.trap_slots(), 0.0);
+        const auto at = [&](double t) { return DriftDiffusion::TimeStep{1e3, storage, traps, t}; };
+        const std::vector<double> unit = term_f(dd1, nullptr);
+        REQUIRE(std::ranges::any_of(unit, [](double v) { return v != 0.0; }));
+        // Without a step the weight is w(0) = w_0 = 0: no source at all.
+        CHECK(std::ranges::all_of(term_f(ddw, nullptr), [](double v) { return v == 0.0; }));
+        for (const auto& [t, w] : std::vector<std::pair<double, double>>{
+                 {0.5e-9, 0.0}, {1e-9, 0.0}, {1.5e-9, 3.0}, {2e-9, 3.0}, {7e-9, -0.5}}) {
+            CAPTURE(t, w);
+            const auto step = at(t);
+            const std::vector<double> fw = term_f(ddw, &step);
+            // The unweighted term does not see the time.
+            CHECK(term_f(dd1, &step) == unit);
+            for (std::size_t k = 0; k < unit.size(); ++k) {
+                if (w == 0.0 || unit[k] == 0.0) {
+                    CHECK(fw[k] == 0.0);
+                } else {
+                    CHECK(close(fw[k], w * unit[k]));
+                }
+            }
+        }
+        // A profile of ones is the hook without one, bit for bit, with and without a step.
+        const auto step = at(1.5e-9);
+        CHECK(term_f(dd_ones, nullptr) == unit);
+        CHECK(term_f(dd_ones, &step) == unit);
+        const Evaluated a = evaluate(dd1, x), b = evaluate(dd_ones, x);
+        CHECK(a.f == b.f);
+        CHECK(a.values == b.values);
+    }
+}
+
+TEST_CASE("manufactured sources: a malformed time profile is refused (DT-Q3 A)", "[manufactured]") {
+    const device::Device d = mos(1);
+    const std::size_t nodes = d.mesh().node_count();
+    const auto s = *assemble::make_scaling(d);
+    const auto base = sources(nodes, 1.0, 1.0, 1.0);
+    const auto message = [&](std::vector<double> times, std::vector<double> weights) -> std::string {
+        auto ms = std::make_shared<ManufacturedSources>(*base);
+        ms->profile_times_s = std::move(times);
+        ms->profile_weights = std::move(weights);
+        PhysicsModels m;
+        m.manufactured = ms.get();
+        const auto r = DriftDiffusion::create(d, s, m);
+        return r ? std::string{} : r.error().message;
+    };
+    const double nan = std::numeric_limits<double>::quiet_NaN();
+    const double inf = std::numeric_limits<double>::infinity();
+    CHECK(message({}, {}).empty());
+    CHECK(message({}, {2.0}).empty());  // no jumps: one constant weight
+    CHECK(message({1e-9, 2e-9}, {0.0, 1.0, 0.0}).empty());
+    CHECK(message({1e-9}, {1.0}).find("one weight more") != std::string::npos);
+    CHECK(message({1e-9}, {}).find("one weight more") != std::string::npos);
+    CHECK(message({1e-9}, {1.0, 1.0, 1.0}).find("one weight more") != std::string::npos);
+    CHECK(message({2e-9, 1e-9}, {0.0, 1.0, 0.0}).find("increasing") != std::string::npos);
+    CHECK(message({1e-9, 1e-9}, {0.0, 1.0, 0.0}).find("increasing") != std::string::npos);
+    CHECK(message({0.0}, {0.0, 1.0}).find("positive") != std::string::npos);
+    CHECK(message({-1e-9}, {0.0, 1.0}).find("positive") != std::string::npos);
+    CHECK(message({inf}, {0.0, 1.0}).find("finite") != std::string::npos);
+    CHECK(message({nan}, {0.0, 1.0}).find("finite") != std::string::npos);
+    CHECK(message({1e-9}, {0.0, nan}).find("weights must be finite") != std::string::npos);
+    CHECK(message({1e-9}, {inf, 1.0}).find("weights must be finite") != std::string::npos);
 }

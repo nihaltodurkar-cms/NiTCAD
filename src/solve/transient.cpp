@@ -183,6 +183,13 @@ std::expected<results::Transient, base::Error> solve_transient_unobserved(
     for (const Waveform& w : waveforms) {
         for (const double t : w.breakpoints(0.0, t_end)) restarts.push_back(t);
     }
+    // The manufactured sources' profile jumps (verification only, DT-Q3 A) are breakpoints too:
+    // steps land on them and restart, so each step sees one weight.
+    if (const assemble::ManufacturedSources* ms = options.steady.models.manufactured) {
+        for (const double t : ms->profile_times_s) {
+            if (t > 0.0 && t <= t_end) restarts.push_back(t);
+        }
+    }
     std::ranges::sort(restarts);
     restarts.erase(std::unique(restarts.begin(), restarts.end()), restarts.end());
     const auto bias_at = [&](double t, bool left) {
@@ -453,7 +460,7 @@ std::expected<results::Transient, base::Error> solve_transient_unobserved(
             combine(formula, now.storage, prev != nullptr ? &prev->storage : nullptr);
         const std::vector<double> traps =
             combine(formula, now.traps, prev != nullptr ? &prev->traps : nullptr);
-        const TimeStep step{1.0 / (formula.beta * step_s / t0), storage, traps};
+        const TimeStep step{1.0 / (formula.beta * step_s / t0), storage, traps, t_new};
         const std::vector<double> bias = bias_at(t_new, true);
         (void)system->set_bias(bias);  // checked
         x = now.x;

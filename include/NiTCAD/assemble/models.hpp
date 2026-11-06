@@ -2,6 +2,8 @@
 // silicon models; the defaults are the legacy ones but for the hole mobility, Unit 35).
 #pragma once
 
+#include <algorithm>
+#include <cstddef>
 #include <cstdint>
 #include <vector>
 
@@ -20,11 +22,30 @@ enum class NonlocalTunnelling : std::uint8_t { off, kane, direct_wkb };
 //   electron_generation  [cm^-3 s^-1], in the electron row of every semiconductor node off contacts;
 //   hole_generation      [cm^-3 s^-1], in the hole row of the same nodes.
 // Each vector is empty (no source in that row) or has one entry per node.
+// The time profile (DECISIONS.md Unit 55 16.3, DT-Q3 A): all three sources are scaled by a weight
+// w(t), piecewise constant and left-continuous on the jump times tau_0 < tau_1 < ... (finite,
+// positive): w = profile_weights[0] for t <= tau_0 (the steady state at t = 0 included),
+// profile_weights[k] for tau_(k-1) < t <= tau_k, and the last weight after the last time; so
+// profile_weights has one entry more than profile_times_s. A time step takes w at its end time,
+// and solve_transient lands steps on every tau_k in (0, t_end] and restarts there as at a
+// waveform breakpoint, so each step sees one weight: the source is exactly piecewise constant in
+// time. Both empty (the default): w = 1 at every time, and every result is bit-identical to a
+// hook without a profile (1 y is y exactly).
 struct ManufacturedSources {
     std::vector<double> charge_cm3;
     std::vector<double> electron_generation;
     std::vector<double> hole_generation;
+    std::vector<double> profile_times_s;
+    std::vector<double> profile_weights;
 };
+
+// w(t) of the profile above (1 without one). Preconditions: the profile as create() accepts it.
+[[nodiscard]] inline double manufactured_weight(const ManufacturedSources& ms, double t_s) noexcept {
+    if (ms.profile_weights.empty()) return 1.0;
+    const auto k = std::lower_bound(ms.profile_times_s.begin(), ms.profile_times_s.end(), t_s) -
+                   ms.profile_times_s.begin();  // the first tau_k >= t
+    return ms.profile_weights[static_cast<std::size_t>(k)];
+}
 
 // The doping-dependent hole mobility (Units 34, 35): the material's Caughey-Thomas (the legacy),
 // Masetti's boron-doped silicon fit (physics/mobility.hpp), which needs every semiconductor region

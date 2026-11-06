@@ -16,6 +16,7 @@
 #include <utility>
 #include <vector>
 
+#include "NiTCAD/assemble/models.hpp"
 #include "NiTCAD/base/constants.hpp"
 #include "NiTCAD/device/device.hpp"
 #include "NiTCAD/mesh/tensor_grid.hpp"
@@ -933,4 +934,79 @@ TEST_CASE("transient: traps on an ohmic node charge from the contact") {
     REQUIRE(dQ != 0.0);
     REQUIRE(close(integral, dQ, 1e-9));
     REQUIRE(worst <= 1e-8);
+}
+
+// The manufactured sources' time profile (verification only; DECISIONS.md Unit 55 16.3, DT-Q3 A):
+// a generation pulse G on (tau_0, tau_1] in a long uniform n-type bar without recombination. Steps
+// land on both jumps and restart there (backward Euler); before the pulse the run is the run
+// without sources; at tau_1 the excess density in the middle, far from the contacts (the
+// diffusion length over the pulse is about 1 um of 50), is G (tau_1 - tau_0): the source is
+// integrated exactly, with no recombination to remove carriers.
+TEST_CASE("transient: a manufactured generation pulse lands on its jumps (DT-Q3 A)") {
+    constexpr std::size_t N = 101;
+    std::vector<double> x(N);
+    for (std::size_t i = 0; i < N; ++i) x[i] = 1e-2 * static_cast<double>(i) / (N - 1);  // 100 um
+    mesh::Mesh m = *mesh::make_tensor_grid(x);
+    auto left = m.find_boundary("x_min")->nodes;
+    auto right = m.find_boundary("x_max")->nodes;
+    const device::Device d = *device::Device::create(
+        {.mesh = std::move(m),
+         .temperature_K = 300.0,
+         .regions = {{"silicon", physics::silicon()}},
+         .node_region = std::vector<device::RegionId>(N, 0),
+         .donors = std::vector<double>(N, 1e17),
+         .acceptors = std::vector<double>(N, 0.0),
+         .contacts = {{"left", device::ContactKind::ohmic, std::move(left)},
+                      {"right", device::ContactKind::ohmic, std::move(right)}}});
+    const double G = 1e24, tau0 = 1e-9, tau1 = 2e-9, dt = 1e-10, t_end = 3e-9;
+    assemble::ManufacturedSources ms;
+    ms.electron_generation.assign(N, G);
+    ms.hole_generation.assign(N, G);
+    ms.profile_times_s = {tau0, tau1};
+    ms.profile_weights = {0.0, 1.0, 0.0};
+    solve::TransientOptions o{.t_end_s = t_end, .dt_initial_s = dt, .adaptive = false,
+                              .fields_every_step = true};
+    o.steady.models.srh = o.steady.models.auger = o.steady.models.radiative = false;
+    solve::TransientOptions plain_o = o;
+    o.steady.models.manufactured = &ms;
+    const auto wf = waveforms(Waveform::constant(0.0), Waveform::constant(0.0));
+    const auto run = *solve::solve_transient(d, wf, o);
+    const auto plain = *solve::solve_transient(d, wf, plain_o);
+    REQUIRE(!run.stopped);
+    REQUIRE(!plain.stopped);
+    // Steps land on both jumps, and the step after each is a restart (backward Euler).
+    for (const double tau : {tau0, tau1}) {
+        CAPTURE(tau);
+        const auto at = std::ranges::find_if(run.points, [&](const auto& p) { return p.time_s == tau; });
+        REQUIRE(at != run.points.end());
+        REQUIRE(at + 1 != run.points.end());
+        CHECK((at + 1)->order == 1);
+    }
+    // Before the pulse (w = 0) the run is the plain run's, bit for bit.
+    const std::size_t mid = N / 2;
+    std::size_t compared = 0;
+    for (const auto& s : run.snapshots) {
+        if (s.time_s >= tau0 - 0.5 * dt) break;
+        const auto q = std::ranges::find_if(plain.snapshots, [&](const auto& p) { return p.time_s == s.time_s; });
+        REQUIRE(q != plain.snapshots.end());
+        CHECK(s.fields.n_cm3 == q->fields.n_cm3);
+        CHECK(s.fields.p_cm3 == q->fields.p_cm3);
+        CHECK(s.fields.potential_V == q->fields.potential_V);
+        ++compared;
+    }
+    CHECK(compared >= 9);  // 0, dt, ..., 9 dt
+    // At tau_1 the excess density in the middle is G (tau_1 - tau_0).
+    const auto at1 = std::ranges::find_if(run.snapshots, [&](const auto& s) { return s.time_s == tau1; });
+    REQUIRE(at1 != run.snapshots.end());
+    const double n0 = plain.snapshots.back().fields.n_cm3[mid];
+    const double dn = at1->fields.n_cm3[mid] - n0;
+    const double dp = at1->fields.p_cm3[mid] - plain.snapshots.back().fields.p_cm3[mid];
+    CAPTURE(dn, dp, G * (tau1 - tau0));
+    CHECK(close(dn, G * (tau1 - tau0), 1e-3));
+    CHECK(close(dp, G * (tau1 - tau0), 1e-3));
+    // After the pulse nothing is generated: without recombination the excess stays (it only
+    // spreads), so the middle keeps it at t_end.
+    const double dn_end = run.snapshots.back().fields.n_cm3[mid] - n0;
+    CAPTURE(dn_end);
+    CHECK(close(dn_end, G * (tau1 - tau0), 1e-2));
 }

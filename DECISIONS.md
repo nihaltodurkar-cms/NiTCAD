@@ -9956,6 +9956,28 @@ are independent) is tested directly rather than argued.
 - **DT-Q21: A.** `save_device` keeps refusing an insulator-only device, and the device-file format is unchanged.
   Widening the format (B) waits until a deck needs an insulator-only device.
 
+**16.25 Step 3 as built: the hook's time profile (DT-Q3 A).**
+- `assemble/models.hpp`:
+  - `ManufacturedSources` gains `profile_times_s` (τ₀ < τ₁ < …) and `profile_weights` (one entry more than the times).
+  - `manufactured_weight(ms, t)` gives w(t), piecewise constant and left-continuous: w₀ for t ≤ τ₀ (the steady state at t = 0 included), w_k on (τ_{k−1}, τ_k], and the last weight after the last time.
+  - With both vectors empty, w ≡ 1.
+- `DriftDiffusion::TimeStep` gains `time_s`, the step's end time, defaulting to 0. Existing aggregate initialisers are unchanged.
+- The manufactured term multiplies each source by w at the step's end time, or by w(0) with no step. Without a profile w = 1, and 1·y = y exactly, so every result is bit-identical. A test asserts that a profile of ones is bit-identical to none.
+- `create` refuses a malformed profile:
+  - a weight count other than the time count + 1;
+  - a time that is not finite, not positive, or not strictly increasing;
+  - a weight that is not finite.
+- `solve_transient` adds every τ_k in (0, t_end] to its restarts, so steps land on the jumps and restart with backward Euler, as at a waveform breakpoint. It passes t_new to each step. Each step therefore sees one weight, and a piecewise-constant source is integrated exactly.
+- The profile is not in the deck vocabulary or the run record, as for TVQ3.
+- Tests:
+  - `assemble/manufactured_test`, three new cases: w(t) at and between the jumps; the term against w × the unweighted term at five times (1D and 2D), with no step meaning w(0); the bit-identity; and the refusals, 14 inputs.
+  - `solve/transient_test`, one new case: a generation pulse G = 1e24 cm⁻³ s⁻¹ on (1, 2] ns in a 100 µm n-type bar (1e17, recombination off, fixed steps of 0.1 ns).
+    - Steps land on both jumps and restart there.
+    - Before the pulse the fields are the sourceless run's, bit for bit (10 snapshots).
+    - At τ₁ the excess n and p in the middle are G·Δt = 1e15 to the printed digits (criterion 1e-3). At t_end they are still 1e15 (criterion 1e-2).
+- Mutation: 16 mutants (2 models, 6 term, 5 validation, 3 transient), all caught. They include evaluating w at the step's start, dropping the restart, and `upper_bound` for `lower_bound`.
+- Suite: Release, the whole suite (`full` label and app tests excluded, −j 4): 174/174 pass.
+
 
 
 ---
