@@ -172,6 +172,8 @@ add_custom_command(
           include/NiTCAD/verify/reference/model_thermal.hpp
           include/NiTCAD/verify/reference/mos_capacitor.hpp
           src/verify/reference/mos_capacitor.cpp
+          include/NiTCAD/verify/reference/capacitor.hpp
+          src/verify/reference/capacitor.cpp
   COMMENT "verify/reference include boundary (VR2)")
 add_custom_target(nitcad_verify_reference_boundary
   DEPENDS "${CMAKE_BINARY_DIR}/verify_reference_boundary.stamp")
@@ -180,7 +182,8 @@ add_library(nitcad_verify_reference STATIC src/verify/reference/double_double.cp
   src/verify/reference/chebyshev.cpp src/verify/reference/metrics.cpp
   src/verify/reference/contract.cpp src/verify/reference/fermi_dirac.cpp
   src/verify/reference/pn_junction.cpp src/verify/reference/first_integral.cpp
-  src/verify/reference/mos_capacitor.cpp src/verify/reference/special_functions.cpp)
+  src/verify/reference/mos_capacitor.cpp src/verify/reference/special_functions.cpp
+  src/verify/reference/capacitor.cpp)
 add_library(NiTCAD::verify_reference ALIAS nitcad_verify_reference)
 target_include_directories(nitcad_verify_reference PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
 add_dependencies(nitcad_verify_reference nitcad_verify_reference_boundary)
@@ -207,7 +210,8 @@ add_executable(nitcad_verify_test
   tests/verify/reference/model_statistics_test.cpp
   tests/verify/reference/model_generation_test.cpp
   tests/verify/reference/model_tunnelling_test.cpp
-  tests/verify/reference/model_thermal_test.cpp)
+  tests/verify/reference/model_thermal_test.cpp
+  tests/verify/reference/capacitor_test.cpp)
 target_link_libraries(nitcad_verify_test PRIVATE NiTCAD::verify_reference Catch2::Catch2WithMain)
 nitcad_add_file_tests(verify nitcad_verify_test)
 add_test(NAME verify_reference_boundary
@@ -721,7 +725,7 @@ add_library(nitcad_verify_benchmark STATIC src/verify/benchmark/device_data.cpp
   src/verify/benchmark/tvb03.cpp src/verify/benchmark/tvb04.cpp src/verify/benchmark/tvb07.cpp
   src/verify/benchmark/tvb09.cpp src/verify/benchmark/tvb14.cpp
   src/verify/benchmark/tvb11.cpp
-  src/verify/benchmark/tvb12.cpp src/verify/benchmark/tvb32.cpp
+  src/verify/benchmark/tvb12.cpp src/verify/benchmark/tvb32.cpp src/verify/benchmark/tvb06.cpp src/verify/benchmark/tvb05.cpp
   src/verify/benchmark/tvb31_common.cpp src/verify/benchmark/tvb31_band.cpp
   src/verify/benchmark/tvb31_mobility.cpp
   src/verify/benchmark/tvb31_recombination.cpp
@@ -773,7 +777,8 @@ add_executable(nitcad_verify_benchmark_test
   tests/verify/benchmark/tvb31_tunnelling_test.cpp
   tests/verify/benchmark/tvb31_thermal_test.cpp
   tests/verify/benchmark/tvb31_materials_test.cpp
-  tests/verify/benchmark/tvb31_fast_test.cpp)
+  tests/verify/benchmark/tvb31_fast_test.cpp
+  tests/verify/benchmark/device_theory_test.cpp)
 target_link_libraries(nitcad_verify_benchmark_test PRIVATE NiTCAD::verify_benchmark
   Catch2::Catch2WithMain)
 nitcad_add_file_tests(verify_benchmark nitcad_verify_benchmark_test)
@@ -781,6 +786,8 @@ nitcad_add_file_tests(verify_benchmark nitcad_verify_benchmark_test)
 # Debug they took 89 s against MI-Q9's 8 s (15.20). Debug and Release both run the fast tier (tvb31_fast_test).
 if(CMAKE_BUILD_TYPE STREQUAL "Release")
   add_test(NAME verify_benchmark.tvb31_full COMMAND nitcad_verify_benchmark_test "[tvb31_full]")
+  # TVR-4's full-tier frozen outcomes (DECISIONS Unit 55 16.7, DT-Q9): TVB-05.
+  add_test(NAME verify_benchmark.tvr4_full COMMAND nitcad_verify_benchmark_test "[tvr4_full]")
 endif()
 
 # The full tier of TVR-2 (DECISIONS Unit 55 14.9): TVB-04's 3D tensor ladder to 64^3 with PARDISO, about 12 minutes on 6

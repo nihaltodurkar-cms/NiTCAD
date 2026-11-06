@@ -17,7 +17,10 @@
 
 #include <algorithm>
 #include <cmath>
+#include <complex>
 #include <cstddef>
+#include <cstdint>
+#include <numbers>
 #include <optional>
 #include <string>
 #include <tuple>
@@ -35,6 +38,7 @@
 #include "NiTCAD/results/solution.hpp"
 #include "NiTCAD/solve/bias.hpp"
 #include "NiTCAD/solve/equilibrium.hpp"
+#include "NiTCAD/solve/small_signal.hpp"
 #include "legacy_moscap.hpp"
 
 using namespace NiTCAD;
@@ -683,4 +687,62 @@ TEST_CASE("insulator: the run identity covers insulators, electrodes and interfa
              .interfaces = {ref.interfaces().begin(), ref.interfaces().end()}});
         REQUIRE(identity(other) != base_id);
     }
+}
+
+// DECISIONS.md Unit 55 16.22 (DT-Q19 A): an insulator-only device, a SiO2 plate capacitor between
+// two metal electrodes, scaled by its reference_material. Its admittance at any frequency is
+// j omega C with C = eps / d exactly: the potential is linear, which the box method reproduces to
+// rounding. The full benchmarks are TVB-05 and TVB-06; this pins the solve path.
+TEST_CASE("insulator: an insulator-only capacitor through the small-signal path") {
+    constexpr std::size_t N = 33;
+    constexpr double d_cm = 10e-7;
+    std::vector<double> x(N);
+    for (std::size_t i = 0; i < N; ++i) x[i] = d_cm * static_cast<double>(i) / (N - 1);
+    const auto make = [&](std::uint8_t tunnelling) {
+        mesh::Mesh m = *mesh::make_tensor_grid(x);
+        device::Contact a{"a", device::ContactKind::electrode, {0}};
+        device::Contact b{"b", device::ContactKind::electrode, {N - 1}};
+        a.electrode = b.electrode = {.kind = device::GateElectrode::metal, .work_function_eV = 4.5};
+        a.tunnelling = tunnelling;
+        device::DeviceDescription dd{.mesh = std::move(m),
+                                     .temperature_K = 300.0,
+                                     .regions = {{"oxide", physics::silicon_dioxide()}},
+                                     .node_region = std::vector<device::RegionId>(N, 0),
+                                     .donors = std::vector<double>(N, 0.0),
+                                     .acceptors = std::vector<double>(N, 0.0),
+                                     .contacts = {std::move(a), std::move(b)}};
+        dd.reference_material = physics::silicon();
+        return *device::Device::create(std::move(dd));
+    };
+    const device::Device dev = make(0);
+    const double eps = physics::silicon_dioxide_parameters.eps_r * base::eps0_F_per_cm;
+    const double C = eps / d_cm;  // F/cm^2
+    const std::vector<std::vector<double>> points{{0.0, 0.0}, {0.0, 1.0}};
+    {
+        const solve::SmallSignalOptions o{.frequencies_Hz = {1e3, 1e9}};
+        const auto r = solve::solve_small_signal(dev, points, o);
+        REQUIRE(r.has_value());
+        REQUIRE_FALSE(r->stopped.has_value());
+        for (std::size_t p = 0; p < points.size(); ++p) {
+            for (std::size_t k = 0; k < r->frequency_Hz.size(); ++k) {
+                const double w = 2.0 * std::numbers::pi * r->frequency_Hz[k];
+                const auto y00 = r->admittance(p, k, 0, 0);
+                const auto y01 = r->admittance(p, k, 0, 1);
+                CAPTURE(p, k, y00.real(), y00.imag() / w, C);
+                const double tol = 64.0 * 0x1p-52 * N * N;
+                REQUIRE(std::abs(y00.imag() / w - C) <= tol * C);
+                REQUIRE(std::abs(y01.imag() / w + C) <= tol * C);
+                REQUIRE(std::abs(y00.real()) <= tol * w * C);
+            }
+        }
+    }
+    // The models that need a semiconductor are refused.
+    solve::SmallSignalOptions thermal{.frequencies_Hz = {1e3}};
+    thermal.steady.models.electrothermal = true;
+    const auto refused = solve::solve_small_signal(dev, points, thermal);
+    REQUIRE_FALSE(refused.has_value());
+    REQUIRE(refused.error().message.find("insulator-only") != std::string::npos);
+    const auto tunnelling = solve::solve_small_signal(make(1), points, {.frequencies_Hz = {1e3}});
+    REQUIRE_FALSE(tunnelling.has_value());
+    REQUIRE(tunnelling.error().message.find("gate tunnelling needs a semiconductor") != std::string::npos);
 }

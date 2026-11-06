@@ -9891,6 +9891,62 @@ change at all; the union helper and its test live in `verify`. (B) TVB-05/06 unb
 is exact by construction (no shared edge), keeps NiTCAD untouched as CV-Q3 intended, and its one assumption (the parts
 are independent) is tested directly rather than argued.
 
+**DT-Q19 ruling: A** (owner, "A", 2026-11-06), not the recommended A′.
+
+**16.23 Step 2 as built (DT-Q19 A).**
+
+- `device`:
+  - `DeviceDescription::reference_material` (optional). A description with no semiconductor region must name one, and its temperature is checked against it. A description with a semiconductor region must not name one.
+  - `Device::has_semiconductor()` and `Device::reference_material()`. For a device with a semiconductor, `reference_material()` returns the same object as `material(reference_node())`, so every existing device is bit-identical by construction. A test asserts the address equality.
+  - An insulator-only device's reference node is its lowest electrode node. Contact nodes are validated strictly increasing, so it is the first node of each electrode.
+- `assemble`:
+  - `scaling.cpp`, `scaled_device.cpp` and `gate_tunnels.cpp` read `reference_material()`.
+  - `drift_diffusion` refuses the electrothermal model and any tunnelling contact on an insulator-only device.
+- `io` (beyond DT-Q19's `device` + `assemble`; see DT-Q21): `save_device` refuses an insulator-only device, because the device-file format stores no reference material. Nothing is written.
+- Tests:
+  - `device/insulator_test`: the rules above.
+  - `solve/insulator_test`: a 1D SiO₂ plate capacitor through `solve_small_signal`. Im Y/ω = ±C and Re Y ≈ 0 to 64 ε N², at 1 kHz and 1 GHz, at 0 V and 1 V. Both refusals are also checked.
+  - `io/device_file_test`: the refusal.
+- `verify/reference/capacitor`:
+  - ε₀ in F/cm from CODATA 2018's printed digits (`codata2018::to_dd`, shift −2).
+  - `series_capacitance` and `coaxial_capacitance` in double-double.
+  - L0 tests: each form against a Gauss–Kronrod integral of its elastance density (≤ 16 and 64 u_dd), the one-layer and split-layer identities, and the thin-shell limit (≤ 1e-6).
+- Mutation: 14 mutants (6 device, 2 assemble, 6 capacitor), all caught. The tunnelling-refusal mutant survived the first run, and the test was added before the rerun.
+- Suites:
+  - Release, the whole suite with the device change (`full` label and app tests excluded, −j 4): 171/171 pass.
+  - Debug serial verify (`ctest -R verify -LE full`): 62/62 pass in 74.97 s and 76.82 s.
+    - TVR-4's share is 0.13 s (`device_theory` 0.10 s, `capacitor` 0.03 s), within 16.7's 2 s.
+    - The rest is the baseline: the unchanged tests ran 4–7 % above the 69.89 s of 15.20 (`fermi_dirac` +1.0 s, C-transient +1.1 s), as in step 8's 71–80 s under load.
+  - The first Debug run had TVB-06's full case (2D 32²) under `[tvr4]`, costing 5 s. 16.7 puts it in `full`, so it moved to `[.tvr4_full]`.
+- **TVB-06 (D): pass at every level**, against a criterion of 64 ε N² (1.5e-11 at N = 32, 2.3e-10 at N = 128):
+
+  | Level | C (−Im Y_ab/ω) | C (Im Y_aa/ω) | E_ox/E_hk |
+  |---|---|---|---|
+  | 1D N = 32 | 2.9e-15 | 5.3e-15 | 7.9e-16 |
+  | 1D N = 128 | 2.2e-14 | 2.4e-14 | 6.3e-16 |
+  | 2D 32² | 3.6e-14 | 1.4e-15 | 7.9e-16 |
+
+- **TVB-05 (E): the 16.22 risk did not occur.** `generate_mesh` accepts the annulus of M quadrilateral sectors.
+  - Relative errors: 3.687e-5 at M = 256, 1.513e-4 at 128, 6.238e-4 at 64 and 2.729e-3 at 32. The backward errors are ≤ 7.2e-16.
+  - (b) accuracy: **pass** (3.7e-5 ≤ 1e-3).
+  - (a) order: the successive orders, finest pair first, are 2.0545, 2.0825 and 2.1846. p̂ = 2.054 is in the band [1.8, 2.3]. The spread is **0.1021**, above the asymptotic-range limit of 0.1 (§4.2, `metrics.hpp`), so `judge_order` returns **not_evaluated** ("not in the asymptotic range").
+  - The excess comes from the coarsest pair. At M = 32, h = 1.3e-5 cm, which is a/8.
+  - The frozen expected outcome (pass) is unmet, so `verify_benchmark.tvr4_full` fails (37 s in Release). Nothing has been changed after the run (TVM2).
+
+**DT-Q20 (TVB-05's order).**
+- (A) Record it as found: the order comparison is not_evaluated, with p̂ = 2.054, the spread of 0.102 and the coarsest pair named. The frozen expected outcome in the test becomes not_evaluated for that comparison, and the finest-accuracy pass stands. No criterion and no ladder changes.
+- (B) Shift the ladder one level finer (M = 64…512), so that the four-level check excludes M = 32. This changes the frozen ladder (16.8) after a run, which TVM2 forbids in spirit. It also costs about 4× the finest level.
+- (C) Keep the ladder and judge p̂ on the finest three levels (the 3-level rule of 14.7). This changes the method after the run, the same objection as B.
+
+**Recommendation: A.** It is the only option that leaves 16.8 as frozen. The miss is 2 % of the limit on the coarsest pair, and the accuracy passes with a factor of 27 to spare.
+
+**DT-Q21 (the `io` refusal, outside DT-Q19's `device` + `assemble`).**
+- (A) Keep it. `save_device` refuses an insulator-only device, and the format is unchanged.
+- (B) Widen the device-file format to store `reference_material`. This is a format change: the version, the reader, the writer and the round-trip tests.
+- (C) Remove the refusal. `save_device` would then write a file whose `load_device` fails ("needs at least one semiconductor region or a reference_material").
+
+**Recommendation: A.** It is the smallest change that keeps the save–load round trip honest. B can follow if a deck ever needs an insulator-only device.
+
 
 
 ---

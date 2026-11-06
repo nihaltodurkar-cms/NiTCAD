@@ -118,6 +118,18 @@ std::expected<DriftDiffusion, base::Error> DriftDiffusion::create(
             return refuse("manufactured sources are for the isothermal drift-diffusion rows only");
         }
     }
+    // An insulator-only device (DECISIONS.md Unit 55 16.22, DT-Q19 A): its reference node is an
+    // electrode node, so the electrothermal reference conductivity and gate tunnelling, which both
+    // need a semiconductor, are refused.
+    if (!device.has_semiconductor()) {
+        if (models.electrothermal) {
+            return refuse("an insulator-only device with the electrothermal model is not supported");
+        }
+        if (std::ranges::any_of(device.contacts(),
+                                [](const device::Contact& c) { return c.tunnelling != 0; })) {
+            return refuse("gate tunnelling needs a semiconductor region");
+        }
+    }
     if (nonlocal && models.btbt_local) {
         return refuse("btbt_local and btbt_nonlocal would count the same tunnelling twice");
     }

@@ -110,6 +110,12 @@ struct DeviceDescription {
     // U16: a general 1D mesh needs mesh::certify_interfaces_1d), and then it must be issued
     // for this mesh and these node regions. Ignored otherwise.
     std::optional<mesh::InterfaceCertificate> interface_certificate;
+    // An insulator-only device (DECISIONS.md Unit 55 16.22, DT-Q19 A: dielectrics between
+    // electrodes, e.g. capacitors): the semiconductor whose parameters set the scaling and the
+    // potential's reference (assemble::make_scaling, the band shift), as the reference node's
+    // material does for a device with a semiconductor region. Required when no region is a
+    // semiconductor, refused when one is; it carries no nodes.
+    std::optional<physics::Semiconductor> reference_material;
 };
 
 class Device {
@@ -118,7 +124,8 @@ public:
     // offending region, node or contact, as the message says:
     // - no regions; a region name empty or repeated; the temperature rejected by
     //   physics::check_temperature for a region's semiconductor (the message names the region);
-    //   no semiconductor region;
+    //   no semiconductor region and no reference_material; a reference_material with a
+    //   semiconductor region, or whose temperature check fails;
     // - node_region, donors or acceptors not one per mesh node; a node's region out of range; a
     //   region with no nodes;
     // - a donor or acceptor concentration that is not finite and >= 0 (the value is in context),
@@ -193,8 +200,15 @@ public:
     // The relative permittivity of the node's material, semiconductor or insulator.
     [[nodiscard]] double relative_permittivity(mesh::NodeId node) const;
     // The lowest node in a semiconductor region: its material is the reference of the scaling
-    // and of the band shift (node 0 when there is no insulator).
+    // and of the band shift (node 0 when there is no insulator). In an insulator-only device, the
+    // lowest electrode node (its material is not a semiconductor; use reference_material()).
     [[nodiscard]] mesh::NodeId reference_node() const noexcept { return reference_node_; }
+    // Whether some region is a semiconductor (false only for an insulator-only device).
+    [[nodiscard]] bool has_semiconductor() const noexcept { return !d_.reference_material; }
+    // The reference of the scaling and of the band shift: material(reference_node()) when a
+    // semiconductor region exists (the same object, so such devices are unchanged), else the
+    // description's reference_material.
+    [[nodiscard]] const physics::Semiconductor& reference_material() const;
 
 private:
     explicit Device(DeviceDescription description) noexcept;

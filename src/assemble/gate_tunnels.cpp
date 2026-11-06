@@ -61,7 +61,7 @@ std::optional<base::Error> DriftDiffusion::make_gate_tunnels(const device::Devic
     const double T = scaling.temperature_K;
     const double flow = 1.0 / (base::q_C * scaling.Ns * std::pow(scaling.L_D, D - 2) * scaling.D0);
     const double depth =
-        physics::intrinsic_level_depth_eV(device.material(device.reference_node()), T);
+        physics::intrinsic_level_depth_eV(device.reference_material(), T);
     const auto richardson = [T](const physics::Semiconductor& m, physics::Carrier c) {
         const double N = c == physics::Carrier::electron ? physics::conduction_band_dos(m, T)
                                                          : physics::valence_band_dos(m, T);

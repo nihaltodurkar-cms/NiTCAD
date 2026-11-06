@@ -71,7 +71,7 @@ std::expected<ScaledDevice, base::Error> make_scaled_device(const device::Device
     s.contact.assign(n, -1);
     const double T = scaling.temperature_K;
     const double reference_depth =
-        physics::intrinsic_level_depth_eV(device.material(device.reference_node()), T);
+        physics::intrinsic_level_depth_eV(device.reference_material(), T);
     for (std::size_t i = 0; i < n; ++i) {
         const auto node = static_cast<mesh::NodeId>(i);
         s.volume[i] = m.volumes()[i] / volume_scale;

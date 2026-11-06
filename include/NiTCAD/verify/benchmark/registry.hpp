@@ -72,6 +72,9 @@ void set_pardiso_threads(int threads);
 [[nodiscard]] BenchmarkResult run_tvb14(Tier tier);  // fast: 1D tensor; full: + 2D/3D tensor, 2D/3D generated, swept
 [[nodiscard]] BenchmarkResult run_tvb11();  // TVR-2 (DECISIONS Unit 55 14)
 [[nodiscard]] BenchmarkResult run_tvb12();
+// TVR-4 (DECISIONS Unit 55 16): device theory, small signal, transient, thermal.
+[[nodiscard]] BenchmarkResult run_tvb05(Tier tier);  // full only: M = 32 ... 256 sectors, 2D generated
+[[nodiscard]] BenchmarkResult run_tvb06(Tier tier);  // fast: 1D N = 32, 128; full: + 2D 32 x 32
 // TVR-3 (DECISIONS Unit 55 15): TVB-31, the model-implementation catalogue.
 [[nodiscard]] BenchmarkResult run_tvb31_01();  // legacy band set
 [[nodiscard]] BenchmarkResult run_tvb31_02();  // Passler gap

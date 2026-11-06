@@ -14,12 +14,14 @@ namespace NiTCAD::verify::benchmark {
 
 namespace {
 
-constexpr std::array<Benchmark, 41> shipped{{
+constexpr std::array<Benchmark, 43> shipped{{
     {"TVB-01", "Constants and thermal voltage against CODATA 2018", Tier::fast, [](Tier) { return run_tvb01(); }},
     {"TVB-02", "Fermi-Dirac integrals F_1/2, F_-1/2, F_3/2 and the inverse of F_1/2", Tier::fast,
      [](Tier) { return run_tvb02(); }},
     {"TVB-03", "The Bernoulli function B(x) = x / (e^x - 1)", Tier::fast, [](Tier) { return run_tvb03(); }},
     {"TVB-04", "Poisson manufactured solution with a dielectric jump", Tier::fast, &run_tvb04},
+    {"TVB-05", "Coaxial capacitor on generated 2D meshes", Tier::full, &run_tvb05},
+    {"TVB-06", "Dielectric stack between electrodes", Tier::fast, &run_tvb06},
     {"TVB-07", "Equilibrium abrupt pn junction", Tier::fast, &run_tvb07},
     {"TVB-09", "MOS capacitor on a uniform substrate", Tier::fast, &run_tvb09},
     {"TVB-11", "Uniform resistor with ohmic contacts", Tier::fast, [](Tier) { return run_tvb11(); }},
