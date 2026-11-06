@@ -19,7 +19,8 @@
 //   - max(Delta n / N) at the two reference edges (the minority excess against the doping);
 //   - e^v / |e^v - 1| x Delta phi / V_T, Delta phi the larger quasi-Fermi drop between the edges;
 //   - short base only: 3 L_D / W' (the edge's definition), the larger side.
-// U_num = U_disc (Roache's three-grid GCI on N = 1024, 512, 256, F_s = 1.25, with the measured ratios) + the
+// U_num = U_disc (Roache's three-grid GCI on N = 1024, 512, 256, F_s = 1.25, with the measured ratios;
+// not estimated outside the asymptotic range: the orders of 1024-512-256 and 512-256-128 within 0.1, 4.2, DT-Q26 A) + the
 // resolution + |eps_int| (the (h, tol) factorial at N = 1024: N = 2048, tol = 1e-12 and 1e-14; 16.2 (p)).
 // U_ref = the SNS second-method difference + its quadrature estimate (+ the double's rounding).
 // Derivatives (DT-Q24 A), between consecutive biases: the ideality n = Delta V / (V_T Delta ln J) (forward) and, in
@@ -237,6 +238,26 @@ std::optional<double> gci(const double h[3], const double f[3], double& order) {
     return reference::gci_safety_factor_three_grids * std::abs(e21) / (std::pow(r21, p) - 1.0);
 }
 
+// U_disc with §4.2's asymptotic check (DT-Q26 A): the three-grid orders of levels 0-1-2 and 1-2-3 agree within 0.1,
+// else U_disc is not estimated (why says which). Sets both orders.
+std::optional<double> disc(const double h[4], const double f[4], double& order, double& order2, std::string& why) {
+    const auto u = gci(h, f, order);
+    const auto u2 = gci(h + 1, f + 1, order2);
+    if (!u) {
+        why = "GCI: oscillatory or a non-positive order";
+        return std::nullopt;
+    }
+    if (!u2) {
+        why = "asymptotic check: no order on the coarser triple";
+        return std::nullopt;
+    }
+    if (std::abs(order - order2) > reference::asymptotic_order_spread) {
+        why = "outside the asymptotic range (orders " + shortest(order) + ", " + shortest(order2) + ")";
+        return std::nullopt;
+    }
+    return u;
+}
+
 }  // namespace
 
 BenchmarkResult run_tvb16(Tier tier) {
@@ -352,9 +373,10 @@ BenchmarkResult run_tvb16(Tier tier) {
                              : 0.0;
             eps[b] = fine.low + fine.phi + edge;
             uref[b] = (refs[b].sns_second_method_difference + refs[b].sns_quadrature_error) / std::abs(Jref) + 1e-15;
-            const double f[3] = {lv[0][b].J, lv[1][b].J, lv[2][b].J};
-            double p = 0.0;
-            const auto ud = gci(hs, f, p);
+            const double f[4] = {lv[0][b].J, lv[1][b].J, lv[2][b].J, lv[3][b].J};
+            double p = 0.0, p2 = 0.0;
+            std::string why_d;
+            const auto ud = disc(hs, f, p, p2, why_d);
             const auto e = [&](double J) { return J / Jref - 1.0; };
             const std::vector<double> parts{ud ? *ud / std::abs(Jref) : 0.0, fine.res / std::abs(Jref)};
             const Factorial fc = factorial(e(fine.J), e(fac[0][b].J), e(fac[1][b].J), e(fac[2][b].J), parts);
@@ -375,13 +397,13 @@ BenchmarkResult run_tvb16(Tier tier) {
                               shortest(refs[b].sns_A_per_cm2.to_double()) +
                               "), J_sim " + shortest(fine.J) + "; eps_J/J: low injection " + shortest(fine.low) +
                               ", quasi-Fermi " + shortest(fine.phi) + ", edge " + shortest(edge) + "; U_num/J " +
-                              shortest(unum[b]) + " (GCI order " + shortest(p) + ", resolution/J " +
+                              shortest(unum[b]) + " (GCI orders " + shortest(p) + ", " + shortest(p2) + ", resolution/J " +
                               shortest(fine.res / std::abs(Jref)) + "), U_ref/J " + shortest(uref[b]) + "; " + fc.note +
                               stalled);
             ComparisonRecord cr{"J " + at_v, "A/cm^2", V, fine.J, Jref, uref[b] * std::abs(Jref), metric,
                                 "log error <= log10(1 + (U_num + U_ref + eps_J) / J_ref) = " + shortest(bound), {}};
             const std::vector<Predicate> pr{{"eps_J / J_ref <= 0.1", eps[b], applicability, applies[b]}};
-            const std::string why = "U_num not estimated (" + std::string(ud ? "the (h, tol) factorial" : "GCI") +
+            const std::string why = "U_num not estimated (" + (ud ? std::string("the (h, tol) factorial") : why_d) +
                                     (stalled.empty() ? std::string() : ":" + stalled) + ")";
             cr.comparison = !estimated[b] ? Comparison{Outcome::not_evaluated, why, {}}
                                           : judge(r.info, pr, metric <= bound, cr.criterion);
@@ -405,9 +427,11 @@ BenchmarkResult run_tvb16(Tier tier) {
                 const double share = std::abs(x_ref) / dly;
                 const double eps_x = share * (eps[a] + eps[z]), uref_x = share * (uref[a] + uref[z]);
                 const double x_sim = x_of(lv[0][a].J, lv[0][z].J);
-                const double f[3] = {x_sim, x_of(lv[1][a].J, lv[1][z].J), x_of(lv[2][a].J, lv[2][z].J)};
-                double p = 0.0;
-                const auto ud = gci(hs, f, p);
+                const double f[4] = {x_sim, x_of(lv[1][a].J, lv[1][z].J), x_of(lv[2][a].J, lv[2][z].J),
+                                     x_of(lv[3][a].J, lv[3][z].J)};
+                double p = 0.0, p2 = 0.0;
+                std::string why_d;
+                const auto ud = disc(hs, f, p, p2, why_d);
                 const double res_x =
                     share * (lv[0][a].res / std::abs(lv[0][a].J) + lv[0][z].res / std::abs(lv[0][z].J));
                 const std::vector<double> parts{ud ? *ud : 0.0, res_x};
@@ -419,7 +443,7 @@ BenchmarkResult run_tvb16(Tier tier) {
                 const std::string name = std::string(ideality ? "ideality " : "reverse exponent ") + c.name + ", V = " +
                                          shortest(Va) + " .. " + shortest(Vz) + " V";
                 r.notes.push_back(name + ": x_ref " + shortest(x_ref) + ", x_sim " + shortest(x_sim) + ", U_num " +
-                                  shortest(fc.ok ? fc.u : 0.0) + " (GCI order " + shortest(p) + "), U_ref " +
+                                  shortest(fc.ok ? fc.u : 0.0) + " (GCI orders " + shortest(p) + ", " + shortest(p2) + "), U_ref " +
                                   shortest(uref_x) + ", eps_x " + shortest(eps_x) + "; " + fc.note);
                 ComparisonRecord cr{name, "1", Va, x_sim, x_ref, uref_x, metric,
                                     "|x_sim - x_ref| <= U_num + U_ref + eps_x = " + shortest(bound), {}};
@@ -427,7 +451,8 @@ BenchmarkResult run_tvb16(Tier tier) {
                 const std::vector<Predicate> pr{
                     {"eps_J / J_ref <= 0.1 at both biases", std::max(eps[a], eps[z]), applicability, both}};
                 cr.comparison = !(ud && fc.ok && estimated[a] && estimated[z])
-                                    ? Comparison{Outcome::not_evaluated, "U_num not estimated", {}}
+                                    ? Comparison{Outcome::not_evaluated,
+                                                 "U_num not estimated (" + (ud ? std::string("factorial or a bias") : why_d) + ")", {}}
                                     : judge(r.info, pr, metric <= bound, cr.criterion);
                 r.comparisons.push_back(std::move(cr));
             }

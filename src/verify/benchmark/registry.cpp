@@ -114,7 +114,15 @@ constexpr std::string_view finding_vii =
     "DECISIONS Unit 55 15.14 MI-Q14 (known finding): the mu0 partials of the energy-balance mobility and field are "
     "formed by differences that cancel for a >= about 20 (absolute error about eps m); fix proposed separately";
 
-constexpr std::array<KnownFinding, 25> findings{{
+// Finding (x) (DECISIONS Unit 55 16.33, DT-Q27 A): TVB-16's long base (5e-2 cm) carries the forward current through
+// a neutral base of about 0.09 Ohm cm^2, whose ohmic drop 16.18 (f)'s eps_J omits; it lowers J by about 12 % at 0.6 V.
+bool from_half_volt(double V) { return V >= 0.5; }
+
+constexpr std::string_view finding_x =
+    "DECISIONS Unit 55 16.33 DT-Q27 A (known finding): the long base's series resistance (about 0.09 Ohm cm^2) is "
+    "missing from 16.18 (f)'s eps_J; its ohmic drop lowers J at V >= 0.5 V (about 12 % at 0.6 V)";
+
+constexpr std::array<KnownFinding, 27> findings{{
     {"TVB-02", "F_-1/2", &everywhere, "(ii)",
      "DECISIONS 11.13 TVB-02 finding (ii) widened (option A), accepted as a limitation (Unit 56, 13): F_-1/2 "
      "misses from eta = 13.76, a quadrature-rounding floor of the derivative-consistent table"},
@@ -142,6 +150,8 @@ constexpr std::array<KnownFinding, 25> findings{{
     {"TVB-31.10", "beta 1 dE_eff/dmu0", &a_from_20, "(vii)", finding_vii},
     {"TVB-31.10", "beta 1.5 dE_eff/dmu0", &a_from_20, "(vii)", finding_vii},
     {"TVB-31.10", "beta 2 dE_eff/dmu0", &a_from_20, "(vii)", finding_vii},
+    {"TVB-16", "J (ii) SRH, long base", &from_half_volt, "(x)", finding_x},
+    {"TVB-16", "ideality (ii) SRH, long base", &from_half_volt, "(x)", finding_x},
 }};
 
 bool starts_with(std::string_view s, std::string_view prefix) { return s.substr(0, prefix.size()) == prefix; }

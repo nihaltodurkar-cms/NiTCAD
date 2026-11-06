@@ -122,10 +122,10 @@ TEST_CASE("TVB-17: nothing in the fast tier", "[tvr4]") {
 TEST_CASE("TVB-16: the ideal diode, full tier (frozen outcome: pass)", "[.tvr4_full]") {
     const auto r = bench::run_tvb16(bench::Tier::full);
     if (r.run_error) FAIL(*r.run_error);
-    for (const auto& n : r.notes) UNSCOPED_INFO("note: " << n);
+    for (const auto& n : r.notes) std::printf("TVB-16 note: %s\n", n.c_str());
     for (const auto& c : r.comparisons) {
-        std::printf("TVB-16 %s: %.4g (%s) %s\n", c.quantity.c_str(), c.metric, c.criterion.c_str(),
-                    c.comparison.reason.c_str());
+        std::printf("TVB-16 [%s] %s: %.4g (%s) %s\n", std::string(to_string(c.comparison.outcome)).c_str(),
+                    c.quantity.c_str(), c.metric, c.criterion.c_str(), c.comparison.reason.c_str());
     }
     REQUIRE(r.comparisons.size() == 41);
     for (const auto& c : r.comparisons) {

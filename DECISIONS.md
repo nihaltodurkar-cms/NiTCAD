@@ -10226,6 +10226,38 @@ are independent) is tested directly rather than argued.
 
 **Recommendation: A** for TVR-4: the frozen criterion stands, and the omission is recorded with its measured size. B would be the right design for a later revision of 16.18 (f), as its own ruling before any run.
 
+**16.33 Rulings DT-Q26, DT-Q27** (owner, "choose recommended", 2026-11-06), **as applied; TVB-16 rerun. DT-Q28 open.**
+- **DT-Q26: A.** `tvb16.cpp` now has `disc()`. It computes the three-grid GCI on levels 1024/512/256 (order p012) and on 512/256/128 (order p123). U_disc is estimated only when both orders exist and |p012 − p123| ≤ 0.1 (`reference::asymptotic_order_spread`, §4.2). Otherwise the comparison is not_evaluated (§4.3), and its reason says which case applies: oscillatory or non-positive finest order, no order on the coarser triple, or "outside the asymptotic range (orders a, b)". This applies to the J ladders and to the derivative ladders. Both orders are printed.
+- **DT-Q27: A.** `registry.cpp` gets known finding **(x)**: TVB-16, quantity prefixes "J (ii) SRH, long base" and "ideality (ii) SRH, long base", region V ≥ 0.5 V (for the ideality, its lower bias). The ruling text cites this entry. The labels (viii) and (ix) were already used by TVB-31.12 and 31.15 (MI-Q15), so this one is (x). There are now 27 entries.
+- **Found while applying (my construction, from 8ce7fe9).** `registry_test` was not updated when TVB-16 was registered. Its id list had 45 names for 46 benchmarks: from TVB-16 on, the checks compared the wrong names, `ids[45]` read past the array, and TVB-16 was not in the full-tier set. So 35 checks failed in `verify_benchmark`'s default run. 16.32's "Release verify 68/68" was therefore wrong for that commit. Fixed:
+  - TVB-16 is added to the list and to the full-tier set;
+  - a new check `REQUIRE(std::size(ids) == b.size())`.
+- **Results** (Release, first run after the rulings, nothing changed after it): **1 pass, 39 not_evaluated, 1 fail**. `tvr4_full` still fails.
+  - **pass:** J of (i) at 0.2 V only. Its orders are 1.949 and 1.983, and every other (i) point is outside the range. For example, J at 0.5 V has orders 1.81 and 0.34, and the 0.2–0.3 V ideality has 2.05 and 2.92.
+  - **(ii) short base, all 17 not_evaluated.** At 0.2 and 0.3 V the finest triple oscillates. At 0.4–0.6 V and −1 and −5 V the coarser triple has no order. At −0.5 and −2 V the orders differ by more than 0.1 (4.09/3.32 and 2.69/3.84).
+  - **(ii) long base.** Finding (x) changes nothing in this run: J at 0.5 and 0.6 V and the 0.5–0.6 V ideality are now not_evaluated (orders 2.09/7.99, 1.06/0.35, 0.77/6.38), so no fail remains for it to classify. The one **fail** is J at −2 V:
+    - orders 2.713 and 2.797, inside 0.1, so U_disc is estimated: U_num/J = 1.15e-4;
+    - but the error is 1.705e-4 (log error 7.41e-5 against a bound of 5.01e-5);
+    - the factorial shows e(h/2)/e(h) = 0.249, so between N = 1024 and 2048 the error falls as h² and is discretization error;
+    - the two three-grid orders agree with each other, but both are pre-asymptotic, near 2.7 against the measured 2.0. §4.2's check does not detect this, and the GCI is about 1.5 times too small.
+  - **The derivatives:** every one is not_evaluated. Each needs its own ladder in range and both of its J values estimated.
+- **Diagnostic** (a temporary build, reverted, not committed): with the factorial's N = 2048 state as the finest level, the J ladders 2048/1024/512/256/128 are within 0.1 at only 4 of 23 points: (i) at 0.2, 0.3 and 0.4 V, and the long base at −5 V. So a one-level-finer ladder does not bring the graded mesh into the asymptotic range.
+- The TVB-16 mutation run and the frozen expected outcome wait for DT-Q28.
+
+**DT-Q28 (TVB-16's ladder is almost never in the asymptotic range).** Under DT-Q26 A, 39 of 41 comparisons are not_evaluated. The one judged fail is a GCI that is too small, at orders that pass the check.
+- (A) **Record it as found.**
+  - The frozen expected outcome becomes the found outcomes, listed per comparison.
+  - The −2 V long-base J becomes a known finding (xi): "the three-grid GCI underestimates on the graded mesh at in-range but pre-asymptotic orders (2.71/2.80 against the measured 2.0)".
+  - TVB-16 then judges one point. Its test passes, but in practice it verifies almost nothing.
+- (B) **Roache's two-grid estimate as the fallback.**
+  - Where the three-grid estimate is unavailable or out of range, U_disc of the N = 1024 value is F_s |J_2048 − J_1024| r^p/(r^p − 1), with F_s = 3 and p = p_th = 2 (the coarse-solution form; the N = 2048 states are already solved for the factorial). Where the three-grid estimate is in range, it is kept, and the larger of the two is used.
+  - It is DT-Q26's option B, now with A's result measured. It widens U_num after a run (TVM2), so it needs your explicit authorization.
+  - Effect, from numbers already printed: at −2 V long, 3 × 1.28e-4 × 4/3 = 5.1e-4 ≥ 1.705e-4, so the fail would pass. Its effect elsewhere has not been computed.
+  - p_th = 2 is supported where the factorial shows it (0.249 at −1 and −2 V). Where e(h/2)/e(h) is outside 0.25 ± 0.05 (a band this ruling would fix before any run), the fallback is not estimated either.
+- (C) **A finer, longer ladder** (N = 4096 … 512) and rerun. This changes 16.31's frozen ladder after a run, costs about 4× the 9.7 s, and the diagnostic above gives little reason to expect the range.
+
+**Recommendation: B.** A benchmark that judges 1 of 41 points does not verify the diode. Roache's F_s = 3 two-grid estimate with an assumed order is the documented practice when the observed order cannot be trusted (Roache, Verification and Validation in Computational Science and Engineering, 1998: F_s = 3 for two grids). The condition that e(h/2)/e(h) be near 1/4 keeps it from being applied blindly. It is a post-run change, so it needs your "authorize". A is the strict reading of TVM2.
+
 
 
 ---
