@@ -9,11 +9,13 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdio>
+#include <map>
 #include <string>
 #include <utility>
 #include <vector>
 
 #include "NiTCAD/verify/benchmark/registry.hpp"
+#include "NiTCAD/verify/benchmark/tvb32.hpp"
 #include "NiTCAD/verify/reference/contract.hpp"
 
 namespace bench = NiTCAD::verify::benchmark;
@@ -336,5 +338,75 @@ TEST_CASE("TVB-27 and TVB-28: nothing in the fast tier", "[tvr4]") {
     for (const auto& r : {bench::run_tvb27(bench::Tier::fast), bench::run_tvb28(bench::Tier::fast)}) {
         REQUIRE_FALSE(r.run_error.has_value());
         REQUIRE(r.comparisons.empty());
+    }
+}
+
+// TVB-32 on the TVR-4 benchmark devices (16.44; TVB-32's full tier). Frozen expectations, set before code and before
+// any run (11.13's rule): C1, C2, C7, C8 pass where every bias is exactly 0 and the thermal contacts are at one
+// temperature, else NOT APPLICABLE naming that predicate; C1 and C3 on the equilibrium, C3, C4, C12, C6 and C9 pass;
+// C5 NOT APPLICABLE ("electrothermal on") with the model off and pass with it on (TVB-27, 28). Any other outcome,
+// and any failed or NOT EVALUATED part, is a finding. Per device and check the worst residual/tolerance is printed.
+// Found on the first run (16.45): 457 entries, 2 fail (C1, C2 at TVB-15's generated point: the finding), 19 NOT
+// EVALUATED and 3 C6 NOT APPLICABLE by the checks' own contracts; DT-Q39 open.
+TEST_CASE("TVB-32: the consistency suite on the TVR-4 devices (frozen outcomes)", "[.tvr4_full]") {
+    namespace c = NiTCAD::verify::consistency;
+    const auto name_of = [](Outcome o) {
+        switch (o) {
+            case Outcome::pass: return "pass";
+            case Outcome::fail: return "FAIL";
+            case Outcome::not_applicable: return "not applicable";
+            case Outcome::not_evaluated: return "NOT EVALUATED";
+            default: return "other";
+        }
+    };
+    struct Tally {
+        std::map<std::string, int> outcomes;
+        double worst = 0.0;
+        std::string where;
+    };
+    const bench::Tvb32Run run = bench::tvb32_tvr4_entries();
+    CAPTURE(run.run_error.value_or(""));
+    CHECK_FALSE(run.run_error.has_value());
+    std::map<std::string, Tally> tally;  // "device check"
+    for (const bench::Tvb32Entry& e : run.entries) {
+        const c::CheckResult& r = e.result;
+        const std::string& id = r.id;
+        const bool thermal = e.deck.rfind("TVB-27", 0) == 0 || e.deck.rfind("TVB-28", 0) == 0;
+        Outcome want = Outcome::pass;
+        std::vector<std::string> predicates;
+        if (e.at != "equilibrium" && (id == "C1" || id == "C2" || id == "C7" || id == "C8")) {
+            want = e.zero_bias ? Outcome::pass : Outcome::not_applicable;
+            predicates = {"all biases 0", "thermal contacts at one temperature"};
+        } else if (id == "C5" && !thermal) {
+            want = Outcome::not_applicable;
+            predicates = {"electrothermal on"};
+        }
+        Tally& t = tally[e.deck + " " + id];
+        ++t.outcomes[name_of(r.comparison.outcome)];
+        for (const auto& p : r.parts) {
+            if (p.outcome != Outcome::pass || !(p.tolerance > 0.0)) continue;
+            const double q = p.residual / p.tolerance;
+            if (q > t.worst) {
+                t.worst = q;
+                t.where = e.at + ", " + p.name + " at " + p.where;
+            }
+        }
+        CAPTURE(e.deck, e.at, id, r.comparison.reason);
+        for (const auto& p : r.parts) {
+            CAPTURE(p.name, name_of(p.outcome), p.residual, p.tolerance, p.where, p.reason);
+            if (p.outcome == Outcome::fail || p.outcome == Outcome::not_evaluated) FAIL_CHECK("part " << p.name);
+        }
+        CHECK(r.comparison.outcome == want);
+        if (want == Outcome::not_applicable) {
+            CHECK(std::any_of(predicates.begin(), predicates.end(), [&](const std::string& s) {
+                return r.comparison.reason.find(s) != std::string::npos;
+            }));
+        }
+    }
+    for (const auto& [key, t] : tally) {
+        std::string counts;
+        for (const auto& [o, n] : t.outcomes) counts += (counts.empty() ? "" : ", ") + std::to_string(n) + " " + o;
+        std::printf("TVB-32 %s: %s; worst %.3g of the bound (%s)\n", key.c_str(), counts.c_str(), t.worst,
+                    t.where.c_str());
     }
 }

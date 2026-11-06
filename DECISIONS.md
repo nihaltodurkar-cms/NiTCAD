@@ -10811,6 +10811,73 @@ and the fix keeps the criterion. The slab and Π are DT-Q36's class and should f
   (the generated carriers leave through both contacts). If they do, that is a finding against C1's predicate list
   (11.6), not against the solver.
 
+**16.45 Step 13 as built: TVB-32 on the TVR-4 devices. One finding; DT-Q39 open.**
+- **Code.**
+  - `tvb32.hpp` exposes TVB-32's collector (`Tvb32Collector`: dc, ac, transient, equilibrium) and one
+    `tvbXX_consistency()` per benchmark, each in its benchmark's file on its own builder and models.
+    `tvb32_tvr4_entries()` runs them in order.
+  - `run_tvb32(Tier)`: fast is unchanged (the three decks); full and nightly add these entries.
+  - To share their builders, four benchmarks had device or case construction moved into functions, with no
+    change in what they compute: TVB-05 `coax`, TVB-06 `stack`, TVB-10 `dd_transient` and `flat_band`, TVB-15
+    `generated_point`, TVB-19 `relaxation_case`, `pulse_case`, `case_options` and `solve_case`.
+  - **Checked as identical:** a baseline build of HEAD (be65856) in a separate worktree. TVB-05, 06, 10 and 15
+    (`-s`), TVB-19's nightly case and TVB-32's deck test (7037 lines) print the same output, sorted, line for
+    line. Catch2's case order differs between the builds.
+- **Devices and points** (the coarsest level of each ladder):
+  - TVB-05: coax M = 32. TVB-06: 1D N = 32. Both at (0, 0) and (0, 1) V, 1 MHz.
+  - TVB-10: N = 64. HF (equilibrium Poisson) at 0, V_FB + 0.5 and V_FB + 2 V, three frequencies; equilibrium;
+    the deep-depletion ramp.
+  - TVB-13: the drift bar N = 64 at 0 and four fields; the energy-balance bar N = 128 from 0 to 1e4 V/cm by half
+    decades; equilibria.
+  - TVB-15: N = 64, zero bias without and with the E part's generation; equilibrium.
+  - TVB-16: the three configurations at N = 128, forward from 0 and reverse; equilibria.
+  - TVB-17: N = 64, AC at 0, −0.5, −1 and −2 V.
+  - TVB-18: N = 128, AC at 0, 0.35, 0.40 and 0.45 V at 0, 1e4 and 1e6 Hz; C9 at 0.40 V (h = 1 mV).
+  - TVB-19: both cases at N = 257 and 8 dt₀ (relaxation BDF2 and BE, the pulse BDF2), with each bar's zero-bias
+    point and equilibrium.
+  - TVB-27: the slab and the resistor (0, 4 V) at N = 64. TVB-28 (legacy set): the Seebeck bar, the Peltier bar
+    (0, ±1 mV) and the resistor (0, 4 V), all at N = 64; equilibria.
+- **Run: 457 entries in 0.53 s (Release): 261 pass, 175 not applicable, 19 NOT EVALUATED, 2 fail.** 52 assertions
+  of the frozen case fail, so `tvr4_full` stays red pending DT-Q39.
+  - Every check where the frozen rule applies is as frozen. The worst ratio is 0.073 of the bound (C8, TVB-10 HF).
+- **Departures from 16.44's expectations, classified:**
+  - **The finding: C1 and C2 fail at TVB-15's generated zero-bias point.** This was predicted in 16.44.
+    - Edge currents 8.4e-9 against 5.4e-12; quasi-Fermi split 0.22 eV against 1.3e-14 eV; SRH 4.3e-8 against
+      5.4e-12.
+    - The TVQ3 hook (`models.manufactured`) is a prescribed generation, so C1's "no optical or prescribed
+      generation, holds by construction" is false. `DeviceData` and `BiasPoint` do not record the hook, so C1 and
+      C2 cannot see it.
+    - The checks are wrong to apply here, not the solver: the currents are the generated carriers leaving.
+    - Not fixed (DT-Q11).
+  - **Departures that are the checks' own contracts (11.6), not findings.** The frozen rule was 11.13's, written
+    for decks with every mechanism on and no insulator-only device:
+    - C2 is NOT EVALUATED, "no rates stored", at the zero-bias points with G-R off (9 entries).
+    - On insulator-only devices (TVB-05, 06), C1 and C2 are NOT EVALUATED ("no nonzero terminal resolution") at
+      zero bias, and C12 ("no semiconductor nodes") at every point (8). DT-Q2 A made these devices after C1–C12
+      were built.
+    - At TVB-10's zero-bias HF point (equilibrium Poisson: no currents), C1 is NOT EVALUATED, "no nonzero terminal
+      resolution" (1).
+    - C9 at TVB-18 is NOT EVALUATED: its conductance part passes (3.2e-4 of the bound), and its capacitance part
+      needs a gate or electrode row (1).
+    - C6 is NOT APPLICABLE on TVB-19's three transients ("transient with a gate or electrode"); TVB-10's ramp
+      passes (3).
+- **Mutation** (12 mutants, judged by any change in the printed tally, failure and reason lines, since the frozen
+  case is red): 11 caught. These were the thermal-temperature predicate, removing C12, C8, the equilibrium C3,
+  TVB-18's entries or C6, C9's step, TVB-15's generation, the slab's temperatures, TVB-13's energy model and the
+  zero-bias flag. The survivor, C6's device data from the HF models, is equivalent: C6 reads none of the models
+  that differ.
+
+**DT-Q39 (TVB-32 on the TVR-4 devices).**
+- (A) Pin as found:
+  - the frozen case's expectations add the five contract classes above, each with its reason;
+  - the two C1/C2 fails at TVB-15's generated point become a known finding;
+  - the finding's fix (a "prescribed generation" predicate from `models.manufactured` into `DeviceData`, making
+    C1 and C2 NOT APPLICABLE there) is deferred past TVR-4 (DT-Q11).
+- (B) As A, but authorize the predicate fix now as a TVR-4 change (TVM2's change to a check's inputs; its own
+  tests, bit-identical elsewhere).
+
+**Recommendation: A.** DT-Q11 keeps findings out of TVR-4. The contract classes are what C2, C6, C9 and C12 state.
+
 ---
 
 ## New questions the advisor raised (not yet in `ARCHITECTURE.md`)

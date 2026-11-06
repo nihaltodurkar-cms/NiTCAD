@@ -43,7 +43,9 @@
 #include "NiTCAD/mesh/tensor_grid.hpp"
 #include "NiTCAD/physics/semiconductor.hpp"
 #include "NiTCAD/solve/small_signal.hpp"
+#include "NiTCAD/verify/benchmark/device_data.hpp"
 #include "NiTCAD/verify/benchmark/registry.hpp"
+#include "NiTCAD/verify/benchmark/tvb32.hpp"
 #include "NiTCAD/verify/reference/metrics.hpp"
 #include "NiTCAD/verify/reference/pn_junction.hpp"
 #include "NiTCAD/verify/reference/qe_junction.hpp"
@@ -275,6 +277,23 @@ BenchmarkResult run_tvb17(Tier tier) {
     }
     apply_known_findings(r, known_findings());
     return r;
+}
+
+// TVB-32 on this benchmark's device (16.44): N = 64; the small-signal run at zero bias and the three reverse biases,
+// at its frequency; the equilibrium.
+Tvb32Run tvb17_consistency() {
+    Tvb32Run run;
+    const device::Device d = diode(64);
+    solve::SmallSignalOptions o{.steady = options(), .frequencies_Hz = {frequency_Hz}};
+    o.steady.newton.tol_update = tol_newton;
+    const auto s = solve::solve_small_signal(
+        d, std::vector<std::vector<double>>{{0.0, 0.0}, {-0.5, 0.0}, {-1.0, 0.0}, {-2.0, 0.0}}, o);
+    if (!s || s->stopped) return {{}, "TVB-17 diode N = 64: " + (s ? s->stopped->message : s.error().message)};
+    Tvb32Collector col{run.entries, "TVB-17 diode N = 64", d.contacts().size()};
+    col.ac(*s, d.mesh(), device_data(d, o.steady.models), "");
+    std::string error;
+    if (!col.equilibrium(d, o.steady.models, error)) return {std::move(run.entries), error};
+    return run;
 }
 
 }  // namespace NiTCAD::verify::benchmark

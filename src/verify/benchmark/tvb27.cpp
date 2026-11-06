@@ -33,6 +33,7 @@
 #include "NiTCAD/solve/bias.hpp"
 #include "NiTCAD/verify/benchmark/device_data.hpp"
 #include "NiTCAD/verify/benchmark/registry.hpp"
+#include "NiTCAD/verify/benchmark/tvb32.hpp"
 #include "NiTCAD/verify/consistency/checks.hpp"
 #include "NiTCAD/verify/reference/metrics.hpp"
 #include "NiTCAD/verify/reference/thermal_slab.hpp"
@@ -378,6 +379,52 @@ BenchmarkResult run_tvb28(Tier tier) {
     }
     apply_known_findings(r, known_findings());
     return r;
+}
+
+namespace {
+
+// TVB-32 on a set of electrothermal bars at N = 64 (the coarsest), each at its points (16.44).
+Tvb32Run thermal_consistency(const char* id, const std::vector<std::pair<std::string, Bar>>& bars,
+                             const std::vector<std::vector<std::vector<double>>>& points) {
+    Tvb32Run run;
+    std::string error;
+    for (std::size_t b = 0; b < bars.size(); ++b) {
+        const device::Device d = build(bars[b].second, ladder[3]);
+        const std::string name = std::string(id) + " " + bars[b].first + " N = " + std::to_string(ladder[3]);
+        const solve::BiasOptions o = options(tol_newton);
+        const auto s = solve::sweep_bias(d, points[b], o);
+        if (!s || s->stopped || s->points.size() != points[b].size()) {
+            return {std::move(run.entries),
+                    name + ": " + (!s ? s.error().message : s->stopped ? s->stopped->message : "short sweep")};
+        }
+        Tvb32Collector col{run.entries, name, d.contacts().size()};
+        const consistency::DeviceData data = device_data(d, o.models);
+        for (const auto& p : s->points) col.dc(p, d.mesh(), data, bias_label(p));
+        if (!col.equilibrium(d, o.models, error)) return {std::move(run.entries), error};
+    }
+    return run;
+}
+
+}  // namespace
+
+// TVB-27's slab (300 / 400 K, its one contact at 0 V) and resistor (0 and 4 V), default silicon.
+Tvb32Run tvb27_consistency() {
+    const physics::SemiconductorParameters& sp = physics::silicon_parameters;
+    return thermal_consistency("TVB-27",
+                               {{"slab", Bar{1e-3, sp, false, 300.0, 400.0}},
+                                {"resistor", Bar{1e-3, sp, true, 300.0, 300.0}}},
+                               {{{0.0}}, {{0.0, 0.0}, {0.0, 4.0}}});
+}
+
+// TVB-28's bars on the legacy set: the Seebeck bar (300 / 400 K), the Peltier bar (0, +1 mV, -1 mV), the resistor
+// (0 and 4 V).
+Tvb32Run tvb28_consistency() {
+    const physics::SemiconductorParameters& sp = physics::legacy_silicon_parameters;
+    return thermal_consistency("TVB-28",
+                               {{"Seebeck bar", Bar{1e-2, sp, false, 300.0, 400.0}},
+                                {"Peltier bar", Bar{1e-3, sp, true, 300.0, 300.0}},
+                                {"resistor", Bar{1e-3, sp, true, 300.0, 300.0}}},
+                               {{{0.0}}, {{0.0, 0.0}, {1e-3, 0.0}, {-1e-3, 0.0}}, {{0.0, 0.0}, {0.0, 4.0}}});
 }
 
 }  // namespace NiTCAD::verify::benchmark

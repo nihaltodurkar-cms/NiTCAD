@@ -45,7 +45,9 @@
 #include "NiTCAD/physics/recombination.hpp"
 #include "NiTCAD/physics/semiconductor.hpp"
 #include "NiTCAD/solve/bias.hpp"
+#include "NiTCAD/verify/benchmark/device_data.hpp"
 #include "NiTCAD/verify/benchmark/registry.hpp"
+#include "NiTCAD/verify/benchmark/tvb32.hpp"
 #include "NiTCAD/verify/reference/diode.hpp"
 #include "NiTCAD/verify/reference/metrics.hpp"
 #include "NiTCAD/verify/reference/pn_junction.hpp"
@@ -436,6 +438,36 @@ BenchmarkResult run_tvb16(Tier tier) {
     }
     apply_known_findings(r, known_findings());
     return r;
+}
+
+// TVB-32 on this benchmark's devices (16.44): each configuration at N = 128 (the coarsest), swept from zero bias
+// forward and, where it has them, reverse; each equilibrium.
+Tvb32Run tvb16_consistency() {
+    Tvb32Run run;
+    std::string error;
+    for (const Config& c : configs()) {
+        const device::Device d = diode(c, ladder[3]);
+        const std::string name = "TVB-16 diode " + c.name + " N = " + std::to_string(ladder[3]);
+        const solve::BiasOptions o = options(c.srh, tol_newton);
+        const consistency::DeviceData data = device_data(d, o.models);
+        Tvb32Collector col{run.entries, name, d.contacts().size()};
+        bool first = true;
+        for (const std::vector<double>* side : {&c.forward, &c.reverse}) {
+            if (side->empty()) continue;
+            std::vector<std::vector<double>> points;
+            if (first) points.push_back({0.0, 0.0});
+            for (const double V : *side) points.push_back({V, 0.0});
+            const auto s = solve::sweep_bias(d, points, o);
+            if (!s || s->stopped || s->points.size() != points.size()) {
+                return {std::move(run.entries),
+                        name + ": " + (!s ? s.error().message : s->stopped ? s->stopped->message : "short sweep")};
+            }
+            for (const auto& p : s->points) col.dc(p, d.mesh(), data, bias_label(p));
+            first = false;
+        }
+        if (!col.equilibrium(d, o.models, error)) return {std::move(run.entries), error};
+    }
+    return run;
 }
 
 }  // namespace NiTCAD::verify::benchmark

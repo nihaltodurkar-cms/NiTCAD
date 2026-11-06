@@ -40,7 +40,9 @@
 #include "NiTCAD/physics/semiconductor.hpp"
 #include "NiTCAD/solve/transient.hpp"
 #include "NiTCAD/solve/waveform.hpp"
+#include "NiTCAD/verify/benchmark/device_data.hpp"
 #include "NiTCAD/verify/benchmark/registry.hpp"
+#include "NiTCAD/verify/benchmark/tvb32.hpp"
 #include "NiTCAD/verify/reference/first_integral.hpp"
 #include "NiTCAD/verify/reference/linear_transient.hpp"
 #include "NiTCAD/verify/reference/metrics.hpp"
@@ -104,30 +106,50 @@ struct Run {
     std::vector<double> x;
 };
 
-std::expected<Run, std::string> run_case(const Case& c, int N, double dt, solve::Integrator integ, double tol) {
-    const device::Device d = bar(N, c.length, c.ND);
+constexpr double relaxation_ND = 1e14, pulse_ND = 1e15;
+
+// The relaxation case at tau_d = td, and the Haynes-Shockley pulse.
+Case relaxation_case(double td) {
+    Case relax{.length = 4e-3, .ND = relaxation_ND, .V = 0.0, .sigma = 2e-4, .centre = 2e-3, .rate = 0.0,
+               .t_on = 0.1 * td, .t_off = 0.5 * td, .t_end = 4.5 * td, .srh = false, .pairs = false, .times = {}};
+    relax.rate = 1e-6 * relaxation_ND / (relax.t_off - relax.t_on) * 0.5;  // peak excess about 1e-6 N_D at most
+    for (int k = 1; k <= 4; ++k) relax.times.push_back(relax.t_off + k * td);
+    return relax;
+}
+
+Case pulse_case() {
+    return {.length = 2e-2, .ND = pulse_ND, .V = 2.0, .sigma = 3e-4, .centre = 5e-3, .rate = 5e14, .t_on = 1e-10,
+            .t_off = 2e-9, .t_end = 4e-8, .srh = true, .pairs = true, .times = {4e-8}};
+}
+
+solve::BiasOptions case_options(const Case& c, double tol) {
+    solve::BiasOptions o;
+    o.models.srh = c.srh;
+    o.models.auger = o.models.radiative = false;
+    o.models.bgn = false;
+    o.models.fermi_dirac = false;
+    o.models.field_mobility = false;
+    o.models.hole_mobility = assemble::HoleMobility::caughey_thomas;
+    o.models.electron_mobility = assemble::ElectronMobility::caughey_thomas;
+    o.newton.tol_update = tol;
+    return o;
+}
+
+// One case on device d at fixed step dt.
+std::expected<results::Transient, std::string> solve_case(const Case& c, const device::Device& d, double dt,
+                                                          solve::Integrator integ, double tol) {
     const std::size_t n = d.mesh().node_count();
     assemble::ManufacturedSources ms;
-    Run out;
     for (std::size_t i = 0; i < n; ++i) {
-        const double x = d.mesh().points()[i][0];
-        out.x.push_back(x);
-        const double z = (x - c.centre) / c.sigma;
+        const double z = (d.mesh().points()[i][0] - c.centre) / c.sigma;
         ms.electron_generation.push_back(c.rate * std::exp(-0.5 * z * z));
     }
     ms.hole_generation = c.pairs ? ms.electron_generation : std::vector<double>(n, 0.0);
     ms.profile_times_s = {c.t_on, c.t_off};
     ms.profile_weights = {0.0, 1.0, 0.0};
     solve::TransientOptions o;
-    o.steady.models.srh = c.srh;
-    o.steady.models.auger = o.steady.models.radiative = false;
-    o.steady.models.bgn = false;
-    o.steady.models.fermi_dirac = false;
-    o.steady.models.field_mobility = false;
-    o.steady.models.hole_mobility = assemble::HoleMobility::caughey_thomas;
-    o.steady.models.electron_mobility = assemble::ElectronMobility::caughey_thomas;
+    o.steady = case_options(c, tol);
     o.steady.models.manufactured = &ms;
-    o.steady.newton.tol_update = tol;
     o.integrator = integ;
     o.t_end_s = c.t_end;
     o.adaptive = false;
@@ -136,9 +158,19 @@ std::expected<Run, std::string> run_case(const Case& c, int N, double dt, solve:
     o.dt_max_s = dt;
     o.output_times_s = c.times;
     const std::vector<solve::Waveform> w{solve::Waveform::constant(c.V), solve::Waveform::constant(0.0)};
-    const auto s = solve::solve_transient(d, w, o);
-    if (!s) return std::unexpected("N = " + std::to_string(N) + ": " + s.error().message);
-    if (s->stopped) return std::unexpected("N = " + std::to_string(N) + ": " + s->stopped->message);
+    auto s = solve::solve_transient(d, w, o);
+    if (!s) return std::unexpected("N = " + std::to_string(n) + ": " + s.error().message);
+    if (s->stopped) return std::unexpected("N = " + std::to_string(n) + ": " + s->stopped->message);
+    return std::move(*s);
+}
+
+std::expected<Run, std::string> run_case(const Case& c, int N, double dt, solve::Integrator integ, double tol) {
+    const device::Device d = bar(N, c.length, c.ND);
+    const std::size_t n = d.mesh().node_count();
+    Run out;
+    for (std::size_t i = 0; i < n; ++i) out.x.push_back(d.mesh().points()[i][0]);
+    const auto s = solve_case(c, d, dt, integ, tol);
+    if (!s) return std::unexpected(s.error());
     const auto at = [&](double t) {
         return std::find_if(s->snapshots.begin(), s->snapshots.end(),
                             [&](const auto& sn) { return std::abs(sn.time_s - t) <= 1e-9 * dt; });
@@ -207,7 +239,7 @@ BenchmarkResult run_tvb19(Tier tier) {
     const double eps = si.parameters().eps_r * base::eps0_F_per_cm;
 
     // ---- The two cases and their references ----
-    const double ND1 = 1e14;
+    const double ND1 = relaxation_ND;
     const reference::NeutralBulk b1 = reference::neutral_bulk(ni, ND1);
     const double mun1 = physics::caughey_thomas_mobility(si, physics::Carrier::electron, ND1, T);
     const double mup1 = physics::caughey_thomas_mobility(si, physics::Carrier::hole, ND1, T);
@@ -223,12 +255,9 @@ BenchmarkResult run_tvb19(Tier tier) {
         r.run_error = "reference: " + relax2.error();
         return r;
     }
-    Case relax{.length = 4e-3, .ND = ND1, .V = 0.0, .sigma = 2e-4, .centre = 2e-3, .rate = 0.0,
-               .t_on = 0.1 * td, .t_off = 0.5 * td, .t_end = 4.5 * td, .srh = false, .pairs = false, .times = {}};
-    relax.rate = 1e-6 * ND1 / (relax.t_off - relax.t_on) * 0.5;  // peak excess about 1e-6 N_D at most
-    for (int k = 1; k <= 4; ++k) relax.times.push_back(relax.t_off + k * td);
+    const Case relax = relaxation_case(td);
 
-    const double ND2 = 1e15, L2 = 2e-2, V2 = 2.0, E2 = V2 / L2;
+    const double ND2 = pulse_ND, L2 = 2e-2, V2 = 2.0, E2 = V2 / L2;
     const reference::NeutralBulk b2 = reference::neutral_bulk(ni, ND2);
     const double mup2 = physics::caughey_thomas_mobility(si, physics::Carrier::hole, ND2, T);
     const double inv_tau = reference::srh_linear_inverse_lifetime(
@@ -236,8 +265,7 @@ BenchmarkResult run_tvb19(Tier tier) {
                                physics::scharfetter_lifetime(si, physics::Carrier::electron, ND2),
                                physics::scharfetter_lifetime(si, physics::Carrier::hole, ND2))
                                .to_double();
-    Case hs{.length = L2, .ND = ND2, .V = V2, .sigma = 3e-4, .centre = 5e-3, .rate = 5e14, .t_on = 1e-10,
-            .t_off = 2e-9, .t_end = 4e-8, .srh = true, .pairs = true, .times = {4e-8}};
+    const Case hs = pulse_case();
     const reference::PulseInput pin{.diffusivity_cm2_s = VT * mup2, .velocity_cm_s = mup2 * E2,
                                     .lifetime_s = 1.0 / inv_tau, .centre_cm = hs.centre, .sigma_cm = hs.sigma,
                                     .rate_cm3_s = hs.rate, .t_on_s = hs.t_on, .t_off_s = hs.t_off};
@@ -400,6 +428,51 @@ BenchmarkResult run_tvb19(Tier tier) {
     }
     apply_known_findings(r, known_findings());
     return r;
+}
+
+// TVB-32 on this benchmark's devices (16.44): C6 on both cases at the coarsest h (N = 257) and the coarsest step of
+// the dt ladder (8 dt0), relaxation with BDF2 and backward Euler, the pulse with BDF2; each device's zero-bias
+// point and equilibrium.
+Tvb32Run tvb19_consistency() {
+    Tvb32Run run;
+    const physics::Semiconductor si = physics::silicon();
+    const double ni = physics::intrinsic_density(si, T), eps = si.parameters().eps_r * base::eps0_F_per_cm;
+    const reference::NeutralBulk b1 = reference::neutral_bulk(ni, relaxation_ND);
+    const double sigma_over_q =
+        physics::caughey_thomas_mobility(si, physics::Carrier::electron, relaxation_ND, T) * b1.n_b.to_double() +
+        physics::caughey_thomas_mobility(si, physics::Carrier::hole, relaxation_ND, T) * b1.p_b.to_double();
+    const auto taud = reference::dielectric_relaxation_time(eps, base::q_C, 1.0, sigma_over_q);
+    if (!taud) return {{}, "TVB-19: reference: " + taud.error()};
+    const double td = taud->to_double();
+    const int N = h_ladder[3];
+    std::string error;
+    struct Item {
+        Case c;
+        double dt;
+        const char* name;
+    };
+    for (const Item& it : {Item{relaxation_case(td), 8.0 * td / 160.0, "relaxation"},
+                           Item{pulse_case(), 8.0 * 5e-11, "Haynes-Shockley"}}) {
+        const device::Device d = bar(N, it.c.length, it.c.ND);
+        const std::string name = std::string("TVB-19 ") + it.name + " bar N = " + std::to_string(N);
+        const solve::BiasOptions o = case_options(it.c, tol_newton);
+        const consistency::DeviceData data = device_data(d, o.models);
+        Tvb32Collector col{run.entries, name, d.contacts().size()};
+        const auto p0 = solve::solve_bias(d, std::vector<double>{0.0, 0.0}, o);
+        if (!p0) return {std::move(run.entries), name + ": " + p0.error().message};
+        col.dc(*p0, d.mesh(), data, bias_label(*p0));
+        if (!col.equilibrium(d, o.models, error)) return {std::move(run.entries), error};
+        const bool relax = it.c.V == 0.0;
+        for (const solve::Integrator integ : {solve::Integrator::bdf2, solve::Integrator::backward_euler}) {
+            if (!relax && integ == solve::Integrator::backward_euler) continue;
+            const auto t = solve_case(it.c, d, it.dt, integ, tol_newton);
+            if (!t) return {std::move(run.entries), name + ": " + t.error()};
+            col.transient(*t, d.mesh(), data,
+                          std::string(integ == solve::Integrator::bdf2 ? "BDF2" : "backward Euler") + ", dt " +
+                              shortest(it.dt) + " s");
+        }
+    }
+    return run;
 }
 
 }  // namespace NiTCAD::verify::benchmark

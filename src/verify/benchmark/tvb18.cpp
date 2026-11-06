@@ -41,7 +41,9 @@
 #include "NiTCAD/physics/recombination.hpp"
 #include "NiTCAD/physics/semiconductor.hpp"
 #include "NiTCAD/solve/small_signal.hpp"
+#include "NiTCAD/verify/benchmark/device_data.hpp"
 #include "NiTCAD/verify/benchmark/registry.hpp"
+#include "NiTCAD/verify/benchmark/tvb32.hpp"
 #include "NiTCAD/verify/reference/admittance.hpp"
 #include "NiTCAD/verify/reference/metrics.hpp"
 #include "NiTCAD/verify/reference/qe_junction.hpp"
@@ -387,6 +389,37 @@ BenchmarkResult run_tvb18(Tier tier) {
     }
     apply_known_findings(r, known_findings());
     return r;
+}
+
+// TVB-32 on this benchmark's device (16.44): N = 128 (the coarsest); the small-signal run at zero bias and the three
+// forward biases at f = 0, 1e4 and 1e6 Hz; C9 at 0.40 V from DC points 0.40 V +- 1 mV and +- 2 mV; the equilibrium.
+Tvb32Run tvb18_consistency() {
+    Tvb32Run run;
+    const int N = ladder[3];
+    const device::Device d = diode(N);
+    const std::string name = "TVB-18 diode N = " + std::to_string(N);
+    const solve::SmallSignalOptions o{.steady = options(tol_newton), .frequencies_Hz = {0.0, 1e4, 1e6}};
+    std::vector<std::vector<double>> points{{0.0, 0.0}};
+    for (const double V : biases) points.push_back({V, 0.0});
+    const auto s = solve::solve_small_signal(d, points, o);
+    if (!s || s->stopped) return {{}, name + ": " + (s ? s->stopped->message : s.error().message)};
+    const consistency::DeviceData data = device_data(d, o.steady.models);
+    Tvb32Collector col{run.entries, name, d.contacts().size()};
+    col.ac(*s, d.mesh(), data, "");
+    constexpr double h = 1e-3;
+    const double V = biases[1];
+    const std::vector<std::vector<double>> stencil{{V - 2 * h, 0.0}, {V - h, 0.0}, {V + h, 0.0}, {V + 2 * h, 0.0}};
+    const auto st = solve::sweep_bias(d, stencil, o.steady);
+    if (!st || st->stopped || st->points.size() != stencil.size()) {
+        return {std::move(run.entries), name + ", C9 stencil: " +
+                                            (!st ? st.error().message : st->stopped ? st->stopped->message : "short")};
+    }
+    const consistency::DcStencil dcs{.contact = 0, .h_V = h,
+                                     .points = {&st->points[0], &st->points[1], &st->points[2], &st->points[3]}};
+    col.add(bias_label(s->points[2].dc), false, consistency::check_c9(*s, 2, dcs, d.mesh(), data));
+    std::string error;
+    if (!col.equilibrium(d, o.steady.models, error)) return {std::move(run.entries), error};
+    return run;
 }
 
 }  // namespace NiTCAD::verify::benchmark

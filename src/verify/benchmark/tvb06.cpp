@@ -23,7 +23,9 @@
 #include "NiTCAD/physics/insulator.hpp"
 #include "NiTCAD/physics/semiconductor.hpp"
 #include "NiTCAD/solve/small_signal.hpp"
+#include "NiTCAD/verify/benchmark/device_data.hpp"
 #include "NiTCAD/verify/benchmark/registry.hpp"
+#include "NiTCAD/verify/benchmark/tvb32.hpp"
 #include "NiTCAD/verify/reference/capacitor.hpp"
 
 namespace NiTCAD::verify::benchmark {
@@ -59,6 +61,41 @@ ComparisonRecord record(const std::string& quantity, const std::string& unit, in
     return c;
 }
 
+// The stack at N nodes across (1D, or 2D N x N): its description, the x nodes, the last SiO2 node k and t1.
+struct Stack {
+    device::DeviceDescription description;
+    std::vector<double> x;
+    int k = 0;
+    double t1 = 0.0;
+};
+
+Stack stack(int dimension, int N, const physics::Insulator& hk) {
+    const double h = stack_cm / (N - 1);
+    const int k = static_cast<int>(std::lround(0.4 * (N - 1) - 0.5));  // last SiO2 node
+    std::vector<double> x(static_cast<std::size_t>(N));
+    for (int i = 0; i < N; ++i) x[static_cast<std::size_t>(i)] = h * i;
+    const double t1 = 0.5 * (x[static_cast<std::size_t>(k)] + x[static_cast<std::size_t>(k + 1)]);
+    std::vector<double> y;
+    for (int j = 0; j < N; ++j) y.push_back(width_cm * j / (N - 1));
+    mesh::Mesh m = dimension == 1 ? *mesh::make_tensor_grid(x) : *mesh::make_tensor_grid(x, y);
+    const std::size_t n = m.node_count();
+    std::vector<device::RegionId> region(n, 0);
+    for (std::size_t i = 0; i < n; ++i) region[i] = m.points()[i][0] > t1 ? 1 : 0;
+    device::Contact a{"a", device::ContactKind::electrode, m.find_boundary("x_min")->nodes};
+    device::Contact b{"b", device::ContactKind::electrode, m.find_boundary("x_max")->nodes};
+    a.electrode = b.electrode = {.kind = device::GateElectrode::metal, .work_function_eV = 4.5};
+    device::DeviceDescription dd{.mesh = std::move(m),
+                                 .temperature_K = 300.0,
+                                 .regions = {{"oxide", physics::silicon_dioxide()}, {"highk", hk}},
+                                 .node_region = std::move(region),
+                                 .donors = std::vector<double>(n, 0.0),
+                                 .acceptors = std::vector<double>(n, 0.0),
+                                 .contacts = {std::move(a), std::move(b)},
+                                 .interfaces = {{"oxide", "highk"}}};
+    dd.reference_material = physics::silicon();
+    return {std::move(dd), std::move(x), k, t1};
+}
+
 }  // namespace
 
 BenchmarkResult run_tvb06(Tier tier) {
@@ -80,32 +117,13 @@ BenchmarkResult run_tvb06(Tier tier) {
     if (tier != Tier::fast) levels.push_back({2, 32});
     for (const Level lv : levels) {
         const int N = lv.nodes;
-        const double h = stack_cm / (N - 1);
-        const int k = static_cast<int>(std::lround(0.4 * (N - 1) - 0.5));  // last SiO2 node
-        std::vector<double> x(static_cast<std::size_t>(N));
-        for (int i = 0; i < N; ++i) x[static_cast<std::size_t>(i)] = h * i;
-        const double t1 = 0.5 * (x[static_cast<std::size_t>(k)] + x[static_cast<std::size_t>(k + 1)]);
+        Stack st = stack(lv.dimension, N, *hk);
+        const std::vector<double>& x = st.x;
+        const int k = st.k;
+        const double t1 = st.t1;
         const double t2 = stack_cm - t1;
-        std::vector<double> y;
-        for (int j = 0; j < N; ++j) y.push_back(width_cm * j / (N - 1));
-        mesh::Mesh m = lv.dimension == 1 ? *mesh::make_tensor_grid(x) : *mesh::make_tensor_grid(x, y);
-        const std::size_t n = m.node_count();
-        std::vector<device::RegionId> region(n, 0);
-        for (std::size_t i = 0; i < n; ++i) region[i] = m.points()[i][0] > t1 ? 1 : 0;
-        device::Contact a{"a", device::ContactKind::electrode, m.find_boundary("x_min")->nodes};
-        device::Contact b{"b", device::ContactKind::electrode, m.find_boundary("x_max")->nodes};
-        a.electrode = b.electrode = {.kind = device::GateElectrode::metal, .work_function_eV = 4.5};
-        device::DeviceDescription dd{.mesh = std::move(m),
-                                     .temperature_K = 300.0,
-                                     .regions = {{"oxide", physics::silicon_dioxide()}, {"highk", *hk}},
-                                     .node_region = std::move(region),
-                                     .donors = std::vector<double>(n, 0.0),
-                                     .acceptors = std::vector<double>(n, 0.0),
-                                     .contacts = {std::move(a), std::move(b)},
-                                     .interfaces = {{"oxide", "highk"}}};
-        dd.reference_material = physics::silicon();
         const std::string label = std::to_string(lv.dimension) + "D N = " + std::to_string(N);
-        const auto created = device::Device::create(std::move(dd));
+        const auto created = device::Device::create(std::move(st.description));
         if (!created) {
             r.run_error = label + ": " + created.error().message;
             return r;
@@ -148,6 +166,24 @@ BenchmarkResult run_tvb06(Tier tier) {
     }
     apply_known_findings(r, known_findings());
     return r;
+}
+
+// TVB-32 on this benchmark's device (16.44): 1D N = 32, the benchmark's point (0, 1) V and zero bias, at 1 MHz.
+Tvb32Run tvb06_consistency() {
+    Tvb32Run run;
+    physics::InsulatorParameters hk_p = physics::silicon_dioxide_parameters;
+    hk_p.eps_r = eps_hk;
+    const auto hk = physics::Insulator::create(hk_p);
+    if (!hk) return {{}, "TVB-06: high-k insulator: " + hk.error().message};
+    Stack st = stack(1, 32, *hk);
+    const auto d = device::Device::create(std::move(st.description));
+    if (!d) return {{}, "TVB-06: " + d.error().message};
+    const solve::SmallSignalOptions o{.frequencies_Hz = {frequency_Hz}};
+    const auto s = solve::solve_small_signal(*d, std::vector<std::vector<double>>{{0.0, 0.0}, {0.0, 1.0}}, o);
+    if (!s || s->stopped) return {{}, "TVB-06 stack 1D N = 32: " + (s ? s->stopped->message : s.error().message)};
+    Tvb32Collector col{run.entries, "TVB-06 stack 1D N = 32", d->contacts().size()};
+    col.ac(*s, d->mesh(), device_data(*d, o.steady.models), "");
+    return run;
 }
 
 }  // namespace NiTCAD::verify::benchmark

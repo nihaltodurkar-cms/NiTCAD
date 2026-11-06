@@ -48,7 +48,9 @@
 #include "NiTCAD/physics/recombination.hpp"
 #include "NiTCAD/physics/semiconductor.hpp"
 #include "NiTCAD/solve/bias.hpp"
+#include "NiTCAD/verify/benchmark/device_data.hpp"
 #include "NiTCAD/verify/benchmark/registry.hpp"
+#include "NiTCAD/verify/benchmark/tvb32.hpp"
 #include "NiTCAD/verify/reference/metrics.hpp"
 #include "NiTCAD/verify/reference/minority_diffusion.hpp"
 #include "NiTCAD/verify/study/study.hpp"
@@ -137,9 +139,10 @@ struct Solved {
 };
 
 // Delta n = n(G) - n(0) at every node, G scaled from the unit-peak generation by G0.
-std::expected<Solved, std::string> solve_level(const device::Device& d, const std::vector<double>& n_eq,
-                                               const reference::MinorityProblem& unit, double G0, double n0,
-                                               double tol = tol_newton) {
+// The operating point at zero bias under the generation G0 exp(-z^2 / 2).
+std::expected<results::BiasPoint, base::Error> generated_point(const device::Device& d,
+                                                               const reference::MinorityProblem& unit, double G0,
+                                                               double tol) {
     const std::size_t n = d.mesh().node_count();
     assemble::ManufacturedSources ms;
     for (std::size_t i = 0; i < n; ++i) {
@@ -149,7 +152,14 @@ std::expected<Solved, std::string> solve_level(const device::Device& d, const st
     ms.hole_generation = ms.electron_generation;
     solve::BiasOptions o = options(tol);
     o.models.manufactured = &ms;  // alive through the solve
-    const auto s = solve::solve_bias(d, std::vector<double>{0.0, 0.0}, o);
+    return solve::solve_bias(d, std::vector<double>{0.0, 0.0}, o);
+}
+
+std::expected<Solved, std::string> solve_level(const device::Device& d, const std::vector<double>& n_eq,
+                                               const reference::MinorityProblem& unit, double G0, double n0,
+                                               double tol = tol_newton) {
+    const std::size_t n = d.mesh().node_count();
+    const auto s = generated_point(d, unit, G0, tol);
     if (!s) return std::unexpected(s.error().message);
     Solved out;
     for (std::size_t i = 0; i < n; ++i) {
@@ -397,6 +407,28 @@ BenchmarkResult run_tvb15(Tier tier) {
     r.comparisons.push_back(std::move(al));
     apply_known_findings(r, known_findings());
     return r;
+}
+
+// TVB-32 on this benchmark's device (16.44): N = 64; zero bias without and with the E part's generation (the TVQ3
+// hook, G0 for a reference peak of 5e-9 N_A); the equilibrium.
+Tvb32Run tvb15_consistency() {
+    Tvb32Run run;
+    const Inputs in = inputs();
+    const reference::MinorityProblem unit = problem(in, 1.0);
+    const double gE = e_peak * NA / reference::minority_excess(unit, 0.5 * L_cm).value.hi;
+    const device::Device d = bar(64);
+    const solve::BiasOptions o = options();
+    const consistency::DeviceData data = device_data(d, o.models);
+    Tvb32Collector col{run.entries, "TVB-15 bar N = 64", d.contacts().size()};
+    const auto p0 = solve::solve_bias(d, std::vector<double>{0.0, 0.0}, o);
+    if (!p0) return {{}, "TVB-15 bar N = 64: " + p0.error().message};
+    col.dc(*p0, d.mesh(), data, bias_label(*p0));
+    const auto pg = generated_point(d, unit, gE, tol_newton);
+    if (!pg) return {std::move(run.entries), "TVB-15 bar N = 64, generated: " + pg.error().message};
+    col.dc(*pg, d.mesh(), data, bias_label(*pg) + ", generation G0 = " + shortest(gE) + " cm^-3 s^-1");
+    std::string error;
+    if (!col.equilibrium(d, o.models, error)) return {std::move(run.entries), error};
+    return run;
 }
 
 }  // namespace NiTCAD::verify::benchmark

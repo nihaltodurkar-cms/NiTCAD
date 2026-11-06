@@ -27,7 +27,9 @@
 #include "NiTCAD/physics/insulator.hpp"
 #include "NiTCAD/physics/semiconductor.hpp"
 #include "NiTCAD/solve/small_signal.hpp"
+#include "NiTCAD/verify/benchmark/device_data.hpp"
 #include "NiTCAD/verify/benchmark/registry.hpp"
+#include "NiTCAD/verify/benchmark/tvb32.hpp"
 #include "NiTCAD/verify/reference/capacitor.hpp"
 #include "NiTCAD/verify/reference/metrics.hpp"
 #include "NiTCAD/verify/study/study.hpp"
@@ -60,9 +62,8 @@ struct Level {
     double h = 0.0, error = 0.0, u_iter = 0.0, C = 0.0;
 };
 
-// The annulus as M sectors and its 2M boundary patches; the electrodes' nodes from those patches. One level per Newton
-// tolerance in tols, on one mesh.
-std::expected<std::vector<Level>, std::string> run_levels(int M, double C_ref, const std::vector<double>& tols) {
+// The annulus as M sectors and its 2M boundary patches; the electrodes' nodes from those patches; and its mean spacing.
+std::expected<device::Device, std::string> coax(int M, double& spacing) {
     std::vector<mesh::Point> inner(static_cast<std::size_t>(M)), outer(static_cast<std::size_t>(M));
     for (int l = 0; l < M; ++l) {
         const double t = 2.0 * std::numbers::pi * l / M;
@@ -79,7 +80,7 @@ std::expected<std::vector<Level>, std::string> run_levels(int M, double C_ref, c
     const double h = 2.0 * std::numbers::pi * a_cm / M;
     auto gm = mesh::generate_mesh(g, {.max_size = h});
     if (!gm) return std::unexpected("M = " + std::to_string(M) + ": generate_mesh: " + gm.error().message);
-    const double spacing = study::mean_spacing(gm->mesh);
+    spacing = study::mean_spacing(gm->mesh);
     const auto nodes_of = [&](const char* prefix) {
         std::vector<mesh::NodeId> v;
         for (int l = 0; l < M; ++l) {
@@ -102,8 +103,16 @@ std::expected<std::vector<Level>, std::string> run_levels(int M, double C_ref, c
                                  .acceptors = std::vector<double>(n, 0.0),
                                  .contacts = {std::move(ca), std::move(cb)}};
     dd.reference_material = physics::silicon();
-    const auto d = device::Device::create(std::move(dd));
+    auto d = device::Device::create(std::move(dd));
     if (!d) return std::unexpected("M = " + std::to_string(M) + ": " + d.error().message);
+    return std::move(*d);
+}
+
+// One level per Newton tolerance in tols, on one mesh.
+std::expected<std::vector<Level>, std::string> run_levels(int M, double C_ref, const std::vector<double>& tols) {
+    double spacing = 0.0;
+    const auto d = coax(M, spacing);
+    if (!d) return std::unexpected(d.error());
     const std::vector<std::vector<double>> points{{0.0, 1.0}};
     std::vector<Level> out;
     for (const double tol : tols) {
@@ -192,6 +201,21 @@ BenchmarkResult run_tvb05(Tier tier) {
     for (ComparisonRecord& c : r.comparisons) block_if_interacting(c, fac);
     apply_known_findings(r, known_findings());
     return r;
+}
+
+// TVB-32 on this benchmark's device (16.44): M = 32, the benchmark's point (0, 1) V and zero bias, at 1 MHz.
+Tvb32Run tvb05_consistency() {
+    Tvb32Run run;
+    double spacing = 0.0;
+    const auto d = coax(32, spacing);
+    if (!d) return {{}, "TVB-05: " + d.error()};
+    solve::SmallSignalOptions o{.frequencies_Hz = {frequency_Hz}};
+    o.steady.newton.tol_update = tol_newton;
+    const auto s = solve::solve_small_signal(*d, std::vector<std::vector<double>>{{0.0, 0.0}, {0.0, 1.0}}, o);
+    if (!s || s->stopped) return {{}, "TVB-05 coax M = 32: " + (s ? s->stopped->message : s.error().message)};
+    Tvb32Collector col{run.entries, "TVB-05 coax M = 32", d->contacts().size()};
+    col.ac(*s, d->mesh(), device_data(*d, o.steady.models), "");
+    return run;
 }
 
 }  // namespace NiTCAD::verify::benchmark

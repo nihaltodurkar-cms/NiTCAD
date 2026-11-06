@@ -32,7 +32,9 @@
 #include "NiTCAD/physics/field_mobility.hpp"
 #include "NiTCAD/physics/semiconductor.hpp"
 #include "NiTCAD/solve/bias.hpp"
+#include "NiTCAD/verify/benchmark/device_data.hpp"
 #include "NiTCAD/verify/benchmark/registry.hpp"
+#include "NiTCAD/verify/benchmark/tvb32.hpp"
 #include "NiTCAD/verify/reference/energy_layer.hpp"
 #include "NiTCAD/verify/reference/model_mobility.hpp"
 
@@ -280,6 +282,38 @@ BenchmarkResult run_tvb13(Tier tier) {
     }
     apply_known_findings(r, known_findings());
     return r;
+}
+
+// TVB-32 on this benchmark's devices (16.44): the drift bar (N = 64) swept from zero bias through the four fields; the
+// energy-balance bar (N = 128, the coarsest) swept from zero bias by half decades to 1e4 V/cm; each equilibrium.
+Tvb32Run tvb13_consistency() {
+    Tvb32Run run;
+    std::string error;
+    for (const bool energy : {false, true}) {
+        const int N = energy ? eb_nodes[0] : drift_nodes;
+        const double L = energy ? eb_length[1] : drift_length;
+        const device::Device d = bar(N, L);
+        const std::string name = std::string("TVB-13 ") + (energy ? "energy-balance" : "drift") + " bar N = " +
+                                 std::to_string(N);
+        std::vector<std::vector<double>> points{{0.0, 0.0}};
+        if (energy) {
+            for (double E = 1e2; E <= eb_fields[1] * (1.0 + 1e-12); E *= std::sqrt(10.0)) points.push_back({0.0, E * L});
+            points.back()[1] = eb_fields[1] * L;
+        } else {
+            for (const double E : drift_fields) points.push_back({0.0, E * L});
+        }
+        const solve::BiasOptions o = options(energy);
+        const auto s = solve::sweep_bias(d, points, o);
+        if (!s || s->stopped || s->points.size() != points.size()) {
+            return {std::move(run.entries),
+                    name + ": " + (!s ? s.error().message : s->stopped ? s->stopped->message : "short sweep")};
+        }
+        Tvb32Collector col{run.entries, name, d.contacts().size()};
+        const consistency::DeviceData data = device_data(d, o.models);
+        for (const auto& p : s->points) col.dc(p, d.mesh(), data, bias_label(p));
+        if (!col.equilibrium(d, o.models, error)) return {std::move(run.entries), error};
+    }
+    return run;
 }
 
 }  // namespace NiTCAD::verify::benchmark

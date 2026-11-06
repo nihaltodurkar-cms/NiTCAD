@@ -75,7 +75,7 @@ constexpr std::array<Benchmark, 52> shipped{{
     {"TVB-31.29", "Fermi orders -1, 0, 1 and the thermopower factor", Tier::fast, &run_tvb31_29},
     {"TVB-31.30", "SiO2 data", Tier::fast, &run_tvb31_30},
     {"TVB-31.31", "Non-silicon material sets", Tier::fast, &run_tvb31_31},
-    {"TVB-32", "The consistency suite C1-C12 on the three TVR-1 decks", Tier::fast, [](Tier) { return run_tvb32(); }},
+    {"TVB-32", "The consistency suite C1-C12 on the three TVR-1 decks", Tier::fast, &run_tvb32},
 }};
 
 int pardiso_thread_count = 1;

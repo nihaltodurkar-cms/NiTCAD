@@ -116,7 +116,8 @@ void set_pardiso_threads(int threads);
 [[nodiscard]] BenchmarkResult run_tvb31_29(Tier tier);  // Fermi orders and thermopower factor
 [[nodiscard]] BenchmarkResult run_tvb31_30(Tier tier);  // SiO2 data
 [[nodiscard]] BenchmarkResult run_tvb31_31(Tier tier);  // non-silicon material sets
-[[nodiscard]] BenchmarkResult run_tvb32();
+// fast: the three decks; full and nightly: + the TVR-4 benchmark devices (16.44)
+[[nodiscard]] BenchmarkResult run_tvb32(Tier tier = Tier::fast);
 
 struct KnownFinding {
     std::string_view benchmark;

@@ -38,7 +38,9 @@
 #include "NiTCAD/solve/small_signal.hpp"
 #include "NiTCAD/solve/transient.hpp"
 #include "NiTCAD/solve/waveform.hpp"
+#include "NiTCAD/verify/benchmark/device_data.hpp"
 #include "NiTCAD/verify/benchmark/registry.hpp"
+#include "NiTCAD/verify/benchmark/tvb32.hpp"
 #include "NiTCAD/verify/reference/first_integral.hpp"
 #include "NiTCAD/verify/reference/metrics.hpp"
 #include "NiTCAD/verify/reference/mos_capacitor.hpp"
@@ -169,9 +171,9 @@ struct DdLevel {
     std::size_t steps = 0;
 };
 
-std::expected<DdLevel, std::string> dd_level(int N, double tol, double dt, double ramp, double VFB) {
-    const auto d = make_device(N);
-    if (!d) return std::unexpected(d.error());
+// The deep-depletion ramp on device d (N nodes, for the messages).
+std::expected<results::Transient, std::string> dd_transient(const device::Device& d, int N, double tol, double dt,
+                                                            double ramp, double VFB) {
     const double top = dd_offsets[std::size(dd_offsets) - 1];
     auto gate = solve::Waveform::ramp(VFB, VFB + top, 0.0, ramp);
     if (!gate) return std::unexpected(gate.error().message);
@@ -187,9 +189,18 @@ std::expected<DdLevel, std::string> dd_level(int N, double tol, double dt, doubl
     for (const double dv : dd_offsets) {
         if (dv < top) o.output_times_s.push_back(ramp * dv / top);
     }
-    const auto s = solve::solve_transient(*d, w, o);
+    auto s = solve::solve_transient(d, w, o);
     if (!s) return std::unexpected("deep depletion, N = " + std::to_string(N) + ": " + s.error().message);
     if (s->stopped) return std::unexpected("deep depletion, N = " + std::to_string(N) + ": " + s->stopped->message);
+    return std::move(*s);
+}
+
+std::expected<DdLevel, std::string> dd_level(int N, double tol, double dt, double ramp, double VFB) {
+    const auto d = make_device(N);
+    if (!d) return std::unexpected(d.error());
+    const double top = dd_offsets[std::size(dd_offsets) - 1];
+    const auto s = dd_transient(*d, N, tol, dt, ramp, VFB);
+    if (!s) return std::unexpected(s.error());
     DdLevel lv;
     lv.steps = s->points.size();
     const auto& x = d->mesh().points();
@@ -208,6 +219,21 @@ std::expected<DdLevel, std::string> dd_level(int N, double tol, double dt, doubl
     return lv;
 }
 
+std::expected<reference::DD, std::string> flat_band(const physics::Semiconductor& si) {
+    const double VT = base::thermal_voltage(T), ni = physics::intrinsic_density(si, T);
+    return reference::flat_band_voltage({.work_function_eV = phi_m_eV,
+                                         .electron_affinity_eV = si.parameters().electron_affinity_eV,
+                                         .band_gap_eV = physics::band_gap_eV(si, T),
+                                         .conduction_dos_cm3 = physics::conduction_band_dos(si, T),
+                                         .valence_dos_cm3 = physics::valence_band_dos(si, T),
+                                         .thermal_voltage_V = VT,
+                                         .ni_cm3 = ni,
+                                         .net_doping_cm3 = -acceptors_cm3,
+                                         .fixed_charge_cm2 = fixed_charge_cm2,
+                                         .q_C = base::q_C,
+                                         .oxide_capacitance_F_per_cm2 = eps_ox_r * base::eps0_F_per_cm / t_ox_cm});
+}
+
 }  // namespace
 
 BenchmarkResult run_tvb10(Tier tier) {
@@ -223,17 +249,7 @@ BenchmarkResult run_tvb10(Tier tier) {
     const double VT = base::thermal_voltage(T), q = base::q_C;
     const double cox = eps_ox_r * base::eps0_F_per_cm / t_ox_cm;
     const double ni = physics::intrinsic_density(si, T);
-    const auto vfb = reference::flat_band_voltage({.work_function_eV = phi_m_eV,
-                                                   .electron_affinity_eV = si.parameters().electron_affinity_eV,
-                                                   .band_gap_eV = physics::band_gap_eV(si, T),
-                                                   .conduction_dos_cm3 = physics::conduction_band_dos(si, T),
-                                                   .valence_dos_cm3 = physics::valence_band_dos(si, T),
-                                                   .thermal_voltage_V = VT,
-                                                   .ni_cm3 = ni,
-                                                   .net_doping_cm3 = -acceptors_cm3,
-                                                   .fixed_charge_cm2 = fixed_charge_cm2,
-                                                   .q_C = q,
-                                                   .oxide_capacitance_F_per_cm2 = cox});
+    const auto vfb = flat_band(si);
     if (!vfb) {
         r.run_error = "reference: " + vfb.error();
         return r;
@@ -457,6 +473,33 @@ BenchmarkResult run_tvb10(Tier tier) {
     }
     apply_known_findings(r, known_findings());
     return r;
+}
+
+// TVB-32 on this benchmark's device (16.44): N = 64; the HF run (equilibrium Poisson) at zero bias, V_FB + 0.5 V and
+// V_FB + 2 V at its three frequencies; the equilibrium; the deep-depletion ramp (C6).
+Tvb32Run tvb10_consistency() {
+    Tvb32Run run;
+    const physics::Semiconductor si = physics::silicon();
+    const auto vfb = flat_band(si);
+    if (!vfb) return {{}, "TVB-10: reference: " + vfb.error()};
+    const double VFB = vfb->to_double();
+    const auto d = make_device(64);
+    if (!d) return {{}, "TVB-10: " + d.error()};
+    Tvb32Collector col{run.entries, "TVB-10 MOS-C N = 64", d->contacts().size()};
+    const solve::BiasOptions hf = options(1e-12, solve::Equations::equilibrium_poisson);
+    const solve::SmallSignalOptions o{
+        .steady = hf, .frequencies_Hz = std::vector<double>(std::begin(frequencies_Hz), std::end(frequencies_Hz))};
+    const auto s = solve::solve_small_signal(
+        *d, std::vector<std::vector<double>>{{0.0, 0.0}, {VFB + 0.5, 0.0}, {VFB + 2.0, 0.0}}, o);
+    if (!s || s->stopped) return {{}, "TVB-10 HF, N = 64: " + (s ? s->stopped->message : s.error().message)};
+    col.ac(*s, d->mesh(), device_data(*d, hf.models), "HF, ");
+    std::string error;
+    if (!col.equilibrium(*d, hf.models, error)) return {std::move(run.entries), error};
+    const auto t = dd_transient(*d, 64, 1e-12, dt_dd, ramp_s, VFB);
+    if (!t) return {std::move(run.entries), "TVB-10: " + t.error()};
+    const solve::BiasOptions ddo = options(1e-12, solve::Equations::drift_diffusion);
+    col.transient(*t, d->mesh(), device_data(*d, ddo.models), "deep-depletion ramp");
+    return run;
 }
 
 }  // namespace NiTCAD::verify::benchmark
