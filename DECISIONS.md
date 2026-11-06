@@ -10014,6 +10014,50 @@ are independent) is tested directly rather than argued.
   - Debug serial verify passes, 63/63 in 71.7 s.
   - `registry`: 44 benchmarks, TVB-15 in `full`.
 
+**16.27 Step 5 as built: qe_junction and TVB-17.**
+- `verify/reference/qe_junction` (PD, base-free):
+  - The QE junction at bias V is TVR-2's equilibrium junction with n_i → m = n_i e^{V/2V_T}, the potential shifted by V/2. Bias enters only through m. Derived in the header; the L0 test checks it against `pn_junction` at m.
+  - Q = ε E_max = √(2 q ε V_T Φ_n(u_j)), with u_j by Brent in double-double.
+  - C = −dQ/dV by one dual-number Newton step from the converged root. It is exact to rounding (du_j/dv = −F_v/F_u).
+  - The second method is complex step (h = 1e-200) on Q(v) with complex Newton for u_j.
+  - **Plan deviation (method only):** 16.3 says "C by complex step on Q(V)", which is the second method here. Complex step cannot run through a double-double Brent root, so the primary is the dual number.
+  - A guard refuses m < 1e-140 cm⁻³ (about −15 V at 300 K), where m² leaves the normal range.
+- Derived (PD, recorded because 16.3 expected a reportable "ε/W difference"):
+  - Dropping the junction's minority terms and taking n_n = N_D, p_p = N_A turns the first integral into exactly ε/W with V_bi − V − 2V_T.
+  - So ε/W(−2V_T) equals the QE C up to terms exponentially small in the barrier and m²/N².
+  - Measured: 9.1e-8 at −0.5 V, 1.4e-10 at −1 V, 4.6e-16 at −2 V.
+- L0 tests (`verify.qe_junction`):
+  - zero bias against `pn_junction` (≤ 1e-28);
+  - the shift identity at four biases (≤ 1e-15, the double rounding of m);
+  - dual C against complex step (≤ 1e-13) and against a Richardson central difference with exact 2⁻²⁰ steps (≤ 1e-14);
+  - ε/W converging to C;
+  - the range guard and the input errors.
+- Mutation (reference): 11 mutants, 10 caught. The survivor is an equivalent mutant: the derivative part of F_u, which drops out of the Newton step's derivative at the root. The range-guard mutant survived until a −18 V case refused only by the guard was added.
+- TVB-17 (full tier only):
+  - The diode: TVB-07's junction on [−1.5, 1.5] µm, no G−R, the anode on the p side.
+  - V = −0.5, −1, −2 V; C = Im Y_aa/ω at 1 kHz; N = 64…512.
+  - DT-Q4: applicable at every level, with quasi-Fermi drops ≤ 5.6e-11 V against 1e-3 V_T = 2.6e-5 V.
+  - U_ref ≤ 1e-11: dual vs complex step ≤ 4.6e-16, plus the contact tail of 1.9e-13, 8.6e-13 and 9.9e-12.
+  - U_iter ≤ 5.9e-9, below U_disc/10 everywhere.
+
+  | V | finest error (N = 512) | (b) ≤ 1e-3 | orders, finest pair first | spread | (a) |
+  |---|---|---|---|---|---|
+  | −0.5 V | 5.65e-5 | pass | 1.9986, 2.0010, 2.2256 | 0.225 | not_evaluated |
+  | −1 V | 3.96e-5 | pass | 2.0003, 2.0011, 1.8184 | 0.183 | not_evaluated |
+  | −2 V | 2.48e-5 | pass | 2.0002, 2.0007, 1.8675 | 0.133 | not_evaluated |
+
+  - The coarsest pair (N = 64, h = 47.6 nm, about the 41 nm p-side Debye length) puts the spread above the asymptotic limit of 0.1. The finer pairs agree with 2 to 1e-3.
+  - The frozen expected outcome (pass) is unmet on the three order comparisons, so `verify_benchmark.tvr4_full` fails (36.6 s). Nothing has been changed after the run (TVM2).
+  - The benchmark's own mutation run waits for the ruling: with the test failing, every mutant would look caught.
+- Timing: Debug serial verify passes, 64/64 in 72.5 s (`qe_junction` 0.02 s). `registry`: 45 benchmarks, TVB-17 in `full`.
+
+**DT-Q22 (TVB-17's order).**
+- (A) Record it as found, as DT-Q20 A: the three order comparisons are not_evaluated, with the orders and spreads above, and the three finest-accuracy passes stand. No criterion, ladder or construction changes.
+- (B) Shorten the diode to TVB-07's L = 1 µm per side, so that h(64) = 32 nm. This changes my construction after a run, to make a check pass, so it is TVM2's concern again. The contact tail would rise to about 3e-6 at −2 V, still within U_ref ≤ 1e-4. Whether the spread would then meet 0.1 is not known.
+- (C) Judge p̂ on the finest three levels (14.7's 3-level rule). This changes the method after the run.
+
+**Recommendation: A.** It matches DT-Q20 and leaves 16.8 untouched. The finest pairs show the scheme's order cleanly at every bias.
+
 
 
 ---

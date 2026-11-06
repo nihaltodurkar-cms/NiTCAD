@@ -80,3 +80,15 @@ TEST_CASE("TVB-15: nothing in the fast tier", "[tvr4]") {
     REQUIRE_FALSE(r.run_error.has_value());
     REQUIRE(r.comparisons.empty());
 }
+
+// TVB-17 (depletion capacitance against the QE model, DT-Q4's predicate) is E, full tier only (16.7): at each of
+// V = -0.5, -1, -2 V the order and finest accuracy of C_j pass (16.8).
+TEST_CASE("TVB-17: depletion capacitance, full tier (frozen outcome: pass)", "[.tvr4_full]") {
+    require_all_pass(bench::run_tvb17(bench::Tier::full), 6);
+}
+
+TEST_CASE("TVB-17: nothing in the fast tier", "[tvr4]") {
+    const auto r = bench::run_tvb17(bench::Tier::fast);
+    REQUIRE_FALSE(r.run_error.has_value());
+    REQUIRE(r.comparisons.empty());
+}
