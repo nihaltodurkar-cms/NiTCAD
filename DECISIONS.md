@@ -10067,6 +10067,33 @@ are independent) is tested directly rather than argued.
 - Mutation (TVB-17 benchmark, against the new expected outcome): 12 of 12 caught. The mutants were the DT-Q4 thresholds (electron and hole), the density cut, the U_ref gate, C_ref's sign, the tolerance, a 1 % scale on C, h, the frequency (1e11 Hz), N_D, p_th and the finest-accuracy judgement.
 - `verify_benchmark.tvr4_full` passes.
 
+**16.29 Found before step 6's code: two gaps (owner questions DT-Q23, DT-Q24).**
+- **(a) The (h, tol) factorial was left out of steps 2, 4 and 5.**
+  - 16.2 (p), approved with the plan (16.15, 16.16), requires every E and A benchmark to run the 2×2 (h, tol) factorial at its finest level and report ε_int. An ε_int above 10 % of U blocks an E pass (§4.1).
+  - TVB-05, TVB-15 (E and A) and TVB-17 do not run it. `reference::interaction_contrast` and `combine_uncertainty` exist (metrics.hpp), but no benchmark calls them. Their recorded passes (16.23, 16.26, 16.28) therefore lack a term the plan requires.
+  - This is my omission, not a finding about NiTCAD. Nothing has been changed.
+- **(b) TVB-16's ideality and reverse exponent have no frozen tolerance.** 16.19 freezes only the log-error rule on J(V). 16.18 (f) says the reverse exponent "is judged" against the reference's own exponent, and 16.4 lists ideality, but neither has a criterion.
+
+**DT-Q23 (the factorial).**
+- (A) Before step 6, add it to TVB-05, TVB-15 and TVB-17 in one fix commit, and from now on to every E/A benchmark.
+  - At the finest level: e(h, tol), e(h, tol/100), e(h/2, tol) and e(h/2, tol/100), with tol the Newton `tol_update` (1e-12 → 1e-14) and h/2 one more level.
+  - ε_int is reported, and enters U by §4.1. If it exceeds 10 % of U, the E pass is blocked.
+  - The frozen expected outcomes would change only if a pass is blocked, and that would be recorded as found.
+  - If tol/100 cannot be reached (Newton stalls at rounding), that level is recorded as not_evaluated with the measured update, not loosened.
+- (B) Defer it to the close-out (step 14), for all TVR-4 benchmarks at once.
+
+**Recommendation: A.** The rule applies to each benchmark. Building TVB-16 onward with it, while 05/15/17 lack it, would leave the unit inconsistent.
+
+**DT-Q24 (TVB-16's derivative quantities).**
+- (A) Judge the ideality n = (1/V_T) dV/d ln J (forward) and the reverse exponent d ln|J|/d ln(V_bi − V) ((ii) only) by 16.19's rule applied to the derivative, as TVB-21 does for S:
+  - |x_sim − x_ref| ≤ U_num + U_ref + ε_x;
+  - U_num is the GCI of x on the ladder, and U_ref the reference's second-method difference;
+  - ε_x carries ε_J from the two biases of the difference: ε_x = |x_ref| (ε_J,k/J_k + ε_J,k+1/J_k+1) / |Δ ln y|, with y = J for n and y = V_bi − V for the exponent;
+  - applicability is as for J at both biases.
+- (B) Report n and the exponent as diagnostics only. J(V) at each bias is already gated by the log error.
+
+**Recommendation: A.** 16.18 (f) says the exponent is judged, and this rule is the one already frozen for S. ε_x is conservative (a sum of magnitudes).
+
 
 
 ---
