@@ -44,6 +44,18 @@ TEST_CASE("TVB-06: the dielectric stack, full tier (frozen outcome: pass)", "[.t
     require_all_pass(bench::run_tvb06(bench::Tier::full), 9);  // + 2D 32 x 32
 }
 
+// TVB-13 (the uniform resistor, D; 16.2 (f), 16.8 frozen; construction 16.42). Frozen outcome, set before its first
+// run: every comparison passes. Fast: the Canali current at four fields; full: + T_n - T_L at two fields, N = 128
+// and 512, on the nodes beyond the layer's tail. Found on the first run (16.42): the drift passes; T_n - T_L fails at
+// both fields and both N (the reference taken at V/L, not the interior's own field); DT-Q37 open.
+TEST_CASE("TVB-13: Canali drift, fast tier (frozen outcome: pass)", "[tvr4]") {
+    require_all_pass(bench::run_tvb13(bench::Tier::fast), 4);
+}
+
+TEST_CASE("TVB-13: drift and energy balance, full tier (frozen outcome: pass)", "[.tvr4_full]") {
+    require_all_pass(bench::run_tvb13(bench::Tier::full), 8);
+}
+
 // TVB-05 (coaxial capacitor, 2D generated, M = 32 ... 256 sectors) is E-class and full tier only (16.7). Release-only
 // ctest verify_benchmark.tvr4_full (hidden tag), as tvb31_full. Recorded as found (16.24, DT-Q20 A): the finest
 // accuracy passes; the order is not_evaluated, its successive orders 2.0545, 2.0825, 2.1846 spreading 0.102 > 0.1

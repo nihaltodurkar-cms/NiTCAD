@@ -10634,6 +10634,79 @@ steps; 16.10's order is otherwise kept.)
 **Recommendation: A** for TVR-4. The fails are a property of the construction: the quantities chosen have no h error.
 They are not errors in NiTCAD. B is the better design, but it changes criteria after seeing their results.
 
+**16.42 Step 11 as built: energy_layer and TVB-13. DT-Q37 open.**
+- **The linearization of 16.18 (a), checked before code** against ED2 (Stratton's current), Poisson and ED3 (the
+  energy flux with c = 5/2, the Joule term J·E, the relaxation term): the three rows and the quartic P = A·D − B·C
+  are as written there.
+- **`verify/reference/energy_layer`** (PD, base-free):
+  - `durand_kerner`: Weierstrass iteration on a monic real polynomial in complex dd, after scaling by the roots'
+    geometric mean.
+  - `energy_layer`: P's coefficients in dd, its four roots, λ = 2/min |Re s|.
+  - **Departure from 16.18 (a):** the second method is not Chebyshev collocation of the linearized ODE with a decay
+    fit. It is the determinant of the unreduced 3 × 3 system at each root, relative to the sum of its six expansion
+    terms' magnitudes.
+    - It is independent of the elimination and of the root finder. Collocation would have checked the same thing
+      at much greater cost, and neither checks the linearization's signs against NiTCAD's equations.
+    - That check is the printed diagnostic below: the decay measured on NiTCAD's own solution.
+  - Found: 2e-32 to 1.7e-30 at the benchmark's three states. (The first normalization, by the rows' norms, gave
+    1e-51, which is not a measure of cancellation. It was replaced before the first NiTCAD run.)
+- **L0** (`energy_layer_test`, 4 cases, 37 assertions): a quartic with real and complex roots (1e-28); roots over ten
+  decades (1e-26 relative); the zero-field limit ±1/L_D, ±√(G/κ) (1e-9); the determinant at three hot states
+  (≤ 1e-25); the refusals.
+- **TVB-13** (`tvb13.cpp`, Tier fast, registered after TVB-12; 50 benchmarks):
+  - Drift (fast and full): field mobility on, L = 1 µm, N = 64, V/L = 1e2 … 1e5 V/cm.
+  - Energy balance (full): N = 128 and 512, judged beyond 30 λ from each contact (13 ln 10 · λ).
+  - μ₀ = the materials' μ_max (doping mobility off, as TVB-11). τ_w is silicon's cited 0.35 ps (ED5 as built: the
+    default silicon set does not carry it). The reference values come from `model_mobility` in dd.
+  - **Lengths chosen from λ before any NiTCAD run:** λ = 96 nm (1e3 V/cm), 0.20 µm (1e4) and 27 µm (1e5). The
+    roots at 1e5 V/cm include 738 /cm, the unscreened cold-carrier mode that EC3's ruling (2026-10-29) describes.
+    L = 20 µm for 1e3 and 1e4 V/cm, and 2 mm for 1e5.
+  - **Construction change after a run error** (no outcome seen): at 1e5 V/cm the 2 mm bar stopped at 632 V (no
+    convergence even at 2⁻²⁰ of the step). At the 20 kV the point needs, the potential's rounding (about 8e-11 in
+    units of V_T) is above Newton's 1e-12 tolerance and comparable to the D criterion. 1e5 V/cm was removed from
+    the energy-balance part; it remains in the drift part. 8 comparisons, not 10.
+- **Frozen outcome, set before the first run:** every comparison passes.
+- **TVB-13's run: 4 pass, 4 fail.** 0.06 s fast and about 1 s full, in Release. The frozen full case fails, so
+  `tvr4_full` fails, pending DT-Q37.
+  - Drift: all 4 pass, with relative errors 7.9e-14, 2.4e-14, 8.6e-16 and 1.7e-16 against 5.8e-11.
+  - **Fail: T_n − T_L at both fields and both N.** The errors are 1.42e-4 and 7.3e-5 (1e3 V/cm, N = 128 and 512),
+    then 6.6e-3 and 4.0e-3 (1e4 V/cm), against 2.3e-10 and 3.7e-9.
+  - **Cause:** the reference was evaluated at V/L. With energy balance the contact layers carry part of the
+    voltage, so the interior's uniform field is not V/L. Measured (printed, not judged): (E_int − V/L)/(V/L) is
+    7.2e-5 and 3.7e-5 (1e3 V/cm), then 4.7e-3 and 2.9e-3 (1e4 V/cm). It falls with N because the layer is under-
+    resolved at these meshes.
+  - At each judged node's own field (its two edges' mean), the rise agrees with the homogeneous rise to 1.3e-14 …
+    1.5e-13, inside 64 ε N². That is 16.2 (f)'s premise: the uniform state at its own field solves the discrete
+    equations exactly.
+  - This is a construction error in the benchmark (V/L was this step's choice; 16.4 says "T_n(E)"). It is not a
+    finding.
+  - **λ checked on NiTCAD's solution** (printed, not judged): |rise − rise(centre)| decays near the contact at
+    2.03e5 and 9.5e4 /cm at N = 512, against min |Re s| = 2.09e5 and 9.9e4 /cm. At N = 128 it decays at 1.55e5
+    and 7.2e4 /cm: under-resolved, but inside the ×2 safety and the 1e-13 margin. This confirms the linearization's
+    signs.
+- **Time:** the fast tier takes 1.97–2.59 s in Debug (0.06 s Release). With TVB-06's 0.11 s that is above 16.7's
+  2 s for both cases. One solve per field instead of the continuation was tried and gave the same (2.04 s); the
+  sweep is kept. The serial Debug `nitcad verify` total is taken at the close-out (step 14), against CV-Q19's 75 s.
+- **Mutation:**
+  - `energy_layer` (13 mutants: κ, G, the quartic's four factors, H's sign, the convergence threshold, the
+    slowest-root choice, λ's factor, the scaling, a determinant term, the Poisson entry): 11 caught. The 2
+    survivors are equivalent:
+    - the scaling exponent (any scale gives the same roots);
+    - the determinant term's sign: it multiplies the Poisson row's zero entry.
+  - TVB-13 (10 mutants: the holes' term, the tail's 13, the rise's 2/3, the predicate, Canali's β, the drift
+    criterion, the rise's denominator, the reference self-check, the Newton tolerance, the T_n criterion): 10
+    caught. They are judged by any change in the printed comparison, failure and reason lines, because the full
+    case is red.
+
+**DT-Q37 (TVB-13's T_n reference).**
+- (A) Evaluate the homogeneous reference at each judged node's own field (its two edges' mean) instead of V/L. The
+  comparison is then the one 16.2 (f) describes. Measured as a diagnostic: 1.3e-14 … 1.5e-13, so all 4 would pass.
+  The interior field's departure from V/L stays printed. This changes a reference input after a run (TVM2).
+- (B) Record as found: 4 fails, pinned, with the cause printed.
+
+**Recommendation: A.** V/L is wrong for this device: the contact layers take part of the voltage. 16.4 names T_n(E)
+at the field, and the criterion is unchanged.
+
 ---
 
 ## New questions the advisor raised (not yet in `ARCHITECTURE.md`)

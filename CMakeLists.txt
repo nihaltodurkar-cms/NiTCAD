@@ -182,6 +182,8 @@ add_custom_command(
           include/NiTCAD/verify/reference/admittance.hpp
           include/NiTCAD/verify/reference/mos_hf.hpp
           include/NiTCAD/verify/reference/linear_transient.hpp
+          include/NiTCAD/verify/reference/energy_layer.hpp
+          src/verify/reference/energy_layer.cpp
           src/verify/reference/linear_transient.cpp
           src/verify/reference/mos_hf.cpp
           src/verify/reference/diode.cpp
@@ -197,7 +199,7 @@ add_library(nitcad_verify_reference STATIC src/verify/reference/double_double.cp
   src/verify/reference/capacitor.cpp src/verify/reference/minority_diffusion.cpp
   src/verify/reference/qe_junction.cpp src/verify/reference/diode.cpp
   src/verify/reference/admittance.cpp src/verify/reference/mos_hf.cpp
-  src/verify/reference/linear_transient.cpp)
+  src/verify/reference/linear_transient.cpp src/verify/reference/energy_layer.cpp)
 add_library(NiTCAD::verify_reference ALIAS nitcad_verify_reference)
 target_include_directories(nitcad_verify_reference PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
 add_dependencies(nitcad_verify_reference nitcad_verify_reference_boundary)
@@ -231,7 +233,8 @@ add_executable(nitcad_verify_test
   tests/verify/reference/diode_test.cpp
   tests/verify/reference/admittance_test.cpp
   tests/verify/reference/mos_hf_test.cpp
-  tests/verify/reference/linear_transient_test.cpp)
+  tests/verify/reference/linear_transient_test.cpp
+  tests/verify/reference/energy_layer_test.cpp)
 target_link_libraries(nitcad_verify_test PRIVATE NiTCAD::verify_reference Catch2::Catch2WithMain)
 nitcad_add_file_tests(verify nitcad_verify_test)
 add_test(NAME verify_reference_boundary
@@ -749,7 +752,7 @@ add_library(nitcad_verify_benchmark STATIC src/verify/benchmark/device_data.cpp
   src/verify/benchmark/tvb15.cpp src/verify/benchmark/tvb16.cpp src/verify/benchmark/tvb17.cpp
   src/verify/benchmark/tvb18.cpp
   src/verify/benchmark/tvb10.cpp
-  src/verify/benchmark/tvb19.cpp
+  src/verify/benchmark/tvb19.cpp src/verify/benchmark/tvb13.cpp
   src/verify/benchmark/tvb31_common.cpp src/verify/benchmark/tvb31_band.cpp
   src/verify/benchmark/tvb31_mobility.cpp
   src/verify/benchmark/tvb31_recombination.cpp
