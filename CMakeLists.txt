@@ -166,6 +166,7 @@ add_custom_command(
           include/NiTCAD/verify/reference/model_band.hpp
           include/NiTCAD/verify/reference/model_mobility.hpp
           include/NiTCAD/verify/reference/model_recombination.hpp
+          include/NiTCAD/verify/reference/model_statistics.hpp
           include/NiTCAD/verify/reference/mos_capacitor.hpp
           src/verify/reference/mos_capacitor.cpp
   COMMENT "verify/reference include boundary (VR2)")
@@ -199,7 +200,8 @@ add_executable(nitcad_verify_test
   tests/verify/reference/special_functions_test.cpp
   tests/verify/reference/model_band_test.cpp
   tests/verify/reference/model_mobility_test.cpp
-  tests/verify/reference/model_recombination_test.cpp)
+  tests/verify/reference/model_recombination_test.cpp
+  tests/verify/reference/model_statistics_test.cpp)
 target_link_libraries(nitcad_verify_test PRIVATE NiTCAD::verify_reference Catch2::Catch2WithMain)
 nitcad_add_file_tests(verify nitcad_verify_test)
 add_test(NAME verify_reference_boundary
@@ -716,7 +718,8 @@ add_library(nitcad_verify_benchmark STATIC src/verify/benchmark/device_data.cpp
   src/verify/benchmark/tvb12.cpp src/verify/benchmark/tvb32.cpp
   src/verify/benchmark/tvb31_common.cpp src/verify/benchmark/tvb31_band.cpp
   src/verify/benchmark/tvb31_mobility.cpp
-  src/verify/benchmark/tvb31_recombination.cpp)
+  src/verify/benchmark/tvb31_recombination.cpp
+  src/verify/benchmark/tvb31_statistics.cpp)
 add_library(NiTCAD::verify_benchmark ALIAS nitcad_verify_benchmark)
 target_include_directories(nitcad_verify_benchmark PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
 target_link_libraries(nitcad_verify_benchmark PUBLIC NiTCAD::device NiTCAD::verify_consistency NiTCAD::deck
@@ -754,7 +757,8 @@ add_executable(nitcad_verify_benchmark_test
   tests/verify/benchmark/code_verification_test.cpp
   tests/verify/benchmark/tvb31_band_test.cpp
   tests/verify/benchmark/tvb31_mobility_test.cpp
-  tests/verify/benchmark/tvb31_recombination_test.cpp)
+  tests/verify/benchmark/tvb31_recombination_test.cpp
+  tests/verify/benchmark/tvb31_statistics_test.cpp)
 target_link_libraries(nitcad_verify_benchmark_test PRIVATE NiTCAD::verify_benchmark
   Catch2::Catch2WithMain)
 nitcad_add_file_tests(verify_benchmark nitcad_verify_benchmark_test)

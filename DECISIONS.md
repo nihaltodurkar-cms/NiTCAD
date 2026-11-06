@@ -8816,6 +8816,72 @@ Mutations:
 Cost (Release): 31.11–31.14 take 0.5 s, 31.15 0.4 s and 31.16 1.1 s, about 2 s in all. The fast/full split
 (MI-Q9) is settled at close-out.
 
+**15.16 Step 6 as built: TVB-31.17–31.19, ionization and the neutral equilibria (2026-11-06).**
+
+Files:
+- `verify/reference/model_statistics.hpp`:
+  - the ionized density, with the bound fraction and the documented complete ionization at depth ≤ 0;
+  - Altermatt–Schenk E_dop(N) and b(N);
+  - the neutral equilibrium as the Brent root (TC5) in η of the double-double charge balance. F_1/2 comes from the
+    TVB-02 reference: its series for x ≤ −2, tanh–sinh (TC4) above.
+  - The condition sums of n, p and η at the root are by implicit differentiation, dη/dx_i = −(∂G/∂x_i)/(∂G/∂η).
+    The densities are held fixed for the inputs that do not move them; they are linear in n_ie, and only g_n and g_p
+    are differenced through F_1/2.
+- `verify/benchmark/tvb31_statistics.cpp`: entries TVB-31.17–31.19. `bound_field` gains the ionization fields, and
+  `other_shipped_value` the Altermatt sets. The rounding-floor findings of 15.15 (`FloorFinding`, `classify_floor`)
+  move to `tvb31_common.hpp`.
+- Tests: `tests/verify/reference/model_statistics_test.cpp`, `tests/verify/benchmark/tvb31_statistics_test.cpp`.
+
+Grids:
+- 31.17 (N = 1e17, kT at 300 K): η −40..40 in steps of ¼ at depths 0, 0+ (the next double), 0.045, 0.1 and 0.3 eV;
+  depth 0..0.3 eV in 256 steps at η −40, −5, 0, 5 and 40; g 2 and 4; b 1, 0.5 and 1e-3.
+- 31.18: N 0 and 1e14–1e21, with the register's Table I values written into the function's argument.
+- 31.19 (legacy silicon at 300 K):
+  - complete ionization, with both statistics, at net doping 0 and ±1–1e21;
+  - ionized, with both statistics and both the legacy fixed levels and the Altermatt levels, over N_D or N_A
+    1e10–1e21, plus 25 compensated pairs N_D = N_A(1 ± 10^-k) about N_A = 1e17.
+
+L0:
+- dN_ion/dη agrees with complex step (h = 1e-30|η|). At b = 1 the value is N·s exactly, and complete ionization holds
+  at depth 0.
+- Altermatt is exact at N_ref and N_b (c = 2).
+- The F_1/2 series and Gauss–Kronrod agree at the switch, and tanh–sinh agrees with Gauss–Kronrod from −1.999 to 60,
+  to 1e-26.
+- The Boltzmann root agrees with its closed form ln((C + √(C² + 4n_ie²))/(2n_ie)) to 1e-29. The Fermi–Dirac root
+  satisfies n − p = C, and degeneracy raises |η| at |C| ≥ 1e19.
+- The implicit condition sums agree with `condition_sum` over re-solved roots to 1e-6.
+
+Outcomes (Release):
+
+| Entry | Pass | Finding | Not applicable |
+|---|---|---|---|
+| 31.17 | 34680 | 4: the legacy levels and degeneracies (PC) | 180 |
+| 31.18 | 1810, incl. the 10 PA Table I rows (bit-equal) | 0 | 4 |
+| 31.19 | 32424: every n and p, and every η but (x) | 942: (x) | 12 |
+
+- **(x), new (MI-Q16).** The η of `fermi_dirac_neutral_equilibrium` misses where |η| is small (|C| ≲ 6e7, η ≲ 3e-3).
+  - Mechanism: the residual forms ln c + log1p(minor/c), with c = |C|/n_ie. Its two terms are each about |ln c| and
+    cancel when c ≪ 1, which leaves an absolute error of about 5e-15. The header documents the root as "good to a
+    few 1e-14 in y".
+  - n and p pass, because the majority is formed as |C| + minor.
+  - **MI-Q16.** (A) Record (x) as a known finding. It is classified by the residual's rounding floor, T = |η| +
+    2|ln c|, as for (viii) and (ix), and a fix is proposed separately (MI-Q10). (B) Leave it failing.
+  - **Ruling (owner standing instruction, "choose recommended", 2026-11-06): A.**
+- **31.19's first run took 151 s in Release.** It used Gauss–Kronrod F_1/2 (1.4 ms each), a ±60 Brent bracket, and
+  condition sums that re-evaluated both densities for all 11 inputs. With tanh–sinh above x = −2 (0.3–1.1 ms), the
+  bracket started about NiTCAD's η (its ends verified by sign and widened ×4, so the root is still the reference's
+  own balance), and the fixed-density condition sums, it takes 6.3 s. That is too long for `fast` at 64 points a
+  decade, and is for the close-out split (MI-Q9).
+
+Mutations:
+- 8 of NiTCAD's `ionization.cpp`, 4 of `statistics.cpp` (the Fermi–Dirac neutral solve), and 8 of
+  `model_statistics.hpp`.
+- **The first run was invalid.** Its Catch filter, `TVB-31.1[789]*`, matched no test, because Catch has no
+  character classes. "No tests ran" exits non-zero, so every mutant looked caught. Rerun with
+  `TVB-31.17*,TVB-31.18*,TVB-31.19*`, after a green baseline check: 19 of 20 are caught. The survivor writes s =
+  1 − e·d for d on y ≤ 0, which is the same number to rounding (an equivalent mutant). Step 5's runs used
+  `TVB-31.1*`, which matches the ten entries 31.10–31.19, and stand.
+
 ---
 
 ## New questions the advisor raised (not yet in `ARCHITECTURE.md`)

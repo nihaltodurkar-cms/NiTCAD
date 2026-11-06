@@ -43,6 +43,9 @@ using tvb31::in_range;
 using tvb31::value_check;
 using tvb31::value_record;
 using tvb31::zero_or_in_range;
+using tvb31::FloorFinding;
+using tvb31::classify_floor;
+using tvb31::note_if_stale;
 
 constexpr std::string_view n_range = "N 0 or within the source's range [1e13, 1e21] cm^-3";
 constexpr std::string_view c_range = "n and p within [1e-10, 1e21] cm^-3";
@@ -86,31 +89,6 @@ constexpr std::string_view finding_ix =
     "DECISIONS Unit 55 15.15 MI-Q15 (known finding): trap_kinetics's partials by the bare quotient rule cancel when "
     "f or 1 - f is near 1 or one capture term dominates; error within the form's rounding floor; fix proposed "
     "separately (MI-Q10)";
-
-struct FloorFinding {
-    std::string_view label, ruling;
-    int converted = 0;
-};
-
-// The last K comparisons of r; T[k] = 0 for a quantity outside the finding.
-template <std::size_t K>
-void classify_floor(BenchmarkResult& r, const std::array<double, K>& T, FloorFinding& ff) {
-    for (std::size_t k = 0; k < K; ++k) {
-        ComparisonRecord& c = r.comparisons[r.comparisons.size() - K + k];
-        if (c.comparison.outcome != Outcome::fail || !(T[k] > 0.0)) continue;
-        if (!(std::abs(c.q_sim - c.q_ref) <= 64.0 * tvb31::eps * T[k])) continue;
-        c.comparison.outcome = Outcome::finding;
-        c.comparison.reason = "known finding " + std::string(ff.label) + " (" + std::string(ff.ruling) +
-                              "): " + c.comparison.reason + "; within 64 eps T, T " + shortest(T[k]);
-        ++ff.converted;
-    }
-}
-
-void note_if_stale(BenchmarkResult& r, const FloorFinding& ff) {
-    if (ff.converted == 0) {
-        r.notes.push_back("known finding " + std::string(ff.label) + " no longer reproduces: remove the entry");
-    }
-}
 
 }  // namespace
 

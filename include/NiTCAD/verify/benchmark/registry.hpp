@@ -89,6 +89,9 @@ void set_pardiso_threads(int threads);
 [[nodiscard]] BenchmarkResult run_tvb31_14(Tier tier);  // radiative
 [[nodiscard]] BenchmarkResult run_tvb31_15(Tier tier);  // trap occupancy and kinetics
 [[nodiscard]] BenchmarkResult run_tvb31_16(Tier tier);  // trap-band quadrature
+[[nodiscard]] BenchmarkResult run_tvb31_17(Tier tier);  // incomplete ionization
+[[nodiscard]] BenchmarkResult run_tvb31_18(Tier tier);  // Altermatt-Schenk levels
+[[nodiscard]] BenchmarkResult run_tvb31_19(Tier tier);  // neutral equilibria
 [[nodiscard]] BenchmarkResult run_tvb32();
 
 struct KnownFinding {

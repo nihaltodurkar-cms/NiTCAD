@@ -122,6 +122,35 @@ void table_checks(BenchmarkResult& r, std::string_view entry);
     return r;
 }
 
+// A known finding defined by a rounding floor (DECISIONS Unit 55 15.15): a comparison that misses the value rule is
+// the finding only where its error is within 64 eps T, T the size of the shipped form's terms; a larger miss stays a
+// fail. classify_floor applies it to the last K comparisons (T[k] = 0 leaves k alone); note_if_stale adds the note
+// when nothing was converted.
+struct FloorFinding {
+    std::string_view label, ruling;
+    int converted = 0;
+};
+
+// The last K comparisons of r; T[k] = 0 for a quantity outside the finding.
+template <std::size_t K>
+void classify_floor(BenchmarkResult& r, const std::array<double, K>& T, FloorFinding& ff) {
+    for (std::size_t k = 0; k < K; ++k) {
+        ComparisonRecord& c = r.comparisons[r.comparisons.size() - K + k];
+        if (c.comparison.outcome != Outcome::fail || !(T[k] > 0.0)) continue;
+        if (!(std::abs(c.q_sim - c.q_ref) <= 64.0 * eps * T[k])) continue;
+        c.comparison.outcome = Outcome::finding;
+        c.comparison.reason = "known finding " + std::string(ff.label) + " (" + std::string(ff.ruling) +
+                              "): " + c.comparison.reason + "; within 64 eps T, T " + shortest(T[k]);
+        ++ff.converted;
+    }
+}
+
+inline void note_if_stale(BenchmarkResult& r, const FloorFinding& ff) {
+    if (ff.converted == 0) {
+        r.notes.push_back("known finding " + std::string(ff.label) + " no longer reproduces: remove the entry");
+    }
+}
+
 // A predicate that holds at exactly 0 or inside [lo, hi].
 [[nodiscard]] inline Predicate zero_or_in_range(std::string name, double value, double lo, double hi) {
     Predicate p = in_range(std::move(name), value, lo, hi);

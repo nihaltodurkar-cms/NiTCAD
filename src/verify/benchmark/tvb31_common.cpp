@@ -5,6 +5,7 @@
 #include <utility>
 
 #include "NiTCAD/physics/energy_balance.hpp"
+#include "NiTCAD/physics/ionization.hpp"
 #include "NiTCAD/physics/mobility.hpp"
 #include "NiTCAD/physics/surface_mobility.hpp"
 #include <charconv>
@@ -81,6 +82,16 @@ std::optional<double> other_shipped_value(std::string_view binding) {
     if (const auto g = tail("masetti_phosphorus_silicon.")) return masetti(physics::masetti_phosphorus_silicon, *g);
     if (const auto g = tail("lombardi_silicon_electrons.")) return lombardi(physics::lombardi_silicon_electrons, *g);
     if (const auto g = tail("lombardi_silicon_holes.")) return lombardi(physics::lombardi_silicon_holes, *g);
+    const auto altermatt = [](const physics::DensityDependentLevel& l, std::string_view g) -> std::optional<double> {
+        if (g == "E_dop0") return l.E0_eV;
+        if (g == "N_ref") return l.N_ref;
+        if (g == "c") return l.c;
+        if (g == "N_b") return l.N_b;
+        if (g == "d") return l.d;
+        return std::nullopt;
+    };
+    if (const auto g = tail("altermatt_phosphorus.")) return altermatt(physics::altermatt_phosphorus, *g);
+    if (const auto g = tail("altermatt_boron.")) return altermatt(physics::altermatt_boron, *g);
     if (binding == "energy_relaxation.electron") return physics::silicon_energy_relaxation.tau_n_s;
     if (binding == "energy_relaxation.hole") return physics::silicon_energy_relaxation.tau_p_s;
     if (binding == "energy_balance_regularization") return physics::energy_balance_regularization;
@@ -112,6 +123,10 @@ double* bound_field(physics::SemiconductorParameters& p, std::string_view bindin
     if (f == "lifetime.N_ref") return &p.lifetime.N_ref;
     if (f == "auger.Cn") return &p.auger.Cn;
     if (f == "auger.Cp") return &p.auger.Cp;
+    if (f == "ionization.donor_eV") return &p.ionization.donor_eV;
+    if (f == "ionization.acceptor_eV") return &p.ionization.acceptor_eV;
+    if (f == "ionization.donor_degeneracy") return &p.ionization.donor_degeneracy;
+    if (f == "ionization.acceptor_degeneracy") return &p.ionization.acceptor_degeneracy;
     for (const auto& [name, c] : {std::pair{"electron_mobility.", &p.electron_mobility}, std::pair{"hole_mobility.", &p.hole_mobility}}) {
         if (!starts_with(f, name)) continue;
         const std::string_view g = f.substr(std::string_view(name).size());
