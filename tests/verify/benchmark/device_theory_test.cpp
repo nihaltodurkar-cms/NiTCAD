@@ -36,6 +36,37 @@ void require_all_pass(const bench::BenchmarkResult& r, std::size_t expected_comp
     CHECK(bench::overall(r) == Outcome::pass);
 }
 
+// A frozen outcome recorded as found: per comparison, in order, its quantity, outcome, a part of its reason ("" for
+// none) and, where the criterion ends in "= <bound>", that bound to 1e-6 (0: not pinned).
+struct Found {
+    std::string quantity;
+    Outcome outcome;
+    std::string reason;
+    double bound = 0.0;
+};
+
+void require_as_found(const bench::BenchmarkResult& r, const std::vector<Found>& expected) {
+    INFO(r.id);
+    if (r.run_error) FAIL(*r.run_error);
+    for (const auto& n : r.notes) std::printf("%s note: %s\n", r.id.c_str(), n.c_str());
+    for (const auto& c : r.comparisons) {
+        std::printf("%s [%s] %s: %.4g (%s) %s\n", r.id.c_str(),
+                    std::string(to_string(c.comparison.outcome)).c_str(), c.quantity.c_str(), c.metric, c.criterion.c_str(), c.comparison.reason.c_str());
+    }
+    REQUIRE(r.comparisons.size() == expected.size());
+    for (std::size_t i = 0; i < expected.size(); ++i) {
+        const auto& c = r.comparisons[i];
+        CAPTURE(c.quantity, c.metric, c.criterion, c.comparison.reason);
+        CHECK(c.quantity == expected[i].quantity);
+        CHECK(c.comparison.outcome == expected[i].outcome);
+        CHECK(c.comparison.reason.find(expected[i].reason) != std::string::npos);
+        if (expected[i].bound > 0.0) {
+            const double bound = std::stod(c.criterion.substr(c.criterion.rfind("= ") + 2));
+            CHECK(std::abs(bound - expected[i].bound) <= 1e-6 * expected[i].bound);
+        }
+    }
+}
+
 }  // namespace
 
 TEST_CASE("TVB-06: the dielectric stack, fast tier (frozen outcome: pass)", "[tvr4]") {
@@ -49,7 +80,8 @@ TEST_CASE("TVB-06: the dielectric stack, full tier (frozen outcome: pass)", "[.t
 // TVB-13 (the uniform resistor, D; 16.2 (f), 16.8 frozen; construction 16.42). Frozen outcome, set before its first
 // run: every comparison passes. Fast: the Canali current at four fields; full: + T_n - T_L at two fields, N = 128
 // and 512, on the nodes beyond the layer's tail. Found on the first run (16.42): the drift passes; T_n - T_L fails at
-// both fields and both N (the reference taken at V/L, not the interior's own field); DT-Q37 open.
+// both fields and both N (the reference taken at V/L, not the interior's own field). DT-Q37 A (16.48): the reference
+// is taken at each judged node's own field (16.2 (f)), and all 8 pass.
 TEST_CASE("TVB-13: Canali drift, fast tier (frozen outcome: pass)", "[tvr4]") {
     require_all_pass(bench::run_tvb13(bench::Tier::fast), 4);
 }
@@ -295,17 +327,24 @@ TEST_CASE("TVB-18: nothing in the fast tier", "[tvr4]") {
 }
 
 // TVB-10 (the MOS capacitor's HF C-V, A, and deep depletion, E; criteria 16.8 and 16.19, frozen; construction 16.40) is
-// full tier only (16.7). 14 comparisons: C_HF at 6 gate biases; Q_s order and finest accuracy at 4. Frozen outcome,
-// set before its first run: every comparison passes.
-TEST_CASE("TVB-10: the MOS capacitor HF C-V and deep depletion, full tier (frozen outcome: pass)", "[.tvr4_full]") {
-    const auto r = bench::run_tvb10(bench::Tier::full);
-    if (r.run_error) FAIL(*r.run_error);
-    for (const auto& n : r.notes) std::printf("TVB-10 note: %s\n", n.c_str());
-    for (const auto& c : r.comparisons) {
-        std::printf("TVB-10 [%s] %s: %.4g (%s) %s\n", std::string(to_string(c.comparison.outcome)).c_str(),
-                    c.quantity.c_str(), c.metric, c.criterion.c_str(), c.comparison.reason.c_str());
+// full tier only (16.7). 14 comparisons: C_HF at 6 gate biases; Q_s order and finest accuracy at 4. Frozen outcome: as
+// found (DT-Q35 A, 16.48): 13 pass; C_HF at 2 V is NOT EVALUATED (U_num not estimated: the h/2 state's tolerance
+// sensitivity; its |C_sim - C_ref| is 5.3e-13, as its neighbours'). The C_HF passes' bounds are pinned to 1e-6.
+TEST_CASE("TVB-10: the MOS capacitor HF C-V and deep depletion, full tier (frozen outcome: as found, 16.48)",
+          "[.tvr4_full]") {
+    const Outcome pass = Outcome::pass;
+    std::vector<Found> expected{
+        {"C_HF, V_G - V_FB = 0.2 V", pass, "", 3.5149300759295247e-12},
+        {"C_HF, V_G - V_FB = 0.5 V", pass, "", 2.302502110943355e-12},
+        {"C_HF, V_G - V_FB = 1 V", pass, "", 1.6855634414557072e-12},
+        {"C_HF, V_G - V_FB = 1.5 V", pass, "", 3.22814423343859e-10},
+        {"C_HF, V_G - V_FB = 2 V", Outcome::not_evaluated, "U_num not estimated", 0.0},
+        {"C_HF, V_G - V_FB = 2.5 V", pass, "", 4.740650305197262e-09}};
+    for (const char* v : {"1", "2", "3", "4"}) {
+        expected.push_back({std::string("Q_s order (deep depletion), V_G - V_FB = ") + v + " V", pass, "", 0.0});
+        expected.push_back({std::string("Q_s finest (deep depletion, N = 512), V_G - V_FB = ") + v + " V", pass, "", 0.0});
     }
-    require_all_pass(r, 14);
+    require_as_found(bench::run_tvb10(bench::Tier::full), expected);
 }
 
 TEST_CASE("TVB-10: nothing in the fast tier", "[tvr4]") {
@@ -320,18 +359,33 @@ TEST_CASE("TVB-19: nothing in the fast tier", "[tvr4]") {
     REQUIRE(r.comparisons.empty());
 }
 
-// TVB-27 (lattice heat, E; 16.8 frozen; construction 16.43) and TVB-28 (thermoelectric identities, E and D) are full
-// tier only (16.7). TVB-27: the order and the finest accuracy of T for the Kirchhoff slab and the self-heated
-// resistor (4). TVB-28: the same for S and Pi, and C5's energy residual on four states (8). Frozen outcome, set before
-// the first run: every comparison passes. Found on the first run (16.43): TVB-27 2 pass, 2 not_evaluated (the slab
-// exact in h; the resistor floored by the reference's n = N); TVB-28 6 pass, 1 not_evaluated (S), 1 fail (Pi's order,
-// exact in h); DT-Q38 open.
-TEST_CASE("TVB-27: lattice heat, full tier (frozen outcome: pass)", "[.tvr4_full]") {
-    require_all_pass(bench::run_tvb27(bench::Tier::full), 4);
+// TVB-27 (lattice heat, E; 16.8 frozen; construction 16.43, the resistor's changed by DT-Q38 B, 16.48) and TVB-28
+// (thermoelectric identities, E and D) are full tier only (16.7). TVB-27: the order and the finest accuracy of T for
+// the Kirchhoff slab and the self-heated resistor (4). TVB-28: the same for S and Pi, and C5's energy residual on four
+// states (8). Frozen outcome: as found (DT-Q38 B, 16.48).
+// TVB-27: both accuracies pass; both orders are NOT EVALUATED (the slab is exact in h; the resistor, 100 um on the
+// legacy set, has p-hat 2.26 with its successive orders spreading more than 0.1).
+// TVB-28: 6 pass; S's order is NOT EVALUATED (its finest pair 0.01 below the window); Pi's order fails (Pi is exact
+// in h: DT-Q36's class).
+TEST_CASE("TVB-27: lattice heat, full tier (frozen outcome: as found, 16.48)", "[.tvr4_full]") {
+    const char* range = "not in the asymptotic range";
+    require_as_found(bench::run_tvb27(bench::Tier::full),
+                     {{"T (Kirchhoff slab) order in h", Outcome::not_evaluated, range},
+                      {"T (Kirchhoff slab) finest accuracy", Outcome::pass, ""},
+                      {"T (self-heated resistor) order in h", Outcome::not_evaluated, range},
+                      {"T (self-heated resistor) finest accuracy", Outcome::pass, ""}});
 }
 
-TEST_CASE("TVB-28: thermoelectric identities, full tier (frozen outcome: pass)", "[.tvr4_full]") {
-    require_all_pass(bench::run_tvb28(bench::Tier::full), 8);
+TEST_CASE("TVB-28: thermoelectric identities, full tier (frozen outcome: as found, 16.48)", "[.tvr4_full]") {
+    require_as_found(bench::run_tvb28(bench::Tier::full),
+                     {{"S (open-circuit rise) order in h", Outcome::not_evaluated, "not in the asymptotic range"},
+                      {"S (open-circuit rise) finest accuracy", Outcome::pass, ""},
+                      {"Pi (contact heat per current) order in h", Outcome::fail, "p-hat in [1.8, 2.3] (p_th 2) missed"},
+                      {"Pi (contact heat per current) finest accuracy", Outcome::pass, ""},
+                      {"energy residual (C5), self-heated resistor, 4 V", Outcome::pass, ""},
+                      {"energy residual (C5), Seebeck bar", Outcome::pass, ""},
+                      {"energy residual (C5), Peltier bar, +1 mV", Outcome::pass, ""},
+                      {"energy residual (C5), Peltier bar, -1 mV", Outcome::pass, ""}});
 }
 
 TEST_CASE("TVB-27 and TVB-28: nothing in the fast tier", "[tvr4]") {
@@ -346,8 +400,14 @@ TEST_CASE("TVB-27 and TVB-28: nothing in the fast tier", "[tvr4]") {
 // temperature, else NOT APPLICABLE naming that predicate; C1 and C3 on the equilibrium, C3, C4, C12, C6 and C9 pass;
 // C5 NOT APPLICABLE ("electrothermal on") with the model off and pass with it on (TVB-27, 28). Any other outcome,
 // and any failed or NOT EVALUATED part, is a finding. Per device and check the worst residual/tolerance is printed.
-// Found on the first run (16.45): 457 entries, 2 fail (C1, C2 at TVB-15's generated point: the finding), 19 NOT
-// EVALUATED and 3 C6 NOT APPLICABLE by the checks' own contracts; DT-Q39 open.
+// Frozen as found (DT-Q39 A, 16.48): 501 entries. Beside the rule above, the checks' own contracts (11.6) and one
+// known finding are pinned by their counts and reasons:
+//   C2 NOT EVALUATED, "no rates stored", at zero-bias points with G-R off (10);
+//   C1 and C2 NOT EVALUATED, "no nonzero terminal resolution", at zero bias on the insulator-only devices and at
+//   TVB-10's HF point (5); C12 NOT EVALUATED, "no semiconductor nodes", on the insulator-only devices (4);
+//   C9 NOT EVALUATED at TVB-18 (no gate or electrode row for its capacitance part) (1);
+//   C6 NOT APPLICABLE, "transient with a gate or electrode", on TVB-19's transients (3);
+//   the finding (16.45; its fix deferred past TVR-4, DT-Q11): C1 and C2 fail at TVB-15's generated point (2).
 TEST_CASE("TVB-32: the consistency suite on the TVR-4 devices (frozen outcomes)", "[.tvr4_full]") {
     namespace c = NiTCAD::verify::consistency;
     const auto name_of = [](Outcome o) {
@@ -368,6 +428,31 @@ TEST_CASE("TVB-32: the consistency suite on the TVR-4 devices (frozen outcomes)"
     CAPTURE(run.run_error.value_or(""));
     CHECK_FALSE(run.run_error.has_value());
     std::map<std::string, Tally> tally;  // "device check"
+    std::map<std::string, int> pinned;   // the contract classes and the finding, by count
+    const auto pinned_class = [](const bench::Tvb32Entry& e) -> std::string {
+        const c::CheckResult& r = e.result;
+        const auto has = [&](const char* s) { return r.comparison.reason.find(s) != std::string::npos; };
+        const Outcome o = r.comparison.outcome;
+        if (o == Outcome::not_evaluated && r.id == "C2" && has("no rates stored")) return "no rates stored";
+        if (o == Outcome::not_evaluated && (r.id == "C1" || r.id == "C2") && has("no nonzero terminal resolution")) {
+            return "no nonzero terminal resolution";
+        }
+        if (o == Outcome::not_evaluated && r.id == "C12" && has("no semiconductor nodes")) {
+            return "no semiconductor nodes";
+        }
+        if (o == Outcome::not_evaluated && r.id == "C9" && e.deck.rfind("TVB-18", 0) == 0 &&
+            has("capacitance (gate and electrode rows)")) {
+            return "C9 without a gate or electrode row";
+        }
+        if (o == Outcome::not_applicable && r.id == "C6" && has("transient with a gate or electrode")) {
+            return "C6 on a transient without a gate or electrode";
+        }
+        if (o == Outcome::fail && (r.id == "C1" || r.id == "C2") && e.deck.rfind("TVB-15", 0) == 0 &&
+            e.at.find("generation") != std::string::npos) {
+            return "finding: TVB-15's generated point";
+        }
+        return {};
+    };
     for (const bench::Tvb32Entry& e : run.entries) {
         const c::CheckResult& r = e.result;
         const std::string& id = r.id;
@@ -392,6 +477,10 @@ TEST_CASE("TVB-32: the consistency suite on the TVR-4 devices (frozen outcomes)"
             }
         }
         CAPTURE(e.deck, e.at, id, r.comparison.reason);
+        if (const std::string cls = pinned_class(e); !cls.empty()) {
+            ++pinned[cls];
+            continue;
+        }
         for (const auto& p : r.parts) {
             CAPTURE(p.name, name_of(p.outcome), p.residual, p.tolerance, p.where, p.reason);
             if (p.outcome == Outcome::fail || p.outcome == Outcome::not_evaluated) FAIL_CHECK("part " << p.name);
@@ -403,6 +492,15 @@ TEST_CASE("TVB-32: the consistency suite on the TVR-4 devices (frozen outcomes)"
             }));
         }
     }
+    CHECK(run.entries.size() == 501);
+    const std::map<std::string, int> expected{{"no rates stored", 10},
+                                              {"no nonzero terminal resolution", 5},
+                                              {"no semiconductor nodes", 4},
+                                              {"C9 without a gate or electrode row", 1},
+                                              {"C6 on a transient without a gate or electrode", 3},
+                                              {"finding: TVB-15's generated point", 2}};
+    for (const auto& [cls, n] : pinned) std::printf("TVB-32 pinned: %s: %d\n", cls.c_str(), n);
+    CHECK(pinned == expected);
     for (const auto& [key, t] : tally) {
         std::string counts;
         for (const auto& [o, n] : t.outcomes) counts += (counts.empty() ? "" : ", ") + std::to_string(n) + " " + o;

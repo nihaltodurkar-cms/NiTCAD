@@ -7,7 +7,9 @@
 // <= 1e-4; the (h, tol) factorial at N = 512 (16.2 (p)).
 //   (i) The Kirchhoff slab: 10 um, one ohmic contact (no current flows), isothermal 300 K and 400 K ends. Its T
 //       is the Kirchhoff closed form (verify/reference/thermal_slab (i)).
-//   (ii) The self-heated resistor: 10 um, ohmic and isothermal 300 K at both ends, 4 V. Its T is the reference ODE
+//   (ii) The self-heated resistor: 100 um on the legacy silicon set (DT-Q38 B, 16.48: at 10 um on the default set the
+//       reference's n = N floors the error near 1e-6), ohmic and isothermal 300 K at both ends, 4 V. Its T is the
+//       reference ODE
 //       (thermal_slab (ii)), solved in dd with its finite-difference second method.
 // TVB-28, on the legacy silicon set (Nc = Nc300 (T / 300)^(3/2), so S and Pi are closed forms; 16.43):
 //   (iii) S (E): the open-circuit rise of the electron quasi-Fermi level across a 100 um bar with one ohmic contact
@@ -218,15 +220,17 @@ BenchmarkResult run_tvb27(Tier tier) {
     judge_e(r, "T (Kirchhoff slab)", *slab_errors, {});
 
     // (ii) The self-heated resistor.
-    const Bar res{1e-3, sp, true, 300.0, 300.0};
-    const physics::CaugheyThomasParameters& ct = sp.electron_mobility;
+    const physics::SemiconductorParameters& lp = physics::legacy_silicon_parameters;  // DT-Q38 B (16.48)
+    const reference::Conductivity kappa_l{lp.thermal.conductivity_W_cmK, lp.thermal.conductivity_exponent};
+    const Bar res{1e-2, lp, true, 300.0, 300.0};
+    const physics::CaugheyThomasParameters& ct = lp.electron_mobility;
     reference::ResistorInput in{.q_C = base::q_C,
                                 .k_eV_per_K = base::k_B_eV_per_K,
                                 .length_cm = res.length,
                                 .density_cm3 = ND,
                                 .voltage_V = 4.0,
                                 .ambient_K = 300.0,
-                                .kappa = kappa,
+                                .kappa = kappa_l,
                                 .mu_min = ct.mu_min,
                                 .mu_max = ct.mu_max,
                                 .N_ref = ct.N_ref,
@@ -407,12 +411,12 @@ Tvb32Run thermal_consistency(const char* id, const std::vector<std::pair<std::st
 
 }  // namespace
 
-// TVB-27's slab (300 / 400 K, its one contact at 0 V) and resistor (0 and 4 V), default silicon.
+// TVB-27's slab (300 / 400 K, its one contact at 0 V; default silicon) and resistor (0 and 4 V; 100 um, legacy set).
 Tvb32Run tvb27_consistency() {
     const physics::SemiconductorParameters& sp = physics::silicon_parameters;
     return thermal_consistency("TVB-27",
                                {{"slab", Bar{1e-3, sp, false, 300.0, 400.0}},
-                                {"resistor", Bar{1e-3, sp, true, 300.0, 300.0}}},
+                                {"resistor", Bar{1e-2, physics::legacy_silicon_parameters, true, 300.0, 300.0}}},
                                {{{0.0}}, {{0.0, 0.0}, {0.0, 4.0}}});
 }
 

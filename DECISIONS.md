@@ -10997,6 +10997,44 @@ the benchmark (TVM2).**
 - **Time:** nightly only; `verify_full.tvb20` 12 to 16 min Release against its 3600 s limit. Nothing is added to the
   fast tier or to `tvr4_full` except TVB-32's 44 entries (the L0 sweep).
 
+**16.48 DT-Q35 to DT-Q39 ruled as recommended ("for decision choose recommended", 2026-11-11) and applied.
+`tvr4_full` is green.**
+- **DT-Q35 A (TVB-10): pinned as found.** 13 pass; C_HF at V_G − V_FB = 2 V is NOT EVALUATED ("U_num not
+  estimated"). The five C_HF passes' bounds are pinned to 1e-6. Nothing else changed.
+- **DT-Q36 A (TVB-19, nightly): pinned as found.** 10 pass, 3 NOT EVALUATED ("not in the asymptotic range": the
+  decay rate's and the width's BDF2 orders in dt, the width's order in h), 3 fail (the orders in h of the decay
+  rate, the pulse's area and its centre, which have no h error). The run of 2026-11-11 reproduced 16.41's outcome
+  line for line. Its criteria carry no computed bound, so none is pinned.
+- **DT-Q37 A (TVB-13): the T_n reference is taken at each judged node's own field** (its two edges' mean), as
+  16.2 (f) states, not at V/L.
+  - T_n − T_L: 3.7e-14 and 1.3e-14 (N = 128), 1.5e-13 and 6.8e-14 (N = 512), against 2.3e-10 and 3.7e-9. All 8
+    comparisons pass; the case is `require_all_pass` again.
+  - Printed, not judged: the rise against the homogeneous rise at V/L (the former comparison) and the interior
+    field's departure from V/L.
+- **DT-Q38 B (TVB-27): the self-heated resistor is 100 µm on the legacy set.** The slab, S and Π stay as found.
+  - The resistor's errors are 2.25e-6, 5.83e-7, 1.41e-7 and 2.93e-8 (N = 64 … 512): orders 1.93, 2.04 and 2.26.
+    Accuracy passes (2.9e-8 against 1e-4).
+  - **Its order is still NOT EVALUATED**: p̂ is 2.26, inside the window, but the successive orders spread 0.225,
+    above 0.1. 16.43's "so it would pass" overlooked the spread rule; the diagnostic's numbers were these.
+  - TVB-27 as pinned: both accuracies pass, both orders NOT EVALUATED. TVB-28 as pinned: 6 pass, S's order NOT
+    EVALUATED, Π's order fail (DT-Q36's class).
+  - TVB-32's TVB-27 resistor is the same device (100 µm, legacy set): C1, C3, C4, C5 and C12 pass.
+  - TVB-28's C5 state "self-heated resistor, 4 V" is unchanged (10 µm, legacy set).
+- **DT-Q39 A (TVB-32): pinned as found, 501 entries.** The frozen rule of 16.44 stands. Beside it the case pins,
+  by count and reason:
+  - C2 NOT EVALUATED, "no rates stored" (10);
+  - C1 and C2 NOT EVALUATED, "no nonzero terminal resolution" (5); C12 NOT EVALUATED, "no semiconductor nodes" (4);
+  - C9 NOT EVALUATED at TVB-18, no gate or electrode row (1);
+  - C6 NOT APPLICABLE, "transient with a gate or electrode" (3);
+  - the known finding: C1 and C2 fail at TVB-15's generated point (2). Its fix stays deferred past TVR-4 (DT-Q11).
+  Any other departure fails the case.
+- **Tests.** `device_theory_test` gains `require_as_found` (quantity, outcome, a part of the reason, and the bound
+  to 1e-6 where the criterion states one). `[.tvr4_full]`: 11 cases, 1041 assertions, all pass (Release).
+- **Not done:** mutation runs of these changes (the T_n reference's field, the resistor's set and length, the
+  pins) and of TVB-20/21's own code (16.47); the serial Debug timing (CV-Q19's 75 s), which these full-tier
+  changes do not enter.
+- **Open in TVR-4:** step 14, the close-out. No DT question is open.
+
 ---
 
 ## New questions the advisor raised (not yet in `ARCHITECTURE.md`)

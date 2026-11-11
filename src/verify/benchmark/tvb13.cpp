@@ -13,7 +13,8 @@
 //     T_L = (2/3)(q/k) tau_w mu_C(E) E^2 (ED3, ED4's E_eff(T) = E). The contacts hold T_n = T_L, so there is a
 //     boundary layer; its length lambda = 2 / min |Re s| over the linearized quartic's roots
 //     (verify/reference/energy_layer). Judged on the nodes at distance d from the nearer contact with
-//     e^{-d / lambda} <= 1e-13: max |rise - rise_ref| / rise_ref <= 64 eps N^2. Applicable (else NOT APPLICABLE)
+//     e^{-d / lambda} <= 1e-13: max |rise - rise_ref(E_i)| / rise_ref(E_i) <= 64 eps N^2, E_i the node's own field (its
+//     two edges' mean; DT-Q37 A, 16.48). Applicable (else NOT APPLICABLE)
 //     while there is at least one such node. Printed, not judged: the decay rate of |rise - rise_ref| measured on
 //     the solved profile near the left contact, beside min |Re s|.
 // No order is computed (16.2 (f)).
@@ -244,8 +245,9 @@ BenchmarkResult run_tvb13(Tier tier) {
                 if (i3 == Tn.size() && dev < 1e-3) i3 = i;
                 if (i9 == Tn.size() && dev < 1e-9) i9 = i;
             }
-            // Printed, not judged (16.42, DT-Q37): the interior's own field against V / L, and the rise against the
-            // homogeneous rise at each judged node's local field (its two edges' mean).
+            // DT-Q37 A (16.48): the rise is judged against the homogeneous rise at each judged node's own field (its two
+            // edges' mean), as 16.2 (f) states. Printed, not judged: the interior's field against V / L, and the rise
+            // against the homogeneous rise at V / L (the contact layers take part of the voltage).
             const auto& psi = s->points.back().fields.potential_V;
             double first = -1.0, last = -1.0, psi_first = 0.0, psi_last = 0.0, local = 0.0;
             for (std::size_t i = 1; i + 1 < Tn.size(); ++i) {
@@ -270,13 +272,13 @@ BenchmarkResult run_tvb13(Tier tier) {
                               " judged nodes; the tail's measured decay rate " + measured + " against min |Re s| " +
                               shortest(ly.L.slowest_rate_per_cm) + " /cm; interior field " + shortest(E_int) +
                               " V/cm ((E_int - V/L) / (V/L) " + shortest(E_int / eb_fields[k] - 1.0) +
-                              "); rise against the homogeneous rise at the local field, max relative " +
-                              shortest(local));
+                              "); rise against the homogeneous rise at V/L, max relative " +
+                              shortest(worst));
             const std::vector<Predicate> pr{
                 {"judged nodes (e^{-d/lambda} <= 1e-13) >= 1", static_cast<double>(judged), 1.0, judged >= 1}};
-            ComparisonRecord c{"T_n - T_L, " + label, "1", static_cast<double>(N), worst, ly.h.rise, 0.0, worst, crit,
+            ComparisonRecord c{"T_n - T_L, " + label, "1", static_cast<double>(N), local, ly.h.rise, 0.0, local, crit,
                                {}};
-            c.comparison = judge(r.info, pr, worst <= criterion, crit);
+            c.comparison = judge(r.info, pr, local <= criterion, crit);
             r.comparisons.push_back(std::move(c));
         }
     }
