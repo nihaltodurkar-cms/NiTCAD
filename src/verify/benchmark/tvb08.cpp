@@ -33,7 +33,7 @@
 // Ladder: N = 64, 128, 256, 512. Full tier only (17.7).
 // Reference uncertainty: the domain truncation V_T t at the contacts, relative to |V_bi|; above 1e-3 of the psi
 // criterion the E comparisons are not_evaluated (TB-Q4).
-// The (h, tol) factorial (16.2 (p)) at N = 512: tol = 1e-12 and 1e-14, N = 512 and 1024, on the psi L-infinity
+// The (h, tol) factorial (16.2 (p)) at N = 512: tol = 1e-10 and 1e-12, N = 512 and 1024, on the psi L-infinity
 // error; eps_int above 10 % of U blocks the E passes (4.1 (c)).
 #include <algorithm>
 #include <array>
@@ -62,7 +62,8 @@ namespace {
 constexpr double L = 5e-5, beta = 3.0, T = 300.0;
 constexpr double eps = 0x1p-52;
 constexpr double psi_tolerance = 1e-4, level_tolerance = 1e-4, field_tolerance = 1e-3;
-constexpr double tol_newton = 1e-12;
+// 1e-10, and 1e-12 in the factorial: 1e-14 is not reachable at N = 1024 (found at the first run, before any result).
+constexpr double tol_newton = 1e-10;
 
 // One material of the spec.
 struct Spec {
@@ -105,10 +106,14 @@ ReferenceInfo info() {
     r.id = "TVB-08";
     r.cls = ReferenceClass::E;
     r.independence = Independence::I1;
-    r.provenance = Provenance::PB;
-    r.citation = "Electron affinity rule (Anderson, Solid-State Electronics 5, 341 (1962), read as E. F. Schubert, "
-                 "Band diagrams of heterostructures, eqs (17.1), (17.2)); first integrals of the 1D Poisson-Boltzmann "
-                 "equation on each side matched by D continuity (derived, DECISIONS Unit 55 17.13)";
+    // PD: the judged formula is this unit's derivation with a second method (17.12: "the matching of D is Gauss's law,
+    // derived (PD)"). The electron affinity rule is the statement of NiTCAD's model (vacuum level continuous), read
+    // at PB; it grades the model, not this comparison (IG-Q20 A).
+    r.provenance = Provenance::PD;
+    r.citation = "First integrals of the 1D Poisson-Boltzmann equation on each side matched by D continuity (derived, "
+                 "DECISIONS Unit 55 17.12, 17.13); the alignment is the model's electron affinity rule (Anderson, "
+                 "Solid-State Electronics 5, 341 (1962), read as E. F. Schubert, Band diagrams of heterostructures, "
+                 "eqs (17.1), (17.2): PB)";
     r.version = "DECISIONS Unit 55 17.3, 17.8";
     r.equations = {1, 4};
     r.form = "eps_1 Phi_1(t_1) = eps_2 Phi_2(t_1 - V_bi / V_T), Phi_b = n_b G(t) + p_b G(-t), "
@@ -158,6 +163,9 @@ std::expected<device::Device, std::string> junction(const Case& c, int N, bool t
                                                   {"cathode", device::ContactKind::ohmic, std::move(hi)}},
                                      .interfaces = std::move(interfaces)});
     if (!d) return std::unexpected(d.error().message);
+    // The third equilibrium must be solved with the emission flux on the interface edge, not the default one.
+    const bool declared = d->transport(0, 1) == device::InterfaceTransport::thermionic_emission;
+    if (declared != thermionic) return std::unexpected("the interface transport is not the one requested");
     return std::move(*d);
 }
 
@@ -189,7 +197,7 @@ std::expected<Solved, std::string> drift_diffusion(const Case& c, int N, bool th
     solve::BiasOptions o;
     o.models = models();
     o.newton.tol_update = tol;
-    // Unit 50's minority floor: at 1e-12 the wide-gap minorities (about 1e-5 cm^-3) never converge in the default
+    // Unit 50's minority floor: at these tolerances the wide-gap minorities (about 1e-5 cm^-3) never converge in the default
     // measure (found at the first run, before any result: "Newton did not converge in 100 iterations").
     o.minority_floor = true;
     const auto s = solve::solve_bias(*d, std::vector<double>{0.0, 0.0}, o);
@@ -278,7 +286,7 @@ BenchmarkResult run_tvb08(Tier tier) {
         // The psi L-infinity error of the zero-bias drift-diffusion solve at (N, tol), relative to |V_bi|.
         const auto measure = [&](int N, double tol, Level* out) -> std::expected<double, std::string> {
             const auto dd = drift_diffusion(c, N, false, tol);
-            if (!dd) return std::unexpected(at + ", N = " + std::to_string(N) + ": " + dd.error());
+            if (!dd) return std::unexpected(at + ", N = " + std::to_string(N) + ", tol " + shortest(tol) + ": " + dd.error());
             const std::vector<double> x = nodes(N);
             const auto exact = reference::hetero_potential(*ref, x);
             if (!exact) return std::unexpected(at + ": reference: " + exact.error());

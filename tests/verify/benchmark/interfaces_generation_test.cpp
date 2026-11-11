@@ -1,13 +1,22 @@
 // TVR-5a benchmarks, classical interfaces and generation (DECISIONS Unit 55 17.4; criteria 17.8 and 17.14, frozen
-// before code): their frozen expected outcomes. Everything is in the full tier (17.7) and runs in the Release-only
-// ctest verify_benchmark.tvr5a_full.
-// TVB-08 (equilibrium heterojunction): expectation written before the first run: every comparison passes (three
-// junctions, each 4 D comparisons of the three equilibria, the psi order, and 5 finest-level accuracies).
+// before code): their frozen outcomes. Everything is in the full tier (17.7) and runs in the Release-only ctest
+// verify_benchmark.tvr5a_full.
+//
+// TVB-08 (equilibrium heterojunction). The expectation written before the first run was that all 30 comparisons
+// pass. It was not met. Recorded as found (17.17, IG-Q19 A), with no criterion, ladder or mesh changed (TVM2):
+//   - the three equilibria agree at every level of every junction (12 pass);
+//   - p-N: the order and all five finest-level accuracies pass;
+//   - n-N: the order is not_evaluated (p-hat 1.98, spread 0.109 above 0.1); psi, the interface level and the left
+//     band bending miss at N = 512 (2.5e-4, 2.3e-4 against 1e-4; 1.16e-3 against 1e-3); D and the right bending pass;
+//   - chi-eps: the order passes; psi and the interface level miss (2.3e-4, 2.1e-4); D and both bendings pass.
+// The misses are second-order discretization error on the frozen ladder (N = 1024, run by the factorial, gives
+// 6.2e-5 and 5.8e-5), not a defect found in the solver.
 #include <catch2/catch_test_macros.hpp>
 
 #include <cstddef>
 #include <cstdio>
 #include <string>
+#include <vector>
 
 #include "NiTCAD/verify/benchmark/registry.hpp"
 #include "NiTCAD/verify/reference/contract.hpp"
@@ -17,7 +26,15 @@ using NiTCAD::verify::Outcome;
 
 namespace {
 
-void require_all_pass(const bench::BenchmarkResult& r, std::size_t expected_comparisons) {
+// A frozen outcome recorded as found: per comparison, in order, its quantity, outcome and a window on its metric
+// (0: not pinned).
+struct Found {
+    std::string quantity;
+    Outcome outcome;
+    double metric_above = 0.0, metric_below = 0.0;
+};
+
+void require_as_found(const bench::BenchmarkResult& r, const std::vector<Found>& expected) {
     INFO(r.id);
     if (r.run_error) FAIL(*r.run_error);
     for (const auto& n : r.notes) std::printf("%s note: %s\n", r.id.c_str(), n.c_str());
@@ -25,18 +42,54 @@ void require_all_pass(const bench::BenchmarkResult& r, std::size_t expected_comp
         std::printf("%s [%s] %s: %.4g (%s) %s\n", r.id.c_str(), std::string(to_string(c.comparison.outcome)).c_str(),
                     c.quantity.c_str(), c.metric, c.criterion.c_str(), c.comparison.reason.c_str());
     }
-    REQUIRE(r.comparisons.size() == expected_comparisons);
-    for (const auto& c : r.comparisons) {
-        CAPTURE(c.quantity, c.q_sim, c.q_ref, c.metric, c.criterion, c.comparison.reason);
-        CHECK(c.comparison.outcome == Outcome::pass);
+    REQUIRE(r.comparisons.size() == expected.size());
+    for (std::size_t i = 0; i < expected.size(); ++i) {
+        const auto& c = r.comparisons[i];
+        CAPTURE(c.quantity, c.metric, c.criterion, c.comparison.reason);
+        CHECK(c.quantity == expected[i].quantity);
+        CHECK(c.comparison.outcome == expected[i].outcome);
+        if (expected[i].metric_above > 0.0) CHECK(c.metric > expected[i].metric_above);
+        if (expected[i].metric_below > 0.0) CHECK(c.metric < expected[i].metric_below);
     }
-    CHECK(bench::overall(r) == Outcome::pass);
 }
 
 }  // namespace
 
-TEST_CASE("TVB-08: the equilibrium heterojunction, full tier (frozen outcome: pass)", "[.tvr5a_full]") {
-    require_all_pass(bench::run_tvb08(bench::Tier::full), 30);
+TEST_CASE("TVB-08: the equilibrium heterojunction, full tier (frozen outcome: as found, 17.17)", "[.tvr5a_full]") {
+    const auto pass = Outcome::pass, fail = Outcome::fail, ne = Outcome::not_evaluated;
+    std::vector<Found> expected;
+    // Per junction: the order's outcome and window, then psi, interface level, D, left and right bending.
+    struct Junction {
+        const char* name;
+        Found order, psi, level, field, left, right;
+    };
+    const Junction junctions[] = {
+        {"n-N", {"", ne, 1.95, 2.0}, {"", fail, 2.2e-4, 2.7e-4}, {"", fail, 2.0e-4, 2.5e-4}, {"", pass, 1.4e-4, 1.8e-4},
+         {"", fail, 1.05e-3, 1.3e-3}, {"", pass, 2.5e-4, 3.2e-4}},
+        {"p-N", {"", pass, 1.99, 2.01}, {"", pass, 6.0e-6, 7.4e-6}, {"", pass, 1.2e-8, 1.6e-8},
+         {"", pass, 3.6e-6, 4.5e-6}, {"", pass, 2.5e-8, 3.3e-8}, {"", pass, 2.4e-8, 3.1e-8}},
+        {"chi-eps", {"", pass, 1.96, 2.0}, {"", fail, 2.1e-4, 2.5e-4}, {"", fail, 1.85e-4, 2.3e-4},
+         {"", pass, 1.4e-4, 1.8e-4}, {"", pass, 2.4e-4, 3.0e-4}, {"", pass, 8.2e-4, 9.9e-4}},
+    };
+    for (const Junction& j : junctions) {
+        const std::string at = j.name;
+        for (const int N : {64, 128, 256, 512}) {
+            // The agreement is bounded by the Newton term; its ratio to the bound stays below 0.1.
+            expected.push_back({"equilibria agree, " + at + ", N = " + std::to_string(N), pass, 0.0, 0.1});
+        }
+        const auto add = [&](const std::string& q, const Found& f) {
+            expected.push_back({q, f.outcome, f.metric_above, f.metric_below});
+        };
+        add("psi Linf order, " + at, j.order);
+        add("psi Linf finest (N = 512), " + at, j.psi);
+        add("interface level finest (N = 512), " + at, j.level);
+        add("fields (D), both sides finest (N = 512), " + at, j.field);
+        add("band bending, left finest (N = 512), " + at, j.left);
+        add("band bending, right finest (N = 512), " + at, j.right);
+    }
+    const auto r = bench::run_tvb08(bench::Tier::full);
+    require_as_found(r, expected);
+    CHECK(bench::overall(r) == fail);
 }
 
 TEST_CASE("TVB-08: nothing in the fast tier", "[tvr5a]") {

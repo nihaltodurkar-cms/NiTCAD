@@ -11521,6 +11521,82 @@ as such. It is not read as covering a criterion change after a run (16.35's rule
 a miss inside these estimates' uncertainty, it is recorded as found and brought back, not adjusted (TVM2). The
 generator's handling of the ring (17.12) is measured in step 7 before TVB-29's ladder is built.
 
+**17.17 Step 2 as built: the heterojunction reference and TVB-08. IG-Q19 and IG-Q20, ruled A under the standing
+instruction (2026-11-11).**
+
+- **`verify/reference/heterojunction`** (base only): the first integrals on each side, the interface level by Brent
+  on ε₁Φ₁(t₁) = ε₂Φ₂(t₁ − V_bi/V_T), V_bi from the electron affinity rule, the profile through
+  `first_integral`'s `bulk_profile`, all in double-double. Second method: Chebyshev collocation of the
+  finite-domain problem with the flux patch across the ε step, in double.
+  - L0, 8 cases, 105 assertions: the homojunction limit against `pn_junction` (1e-26); the matching condition
+    re-evaluated with expm1 (1e-26); a pure affinity step; n_i and the anisotype V_bi against plain-double formulas;
+    the small-step Debye–Hückel division (1e-3); the profile's ends and one-sided slopes; the collocation
+    (two degrees agree to 3.4e-11 V, the flux to 1e-9, the interface level and D to the contact tail); bad inputs.
+  - The collocation case is Release-only (`verify.tvr5a_reference_release`, 0.22 s in Release).
+  - Mutation: 22 mutants, 20 caught at first. The two survivors (n_i formed without N_v; the sign of the bending
+    in E_c at the interface) were gaps in the L0 tests. Two checks were added, and all 22 are caught.
+- **TVB-08, construction as fixed before the run:** [−L, L] with L = 0.5 µm; nodes x_k = L sinh(βξ_k)/sinh β,
+  β = 3, N even, so the interface is the midpoint of the middle edge at every level; three junctions (n–N and p–N
+  of a narrow- and a wide-gap III–V, and a silicon pair differing in χ by 0.25 eV and in ε_r), all at 1e17; the
+  band data given in the benchmark, with no Varshni term, so no NiTCAD band function lies between the spec and
+  the device or the reference.
+- **Three things settled between the first attempt and the first outcome, each before any comparison was seen:**
+  - The reference's own run-time cross-check failed (collocation at degree 32 against the first integral, 3.2e-10 V
+    against 7.5e-11 allowed). The collocation's degree was raised to 48 (differences 7e-14, 2e-12 and 5e-14 V).
+  - `solve_bias` at 0 V did not converge in 100 iterations at tol 1e-12 with default options: the wide-gap
+    minorities (about 1e-5 cm⁻³) never converge in the default measure. Unit 50's `minority_floor` is on in the
+    benchmark's drift-diffusion solves.
+  - With it, N = 1024 at tol 1e-14 (the factorial's corner) still stalled. The pair is tol 1e-10, and 1e-12 in the
+    factorial.
+- **IG-Q20 (found at the first outcome): every comparison was NOT EVALUATED, "E reference graded PB".** The
+  benchmark's `ReferenceInfo` carried PB, the grade at which Anderson's rule was read.
+  - (A) Grade the comparison PD: the judged formula is this unit's derivation with a second method, as 17.12
+    recorded before the run ("the matching of D is Gauss's law, derived (PD)"). Anderson's rule is the statement of
+    NiTCAD's model and stays PB in the citation.
+  - (B) Leave PB: TVB-08 verifies nothing.
+  - **A, applied.** No criterion, tolerance or ladder is touched, but it changes what is judged after a run, so it
+    is flagged for the owner: say so and it reverts to B.
+- **Outcome as found (30 comparisons: 24 pass, 5 fail, 1 not_evaluated). The expectation written before the run
+  (all pass) was not met.**
+
+  | Junction | Equilibria agree (D, 4 levels) | Order p̂ (spread) | ψ L∞ / \|V_bi\| | Interface level | D | Bending, left | Bending, right |
+  |---|---|---|---|---|---|---|---|
+  | n–N | pass, ≤ 1.1e-3 of the bound | 1.979 (0.109): **not_evaluated** | **2.47e-4: fail** | **2.29e-4: fail** | 1.6e-4 | **1.16e-3: fail** | 2.8e-4 |
+  | p–N | pass, ≤ 1.7e-2 | 2.000 (0.005): pass | 6.7e-6 | 1.4e-8 | 4.1e-6 | 2.9e-8 | 2.7e-8 |
+  | χ–ε | pass, ≤ 5.7e-3 | 1.982 (0.095): pass | **2.31e-4: fail** | **2.06e-4: fail** | 1.6e-4 | 2.7e-4 | 9.1e-4 |
+
+  - **D: the three equilibria coincide.** `solve_equilibrium`, drift-diffusion at 0 V and drift-diffusion at 0 V
+    with thermionic emission differ by at most 4.4e-16 V at every level (one or two units in the last place).
+    17.2 (c) holds as an identity in the code.
+  - **The five misses are discretization error, not a defect.** Both isotype junctions converge at second order
+    (orders 1.98, 1.94, 1.83 and 1.98, 1.95, 1.85), and N = 1024, which the factorial runs, gives 6.2e-5 and
+    5.8e-5, inside the criterion. An isotype junction has an accumulation layer on one side, with a surface
+    density about 12 times the doping and so a local screening length near 4 nm, which the ladder resolves worse
+    than the p–N junction's depletion layers.
+  - The n–N order is NOT EVALUATED by §4.2's spread rule (0.109 against 0.1), from the N = 64 pair, as TVB-05's
+    was (DT-Q20).
+  - The factorial's ε_int is 3.4e-16, 0 and 0 against U of 3.1e-4, 8.4e-6 and 2.9e-4: no interaction.
+- **IG-Q19 (the five fails and the order).**
+  - (A) Record as found. The frozen test pins the outcomes and a window on each metric. The fails stand, with the
+    N = 1024 values printed. No criterion, ladder or mesh changes (DT-Q20 A's and DT-Q36 A's precedent).
+  - (B) A finer ladder or a stronger grading: a construction change after a run (TVM2), which would need the
+    owner's explicit authorization.
+  - **A, applied.** `verify_benchmark.tvr5a_full` holds TVB-08 to the outcome as found, overall `fail`.
+- **Mutation, TVB-08's own code:** 24 mutants, 18 caught. The six survivors:
+  - the wide material's N_v removed from the device: no junction has a p-type wide side, so that number is not
+    exercised (a coverage gap, for the owner);
+  - the right bending computed from the level's error alone: equivalent, since V_bi is reproduced to rounding;
+  - band-gap narrowing left on: no effect on these junctions within the pinned windows (both silicon sides carry
+    the same narrowing, and the III–V set has none);
+  - the Newton term dropped from the agreement bound, and either of the two differences zeroed: a comparison that
+    passes with 1 ulp cannot detect its own weakening. The pinned ceiling (ratio below 0.1) holds in each.
+- **Suites, Release:** `nitcad_verify_test` 177 cases and `nitcad_verify_benchmark_test` 43 cases pass
+  (registry: 55 benchmarks, TVB-08 in the full tier); TVB-08 takes 5 s. No Debug build exists in this worktree
+  yet; the Debug timing is taken at close-out.
+- **For the owner, not acted on:** (1) IG-Q20 A above; (2) whether a fourth junction with a p-type wide side
+  should be added to close the N_v gap; (3) option B of IG-Q19, if the isotype accuracy should be judged on a
+  finer ladder.
+
 ---
 
 ## New questions the advisor raised (not yet in `ARCHITECTURE.md`)
