@@ -192,11 +192,12 @@ TEST_CASE("TVB-19 nightly tier: linear transients (frozen outcome: as found, 16.
 
 // TVB-20 and TVB-21 (the long-channel MOSFET against Pao-Sah, and its swing; A, 16.19 frozen; construction 16.46 as
 // changed by 16.47) in the nightly tier: NiTCAD's L ladder (4 L0 ... 32 L0) and the (h, tol) factorial with the h/2
-// mesh at 32 L0. TVB-20: for each judged (V_G, V_D), the order in 1/L and the limit against Pao-Sah; TVB-21: the same
-// for S at three gate biases. Frozen outcome (16.47; DT-Q40 A, DT-Q41 A, DT-Q42 A, DT-Q43 A): TVB-20 passes all 22
-// (none of its points is below psi_B + 3 V_T). TVB-21 as found: all 6 NOT EVALUATED, because S does not depend on L
-// measurably at these lengths (its ladder's differences are below U_disc), so no order in 1/L is established.
-TEST_CASE("TVB-20 and TVB-21 nightly tier: Pao-Sah and the swing (frozen outcome: as found, 16.47)", "[tvb20_full]") {
+// mesh at 32 L0. TVB-20: for each judged (V_G, V_D), the order in 1/L and the limit against Pao-Sah: all 22 pass
+// (16.47; none of its points is below psi_B + 3 V_T).
+// TVB-21 (DT-Q44 A, 16.49; expectation set before the run from 16.47's printed ladders): S's last ladder difference is
+// within U_disc at all three gate biases, so each order is NOT APPLICABLE by that predicate and S at 32 L0 passes
+// against Pao-Sah within U_num + U_ref + |last ladder difference| + eps_cutoff.
+TEST_CASE("TVB-20 and TVB-21 nightly tier: Pao-Sah and the swing (frozen outcome: 16.47, 16.49)", "[tvb20_full]") {
     for (const bench::BenchmarkResult& r : {bench::run_tvb20(bench::Tier::full), bench::run_tvb21(bench::Tier::full)}) {
         INFO(r.id);
         CHECK_FALSE(r.run_error.has_value());
@@ -209,13 +210,12 @@ TEST_CASE("TVB-20 and TVB-21 nightly tier: Pao-Sah and the swing (frozen outcome
         CHECK(r.comparisons.size() == (r.id == "TVB-20" ? 22u : 6u));
         for (const auto& c : r.comparisons) {
             CAPTURE(c.quantity, c.comparison.reason);
-            if (r.id == "TVB-20") {
-                CHECK(c.comparison.outcome == Outcome::pass);
+            if (r.id == "TVB-21" && c.quantity.find("order in 1/L") != std::string::npos) {
+                CHECK(c.comparison.outcome == Outcome::not_applicable);
+                CHECK(c.comparison.reason.find("the ladder's last difference > U_disc") != std::string::npos);
             } else {
-                CHECK(c.comparison.outcome == Outcome::not_evaluated);
-                const bool order = c.quantity.find("order in 1/L") != std::string::npos;
-                CHECK(c.comparison.reason.find(order ? "not in the asymptotic range" : "Q_inf not established") !=
-                      std::string::npos);
+                if (r.id == "TVB-21") CHECK(c.quantity.find("at the longest L against Pao-Sah") != std::string::npos);
+                CHECK(c.comparison.outcome == Outcome::pass);
             }
         }
     }

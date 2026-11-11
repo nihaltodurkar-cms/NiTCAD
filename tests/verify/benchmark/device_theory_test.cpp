@@ -37,12 +37,14 @@ void require_all_pass(const bench::BenchmarkResult& r, std::size_t expected_comp
 }
 
 // A frozen outcome recorded as found: per comparison, in order, its quantity, outcome, a part of its reason ("" for
-// none) and, where the criterion ends in "= <bound>", that bound to 1e-6 (0: not pinned).
+// none), where the criterion ends in "= <bound>", that bound to 1e-6 (0: not pinned), and a ceiling on the metric (0:
+// none).
 struct Found {
     std::string quantity;
     Outcome outcome;
     std::string reason;
     double bound = 0.0;
+    double metric_below = 0.0;
 };
 
 void require_as_found(const bench::BenchmarkResult& r, const std::vector<Found>& expected) {
@@ -60,6 +62,7 @@ void require_as_found(const bench::BenchmarkResult& r, const std::vector<Found>&
         CHECK(c.quantity == expected[i].quantity);
         CHECK(c.comparison.outcome == expected[i].outcome);
         CHECK(c.comparison.reason.find(expected[i].reason) != std::string::npos);
+        if (expected[i].metric_below > 0.0) CHECK(c.metric < expected[i].metric_below);
         if (expected[i].bound > 0.0) {
             const double bound = std::stod(c.criterion.substr(c.criterion.rfind("= ") + 2));
             CHECK(std::abs(bound - expected[i].bound) <= 1e-6 * expected[i].bound);
@@ -373,7 +376,8 @@ TEST_CASE("TVB-27: lattice heat, full tier (frozen outcome: as found, 16.48)", "
                      {{"T (Kirchhoff slab) order in h", Outcome::not_evaluated, range},
                       {"T (Kirchhoff slab) finest accuracy", Outcome::pass, ""},
                       {"T (self-heated resistor) order in h", Outcome::not_evaluated, range},
-                      {"T (self-heated resistor) finest accuracy", Outcome::pass, ""}});
+                      // 2.9e-8 as found at 100 um; at 10 um the reference's n = N floors it near 1e-6 (16.43).
+                      {"T (self-heated resistor) finest accuracy", Outcome::pass, "", 0.0, 1e-7}});
 }
 
 TEST_CASE("TVB-28: thermoelectric identities, full tier (frozen outcome: as found, 16.48)", "[.tvr4_full]") {

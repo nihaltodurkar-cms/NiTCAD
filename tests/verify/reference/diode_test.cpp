@@ -104,7 +104,8 @@ TEST_CASE("diode: with SRH, the long- and short-base limits of the coth law", "[
     }
 }
 
-TEST_CASE("diode: the SNS current, two methods, sign, 1 / tau scaling, reverse generation bound", "[diode]") {
+TEST_CASE("diode: the SNS current, two methods, sign, 1 / tau scaling, reverse generation bound",
+          "[diode][.tvr4_reference_release]") {
     const DiodeInput in = input(true);
     for (const double V : {-5.0, 0.5}) {  // two biases: each SRH call is about 0.1 s in Debug
         CAPTURE(V);

@@ -11035,6 +11035,74 @@ the benchmark (TVM2).**
   changes do not enter.
 - **Open in TVR-4:** step 14, the close-out. No DT question is open.
 
+**16.49 DT-Q44 and DT-Q45, ruled A (owner "go ahead and choose recommended", 2026-11-11).**
+- **DT-Q44 (TVB-21 judged nothing after 16.47).**
+  - (A) Where the last ladder difference of S is within U_disc, S has no measurable dependence on L: its order in
+    1/L is NOT APPLICABLE by that predicate, and S at the longest L is judged directly,
+    |S(32 L0) − S_PS| ≤ U_num + U_ref + ε_approx with ε_approx = |last ladder difference| + ε_cutoff. Elsewhere
+    16.19's rule stands. This is a criterion change after a run (TVM2), DT-Q36 B's class.
+  - (B) Leave the six NOT EVALUATED (16.47's DT-Q43 A).
+  - **A, applied.** Without it the swing benchmark verifies nothing.
+  - **Expectation, set before the run from 16.47's printed ladders:** all three orders NOT APPLICABLE; S passes at
+    0.97, 0.62 and 0.36 of its bound (0.4, 0.5 and 0.6 V).
+  - **Run: as expected.** 0.964, 0.617 and 0.360. The last differences are 4.6e-5, 4.0e-6 and 3.5e-7 V/dec against
+    U_disc 5.6e-5, 4.9e-5 and 4.4e-5.
+  - The pass at 0.4 V is marginal. Its bound is 86 % ε_cutoff: at ψ_s − ψ_B = 5 V_T the reference's cutoff
+    ambiguity is 0.75 % of S, and NiTCAD's S lies inside it. At 0.5 and 0.6 V the bound is mostly U_disc.
+  - TVB-20 is unchanged: 22 pass. Frozen case: TVB-20 22 pass; TVB-21 3 NOT APPLICABLE, 3 pass.
+- **DT-Q45 (CV-Q19's 75 s after TVR-4).**
+  - Measured, serial Debug `ctest -R verify -LE full`: 71/71 pass in 101.3 and 94.9 s, **under load** (a game on
+    the machine). The 66 tests of 16.38's idle run (74.5 s) ran 22 to 30 % slower than there.
+  - Idle estimate from the per-test times: 71.05 s for the 62 tests unchanged since 16.38, plus about 6.2 s for
+    the changed and new ones, about 77.2 s. Over the budget by about 2.2 s. The growth is TVB-13's fast case
+    (about 1.4 s; 16.42) and the L0 tests of steps 8 to 12 and 9.
+  - (A) Move the Debug-heavy L0 cases to a Release-only ctest, as 16.31, 16.38 and 16.46 did.
+  - (B) Raise CV-Q19 to 80 s.
+  - **A, applied.** Eight cases carry `[.tvr4_reference_release]` and run in the Release-only ctest
+    `verify.tvr4_reference_release`: `pao_sah` limits; `admittance` at ω = 0, the Riccati second method and C_SCR;
+    `diode` SNS; `minority_diffusion` erfc and collocation; `thermal_slab`'s constant-coefficient resistor.
+    Nothing is removed from Release or CI.
+  - After the move: 71/71 pass in 97.0 and 96.7 s, under the same load (the unchanged tests 30 % slower than
+    idle). **Idle estimate 74.2 s.** This is an estimate; no idle run was possible today.
+
+**16.50 Step 14: TVR-4 close-out (2026-11-11).**
+- **Outcomes** (ARCHITECTURE.md 10 carries the table): TVB-06, 13, 15 and 20 pass in full. TVB-21 3 pass and 3 NOT
+  APPLICABLE. TVB-05, 10, 16, 17, 18 and 27 pass where judged and are NOT EVALUATED elsewhere (TVB-16 also 3
+  finding, (x)). TVB-19 and TVB-28 carry 3 and 1 order fails of h-exact quantities. TVB-32 on these devices: 501
+  entries, 285 pass, 194 not applicable, 20 NOT EVALUATED, 2 fail (the finding of 16.45).
+- **Provenance:** PD 9 references (TVB-05, 06, 10, 13, 15, 17, 19, 27, 28), PA 2 (TVB-16, 18), PB 1 (`pao_sah`:
+  TVB-20, 21; Pao and Sah's paper was not read, 16.17).
+- **Mutation, for 16.47 to 16.49's changes.**
+  - TVB-20 and TVB-21's own code (12 mutants, each a nightly run): 11 caught. These were U_disc's r^p, ε_cutoff
+    out of the flat bound, the flat predicate, the ladder's first length, Q without L, the 1e-2 limit, the order
+    window, the reference's μ by 1 % (6 comparisons fail), ε_cutoff's first term, the reference's S stencil and
+    the spread limit.
+    - The survivor: S judged at Q_∞ instead of at the longest L. Same outcomes: the two differ by less than the
+      bound's slack.
+  - TVB-13 (3): the node field by 0.1 % and the reference at V/L are caught. The outcome forced to pass is the
+    outcome as found.
+  - TVB-27 (3): the resistor back at 10 µm survived the first pins, since both lengths pass ≤ 1e-4. The case now
+    pins the finest error below 1e-7 (2.9e-8 as found; about 1e-6 at 10 µm), which catches it. The default set's
+    κ and μ in the reference are equivalent: the default set copies the legacy's mobility and conductivity.
+  - Not mutated: the pins of 16.48 (test code).
+- **Suites (2026-11-11, after every change above).**
+  - Release, `ctest -LE full -j 4`: 206/206 pass in 807 s. `verify_benchmark.tvr4_full` 77.7 s under load, against
+    16.7's 120 s; `verify.tvr4_reference_release` 0.49 s; `verify.pao_sah_release` 1.54 s.
+  - Debug, serial `ctest -R verify -LE full`: 71/71 pass (16.49's times).
+  - Nightly cases run today in Release: `verify_full.tvb20` passes (38 assertions, 13.6 min) and
+    `verify_full.tvb19` passes (25 assertions, about 9 min). Not rerun: `verify_full.tvb04`, `tvb05`, `tvb07`,
+    `tvb09` and `tvb14`, whose code this branch's last three commits do not touch.
+- **Time.** Fast tier: TVB-06 0.09 s and TVB-13 1.65 s in Debug under load (about 1.3 s idle), within 16.7's 2 s
+  only at idle. Serial Debug verify: 16.49. Nightly: TVB-19 about 9 min, TVB-20/21 12 to 16 min.
+- **Not done, for the owner:**
+  - an idle serial Debug run to confirm the 74.2 s estimate (CV-Q19);
+  - findings deferred past TVR-4 (DT-Q11): the prescribed-generation predicate for C1 and C2 (16.45); finding (x);
+  - DT-Q36 B's redesign (judging h-exact quantities as exactness), which would turn TVB-19's and TVB-28's four
+    fails and TVB-27's slab into judged comparisons;
+  - TVB-16, 17 and 18's NOT EVALUATED comparisons (U_disc outside the asymptotic range) stay as found.
+- **Work location.** Steps 9 and 14 were done on `verify/device-theory-step9`, a worktree branch off
+  `verify/device-theory` at 7688cd6. Nothing is pushed. TVR-4 is complete on that branch.
+
 ---
 
 ## New questions the advisor raised (not yet in `ARCHITECTURE.md`)

@@ -91,7 +91,7 @@ TEST_CASE("pao_sah: the conductance identity", "[pao_sah][.pao_sah_release]") {
     }
 }
 
-TEST_CASE("pao_sah: limits", "[pao_sah]") {
+TEST_CASE("pao_sah: limits", "[pao_sah][.tvr4_reference_release]") {
     // Linear region: Q / (mu (-Q_I(0)) V_D) -> 1 as V_D -> 0 (first order in V_D / V_T).
     const auto q0 = ref::pao_sah_inversion_charge(input(), 1.5, 0.0);
     const auto lin = ref::pao_sah(input(), 1.5, 1e-5);

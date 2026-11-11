@@ -62,7 +62,8 @@ TEST_CASE("minority diffusion: the Green's function", "[minority_diffusion]") {
     REQUIRE_THROWS_AS(minority_green(p, 1.5, s), std::invalid_argument);
 }
 
-TEST_CASE("minority diffusion: the integral against the erfc closed form on a long bar", "[minority_diffusion]") {
+TEST_CASE("minority diffusion: the integral against the erfc closed form on a long bar",
+          "[minority_diffusion][.tvr4_reference_release]") {
     // k L = 200 and the Gaussian 50 widths from each end: the ends change u by e^-100, below double-double.
     // Infinite domain: u = G0 / (2 D k) sigma sqrt(pi / 2) e^(k^2 sigma^2 / 2)
     //   [e^(-k y) erfc((k sigma^2 - y) / (sigma sqrt 2)) + e^(k y) erfc((k sigma^2 + y) / (sigma sqrt 2))], y = x - c.
@@ -83,7 +84,8 @@ TEST_CASE("minority diffusion: the integral against the erfc closed form on a lo
     }
 }
 
-TEST_CASE("minority diffusion: collocation against the integral (the second method)", "[minority_diffusion]") {
+TEST_CASE("minority diffusion: collocation against the integral (the second method)",
+          "[minority_diffusion][.tvr4_reference_release]") {
     // TVB-15's shape: a Gaussian 10 um wide in a 100 um bar, a diffusion length of 30 um.
     const MinorityProblem p{.diffusivity_cm2_s = 30.0, .lifetime_s = 3e-7, .length_cm = 1e-2,
                             .peak_generation = 1e20, .centre_cm = 5e-3, .width_cm = 1e-3};

@@ -48,7 +48,7 @@ double conductance(const DiodeInput& in, double V) {
 
 }  // namespace
 
-TEST_CASE("admittance: at w = 0 the edges' motion makes it d J_diff / dV", "[admittance]") {
+TEST_CASE("admittance: at w = 0 the edges' motion makes it d J_diff / dV", "[admittance][.tvr4_reference_release]") {
     for (const bool srh : {true, false}) {
         for (const double L : {5e-4, 5e-2}) {
             const DiodeInput in = input(srh, L);
@@ -113,7 +113,7 @@ TEST_CASE("admittance: the short-base series at low frequency", "[admittance]") 
     }
 }
 
-TEST_CASE("admittance: the Riccati second method agrees with the closed form", "[admittance]") {
+TEST_CASE("admittance: the Riccati second method agrees with the closed form", "[admittance][.tvr4_reference_release]") {
     for (const double L : {5e-4, 5e-2}) {
         const DiodeInput in = input(true, L);
         const std::vector<double> w{1e2, 1e4, 1e5, 1e6, 1e8, 1e9};  // w tau_p about 8e-4 ... 8e3
@@ -172,7 +172,7 @@ TEST_CASE("admittance: the capacitive term and the totals", "[admittance]") {
     }
 }
 
-TEST_CASE("admittance: the depletion region's minority storage C_SCR (DT-Q34 A)", "[admittance]") {
+TEST_CASE("admittance: the depletion region's minority storage C_SCR (DT-Q34 A)", "[admittance][.tvr4_reference_release]") {
     // Without SRH (no SNS quadrature in diode_current; C_SCR does not depend on the lifetimes).
     const DiodeInput in = input(false, 5e-4);
     const std::vector<double> w{1e6};

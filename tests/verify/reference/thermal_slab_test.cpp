@@ -48,7 +48,7 @@ TEST_CASE("thermal_slab: the slab", "[thermal_slab]") {
     CHECK((*T)[2].to_double() < 350.0);
 }
 
-TEST_CASE("thermal_slab: the self-heated resistor's constant-coefficient limit", "[thermal_slab]") {
+TEST_CASE("thermal_slab: the self-heated resistor's constant-coefficient limit", "[thermal_slab][.tvr4_reference_release]") {
     ref::ResistorInput in{.q_C = q,
                           .k_eV_per_K = k,
                           .length_cm = 1e-3,

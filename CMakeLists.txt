@@ -827,6 +827,9 @@ if(CMAKE_BUILD_TYPE STREQUAL "Release")
   add_test(NAME verify.diode_profile COMMAND nitcad_verify_test "[.diode_profile]")
   # The Pao-Sah reference's bulk-ambiguity and conductance-identity cases (DECISIONS Unit 55 16.46): 1.5 s Release.
   add_test(NAME verify.pao_sah_release COMMAND nitcad_verify_test "[.pao_sah_release]")
+  # TVR-4's Debug-heavy reference L0 cases (DECISIONS Unit 55 16.49, DT-Q45 A; CV-Q19's Debug budget): about 3 s
+  # in Debug.
+  add_test(NAME verify.tvr4_reference_release COMMAND nitcad_verify_test "[.tvr4_reference_release]")
 endif()
 
 # The full tier of TVR-2 (DECISIONS Unit 55 14.9): TVB-04's 3D tensor ladder to 64^3 with PARDISO, about 12 minutes on 6

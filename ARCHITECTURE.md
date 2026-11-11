@@ -3014,6 +3014,43 @@ against a register typed from the sources (`verify/reference/model_parameters.hp
   register mismatches, including the non-silicon sets against the Ioffe NSM archive.
 - No physics was changed.
 
+**Device-theory verification (Unit 55 TVR-4, `verify/device-theory`; DECISIONS.md Unit 55 16.4, 16.19, 16.50).**
+Fourteen benchmarks compare the assembled solver with closed forms and quadrature-grade references on 1D and 2D
+devices. Each reference is independent code under `verify/reference`, with its own L0 tests and a second method.
+Criteria were frozen before code (16.8, 16.19); every departure from a frozen outcome is recorded with its ruling.
+
+| Benchmark | Device and reference (provenance) | Outcome (tier) |
+|---|---|---|
+| TVB-05 | Coaxial capacitor, generated 2D mesh; closed form (PD) | accuracy 3.7e-5 printed; order and accuracy NOT EVALUATED (full; the factorial runs nightly) |
+| TVB-06 | Dielectric stack, insulator-only device; closed form (PD) | 9 pass (full); 6 pass (fast) |
+| TVB-10 | MOS capacitor, HF C-V and deep depletion; `mos_hf` (PD) | 13 pass, 1 NOT EVALUATED (full) |
+| TVB-13 | Uniform resistor: Canali drift, homogeneous energy balance; `energy_layer` (PD) | 8 pass (full); 4 pass (fast) |
+| TVB-15 | Neutral-region minority diffusion with SRH; `minority_diffusion` (PD) | 4 pass (full) |
+| TVB-16 | Ideal diode, long and short base, SNS current; `diode` (PA) | 19 pass, 3 finding, 19 NOT EVALUATED (full) |
+| TVB-17 | Depletion capacitance at reverse bias; `qe_junction` (PD) | 3 pass, 3 NOT EVALUATED (full) |
+| TVB-18 | Diode small-signal admittance at forward bias; `admittance` (PA) | 52 pass, 11 NOT EVALUATED (full) |
+| TVB-19 | Dielectric relaxation and the Haynes–Shockley pulse; `linear_transient` (PD) | 10 pass, 3 NOT EVALUATED, 3 fail (nightly) |
+| TVB-20 | Long-channel MOSFET against Pao–Sah; `pao_sah` (PB) | 22 pass (nightly) |
+| TVB-21 | Its subthreshold swing; `pao_sah` (PB) | 3 pass, 3 NOT APPLICABLE (nightly) |
+| TVB-27 | Lattice heat: Kirchhoff slab, self-heated resistor; `thermal_slab` (PD) | 2 pass, 2 NOT EVALUATED (full) |
+| TVB-28 | Seebeck, Peltier and the energy residual; `thermal_slab` (PD) | 6 pass, 1 NOT EVALUATED, 1 fail (full) |
+| TVB-32 | The consistency checks C1–C12 on these devices | 501 entries: 285 pass, 194 not applicable, 20 NOT EVALUATED, 2 fail (full) |
+
+- The four fails are not solver errors by the records' analysis:
+  - TVB-19's three and TVB-28's one are orders in h of quantities that have no h error (16.41, 16.43);
+  - TVB-32's two are C1 and C2 applied at a point with prescribed generation, which the checks cannot see (16.45).
+    Its fix is deferred.
+- TVB-16's three findings are finding (x): the long base with SRH at 0.5 and 0.6 V (16.33, 16.37).
+- NOT EVALUATED means the frozen rule could not establish a discretization uncertainty or an order (mostly "not in
+  the asymptotic range"); the printed differences are in DECISIONS.md.
+- TVB-20's ladder is L = 10 to 80 µm; its Newton tolerance is 1e-6 because the inverted surface's holes sit at the
+  solver's rounding (16.47). TVB-21 judges S at the longest L where S has no measurable dependence on L (16.49).
+- Where they run: `nitcad verify` (fast) runs TVB-06 and TVB-13's drift; the Release-only ctest
+  `verify_benchmark.tvr4_full` pins the full-tier outcomes; TVB-05's factorial, TVB-19 and TVB-20/21 run only with
+  NITCAD_VERIFY_FULL_TIER (local, label `full`).
+- No physics was changed. One device capability was added for these benchmarks: insulator-only devices
+  (DT-Q2 A).
+
 ## 11. Build order and long-term capability roadmap
 
 Each implemented unit is one branch, is independently tested, and is merged only on the owner's instruction. The table

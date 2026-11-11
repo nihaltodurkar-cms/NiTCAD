@@ -17,7 +17,9 @@
 // against h/2 (every spacing halved and the grading ratio square-rooted), U_iter = |Q(tol) - Q(tol / 100)|.
 // TVB-21: S = 2 h_G / log10(Q(V_G + h_G) / Q(V_G - h_G)), h_G = 20 mV, at V_D = 50 mV (<= 3 V_T), the same stencil on
 // NiTCAD's ladder and on the reference; the same rule on S (16.19). The depletion formula ln 10 V_T (1 + C_dep / C_ox)
-// is printed beside it (DT-Q6), never judged.
+// is printed beside it (DT-Q6), never judged. Where S's last ladder difference is within U_disc (no measurable
+// dependence on
+// L), S at the longest L is judged directly and the order is NOT APPLICABLE (DT-Q44 A, 16.49).
 // Nightly tier (16.7): the factorial's h/2 mesh is about 30 000 nodes.
 #include <algorithm>
 #include <cmath>
@@ -252,7 +254,10 @@ struct Quantity {
     double applicability_value = 0.0, applicability_threshold = 0.0;
 };
 
-void judge_limit(BenchmarkResult& r, const Quantity& q) {
+// length_exact (TVB-21; DT-Q44 A, 16.49): where the ladder's last difference is within U_disc the quantity has no
+// measurable dependence on L, so no order in 1/L exists to judge (NOT APPLICABLE) and the value at the longest L is
+// judged directly, with eps_approx = |last ladder difference| + eps_cutoff.
+void judge_limit(BenchmarkResult& r, const Quantity& q, bool length_exact = false) {
     const double d1 = q.ladder[1] - q.ladder[0], d2 = q.ladder[2] - q.ladder[1], d3 = q.ladder[3] - q.ladder[2];
     const double p1 = std::log2(std::abs(d1 / d2)), p2 = std::log2(std::abs(d2 / d3));
     const double spread = std::abs(p2 - p1);
@@ -279,6 +284,32 @@ void judge_limit(BenchmarkResult& r, const Quantity& q) {
                       shortest(u_iter) + ", U_ref " + shortest(q.u_ref) + "; " + f.note);
     const std::vector<Predicate> pr{{"psi_s(V_S) >= psi_B + 3 V_T", q.applicability_value,
                                      q.applicability_threshold, q.applicable}};
+    const bool flat = length_exact && q.applicable && std::abs(d3) <= u_disc;
+    if (flat) {
+        std::vector<Predicate> po = pr;
+        po.push_back({"the ladder's last difference > U_disc (an order in 1/L is measurable)", std::abs(d3), u_disc,
+                      false});
+        const std::string band_flat = "order in 1/L in [0.8, 1.3], spread <= 0.1 (16.18 (d))";
+        ComparisonRecord co{q.name + " order in 1/L", "1", 0.0, p2, 1.0, 0.0, p2, band_flat, {}};
+        co.comparison = judge(r.info, po, false, band_flat);
+        const double eps_flat = std::abs(d3) + eps_cut, bound_flat = u_disc + u_iter + q.u_ref + eps_flat;
+        const double miss = std::abs(q.ladder[levels - 1] - q.ref);
+        const std::string acc_flat =
+            "|S(L_max) - S_PS| <= U_num + U_ref + eps_approx, eps_approx = |last ladder difference| + eps_cutoff "
+            "(DT-Q44 A)";
+        ComparisonRecord ca{q.name + " at the longest L against Pao-Sah", "A", 0.0, q.ladder[levels - 1], q.ref,
+                            q.u_ref, miss / bound_flat, acc_flat, {}};
+        if (eps_flat > approx_limit * s) {
+            ca.comparison = Comparison{Outcome::not_evaluated, "eps_approx " + shortest(eps_flat / s) +
+                                                                   " of S_PS, above 1e-2", {}};
+        } else {
+            ca.comparison = judge(r.info, pr, miss <= bound_flat, acc_flat);
+            block_if_interacting(ca, f);
+        }
+        r.comparisons.push_back(std::move(co));
+        r.comparisons.push_back(std::move(ca));
+        return;
+    }
     const std::string band = "order in 1/L in [0.8, 1.3], spread <= 0.1 (16.18 (d))";
     ComparisonRecord co{q.name + " order in 1/L", "1", 0.0, p2, 1.0, 0.0, p2, band, {}};
     if (!q.applicable) {
@@ -470,7 +501,7 @@ BenchmarkResult run_tvb21(Tier tier) {
         q.applicability_value = mid->psi_s;
         q.applicability_threshold = mid->psi_B + 3.0 * VT;
         q.applicable = mid->psi_s >= q.applicability_threshold;
-        judge_limit(r, q);
+        judge_limit(r, q, true);
         const double Cdep = std::sqrt(in.q_C * in.eps_F_per_cm * NA / (2.0 * mid->psi_s));
         r.notes.push_back(q.name + ": the depletion formula ln 10 V_T (1 + C_dep / C_ox) " +
                           shortest(std::log(10.0) * VT * (1.0 + Cdep / in.oxide_capacitance_F_per_cm2)) +
