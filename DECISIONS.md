@@ -11364,6 +11364,21 @@ Open risks, for the owner:
   APPLICABLE, as found.
 - (5) Sources behind paywalls (Anderson, Crowell–Sze, Lehovec) may be reachable only through reproductions (PB).
 
+**17.11 Rulings (owner, "choose recommended and go", 2026-11-11).** IG-Q1 through IG-Q13 are approved as
+recommended:
+- Scope as 17.1; no change to NiTCAD's code (IG-Q1).
+- TVB-23's primary current is the hook's localized generation in one neutral side; M_n and M_p are judged
+  separately (IG-Q2 A). `qe_junction`'s range is extended in the reference (IG-Q3 A). Breakdown is judged as V at
+  criterion currents (IG-Q4).
+- TVB-24 judges the generated pairs; direct WKB runs on GaAs with spec masses (IG-Q5).
+- TVB-22 is E under the three measured predicates, on the full Y (IG-Q6).
+- TVB-08 gains the biased thermionic-emission comparison, A class (IG-Q7).
+- TVB-29 judges a graded radial profile; the abrupt case is a diagnostic (IG-Q8 A, IG-Q9).
+- The Lombardi limit runs on a 2D gated resistor (IG-Q10). Tiers as 17.7 (IG-Q11).
+- **17.8's D and E criteria are frozen now.** Each A-class ε_approx is frozen in step 1 (IG-Q12). A criterion
+  change after a run needs the owner's explicit authorization.
+- No code was written with this proposal. Step 1 follows.
+
 ---
 
 ## New questions the advisor raised (not yet in `ARCHITECTURE.md`)
