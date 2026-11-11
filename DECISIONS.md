@@ -11103,6 +11103,267 @@ the benchmark (TVM2).**
 - **Work location.** Steps 9 and 14 were done on `verify/device-theory-step9`, a worktree branch off
   `verify/device-theory` at 7688cd6. Nothing is pushed. TVR-4 is complete on that branch.
 
+#### 17. TVR-5a (Unit 55e, first half): classical interfaces and generation (proposed 2026-11-11; on `verify/interfaces-generation`; rulings before code)
+
+**Owner request (2026-11-11):** "start TVR-5a". By 16.14 and AP-Q6 the sub-unit starts with its own proposal: the
+scope, what the catalogue does not fit in the code, the references, the D and E criteria to freeze, and the owner's
+questions. No code is written before the rulings. Step 1 (reading and derivations) follows them, and the A-class
+criteria are frozen there, before the code that runs them (as DT-Q8).
+
+**Branch.** `verify/interfaces-generation`, from `verify/device-theory` at `f4a6412` (TVR-4, draft PR #80, not
+merged). TVR-5a needs TVR-4's `qe_junction`, the hook's generation and time profile, the shared U_disc rule and the
+registry. It is rebased on `main` once #80 merges. Local only.
+
+**17.1 Scope.** In:
+- (a) TVB-08, 22, 23, 24, 26 and 29 (16.12 (f)), each re-planned below against the code as it is.
+- (b) The C10 limit Lombardi → bulk as E⊥ → 0 (16.12 (f); §11.6).
+- (c) The new references, base-only (TVD-19), each with its L0 tests, its second method and its contract (§3.3).
+- (d) TVB-32 (C1–C12) on every new device.
+- (e) Every benchmark registered with its tier and its frozen-outcome test; the (h, tol) factorial on every E and A
+  comparison (16.2 (p)); U_disc by the shared rule of 16.36–16.37.
+
+Out:
+- TVR-5b: TVB-25, 30, 33 and the MLDA limit.
+- The existing tests these benchmarks sit beside (`heterojunction:147`, `small_signal:743` and `:774`,
+  `impact_ionization:170` and `:205`, `btbt:129` to `:230`, `deck/schottky:286` to `:419`). They stay as they are
+  (TVD-14).
+- Any change to NiTCAD's physics, tables, tests, gates or tolerances. A miss is a finding, proposed separately
+  (DT-Q11). This proposal asks for no change to NiTCAD's code at all: 17.2 found no blocker of the DT-Q2 kind.
+
+**17.2 Found before code (the catalogue against the code).** Each item was read in the file named.
+
+- **(a) TVB-08: the existing exact test covers one mesh and no order.** `heterojunction:147` compares the interface
+  potential and D with a first integral coded in the test, on the legacy mesh, within 2e-4 V_bi and 2e-3. Its
+  reference inputs come from NiTCAD's own `intrinsic_density` and `conduction_band_dos` (`:124`–`:125`), so a wrong
+  N_c passes (R-7). TVB-08 takes every input from the spec, in double-double, on a ladder.
+- **(b) TVB-08: where the interface is.** An edge joining two materials carries the step; the interface lies at
+  that edge's midpoint (the test's own comment, `:151`). The ladder's meshes put the interface at an edge midpoint
+  at every level. Otherwise the junction moves by h/2 between levels and the order measured is the placement's.
+- **(c) TVB-08: "both modes agree" is an identity, not a convergence statement.** The thermionic flux vanishes
+  exactly at n₂/n₁ = e^δ (`thermionic_flux.hpp:15`), the same state at which the Scharfetter–Gummel flux vanishes.
+  So three NiTCAD equilibria must coincide on the same mesh: `solve_equilibrium`, drift-diffusion at 0 V with the
+  default interface, and drift-diffusion at 0 V with thermionic emission declared. That is D class, bounded by C1's
+  rounding and Newton terms (11.13). The order study runs once.
+- **(d) TVB-08: the emission flux under bias has no theory comparison anywhere.** The catalogue's TVB-08 is
+  equilibrium only, and `heterojunction:282`–`:320` are monotonicity checks. The flux
+  K (n₂g₂ − n₁g₁) with v = (kT/h)(2/N)^(1/3) (`thermionic_emission.hpp:6`) is verified as a function (TVR-3) and
+  nowhere as assembled. An isotype n–N junction with constant μ and no recombination has an exact series law for
+  the drift-diffusion model: emission at the step in series with diffusion over the barrier, the same integral as
+  TVB-26's (h). IG-Q7 asks whether to add it.
+- **(e) TVB-22: the model exists and is dynamic.** The small-signal system carries T(s), the traps' occupancy
+  dynamics (`small_signal.hpp:8`; `interface_edges.hpp:107`–`:112`: (s/N_s + D) δf = δocc − f δD). Traps need a
+  meshed insulator and a declared semiconductor–insulator interface (`device.hpp:68`–`:71`), so the MOS-C has a
+  meshed oxide and an electrode, not a lumped gate. The interface lies at the midpoint of each oxide–silicon edge
+  (`interface_edges.hpp:6`), and the oxide thickness is counted to that midpoint.
+- **(f) TVB-22: the single-level circuit is exact only for part of the model.** NiTCAD's level exchanges carriers
+  with both bands and its semiconductor responds through drift-diffusion. The circuit C_ox in series with
+  (C_s ∥ Y_it), Y_it = iω C_T/(1 + iωτ), is exact when (i) one carrier's capture dominates, (ii) the majority
+  carriers follow the signal (ω τ_d ≪ 1, and the substrate's series resistance negligible), and (iii) the minority
+  carriers do not respond. Step 1 derives the general two-carrier admittance from the model's linearized rate
+  equation (PD, second method a direct complex solve of the linearized surface equations) and the size of each
+  departure. Each becomes a predicate measured on the run. `small_signal:748` already records the series
+  resistance's ω²RC² above ωτ = 3.
+- **(g) TVB-22: the extraction must be the benchmark's own.** `analysis::conductance_peak` removes C_ox and fits
+  the peak (`cv.hpp:59`–`:69`). Using it would put NiTCAD's analysis code inside the comparison (I0). TVB-22
+  compares the full admittance Y(ω) with the reference circuit's, and G_p/ω and C_p by the benchmark's own removal
+  of the spec's C_ox. `conductance_peak`'s reading is printed as a diagnostic.
+- **(h) TVB-23: at reverse bias without generation there is no resolved current to multiply.**
+  `impact_ionization:216`–`:217` records the legacy fixture's leakage "four decades below the state's current
+  resolution", and that test uses 10 ps lifetimes to lift it. Two more limits sit at the same level: the
+  generation fades below `impact_current_floor` = 1e-12 A/cm² (`drift_diffusion.hpp:284`; by the documented form
+  α|j|²/√(|j|² + floor²) the deficit is about (floor/|j|)²/2), and `weighted_current` is off by default
+  (`bias.hpp:81`). So M(V) needs a known primary current well above all three. Options in IG-Q2: a localized
+  generation G from the TVQ3 hook in one neutral side (as TVB-15), or short SRH lifetimes (as the existing test).
+- **(i) TVB-23: `qe_junction` stops at about −15 V** (`qe_junction.hpp:47`–`:48`: m² leaves the normal range). A
+  1e16 one-sided junction breaks down near 55 V (`impact_ionization:215`). IG-Q3: extend the reference's range
+  (below the limit the minority terms are under 2⁻¹⁰⁷⁴ and are dropped with that bound stated), or use only dopings
+  that break down inside the range.
+- **(j) TVB-23: NiTCAD has no breakdown voltage of its own.** "The trace defines no breakdown voltage of its own"
+  (`trace.hpp:41`–`:43`). The reference's V_BR is where its ionization integral reaches 1, at zero current. NiTCAD
+  gives V(J) along the traced branch. The comparison is therefore V at criterion currents J_c, against the bias at
+  which the reference's M equals J_c/J_primary, and the limit J_c → ∞ within the low-current window. The mobile
+  carriers' space charge and the neutral regions' ohmic drop bound that window and form ε_approx (step 1; 16.33's
+  lesson: the ohmic drop is in ε from the start).
+- **(k) TVB-23: the ionization integral must hold both coefficients.** α_n ≠ α_p, so M_n = 1/(1 − I_n) with
+  I_n = ∫α_n e^{−φ} dx, φ = ∫(α_n − α_p), and M_p = e^{−φ(W)}/(1 − I_n) (the form `impact_ionization:104`–`:109`
+  uses on NiTCAD's own field, C-2). The reference evaluates it on the QE field, in ψ-space (dx = dψ/E(ψ), E from
+  the first integral in closed form), by nested quadrature, with Dormand–Prince on the current-continuity ODE as
+  the second method. The hole coefficient's branches meet in value but not in slope at 4e5 V/cm
+  (`impact_ionization.hpp:10`–`:12`); the quadrature splits there.
+- **(l) TVB-23: 300 K only.** γ(T) is a tag-C choice (F4, 15.10). It is 1 at 300 K, so the assembled comparison
+  does not exercise it. That is stated in the outcome, not hidden.
+- **(m) TVB-24: the terminal current resolves little of the tunnelling.** "The generation itself is exact, the
+  current resolved only to 5e-4 A/cm²" at 5e19 (`btbt:204`–`:205`). The judged quantity is the generated pairs,
+  q Σ G_i V_i from the stored rates (Unit 45) and from `tunnel_paths` (`generation_cm3_s`, per path), and the
+  terminal current only where it exceeds its resolution (a predicate; `weighted_current` on).
+- **(n) TVB-24: there is no closed form to "re-home".** Both rates are pure generation with no occupancy factor
+  (`band_to_band.hpp:9`), and the local rate takes F at the node from the reconstructed field
+  (`drift_diffusion.hpp:144`–`:147`). The reference is ∫G(E(x)) dx over a p-i-n's reference field. `qe_junction`
+  has two regions; a p-i-n needs three. The first integral closes with one unknown (the level at one i-region
+  edge, fixed by the i-region's length), so the new reference is a Brent root on a quadrature, with Chebyshev
+  collocation on the three-piece problem as the second method. "Field near uniform" is needed only for the
+  diagnostic G(V/W_i), not for the comparison.
+- **(o) TVB-24: the nonlocal rates.** `kane` takes the path's mean field F = (ψ_f − ψ_i)V_T/l
+  (`drift_diffusion.hpp:155`–`:158`); in 1D the reference finds each start's crossing on its own potential by
+  Brent and integrates G(F(x)) over the starts. Per-path l and F are compared too. `direct_wkb` is refused for
+  silicon and needs a direct gap and tunnelling masses (`models.hpp:150`–`:152`); `btbt:479` runs it on GaAs "with
+  a test's masses". As assembled it can be judged on GaAs with masses given in the spec (E for the assembly; the
+  masses' provenance is not at issue at this level). Findings (xi) and (xii) are carried into its report
+  (16.12 (e)). Nonlocal tunnelling needs tensor cells, so these are tensor meshes.
+- **(p) TVB-26: the series law is exact for the model, given the potential.** With constant μ, Boltzmann
+  statistics and no recombination, integrating the electron current from the contact to the ohmic end gives
+  J = q n_B (e^{V/V_T} − 1) / (1/v_r + 1/v_d), v_d = D / ∫ e^{−(ψ(x) − ψ(0))/V_T} dx, with NiTCAD's own boundary
+  condition v (n − n_B) (`contact.hpp:19`–`:22`). `deck/schottky:286` evaluates this on NiTCAD's potential (C-3).
+  TVB-26 evaluates it on the reference's: a first integral with the electrons at the semiconductor's level and the
+  holes at the metal's. The reference's potential omits the electrons' departure from quasi-equilibrium next to
+  the contact and the ohmic drop in the neutral region. Both are bounded in ε_approx (step 1). Class A, as the
+  catalogue says, with a small ε.
+- **(q) TVB-26: what cannot be judged.** Image-force lowering and tunnelling are NOT APPLICABLE (16.12 (a)).
+  The reverse saturation current of the usual diode (1.7e-5 A/cm² at Φ_B = 0.7 eV; Unit 48's ruling of 2026-10-28) is near
+  the terminal-current resolution, and the weighted current is refused on Schottky contacts (SD7). Reverse points
+  are judged only where J exceeds its resolution, else NOT EVALUATED. Unit 48's five accepted limitations are
+  printed beside the outcome. The ideality is judged by 16.19's rule on the derivative (DT-Q24).
+- **(r) TVB-29: an abrupt junction on a generated mesh is placed to first order.** Doping is one value per node
+  (`device.hpp:99`–`:100`), and `unstructured:211` assigns it by the node's position. On a faceted circle the
+  junction then follows the dual cells of the nearest ring of nodes, an O(h) displacement, so an abrupt circular
+  junction would show first order by construction and the comparison would judge the placement. IG-Q8: a graded
+  radial profile of fixed physical width resolved by the ladder (the reference takes any N(r)), the abrupt case
+  reported as a diagnostic with its measured order.
+- **(s) TVB-29: the geometry.** As TVB-05 (`tvb05.cpp:73`–`:81`): a quarter annulus a ≤ r ≤ b tiled by
+  quadrilateral sectors, ohmic contacts on the two arcs, the straight sides natural boundaries. A full disc would
+  leave the inner side without a boundary patch for its contact. Faceting enters the order as in TVB-05 and is
+  measured.
+- **(t) TVB-29: C_j is exact only in the QE model.** As TVB-17 (16.2 (c)): the radial Poisson–Boltzmann problem
+  under bias is the QE problem with the two levels split, and DT-Q4's predicate applies.
+- **(u) The Lombardi limit has no series in 1D.** "In 1D v vanishes and E_perp = E_0" (`drift_diffusion.hpp:38`),
+  E_0 = 1 V/cm. TVR-5a's own MOS device (TVB-22) is 1D, so it cannot carry the limit. C10 needs a series x_k → 0
+  (`checks.hpp:146`). A 2D uniform resistor with a lumped gate along one side gives it: x = V_G − V_FB, the
+  transverse field at the surface proportional to x, the limit model the same device with the surface mobility
+  off. The stated rate is derived in step 1 before any run (11.13). The floor E_0 leaves a residual that C10's
+  floor rule must cover, else NOT EVALUATED.
+- **(v) Time.** Serial Debug verify stands at an estimated 74.2 s of 75 s, the idle run still owed (16.49). TVR-5a
+  adds nothing to the fast tier.
+
+**17.3 New references (`verify/reference`, base only; L0 tests in each one's commit).**
+
+| Ref | Contents | Method; second method | Used by |
+|---|---|---|---|
+| heterojunction | Abrupt two-material junction at equilibrium: Anderson's alignment, first integrals on each side, D and ψ continuous; ψ(x), the interface level, the fields, spike and notch | Brent on the matching condition, tanh–sinh profile (`first_integral`); two-domain Chebyshev collocation with the ε step (TC7) | TVB-08 |
+| trap_admittance | KN surface with a level's sheet charge in the gate equation; the level's two-carrier small-signal admittance; the circuit's Y(ω) | Closed form in complex dd and Brent; a direct complex solve of the linearized surface equations | TVB-22 |
+| multiplication | I_n, φ, M_n, M_p on the QE field in ψ-space; the bias at a given M; `qe_junction`'s range (IG-Q3) | Nested Gauss–Kronrod with the split at the hole switch field; Dormand–Prince on the continuity ODE | TVB-23 |
+| pin_junction | Three-region first integral (p, i, n) in the QE model; E(x) | Brent on the i-length quadrature; three-piece Chebyshev collocation | TVB-24 |
+| tunnel_generation | ∫G(E(x)) dx (local); per-start crossing, l, F and ∫G(F) dx (nonlocal Kane); the direct-gap path integrals on the reference potential | Gauss–Kronrod and Brent on TVR-3's `model_generation`; tanh–sinh | TVB-24 |
+| emission_diffusion | The series law of 17.2 (p) on a first-integral potential, for a Schottky contact and for an isotype heterointerface | tanh–sinh of the barrier integral in dd; Dormand–Prince on the one-carrier current ODE | TVB-26, TVB-08 (IG-Q7) |
+| radial_junction | Radial Poisson–Boltzmann on [a, b] for a given N(r), at equilibrium and in the QE model; ψ(r), E_max, Q(V), C_j | Chebyshev collocation with domain splitting (TC7), Newton; Dormand–Prince shooting | TVB-29 |
+
+The ionization and tunnelling rates are TVR-3's re-coded `model_generation`, and the Lombardi terms its
+`model_mobility`, reused unchanged.
+
+**17.4 The benchmarks.**
+
+| ID | Construction | Reference; class | Judged | Tier |
+|---|---|---|---|---|
+| TVB-08 | 1D GaAs / Al₀.₃Ga₀.₇As, n–N and p–N, and a silicon pair differing only in χ and ε; Boltzmann, no BGN; three NiTCAD equilibria (17.2 (c)) | heterojunction; D (the three agree), E | ψ in L∞ and p̂; interface level; the field on each side; spike and notch heights | full, 1D ladder |
+| TVB-08 bias (IG-Q7) | The n–N junction with thermionic emission declared, constant μ, no recombination, forward and reverse | emission_diffusion; A | J(V) by log error; the emission-limited and diffusion-limited ends | full |
+| TVB-22 | 1D MOS-C, meshed oxide and electrode, one acceptor-like and one donor-like level (separate runs), depletion bias, quasi-static operating point | trap_admittance; E under 17.2 (f)'s predicates | Y(ω) over 1e-2 ≤ ωτ ≤ 1e2; G_p/ω, C_p, the peak's place and height | full, 1D ladder |
+| TVB-23 | Abrupt 1D diode, impact ionization on, constant μ; primary current per IG-Q2 | multiplication; E for 1 − 1/M below breakdown (low-current predicate measured); A for V at criterion currents (17.2 (j)) | 1 − 1/M_n and 1 − 1/M_p at I_n from 0.1 to 0.9; V(J_c) | full; traces nightly if over budget |
+| TVB-24 | 1D p-i-n, tensor cells, reverse bias: local Kane; nonlocal Kane; direct WKB on GaAs with the spec's masses | pin_junction and tunnel_generation; E for the model as assembled | generated pairs (local, per path and summed); l and F per path; the current where resolved | full |
+| TVB-26 | 1D n-Si Schottky diode, constant μ, no recombination; A* from the spec; then v_r swept across v_d | emission_diffusion; A | J(V) forward by log error; ideality; reverse where resolved; image force NOT APPLICABLE | full |
+| TVB-29 | Quarter annulus, 2D generated, radial doping per IG-Q8, ohmic arcs | radial_junction; E (C_j under DT-Q4's predicate) | ψ in L∞ and p̂ (faceting included); E_max; C_j(V) | full; finest level nightly if over budget |
+| C10 Lombardi | 2D uniform resistor, lumped gate on one side, V_G − V_FB → 0, surface mobility on against off | C10's rule (11.6) with the rate derived in step 1 | the observed rates | full |
+
+Every reference input comes from the benchmark spec (§2.2, R-7). Every comparison carries its predicates (TVD-6),
+and a false one is NOT APPLICABLE with its measured value (TVD-16).
+
+**17.5 Sources (step 1; grades per §3.3).**
+
+| Source | Status | Needed for |
+|---|---|---|
+| Anderson, Solid-State Electronics 5, 341 (1962) | To read | TVB-08 |
+| Nicollian and Goetzberger, BSTJ 46, 1055 (1967) | Read (OCR), peak verified, eq (17) illegible (I-10) | TVB-22 |
+| Lehovec, Appl. Phys. Lett. 8, 48 (1966), or Nicollian and Brews ch. 5, for the two-carrier single-level circuit | To locate; the form is derived here (PD) either way | TVB-22 |
+| McKay (Phys. Rev. 94, 1954) or an open reproduction of the ionization integral with α_n ≠ α_p | To locate | TVB-23 |
+| Sze and Gibbons, Appl. Phys. Lett. 8, 111 (1966) | To read; diagnostic values only | TVB-23 |
+| van Overstraeten and de Man (1970); Hurkx et al. (1992); Esseni et al. (2017) | As graded in TVR-3 (15.10, 15.17); F5 open | TVB-23, 24 |
+| Crowell and Sze, Solid-State Electronics 9, 1035 (1966) | To read | TVB-26, TVB-08 bias |
+| Unit 48's records (SD1–SD9; Masszi 1983 as cited there) | In DECISIONS | TVB-26 |
+| Lombardi et al. (1988) | As graded in TVR-3 (PB) | C10 |
+
+A PC-only source makes its comparison "provenance insufficient" (TVD-18). The series law, the multiplication
+integral and the trap admittance are derived here for NiTCAD's stated model (PD) with a second method each, so the
+sources grade the model's statement, not the formula.
+
+**17.6 Order of work (one commit each; L0 before the benchmark that uses it; mutation runs per commit).**
+1. Reading log and derivations (PD, each with its second method): the two-carrier trap admittance and its three
+   predicates; the multiplication integral with both injections; ε_approx for V(J_c), TVB-26 and TVB-08 bias; the
+   three-region first integral; the radial QE problem; the Lombardi rate. Then the A-class criteria freeze.
+2. heterojunction; TVB-08.
+3. trap_admittance; TVB-22.
+4. `qe_junction`'s range (IG-Q3) and multiplication; TVB-23.
+5. pin_junction and tunnel_generation; TVB-24.
+6. emission_diffusion; TVB-26, then TVB-08 bias (IG-Q7).
+7. radial_junction; TVB-29.
+8. The Lombardi C10 series.
+9. TVB-32 on every new device; findings to the owner.
+10. Close-out: timing, suites, provenance summary, ARCHITECTURE 10 links.
+
+**17.7 Tiers and time.** Nothing joins the fast tier (17.2 (v)). The frozen full outcomes run in a Release-only
+ctest `verify_benchmark.tvr5a_full` if it takes ≤ 120 s on CI (16.7's rule; `tvr4_full` is at 77.7 s under load,
+so TVR-5a gets its own). Traces and ladders beyond that go under `NITCAD_VERIFY_FULL_TIER` (nightly, local). New L0
+tests run in Debug only if together they add ≤ 0.5 s, measured; the rest are Release-only (DT-Q45 A's rule).
+
+**17.8 Criteria for the D and E comparisons (proposed; frozen with the rulings, before code; TVM2).** Notation as
+16.8. p̂ on r = 2 ladders by §4.2 with the four-level asymptotic check; U_disc by 16.36–16.37.
+
+| ID | D criterion | E (a) order | E (b) accuracy on the finest level | Ladder |
+|---|---|---|---|---|
+| TVB-08 | The three equilibria: max \|Δψ\| within C1's bound (64 ε scale + V_T u_last, 11.13) | ψ in L∞: p̂ ∈ [1.8, 2.3] | ψ ≤ 1e-4 V_bi; interface level ≤ 1e-4 V_bi; each side's field, spike and notch relative ≤ 1e-3 | 1D N = 64…512, the interface at an edge midpoint |
+| TVB-22 | — | G_p/ω at ωτ = 1 and C_p at ωτ = 1e-2: p̂ ∈ [1.8, 2.3] | \|Y − Y_ref\| ≤ 1e-3 ω C_T at every ω; the peak's place relative ≤ 1e-3 | 1D N = 64…512 in the silicon, the oxide's spacing halved with it |
+| TVB-23 | — | 1 − 1/M: p̂ ∈ [1.8, 2.3] | 1 − 1/M relative ≤ 1e-3, at each I_n | 1D N = 128…1024, graded to the junction |
+| TVB-24 local | — | pairs: p̂ ∈ [1.8, 2.3] | pairs relative ≤ 1e-3 | 1D N = 128…1024 |
+| TVB-24 nonlocal | — | pairs: p̂ ∈ [1.8, 2.3] | pairs relative ≤ 1e-3; per-path l and F relative ≤ 1e-3 where the path's rate is ≥ 1e-6 of the largest | as local |
+| TVB-29 | — | ψ in L∞: p̂ ∈ [1.8, 2.3] | ψ ≤ 1e-4 V_bi; E_max and C_j relative ≤ 1e-3 | 4 levels, 2D generated, M sectors doubling |
+
+The orders 2 for the nonlocal pairs and for TVB-29 with faceting are the stated expectations. If the method's
+order is otherwise by construction, that is found in step 1 and brought back before the freeze, not after a run.
+A-class criteria (TVB-23 V(J_c), TVB-26, TVB-08 bias) are §4.4's A row with ε_approx frozen in step 1. The Lombardi
+series uses C10's frozen rule (rates within 0.2 of the stated one).
+
+**17.9 Owner questions (recommendations in the last column).**
+
+| # | Question | Recommendation |
+|---|---|---|
+| IG-Q1 | Scope as 17.1: six benchmarks, the Lombardi limit, TVB-32 on the new devices; the existing tests kept; no change to NiTCAD's code? | Yes |
+| IG-Q2 | TVB-23's primary current: (A) a localized generation from the TVQ3 hook in one neutral side, the junction then multiplying a pure electron or a pure hole current; M = J(ionization on)/J(off) at the same G, so M_n and M_p are judged separately. (B) Short SRH lifetimes as `impact_ionization:170`, the source distributed through the depletion region, the reference needing the generation profile too (A class). | A. One-carrier injection is the textbook definition of M_n and M_p, and it keeps the comparison E. The hook is verification-only already |
+| IG-Q3 | `qe_junction` below −15 V: (A) extend the reference (minority terms under 2⁻¹⁰⁷⁴ dropped, the bound stated, its own L0 against the existing range and against collocation); (B) only junctions that break down above −15 V (heavier doping). | A. B would leave the 1e16 junction of Unit 19's own tests outside the benchmark |
+| IG-Q4 | TVB-23's breakdown comparison as 17.2 (j): V at criterion currents against the reference's bias for M = J_c/J_primary, ε_approx from the space charge and ohmic drop, frozen in step 1; no V_BR read from a failed corrector? | Yes |
+| IG-Q5 | TVB-24: judge the generated pairs (stored rates and paths), the terminal current only where resolved; the three-region reference; direct WKB included on GaAs with spec masses? | Yes |
+| IG-Q6 | TVB-22: E against the single-level circuit under the three measured predicates of 17.2 (f), each with a limit frozen in step 1 from its derivation (else NOT APPLICABLE); the full Y compared, `conductance_peak` a diagnostic? | Yes |
+| IG-Q7 | Add the biased thermionic-emission comparison to TVB-08 (17.2 (d)), A class, sharing TVB-26's reference? It is not in §6's catalogue. | Yes. Otherwise the emission flux is verified only as a function. The added cost is one device and no new reference |
+| IG-Q8 | TVB-29's junction: (A) a graded radial profile of fixed width, judged; the abrupt nodal-doping case run and reported with its measured order, not judged. (B) Abrupt and judged: expected first order by construction, a finding before it runs. (C) Abrupt with the benchmark computing box-fraction-weighted doping on the junction nodes. | A. B judges the placement, not the solver. C tests a doping rule no user gets |
+| IG-Q9 | TVB-29's quantities: ψ and E_max at equilibrium, C_j at reverse bias in the QE model under DT-Q4's predicate; the spherical junction unbuildable (AP-Q2)? | Yes |
+| IG-Q10 | The Lombardi limit on a 2D gated resistor (17.2 (u)), the rate derived in step 1 before any run? | Yes |
+| IG-Q11 | Tiers as 17.7? | Yes |
+| IG-Q12 | Standing rules carried from TVR-4: D and E criteria (17.8) frozen with these rulings, A-class ε_approx in step 1; a failed predicate NOT APPLICABLE (DT-Q10); no finding fixed here (DT-Q11); a criterion change after a run needs the owner's explicit authorization (16.35)? | Yes |
+| IG-Q13 | Numbering and branch: TVR-5a on `verify/interfaces-generation`, stacked on #80; TVR-5b on its own branch after this closes? | Yes |
+
+**17.10 Review of this proposal, and open risks.** Checked in the files, as quoted: `contact.hpp:22`;
+`trace.hpp:41`; `drift_diffusion.hpp:38`, `:144`, `:155`, `:284`; `interface_edges.hpp:6`, `:107`;
+`thermionic_flux.hpp:15`; `qe_junction.hpp:47`; `models.hpp:150`; `bias.hpp:81`; `device.hpp:68`, `:99`;
+`checks.hpp:146`; the test lines named in 17.2. Not checked, and left to step 1: how `small_signal:743`'s fixture
+forms its expected τ and C_it; whether the stored rates (Unit 45) carry the nonlocal electrons at their crossing
+or at the start; the generator's behaviour on a quarter annulus with an interior ring.
+
+Open risks, for the owner:
+- (1) TVB-23's hook injection (IG-Q2 A) puts a source in the continuity rows, and 16.45 found C1 and C2 failing
+  under such a source. TVB-32 on that device will repeat that finding, not a new one.
+- (2) The traces may not fit the 120 s tier, and then V(J_c) runs nightly only.
+- (3) The orders in 17.8 for the nonlocal pairs and the faceted junction are expectations. Step 1 may show a
+  different order by construction; that comes back as a question before the freeze.
+- (4) The three predicates of TVB-22 may leave only a narrow band of ω and bias judged. The rest is NOT
+  APPLICABLE, as found.
+- (5) Sources behind paywalls (Anderson, Crowell–Sze, Lehovec) may be reachable only through reproductions (PB).
+
 ---
 
 ## New questions the advisor raised (not yet in `ARCHITECTURE.md`)
