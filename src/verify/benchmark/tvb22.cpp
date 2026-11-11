@@ -10,9 +10,10 @@
 //     doping dependence off) mu_n = 1000, mu_p = 400 cm^2/Vs;
 //   - silicon: eps_r 11.7, E_g 1.12 eV (no Varshni term), N_c 2.86e19, N_v 3.10e19, chi 4.05 eV (the spec; R-7);
 //     oxide: NiTCAD's SiO2, whose eps_r the spec states as 3.9;
-//   - the level: N_t = 1e10 cm^-2 at E_t - E_i = 0.20 eV, sigma_n = sigma_p = 1e-16 cm^2, v_th = 1e7 cm/s (c = 1e-9
+//   - the level: N_t = 1e11 cm^-2 at E_t - E_i = 0.20 eV, sigma_n = 1e-16 and sigma_p = 1e-18 cm^2, v_th = 1e7 cm/s (c_n = 1e-9
 //     cm^3/s); acceptor-like and donor-like in separate runs;
-//   - the gate at V_FB - 0.20 V and V_FB - 0.30 V (depletion), V_FB the trap-free flat band of the reference;
+//   - the gate at V_FB - 0.20 V and V_FB - 0.25 V (depletion), V_FB the trap-free flat band of the reference (N_t, sigma_p
+//     and the second bias as rebuilt once under IG-Q22 B, DECISIONS 17.19, fixed before the rerun);
 //   - mesh: silicon nodes h_1 / 2 + L sinh(beta k / (N - 1)) / sinh(beta), beta = 4, k = 0 ... N - 1, h_1 the first
 //     silicon spacing; N / 8 + 1 oxide nodes uniform on [-t_ox, -h_1 / 2]. The oxide-silicon edge has length h_1 and
 //     its midpoint, where the interface lies (interface_edges.hpp), is x = 0 at every level (17.2 (e)).
@@ -72,11 +73,11 @@ constexpr double length_cm = 1e-4, t_ox_cm = 1e-6, beta = 4.0;
 constexpr double donors_cm3 = 1e16, phi_m_eV = 4.1, eps_ox_r = 3.9;
 constexpr double eps_si_r = 11.7, gap_eV = 1.12, Nc = 2.86e19, Nv = 3.10e19, chi_eV = 4.05;
 constexpr double mu_n = 1000.0, mu_p = 400.0;
-constexpr double N_t = 1e10, level_eV = 0.20, sigma_cm2 = 1e-16, v_th = 1e7;
+constexpr double N_t = 1e11, level_eV = 0.20, sigma_cm2 = 1e-16, sigma_p_cm2 = 1e-18, v_th = 1e7;
 // 1e-10, and 1e-12 in the factorial: 1e-14 is not reachable at N = 512 (found at the first run, before any result).
 constexpr double tolerance = 1e-3, tol_newton = 1e-10;
 constexpr double limit_p1 = 1e-6, limit_p2 = 1e-5, limit_p3 = 1e-6, limit_relaxation = 1e-2;
-constexpr std::array<double, 2> offsets_V{-0.20, -0.30};
+constexpr std::array<double, 2> offsets_V{-0.20, -0.25};
 // w tau: the seven judged frequencies, then the four more around the peak.
 constexpr std::array<double, 7> judged{1e-2, 1e-1, 0.3, 1.0, 3.0, 10.0, 100.0};
 constexpr std::array<double, 5> around{-0.1, -0.05, 0.0, 0.05, 0.1};  // log10(w tau)
@@ -157,7 +158,7 @@ std::expected<device::Device, std::string> capacitor(int N, bool donor) {
                        .density_cm2 = N_t,
                        .energy_eV = level_eV,
                        .sigma_n_cm2 = sigma_cm2,
-                       .sigma_p_cm2 = sigma_cm2}};
+                       .sigma_p_cm2 = sigma_p_cm2}};
     f.traps.thermal_velocity_n_cm_s = v_th;
     f.traps.thermal_velocity_p_cm_s = v_th;
     auto d = device::Device::create({.mesh = std::move(*m),
@@ -265,7 +266,7 @@ BenchmarkResult run_tvb22(Tier tier) {
                                                     .density_cm2 = N_t,
                                                     .energy_eV = level_eV,
                                                     .capture_n_cm3_s = sigma_cm2 * v_th,
-                                                    .capture_p_cm3_s = sigma_cm2 * v_th,
+                                                    .capture_p_cm3_s = sigma_p_cm2 * v_th,
                                                     .mobility_cm2_Vs = mu_n};
             const auto op = reference::trap_operating_point(in);
             if (!op) {

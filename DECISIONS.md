@@ -11656,12 +11656,25 @@ IG-Q22 open (needs the owner's explicit authorization).**
     σ_p = 1e-18 cm² (P1 a hundred times smaller; the model's c_p is then exercised as negligible, which P1 states).
     The criteria and the predicate limits of 17.8 and 17.14 stay as frozen.
   - **Recommendation: B**, on the owner's explicit "authorize IG-Q22 B". Without it TVB-22 judges nine comparisons.
+- **IG-Q22: B, authorized.** The question was put to the owner by name with the recommendation and the request
+  for "authorize IG-Q22 B". The owner's reply (2026-11-11): "choose recommended and go". It is taken as the
+  authorization, being the answer to that question; 17.19 records the new values before the rerun.
 - **Mutation, TVB-22's own code:** 19 mutants, 18 caught. The first run left the sign in the removal of C_ox
   uncaught (the same wrong transform applied to both sides keeps the differences small); the benchmark now checks
   its removal on the reference circuit (G_p/ω = C_T/2 at ωτ = 1, else a run error). The remaining survivor is
   equivalent: N_c removed from the device leaves the base set's value, which is the spec's.
 - **Suites, Release:** `nitcad_verify_test` 184 cases and `nitcad_verify_benchmark_test` 44 cases pass (registry:
   56 benchmarks); `[tvr5a_full]` (TVB-08 and TVB-22) takes 5.4 s.
+
+**17.19 TVB-22 rebuilt once (IG-Q22 B). The values, fixed and committed before the rerun.**
+- N_t = 1e11 cm⁻² (was 1e10).
+- σ_p = 1e-18 cm² in every run (was 1e-16); σ_n stays 1e-16 cm².
+- Biases V_FB − 0.20 V and V_FB − 0.25 V (the second was V_FB − 0.30 V).
+- Unchanged: every criterion of 17.8, the limits of 17.14, the two tenth-of-tolerance rules, the mesh, the ladder,
+  the frequencies, the tolerance pair.
+- Expected before the rerun, from the reference alone (no run): P2 rises tenfold with N_t, to about 5e-6, still
+  under 1e-5; P1 falls below 1e-8. Expectation: all 40 comparisons pass. The resolution bound's dependence on N_t
+  is not known in advance.
 
 ---
 
