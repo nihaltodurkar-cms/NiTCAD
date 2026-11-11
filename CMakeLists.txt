@@ -158,6 +158,8 @@ add_custom_command(
           src/verify/reference/pn_junction.cpp
           include/NiTCAD/verify/reference/first_integral.hpp
           src/verify/reference/first_integral.cpp
+          include/NiTCAD/verify/reference/heterojunction.hpp
+          src/verify/reference/heterojunction.cpp
           include/NiTCAD/verify/reference/special_functions.hpp
           src/verify/reference/special_functions.cpp
           include/NiTCAD/verify/reference/model_parameters.hpp
@@ -205,7 +207,7 @@ add_library(nitcad_verify_reference STATIC src/verify/reference/double_double.cp
   src/verify/reference/admittance.cpp src/verify/reference/mos_hf.cpp
   src/verify/reference/linear_transient.cpp src/verify/reference/energy_layer.cpp
   src/verify/reference/thermal_slab.cpp
-  src/verify/reference/pao_sah.cpp)
+  src/verify/reference/pao_sah.cpp src/verify/reference/heterojunction.cpp)
 add_library(NiTCAD::verify_reference ALIAS nitcad_verify_reference)
 target_include_directories(nitcad_verify_reference PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
 add_dependencies(nitcad_verify_reference nitcad_verify_reference_boundary)
@@ -242,7 +244,8 @@ add_executable(nitcad_verify_test
   tests/verify/reference/linear_transient_test.cpp
   tests/verify/reference/energy_layer_test.cpp
   tests/verify/reference/thermal_slab_test.cpp
-  tests/verify/reference/pao_sah_test.cpp)
+  tests/verify/reference/pao_sah_test.cpp
+  tests/verify/reference/heterojunction_test.cpp)
 target_link_libraries(nitcad_verify_test PRIVATE NiTCAD::verify_reference Catch2::Catch2WithMain)
 nitcad_add_file_tests(verify nitcad_verify_test)
 add_test(NAME verify_reference_boundary
@@ -830,6 +833,8 @@ if(CMAKE_BUILD_TYPE STREQUAL "Release")
   # TVR-4's Debug-heavy reference L0 cases (DECISIONS Unit 55 16.49, DT-Q45 A; CV-Q19's Debug budget): about 3 s
   # in Debug.
   add_test(NAME verify.tvr4_reference_release COMMAND nitcad_verify_test "[.tvr4_reference_release]")
+  # TVR-5a's Debug-heavy reference L0 cases (DECISIONS Unit 55 17.7): the collocation cross-checks.
+  add_test(NAME verify.tvr5a_reference_release COMMAND nitcad_verify_test "[.tvr5a_reference_release]")
 endif()
 
 # The full tier of TVR-2 (DECISIONS Unit 55 14.9): TVB-04's 3D tensor ladder to 64^3 with PARDISO, about 12 minutes on 6
