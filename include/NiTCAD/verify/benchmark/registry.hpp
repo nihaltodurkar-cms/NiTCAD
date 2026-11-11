@@ -68,6 +68,8 @@ void set_pardiso_threads(int threads);
 [[nodiscard]] BenchmarkResult run_tvb03();
 [[nodiscard]] BenchmarkResult run_tvb04(Tier tier);  // fast: 1D; full and nightly: + 2D and 3D tensor
 [[nodiscard]] BenchmarkResult run_tvb07(Tier tier);  // fast: N = 64, 128 (V_bi only); full: + 256, 512 and the E gates
+// TVR-5a (DECISIONS Unit 55 17): classical interfaces and generation.
+[[nodiscard]] BenchmarkResult run_tvb08(Tier tier);  // full only: three heterojunctions, N = 64 ... 512
 [[nodiscard]] BenchmarkResult run_tvb09(Tier tier);  // fast: one bias (V_FB + 1.5 V); full: the V_G grid
 [[nodiscard]] BenchmarkResult run_tvb10(Tier tier);  // full only: HF C-V and deep depletion, N = 64 ... 512
 [[nodiscard]] BenchmarkResult run_tvb14(Tier tier);  // fast: 1D tensor; full: + 2D/3D tensor, 2D/3D generated, swept

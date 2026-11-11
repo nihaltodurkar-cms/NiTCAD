@@ -17,7 +17,7 @@ namespace NiTCAD::verify::benchmark {
 
 namespace {
 
-constexpr std::array<Benchmark, 54> shipped{{
+constexpr std::array<Benchmark, 55> shipped{{
     {"TVB-01", "Constants and thermal voltage against CODATA 2018", Tier::fast, [](Tier) { return run_tvb01(); }},
     {"TVB-02", "Fermi-Dirac integrals F_1/2, F_-1/2, F_3/2 and the inverse of F_1/2", Tier::fast,
      [](Tier) { return run_tvb02(); }},
@@ -26,6 +26,7 @@ constexpr std::array<Benchmark, 54> shipped{{
     {"TVB-05", "Coaxial capacitor on generated 2D meshes", Tier::full, &run_tvb05},
     {"TVB-06", "Dielectric stack between electrodes", Tier::fast, &run_tvb06},
     {"TVB-07", "Equilibrium abrupt pn junction", Tier::fast, &run_tvb07},
+    {"TVB-08", "Equilibrium abrupt heterojunction", Tier::full, &run_tvb08},
     {"TVB-09", "MOS capacitor on a uniform substrate", Tier::fast, &run_tvb09},
     {"TVB-10", "MOS capacitor: high-frequency C-V and deep depletion", Tier::full, &run_tvb10},
     {"TVB-11", "Uniform resistor with ohmic contacts", Tier::fast, [](Tier) { return run_tvb11(); }},

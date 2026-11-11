@@ -760,7 +760,7 @@ add_library(nitcad_verify_benchmark STATIC src/verify/benchmark/device_data.cpp
   src/verify/benchmark/tvb09.cpp src/verify/benchmark/tvb14.cpp
   src/verify/benchmark/tvb11.cpp
   src/verify/benchmark/tvb12.cpp src/verify/benchmark/tvb32.cpp src/verify/benchmark/tvb06.cpp src/verify/benchmark/tvb05.cpp
-  src/verify/benchmark/tvb15.cpp src/verify/benchmark/tvb16.cpp src/verify/benchmark/tvb17.cpp
+  src/verify/benchmark/tvb15.cpp src/verify/benchmark/tvb16.cpp src/verify/benchmark/tvb17.cpp src/verify/benchmark/tvb08.cpp
   src/verify/benchmark/tvb18.cpp
   src/verify/benchmark/tvb10.cpp
   src/verify/benchmark/tvb19.cpp src/verify/benchmark/tvb13.cpp src/verify/benchmark/tvb27.cpp src/verify/benchmark/tvb20.cpp
@@ -816,7 +816,8 @@ add_executable(nitcad_verify_benchmark_test
   tests/verify/benchmark/tvb31_thermal_test.cpp
   tests/verify/benchmark/tvb31_materials_test.cpp
   tests/verify/benchmark/tvb31_fast_test.cpp
-  tests/verify/benchmark/device_theory_test.cpp)
+  tests/verify/benchmark/device_theory_test.cpp
+  tests/verify/benchmark/interfaces_generation_test.cpp)
 target_link_libraries(nitcad_verify_benchmark_test PRIVATE NiTCAD::verify_benchmark
   Catch2::Catch2WithMain)
 nitcad_add_file_tests(verify_benchmark nitcad_verify_benchmark_test)
@@ -826,6 +827,8 @@ if(CMAKE_BUILD_TYPE STREQUAL "Release")
   add_test(NAME verify_benchmark.tvb31_full COMMAND nitcad_verify_benchmark_test "[tvb31_full]")
   # TVR-4's full-tier frozen outcomes (DECISIONS Unit 55 16.7, DT-Q9): TVB-05.
   add_test(NAME verify_benchmark.tvr4_full COMMAND nitcad_verify_benchmark_test "[tvr4_full]")
+  # TVR-5a's frozen full-tier outcomes (DECISIONS Unit 55 17.7).
+  add_test(NAME verify_benchmark.tvr5a_full COMMAND nitcad_verify_benchmark_test "[tvr5a_full]")
   # The diode reference's x-space check of its change of variable (DECISIONS Unit 55 16.31): 15 s in Debug.
   add_test(NAME verify.diode_profile COMMAND nitcad_verify_test "[.diode_profile]")
   # The Pao-Sah reference's bulk-ambiguity and conductance-identity cases (DECISIONS Unit 55 16.46): 1.5 s Release.
