@@ -11676,6 +11676,36 @@ IG-Q22 open (needs the owner's explicit authorization).**
   under 1e-5; P1 falls below 1e-8. Expectation: all 40 comparisons pass. The resolution bound's dependence on N_t
   is not known in advance.
 
+**17.20 TVB-22 rerun as rebuilt: outcome as found (40 comparisons: 30 pass, 10 not_evaluated, 0 not_applicable,
+0 fail). IG-Q23, ruled A under the standing instruction.**
+
+| Run | P1 | P2 | \|Y − Y_ref\| / (ω C_T), N = 512 | G_p/ω orders | Peak's place | Judged |
+|---|---|---|---|---|---|---|
+| acceptor, V_FB − 0.20 V | 2.4e-9 | 4.9e-6 | 7.2e-7 … 1.2e-6 | 1.89, 1.96, 1.98 | 1.3e-6 | 7 pass, 3 NE |
+| acceptor, V_FB − 0.25 V | 8.2e-9 | 4.4e-6 | 1.6e-6 … 2.8e-6 | 1.98, 1.99, 1.99 | 2.9e-6 | 7 pass, 3 NE |
+| donor, V_FB − 0.20 V | 8.3e-10 | 5.5e-6 | 4.5e-7 … 1.6e-6 | 2.07, 2.01, 1.99 | 6.3e-7 | 8 pass, 2 NE |
+| donor, V_FB − 0.25 V | 2.6e-9 | 4.9e-6 | 7.4e-7 … 1.3e-6 | 1.92, 1.97, 1.98 | 1.4e-6 | 8 pass, 2 NE |
+
+- **Every comparison is applicable, and none fails.** P1, P2 and P3 are inside 17.14's limits in all four runs,
+  as 17.19 predicted from the reference.
+- **Agreement:** |Y − Y_ref| is at most 0.28 % of the tolerance at every frequency from ωτ = 1e-2 to 100. The
+  G_p/ω orders are in the band and in the asymptotic range, the C_p orders are 2.00, and the peak is placed to
+  3e-6. The factorial's ε_int is at most 1.9e-9 against U of about 1e-5.
+- **Ten comparisons stay NOT EVALUATED,** all by the resolution rule: Y at ωτ = 1e-2 and the C_p order (taken at
+  ωτ = 1e-2) in every run, and Y at ωτ = 0.1 in the two acceptor runs. The resolution bound did not grow with
+  N_t (5e-8 to 9e-8 S/cm² against 8e-8 to 1e-7 before), so the tenfold tolerance moved the threshold from ωτ ≈ 1
+  down to ωτ ≈ 0.1. The 17.19 expectation (all pass) is unmet by these ten.
+  - At ωτ = 0.1 the bound is within a factor 2 of the threshold in all four runs. The frozen test accepts pass or
+    not_evaluated on those four rows and pins every other outcome and every metric.
+- **IG-Q23.** (A) Record as found. (B) A further change (lower frequencies dropped, or a second rebuild): another
+  change after a run. **A, applied.** IG-Q22 B authorized one rebuild, and this is its result. The unevaluated
+  rows are a statement about the solver's resolution bound at low frequency, which is itself worth having on
+  record: the bound is two to three orders of magnitude above the errors measured there.
+- **Mutation, rerun on the rebuilt benchmark:** 21 mutants, 20 caught, 1 equivalent (N_c, as 17.18). The halved
+  error survived the first rerun, because the pinned windows had to span four runs; each run's ωτ = 1 error is now
+  pinned to within a quarter.
+- **Suites, Release:** `nitcad_verify_benchmark_test` 44 cases pass; `[tvr5a_full]` passes.
+
 ---
 
 ## New questions the advisor raised (not yet in `ARCHITECTURE.md`)
