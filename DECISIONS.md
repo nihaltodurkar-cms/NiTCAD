@@ -11511,6 +11511,12 @@ them).**
 | IG-Q17 | Freeze 17.14 (the A-class criteria, ε_V, ε_J and the predicate limits) as written? | Yes |
 | IG-Q18 | TVB-26's and TVB-08 bias's provenance is PD (own derivation with a second method), with Crowell–Sze unread. Accept PD, as TVR-4 did for nine references, and print it in every report line? | Yes |
 
+**17.15a Rulings (owner, "always choose recommended", 2026-11-11).** IG-Q14 A, IG-Q15, IG-Q16, IG-Q17 and IG-Q18
+are approved as recommended. **17.14 is frozen now.** The Lombardi check is the E-class ΔI comparison (ΔI
+relative ≤ 1e-2 on the finest level, p̂ ∈ [1.8, 2.3]), frozen with it, and C10 for that limit is NOT APPLICABLE.
+The owner's instruction is standing: later questions with a recommendation are ruled as recommended and recorded
+as such. It is not read as covering a criterion change after a run (16.35's rule, the owner's own) or a push.
+
 **17.16 Open after step 1.** Not derived to a bound, only to leading order: ε_J's two terms and Q1. If a run shows
 a miss inside these estimates' uncertainty, it is recorded as found and brought back, not adjusted (TVM2). The
 generator's handling of the ring (17.12) is measured in step 7 before TVB-29's ladder is built.
