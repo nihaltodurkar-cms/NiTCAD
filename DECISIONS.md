@@ -11641,7 +11641,8 @@ IG-Q22 open (needs the owner's explicit authorization).**
     The measured errors there (5 % of the tolerance) are printed and not judged (17.10's risk (4)).
   - **At V_FB − 0.2 V the low frequencies are not evaluated.** The run's resolution bound on Y is about 1e-7 S/cm²
     at every frequency, and a tenth of the tolerance is 1e-4 ω C_T, which is 9.6e-8 at ωτ = 1 and smaller below.
-    The measured errors are 100 times below that bound, which is a bound and not the error. At ωτ = 1 the two
+    The measured errors are 7 times (at ωτ = 1) to several hundred times (at ωτ = 1e-2) below that bound, which
+    is a bound and not the error. At ωτ = 1 the two
     numbers are within 10 % of each other, on opposite sides for the two trap types, so the frozen test accepts
     pass or not_evaluated on those three rows per run and pins the rest.
   - The factorial's ε_int is at most 1.7e-6 against U of 1e-4 to 4e-4: no interaction.
