@@ -11379,6 +11379,142 @@ recommended:
   change after a run needs the owner's explicit authorization.
 - No code was written with this proposal. Step 1 follows.
 
+**17.12 Step 1: reading log (2026-11-11).** Pages were fetched and read as text, or saved and rendered page by page
+(WinRT PDF render). Nothing below is taken from memory without a source line.
+
+| Source | How read | Grade | What it settles |
+|---|---|---|---|
+| Anderson, Solid-State Electronics 5, 341 (1962) | Primary not reachable. E. F. Schubert, "Band diagrams of heterostructures", ch. 17, pp. 187–189 (eng.auburn.edu copy, rendered) | PB | Eq (17.1) ΔE_c = χ₁ − χ₂ and (17.2) ΔE_v = E_g2 − E_g1 − ΔE_c, cited to "Anderson, 1962", valid "only if the potential steps caused by atomic dipoles … can be neglected". This is NiTCAD's alignment (vacuum level continuous). The matching of D is Gauss's law, derived (PD). |
+| Goetzberger, "Interface states in Si–SiO₂ interfaces" (1974 conference paper, imagesensors.org scan, pp. 47–50 rendered) | Read | PA for the circuit's statement | Fig. 1B: C_ox in series with (C_D ∥ (C_s in series with R_s)), "a greatly simplified equivalent circuit", τ = R_s C_s, and eq (2) τ = 1/(σ_n v̄ n_s0). The series C_s–R_s branch is Y = iωC_s/(1 + iωτ). His τ has no occupancy factor; 17.13 (a) derives τ = f₀/(c_n n_s0) for NiTCAD's model. The two agree only for f₀ → 1. The model's own linearization is the reference. |
+| Nicollian and Goetzberger, BSTJ 46 (1967) | As TVR-0 (I-10): peak verified, eq (17) illegible | PA (peak) | Unchanged. |
+| Lehovec, Appl. Phys. Lett. 8, 48 (1966) | Not found in an open copy | — | Not needed: the two-carrier form is derived (17.13 (a)). |
+| The ionization integral with α_n ≠ α_p | J. M. Park, "Novel Power Devices for Smart Power Applications", TU Wien 2004, sec. 3.2.1.1, eqs (3.26)–(3.28), read from the page's equation source | PB | M(x) = 1 + ∫₀ˣ α_n M + ∫ₓᵂ α_p M and its solution with exp ∫₀ˣ(α_n − α_p); breakdown where the integral reaches 1. Its M(0) and M(W) are 17.13 (b)'s M_p and M_n with the carriers mirrored. McKay's paper was not reached. |
+| Crowell and Sze, Solid-State Electronics 9, 1035 (1966) | Not reachable: the one open reproduction found refused the connection, and another carries its equations as images | — | The series law is derived for NiTCAD's stated boundary condition (17.13 (c), PD). The statement "thermionic emission in series with diffusion" stays ungraded until a copy is read. TVB-26's provenance is PD. |
+| Sze and Gibbons (1966) | Not fetched | — | Diagnostic values only; dropped unless a copy is supplied. |
+
+Checked in the code, for 17.10's open items:
+- `small_signal:616`–`:637`: the existing trap test takes its τ and C_it from NiTCAD's own DC state (the occupancy
+  from `interface_trap_charge`, p₁ from `intrinsic_density`). It is an inter-analysis consistency check (C-4's kind).
+- `results/solution.hpp:81`–`:82`: the stored rates keep `band_to_band_n` and `band_to_band_p` apart, the electrons
+  at their crossing. TVB-24 sums the hole vector for the pairs.
+- The generator on a quarter annulus with an interior ring is not checked: it needs a run, in step 7.
+
+**17.13 Step 1: derivations (PD; each with the second method its code step runs at L0).**
+
+- **(a) The level's admittance (TVB-22).** NiTCAD's rate equation (`interface_edges.hpp:37`–`:38`) is
+  df/dt = c_n n(1 − f) − c_n n₁ f − c_p p f + c_p p₁(1 − f). About equilibrium, with D₀ = c_n(n₀ + n₁) + c_p(p₀ + p₁):
+  (iω + D₀) δf = c_n(1 − f₀) δn − c_p f₀ δp.
+  - Detailed balance per carrier gives n₀/f₀ = n₀ + n₁ and p₀/(1 − f₀) = p₀ + p₁. If both carriers stay in
+    equilibrium with one Fermi level at the interface (δn = n₀ δu, δp = −p₀ δu, u = ψ_I/V_T), the right side is
+    f₀(1 − f₀) D₀ δu, so Y_it = iω C_T/(1 + iωτ) with C_T = q²N_t f₀(1 − f₀)/kT and **τ = 1/D₀**. The circuit is
+    exact in that case for either trap type.
+  - In depletion the minority carriers do not follow. Then only the majority term is known, and the form holds
+    with τ = 1/(c_maj(n₀ + n₁)) = f₀/(c_n n₀) (n-type) up to the minority share.
+    **P1** = c_min(p₀ + p₁)/(c_maj(n₀ + n₁)), computed by the reference.
+  - The majority carriers reach the level through the depletion layer. The quasi-Fermi drop that the trap's
+    current causes there, relative to the signal, is at most **P2** = N_t c_maj/(μ_maj E_s) at ωτ = 1 (the layer's
+    resistance ∫dx/(qμn) ≈ V_T/(qμ n_s E_s) times the branch conductance; n_s cancels), E_s the reference's surface
+    field.
+  - The neutral substrate is in the circuit exactly: Z_b = R_b/(1 + iωτ_d), R_b = L_n/(qμN), τ_d = ε/(qμN). So the
+    reference is Y⁻¹ = 1/(iωC_ox) + 1/(iωC_s + Y_it) + Z_b. `small_signal:748` left this term out and saw it
+    above ωτ = 3.
+  - C_s is the KN capacitance. **P3** = the minority share of the semiconductor charge, by the reference. Below it
+    the low- and high-frequency C_s agree and no frequency window is needed.
+  - Limits (17.14): the comparison applies where P1 ≤ 1e-6, P2 ≤ 1e-5 and P3 ≤ 1e-6, three decades below the
+    1e-3 tolerance.
+  - Second method: the 3 × 3 complex linear system for (δψ_I, δf, δQ_s) solved directly, without the circuit.
+- **(b) Multiplication (TVB-23).** Electrons move toward +x and enter the depletion layer at x = 0 (the p edge).
+  dJ_n/dx = α_n J_n + α_p J_p with J = J_n + J_p constant. With φ(x) = ∫₀ˣ(α_n − α_p):
+  d(J_n e^{−φ})/dx = α_p J e^{−φ}.
+  - Electron injection (J_n(0) = J_n0, J_p(W) = 0): M_n = 1/(1 − I_n), I_n = ∫₀ᵂ α_n e^{−φ} dx.
+  - Hole injection (J_n(0) = 0, J_p(W) = J_p0): M_p = e^{−φ(W)}/(1 − I_n).
+  - The identity 1 − I_n = e^{−φ(W)} − ∫₀ᵂ α_p e^{−φ} dx (integrate (α_n − α_p)e^{−φ}) is an L0 check. Park's
+    (3.27) is the same result.
+  - In ψ-space dx = dψ/E(ψ), with E from the first integral in closed form, so no profile inversion is needed.
+  - The simulated M is J(ionization on)/J(off) at the same generation and bias. The secondary carriers return
+    through the neutral side as a majority current, whose field moves the collected fraction by about
+    V_Ω,d/V_T, V_Ω,d = J d/(qμ_maj N) over the distance d from the source to the depletion edge.
+    **Q1** = V_Ω,d/V_T, from the spec and the simulated J.
+  - **Q2** = max |p − n|/N_light over the nodes where the reference field exceeds a tenth of its peak, measured on
+    the solved state.
+  - Limits: Q1 ≤ 1e-5, Q2 ≤ 1e-5, and J(off) ≥ 1e3 times its resolution (`weighted_current` on) and ≥ 1e3 times
+    `impact_current_floor`. Outside them: NOT APPLICABLE, or NOT EVALUATED for the resolution.
+  - Second method: Dormand–Prince on the J_n equation across the layer.
+- **(c) The emission–diffusion series law (TVB-26, TVB-08 bias).** One carrier, constant μ, Boltzmann, no
+  recombination. J = qD(n′ − nψ′/V_T), so J e^{−ψ/V_T} = qD (n e^{−ψ/V_T})′, and J is constant.
+  - Schottky contact at x = 0 with NiTCAD's condition J = q v (n(0) − n_B), ohmic at x = L:
+    **J = q n_B (e^{V/V_T} − 1)/(1/v + 1/v_d)**, v_d = D/S, S = ∫₀ᴸ e^{−(ψ(x) − ψ(0))/V_T} dx. The step uses only
+    n(L)e^{−Δψ₀/V_T} = n_B at equilibrium and Δψ = Δψ₀ − V from the two Dirichlet values. It is exact for the model
+    given ψ(x). The holes obey the mirror law with p_B, and the reference adds it.
+  - The reference's ψ is the zero-current first integral. Two departures, both to leading order:
+    - The neutral region's drop V_Ω = |J| L/(qμN) enters S through the flat bulk as its first-order term already.
+      What is missed is of relative size (V_Ω/V_T)².
+    - Inside the depletion layer the electrons fall short of quasi-equilibrium by J/(qμE(x)). That changes the
+      surface field, and S ≈ V_T/E_s with it, by about V_Ω,dep ln(W/L_D)/(2(V_bi − V)), which is below
+      V_Ω/(V_bi − V) when L ≥ 3W.
+    - **ε_J = (V_Ω/V_T)² + V_Ω/(V_bi − V)**, relative in J, with V_Ω at the reference current.
+  - Isotype heterointerface (TVB-08 bias). With w = e^{E_Fn/kT}, in each region
+    J ∫ e^{E_c/kT}/(μ kT N_c) dx = Δw. NiTCAD's edge flux, from `thermionic_flux.hpp:7`–`:8` and
+    `drift_diffusion.cpp:427`–`:434`, reduces for either sign of the step to
+    J_edge = K N_c,a e^{−E_c,max/kT}(w_b − w_a), K = hmean(v_a, v_b) times the area, a the edge's first node. The
+    three resistances add: J = q(w_R − w_L)/(S₁ + 1/(K N_c,a e^{−E_c,max/kT}) + S₂). ε_J as above with both sides'
+    drops.
+  - Second method: Dormand–Prince on w′ = J e^{E_c/kT}/(μ kT N_c) across the device, with J by Brent on the end
+    value.
+- **(d) Suspected before code (S1): the emission flux depends on the edge's orientation.** In (c)'s reduction the
+  prefactor is the density of states of the edge's *first* node, while K is symmetric. Relabelling the edge's ends
+  multiplies the flux by N_c,b/N_c,a. So a device and its mirror image would carry emission-limited currents in
+  the ratio of the two materials' N_c (about 0.6 for GaAs against Al₀.₃Ga₀.₇As; N_v likewise for holes).
+  Equilibrium is not affected (the flux still vanishes there). This is read from the formulas, not measured.
+  TVB-08 bias runs the junction in both orientations and applies C11 to the pair; the reference follows the
+  header's formula with the first node as built. A confirmed asymmetry is a finding, not fixed here (DT-Q11).
+- **(e) The three-region first integral (TVB-24).** With κ = q/(εV_T) and m as `qe_junction`: on the p side
+  ½u′² = κΦ_p(u), on the n side κΦ_n(u). In the i-region (net doping C_i, length d) from its p-edge level u₀:
+  ½u′² = κ[Φ_p(u₀) + m(e^u − e^{u₀}) + m(e^{−u} − e^{−u₀}) − C_i(u − u₀)]. The n-edge level u_d is where this equals
+  κΦ_n(u_d), and u₀ is fixed by ∫ du/u′ = d from u₀ to u_d. One Brent root inside another. Second method:
+  three-piece Chebyshev collocation.
+- **(f) The radial problem (TVB-29).** u″ + u′/r = κ(m e^u − m e^{−u} − C(r)) on [a, b], Dirichlet at the local
+  neutral levels; C(r) = ½(N_D + N_A) erfc((r − r_j)/λ) − N_A, λ fixed in the spec. Chebyshev collocation with
+  pieces split around r_j, Newton. C_j from the tangent system at the converged state.
+  - **Departure from 17.3:** shooting with Dormand–Prince cannot serve as the second method. Poisson–Boltzmann
+    over hundreds of Debye lengths is exponentially unstable as an initial-value problem. The second method is a
+    second-order finite-difference solve on a graded radial mesh with Richardson extrapolation, inside the
+    reference library, sharing no code with the collocation.
+- **(g) The Lombardi limit has no single rate.** As E → 0 the model's 1/μ_ac = E/(B + C′E^{2/3}), C′ = C N^λ/T.
+  The linear term alone holds only where C′E^{2/3} ≪ B, about E ≲ 30 V/cm at 1e17 (16 % off at 1e3 V/cm). The
+  floor E_⊥ = √(v² + E₀²) with E₀ = 1 V/cm leaves a constant difference from the bulk model over the whole height
+  H, which outweighs the gate's part unless ψ_s ≫ E₀H (1e-4 V at H = 1 µm), and there E_s is far above 30 V/cm. No
+  window has both. So |I − I_bulk| is not a power of V_G − V_FB anywhere, and IG-Q10's "stated rate" does not
+  exist. IG-Q14.
+- **(h) Orders (17.8's two expectations).** Nothing found by construction against order 2 for the nonlocal pairs
+  (multilinear samples, a linearly interpolated crossing, one path per start node) or for the faceted junction
+  (TVB-05 measured 2.05 with the same faceting). They stand as frozen.
+
+**17.14 Proposed A-class criteria and predicate limits (frozen on the owner's ruling, before the code that runs
+them).**
+
+| ID | Criterion | Applies where |
+|---|---|---|
+| TVB-22 (E, 17.8) | as frozen | P1 ≤ 1e-6, P2 ≤ 1e-5, P3 ≤ 1e-6 (17.13 (a)); ω τ_d ≤ 1e-2 |
+| TVB-23 E (17.8) | as frozen | Q1 ≤ 1e-5, Q2 ≤ 1e-5; J(off) ≥ 1e3 × its resolution and ≥ 1e3 × the ionization floor |
+| TVB-23 V(M_c) (A) | At M_c = 10, 100, 1000: \|V_sim − V_ref\| ≤ U_num + U_ref + ε_V, V_sim where J(on)/J(off) = M_c along the trace (interpolated in ln M), ε_V = 2 Q2 (V_bi + V) + J (R_n + R_p) with the neutral sides' resistances from the spec | J(off) as above; the reference's V_BR (I_n = 1) printed beside |
+| TVB-26 (A) | \|ln J_sim − ln J_ref\| ≤ U_num + U_ref + ε_J (17.13 (c)); the ideality by 16.19's derivative rule | ε_J ≤ 1e-2; \|J\| ≥ 1e3 × its resolution, else NOT EVALUATED; L ≥ 3W |
+| TVB-08 bias (A) | the same rule on the heterointerface law, in each orientation | the same |
+
+**17.15 Owner questions from step 1 (recommendations in the last column).**
+
+| # | Question | Recommendation |
+|---|---|---|
+| IG-Q14 | The Lombardi limit (17.13 (g)): (A) replace the rate check by a comparison with theory: the gated resistor's current change ΔI = I(surface mobility on) − I(off) against q(V/L)∫[μ_Lombardi(E_⊥(y)) − μ_b] n(y) dy on the reference's KN potential with TVR-3's re-coded Lombardi, E class, ΔI relative ≤ 1e-2 on the finest level and p̂ ∈ [1.8, 2.3]; C10 itself recorded NOT APPLICABLE ("no power-law window", with (g)'s numbers). (B) Record NOT APPLICABLE only. (C) Run C10 with a rate per pair taken from the reference. | A. It checks the assembled surface mobility against theory, which the limit was meant to do; B leaves it unverified at this level; C bends C10's frozen rule |
+| IG-Q15 | The radial reference's second method becomes a finite-difference solve with Richardson extrapolation (17.13 (f))? | Yes |
+| IG-Q16 | S1 (17.13 (d)): run TVB-08 bias in both orientations with C11 on the pair; the reference follows the header's formula; a confirmed asymmetry recorded as a finding with a fix proposal for the owner, not fixed here? | Yes |
+| IG-Q17 | Freeze 17.14 (the A-class criteria, ε_V, ε_J and the predicate limits) as written? | Yes |
+| IG-Q18 | TVB-26's and TVB-08 bias's provenance is PD (own derivation with a second method), with Crowell–Sze unread. Accept PD, as TVR-4 did for nine references, and print it in every report line? | Yes |
+
+**17.16 Open after step 1.** Not derived to a bound, only to leading order: ε_J's two terms and Q1. If a run shows
+a miss inside these estimates' uncertainty, it is recorded as found and brought back, not adjusted (TVM2). The
+generator's handling of the ring (17.12) is measured in step 7 before TVB-29's ladder is built.
+
 ---
 
 ## New questions the advisor raised (not yet in `ARCHITECTURE.md`)
