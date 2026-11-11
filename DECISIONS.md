@@ -11596,6 +11596,71 @@ instruction (2026-11-11).**
 - **For the owner, not acted on:** (1) IG-Q20 A above; (2) whether a fourth junction with a p-type wide side
   should be added to close the N_v gap; (3) option B of IG-Q19, if the isotype accuracy should be judged on a
   finer ladder.
+- **Owner, 2026-11-11, after this report: "choose recommended and go".** IG-Q20 A stands (the comparison is graded
+  PD). IG-Q19 stays at A. Item (2) carried no recommendation, so TVB-08 stays as frozen and the N_v gap stays
+  listed.
+
+**17.18 Step 3 as built: the trap-admittance reference and TVB-22. IG-Q21, ruled A under the standing instruction;
+IG-Q22 open (needs the owner's explicit authorization).**
+
+- **`verify/reference/trap_admittance`** (base only): the operating point with the level's charge in the gate
+  equation (Brent in double-double), C_s, C_T, τ, the predicates P1 to P3, and the circuit
+  1/Y = 1/(iωC_ox) + 1/(iωC_s + iωC_T/(1 + iωτ)) + R_b/(1 + iωτ_d). Second method: the 3 × 3 complex system for
+  (δψ_s, δf, δψ_ox), with the level's rate written from n₀ and n₁.
+  - L0, 7 cases, 1196 assertions: N_t = 0 against `mos_capacitor` (1e-13); the gate equation's residual and the
+    q N_t/C_ox shift between the two trap types; f₀, C_T, τ and the predicates against plain-double definitions,
+    including τ = f₀/(c_n n₀) against Goetzberger's 1/(c n_s0); the circuit against the direct solve over
+    ωτ = 1e-3 … 1e3, both substrate and both trap types (1e-12); the peak C_T/2 at ωτ = 1 and the capacitance step
+    C_T; the low-frequency limit, the substrate's ω²R_bC² and its (1 + i)/R_b at ωτ_d = 1.
+  - Mutation: 20 mutants, all caught after two additions (unequal capture rates in the fixtures; the τ_d check).
+- **TVB-22, construction as fixed before the run:** a metal electrode (4.1 eV) on 10 nm of meshed SiO₂ over 1 µm
+  of n-silicon at 1e16, constant mobility, no recombination; the level N_t = 1e10 cm⁻² at E_t − E_i = 0.20 eV with
+  c = 1e-9 cm³/s, acceptor-like and donor-like; the gate at V_FB − 0.20 V and V_FB − 0.30 V; silicon nodes graded
+  by sinh (β = 4), the oxide's nodes N/8 + 1, the oxide–silicon edge's midpoint at x = 0 on every level; eleven
+  frequencies per run. The benchmark removes C_ox itself; `analysis::conductance_peak` is not used.
+  - Two rules were written into the benchmark before the run and are not in 17.14's table: a comparison is NOT
+    EVALUATED where the reference uncertainty, or the admittance's own resolution bound, exceeds a tenth of its
+    tolerance (TVB-17's rule for U_ref, extended to the resolution).
+  - At the first attempt the factorial's tol = 1e-14 corner did not converge (N = 512). The pair is 1e-10 and
+    1e-12, set before any comparison was seen.
+- **Outcome as found (40 comparisons: 9 pass, 11 not_evaluated, 20 not_applicable, 0 fail). The expectation
+  written before the run (all pass) was not met.**
+
+  | Run | P1 | \|Y − Y_ref\| / (ω C_T), N = 512 | G_p/ω orders | C_p orders | Peak's place | Judged |
+  |---|---|---|---|---|---|---|
+  | acceptor, V_FB − 0.2 V | 1.4e-7 | 1.3e-5 … 1.4e-5 | 2.07, 2.00, 1.99 | 2.00, 2.00, 2.00 | 2.7e-6 | 6 pass, 4 NE |
+  | donor, V_FB − 0.2 V | 1.2e-7 | 1.3e-5 … 1.5e-5 | 2.06, 2.00, 1.99 | 2.00, 2.00, 2.00 | 2.9e-6 | 3 pass, 7 NE |
+  | acceptor, V_FB − 0.3 V | **3.1e-6** | 4.9e-5 … 5.2e-5 | 1.99, 1.99, 1.99 | 2.00, 2.00, 2.00 | 3.0e-6 | 10 NA |
+  | donor, V_FB − 0.3 V | **2.7e-6** | 4.3e-5 … 4.7e-5 | 1.99, 1.99, 1.99 | 2.00, 2.00, 2.00 | 2.7e-6 | 10 NA |
+
+  - **Where it is judged, NiTCAD agrees with the circuit to 1.5 % of the tolerance**, at second order, and the
+    conductance peak sits where the model's τ = f₀/(c_n n₀) puts it, to 3e-6. Goetzberger's 1/(c n_s0) would be off
+    by the factor f₀ (0.58 and 0.61 here), so the comparison does distinguish the two.
+  - **At V_FB − 0.3 V the frozen predicate fails.** P1 is 3.1e-6 and 2.7e-6 against 1e-6: the level is 3.7 kT
+    above the Fermi level there, n₀ + n₁ is dominated by n₁, and the holes' share is no longer below the limit.
+    The measured errors there (5 % of the tolerance) are printed and not judged (17.10's risk (4)).
+  - **At V_FB − 0.2 V the low frequencies are not evaluated.** The run's resolution bound on Y is about 1e-7 S/cm²
+    at every frequency, and a tenth of the tolerance is 1e-4 ω C_T, which is 9.6e-8 at ωτ = 1 and smaller below.
+    The measured errors are 100 times below that bound, which is a bound and not the error. At ωτ = 1 the two
+    numbers are within 10 % of each other, on opposite sides for the two trap types, so the frozen test accepts
+    pass or not_evaluated on those three rows per run and pins the rest.
+  - The factorial's ε_int is at most 1.7e-6 against U of 1e-4 to 4e-4: no interaction.
+- **IG-Q21 (the outcome).** (A) Record as found: 9 judged and passed, the rest NOT APPLICABLE or NOT EVALUATED with
+  their measured values, nothing changed. (B) Change the construction after the run. **A, applied**, as IG-Q19 A.
+- **IG-Q22 (for the owner; a construction change after a run, so not taken under the standing instruction).** The
+  31 unjudged comparisons come from this benchmark's own margins, not from the solver:
+  - (A) Keep as found.
+  - (B) Rebuild TVB-22 once, with the new values fixed and recorded before the rerun: N_t = 1e11 cm⁻² (C_T and
+    the tolerance ten times larger against the same resolution bound), and the second bias at V_FB − 0.25 V with
+    σ_p = 1e-18 cm² (P1 a hundred times smaller; the model's c_p is then exercised as negligible, which P1 states).
+    The criteria and the predicate limits of 17.8 and 17.14 stay as frozen.
+  - **Recommendation: B**, on the owner's explicit "authorize IG-Q22 B". Without it TVB-22 judges nine comparisons.
+- **Mutation, TVB-22's own code:** 19 mutants, 18 caught. The first run left the sign in the removal of C_ox
+  uncaught (the same wrong transform applied to both sides keeps the differences small); the benchmark now checks
+  its removal on the reference circuit (G_p/ω = C_T/2 at ωτ = 1, else a run error). The remaining survivor is
+  equivalent: N_c removed from the device leaves the base set's value, which is the spec's.
+- **Suites, Release:** `nitcad_verify_test` 184 cases and `nitcad_verify_benchmark_test` 44 cases pass (registry:
+  56 benchmarks); `[tvr5a_full]` (TVB-08 and TVB-22) takes 5.4 s.
 
 ---
 

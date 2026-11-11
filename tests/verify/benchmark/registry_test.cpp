@@ -33,10 +33,10 @@ constexpr bench::KnownFinding table[] = {{"TVB-X", "q", &above_ten, "(z)", "a ru
 
 TEST_CASE("registry: the shipped benchmarks and the tier each starts in") {
     const auto b = bench::benchmarks();
-    // TVR-1, TVR-2's TVB-04, 07, 09, 11, 12 and 14 (DECISIONS Unit 55 14), TVR-3's TVB-31.01-31, TVR-4's TVB-05, 06, 10, 13, 15-21, 27, 28 (16), TVR-5a's TVB-08 (17).
-    REQUIRE(b.size() == 55);
+    // TVR-1, TVR-2's TVB-04, 07, 09, 11, 12 and 14 (DECISIONS Unit 55 14), TVR-3's TVB-31.01-31, TVR-4's TVB-05, 06, 10, 13, 15-21, 27, 28 (16), TVR-5a's TVB-08, 22 (17).
+    REQUIRE(b.size() == 56);
     const char* ids[] = {"TVB-01",    "TVB-02",    "TVB-03",    "TVB-04",    "TVB-05",    "TVB-06",    "TVB-07",    "TVB-08",    "TVB-09",
-                         "TVB-10",    "TVB-11",    "TVB-12",    "TVB-13",    "TVB-14",    "TVB-15",    "TVB-16",    "TVB-17",    "TVB-18",    "TVB-19",    "TVB-20",    "TVB-21",    "TVB-27",    "TVB-28",    "TVB-31.01",
+                         "TVB-10",    "TVB-11",    "TVB-12",    "TVB-13",    "TVB-14",    "TVB-15",    "TVB-16",    "TVB-17",    "TVB-18",    "TVB-19",    "TVB-20",    "TVB-21",    "TVB-22",    "TVB-27",    "TVB-28",    "TVB-31.01",
                          "TVB-31.02", "TVB-31.03", "TVB-31.04", "TVB-31.05", "TVB-31.06", "TVB-31.07", "TVB-31.08", "TVB-31.09",
                          "TVB-31.10", "TVB-31.11", "TVB-31.12", "TVB-31.13", "TVB-31.14", "TVB-31.15",
                          "TVB-31.16", "TVB-31.17", "TVB-31.18", "TVB-31.19", "TVB-31.20", "TVB-31.21",
@@ -48,7 +48,7 @@ TEST_CASE("registry: the shipped benchmarks and the tier each starts in") {
         // TVB-05, 10, 15-21, 27, 28 start in full (DECISIONS Unit 55 16.7, DT-Q9), and TVB-08 (17.7); every other
         // benchmark in fast.
         const bool full = b[i].id == "TVB-05" || b[i].id == "TVB-08" || b[i].id == "TVB-10" || b[i].id == "TVB-15" || b[i].id == "TVB-16" ||
-                          b[i].id == "TVB-17" || b[i].id == "TVB-18" || b[i].id == "TVB-19" || b[i].id == "TVB-20" || b[i].id == "TVB-21" ||
+                          b[i].id == "TVB-17" || b[i].id == "TVB-18" || b[i].id == "TVB-19" || b[i].id == "TVB-20" || b[i].id == "TVB-21" || b[i].id == "TVB-22" ||
                           b[i].id == "TVB-27" || b[i].id == "TVB-28";
         CHECK(b[i].tier == (full ? bench::Tier::full : bench::Tier::fast));
         CHECK(b[i].run != nullptr);

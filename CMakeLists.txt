@@ -764,7 +764,7 @@ add_library(nitcad_verify_benchmark STATIC src/verify/benchmark/device_data.cpp
   src/verify/benchmark/tvb09.cpp src/verify/benchmark/tvb14.cpp
   src/verify/benchmark/tvb11.cpp
   src/verify/benchmark/tvb12.cpp src/verify/benchmark/tvb32.cpp src/verify/benchmark/tvb06.cpp src/verify/benchmark/tvb05.cpp
-  src/verify/benchmark/tvb15.cpp src/verify/benchmark/tvb16.cpp src/verify/benchmark/tvb17.cpp src/verify/benchmark/tvb08.cpp
+  src/verify/benchmark/tvb15.cpp src/verify/benchmark/tvb16.cpp src/verify/benchmark/tvb17.cpp src/verify/benchmark/tvb08.cpp src/verify/benchmark/tvb22.cpp
   src/verify/benchmark/tvb18.cpp
   src/verify/benchmark/tvb10.cpp
   src/verify/benchmark/tvb19.cpp src/verify/benchmark/tvb13.cpp src/verify/benchmark/tvb27.cpp src/verify/benchmark/tvb20.cpp

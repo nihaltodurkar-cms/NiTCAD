@@ -92,6 +92,72 @@ TEST_CASE("TVB-08: the equilibrium heterojunction, full tier (frozen outcome: as
     CHECK(bench::overall(r) == fail);
 }
 
+// TVB-22 (interface trap level). The expectation written before the first run was that all 40 comparisons pass
+// (two trap types x two biases, each two orders, Y at seven frequencies and the peak's place). It was not met.
+// Recorded as found (17.18, IG-Q21 A), nothing changed after the run:
+//   - at V_FB - 0.3 V all 20 comparisons are NOT APPLICABLE: P1 (the minority carriers' share of the level's
+//     exchange) is 3.1e-6 and 2.7e-6 against the frozen limit 1e-6;
+//   - at V_FB - 0.2 V the comparisons at w tau <= 0.3, and the C_p order (taken at w tau = 1e-2), are NOT EVALUATED:
+//     the admittance's resolution bound (about 1e-7 S/cm^2) is above a tenth of the tolerance there; at w tau = 1
+//     the bound is within 10 % of that threshold on either side, so those rows (Y, the G_p / w order, the peak) are
+//     held to "pass or not_evaluated"; at w tau >= 3 every comparison passes.
+// Every measured error is far inside its criterion wherever it is formed (pinned below): |Y - Y_ref| at most 1.5 %
+// of the tolerance at -0.2 V and 5.3 % at -0.3 V, orders 1.99 to 2.07, the peak's place within 3e-6.
+TEST_CASE("TVB-22: the trap level's admittance, full tier (frozen outcome: as found, 17.18)", "[.tvr5a_full]") {
+    const auto r = bench::run_tvb22(bench::Tier::full);
+    if (r.run_error) FAIL(*r.run_error);
+    for (const auto& n : r.notes) std::printf("%s note: %s\n", r.id.c_str(), n.c_str());
+    REQUIRE(r.comparisons.size() == 40);
+    const auto pass = Outcome::pass, ne = Outcome::not_evaluated, na = Outcome::not_applicable;
+    const char* wt[] = {"0.01", "0.1", "0.3", "1", "3", "10", "100"};
+    std::size_t i = 0;
+    int passes = 0;
+    for (const char* type : {"acceptor", "donor"}) {
+        for (const char* bias : {"-0.2", "-0.3"}) {
+            const std::string at = std::string(type) + ", V_FB " + bias + " V";
+            const bool shallow = std::string(bias) == "-0.2";
+            // The row at index i: its name, the outcomes allowed, and a window on the metric.
+            const auto row = [&](const std::string& quantity, bool borderline, Outcome judged, double above,
+                                 double below) {
+                const auto& c = r.comparisons[i++];
+                std::printf("%s [%s] %s: %.4g (%s) %s\n", r.id.c_str(),
+                            std::string(to_string(c.comparison.outcome)).c_str(), c.quantity.c_str(), c.metric,
+                            c.criterion.c_str(), c.comparison.reason.c_str());
+                CAPTURE(c.quantity, c.metric, c.comparison.reason);
+                CHECK(c.quantity == quantity);
+                if (!shallow) {
+                    CHECK(c.comparison.outcome == na);
+                    CHECK(c.comparison.reason.find("P1 ") == 0);
+                } else if (borderline) {
+                    CHECK((c.comparison.outcome == pass || c.comparison.outcome == ne));
+                } else {
+                    CHECK(c.comparison.outcome == judged);
+                }
+                if (c.comparison.outcome == pass) ++passes;
+                CHECK(c.metric > above);
+                CHECK(c.metric < below);
+            };
+            row("G_p / w order (w tau = 1), " + at, true, pass, 1.95, 2.1);
+            row("C_p order (w tau = 1e-2), " + at, false, ne, 1.99, 2.01);
+            for (std::size_t k = 0; k < 7; ++k) {
+                // The metric is |Y - Y_ref| / (w C_T) over the tolerance.
+                row(std::string("Y finest (N = 512), w tau = ") + wt[k] + ", " + at, k == 3, k < 3 ? ne : pass,
+                    shallow ? 0.010 : 0.040, shallow ? 0.017 : 0.058);
+            }
+            row("G_p / w peak place finest (N = 512), " + at, true, pass, 1e-6, 5e-6);
+        }
+    }
+    CHECK(passes >= 6);  // the six rows at w tau >= 3 of the two -0.2 V runs
+    CHECK(passes <= 12);
+    CHECK(bench::overall(r) == ne);
+}
+
+TEST_CASE("TVB-22: nothing in the fast tier", "[tvr5a]") {
+    const auto r = bench::run_tvb22(bench::Tier::fast);
+    REQUIRE_FALSE(r.run_error.has_value());
+    REQUIRE(r.comparisons.empty());
+}
+
 TEST_CASE("TVB-08: nothing in the fast tier", "[tvr5a]") {
     const auto r = bench::run_tvb08(bench::Tier::fast);
     REQUIRE_FALSE(r.run_error.has_value());

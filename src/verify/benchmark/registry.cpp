@@ -17,7 +17,7 @@ namespace NiTCAD::verify::benchmark {
 
 namespace {
 
-constexpr std::array<Benchmark, 55> shipped{{
+constexpr std::array<Benchmark, 56> shipped{{
     {"TVB-01", "Constants and thermal voltage against CODATA 2018", Tier::fast, [](Tier) { return run_tvb01(); }},
     {"TVB-02", "Fermi-Dirac integrals F_1/2, F_-1/2, F_3/2 and the inverse of F_1/2", Tier::fast,
      [](Tier) { return run_tvb02(); }},
@@ -40,6 +40,7 @@ constexpr std::array<Benchmark, 55> shipped{{
     {"TVB-19", "Linear transients: dielectric relaxation and the Haynes-Shockley pulse", Tier::full, &run_tvb19},
     {"TVB-20", "Long-channel MOSFET against Pao-Sah: the channel-length limit", Tier::full, &run_tvb20},
     {"TVB-21", "Subthreshold swing of the long-channel MOSFET", Tier::full, &run_tvb21},
+    {"TVB-22", "Interface trap level: the small-signal admittance", Tier::full, &run_tvb22},
     {"TVB-27", "Lattice heat: the Kirchhoff slab and the self-heated resistor", Tier::full, &run_tvb27},
     {"TVB-28", "Thermoelectric identities: Seebeck, Peltier and the energy balance", Tier::full, &run_tvb28},
     {"TVB-31.01", "Legacy silicon band set: Varshni gap and power-law densities of states", Tier::fast,
