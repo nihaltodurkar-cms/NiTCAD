@@ -10938,6 +10938,65 @@ the benchmark (TVM2).**
 - TVB-32 adds TVB-20's device at L0 (the V_D = 50 mV sweep from zero bias, and the equilibrium) under 16.44's
   rule.
 
+**16.47 Step 9 as built: TVB-20 and TVB-21. DT-Q40 to DT-Q43, ruled A ("for decision choose recommended",
+2026-11-11).**
+- **First attempts: run errors, no comparison seen.**
+  - With 16.46's tol 1e-12 (and an interim 1e-10) Newton did not converge at L = 2 L0, V_D = 0.5 V, V_G = 0.8 V, with
+    the bias step cut to 2⁻³⁰. The last updates wander between 2e-10 and 8e-10 without decreasing.
+  - **Cause, measured with a temporary print in `DriftDiffusion::update_size` (not committed):** the largest
+    correction is always a hole density at a node of the inverted or depleted surface. There p is 7e-22 to 4e-19 of
+    the largest density (1e-16 of the local electrons) and its correction is 1e-10 of itself: the linear solve's
+    rounding. Unit 50's `minority_floor` does not help (ε n is below `update_size`'s own 1e-20 floor there).
+  - These holes carry no charge or current that enters I_D. The solver is not changed.
+- **DT-Q40 (the Newton tolerance). A, applied:** tol 1e-6, so the factorial's tol/100 is 1e-8, the solver's default,
+  12 times above the worst stall seen. U_iter came out at 1e-13 of Q or below at every point, so the choice enters
+  no outcome. `solve_level` now prints the stopped point's last six updates in a run error.
+- **First complete run (L0 … 8 L0, 8.8 min Release): TVB-20 16 pass, 6 NOT EVALUATED; TVB-21 1 pass, 4 NOT
+  EVALUATED, 1 fail.**
+  - TVB-20: the 11 orders pass (0.99 to 1.08). Five limits pass. Six are NOT EVALUATED: U_L is 1.5 to 2 % of Q_PS
+    at V_G ≤ 0.8 V (and at 1.2 V, V_D = 0.5 V), above 16.19's 1e-2.
+  - TVB-21: S at 0.6 V missed its bound by 1.19 (1.67e-5 V/dec against 1.40e-5, 2e-4 of S); at 0.4 and 0.5 V the
+    spread of the two orders was 0.38 and 0.11.
+- **DT-Q41 (U_disc's form). A, applied.** `tvb20.cpp` computed F_s |f(h/2) − f(h)| / (r^p − 1), the estimate of the
+  h/2 value. The judged values are on h. 16.36's form (`registry.cpp`), F_s |f(h/2) − f(h)| r^p / (r^p − 1), is the
+  one 16.46 names ("the two-grid GCI of h"). A coding error of mine, found after the run from the S fail; four times
+  larger. It enters the bounds only, never ε_approx.
+- **DT-Q42 (the six NOT EVALUATED limits). A, applied: the ladder is L0 × {4, 8, 16, 32}** (10 to 80 µm), the
+  factorial at 32 L0. The criterion is unchanged. (B was to pin the six as found.)
+- **The ruled run (12 to 16 min Release, two runs): TVB-20 22 pass. TVB-21 6 NOT EVALUATED.**
+  - TVB-20: orders 1.006 to 1.085, spreads within 0.1. U_L is 0.06 to 0.52 % of Q_PS. |Q_∞ − Q_PS| / bound is 0.08
+    to 0.27.
+    - Q_∞ against Q_PS: −0.37 to −0.68 % at V_G ≤ 0.8 V, where U_disc is 1.8 to 2.1 %; within ±0.08 % at V_G ≥ 1.2 V,
+      where U_disc is 0.03 to 0.23 %. The weak-inversion bound is the mesh's, not the ladder's.
+    - No point is below ψ_B + 3 V_T (0.495 V; ψ_s is 0.549 V already at V_G = 0.4 V).
+    - Brews' charge sheet at V_G 1.2 V, V_D 50 mV: 2.5 % below Pao–Sah (diagnostic).
+  - TVB-21: S does not depend on L measurably at these lengths. Its ladder's differences are 3e-7 to 5e-5 V/dec,
+    below U_disc (4.4e-5 to 5.6e-5), so the orders are −1.58, −0.23 and 0.30 with spreads 0.6 to 1.2: "not in the
+    asymptotic range", and the limit "Q_inf not established".
+    - Printed, not judged: S at 32 L0 against the reference is +0.84 % at 0.4 V (ε_cutoff 0.75 %), +0.069 % at 0.5 V
+      and +0.021 % at 0.6 V; on h/2, +0.82 %, +0.053 % and +0.007 %.
+    - The depletion formula is 2.5 to 2.7 % below the reference's S (DT-Q6's diagnostic).
+- **DT-Q43 (TVB-21's outcome). A: pinned as found**, as DT-Q20 A and DT-Q35 A. (B, a criterion change, was to judge
+  S at the longest L with ε_approx from the last ladder difference when the differences are below U_disc. It is
+  DT-Q36's class, an L-exact quantity judged by an order, and should follow that ruling if B is ever taken.)
+- **Frozen case** (`[tvb20_full]`, `verify_full.tvb20`): TVB-20 22 pass; TVB-21 6 NOT EVALUATED with the two
+  reasons. 16.46's "every comparison passes" is replaced.
+- **TVB-32 on TVB-20's device** (L0, zero bias and the V_D = 50 mV sweep, the equilibrium): 44 entries, 501 in all.
+  C1 2 pass and 6 not applicable, C3 8 pass, C4 7 pass (worst 0.0097 of the bound), C12 7 pass, C5 7 not
+  applicable, C2 6 not applicable and 1 NOT EVALUATED ("no rates stored" at zero bias with G-R off: 16.45's first
+  contract class, now 10 entries). No finding. The frozen case stays red pending DT-Q39.
+- **Mutation.**
+  - `pao_sah` L0 (19 mutants: the field's scale, ψ_B, the hole term's sign, each form's electron term, n's V, the
+    gate equation's sign, the cutoff, Q_I's sign, μ, the outer integral's lower limit, the stencil's 12, the
+    identity's sign, the charge sheet's V_T, its 2/3 and its diffusion sign, three refusals): 16 caught at first
+    (the hole term's sign by a 120 s limit: the root search does not end).
+    - Two survivors were gaps and are closed: the cutoff ignored (now: c = 1/2 must change the current) and the
+      charge sheet's ψ_s ≤ V_T refusal (now tested). `pao_sah_test` is 65 assertions.
+    - One is equivalent: without the V_G ≤ V_FB refusal the point is still refused, by Brent's empty bracket.
+  - TVB-20 and TVB-21's own code: not run. Each mutant costs the 12 to 16 min nightly run.
+- **Time:** nightly only; `verify_full.tvb20` 12 to 16 min Release against its 3600 s limit. Nothing is added to the
+  fast tier or to `tvr4_full` except TVB-32's 44 entries (the L0 sweep).
+
 ---
 
 ## New questions the advisor raised (not yet in `ARCHITECTURE.md`)

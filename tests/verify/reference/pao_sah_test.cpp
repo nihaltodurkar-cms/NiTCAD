@@ -76,6 +76,7 @@ TEST_CASE("pao_sah: the bulk ambiguity is small in strong inversion", "[pao_sah]
         CHECK(a->quadrature_error <= 1e-18);
         CHECK(std::abs(((b->current - a->current) / a->current).to_double()) <= 1e-10);
         CHECK(std::abs(((c->current - a->current) / a->current).to_double()) <= 1e-8);
+        CHECK(c->current.to_double() != a->current.to_double());  // the cutoff is read (it adds the weak-inversion tail)
         CHECK(a->current.hi > 0.0);
         CHECK(a->surface_drain_V > a->surface_source_V);  // V_D > 0 raises psi_s toward the drain
     }
@@ -128,4 +129,5 @@ TEST_CASE("pao_sah: refusals", "[pao_sah]") {
     CHECK_FALSE(ref::pao_sah(input(3), 1.0, 0.1).has_value());
     CHECK_FALSE(ref::pao_sah(input(1, 0.0), 1.0, 0.1).has_value());
     CHECK_FALSE(ref::pao_sah_conductance_identity(input(), 1.0, 0.1, 0.06).has_value());
+    CHECK_FALSE(ref::charge_sheet(input(), VFB + 0.01, 0.05).has_value());  // psi_s <= V_T
 }

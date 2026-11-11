@@ -7,14 +7,14 @@
 // and surface mobility off), Boltzmann, no BGN, no generation-recombination (16.2 (i)).
 // Reference: verify/reference/pao_sah (Pao and Sah's double integral, form 1, cutoff psi_B; PB) with the same
 // material values NiTCAD is given (I1).
-// The channel-length limit (16.18 (d), DT-Q13): NiTCAD at L = L0 {1, 2, 4, 8}, L0 = 2.5 um (above 20 W_dmax, W_dmax
-// about 0.11 um); Q(L) = I_D L per unit width; the order of Q in 1/L from the ladder's three differences, in [0.8, 1.3]
+// The channel-length limit (16.18 (d), DT-Q13): NiTCAD at L = L0 {4, 8, 16, 32} (DT-Q42 A:
+// L0 {1, 2, 4, 8} left U_L at 1.5 to 2 % in weak inversion), L0 = 2.5 um (above 20 W_dmax, W_dmax about 0.11 um); Q(L) = I_D L per unit width; the order of Q in 1/L from the ladder's three differences, in [0.8, 1.3]
 // with spread <= 0.1; Q_inf by Richardson at the finest pair, U_L its three-grid GCI.
 // Accuracy (A, 16.19): |Q_inf - Q_PS| <= U_num + U_ref + eps_approx, eps_approx = U_L + eps_cutoff, eps_cutoff =
 // |Q_PS(c = 1) - Q_PS(c = 1/2)| + |Q_PS(form 1) - Q_PS(form 2)|; NOT EVALUATED when eps_approx > 1e-2 Q_PS or the
 // order is not judged a pass; NOT APPLICABLE where psi_s(V_S) < psi_B + 3 V_T.
-// U_num at the longest L: the (h, tol) factorial (16.2 (p)); U_disc = the two-grid GCI (F_s 3, p 2) of h against h/2
-// (every spacing halved and the grading ratio square-rooted), U_iter = |Q(tol) - Q(tol / 100)|.
+// U_num at the longest L: the (h, tol) factorial (16.2 (p)); U_disc = the two-grid GCI (F_s 3, p 2) of the h value
+// against h/2 (every spacing halved and the grading ratio square-rooted), U_iter = |Q(tol) - Q(tol / 100)|.
 // TVB-21: S = 2 h_G / log10(Q(V_G + h_G) / Q(V_G - h_G)), h_G = 20 mV, at V_D = 50 mV (<= 3 V_T), the same stencil on
 // NiTCAD's ladder and on the reference; the same rule on S (16.19). The depletion formula ln 10 V_T (1 + C_dep / C_ox)
 // is printed beside it (DT-Q6), never judged.
@@ -46,8 +46,10 @@ namespace {
 
 constexpr double NA = 1e17, N_sd = 1e19, t_ox_cm = 1e-6, eps_ox_r = 3.9, phi_m_eV = 4.5, T = 300.0;
 constexpr double Lsd = 5e-5, xj = 1e-5, depth = 1e-4, L0 = 2.5e-4;
-constexpr double tol_newton = 1e-12, h_G = 0.02, approx_limit = 1e-2;
-constexpr int levels = 4;
+// tol 1e-6, so the factorial's tol / 100 is 1e-8: below about 1e-9 the holes of the inverted surface, 1e-20 of the
+// largest density, hold Newton's update at their rounding (16.47, DT-Q40).
+constexpr double tol_newton = 1e-6, h_G = 0.02, approx_limit = 1e-2;
+constexpr int levels = 4, first_level = 2;  // L = L0 2^(first_level + k), k < levels: 4 L0 ... 32 L0 (16.47, DT-Q42 A)
 constexpr double drains[2] = {0.05, 0.5};
 const std::vector<double> judged_gates[2] = {{0.45, 0.6, 0.8, 1.2, 1.6, 2.0}, {0.6, 0.8, 1.2, 1.6, 2.0}};
 constexpr double swing_gates[3] = {0.4, 0.5, 0.6};
@@ -194,8 +196,17 @@ std::expected<Values, std::string> solve_level(double L, int m, double tol) {
         const std::string at = "L = " + shortest(L) + " cm, refinement " + std::to_string(m) + ", V_D " +
                                shortest(drains[k]) + " V";
         if (!s || s->stopped || s->points.size() != points.size()) {
+            std::string history;  // the stopped point's last Newton updates: a rounding floor or a divergence
+            if (s && s->unfinished) {
+                const auto& it = s->unfinished->iterations;
+                history = "; last updates";
+                for (std::size_t i = it.size() > 6 ? it.size() - 6 : 0; i < it.size(); ++i) {
+                    history += " " + shortest(it[i].update);
+                }
+            }
             return std::unexpected(at + ": " +
-                                   (!s ? s.error().message : s->stopped ? s->stopped->message : "short sweep"));
+                                   (!s ? s.error().message : s->stopped ? s->stopped->message : "short sweep") +
+                                   history);
         }
         for (std::size_t q = 0; q < gates.size(); ++q) {
             out[{k, gates[q]}] = std::abs(s->points[q].weighted_current[1]) * L;
@@ -231,11 +242,11 @@ reference::PaoSahInput reference_input(int form, double cutoff) {
             .cutoff_fraction = cutoff};
 }
 
-// One quantity's values on the ladder (L0 first), its factorial at the longest L, and the reference's three forms.
+// One quantity's values on the ladder (4 L0 first), its factorial at the longest L, and the reference's three forms.
 struct Quantity {
     std::string name;
     double ladder[levels] = {};
-    double h_tol = 0.0, h_tolfine = 0.0, h2_tol = 0.0, h2_tolfine = 0.0;  // the factorial, at 8 L0
+    double h_tol = 0.0, h_tolfine = 0.0, h2_tol = 0.0, h2_tolfine = 0.0;  // the factorial, at 32 L0
     double ref = 0.0, ref_cut = 0.0, ref_form = 0.0, u_ref = 0.0;
     bool applicable = true;
     double applicability_value = 0.0, applicability_threshold = 0.0;
@@ -249,7 +260,9 @@ void judge_limit(BenchmarkResult& r, const Quantity& q) {
     const double denom = std::pow(2.0, p2) - 1.0;
     const double q_inf = q.ladder[3] + d3 / denom;
     const double U_L = reference::gci_safety_factor_three_grids * std::abs(d3) / denom;
-    const double u_disc = reference::gci_safety_factor_two_grids * std::abs(q.h2_tol - q.h_tol) / 3.0;
+    // Roache's two-grid estimate of the h value (16.36's form; DT-Q41 A): F_s |f(h/2) - f(h)| r^p / (r^p - 1),
+    // r = p = 2.
+    const double u_disc = reference::gci_safety_factor_two_grids * std::abs(q.h2_tol - q.h_tol) * 4.0 / 3.0;
     const double u_iter = std::abs(q.h_tol - q.h_tolfine);
     const double eps_cut = std::abs(q.ref - q.ref_cut) + std::abs(q.ref - q.ref_form);
     const double eps_approx = U_L + eps_cut;
@@ -259,7 +272,7 @@ void judge_limit(BenchmarkResult& r, const Quantity& q) {
                                   (q.h2_tolfine - q.ref) / s, std::vector<double>{u_disc / s, u_iter / s});
     std::string ladder;
     for (const double v : q.ladder) ladder += " " + shortest(v);
-    r.notes.push_back(q.name + ": ladder (L0 ... 8 L0)" + ladder + "; orders " + shortest(p1) + " " + shortest(p2) +
+    r.notes.push_back(q.name + ": ladder (4 L0 ... 32 L0)" + ladder + "; orders " + shortest(p1) + " " + shortest(p2) +
                       "; Q_inf " + shortest(q_inf) + ", reference " + shortest(q.ref) + " (cutoff psi_B / 2 " +
                       shortest(q.ref_cut) + ", form 2 " + shortest(q.ref_form) + "); U_L " + shortest(U_L) +
                       ", eps_cutoff " + shortest(eps_cut) + ", U_disc " + shortest(u_disc) + ", U_iter " +
@@ -297,7 +310,7 @@ void judge_limit(BenchmarkResult& r, const Quantity& q) {
 
 // Everything TVB-20 and TVB-21 share: NiTCAD's ladder and factorial, and the reference's three forms at each point.
 struct Shared {
-    std::vector<Values> ladder;          // L0 ... 8 L0
+    std::vector<Values> ladder;          // 4 L0 ... 32 L0
     Values h_tol, h_tolfine, h2_tol, h2_tolfine;
     std::vector<std::string> notes;
     std::optional<std::string> error;
@@ -307,14 +320,14 @@ const Shared& shared_run() {
     static const Shared s = [] {
         Shared out;
         for (int k = 0; k < levels; ++k) {
-            auto v = solve_level(L0 * std::ldexp(1.0, k), 1, tol_newton);
+            auto v = solve_level(L0 * std::ldexp(1.0, first_level + k), 1, tol_newton);
             if (!v) {
                 out.error = v.error();
                 return out;
             }
             out.ladder.push_back(std::move(*v));
         }
-        const double Lmax = L0 * std::ldexp(1.0, levels - 1);
+        const double Lmax = L0 * std::ldexp(1.0, first_level + levels - 1);
         auto a = solve_level(Lmax, 1, 0.01 * tol_newton), b = solve_level(Lmax, 2, tol_newton),
              c = solve_level(Lmax, 2, 0.01 * tol_newton);
         if (!a || !b || !c) {
