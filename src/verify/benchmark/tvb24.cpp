@@ -19,7 +19,8 @@
 //   - Three cases, two reverse biases each, reached by 0.5 V steps from 0 V:
 //     local Kane on silicon (NiTCAD's) at -3 and -6 V; nonlocal Kane on silicon at -3 and -6 V; direct WKB on GaAs
 //     (NiTCAD's set) with the spec's tunnelling masses m_c = 0.067, m_v = 0.5 (17.2 (o); the masses' provenance is not
-//     at issue at this level) at -2 and -4 V.
+//     at issue at this level) at -0.5 and -1 V (IG-Q26 B, 17.26; -2 and -4 V as first built, where P_QE was 2.8e-6
+//     and 1.4e-4, 17.25).
 // Reference (verify/reference/pin_junction.hpp, tunnel_generation.hpp): the QE p-i-n potential with NiTCAD's q, eps,
 // V_T, n_i, gap and (A, B) as inputs (I1), and on it the local pairs int G(E) dx, the nonlocal Kane pairs and paths,
 // and the WKB pairs and paths with the flat field 1e3 V/cm (tunnel_paths.cpp's `flat_field_V_cm`).
@@ -30,8 +31,10 @@
 //   - nonlocal cases, at k = 3: per path, l and F relative <= 1e-3 for every path that reached its crossing with a
 //     rate >= 1e-6 of the largest (judged on the largest of the errors), against the reference's path from the level
 //     at the start node's position;
-//   - the current, at k = 3: |J - q P_ref| / (q P_ref) <= 1e-3, J the anode's weighted current (local) or terminal current
-//     (nonlocal), judged where |J| >= 1e3 times its resolution (else NOT EVALUATED).
+//   - the current, at k = 3: |J - q P_ref| / (q P_ref) <= 1e-3, J the generation's share |J_on - J_off| of the anode's
+//     weighted current (local) or terminal current (nonlocal), J_off from the same ramp and mesh with the band-to-band
+//     rate off (IG-Q26 B, 17.26: the contacts' leakage cancels), judged where J >= 1e3 times the sum of the two
+//     resolutions (else NOT EVALUATED).
 //   Applicability (17.24): P_QE = q sum_i |Delta rho_i| V_i / (eps E_max) <= 1e-6 on every level, Delta rho the
 //   difference of p - n from its value with the electrons at the cathode's level and the holes at the anode's (the
 //   reference's QE model), E_max the reference's largest field; else NOT APPLICABLE. A comparison whose U_ref or U_iter
@@ -93,7 +96,7 @@ struct Case {
 };
 constexpr std::array<Case, 3> cases{{{Model::local, "local Kane, Si", false, {-3.0, -6.0}},
                                      {Model::kane, "nonlocal Kane, Si", false, {-3.0, -6.0}},
-                                     {Model::wkb, "direct WKB, GaAs", true, {-2.0, -4.0}}}};
+                                     {Model::wkb, "direct WKB, GaAs", true, {-0.5, -1.0}}}};  // IG-Q26 B (17.26)
 
 ReferenceInfo info() {
     ReferenceInfo r;
@@ -156,17 +159,19 @@ std::expected<device::Device, std::string> diode(int k, const physics::Semicondu
     return std::move(*d);
 }
 
-solve::BiasOptions options(Model model, double tol) {
+// generation false: the same system with the band-to-band rate off (the current's background, IG-Q26 B).
+solve::BiasOptions options(Model model, double tol, bool generation) {
     solve::BiasOptions o;
     o.models.srh = o.models.auger = o.models.radiative = false;
     o.models.bgn = false;
     o.models.fermi_dirac = false;
     o.models.doping_mobility = false;
     o.models.hole_mobility = assemble::HoleMobility::caughey_thomas;
-    o.models.btbt_local = model == Model::local;
-    o.models.btbt_nonlocal = model == Model::kane  ? assemble::NonlocalTunnelling::kane
-                             : model == Model::wkb ? assemble::NonlocalTunnelling::direct_wkb
-                                                   : assemble::NonlocalTunnelling::off;
+    o.models.btbt_local = generation && model == Model::local;
+    o.models.btbt_nonlocal = !generation         ? assemble::NonlocalTunnelling::off
+                             : model == Model::kane ? assemble::NonlocalTunnelling::kane
+                             : model == Model::wkb  ? assemble::NonlocalTunnelling::direct_wkb
+                                                    : assemble::NonlocalTunnelling::off;
     o.weighted_current = model == Model::local;  // refused with nonlocal tunnelling (W6)
     o.minority_floor = true;
     o.store_rates = true;
@@ -184,7 +189,7 @@ struct RefPoint {
 
 // One bias's values on one level.
 struct Sample {
-    double pairs = 0.0, path_pairs = 0.0, J = 0.0, J_res = 0.0, qe = 0.0;
+    double pairs = 0.0, path_pairs = 0.0, J = 0.0, J_res = 0.0, qe = 0.0;  // J signed (the anode's)
     std::vector<results::TunnelPath> paths;
 };
 
@@ -302,11 +307,13 @@ BenchmarkResult run_tvb24(Tier tier) {
             }
         }
 
-        const auto run_level = [&](int k, double tol, bool keep_paths) -> std::expected<Level, std::string> {
-            const std::string where = std::string(c.name) + ", k = " + std::to_string(k) + ", tol " + shortest(tol);
+        const auto run_level = [&](int k, double tol, bool keep_paths,
+                                   bool generation = true) -> std::expected<Level, std::string> {
+            const std::string where = std::string(c.name) + ", k = " + std::to_string(k) + ", tol " + shortest(tol) +
+                                      (generation ? "" : ", generation off");
             const auto d = diode(k, material);
             if (!d) return std::unexpected(where + ": " + d.error());
-            const auto sw = solve::sweep_bias(*d, ramp, options(c.model, tol));
+            const auto sw = solve::sweep_bias(*d, ramp, options(c.model, tol, generation));
             if (!sw) return std::unexpected(where + ": " + sw.error().message);
             if (sw->stopped) return std::unexpected(where + ": " + sw->stopped->message);
             Level lv;
@@ -316,14 +323,16 @@ BenchmarkResult run_tvb24(Tier tier) {
             const std::vector<double> volume(d->mesh().volumes().begin(), d->mesh().volumes().end());
             for (std::size_t b = 0; b < 2; ++b) {
                 const results::BiasPoint& p = sw->points[at[b]];
-                if (p.rates.band_to_band_p.size() != volume.size()) {
-                    return std::unexpected(where + ": the band-to-band rates were not stored");
-                }
                 Sample& s = lv.s[b];
-                for (std::size_t i = 0; i < volume.size(); ++i) s.pairs -= p.rates.band_to_band_p[i] * volume[i];
-                for (const auto& t : p.tunnel_paths) s.path_pairs += t.generation_cm3_s * volume[t.start_node];
+                if (generation) {
+                    if (p.rates.band_to_band_p.size() != volume.size()) {
+                        return std::unexpected(where + ": the band-to-band rates were not stored");
+                    }
+                    for (std::size_t i = 0; i < volume.size(); ++i) s.pairs -= p.rates.band_to_band_p[i] * volume[i];
+                    for (const auto& t : p.tunnel_paths) s.path_pairs += t.generation_cm3_s * volume[t.start_node];
+                }
                 const bool weighted = c.model == Model::local;
-                s.J = std::abs(weighted ? p.weighted_current[0] : p.terminal_current[0]);
+                s.J = weighted ? p.weighted_current[0] : p.terminal_current[0];
                 s.J_res = weighted ? p.weighted_current_resolution[0] : p.terminal_current_resolution[0];
                 s.qe = qe_share(p, volume, c.biases[b], VT, eps, refs[b].E_max);
                 if (keep_paths) s.paths = p.tunnel_paths;
@@ -353,6 +362,12 @@ BenchmarkResult run_tvb24(Tier tier) {
                 fac[n++] = std::move(*lv);
             }
         }
+        // The current's background (IG-Q26 B): the finest level with the generation off, the same ramp and mesh.
+        auto off = run_level(ladder.front(), tol_newton, false, false);
+        if (!off) {
+            r.run_error = off.error();
+            return r;
+        }
 
         for (std::size_t b = 0; b < 2; ++b) {
             const RefPoint& rp = refs[b];
@@ -374,6 +389,8 @@ BenchmarkResult run_tvb24(Tier tier) {
                         shortest(l.s[b].qe);
                 r.notes.push_back(line);
             }
+            r.notes.push_back(at_b + ", generation off, k = " + std::to_string(off->k) + ": J " +
+                              shortest(off->s[b].J) + " (res " + shortest(off->s[b].J_res) + ")");
             for (const Level& l : fac) qe = std::max(qe, l.s[b].qe);
             const study::OrderStudy st = study::order_study(hs, es, us);
             const study::OrderVerdict v = study::judge_order(st, {.p_th = 2.0});
@@ -468,17 +485,19 @@ BenchmarkResult run_tvb24(Tier tier) {
                 }
             }
             {
+                // The generation's share: J(on) - J(off), its resolution the sum of the two (IG-Q26 B).
                 const double Jref = base::q_C * rp.pairs;
-                const double e = std::abs(fine.s[b].J - Jref) / Jref;
+                const double J = std::abs(fine.s[b].J - off->s[b].J);
+                const double J_res = fine.s[b].J_res + off->s[b].J_res;
+                const double e = std::abs(J - Jref) / Jref;
                 const std::string crit = "|J - q P_ref| / (q P_ref) <= 1e-3";
-                ComparisonRecord& rec = record("current finest, " + at_b, "A/cm^2", rp.V, fine.s[b].J, Jref,
-                                               rp.u_ref, e, crit);
+                ComparisonRecord& rec = record("current finest, " + at_b, "A/cm^2", rp.V, J, Jref, rp.u_ref, e, crit);
                 if (fine.s[b].qe > limit_qe) {
                     rec.comparison = Comparison{Outcome::not_applicable, "P_QE above 1e-6", {}};
-                } else if (fine.s[b].J < resolution_factor * fine.s[b].J_res) {
+                } else if (J < resolution_factor * J_res) {
                     rec.comparison = Comparison{Outcome::not_evaluated,
                                                 "J below 1e3 times its resolution (resolution / J " +
-                                                    shortest(fine.s[b].J_res / fine.s[b].J) + ")",
+                                                    shortest(J_res / J) + ")",
                                                 {}};
                 } else if (rp.u_ref > 0.1 * tolerance) {
                     rec.comparison = Comparison{Outcome::not_evaluated, "U_ref above a tenth of the tolerance", {}};

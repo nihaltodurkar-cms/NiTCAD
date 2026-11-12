@@ -11886,6 +11886,24 @@ pre-registered; IG-Q25 A under the standing instruction.**
 - **Frozen as found** (step 5d): `interfaces_generation_test.cpp`, every metric within a quarter, the orders within
   0.02, the four unresolved currents not pinned.
 
+**17.26 TVB-24 rebuilt once (IG-Q26 B). The values, fixed and committed before the rerun.**
+- The direct-WKB biases are −0.5 and −1 V (the ramp's order: −0.5 V first), from 0 V by the same 0.5 V steps. The
+  silicon cases keep −3 and −6 V.
+- Every current is the generation's share, J = |J_on − J_off| at the anode, on the finest level (k = 3, tol
+  1e-8). J_off comes from the same device, ramp and options with the band-to-band rate off (local and nonlocal alike).
+  The reader stays as 17.25: weighted (local) or terminal (nonlocal). The resolution is the sum of the two
+  resolutions. Judged where J ≥ 1e3 times that sum, as before.
+- Unchanged: every criterion and limit of 17.8, 17.14 and 17.24 (P_QE ≤ 1e-6, the order band, 1e-3, the tenth
+  rules); the construction of 17.24 and the corrections of 17.25 otherwise.
+- **Expectation before the rerun** (26 comparisons: 14 pass, 7 fail, 5 not_evaluated):
+  - local Kane: as 17.25 for the orders and pairs (4 pass); both currents NOT EVALUATED, because the share is
+    q P (9e-16 and 3e-8 A/cm²) and the resolution is not changed by the subtraction;
+  - nonlocal Kane: as 17.25 (the order at −3 V fails, at −6 V NOT EVALUATED; pairs and paths pass; currents NOT
+    EVALUATED);
+  - direct WKB: P_QE below 1e-6 at both biases (estimated, not known). Orders fail near 1 (S2). The finest pairs
+    fail at c₁h: c₁ rose from 1.26e5 to 2.24e5 /cm between −4 and −2 V, so c₁h at h = 6.9e-9 cm is about 2e-3 or
+    more at −1 V. The paths' l and F pass. The currents are resolved and follow the pairs (fail).
+
 ---
 
 ## New questions the advisor raised (not yet in `ARCHITECTURE.md`)
