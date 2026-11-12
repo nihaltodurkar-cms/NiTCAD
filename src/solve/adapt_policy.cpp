@@ -1,9 +1,10 @@
-// The intelligent decision layer (Unit 17, slice 5; DECISIONS.md Unit 17 ID2, ID3, AR5).
+// The intelligent decision layer (Unit 17, slice 5; DECISIONS.md Unit 17 ID2, ID3, ID5, AR5, AR7).
 #include "NiTCAD/solve/adapt_policy.hpp"
 
 #include <algorithm>
 #include <cmath>
 #include <numeric>
+#include <optional>
 #include <string>
 #include <utility>
 
@@ -283,6 +284,213 @@ std::expected<std::vector<std::size_t>, base::Error> choose_points(std::span<con
     }
     std::ranges::sort(at);
     return at;
+}
+
+namespace {
+
+// Least squares ||U theta - 1|| over the columns in `use` (theta zero elsewhere), columns scaled to
+// unit norm; nullopt when singular. The normal equations, by Gaussian elimination with partial pivoting.
+std::optional<std::array<double, 3>> relative_fit(const std::vector<std::array<double, 3>>& u, unsigned use) {
+    std::array<std::size_t, 3> cols{};
+    std::size_t m = 0;
+    for (std::size_t j = 0; j < 3; ++j) {
+        if ((use >> j & 1U) != 0) cols[m++] = j;
+    }
+    std::array<double, 3> scale{};
+    for (std::size_t q = 0; q < m; ++q) {
+        double s = 0.0;
+        for (const auto& row : u) s += row[cols[q]] * row[cols[q]];
+        if (!(s > 0.0)) return std::nullopt;
+        scale[q] = 1.0 / std::sqrt(s);
+    }
+    std::array<std::array<double, 4>, 3> a{};
+    for (std::size_t p = 0; p < m; ++p) {
+        for (std::size_t q = 0; q < m; ++q) {
+            for (const auto& row : u) a[p][q] += row[cols[p]] * scale[p] * row[cols[q]] * scale[q];
+        }
+        for (const auto& row : u) a[p][3] += row[cols[p]] * scale[p];
+    }
+    for (std::size_t p = 0; p < m; ++p) {
+        std::size_t piv = p;
+        for (std::size_t r = p + 1; r < m; ++r) {
+            if (std::abs(a[r][p]) > std::abs(a[piv][p])) piv = r;
+        }
+        if (!(std::abs(a[piv][p]) > 1e-12)) return std::nullopt;
+        std::swap(a[p], a[piv]);
+        for (std::size_t r = 0; r < m; ++r) {
+            if (r == p) continue;
+            const double f = a[r][p] / a[p][p];
+            for (std::size_t q = p; q < 4; ++q) a[r][q] -= f * a[p][q];
+        }
+    }
+    std::array<double, 3> theta{};
+    for (std::size_t p = 0; p < m; ++p) theta[cols[p]] = a[p][3] / a[p][p] * scale[p];
+    return theta;
+}
+
+double mean_square_relative(const std::vector<std::array<double, 3>>& u, const std::array<double, 3>& theta) {
+    double s = 0.0;
+    for (const auto& row : u) {
+        const double e = row[0] * theta[0] + row[1] * theta[1] + row[2] * theta[2] - 1.0;
+        s += e * e;
+    }
+    return u.empty() ? 0.0 : s / static_cast<double>(u.size());
+}
+
+// a alone given b: relative least squares of a nnz^b / y.
+double scale_only(std::span<const double> f, std::span<const double> y) {
+    double num = 0.0, den = 0.0;
+    for (std::size_t k = 0; k < f.size(); ++k) {
+        const double u = f[k] / y[k];
+        num += u;
+        den += u * u;
+    }
+    return den > 0.0 ? num / den : 0.0;
+}
+
+}  // namespace
+
+double CostModel::per_iteration(double nnz, double fill, double dofs) const {
+    return a * std::pow(nnz, b) + c * fill + d * dofs;
+}
+
+double CostModel::pass_seconds(double newton_iterations, double nnz, double fill, double dofs, double nodes) const {
+    if (samples == 0) return std::numeric_limits<double>::quiet_NaN();
+    return newton_iterations * per_iteration(nnz, fill, dofs) + (mesh_per_node + transfer_per_node) * nodes;
+}
+
+double CostModel::pass_seconds_nodes(double nodes) const {
+    if (samples == 0) return std::numeric_limits<double>::quiet_NaN();
+    return alpha * std::pow(nodes, beta);
+}
+
+CostModel fit_cost_model(std::span<const CostSample> samples) {
+    CostModel m;
+    std::vector<CostSample> s;
+    for (const CostSample& x : samples) {
+        if (x.newton_iterations > 0.0 && x.matrix_nonzeros > 0.0 && x.seconds_solve > 0.0 && x.nodes > 0.0) s.push_back(x);
+    }
+    m.samples = s.size();
+    if (s.empty()) return m;
+    std::vector<double> y(s.size()), nnz(s.size());
+    for (std::size_t k = 0; k < s.size(); ++k) {
+        y[k] = s[k].seconds_solve / s[k].newton_iterations;
+        nnz[k] = s[k].matrix_nonzeros;
+    }
+    const auto powers = [&](double b) {
+        std::vector<double> f(s.size());
+        for (std::size_t k = 0; k < s.size(); ++k) f[k] = std::pow(nnz[k], b);
+        return f;
+    };
+    if (s.size() == 1) {
+        m.b = 1.5;
+        m.a = scale_only(powers(m.b), y);
+    } else if (s.size() == 2) {
+        m.b = nnz[1] != nnz[0] && y[0] > 0.0 && y[1] > 0.0
+                  ? std::clamp(std::log(y[1] / y[0]) / std::log(nnz[1] / nnz[0]), 1.0, 2.0)
+                  : 1.5;
+        m.a = scale_only(powers(m.b), y);
+    } else {
+        double best = std::numeric_limits<double>::infinity();
+        for (int step = 0; step <= 20; ++step) {
+            const double b = 1.0 + 0.05 * step;
+            const std::vector<double> f = powers(b);
+            std::vector<std::array<double, 3>> u(s.size());
+            for (std::size_t k = 0; k < s.size(); ++k) u[k] = {f[k] / y[k], s[k].fill / y[k], s[k].dofs / y[k]};
+            for (unsigned use = 1; use < 8; ++use) {
+                const auto theta = relative_fit(u, use);
+                if (!theta || (*theta)[0] < 0.0 || (*theta)[1] < 0.0 || (*theta)[2] < 0.0) continue;
+                const double obj = mean_square_relative(u, *theta) + 0.01 / static_cast<double>(s.size()) * (b - 1.5) * (b - 1.5);
+                if (obj < best) {  // strict: the first (smallest b, fewest columns) wins ties
+                    best = obj;
+                    m.b = b;
+                    m.a = (*theta)[0];
+                    m.c = (*theta)[1];
+                    m.d = (*theta)[2];
+                }
+            }
+        }
+    }
+    double r = 0.0;
+    for (std::size_t k = 0; k < s.size(); ++k) {
+        const double e = m.per_iteration(nnz[k], s[k].fill, s[k].dofs) / y[k] - 1.0;
+        r += e * e;
+    }
+    m.residual = std::sqrt(r / static_cast<double>(s.size()));
+    double nodes = 0.0, mesh = 0.0, tnodes = 0.0, transfer = 0.0;
+    for (const CostSample& x : s) {
+        nodes += x.nodes;
+        mesh += x.seconds_mesh;
+        if (x.seconds_transfer > 0.0) {
+            tnodes += x.nodes;
+            transfer += x.seconds_transfer;
+        }
+    }
+    m.mesh_per_node = mesh / nodes;
+    m.transfer_per_node = tnodes > 0.0 ? transfer / tnodes : 0.0;
+    // The node-count-only model on the whole pass's time.
+    std::vector<double> t(s.size()), n(s.size());
+    for (std::size_t k = 0; k < s.size(); ++k) {
+        t[k] = s[k].seconds_solve + s[k].seconds_mesh + s[k].seconds_transfer;
+        n[k] = s[k].nodes;
+    }
+    m.beta = 1.0;
+    if (s.size() >= 2) {
+        double mx = 0.0, my = 0.0;
+        for (std::size_t k = 0; k < s.size(); ++k) {
+            mx += std::log(n[k]);
+            my += std::log(t[k]);
+        }
+        mx /= static_cast<double>(s.size());
+        my /= static_cast<double>(s.size());
+        double sxy = 0.0, sxx = 0.0;
+        for (std::size_t k = 0; k < s.size(); ++k) {
+            sxy += (std::log(n[k]) - mx) * (std::log(t[k]) - my);
+            sxx += (std::log(n[k]) - mx) * (std::log(n[k]) - mx);
+        }
+        if (sxx > 0.0) m.beta = std::clamp(sxy / sxx, 0.5, 3.0);
+    }
+    std::vector<double> fn(s.size());
+    for (std::size_t k = 0; k < s.size(); ++k) fn[k] = std::pow(n[k], m.beta);
+    m.alpha = scale_only(fn, t);
+    double rn = 0.0;
+    for (std::size_t k = 0; k < s.size(); ++k) {
+        const double e = m.alpha * fn[k] / t[k] - 1.0;
+        rn += e * e;
+    }
+    m.residual_nodes = std::sqrt(rn / static_cast<double>(s.size()));
+    return m;
+}
+
+std::vector<OrderFit> fit_orders(std::span<const OrderSample> samples) {
+    std::vector<OrderFit> fits;
+    std::vector<double> sums;
+    for (const OrderSample& x : samples) {
+        if (!(std::isfinite(x.ratio) && x.ratio > 0.0)) continue;
+        auto it = std::ranges::find_if(fits, [&](const OrderFit& f) { return f.kind == x.kind && f.region == x.region; });
+        if (it == fits.end()) {
+            fits.push_back(OrderFit{.kind = x.kind, .region = x.region, .order = 1.0, .samples = 0});
+            sums.push_back(0.0);
+            it = fits.end() - 1;
+        }
+        const auto i = static_cast<std::size_t>(it - fits.begin());
+        sums[i] += -std::log2(x.ratio);
+        ++fits[i].samples;
+    }
+    for (std::size_t i = 0; i < fits.size(); ++i) {
+        fits[i].order = std::clamp((sums[i] + 1.0) / (static_cast<double>(fits[i].samples) + 1.0), 0.5, 3.0);
+    }
+    std::ranges::sort(fits, [](const OrderFit& a, const OrderFit& b) {
+        return a.kind != b.kind ? a.kind < b.kind : a.region < b.region;
+    });
+    return fits;
+}
+
+double order_of(std::span<const OrderFit> fits, Indicator kind, std::size_t region) {
+    for (const OrderFit& f : fits) {
+        if (f.kind == kind && f.region == region) return f.order;
+    }
+    return 1.0;
 }
 
 }  // namespace NiTCAD::solve

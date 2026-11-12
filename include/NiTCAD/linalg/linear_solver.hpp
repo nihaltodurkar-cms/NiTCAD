@@ -138,6 +138,10 @@ struct FactorizationReport {
     std::optional<double> pivot_ratio;
     // Pivots the backend perturbed instead of failing (mkl_pardiso); empty for eigen_sparse_lu.
     std::optional<std::size_t> perturbed_pivots;
+    // Nonzeros of the factors L and U (Unit 17 ID5's cost model): eigen_sparse_lu's nnzL + nnzU,
+    // mkl_pardiso's iparm[17], gmres_ilut's preconditioner factors (or, once fallen back, the SparseLU
+    // fallback's). Empty when the backend does not report it.
+    std::optional<std::size_t> fill;
 };
 
 // The backend's own work since the solver was created: symbolic analyses (an ordering and symbolic

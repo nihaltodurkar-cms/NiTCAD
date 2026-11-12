@@ -11,6 +11,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -432,4 +433,206 @@ TEST_CASE("policy: each AD12 trigger switches to basic at the pass it names (AC1
         CHECK(r->fallback == solve::FallbackTrigger::none);
         CHECK(r->misses == 0);
     }
+}
+
+TEST_CASE("policy: the cost model fits its passes (ID5, AR7)", "[adapt_policy]") {
+    // Passes timed by a known model: 10 Newton iterations of 1e-9 nnz^1.3 s, 2e-6 s per node to mesh,
+    // 1e-6 to transfer.
+    const auto pass = [](double nnz, bool transfer) {
+        const double nodes = nnz / 30.0;
+        return solve::CostSample{.newton_iterations = 10.0,
+                                 .matrix_nonzeros = nnz,
+                                 .fill = 4.0 * nnz,
+                                 .dofs = 3.0 * nodes,
+                                 .nodes = nodes,
+                                 .seconds_solve = 10.0 * 1e-9 * std::pow(nnz, 1.3),
+                                 .seconds_mesh = 2e-6 * nodes,
+                                 .seconds_transfer = transfer ? 1e-6 * nodes : 0.0};
+    };
+    std::vector<solve::CostSample> s;
+    for (int k = 0; k < 5; ++k) s.push_back(pass(1e4 * std::exp2(k), k > 0));
+    SECTION("no sample: no prediction") {
+        const solve::CostModel m = solve::fit_cost_model({});
+        CHECK(m.samples == 0);
+        CHECK(std::isnan(m.pass_seconds(10, 1e4, 4e4, 1e3, 333)));
+        CHECK(std::isnan(m.pass_seconds_nodes(333)));
+    }
+    SECTION("one sample: a alone at b = 1.5, exact on it") {
+        const solve::CostModel m = solve::fit_cost_model(std::span(s).first(1));
+        CHECK(m.samples == 1);
+        CHECK(m.b == 1.5);
+        CHECK(m.c == 0.0);
+        CHECK(m.d == 0.0);
+        CHECK(std::abs(m.per_iteration(1e4, 4e4, 1e3) / (s[0].seconds_solve / 10.0) - 1.0) < 1e-12);
+        CHECK(m.transfer_per_node == 0.0);  // no pass transferred
+        CHECK(m.beta == 1.0);
+    }
+    SECTION("two samples: b through both") {
+        const solve::CostModel m = solve::fit_cost_model(std::span(s).first(2));
+        CHECK(std::abs(m.b - 1.3) < 1e-12);
+        CHECK(std::abs(m.transfer_per_node - 1e-6) < 1e-15);
+        CHECK(std::abs(m.mesh_per_node - 2e-6) < 1e-15);
+    }
+    SECTION("five samples: every pass that transferred within 1%, and the next predicted within 5%") {
+        const solve::CostModel m = solve::fit_cost_model(s);
+        CHECK(m.samples == 5);
+        CHECK(m.b >= 1.0);
+        CHECK(m.b <= 2.0);
+        CHECK(m.residual < 0.01);
+        for (const solve::CostSample& x : std::span(s).subspan(1)) {  // a predicted pass transfers; the first did not
+            const double t = x.seconds_solve + x.seconds_mesh + x.seconds_transfer;
+            CHECK(std::abs(m.pass_seconds(x.newton_iterations, x.matrix_nonzeros, x.fill, x.dofs, x.nodes) / t - 1.0) < 0.01);
+        }
+        const solve::CostSample next = pass(1e4 * 32.0, true);
+        const double t = next.seconds_solve + next.seconds_mesh + next.seconds_transfer;
+        CHECK(std::abs(m.pass_seconds(10, next.matrix_nonzeros, next.fill, next.dofs, next.nodes) / t - 1.0) < 0.05);
+    }
+    SECTION("the node-only model is a power law in the nodes") {
+        std::vector<solve::CostSample> p;
+        for (int k = 0; k < 4; ++k) {
+            const double nodes = 1e3 * std::exp2(k);
+            p.push_back({.newton_iterations = 5.0, .matrix_nonzeros = 30.0 * nodes, .dofs = 3.0 * nodes, .nodes = nodes,
+                         .seconds_solve = 3e-6 * std::pow(nodes, 1.2)});
+        }
+        const solve::CostModel m = solve::fit_cost_model(p);
+        CHECK(std::abs(m.beta - 1.2) < 1e-9);
+        CHECK(std::abs(m.pass_seconds_nodes(16e3) / (3e-6 * std::pow(16e3, 1.2)) - 1.0) < 1e-9);
+        CHECK(m.residual_nodes < 1e-9);
+    }
+    SECTION("samples without a solve are ignored") {
+        std::vector<solve::CostSample> p{solve::CostSample{}, s[0]};
+        CHECK(solve::fit_cost_model(p).samples == 1);
+    }
+}
+
+TEST_CASE("policy: the local orders fit the realized ratios (ID5, AR7)", "[adapt_policy]") {
+    using solve::Indicator;
+    const std::vector<solve::OrderSample> s{
+        {Indicator::electron_density, 1, 0.25}, {Indicator::potential, 0, 0.5}, {Indicator::electron_density, 1, 0.25},
+        {Indicator::potential, 0, 0.5},         {Indicator::potential, 0, 0.5}, {Indicator::electron_density, 1, 0.25},
+        {Indicator::hole_density, 0, 1e-6},     {Indicator::hole_density, 0, 0.0}, {Indicator::doping, 2, inf}};
+    const std::vector<solve::OrderFit> f = solve::fit_orders(s);
+    REQUIRE(f.size() == 3);  // doping's only sample is not finite: no fit
+    CHECK(f[0].kind == Indicator::potential);
+    CHECK(f[0].samples == 3);
+    CHECK(f[0].order == 1.0);  // (3 + 1) / 4: the ridge toward 1 changes nothing here
+    CHECK(f[1].kind == Indicator::electron_density);
+    CHECK(f[1].region == 1);
+    CHECK(f[1].order == 1.75);  // (3 x 2 + 1) / 4
+    CHECK(f[2].kind == Indicator::hole_density);
+    CHECK(f[2].samples == 1);  // the zero ratio skipped
+    CHECK(f[2].order == 3.0);  // clamped
+    CHECK(solve::order_of(f, Indicator::electron_density, 1) == 1.75);
+    CHECK(solve::order_of(f, Indicator::electron_density, 0) == 1.0);
+    CHECK(solve::order_of({}, Indicator::potential, 0) == 1.0);
+}
+
+TEST_CASE("policy: the allocation is deterministic and its report recomputes from the passes (AC18)", "[adapt_policy]") {
+    solve::AdaptOptions o;
+    o.goals = {{0}};
+    o.tolerance = 1e-3;
+    o.at = {0, 4};
+    o.max_passes = 14;
+    o.weighting = solve::Weighting::adjoint;
+    o.policy = solve::Policy::intelligent;
+    auto a = solve::adapt(diode_builder(21), points, legacy_options(), o);
+    auto b = solve::adapt(diode_builder(21), points, legacy_options(), o);
+    REQUIRE(a.has_value());
+    REQUIRE(b.has_value());
+    // Bit-identical, timings aside (and the timing-fitted model's seconds, which only reports and
+    // budgets read; AR7).
+    REQUIRE(a->passes.size() == b->passes.size());
+    std::size_t allocated = 0, measured = 0;
+    for (std::size_t k = 0; k < a->passes.size(); ++k) {
+        const auto &p = a->passes[k], &q = b->passes[k];
+        CHECK(p.nodes == q.nodes);
+        CHECK(p.goal == q.goal);
+        CHECK(p.estimate == q.estimate);
+        CHECK(p.relative_estimate == q.relative_estimate);
+        CHECK(p.source == q.source);
+        CHECK(p.dofs == q.dofs);
+        CHECK(p.matrix_nonzeros == q.matrix_nonzeros);
+        CHECK(p.factor_fill == q.factor_fill);
+        CHECK(p.candidate_count == q.candidate_count);
+        CHECK(p.candidates_taken == q.candidates_taken);
+        CHECK(std::bit_cast<std::uint64_t>(p.predicted_relative) == std::bit_cast<std::uint64_t>(q.predicted_relative));
+        CHECK(p.predicted_dofs == q.predicted_dofs);
+        REQUIRE(p.orders.size() == q.orders.size());
+        for (std::size_t j = 0; j < p.orders.size(); ++j) {
+            CHECK(p.orders[j].order == q.orders[j].order);
+            CHECK(p.orders[j].samples == q.orders[j].samples);
+        }
+        REQUIRE(p.candidates.size() == q.candidates.size());
+        for (std::size_t j = 0; j < p.candidates.size(); ++j) {
+            const auto &x = p.candidates[j], &y = q.candidates[j];
+            CHECK(x.axis == y.axis);
+            CHECK(x.index == y.index);
+            CHECK(x.benefit == y.benefit);
+            CHECK(x.work == y.work);
+            CHECK(x.order == y.order);
+            CHECK(std::bit_cast<std::uint64_t>(x.realized) == std::bit_cast<std::uint64_t>(y.realized));
+        }
+        // Recomputed from the saved passes: the orders used are the pass's fits; the predicted estimate
+        // is the estimate less the taken benefits (all listed when at most 20 were taken); a
+        // candidate's benefit over l levels is its share times 1 - 2^-lp, and its realized reduction
+        // its share times one less its ratio.
+        if (!p.candidates.empty()) ++allocated;
+        double predicted = p.relative_estimate;
+        for (const auto& x : p.candidates) {
+            CHECK(x.order == solve::order_of(p.orders, x.indicator, x.region));
+            CHECK(x.levels >= 1);
+            CHECK(x.levels <= 3);
+            predicted -= x.benefit;
+            if (std::isfinite(x.realized)) {
+                ++measured;
+                const double share = x.benefit / (1.0 - std::exp2(-x.levels * x.order));
+                CHECK(std::abs(x.realized - share * (1.0 - x.realized_ratio)) <= 1e-12 * std::abs(share));
+            }
+        }
+        if (!p.candidates.empty() && p.candidates_taken == p.candidates.size()) {
+            CHECK(std::abs(predicted - p.predicted_relative) <= 1e-12 * p.relative_estimate);
+        }
+        // The cost model: fitted on the passes up to this one; this pass predicted from the earlier.
+        std::vector<solve::CostSample> s;
+        for (std::size_t j = 0; j <= k; ++j) {
+            const auto& r = a->passes[j];
+            s.push_back({.newton_iterations = static_cast<double>(r.newton_iterations),
+                         .matrix_nonzeros = static_cast<double>(r.matrix_nonzeros),
+                         .fill = static_cast<double>(r.factor_fill),
+                         .dofs = static_cast<double>(r.dofs),
+                         .nodes = static_cast<double>(r.nodes),
+                         .seconds_solve = r.seconds_solve,
+                         .seconds_mesh = r.seconds_mesh,
+                         .seconds_transfer = r.seconds_transfer});
+        }
+        const solve::CostModel all = solve::fit_cost_model(s);
+        CHECK(all.a == p.cost_model.a);
+        CHECK(all.b == p.cost_model.b);
+        CHECK(all.alpha == p.cost_model.alpha);
+        if (k > 0) {
+            const solve::CostModel before = solve::fit_cost_model(std::span(s).first(k));
+            CHECK(before.pass_seconds(s[k - 1].newton_iterations, s[k].matrix_nonzeros, s[k].fill, s[k].dofs, s[k].nodes) ==
+                  p.predicted_seconds);
+            CHECK(before.pass_seconds_nodes(s[k].nodes) == p.predicted_seconds_nodes);
+        } else {
+            CHECK(std::isnan(p.predicted_seconds));
+        }
+        CHECK(p.matrix_nonzeros > 0);
+        CHECK(p.factor_fill >= p.matrix_nonzeros / 2);  // SparseLU reports its factors
+    }
+    CHECK(allocated >= 1);
+    CHECK(measured >= 1);
+    REQUIRE(a->certificates.size() == b->certificates.size());
+    for (std::size_t j = 0; j < a->certificates.size(); ++j) {
+        CHECK(a->certificates[j].status == b->certificates[j].status);
+        CHECK(a->certificates[j].estimate == b->certificates[j].estimate);
+        CHECK(std::bit_cast<std::uint64_t>(a->certificates[j].verified_error) ==
+              std::bit_cast<std::uint64_t>(b->certificates[j].verified_error));
+    }
+    WARN("AC18 diode: stop " << solve::to_string(a->stop) << " after " << a->passes.size() << " passes, "
+                             << a->mesh->device.mesh().node_count() << " nodes, certificate "
+                             << solve::to_string(a->certificates[0].status));
+    const auto pa = a->mesh->device.mesh().points(), pb = b->mesh->device.mesh().points();
+    REQUIRE(pa.size() == pb.size());
+    for (std::size_t i = 0; i < pa.size(); ++i) CHECK(pa[i] == pb[i]);
 }

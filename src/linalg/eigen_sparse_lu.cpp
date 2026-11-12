@@ -205,7 +205,8 @@ std::expected<Factorization, base::Error> SparseLuBackend<Scalar>::factorize(
     return Factorization{
         .pivots = PivotRatio{.ratio = largest > 0.0 ? smallest / largest : 0.0,
                              .column = static_cast<std::size_t>(factored_to_original_[smallest_at])},
-        .perturbed_pivots = std::nullopt};
+        .perturbed_pivots = std::nullopt,
+        .fill = static_cast<std::size_t>(lu_->nnzL() + lu_->nnzU())};
 }
 
 template <MatrixScalar Scalar>

@@ -47,6 +47,7 @@
 #include <cstddef>
 #include <expected>
 #include <functional>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <span>
@@ -159,6 +160,32 @@ enum class AdaptStop : unsigned char { converged, max_passes, max_nodes, nothing
     return "?";
 }
 
+// A refinement candidate of the decision layer (ID4, ID7): a node whose size is halved (a generated
+// 2D mesh, a swept mesh's cross-section) or an axis interval split (tensor axes, the swept axis).
+struct AdaptCandidate {
+    int axis = -1;                    // -1: a node; else the axis of the interval
+    std::size_t index = 0;            // the node (a swept mesh's: of the cross-section), or the interval
+    mesh::Point location{};           // the node, or the interval's midpoint on its axis (0 on the others)
+    std::size_t region = 0;           // of the node that carries its largest weighted excess
+    Indicator indicator = Indicator::potential;
+    double order = 1.0;               // p_c used (ID5)
+    int levels = 1;                   // halvings taken this pass (an interval up to 3, a node 1; AR7)
+    // Over its levels: the predicted error reduction relative to the allowance (ID4), and below
+    // the costs and the added unknowns.
+    double benefit = 0.0;
+    double cost = 0.0;                // predicted seconds, by the timing-fitted cost model (ID4, OA4; reported)
+    // The allocation's deterministic cost (AR7): N_newton ((W + dW)^1.5 - W^1.5), W = nnz + fill and
+    // dW the candidate's added nonzeros and their fill at the current fill ratio.
+    double work = 0.0;
+    std::size_t added_nodes = 0;
+    std::size_t added_dofs = 0;
+    std::size_t added_nonzeros = 0;
+    // Measured on the next pass (NaN until then, or when its region holds no weight): the local
+    // error's ratio after / before and the realized reduction (ID5, ID7).
+    double realized_ratio = std::numeric_limits<double>::quiet_NaN();
+    double realized = std::numeric_limits<double>::quiet_NaN();
+};
+
 struct AdaptPass {
     std::size_t nodes = 0;
     std::size_t edges = 0;
@@ -185,6 +212,25 @@ struct AdaptPass {
     double relative_estimate = 0.0;
     bool miss = false;
     bool empty_proposal = false;  // the proposal made on this pass refined nothing (a miss; AD3's marks used)
+    // The solve's size (ID4, ID5): unknowns, and the largest over the sweep's points of the last
+    // factorization's matrix nonzeros and fill (0 when the backend does not report it).
+    std::size_t dofs = 0;
+    std::size_t matrix_nonzeros = 0;
+    std::size_t factor_fill = 0;
+    // ID5: this pass's time predicted by the cost model and by the node-only model fitted on the
+    // earlier passes (NaN on the first), and the models fitted on the passes up to this one.
+    double predicted_seconds = std::numeric_limits<double>::quiet_NaN();
+    double predicted_seconds_nodes = std::numeric_limits<double>::quiet_NaN();
+    CostModel cost_model;
+    std::vector<OrderFit> orders;
+    // ID6's allocation on this pass (empty when it did not run): the candidates taken, at most the
+    // top 20 by benefit over cost; how many there were and were taken; the relative estimate and
+    // DOFs it predicts for the next mesh.
+    std::vector<AdaptCandidate> candidates;
+    std::size_t candidate_count = 0;
+    std::size_t candidates_taken = 0;
+    double predicted_relative = std::numeric_limits<double>::quiet_NaN();
+    std::size_t predicted_dofs = 0;
     TransferReport transfer;         // onto this pass's mesh (nodes 0 on the first)
     double seconds_mesh = 0.0;       // building this pass's device
     double seconds_transfer = 0.0;

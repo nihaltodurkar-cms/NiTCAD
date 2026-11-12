@@ -1,6 +1,7 @@
 // Newton convergence history of one solve (ARCHITECTURE.md 6.6): plain data.
 #pragma once
 
+#include <cstddef>
 #include <optional>
 #include <vector>
 
@@ -20,6 +21,10 @@ struct ConvergenceRecord {
     // Smallest smallest-to-largest pivot ratio over the factorizations, when the linear solver
     // reports one (ARCHITECTURE.md 6.10).
     std::optional<double> smallest_pivot_ratio;
+    // The last factorization's matrix nonzeros and factor fill nnz(L + U), when the solver reports
+    // it (Unit 17 ID5's cost model). Diagnostics of the run: not saved, not observed.
+    std::size_t matrix_nonzeros = 0;
+    std::optional<std::size_t> factor_fill;
 };
 
 }  // namespace NiTCAD::results

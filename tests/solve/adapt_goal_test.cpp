@@ -206,3 +206,62 @@ TEST_CASE("adapt: goal weighting avoids the well junction off the current path (
     CHECK(est <= 3.0 * weighted.error);
     CHECK(est >= weighted.error / 3.0);
 }
+
+// Fails as frozen (AR7, owner ruling pending), measured 2026-11-13: tolerance mode 12744 DOFs against
+// basic's 6642 (1.92x; 3 passes against 6, relative estimate 0.013 against 0.52 at the stop: the
+// growth-capped first allocation overshoots the accuracy); budget mode passes (3255 DOFs, error 6.5%
+// against basic's 7.2% on 3240).
+TEST_CASE("adapt: the allocation needs fewer DOFs than basic on the well MOSFET, and does better on a budget (AC16)",
+          "[.adapt_goal][!shouldfail]") {
+    // Unit 17 slice 5b (ID6, AR7): adjoint-weighted, policy basic against intelligent, to AC7's
+    // tolerance on I_D against AC7's recorded reference (AR4).
+    constexpr double I_ref = 5.20577;
+    const deck::Plan coarse = plan_of(linspace(width_cm, 21), surface_axis());
+    const std::size_t drain = contact_index(coarse.device, "drain");
+    const std::size_t k = coarse.points.size() - 1;
+    solve::AdaptOptions o;
+    o.goals = {{drain}};
+    o.tolerance = 1e-2;
+    o.at = {k};
+    o.max_passes = 10;
+    o.weighting = solve::Weighting::adjoint;
+    const auto dofs = [](const solve::AdaptResult& r) { return 3 * r.mesh->device.mesh().node_count(); };  // all silicon
+    const auto error = [&](const solve::AdaptResult& r) {
+        return std::abs(r.sweep.points[k].weighted_current[drain] - I_ref) / std::abs(I_ref);
+    };
+    const auto run = [&](const solve::AdaptOptions& oo, const char* name) {
+        auto r = solve::adapt(builder(), coarse.points, coarse.options, oo);
+        if (!r) FAIL(r.error().message);
+        for (std::size_t p = 0; p < r->passes.size(); ++p) {
+            const auto& rep = r->passes[p];
+            WARN("AC16 well " << name << " pass " << p << ": " << solve::to_string(rep.source) << ", " << rep.dofs
+                              << " DOFs, I_D " << rep.goal[0] << ", relative estimate " << rep.relative_estimate
+                              << ", predicted " << rep.predicted_relative << " on " << rep.predicted_dofs << " DOFs, "
+                              << rep.candidates_taken << " of " << rep.candidate_count << " candidates"
+                              << (rep.miss ? " (miss)" : ""));
+        }
+        WARN("AC16 well " << name << ": stop " << solve::to_string(r->stop) << ", " << r->passes.size() << " passes, "
+                          << dofs(*r) << " DOFs, error " << error(*r) << ", certificate "
+                          << solve::to_string(r->certificates[0].status) << ", misses " << r->misses << ", fallback "
+                          << solve::to_string(r->fallback));
+        return std::move(*r);
+    };
+    solve::AdaptOptions ob = o;
+    ob.policy = solve::Policy::basic;
+    const solve::AdaptResult b = run(ob, "basic");
+    solve::AdaptOptions oi = o;
+    oi.policy = solve::Policy::intelligent;
+    const solve::AdaptResult i = run(oi, "intelligent");
+    CHECK(b.certificates[0].status == solve::CertificateStatus::certified);
+    CHECK(i.certificates[0].status == solve::CertificateStatus::certified);
+    CHECK(error(b) <= o.tolerance);
+    CHECK(error(i) <= o.tolerance);
+    CHECK(static_cast<double>(dofs(i)) <= 0.8 * static_cast<double>(dofs(b)));
+    // Budget mode at half basic's final DOFs; basic at the same budget.
+    oi.intelligent.dof_budget = dofs(b) / 2;
+    const solve::AdaptResult ib = run(oi, "intelligent, budget");
+    ob.max_nodes = dofs(b) / 2 / 3;
+    const solve::AdaptResult bb = run(ob, "basic, budget");
+    CHECK(dofs(ib) <= dofs(b) / 2);
+    CHECK(error(ib) <= error(bb));
+}

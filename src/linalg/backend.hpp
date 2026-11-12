@@ -23,6 +23,7 @@ struct PivotRatio {
 struct Factorization {
     std::optional<PivotRatio> pivots;              // when the backend reports its pivots
     std::optional<std::size_t> perturbed_pivots;   // when the backend perturbs tiny pivots
+    std::optional<std::size_t> fill;               // nonzeros of the factors L and U, when reported
 };
 
 template <MatrixScalar Scalar>

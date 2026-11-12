@@ -217,6 +217,8 @@ template <NewtonSystem System>
             record.smallest_pivot_ratio =
                 std::min(record.smallest_pivot_ratio.value_or(*ratio), *ratio);
         }
+        record.matrix_nonzeros = jacobian.nonzeros();
+        record.factor_fill = factored->fill;
         auto solved = solver.solve(rhs, dx);
         if (!solved) {
             base::Error e = std::move(solved.error());

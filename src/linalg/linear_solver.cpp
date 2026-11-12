@@ -412,7 +412,8 @@ std::expected<FactorizationReport, base::Error> BasicLinearSolver<Scalar>::check
     }
     return FactorizationReport{
         .pivot_ratio = pivots ? std::optional<double>(pivots->ratio) : std::nullopt,
-        .perturbed_pivots = factorization->perturbed_pivots};
+        .perturbed_pivots = factorization->perturbed_pivots,
+        .fill = factorization->fill};
 }
 
 template <MatrixScalar Scalar>

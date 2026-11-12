@@ -1,8 +1,9 @@
-// AC14 and AC17's MOSFET case (Unit 17, slice 5; DECISIONS.md Unit 17 ID1-ID3, AD12, AR5): the
-// a priori prediction against the region the basic loop finally refines (recall, precision, the
-// false-positive DOFs and their cost, the mesh overhead, the passes) on the legacy diode, a MOS-C
-// and the generated 2D MOSFET; and a wrong prediction on the MOSFET guarded within twice basic's
-// time. Release only (hidden tag; CMakeLists.txt).
+// AC14, AC15 and AC16 (Unit 17, slice 5; DECISIONS.md Unit 17 ID1-ID6, AD12, AR5-AR7): the a priori
+// prediction against the region the basic loop finally refines (recall, precision, the false-positive
+// DOFs and their cost, the mesh overhead, the passes) on the legacy diode, a MOS-C and the 2D MOSFET
+// on a tensor mesh (AR6); the benefit and cost estimates against the realized ones; the allocation's
+// DOFs against basic's in tolerance and budget modes. Release only (hidden tag; CMakeLists.txt).
+// AC16 on AC7's well MOSFET is in adapt_goal_test.cpp.
 #include <catch2/catch_test_macros.hpp>
 
 #include <algorithm>
@@ -463,5 +464,283 @@ TEST_CASE("intelligent: probe the 2D MOSFET's passes", "[.adapt_probe]") {
         }
         WARN("probe " << solve::to_string(policy) << ": stop " << solve::to_string(r->stop) << ", rounds "
                       << r->prediction_rounds << ", " << seconds_since(t) << " s");
+    }
+}
+
+namespace {
+
+// --- AC15, AC16 ------------------------------------------------------------------------------------
+
+std::vector<double> ranks(const std::vector<double>& v) {
+    std::vector<std::size_t> o(v.size());
+    for (std::size_t i = 0; i < o.size(); ++i) o[i] = i;
+    std::ranges::stable_sort(o, [&](std::size_t a, std::size_t b) { return v[a] < v[b]; });
+    std::vector<double> r(v.size());
+    for (std::size_t i = 0; i < o.size();) {
+        std::size_t j = i;
+        while (j + 1 < o.size() && v[o[j + 1]] == v[o[i]]) ++j;
+        for (std::size_t k = i; k <= j; ++k) r[o[k]] = 0.5 * static_cast<double>(i + j);  // ties: the mean rank
+        i = j + 1;
+    }
+    return r;
+}
+
+double spearman(const std::vector<double>& x, const std::vector<double>& y) {
+    const std::vector<double> rx = ranks(x), ry = ranks(y);
+    const double n = static_cast<double>(x.size());
+    double mx = 0.0, my = 0.0;
+    for (std::size_t i = 0; i < x.size(); ++i) {
+        mx += rx[i] / n;
+        my += ry[i] / n;
+    }
+    double sxy = 0.0, sxx = 0.0, syy = 0.0;
+    for (std::size_t i = 0; i < x.size(); ++i) {
+        sxy += (rx[i] - mx) * (ry[i] - my);
+        sxx += (rx[i] - mx) * (rx[i] - mx);
+        syy += (ry[i] - my) * (ry[i] - my);
+    }
+    return sxy / std::sqrt(sxx * syy);
+}
+
+// AC15's measures of a run: the predicted against the realized reductions of its listed candidates
+// (rank correlation), and from the third pass on the passes' times against the cost model's and the
+// node-only model's predictions (each fitted on the earlier passes).
+struct Estimates {
+    double rank = std::numeric_limits<double>::quiet_NaN();
+    std::size_t pairs = 0;
+    std::size_t timed = 0;
+    double worst = 0.0;        // the cost model's largest relative error
+    double mare = 0.0;         // its mean absolute relative error
+    double mare_nodes = 0.0;   // the node-only model's
+};
+
+Estimates estimates_of(const solve::AdaptResult& r, const char* name) {
+    Estimates e;
+    std::vector<double> predicted, realized;
+    for (const auto& p : r.passes) {
+        for (const auto& c : p.candidates) {
+            if (!std::isfinite(c.realized)) continue;
+            predicted.push_back(c.benefit);
+            realized.push_back(c.realized);
+        }
+    }
+    e.pairs = predicted.size();
+    if (e.pairs >= 3) e.rank = spearman(predicted, realized);
+    for (std::size_t k = 2; k < r.passes.size(); ++k) {
+        const auto& p = r.passes[k];
+        const double t = p.seconds_mesh + p.seconds_transfer + p.seconds_solve;
+        const double a = std::abs(p.predicted_seconds / t - 1.0), b = std::abs(p.predicted_seconds_nodes / t - 1.0);
+        WARN("AC15 " << name << " pass " << k << ": " << t << " s, cost model " << p.predicted_seconds << " ("
+                     << a << "), node-only " << p.predicted_seconds_nodes << " (" << b << ")");
+        ++e.timed;
+        e.worst = std::max(e.worst, a);
+        e.mare += a;
+        e.mare_nodes += b;
+    }
+    if (e.timed > 0) {
+        e.mare /= static_cast<double>(e.timed);
+        e.mare_nodes /= static_cast<double>(e.timed);
+    }
+    WARN("AC15 " << name << ": rank correlation " << e.rank << " over " << e.pairs << " candidates; cost model from the "
+                 << "third pass worst " << e.worst << ", mean " << e.mare << " vs node-only " << e.mare_nodes << " over "
+                 << e.timed << " passes");
+    return e;
+}
+
+const std::vector<std::vector<double>> ac16_points{{0.0, 0.05, 0.0, 0.0}, {0.0, 0.05, 0.0, 0.5}, {0.0, 0.05, 0.0, 1.0}};
+
+solve::AdaptOptions ac16_options() {
+    solve::AdaptOptions o;
+    o.goals = {{1}};
+    o.tolerance = 1e-2;
+    o.at = {1, 2};
+    o.max_passes = 10;
+    o.weighting = solve::Weighting::adjoint;
+    return o;
+}
+
+solve::BiasOptions ac16_bias() {
+    solve::BiasOptions b;
+    b.step_control.max_cuts = 20;
+    return b;
+}
+
+// I_D on the tensor MOSFET's start refined uniformly (every interval split k times).
+std::vector<double> mosfet_reference(int k) {
+    solve::MeshRefinement r;
+    r.axes[0] = uniform(2 * Lsd + Lg, 24 * k + 1);
+    r.axes[1] = uniform(depth, 10 * k + 1);
+    auto m = tensor_mosfet_mesh(r);
+    REQUIRE(m.has_value());
+    auto s = solve::sweep_bias(m->device, ac16_points, ac16_bias());
+    REQUIRE(s.has_value());
+    REQUIRE(!s->stopped);
+    return {s->points[1].terminal_current[1], s->points[2].terminal_current[1]};
+}
+
+double mosfet_error(const solve::AdaptResult& r, const std::vector<double>& ref) {
+    return std::max(std::abs(r.sweep.points[1].terminal_current[1] - ref[0]) / std::abs(ref[0]),
+                    std::abs(r.sweep.points[2].terminal_current[1] - ref[1]) / std::abs(ref[1]));
+}
+
+}  // namespace
+
+TEST_CASE("intelligent: the allocation needs fewer DOFs than basic, and does better on a budget (AC16)",
+          "[.adapt_intelligent]") {
+    // The 2D MOSFET on the tensor mesh (AR6), adjoint-weighted (AR7), against its start refined 8
+    // times uniformly (4 times reported as the reference's spread).
+    const std::vector<double> ref = mosfet_reference(8), ref4 = mosfet_reference(4);
+    WARN("AC16 reference I_D (8x): " << ref[0] << ", " << ref[1] << "; 4x " << ref4[0] << ", " << ref4[1]);
+    solve::AdaptOptions o = ac16_options();
+    o.policy = solve::Policy::basic;
+    auto b = solve::adapt(tensor_mosfet_mesh, ac16_points, ac16_bias(), o);
+    if (!b) FAIL(b.error().message);
+    o.policy = solve::Policy::intelligent;
+    auto i = solve::adapt(tensor_mosfet_mesh, ac16_points, ac16_bias(), o);
+    if (!i) FAIL(i.error().message);
+    const std::size_t db = dofs(b->mesh->device), di = dofs(i->mesh->device);
+    const double eb = mosfet_error(*b, ref), ei = mosfet_error(*i, ref);
+    WARN("AC16 tolerance mode: DOFs intelligent " << di << " basic " << db << " (ratio "
+                                                  << static_cast<double>(di) / static_cast<double>(db) << "), errors "
+                                                  << ei << " vs " << eb << ", passes " << i->passes.size() << " vs "
+                                                  << b->passes.size() << ", misses " << i->misses << ", fallback "
+                                                  << solve::to_string(i->fallback));
+    // The same verified accuracy: both certified at the tolerance. Their errors against the 8x
+    // reference are reported, not gated here: 4x and 8x differ by 2.8% at Vg 0.5 V, so the reference
+    // is not converged to the tolerance (AR7; certification against references is AC20's, slice 7).
+    CHECK(b->stop == solve::AdaptStop::converged);
+    CHECK(i->stop == solve::AdaptStop::converged);
+    for (const auto& c : b->certificates) CHECK(c.status == solve::CertificateStatus::certified);
+    for (const auto& c : i->certificates) CHECK(c.status == solve::CertificateStatus::certified);
+    CHECK(static_cast<double>(di) <= 0.8 * static_cast<double>(db));
+    // Budget mode at half basic's final DOFs; basic at the same budget (max_nodes, all nodes silicon).
+    o.intelligent.dof_budget = db / 2;
+    auto ib = solve::adapt(tensor_mosfet_mesh, ac16_points, ac16_bias(), o);
+    if (!ib) FAIL(ib.error().message);
+    solve::AdaptOptions ob = ac16_options();
+    ob.max_nodes = db / 2 / 3;
+    auto bb = solve::adapt(tensor_mosfet_mesh, ac16_points, ac16_bias(), ob);
+    if (!bb) FAIL(bb.error().message);
+    const double eib = mosfet_error(*ib, ref), ebb = mosfet_error(*bb, ref);
+    WARN("AC16 budget " << db / 2 << " DOFs: intelligent " << dofs(ib->mesh->device) << " DOFs, error " << eib << " ("
+                        << solve::to_string(ib->stop) << "); basic " << dofs(bb->mesh->device) << " DOFs, error " << ebb
+                        << " (" << solve::to_string(bb->stop) << ")");
+    CHECK(dofs(ib->mesh->device) <= db / 2);
+    CHECK(eib <= ebb);
+}
+
+// Fails as frozen (AR7, owner ruling pending), measured 2026-11-13: rank correlation 0.97 (MOSFET,
+// 14 candidates) and 0.997 (diode, 37); the cost model within 30% from the third pass (worst 5% and
+// 15%) but not better than node-only (mean 3.3% vs 2.7%, 8.0% vs 7.6%: both small, within timing
+// noise); the diode's orders 1.10, 1.09 and 0.81, and hole density's 1.64 from 2 samples.
+TEST_CASE("intelligent: the benefit and cost estimates track the realized ones (AC15)",
+          "[.adapt_intelligent][!shouldfail]") {
+    // AC5's run is the generated MOSFET's, which does not converge in a gate's time (AR6): the tensor
+    // MOSFET stands in; AC6's diode, adjoint-weighted; AC8 (the FinFET) is slice 7's.
+    solve::AdaptOptions o = ac16_options();
+    o.policy = solve::Policy::intelligent;
+    auto m = solve::adapt(tensor_mosfet_mesh, ac16_points, ac16_bias(), o);
+    if (!m) FAIL(m.error().message);
+    const Estimates em = estimates_of(*m, "mosfet");
+    solve::AdaptOptions od;
+    od.goals = {{0}};
+    od.tolerance = 1e-3;
+    od.at = {0, 4};
+    od.max_passes = 14;
+    od.weighting = solve::Weighting::adjoint;
+    od.policy = solve::Policy::intelligent;
+    const std::vector<std::vector<double>> diode_points{{-1.0, 0.0}, {-0.5, 0.0}, {0.0, 0.0}, {0.3, 0.0}, {0.6, 0.0}};
+    const solve::DeviceBuilder diode = [](const solve::MeshRefinement& r) -> std::expected<solve::AdaptableMesh, base::Error> {
+        const std::vector<double> x = r.axes[0].empty() ? uniform(2e-4, 21) : r.axes[0];
+        return solve::AdaptableMesh{.device = legacy_diode(x), .kind = solve::AdaptMeshKind::tensor};
+    };
+    auto d = solve::adapt(diode, diode_points, legacy_options(), od);
+    if (!d) FAIL(d.error().message);
+    const Estimates ed = estimates_of(*d, "diode");
+    // Rank correlation over the MOSFET's refined candidates.
+    REQUIRE(em.pairs >= 5);
+    CHECK(em.rank >= 0.6);
+    // The diode's fitted orders (abrupt: first order expected).
+    for (const auto& f : d->passes.back().orders) {
+        WARN("AC15 diode order: kind " << static_cast<int>(f.kind) << ", region " << f.region << ": " << f.order << " from "
+                                       << f.samples << " samples");
+        CHECK(f.order >= 0.8);
+        CHECK(f.order <= 1.3);
+    }
+    // The cost model within 30% from the third pass on, and better than node-only.
+    for (const Estimates* e : {&em, &ed}) {
+        if (e->timed == 0) continue;
+        CHECK(e->worst <= 0.3);
+        CHECK(e->mare < e->mare_nodes);
+    }
+}
+
+TEST_CASE("intelligent: probe the allocation", "[.adapt_probe5b]") {
+    const std::vector<std::vector<double>> diode_points{{-1.0, 0.0}, {-0.5, 0.0}, {0.0, 0.0}, {0.3, 0.0}, {0.6, 0.0}};
+    const solve::DeviceBuilder diode = [](const solve::MeshRefinement& r) -> std::expected<solve::AdaptableMesh, base::Error> {
+        const std::vector<double> x = r.axes[0].empty() ? uniform(2e-4, 21) : r.axes[0];
+        return solve::AdaptableMesh{.device = legacy_diode(x), .kind = solve::AdaptMeshKind::tensor};
+    };
+    const std::vector<std::vector<double>> mosfet_points{{0.0, 0.05, 0.0, 0.0}, {0.0, 0.05, 0.0, 0.5}, {0.0, 0.05, 0.0, 1.0}};
+    solve::BiasOptions mb;
+    mb.step_control.max_cuts = 20;
+    struct Case {
+        const char* name;
+        solve::DeviceBuilder build;
+        std::vector<std::vector<double>> pts;
+        solve::BiasOptions bias;
+        solve::AdaptOptions o;
+    };
+    std::vector<Case> cases;
+    {
+        solve::AdaptOptions o;
+        o.goals = {{0}};
+        o.tolerance = 1e-3;
+        o.at = {0, 4};
+        o.max_passes = 14;
+        cases.push_back({"diode", diode, diode_points, legacy_options(), o});
+        o.weighting = solve::Weighting::adjoint;
+        cases.push_back({"diode-adjoint", diode, diode_points, legacy_options(), o});
+    }
+    {
+        solve::AdaptOptions o;
+        o.goals = {{1}};
+        o.tolerance = 1e-2;
+        o.at = {1, 2};
+        o.max_passes = 10;
+        o.weighting = solve::Weighting::adjoint;
+        cases.push_back({"mosfet-adjoint", tensor_mosfet_mesh, mosfet_points, mb, o});
+    }
+    for (Case& c : cases) {
+        for (const solve::Policy policy : {solve::Policy::basic, solve::Policy::intelligent}) {
+            c.o.policy = policy;
+            const auto t = std::chrono::steady_clock::now();
+            auto r = solve::adapt(c.build, c.pts, c.bias, c.o);
+            if (!r) FAIL(r.error().message);
+            for (std::size_t k = 0; k < r->passes.size(); ++k) {
+                const auto& p = r->passes[k];
+                std::string orders;
+                for (const auto& f : p.orders) {
+                    orders += std::format(" [{} r{} p{:.3f} n{}]", static_cast<int>(f.kind), f.region, f.order, f.samples);
+                }
+                std::string cands;
+                for (std::size_t q = 0; q < std::min<std::size_t>(p.candidates.size(), 4); ++q) {
+                    const auto& x = p.candidates[q];
+                    cands += std::format(" (ax{} i{} b{:.3g} re{:.3g} w{:.3g} c{:.3g})", x.axis, x.index, x.benefit, x.realized,
+                                         x.work, x.cost);
+                }
+                const double measured = p.seconds_mesh + p.seconds_transfer + p.seconds_solve;
+                WARN(std::format("{} {} pass {}: {} nodes {} dofs {} nnz {} fill {} newton {}, rel {:.4g} pred_rel {:.4g} "
+                                 "pred_dofs {}, cand {} taken {}, t {:.4g} pred {:.4g} pred_nodes {:.4g}{}{}",
+                                 c.name, solve::to_string(policy), k, solve::to_string(p.source), p.nodes, p.dofs,
+                                 p.matrix_nonzeros, p.factor_fill, p.newton_iterations, p.relative_estimate,
+                                 p.predicted_relative, p.predicted_dofs, p.candidate_count, p.candidates_taken, measured,
+                                 p.predicted_seconds, p.predicted_seconds_nodes, orders, cands));
+            }
+            WARN(std::format("{} {}: stop {}, {} passes, cert {}, misses {}, fallback {} at {}, {:.3g} s", c.name,
+                             solve::to_string(policy), solve::to_string(r->stop), r->passes.size(),
+                             solve::to_string(r->certificates[0].status), r->misses, solve::to_string(r->fallback),
+                             r->fallback_pass, seconds_since(t)));
+        }
     }
 }

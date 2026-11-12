@@ -1,5 +1,5 @@
 // The intelligent decision layer of adaptive refinement (Unit 17, slice 5; DECISIONS.md Unit 17
-// ID1-ID7, ID9, AD12, AR5).
+// ID1-ID7, ID9, AD12, AR5, AR7).
 //
 // The layer decides only where nodes are spent (ID1, OA6): the estimate, the stop rule, AD11's
 // verification and the certificate are computed from solves alone and read nothing here.
@@ -32,6 +32,18 @@
 // Bias prediction (ID3): from one coarse sweep on the start mesh, per point the united indicator
 // excess; the points are the last one and those whose field changed most from the previous point
 // (the weighted 2-norm of the difference, weights 1), up to max_points, in sweep order.
+//
+// Benefit, cost and allocation (ID4-ID6, AR7; in adapt.cpp, with adjoint weighting only: the benefit
+// is the adjoint estimate's share): candidates are axis intervals (tensor axes, the swept axis; up
+// to three levels of halving per pass) and nodes (a generated 2D size field, a swept cross-section;
+// one level). A candidate's benefit is E (S_c / S) 2^-(l-1)p (1 - 2^-p) for its level l, E the
+// relative estimate, S_c its sum of weight times excess, p its fitted order; the allocation ranks
+// by benefit over a deterministic work, N_newton ((W + dW)^1.5 - W^1.5) with W = nnz + fill, and
+// takes candidates until the predicted estimate is at most min(1/2, E/2), the pass's DOF growth
+// cap (2.5) or the budget, both held on the built mesh (a proposal over one is allocated again with
+// grading's measured inflation). The timing-fitted cost model below predicts each candidate's and
+// pass's seconds (reported, AC15) and enforces a time budget; it never ranks, so the mesh is
+// deterministic (AD9).
 #pragma once
 
 #include <array>
@@ -85,6 +97,61 @@ struct Prediction {
 [[nodiscard]] std::expected<std::vector<std::size_t>, base::Error> choose_points(
     std::span<const IndicatorField> fields, std::size_t max_points, std::span<const char> eligible = {});
 
+// ID5's cost model (OA4), per pass: T_pass = N_newton (a nnz^b + c fill + d DOF) + T_mesh + T_transfer,
+// T_mesh and T_transfer per node. One sample per solved pass.
+struct CostSample {
+    double newton_iterations = 0.0;  // summed over the sweep's points
+    double matrix_nonzeros = 0.0;    // the Jacobian's
+    double fill = 0.0;               // nnz(L + U); 0 when the backend does not report it
+    double dofs = 0.0;
+    double nodes = 0.0;
+    double seconds_solve = 0.0;
+    double seconds_mesh = 0.0;
+    double seconds_transfer = 0.0;
+};
+
+struct CostModel {
+    // Per Newton iteration: a nnz^b + c fill + d DOF (a, c, d >= 0; b in [1, 2]).
+    double a = 0.0, b = 1.5, c = 0.0, d = 0.0;
+    double mesh_per_node = 0.0, transfer_per_node = 0.0;
+    std::size_t samples = 0;
+    double residual = 0.0;  // root mean square relative error of the per-iteration fit
+    // The node-count-only model fitted to the same passes (AC15's comparison): T_pass = alpha N^beta.
+    double alpha = 0.0, beta = 1.0;
+    double residual_nodes = 0.0;
+    [[nodiscard]] double per_iteration(double nnz, double fill, double dofs) const;
+    // A pass's predicted time (NaN without samples).
+    [[nodiscard]] double pass_seconds(double newton_iterations, double nnz, double fill, double dofs, double nodes) const;
+    [[nodiscard]] double pass_seconds_nodes(double nodes) const;
+};
+
+// The fit (ID5, AR7): with one sample a alone (b = 1.5, c = d = 0); with two, a and b through both
+// (b clamped); with three or more, b on a grid of 0.05 in [1, 2] and a, c, d by non-negative least
+// squares of the relative error, plus a ridge (0.01 / n) (b - 1.5)^2 fading with the n samples. T_mesh and T_transfer per node: their
+// sums over the nodes' (transfer: of the passes that transferred). The node-only model: beta from a
+// least-squares line in log-log (1 with one sample; clamped to [0.5, 3]), alpha by relative least squares.
+[[nodiscard]] CostModel fit_cost_model(std::span<const CostSample> samples);
+
+// ID5's local order: a refined candidate's realized ratio of its local error after / before (AR7).
+struct OrderSample {
+    Indicator kind = Indicator::potential;
+    std::size_t region = 0;
+    double ratio = 1.0;
+};
+
+struct OrderFit {
+    Indicator kind = Indicator::potential;
+    std::size_t region = 0;
+    double order = 1.0;
+    std::size_t samples = 0;
+};
+
+// Per (kind, region), the least squares of -log2 ratio with a ridge of one sample toward 1, clamped to
+// [0.5, 3]; samples with a ratio not finite and positive are skipped. Sorted by kind, then region.
+[[nodiscard]] std::vector<OrderFit> fit_orders(std::span<const OrderSample> samples);
+// The fitted order of (kind, region), 1 when none.
+[[nodiscard]] double order_of(std::span<const OrderFit> fits, Indicator kind, std::size_t region);
+
 // The layer's options (adapt.hpp's AdaptOptions::intelligent).
 struct PolicyOptions {
     // ID3: with AdaptOptions::at empty, up to this many points chosen from a coarse sweep; 0 keeps
@@ -96,6 +163,11 @@ struct PolicyOptions {
     // proposal): per-node targets on the given device. Used for AC17's wrong prediction; empty: the
     // layer's.
     std::function<SizeTargets(const device::Device&)> prediction;
+    // ID6's budget mode: the run's DOFs (final mesh) and its time (measured passes plus the next one
+    // predicted) at most these; 0: tolerance mode. A pass whose allocation fits nothing stops the run
+    // (max_nodes, unverified).
+    std::size_t dof_budget = 0;
+    double seconds_budget = 0.0;
 };
 
 }  // namespace NiTCAD::solve
