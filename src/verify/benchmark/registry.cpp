@@ -3,28 +3,44 @@
 
 #include "NiTCAD/base/constants.hpp"
 #include "NiTCAD/physics/semiconductor.hpp"
+#include "NiTCAD/verify/reference/metrics.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cfloat>
 #include <charconv>
 #include <cmath>
+#include <optional>
 #include <utility>
 
 namespace NiTCAD::verify::benchmark {
 
 namespace {
 
-constexpr std::array<Benchmark, 41> shipped{{
+constexpr std::array<Benchmark, 54> shipped{{
     {"TVB-01", "Constants and thermal voltage against CODATA 2018", Tier::fast, [](Tier) { return run_tvb01(); }},
     {"TVB-02", "Fermi-Dirac integrals F_1/2, F_-1/2, F_3/2 and the inverse of F_1/2", Tier::fast,
      [](Tier) { return run_tvb02(); }},
     {"TVB-03", "The Bernoulli function B(x) = x / (e^x - 1)", Tier::fast, [](Tier) { return run_tvb03(); }},
     {"TVB-04", "Poisson manufactured solution with a dielectric jump", Tier::fast, &run_tvb04},
+    {"TVB-05", "Coaxial capacitor on generated 2D meshes", Tier::full, &run_tvb05},
+    {"TVB-06", "Dielectric stack between electrodes", Tier::fast, &run_tvb06},
     {"TVB-07", "Equilibrium abrupt pn junction", Tier::fast, &run_tvb07},
     {"TVB-09", "MOS capacitor on a uniform substrate", Tier::fast, &run_tvb09},
+    {"TVB-10", "MOS capacitor: high-frequency C-V and deep depletion", Tier::full, &run_tvb10},
     {"TVB-11", "Uniform resistor with ohmic contacts", Tier::fast, [](Tier) { return run_tvb11(); }},
     {"TVB-12", "Scharfetter-Gummel constant-field exactness", Tier::fast, [](Tier) { return run_tvb12(); }},
+    {"TVB-13", "Uniform resistor: Canali drift and the homogeneous energy balance", Tier::fast, &run_tvb13},
     {"TVB-14", "Full drift-diffusion manufactured solution", Tier::fast, &run_tvb14},
+    {"TVB-15", "Neutral-region minority diffusion with SRH", Tier::full, &run_tvb15},
+    {"TVB-16", "Ideal diode: long and short base, Sah-Noyce-Shockley current", Tier::full, &run_tvb16},
+    {"TVB-17", "Depletion capacitance at reverse bias", Tier::full, &run_tvb17},
+    {"TVB-18", "Diode small-signal admittance at forward bias", Tier::full, &run_tvb18},
+    {"TVB-19", "Linear transients: dielectric relaxation and the Haynes-Shockley pulse", Tier::full, &run_tvb19},
+    {"TVB-20", "Long-channel MOSFET against Pao-Sah: the channel-length limit", Tier::full, &run_tvb20},
+    {"TVB-21", "Subthreshold swing of the long-channel MOSFET", Tier::full, &run_tvb21},
+    {"TVB-27", "Lattice heat: the Kirchhoff slab and the self-heated resistor", Tier::full, &run_tvb27},
+    {"TVB-28", "Thermoelectric identities: Seebeck, Peltier and the energy balance", Tier::full, &run_tvb28},
     {"TVB-31.01", "Legacy silicon band set: Varshni gap and power-law densities of states", Tier::fast,
      [](Tier) { return run_tvb31_01(); }},
     {"TVB-31.02", "Passler band gap (Couderc et al. 2014, eq (10), Table I)", Tier::fast,
@@ -61,7 +77,7 @@ constexpr std::array<Benchmark, 41> shipped{{
     {"TVB-31.29", "Fermi orders -1, 0, 1 and the thermopower factor", Tier::fast, &run_tvb31_29},
     {"TVB-31.30", "SiO2 data", Tier::fast, &run_tvb31_30},
     {"TVB-31.31", "Non-silicon material sets", Tier::fast, &run_tvb31_31},
-    {"TVB-32", "The consistency suite C1-C12 on the three TVR-1 decks", Tier::fast, [](Tier) { return run_tvb32(); }},
+    {"TVB-32", "The consistency suite C1-C12 on the three TVR-1 decks", Tier::fast, &run_tvb32},
 }};
 
 int pardiso_thread_count = 1;
@@ -108,7 +124,15 @@ constexpr std::string_view finding_vii =
     "DECISIONS Unit 55 15.14 MI-Q14 (known finding): the mu0 partials of the energy-balance mobility and field are "
     "formed by differences that cancel for a >= about 20 (absolute error about eps m); fix proposed separately";
 
-constexpr std::array<KnownFinding, 25> findings{{
+// Finding (x) (DECISIONS Unit 55 16.33, DT-Q27 A): TVB-16's long base (5e-2 cm) carries the forward current through
+// a neutral base of about 0.09 Ohm cm^2, whose ohmic drop 16.18 (f)'s eps_J omits; it lowers J by about 12 % at 0.6 V.
+bool from_half_volt(double V) { return V >= 0.5; }
+
+constexpr std::string_view finding_x =
+    "DECISIONS Unit 55 16.33 DT-Q27 A (known finding): the long base's series resistance (about 0.09 Ohm cm^2) is "
+    "missing from 16.18 (f)'s eps_J; its ohmic drop lowers J at V >= 0.5 V (about 12 % at 0.6 V)";
+
+constexpr std::array<KnownFinding, 27> findings{{
     {"TVB-02", "F_-1/2", &everywhere, "(ii)",
      "DECISIONS 11.13 TVB-02 finding (ii) widened (option A), accepted as a limitation (Unit 56, 13): F_-1/2 "
      "misses from eta = 13.76, a quadrature-rounding floor of the derivative-consistent table"},
@@ -136,6 +160,8 @@ constexpr std::array<KnownFinding, 25> findings{{
     {"TVB-31.10", "beta 1 dE_eff/dmu0", &a_from_20, "(vii)", finding_vii},
     {"TVB-31.10", "beta 1.5 dE_eff/dmu0", &a_from_20, "(vii)", finding_vii},
     {"TVB-31.10", "beta 2 dE_eff/dmu0", &a_from_20, "(vii)", finding_vii},
+    {"TVB-16", "J (ii) SRH, long base", &from_half_volt, "(x)", finding_x},
+    {"TVB-16", "ideality (ii) SRH, long base", &from_half_volt, "(x)", finding_x},
 }};
 
 bool starts_with(std::string_view s, std::string_view prefix) { return s.substr(0, prefix.size()) == prefix; }
@@ -270,6 +296,110 @@ std::string shortest(double x) {
     char buf[64];
     const auto r = std::to_chars(buf, buf + sizeof buf, x);
     return std::string(buf, r.ptr);
+}
+
+Factorial factorial(double e_h_tol, double e_h_tolfine, double e_hfine_tol, double e_hfine_tolfine,
+                    std::span<const double> components) {
+    Factorial f;
+    f.note = "factorial (h, tol): e(h, tol) " + shortest(e_h_tol) + ", e(h, tol/100) " + shortest(e_h_tolfine) +
+             ", e(h/2, tol) " + shortest(e_hfine_tol) + ", e(h/2, tol/100) " + shortest(e_hfine_tolfine);
+    const reference::Metric c = reference::interaction_contrast(e_h_tol, e_h_tolfine, e_hfine_tol, e_hfine_tolfine);
+    if (c.status != reference::MetricStatus::ok) {
+        f.note += "; not evaluated (" + std::string(c.reason) + ")";
+        return f;
+    }
+    const reference::CombinedUncertainty u = reference::combine_uncertainty(components, c.value);
+    if (u.status != reference::MetricStatus::ok) {
+        f.note += "; not evaluated (" + std::string(u.reason) + ")";
+        return f;
+    }
+    f.ok = true;
+    f.eps_int = c.value;
+    f.u = u.value;
+    f.interacting = u.interacting;
+    f.note += "; eps_int " + shortest(f.eps_int) + ", U " + shortest(f.u);
+    if (f.interacting) f.note += ", interacting errors";
+    return f;
+}
+
+void block_if_interacting(ComparisonRecord& c, const Factorial& f) {
+    if (c.comparison.outcome != Outcome::pass) return;
+    if (!f.ok) {
+        c.comparison = Comparison{Outcome::not_evaluated, "the (h, tol) factorial was not evaluated", {}};
+    } else if (f.interacting) {
+        c.comparison = Comparison{Outcome::not_evaluated,
+                                  "interacting errors: |eps_int| " + shortest(std::abs(f.eps_int)) +
+                                      " above 10 % of U " + shortest(f.u) + " (DECISIONS 4.1 (c))",
+                                  {}};
+    }
+}
+
+namespace {
+
+// Roache's three-grid GCI (F_s = 1.25) with non-constant ratios, finest first; absolute. nullopt: oscillatory or a
+// non-positive order. Sets the order (Roache's fixed-point iteration).
+std::optional<double> three_grid(const double* h, const double* f, double& order) {
+    const double e21 = f[1] - f[0], e32 = f[2] - f[1];
+    if (e21 == 0.0 && e32 == 0.0) {
+        order = 0.0;
+        return 0.0;
+    }
+    if (!(e32 / e21 > 0.0)) return std::nullopt;
+    const double r21 = h[1] / h[0], r32 = h[2] / h[1];
+    double p = 2.0;
+    for (int it = 0; it < 200; ++it) {
+        const double q = std::log((std::pow(r21, p) - 1.0) / (std::pow(r32, p) - 1.0));
+        p = std::abs(std::log(std::abs(e32 / e21)) + q) / std::log(r21);
+    }
+    order = p;
+    if (!(std::isfinite(p) && p > 0.0)) return std::nullopt;
+    return reference::gci_safety_factor_three_grids * std::abs(e21) / (std::pow(r21, p) - 1.0);
+}
+
+constexpr double assumed_order = 2.0, order_band = 0.5;  // DT-Q28 B, the gate DT-Q32 A
+
+}  // namespace
+
+Discretization u_disc(std::span<const double, 4> h, std::span<const double, 4> f, double h_half, double f_half) {
+    Discretization d;
+    std::optional<double> u3;
+    std::string w3;
+    const auto a = three_grid(h.data(), f.data(), d.order);
+    const auto b = three_grid(h.data() + 1, f.data() + 1, d.order_coarse);
+    if (!a) {
+        w3 = "GCI: oscillatory or a non-positive order";
+    } else if (!b) {
+        w3 = "asymptotic check: no order on the coarser triple";
+    } else if (std::abs(d.order - d.order_coarse) > reference::asymptotic_order_spread) {
+        w3 = "outside the asymptotic range (orders " + shortest(d.order) + ", " + shortest(d.order_coarse) + ")";
+    } else {
+        u3 = a;
+    }
+    std::optional<double> u2;
+    std::string w2;
+    const double hf[3] = {h_half, h[0], h[1]}, ff[3] = {f_half, f[0], f[1]};
+    const auto c = three_grid(hf, ff, d.order_fine);
+    if (c && (*c == 0.0 || std::abs(d.order_fine - assumed_order) <= order_band)) {
+        const double rp = std::pow(h[0] / h_half, assumed_order);
+        u2 = reference::gci_safety_factor_two_grids * std::abs(f_half - f[0]) * rp / (rp - 1.0);
+    } else if (!c) {
+        w2 = "two-grid: the finest triple oscillates or has no positive order";
+    } else {
+        w2 = "two-grid: finest-triple order " + shortest(d.order_fine) + " outside 2 +- 0.5";
+    }
+    if (u3 && u2) {
+        d.how = *u3 >= *u2 ? "GCI (>= two-grid)" : "two-grid (> GCI)";
+        d.u = std::max(*u3, *u2);
+    } else if (u3) {
+        d.how = "GCI; " + w2;
+        d.u = u3;
+    } else if (u2) {
+        d.how = "two-grid; " + w3;
+        d.u = u2;
+    } else {
+        d.how = w3 + "; " + w2;
+    }
+    return d;
 }
 
 }  // namespace NiTCAD::verify::benchmark

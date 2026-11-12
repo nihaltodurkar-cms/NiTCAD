@@ -69,9 +69,23 @@ void set_pardiso_threads(int threads);
 [[nodiscard]] BenchmarkResult run_tvb04(Tier tier);  // fast: 1D; full and nightly: + 2D and 3D tensor
 [[nodiscard]] BenchmarkResult run_tvb07(Tier tier);  // fast: N = 64, 128 (V_bi only); full: + 256, 512 and the E gates
 [[nodiscard]] BenchmarkResult run_tvb09(Tier tier);  // fast: one bias (V_FB + 1.5 V); full: the V_G grid
+[[nodiscard]] BenchmarkResult run_tvb10(Tier tier);  // full only: HF C-V and deep depletion, N = 64 ... 512
 [[nodiscard]] BenchmarkResult run_tvb14(Tier tier);  // fast: 1D tensor; full: + 2D/3D tensor, 2D/3D generated, swept
 [[nodiscard]] BenchmarkResult run_tvb11();  // TVR-2 (DECISIONS Unit 55 14)
 [[nodiscard]] BenchmarkResult run_tvb12();
+// TVR-4 (DECISIONS Unit 55 16): device theory, small signal, transient, thermal.
+[[nodiscard]] BenchmarkResult run_tvb05(Tier tier);  // full only: M = 32 ... 256 sectors, 2D generated
+[[nodiscard]] BenchmarkResult run_tvb06(Tier tier);  // fast: 1D N = 32, 128; full: + 2D 32 x 32
+[[nodiscard]] BenchmarkResult run_tvb13(Tier tier);  // fast: Canali drift, N = 64; full: + energy balance, N = 128, 512
+[[nodiscard]] BenchmarkResult run_tvb27(Tier tier);  // full only: Kirchhoff slab, self-heated resistor
+[[nodiscard]] BenchmarkResult run_tvb28(Tier tier);  // full only: Seebeck, Peltier, the energy residual (C5)
+[[nodiscard]] BenchmarkResult run_tvb15(Tier tier);  // full only: 1D N = 64 ... 512 and the injection ladder
+[[nodiscard]] BenchmarkResult run_tvb16(Tier tier);  // full only: three 1D diodes, N = 128 ... 1024, both polarities
+[[nodiscard]] BenchmarkResult run_tvb17(Tier tier);  // full only: 1D N = 64 ... 512 at V = -0.5, -1, -2 V
+[[nodiscard]] BenchmarkResult run_tvb18(Tier tier);  // full only: 1D N = 128 ... 1024, 3 biases x 7 frequencies
+[[nodiscard]] BenchmarkResult run_tvb19(Tier tier);  // full only: relaxation and Haynes-Shockley, dt and h ladders
+[[nodiscard]] BenchmarkResult run_tvb20(Tier tier);  // full only (nightly ctest): Pao-Sah on the L ladder
+[[nodiscard]] BenchmarkResult run_tvb21(Tier tier);  // full only (nightly ctest): the swing, TVB-20's ladder
 // TVR-3 (DECISIONS Unit 55 15): TVB-31, the model-implementation catalogue.
 [[nodiscard]] BenchmarkResult run_tvb31_01();  // legacy band set
 [[nodiscard]] BenchmarkResult run_tvb31_02();  // Passler gap
@@ -104,7 +118,8 @@ void set_pardiso_threads(int threads);
 [[nodiscard]] BenchmarkResult run_tvb31_29(Tier tier);  // Fermi orders and thermopower factor
 [[nodiscard]] BenchmarkResult run_tvb31_30(Tier tier);  // SiO2 data
 [[nodiscard]] BenchmarkResult run_tvb31_31(Tier tier);  // non-silicon material sets
-[[nodiscard]] BenchmarkResult run_tvb32();
+// fast: the three decks; full and nightly: + the TVR-4 benchmark devices (16.44)
+[[nodiscard]] BenchmarkResult run_tvb32(Tier tier = Tier::fast);
 
 struct KnownFinding {
     std::string_view benchmark;
@@ -138,5 +153,40 @@ struct Summary {
 
 // The shortest round-trip form of a double (std::to_chars), as the contract's reasons print numbers.
 [[nodiscard]] std::string shortest(double x);
+
+// The 2x2 (h, tol) factorial at a benchmark's finest level (DECISIONS 4.1 (b), (c); Unit 55 16.2 (p), DT-Q23 A).
+// The four errors are the comparison's own metric at (h, tol), (h, tol / 100), (h / 2, tol) and (h / 2, tol / 100),
+// and the components are the other U terms at (h, tol). eps_int = e(h/2, tol/100) - e(h/2, tol) - e(h, tol/100) +
+// e(h, tol); U = sum |U_k| + |eps_int|; interacting when |eps_int| > 10 % of U. Any input not finite: not ok.
+struct Factorial {
+    bool ok = false;
+    double eps_int = 0.0, u = 0.0;
+    bool interacting = false;
+    std::string note;  // the four errors, eps_int and U, for the result's notes
+};
+[[nodiscard]] Factorial factorial(double e_h_tol, double e_h_tolfine, double e_hfine_tol, double e_hfine_tolfine,
+                                  std::span<const double> components);
+
+// 4.1 (c): with interacting errors (or a factorial that is not ok) an E comparison cannot pass. A pass becomes
+// not_evaluated with the reason; any other outcome is kept.
+void block_if_interacting(ComparisonRecord& c, const Factorial& f);
+
+// U_disc of a finest-level value on a 4-level ladder (DECISIONS 4.2, 4.3; Unit 55 16.33 DT-Q26 A, 16.35 DT-Q28 B,
+// 16.37 DT-Q32 A),
+// finest first, h the spacings (non-constant ratios allowed):
+//   - the three-grid GCI (Roache, F_s = 1.25) on levels 0-1-2, kept only in the asymptotic range: its order and
+//     that of levels 1-2-3 both exist and agree within 0.1;
+//   - the two-grid estimate of the level-0 value, F_s |f(h/2) - f(h)| r^p / (r^p - 1), F_s = 3 and p = p_th = 2, on
+//     the pair (h, f[0]) and (h_half, f_half), kept only where the observed order of the finest triple (h_half,
+//     h[0], h[1]) exists (successive differences of one sign) and is within p_th +- 0.5 (or the three agree exactly);
+//   - the larger of the kept ones; nothing where neither is kept. `how` names what was used, or why nothing was.
+struct Discretization {
+    std::optional<double> u;
+    double order = 0.0, order_coarse = 0.0;  // the two three-grid orders (0 where not formed)
+    double order_fine = 0.0;                 // the finest triple's order (h_half, h[0], h[1])
+    std::string how;
+};
+[[nodiscard]] Discretization u_disc(std::span<const double, 4> h, std::span<const double, 4> f, double h_half,
+                                    double f_half);
 
 }  // namespace NiTCAD::verify::benchmark

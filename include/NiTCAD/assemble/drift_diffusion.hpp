@@ -397,10 +397,13 @@ public:
     // model c of the rise tau third (read off the isothermal sinks), with energy balance c of the
     // carriers' thermal energies W_n and W_p third and fourth (Unit 52, ED9); traps c of every
     // trap slot (trap_slots() entries).
+    // time_s is the step's end time [s], read only by the manufactured sources' time profile
+    // (verification only, models.hpp; DECISIONS.md Unit 55 16.3, DT-Q3 A).
     struct TimeStep {
         double rate;
         std::span<const double> storage;
         std::span<const double> traps;
+        double time_s = 0.0;
     };
     // t0 = Ns / R0 [s].
     [[nodiscard]] double time_scale() const noexcept { return rate_scale_; }

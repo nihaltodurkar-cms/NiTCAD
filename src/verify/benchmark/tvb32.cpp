@@ -18,11 +18,9 @@
 
 namespace NiTCAD::verify::benchmark {
 
-namespace {
-
 namespace c = verify::consistency;
 
-bool at_zero(const results::BiasPoint& p) {
+bool at_zero_bias(const results::BiasPoint& p) {
     if (std::any_of(p.bias_V.begin(), p.bias_V.end(), [](double b) { return b != 0.0; })) return false;
     return p.thermal_bias_K.empty() || std::all_of(p.thermal_bias_K.begin(), p.thermal_bias_K.end(),
                                                    [&](double t) { return t == p.thermal_bias_K.front(); });
@@ -33,6 +31,69 @@ std::string bias_label(const results::BiasPoint& p) {
     for (std::size_t i = 0; i < p.bias_V.size(); ++i) s += (i == 0 ? "" : ", ") + shortest(p.bias_V[i]);
     return s + ") V";
 }
+
+void Tvb32Collector::add(const std::string& at, bool zero, c::CheckResult r) {
+    out.push_back({deck, at, zero, contacts, std::move(r)});
+}
+
+void Tvb32Collector::dc(const results::BiasPoint& p, const mesh::Mesh& m, const c::DeviceData& d,
+                        const std::string& at) {
+    const bool z = at_zero_bias(p);
+    add(at, z, c::check_c1(p, m, d));
+    add(at, z, c::check_c2(p, m, d));
+    add(at, z, c::check_c3(p, m, d));
+    add(at, z, c::check_c4(p, m, d));
+    add(at, z, c::check_c5(p, m, d));
+    add(at, z, c::check_c12(p.fields, &p, m, d));
+}
+
+void Tvb32Collector::ac(const results::SmallSignal& run, const mesh::Mesh& m, const c::DeviceData& d,
+                        const std::string& prefix) {
+    for (std::size_t k = 0; k < run.points.size(); ++k) {
+        const auto& p = run.points[k];
+        const std::string at = prefix + bias_label(p.dc);
+        dc(p.dc, m, d, at);
+        add(at, at_zero_bias(p.dc), c::check_c7(run, k, m, d));
+        add(at, at_zero_bias(p.dc), c::check_c8(run, k, m, d));
+    }
+}
+
+void Tvb32Collector::transient(const results::Transient& run, const mesh::Mesh& m, const c::DeviceData& d,
+                               const std::string& at) {
+    add(at, false, c::check_c6(run, m, d));
+}
+
+bool Tvb32Collector::equilibrium(const device::Device& device, const assemble::PhysicsModels& models,
+                                 std::string& error) {
+    solve::EquilibriumOptions eo;
+    eo.models = models;
+    const auto eq = solve::solve_equilibrium(device, eo);
+    if (!eq) {
+        error = deck + " equilibrium: " + eq.error().message;
+        return false;
+    }
+    const c::DeviceData data = device_data(device, models);
+    add("equilibrium", true, c::check_c1(*eq, device.mesh(), data));
+    add("equilibrium", true, c::check_c3(*eq, device.mesh(), data));
+    return true;
+}
+
+Tvb32Run tvb32_tvr4_entries() {
+    Tvb32Run all;
+    for (Tvb32Run (*f)() : {&tvb05_consistency, &tvb06_consistency, &tvb10_consistency, &tvb13_consistency,
+                            &tvb15_consistency, &tvb16_consistency, &tvb17_consistency, &tvb18_consistency,
+                            &tvb19_consistency, &tvb20_consistency, &tvb27_consistency, &tvb28_consistency}) {
+        Tvb32Run one = f();
+        for (Tvb32Entry& e : one.entries) all.entries.push_back(std::move(e));
+        if (one.run_error) {
+            all.run_error = std::move(one.run_error);
+            return all;
+        }
+    }
+    return all;
+}
+
+namespace {
 
 struct Built {
     deck::Plan plan;
@@ -55,44 +116,10 @@ std::optional<Built> build(std::string_view text, const char* name, std::string&
     return Built{std::move(*plan), std::move(data)};
 }
 
-struct Collector {
-    std::vector<Tvb32Entry>& out;
-    std::string deck;
-    std::size_t contacts;
-    void add(const std::string& at, bool zero, c::CheckResult r) {
-        out.push_back({deck, at, zero, contacts, std::move(r)});
-    }
-    void dc(const results::BiasPoint& p, const mesh::Mesh& m, const c::DeviceData& d, const std::string& at) {
-        const bool z = at_zero(p);
-        add(at, z, c::check_c1(p, m, d));
-        add(at, z, c::check_c2(p, m, d));
-        add(at, z, c::check_c3(p, m, d));
-        add(at, z, c::check_c4(p, m, d));
-        add(at, z, c::check_c5(p, m, d));
-        add(at, z, c::check_c12(p.fields, &p, m, d));
-    }
-    void ac(const results::SmallSignal& run, const mesh::Mesh& m, const c::DeviceData& d, const std::string& prefix) {
-        for (std::size_t k = 0; k < run.points.size(); ++k) {
-            const auto& p = run.points[k];
-            const std::string at = prefix + bias_label(p.dc);
-            dc(p.dc, m, d, at);
-            add(at, at_zero(p.dc), c::check_c7(run, k, m, d));
-            add(at, at_zero(p.dc), c::check_c8(run, k, m, d));
-        }
-    }
-};
+using Collector = Tvb32Collector;
 
 bool equilibrium(const Built& b, Collector& col, std::string& error) {
-    solve::EquilibriumOptions eo;
-    eo.models = b.plan.options.models;
-    const auto eq = solve::solve_equilibrium(b.plan.device, eo);
-    if (!eq) {
-        error = col.deck + " equilibrium: " + eq.error().message;
-        return false;
-    }
-    col.add("equilibrium", true, c::check_c1(*eq, b.plan.device.mesh(), b.data));
-    col.add("equilibrium", true, c::check_c3(*eq, b.plan.device.mesh(), b.data));
-    return true;
+    return col.equilibrium(b.plan.device, b.plan.options.models, error);
 }
 
 }  // namespace
@@ -135,11 +162,18 @@ Tvb32Run tvb32_entries() {
     return run;
 }
 
-BenchmarkResult run_tvb32() {
+BenchmarkResult run_tvb32(Tier tier) {
     BenchmarkResult r;
     r.id = "TVB-32";
     r.title = "The consistency suite C1-C12 on the three TVR-1 decks";
     Tvb32Run t = tvb32_entries();
+    if (tier != Tier::fast && !t.run_error) {  // + the TVR-4 devices (16.44)
+        Tvb32Run more = tvb32_tvr4_entries();
+        for (Tvb32Entry& e : more.entries) t.entries.push_back(std::move(e));
+        t.run_error = std::move(more.run_error);
+        r.notes.push_back("full tier: + the TVR-4 benchmark devices (16.44); C10, C11: no TVR-4 benchmark builds a "
+                          "limit series or a symmetry map");
+    }
     r.info = consistency::check_info("C1");  // class D, I2; each check judged with its own contract
     r.info.id = "TVB-32";
     r.info.citation = "DECISIONS Unit 55 11.6: checks C1-C12, each judged with its own contract (check_info)";

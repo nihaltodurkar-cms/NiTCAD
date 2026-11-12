@@ -117,6 +117,33 @@ std::expected<DriftDiffusion, base::Error> DriftDiffusion::create(
         if (models.electrothermal || models.energy_balance) {
             return refuse("manufactured sources are for the isothermal drift-diffusion rows only");
         }
+        // The time profile (DT-Q3 A): none, or one weight more than jump times; the times
+        // finite, positive and strictly increasing, the weights finite.
+        const auto& tau = ms->profile_times_s;
+        const auto& wts = ms->profile_weights;
+        if (!(tau.empty() && wts.empty()) && wts.size() != tau.size() + 1) {
+            return refuse("a manufactured time profile needs one weight more than jump times");
+        }
+        for (std::size_t k = 0; k < tau.size(); ++k) {
+            if (!(std::isfinite(tau[k]) && tau[k] > 0.0 && (k == 0 || tau[k] > tau[k - 1]))) {
+                return refuse("manufactured profile times must be finite, positive and increasing");
+            }
+        }
+        if (!std::ranges::all_of(wts, [](double y) { return std::isfinite(y); })) {
+            return refuse("manufactured profile weights must be finite");
+        }
+    }
+    // An insulator-only device (DECISIONS.md Unit 55 16.22, DT-Q19 A): its reference node is an
+    // electrode node, so the electrothermal reference conductivity and gate tunnelling, which both
+    // need a semiconductor, are refused.
+    if (!device.has_semiconductor()) {
+        if (models.electrothermal) {
+            return refuse("an insulator-only device with the electrothermal model is not supported");
+        }
+        if (std::ranges::any_of(device.contacts(),
+                                [](const device::Contact& c) { return c.tunnelling != 0; })) {
+            return refuse("gate tunnelling needs a semiconductor region");
+        }
     }
     if (nonlocal && models.btbt_local) {
         return refuse("btbt_local and btbt_nonlocal would count the same tunnelling twice");

@@ -9386,7 +9386,1722 @@ Other findings:
 **Next.** Unit 55's later phases (TVR-4/5) are not started. Every commit is local, on `verify/model-implementation`,
 stacked on PR #78, which is open and not merged. Pushing, opening a PR or merging needs the owner's authorization.
 
+#### 16. TVR-4 and TVR-5 (Units 55d, 55e) plan: assembled physics (proposed 2026-11-06; on `verify/device-theory`; rulings before code)
 
+**Owner request (2026-11-06):** "plan for TVR-4 and TVR-5 (assembled physics)". TVR-3 checked every model *function*
+(M class, 15.1). These two phases check the physics *as assembled and solved*: the device theories (A class), the
+linear and transient responses, and the interface, generation and quantum terms. This section plans both phases. It
+also reports, before any code, the places where §6's catalogue does not fit the code (16.2, 16.12). Each phase freezes
+its criteria in a separate commit before the code that runs them (TVM2).
+
+**Branch.** `verify/device-theory`, from `verify/model-implementation` at `dab9ec5` (PR #79, stacked on PR #78; neither
+merged). TVR-4 needs TVR-2's first integral, KN reference and study driver, and TVR-3's re-coded models. It is rebased
+on `main` once #78 and #79 merge. TVR-5 gets its own branch, stacked on this one, when TVR-4 closes (16.14). Local
+only.
+
+##### TVR-4 (Unit 55d): device theory, small signal, transient, thermal
+
+**16.1 Scope.** In:
+- (a) The benchmarks of §9's TVR-4 row (TVB-10, 13, 15–21, 27, 28), plus TVB-05 and 06, which CV-Q3 B deferred from
+  TVR-2.
+- (b) The audit's TVR-4 items (§10.7): R-4's reverse-bias dQ/dV, R-5 (the diode family with consistent assumptions),
+  R-9 (the Shockley admittance with both carriers and C_T, eq 4.23) and R-10 (Pao–Sah and the charge sheet).
+- (c) The new references, base-only (TVD-19), each with its L0 tests and its contract (§3.3).
+- (d) The two changes to existing code the catalogue needs (16.2 (a), (b)), each only if ruled, each with its own
+  tests, each bit-identical for every existing device and run.
+- (e) The TVB-32 consistency suite on every new benchmark device (§6: "every P1/P2 benchmark device").
+- (f) Every benchmark registered in TVR-1's registry with its tier, and its frozen-outcome test.
+
+Out:
+- TVR-5's benchmarks (16.12).
+- The existing tests that TVB-16, 17, 18, 20, 21, 27 and 28 overlap (`bias:165`, `:284`, `small_signal:856`, `:994`,
+  `mosfet:222`, the electrothermal U4/DC7 gates). They stay as they are (TVD-14). "Re-homing" (§6) means a new,
+  independent benchmark beside the original; the original's gate is kept.
+- Any change to NiTCAD's physics, tables, tests, gates or tolerances. A miss is a finding, and any fix is proposed
+  separately (as Unit 56 did).
+
+**16.2 Found before code (the catalogue against the code).**
+- **(a) Insulator-only devices are refused** (`device.cpp:75`, "device needs at least one semiconductor region"), and
+  the reference node assumes a semiconductor node (`device.cpp:472`). TVB-05 and 06 cannot be built without a
+  device change. CV-Q3 deferred them here, so they must now be built (DT-Q2 A) or recorded as unbuildable (DT-Q2 B).
+- **(b) The transient API cannot start from an excess-carrier state.** `transient.hpp:83`: "`initial` is a starting
+  guess for the steady state at t = 0". TVD-15 said the initial state "exists"; it does not. Nor does prescribed
+  generation (§7). So TVB-19, dielectric relaxation and the Haynes–Shockley pulse have no way to inject carriers.
+  Options in DT-Q3.
+- **(c) TVB-17's "exact dQ/dV at reverse bias" is exact only for a model NiTCAD does not solve.** TVR-2's first
+  integral is exact at equilibrium, where the quasi-Fermi levels are flat. Under bias the first integral holds for the
+  *quasi-equilibrium* (QE) model: electrons referred to φ_n of the n side, holes to φ_p of the p side, both flat
+  across the junction. Drift-diffusion departs from QE by the quasi-Fermi drop the current causes. That departure is
+  small where the carriers' charge matters and large only where their density is negligible. TVB-17 is therefore E
+  against the QE model, with a predicate on the solved state (DT-Q4).
+- **(d) The diode laws need consistent assumptions (I-2, R-5).** Shockley's law is the whole current only without
+  depletion-region recombination, and its long-base form needs recombination in the neutral regions. So TVB-16 has
+  two configurations:
+  - (i) SRH, Auger and radiative off: only the short-base law applies (the contacts are the only sinks). W(V) comes
+    from the QE first integral (not W(0)), and the base length is measured from the depletion edge.
+  - (ii) SRH on: the long- and short-base laws with L = √(D τ), plus the Sah–Noyce–Shockley (SNS) integral of U(ψ)
+    over the *reference's* QE potential (not NiTCAD's field: C-2's lesson).
+  - The reverse-leakage exponent (I-3) is judged in (ii), against the SNS integral, not a fixed band.
+  - Mobility is constant (uniform doping per side, field mobility off) and its value and the lifetimes are given in
+    the spec (R-7), so D = V_T μ and τ enter the reference without NiTCAD's tables. NiTCAD's tables must agree with
+    the spec values; a mismatch is an L1 finding (§2.2), not hidden by sharing.
+- **(e) TVB-15's injection.** A minority-diffusion region with SRH needs carriers injected. With no prescribed
+  generation (b), a junction would inject them, and the boundary condition would then be the law of the junction (A,
+  not E). The TVQ3 hook already supplies a *static*, state-independent generation G(x). With a localized G in a long
+  uniform p-type bar, the linear minority equation D Δn'' − Δn/τ = −G has a closed-form solution (Green's function,
+  cosh/sinh), with τ the *exact* linearization of SRH at the equilibrium state (it includes the n₁, p₁ terms),
+  computed in the reference from the spec. NiTCAD solves full DD, not the linear model, and the two differ by
+  O(Δn/N_A) (the ambipolar field and the SRH nonlinearity). Hence two comparisons:
+  - E, with the predicate max Δn/N_A ≤ 1e-8 measured on the solved state: the model error is then about 1e-8, two
+    decades below the 1e-4 tolerance and below the finest discretization error, so it cannot pollute p̂.
+  - A, at Δn/N_A from 1e-3 to 1e-1, with ε_approx derived in step 1 and frozen before it runs.
+- **(f) TVB-13 is exact in a different way than the catalogue says.** In a uniform resistor with ohmic contacts,
+  n = N everywhere, so J = q N μ(E) E forces E to be uniform. Canali drift is then a D-class identity, as TVB-11 is.
+  With energy balance, T_n = T_L at the contacts, so there is a boundary layer of length λ ≈ v τ_w (an upper bound on
+  λ derived in step 1, PD). In the interior the uniform state solves the discrete equations exactly, so there is no
+  discretization error to converge, only the boundary layer's tail: T_n is judged as D, not E, on the nodes whose
+  distance d from both contacts gives e^{−d/λ} ≤ 1e-13 (a predicate with its measured value), and no order is
+  computed.
+- **(g) TVB-10's frequencies and its HF model.** HF C-V needs f above the minority carriers' generation response and
+  below their redistribution across the inversion layer. The HF reference is therefore not "minority density frozen"
+  but the redistribution limit: the minority quasi-Fermi level spatially uniform, its total number conserved, the
+  majority carriers at equilibrium (to be confirmed against the source in step 1). NiTCAD's `frozen_minority_
+  capacitance` is not used (C-4: I0). The plateau is measured and must be flat to the tolerance across a decade
+  (else NOT APPLICABLE). Deep depletion needs a transient ramp faster than generation. Its reference is the KN charge
+  with zero minority carriers, exact for that state, under the predicate minority charge ≤ 1e-3 |Q_s| on the solved
+  state.
+- **(h) TVB-21 needs no separate formula.** S = ln10 V_T (1 + C_dep/C_ox) is the depletion approximation *of* the
+  Pao–Sah current in weak inversion. The A reference is S from the Pao–Sah reference itself (TVB-20) at the same
+  V_G. The closed formula is reported beside it as a diagnostic.
+- **(i) TVB-20's assumptions.** Pao–Sah requires constant mobility (field mobility and Lombardi off), uniform
+  substrate, Boltzmann, no BGN, a lumped gate, and the gradual channel. Gradual channel is checked on the solved
+  state: max |∂E_x/∂x| / |∂E_y/∂y| in the channel ≤ a frozen bound, with source and drain far enough apart.
+- **(j) TVB-05's spherical capacitor cannot be meshed.** `Geometry3D` is a convex polyhedron with planar interfaces
+  (`generate.hpp:263`). A spherical shell has a curved, interior boundary, so it cannot be built. The coaxial
+  capacitor can be built in 2D (per unit length): the 2D generator takes region polygons that tile the domain without
+  nesting, so the annulus is tiled by sectors of one region, with the inner and outer circles faceted. The spherical
+  case is recorded as unbuildable (unverified, not failed).
+- **(k) TVR-0's C-9 for thermal.** The existing electrothermal gates take expected values partly from NiTCAD's
+  physics functions. The re-homed TVB-27 and 28 take κ(T) = κ₃₀₀ (T/300)^−a (`thermal.hpp:4`'s form), S and Π from
+  the benchmark spec, re-coded (R-7).
+- **(l) TVB-18 needs recombination, which brings a term eq 4.23 omits.** The long-base admittance needs SRH on, and
+  SRH also recombines in the depletion region. Its admittance share is bounded in ε_approx (step 1), and the forward
+  biases judged are those where the reference's SNS current is ≤ 1e-2 of the diffusion current (a predicate).
+- **(m) TVB-19's linear models include diffusion.** The excess majority charge spreads while it relaxes, but its
+  integral decays exactly as exp(−t/τ_d) in the linear model (ohmic ends far from the pulse, their flux bounded in
+  the predicate). The decay rate is judged on that integral. The Haynes–Shockley pulse is E only under the same
+  low-injection predicate as TVB-15 (Δp/N_D ≤ 1e-8).
+- **(n) Pao–Sah's inner integral.** The behaviour of n/E at the bulk end of the inner ψ integral (where E → 0) is
+  derived in step 1 before the quadrature is chosen. The quadrature does not hide a divergence.
+- **(o) Reach of the two code changes.** (a) and (b) may reach beyond `device.cpp` and the hook: assembly with no
+  carrier rows, the equilibrium and bias solves, and the transient passing t to the residual (the hook's profile adds
+  its own breakpoints to the step-landing set). Each step measures the reach first and stops for the owner if the
+  change touches more than the device check, the reference-node choice, the hook and the transient's breakpoint set.
+- **(p) Error interactions (TVD-17, R-12).** Every E and A benchmark runs the 2×2 (h, tol) factorial at its finest
+  level and reports ε_int, and the transients add Δt (2×2×2). An ε_int above 10% of U blocks an E pass (§4.1).
+
+**16.3 New references (`verify/reference`, base only; L0 tests in each one's commit).**
+
+| Ref | Contents | Method; second method | Used by |
+|---|---|---|---|
+| capacitor | C = 2πεL/ln(b/a); series stack C⁻¹ = Σ t_i/ε_i, D continuous | Closed form; the faceted polygon's own capacitance by Richardson extrapolation (the O(h²) faceting term is measured, not assumed) | TVB-05, 06 |
+| minority_diffusion | D n'' − n/τ = −G on [0, L] with ohmic ends (n = n₀); G a Gaussian or box | Green's function, integrated by Gauss–Kronrod in dd; Chebyshev collocation | TVB-15 |
+| qe_junction | TVR-2's first integral under bias in the QE model: ψ(x), the edges, Q(V) and C = dQ/dV | tanh–sinh and Brent (as TVB-07); C by complex step on Q(V); Chebyshev | TVB-16, 17, 23 (TVR-5) |
+| diode | Shockley J₀ (long and short base, the base from the QE edge); the SNS integral of U(ψ) over the QE profile | Closed form and Gauss–Kronrod; the SNS integral also by tanh–sinh | TVB-16 |
+| admittance | Shockley eq 4.23: Y = Σ_{n,p} G₀ √(1 + iωτ) (long base) or the coth form (short), plus iω C_T | Closed form in complex dd; the linearized minority ODE solved directly (Chebyshev, complex) | TVB-18 |
+| mos_hf | KN charge in the HF redistribution limit (16.2 (g)), and with no minority carriers (deep depletion) | Closed form and Brent; HF C by complex step | TVB-10 |
+| pao_sah | I_D = q μ (W/L) ∫_{V_S}^{V_D} ∫ n(ψ, V)/E(ψ, V) dψ dV, the inner integral from the bulk to ψ_s(V_G, V), ψ_s by Brent on TVB-09's KN; Brews' charge sheet; S | Nested adaptive Gauss–Kronrod; tanh–sinh at the endpoint whose behaviour step 1 derives (16.2 (n)) | TVB-20, 21 |
+| linear_transient | Dielectric relaxation: the excess charge's integral as exp(−t/τ_d), τ_d = ε/(q μ N); Haynes–Shockley: a drifting, spreading, decaying Gaussian convolved with the source's time profile | Closed form; the convolution by Gauss–Kronrod in dd; the PDE by method of lines with Dormand–Prince (TC6) | TVB-19 |
+| thermal_slab | Kirchhoff transform for κ = κ₀ (T/T₀)^−α; Joule parabola; Seebeck and Peltier integrals | Closed form; the ODE by Dormand–Prince | TVB-27, 28 |
+
+The homogeneous drift and energy-balance references (TVB-13) are TVR-3's re-coded `model_mobility` and `model_thermal`,
+reused unchanged.
+
+**16.4 The benchmarks.**
+
+| ID | Construction | Reference; class | Judged | Families (fast / full) |
+|---|---|---|---|---|
+| TVB-05 | Coaxial capacitor, 2D generated annulus (sectors), electrodes on both circles (DT-Q2 A) | capacitor; E | C per unit length, p̂ (faceting included in p_th 2) | — / 4 levels |
+| TVB-06 | SiO₂ / high-k stack between electrodes, 1D and 2D tensor, interfaces on dual faces | capacitor; D | C and the field ratio ε₁/ε₂ | 1D N = 32 / + 2D |
+| TVB-10 | MOS-C 1D, SRH on: HF C-V by small signal at f in the measured plateau; deep depletion by a transient V_G ramp | mos_hf; A (HF), E (deep depletion, with the predicate) | C_HF(V_G), C_min; Q_s in deep depletion | — / 1D ladder |
+| TVB-13 | Uniform resistor, field mobility on (Canali); then energy balance on | model_mobility, model_thermal; D (drift, and T_n on the judged interior, 16.2 (f)) | v = J/(qN) against v(V/L); T_n against the homogeneous T_n(E) | 1D (fast: drift) / + energy balance |
+| TVB-15 | Long uniform p-bar, ohmic ends, SRH only, the TVQ3 hook's localized G | minority_diffusion; E (Δn/N_A ≤ 1e-8) and A (Δn/N_A 1e-3 to 1e-1) | relative Δn in L∞; p̂ | — / 1D ladder |
+| TVB-16 | Abrupt 1D diode, constant μ; (i) no G−R, short base; (ii) SRH on, long and short base | diode; A | J(V) by log error; ideality; the reverse exponent (ii) | — / 1D ladder per V |
+| TVB-17 | Abrupt 1D diode at reverse bias, no G−R | qe_junction; E (QE, predicate DT-Q4); the ε/W form's difference reported | C_j(V), p̂ | — / 1D ladder |
+| TVB-18 | Long and short diode, forward bias, low injection | admittance; A | Y(ω) magnitude and phase over 1e-3 ≤ ωτ ≤ 1e3 | — / 1D |
+| TVB-19 | Uniform n-bar: (i) a majority-charge pulse (dielectric relaxation); (ii) a minority pulse in a uniform field (Haynes–Shockley); injection per DT-Q3 | linear_transient; E | decay rate; pulse centre, width and area; time-step p̂ (BDF2: 2; BE: 1) and the 2×2×2 factorial (h, tol, Δt) | — / 1D |
+| TVB-20 | Long-channel n-MOSFET, 2D tensor, constant μ, lumped gate | pao_sah; A (gradual channel); Brews as second A | I_D(V_G, V_D), V_T, g_m | — / 2D ladder |
+| TVB-21 | TVB-20's device in weak inversion, low V_D | pao_sah; A | S | — / with TVB-20 |
+| TVB-27 | 1D slab with κ(T) from the spec, isothermal ends; Joule-heated resistor | thermal_slab; E | T(x) in L∞, p̂ | — / 1D ladder |
+| TVB-28 | Seebeck and Peltier: a 1D bar with ∇T; the energy identity | thermal_slab; E / D | S, Π; the energy residual | — / 1D |
+
+Every reference input comes from the benchmark spec, never from NiTCAD's tables (§2.2, R-7). Every comparison carries
+its applicability predicates (TVD-6), and a false one is NOT APPLICABLE with the predicate and its measured value
+named (TVD-16).
+
+**16.5 Sources (step 1, read before criteria freeze; grades per §3.3).**
+
+| Source | Status | Needed for |
+|---|---|---|
+| Shockley, BSTJ 28 (1949), eqs 4.23–4.24 | Read in TVR-0 (OCR); PA | TVB-16, 18 |
+| Sah, Noyce and Shockley, Proc. IRE 45 (1957) | To read | TVB-16 (SNS) |
+| Pao and Sah, Solid-State Electronics 9 (1966) | To read (paywalled per §9); PB via textbook reproductions otherwise | TVB-20 |
+| Brews, Solid-State Electronics 21 (1978) | To read; as above | TVB-20, 21 |
+| Haynes and Shockley, the drift-mobility experiment (Phys. Rev., 1951) | To locate and read | TVB-19 |
+| The HF MOS C-V derivation (Nicollian and Brews, *MOS Physics and Technology*, ch. 4, or an open reproduction) | To locate | TVB-10 |
+| Kingston and Neustadter (TVR-2) | As graded in TVR-2 | TVB-10, 20 |
+| Wachutka, IEEE Trans. CAD 9 (1990) (thermodynamic heat generation) | To read | TVB-28 |
+| Kirchhoff transform (Carslaw and Jaeger, or any heat-conduction text) | Derived here (PD) with a second method | TVB-27 |
+| Canali et al. (1975) | Read in TVR-3 (15.10) | TVB-13 |
+
+Where only PB is reachable, the grade is printed in every report line. A PC-only source makes the comparison
+"provenance insufficient" and it cannot pass (TVD-18).
+
+**16.6 Order of work (one commit each; L0 tests before the benchmark that uses them; mutation runs per commit as in
+TVR-3).**
+1. Reading log and the derivations (PD, each with its second method): the bound on λ (TVB-13); the HF
+   redistribution model (TVB-10); the behaviour of Pao–Sah's inner integrand at the bulk end; ε_approx for TVB-10
+   HF, 15, 16, 18, 20 and 21. Recorded as their own subsection; then the A-class criteria freeze (DT-Q8).
+2. The insulator-only device change (DT-Q2 A) with its tests; capacitor reference; TVB-06, then TVB-05.
+3. The hook's time profile (DT-Q3 A) with its tests.
+4. minority_diffusion; TVB-15.
+5. qe_junction; TVB-17.
+6. diode; TVB-16.
+7. admittance; TVB-18.
+8. mos_hf; TVB-10.
+9. pao_sah; TVB-20, TVB-21.
+10. linear_transient; TVB-19.
+11. TVB-13.
+12. thermal_slab; TVB-27, TVB-28.
+13. TVB-32 consistency (C1–C12) on every new device; findings to the owner.
+14. Close-out: timing, suites, provenance summary, ARCHITECTURE 10 catalogue links (documentation only).
+
+**16.7 Tiers and time.** Serial Debug `nitcad verify` is at 69.89 s of CV-Q19's 75 s (15.20). TVR-4 adds to `fast` only
+its two D-class cases (TVB-06 1D, TVB-13 drift), measured, with ≤ 2 s total. Everything else is `full`. The frozen full
+outcomes run in a Release-only ctest `verify_benchmark.tvr4_full` (as `tvb31_full`, so CI sees them) if it takes ≤ 120 s
+on CI. Ladders beyond that budget go under `NITCAD_VERIFY_FULL_TIER` (local, as TVB-04's).
+
+**16.8 Criteria for the D and E comparisons (frozen with these rulings, 2026-11-06, before code; TVM2).** Notation as
+14.7: ε = 2⁻⁵², N the nodes along the path, p̂ by §4.2 on r = 2 ladders, the CV-Q8 iterative rule, TB-Q4's
+reference-uncertainty rule.
+
+| ID | D criterion | E (a) order | E (b) accuracy on the finest level | Ladder |
+|---|---|---|---|---|
+| TVB-06 | C and the field ratio, relative ≤ 64 ε N² | — | — | 1D N = 32, 128; 2D 32² |
+| TVB-05 | — | C: p̂ ∈ [1.8, 2.3] | C relative ≤ 1e-3 | 4 levels, 2D generated |
+| TVB-13 drift | v relative ≤ 64 ε N² at V/L from 1e2 to 1e5 V/cm | — | — | 1D N = 64 |
+| TVB-13 T_n | T_n − T_L relative ≤ 64 ε N² on the judged nodes (16.2 (f)) | — | — | 1D N = 128, 512 |
+| TVB-15 linear | — | relative Δn in L∞: p̂ ∈ [1.8, 2.3] | ≤ 1e-4 | 1D N = 64…512 |
+| TVB-17 | — | C_j: p̂ ∈ [1.8, 2.3] | relative ≤ 1e-3 | 1D N = 64…512, at each V |
+| TVB-19 | — | in Δt at fixed h: p̂ ∈ [1.8, 2.3] (BDF2), [0.8, 1.3] (BE); in h at fixed Δt: [1.8, 2.3] | decay rate relative ≤ 1e-3; pulse centre ≤ 1e-3 of the drift length, width and area relative ≤ 1e-3 | Δt and h ladders, 4 levels each; the 2×2×2 factorial at the finest |
+| TVB-27 | — | T in L∞: p̂ ∈ [1.8, 2.3] | relative ≤ 1e-4 | 1D N = 64…512 |
+| TVB-28 | energy residual within C5's frozen bound (11.6), with C5's accepted Newton-term limitation printed | S, Π: p̂ ∈ [1.8, 2.3] | relative ≤ 1e-4 | 1D N = 64…512 |
+| TVB-10 deep depletion | — | Q_s: p̂ ∈ [1.8, 2.3] | relative ≤ 1e-3 | 1D N = 64…512 |
+
+A-class criteria (TVB-10 HF, 15 DD-vs-linear, 16, 18, 20, 21) are §4.4's A row, |q_sim − q_ref| ≤ U_num + U_ref +
+ε_approx, with each ε_approx frozen in step 1 from its derivation and source, before the code that runs it (DT-Q8).
+
+**16.9 Owner questions (recommendations in the last column).**
+
+| # | Question | Recommendation |
+|---|---|---|
+| DT-Q1 | Scope as 16.1, including TVB-05/06 and R-4, R-5, R-9, R-10; the overlapping existing tests kept as they are? | Yes |
+| DT-Q2 | Insulator-only devices: (A) a narrow change to `device.cpp:75` and `:472`: allow a device with no semiconductor region if every connected component of its mesh has an electrode, with the reference node an electrode node; its own tests; bit-identical for every existing device. (B) Record TVB-05/06 as unbuildable (unverified). | A. CV-Q3 deferred them here on the understanding that they would be built; B would leave the Poisson operator's only exact closed-form capacitances unchecked |
+| DT-Q3 | Excess-carrier injection for TVB-19: (A) give the TVQ3 hook an optional time profile w(t), piecewise constant on the transient's waveform breakpoints (so steps land on its jumps); null by default, verification-only, not in the deck, bit-identical when absent. The pulse is then a short generation burst, which is what the experiment does physically, and the reference convolves with w(t). (B) A transient option to take `initial` as the t = 0 state instead of a guess: an API change to a user-facing function. (C) Defer TVB-19 | A. It extends a hook that is already verification-only; B changes user-facing semantics |
+| DT-Q4 | TVB-17: E against the QE model, applicable only where the solved state's quasi-Fermi drop across the region in which the carrier's charge exceeds 1e-6 of the local doping is ≤ 1e-3 V_T (else NOT APPLICABLE with the measured drop)? | Yes |
+| DT-Q5 | TVB-16 in two configurations (16.2 (d)), with constant μ from the spec; the 1.321e-2 short-base value of `bias:144` cross-checked, not gated? | Yes |
+| DT-Q6 | TVB-21: S from the Pao–Sah reference (A), the closed formula a diagnostic? | Yes |
+| DT-Q7 | TVB-05: coaxial only; the spherical capacitor recorded as unbuildable (no curved 3D geometry)? | Yes |
+| DT-Q8 | Criteria: freeze 16.8 (D and E) with these rulings; freeze each A-class ε_approx in step 1, after its source is read and its derivation written, before the code that runs it? | Yes |
+| DT-Q9 | Tiers as 16.7 (two D cases in `fast`, ≤ 2 s; `verify_benchmark.tvr4_full` Release-only if ≤ 120 s on CI; heavier ladders local)? | Yes |
+| DT-Q10 | A failed predicate is NOT APPLICABLE; a benchmark whose every comparison is NOT APPLICABLE is "unverified" (TVD-16), never adjusted to apply? | Yes |
+| DT-Q11 | Findings: none fixed in TVR-4; each gets a fix proposal and goes to the owner (MI-Q10's rule)? | Yes |
+| DT-Q12 | Unit numbering and branch: Unit 55d on `verify/device-theory`; TVR-5 as Unit 55e on its own branch after TVR-4 closes? | Yes |
+
+##### TVR-5 (Unit 55e): interfaces, generation, tunnelling, quantum
+
+**16.10 Scope.** In: §9's TVR-5 row: TVB-08, 22–26, 29, 30, 33; the C10 limits left for TVR-5 (MLDA → classical far
+from the interface, Lombardi → bulk as E⊥ → 0; §11.6); the new numerics TVD-22 placed here (the Sturm-sequence
+eigensolver); TVB-32 on every new device. Out: as 16.1.
+
+**16.11 The benchmarks (each re-planned in TVR-5's own proposal, which freezes its criteria).**
+
+| ID | Construction | Reference; class |
+|---|---|---|
+| TVB-08 | Equilibrium abrupt heterojunction with an ε step, both interface modes (continuous DD and thermionic emission; their equilibria must agree) | First integrals on each side matched by D continuity (Anderson rule); E. `heterojunction:147` kept |
+| TVB-22 | MOS-C with one trap level: G_p/ω and C_it(ω) | Single-level equivalent circuit, derived here (PD) from the small-signal SRH trap model, since eq 17 of Nicollian–Goetzberger was illegible (I-10); E for the model |
+| TVB-23 | Abrupt 1D diode, impact ionization on | The ionization integral of TVR-3's re-coded vOdM over the *reference* field (qe_junction): E for M(V) below breakdown, under a low-current predicate (the carriers' space charge negligible, measured); A for NiTCAD's V_BR on Unit 19's traced branch against the reference's integral = 1 |
+| TVB-24 | p-i-n at reverse bias (field near uniform, predicate measured); local Kane, then nonlocal paths | ∫ G(E(x)) dx on the reference field; the path integral by quadrature on the reference potential; E for the model as assembled |
+| TVB-25 | MOS-C with gate tunnelling (Unit 51) | (1) E: Tsu–Esaki with WKB on the reference's own band diagram (KN): the assembled coupling; (2) H: WKB vs exact transmission (Airy functions, Gundlach) by oxide-field regime, recorded only (TVQ5); (3) A: Fowler–Nordheim and Simmons in their regimes |
+| TVB-26 | Schottky diode (Unit 48) | Thermionic emission and the Crowell–Sze thermionic-diffusion combination; A. Image-force lowering NOT APPLICABLE (16.12 (a)) |
+| TVB-29 | Cylindrical pn junction: 2D generated, a faceted circular junction | Radial Poisson–Boltzmann by Chebyshev collocation; E. Spherical unbuildable (16.12 (b)) |
+| TVB-30 | MLDA vs 1D Schrödinger–Poisson, infinite and finite barrier | In-reference Sturm bisection + inverse iteration in dd (TVQ4 ruling), Eigen secondary; H, recorded only |
+| TVB-33 | Aste–Vahldieck ballistic diode | P; see 16.12 (c) |
+
+**16.12 Found before code (TVR-5).**
+- **(a) Image-force lowering and Schottky tunnelling are not modelled** (`contact.hpp:22`). TVB-26's barrier-lowering
+  comparison is NOT APPLICABLE with that predicate named. Unit 48's five accepted limitations are printed beside the
+  outcome.
+- **(b) No curved 3D geometry** (16.2 (j)). TVB-29's spherical junction is unbuildable; the cylindrical junction is
+  built in 2D, its faceting measured as in TVB-05.
+- **(c) TVB-33 compares different models (I-8).** NiTCAD's τ_w is constant (`energy_balance.hpp:26`); the paper's
+  depends on T (its eqs 15–16), and its β is not stated. A P-class comparison would judge the model mismatch, not the
+  code. The comparison is NOT APPLICABLE ("the model matches the publication's": false), with NiTCAD's peak velocity
+  printed as a diagnostic. It becomes applicable only if a T-dependent τ_w is added, which is not in scope.
+- **(d) New numerics.** Airy functions Ai, Bi and their derivatives in dd, scaled for large arguments (Bi grows as
+  exp(2ζ^{3/2}/3)), with L0 against DLMF §9's tables and identities (the Wronskian); the exact transmission is
+  cross-checked by integrating the Schrödinger equation through the barrier with Dormand–Prince (I3, two methods).
+  The Schrödinger–Poisson reference's self-consistency loop must give its own U_ref (a residual bound, not an
+  iteration count).
+- **(e) C-2's circularity is avoided by construction.** TVB-23 and 24 integrate on the *reference* field, never on
+  NiTCAD's. Findings (xi) and (xii) of TVR-3 are carried into TVB-24's report.
+- **(f) Size.** TVR-5 is XL (§9). Split it into two units, each with its own proposal, rulings and criteria freeze:
+  TVR-5a (TVB-08, 22, 23, 24, 26, 29; classical interfaces and generation) and TVR-5b (TVB-25, 30, 33 and the C10 MLDA
+  limit; tunnelling and quantum). The Lombardi limit goes with TVR-5a's MOS devices.
+- **(g) Sources, all to read in each sub-unit's step 1:** Anderson (Solid-State Electronics 5, 1962); Nicollian and
+  Brews (book) for the trap circuit; Sze and Gibbons (1966) and Unit 19's records for breakdown; Kane's
+  band-to-band rate (attribution still open: F5 of 15.4) and Unit 51's records; Gundlach (Solid-State Electronics 9, 1966); Simmons (J. Appl. Phys. 34, 1963); Crowell and Sze
+  (Solid-State Electronics 9, 1966); Paasch and Übensee (MLDA); Stern's self-consistent inversion-layer papers as the
+  SP cross-check. Grades as §3.3; a PC-only reference cannot pass.
+
+**16.13 Owner questions for TVR-5 (the plan only; each sub-unit's proposal asks its detailed questions).**
+
+| # | Question | Recommendation |
+|---|---|---|
+| AP-Q1 | Split TVR-5 into 5a (classical interfaces and generation) and 5b (tunnelling and quantum), as 16.12 (f)? | Yes |
+| AP-Q2 | TVB-26's image-force and TVB-29's spherical case recorded as NOT APPLICABLE / unbuildable rather than adding the models or geometry? | Yes. Adding them is new physics and meshing, outside a verification unit |
+| AP-Q3 | TVB-33 NOT APPLICABLE with the mismatch named, NiTCAD's peak printed as a diagnostic (16.12 (c))? | Yes |
+| AP-Q4 | TVB-25 in three layers: E for the assembled WKB coupling, H (record only) for WKB vs Airy, A for FN and Simmons? | Yes |
+| AP-Q5 | TVB-23/24 integrate on the reference field only (16.12 (e))? | Yes |
+| AP-Q6 | Criteria for TVR-5 frozen in each sub-unit's proposal, after its step 1 reading, before its code? | Yes |
+
+**16.14 Sequence.** TVR-4 steps 1–14 (16.6), close-out, the owner's review; then TVR-5a's proposal (rulings, criteria
+freeze, code), then TVR-5b's. Nothing is pushed without the owner's authorization.
+
+**16.15 Review of the plan (owner: "choose recommended and review the plan", 2026-11-06).** The first draft was
+checked against the code and against §4's rules before the rulings. The review changed:
+- TVB-16 (i): with no G−R there is no long base. Only the short-base law applies; the long base and the reverse
+  exponent moved to (ii).
+- TVB-15: "E for the linear model" cannot be judged on a full-DD solve unless the model error is far below the
+  discretization error. E now has the predicate Δn/N_A ≤ 1e-8, and the A comparison runs at higher injection. τ is
+  SRH's exact linearization, not τ_n.
+- TVB-13: the interior energy-balance state is exact in the discrete equations, so an order study measured only the
+  boundary layer's tail. It is D on the judged nodes, with a tail predicate.
+- TVB-10: "minority density frozen" is not the HF limit of a 1D MOS-C small-signal solve. The reference is the
+  redistribution limit (uniform minority quasi-Fermi level, number conserved), to be confirmed in step 1.
+- TVB-18: SRH in the depletion region adds admittance that eq 4.23 omits. It is now bounded by a predicate and in
+  ε_approx.
+- TVB-19: the dielectric-relaxation decay is judged on the excess charge's integral (diffusion conserves it). The
+  pulse needs TVB-15's low-injection predicate.
+- TVB-20: the first draft put the inner integral's singularity at the surface. Where n/E is singular (at the bulk
+  end, where E → 0) is derived in step 1 before the quadrature is chosen.
+- TVB-28: the energy residual uses C5's frozen bound, not a bare 64ε, since C5's Newton-term limitation applies.
+- TVB-23: E for M(V) needs a low-current predicate. V_BR is NiTCAD's traced value against the reference integral.
+- Added: the 2×2 (h, tol) factorial on every E/A benchmark (TVD-17, R-12); the reach of the two code changes measured
+  before they are made, with a stop for the owner (16.2 (o)); registry entries (16.1 (f)).
+- Removed: a Kane date the register does not support (F5 is open).
+
+Not changed, and checked:
+- `device.cpp:75` and `transient.hpp:83` read as quoted.
+- `Geometry3D` is convex with planar interfaces.
+- `contact.hpp:22` states that there is no image-force lowering or tunnelling.
+- The hook already has separate electron and hole generation (`models.hpp:23`), so a majority-only pulse needs no
+  new source kind.
+- The fast-tier budget: 69.89 s + ≤ 2 s < 75 s.
+
+Open risks, for the owner:
+- (1) DT-Q2 A may reach the solves (16.2 (o)).
+- (2) Pao–Sah, Brews and Sah–Noyce–Shockley may be reachable only at PB.
+- (3) TVB-10 HF's redistribution model is this plan's derivation until the source is read. If the source differs,
+  the source wins and the change is recorded.
+
+**16.16 Rulings (owner, "choose recommended", 2026-11-06).** DT-Q1 through DT-Q12 and AP-Q1 through AP-Q6 are
+approved as recommended, on the plan as reviewed in 16.15:
+- TVB-05 (coaxial only) and TVB-06 are built in TVR-4 with the narrow insulator-only device change (DT-Q2 A).
+- TVB-19's injection is a time profile on the TVQ3 hook (DT-Q3 A).
+- TVB-17 is E against the QE model under DT-Q4's predicate.
+- 16.8's D and E criteria are frozen now. Each A-class ε_approx is frozen in step 1, before the code that runs it.
+- TVR-5 is split into 5a and 5b. Each gets its own proposal and criteria freeze.
+- No code was written with this plan. Step 1 (reading and derivations) is next, on the owner's "go".
+
+**16.17 Step 1: reading log (owner "go", 2026-11-06).** Open copies were fetched with curl and rendered page by
+page (WinRT PDF render). Nothing was taken from memory without a source line below.
+
+| Source | How read | Grade | What it settles |
+|---|---|---|---|
+| Haynes and Shockley, Phys. Rev. 81, 835 (1951) | Scan pp. 835–838 (ibm1401.computerhistory.org) | PA (model statement); formula PD | §III: with the emitter current small enough that conductivity modulation is neglected, the pulse fronts have "the customary integral of the error function" shape. Diffusion spreads them equally ahead and behind. Footnote 9: recombination multiplies by exp(−t/τ). §VI: N = N₀ exp(−t/τ). This is the linear drift–diffusion–decay equation under low injection. Its Gaussian Green's function is derived here (PD), and conductivity modulation (Herring, BSTJ 28, 401) is the departure that the low-injection predicate excludes. |
+| Pao and Sah, Solid-State Electronics 9, 927 (1966) | Primary paywalled. (1) H.-S. P. Wong, Stanford EE 316 slides 3-8 to 3-11 (hosted at dunham.ece.uw.edu); (2) Galup-Montoro, Schneider and Cunha, NSTI-Nanotech 2007, 474, eqs 1–2 | PB | Both give I_D = (μW/L)∫_{V_S}^{V_D}(−Q_I(V))dV. (1) gives Q_I = −q∫_{ψ_B}^{ψ_s}(n_i²/N_a)e^{(ψ−V)/V_T}/E(ψ,V)dψ, **with the inner lower limit ψ_B (the bulk Fermi potential), not 0**, and E² = (2kTN_a/ε)[(e^{−ψ/V_T} + ψ/V_T − 1) + (n_i²/N_a²)(e^{−V/V_T}(e^{ψ/V_T} − 1) − ψ/V_T)]. (2) uses the same double integral. Slide 3-11's V_G equation is an approximation (the slide says so), and is not used. |
+| Brews, Solid-State Electronics 21, 345 (1978) | Primary paywalled. Galup-Montoro et al. 2007, eqs 5, 7, 9, 10a, 10b; the EE 316 slide 3-13 gives only the strong-inversion pinned form | PC, used as PD (16.18 (e)) | The charge sheet Q_I(φ_s) = −C_ox(V_G − V_FB − φ_s − γ√(φ_s − φ_t)) (eq 7), and the current as drift plus diffusion (eq 9) integrated between the source and drain surface potentials φ_s0 and φ_sL (eqs 10a, 10b). The surface potential comes from eq 5, which carries an author-dependent term χ(φ_s) "to circumvent some (numerical) problems … near the flat-band condition". |
+| Brews, J. Appl. Phys. 45, 1276 (1974) (HF capacitance) | Abstract only (scilit) | PC on the premise; model PD | The HF capacitance of an inverted MOS-C keeps the total minority charge at its DC value, but lets the minority carriers move inside the inversion layer with a constant quasi-Fermi level across it. This is 16.2 (g)'s redistribution limit, which the plan derived independently. Brews reports a 7% error from neglecting that motion (strong inversion, 1e13 cm⁻³). Baccarani and Severi (IEEE, 1974) found ≤ 5% for practical dopings. |
+| Sah, Noyce and Shockley, Proc. IRE 45, 1228 (1957) | Paywalled; abstract only | — (attribution only) | The reference does not use their closed-form approximations. It integrates U(ψ) of the spec's SRH over the QE profile, which is the definition (PD). |
+| Shockley, BSTJ 28 (1949) | Read in TVR-0 | PA | Unchanged (I-9). |
+| Wachutka (1990) | Not needed | — | TVB-28's reference is NiTCAD's own T2/T4 model equations (DECISIONS Unit 23), derived to S and Π here (PD), as DC7 did. 31.29 already carries the thermopower function (PD). |
+| Nicollian and Brews, *MOS Physics and Technology*; Taur and Ning | Not reached | — | Not needed after Brews 1974's abstract and the two Pao–Sah reproductions; listed so they are not later cited as read. |
+
+**Found in reading: the two Pao–Sah reproductions differ in the bulk term, and the difference is Galup-Montoro's
+χ.**
+- Reproduction (1) has the electron term (n_i²/N_a²)(e^{−V}(e^{ψ} − 1) − ψ), in units of V_T.
+- Reproduction (2), eq 5 with χ = 0, has e^{−V}(e^{ψ} − ψ − 1).
+- They differ by (n_i²/N_a²)(1 − e^{−V})ψ. For V > 0 that term makes E² negative for 0 < ψ < ψ* ≈ 2(n_i²/N_a²)(1 −
+  e^{−V}) V_T, which is about 5e-16 V at N_a = 1e17. So form (1) is undefined near the bulk, and the inner integral
+  of n/E would diverge logarithmically there.
+- Physically, Pao–Sah's slice gives the electrons the channel's quasi-Fermi level V down to the bulk. In the bulk
+  they are in fact at the substrate's level. Both the cutoff at ψ_B and χ are ways of not counting those electrons.
+- NiTCAD solves the full problem, so the reference must bound the ambiguity, not choose between the forms. 16.18 (d)
+  does that.
+
+**16.18 Step 1: derivations (PD; each with the second method its code step will run at L0).**
+
+*(a) TVB-13, the energy-balance boundary layer λ.* Linearize ED2, ED3 and Poisson about the uniform state (n = N,
+field E₀, T_h with E_eff(T_h) = E₀, current J). Use modes e^{sx} with δJ = 0, unknown amplitudes (δψ, δn, δT), μ =
+μ(T_h), μ′ = dμ/dT, κ = (5/2)(k²/q)Nμ T_h and G = (3/2)kN/τ_w:
+- current: μqE₀ δn + μ′qE₀N δT − μNq s δψ + μk(T_h s δn + N s δT) = 0;
+- Poisson: ε s² δψ = q δn;
+- energy: (−κs² − (5/2)(k/q)J s + G) δT + J s δψ + (3/2)k(T_h − T_L)/τ_w δn = 0.
+
+Eliminating δψ gives s · P(s) = 0, with the quartic
+P(s) = [μkT_h s² + μqE₀ s − μNq²/ε](−κs² − (5/2)(k/q)Js + G) − (μ′qE₀N + μkNs)(Jq/ε + (3/2)k(T_h − T_L)s/τ_w).
+- λ = 2/min|Re s| over P's four roots: the slowest mode, times 2 for safety.
+- T_n is judged on the nodes with e^{−d/λ} ≤ 1e-13, d the distance to the nearer contact.
+- The roots come from the quartic's companion matrix. The reference has no non-symmetric eigensolver, so the code
+  step uses Durand–Kerner in dd, with its own L0 test.
+- Second method: the linearized ODE is solved by Chebyshev collocation on a long interval, and its decay fitted.
+- The signs follow ED2/ED3's conventions. The second method is what catches a sign slip, and it runs before the
+  predicate is used.
+
+*(b) TVB-10 HF, the redistribution limit.* Q_s(ψ_s, V) is TVB-09's KN charge with the electrons at a quasi-Fermi
+level V that is uniform across the layer (E² as in reproduction (1), with V; holes at equilibrium). HF keeps
+Q_n(ψ_s, V) at its DC value, so δV = −(∂Q_n/∂ψ_s / ∂Q_n/∂V) δψ_s, and
+C_s,HF = −(∂Q_s/∂ψ_s + ∂Q_s/∂V · δV/δψ_s), C_HF = (1/C_ox + 1/C_s,HF)⁻¹.
+- The partials come by complex step on the reference.
+- Second method: a central difference in dd on Q_s along the constrained path, Q_n held fixed by Brent.
+- Limits: in depletion C_s,HF → the depletion capacitance (Q_n → 0); with "V frozen" in place of "Q_n fixed" it is
+  the simpler formula Brews improved on, and the reference's report prints the difference.
+- ε_approx: the formula is exact for its limit. The departure from the limit is frequency-dependent, so it is measured
+  as the spread of NiTCAD's C over the judged decade: ε_HF = max |C(f_i) − C(f_j)| over three frequencies spanning a
+  decade, with the predicate ε_HF ≤ 1e-3 C (else NOT APPLICABLE, "not on the HF plateau").
+
+*(c) TVB-15 A: the injection ladder (replaces a hand-set ε_approx; DT-Q14).* DD departs from the linear model by
+O(Δn/N_A): the ambipolar field and the SRH nonlinearity, both first order. Rather than bound the constant, run DD at
+G = g₀ × {1, 2, 4, 8} with g₀ giving max Δn/N_A = 1e-3. Then:
+- the departure e(G) = ‖Δn_sim/G − Δn_lin/G‖∞ must have an observed order in G within [0.8, 1.3];
+- its extrapolation to G → 0 must agree with the E comparison's limit within that comparison's U.
+
+This measures the approximation error's order rather than assuming a constant. A departure of any other order is a
+finding.
+
+*(d) TVB-20 and 21: the channel-length limit (replaces a hand-set ε_approx; DT-Q13).* Pao–Sah is the L → ∞ limit of
+the 2D problem at fixed W/L scaling: the gradual-channel error falls with L, and the source and drain ends add
+ΔL/L. So run NiTCAD's long-channel MOSFET at L = L₀ × {1, 2, 4, 8} (L₀ ≥ 20 × the maximum depletion depth), with
+Q(L) = I_D L/W. Then:
+- the observed order of Q(L) in 1/L must lie in [0.8, 1.3], with the asymptotic check (order spread ≤ 0.1 on four
+  lengths);
+- Q_∞ by Richardson, with U_L = the GCI of the ladder;
+- ε_approx = U_L + ε_cutoff, where ε_cutoff = |I_PS(cutoff ψ_B) − I_PS(cutoff ψ_B/2)| + |I_PS(form 1) − I_PS(form 2)|,
+  from the reference itself (16.17's finding);
+- applicability: V_G with ψ_s(V_S) ≥ ψ_B + 3V_T (weak inversion and above). Deeper subthreshold is NOT APPLICABLE,
+  because there the bulk ambiguity is not small. Constant μ, no field mobility, no Lombardi, Boltzmann, no BGN.
+
+S (TVB-21) is taken from the same ladder: d log₁₀ I/dV_G by a dd central difference on the reference, and the
+ladder's Q_∞ at the V_G grid.
+- Second method for the reference: Galup-Montoro's eq 4, g_d = −(μW/L)Q_I(V_D), against a dd difference of I_D in V_D.
+  It is an identity of the double integral.
+
+*(e) Brews' charge sheet (second A, diagnostic).* Integrating eq 9 with eq 7 between φ_s0 and φ_sL gives eqs 10a
+and 10b. That integration is redone here (PD), and the second method is quadrature of eq 9 in dd. It is reported
+beside Pao–Sah, as Brews himself compared it, and is never gated.
+
+*(f) TVB-16 ε_approx (first-order terms, each measured or computed, summed as magnitudes per TVD-17).*
+ε_J = J_ref × [ max(Δn/N) at the two depletion edges (measured on the solved state) + Δφ/V_T (the measured
+quasi-Fermi drop across the depletion region) + 3L_D/(W − x_edge) (the edge's definition; short base only) ].
+- Applicability: ε_J ≤ 0.1 J_ref (else NOT APPLICABLE).
+- Metric: the log error, with q_floor the current resolution (Units 15 and 32).
+- In (ii) the SNS integral is part of J_ref, and the reverse exponent is judged as d ln|J|/d ln(V_bi − V) against the
+  reference's own exponent.
+
+*(g) TVB-18 ε_approx.* ε_Y = |Y_ref| × [ max(Δn/N) + Δφ/V_T + J_SNS/J_diff (the depletion recombination eq 4.23
+omits) + 3L_D/|L_eff(ω)| ], with L_eff = √(Dτ/(1 + iωτ)).
+- Applicability: |L_eff(ω)| ≥ 30 L_D and ε_Y ≤ 0.1 |Y_ref|.
+- Second method for the reference: the linearized minority ODE solved directly by complex Chebyshev collocation.
+
+*(h) TVB-19 references (E).* Dielectric relaxation: Q(t) = Q₀e^{−t/τ_d} exactly for the linear majority equation.
+Haynes–Shockley: Δp(x, t) = (G₀/√(4πDt)) exp(−(x − x₀ − μE t)²/(4Dt) − t/τ), convolved with the source's spatial
+Gaussian (closed form: the variances add) and its time profile (Gauss–Kronrod in dd). Second method: the PDE by
+method of lines with Dormand–Prince.
+
+**16.19 Proposed A-class criteria (frozen on the owner's ruling, DT-Q13–Q17, before any code that runs them).**
+
+| ID | Criterion | Applicability (else NOT APPLICABLE, predicate and value printed) |
+|---|---|---|
+| TVB-10 HF | \|C_sim − C_ref\| ≤ U_num + U_ref + ε_HF; ε_HF from 16.18 (b) | plateau spread ≤ 1e-3 C; strong inversion and depletion V_G grid |
+| TVB-15 A | departure order in G ∈ [0.8, 1.3]; the G → 0 extrapolation agrees with the E comparison within its U | max Δn/N_A ≤ 1e-1 at the largest G |
+| TVB-16 | log error ≤ log₁₀(1 + (U_num + U_ref + ε_J)/J_ref) | ε_J ≤ 0.1 J_ref; V ∈ [0.2, 0.6] V forward, [−5, −0.5] V reverse ((ii) only) |
+| TVB-18 | \|Y_sim − Y_ref\| ≤ U_num + U_ref + ε_Y, magnitude and phase | 16.18 (g) |
+| TVB-20 | the L-ladder order ∈ [0.8, 1.3], asymptotic check passed; \|Q_∞ − Q_PS\| ≤ U_num + U_ref + ε_approx; ε_approx ≤ 1e-2 Q_PS (else NOT EVALUATED) | 16.18 (d) |
+| TVB-21 | \|S_∞ − S_PS\| ≤ U_num + U_ref + ε_approx (the same rule on the derivative) | as TVB-20, at V_D ≤ 3V_T |
+
+**16.20 Owner questions from step 1 (recommendations in the last column).**
+
+| # | Question | Recommendation |
+|---|---|---|
+| DT-Q13 | TVB-20/21: judge NiTCAD's channel-length limit (four lengths, Richardson) against Pao–Sah, with ε_approx = the ladder's GCI + the reference's own bulk-term ambiguity, instead of a hand-set gradual-channel bound? | Yes. It measures the approximation's order instead of assuming its size |
+| DT-Q14 | TVB-15 A as an injection ladder (order in G, G → 0 limit = the E case) instead of a constant times Δn/N? | Yes, for the same reason |
+| DT-Q15 | TVB-13: λ from the linearized quartic (16.18 (a)), × 2, with a Durand–Kerner root finder added to the reference (L0-tested) and the Chebyshev decay fit as the second method? | Yes |
+| DT-Q16 | TVB-16/18: ε_approx as the sum of the named first-order terms of 16.18 (f), (g), each measured on the solved state or computed in the reference, with ε ≤ 0.1 of the reference as the applicability bound? | Yes. No source states a bound; each term is a named mechanism |
+| DT-Q17 | TVB-10 HF: the redistribution limit (Brews 1974's premise, abstract only; derived here), ε from the measured plateau spread? | Yes. The "frozen V" variant printed as a diagnostic |
+| DT-Q18 | Provenance: Pao–Sah PB (two reproductions agreeing on the double integral); Brews 1978 PC used only as PD with quadrature; SNS PD (the definition); Brews 1974 PD with the abstract recorded? | Yes |
+
+Step 1 is complete apart from these rulings. Nothing in 16.8's frozen D/E criteria changed.
+
+**16.21 Rulings on step 1 (owner "go" after the recommendations, 2026-11-06).** DT-Q13 through DT-Q18 are approved
+as recommended. The A-class criteria of 16.19 are **frozen** from this commit, before any code that runs them (TVM2).
+
+**16.22 Step 2, the reach of DT-Q2 A, measured before any change (16.2 (o)): it exceeds the ruled bound.** Removing
+`device.cpp:75` and choosing an electrode node as the reference node is not enough. Four places in `assemble` take
+a *semiconductor* from `Device::reference_node()`:
+- `scaling.cpp:20`: the material behind the density and potential scales;
+- `scaled_device.cpp:74`: the intrinsic-level depth that fixes the potential's reference;
+- `gate_tunnels.cpp:64`: the same depth;
+- `electrothermal.cpp:111`: κ_ref, by the reference node's region.
+
+An insulator-only device needs a new source for each: for example a `DeviceDescription::reference_material`, a
+semiconductor used only for scales, plus refusals of tunnelling and electrothermal. That touches `device` and three
+or four `assemble` files. 16.2 (o) says to stop for the owner, so step 2 has stopped here. No code is written.
+
+**A route that needs no change to NiTCAD (found while measuring).** `check_topology` (`device.cpp:281`) already
+accepts a mesh of several connected parts: each part needs an ohmic contact or an electrode. So the benchmark device
+can be the **capacitor component plus a disjoint silicon island** (a short n-type bar with one ohmic contact):
+- The island supplies the reference node, and hence every scale, unchanged.
+- No edge joins the two parts, so the box method's Poisson rows of the capacitor see nothing of the island. The
+  electrodes' charges are exactly the capacitor's.
+- Assembling the mesh: the two SimplexMeshes are concatenated with offset node ids (a test-side helper in `verify`,
+  with its own test: each part's dual equals its own dual alone), then passed through `make_dual_mesh`.
+  `make_dual_mesh` has no connectivity rule (`simplex_mesh.hpp:63`), and its P2 check only bites if the island sits
+  inside a boundary facet's diametral circle, so the island is placed far away. `certify_interfaces` then certifies
+  the union.
+- In 1D, a graph mesh of the two chains with `certify_interfaces_1d`, which judges only edges joining two regions.
+- TVB-06's frozen "2D tensor" family: each rectangle is split into two right triangles. Their circumcentres are the
+  rectangle centres, so the dual is the tensor box method. The test asserts that equality before the benchmark uses it.
+- Risk, to be measured in this route's first commit: whether the 2D generator accepts the coaxial annulus (sectors
+  of one region whose union has a hole). If it does not, TVB-05 needs the owner again.
+
+**DT-Q19.** (A) DT-Q2 A as ruled, widened: `reference_material` in `device` plus the `assemble` changes above, each
+bit-identical for devices with a semiconductor, with their own tests. (A′) The disjoint-island fixture: no NiTCAD
+change at all; the union helper and its test live in `verify`. (B) TVB-05/06 unbuildable. **Recommendation: A′.** It
+is exact by construction (no shared edge), keeps NiTCAD untouched as CV-Q3 intended, and its one assumption (the parts
+are independent) is tested directly rather than argued.
+
+**DT-Q19 ruling: A** (owner, "A", 2026-11-06), not the recommended A′.
+
+**16.23 Step 2 as built (DT-Q19 A).**
+
+- `device`:
+  - `DeviceDescription::reference_material` (optional). A description with no semiconductor region must name one, and its temperature is checked against it. A description with a semiconductor region must not name one.
+  - `Device::has_semiconductor()` and `Device::reference_material()`. For a device with a semiconductor, `reference_material()` returns the same object as `material(reference_node())`, so every existing device is bit-identical by construction. A test asserts the address equality.
+  - An insulator-only device's reference node is its lowest electrode node. Contact nodes are validated strictly increasing, so it is the first node of each electrode.
+- `assemble`:
+  - `scaling.cpp`, `scaled_device.cpp` and `gate_tunnels.cpp` read `reference_material()`.
+  - `drift_diffusion` refuses the electrothermal model and any tunnelling contact on an insulator-only device.
+- `io` (beyond DT-Q19's `device` + `assemble`; see DT-Q21): `save_device` refuses an insulator-only device, because the device-file format stores no reference material. Nothing is written.
+- Tests:
+  - `device/insulator_test`: the rules above.
+  - `solve/insulator_test`: a 1D SiO₂ plate capacitor through `solve_small_signal`. Im Y/ω = ±C and Re Y ≈ 0 to 64 ε N², at 1 kHz and 1 GHz, at 0 V and 1 V. Both refusals are also checked.
+  - `io/device_file_test`: the refusal.
+- `verify/reference/capacitor`:
+  - ε₀ in F/cm from CODATA 2018's printed digits (`codata2018::to_dd`, shift −2).
+  - `series_capacitance` and `coaxial_capacitance` in double-double.
+  - L0 tests: each form against a Gauss–Kronrod integral of its elastance density (≤ 16 and 64 u_dd), the one-layer and split-layer identities, and the thin-shell limit (≤ 1e-6).
+- Mutation: 14 mutants (6 device, 2 assemble, 6 capacitor), all caught. The tunnelling-refusal mutant survived the first run, and the test was added before the rerun.
+- Suites:
+  - Release, the whole suite with the device change (`full` label and app tests excluded, −j 4): 171/171 pass.
+  - Debug serial verify (`ctest -R verify -LE full`): 62/62 pass in 74.97 s and 76.82 s.
+    - TVR-4's share is 0.13 s (`device_theory` 0.10 s, `capacitor` 0.03 s), within 16.7's 2 s.
+    - The rest is the baseline: the unchanged tests ran 4–7 % above the 69.89 s of 15.20 (`fermi_dirac` +1.0 s, C-transient +1.1 s), as in step 8's 71–80 s under load.
+  - The first Debug run had TVB-06's full case (2D 32²) under `[tvr4]`, costing 5 s. 16.7 puts it in `full`, so it moved to `[.tvr4_full]`.
+- **TVB-06 (D): pass at every level**, against a criterion of 64 ε N² (1.5e-11 at N = 32, 2.3e-10 at N = 128):
+
+  | Level | C (−Im Y_ab/ω) | C (Im Y_aa/ω) | E_ox/E_hk |
+  |---|---|---|---|
+  | 1D N = 32 | 2.9e-15 | 5.3e-15 | 7.9e-16 |
+  | 1D N = 128 | 2.2e-14 | 2.4e-14 | 6.3e-16 |
+  | 2D 32² | 3.6e-14 | 1.4e-15 | 7.9e-16 |
+
+- **TVB-05 (E): the 16.22 risk did not occur.** `generate_mesh` accepts the annulus of M quadrilateral sectors.
+  - Relative errors: 3.687e-5 at M = 256, 1.513e-4 at 128, 6.238e-4 at 64 and 2.729e-3 at 32. The backward errors are ≤ 7.2e-16.
+  - (b) accuracy: **pass** (3.7e-5 ≤ 1e-3).
+  - (a) order: the successive orders, finest pair first, are 2.0545, 2.0825 and 2.1846. p̂ = 2.054 is in the band [1.8, 2.3]. The spread is **0.1021**, above the asymptotic-range limit of 0.1 (§4.2, `metrics.hpp`), so `judge_order` returns **not_evaluated** ("not in the asymptotic range").
+  - The excess comes from the coarsest pair. At M = 32, h = 1.3e-5 cm, which is a/8.
+  - The frozen expected outcome (pass) is unmet, so `verify_benchmark.tvr4_full` fails (37 s in Release). Nothing has been changed after the run (TVM2).
+
+**DT-Q20 (TVB-05's order).**
+- (A) Record it as found: the order comparison is not_evaluated, with p̂ = 2.054, the spread of 0.102 and the coarsest pair named. The frozen expected outcome in the test becomes not_evaluated for that comparison, and the finest-accuracy pass stands. No criterion and no ladder changes.
+- (B) Shift the ladder one level finer (M = 64…512), so that the four-level check excludes M = 32. This changes the frozen ladder (16.8) after a run, which TVM2 forbids in spirit. It also costs about 4× the finest level.
+- (C) Keep the ladder and judge p̂ on the finest three levels (the 3-level rule of 14.7). This changes the method after the run, the same objection as B.
+
+**Recommendation: A.** It is the only option that leaves 16.8 as frozen. The miss is 2 % of the limit on the coarsest pair, and the accuracy passes with a factor of 27 to spare.
+
+**DT-Q21 (the `io` refusal, outside DT-Q19's `device` + `assemble`).**
+- (A) Keep it. `save_device` refuses an insulator-only device, and the format is unchanged.
+- (B) Widen the device-file format to store `reference_material`. This is a format change: the version, the reader, the writer and the round-trip tests.
+- (C) Remove the refusal. `save_device` would then write a file whose `load_device` fails ("needs at least one semiconductor region or a reference_material").
+
+**Recommendation: A.** It is the smallest change that keeps the save–load round trip honest. B can follow if a deck ever needs an insulator-only device.
+
+**16.24 Rulings DT-Q20 and DT-Q21** (owner, "choose recommended", 2026-11-06).
+- **DT-Q20: A.** TVB-05 is recorded as found.
+  - The order comparison is not_evaluated: p̂ = 2.054 is in the band, but the spread is 0.1021, from the M = 32 pair.
+  - The finest-accuracy comparison passes, and the overall outcome is not_evaluated.
+  - The frozen expected outcome in `device_theory_test` now states this, so `verify_benchmark.tvr4_full` asserts it.
+  - 16.8 (criteria and ladder) is unchanged.
+- **DT-Q21: A.** `save_device` keeps refusing an insulator-only device, and the device-file format is unchanged.
+  Widening the format (B) waits until a deck needs an insulator-only device.
+
+**16.25 Step 3 as built: the hook's time profile (DT-Q3 A).**
+- `assemble/models.hpp`:
+  - `ManufacturedSources` gains `profile_times_s` (τ₀ < τ₁ < …) and `profile_weights` (one entry more than the times).
+  - `manufactured_weight(ms, t)` gives w(t), piecewise constant and left-continuous: w₀ for t ≤ τ₀ (the steady state at t = 0 included), w_k on (τ_{k−1}, τ_k], and the last weight after the last time.
+  - With both vectors empty, w ≡ 1.
+- `DriftDiffusion::TimeStep` gains `time_s`, the step's end time, defaulting to 0. Existing aggregate initialisers are unchanged.
+- The manufactured term multiplies each source by w at the step's end time, or by w(0) with no step. Without a profile w = 1, and 1·y = y exactly, so every result is bit-identical. A test asserts that a profile of ones is bit-identical to none.
+- `create` refuses a malformed profile:
+  - a weight count other than the time count + 1;
+  - a time that is not finite, not positive, or not strictly increasing;
+  - a weight that is not finite.
+- `solve_transient` adds every τ_k in (0, t_end] to its restarts, so steps land on the jumps and restart with backward Euler, as at a waveform breakpoint. It passes t_new to each step. Each step therefore sees one weight, and a piecewise-constant source is integrated exactly.
+- The profile is not in the deck vocabulary or the run record, as for TVQ3.
+- Tests:
+  - `assemble/manufactured_test`, three new cases: w(t) at and between the jumps; the term against w × the unweighted term at five times (1D and 2D), with no step meaning w(0); the bit-identity; and the refusals, 14 inputs.
+  - `solve/transient_test`, one new case: a generation pulse G = 1e24 cm⁻³ s⁻¹ on (1, 2] ns in a 100 µm n-type bar (1e17, recombination off, fixed steps of 0.1 ns).
+    - Steps land on both jumps and restart there.
+    - Before the pulse the fields are the sourceless run's, bit for bit (10 snapshots).
+    - At τ₁ the excess n and p in the middle are G·Δt = 1e15 to the printed digits (criterion 1e-3). At t_end they are still 1e15 (criterion 1e-2).
+- Mutation: 16 mutants (2 models, 6 term, 5 validation, 3 transient), all caught. They include evaluating w at the step's start, dropping the restart, and `upper_bound` for `lower_bound`.
+- Suite: Release, the whole suite (`full` label and app tests excluded, −j 4): 174/174 pass.
+
+**16.26 Step 4 as built: minority_diffusion and TVB-15.**
+- `verify/reference/minority_diffusion` (PD, base-free):
+  - `srh_linear_inverse_lifetime`: 1/τ = (n₀ + p₀) / (τ_p(n₀ + n_ie) + τ_n(p₀ + n_ie)).
+  - `minority_green`: the Dirichlet Green's function of −D u'' + u/τ, in an overflow-free exponential form.
+  - `minority_excess`: the Green's-function integral of a Gaussian G, split at s = x, by qag15 in double-double to 0.5e-28.
+  - `minority_collocation` (the second method): 8 pieces of degree 40, patched in u and u′, as a dense double-double LU.
+- L0 tests (`verify.minority_diffusion`, 0.5 s in Debug):
+  - the lifetime against a double-double difference quotient of the full SRH rate (≤ 1e-14);
+  - the Green's function against its sinh form (≤ 64 u_dd), its symmetry and its derivative jump −1/D;
+  - the integral against the infinite-domain erfc closed form on a bar with kL = 200 (≤ 1e-25);
+  - the collocation against the integral (≤ 1e-22 of the peak), its tail estimate, and the throws.
+- TVB-15 (full tier only, 16.7):
+  - The bar: silicon, N_A = 1e16, L = 1 mm, ohmic ends, SRH only.
+  - G is a Gaussian, σ = 100 µm, at L/2, through the TVQ3 hook.
+  - Inputs (I1): D = μ_n V_T = 32.26 cm²/s and τ = 8.333e-6 s, giving a diffusion length of 164 µm.
+  - The reference: I3 agreement 2.0e-28 of the peak; U_ref 2.0e-28.
+  - **E (16.8): pass.** p̂ = 1.9993 (orders 1.9993, 1.9987, 1.9952; spread 0.0035). The finest error (N = 512) is 8.14e-6 against 1e-4. Max Δn/N_A = 5.0e-9 on every level (predicate 1e-8). U_iter ≤ 9.5e-16.
+  - **A (16.19): pass.** The injection ladder at N = 512, g₀ for a peak of 1e-3 N_A:
+    - the departure's order in G is 0.995 (then 0.990), in [0.8, 1.3];
+    - the G → 0 limit by Richardson differs from the E solve by 2.93e-6, within U_E = 1.02e-5 (U_disc by the finest pair's GCI, F_s = 1.25, + U_iter + U_ref);
+    - max Δn/N_A at 8 g₀ is 8.0e-3 (applicability 1e-1);
+    - the ladder's U_iter is ≤ 2.9e-15, below a tenth of the smallest difference (CV-Q8, applied to the ladder).
+  - The A record states its approximation error as measured (the `contract` rule for A).
+- Construction change before commit (no criterion or ladder touched, TVM2):
+  - The first build used L = 100 µm and σ = 10 µm. It passed all four comparisons (E 6.0e-6, p̂ 1.999; A order 0.997, limit 2.8e-6 within 7.6e-6).
+  - A mutation then showed that a bar shorter than the diffusion length barely depends on τ.
+  - The bar was lengthened to the spec's "long" (about 6 diffusion lengths, the same σ/L) and the run above was repeated.
+- Mutation:
+  - reference: 9 mutants, all caught. The tail-estimate mutant survived until the test asserted the estimate is computed.
+  - benchmark: 13 mutants, all caught, including τ × 1.01, D × 1.01, G × 1.001, the predicates, the limit bound, the ladder's CV-Q8 rule and the U_ref gate.
+  - One mutant, τ = τ_n in place of the linearization, survives. It is a relative 1e-6 change (n_ie/p₀), below the 1e-4 tolerance, so the benchmark cannot resolve it. This is recorded, not hidden.
+- Timing and suites:
+  - Release `verify_benchmark.tvr4_full` (TVB-05, TVB-06 2D, TVB-15) passes in 35.6 s, inside 16.7's 120 s.
+  - Debug serial verify passes, 63/63 in 71.7 s.
+  - `registry`: 44 benchmarks, TVB-15 in `full`.
+
+**16.27 Step 5 as built: qe_junction and TVB-17.**
+- `verify/reference/qe_junction` (PD, base-free):
+  - The QE junction at bias V is TVR-2's equilibrium junction with n_i → m = n_i e^{V/2V_T}, the potential shifted by V/2. Bias enters only through m. Derived in the header; the L0 test checks it against `pn_junction` at m.
+  - Q = ε E_max = √(2 q ε V_T Φ_n(u_j)), with u_j by Brent in double-double.
+  - C = −dQ/dV by one dual-number Newton step from the converged root. It is exact to rounding (du_j/dv = −F_v/F_u).
+  - The second method is complex step (h = 1e-200) on Q(v) with complex Newton for u_j.
+  - **Plan deviation (method only):** 16.3 says "C by complex step on Q(V)", which is the second method here. Complex step cannot run through a double-double Brent root, so the primary is the dual number.
+  - A guard refuses m < 1e-140 cm⁻³ (about −15 V at 300 K), where m² leaves the normal range.
+- Derived (PD, recorded because 16.3 expected a reportable "ε/W difference"):
+  - Dropping the junction's minority terms and taking n_n = N_D, p_p = N_A turns the first integral into exactly ε/W with V_bi − V − 2V_T.
+  - So ε/W(−2V_T) equals the QE C up to terms exponentially small in the barrier and m²/N².
+  - Measured: 9.1e-8 at −0.5 V, 1.4e-10 at −1 V, 4.6e-16 at −2 V.
+- L0 tests (`verify.qe_junction`):
+  - zero bias against `pn_junction` (≤ 1e-28);
+  - the shift identity at four biases (≤ 1e-15, the double rounding of m);
+  - dual C against complex step (≤ 1e-13) and against a Richardson central difference with exact 2⁻²⁰ steps (≤ 1e-14);
+  - ε/W converging to C;
+  - the range guard and the input errors.
+- Mutation (reference): 11 mutants, 10 caught. The survivor is an equivalent mutant: the derivative part of F_u, which drops out of the Newton step's derivative at the root. The range-guard mutant survived until a −18 V case refused only by the guard was added.
+- TVB-17 (full tier only):
+  - The diode: TVB-07's junction on [−1.5, 1.5] µm, no G−R, the anode on the p side.
+  - V = −0.5, −1, −2 V; C = Im Y_aa/ω at 1 kHz; N = 64…512.
+  - DT-Q4: applicable at every level, with quasi-Fermi drops ≤ 5.6e-11 V against 1e-3 V_T = 2.6e-5 V.
+  - U_ref ≤ 1e-11: dual vs complex step ≤ 4.6e-16, plus the contact tail of 1.9e-13, 8.6e-13 and 9.9e-12.
+  - U_iter ≤ 5.9e-9, below U_disc/10 everywhere.
+
+  | V | finest error (N = 512) | (b) ≤ 1e-3 | orders, finest pair first | spread | (a) |
+  |---|---|---|---|---|---|
+  | −0.5 V | 5.65e-5 | pass | 1.9986, 2.0010, 2.2256 | 0.225 | not_evaluated |
+  | −1 V | 3.96e-5 | pass | 2.0003, 2.0011, 1.8184 | 0.183 | not_evaluated |
+  | −2 V | 2.48e-5 | pass | 2.0002, 2.0007, 1.8675 | 0.133 | not_evaluated |
+
+  - The coarsest pair (N = 64, h = 47.6 nm, about the 41 nm p-side Debye length) puts the spread above the asymptotic limit of 0.1. The finer pairs agree with 2 to 1e-3.
+  - The frozen expected outcome (pass) is unmet on the three order comparisons, so `verify_benchmark.tvr4_full` fails (36.6 s). Nothing has been changed after the run (TVM2).
+  - The benchmark's own mutation run waits for the ruling: with the test failing, every mutant would look caught.
+- Timing: Debug serial verify passes, 64/64 in 72.5 s (`qe_junction` 0.02 s). `registry`: 45 benchmarks, TVB-17 in `full`.
+
+**DT-Q22 (TVB-17's order).**
+- (A) Record it as found, as DT-Q20 A: the three order comparisons are not_evaluated, with the orders and spreads above, and the three finest-accuracy passes stand. No criterion, ladder or construction changes.
+- (B) Shorten the diode to TVB-07's L = 1 µm per side, so that h(64) = 32 nm. This changes my construction after a run, to make a check pass, so it is TVM2's concern again. The contact tail would rise to about 3e-6 at −2 V, still within U_ref ≤ 1e-4. Whether the spread would then meet 0.1 is not known.
+- (C) Judge p̂ on the finest three levels (14.7's 3-level rule). This changes the method after the run.
+
+**Recommendation: A.** It matches DT-Q20 and leaves 16.8 untouched. The finest pairs show the scheme's order cleanly at every bias.
+
+**16.28 Ruling DT-Q22** (owner, "choose recommended", 2026-11-06).
+- **DT-Q22: A.** TVB-17 is recorded as found, as DT-Q20 A.
+  - At each of V = −0.5, −1 and −2 V, the C_j order comparison is not_evaluated ("not in the asymptotic range"): p̂ is 1.9986, 2.0003 and 2.0002 (finest pair), in the band, with spreads 0.225, 0.183 and 0.133 from the N = 64 pair.
+  - The three finest-accuracy comparisons pass (5.65e-5, 3.96e-5, 2.48e-5 against ≤ 1e-3), and the overall outcome is not_evaluated.
+  - The frozen expected outcome in `device_theory_test` now states this (each order not_evaluated with p̂ in [1.8, 2.3], each finest pass), so `verify_benchmark.tvr4_full` asserts it and passes.
+  - 16.8 (criteria and ladder) and TVB-17's construction (16.27) are unchanged.
+- Mutation (TVB-17 benchmark, against the new expected outcome): 12 of 12 caught. **Invalid, corrected in 16.30:** the filter matched no test; the rerun gives 11 of 12. The mutants were the DT-Q4 thresholds (electron and hole), the density cut, the U_ref gate, C_ref's sign, the tolerance, a 1 % scale on C, h, the frequency (1e11 Hz), N_D, p_th and the finest-accuracy judgement.
+- `verify_benchmark.tvr4_full` passes.
+
+**16.29 Found before step 6's code: two gaps (owner questions DT-Q23, DT-Q24).**
+- **(a) The (h, tol) factorial was left out of steps 2, 4 and 5.**
+  - 16.2 (p), approved with the plan (16.15, 16.16), requires every E and A benchmark to run the 2×2 (h, tol) factorial at its finest level and report ε_int. An ε_int above 10 % of U blocks an E pass (§4.1).
+  - TVB-05, TVB-15 (E and A) and TVB-17 do not run it. `reference::interaction_contrast` and `combine_uncertainty` exist (metrics.hpp), but no benchmark calls them. Their recorded passes (16.23, 16.26, 16.28) therefore lack a term the plan requires.
+  - This is my omission, not a finding about NiTCAD. Nothing has been changed.
+- **(b) TVB-16's ideality and reverse exponent have no frozen tolerance.** 16.19 freezes only the log-error rule on J(V). 16.18 (f) says the reverse exponent "is judged" against the reference's own exponent, and 16.4 lists ideality, but neither has a criterion.
+
+**DT-Q23 (the factorial).**
+- (A) Before step 6, add it to TVB-05, TVB-15 and TVB-17 in one fix commit, and from now on to every E/A benchmark.
+  - At the finest level: e(h, tol), e(h, tol/100), e(h/2, tol) and e(h/2, tol/100), with tol the Newton `tol_update` (1e-12 → 1e-14) and h/2 one more level.
+  - ε_int is reported, and enters U by §4.1. If it exceeds 10 % of U, the E pass is blocked.
+  - The frozen expected outcomes would change only if a pass is blocked, and that would be recorded as found.
+  - If tol/100 cannot be reached (Newton stalls at rounding), that level is recorded as not_evaluated with the measured update, not loosened.
+- (B) Defer it to the close-out (step 14), for all TVR-4 benchmarks at once.
+
+**Recommendation: A.** The rule applies to each benchmark. Building TVB-16 onward with it, while 05/15/17 lack it, would leave the unit inconsistent.
+
+**DT-Q24 (TVB-16's derivative quantities).**
+- (A) Judge the ideality n = (1/V_T) dV/d ln J (forward) and the reverse exponent d ln|J|/d ln(V_bi − V) ((ii) only) by 16.19's rule applied to the derivative, as TVB-21 does for S:
+  - |x_sim − x_ref| ≤ U_num + U_ref + ε_x;
+  - U_num is the GCI of x on the ladder, and U_ref the reference's second-method difference;
+  - ε_x carries ε_J from the two biases of the difference: ε_x = |x_ref| (ε_J,k/J_k + ε_J,k+1/J_k+1) / |Δ ln y|, with y = J for n and y = V_bi − V for the exponent;
+  - applicability is as for J at both biases.
+- (B) Report n and the exponent as diagnostics only. J(V) at each bias is already gated by the log error.
+
+**Recommendation: A.** 16.18 (f) says the exponent is judged, and this rule is the one already frozen for S. ε_x is conservative (a sum of magnitudes).
+
+**16.30 Rulings DT-Q23 and DT-Q24** (owner, "choose recommended for commercial TCAD", 2026-11-06), and the factorial fix as built.
+- **DT-Q23: A.** The (h, tol) factorial is added to TVB-05, TVB-15 and TVB-17 before step 6, and is required of every later E/A benchmark.
+- **DT-Q24: A.** TVB-16's ideality and reverse exponent are judged by 16.19's rule applied to the derivative (16.29).
+- **The helper** (`benchmark::factorial`, `block_if_interacting`, registry.hpp) wraps `reference::interaction_contrast` and `combine_uncertainty`.
+  - An E pass becomes not_evaluated with interacting errors, or when the factorial was not evaluated (4.3).
+  - Fail, finding and not_applicable outcomes are kept.
+  - L0 tests are in `registry_test`.
+- **Results.** tol is the Newton `tol_update`, 1e-12 → 1e-14. U at (h, tol) = U_disc (GCI of the finest pair, F_s 1.25) + U_iter + U_ref.
+
+  | Benchmark | levels (h, h/2) | ε_int | U | interacting |
+  |---|---|---|---|---|
+  | TVB-17, −0.5 V | N = 512, 1024 | 8.0e-13 | 7.06e-5 | no |
+  | TVB-17, −1 V | N = 512, 1024 | −1.3e-12 | 4.95e-5 | no |
+  | TVB-17, −2 V | N = 512, 1024 | −1.7e-12 | 3.11e-5 | no |
+  | TVB-15 E | N = 512, 1023 | 0 (tol/100 rounds to the same state) | 1.02e-5 | no |
+  | TVB-05 | M = 256, 512 | 0 (the AC solve is linear and direct) | 4.61e-5 | no |
+
+  - TVB-15's A limit is now judged against U_E with |ε_int| included. Its frozen outcomes are unchanged.
+  - TVB-17's frozen outcome (16.28) is unchanged.
+- **TVB-05's h/2 level is beyond 16.7's CI budget.**
+  - At M = 512 (131k nodes), mesh generation takes 70 s and each solve about 190 s. tvr4_full is 45 s locally without it.
+  - Under 16.7, it runs in the `nightly` tier: the local `verify_full.tvb05`, registered with NITCAD_VERIFY_FULL_TIER. There the frozen outcome is: order not_evaluated (16.24), finest pass, ε_int reported and not interacting.
+  - In `full` (and so in tvr4_full on CI), the factorial is not evaluated. TVB-05's finest accuracy is therefore held at not_evaluated: "the (h, tol) factorial was not evaluated". Its error, 3.7e-5, is still printed and asserted ≤ 1e-3.
+  - This is the one frozen outcome that changes: TVB-05's finest pass in `full` becomes not_evaluated. TVB-05's overall outcome was already not_evaluated.
+- **Found in my own mutation runs: 16.28's "12 of 12 caught" was invalid.**
+  - Those mutants were run with the test's full name as the Catch2 filter. That name contains a comma, which Catch2 reads as a separator, so no test matched. The binary then exited non-zero, and every mutant counted as caught.
+  - Rerun with a comma-free filter (`TVB-17*`): 11 of 12 benchmark mutants are caught. The survivor is p_th = 1: the order is never judged (16.28), so p_th cannot be observed.
+  - Of the 4 factorial-wiring mutants, 3 are caught. The survivor inflates U_disc 1e9-fold: with no interaction, U's size cannot be observed.
+  - No other mutation run in TVR-4 used a filter with a comma. Those runs used tags or comma-free wildcards, checked against this session's transcript.
+  - TVB-15's 3 wiring mutants are all caught.
+  - In the helper, 6 of 7 mutants are caught after one added check (a not_applicable outcome kept). The survivor, `ok = value == value`, is equivalent, since the value is finite whenever the status is ok.
+- **Checks.**
+  - `verify_benchmark.tvr4_full` passes in 45.2 s (36.6 s before), and `verify_full.tvb05` in 652 s (local; run alongside other work).
+  - `[registry]` passes. Debug serial verify passes 64/64 in 75.5, 74.3 and 74.3 s (72.5 s at step 5). The fast tier is unchanged, and the slowest tests (fermi_dirac 21.6 s, consistency.transient 15.3 s) are untouched. So this is the machine's spread, but the 75 s budget now has under 1 s of margin, for the close-out (step 14).
+
+**16.31 Step 6a as built: the diode reference (`verify/reference/diode`); DT-Q25 open before TVB-16's code.**
+- **`diode_current(in, V)`** builds on TVR-2's equilibrium junction at m = n_i e^(v/2) (qe_junction's shift identity):
+  - edges x_p = Q/(qN_A) and x_n = Q/(qN_D) from pn_junction at m, and bases W′ = L − x;
+  - Shockley's finite-base law q(e^v − 1)[D n₀/L coth(W′/L)] per side, with L = √(Dτ) and 1/τ SRH's exact linearization at the bulk. Without SRH it is the short-base law q(e^v − 1) D n₀/W′;
+  - the SNS current q∫U dx over [−x_p, x_n] on the reference's QE profile, as ∫U(u)/|u′(u)| du by Gauss–Kronrod in u, each side with its own lifetimes;
+  - second method: tanh-sinh on the same integrals (16.3). The change of variable is checked at L0 against U(x) integrated in x with u(x) from pn_potential.
+- **L0 (`diode_test`)**:
+  - no SRH: the short-base law with edges recomputed from qe_junction's charge, to 1e-13;
+  - long base (50 L) and short base (W′/L ~ 1e-6) limits of the coth law;
+  - L against √(Dτ_n) on the p side and √(Dτ_p) on the n side;
+  - the reported bulk minorities; SNS: the two quadratures agree; the sign; the exact 1/τ scaling;
+  - at −5 V: below the bound q n_i(x_p + x_n)/(τ_n + τ_p), and within 10 % (measured 3.9 %) of the depletion-approximation estimate q n_i ΣW_eff/(τ_n + τ_p);
+  - the x-space integral agrees to 1e-8;
+  - zero current at zero bias, and the refusals.
+- **Found while building (my errors, fixed before commit):**
+  - (a) The n side's SRH linearization got its electron and hole densities swapped, so the hole lifetime came out as about τ_n. The added n-side length check catches it.
+  - (b) A first second method integrated in x with a pn_potential solve per abscissa. It took 40 s in Release and 275 s in Debug, and passed vacuously: tanh-sinh's error estimate is absolute and capped at 1, meant for integrals of order one (tanh_sinh.hpp). Unscaled integrals of about 1e10 stop it at level 3, which is what happened.
+    - Now every tanh-sinh integrand is scaled to order one.
+    - The x-space check (2.2 s in Release, 15 s in Debug) is hidden ([.diode_profile]) and run by the Release-only ctest `verify.diode_profile`, to keep within CV-Q19's Debug budget.
+    - The SNS L0 case runs two biases (0.86 s → about 0.4 s in Debug).
+- Mutation: 20 of 20 caught. One survivor (the reported n_p0) was caught after a check was added.
+- Release verify passes 68/68 (`verify.diode_profile` 2.1 s). Debug serial verify passes 65/65 in 73.0 s (`verify.diode` 0.70 s).
+
+**TVB-16's construction, planned (my choices; nothing has run).**
+- (i) Silicon, N_A = 1e16 for x < 0 and N_D = 2e16 for x > 0, 5 µm per side, so that 3L_D/W′ ≈ 0.025.
+  - SRH, Auger and radiative off; Boltzmann statistics; no band-gap narrowing; no field mobility.
+  - Caughey–Thomas mobility for both carriers. Holes are set to it explicitly, since the default is automatic Masetti.
+  - Uniform nodes N = 128, 256, 512, 1024 (N even, so x = 0 is a face), with the factorial at N = 1024 and 2048.
+  - Forward bias 0.2–0.6 V in steps of 0.1 V.
+- (ii) short: the same device with SRH on (Scharfetter lifetimes at the local doping). Forward as (i), and reverse at −0.5, −1, −2 and −5 V.
+- (ii) long: 500 µm per side, about 3 L_n and 10 L_p.
+  - Nodes x = L sinh(βξ)/sinh β with ξ uniform and β = 7.5: the junction spacing is 8 nm at N = 1024. Same ladder.
+- J_sim is the weighted terminal current (Unit 32), and its resolution goes into U_num.
+  - U_num = GCI of J (Roache's three-grid form with the measured ratios, since h(N) ∝ 1/(N − 1) is not exactly constant-ratio) + the resolution + |ε_int|.
+  - U_ref = the SNS second-method difference + the quadrature estimate.
+- The inputs are NiTCAD's material data (I1), printed as the spec values (R-7): D = μ V_T with Caughey–Thomas μ at the side's doping, and Scharfetter τ.
+- The legacy short-base value 1.321e-2 (DT-Q5) is printed as a cross-check, not gated.
+
+**DT-Q25 (16.18 (f)'s quasi-Fermi term in reverse bias).**
+- 16.18 (f) writes the term as Δφ/V_T, "the measured quasi-Fermi drop across the depletion region", as a first-order term.
+  - In forward bias, J ∝ e^{(φ_p − φ_n)/V_T} at the edges, so the term is Δφ/V_T.
+  - In reverse, the minority carriers' quasi-Fermi levels fall by about |V| across the region where their density is negligible. Read literally, the term is then about 20–200, so every reverse point would be NOT APPLICABLE and the reverse exponent, which 16.18 (f) says is judged, could not be.
+  - The first-order sensitivity of both J_diff and J_SNS to a drop Δφ is e^v/|e^v − 1| × Δφ/V_T. This holds because both are ∝ (np − n_i²) at the edge or in the region, and np carries the e^{Δφ/V_T}.
+- (A) Use ε_φ = e^v/|e^v − 1| × Δφ/V_T.
+  - Δφ is the larger of |φ_n(x_n) − φ_n(−x_p)| and |φ_p(x_n) − φ_p(−x_p)|, interpolated at the reference's edges.
+  - In forward bias this is Δφ/V_T to within e^{−v} (4.6e-4 at 0.2 V). In reverse it is ≈ e^v Δφ/V_T.
+- (B) The literal Δφ/V_T: all reverse points NOT APPLICABLE, and the reverse exponent recorded as not judgeable.
+- (C) Measure the drop only where the carrier's density exceeds 1e-6 of the local doping (DT-Q4's predicate). In forward bias this would exclude the minority edge itself (n(−x_p) ≈ 2e7 cm⁻³ at 0.2 V, against 1e10) and understate the term where it was written.
+
+**Recommendation: A.** It is the first-order term 16.18 (f) asks for, and equals the frozen text in forward bias, where that text applies. Nothing else in 16.19 changes.
+
+**16.32 Ruling DT-Q25** (owner, "choose recommended and write", 2026-11-06), **and step 6b as built: TVB-16. DT-Q26 and DT-Q27 open.**
+- **DT-Q25: A.** ε_φ = e^v/|e^v − 1| × Δφ/V_T, with Δφ the larger quasi-Fermi drop between the reference's edges.
+- **As built**, as planned in 16.31:
+  - `tvb16.cpp`: three configurations, the ladder N = 128 … 1024, and the factorial at N = 1024/2048 with tol 1e-12/1e-14.
+  - DT-Q24's derivative comparisons: 4 idealities per configuration, and 3 reverse exponents per (ii) configuration. 41 comparisons in all.
+  - Registered in `full` (46 benchmarks). The case is in `device_theory_test` [.tvr4_full], with the frozen expected outcome "every comparison passes". It runs in 9.7 s (Release).
+  - **Found while running (my construction, not NiTCAD).** A factorial tol/100 state that Newton cannot reach no longer aborts the run. Per DT-Q23 A it is recorded with its last update, and the comparison is not_evaluated. Newton stalls at 1e-14 at −5 V (last updates 1.4e-14 and 7.3e-14 to 2.0e-13) and at 0.5 V in (ii) short.
+- **Results** (first run, nothing changed after it): 20 pass, 15 not_evaluated, 6 fail. The frozen outcome is unmet, so `verify_benchmark.tvr4_full` fails.
+  - (i) no G−R, short base: all 9 pass. Log errors are 2.4e-6 to 6.4e-3, against bounds of 1.3e-2 to 2.1e-2. The ideality errors are 2.5e-6 to 3.7e-3.
+  - (ii) short:
+    - J passes at 0.4–0.6 V and at −0.5 to −2 V.
+    - not_evaluated at 0.2 and 0.3 V: the three-grid differences oscillate, so there is no GCI.
+    - not_evaluated at −5 V: the factorial's tol/100 was not reached.
+    - The derivatives pass where both of their J values are estimated.
+  - (ii) long: the 6 fails are J at 0.5 and 0.6 V and at −1 and −2 V, the 0.5–0.6 V ideality, and the −1 to −2 V exponent. They come from two causes:
+    - **(a) Ohmic drop in the 500 µm neutral bases (forward bias).**
+      - The deviation is converged in the mesh: e(h) and e(h/2) are −2.945e-3 and −2.928e-3 at 0.5 V, and −12.383 % and −12.384 % at 0.6 V. It is not discretization.
+      - The majority current crosses both bases, whose series resistance is R = Σ W′/(q N μ_maj) ≈ 0.05 × (1.54 + 0.27) ≈ 0.090 Ω·cm². At 0.6 V the estimate J R / V_T ≈ 0.17 gives about −15 %, against −12.4 % measured; at 0.5 V it gives 0.40 %, against 0.29 %. Near the junction part of the current is minority current, so the true drop is smaller than this estimate.
+      - Shockley's law assumes the whole of V falls across the junction. 16.18 (f)'s three ε_J terms have no series-resistance term. In the 5 µm devices the term is about 2e-4 of J at 0.6 V, which is why they pass.
+    - **(b) U_disc is underestimated (reverse bias).**
+      - At −1 and −2 V the error falls as h²: e(h/2)/e(h) = 0.249 in the factorial, so J_sim tends to J_ref.
+      - But the three-grid order on N = 1024/512/256 of the graded mesh is 3.80 and 2.71, and the GCI with that order is about 4× smaller than the error it should bound.
+      - §4.2 says an order outside the asymptotic range "is not reported as an order". The benchmark computes the GCI without that check.
+- The DT-Q5 cross-check, printed only: the W(V) short-base law on bias:144's inputs gives 1.2786e-2 A/cm² at 0.5 V, against its W(0) value of 1.321e-2. bias:144's legacy pin is 1.280e-2.
+- The TVB-16 benchmark mutation run waits for the rulings, as for DT-Q22.
+
+**DT-Q26 (U_disc outside the asymptotic range).**
+- (A) Apply §4.2's asymptotic check (successive orders within 0.1 on the 4 levels) to every J and derivative ladder.
+  - Outside the range, the order is not reported, U_num is "not estimated" and the comparison is not_evaluated (§4.3).
+  - This is §4.2's existing rule, which the code left out. How many comparisons it leaves judged has not been measured.
+- (B) Outside the range, use Roache's two-grid GCI with the assumed order: F_s = 3.0 and p = p_th = 2 on the finest pair, N = 2048 and 1024 (already solved for the factorial).
+  - This changes 16.31's U_num definition after a run.
+- (C) Keep it as run: the −1 and −2 V long-base fails stand, as found.
+
+**Recommendation: A.** It is the rule §4.2 already states, and it introduces no new choice.
+
+**DT-Q27 (the series resistance missing from ε_J).**
+- (A) Record it as found. 16.18 (f)'s ε_J omits the neutral bases' ohmic drop, which dominates the long base at ≥ 0.5 V.
+  - The three forward comparisons it affects (J at 0.5 and 0.6 V, the 0.5–0.6 V ideality) become findings, through the known-findings table citing this entry, with the estimate above printed.
+  - This is about the reference's approximation, not NiTCAD.
+- (B) Add a fourth named first-order term, ε_R = J_ref R_base / V_T, with R_base computed from the spec, and rerun.
+  - This adds to a frozen criterion after a run (TVM2), so it needs your explicit authorization.
+- (C) Make the long base's forward points NOT APPLICABLE where J R_base / V_T > 1e-3 (a new predicate). Also a change after the run.
+
+**Recommendation: A** for TVR-4: the frozen criterion stands, and the omission is recorded with its measured size. B would be the right design for a later revision of 16.18 (f), as its own ruling before any run.
+
+**16.33 Rulings DT-Q26, DT-Q27** (owner, "choose recommended", 2026-11-06), **as applied; TVB-16 rerun. DT-Q28 open.**
+- **DT-Q26: A.** `tvb16.cpp` now has `disc()`. It computes the three-grid GCI on levels 1024/512/256 (order p012) and on 512/256/128 (order p123). U_disc is estimated only when both orders exist and |p012 − p123| ≤ 0.1 (`reference::asymptotic_order_spread`, §4.2). Otherwise the comparison is not_evaluated (§4.3), and its reason says which case applies: oscillatory or non-positive finest order, no order on the coarser triple, or "outside the asymptotic range (orders a, b)". This applies to the J ladders and to the derivative ladders. Both orders are printed.
+- **DT-Q27: A.** `registry.cpp` gets known finding **(x)**: TVB-16, quantity prefixes "J (ii) SRH, long base" and "ideality (ii) SRH, long base", region V ≥ 0.5 V (for the ideality, its lower bias). The ruling text cites this entry. The labels (viii) and (ix) were already used by TVB-31.12 and 31.15 (MI-Q15), so this one is (x). There are now 27 entries.
+- **Found while applying (my construction, from 8ce7fe9).** `registry_test` was not updated when TVB-16 was registered. Its id list had 45 names for 46 benchmarks: from TVB-16 on, the checks compared the wrong names, `ids[45]` read past the array, and TVB-16 was not in the full-tier set. So 35 checks failed in `verify_benchmark`'s default run. 16.32's "Release verify 68/68" was therefore wrong for that commit. Fixed:
+  - TVB-16 is added to the list and to the full-tier set;
+  - a new check `REQUIRE(std::size(ids) == b.size())`.
+- **Results** (Release, first run after the rulings, nothing changed after it): **1 pass, 39 not_evaluated, 1 fail**. `tvr4_full` still fails.
+  - **pass:** J of (i) at 0.2 V only. Its orders are 1.949 and 1.983, and every other (i) point is outside the range. For example, J at 0.5 V has orders 1.81 and 0.34, and the 0.2–0.3 V ideality has 2.05 and 2.92.
+  - **(ii) short base, all 17 not_evaluated.** At 0.2 and 0.3 V the finest triple oscillates. At 0.4–0.6 V and −1 and −5 V the coarser triple has no order. At −0.5 and −2 V the orders differ by more than 0.1 (4.09/3.32 and 2.69/3.84).
+  - **(ii) long base.** Finding (x) changes nothing in this run: J at 0.5 and 0.6 V and the 0.5–0.6 V ideality are now not_evaluated (orders 2.09/7.99, 1.06/0.35, 0.77/6.38), so no fail remains for it to classify. The one **fail** is J at −2 V:
+    - orders 2.713 and 2.797, inside 0.1, so U_disc is estimated: U_num/J = 1.15e-4;
+    - but the error is 1.705e-4 (log error 7.41e-5 against a bound of 5.01e-5);
+    - the factorial shows e(h/2)/e(h) = 0.249, so between N = 1024 and 2048 the error falls as h² and is discretization error;
+    - the two three-grid orders agree with each other, but both are pre-asymptotic, near 2.7 against the measured 2.0. §4.2's check does not detect this, and the GCI is about 1.5 times too small.
+  - **The derivatives:** every one is not_evaluated. Each needs its own ladder in range and both of its J values estimated.
+- **Diagnostic** (a temporary build, reverted, not committed): with the factorial's N = 2048 state as the finest level, the J ladders 2048/1024/512/256/128 are within 0.1 at only 4 of 23 points: (i) at 0.2, 0.3 and 0.4 V, and the long base at −5 V. So a one-level-finer ladder does not bring the graded mesh into the asymptotic range.
+- The TVB-16 mutation run and the frozen expected outcome wait for DT-Q28.
+
+**DT-Q28 (TVB-16's ladder is almost never in the asymptotic range).** Under DT-Q26 A, 39 of 41 comparisons are not_evaluated. The one judged fail is a GCI that is too small, at orders that pass the check.
+- (A) **Record it as found.**
+  - The frozen expected outcome becomes the found outcomes, listed per comparison.
+  - The −2 V long-base J becomes a known finding (xi): "the three-grid GCI underestimates on the graded mesh at in-range but pre-asymptotic orders (2.71/2.80 against the measured 2.0)".
+  - TVB-16 then judges one point. Its test passes, but in practice it verifies almost nothing.
+- (B) **Roache's two-grid estimate as the fallback.**
+  - Where the three-grid estimate is unavailable or out of range, U_disc of the N = 1024 value is F_s |J_2048 − J_1024| r^p/(r^p − 1), with F_s = 3 and p = p_th = 2 (the coarse-solution form; the N = 2048 states are already solved for the factorial). Where the three-grid estimate is in range, it is kept, and the larger of the two is used.
+  - It is DT-Q26's option B, now with A's result measured. It widens U_num after a run (TVM2), so it needs your explicit authorization.
+  - Effect, from numbers already printed: at −2 V long, 3 × 1.28e-4 × 4/3 = 5.1e-4 ≥ 1.705e-4, so the fail would pass. Its effect elsewhere has not been computed.
+  - p_th = 2 is supported where the factorial shows it (0.249 at −1 and −2 V). Where e(h/2)/e(h) is outside 0.25 ± 0.05 (a band this ruling would fix before any run), the fallback is not estimated either.
+- (C) **A finer, longer ladder** (N = 4096 … 512) and rerun. This changes 16.31's frozen ladder after a run, costs about 4× the 9.7 s, and the diagnostic above gives little reason to expect the range.
+
+**Recommendation: B.** A benchmark that judges 1 of 41 points does not verify the diode. Roache's F_s = 3 two-grid estimate with an assumed order is the documented practice when the observed order cannot be trusted (Roache, Verification and Validation in Computational Science and Engineering, 1998: F_s = 3 for two grids). The condition that e(h/2)/e(h) be near 1/4 keeps it from being applied blindly. It is a post-run change, so it needs your "authorize". A is the strict reading of TVM2.
+
+**16.34 Step 7a as built: the admittance reference (`verify/reference/admittance`); DT-Q29–DT-Q31 open before TVB-18's code.** TVB-18's code also waits for DT-Q28, because its U_num follows the same GCI rule.
+- **`diode_admittance(in, V, ω list)`** builds on diode.hpp's operating point (the QE edges at V, the bases W′, U₀ = n₀(e^v − 1)). Per base, with κ = √((1/τ + iω)/D) (1/τ is SRH's linearization, or 0 without SRH) and L_eff = 1/κ:
+  - **Y_fixed = q D n₀ e^v/V_T · κ coth(κW′):** Shockley eq 4.23 with the finite base (PA; the coth form PD). It is G₀√(1 + iωτ) for a long base and the short-base series for a short one.
+  - **Y_edge = q D U₀ (dW′/dV) [u₀″/U₀ − κ coth(κW′) u₀′/U₀]:** the depletion edges' motion, with dW′/dV = C_j/(qN). This is derived here (PD) and is not in eq 4.23. At ω = 0, Y_fixed + Y_edge is d J_diff/dV of diode.hpp (its W(V) edges) exactly.
+  - **iω C_j,** with qe_junction's C_j at V.
+  - The **Shockley total** (ΣY_fixed + iωC_j) and the **total** (adding ΣY_edge) are both reported.
+  - Complex double-double is written locally, with cos and sin reduced by 2π and halved, an expm1 without cancellation, and coth for Re z > 0.
+  - **Second method** for Y_fixed: the Riccati form w = δu/δu′, w′ = 1 − κ²w², integrated by Dormand–Prince in double-double from the contact (w = 0) to the edge, in y/|L_eff| over at most 20 |L_eff| (the contact's influence is e^−40). The difference is reported.
+  - **A departure from 16.3, made in the build:** 16.3 names complex Chebyshev collocation as the second method. At high ωτ the base holds up to about 100 |L_eff|. Collocation would then need about 10 patches and a dense double-double solve of about 500 unknowns per frequency (about 1 s each), or a block-banded solver that does not exist. The Riccati form is a different formulation of the same ODE, independent of the closed form, and costs milliseconds. Your call if collocation is wanted anyway.
+- **L0 (`admittance_test`, 7 cases, 151 assertions):**
+  - at ω = 0, the total against a Richardson-extrapolated double-double difference of diode_current's J_diff, to 1e-9: with and without SRH, and for 5 µm and 500 µm bases. The edge term is resolved, between 1e-9 and 1e-2 of G;
+  - the long-base limit at W′ = 40 L, to 1e-13;
+  - the short-base series 1/W′ + κ²W′/3 − κ⁴W′³/45;
+  - the Riccati method against the closed form over ωτ ≈ 8e-4 … 8e3, to 1e-12;
+  - the edge term at ω > 0, against a second algebraic form built from Y_fixed;
+  - iωC_j and the sums; the refusals.
+- **Mutation:** 24 mutants, 22 caught on the first run. The survivors:
+  - M22 (the sign of the edge term's imaginary part, which was checked only at ω = 0) is caught after adding the ω > 0 case;
+  - M10 (the square root's branch for Re z < 0) was unreachable, since Re κ² ≥ 0. It is removed, and the precondition is stated.
+- **Timing:**
+  - Release: the 7 cases take 0.36 s.
+  - Debug: `verify.admittance` takes 1.45 s. I trimmed the SRH biases in the ω = 0 case and removed duplicate operating-point calls to get it there.
+  - The serial Debug verify run measured 95.4 s (66/66 pass), but with a game using about 56 % of the CPU: every unchanged test was 20–35 % slower than in 16.27 (fermi_dirac 21.3 → 25.4 s). The idle estimate is 72.5 + 1.45 ≈ 74.0 s against CV-Q19's 75 s, to be remeasured on an idle machine before close-out (step 14).
+
+**Measured sizes for TVB-18's construction** (the reference itself, NiTCAD's spec values as TVB-16, τ_p = 8.33 µs the p base's minority lifetime, R = ΣW′/(qNμ_maj) with Caughey–Thomas μ_maj 405 and 1157 cm²/Vs). This was a temporary diagnostic, not committed.
+
+| base | V | SNS/J_diff | \|Y\|R at ωτ = 1e-3 / 1 / 1e3 / 1e4 | \|Y_edge\|/\|Y\| at low ω | iωC_j share of \|Y\| at ωτ = 1 |
+|---|---|---|---|---|---|
+| 5 µm | 0.35 | 6.3e-3 | 2.9e-6 / 5.2e-6 / 4.3e-3 / 4.3e-2 | 1.3e-3 | 0.82 |
+| 5 µm | 0.40 | 2.7e-3 | 2.0e-5 / 2.1e-5 / 4.6e-3 / 4.6e-2 | 1.4e-3 | 0.22 |
+| 5 µm | 0.45 | 1.2e-3 | 1.4e-4 / 1.4e-4 / 5.1e-3 / 5.1e-2 | 1.5e-3 | 0.036 |
+| 500 µm | 0.50 | 1.3e-2 | 4.0e-3 / 4.6e-3 / 0.65 / 5.9 | 3e-7 | 0.12 |
+| 500 µm | 0.55 | 5.9e-3 | 2.8e-2 / 3.1e-2 / 1.3 / 8.1 | 3e-7 | 0.021 |
+| 500 µm | 0.60 | 2.6e-3 | 0.19 / 0.21 / 5.5 / 21 | 4e-7 | 3.3e-3 |
+
+- The neutral bases' series resistance enters Y as about |Y|R, and at high ω it is mostly ωC_jR. Neither Y_ref nor 16.18 (g)'s ε_Y contains it (finding (x)'s cause, now in AC).
+- In the 500 µm base, every bias that meets 16.2 (l)'s SNS ≤ 1e-2 has |Y|R ≥ 4e-3 at low ω, and above 0.6 at ωτ = 1e3. The product (SNS)² × G₀R does not depend on V, so no bias satisfies both.
+- In the 5 µm base, |Y|R ≤ 1.4e-4 up to ωτ = 1 and ≈ 5e-3 at ωτ = 1e3, against ε_Y's 3L_D/|L_eff| = 2.4e-2 there.
+
+**TVB-18's construction, planned (my choices; nothing has run)**, assuming DT-Q29 A:
+- The 5 µm device of TVB-16 (ii) short (SRH on, uniform nodes, ladder 1024 … 128, the factorial at 2048), at forward biases 0.35, 0.40 and 0.45 V.
+- ωτ_p ∈ {1e-3, 1e-2, 1e-1, 1, 10, 1e2, 1e3}, from NiTCAD's `solve_small_signal` (f = ω/2π). Y_sim is Y₁₁ of the anode, A/(V cm²).
+- |Y| and arg Y are judged by 16.19's rule, with ε_Y from 16.18 (g) measured on the solved state (Δn/N, the DT-Q25 ε_φ, J_SNS/J_diff, 3L_D/|L_eff|) and applicability |L_eff| ≥ 30 L_D (≥ 4.2 here) and ε_Y ≤ 0.1|Y_ref|.
+- U_ref is the Riccati difference plus C_j's complex-step difference. U_num follows DT-Q26 and DT-Q28.
+- 42 comparisons (3 biases × 7 frequencies × magnitude and phase); with DT-Q31 A, 63.
+
+**DT-Q29 (the 500 µm base cannot meet 16.18 (g)).**
+- (A) Build TVB-18 on the 5 µm base only, at 0.35–0.45 V. Record the long base as not buildable under 16.18 (g) on NiTCAD's silicon, with the table above. The √(1 + iωτ) behaviour is then seen only partly: at ωτ = 1e3, |L_eff| ≈ W′, the transition from short to long base.
+- (B) Keep the long base and add the bases' impedance to Y_ref: Y = 1/(1/Y_j + Z_R), with Z_R from the reference's own minority profile (the majority current's ohmic drop). This is new reference physics and changes 16.3 and 16.18 (g) after their freeze (before any run). It is first-order only where |Y|R ≪ 1: it neglects the minority carriers' drift in the ohmic field, which is of the same order. So the long base above ωτ ≈ 1 would still be outside it.
+- (C) Keep the frozen plan and run it. The long base fails like TVB-16's (x), and the fails become findings.
+
+**Recommendation: A.** The table shows the long base fails for a reason 16.18 (g) does not budget, before anything is run. A avoids building a known finding, and B's extension would not hold where the long base matters.
+
+**DT-Q30 (the edge motion in Y_ref).**
+- (A) Y_ref = the total, with Y_edge. Its ω = 0 limit is d J_ref/dV of TVB-16's own reference, which uses W(V) edges (DT-Q5), and it is checked at L0. Shockley's fixed-edge form is printed beside it.
+- (B) Y_ref = eq 4.23 with fixed edges, 16.3's literal form. Y_edge (1.3–1.5e-3 of |Y| in the 5 µm base) is then an unnamed difference inside ε_Y.
+
+**Recommendation: A.** It is the exact linearization of the reference's own DC model and adds no new approximation. I-9's "eq 4.23's full form" (both carriers, plus C_T) is kept, and extended consistently with the W(V) edges.
+
+**DT-Q31 (what magnitude and phase test at high ω).** In the 5 µm base at 0.35–0.40 V, iωC_j is 0.2–0.8 of |Y| at ωτ = 1, and nearly all of it at 1e3. There, magnitude and phase mostly re-test C_j (TVB-17's quantity) and see the diffusion admittance only weakly.
+- (A) Also judge Re Y, the diffusion conductance G(ω), which C_j does not enter, by the same rule: |Re Y_sim − Re Y_ref| ≤ U_num + U_ref + ε_Y. This adds 21 comparisons and widens nothing.
+- (B) Magnitude and phase only, as 16.4 states.
+
+**Recommendation: A.** It makes the benchmark test what it is named for, at all frequencies.
+
+**16.35 Rulings DT-Q28 B (authorized), DT-Q29 A, DT-Q30 A, DT-Q31 A** (owner, "choose recommended" 2026-11-06, and "Authorize B" on DT-Q28, asked separately because B widens U_num after TVB-16's run, TVM2)**; DT-Q28 B applied; TVB-16's frozen outcome.**
+- **DT-Q28: B, authorized.** In `tvb16.cpp`, `u_disc()` is the larger of:
+  - the in-range three-grid GCI (DT-Q26 A);
+  - Roache's two-grid estimate of the N = 1024 value, F_s |f(h/2) − f(h)| r^p/(r^p − 1) with F_s = 3 (`gci_safety_factor_two_grids`) and p = p_th = 2 on N = 2048 and 1024 (the factorial's (h/2, tol) state). It is used only where the measured e(h/2)/e(h), the errors against the reference, is within 0.25 ± 0.05.
+
+  If neither applies, U_disc is not estimated, and the reason names both causes. This holds for J and for the derivatives. The note prints which estimate was used.
+- **DT-Q29: A.** TVB-18 is built on the 5 µm base only. The 500 µm base is recorded as not buildable under 16.18 (g) on NiTCAD's silicon (16.34's table).
+- **DT-Q30: A.** Y_ref is the total, with Y_edge. Shockley's fixed-edge form is printed beside it.
+- **DT-Q31: A.** TVB-18 also judges Re Y, by the same rule. That makes 63 comparisons.
+- **TVB-16 rerun** (Release, first run after DT-Q28 B, nothing changed after it): **13 pass, 28 not_evaluated, 0 fail.** `verify_benchmark.tvr4_full` passes, with the frozen outcome set to this result: the 13 passing comparisons are listed in `device_theory_test`, and every other one must be not_evaluated.
+  - **Pass:**
+    - (i) J at 0.2 V (three-grid in range);
+    - (ii) short: J at 0.2, 0.3, −0.5, −1 and −2 V, and the −0.5..−1 and −1..−2 V reverse exponents;
+    - (ii) long: J at −0.5, −1 and −2 V, and the same two exponents.
+    - The −2 V long-base J, 16.33's fail, now passes with the two-grid estimate (5.1e-4 against an error of 1.7e-4; 16.33's three-grid 1.15e-4 is the smaller of the two).
+  - **not_evaluated, by cause:**
+    - Most have e(h/2)/e(h) ≈ 1 (for example 1.0002 at 0.6 V and 1.011 at 0.5 V in (ii) short). There, the error against the reference is the reference's approximation (ε_J's terms, and in the long base finding (x)'s ohmic drop), not mesh error. The order test can't be applied and the fallback correctly declines.
+    - Others have ratios far from 1/4 (−0.79, 2.19, 0.50, 1.66: errors at rounding or resolution level that change sign).
+    - At −5 V, the factorial's tol/100 states were not reached (DT-Q23 A).
+    - Some derivatives are not_evaluated because one of their J values is.
+  - Finding (x) still classifies nothing: no long-base forward point is judged.
+- **What TVB-16 now verifies:** reverse-bias J and its voltage exponent in both bases with SRH, and the low-forward J in the short base. In forward bias in the short bases, NiTCAD's J agrees with the reference within the bounds (log errors 2.4e-6 to 6.4e-3 against 1.3e-2 to 2.1e-2), but the discretization error can't be separated from the reference's approximation, so those points stay not_evaluated. The long base's forward J at 0.5 and 0.6 V would exceed its bounds (1.3e-3 and 5.7e-2 against 3.4e-4 and 7.3e-3: finding (x)'s ohmic drop), and is not_evaluated for the same reason. This is recorded as TVB-16's reach, not as a finding.
+
+
+
+**16.36 Step 7b as built: TVB-18; the shared U_disc rule; TVB-16's mutation run. DT-Q32 and DT-Q33 open.**
+- **The shared U_disc rule** (`registry.hpp`'s `u_disc`, beside `factorial`): the in-range three-grid GCI (DT-Q26 A), Roache's two-grid estimate gated as DT-Q28 B, and the larger of the two. TVB-16's local copy is replaced by it, and TVB-18 uses it. TVB-16's outcomes and its 13 pinned bounds are identical after the move. There are 8 unit cases in `registry_test` on exact sequences c + a h^p: values, orders, each reason, the band's edges, and the spread between 0.1 and 1.
+- **TVB-16's mutation run** ("TVB-16*", 14 mutants): 8 caught. The 6 survivors each change U_num or ε but no outcome, because the 13 passes have wide margins:
+  - M1, assumed order 4;
+  - M3, F_s = 1;
+  - M7, the coarser-triple check removed;
+  - M8, h/2 halved;
+  - M11, ε_φ dropped;
+  - M12, the GCI denominator's sign.
+
+  Changes made:
+  - the frozen test now pins the 13 passes' bounds to 1e-6;
+  - the rule moved to the registry, with unit tests.
+
+  Rerun, the 6 survivors and 7 mutants of the shared rule: all caught. The spread and band survivors were caught after the two added cases.
+- **TVB-18** (`tvb18.cpp`, registered after TVB-17, full tier, 47 benchmarks), as planned in 16.34 under DT-Q29–Q31 A:
+  - 5 µm bases, the ladder 1024 … 128 and the factorial at 2048. Biases 0.35, 0.40 and 0.45 V. ωτ_p = 1e-3 … 1e3 with τ_p = 8.33 µs.
+  - |Y|, Re Y and arg Y of Y₁₁, 63 comparisons.
+  - The phase bound is asin((U_num,|Y| + U_ref + ε_Y)/|Y_ref|): the largest angle a complex error of the bound's size can produce (16.19's bound read on the complex value).
+  - The frozen expected outcome, set before the first run, is "every comparison passes". The case is in `device_theory_test` [.tvr4_full], and the run takes 0.5 s in Release.
+- **TVB-18's first run** (nothing changed after it): **1 pass, 62 not_evaluated.** `tvr4_full` fails on TVB-18.
+  - U_disc is not estimated at 62 points:
+    - three-grid outside the range at 37, no coarser order at 18, oscillatory at 7;
+    - the two-grid gate is refused everywhere, with e(h/2)/e(h) = 0.97–1.0.
+  - The level-to-level differences are 1e-6 to 4e-4 of |Y|. The error against the reference (1e-3 to 3e-2) is the reference's approximation and NiTCAD's model departures, not mesh error. So the gate's ratio is about 1 wherever ε_Y dominates.
+  - This is a flaw in the gate I proposed in DT-Q28 B, not in NiTCAD. It is also why TVB-16's forward points are not_evaluated (16.35).
+- **Two physical observations from the same run:**
+  - **(a) Series resistance:** at ωτ = 1e3, Re Y_sim / Re Y_ref = 7.0, 2.0 and 1.19 at 0.35, 0.40 and 0.45 V. The excess matches ω²C_j²R (R = 8.8e-4 Ω·cm², 16.34). This is the term DT-Q29 kept out of reach. Re Y's bound is ε_Y|Y_ref| in absolute terms, so it covers it.
+  - **(b) C_j above the QE reference:** Im Y_sim / Im Y_ref = 1.0068, 1.0133 and 1.0272 at 0.35, 0.40 and 0.45 V, the same at ωτ = 1e-3 and 1e3 (Im Y ≈ ωC_j throughout, since the short base's diffusion susceptance is about 1e-3 of it).
+    - The excess roughly doubles every 50 mV and is converged in the mesh (e(h/2)/e(h) ≈ 1). At reverse bias TVB-17's C agrees to about 1e-5.
+    - None of ε_Y's named terms has this dependence. Δφ/V_T is 4.7e-3, flat in V. J_SNS/J_diff falls with V.
+    - Not explained yet.
+- **Diagnostic** (a temporary build, reverted): the observed order on the finest triple N = 2048/1024/512 (the factorial's (h/2, tol) state with levels 0 and 1).
+  - In TVB-18 the median order is 2.04 (range −0.9 to 2.41), and 7 of 63 change sign.
+  - With the two-grid estimate gated on that order instead (within 2 ± 0.5, differences of one sign):
+    - **TVB-18 would be 54 pass, 1 fail, 8 not_evaluated.** The fail is |Y| at 0.45 V, ωτ = 100: error 1.53e-2 against a bound of 1.29e-2, from (b). The 8 are |Y| and Re Y at 0.35 V with ωτ ≤ 10, where the differences change sign.
+    - **TVB-16's J would be 14 pass, 2 fail, 7 not_evaluated.** The 2 fails are the long base at 0.5 and 0.6 V, inside finding (x)'s region, so they become findings as DT-Q27 intended. TVB-16's derivatives were not measured.
+
+**DT-Q32 (the two-grid gate).**
+- (A) **Gate the two-grid estimate on the discretization itself:** the observed order on N = 2048/1024/512 within p_th ± 0.5, with successive differences of one sign, instead of e(h/2)/e(h) against the reference. The rest of DT-Q28 B (F_s = 3, p_th = 2, the larger of the two, not estimated where neither) is unchanged.
+  - Applied to TVB-16 and TVB-18. Both have run, so this is a post-run change (TVM2) and needs your **authorize**.
+  - The ±0.5 band is mine. 4.2's 0.1 spread is the three-grid rule, which these ladders don't meet.
+- (B) **Keep DT-Q28 B as ruled.** TVB-18 is frozen as found (1 pass / 62 not_evaluated), and TVB-16 stays at 16.35.
+- (C) **The two-grid estimate with F_s = 3 and no gate.** That gives TVB-18 62 pass / 1 fail, but no check that p_th = 2 holds (the 7 sign changes included).
+
+**Recommendation: A.** It is what DT-Q28 B meant to test, whether the mesh error falls as h², measured where it can be. B leaves both benchmarks verifying almost nothing, and C trusts p_th without looking.
+
+**DT-Q33 (C_j above the QE reference at forward bias, 0.7–2.7 %).**
+- (A) **Investigate before TVB-18's frozen outcome is set.** This is a diagnostic only, with no criterion change:
+  - NiTCAD's quasi-static capacitance −dQ/dV from its own DC states (the charge in the depletion region and in each neutral base, separately), against qe_junction's Q(V) and the reference's diffusion charge;
+  - whether the excess sits in the depletion region (the QE model's charge) or in the bases (charge the reference does not have).
+
+  I report the result and propose either a reference correction (as its own ruling) or a finding.
+- (B) Record it now as a known finding on TVB-18's |Y| where it decides the outcome (one point under DT-Q32 A), cause unknown.
+
+**Recommendation: A.** A 2.7 % capacitance difference that grows with bias is either a reference term missing at forward bias or a NiTCAD defect. Both matter commercially, and the two are distinguishable from charges already on hand.
+
+
+**16.37 DT-Q32 A and DT-Q33 A (authorized: owner "go ahead", 2026-11-06, in reply to "authorize DT-Q32 A, DT-Q33 A"); TVB-16 re-frozen; the C_j excess explained. DT-Q34 open.**
+- **DT-Q32 A applied** (a post-run change, authorized as above). The shared `u_disc` now gates the two-grid estimate on the discretization itself: the observed order on N = 2048/1024/512 (the factorial's (h/2, tol) state and ladder levels 0, 1), within 2 +- 0.5, with differences of one sign. The rest of DT-Q28 B is unchanged (F_s = 3, p_th = 2, the larger of the two, nothing where neither is kept). `u_disc` takes no reference errors any more; `Discretization` gains `order_fine`.
+  - `registry_test`'s U_disc case is rewritten for the gate: exact order 2 gives the two-grid estimate; finest-triple orders 1 and 3 are not kept; an oscillating finest triple; band edges 1.45/1.55/2.45/2.55; the spread cases. 50 assertions pass.
+- **TVB-16 rerun and re-frozen as found:** 19 pass, 3 findings (x), 19 not_evaluated.
+  - The 3 findings are J (ii) long base at 0.5 V and 0.6 V and the ideality between them: the series-resistance finding, as DT-Q27 A intended.
+  - The not_evaluated points: the finest-triple order outside 2 +- 0.5 (0.65–4.9) or oscillating, with the three-grid GCI also out of range; or a factorial state not reached.
+  - The frozen case pins the 19 bounds to 1e-6.
+- **TVB-18 rerun:** 51 pass, 1 fail, 11 not_evaluated.
+  - The fail is |Y| at 0.45 V, ωτ = 100: 1.53e-2 against a bound of 1.29e-2.
+  - The not_evaluated points are all at 0.35 V: 8 |Y| and Re Y points whose differences change sign, and 3 arg Y points whose bound takes |Y|'s U_num.
+  - The frozen case ("every comparison passes") is unchanged and still fails. It is not re-frozen pending DT-Q34. `tvr4_full` fails on TVB-18 only. The default verify suite passes, 68 of 68 outside `tvr4_full`.
+- **DT-Q33 A, the investigation** (a temporary diagnostic, reverted; no criterion changed). Using NiTCAD's own quasi-static (f = 0) small-signal fields at N = 1024 and 2048, 0.1–0.45 V:
+  - **The depletion charge agrees.** −dQ_n/dV, the n half's net charge response (depletion plus tail), equals qe_junction's C_j to about 1e-4. The excess is not in the QE charge.
+  - **The base storage agrees.** The minority storage in each base, times the short base's 2/3, matches the reference's Im(Y_fixed + Y_edge)/ω.
+  - **The cause.** The terminal current at x = 0 is exactly iωC_j + J_n(0) + J_p(0). The reference takes the minority currents at the depletion edges, x_p and x_n, not at x = 0. So it omits the minority carriers stored inside the depletion region, C_SCR = q(∫_0^x_n ∂p/∂V dx + ∫_x_p^0 ∂n/∂V dx). Its in-phase counterpart, the SNS recombination, is in ε_Y; this quadrature term is not.
+  - **The measure.** At N = 2048, (Im Y_sim/ω − C_ref,total) / C_SCR is 1.021, 1.008, 1.002 and 0.9996 at 0.30, 0.35, 0.40 and 0.45 V. At lower bias the residual is a few 1e-12 F/cm², and it falls with h: 1.31 → 1.09 at 0.1 → 0.2 V for N = 2048, against 2.14 and 1.33 at N = 1024.
+  - So the excess is a term the reference omits, not a NiTCAD defect. C_SCR / C_j is 0.64 %, 1.29 % and 2.70 % at 0.35, 0.40 and 0.45 V.
+
+**DT-Q34 (the depletion region's minority storage, missing from TVB-18's reference).**
+- (A) **Reference correction:** add iωC_SCR to the reference.
+  - C_SCR is computed in the QE model, in double-double: p and n are referred to the flat quasi-Fermi levels, x(u) comes from the first integral by quadrature, and the integrals run between the charge-balance edges and the metallurgical junction.
+  - The second method is complex step on the same integrals, with admittance_test cases.
+  - A post-run change to the reference; needs your **authorize**. TVB-18 would then be frozen as found after one rerun.
+- (B) Add C_SCR/C_j to ε_Y as a named approximation term (a post-run widening; needs **authorize**).
+- (C) Keep the reference; record a known finding on TVB-18 |Y| at forward bias where C_SCR decides the outcome (the one point), with this cause.
+
+**Recommendation: A.** The term is physical and computable in the same QE model. Adding it tightens the check of NiTCAD instead of widening a bound, and the diagnostic shows NiTCAD agrees with it to under 1 % at 0.35–0.45 V.
+
+**Not done yet** (after DT-Q34): freeze TVB-18 and run its mutants ("TVB-18*"); the mutants of the new gate ([registry]) and "TVB-16*"; then step 8 (TVB-10).
+
+**16.38 DT-Q34 A (authorized: owner "go A", 2026-11-06): the reference gains i w C_SCR; TVB-18 frozen as found.**
+- **The correction** (a post-run change to the reference, authorized). `verify/reference/admittance` adds i w C_SCR to Y_ref's total. C_SCR = q(∫_0^{x_n} ∂p/∂V|_x dx + ∫_{−x_p}^0 ∂n/∂V|_x dx) over the QE profile at V, between the charge-balance edges and the junction. Shockley's form is reported without it. The new fields are `DiodeAdmittance::scr_storage_F_per_cm2` and `scr_second_method_difference`, and `AdmittancePoint::scr_storage`.
+  - **Derivation** (PD; `admittance.hpp`). At fixed x, ∂u/∂v = −(∂x/∂v|_u)·√(kΦ). Exchanging the order of the double integral leaves single integrals in u, and the inner minority integral is closed-form. The closed forms are ∂Φ_b/∂v|_u = (n + p − n_b − p_b)/2 (from Φ_b = n + p − (n_b + p_b) − C(u − u_b)) and du_j/dv = (√(N_A² + 4m²) − √(N_D² + 4m²)) / (2(N_A + N_D)). The integrals use Gauss-Kronrod in u, in double-double.
+  - **Departure, second method.** DT-Q34 A named complex step on the same integrals. The QE profile (`pn_potential`'s Newton inversion and Brent's root) has no complex extension here, so the second method is a different one: the minority charge between the fixed positions −x_p and x_n (at V), evaluated as a function of the bias and differenced by Richardson's 4-point rule in v (h = 1e-3). It shares the profile and quadrature, but not the differentiation or the change of variables. The difference is reported.
+- **L0** (`admittance_test`, a new case). At 0.35 and 0.45 V, C_SCR is positive, grows with bias, and stays below 5 % of C_j. Its second method agrees to within 1e-9 relative at 0.45 V. At −2 V, C_SCR is below 1e-9 C_j and the second method agrees. The totals case now includes the term. 8 cases, 167 assertions pass.
+  - **Cost (CV-Q19).** In the first build every `diode_admittance` call also ran the second method. That took `verify.admittance` from 1.45 to 5.2 s, and serial Debug verify to 80.6 s, against the 75 s budget.
+    - The second method is now its own function, `scr_storage_second_method`, called by the L0 test and by TVB-18's notes. `diode_admittance` keeps only the first method, with its two integrals per side merged into one quadrature.
+    - The new case is trimmed to 2 forward biases, and the quadratures run at 1e-20. That is still far below any criterion: C_SCR is a few percent of C_j.
+    - Now `verify.admittance` takes 2.1 s, and serial Debug verify passes 66/66 in 74.2 and 74.6 s.
+  - Mutation, on the final code: 8 mutants (the ½ factor, the u_j-term sign, the n and p sides' b-term each dropped, du_j/dv swapped, ∂Φ/∂v's ½, the second method's difference rule, the total without the term). All 8 are caught.
+- **TVB-18's notes** report C_SCR per bias: 0.632 %, 1.28 % and 2.69 % of C_j at 0.35, 0.40 and 0.45 V. This agrees with 16.37's diagnostic (0.64, 1.29 and 2.70 %). The second method differs by about 1e-23 F/cm², 1e-14 relative.
+- **Suites.** Release verify passes 74/74, the local full tier included (2622 s; `verify_full.tvb04` 1272 s); this ran before the restructure. After the restructure: `[admittance]`, `[tvr4_full]` and serial Debug verify pass again.
+- **TVB-18 rerun: 52 pass, 11 not_evaluated, 0 fail** (it was 51/11/1). The |Y| miss at 0.45 V, ωτ = 100, is gone. The 11 not_evaluated points are unchanged: at 0.35 V, |Y|, Re Y and arg Y at ωτ_p = 0.001–0.1, and Re Y at 1 and 10, where U_num is not estimated.
+  - **Frozen as found** (DT-Q34 A): `device_theory_test`'s TVB-18 case pins those 11 as not_evaluated and the other 52 as pass. The criteria are unchanged; only the reference moved.
+  - `tvr4_full` passes: 6 cases, 170 assertions (Release).
+- **Not done yet:** the mutants of TVB-18's own code ("TVB-18*"), of the DT-Q32 gate ([registry]) and of "TVB-16*"; then step 8 (TVB-10).
+
+**16.39 Step 7's mutation runs (owner "complete TVR-4 in one go", 2026-11-06).** No criterion, reference or outcome
+changed. Each mutant was applied to the Release build, the frozen case run, and the file restored.
+- **TVB-18's frozen case now pins its 52 passes' bounds to 1e-6**, as TVB-16's does (16.36). The outcomes were already
+  pinned; the bounds were not, so U_num and ε_Y mutants could only be caught through an outcome change. This is test
+  strengthening only (the values are those of 16.38's run).
+- **TVB-18\*** (17 mutants: both applicability constants, each ε_Y term dropped or rescaled, L_eff's min, U_ref's
+  complex-step term, the phase bound's U_num, the factorial's states, the resolution, the edge densities' doping,
+  the quasi-Fermi factor, both h's, Y₁₂ for Y₁₁, the judge's bound): **13 caught.** The 4 survivors are equivalent on
+  this data:
+  - U_ref's ω|C_j − C_j,cs| term (U_ref is 3e-18 S/cm², below the pins' 1e-6);
+  - the factorial's (h/2, tol/100) state for (h/2, tol), and (h, tol) for (h, tol/100): Newton converges past both
+    tolerances, and the states are bit-identical (ε_int = 0 at every point);
+  - the bound halved: the largest metric/bound is 0.143.
+- **[registry], the DT-Q32 gate** (11 mutants: the band, its `<=`, the two-grid order and safety factor, the triple's
+  h and f, the flat-triple clause, the oscillation test, max for min, the u2-only branch, the two-grid difference):
+  **9 caught, then 10.** The flat-triple clause (`*c == 0.0`) survived; a `registry_test` case was added (finest
+  triple exactly flat, the ladder's GCI refused: the two-grid estimate is kept and is 0), and the rerun caught it. The
+  `<=` → `<` mutant is equivalent: the iterated order never lands exactly on 1.5 or 2.5.
+- **TVB-16\*** under the DT-Q32 gate (14 mutants: h/2, each ε_J term, the edge factor, the resolution, U_ref's
+  quadrature term, U_num in the bound, the derivatives' ε and resolution, the factorial's h/2 state, h, the
+  derivative share, the applicability predicate, the factorial's argument order): **11 caught.** One mutant (the
+  quasi-Fermi factor to 1) did not compile (unused variable, warnings as errors); its replacement was caught. The 3
+  survivors are equivalent:
+  - U_ref's quadrature term (U_ref/J is the 1e-15 floor at every bias);
+  - the predicate forced true: ε_J ≤ 0.1 J_ref holds at every point of this data;
+  - (h, tol/100) swapped with (h/2, tol): ε_int is symmetric in them.
+- Release `[registry]` (53 assertions) and the TVB-16/18 frozen cases pass after the restores.
+
+**16.40 Step 8 as built: mos_hf and TVB-10. DT-Q35 open.**
+- **`verify/reference/mos_hf`** (PD, base-free; p-type substrates only, an n-type one is refused):
+  - The redistribution model of 16.18 (b): the electrons at one quasi-Fermi level shifted by v, Φ(t, v) =
+    p_b G(−t) + n_b e^{−v} G(t). This is 16.17's reproduction (2) with χ = 0. Its double zero at t = 0 keeps
+    Q_n = −q ∫ n_b e^{−v} expm1(s)/g ds finite. Reproduction (1) is not used (16.17's finding).
+  - C_s,HF = −(1/V_T)(∂Q_s/∂t + ∂Q_s/∂v · dv/dt), with dv/dt = −(∂Q_n/∂t)/(∂Q_n/∂v). The partials are analytic, and
+    ∂Q_n/∂v is a Gauss–Kronrod quadrature in dd.
+  - **Departure from 16.18 (b):** the plan named complex step for the partials. They are analytic instead, so the
+    second method (Q_s along Q_n held fixed by Brent, Richardson central differences, δ = 1e-3) is independent of
+    them.
+  - 16.18 (b)'s "V frozen" diagnostic is C_LF itself: v held at 0 means the electrons follow the substrate. The
+    benchmark prints C_LF beside C_HF instead.
+  - Deep depletion: Φ_dd = N_A G(−t), with V_G by Brent. The second method is the quadrature of the charge density
+    over the profile.
+- **L0** (`mos_hf_test`, 5 cases, 71 assertions, 0.25 s Debug):
+  - v = 0 is KN's charge (1e-28);
+  - Q_s = Q_p + Q_n by quadrature, inversion and accumulation, v ≠ 0 (1e-24);
+  - depletion C_HF = C_LF (1e-6); the strong-inversion plateau within 1 %, and inside ±10 % of ε/W_max;
+  - deep depletion: its second method (1e-24), the round trip (1e-25), KN in depletion (1e-8), and smaller |Q|
+    with larger band bending in strong inversion;
+  - the refusals.
+  - The second method takes 0.7 s in Debug against CV-Q19's exhausted budget. It is therefore not run in L0.
+    TVB-10 runs it at all six gate biases and stops with a run error unless it agrees to 1e-15 C. The agreement
+    found is 1e-17 to 1e-28 relative (6.8e-28 F/cm² at 2 V).
+- **TVB-10** (`tvb10.cpp`, full tier, registered after TVB-09; 48 benchmarks). TVB-09's MOS-C, now with SRH on,
+  Caughey–Thomas mobility and no field mobility.
+  - HF (A): the operating point is `equilibrium_poisson`, as `small_signal.hpp` prescribes for inversion. The small
+    signal runs at 1e5, 10^5.5 and 1e6 Hz, and C = Im Y_gg/ω is judged at 10^5.5 Hz. The ladder is N = 512…64, with
+    N = 1024 as h/2. U_disc comes from the shared `u_disc`, and the (h, tol) factorial runs at N = 512.
+  - Deep depletion (E): a gate ramp from V_FB to V_FB + 4 V in 100 µs, BDF2 with fixed 1 µs steps, at Newton
+    tolerance 1e-10 (1e-12 for the factorial's tol/100 state). Q_s is judged at 1, 2, 3 and 4 V. The factorials are
+    (h, tol) and (h, Δt) at N = 512, with Δt/2 the finer step.
+- **Construction changes before commit** (no criterion, ladder or expected outcome touched; as TVB-15's, 16.26):
+  - The first build used a 1 µs ramp with adaptive steps (rtol 1e-6, factorial rtol 1e-8). The factorial's
+    adaptive runs took more than 45 minutes and were killed.
+  - Fixed steps of 10 ns made the run 2 s. That run found the holes' lag behind the ramp: Q_s at a ramp 10× slower
+    differed by 1.7e-6. That is comparable to the finest mesh error (3.7e-6), and it bent the 1 V order to 2.46.
+  - The ramp became 100 µs. That is still deep depletion: generation needs about 0.1 s, and the electrons' charge
+    measured at 4 V is 6.5e-7 of |Q_s|.
+  - The Newton tolerance became 1e-10, because tol/100 = 1e-14 fell below the rounding floor at 1 µs steps
+    (Newton failed at t = 41 µs).
+  - The deep-depletion truncation uses the bound 4 e^{−(d − W)/L_D} (at most 3e-10). `bulk_profile` cannot take a
+    deep-depletion band bending: it would include the inversion layer.
+- **Frozen outcome, set before the first run:** every comparison passes (14 comparisons).
+- **TVB-10's run: 13 pass, 1 not_evaluated, 0 fail.** 4.3 s in Release. The frozen case fails, so `tvr4_full`
+  fails, pending DT-Q35.
+  - HF C_HF passes at V_G − V_FB = 0.2, 0.5, 1, 1.5 and 2.5 V, with |C_sim − C_ref| = 4.3e-13 to 1.0e-12 F/cm²
+    (5.6e-6 to 1.2e-5 relative). ε_HF, the spread over the decade, is 9e-18 to 1.2e-12, far inside 1e-3 C.
+  - **2 V is not_evaluated.** The three-grid GCI is outside the asymptotic range (orders 2.108, 2.005), and the
+    finest triple oscillates. The (h/2, tol) state is not converged in C: e(h/2, tol) = 1.43e-11 against
+    e(h/2, tol/100) = 4.26e-12.
+  - Deep depletion: all 8 comparisons pass. p̂ = 2.001, 1.975, 1.941 and 1.903 (spread ≤ 0.071). The finest errors
+    are 5.6e-6 to 6.4e-6. U_iter is ≤ 1.2e-12, U_dt ≤ 5.1e-11 and ε_int ≤ 1.6e-12. The orders' drift toward 1.9 at
+    high V_G follows the electrons' growing charge (1.6e-8 to 6.5e-7); the slower ramp's departure is 7.8e-8 to
+    4.8e-6.
+  - **Observation (not a finding, no criterion involved):** in strong inversion NiTCAD's reported small-signal
+    resolution is 3.2e-10 to 4.7e-9 F/cm² (up to 6 % of C). The actual agreement with the reference is 5e-13. The
+    resolution dominates U_num there, so the HF bounds at 1.5–2.5 V are 100–1000× wider than the error.
+- **Mutation:**
+  - `mos_hf` (10 mutants: Φ's shift, Φ_v's form, the ½ in Φ_v/2Φ, dv/dt's sign, Richardson, the deep-depletion
+    charge and density, dQ_n/dt's sign, the v-term): 9 caught.
+    - The Φ_v mutant first survived the 1e-9 second-method bound. The bound was tightened to 1e-15 (the agreement
+      found is ~1e-17), and it was then caught.
+    - The survivor (dQ_n/dt's sign, which acts only in accumulation) is equivalent: the term it re-signs is about
+      1e-17 of C there.
+    - After the second method moved into TVB-10, the Φ_v and Richardson mutants were rerun against TVB-10. Its
+      self-check catches both.
+  - TVB-10 (14 mutants): judged by any change in its 14 printed comparison lines, because the frozen case is
+    already red. 12 caught. The 2 survivors are equivalent:
+    - U_dt dropped: it enters only the factorial's interaction test, which is far from its threshold;
+    - the factorial's argument order: ε_int is symmetric in it.
+
+**DT-Q35 (TVB-10's frozen outcome).**
+- (A) Record as found, as DT-Q20 A did: the 2 V HF point is not_evaluated with its reason (the h/2 state's tolerance
+  sensitivity), and the other 13 pass. The frozen case then pins those outcomes and the passes' bounds to 1e-6.
+  Criteria, ladder and construction are unchanged.
+- (B) Tighten the HF Newton tolerance to 1e-14 (factorial 1e-16, if reachable) and rerun. That changes the
+  construction after a run (TVM2), and 1e-16 is probably below the rounding floor.
+
+**Recommendation: A.** The miss is the U_num estimate at one point, not an error: that point's |C_sim − C_ref| is
+5.3e-13, the same as its neighbours.
+
+**16.41 Step 10 as built: linear_transient and TVB-19. DT-Q36 open.** (Step 9, Pao–Sah, is taken after the lighter
+steps; 16.10's order is otherwise kept.)
+- **`verify/reference/linear_transient`** (PD, base-free):
+  - `dielectric_relaxation_time`: τ_d = ε/(q μ N) in dd. With σ = q(μ_n n_0 + μ_p p_0), the benchmark passes μ = 1
+    and N = σ/q.
+  - `relaxation_second_method`: Dormand–Prince with 4000 fixed steps on dQ/dt = −Q/τ_d, against the exponential, to
+    5 τ_d. The largest difference is 3.1e-19.
+  - `haynes_shockley_moments`: the moments of a drifting, spreading, decaying Gaussian (σ, D, v, τ), integrated over
+    the source's time profile. Its age a lies on [t − t_off, t − t_on] with the weight e^{−a/τ}, so the moments are
+    those of a truncated exponential, in closed form:
+    - area = G σ √(2π) e^{−a₁/τ} m₀;
+    - centre = x₀ + v⟨a⟩;
+    - width² = σ² + 2D⟨a⟩ + v² Var(a).
+  - **Departure from 16.3:** the plan's second method was the PDE by method of lines with Dormand–Prince. It is
+    instead Gauss–Kronrod on the three age integrals. A method-of-lines solution would carry its own spatial error,
+    at the level being judged. The quadrature checks the closed forms independently: it agrees to 4.5e-33, 4.3e-31
+    and 7.5e-29 at the benchmark's point. The Gaussian step (variances add under drift and diffusion) is checked by
+    L0's limit cases, not by the second method.
+- **L0** (`linear_transient_test`, 4 cases, 40 assertions, 0.16 s Debug): τ_d by hand; the second method; the
+  uniform-age limit (τ = ∞); the moments' equations at τ finite against a direct quadrature; the short-pulse limit; the
+  refusals.
+- **TVB-19** (`tvb19.cpp`, registered after TVB-18; 49 benchmarks). The construction is as in the file header, from
+  16.2 (m) and 16.8. Injection uses the TVQ3 hook's time profile (DT-Q3 A).
+  - **Tier:** the full tier takes 438 s in Release: 16 runs per case, at N up to 4097, with fixed steps. That is past
+    `tvr4_full`'s 120 s. It therefore runs in the local nightly tier, as `verify_full.tvb19` (DT-Q9: heavier ladders
+    local). The fast tier has no comparisons.
+- **Frozen outcome, set before the first run:** every comparison passes (16).
+- **TVB-19's run: 10 pass, 3 not_evaluated, 3 fail.** The frozen nightly case fails, pending DT-Q36.
+  - The finest accuracies all pass: decay rate 2.87e-5, area 5.6e-7, centre 4.1e-5 of the drift length, width
+    8.5e-5, each against 1e-3. The backward-Euler orders pass (0.98–1.00). BDF2's dt orders pass for area and centre
+    (2.000).
+  - **Fail: the h order of the decay rate, area and centre** (p̂ = −0.0028, 3.2e-7, 2.0e-8). These quantities have
+    no h error at the ladder's resolution. Their error is flat in h to 2e-8 of itself, and the error that exists is
+    the time step's. The finite-volume sums conserve the integral, and the first moment under a uniform field. p̂
+    is then undefined, and `judge_order` reports it as missed.
+  - **Not evaluated: the decay rate's BDF2 dt order** (0.907 on the finest pair; 2.00 and 2.02 coarser). This is a
+    floor of 2.86e-5 that neither h (2e-8) nor the tolerance (identical at tol/100) moves. Nor does dt below dt₀:
+    the factorial's dt₀/2 state gives 2.92e-5.
+    - A temporary diagnostic (not committed) varied the amplitude and N. At amplitude 1 and 0.25, N = 513 and 2049,
+      rate·τ_d − 1 = 2.76e-5 and 2.87e-5, then 7.06e-5 and 7.46e-5. That fits c + d/amplitude, with c ≈ 1.4e-5 and
+      d ≈ 1.4e-5.
+    - The floor is not nonlinearity, which would grow with the amplitude, and not Newton.
+    - The cause is not identified. It is reported as found: not a finding, and inside the accuracy criterion by
+      35×.
+  - **Not evaluated: the pulse width's BDF2 dt order (1.06) and h order (1.54).** Each ladder reaches the other
+    parameter's floor. The width's finest error is mostly spatial (e(h/2) = 4.46e-5 against e(h) = 8.54e-5), so the
+    dt ladder at the finest h flattens. The h ladder at dt₀ flattens on the time error.
+  - The factorials are evaluated and non-interacting for all four quantities (|ε_int| ≤ 1.2e-7).
+  - A cosmetic defect: the (h, dt) factorial's note keeps the shared formatter's labels "tol" and "tol/100" for dt₀
+    and dt₀/2. It is left as is, to keep the run's output frozen.
+- **Mutation:**
+  - `linear_transient` (12 mutants: τ_d, the second method's rate, m₀, m₁ and Var's forms, the decay weight's age,
+    the √(2π), the 2D, the centre's mean age, the uniform-age limit, the mean age's end, the refusal): 12 caught.
+  - TVB-19: each mutant run takes about 7.5 minutes. It is judged by any change in the 16 printed comparison
+    lines, because the frozen case is red. 3 mutants: the decay rate's τ_d scale (1e-4), the drift velocity's
+    mobility (μ_p at 1e14 instead of 1e15) and the linearity predicate's threshold. All 3 caught.
+  - The reduced set is a departure from the other steps' full mutation runs, made for cost. The judging code is
+    shared with TVB-10's pattern, whose 14 mutants ran in 16.40.
+
+**DT-Q36 (TVB-19's frozen outcome).**
+- (A) Record as found, as DT-Q20 A and DT-Q35 A do: the frozen case pins the 10 passes (their bounds to 1e-6), the 3
+  not_evaluated with their reasons, and the 3 h-order fails as fails with the reason above. Criteria, ladders and
+  construction are unchanged.
+- (B) Change the judging after the run (TVM2):
+  - judge each one-parameter order on errors with the other parameter's part removed by Richardson;
+  - judge the h-exact quantities as exactness (|e(h) − e(2h)| ≤ U_iter-based bound) instead of an order.
+  This would turn the 3 fails into passes and probably 2 of the not_evaluated as well.
+
+**Recommendation: A** for TVR-4. The fails are a property of the construction: the quantities chosen have no h error.
+They are not errors in NiTCAD. B is the better design, but it changes criteria after seeing their results.
+
+**16.42 Step 11 as built: energy_layer and TVB-13. DT-Q37 open.**
+- **The linearization of 16.18 (a), checked before code** against ED2 (Stratton's current), Poisson and ED3 (the
+  energy flux with c = 5/2, the Joule term J·E, the relaxation term): the three rows and the quartic P = A·D − B·C
+  are as written there.
+- **`verify/reference/energy_layer`** (PD, base-free):
+  - `durand_kerner`: Weierstrass iteration on a monic real polynomial in complex dd, after scaling by the roots'
+    geometric mean.
+  - `energy_layer`: P's coefficients in dd, its four roots, λ = 2/min |Re s|.
+  - **Departure from 16.18 (a):** the second method is not Chebyshev collocation of the linearized ODE with a decay
+    fit. It is the determinant of the unreduced 3 × 3 system at each root, relative to the sum of its six expansion
+    terms' magnitudes.
+    - It is independent of the elimination and of the root finder. Collocation would have checked the same thing
+      at much greater cost, and neither checks the linearization's signs against NiTCAD's equations.
+    - That check is the printed diagnostic below: the decay measured on NiTCAD's own solution.
+  - Found: 2e-32 to 1.7e-30 at the benchmark's three states. (The first normalization, by the rows' norms, gave
+    1e-51, which is not a measure of cancellation. It was replaced before the first NiTCAD run.)
+- **L0** (`energy_layer_test`, 4 cases, 37 assertions): a quartic with real and complex roots (1e-28); roots over ten
+  decades (1e-26 relative); the zero-field limit ±1/L_D, ±√(G/κ) (1e-9); the determinant at three hot states
+  (≤ 1e-25); the refusals.
+- **TVB-13** (`tvb13.cpp`, Tier fast, registered after TVB-12; 50 benchmarks):
+  - Drift (fast and full): field mobility on, L = 1 µm, N = 64, V/L = 1e2 … 1e5 V/cm.
+  - Energy balance (full): N = 128 and 512, judged beyond 30 λ from each contact (13 ln 10 · λ).
+  - μ₀ = the materials' μ_max (doping mobility off, as TVB-11). τ_w is silicon's cited 0.35 ps (ED5 as built: the
+    default silicon set does not carry it). The reference values come from `model_mobility` in dd.
+  - **Lengths chosen from λ before any NiTCAD run:** λ = 96 nm (1e3 V/cm), 0.20 µm (1e4) and 27 µm (1e5). The
+    roots at 1e5 V/cm include 738 /cm, the unscreened cold-carrier mode that EC3's ruling (2026-10-29) describes.
+    L = 20 µm for 1e3 and 1e4 V/cm, and 2 mm for 1e5.
+  - **Construction change after a run error** (no outcome seen): at 1e5 V/cm the 2 mm bar stopped at 632 V (no
+    convergence even at 2⁻²⁰ of the step). At the 20 kV the point needs, the potential's rounding (about 8e-11 in
+    units of V_T) is above Newton's 1e-12 tolerance and comparable to the D criterion. 1e5 V/cm was removed from
+    the energy-balance part; it remains in the drift part. 8 comparisons, not 10.
+- **Frozen outcome, set before the first run:** every comparison passes.
+- **TVB-13's run: 4 pass, 4 fail.** 0.06 s fast and about 1 s full, in Release. The frozen full case fails, so
+  `tvr4_full` fails, pending DT-Q37.
+  - Drift: all 4 pass, with relative errors 7.9e-14, 2.4e-14, 8.6e-16 and 1.7e-16 against 5.8e-11.
+  - **Fail: T_n − T_L at both fields and both N.** The errors are 1.42e-4 and 7.3e-5 (1e3 V/cm, N = 128 and 512),
+    then 6.6e-3 and 4.0e-3 (1e4 V/cm), against 2.3e-10 and 3.7e-9.
+  - **Cause:** the reference was evaluated at V/L. With energy balance the contact layers carry part of the
+    voltage, so the interior's uniform field is not V/L. Measured (printed, not judged): (E_int − V/L)/(V/L) is
+    7.2e-5 and 3.7e-5 (1e3 V/cm), then 4.7e-3 and 2.9e-3 (1e4 V/cm). It falls with N because the layer is under-
+    resolved at these meshes.
+  - At each judged node's own field (its two edges' mean), the rise agrees with the homogeneous rise to 1.3e-14 …
+    1.5e-13, inside 64 ε N². That is 16.2 (f)'s premise: the uniform state at its own field solves the discrete
+    equations exactly.
+  - This is a construction error in the benchmark (V/L was this step's choice; 16.4 says "T_n(E)"). It is not a
+    finding.
+  - **λ checked on NiTCAD's solution** (printed, not judged): |rise − rise(centre)| decays near the contact at
+    2.03e5 and 9.5e4 /cm at N = 512, against min |Re s| = 2.09e5 and 9.9e4 /cm. At N = 128 it decays at 1.55e5
+    and 7.2e4 /cm: under-resolved, but inside the ×2 safety and the 1e-13 margin. This confirms the linearization's
+    signs.
+- **Time:** the fast tier takes 1.97–2.59 s in Debug (0.06 s Release). With TVB-06's 0.11 s that is above 16.7's
+  2 s for both cases. One solve per field instead of the continuation was tried and gave the same (2.04 s); the
+  sweep is kept. The serial Debug `nitcad verify` total is taken at the close-out (step 14), against CV-Q19's 75 s.
+- **Mutation:**
+  - `energy_layer` (13 mutants: κ, G, the quartic's four factors, H's sign, the convergence threshold, the
+    slowest-root choice, λ's factor, the scaling, a determinant term, the Poisson entry): 11 caught. The 2
+    survivors are equivalent:
+    - the scaling exponent (any scale gives the same roots);
+    - the determinant term's sign: it multiplies the Poisson row's zero entry.
+  - TVB-13 (10 mutants: the holes' term, the tail's 13, the rise's 2/3, the predicate, Canali's β, the drift
+    criterion, the rise's denominator, the reference self-check, the Newton tolerance, the T_n criterion): 10
+    caught. They are judged by any change in the printed comparison, failure and reason lines, because the full
+    case is red.
+
+**DT-Q37 (TVB-13's T_n reference).**
+- (A) Evaluate the homogeneous reference at each judged node's own field (its two edges' mean) instead of V/L. The
+  comparison is then the one 16.2 (f) describes. Measured as a diagnostic: 1.3e-14 … 1.5e-13, so all 4 would pass.
+  The interior field's departure from V/L stays printed. This changes a reference input after a run (TVM2).
+- (B) Record as found: 4 fails, pinned, with the cause printed.
+
+**Recommendation: A.** V/L is wrong for this device: the contact layers take part of the voltage. 16.4 names T_n(E)
+at the field, and the criterion is unchanged.
+
+**16.43 Step 12 as built: thermal_slab, TVB-27 and TVB-28. DT-Q38 open.**
+- **`verify/reference/thermal_slab`** (PD, base-free; κ = κ₃₀₀ (T/300)^−a, Unit 23 T11's form):
+  - `kirchhoff` / `kirchhoff_inverse` in dd; `slab_temperature` (u linear in x).
+  - `self_heated_resistor`: (κT′)′ = −J²/(qμN) − (3/2)(k/q) J T′ with n = N, T = T_amb at both ends and
+    J = −qNV/∫dx/μ. Solved in dd: Dormand–Prince on (u, u′, ∫dx/μ) at fixed steps, Brent on u′(0), the secant
+    on J. Second method: Kirchhoff-form finite differences on 2¹⁴ and 2¹⁵ cells (Newton, double), Richardson.
+    After the first run its κ integral was moved from dd to a double closed form (no outcome changed: 51 s to
+    3.2 s for TVB-27, the difference still 1.1e-11 K).
+  - `seebeck_rise`: the closed form for Nc ∝ T^{3/2}, with Gauss–Kronrod as the second method (7.7e-34 eV);
+    `peltier_coefficient` = −(kT/q)((5/2 + r) − ln(N/Nc(T))).
+- **L0** (`thermal_slab_test`, 5 cases, 29 assertions): the Kirchhoff round trip (1e-29 K) and du/dT = κ; the
+  slab's ends and sag (T(L/2) < 350 K); the constant-coefficient resistor against its closed form in dd (1e-12 K)
+  and its steps-halving; the Seebeck second method and sign, the Peltier coefficient; the refusals. Two L0
+  expectations of mine were wrong in the first draft (the sag's direction; the closed form evaluated in double
+  lost 1e-9 K to cancellation) and were fixed before any NiTCAD run.
+- **TVB-27 and TVB-28** (`tvb27.cpp`, Tier full, registered after TVB-19; 52 benchmarks). 1D ladder N = 512, 256,
+  128, 64 with the (h, tol) factorial at N = 1024.
+  - TVB-27: the slab (10 µm, 300/400 K ends, default silicon) and the self-heated resistor (10 µm, N_D = 1e17,
+    4 V, default silicon). The resistor reference is solved once over every ladder's node set.
+  - TVB-28 on the legacy silicon set (chosen before the run: Nc ∝ T^{3/2}, so S and Π are closed forms; the
+    default Couderc set has no closed form): S as the open-circuit E_Fn rise on a 100 µm bar 300 → 400 K; Π as the
+    odd part of the contact heat per current at ±1 mV; C5 on four states (the resistor at 4 V, the Seebeck bar,
+    Peltier ±1 mV) with 11.13's Newton-term limitation printed.
+  - **Construction change after a run error** (no outcome seen): Newton's 1e-12 tolerance with the factorial's
+    tol/100 = 1e-14 did not converge at N = 512. tol_newton = 1e-10.
+- **Frozen outcome, set before the first run:** every comparison passes.
+- **TVB-27's run: 2 pass, 2 not_evaluated** (3.2 s Release). The frozen case fails, so `tvr4_full` fails, pending
+  DT-Q38.
+  - The slab is exact: errors 2.8e-16 at every level, so its order is 0 and "not in the asymptotic range".
+    Accuracy passes.
+  - The resistor's errors are flat at 1.66e-6, 1.55e-6, 1.14e-6 and 7.3e-7 relative (orders −0.09, −0.44,
+    −0.63). Accuracy passes (≤ 1e-4); the order is not_evaluated.
+  - **Cause, measured with temporary runs (not committed):** the floor is the reference's n = N assumption. The
+    mobility gradient puts a space charge δn/N of about 4e-5 into NiTCAD's solution, scaling as 1/L². On the
+    legacy set the floor halves (the Couderc T·M′/M Thomson term is the other half). On the legacy set at 100 µm
+    the errors are 2.25e-6, 5.8e-7, 1.41e-7 and 2.9e-8, orders 1.93, 2.04 and 2.26: clean second order.
+  - This is a construction error of the benchmark (n = N is this step's reference), not a finding.
+  - An observation, not a finding: `tests/solve/electrothermal_test.cpp:652` says the 10 µm resistor's space charge
+    is "some 1e-8" of N_D; at 4 V it is nearer 4e-5. Its tolerance holds either way.
+- **TVB-28's run: 6 pass, 1 not_evaluated, 1 fail** (0.22 s Release).
+  - S: accuracy 2.06e-9 passes. Its errors are 2.06e-9, 7.15e-9, 2.77e-8 and 1.11e-7, orders 1.79, 1.94 and 1.99
+    (finest pair first). The finest pair is 0.01 below the window; not_evaluated.
+  - **Fail: Π's order.** Π is exact in h (errors 4.721e-10 at every level, from Newton). That is the class of
+    DT-Q36 (an h-exact quantity judged by an order).
+  - Π's accuracy 4.7e-10 passes.
+  - C5 passes on all four states: residual/bound 5.2e-5 (resistor), 9.7e-3 (Seebeck), 6.7e-6 and 6.6e-6
+    (Peltier ±1 mV).
+- **Time:** both are full tier; `tvr4_full` grows by about 3.4 s in Release.
+- **Mutation:**
+  - `thermal_slab` L0 (17 mutants: the transform's two 300s and κ's exponent sign, the Joule factor, the Thomson
+    3/2, ∫dx/μ, J's relation sign, the mobility denominator, the dense evaluation, the halved-step shot, the slab's
+    interpolation, Seebeck's A, its 3/2 and the integrand's Nc exponent, the Peltier factor, two refusals): 15
+    caught. The survivors:
+    - κ's exponent sign: the L0 resistor has constant κ (a = 0). Caught in TVB-27 (A1).
+    - the V = 0 refusal: still refused, by the shooting's empty bracket.
+  - TVB-27 (12 mutants, judged by the printed comparison, failure, reason and note lines since the frozen case is
+    red): 9 caught (κ's sign, the FD Thomson term, the Richardson step, the slab's end, the voltage, the second
+    method's gate, the relative scale, the accuracy criterion, the node positions). The survivors:
+    - the FD Newton Jacobian's mobility term (equivalent: only the convergence rate changes);
+    - u_iter = 0 (equivalent here: e(h, tol) = e(h, tol/100) exactly);
+    - p_th 2 → 1 (not observable while both orders are not_evaluated).
+  - TVB-28 (10 mutants): 9 caught (T1, the rise's offset, Π's T, Π's sign, the odd part, the GK gate, the material
+    set, the thermopower exponent, C5's metric). The survivor: C5's outcome forced to pass, the same outcome as
+    found (C5's bound is TVR-2's, mutated there).
+
+**DT-Q38 (TVB-27 and TVB-28's non-passes).**
+- (A) Record as found, as DT-Q36 A: the frozen cases pin the 8 passes, the 3 not_evaluated and Π's order fail with
+  their reasons. The resistor's cause stays in the notes.
+- (B) Construction change for the resistor only (TVM2): 100 µm on the legacy set, measured orders 1.93/2.04/2.26,
+  so it would pass. The slab, S and Π stay as found (A).
+- (C) B, plus judge the h-exact quantities (slab, Π) as exactness, as DT-Q36 B.
+
+**Recommendation: B.** The resistor's floor is the benchmark's own reference assumption (n = N), like DT-Q37's V/L,
+and the fix keeps the criterion. The slab and Π are DT-Q36's class and should follow its ruling.
+
+**16.44 Step 13: TVB-32 on the TVR-4 devices. Scope and frozen expectations, written before code and before any run
+(TVM2).**
+- **Scope.** Each TVR-4 benchmark already built (TVB-05, 06, 10, 13, 15, 16, 17, 18, 19, 27, 28) exposes a
+  `tvbXX_consistency()` that runs the checks on its own device (its own builder and models) at the coarsest level
+  of its ladder.
+  - The operating points are the benchmark's own, plus the zero-bias point where the benchmark has none.
+  - TVB-20 and 21 join with step 9.
+- **Checks:**
+  - C1–C5 and C12 at every DC point (a small-signal run's DC points included);
+  - C1 and C3 on the equilibrium solve, for devices with a semiconductor region;
+  - C7 and C8 at every small-signal point;
+  - C6 on every transient run (TVB-10's deep depletion, TVB-19's two cases);
+  - C9 on TVB-18's diode at 0.40 V, from a DC stencil of h = 1 mV, with f = 0 among the frequencies;
+  - C10 and C11 are not run: no TVR-4 benchmark builds a limit series or a symmetry map. Listed in the notes.
+- **Tier.** TVB-32's fast tier is unchanged (the three decks). The full tier adds these entries. The frozen case runs
+  in `tvr4_full` as `[.tvr4_full]`.
+- **Frozen expectations** (11.13's rule, unchanged):
+  - C1, C2, C7, C8: pass where every bias is exactly 0 and the thermal contacts are at one temperature, else NOT
+    APPLICABLE naming the predicate.
+  - C1 and C3 on the equilibrium: pass. C3, C4 and C12: pass. C6 and C9: pass.
+  - C5: NOT APPLICABLE ("electrothermal on") with the model off; pass with it on (TVB-27, 28), with 11.13's
+    Newton-term limitation printed.
+  - A failed or NOT EVALUATED part, and any other outcome, is a finding to the owner (DT-Q11: not fixed in TVR-4).
+- **Prediction, not an expectation** (written before the run): TVB-15's zero-bias point carries the TVQ3 hook's
+  manufactured generation. C1's header says "NiTCAD has no optical or prescribed generation, so that predicate
+  holds by construction", and the hook makes that untrue. C1 and C2 at that point are therefore expected to fail
+  (the generated carriers leave through both contacts). If they do, that is a finding against C1's predicate list
+  (11.6), not against the solver.
+
+**16.45 Step 13 as built: TVB-32 on the TVR-4 devices. One finding; DT-Q39 open.**
+- **Code.**
+  - `tvb32.hpp` exposes TVB-32's collector (`Tvb32Collector`: dc, ac, transient, equilibrium) and one
+    `tvbXX_consistency()` per benchmark, each in its benchmark's file on its own builder and models.
+    `tvb32_tvr4_entries()` runs them in order.
+  - `run_tvb32(Tier)`: fast is unchanged (the three decks); full and nightly add these entries.
+  - To share their builders, four benchmarks had device or case construction moved into functions, with no
+    change in what they compute: TVB-05 `coax`, TVB-06 `stack`, TVB-10 `dd_transient` and `flat_band`, TVB-15
+    `generated_point`, TVB-19 `relaxation_case`, `pulse_case`, `case_options` and `solve_case`.
+  - **Checked as identical:** a baseline build of HEAD (be65856) in a separate worktree. TVB-05, 06, 10 and 15
+    (`-s`), TVB-19's nightly case and TVB-32's deck test (7037 lines) print the same output, sorted, line for
+    line. Catch2's case order differs between the builds.
+- **Devices and points** (the coarsest level of each ladder):
+  - TVB-05: coax M = 32. TVB-06: 1D N = 32. Both at (0, 0) and (0, 1) V, 1 MHz.
+  - TVB-10: N = 64. HF (equilibrium Poisson) at 0, V_FB + 0.5 and V_FB + 2 V, three frequencies; equilibrium;
+    the deep-depletion ramp.
+  - TVB-13: the drift bar N = 64 at 0 and four fields; the energy-balance bar N = 128 from 0 to 1e4 V/cm by half
+    decades; equilibria.
+  - TVB-15: N = 64, zero bias without and with the E part's generation; equilibrium.
+  - TVB-16: the three configurations at N = 128, forward from 0 and reverse; equilibria.
+  - TVB-17: N = 64, AC at 0, −0.5, −1 and −2 V.
+  - TVB-18: N = 128, AC at 0, 0.35, 0.40 and 0.45 V at 0, 1e4 and 1e6 Hz; C9 at 0.40 V (h = 1 mV).
+  - TVB-19: both cases at N = 257 and 8 dt₀ (relaxation BDF2 and BE, the pulse BDF2), with each bar's zero-bias
+    point and equilibrium.
+  - TVB-27: the slab and the resistor (0, 4 V) at N = 64. TVB-28 (legacy set): the Seebeck bar, the Peltier bar
+    (0, ±1 mV) and the resistor (0, 4 V), all at N = 64; equilibria.
+- **Run: 457 entries in 0.53 s (Release): 261 pass, 175 not applicable, 19 NOT EVALUATED, 2 fail.** 52 assertions
+  of the frozen case fail, so `tvr4_full` stays red pending DT-Q39.
+  - Every check where the frozen rule applies is as frozen. The worst ratio is 0.073 of the bound (C8, TVB-10 HF).
+- **Departures from 16.44's expectations, classified:**
+  - **The finding: C1 and C2 fail at TVB-15's generated zero-bias point.** This was predicted in 16.44.
+    - Edge currents 8.4e-9 against 5.4e-12; quasi-Fermi split 0.22 eV against 1.3e-14 eV; SRH 4.3e-8 against
+      5.4e-12.
+    - The TVQ3 hook (`models.manufactured`) is a prescribed generation, so C1's "no optical or prescribed
+      generation, holds by construction" is false. `DeviceData` and `BiasPoint` do not record the hook, so C1 and
+      C2 cannot see it.
+    - The checks are wrong to apply here, not the solver: the currents are the generated carriers leaving.
+    - Not fixed (DT-Q11).
+  - **Departures that are the checks' own contracts (11.6), not findings.** The frozen rule was 11.13's, written
+    for decks with every mechanism on and no insulator-only device:
+    - C2 is NOT EVALUATED, "no rates stored", at the zero-bias points with G-R off (9 entries).
+    - On insulator-only devices (TVB-05, 06), C1 and C2 are NOT EVALUATED ("no nonzero terminal resolution") at
+      zero bias, and C12 ("no semiconductor nodes") at every point (8). DT-Q2 A made these devices after C1–C12
+      were built.
+    - At TVB-10's zero-bias HF point (equilibrium Poisson: no currents), C1 is NOT EVALUATED, "no nonzero terminal
+      resolution" (1).
+    - C9 at TVB-18 is NOT EVALUATED: its conductance part passes (3.2e-4 of the bound), and its capacitance part
+      needs a gate or electrode row (1).
+    - C6 is NOT APPLICABLE on TVB-19's three transients ("transient with a gate or electrode"); TVB-10's ramp
+      passes (3).
+- **Mutation** (12 mutants, judged by any change in the printed tally, failure and reason lines, since the frozen
+  case is red): 11 caught. These were the thermal-temperature predicate, removing C12, C8, the equilibrium C3,
+  TVB-18's entries or C6, C9's step, TVB-15's generation, the slab's temperatures, TVB-13's energy model and the
+  zero-bias flag. The survivor, C6's device data from the HF models, is equivalent: C6 reads none of the models
+  that differ.
+
+**DT-Q39 (TVB-32 on the TVR-4 devices).**
+- (A) Pin as found:
+  - the frozen case's expectations add the five contract classes above, each with its reason;
+  - the two C1/C2 fails at TVB-15's generated point become a known finding;
+  - the finding's fix (a "prescribed generation" predicate from `models.manufactured` into `DeviceData`, making
+    C1 and C2 NOT APPLICABLE there) is deferred past TVR-4 (DT-Q11).
+- (B) As A, but authorize the predicate fix now as a TVR-4 change (TVM2's change to a check's inputs; its own
+  tests, bit-identical elsewhere).
+
+**Recommendation: A.** DT-Q11 keeps findings out of TVR-4. The contract classes are what C2, C6, C9 and C12 state.
+
+**16.46 Step 9: pao_sah, TVB-20 and TVB-21. The reference and the construction, recorded before any NiTCAD run of
+the benchmark (TVM2).**
+- **`verify/reference/pao_sah`** (PB through the two reproductions of 16.17; base-free):
+  - The field E(ψ, V) in both forms of 16.17, with exact bulk densities (`neutral_bulk`).
+  - ψ_s(V) by Brent in dd from V_G − V_FB = ψ_s + εE(ψ_s, V)/C_ox.
+  - Q_I(V) by adaptive Gauss–Kronrod in dd from c ψ_B to ψ_s; Q = μ ∫₀^{V_D} (−Q_I) dV by Gauss–Kronrod.
+  - **The primary reference is form 1 with c = 1** (Wong's reproduction, the one that states its limits). The
+    other form and c = 1/2 enter only as ε_cutoff (16.18 (d)).
+  - At c ψ_B > 0 the inner integrand is finite (16.18 (n)).
+  - The second method (16.18 (d)): g_d against a fourth-order difference of Q in V_D at the dyadic step 2⁻¹⁷. It
+    is run at L0 and at TVB-20's run time; above 1e-10 it is a run error.
+  - Brews' charge sheet (16.18 (e)), with ψ_s at both ends from the same gate equation instead of Brews' χ-modified
+    eq 5. A diagnostic only; its closed form is checked against Gauss–Kronrod.
+  - Quadrature tolerances: 1e-24 (inner) and 1e-22 (outer), relative. The quadrature estimate enters U_ref.
+- **L0** (`pao_sah_test`, 5 cases, 62 assertions):
+  - at V = 0, ψ_s against TVB-09's Kingston–Neustadter reference (separate code), 1e-24 relative, both forms;
+  - the bulk ambiguity in strong inversion: the forms within 1e-10 of Q, the cutoffs within 1e-8;
+  - the identity at weak and strong inversion, 1e-12;
+  - the linear-region limit, 1e-3;
+  - the subthreshold slope against the depletion formula, 5 %;
+  - the charge sheet within 5 % in strong inversion, and its second method, 1e-24;
+  - the refusals.
+- **Corrections to my own L0 expectations before any NiTCAD run:**
+  - The identity needed a fourth-order stencil: the central difference's (h/V_T)²/6 is 2.5e-6.
+  - It needed a dyadic step, because the double rounding of V_D ± h gave a 2.7e-12 floor.
+  - The cutoff bound was 1e-10 by my guess; the estimate n_i V_T / (E(ψ_B) N_inv) ≈ 2e-9 (measured 5.6e-10)
+    makes it 1e-8.
+- **L0 time:** the ambiguity and identity cases take 1.5 s in Release, against CV-Q19's Debug budget. They are
+  hidden (`[.pao_sah_release]`) and run in the Release-only ctest `verify.pao_sah_release`, as `diode_profile`
+  does. The identity also runs at TVB-20's run time.
+- **Construction** (`tvb20.cpp`; 16.2 (i), 16.18 (d)):
+  - **Device.** A uniform p-substrate, N_A = 1e17. Abrupt n+ source and drain boxes, 1e19, 0.5 µm wide and
+    0.1 µm deep. Depth 1 µm, with the body contact on the bottom.
+  - **Gate.** A lumped gate over the channel: t_ox = 10 nm, ε_ox 3.9, metal 4.5 eV, no fixed charge.
+  - **Physics.** 300 K, default silicon. Constant mobility: doping, field and surface mobility off, so μ_n is
+    μ_max. Boltzmann, no BGN, SRH, Auger and radiative off. Weighted terminal current (Unit 32).
+  - **Lengths.** L = L0 × {1, 2, 4, 8} with L0 = 2.5 µm (W_dmax ≈ 0.11 µm, so L0 ≥ 20 W_dmax).
+  - **Mesh, x.** Spacings 2 nm at the junction edges, growing ×1.2 up to 50 nm in the source and drain and up to
+    L/40 in the channel.
+  - **Mesh, y.** 0.2 nm at the surface, growing ×1.15 up to 40 nm.
+  - **Factorial.** At 8 L0: tol 1e-12 and 1e-14, and h/2 (every spacing halved, the ratios square-rooted).
+  - **U_disc** is the two-grid GCI (F_s 3, p 2) of h against h/2. U_iter = |Q(tol) − Q(tol/100)|.
+  - **Bias points.** Q = |I_D| L.
+    - V_D = 50 mV at V_G = 0.45, 0.6, 0.8, 1.2, 1.6 and 2.0 V.
+    - V_D = 0.5 V at V_G = 0.6, 0.8, 1.2, 1.6 and 2.0 V.
+    - Each V_D is swept in V_G from equilibrium.
+    - A point is NOT APPLICABLE where the reference's ψ_s(V_S) < ψ_B + 3V_T.
+  - **TVB-21.** S at V_G = 0.4, 0.5 and 0.6 V, V_D = 50 mV, from the stencil V_G ± 20 mV. The same stencil is
+    used on NiTCAD's ladder and on the reference. The depletion formula is printed (DT-Q6).
+  - **Judging.** The order in 1/L comes from the ladder's three differences (finest pair), with the spread of its
+    two values as the asymptotic check. Q_∞ is Richardson's at the finest pair, and U_L its three-grid GCI.
+  - **The accuracy needs the order.** It is NOT EVALUATED unless the order is a pass (Q_∞ is not established
+    otherwise), or when ε_approx > 1e-2 Q_PS.
+  - V_T and g_m are named in §6's catalogue row but not in 16.19's frozen criteria, so they are not judged.
+- **Tier:** nightly (`verify_full.tvb20`, NITCAD_VERIFY_FULL_TIER, as TVB-19). Registered in full, like TVB-19.
+- **Frozen outcome, set before the first run:** every comparison passes, except those at points below ψ_B + 3V_T,
+  which are NOT APPLICABLE by that predicate. 22 comparisons for TVB-20, 6 for TVB-21.
+- TVB-32 adds TVB-20's device at L0 (the V_D = 50 mV sweep from zero bias, and the equilibrium) under 16.44's
+  rule.
+
+**16.47 Step 9 as built: TVB-20 and TVB-21. DT-Q40 to DT-Q43, ruled A ("for decision choose recommended",
+2026-11-11).**
+- **First attempts: run errors, no comparison seen.**
+  - With 16.46's tol 1e-12 (and an interim 1e-10) Newton did not converge at L = 2 L0, V_D = 0.5 V, V_G = 0.8 V, with
+    the bias step cut to 2⁻³⁰. The last updates wander between 2e-10 and 8e-10 without decreasing.
+  - **Cause, measured with a temporary print in `DriftDiffusion::update_size` (not committed):** the largest
+    correction is always a hole density at a node of the inverted or depleted surface. There p is 7e-22 to 4e-19 of
+    the largest density (1e-16 of the local electrons) and its correction is 1e-10 of itself: the linear solve's
+    rounding. Unit 50's `minority_floor` does not help (ε n is below `update_size`'s own 1e-20 floor there).
+  - These holes carry no charge or current that enters I_D. The solver is not changed.
+- **DT-Q40 (the Newton tolerance). A, applied:** tol 1e-6, so the factorial's tol/100 is 1e-8, the solver's default,
+  12 times above the worst stall seen. U_iter came out at 1e-13 of Q or below at every point, so the choice enters
+  no outcome. `solve_level` now prints the stopped point's last six updates in a run error.
+- **First complete run (L0 … 8 L0, 8.8 min Release): TVB-20 16 pass, 6 NOT EVALUATED; TVB-21 1 pass, 4 NOT
+  EVALUATED, 1 fail.**
+  - TVB-20: the 11 orders pass (0.99 to 1.08). Five limits pass. Six are NOT EVALUATED: U_L is 1.5 to 2 % of Q_PS
+    at V_G ≤ 0.8 V (and at 1.2 V, V_D = 0.5 V), above 16.19's 1e-2.
+  - TVB-21: S at 0.6 V missed its bound by 1.19 (1.67e-5 V/dec against 1.40e-5, 2e-4 of S); at 0.4 and 0.5 V the
+    spread of the two orders was 0.38 and 0.11.
+- **DT-Q41 (U_disc's form). A, applied.** `tvb20.cpp` computed F_s |f(h/2) − f(h)| / (r^p − 1), the estimate of the
+  h/2 value. The judged values are on h. 16.36's form (`registry.cpp`), F_s |f(h/2) − f(h)| r^p / (r^p − 1), is the
+  one 16.46 names ("the two-grid GCI of h"). A coding error of mine, found after the run from the S fail; four times
+  larger. It enters the bounds only, never ε_approx.
+- **DT-Q42 (the six NOT EVALUATED limits). A, applied: the ladder is L0 × {4, 8, 16, 32}** (10 to 80 µm), the
+  factorial at 32 L0. The criterion is unchanged. (B was to pin the six as found.)
+- **The ruled run (12 to 16 min Release, two runs): TVB-20 22 pass. TVB-21 6 NOT EVALUATED.**
+  - TVB-20: orders 1.006 to 1.085, spreads within 0.1. U_L is 0.06 to 0.52 % of Q_PS. |Q_∞ − Q_PS| / bound is 0.08
+    to 0.27.
+    - Q_∞ against Q_PS: −0.37 to −0.68 % at V_G ≤ 0.8 V, where U_disc is 1.8 to 2.1 %; within ±0.08 % at V_G ≥ 1.2 V,
+      where U_disc is 0.03 to 0.23 %. The weak-inversion bound is the mesh's, not the ladder's.
+    - No point is below ψ_B + 3 V_T (0.495 V; ψ_s is 0.549 V already at V_G = 0.4 V).
+    - Brews' charge sheet at V_G 1.2 V, V_D 50 mV: 2.5 % below Pao–Sah (diagnostic).
+  - TVB-21: S does not depend on L measurably at these lengths. Its ladder's differences are 3e-7 to 5e-5 V/dec,
+    below U_disc (4.4e-5 to 5.6e-5), so the orders are −1.58, −0.23 and 0.30 with spreads 0.6 to 1.2: "not in the
+    asymptotic range", and the limit "Q_inf not established".
+    - Printed, not judged: S at 32 L0 against the reference is +0.84 % at 0.4 V (ε_cutoff 0.75 %), +0.069 % at 0.5 V
+      and +0.021 % at 0.6 V; on h/2, +0.82 %, +0.053 % and +0.007 %.
+    - The depletion formula is 2.5 to 2.7 % below the reference's S (DT-Q6's diagnostic).
+- **DT-Q43 (TVB-21's outcome). A: pinned as found**, as DT-Q20 A and DT-Q35 A. (B, a criterion change, was to judge
+  S at the longest L with ε_approx from the last ladder difference when the differences are below U_disc. It is
+  DT-Q36's class, an L-exact quantity judged by an order, and should follow that ruling if B is ever taken.)
+- **Frozen case** (`[tvb20_full]`, `verify_full.tvb20`): TVB-20 22 pass; TVB-21 6 NOT EVALUATED with the two
+  reasons. 16.46's "every comparison passes" is replaced.
+- **TVB-32 on TVB-20's device** (L0, zero bias and the V_D = 50 mV sweep, the equilibrium): 44 entries, 501 in all.
+  C1 2 pass and 6 not applicable, C3 8 pass, C4 7 pass (worst 0.0097 of the bound), C12 7 pass, C5 7 not
+  applicable, C2 6 not applicable and 1 NOT EVALUATED ("no rates stored" at zero bias with G-R off: 16.45's first
+  contract class, now 10 entries). No finding. The frozen case stays red pending DT-Q39.
+- **Mutation.**
+  - `pao_sah` L0 (19 mutants: the field's scale, ψ_B, the hole term's sign, each form's electron term, n's V, the
+    gate equation's sign, the cutoff, Q_I's sign, μ, the outer integral's lower limit, the stencil's 12, the
+    identity's sign, the charge sheet's V_T, its 2/3 and its diffusion sign, three refusals): 16 caught at first
+    (the hole term's sign by a 120 s limit: the root search does not end).
+    - Two survivors were gaps and are closed: the cutoff ignored (now: c = 1/2 must change the current) and the
+      charge sheet's ψ_s ≤ V_T refusal (now tested). `pao_sah_test` is 65 assertions.
+    - One is equivalent: without the V_G ≤ V_FB refusal the point is still refused, by Brent's empty bracket.
+  - TVB-20 and TVB-21's own code: not run. Each mutant costs the 12 to 16 min nightly run.
+- **Time:** nightly only; `verify_full.tvb20` 12 to 16 min Release against its 3600 s limit. Nothing is added to the
+  fast tier or to `tvr4_full` except TVB-32's 44 entries (the L0 sweep).
+
+**16.48 DT-Q35 to DT-Q39 ruled as recommended ("for decision choose recommended", 2026-11-11) and applied.
+`tvr4_full` is green.**
+- **DT-Q35 A (TVB-10): pinned as found.** 13 pass; C_HF at V_G − V_FB = 2 V is NOT EVALUATED ("U_num not
+  estimated"). The five C_HF passes' bounds are pinned to 1e-6. Nothing else changed.
+- **DT-Q36 A (TVB-19, nightly): pinned as found.** 10 pass, 3 NOT EVALUATED ("not in the asymptotic range": the
+  decay rate's and the width's BDF2 orders in dt, the width's order in h), 3 fail (the orders in h of the decay
+  rate, the pulse's area and its centre, which have no h error). The run of 2026-11-11 reproduced 16.41's outcome
+  line for line. Its criteria carry no computed bound, so none is pinned.
+- **DT-Q37 A (TVB-13): the T_n reference is taken at each judged node's own field** (its two edges' mean), as
+  16.2 (f) states, not at V/L.
+  - T_n − T_L: 3.7e-14 and 1.3e-14 (N = 128), 1.5e-13 and 6.8e-14 (N = 512), against 2.3e-10 and 3.7e-9. All 8
+    comparisons pass; the case is `require_all_pass` again.
+  - Printed, not judged: the rise against the homogeneous rise at V/L (the former comparison) and the interior
+    field's departure from V/L.
+- **DT-Q38 B (TVB-27): the self-heated resistor is 100 µm on the legacy set.** The slab, S and Π stay as found.
+  - The resistor's errors are 2.25e-6, 5.83e-7, 1.41e-7 and 2.93e-8 (N = 64 … 512): orders 1.93, 2.04 and 2.26.
+    Accuracy passes (2.9e-8 against 1e-4).
+  - **Its order is still NOT EVALUATED**: p̂ is 2.26, inside the window, but the successive orders spread 0.225,
+    above 0.1. 16.43's "so it would pass" overlooked the spread rule; the diagnostic's numbers were these.
+  - TVB-27 as pinned: both accuracies pass, both orders NOT EVALUATED. TVB-28 as pinned: 6 pass, S's order NOT
+    EVALUATED, Π's order fail (DT-Q36's class).
+  - TVB-32's TVB-27 resistor is the same device (100 µm, legacy set): C1, C3, C4, C5 and C12 pass.
+  - TVB-28's C5 state "self-heated resistor, 4 V" is unchanged (10 µm, legacy set).
+- **DT-Q39 A (TVB-32): pinned as found, 501 entries.** The frozen rule of 16.44 stands. Beside it the case pins,
+  by count and reason:
+  - C2 NOT EVALUATED, "no rates stored" (10);
+  - C1 and C2 NOT EVALUATED, "no nonzero terminal resolution" (5); C12 NOT EVALUATED, "no semiconductor nodes" (4);
+  - C9 NOT EVALUATED at TVB-18, no gate or electrode row (1);
+  - C6 NOT APPLICABLE, "transient with a gate or electrode" (3);
+  - the known finding: C1 and C2 fail at TVB-15's generated point (2). Its fix stays deferred past TVR-4 (DT-Q11).
+  Any other departure fails the case.
+- **Tests.** `device_theory_test` gains `require_as_found` (quantity, outcome, a part of the reason, and the bound
+  to 1e-6 where the criterion states one). `[.tvr4_full]`: 11 cases, 1041 assertions, all pass (Release).
+- **Not done:** mutation runs of these changes (the T_n reference's field, the resistor's set and length, the
+  pins) and of TVB-20/21's own code (16.47); the serial Debug timing (CV-Q19's 75 s), which these full-tier
+  changes do not enter.
+- **Open in TVR-4:** step 14, the close-out. No DT question is open.
+
+**16.49 DT-Q44 and DT-Q45, ruled A (owner "go ahead and choose recommended", 2026-11-11).**
+- **DT-Q44 (TVB-21 judged nothing after 16.47).**
+  - (A) Where the last ladder difference of S is within U_disc, S has no measurable dependence on L: its order in
+    1/L is NOT APPLICABLE by that predicate, and S at the longest L is judged directly,
+    |S(32 L0) − S_PS| ≤ U_num + U_ref + ε_approx with ε_approx = |last ladder difference| + ε_cutoff. Elsewhere
+    16.19's rule stands. This is a criterion change after a run (TVM2), DT-Q36 B's class.
+  - (B) Leave the six NOT EVALUATED (16.47's DT-Q43 A).
+  - **A, applied.** Without it the swing benchmark verifies nothing.
+  - **Expectation, set before the run from 16.47's printed ladders:** all three orders NOT APPLICABLE; S passes at
+    0.97, 0.62 and 0.36 of its bound (0.4, 0.5 and 0.6 V).
+  - **Run: as expected.** 0.964, 0.617 and 0.360. The last differences are 4.6e-5, 4.0e-6 and 3.5e-7 V/dec against
+    U_disc 5.6e-5, 4.9e-5 and 4.4e-5.
+  - The pass at 0.4 V is marginal. Its bound is 86 % ε_cutoff: at ψ_s − ψ_B = 5 V_T the reference's cutoff
+    ambiguity is 0.75 % of S, and NiTCAD's S lies inside it. At 0.5 and 0.6 V the bound is mostly U_disc.
+  - TVB-20 is unchanged: 22 pass. Frozen case: TVB-20 22 pass; TVB-21 3 NOT APPLICABLE, 3 pass.
+- **DT-Q45 (CV-Q19's 75 s after TVR-4).**
+  - Measured, serial Debug `ctest -R verify -LE full`: 71/71 pass in 101.3 and 94.9 s, **under load** (a game on
+    the machine). The 66 tests of 16.38's idle run (74.5 s) ran 22 to 30 % slower than there.
+  - Idle estimate from the per-test times: 71.05 s for the 62 tests unchanged since 16.38, plus about 6.2 s for
+    the changed and new ones, about 77.2 s. Over the budget by about 2.2 s. The growth is TVB-13's fast case
+    (about 1.4 s; 16.42) and the L0 tests of steps 8 to 12 and 9.
+  - (A) Move the Debug-heavy L0 cases to a Release-only ctest, as 16.31, 16.38 and 16.46 did.
+  - (B) Raise CV-Q19 to 80 s.
+  - **A, applied.** Eight cases carry `[.tvr4_reference_release]` and run in the Release-only ctest
+    `verify.tvr4_reference_release`: `pao_sah` limits; `admittance` at ω = 0, the Riccati second method and C_SCR;
+    `diode` SNS; `minority_diffusion` erfc and collocation; `thermal_slab`'s constant-coefficient resistor.
+    Nothing is removed from Release or CI.
+  - After the move: 71/71 pass in 97.0 and 96.7 s, under the same load (the unchanged tests 30 % slower than
+    idle). **Idle estimate 74.2 s.** This is an estimate; no idle run was possible today.
+
+**16.50 Step 14: TVR-4 close-out (2026-11-11).**
+- **Outcomes** (ARCHITECTURE.md 10 carries the table): TVB-06, 13, 15 and 20 pass in full. TVB-21 3 pass and 3 NOT
+  APPLICABLE. TVB-05, 10, 16, 17, 18 and 27 pass where judged and are NOT EVALUATED elsewhere (TVB-16 also 3
+  finding, (x)). TVB-19 and TVB-28 carry 3 and 1 order fails of h-exact quantities. TVB-32 on these devices: 501
+  entries, 285 pass, 194 not applicable, 20 NOT EVALUATED, 2 fail (the finding of 16.45).
+- **Provenance:** PD 9 references (TVB-05, 06, 10, 13, 15, 17, 19, 27, 28), PA 2 (TVB-16, 18), PB 1 (`pao_sah`:
+  TVB-20, 21; Pao and Sah's paper was not read, 16.17).
+- **Mutation, for 16.47 to 16.49's changes.**
+  - TVB-20 and TVB-21's own code (12 mutants, each a nightly run): 11 caught. These were U_disc's r^p, ε_cutoff
+    out of the flat bound, the flat predicate, the ladder's first length, Q without L, the 1e-2 limit, the order
+    window, the reference's μ by 1 % (6 comparisons fail), ε_cutoff's first term, the reference's S stencil and
+    the spread limit.
+    - The survivor: S judged at Q_∞ instead of at the longest L. Same outcomes: the two differ by less than the
+      bound's slack.
+  - TVB-13 (3): the node field by 0.1 % and the reference at V/L are caught. The outcome forced to pass is the
+    outcome as found.
+  - TVB-27 (3): the resistor back at 10 µm survived the first pins, since both lengths pass ≤ 1e-4. The case now
+    pins the finest error below 1e-7 (2.9e-8 as found; about 1e-6 at 10 µm), which catches it. The default set's
+    κ and μ in the reference are equivalent: the default set copies the legacy's mobility and conductivity.
+  - Not mutated: the pins of 16.48 (test code).
+- **Suites (2026-11-11, after every change above).**
+  - Release, `ctest -LE full -j 4`: 206/206 pass in 807 s. `verify_benchmark.tvr4_full` 77.7 s under load, against
+    16.7's 120 s; `verify.tvr4_reference_release` 0.49 s; `verify.pao_sah_release` 1.54 s.
+  - Debug, serial `ctest -R verify -LE full`: 71/71 pass (16.49's times).
+  - Nightly cases run today in Release: `verify_full.tvb20` passes (38 assertions, 13.6 min) and
+    `verify_full.tvb19` passes (25 assertions, about 9 min). Not rerun: `verify_full.tvb04`, `tvb05`, `tvb07`,
+    `tvb09` and `tvb14`, whose code this branch's last three commits do not touch.
+- **Time.** Fast tier: TVB-06 0.09 s and TVB-13 1.65 s in Debug under load (about 1.3 s idle), within 16.7's 2 s
+  only at idle. Serial Debug verify: 16.49. Nightly: TVB-19 about 9 min, TVB-20/21 12 to 16 min.
+- **Not done, for the owner:**
+  - an idle serial Debug run to confirm the 74.2 s estimate (CV-Q19);
+  - findings deferred past TVR-4 (DT-Q11): the prescribed-generation predicate for C1 and C2 (16.45); finding (x);
+  - DT-Q36 B's redesign (judging h-exact quantities as exactness), which would turn TVB-19's and TVB-28's four
+    fails and TVB-27's slab into judged comparisons;
+  - TVB-16, 17 and 18's NOT EVALUATED comparisons (U_disc outside the asymptotic range) stay as found.
+- **Work location.** Steps 9 and 14 were done on `verify/device-theory-step9`, a worktree branch off
+  `verify/device-theory` at 7688cd6. Nothing is pushed. TVR-4 is complete on that branch.
 
 ---
 

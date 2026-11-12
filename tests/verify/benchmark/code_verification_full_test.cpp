@@ -5,8 +5,10 @@
 // as long again, so the test exists only with NITCAD_VERIFY_FULL_TIER=ON (Release) and carries the ctest label "full".
 #include <catch2/catch_test_macros.hpp>
 
+#include <algorithm>
 #include <cstdio>
 #include <string>
+#include <vector>
 
 #include "NiTCAD/linalg/mkl_runtime.hpp"
 #include "NiTCAD/verify/benchmark/registry.hpp"
@@ -128,6 +130,93 @@ TEST_CASE("TVB-14 full tier: tensor ladders and the unstructured families (froze
         for (const char* family : {"2D generated", "3D generated", "3D swept"}) {
             CAPTURE(family);
             CHECK(outcome_of(r, f + " H1 finest, " + family) == Outcome::pass);
+        }
+    }
+}
+
+// TVB-05 in the nightly tier (DECISIONS Unit 55 16.7, 16.30; DT-Q20 A, DT-Q23 A): the ladder M = 32 ... 256 and the
+// (h, tol) factorial at M = 256 (M = 512, about 4 minutes a solve). The order stays not_evaluated (16.24); the finest
+// accuracy passes with eps_int reported and not interacting.
+TEST_CASE("TVB-05 nightly tier: the coaxial capacitor with its factorial (frozen outcomes)", "[tvb05_full]") {
+    const bench::BenchmarkResult r = bench::run_tvb05(bench::Tier::nightly);
+    REQUIRE_FALSE(r.run_error.has_value());
+    bool reported = false;
+    for (const auto& n : r.notes) {
+        std::printf("TVB-05 note: %s\n", n.c_str());
+        reported = reported || (n.find("eps_int") != std::string::npos && n.find("interacting") == std::string::npos);
+    }
+    CHECK(reported);
+    REQUIRE(r.comparisons.size() == 2);
+    CHECK(r.comparisons[0].comparison.outcome == Outcome::not_evaluated);
+    CHECK(r.comparisons[0].comparison.reason == "not in the asymptotic range");
+    CHECK(r.comparisons[1].comparison.outcome == Outcome::pass);
+    CHECK(bench::overall(r) == Outcome::not_evaluated);
+}
+
+// TVB-19 (dielectric relaxation and the Haynes-Shockley pulse; E, 16.8 frozen; construction 16.41) in the nightly
+// tier: its 16 runs per ladder at N = 2049 and 4097 take about 9 minutes, past tvr4_full's 120 s (16.7, DT-Q9).
+// 16 comparisons: for the decay rate and the pulse's area, centre and width, the orders in dt (BDF2, backward Euler)
+// and in h, and the finest accuracy. Frozen outcome: as found (DT-Q36 A, 16.48): 10 pass, 3 NOT EVALUATED (not in the
+// asymptotic range) and 3 fails, the orders in h of quantities that have no h error (the decay rate, the pulse's area
+// and centre): a property of the construction, not an error in NiTCAD. Criteria and ladders are unchanged.
+TEST_CASE("TVB-19 nightly tier: linear transients (frozen outcome: as found, 16.48)", "[tvb19_full]") {
+    const bench::BenchmarkResult r = bench::run_tvb19(bench::Tier::full);
+    REQUIRE_FALSE(r.run_error.has_value());
+    for (const auto& n : r.notes) std::printf("TVB-19 note: %s\n", n.c_str());
+    for (const auto& c : r.comparisons) {
+        std::printf("TVB-19 [%s] %s: %.4g (%s) %s\n", std::string(to_string(c.comparison.outcome)).c_str(),
+                    c.quantity.c_str(), c.metric, c.criterion.c_str(), c.comparison.reason.c_str());
+    }
+    const std::vector<std::string> not_evaluated{"decay rate (relaxation) order in dt (BDF2)",
+                                                 "pulse width order in dt (BDF2)", "pulse width order in h (BDF2)"};
+    const std::vector<std::string> failing{"decay rate (relaxation) order in h (BDF2)", "pulse area order in h (BDF2)",
+                                           "pulse centre (per drift length) order in h (BDF2)"};
+    REQUIRE(r.comparisons.size() == 16);
+    int seen = 0;
+    for (const auto& c : r.comparisons) {
+        CAPTURE(c.quantity, c.comparison.reason);
+        if (std::find(not_evaluated.begin(), not_evaluated.end(), c.quantity) != not_evaluated.end()) {
+            ++seen;
+            CHECK(c.comparison.outcome == Outcome::not_evaluated);
+            CHECK(c.comparison.reason.find("not in the asymptotic range") != std::string::npos);
+        } else if (std::find(failing.begin(), failing.end(), c.quantity) != failing.end()) {
+            ++seen;
+            CHECK(c.comparison.outcome == Outcome::fail);
+            CHECK(c.comparison.reason.find("p-hat in [1.8, 2.3] (p_th 2) missed") != std::string::npos);
+        } else {
+            CHECK(c.comparison.outcome == Outcome::pass);
+        }
+    }
+    CHECK(seen == 6);
+}
+
+// TVB-20 and TVB-21 (the long-channel MOSFET against Pao-Sah, and its swing; A, 16.19 frozen; construction 16.46 as
+// changed by 16.47) in the nightly tier: NiTCAD's L ladder (4 L0 ... 32 L0) and the (h, tol) factorial with the h/2
+// mesh at 32 L0. TVB-20: for each judged (V_G, V_D), the order in 1/L and the limit against Pao-Sah: all 22 pass
+// (16.47; none of its points is below psi_B + 3 V_T).
+// TVB-21 (DT-Q44 A, 16.49; expectation set before the run from 16.47's printed ladders): S's last ladder difference is
+// within U_disc at all three gate biases, so each order is NOT APPLICABLE by that predicate and S at 32 L0 passes
+// against Pao-Sah within U_num + U_ref + |last ladder difference| + eps_cutoff.
+TEST_CASE("TVB-20 and TVB-21 nightly tier: Pao-Sah and the swing (frozen outcome: 16.47, 16.49)", "[tvb20_full]") {
+    for (const bench::BenchmarkResult& r : {bench::run_tvb20(bench::Tier::full), bench::run_tvb21(bench::Tier::full)}) {
+        INFO(r.id);
+        CHECK_FALSE(r.run_error.has_value());
+        if (r.run_error) std::printf("%s run error: %s\n", r.id.c_str(), r.run_error->c_str());
+        for (const auto& n : r.notes) std::printf("%s note: %s\n", r.id.c_str(), n.c_str());
+        for (const auto& c : r.comparisons) {
+            std::printf("%s [%s] %s: %.4g (%s) %s\n", r.id.c_str(), std::string(to_string(c.comparison.outcome)).c_str(),
+                        c.quantity.c_str(), c.metric, c.criterion.c_str(), c.comparison.reason.c_str());
+        }
+        CHECK(r.comparisons.size() == (r.id == "TVB-20" ? 22u : 6u));
+        for (const auto& c : r.comparisons) {
+            CAPTURE(c.quantity, c.comparison.reason);
+            if (r.id == "TVB-21" && c.quantity.find("order in 1/L") != std::string::npos) {
+                CHECK(c.comparison.outcome == Outcome::not_applicable);
+                CHECK(c.comparison.reason.find("the ladder's last difference > U_disc") != std::string::npos);
+            } else {
+                if (r.id == "TVB-21") CHECK(c.quantity.find("at the longest L against Pao-Sah") != std::string::npos);
+                CHECK(c.comparison.outcome == Outcome::pass);
+            }
         }
     }
 }

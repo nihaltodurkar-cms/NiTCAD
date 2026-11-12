@@ -236,3 +236,58 @@ TEST_CASE("insulator device: interface rules") {
         REQUIRE(device::Device::create(std::move(d)).has_value());
     }
 }
+
+// DECISIONS.md Unit 55 16.22 (DT-Q19 A): insulator-only devices name the semiconductor of their
+// scaling (reference_material); a device with a semiconductor takes its reference node's.
+TEST_CASE("insulator device: insulator-only devices and the reference material") {
+    const auto capacitor = [] {
+        mesh::Mesh m = *mesh::make_tensor_grid(axis());
+        const std::size_t n = m.node_count();
+        device::DeviceDescription d{
+            .mesh = std::move(m),
+            .temperature_K = 300.0,
+            .regions = {{"oxide", physics::silicon_dioxide()}},
+            .node_region = std::vector<device::RegionId>(n, 0),
+            .donors = std::vector<double>(n, 0.0),
+            .acceptors = std::vector<double>(n, 0.0),
+            .contacts = {{"top", device::ContactKind::electrode, {9}},
+                         {"bottom", device::ContactKind::electrode, {0}}}};
+        d.reference_material = physics::silicon();
+        return d;
+    };
+    {
+        const auto r = device::Device::create(capacitor());
+        REQUIRE(r.has_value());
+        REQUIRE_FALSE(r->has_semiconductor());
+        REQUIRE(r->reference_node() == 0);  // the lowest electrode node, whatever the order
+        REQUIRE(r->reference_material().parameters() == physics::silicon_parameters);
+    }
+    {
+        auto d = capacitor();
+        d.reference_material.reset();
+        REQUIRE(rejected(std::move(d), "at least one semiconductor region or a reference_material"));
+    }
+    {
+        auto d = capacitor();
+        d.temperature_K = -1.0;  // the reference material's temperature check runs
+        REQUIRE(rejected(std::move(d), "reference_material: "));
+    }
+    {
+        auto d = capacitor();
+        d.contacts[1].kind = device::ContactKind::ohmic;  // no carriers anywhere to contact
+        REQUIRE(rejected(std::move(d), "node is in an insulator"));
+    }
+    {
+        auto d = mos();
+        d.reference_material = physics::silicon();
+        REQUIRE(rejected(std::move(d), "reference_material is only for a device with no semiconductor"));
+    }
+    {
+        // With a semiconductor region the reference is the reference node's own material object,
+        // so every existing device's scaling is unchanged.
+        const auto r = device::Device::create(mos());
+        REQUIRE(r.has_value());
+        REQUIRE(r->has_semiconductor());
+        REQUIRE(&r->reference_material() == &r->material(r->reference_node()));
+    }
+}

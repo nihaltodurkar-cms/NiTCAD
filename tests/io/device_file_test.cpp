@@ -432,3 +432,29 @@ TEST_CASE("device file: energy relaxation times are written only when given (Uni
     CHECK(std::get<physics::Semiconductor>(none->regions()[0].material).parameters().energy_relaxation ==
           physics::EnergyRelaxationParameters{});
 }
+
+// DECISIONS.md Unit 55 16.22: the format stores no reference material, so an insulator-only device
+// is refused before anything is written.
+TEST_CASE("device file: an insulator-only device is refused and nothing is written", "[io][device_file]") {
+    const std::vector<double> axis{0.0, 1e-7, 2e-7};
+    mesh::Mesh m = *mesh::make_tensor_grid(axis);
+    DeviceDescription d{.mesh = std::move(m),
+                        .temperature_K = 300.0,
+                        .regions = {{"oxide", physics::silicon_dioxide()}},
+                        .node_region = {0, 0, 0},
+                        .donors = {0.0, 0.0, 0.0},
+                        .acceptors = {0.0, 0.0, 0.0},
+                        .contacts = {{"a", ContactKind::electrode, {0}},
+                                     {"b", ContactKind::electrode, {2}}}};
+    d.reference_material = physics::silicon();
+    const auto device = Device::create(std::move(d));
+    REQUIRE(device.has_value());
+    const fs::path p = scratch("insulator_only") / "capacitor.nitdev";
+    std::error_code ec;
+    fs::remove(p, ec);
+    const auto r = io::save_device(p, *device);
+    REQUIRE_FALSE(r.has_value());
+    REQUIRE(r.error().code == ErrorCode::invalid_input);
+    REQUIRE(r.error().message.find("insulator-only") != std::string::npos);
+    REQUIRE_FALSE(fs::exists(p));
+}

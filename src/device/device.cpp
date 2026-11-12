@@ -72,7 +72,20 @@ std::optional<base::Error> check_regions(const DeviceDescription& d) {
                            ok.error().context ? ok.error().context->value : std::nullopt);
         }
     }
-    if (!semiconductor) return invalid("device needs at least one semiconductor region");
+    // DECISIONS.md Unit 55 16.22 (DT-Q19 A): an insulator-only device names the semiconductor of
+    // its scaling; a device with a semiconductor region takes it from its reference node.
+    if (semiconductor && d.reference_material) {
+        return invalid("reference_material is only for a device with no semiconductor region");
+    }
+    if (!semiconductor) {
+        if (!d.reference_material) {
+            return invalid("device needs at least one semiconductor region or a reference_material");
+        }
+        if (auto ok = physics::check_temperature(*d.reference_material, d.temperature_K); !ok) {
+            return invalid("reference_material: " + ok.error().message, std::nullopt,
+                           ok.error().context ? ok.error().context->value : std::nullopt);
+        }
+    }
     return std::nullopt;
 }
 
@@ -469,7 +482,21 @@ std::expected<Device, base::Error> Device::create(DeviceDescription description)
 }
 
 Device::Device(DeviceDescription description) noexcept : d_(std::move(description)) {
-    while (insulator_node(d_, reference_node_)) ++reference_node_;  // a semiconductor node exists
+    if (!d_.reference_material) {
+        while (insulator_node(d_, reference_node_)) ++reference_node_;  // a semiconductor node exists
+        return;
+    }
+    // Insulator-only (check_regions): the lowest electrode node; check_topology guarantees one.
+    reference_node_ = static_cast<mesh::NodeId>(d_.mesh.node_count());
+    for (const Contact& c : d_.contacts) {
+        if (c.kind == ContactKind::electrode && !c.nodes.empty()) {
+            reference_node_ = std::min(reference_node_, c.nodes.front());
+        }
+    }
+}
+
+const physics::Semiconductor& Device::reference_material() const {
+    return d_.reference_material ? *d_.reference_material : material(reference_node_);
 }
 
 InterfaceTransport Device::transport(RegionId a, RegionId b) const {

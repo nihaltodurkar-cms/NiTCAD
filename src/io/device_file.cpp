@@ -473,6 +473,14 @@ std::expected<device::ThermalContact, base::Error> read_thermal_contact(const Re
 
 std::expected<void, base::Error> save_device(const std::filesystem::path& path,
                                              const device::Device& d) {
+    // DECISIONS.md Unit 55 16.22: the format stores no reference material, so an insulator-only
+    // device is refused rather than written into a file that would not load.
+    if (!d.has_semiconductor()) {
+        return std::unexpected(base::Error{base::ErrorCode::invalid_input,
+                                           "device files do not store an insulator-only device's "
+                                           "reference material",
+                                           base::ErrorContext{}});
+    }
     Writer w;
     w.record(device_key::mesh, detail::write_mesh(d.mesh()));
     w.f64(device_key::temperature, d.temperature_K());

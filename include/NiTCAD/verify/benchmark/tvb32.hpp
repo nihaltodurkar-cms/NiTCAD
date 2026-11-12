@@ -11,6 +11,11 @@
 #include <string>
 #include <vector>
 
+#include "NiTCAD/assemble/models.hpp"
+#include "NiTCAD/device/device.hpp"
+#include "NiTCAD/results/small_signal.hpp"
+#include "NiTCAD/results/solution.hpp"
+#include "NiTCAD/results/transient.hpp"
 #include "NiTCAD/verify/consistency/checks.hpp"
 
 namespace NiTCAD::verify::benchmark {
@@ -29,5 +34,41 @@ struct Tvb32Run {
 };
 
 [[nodiscard]] Tvb32Run tvb32_entries();
+
+// The TVR-4 devices (DECISIONS Unit 55 16.44), TVB-32's full tier: each benchmark's own device at the coarsest level
+// of its ladder, at its own operating points plus zero bias. C1-C5 and C12 at each DC point, C1 and C3 on the
+// equilibrium (devices with a semiconductor region), C7 and C8 at each small-signal point, C6 on each transient, C9
+// on TVB-18's diode.
+struct Tvb32Collector {
+    std::vector<Tvb32Entry>& out;
+    std::string deck;  // the benchmark and its device, e.g. "TVB-17 diode N = 64"
+    std::size_t contacts = 0;
+    void add(const std::string& at, bool zero, consistency::CheckResult r);
+    void dc(const results::BiasPoint& p, const mesh::Mesh& m, const consistency::DeviceData& d,
+            const std::string& at);
+    void ac(const results::SmallSignal& run, const mesh::Mesh& m, const consistency::DeviceData& d,
+            const std::string& prefix);
+    void transient(const results::Transient& run, const mesh::Mesh& m, const consistency::DeviceData& d,
+                   const std::string& at);
+    // C1 and C3 on solve_equilibrium with these models; false (error set) when it does not solve.
+    bool equilibrium(const device::Device& device, const assemble::PhysicsModels& models, std::string& error);
+};
+[[nodiscard]] bool at_zero_bias(const results::BiasPoint& p);
+[[nodiscard]] std::string bias_label(const results::BiasPoint& p);
+
+[[nodiscard]] Tvb32Run tvb05_consistency();
+[[nodiscard]] Tvb32Run tvb06_consistency();
+[[nodiscard]] Tvb32Run tvb10_consistency();
+[[nodiscard]] Tvb32Run tvb13_consistency();
+[[nodiscard]] Tvb32Run tvb15_consistency();
+[[nodiscard]] Tvb32Run tvb16_consistency();
+[[nodiscard]] Tvb32Run tvb17_consistency();
+[[nodiscard]] Tvb32Run tvb18_consistency();
+[[nodiscard]] Tvb32Run tvb19_consistency();
+[[nodiscard]] Tvb32Run tvb20_consistency();  // with step 9 (16.46)
+[[nodiscard]] Tvb32Run tvb27_consistency();
+[[nodiscard]] Tvb32Run tvb28_consistency();
+// All of them, in that order; a run error stops the list at that benchmark.
+[[nodiscard]] Tvb32Run tvb32_tvr4_entries();
 
 }  // namespace NiTCAD::verify::benchmark
