@@ -33,26 +33,40 @@ std::vector<double> edge_excess(const EdgeIndicators& e, const IndicatorOptions&
     return x;
 }
 
-// The 2D refinement of a triangulation's nodal sizes (AD4).
+// The 2D refinement of a triangulation's nodal sizes (AD4): marked nodes halved, or (targets given,
+// ID2) each node's size lowered to its target; `changed` counts the nodes lowered.
 std::expected<std::shared_ptr<const mesh::SizeField>, base::Error> refine_field(
     const mesh::SimplexMesh& sm, const std::shared_ptr<const mesh::SizeField>& previous, const std::vector<char>& marked,
-    double min_size, double grading, bool uniform) {
+    double min_size, double grading, bool uniform, const std::vector<double>* targets = nullptr,
+    std::size_t* changed = nullptr) {
     std::vector<double> h = mesh::local_sizes(sm);
     if (previous) {
         for (std::size_t i = 0; i < h.size(); ++i) h[i] = std::min(h[i], previous->at(sm.points[i]));
     }
+    std::size_t count = 0;
     if (uniform) {
         for (double& x : h) x *= 0.5;
+        count = h.size();
     } else {
         std::vector<char> seeds(h.size(), 0);
         for (std::size_t i = 0; i < h.size(); ++i) {
-            if (marked[i] == 0 || !(h[i] > min_size)) continue;
-            h[i] = std::max(0.5 * h[i], min_size);
+            if (!(h[i] > min_size)) continue;
+            if (targets != nullptr) {
+                // Halved at most per call (as marks are), toward the target (AR5).
+                const double t = std::max({(*targets)[i], 0.5 * h[i], min_size});
+                if (!(t < h[i])) continue;
+                h[i] = t;
+            } else {
+                if (marked[i] == 0) continue;
+                h[i] = std::max(0.5 * h[i], min_size);
+            }
             seeds[i] = 1;
+            ++count;
         }
         auto g = mesh::grade_sizes(sm, h, grading, seeds);
         if (!g) return std::unexpected(g.error());
     }
+    if (changed != nullptr) *changed = count;
     return mesh::SizeField::create(sm.points, sm.cells, std::move(h));
 }
 
@@ -82,6 +96,15 @@ std::expected<std::vector<double>, base::Error> refine_lines(const std::vector<d
     return std::move(r->lines);
 }
 
+// The refinement of `cur` from node marks (the 2D size field) and an edge predicate (axis
+// intervals), or from per-node targets (ID2: the size field lowered to them; axis intervals by the
+// predicate). `changed`: whether anything was refined.
+std::expected<MeshRefinement, base::Error> refine_with(const AdaptableMesh& cur, const MeshRefinement& previous,
+                                                       const std::vector<char>& mk,
+                                                       const std::function<bool(std::size_t)>& edge_marked,
+                                                       const std::vector<double>* targets, const AdaptOptions& o,
+                                                       bool uniform, bool* changed);
+
 }  // namespace
 
 std::expected<MeshRefinement, base::Error> next_refinement(const AdaptableMesh& cur, const MeshRefinement& previous,
@@ -101,6 +124,19 @@ std::expected<MeshRefinement, base::Error> next_refinement(const AdaptableMesh& 
         const bool has = excess.empty() || excess[e] > 0.0;
         return has && (mk[a] != 0 || mk[b] != 0);
     };
+    return refine_with(cur, previous, mk, edge_marked, nullptr, o, uniform, nullptr);
+}
+
+namespace {
+
+std::expected<MeshRefinement, base::Error> refine_with(const AdaptableMesh& cur, const MeshRefinement& previous,
+                                                       const std::vector<char>& mk,
+                                                       const std::function<bool(std::size_t)>& edge_marked,
+                                                       const std::vector<double>* targets, const AdaptOptions& o,
+                                                       bool uniform, bool* changed) {
+    const mesh::Mesh& m = cur.device.mesh();
+    const std::size_t nn = m.node_count();
+    bool any = false;
     const double floor2d = o.min_size > 0.0             ? o.min_size
                            : cur.interface_resolution > 0 ? 0.25 * cur.interface_resolution
                                                           : cur.max_size / 64.0;
@@ -110,9 +146,12 @@ std::expected<MeshRefinement, base::Error> next_refinement(const AdaptableMesh& 
             if (!cur.generated || cur.generated->simplices.points.size() != nn) {
                 return std::unexpected(invalid("a generated 2D mesh needs its simplices, one point per node"));
             }
-            auto f = refine_field(cur.generated->simplices, previous.size_field, mk, floor2d, o.grading, uniform);
+            std::size_t count = 0;
+            auto f = refine_field(cur.generated->simplices, previous.size_field, mk, floor2d, o.grading, uniform, targets,
+                                  &count);
             if (!f) return std::unexpected(f.error());
             next.size_field = std::move(*f);
+            if (changed != nullptr) *changed = count > 0;
             return next;
         }
         case AdaptMeshKind::tensor: {
@@ -134,8 +173,10 @@ std::expected<MeshRefinement, base::Error> next_refinement(const AdaptableMesh& 
                 }
                 auto r = refine_lines(lines, im, cur.axis_protected[static_cast<std::size_t>(a)], o, uniform);
                 if (!r) return std::unexpected(r.error());
+                any = any || r->size() != lines.size();
                 next.axes[static_cast<std::size_t>(a)] = std::move(*r);
             }
+            if (changed != nullptr) *changed = any;
             return next;
         }
         case AdaptMeshKind::swept: {
@@ -157,11 +198,20 @@ std::expected<MeshRefinement, base::Error> next_refinement(const AdaptableMesh& 
                 if (b != a + n2) continue;  // along the axis: the same section node on consecutive lines
                 if (edge_marked(e)) im[a / n2] = 1;
             }
-            auto f = refine_field(*cur.section, previous.size_field, section_marks, floor2d, o.grading, uniform);
+            // Targets on the cross-section: per section node, the smallest over the lines.
+            std::vector<double> section_targets;
+            if (targets != nullptr) {
+                section_targets.assign(n2, std::numeric_limits<double>::infinity());
+                for (std::size_t i = 0; i < nn; ++i) section_targets[i % n2] = std::min(section_targets[i % n2], (*targets)[i]);
+            }
+            std::size_t count = 0;
+            auto f = refine_field(*cur.section, previous.size_field, section_marks, floor2d, o.grading, uniform,
+                                  targets != nullptr ? &section_targets : nullptr, &count);
             if (!f) return std::unexpected(f.error());
             next.size_field = std::move(*f);
             auto r = refine_lines(lines, im, cur.sweep_protected, o, uniform);
             if (!r) return std::unexpected(r.error());
+            if (changed != nullptr) *changed = count > 0 || r->size() != lines.size();
             // The generator adds the straddles' lines itself: drop them (the protected ranges' ends).
             std::vector<double> given;
             for (const double x : *r) {
@@ -176,7 +226,15 @@ std::expected<MeshRefinement, base::Error> next_refinement(const AdaptableMesh& 
     return std::unexpected(invalid("unknown mesh kind"));
 }
 
-namespace {
+// ID6's DOF growth cap per pass.
+constexpr double growth_cap = 2.5;
+
+// Unknowns: 3 per semiconductor node (drift-diffusion), 1 per insulator node (ID4).
+std::size_t dofs_of(const device::Device& d) {
+    std::size_t n = 0;
+    for (std::size_t i = 0; i < d.mesh().node_count(); ++i) n += d.is_insulator(static_cast<mesh::NodeId>(i)) ? 1 : 3;
+    return n;
+}
 
 struct Goals {
     std::vector<double> value;
@@ -340,7 +398,228 @@ std::expected<AdaptResult, base::Error> adapt(const DeviceBuilder& build, std::s
         if (adjoint) return rep.estimate[j];
         return rep.change.empty() ? std::numeric_limits<double>::infinity() : rep.change[j];
     };
-    double seconds_mesh = seconds_since(t0);
+    // M' for a pass: the uniform refinement of its mesh, built (the estimate's and AD11's mesh).
+    const auto build_uniform = [&](const AdaptableMesh& m,
+                                   const MeshRefinement& r) -> std::expected<AdaptableMesh, base::Error> {
+        auto uniform = next_refinement(m, r, {}, nullptr, o.indicators, o, true);
+        if (!uniform) return std::unexpected(uniform.error());
+        return build(*uniform);
+    };
+    // The adjoint estimate per goal and point and AD3's weights omega (per node, the largest over
+    // goals and points of the semiconductor-normalized weight), on M' (AR3).
+    struct AdjointPart {
+        std::optional<AdaptableMesh> fine;
+        std::vector<double> estimate;
+        std::vector<double> omega;
+        bool fell_back = false;
+        double seconds = 0.0;
+    };
+    const auto adjoint_part = [&](const AdaptableMesh& m, const MeshRefinement& r,
+                                  const results::Sweep& s) -> std::expected<AdjointPart, base::Error> {
+        AdjointPart out;
+        const auto te = clock_type::now();
+        auto f = build_uniform(m, r);
+        if (!f) return std::unexpected(f.error());
+        out.fine = std::move(*f);
+        auto loc = locator_of(m);
+        if (!loc) return std::unexpected(loc.error());
+        const std::size_t nn = m.device.mesh().node_count();
+        out.omega.assign(nn, 0.0);
+        out.estimate.assign(goal_contacts.size() * at.size(), 0.0);
+        for (std::size_t a = 0; a < at.size(); ++a) {
+            auto e = estimate_goals(m.device, *loc, s.points[at[a]], out.fine->device, bias, goal_contacts);
+            if (!e) return std::unexpected(e.error());
+            out.fell_back = out.fell_back || e->fell_back;
+            for (std::size_t gi = 0; gi < goal_contacts.size(); ++gi) {
+                out.estimate[gi * at.size() + a] = e->estimate[gi];
+                // Normalized so the semiconductor nodes' weights sum to 1 (AD3).
+                double total = 0.0;
+                for (std::size_t i = 0; i < nn; ++i) {
+                    if (!m.device.is_insulator(static_cast<mesh::NodeId>(i))) total += e->node_weight[gi][i];
+                }
+                if (!(total > 0.0)) continue;
+                for (std::size_t i = 0; i < nn; ++i) {
+                    if (m.device.is_insulator(static_cast<mesh::NodeId>(i))) continue;
+                    out.omega[i] = std::max(out.omega[i], e->node_weight[gi][i] / total);
+                }
+            }
+        }
+        out.seconds = seconds_since(te);
+        return out;
+    };
+    // The largest over goals and points of a per-goal quantity over its allowance tol max(|G|, r).
+    const auto relative = [&](const std::vector<double>& x, const Goals& g) {
+        double r = 0.0;
+        for (std::size_t j = 0; j < x.size(); ++j) {
+            r = std::max(r, x[j] / (o.tolerance * std::max(std::abs(g.value[j]), g.resolution[j])));
+        }
+        return r;
+    };
+
+    // The decision layer before pass 0 (ID3, ID2): the adaptation points from a coarse sweep on the
+    // start mesh, and the start refined toward the a priori prediction.
+    const bool intelligent = o.policy == Policy::intelligent;
+    std::optional<Solved> coarse;
+    double coarse_relative = std::numeric_limits<double>::infinity();
+    MeshSource source = MeshSource::start;
+    if (intelligent) {
+        if (!(o.intelligent.miss_margin >= 0.0 && o.intelligent.miss_margin < 1.0)) {
+            return std::unexpected(invalid("the miss margin must be in [0, 1)"));
+        }
+        if (o.at.empty() && o.intelligent.max_points > 0) {
+            const auto tc = clock_type::now();
+            auto c = solve_on(*built, nullptr, nullptr, points, bias, control);
+            if (!c) return std::unexpected(c.error());
+            std::vector<IndicatorField> fields;
+            for (const results::BiasPoint& p : c->sweep.points) {
+                auto f = compute_indicators(built->device, &p.fields, &p.rates, o.indicators);
+                if (!f) return std::unexpected(f.error());
+                fields.push_back(std::move(*f));
+            }
+            // Eligible: every goal above its current resolution at the point (AR5).
+            std::vector<char> eligible(c->sweep.points.size(), 1);
+            for (std::size_t k = 0; k < eligible.size(); ++k) {
+                const results::BiasPoint& p = c->sweep.points[k];
+                const bool weighted = !p.weighted_current.empty();
+                const auto& cur = weighted ? p.weighted_current : p.terminal_current;
+                const auto& res = weighted ? p.weighted_current_resolution : p.terminal_current_resolution;
+                for (const AdaptGoal& goal : o.goals) {
+                    const double r = goal.contact < res.size() ? res[goal.contact] : 0.0;
+                    if (!(std::abs(cur[goal.contact]) > r)) eligible[k] = 0;
+                }
+            }
+            auto chosen = choose_points(fields, o.intelligent.max_points, eligible);
+            if (!chosen) return std::unexpected(chosen.error());
+            at = std::move(*chosen);
+            if (adjoint) {
+                auto part = adjoint_part(*built, refinement, c->sweep);
+                if (!part) return std::unexpected(part.error());
+                coarse_relative = relative(part->estimate, read_goals(c->sweep, o, at));
+            }
+            result.coarse_nodes = built->device.mesh().node_count();
+            result.coarse_seconds = seconds_since(tc);
+            coarse = std::move(*c);
+        }
+        const std::size_t start_dofs = dofs_of(built->device);
+        for (int round = 0; round < 12; ++round) {
+            SizeTargets t;
+            if (o.intelligent.prediction) {
+                t = o.intelligent.prediction(built->device);
+            } else {
+                auto p = predict_sizes(built->device, points, bias);
+                if (!p) return std::unexpected(p.error());
+                if (round == 0) {
+                    result.junction_points = p->junction_points;
+                    result.interface_points = p->interface_points;
+                    result.predicted_nodes = p->predicted_nodes;
+                }
+                t = std::move(p->targets);
+            }
+            const std::size_t nn = built->device.mesh().node_count();
+            if (t.size.size() != nn || t.normal.size() != nn) {
+                return std::unexpected(invalid("a prediction must give one target and normal per node"));
+            }
+            // Per edge, how far it exceeds its target (projected length over the smaller target of its
+            // ends; 0 when it does not); per node, the largest over its edges.
+            const device::Device& dev = built->device;
+            const auto& edges = dev.mesh().edges();
+            const auto dpts = dev.mesh().points();
+            std::vector<double> ratio(edges.size(), 0.0), node_ratio(nn, 0.0);
+            for (std::size_t e = 0; e < edges.size(); ++e) {
+                if (!edge_exceeds(dev, t, e)) continue;
+                const auto a = static_cast<std::size_t>(edges[e].first), b = static_cast<std::size_t>(edges[e].second);
+                double best = 0.0;
+                for (const std::size_t k : {a, b}) {
+                    if (!std::isfinite(t.size[k])) continue;
+                    const auto& n = t.normal[k];
+                    double along = edges[e].length;
+                    if (n[0] != 0.0 || n[1] != 0.0 || n[2] != 0.0) {
+                        along = std::abs((dpts[b][0] - dpts[a][0]) * n[0] + (dpts[b][1] - dpts[a][1]) * n[1] +
+                                         (dpts[b][2] - dpts[a][2]) * n[2]);
+                    }
+                    best = std::max(best, along / t.size[k]);
+                }
+                ratio[e] = best;
+                node_ratio[a] = std::max(node_ratio[a], best);
+                node_ratio[b] = std::max(node_ratio[b], best);
+            }
+            // The refinement taking the edges (and nodes) at or above rho, built; nullopt when it
+            // refines nothing or exceeds a budget: max_nodes or ID6's growth cap, the prediction being
+            // pass 0's proposal (ID1, AR5).
+            struct Round {
+                MeshRefinement refinement;
+                AdaptableMesh mesh;
+            };
+            bool over = false;
+            const auto try_round = [&](double rho) -> std::expected<std::optional<Round>, base::Error> {
+                std::vector<double> sizes = t.size;
+                for (std::size_t i = 0; i < nn; ++i) {
+                    if (!(node_ratio[i] >= rho && node_ratio[i] > 0.0)) sizes[i] = std::numeric_limits<double>::infinity();
+                }
+                bool changed = false;
+                auto r = refine_with(*built, refinement, std::vector<char>(nn, 0),
+                                     [&](std::size_t e) { return ratio[e] > 0.0 && ratio[e] >= rho; }, &sizes, o, false,
+                                     &changed);
+                if (!r) return std::unexpected(r.error());
+                over = false;
+                if (!changed) return std::optional<Round>{};
+                auto nb = build(*r);
+                if (!nb) return std::unexpected(nb.error());
+                if ((o.max_nodes > 0 && nb->device.mesh().node_count() > o.max_nodes) ||
+                    static_cast<double>(dofs_of(nb->device)) > growth_cap * static_cast<double>(start_dofs)) {
+                    over = true;
+                    return std::optional<Round>{};
+                }
+                return std::optional<Round>{Round{std::move(*r), std::move(*nb)}};
+            };
+            auto full = try_round(0.0);
+            if (!full) return std::unexpected(full.error());
+            std::optional<Round> taken = std::move(*full);
+            bool last = false;
+            if (!taken && over) {
+                // Over a budget: the edges that exceed their targets most, as many as fit (bisection on
+                // the sorted ratios, the largest set within the budget); this round is the last.
+                last = true;
+                std::vector<double> sorted;
+                for (const double x : ratio) {
+                    if (x > 0.0) sorted.push_back(x);
+                }
+                std::ranges::sort(sorted, std::greater<>());
+                sorted.erase(std::unique(sorted.begin(), sorted.end()), sorted.end());
+                std::size_t lo = 0, hi = sorted.size();  // the answer takes sorted[0 .. k), k in [lo, hi)
+                while (lo + 1 < hi) {
+                    const std::size_t mid = (lo + hi) / 2;
+                    auto attempt = try_round(sorted[mid - 1]);
+                    if (!attempt) return std::unexpected(attempt.error());
+                    if (*attempt) {
+                        taken = std::move(*attempt);
+                        lo = mid;
+                    } else {
+                        hi = mid;
+                    }
+                }
+            }
+            if (!taken) break;
+            built = std::move(taken->mesh);
+            refinement = std::move(taken->refinement);
+            ++result.prediction_rounds;
+            source = MeshSource::prediction;
+            if (last) break;
+        }
+    }
+    bool fallen_back = false;
+    int consecutive_misses = 0;
+    double previous_relative = coarse_relative;
+    double previous_change = std::numeric_limits<double>::infinity();
+    const auto fall_back = [&](FallbackTrigger t, int pass) {
+        if (!intelligent || fallen_back) return;
+        fallen_back = true;
+        result.fallback = t;
+        result.fallback_pass = pass;
+    };
+
+    // Pass 0's mesh time: the start's build and the prediction's (not the coarse sweep).
+    double seconds_mesh = seconds_since(t0) - result.coarse_seconds;
     std::optional<AdaptableMesh> previous_mesh;
     results::Sweep previous_sweep;
     std::vector<double> previous_goal;
@@ -356,13 +635,6 @@ std::expected<AdaptResult, base::Error> adapt(const DeviceBuilder& build, std::s
         IndicatorField difference;  // the verified error's distribution on M (AR2)
     };
     std::optional<Verification> verification;  // of the current mesh, when run
-    // M' for a pass: the uniform refinement of its mesh, built (the estimate's and AD11's mesh).
-    const auto build_uniform = [&](const AdaptableMesh& m,
-                                   const MeshRefinement& r) -> std::expected<AdaptableMesh, base::Error> {
-        auto uniform = next_refinement(m, r, {}, nullptr, o.indicators, o, true);
-        if (!uniform) return std::unexpected(uniform.error());
-        return build(*uniform);
-    };
     // `prebuilt`: M' when the pass built it for the estimate (the same refinement, so the same mesh).
     const auto verify_pass = [&](const AdaptableMesh& m, const MeshRefinement& r, const results::Sweep& s,
                                  const AdaptPass& rep,
@@ -399,8 +671,12 @@ std::expected<AdaptResult, base::Error> adapt(const DeviceBuilder& build, std::s
     };
 
     for (int pass = 0;; ++pass) {
-        auto solved = solve_on(*built, previous_mesh ? &*previous_mesh : nullptr, previous_mesh ? &previous_sweep : nullptr,
-                               points, bias, control);
+        auto solved = [&]() -> std::expected<Solved, base::Error> {
+            // ID3's coarse sweep is pass 0's solve when the prediction refined nothing.
+            if (pass == 0 && coarse && result.prediction_rounds == 0) return std::move(*coarse);
+            return solve_on(*built, previous_mesh ? &*previous_mesh : nullptr, previous_mesh ? &previous_sweep : nullptr,
+                            points, bias, control);
+        }();
         if (!solved) return std::unexpected(solved.error());
         AdaptPass rep;
         rep.nodes = built->device.mesh().node_count();
@@ -417,36 +693,14 @@ std::expected<AdaptResult, base::Error> adapt(const DeviceBuilder& build, std::s
         std::optional<AdaptableMesh> fine_mesh;
         std::vector<double> omega;  // AD3's node weight: per node, the largest over goals and points
         if (adjoint) {
-            const auto te = clock_type::now();
-            auto f = build_uniform(*built, refinement);
-            if (!f) return std::unexpected(f.error());
-            fine_mesh = std::move(*f);
-            auto loc = locator_of(*built);
-            if (!loc) return std::unexpected(loc.error());
-            const std::size_t nn = rep.nodes;
-            omega.assign(nn, 0.0);
-            rep.estimate.assign(g.value.size(), 0.0);
-            for (std::size_t a = 0; a < at.size(); ++a) {
-                auto e = estimate_goals(built->device, *loc, solved->sweep.points[at[a]], fine_mesh->device, bias,
-                                        goal_contacts);
-                if (!e) return std::unexpected(e.error());
-                rep.estimate_fell_back = rep.estimate_fell_back || e->fell_back;
-                for (std::size_t gi = 0; gi < goal_contacts.size(); ++gi) {
-                    rep.estimate[gi * at.size() + a] = e->estimate[gi];
-                    // Normalized so the semiconductor nodes' weights sum to 1 (AD3).
-                    double total = 0.0;
-                    for (std::size_t i = 0; i < nn; ++i) {
-                        if (!built->device.is_insulator(static_cast<mesh::NodeId>(i))) total += e->node_weight[gi][i];
-                    }
-                    if (!(total > 0.0)) continue;
-                    for (std::size_t i = 0; i < nn; ++i) {
-                        if (built->device.is_insulator(static_cast<mesh::NodeId>(i))) continue;
-                        omega[i] = std::max(omega[i], e->node_weight[gi][i] / total);
-                    }
-                }
-            }
+            auto part = adjoint_part(*built, refinement, solved->sweep);
+            if (!part) return std::unexpected(part.error());
+            fine_mesh = std::move(part->fine);
+            omega = std::move(part->omega);
+            rep.estimate = std::move(part->estimate);
+            rep.estimate_fell_back = part->fell_back;
             rep.estimate_nodes = fine_mesh->device.mesh().node_count();
-            rep.seconds_estimate = seconds_since(te);
+            rep.seconds_estimate = part->seconds;
         }
         bool converged = pass > 0;
         if (pass > 0) {
@@ -456,6 +710,28 @@ std::expected<AdaptResult, base::Error> adapt(const DeviceBuilder& build, std::s
                 const double allowed = o.tolerance * std::max(std::abs(g.value[j]), g.resolution[j]);
                 if (rep.change[j] > allowed) converged = false;
                 if (adjoint && !(rep.estimate[j] <= allowed)) converged = false;  // AD6: and the estimate
+            }
+        }
+        // The guard (ID1) and AD12's triggers a and b: decisions only, after the solve; nothing
+        // here enters the stop rule, AD11 or the certificate (OA6).
+        const double inf = std::numeric_limits<double>::infinity();
+        const double change_relative = rep.change.empty() ? inf : relative(rep.change, g);
+        rep.source = source;
+        rep.relative_estimate = adjoint ? relative(rep.estimate, g) : change_relative;
+        if (intelligent && !fallen_back) {
+            const bool proposal = source == MeshSource::prediction || source == MeshSource::proposal;
+            if (proposal && std::isfinite(previous_relative)) {
+                rep.miss = !(rep.relative_estimate <= (1.0 - o.intelligent.miss_margin) * previous_relative);
+                if (rep.miss) {
+                    ++result.misses;
+                    if (++consecutive_misses >= 2) fall_back(FallbackTrigger::two_misses, pass);
+                } else {
+                    consecutive_misses = 0;
+                }
+            }
+            if (pass >= 2 && std::isfinite(previous_relative) && std::isfinite(previous_change) &&
+                !(rep.relative_estimate < previous_relative) && !(change_relative < previous_change)) {
+                fall_back(FallbackTrigger::no_progress, pass);
             }
         }
         std::optional<AdaptStop> stop;
@@ -470,12 +746,14 @@ std::expected<AdaptResult, base::Error> adapt(const DeviceBuilder& build, std::s
             } else {
                 rep.rejected = true;
                 ++result.rejected_stops;
+                fall_back(FallbackTrigger::rejected_stop, pass);  // AD12 c
             }
         } else if (converged) {
             stop = AdaptStop::converged;
         }
         if (!stop && pass + 1 >= o.max_passes) stop = AdaptStop::max_passes;
         std::optional<MeshRefinement> next;
+        MeshSource next_source = MeshSource::marks;
         if (!stop) {
             // Indicators at every adaptation point, united (AQ3), marked by AD3: weighted by the
             // adjoint's omega, or feature-only (w = 1).
@@ -511,15 +789,41 @@ std::expected<AdaptResult, base::Error> adapt(const DeviceBuilder& build, std::s
             if (!mk) return std::unexpected(mk.error());
             rep.marking = *mk;
             rep.marked_by_difference = by_difference;
-            if (by_difference && mk->count > 0) {
+            // The decision layer's proposal (ID1), unless the run fell back, this pass missed or a stop
+            // was rejected (AD3's marks then). A proposal that refines nothing is a miss itself.
+            if (intelligent && !fallen_back && !rep.miss && !rep.rejected && o.intelligent.prediction) {
+                const SizeTargets t = o.intelligent.prediction(built->device);
+                const std::size_t nn = built->device.mesh().node_count();
+                if (t.size.size() != nn || t.normal.size() != nn) {
+                    return std::unexpected(invalid("a prediction must give one target and normal per node"));
+                }
+                bool changed = false;
+                const device::Device& dev = built->device;
+                auto r = refine_with(*built, refinement, std::vector<char>(nn, 0),
+                                     [&](std::size_t e) { return edge_exceeds(dev, t, e); }, &t.size, o, false, &changed);
+                if (!r) return std::unexpected(r.error());
+                if (changed) {
+                    next = std::move(*r);
+                    next_source = MeshSource::proposal;
+                } else {
+                    rep.empty_proposal = true;
+                    ++result.misses;
+                    if (++consecutive_misses >= 2) fall_back(FallbackTrigger::two_misses, pass);
+                }
+            }
+            if (next) {
+                // The proposal.
+            } else if (by_difference && mk->count > 0) {
                 auto r = next_refinement(*built, refinement, mk->marked, nullptr, o.indicators, o, false);
                 if (!r) return std::unexpected(r.error());
                 next = std::move(*r);
+                next_source = MeshSource::difference;
             } else if (mk->count == 0 && rep.rejected) {
                 // A rejected stop with nothing marked: the uniform refinement (M') is the next mesh.
                 auto r = next_refinement(*built, refinement, {}, nullptr, o.indicators, o, true);
                 if (!r) return std::unexpected(r.error());
                 next = std::move(*r);
+                next_source = MeshSource::uniform;
             } else if (mk->count == 0) {
                 stop = AdaptStop::nothing_marked;
             } else {
@@ -540,8 +844,11 @@ std::expected<AdaptResult, base::Error> adapt(const DeviceBuilder& build, std::s
                 previous_mesh = std::move(*built);
                 previous_sweep = std::move(solved->sweep);
                 previous_goal = g.value;
+                previous_relative = result.passes.back().relative_estimate;
+                previous_change = change_relative;
                 built = std::move(*nb);
                 refinement = std::move(*next);
+                source = next_source;
                 continue;
             }
         }
@@ -585,6 +892,8 @@ std::expected<AdaptResult, base::Error> adapt(const DeviceBuilder& build, std::s
             result.certificates.push_back(c);
         }
     }
+    result.points = at;
+    result.policy = o.policy;
     result.mesh = std::move(*built);
     return result;
 }

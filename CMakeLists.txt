@@ -597,6 +597,7 @@ add_library(nitcad_solve STATIC
   src/solve/adapt_indicators.cpp
   src/solve/adapt_transfer.cpp
   src/solve/adapt_adjoint.cpp
+  src/solve/adapt_policy.cpp
   src/solve/adapt.cpp)
 add_library(NiTCAD::solve ALIAS nitcad_solve)
 target_include_directories(nitcad_solve PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
@@ -711,9 +712,17 @@ add_executable(nitcad_adapt_test
   tests/solve/adapt_transfer_test.cpp
   tests/solve/adapt_loop_test.cpp
   tests/solve/adapt_adjoint_test.cpp
-  tests/solve/adapt_goal_test.cpp)
+  tests/solve/adapt_goal_test.cpp
+  tests/solve/adapt_policy_test.cpp
+  tests/solve/adapt_intelligent_test.cpp)
 target_link_libraries(nitcad_adapt_test PRIVATE NiTCAD::deck Catch2::Catch2WithMain)
 nitcad_add_file_tests(adapt nitcad_adapt_test)
+# The adaptive gates on 2D MOSFETs (AC7 [.adapt_goal]; AC14, AC17 [.adapt_intelligent]): tens of
+# seconds in Release, tens of minutes in Debug (AC13), so in the Release configuration only.
+if(CMAKE_BUILD_TYPE STREQUAL "Release")
+  add_test(NAME adapt_goal COMMAND nitcad_adapt_test "[adapt_goal]")
+  add_test(NAME adapt_intelligent COMMAND nitcad_adapt_test "[adapt_intelligent]")
+endif()
 # The Lombardi device gates (tests/deck/surface_mobility_test.cpp, hidden tag [.lombardi]: MOSFET
 # sweeps) run in the Release configuration only.
 if(CMAKE_BUILD_TYPE STREQUAL "Release")

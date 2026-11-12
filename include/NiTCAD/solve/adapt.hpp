@@ -59,6 +59,7 @@
 #include "NiTCAD/mesh/size_field.hpp"
 #include "NiTCAD/results/run.hpp"
 #include "NiTCAD/solve/adapt_indicators.hpp"
+#include "NiTCAD/solve/adapt_policy.hpp"
 #include "NiTCAD/solve/adapt_transfer.hpp"
 #include "NiTCAD/solve/bias.hpp"
 #include "NiTCAD/solve/control.hpp"
@@ -107,7 +108,44 @@ struct AdaptOptions {
     int max_passes = 6;                     // solves on adapted meshes, the first mesh included; >= 1
     std::size_t max_nodes = 0;              // 0: no limit
     bool verify = true;                     // AD11
+    Policy policy = Policy::basic;          // the decision layer (adapt_policy.hpp); basic: AD3 alone
+    PolicyOptions intelligent;              // read only with policy = intelligent
 };
+
+// How a pass's mesh was made (ID7).
+enum class MeshSource : unsigned char {
+    start,       // the builder's mesh as given
+    prediction,  // the start refined toward the a priori prediction (ID2)
+    proposal,    // the decision layer's proposal (ID1)
+    marks,       // AD3's marks
+    difference,  // AD3 on the verified error's distribution (AR2, AD12 c)
+    uniform,     // M' after a rejected stop with nothing marked
+};
+
+[[nodiscard]] constexpr const char* to_string(MeshSource s) noexcept {
+    switch (s) {
+        case MeshSource::start: return "start";
+        case MeshSource::prediction: return "prediction";
+        case MeshSource::proposal: return "proposal";
+        case MeshSource::marks: return "marks";
+        case MeshSource::difference: return "difference";
+        case MeshSource::uniform: return "uniform";
+    }
+    return "?";
+}
+
+// AD12's triggers.
+enum class FallbackTrigger : unsigned char { none, two_misses, no_progress, rejected_stop };
+
+[[nodiscard]] constexpr const char* to_string(FallbackTrigger t) noexcept {
+    switch (t) {
+        case FallbackTrigger::none: return "none";
+        case FallbackTrigger::two_misses: return "two_misses";
+        case FallbackTrigger::no_progress: return "no_progress";
+        case FallbackTrigger::rejected_stop: return "rejected_stop";
+    }
+    return "?";
+}
 
 enum class AdaptStop : unsigned char { converged, max_passes, max_nodes, nothing_marked };
 
@@ -140,6 +178,13 @@ struct AdaptPass {
     int newton_iterations = 0;       // summed over the sweep's points
     bool rejected = false;           // a proposed stop on this mesh that AD11 rejected (AR2)
     bool marked_by_difference = false;  // the marks came from the verified error's distribution
+    // The decision layer (ID1, ID7): how this pass's mesh was made; the largest over goals and points
+    // of the estimate over its allowance (infinity when there is none); whether this pass's mesh was
+    // a proposal that missed (did not lower it by the miss margin, or refined nothing).
+    MeshSource source = MeshSource::start;
+    double relative_estimate = 0.0;
+    bool miss = false;
+    bool empty_proposal = false;  // the proposal made on this pass refined nothing (a miss; AD3's marks used)
     TransferReport transfer;         // onto this pass's mesh (nodes 0 on the first)
     double seconds_mesh = 0.0;       // building this pass's device
     double seconds_transfer = 0.0;
@@ -179,6 +224,18 @@ struct AdaptResult {
     double verification_seconds = 0.0;
     std::vector<double> verification_goal;
     std::vector<GoalCertificate> certificates;
+    // The decision layer (ID2, ID3, ID7, AD12).
+    std::vector<std::size_t> points;    // the adaptation points used
+    Policy policy = Policy::basic;      // as asked
+    FallbackTrigger fallback = FallbackTrigger::none;
+    int fallback_pass = -1;             // the pass whose outcome switched the run to basic
+    std::size_t misses = 0;
+    std::size_t coarse_nodes = 0;       // ID3's coarse sweep (0 when not run)
+    double coarse_seconds = 0.0;
+    std::size_t junction_points = 0;    // ID2 on the start mesh
+    std::size_t interface_points = 0;
+    std::size_t predicted_nodes = 0;    // start-mesh nodes with a finite target
+    int prediction_rounds = 0;          // refinements toward the prediction before pass 0
 };
 
 // The refinement of `current` for the next pass (AD4), from per-node marks; exposed for tests.

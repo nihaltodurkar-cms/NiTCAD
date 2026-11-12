@@ -132,7 +132,7 @@ std::size_t lines_near_junction(std::span<const double> y) {
 
 }  // namespace
 
-TEST_CASE("adapt: goal weighting avoids the well junction off the current path (AC7)", "[adapt_goal]") {
+TEST_CASE("adapt: goal weighting avoids the well junction off the current path (AC7)", "[.adapt_goal]") {
     const deck::Plan coarse = plan_of(linspace(width_cm, 21), surface_axis());
     const std::size_t drain = contact_index(coarse.device, "drain");
     const std::size_t k = coarse.points.size() - 1;
