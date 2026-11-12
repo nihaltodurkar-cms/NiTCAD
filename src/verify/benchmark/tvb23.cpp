@@ -22,8 +22,8 @@
 //     2048 in the factorial.
 // Reference (verify/reference/multiplication.hpp): I_n, phi and M_n = 1 / (1 - I_n), M_p = e^-phi(W) / (1 - I_n) on
 // the QE field, with NiTCAD's q, eps, V_T, n_i and coefficients as inputs (I1). The judged biases are the reference's
-// at I_n = 0.1, 0.3, 0.5, 0.7, 0.9. The simulated M is J(ionization on) / J(off) at the same bias and generation,
-// from the weighted current of the anode.
+// at I_n = 0.1, 0.3, 0.5, 0.7, 0.9. The simulated M is the generation's share (IG-Q24 B, 17.22): (J_on(G) - J_on(0)) /
+// (J_off(G) - J_off(0)) at the same bias, from the weighted current of the anode (the contacts' own leakage cancels).
 // E (17.8), per injection and bias, on x = 1 - 1 / M (I_n for electrons, 1 - (1 - I_n) e^phi for holes):
 //   - (a) p-hat in [1.8, 2.3] of the relative error of x on N = 128 ... 1024;
 //   - (b) at N = 1024, the relative error of x <= 1e-3.
@@ -36,10 +36,10 @@
 //   carried to x. U_iter: the weighted currents' resolutions, carried to x: (r_on / J_on + r_off / J_off) / (M - 1).
 //   The (h, tol) factorial (16.2 (p)) at N = 1024, tol = 1e-9 and 1e-11, N = 1024 and 2048, per comparison.
 // A (17.14), per injection, at M_c = 10, 100, 1000: |V_sim - V_ref| <= U_num + U_ref + eps_V, V_sim where J(on) /
-//   J(off) = M_c along trace_bias with the generation (interpolated in ln M between traced points; J(off) re-solved
-//   at each traced bias), V_ref the reference's bias for 1 / M = 1 / M_c; eps_V = 2 Q2 (V_bi - V) + J (R_n + R_p),
-//   R the neutral sides' resistances from the spec and the reference's depletion widths, Q2 at the traced point
-//   past M_c; U_num the two-grid estimate on N = 512 and 1024 (F_s = 3, p = 2); U_ref the reference's error carried
+//   J(off) = M_c (17.22: ln M of the traced points, all four solves at their biases, brackets ln M_c; then Illinois
+//   regula falsi in the bias to |Delta ln M| <= 1e-9), V_ref the reference's bias for 1 / M = 1 / M_c; eps_V = 2 Q2 (V_bi - V) + J (R_n + R_p),
+//   R the neutral sides' resistances from the spec and the reference's depletion widths, Q2 at the root's state
+//   (with ionization and generation); U_num the two-grid estimate on N = 512 and 1024 (F_s = 3, p = 2); U_ref the reference's error carried
 //   to V by its slope. Applicability: J(off) as above. The reference's V_BR (I_n = 1) is printed beside.
 #include <algorithm>
 #include <array>
@@ -226,6 +226,7 @@ struct Level {
     double h = 0.0;
     std::array<std::array<Sample, 5>, 2> s{};  // [electron = 0, hole = 1][target]
     results::BiasPoint last_on[2], last_off[2];  // the states at I_n = 0.7 (the traces start there, below M_n = 10)
+    results::BiasPoint last_on0, last_off0;      // the same without generation
 };
 
 }  // namespace
@@ -301,6 +302,14 @@ BenchmarkResult run_tvb23(Tier tier) {
         Level lv;
         lv.N = N;
         lv.h = 2.0 * half_cm / (N - 1);
+        // The background without generation (17.22, IG-Q24 B): the contacts' own leakage, shared by both injections.
+        const auto on0 = solve::sweep_bias(*d, ramp, options(tol, true, nullptr));
+        const auto off0 = solve::sweep_bias(*d, ramp, options(tol, false, nullptr));
+        if (!on0 || on0->stopped || !off0 || off0->stopped) {
+            const std::string why = !on0 ? on0.error().message : on0->stopped ? on0->stopped->message
+                                    : !off0 ? off0.error().message : off0->stopped->message;
+            return std::unexpected(where + ", without generation: " + why);
+        }
         for (const bool electron : {true, false}) {
             const std::size_t c = electron ? 0 : 1;
             const assemble::ManufacturedSources ms = source(*d, electron);
@@ -314,15 +323,18 @@ BenchmarkResult run_tvb23(Tier tier) {
             for (std::size_t k = 0; k < targets.size(); ++k) {
                 const results::BiasPoint& pn = on->points[at[k]];
                 const results::BiasPoint& pf = off->points[at[k]];
+                const results::BiasPoint& bn = on0->points[at[k]];
+                const results::BiasPoint& bf = off0->points[at[k]];
                 Sample& s = lv.s[c][k];
-                s.J_on = std::abs(pn.weighted_current[0]);
-                s.J_off = std::abs(pf.weighted_current[0]);
-                s.res_off = pf.weighted_current_resolution[0];
+                s.J_on = std::abs(pn.weighted_current[0] - bn.weighted_current[0]);
+                s.J_off = std::abs(pf.weighted_current[0] - bf.weighted_current[0]);
+                s.res_off = pf.weighted_current_resolution[0] + bf.weighted_current_resolution[0];
+                const double res_on = pn.weighted_current_resolution[0] + bn.weighted_current_resolution[0];
                 const double M = s.J_on / s.J_off;
                 s.x = 1.0 - 1.0 / M;
                 const double x_ref = electron ? ref[k].x_n : ref[k].x_p;
                 s.error = std::abs(s.x - x_ref) / x_ref;
-                s.u_iter = (pn.weighted_current_resolution[0] / s.J_on + s.res_off / s.J_off) / (M - 1.0);
+                s.u_iter = (res_on / s.J_on + s.res_off / s.J_off) / (M - 1.0);
                 const double d_cm = source_cm - (electron ? ref[k].W_p : ref[k].W_n);
                 s.q1 = s.J_on * d_cm / (base::q_C * (electron ? mu_p : mu_n) * doping_cm3) / VT;
                 s.q2 = q2(*d, pn, ref[k].window_p, ref[k].window_n);
@@ -336,6 +348,8 @@ BenchmarkResult run_tvb23(Tier tier) {
             lv.last_on[c] = on->points[at[3]];
             lv.last_off[c] = off->points[at[3]];
         }
+        lv.last_on0 = on0->points[at[3]];
+        lv.last_off0 = off0->points[at[3]];
         return lv;
     };
 
@@ -473,37 +487,94 @@ BenchmarkResult run_tvb23(Tier tier) {
         const auto t = solve::trace_bias(*d, o, &lv.last_on[c].fields);
         if (!t) return std::unexpected(where + ": " + t.error().message);
         if (t->stopped) return std::unexpected(where + ": " + t->stopped->message);
+        // At every traced bias: J(off) with the generation and both currents without it (17.22).
         std::vector<std::vector<double>> biases;
         for (const auto& p : t->points) biases.push_back(p.bias_V);
         const auto off = solve::sweep_bias(*d, biases, options(tol_newton, false, &ms), &lv.last_off[c].fields);
-        if (!off) return std::unexpected(where + ", J(off): " + off.error().message);
-        if (off->stopped) return std::unexpected(where + ", J(off): " + off->stopped->message);
-        std::array<Crossing, 3> out{};
-        double prev_lnM = 0.0, prev_V = 0.0;
-        for (std::size_t i = 0; i < t->points.size(); ++i) {
-            const auto& pn = t->points[i];
-            const auto& pf = off->points[i];
-            const double Jon = std::abs(pn.weighted_current[0]), Joff = std::abs(pf.weighted_current[0]);
-            const double lnM = std::log(Jon / Joff), V = pn.bias_V[0];
-            for (std::size_t m = 0; m < criterion_M.size(); ++m) {
-                const double target = std::log(criterion_M[m]);
-                if (out[m].found || i == 0 || !(lnM >= target && prev_lnM < target)) continue;
-                const double f = (target - prev_lnM) / (lnM - prev_lnM);
-                out[m].V = prev_V + f * (V - prev_V);
-                out[m].J = criterion_M[m] * Joff;
-                out[m].J_off = Joff;
-                out[m].res_ratio = pf.weighted_current_resolution[0] / Joff;
-                const auto w = reference::multiplication_field_window(in, out[m].V, 0.1);
-                if (!w) return std::unexpected(where + ": window: " + w.error());
-                out[m].q2 = q2(*d, pn, w->x_p_cm.to_double(), w->x_n_cm.to_double());
-                out[m].found = true;
+        const auto on0 = solve::sweep_bias(*d, biases, options(tol_newton, true, nullptr), &lv.last_on0.fields);
+        const auto off0 = solve::sweep_bias(*d, biases, options(tol_newton, false, nullptr), &lv.last_off0.fields);
+        for (const auto* s : {&off, &on0, &off0}) {
+            if (!*s) return std::unexpected(where + ", re-solved at the traced biases: " + (*s).error().message);
+            if ((*s)->stopped) return std::unexpected(where + ", re-solved at the traced biases: " + (*s)->stopped->message);
+        }
+        // M at one bias from four states: the generation's share of J(on) over its share of J(off).
+        struct Eval {
+            double lnM = 0.0, J_off = 0.0, res_off = 0.0;
+            results::BiasPoint on;  // with the generation and ionization: Q2's state
+        };
+        const auto combine = [](results::BiasPoint on, const results::BiasPoint& of, const results::BiasPoint& n0,
+                                const results::BiasPoint& f0) {
+            Eval e;
+            const double Jon = std::abs(on.weighted_current[0] - n0.weighted_current[0]);
+            e.J_off = std::abs(of.weighted_current[0] - f0.weighted_current[0]);
+            e.res_off = of.weighted_current_resolution[0] + f0.weighted_current_resolution[0];
+            e.lnM = std::log(Jon / e.J_off);
+            e.on = std::move(on);
+            return e;
+        };
+        // The four solves at bias V, each from the given traced state.
+        const auto evaluate = [&](double V, std::size_t from) -> std::expected<Eval, std::string> {
+            const std::vector<double> b{V, 0.0};
+            auto pn = solve::solve_bias(*d, b, options(tol_newton, true, &ms), &t->points[from].fields);
+            auto pf = solve::solve_bias(*d, b, options(tol_newton, false, &ms), &off->points[from].fields);
+            auto bn = solve::solve_bias(*d, b, options(tol_newton, true, nullptr), &on0->points[from].fields);
+            auto bf = solve::solve_bias(*d, b, options(tol_newton, false, nullptr), &off0->points[from].fields);
+            if (!pn || !pf || !bn || !bf) {
+                return std::unexpected(where + ": a solve at " + shortest(V) + " V: " +
+                                       (!pn ? pn.error().message : !pf ? pf.error().message
+                                        : !bn ? bn.error().message : bf.error().message));
             }
-            prev_lnM = lnM;
-            prev_V = V;
+            return combine(std::move(*pn), *pf, *bn, *bf);
+        };
+        std::vector<double> lnMs;
+        for (std::size_t i = 0; i < t->points.size(); ++i) {
+            lnMs.push_back(combine(t->points[i], off->points[i], on0->points[i], off0->points[i]).lnM);
+        }
+        std::array<Crossing, 3> out{};
+        int iterations = 0;
+        for (std::size_t m = 0; m < criterion_M.size(); ++m) {
+            const double target = std::log(criterion_M[m]);
+            std::size_t k = 1;
+            while (k < lnMs.size() && !(lnMs[k] >= target && lnMs[k - 1] < target)) ++k;
+            if (k == lnMs.size()) continue;
+            // Illinois regula falsi on g(V) = ln M - ln M_c between the bracketing traced points.
+            double a = t->points[k - 1].bias_V[0], b = t->points[k].bias_V[0];
+            double ga = lnMs[k - 1] - target, gb = lnMs[k] - target;
+            int side = 0;
+            std::optional<Eval> best;
+            double V = a;
+            for (int it = 0; it < 60; ++it) {
+                V = b - gb * (b - a) / (gb - ga);
+                auto e = evaluate(V, k - 1);
+                if (!e) return std::unexpected(e.error());
+                ++iterations;
+                const double g = e->lnM - target;
+                best = std::move(*e);
+                if (std::abs(g) <= 1e-9) break;
+                if ((g < 0.0) == (ga < 0.0)) {
+                    a = V;
+                    ga = g;
+                    if (side == -1) gb *= 0.5;
+                    side = -1;
+                } else {
+                    b = V;
+                    gb = g;
+                    if (side == 1) ga *= 0.5;
+                    side = 1;
+                }
+            }
+            out[m].V = V;
+            out[m].J_off = best->J_off;
+            out[m].J = criterion_M[m] * best->J_off;
+            out[m].res_ratio = best->res_off / best->J_off;
+            const auto w = reference::multiplication_field_window(in, V, 0.1);
+            if (!w) return std::unexpected(where + ": window: " + w.error());
+            out[m].q2 = q2(*d, best->on, w->x_p_cm.to_double(), w->x_n_cm.to_double());
+            out[m].found = std::abs(best->lnM - target) <= 1e-9;
         }
         r.notes.push_back(where + ": " + std::to_string(t->points.size()) + " traced points to " +
-                          shortest(t->points.back().bias_V[0]) + " V, M there " +
-                          shortest(std::exp(prev_lnM)));
+                          shortest(t->points.back().bias_V[0]) + " V, M there " + shortest(std::exp(lnMs.back())) +
+                          "; " + std::to_string(iterations) + " root iterations in all");
         return out;
     };
     for (const bool electron : {true, false}) {
@@ -541,7 +612,7 @@ BenchmarkResult run_tvb23(Tier tier) {
             ComparisonRecord& rec = record("V at " + at_m + " (A), N = 1024", "V", criterion_M[m], f.V, *Vr, u_ref,
                                            std::abs(f.V - *Vr), "|V_sim - V_ref| <= U_num + U_ref + eps_V");
             if (!f.found || !g.found) {
-                rec.comparison = Comparison{Outcome::not_evaluated, "the trace did not reach M = " +
+                rec.comparison = Comparison{Outcome::not_evaluated, "the trace did not reach, or the root did not converge at, M = " +
                                                                         shortest(criterion_M[m]), {}};
                 continue;
             }
