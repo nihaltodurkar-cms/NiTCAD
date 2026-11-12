@@ -225,47 +225,52 @@ TEST_CASE("TVB-23: nothing in the fast tier", "[tvr5a]") {
 }
 
 // TVB-24 (band-to-band tunnelling), as rebuilt once under IG-Q26 B (17.26: the WKB biases at -0.5 and -1 V; every
-// current the generation's share J_on - J_off). The expectation before the rerun, 26 comparisons: 14 pass, 7 fail,
-// 5 NOT EVALUATED (local: orders and pairs pass, currents NOT EVALUATED; nonlocal as 17.25; WKB applicable, the
-// orders, finest pairs and currents fail by S2, the paths pass). The first construction's outcome as found (17.25:
-// 10 pass, 2 fail, 4 not_evaluated, 10 not_applicable) is frozen in the history at step 5d.
-TEST_CASE("TVB-24: band-to-band tunnelling, full tier (expectation before the rerun, 17.26)", "[.tvr5a_full]") {
-    const auto r = bench::run_tvb24(bench::Tier::full);
+// current the generation's share J_on - J_off), with the reference's run error fixed (17.27). The expectation before
+// the rerun (14 pass, 7 fail, 5 NOT EVALUATED) missed on the two WKB currents. As found (17.28), 26 comparisons:
+// 14 pass, 5 fail, 7 not_evaluated:
+//   - local Kane: orders (1.99, 2.00) and finest pairs (3.0e-4, 1.4e-4) pass; both currents NOT EVALUATED by their
+//     resolution (at -3 V the leakage now cancels: the share is within 3.8e-4 of q P, below 1e3 times its resolution);
+//   - nonlocal Kane: as 17.25 (order 2.53 fails at -3 V, not asymptotic at -6 V; pairs and paths pass); currents NOT
+//     EVALUATED (J_on - J_off is 0: the terminal current 1e4-1e5 times below its resolution);
+//   - direct WKB, now applicable (P_QE 8.7e-10, 4.0e-8): orders 1.01 and 1.00 and finest pairs 5.8e-3 and 3.1e-3 fail,
+//     at S2's c_1 h (5.78e-3, 3.05e-3); the paths pass (2.9e-5); the currents follow the pairs but are NOT EVALUATED
+//     by their resolution.
+// Every judged metric is pinned within a quarter (the orders within 0.02); the currents are not pinned.
+TEST_CASE("TVB-24: band-to-band tunnelling, full tier (frozen outcome: as found, 17.28)", "[.tvr5a_full]") {
     const auto pass = Outcome::pass, fail = Outcome::fail, ne = Outcome::not_evaluated;
-    std::vector<Found> expected;
-    struct Row {
-        const char* at;
-        bool nonlocal;
-        Outcome order, finest, current;
-    };
-    const Row rows[] = {{"local Kane, Si, -3 V", false, pass, pass, ne},
-                        {"local Kane, Si, -6 V", false, pass, pass, ne},
-                        {"nonlocal Kane, Si, -3 V", true, fail, pass, ne},
-                        {"nonlocal Kane, Si, -6 V", true, ne, pass, ne},
-                        {"direct WKB, GaAs, -0.5 V", true, fail, fail, fail},
-                        {"direct WKB, GaAs, -1 V", true, fail, fail, fail}};
-    for (const Row& w : rows) {
-        expected.push_back({std::string("pairs order, ") + w.at, w.order});
-        expected.push_back({std::string("pairs finest (N = 1010), ") + w.at, w.finest});
-        if (w.nonlocal) {
-            expected.push_back({"path l finest", pass});
-            expected.push_back({"path F finest", pass});
-        }
-        expected.push_back({std::string("current finest, ") + w.at, w.current});
-    }
-    if (r.run_error) FAIL(*r.run_error);
-    for (const auto& n : r.notes) std::printf("%s note: %s\n", r.id.c_str(), n.c_str());
-    for (const auto& c : r.comparisons) {
-        std::printf("%s [%s] %s: %.4g (%s) %s\n", r.id.c_str(), std::string(to_string(c.comparison.outcome)).c_str(),
-                    c.quantity.c_str(), c.metric, c.criterion.c_str(), c.comparison.reason.c_str());
-    }
-    REQUIRE(r.comparisons.size() == expected.size());
-    for (std::size_t i = 0; i < expected.size(); ++i) {
-        const auto& c = r.comparisons[i];
-        CAPTURE(c.quantity, c.metric, c.comparison.reason);
-        CHECK(c.quantity.starts_with(expected[i].quantity));
-        CHECK(c.comparison.outcome == expected[i].outcome);
-    }
+    const auto pinned = [](const std::string& q, Outcome o, double v) { return Found{q, o, 0.75 * v, 1.25 * v}; };
+    const auto order = [](const std::string& q, Outcome o, double p) { return Found{q, o, p - 0.02, p + 0.02}; };
+    const std::string l3 = "local Kane, Si, -3 V", l6 = "local Kane, Si, -6 V", k3 = "nonlocal Kane, Si, -3 V",
+                      k6 = "nonlocal Kane, Si, -6 V", w1 = "direct WKB, GaAs, -0.5 V", w2 = "direct WKB, GaAs, -1 V";
+    const std::vector<Found> expected{order("pairs order, " + l3, pass, 1.992),
+                                      pinned("pairs finest (N = 1010), " + l3, pass, 3.047e-4),
+                                      {"current finest, " + l3, ne},
+                                      order("pairs order, " + l6, pass, 1.998),
+                                      pinned("pairs finest (N = 1010), " + l6, pass, 1.366e-4),
+                                      {"current finest, " + l6, ne},
+                                      order("pairs order, " + k3, fail, 2.527),
+                                      pinned("pairs finest (N = 1010), " + k3, pass, 2.007e-5),
+                                      pinned("path l finest, worst of 205, " + k3, pass, 8.008e-6),
+                                      pinned("path F finest, worst of 205, " + k3, pass, 8.008e-6),
+                                      {"current finest, " + k3, ne},
+                                      order("pairs order, " + k6, ne, 2.107),
+                                      pinned("pairs finest (N = 1010), " + k6, pass, 4.882e-5),
+                                      pinned("path l finest, worst of 266, " + k6, pass, 1.246e-5),
+                                      pinned("path F finest, worst of 266, " + k6, pass, 1.246e-5),
+                                      {"current finest, " + k6, ne},
+                                      order("pairs order, " + w1, fail, 1.008),
+                                      pinned("pairs finest (N = 1010), " + w1, fail, 5.843e-3),
+                                      pinned("path l finest, worst of 209, " + w1, pass, 2.888e-5),
+                                      pinned("path F finest, worst of 209, " + w1, pass, 2.888e-5),
+                                      {"current finest, " + w1, ne},
+                                      order("pairs order, " + w2, fail, 0.9951),
+                                      pinned("pairs finest (N = 1010), " + w2, fail, 3.074e-3),
+                                      pinned("path l finest, worst of 249, " + w2, pass, 2.942e-5),
+                                      pinned("path F finest, worst of 249, " + w2, pass, 2.942e-5),
+                                      {"current finest, " + w2, ne}};
+    const auto r = bench::run_tvb24(bench::Tier::full);
+    require_as_found(r, expected);
+    CHECK(bench::overall(r) == Outcome::fail);
 }
 
 TEST_CASE("TVB-24: nothing in the fast tier", "[tvr5a]") {

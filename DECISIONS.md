@@ -11918,6 +11918,36 @@ pre-registered; IG-Q25 A under the standing instruction.**
   either side of each cut at −0.5, −1 and −2 V. Every path forms, the two methods' rates agree within 1e-10, and the
   pairs agree within 1e-10. It failed before the fix (−0.5 V, s_d − g + 1e-14: rates 2.1e22 and 0).
 
+**17.28 TVB-24 rerun as rebuilt (ee370d2, reference 247db07): outcome as found (26 comparisons: 14 pass, 5 fail,
+7 not_evaluated).** The expectation of 17.26 (14 pass, 7 fail, 5 NE) was missed on the two WKB currents.
+
+| Case, bias | Pairs order | Pairs, N = 1010 | Path l, F (worst) | Current (share) |
+|---|---|---|---|---|
+| local Kane, Si, −3 V | pass 1.992 | pass 3.0e-4 | — | NE: error 3.8e-4, resolution 7.0e-3 J |
+| local Kane, Si, −6 V | pass 1.998 | pass 1.4e-4 | — | NE: resolution 9.1 J |
+| nonlocal Kane, Si, −3 V | **fail** 2.527 | pass 2.0e-5 | pass 8.0e-6 (205) | NE: J_on − J_off = 0 |
+| nonlocal Kane, Si, −6 V | NE 2.107 | pass 4.9e-5 | pass 1.2e-5 (266) | NE: J_on − J_off = 0 |
+| direct WKB, GaAs, −0.5 V | **fail** 1.008 | **fail** 5.8e-3 | pass 2.9e-5 (209) | NE: error 5.7e-3, resolution 74 J |
+| direct WKB, GaAs, −1 V | **fail** 0.995 | **fail** 3.1e-3 | pass 2.9e-5 (249) | NE: error 3.1e-3, resolution 1.2 J |
+
+- **The leakage cancels (IG-Q26 B).** For local Kane at −3 V, J_on − J_off = 8.98e-16 A/cm² against q P = 8.98e-16 (the
+  failure of 17.25, a factor 4.4e4, is gone). It is not judged: 1e3 times its resolution is 7 J.
+- **WKB is now applicable:** P_QE 8.7e-10 and 4.0e-8. The WKB comparisons are judged for the first time. **S2
+  stands as found:** orders 1.01 and 1.00; the finest errors 5.84e-3 and 3.07e-3 against c₁h of 5.78e-3 and 3.05e-3
+  (c₁ = 8.3e5 and 4.4e5 /cm), within 1 %. They fail 17.8's band and 1e-3. This is the pre-registered first-order
+  slope error of NiTCAD's direct-WKB rate (`drift_diffusion.cpp`, the first segment's forward difference), now a
+  judged fail. A fix is not made here (DT-Q11); it is a finding for the owner. The paths' l and F pass at every
+  judged path. The shares follow the pairs (5.7e-3, 3.1e-3) but are not resolved.
+- **Nonlocal Kane's current share is exactly 0** at both biases: J_on equals J_off to every digit. A diagnostic run
+  (N = 128, not committed) showed that the nonlocal generation is coupled: n and p change by factors up to 10 and 30
+  with it on (12–37 paths, one re-trace per point), and the terminal current changes sign from point to point near
+  1e-6 A/cm². That current is 1e4–1e5 times below its own resolution (0.03 A/cm²), and W6 already records that a
+  path's current is not carried by the edges. This is an observation below resolution, not a finding.
+- The nonlocal order at −3 V (2.53) is unchanged and unexplained (17.25).
+- **Frozen as found:** every judged metric within a quarter, the orders within 0.02, the currents not pinned.
+- **Time:** 97 s in Release for the frozen case (411 s as first built, with the WKB ramps to −2 and −4 V), within 17.7's
+  120 s. Debug is checked at close-out (step 10).
+
 ---
 
 ## New questions the advisor raised (not yet in `ARCHITECTURE.md`)
