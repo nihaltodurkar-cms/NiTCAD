@@ -71,6 +71,7 @@ void set_pardiso_threads(int threads);
 // TVR-5a (DECISIONS Unit 55 17): classical interfaces and generation.
 [[nodiscard]] BenchmarkResult run_tvb08(Tier tier);  // full only: three heterojunctions, N = 64 ... 512
 [[nodiscard]] BenchmarkResult run_tvb22(Tier tier);  // full only: one trap level, two types x two biases
+[[nodiscard]] BenchmarkResult run_tvb23(Tier tier);  // full only: 1D N = 128 ... 1024, both injections; the traces
 [[nodiscard]] BenchmarkResult run_tvb09(Tier tier);  // fast: one bias (V_FB + 1.5 V); full: the V_G grid
 [[nodiscard]] BenchmarkResult run_tvb10(Tier tier);  // full only: HF C-V and deep depletion, N = 64 ... 512
 [[nodiscard]] BenchmarkResult run_tvb14(Tier tier);  // fast: 1D tensor; full: + 2D/3D tensor, 2D/3D generated, swept

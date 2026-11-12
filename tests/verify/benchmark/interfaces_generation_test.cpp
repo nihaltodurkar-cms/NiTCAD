@@ -165,6 +165,45 @@ TEST_CASE("TVB-22: nothing in the fast tier", "[tvr5a]") {
     REQUIRE(r.comparisons.empty());
 }
 
+// TVB-23 (avalanche multiplication). The expectation written before the first run (construction in tvb23.cpp,
+// fixed at that commit): all 26 comparisons pass, per injection (M_n, M_p) at I_n = 0.1, 0.3, 0.5, 0.7, 0.9 the order
+// and the finest-level 1 - 1/M, then V at M = 10, 100, 1000 (A) for M_n and for M_p.
+TEST_CASE("TVB-23: avalanche multiplication, full tier (expectation before the first run)", "[.tvr5a_full]") {
+    const auto r = bench::run_tvb23(bench::Tier::full);
+    std::vector<Found> expected;
+    for (const char* carrier : {"M_n", "M_p"}) {
+        for (const char* I : {"0.1", "0.3", "0.5", "0.7", "0.9"}) {
+            // The bias in the name is the reference's; matched by prefix below.
+            expected.push_back({std::string("1 - 1/M order, ") + carrier + ", I_n " + I, Outcome::pass});
+            expected.push_back({std::string("1 - 1/M finest (N = 1024), ") + carrier + ", I_n " + I, Outcome::pass});
+        }
+    }
+    for (const char* carrier : {"M_n", "M_p"}) {
+        for (const char* M : {"10", "100", "1000"}) {
+            expected.push_back({std::string("V at ") + carrier + " = " + M + " (A), N = 1024", Outcome::pass});
+        }
+    }
+    if (r.run_error) FAIL(*r.run_error);
+    for (const auto& n : r.notes) std::printf("%s note: %s\n", r.id.c_str(), n.c_str());
+    for (const auto& c : r.comparisons) {
+        std::printf("%s [%s] %s: %.4g (%s) %s\n", r.id.c_str(), std::string(to_string(c.comparison.outcome)).c_str(),
+                    c.quantity.c_str(), c.metric, c.criterion.c_str(), c.comparison.reason.c_str());
+    }
+    REQUIRE(r.comparisons.size() == expected.size());
+    for (std::size_t i = 0; i < expected.size(); ++i) {
+        const auto& c = r.comparisons[i];
+        CAPTURE(c.quantity, c.metric, c.comparison.reason);
+        CHECK(c.quantity.starts_with(expected[i].quantity));
+        CHECK(c.comparison.outcome == expected[i].outcome);
+    }
+}
+
+TEST_CASE("TVB-23: nothing in the fast tier", "[tvr5a]") {
+    const auto r = bench::run_tvb23(bench::Tier::fast);
+    REQUIRE_FALSE(r.run_error.has_value());
+    REQUIRE(r.comparisons.empty());
+}
+
 TEST_CASE("TVB-08: nothing in the fast tier", "[tvr5a]") {
     const auto r = bench::run_tvb08(bench::Tier::fast);
     REQUIRE_FALSE(r.run_error.has_value());

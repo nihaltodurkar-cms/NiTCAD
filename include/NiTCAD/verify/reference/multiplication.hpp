@@ -88,6 +88,19 @@ struct MultiplicationQuadrature {
 [[nodiscard]] std::expected<MultiplicationQuadrature, std::string> multiplication_quadrature(
     const MultiplicationInput& in, double bias_V, int panels = 16);
 
+// Where the field falls to `fraction` of its peak on each side (TVB-23's Q2 window, DECISIONS Unit 55 17.13 (b)):
+// x = -int V_T ds / E from that level to the junction's on the p side, and the mirror on the n side, the junction at
+// x = 0. The level by Brent, the integral by adaptive Kronrod-15 (relative 1e-25); E >= fraction E_max on the range,
+// so the integrand is bounded. `abs_error` is the quadrature's summed estimate.
+struct FieldWindow {
+    DD field_max_V_per_cm;
+    DD x_p_cm, x_n_cm;  // x_p < 0 < x_n
+    double abs_error = 0.0;
+};
+// Errors: as multiplication; fraction not in (0, 1); Brent or the quadrature not converging.
+[[nodiscard]] std::expected<FieldWindow, std::string> multiplication_field_window(const MultiplicationInput& in,
+                                                                                 double bias_V, double fraction);
+
 // The bias in [reverse_V, forward_V] (reverse_V < forward_V <= 0) at which 1 / M of the chosen carrier equals
 // `inverse` (0: breakdown, where I_n = 1), by Brent to 1e-10 V. 1 / M falls as the reverse bias grows. Errors: as
 // multiplication; the bracket does not hold the value.

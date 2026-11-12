@@ -19,6 +19,8 @@
 //     the linear-field series to 2 % (the cut keeps such fields);
 //   - the branch switch: swapped branch sets with the switch at 0 and above any field give the single-branch result
 //     exactly, and a switch at half the peak a result strictly between the two single-branch ones;
+//   - the field window (where E falls to a fraction of its peak) against the linear field's (1 - f) W where the
+//     majority carriers are negligible, and its refusals;
 //   - no ionization: A = 0 everywhere gives M = 1 exactly;
 //   - breakdown of a one-sided 1e16 junction: I_n = 1 within 1 % of 55.3 V (the depletion-approximation value of
 //     Unit 19's tests, a sanity bound), and the bias at a given 1 / M returns that 1 / M;
@@ -207,6 +209,43 @@ TEST_CASE("multiplication: each carrier's branch follows its switch field", "[.t
     INFO("strong " << strong_only.hi << ", weak " << weak_only.hi << ", mixed " << mixed.hi);
     CHECK(mixed.hi < 0.9 * strong_only.hi);
     CHECK(mixed.hi > weak_only.hi);
+}
+
+TEST_CASE("multiplication: the field window") {
+    // Where the majority carriers are negligible the field is linear, E = E_max (1 - |x| / W), W = eps E_max / (q N):
+    // the window's edge at E = f E_max is |x| = (1 - f) W. At the edge of a tenth of the peak the majority density is
+    // N e^-(1 + z), z = f^2 eps E_max^2 / (2 q N V_T) (17 on both sides of 5e15 at -100 V), so the linear form holds
+    // to about e^-z there. In 1e16 against 2e17 at -5 V the n side bends by only about 10 V_T: its electrons spill
+    // into the p side near the junction at about N_D e^-10, 1e-3 of N_A, which bends the p side's field by that much
+    // (within 3e-3 of linear), and its own majority tail makes the field there fall more slowly than linearly
+    // (x_n between (1 - f) W_n and W_n + 3 L_D, L_D the Debye length at N_D).
+    for (const double f : {0.1, 0.5, 0.9}) {
+        const auto w = ref::multiplication_field_window(input(5e15, 5e15, none, none), -100.0, f);
+        const auto m = ref::multiplication(input(5e15, 5e15, none, none), -100.0);
+        REQUIRE(w.has_value());
+        REQUIRE(m.has_value());
+        INFO("f " << f << ": x_p " << w->x_p_cm.hi << ", x_n " << w->x_n_cm.hi << ", W " << m->depletion_p_cm.hi);
+        CHECK(rel(w->field_max_V_per_cm, m->field_max_V_per_cm) == 0.0);
+        CHECK(rel(-w->x_p_cm, DD(1.0 - f) * m->depletion_p_cm) <= 1e-6);
+        CHECK(rel(w->x_n_cm, DD(1.0 - f) * m->depletion_n_cm) <= 1e-6);
+        CHECK(w->abs_error <= 1e-20);
+    }
+    {
+        const auto w = ref::multiplication_field_window(input(1e16, 2e17, none, none), -5.0, 0.1);
+        const auto m = ref::multiplication(input(1e16, 2e17, none, none), -5.0);
+        REQUIRE(w.has_value());
+        REQUIRE(m.has_value());
+        const double debye = std::sqrt(eps * VT / (q * 2e17));
+        INFO("x_p " << w->x_p_cm.hi << ", x_n " << w->x_n_cm.hi << ", W_p " << m->depletion_p_cm.hi << ", W_n "
+                    << m->depletion_n_cm.hi << ", L_D " << debye);
+        CHECK(rel(-w->x_p_cm, DD(0.9) * m->depletion_p_cm) <= 3e-3);
+        CHECK(w->x_n_cm.hi > 0.9 * m->depletion_n_cm.hi);
+        CHECK(w->x_n_cm.hi < m->depletion_n_cm.hi + 3.0 * debye);
+    }
+    for (const double f : {0.0, 1.0, -0.5, std::numeric_limits<double>::quiet_NaN()}) {
+        CHECK_FALSE(ref::multiplication_field_window(input(5e15, 5e15, none, none), -100.0, f).has_value());
+    }
+    CHECK_FALSE(ref::multiplication_field_window(input(5e15, 5e15, none, none), 0.5, 0.1).has_value());
 }
 
 TEST_CASE("multiplication: no ionization") {

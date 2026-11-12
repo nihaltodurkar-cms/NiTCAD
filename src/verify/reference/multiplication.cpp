@@ -222,6 +222,33 @@ std::expected<MultiplicationQuadrature, std::string> multiplication_quadrature(c
     return MultiplicationQuadrature{s.I_n, s.I_p, s.phi};
 }
 
+std::expected<FieldWindow, std::string> multiplication_field_window(const MultiplicationInput& in, double bias_V,
+                                                                  double fraction) {
+    if (!(fraction > 0.0 && fraction < 1.0)) {
+        return std::unexpected("multiplication_field_window: the fraction must be in (0, 1)");
+    }
+    const auto j = junction(in, bias_V);
+    if (!j) return std::unexpected(j.error());
+    FieldWindow w;
+    w.field_max_V_per_cm = j->field(true, j->s_j);
+    const DD target = DD(fraction) * w.field_max_V_per_cm;
+    for (const bool p_side : {true, false}) {
+        const DD top = p_side ? j->s_j : j->r_j;
+        const BrentResult c = brent_zero([&](const DD& v) { return j->field(p_side, v) - target; }, DD(0.0), top,
+                                         u_dd * top.hi);
+        if (c.status != BrentStatus::ok) {
+            return std::unexpected("multiplication_field_window: Brent did not converge for the level");
+        }
+        const AdaptiveResult a = qag15([&](const DD& v) { return j->VT / j->field(p_side, v); }, c.root, top, 0.0, 1e-25);
+        if (a.status != QuadratureStatus::ok) {
+            return std::unexpected("multiplication_field_window: the quadrature did not converge");
+        }
+        (p_side ? w.x_p_cm : w.x_n_cm) = p_side ? -a.value : a.value;
+        w.abs_error += a.abs_error;
+    }
+    return w;
+}
+
 std::expected<double, std::string> bias_at_inverse_multiplication(const MultiplicationInput& in, bool electron,
                                                                  double inverse, double reverse_V, double forward_V) {
     if (!(reverse_V < forward_V) || !(forward_V <= 0.0) || !std::isfinite(reverse_V) || !std::isfinite(inverse)) {
