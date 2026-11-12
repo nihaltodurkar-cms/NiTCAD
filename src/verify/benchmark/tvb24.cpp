@@ -9,8 +9,9 @@
 //   - 1D, one material, an abrupt p+ i n+ diode: N_A = 1e19 cm^-3 on x < 0, undoped on (0, d), N_D = 1e19 on x > d,
 //     d = 10 nm; ohmic contacts at both ends (the anode, contact 0, on the p side, at the bias; the cathode at 0 V);
 //     300 K; Boltzmann, no band-gap narrowing, no recombination (SRH, Auger, radiative off), constant mobility (the
-//     doping dependence off); the weighted terminal current (Unit 32), the minority floor (Unit 50) and the stored
-//     rates on.
+//     doping dependence off); the minority floor (Unit 50) and the stored rates on; the weighted terminal current
+//     (Unit 32) on for the local case only (it refuses nonlocal tunnelling, DECISIONS W6: found at the first run, a
+//     run error before any comparison was formed), the nonlocal cases reading the terminal current.
 //   - mesh: uniform, spacing h = d / m, nodes at x_j = (j + 1/2) h for j = -J - 1 ... m + J, so that x = 0 and x = d
 //     are edge midpoints (the boxes' boundaries) at every level; m = 18 2^k, J = 54 2^k (each side 3 d = 30 nm, about
 //     13 nm beyond the widest depletion layer); k = 3, 2, 1, 0 (N = 1010, 506, 254, 128 nodes), and k = 4 (N = 2018)
@@ -29,8 +30,8 @@
 //   - nonlocal cases, at k = 3: per path, l and F relative <= 1e-3 for every path that reached its crossing with a
 //     rate >= 1e-6 of the largest (judged on the largest of the errors), against the reference's path from the level
 //     at the start node's position;
-//   - the current, at k = 3: |J - q P_ref| / (q P_ref) <= 1e-3, J the anode's weighted current, judged where |J| >= 1e3
-//     times its resolution (else NOT EVALUATED).
+//   - the current, at k = 3: |J - q P_ref| / (q P_ref) <= 1e-3, J the anode's weighted current (local) or terminal current
+//     (nonlocal), judged where |J| >= 1e3 times its resolution (else NOT EVALUATED).
 //   Applicability (17.24): P_QE = q sum_i |Delta rho_i| V_i / (eps E_max) <= 1e-6 on every level, Delta rho the
 //   difference of p - n from its value with the electrons at the cathode's level and the holes at the anode's (the
 //   reference's QE model), E_max the reference's largest field; else NOT APPLICABLE. A comparison whose U_ref or U_iter
@@ -38,7 +39,7 @@
 //   U_ref: the reference's own error estimate and its difference from the second method. U_iter: |P(k = 3, tol / 100)
 //   - P(k = 3, tol)| / P_ref, the Newton tolerance's share, measured at the finest level and used at every level.
 //   U_disc: the three-grid GCI (F_s 1.25) on k = 3, 2, 1 at the observed order. The (h, tol) factorial (16.2 (p)) on
-//   k = 3, 4 and tol = 1e-9, 1e-11, per pairs comparison.
+//   k = 3, 4 and tol = 1e-8, 1e-10, per pairs comparison.
 // S2 (17.24, pre-registered): NiTCAD's WKB slope |dE_v/dx| is the forward difference over the path's first segment,
 // first order where E' != 0, so the WKB pairs carry a leading relative error c_1 h (c_1 from the reference:
 // wkb_slope_coefficient). The criteria stand (IG-Q25 A); the predicted c_1 h is printed beside each level's error.
@@ -74,7 +75,9 @@ namespace ref = reference;
 constexpr double T = 300.0;
 constexpr double d_cm = 1e-6, doping_cm3 = 1e19;
 constexpr int cells_i = 18, cells_side = 54;  // at k = 0; each doubles with k
-constexpr double tolerance = 1e-3, tol_newton = 1e-9;
+// 1e-8, and 1e-10 in the factorial: 1e-11 is not reachable at N = 1010 (Newton stalls; found at the first run, a run
+// error before any comparison was formed, as TVB-23's).
+constexpr double tolerance = 1e-3, tol_newton = 1e-8;
 constexpr double limit_qe = 1e-6, resolution_factor = 1e3, path_share = 1e-6;
 constexpr double step_V = 0.5, flat_field = 1e3;
 constexpr std::array<int, 4> ladder{3, 2, 1, 0};  // finest first
@@ -164,7 +167,7 @@ solve::BiasOptions options(Model model, double tol) {
     o.models.btbt_nonlocal = model == Model::kane  ? assemble::NonlocalTunnelling::kane
                              : model == Model::wkb ? assemble::NonlocalTunnelling::direct_wkb
                                                    : assemble::NonlocalTunnelling::off;
-    o.weighted_current = true;
+    o.weighted_current = model == Model::local;  // refused with nonlocal tunnelling (W6)
     o.minority_floor = true;
     o.store_rates = true;
     o.newton.tol_update = tol;
@@ -319,8 +322,9 @@ BenchmarkResult run_tvb24(Tier tier) {
                 Sample& s = lv.s[b];
                 for (std::size_t i = 0; i < volume.size(); ++i) s.pairs -= p.rates.band_to_band_p[i] * volume[i];
                 for (const auto& t : p.tunnel_paths) s.path_pairs += t.generation_cm3_s * volume[t.start_node];
-                s.J = std::abs(p.weighted_current[0]);
-                s.J_res = p.weighted_current_resolution[0];
+                const bool weighted = c.model == Model::local;
+                s.J = std::abs(weighted ? p.weighted_current[0] : p.terminal_current[0]);
+                s.J_res = weighted ? p.weighted_current_resolution[0] : p.terminal_current_resolution[0];
                 s.qe = qe_share(p, volume, c.biases[b], VT, eps, refs[b].E_max);
                 if (keep_paths) s.paths = p.tunnel_paths;
             }

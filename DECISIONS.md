@@ -11844,6 +11844,48 @@ pre-registered; IG-Q25 A under the standing instruction.**
   EVALUATED if the ladder is not asymptotic. The finest pairs lie near c₁h, at the tolerance: either outcome is S2's.
   The WKB currents follow the pairs.
 
+**17.25 TVB-24 as first built (57d8228): outcome as found (26 comparisons: 10 pass, 2 fail, 4 not_evaluated,
+10 not_applicable). IG-Q26 B under the standing instruction.**
+- **Corrected before any comparison formed** (run errors, as 17.21's): the tolerance pair is 1e-8/1e-10 (Newton at
+  1e-11 did not converge at N = 1010); the nonlocal cases read `terminal_current` and its resolution, because the
+  weighted current is refused with nonlocal tunnelling (W6). The local cases keep the weighted current.
+- **Outcome as found (run 4, 411 s in Release):**
+
+| Case, bias | Pairs order | Pairs, N = 1010 | Path l, F (worst) | Current |
+|---|---|---|---|---|
+| local Kane, Si, −3 V | pass 1.992 | pass 3.0e-4 | — | **fail** 4.4e4 |
+| local Kane, Si, −6 V | pass 1.998 | pass 1.4e-4 | — | NE (resolution 7.9 J) |
+| nonlocal Kane, Si, −3 V | **fail** 2.527 (2.53, 2.50, 2.48) | pass 2.0e-5 | pass 8.0e-6, 8.0e-6 (205 paths) | NE (resolution 5.7e4 J) |
+| nonlocal Kane, Si, −6 V | NE 2.107 (not asymptotic) | pass 4.9e-5 | pass 1.2e-5, 1.2e-5 (266) | NE (resolution 1.0e3 J) |
+| direct WKB, GaAs, −2 V | NA 1.001 | NA 1.6e-3 | NA 1.4e-5, 1.4e-5 (307) | NA 1.6e-3 |
+| direct WKB, GaAs, −4 V | NA 1.032 | NA 8.7e-4 | NA 2.3e-4, 2.3e-4 (383) | NA 8.7e-4 |
+
+  - The reference's pairs: local 5607.6 and 1.914e11 /cm²s; nonlocal 3550.9 and 1.583e11; WKB 1.701e20 and
+    1.701e22 (q P = 27.3 and 2725 A/cm²). Each case's paths carry the same pairs as its rates.
+  - **The local current at −3 V: the contacts' leakage (as 17.21's cause 1).** Without recombination each contact
+    supplies its minority carriers by diffusion, about 4e-11 A/cm², against q P = 9.0e-16 A/cm²: J is the leakage.
+    The pairs, from the rates, pass. This is again a gap of the construction, not of the tunnelling.
+  - **The nonlocal order at −3 V, 2.53.** Steady over the three pairs (2.53, 2.50, 2.48) and above the band; the
+    finest error is 2.0e-5. At −6 V the pairs' orders spread by 1.70 (NE). The cause is not settled here. Nothing is
+    changed (TVM2).
+  - **WKB is NOT APPLICABLE by P_QE:** 2.8e-6 at −2 V and 1.4e-4 at −4 V (the paths' 2.7e-6 and 1.3e-4). The
+    generated carriers move the quasi-Fermi levels off the contacts', so the reference's QE potential is not the
+    simulated one. P_QE scales about as the pairs^0.84 between the two biases.
+  - **S2 confirmed as pre-registered:** orders 1.001 and 1.032; at every level the pairs' error equals c₁h within a
+    few per cent (c₁ = 2.24e5 /cm at −2 V, 1.26e5 at −4 V: 1.57e-3 against 1.55e-3 at −2 V, N = 1010; 8.74e-4 against
+    8.77e-4 at −4 V). The finding stands on these numbers even though the comparisons are NOT APPLICABLE.
+  - **Time:** 411 s, above 17.7's 120 s. This is decided at close-out (step 10), with TVB-23's.
+- **IG-Q26 (a construction change after a run).** (A) Keep as found. (B) Rebuild TVB-24 once with values fixed
+  before the rerun (17.26): the WKB biases lowered to −1 and −0.5 V, so that P_QE falls below 1e-6 (at the scaling
+  above, a fall of the pairs by about 3.4 is needed; the −2 → −4 V step multiplied them by 100, so −1 V is estimated
+  near 4e-7); and every current judged from the generation's share, J(BTBT on) − J(BTBT off) at the same bias and
+  mesh, which cancels the contacts' leakage. U_iter adds the two resolutions. The criteria and limits of 17.8, 17.14
+  and 17.24 stay as frozen. **Recommendation B.** Both changes remove a defect of the construction that the run
+  showed, and neither makes a criterion easier. **B, under the standing instruction** (2026-11-12, extended to
+  post-run rebuilds).
+- **Frozen as found** (step 5d): `interfaces_generation_test.cpp`, every metric within a quarter, the orders within
+  0.02, the four unresolved currents not pinned.
+
 ---
 
 ## New questions the advisor raised (not yet in `ARCHITECTURE.md`)
