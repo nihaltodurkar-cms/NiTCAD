@@ -164,6 +164,8 @@ add_custom_command(
           src/verify/reference/trap_admittance.cpp
           include/NiTCAD/verify/reference/multiplication.hpp
           src/verify/reference/multiplication.cpp
+          include/NiTCAD/verify/reference/pin_junction.hpp
+          src/verify/reference/pin_junction.cpp
           include/NiTCAD/verify/reference/special_functions.hpp
           src/verify/reference/special_functions.cpp
           include/NiTCAD/verify/reference/model_parameters.hpp
@@ -212,7 +214,8 @@ add_library(nitcad_verify_reference STATIC src/verify/reference/double_double.cp
   src/verify/reference/linear_transient.cpp src/verify/reference/energy_layer.cpp
   src/verify/reference/thermal_slab.cpp
   src/verify/reference/pao_sah.cpp src/verify/reference/heterojunction.cpp
-  src/verify/reference/trap_admittance.cpp src/verify/reference/multiplication.cpp)
+  src/verify/reference/trap_admittance.cpp src/verify/reference/multiplication.cpp
+  src/verify/reference/pin_junction.cpp)
 add_library(NiTCAD::verify_reference ALIAS nitcad_verify_reference)
 target_include_directories(nitcad_verify_reference PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
 add_dependencies(nitcad_verify_reference nitcad_verify_reference_boundary)
@@ -252,7 +255,8 @@ add_executable(nitcad_verify_test
   tests/verify/reference/pao_sah_test.cpp
   tests/verify/reference/heterojunction_test.cpp
   tests/verify/reference/trap_admittance_test.cpp
-  tests/verify/reference/multiplication_test.cpp)
+  tests/verify/reference/multiplication_test.cpp
+  tests/verify/reference/pin_junction_test.cpp)
 target_link_libraries(nitcad_verify_test PRIVATE NiTCAD::verify_reference Catch2::Catch2WithMain)
 nitcad_add_file_tests(verify nitcad_verify_test)
 add_test(NAME verify_reference_boundary
