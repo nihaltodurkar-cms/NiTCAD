@@ -601,6 +601,11 @@ std::uint64_t generation_digest(const ExtrudedGeometry& x, const SweptOptions& o
         real(st.width);
     }
     word(options.max_nodes);
+    // Unit 17 (AD4, AD10): a cross-section size field, when given; nothing is added without one.
+    if (s.size_field) {
+        word(0x53495a45464cULL);
+        word(s.size_field->digest());
+    }
     return h;
 }
 
