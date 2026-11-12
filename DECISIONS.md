@@ -11947,6 +11947,13 @@ pre-registered; IG-Q25 A under the standing instruction.**
 - **Frozen as found:** every judged metric within a quarter, the orders within 0.02, the currents not pinned.
 - **Time:** 97 s in Release for the frozen case (411 s as first built, with the WKB ramps to −2 and −4 V), within 17.7's
   120 s. Debug is checked at close-out (step 10).
+- **Mutation, TVB-24's own code:** 10 mutants, 9 caught, 1 equivalent.
+  - Caught: the background's subtraction, the summed resolution, the P_QE limit, the tolerance, the pairs' scale,
+    the reference path's start node, P_QE's hole level, the path share, and U_iter.
+  - U_iter was rewritten once, from ×1e9 to ×1e12. The tolerance's share is at most about 1e-15 here, so ×1e9 stayed
+    below the tenth-of-tolerance guard.
+  - Equivalent: removing the `reached` filter. A stored point's paths have been re-traced until they agree, and a
+    path is unreached only while the paths lag the state.
 
 ---
 
