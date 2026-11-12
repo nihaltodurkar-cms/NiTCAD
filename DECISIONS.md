@@ -11706,6 +11706,64 @@ IG-Q22 open (needs the owner's explicit authorization).**
   pinned to within a quarter.
 - **Suites, Release:** `nitcad_verify_benchmark_test` 44 cases pass; `[tvr5a_full]` passes.
 
+**17.21 Step 4: the multiplication reference, TVB-23 as first built, outcome as found (26 comparisons: 9 pass,
+7 fail, 10 not_evaluated). IG-Q24 B, authorized.**
+- **Reference (afe7acc, 74d809c).** `verify/reference/multiplication`: I_n, I_p, φ, M_n, M_p on the QE field with
+  each side described from its own bulk (IG-Q3 A; valid past qe_junction's −15 V), Dormand–Prince in the level
+  coordinate as the method, nested Kronrod-15 as the second method, the bias at a given 1/M, and the field window
+  (where E falls to a fraction of its peak: Q2's nodes). 13 L0 cases (258 assertions). Mutation: 19 mutants, all
+  caught after three tests were added (the mirrored junction's field, a peak field just above the cut, the branch
+  switch); afe7acc's message says 20, the count is 19.
+- **Construction (74d809c, before any run).** As the header of `tvb23.cpp`. Two choices made there, both within
+  the construction:
+  - The junction is symmetric, 3e15 on both sides, not Unit 19's one-sided 1e16/1e19. Q2 (17.13 (b)) counts every
+    mobile carrier inside the window E ≥ E_max/10, and a heavy side's majority tail lies inside it (Q2 near 1e2);
+    at 3e15 the window's edge is 15 V_T or more inside the depletion layer at every judged bias (Q2 ≈ 1e-7 at
+    I_n = 0.1). V_BR (reference) is 193.79 V; the judged biases are −76.93 … −174.39 V.
+  - The primary current: pairs from the TVQ3 hook 8 µm from the junction (σ = 0.1 µm), 2.5e-5 A/cm² of pairs;
+    the collected J(off) is 8.5e-6 … 1.2e-5 A/cm² (Q1 ≤ 1.5e-6).
+- **Corrected before any comparison formed** (run errors, as 17.18's tolerance): the tolerance pair is
+  1e-9/1e-11 (1e-12 did not converge at N = 1024); the traces start at I_n = 0.7 (M_n = 10 is I_n = 0.9, where they
+  started, so the crossing lay on the bracket's end). **Corrected after the first outcome:** the A part's two-grid
+  ratio was inverted (U_num negative); fixing it changed no outcome.
+- **Outcome as found (run 4, 113 s):**
+
+| Comparison | Outcome | Measured |
+|---|---|---|
+| 1 − 1/M_n finest, I_n 0.1 … 0.9 | 5 pass | 2.6e-5, 1.5e-5, 9.3e-6, 4.7e-6, 8.8e-7 |
+| 1 − 1/M_n orders | 5 NE (not asymptotic) | finest pairs 1.46, 1.23, 1.09, 0.91, −0.56 (coarse pairs 1.9–2.1) |
+| 1 − 1/M_p finest | 4 pass, 1 fail (I_n 0.1) | 1.6e-3, 8.2e-4, 5.7e-4, 4.0e-4, 2.1e-4, the same at every N |
+| 1 − 1/M_p orders | 5 NE | about 0 |
+| V at M_n, M_p = 10, 100, 1000 (A) | 6 fail | \|ΔV\| 17, 98, 5.0 mV (M_n) and 148, 5.1, 3.4 mV (M_p) against bounds 0.02–1.6 mV |
+
+  - No comparison is NOT APPLICABLE: Q1 ≤ 1.5e-6, Q2 ≤ 5e-8 at the judged biases, J(off) 15 decades above its
+    resolution. The factorial's ε_int is at most 2e-13.
+  - **Cause 1, the other carrier's leakage (E).** Without recombination each contact still supplies its minority
+    carriers by diffusion, 6e-10 A/cm² in all (the bound printed in the run). Under hole injection the p contact's
+    electrons are multiplied by M_n, not M_p; the error this predicts in 1 − 1/M_p is 2.4e-3 at I_n = 0.1 and
+    3.1e-4 at 0.9, measured 1.6e-3 and 2.1e-4 at every N. The same leakage, mirrored, is the floor near 1e-5 that
+    flattens M_n's finest orders. The predicates of 17.14 do not measure it; it is a gap of this construction.
+  - **Cause 2, the interpolation (A).** The trace's steps are 1.5–2 V, and ln M interpolated linearly across one is
+    off by its curvature: about 4e-3 in ln M near M = 10, 40 mV. At the judged bias −174.39 V the E part puts M_n
+    within 9e-7 of the reference (about 1e-4 V); the trace's reading at M_n = 10 is 17 mV away.
+- **IG-Q24 (a construction change after a run).** (A) Keep as found. (B) Rebuild TVB-23 once with the values of
+  17.22 fixed before the rerun: M from the generation's own share, (J_on(G) − J_on(0)) / (J_off(G) − J_off(0)), and
+  V(M_c) by a bias root between the two traced points around it. The criteria and limits of 17.8 and 17.14 stay as
+  frozen. **Recommendation B.** The owner (2026-11-12): "choose recommended always". **B, authorized,** as the
+  answer to IG-Q24; the standing instruction now covers such questions too.
+
+**17.22 TVB-23 rebuilt once (IG-Q24 B). The values, fixed and committed before the rerun.**
+- M = (J_on(G) − J_on(0)) / (J_off(G) − J_off(0)) at each judged bias and in the A part: four solves at one
+  bias and level, the same ramp, the same meshes. Linear in the injected current where Q2 is small, so the leakage
+  cancels to the order of Q2. U_iter adds the two G = 0 resolutions.
+- V(M_c): the traced points whose ln M (by the definition above, solved at their biases) bracket ln M_c, then
+  Illinois regula falsi in the bias on ln M − ln M_c with all four solves at each bias (started from the bracket's
+  first traced state), to |Δ ln M| ≤ 1e-9 or 60 iterations. Q2 is read at the root's state.
+- Unchanged: every criterion and limit, the construction of 17.21 (junction, source, mesh, ladder, tolerances,
+  traces), the two tenth-of-tolerance rules.
+- Expectation before the rerun: all 26 pass. The coarse pairs' orders (1.8–2.1 above) and the leakage estimate
+  suggest the orders become asymptotic; it is not known that they do.
+
 ---
 
 ## New questions the advisor raised (not yet in `ARCHITECTURE.md`)

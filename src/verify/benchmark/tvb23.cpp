@@ -34,7 +34,7 @@
 //   comparison whose U_ref or U_iter exceeds a tenth of its tolerance is NOT EVALUATED.
 //   U_ref: the reference's tolerance error and its difference from the second method (nested Kronrod, 16 panels),
 //   carried to x. U_iter: the weighted currents' resolutions, carried to x: (r_on / J_on + r_off / J_off) / (M - 1).
-//   The (h, tol) factorial (16.2 (p)) at N = 1024, tol = 1e-10 and 1e-12, N = 1024 and 2048, per comparison.
+//   The (h, tol) factorial (16.2 (p)) at N = 1024, tol = 1e-9 and 1e-11, N = 1024 and 2048, per comparison.
 // A (17.14), per injection, at M_c = 10, 100, 1000: |V_sim - V_ref| <= U_num + U_ref + eps_V, V_sim where J(on) /
 //   J(off) = M_c along trace_bias with the generation (interpolated in ln M between traced points; J(off) re-solved
 //   at each traced bias), V_ref the reference's bias for 1 / M = 1 / M_c; eps_V = 2 Q2 (V_bi - V) + J (R_n + R_p),
@@ -73,7 +73,9 @@ namespace {
 constexpr double T = 300.0;
 constexpr double doping_cm3 = 3e15, half_cm = 1e-3, beta = 2.0;
 constexpr double source_cm = 8e-4, sigma_cm = 1e-5, pair_current_A_cm2 = 2.5e-5;
-constexpr double tolerance = 1e-3, tol_newton = 1e-10;
+// 1e-9, and 1e-11 in the factorial: 1e-12 is not reachable at N = 1024 (Newton stalls; found at the first run, a run
+// error before any comparison was formed).
+constexpr double tolerance = 1e-3, tol_newton = 1e-9;
 constexpr double limit_q1 = 1e-5, limit_q2 = 1e-5, resolution_factor = 1e3;
 constexpr double step_V = 4.0;
 constexpr std::array<double, 5> targets{0.1, 0.3, 0.5, 0.7, 0.9};  // the reference's I_n at the judged biases
@@ -223,7 +225,7 @@ struct Level {
     int N = 0;
     double h = 0.0;
     std::array<std::array<Sample, 5>, 2> s{};  // [electron = 0, hole = 1][target]
-    results::BiasPoint last_on[2], last_off[2];  // the states at the last judged bias (the traces start there)
+    results::BiasPoint last_on[2], last_off[2];  // the states at I_n = 0.7 (the traces start there, below M_n = 10)
 };
 
 }  // namespace
@@ -331,8 +333,8 @@ BenchmarkResult run_tvb23(Tier tier) {
                                            shortest(pair_current_A_cm2));
                 }
             }
-            lv.last_on[c] = on->points[at.back()];
-            lv.last_off[c] = off->points[at.back()];
+            lv.last_on[c] = on->points[at[3]];
+            lv.last_off[c] = off->points[at[3]];
         }
         return lv;
     };
@@ -463,7 +465,7 @@ BenchmarkResult run_tvb23(Tier tier) {
         const assemble::ManufacturedSources ms = source(*d, electron);
         solve::TraceOptions o;
         o.steady = options(tol_newton, true, &ms);
-        o.start_V = {ref.back().V, 0.0};
+        o.start_V = {ref[3].V, 0.0};
         o.end_V = *vbr - 20.0;
         o.step_V = 0.5;
         o.max_step_V = 2.0;
@@ -512,11 +514,11 @@ BenchmarkResult run_tvb23(Tier tier) {
             return r;
         }
         const std::string carrier = electron ? "M_n" : "M_p";
-        const double ratio = (levels[1].N - 1.0) / (levels[0].N - 1.0);
+        const double ratio = (levels[0].N - 1.0) / (levels[1].N - 1.0);  // h_512 / h_1024, about 2
         for (std::size_t m = 0; m < criterion_M.size(); ++m) {
             const std::string at_m = carrier + " = " + shortest(criterion_M[m]);
             const auto Vr = reference::bias_at_inverse_multiplication(in, electron, 1.0 / criterion_M[m], *vbr,
-                                                                       ref.back().V);
+                                                                       -1.0);
             if (!Vr) {
                 r.run_error = "reference: the bias at " + at_m + ": " + Vr.error();
                 return r;
