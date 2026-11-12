@@ -173,6 +173,10 @@ struct GeneratedMesh {
     MeshReport report;
     // generation_digest of the complex and options (Unit 53, FD14); 0 for the other generators.
     std::uint64_t generation_digest = 0;
+    // A swept mesh's cross-section (Unit 17, AD4: its size field lives there): the 2D generator's
+    // simplices, node p of line j being node j * points + p of the result. Empty for the others;
+    // not saved in mesh files.
+    std::optional<SimplexMesh> section;
 };
 
 // Errors: invalid_input (the geometry or option rules above); resource_exhausted (max_nodes

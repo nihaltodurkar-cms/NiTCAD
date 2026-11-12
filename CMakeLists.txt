@@ -317,7 +317,8 @@ add_library(nitcad_mesh STATIC
   src/mesh/complex_interfaces.cpp
   src/mesh/generate_complex.cpp
   src/mesh/generate_swept.cpp
-  src/mesh/size_field.cpp)
+  src/mesh/size_field.cpp
+  src/mesh/locate.cpp)
 add_library(NiTCAD::mesh ALIAS nitcad_mesh)
 target_include_directories(nitcad_mesh PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
 target_link_libraries(nitcad_mesh PUBLIC NiTCAD::base)
@@ -592,7 +593,10 @@ add_library(nitcad_solve STATIC
   src/solve/transient.cpp
   src/solve/small_signal.cpp
   src/solve/trace.cpp
-  src/solve/provenance.cpp)
+  src/solve/provenance.cpp
+  src/solve/adapt_indicators.cpp
+  src/solve/adapt_transfer.cpp
+  src/solve/adapt.cpp)
 add_library(NiTCAD::solve ALIAS nitcad_solve)
 target_include_directories(nitcad_solve PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
 target_link_libraries(nitcad_solve PUBLIC
@@ -699,6 +703,14 @@ target_compile_definitions(nitcad_deck_test PRIVATE
   NITCAD_DECKS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/decks"
   NITCAD_MKL_RUNTIME_PATH="${NITCAD_MKL_RUNTIME_PATH}")
 nitcad_add_file_tests(deck nitcad_deck_test)
+
+# Adaptive refinement (Unit 17): indicators, transfer and the loop, on devices built from decks.
+add_executable(nitcad_adapt_test
+  tests/solve/adapt_indicators_test.cpp
+  tests/solve/adapt_transfer_test.cpp
+  tests/solve/adapt_loop_test.cpp)
+target_link_libraries(nitcad_adapt_test PRIVATE NiTCAD::deck Catch2::Catch2WithMain)
+nitcad_add_file_tests(adapt nitcad_adapt_test)
 # The Lombardi device gates (tests/deck/surface_mobility_test.cpp, hidden tag [.lombardi]: MOSFET
 # sweeps) run in the Release configuration only.
 if(CMAKE_BUILD_TYPE STREQUAL "Release")

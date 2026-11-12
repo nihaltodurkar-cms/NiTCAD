@@ -5929,6 +5929,78 @@ predictor case (ID8, ID10); 3 slices.
 
 **Size:** Unit 17 XL (7 slices; 1, 3, 4 and 5 the bulk); Unit 17b L.
 
+**Implementation record (from 2026-11-12).**
+
+*Slice 1 — size fields (AD4, AD10; AC1, AC2).* `mesh/size_field.hpp`: `SizeField` (a nodal size on a background
+triangulation; exact location by `orient2d` through a bucket grid, the lowest-indexed containing triangle on a shared
+edge, linear interpolation clamped to the corners' range; outside every triangle the value at the nearest point of the
+nearest triangle), `local_sizes` (a node's longest incident edge, the h_old of AD4), `grade_sizes`, `refine_axis`.
+`MeshOptions2D::size_field` (a `shared_ptr<const SizeField>`, null by default) enters the 2D generator only through
+`size_at` (`min` with the field), so a field only refines; the swept generator passes its section's field through and
+adds the field's digest to `generation_digest` only when one is given (AD10: no word added without it). Two
+construction points found while writing the tests, fixed before any gate run (no criterion touched):
+- *Grading follows the refinement only.* Grading every node of the old mesh (AD4's "fixed-point sweep" read
+  literally) spreads the s-scale sizes of every interface pair and straddle over the whole device, refining where
+  nothing was marked. `grade_sizes` therefore takes seed nodes (the nodes a pass refined) and propagates g^k h from
+  them only (Dijkstra on log h); with every node a seed it is the full grading (h_j ≤ g h_i on every edge, tested).
+  `refine_axis` likewise grades against intervals split in the call, keeping the given axis' own ratios.
+- *Axis grading factor at least 2.* A midpoint split leaves a ratio of exactly 2 beside it, so with g = 1.5 every split
+  cascades over the whole axis. On axes the factor is max(g, 2) (the 2D field keeps g = 1.5). Stated in the header.
+Tests (`tests/mesh/size_field_test.cpp`, 6 cases): linear reproduction (1e-12) and the outside rule; refusals;
+local sizes and grading (all seeds, seeds only); axis refinement (marked, second-level grading, protected straddles,
+min_interval, refusals, determinism); AC2 on the 2D generator (a constant field equal to h gives the h mesh's
+`graph_digest` and points; a left-half h/4 graded field: P4 certificate kept, more nodes, concentrated where the field
+is small, every triangle not exempt within the generator's bound circumradius ≤ size/√3 against the field at its
+centroid, deterministic); AC2 on the swept path (same digest of the graph with a non-refining field, generation digest
+names the field, a refining field adds nodes in whole axis lines).
+
+*Slice 2 — indicators and feature-only marking (AD2, AD3 with ω ≡ 1; AC4).* `solve/adapt_indicators.hpp`:
+`edge_indicators` (raw values per edge and kind), `compute_indicators` (excess e = max(0, r/t − 1), node max, dominant
+kind), `unite` (AQ3's union over adaptation points), `mark_nodes` (Dörfler: e w > 0 and e w ≥ θ max). Insulator edges
+carry no indicator (the potential is linear between charges there, exact for the box method). The generation indicator
+is a node's share of the total G·V times the number of semiconductor nodes, t = 10.
+
+| # | Question (put and ruled under the owner's standing instruction "always choose recommended", 2026-11-11) | Options | Recommendation and ruling |
+|---|---|---|---|
+| AR1 | AD2's doping indicator \|Δ ln \|N_D − N_A\|\| is near zero across an abrupt junction between equal and opposite dopings (1e17 to −1e17: Δ ln = 0), so AC4's "the doping indicator marks the junction" cannot be met as written. | (a) As written. (b) **The signed log L(N) = sign(N) ln(max(\|N\|, n_i)/n_i), indicator \|ΔL\| / ln 10**: on an edge of one sign above n_i it is AD2's formula exactly; across a junction it counts the decades down to n_i and back up. (c) The equilibrium potential step \|Δ asinh(N / 2n_i)\|. | **(b)**, ruled as recommended: it keeps AD2's meaning and units (decades of net doping) where AD2's formula works and needs no solve; (c) changes the unit. No criterion changed. |
+
+AC4 run (`tests/solve/adapt_indicators_test.cpp`, 4 cases, 342 assertions): the four-node fixture's edge values equal
+the hand-computed ones (potential, both densities, doping by AR1, generation share 4 on node 3's edges); on the abrupt
+1e17 diode the doping indicator alone marks only the nodes beside the junction and the potential indicator only nodes
+within W/2 + h of it (W the abrupt-junction depletion width), zero excess beyond W/2 + 2h; on a MOS-C (p 1e17, 1.5 nm
+oxide, n+ poly, 1 V, the quasi-static `equilibrium_poisson` solve: drift-diffusion stalls above threshold on a MOS-C,
+`bias.hpp`) the electron-density indicator alone marks only nodes within one spacing of the inversion layer (n > N_A),
+the surface node included. Fixture note: a constant profile's window along its depth axis (x by default) is ignored
+(`doping_profiles.hpp`), so the x-windows take `axis=y`.
+
+*Slice 3 — transfer, the loop, verification and the certificate (AD1, AD5, AD6, AD9, AD11, AD13; AC3, AC6, AC20
+part).* `mesh/locate.hpp` (`PointLocator`: simplex meshes in 2D and 3D by orientation predicates through a bucket
+grid, tensor meshes by `TensorCells::stencil`; outside: the nearest node); `GeneratedMesh::section` (a swept mesh's
+cross-section simplices, node p of line j being j·n2 + p; not saved in files, so no file or digest changes);
+`solve/adapt_transfer.hpp` (`transfer_state`: ψ, E_Fn, E_Fp and the density offsets c_n = ln n − (ψ + E_Fn)/V_T,
+c_p = ln p + (ψ + E_Fp)/V_T interpolated over the old nodes of the new node's region; n, p rebuilt from them, so a
+linear ψ and linear quasi-Fermi levels transfer exactly where c is constant, one material without narrowing);
+`solve/adapt.hpp` (`adapt`, `next_refinement`, the builder callback `DeviceBuilder` and `MeshRefinement`). Without
+adjoint weighting (slice 4) a goal's estimate is its last change between passes.
+
+| # | Question (ruled under the standing instruction "always choose recommended") | Options | Recommendation and ruling |
+|---|---|---|---|
+| AR2 | What the loop does when AD11 rejects a proposed stop. Found on AC6's first run: the reverse current's change between passes fell below tolerance at 70 nodes while its error against the 2× reference was 0.27%; AD11 rejected the stop (its verified error above the allowance; the estimate, 1.0e-12, within it), but the slice-3 loop as first written ended there, not certified. Continuing with indicator marks did not help (12 passes, the value settled 0.26% off: the indicators kept marking the same few nodes, so the missing accuracy lies where they see none; where exactly was not measured). | (a) End, not certified. (b) **Continue, the next pass marked by AD3 on the verified error's distribution** (AD12 c's wording, brought forward from slice 5 into the basic loop): per node of M, the largest over the adaptation points of \|ψ′ − ψ\|/V_T, \|ln n′ − ln n\|, \|ln p′ − ln p\| with M′'s solution interpolated at the node; uniform refinement (M′) when that marks nothing. (c) Continue with M′ itself. | **(b)**, ruled as recommended: it is AD12 (c) as frozen, reads solves only (OA6), and refines where the error is rather than everywhere; (c) multiplies 2D meshes by four per rejection. Slice 5 adds AD12's switch from the intelligent policy to this one; the basic loop has it from slice 3. No criterion changed. |
+
+Runs (Release, `build/r3`):
+- AC3: linear ψ and quasi-Fermi levels exact to 1e-12 tensor → tensor (5×4 to 9×7, not nested) and generated →
+  generated (0.3 µm to 0.11 µm); the locator reproduces linear fields on tensor, 2D and swept 3D meshes. The 1e17
+  diode at 0.5 V (41 → 97 nodes along x): currents equal to 1e-9, Newton 10 from scratch, 5 transferred; a lateral
+  n+ p n+ MOSFET (gate 1 V, drain 0.5 V; 41×16 → 73×29): equal to 1e-9, Newton 12 from scratch, 8 transferred.
+- AC6 (the legacy diode, weighted current on: the reverse current, 3.1e-9 A/cm², lies below the terminal current's
+  resolution of about 4e-8): from 21 uniform nodes, 10 passes, AD11 rejecting two proposed stops (at 70 and 107
+  nodes; AR2 then marked 30 and 64 nodes); stopped by the goal rule at **180 nodes** (the
+  hand-made mesh: 250); I(−1 V) −3.09402e-9 against the 2× reference's −3.09688e-9 (9.2e-4, within AC6's 1e-3, a thin
+  margin), I(0.6 V) 0.606567 against 0.606549 (2.9e-5); both certified; verification on 370 nodes in 0.02 s.
+- AC20 part: a `max_nodes` stop and a `max_passes` stop are unverified (no verification run, verified error NaN);
+  `verify = off` gives unverified after a goal stop. AD9: two runs bit-identical (node counts, goals, points,
+  verified error, status). AC10 part: the refusals named in `adapt.hpp`.
+
 ---
 
 ### Unit 55 — theoretical calculation validation framework: research and design proposal (proposed 2026-10-31; on `verify/theoretical-validation`)

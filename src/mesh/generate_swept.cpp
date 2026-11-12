@@ -524,8 +524,9 @@ std::expected<GeneratedMesh, base::Error> generate_swept(const ExtrudedGeometry&
         }
         certificate = std::move(*cert);
     }
-    return GeneratedMesh{std::move(*dual), std::move(sm), std::move(node_region), std::move(certificate), report,
-                         generation_digest(x, options)};
+    return GeneratedMesh{std::move(*dual),        std::move(sm), std::move(node_region), std::move(certificate),
+                         report,                  generation_digest(x, options),
+                         std::move(m2->simplices)};
 }
 
 std::uint64_t generation_digest(const ExtrudedGeometry& x, const SweptOptions& options) {
