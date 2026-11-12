@@ -224,6 +224,59 @@ TEST_CASE("TVB-23: nothing in the fast tier", "[tvr5a]") {
     REQUIRE(r.comparisons.empty());
 }
 
+// TVB-24 (band-to-band tunnelling). The expectation written before the first run (construction in tvb24.cpp and
+// DECISIONS 17.24, fixed at that commit), 26 comparisons, per case and bias the pairs' order and finest error, the
+// nonlocal cases' worst per-path l and F, and the current:
+//   - local and nonlocal Kane on silicon: everything passes, except the current at -3 V (about 3e-15 A/cm^2), expected
+//     below 1e3 times its resolution (NOT EVALUATED);
+//   - direct WKB on GaAs: the per-path l and F pass; the pairs' orders fail (S2: first order); the finest pairs, near
+//     c_1 h, fail at -2 V (c_1 h about 1.2e-3, estimated from the field) and pass at -4 V (8.8e-4); the current
+//     follows the pairs.
+TEST_CASE("TVB-24: band-to-band tunnelling, full tier (expectation before the first run)", "[.tvr5a_full]") {
+    const auto r = bench::run_tvb24(bench::Tier::full);
+    const auto pass = Outcome::pass, fail = Outcome::fail, ne = Outcome::not_evaluated;
+    std::vector<Found> expected;
+    struct Row {
+        const char* at;
+        bool nonlocal;
+        Outcome order, finest, current;
+    };
+    const Row rows[] = {{"local Kane, Si, -3 V", false, pass, pass, ne},
+                        {"local Kane, Si, -6 V", false, pass, pass, pass},
+                        {"nonlocal Kane, Si, -3 V", true, pass, pass, ne},
+                        {"nonlocal Kane, Si, -6 V", true, pass, pass, pass},
+                        {"direct WKB, GaAs, -2 V", true, fail, fail, fail},
+                        {"direct WKB, GaAs, -4 V", true, fail, pass, pass}};
+    for (const Row& w : rows) {
+        expected.push_back({std::string("pairs order, ") + w.at, w.order});
+        expected.push_back({std::string("pairs finest (N = 1010), ") + w.at, w.finest});
+        if (w.nonlocal) {
+            expected.push_back({"path l finest", pass});
+            expected.push_back({"path F finest", pass});
+        }
+        expected.push_back({std::string("current finest, ") + w.at, w.current});
+    }
+    if (r.run_error) FAIL(*r.run_error);
+    for (const auto& n : r.notes) std::printf("%s note: %s\n", r.id.c_str(), n.c_str());
+    for (const auto& c : r.comparisons) {
+        std::printf("%s [%s] %s: %.4g (%s) %s\n", r.id.c_str(), std::string(to_string(c.comparison.outcome)).c_str(),
+                    c.quantity.c_str(), c.metric, c.criterion.c_str(), c.comparison.reason.c_str());
+    }
+    REQUIRE(r.comparisons.size() == expected.size());
+    for (std::size_t i = 0; i < expected.size(); ++i) {
+        const auto& c = r.comparisons[i];
+        CAPTURE(c.quantity, c.metric, c.comparison.reason);
+        CHECK(c.quantity.starts_with(expected[i].quantity));
+        CHECK(c.comparison.outcome == expected[i].outcome);
+    }
+}
+
+TEST_CASE("TVB-24: nothing in the fast tier", "[tvr5a]") {
+    const auto r = bench::run_tvb24(bench::Tier::fast);
+    REQUIRE_FALSE(r.run_error.has_value());
+    REQUIRE(r.comparisons.empty());
+}
+
 TEST_CASE("TVB-08: nothing in the fast tier", "[tvr5a]") {
     const auto r = bench::run_tvb08(bench::Tier::fast);
     REQUIRE_FALSE(r.run_error.has_value());

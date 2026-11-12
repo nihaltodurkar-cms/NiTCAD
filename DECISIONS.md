@@ -11796,6 +11796,54 @@ IG-Q22 open (needs the owner's explicit authorization).**
 - **Suites, Release:** the fast `[tvr5a]` and registry cases pass (57 benchmarks); the frozen `[tvr5a_full]` TVB-23
   case passes against the source as committed.
 
+**17.24 Step 5: the p-i-n and band-to-band references; TVB-24's construction, fixed before the first run. S2
+pre-registered; IG-Q25 A under the standing instruction.**
+- **References (428583e, then step 5b).** `verify/reference/pin_junction`: 17.13 (e)'s three-region first integral,
+  the n edge in one step from Gauss's law, the p-edge level by Brent on the i region's length, positions in the
+  logarithm of the distance to each bulk level, and the field from the n bulk's distance (no B − (B − r)
+  cancellation). Second method: three-region Chebyshev collocation. 10 L0 cases. `verify/reference/tunnel_generation`:
+  the local pairs, the nonlocal Kane paths and pairs, and the direct-WKB paths, pairs and windows on that potential,
+  each with a second method (tanh-sinh; for the WKB integrals Kronrod-15 after δ = t²(3 − 2t)), and c₁ below.
+  7 L0 cases, among them closed forms in the uniform i region and the linear depletion layer, an independent
+  quadrature over the starts, and the cut at B/F = 700. Mutation (4db4060): 24 mutants, 22 caught after three tests
+  were added, 2 equivalent (a normalisation; the nonlocal weight at the crossing, equal by ∫G(l) dl = 0), one dead
+  clamp removed.
+- **Construction (as the header of `tvb24.cpp`).** 1D p⁺-i-n⁺, N_A = N_D = 1e19, d = 10 nm undoped; each side 3d
+  = 30 nm (about 13 nm beyond the widest depletion layer, 17 nm at −6 V); 300 K, Boltzmann, no BGN, no
+  recombination, constant μ; weighted current, minority floor and stored rates on. Uniform mesh with nodes at
+  (j + ½)h, so x = 0 and x = d are box boundaries at every level: m = 18·2^k cells in the i region and 54·2^k on each
+  side, k = 3, 2, 1, 0 (N = 1010, 506, 254, 128; 17.8's 128 … 1024 as near as this placement allows) and k = 4
+  (N = 2018) in the factorial; tensor cells. Cases: local Kane and nonlocal Kane on silicon at −3 and −6 V; direct
+  WKB on GaAs with m_c = 0.067, m_v = 0.5 at −2 and −4 V; 0.5 V steps from 0 V. Inputs are NiTCAD's material data
+  (I1). The pairs are −Σ band_to_band_p V_i. 26 comparisons: per case and bias the pairs' order and finest error;
+  for the nonlocal cases the worst per-path l and F over the paths with a rate ≥ 1e-6 of the largest; the current
+  against q P_ref, judged where |J| ≥ 1e3 × its resolution, else NOT EVALUATED, with the pairs' 1e-3.
+- **The QE predicate (new here; TVB-24 had none in 17.14).** The reference holds the electrons at the cathode's
+  level and the holes at the anode's. P_QE = q Σ|Δρ_i| V_i/(ε E_max), Δρ the change of p − n when each carrier is
+  moved to its contact's level (from the band diagram's quasi-Fermi levels), E_max the reference's: the field error
+  that charge could make, relative. Limit 1e-6 on every level (three decades below 1e-3, as 17.14's), else NOT
+  APPLICABLE.
+- **U terms.** U_ref: the reference's estimate plus its difference from the second method. U_iter: |P(tol/100) −
+  P(tol)|/P_ref at k = 3, used at every level. U_disc: the three-grid GCI as TVB-23. The factorial on (k = 3, 4) ×
+  (1e-9, 1e-11).
+- **S2, found before the first run (17.8: "brought back before the freeze, not after a run").** NiTCAD's direct-WKB
+  rate takes |dE_v/dx| over the path's first segment, `q V_T (Ev_i − Ev[1]) / L0` (`drift_diffusion.cpp`:1990–1994).
+  On a 1D grid that segment is half a cell, and its slope is the forward difference (ψ_{i+1} − ψ_i)/h, which is E(1 +
+  (h/2)E′/E) + O(h²). E′ = qN/ε ≠ 0 in the depletion layers, so the WKB pairs carry a first-order error with leading
+  term c₁h, c₁ = ½∫G E′/E dx / P (`wkb_slope_coefficient`). 17.13 (h) did not see it. At −4 V (the L0 device, d =
+  10 nm) c₁ = 1.26e5 /cm: c₁h is 8.8e-4 at k = 3 and 7.0e-3 at k = 0. Nonlocal Kane takes no slope and is not
+  affected.
+- **IG-Q25 (TVB-24's WKB order under S2).** (A) Keep 17.8's criteria for the WKB pairs, run as built, and record the
+  outcome as found with S2 as its explanation. A fix is not made here (DT-Q11). (B) Judge the WKB pairs at p_th = 1:
+  a criterion change. (C) Drop the WKB order. **Recommendation A.** B and C change frozen criteria. A shows the
+  finding through the frozen order band, which is what the band is for. **A, under the standing instruction** ("always
+  choose recommended"); it changes no criterion.
+- **Expectation before the first run.** Local and nonlocal Kane: the orders and finest pairs pass (8), the per-path l
+  and F pass (4). The currents pass where resolved; at −3 V on silicon the current may sit below 1e3 × its
+  resolution (NOT EVALUATED). WKB: the per-path l and F pass (4). The pairs' orders fail near p̂ = 1 (S2), or are NOT
+  EVALUATED if the ladder is not asymptotic. The finest pairs lie near c₁h, at the tolerance: either outcome is S2's.
+  The WKB currents follow the pairs.
+
 ---
 
 ## New questions the advisor raised (not yet in `ARCHITECTURE.md`)
