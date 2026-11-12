@@ -1,6 +1,8 @@
 // L0 tests of the p-i-n reference (verify/reference/pin_junction.hpp; DECISIONS Unit 55 17.3, 17.13 (e), TVB-24).
 //   - the limit d -> 0: a 1e-15 cm i region gives qe_junction's barrier and peak field (a different reference, two
 //     regions) to 1e-8, at 0 and -1 V, for a symmetric and a one-sided junction;
+//   - the n side's field from its bulk distance r equals pin_field(B - r) inside the n side, and is linear in r as
+//     r -> 0 (r = 1e-20, where B - r has lost r);
 //   - an intrinsic region carries a uniform field: E at the two edges agree to 1e-10 at -3 and -20 V (the latter past
 //     qe_junction's range), the length and matching residuals at rounding;
 //   - Gauss across a doped i region: E(0) - E(d) = q C_i d / eps to 1e-8, for donors and for acceptors, which also
@@ -52,6 +54,22 @@ TEST_CASE("pin_junction: a vanishing i region is the two-region junction", "[.tv
             REQUIRE(rel(p->field_n_edge_V_per_cm, E2) < 1e-8);
         }
     }
+}
+
+TEST_CASE("pin_junction: the n side's field from its bulk", "[.tvr5a_reference_release]") {
+    // pin_field(B - r) at r = 0.2 and 0.9 of B - s_d; E -> V_T r sqrt(scale N_D / 2) as r -> 0 (Phi_n = N_D r^2 / 2 to
+    // relative r / 3), where B - r would have lost r.
+    const auto p = ref::pin_junction(input(1e16, 0.0, 1e19, 1e-6), -2.0);
+    REQUIRE(p.has_value());
+    const DD side = p->barrier - p->sd;
+    for (const double f : {0.2, 0.9}) {
+        const DD r = side * DD(f);
+        CAPTURE(f, side.to_double());
+        REQUIRE(rel(ref::pin_field_n_bulk(*p, r), ref::pin_field(*p, p->barrier - r)) < 1e-28);
+    }
+    const DD r(1e-20);
+    const DD linear = p->VT * r * sqrt(p->scale * DD(1e19) / DD(2.0));
+    REQUIRE(rel(ref::pin_field_n_bulk(*p, r), linear) < 1e-19);
 }
 
 TEST_CASE("pin_junction: an intrinsic region carries a uniform field", "[.tvr5a_reference_release]") {

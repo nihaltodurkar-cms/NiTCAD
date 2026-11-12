@@ -251,6 +251,8 @@ DD pin_field(const PinJunction& j, const DD& s) {
     return field_of(j, phi_n(j, j.barrier - s));
 }
 
+DD pin_field_n_bulk(const PinJunction& j, const DD& r) { return field_of(j, phi_n(j, r)); }
+
 DD pin_field_slope(const PinJunction& j, const DD& s) {
     const DD k = DD(j.in.q_C) / DD(j.in.eps_F_per_cm);
     // Each side from its bulk, so that neutrality cancels exactly: p side n - p + N_A = n_p expm1(s) - p_p expm1(-s);
@@ -264,7 +266,7 @@ DD pin_field_slope(const PinJunction& j, const DD& s) {
 }
 
 std::expected<DD, std::string> pin_position(const PinJunction& j, const DD& s) {
-    if (!(s.hi > 0.0 && s.hi < j.barrier.hi)) return std::unexpected("pin_position: the level is outside (0, B)");
+    if (!(s.hi > 0.0 && s < j.barrier)) return std::unexpected("pin_position: the level is outside (0, B)");
     if (!(s > j.s0)) return p_position(j, log(s));
     if (!(s > j.sd)) {
         if (s == j.s0) return DD(0.0);

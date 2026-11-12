@@ -79,6 +79,10 @@ struct PinJunction {
 // E [V/cm] at level s in (0, B).
 [[nodiscard]] DD pin_field(const PinJunction& j, const DD& s);
 
+// E [V/cm] on the n side at r = B - s levels from the n bulk, 0 < r <= B - s_d, without forming s (B - (B - r)
+// would lose r's digits once r << 1).
+[[nodiscard]] DD pin_field_n_bulk(const PinJunction& j, const DD& r);
+
 // dE/dx = (q / eps)(n - p - C) [V/cm^2] at level s in (0, B), C the region's net doping (s_0 and s_d belong to the
 // i region).
 [[nodiscard]] DD pin_field_slope(const PinJunction& j, const DD& s);
