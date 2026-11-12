@@ -11955,6 +11955,27 @@ pre-registered; IG-Q25 A under the standing instruction.**
   - Equivalent: removing the `reached` filter. A stored point's paths have been re-traced until they agree, and a
     path is unreached only while the paths lag the state.
 
+**17.29 Unit 55 deferred (owner, 2026-11-12: "defer the Unit 55").** Work stops after TVR-5a step 5. Nothing below is
+started, ruled or changed.
+- **State at deferral.** Branch `verify/interfaces-generation` holds steps 1–5, committed locally. It is not pushed,
+  has no PR, and is not rebased on `main`.
+  - Step 2: TVB-08 (17.17).
+  - Step 3: TVB-22 (17.20).
+  - Step 4: TVB-23 (17.23).
+  - Step 5: TVB-24 (17.28).
+  - The registry has 58 benchmarks. The fast `[tvr5a]` cases and every frozen `[.tvr5a_full]` case pass in Release.
+    No Debug build has been run in this worktree.
+- **Open at deferral, for the resumption:**
+  - S2: the direct-WKB rate is first order (17.28). This is a finding that needs an owner ruling (fix, accept as a
+    limitation, or keep as found).
+  - The nonlocal Kane order at −3 V, 2.53, cause unknown (17.25, 17.28).
+  - IG-Q20: PB → PD flagged for the owner (17.17).
+  - Tier decisions at close-out: TVB-23 takes 167 s and TVB-24 97 s, against 17.7's 120 s.
+  - TVR-4's idle Debug timing, still owed.
+  - Steps 6–10 of 17.6, not started: the TVB-26/TVB-08 bias work, TVB-29, Lombardi, TVB-32 and the close-out.
+- **To resume:** the owner names Unit 55 again. The branch is then rebased on `main`, which needs the owner's go. The
+  rest is pushed or opened as a PR only on the owner's word.
+
 ---
 
 ## New questions the advisor raised (not yet in `ARCHITECTURE.md`)
