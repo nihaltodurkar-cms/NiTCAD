@@ -22,7 +22,8 @@ std::expected<results::NodeFields, base::Error> transfer_state(const device::Dev
                                                                const mesh::PointLocator& where,
                                                                const results::NodeFields& s,
                                                                const results::BandDiagram& bands,
-                                                               const device::Device& to, TransferReport* report) {
+                                                               const device::Device& to, TransferReport* report,
+                                                               TransferMode mode) {
     const std::size_t no = from.mesh().node_count();
     const auto sized = [&](const std::vector<double>& v) { return v.size() == no; };
     if (!sized(s.potential_V) || !sized(s.n_cm3) || !sized(s.p_cm3) || !sized(bands.electron_fermi_eV) ||
@@ -125,6 +126,15 @@ std::expected<results::NodeFields, base::Error> transfer_state(const device::Dev
         }
         if (to.is_insulator(static_cast<mesh::NodeId>(i))) continue;
         const double vt = base::thermal_voltage(thermal ? out.temperature_K[i] : to.temperature_K());
+        if (mode == TransferMode::exponential_fit) {
+            const double nn_ = interp([&](std::size_t k) { return s.n_cm3[k] * std::exp((psi - s.potential_V[k]) / (2.0 * vt)); });
+            const double dn = interp([&](std::size_t k) { return std::exp((s.potential_V[k] - psi) / (2.0 * vt)); });
+            const double np_ = interp([&](std::size_t k) { return s.p_cm3[k] * std::exp((s.potential_V[k] - psi) / (2.0 * vt)); });
+            const double dp = interp([&](std::size_t k) { return std::exp((psi - s.potential_V[k]) / (2.0 * vt)); });
+            out.n_cm3[i] = nn_ / dn;
+            out.p_cm3[i] = np_ / dp;
+            continue;
+        }
         const double fn = interp([&](std::size_t k) { return bands.electron_fermi_eV[k]; });
         const double fp = interp([&](std::size_t k) { return bands.hole_fermi_eV[k]; });
         const double c_n = interp([&](std::size_t k) { return cn[k]; });

@@ -10,6 +10,7 @@
 
 #include "NiTCAD/base/constants.hpp"
 #include "NiTCAD/mesh/locate.hpp"
+#include "NiTCAD/solve/adapt_adjoint.hpp"
 
 namespace NiTCAD::solve {
 namespace {
@@ -303,8 +304,9 @@ std::expected<AdaptResult, base::Error> adapt(const DeviceBuilder& build, std::s
     if (!(std::isfinite(o.grading) && o.grading >= 1.0)) return std::unexpected(invalid("the grading must be >= 1"));
     if (!(std::isfinite(o.min_size) && o.min_size >= 0.0)) return std::unexpected(invalid("min_size must be >= 0"));
     if (o.max_passes < 1) return std::unexpected(invalid("max_passes must be at least 1"));
-    if (o.weighting == Weighting::adjoint) {
-        return std::unexpected(invalid("adjoint goal weighting is not available yet (Unit 17 slice 4)"));
+    const bool adjoint = o.weighting == Weighting::adjoint;
+    if (adjoint) {
+        if (auto e = check_adjoint(bias)) return std::unexpected(std::move(*e));
     }
     std::vector<std::size_t> at = o.at;
     if (at.empty()) {
@@ -326,7 +328,18 @@ std::expected<AdaptResult, base::Error> adapt(const DeviceBuilder& build, std::s
         if (kind == device::ContactKind::gate || kind == device::ContactKind::electrode) {
             return std::unexpected(invalid("a goal's contact is a gate or an electrode, which carries no current"));
         }
+        if (adjoint && kind != device::ContactKind::ohmic) {
+            return std::unexpected(invalid("adjoint goal weighting needs ohmic goal contacts"));
+        }
     }
+    std::vector<std::size_t> goal_contacts;
+    for (const AdaptGoal& g : o.goals) goal_contacts.push_back(g.contact);
+    // AD6's estimate of goal j on a pass (goal-major, as the goals): the adjoint's (AR3), or the
+    // last change without weighting (infinity on the first pass).
+    const auto estimate_of = [&](const AdaptPass& rep, std::size_t j) {
+        if (adjoint) return rep.estimate[j];
+        return rep.change.empty() ? std::numeric_limits<double>::infinity() : rep.change[j];
+    };
     double seconds_mesh = seconds_since(t0);
     std::optional<AdaptableMesh> previous_mesh;
     results::Sweep previous_sweep;
@@ -343,14 +356,26 @@ std::expected<AdaptResult, base::Error> adapt(const DeviceBuilder& build, std::s
         IndicatorField difference;  // the verified error's distribution on M (AR2)
     };
     std::optional<Verification> verification;  // of the current mesh, when run
-    const auto verify_pass = [&](const AdaptableMesh& m, const MeshRefinement& r, const results::Sweep& s,
-                                 const AdaptPass& rep) -> std::expected<Verification, base::Error> {
-        Verification v;
+    // M' for a pass: the uniform refinement of its mesh, built (the estimate's and AD11's mesh).
+    const auto build_uniform = [&](const AdaptableMesh& m,
+                                   const MeshRefinement& r) -> std::expected<AdaptableMesh, base::Error> {
         auto uniform = next_refinement(m, r, {}, nullptr, o.indicators, o, true);
         if (!uniform) return std::unexpected(uniform.error());
+        return build(*uniform);
+    };
+    // `prebuilt`: M' when the pass built it for the estimate (the same refinement, so the same mesh).
+    const auto verify_pass = [&](const AdaptableMesh& m, const MeshRefinement& r, const results::Sweep& s,
+                                 const AdaptPass& rep,
+                                 const AdaptableMesh* prebuilt) -> std::expected<Verification, base::Error> {
+        Verification v;
         const auto tv = clock_type::now();
-        auto fine = build(*uniform);
-        if (!fine) return std::unexpected(fine.error());
+        std::optional<AdaptableMesh> own;
+        if (prebuilt == nullptr) {
+            auto f = build_uniform(m, r);
+            if (!f) return std::unexpected(f.error());
+            own = std::move(*f);
+        }
+        const AdaptableMesh* fine = prebuilt != nullptr ? prebuilt : &*own;
         auto solved = solve_on(*fine, &m, &s, points, bias, control);
         if (!solved) return std::unexpected(solved.error());
         v.seconds = seconds_since(tv);
@@ -368,8 +393,7 @@ std::expected<AdaptResult, base::Error> adapt(const DeviceBuilder& build, std::s
             v.order.push_back(p);
             v.error.push_back(d_fine / (std::exp2(p) - 1.0));
             const double allowed = o.tolerance * std::max(std::abs(rep.goal[j]), rep.resolution[j]);
-            const double estimate = rep.change.empty() ? std::numeric_limits<double>::infinity() : rep.change[j];
-            if (!(estimate <= allowed && v.error.back() <= allowed)) v.accepts = false;
+            if (!(estimate_of(rep, j) <= allowed && v.error.back() <= allowed)) v.accepts = false;
         }
         return v;
     };
@@ -389,19 +413,56 @@ std::expected<AdaptResult, base::Error> adapt(const DeviceBuilder& build, std::s
         const Goals g = read_goals(solved->sweep, o, at);
         rep.goal = g.value;
         rep.resolution = g.resolution;
+        // The adjoint estimate and weights (AD3, AD6; AR3): on M', per adaptation point.
+        std::optional<AdaptableMesh> fine_mesh;
+        std::vector<double> omega;  // AD3's node weight: per node, the largest over goals and points
+        if (adjoint) {
+            const auto te = clock_type::now();
+            auto f = build_uniform(*built, refinement);
+            if (!f) return std::unexpected(f.error());
+            fine_mesh = std::move(*f);
+            auto loc = locator_of(*built);
+            if (!loc) return std::unexpected(loc.error());
+            const std::size_t nn = rep.nodes;
+            omega.assign(nn, 0.0);
+            rep.estimate.assign(g.value.size(), 0.0);
+            for (std::size_t a = 0; a < at.size(); ++a) {
+                auto e = estimate_goals(built->device, *loc, solved->sweep.points[at[a]], fine_mesh->device, bias,
+                                        goal_contacts);
+                if (!e) return std::unexpected(e.error());
+                rep.estimate_fell_back = rep.estimate_fell_back || e->fell_back;
+                for (std::size_t gi = 0; gi < goal_contacts.size(); ++gi) {
+                    rep.estimate[gi * at.size() + a] = e->estimate[gi];
+                    // Normalized so the semiconductor nodes' weights sum to 1 (AD3).
+                    double total = 0.0;
+                    for (std::size_t i = 0; i < nn; ++i) {
+                        if (!built->device.is_insulator(static_cast<mesh::NodeId>(i))) total += e->node_weight[gi][i];
+                    }
+                    if (!(total > 0.0)) continue;
+                    for (std::size_t i = 0; i < nn; ++i) {
+                        if (built->device.is_insulator(static_cast<mesh::NodeId>(i))) continue;
+                        omega[i] = std::max(omega[i], e->node_weight[gi][i] / total);
+                    }
+                }
+            }
+            rep.estimate_nodes = fine_mesh->device.mesh().node_count();
+            rep.seconds_estimate = seconds_since(te);
+        }
         bool converged = pass > 0;
         if (pass > 0) {
             rep.change.resize(g.value.size());
             for (std::size_t j = 0; j < g.value.size(); ++j) {
                 rep.change[j] = std::abs(g.value[j] - previous_goal[j]);
-                if (rep.change[j] > o.tolerance * std::max(std::abs(g.value[j]), g.resolution[j])) converged = false;
+                const double allowed = o.tolerance * std::max(std::abs(g.value[j]), g.resolution[j]);
+                if (rep.change[j] > allowed) converged = false;
+                if (adjoint && !(rep.estimate[j] <= allowed)) converged = false;  // AD6: and the estimate
             }
         }
         std::optional<AdaptStop> stop;
         verification.reset();
         if (converged && o.verify) {
             // A proposed stop, subject to AD11; a rejected stop goes on refining (AR2).
-            auto v = verify_pass(*built, refinement, solved->sweep, rep);
+            auto v = verify_pass(*built, refinement, solved->sweep, rep, fine_mesh ? &*fine_mesh : nullptr);
             if (!v) return std::unexpected(v.error());
             verification = std::move(*v);
             if (verification->accepts) {
@@ -416,7 +477,8 @@ std::expected<AdaptResult, base::Error> adapt(const DeviceBuilder& build, std::s
         if (!stop && pass + 1 >= o.max_passes) stop = AdaptStop::max_passes;
         std::optional<MeshRefinement> next;
         if (!stop) {
-            // Indicators at every adaptation point, united (AQ3), feature-only marks (AD3, w = 1).
+            // Indicators at every adaptation point, united (AQ3), marked by AD3: weighted by the
+            // adjoint's omega, or feature-only (w = 1).
             std::vector<IndicatorField> fields;
             std::optional<EdgeIndicators> edges;
             for (const std::size_t k : at) {
@@ -440,9 +502,12 @@ std::expected<AdaptResult, base::Error> adapt(const DeviceBuilder& build, std::s
             if (!united) return std::unexpected(united.error());
             rep.nodes_with_excess = united->nodes_with_excess;
             // After a rejected stop the marks come from the verified error's distribution (AD12 c,
-            // AR2): the indicators found nothing more to refine where the error is.
+            // AR2): the indicators found nothing more to refine where the error is. That distribution
+            // is marked unweighted: it is already the solves' own difference (OA6).
             const bool by_difference = rep.rejected;
-            auto mk = mark_nodes(built->device, by_difference ? verification->difference : *united, {}, o.theta);
+            const std::span<const double> weights =
+                adjoint && !by_difference ? std::span<const double>(omega) : std::span<const double>();
+            auto mk = mark_nodes(built->device, by_difference ? verification->difference : *united, weights, o.theta);
             if (!mk) return std::unexpected(mk.error());
             rep.marking = *mk;
             rep.marked_by_difference = by_difference;
@@ -507,7 +572,7 @@ std::expected<AdaptResult, base::Error> adapt(const DeviceBuilder& build, std::s
             c.goal = gi;
             c.point = at[a];
             c.value = last.goal[j];
-            c.estimate = last.change.empty() ? std::numeric_limits<double>::infinity() : last.change[j];
+            c.estimate = estimate_of(last, j);
             c.verified_error = verified[j];
             c.order = order[j];
             c.allowed = o.tolerance * std::max(std::abs(c.value), last.resolution[j]);

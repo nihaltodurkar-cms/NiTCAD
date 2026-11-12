@@ -35,11 +35,28 @@ struct TransferReport {
     std::size_t other_region = 0;   // no old interpolant node of their region: nearest of the region
 };
 
+// How the densities are carried (Unit 17 AR3). quasi_fermi: as above (Newton's initial state).
+// exponential_fit: the Scharfetter-Gummel profile instead, for the adjoint estimate's prolongation
+// (adapt_adjoint.hpp): with psi linear between two nodes and a constant current, the electrons'
+// Slotboom variable n e^(-psi/V_T) follows (1 - e^(-d t)) / (1 - e^(-d)) along the edge
+// (d = (psi_b - psi_a) / V_T), which at the midpoint is the weighted mean with weights
+// e^(psi_j / 2 V_T); generalized to any interpolant with its weights lambda_j,
+//     n = sum lambda_j n_j e^((psi - psi_j) / 2 V_T) / sum lambda_k e^((psi_k - psi) / 2 V_T),
+// and for holes with the signs of the exponents reversed. It is exact at an edge's midpoint (so
+// the coarse edge's flux is that of its two halves: no residual from the interpolation itself)
+// and in equilibrium (n_j = n_i e^(psi_j / V_T) gives n_i e^(psi / V_T)); elsewhere an
+// approximation. Quasi-Fermi levels linear across an edge put the drop of the level where the
+// edge's average is, not where the density is small, so on a coarse edge through a depletion
+// region they make the new halves' currents wrong by orders (measured: 10 times the current at
+// 0.6 V on the 41-node diode), which a linearization cannot correct.
+enum class TransferMode : unsigned char { quasi_fermi, exponential_fit };
+
 // Errors (invalid_input): the fields or bands not one per old node; the locator not over the old
 // mesh (node count); devices with different region lists (count or insulator kind); a new node's
 // region with no old node.
 [[nodiscard]] std::expected<results::NodeFields, base::Error> transfer_state(
     const device::Device& from, const mesh::PointLocator& from_locator, const results::NodeFields& state,
-    const results::BandDiagram& bands, const device::Device& to, TransferReport* report = nullptr);
+    const results::BandDiagram& bands, const device::Device& to, TransferReport* report = nullptr,
+    TransferMode mode = TransferMode::quasi_fermi);
 
 }  // namespace NiTCAD::solve

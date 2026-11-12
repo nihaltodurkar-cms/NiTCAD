@@ -206,7 +206,11 @@ TEST_CASE("adapt: refusals (AC10 part)", "[adapt_loop]") {
     bad = o;
     bad.max_passes = 0;
     CHECK(!solve::adapt(build, points, legacy_options(), bad).has_value());
+    // Adjoint weighting with a solver that cannot transpose (AC10: no fallback).
     bad = o;
     bad.weighting = solve::Weighting::adjoint;
-    CHECK(!solve::adapt(build, points, legacy_options(), bad).has_value());
+    solve::BiasOptions strict = legacy_options();
+    strict.linear.backend = linalg::SolverBackend::gmres_ilut;
+    strict.linear.fallback = linalg::LinearFallback::none;
+    CHECK(solve::adapt(build, points, strict, bad).error().code == base::ErrorCode::invalid_input);
 }

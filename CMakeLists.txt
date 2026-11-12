@@ -596,6 +596,7 @@ add_library(nitcad_solve STATIC
   src/solve/provenance.cpp
   src/solve/adapt_indicators.cpp
   src/solve/adapt_transfer.cpp
+  src/solve/adapt_adjoint.cpp
   src/solve/adapt.cpp)
 add_library(NiTCAD::solve ALIAS nitcad_solve)
 target_include_directories(nitcad_solve PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
@@ -708,7 +709,9 @@ nitcad_add_file_tests(deck nitcad_deck_test)
 add_executable(nitcad_adapt_test
   tests/solve/adapt_indicators_test.cpp
   tests/solve/adapt_transfer_test.cpp
-  tests/solve/adapt_loop_test.cpp)
+  tests/solve/adapt_loop_test.cpp
+  tests/solve/adapt_adjoint_test.cpp
+  tests/solve/adapt_goal_test.cpp)
 target_link_libraries(nitcad_adapt_test PRIVATE NiTCAD::deck Catch2::Catch2WithMain)
 nitcad_add_file_tests(adapt nitcad_adapt_test)
 # The Lombardi device gates (tests/deck/surface_mobility_test.cpp, hidden tag [.lombardi]: MOSFET

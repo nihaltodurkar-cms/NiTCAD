@@ -15,7 +15,12 @@
 // every goal's change from the previous pass is within tolerance, |G_k - G_k-1| <= tol max(|G_k|,
 // r) with r the point's current resolution, and otherwise ends at max_passes, max_nodes (the next
 // mesh would exceed it; the current one is kept) or when nothing is marked. The estimate of a goal
-// is its last change (feature-only, `weighting = none`; the adjoint estimate replaces it in slice 4).
+// is its last change with `weighting = none` (feature-only marks, w = 1). With `weighting =
+// adjoint` (slice 4; adapt_adjoint.hpp, DECISIONS.md AR3) every pass builds M' (AD11's mesh), and
+// per adaptation point computes the adjoint estimate 2 |D| on it and the dual-weighted residual's
+// node weights: the stop then also needs every estimate within tolerance (AD6), the marks are
+// e_i w_i with w the normalized weights (the largest over goals and points; AD3), and AD11 reuses
+// that M'.
 //
 // Verification (AD11): after a proposed stop, the final mesh M is refined uniformly once (every
 // size halved, every tensor and swept-axis interval outside the straddles split) to M', the sweep
@@ -95,7 +100,7 @@ struct AdaptOptions {
     double tolerance = 1e-3;                // relative, in (0, 1)
     std::vector<std::size_t> at;            // adaptation points, indices into the sweep; empty: its first and last
     IndicatorOptions indicators;
-    Weighting weighting = Weighting::none;  // adjoint: slice 4
+    Weighting weighting = Weighting::none;  // adjoint: AD3's weights and AD6's estimate (AR3)
     double theta = 0.3;                     // AD3
     double grading = 1.5;                   // AD4, g >= 1
     double min_size = 0.0;                  // cm; 0: s / 4 with interfaces, else h / 64 (axes: per axis, see adapt.cpp)
@@ -123,6 +128,13 @@ struct AdaptPass {
     std::vector<double> goal;
     std::vector<double> resolution;  // the point's current resolution, same layout
     std::vector<double> change;      // |G_k - G_k-1|; empty on the first pass
+    // weighting = adjoint (AR3): the adjoint estimate 2 |D| per goal and point (same layout; empty
+    // without weighting), M''s node count it was computed on, its time (building M' included) and
+    // whether a transposed solve fell back to SparseLU (gmres_ilut).
+    std::vector<double> estimate;
+    std::size_t estimate_nodes = 0;
+    double seconds_estimate = 0.0;
+    bool estimate_fell_back = false;
     Marking marking;                 // the marks this pass made for the next (empty count on the last)
     std::array<std::size_t, indicator_count> nodes_with_excess{};
     int newton_iterations = 0;       // summed over the sweep's points
@@ -149,7 +161,7 @@ struct GoalCertificate {
     std::size_t goal = 0;
     std::size_t point = 0;    // index into the sweep
     double value = 0.0;       // on the final mesh
-    double estimate = 0.0;    // AD6's (the last change; infinity after a single pass)
+    double estimate = 0.0;    // AD6's: the adjoint's 2 |D|, or the last change (infinity after a single pass)
     double verified_error = 0.0;  // AD11 (NaN when unverified)
     double order = 1.0;           // p used
     double allowed = 0.0;         // tol max(|G|, r)
@@ -179,7 +191,8 @@ struct AdaptResult {
 
 // Errors (invalid_input, before solving): no points; no goals, a goal contact out of range or a
 // gate; tolerance not in (0, 1); an adaptation point out of range; theta not in (0, 1]; grading
-// below 1; min_size negative; max_passes below 1; weighting adjoint (not in this slice). Then those
+// below 1; min_size negative; max_passes below 1; weighting adjoint with check_adjoint's refusals
+// (adapt_adjoint.hpp) or a goal contact that is not ohmic. Then those
 // of the builder, the sweep (a sweep that stops early is an error: non_convergence and the rest),
 // the transfer and the refinement.
 [[nodiscard]] std::expected<AdaptResult, base::Error> adapt(const DeviceBuilder& build,

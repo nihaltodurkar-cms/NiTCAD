@@ -220,6 +220,18 @@ void SparseLuBackend<Scalar>::solve(std::span<const Scalar> b, std::span<Scalar>
     ++this->counts_.solves;
 }
 
+template <MatrixScalar Scalar>
+void SparseLuBackend<Scalar>::solve_transposed(std::span<const Scalar> b, std::span<Scalar> x) {
+    NITCAD_EXPECTS(lu_.has_value());
+    const auto n = static_cast<Eigen::Index>(csc_.rows());
+    NITCAD_EXPECTS(b.size() == static_cast<std::size_t>(n) && x.size() == b.size());
+    using Vector = Eigen::Matrix<Scalar, Eigen::Dynamic, 1>;
+    const Eigen::Map<const Vector> bv(b.data(), n);
+    Eigen::Map<Vector> xv(x.data(), n);
+    xv = lu_->transpose().solve(bv);
+    ++this->counts_.solves;
+}
+
 }  // namespace NiTCAD::linalg::detail
 
 namespace NiTCAD::linalg::detail {

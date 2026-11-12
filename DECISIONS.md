@@ -6001,6 +6001,36 @@ Runs (Release, `build/r3`):
   `verify = off` gives unverified after a goal stop. AD9: two runs bit-identical (node counts, goals, points,
   verified error, status). AC10 part: the refusals named in `adapt.hpp`.
 
+*Slice 4 — the transposed solve, the goal adjoint, adjoint weighting and the estimate (AQ4, AD3, AD6; AC7).*
+`linalg::LinearSolver::solve_transposed` and `can_transpose` (the equilibrated system transposed, (R A C)ᵀ y = C b,
+x = R y, refined against the transposed componentwise backward error; SparseLU through Eigen's `transpose()` view,
+PARDISO with iparm[11] = 2; gmres_ilut factorizes its sparse_lu fallback and reports `fell_back`, and without a
+fallback cannot transpose, so `weighting = adjoint` is refused for it); `solve/adapt_adjoint.hpp` (`check_adjoint`,
+`point_adjoint`, `goal_at`, `estimate_goals`); `TransferMode::exponential_fit` in `transfer_state`; the loop's
+adjoint branch in `adapt.cpp`. The goal is the terminal current, or the weighted current G = T_c + Σ w_i B_i (Unit
+32); its gradient is the small-signal currents' rows at s = 0 plus the weighted continuity rows, and the adjoint z
+solves Jᵀ z = ∂G/∂u at the converged state.
+
+| # | Question (ruled under the standing instruction "always choose recommended") | Options | Recommendation and ruling |
+|---|---|---|---|
+| AR3 | How AD3's weights and AD6's estimate are computed from the adjoint (the design fixes the dual-weighted residual, not its discretization). Measured on the legacy diode (41 to 321 uniform nodes, against the solve on M′): M's adjoint interpolated onto M′ with M's state transferred by quasi-Fermi levels gave estimates off by orders of magnitude (the transfer's residual on M′ dominated); the exponential-fit transfer with M's adjoint still missed by factors of 5 to 50 at 0.6 V; a Newton-step (nonlinear) evaluation was worse. | (a) M's adjoint interpolated to M′. (b) **M′'s own adjoint at M's state prolongated to M′ by the Scharfetter-Gummel exponential fit** (n = Σλ_j n_j e^{(ψ−ψ_j)/2V_T} / Σλ_j e^{(ψ_j−ψ)/2V_T}, holes with the signs reversed; M's recombination densities N_s kept), one factorization of M′'s Jacobian per point: D = G′(u) − G_M − z′ᵀR′(u), the estimate 2\|D\| (p = 1, as AD11 without an observed order), the weights z′_q R′_q summed onto the coarse node with the largest interpolation weight in the same region and normalized over the semiconductor nodes, ω the largest over goals and points. (c) Uniform M′ solves each pass (AD11's cost every pass). | **(b)**, ruled as recommended: it is the dual-weighted residual on M′ with one linear solve instead of (c)'s nonlinear one, and the only form measured to work: at 0.6 V within 30% of G_M′ − G_M on every mesh; at −1 V within a factor 1.6 up to 161 nodes and 10 at 321 (a change of 1e-3 of the current); at 0.3 V the uniform meshes are not asymptotic (the change flips sign from 41 to 161 nodes), within 1.3 at 321. The cost is M′'s assembly and one factorization per adaptation point and pass (AC7: 2993 to 9570 nodes, 0.07 to 0.1 s). AD11 reuses the pass's M′. AR2's difference marking stays unweighted. No criterion changed. |
+| AR4 | AC7's "fine uniform reference". The test first refined the start 4× (10449 nodes), then extrapolated 2×/4×/8× (5.18618, order 1.415), against which the adjoint estimate missed AC7's factor 3 (5.8). A 16× solve (164673 nodes, 12 minutes) moved the extrapolation to 5.20577 (4×/8×/16×, order 1.165): the uniform sequence is not asymptotic, so the reference is uncertain by about 0.4%, the size of the errors measured. | (a) Solve 16× in the test (12 minutes Release, far longer Debug). (b) **Record the 4×/8×/16× extrapolation as a measured constant, with the 2× solve repeated as the guard that the deck and physics are unchanged (to 1e-5).** (c) Keep 2×/4×/8×. | **(b)**, ruled as recommended: the finest reference measured, at suite cost; (c) uses a reference known to be 0.4% coarser. The reference's own uncertainty is reported to the owner: against (c) the estimate check fails, against (b) it passes; neither 32× nor any other independent reference was run. No criterion changed. |
+
+Runs (Release, `build/r3`):
+- linalg: transposed solves match factorizing Aᵀ (real and complex, transpose not conjugate; backward error within
+  1e-9 measured 2.4e-10); PARDISO transposed with MKL; gmres_ilut falls back, or refuses without a fallback.
+- AQ4: the goal's gradient against central differences on the diode (terminal and weighted current at −1, 0.3 and
+  0.6 V): within 1e-6 of the terms' magnitude in five cases; **the weighted current at −1 V differs by 5.8e-3** of the
+  derivative (open finding: not isolated; not SRH, Auger, radiative or narrowing alone; the test bounds it at 1e-2
+  in that case only).
+- AC7 (a MOSFET in a p-well, 1 µm × 1.5 µm, gate 1.5 V, drain 0.5 V; I_D's reference 5.20577, AR4): from 693 nodes,
+  feature-only stopped by the goal rule at 6834 nodes (I_D 5.18975, 0.31%, certified); adjoint-weighted at **2214
+  nodes** (I_D 5.18151, 0.47%, certified; estimate 0.0271, AD11's verified error 0.0156, actual 0.0243, estimate /
+  actual 1.12); node ratio 0.32 (AC7: at most 0.75); y-lines within 0.15 µm of the well junction 3 (the initial
+  3) against feature-only's 19. 29 s.
+- Open finding for the owner: AD11's verified error \|G_M′ − G_M\| / (2^p − 1) estimates M′'s error, not M's (M's
+  is 2^p times it, \|G_M′ − G_M\| 2^p / (2^p − 1)); frozen, not changed.
+
 ---
 
 ### Unit 55 — theoretical calculation validation framework: research and design proposal (proposed 2026-10-31; on `verify/theoretical-validation`)

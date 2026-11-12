@@ -340,3 +340,26 @@ TEST_CASE("pardiso: invalid values and right-hand sides are errors before PARDIS
     REQUIRE(x[0] == 0.5);
     REQUIRE(x[1] == 0.5);
 }
+
+TEST_CASE("pardiso: solve_transposed agrees with the explicit transpose", "[pardiso]") {
+    REQUIRE_MKL();
+    // B = A^T factorized, B^T x = b is A x = b (the fixture's solution; see linear_solver_test).
+    for (const System& s : {nonsymmetric(2000), badly_scaled_coupled(20)}) {
+        LinearSolver solver = make({.backend = SolverBackend::mkl_pardiso, .min_pivot_ratio = 0.0});
+        REQUIRE(solver.factorize(transpose(s.a)).has_value());
+        std::vector<double> x(s.b.size());
+        const auto r = solver.solve_transposed(s.b, x);
+        REQUIRE(r.has_value());
+        REQUIRE(relative_error(x, s.x_exact) <= 1e-10);
+    }
+    // The plain solve is unchanged after a transposed one (iparm reset).
+    const System s = nonsymmetric(2000);
+    std::vector<double> bt(s.b.size()), x(s.b.size());
+    transpose(s.a).multiply(s.x_exact, bt);
+    LinearSolver solver = make();
+    REQUIRE(solver.factorize(s.a).has_value());
+    REQUIRE(solver.solve_transposed(bt, x).has_value());
+    REQUIRE(relative_error(x, s.x_exact) <= 1e-12);
+    REQUIRE(solver.solve(s.b, x).has_value());
+    REQUIRE(relative_error(x, s.x_exact) <= 1e-12);
+}

@@ -139,6 +139,19 @@ void PardisoBackend<Scalar>::solve(std::span<const Scalar> b, std::span<Scalar> 
     }
 }
 
+template <MatrixScalar Scalar>
+void PardisoBackend<Scalar>::solve_transposed(std::span<const Scalar> b, std::span<Scalar> x) {
+    NITCAD_EXPECTS(analyzed_);
+    NITCAD_EXPECTS(b.size() == rhs_.size() && x.size() == b.size());
+    std::ranges::copy(b, rhs_.begin());
+    iparm_[11] = 2;
+    const MklInt error = call(phase_solve, rhs_.data(), x.data());
+    iparm_[11] = 0;
+    if (error != 0) {
+        std::ranges::fill(x, Scalar{std::numeric_limits<double>::quiet_NaN()});
+    }
+}
+
 template class PardisoBackend<double>;
 template class PardisoBackend<std::complex<double>>;
 
