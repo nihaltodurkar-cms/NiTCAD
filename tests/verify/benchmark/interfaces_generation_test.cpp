@@ -166,21 +166,38 @@ TEST_CASE("TVB-22: nothing in the fast tier", "[tvr5a]") {
 }
 
 // TVB-23 (avalanche multiplication), as rebuilt once under IG-Q24 B (17.22: M from the generation's share; V(M_c) by
-// a bias root). The expectation before the rerun: all 26 pass. The first construction's outcome as found (17.21: 9
-// pass, 7 fail, 10 not_evaluated) is in the history at 94e7256.
-TEST_CASE("TVB-23: avalanche multiplication, full tier (expectation before the rerun, 17.22)", "[.tvr5a_full]") {
+// a bias root). The expectation before the rerun was 26 pass. As found (17.23): 20 pass, 6 not_evaluated, 0 fail.
+//   - every finest-level 1 - 1/M passes (2.9e-7 ... 4.0e-5 against 1e-3), and the six V(M_c) (A) pass;
+//   - four orders pass; six are NOT EVALUATED by the asymptotic rule (finest pairs 2.01-2.19, but the coarsest pair
+//     moves the spread above 0.1; M_n at I_n = 0.9, whose error is 2.9e-7, has 0.99).
+// V at M_n = 10 passes by a small margin (4.18e-5 V against 4.73e-5 V). Every metric is pinned within a quarter.
+// The first construction's outcome (17.21: 9 pass, 7 fail, 10 not_evaluated) is in the history at 94e7256.
+TEST_CASE("TVB-23: avalanche multiplication, full tier (frozen outcome: as found, 17.23)", "[.tvr5a_full]") {
     const auto r = bench::run_tvb23(bench::Tier::full);
+    const auto pass = Outcome::pass, ne = Outcome::not_evaluated;
     std::vector<Found> expected;
-    for (const char* carrier : {"M_n", "M_p"}) {
-        for (const char* I : {"0.1", "0.3", "0.5", "0.7", "0.9"}) {
+    const auto pinned = [](const std::string& q, Outcome o, double v) { return Found{q, o, 0.75 * v, 1.25 * v}; };
+    // Per injection, I_n = 0.1 ... 0.9: the order's outcome and its finest-pair order, the finest-level error.
+    const Outcome order_n[] = {pass, ne, ne, ne, ne}, order_p[] = {pass, pass, ne, pass, ne};
+    const double p_n[] = {2.019, 2.041, 2.077, 2.189, 0.9885}, p_p[] = {2.004, 2.006, 2.008, 2.011, 2.098};
+    const double e_n[] = {1.514e-5, 6.541e-6, 3.232e-6, 1.171e-6, 2.866e-7};
+    const double e_p[] = {4.01e-5, 2.11e-5, 1.372e-5, 8.074e-6, 7.592e-7};
+    const char* I[] = {"0.1", "0.3", "0.5", "0.7", "0.9"};
+    for (const bool n : {true, false}) {
+        const std::string carrier = n ? "M_n" : "M_p";
+        for (std::size_t k = 0; k < 5; ++k) {
             // The bias in the name is the reference's; matched by prefix below.
-            expected.push_back({std::string("1 - 1/M order, ") + carrier + ", I_n " + I, Outcome::pass});
-            expected.push_back({std::string("1 - 1/M finest (N = 1024), ") + carrier + ", I_n " + I, Outcome::pass});
+            expected.push_back({"1 - 1/M order, " + carrier + ", I_n " + I[k], n ? order_n[k] : order_p[k],
+                                (n ? p_n[k] : p_p[k]) - 0.02, (n ? p_n[k] : p_p[k]) + 0.02});
+            expected.push_back(pinned("1 - 1/M finest (N = 1024), " + carrier + ", I_n " + I[k], pass,
+                                      n ? e_n[k] : e_p[k]));
         }
     }
+    const double dV[] = {4.182e-5, 1.617e-4, 1.165e-4, 1.233e-4, 1.385e-4, 7.746e-5};
+    std::size_t a = 0;
     for (const char* carrier : {"M_n", "M_p"}) {
         for (const char* M : {"10", "100", "1000"}) {
-            expected.push_back({std::string("V at ") + carrier + " = " + M + " (A), N = 1024", Outcome::pass});
+            expected.push_back(pinned(std::string("V at ") + carrier + " = " + M + " (A), N = 1024", pass, dV[a++]));
         }
     }
     if (r.run_error) FAIL(*r.run_error);
@@ -195,7 +212,10 @@ TEST_CASE("TVB-23: avalanche multiplication, full tier (expectation before the r
         CAPTURE(c.quantity, c.metric, c.comparison.reason);
         CHECK(c.quantity.starts_with(expected[i].quantity));
         CHECK(c.comparison.outcome == expected[i].outcome);
+        CHECK(c.metric > expected[i].metric_above);
+        CHECK(c.metric < expected[i].metric_below);
     }
+    CHECK(bench::overall(r) == Outcome::not_evaluated);
 }
 
 TEST_CASE("TVB-23: nothing in the fast tier", "[tvr5a]") {

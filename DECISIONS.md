@@ -11764,6 +11764,38 @@ IG-Q22 open (needs the owner's explicit authorization).**
 - Expectation before the rerun: all 26 pass. The coarse pairs' orders (1.8–2.1 above) and the leakage estimate
   suggest the orders become asymptotic; it is not known that they do.
 
+**17.23 TVB-23 rerun as rebuilt (d8463f2): outcome as found (26 comparisons: 20 pass, 6 not_evaluated, 0 fail).**
+
+| Injection, I_n | 0.1 | 0.3 | 0.5 | 0.7 | 0.9 |
+|---|---|---|---|---|---|
+| 1 − 1/M_n, N = 1024 (all pass) | 1.5e-5 | 6.5e-6 | 3.2e-6 | 1.2e-6 | 2.9e-7 |
+| M_n orders, finest pair first | 2.02, 2.00, 1.99 pass | 2.04, 2.01, 2.16 NE | 2.08, 2.02, 1.63 NE | 2.19, 2.05, 2.14 NE | 0.99, 1.43, 2.97 NE |
+| 1 − 1/M_p, N = 1024 (all pass) | 4.0e-5 | 2.1e-5 | 1.4e-5 | 8.1e-6 | 7.6e-7 |
+| M_p orders | 2.00, 2.00, 1.99 pass | 2.01, 2.00, 2.10 pass | 2.01, 2.00, 1.78 NE | 2.01, 2.00, 2.08 pass | 2.10, 2.13, 3.54 NE |
+
+| V at M_c (A) | M_n = 10 | 100 | 1000 | M_p = 10 | 100 | 1000 |
+|---|---|---|---|---|---|---|
+| \|V_sim − V_ref\| [V] | 4.18e-5 | 1.62e-4 | 1.17e-4 | 1.23e-4 | 1.39e-4 | 7.7e-5 |
+| bound U_num + U_ref + ε_V [V] | 4.73e-5 | 4.61e-4 | 1.24e-3 | 3.75e-4 | 5.13e-4 | 1.25e-3 |
+
+- **The leakage was the M_p error.** With it removed the M_p errors fall by a factor 40 at I_n = 0.1 and converge at
+  second order; M_n's floor is gone as well (its finest errors fell 2–3 times).
+- **The six NOT EVALUATED orders** are held by the asymptotic rule (spread of the successive orders ≤ 0.1): five
+  have finest pairs of 2.01–2.19 inside the band, and the coarsest pair (N = 128–256) moves the spread. M_n at
+  I_n = 0.9 has 0.99 on the finest pair, at an error of 2.9e-7. Nothing here is changed (TVM2).
+- **The A part passes** at every M_c. The closest is M_n = 10 (4.18e-5 V against 4.73e-5 V; there U_num, 4.1e-5, is
+  most of the bound). The reference's V_BR is −193.787 V; NiTCAD's V at M = 1000 is within 0.12 mV of the
+  reference's −193.548 V (M_n) and −193.763 V (M_p).
+- Q1 ≤ 1.5e-6, Q2 ≤ 5e-8 at the judged biases (2.0e-6 at M = 1000, inside ε_V); the factorial's ε_int is at most
+  8e-14 against U of 4e-7 … 5e-5.
+- **Time:** 167 s in Release, above 17.7's 120 s for the full tier. 17.7 allows the traces to move to nightly if over
+  budget; that is decided at close-out (step 10) with the Debug timing, and recorded there.
+- **Mutation, TVB-23's own code:** 10 mutants, all caught (the background's subtraction, the source's side, the
+  reference's x_p and x_ref, the Q2 window's edge, the root's tolerance, the order band, the source's size, the
+  two-grid ratio, the trace's start). Two were rewritten once to compile (an unused variable is an error here).
+- **Suites, Release:** the fast `[tvr5a]` and registry cases pass (57 benchmarks); the frozen `[tvr5a_full]` TVB-23
+  case passes against the source as committed.
+
 ---
 
 ## New questions the advisor raised (not yet in `ARCHITECTURE.md`)
