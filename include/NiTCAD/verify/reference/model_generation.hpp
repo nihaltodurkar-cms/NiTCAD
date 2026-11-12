@@ -76,17 +76,27 @@ struct AlphaCos {
     DD alpha, c;
 };
 
-[[nodiscard]] inline AlphaCos alpha_cos(const DD& delta, const DD& u) {
-    const DD d = delta.hi < 0.0 ? DD(0.0) : (delta.hi > 1.0 ? DD(1.0) : delta);
+// d in [0, 1] with its complement w = 1 - d given by the caller (a caller that has 1 - d without cancellation, as
+// TVB-24's second method near d = 1, passes it; the one-argument form below forms it as 1 - d).
+[[nodiscard]] inline AlphaCos alpha_cos(const DD& d, const DD& w, const DD& u) {
     const DD S = sqrt(u * (d - DD(0.5)) + u * u / DD(4.0) + DD(0.25));
     const DD one_p = DD(2.0) * u * d / (S + (u - DD(1.0)) / DD(2.0));
-    const DD one_m = DD(2.0) * u * (DD(1.0) - d) / (S + (u + DD(1.0)) / DD(2.0));
+    const DD one_m = DD(2.0) * u * w / (S + (u + DD(1.0)) / DD(2.0));
     const DD alpha = d.hi < 0.5 ? one_p - DD(1.0) : DD(1.0) - one_m;
     return {alpha, sqrt(one_p * one_m)};
 }
 
+[[nodiscard]] inline AlphaCos alpha_cos(const DD& delta, const DD& u) {
+    const DD d = delta.hi < 0.0 ? DD(0.0) : (delta.hi > 1.0 ? DD(1.0) : delta);
+    return alpha_cos(d, DD(1.0) - d, u);
+}
+
 [[nodiscard]] inline DD kappa(const DD& delta, const Band& b) {
     return scale_of(b) * alpha_cos(delta, u_of(b)).c / hbar();
+}
+// kappa with 1 - delta given (delta and one_minus in [0, 1], summing to 1).
+[[nodiscard]] inline DD kappa(const DD& delta, const DD& one_minus, const Band& b) {
+    return scale_of(b) * alpha_cos(delta, one_minus, u_of(b)).c / hbar();
 }
 [[nodiscard]] inline DD kappa_antiderivative(const DD& delta, const Band& b) {
     const DD u = u_of(b);

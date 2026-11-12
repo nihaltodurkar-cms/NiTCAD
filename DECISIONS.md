@@ -11904,6 +11904,20 @@ pre-registered; IG-Q25 A under the standing instruction.**
     fail at c₁h: c₁ rose from 1.26e5 to 2.24e5 /cm between −4 and −2 V, so c₁h at h = 6.9e-9 cm is about 2e-3 or
     more at −1 V. The paths' l and F pass. The currents are resolved and follow the pairs (fail).
 
+**17.27 A run error at the rerun, in the reference (before any comparison formed).**
+- The rerun stopped at "wkb_pairs: the second method did not converge" at −0.5 V. Cause: for a start just above
+  s_d − g (1e-13 … 1e-14 relative), the n edge falls about 1e-15 below δ = 1. The second method's Kronrod then places
+  nodes where δ = t²(3 − 2t) rounds within u_dd of 1, `alpha_cos` forms 1 − δ from δ as 0, and 1/κ is infinite. One
+  such start gave a NaN I_ik that qag reported as converged (its tests are comparisons), so the rate there read 0.
+  The test file's constants fail at −2 V in the same way: the fault depends on where the cut lands, not on the bias.
+- **Fix (reference only, no construction or criterion change):** `model_generation::alpha_cos` and `kappa` take 1 − δ
+  as an argument (the one-argument forms call them with 1 − d, so TVR-3's references are unchanged bit for bit). The
+  WKB second method passes 1 − δ = (1 − t)²(1 + 2t), exact near t = 1. The local Kronrod helper treats a non-finite
+  piece as not converged. A roundoff acceptance tried on the way was not needed and was removed.
+- **L0:** a new Release-only case, "WKB paths near the quadrature's cuts". It takes starts at 1e-9 … 1e-17 (relative)
+  either side of each cut at −0.5, −1 and −2 V. Every path forms, the two methods' rates agree within 1e-10, and the
+  pairs agree within 1e-10. It failed before the fix (−0.5 V, s_d − g + 1e-14: rates 2.1e22 and 0).
+
 ---
 
 ## New questions the advisor raised (not yet in `ARCHITECTURE.md`)

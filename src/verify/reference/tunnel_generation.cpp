@@ -49,7 +49,10 @@ Sum kronrod(F&& f, const std::vector<DD>& at, double rtol, double abs_floor = 0.
     Sum s;
     for (std::size_t k = 0; k + 1 < at.size(); ++k) {
         const AdaptiveResult a = qag15(f, at[k], at[k + 1], abs_floor, rtol);
-        s.ok = s.ok && a.status == QuadratureStatus::ok;
+        // qag's tests are comparisons, which a NaN fails silently: a non-finite piece is not converged (a NaN I_ik
+        // passed as converged at TVB-24's rerun, 17.27).
+        const bool finite = std::isfinite(a.value.hi) && std::isfinite(a.abs_error);
+        s.ok = s.ok && finite && a.status == QuadratureStatus::ok;
         s.value += a.value;
         s.abs_error += a.abs_error;
     }
@@ -186,8 +189,14 @@ WkbIntegrals wkb_integrals_second(const PinJunction& j, const Wkb& b, const DD& 
     at.push_back(DD(1.0));
     const auto jac = [](const DD& t) { return DD(6.0) * t * (DD(1.0) - t); };  // d delta / dt
     const auto E = [&](const DD& t) { return pin_field(j, s_a + b.g * delta_of(t)); };
-    const auto fk = [&](const DD& t) { return kappa_at(b, delta_of(t)) * b.g * j.VT / E(t) * m_per_cm * jac(t); };
-    const auto fi = [&](const DD& t) { return b.g * j.VT / E(t) * m_per_cm / kappa_at(b, delta_of(t)) * jac(t); };
+    // kappa from t with 1 - delta = (1 - t)^2 (1 + 2t), exact where delta rounds near 1 (1 - delta formed from delta
+    // there is 0 within u_dd, and 1 / kappa infinite: TVB-24's rerun at -0.5 V, 17.27).
+    const auto kappa_t = [&](const DD& t) {
+        const DD r = DD(1.0) - t;
+        return mg::kappa(delta_of(t), r * r * (DD(1.0) + ldexp(t, 1)), b.band);
+    };
+    const auto fk = [&](const DD& t) { return kappa_t(t) * b.g * j.VT / E(t) * m_per_cm * jac(t); };
+    const auto fi = [&](const DD& t) { return b.g * j.VT / E(t) * m_per_cm / kappa_t(t) * jac(t); };
     // The tolerance is relative to the whole integral, not to each piece: where a region edge falls within ~1e-8 of
     // t = 1 its sliver carries ~1e-6 of the total, and a relative tolerance on the sliver alone would drive qag to
     // nodes where delta rounds to 1 and 1 / kappa is infinite.

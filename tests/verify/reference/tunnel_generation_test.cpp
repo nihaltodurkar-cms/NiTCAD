@@ -272,6 +272,39 @@ TEST_CASE("tunnel_generation: WKB pairs and the slope coefficient", "[.tvr5a_ref
     REQUIRE(rel(*c1, expected) < 1e-6);
 }
 
+// Starts within 1e-9 ... 1e-17 (relative) of each cut of the pairs' quadrature, at -0.5, -1 and -2 V: every path
+// forms, its two methods' rates agree, and the pairs form. A start just above s_d - g puts the n edge ~1e-14 below
+// delta = 1, where the second method's sliver stops on roundoff (found at TVB-24's rerun, 17.27).
+TEST_CASE("tunnel_generation: WKB paths near the quadrature's cuts", "[.tvr5a_reference_release]") {
+    for (const double V : {-0.5, -1.0, -2.0}) {
+        CAPTURE(V);
+        const ref::PinJunction j = gaas(1e-6, V);
+        const auto lv = ref::wkb_levels(j, gaas_wkb);
+        REQUIRE(lv.has_value());
+        const DD g = DD(gaas_gap / VT);
+        const DD lo = lv->s_lo, hi = lv->s_hi - g;
+        const DD mv(gaas_wkb.hole_mass), mc(gaas_wkb.electron_mass);
+        const DD meet = (mv * lv->s_lo + mc * (lv->s_hi - g)) / (mv + mc);
+        for (const DD& cut : {lo, hi, j.s0, j.sd, j.s0 - g, j.sd - g, meet}) {
+            if (cut < lo || cut > hi) continue;
+            for (int e = 9; e <= 17; ++e) {
+                for (const double sign : {-1.0, 1.0}) {
+                    const DD s = cut + DD(sign * std::pow(10.0, -e)) * cut;
+                    if (s < lo || s > hi) continue;
+                    CAPTURE(cut.to_double(), sign, e);
+                    const auto p = ref::wkb_path(j, gaas_wkb, s);
+                    if (!p) FAIL(p.error());
+                    if (p->rate_cm3_s.hi > 0.0) REQUIRE(rel(p->second_rate_cm3_s, p->rate_cm3_s) < 1e-10);
+                }
+            }
+        }
+        const auto P = ref::wkb_pairs(j, gaas_wkb);
+        if (!P) FAIL(P.error());
+        REQUIRE(P->pairs_cm2_s.hi > 0.0);
+        REQUIRE(rel(P->second_cm2_s, P->pairs_cm2_s) < 1e-10);
+    }
+}
+
 TEST_CASE("tunnel_generation: bad inputs are refused") {
     const ref::PinJunction j = silicon(1e-6, -1.0);
     REQUIRE(!ref::local_kane_pairs(j, {0.0, 1e8}).has_value());
