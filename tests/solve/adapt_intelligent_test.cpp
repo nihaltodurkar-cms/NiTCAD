@@ -958,3 +958,60 @@ TEST_CASE("intelligent: probe the generated MOSFET for AC5", "[.adapt_ac5]") {
         std::fflush(stdout);
     }
 }
+
+// AC5 (DECISIONS.md Unit 17, AR10): the generated 2D MOSFET from its 20 nm start, I_D at the sweep's
+// three points, adjoint-weighted, the intelligent policy, against AR9's reference (the same continuum
+// device; the generated mesh's own 4x reference is 14-19% off, reported beside it), Vg 0 included
+// (7.0150e-5, AR10). The uniform ladder's nodes for 1% are bounded below from its measured h0/4 and
+// h0/8 runs by assuming second order beyond h0/8 (observed below first order there). Manual, about
+// 40 minutes in Release; basic's 12 passes are reported by [.adapt_ac5].
+TEST_CASE("intelligent: the generated MOSFET reaches 1% with at most 1/3 of the uniform ladder's nodes (AC5)",
+          "[.ac5]") {
+    const std::vector<double> ref{7.0150e-5, mosfet_ref[0], mosfet_ref[1]};
+    const auto errors = [&](const results::Sweep& s) {
+        std::vector<double> e;
+        for (std::size_t k = 0; k < 3; ++k) e.push_back(s.points[k].terminal_current[1] / ref[k] - 1.0);
+        return e;
+    };
+    double needed = 0.0;
+    for (const int k : {4, 8}) {
+        auto m = mosfet_mesh_h({}, h0 / k);
+        REQUIRE(m.has_value());
+        auto s = solve::sweep_bias(m->device, ac16_points, ac16_bias());
+        REQUIRE(s.has_value());
+        REQUIRE(!s->stopped);
+        const auto e = errors(*s);
+        const auto n = static_cast<double>(m->device.mesh().node_count());
+        std::printf("AC5 uniform h0/%d: %.0f nodes, errors %.3f%% %.3f%% %.3f%%\n", k, n, 100 * e[0], 100 * e[1], 100 * e[2]);
+        if (k == 8) {
+            for (const double x : e) needed = std::max(needed, n * std::abs(x) / 1e-2);  // N ~ h^-2, error ~ h^2
+        }
+    }
+    solve::AdaptOptions o = ac16_options();
+    o.at = {0, 1, 2};
+    o.max_passes = 12;
+    o.max_nodes = 100000;
+    o.policy = solve::Policy::intelligent;
+    auto r = solve::adapt(mosfet_mesh, ac16_points, ac16_bias(), o);
+    if (!r) FAIL(r.error().message);
+    // The first pass inside 1% at every point (all three are above their current resolution).
+    std::size_t first = r->passes.size();
+    for (std::size_t k = 0; k < r->passes.size(); ++k) {
+        const auto& p = r->passes[k];
+        double worst = 0.0;
+        for (std::size_t j = 0; j < 3; ++j) worst = std::max(worst, std::abs(p.goal[j] / ref[j] - 1.0));
+        std::printf("AC5 pass %zu: %s, %zu nodes, worst error %.3f%%, relative estimate %.4g\n", k, solve::to_string(p.source),
+                    p.nodes, 100 * worst, p.relative_estimate);
+        if (worst <= 1e-2 && first == r->passes.size()) first = k;
+    }
+    std::printf("AC5: stop %s; uniform ladder needs at least %.0f nodes (1/3: %.0f)\n", solve::to_string(r->stop), needed,
+                needed / 3);
+    std::fflush(stdout);
+    REQUIRE(first < r->passes.size());
+    CHECK(3.0 * static_cast<double>(r->passes[first].nodes) <= needed);
+    // AC20: a budget stop is not certified; a certified result is within its tolerance.
+    for (const auto& c : r->certificates) {
+        if (r->stop == solve::AdaptStop::max_nodes) CHECK(c.status != solve::CertificateStatus::certified);
+        if (c.status == solve::CertificateStatus::certified) CHECK(std::abs(c.value - ref[c.point]) <= c.allowed);
+    }
+}
