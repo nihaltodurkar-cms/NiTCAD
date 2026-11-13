@@ -6353,6 +6353,11 @@ Every 17b row has a killed mutant and none survives: ID8 (7), LB5 (5), ID10 (5),
 for 17b.** (A process note: commit 7359b44 captured round 1's first mutant, applied in the working tree while the
 runner ran; 4adba48 restores it, and no commit is made while the runner is active.)
 
+**AC13 for 17b (suites, 2026-11-13, at 5cd7008).** Release: 219/219 passed (868 s). Debug: 201/201 passed (980 s).
+The AC19 gate is `[.ac19]` (hidden, Release by hand); the 17b cases in the suites are `[adapt_learn]`, the AC21
+predictor case and the deck cases. Unit 17 merged to `main` meanwhile (72377ad, PR #81, owner "merge pr 81"); this
+branch holds 17's head (6ffad0b), so its PR to `main` carries the 17b commits only.
+
 ---
 
 ### Unit 55 — theoretical calculation validation framework: research and design proposal (proposed 2026-10-31; on `verify/theoretical-validation`)
