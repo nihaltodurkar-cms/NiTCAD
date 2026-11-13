@@ -234,7 +234,7 @@ std::vector<double> realized_levels(const EdgeFeatures& edges, const mesh::Point
         }
         const double h = hi - lo;
         if (!(h > 0.0)) continue;
-        out[e] = std::max(0.0, std::log2(h / edges.length[e]));
+        out[e] = std::max(0.0, std::log2(edges.length[e] / h));
     }
     return out;
 }
