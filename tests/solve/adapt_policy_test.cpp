@@ -600,6 +600,9 @@ TEST_CASE("policy: the allocation is deterministic and its report recomputes fro
         if (!p.candidates.empty() && p.candidates_taken == p.candidates.size()) {
             CHECK(std::abs(predicted - p.predicted_relative) <= 1e-12 * p.relative_estimate);
         }
+        WARN("AC18 pass " << k << ": E " << p.relative_estimate << ", predicted " << p.predicted_relative << ", taken "
+                          << p.candidates_taken << " of " << p.candidate_count << ", DOFs " << p.dofs << " predicted "
+                          << p.predicted_dofs);
         // ID7: the first 20 taken are listed. ID6: away from the growth cap and with candidates
         // left, the allocation stopped at its target, min(1/2, E/2).
         CHECK(p.candidates.size() == std::min<std::size_t>(20, p.candidates_taken));

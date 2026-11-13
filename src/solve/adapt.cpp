@@ -47,6 +47,8 @@ bool proposal_missed(double relative, double previous_relative, double margin) n
     return !(relative <= (1.0 - margin) * previous_relative);
 }
 
+double allocation_target(double relative_estimate) noexcept { return std::min(0.5, 0.5 * relative_estimate); }
+
 namespace {
 
 base::Error invalid(std::string message) { return {base::ErrorCode::invalid_input, std::move(message), std::nullopt}; }
@@ -677,7 +679,7 @@ std::expected<Allocation, base::Error> allocate(const AdaptableMesh& cur, const 
     std::ranges::stable_sort(order, [&](std::size_t i, std::size_t j) {
         return entries[i].benefit * entries[j].work > entries[j].benefit * entries[i].work;
     });
-    const double target = std::min(0.5, 0.5 * E);
+    const double target = allocation_target(E);
     // The caps on the predicted DOFs, each's headroom over the measured inflation (AR7).
     double cap = st.dofs + (growth_cap - 1.0) * st.dofs / st.added_scale;
     const bool budget = o.intelligent.dof_budget > 0 || o.intelligent.seconds_budget > 0.0;

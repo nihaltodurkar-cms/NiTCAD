@@ -326,6 +326,9 @@ struct RichardsonError {
 [[nodiscard]] std::size_t heavier_node(std::size_t a, double excess_a, std::size_t b, double excess_b) noexcept;
 // ID1: a proposal misses when its relative estimate is not below (1 - margin) times the previous.
 [[nodiscard]] bool proposal_missed(double relative, double previous_relative, double margin) noexcept;
+// ID6 (AR7): the allocation takes candidates until the predicted relative estimate is at most
+// min(1/2, E/2): tol/2 at most, and at least halving E.
+[[nodiscard]] double allocation_target(double relative_estimate) noexcept;
 // AD12 a: two consecutive misses (an empty proposal counts as one) trigger the fallback; a pass
 // that is not a miss resets the count. record() returns whether this miss triggers it.
 struct MissGuard {

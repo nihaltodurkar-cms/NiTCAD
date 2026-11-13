@@ -15,6 +15,7 @@
 #include "NiTCAD/mesh/tensor_grid.hpp"
 #include "NiTCAD/physics/semiconductor.hpp"
 #include "NiTCAD/solve/adapt.hpp"
+#include "NiTCAD/solve/adapt_policy.hpp"
 #include "NiTCAD/solve/bias.hpp"
 #include "legacy_graded_mesh.hpp"
 
@@ -260,6 +261,18 @@ TEST_CASE("adapt: the loop's rules (AD4, AD6, AD9, AD11, AD12, AD13, ID1; AC12)"
     CHECK(solve::proposal_missed(0.95, 1.0, 0.1));
     CHECK(!solve::proposal_missed(1.0, 1.0, 0.0));
     CHECK(solve::proposal_missed(std::nan(""), 1.0, 0.1));
+    // ID6: the allocation's target, min(1/2, E/2).
+    CHECK(solve::allocation_target(10.0) == 0.5);
+    CHECK(solve::allocation_target(0.8) == 0.4);
+    CHECK(solve::allocation_target(0.2) == 0.1);
+    // ID5: the cost model per Newton iteration, a nnz^b + c fill + d DOF.
+    solve::CostModel cm;
+    cm.a = 2e-9;
+    cm.b = 1.25;
+    cm.c = 3e-8;
+    cm.d = 5e-7;
+    CHECK(std::abs(cm.per_iteration(1e4, 2e5, 3e3) - (2e-9 * std::pow(1e4, 1.25) + 3e-8 * 2e5 + 5e-7 * 3e3)) <=
+          1e-15);
     // AD12 a: two consecutive misses; a hit between them resets the count.
     solve::MissGuard g;
     CHECK(!g.record(true));
