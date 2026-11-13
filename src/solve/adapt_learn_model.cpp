@@ -383,4 +383,49 @@ double predict_levels(const results::LearnedModel& model, const double* row) {
     return predict_trees(model.base, model.trees, row);
 }
 
+bool out_of_range(const results::LearnedModel& m, const double* row) {
+    for (std::size_t k = 0; k < F; ++k) {
+        const double v = row[k];
+        if (results::learn_feature_is_category(k)) {
+            if (!std::ranges::binary_search(m.categories[k], v)) return true;
+            continue;
+        }
+        const double margin = 0.05 * (m.feature_max[k] - m.feature_min[k]);
+        if (!(v >= m.feature_min[k] - margin && v <= m.feature_max[k] + margin)) return true;
+    }
+    return false;
+}
+
+double out_of_range_fraction(const results::LearnedModel& m, const EdgeFeatures& edges) {
+    if (edges.rows == 0) return 0.0;
+    std::size_t out = 0;
+    for (std::size_t e = 0; e < edges.rows; ++e) out += out_of_range(m, &edges.features[e * F]) ? 1 : 0;
+    return static_cast<double>(out) / static_cast<double>(edges.rows);
+}
+
+std::expected<SizeTargets, base::Error> learned_targets(const results::LearnedModel& m, const device::Device& d,
+                                                        std::span<const std::vector<double>> points,
+                                                        const BiasOptions& options) {
+    auto f = edge_features(d, points, options, m.materials);
+    if (!f) return std::unexpected(f.error());
+    const std::size_t nn = d.mesh().node_count();
+    SizeTargets t;
+    t.size.assign(nn, std::numeric_limits<double>::infinity());
+    t.normal.assign(nn, std::array<double, 3>{});
+    const auto& edges = d.mesh().edges();
+    for (std::size_t e = 0; e < f->rows; ++e) {
+        const double l = predict_levels(m, &f->features[e * F]);
+        if (!(l >= 0.5)) continue;
+        const double target = f->length[e] * std::exp2(-l);
+        for (const mesh::NodeId v : {edges[e].first, edges[e].second}) {
+            const auto i = static_cast<std::size_t>(v);
+            if (target < t.size[i]) {
+                t.size[i] = target;
+                t.normal[i] = f->direction[e];
+            }
+        }
+    }
+    return t;
+}
+
 }  // namespace NiTCAD::solve

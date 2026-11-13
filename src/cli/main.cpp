@@ -181,11 +181,28 @@ void describe(const NiTCAD::deck::Plan& plan) {
                     goals.c_str(), o.tolerance, NiTCAD::solve::to_string(o.policy),
                     o.weighting == NiTCAD::solve::Weighting::adjoint ? "adjoint" : "none", o.verify ? "richardson" : "off",
                     plan.adapt->certify_required ? "required" : "report", o.max_passes);
+        if (const auto& m = plan.adapt->predictor) {
+            std::printf("adapt: predictor %s (%016llx): format %llu, schema %llu, %zu trees, trained on %zu devices; "
+                        "held-out rank correlation %.3f (ridge %.3f)\n",
+                        plan.adapt->predictor_path.generic_string().c_str(),
+                        static_cast<unsigned long long>(plan.adapt->predictor_digest),
+                        static_cast<unsigned long long>(m->format), static_cast<unsigned long long>(m->schema),
+                        m->trees.size(), m->training.size(), m->metrics.rank_correlation, m->metrics.ridge_rank_correlation);
+        }
     }
 }
 
 // An adaptive run's passes and certificates (Unit 17, AD8, AD13).
 void print_adapt(const NiTCAD::results::AdaptReport& a) {
+    // Unit 17b (LB8): the learned predictor's use, or why it was not used.
+    if (a.predictor_status == "used") {
+        std::printf("adapt: predictor %s (%016llx) predicted the start mesh\n", a.predictor.c_str(),
+                    static_cast<unsigned long long>(a.predictor_digest));
+    } else if (a.predictor_status == "out_of_range") {
+        std::printf("adapt: out of the predictor's training range (%.1f%% of the start mesh's edges): "
+                    "the a priori prediction used\n",
+                    100.0 * a.predictor_out_of_range);
+    }
     for (std::size_t k = 0; k < a.passes.size(); ++k) {
         const auto& p = a.passes[k];
         std::printf("pass %zu (%s): %llu nodes, %llu DOFs, relative estimate %.3g, %llu marked, %.3f s\n", k,

@@ -268,10 +268,33 @@ std::expected<RunReport, base::Error> run(const Plan& plan, const solve::RunCont
                 return recorder->record(pass, m);
             };
         }
+        // Unit 17b (LB4, LB8): the learned predictor replaces ID2's prediction of the start mesh (the
+        // deck's own mesh, AD10) unless too many of its edges are outside the model's training range.
+        std::string predictor_status;
+        double predictor_out = 0.0;
+        if (a.predictor) {
+            auto f = solve::edge_features(plan.device, plan.points, plan.options, a.predictor->materials);
+            if (!f) return std::unexpected(std::move(f.error()));
+            predictor_out = solve::out_of_range_fraction(*a.predictor, *f);
+            if (predictor_out > solve::out_of_range_limit) {
+                predictor_status = "out_of_range";
+            } else {
+                predictor_status = "used";
+                o.intelligent.first_prediction = [model = a.predictor, &plan](const device::Device& d) {
+                    auto t = solve::learned_targets(*model, d, plan.points, plan.options);
+                    return t ? std::move(*t) : solve::SizeTargets{};
+                };
+            }
+        }
         auto r = solve::adapt(device_builder(plan), plan.points, plan.options, o, control);
         if (!r) return std::unexpected(std::move(r.error()));
         solve::stamp_adapt(r->sweep.run, o, a.certify_required);
+        if (a.predictor) solve::stamp_predictor(r->sweep.run, a.predictor_digest, *a.predictor, predictor_status == "used");
         const solve::AdaptableMesh& fin = *r->mesh;
+        if (fin.generated && fin.generated->generation_digest != 0) {
+            r->sweep.run.mesh_type = plan.mesh_type;
+            r->sweep.run.mesh_generation_digest = fin.generated->generation_digest;
+        }
         if (recorder) {
             auto h = recorder->finish(fin);
             if (!h) return std::unexpected(std::move(h.error()));
@@ -281,11 +304,13 @@ std::expected<RunReport, base::Error> run(const Plan& plan, const solve::RunCont
                 return std::unexpected(w.error());
             }
         }
-        if (fin.generated && fin.generated->generation_digest != 0) {
-            r->sweep.run.mesh_type = plan.mesh_type;
-            r->sweep.run.mesh_generation_digest = fin.generated->generation_digest;
-        }
         report.adapt = solve::adapt_report(*r, o, fin.device, a.certify_required);
+        if (a.predictor) {
+            report.adapt->predictor = a.predictor_path.generic_string();
+            report.adapt->predictor_digest = a.predictor_digest;
+            report.adapt->predictor_status = predictor_status;
+            report.adapt->predictor_out_of_range = predictor_out;
+        }
         if (!out.device.empty()) {
             if (auto w = written(out.device, io::save_device(out.device, fin.device)); !w) return std::unexpected(w.error());
         }

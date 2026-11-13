@@ -187,6 +187,10 @@ struct PolicyOptions {
     // proposal): per-node targets on the given device. Used for AC17's wrong prediction; empty: the
     // layer's.
     std::function<SizeTargets(const device::Device&)> prediction;
+    // Unit 17b (LB4): a learned prediction in place of ID2's for the start mesh only (the prediction
+    // rounds before pass 0); every later pass is the layer's own (or `prediction`'s, when set: AC21's
+    // fixture combines the two).
+    std::function<SizeTargets(const device::Device&)> first_prediction;
     // ID6's budget mode: the run's DOFs (final mesh) and its time (measured passes plus the next one
     // predicted) at most these; 0: tolerance mode. A pass whose allocation fits nothing stops the run
     // (max_nodes, unverified).

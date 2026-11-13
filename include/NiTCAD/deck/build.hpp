@@ -139,7 +139,9 @@
 //                       (default richardson); certify = report | required (default report: `nitcad
 //                       run` exits 3 when a required certificate is not reached, AD13); max_passes
 //                       (default 6), max_nodes, min_size, grading (1.5), theta (0.3);
-//                       predictor (17b) is refused.
+//                       predictor = <file> (Unit 17b: a learned model, io/learn_files.hpp; needs
+//                       policy = intelligent; it replaces ID2's prediction of the start mesh unless
+//                       the device is out of its training range, LB4, LB8).
 //                     The deck is rebuilt for every pass with the loop's refinement (build's second
 //                     argument): the tensor axes replaced (straddles kept as given), the 2D or
 //                     cross-section size field and the swept lines. restart is refused with [adapt].
@@ -161,6 +163,7 @@
 
 #include <expected>
 #include <array>
+#include <cstdint>
 #include <filesystem>
 #include <memory>
 #include <optional>
@@ -171,6 +174,7 @@
 #include "NiTCAD/deck/syntax.hpp"
 #include "NiTCAD/device/device.hpp"
 #include "NiTCAD/mesh/generate.hpp"
+#include "NiTCAD/results/learn.hpp"
 #include "NiTCAD/solve/adapt.hpp"
 #include "NiTCAD/solve/bias.hpp"
 #include "NiTCAD/solve/small_signal.hpp"
@@ -206,6 +210,11 @@ struct AdaptPlan {
     std::vector<mesh::AxisRange> sweep_protected;
     double interface_resolution = 0.0, max_size = 0.0;
     std::shared_ptr<const Deck> deck;  // the deck, rebuilt per pass
+    // Unit 17b (LB9): [adapt] predictor = <file>, loaded at build (its versions checked then), with
+    // its file digest; absent: null.
+    std::shared_ptr<const results::LearnedModel> predictor;
+    std::filesystem::path predictor_path;
+    std::uint64_t predictor_digest = 0;
 };
 
 struct Plan {

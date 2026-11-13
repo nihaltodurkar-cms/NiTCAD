@@ -24,7 +24,8 @@ constexpr std::uint16_t run = 1, goal_contact = 2, tolerance = 3, points = 4, po
                         certify = 8, indicator = 9, stop = 10, rejected_stops = 11, fallback = 12, fallback_pass = 13,
                         misses = 14, prediction = 15, coarse_nodes = 16, coarse_seconds = 17, verification_nodes = 18,
                         verification_seconds = 19, verification_goal = 20, pass = 21, certificate = 22, status = 23,
-                        final_mesh = 24;
+                        final_mesh = 24, predictor = 25, predictor_digest = 26, predictor_status = 27,
+                        predictor_out_of_range = 28;  // 25-28: Unit 17b, absent before it
 // Pass.
 constexpr std::uint16_t sizes = 1, mesh_digest = 2, source = 3, goal = 4, resolution = 5, change = 6, estimate = 7,
                         relative_estimate = 8, estimate_nodes = 9, marked = 10, by_indicator = 11, by_region = 12,
@@ -284,6 +285,12 @@ std::expected<void, base::Error> save_adapt_report(const std::filesystem::path& 
     }
     w.text(k::status, a.status);
     w.u64(k::final_mesh, a.final_mesh_digest);
+    if (!a.predictor.empty()) {
+        w.text(k::predictor, a.predictor);
+        w.u64(k::predictor_digest, a.predictor_digest);
+        w.text(k::predictor_status, a.predictor_status);
+        w.f64(k::predictor_out_of_range, a.predictor_out_of_range);
+    }
     return detail::write_file(path, Content::adapt_report, w);
 }
 
@@ -364,6 +371,16 @@ std::expected<results::AdaptReport, base::Error> load_adapt_report(const std::fi
     a.status = std::move(status);
     NITCAD_IO_TRY(final_mesh, r.u64(k::final_mesh));
     a.final_mesh_digest = final_mesh;
+    if (r.has(k::predictor)) {
+        NITCAD_IO_TRY(predictor, r.text(k::predictor));
+        a.predictor = std::move(predictor);
+        NITCAD_IO_TRY(pd, r.u64(k::predictor_digest));
+        a.predictor_digest = pd;
+        NITCAD_IO_TRY(ps, r.text(k::predictor_status));
+        a.predictor_status = std::move(ps);
+        NITCAD_IO_TRY(po, r.f64(k::predictor_out_of_range));
+        a.predictor_out_of_range = po;
+    }
     return a;
 }
 

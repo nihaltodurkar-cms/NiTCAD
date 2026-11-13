@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <cmath>
 #include <numeric>
+#include <limits>
 #include <cstddef>
 #include <filesystem>
 #include <fstream>
@@ -465,4 +466,66 @@ TEST_CASE("learn: training by device, its metrics, its file and the version refu
         CHECK(dm->held_out.size() == 1);
         CHECK(dm->metrics.samples > 0);
     }
+}
+
+// --- Slice 3: the predictor's rules (LB4, LB8) ---------------------------------------------------
+
+TEST_CASE("learn: the training range and the first mesh's targets, exactly (LB4, LB8)", "[adapt_learn]") {
+    results::LearnedModel m;
+    m.feature_min.assign(F, 0.0);
+    m.feature_max.assign(F, 1.0);
+    m.categories.assign(F, {});
+    m.categories[0] = {0.0};
+    m.categories[1] = {0.0};
+    std::vector<double> row(F, 0.5);
+    row[0] = row[1] = 0.0;
+    CHECK(!solve::out_of_range(m, row.data()));
+    row[13] = 1.04;  // inside the 5% margin
+    CHECK(!solve::out_of_range(m, row.data()));
+    row[13] = 1.06;
+    CHECK(solve::out_of_range(m, row.data()));
+    row[13] = -0.04;
+    CHECK(!solve::out_of_range(m, row.data()));
+    row[13] = -0.06;
+    CHECK(solve::out_of_range(m, row.data()));
+    row[13] = 0.5;
+    row[1] = 1.0;  // an unseen material
+    CHECK(solve::out_of_range(m, row.data()));
+    row[1] = -1.0;  // a material not in the model's list
+    CHECK(solve::out_of_range(m, row.data()));
+    row[1] = 0.0;
+    row[4] = std::numeric_limits<double>::quiet_NaN();
+    CHECK(solve::out_of_range(m, row.data()));
+    // The fraction over a device's edges, against LB8's limit.
+    solve::EdgeFeatures e;
+    e.rows = 20;
+    e.features.assign(20 * F, 0.5);
+    for (std::size_t r = 0; r < 20; ++r) e.features[r * F] = e.features[r * F + 1] = 0.0;
+    CHECK(solve::out_of_range_fraction(m, e) == 0.0);
+    e.features[13] = 2.0;  // one edge of 20: 5%, not above the limit
+    CHECK(solve::out_of_range_fraction(m, e) == Approx(0.05));
+    CHECK(!(solve::out_of_range_fraction(m, e) > solve::out_of_range_limit));
+    e.features[F + 13] = 2.0;
+    CHECK(solve::out_of_range_fraction(m, e) > solve::out_of_range_limit);
+
+    // Targets: a model predicting l^ = 1 everywhere halves every edge, normal along it; 0.4 asks nothing.
+    const device::Device d = legacy_diode(uniform(2e-4, 21));
+    results::LearnedModel one;
+    one.materials = solve::material_keys(d);
+    one.base = 1.0;
+    auto t = solve::learned_targets(one, d, points, legacy_options());
+    REQUIRE(t.has_value());
+    REQUIRE(t->size.size() == 21);
+    for (std::size_t i = 0; i < 21; ++i) {
+        CHECK(t->size[i] == Approx(0.5e-5));
+        CHECK(t->normal[i][0] == Approx(1.0));
+    }
+    one.base = 0.4;
+    auto none = solve::learned_targets(one, d, points, legacy_options());
+    REQUIRE(none.has_value());
+    for (const double s : none->size) CHECK(std::isinf(s));
+    one.base = 0.5;  // the threshold itself refines
+    auto half = solve::learned_targets(one, d, points, legacy_options());
+    REQUIRE(half.has_value());
+    CHECK(half->size[0] == Approx(1e-5 * std::exp2(-0.5)));
 }

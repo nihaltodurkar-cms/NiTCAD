@@ -248,6 +248,23 @@ std::expected<mesh::PointLocator, base::Error> adaptable_locator(const Adaptable
     return mesh::PointLocator::create(m.generated->simplices);
 }
 
+void stamp_predictor(results::RunRecord& run, std::uint64_t file_digest, const results::LearnedModel& model, bool used) {
+    Fnv h;
+    h.h = run.input_identity;
+    const std::string_view tag = "adapt.predictor";
+    h.bytes(tag.data(), tag.size());
+    h.u64(file_digest);
+    h.u64(model.format);
+    h.u64(model.schema);
+    h.u64(used ? 1 : 0);
+    run.input_identity = h.h;
+    run.settings.emplace_back("adapt.predictor.digest_high", static_cast<double>(file_digest >> 32));
+    run.settings.emplace_back("adapt.predictor.digest_low", static_cast<double>(file_digest & 0xffffffffull));
+    run.settings.emplace_back("adapt.predictor.format", static_cast<double>(model.format));
+    run.settings.emplace_back("adapt.predictor.schema", static_cast<double>(model.schema));
+    run.settings.emplace_back("adapt.predictor.used", used ? 1.0 : 0.0);
+}
+
 HistoryRecorder::HistoryRecorder(std::vector<std::vector<double>> points, BiasOptions options)
     : points_(std::move(points)), options_(std::move(options)) {}
 

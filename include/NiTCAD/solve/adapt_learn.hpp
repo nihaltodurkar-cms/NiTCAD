@@ -139,4 +139,25 @@ struct Ridge {
 // The model's l^ for one schema-1 row.
 [[nodiscard]] double predict_levels(const results::LearnedModel& model, const double* row);
 
+// --- Slice 3: the predictor in the loop (LB4, LB8) -----------------------------------------------
+
+// LB8: whether a row is outside the model's training range (a continuous feature outside [min - 5%
+// of the range, max + 5%], or a category not seen), and the fraction of a device's edges that are.
+[[nodiscard]] bool out_of_range(const results::LearnedModel& model, const double* row);
+[[nodiscard]] double out_of_range_fraction(const results::LearnedModel& model, const EdgeFeatures& edges);
+inline constexpr double out_of_range_limit = 0.05;  // LB8: a device above it falls back to ID2
+
+// The run identity with a predictor (ID10, LB9): input_identity continued by FNV-1a 64 over
+// "adapt.predictor", the model file's digest, its format and schema and whether it was used; the
+// settings gain adapt.predictor.digest_high and _low (its 32-bit halves), .format, .schema and .used.
+void stamp_predictor(results::RunRecord& run, std::uint64_t file_digest, const results::LearnedModel& model, bool used);
+
+// LB4's targets on a device: per edge L_e 2^-l^ where l^ >= 0.5; per node the smallest over its edges,
+// with that edge's direction as the normal; infinity (no target) elsewhere. Errors: those of
+// edge_features.
+[[nodiscard]] std::expected<SizeTargets, base::Error> learned_targets(const results::LearnedModel& model,
+                                                                      const device::Device& device,
+                                                                      std::span<const std::vector<double>> points,
+                                                                      const BiasOptions& options);
+
 }  // namespace NiTCAD::solve
