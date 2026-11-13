@@ -6145,6 +6145,22 @@ clamp [0.5, 3] lets it extrapolate the last change down by 2^2.18 − 1 = 3.5 an
 certificate held only because the actual error was a fifth of the allowance. AC7's case now also checks that a
 certified result is within its tolerance of AR4's reference.
 
+| # | Question (ruled under the standing instruction "always choose recommended") | Options | Recommendation and ruling |
+|---|---|---|---|
+| AR10 | AC5's reference and its "uniform-refinement ladder needs" (AC20's "AC5's 4× uniform"). | (a) AR9's converged reference (the same continuum device), the 4× generated value reported beside it; the ladder's nodes bounded below from its h0/4 and h0/8 runs at an assumed second order; (b) as frozen: the generated mesh's own 4× reference, the ladder measured to 1%. | **(a)**, ruled as recommended; **owner to confirm** (it changes the reference AC5 and AC20 name, toward a more accurate one, not a looser one). The generated MOSFET is the tensor MOSFET's device (geometry, doping, contacts and gate identical; only the mesh differs), so its mesh-converged I_D is AR9's. Its 4× uniform value (5 nm, 20 295 nodes) is −13.8% and −19.3% from it (8×, 80 660 nodes: −6.1%, −11.0%), so as a reference it would certify nothing meaningful at 1%, and the ladder cannot be measured to 1% (it converges below first order between 4× and 8×; second order from 8× on would still need about 890 k nodes; the observed order about 1 M × 30). Vg 0 (above its resolution, 4.8e-9 A/cm) gets the same per-axis construction: x at ky = 32 (kx 4, 8, 16): 7.08387, 7.08502, 7.08562e-5 (order 0.94); y at kx = 4 (ky 32, 64, 128): 7.08387, 7.03040, 7.01701e-5 (order 2.0), the y step at kx = 8 equal to 0.1%: **7.0150e-5 A/cm** (about 0.05%). |
+
+**AC5 (measured 2026-11-13, Release; generated MOSFET from h0 = 20 nm, 1 323 nodes; I_D at Vg 0, 0.5 and 1 V,
+tolerance 1e-2, adjoint-weighted; against AR9 and AR10).** Uniform: h0/2 5 147 nodes (−23.6%, −27.4% at 0.5 and 1 V),
+h0/4 20 295 (+12.9% at 0 V, −13.8%, −19.3%), h0/8 80 660 (+2.7%, −6.1%, −11.0%). **Basic** (12 passes, 17 s): 1 323 →
+2 888 nodes, errors −15.3% and −19.9% at the last pass (θ = 0.3 marks a few nodes; growth about 10% a pass), relative
+estimate 22.9, max_passes, unverified. **Intelligent** (9 passes, 40 min): the prediction's 3 303 nodes, then
+proposals 7 202, 14 823, 30 104, 68 898 (+0.35%, −0.36%, −1.33%), **98 593 (+0.37%, −0.20%, −0.89%: inside 1% at every
+point)**, 120 824, 129 977, 146 084 (+0.30%, −0.19%, −0.83%); relative estimate 1.05 at the stop (the estimate 1.25 times
+the actual error at 1 V), so it stopped at `max_nodes` (150 000), unverified at every point. **98 593 nodes against at
+least 890 k for the ladder (0.11 of it; ≤ 1/3 holds) with the intelligent policy; the basic loop does not reach 1%
+within 12 passes.** The gate (`[.ac5]`, manual like `[.uc8]`: about 40 minutes) repeats the h0/4 and h0/8 runs for the
+bound and the intelligent run to 100 000 nodes, and checks AC20 on it.
+
 **AC12 (hand mutants, 2026-11-13).** Each mutant one exact-string change, the solve, deck and mesh libraries and
 `nitcad_adapt_test`, `nitcad_deck_test` and `nitcad_mesh_test` rebuilt (Release, r3), then the fast suites: every
 non-hidden adapt case, the deck's adapt cases and `[size_field]`; killed if a build or a test fails. **Round 1, 37
