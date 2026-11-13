@@ -15,8 +15,10 @@
 #include "NiTCAD/io/adapt_report.hpp"
 #include "NiTCAD/io/device_file.hpp"
 #include "NiTCAD/io/files.hpp"
+#include "NiTCAD/io/learn_files.hpp"
 #include "NiTCAD/mesh/mesh.hpp"
 #include "NiTCAD/render/image.hpp"
+#include "NiTCAD/solve/adapt_learn.hpp"
 #include "fixtures.hpp"
 
 using namespace NiTCAD;
@@ -226,7 +228,9 @@ TEST_CASE("deck adapt: refusals name their line (AC9, AC10)", "[deck]") {
     holds(refused(base + "goal = current anode\nmode = budget\nbudget_dofs = 100\n"), "needs policy = intelligent");
     holds(refused(base + "goal = current anode\npolicy = intelligent\nmode = budget\n"), "budget_dofs or budget_seconds");
     holds(refused(base + "goal = current anode\nbudget_dofs = 100\n"), "is for mode = budget");
-    holds(refused(base + "goal = current anode\npredictor = m.nitlearn\n"), "Unit 17b");
+    holds(refused(base + "goal = current anode\npredictor = m.nitlearn\n"), "predictor needs policy = intelligent");
+    holds(refused(base + "goal = current anode\npolicy = intelligent\npredictor = none.nitlearn\n"),
+          at(2) + " predictor: cannot open");
     holds(refused(base + "goal = current anode\nmax_points = 2\n"), "max_points is for at = auto");
     holds(refused(base + "tolerance = 1e-2\n"), "at least one 'goal = current <contact>'");
     holds(refused(base + "goal = current anode\ngoal = current anode\n"), "a second goal on 'anode'");
@@ -487,4 +491,159 @@ adapt_meshes = passes
     const Cli changed = cli("plot " + deck + " --view passes --adapter warp --out " + out("x.png"));
     CHECK(changed.status == 1);
     CHECK(changed.output.find("digest differs") != std::string::npos);
+}
+
+TEST_CASE("deck adapt: adapt_history writes the run's learning history; nitcad learn manifest lists it (Unit 17b LB9, LB11)",
+          "[deck]") {
+    const fs::path dir = scratch("adapt_history");
+    const auto deck_with = [](const std::string& tolerance, const std::string& file) {
+        return coarse_diode + "[adapt]\ngoal = current anode\ntolerance = " + tolerance + "\n[output]\nadapt = " + file +
+               ".nitadapt\nadapt_history = " + file + ".nithist\n";
+    };
+    const std::string text = deck_with("1e-2", "h1");
+    const deck::Plan plan = must(text, dir);
+    const auto report = deck::run(plan);
+    if (!report) FAIL(report.error().message);
+    const auto h = io::load_adapt_history(dir / "h1.nithist");
+    REQUIRE(h.has_value());
+    CHECK(h->deck_text == text);
+    CHECK(h->run.input_identity == report->sweep->run.input_identity);
+    REQUIRE(h->passes.size() == report->adapt->passes.size());
+    for (std::size_t k = 0; k < h->passes.size(); ++k) CHECK(h->passes[k].mesh_digest == report->adapt->passes[k].mesh_digest);
+    CHECK(h->passes.back().device_digest != 0);
+    // A second device, then the manifest by the CLI: sorted, the digests the files'.
+    REQUIRE(deck::run(must(deck_with("3e-2", "h2"), dir)).has_value());
+    const fs::path manifest = dir / "set.manifest";
+    const Cli made = cli("learn manifest \"" + manifest.string() + "\" \"" + (dir / "h1.nithist").string() + "\" \"" +
+                         (dir / "h2.nithist").string() + "\"");
+    INFO(made.output);
+    CHECK(made.status == 0);
+    CHECK(made.output.find("manifest: 2 histories, schema 1") != std::string::npos);
+    const auto m = io::load_manifest(manifest);
+    REQUIRE(m.has_value());
+    REQUIRE(m->entries.size() == 2);
+    for (const auto& e : m->entries) CHECK(io::file_digest(e.path).value() == e.digest);
+    CHECK(cli("learn manifest \"" + manifest.string() + "\"").status == 64);
+    CHECK(cli("learn manifest \"" + manifest.string() + "\" \"" + (dir / "h1.nitadapt").string() + "\"").status == 1);
+    // Training by the CLI (slice 2): h1 held out by name; the model loads and names its sides.
+    const fs::path model = dir / "m.nitlearn";
+    const Cli trained = cli("learn train \"" + manifest.string() + "\" \"" + model.string() + "\" --holdout \"" +
+                            (dir / "h1.nithist").string() + "\"");
+    INFO(trained.output);
+    CHECK(trained.status == 0);
+    CHECK(trained.output.find("held-out rank correlation: trees") != std::string::npos);
+    const auto lm = io::load_learned_model(model);
+    REQUIRE(lm.has_value());
+    REQUIRE(lm->held_out.size() == 1);
+    CHECK(io::file_digest(dir / "h1.nithist").value() == lm->held_out[0].digest);
+    CHECK(cli("learn train \"" + manifest.string() + "\" \"" + model.string() + "\" --holdout nowhere.nithist").status == 1);
+    CHECK(cli("learn train \"" + manifest.string() + "\" \"" + model.string() + "\" --holdout").status == 64);
+    // Without [adapt], refused.
+    CHECK(refused(coarse_diode + "[output]\nadapt_history = h.nithist\n").find("the deck has no [adapt]") != std::string::npos);
+}
+
+TEST_CASE("deck adapt: a learned predictor: its use, the identity, the out-of-range fallback and bit-identity without it "
+          "(Unit 17b LB4, LB8, LB9; AC19 part)",
+          "[deck]") {
+    const fs::path dir = scratch("adapt_predictor");
+    const auto intelligent = [](const std::string& extra) {
+        return coarse_diode + "[adapt]\ngoal = current anode\ntolerance = 1e-2\npolicy = intelligent\n" + extra;
+    };
+    // Training data: two diode runs at different tolerances, one model on each held-out choice.
+    for (const char* t : {"1e-2", "3e-2", "2e-2"}) {
+        const std::string name = std::string("h") + t;
+        REQUIRE(deck::run(must(coarse_diode + "[adapt]\ngoal = current anode\npolicy = intelligent\ntolerance = " + t +
+                                   "\n[output]\nadapt_history = " + name + ".nithist\n",
+                               dir))
+                    .has_value());
+    }
+    const std::vector<fs::path> files{dir / "h1e-2.nithist", dir / "h3e-2.nithist", dir / "h2e-2.nithist"};
+    auto man = io::make_manifest(files);
+    REQUIRE(man.has_value());
+    auto set = io::build_training_set(*man);
+    REQUIRE(set.has_value());
+    solve::TreeOptions small;
+    small.min_leaf = 2;
+    for (const std::size_t h : {std::size_t{0}, std::size_t{1}}) {
+        auto m = solve::train_predictor(*set, std::vector<std::size_t>{h}, small);
+        REQUIRE(m.has_value());
+        REQUIRE(io::save_learned_model(dir / ("m" + std::to_string(h) + ".nitlearn"), *m).has_value());
+    }
+
+    // Without a predictor: a 17b key that only writes (adapt_history) changes nothing (AC19: "with
+    // predictor absent every run is bit-identical to Unit 17's").
+    const auto plain = deck::run(must(intelligent(""), dir));
+    const auto with_history = deck::run(must(intelligent("[output]\nadapt_history = x.nithist\n"), dir));
+    REQUIRE(plain.has_value());
+    REQUIRE(with_history.has_value());
+    CHECK(plain->sweep->run.input_identity == with_history->sweep->run.input_identity);
+    REQUIRE(io::save_adapt_report(dir / "plain.nitadapt", deterministic(*plain->adapt)).has_value());
+    REQUIRE(io::save_adapt_report(dir / "hist.nitadapt", deterministic(*with_history->adapt)).has_value());
+    CHECK(bytes_of(dir / "plain.nitadapt") == bytes_of(dir / "hist.nitadapt"));
+    CHECK(plain->adapt->predictor.empty());
+
+    // With one: used, the run's identity carries the model (ID10), another model another identity.
+    const auto used = deck::run(must(intelligent("predictor = m0.nitlearn\n"), dir));
+    REQUIRE(used.has_value());
+    const results::AdaptReport& a = *used->adapt;
+    CHECK(a.predictor_status == "used");
+    // LB4: the model predicts the start mesh only; with weighting none every later pass is the
+    // layer's own (AD3's marks), never a learned proposal.
+    REQUIRE(a.passes.size() >= 2);
+    CHECK(a.passes[0].source == "prediction");
+    for (std::size_t k = 1; k < a.passes.size(); ++k) CHECK(a.passes[k].source != "proposal");
+    CHECK(a.predictor_out_of_range <= 0.05);
+    CHECK(a.predictor_digest == io::file_digest(dir / "m0.nitlearn").value());
+    CHECK(used->sweep->run.input_identity != plain->sweep->run.input_identity);
+    CHECK(std::ranges::any_of(used->sweep->run.settings,
+                              [](const auto& s) { return s.first == "adapt.predictor.used" && s.second == 1.0; }));
+    const auto other = deck::run(must(intelligent("predictor = m1.nitlearn\n"), dir));
+    REQUIRE(other.has_value());
+    CHECK(other->sweep->run.input_identity != used->sweep->run.input_identity);
+    // The report keeps it through its file.
+    REQUIRE(io::save_adapt_report(dir / "used.nitadapt", *used->adapt).has_value());
+    const auto ru = io::load_adapt_report(dir / "used.nitadapt");
+    REQUIRE(ru.has_value());
+    CHECK(ru->predictor_status == "used");
+    CHECK(ru->predictor_digest == a.predictor_digest);
+
+    // Out of range (another material: every edge an unseen category): flagged, ID2 used, so the passes
+    // are the plain run's on that device; the identity still carries the model (LB8).
+    std::string legacy = coarse_diode;
+    legacy.replace(legacy.find("material = silicon"), 18, "material = silicon_legacy");
+    const auto legacy_deck = [&](const std::string& extra) {
+        return legacy + "[adapt]\ngoal = current anode\ntolerance = 1e-2\npolicy = intelligent\n" + extra;
+    };
+    const auto oor = deck::run(must(legacy_deck("predictor = m0.nitlearn\n"), dir));
+    const auto legacy_plain = deck::run(must(legacy_deck(""), dir));
+    REQUIRE(oor.has_value());
+    REQUIRE(legacy_plain.has_value());
+    CHECK(oor->adapt->predictor_status == "out_of_range");
+    CHECK(oor->adapt->predictor_out_of_range == 1.0);
+    REQUIRE(oor->adapt->passes.size() == legacy_plain->adapt->passes.size());
+    for (std::size_t k = 0; k < oor->adapt->passes.size(); ++k) {
+        CHECK(oor->adapt->passes[k].mesh_digest == legacy_plain->adapt->passes[k].mesh_digest);
+    }
+    CHECK(oor->sweep->run.input_identity != legacy_plain->sweep->run.input_identity);
+    CHECK(std::ranges::any_of(oor->sweep->run.settings,
+                              [](const auto& s) { return s.first == "adapt.predictor.used" && s.second == 0.0; }));
+    // The console says which.
+    write_text(dir / "oor.deck", legacy_deck("predictor = m0.nitlearn\n"));
+    const Cli run = cli("run \"" + (dir / "oor.deck").string() + "\"");
+    INFO(run.output);
+    CHECK(run.output.find("out of the predictor's training range (100.0% of the start mesh's edges)") != std::string::npos);
+    const Cli check = cli("check \"" + (dir / "oor.deck").string() + "\"");
+    CHECK(check.output.find("adapt: predictor ") != std::string::npos);
+    // A model of another format is refused at build, with its line.
+    {
+        auto m = io::load_learned_model(dir / "m0.nitlearn");
+        REQUIRE(m.has_value());
+        m->format = 9;
+        REQUIRE(io::save_learned_model(dir / "f9.nitlearn", *m).has_value());
+        auto d = deck::parse(intelligent("predictor = f9.nitlearn\n"), "t.deck", dir);
+        REQUIRE(d.has_value());
+        auto p = deck::build(*d);
+        REQUIRE(!p.has_value());
+        CHECK(p.error().message.find("format version 9, this build's is 1") != std::string::npos);
+    }
 }

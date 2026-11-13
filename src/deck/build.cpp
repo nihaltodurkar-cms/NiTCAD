@@ -16,6 +16,7 @@
 
 #include "NiTCAD/device/doping_profiles.hpp"
 #include "NiTCAD/io/files.hpp"
+#include "NiTCAD/io/learn_files.hpp"
 #include "NiTCAD/mesh/complex.hpp"
 #include "NiTCAD/mesh/tensor_cells.hpp"
 #include "NiTCAD/mesh/tensor_grid.hpp"
@@ -1627,9 +1628,10 @@ std::expected<void, base::Error> Builder::outputs(Plan& plan) const {
                                         : e.key == "small_signal" ? &plan.outputs.small_signal
                                         : e.key == "adapt"        ? &plan.outputs.adapt
                                         : e.key == "adapt_meshes" ? &plan.outputs.adapt_meshes
+                                        : e.key == "adapt_history" ? &plan.outputs.adapt_history
                                                                   : nullptr;
         if (!target) return std::unexpected(unknown(e, *s));
-        if ((e.key == "adapt" || e.key == "adapt_meshes") && !plan.adapt) {
+        if ((e.key == "adapt" || e.key == "adapt_meshes" || e.key == "adapt_history") && !plan.adapt) {
             return std::unexpected(at(e.line, "'" + e.key + "' is written by an [adapt] run; the deck has no [adapt]"));
         }
         *target = file(e);
@@ -1688,6 +1690,7 @@ std::expected<void, base::Error> Builder::adapt(Plan& plan) const {
     const Entry* budget_seconds = nullptr;
 
     const Entry* max_points = nullptr;
+    const Entry* predictor = nullptr;
     std::set<std::string> seen;
     for (const Entry& e : s->entries) {
         if (e.key != "goal" && !seen.insert(e.key).second) return std::unexpected(at(e.line, "a second '" + e.key + "'"));
@@ -1786,7 +1789,7 @@ std::expected<void, base::Error> Builder::adapt(Plan& plan) const {
             if (!(v > 0.0 && v <= 1.0)) return std::unexpected(at(e.line, "theta must be in (0, 1]"));
             o.theta = v;
         } else if (e.key == "predictor") {
-            return std::unexpected(at(e.line, "predictor is Unit 17b's cross-run model, not in this unit"));
+            predictor = &e;
         } else {
             return std::unexpected(unknown(e, *s));
         }
@@ -1821,6 +1824,19 @@ std::expected<void, base::Error> Builder::adapt(Plan& plan) const {
                                                                plan.device.contacts()[g.contact].name + "' is not"));
             }
         }
+    }
+    // Unit 17b (LB9): the learned model, loaded now so its versions are checked by `nitcad check`.
+    if (predictor != nullptr) {
+        if (o.policy != solve::Policy::intelligent) {
+            return std::unexpected(at(predictor->line, "predictor needs policy = intelligent (it replaces the a priori prediction)"));
+        }
+        a.predictor_path = file(*predictor);
+        auto model = io::load_learned_model(a.predictor_path);
+        if (!model) return std::unexpected(at(predictor->line, "predictor: " + model.error().message));
+        auto digest = io::file_digest(a.predictor_path);
+        if (!digest) return std::unexpected(at(predictor->line, "predictor: " + digest.error().message));
+        a.predictor = std::make_shared<const results::LearnedModel>(std::move(*model));
+        a.predictor_digest = *digest;
     }
     plan.adapt = std::move(a);
     return {};

@@ -139,13 +139,16 @@
 //                       (default richardson); certify = report | required (default report: `nitcad
 //                       run` exits 3 when a required certificate is not reached, AD13); max_passes
 //                       (default 6), max_nodes, min_size, grading (1.5), theta (0.3);
-//                       predictor (17b) is refused.
+//                       predictor = <file> (Unit 17b: a learned model, io/learn_files.hpp; needs
+//                       policy = intelligent; it replaces ID2's prediction of the start mesh unless
+//                       the device is out of its training range, LB4, LB8).
 //                     The deck is rebuilt for every pass with the loop's refinement (build's second
 //                     argument): the tensor axes replaced (straddles kept as given), the 2D or
 //                     cross-section size field and the swept lines. restart is refused with [adapt].
 //                     [output] adapt = <file> (the report, io/adapt_report.hpp) and adapt_meshes =
 //                     <directory> (each pass's device, pass_<k>.nitdev, and generated mesh,
-//                     pass_<k>.nitmesh); sweep, device, mesh, checkpoint and table are the final
+//                     pass_<k>.nitmesh) and adapt_history = <file> (Unit 17b: the run's learning
+//                     history, io/learn_files.hpp); sweep, device, mesh, checkpoint and table are the final
 //                     mesh's, the table with the certificates' columns.
 // Exactly one analysis section: [equilibrium], [sweep], [transient], [small_signal] or [trace].
 // A series is a comma list, first : last : step (DK6) or logspace(first, last, count) (Unit 43:
@@ -160,6 +163,7 @@
 
 #include <expected>
 #include <array>
+#include <cstdint>
 #include <filesystem>
 #include <memory>
 #include <optional>
@@ -170,6 +174,7 @@
 #include "NiTCAD/deck/syntax.hpp"
 #include "NiTCAD/device/device.hpp"
 #include "NiTCAD/mesh/generate.hpp"
+#include "NiTCAD/results/learn.hpp"
 #include "NiTCAD/solve/adapt.hpp"
 #include "NiTCAD/solve/bias.hpp"
 #include "NiTCAD/solve/small_signal.hpp"
@@ -192,6 +197,7 @@ struct Outputs {
     std::filesystem::path small_signal;  // io::save_small_signal (Unit 43)
     std::filesystem::path adapt;         // io::save_adapt_report (Unit 17)
     std::filesystem::path adapt_meshes;  // a directory: each pass's device and generated mesh (Unit 17)
+    std::filesystem::path adapt_history; // io::save_adapt_history (Unit 17b, LB9)
 };
 
 // [adapt] (Unit 17): the loop's options and what it needs to refine the deck's mesh.
@@ -204,6 +210,11 @@ struct AdaptPlan {
     std::vector<mesh::AxisRange> sweep_protected;
     double interface_resolution = 0.0, max_size = 0.0;
     std::shared_ptr<const Deck> deck;  // the deck, rebuilt per pass
+    // Unit 17b (LB9): [adapt] predictor = <file>, loaded at build (its versions checked then), with
+    // its file digest; absent: null.
+    std::shared_ptr<const results::LearnedModel> predictor;
+    std::filesystem::path predictor_path;
+    std::uint64_t predictor_digest = 0;
 };
 
 struct Plan {

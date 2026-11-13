@@ -1365,6 +1365,10 @@ Writer write_run_record(const results::RunRecord& run) { return write_run(run); 
 
 std::expected<results::RunRecord, base::Error> read_run_record(const Reader& r) { return read_run(r); }
 
+Writer write_provenance_record(const results::Provenance& p) { return write_provenance(p); }
+
+std::expected<results::Provenance, base::Error> read_provenance_record(const Reader& r) { return read_provenance(r); }
+
 }  // namespace detail
 
 }  // namespace NiTCAD::io

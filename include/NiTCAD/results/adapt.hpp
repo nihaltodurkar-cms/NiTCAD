@@ -127,6 +127,13 @@ struct AdaptReport {
     std::vector<AdaptCertificateRow> certificates;
     std::string status;                   // the worst certificate's
     std::uint64_t final_mesh_digest = 0;  // the last pass's mesh: the result's
+    // Unit 17b (LB8, LB9): the learned predictor the run was given (empty: none), its file digest,
+    // "used" or "out_of_range" (the device outside its training range: ID2's prediction used), and the
+    // fraction of the start mesh's edges outside the range.
+    std::string predictor;
+    std::uint64_t predictor_digest = 0;
+    std::string predictor_status;
+    double predictor_out_of_range = 0.0;
     bool operator==(const AdaptReport&) const = default;
 };
 

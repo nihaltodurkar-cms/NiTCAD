@@ -41,6 +41,9 @@ std::expected<mesh::Mesh, base::Error> read_mesh(const Reader& r);
 // A run record (results/run.hpp), as every result file holds it (Unit 17: the adaptation report too).
 Writer write_run_record(const results::RunRecord& run);
 std::expected<results::RunRecord, base::Error> read_run_record(const Reader& r);
+// A provenance alone (Unit 17b: the learned model records the build that trained it).
+Writer write_provenance_record(const results::Provenance& p);
+std::expected<results::Provenance, base::Error> read_provenance_record(const Reader& r);
 
 Writer write_certificate(const mesh::InterfaceCertificate& c);
 // The stored certificate, unchecked (the caller checks it against its mesh and regions).
