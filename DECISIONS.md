@@ -6145,6 +6145,29 @@ clamp [0.5, 3] lets it extrapolate the last change down by 2^2.18 − 1 = 3.5 an
 certificate held only because the actual error was a fifth of the allowance. AC7's case now also checks that a
 certified result is within its tolerance of AR4's reference.
 
+**AC12 (hand mutants, 2026-11-13).** Each mutant one exact-string change, the solve, deck and mesh libraries and
+`nitcad_adapt_test`, `nitcad_deck_test` and `nitcad_mesh_test` rebuilt (Release, r3), then the fast suites: every
+non-hidden adapt case, the deck's adapt cases and `[size_field]`; killed if a build or a test fails. **Round 1, 37
+mutants:** 23 killed; 13 survived; 1 did not build (ID5's, an unused variable under `/WX`; replaced). The survivors were
+rules the end-to-end runs never pinned: AD1 (solve from scratch, not the transferred state), AD4 (halving 0.5 → 0.7;
+the `min_size` skip dropped), AD9 (the tie-break reversed), AD11 (the default order 1 → 3), AD12 (the miss count not
+reset), AD13 (`&&` → `||` in the status; the allowance doubled), ID1 (the margin's sign), ID3 (one point, not
+`max_points`), ID6 (the target E, not E/2; the growth cap ×10), ID7 (2 listed, not 20). **Closed by tests:** the rules
+are functions in solve/adapt.hpp, applied by `adapt()` in place of the inline code (no behaviour change; the fast
+suites' numbers unchanged): `allowed_error`, `richardson_error`, `certificate_status`, `refined_size`, `heavier_node`,
+`proposal_missed`, `MissGuard`, `allocation_target`, each tested exactly in adapt_loop_test.cpp ("the loop's
+rules"), with `CostModel::per_iteration`'s form; AC6 checks that every pass after the first was transferred onto
+(AD1); AC17 that `max_points` points are chosen (ID3) and that the prediction's rounds and every proposal hold the
+growth cap (ID6); AC18 that the first 20 taken are listed (ID7) and that an allocation away from the cap stops at
+its target (ID6; on that diode E never falls below 1, where the target's two forms differ, hence the exact test).
+**Round 2:** the 13 re-aimed at the rules' new places, and ID5's (the DOF term dropped): 12 killed; ID5's and ID6's
+target survived; **round 3** after their tests: both killed. **Every design row has at least one killed mutant and
+none survives:** AD1 (2), AD2 (2), AD3 (2), AD4 (3), AD5, AD6 (3), AD7, AD8 (2), AD9, AD10, AD11 (4: AC20's skipped
+refinement, wrong p twice, wrong mesh compared), AD12 (3), AD13 (3: AC20's status logic twice, the allowance), ID1,
+ID2, ID3, ID4, ID5 (2), ID6 (2), ID7, ID9. **AC12 met; AC20's mutant clause met.** The runner first restored each file
+with `git checkout`, which discarded uncommitted edits to the mutated file in round 2's first attempt; it now restores
+from a copy, and each round runs on a committed tree.
+
 ---
 
 ### Unit 55 — theoretical calculation validation framework: research and design proposal (proposed 2026-10-31; on `verify/theoretical-validation`)
