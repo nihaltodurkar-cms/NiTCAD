@@ -10,6 +10,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstddef>
+#include <cstdio>
 #include <format>
 #include <limits>
 #include <memory>
@@ -578,6 +579,25 @@ std::vector<double> mosfet_reference(int k) {
     return {s->points[1].terminal_current[1], s->points[2].terminal_current[1]};
 }
 
+// The tensor MOSFET's reference I_D at Vg 0.5 and 1 V (DECISIONS.md Unit 17 AR9), measured once
+// (Release, 2026-11-13): the uniform ladder converges slowly because its y error (the inversion
+// layer) and its x error are paired; refined per axis they separate. At kx = 4, ky = 32, 64, 128:
+// 0.122849, 0.122425, 0.122309 and 0.305497, 0.304497, 0.304174 (orders 1.87, 1.63); at ky = 32,
+// kx = 4, 8, 16, 32: 0.122849, 0.124059, 0.124385, 0.124483 and 0.305497, 0.312421, 0.314917,
+// 0.316039 (orders 1.89 then 1.73, 1.47 then 1.15); the y steps at kx = 8 within 4% and 12% of
+// those at kx = 4 (the errors add). Each axis extrapolated at its last observed order, the y
+// correction scaled to the finer x: 0.12393 (uncertain by about 0.1%) and 0.3153 (about 0.3%: the x
+// order still drifts). The 8x uniform values (0.128458, 0.319467) are 3.7% and 1.3% high. The
+// 32 x 32 solve takes 14 minutes, so the values are recorded; the 2x solve is the guard.
+const std::vector<double> mosfet_ref{0.12393, 0.3153};
+
+void guard_mosfet_reference() {
+    const std::vector<double> r2 = mosfet_reference(2);
+    WARN("tensor MOSFET reference guard: 2x " << r2[0] << ", " << r2[1] << " (recorded 0.1325677205, 0.3044490795)");
+    REQUIRE(std::abs(r2[0] - 0.1325677205) <= 1e-6 * 0.1325677205);
+    REQUIRE(std::abs(r2[1] - 0.3044490795) <= 1e-6 * 0.3044490795);
+}
+
 double mosfet_error(const solve::AdaptResult& r, const std::vector<double>& ref) {
     return std::max(std::abs(r.sweep.points[1].terminal_current[1] - ref[0]) / std::abs(ref[0]),
                     std::abs(r.sweep.points[2].terminal_current[1] - ref[1]) / std::abs(ref[1]));
@@ -587,10 +607,9 @@ double mosfet_error(const solve::AdaptResult& r, const std::vector<double>& ref)
 
 TEST_CASE("intelligent: the allocation needs fewer DOFs than basic, and does better on a budget (AC16)",
           "[.adapt_intelligent]") {
-    // The 2D MOSFET on the tensor mesh (AR6), adjoint-weighted (AR7), against its start refined 8
-    // times uniformly (4 times reported as the reference's spread).
-    const std::vector<double> ref = mosfet_reference(8), ref4 = mosfet_reference(4);
-    WARN("AC16 reference I_D (8x): " << ref[0] << ", " << ref[1] << "; 4x " << ref4[0] << ", " << ref4[1]);
+    // The 2D MOSFET on the tensor mesh (AR6), adjoint-weighted (AR7); errors against AR9's reference.
+    guard_mosfet_reference();
+    const std::vector<double>& ref = mosfet_ref;
     solve::AdaptOptions o = ac16_options();
     o.policy = solve::Policy::basic;
     auto b = solve::adapt(tensor_mosfet_mesh, ac16_points, ac16_bias(), o);
@@ -605,9 +624,8 @@ TEST_CASE("intelligent: the allocation needs fewer DOFs than basic, and does bet
                                                   << ei << " vs " << eb << ", passes " << i->passes.size() << " vs "
                                                   << b->passes.size() << ", misses " << i->misses << ", fallback "
                                                   << solve::to_string(i->fallback));
-    // The same verified accuracy: both certified at the tolerance. Their errors against the 8x
-    // reference are reported, not gated here: 4x and 8x differ by 2.8% at Vg 0.5 V, so the reference
-    // is not converged to the tolerance (AR7; certification against references is AC20's, slice 7).
+    // The same verified accuracy: both certified at the tolerance; their errors against AR9's
+    // reference are reported here and gated by AC20.
     CHECK(b->stop == solve::AdaptStop::converged);
     CHECK(i->stop == solve::AdaptStop::converged);
     for (const auto& c : b->certificates) CHECK(c.status == solve::CertificateStatus::certified);
@@ -742,5 +760,138 @@ TEST_CASE("intelligent: probe the allocation", "[.adapt_probe5b]") {
                              solve::to_string(r->certificates[0].status), r->misses, solve::to_string(r->fallback),
                              r->fallback_pass, seconds_since(t)));
         }
+    }
+}
+
+// Slice 7, AC20: is the tensor MOSFET's uniform ladder converging? I_D at Vg 0.5 and 1 V on the start
+// refined k = 1..16 times, with the plain and the weighted terminal current (Unit 32).
+TEST_CASE("intelligent: probe the tensor MOSFET's reference ladder", "[.adapt_ref]") {
+    for (const bool weighted : {false, true}) {
+        for (const int k : {1, 2, 4, 8, 16}) {
+            solve::MeshRefinement r;
+            r.axes[0] = uniform(2 * Lsd + Lg, 24 * k + 1);
+            r.axes[1] = uniform(depth, 10 * k + 1);
+            auto m = tensor_mosfet_mesh(r);
+            REQUIRE(m.has_value());
+            solve::BiasOptions b = ac16_bias();
+            b.weighted_current = weighted;
+            const auto t = std::chrono::steady_clock::now();
+            auto s = solve::sweep_bias(m->device, ac16_points, b);
+            REQUIRE(s.has_value());
+            WARN(std::format("ladder weighted={} k={} nodes {}: I_D {:.10g} {:.10g} stopped {} ({:.3g} s)", weighted, k,
+                             m->device.mesh().node_count(), s->points[1].terminal_current[1],
+                             s->points[2].terminal_current[1], s->stopped.has_value(), seconds_since(t)));
+        }
+    }
+}
+
+// The ladder per axis: x refined kx times, y ky times (the inversion layer is a few nm; 16x is 1.25 nm).
+TEST_CASE("intelligent: probe the tensor MOSFET's ladder per axis", "[.adapt_ref2]") {
+    for (const auto [kx, ky] : std::vector<std::pair<int, int>>{{32, 32}}) {
+        solve::MeshRefinement r;
+        r.axes[0] = uniform(2 * Lsd + Lg, 24 * kx + 1);
+        r.axes[1] = uniform(depth, 10 * ky + 1);
+        auto m = tensor_mosfet_mesh(r);
+        REQUIRE(m.has_value());
+        const auto t = std::chrono::steady_clock::now();
+        auto s = solve::sweep_bias(m->device, ac16_points, ac16_bias());
+        REQUIRE(s.has_value());
+        std::printf("ladder2 kx=%d ky=%d nodes %zu: I_D %.10g %.10g stopped %d (%.3g s)\n", kx, ky,
+                    m->device.mesh().node_count(), s->points[1].terminal_current[1], s->points[2].terminal_current[1],
+                    s->stopped.has_value() ? 1 : 0, seconds_since(t));
+        std::fflush(stdout);
+    }
+}
+
+namespace {
+
+// AC11's report of one run: per pass DOFs, Jacobian nonzeros, fill, Newton iterations and the times
+// (regeneration, transfer, solve, the estimate; the estimate's factorizations and its largest
+// transposed solve), and AD11's verification solve separately. Checks, per adjoint pass, that one
+// transposed solve costs no more than one factorization (a lower bound on a Newton iteration's
+// linear solve, which also solves).
+void cost_report(const solve::AdaptResult& r, const char* name) {
+    for (std::size_t k = 0; k < r.passes.size(); ++k) {
+        const auto& p = r.passes[k];
+        std::printf("AC11 %s pass %zu: nodes %zu DOFs %zu nnz %zu fill %zu newton %d; mesh %.4g s, transfer %.4g s, "
+                    "solve %.4g s, estimate %.4g s (factorizations %.4g s, transposed %.4g s)\n",
+                    name, k, p.nodes, p.dofs, p.matrix_nonzeros, p.factor_fill, p.newton_iterations, p.seconds_mesh,
+                    p.seconds_transfer, p.seconds_solve, p.seconds_estimate, p.seconds_estimate_factorize,
+                    p.seconds_transposed);
+        if (p.estimate.empty()) continue;
+        const double per_factorization = p.seconds_estimate_factorize / static_cast<double>(r.points.size());
+        CHECK(p.seconds_transposed <= per_factorization);
+    }
+    std::printf("AC11 %s verification: %zu nodes, %.4g s (final pass solve %.4g s)\n", name, r.verification_nodes,
+                r.verification_seconds, r.passes.back().seconds_solve);
+    std::fflush(stdout);
+}
+
+}  // namespace
+
+TEST_CASE("intelligent: the cost of each pass, the verification and the transposed solve (AC11)",
+          "[.adapt_intelligent]") {
+    // AC5's stand-in (the tensor MOSFET, AR6) and AC6's diode, adjoint-weighted, both policies; AC8's
+    // FinFET is reported by its own case (tests/deck/adapt_finfet_test.cpp).
+    for (const solve::Policy policy : {solve::Policy::basic, solve::Policy::intelligent}) {
+        solve::AdaptOptions o = ac16_options();
+        o.policy = policy;
+        auto m = solve::adapt(tensor_mosfet_mesh, ac16_points, ac16_bias(), o);
+        if (!m) FAIL(m.error().message);
+        cost_report(*m, policy == solve::Policy::basic ? "mosfet basic" : "mosfet intelligent");
+        REQUIRE(m->verification_nodes > 0);
+    }
+    solve::AdaptOptions od;
+    od.goals = {{0}};
+    od.tolerance = 1e-3;
+    od.at = {0, 4};
+    od.max_passes = 14;
+    od.weighting = solve::Weighting::adjoint;
+    const std::vector<std::vector<double>> diode_points{{-1.0, 0.0}, {-0.5, 0.0}, {0.0, 0.0}, {0.3, 0.0}, {0.6, 0.0}};
+    const solve::DeviceBuilder diode = [](const solve::MeshRefinement& r) -> std::expected<solve::AdaptableMesh, base::Error> {
+        const std::vector<double> x = r.axes[0].empty() ? uniform(2e-4, 21) : r.axes[0];
+        return solve::AdaptableMesh{.device = legacy_diode(x), .kind = solve::AdaptMeshKind::tensor};
+    };
+    auto d = solve::adapt(diode, diode_points, legacy_options(), od);
+    if (!d) FAIL(d.error().message);
+    cost_report(*d, "diode");
+}
+
+TEST_CASE("intelligent: no certified result is outside its tolerance against the reference (AC20)",
+          "[.adapt_intelligent]") {
+    // AC5's stand-in (the tensor MOSFET, AR6), both policies, adjoint-weighted, against AR9's reference;
+    // AC6's diode is checked in adapt_loop_test.cpp, AC7's well MOSFET in adapt_goal_test.cpp and AC8's
+    // FinFET in tests/deck/adapt_finfet_test.cpp. The verified error and the estimate are reported with
+    // their ratios to the actual error.
+    guard_mosfet_reference();
+    const auto check = [](const solve::AdaptResult& r, const char* name) {
+        std::size_t certified = 0;
+        for (const auto& c : r.certificates) {
+            const std::size_t i = c.point == 1 ? 0 : 1;
+            const double actual = std::abs(c.value - mosfet_ref[i]);
+            std::printf("AC20 %s point %zu: %s, value %.6g, actual %.4g (%.3g%%), allowed %.4g, verified %.4g (ratio %.3g), "
+                        "estimate %.4g (ratio %.3g), p %.3g\n",
+                        name, c.point, solve::to_string(c.status), c.value, actual, 100 * actual / mosfet_ref[i],
+                        c.allowed, c.verified_error, c.verified_error / actual, c.estimate, c.estimate / actual, c.order);
+            if (c.status != solve::CertificateStatus::certified) continue;
+            ++certified;
+            CHECK(actual <= c.allowed);
+        }
+        std::fflush(stdout);
+        return certified;
+    };
+    for (const solve::Policy policy : {solve::Policy::basic, solve::Policy::intelligent}) {
+        solve::AdaptOptions o = ac16_options();
+        o.policy = policy;
+        auto r = solve::adapt(tensor_mosfet_mesh, ac16_points, ac16_bias(), o);
+        if (!r) FAIL(r.error().message);
+        REQUIRE(r->certificates.size() == 2);
+        CHECK(check(*r, policy == solve::Policy::basic ? "mosfet basic" : "mosfet intelligent") == 2);
+        // Stopped early by a node budget: unverified, never certified.
+        o.max_nodes = r->passes.front().nodes + 1;
+        auto b = solve::adapt(tensor_mosfet_mesh, ac16_points, ac16_bias(), o);
+        if (!b) FAIL(b.error().message);
+        check(*b, "mosfet budget");
+        for (const auto& c : b->certificates) CHECK(c.status != solve::CertificateStatus::certified);
     }
 }

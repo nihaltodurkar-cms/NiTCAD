@@ -183,6 +183,8 @@ TEST_CASE("adapt: goal weighting avoids the well junction off the current path (
                     << out.error / std::abs(I_ref) << " relative; certificate " << solve::to_string(c.status)
                     << ", estimate " << c.estimate << ", verified " << c.verified_error << ", actual " << out.error
                     << ", estimate / actual " << c.estimate / out.error);
+        // AC20: a certified result within its tolerance of AR4's reference.
+        if (c.status == solve::CertificateStatus::certified) CHECK(out.error <= c.allowed);
         return std::make_pair(out, std::move(*r));
     };
     auto [feature, fr] = run(solve::Weighting::none, "feature-only");

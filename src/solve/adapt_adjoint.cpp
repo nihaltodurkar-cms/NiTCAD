@@ -2,6 +2,7 @@
 #include "NiTCAD/solve/adapt_adjoint.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <string>
@@ -18,6 +19,9 @@ namespace NiTCAD::solve {
 namespace {
 
 base::Error invalid(std::string message) { return {base::ErrorCode::invalid_input, std::move(message), std::nullopt}; }
+
+using clock_type = std::chrono::steady_clock;
+double since(clock_type::time_point t) { return std::chrono::duration<double>(clock_type::now() - t).count(); }
 
 // The scaled system of `device` at a bias, with a given concentration scale when given.
 struct System {
@@ -101,7 +105,9 @@ std::expected<PointAdjoint, base::Error> adjoints_at(const device::Device& devic
         std::vector<double> h(n, 0.0);
         for (std::size_t k = 0; k < rows[c].columns.size(); ++k) h[rows[c].columns[k]] += rows[c].values[k].real();
         std::vector<double> y(n, 0.0);
+        const auto tt = clock_type::now();
         auto s = solver.solve_transposed(h, y);
+        out.seconds_transposed = std::max(out.seconds_transposed, since(tt));
         if (!s) return std::unexpected(s.error());
         out.fell_back = out.fell_back || s->fell_back;
         std::vector<double> z = y;
@@ -170,8 +176,12 @@ std::expected<PointAdjoint, base::Error> point_adjoint(const device::Device& dev
     dd.evaluate(x, f, jac);
     auto solver = linalg::LinearSolver::create(options.linear);
     if (!solver) return std::unexpected(solver.error());
+    const auto tf = clock_type::now();
     if (auto fz = solver->factorize(jac); !fz) return std::unexpected(fz.error());
-    return adjoints_at(device, dd, *sys, std::move(x), jac, *solver, options, contacts);
+    const double seconds_factorize = since(tf);
+    auto adj = adjoints_at(device, dd, *sys, std::move(x), jac, *solver, options, contacts);
+    if (adj) adj->seconds_factorize = seconds_factorize;
+    return adj;
 }
 
 std::expected<double, base::Error> goal_at(const device::Device& device, const BiasOptions& options,
@@ -213,7 +223,9 @@ std::expected<GoalEstimate, base::Error> estimate_goals(const device::Device& co
     fd.evaluate(u, r, jac);
     auto solver = linalg::LinearSolver::create(options.linear);
     if (!solver) return std::unexpected(solver.error());
+    const auto tf = clock_type::now();
     if (auto fz = solver->factorize(jac); !fz) return std::unexpected(fz.error());
+    const double seconds_factorize = since(tf);
     auto adj = adjoints_at(fine, fd, *fine_sys, u, jac, *solver, options, contacts);
     if (!adj) return std::unexpected(adj.error());
 
@@ -244,6 +256,8 @@ std::expected<GoalEstimate, base::Error> estimate_goals(const device::Device& co
 
     GoalEstimate out;
     out.fell_back = adj->fell_back;
+    out.seconds_factorize = seconds_factorize;
+    out.seconds_transposed = adj->seconds_transposed;
     const double scale = adj->current_scale;
     for (std::size_t gi = 0; gi < contacts.size(); ++gi) {
         const std::size_t c = contacts[gi];

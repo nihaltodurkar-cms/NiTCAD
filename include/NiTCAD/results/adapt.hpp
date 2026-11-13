@@ -81,6 +81,7 @@ struct AdaptPassRow {
     double cost_alpha = 0.0, cost_beta = 1.0, cost_residual_nodes = 0.0;
     std::uint64_t cost_samples = 0;
     double seconds_mesh = 0.0, seconds_transfer = 0.0, seconds_solve = 0.0, seconds_estimate = 0.0;
+    double seconds_estimate_factorize = 0.0, seconds_transposed = 0.0;  // AC11 (the estimate's)
     bool operator==(const AdaptPassRow&) const = default;
 };
 

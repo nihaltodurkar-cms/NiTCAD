@@ -93,6 +93,7 @@ results::AdaptReport deterministic(results::AdaptReport a) {
     a.coarse_seconds = a.verification_seconds = 0.0;
     for (results::AdaptPassRow& p : a.passes) {
         p.seconds_mesh = p.seconds_transfer = p.seconds_solve = p.seconds_estimate = 0.0;
+        p.seconds_estimate_factorize = p.seconds_transposed = 0.0;
         p.predicted_seconds = p.predicted_seconds_nodes = 0.0;
         p.cost_a = p.cost_b = p.cost_c = p.cost_d = 0.0;
         p.cost_mesh_per_node = p.cost_transfer_per_node = p.cost_residual = 0.0;

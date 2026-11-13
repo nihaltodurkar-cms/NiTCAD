@@ -133,7 +133,8 @@ Writer write_pass(const results::AdaptPassRow& p) {
     w.f64s(k::cost, std::vector<double>{p.cost_a, p.cost_b, p.cost_c, p.cost_d, p.cost_mesh_per_node,
                                         p.cost_transfer_per_node, p.cost_residual, p.cost_alpha, p.cost_beta,
                                         p.cost_residual_nodes, static_cast<double>(p.cost_samples)});
-    w.f64s(k::seconds, std::vector<double>{p.seconds_mesh, p.seconds_transfer, p.seconds_solve, p.seconds_estimate});
+    w.f64s(k::seconds, std::vector<double>{p.seconds_mesh, p.seconds_transfer, p.seconds_solve, p.seconds_estimate,
+                                           p.seconds_estimate_factorize, p.seconds_transposed});
     return w;
 }
 
@@ -236,11 +237,13 @@ std::expected<results::AdaptPassRow, base::Error> read_pass(const Reader& r, std
     p.cost_beta = cost[8];
     p.cost_residual_nodes = cost[9];
     p.cost_samples = static_cast<std::uint64_t>(cost[10]);
-    NITCAD_IO_TRY(sec, reals_of(r, k::seconds, 4, "pass times"));
+    NITCAD_IO_TRY(sec, reals_of(r, k::seconds, 6, "pass times"));
     p.seconds_mesh = sec[0];
     p.seconds_transfer = sec[1];
     p.seconds_solve = sec[2];
     p.seconds_estimate = sec[3];
+    p.seconds_estimate_factorize = sec[4];
+    p.seconds_transposed = sec[5];
     return p;
 }
 

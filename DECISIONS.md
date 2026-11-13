@@ -6118,6 +6118,33 @@ plot views, their refusals and a changed pass file (tests/deck/adapt_test.cpp), 
 workspace_test.cpp) and the window (tests/app/analysis_window_test.cpp). Slice 6 is committed as one commit (6a and
 6b), its suites run on both together.
 
+**Slice 7 (gates and cost: AC5, AC8, AC11, AC20, AC12; ARCHITECTURE 6.12.4 and 11.3).**
+
+| # | Question (ruled under the standing instruction "always choose recommended") | Options | Recommendation and ruling |
+|---|---|---|---|
+| AR9 | The tensor MOSFET's reference (AC16's comparison, AC20's on AC5's stand-in, AR6). The 8× uniform reference of slice 5b is not converged. | (a) per-axis ladders, each axis extrapolated, recorded with a 2× guard; (b) a finer uniform ladder (32×: 590 k nodes, hours); (c) keep 8×. | **(a)**, ruled as recommended; no criterion changed. **Measured (Release, 2026-11-13), I_D (A/cm) at Vg 0.5 and 1 V.** Uniform 1×–16× (275–61 985 nodes): 0.13051, 0.13257, 0.13214, 0.12846, 0.12575 and 0.28192, 0.30445, 0.31875, 0.31947, 0.31763: not monotone, because the y error (the inversion layer: 16× is 1.25 nm) and the x error have opposite signs and different orders. Per axis: at kx = 4, ky = 32, 64, 128: 0.122849, 0.122425, 0.122309 and 0.305497, 0.304497, 0.304174 (orders 1.87, 1.63); at ky = 32, kx = 4, 8, 16, 32 (to 246 849 nodes, 14 min): 0.122849, 0.124059, 0.124385, 0.124483 and 0.305497, 0.312421, 0.314917, 0.316039 (orders 1.89 then 1.73; 1.47 then 1.15). The y step 32 → 64 at kx = 8 is within 4% (0.5 V) and 12% (1 V) of that at kx = 4: the errors add. Each axis extrapolated at its last observed order, the y correction scaled to the finer x: **0.12393 (uncertain by about 0.1%) and 0.3153 (about 0.3%: the x order still drifts)**. The 8× values are 3.7% and 1.3% high, which is slice 5b's "certified runs 3% off". The values are recorded in adapt_intelligent_test.cpp (`mosfet_ref`), with the 2× solve (0.1325677205, 0.3044490795) as the guard that the device and the physics are unchanged (as AR4). AC16 now reports its errors against them instead of solving 8× and 4× each run. |
+
+**AC11 (measured 2026-11-13, Release, another 246 k-node solve running beside it; timings re-measured idle at
+close).** The estimate's factorizations of J′ on M′ and its largest transposed solve are timed (`PointAdjoint`,
+`GoalEstimate`, `AdaptPass::seconds_estimate_factorize` and `seconds_transposed`, the report row and `.nitadapt`; both
+excluded from the AD9 comparison as measured seconds). The gate compares one transposed solve against one
+factorization, a lower bound on a Newton iteration's linear solve (which also solves). Tensor MOSFET, adjoint: basic 8
+passes (275 → 5 244 nodes; nnz 7 615 → 150 476; fill 49 890 → 2 671 164; 18–22 Newton iterations per pass), the
+transposed solve 2.2–5.4% of a factorization (0.047 s against 1.32 s on the last pass); verification 21 436 nodes,
+14.9 s against the final pass' 1.6 s. Intelligent 4 passes (663 → 3 090 nodes), the transposed solve 2.5–5.2%;
+verification 12 900 nodes, 5.6 s. Adjoint diode, 14 passes (21 → 143 nodes), 3–13%; not verified (the max_passes stop
+of slice 5b). **Passes** (the AC5 and AC8 rows with their own runs below).
+
+**AC20 on AC5's stand-in (measured 2026-11-13; AR9's reference).** Tolerance 1e-2. Basic: certified at both points,
+actual errors 0.156% and 0.431%; the verified error 0.33 and 0.87 times the actual (p 1.86 and 0.5), the adjoint
+estimate 1.65 and 1.17 times. Intelligent: certified, 0.452% and 0.198%; verified 1.88 and **0.038** times the actual
+(p 0.5 and 2.18), estimate 1.59 and 0.38 times. Each run stopped by a `max_nodes` budget one node above its first pass
+is unverified at both points (errors 5.3–11%). **Passes.** Finding (not a failure, recorded): AD11's verified error
+can underestimate the actual error by a large factor when its observed order is high (2.18 here, where the order
+clamp [0.5, 3] lets it extrapolate the last change down by 2^2.18 − 1 = 3.5 and the change itself is small); the
+certificate held only because the actual error was a fifth of the allowance. AC7's case now also checks that a
+certified result is within its tolerance of AR4's reference.
+
 ---
 
 ### Unit 55 — theoretical calculation validation framework: research and design proposal (proposed 2026-10-31; on `verify/theoretical-validation`)

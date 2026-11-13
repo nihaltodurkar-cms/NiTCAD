@@ -945,6 +945,8 @@ std::expected<AdaptResult, base::Error> adapt(const DeviceBuilder& build, std::s
         std::vector<double> estimate;
         std::vector<double> omega;
         bool fell_back = false;
+        double seconds_factorize = 0.0;
+        double seconds_transposed = 0.0;
         double seconds = 0.0;
     };
     const auto adjoint_part = [&](const AdaptableMesh& m, const MeshRefinement& r,
@@ -963,6 +965,8 @@ std::expected<AdaptResult, base::Error> adapt(const DeviceBuilder& build, std::s
             auto e = estimate_goals(m.device, *loc, s.points[at[a]], out.fine->device, bias, goal_contacts);
             if (!e) return std::unexpected(e.error());
             out.fell_back = out.fell_back || e->fell_back;
+            out.seconds_factorize += e->seconds_factorize;
+            out.seconds_transposed = std::max(out.seconds_transposed, e->seconds_transposed);
             for (std::size_t gi = 0; gi < goal_contacts.size(); ++gi) {
                 out.estimate[gi * at.size() + a] = e->estimate[gi];
                 // Normalized so the semiconductor nodes' weights sum to 1 (AD3).
@@ -1269,6 +1273,8 @@ std::expected<AdaptResult, base::Error> adapt(const DeviceBuilder& build, std::s
             omega = std::move(part->omega);
             rep.estimate = std::move(part->estimate);
             rep.estimate_fell_back = part->fell_back;
+            rep.seconds_estimate_factorize = part->seconds_factorize;
+            rep.seconds_transposed = part->seconds_transposed;
             rep.estimate_nodes = fine_mesh->device.mesh().node_count();
             rep.seconds_estimate = part->seconds;
         }

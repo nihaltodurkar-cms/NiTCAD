@@ -177,6 +177,8 @@ results::AdaptReport adapt_report(const AdaptResult& r, const AdaptOptions& o, c
         row.seconds_transfer = p.seconds_transfer;
         row.seconds_solve = p.seconds_solve;
         row.seconds_estimate = p.seconds_estimate;
+        row.seconds_estimate_factorize = p.seconds_estimate_factorize;
+        row.seconds_transposed = p.seconds_transposed;
         out.passes.push_back(std::move(row));
     }
     bool any_not = false, any_unverified = false;

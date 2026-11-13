@@ -207,6 +207,10 @@ struct AdaptPass {
     std::size_t estimate_nodes = 0;
     double seconds_estimate = 0.0;
     bool estimate_fell_back = false;
+    // AC11: summed over the adaptation points, the estimate's factorizations of J' on M' and its
+    // largest one transposed solve (measured; the transposed solve against one factorization).
+    double seconds_estimate_factorize = 0.0;
+    double seconds_transposed = 0.0;
     Marking marking;                 // the marks this pass made for the next (empty count on the last)
     std::array<std::size_t, indicator_count> nodes_with_excess{};
     int newton_iterations = 0;       // summed over the sweep's points

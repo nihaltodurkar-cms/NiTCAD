@@ -64,6 +64,10 @@ struct PointAdjoint {
     std::vector<std::vector<double>> terminal;   // per goal: y (the terminal current's adjoint)
     double current_scale = 0.0;                  // public units per scaled current
     bool fell_back = false;                      // gmres_ilut: the transposed solve by SparseLU
+    // AC11: the seconds of J's factorization (point_adjoint and estimate_goals; 0 when the caller
+    // factorized) and of the largest one transposed solve over the goals (measured, reported only).
+    double seconds_factorize = 0.0;
+    double seconds_transposed = 0.0;
 };
 
 // Refusals (invalid_input) shared by the adjoint functions and adapt()'s weighting = adjoint: not
@@ -89,6 +93,8 @@ struct GoalEstimate {
     std::vector<double> estimate;                   // per goal: 2 |D|
     std::vector<std::vector<double>> node_weight;   // per goal: per node of M, |sum of its contributions|
     std::vector<double> prolongated_part;           // per goal: G'(u) - G_M (public units)
+    double seconds_factorize = 0.0;                 // AC11: J'(u)'s factorization on M'
+    double seconds_transposed = 0.0;                // AC11: the largest one transposed solve
     bool fell_back = false;
 };
 
