@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
@@ -19,6 +20,7 @@
 #include "NiTCAD/mesh/tensor_cells.hpp"
 #include "NiTCAD/mesh/tensor_grid.hpp"
 #include "NiTCAD/physics/insulator.hpp"
+#include "NiTCAD/solve/adapt_adjoint.hpp"
 #include "values.hpp"
 #include "waveforms.hpp"
 
@@ -113,7 +115,7 @@ struct RegionSpec {
 
 class Builder {
 public:
-    explicit Builder(const Deck& d) : d_(d) {}
+    Builder(const Deck& d, const solve::MeshRefinement* refinement) : d_(d), refine_(refinement) {}
 
     std::expected<Plan, base::Error> run();
 
@@ -227,6 +229,7 @@ private:
                                                           const Plan& plan) const;
     base::Error no_restart(const Entry& e, const Section& s) const;
     std::expected<void, base::Error> outputs(Plan& plan) const;
+    std::expected<void, base::Error> adapt(Plan& plan) const;
     std::expected<Box, base::Error> box(const Entry& e, int dim) const;
 
     const Deck& d_;
@@ -234,13 +237,17 @@ private:
     MeshType type_ = MeshType::tensor;
     std::string type_name_;  // the [mesh] type as written (extrude3d for a file mesh from a complex)
     std::optional<mesh::GeneratedMesh> generated_;
+    // Unit 17: the loop's refinement (null: the deck's mesh) and what [adapt] needs of the mesh.
+    const solve::MeshRefinement* refine_ = nullptr;
+    AdaptPlan mesh_info_;
+    bool swept_ = false;
 };
 
 std::expected<void, base::Error> Builder::check_sections() const {
     static const std::set<std::string_view> once{"device",       "mesh",      "doping",
                                                  "models",       "solver",    "equilibrium",
                                                  "sweep",        "transient", "small_signal",
-                                                 "trace",        "output"};
+                                                 "trace",        "output",    "adapt"};
     static const std::set<std::string_view> many{"region", "contact", "interface",
                                                  "thermal_contact"};
     std::set<std::string> seen;
@@ -416,15 +423,24 @@ std::expected<void, base::Error> Builder::tensor_mesh(const Section& s, device::
         return std::unexpected(at(s.line, "a tensor mesh needs x, then y, then z"));
     }
     const int dim = axes[2] ? 3 : axes[1] ? 2 : 1;
+    // Unit 17: an axis the loop refined is taken whole (its straddles already in it); a straddle's
+    // two lines and the span between them are protected from refinement either way.
+    const auto refined = [&](std::size_t a) { return refine_ != nullptr && !refine_->axes[a].empty(); };
     for (const Entry* e : straddles) {
         const auto which = e->key.substr(9);
         const auto it = std::find(names.begin(), names.begin() + dim, which);
         if (it == names.begin() + dim) return std::unexpected(at(e->line, "straddle on an axis the mesh does not have"));
         NITCAD_DECK_TRY(ps, lengths(*e, e->value, 2));
-        auto& a = *axes[static_cast<std::size_t>(it - names.begin())];
+        const auto k = static_cast<std::size_t>(it - names.begin());
+        mesh_info_.axis_protected[k].push_back({ps[0] - 0.5 * ps[1], ps[0] + 0.5 * ps[1]});
+        if (refined(k)) continue;
+        auto& a = *axes[k];
         auto moved = mesh::straddle_interface(std::move(a), ps[0], ps[1]);
         if (!moved) return std::unexpected(located(e->line, "straddle", std::move(moved.error())));
         a = std::move(*moved);
+    }
+    for (std::size_t k = 0; k < static_cast<std::size_t>(dim); ++k) {
+        if (refined(k)) axes[k] = refine_->axes[k];
     }
     auto m = dim == 1   ? mesh::make_tensor_grid(*axes[0])
              : dim == 2 ? mesh::make_tensor_grid(*axes[0], *axes[1])
@@ -507,6 +523,10 @@ std::expected<void, base::Error> Builder::generated_2d(const Section& s) {
             g.polygons.push_back({std::move(v), static_cast<std::int32_t>(r)});
         }
     }
+    if (refine_ != nullptr) o.size_field = refine_->size_field;
+    mesh_info_.kind = solve::AdaptMeshKind::generated2d;
+    mesh_info_.interface_resolution = o.interface_resolution;
+    mesh_info_.max_size = o.max_size;
     auto m = mesh::generate_mesh(g, o);
     if (!m) return std::unexpected(located(s.line, "[mesh] generate2d", std::move(m.error())));
     generated_ = std::move(*m);
@@ -812,6 +832,18 @@ std::expected<void, base::Error> Builder::extruded_3d(const Section& s) {
         }
     }
     if (sweep) {
+        swept_ = true;
+        mesh_info_.kind = solve::AdaptMeshKind::swept;
+        mesh_info_.sweep_axis = x.axis;
+        for (const mesh::AxisStraddle& st : sw.straddles) {
+            mesh_info_.sweep_protected.push_back({st.station - 0.5 * st.width, st.station + 0.5 * st.width});
+        }
+        mesh_info_.interface_resolution = sw.section.interface_resolution;
+        mesh_info_.max_size = sw.section.max_size;
+        if (refine_ != nullptr) {
+            sw.section.size_field = refine_->size_field;
+            if (!refine_->sweep_lines.empty()) sw.lines = refine_->sweep_lines;
+        }
         auto m = mesh::generate_swept(x, sw);
         if (!m) return std::unexpected(located(s.line, "[mesh] extrude3d (sweep)", std::move(m.error())));
         generated_ = std::move(*m);
@@ -1593,8 +1625,13 @@ std::expected<void, base::Error> Builder::outputs(Plan& plan) const {
                                         : e.key == "table"        ? &plan.outputs.table
                                         : e.key == "transient"    ? &plan.outputs.transient
                                         : e.key == "small_signal" ? &plan.outputs.small_signal
+                                        : e.key == "adapt"        ? &plan.outputs.adapt
+                                        : e.key == "adapt_meshes" ? &plan.outputs.adapt_meshes
                                                                   : nullptr;
         if (!target) return std::unexpected(unknown(e, *s));
+        if ((e.key == "adapt" || e.key == "adapt_meshes") && !plan.adapt) {
+            return std::unexpected(at(e.line, "'" + e.key + "' is written by an [adapt] run; the deck has no [adapt]"));
+        }
         *target = file(e);
     }
     if (plan.analysis == Analysis::equilibrium && (!plan.outputs.sweep.empty() || !plan.outputs.table.empty())) {
@@ -1622,6 +1659,170 @@ std::expected<void, base::Error> Builder::outputs(Plan& plan) const {
         return std::unexpected(at(s->line, "a transient run writes no checkpoint: its end state is not "
                                            "a steady state a sweep can restart from"));
     }
+    return {};
+}
+
+// [adapt] (Unit 17, AD7; DECISIONS.md AR8): the loop's options, checked with the line of the key that
+// is wrong; the loop's own checks (solve::adapt) repeat these without lines.
+std::expected<void, base::Error> Builder::adapt(Plan& plan) const {
+    const Section* s = single("adapt");
+    if (!s) return {};
+    if (plan.analysis != Analysis::sweep) {
+        return std::unexpected(at(s->line, "[adapt] refines the mesh of a [sweep] (one mesh for the sweep); this deck's "
+                                           "analysis is not a sweep"));
+    }
+    if (!plan.restart.empty()) {
+        return std::unexpected(at(s->line, "[adapt] with a restart: the checkpoint belongs to the deck's mesh, not the "
+                                           "adapted one"));
+    }
+    if (type_ == MeshType::generate3d || type_ == MeshType::file || (type_ == MeshType::extrude3d && !swept_)) {
+        return std::unexpected(at(s->line, "[adapt] refines a tensor, generate2d or swept extrude3d (sweep = on) mesh; "
+                                           "a general 3D or file mesh is not adapted in this unit (AQ2)"));
+    }
+    AdaptPlan a = mesh_info_;
+    if (type_ == MeshType::tensor) a.kind = solve::AdaptMeshKind::tensor;
+    solve::AdaptOptions& o = a.options;
+    const Entry* weighting = nullptr;
+    const Entry* mode = nullptr;
+    const Entry* budget_dofs = nullptr;
+    const Entry* budget_seconds = nullptr;
+
+    const Entry* max_points = nullptr;
+    std::set<std::string> seen;
+    for (const Entry& e : s->entries) {
+        if (e.key != "goal" && !seen.insert(e.key).second) return std::unexpected(at(e.line, "a second '" + e.key + "'"));
+        if (e.key == "goal") {
+            const auto w = tokens(e.value);
+            if (w.empty()) return std::unexpected(at(e.line, "a goal is 'current <contact>'"));
+            if (w[0] == "vt" || w[0] == "gm" || w[0] == "swing") {
+                return std::unexpected(at(e.line, "the goal '" + std::string(w[0]) +
+                                                      "' is not adapted in this unit (DECISIONS.md AR8): use 'current <contact>'"));
+            }
+            if (w[0] != "current" || w.size() != 2) {
+                return std::unexpected(at(e.line, "unknown goal '" + e.value + "': a goal is 'current <contact>'"));
+            }
+            NITCAD_DECK_TRY(c, contact_index(e, w[1], plan));
+            const auto kind = plan.device.contacts()[c].kind;
+            if (kind == device::ContactKind::gate || kind == device::ContactKind::electrode) {
+                return std::unexpected(at(e.line, "the goal's contact '" + std::string(w[1]) +
+                                                      "' is a gate or an electrode, which carries no current"));
+            }
+            for (const solve::AdaptGoal& g : o.goals) {
+                if (g.contact == c) return std::unexpected(at(e.line, "a second goal on '" + std::string(w[1]) + "'"));
+            }
+            o.goals.push_back({c});
+        } else if (e.key == "tolerance") {
+            NITCAD_DECK_TRY(v, num(e));
+            if (!(v > 0.0 && v < 1.0)) return std::unexpected(at(e.line, "the tolerance is relative, in (0, 1)"));
+            o.tolerance = v;
+        } else if (e.key == "at") {
+
+            if (e.value == "auto") continue;
+            for (const std::string_view item : items(e.value)) {
+                NITCAD_DECK_TRY(k, lift(e.line, integer(item)));
+                if (k < 0 || static_cast<std::size_t>(k) >= plan.points.size()) {
+                    return std::unexpected(at(e.line, "the adaptation point " + std::to_string(k) + " is not a point of the sweep (0.." +
+                                                          std::to_string(plan.points.size() - 1) + ")"));
+                }
+                o.at.push_back(static_cast<std::size_t>(k));
+            }
+        } else if (e.key == "max_points") {
+            max_points = &e;
+            NITCAD_DECK_TRY(v, count(e, 1, 1000));
+            o.intelligent.max_points = static_cast<std::size_t>(v);
+        } else if (e.key == "indicators") {
+            if (e.value == "auto") continue;
+            o.indicators.enabled.fill(false);
+            for (const std::string_view item : items(e.value)) {
+                std::size_t k = 0;
+                while (k < solve::indicator_count && item != solve::to_string(static_cast<solve::Indicator>(k))) ++k;
+                if (k == solve::indicator_count) {
+                    return std::unexpected(at(e.line, "unknown indicator '" + std::string(item) +
+                                                          "' (potential, electron_density, hole_density, doping, generation)"));
+                }
+                o.indicators.enabled[k] = true;
+            }
+        } else if (e.key == "weighting") {
+            weighting = &e;
+            if (e.value == "adjoint") o.weighting = solve::Weighting::adjoint;
+            else if (e.value != "none") return std::unexpected(at(e.line, "weighting is none or adjoint"));
+        } else if (e.key == "policy") {
+            if (e.value == "intelligent") o.policy = solve::Policy::intelligent;
+            else if (e.value != "basic") return std::unexpected(at(e.line, "policy is basic or intelligent"));
+        } else if (e.key == "mode") {
+            if (e.value != "tolerance" && e.value != "budget") return std::unexpected(at(e.line, "mode is tolerance or budget"));
+            mode = &e;
+        } else if (e.key == "budget_dofs") {
+            budget_dofs = &e;
+            NITCAD_DECK_TRY(v, count(e, 1, std::numeric_limits<int>::max()));
+            o.intelligent.dof_budget = static_cast<std::size_t>(v);
+        } else if (e.key == "budget_seconds") {
+            budget_seconds = &e;
+            NITCAD_DECK_TRY(v, num(e));
+            if (!(v > 0.0 && std::isfinite(v))) return std::unexpected(at(e.line, "budget_seconds must be positive"));
+            o.intelligent.seconds_budget = v;
+        } else if (e.key == "verify") {
+            if (e.value == "off") o.verify = false;
+            else if (e.value != "richardson") return std::unexpected(at(e.line, "verify is richardson or off"));
+        } else if (e.key == "certify") {
+            if (e.value == "required") a.certify_required = true;
+            else if (e.value != "report") return std::unexpected(at(e.line, "certify is report or required"));
+        } else if (e.key == "max_passes") {
+            NITCAD_DECK_TRY(v, count(e, 1, 1000));
+            o.max_passes = v;
+        } else if (e.key == "max_nodes") {
+            NITCAD_DECK_TRY(v, count(e, 1, std::numeric_limits<int>::max()));
+            o.max_nodes = static_cast<std::size_t>(v);
+        } else if (e.key == "min_size") {
+            NITCAD_DECK_TRY(v, len(e));
+            if (!(v > 0.0 && std::isfinite(v))) return std::unexpected(at(e.line, "min_size must be a positive length"));
+            o.min_size = v;
+        } else if (e.key == "grading") {
+            NITCAD_DECK_TRY(v, num(e));
+            if (!(v >= 1.0 && std::isfinite(v))) return std::unexpected(at(e.line, "grading must be >= 1"));
+            o.grading = v;
+        } else if (e.key == "theta") {
+            NITCAD_DECK_TRY(v, num(e));
+            if (!(v > 0.0 && v <= 1.0)) return std::unexpected(at(e.line, "theta must be in (0, 1]"));
+            o.theta = v;
+        } else if (e.key == "predictor") {
+            return std::unexpected(at(e.line, "predictor is Unit 17b's cross-run model, not in this unit"));
+        } else {
+            return std::unexpected(unknown(e, *s));
+        }
+    }
+    if (o.goals.empty()) return std::unexpected(at(s->line, "[adapt] needs at least one 'goal = current <contact>'"));
+    const bool budget = mode != nullptr && mode->value == "budget";
+    if (budget && o.policy != solve::Policy::intelligent) {
+        return std::unexpected(at(mode->line, "mode = budget needs policy = intelligent (the basic loop takes max_nodes)"));
+    }
+    if (budget && budget_dofs == nullptr && budget_seconds == nullptr) {
+        return std::unexpected(at(mode->line, "mode = budget needs budget_dofs or budget_seconds"));
+    }
+    if (!budget && (budget_dofs != nullptr || budget_seconds != nullptr)) {
+        const Entry* e = budget_dofs != nullptr ? budget_dofs : budget_seconds;
+        return std::unexpected(at(e->line, "'" + e->key + "' is for mode = budget"));
+    }
+    // at = auto (or absent): the first and last point, or with the intelligent policy up to
+    // max_points chosen from a coarse sweep (ID3; default 3, AR8).
+    if (o.at.empty() && o.policy == solve::Policy::intelligent && o.intelligent.max_points == 0) o.intelligent.max_points = 3;
+    if (max_points != nullptr && (o.policy != solve::Policy::intelligent || !o.at.empty())) {
+        return std::unexpected(at(max_points->line, "max_points is for at = auto with policy = intelligent"));
+    }
+    if (o.weighting == solve::Weighting::adjoint) {
+        if (auto e = solve::check_adjoint(plan.options)) {
+            e->message = d_.source + ":" + std::to_string(weighting->line) + ": weighting = adjoint: " + e->message;
+            e->context = base::ErrorContext{.index = static_cast<std::size_t>(weighting->line), .value = std::nullopt};
+            return std::unexpected(std::move(*e));
+        }
+        for (const solve::AdaptGoal& g : o.goals) {
+            if (plan.device.contacts()[g.contact].kind != device::ContactKind::ohmic) {
+                return std::unexpected(at(weighting->line, "weighting = adjoint needs ohmic goal contacts; '" +
+                                                               plan.device.contacts()[g.contact].name + "' is not"));
+            }
+        }
+    }
+    plan.adapt = std::move(a);
     return {};
 }
 
@@ -1663,13 +1864,50 @@ std::expected<Plan, base::Error> Builder::run() {
     NITCAD_DECK_CHECK(models(plan.options.models));
     NITCAD_DECK_CHECK(solver(plan));
     NITCAD_DECK_CHECK(analysis(plan));
+    NITCAD_DECK_CHECK(adapt(plan));
     NITCAD_DECK_CHECK(outputs(plan));
     return plan;
 }
 
 }  // namespace
 
-std::expected<Plan, base::Error> build(const Deck& deck) { return Builder(deck).run(); }
+std::expected<Plan, base::Error> build(const Deck& deck) {
+    auto plan = Builder(deck, nullptr).run();
+    if (plan && plan->adapt) plan->adapt->deck = std::make_shared<const Deck>(deck);
+    return plan;
+}
+
+std::expected<Plan, base::Error> build(const Deck& deck, const solve::MeshRefinement& refinement) {
+    return Builder(deck, &refinement).run();
+}
+
+solve::AdaptableMesh adaptable(Plan plan) {
+    solve::AdaptableMesh m{.device = std::move(plan.device)};
+    if (plan.adapt) {
+        const AdaptPlan& a = *plan.adapt;
+        m.kind = a.kind;
+        m.axis_protected = a.axis_protected;
+        m.sweep_axis = a.sweep_axis;
+        m.sweep_protected = a.sweep_protected;
+        m.interface_resolution = a.interface_resolution;
+        m.max_size = a.max_size;
+    }
+    if (plan.generated) {
+        m.section = plan.generated->section;
+        m.generated = std::move(plan.generated);
+    }
+    return m;
+}
+
+solve::DeviceBuilder device_builder(const Plan& plan) {
+    std::shared_ptr<const Deck> deck = plan.adapt ? plan.adapt->deck : nullptr;
+    return [deck](const solve::MeshRefinement& r) -> std::expected<solve::AdaptableMesh, base::Error> {
+        if (!deck) return std::unexpected(base::Error{base::ErrorCode::invalid_input, "the plan has no [adapt]", std::nullopt});
+        auto p = build(*deck, r);
+        if (!p) return std::unexpected(std::move(p.error()));
+        return adaptable(std::move(*p));
+    };
+}
 
 }  // namespace NiTCAD::deck
 

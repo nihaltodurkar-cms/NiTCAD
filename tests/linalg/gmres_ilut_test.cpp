@@ -440,3 +440,21 @@ TEST_CASE("gmres_ilut: a moved solver keeps its preconditioner") {
     REQUIRE(r.has_value());
     REQUIRE(relative_error(x, s.x_exact) <= 1e-7);
 }
+
+TEST_CASE("gmres_ilut: a transposed solve falls back to SparseLU, or is refused without the fallback") {
+    const System s = nonsymmetric(300);
+    const SparseMatrix at = transpose(s.a);
+    std::vector<double> bt(s.b.size()), x(s.b.size());
+    at.multiply(s.x_exact, bt);
+    LinearSolver fallback = make(gmres);
+    REQUIRE(fallback.can_transpose());
+    REQUIRE(fallback.factorize(s.a).has_value());
+    const auto r = fallback.solve_transposed(bt, x);
+    REQUIRE(r.has_value());
+    REQUIRE(r->fell_back);
+    REQUIRE(relative_error(x, s.x_exact) <= 1e-10);
+    LinearSolver refused = make(strict);
+    REQUIRE(!refused.can_transpose());
+    REQUIRE(refused.factorize(s.a).has_value());
+    REQUIRE(refused.solve_transposed(bt, x).error().code == ErrorCode::invalid_input);
+}

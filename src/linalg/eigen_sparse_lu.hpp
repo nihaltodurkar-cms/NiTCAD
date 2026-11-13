@@ -32,6 +32,9 @@ public:
         std::span<const Scalar> csr_values) override;
     // x = A^-1 b with the last factorization. b and x have the analyzed dimension.
     void solve(std::span<const Scalar> b, std::span<Scalar> x) override;
+    [[nodiscard]] bool can_transpose() const noexcept override { return true; }
+    // x = A^-T b through SparseLU's transpose view (the same factors, no refactorization).
+    void solve_transposed(std::span<const Scalar> b, std::span<Scalar> x) override;
 
 private:
     // COLAMD, not AMD on A^T + A: legacy measured AMD as pathological with SparseLU on the coupled

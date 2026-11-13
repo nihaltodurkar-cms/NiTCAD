@@ -760,3 +760,80 @@ TEST_CASE("complex linear solver: the analysis is reused across frequencies") {
     REQUIRE(solver.analyses() == 1);
     REQUIRE(solver.factorizations() == 3);
 }
+
+// --- transposed solve (Unit 17 AQ4: the goal adjoint) ---------------------------------------
+
+TEST_CASE("linear solver: solve_transposed solves A^T x = b with the same factorization") {
+    // The 3x3 above: A^T x = b for x = (1, 2, 3) is b = (2 + 3, 1 + 6, 2 + 12).
+    const SparseMatrix a = from(3, {{0, 0, 2.0}, {0, 1, 1.0}, {1, 1, 3.0}, {1, 2, 1.0},
+                                    {2, 0, 1.0}, {2, 2, 4.0}});
+    const std::array<double, 3> b{5.0, 7.0, 14.0};
+    std::array<double, 3> x{};
+    for (const bool equilibrate : {true, false}) {
+        LinearSolver solver =
+            make_solver({.equilibrate = equilibrate, .min_pivot_ratio = equilibrate ? 1e-11 : 0.0});
+        REQUIRE(solver.factorize(a).has_value());
+        const auto r = solver.solve_transposed(b, x);
+        REQUIRE(r.has_value());
+        REQUIRE(max_abs_diff(x, std::array<double, 3>{1.0, 2.0, 3.0}) <= 1e-14);
+        REQUIRE(solver.factorizations() == 1);
+        REQUIRE(!r->fell_back);
+    }
+    // Larger, nonsymmetric, and badly scaled: factorize B = A^T, then B^T x = b is A x = b, whose
+    // exact solution the fixture knows (and whose scaling matches it: the fixture's x is scaled to
+    // A's columns, so it is no test solution of A^T x = b, whose columns carry A's row scales).
+    for (const System& s : {nonsymmetric(500), badly_scaled_coupled(30)}) {
+        const SparseMatrix at = transpose(s.a);
+        std::vector<double> y(s.b.size());
+        // The pivot test off: A^T's own equilibration leaves the badly scaled system's pivot ratio
+        // below it.
+        LinearSolver solver = make_solver({.min_pivot_ratio = 0.0});
+        REQUIRE(solver.factorize(at).has_value());
+        const auto r = solver.solve_transposed(s.b, y);
+        REQUIRE(r.has_value());
+        REQUIRE(r->backward_error <= 1e-9);  // measured 2.4e-10 on the badly scaled system (A^T, 30x30x3)
+        // Measured 5.3e-10 on the badly scaled system under ctest -j 6 (below 1e-10 alone): the
+        // rounding follows the core's Eigen blocking (Unit 41), within its backward error's bound.
+        REQUIRE(relative_error(y, s.x_exact) <= 1e-8);
+        REQUIRE(solver.factorizations() == 1);
+    }
+    // The plain solve still solves A after a transposed one.
+    {
+        const System s = nonsymmetric(300);
+        std::vector<double> bt(s.b.size()), y(s.b.size());
+        transpose(s.a).multiply(s.x_exact, bt);
+        LinearSolver solver = make_solver();
+        REQUIRE(solver.factorize(s.a).has_value());
+        REQUIRE(solver.solve_transposed(bt, y).has_value());
+        REQUIRE(relative_error(y, s.x_exact) <= 1e-12);
+        REQUIRE(solver.solve(s.b, y).has_value());
+        REQUIRE(relative_error(y, s.x_exact) <= 1e-12);
+    }
+}
+
+TEST_CASE("linear solver: solve_transposed's acceptance is on the transposed system") {
+    const System s = nonsymmetric(200);
+    std::vector<double> x(s.b.size());
+    LinearSolver strict = make_solver({.max_backward_error = 1e-300, .max_refinement_steps = 0});
+    REQUIRE(strict.factorize(s.a).has_value());
+    const auto r = strict.solve_transposed(s.b, x);
+    REQUIRE(!r.has_value());
+    REQUIRE(r.error().code == ErrorCode::inaccurate_solve);
+    std::vector<double> bad = s.b;
+    bad[3] = std::numeric_limits<double>::quiet_NaN();
+    LinearSolver ok = make_solver();
+    REQUIRE(ok.factorize(s.a).has_value());
+    REQUIRE(ok.solve_transposed(bad, x).error().code == ErrorCode::invalid_input);
+}
+
+TEST_CASE("complex linear solver: solve_transposed is the transpose, not the conjugate transpose") {
+    const ComplexSparseMatrix a =
+        complex_from(2, {{0, 0, {1.0, 1.0}}, {0, 1, {2.0, 0.0}}, {1, 1, {0.0, 3.0}}});
+    // A^T = [[1+i, 0], [2, 3i]]; x = (1, i): A^T x = (1+i, 2 - 3).
+    const std::array<Complex, 2> b{Complex{1.0, 1.0}, Complex{-1.0, 0.0}};
+    std::array<Complex, 2> x{};
+    ComplexLinearSolver solver = make_complex_solver();
+    REQUIRE(solver.factorize(a).has_value());
+    REQUIRE(solver.solve_transposed(b, x).has_value());
+    REQUIRE(max_abs_diff(x, std::array<Complex, 2>{Complex{1.0, 0.0}, Complex{0.0, 1.0}}) <= 1e-14);
+}

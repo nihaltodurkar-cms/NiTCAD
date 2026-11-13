@@ -27,6 +27,7 @@
 #include "NiTCAD/analysis/curve.hpp"
 #include "NiTCAD/analysis/dc.hpp"
 #include "NiTCAD/deck/build.hpp"
+#include "NiTCAD/deck/run.hpp"
 #include "NiTCAD/linalg/mkl_runtime.hpp"
 #include "NiTCAD/mesh/mesh.hpp"
 #include "NiTCAD/solve/bias.hpp"
@@ -243,5 +244,119 @@ TEST_CASE("complex FinFET: the two decks' meshes are pinned", "[.fc_digests]") {
         const deck::Plan p = deck_test::must(read_deck(name), NITCAD_DECKS_DIR);
         INFO(name);
         CHECK(mesh::graph_digest(p.device.mesh()) == digest);
+    }
+}
+
+namespace {
+
+// AC8 (Unit 17): the swept deck coarsened (its axis lines about 10 nm apart, the cross-section
+// unstructured at up to 12 nm; the structured frame unchanged), adapted for I_D with [adapt].
+std::string coarse_swept_text(const std::string& mkl, const char* policy) {
+    std::string t = read_deck("finfet_3d_swept.deck");
+    replace_once(t, "lines = linspace(0, 20nm, 3) + linspace(22.5nm, 27.5nm, 3) + linspace(32.5nm, 52.5nm, 9) + ",
+                 "lines = linspace(0, 20nm, 2) + 25nm + linspace(35nm, 50nm, 4) + 60nm + ");
+    replace_once(t, "        linspace(57.5nm, 62.5nm, 3) + linspace(65nm, 85nm, 3)", "        linspace(65nm, 85nm, 2)");
+    replace_once(t, "max_size = 8nm", "max_size = 12nm");
+    replace_once(t, "[solver]\n", "[solver]\n" + pardiso(mkl));
+    t.erase(t.find("[output]"));
+    t += std::string("[adapt]\ngoal = current drain\ntolerance = 1e-2\nweighting = adjoint\npolicy = ") + policy +
+         "\nmax_passes = 8\nmax_nodes = 9367\n";
+    return t;
+}
+
+struct AdaptRun {
+    Run run;
+    results::AdaptReport report;
+};
+
+AdaptRun adapt_run(const std::string& label, const std::string& text) {
+    const auto t0 = std::chrono::steady_clock::now();
+    const deck::Plan p = deck_test::must(text, NITCAD_DECKS_DIR);
+    auto rep = deck::run(p);
+    if (!rep) FAIL(label << ": " << rep.error().message);
+    REQUIRE(rep->adapt.has_value());
+    REQUIRE(rep->adapted.has_value());
+    REQUIRE(rep->sweep.has_value());
+    AdaptRun out;
+    out.report = *rep->adapt;
+    const device::Device& d = rep->adapted->device;
+    out.run.nodes = d.mesh().node_count();
+    out.run.solve_s = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+    out.run.converged = rep->sweep->points.size();
+    out.run.requested = p.points.size();
+    std::size_t gate = 0, drain = 0;
+    for (std::size_t c = 0; c < d.contacts().size(); ++c) {
+        if (d.contacts()[c].name == "gate") gate = c;
+        if (d.contacts()[c].name == "drain") drain = c;
+    }
+    auto c = analysis::current_curve(*rep->sweep, gate, drain);
+    if (!c) FAIL(label << ": " << c.error().message);
+    out.run.transfer = std::move(*c);
+    const auto& a = out.report;
+    for (std::size_t k = 0; k < a.passes.size(); ++k) {
+        const auto& q = a.passes[k];
+        std::printf("AC8 %s pass %zu: %s, nodes %llu DOFs %llu nnz %llu fill %llu newton %lld, relative %.4g; mesh %.3g s, "
+                    "transfer %.3g s, solve %.3g s, estimate %.3g s (factorizations %.3g s, transposed %.3g s)\n",
+                    label.c_str(), k, q.source.c_str(), static_cast<unsigned long long>(q.nodes),
+                    static_cast<unsigned long long>(q.dofs), static_cast<unsigned long long>(q.matrix_nonzeros),
+                    static_cast<unsigned long long>(q.factor_fill), static_cast<long long>(q.newton_iterations),
+                    q.relative_estimate, q.seconds_mesh, q.seconds_transfer, q.seconds_solve, q.seconds_estimate,
+                    q.seconds_estimate_factorize, q.seconds_transposed);
+    }
+    std::printf("AC8 %s: stop %s, status %s, %zu nodes, verification %llu nodes %.3g s, total %.0f s\n", label.c_str(),
+                a.stop.c_str(), a.status.c_str(), out.run.nodes, static_cast<unsigned long long>(a.verification_nodes),
+                a.verification_seconds, out.run.solve_s);
+    std::fflush(stdout);
+    return out;
+}
+
+}  // namespace
+
+// AC8 (Unit 17): a measured target, not a pass/fail gate (stated before the run): UC8's rule at all
+// 17 points within UC8's 9,367-node budget. Gated: every point converges, the budget holds, and
+// (AC20) a certified result is within its tolerance of the 2x tensor reference.
+TEST_CASE("adaptive FinFET: the coarse swept deck adapted for I_D against UC8's rule (AC8)", "[.ac8]") {
+    const std::string mkl = mkl_path();
+    if (mkl.empty()) SKIP("NITCAD_MKL not set");
+    if (auto loaded = linalg::load_mkl_runtime(mkl); !loaded) FAIL(loaded.error().message);
+    const Run tensor = run("AC8 coarse tensor", tensor_text(false, mkl), "gate_top");
+    const Run ref = run("AC8 tensor reference", tensor_text(true, mkl), "gate_top");
+    for (const char* policy : {"basic", "intelligent"}) {
+        const AdaptRun a = adapt_run(std::string("adaptive ") + policy, coarse_swept_text(mkl, policy));
+        CHECK(a.run.converged == a.run.requested);
+        CHECK(a.run.nodes <= 9367);
+        REQUIRE(a.run.transfer.x == ref.transfer.x);
+        std::size_t inside = 0, compared = 0;
+        for (std::size_t k = 0; k < ref.transfer.x.size(); ++k) {
+            const auto above = [k](const Run& r) {
+                return r.transfer.resolution.empty() || std::abs(r.transfer.y[k]) > r.transfer.resolution[k];
+            };
+            if (!above(ref) || !above(tensor) || !above(a.run)) continue;
+            ++compared;
+            const std::string what = std::string("AC8 ") + policy + " I_D at " + std::to_string(ref.transfer.x[k]) + " V";
+            inside += within(what.c_str(), a.run.transfer.y[k], tensor.transfer.y[k], ref.transfer.y[k]) ? 1 : 0;
+        }
+        const auto extract = [](const Run& r, auto f) {
+            const auto e = f(r.transfer);
+            return e ? e->value : std::nan("");
+        };
+        const auto vt = [](const analysis::Curve& c) { return analysis::threshold_max_gm(c, 0.05); };
+        const auto gm = [](const analysis::Curve& c) { return analysis::max_transconductance(c); };
+        const auto ss = [](const analysis::Curve& c) { return analysis::subthreshold_swing(c); };
+        within("AC8 V_T (max g_m) [V]", extract(a.run, vt), extract(tensor, vt), extract(ref, vt));
+        within("AC8 max g_m [A/V]", extract(a.run, gm), extract(tensor, gm), extract(ref, gm));
+        within("AC8 swing [mV/dec]", extract(a.run, ss), extract(tensor, ss), extract(ref, ss));
+        std::printf("AC8 %s: UC8's rule at %zu of %zu points, %zu nodes (budget 9367)\n", policy, inside, compared,
+                    a.run.nodes);
+        for (const auto& c : a.report.certificates) {
+            const double I_ref = ref.transfer.y[c.point];
+            const double actual = std::abs(c.value - I_ref);
+            std::printf("AC8 %s certificate point %llu: %s, value %.6e, reference %.6e, actual %.3g (%.3g%%), allowed %.3g, "
+                        "verified %.3g, estimate %.3g\n",
+                        policy, static_cast<unsigned long long>(c.point), c.status.c_str(), c.value, I_ref, actual,
+                        100 * actual / std::abs(I_ref), c.allowed, c.verified_error, c.estimate);
+            if (c.status == "certified") CHECK(actual <= c.allowed);
+        }
+        std::fflush(stdout);
     }
 }

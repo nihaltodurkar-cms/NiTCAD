@@ -191,6 +191,7 @@ BasicLinearSolver<Scalar>::BasicLinearSolver(BasicLinearSolver&& other) noexcept
       work_x_(std::move(other.work_x_)),
       correction_(std::move(other.correction_)),
       previous_x_(std::move(other.previous_x_)),
+      transposed_abs_(std::move(other.transposed_abs_)),
       gmres_(std::move(other.gmres_)),
       fallback_(std::move(other.fallback_)),
       fallback_analyzed_(std::exchange(other.fallback_analyzed_, false)),
@@ -216,6 +217,7 @@ BasicLinearSolver<Scalar>& BasicLinearSolver<Scalar>::operator=(
         work_x_ = std::move(other.work_x_);
         correction_ = std::move(other.correction_);
         previous_x_ = std::move(other.previous_x_);
+        transposed_abs_ = std::move(other.transposed_abs_);
         gmres_ = std::move(other.gmres_);
         fallback_ = std::move(other.fallback_);
         fallback_analyzed_ = std::exchange(other.fallback_analyzed_, false);
@@ -410,7 +412,8 @@ std::expected<FactorizationReport, base::Error> BasicLinearSolver<Scalar>::check
     }
     return FactorizationReport{
         .pivot_ratio = pivots ? std::optional<double>(pivots->ratio) : std::nullopt,
-        .perturbed_pivots = factorization->perturbed_pivots};
+        .perturbed_pivots = factorization->perturbed_pivots,
+        .fill = factorization->fill};
 }
 
 template <MatrixScalar Scalar>
@@ -436,9 +439,18 @@ std::expected<FactorizationReport, base::Error> BasicLinearSolver<Scalar>::facto
 
 template <MatrixScalar Scalar>
 void BasicLinearSolver<Scalar>::scaled_solve(detail::Backend<Scalar>& backend,
-                                             std::span<const Scalar> rhs, std::span<Scalar> x) {
+                                             std::span<const Scalar> rhs, std::span<Scalar> x,
+                                             bool transposed) {
     if (!config_.equilibrate) {
-        backend.solve(rhs, x);
+        if (transposed) backend.solve_transposed(rhs, x);
+        else backend.solve(rhs, x);
+        return;
+    }
+    if (transposed) {
+        // (R A C)^T y = C b, x = R y.
+        for (std::size_t i = 0; i < rhs.size(); ++i) work_rhs_[i] = rhs[i] * col_scale_[i];
+        backend.solve_transposed(work_rhs_, work_x_);
+        for (std::size_t i = 0; i < x.size(); ++i) x[i] = work_x_[i] * row_scale_[i];
         return;
     }
     for (std::size_t i = 0; i < rhs.size(); ++i) {
@@ -447,6 +459,83 @@ void BasicLinearSolver<Scalar>::scaled_solve(detail::Backend<Scalar>& backend,
     backend.solve(work_rhs_, work_x_);
     for (std::size_t i = 0; i < x.size(); ++i) {
         x[i] = work_x_[i] * col_scale_[i];
+    }
+}
+
+template <MatrixScalar Scalar>
+double BasicLinearSolver<Scalar>::transposed_backward_error(std::span<const Scalar> b,
+                                                            std::span<const Scalar> x) {
+    // backward_error's measure for the system A^T: its rows are A's columns, its column scales
+    // A's row scales, so x is measured in row-equilibrated units and the Arioli-Demmel-Duff bound
+    // of row j of A^T is max_i |a_ij| r_i times that norm.
+    const std::span<const Index> offsets = matrix_.row_offsets();
+    const std::span<const Index> columns = matrix_.col_indices();
+    const std::span<const Scalar> values = matrix_.values();
+    const std::size_t n = b.size();
+    transposed_abs_.assign(n, 0.0);
+    std::vector<double> bound_row(n, 0.0);
+    std::ranges::fill(residual_, Scalar{});
+    double z_norm = 0.0;
+    for (std::size_t i = 0; i < n; ++i) z_norm = std::max(z_norm, std::abs(x[i]) / row_scale_[i]);
+    for (std::size_t i = 0; i < n; ++i) {
+        for (auto k = static_cast<std::size_t>(offsets[i]); k < static_cast<std::size_t>(offsets[i + 1]); ++k) {
+            const auto j = static_cast<std::size_t>(columns[k]);
+            const Scalar term = values[k] * x[i];
+            residual_[j] += term;
+            transposed_abs_[j] += std::abs(term);
+            bound_row[j] = std::max(bound_row[j], std::abs(values[k]) * row_scale_[i]);
+        }
+    }
+    const double rounding = 1000.0 * static_cast<double>(n) * epsilon;
+    double worst = 0.0;
+    for (std::size_t j = 0; j < n; ++j) {
+        const Scalar r = b[j] - residual_[j];
+        residual_[j] = r;
+        const double bound = bound_row[j] * z_norm;
+        double denominator = transposed_abs_[j] + std::abs(b[j]);
+        if (denominator <= rounding * (bound + std::abs(b[j]))) denominator = transposed_abs_[j] + bound;
+        const double row_error = denominator > 0.0 ? std::abs(r) / denominator
+                                 : r == Scalar{}  ? 0.0
+                                                  : std::numeric_limits<double>::infinity();
+        worst = std::isnan(row_error) ? row_error : std::max(worst, row_error);
+        if (std::isnan(worst)) break;
+    }
+    return worst;
+}
+
+template <MatrixScalar Scalar>
+std::expected<SolveReport, base::Error> BasicLinearSolver<Scalar>::solve_transposed(
+    std::span<const Scalar> b, std::span<Scalar> x) {
+    NITCAD_EXPECTS(backend_ != nullptr);
+    NITCAD_EXPECTS(factorized_);
+    NITCAD_EXPECTS(b.size() == static_cast<std::size_t>(matrix_.rows()) && x.size() == b.size());
+    NITCAD_EXPECTS(!overlaps<Scalar>(b, x));
+    if (const std::size_t k = first_non_finite(b); k < b.size()) {
+        return std::unexpected(error(base::ErrorCode::invalid_input,
+                                     "right-hand side contains a non-finite value", k,
+                                     reported(b[k])));
+    }
+    if (!can_transpose()) {
+        return std::unexpected(error(base::ErrorCode::invalid_input,
+                                     "gmres_ilut cannot solve a transposed system without the "
+                                     "sparse_lu fallback",
+                                     std::nullopt));
+    }
+    try {
+        if (gmres_ && !direct_) {
+            if (auto factorization = factorize_fallback(); !factorization) {
+                return std::unexpected(std::move(factorization.error()));
+            }
+        }
+        detail::Backend<Scalar>& backend = direct_ ? *fallback_ : *backend_;
+        auto solved = direct_solve(backend, b, x, true);
+        if (solved && gmres_) {
+            solved->iterations = 0;
+            solved->fell_back = true;
+        }
+        return solved;
+    } catch (const std::bad_alloc&) {
+        return std::unexpected(out_of_memory());
     }
 }
 
@@ -587,30 +676,34 @@ std::expected<SolveReport, base::Error> BasicLinearSolver<Scalar>::iterative_sol
 
 template <MatrixScalar Scalar>
 std::expected<SolveReport, base::Error> BasicLinearSolver<Scalar>::direct_solve(
-    detail::Backend<Scalar>& backend, std::span<const Scalar> b, std::span<Scalar> x) {
+    detail::Backend<Scalar>& backend, std::span<const Scalar> b, std::span<Scalar> x,
+    bool transposed) {
+    const auto measure = [&](std::span<const Scalar> v) {
+        return transposed ? transposed_backward_error(b, v) : backward_error(b, v);
+    };
     double omega = 0.0;
     std::size_t steps = 0;
-    scaled_solve(backend, b, x);
+    scaled_solve(backend, b, x, transposed);
     if (const std::size_t k = first_non_finite<Scalar>(x); k < x.size()) {
         return std::unexpected(error(base::ErrorCode::inaccurate_solve,
                                      "solution contains a non-finite value", k));
     }
-    omega = backward_error(b, x);
+    omega = measure(x);
     for (int attempt = 0;
          !(omega <= config_.max_backward_error) && attempt < config_.max_refinement_steps;
          ++attempt) {
-        scaled_solve(backend, residual_, correction_);
+        scaled_solve(backend, residual_, correction_, transposed);
         std::ranges::copy(x, previous_x_.begin());
         for (std::size_t i = 0; i < x.size(); ++i) {
             x[i] += correction_[i];
         }
         const double refined = first_non_finite<Scalar>(x) < x.size()
                                    ? std::numeric_limits<double>::quiet_NaN()
-                                   : backward_error(b, x);
+                                   : measure(x);
         if (!(refined < omega)) {
             // No progress: keep the better iterate, restore its residual, and stop.
             std::ranges::copy(previous_x_, x.begin());
-            omega = backward_error(b, x);
+            omega = measure(x);
             break;
         }
         omega = refined;

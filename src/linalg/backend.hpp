@@ -23,6 +23,7 @@ struct PivotRatio {
 struct Factorization {
     std::optional<PivotRatio> pivots;              // when the backend reports its pivots
     std::optional<std::size_t> perturbed_pivots;   // when the backend perturbs tiny pivots
+    std::optional<std::size_t> fill;               // nonzeros of the factors L and U, when reported
 };
 
 template <MatrixScalar Scalar>
@@ -37,6 +38,12 @@ public:
         std::span<const Scalar> csr_values) = 0;
     // x = A^-1 b with the last factorization. b and x have the analyzed dimension.
     virtual void solve(std::span<const Scalar> b, std::span<Scalar> x) = 0;
+    // Whether solve_transposed is available (Unit 17 AQ4: the direct backends; an incomplete
+    // factorization is a preconditioner, not a transposable solve).
+    [[nodiscard]] virtual bool can_transpose() const noexcept { return false; }
+    // x = A^-T b with the last factorization (the transpose, not the conjugate transpose, for a
+    // complex A). Requires can_transpose(); b and x have the analyzed dimension.
+    virtual void solve_transposed(std::span<const Scalar> /*b*/, std::span<Scalar> /*x*/) {}
 
     // The backend's own work, counted where it is done (BackendCounts).
     [[nodiscard]] const BackendCounts& counts() const noexcept { return counts_; }

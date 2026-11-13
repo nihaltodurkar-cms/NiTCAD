@@ -353,6 +353,7 @@ struct Generator {
                 h = std::min(h, box.max_size);
             }
         }
+        if (o.size_field) h = std::min(h, o.size_field->at(p));  // Unit 17, AD4
         return h;
     }
 

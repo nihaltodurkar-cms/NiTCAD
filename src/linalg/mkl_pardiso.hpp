@@ -36,6 +36,9 @@ public:
         std::span<const Scalar> csr_values) override;
     // A failed phase 33 leaves x NaN, which BasicLinearSolver reports as inaccurate_solve.
     void solve(std::span<const Scalar> b, std::span<Scalar> x) override;
+    [[nodiscard]] bool can_transpose() const noexcept override { return true; }
+    // Phase 33 with iparm(12) = 2 (A^T x = b, the transpose also for complex), reset after.
+    void solve_transposed(std::span<const Scalar> b, std::span<Scalar> x) override;
 
 private:
     // One PARDISO call with this solver's thread count set thread-locally around it; counts the

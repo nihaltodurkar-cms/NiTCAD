@@ -205,7 +205,8 @@ std::expected<Factorization, base::Error> SparseLuBackend<Scalar>::factorize(
     return Factorization{
         .pivots = PivotRatio{.ratio = largest > 0.0 ? smallest / largest : 0.0,
                              .column = static_cast<std::size_t>(factored_to_original_[smallest_at])},
-        .perturbed_pivots = std::nullopt};
+        .perturbed_pivots = std::nullopt,
+        .fill = static_cast<std::size_t>(lu_->nnzL() + lu_->nnzU())};
 }
 
 template <MatrixScalar Scalar>
@@ -217,6 +218,18 @@ void SparseLuBackend<Scalar>::solve(std::span<const Scalar> b, std::span<Scalar>
     const Eigen::Map<const Vector> bv(b.data(), n);
     Eigen::Map<Vector> xv(x.data(), n);
     xv = lu_->solve(bv);
+    ++this->counts_.solves;
+}
+
+template <MatrixScalar Scalar>
+void SparseLuBackend<Scalar>::solve_transposed(std::span<const Scalar> b, std::span<Scalar> x) {
+    NITCAD_EXPECTS(lu_.has_value());
+    const auto n = static_cast<Eigen::Index>(csc_.rows());
+    NITCAD_EXPECTS(b.size() == static_cast<std::size_t>(n) && x.size() == b.size());
+    using Vector = Eigen::Matrix<Scalar, Eigen::Dynamic, 1>;
+    const Eigen::Map<const Vector> bv(b.data(), n);
+    Eigen::Map<Vector> xv(x.data(), n);
+    xv = lu_->transpose().solve(bv);
     ++this->counts_.solves;
 }
 

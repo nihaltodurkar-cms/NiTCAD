@@ -12,7 +12,9 @@
 //
 // Exit status: 0 done; 1 the deck, the run or the plot failed (the message on stderr); 2 a sweep,
 // trace, transient or small-signal run stopped early (its completed part and outputs are written;
-// the reason on stderr; Unit 43 for the last three); 64 usage.
+// the reason on stderr; Unit 43 for the last three); 3 an [adapt] run with certify = required
+// whose result is not certified (Unit 17, AD13: its outputs are written, the certificates printed);
+// 64 usage.
 // Ctrl+C or Ctrl+Break asks the run to stop: the solver stops at its next check and the completed
 // points are written, as for any early stop.
 #include <windows.h>
@@ -165,6 +167,37 @@ void describe(const NiTCAD::deck::Plan& plan) {
                     plan.trace.end_V);
         break;
     }
+    if (plan.adapt) {
+        const auto& o = plan.adapt->options;
+        std::string goals;
+        for (const auto& g : o.goals) goals += (goals.empty() ? "" : ", ") + d.contacts()[g.contact].name;
+        std::printf("adapt: current of %s to %g (relative), policy %s, weighting %s, verify %s, certify %s, "
+                    "at most %d passes\n",
+                    goals.c_str(), o.tolerance, NiTCAD::solve::to_string(o.policy),
+                    o.weighting == NiTCAD::solve::Weighting::adjoint ? "adjoint" : "none", o.verify ? "richardson" : "off",
+                    plan.adapt->certify_required ? "required" : "report", o.max_passes);
+    }
+}
+
+// An adaptive run's passes and certificates (Unit 17, AD8, AD13).
+void print_adapt(const NiTCAD::results::AdaptReport& a) {
+    for (std::size_t k = 0; k < a.passes.size(); ++k) {
+        const auto& p = a.passes[k];
+        std::printf("pass %zu (%s): %llu nodes, %llu DOFs, relative estimate %.3g, %llu marked, %.3f s\n", k,
+                    p.source.c_str(), static_cast<unsigned long long>(p.nodes), static_cast<unsigned long long>(p.dofs),
+                    p.relative_estimate, static_cast<unsigned long long>(p.marked),
+                    p.seconds_mesh + p.seconds_transfer + p.seconds_solve + p.seconds_estimate);
+    }
+    std::printf("adapt: stopped (%s), policy %s, fallback %s; verification on %llu nodes, %.3f s\n", a.stop.c_str(),
+                a.policy.c_str(), a.fallback.c_str(), static_cast<unsigned long long>(a.verification_nodes),
+                a.verification_seconds);
+    for (const auto& c : a.certificates) {
+        std::printf("certificate: current of %s at point %llu: %.10g A, estimate %.3g, verified error %.3g "
+                    "(order %.2f), allowed %.3g: %s\n",
+                    a.goal_contacts[c.goal].c_str(), static_cast<unsigned long long>(c.point), c.value, c.estimate,
+                    c.verified_error, c.order, c.allowed, c.status.c_str());
+    }
+    std::printf("adapt: %s (an estimate and an independent Richardson check, not a proof)\n", a.status.c_str());
 }
 
 }  // namespace
@@ -213,6 +246,7 @@ int main(int argc, char** argv) {
     if (report->skipped_points > 0) {
         std::printf("restart: %zu point(s) already done\n", report->skipped_points);
     }
+    if (report->adapt) print_adapt(*report->adapt);
     for (const auto& p : report->written) std::printf("wrote %s\n", p.string().c_str());
     // A sweep's own record; an equilibrium run has none, so the provenance of now, without a
     // wall time.
@@ -240,6 +274,11 @@ int main(int argc, char** argv) {
                      report->small_signal->points.size(), plan->points.size(),
                      report->small_signal->stopped->message.c_str());
         return 2;
+    }
+    if (report->adapt && report->adapt->certify_required && report->adapt->status != "certified") {
+        std::fprintf(stderr, "nitcad: the adaptive result is %s; the deck requires it certified (certify = required)\n",
+                     report->adapt->status.c_str());
+        return 3;
     }
     return 0;
 }

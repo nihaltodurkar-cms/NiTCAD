@@ -4,6 +4,7 @@
 #include <commctrl.h>
 
 #include <algorithm>
+#include <cmath>
 #include <format>
 #include <variant>
 
@@ -346,6 +347,20 @@ ResultsPage::ResultsPage(HWND parent, int id) {
     add_column(record_, 0, L"Item", 200);
     add_column(record_, 1, L"Value", 420);
     add_column(record_, 2, L"Run B", 420);
+    // Unit 17 (AD8): an adaptive run's passes, hidden for any other run.
+    passes_label_ = make(L"STATIC", L"Adaptation passes (double-click: show that pass's mesh)", 0, panel_, 0);
+    passes_ = make(WC_LISTVIEWW, L"", WS_TABSTOP | LVS_REPORT | LVS_SHOWSELALWAYS | LVS_SINGLESEL, panel_, 12, WS_EX_CLIENTEDGE);
+    SendMessageW(passes_, LVM_SETEXTENDEDLISTVIEWSTYLE, 0, LVS_EX_FULLROWSELECT);
+    add_column(passes_, 0, L"Pass", 60);
+    add_column(passes_, 1, L"Mesh", 100);
+    add_column(passes_, 2, L"Nodes", 80);
+    add_column(passes_, 3, L"DOFs", 80);
+    add_column(passes_, 4, L"Estimate / allowed", 130);
+    add_column(passes_, 5, L"Marked", 80);
+    add_column(passes_, 6, L"Seconds", 80);
+    add_column(passes_, 7, L"Notes", 200);
+    ShowWindow(passes_label_, SW_HIDE);
+    ShowWindow(passes_, SW_HIDE);
 }
 
 ResultsPage::~ResultsPage() {
@@ -358,6 +373,30 @@ ResultsPage::~ResultsPage() {
 void ResultsPage::show(const Workspace* w, const Workspace* b) {
     SendMessageW(figures_, LVM_DELETEALLITEMS, 0, 0);
     SendMessageW(record_, LVM_DELETEALLITEMS, 0, 0);
+    SendMessageW(passes_, LVM_DELETEALLITEMS, 0, 0);
+    const bool passes = w && w->adapt && !w->adapt->passes.empty();
+    if (passes != has_passes_) {
+        has_passes_ = passes;
+        ShowWindow(passes_label_, passes ? SW_SHOW : SW_HIDE);
+        ShowWindow(passes_, passes ? SW_SHOW : SW_HIDE);
+        layout();
+    }
+    if (passes) {
+        const std::size_t shown = w->pass.value_or(w->adapt->passes.size() - 1);
+        for (std::size_t k = 0; k < w->adapt->passes.size(); ++k) {
+            const results::AdaptPassRow& p = w->adapt->passes[k];
+            std::string notes;
+            const auto note = [&](const char* s) { notes += std::string(notes.empty() ? "" : ", ") + s; };
+            if (k == shown) note("shown");
+            if (k + 1 == w->adapt->passes.size()) note("final: the results' mesh");
+            if (p.rejected) note("stop rejected");
+            if (p.miss) note("miss");
+            const double seconds = p.seconds_mesh + p.seconds_transfer + p.seconds_solve + p.seconds_estimate;
+            add_row(passes_, {std::to_string(k), p.source, std::to_string(p.nodes), std::to_string(p.dofs),
+                              std::isfinite(p.relative_estimate) ? std::format("{:.4g}", p.relative_estimate) : std::string("-"),
+                              std::to_string(p.marked), std::format("{:.3g}", seconds), notes});
+        }
+    }
     if (!w) return;
     const std::vector<FigureShift> shifts = b ? figure_shifts(*w, *b) : std::vector<FigureShift>{};
     for (const Figure& f : extracted_figures(*w)) {
@@ -380,7 +419,7 @@ void ResultsPage::show(const Workspace* w, const Workspace* b) {
 void ResultsPage::set_dpi(int dpi, HFONT font, HFONT bold) {
     dpi_ = dpi;
     set_font(panel_, font);
-    for (HWND h : {figures_label_, record_label_}) SendMessageW(h, WM_SETFONT, reinterpret_cast<WPARAM>(bold), TRUE);
+    for (HWND h : {figures_label_, record_label_, passes_label_}) SendMessageW(h, WM_SETFONT, reinterpret_cast<WPARAM>(bold), TRUE);
     layout();
 }
 
@@ -388,15 +427,26 @@ int ResultsPage::figure_count() const { return static_cast<int>(SendMessageW(fig
 int ResultsPage::record_count() const { return static_cast<int>(SendMessageW(record_, LVM_GETITEMCOUNT, 0, 0)); }
 std::wstring ResultsPage::figure_cell(int row, int column) const { return list_cell(figures_, row, column); }
 std::wstring ResultsPage::record_cell(int row, int column) const { return list_cell(record_, row, column); }
+int ResultsPage::pass_count() const { return static_cast<int>(SendMessageW(passes_, LVM_GETITEMCOUNT, 0, 0)); }
+std::wstring ResultsPage::pass_cell(int row, int column) const { return list_cell(passes_, row, column); }
 
 void ResultsPage::layout() {
     RECT r{};
     GetClientRect(panel_, &r);
     const int pad = scaled(8, dpi_), row = scaled(24, dpi_);
     const int h = std::max<int>((r.bottom - 3 * pad - 2 * row) / 2, 0);
-    MoveWindow(figures_label_, pad, pad, std::max<int>(r.right - 2 * pad, 0), row, TRUE);
-    MoveWindow(figures_, pad, pad + row, std::max<int>(r.right - 2 * pad, 0), std::max(h * 2 / 3, 0), TRUE);
-    const int y = pad + row + h * 2 / 3 + pad;
+    const int width = std::max<int>(r.right - 2 * pad, 0);
+    // With an adaptive run's passes, the figures' height is shared with them.
+    const int figures_h = has_passes_ ? std::max(h / 3, 0) : std::max(h * 2 / 3, 0);
+    MoveWindow(figures_label_, pad, pad, width, row, TRUE);
+    MoveWindow(figures_, pad, pad + row, width, figures_h, TRUE);
+    int y = pad + row + figures_h + pad;
+    if (has_passes_) {
+        const int passes_h = std::max(h * 2 / 3, 0);
+        MoveWindow(passes_label_, pad, y, width, row, TRUE);
+        MoveWindow(passes_, pad, y + row, width, passes_h, TRUE);
+        y += row + passes_h + pad;
+    }
     MoveWindow(record_label_, pad, y, std::max<int>(r.right - 2 * pad, 0), row, TRUE);
     MoveWindow(record_, pad, y + row, std::max<int>(r.right - 2 * pad, 0), std::max<int>(r.bottom - y - row - pad, 0), TRUE);
 }
@@ -410,6 +460,14 @@ LRESULT CALLBACK ResultsPage::proc(HWND hwnd, UINT message, WPARAM w, LPARAM l) 
     if (self && message == WM_CTLCOLORSTATIC) {
         SetBkMode(reinterpret_cast<HDC>(w), TRANSPARENT);
         return reinterpret_cast<LRESULT>(GetSysColorBrush(COLOR_WINDOW));
+    }
+    if (self && message == WM_NOTIFY) {
+        const auto* n = reinterpret_cast<const NMHDR*>(l);
+        if (n->hwndFrom == self->passes_ && (n->code == NM_DBLCLK || n->code == LVN_ITEMACTIVATE)) {
+            const int k = static_cast<int>(SendMessageW(self->passes_, LVM_GETNEXTITEM, static_cast<WPARAM>(-1), LVNI_SELECTED));
+            if (k >= 0 && self->on_pass) self->on_pass(static_cast<std::size_t>(k));
+            return 0;
+        }
     }
     return DefWindowProcW(hwnd, message, w, l);
 }

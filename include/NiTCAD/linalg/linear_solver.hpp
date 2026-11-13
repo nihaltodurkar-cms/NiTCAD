@@ -138,6 +138,10 @@ struct FactorizationReport {
     std::optional<double> pivot_ratio;
     // Pivots the backend perturbed instead of failing (mkl_pardiso); empty for eigen_sparse_lu.
     std::optional<std::size_t> perturbed_pivots;
+    // Nonzeros of the factors L and U (Unit 17 ID5's cost model): eigen_sparse_lu's nnzL + nnzU,
+    // mkl_pardiso's iparm[17], gmres_ilut's preconditioner factors (or, once fallen back, the SparseLU
+    // fallback's). Empty when the backend does not report it.
+    std::optional<std::size_t> fill;
 };
 
 // The backend's own work since the solver was created: symbolic analyses (an ordering and symbolic
@@ -207,6 +211,20 @@ public:
     // overlapping. On failure x holds no meaningful result.
     [[nodiscard]] std::expected<SolveReport, base::Error> solve(std::span<const Scalar> b,
                                                                 std::span<Scalar> x);
+    // Solves A^T x = b with the last factorization (the transpose, also for a complex A; Unit 17
+    // AQ4, the goal adjoint), with solve()'s checks, refinement and acceptance applied to the
+    // transposed system (its componentwise backward error). Equilibrated as R A C, it is solved as
+    // (R A C)^T y = C b, x = R y. gmres_ilut: an incomplete factorization is not a transposable
+    // solve, so the system is solved by the SparseLU fallback (fell_back, and this factorization is
+    // solved directly from then on, as after a GMRES failure), or is invalid_input when fallback is
+    // none (can_transpose()). Preconditions as solve()'s.
+    [[nodiscard]] std::expected<SolveReport, base::Error> solve_transposed(std::span<const Scalar> b,
+                                                                           std::span<Scalar> x);
+    // Whether solve_transposed can succeed with this configuration: false only for gmres_ilut
+    // with fallback none.
+    [[nodiscard]] bool can_transpose() const noexcept {
+        return config_.backend != SolverBackend::gmres_ilut || config_.fallback != LinearFallback::none;
+    }
 
     [[nodiscard]] bool is_analyzed() const noexcept { return analyzed_; }
     [[nodiscard]] bool is_factorized() const noexcept { return factorized_; }
@@ -231,17 +249,21 @@ private:
     // pattern is new to it, with the direct checks; on success later solves are direct.
     [[nodiscard]] std::expected<FactorizationReport, base::Error> factorize_fallback();
     // A direct solve with refinement through backend; x, omega and steps as solve() reports them.
+    // transposed: of A^T (solve_transposed).
     [[nodiscard]] std::expected<SolveReport, base::Error> direct_solve(detail::Backend<Scalar>& backend,
                                                                      std::span<const Scalar> b,
-                                                                     std::span<Scalar> x);
+                                                                     std::span<Scalar> x,
+                                                                     bool transposed = false);
     // gmres_ilut: GMRES on the equilibrated system, then the fallback as configured.
     [[nodiscard]] std::expected<SolveReport, base::Error> iterative_solve(std::span<const Scalar> b,
                                                                         std::span<Scalar> x);
     // Solves the equilibrated system for right-hand side rhs into x (unscaled) through backend.
     void scaled_solve(detail::Backend<Scalar>& backend, std::span<const Scalar> rhs,
-                      std::span<Scalar> x);
+                      std::span<Scalar> x, bool transposed = false);
     // Componentwise backward error of x on the original system; fills residual_ with b - A x.
     [[nodiscard]] double backward_error(std::span<const Scalar> b, std::span<const Scalar> x);
+    // The same for A^T x = b; fills residual_ with b - A^T x.
+    [[nodiscard]] double transposed_backward_error(std::span<const Scalar> b, std::span<const Scalar> x);
     void reset() noexcept;
 
     SolverConfig config_;
@@ -258,6 +280,7 @@ private:
     std::vector<Scalar> work_x_;
     std::vector<Scalar> correction_;
     std::vector<Scalar> previous_x_;
+    std::vector<double> transposed_abs_;  // |A^T| |x| per row of A^T (transposed_backward_error)
     // gmres_ilut only: the GMRES workspace, and the SparseLU fallback (created at its first use).
     std::unique_ptr<detail::Gmres<Scalar>> gmres_;
     std::unique_ptr<detail::Backend<Scalar>> fallback_;

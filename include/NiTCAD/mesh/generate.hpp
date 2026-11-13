@@ -38,6 +38,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <expected>
+#include <memory>
 #include <optional>
 #include <string>
 #include <vector>
@@ -47,6 +48,7 @@
 #include "NiTCAD/mesh/interfaces.hpp"
 #include "NiTCAD/mesh/mesh.hpp"
 #include "NiTCAD/mesh/simplex_mesh.hpp"
+#include "NiTCAD/mesh/size_field.hpp"
 
 namespace NiTCAD::mesh {
 
@@ -133,6 +135,10 @@ struct MeshOptions2D {
     double interface_resolution = 0.0;    // s [cm]; required when there are interfaces
     double min_angle_deg = 20.7;          // in (0, 33.8]
     std::size_t max_nodes = 2'000'000;
+    // Adaptive refinement (Unit 17, AD4): a nodal size on a background triangulation; the size at
+    // a point is the smallest of the above and the field's (size_field.hpp). Null: no field, and
+    // the mesh is bit-identical to one generated without it (AD10).
+    std::shared_ptr<const SizeField> size_field;
 };
 
 struct MeshReport {
@@ -167,6 +173,10 @@ struct GeneratedMesh {
     MeshReport report;
     // generation_digest of the complex and options (Unit 53, FD14); 0 for the other generators.
     std::uint64_t generation_digest = 0;
+    // A swept mesh's cross-section (Unit 17, AD4: its size field lives there): the 2D generator's
+    // simplices, node p of line j being node j * points + p of the result. Empty for the others;
+    // not saved in mesh files.
+    std::optional<SimplexMesh> section;
 };
 
 // Errors: invalid_input (the geometry or option rules above); resource_exhausted (max_nodes

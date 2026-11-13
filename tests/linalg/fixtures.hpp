@@ -9,6 +9,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <span>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -188,5 +189,17 @@ inline ComplexSparseMatrix ac_matrix(const SparseMatrix& g, const std::vector<do
     return complex_from(g.rows(), t);
 }
 
+// A^T, explicitly (for the transposed solve's tests).
+template <class Matrix>
+Matrix transpose(const Matrix& a) {
+    using Scalar = std::remove_cvref_t<decltype(a.values()[0])>;
+    std::vector<BasicTriplet<Scalar>> t;
+    for (Index r = 0; r < a.rows(); ++r) {
+        for (Index k = a.row_offsets()[r]; k < a.row_offsets()[r + 1]; ++k) {
+            t.push_back({a.col_indices()[k], r, a.values()[k]});
+        }
+    }
+    return Matrix::from_triplets(a.cols(), a.rows(), t).value();
+}
 
 }  // namespace fixtures

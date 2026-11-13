@@ -195,6 +195,7 @@ bool MainWindow::create_children() {
     start_ = std::make_unique<StartPage>(hwnd_, *this, id_start);
     run_page_ = std::make_unique<RunPage>(hwnd_, *this, id_run_page);
     results_ = std::make_unique<ResultsPage>(hwnd_, id_results);
+    results_->on_pass = [this](std::size_t k) { results_show_pass(k); };
     metrics_ = make(L"STATIC", L"", WS_VISIBLE | SS_LEFTNOWORDWRAP | SS_CENTERIMAGE, hwnd_, id_metrics);
     inspector_ = CreateWindowExW(WS_EX_CONTROLPARENT, panel_class, L"", WS_CHILD | WS_VISIBLE | WS_CLIPCHILDREN, 0, 0,
                                  10, 10, hwnd_, reinterpret_cast<HMENU>(static_cast<INT_PTR>(id_inspector)),
@@ -659,9 +660,40 @@ void MainWindow::default_settings() {
     }
 }
 
+bool MainWindow::results_show_pass(std::size_t k) {
+    if (!workspace_ || !workspace_->adapt || k >= workspace_->adapt->passes.size()) return false;
+    const std::size_t last = workspace_->adapt->passes.size() - 1;
+    const auto shown = [&] {
+        if (workspace_->device->mesh().dimension() >= 2) device_view_.kind = ViewKind::mesh;
+        select_tab(tab_view);
+        refresh();
+        return true;
+    };
+    if (workspace_->pass == k || (k == last && !workspace_->pass)) return shown();
+    if (k == last && adapt_result_) {
+        // The final mesh: the results, back.
+        Workspace r = std::move(*adapt_result_);
+        adapt_result_.reset();
+        set_workspace(std::move(r), true);
+        return shown();
+    }
+    auto p = workspace_of_pass(adapt_result_ ? *adapt_result_ : *workspace_, k);
+    if (!p) {
+        set_status(status_state, p.error().message);
+        return false;
+    }
+    if (!workspace_->pass) {
+        adapt_result_ = std::move(*workspace_);
+        workspace_.reset();
+    }
+    set_workspace(std::move(*p), true);
+    return shown();
+}
+
 void MainWindow::set_workspace(Workspace w, bool keep_settings) {
     play(false);  // YD5: a new workspace stops playback; its film is fitted again
     film_key_.clear();
+    if (!w.pass) adapt_result_.reset();  // a pass's mesh is shown only beside its own results
     // The results a run (or the structure preview) of the same deck replaces: the previous run (XD6).
     if (workspace_ && workspace_->has_results() && workspace_->source == w.source) previous_ = std::move(*workspace_);
     workspace_ = std::move(w);

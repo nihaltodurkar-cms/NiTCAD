@@ -524,8 +524,9 @@ std::expected<GeneratedMesh, base::Error> generate_swept(const ExtrudedGeometry&
         }
         certificate = std::move(*cert);
     }
-    return GeneratedMesh{std::move(*dual), std::move(sm), std::move(node_region), std::move(certificate), report,
-                         generation_digest(x, options)};
+    return GeneratedMesh{std::move(*dual),        std::move(sm), std::move(node_region), std::move(certificate),
+                         report,                  generation_digest(x, options),
+                         std::move(m2->simplices)};
 }
 
 std::uint64_t generation_digest(const ExtrudedGeometry& x, const SweptOptions& options) {
@@ -601,6 +602,11 @@ std::uint64_t generation_digest(const ExtrudedGeometry& x, const SweptOptions& o
         real(st.width);
     }
     word(options.max_nodes);
+    // Unit 17 (AD4, AD10): a cross-section size field, when given; nothing is added without one.
+    if (s.size_field) {
+        word(0x53495a45464cULL);
+        word(s.size_field->digest());
+    }
     return h;
 }
 

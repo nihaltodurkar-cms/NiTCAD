@@ -78,7 +78,9 @@ std::expected<Factorization, base::Error> IlutBackend<Scalar>::factorize(
         }
     }
     built_ = true;
-    return Factorization{.pivots = std::nullopt, .perturbed_pivots = std::nullopt};
+    return Factorization{.pivots = std::nullopt,
+                         .perturbed_pivots = std::nullopt,
+                         .fill = static_cast<std::size_t>(factors.nonZeros())};
 }
 
 template <MatrixScalar Scalar>

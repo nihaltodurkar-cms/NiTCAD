@@ -1,0 +1,375 @@
+// The adaptive refinement loop (Unit 17, slice 3; DECISIONS.md Unit 17 AD1, AD4-AD6, AD9, AD11,
+// AD13; AQ1-AQ3).
+//
+// adapt() solves the analysis (a bias sweep, one mesh for the whole sweep, AQ3) on the device the
+// builder makes from the deck's mesh, then repeats: indicators at the adaptation points (AD2),
+// united, marked (AD3), a refinement of the mesh (AD4: a graded size field for a generated 2D mesh
+// and a swept mesh's cross-section, midpoint lines for tensor axes and the swept axis), the device
+// rebuilt by the builder with it (AQ1: regenerated, so every certificate comes from the generators'
+// checked path), the previous state transferred as Newton's initial state (AD5), and the sweep
+// solved again. The physics, the solver and the analysis are not changed: the builder and the
+// sweep are passed in (AD1).
+//
+// Goals (AD6): terminal currents of named contacts at the adaptation points (the weighted current,
+// Unit 32, when the options compute it; else the terminal current). The loop proposes to stop when
+// every goal's change from the previous pass is within tolerance, |G_k - G_k-1| <= tol max(|G_k|,
+// r) with r the point's current resolution, and otherwise ends at max_passes, max_nodes (the next
+// mesh would exceed it; the current one is kept) or when nothing is marked. The estimate of a goal
+// is its last change with `weighting = none` (feature-only marks, w = 1). With `weighting =
+// adjoint` (slice 4; adapt_adjoint.hpp, DECISIONS.md AR3) every pass builds M' (AD11's mesh), and
+// per adaptation point computes the adjoint estimate 2 |D| on it and the dual-weighted residual's
+// node weights: the stop then also needs every estimate within tolerance (AD6), the marks are
+// e_i w_i with w the normalized weights (the largest over goals and points; AD3), and AD11 reuses
+// that M'.
+//
+// Verification (AD11): after a proposed stop, the final mesh M is refined uniformly once (every
+// size halved, every tensor and swept-axis interval outside the straddles split) to M', the sweep
+// solved on M' from the transferred state, and the verified error is |G_M' - G_M| / (2^p - 1), p
+// the order observed from the last two passes and M' (log2 of the ratio of the changes, clamped to
+// [0.5, 3]) when the loop made at least two passes, else 1. It reads no indicator, weight or
+// prediction. The result stays on M. A stop is accepted only when, for every goal, the estimate and
+// the verified error are both within tol max(|G|, r); a rejected stop (DECISIONS.md AR2) is recorded
+// and the loop goes on refining (by its marks, or to M' when nothing is marked) within max_passes
+// and max_nodes. Two consecutive small changes can be stagnation, not convergence: this is the
+// guard.
+//
+// The certificate (AD13), per goal and adaptation point, from the final mesh's verification:
+// certified when the estimate and the verified error are both within tol max(|G|, r); not certified
+// when either exceeds it (a stop rejected at the last pass, or a budget stop right after one);
+// unverified when the final mesh was not verified (verification off, or a budget stop: max_passes,
+// max_nodes, nothing marked).
+//
+// Determinism (AD9): every step is deterministic, so two runs on one machine and thread count are
+// bit-identical.
+#pragma once
+
+#include <array>
+#include <cstddef>
+#include <cstdint>
+#include <expected>
+#include <functional>
+#include <limits>
+#include <memory>
+#include <optional>
+#include <span>
+#include <string>
+#include <utility>
+#include <vector>
+
+#include "NiTCAD/base/error.hpp"
+#include "NiTCAD/device/device.hpp"
+#include "NiTCAD/mesh/generate.hpp"
+#include "NiTCAD/mesh/size_field.hpp"
+#include "NiTCAD/results/adapt.hpp"
+#include "NiTCAD/results/run.hpp"
+#include "NiTCAD/solve/adapt_indicators.hpp"
+#include "NiTCAD/solve/adapt_policy.hpp"
+#include "NiTCAD/solve/adapt_transfer.hpp"
+#include "NiTCAD/solve/bias.hpp"
+#include "NiTCAD/solve/control.hpp"
+
+namespace NiTCAD::solve {
+
+// What the builder is asked for, relative to the deck's own mesh; empty members leave it as given.
+struct MeshRefinement {
+    std::shared_ptr<const mesh::SizeField> size_field;  // generated 2D, or a swept mesh's cross-section
+    std::array<std::vector<double>, 3> axes;            // tensor: the whole axes, straddles included
+    std::vector<double> sweep_lines;                    // swept: the given lines (the straddles' added by the generator)
+};
+
+enum class AdaptMeshKind : unsigned char { tensor, generated2d, swept };
+
+// A device as the builder made it, with what the loop needs to refine its mesh.
+struct AdaptableMesh {
+    device::Device device;
+    AdaptMeshKind kind = AdaptMeshKind::tensor;
+    std::optional<mesh::GeneratedMesh> generated;  // generated 2D and swept
+    std::optional<mesh::SimplexMesh> section;      // swept: the cross-section's 2D mesh
+    std::array<std::vector<mesh::AxisRange>, 3> axis_protected;  // tensor: the straddles per axis
+    int sweep_axis = 2;                                 // swept: the axis (0, 1, 2)
+    std::vector<mesh::AxisRange> sweep_protected;       // swept: the straddles along the axis
+    double interface_resolution = 0.0;                  // generated 2D and swept: s (0 without interfaces)
+    double max_size = 0.0;                              // generated 2D and swept: the deck's h
+};
+
+using DeviceBuilder = std::function<std::expected<AdaptableMesh, base::Error>(const MeshRefinement&)>;
+
+struct AdaptGoal {
+    std::size_t contact = 0;  // a terminal current, device contact order
+};
+
+enum class Weighting : unsigned char { none, adjoint };
+
+struct AdaptOptions {
+    std::vector<AdaptGoal> goals;           // at least one
+    double tolerance = 1e-3;                // relative, in (0, 1)
+    std::vector<std::size_t> at;            // adaptation points, indices into the sweep; empty: its first and last
+    IndicatorOptions indicators;
+    Weighting weighting = Weighting::none;  // adjoint: AD3's weights and AD6's estimate (AR3)
+    double theta = 0.3;                     // AD3
+    double grading = 1.5;                   // AD4, g >= 1
+    double min_size = 0.0;                  // cm; 0: s / 4 with interfaces, else h / 64 (axes: per axis, see adapt.cpp)
+    int max_passes = 6;                     // solves on adapted meshes, the first mesh included; >= 1
+    std::size_t max_nodes = 0;              // 0: no limit
+    bool verify = true;                     // AD11
+    Policy policy = Policy::basic;          // the decision layer (adapt_policy.hpp); basic: AD3 alone
+    PolicyOptions intelligent;              // read only with policy = intelligent
+    // Called with each pass's mesh once it is solved, in pass order (AD8: the runner saves the passes'
+    // meshes); an error it returns ends the run with that error. Empty: not called.
+    std::function<std::expected<void, base::Error>(std::size_t pass, const AdaptableMesh& mesh)> on_mesh;
+};
+
+// How a pass's mesh was made (ID7).
+enum class MeshSource : unsigned char {
+    start,       // the builder's mesh as given
+    prediction,  // the start refined toward the a priori prediction (ID2)
+    proposal,    // the decision layer's proposal (ID1)
+    marks,       // AD3's marks
+    difference,  // AD3 on the verified error's distribution (AR2, AD12 c)
+    uniform,     // M' after a rejected stop with nothing marked
+};
+
+[[nodiscard]] constexpr const char* to_string(MeshSource s) noexcept {
+    switch (s) {
+        case MeshSource::start: return "start";
+        case MeshSource::prediction: return "prediction";
+        case MeshSource::proposal: return "proposal";
+        case MeshSource::marks: return "marks";
+        case MeshSource::difference: return "difference";
+        case MeshSource::uniform: return "uniform";
+    }
+    return "?";
+}
+
+// AD12's triggers.
+enum class FallbackTrigger : unsigned char { none, two_misses, no_progress, rejected_stop };
+
+[[nodiscard]] constexpr const char* to_string(FallbackTrigger t) noexcept {
+    switch (t) {
+        case FallbackTrigger::none: return "none";
+        case FallbackTrigger::two_misses: return "two_misses";
+        case FallbackTrigger::no_progress: return "no_progress";
+        case FallbackTrigger::rejected_stop: return "rejected_stop";
+    }
+    return "?";
+}
+
+enum class AdaptStop : unsigned char { converged, max_passes, max_nodes, nothing_marked };
+
+[[nodiscard]] constexpr const char* to_string(AdaptStop s) noexcept {
+    switch (s) {
+        case AdaptStop::converged: return "converged";
+        case AdaptStop::max_passes: return "max_passes";
+        case AdaptStop::max_nodes: return "max_nodes";
+        case AdaptStop::nothing_marked: return "nothing_marked";
+    }
+    return "?";
+}
+
+// A refinement candidate of the decision layer (ID4, ID7): a node whose size is halved (a generated
+// 2D mesh, a swept mesh's cross-section) or an axis interval split (tensor axes, the swept axis).
+struct AdaptCandidate {
+    int axis = -1;                    // -1: a node; else the axis of the interval
+    std::size_t index = 0;            // the node (a swept mesh's: of the cross-section), or the interval
+    mesh::Point location{};           // the node, or the interval's midpoint on its axis (0 on the others)
+    std::size_t region = 0;           // of the node that carries its largest weighted excess
+    Indicator indicator = Indicator::potential;
+    double order = 1.0;               // p_c used (ID5)
+    int levels = 1;                   // halvings taken this pass (an interval up to 3, a node 1; AR7)
+    // Over its levels: the predicted error reduction relative to the allowance (ID4), and below
+    // the costs and the added unknowns.
+    double benefit = 0.0;
+    double cost = 0.0;                // predicted seconds, by the timing-fitted cost model (ID4, OA4; reported)
+    // The allocation's deterministic cost (AR7): N_newton ((W + dW)^1.5 - W^1.5), W = nnz + fill and
+    // dW the candidate's added nonzeros and their fill at the current fill ratio.
+    double work = 0.0;
+    std::size_t added_nodes = 0;
+    std::size_t added_dofs = 0;
+    std::size_t added_nonzeros = 0;
+    // Measured on the next pass (NaN until then, or when its region holds no weight): the local
+    // error's ratio after / before and the realized reduction (ID5, ID7).
+    double realized_ratio = std::numeric_limits<double>::quiet_NaN();
+    double realized = std::numeric_limits<double>::quiet_NaN();
+};
+
+struct AdaptPass {
+    std::size_t nodes = 0;
+    std::size_t edges = 0;
+    std::uint64_t mesh_digest = 0;   // mesh::graph_digest of this pass's mesh (AD8)
+    // Per goal and adaptation point, goal-major (goal g, point a at g * at.size() + a).
+    std::vector<double> goal;
+    std::vector<double> resolution;  // the point's current resolution, same layout
+    std::vector<double> change;      // |G_k - G_k-1|; empty on the first pass
+    // weighting = adjoint (AR3): the adjoint estimate 2 |D| per goal and point (same layout; empty
+    // without weighting), M''s node count it was computed on, its time (building M' included) and
+    // whether a transposed solve fell back to SparseLU (gmres_ilut).
+    std::vector<double> estimate;
+    std::size_t estimate_nodes = 0;
+    double seconds_estimate = 0.0;
+    bool estimate_fell_back = false;
+    // AC11: summed over the adaptation points, the estimate's factorizations of J' on M' and its
+    // largest one transposed solve (measured; the transposed solve against one factorization).
+    double seconds_estimate_factorize = 0.0;
+    double seconds_transposed = 0.0;
+    Marking marking;                 // the marks this pass made for the next (empty count on the last)
+    std::array<std::size_t, indicator_count> nodes_with_excess{};
+    int newton_iterations = 0;       // summed over the sweep's points
+    bool rejected = false;           // a proposed stop on this mesh that AD11 rejected (AR2)
+    bool marked_by_difference = false;  // the marks came from the verified error's distribution
+    // The decision layer (ID1, ID7): how this pass's mesh was made; the largest over goals and points
+    // of the estimate over its allowance (infinity when there is none); whether this pass's mesh was
+    // a proposal that missed (did not lower it by the miss margin, or refined nothing).
+    MeshSource source = MeshSource::start;
+    double relative_estimate = 0.0;
+    bool miss = false;
+    bool empty_proposal = false;  // the proposal made on this pass refined nothing (a miss; AD3's marks used)
+    // The solve's size (ID4, ID5): unknowns, and the largest over the sweep's points of the last
+    // factorization's matrix nonzeros and fill (0 when the backend does not report it).
+    std::size_t dofs = 0;
+    std::size_t matrix_nonzeros = 0;
+    std::size_t factor_fill = 0;
+    // ID5: this pass's time predicted by the cost model and by the node-only model fitted on the
+    // earlier passes (NaN on the first), and the models fitted on the passes up to this one.
+    double predicted_seconds = std::numeric_limits<double>::quiet_NaN();
+    double predicted_seconds_nodes = std::numeric_limits<double>::quiet_NaN();
+    CostModel cost_model;
+    std::vector<OrderFit> orders;
+    // ID6's allocation on this pass (empty when it did not run): the candidates taken, at most the
+    // top 20 by benefit over cost; how many there were and were taken; the relative estimate and
+    // DOFs it predicts for the next mesh.
+    std::vector<AdaptCandidate> candidates;
+    std::size_t candidate_count = 0;
+    std::size_t candidates_taken = 0;
+    double predicted_relative = std::numeric_limits<double>::quiet_NaN();
+    std::size_t predicted_dofs = 0;
+    TransferReport transfer;         // onto this pass's mesh (nodes 0 on the first)
+    double seconds_mesh = 0.0;       // building this pass's device
+    double seconds_transfer = 0.0;
+    double seconds_solve = 0.0;
+};
+
+enum class CertificateStatus : unsigned char { certified, not_certified, unverified };
+
+[[nodiscard]] constexpr const char* to_string(CertificateStatus s) noexcept {
+    switch (s) {
+        case CertificateStatus::certified: return "certified";
+        case CertificateStatus::not_certified: return "not_certified";
+        case CertificateStatus::unverified: return "unverified";
+    }
+    return "?";
+}
+
+struct GoalCertificate {
+    std::size_t goal = 0;
+    std::size_t point = 0;    // index into the sweep
+    double value = 0.0;       // on the final mesh
+    double estimate = 0.0;    // AD6's: the adjoint's 2 |D|, or the last change (infinity after a single pass)
+    double verified_error = 0.0;  // AD11 (NaN when unverified)
+    double order = 1.0;           // p used
+    double allowed = 0.0;         // tol max(|G|, r)
+    CertificateStatus status = CertificateStatus::unverified;
+};
+
+struct AdaptResult {
+    std::vector<AdaptPass> passes;
+    AdaptStop stop = AdaptStop::converged;
+    std::size_t rejected_stops = 0;     // proposed stops AD11 rejected
+    std::optional<AdaptableMesh> mesh;  // the final mesh
+    results::Sweep sweep;               // the sweep on the final mesh
+    // AD11's solve on M' (absent when not run): its node count, time and goals (same layout).
+    std::size_t verification_nodes = 0;
+    double verification_seconds = 0.0;
+    std::vector<double> verification_goal;
+    std::vector<GoalCertificate> certificates;
+    // The decision layer (ID2, ID3, ID7, AD12).
+    std::vector<std::size_t> points;    // the adaptation points used
+    Policy policy = Policy::basic;      // as asked
+    FallbackTrigger fallback = FallbackTrigger::none;
+    int fallback_pass = -1;             // the pass whose outcome switched the run to basic
+    std::size_t misses = 0;
+    std::size_t coarse_nodes = 0;       // ID3's coarse sweep (0 when not run)
+    double coarse_seconds = 0.0;
+    std::size_t junction_points = 0;    // ID2 on the start mesh
+    std::size_t interface_points = 0;
+    std::size_t predicted_nodes = 0;    // start-mesh nodes with a finite target
+    int prediction_rounds = 0;          // refinements toward the prediction before pass 0
+};
+
+// The refinement of `current` for the next pass (AD4), from per-node marks; exposed for tests.
+// `uniform` asks for AD11's M' instead (every size halved, every unprotected interval split).
+// `previous` is the refinement `current` was built with. Errors: those of the size field and axis
+// refinement; invalid_input for marks not one per node.
+[[nodiscard]] std::expected<MeshRefinement, base::Error> next_refinement(
+    const AdaptableMesh& current, const MeshRefinement& previous, const std::vector<char>& marked,
+    const EdgeIndicators* edges, const IndicatorOptions& indicators, const AdaptOptions& options, bool uniform);
+
+// The loop's rules, as adapt() applies them (exposed so each is tested on its own; AC12).
+// AD6, AD13: the error allowed a goal of value G and current resolution r: tol max(|G|, r).
+[[nodiscard]] double allowed_error(double tolerance, double value, double resolution) noexcept;
+// AD11: the Richardson estimate of the error of a goal G_M from its value on M' (G_M') and its
+// last change |G_M - G_previous| (`change`; not finite or not positive: none, after one pass):
+// the observed order p = log2(change / |G_M' - G_M|) clamped to [0.5, 3], else 1, and the error
+// |G_M' - G_M| / (2^p - 1).
+struct RichardsonError {
+    double error = 0.0;
+    double order = 1.0;
+};
+[[nodiscard]] RichardsonError richardson_error(double coarse, double fine, double change) noexcept;
+// AD13: certified when verified and both the estimate and the verified error are within the
+// allowance; not_certified when verified otherwise; unverified when not verified.
+[[nodiscard]] CertificateStatus certificate_status(bool verified, double estimate, double verified_error,
+                                                   double allowed) noexcept;
+// AD4: a marked node's new size, halved and never below min_size; nullopt when it is already at
+// or below min_size (not refined, not a grading seed).
+[[nodiscard]] std::optional<double> refined_size(double size, double min_size) noexcept;
+// AD9: of an edge's two nodes, the one with the larger weighted excess; the lower index on a tie.
+[[nodiscard]] std::size_t heavier_node(std::size_t a, double excess_a, std::size_t b, double excess_b) noexcept;
+// ID1: a proposal misses when its relative estimate is not below (1 - margin) times the previous.
+[[nodiscard]] bool proposal_missed(double relative, double previous_relative, double margin) noexcept;
+// ID6 (AR7): the allocation takes candidates until the predicted relative estimate is at most
+// min(1/2, E/2): tol/2 at most, and at least halving E.
+[[nodiscard]] double allocation_target(double relative_estimate) noexcept;
+// AD12 a: two consecutive misses (an empty proposal counts as one) trigger the fallback; a pass
+// that is not a miss resets the count. record() returns whether this miss triggers it.
+struct MissGuard {
+    int consecutive = 0;
+    [[nodiscard]] bool record(bool miss) noexcept {
+        if (!miss) {
+            consecutive = 0;
+            return false;
+        }
+        return ++consecutive >= 2;
+    }
+};
+
+// Errors (invalid_input, before solving): no points; no goals, a goal contact out of range or a
+// gate; tolerance not in (0, 1); an adaptation point out of range; theta not in (0, 1]; grading
+// below 1; min_size negative; max_passes below 1; weighting adjoint with check_adjoint's refusals
+// (adapt_adjoint.hpp) or a goal contact that is not ohmic. Then those
+// of the builder, the sweep (a sweep that stops early is an error: non_convergence and the rest),
+// the transfer and the refinement.
+[[nodiscard]] std::expected<AdaptResult, base::Error> adapt(const DeviceBuilder& build,
+                                                            std::span<const std::vector<double>> points,
+                                                            const BiasOptions& bias, const AdaptOptions& options,
+                                                            const RunControl& control = {});
+
+// The adaptation settings as named values (AD8, AR8): "adapt.tolerance", "adapt.goal" (a contact
+// index, one per goal), "adapt.at" (one per given point), "adapt.weighting" (0 none, 1 adjoint),
+// "adapt.policy" (0 basic, 1 intelligent), theta, grading, min_size, max_passes, max_nodes, verify,
+// "adapt.certify_required", the indicators' switches and thresholds, and the decision layer's
+// max_points, miss_margin, budget_dofs and budget_seconds.
+[[nodiscard]] std::vector<std::pair<std::string, double>> adapt_settings(const AdaptOptions& options,
+                                                                         bool certify_required);
+
+// The run identity covers the adaptation (AD8): the record's input_identity continued (FNV-1a 64)
+// with the settings' names and values (doubles by bit pattern) and the record's mesh digest, the
+// final mesh's; the settings appended to the record's. A run without adaptation is not stamped
+// (AD10).
+void stamp_adapt(results::RunRecord& run, const AdaptOptions& options, bool certify_required);
+
+// The report of a run (AD8, AD13, ID7; results/adapt.hpp), its run record the final sweep's. The
+// goal contacts are named from `device` (any of the run's devices: the contacts do not change).
+[[nodiscard]] results::AdaptReport adapt_report(const AdaptResult& result, const AdaptOptions& options,
+                                                const device::Device& device, bool certify_required);
+
+}  // namespace NiTCAD::solve

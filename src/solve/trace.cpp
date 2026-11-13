@@ -114,6 +114,8 @@ public:
             record.smallest_pivot_ratio =
                 std::min(record.smallest_pivot_ratio.value_or(*ratio), *ratio);
         }
+        record.matrix_nonzeros = pattern_.nonzeros();
+        record.factor_fill = factored->fill;
         double residual = 0.0;
         for (const double e : f) residual = std::max(residual, std::abs(e));
         return residual;

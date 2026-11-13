@@ -9,6 +9,7 @@
 #include <system_error>
 #include <utility>
 
+#include "NiTCAD/io/adapt_report.hpp"
 #include "NiTCAD/io/device_file.hpp"
 #include "NiTCAD/io/files.hpp"
 #include "NiTCAD/linalg/mkl_runtime.hpp"
@@ -48,7 +49,8 @@ std::expected<void, base::Error> write_text(const std::filesystem::path& path, c
 
 std::expected<void, base::Error> write_table(const std::filesystem::path& path,
                                              const device::Device& device,
-                                             const results::Sweep& sweep) {
+                                             const results::Sweep& sweep,
+                                             const results::AdaptReport* adapt) {
     // With the weighted current (Unit 32) every point has it: two more columns per contact.
     const bool weighted = !sweep.points.empty() && !sweep.points.front().weighted_current.empty();
     std::string text = "point";
@@ -71,7 +73,16 @@ std::expected<void, base::Error> write_table(const std::filesystem::path& path,
             text += "," + device.contacts()[c].name + what;
         }
     }
-    text += ",substeps\n";
+    text += ",substeps";
+    // The certificates (Unit 17, AD13): per goal, at the adaptation points; empty at the others.
+    if (adapt != nullptr) {
+        for (const std::string& g : adapt->goal_contacts) {
+            for (const char* what : {" certificate", " estimate A", " verified error A", " allowed A", " order"}) {
+                text += "," + g + what;
+            }
+        }
+    }
+    text += "\n";
     for (std::size_t k = 0; k < sweep.points.size(); ++k) {
         const results::BiasPoint& p = sweep.points[k];
         text += std::to_string(k);
@@ -85,9 +96,41 @@ std::expected<void, base::Error> write_table(const std::filesystem::path& path,
             text += "," + format(p.tunnelling_ecb[c]) + "," + format(p.tunnelling_hvb[c]) + "," +
                     format(p.tunnelling_evb[c]);
         }
-        text += "," + std::to_string(p.bias_substeps) + "\n";
+        text += "," + std::to_string(p.bias_substeps);
+        if (adapt != nullptr) {
+            for (std::size_t g = 0; g < adapt->goal_contacts.size(); ++g) {
+                const auto c = std::ranges::find_if(adapt->certificates, [&](const results::AdaptCertificateRow& r) {
+                    return r.goal == g && r.point == k;
+                });
+                if (c == adapt->certificates.end()) {
+                    text += ",,,,,";
+                } else {
+                    text += "," + c->status + "," + format(c->estimate) + "," + format(c->verified_error) + "," +
+                            format(c->allowed) + "," + format(c->order);
+                }
+            }
+        }
+        text += "\n";
     }
     return write_text(path, text);
+}
+
+namespace {
+
+std::string pass_name(std::size_t pass) {
+    char name[32];
+    std::snprintf(name, sizeof name, "pass_%02zu", pass);
+    return name;
+}
+
+}  // namespace
+
+std::filesystem::path pass_device_file(const std::filesystem::path& directory, std::size_t pass) {
+    return directory / (pass_name(pass) + ".nitdev");
+}
+
+std::filesystem::path pass_mesh_file(const std::filesystem::path& directory, std::size_t pass) {
+    return directory / (pass_name(pass) + ".nitmesh");
 }
 
 std::expected<void, base::Error> write_transient_table(const std::filesystem::path& path,
@@ -190,6 +233,61 @@ std::expected<RunReport, base::Error> run(const Plan& plan, const solve::RunCont
         }
     };
     const Outputs& out = plan.outputs;
+    if (plan.adapt) {
+        // Unit 17 (AD8): the loop rebuilds the deck per pass; every output is the final mesh's, the
+        // passes' devices and meshes go to adapt_meshes as they are solved.
+        const AdaptPlan& a = *plan.adapt;
+        solve::AdaptOptions o = a.options;
+        if (!out.adapt_meshes.empty()) {
+            std::error_code ec;
+            std::filesystem::create_directories(out.adapt_meshes, ec);
+            if (ec) {
+                return std::unexpected(base::Error{base::ErrorCode::resource_exhausted,
+                                                   "cannot create '" + out.adapt_meshes.string() + "': " + ec.message(),
+                                                   std::nullopt});
+            }
+            o.on_mesh = [&](std::size_t pass, const solve::AdaptableMesh& m) -> std::expected<void, base::Error> {
+                const auto dev = pass_device_file(out.adapt_meshes, pass);
+                if (auto w = written(dev, io::save_device(dev, m.device)); !w) return w;
+                const auto msh = pass_mesh_file(out.adapt_meshes, pass);
+                return written(msh, m.generated ? io::save_generated_mesh(msh, *m.generated) : io::save_mesh(msh, m.device.mesh()));
+            };
+        }
+        auto r = solve::adapt(device_builder(plan), plan.points, plan.options, o, control);
+        if (!r) return std::unexpected(std::move(r.error()));
+        solve::stamp_adapt(r->sweep.run, o, a.certify_required);
+        const solve::AdaptableMesh& fin = *r->mesh;
+        if (fin.generated && fin.generated->generation_digest != 0) {
+            r->sweep.run.mesh_type = plan.mesh_type;
+            r->sweep.run.mesh_generation_digest = fin.generated->generation_digest;
+        }
+        report.adapt = solve::adapt_report(*r, o, fin.device, a.certify_required);
+        if (!out.device.empty()) {
+            if (auto w = written(out.device, io::save_device(out.device, fin.device)); !w) return std::unexpected(w.error());
+        }
+        if (!out.mesh.empty()) {
+            auto m = fin.generated ? io::save_generated_mesh(out.mesh, *fin.generated) : io::save_mesh(out.mesh, fin.device.mesh());
+            if (auto w = written(out.mesh, std::move(m)); !w) return std::unexpected(w.error());
+        }
+        if (!out.sweep.empty()) {
+            if (auto w = written(out.sweep, io::save_sweep(out.sweep, r->sweep)); !w) return std::unexpected(w.error());
+        }
+        if (!out.table.empty()) {
+            if (auto w = written(out.table, write_table(out.table, fin.device, r->sweep, &*report.adapt)); !w) {
+                return std::unexpected(w.error());
+            }
+        }
+        if (!out.checkpoint.empty() && !r->sweep.points.empty()) {
+            auto c = io::save_checkpoint(out.checkpoint, fin.device.mesh(), r->sweep.run, r->sweep.points.back());
+            if (auto w = written(out.checkpoint, std::move(c)); !w) return std::unexpected(w.error());
+        }
+        if (!out.adapt.empty()) {
+            if (auto w = written(out.adapt, io::save_adapt_report(out.adapt, *report.adapt)); !w) return std::unexpected(w.error());
+        }
+        report.sweep = std::move(r->sweep);
+        report.adapted = std::move(r->mesh);
+        return report;
+    }
     if (!out.device.empty()) {
         if (auto r = written(out.device, io::save_device(out.device, plan.device)); !r) return std::unexpected(r.error());
     }

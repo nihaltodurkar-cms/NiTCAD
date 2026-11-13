@@ -95,6 +95,7 @@ std::expected<void, base::Error> PardisoBackend<Scalar>::analyze(
     iparm_[9] = 13;  // perturb pivots below 1e-13 of the largest
     iparm_[10] = 1;  // scaling and
     iparm_[12] = 1;  // weighted matching (the unsymmetric defaults), computed in phase 11
+    iparm_[17] = -1; // report the factors' nonzeros (Unit 17 ID5's cost model; no effect on the factors)
     iparm_[26] = 0;  // no matrix checker: BasicLinearSolver checked the input
     iparm_[27] = 0;  // double precision
     iparm_[34] = 1;  // zero-based indices
@@ -124,9 +125,11 @@ std::expected<Factorization, base::Error> PardisoBackend<Scalar>::factorize(
     // equilibrated system (tests/linalg badly_scaled_coupled) has a diagonal ratio of 1.8e-13 with
     // no perturbed pivot, under the 1e-11 that Eigen's partial-pivoting ratio is calibrated for.
     // The perturbed-pivot count is the check (BasicLinearSolver).
+    // iparm[17]: the factors' nonzeros, reported by the analysis since it was negative on entry.
     return Factorization{
         .pivots = std::nullopt,
-        .perturbed_pivots = static_cast<std::size_t>(std::max<MklInt>(iparm_[13], 0))};
+        .perturbed_pivots = static_cast<std::size_t>(std::max<MklInt>(iparm_[13], 0)),
+        .fill = iparm_[17] > 0 ? std::optional<std::size_t>(static_cast<std::size_t>(iparm_[17])) : std::nullopt};
 }
 
 template <MatrixScalar Scalar>
@@ -135,6 +138,19 @@ void PardisoBackend<Scalar>::solve(std::span<const Scalar> b, std::span<Scalar> 
     NITCAD_EXPECTS(b.size() == rhs_.size() && x.size() == b.size());
     std::ranges::copy(b, rhs_.begin());
     if (call(phase_solve, rhs_.data(), x.data()) != 0) {
+        std::ranges::fill(x, Scalar{std::numeric_limits<double>::quiet_NaN()});
+    }
+}
+
+template <MatrixScalar Scalar>
+void PardisoBackend<Scalar>::solve_transposed(std::span<const Scalar> b, std::span<Scalar> x) {
+    NITCAD_EXPECTS(analyzed_);
+    NITCAD_EXPECTS(b.size() == rhs_.size() && x.size() == b.size());
+    std::ranges::copy(b, rhs_.begin());
+    iparm_[11] = 2;
+    const MklInt error = call(phase_solve, rhs_.data(), x.data());
+    iparm_[11] = 0;
+    if (error != 0) {
         std::ranges::fill(x, Scalar{std::numeric_limits<double>::quiet_NaN()});
     }
 }

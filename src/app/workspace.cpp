@@ -11,6 +11,7 @@
 #include "NiTCAD/analysis/curve.hpp"
 #include "NiTCAD/analysis/dc.hpp"
 #include "NiTCAD/deck/syntax.hpp"
+#include "NiTCAD/io/adapt_report.hpp"
 #include "NiTCAD/io/device_file.hpp"
 #include "NiTCAD/io/files.hpp"
 #include "NiTCAD/mesh/mesh.hpp"
@@ -126,8 +127,16 @@ const results::RunRecord* Workspace::record() const noexcept {
 std::expected<Workspace, base::Error> workspace_from_run(deck::Plan plan, deck::RunReport report) {
     Workspace w;
     w.analysis = plan.analysis;
-    w.device = std::make_unique<device::Device>(std::move(plan.device));
-    if (plan.generated) w.generated = std::make_unique<mesh::GeneratedMesh>(std::move(*plan.generated));
+    if (report.adapted) {
+        // An adaptive run's results are on its final mesh (Unit 17).
+        w.device = std::make_unique<device::Device>(std::move(report.adapted->device));
+        if (report.adapted->generated) w.generated = std::make_unique<mesh::GeneratedMesh>(std::move(*report.adapted->generated));
+        w.adapt = std::move(report.adapt);
+        w.pass_meshes = plan.outputs.adapt_meshes;
+    } else {
+        w.device = std::make_unique<device::Device>(std::move(plan.device));
+        if (plan.generated) w.generated = std::make_unique<mesh::GeneratedMesh>(std::move(*plan.generated));
+    }
     w.sweep = std::move(report.sweep);
     w.transient = std::move(report.transient);
     w.small_signal = std::move(report.small_signal);
@@ -165,9 +174,48 @@ bool same_mesh(const Workspace& w, const mesh::Mesh& m) {
 std::expected<Workspace, base::Error> workspace_from_plan(deck::Plan plan, const fs::path& deck_path) {
     const deck::Outputs out = plan.outputs;
     const deck::Analysis analysis = plan.analysis;
+    const bool adaptive = plan.adapt.has_value();
     auto structure = workspace_from_structure(std::move(plan), deck_path);
     if (!structure) return std::unexpected(std::move(structure.error()));
     Workspace w = std::move(*structure);
+    // An adaptive run (Unit 17): before it has run, the start mesh's structure; after, the final mesh's
+    // device with its results and report.
+    if (adaptive) {
+        if (out.adapt.empty() || !fs::exists(out.adapt)) return w;
+        auto report = io::load_adapt_report(out.adapt);
+        if (!report) return std::unexpected(std::move(report.error()));
+        if (report->passes.empty()) return std::unexpected(invalid("the adaptation report " + out.adapt.string() + " holds no pass"));
+        const std::uint64_t final_digest = report->final_mesh_digest;
+        std::vector<std::pair<fs::path, fs::path>> candidates;  // device, mesh
+        if (!out.device.empty()) candidates.emplace_back(out.device, out.mesh);
+        if (!out.adapt_meshes.empty()) {
+            const std::size_t last = report->passes.size() - 1;
+            candidates.emplace_back(deck::pass_device_file(out.adapt_meshes, last),
+                                    deck::pass_mesh_file(out.adapt_meshes, last));
+        }
+        bool found = false;
+        for (const auto& [device_file, mesh_file] : candidates) {
+            if (!fs::exists(device_file)) continue;
+            auto d = io::load_device(device_file);
+            if (!d || mesh::graph_digest(d->mesh()) != final_digest) continue;
+            w.device = std::make_unique<device::Device>(std::move(*d));
+            w.generated.reset();
+            if (!mesh_file.empty() && fs::exists(mesh_file)) {
+                if (auto g = io::load_generated_mesh(mesh_file); g && mesh::graph_digest(g->mesh) == final_digest) {
+                    w.generated = std::make_unique<mesh::GeneratedMesh>(std::move(*g));
+                }
+            }
+            found = true;
+            break;
+        }
+        if (!found) {
+            return std::unexpected(invalid("the adaptive run's final mesh is not on disk (its device file, or the last "
+                                           "pass's in adapt_meshes): run the deck again"));
+        }
+        if (auto g = make_geometry(w); !g) return std::unexpected(std::move(g.error()));
+        w.adapt = std::move(*report);
+        w.pass_meshes = out.adapt_meshes;
+    }
     // The results the deck's outputs hold, if it has run.
     using deck::Analysis;
     const fs::path file = analysis == Analysis::transient      ? out.transient
@@ -212,11 +260,64 @@ std::expected<Workspace, base::Error> workspace_from_result(const fs::path& resu
     return w;
 }
 
+std::expected<Workspace, base::Error> workspace_of_pass(const Workspace& w, std::size_t pass) {
+    if (!w.adapt) return std::unexpected(invalid("not an adaptive run"));
+    if (w.pass_meshes.empty()) return std::unexpected(invalid("the deck writes no pass meshes ([output] adapt_meshes)"));
+    if (pass >= w.adapt->passes.size()) {
+        return std::unexpected(invalid("pass " + std::to_string(pass) + " is out of range (" +
+                                       std::to_string(w.adapt->passes.size()) + " passes)"));
+    }
+    const std::uint64_t digest = w.adapt->passes[pass].mesh_digest;
+    Workspace p;
+    p.source = deck::pass_device_file(w.pass_meshes, pass);
+    p.analysis = w.analysis;
+    auto d = io::load_device(p.source);
+    if (!d) return std::unexpected(std::move(d.error()));
+    if (mesh::graph_digest(d->mesh()) != digest) {
+        return std::unexpected(invalid("the pass " + std::to_string(pass) + " mesh file is not the report's (its digest differs)"));
+    }
+    p.device = std::make_unique<device::Device>(std::move(*d));
+    const fs::path mesh_file = deck::pass_mesh_file(w.pass_meshes, pass);
+    if (!p.device->cells() && fs::exists(mesh_file)) {
+        if (auto g = io::load_generated_mesh(mesh_file); g && mesh::graph_digest(g->mesh) == digest) {
+            p.generated = std::make_unique<mesh::GeneratedMesh>(std::move(*g));
+        }
+    }
+    if (auto g = make_geometry(p); !g) return std::unexpected(std::move(g.error()));
+    p.adapt = w.adapt;
+    p.pass_meshes = w.pass_meshes;
+    p.pass = pass;
+    return p;
+}
+
+// The adaptation's lines (Unit 17, AD8, AD13).
+static void adapt_lines(const Workspace& w, std::vector<Line>& out) {
+    const results::AdaptReport& a = *w.adapt;
+    out.push_back({"Adaptation", a.status + " (" + a.stop + "), an estimate and an independent check, not a proof"});
+    if (w.pass) {
+        const results::AdaptPassRow& p = a.passes[*w.pass];
+        out.push_back({"Pass shown", std::format("{} of {} ({}), its mesh only: the results are the final mesh's",
+                                                 *w.pass, a.passes.size(), p.source)});
+    }
+    out.push_back({"Passes", std::format("{}, {} to {} nodes", a.passes.size(), a.passes.front().nodes, a.passes.back().nodes)});
+    out.push_back({"Policy", a.policy + ", weighting " + a.weighting});
+    if (a.fallback != "none") out.push_back({"Fallback", std::format("{} at pass {}", a.fallback, a.fallback_pass)});
+    out.push_back({"Verification", a.verification_nodes > 0 ? std::format("{} nodes", a.verification_nodes) : std::string("none")});
+    for (const results::AdaptCertificateRow& c : a.certificates) {
+        const std::string goal = c.goal < a.goal_contacts.size() ? a.goal_contacts[c.goal] : std::to_string(c.goal);
+        out.push_back({std::format("Certificate {} at point {}", goal, c.point),
+                       std::format("{}: estimate {} A, verified error {}, allowed {} A", c.status, number(c.estimate),
+                                   std::isfinite(c.verified_error) ? number(c.verified_error) + " A" : std::string("none"),
+                                   number(c.allowed))});
+    }
+}
+
 std::vector<Line> run_record(const Workspace& w) {
     std::vector<Line> out;
     const results::RunRecord* r = w.record();
     const mesh::Mesh& m = w.device->mesh();
     out.push_back({"Mesh", std::format("{}D, {} nodes, {} edges", m.dimension(), m.node_count(), m.edges().size())});
+    if (w.adapt && !w.adapt->passes.empty()) adapt_lines(w, out);
     if (w.sweep) out.push_back({"Points", std::to_string(w.sweep->points.size())});
     if (w.transient) {
         out.push_back({"Steps", std::to_string(w.transient->points.empty() ? 0 : w.transient->points.size() - 1)});

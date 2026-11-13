@@ -20,6 +20,7 @@
 
 #include "NiTCAD/base/error.hpp"
 #include "NiTCAD/deck/build.hpp"
+#include "NiTCAD/results/adapt.hpp"
 #include "NiTCAD/results/run.hpp"
 #include "NiTCAD/results/small_signal.hpp"
 #include "NiTCAD/results/solution.hpp"
@@ -35,6 +36,9 @@ struct RunReport {
     std::optional<results::SmallSignal> small_signal;  // Unit 43
     std::size_t skipped_points = 0;               // plan points before a restart's checkpoint
     std::vector<std::filesystem::path> written;   // in the order written
+    // [adapt] (Unit 17): the report, and the final mesh's device that `sweep` was solved on.
+    std::optional<results::AdaptReport> adapt;
+    std::optional<solve::AdaptableMesh> adapted;
 };
 
 // Errors: invalid_input for a plan the solvers reject before solving, a restart checkpoint of
@@ -46,10 +50,19 @@ struct RunReport {
 
 // The CSV table (Outputs::table): a header "point,<contact> V...,<contact> A...,substeps" (with the
 // weighted current, Unit 32, "<contact> weighted A..." and "<contact> weighted resolution A..."
-// before substeps) and one row per point, every number with 17 significant digits.
+// before substeps) and one row per point, every number with 17 significant digits. With an
+// adaptation report (Unit 17, AD13), after substeps per goal "<contact> certificate", "<contact>
+// estimate A", "<contact> verified error A", "<contact> allowed A" and "<contact> order", filled at
+// the adaptation points and empty at the others.
 [[nodiscard]] std::expected<void, base::Error> write_table(const std::filesystem::path& path,
                                                            const device::Device& device,
-                                                           const results::Sweep& sweep);
+                                                           const results::Sweep& sweep,
+                                                           const results::AdaptReport* adapt = nullptr);
+
+// A pass's files in Outputs::adapt_meshes (Unit 17, AD8): pass_<k>.nitdev (its device) and
+// pass_<k>.nitmesh (its generated mesh, or its mesh), k with at least two digits.
+[[nodiscard]] std::filesystem::path pass_device_file(const std::filesystem::path& directory, std::size_t pass);
+[[nodiscard]] std::filesystem::path pass_mesh_file(const std::filesystem::path& directory, std::size_t pass);
 
 // The transient run's table (Unit 43, AQ3): "time s,step s,order", then per contact "<c> V",
 // "<c> A" (the total current), "<c> conduction A" and "<c> displacement A"; one row per accepted

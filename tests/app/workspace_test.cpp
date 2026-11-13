@@ -154,3 +154,87 @@ TEST_CASE("app workspace: Unit 24's figures (VA5)", "[app]") {
         CHECK(ratio->value > 1.0);
     }
 }
+
+TEST_CASE("app workspace: an adaptive run on its final mesh, its record and each pass's mesh (Unit 17, AD8)", "[app]") {
+    const fs::path dir = app_test::scratch("workspace_adapt");
+    const fs::path deck = dir / "a.deck";
+    // Before the run: the start mesh's structure, no report.
+    app_test::write(dir, "a.deck", app_test::adapt_diode);
+    auto before = app::workspace_from_deck(deck);
+    REQUIRE(before);
+    CHECK(before->device->mesh().node_count() == 42);
+    CHECK_FALSE(before->adapt);
+    CHECK_FALSE(before->has_results());
+
+    auto taken = run(deck, app_test::adapt_diode);
+    REQUIRE(taken.report.adapt);
+    REQUIRE(taken.report.adapted);
+    const std::size_t final_nodes = taken.report.adapted->device.mesh().node_count();
+    const std::size_t passes = taken.report.adapt->passes.size();
+    REQUIRE(passes >= 2);
+    CHECK(final_nodes > 42);
+    auto from_run = app::workspace_from_run(std::move(taken.plan), std::move(taken.report));
+    REQUIRE(from_run);
+    CHECK(from_run->device->mesh().node_count() == final_nodes);
+    CHECK(from_run->has_results());
+    REQUIRE(from_run->adapt);
+    CHECK(from_run->pass_meshes == dir / "passes");
+
+    // From the deck's outputs: the same final mesh, results and report.
+    auto from_deck = app::workspace_from_deck(deck);
+    if (!from_deck) FAIL(from_deck.error().message);
+    CHECK(from_deck->device->mesh().node_count() == final_nodes);
+    CHECK(from_deck->points.size() == from_run->points.size());
+    REQUIRE(from_deck->adapt);
+    // (The rows hold NaNs by design, so they are compared by mesh; the file round trip is tested bit for
+    // bit in tests/deck/adapt_test.cpp.)
+    REQUIRE(from_deck->adapt->passes.size() == passes);
+    for (std::size_t k = 0; k < passes; ++k) {
+        CHECK(from_deck->adapt->passes[k].mesh_digest == from_run->adapt->passes[k].mesh_digest);
+        CHECK(from_deck->adapt->passes[k].nodes == from_run->adapt->passes[k].nodes);
+    }
+    CHECK(from_deck->adapt->certificates == from_run->adapt->certificates);
+    CHECK(from_deck->adapt->final_mesh_digest == from_run->adapt->final_mesh_digest);
+
+    // The record's adaptation lines.
+    const auto lines = app::run_record(*from_deck);
+    const app::Line* status = find(lines, "Adaptation");
+    REQUIRE(status);
+    CHECK(status->value.starts_with("certified (converged)"));
+    const app::Line* count = find(lines, "Passes");
+    REQUIRE(count);
+    CHECK(count->value == std::to_string(passes) + ", 42 to " + std::to_string(final_nodes) + " nodes");
+    const app::Line* cert = find(lines, "Certificate anode at point 2");
+    REQUIRE(cert);
+    CHECK(cert->value.starts_with("certified: estimate "));
+    CHECK(find(lines, "Pass shown") == nullptr);
+
+    // Each pass's mesh alone.
+    auto first = app::workspace_of_pass(*from_deck, 0);
+    if (!first) FAIL(first.error().message);
+    CHECK(first->device->mesh().node_count() == 42);
+    CHECK_FALSE(first->has_results());
+    CHECK(first->pass == std::size_t{0});
+    CHECK(first->source == deck::pass_device_file(dir / "passes", 0));
+    const auto first_lines = app::run_record(*first);
+    const app::Line* shown = find(first_lines, "Pass shown");
+    REQUIRE(shown);
+    CHECK(shown->value.starts_with("0 of " + std::to_string(passes) + " (start)"));
+    auto last = app::workspace_of_pass(*first, passes - 1);  // from a pass's workspace too
+    REQUIRE(last);
+    CHECK(last->device->mesh().node_count() == final_nodes);
+    CHECK_FALSE(app::workspace_of_pass(*from_deck, passes).has_value());
+    // A pass file replaced: refused by its digest.
+    fs::copy_file(deck::pass_device_file(dir / "passes", passes - 1), deck::pass_device_file(dir / "passes", 0),
+                  fs::copy_options::overwrite_existing);
+    const auto changed = app::workspace_of_pass(*from_deck, 0);
+    REQUIRE_FALSE(changed);
+    CHECK(changed.error().message.find("digest differs") != std::string::npos);
+
+    // The final mesh gone (device file and passes): the report's results cannot be shown.
+    fs::remove(dir / "a.nitdev");
+    fs::remove_all(dir / "passes");
+    const auto gone = app::workspace_from_deck(deck);
+    REQUIRE_FALSE(gone);
+    CHECK(gone.error().message.find("final mesh is not on disk") != std::string::npos);
+}

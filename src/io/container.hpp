@@ -13,6 +13,7 @@
 #include "NiTCAD/io/files.hpp"
 #include "NiTCAD/mesh/interfaces.hpp"
 #include "NiTCAD/mesh/mesh.hpp"
+#include "NiTCAD/results/run.hpp"
 #include "record.hpp"
 
 // Unwraps an expected into `var`, or returns its error from the enclosing function (every read is
@@ -36,6 +37,10 @@ std::expected<std::vector<std::byte>, base::Error> read_file(const std::filesyst
 Writer write_mesh(const mesh::Mesh& m);
 // Rebuilt through mesh::Mesh::from_parts.
 std::expected<mesh::Mesh, base::Error> read_mesh(const Reader& r);
+
+// A run record (results/run.hpp), as every result file holds it (Unit 17: the adaptation report too).
+Writer write_run_record(const results::RunRecord& run);
+std::expected<results::RunRecord, base::Error> read_run_record(const Reader& r);
 
 Writer write_certificate(const mesh::InterfaceCertificate& c);
 // The stored certificate, unchecked (the caller checks it against its mesh and regions).
