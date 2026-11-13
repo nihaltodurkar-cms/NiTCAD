@@ -4,6 +4,12 @@
 //       loads each adaptation history (refusing a corrupt one or another schema), digests it and
 //       writes the manifest, sorted by digest (io/learn_files.hpp).
 //
+//   nitcad learn train <manifest> <model.nitlearn> [--holdout <history>]...
+//       builds the manifest's training set (LB6), trains the boosted trees on the devices not held
+//       out (LB5, LB7: by default every fourth from the fourth, or the last of fewer than four), measures
+//       them and the ridge baseline on the held-out devices (LB10), writes the model and prints its
+//       metrics and feature importances.
+//
 // Exit status: 0 done; 1 a file failed (the message on stderr); 64 usage.
 #pragma once
 

@@ -98,4 +98,51 @@ struct TrainingSet {
     bool operator==(const TrainingSet&) const = default;
 };
 
+// The model file's format (ID10); a model of another format or schema is refused.
+inline constexpr std::uint64_t learn_model_format = 1;
+
+// A regression tree node: an internal node sends x[feature] <= threshold left; a leaf (feature -1)
+// holds its value (shrinkage applied).
+struct TreeNode {
+    std::int64_t feature = -1;
+    double threshold = 0.0;
+    std::int64_t left = -1, right = -1;
+    double value = 0.0;
+    bool operator==(const TreeNode&) const = default;
+};
+
+// The held-out metrics (ID10, LB10), on the held-out devices' samples.
+struct HeldOutMetrics {
+    std::uint64_t samples = 0;           // all held-out samples (rank correlations)
+    std::uint64_t first_pass_samples = 0; // their first pass's (recall, precision)
+    double rank_correlation = 0.0;       // Spearman, trees' prediction against the label
+    double ridge_rank_correlation = 0.0; // the ridge baseline's (ID9)
+    double recall = 0.0;                 // of l >= 0.5 by l^ >= 0.5, first pass
+    double precision = 0.0;
+    bool operator==(const HeldOutMetrics&) const = default;
+};
+
+// A trained cross-run predictor (ID8, ID10, LB5): gradient-boosted trees predicting l from schema
+// `schema`'s features, with what it was trained on and how it did on held-out devices.
+struct LearnedModel {
+    std::uint64_t format = learn_model_format;
+    std::uint64_t schema = learn_schema_version;
+    std::string model_class = "gradient_boosted_trees";
+    // LB5's hyperparameters, as trained.
+    std::uint64_t tree_count = 0, depth = 0, min_leaf = 0, cut_points = 0;
+    double shrinkage = 0.0;
+    double base = 0.0;                                 // the training labels' mean
+    std::vector<std::vector<TreeNode>> trees;          // node 0 the root
+    std::vector<std::string> materials;                // feature 1's categories index this list
+    std::vector<double> feature_min, feature_max;      // per feature, over the training samples
+    std::vector<std::vector<double>> categories;       // per feature: the values seen (categories only)
+    std::vector<double> importance;                    // per feature: summed squared-error decrease
+    std::uint64_t manifest_digest = 0;                 // FNV-1a 64 over the manifest's entry digests
+    std::vector<ManifestEntry> training, held_out;     // the devices of each side
+    std::uint64_t training_samples = 0;
+    Provenance provenance;                             // the build that trained it
+    HeldOutMetrics metrics;
+    bool operator==(const LearnedModel&) const = default;
+};
+
 }  // namespace NiTCAD::results

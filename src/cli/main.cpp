@@ -54,6 +54,7 @@ int usage() {
                "       nitcad verify [--tier fast|full|nightly] [--id <id>] [--report <file>]\n"
                "                     [--mkl <mkl_rt.dll>] [--threads <n>]\n"
                "       nitcad learn manifest <manifest> <history.nithist>...\n"
+               "       nitcad learn train <manifest> <model.nitlearn> [--holdout <history.nithist>]...\n"
                "       nitcad --version\n",
                stderr);
     return 64;

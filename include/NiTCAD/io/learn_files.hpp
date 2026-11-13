@@ -53,4 +53,12 @@ inline constexpr std::size_t max_samples_per_history = 20000;
     const results::Manifest& manifest, const std::filesystem::path& base = {},
     std::size_t max_per_history = max_samples_per_history);
 
+// The learned model (.nitlearn, content kind learned_model; ID10): written with its format and schema
+// versions first; a model whose format or schema differs from this build's is refused (invalid_input,
+// both versions named: "retrain"); trees whose nodes do not form a tree over valid features, ranges
+// or categories not one per feature, are corrupt.
+[[nodiscard]] std::expected<void, base::Error> save_learned_model(const std::filesystem::path& path,
+                                                                  const results::LearnedModel& model);
+[[nodiscard]] std::expected<results::LearnedModel, base::Error> load_learned_model(const std::filesystem::path& path);
+
 }  // namespace NiTCAD::io

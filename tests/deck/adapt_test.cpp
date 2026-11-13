@@ -522,6 +522,19 @@ TEST_CASE("deck adapt: adapt_history writes the run's learning history; nitcad l
     for (const auto& e : m->entries) CHECK(io::file_digest(e.path).value() == e.digest);
     CHECK(cli("learn manifest \"" + manifest.string() + "\"").status == 64);
     CHECK(cli("learn manifest \"" + manifest.string() + "\" \"" + (dir / "h1.nitadapt").string() + "\"").status == 1);
+    // Training by the CLI (slice 2): h1 held out by name; the model loads and names its sides.
+    const fs::path model = dir / "m.nitlearn";
+    const Cli trained = cli("learn train \"" + manifest.string() + "\" \"" + model.string() + "\" --holdout \"" +
+                            (dir / "h1.nithist").string() + "\"");
+    INFO(trained.output);
+    CHECK(trained.status == 0);
+    CHECK(trained.output.find("held-out rank correlation: trees") != std::string::npos);
+    const auto lm = io::load_learned_model(model);
+    REQUIRE(lm.has_value());
+    REQUIRE(lm->held_out.size() == 1);
+    CHECK(io::file_digest(dir / "h1.nithist").value() == lm->held_out[0].digest);
+    CHECK(cli("learn train \"" + manifest.string() + "\" \"" + model.string() + "\" --holdout nowhere.nithist").status == 1);
+    CHECK(cli("learn train \"" + manifest.string() + "\" \"" + model.string() + "\" --holdout").status == 64);
     // Without [adapt], refused.
     CHECK(refused(coarse_diode + "[output]\nadapt_history = h.nithist\n").find("the deck has no [adapt]") != std::string::npos);
 }

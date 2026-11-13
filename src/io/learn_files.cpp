@@ -64,6 +64,179 @@ std::expected<std::vector<std::string>, base::Error> read_texts(const Reader& r,
 
 }  // namespace
 
+namespace {
+
+namespace mkey {
+constexpr std::uint16_t format = 1, schema = 2, model_class = 3, hyper = 4, shrinkage = 5, base = 6, tree = 7,
+                        material = 8, feature_min = 9, feature_max = 10, category = 11, importance = 12,
+                        manifest_digest = 13, training = 14, held_out = 15, training_samples = 16, provenance = 17,
+                        metrics_counts = 18, metrics = 19;
+constexpr std::uint16_t t_ints = 1, t_reals = 2;      // a tree: (feature, left, right) per node; (threshold, value)
+constexpr std::uint16_t e_digest = 1, e_path = 2;     // a manifest entry
+constexpr std::uint16_t c_values = 1;                 // a feature's categories
+}  // namespace mkey
+
+void write_entries(Writer& w, std::uint16_t k, const std::vector<results::ManifestEntry>& entries) {
+    for (const results::ManifestEntry& e : entries) {
+        Writer one;
+        one.u64(mkey::e_digest, e.digest);
+        one.text(mkey::e_path, e.path);
+        w.record(k, one);
+    }
+}
+
+std::expected<std::vector<results::ManifestEntry>, base::Error> read_entries(const Reader& r, std::uint16_t k) {
+    NITCAD_IO_TRY(list, r.records(k));
+    std::vector<results::ManifestEntry> out;
+    for (const Reader& one : list) {
+        NITCAD_IO_TRY(d, one.u64(mkey::e_digest));
+        NITCAD_IO_TRY(p, one.text(mkey::e_path));
+        out.push_back({d, std::move(p)});
+    }
+    return out;
+}
+
+base::Error model_refused(const char* what, std::uint64_t found, std::uint64_t ours) {
+    return invalid(std::string("a learned model of ") + what + " " + std::to_string(found) + ", this build's is " +
+                   std::to_string(ours) + " (retrain the model)");
+}
+
+}  // namespace
+
+std::expected<void, base::Error> save_learned_model(const std::filesystem::path& path, const results::LearnedModel& m) {
+    namespace k = mkey;
+    Writer w;
+    w.u64(k::format, m.format);
+    w.u64(k::schema, m.schema);
+    w.text(k::model_class, m.model_class);
+    w.i64s(k::hyper, std::vector<std::int64_t>{static_cast<std::int64_t>(m.tree_count), static_cast<std::int64_t>(m.depth),
+                                               static_cast<std::int64_t>(m.min_leaf),
+                                               static_cast<std::int64_t>(m.cut_points)});
+    w.f64(k::shrinkage, m.shrinkage);
+    w.f64(k::base, m.base);
+    for (const auto& tree : m.trees) {
+        std::vector<std::int64_t> ints;
+        std::vector<double> reals;
+        for (const results::TreeNode& n : tree) {
+            ints.insert(ints.end(), {n.feature, n.left, n.right});
+            reals.insert(reals.end(), {n.threshold, n.value});
+        }
+        Writer t;
+        t.i64s(k::t_ints, ints);
+        t.f64s(k::t_reals, reals);
+        w.record(k::tree, t);
+    }
+    write_texts(w, k::material, m.materials);
+    w.f64s(k::feature_min, m.feature_min);
+    w.f64s(k::feature_max, m.feature_max);
+    for (const auto& c : m.categories) {
+        Writer one;
+        one.f64s(k::c_values, c);
+        w.record(k::category, one);
+    }
+    w.f64s(k::importance, m.importance);
+    w.u64(k::manifest_digest, m.manifest_digest);
+    write_entries(w, k::training, m.training);
+    write_entries(w, k::held_out, m.held_out);
+    w.u64(k::training_samples, m.training_samples);
+    w.record(k::provenance, detail::write_provenance_record(m.provenance));
+    w.i64s(k::metrics_counts, std::vector<std::int64_t>{static_cast<std::int64_t>(m.metrics.samples),
+                                                        static_cast<std::int64_t>(m.metrics.first_pass_samples)});
+    w.f64s(k::metrics, std::vector<double>{m.metrics.rank_correlation, m.metrics.ridge_rank_correlation, m.metrics.recall,
+                                           m.metrics.precision});
+    return detail::write_file(path, Content::learned_model, w);
+}
+
+std::expected<results::LearnedModel, base::Error> load_learned_model(const std::filesystem::path& path) {
+    namespace k = mkey;
+    NITCAD_IO_TRY(bytes, detail::read_file(path, Content::learned_model));
+    NITCAD_IO_TRY(r, Reader::parse(bytes));
+    results::LearnedModel m;
+    NITCAD_IO_TRY(format, r.u64(k::format));
+    if (format != results::learn_model_format) {
+        return std::unexpected(model_refused("format version", format, results::learn_model_format));
+    }
+    NITCAD_IO_TRY(schema, r.u64(k::schema));
+    if (schema != results::learn_schema_version) {
+        return std::unexpected(model_refused("feature schema version", schema, results::learn_schema_version));
+    }
+    m.format = format;
+    m.schema = schema;
+    NITCAD_IO_TRY(model_class, r.text(k::model_class));
+    if (model_class != "gradient_boosted_trees") return std::unexpected(corrupt("an unknown model class"));
+    m.model_class = std::move(model_class);
+    NITCAD_IO_TRY(hyper, r.i64s(k::hyper));
+    if (hyper.size() != 4) return std::unexpected(corrupt("a learned model's hyperparameters"));
+    m.tree_count = static_cast<std::uint64_t>(hyper[0]);
+    m.depth = static_cast<std::uint64_t>(hyper[1]);
+    m.min_leaf = static_cast<std::uint64_t>(hyper[2]);
+    m.cut_points = static_cast<std::uint64_t>(hyper[3]);
+    NITCAD_IO_TRY(shrinkage, r.f64(k::shrinkage));
+    m.shrinkage = shrinkage;
+    NITCAD_IO_TRY(base, r.f64(k::base));
+    m.base = base;
+    NITCAD_IO_TRY(trees, r.records(k::tree));
+    for (const Reader& tr : trees) {
+        NITCAD_IO_TRY(ints, tr.i64s(k::t_ints));
+        NITCAD_IO_TRY(reals, tr.f64s(k::t_reals));
+        if (ints.empty() || ints.size() % 3 != 0 || reals.size() != ints.size() / 3 * 2) {
+            return std::unexpected(corrupt("a learned model's tree"));
+        }
+        const std::size_t nodes = ints.size() / 3;
+        std::vector<results::TreeNode> tree(nodes);
+        for (std::size_t i = 0; i < nodes; ++i) {
+            results::TreeNode& n = tree[i];
+            n.feature = ints[3 * i];
+            n.left = ints[3 * i + 1];
+            n.right = ints[3 * i + 2];
+            n.threshold = reals[2 * i];
+            n.value = reals[2 * i + 1];
+            // A child always follows its parent, so traversal ends.
+            const auto ok = [&](std::int64_t c) { return c > static_cast<std::int64_t>(i) && c < static_cast<std::int64_t>(nodes); };
+            if (n.feature >= 0 && (n.feature >= static_cast<std::int64_t>(F) || !ok(n.left) || !ok(n.right))) {
+                return std::unexpected(corrupt("a learned model's tree node"));
+            }
+            if (n.feature < -1) return std::unexpected(corrupt("a learned model's tree node"));
+        }
+        m.trees.push_back(std::move(tree));
+    }
+    if (m.trees.size() != m.tree_count) return std::unexpected(corrupt("a learned model's tree count"));
+    NITCAD_IO_TRY(materials, read_texts(r, k::material));
+    m.materials = std::move(materials);
+    NITCAD_IO_TRY(fmin, r.f64s(k::feature_min));
+    NITCAD_IO_TRY(fmax, r.f64s(k::feature_max));
+    NITCAD_IO_TRY(importance, r.f64s(k::importance));
+    if (fmin.size() != F || fmax.size() != F || importance.size() != F) {
+        return std::unexpected(corrupt("a learned model's per-feature arrays"));
+    }
+    m.feature_min = std::move(fmin);
+    m.feature_max = std::move(fmax);
+    m.importance = std::move(importance);
+    NITCAD_IO_TRY(categories, r.records(k::category));
+    if (categories.size() != F) return std::unexpected(corrupt("a learned model's categories"));
+    for (const Reader& c : categories) {
+        NITCAD_IO_TRY(values, c.f64s_or_empty(k::c_values));
+        m.categories.push_back(std::move(values));
+    }
+    NITCAD_IO_TRY(md, r.u64(k::manifest_digest));
+    m.manifest_digest = md;
+    NITCAD_IO_TRY(training, read_entries(r, k::training));
+    m.training = std::move(training);
+    NITCAD_IO_TRY(held_out, read_entries(r, k::held_out));
+    m.held_out = std::move(held_out);
+    NITCAD_IO_TRY(samples, r.u64(k::training_samples));
+    m.training_samples = samples;
+    NITCAD_IO_TRY(prov, r.record(k::provenance));
+    NITCAD_IO_TRY(provenance, detail::read_provenance_record(prov));
+    m.provenance = std::move(provenance);
+    NITCAD_IO_TRY(counts, r.i64s(k::metrics_counts));
+    NITCAD_IO_TRY(metrics, r.f64s(k::metrics));
+    if (counts.size() != 2 || metrics.size() != 4) return std::unexpected(corrupt("a learned model's metrics"));
+    m.metrics = {static_cast<std::uint64_t>(counts[0]), static_cast<std::uint64_t>(counts[1]), metrics[0], metrics[1],
+                 metrics[2], metrics[3]};
+    return m;
+}
+
 std::expected<void, base::Error> save_adapt_history(const std::filesystem::path& path, const results::AdaptHistory& h) {
     namespace k = hkey;
     if (h.schema != results::learn_schema_version) return std::unexpected(schema_refused(h.schema));

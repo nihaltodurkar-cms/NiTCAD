@@ -6280,6 +6280,30 @@ refusals: a duplicate, a digest that does not match, another schema, unsorted li
 deck text, run identity and per-pass mesh digests, the CLI's manifest, its usage and a non-history refused).
 ---
 
+**LB13 (found at build, slice 2; ruled as recommended).** ID10 says the model records "the build that trained it
+(Unit 42 provenance)", and AC19 that "the trained model" built twice is bit-identical. A Unit 42 provenance holds
+the run's start time and machine too, so two trainings would differ. (a) **The model keeps the build's fields only**
+(version, revision, dirty, build type, compiler, Eigen version); the run's (start, wall time, OS, CPU, MKL, cache
+sizes) are left empty. (b) Keep them and compare models without them. **(a)**, ruled as recommended: the build is
+what ID10 names, and the file itself is then reproducible.
+
+*Slice 2 — the model (LB5, LB7, LB10, LB13; ID9, ID10).* `solve/adapt_learn.hpp`: `cut_points`, `fit_boosted_trees`
+(histogram split search over LB5's cut points, one byte per bin; the left child grown first; leaves the mean
+residual times the shrinkage), `predict_trees`, `fit_ridge` (its 20-odd columns solved by an in-place Cholesky:
+Eigen is private to linalg), `rank_correlation` (Spearman, average ranks), `default_held_out`, `train_predictor`
+(trees and ridge on the training devices only, both measured on the held-out devices; ranges and categories over
+the training samples; the manifest digest over the entries' digests, not their paths), `predict_levels`.
+`results::LearnedModel`, `TreeNode`, `HeldOutMetrics`; the `.nitlearn` file (content kind 10) refusing another
+format or schema with both versions named, and a tree whose children do not follow their parent or whose feature is
+out of range as corrupt. `nitcad learn train <manifest> <model> [--holdout <history>]...` (a held-out path matched
+as written or as the same file), printing the metrics and the importances. Tests: the parts exactly (cut points,
+rank correlation with ties, the default split, trees learning a step that ridge cannot, the first split, a tie to the
+lower feature, `min_leaf`, ridge recovering a linear law), training by device (sides, counts, trees beating ridge on
+a step, recall and precision, trained twice equal and its files bit-identical, loaded equal and predicting the
+same, another format and another schema refused by name, another content kind, the split's four refusals, a
+held-out device's labels not reaching the trees), the diode's histories end to end, and the CLI (training with a
+named held-out history, an unknown one, usage).
+
 ### Unit 55 — theoretical calculation validation framework: research and design proposal (proposed 2026-10-31; on `verify/theoretical-validation`)
 
 **Owner request (2026-10-31):** "Design a comprehensive Theoretical Calculation Validation Framework for NiTCAD.

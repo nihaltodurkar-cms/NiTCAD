@@ -5,7 +5,9 @@
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 
+#include <algorithm>
 #include <cmath>
+#include <numeric>
 #include <cstddef>
 #include <filesystem>
 #include <fstream>
@@ -253,4 +255,214 @@ TEST_CASE("learn: a run's history, its file, the manifest and the training set a
         f << "nitcad-learn-manifest 1\nschema 1\n0000000000000002 b\n0000000000000001 a\n";
     }
     CHECK(!io::load_manifest(scratch("unsorted.manifest")).has_value());
+}
+
+// --- Slice 2: the model (LB5, LB7, LB10; ID9, ID10) ----------------------------------------------
+
+namespace {
+
+// A synthetic training set: n rows per device, feature 13 uniform in [0, 1) by a fixed sequence,
+// feature 2 another, the label a step in feature 13 plus a small slope in feature 2.
+results::TrainingSet synthetic(std::size_t devices, std::size_t n) {
+    results::TrainingSet t;
+    t.materials = {"m"};
+    for (std::size_t d = 0; d < devices; ++d) t.devices.push_back({0x100 + d, "d" + std::to_string(d)});
+    for (std::size_t d = 0; d < devices; ++d) {
+        for (std::size_t i = 0; i < n; ++i) {
+            const double u = std::fmod(0.6180339887 * static_cast<double>(d * n + i + 1), 1.0);
+            const double v = std::fmod(0.4142135624 * static_cast<double>(d * n + i + 1), 1.0);
+            std::vector<double> row(F, 0.0);
+            row[13] = u;
+            row[2] = v;
+            t.features.insert(t.features.end(), row.begin(), row.end());
+            t.labels.push_back((u > 0.5 ? 2.0 : 0.0) + 0.1 * v);
+            t.device.push_back(static_cast<std::uint32_t>(d));
+            t.pass.push_back(static_cast<std::uint32_t>(i % 2));
+            ++t.rows;
+        }
+    }
+    return t;
+}
+
+std::vector<std::size_t> all_rows(const results::TrainingSet& t) {
+    std::vector<std::size_t> r(t.rows);
+    for (std::size_t i = 0; i < t.rows; ++i) r[i] = i;
+    return r;
+}
+
+}  // namespace
+
+TEST_CASE("learn: the model's parts, exactly (LB5)", "[adapt_learn]") {
+    // Cut points.
+    CHECK(solve::cut_points(std::vector<double>{3, 1, 2, 2}, 64) == std::vector<double>{1, 2});
+    CHECK(solve::cut_points(std::vector<double>{5, 5, 5}, 64).empty());
+    {
+        std::vector<double> v;
+        for (int i = 0; i < 100; ++i) v.push_back(i);
+        const auto c = solve::cut_points(v, 4);  // ranks floor(j 100 / 5) = 20, 40, 60, 80
+        CHECK(c == std::vector<double>{20, 40, 60, 80});
+    }
+    // Rank correlation.
+    CHECK(solve::rank_correlation(std::vector<double>{1, 2, 3}, std::vector<double>{10, 20, 30}) == Approx(1.0));
+    CHECK(solve::rank_correlation(std::vector<double>{1, 2, 3}, std::vector<double>{3, 2, 1}) == Approx(-1.0));
+    CHECK(solve::rank_correlation(std::vector<double>{1, 1, 1}, std::vector<double>{3, 2, 1}) == 0.0);
+    CHECK(solve::rank_correlation(std::vector<double>{1, 2, 2, 3}, std::vector<double>{1, 2, 3, 4}) ==
+          Approx(0.9486832981).epsilon(1e-9));
+    // The default split (LB7).
+    CHECK(solve::default_held_out(8) == std::vector<std::size_t>{3, 7});
+    CHECK(solve::default_held_out(4) == std::vector<std::size_t>{3});
+    CHECK(solve::default_held_out(2) == std::vector<std::size_t>{1});
+    CHECK(solve::default_held_out(1).empty());
+    // Trees learn the step; ridge cannot (ID9).
+    const results::TrainingSet t = synthetic(1, 400);
+    const auto rows = all_rows(t);
+    const solve::BoostedTrees bt = solve::fit_boosted_trees(t.features, t.labels, rows);
+    REQUIRE(bt.trees.size() == 200);
+    for (const auto& tree : bt.trees) CHECK(tree.size() <= 31);  // depth 4
+    CHECK(bt.base == Approx(std::accumulate(t.labels.begin(), t.labels.end(), 0.0) / 400.0));
+    // Away from the step (the samples between its nearest cut and 0.5 fall on the cut's side).
+    double worst = 0.0;
+    for (const std::size_t i : rows) {
+        if (std::abs(t.features[i * F + 13] - 0.5) < 0.02) continue;
+        worst = std::max(worst, std::abs(solve::predict_trees(bt.base, bt.trees, &t.features[i * F]) - t.labels[i]));
+    }
+    CHECK(worst < 0.25);  // against a step of 2
+    CHECK(bt.importance[13] > 10.0 * bt.importance[2]);
+    for (std::size_t k = 0; k < F; ++k) {
+        if (k != 13 && k != 2) CHECK(bt.importance[k] == 0.0);
+    }
+    // The first split of the first tree is the step's.
+    CHECK(bt.trees[0][0].feature == 13);
+    CHECK(bt.trees[0][0].threshold == Approx(0.5).margin(0.02));
+    // A tie between two equal features goes to the lower index.
+    {
+        results::TrainingSet twin = t;
+        for (std::size_t i = 0; i < twin.rows; ++i) twin.features[i * F + 4] = twin.features[i * F + 13];
+        const auto b2 = solve::fit_boosted_trees(twin.features, twin.labels, rows);
+        CHECK(b2.trees[0][0].feature == 4);
+    }
+    // min_leaf holds.
+    {
+        solve::TreeOptions o;
+        o.trees = 1;
+        o.min_leaf = 150;
+        const auto b3 = solve::fit_boosted_trees(t.features, t.labels, rows, o);
+        REQUIRE(b3.trees.size() == 1);
+        std::vector<std::size_t> leaf_count(b3.trees[0].size(), 0);
+        for (const std::size_t i : rows) {
+            std::size_t node = 0;
+            const double* row = &t.features[i * F];
+            while (b3.trees[0][node].feature >= 0) {
+                const auto& nd = b3.trees[0][node];
+                node = static_cast<std::size_t>(row[nd.feature] <= nd.threshold ? nd.left : nd.right);
+            }
+            ++leaf_count[node];
+        }
+        for (std::size_t k = 0; k < leaf_count.size(); ++k) {
+            if (b3.trees[0][k].feature < 0) CHECK(leaf_count[k] >= 150);
+        }
+    }
+    // The ridge recovers a linear law.
+    {
+        results::TrainingSet lin = t;
+        for (std::size_t i = 0; i < lin.rows; ++i) lin.labels[i] = 3.0 + 2.0 * lin.features[i * F + 2];
+        auto r = solve::fit_ridge(lin.features, lin.labels, rows, 1e-6);
+        REQUIRE(r.has_value());
+        for (const std::size_t i : {std::size_t{0}, std::size_t{17}, std::size_t{399}}) {
+            CHECK(solve::predict_ridge(*r, &lin.features[i * F]) == Approx(lin.labels[i]).epsilon(1e-6));
+        }
+    }
+}
+
+TEST_CASE("learn: training by device, its metrics, its file and the version refusals (LB7, LB10, ID10; AC19 part)",
+          "[adapt_learn]") {
+    // Synthetic: 4 devices, the last held out by default.
+    const results::TrainingSet t = synthetic(4, 300);
+    const auto held = solve::default_held_out(4);
+    auto m = solve::train_predictor(t, held);
+    REQUIRE(m.has_value());
+    CHECK(m->training.size() == 3);
+    REQUIRE(m->held_out.size() == 1);
+    CHECK(m->held_out[0].path == "d3");
+    CHECK(m->training_samples == 900);
+    CHECK(m->metrics.samples == 300);
+    CHECK(m->metrics.first_pass_samples == 150);
+    CHECK(m->metrics.rank_correlation > m->metrics.ridge_rank_correlation);  // trees beat ridge on a step
+    CHECK(m->metrics.rank_correlation > 0.9);
+    CHECK(m->metrics.recall > 0.95);
+    CHECK(m->metrics.precision > 0.95);
+    CHECK(m->feature_min[13] >= 0.0);
+    CHECK(m->feature_max[13] < 1.0);
+    CHECK(m->categories[1] == std::vector<double>{0.0});
+    CHECK(m->model_class == "gradient_boosted_trees");
+    CHECK(m->format == results::learn_model_format);
+    CHECK(m->schema == results::learn_schema_version);
+    CHECK(!m->provenance.version.empty());
+    // Trained twice: equal, and its files bit-identical (AC19).
+    auto again = solve::train_predictor(t, held);
+    REQUIRE(again.has_value());
+    CHECK(*again == *m);
+    const auto p1 = scratch("m1.nitlearn"), p2 = scratch("m2.nitlearn");
+    REQUIRE(io::save_learned_model(p1, *m).has_value());
+    REQUIRE(io::save_learned_model(p2, *again).has_value());
+    CHECK(bytes_of(p1) == bytes_of(p2));
+    auto loaded = io::load_learned_model(p1);
+    REQUIRE(loaded.has_value());
+    CHECK(*loaded == *m);
+    for (std::size_t i = 0; i < t.rows; i += 37) {
+        CHECK(solve::predict_levels(*loaded, &t.features[i * F]) == solve::predict_levels(*m, &t.features[i * F]));
+    }
+    // Another format or schema is refused, both versions named (ID10).
+    {
+        results::LearnedModel other = *m;
+        other.format = 2;
+        REQUIRE(io::save_learned_model(scratch("f2.nitlearn"), other).has_value());
+        auto r = io::load_learned_model(scratch("f2.nitlearn"));
+        REQUIRE(!r.has_value());
+        CHECK(r.error().code == base::ErrorCode::invalid_input);
+        CHECK(r.error().message.find("format version 2, this build's is 1") != std::string::npos);
+        other = *m;
+        other.schema = 7;
+        REQUIRE(io::save_learned_model(scratch("s7.nitlearn"), other).has_value());
+        auto s = io::load_learned_model(scratch("s7.nitlearn"));
+        REQUIRE(!s.has_value());
+        CHECK(s.error().message.find("feature schema version 7, this build's is 1") != std::string::npos);
+    }
+    // Another content kind.
+    REQUIRE(io::save_adapt_history(scratch("kind.nithist"), history_of(21)).has_value());
+    CHECK(!io::load_learned_model(scratch("kind.nithist")).has_value());
+    // The split's refusals.
+    CHECK(!solve::train_predictor(t, std::vector<std::size_t>{}).has_value());
+    CHECK(!solve::train_predictor(t, std::vector<std::size_t>{0, 1, 2, 3}).has_value());
+    CHECK(!solve::train_predictor(t, std::vector<std::size_t>{4}).has_value());
+    CHECK(!solve::train_predictor(t, std::vector<std::size_t>{1, 1}).has_value());
+    // A held-out device is never trained on: changing its labels leaves the trees unchanged.
+    {
+        results::TrainingSet u = t;
+        for (std::size_t i = 0; i < u.rows; ++i) {
+            if (u.device[i] == 3) u.labels[i] = 100.0;
+        }
+        auto mu = solve::train_predictor(u, held);
+        REQUIRE(mu.has_value());
+        CHECK(mu->trees == m->trees);
+        CHECK(mu->base == m->base);
+        CHECK(mu->metrics.rank_correlation != m->metrics.rank_correlation);
+    }
+    // The diode's histories (slice 1's) train end to end.
+    {
+        const auto pa = scratch("t21.nithist"), pb = scratch("t31.nithist");
+        REQUIRE(io::save_adapt_history(pa, history_of(21)).has_value());
+        REQUIRE(io::save_adapt_history(pb, history_of(31)).has_value());
+        const std::vector<std::filesystem::path> files{pa, pb};
+        auto man = io::make_manifest(files);
+        REQUIRE(man.has_value());
+        auto set = io::build_training_set(*man);
+        REQUIRE(set.has_value());
+        solve::TreeOptions small;
+        small.min_leaf = 2;
+        auto dm = solve::train_predictor(*set, solve::default_held_out(2), small);
+        REQUIRE(dm.has_value());
+        CHECK(dm->held_out.size() == 1);
+        CHECK(dm->metrics.samples > 0);
+    }
 }

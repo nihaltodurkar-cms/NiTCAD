@@ -602,7 +602,8 @@ add_library(nitcad_solve STATIC
   src/solve/adapt_policy.cpp
   src/solve/adapt.cpp
   src/solve/adapt_report.cpp
-  src/solve/adapt_learn.cpp)
+  src/solve/adapt_learn.cpp
+  src/solve/adapt_learn_model.cpp)
 add_library(NiTCAD::solve ALIAS nitcad_solve)
 target_include_directories(nitcad_solve PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
 target_link_libraries(nitcad_solve PUBLIC
