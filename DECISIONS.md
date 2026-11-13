@@ -6073,6 +6073,15 @@ the candidates, their benefits, work and predicted seconds, the allocation, the 
 - AC14 is unchanged by 5b (its runs are feature-only); with adjoint weighting the intelligent loop takes 4 passes
   against basic's 8 on the tensor MOSFET (AC16's run).
 
+**Owner rulings after slice 5b (2026-11-13; owner, "Decisions for you: choose recommended").** No criterion is
+loosened or re-worded. (1) AR7's determinism construction is confirmed: the allocation ranks by the counted work
+N_newton ((W + dW)^1.5 − W^1.5), and the timing-fitted model only reports (AC15) and enforces the time budget.
+(2) The allocation runs with adjoint weighting only; feature-only runs keep slice 5a's layer. (3) AC14 (AR6), AC15
+and the well-MOSFET AC16 stay `[!shouldfail]` with their measurements above. They are re-measured once slice 7's gates
+are in, and any still unmet at the unit's close is recorded as a limitation in ARCHITECTURE.md 11.3, as for Units
+46, 48, 53 and 54. (4) AR4: AC7 keeps the recorded 4×/8×/16× reference 5.20577. Its uncertainty (about 0.4%) is stated
+beside AC7 and re-examined with the tensor MOSFET's unconverged 8× reference under AC20 in slice 7.
+
 ---
 
 ### Unit 55 — theoretical calculation validation framework: research and design proposal (proposed 2026-10-31; on `verify/theoretical-validation`)
