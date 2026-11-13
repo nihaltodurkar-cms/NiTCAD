@@ -16,7 +16,9 @@
 
 #include "NiTCAD/analysis/curve.hpp"
 #include "NiTCAD/deck/build.hpp"
+#include "NiTCAD/deck/run.hpp"
 #include "NiTCAD/deck/syntax.hpp"
+#include "NiTCAD/io/adapt_report.hpp"
 #include "NiTCAD/io/device_file.hpp"
 #include "NiTCAD/io/files.hpp"
 #include "NiTCAD/mesh/mesh.hpp"
@@ -38,7 +40,11 @@ constexpr const char* plot_usage =
     "  input   a deck (its device, mesh and the result files its run wrote), or a .nitsweep,\n"
     "          .nittran or .nitac file with --device <file.nitdev> [--mesh <file.nitmesh>]\n"
     "  view    --view solid|mesh|field|slice|iso|exploded|filmstrip|iv|cv|current|bands|profile|\n"
-    "          quality|quality-histogram|difference (default: field with --field, else solid)\n"
+    "          quality|quality-histogram|difference|adapt|passes (default: field with --field, else\n"
+    "          solid)\n"
+    "  adapt   --view adapt: an adaptive run's estimate over its allowance against the DOFs per pass\n"
+    "          (a deck with [adapt], or its .nitadapt report); --view passes: each pass's mesh, tiled\n"
+    "          in rows of --columns (4) at --size (640x480 each); other views draw the final mesh\n"
     "  iso     --view iso --field <f> --levels <v>[,<v>...] (3D surfaces, 2D contours)\n"
     "  field   --field potential|n|p|Ec|Ev|Efn|Efp|T|doping|ND|NA|R|srh|auger|\n"
     "          radiative|surface|Gii|Gbtbt|E|J|Jn|Jp|Tn|Tp  --point <k> (default: last)\n"
@@ -246,6 +252,98 @@ std::size_t swept_contact(const std::vector<std::vector<double>>& biases) {
     return best;
 }
 
+// An adaptive run (Unit 17, AD8): --view adapt plots each pass's relative estimate (the largest estimate over
+// its allowance; at or below 1 within the tolerance) against its DOFs, log-log, with the line at 1; --view
+// passes tiles each pass's mesh from the deck's adapt_meshes directory. The report is the deck's [output]
+// adapt, or a .nitadapt file given as the input (--view adapt only).
+int plot_adapt(const Options& o) {
+    fs::path report_path, meshes;
+    if (o.input.extension() == ".nitadapt") {
+        if (o.view == "passes") return usage("--view passes needs the deck (its adapt_meshes directory)");
+        report_path = o.input;
+    } else {
+        const auto deck = deck::read(o.input);
+        if (!deck) return fail(deck.error().message);
+        auto plan = deck::build(*deck);
+        if (!plan) return fail(plan.error().message);
+        if (!plan->adapt) return fail("the deck has no [adapt]");
+        report_path = plan->outputs.adapt;
+        meshes = plan->outputs.adapt_meshes;
+        if (report_path.empty()) return fail("the deck writes no adaptation report ([output] adapt)");
+    }
+    auto report = io::load_adapt_report(report_path);
+    if (!report) return fail(report.error().message);
+    if (report->passes.empty()) return fail("the adaptation report holds no pass");
+    if (o.adapter != "gpu" && o.adapter != "warp" && o.adapter != "auto") return usage("unknown adapter " + o.adapter);
+    const Adapter adapter = o.adapter == "gpu" ? Adapter::hardware : o.adapter == "warp" ? Adapter::warp : Adapter::automatic;
+    auto renderer = Renderer::create({.adapter = adapter});
+    if (!renderer) return fail(renderer.error().message);
+    if (o.view == "adapt") {
+        std::vector<double> x, y;
+        for (const results::AdaptPassRow& p : report->passes) {
+            if (!(std::isfinite(p.relative_estimate) && p.relative_estimate > 0.0)) continue;
+            x.push_back(static_cast<double>(p.dofs));
+            y.push_back(p.relative_estimate);
+        }
+        if (x.size() < 2) return fail("fewer than two passes have a finite estimate to plot");
+        auto c = analysis::make_curve(x, y);
+        if (!c) return fail(c.error().message);
+        auto t = analysis::make_curve({x.front(), x.back()}, {1.0, 1.0});
+        if (!t) return fail(t.error().message);
+        std::vector<SeriesInput> series{{"estimate / allowed", std::move(*c)}, {"tolerance", std::move(*t)}};
+        auto s = curve_plot(series, "DOFs", "estimate / allowed", AxisScale::log10, AxisScale::log10,
+                            "Adaptation (" + report->policy + "): " + report->status);
+        if (!s) return fail(s.error().message);
+        s->series.front().markers = true;
+        auto image = renderer->draw(*s, o.width, o.height);
+        if (!image) return fail(image.error().message);
+        if (auto saved = save_png(*image, o.out); !saved) return fail(saved.error().message);
+        std::printf("wrote %s (%dx%d, %zu passes, %s)\n", o.out.string().c_str(), image->width, image->height,
+                    report->passes.size(), renderer->adapter_name().c_str());
+        return 0;
+    }
+    if (meshes.empty()) return fail("the deck writes no pass meshes ([output] adapt_meshes)");
+    const int tw = o.size_given ? o.width : 640, th = o.size_given ? o.height : 480;
+    std::vector<Image> tiles;
+    for (std::size_t k = 0; k < report->passes.size(); ++k) {
+        const results::AdaptPassRow& p = report->passes[k];
+        auto d = io::load_device(deck::pass_device_file(meshes, k));
+        if (!d) return fail(d.error().message);
+        if (mesh::graph_digest(d->mesh()) != p.mesh_digest) {
+            return fail("the pass " + std::to_string(k) + " mesh file is not the report's (its digest differs)");
+        }
+        if (d->mesh().dimension() < 2) return fail("--view passes needs a 2D or 3D device");
+        std::optional<Geometry> geometry;
+        std::optional<mesh::GeneratedMesh> generated;
+        if (d->cells()) {
+            auto g = Geometry::tensor(d->mesh(), *d->cells());
+            if (!g) return fail(g.error().message);
+            geometry = std::move(*g);
+        } else if (auto gm = io::load_generated_mesh(deck::pass_mesh_file(meshes, k)); gm) {
+            generated = std::move(*gm);
+            auto g = Geometry::simplex(d->mesh(), generated->simplices);
+            if (!g) return fail(g.error().message);
+            geometry = std::move(*g);
+        } else {
+            geometry = Geometry::graph(d->mesh());
+        }
+        ViewOptions view;
+        view.contacts = true;
+        auto s = mesh_view(*d, *geometry, view);
+        if (!s) return fail(s.error().message);
+        s->title = "pass " + std::to_string(k) + " (" + p.source + "): " + std::to_string(p.nodes) + " nodes";
+        auto t = renderer->draw(*s, tw, th);
+        if (!t) return fail(t.error().message);
+        tiles.push_back(std::move(*t));
+    }
+    const int columns = static_cast<int>(o.columns > 0 ? std::min(o.columns, tiles.size()) : std::min<std::size_t>(4, tiles.size()));
+    auto strip = tile_images(tiles, columns);
+    if (!strip) return fail(strip.error().message);
+    if (auto saved = save_png(*strip, o.out); !saved) return fail(saved.error().message);
+    std::printf("wrote %s (%dx%d, %zu passes, %s)\n", o.out.string().c_str(), strip->width, strip->height, tiles.size(),
+                renderer->adapter_name().c_str());
+    return 0;
+}
 }  // namespace
 
 int plot(int argc, char** argv) {
@@ -397,6 +495,8 @@ int plot(int argc, char** argv) {
         }
     }
     if (o.out.empty()) return usage("--out is required");
+    if (o.view == "adapt" || o.view == "passes") return plot_adapt(o);
+    if (o.input.extension() == ".nitadapt") return usage("a .nitadapt report is plotted with --view adapt");
     if (!o.streamlines.empty()) {
         if (o.streamlines != "E" && o.streamlines != "J" && o.streamlines != "Jn" && o.streamlines != "Jp") {
             return usage("--streamlines is E, J, Jn or Jp");
@@ -440,6 +540,27 @@ int plot(int argc, char** argv) {
         if (!built) return fail(built.error().message);
         plan = std::move(*built);
         device = &plan->device;
+        // An adaptive run's results are on its final mesh (Unit 17, AD8): the device and mesh files it
+        // wrote, not the deck's start mesh.
+        if (plan->adapt) {
+            if (plan->outputs.device.empty()) {
+                return fail("an adaptive run is plotted on its final mesh: the deck writes no device file ([output] device)");
+            }
+            if (!fs::exists(plan->outputs.device)) {
+                return fail("no device file " + plan->outputs.device.string() + " (run the deck first)");
+            }
+            auto d = io::load_device(plan->outputs.device);
+            if (!d) return fail(d.error().message);
+            l.device = std::move(*d);
+            device = &*l.device;
+            plan->generated.reset();
+            if (!plan->outputs.mesh.empty() && fs::exists(plan->outputs.mesh)) {
+                if (auto g = io::load_generated_mesh(plan->outputs.mesh);
+                    g && mesh::graph_digest(g->mesh) == mesh::graph_digest(device->mesh())) {
+                    l.generated = std::move(*g);
+                }
+            }
+        }
         // The doping and the mesh quality need no results (a field, profile or difference of the doping);
         // arrows and streamlines always do, on any view (Unit 26c).
         const bool doping = o.field == "doping" || o.field == "ND" || o.field == "NA";

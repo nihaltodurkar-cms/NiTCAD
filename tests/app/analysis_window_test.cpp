@@ -1016,3 +1016,52 @@ TEST_CASE("app window 26c: the clipping box's sliders (YD6, YG4, YG5)", "[app]")
     CHECK(high.right <= inspector.right);
     CHECK(high.bottom - high.top >= 40);
 }
+
+TEST_CASE("app window: an adaptive run's passes listed, a pass's mesh shown and the results back (Unit 17, AD8)", "[app]") {
+    const fs::path dir = app_test::scratch("window_adapt");
+    const fs::path deck = app_test::write(dir, "a.deck", app_test::adapt_diode);
+    auto w = window();
+    REQUIRE(w->open_deck(deck));
+    REQUIRE(pump_until([&] { return w->workspace() != nullptr && !w->runner().busy(); }));
+    w->select_tab(MainWindow::tab_results);
+    CHECK(w->results_page().pass_count() == 0);  // not run: no passes
+    w->execute(Command::run);
+    REQUIRE(pump_until([&] { return !w->runner().busy() && w->workspace()->has_results(); }));
+    REQUIRE(w->workspace()->adapt);
+    const std::size_t passes = w->workspace()->adapt->passes.size();
+    const std::size_t final_nodes = w->workspace()->device->mesh().node_count();
+    REQUIRE(passes >= 2);
+    CHECK(final_nodes > 42);
+
+    // The list: a row per pass, the last the shown and final one.
+    w->select_tab(MainWindow::tab_results);
+    REQUIRE(w->results_page().pass_count() == static_cast<int>(passes));
+    CHECK(w->results_page().pass_cell(0, 1) == L"start");
+    CHECK(w->results_page().pass_cell(0, 2) == L"42");
+    const int last = static_cast<int>(passes) - 1;
+    CHECK(w->results_page().pass_cell(last, 7).starts_with(L"shown, final"));
+    bool adaptation_line = false;
+    for (int r = 0; r < w->results_page().record_count(); ++r) {
+        if (w->results_page().record_cell(r, 0) == L"Adaptation") adaptation_line = true;
+    }
+    CHECK(adaptation_line);
+
+    // Pass 0's mesh in the device view; the list stays, marking it.
+    REQUIRE(w->results_show_pass(0));
+    CHECK(w->tab() == MainWindow::tab_view);
+    CHECK(w->settings().kind == app::ViewKind::mesh);
+    REQUIRE(w->workspace()->pass == std::size_t{0});
+    CHECK(w->workspace()->device->mesh().node_count() == 42);
+    CHECK_FALSE(w->workspace()->has_results());
+    REQUIRE(w->scene());
+    CHECK(w->results_page().pass_count() == static_cast<int>(passes));
+    CHECK(w->results_page().pass_cell(0, 7).starts_with(L"shown"));
+    // Another pass, then the last: the results back on the final mesh.
+    REQUIRE(w->results_show_pass(1));
+    CHECK(w->workspace()->pass == std::size_t{1});
+    REQUIRE(w->results_show_pass(passes - 1));
+    CHECK_FALSE(w->workspace()->pass);
+    CHECK(w->workspace()->has_results());
+    CHECK(w->workspace()->device->mesh().node_count() == final_nodes);
+    CHECK_FALSE(w->results_show_pass(passes));  // out of range
+}

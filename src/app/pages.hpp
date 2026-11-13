@@ -12,6 +12,7 @@
 
 #include <chrono>
 #include <filesystem>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
@@ -122,12 +123,20 @@ public:
     [[nodiscard]] int record_count() const;
     [[nodiscard]] std::wstring figure_cell(int row, int column) const;
     [[nodiscard]] std::wstring record_cell(int row, int column) const;
+    // An adaptive run's passes (Unit 17, AD8): one row each (pass, mesh, nodes, DOFs, estimate over the
+    // allowance, marked, seconds, notes), shown only for an adaptive run; activating a row (double
+    // click, Enter) calls on_pass with its pass.
+    [[nodiscard]] int pass_count() const;
+    [[nodiscard]] std::wstring pass_cell(int row, int column) const;
+    std::function<void(std::size_t)> on_pass;
 
 private:
     static LRESULT CALLBACK proc(HWND hwnd, UINT message, WPARAM w, LPARAM l);
     void layout();
 
     HWND panel_ = nullptr, figures_ = nullptr, record_ = nullptr, figures_label_ = nullptr, record_label_ = nullptr;
+    HWND passes_ = nullptr, passes_label_ = nullptr;
+    bool has_passes_ = false;
     int dpi_ = 96;
 };
 

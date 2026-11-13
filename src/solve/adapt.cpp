@@ -12,6 +12,7 @@
 
 #include "NiTCAD/base/constants.hpp"
 #include "NiTCAD/mesh/locate.hpp"
+#include "NiTCAD/mesh/mesh.hpp"
 #include "NiTCAD/solve/adapt_adjoint.hpp"
 
 namespace NiTCAD::solve {
@@ -1233,6 +1234,10 @@ std::expected<AdaptResult, base::Error> adapt(const DeviceBuilder& build, std::s
             rep.factor_fill = std::max(rep.factor_fill, p.convergence.factor_fill.value_or(0));
         }
         rep.dofs = dofs_of(built->device, bias);
+        rep.mesh_digest = mesh::graph_digest(built->device.mesh());
+        if (o.on_mesh) {
+            if (auto r = o.on_mesh(static_cast<std::size_t>(pass), *built); !r) return std::unexpected(r.error());
+        }
         // ID5's cost model: this pass predicted from the earlier passes (their last Newton count, this
         // mesh's size), then refitted with it.
         const CostSample sample{.newton_iterations = static_cast<double>(rep.newton_iterations),

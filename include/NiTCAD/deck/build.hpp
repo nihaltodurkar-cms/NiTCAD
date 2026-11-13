@@ -124,6 +124,29 @@
 //                     device, mesh, checkpoint, table; transient transient, device, mesh, table
 //                     (no checkpoint: its end state is not steady); small_signal small_signal,
 //                     device, mesh, checkpoint (the last operating point), table.
+//   [adapt]           (Unit 17, AD7; solve/adapt.hpp) adaptive refinement of the mesh for a [sweep]
+//                     (one mesh for the sweep, AQ3) on a tensor, generate2d or swept extrude3d mesh
+//                     (sweep = on): goal = current <contact>  (repeatable, at least one; an ohmic or
+//                       Schottky contact; vt, gm and swing are refused: not in this unit, AR8);
+//                     tolerance (relative, default 1e-3); at = auto | <point indices from 0>
+//                       (default auto: the sweep's first and last point, or with policy = intelligent
+//                       up to max_points chosen from a coarse sweep, ID3); max_points (default 3);
+//                     indicators = auto | <potential, electron_density, hole_density, doping,
+//                       generation> (auto: all); weighting = none | adjoint (default none);
+//                     policy = basic | intelligent (default basic, ID9: intelligent is not the default
+//                       until AC14-AC17 pass); mode = tolerance | budget with budget_dofs and/or
+//                       budget_seconds (budget needs policy = intelligent); verify = richardson | off
+//                       (default richardson); certify = report | required (default report: `nitcad
+//                       run` exits 3 when a required certificate is not reached, AD13); max_passes
+//                       (default 6), max_nodes, min_size, grading (1.5), theta (0.3);
+//                       predictor (17b) is refused.
+//                     The deck is rebuilt for every pass with the loop's refinement (build's second
+//                     argument): the tensor axes replaced (straddles kept as given), the 2D or
+//                     cross-section size field and the swept lines. restart is refused with [adapt].
+//                     [output] adapt = <file> (the report, io/adapt_report.hpp) and adapt_meshes =
+//                     <directory> (each pass's device, pass_<k>.nitdev, and generated mesh,
+//                     pass_<k>.nitmesh); sweep, device, mesh, checkpoint and table are the final
+//                     mesh's, the table with the certificates' columns.
 // Exactly one analysis section: [equilibrium], [sweep], [transient], [small_signal] or [trace].
 // A series is a comma list, first : last : step (DK6) or logspace(first, last, count) (Unit 43:
 // count values evenly spaced in log10, first and last exact, both positive). Lengths take the
@@ -136,7 +159,9 @@
 #pragma once
 
 #include <expected>
+#include <array>
 #include <filesystem>
+#include <memory>
 #include <optional>
 #include <string>
 #include <vector>
@@ -145,6 +170,7 @@
 #include "NiTCAD/deck/syntax.hpp"
 #include "NiTCAD/device/device.hpp"
 #include "NiTCAD/mesh/generate.hpp"
+#include "NiTCAD/solve/adapt.hpp"
 #include "NiTCAD/solve/bias.hpp"
 #include "NiTCAD/solve/small_signal.hpp"
 #include "NiTCAD/solve/trace.hpp"
@@ -164,6 +190,20 @@ struct Outputs {
     std::filesystem::path table;         // a CSV of the analysis's terminal quantities
     std::filesystem::path transient;     // io::save_transient (Unit 43)
     std::filesystem::path small_signal;  // io::save_small_signal (Unit 43)
+    std::filesystem::path adapt;         // io::save_adapt_report (Unit 17)
+    std::filesystem::path adapt_meshes;  // a directory: each pass's device and generated mesh (Unit 17)
+};
+
+// [adapt] (Unit 17): the loop's options and what it needs to refine the deck's mesh.
+struct AdaptPlan {
+    solve::AdaptOptions options;  // on_mesh unset (the runner sets it)
+    bool certify_required = false;
+    solve::AdaptMeshKind kind = solve::AdaptMeshKind::tensor;
+    std::array<std::vector<mesh::AxisRange>, 3> axis_protected;  // tensor: the straddles per axis
+    int sweep_axis = 2;
+    std::vector<mesh::AxisRange> sweep_protected;
+    double interface_resolution = 0.0, max_size = 0.0;
+    std::shared_ptr<const Deck> deck;  // the deck, rebuilt per pass
 };
 
 struct Plan {
@@ -184,8 +224,17 @@ struct Plan {
     std::vector<solve::Waveform> waveforms;  // one per contact, device contact order
     solve::SmallSignalOptions small_signal;
     solve::TraceOptions trace;
+    std::optional<AdaptPlan> adapt;  // [adapt] (Unit 17)
 };
 
 [[nodiscard]] std::expected<Plan, base::Error> build(const Deck& deck);
+// The deck built on a refined mesh (Unit 17): the refinement's non-empty members replace the
+// mesh's (see [adapt]); an empty refinement gives build(deck)'s plan.
+[[nodiscard]] std::expected<Plan, base::Error> build(const Deck& deck, const solve::MeshRefinement& refinement);
+
+// A plan's device as solve::adapt takes it (its generated mesh and cross-section moved in).
+[[nodiscard]] solve::AdaptableMesh adaptable(Plan plan);
+// The loop's builder for a plan with [adapt]: build(deck, refinement), then adaptable().
+[[nodiscard]] solve::DeviceBuilder device_builder(const Plan& plan);
 
 }  // namespace NiTCAD::deck

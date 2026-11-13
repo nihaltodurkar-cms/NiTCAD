@@ -22,6 +22,7 @@
 #include "NiTCAD/device/device.hpp"
 #include "NiTCAD/mesh/generate.hpp"
 #include "NiTCAD/render/geometry.hpp"
+#include "NiTCAD/results/adapt.hpp"
 #include "NiTCAD/results/run.hpp"
 #include "NiTCAD/results/small_signal.hpp"
 #include "NiTCAD/results/solution.hpp"
@@ -43,6 +44,12 @@ struct Workspace {
     // transient's snapshots (with their currents and rates), a small-signal run's operating points,
     // or the equilibrium.
     std::vector<results::BiasPoint> points;
+    // An adaptive run (Unit 17, AD8): its report and the directory of its passes' meshes; the device
+    // is the final mesh's, the one the results were solved on. A pass's mesh shown alone
+    // (workspace_of_pass) keeps the report, has no results and names its pass.
+    std::optional<results::AdaptReport> adapt;
+    std::filesystem::path pass_meshes;
+    std::optional<std::size_t> pass;
 
     [[nodiscard]] bool has_results() const noexcept { return !points.empty(); }
     // The run record of the results, if they have one (an equilibrium has none).
@@ -51,7 +58,9 @@ struct Workspace {
 
 // A finished run's plan and report (nothing read from disk).
 [[nodiscard]] std::expected<Workspace, base::Error> workspace_from_run(deck::Plan plan, deck::RunReport report);
-// A deck's device, and the results its outputs hold if they exist (none before the deck has run).
+// A deck's device, and the results its outputs hold if they exist (none before the deck has run). For
+// a deck with [adapt] that has run, the final mesh's device (its device file, else the last pass's
+// file) and its adaptation report; an error when the report is there and the final mesh is not.
 [[nodiscard]] std::expected<Workspace, base::Error> workspace_from_deck(const std::filesystem::path& deck);
 // The same from a plan already built from the deck at that path (a check's, off the UI thread).
 [[nodiscard]] std::expected<Workspace, base::Error> workspace_from_plan(deck::Plan plan, const std::filesystem::path& deck);
@@ -67,13 +76,19 @@ struct Workspace {
                                                                          const std::filesystem::path& device,
                                                                          const std::filesystem::path& mesh = {});
 
+// Pass k's mesh of an adaptive run's workspace (Unit 17, AD8), from its pass files, without results.
+// Errors (invalid_input): no adaptation report or pass directory, k out of range, a pass file whose
+// mesh digest is not the report's; a file that does not load.
+[[nodiscard]] std::expected<Workspace, base::Error> workspace_of_pass(const Workspace& w, std::size_t pass);
+
 // The results browser (VA5): a name and a value per line.
 struct Line {
     std::string name;
     std::string value;
 };
 // The run record (identity, mesh digest, settings, how it ended) and the build and platform of the
-// provenance; for an equilibrium, its convergence.
+// provenance; for an equilibrium, its convergence; for an adaptive run, the adaptation (status, stop,
+// passes, verification, each certificate) and the pass shown.
 [[nodiscard]] std::vector<Line> run_record(const Workspace& w);
 // Every converged point's Newton history: point, iterations, final update.
 struct PointHistory {

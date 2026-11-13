@@ -490,7 +490,8 @@ add_library(nitcad_io STATIC
   src/io/record.cpp
   src/io/files.cpp
   src/io/device_file.cpp
-  src/io/verify_report.cpp)
+  src/io/verify_report.cpp
+  src/io/adapt_report.cpp)
 add_library(NiTCAD::io ALIAS nitcad_io)
 target_include_directories(nitcad_io PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
 target_link_libraries(nitcad_io PUBLIC NiTCAD::base NiTCAD::mesh NiTCAD::device NiTCAD::results)
@@ -598,7 +599,8 @@ add_library(nitcad_solve STATIC
   src/solve/adapt_transfer.cpp
   src/solve/adapt_adjoint.cpp
   src/solve/adapt_policy.cpp
-  src/solve/adapt.cpp)
+  src/solve/adapt.cpp
+  src/solve/adapt_report.cpp)
 add_library(NiTCAD::solve ALIAS nitcad_solve)
 target_include_directories(nitcad_solve PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
 target_link_libraries(nitcad_solve PUBLIC
@@ -692,6 +694,7 @@ add_executable(nitcad_deck_test
   tests/deck/quantum_confinement_test.cpp
   tests/deck/gate_tunnelling_test.cpp
   tests/deck/complex_finfet_test.cpp
+  tests/deck/adapt_test.cpp
   tests/baseline/trace_listener.cpp)
 target_include_directories(nitcad_deck_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/deck")
 # The plot tests read the images back (Unit 25a).

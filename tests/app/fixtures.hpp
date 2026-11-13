@@ -318,4 +318,43 @@ inline Cli nitcad(const std::string& arguments) {
 
 inline std::string quoted(const std::filesystem::path& p) { return "\"" + p.string() + "\""; }
 
+// An adaptive run (Unit 17): a coarse 2D lateral diode adapted for the anode's current at its last
+// point, with its final mesh's device and mesh, the report and each pass's mesh (as tests/deck/adapt_test.cpp).
+inline const std::string adapt_diode = R"(
+[mesh]
+type = tensor
+x = linspace(0, 2um, 21)
+y = 0, 0.1um
+
+[region silicon]
+material = silicon
+
+[doping]
+profile = acceptor constant 1e17 axis=y x=-1:1um
+profile = donor constant 1e17 axis=y x=1um:3um
+
+[contact anode]
+kind = ohmic
+patch = x_min
+
+[contact cathode]
+kind = ohmic
+patch = x_max
+
+[sweep]
+contact anode = 0 : 0.4 : 0.2
+
+[adapt]
+goal = current anode
+tolerance = 1e-2
+at = 2
+
+[output]
+sweep = a.nitsweep
+device = a.nitdev
+mesh = a.nitmesh
+adapt = a.nitadapt
+adapt_meshes = passes
+)";
+
 }  // namespace app_test

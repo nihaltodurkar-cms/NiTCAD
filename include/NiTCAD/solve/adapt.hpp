@@ -45,6 +45,7 @@
 
 #include <array>
 #include <cstddef>
+#include <cstdint>
 #include <expected>
 #include <functional>
 #include <limits>
@@ -52,12 +53,14 @@
 #include <optional>
 #include <span>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "NiTCAD/base/error.hpp"
 #include "NiTCAD/device/device.hpp"
 #include "NiTCAD/mesh/generate.hpp"
 #include "NiTCAD/mesh/size_field.hpp"
+#include "NiTCAD/results/adapt.hpp"
 #include "NiTCAD/results/run.hpp"
 #include "NiTCAD/solve/adapt_indicators.hpp"
 #include "NiTCAD/solve/adapt_policy.hpp"
@@ -111,6 +114,9 @@ struct AdaptOptions {
     bool verify = true;                     // AD11
     Policy policy = Policy::basic;          // the decision layer (adapt_policy.hpp); basic: AD3 alone
     PolicyOptions intelligent;              // read only with policy = intelligent
+    // Called with each pass's mesh once it is solved, in pass order (AD8: the runner saves the passes'
+    // meshes); an error it returns ends the run with that error. Empty: not called.
+    std::function<std::expected<void, base::Error>(std::size_t pass, const AdaptableMesh& mesh)> on_mesh;
 };
 
 // How a pass's mesh was made (ID7).
@@ -189,6 +195,7 @@ struct AdaptCandidate {
 struct AdaptPass {
     std::size_t nodes = 0;
     std::size_t edges = 0;
+    std::uint64_t mesh_digest = 0;   // mesh::graph_digest of this pass's mesh (AD8)
     // Per goal and adaptation point, goal-major (goal g, point a at g * at.size() + a).
     std::vector<double> goal;
     std::vector<double> resolution;  // the point's current resolution, same layout
@@ -302,5 +309,24 @@ struct AdaptResult {
                                                             std::span<const std::vector<double>> points,
                                                             const BiasOptions& bias, const AdaptOptions& options,
                                                             const RunControl& control = {});
+
+// The adaptation settings as named values (AD8, AR8): "adapt.tolerance", "adapt.goal" (a contact
+// index, one per goal), "adapt.at" (one per given point), "adapt.weighting" (0 none, 1 adjoint),
+// "adapt.policy" (0 basic, 1 intelligent), theta, grading, min_size, max_passes, max_nodes, verify,
+// "adapt.certify_required", the indicators' switches and thresholds, and the decision layer's
+// max_points, miss_margin, budget_dofs and budget_seconds.
+[[nodiscard]] std::vector<std::pair<std::string, double>> adapt_settings(const AdaptOptions& options,
+                                                                         bool certify_required);
+
+// The run identity covers the adaptation (AD8): the record's input_identity continued (FNV-1a 64)
+// with the settings' names and values (doubles by bit pattern) and the record's mesh digest, the
+// final mesh's; the settings appended to the record's. A run without adaptation is not stamped
+// (AD10).
+void stamp_adapt(results::RunRecord& run, const AdaptOptions& options, bool certify_required);
+
+// The report of a run (AD8, AD13, ID7; results/adapt.hpp), its run record the final sweep's. The
+// goal contacts are named from `device` (any of the run's devices: the contacts do not change).
+[[nodiscard]] results::AdaptReport adapt_report(const AdaptResult& result, const AdaptOptions& options,
+                                                const device::Device& device, bool certify_required);
 
 }  // namespace NiTCAD::solve

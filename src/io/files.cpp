@@ -1359,4 +1359,12 @@ std::expected<results::SmallSignal, base::Error> load_small_signal(
     return s;
 }
 
+namespace detail {
+
+Writer write_run_record(const results::RunRecord& run) { return write_run(run); }
+
+std::expected<results::RunRecord, base::Error> read_run_record(const Reader& r) { return read_run(r); }
+
+}  // namespace detail
+
 }  // namespace NiTCAD::io

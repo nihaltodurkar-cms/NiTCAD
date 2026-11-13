@@ -6082,6 +6082,42 @@ are in, and any still unmet at the unit's close is recorded as a limitation in A
 46, 48, 53 and 54. (4) AR4: AC7 keeps the recorded 4×/8×/16× reference 5.20577. Its uncertainty (about 0.4%) is stated
 beside AC7 and re-examined with the tensor MOSFET's unconverged 8× reference under AC20 in slice 7.
 
+**Slice 6 (AD7, AD8, AD13; AC9, AC10).** `[adapt]` in the deck (deck/build.hpp), the runner's adaptive path
+(deck/run.cpp), `results::AdaptReport` (results/adapt.hpp) filled by `solve::adapt_report`, its file
+(io/adapt_report.hpp, content kind 8, `.nitadapt`), the identity stamp (`solve::stamp_adapt`), the certificates in
+`nitcad run`'s output and the CSV table, exit status 3, and the app's deck vocabulary. 6b adds `nitcad plot`'s and the
+app's views of the passes.
+
+| # | Question (ruled under the standing instruction "always choose recommended") | Options | Recommendation and ruling |
+|---|---|---|---|
+| AR8 | The constructions AD7, AD8 and AD13 leave open. | (a) as below; (b) implement the derived goals now. | **(a)**, ruled as recommended; no criterion changed. **Goals:** `goal = current <contact>` only; `vt`, `gm` and `swing` are refused with their line ("not adapted in this unit"). The loop, its adjoint (AR3) and AD11 are built on terminal currents, and a derived goal needs its own adjoint (a functional of several points) and resolution rule: a later unit, **owner to confirm**. `predictor` (17b) is refused. **Defaults:** `weighting = none`, `policy = basic` (ID9: intelligent is not the default until AC14–AC17 pass, and AC14 and AC15 do not), `verify = richardson`, `certify = report`, `tolerance = 1e-3`, `max_passes = 6`; `at = auto` (absent: the same): the sweep's first and last points, or, with the intelligent policy, up to `max_points` (default 3) chosen by ID3; `at = <indices>` counts the sweep's points from 0. `mode = budget` needs the intelligent policy and `budget_dofs` and/or `budget_seconds` (the basic loop takes `max_nodes`); the budget keys are refused in tolerance mode. **Scope refusals (AC10), each with its line:** an analysis other than `[sweep]` (AQ3: one mesh per sweep), a restart (the checkpoint is the deck's mesh's), a generate3d, file or unswept extrude3d mesh (AQ2), `weighting = adjoint` with `check_adjoint`'s refusals (a backend that cannot transpose and no fallback, electrothermal, energy balance, nonlocal tunnelling) or a non-ohmic goal, a goal on a gate or electrode, a second goal on one contact, the adaptation's outputs without `[adapt]`. **Rebuild (AQ1):** the builder is `deck::build(deck, refinement)`, the whole deck rebuilt per pass: a tensor axis the loop refined is taken whole (its straddles already in it; their spans protected), a generate2d mesh and a swept cross-section take the size field, a swept mesh the refined lines; an empty refinement gives the deck's mesh (AD10). **Outputs (AD8):** `sweep`, `device`, `mesh`, `checkpoint` and `table` are the final mesh's; `adapt = <file>` the report; `adapt_meshes = <directory>` each pass's device and mesh (`pass_<k>.nitdev`, `pass_<k>.nitmesh`, written as each pass is solved through `AdaptOptions::on_mesh`): the passes' meshes the app and `nitcad plot` show. The report holds the run record, the settings, per pass the mesh digest, source, goals, estimates, marks by indicator and region, Newton counts, nonzeros, fill, the decision layer's predictions, candidates, orders and cost model, the times; the certificates; the stop, fallback and verification; its status is the worst certificate's. **Identity (AD8):** the final sweep's `input_identity` continued by FNV-1a 64 over "adapt", each setting's name and value (bit pattern) and the final mesh's digest, the settings appended as `adapt.*` (`solve::adapt_settings`); a run without `[adapt]` is unchanged (AD10). **Certification (AD13):** `nitcad run` prints each pass and each certificate, with "an estimate and an independent Richardson check, not a proof"; the CSV table gains per goal `<c> certificate`, `<c> estimate A`, `<c> verified error A`, `<c> allowed A` and `<c> order` after `substeps` (filled at the adaptation points); with `certify = required` a result that is not certified exits **3** (2 stays an early stop), its outputs written. |
+
+**Slice 6 finding (not changed):** the deck tests' `diode_device` fixture (tests/deck/fixtures.hpp) is not a diode. Its
+profiles `acceptor constant 1e17 x=-1:1um` and `donor constant 1e17 x=1um:3um` window the depth axis x, which a profile
+ignores (doping_profiles.hpp: "the depth axis's entry is ignored"), so both dopants cover the whole device and it is a
+compensated resistor (the anode current is linear in the bias, 1.46 mA at 0.2 V). Its tests compare a deck against the
+same hand-built device, so they still hold. Slice 6's deck uses a lateral window (`axis=y`) on a 21 × 2 mesh, which
+gives a junction (2.6 nA at 0.4 V). Owner to decide whether to correct the fixture (every deck test that uses it would
+change its numbers).
+
+**Slice 6b (AD8: the views).** `nitcad plot --view adapt` draws each pass's estimate over its allowance against its
+DOFs (log-log, the tolerance the line at 1), from the deck's `[output] adapt` or a `.nitadapt` file; `--view passes`
+tiles each pass's mesh from `adapt_meshes` (`--columns`, 4; `--size` per tile, 640×480), each pass file checked against
+the report's mesh digest. Every other view of a deck with `[adapt]` draws the **final** mesh, read from its `device`
+(and `mesh`) output: the results were solved on it, not on the deck's start mesh, so `plot` (and the app) would
+otherwise refuse them by digest. The pass files are named by `deck::pass_device_file` / `pass_mesh_file`. The app:
+`Workspace` carries the report, the passes' directory and, for a pass shown alone, its index; `workspace_from_run`
+takes the final mesh's device from the run, `workspace_from_plan` from the device output or the last pass's file
+(whichever has the report's final digest; an error when neither does: the report's results cannot be paired);
+`workspace_of_pass` loads one pass's mesh without results; the run record gains the adaptation (status and stop, "an
+estimate and an independent check, not a proof", passes and nodes, policy and weighting, fallback, verification, each
+certificate) and the pass shown. The results page lists the passes (pass, mesh source, nodes, DOFs, estimate over
+allowance, marked, seconds, notes) for an adaptive run only; activating a row shows that pass's mesh in the device
+view with the results kept aside, and the last pass brings them back (`MainWindow::results_show_pass`). Tests: the
+plot views, their refusals and a changed pass file (tests/deck/adapt_test.cpp), the workspace (tests/app/
+workspace_test.cpp) and the window (tests/app/analysis_window_test.cpp). Slice 6 is committed as one commit (6a and
+6b), its suites run on both together.
+
 ---
 
 ### Unit 55 — theoretical calculation validation framework: research and design proposal (proposed 2026-10-31; on `verify/theoretical-validation`)

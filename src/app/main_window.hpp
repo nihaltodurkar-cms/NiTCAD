@@ -117,6 +117,10 @@ public:
     [[nodiscard]] int dpi() const noexcept { return dpi_; }
     [[nodiscard]] int tab() const noexcept { return tab_; }
     void select_tab(int tab);
+    // An adaptive run's pass k (Unit 17, AD8; the results page's passes list): its mesh in the device
+    // view, the results kept aside; the last pass brings the results back. False (with the reason in the
+    // status bar) when it cannot be shown.
+    bool results_show_pass(std::size_t pass);
     // Builds the active view's scene from the workspace and settings, and presents it.
     void refresh();
     [[nodiscard]] const Scene* scene() const noexcept { return scene_ ? &*scene_ : nullptr; }
@@ -256,6 +260,7 @@ private:
     std::chrono::steady_clock::time_point run_ui_updated_{};
     std::optional<Workspace> workspace_;
     std::optional<Workspace> run_b_, previous_;  // Unit 26b, XD6
+    std::optional<Workspace> adapt_result_;      // Unit 17: the results while a pass's mesh is shown
     std::optional<Prober> prober_;
     ViewSettings device_view_, curve_view_;
     std::optional<Scene> scene_;

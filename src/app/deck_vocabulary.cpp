@@ -224,7 +224,36 @@ constexpr std::array<KeyInfo, 10> trace_keys{{
     {"thermal", 1, true, "<K>", "a thermal contact's temperature, held", {}, {}, {}},
 }};
 
-constexpr std::array<KeyInfo, 7> output_keys{{
+// [adapt] (Unit 17, AD7).
+constexpr std::array<std::string_view, 1> goal_kinds{"current"};
+constexpr std::array<std::string_view, 2> weightings{"none", "adjoint"};
+constexpr std::array<std::string_view, 2> policies{"basic", "intelligent"};
+constexpr std::array<std::string_view, 2> adapt_modes{"tolerance", "budget"};
+constexpr std::array<std::string_view, 2> verifications{"richardson", "off"};
+constexpr std::array<std::string_view, 2> certifications{"report", "required"};
+constexpr std::array<KeyInfo, 18> adapt_keys{{
+    {"goal", 0, true, "current <contact>", "a goal: a contact's current (at least one)", goal_kinds, {}, {}},
+    {"tolerance", 0, false, "1e-3", "the goals' relative tolerance", {}, {}, {}},
+    {"at", 0, false, "auto", "the adaptation points: auto or point indices from 0", {}, {}, {}},
+    {"max_points", 0, false, "3", "at = auto, intelligent: the most points chosen", {}, {}, {}},
+    {"indicators", 0, false, "auto", "auto, or a list of potential, electron_density, hole_density, doping, generation", {}, {}, {}},
+    {"weighting", 0, false, "none", "none | adjoint (goal-weighted marks and estimate)", weightings, {}, {}},
+    {"policy", 0, false, "basic", "basic | intelligent (the decision layer)", policies, {}, {}},
+    {"mode", 0, false, "tolerance", "tolerance | budget (intelligent)", adapt_modes, {}, {}},
+    {"budget_dofs", 0, false, "<n>", "mode = budget: the final mesh's unknowns at most", {}, {}, {}},
+    {"budget_seconds", 0, false, "<s>", "mode = budget: the run's time at most", {}, {}, {}},
+    // certify before verify: "cerify" is one edit from both, and a tie suggests the first.
+    {"certify", 0, false, "report", "report | required (nitcad run exits 3 when not certified)", certifications, {}, {}},
+    {"verify", 0, false, "richardson", "richardson | off (the independent check)", verifications, {}, {}},
+    {"max_passes", 0, false, "6", "the most passes", {}, {}, {}},
+    {"max_nodes", 0, false, "<n>", "the largest mesh", {}, {}, {}},
+    {"min_size", 0, false, "<length>", "the smallest size (default from the mesh)", {}, {}, {}},
+    {"grading", 0, false, "1.5", "the largest size ratio between neighbours", {}, {}, {}},
+    {"theta", 0, false, "0.3", "the marking fraction", {}, {}, {}},
+    {"predictor", 0, false, "<file>", "Unit 17b's cross-run model (refused in this unit)", {}, {}, {}},
+}};
+
+constexpr std::array<KeyInfo, 9> output_keys{{
     {"sweep", 0, false, "<file>", "a sweep's or trace's results (.nitsweep)", {}, {}, {}},
     {"device", 0, false, "<file>", "the device (.nitdev)", {}, {}, {}},
     {"mesh", 0, false, "<file>", "the mesh", {}, {}, {}},
@@ -232,9 +261,11 @@ constexpr std::array<KeyInfo, 7> output_keys{{
     {"table", 0, false, "<file>", "a CSV table of the terminal quantities", {}, {}, {}},
     {"transient", 0, false, "<file>", "a transient run's results (.nittran)", {}, {}, {}},
     {"small_signal", 0, false, "<file>", "a small-signal run's results (.nitac)", {}, {}, {}},
+    {"adapt", 0, false, "<file>", "an [adapt] run's report (.nitadapt)", {}, {}, {}},
+    {"adapt_meshes", 0, false, "<directory>", "an [adapt] run's pass meshes", {}, {}, {}},
 }};
 
-constexpr std::array<SectionInfo, 15> sections{{
+constexpr std::array<SectionInfo, 16> sections{{
     {"device", 0, false, "the device's temperature", device_keys, {}},
     {"mesh", 0, false, "the mesh: tensor, generated or from a file", mesh_keys, "type"},
     {"region", 1, true, "a region: its material and where it is", region_keys, {}},
@@ -250,6 +281,7 @@ constexpr std::array<SectionInfo, 15> sections{{
     {"small_signal", 0, false, "the analysis: small-signal (AC) at operating points", small_signal_keys, {}},
     {"trace", 0, false, "the analysis: an arc-length trace", trace_keys, {}},
     {"output", 0, false, "files the run writes, relative to the deck", output_keys, {}},
+    {"adapt", 0, false, "adaptive refinement of a sweep's mesh", adapt_keys, {}},
 }};
 
 std::string_view trim(std::string_view s) {
