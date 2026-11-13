@@ -253,10 +253,9 @@ namespace {
 // unstructured at up to 12 nm; the structured frame unchanged), adapted for I_D with [adapt].
 std::string coarse_swept_text(const std::string& mkl, const char* policy) {
     std::string t = read_deck("finfet_3d_swept.deck");
-    replace_once(t,
-                 "lines = linspace(0, 20nm, 3) + linspace(22.5nm, 27.5nm, 3) + linspace(32.5nm, 52.5nm, 9) + \\n"
-                 "        linspace(57.5nm, 62.5nm, 3) + linspace(65nm, 85nm, 3)",
-                 "lines = linspace(0, 20nm, 2) + 25nm + linspace(35nm, 50nm, 4) + 60nm + linspace(65nm, 85nm, 2)");
+    replace_once(t, "lines = linspace(0, 20nm, 3) + linspace(22.5nm, 27.5nm, 3) + linspace(32.5nm, 52.5nm, 9) + ",
+                 "lines = linspace(0, 20nm, 2) + 25nm + linspace(35nm, 50nm, 4) + 60nm + ");
+    replace_once(t, "        linspace(57.5nm, 62.5nm, 3) + linspace(65nm, 85nm, 3)", "        linspace(65nm, 85nm, 2)");
     replace_once(t, "max_size = 8nm", "max_size = 12nm");
     replace_once(t, "[solver]\n", "[solver]\n" + pardiso(mkl));
     t.erase(t.find("[output]"));
