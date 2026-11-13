@@ -633,6 +633,21 @@ TEST_CASE("intelligent: the allocation needs fewer DOFs than basic, and does bet
     for (const auto& c : b->certificates) CHECK(c.status == solve::CertificateStatus::certified);
     for (const auto& c : i->certificates) CHECK(c.status == solve::CertificateStatus::certified);
     CHECK(static_cast<double>(di) <= 0.8 * static_cast<double>(db));
+}
+
+// Fails as frozen against AR9's reference (slice 7, re-measured 2026-11-13): at the budget (7866 DOFs)
+// intelligent 0.6531% (7614 DOFs) against basic's 0.6507% (3960 DOFs): a tie within AR9's 0.1%; it
+// passed against the unconverged 8x reference (2.8945% against 2.8969%). Unmet at the unit's close:
+// a limitation in ARCHITECTURE.md 11.3 (owner ruling after slice 5b).
+TEST_CASE("intelligent: on a budget the allocation does at least as well as basic (AC16 budget mode)",
+          "[.adapt_intelligent][!shouldfail]") {
+    guard_mosfet_reference();
+    const std::vector<double>& ref = mosfet_ref;
+    solve::AdaptOptions o = ac16_options();
+    auto b = solve::adapt(tensor_mosfet_mesh, ac16_points, ac16_bias(), o);
+    if (!b) FAIL(b.error().message);
+    const std::size_t db = dofs(b->mesh->device);
+    o.policy = solve::Policy::intelligent;
     // Budget mode at half basic's final DOFs; basic at the same budget (max_nodes, all nodes silicon).
     o.intelligent.dof_budget = db / 2;
     auto ib = solve::adapt(tensor_mosfet_mesh, ac16_points, ac16_bias(), o);

@@ -6179,6 +6179,20 @@ AC11 on AC8: per pass 6 734 and 11 550 DOFs, 181 820 and 302 032 nonzeros, fill 
 iterations over the 17 points; solve 5.8 and 10.1 s, the estimate 3.1 and 5.2 s (factorizations 1.0 and 2.1 s,
 transposed solve 0.024 and 0.041 s: 2% of a factorization); no verification run (budget stops).
 
+**Re-measured after slice 7's gates (2026-11-13, Release, idle machine; the owner ruling after slice 5b).**
+`[adapt_intelligent],[adapt_goal]`: AC7 passes (adjoint 2 214 nodes against feature-only 6 834, 0.32; error 0.47%
+against AR4). AC11 and AC20 pass. **AC14** unchanged (its runs are feature-only): recall 0.87 / 0.83 / 0.51, precision
+1 / 1 / 0.996, DOFs 1116 vs 540 and 504 vs 216, passes saved 0: **unmet**. **AC15**: rank correlation 0.97 and 0.997
+(holds); the diode's orders 1.10, 1.09, 0.81 and **1.64** (holes, 2 samples), and the cost model not better than
+node-only within timing noise: **unmet**. **AC16** tolerance mode on the tensor MOSFET: 9 270 against 15 732 DOFs
+(0.59), both certified, errors against AR9 0.45% and 0.43%: **holds**. **AC16 budget mode on the tensor MOSFET, against
+AR9's reference: intelligent 0.6531% (7 614 DOFs) against basic's 0.6507% (3 960 DOFs) at a 7 866-DOF budget —
+unmet** (a tie within AR9's 0.1% uncertainty; slice 5b's pass was against the unconverged 8× reference, 2.8945%
+against 2.8969%). The case is split: tolerance mode stays a gate; budget mode is `[!shouldfail]` with this
+measurement, the criterion unchanged. **AC16 on the well MOSFET** tolerance mode 12 744 against 6 642 DOFs (1.92×):
+**unmet**; its budget mode holds (6.5% against 7.2%). Per the ruling, the unmet criteria at the unit's close are
+limitations in ARCHITECTURE.md 11.3: AC14, AC15, AC16 (well tolerance mode; tensor budget mode), and AC8's target.
+
 **AC12 (hand mutants, 2026-11-13).** Each mutant one exact-string change, the solve, deck and mesh libraries and
 `nitcad_adapt_test`, `nitcad_deck_test` and `nitcad_mesh_test` rebuilt (Release, r3), then the fast suites: every
 non-hidden adapt case, the deck's adapt cases and `[size_field]`; killed if a build or a test fails. **Round 1, 37
