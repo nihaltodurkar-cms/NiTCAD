@@ -214,10 +214,22 @@ void print_adapt(const NiTCAD::results::AdaptReport& a) {
                 a.policy.c_str(), a.fallback.c_str(), static_cast<unsigned long long>(a.verification_nodes),
                 a.verification_seconds);
     for (const auto& c : a.certificates) {
-        std::printf("certificate: current of %s at point %llu: %.10g A, estimate %.3g, verified error %.3g "
-                    "(order %.2f), allowed %.3g: %s\n",
-                    a.goal_contacts[c.goal].c_str(), static_cast<unsigned long long>(c.point), c.value, c.estimate,
-                    c.verified_error, c.order, c.allowed, c.status.c_str());
+        const std::string kind = NiTCAD::results::goal_kind(a, c.goal);
+        if (kind == "current") {
+            std::printf("certificate: current of %s at point %llu: %.10g A, estimate %.3g, verified error %.3g "
+                        "(order %.2f), allowed %.3g: %s\n",
+                        a.goal_contacts[c.goal].c_str(), static_cast<unsigned long long>(c.point), c.value, c.estimate,
+                        c.verified_error, c.order, c.allowed, c.status.c_str());
+            continue;
+        }
+        // Unit 17c (DG6, DG8): a derived goal's certificate covers the mesh's error at this gate step,
+        // not the step's own; a moved window is named.
+        const std::string unit = NiTCAD::results::goal_unit(a, c.goal);
+        std::printf("certificate: %s of %s (window at point %llu): %.10g %s, estimate %.3g, verified error %.3g "
+                    "(order %.2f), allowed %.3g: %s%s (the mesh's error at this sweep's gate step, not the step's)\n",
+                    kind.c_str(), a.goal_contacts[c.goal].c_str(), static_cast<unsigned long long>(c.point), c.value,
+                    unit.c_str(), c.estimate, c.verified_error, c.order, c.allowed, c.status.c_str(),
+                    c.window_moved ? ", window moved on M'" : "");
     }
     std::printf("adapt: %s (an estimate and an independent Richardson check, not a proof)\n", a.status.c_str());
 }

@@ -78,11 +78,14 @@ std::expected<void, base::Error> write_table(const std::filesystem::path& path,
     }
     text += ",substeps";
     // The certificates (Unit 17, AD13): per goal, at the adaptation points; empty at the others.
+    // Unit 17c (DG9): a derived goal's columns are "<kind> <contact> ...", in its unit, filled at its
+    // certificate's point.
     if (adapt != nullptr) {
-        for (const std::string& g : adapt->goal_contacts) {
-            for (const char* what : {" certificate", " estimate A", " verified error A", " allowed A", " order"}) {
-                text += "," + g + what;
-            }
+        for (std::size_t g = 0; g < adapt->goal_contacts.size(); ++g) {
+            const std::string name = results::goal_name(*adapt, g);
+            const std::string unit = results::goal_unit(*adapt, g);
+            text += "," + name + " certificate," + name + " estimate " + unit + "," + name + " verified error " + unit +
+                    "," + name + " allowed " + unit + "," + name + " order";
         }
     }
     text += "\n";
@@ -256,10 +259,19 @@ std::expected<RunReport, base::Error> run(const Plan& plan, const solve::RunCont
                 return written(msh, m.generated ? io::save_generated_mesh(msh, *m.generated) : io::save_mesh(msh, m.device.mesh()));
             };
         }
+        // Unit 17c (DG10): feature 12, the run's goal kind: 0 when every goal is a current, else its
+        // first derived goal's (1 vt, 2 gm, 3 swing).
+        double goal_kind = 0.0;
+        for (const solve::AdaptGoal& g : o.goals) {
+            if (g.kind != solve::GoalKind::current) {
+                goal_kind = static_cast<double>(static_cast<unsigned>(g.kind));
+                break;
+            }
+        }
         // Unit 17b (LB11): the learning history, each pass's features as it is solved.
         std::optional<solve::HistoryRecorder> recorder;
         if (!out.adapt_history.empty()) {
-            recorder.emplace(plan.points, plan.options);
+            recorder.emplace(plan.points, plan.options, goal_kind);
             o.on_mesh = [&, saving = std::move(o.on_mesh)](std::size_t pass,
                                                            const solve::AdaptableMesh& m) -> std::expected<void, base::Error> {
                 if (saving) {
@@ -273,7 +285,7 @@ std::expected<RunReport, base::Error> run(const Plan& plan, const solve::RunCont
         std::string predictor_status;
         double predictor_out = 0.0;
         if (a.predictor) {
-            auto f = solve::edge_features(plan.device, plan.points, plan.options, a.predictor->materials);
+            auto f = solve::edge_features(plan.device, plan.points, plan.options, a.predictor->materials, goal_kind);
             if (!f) return std::unexpected(std::move(f.error()));
             predictor_out = solve::out_of_range_fraction(*a.predictor, *f);
             if (predictor_out > solve::out_of_range_limit) {

@@ -807,9 +807,11 @@ struct Goals {
     std::vector<double> resolution;
 };
 
+// The current goals' entries: their currents at the adaptation points, goal-major.
 Goals read_goals(const results::Sweep& s, const AdaptOptions& o, const std::vector<std::size_t>& at) {
     Goals g;
     for (const AdaptGoal& goal : o.goals) {
+        if (goal.kind != GoalKind::current) continue;
         for (const std::size_t k : at) {
             const results::BiasPoint& p = s.points[k];
             const bool weighted = !p.weighted_current.empty();
@@ -819,6 +821,29 @@ Goals read_goals(const results::Sweep& s, const AdaptOptions& o, const std::vect
         }
     }
     return g;
+}
+
+// A point's current of `contact` and its resolution, as read_goals reads them.
+std::pair<double, double> current_of(const results::BiasPoint& p, std::size_t contact) {
+    const bool weighted = !p.weighted_current.empty();
+    const auto& res = weighted ? p.weighted_current_resolution : p.terminal_current_resolution;
+    return {weighted ? p.weighted_current[contact] : p.terminal_current[contact],
+            contact < res.size() ? res[contact] : 0.0};
+}
+
+// DG1: a derived goal's transfer curve on a sweep: the swept contact's biases, the goal contact's
+// currents and resolutions; its drain bias the goal contact's (fixed) bias.
+TransferCurve transfer_curve(const results::Sweep& s, std::span<const std::vector<double>> points, std::size_t gate,
+                             std::size_t contact) {
+    TransferCurve c;
+    c.drain_V = points[0][contact];
+    for (std::size_t k = 0; k < s.points.size(); ++k) {
+        const auto [i, r] = current_of(s.points[k], contact);
+        c.gate_V.push_back(points[k][gate]);
+        c.current.push_back(i);
+        c.resolution.push_back(r);
+    }
+    return c;
 }
 
 std::expected<mesh::PointLocator, base::Error> locator_of(const AdaptableMesh& m) {
@@ -837,18 +862,19 @@ struct Solved {
     double seconds_solve = 0.0;
 };
 
-// Transfers `from`'s first point onto `to` (when given) and solves the sweep there.
+// Transfers `from`'s point `first` onto `to` (when given) and solves the sweep there; `points` are
+// the sweep's from its point `first` on (DG7: a part of the sweep on M').
 std::expected<Solved, base::Error> solve_on(const AdaptableMesh& to, const AdaptableMesh* from,
                                             const results::Sweep* from_sweep, std::span<const std::vector<double>> points,
-                                            const BiasOptions& bias, const RunControl& control) {
+                                            const BiasOptions& bias, const RunControl& control, std::size_t first = 0) {
     Solved out;
     std::optional<results::NodeFields> initial;
     BiasOptions opts = bias;
-    if (from != nullptr && from_sweep != nullptr && !from_sweep->points.empty()) {
+    if (from != nullptr && from_sweep != nullptr && first < from_sweep->points.size()) {
         const auto t0 = clock_type::now();
         auto loc = locator_of(*from);
         if (!loc) return std::unexpected(loc.error());
-        const results::BiasPoint& p0 = from_sweep->points[0];
+        const results::BiasPoint& p0 = from_sweep->points[first];
         auto st = transfer_state(from->device, *loc, p0.fields, p0.bands, to.device, &out.transfer);
         if (!st) return std::unexpected(st.error());
         initial = std::move(*st);
@@ -867,10 +893,10 @@ std::expected<Solved, base::Error> solve_on(const AdaptableMesh& to, const Adapt
 // The verified error's distribution (AD12 c, AR2): per node of the coarse mesh M, the largest over
 // the adaptation points of |psi' - psi| / V_T, |ln n' - ln n| and |ln p' - ln p|, the primes M''s
 // solution interpolated at the node (over M' nodes of its own region). Solves only: no indicator,
-// weight or prediction.
+// weight or prediction. `fs` holds the sweep from its point `offset` on (DG7).
 std::expected<IndicatorField, base::Error> difference_field(const AdaptableMesh& coarse, const results::Sweep& cs,
                                                             const AdaptableMesh& fine, const results::Sweep& fs,
-                                                            const std::vector<std::size_t>& at) {
+                                                            const std::vector<std::size_t>& at, std::size_t offset = 0) {
     auto loc = locator_of(fine);
     if (!loc) return std::unexpected(loc.error());
     const auto pts = coarse.device.mesh().points();
@@ -890,7 +916,7 @@ std::expected<IndicatorField, base::Error> difference_field(const AdaptableMesh&
         const bool insulator = coarse.device.is_insulator(static_cast<mesh::NodeId>(i));
         for (const std::size_t k : at) {
             const results::NodeFields& a = cs.points[k].fields;
-            const results::NodeFields& b = fs.points[k].fields;
+            const results::NodeFields& b = fs.points[k - offset].fields;
             double psi = 0.0, ln_n = 0.0, ln_p = 0.0;
             for (int j = 0; j < it.count; ++j) {
                 const auto q = static_cast<std::size_t>(it.nodes[static_cast<std::size_t>(j)]);
@@ -932,8 +958,46 @@ std::expected<AdaptResult, base::Error> adapt(const DeviceBuilder& build, std::s
     if (adjoint) {
         if (auto e = check_adjoint(bias)) return std::unexpected(std::move(*e));
     }
+    // Unit 17c (DG1, DG2): the derived goals (indices into o.goals) and the sweep's swept contact.
+    std::vector<std::size_t> derived;
+    bool any_current = false;
+    for (std::size_t gi = 0; gi < o.goals.size(); ++gi) {
+        if (o.goals[gi].kind == GoalKind::current) {
+            any_current = true;
+        } else {
+            derived.push_back(gi);
+        }
+    }
+    std::size_t gate = 0;
+    if (!derived.empty()) {
+        if (!o.at.empty()) {
+            return std::unexpected(invalid("adaptation points cannot be given with a vt, gm or swing goal (its window decides)"));
+        }
+        if (points.size() < 3) return std::unexpected(invalid("a vt, gm or swing goal needs a sweep of at least 3 points"));
+        if (!(std::isfinite(o.vt_tolerance) && o.vt_tolerance > 0.0)) {
+            return std::unexpected(invalid("vt_tolerance must be positive"));
+        }
+        std::vector<std::size_t> swept;
+        for (std::size_t c = 0; c < points[0].size(); ++c) {
+            for (std::size_t k = 1; k < points.size(); ++k) {
+                if (c < points[k].size() && points[k][c] != points[0][c]) {
+                    swept.push_back(c);
+                    break;
+                }
+            }
+        }
+        if (swept.size() != 1) {
+            return std::unexpected(invalid("a vt, gm or swing goal needs a sweep of exactly one contact"));
+        }
+        gate = swept[0];
+        for (const std::size_t gi : derived) {
+            if (o.goals[gi].contact == gate) {
+                return std::unexpected(invalid("a vt, gm or swing goal's contact is the swept contact"));
+            }
+        }
+    }
     std::vector<std::size_t> at = o.at;
-    if (at.empty()) {
+    if (at.empty() && any_current) {
         at.push_back(0);
         if (points.size() > 1) at.push_back(points.size() - 1);
     }
@@ -956,8 +1020,58 @@ std::expected<AdaptResult, base::Error> adapt(const DeviceBuilder& build, std::s
             return std::unexpected(invalid("adjoint goal weighting needs ohmic goal contacts"));
         }
     }
+    if (!derived.empty()) {
+        if (gate >= built->device.contacts().size()) return std::unexpected(invalid("the swept contact is not a contact"));
+        const auto kind = built->device.contacts()[gate].kind;
+        if (kind != device::ContactKind::gate && kind != device::ContactKind::electrode) {
+            return std::unexpected(invalid("a vt, gm or swing goal needs the swept contact to be a gate or an electrode"));
+        }
+    }
+    // The current goals' contacts (AD6); the derived goals' estimates are their own (DG4).
     std::vector<std::size_t> goal_contacts;
-    for (const AdaptGoal& g : o.goals) goal_contacts.push_back(g.contact);
+    for (const AdaptGoal& g : o.goals) {
+        if (g.kind == GoalKind::current) goal_contacts.push_back(g.contact);
+    }
+    // Every goal's entries on a sweep (DG4's layout): the currents at the adaptation points, then the
+    // derived goals with their windows and sensitivities.
+    struct Entries {
+        Goals goals;
+        std::vector<DerivedGoal> derived;
+    };
+    const auto entries_of = [&](const results::Sweep& s) -> std::expected<Entries, base::Error> {
+        Entries e;
+        e.goals = read_goals(s, o, at);
+        for (const std::size_t gi : derived) {
+            auto d = derived_goal(o.goals[gi].kind, transfer_curve(s, points, gate, o.goals[gi].contact));
+            if (!d) {
+                base::Error err = d.error();
+                err.message = std::string("goal ") + to_string(o.goals[gi].kind) + ": " + err.message;
+                return std::unexpected(std::move(err));
+            }
+            e.goals.value.push_back(d->value);
+            e.goals.resolution.push_back(d->resolution);
+            e.derived.push_back(std::move(*d));
+        }
+        return e;
+    };
+    // The points whose indicators and differences a pass unites: the adaptation points and the
+    // derived goals' windows (DG2); the adaptation points alone without derived goals.
+    const auto used_points = [&](const Entries& e) {
+        if (e.derived.empty()) return at;
+        std::vector<std::size_t> u = at;
+        for (const DerivedGoal& d : e.derived) {
+            for (std::size_t k = d.first; k <= d.last; ++k) u.push_back(k);
+        }
+        std::ranges::sort(u);
+        u.erase(std::unique(u.begin(), u.end()), u.end());
+        return u;
+    };
+    // AD13 / DG5: entry j's allowance: a vt goal's absolute vt_tolerance, else tol max(|G|, r).
+    const auto allowed_of = [&](std::size_t j, double value, double resolution) {
+        const std::size_t nc = goal_contacts.size() * at.size();
+        if (j >= nc && o.goals[derived[j - nc]].kind == GoalKind::vt) return o.vt_tolerance;
+        return allowed_error(o.tolerance, value, resolution);
+    };
     // AD6's estimate of goal j on a pass (goal-major, as the goals): the adjoint's (AR3), or the
     // last change without weighting (infinity on the first pass).
     const auto estimate_of = [&](const AdaptPass& rep, std::size_t j) {
@@ -982,8 +1096,8 @@ std::expected<AdaptResult, base::Error> adapt(const DeviceBuilder& build, std::s
         double seconds_transposed = 0.0;
         double seconds = 0.0;
     };
-    const auto adjoint_part = [&](const AdaptableMesh& m, const MeshRefinement& r,
-                                  const results::Sweep& s) -> std::expected<AdjointPart, base::Error> {
+    const auto adjoint_part = [&](const AdaptableMesh& m, const MeshRefinement& r, const results::Sweep& s,
+                                  const std::vector<DerivedGoal>& d) -> std::expected<AdjointPart, base::Error> {
         AdjointPart out;
         const auto te = clock_type::now();
         auto f = build_uniform(m, r);
@@ -1014,14 +1128,65 @@ std::expected<AdaptResult, base::Error> adapt(const DeviceBuilder& build, std::s
                 }
             }
         }
+        if (!d.empty()) {
+            // DG4: per window point one estimate of the derived goals' contacts there; a goal's
+            // estimate sum_k |c_k| E_k, its weights sum_k |c_k| omega_k renormalized to sum 1 over the
+            // semiconductor nodes, and AD3's omega the largest over every goal.
+            std::vector<std::size_t> window_points;
+            for (const DerivedGoal& g : d) {
+                for (std::size_t k = g.first; k <= g.last; ++k) window_points.push_back(k);
+            }
+            std::ranges::sort(window_points);
+            window_points.erase(std::unique(window_points.begin(), window_points.end()), window_points.end());
+            std::vector<double> estimate(d.size(), 0.0);
+            std::vector<std::vector<double>> weight(d.size(), std::vector<double>(nn, 0.0));
+            for (const std::size_t k : window_points) {
+                std::vector<std::size_t> contacts;
+                for (std::size_t i = 0; i < d.size(); ++i) {
+                    if (k >= d[i].first && k <= d[i].last) contacts.push_back(o.goals[derived[i]].contact);
+                }
+                std::ranges::sort(contacts);
+                contacts.erase(std::unique(contacts.begin(), contacts.end()), contacts.end());
+                auto e = estimate_goals(m.device, *loc, s.points[k], out.fine->device, bias, contacts);
+                if (!e) return std::unexpected(e.error());
+                out.fell_back = out.fell_back || e->fell_back;
+                out.seconds_factorize += e->seconds_factorize;
+                out.seconds_transposed = std::max(out.seconds_transposed, e->seconds_transposed);
+                for (std::size_t i = 0; i < d.size(); ++i) {
+                    if (!(k >= d[i].first && k <= d[i].last)) continue;
+                    const auto q = static_cast<std::size_t>(
+                        std::ranges::find(contacts, o.goals[derived[i]].contact) - contacts.begin());
+                    const double c = std::abs(d[i].sensitivity[k - d[i].first]);
+                    estimate[i] += c * e->estimate[q];
+                    double total = 0.0;
+                    for (std::size_t n = 0; n < nn; ++n) {
+                        if (!m.device.is_insulator(static_cast<mesh::NodeId>(n))) total += e->node_weight[q][n];
+                    }
+                    if (!(total > 0.0)) continue;
+                    for (std::size_t n = 0; n < nn; ++n) weight[i][n] += c * e->node_weight[q][n] / total;
+                }
+            }
+            for (std::size_t i = 0; i < d.size(); ++i) {
+                out.estimate.push_back(estimate[i]);
+                double total = 0.0;
+                for (std::size_t n = 0; n < nn; ++n) {
+                    if (!m.device.is_insulator(static_cast<mesh::NodeId>(n))) total += weight[i][n];
+                }
+                if (!(total > 0.0)) continue;
+                for (std::size_t n = 0; n < nn; ++n) {
+                    if (m.device.is_insulator(static_cast<mesh::NodeId>(n))) continue;
+                    out.omega[n] = std::max(out.omega[n], weight[i][n] / total);
+                }
+            }
+        }
         out.seconds = seconds_since(te);
         return out;
     };
-    // The largest over goals and points of a per-goal quantity over its allowance tol max(|G|, r).
+    // The largest over goals and points of a per-goal quantity over its allowance (allowed_of).
     const auto relative = [&](const std::vector<double>& x, const Goals& g) {
         double r = 0.0;
         for (std::size_t j = 0; j < x.size(); ++j) {
-            r = std::max(r, x[j] / (allowed_error(o.tolerance, g.value[j], g.resolution[j])));
+            r = std::max(r, x[j] / (allowed_of(j, g.value[j], g.resolution[j])));
         }
         return r;
     };
@@ -1036,7 +1201,8 @@ std::expected<AdaptResult, base::Error> adapt(const DeviceBuilder& build, std::s
         if (!(o.intelligent.miss_margin >= 0.0 && o.intelligent.miss_margin < 1.0)) {
             return std::unexpected(invalid("the miss margin must be in [0, 1)"));
         }
-        if (o.at.empty() && o.intelligent.max_points > 0) {
+        // ID3 chooses the current goals' points; a derived goal's are its window (DG2).
+        if (o.at.empty() && any_current && o.intelligent.max_points > 0) {
             const auto tc = clock_type::now();
             auto c = solve_on(*built, nullptr, nullptr, points, bias, control);
             if (!c) return std::unexpected(c.error());
@@ -1054,6 +1220,7 @@ std::expected<AdaptResult, base::Error> adapt(const DeviceBuilder& build, std::s
                 const auto& cur = weighted ? p.weighted_current : p.terminal_current;
                 const auto& res = weighted ? p.weighted_current_resolution : p.terminal_current_resolution;
                 for (const AdaptGoal& goal : o.goals) {
+                    if (goal.kind != GoalKind::current) continue;
                     const double r = goal.contact < res.size() ? res[goal.contact] : 0.0;
                     if (!(std::abs(cur[goal.contact]) > r)) eligible[k] = 0;
                 }
@@ -1062,9 +1229,11 @@ std::expected<AdaptResult, base::Error> adapt(const DeviceBuilder& build, std::s
             if (!chosen) return std::unexpected(chosen.error());
             at = std::move(*chosen);
             if (adjoint) {
-                auto part = adjoint_part(*built, refinement, c->sweep);
+                auto ce = entries_of(c->sweep);
+                if (!ce) return std::unexpected(ce.error());
+                auto part = adjoint_part(*built, refinement, c->sweep, ce->derived);
                 if (!part) return std::unexpected(part.error());
-                coarse_relative = relative(part->estimate, read_goals(c->sweep, o, at));
+                coarse_relative = relative(part->estimate, ce->goals);
             }
             result.coarse_nodes = built->device.mesh().node_count();
             result.coarse_seconds = seconds_since(tc);
@@ -1201,6 +1370,10 @@ std::expected<AdaptResult, base::Error> adapt(const DeviceBuilder& build, std::s
     std::optional<AdaptableMesh> previous_mesh;
     results::Sweep previous_sweep;
     std::vector<double> previous_goal;
+    // DG6: the previous pass's derived windows; DG1: the last pass's derived goals' points.
+    std::vector<std::size_t> previous_window_first;
+    std::vector<std::size_t> previous_window_last;
+    std::vector<std::size_t> final_points;
     // ID5: the passes' cost samples and the realized ratios so far; the candidates the last allocation
     // took, measured on the next pass.
     std::vector<CostSample> cost_samples;
@@ -1219,12 +1392,17 @@ std::expected<AdaptResult, base::Error> adapt(const DeviceBuilder& build, std::s
         double seconds = 0.0;
         bool accepts = true;  // every goal's estimate and verified error within its allowance
         IndicatorField difference;  // the verified error's distribution on M (AR2)
+        std::vector<char> window_moved;  // per derived goal (DG6)
     };
     std::optional<Verification> verification;  // of the current mesh, when run
     // `prebuilt`: M' when the pass built it for the estimate (the same refinement, so the same mesh).
+    // `used`: the pass's points (used_points). With derived goals and no current goal, M' solves only
+    // the windows and one point either side, from the first of them (DG7); the derived goals' values
+    // on M' are their extractions from M's curve with M''s currents at those points, and a window
+    // that differs from M's is a moved window (DG6: the stop is not accepted).
     const auto verify_pass = [&](const AdaptableMesh& m, const MeshRefinement& r, const results::Sweep& s,
-                                 const AdaptPass& rep,
-                                 const AdaptableMesh* prebuilt) -> std::expected<Verification, base::Error> {
+                                 const AdaptPass& rep, const AdaptableMesh* prebuilt,
+                                 const std::vector<std::size_t>& used) -> std::expected<Verification, base::Error> {
         Verification v;
         const auto tv = clock_type::now();
         std::optional<AdaptableMesh> own;
@@ -1234,12 +1412,41 @@ std::expected<AdaptResult, base::Error> adapt(const DeviceBuilder& build, std::s
             own = std::move(*f);
         }
         const AdaptableMesh* fine = prebuilt != nullptr ? prebuilt : &*own;
-        auto solved = solve_on(*fine, &m, &s, points, bias, control);
+        std::size_t first = 0;
+        std::span<const std::vector<double>> part = points;
+        if (!derived.empty() && !any_current) {
+            std::size_t lo = points.size(), hi = 0;
+            for (std::size_t i = 0; i < derived.size(); ++i) {
+                lo = std::min(lo, rep.window_first[i]);
+                hi = std::max(hi, rep.window_last[i]);
+            }
+            lo = lo > 0 ? lo - 1 : 0;
+            hi = std::min(hi + 1, points.size() - 1);
+            first = lo;
+            part = points.subspan(lo, hi - lo + 1);
+        }
+        auto solved = solve_on(*fine, &m, &s, part, bias, control, first);
         if (!solved) return std::unexpected(solved.error());
         v.seconds = seconds_since(tv);
         v.nodes = fine->device.mesh().node_count();
         v.goal = read_goals(solved->sweep, o, at).value;
-        auto diff = difference_field(m, s, *fine, solved->sweep, at);
+        for (std::size_t i = 0; i < derived.size(); ++i) {
+            const AdaptGoal& goal = o.goals[derived[i]];
+            TransferCurve c = transfer_curve(s, points, gate, goal.contact);
+            for (std::size_t k = 0; k < solved->sweep.points.size(); ++k) {
+                const auto [current, resolution] = current_of(solved->sweep.points[k], goal.contact);
+                c.current[first + k] = current;
+                c.resolution[first + k] = resolution;
+            }
+            const std::size_t j = goal_contacts.size() * at.size() + i;
+            auto dg = derived_goal(goal.kind, c);
+            const bool moved =
+                !dg || dg->first != rep.window_first[i] || dg->last != rep.window_last[i];
+            v.window_moved.push_back(moved ? 1 : 0);
+            v.goal.push_back(dg ? dg->value : rep.goal[j]);
+            if (moved) v.accepts = false;
+        }
+        auto diff = difference_field(m, s, *fine, solved->sweep, used, first);
         if (!diff) return std::unexpected(diff.error());
         v.difference = std::move(*diff);
         for (std::size_t j = 0; j < v.goal.size(); ++j) {
@@ -1247,7 +1454,7 @@ std::expected<AdaptResult, base::Error> adapt(const DeviceBuilder& build, std::s
                 richardson_error(rep.goal[j], v.goal[j], rep.change.empty() ? 0.0 : rep.change[j]);
             v.order.push_back(re.order);
             v.error.push_back(re.error);
-            const double allowed = allowed_error(o.tolerance, rep.goal[j], rep.resolution[j]);
+            const double allowed = allowed_of(j, rep.goal[j], rep.resolution[j]);
             if (!(estimate_of(rep, j) <= allowed && v.error.back() <= allowed)) v.accepts = false;
         }
         return v;
@@ -1296,14 +1503,24 @@ std::expected<AdaptResult, base::Error> adapt(const DeviceBuilder& build, std::s
         }
         cost_samples.push_back(sample);
         if (intelligent) rep.cost_model = fit_cost_model(cost_samples);
-        const Goals g = read_goals(solved->sweep, o, at);
+        auto entries = entries_of(solved->sweep);
+        if (!entries) return std::unexpected(entries.error());
+        const Goals& g = entries->goals;
         rep.goal = g.value;
         rep.resolution = g.resolution;
-        // The adjoint estimate and weights (AD3, AD6; AR3): on M', per adaptation point.
+        final_points.clear();
+        for (const DerivedGoal& d : entries->derived) {
+            rep.window_first.push_back(d.first);
+            rep.window_last.push_back(d.last);
+            final_points.push_back(d.point);
+        }
+        const std::vector<std::size_t> used = used_points(*entries);
+        // The adjoint estimate and weights (AD3, AD6; AR3): on M', per adaptation point (DG4: and per
+        // derived goal through its window).
         std::optional<AdaptableMesh> fine_mesh;
         std::vector<double> omega;  // AD3's node weight: per node, the largest over goals and points
         if (adjoint) {
-            auto part = adjoint_part(*built, refinement, solved->sweep);
+            auto part = adjoint_part(*built, refinement, solved->sweep, entries->derived);
             if (!part) return std::unexpected(part.error());
             fine_mesh = std::move(part->fine);
             omega = std::move(part->omega);
@@ -1325,7 +1542,7 @@ std::expected<AdaptResult, base::Error> adapt(const DeviceBuilder& build, std::s
         const auto indicators = [&]() -> std::expected<void, base::Error> {
             if (united) return {};
             std::vector<IndicatorField> fields;
-            for (const std::size_t k : at) {
+            for (const std::size_t k : used) {
                 const results::BiasPoint& p = solved->sweep.points[k];
                 auto f = compute_indicators(built->device, &p.fields, &p.rates, o.indicators);
                 if (!f) return std::unexpected(f.error());
@@ -1375,9 +1592,15 @@ std::expected<AdaptResult, base::Error> adapt(const DeviceBuilder& build, std::s
             rep.change.resize(g.value.size());
             for (std::size_t j = 0; j < g.value.size(); ++j) {
                 rep.change[j] = std::abs(g.value[j] - previous_goal[j]);
-                const double allowed = allowed_error(o.tolerance, g.value[j], g.resolution[j]);
+                const double allowed = allowed_of(j, g.value[j], g.resolution[j]);
                 if (rep.change[j] > allowed) converged = false;
                 if (adjoint && !(rep.estimate[j] <= allowed)) converged = false;  // AD6: and the estimate
+            }
+            // DG6: a derived goal's stop needs its window unchanged from the previous pass.
+            for (std::size_t i = 0; i < rep.window_first.size(); ++i) {
+                if (rep.window_first[i] != previous_window_first[i] || rep.window_last[i] != previous_window_last[i]) {
+                    converged = false;
+                }
             }
         }
         // The guard (ID1) and AD12's triggers a and b: decisions only, after the solve; nothing
@@ -1406,7 +1629,7 @@ std::expected<AdaptResult, base::Error> adapt(const DeviceBuilder& build, std::s
         verification.reset();
         if (converged && o.verify) {
             // A proposed stop, subject to AD11; a rejected stop goes on refining (AR2).
-            auto v = verify_pass(*built, refinement, solved->sweep, rep, fine_mesh ? &*fine_mesh : nullptr);
+            auto v = verify_pass(*built, refinement, solved->sweep, rep, fine_mesh ? &*fine_mesh : nullptr, used);
             if (!v) return std::unexpected(v.error());
             verification = std::move(*v);
             if (verification->accepts) {
@@ -1562,6 +1785,8 @@ std::expected<AdaptResult, base::Error> adapt(const DeviceBuilder& build, std::s
                 previous_mesh = std::move(*built);
                 previous_sweep = std::move(solved->sweep);
                 previous_goal = g.value;
+                previous_window_first = result.passes.back().window_first;
+                previous_window_last = result.passes.back().window_last;
                 previous_relative = result.passes.back().relative_estimate;
                 previous_change = change_relative;
                 built = std::move(*nb);
@@ -1590,9 +1815,11 @@ std::expected<AdaptResult, base::Error> adapt(const DeviceBuilder& build, std::s
         verified = verification->error;
         order = verification->order;
     }
+    std::size_t ci = 0;  // the current goals' count so far (their entries are goal-major)
     for (std::size_t gi = 0; gi < o.goals.size(); ++gi) {
+        if (o.goals[gi].kind != GoalKind::current) continue;
         for (std::size_t a = 0; a < at.size(); ++a) {
-            const std::size_t j = gi * at.size() + a;
+            const std::size_t j = ci * at.size() + a;
             GoalCertificate c;
             c.goal = gi;
             c.point = at[a];
@@ -1604,6 +1831,24 @@ std::expected<AdaptResult, base::Error> adapt(const DeviceBuilder& build, std::s
             c.status = certificate_status(verify, c.estimate, c.verified_error, c.allowed);
             result.certificates.push_back(c);
         }
+        ++ci;
+    }
+    // DG5, DG6: a derived goal's certificate, at its point; a moved window is never certified.
+    for (std::size_t i = 0; i < derived.size(); ++i) {
+        const std::size_t j = goal_contacts.size() * at.size() + i;
+        GoalCertificate c;
+        c.goal = derived[i];
+        c.kind = o.goals[derived[i]].kind;
+        c.point = final_points[i];
+        c.value = last.goal[j];
+        c.estimate = estimate_of(last, j);
+        c.verified_error = verified[j];
+        c.order = order[j];
+        c.allowed = allowed_of(j, c.value, last.resolution[j]);
+        c.window_moved = verify && verification->window_moved[i] != 0;
+        c.status = certificate_status(verify, c.estimate, c.verified_error, c.allowed);
+        if (c.window_moved) c.status = CertificateStatus::not_certified;
+        result.certificates.push_back(c);
     }
     result.points = at;
     result.policy = o.policy;

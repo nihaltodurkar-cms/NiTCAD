@@ -6360,6 +6360,131 @@ branch holds 17's head (6ffad0b), so its PR to `main` carries the 17b commits on
 
 ---
 
+### Unit 17c — adaptation for derived goals: V_T, g_m and swing (approved 2026-11-13; on `mesh/derived-goals`)
+
+**Request.** Owner, 2026-11-13: "draft the design for the V_T, g_m and swing refinement". This is the
+follow-up that Unit 17's AR8 deferred: "a derived goal needs its own adjoint (a functional of several points) and
+resolution rule: a later unit". **Approved** by the owner (2026-11-13: "approved, choose recommended"). Branch `mesh/derived-goals`, stacked on 17b (`fad06b4`; 17b is PR #82).
+
+**What exists.**
+- `analysis/dc.hpp` extracts each quantity from a transfer curve:
+  - `threshold_max_gm`: tangent at the largest g_m, less V_d / 2;
+  - `max_transconductance`: central derivative, with the point and its neighbours as the window;
+  - `subthreshold_swing`: the steepest segment below 1e-2 of the largest current.
+- Every adaptation pass already solves the whole sweep on one mesh (AQ3).
+- AR3's adjoint gives, for each adaptation point k, an estimate D_k of the error in I_D(k) and per-node weights ω_k.
+- AD11 verifies on M′, the uniform refinement of the final mesh M.
+
+A derived goal G = F(I_1 … I_N) depends on the mesh only through the currents in its window, so the whole unit is
+the chain rule plus a rule for when the window moves.
+
+| ID | Construction | Basis | Gain | Risk / cost |
+|---|---|---|---|---|
+| DG1 | **Goals.** `goal = vt <contact>`, `goal = gm <contact>` and `goal = swing <contact>` select the extractors above, applied to the goal contact's current against the swept gate bias. They need a `[sweep]` that varies exactly one gate or electrode contact, holds every other contact fixed, and has at least 3 points (swing: 2 in its window). V_T's drain bias is the goal contact's fixed bias. A falling curve (p-channel) is scaled by −1, as dc.hpp documents. Current goals may be mixed with derived goals. | dc.hpp, Unit 24 | The figures a MOSFET user reports become adaptation goals. | — |
+| DG2 | **Window and adaptation points.** On each pass, the extractor's window on that pass's sweep is: for g_m and V_T, the max-g_m point and its two neighbours; for swing, the steepest segment's two points. Those window points are the goal's adaptation points, and `at = auto` takes their union with the current goals' points. An explicit `at` combined with a derived goal is refused, because the window decides. | — | The adjoint is solved only where the goal depends on the current. | — |
+| DG3 | **Sensitivities.** c_k = ∂F/∂I_k at the pass's currents, with the window held fixed, computed analytically per extractor. g_m: ±1/(V_{k+1} − V_{k−1}) on the neighbours. V_T: through the tangent, V* − I*/g_m − V_d/2. Swing: through ΔV / Δlog10 I. A finite-difference check of each formula is a test (DC2). | Chain rule | No new adjoint system: the existing per-point adjoints are combined. | Valid only while the window does not move (DG6). |
+| DG4 | **Estimate and weights.** The estimate is E_G = Σ_k \|c_k\| · E_k, where E_k is AR3's estimate for I_D(k); without weighting, E_k is the last change. Summing absolute values is the triangle-inequality bound on the linearization, so errors at different points cannot cancel in the estimate. Per-node weights are ω = Σ_k \|c_k\| ω_k (each ω_k already normalized, AD3), renormalized to sum to 1, and AD3's marking, ID4's benefit and ID6's allocation use them unchanged. | Dual-weighted residual for a functional of several solutions | The loop is driven by the goal, not by every current in the sweep. | — |
+| DG5 | **Allowance (AD13 for derived goals).** V_T has an absolute allowance, `vt_tolerance` in V (default 1e-3). Its value can be near 0, so a relative tolerance is meaningless there. g_m and swing are positive and use `tolerance` relative, tol · max(\|G\|, r_G). The resolution is r_G = Σ_k \|c_k\| r_k, where r_k is the current's resolution (Unit 15). | AD13; Unit 15 | Each figure's tolerance is stated in units that suit it. | One more key. |
+| DG6 | **Moving window.** The extractors are piecewise: the argmax point or steepest segment can move to a neighbour, and G jumps when it does. A stop is proposed only when the window is the same on the last two passes, and the certificate requires the same window on M and M′. If the window differs, the result is **not_certified** with the reason "window moved", and that counts as a rejected stop (AR2: continue, marked by the verified difference). | — | A certificate is never issued across a discontinuity. | A device whose g_m peak is flat can end not_certified (reported, never hidden). |
+| DG7 | **Verification on M′ (AD11).** M′ solves the window's points plus one neighbour on each side, so a local move of the argmax or steepest segment is seen on M′ too. Richardson extrapolation is applied to G itself, as AD11 does: G_M′ is F applied to M′'s currents, and the order is observed from the loop's passes. | AD11 | An independent check that is still cheaper than solving the whole sweep on M′ (about 5 points against N). | A window move further than one point away on M′ is not seen there; it is seen across the loop's passes (DG6). |
+| DG8 | **What the certificate covers.** Only the mesh's discretization error, for the given gate step. The gate step's own error in V_T, g_m and swing (sampling) is not certified. `nitcad run` and the report state this next to each derived certificate. | — | Honest scope. | Users may read "certified V_T" as also covering the step; the text says it does not. |
+| DG9 | **Report, CSV and identity.** The goal kind is added to the report (new key, written only for derived goals), `adapt.goal` (the kind and the contact) and the CSV columns `<kind> <c> certificate`, `estimate`, `verified error`, `allowed` and `order`. Units: V, S cm^(D−3) and mV/dec. The window's points are reported per pass. With current goals only, the report, CSV and identity are bit-identical to today's. | AD8 | — | — |
+| DG10 | **Learning (17b).** Histories record the goal kind, and schema 1 is unchanged: kind ≠ 0 is a category the model has not seen, so LB8 already sends the device to ID2. Training on derived-goal histories is a later schema. | LB3, LB8 | No new code path for the predictor. | — |
+| DG11 | **Unchanged.** The adjoint's refusals (`check_adjoint`), AD11 itself (independent of all predictions, OA6), AD12's fallback, the mesh kinds (AQ2) and one mesh per sweep (AQ3) are all as in Unit 17. | — | — | — |
+| DG12 | **Layering.** The layer table forbids `solve` to depend on `analysis` (L6 above L5), so the three figures are restated in `solve/adapt_derived.cpp` from dc.cpp and curve.cpp (derivative, `peak_transconductance`, `threshold_max_gm`, `subthreshold_swing` at its default ceiling); a test holds them equal to `analysis/dc.hpp`'s, bit for bit, on n- and p-channel curves (with DC2). | ARCHITECTURE.md 4 | No layering change. | Two copies of three short formulas; the test catches drift. |
+
+**Acceptance criteria. They are frozen before any run and never loosened after one; a miss gets `[!shouldfail]` with
+its measurement and goes to the owner for a ruling.**
+
+| ID | Criterion |
+|---|---|
+| DC1 | Nothing changes. Every existing test passes, and every deck with current goals only (or without `[adapt]`) has a byte-identical report, CSV and identity. |
+| DC2 | **Sensitivities and estimate.** On analytic transfer curves (exponential below threshold, linear above), each extractor's c_k equals a central finite difference of the extractor with the window fixed, to 1e-6 relative. E_G and ω equal values computed by hand on a fixture. |
+| DC3 | **Accuracy gate.** Device: the tensor MOSFET (AR6: V_d 0.05 V, V_g from −0.2 to 1.0 V in 0.05 V steps, 25 points), adjoint-weighted, each goal adapted separately: `vt` at 1 mV, and `gm` and `swing` at 1e-2. Each run ends **certified**. Its actual error against the reference is within its allowance. The reference is the extraction on a 4×/8×/16× uniform Richardson ladder, recorded as a constant with a 2× guard solve, as AR4 did. |
+| DC4 | **Efficiency (ID9: the goal earns its place).** Baseline: `goal = current drain` on the same window points, with the tolerance tightened through 1e-2, 3e-3, 1e-3 and 3e-4 until its V_T, g_m and swing meet DC3's allowances. The derived-goal run must use ≤ 0.8× the baseline's final DOFs for V_T and for swing, and ≤ 1/3 of the uniform ladder's nodes for the same error. |
+| DC5 | **Estimate quality.** At the final pass of each DC3 run, E_G is within a factor 3 of the actual error (AC7's bound). Both E_G and the verified error are reported, with their ratios to the actual error. |
+| DC6 | **Moving window.** In a fixture where the max-g_m point moves between M and M′, the result is not_certified with "window moved", never certified. With `certify = required`, the run exits with code 3. |
+| DC7 | **Deck and refusals.** `nitcad check` accepts `vt`, `gm` and `swing` and refuses each of the following with its line: a sweep with no single swept gate or electrode contact; fewer than 3 points; an explicit `at` combined with a derived goal; `vt_tolerance` without a `vt` goal; a non-ohmic goal contact with adjoint weighting. |
+| DC8 | **Determinism and independence.** Two runs are bit-identical. AC21 is extended: on a forced common mesh, a derived certificate is identical with `policy = basic`, with `policy = intelligent` and with a `predictor`. |
+| DC9 | **Hand mutants (AC12).** At least one per row DG1–DG10 and DG12; each survivor is closed by a test or argued equivalent. |
+| DC10 | **Suites.** Release and Debug pass at every commit with `/W4 /WX`; Debug grows by ≤ 60 s; the DC3, DC4 and DC5 gates are `[.derived_goals]`. |
+
+**Owner questions, ruled as recommended (owner, 2026-11-13: "approved, choose recommended"): DQ1 (a), DQ2 (a), DQ3 (a), DQ4 (a).**
+- **DQ1 (V_T's allowance).**
+  - (a) **Recommended:** absolute, `vt_tolerance` in V, default 1 mV.
+  - (b) Relative, like the current goals.
+  - Reason for (a): V_T can be near 0 V, where a relative allowance is meaningless.
+- **DQ2 (M′'s points).**
+  - (a) **Recommended:** the window plus one neighbour on each side (DG7).
+  - (b) The whole sweep, which also catches far window moves on M′ at about N/5 times the verification cost (25 points against 5 in DC3).
+- **DQ3 (p-channel).**
+  - (a) **Recommended:** supported by dc.hpp's −1 scaling.
+  - (b) Refused in this unit.
+- **DQ4 (DC4's baseline).**
+  - (a) **Recommended:** current-goal adaptation tightened until it meets the same derived accuracy.
+  - (b) Uniform refinement only, as AC5 did.
+  - Reason for (a): the question this unit answers is whether a derived goal beats adapting the currents.
+
+**Slices (planned).**
+1. DG1–DG5 in `solve::adapt`: sensitivities, estimate, weights, allowance. Tests DC2 and DC1.
+2. DG6–DG8 (window rule, verification, certificate scope), plus DC6.
+3. DG9 and DG10: deck, report, CSV, identity, app columns. Tests DC7 and DC8.
+4. Gates DC3–DC5, then mutants (DC9) and the suites (DC10).
+
+**Owner instruction on tests (2026-11-13).** "Dont start the 17c tests", then "keep writing the code, no tests". The
+code is written first. No 17c test is written or run until the owner says so. DC1–DC10 stay as frozen above; none is
+measured yet.
+
+**Slices 1–3 as written (code only; compiled in Release, `nitcad` and `nitcad_app`, under `/W4 /WX`; nothing run).**
+- **DG1–DG3, DG12.** `solve/adapt_derived.{hpp,cpp}`: `GoalKind`, `TransferCurve`, and `derived_goal`, which
+  restates the three extractors and their analytic sensitivities. The p-channel sign rule: a curve whose largest
+  |I| is negative is read with currents and biases times −1. dV_T/dI equals the read curve's dG/dy; g_m's and the
+  swing's sensitivities are s · dG/dy. `AdaptGoal::kind` and `AdaptOptions::vt_tolerance` (default 1e-3 V) are added.
+- **`adapt()`, DG2.** Refused:
+  - an explicit `at` with a derived goal;
+  - fewer than 3 points;
+  - a sweep that moves anything but exactly one contact;
+  - a swept contact that is not a gate or an electrode;
+  - a derived goal on the swept contact.
+
+  The current goals keep `at`; their defaults apply only when a current goal exists, and ID3's coarse sweep runs
+  only then. The entries are the current goals × `at` (goal-major), then one per derived goal. Indicators and
+  differences unite `at` with the windows. Without derived goals the points are `at` itself, the same order as
+  before, so DC1 holds by construction.
+- **DG4.** One `estimate_goals` call per window point covers the derived goals' contacts there. The estimate is
+  Σ |c_k| E_k. The weights Σ |c_k| ω_k are renormalized over the semiconductor nodes, and ω is the largest over all
+  goals.
+- **DG5.** `allowed_of` gives a vt entry its absolute `vt_tolerance`; every other entry keeps
+  `allowed_error(tol, G, r)`. It is used by `relative`, the stop rule, AD11 and the certificates.
+- **DG6.** A derived goal's stop needs its window unchanged from the previous pass. On M′ a moved window, or a
+  failed extraction, rejects the stop. The certificate is then `not_certified` with `window_moved`.
+- **DG7.**
+  - With derived goals and no current goal, M′ solves the windows plus one point either side, from the first of
+    them; `solve_on` and `difference_field` take that offset.
+  - The derived values on M′ are extracted from M's curve with M′'s currents at the solved points. The extraction
+    runs on that whole curve, so the swing's ceiling (1e-2 of the largest current) sees every point.
+  - With a current goal present, M′ solves the whole sweep as before.
+- **DG8, DG9.**
+  - `nitcad run` prints a derived certificate as "<kind> of <contact> (window at point k)", in its unit, with
+    the scope sentence and any moved window.
+  - The CSV columns are "<kind> <contact> certificate", "estimate <unit>" and so on; a current goal's header is
+    unchanged.
+  - The app's certificate lines show the kind and unit.
+  - The `.nitadapt` report gains keys only when a derived goal is present: report 29 `goal_kind` (texts) and 30
+    `vt_tolerance`, pass 22 `window` (first and last per derived goal), certificate 4 `window_moved` (written only
+    when true). The entries' count on load is (goals − derived) × points + derived.
+  - `adapt.goal_kind` (per goal) and `adapt.vt_tolerance` enter the settings and identity only with a derived goal.
+  - The app's `[adapt]` vocabulary gains vt, gm, swing and `vt_tolerance`. The `predictor` key's stale "refused in
+    this unit" text is corrected.
+- **DG10.**
+  - Feature 12 is the run's goal kind: 0 with current goals only, else its first derived goal's (1 vt, 2 gm,
+    3 swing). It is passed to `edge_features` and `HistoryRecorder`.
+  - Schema 1 is unchanged. A model trained on current runs has feature 12's range [0, 0] (±5% of 0), so every edge
+    of a derived-goal run is out of range and LB8 falls back to ID2. That is DG10, with no new code path.
+- **Not yet:** ARCHITECTURE.md (6.12.4, the unit table, 11.3) and the tests (DC1–DC10, held per the owner's instruction).
+
+---
+
 ### Unit 55 — theoretical calculation validation framework: research and design proposal (proposed 2026-10-31; on `verify/theoretical-validation`)
 
 **Owner request (2026-10-31):** "Design a comprehensive Theoretical Calculation Validation Framework for NiTCAD.

@@ -1,4 +1,5 @@
 // The adaptation's settings, run identity and report (Unit 17, slice 6; DECISIONS.md AD8, AD13, AR8).
+#include <algorithm>
 #include <bit>
 #include <span>
 #include <cstdint>
@@ -68,6 +69,14 @@ std::vector<std::pair<std::string, double>> adapt_settings(const AdaptOptions& o
     put("adapt.miss_margin", o.intelligent.miss_margin);
     put("adapt.budget_dofs", static_cast<double>(o.intelligent.dof_budget));
     put("adapt.budget_seconds", o.intelligent.seconds_budget);
+    // Unit 17c (DG9): the goals' kinds (0 current, 1 vt, 2 gm, 3 swing) and vt_tolerance, only when
+    // a derived goal is present, so a run with current goals alone keeps its identity (DC1).
+    const bool any_derived =
+        std::ranges::any_of(o.goals, [](const AdaptGoal& g) { return g.kind != GoalKind::current; });
+    if (any_derived) {
+        for (const AdaptGoal& g : o.goals) put("adapt.goal_kind", static_cast<double>(static_cast<unsigned>(g.kind)));
+        put("adapt.vt_tolerance", o.vt_tolerance);
+    }
     return s;
 }
 
@@ -91,6 +100,11 @@ results::AdaptReport adapt_report(const AdaptResult& r, const AdaptOptions& o, c
         out.goal_contacts.push_back(g.contact < device.contacts().size() ? device.contacts()[g.contact].name : "?");
     }
     out.tolerance = o.tolerance;
+    // Unit 17c (DG9): the kinds and vt_tolerance only with a derived goal (DC1).
+    if (std::ranges::any_of(o.goals, [](const AdaptGoal& g) { return g.kind != GoalKind::current; })) {
+        for (const AdaptGoal& g : o.goals) out.goal_kinds.emplace_back(to_string(g.kind));
+        out.vt_tolerance = o.vt_tolerance;
+    }
     out.points.assign(r.points.begin(), r.points.end());
     out.policy = to_string(r.policy);
     out.weighting = o.weighting == Weighting::adjoint ? "adjoint" : "none";
@@ -122,6 +136,8 @@ results::AdaptReport adapt_report(const AdaptResult& r, const AdaptOptions& o, c
         row.resolution = p.resolution;
         row.change = p.change;
         row.estimate = p.estimate;
+        row.window_first.assign(p.window_first.begin(), p.window_first.end());
+        row.window_last.assign(p.window_last.begin(), p.window_last.end());
         row.relative_estimate = p.relative_estimate;
         row.estimate_nodes = p.estimate_nodes;
         row.marked = p.marking.count;
@@ -190,7 +206,8 @@ results::AdaptReport adapt_report(const AdaptResult& r, const AdaptOptions& o, c
                                     .verified_error = c.verified_error,
                                     .order = c.order,
                                     .allowed = c.allowed,
-                                    .status = to_string(c.status)});
+                                    .status = to_string(c.status),
+                                    .window_moved = c.window_moved});
         any_not = any_not || c.status == CertificateStatus::not_certified;
         any_unverified = any_unverified || c.status == CertificateStatus::unverified;
     }

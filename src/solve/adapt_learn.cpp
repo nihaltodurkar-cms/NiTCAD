@@ -110,7 +110,8 @@ std::uint64_t device_digest(const device::Device& d) {
 }
 
 std::expected<EdgeFeatures, base::Error> edge_features(const device::Device& d, std::span<const std::vector<double>> points,
-                                                       const BiasOptions& options, std::span<const std::string> materials) {
+                                                       const BiasOptions& options, std::span<const std::string> materials,
+                                                       double goal_kind) {
     auto fp = feature_points(d, points, options);
     if (!fp) return std::unexpected(fp.error());
     const mesh::Mesh& m = d.mesh();
@@ -203,7 +204,7 @@ std::expected<EdgeFeatures, base::Error> edge_features(const device::Device& d, 
         f[9] = inf ? lg(inf->size) : 0.0;
         f[10] = fp->v_junction;
         f[11] = fp->v_gate;
-        f[12] = 0.0;
+        f[12] = goal_kind;
         f[13] = lg(L);
         const FeaturePoint* closest = jf;
         if (inf && (!jf || id < jd)) closest = inf;
@@ -265,8 +266,8 @@ void stamp_predictor(results::RunRecord& run, std::uint64_t file_digest, const r
     run.settings.emplace_back("adapt.predictor.used", used ? 1.0 : 0.0);
 }
 
-HistoryRecorder::HistoryRecorder(std::vector<std::vector<double>> points, BiasOptions options)
-    : points_(std::move(points)), options_(std::move(options)) {}
+HistoryRecorder::HistoryRecorder(std::vector<std::vector<double>> points, BiasOptions options, double goal_kind)
+    : points_(std::move(points)), options_(std::move(options)), goal_kind_(goal_kind) {}
 
 std::expected<void, base::Error> HistoryRecorder::record(std::size_t pass, const AdaptableMesh& m) {
     if (pass != passes_.size()) return std::unexpected(invalid("history passes must be recorded in order"));
@@ -274,7 +275,7 @@ std::expected<void, base::Error> HistoryRecorder::record(std::size_t pass, const
     p.device_digest = device_digest(m.device);
     p.mesh_digest = mesh::graph_digest(m.device.mesh());
     p.materials = material_keys(m.device);
-    auto f = edge_features(m.device, points_, options_, p.materials);
+    auto f = edge_features(m.device, points_, options_, p.materials, goal_kind_);
     if (!f) return std::unexpected(f.error());
     p.edges = std::move(*f);
     passes_.push_back(std::move(p));

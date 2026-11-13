@@ -600,6 +600,7 @@ add_library(nitcad_solve STATIC
   src/solve/adapt_transfer.cpp
   src/solve/adapt_adjoint.cpp
   src/solve/adapt_policy.cpp
+  src/solve/adapt_derived.cpp
   src/solve/adapt.cpp
   src/solve/adapt_report.cpp
   src/solve/adapt_learn.cpp

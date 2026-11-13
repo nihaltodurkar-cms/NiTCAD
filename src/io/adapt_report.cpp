@@ -25,18 +25,20 @@ constexpr std::uint16_t run = 1, goal_contact = 2, tolerance = 3, points = 4, po
                         misses = 14, prediction = 15, coarse_nodes = 16, coarse_seconds = 17, verification_nodes = 18,
                         verification_seconds = 19, verification_goal = 20, pass = 21, certificate = 22, status = 23,
                         final_mesh = 24, predictor = 25, predictor_digest = 26, predictor_status = 27,
-                        predictor_out_of_range = 28;  // 25-28: Unit 17b, absent before it
+                        predictor_out_of_range = 28,  // 25-28: Unit 17b, absent before it
+                        goal_kind = 29, vt_tolerance = 30;  // 29-30: Unit 17c, only with a derived goal
 // Pass.
 constexpr std::uint16_t sizes = 1, mesh_digest = 2, source = 3, goal = 4, resolution = 5, change = 6, estimate = 7,
                         relative_estimate = 8, estimate_nodes = 9, marked = 10, by_indicator = 11, by_region = 12,
                         with_excess = 13, newton = 14, flags = 15, predicted = 16, allocation = 17, candidate = 18,
-                        order = 19, cost = 20, seconds = 21;
+                        order = 19, cost = 20, seconds = 21,
+                        window = 22;  // Unit 17c: per derived goal first, last (only with one)
 // Candidate.
 constexpr std::uint16_t c_ints = 1, c_reals = 2, c_indicator = 3;
 // Order.
 constexpr std::uint16_t o_indicator = 1, o_ints = 2, o_order = 3;
 // Certificate.
-constexpr std::uint16_t g_ints = 1, g_reals = 2, g_status = 3;
+constexpr std::uint16_t g_ints = 1, g_reals = 2, g_status = 3, g_window_moved = 4;  // 4: Unit 17c, only when moved
 }  // namespace key
 
 std::vector<std::int64_t> ints(std::initializer_list<std::uint64_t> v) {
@@ -101,6 +103,14 @@ Writer write_pass(const results::AdaptPassRow& p) {
     w.f64s(k::resolution, p.resolution);
     w.f64s(k::change, p.change);
     w.f64s(k::estimate, p.estimate);
+    if (!p.window_first.empty()) {
+        std::vector<std::int64_t> wv;
+        for (std::size_t i = 0; i < p.window_first.size(); ++i) {
+            wv.push_back(static_cast<std::int64_t>(p.window_first[i]));
+            wv.push_back(static_cast<std::int64_t>(p.window_last[i]));
+        }
+        w.i64s(k::window, wv);
+    }
     w.f64(k::relative_estimate, p.relative_estimate);
     w.u64(k::estimate_nodes, p.estimate_nodes);
     w.u64(k::marked, p.marked);
@@ -139,7 +149,7 @@ Writer write_pass(const results::AdaptPassRow& p) {
     return w;
 }
 
-std::expected<results::AdaptPassRow, base::Error> read_pass(const Reader& r, std::size_t goals) {
+std::expected<results::AdaptPassRow, base::Error> read_pass(const Reader& r, std::size_t goals, std::size_t derived) {
     namespace k = key;
     results::AdaptPassRow p;
     NITCAD_IO_TRY(sz, ints_of(r, k::sizes, 3, "pass sizes"));
@@ -162,6 +172,13 @@ std::expected<results::AdaptPassRow, base::Error> read_pass(const Reader& r, std
     p.resolution = std::move(resolution);
     p.change = std::move(change);
     p.estimate = std::move(estimate);
+    if (derived > 0) {
+        NITCAD_IO_TRY(wv, ints_of(r, k::window, 2 * derived, "pass windows"));
+        for (std::size_t i = 0; i < derived; ++i) {
+            p.window_first.push_back(static_cast<std::uint64_t>(wv[2 * i]));
+            p.window_last.push_back(static_cast<std::uint64_t>(wv[2 * i + 1]));
+        }
+    }
     NITCAD_IO_TRY(rel, r.f64(k::relative_estimate));
     p.relative_estimate = rel;
     NITCAD_IO_TRY(en, r.u64(k::estimate_nodes));
@@ -281,6 +298,7 @@ std::expected<void, base::Error> save_adapt_report(const std::filesystem::path& 
         cw.i64s(key::g_ints, ints({c.goal, c.point}));
         cw.f64s(key::g_reals, std::vector<double>{c.value, c.estimate, c.verified_error, c.order, c.allowed});
         cw.text(key::g_status, c.status);
+        if (c.window_moved) cw.u64(key::g_window_moved, 1);
         w.record(k::certificate, cw);
     }
     w.text(k::status, a.status);
@@ -290,6 +308,10 @@ std::expected<void, base::Error> save_adapt_report(const std::filesystem::path& 
         w.u64(k::predictor_digest, a.predictor_digest);
         w.text(k::predictor_status, a.predictor_status);
         w.f64(k::predictor_out_of_range, a.predictor_out_of_range);
+    }
+    if (!a.goal_kinds.empty()) {
+        write_texts(w, k::goal_kind, a.goal_kinds);
+        w.f64(k::vt_tolerance, a.vt_tolerance);
     }
     return detail::write_file(path, Content::adapt_report, w);
 }
@@ -341,13 +363,28 @@ std::expected<results::AdaptReport, base::Error> load_adapt_report(const std::fi
     a.verification_nodes = vn;
     NITCAD_IO_TRY(vs, r.f64(k::verification_seconds));
     a.verification_seconds = vs;
+    // Unit 17c: the goals' kinds (absent: every goal a current), read first for the entries' count.
+    std::size_t derived = 0;
+    if (r.has(k::goal_kind)) {
+        NITCAD_IO_TRY(kinds, read_texts(r, k::goal_kind));
+        if (kinds.size() != a.goal_contacts.size()) return std::unexpected(corrupt("adaptation report goal kinds"));
+        for (const std::string& kind : kinds) {
+            if (kind != "current" && kind != "vt" && kind != "gm" && kind != "swing") {
+                return std::unexpected(corrupt("adaptation report goal kind"));
+            }
+            if (kind != "current") ++derived;
+        }
+        a.goal_kinds = std::move(kinds);
+        NITCAD_IO_TRY(vt, r.f64(k::vt_tolerance));
+        a.vt_tolerance = vt;
+    }
     NITCAD_IO_TRY(vg, r.f64s_or_empty(k::verification_goal));
-    const std::size_t goals_by_points = a.goal_contacts.size() * a.points.size();
+    const std::size_t goals_by_points = (a.goal_contacts.size() - derived) * a.points.size() + derived;
     if (!vg.empty() && vg.size() != goals_by_points) return std::unexpected(corrupt("adaptation report verification goals"));
     a.verification_goal = std::move(vg);
     NITCAD_IO_TRY(passes, r.records(k::pass));
     for (const Reader& p : passes) {
-        NITCAD_IO_TRY(row, read_pass(p, goals_by_points));
+        NITCAD_IO_TRY(row, read_pass(p, goals_by_points, derived));
         a.passes.push_back(std::move(row));
     }
     NITCAD_IO_TRY(certs, r.records(k::certificate));
@@ -365,6 +402,10 @@ std::expected<results::AdaptReport, base::Error> load_adapt_report(const std::fi
         c.order = cf[3];
         c.allowed = cf[4];
         c.status = std::move(status);
+        if (cr.has(key::g_window_moved)) {
+            NITCAD_IO_TRY(moved, cr.u64(key::g_window_moved));
+            c.window_moved = moved != 0;
+        }
         a.certificates.push_back(std::move(c));
     }
     NITCAD_IO_TRY(status, r.text(k::status));
