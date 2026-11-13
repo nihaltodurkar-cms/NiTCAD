@@ -6303,6 +6303,23 @@ same, another format and another schema refused by name, another content kind, t
 held-out device's labels not reaching the trees), the diode's histories end to end, and the CLI (training with a
 named held-out history, an unknown one, usage).
 
+
+*Slice 3a — the predictor in the loop (LB4, LB8, LB9; AC19's fast clauses, AC21's predictor case).*
+`PolicyOptions::first_prediction`: the start mesh's prediction rounds take it in place of ID2's field (before the test
+hook `prediction`, which still drives the later proposals when set: AC21's fixture uses both); every later pass is the
+layer's own. `solve::learned_targets` (LB4), `out_of_range` and `out_of_range_fraction` (LB8), `stamp_predictor` (the
+identity continued over the model file's digest, format, schema and use; settings `adapt.predictor.digest_high`,
+`_low`, `.format`, `.schema`, `.used`). `[adapt] predictor = <file>` is loaded at build, so `nitcad check` refuses a
+model of another format or schema with its line, and needs `policy = intelligent`. `deck::run` computes the start
+mesh's (the deck's own, AD10) features against the model's materials; above 5% out of range it leaves ID2's field and
+records `out_of_range`. `results::AdaptReport` gains the predictor's path, digest, status and fraction (io keys 25–28,
+written only with a predictor, so Unit 17's reports are unchanged and still load); `nitcad run` and `check` print
+them. Tests: the range rule and the targets exactly (the 5% margin both ways, unseen and absent materials, NaN, the
+5% device limit, l^ = 1, 0.4 and the 0.5 threshold); the deck case (`adapt_history` alone leaves the identity and the
+deterministic report bit-identical to a run without it; a model used, its digest in the report and its file; two
+models two identities; a device of another material 100% out of range, its passes' meshes those of the run without
+the predictor, the identity still carrying the model with `used = 0`; the console lines; another format refused at
+build); AC21 with a learned model given through `learned_targets`, the certificates bit-identical to basic's.
 ---
 
 ### Unit 55 — theoretical calculation validation framework: research and design proposal (proposed 2026-10-31; on `verify/theoretical-validation`)

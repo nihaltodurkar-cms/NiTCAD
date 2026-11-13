@@ -698,6 +698,7 @@ add_executable(nitcad_deck_test
   tests/deck/gate_tunnelling_test.cpp
   tests/deck/complex_finfet_test.cpp
   tests/deck/adapt_test.cpp
+  tests/deck/cross_run_learning_test.cpp
   tests/baseline/trace_listener.cpp)
 target_include_directories(nitcad_deck_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/deck")
 # The plot tests read the images back (Unit 25a).
