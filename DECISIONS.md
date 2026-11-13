@@ -6161,6 +6161,24 @@ least 890 k for the ladder (0.11 of it; ≤ 1/3 holds) with the intelligent poli
 within 12 passes.** The gate (`[.ac5]`, manual like `[.uc8]`: about 40 minutes) repeats the h0/4 and h0/8 runs for the
 bound and the intelligent run to 100 000 nodes, and checks AC20 on it.
 
+**AC8 (measured 2026-11-13, Release, PARDISO on 6 threads; `[.ac8]` in tests/deck/complex_finfet_test.cpp).** The
+start: decks/finfet_3d_swept.deck with its axis lines about 10 nm apart (0, 20, 25, 35–50 every 5, 60, 65, 85 nm, the
+gate edges straddled as the deck) and its cross-section unstructured at up to 12 nm (the structured frame unchanged):
+4 718 nodes. `[adapt]`: goal the drain current, tolerance 1e-2, adjoint-weighted, `at = auto` (0 and 0.8 V for basic,
+ID3's points for intelligent), max_nodes 9 367 (UC8's budget). The coarse tensor mesh (9 367) and the 2× reference
+(45 375) re-solved as UC8. **Basic:** 2 passes (4 718 → 7 678 nodes; the next would exceed the budget), relative
+estimate 175 then 139, stop max_nodes, unverified; UC8's rule at **9 of 17** points (fails at 0.1, 0.15 and 0.35–0.6
+V: on-current 3–5% low at 0.4–0.55 V, the tensor within 0.6%), V_T and the swing within their bounds, max g_m −8.3%
+outside. **Intelligent:** the prediction's 7 350 nodes and no further pass, relative 125, unverified; **6 of 17**,
+V_T and max g_m outside, the swing within. UC8's hand-tuned deck (Unit 54, 8 300 nodes) met 12 of 17. **The measured
+target is missed** (it was stated as a target, not a gate). The gated parts hold: every point converges, the budget
+holds, both runs unverified (AC20). The cause measured: on the swept 3D mesh the adjoint estimate is 84 times the
+actual error at 0 V (2.98e-10 against 3.56e-12 A) and 9 times at 0.8 V (1.29e-6 against 1.37e-7 A), so the loop sees
+itself 100× from its tolerance and the budget allows one or two passes, spent where the overestimated weights point.
+AC11 on AC8: per pass 6 734 and 11 550 DOFs, 181 820 and 302 032 nonzeros, fill 6.46 M and 13.1 M, 109–115 Newton
+iterations over the 17 points; solve 5.8 and 10.1 s, the estimate 3.1 and 5.2 s (factorizations 1.0 and 2.1 s,
+transposed solve 0.024 and 0.041 s: 2% of a factorization); no verification run (budget stops).
+
 **AC12 (hand mutants, 2026-11-13).** Each mutant one exact-string change, the solve, deck and mesh libraries and
 `nitcad_adapt_test`, `nitcad_deck_test` and `nitcad_mesh_test` rebuilt (Release, r3), then the fast suites: every
 non-hidden adapt case, the deck's adapt cases and `[size_field]`; killed if a build or a test fails. **Round 1, 37
