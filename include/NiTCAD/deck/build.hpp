@@ -145,7 +145,8 @@
 //                     cross-section size field and the swept lines. restart is refused with [adapt].
 //                     [output] adapt = <file> (the report, io/adapt_report.hpp) and adapt_meshes =
 //                     <directory> (each pass's device, pass_<k>.nitdev, and generated mesh,
-//                     pass_<k>.nitmesh); sweep, device, mesh, checkpoint and table are the final
+//                     pass_<k>.nitmesh) and adapt_history = <file> (Unit 17b: the run's learning
+//                     history, io/learn_files.hpp); sweep, device, mesh, checkpoint and table are the final
 //                     mesh's, the table with the certificates' columns.
 // Exactly one analysis section: [equilibrium], [sweep], [transient], [small_signal] or [trace].
 // A series is a comma list, first : last : step (DK6) or logspace(first, last, count) (Unit 43:
@@ -192,6 +193,7 @@ struct Outputs {
     std::filesystem::path small_signal;  // io::save_small_signal (Unit 43)
     std::filesystem::path adapt;         // io::save_adapt_report (Unit 17)
     std::filesystem::path adapt_meshes;  // a directory: each pass's device and generated mesh (Unit 17)
+    std::filesystem::path adapt_history; // io::save_adapt_history (Unit 17b, LB9)
 };
 
 // [adapt] (Unit 17): the loop's options and what it needs to refine the deck's mesh.

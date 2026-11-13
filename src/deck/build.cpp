@@ -1627,9 +1627,10 @@ std::expected<void, base::Error> Builder::outputs(Plan& plan) const {
                                         : e.key == "small_signal" ? &plan.outputs.small_signal
                                         : e.key == "adapt"        ? &plan.outputs.adapt
                                         : e.key == "adapt_meshes" ? &plan.outputs.adapt_meshes
+                                        : e.key == "adapt_history" ? &plan.outputs.adapt_history
                                                                   : nullptr;
         if (!target) return std::unexpected(unknown(e, *s));
-        if ((e.key == "adapt" || e.key == "adapt_meshes") && !plan.adapt) {
+        if ((e.key == "adapt" || e.key == "adapt_meshes" || e.key == "adapt_history") && !plan.adapt) {
             return std::unexpected(at(e.line, "'" + e.key + "' is written by an [adapt] run; the deck has no [adapt]"));
         }
         *target = file(e);

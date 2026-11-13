@@ -6254,6 +6254,30 @@ criterion; LB10 narrows what one design row stores and is flagged for the owner'
    out-of-range fallback and bit-identity without `predictor`; AC21's predictor case; AC12's ID8 and ID10 mutants;
    ARCHITECTURE 6.12.4 and 11.3.
 
+
+**Amendment at build (LB9, 2026-11-13).** The history is an output, so it is written by `[output] adapt_history =
+<file>` beside `adapt` and `adapt_meshes` (AD8's convention), not by an `[adapt] history` key; `predictor` stays an
+`[adapt]` key (it is an input). Nothing else in LB9 changes.
+
+**Implementation record.**
+
+*Slice 1 — features, labels, histories, manifests (LB2, LB3, LB6, LB9, LB11).* `solve/adapt_policy.hpp`:
+`feature_points` (ID2's junction, interface and depletion points with their spans and sizes, and the analysis's
+largest junction and gate bias differences), split out of `predict_sizes` without a change to it (the fast adapt suite
+and `[adapt_intelligent]` unchanged: 28 cases pass; 3 pass and 3 fail as expected). `results/learn.hpp`: schema 1's
+17 features, `HistoryPass`, `AdaptHistory`, `Manifest`, `TrainingSet`. `solve/adapt_learn.hpp`: `material_key` (a
+category from the material's kind, eps_r and, for a semiconductor, Eg0, Nc300 and Nv300 as exact hexadecimal
+floats: materials carry no names, and two decks naming one material differently give one key), `device_digest`,
+`edge_features` (nearest junction, interface and contact points by an x-sorted scan, ties to the lower index),
+`realized_levels`, `HistoryRecorder`. Feature 10 is ID2's per-point largest junction difference (the diode's points
+−1 to 0.6 V give 1 V, not the range 1.6 V). `io/learn_files.hpp`: the `.nithist` file (content kind 9), `file_digest`,
+`make_manifest`, the text manifest, `build_training_set` with LB6's stride. `deck::Deck` keeps its text (the history
+records it); `[output] adapt_history`; `deck::run` gathers the history through `on_mesh` (after `adapt_meshes`'
+writer when both are given). `nitcad learn manifest <manifest> <history>...`. Tests: `[adapt_learn]` (features on
+the diode, labels against a refined mesh and against itself, a run's history saved, loaded and saved again
+bit-identical, the manifest the same in either input order, the training set built twice equal, the cap, and the
+refusals: a duplicate, a digest that does not match, another schema, unsorted lines); the deck case (the history's
+deck text, run identity and per-pass mesh digests, the CLI's manifest, its usage and a non-history refused).
 ---
 
 ### Unit 55 — theoretical calculation validation framework: research and design proposal (proposed 2026-10-31; on `verify/theoretical-validation`)

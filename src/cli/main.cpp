@@ -8,6 +8,8 @@
 //   nitcad verify [--tier fast|full|nightly] [--id <id>] [--report <file>]
 //                 [--mkl <mkl_rt.dll>] [--threads <n>]   (PARDISO for TVB-04's 3D levels)
 //                         run the verification benchmarks of TVR-1 (Unit 55; verify.hpp, its own exit status)
+//   nitcad learn manifest <manifest> <history>...
+//                         the manifest of adaptation histories for cross-run learning (Unit 17b; learn.hpp)
 //   nitcad --version      print the build: version, git revision, build type, compiler, Eigen
 //
 // Exit status: 0 done; 1 the deck, the run or the plot failed (the message on stderr); 2 a sweep,
@@ -31,6 +33,7 @@
 #include "NiTCAD/solve/provenance.hpp"
 #include "NiTCAD/verify/benchmark/registry.hpp"
 #include "plot.hpp"
+#include "learn.hpp"
 #include "verify.hpp"
 
 namespace {
@@ -50,6 +53,7 @@ int usage() {
                "       nitcad plot <deck or result file> [options] --out <image.png>\n"
                "       nitcad verify [--tier fast|full|nightly] [--id <id>] [--report <file>]\n"
                "                     [--mkl <mkl_rt.dll>] [--threads <n>]\n"
+               "       nitcad learn manifest <manifest> <history.nithist>...\n"
                "       nitcad --version\n",
                stderr);
     return 64;
@@ -208,6 +212,7 @@ int main(int argc, char** argv) {
         return 0;
     }
     if (argc >= 2 && std::string_view(argv[1]) == "plot") return NiTCAD::cli::plot(argc, argv);
+    if (argc >= 2 && std::string_view(argv[1]) == "learn") return NiTCAD::cli::learn(argc, argv);
     if (argc >= 2 && std::string_view(argv[1]) == "verify") {
         return NiTCAD::cli::verify(argc, argv, NiTCAD::verify::benchmark::benchmarks());
     }

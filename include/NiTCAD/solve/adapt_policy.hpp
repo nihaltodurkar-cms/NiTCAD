@@ -81,6 +81,30 @@ struct Prediction {
     std::size_t predicted_nodes = 0;  // nodes with a finite target
 };
 
+// ID2's feature points, before they become per-node targets (exposed for Unit 17b's learning
+// features, DECISIONS.md LB3). Junction points: span W, size L_D / 2; interface points: span 5 lambda,
+// size lambda; their depletion region (AR5): span W_d, size L_D / 2. v_junction and v_gate: the
+// analysis's largest difference between non-gate contacts and between a gate-like contact and the
+// rest (V). Errors (invalid_input): points not one bias per contact.
+struct FeaturePoint {
+    enum class Kind : unsigned char { junction, interface, depletion };
+    Kind kind = Kind::junction;
+    mesh::Point at{};
+    std::array<double, 3> normal{};
+    double span = 0.0;
+    double size = 0.0;
+};
+
+struct FeaturePoints {
+    std::vector<FeaturePoint> points;
+    double v_junction = 0.0;
+    double v_gate = 0.0;
+};
+
+[[nodiscard]] std::expected<FeaturePoints, base::Error> feature_points(const device::Device& device,
+                                                                       std::span<const std::vector<double>> points,
+                                                                       const BiasOptions& options);
+
 // ID2. Errors (invalid_input): points not one bias per contact.
 [[nodiscard]] std::expected<Prediction, base::Error> predict_sizes(const device::Device& device,
                                                                    std::span<const std::vector<double>> points,

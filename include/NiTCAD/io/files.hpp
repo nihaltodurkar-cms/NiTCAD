@@ -48,6 +48,8 @@ enum class Content : std::uint32_t {
     small_signal = 6,  // Unit 42
     verify_report = 7, // Unit 55 TVR-1 (io/verify_report.hpp; DECISIONS 11.13 RC-Q3)
     adapt_report = 8,  // Unit 17 (io/adapt_report.hpp; DECISIONS AD8, AR8)
+    adapt_history = 9, // Unit 17b (io/learn_files.hpp; DECISIONS LB6)
+    learned_model = 10, // Unit 17b (io/learn_files.hpp; DECISIONS ID10, LB6)
 };
 
 // A 64-bit FNV-1a digest of the mesh graph (dimension, points, volumes, edges, boundary patches;

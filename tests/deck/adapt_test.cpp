@@ -15,6 +15,7 @@
 #include "NiTCAD/io/adapt_report.hpp"
 #include "NiTCAD/io/device_file.hpp"
 #include "NiTCAD/io/files.hpp"
+#include "NiTCAD/io/learn_files.hpp"
 #include "NiTCAD/mesh/mesh.hpp"
 #include "NiTCAD/render/image.hpp"
 #include "fixtures.hpp"
@@ -487,4 +488,40 @@ adapt_meshes = passes
     const Cli changed = cli("plot " + deck + " --view passes --adapter warp --out " + out("x.png"));
     CHECK(changed.status == 1);
     CHECK(changed.output.find("digest differs") != std::string::npos);
+}
+
+TEST_CASE("deck adapt: adapt_history writes the run's learning history; nitcad learn manifest lists it (Unit 17b LB9, LB11)",
+          "[deck]") {
+    const fs::path dir = scratch("adapt_history");
+    const auto deck_with = [](const std::string& tolerance, const std::string& file) {
+        return coarse_diode + "[adapt]\ngoal = current anode\ntolerance = " + tolerance + "\n[output]\nadapt = " + file +
+               ".nitadapt\nadapt_history = " + file + ".nithist\n";
+    };
+    const std::string text = deck_with("1e-2", "h1");
+    const deck::Plan plan = must(text, dir);
+    const auto report = deck::run(plan);
+    if (!report) FAIL(report.error().message);
+    const auto h = io::load_adapt_history(dir / "h1.nithist");
+    REQUIRE(h.has_value());
+    CHECK(h->deck_text == text);
+    CHECK(h->run.input_identity == report->sweep->run.input_identity);
+    REQUIRE(h->passes.size() == report->adapt->passes.size());
+    for (std::size_t k = 0; k < h->passes.size(); ++k) CHECK(h->passes[k].mesh_digest == report->adapt->passes[k].mesh_digest);
+    CHECK(h->passes.back().device_digest != 0);
+    // A second device, then the manifest by the CLI: sorted, the digests the files'.
+    REQUIRE(deck::run(must(deck_with("3e-2", "h2"), dir)).has_value());
+    const fs::path manifest = dir / "set.manifest";
+    const Cli made = cli("learn manifest \"" + manifest.string() + "\" \"" + (dir / "h1.nithist").string() + "\" \"" +
+                         (dir / "h2.nithist").string() + "\"");
+    INFO(made.output);
+    CHECK(made.status == 0);
+    CHECK(made.output.find("manifest: 2 histories, schema 1") != std::string::npos);
+    const auto m = io::load_manifest(manifest);
+    REQUIRE(m.has_value());
+    REQUIRE(m->entries.size() == 2);
+    for (const auto& e : m->entries) CHECK(io::file_digest(e.path).value() == e.digest);
+    CHECK(cli("learn manifest \"" + manifest.string() + "\"").status == 64);
+    CHECK(cli("learn manifest \"" + manifest.string() + "\" \"" + (dir / "h1.nitadapt").string() + "\"").status == 1);
+    // Without [adapt], refused.
+    CHECK(refused(coarse_diode + "[output]\nadapt_history = h.nithist\n").find("the deck has no [adapt]") != std::string::npos);
 }

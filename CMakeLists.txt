@@ -491,7 +491,8 @@ add_library(nitcad_io STATIC
   src/io/files.cpp
   src/io/device_file.cpp
   src/io/verify_report.cpp
-  src/io/adapt_report.cpp)
+  src/io/adapt_report.cpp
+  src/io/learn_files.cpp)
 add_library(NiTCAD::io ALIAS nitcad_io)
 target_include_directories(nitcad_io PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
 target_link_libraries(nitcad_io PUBLIC NiTCAD::base NiTCAD::mesh NiTCAD::device NiTCAD::results)
@@ -600,7 +601,8 @@ add_library(nitcad_solve STATIC
   src/solve/adapt_adjoint.cpp
   src/solve/adapt_policy.cpp
   src/solve/adapt.cpp
-  src/solve/adapt_report.cpp)
+  src/solve/adapt_report.cpp
+  src/solve/adapt_learn.cpp)
 add_library(NiTCAD::solve ALIAS nitcad_solve)
 target_include_directories(nitcad_solve PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
 target_link_libraries(nitcad_solve PUBLIC
@@ -717,7 +719,8 @@ add_executable(nitcad_adapt_test
   tests/solve/adapt_adjoint_test.cpp
   tests/solve/adapt_goal_test.cpp
   tests/solve/adapt_policy_test.cpp
-  tests/solve/adapt_intelligent_test.cpp)
+  tests/solve/adapt_intelligent_test.cpp
+  tests/solve/adapt_learn_test.cpp)
 target_link_libraries(nitcad_adapt_test PRIVATE NiTCAD::deck Catch2::Catch2WithMain)
 nitcad_add_file_tests(adapt nitcad_adapt_test)
 # The adaptive gates on 2D MOSFETs (AC7 [.adapt_goal]; AC14, AC17 [.adapt_intelligent]): tens of
@@ -890,7 +893,7 @@ if(NITCAD_VERIFY_FULL_TIER AND CMAKE_BUILD_TYPE STREQUAL "Release")
 endif()
 
 # The batch runner (`nitcad check|run <deck>`).
-add_executable(nitcad src/cli/main.cpp src/cli/plot.cpp src/cli/verify.cpp)
+add_executable(nitcad src/cli/main.cpp src/cli/plot.cpp src/cli/verify.cpp src/cli/learn.cpp)
 target_link_libraries(nitcad PRIVATE NiTCAD::deck NiTCAD::render NiTCAD::verify_benchmark)
 # `nitcad --version` names the build (Unit 42, PV6): a 40-digit revision, or unknown without git.
 add_test(NAME cli_version COMMAND nitcad --version)

@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <fstream>
+#include <optional>
 #include <string>
 #include <system_error>
 #include <utility>
@@ -12,7 +13,9 @@
 #include "NiTCAD/io/adapt_report.hpp"
 #include "NiTCAD/io/device_file.hpp"
 #include "NiTCAD/io/files.hpp"
+#include "NiTCAD/io/learn_files.hpp"
 #include "NiTCAD/linalg/mkl_runtime.hpp"
+#include "NiTCAD/solve/adapt_learn.hpp"
 #include "NiTCAD/solve/bias.hpp"
 #include "NiTCAD/solve/equilibrium.hpp"
 #include "NiTCAD/solve/small_signal.hpp"
@@ -253,10 +256,31 @@ std::expected<RunReport, base::Error> run(const Plan& plan, const solve::RunCont
                 return written(msh, m.generated ? io::save_generated_mesh(msh, *m.generated) : io::save_mesh(msh, m.device.mesh()));
             };
         }
+        // Unit 17b (LB11): the learning history, each pass's features as it is solved.
+        std::optional<solve::HistoryRecorder> recorder;
+        if (!out.adapt_history.empty()) {
+            recorder.emplace(plan.points, plan.options);
+            o.on_mesh = [&, saving = std::move(o.on_mesh)](std::size_t pass,
+                                                           const solve::AdaptableMesh& m) -> std::expected<void, base::Error> {
+                if (saving) {
+                    if (auto w = saving(pass, m); !w) return w;
+                }
+                return recorder->record(pass, m);
+            };
+        }
         auto r = solve::adapt(device_builder(plan), plan.points, plan.options, o, control);
         if (!r) return std::unexpected(std::move(r.error()));
         solve::stamp_adapt(r->sweep.run, o, a.certify_required);
         const solve::AdaptableMesh& fin = *r->mesh;
+        if (recorder) {
+            auto h = recorder->finish(fin);
+            if (!h) return std::unexpected(std::move(h.error()));
+            h->deck_text = a.deck ? a.deck->text : std::string();
+            h->run = r->sweep.run;
+            if (auto w = written(out.adapt_history, io::save_adapt_history(out.adapt_history, *h)); !w) {
+                return std::unexpected(w.error());
+            }
+        }
         if (fin.generated && fin.generated->generation_digest != 0) {
             r->sweep.run.mesh_type = plan.mesh_type;
             r->sweep.run.mesh_generation_digest = fin.generated->generation_digest;
