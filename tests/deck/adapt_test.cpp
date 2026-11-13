@@ -587,6 +587,11 @@ TEST_CASE("deck adapt: a learned predictor: its use, the identity, the out-of-ra
     REQUIRE(used.has_value());
     const results::AdaptReport& a = *used->adapt;
     CHECK(a.predictor_status == "used");
+    // LB4: the model predicts the start mesh only; with weighting none every later pass is the
+    // layer's own (AD3's marks), never a learned proposal.
+    REQUIRE(a.passes.size() >= 2);
+    CHECK(a.passes[0].source == "prediction");
+    for (std::size_t k = 1; k < a.passes.size(); ++k) CHECK(a.passes[k].source != "proposal");
     CHECK(a.predictor_out_of_range <= 0.05);
     CHECK(a.predictor_digest == io::file_digest(dir / "m0.nitlearn").value());
     CHECK(used->sweep->run.input_identity != plain->sweep->run.input_identity);

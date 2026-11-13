@@ -223,6 +223,18 @@ TEST_CASE("learn: a run's history, its file, the manifest and the training set a
     REQUIRE(t2.has_value());
     CHECK(*t1 == *t2);
     CHECK(t1->rows == t1->labels.size());
+    // Under the cap (stride 1) every labelled edge of both histories is a sample.
+    {
+        std::size_t labelled = 0;
+        for (const auto& path : {pa, pb}) {
+            auto h = io::load_adapt_history(path);
+            REQUIRE(h.has_value());
+            for (const auto& p : h->passes) {
+                for (const double v : p.labels) labelled += std::isnan(v) ? 0 : 1;
+            }
+        }
+        CHECK(t1->rows == labelled);
+    }
     CHECK(t1->features.size() == t1->rows * F);
     for (const double v : t1->labels) CHECK(!std::isnan(v));
     // The stride cap (LB6): at most 5 per device, taken from the start of each.
@@ -230,6 +242,20 @@ TEST_CASE("learn: a run's history, its file, the manifest and the training set a
     REQUIRE(capped.has_value());
     CHECK(capped->rows <= 10);
     CHECK(capped->rows >= 2);
+    // Exactly LB6's stride: per device every k-th labelled edge, k = ceil(n / 5), from the first.
+    for (std::uint32_t dv = 0; dv < 2; ++dv) {
+        std::vector<std::size_t> all;
+        for (std::size_t i = 0; i < t1->rows; ++i) {
+            if (t1->device[i] == dv) all.push_back(i);
+        }
+        const std::size_t k = (all.size() + 4) / 5;
+        std::vector<std::size_t> mine;
+        for (std::size_t i = 0; i < capped->rows; ++i) {
+            if (capped->device[i] == dv) mine.push_back(i);
+        }
+        REQUIRE(mine.size() == (all.size() + k - 1) / k);
+        for (std::size_t j = 0; j < mine.size(); ++j) CHECK(capped->labels[mine[j]] == t1->labels[all[j * k]]);
+    }
 
     // Refusals.
     const std::vector<std::filesystem::path> dup{pa, pa2};
@@ -362,6 +388,45 @@ TEST_CASE("learn: the model's parts, exactly (LB5)", "[adapt_learn]") {
         for (std::size_t k = 0; k < leaf_count.size(); ++k) {
             if (b3.trees[0][k].feature < 0) CHECK(leaf_count[k] >= 150);
         }
+    }
+    // The shrinkage (LB5): a one-split tree's leaves are 0.1 times their side's mean residual.
+    {
+        solve::TreeOptions o;
+        o.trees = 1;
+        o.depth = 1;
+        const auto b1 = solve::fit_boosted_trees(t.features, t.labels, rows, o);
+        const auto& root = b1.trees[0][0];
+        REQUIRE(root.feature == 13);
+        double sl = 0.0, sr = 0.0;
+        std::size_t nl = 0, nr = 0;
+        for (const std::size_t i : rows) {
+            const double r = t.labels[i] - b1.base;
+            if (t.features[i * F + 13] <= root.threshold) {
+                sl += r;
+                ++nl;
+            } else {
+                sr += r;
+                ++nr;
+            }
+        }
+        CHECK(b1.trees[0][static_cast<std::size_t>(root.left)].value == Approx(0.1 * sl / static_cast<double>(nl)));
+        CHECK(b1.trees[0][static_cast<std::size_t>(root.right)].value == Approx(0.1 * sr / static_cast<double>(nr)));
+    }
+    // min_leaf binds the split itself: a step at 0.9 (40 rows above) cannot be cut with 150 a side.
+    {
+        results::TrainingSet late = t;
+        for (std::size_t i = 0; i < late.rows; ++i) late.labels[i] = late.features[i * F + 13] > 0.9 ? 2.0 : 0.0;
+        solve::TreeOptions o;
+        o.trees = 1;
+        o.depth = 1;
+        o.min_leaf = 150;
+        const auto b4 = solve::fit_boosted_trees(late.features, late.labels, rows, o);
+        const auto& root = b4.trees[0][0];
+        REQUIRE(root.feature >= 0);
+        std::size_t above = 0;
+        for (const std::size_t i : rows) above += late.features[i * F + root.feature] > root.threshold ? 1 : 0;
+        CHECK(above >= 150);
+        CHECK(rows.size() - above >= 150);
     }
     // The ridge recovers a linear law.
     {
