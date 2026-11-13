@@ -16,6 +16,37 @@
 #include "NiTCAD/solve/adapt_adjoint.hpp"
 
 namespace NiTCAD::solve {
+
+double allowed_error(double tolerance, double value, double resolution) noexcept {
+    return tolerance * std::max(std::abs(value), resolution);
+}
+
+RichardsonError richardson_error(double coarse, double fine, double change) noexcept {
+    const double d = std::abs(fine - coarse);
+    double p = 1.0;
+    if (std::isfinite(change) && change > 0.0 && d > 0.0) p = std::clamp(std::log2(change / d), 0.5, 3.0);
+    return {.error = d / (std::exp2(p) - 1.0), .order = p};
+}
+
+CertificateStatus certificate_status(bool verified, double estimate, double verified_error, double allowed) noexcept {
+    if (!verified) return CertificateStatus::unverified;
+    return estimate <= allowed && verified_error <= allowed ? CertificateStatus::certified
+                                                            : CertificateStatus::not_certified;
+}
+
+std::optional<double> refined_size(double size, double min_size) noexcept {
+    if (!(size > min_size)) return std::nullopt;
+    return std::max(0.5 * size, min_size);
+}
+
+std::size_t heavier_node(std::size_t a, double excess_a, std::size_t b, double excess_b) noexcept {
+    return excess_b > excess_a || (excess_b == excess_a && b < a) ? b : a;
+}
+
+bool proposal_missed(double relative, double previous_relative, double margin) noexcept {
+    return !(relative <= (1.0 - margin) * previous_relative);
+}
+
 namespace {
 
 base::Error invalid(std::string message) { return {base::ErrorCode::invalid_input, std::move(message), std::nullopt}; }
@@ -53,7 +84,8 @@ std::expected<std::shared_ptr<const mesh::SizeField>, base::Error> refine_field(
     } else {
         std::vector<char> seeds(h.size(), 0);
         for (std::size_t i = 0; i < h.size(); ++i) {
-            if (!(h[i] > min_size)) continue;
+            const std::optional<double> halved = refined_size(h[i], min_size);
+            if (!halved) continue;
             if (targets != nullptr) {
                 // Halved at most per call (as marks are), toward the target (AR5).
                 const double t = std::max({(*targets)[i], 0.5 * h[i], min_size});
@@ -61,7 +93,7 @@ std::expected<std::shared_ptr<const mesh::SizeField>, base::Error> refine_field(
                 h[i] = t;
             } else {
                 if (marked[i] == 0) continue;
-                h[i] = std::max(0.5 * h[i], min_size);
+                h[i] = *halved;
             }
             seeds[i] = 1;
             ++count;
@@ -438,8 +470,7 @@ std::expected<Allocation, base::Error> allocate(const AdaptableMesh& cur, const 
     std::vector<Cand> cands;
     // The node of an edge with the larger weighted excess (the lower index on a tie).
     const auto heavier = [&](std::size_t a, std::size_t b) {
-        const double x = w(a) * united.excess[a], y = w(b) * united.excess[b];
-        return y > x || (y == x && b < a) ? b : a;
+        return heavier_node(a, w(a) * united.excess[a], b, w(b) * united.excess[b]);
     };
     std::size_t sweep_n2 = 0;
     switch (cur.kind) {
@@ -988,7 +1019,7 @@ std::expected<AdaptResult, base::Error> adapt(const DeviceBuilder& build, std::s
     const auto relative = [&](const std::vector<double>& x, const Goals& g) {
         double r = 0.0;
         for (std::size_t j = 0; j < x.size(); ++j) {
-            r = std::max(r, x[j] / (o.tolerance * std::max(std::abs(g.value[j]), g.resolution[j])));
+            r = std::max(r, x[j] / (allowed_error(o.tolerance, g.value[j], g.resolution[j])));
         }
         return r;
     };
@@ -1147,7 +1178,7 @@ std::expected<AdaptResult, base::Error> adapt(const DeviceBuilder& build, std::s
         }
     }
     bool fallen_back = false;
-    int consecutive_misses = 0;
+    MissGuard misses_guard;  // AD12 a
     double previous_relative = coarse_relative;
     double previous_change = std::numeric_limits<double>::infinity();
     const auto fall_back = [&](FallbackTrigger t, int pass) {
@@ -1204,14 +1235,11 @@ std::expected<AdaptResult, base::Error> adapt(const DeviceBuilder& build, std::s
         if (!diff) return std::unexpected(diff.error());
         v.difference = std::move(*diff);
         for (std::size_t j = 0; j < v.goal.size(); ++j) {
-            const double d_fine = std::abs(v.goal[j] - rep.goal[j]);
-            double p = 1.0;
-            if (!rep.change.empty() && d_fine > 0.0 && rep.change[j] > 0.0) {
-                p = std::clamp(std::log2(rep.change[j] / d_fine), 0.5, 3.0);
-            }
-            v.order.push_back(p);
-            v.error.push_back(d_fine / (std::exp2(p) - 1.0));
-            const double allowed = o.tolerance * std::max(std::abs(rep.goal[j]), rep.resolution[j]);
+            const RichardsonError re =
+                richardson_error(rep.goal[j], v.goal[j], rep.change.empty() ? 0.0 : rep.change[j]);
+            v.order.push_back(re.order);
+            v.error.push_back(re.error);
+            const double allowed = allowed_error(o.tolerance, rep.goal[j], rep.resolution[j]);
             if (!(estimate_of(rep, j) <= allowed && v.error.back() <= allowed)) v.accepts = false;
         }
         return v;
@@ -1339,7 +1367,7 @@ std::expected<AdaptResult, base::Error> adapt(const DeviceBuilder& build, std::s
             rep.change.resize(g.value.size());
             for (std::size_t j = 0; j < g.value.size(); ++j) {
                 rep.change[j] = std::abs(g.value[j] - previous_goal[j]);
-                const double allowed = o.tolerance * std::max(std::abs(g.value[j]), g.resolution[j]);
+                const double allowed = allowed_error(o.tolerance, g.value[j], g.resolution[j]);
                 if (rep.change[j] > allowed) converged = false;
                 if (adjoint && !(rep.estimate[j] <= allowed)) converged = false;  // AD6: and the estimate
             }
@@ -1353,12 +1381,12 @@ std::expected<AdaptResult, base::Error> adapt(const DeviceBuilder& build, std::s
         if (intelligent && !fallen_back) {
             const bool proposal = source == MeshSource::prediction || source == MeshSource::proposal;
             if (proposal && std::isfinite(previous_relative)) {
-                rep.miss = !(rep.relative_estimate <= (1.0 - o.intelligent.miss_margin) * previous_relative);
+                rep.miss = proposal_missed(rep.relative_estimate, previous_relative, o.intelligent.miss_margin);
                 if (rep.miss) {
                     ++result.misses;
-                    if (++consecutive_misses >= 2) fall_back(FallbackTrigger::two_misses, pass);
+                    if (misses_guard.record(true)) fall_back(FallbackTrigger::two_misses, pass);
                 } else {
-                    consecutive_misses = 0;
+                    (void)misses_guard.record(false);
                 }
             }
             if (pass >= 2 && std::isfinite(previous_relative) && std::isfinite(previous_change) &&
@@ -1435,7 +1463,7 @@ std::expected<AdaptResult, base::Error> adapt(const DeviceBuilder& build, std::s
                 } else {
                     rep.empty_proposal = true;
                     ++result.misses;
-                    if (++consecutive_misses >= 2) fall_back(FallbackTrigger::two_misses, pass);
+                    if (misses_guard.record(true)) fall_back(FallbackTrigger::two_misses, pass);
                 }
             }
             if (proposing && o.intelligent.prediction) {
@@ -1455,7 +1483,7 @@ std::expected<AdaptResult, base::Error> adapt(const DeviceBuilder& build, std::s
                 } else {
                     rep.empty_proposal = true;
                     ++result.misses;
-                    if (++consecutive_misses >= 2) fall_back(FallbackTrigger::two_misses, pass);
+                    if (misses_guard.record(true)) fall_back(FallbackTrigger::two_misses, pass);
                 }
             }
             if (next || stop) {
@@ -1564,13 +1592,8 @@ std::expected<AdaptResult, base::Error> adapt(const DeviceBuilder& build, std::s
             c.estimate = estimate_of(last, j);
             c.verified_error = verified[j];
             c.order = order[j];
-            c.allowed = o.tolerance * std::max(std::abs(c.value), last.resolution[j]);
-            if (!verify) {
-                c.status = CertificateStatus::unverified;
-            } else {
-                c.status = c.estimate <= c.allowed && c.verified_error <= c.allowed ? CertificateStatus::certified
-                                                                                    : CertificateStatus::not_certified;
-            }
+            c.allowed = allowed_error(o.tolerance, c.value, last.resolution[j]);
+            c.status = certificate_status(verify, c.estimate, c.verified_error, c.allowed);
             result.certificates.push_back(c);
         }
     }

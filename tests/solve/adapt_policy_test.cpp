@@ -355,6 +355,14 @@ TEST_CASE("policy: a wrong prediction is guarded, handed to basic and still cert
                          << b->mesh->device.mesh().node_count() << "), time " << seconds_i << " s (basic " << seconds_b
                          << " s)");
     CHECK(r->stop == solve::AdaptStop::converged);
+    // ID3: max_points adaptation points chosen; ID6 (AR7): the prediction's rounds and every
+    // proposal's built mesh hold the growth cap (2.5x the DOFs they start from).
+    CHECK(r->points.size() == 2);
+    CHECK(static_cast<double>(r->passes[0].dofs) <= 2.5 * 3.0 * 21.0);
+    for (std::size_t k = 1; k < r->passes.size(); ++k) {
+        if (r->passes[k].source != solve::MeshSource::proposal) continue;
+        CHECK(static_cast<double>(r->passes[k].dofs) <= 2.5 * static_cast<double>(r->passes[k - 1].dofs));
+    }
     CHECK(r->misses >= 2);
     CHECK(r->fallback == solve::FallbackTrigger::two_misses);
     CHECK(r->fallback_pass >= 0);
@@ -591,6 +599,13 @@ TEST_CASE("policy: the allocation is deterministic and its report recomputes fro
         }
         if (!p.candidates.empty() && p.candidates_taken == p.candidates.size()) {
             CHECK(std::abs(predicted - p.predicted_relative) <= 1e-12 * p.relative_estimate);
+        }
+        // ID7: the first 20 taken are listed. ID6: away from the growth cap and with candidates
+        // left, the allocation stopped at its target, min(1/2, E/2).
+        CHECK(p.candidates.size() == std::min<std::size_t>(20, p.candidates_taken));
+        if (p.candidates_taken > 0 && p.candidates_taken < p.candidate_count &&
+            static_cast<double>(p.predicted_dofs) < 2.0 * static_cast<double>(p.dofs)) {
+            CHECK(p.predicted_relative <= std::min(0.5, 0.5 * p.relative_estimate) * (1.0 + 1e-12));
         }
         // The cost model: fitted on the passes up to this one; this pass predicted from the earlier.
         std::vector<solve::CostSample> s;

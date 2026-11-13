@@ -123,7 +123,7 @@ std::vector<device::DopingProfile> mosfet_doping() {
     return {source, drain, {.dopant = device::Dopant::acceptor, .peak_cm3 = 1e17}};
 }
 
-std::expected<solve::AdaptableMesh, base::Error> mosfet_mesh(const solve::MeshRefinement& r) {
+std::expected<solve::AdaptableMesh, base::Error> mosfet_mesh_h(const solve::MeshRefinement& r, double h) {
     const double L = 2 * Lsd + Lg;
     const auto rect = [](double x0, double y0, double x1, double y1) {
         return mesh::RegionPolygon{{{x0, y0, 0}, {x1, y0, 0}, {x1, y1, 0}, {x0, y1, 0}}, 0};
@@ -132,7 +132,7 @@ std::expected<solve::AdaptableMesh, base::Error> mosfet_mesh(const solve::MeshRe
                        {{"source", {0, 0, 0}, {Lsd, 0, 0}}, {"channel", {Lsd, 0, 0}, {Lsd + Lg, 0, 0}},
                         {"drain", {Lsd + Lg, 0, 0}, {L, 0, 0}}, {"body", {0, depth, 0}, {L, depth, 0}}}};
     mesh::MeshOptions2D o;
-    o.max_size = h0;
+    o.max_size = h;
     o.size_field = r.size_field;
     auto gm = mesh::generate_mesh(g, o);
     if (!gm) return std::unexpected(gm.error());
@@ -160,8 +160,10 @@ std::expected<solve::AdaptableMesh, base::Error> mosfet_mesh(const solve::MeshRe
                                                   std::move(gc)}});
     if (!d) return std::unexpected(d.error());
     return solve::AdaptableMesh{.device = std::move(*d), .kind = solve::AdaptMeshKind::generated2d,
-                                .generated = std::move(*gm), .max_size = h0};
+                                .generated = std::move(*gm), .max_size = h};
 }
+
+std::expected<solve::AdaptableMesh, base::Error> mosfet_mesh(const solve::MeshRefinement& r) { return mosfet_mesh_h(r, h0); }
 
 // The same MOSFET on a tensor mesh (AR6: AC14's MOSFET; the generated mesh's isotropic refinement
 // does not converge within a gate's budget): from 25 x 11 uniform nodes (50 nm by 20 nm), the
@@ -893,5 +895,66 @@ TEST_CASE("intelligent: no certified result is outside its tolerance against the
         if (!b) FAIL(b.error().message);
         check(*b, "mosfet budget");
         for (const auto& c : b->certificates) CHECK(c.status != solve::CertificateStatus::certified);
+    }
+}
+
+// Slice 7, AC5: the tensor ladder at all three points (Vg 0 for AR9), and the generated MOSFET's
+// uniform ladder and adaptive runs against AR9.
+TEST_CASE("intelligent: probe the tensor MOSFET's ladder at every point", "[.adapt_ref3]") {
+    for (const auto [kx, ky] : std::vector<std::pair<int, int>>{{4, 32}, {8, 32}, {16, 32}, {4, 64}, {4, 128}, {8, 64}}) {
+        solve::MeshRefinement r;
+        r.axes[0] = uniform(2 * Lsd + Lg, 24 * kx + 1);
+        r.axes[1] = uniform(depth, 10 * ky + 1);
+        auto m = tensor_mosfet_mesh(r);
+        REQUIRE(m.has_value());
+        auto s = solve::sweep_bias(m->device, ac16_points, ac16_bias());
+        REQUIRE(s.has_value());
+        std::printf("ladder3 kx=%d ky=%d nodes %zu: I_D %.10g %.10g %.10g res %.3g stopped %d\n", kx, ky,
+                    m->device.mesh().node_count(), s->points[0].terminal_current[1], s->points[1].terminal_current[1],
+                    s->points[2].terminal_current[1],
+                    s->points[0].terminal_current_resolution.empty() ? 0.0 : s->points[0].terminal_current_resolution[1],
+                    s->stopped.has_value() ? 1 : 0);
+        std::fflush(stdout);
+    }
+}
+
+TEST_CASE("intelligent: probe the generated MOSFET for AC5", "[.adapt_ac5]") {
+    for (const int k : {1, 2, 4, 8}) {
+        auto m = mosfet_mesh_h({}, h0 / k);
+        REQUIRE(m.has_value());
+        const auto t = std::chrono::steady_clock::now();
+        auto s = solve::sweep_bias(m->device, ac16_points, ac16_bias());
+        REQUIRE(s.has_value());
+        std::printf("ac5 uniform h0/%d nodes %zu: I_D %.10g %.10g %.10g errors %.4g%% %.4g%% stopped %d (%.3g s)\n", k,
+                    m->device.mesh().node_count(), s->points[0].terminal_current[1], s->points[1].terminal_current[1],
+                    s->points[2].terminal_current[1], 100 * (s->points[1].terminal_current[1] / mosfet_ref[0] - 1),
+                    100 * (s->points[2].terminal_current[1] / mosfet_ref[1] - 1), s->stopped.has_value() ? 1 : 0,
+                    seconds_since(t));
+        std::fflush(stdout);
+    }
+    for (const solve::Policy policy : {solve::Policy::basic, solve::Policy::intelligent}) {
+        solve::AdaptOptions o = ac16_options();
+        o.at = {0, 1, 2};
+        o.max_passes = 12;
+        o.max_nodes = 150000;
+        o.policy = policy;
+        const auto t = std::chrono::steady_clock::now();
+        auto r = solve::adapt(mosfet_mesh, ac16_points, ac16_bias(), o);
+        if (!r) FAIL(r.error().message);
+        for (std::size_t k = 0; k < r->passes.size(); ++k) {
+            const auto& p = r->passes[k];
+            std::printf("ac5 %s pass %zu: %s nodes %zu, I_D %.6g %.6g %.6g, errors %.4g%% %.4g%%, rel %.4g, est %s, "
+                        "solve %.3g s, estimate %.3g s\n",
+                        solve::to_string(policy), k, solve::to_string(p.source), p.nodes, p.goal[0], p.goal[1], p.goal[2],
+                        100 * (p.goal[1] / mosfet_ref[0] - 1), 100 * (p.goal[2] / mosfet_ref[1] - 1), p.relative_estimate,
+                        p.estimate.empty() ? "-" : std::format("{:.3g} {:.3g} {:.3g}", p.estimate[0], p.estimate[1], p.estimate[2]).c_str(),
+                        p.seconds_solve, p.seconds_estimate);
+            std::fflush(stdout);
+        }
+        std::printf("ac5 %s: stop %s, %zu passes, certificates %s %s %s, %.4g s\n", solve::to_string(policy),
+                    solve::to_string(r->stop), r->passes.size(), solve::to_string(r->certificates[0].status),
+                    solve::to_string(r->certificates[1].status), solve::to_string(r->certificates[2].status),
+                    seconds_since(t));
+        std::fflush(stdout);
     }
 }

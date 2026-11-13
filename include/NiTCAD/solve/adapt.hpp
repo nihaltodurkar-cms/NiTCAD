@@ -303,6 +303,42 @@ struct AdaptResult {
     const AdaptableMesh& current, const MeshRefinement& previous, const std::vector<char>& marked,
     const EdgeIndicators* edges, const IndicatorOptions& indicators, const AdaptOptions& options, bool uniform);
 
+// The loop's rules, as adapt() applies them (exposed so each is tested on its own; AC12).
+// AD6, AD13: the error allowed a goal of value G and current resolution r: tol max(|G|, r).
+[[nodiscard]] double allowed_error(double tolerance, double value, double resolution) noexcept;
+// AD11: the Richardson estimate of the error of a goal G_M from its value on M' (G_M') and its
+// last change |G_M - G_previous| (`change`; not finite or not positive: none, after one pass):
+// the observed order p = log2(change / |G_M' - G_M|) clamped to [0.5, 3], else 1, and the error
+// |G_M' - G_M| / (2^p - 1).
+struct RichardsonError {
+    double error = 0.0;
+    double order = 1.0;
+};
+[[nodiscard]] RichardsonError richardson_error(double coarse, double fine, double change) noexcept;
+// AD13: certified when verified and both the estimate and the verified error are within the
+// allowance; not_certified when verified otherwise; unverified when not verified.
+[[nodiscard]] CertificateStatus certificate_status(bool verified, double estimate, double verified_error,
+                                                   double allowed) noexcept;
+// AD4: a marked node's new size, halved and never below min_size; nullopt when it is already at
+// or below min_size (not refined, not a grading seed).
+[[nodiscard]] std::optional<double> refined_size(double size, double min_size) noexcept;
+// AD9: of an edge's two nodes, the one with the larger weighted excess; the lower index on a tie.
+[[nodiscard]] std::size_t heavier_node(std::size_t a, double excess_a, std::size_t b, double excess_b) noexcept;
+// ID1: a proposal misses when its relative estimate is not below (1 - margin) times the previous.
+[[nodiscard]] bool proposal_missed(double relative, double previous_relative, double margin) noexcept;
+// AD12 a: two consecutive misses (an empty proposal counts as one) trigger the fallback; a pass
+// that is not a miss resets the count. record() returns whether this miss triggers it.
+struct MissGuard {
+    int consecutive = 0;
+    [[nodiscard]] bool record(bool miss) noexcept {
+        if (!miss) {
+            consecutive = 0;
+            return false;
+        }
+        return ++consecutive >= 2;
+    }
+};
+
 // Errors (invalid_input, before solving): no points; no goals, a goal contact out of range or a
 // gate; tolerance not in (0, 1); an adaptation point out of range; theta not in (0, 1]; grading
 // below 1; min_size negative; max_passes below 1; weighting adjoint with check_adjoint's refusals

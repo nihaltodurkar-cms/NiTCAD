@@ -106,6 +106,8 @@ TEST_CASE("adapt: the legacy diode reaches its 2x reference with fewer nodes tha
     WARN("AC6 stop " << solve::to_string(r->stop) << "; verification nodes " << r->verification_nodes << " in "
                      << r->verification_seconds << " s; hand mesh " << hand.size() << " nodes");
     CHECK(r->stop == solve::AdaptStop::converged);
+    // AD1, AD5: every pass after the first starts from the state transferred onto its new mesh.
+    for (std::size_t k = 1; k < r->passes.size(); ++k) CHECK(r->passes[k].transfer.nodes == r->passes[k].nodes);
     const std::size_t nodes = r->mesh->device.mesh().node_count();
     CHECK(nodes < hand.size());
     for (const std::size_t k : o.at) {
@@ -213,4 +215,55 @@ TEST_CASE("adapt: refusals (AC10 part)", "[adapt_loop]") {
     strict.linear.backend = linalg::SolverBackend::gmres_ilut;
     strict.linear.fallback = linalg::LinearFallback::none;
     CHECK(solve::adapt(build, points, strict, bad).error().code == base::ErrorCode::invalid_input);
+}
+
+TEST_CASE("adapt: the loop's rules (AD4, AD6, AD9, AD11, AD12, AD13, ID1; AC12)", "[adapt_loop]") {
+    // AD6, AD13: the allowance is tol max(|G|, r).
+    CHECK(solve::allowed_error(1e-2, -3.0, 1.0) == 1e-2 * 3.0);
+    CHECK(solve::allowed_error(1e-2, 0.5, 2.0) == 1e-2 * 2.0);
+    // AD11: the observed order from the last change, clamped to [0.5, 3]; 1 without a change.
+    const auto r1 = solve::richardson_error(1.0, 1.1, 0.0);
+    CHECK(r1.order == 1.0);
+    CHECK(std::abs(r1.error - 0.1) <= 1e-15);
+    CHECK(solve::richardson_error(1.0, 1.1, std::nan("")).order == 1.0);
+    const auto r2 = solve::richardson_error(1.0, 1.1, 0.4);
+    CHECK(std::abs(r2.order - 2.0) <= 1e-12);
+    CHECK(std::abs(r2.error - 0.1 / 3.0) <= 1e-15);
+    const auto r3 = solve::richardson_error(1.0, 1.1, 100.0);
+    CHECK(r3.order == 3.0);
+    CHECK(std::abs(r3.error - 0.1 / 7.0) <= 1e-15);
+    const auto r4 = solve::richardson_error(1.0, 1.1, 0.11);
+    CHECK(r4.order == 0.5);
+    CHECK(std::abs(r4.error - 0.1 / (std::sqrt(2.0) - 1.0)) <= 1e-14);
+    const auto r5 = solve::richardson_error(2.0, 2.0, 0.3);
+    CHECK(r5.order == 1.0);
+    CHECK(r5.error == 0.0);
+    // AD13: certified only when verified with both within the allowance.
+    using S = solve::CertificateStatus;
+    CHECK(solve::certificate_status(true, 1.0, 1.0, 1.0) == S::certified);
+    CHECK(solve::certificate_status(true, 1.5, 0.5, 1.0) == S::not_certified);
+    CHECK(solve::certificate_status(true, 0.5, 1.5, 1.0) == S::not_certified);
+    CHECK(solve::certificate_status(true, 0.5, std::nan(""), 1.0) == S::not_certified);
+    CHECK(solve::certificate_status(false, 0.5, 0.5, 1.0) == S::unverified);
+    // AD4: halved, never below min_size; at or below it, not refined.
+    CHECK(solve::refined_size(1.0, 0.1) == 0.5);
+    CHECK(solve::refined_size(0.15, 0.1) == 0.1);
+    CHECK(!solve::refined_size(0.1, 0.1).has_value());
+    CHECK(!solve::refined_size(0.05, 0.1).has_value());
+    // AD9: the larger weighted excess; the lower index on a tie.
+    CHECK(solve::heavier_node(3, 1.0, 5, 2.0) == 5);
+    CHECK(solve::heavier_node(3, 2.0, 5, 1.0) == 3);
+    CHECK(solve::heavier_node(3, 1.0, 5, 1.0) == 3);
+    CHECK(solve::heavier_node(5, 1.0, 3, 1.0) == 3);
+    // ID1: a miss unless below (1 - margin) of the previous.
+    CHECK(!solve::proposal_missed(0.8, 1.0, 0.1));
+    CHECK(solve::proposal_missed(0.95, 1.0, 0.1));
+    CHECK(!solve::proposal_missed(1.0, 1.0, 0.0));
+    CHECK(solve::proposal_missed(std::nan(""), 1.0, 0.1));
+    // AD12 a: two consecutive misses; a hit between them resets the count.
+    solve::MissGuard g;
+    CHECK(!g.record(true));
+    CHECK(!g.record(false));
+    CHECK(!g.record(true));
+    CHECK(g.record(true));
 }
