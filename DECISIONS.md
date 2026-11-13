@@ -6278,7 +6278,6 @@ the diode, labels against a refined mesh and against itself, a run's history sav
 bit-identical, the manifest the same in either input order, the training set built twice equal, the cap, and the
 refusals: a duplicate, a digest that does not match, another schema, unsorted lines); the deck case (the history's
 deck text, run identity and per-pass mesh digests, the CLI's manifest, its usage and a non-history refused).
----
 
 **LB13 (found at build, slice 2; ruled as recommended).** ID10 says the model records "the build that trained it
 (Unit 42 provenance)", and AC19 that "the trained model" built twice is bit-identical. A Unit 42 provenance holds
@@ -6303,6 +6302,8 @@ a step, recall and precision, trained twice equal and its files bit-identical, l
 same, another format and another schema refused by name, another content kind, the split's four refusals, a
 held-out device's labels not reaching the trees), the diode's histories end to end, and the CLI (training with a
 named held-out history, an unknown one, usage).
+
+---
 
 ### Unit 55 — theoretical calculation validation framework: research and design proposal (proposed 2026-10-31; on `verify/theoretical-validation`)
 
