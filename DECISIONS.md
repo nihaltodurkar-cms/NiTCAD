@@ -6320,6 +6320,39 @@ deterministic report bit-identical to a run without it; a model used, its digest
 models two identities; a device of another material 100% out of range, its passes' meshes those of the run without
 the predictor, the identity still carrying the model with `used = 0`; the console lines; another format refused at
 build); AC21 with a learned model given through `learned_targets`, the certificates bit-identical to basic's.
+
+**AC19 (measured 2026-11-13, Release; `[.ac19]` in tests/deck/cross_run_learning_test.cpp, 18.7 min).** The family
+(LB12): tensor MOSFETs from 50 nm × 20 nm uniform starts, source and drain 300 nm, I_D at V_g 0.5 and 1 V, V_d
+0.05 V, intelligent, adjoint-weighted, tolerance 1e-2, `max_passes` 10. **ID2's a priori first mesh** (each run's
+history saved): m0 (L_g 400 nm, t_ox 4 nm, N_A 1e17) 10 passes, 144 144 DOFs (its stops rejected twice, the basic
+loop then grew it to 48 048 nodes, and the verification ran on 198 830: 14.5 min of the gate); m1 (500, 5, 2e17) 5
+passes, 21 420; m2 (600, 5, 1e17) 5, 19 026; m3 (700, 6, 5e16) 5, 13 542; m4 (800, 4, 2e17) 4, 12 198; m5 (500, 3,
+5e16) 4, 15 867; held out: m6 (700, 5, 1.5e17) 5, 10 476; m7 (600, 4, 7e16) 5, 15 561; every run certified, stopped
+converged. **The model** (trained on m0–m5, 94 244 samples after LB6's stride; 21 637 held-out samples): held-out
+rank correlation **trees 0.399, ridge 0.161** (the trees beat the ID9 baseline); first-pass recall 0.900, precision
+0.722. **Learned first mesh on the held-out devices:** m6 4 passes, **12 000 DOFs** (against 5 and 10 476); m7 4
+passes, 10 260 DOFs (against 5 and 15 561); both certified. **AC19's family clause is met on m7 and unmet on m6** (a
+pass saved, but 1.15× the DOFs); the gate is `[!shouldfail]` with this measurement. **The other AC19 clauses hold**
+(fast cases): the training set and the model built twice bit-identical; another format or schema refused; the
+identity changes with the model's digest; an out-of-range device flagged and on ID2's field; without `predictor`,
+runs bit-identical. **Ruled under the standing instruction, as Unit 17's unmet criteria were (2026-11-13 ruling after
+slice 5b):** the m6 DOF miss is a limitation in ARCHITECTURE.md 11.3, the criterion unchanged. Reading: the learned
+field covers the refinement the converged runs made (recall 0.90) and so starts nearer the final mesh (a pass fewer on
+both), but at precision 0.72 it also refines where m6's own run did not, and m6's a priori run was already the
+family's cheapest.
+
+**AC12 for 17b (hand mutants, 2026-11-13).** C:\Users\disha\mut17\run17b.sh in a separate Release tree (r3): one
+exact-string change each; `nitcad`, `nitcad_adapt_test` and `nitcad_deck_test` rebuilt; killed if a build or the
+`[adapt_learn]`, `[adapt_policy]` or "deck adapt*" cases fail. **Round 1, 22 mutants, 18 killed.** Survivors: ID8's
+stride (2 in place of 1: every capped case had a stride of at least 2), LB5's shrinkage dropped, LB5's `min_leaf` at the
+split (the node gate alone held the step test), LB4's predictor on every proposal (no case looked at the later
+passes). **Closed by tests:** the uncapped set holds every labelled edge and the capped one exactly LB6's stride; a
+one-split tree's leaves are 0.1 of their sides' mean residual; a step at 0.9 cannot be cut with 150 a side; with a
+predictor and weighting none every pass after the first is the layer's own (marks). **Round 2: all four killed.**
+Every 17b row has a killed mutant and none survives: ID8 (7), LB5 (5), ID10 (5), LB8 (3), LB4 (2), LB9 (1). **AC12 met
+for 17b.** (A process note: commit 7359b44 captured round 1's first mutant, applied in the working tree while the
+runner ran; 4adba48 restores it, and no commit is made while the runner is active.)
+
 ---
 
 ### Unit 55 — theoretical calculation validation framework: research and design proposal (proposed 2026-10-31; on `verify/theoretical-validation`)
