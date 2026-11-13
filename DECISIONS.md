@@ -6193,6 +6193,10 @@ measurement, the criterion unchanged. **AC16 on the well MOSFET** tolerance mode
 **unmet**; its budget mode holds (6.5% against 7.2%). Per the ruling, the unmet criteria at the unit's close are
 limitations in ARCHITECTURE.md 11.3: AC14, AC15, AC16 (well tolerance mode; tensor budget mode), and AC8's target.
 
+**Slice 7 suites (2026-11-13, at ca22846):** Release 217/217 (980 s, `-j 6`); Debug 198/199, the one failure
+`app.live_check` (its wake count, line 53: the known flake under `-j 6`, untouched by this unit), which passes alone
+three times in a row (`--repeat until-fail:3`).
+
 **AC12 (hand mutants, 2026-11-13).** Each mutant one exact-string change, the solve, deck and mesh libraries and
 `nitcad_adapt_test`, `nitcad_deck_test` and `nitcad_mesh_test` rebuilt (Release, r3), then the fast suites: every
 non-hidden adapt case, the deck's adapt cases and `[size_field]`; killed if a build or a test fails. **Round 1, 37
