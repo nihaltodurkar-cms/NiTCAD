@@ -733,6 +733,8 @@ nitcad_add_file_tests(adapt nitcad_adapt_test)
 if(CMAKE_BUILD_TYPE STREQUAL "Release")
   add_test(NAME adapt_goal COMMAND nitcad_adapt_test "[adapt_goal]")
   add_test(NAME adapt_intelligent COMMAND nitcad_adapt_test "[adapt_intelligent]")
+  # Unit 17c: DC6's moved window (15 s Release) and the DC3-DC5 gates (hidden tag [.derived_goals]).
+  add_test(NAME adapt_derived_slow COMMAND nitcad_adapt_test "[.adapt_derived_slow]")
 endif()
 # The Lombardi device gates (tests/deck/surface_mobility_test.cpp, hidden tag [.lombardi]: MOSFET
 # sweeps) run in the Release configuration only.

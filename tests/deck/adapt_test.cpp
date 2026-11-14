@@ -723,9 +723,11 @@ adapt = out.nitadapt
     CHECK(run.output.find("certificate: vt of drain (window at point") != std::string::npos);
     CHECK(run.output.find("not the step's") != std::string::npos);  // DG8's scope
     // The table: a derived goal's columns in its unit; filled at its certificate's point.
-    std::ifstream t(dir / "iv.csv");
     std::string header;
-    std::getline(t, header);
+    {
+        std::ifstream t(dir / "iv.csv");  // closed before the next run rewrites the file
+        std::getline(t, header);
+    }
     CHECK(header.find(",gm drain certificate,gm drain estimate A/V,gm drain verified error A/V,gm drain allowed A/V,"
                       "gm drain order") != std::string::npos);
     CHECK(header.find(",vt drain certificate,vt drain estimate V,") != std::string::npos);
@@ -765,4 +767,19 @@ adapt = out.nitadapt
     CHECK(b->verification_goal == a->verification_goal);
     // The identity carries the kinds (DG9).
     CHECK(std::ranges::count_if(a->run.settings, [](const auto& s) { return s.first == "adapt.goal_kind"; }) == 2);
+    // DC6: a moved window with certify = required exits 3 (its outputs written).
+    std::string moved = mosfet;
+    const auto replace = [&](const std::string& from, const std::string& to) {
+        const std::size_t at = moved.find(from);
+        REQUIRE(at != std::string::npos);
+        moved.replace(at, from.size(), to);
+    };
+    replace("contact gate = 0 : 1.2 : 0.2", "contact gate = -0.2 : 0.2 : 0.02");
+    replace("goal = gm drain\ngoal = vt drain\ntolerance = 1e-2\nvt_tolerance = 1e-2\nmax_passes = 2",
+            "goal = swing drain\ntolerance = 1e-1\nmax_passes = 4\ncertify = required");
+    write_text(dir / "moved.deck", moved);
+    const Cli required = cli("run \"" + (dir / "moved.deck").string() + "\"");
+    INFO(required.output);
+    CHECK(required.status == 3);
+    CHECK(required.output.find("window moved on M'") != std::string::npos);
 }

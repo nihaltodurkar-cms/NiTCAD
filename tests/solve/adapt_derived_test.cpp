@@ -6,9 +6,13 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <algorithm>
+#include <array>
+#include <chrono>
 #include <cmath>
 #include <cstddef>
+#include <cstdio>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "NiTCAD/analysis/curve.hpp"
@@ -20,6 +24,7 @@
 #include "NiTCAD/physics/semiconductor.hpp"
 #include "NiTCAD/solve/adapt.hpp"
 #include "NiTCAD/solve/adapt_derived.hpp"
+#include "NiTCAD/solve/bias.hpp"
 
 using namespace NiTCAD;
 
@@ -275,4 +280,118 @@ TEST_CASE("derived goals: a gm and a vt goal on the coarse tensor MOSFET (DG2, D
     // V_T of a 1e17 / 5 nm MOSFET lies inside the sweep.
     CHECK(r->certificates[1].value > 0.0);
     CHECK(r->certificates[1].value < 1.2);
+}
+
+namespace {
+
+// DC3's device and sweep: the tensor MOSFET at V_d 0.05 V, V_g -0.2 to 1.0 V in 0.05 V steps.
+const std::vector<std::vector<double>> dc3_points = gate_sweep(-0.2, 1.0, 25);
+
+// The three figures on the tensor MOSFET refined uniformly by `factor` (each interval split evenly).
+std::array<double, 3> uniform_figures(int factor) {
+    solve::MeshRefinement r;
+    r.axes[0] = uniform(2 * Lsd + Lg, 24 * factor + 1);
+    r.axes[1] = uniform(depth, 10 * factor + 1);
+    auto m = tensor_mosfet_mesh(r);
+    REQUIRE(m.has_value());
+    auto s = solve::sweep_bias(m->device, dc3_points, sweep_options());
+    if (!s) FAIL(s.error().message);
+    solve::TransferCurve c;
+    c.drain_V = 0.05;
+    for (std::size_t k = 0; k < s->points.size(); ++k) {
+        const auto& p = s->points[k];
+        c.gate_V.push_back(dc3_points[k][3]);
+        c.current.push_back(p.terminal_current[1]);
+        c.resolution.push_back(p.terminal_current_resolution.size() > 1 ? p.terminal_current_resolution[1] : 0.0);
+    }
+    std::array<double, 3> out{};
+    const solve::GoalKind kinds[3] = {solve::GoalKind::vt, solve::GoalKind::gm, solve::GoalKind::swing};
+    for (int i = 0; i < 3; ++i) {
+        auto g = solve::derived_goal(kinds[i], c);
+        if (!g) FAIL(g.error().message);
+        out[static_cast<std::size_t>(i)] = g->value;
+        std::printf("  factor %2d, %s: %.12g (window %zu..%zu)\n", factor, solve::to_string(kinds[i]), g->value, g->first,
+                    g->last);
+    }
+    std::printf("factor %d: %zu nodes\n", factor, m->device.mesh().node_count());
+    std::fflush(stdout);
+    return out;
+}
+
+}  // namespace
+
+TEST_CASE("derived goals: probe the tensor MOSFET's uniform ladder for DC3's reference", "[.adapt_derived_ref]") {
+    std::vector<std::array<double, 3>> f;
+    for (const int factor : {1, 2, 4, 8, 16}) f.push_back(uniform_figures(factor));
+    const char* names[3] = {"vt", "gm", "swing"};
+    for (std::size_t i = 0; i < 3; ++i) {
+        // Richardson on 4x / 8x / 16x: the observed order and the extrapolated value.
+        const double d1 = f[3][i] - f[2][i], d2 = f[4][i] - f[3][i];
+        const double p = std::log2(std::abs(d1 / d2));
+        const double ext = f[4][i] + d2 / (std::exp2(p) - 1.0);
+        std::printf("%s: 4x %.12g, 8x %.12g, 16x %.12g, order %.3f, extrapolated %.12g\n", names[i], f[2][i], f[3][i],
+                    f[4][i], p, ext);
+    }
+}
+
+// The ladder per axis (as AR9: the uniform ladder is not asymptotic on this device). Only the
+// windows' neighbourhoods are solved: points 2..5 (swing, window 3..4 on 4x..16x) and 11..17 (vt
+// and gm, window 13..15). Swing is taken on the fixed window 3..4 (its ceiling needs the whole
+// curve); vt and gm on the sub-curve 11..17, their window required interior.
+TEST_CASE("derived goals: probe the tensor MOSFET's ladder per axis for DC3's reference", "[.adapt_derived_ref2]") {
+    std::vector<std::pair<int, int>> ladder{{4, 4}, {4, 32}, {8, 32}, {4, 64}, {16, 32}, {8, 64}, {4, 128}, {32, 32}};
+    std::vector<std::vector<double>> pts;
+    std::vector<std::size_t> index;
+    for (std::size_t k = 2; k <= 5; ++k) index.push_back(k);
+    for (std::size_t k = 11; k <= 17; ++k) index.push_back(k);
+    for (const std::size_t k : index) pts.push_back(dc3_points[k]);
+    for (const auto [kx, ky] : ladder) {
+        solve::MeshRefinement r;
+        r.axes[0] = uniform(2 * Lsd + Lg, 24 * kx + 1);
+        r.axes[1] = uniform(depth, 10 * ky + 1);
+        auto m = tensor_mosfet_mesh(r);
+        REQUIRE(m.has_value());
+        const auto t0 = std::chrono::steady_clock::now();
+        auto s = solve::sweep_bias(m->device, pts, sweep_options());
+        if (!s) FAIL(s.error().message);
+        REQUIRE(s->points.size() == pts.size());
+        const auto I = [&](std::size_t j) { return s->points[j].terminal_current[1]; };
+        const double swing = 1000.0 * (dc3_points[4][3] - dc3_points[3][3]) / (std::log10(I(2)) - std::log10(I(1)));
+        solve::TransferCurve c;
+        c.drain_V = 0.05;
+        for (std::size_t j = 4; j < pts.size(); ++j) {
+            c.gate_V.push_back(pts[j][3]);
+            c.current.push_back(I(j));
+            c.resolution.push_back(0.0);
+        }
+        auto vt = solve::derived_goal(solve::GoalKind::vt, c);
+        auto gm = solve::derived_goal(solve::GoalKind::gm, c);
+        if (!vt) FAIL(vt.error().message);
+        if (!gm) FAIL(gm.error().message);
+        CHECK(gm->first > 0);
+        CHECK(gm->last + 1 < c.gate_V.size());
+        const double sec = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+        std::printf("ladder kx=%d ky=%d nodes %zu: vt %.12g gm %.12g swing %.12g (gm window %zu..%zu of 11..17) %.0f s\n",
+                    kx, ky, m->device.mesh().node_count(), vt->value, gm->value, swing, gm->first + 11, gm->last + 11,
+                    sec);
+        std::fflush(stdout);
+    }
+}
+
+TEST_CASE("derived goals: a window that moves on M' is never certified (DC6, DG6)", "[.adapt_derived_slow]") {
+    // Found by a probe (2026-11-14): at a 0.02 V gate step the subthreshold swing is nearly the same on
+    // every segment, so its steepest segment moves between the passes and onto M'.
+    solve::AdaptOptions o;
+    o.goals = {{.contact = 1, .kind = solve::GoalKind::swing}};
+    o.tolerance = 1e-1;
+    o.max_passes = 4;
+    auto r = solve::adapt(tensor_mosfet_mesh, gate_sweep(-0.2, 0.2, 21), sweep_options(), o);
+    if (!r) FAIL(r.error().message);
+    REQUIRE(r->certificates.size() == 1);
+    const auto& c = r->certificates[0];
+    CHECK(c.window_moved);
+    CHECK(c.status == solve::CertificateStatus::not_certified);
+    CHECK(r->rejected_stops >= 1);  // the moved window rejected a proposed stop (AR2)
+    // The windows moved between passes too: no stop was proposed until two passes agreed.
+    CHECK(r->passes.front().window_first[0] != r->passes.back().window_first[0]);
 }
