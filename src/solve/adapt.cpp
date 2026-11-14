@@ -28,6 +28,15 @@ RichardsonError richardson_error(double coarse, double fine, double change) noex
     return {.error = d / (std::exp2(p) - 1.0), .order = p};
 }
 
+// DR6: G on M, M' and M''. The order is observed from the two differences (clamped as AD11's,
+// [0.5, 3]); the error is G's distance from M'''s Richardson extrapolation.
+RichardsonError two_level_error(double g0, double g1, double g2) noexcept {
+    const double d1 = g1 - g0, d2 = g2 - g1;
+    double p = 3.0;
+    if (d2 != 0.0) p = d1 != 0.0 ? std::clamp(std::log2(std::abs(d1 / d2)), 0.5, 3.0) : 0.5;
+    return {.error = std::abs(g2 + d2 / (std::exp2(p) - 1.0) - g0), .order = p};
+}
+
 CertificateStatus certificate_status(bool verified, double estimate, double verified_error, double allowed) noexcept {
     if (!verified) return CertificateStatus::unverified;
     return estimate <= allowed && verified_error <= allowed ? CertificateStatus::certified
@@ -1444,12 +1453,67 @@ std::expected<AdaptResult, base::Error> adapt(const DeviceBuilder& build, std::s
             v.goal.push_back(dg ? dg->value : rep.goal[j]);
             if (moved) v.accepts = false;
         }
+        // DR6 (owner, 2026-11-15): the derived goals verified on two levels. M'' (M' refined
+        // uniformly again) solves the windows and one point either side; G on M, M' and M''
+        // gives the order and the error against M'''s extrapolation, so a figure whose error
+        // appears only below M''s resolution (the swing's y step) is still seen one level on.
+        std::vector<double> second(derived.size(), std::numeric_limits<double>::quiet_NaN());
+        if (!derived.empty()) {
+            std::size_t lo = points.size(), hi = 0;
+            for (std::size_t i = 0; i < derived.size(); ++i) {
+                lo = std::min(lo, rep.window_first[i]);
+                hi = std::max(hi, rep.window_last[i]);
+            }
+            lo = lo > 0 ? lo - 1 : 0;
+            hi = std::min(hi + 1, points.size() - 1);
+            auto u1 = next_refinement(m, r, {}, nullptr, o.indicators, o, true);
+            if (!u1) return std::unexpected(u1.error());
+            auto u2 = next_refinement(*fine, *u1, {}, nullptr, o.indicators, o, true);
+            if (!u2) return std::unexpected(u2.error());
+            auto fine2 = build(*u2);
+            if (!fine2) return std::unexpected(fine2.error());
+            auto solved2 = solve_on(*fine2, fine, &solved->sweep, points.subspan(lo, hi - lo + 1), bias, control,
+                                    lo - first);
+            if (!solved2) return std::unexpected(solved2.error());
+            v.nodes = fine2->device.mesh().node_count();
+            for (std::size_t i = 0; i < derived.size(); ++i) {
+                const AdaptGoal& goal = o.goals[derived[i]];
+                TransferCurve c = transfer_curve(s, points, gate, goal.contact);
+                for (std::size_t k = 0; k < solved->sweep.points.size(); ++k) {
+                    const auto [current, resolution] = current_of(solved->sweep.points[k], goal.contact);
+                    c.current[first + k] = current;
+                    c.resolution[first + k] = resolution;
+                }
+                for (std::size_t k = 0; k < solved2->sweep.points.size(); ++k) {
+                    const auto [current, resolution] = current_of(solved2->sweep.points[k], goal.contact);
+                    c.current[lo + k] = current;
+                    c.resolution[lo + k] = resolution;
+                }
+                auto dg = derived_goal(goal.kind, c, lo, hi);  // DR5
+                const bool moved = !dg || dg->first != rep.window_first[i] || dg->last != rep.window_last[i];
+                if (moved) {
+                    v.window_moved[i] = 1;
+                    v.accepts = false;
+                }
+                if (dg) second[i] = dg->value;
+            }
+        }
         auto diff = difference_field(m, s, *fine, solved->sweep, used, first);
         if (!diff) return std::unexpected(diff.error());
         v.difference = std::move(*diff);
+        const std::size_t first_derived = goal_contacts.size() * at.size();
         for (std::size_t j = 0; j < v.goal.size(); ++j) {
-            const RichardsonError re =
+            RichardsonError re =
                 richardson_error(rep.goal[j], v.goal[j], rep.change.empty() ? 0.0 : rep.change[j]);
+            if (j >= first_derived) {
+                const double g2 = second[j - first_derived];
+                if (std::isfinite(g2)) {
+                    const RichardsonError two = two_level_error(rep.goal[j], v.goal[j], g2);
+                    if (two.error > re.error) re = two;  // DR6: the larger of the two
+                } else {
+                    re.error = std::numeric_limits<double>::infinity();
+                }
+            }
             v.order.push_back(re.order);
             v.error.push_back(re.error);
             const double allowed = allowed_of(j, rep.goal[j], rep.resolution[j]);
@@ -1516,6 +1580,7 @@ std::expected<AdaptResult, base::Error> adapt(const DeviceBuilder& build, std::s
         // The adjoint estimate and weights (AD3, AD6; AR3): on M', per adaptation point (DG4: and per
         // derived goal through its window).
         std::optional<AdaptableMesh> fine_mesh;
+        std::optional<IndicatorField> swing_difference;  // DR7: the solved difference on M' (a swing goal)
         std::vector<double> omega;  // AD3's node weight: per node, the largest over goals and points
         if (adjoint) {
             auto part = adjoint_part(*built, refinement, solved->sweep, entries->derived);
@@ -1556,6 +1621,17 @@ std::expected<AdaptResult, base::Error> adapt(const DeviceBuilder& build, std::s
                     const double change = pass > 0 ? std::abs(g.value[j] - previous_goal[j]) : 0.0;
                     rep.estimate[j] = dg ? richardson_error(g.value[j], dg->value, change).error
                                          : std::numeric_limits<double>::infinity();
+                }
+                // DR7: with a swing goal the marks come from this solve's difference (the adjoint's
+                // weights are not reliable in subthreshold, DR4), unweighted as AR2's.
+                const bool swing =
+                    std::ranges::any_of(derived, [&](std::size_t gi) { return o.goals[gi].kind == GoalKind::swing; });
+                if (swing) {
+                    std::vector<std::size_t> window;
+                    for (std::size_t k = lo; k <= hi; ++k) window.push_back(k);
+                    auto df = difference_field(*built, solved->sweep, *fine_mesh, fs->sweep, window, lo);
+                    if (!df) return std::unexpected(df.error());
+                    swing_difference = std::move(*df);
                 }
                 rep.seconds_estimate += seconds_since(td);
             }
@@ -1681,10 +1757,13 @@ std::expected<AdaptResult, base::Error> adapt(const DeviceBuilder& build, std::s
             // After a rejected stop the marks come from the verified error's distribution (AD12 c,
             // AR2): the indicators found nothing more to refine where the error is. That distribution
             // is marked unweighted: it is already the solves' own difference (OA6).
-            const bool by_difference = rep.rejected;
+            // DR7: a swing goal's pass marks by its own solved difference on M'.
+            const bool by_difference = rep.rejected || swing_difference.has_value();
             const std::span<const double> weights =
                 adjoint && !by_difference ? std::span<const double>(omega) : std::span<const double>();
-            auto mk = mark_nodes(built->device, by_difference ? verification->difference : *united, weights, o.theta);
+            const IndicatorField& marked_field =
+                rep.rejected ? verification->difference : (swing_difference ? *swing_difference : *united);
+            auto mk = mark_nodes(built->device, marked_field, weights, o.theta);
             if (!mk) return std::unexpected(mk.error());
             rep.marking = *mk;
             rep.marked_by_difference = by_difference;

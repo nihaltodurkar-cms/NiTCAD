@@ -501,7 +501,7 @@ TEST_CASE("derived goals: probe DC3's adaptive runs", "[.adapt_derived_trial]") 
         o.tolerance = 1e-2;
         o.vt_tolerance = 1e-3;
         o.weighting = solve::Weighting::adjoint;
-        o.max_passes = 12;
+        o.max_passes = 20;
         const auto t0 = std::chrono::steady_clock::now();
         auto r = solve::adapt(tensor_mosfet_mesh, dc3_points, sweep_options(), o);
         if (!r) FAIL(r.error().message);
@@ -673,5 +673,42 @@ TEST_CASE("derived goals: probe per-axis differences", "[.adapt_derived_axes]") 
     for (const auto [kx, ky] : std::vector<std::pair<int, int>>{{1, 1}, {2, 1}, {1, 2}, {2, 2}, {4, 2}, {2, 4}, {4, 4},
                                                                 {8, 4}, {4, 8}}) {
         (void)uniform_figures(kx, ky);
+    }
+}
+
+// DC3's V_T reference with the window held at its converged position, 14..16 (the x ladder's
+// window flips between kx = 8 and 16, so Richardson across it mixes a jump with the error).
+TEST_CASE("derived goals: probe the fixed-window V_T ladder", "[.adapt_derived_ref3]") {
+    std::vector<std::vector<double>> pts;
+    for (std::size_t k = 13; k <= 17; ++k) pts.push_back(dc3_points[k]);
+    for (const auto [kx, ky] : std::vector<std::pair<int, int>>{{2, 2}, {4, 32}, {8, 32}, {16, 32}, {4, 64}, {4, 128},
+                                                                {8, 64}, {32, 32}}) {
+        solve::MeshRefinement r;
+        r.axes[0] = uniform(2 * Lsd + Lg, 24 * kx + 1);
+        r.axes[1] = uniform(depth, 10 * ky + 1);
+        auto m = tensor_mosfet_mesh(r);
+        REQUIRE(m.has_value());
+        const auto t0 = std::chrono::steady_clock::now();
+        auto s = solve::sweep_bias(m->device, pts, sweep_options());
+        if (!s) FAIL(s.error().message);
+        REQUIRE(s->points.size() == pts.size());
+        solve::TransferCurve c;
+        c.drain_V = 0.05;
+        for (std::size_t j = 0; j < pts.size(); ++j) {
+            c.gate_V.push_back(pts[j][3]);
+            c.current.push_back(s->points[j].terminal_current[1]);
+            c.resolution.push_back(0.0);
+        }
+        // Sub-curve index 1..3 is sweep points 14..16: the slope at 15 only.
+        auto vt = solve::derived_goal(solve::GoalKind::vt, c, 1, 3);
+        auto gm = solve::derived_goal(solve::GoalKind::gm, c, 1, 3);
+        auto free_gm = solve::derived_goal(solve::GoalKind::gm, c);
+        if (!vt || !gm || !free_gm) FAIL("extraction");
+        const double sec = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+        std::printf("fixed kx=%d ky=%d nodes %zu: vt(15) %.12g gm(15) %.12g; I13..17 %.12g %.12g %.12g %.12g %.12g; "
+                    "free window %zu..%zu; %.0f s\n",
+                    kx, ky, m->device.mesh().node_count(), vt->value, gm->value, c.current[0], c.current[1],
+                    c.current[2], c.current[3], c.current[4], free_gm->first + 13, free_gm->last + 13, sec);
+        std::fflush(stdout);
     }
 }
