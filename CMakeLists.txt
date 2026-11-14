@@ -723,8 +723,10 @@ add_executable(nitcad_adapt_test
   tests/solve/adapt_goal_test.cpp
   tests/solve/adapt_policy_test.cpp
   tests/solve/adapt_intelligent_test.cpp
-  tests/solve/adapt_learn_test.cpp)
-target_link_libraries(nitcad_adapt_test PRIVATE NiTCAD::deck Catch2::Catch2WithMain)
+  tests/solve/adapt_learn_test.cpp
+  tests/solve/adapt_derived_test.cpp)
+# analysis: the derived goals' formulas held equal to dc.hpp's (Unit 17c, DG12).
+target_link_libraries(nitcad_adapt_test PRIVATE NiTCAD::deck NiTCAD::analysis Catch2::Catch2WithMain)
 nitcad_add_file_tests(adapt nitcad_adapt_test)
 # The adaptive gates on 2D MOSFETs (AC7 [.adapt_goal]; AC14, AC17 [.adapt_intelligent]): tens of
 # seconds in Release, tens of minutes in Debug (AC13), so in the Release configuration only.

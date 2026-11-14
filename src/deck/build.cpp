@@ -1720,7 +1720,9 @@ std::expected<void, base::Error> Builder::adapt(Plan& plan) const {
             }
             for (const solve::AdaptGoal& g : o.goals) {
                 if (g.contact == c && g.kind == goal_kind) {
-                    return std::unexpected(at(e.line, "a second " + std::string(w[0]) + " goal on '" + std::string(w[1]) + "'"));
+                    // A current goal's message as before Unit 17c.
+                    const std::string kind_word = goal_kind == solve::GoalKind::current ? "" : std::string(w[0]) + " ";
+                    return std::unexpected(at(e.line, "a second " + kind_word + "goal on '" + std::string(w[1]) + "'"));
                 }
             }
             if (goal_kind != solve::GoalKind::current && derived_goal == nullptr) derived_goal = &e;

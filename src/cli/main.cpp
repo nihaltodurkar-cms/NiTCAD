@@ -23,6 +23,7 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <format>
 #include <stop_token>
 #include <string>
 #include <string_view>
@@ -175,10 +176,21 @@ void describe(const NiTCAD::deck::Plan& plan) {
     if (plan.adapt) {
         const auto& o = plan.adapt->options;
         std::string goals;
-        for (const auto& g : o.goals) goals += (goals.empty() ? "" : ", ") + d.contacts()[g.contact].name;
-        std::printf("adapt: current of %s to %g (relative), policy %s, weighting %s, verify %s, certify %s, "
+        bool derived = false, vt = false;
+        for (const auto& g : o.goals) {
+            derived = derived || g.kind != NiTCAD::solve::GoalKind::current;
+            vt = vt || g.kind == NiTCAD::solve::GoalKind::vt;
+        }
+        // Unit 17c (DG9): with a derived goal each goal is "<kind> of <contact>"; else as before.
+        for (const auto& g : o.goals) {
+            goals += (goals.empty() ? "" : ", ") +
+                     (derived ? std::string(NiTCAD::solve::to_string(g.kind)) + " of " : std::string()) +
+                     d.contacts()[g.contact].name;
+        }
+        if (vt) goals += std::format(" (vt to {:g} V)", o.vt_tolerance);
+        std::printf("adapt: %s%s to %g (relative), policy %s, weighting %s, verify %s, certify %s, "
                     "at most %d passes\n",
-                    goals.c_str(), o.tolerance, NiTCAD::solve::to_string(o.policy),
+                    derived ? "" : "current of ", goals.c_str(), o.tolerance, NiTCAD::solve::to_string(o.policy),
                     o.weighting == NiTCAD::solve::Weighting::adjoint ? "adjoint" : "none", o.verify ? "richardson" : "off",
                     plan.adapt->certify_required ? "required" : "report", o.max_passes);
         if (const auto& m = plan.adapt->predictor) {
