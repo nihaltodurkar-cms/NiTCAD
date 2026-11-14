@@ -53,7 +53,11 @@ struct TransferCurve {
 // subthreshold_swing with its default ceiling) and DG3's sensitivities. A curve whose largest
 // |current| is negative (p-channel) is read as dc.hpp documents: currents, gate and drain biases
 // times -1, so V_T is reported in the device's own sign and g_m, swing positive.
+// `from`, `to` (DR5): only windows whose points all lie in [from, to] are candidates (M''s curve,
+// solved there only, is not mixed with M's at its ends); the defaults search the whole curve.
 // Errors (invalid_input): kind current; those of the extractors.
-[[nodiscard]] std::expected<DerivedGoal, base::Error> derived_goal(GoalKind kind, const TransferCurve& curve);
+[[nodiscard]] std::expected<DerivedGoal, base::Error> derived_goal(GoalKind kind, const TransferCurve& curve,
+                                                                  std::size_t from = 0,
+                                                                  std::size_t to = static_cast<std::size_t>(-1));
 
 }  // namespace NiTCAD::solve

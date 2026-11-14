@@ -7,9 +7,11 @@
 
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <chrono>
 #include <cmath>
 #include <cstddef>
+#include <cstdint>
 #include <cstdio>
 #include <string>
 #include <utility>
@@ -19,11 +21,16 @@
 #include "NiTCAD/analysis/dc.hpp"
 #include "NiTCAD/device/device.hpp"
 #include "NiTCAD/device/doping_profiles.hpp"
+#include "NiTCAD/mesh/locate.hpp"
 #include "NiTCAD/mesh/tensor_cells.hpp"
 #include "NiTCAD/mesh/tensor_grid.hpp"
 #include "NiTCAD/physics/semiconductor.hpp"
+#include "NiTCAD/results/learn.hpp"
 #include "NiTCAD/solve/adapt.hpp"
+#include "NiTCAD/solve/adapt_adjoint.hpp"
 #include "NiTCAD/solve/adapt_derived.hpp"
+#include "NiTCAD/solve/adapt_learn.hpp"
+#include "NiTCAD/solve/adapt_policy.hpp"
 #include "NiTCAD/solve/bias.hpp"
 
 using namespace NiTCAD;
@@ -184,6 +191,32 @@ TEST_CASE("derived goals: each sensitivity is the figure's finite difference, th
     }
 }
 
+TEST_CASE("derived goals: a searched range admits only windows inside it (DR5)", "[adapt_derived]") {
+    // g_m largest at point 1 (25); inside [3, 6] the candidates are 4 (10), 5 (8.5), 6 (2, one-sided).
+    solve::TransferCurve c;
+    c.gate_V = {0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6};
+    c.current = {0.0, 2.0, 5.0, 6.0, 6.5, 8.0, 8.2};
+    c.resolution.assign(7, 0.0);
+    auto all = solve::derived_goal(solve::GoalKind::gm, c);
+    REQUIRE(all.has_value());
+    CHECK(all->point == 1);
+    auto part = solve::derived_goal(solve::GoalKind::gm, c, 3, 6);
+    REQUIRE(part.has_value());
+    CHECK(part->first >= 3);
+    CHECK(part->point == 4);
+    CHECK(!solve::derived_goal(solve::GoalKind::gm, c, 3, 4).has_value());  // no point's slope inside
+    // The swing (ceiling 1e-2: points 0..4): decades per segment 1, 2, 1, 0.7; the steepest segment
+    // of the whole curve is 1..2, inside [2, 6] it is 2..3.
+    solve::TransferCurve e = c;
+    e.current = {1e-9, 1e-8, 1e-6, 1e-5, 5e-5, 0.5, 1.0};
+    auto sa = solve::derived_goal(solve::GoalKind::swing, e);
+    auto sp = solve::derived_goal(solve::GoalKind::swing, e, 2, 6);
+    REQUIRE(sa.has_value());
+    REQUIRE(sp.has_value());
+    CHECK(sa->first == 1);
+    CHECK(sp->first == 2);
+}
+
 TEST_CASE("derived goals: the figures' errors", "[adapt_derived]") {
     const solve::TransferCurve c = analytic_curve(1.0, 0.05);
     CHECK(!solve::derived_goal(solve::GoalKind::current, c).has_value());
@@ -282,16 +315,97 @@ TEST_CASE("derived goals: a gm and a vt goal on the coarse tensor MOSFET (DG2, D
     CHECK(r->certificates[1].value < 1.2);
 }
 
+TEST_CASE("derived goals: deterministic, and the certificate independent of the policy and predictor (DC8)",
+          "[adapt_derived]") {
+    solve::AdaptOptions o;
+    o.goals = {{.contact = 1, .kind = solve::GoalKind::gm}, {.contact = 1, .kind = solve::GoalKind::vt}};
+    o.tolerance = 1e-2;
+    o.vt_tolerance = 1e-2;
+    o.weighting = solve::Weighting::adjoint;
+    o.max_passes = 3;
+    const auto pts = gate_sweep(0.0, 1.2, 7);
+    const auto same = [](double x, double y) { return std::bit_cast<std::uint64_t>(x) == std::bit_cast<std::uint64_t>(y); };
+    const auto run = [&](const solve::AdaptOptions& op) {
+        auto r = solve::adapt(tensor_mosfet_mesh, pts, sweep_options(), op);
+        if (!r) FAIL(r.error().message);
+        return std::move(*r);
+    };
+    const auto same_certificates = [&](const solve::AdaptResult& a, const solve::AdaptResult& b) {
+        REQUIRE(a.passes.size() == b.passes.size());
+        for (std::size_t p = 0; p < a.passes.size(); ++p) CHECK(a.passes[p].mesh_digest == b.passes[p].mesh_digest);
+        const auto pa = a.mesh->device.mesh().points(), pb = b.mesh->device.mesh().points();
+        REQUIRE(pa.size() == pb.size());
+        for (std::size_t k = 0; k < pa.size(); ++k) REQUIRE(pa[k] == pb[k]);
+        REQUIRE(a.certificates.size() == b.certificates.size());
+        for (std::size_t c = 0; c < a.certificates.size(); ++c) {
+            const auto &x = a.certificates[c], &y = b.certificates[c];
+            CHECK(x.kind == y.kind);
+            CHECK(x.point == y.point);
+            CHECK(x.window_moved == y.window_moved);
+            CHECK(same(x.value, y.value));
+            CHECK(same(x.estimate, y.estimate));
+            CHECK(same(x.verified_error, y.verified_error));
+            CHECK(same(x.order, y.order));
+            CHECK(same(x.allowed, y.allowed));
+            CHECK(x.status == y.status);
+        }
+    };
+    const solve::AdaptResult b = run(o);
+    // Two runs: bit-identical.
+    same_certificates(b, run(o));
+    // AC21 extended: the intelligent layer with empty predictions (every proposal a miss, AD3's marks).
+    solve::AdaptOptions oi = o;
+    oi.policy = solve::Policy::intelligent;
+    oi.intelligent.prediction = [](const device::Device& d) {
+        const std::size_t n = d.mesh().node_count();
+        return solve::SizeTargets{std::vector<double>(n, INFINITY),
+                                  std::vector<std::array<double, 3>>(n, std::array<double, 3>{})};
+    };
+    const solve::AdaptResult i = run(oi);
+    same_certificates(b, i);
+    CHECK(i.misses >= 1);
+    // And with a learned predictor through learned_targets: its one tree splits on feature 12 (the
+    // goal kind, DG10), 3 levels for a current goal and none for a derived one. Given the run's goal
+    // kind it predicts nothing, so the start mesh and the certificates are the basic run's.
+    results::LearnedModel model;
+    auto start = tensor_mosfet_mesh({});
+    REQUIRE(start.has_value());
+    model.materials = solve::material_keys(start->device);
+    model.trees = {{results::TreeNode{.feature = 12, .threshold = 0.5, .left = 1, .right = 2},
+                    results::TreeNode{.value = 3.0}, results::TreeNode{.value = 0.0}}};
+    model.tree_count = 1;
+    const double gm_kind = static_cast<double>(static_cast<unsigned>(solve::GoalKind::gm));
+    const auto finite = [](const solve::SizeTargets& t) {
+        return std::ranges::count_if(t.size, [](double s) { return std::isfinite(s); });
+    };
+    {
+        auto as_current = solve::learned_targets(model, start->device, pts, sweep_options(), 0.0);
+        auto as_gm = solve::learned_targets(model, start->device, pts, sweep_options(), gm_kind);
+        REQUIRE(as_current.has_value());
+        REQUIRE(as_gm.has_value());
+        CHECK(finite(*as_current) == static_cast<std::ptrdiff_t>(start->device.mesh().node_count()));
+        CHECK(finite(*as_gm) == 0);
+    }
+    solve::AdaptOptions op = oi;
+    op.intelligent.first_prediction = [&](const device::Device& d) {
+        auto t = solve::learned_targets(model, d, pts, sweep_options(), gm_kind);
+        REQUIRE(t.has_value());
+        return *t;
+    };
+    same_certificates(b, run(op));
+}
+
 namespace {
 
 // DC3's device and sweep: the tensor MOSFET at V_d 0.05 V, V_g -0.2 to 1.0 V in 0.05 V steps.
 const std::vector<std::vector<double>> dc3_points = gate_sweep(-0.2, 1.0, 25);
 
 // The three figures on the tensor MOSFET refined uniformly by `factor` (each interval split evenly).
-std::array<double, 3> uniform_figures(int factor) {
+std::array<double, 3> uniform_figures(int factor, int ky = 0) {
+    if (ky == 0) ky = factor;
     solve::MeshRefinement r;
     r.axes[0] = uniform(2 * Lsd + Lg, 24 * factor + 1);
-    r.axes[1] = uniform(depth, 10 * factor + 1);
+    r.axes[1] = uniform(depth, 10 * ky + 1);
     auto m = tensor_mosfet_mesh(r);
     REQUIRE(m.has_value());
     auto s = solve::sweep_bias(m->device, dc3_points, sweep_options());
@@ -378,6 +492,164 @@ TEST_CASE("derived goals: probe the tensor MOSFET's ladder per axis for DC3's re
     }
 }
 
+// DC3's runs, printed pass by pass (a probe: the path and the cost before the gates are written).
+TEST_CASE("derived goals: probe DC3's adaptive runs", "[.adapt_derived_trial]") {
+    const solve::GoalKind kinds[3] = {solve::GoalKind::vt, solve::GoalKind::gm, solve::GoalKind::swing};
+    for (const auto kind : kinds) {
+        solve::AdaptOptions o;
+        o.goals = {{.contact = 1, .kind = kind}};
+        o.tolerance = 1e-2;
+        o.vt_tolerance = 1e-3;
+        o.weighting = solve::Weighting::adjoint;
+        o.max_passes = 12;
+        const auto t0 = std::chrono::steady_clock::now();
+        auto r = solve::adapt(tensor_mosfet_mesh, dc3_points, sweep_options(), o);
+        if (!r) FAIL(r.error().message);
+        const double sec = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+        for (std::size_t p = 0; p < r->passes.size(); ++p) {
+            const auto& a = r->passes[p];
+            std::printf("  %s pass %zu: nodes %zu dofs %zu value %.12g window %zu..%zu estimate %.4g\n",
+                        solve::to_string(kind), p, a.nodes, a.dofs, a.goal.empty() ? NAN : a.goal.back(),
+                        a.window_first.empty() ? 0 : a.window_first.back(),
+                        a.window_last.empty() ? 0 : a.window_last.back(), a.estimate.empty() ? NAN : a.estimate.back());
+        }
+        REQUIRE(r->certificates.size() == 1);
+        const auto& c = r->certificates[0];
+        std::printf("%s: %s value %.12g estimate %.4g verified %.4g allowed %.4g moved %d stop %d, %zu passes, "
+                    "verification %zu nodes, %.0f s\n",
+                    solve::to_string(kind), solve::to_string(c.status), c.value, c.estimate, c.verified_error,
+                    c.allowed, c.window_moved ? 1 : 0, static_cast<int>(r->stop), r->passes.size(),
+                    r->verification_nodes, sec);
+        std::fflush(stdout);
+    }
+}
+
+// The adjoint's D_k against the actual change, 4x -> 8x uniform, in the swing's window (a probe).
+TEST_CASE("derived goals: probe the adjoint differences in subthreshold", "[.adapt_derived_dprobe]") {
+    const auto make = [](int k) {
+        solve::MeshRefinement r;
+        r.axes[0] = uniform(2 * Lsd + Lg, 24 * k + 1);
+        r.axes[1] = uniform(depth, 10 * k + 1);
+        auto m = tensor_mosfet_mesh(r);
+        REQUIRE(m.has_value());
+        return std::move(*m);
+    };
+    const auto c = make(4), f = make(8);
+    const std::vector<std::vector<double>> pts(dc3_points.begin(), dc3_points.begin() + 16);
+    auto sc = solve::sweep_bias(c.device, pts, sweep_options());
+    auto sf = solve::sweep_bias(f.device, pts, sweep_options());
+    REQUIRE(sc.has_value());
+    REQUIRE(sf.has_value());
+    const auto loc = mesh::PointLocator::create(*c.device.cells());
+    for (const std::size_t k : {std::size_t{2}, std::size_t{3}, std::size_t{4}, std::size_t{14}}) {
+        const std::vector<std::size_t> goals{1};
+        auto e = solve::estimate_goals(c.device, loc, sc->points[k], f.device, sweep_options(), goals);
+        if (!e) FAIL(e.error().message);
+        const double I4 = sc->points[k].terminal_current[1], I8 = sf->points[k].terminal_current[1];
+        std::printf("point %zu: I4 %.6e I8 %.6e actual %.4e D %.4e prolongated %.4e res %.3e\n", k, I4, I8, I8 - I4,
+                    e->difference[0], e->prolongated_part[0],
+                    sc->points[k].terminal_current_resolution.size() > 1 ? sc->points[k].terminal_current_resolution[1]
+                                                                         : -1.0);
+    }
+}
+
+// The same on the swing run's adapted meshes: each pass's tensor axes, halved, as M'.
+TEST_CASE("derived goals: probe the adjoint differences on adapted meshes", "[.adapt_derived_dprobe2]") {
+    std::vector<std::array<std::vector<double>, 2>> axes;
+    solve::AdaptOptions o;
+    o.goals = {{.contact = 1, .kind = solve::GoalKind::swing}};
+    o.tolerance = 1e-2;
+    o.weighting = solve::Weighting::adjoint;
+    o.max_passes = 8;
+    o.on_mesh = [&](std::size_t, const solve::AdaptableMesh& m) -> std::expected<void, base::Error> {
+        std::array<std::vector<double>, 2> a;
+        for (const auto& p : m.device.mesh().points()) {
+            a[0].push_back(p[0]);
+            a[1].push_back(p[1]);
+        }
+        for (auto& v : a) {
+            std::ranges::sort(v);
+            v.erase(std::unique(v.begin(), v.end()), v.end());
+        }
+        axes.push_back(std::move(a));
+        return {};
+    };
+    auto r = solve::adapt(tensor_mosfet_mesh, dc3_points, sweep_options(), o);
+    if (!r) FAIL(r.error().message);
+    const std::vector<std::vector<double>> pts(dc3_points.begin(), dc3_points.begin() + 6);
+    for (std::size_t p = 0; p < axes.size(); p += 2) {
+        solve::MeshRefinement rc, rf;
+        rc.axes[0] = axes[p][0];
+        rc.axes[1] = axes[p][1];
+        for (int a = 0; a < 2; ++a) {
+            const auto& v = axes[p][static_cast<std::size_t>(a)];
+            for (std::size_t i = 0; i + 1 < v.size(); ++i) {
+                rf.axes[static_cast<std::size_t>(a)].push_back(v[i]);
+                rf.axes[static_cast<std::size_t>(a)].push_back(0.5 * (v[i] + v[i + 1]));
+            }
+            rf.axes[static_cast<std::size_t>(a)].push_back(v.back());
+        }
+        auto c = tensor_mosfet_mesh(rc);
+        auto f = tensor_mosfet_mesh(rf);
+        REQUIRE(c.has_value());
+        REQUIRE(f.has_value());
+        auto sc = solve::sweep_bias(c->device, pts, sweep_options());
+        auto sf = solve::sweep_bias(f->device, pts, sweep_options());
+        REQUIRE(sc.has_value());
+        REQUIRE(sf.has_value());
+        const auto loc = mesh::PointLocator::create(*c->device.cells());
+        std::printf("pass %zu: %zu x %zu nodes\n", p, axes[p][0].size(), axes[p][1].size());
+        for (const std::size_t k : {std::size_t{2}, std::size_t{3}, std::size_t{4}}) {
+            const std::vector<std::size_t> goals{1};
+            auto e = solve::estimate_goals(c->device, loc, sc->points[k], f->device, sweep_options(), goals);
+            if (!e) FAIL(e.error().message);
+            const double I = sc->points[k].terminal_current[1], If = sf->points[k].terminal_current[1];
+            std::printf("  point %zu: I %.6e I' %.6e actual/I %.4e D/I %.4e prolongated %.4e\n", k, I, If, (If - I) / I,
+                        e->difference[0] / I, e->prolongated_part[0]);
+        }
+        std::fflush(stdout);
+    }
+}
+
+// DC4's baseline (DQ4 (a)): `goal = current drain` on the window points, adjoint-weighted, the
+// tolerance tightened; the three figures extracted from each final sweep.
+TEST_CASE("derived goals: probe DC4's current-goal baseline", "[.adapt_derived_baseline]") {
+    const std::vector<std::pair<const char*, std::vector<std::size_t>>> windows{{"vt/gm", {13, 14, 15}},
+                                                                                 {"swing", {3, 4}}};
+    for (const auto& [name, at] : windows) {
+        for (const double tol : {1e-2, 3e-3, 1e-3, 3e-4}) {
+            solve::AdaptOptions o;
+            o.goals = {{.contact = 1}};
+            o.at = at;
+            o.tolerance = tol;
+            o.weighting = solve::Weighting::adjoint;
+            o.max_passes = 12;
+            const auto t0 = std::chrono::steady_clock::now();
+            auto r = solve::adapt(tensor_mosfet_mesh, dc3_points, sweep_options(), o);
+            if (!r) FAIL(r.error().message);
+            const double sec = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+            solve::TransferCurve c;
+            c.drain_V = 0.05;
+            for (std::size_t k = 0; k < r->sweep.points.size(); ++k) {
+                c.gate_V.push_back(dc3_points[k][3]);
+                c.current.push_back(r->sweep.points[k].terminal_current[1]);
+                c.resolution.push_back(0.0);
+            }
+            auto vt = solve::derived_goal(solve::GoalKind::vt, c);
+            auto gm = solve::derived_goal(solve::GoalKind::gm, c);
+            auto sw = solve::derived_goal(solve::GoalKind::swing, c);
+            if (!vt || !gm || !sw) FAIL("extraction");
+            bool certified = true;
+            for (const auto& g : r->certificates) certified = certified && g.status == solve::CertificateStatus::certified;
+            std::printf("baseline %s tol %.0e: dofs %zu nodes %zu passes %zu certified %d: vt %.12g gm %.12g "
+                        "(window %zu..%zu) swing %.12g (window %zu..%zu) %.0f s\n",
+                        name, tol, r->passes.back().dofs, r->passes.back().nodes, r->passes.size(), certified ? 1 : 0,
+                        vt->value, gm->value, gm->first, gm->last, sw->value, sw->first, sw->last, sec);
+            std::fflush(stdout);
+        }
+    }
+}
+
 TEST_CASE("derived goals: a window that moves on M' is never certified (DC6, DG6)", "[.adapt_derived_slow]") {
     // Found by a probe (2026-11-14): at a 0.02 V gate step the subthreshold swing is nearly the same on
     // every segment, so its steepest segment moves between the passes and onto M'.
@@ -394,4 +666,12 @@ TEST_CASE("derived goals: a window that moves on M' is never certified (DC6, DG6
     CHECK(r->rejected_stops >= 1);  // the moved window rejected a proposed stop (AR2)
     // The windows moved between passes too: no stop was proposed until two passes agreed.
     CHECK(r->passes.front().window_first[0] != r->passes.back().window_first[0]);
+}
+
+// Per-axis differences on coarse meshes (a probe for DR6): kx x ky uniform factors.
+TEST_CASE("derived goals: probe per-axis differences", "[.adapt_derived_axes]") {
+    for (const auto [kx, ky] : std::vector<std::pair<int, int>>{{1, 1}, {2, 1}, {1, 2}, {2, 2}, {4, 2}, {2, 4}, {4, 4},
+                                                                {8, 4}, {4, 8}}) {
+        (void)uniform_figures(kx, ky);
+    }
 }

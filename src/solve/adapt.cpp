@@ -1129,8 +1129,10 @@ std::expected<AdaptResult, base::Error> adapt(const DeviceBuilder& build, std::s
             }
         }
         if (!d.empty()) {
-            // DG4: per window point one estimate of the derived goals' contacts there; a goal's
-            // estimate sum_k |c_k| E_k, its weights sum_k |c_k| omega_k renormalized to sum 1 over the
+            // DG4 as ruled in DR1: per window point one estimate of the derived goals' contacts there;
+            // a goal's estimate 2 |sum_k c_k D_k| (the linearized dual-weighted estimate of G itself,
+            // so errors common to the window's currents cancel as they do in G), its weights
+            // |sum_k c_k l_k(n)| over the nodes' signed contributions, renormalized to sum 1 over the
             // semiconductor nodes, and AD3's omega the largest over every goal.
             std::vector<std::size_t> window_points;
             for (const DerivedGoal& g : d) {
@@ -1138,7 +1140,7 @@ std::expected<AdaptResult, base::Error> adapt(const DeviceBuilder& build, std::s
             }
             std::ranges::sort(window_points);
             window_points.erase(std::unique(window_points.begin(), window_points.end()), window_points.end());
-            std::vector<double> estimate(d.size(), 0.0);
+            std::vector<double> difference(d.size(), 0.0);
             std::vector<std::vector<double>> weight(d.size(), std::vector<double>(nn, 0.0));
             for (const std::size_t k : window_points) {
                 std::vector<std::size_t> contacts;
@@ -1156,20 +1158,16 @@ std::expected<AdaptResult, base::Error> adapt(const DeviceBuilder& build, std::s
                     if (!(k >= d[i].first && k <= d[i].last)) continue;
                     const auto q = static_cast<std::size_t>(
                         std::ranges::find(contacts, o.goals[derived[i]].contact) - contacts.begin());
-                    const double c = std::abs(d[i].sensitivity[k - d[i].first]);
-                    estimate[i] += c * e->estimate[q];
-                    double total = 0.0;
-                    for (std::size_t n = 0; n < nn; ++n) {
-                        if (!m.device.is_insulator(static_cast<mesh::NodeId>(n))) total += e->node_weight[q][n];
-                    }
-                    if (!(total > 0.0)) continue;
-                    for (std::size_t n = 0; n < nn; ++n) weight[i][n] += c * e->node_weight[q][n] / total;
+                    const double c = d[i].sensitivity[k - d[i].first];
+                    difference[i] += c * e->difference[q];
+                    for (std::size_t n = 0; n < nn; ++n) weight[i][n] += c * e->node_signed[q][n];
                 }
             }
             for (std::size_t i = 0; i < d.size(); ++i) {
-                out.estimate.push_back(estimate[i]);
+                out.estimate.push_back(2.0 * std::abs(difference[i]));
                 double total = 0.0;
                 for (std::size_t n = 0; n < nn; ++n) {
+                    weight[i][n] = std::abs(weight[i][n]);
                     if (!m.device.is_insulator(static_cast<mesh::NodeId>(n))) total += weight[i][n];
                 }
                 if (!(total > 0.0)) continue;
@@ -1439,7 +1437,7 @@ std::expected<AdaptResult, base::Error> adapt(const DeviceBuilder& build, std::s
                 c.resolution[first + k] = resolution;
             }
             const std::size_t j = goal_contacts.size() * at.size() + i;
-            auto dg = derived_goal(goal.kind, c);
+            auto dg = derived_goal(goal.kind, c, first, first + solved->sweep.points.size() - 1);  // DR5
             const bool moved =
                 !dg || dg->first != rep.window_first[i] || dg->last != rep.window_last[i];
             v.window_moved.push_back(moved ? 1 : 0);
@@ -1530,6 +1528,37 @@ std::expected<AdaptResult, base::Error> adapt(const DeviceBuilder& build, std::s
             rep.seconds_transposed = part->seconds_transposed;
             rep.estimate_nodes = fine_mesh->device.mesh().node_count();
             rep.seconds_estimate = part->seconds;
+            // DR4: a derived goal's estimate is its solved difference on M' (the windows plus one
+            // point either side, DG7's set), as AD11's Richardson error of G; the adjoint's
+            // linearization is not accurate enough in subthreshold on graded meshes (DECISIONS.md
+            // Unit 17c DR4). The adjoint keeps the weights (DR1).
+            if (!entries->derived.empty()) {
+                const auto td = clock_type::now();
+                std::size_t lo = points.size(), hi = 0;
+                for (const DerivedGoal& d : entries->derived) {
+                    lo = std::min(lo, d.first);
+                    hi = std::max(hi, d.last);
+                }
+                lo = lo > 0 ? lo - 1 : 0;
+                hi = std::min(hi + 1, points.size() - 1);
+                auto fs = solve_on(*fine_mesh, &*built, &solved->sweep, points.subspan(lo, hi - lo + 1), bias, control, lo);
+                if (!fs) return std::unexpected(fs.error());
+                for (std::size_t i = 0; i < entries->derived.size(); ++i) {
+                    const AdaptGoal& goal = o.goals[derived[i]];
+                    TransferCurve c = transfer_curve(solved->sweep, points, gate, goal.contact);
+                    for (std::size_t k = 0; k < fs->sweep.points.size(); ++k) {
+                        const auto [current, resolution] = current_of(fs->sweep.points[k], goal.contact);
+                        c.current[lo + k] = current;
+                        c.resolution[lo + k] = resolution;
+                    }
+                    const std::size_t j = goal_contacts.size() * at.size() + i;
+                    auto dg = derived_goal(goal.kind, c, lo, hi);  // DR5: the points solved on M' only
+                    const double change = pass > 0 ? std::abs(g.value[j] - previous_goal[j]) : 0.0;
+                    rep.estimate[j] = dg ? richardson_error(g.value[j], dg->value, change).error
+                                         : std::numeric_limits<double>::infinity();
+                }
+                rep.seconds_estimate += seconds_since(td);
+            }
         }
         seconds_so_far += rep.seconds_mesh + rep.seconds_transfer + rep.seconds_solve + rep.seconds_estimate;
         // ID6's state on this pass, kept for a re-allocation when the built proposal is over a cap.

@@ -62,7 +62,8 @@ bool strictly_monotone(const std::vector<double>& x) {
 
 }  // namespace
 
-std::expected<DerivedGoal, base::Error> derived_goal(GoalKind kind, const TransferCurve& curve) {
+std::expected<DerivedGoal, base::Error> derived_goal(GoalKind kind, const TransferCurve& curve, std::size_t from,
+                                                    std::size_t to) {
     if (kind == GoalKind::current) return std::unexpected(invalid("a current is not a derived goal"));
     const std::size_t n = curve.gate_V.size();
     if (curve.current.size() != n || curve.resolution.size() != n) {
@@ -88,16 +89,20 @@ std::expected<DerivedGoal, base::Error> derived_goal(GoalKind kind, const Transf
     if (!strictly_monotone(x)) return std::unexpected(invalid("x is not strictly monotone"));
     DerivedGoal g;
     if (kind == GoalKind::vt || kind == GoalKind::gm) {
-        // peak_transconductance: the largest derivative, the first on a tie.
+        // peak_transconductance: the largest derivative, the first on a tie (DR5: among the points
+        // whose slope uses only [from, to]).
         std::size_t k = 0;
-        Slope best = slope_at(x, y, 0);
-        for (std::size_t j = 1; j < n; ++j) {
+        std::optional<Slope> found;
+        for (std::size_t j = 0; j < n; ++j) {
+            if ((j == 0 ? 0 : j - 1) < from || std::min(j + 1, n - 1) > to) continue;
             const Slope sj = slope_at(x, y, j);
-            if (sj.value > best.value) {
-                best = sj;
+            if (!found || sj.value > found->value) {
+                found = sj;
                 k = j;
             }
         }
+        if (!found) return std::unexpected(invalid("no window inside the searched range"));
+        const Slope best = *found;
         if (!(best.value > 0.0)) return std::unexpected(invalid("the transconductance is nowhere positive"));
         g.first = k == 0 ? 0 : k - 1;
         g.last = std::min(k + 1, n - 1);
@@ -134,7 +139,7 @@ std::expected<DerivedGoal, base::Error> derived_goal(GoalKind kind, const Transf
         std::optional<std::size_t> best;
         double swing = 0.0;
         for (std::size_t k = 0; k + 1 < n; ++k) {
-            if (!usable(k) || !usable(k + 1)) continue;
+            if (k < from || k + 1 > to || !usable(k) || !usable(k + 1)) continue;  // DR5: inside [from, to]
             const double sw = (x[k + 1] - x[k]) / (std::log10(y[k + 1]) - std::log10(y[k]));
             if (!(sw > 0.0) || !std::isfinite(sw)) continue;
             if (!best || sw < swing) {

@@ -292,8 +292,8 @@ std::expected<RunReport, base::Error> run(const Plan& plan, const solve::RunCont
                 predictor_status = "out_of_range";
             } else {
                 predictor_status = "used";
-                o.intelligent.first_prediction = [model = a.predictor, &plan](const device::Device& d) {
-                    auto t = solve::learned_targets(*model, d, plan.points, plan.options);
+                o.intelligent.first_prediction = [model = a.predictor, &plan, goal_kind](const device::Device& d) {
+                    auto t = solve::learned_targets(*model, d, plan.points, plan.options, goal_kind);
                     return t ? std::move(*t) : solve::SizeTargets{};
                 };
             }

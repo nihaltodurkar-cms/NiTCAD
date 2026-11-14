@@ -92,6 +92,7 @@ struct GoalEstimate {
     std::vector<double> difference;                 // per goal: D (public units)
     std::vector<double> estimate;                   // per goal: 2 |D|
     std::vector<std::vector<double>> node_weight;   // per goal: per node of M, |sum of its contributions|
+    std::vector<std::vector<double>> node_signed;   // per goal: per node of M, the sum itself (Unit 17c DR1)
     std::vector<double> prolongated_part;           // per goal: G'(u) - G_M (public units)
     double seconds_factorize = 0.0;                 // AC11: J'(u)'s factorization on M'
     double seconds_transposed = 0.0;                // AC11: the largest one transposed solve

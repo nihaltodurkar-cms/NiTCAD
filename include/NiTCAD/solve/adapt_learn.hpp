@@ -157,11 +157,13 @@ inline constexpr double out_of_range_limit = 0.05;  // LB8: a device above it fa
 void stamp_predictor(results::RunRecord& run, std::uint64_t file_digest, const results::LearnedModel& model, bool used);
 
 // LB4's targets on a device: per edge L_e 2^-l^ where l^ >= 0.5; per node the smallest over its edges,
-// with that edge's direction as the normal; infinity (no target) elsewhere. Errors: those of
+// with that edge's direction as the normal; infinity (no target) elsewhere. goal_kind: feature 12
+// (edge_features; Unit 17c DG10: the run's own goal, as the range check and the history). Errors: those of
 // edge_features.
 [[nodiscard]] std::expected<SizeTargets, base::Error> learned_targets(const results::LearnedModel& model,
                                                                       const device::Device& device,
                                                                       std::span<const std::vector<double>> points,
-                                                                      const BiasOptions& options);
+                                                                      const BiasOptions& options,
+                                                                      double goal_kind = 0.0);
 
 }  // namespace NiTCAD::solve
