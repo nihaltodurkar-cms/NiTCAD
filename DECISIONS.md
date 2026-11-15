@@ -1010,6 +1010,64 @@ The AC19 gate is `[.ac19]` (hidden, Release by hand); the 17b cases in the suite
 predictor case and the deck cases. Unit 17 merged to `main` meanwhile (72377ad, PR #81, owner "merge pr 81"); this
 branch holds 17's head (6ffad0b), so its PR to `main` carries the 17b commits only.
 
+### Unit 26d — GUI quick wins (proposed 2026-11-15; on `app/gui-quick-wins`)
+
+**Owner request (2026-11-15):** "Check the NiTCAD Interface (GUI), suggest improvements to it", then "which all are
+small", then "yes write proposal". This unit covers the small items from that review. The branch starts from `main`
+`dae4568`.
+
+**Standing conditions:** the app only, with no change to numerics, results, files, run identities or `nitcad plot`
+output. Win32 + D3D12 + Direct2D only. Criteria are fixed before code. Release and Debug suites run at every commit
+with `/W4 /WX`, plus hand mutants. WG1 (message-loop gaps) and the self-tests stay as ruled. Nothing is pushed or
+merged without authorization.
+
+**Left out of this unit (from the same review, medium or larger):** show only the inspector controls that apply,
+merge the two clipping-box inputs, image export / copy to the clipboard, TaskDialog errors, toolbar icons, tooltips
+and mode grouping, right-click menus, tree/inspector consolidation, camera presets, full dark mode, and undo for view
+settings. The duplicated "ψ (V)" heading also stays: it is the scene title that `nitcad plot` draws too, so changing
+it would change PNG output.
+
+**Design:**
+
+| # | Change | Where | Behaviour |
+|---|---|---|---|
+| ZD1 | **Remove Apply.** The inspector's text boxes (arrow and streamline counts, seeds, exploded gap, slice at, iso levels, cut line, clipping box, and ZD3's range) take effect on Enter, and when focus leaves a box whose text changed. | `main_window.cpp` `on_inspector` (Apply branch made a function), `pre_translate` (Enter in an inspector edit), `EN_KILLFOCUS` | Same validation and messages as Apply today. Invalid text gets the status-bar message and the box shows the setting again. Each box takes effect separately (today one Apply commits all of them). The Apply button and its row are removed. |
+| ZD2 | **Point labels.** The Point drop-down shows `k · <contact> = <V> V` for each contact whose bias varies over the points (the swept contact first), `k · t = <time>` for a transient (`render::time_label`), and the bare index only when nothing varies. | New `point_labels(const Workspace&)` in `view_settings` (testable without a window); `sync_inspector` uses it | Selection by index is unchanged. Volts use `{:.4g}`. |
+| ZD3 | **Colour range.** A "Range" row: min and max boxes and an **Auto** checkbox. Auto (the default) clears `ViewSettings::range`. Typed values set it in the colour bar's units, exactly as `nitcad plot --range` takes them. | Inspector (field, slice, iso and exploded views; hidden on others); `on_inspector`; `sync_inspector` | Validation: min < max, both finite, and both > 0 on a log scale; otherwise a status message. Changing the field resets the range to Auto, as it does today. Inherits ZD1's Enter and focus-loss behaviour. |
+| ZD4 | **Drag and drop.** Dropping one file on the window opens it the way the recent-files list does: a `.deck` with `open_deck`, any other file as a result with its sibling `.nitdev` (and `.nitmesh` if present), after `confirm_discard`. More than one file, or a folder, is refused with a status message. | `DragAcceptFiles`; `WM_DROPFILES` in `handle`; the recent-file branch of `execute` made a shared `open_path` | Refused while a run is in progress (as Open is). |
+| ZD5 | **Taskbar progress.** During a run, the taskbar button shows the run controller's progress fraction (`ITaskbarList3`: normal while running, error state on failure until the next run or check, cleared on success or stop). When a run ends with the window not in the foreground, the taskbar button flashes until activated (`FlashWindowEx`). | Created on the `TaskbarButtonCreated` message; updated from `on_run_timer` and `on_run_finished` | COM is already initialized STA in `app/main.cpp`. Without a taskbar interface (e.g. the hidden test window), nothing is shown and nothing fails. |
+| ZD6 | **Dark title bar.** The title bar follows Windows' app theme (`AppsUseLightTheme`) through `DWMWA_USE_IMMERSIVE_DARK_MODE`, updated on `WM_SETTINGCHANGE` "ImmersiveColorSet". | `create`, `handle` | Title bar only; the client area is unchanged. Where the attribute is unsupported, the call fails silently. |
+| ZD7 | **Unit in the metrics strip.** "Max potential 1.714" becomes "Max potential 1.714 V", and the label is the field's symbol rather than its key ("Max ψ 1.714 V"). Both come from `render::field_info`'s title (the symbol, and the unit in its brackets), the text the tree and colour bar show. "Max \|B − A\|" likewise. | `update_metrics` | Text only. |
+
+**Questions (each with a recommendation):**
+
+| # | Question | Options | Recommendation |
+|---|---|---|---|
+| ZQ1 | When a ZD1 box takes effect | (a) Enter and focus loss. (b) Enter only. (c) On every keystroke (redraws while typing). | **(a)**: the Windows convention for property panes. (c) would redraw 3D scenes for half-typed numbers. |
+| ZQ2 | Point label when several contacts vary | (a) All varying contacts. (b) The swept contact only. | **(a)**, swept first: a 2D sweep (V_G at each V_D) is ambiguous otherwise. |
+| ZQ3 | Taskbar error state after a failed run | (a) Kept until the next run or check. (b) Cleared when the window is activated. | **(a)**: a user returning to the window still sees that the run failed. |
+| ZQ4 | Dark title bar | (a) Follow the system theme. (b) Always light (today). (c) A View menu choice. | **(a)**: no new setting, and it matches other Windows apps. |
+
+**Acceptance criteria (frozen before code; tests in `tests/app`, hidden windows as today):**
+
+| # | Criterion |
+|---|---|
+| ZG1 | No Apply button exists. For each ZD1 box: typing a valid value and sending Enter changes the settings and the scene; moving focus does the same; an invalid value leaves the settings unchanged, puts the message in the status bar and shows the old setting in the box. |
+| ZG2 | `point_labels`: a single-contact sweep, a two-contact family (both contacts listed, swept first), a transient (times), and a run where nothing varies (index only), each against expected strings. |
+| ZG3 | Range: Auto clears it; a typed min/max equals what `nitcad plot --range` gives (the scene's colour bar scale is compared); invalid or non-positive-on-log values are refused; changing the field resets to Auto. |
+| ZG4 | Drop: a `.deck` opens it; a result file opens it with its `.nitdev`; two files and a folder are refused; a drop during a run is refused; unsaved edits ask first. Tested by posting `WM_DROPFILES` with a built `HDROP`. |
+| ZG5 | Taskbar: the state machine (idle → running with fraction → error / none) is a pure function, tested for each run outcome. A missing taskbar interface does not fail. |
+| ZG6 | The dark-mode flag is read from the theme value (a pure function, tested); the DWM call is made once at creation and once per theme change. |
+| ZG7 | Metrics text includes the field's unit for every field the tree lists, and for the difference view. |
+| ZG8 | No change elsewhere: every existing app, render and plot test passes unchanged, and `nitcad plot` PNG digests are bit-identical. WG1 self-tests pass at their ruled bounds. |
+| ZG9 | Hand mutants (at least one per ZD item: dropped Enter handling, a swapped label order, a range not reset on field change, a drop accepting two files, error state cleared early, an inverted theme flag, a missing unit) are each killed by a test. |
+
+**Slices (each one local commit):** 26d·1 ZD1 + ZD3 (the inspector); 26d·2 ZD2 + ZD7 (labels and text); 26d·3 ZD4 +
+ZD5 + ZD6 (window integration); 26d·4 suites, mutants, the screenshot `docs/images/app.png` refreshed, and the
+ARCHITECTURE "as built" entry.
+
+Implementation starts only on the owner's word.
+
 ---
 
 ## New questions the advisor raised (not yet in `ARCHITECTURE.md`)
