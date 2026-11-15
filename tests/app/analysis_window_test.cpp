@@ -9,18 +9,23 @@
 
 #include <windows.h>
 #include <richedit.h>
+#include <shlobj.h>  // DROPFILES (Unit 26d, ZG4)
 #include <commctrl.h>
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <cmath>
+#include <cstring>
 #include <cstdio>
 #include <filesystem>
 #include <format>
 #include <functional>
+#include <optional>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <variant>
 #include <vector>
 
@@ -1317,4 +1322,121 @@ TEST_CASE("app window 26d: the inspector's boxes on Enter and focus loss; the co
     }
     w->select_tab(MainWindow::tab_curves);
     CHECK_FALSE(shown(*w, MainWindow::id_range_min));
+}
+
+namespace {
+
+// Unit 26d (ZG4): the files of a drop as the shell hands them over (DROPFILES with wide names); the window frees
+// it (DragFinish).
+HDROP make_drop(const std::vector<fs::path>& files) {
+    std::wstring list;
+    for (const fs::path& f : files) {
+        list += f.wstring();
+        list.push_back(L'\0');
+    }
+    list.push_back(L'\0');
+    const SIZE_T bytes = sizeof(DROPFILES) + list.size() * sizeof(wchar_t);
+    HGLOBAL g = GlobalAlloc(GHND, bytes);
+    REQUIRE(g);
+    auto* d = static_cast<DROPFILES*>(GlobalLock(g));
+    d->pFiles = sizeof(DROPFILES);
+    d->fWide = TRUE;
+    std::memcpy(reinterpret_cast<char*>(d) + sizeof(DROPFILES), list.data(), list.size() * sizeof(wchar_t));
+    GlobalUnlock(g);
+    return static_cast<HDROP>(g);
+}
+
+void drop(MainWindow& w, const std::vector<fs::path>& files) {
+    SendMessageW(w.hwnd(), WM_DROPFILES, reinterpret_cast<WPARAM>(make_drop(files)), 0);
+}
+
+// Answers the window's next message box with Cancel, from another thread; true once it has.
+struct CancelNextBox {
+    std::atomic<bool> answered{false};
+    std::thread thread;
+    CancelNextBox() {
+        thread = std::thread([this] {
+            const auto end = std::chrono::steady_clock::now() + std::chrono::seconds(20);
+            while (std::chrono::steady_clock::now() < end) {
+                if (HWND box = FindWindowW(L"#32770", L"NiTCAD")) {
+                    answered = true;
+                    PostMessageW(box, WM_COMMAND, IDCANCEL, 0);
+                    return;
+                }
+                std::this_thread::sleep_for(std::chrono::milliseconds(20));
+            }
+        });
+    }
+    ~CancelNextBox() { thread.join(); }
+};
+
+}  // namespace
+
+TEST_CASE("app window 26d: files dropped on the window (ZD4, ZG4)", "[app]") {
+    const fs::path dir = app_test::scratch("window_drop");
+    const fs::path deck = app_test::write(dir, "diode.deck", app_test::diode_sweep());
+    const fs::path other = app_test::write(dir, "other.deck", app_test::diode_sweep());
+    auto w = window();
+    // A deck: opened as Open deck opens it.
+    drop(*w, {deck});
+    REQUIRE(pump_until([&] { return w->workspace() != nullptr && !w->runner().busy(); }));
+    CHECK(w->document().path() == deck);
+    // Refused: two files, a folder; and while a run goes on.
+    drop(*w, {deck, other});
+    CHECK(w->status(0) == "Drop one deck or result file at a time.");
+    drop(*w, {dir});
+    CHECK(w->status(0) == "A folder does not open: drop a deck or a result file.");
+    CHECK(w->document().path() == deck);
+    w->execute(Command::run);
+    REQUIRE(w->runner().busy());
+    drop(*w, {other});
+    CHECK(w->status(0) == "A run or check is in progress: drop the file when it ends.");
+    REQUIRE(pump_until([&] { return !w->runner().busy() && w->workspace() && w->workspace()->has_results(); }));
+    CHECK(w->document().path() == deck);
+    // A result file: with the device file of its name beside it.
+    const fs::path result = dir / "diode.nitsweep";
+    REQUIRE(fs::exists(result));
+    REQUIRE(fs::exists(dir / "diode.nitdev"));
+    drop(*w, {result});
+    REQUIRE(w->workspace());
+    CHECK(w->workspace()->source == result);
+    CHECK(w->workspace()->has_results());
+    // Unsaved edits: asked first; Cancel keeps the deck being edited.
+    REQUIRE(w->open_deck(deck));
+    REQUIRE(pump_until([&] { return !w->runner().busy(); }));
+    w->select_tab(MainWindow::tab_deck);
+    replace(*w, "[sweep]", "[sweep]\n# edited");
+    REQUIRE(w->document().modified());
+    {
+        CancelNextBox cancel;
+        drop(*w, {other});
+        CHECK(cancel.answered);
+    }
+    CHECK(w->document().path() == deck);
+    CHECK(w->document().modified());
+}
+
+TEST_CASE("app window 26d: the taskbar's progress and the title bar's theme (ZD5, ZD6, ZG5, ZG6)", "[app]") {
+    const fs::path dir = app_test::scratch("window_shell");
+    const fs::path deck = app_test::write(dir, "diode.deck", app_test::diode_sweep());
+    auto w = window();
+    // ZG6: the theme given to the title bar once at creation, as the user's app theme says; again per theme change.
+    DWORD value = 1, size = sizeof(value);
+    const bool read = RegGetValueW(HKEY_CURRENT_USER, L"Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize",
+                                   L"AppsUseLightTheme", RRF_RT_REG_DWORD, nullptr, &value, &size) == ERROR_SUCCESS;
+    CHECK(w->dark_title() == app::dark_title_bar(read ? std::optional<unsigned long>(value) : std::nullopt));
+    CHECK(w->title_theme_updates() == 1);
+    SendMessageW(w->hwnd(), WM_SETTINGCHANGE, 0, reinterpret_cast<LPARAM>(L"ImmersiveColorSet"));
+    CHECK(w->title_theme_updates() == 2);
+    SendMessageW(w->hwnd(), WM_SETTINGCHANGE, 0, reinterpret_cast<LPARAM>(L"Environment"));
+    SendMessageW(w->hwnd(), WM_SETTINGCHANGE, 0, 0);
+    CHECK(w->title_theme_updates() == 2);
+    // ZG5: a hidden window has no taskbar button; the progress is kept all the same and nothing fails.
+    CHECK(w->taskbar_progress() == app::TaskbarProgress{});
+    REQUIRE(w->open_deck(deck));
+    REQUIRE(pump_until([&] { return w->workspace() != nullptr && !w->runner().busy(); }));
+    w->execute(Command::run);
+    CHECK((w->taskbar_progress().flag == app::TaskbarFlag::normal || w->taskbar_progress().flag == app::TaskbarFlag::indeterminate));
+    REQUIRE(pump_until([&] { return !w->runner().busy() && w->workspace() && w->workspace()->has_results(); }));
+    CHECK(w->taskbar_progress() == app::TaskbarProgress{});
 }

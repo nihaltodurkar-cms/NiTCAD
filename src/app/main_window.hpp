@@ -8,6 +8,7 @@
 #pragma once
 
 #include <windows.h>
+#include <shellapi.h>  // HDROP (ZD4)
 
 #include <array>
 #include <chrono>
@@ -30,10 +31,13 @@
 #include "NiTCAD/app/workspace.hpp"
 #include "NiTCAD/render/image.hpp"
 #include "NiTCAD/app/examples.hpp"
+#include "NiTCAD/app/integration.hpp"
 #include "NiTCAD/app/live_check.hpp"
 #include "deck_pane.hpp"
 #include "pages.hpp"
 #include "viewport.hpp"
+
+struct ITaskbarList3;  // shobjidl.h's, included where used (it brings objbase.h's `interface` macro)
 
 namespace NiTCAD::app {
 
@@ -144,6 +148,13 @@ public:
     [[nodiscard]] bool has_previous_run() const noexcept { return previous_.has_value(); }
     // Transient playback (Unit 26c, YD5): whether the snapshots are playing.
     [[nodiscard]] bool playing() const noexcept { return playing_; }
+    // Unit 26d. A path opened as the recent-files list opens it (ZD4: open_target), after confirm_discard; the
+    // taskbar button's progress (ZD5), kept whether or not the taskbar is there; whether the title bar is dark
+    // and how many times the theme was given to it (ZD6: at creation and per theme change).
+    bool open_path(const std::filesystem::path& path);
+    [[nodiscard]] const TaskbarProgress& taskbar_progress() const noexcept { return taskbar_; }
+    [[nodiscard]] bool dark_title() const noexcept { return dark_title_; }
+    [[nodiscard]] int title_theme_updates() const noexcept { return title_theme_updates_; }
 
     // The ids of the inspector's controls and the panes (for the tests).
     enum Control : int {
@@ -182,6 +193,12 @@ private:
     void show_structure(Workspace w);
     enum class Pending : unsigned char { none, open, check, run };
     void on_run_finished(Pending pending, RunState state);
+    // Unit 26d: a drop (ZD4); the taskbar's progress for the controller's state (ZD5); the title bar's theme
+    // from the user's app theme (ZD6).
+    void on_drop(HDROP drop);
+    void update_taskbar(bool run);
+    void show_taskbar();  // the kept progress on the taskbar button, when there is one
+    void apply_title_theme();
     void on_inspector(int id, int code);
     // Unit 26d (ZD1): the inspector's text boxes. Whether a control is one; one box taking effect (Enter, or
     // focus leaving it changed), its text shown again from the setting with the reason in the status bar when
@@ -289,6 +306,13 @@ private:
     std::size_t play_from_ = 0;
     std::chrono::steady_clock::time_point play_start_{};
     std::string film_key_;
+    // Unit 26d (ZD5, ZD6): the taskbar button (none until the shell says it is made), its progress shown, the
+    // message that says so; the title bar's theme.
+    ITaskbarList3* taskbar_list_ = nullptr;
+    UINT taskbar_created_ = 0;
+    TaskbarProgress taskbar_;
+    bool dark_title_ = false;
+    int title_theme_updates_ = 0;
 
     // The menus' deck sections and keys (VQ13): what each dynamic item id stands for.
     struct SectionItem {

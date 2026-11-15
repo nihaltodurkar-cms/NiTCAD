@@ -2,6 +2,8 @@
 #include "main_window.hpp"
 
 #include <commctrl.h>
+#include <dwmapi.h>     // ZD6: the title bar's theme
+#include <shobjidl.h>   // ZD5: ITaskbarList3
 #include <windowsx.h>
 
 #include <algorithm>
@@ -14,6 +16,7 @@
 #include <variant>
 
 #include "NiTCAD/app/compare.hpp"
+#include "NiTCAD/app/run_monitor.hpp"
 #include "NiTCAD/render/compare.hpp"
 #include "NiTCAD/render/quality.hpp"
 #include "NiTCAD/render/scene.hpp"
@@ -142,6 +145,7 @@ MainWindow::~MainWindow() {
     viewport_.reset();
     deck_.reset();
     renderer_.reset();
+    if (taskbar_list_) taskbar_list_->Release();
     if (accelerators_) DestroyAcceleratorTable(accelerators_);
     if (font_) DeleteObject(font_);
     if (bold_) DeleteObject(bold_);
@@ -1603,6 +1607,7 @@ bool MainWindow::open_deck(const fs::path& path) {
     fill_tree();
     pending_ = Pending::open;
     runner_.start_check(document_.text(), document_.path());
+    update_taskbar(false);  // ZD5: a check clears a failed run's state
     set_status(status_state, "Building the deck...");
     refresh();
     update_command_states();
@@ -1686,6 +1691,7 @@ void MainWindow::on_run_timer() {
         set_status(status_state, text);
         run_page_->update(runner_, renderer());
         update_command_states();
+        update_taskbar(pending_ == Pending::run);
     }
 }
 
@@ -1728,6 +1734,77 @@ void MainWindow::on_run_finished(Pending pending, RunState s) {
                                          : std::format("Done in {:.1f} s", seconds));
     }
     update_command_states();
+    update_taskbar(pending == Pending::run);
+    // ZD5: a run that ends while the window is in the background flashes its taskbar button until activated.
+    if (pending == Pending::run && (s == RunState::done || s == RunState::failed) && IsWindowVisible(hwnd_) &&
+        GetForegroundWindow() != hwnd_) {
+        FLASHWINFO f{sizeof(f), hwnd_, FLASHW_ALL | FLASHW_TIMERNOFG, 0, 0};
+        FlashWindowEx(&f);
+    }
+}
+
+// --- the shell (Unit 26d, ZD4-ZD6) -------------------------------------------------------------------
+
+bool MainWindow::open_path(const fs::path& path) {
+    const OpenTarget t = open_target(path);
+    return t.deck ? open_deck(t.path) : open_result(t.path, t.device, t.mesh);
+}
+
+void MainWindow::on_drop(HDROP drop) {
+    std::vector<fs::path> files;
+    const UINT n = DragQueryFileW(drop, 0xFFFFFFFF, nullptr, 0);
+    for (UINT k = 0; k < n; ++k) {
+        const UINT length = DragQueryFileW(drop, k, nullptr, 0);
+        std::wstring name(static_cast<std::size_t>(length) + 1, L'\0');
+        DragQueryFileW(drop, k, name.data(), length + 1);
+        name.resize(length);
+        files.emplace_back(std::move(name));
+    }
+    DragFinish(drop);
+    const auto file = dropped_file(files);
+    if (!file) {
+        set_status(status_state, file.error());
+        return;
+    }
+    if (runner_.busy()) {
+        set_status(status_state, "A run or check is in progress: drop the file when it ends.");
+        return;
+    }
+    if (confirm_discard()) open_path(*file);
+}
+
+void MainWindow::update_taskbar(bool run) {
+    const RunState s = runner_.state();
+    const double fraction = s == RunState::running || s == RunState::stopping
+                                ? progress_fraction(runner_.points(), runner_.planned_points())
+                                : -1.0;
+    const TaskbarProgress next = app::taskbar_progress(s, run, fraction, taskbar_);
+    if (next == taskbar_) return;
+    taskbar_ = next;
+    show_taskbar();
+}
+
+void MainWindow::show_taskbar() {
+    if (!taskbar_list_) return;  // no taskbar button (a hidden window), or not made yet
+    const TBPFLAG flag = taskbar_.flag == TaskbarFlag::normal          ? TBPF_NORMAL
+                         : taskbar_.flag == TaskbarFlag::indeterminate ? TBPF_INDETERMINATE
+                         : taskbar_.flag == TaskbarFlag::error         ? TBPF_ERROR
+                                                                       : TBPF_NOPROGRESS;
+    taskbar_list_->SetProgressState(hwnd_, flag);
+    if (taskbar_.flag == TaskbarFlag::normal || taskbar_.flag == TaskbarFlag::error) {
+        taskbar_list_->SetProgressValue(hwnd_, static_cast<ULONGLONG>(std::lround(taskbar_.fraction * 1000.0)), 1000);
+    }
+}
+
+void MainWindow::apply_title_theme() {
+    DWORD value = 1, size = sizeof(value);
+    const bool read = RegGetValueW(HKEY_CURRENT_USER, L"Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize",
+                                   L"AppsUseLightTheme", RRF_RT_REG_DWORD, nullptr, &value, &size) == ERROR_SUCCESS;
+    dark_title_ = dark_title_bar(read ? std::optional<unsigned long>(value) : std::nullopt);
+    const BOOL dark = dark_title_ ? TRUE : FALSE;
+    // Fails where the attribute is not known (before Windows 10 20H1): the title bar stays light.
+    (void)DwmSetWindowAttribute(hwnd_, DWMWA_USE_IMMERSIVE_DARK_MODE, &dark, sizeof(dark));
+    ++title_theme_updates_;
 }
 
 void MainWindow::deck_changed() {
@@ -1830,16 +1907,7 @@ void MainWindow::execute(Command c) {
     const auto id = static_cast<int>(c);
     if (id >= static_cast<int>(Command::recent_first) && id < static_cast<int>(Command::recent_first) + 16) {
         const auto k = static_cast<std::size_t>(id - static_cast<int>(Command::recent_first));
-        if (k < state_.recent.size() && confirm_discard()) {
-            const fs::path p = state_.recent[k];
-            if (p.extension() == ".deck") {
-                open_deck(p);
-            } else {
-                fs::path m = fs::path(p).replace_extension(".nitmesh");
-                if (!fs::exists(m)) m.clear();
-                open_result(p, fs::path(p).replace_extension(".nitdev"), m);
-            }
-        }
+        if (k < state_.recent.size() && confirm_discard()) open_path(fs::path(state_.recent[k]));
         return;
     }
     if (id >= static_cast<int>(Command::key_first)) {
@@ -1920,6 +1988,7 @@ void MainWindow::execute(Command c) {
         document_.set_text(deck_->text());
         pending_ = Pending::check;
         runner_.start_check(document_.text(), document_.path());
+        update_taskbar(false);
         set_status(status_state, "Checking...");
         update_command_states();
         return;
@@ -1930,6 +1999,7 @@ void MainWindow::execute(Command c) {
         select_tab(tab_run);  // the run monitor follows it (shown before the run starts)
         pending_ = Pending::run;
         runner_.start_run(document_.text(), document_.path());
+        update_taskbar(true);
         set_status(status_state, "Running...");
         SetTimer(hwnd_, run_timer, 100, nullptr);  // the progress while the events pause
         run_page_->update(runner_, renderer(), true);  // the last run's rows cleared
@@ -2229,11 +2299,30 @@ LRESULT CALLBACK MainWindow::panel_proc(HWND hwnd, UINT message, WPARAM w, LPARA
 }
 
 LRESULT MainWindow::handle(UINT message, WPARAM w, LPARAM l) {
+    // ZD5: the shell made the taskbar button (again after Explorer restarts): its progress shown from now on.
+    if (taskbar_created_ != 0 && message == taskbar_created_) {
+        if (!taskbar_list_) {
+            ITaskbarList3* list = nullptr;
+            if (SUCCEEDED(CoCreateInstance(CLSID_TaskbarList, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&list)))) {
+                if (SUCCEEDED(list->HrInit())) {
+                    taskbar_list_ = list;
+                } else {
+                    list->Release();
+                }
+            }
+        }
+        show_taskbar();  // the state kept, on the new button
+        return 0;
+    }
     switch (message) {
     case WM_CREATE: {
         if (!create_children()) return -1;
         build_menu();
         build_accelerators();
+        // Unit 26d: files dropped on the window (ZD4); the taskbar button's message (ZD5); the title bar's theme (ZD6).
+        DragAcceptFiles(hwnd_, TRUE);
+        taskbar_created_ = RegisterWindowMessageW(L"TaskbarButtonCreated");
+        apply_title_theme();
         auto r = render::Renderer::create({.adapter = options_.adapter, .debug_layer = options_.debug_layer});
         if (r) {
             renderer_ = std::move(*r);
@@ -2318,6 +2407,12 @@ LRESULT MainWindow::handle(UINT message, WPARAM w, LPARAM l) {
         update_command_states();
         return 0;
     }
+    case WM_DROPFILES:  // ZD4
+        on_drop(reinterpret_cast<HDROP>(w));
+        return 0;
+    case WM_SETTINGCHANGE:  // ZD6: the app theme changed
+        if (l != 0 && std::wstring_view(reinterpret_cast<const wchar_t*>(l)) == L"ImmersiveColorSet") apply_title_theme();
+        break;
     case run_message:
         on_run_events();
         return 0;
