@@ -6526,7 +6526,7 @@ each ruling is the recommended option under the standing instruction (no criteri
 
 **DC9 (hand mutants, 2026-11-15; `/c/Users/disha/mut17/mutants17c.txt`, Release, each mutant built and run against
 `[adapt_derived],[adapt_learn],[adapt_policy]`, `deck adapt*` and `[.adapt_derived_slow]`, restored after each).** 53
-mutants covering DG1–DG10, DG12 and DR2–DR9. **51 caught, 1 equivalent, 1 survivor (DG6, owner ruling).**
+mutants covering DG1–DG10, DG12 and DR2–DR9. **51 caught, 1 equivalent, 1 survivor (DG6, accepted by the owner).**
 - Round 1 (the parallel runner): 31 caught, 16 survived, 3 not compiling. Several survivors were false: the runner's
   Catch2 shards ran in random order and missed tests (fixed with `--order decl`). Round 2 ran **serially** (owner,
   2026-11-15: "dont run parallel"): the 16 survivors and compilable variants of the stillborn mutants; 9 caught.
@@ -6554,7 +6554,7 @@ mutants covering DG1–DG10, DG12 and DR2–DR9. **51 caught, 1 equivalent, 1 su
   window moves but M″'s returns to M's and every error is within its allowance. Not observed in six probed
   configurations (DR6's case, DC8, a V_T run at 1 mV and 0.1 mV, a g_m run without weighting, and DC6's). In those, a
   move on M′ either changes the segment (the single-level error then exceeds the allowance) or is caught again on M″.
-  **Owner ruling: OPEN.**
+  **Accepted as a survivor (owner, 2026-11-15: "Accept as survivor (Recommended)").**
 
 ---
 
