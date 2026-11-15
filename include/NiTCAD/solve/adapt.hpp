@@ -336,6 +336,16 @@ struct RichardsonError {
     double order = 1.0;
 };
 [[nodiscard]] RichardsonError richardson_error(double coarse, double fine, double change) noexcept;
+// DR6: G on M, M' and M'' (g0, g1, g2). The order is observed from the two differences, clamped to [0.5, 3]
+// (3 when g2 = g1; 0.5 when only g1 = g0); the error is g0's distance from M'''s Richardson extrapolation.
+[[nodiscard]] RichardsonError two_level_error(double g0, double g1, double g2) noexcept;
+// DR6, DR9: a derived goal's verified error on two levels: the larger of AD11's single-level error and
+// two_level_error(g0, g1, g2); infinite (unmeasured), the single level's order kept, when g1 or g2 is not finite.
+[[nodiscard]] RichardsonError derived_verified_error(const RichardsonError& single, double g0, double g1,
+                                                     double g2) noexcept;
+// DR6, DR9: whether a verification solves M'': only with a derived goal, and then when M' accepts the stop or on
+// the last pass (whose verification is the certificate's); not when M' already rejects a stop before the last.
+[[nodiscard]] bool two_level_verification(bool any_derived, bool single_accepts, bool last_pass) noexcept;
 // AD13: certified when verified and both the estimate and the verified error are within the
 // allowance; not_certified when verified otherwise; unverified when not verified.
 [[nodiscard]] CertificateStatus certificate_status(bool verified, double estimate, double verified_error,

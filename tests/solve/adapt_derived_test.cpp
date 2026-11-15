@@ -460,6 +460,11 @@ TEST_CASE("derived goals: deterministic, and the certificate independent of the 
         }
     };
     const solve::AdaptResult b = run(o);
+    // DC9 (DG4): the marks come from the adjoint weights summed over each goal's whole window; weights
+    // at the window's point alone mark 4 nodes on pass 0 and give a 364-node pass 1.
+    REQUIRE(b.passes.size() >= 2);
+    CHECK(b.passes[0].marking.count == 3);
+    CHECK(b.passes[1].nodes == 312);
     // Two runs: bit-identical.
     same_certificates(b, run(o));
     // AC21 extended: the intelligent layer with empty predictions (every proposal a miss, AD3's marks).
@@ -760,8 +765,8 @@ TEST_CASE("derived goals: probe DC4's current-goal baseline", "[.adapt_derived_b
 }
 
 TEST_CASE("derived goals: DR6's false swing stop is rejected on M'' (DR6, DC9)", "[adapt_derived]") {
-    // DR6: on the 338-node first pass the single-level error (0.13) is within the allowance (0.69) while the
-    // swing is about 1.1 mV/dec off; only the two-level error (about 0.95) rejects the stop.
+    // DR6: on the 480-node last pass M' accepts the stop (single-level error 0.0019 against 0.69) while the swing is
+    // about 1.1 mV/dec off; M'' rejects it (its window moved; two-level error 1.33).
     solve::AdaptOptions o;
     o.goals = {{.contact = 1, .kind = solve::GoalKind::swing}};
     o.tolerance = 1e-2;
@@ -772,6 +777,9 @@ TEST_CASE("derived goals: DR6's false swing stop is rejected on M'' (DR6, DC9)",
     CHECK(r->rejected_stops >= 1);
     REQUIRE(r->certificates.size() == 1);
     CHECK(r->certificates[0].status != solve::CertificateStatus::certified);
+    // DC9 (DR5, DG7): the M' figure from the points solved on M' alone; one taken from a curve mixing M and M'
+    // (no range) jumps segment and reports 43.7.
+    CHECK(std::abs(r->certificates[0].verified_error - 1.3347449054118101) <= 1e-9);
 }
 
 TEST_CASE("derived goals: a window that moves on M' is never certified (DC6, DG6)", "[.adapt_derived_slow]") {
@@ -790,6 +798,9 @@ TEST_CASE("derived goals: a window that moves on M' is never certified (DC6, DG6
     CHECK(r->rejected_stops >= 1);  // the moved window rejected a proposed stop (AR2)
     // The windows moved between passes too: no stop was proposed until two passes agreed.
     CHECK(r->passes.front().window_first[0] != r->passes.back().window_first[0]);
+    // DC9 (DG2): pass 1's indicators united over the window's points (the window's point alone marks 134).
+    REQUIRE(r->passes.size() >= 2);
+    CHECK(r->passes[1].marking.count == 136);
 }
 
 // Per-axis differences on coarse meshes (a probe for DR6): kx x ky uniform factors.
@@ -902,3 +913,65 @@ TEST_CASE("derived goals: g_m certified within 1% of the reference (DC3, DC5)",
 TEST_CASE("derived goals: the swing certified within 1% of the reference (DC3, DC5)", "[.derived_goals]") {
     dc3_gate(solve::GoalKind::swing, swing_ref);
 }
+
+TEST_CASE("derived goals: the two-level verified error is the larger of the two levels' (DR6, DR9, DC9)",
+          "[adapt_derived]") {
+    // two_level_error: the order from the two differences, the error against M'''s extrapolation.
+    const auto t1 = solve::two_level_error(1.0, 1.1, 1.15);
+    CHECK(std::abs(t1.order - 1.0) <= 1e-12);
+    CHECK(std::abs(t1.error - 0.2) <= 1e-12);
+    const auto t2 = solve::two_level_error(1.0, 1.1, 1.1);  // no second change: order 3
+    CHECK(t2.order == 3.0);
+    CHECK(std::abs(t2.error - 0.1) <= 1e-12);
+    const auto t3 = solve::two_level_error(1.0, 1.0, 1.1);  // no first change: order 0.5
+    CHECK(t3.order == 0.5);
+    CHECK(std::abs(t3.error - (0.1 + 0.1 / (std::sqrt(2.0) - 1.0))) <= 1e-12);
+    // The larger of the single-level and the two-level error, with its order.
+    const auto two = solve::derived_verified_error({.error = 0.05, .order = 2.0}, 1.0, 1.1, 1.15);
+    CHECK(std::abs(two.error - 0.2) <= 1e-12);
+    CHECK(std::abs(two.order - 1.0) <= 1e-12);
+    const auto one = solve::derived_verified_error({.error = 0.5, .order = 2.0}, 1.0, 1.1, 1.15);
+    CHECK(one.error == 0.5);
+    CHECK(one.order == 2.0);
+    // DR9: a figure missing on M' or M'' is unmeasured: infinite, the single level's order kept.
+    const auto no2 = solve::derived_verified_error({.error = 0.05, .order = 2.0}, 1.0, 1.1, std::nan(""));
+    CHECK(std::isinf(no2.error));
+    CHECK(no2.order == 2.0);
+    CHECK(std::isinf(solve::derived_verified_error({.error = 0.05, .order = 2.0}, 1.0, std::nan(""), 1.15).error));
+    // DR9: M'' only with a derived goal, when M' accepts or on the last pass.
+    for (const bool last : {false, true}) {
+        CHECK_FALSE(solve::two_level_verification(false, true, last));
+        CHECK_FALSE(solve::two_level_verification(false, false, last));
+        CHECK(solve::two_level_verification(true, true, last));
+    }
+    CHECK_FALSE(solve::two_level_verification(true, false, false));
+    CHECK(solve::two_level_verification(true, false, true));
+}
+
+TEST_CASE("derived goals: no coarse estimate to miss against on pass 0 (DR9, DC9)", "[adapt_derived]") {
+    // DR9: with a derived goal the passes' estimate is DR4's solved difference, which ID3's coarse sweep
+    // does not have, so pass 0's prediction is never judged a miss against a coarse adjoint estimate.
+    solve::AdaptOptions o;
+    o.goals = {{.contact = 1, .kind = solve::GoalKind::current}, {.contact = 1, .kind = solve::GoalKind::gm}};
+    o.tolerance = 1e-2;
+    o.weighting = solve::Weighting::adjoint;
+    o.policy = solve::Policy::intelligent;
+    o.intelligent.max_points = 2;
+    o.max_passes = 1;
+    // A prediction that refines one far corner (the body's), of no use to the goals.
+    o.intelligent.first_prediction = [](const device::Device& d) {
+        const std::size_t n = d.mesh().node_count();
+        solve::SizeTargets t{std::vector<double>(n, INFINITY), std::vector<std::array<double, 3>>(n, {1.0, 0.0, 0.0})};
+        t.size[n - 1] = 1.5e-6;
+        return t;
+    };
+    auto r = solve::adapt(tensor_mosfet_mesh, gate_sweep(0.0, 1.2, 7), sweep_options(), o);
+    if (!r) FAIL(r.error().message);
+    CHECK(r->coarse_nodes > 0);
+    REQUIRE(r->prediction_rounds > 0);
+    REQUIRE(!r->passes.empty());
+    CHECK(r->passes[0].source == solve::MeshSource::prediction);
+    CHECK_FALSE(r->passes[0].miss);
+    CHECK(r->misses == 0);
+}
+

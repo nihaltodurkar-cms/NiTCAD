@@ -37,6 +37,18 @@ RichardsonError two_level_error(double g0, double g1, double g2) noexcept {
     return {.error = std::abs(g2 + d2 / (std::exp2(p) - 1.0) - g0), .order = p};
 }
 
+bool two_level_verification(bool any_derived, bool single_accepts, bool last_pass) noexcept {
+    return any_derived && (single_accepts || last_pass);
+}
+
+RichardsonError derived_verified_error(const RichardsonError& single, double g0, double g1, double g2) noexcept {
+    if (!std::isfinite(g1) || !std::isfinite(g2)) {
+        return {.error = std::numeric_limits<double>::infinity(), .order = single.order};
+    }
+    const RichardsonError two = two_level_error(g0, g1, g2);
+    return two.error > single.error ? two : single;  // DR6: the larger of the two
+}
+
 CertificateStatus certificate_status(bool verified, double estimate, double verified_error, double allowed) noexcept {
     if (!verified) return CertificateStatus::unverified;
     return estimate <= allowed && verified_error <= allowed ? CertificateStatus::certified
@@ -1475,7 +1487,7 @@ std::expected<AdaptResult, base::Error> adapt(const DeviceBuilder& build, std::s
         // appears only below M''s resolution (the swing's y step) is still seen one level on.
         // DR9: not when M' already rejects the stop (the pass refines anyway), except on the last
         // pass, whose verification is the certificate's.
-        const bool two_level = !derived.empty() && (single_accepts || last_pass);
+        const bool two_level = two_level_verification(!derived.empty(), single_accepts, last_pass);
         std::vector<double> second(derived.size(), std::numeric_limits<double>::quiet_NaN());
         if (two_level) {
             std::size_t lo = points.size(), hi = 0;
@@ -1522,13 +1534,7 @@ std::expected<AdaptResult, base::Error> adapt(const DeviceBuilder& build, std::s
         for (std::size_t j = 0; j < v.goal.size(); ++j) {
             RichardsonError re = single[j];
             if (two_level && j >= first_derived) {
-                const double g2 = second[j - first_derived];
-                if (std::isfinite(g2) && std::isfinite(v.goal[j])) {
-                    const RichardsonError two = two_level_error(rep.goal[j], v.goal[j], g2);
-                    if (two.error > re.error) re = two;  // DR6: the larger of the two
-                } else {
-                    re.error = std::numeric_limits<double>::infinity();
-                }
+                re = derived_verified_error(re, rep.goal[j], v.goal[j], second[j - first_derived]);
             }
             v.order.push_back(re.order);
             v.error.push_back(re.error);

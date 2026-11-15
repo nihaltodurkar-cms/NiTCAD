@@ -337,6 +337,9 @@ adapt_meshes = passes
     REQUIRE(a.certificates.size() == 1);
     CHECK(a.certificates[0].point == 2);
     CHECK(a.goal_contacts == std::vector<std::string>{"anode"});
+    // DG9 (DC1): a run with current goals alone carries no kinds and no vt_tolerance.
+    CHECK(a.goal_kinds.empty());
+    CHECK(a.vt_tolerance == 0.0);
 
     // The final mesh is the result's, everywhere.
     const std::uint64_t fin = mesh::graph_digest(report->adapted->device.mesh());
@@ -782,4 +785,90 @@ adapt = out.nitadapt
     INFO(required.output);
     CHECK(required.status == 3);
     CHECK(required.output.find("window moved on M'") != std::string::npos);
+}
+
+// Unit 17c (DG10, DR2; DC9): the deck's learned predictor is asked for the run's goal kind. Its one
+// tree splits on feature 12 (the goal kind): one level for a current goal, none for a derived one, so a
+// gm goal's run gets no learned refinement of its start mesh.
+TEST_CASE("deck adapt: a learned predictor sees the run's goal kind (Unit 17c DG10, DR2)", "[deck]") {
+    const fs::path dir = scratch("adapt_predictor_kind");
+    const std::string mosfet = R"(
+[mesh]
+type = tensor
+x = linspace(0, 1200nm, 25)
+y = linspace(0, 200nm, 11)
+
+[region silicon]
+material = silicon
+
+[doping]
+profile = acceptor constant 1e17
+profile = donor gaussian 1e19 axis=y center=0 width=50nm x=0:300nm lateral=14.142135624nm
+profile = donor gaussian 1e19 axis=y center=0 width=50nm x=900nm:1200nm lateral=14.142135624nm
+
+[contact source]
+kind = ohmic
+patch = y_min
+box = 0 300.5nm  0 0
+
+[contact drain]
+kind = ohmic
+patch = y_min
+box = 899.5nm 1200nm  0 0
+
+[contact body]
+kind = ohmic
+patch = y_max
+
+[contact gate]
+kind = gate
+patch = y_min
+box = 301nm 899nm  0 0
+oxide_thickness = 5nm
+
+[solver]
+max_cuts = 20
+
+[sweep]
+contact drain = 0.05
+contact gate = 0 : 1.2 : 0.2
+
+[adapt]
+goal = gm drain
+tolerance = 1e-2
+policy = intelligent
+max_passes = 1
+)";
+    const deck::Plan plan = must(mosfet, dir);
+    const double gm_kind = static_cast<double>(static_cast<unsigned>(solve::GoalKind::gm));
+    results::LearnedModel model;
+    model.materials = solve::material_keys(plan.device);
+    auto f = solve::edge_features(plan.device, plan.points, plan.options, model.materials, gm_kind);
+    REQUIRE(f.has_value());
+    // In range everywhere: every category seen, every continuous feature inside wide bounds.
+    constexpr std::size_t F = results::learn_feature_count;
+    model.feature_min.assign(F, -1e300);
+    model.feature_max.assign(F, 1e300);
+    model.importance.assign(F, 0.0);
+    model.categories.assign(F, {});
+    for (std::size_t e = 0; e < f->rows; ++e) {
+        for (std::size_t k = 0; k < F; ++k) {
+            if (results::learn_feature_is_category(k)) model.categories[k].push_back(f->features[e * F + k]);
+        }
+    }
+    for (auto& c : model.categories) {
+        std::ranges::sort(c);
+        c.erase(std::unique(c.begin(), c.end()), c.end());
+    }
+    model.trees = {{results::TreeNode{.feature = 12, .threshold = 0.5, .left = 1, .right = 2},
+                    results::TreeNode{.value = 1.0}, results::TreeNode{.value = 0.0}}};
+    model.tree_count = 1;
+    REQUIRE(io::save_learned_model(dir / "kind.nitlearn", model).has_value());
+    const auto used = deck::run(must(mosfet + "predictor = kind.nitlearn\n", dir));
+    if (!used) FAIL(used.error().message);
+    const results::AdaptReport& a = *used->adapt;
+    CHECK(a.predictor_status == "used");
+    REQUIRE(!a.passes.empty());
+    CHECK(a.passes[0].source != "prediction");  // the gm kind's leaf: nothing refined
+    CHECK(a.passes[0].mesh_digest == mesh::graph_digest(plan.device.mesh()));  // the deck's own start mesh
 }

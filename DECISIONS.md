@@ -6524,6 +6524,38 @@ each ruling is the recommended option under the standing instruction (no criteri
 - Against the uniform ladder (DR3; nodes for the same error): V_T 12 719 nodes at 0.73 mV, where 16× (61 985 nodes) is still about 1.8 mV off (about 151 k nodes by log-log): about 0.08×, passes. g_m (not required) 3036 nodes; no level up to 16× reaches 1.1e-3. Swing 10 098 nodes at 0.313, where 8× (15 633 nodes) is at 0.315: 0.65× by interpolation (misses 1/3); read level by level, 16× (61 985) is the first at or below it (0.16×).
 - **DC4 misses for the swing on both halves.** The current goal on points 3, 4 already weights the subthreshold currents the swing is built from, and the swing's error is in y (DR6), which uniform y refinement reaches cheaply. **Accepted as a limitation (owner, 2026-11-15: "Accept as limitation (Recommended)")**; stated in ARCHITECTURE 11.3. The swing still certifies within its allowance (DC3, DC5).
 
+**DC9 (hand mutants, 2026-11-15; `/c/Users/disha/mut17/mutants17c.txt`, Release, each mutant built and run against
+`[adapt_derived],[adapt_learn],[adapt_policy]`, `deck adapt*` and `[.adapt_derived_slow]`, restored after each).** 53
+mutants covering DG1–DG10, DG12 and DR2–DR9. **51 caught, 1 equivalent, 1 survivor (DG6, owner ruling).**
+- Round 1 (the parallel runner): 31 caught, 16 survived, 3 not compiling. Several survivors were false: the runner's
+  Catch2 shards ran in random order and missed tests (fixed with `--order decl`). Round 2 ran **serially** (owner,
+  2026-11-15: "dont run parallel"): the 16 survivors and compilable variants of the stillborn mutants; 9 caught.
+- Tests added for the round-2 survivors (60d4444 and this commit), all caught in round 3:
+  - DG2 (indicators united over the window's points, not its point alone): DC6's pass-1 mark count (136; the point
+    alone 134).
+  - DG4 (adjoint weights summed over the window): DC8's pass-0 marks (3) and pass-1 nodes (312; the point alone 4 and
+    364).
+  - DG7 / DR5 (M′'s figure from the points solved on M′ alone): DR6's case, verified error 1.33474 (a curve mixing M and
+    M′ jumps segment: 43.7).
+  - DG9 (no kinds or vt_tolerance in the report of a current-only run): AC9's deck test.
+  - DR2 (the deck's learned predictor asked for the run's goal kind): a one-tree model splitting on feature 12 leaves a
+    gm run's start mesh unrefined.
+  - DR6 (the larger of the single- and two-level errors) and DR9 (M″ only with a derived goal, when M′ accepts or on the
+    last pass): `derived_verified_error` and `two_level_verification` are now tested functions in `adapt.hpp`, as
+    Unit 17's slice 7b did for the loop's rules; `two_level_error` is declared there too. The DR6 test's case had
+    changed since DR6 (now 275 → 480 nodes; M″'s moved window rejects the stop), and its comment is corrected.
+  - DR9 (no coarse estimate with a derived goal): an intelligent run with a current and a gm goal, a prediction
+    refining one far corner: pass 0 is not a miss.
+- **Equivalent: DR9-swing-adjoint** (the swing's window points kept in the adjoint pass). The swing's estimate is
+  pushed as infinite (DR4 replaces it) and its weights skip ω (`continue` before ω), and every other goal sums only
+  over its own window, so the extra transposed solves change only time (and `estimate_fell_back` when one of those
+  discarded solves falls back).
+- **Survivor: DG6-moved-on-M1** (M′'s window-move check removed). Not equivalent: a stop could be accepted when M′'s
+  window moves but M″'s returns to M's and every error is within its allowance. Not observed in six probed
+  configurations (DR6's case, DC8, a V_T run at 1 mV and 0.1 mV, a g_m run without weighting, and DC6's). In those, a
+  move on M′ either changes the segment (the single-level error then exceeds the allowance) or is caught again on M″.
+  **Owner ruling: OPEN.**
+
 ---
 
 ### Unit 55 — theoretical calculation validation framework: research and design proposal (proposed 2026-10-31; on `verify/theoretical-validation`)
