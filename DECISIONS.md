@@ -1038,6 +1038,7 @@ it would change PNG output.
 | ZD5 | **Taskbar progress.** During a run, the taskbar button shows the run controller's progress fraction (`ITaskbarList3`: normal while running, error state on failure until the next run or check, cleared on success or stop). When a run ends with the window not in the foreground, the taskbar button flashes until activated (`FlashWindowEx`). | Created on the `TaskbarButtonCreated` message; updated from `on_run_timer` and `on_run_finished` | COM is already initialized STA in `app/main.cpp`. Without a taskbar interface (e.g. the hidden test window), nothing is shown and nothing fails. |
 | ZD6 | **Dark title bar.** The title bar follows Windows' app theme (`AppsUseLightTheme`) through `DWMWA_USE_IMMERSIVE_DARK_MODE`, updated on `WM_SETTINGCHANGE` "ImmersiveColorSet". | `create`, `handle` | Title bar only; the client area is unchanged. Where the attribute is unsupported, the call fails silently. |
 | ZD7 | **Unit in the metrics strip.** "Max potential 1.714" becomes "Max potential 1.714 V", and the label is the field's symbol rather than its key ("Max ψ 1.714 V"). Both come from `render::field_info`'s title (the symbol, and the unit in its brackets), the text the tree and colour bar show. "Max \|B − A\|" likewise. | `update_metrics` | Text only. |
+| ZD8 | **Viridis as the app's default colormap** (added by the owner 2026-11-15: "I don't like the 3D device color", answered "the real app's look", "Viridis"). New views and the Colormap drop-down start at viridis; turbo, cividis, coolwarm and soft stay selectable. This supersedes VQ5's turbo default **for the app only**: `nitcad plot` keeps turbo, so its PNGs are unchanged (ZG8). | `ViewSettings::colormap` default; `colormap_names` order (viridis first); `view_settings.cpp` difference view and equivalent command | The difference view still uses cool-warm unless the user picks a colormap: the sentinel compares to the app default rather than the literal "turbo". The view's equivalent `nitcad plot` command now includes `--colormap viridis`, so pasting it reproduces the app's image. |
 
 **Questions (each with a recommendation):**
 
@@ -1059,10 +1060,11 @@ it would change PNG output.
 | ZG5 | Taskbar: the state machine (idle → running with fraction → error / none) is a pure function, tested for each run outcome. A missing taskbar interface does not fail. |
 | ZG6 | The dark-mode flag is read from the theme value (a pure function, tested); the DWM call is made once at creation and once per theme change. |
 | ZG7 | Metrics text includes the field's unit for every field the tree lists, and for the difference view. |
-| ZG8 | No change elsewhere: every existing app, render and plot test passes unchanged, and `nitcad plot` PNG digests are bit-identical. WG1 self-tests pass at their ruled bounds. |
-| ZG9 | Hand mutants (at least one per ZD item: dropped Enter handling, a swapped label order, a range not reset on field change, a drop accepting two files, error state cleared early, an inverted theme flag, a missing unit) are each killed by a test. |
+| ZG8 | No change elsewhere: every existing render and plot test passes unchanged, and app tests change only where ZD1–ZD8 change what they check. `nitcad plot` PNG digests are bit-identical. WG1 self-tests pass at their ruled bounds. |
+| ZG9 | Hand mutants (at least one per ZD item, ZD8 a difference view taking viridis; dropped Enter handling, a swapped label order, a range not reset on field change, a drop accepting two files, error state cleared early, an inverted theme flag, a missing unit) are each killed by a test. |
+| ZG10 | A new device view and the curves view start with viridis; the difference view starts with cool-warm and takes a chosen colormap; the equivalent command of a default field view contains `--colormap viridis` and, run through `nitcad plot`, gives the app's colour bar scale and map. |
 
-**Slices (each one local commit):** 26d·1 ZD1 + ZD3 (the inspector); 26d·2 ZD2 + ZD7 (labels and text); 26d·3 ZD4 +
+**Slices (each one local commit):** 26d·1 ZD1 + ZD3 (the inspector); 26d·2 ZD2 + ZD7 + ZD8 (labels, text and the default colormap); 26d·3 ZD4 +
 ZD5 + ZD6 (window integration); 26d·4 suites, mutants, the screenshot `docs/images/app.png` refreshed, and the
 ARCHITECTURE "as built" entry.
 
