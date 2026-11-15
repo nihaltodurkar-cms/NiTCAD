@@ -735,6 +735,9 @@ if(CMAKE_BUILD_TYPE STREQUAL "Release")
   add_test(NAME adapt_intelligent COMMAND nitcad_adapt_test "[adapt_intelligent]")
   # Unit 17c: DC6's moved window (15 s Release) and the DC3-DC5 gates (hidden tag [.derived_goals]).
   add_test(NAME adapt_derived_slow COMMAND nitcad_adapt_test "[.adapt_derived_slow]")
+  # DR8: g_m's DC3/DC5 gate (2 min); V_T's and the swing's (24 and 11 min Release) are run by hand,
+  # nitcad_adapt_test "[.derived_goals]": CI's Release job has a 60-minute limit.
+  add_test(NAME adapt_derived_gm_gate COMMAND nitcad_adapt_test "[.derived_goals_ci]")
 endif()
 # The Lombardi device gates (tests/deck/surface_mobility_test.cpp, hidden tag [.lombardi]: MOSFET
 # sweeps) run in the Release configuration only.

@@ -6501,6 +6501,27 @@ each ruling is the recommended option under the standing instruction (no criteri
 - Swing: certified on pass 4 (10 098 nodes): 70.128 mV/dec, estimate 0.24, verified 0.32, allowance 0.70; the false stop of DR6 (pass 1) rejected.
 - V_T: certified on pass 13 (12 719 nodes): 153.549 mV, estimate = verified 0.87 mV, allowance 1 mV; window 14..16 from pass 11.
 - Per-axis ladder (DR3) at ky = 32, kx = 4, 8, 16, 32: V_T 150.100, 152.504, 153.327, 153.851 mV; g_m 0.378112, 0.384683, 0.386714, 0.387635; swing 70.4217, 70.4178, 70.4170, 70.4168. At kx = 4, ky = 32, 64, 128: V_T 150.100, 150.158, 150.141; g_m 0.378112, 0.376874, 0.376498; swing 70.4217, 70.4400, 70.4446. The free window flips 13..15 → 14..16 between kx = 8 and 16, so V_T's x ladder mixes a jump with the error: a fixed-window ladder (`[.adapt_derived_ref3]`, window 14..16) is being measured for DC3's V_T reference.
+- Fixed-window ladder (`[.adapt_derived_ref3]`, window 14..16 held): at ky = 32, kx = 4, 8, 16, 32: V_T 148.894, 152.158, 153.327, 153.851 mV (orders 1.48, 1.16); g_m 0.376850, 0.384335, 0.386714, 0.387635 (1.65, 1.37). At kx = 4, ky = 32, 64, 128: V_T 148.894, 148.936, 148.903 (within 0.04 mV, not monotone); g_m 0.376850, 0.375599, 0.375205. At kx = 8, ky = 64: V_T 152.142, g_m 0.382959 (the y step 32 → 64 is 1.10× that at kx = 4 for g_m).
+- **DC3's references (DR3 (a)):** each axis extrapolated at its last observed order, the y correction scaled to the finer x: V_T 154.28 mV (uncertain by about 0.3 mV: the x order still drifts), g_m 0.38612 (about 0.13%), swing 70.441 (about 0.005). The 32 × 32 solve takes 16 minutes, so the values are recorded in the test; the guard re-solves the 2× uniform mesh (0.112573879392, 0.366102000996, 69.2786037546, to 1e-6).
+
+| # | Finding | Options | Ruling |
+|---|---|---|---|
+| DR8 | **The gates do not fit CI's Release job.** DC10 puts the DC3–DC5 gates under `[.derived_goals]`; their Release times are g_m 113 s, swing 687 s, V_T 1429 s. CI's Release job takes 47–54 min of its 60-minute timeout (ctest `-j 4`). | (a) **Only the g_m gate in Release ctest** (`adapt_derived_gm_gate`, tag `[.derived_goals_ci]` beside `[.derived_goals]`); V_T and the swing run by hand with `[.derived_goals]`, their results recorded here. (b) All three in ctest, the timeout raised to 90 min. (c) None in ctest. | **(a)**. `CMakeLists.txt` registers `adapt_derived_gm_gate` and `adapt_derived_slow` (DC6) in the Release block. |
+
+**DC3 and DC5 gates (Release, 2026-11-15; `[.derived_goals]`, adjoint, tol 1e-2, V_T 1 mV, `max_passes` 20).** All pass.
+
+| Goal | Certified | Mesh (passes) | Time | Actual error (allowed) | Estimate / actual (DC5: within 3×) |
+|---|---|---|---|---|---|
+| g_m | 0.385008 | 3036 nodes, 9108 DOFs (9) | 113 s | 1.11e-3 (3.85e-3) | 1.4 |
+| Swing | 70.1284 mV/dec | 10 098 nodes, 30 294 DOFs (5) | 687 s | 0.313 (0.70) | 0.77 (verified 0.32) |
+| V_T | 153.549 mV | 12 719 nodes, 38 157 DOFs (14) | 1429 s | 0.73 mV (1 mV) | 1.2 (verified 0.87 mV) |
+
+**DC4 (Release, 2026-11-15; `[.adapt_derived_baseline]`, `goal = current drain`, adjoint, `max_passes` 20).**
+- Baseline on the V_T/g_m window (points 13, 14, 15): tol 1e-2 certified at 3675 DOFs (7 passes) with V_T 149.90 mV (4.4 mV off: misses DC3's 1 mV) and g_m 0.38128 (1.3%). At 3e-3 it reached the cap: 409 332 DOFs (136 444 nodes, 20 passes, not certified) with V_T 154.18 mV and g_m 0.38800, both within DC3's allowances (6210 s). The 1e-3 and 3e-4 rows repeated it exactly (capped), so the run was stopped before the swing rows.
+- Baseline on the swing window (points 3, 4), from the earlier run (`max_passes` 12): tol 1e-2 reached 19 968 DOFs (12 passes, not certified) with 70.1426 mV/dec, 0.30 off, within the 0.70 allowance.
+- Against the baseline: V_T 38 157 / 409 332 = **0.093×** (≤ 0.8×: passes). Swing 30 294 / 19 968 = **1.52×: misses**.
+- Against the uniform ladder (DR3; nodes for the same error): V_T 12 719 nodes at 0.73 mV, where 16× (61 985 nodes) is still about 1.8 mV off (about 151 k nodes by log-log): about 0.08×, passes. g_m (not required) 3036 nodes; no level up to 16× reaches 1.1e-3. Swing 10 098 nodes at 0.313, where 8× (15 633 nodes) is at 0.315: 0.65× by interpolation (misses 1/3); read level by level, 16× (61 985) is the first at or below it (0.16×).
+- **DC4 misses for the swing on both halves.** The current goal on points 3, 4 already weights the subthreshold currents the swing is built from, and the swing's error is in y (DR6), which uniform y refinement reaches cheaply. Not ruled: a frozen criterion, so the owner's.
 
 ---
 

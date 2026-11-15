@@ -623,7 +623,7 @@ TEST_CASE("derived goals: probe DC4's current-goal baseline", "[.adapt_derived_b
             o.at = at;
             o.tolerance = tol;
             o.weighting = solve::Weighting::adjoint;
-            o.max_passes = 12;
+            o.max_passes = 20;
             const auto t0 = std::chrono::steady_clock::now();
             auto r = solve::adapt(tensor_mosfet_mesh, dc3_points, sweep_options(), o);
             if (!r) FAIL(r.error().message);
@@ -711,4 +711,70 @@ TEST_CASE("derived goals: probe the fixed-window V_T ladder", "[.adapt_derived_r
                     c.current[2], c.current[3], c.current[4], free_gm->first + 13, free_gm->last + 13, sec);
         std::fflush(stdout);
     }
+}
+
+namespace {
+
+// DC3's references (DECISIONS.md Unit 17c DR3, measured once, Release, 2026-11-15). The uniform
+// ladder is not asymptotic (as AR9), so per axis: at ky = 32, kx = 4, 8, 16, 32 with the window held
+// at its converged 14..16 (it flips from 13..15 between kx = 8 and 16): V_T 148.894, 152.158,
+// 153.327, 153.851 mV (orders 1.48 then 1.16); g_m 0.376850, 0.384335, 0.386714, 0.387635 (1.65,
+// 1.37); swing (window 3..4) 70.4217, 70.4178, 70.4170, 70.4168. At kx = 4, ky = 32, 64, 128: V_T
+// 148.894, 148.936, 148.903 (not monotone, within 0.04 mV); g_m 0.376850, 0.375599, 0.375205;
+// swing 70.4217, 70.4400, 70.4446; the y step 32 -> 64 at kx = 8 is 1.10x that at kx = 4 for g_m,
+// 1.0x for the swing (the errors add). Each axis extrapolated at its last observed order, the y
+// correction scaled to the finer x: V_T 154.28 mV (uncertain by about 0.3 mV: the x order still
+// drifts), g_m 0.38612 (about 0.13%), swing 70.441 (about 0.005). The 32 x 32 solve takes 16
+// minutes, so the values are recorded; the 2x uniform figures are the guard.
+constexpr double vt_ref = 0.15428, gm_ref = 0.38612, swing_ref = 70.441;
+
+void guard_derived_reference() {
+    const std::array<double, 3> f = uniform_figures(2);
+    WARN("DC3 reference guard: 2x " << f[0] << ", " << f[1] << ", " << f[2]
+                                    << " (recorded 0.112573879392, 0.366102000996, 69.2786037546)");
+    REQUIRE(std::abs(f[0] - 0.112573879392) <= 1e-6 * 0.112573879392);
+    REQUIRE(std::abs(f[1] - 0.366102000996) <= 1e-6 * 0.366102000996);
+    REQUIRE(std::abs(f[2] - 69.2786037546) <= 1e-6 * 69.2786037546);
+}
+
+// DC3's run of one goal: the tensor MOSFET, adjoint-weighted, tol 1e-2 (V_T 1 mV); then DC3
+// (certified, within its allowance of the reference) and DC5 (the estimate within a factor 3 of the
+// actual error), both reported.
+void dc3_gate(solve::GoalKind kind, double reference) {
+    guard_derived_reference();
+    solve::AdaptOptions o;
+    o.goals = {{.contact = 1, .kind = kind}};
+    o.tolerance = 1e-2;
+    o.vt_tolerance = 1e-3;
+    o.weighting = solve::Weighting::adjoint;
+    o.max_passes = 20;
+    auto r = solve::adapt(tensor_mosfet_mesh, dc3_points, sweep_options(), o);
+    if (!r) FAIL(r.error().message);
+    REQUIRE(r->certificates.size() == 1);
+    const auto& c = r->certificates[0];
+    const double actual = std::abs(c.value - reference);
+    WARN("DC3 " << solve::to_string(kind) << ": " << solve::to_string(c.status) << " " << c.value << " on "
+                << r->passes.back().nodes << " nodes (" << r->passes.back().dofs << " DOFs, " << r->passes.size()
+                << " passes); actual " << actual << ", allowed " << c.allowed << "; DC5 estimate " << c.estimate
+                << " (" << c.estimate / actual << "x actual), verified " << c.verified_error << " ("
+                << c.verified_error / actual << "x)");
+    CHECK(c.status == solve::CertificateStatus::certified);
+    CHECK(actual <= c.allowed);
+    CHECK(c.estimate <= 3.0 * actual);
+    CHECK(c.estimate >= actual / 3.0);
+}
+
+}  // namespace
+
+TEST_CASE("derived goals: V_T certified within 1 mV of the reference (DC3, DC5)", "[.derived_goals]") {
+    dc3_gate(solve::GoalKind::vt, vt_ref);
+}
+
+TEST_CASE("derived goals: g_m certified within 1% of the reference (DC3, DC5)",
+          "[.derived_goals][.derived_goals_ci]") {
+    dc3_gate(solve::GoalKind::gm, gm_ref);
+}
+
+TEST_CASE("derived goals: the swing certified within 1% of the reference (DC3, DC5)", "[.derived_goals]") {
+    dc3_gate(solve::GoalKind::swing, swing_ref);
 }
