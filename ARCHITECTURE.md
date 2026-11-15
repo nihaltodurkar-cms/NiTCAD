@@ -2856,6 +2856,40 @@ CG1–CG9; accepted by the owner 2026-10-22):**
 - Not in Unit 26c: in-view clip handles, the tiled filmstrip in the window, video export, oblique clip planes,
   streamtubes.
 
+**As built (Unit 26d, GUI quick wins; DECISIONS.md ZD1–ZD8, ZQ1–ZQ4, ZG1–ZG10; on `app/gui-quick-wins`):**
+- **No Apply (ZD1, ZQ1):** each inspector text box (arrow and line counts, seeds, gap, slice position, clipping
+  box, iso levels, cut line, colour range) takes effect by itself on Enter (`MainWindow::pre_translate`) or when
+  focus leaves it changed (`EN_KILLFOCUS` with the edit's change flag). Invalid text puts the reason in the status
+  bar and the box shows the setting again (`box_text`). The slice axis list and the clipping-box check commit
+  their own box only.
+- **Colour range (ZD3):** a Range row (min, max, Auto) on the field, slice, iso and exploded views. Auto shows the
+  scale the view was drawn on. Typed values set `ViewSettings::range` as `nitcad plot --range` takes them (min <
+  max, finite, both > 0 on a log scale). Unchecking Auto keeps the drawn scale as the range. A new field resets
+  it to Auto.
+- **Point labels (ZD2, ZQ2):** `app::point_labels`: `k · gate = 1.2 V` for each contact whose bias varies (the
+  swept one first, as `swept_contact` takes it), `k · t = 1.25 ns` for a transient, the bare index otherwise.
+- **Metrics unit (ZD7):** `app::max_metric` writes `Max ψ 1.714 V` from the field's title (the one the tree and
+  colour bar show); the difference view `Max |B − A| <v> <unit>`.
+- **Viridis default (ZD8, superseding VQ5 for the app only):** `app::app_colormap`; new views and the Colormap
+  list start with viridis, and `plot_arguments` names it (`--colormap viridis`) on the device views. `nitcad plot`
+  keeps turbo, and the self-test takes plot's options so it starts at turbo too. On the difference view viridis
+  and turbo both mean cool-warm (`app::takes_coolwarm`), so the equivalent command draws the same map; another
+  colormap chosen is used.
+- **Window integration (ZD4–ZD6, ZQ3, ZQ4):** `app/integration` holds the decisions as plain functions. A file
+  dropped on the window opens as the recent-files list opens it (`open_target`), after the unsaved-edits prompt;
+  two files, a folder, or a drop during a run or check is refused (`dropped_file`). The taskbar button shows a
+  run's progress (`ITaskbarList3`, made on `TaskbarButtonCreated`; `taskbar_progress`): normal, indeterminate when
+  the length is unknown, the error state after a failed run until the next run or check; a run ending in the
+  background flashes the button. The title bar follows the user's app theme (`DWMWA_USE_IMMERSIVE_DARK_MODE`,
+  `dark_title_bar`) at creation and on `WM_SETTINGCHANGE` "ImmersiveColorSet"; the client area is unchanged.
+- Gates: ZG1–ZG7 and ZG10 by the app and window tests (the window tests press Enter through `pre_translate`,
+  send `EN_KILLFOCUS`, and post `WM_DROPFILES` with a built `HDROP`); the app tests that build their own `nitcad
+  plot` commands name `--colormap viridis`, nothing else changed (ZG8); 13 hand mutants, at least one per ZD
+  item, all killed (ZG9). `docs/images/app.png` refreshed.
+- Not in Unit 26d (the larger items of the same review): inspector groups that show only what applies, one
+  clipping-box input, image export and copy, TaskDialog errors, toolbar icons, tooltips, context menus,
+  tree/inspector consolidation, camera presets, a full dark mode, undo for view settings.
+
 ## 7. Language placement (D6: C and Fortran deferred)
 
 | Component | Language | Reason |
@@ -3155,7 +3189,7 @@ built.
 | 23 | Thermal / electrothermal coupling | physics, assemble, solve | **done, on `main`** (`7300b67`, PR #30): the lattice temperature as a fourth Newton unknown (the rise τ) with an exact Jacobian; Wachutka's thermodynamic fluxes (Boltzmann and Fermi–Dirac), the heat as the energy flux's divergence with Peltier and Thomson heat, isothermal and R_th thermal contacts; T in every model the assembler has; steady sweeps, `trace_bias` (thermal-runaway folds), transients and AC; traps and BTBT refused; thermionic emission (deferred) and incomplete ionization refused (6.2, Unit 23; DECISIONS.md T1–T14, U1–U8) |
 | 24 | Analysis and extraction engine | analysis | **done, on `main`** (`4183767`): curves read from sweeps and small-signal runs; transistor, diode and breakdown figures; C-V doping profile, flat band and the conductance method; two-port Y/Z/h/S, Mason's U, k, MAG/MSG, f_T and f_max; every extraction with the points it used and resolution and extrapolation flags (6.13, Unit 24) |
 | 25 | Scientific visualization / rendering | render | **25a done** (`render/visualization`): CPU scenes, Direct3D 12 and Direct2D drawing to PNG, `nitcad plot` (6.14); **25b done** (`render/derived-fields`): \|E\|, \|J\|, isosurfaces, streamlines (6.14); **25c done** (`render/vectors-clip`): arrows, clipping box, exploded view, filmstrips (6.14) |
-| 26 | Native Windows application and workflow | app | **done, on `main`** (`e9b1d71`, PR #59): `nitcad-app.exe`, Win32 with Direct3D 12 / Direct2D; deck editor, runs on a worker, run monitor, results, examples, `--self-test` (6.14, Unit 26); **26b done, on `main`** (`51face0`, PR #60): live checking and completion, structure preview, cut lines, run comparison, mesh quality (6.14, Unit 26b); **26c done** (`app/gui-catch-up`, PR #61): arrows, streamlines, exploded view, curve pickers, region visibility, transient playback, clip sliders (6.14, Unit 26c) |
+| 26 | Native Windows application and workflow | app | **done, on `main`** (`e9b1d71`, PR #59): `nitcad-app.exe`, Win32 with Direct3D 12 / Direct2D; deck editor, runs on a worker, run monitor, results, examples, `--self-test` (6.14, Unit 26); **26b done, on `main`** (`51face0`, PR #60): live checking and completion, structure preview, cut lines, run comparison, mesh quality (6.14, Unit 26b); **26c done** (`app/gui-catch-up`, PR #61): arrows, streamlines, exploded view, curve pickers, region visibility, transient playback, clip sliders (6.14, Unit 26c); **26d done** (`app/gui-quick-wins`): no Apply, colour range, point labels, units in the metrics, viridis default, drag and drop, taskbar progress, dark title bar (6.14, Unit 26d) |
 | 27 | Optimization / sensitivity / inverse-design workflows | analysis, solve | long-term target |
 | 28 | Bias step cutting (commercial-readiness programme, 11.3) | solve, results | **done, on `main`** (`06b708d`, PR #31): off by default; halving and growth from the last converged state (11.3, Unit 28; DECISIONS.md S1–S7) |
 | 29 | The io layer: files and checkpoint/restart (11.3) | io | **done, on `main`** (`f69a7a8`, PR #33): meshes, sweeps and checkpoints in a versioned, checksummed container with atomic writes; restart equals the uninterrupted sweep (6.6, Unit 29; DECISIONS.md IO1–IO7) |

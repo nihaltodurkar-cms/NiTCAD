@@ -1071,6 +1071,38 @@ ARCHITECTURE "as built" entry.
 **Owner ruling (2026-11-15):** "choose recommended": ZQ1 (a), ZQ2 (a), ZQ3 (a), ZQ4 (a). Implementation starts only
 on the owner's word.
 
+**Implementation (owner "go 26d", 2026-11-15).** The branch was rebased onto `main` `beb494f` (PR #84's MKL 2026.2)
+before the first slice. Slices: 26d·1 `640f555` (ZD1, ZD3), 26d·2 `6cd8f8b` (ZD2, ZD7, ZD8), 26d·3 `dcdff44` (ZD4–ZD6,
+new `app/integration`), 26d·4 this record, ARCHITECTURE's "as built" entry and `docs/images/app.png`.
+
+Choices made in building, within the design:
+- **ZD1:** a box takes effect on focus loss only when its edit's change flag is set (text typed, not text the program
+  put there), so moving through the inspector does not redraw. The slice axis list commits the slice box and the
+  clipping-box check commits the clipping box; an unchecked box keeps its text to be checked again. Where Apply
+  silently dropped invalid slice, clipping-box and iso-level text, there are now status messages ("A slice plane is
+  at one position in µm.", "A clipping box is <x0>,<y0>,<z0>:<x1>,<y1>,<z1> in µm.", "Iso levels are numbers
+  separated by commas.").
+- **ZD3:** with Auto on, the boxes show the scale the view was drawn on (`{:.6g}`), so one box can be typed and the
+  other taken as shown; unchecking Auto keeps the drawn scale as the range; both boxes emptied mean Auto. A redraw
+  while typing (playback) leaves a focused, changed box as typed.
+- **ZD8:** on the difference view, viridis (the app's default) and turbo (`nitcad plot`'s, which `nitcad plot` draws
+  cool-warm there) both mean cool-warm (`takes_coolwarm`), so `plot_arguments` gives a command that draws the app's
+  map without changing `nitcad plot`. Choosing viridis or turbo there therefore shows cool-warm; cividis, coolwarm and
+  soft are used as chosen. The curve views name no colormap (they have no colour scale). The self-test takes
+  `nitcad plot`'s options, so its default colormap is turbo, keeping "same options, same image" (WG4).
+- **ZD5:** the error state is for a failed run only; a check that fails (the deck does not build) is shown in the
+  deck, not on the taskbar. A run stopped by Stop ends done and clears the state.
+- **Tests changed (ZG8):** the 26b/26c window tests drive Enter instead of Apply; the app and window tests that
+  build their own `nitcad plot` commands for the app's default settings name `--colormap viridis` (the WG4 argument
+  lists, the film frames, the playback frames).
+
+Results: Release app tests 66/66 test cases, window tests 24/24; 13 hand mutants (ZG9: Enter dropped, focus loss
+ignoring the change flag, swapped label order, range kept on a field change, log range not checked, a drop
+taking two files, a drop during a run, error state cleared while idle, inverted theme flag, theme applied on any
+setting change, missing unit, difference taking viridis, turbo default) all killed. Full Release ctest 227/227
+(58.5 min, -j 6), the render and `nitcad plot` reference tests unchanged (ZG8) and the WG1 self-tests at their ruled
+bounds; the Debug suite left to CI, as for Unit 17c.
+
 ---
 
 ## New questions the advisor raised (not yet in `ARCHITECTURE.md`)
