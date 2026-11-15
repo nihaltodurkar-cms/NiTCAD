@@ -1066,7 +1066,8 @@ it would change PNG output.
 ZD5 + ZD6 (window integration); 26d·4 suites, mutants, the screenshot `docs/images/app.png` refreshed, and the
 ARCHITECTURE "as built" entry.
 
-Implementation starts only on the owner's word.
+**Owner ruling (2026-11-15):** "choose recommended": ZQ1 (a), ZQ2 (a), ZQ3 (a), ZQ4 (a). Implementation starts only
+on the owner's word.
 
 ---
 
