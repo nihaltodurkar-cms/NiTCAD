@@ -150,12 +150,14 @@ public:
         id_tree = 4000, id_tabs, id_viewport, id_deck, id_metrics, id_inspector, id_toolbar, id_status, id_start,
         id_run_page, id_results,
         id_view = 5001, id_field, id_point, id_scale, id_colormap, id_contours, id_edges, id_contacts, id_opaque,
-        id_perspective, id_slice_axis, id_slice_at, id_clip, id_clip_box, id_levels, id_cut, id_apply, id_probe_text,
+        id_perspective, id_slice_axis, id_slice_at, id_clip, id_clip_box, id_levels, id_cut, id_probe_text,
         // Unit 26c (YD1-YD3): arrows, streamlines and their seeds; the exploded view; the curves' pickers.
         id_arrows, id_arrow_count, id_lines, id_line_count, id_from, id_seeds, id_axis, id_gap, id_exploded_field,
         id_swept, id_sensed, id_frequency, id_log,
         // Unit 26c (YD5, YD6): the snapshot slider, its time and Play; the clipping box's low and high sliders.
         id_time, id_time_text, id_play, id_clip_x0, id_clip_x1, id_clip_y0, id_clip_y1, id_clip_z0, id_clip_z1,
+        // Unit 26d (ZD3): the colour range's minimum and maximum, and Auto.
+        id_range_min, id_range_max, id_range_auto,
         id_first_label = 5100,
     };
 
@@ -181,6 +183,16 @@ private:
     enum class Pending : unsigned char { none, open, check, run };
     void on_run_finished(Pending pending, RunState state);
     void on_inspector(int id, int code);
+    // Unit 26d (ZD1): the inspector's text boxes. Whether a control is one; one box taking effect (Enter, or
+    // focus leaving it changed), its text shown again from the setting with the reason in the status bar when
+    // not valid; and a box's text for the active view's settings.
+    [[nodiscard]] static bool is_box(int id) noexcept;
+    void commit_box(int id);
+    [[nodiscard]] std::string box_text(int id) const;
+    void show_box(int id);
+    // ZD3: the range's boxes show the range set, or (Auto) the scale the scene was drawn on; keep_typed leaves
+    // a box with focus and changed text as it is (a redraw while typing).
+    void sync_range(bool keep_typed = false);
     void view_defaults(ViewSettings& s);
     void sync_inspector();
     // Shows the inspector's controls that apply to the active view (Unit 26c), hiding the others.

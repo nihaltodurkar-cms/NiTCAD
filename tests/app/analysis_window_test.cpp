@@ -17,8 +17,10 @@
 #include <cmath>
 #include <cstdio>
 #include <filesystem>
+#include <format>
 #include <functional>
 #include <string>
+#include <string_view>
 #include <variant>
 #include <vector>
 
@@ -81,6 +83,30 @@ void key(MainWindow& w, UINT vk) {
     if (vk == VK_RETURN || vk == VK_TAB || vk == VK_ESCAPE) {
         SendMessageW(w.deck().editor(), WM_CHAR, vk == VK_RETURN ? L'\r' : vk == VK_TAB ? L'\t' : 0x1b, 0);
     }
+}
+
+
+// Unit 26d (ZD1): text typed into an inspector box (its change flag set, as typing sets it), then Enter through
+// the window's message filter (as the message loop passes it) or focus leaving the box.
+void type_box(MainWindow& w, int id, const std::string& text) {
+    HWND box = w.child(id);
+    SetWindowTextW(box, std::wstring(text.begin(), text.end()).c_str());
+    SendMessageW(box, EM_SETMODIFY, TRUE, 0);
+}
+
+void enter_box(MainWindow& w, int id, const std::string& text) {
+    type_box(w, id, text);
+    MSG m{};
+    m.hwnd = w.child(id);
+    m.message = WM_KEYDOWN;
+    m.wParam = VK_RETURN;
+    REQUIRE(w.pre_translate(m));
+}
+
+void leave_box(MainWindow& w, int id, const std::string& text) {
+    type_box(w, id, text);
+    HWND box = w.child(id);
+    SendMessageW(GetParent(box), WM_COMMAND, MAKEWPARAM(id, EN_KILLFOCUS), reinterpret_cast<LPARAM>(box));
 }
 
 }  // namespace
@@ -241,11 +267,7 @@ void click_at(MainWindow& w, const render::Float3& um) {
     SendMessageW(w.viewport().hwnd(), WM_LBUTTONUP, 0, at);
 }
 
-void apply_cut(MainWindow& w, const std::string& text) {
-    SetWindowTextW(w.child(MainWindow::id_cut), std::wstring(text.begin(), text.end()).c_str());
-    SendMessageW(GetParent(w.child(MainWindow::id_apply)), WM_COMMAND, MAKEWPARAM(MainWindow::id_apply, BN_CLICKED),
-                 reinterpret_cast<LPARAM>(w.child(MainWindow::id_apply)));
-}
+void apply_cut(MainWindow& w, const std::string& text) { enter_box(w, MainWindow::id_cut, text); }
 
 }  // namespace
 
@@ -488,10 +510,7 @@ void click(MainWindow& w, int id) {
     SendMessageW(GetParent(b), WM_COMMAND, MAKEWPARAM(id, BN_CLICKED), reinterpret_cast<LPARAM>(b));
 }
 
-void apply_text(MainWindow& w, int id, const std::string& text) {
-    SetWindowTextW(w.child(id), std::wstring(text.begin(), text.end()).c_str());
-    click(w, MainWindow::id_apply);
-}
+void apply_text(MainWindow& w, int id, const std::string& text) { enter_box(w, id, text); }
 
 bool shown(MainWindow& w, int id) { return (GetWindowLongPtrW(w.child(id), GWL_STYLE) & WS_VISIBLE) != 0; }
 
@@ -1064,4 +1083,212 @@ TEST_CASE("app window: an adaptive run's passes listed, a pass's mesh shown and 
     CHECK(w->workspace()->has_results());
     CHECK(w->workspace()->device->mesh().node_count() == final_nodes);
     CHECK_FALSE(w->results_show_pass(passes));  // out of range
+}
+
+namespace {
+
+// Unit 26d: whether the inspector has a button reading Apply (ZD1 removed it).
+bool has_apply(MainWindow& w) {
+    for (HWND c = GetWindow(GetParent(w.child(MainWindow::id_view)), GW_CHILD); c; c = GetWindow(c, GW_HWNDNEXT)) {
+        wchar_t text[64]{};
+        GetWindowTextW(c, text, 64);
+        if (std::wstring_view(text) == L"&Apply" || std::wstring_view(text) == L"Apply") return true;
+    }
+    return false;
+}
+
+// ZG1 for one box: a valid text taken on Enter, another on focus loss; focus leaving it unchanged takes nothing;
+// an invalid text, on either, leaves the setting, gives the message and shows the setting again. `setting` is
+// the setting as the box shows it.
+void check_box(MainWindow& w, int id, const std::string& on_enter, const std::string& on_leave, const std::string& invalid,
+               const std::string& message, const std::function<std::string()>& setting) {
+    CAPTURE(id);
+    enter_box(w, id, on_enter);
+    CHECK(setting() == on_enter);
+    CHECK(text_of(w, id) == on_enter);
+    leave_box(w, id, on_leave);
+    CHECK(setting() == on_leave);
+    CHECK(text_of(w, id) == on_leave);
+    // Text put in by a program, not typed: focus leaving does not take it.
+    HWND box = w.child(id);
+    SetWindowTextW(box, std::wstring(on_enter.begin(), on_enter.end()).c_str());
+    SendMessageW(box, EM_SETMODIFY, FALSE, 0);
+    SendMessageW(GetParent(box), WM_COMMAND, MAKEWPARAM(id, EN_KILLFOCUS), reinterpret_cast<LPARAM>(box));
+    CHECK(setting() == on_leave);
+    for (const bool enter : {true, false}) {
+        CAPTURE(enter);
+        (enter ? enter_box : leave_box)(w, id, invalid);
+        CHECK(w.status(0) == message);
+        CHECK(setting() == on_leave);
+        CHECK(text_of(w, id) == on_leave);
+    }
+}
+
+std::string list(const std::vector<double>& v) {
+    std::string t;
+    for (const double x : v) t += (t.empty() ? "" : ",") + std::format("{}", x);
+    return t;
+}
+
+const render::ColorScale& drawn_scale(MainWindow& w) {
+    REQUIRE(w.scene());
+    const auto& f = std::get<render::FieldScene>(*w.scene());
+    REQUIRE(f.colorbar);
+    return f.colorbar->scale;
+}
+
+bool checked(MainWindow& w, int id) { return SendMessageW(w.child(id), BM_GETCHECK, 0, 0) == BST_CHECKED; }
+
+}  // namespace
+
+TEST_CASE("app window 26d: the inspector's boxes on Enter and focus loss; the colour range (ZD1, ZD3, ZG1, ZG3)", "[app]") {
+    const fs::path dir = app_test::scratch("window_boxes");
+    const fs::path deck = app_test::write(dir, "mosfet3d.deck", app_test::mosfet3d);
+    auto w = window();
+    CHECK_FALSE(has_apply(*w));
+    REQUIRE(w->open_deck(deck));
+    REQUIRE(pump_until([&] { return w->workspace() != nullptr && !w->runner().busy(); }));
+    w->execute(Command::run);
+    REQUIRE(pump_until([&] { return !w->runner().busy() && w->workspace() && w->workspace()->has_results(); }));
+    w->select_tab(MainWindow::tab_view);
+    REQUIRE(w->settings().kind == app::ViewKind::field);
+    const app::ViewSettings& s = w->settings();
+
+    // ZG1: every box, each taking effect by itself.
+    choose(*w, MainWindow::id_arrows, L"E");
+    check_box(*w, MainWindow::id_arrow_count, "40", "60", "0", "Arrows are a count from 1 to 100000.",
+              [&] { return std::to_string(s.arrows); });
+    same_as_plot(*w, deck, dir / "arrows.png");
+    choose(*w, MainWindow::id_lines, L"E");
+    check_box(*w, MainWindow::id_line_count, "7", "9", "2.5", "Streamlines are a count from 1 to 10000.",
+              [&] { return std::to_string(s.lines); });
+    enter_box(*w, MainWindow::id_seeds, " x=1 ");
+    CHECK(s.seeds == "x=1");
+    leave_box(*w, MainWindow::id_seeds, "x=0.5");
+    CHECK(s.seeds == "x=0.5");
+    CHECK(s.lines == 9);  // a box takes effect by itself
+    same_as_plot(*w, deck, dir / "lines.png");
+    choose(*w, MainWindow::id_arrows, L"none");
+    choose(*w, MainWindow::id_lines, L"none");
+    // The clipping box, while checked; unchecked, none, its text kept.
+    SendMessageW(w->child(MainWindow::id_clip), BM_SETCHECK, BST_CHECKED, 0);
+    check_box(*w, MainWindow::id_clip_box, "0.2,0.1,0.1:1.5,0.75,0.6", "0,0,0:1,1,0.8", "1,2",
+              "A clipping box is <x0>,<y0>,<z0>:<x1>,<y1>,<z1> in µm.", [&] {
+                  if (!s.clip) return std::string("none");
+                  return list({s.clip->lo_um.begin(), s.clip->lo_um.end()}) + ":" +
+                         list({s.clip->hi_um.begin(), s.clip->hi_um.end()});
+              });
+    CHECK(position(*w, MainWindow::id_clip_x1) == 500);  // YD6: the box on the sliders
+    same_as_plot(*w, deck, dir / "clip.png");
+    click(*w, MainWindow::id_clip);
+    CHECK_FALSE(s.clip);
+    CHECK(text_of(*w, MainWindow::id_clip_box) == "0,0,0:1,1,0.8");
+    click(*w, MainWindow::id_clip);
+    REQUIRE(s.clip);
+    CHECK(s.clip->hi_um[0] == 1.0);
+    click(*w, MainWindow::id_clip);
+    CHECK_FALSE(s.clip);
+    // The slice view's plane, the iso view's levels, the exploded view's gap.
+    choose(*w, MainWindow::id_view, L"slice");
+    check_box(*w, MainWindow::id_slice_at, "0.3", "0.5", "0.3,0.4", "A slice plane is at one position in µm.", [&] {
+        return s.slices.size() == 1 && s.slices[0].axis == 2 ? std::format("{}", s.slices[0].at_um) : std::string("?");
+    });
+    same_as_plot(*w, deck, dir / "slice.png");
+    choose(*w, MainWindow::id_slice_axis, L"x");
+    REQUIRE(s.slices.size() == 1);
+    CHECK(s.slices[0].axis == 0);
+    CHECK(s.slices[0].at_um == 0.5);
+    choose(*w, MainWindow::id_view, L"iso");
+    check_box(*w, MainWindow::id_levels, "0.2,0.4", "0.3", "0.2,x", "Iso levels are numbers separated by commas.",
+              [&] { return list(s.levels); });
+    choose(*w, MainWindow::id_view, L"exploded");
+    check_box(*w, MainWindow::id_gap, "0.2", "0.1", "-1", "The gap is a length in µm, at least 0.",
+              [&] { return s.gap_um ? std::format("{}", *s.gap_um) : std::string(); });
+    // The cut line: taken on focus loss as on Enter (it is drawn in the Curves tab).
+    choose(*w, MainWindow::id_view, L"field");
+    leave_box(*w, MainWindow::id_cut, "0.5,0.2,0.4:1.5,0.2,0.4");
+    REQUIRE(w->cut());
+    CHECK(w->cut()->to_um == std::vector<double>{1.5, 0.2, 0.4});
+    CHECK(w->tab() == MainWindow::tab_curves);
+    leave_box(*w, MainWindow::id_cut, "0.5");
+    CHECK(w->status(0).starts_with("A cut line is"));
+    CHECK(text_of(*w, MainWindow::id_cut) == "0.5,0.2,0.4:1.5,0.2,0.4");
+    leave_box(*w, MainWindow::id_cut, "");
+    CHECK_FALSE(w->cut());
+    w->select_tab(MainWindow::tab_view);
+
+    // ZG3: the range on the field view; Auto shows the scale drawn.
+    const app::ViewSettings& d = w->settings();
+    REQUIRE(d.kind == app::ViewKind::field);
+    choose(*w, MainWindow::id_field, L"potential");  // the arrows made it E's magnitude
+    CHECK(shown(*w, MainWindow::id_range_min));
+    CHECK(checked(*w, MainWindow::id_range_auto));
+    CHECK_FALSE(d.range);
+    CHECK(text_of(*w, MainWindow::id_range_min) == std::format("{:.6g}", drawn_scale(*w).lo()));
+    CHECK(text_of(*w, MainWindow::id_range_max) == std::format("{:.6g}", drawn_scale(*w).hi()));
+    // Typed: the colour bar's scale is the range, as nitcad plot --range draws it.
+    type_box(*w, MainWindow::id_range_min, "-0.25");
+    enter_box(*w, MainWindow::id_range_max, "1.25");
+    REQUIRE(d.range);
+    CHECK(*d.range == std::pair{-0.25, 1.25});
+    CHECK(drawn_scale(*w).lo() == -0.25);
+    CHECK(drawn_scale(*w).hi() == 1.25);
+    CHECK_FALSE(checked(*w, MainWindow::id_range_auto));
+    same_as_plot(*w, deck, dir / "range.png");
+    // Focus leaving the minimum takes it, with the maximum as shown.
+    leave_box(*w, MainWindow::id_range_min, "0");
+    REQUIRE(d.range);
+    CHECK(*d.range == std::pair{0.0, 1.25});
+    // Refused: a minimum not below the maximum, a value not a number or not finite.
+    for (const auto& [lo, hi] : {std::pair{"2", "1.25"}, std::pair{"1", "1"}, std::pair{"a", "1"}, std::pair{"0", "inf"}}) {
+        CAPTURE(lo, hi);
+        type_box(*w, MainWindow::id_range_min, lo);
+        enter_box(*w, MainWindow::id_range_max, hi);
+        CHECK(w->status(0) == "The range is a minimum and a larger maximum.");
+        REQUIRE(d.range);
+        CHECK(*d.range == std::pair{0.0, 1.25});
+        CHECK(text_of(*w, MainWindow::id_range_min) == "0");
+        CHECK(text_of(*w, MainWindow::id_range_max) == "1.25");
+    }
+    // Auto clears it; unchecked, the scale drawn is kept as the range.
+    click(*w, MainWindow::id_range_auto);
+    CHECK_FALSE(d.range);
+    CHECK(checked(*w, MainWindow::id_range_auto));
+    const double auto_lo = drawn_scale(*w).lo(), auto_hi = drawn_scale(*w).hi();
+    CHECK(text_of(*w, MainWindow::id_range_max) == std::format("{:.6g}", auto_hi));
+    click(*w, MainWindow::id_range_auto);
+    REQUIRE(d.range);
+    CHECK(*d.range == std::pair{auto_lo, auto_hi});
+    // Both boxes emptied: Auto.
+    type_box(*w, MainWindow::id_range_min, "");
+    enter_box(*w, MainWindow::id_range_max, "");
+    CHECK_FALSE(d.range);
+    // A new field resets the range to Auto; on a log scale (the electron density's own) both are above 0.
+    type_box(*w, MainWindow::id_range_min, "1");
+    enter_box(*w, MainWindow::id_range_max, "2");
+    REQUIRE(d.range);
+    choose(*w, MainWindow::id_field, L"n");
+    CHECK_FALSE(d.range);
+    CHECK(checked(*w, MainWindow::id_range_auto));
+    type_box(*w, MainWindow::id_range_min, "0");
+    enter_box(*w, MainWindow::id_range_max, "1e18");
+    CHECK(w->status(0) == "The range is a minimum and a larger maximum, both above 0 on a log scale.");
+    CHECK_FALSE(d.range);
+    type_box(*w, MainWindow::id_range_min, "1e10");
+    enter_box(*w, MainWindow::id_range_max, "1e18");
+    REQUIRE(d.range);
+    CHECK(drawn_scale(*w).kind() == render::ScaleKind::log10);
+    CHECK(drawn_scale(*w).lo() == 1e10);
+    same_as_plot(*w, deck, dir / "range_log.png");
+    // Shown on the views drawn on a colour scale of the field, not on the others nor in the Curves tab.
+    choose(*w, MainWindow::id_view, L"solid");
+    CHECK_FALSE(shown(*w, MainWindow::id_range_min));
+    CHECK_FALSE(shown(*w, MainWindow::id_range_auto));
+    for (const wchar_t* view : {L"slice", L"iso", L"exploded", L"field"}) {
+        CAPTURE(view == std::wstring_view(L"slice") ? 0 : view == std::wstring_view(L"iso") ? 1 : 2);
+        choose(*w, MainWindow::id_view, view);
+        CHECK(shown(*w, MainWindow::id_range_min));
+    }
+    w->select_tab(MainWindow::tab_curves);
+    CHECK_FALSE(shown(*w, MainWindow::id_range_min));
 }

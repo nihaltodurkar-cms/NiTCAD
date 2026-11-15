@@ -46,6 +46,8 @@ constexpr int label_arrows = MainWindow::id_first_label + 9, label_lines = label
               label_frequency = label_arrows + 6;
 // Unit 26c (YD5, YD6): the snapshot slider's label and the clipping box's per axis.
 constexpr int label_time = label_arrows + 7, label_clip_x = label_arrows + 8;
+// Unit 26d (ZD3): the colour range's label, after the three of the clipping box's sliders.
+constexpr int label_range = label_clip_x + 3;
 
 std::string format_um(double v) { return std::format("{:.3g}", v); }
 
@@ -253,7 +255,17 @@ bool MainWindow::create_children() {
             SendMessageW(child(id), TBM_SETPAGESIZE, 0, clip_steps / 20);
         }
     }
-    make(L"BUTTON", L"&Apply", WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON, inspector_, id_apply);
+    // Unit 26d (ZD3): the colour range, its two boxes and Auto side by side, after the colormap in tab order.
+    make(L"STATIC", L"Range (min, max)", WS_VISIBLE, inspector_, label++);
+    make(L"EDIT", L"", WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL, inspector_, id_range_min, WS_EX_CLIENTEDGE);
+    make(L"EDIT", L"", WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL, inspector_, id_range_max, WS_EX_CLIENTEDGE);
+    make(L"BUTTON", L"&Auto", WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX, inspector_, id_range_auto);
+    HWND after = child(id_colormap);
+    for (const int id : {label_range, static_cast<int>(id_range_min), static_cast<int>(id_range_max),
+                         static_cast<int>(id_range_auto)}) {
+        SetWindowPos(child(id), after, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+        after = child(id);
+    }
     make(L"STATIC", L"", WS_VISIBLE | SS_LEFT, inspector_, id_probe_text);
     combo_fill(child(id_scale), {scale_names.begin(), scale_names.end()}, 0);
     combo_fill(child(id_colormap), {colormap_names.begin(), colormap_names.end()}, 0);
@@ -374,6 +386,12 @@ bool MainWindow::pre_translate(MSG& m) {
     if (accelerators_ && TranslateAcceleratorW(hwnd_, accelerators_, &m)) return true;
     // Tab and Shift+Tab between the panes' controls; the deck editor keeps its own keys.
     if (m.message == WM_KEYDOWN && m.hwnd == deck_->editor()) return false;
+    // Unit 26d (ZD1): Enter in an inspector box makes it take effect (dialog navigation would take it as OK).
+    if (m.message == WM_KEYDOWN && m.wParam == VK_RETURN && m.hwnd && GetParent(m.hwnd) == inspector_ &&
+        is_box(GetDlgCtrlID(m.hwnd))) {
+        commit_box(GetDlgCtrlID(m.hwnd));
+        return true;
+    }
     return IsDialogMessageW(hwnd_, &m) != FALSE;
 }
 
@@ -488,10 +506,24 @@ void MainWindow::layout_inspector() {
         MoveWindow(GetDlgItem(inspector_, label++), pad, y, w, label_h, TRUE);
         y += label_h;
     };
+    const auto shown = [&](int id) { return (GetWindowLongPtrW(child(id), GWL_STYLE) & WS_VISIBLE) != 0; };
+    const auto put_at = [&](int label_id) {
+        MoveWindow(GetDlgItem(inspector_, label_id), pad, y, w, label_h, TRUE);
+        y += label_h;
+    };
     for (int id : {id_view, id_field, id_point, id_scale, id_colormap}) {
         put_label();
         put(id, row * 8);  // a drop-down list's height includes its list
         y -= row * 8 - row;
+    }
+    // ZD3: the range's minimum, maximum and Auto in a row.
+    if (shown(id_range_min)) {
+        put_at(label_range);
+        const int third = std::max((w - 2 * gap) / 3, 0);
+        MoveWindow(child(id_range_min), pad, y, third, row, TRUE);
+        MoveWindow(child(id_range_max), pad + third + gap, y, third, row, TRUE);
+        MoveWindow(child(id_range_auto), pad + 2 * (third + gap), y, std::max(w - 2 * (third + gap), 0), row, TRUE);
+        y += row + gap;
     }
     for (int id : {id_contours, id_edges, id_contacts, id_opaque, id_perspective}) put(id, row);
     put_label();
@@ -506,11 +538,6 @@ void MainWindow::layout_inspector() {
     put_label();
     put(id_cut, row);
     // Unit 26c: the groups shown for the active view (show_inspector_groups), one under the other.
-    const auto shown = [&](int id) { return (GetWindowLongPtrW(child(id), GWL_STYLE) & WS_VISIBLE) != 0; };
-    const auto put_at = [&](int label_id) {
-        MoveWindow(GetDlgItem(inspector_, label_id), pad, y, w, label_h, TRUE);
-        y += label_h;
-    };
     const int half = std::max((w - gap) / 2, 0);
     for (const auto& [label_id, list, box] : {std::tuple{label_arrows, id_arrows, id_arrow_count},
                                              std::tuple{label_lines, id_lines, id_line_count},
@@ -548,8 +575,7 @@ void MainWindow::layout_inspector() {
             y += row + gap;
         }
     }
-    MoveWindow(child(id_apply), pad, y, scaled(80, dpi_), row + gap, TRUE);
-    y += row + 2 * gap;
+    y += gap;
     MoveWindow(child(id_probe_text), pad, y, w, std::max<int>(r.bottom - y - pad, 0), TRUE);
 }
 
@@ -767,11 +793,13 @@ void MainWindow::refresh() {
     auto scene = build_scene(*workspace_, shown, run_b());
     if (!scene) {
         viewport_->show_message(scene.error().message);
+        if (tab_ == tab_view) sync_range(true);
         update_metrics();
         update_command_states();
         return;
     }
     scene_ = std::move(*scene);
+    if (tab_ == tab_view) sync_range(true);  // ZD3: Auto's boxes show the scale drawn
     // Hidden regions are not probed (YD4).
     std::vector<std::int32_t> hidden;
     if (takes_hidden(s.kind)) {
@@ -906,22 +934,10 @@ void MainWindow::sync_inspector() {
     check(id_perspective, s.perspective);
     check(id_clip, s.clip.has_value());
     SendMessageW(child(id_slice_axis), CB_SETCURSEL, s.slices.empty() ? 0 : static_cast<WPARAM>(s.slices.front().axis + 1), 0);
-    win32::set_text(child(id_slice_at), s.slices.empty() ? std::string() : std::format("{}", s.slices.front().at_um));
-    if (s.clip) {
-        const auto& c = *s.clip;
-        win32::set_text(child(id_clip_box), std::format("{},{},{}:{},{},{}", c.lo_um[0], c.lo_um[1], c.lo_um[2], c.hi_um[0],
-                                                        c.hi_um[1], c.hi_um[2]));
-    }
-    std::string levels;
-    for (const double v : s.levels) levels += (levels.empty() ? "" : ",") + std::format("{}", v);
-    win32::set_text(child(id_levels), levels);
-    std::string cut;
-    if (cut_) {
-        for (const double v : cut_->from_um) cut += (cut.empty() ? "" : ",") + std::format("{}", v);
-        cut += ":";
-        for (std::size_t k = 0; k < cut_->to_um.size(); ++k) cut += (k ? "," : "") + std::format("{}", cut_->to_um[k]);
-    }
-    win32::set_text(child(id_cut), cut);
+    // The boxes (ZD1); a clipping box's text stays while there is none, to be checked again.
+    for (const int id : {id_slice_at, id_levels, id_cut, id_arrow_count, id_line_count, id_seeds, id_gap}) show_box(id);
+    if (s.clip) show_box(id_clip_box);
+    sync_range();
     // Unit 26c (YD1-YD3).
     const auto select = [&](int id, std::span<const std::string_view> names, const std::string& name) {
         const auto it = std::ranges::find(names, name.empty() ? std::string_view("none") : std::string_view(name));
@@ -929,8 +945,6 @@ void MainWindow::sync_inspector() {
     };
     select(id_arrows, vector_names, s.vectors);
     select(id_lines, vector_names, s.streamlines);
-    win32::set_text(child(id_arrow_count), s.arrows > 0 ? std::to_string(s.arrows) : std::string());
-    win32::set_text(child(id_line_count), s.lines > 0 ? std::to_string(s.lines) : std::string());
     std::vector<std::string> contacts;
     if (workspace_) {
         for (const auto& c : workspace_->device->contacts()) contacts.push_back(c.name);
@@ -943,9 +957,7 @@ void MainWindow::sync_inspector() {
         combo_fill(child(id), items, it == contacts.end() ? 0 : static_cast<int>(it - contacts.begin()) + 1);
     };
     contact_list(id_from, "(automatic)", s.from);
-    win32::set_text(child(id_seeds), s.seeds);
     SendMessageW(child(id_axis), CB_SETCURSEL, static_cast<WPARAM>(std::clamp(s.axis, 0, 2)), 0);
-    win32::set_text(child(id_gap), s.gap_um ? std::format("{}", *s.gap_um) : std::string());
     check(id_exploded_field, s.exploded_field);
     contact_list(id_swept, s.kind == ViewKind::current ? "(all)" : "(automatic)", s.contact);
     contact_list(id_sensed, "(automatic)", s.sense);
@@ -1089,6 +1101,10 @@ void MainWindow::show_inspector_groups() {
     };
     show({label_arrows, id_arrows, id_arrow_count, label_lines, id_lines, id_line_count, label_from, id_from, id_seeds}, vectors);
     show({label_axis, id_axis, id_gap, id_exploded_field}, exploded);
+    // ZD3: the colour range on the views drawn on a colour scale of the field.
+    show({label_range, id_range_min, id_range_max, id_range_auto},
+         tab_ == tab_view && workspace_ &&
+             (s.kind == ViewKind::field || s.kind == ViewKind::slice || s.kind == ViewKind::iso || exploded));
     win32::set_text(GetDlgItem(inspector_, label_swept), s.kind == ViewKind::current ? "Contact" : "Swept contact");
     show({label_swept, id_swept, id_log}, curves);
     show({label_sensed, id_sensed}, curves && s.kind != ViewKind::current);
@@ -1181,64 +1197,192 @@ void MainWindow::on_inspector(int id, int code) {
         s.axis = std::clamp(combo_index(child(id_axis)), 0, 2);
     } else if (clicked && (id == id_exploded_field || id == id_log)) {
         (id == id_log ? s.log : s.exploded_field) = Button_GetCheck(child(id)) == BST_CHECKED;
-    } else if ((id == id_apply && clicked) || (id == id_clip && clicked) || (id == id_slice_axis && selection)) {
-        // Unit 26c: the arrow and line counts (empty: nitcad plot's defaults), the typed seeds and the exploded
-        // view's gap (empty: 12% of the extent), each kept as it was when not valid.
-        const auto count = [&](int box, std::size_t most, std::size_t& to, const char* what) {
-            const std::string t = win32::text_of(child(box));
-            if (t.find_first_not_of(" \t") == std::string::npos) {
-                to = 0;
-                return;
-            }
-            const auto v = numbers(t);
-            if (v.size() == 1 && v[0] >= 1.0 && v[0] <= static_cast<double>(most) && v[0] == std::floor(v[0])) {
-                to = static_cast<std::size_t>(v[0]);
-            } else {
-                set_status(status_state, std::format("{} are a count from 1 to {}.", what, most));
-            }
-        };
-        count(id_arrow_count, 100000, s.arrows, "Arrows");
-        count(id_line_count, 10000, s.lines, "Streamlines");
-        std::string seeds = win32::text_of(child(id_seeds));
+    } else if (id == id_clip && clicked) {
+        commit_box(id_clip_box);  // ZD1: the box's text takes effect when checked; unchecked, none
+        return;
+    } else if (id == id_slice_axis && selection) {
+        commit_box(id_slice_at);  // the plane along the axis chosen, at the box's position
+        return;
+    } else if (id == id_range_auto && clicked) {
+        // ZD3: Auto clears the range; unchecked, the scale drawn becomes the range, to be typed over.
+        if (Button_GetCheck(child(id)) == BST_CHECKED) {
+            s.range.reset();
+        } else if (const auto* f = scene_ ? std::get_if<render::FieldScene>(&*scene_) : nullptr; f && f->colorbar) {
+            s.range = std::pair{f->colorbar->scale.lo(), f->colorbar->scale.hi()};
+        }
+    } else if (code == EN_KILLFOCUS && is_box(id)) {
+        // ZD1: focus left a box; its text takes effect when it changed.
+        if (SendMessageW(child(id), EM_GETMODIFY, 0, 0) != 0) commit_box(id);
+        return;
+    } else {
+        return;
+    }
+    refresh();
+}
+
+// --- the inspector's boxes (Unit 26d, ZD1, ZD3) ------------------------------------------------------
+
+bool MainWindow::is_box(int id) noexcept {
+    switch (id) {
+    case id_slice_at:
+    case id_clip_box:
+    case id_levels:
+    case id_cut:
+    case id_arrow_count:
+    case id_line_count:
+    case id_seeds:
+    case id_gap:
+    case id_range_min:
+    case id_range_max:
+        return true;
+    default:
+        return false;
+    }
+}
+
+std::string MainWindow::box_text(int id) const {
+    const ViewSettings& s = tab_ == tab_curves ? curve_view_ : device_view_;
+    const auto list = [](const std::vector<double>& v) {
+        std::string t;
+        for (const double x : v) t += (t.empty() ? "" : ",") + std::format("{}", x);
+        return t;
+    };
+    switch (id) {
+    case id_slice_at:
+        return s.slices.empty() ? std::string() : std::format("{}", s.slices.front().at_um);
+    case id_clip_box: {
+        if (!s.clip) return {};
+        const auto& c = *s.clip;
+        return std::format("{},{},{}:{},{},{}", c.lo_um[0], c.lo_um[1], c.lo_um[2], c.hi_um[0], c.hi_um[1], c.hi_um[2]);
+    }
+    case id_levels:
+        return list(s.levels);
+    case id_cut:
+        return cut_ ? list(cut_->from_um) + ":" + list(cut_->to_um) : std::string();
+    case id_arrow_count:
+        return s.arrows > 0 ? std::to_string(s.arrows) : std::string();
+    case id_line_count:
+        return s.lines > 0 ? std::to_string(s.lines) : std::string();
+    case id_seeds:
+        return s.seeds;
+    case id_gap:
+        return s.gap_um ? std::format("{}", *s.gap_um) : std::string();
+    case id_range_min:
+    case id_range_max: {
+        // The range set, or (Auto) the scale the device view was drawn on.
+        const bool top = id == id_range_max;
+        if (s.range) return std::format("{}", top ? s.range->second : s.range->first);
+        const auto* f = tab_ == tab_view && scene_ ? std::get_if<render::FieldScene>(&*scene_) : nullptr;
+        if (f && f->colorbar) return std::format("{:.6g}", top ? f->colorbar->scale.hi() : f->colorbar->scale.lo());
+        return {};
+    }
+    default:
+        return {};
+    }
+}
+
+void MainWindow::show_box(int id) {
+    win32::set_text(child(id), box_text(id));
+    SendMessageW(child(id), EM_SETMODIFY, FALSE, 0);
+}
+
+void MainWindow::sync_range(bool keep_typed) {
+    for (const int id : {id_range_min, id_range_max}) {
+        // A redraw (playback) leaves a box being typed in as it is.
+        if (keep_typed && GetFocus() == child(id) && SendMessageW(child(id), EM_GETMODIFY, 0, 0) != 0) continue;
+        show_box(id);
+    }
+    Button_SetCheck(child(id_range_auto), settings().range ? BST_UNCHECKED : BST_CHECKED);
+}
+
+void MainWindow::commit_box(int id) {
+    if (!hwnd_ || !workspace_ || !is_box(id)) return;
+    ViewSettings& s = settings();
+    const auto blank = [](const std::string& t) { return t.find_first_not_of(" \t") == std::string::npos; };
+    const std::string t = win32::text_of(child(id));
+    const std::vector<double> v = numbers(t);
+    std::string error;  // why the text is not taken; empty: taken
+    switch (id) {
+    case id_arrow_count:
+    case id_line_count: {
+        // The arrow and line counts; empty: nitcad plot's defaults.
+        const bool arrows = id == id_arrow_count;
+        const std::size_t most = arrows ? 100000 : 10000;
+        std::size_t& to = arrows ? s.arrows : s.lines;
+        if (blank(t)) {
+            to = 0;
+        } else if (v.size() == 1 && v[0] >= 1.0 && v[0] <= static_cast<double>(most) && v[0] == std::floor(v[0])) {
+            to = static_cast<std::size_t>(v[0]);
+        } else {
+            error = std::format("{} are a count from 1 to {}.", arrows ? "Arrows" : "Streamlines", most);
+        }
+        break;
+    }
+    case id_seeds: {
+        std::string seeds = t;
         while (!seeds.empty() && seeds.back() == ' ') seeds.pop_back();
         while (!seeds.empty() && seeds.front() == ' ') seeds.erase(seeds.begin());
         s.seeds = seeds;
-        const std::string gap = win32::text_of(child(id_gap));
-        if (gap.find_first_not_of(" \t") == std::string::npos) {
+        break;
+    }
+    case id_gap:
+        // The exploded view's gap; empty: 12% of the extent.
+        if (blank(t)) {
             s.gap_um.reset();
-        } else if (const auto v = numbers(gap); v.size() == 1 && v[0] >= 0.0) {
+        } else if (v.size() == 1 && v[0] >= 0.0) {
             s.gap_um = v[0];
         } else {
-            set_status(status_state, "The gap is a length in µm, at least 0.");
+            error = "The gap is a length in µm, at least 0.";
         }
-        // The slice, the clipping box and the iso levels from their fields.
+        break;
+    case id_slice_at: {
+        // The plane along the axis chosen; no axis or no position: none.
         const int axis = combo_index(child(id_slice_axis)) - 1;
-        const std::string at = win32::text_of(child(id_slice_at));
-        s.slices.clear();
-        if (const auto v = numbers(at); axis >= 0 && v.size() == 1) s.slices.push_back({axis, v[0]});
-        s.clip.reset();
-        if (Button_GetCheck(child(id_clip)) == BST_CHECKED) {
-            ViewSettings::Clip c;
-            std::string box = win32::text_of(child(id_clip_box));
-            std::ranges::replace(box, ':', ',');
-            if (const auto v = numbers(box); v.size() == 6) {
-                for (std::size_t k = 0; k < 3; ++k) {
-                    c.lo_um[k] = v[k];
-                    c.hi_um[k] = v[k + 3];
-                }
-                s.clip = c;
-            }
+        if (axis < 0 || blank(t)) {
+            s.slices.clear();
+        } else if (v.size() == 1) {
+            s.slices = {{axis, v[0]}};
+        } else {
+            error = "A slice plane is at one position in µm.";
         }
+        SendMessageW(child(id_slice_axis), CB_SETCURSEL, s.slices.empty() ? 0 : static_cast<WPARAM>(s.slices.front().axis + 1), 0);
+        break;
+    }
+    case id_clip_box: {
+        std::string box = t;
+        std::ranges::replace(box, ':', ',');
+        if (const auto b = numbers(box); Button_GetCheck(child(id_clip)) != BST_CHECKED) {
+            s.clip.reset();
+        } else if (b.size() == 6) {
+            ViewSettings::Clip c;
+            for (std::size_t k = 0; k < 3; ++k) {
+                c.lo_um[k] = b[k];
+                c.hi_um[k] = b[k + 3];
+            }
+            s.clip = c;
+        } else {
+            error = "A clipping box is <x0>,<y0>,<z0>:<x1>,<y1>,<z1> in µm.";
+        }
+        Button_SetCheck(child(id_clip), s.clip ? BST_CHECKED : BST_UNCHECKED);
         sync_clip_sliders();  // YD6: the typed box on the sliders
-        s.levels.clear();
-        s.levels = numbers(win32::text_of(child(id_levels)));
-        // The cut line typed: "<x0>,<y0>[,<z0>]:<x1>,<y1>[,<z1>]" in um; empty removes it.
-        const std::string typed = win32::text_of(child(id_cut));
-        const auto colon = typed.find(':');
+        break;
+    }
+    case id_levels:
+        if (blank(t)) {
+            s.levels.clear();
+        } else if (!v.empty()) {
+            s.levels = v;
+        } else {
+            error = "Iso levels are numbers separated by commas.";
+        }
+        break;
+    case id_cut: {
+        // "<x0>,<y0>[,<z0>]:<x1>,<y1>[,<z1>]" in um; empty removes it. A new line is drawn by set_cut.
+        const auto colon = t.find(':');
         const std::size_t dim = static_cast<std::size_t>(workspace_->device->mesh().dimension());
-        const std::vector<double> a = colon == std::string::npos ? std::vector<double>{} : numbers(typed.substr(0, colon));
-        const std::vector<double> b = colon == std::string::npos ? std::vector<double>{} : numbers(typed.substr(colon + 1));
-        if (typed.find_first_not_of(" \t") == std::string::npos) {
+        const std::vector<double> a = colon == std::string::npos ? std::vector<double>{} : numbers(t.substr(0, colon));
+        const std::vector<double> b = colon == std::string::npos ? std::vector<double>{} : numbers(t.substr(colon + 1));
+        if (blank(t)) {
             if (cut_) {
                 set_cut(std::nullopt);
                 return;
@@ -1249,12 +1393,41 @@ void MainWindow::on_inspector(int id, int code) {
                 return;
             }
         } else {
-            set_status(status_state, "A cut line is <x0>,<y0>[,<z0>]:<x1>,<y1>[,<z1>] in µm, in the device's dimension.");
+            error = "A cut line is <x0>,<y0>[,<z0>]:<x1>,<y1>[,<z1>] in µm, in the device's dimension.";
         }
-    } else {
+        break;
+    }
+    case id_range_min:
+    case id_range_max: {
+        // ZD3: both boxes, in the colour bar's units as `nitcad plot --range` takes them; both empty: Auto.
+        const std::string lo_t = win32::text_of(child(id_range_min)), hi_t = win32::text_of(child(id_range_max));
+        const auto lo = numbers(lo_t), hi = numbers(hi_t);
+        const auto field = render::find_field(s.field);
+        const bool log = s.scale == "log" ||
+                         (s.scale.empty() && field && render::field_info(*field).default_scale == render::ScaleKind::log10);
+        if (blank(lo_t) && blank(hi_t)) {
+            s.range.reset();
+        } else if (lo.size() == 1 && hi.size() == 1 && std::isfinite(lo[0]) && std::isfinite(hi[0]) && lo[0] < hi[0] &&
+                   (!log || lo[0] > 0.0)) {
+            s.range = std::pair{lo[0], hi[0]};
+        } else {
+            error = log ? "The range is a minimum and a larger maximum, both above 0 on a log scale."
+                        : "The range is a minimum and a larger maximum.";
+        }
+        break;
+    }
+    default:
         return;
     }
-    refresh();
+    if (!error.empty()) set_status(status_state, error);
+    if (id == id_range_min || id == id_range_max) {
+        sync_range();
+    } else if (id != id_clip_box || s.clip || !error.empty()) {
+        show_box(id);  // a clipping box's text stays while unchecked, to be checked again
+    } else {
+        SendMessageW(child(id), EM_SETMODIFY, FALSE, 0);
+    }
+    if (error.empty()) refresh();
 }
 
 // --- the scene tree --------------------------------------------------------------------------------
