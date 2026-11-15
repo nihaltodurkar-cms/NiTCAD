@@ -1969,6 +1969,80 @@ copies, outside the repo. In our form the quantum potential is Λ = −(γħ²/6
 - A deck may set `dg_gamma_n` / `dg_mass_n`, and the run record always reports them. That is the place for a
   user's calibration, not the default.
 - The bound is not loosened. Loosening it would be a new owner ruling, by name.
+
+### Unit 58 — solver scale-up: AMG, coupled preconditioning, deterministic threads, parallel assembly (proposed 2026-11-15; on `linalg/solver-scale-up`)
+
+**Owner request (2026-11-15):** "Plan for solver scale-up (AMG, parallel assembly)". This is the 11.3 row "Scalable
+linear solvers", next step "Algebraic multigrid and block (field-split) preconditioners; parallel assembly". The
+branch starts from `main` `beb494f`. The number 58 was used only informally for the MoS₂ gap list of 2026-11-12,
+which was never recorded here.
+
+**What is measured today (the starting point):**
+- **GMRES-ILUT (Unit 44)**, one Newton step's linear solve, one thread: 3D diode 24k / 81k / 192k unknowns took
+  0.77 / 3.8 / 14.1 s, with **40 / 60 / 90 iterations**. The growth with size is what ILUT cannot remove. SparseLU
+  took 1021 s and 10.9 GB at 192k.
+- **PARDISO (Unit 18)** at 81k 3D unknowns: 4.7 s on one thread, 1.07 s on eight. It is the only multithreaded part.
+  The FinFET deck (45,375 nodes) takes 10.6 min on 6 threads (Unit 50).
+- **Assembly is below 1% of a Newton iteration in 2D and 3D** (Unit 52, energy-balance measurement); the
+  factorization dominates. Once a faster preconditioner shrinks the solve, that share rises, but it is unmeasured.
+- GMRES-ILUT requires `threads = 1`. Its products, dot products and triangular solves are serial.
+- GMRES fails the complex small-signal systems (LQ3a: resolution up to 93% of max |Y|), which stay on SparseLU.
+
+**Standing conditions:** opt-in. The default backend and every existing result stay untouched. The 6.8 rules hold:
+the same input, thread count and build give the same result, and a threaded kernel parallelizes over the output
+index and never accumulates in thread order. The result is also independent of the core it runs on (Unit 41).
+`linalg` gains no dependency on `assemble`, and no Eigen type enters its public headers (Q5's check). Criteria are
+fixed before code. Release and Debug suites pass at every commit with `/W4 /WX`, plus hand mutants. Nothing is
+pushed or merged without authorization.
+
+**Left out of this unit:** GPU backends (cuDSS was dropped 2026-11-15); MPI and distributed memory; MUMPS; complex
+(small-signal) AMG, since LQ3a stays; making any new path the default (SQ6); a natural-test Newton norm; dropping the
+insulator nodes' unknowns (FD5).
+
+**Design:**
+
+| # | Slice | Change | Notes |
+|---|---|---|---|
+| SD1 | 0 | **Measure first.** A Release `[.benchmark]` profile of one Newton iteration, split into assembly, analysis, factorization or preconditioner setup, solve, update and the rest. The cases: the 2D MOSFET, the 3D diode at 30³ and 40³, the reduced swept FinFET, the tensor FinFET deck, and a 3D energy-balance device. Each is run with SparseLU (where it fits), PARDISO at 1 and 6 threads, and GMRES-ILUT. A 3D diode size series then runs up to about 1e6 unknowns with GMRES-ILUT and PARDISO, recording iterations, time and memory. Measured pinned to P cores; recorded here before slice 1. | No solver change. This sets the numbers SG4–SG7 are judged against. |
+| SD2 | 1 | **Deterministic threads.** A persistent pool in `base` (`std::jthread`) with `parallel_for` over **fixed-size chunks, independent of the thread count**. Reductions are per-chunk partial sums, combined in chunk order, so the bits are identical for any thread count. Used for the CSR product, GMRES's dot products, norms and updates, the equilibration scaling, and the backward-error check. `threads > 1` is accepted for `gmres_ilut`. The ILUT triangular solves stay serial. | 6.8's rule, by construction. The gate-tunnelling workers (GR11) may move onto the pool later; not in this unit. |
+| SD3 | 2 | **Algebraic multigrid, in-tree (SQ1).** Smoothed aggregation (Vaněk, Mandel, Brezina 1996): a strength-of-connection threshold θ, serial greedy aggregation in node order (deterministic), a damped-Jacobi smoothed prolongator, and Galerkin coarse operators. Damped Jacobi takes l1 diagonal scaling, the smoother is Chebyshev (both parallel over rows, so deterministic), and the coarse level is solved by SparseLU below a size limit. It is a V-cycle used as GMRES's right preconditioner. Aggregates are built once per pattern (`analyze`), and the operators are rebuilt per Jacobian (`factorize`). It runs on the equilibrated matrix, like ILUT. | The same in-tree choice as GMRES (Unit 44): no new dependency, and determinism under our control. |
+| SD4 | 3 | **Coupled preconditioning (SQ2): CPR-style two-stage.** Stage 1 is AMG on the potential block, A_ψψ, with a reduction of the carrier columns into it. Stage 2 is ILUT on the full system for the residual left by stage 1. The block labels reach `linalg` as plain data (`std::span<const std::int32_t>`, one field label per unknown); the solve layer gives them from `DofMap` (Unit 40). Every equation set works (3, 4 or 5 unknowns per node), and insulator nodes are labelled ψ. | The potential equation is elliptic, which AMG handles well; the continuity rows are convection-dominated, which ILUT handles. AMG on the whole system is measured as SD3's own backend for comparison. |
+| SD5 | 4 | **Parallel assembly (SQ4), deterministic, conditional.** The terms compute their per-edge and per-node contributions in parallel into per-item buffers. A row-parallel gather then adds them into F and J **in the serial order of every entry** (FE3), so the result is bit-identical to serial assembly for every thread count, and FD6's objection does not apply. Built only if SD1 or the post-SD4 profile shows assembly at **≥ 10% of a Newton iteration** on the 3D cases, and only after Unit 57 (terms then read `SystemData` with no shared mutable state). Otherwise the measurement is recorded and the slice dropped. | The buffers cost about 48 doubles per edge for drift-diffusion; reported. |
+| SD6 | — | **Configuration and deck (SQ7).** `SolverConfig::preconditioner = ilut \| amg \| cpr` under a `gmres` backend; `gmres_ilut` stays accepted and means `gmres` + `ilut` with an unchanged run identity. The new options are AMG's θ, smoother degree, coarse size and maximum levels. The deck adds `[solver] preconditioner = …`, `amg_*` keys and `threads` for `gmres`. The run record digests the new settings only when used. Small signal stays on SparseLU (LQ3a). | |
+| SD7 | — | **Commits.** One branch. Commit 0 is SD1, then one commit per slice. The owner may stop after any slice; slice 1 is useful alone (threaded GMRES-ILUT). ARCHITECTURE.md 6.10 and 11.3 are updated to "as built" after acceptance. | |
+
+**Criteria (fixed before code; a target missed is recorded as a limitation, never loosened):**
+
+| # | Criterion |
+|---|---|
+| SG1 | **Default untouched:** with the default backend, and with `gmres_ilut` at one thread, every suite and the FG1/FG2 traces are unchanged bit for bit. |
+| SG2 | **Determinism:** for SD2–SD5's kernels and solves, results are bit-identical at 1, 2, 4, 6 and 8 threads, and across P and E cores (a pinned probe as `linalg_eigen_blocking`); repeats are bit-identical. |
+| SG3 | **Accuracy:** each new preconditioner meets `max_backward_error` on the original system (the layer's own check, as Unit 44). Device cases (diode, MOS C-V, transient, 2D MOSFET, a 3D deck, electrothermal, energy balance) agree with SparseLU or PARDISO within Unit 44's `[gmres]` bounds. Fallback and `fallback = none` behave as for ILUT. |
+| SG4 | **Scalability:** on the 3D diode series, AMG on the equilibrium Poisson systems and CPR on the bias Jacobians grow GMRES iterations by **at most 1.5×** from 24k to the largest size in SD1 (ILUT measured 2.25× from 24k to 192k). |
+| SG5 | **Speed at one thread:** on the 3D diode at 40³ and SD1's largest case, the per-Newton-step linear time with CPR is **≤ 0.5×** GMRES-ILUT's. |
+| SG6 | **Speed with threads:** at 6 threads, the linear time of SG5's cases is **≥ 2.5×** faster than at one thread, and the tensor FinFET deck's sweep (17 points) is faster with `gmres` + `cpr` at 6 threads than with PARDISO at 6 threads. Its currents agree with PARDISO's within the deck's terminal-current resolution. |
+| SG7 | **Memory:** the new preconditioners use no more peak memory than ILUT on SG5's cases. |
+| SG8 | **Parallel assembly (if built):** F and J bit-identical to serial for 1–8 threads, and `evaluate` ≥ 3× faster at 6 threads on the 3D cases. |
+| SG9 | **Suites and mutants:** Release and Debug suites pass at every slice, with no warnings. At least 8 mutants per slice are caught. At least: a reduction combined in thread order; a chunk size derived from the thread count; aggregation iterating in a hashed order; a missing Galerkin transpose; the smoother's damping off by a factor; CPR's stage 2 skipped; ψ labels shifted by one; the gather adding in edge-buffer order rather than entry order. |
+| SG10 | **Layering:** `linalg` has no dependency on `assemble` (labels are plain integers); there is no Eigen type in public headers, and no new vcpkg dependency (SQ1 a). |
+
+**Questions (each with a recommendation):**
+
+| # | Question | Options | Recommendation |
+|---|---|---|---|
+| SQ1 | AMG implementation | (a) In-tree smoothed aggregation (SD3). (b) AMGCL (header-only, MIT, in vcpkg; a new dependency whose own dependencies and threaded determinism need checking). (c) hypre BoomerAMG (C, MPI-oriented, large). | **(a)**, as Unit 44 did for GMRES: no dependency, and 6.8's determinism is ours to guarantee. |
+| SQ2 | Coupled preconditioner | (a) CPR two-stage: AMG on ψ, ILUT on the full system. (b) Block Gauss–Seidel over ψ, n, p with AMG on each block. (c) Point-block AMG on the whole system (3×3 to 5×5 node blocks). | **(a)**: the standard for coupled elliptic and convection-dominated systems; it reuses ILUT; (c) is measured as SD3's whole-system AMG. |
+| SQ3 | Threading mechanism | (a) The in-tree fixed-chunk pool (SD2). (b) OpenMP (MSVC's OpenMP 2.0; reduction order not guaranteed). | **(a)**: the only way 6.8's "identical across thread counts" holds by construction. |
+| SQ4 | Parallel assembly | (a) Conditional: built only if assembly is ≥ 10% of an iteration after SD4, and after Unit 57. (b) Build it unconditionally. (c) Drop it. | **(a)**: measured at below 1% today; (b) risks a slice with no gain. |
+| SQ5 | Order against Unit 57 | (a) Slices 0–3 now (they need only `DofMap`, already public); slice 4 after Unit 57. (b) Everything after Unit 57. | **(a)**: no dependency, and slices 0–3 touch only `linalg`, `solve` and `deck`, not the assembler Unit 57 rewrites. |
+| SQ6 | Default | (a) Opt-in; a default change is a separate owner ruling after the measurements. (b) `gmres` + `cpr` becomes the default for 3D. | **(a)**: as for every solver unit so far. |
+| SQ7 | Deck syntax | (a) `backend = gmres` with `preconditioner = ilut \| amg \| cpr`; `gmres_ilut` kept as an alias with an unchanged identity. (b) One backend name per combination (`gmres_amg`, `gmres_cpr`). | **(a)**: options compose without new names, and old decks are unchanged. |
+
+**Risks:** AMG on badly scaled drift-diffusion rows is the known hard case; CPR exists because plain AMG on the
+coupled system often fails, so SG4–SG6 may be missed and recorded as limitations. The FinFET target (SG6) competes
+with a mature multithreaded direct solver at only about 136k unknowns. The gain grows with size, so SD1's size series
+decides whether this pays off on today's decks or only on larger ones.
+
 ## New questions the advisor raised (not yet in `ARCHITECTURE.md`)
 
 None of these is decided. Each needs an owner position before the build scaffold fixes the flags.
