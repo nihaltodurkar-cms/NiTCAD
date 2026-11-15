@@ -832,7 +832,7 @@ TEST_CASE("app window 26c: playing a transient run's snapshots (YD5, YG3, YG5)",
     // The frames nitcad plot draws for the run, each snapshot's.
     const fs::path frames = dir / "frames";
     const auto cli = app_test::nitcad("plot " + app_test::quoted(deck) +
-                                      " --view filmstrip --field potential --every 1 --size 480x360 --adapter warp --frames " +
+                                      " --view filmstrip --field potential --every 1 --colormap viridis --size 480x360 --adapter warp --frames " +
                                       app_test::quoted(frames) + " --out " + app_test::quoted(dir / "strip.png"));
     CAPTURE(cli.output);
     REQUIRE(cli.status == 0);
@@ -956,7 +956,7 @@ TEST_CASE("app window 26c: playing a transient run's snapshots (YD5, YG3, YG5)",
     // The oxide hidden: the scale fitted again over the silicon, each frame as nitcad plot --hide oxide draws it.
     const fs::path hidden_frames = dir / "frames_no_oxide";
     const auto hidden_cli = app_test::nitcad("plot " + app_test::quoted(deck) +
-                                             " --view filmstrip --field potential --every 1 --hide oxide --size 480x360"
+                                             " --view filmstrip --field potential --every 1 --hide oxide --colormap viridis --size 480x360"
                                              " --adapter warp --frames " + app_test::quoted(hidden_frames) + " --out " +
                                              app_test::quoted(dir / "strip_no_oxide.png"));
     CAPTURE(hidden_cli.output);
@@ -1153,6 +1153,32 @@ TEST_CASE("app window 26d: the inspector's boxes on Enter and focus loss; the co
     w->select_tab(MainWindow::tab_view);
     REQUIRE(w->settings().kind == app::ViewKind::field);
     const app::ViewSettings& s = w->settings();
+
+    // ZG10: the device view and the curves view start with viridis, first in the list (ZD8).
+    const auto colormap_shown = [&] {
+        HWND list = w->child(MainWindow::id_colormap);
+        wchar_t text[32]{};
+        SendMessageW(list, CB_GETLBTEXT, static_cast<WPARAM>(SendMessageW(list, CB_GETCURSEL, 0, 0)), reinterpret_cast<LPARAM>(text));
+        return std::wstring(text);
+    };
+    CHECK(s.colormap == "viridis");
+    CHECK(colormap_shown() == L"viridis");
+    CHECK(SendMessageW(w->child(MainWindow::id_colormap), CB_GETCURSEL, 0, 0) == 0);
+    // ZG7: the metrics strip's maximum by the field's symbol, with its unit.
+    {
+        wchar_t metrics[512]{};
+        GetWindowTextW(w->child(MainWindow::id_metrics), metrics, 512);
+        const std::wstring_view m = metrics;
+        const auto at = m.find(L"Max \x03C8 ");
+        REQUIRE(at != std::wstring_view::npos);
+        const auto unit = m.find(L" V", at + 6);
+        CHECK(unit != std::wstring_view::npos);
+        CHECK(m.find(L"Max potential") == std::wstring_view::npos);
+    }
+    w->select_tab(MainWindow::tab_curves);
+    CHECK(w->settings().colormap == "viridis");
+    CHECK(colormap_shown() == L"viridis");
+    w->select_tab(MainWindow::tab_view);
 
     // ZG1: every box, each taking effect by itself.
     choose(*w, MainWindow::id_arrows, L"E");

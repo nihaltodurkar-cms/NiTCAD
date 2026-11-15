@@ -36,7 +36,8 @@ enum TreeKind : int { tree_none = 0, tree_field = 1, tree_view = 2, tree_region 
 LPARAM tree_data(TreeKind k, int index) { return static_cast<LPARAM>((k << 16) | (index & 0xFFFF)); }
 
 constexpr std::array<std::string_view, 4> scale_names{"(default)", "linear", "log", "signed-log"};
-constexpr std::array<std::string_view, 5> colormap_names{"turbo", "viridis", "cividis", "coolwarm", "soft"};
+// ZD8: the app's default (viridis) first.
+constexpr std::array<std::string_view, 5> colormap_names{"viridis", "turbo", "cividis", "coolwarm", "soft"};
 // Unit 26c (YD1): the vector fields arrows and streamlines follow ("none" first).
 constexpr std::array<std::string_view, 5> vector_names{"none", "E", "J", "Jn", "Jp"};
 // The labels of the inspector's groups (Unit 26c), after the nine of Unit 26: their ids follow
@@ -761,6 +762,7 @@ void MainWindow::refresh() {
     if (tab_ != tab_view && tab_ != tab_curves) return;
     scene_.reset();
     values_.clear();
+    values_title_.clear();
     if (!workspace_) {
         viewport_->show_message("Open a deck (Ctrl+O) or a result file (Ctrl+Shift+R).");
         update_metrics();
@@ -826,7 +828,10 @@ void MainWindow::refresh() {
         }
         if (f && pb) {
             auto d = render::difference_field(*workspace_->device, *run_b()->device, *workspace_->geometry, *pa, *pb, *f);
-            if (d) values_ = std::move(d->values);
+            if (d) {
+                values_ = std::move(d->values);
+                values_title_ = std::move(d->title);
+            }
         }
     } else if (const auto f = render::find_field(s.field);
                f && !is_plot(s.kind) && s.kind != ViewKind::quality && s.kind != ViewKind::exploded) {
@@ -837,7 +842,10 @@ void MainWindow::refresh() {
             const results::BiasPoint& p = doping || k >= workspace_->points.size() ? none : workspace_->points[k];
             auto v = doping ? render::field_values(*workspace_->device, p, *f)
                             : render::field_values(*workspace_->device, *workspace_->geometry, p, *f);
-            if (v) values_ = std::move(*v);
+            if (v) {
+                values_ = std::move(*v);
+                values_title_ = std::string(render::field_info(*f).title);
+            }
         }
     }
     viewport_->show(&*renderer_, &*scene_);
@@ -883,8 +891,9 @@ void MainWindow::update_metrics() {
         } else if (!values_.empty()) {
             double top = -1e300;
             for (const double v : values_) if (std::isfinite(v)) top = std::max(top, v);
-            text += (kind == ViewKind::difference ? "     Max |B − A| " : "     Max " + settings().field + " ") +
-                    number(kind == ViewKind::difference ? render::difference_scale(values_).hi() : top);
+            // ZD7: the field's symbol and unit, as the tree and the colour bar show them.
+            const bool difference = kind == ViewKind::difference;
+            text += "     " + max_metric(values_title_, difference ? render::difference_scale(values_).hi() : top, difference);
         }
         if (const Workspace* b = run_b()) {
             // XD6: run B, and the threshold shift when both runs have one.
@@ -916,10 +925,8 @@ void MainWindow::sync_inspector() {
     std::vector<std::string> fields = workspace_ ? available_fields(*workspace_) : std::vector<std::string>{};
     const auto f = std::ranges::find(fields, s.field);
     combo_fill(child(id_field), fields, f == fields.end() ? 0 : static_cast<int>(f - fields.begin()));
-    std::vector<std::string> points;
-    if (workspace_) {
-        for (std::size_t k = 0; k < workspace_->points.size(); ++k) points.push_back(std::to_string(k));
-    }
+    // ZD2: each point by its varying biases or its time.
+    const std::vector<std::string> points = workspace_ ? point_labels(*workspace_) : std::vector<std::string>{};
     combo_fill(child(id_point), points,
                points.empty() ? 0 : static_cast<int>(s.point.value_or(points.size() - 1)));
     const auto sc = std::ranges::find(scale_names, s.scale.empty() ? std::string_view("(default)") : std::string_view(s.scale));

@@ -277,6 +277,7 @@ private:
     ViewSettings device_view_, curve_view_;
     std::optional<Scene> scene_;
     std::vector<double> values_;  // the shown field's values, for probes
+    std::string values_title_;    // their title, "<symbol> (<unit>)" (ZD7)
     std::optional<ProbeHit> probe_, measure_from_;
     bool probe_mode_ = true, measure_mode_ = false, cut_mode_ = false;
     std::optional<ViewSettings::Cut> cut_;          // Unit 26b, XD5
