@@ -1010,6 +1010,70 @@ The AC19 gate is `[.ac19]` (hidden, Release by hand); the 17b cases in the suite
 predictor case and the deck cases. Unit 17 merged to `main` meanwhile (72377ad, PR #81, owner "merge pr 81"); this
 branch holds 17's head (6ffad0b), so its PR to `main` carries the 17b commits only.
 
+### Unit 57 — generic fields and equations, completed (proposed 2026-11-15; on `assemble/generic-equations`)
+
+**Owner request (2026-11-15):** "What next to implement … as per architecture", then "Plan for finish generic
+fields and equations (the Unit 40 follow-up)". This unit does what ARCHITECTURE.md 6.12.1–2 and 11.3 list as "Not
+yet" after Unit 40: move the model data out of `DriftDiffusion` and retire it as the wrapper, add the derived field
+kind with edge locations, and build `EquilibriumPoisson` from the same terms. The branch starts from `main`
+`beb494f`. The number is 57: it was freed when the cuDSS plan was dropped (2026-11-15); 56 is reserved by Unit 55.
+
+**Why now:** 11.1's first priority. Every model since Unit 40 (Units 46–54) was added through terms, but also as
+members and data in `DriftDiffusion` (header 1,011 lines, source 2,069, about 53 data members the terms read
+through `TermAccess`). Density-gradient confinement (11.3, nanoscale) needs a new unknown per carrier. Unit 30's
+open natural-test norm needs the layout of each equation. Both are cheaper on a generic system.
+
+**Standing conditions (as Unit 40):** numerically a pure refactor. F, J and every result are bit-identical
+(P-core-pinned traces, Unit 41). There is no change to physics, defaults, the deck, file formats, run identities or
+checkpoints. Criteria are fixed before code. Release and Debug suites pass at every slice commit with `/W4 /WX`,
+plus hand mutants. Nothing is pushed or merged without authorization.
+
+**Left out of this unit:** dropping the insulator nodes' n and p unknowns (FD5: a layout and checkpoint change);
+parallel assembly (FD6: not bit-identical); automatic differentiation (6.12.3); the natural-test norm itself
+(Unit 30's follow-up, a consumer of this unit); density gradient and any other new physics; the render layer's
+\|E\| and \|J\| (Unit 25b; they read results, not the system).
+
+**Design:**
+
+| # | Slice | Change | Notes |
+|---|---|---|---|
+| GE1 | 0 | **Baselines.** Extend the FG1/FG2 recorder's traced entries to the configurations added after Unit 40: Lombardi, MLDA, Altermatt levels, Schottky contacts, gate tunnelling, energy balance, swept and generated 3D meshes, and an `[adapt]` deck. Extend the FG4 benchmark with an energy-balance and a gate-tunnelling device. Record both on `main`, pinned to P cores. | No assembler change. The recorded files stay in scratch (FD8). |
+| GE2 | 1 | **The model data store.** The data fixed at creation (per node, per edge, per contact; the Jacobian positions `block_`, `EdgeTerm::ab/ba`, the path and gate-tunnel layouts; the scaled tables) moves into an internal `SystemData`, held as `shared_ptr<const SystemData>`. The data that changes between solves (contact biases and metal values, electrode potentials, gate biases, thermal rises, held carrier temperatures, tunnel paths and their layouts, the minority floor) moves into a value-type `SystemState`. Terms read `(const SystemData&, const SystemState&, const Evaluation&)` and no longer `DriftDiffusion`. The private helpers they call (`edge_fluxes`, `thermal_fluxes`, `level`, `interface_at`, `node_storage`, `path_terms`, `gate_tunnel_fluxes`, `surface_gradient`, …) become functions over the data, in the source file of the model they belong to. `TermAccess` is removed. | Copying a system shares its data, so copies get cheaper. `DriftDiffusion`'s public signatures are unchanged in this slice. |
+| GE3 | 2 | **The generic system.** A public `assemble::System`: a composition (terms + `DofMap`) over `SystemData` and `SystemState`, with only the members every equation set has: `create`, `dofs`, `unknowns`, `set_bias`, `make_jacobian`, `evaluate` / `residual` (steady and with a time step), `storage`, the small-signal matrix, `bias_derivative` / `bias_rows`, `update_size` / `apply_update`, `stamp_contacts`, `state_from_potential`. The small-signal path's own interface pass becomes a term, active only in the frequency domain. The model-specific members become free functions over `(const System&, x)` in topic headers: `currents.hpp` (terminal, edge, conduction and small-signal currents, resolution, flux terms), `thermal.hpp` (contact heat, electrical power, Joule heat, thermal bias), `tunnelling.hpp` (paths, path states, gate-tunnelling currents), `energy.hpp` (energy powers, hold and release temperatures), `charges.hpp` (contact, gate and trap charges, occupancies). Callers in `solve` and the tests move to these (GQ1). | Only `solve` and the tests use `DriftDiffusion`; `deck`, `io` and `app` do not. |
+| GE4 | 3 | **Derived fields (FD7).** `Field` gains a kind (unknown, fixed, derived), the locations edge and interface edge besides node, and the shapes scalar and vector. A derived-field table in `assemble` gives a descriptor and an evaluator `(const System&, x) → values` for each existing diagnostic: band edges and quasi-Fermi levels (node), per-mechanism rates and net rates (node), the electron and hole edge currents and flux terms (edge), trap occupancies (interface edge), and lattice and carrier temperatures in K (node). The solve layer fills `results::BiasPoint`, `RateFields` and `BandDiagram` through the table. | Results structs and file formats are unchanged (GQ4). |
+| GE5 | 4 | **Equilibrium from the same terms (FD1).** Equilibrium becomes a composition with a ψ-only `DofMap` and the Poisson, contact, oxide, gate and interface sets, plus one new term: the charge with carriers slaved to ψ (Boltzmann, Fermi–Dirac, incomplete ionization), keeping `EquilibriumPoisson`'s expressions operand for operand. It shares `SystemData`'s scaled tables (both already use `make_scaled_device`). `solve::equilibrium`'s signature is unchanged (GQ3). | Removes the second Poisson implementation (about 440 lines). |
+| GE6 | — | **Order rule.** As FE3: every entry of F and J receives its contributions in the order and with the operands it has on `main`. `/fp:precise` stays, so moving code between functions or files cannot change a value. The traces check this anyway. | |
+| GE7 | — | **Commits.** One branch. Commit 0 is GE1, then one commit per slice, each passing every gate on its own. The owner may stop after any slice; slice 1 is useful alone. Then the docs: ARCHITECTURE.md 2.2, 6.12.1–2 and 11.3 updated to "as built" only after the owner accepts the result. | |
+
+**Criteria (fixed before code):**
+
+| # | Criterion |
+|---|---|
+| GG1 | **Bit-identical numerics:** on every traced entry (Unit 40's nine plus GE1's), F, every Jacobian value, the time-step and small-signal matrices, `bias_derivative`, every Newton count, step cut, λ, arc step, transient step sequence, current, admittance, field and run identity equal commit 0's bit for bit (P-core-pinned). |
+| GG2 | **Byte-identical decks:** the `nitcad run` output tables and every written file (`.nitsweep`, `.nitckpt`, `.nitadapt`) of 12 decks are byte-identical to `main`'s, except their provenance's revision and wall time. The decks: diode, oxide with traps, lumped gate, electrothermal, impact ionization, nonlocal tunnelling, Lombardi + MLDA MOSFET, Schottky diode, gate tunnelling, energy balance, swept 3D FinFET (reduced), and an `[adapt]` deck. |
+| GG3 | **FD-Jacobian:** every existing FD gate and per-term check passes unchanged; GE5's slaved-charge term has its own FD check under Boltzmann, Fermi–Dirac and incomplete ionization. |
+| GG4 | **No slowdown:** FG4's benchmark with GE1's two devices added; `evaluate` and `residual` medians within 2% of commit 0's, or of its measured spread if larger (FD2). Copying a system is reported. |
+| GG5 | **Suites:** full Release and Debug suites pass at every slice commit, with no warnings. |
+| GG6 | **Mutants:** at least 8 per slice, each caught by the suites or the traces (the report says which). At least: a term reading the state's old bias after `set_bias`; a copy that does not share data mutated through the other copy; two terms swapped; the frequency-domain interface term active in steady state; a derived field reading the wrong slot; the equilibrium charge term's FD branch using Boltzmann; equilibrium missing the interface set; a topic function reading the composition's map of another system. |
+| GG7 | **Retired:** `drift_diffusion.hpp` and `TermAccess` no longer exist (GQ1 a). `System`'s public header names no model: no thermal, tunnelling, energy, gate or Schottky member, checked by a test that scans the header. Adding a term changes only its own file and the composition table. |
+| GG8 | **Extensibility (GQ5):** a test-only equation adds one node field χ (one unknown per semiconductor node, the Laplace row ∇²χ = ψ − ψ₀) to the drift-diffusion composition, without editing `System` or any existing term. The test checks: the `DofMap` and pattern grow; the FD check passes; Newton converges; the ψ, n, p fields equal the system without χ to 1e-12. |
+| GG9 | **Layering and scope:** terms, data and state stay internal (`src/assemble`); `System`, `Field`, `DofMap` and the derived-field table are public. No new dependency from `physics`, `mesh` or `linalg`. No change to physics, defaults, deck syntax, file formats or run records. |
+
+**Questions (each with a recommendation):**
+
+| # | Question | Options | Recommendation |
+|---|---|---|---|
+| GQ1 | The fate of `DriftDiffusion` | (a) Replace it with `assemble::System`, migrate every caller in slice 2, and remove `DriftDiffusion`. (b) Keep `DriftDiffusion` as a deprecated alias for one unit. (c) Keep the name for the generic class. | **(a)**: the callers are `solve` (14 files) and the tests (30), all in-repo; an alias would leave two names for one thing. |
+| GQ2 | Where the model-specific queries live | (a) Free functions in topic headers (GE3). (b) Members of `System` (today's shape). | **(a)**: `System` stays generic; a new model adds a header, not members. |
+| GQ3 | Equilibrium's public type | (a) `System` created with the equilibrium equation sets; `EquilibriumPoisson` removed, its two users in `solve` migrated. (b) Keep `EquilibriumPoisson` as a thin type over a composition. | **(a)**: one numerical architecture (11.2). Its `carriers` and `charge_neutral_potential` become free functions. |
+| GQ4 | Derived fields in results | (a) The table feeds today's result structs; formats unchanged. (b) Results carry a generic list of named fields too (a file-format version bump). | **(a)**: no format change in a refactor; (b) is a later unit, if the app or exports need it. |
+| GQ5 | The extensibility test (GG8) | (a) Yes. (b) No. | **(a)**: it is the evidence that density gradient can be added without a second architecture. |
+| GQ6 | Slice order | (a) As GE2–GE5. (b) Equilibrium (GE5) before the system (GE3). | **(a)**: GE5 is simpler on the finished `System`. |
+
+**Risks:** the bit-identity surface is the largest since Unit 40. Moving the bias state out of the system could change
+which values a copied system sees (GG6's first two mutants target this). Slice 2's caller migration touches about 44
+files. Trace and deck runs need P-core pinning (Unit 41).
+
 ---
 
 ## New questions the advisor raised (not yet in `ARCHITECTURE.md`)
