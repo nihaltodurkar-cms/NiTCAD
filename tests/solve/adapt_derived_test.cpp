@@ -232,6 +232,17 @@ TEST_CASE("derived goals: the figures' errors", "[adapt_derived]") {
     CHECK(!solve::derived_goal(solve::GoalKind::vt, short_curve).has_value());
 }
 
+TEST_CASE("derived goals: the swept contacts, one rule for adapt() and the deck (DR9)", "[adapt_derived]") {
+    using V = std::vector<std::vector<double>>;
+    CHECK(solve::swept_contacts(V{}).empty());
+    CHECK(solve::swept_contacts(V{{0.0, 1.0}}).empty());
+    CHECK(solve::swept_contacts(V{{0.0, 0.05, 0.0, 0.0}, {0.0, 0.05, 0.0, 0.5}, {0.0, 0.05, 0.0, 1.0}}) ==
+          std::vector<std::size_t>{3});
+    CHECK(solve::swept_contacts(V{{0.0, 0.0}, {1.0, 0.0}, {1.0, 2.0}}) == std::vector<std::size_t>{0, 1});
+    // A shorter point leaves the contacts it lacks unmoved (the deck's copy read past its end).
+    CHECK(solve::swept_contacts(V{{0.0, 0.0, 0.0}, {0.0, 1.0}}) == std::vector<std::size_t>{1});
+}
+
 TEST_CASE("derived goals: adapt() refuses what DG1 and DG2 exclude (DC7)", "[adapt_derived]") {
     const auto refused = [](const std::vector<std::vector<double>>& pts, const solve::AdaptOptions& o) {
         auto r = solve::adapt(tensor_mosfet_mesh, pts, sweep_options(), o);
@@ -313,6 +324,58 @@ TEST_CASE("derived goals: a gm and a vt goal on the coarse tensor MOSFET (DG2, D
     // V_T of a 1e17 / 5 nm MOSFET lies inside the sweep.
     CHECK(r->certificates[1].value > 0.0);
     CHECK(r->certificates[1].value < 1.2);
+}
+
+TEST_CASE("derived goals: a swing beside a gm goal adds its marks to gm's (DR9, DR7 a)", "[adapt_derived]") {
+    // Found by review (2026-11-15): the swing's difference replaced every goal's marks.
+    const auto pts = gate_sweep(-0.2, 1.0, 7);
+    const auto run = [&](std::vector<solve::AdaptGoal> goals) {
+        solve::AdaptOptions o;
+        o.goals = std::move(goals);
+        o.tolerance = 1e-3;
+        o.weighting = solve::Weighting::adjoint;
+        o.max_passes = 2;
+        auto r = solve::adapt(tensor_mosfet_mesh, pts, sweep_options(), o);
+        if (!r) FAIL(r.error().message);
+        REQUIRE(r->passes.size() == 2);
+        return r->passes[0];
+    };
+    const solve::AdaptPass gm = run({{.contact = 1, .kind = solve::GoalKind::gm}});
+    const solve::AdaptPass both =
+        run({{.contact = 1, .kind = solve::GoalKind::gm}, {.contact = 1, .kind = solve::GoalKind::swing}});
+    const solve::AdaptPass swing = run({{.contact = 1, .kind = solve::GoalKind::swing}});
+    REQUIRE(gm.marking.count > 0);
+    REQUIRE(swing.marking.count > 0);
+    CHECK_FALSE(gm.marked_by_difference);
+    CHECK(swing.marked_by_difference);
+    CHECK(both.marked_by_difference);
+    // The same start mesh and gm's same adjoint weights: every node gm marks alone is marked beside the swing.
+    REQUIRE(both.marking.marked.size() == gm.marking.marked.size());
+    std::size_t missing = 0;
+    for (std::size_t n = 0; n < gm.marking.marked.size(); ++n) missing += gm.marking.marked[n] && !both.marking.marked[n];
+    CHECK(missing == 0);
+    CHECK(both.marking.count >= gm.marking.count);
+    std::size_t counted = 0;
+    for (const char m : both.marking.marked) counted += m ? 1 : 0;
+    CHECK(counted == both.marking.count);
+}
+
+TEST_CASE("derived goals: a swing goal makes no intelligent proposal; DR7's marks stand (DR9)", "[adapt_derived]") {
+    // Found by review (2026-11-15): ID6's allocation replaced the swing's difference marks.
+    solve::AdaptOptions o;
+    o.goals = {{.contact = 1, .kind = solve::GoalKind::swing}};
+    o.tolerance = 1e-3;
+    o.weighting = solve::Weighting::adjoint;
+    o.policy = solve::Policy::intelligent;
+    o.max_passes = 2;
+    auto r = solve::adapt(tensor_mosfet_mesh, gate_sweep(-0.2, 1.0, 7), sweep_options(), o);
+    if (!r) FAIL(r.error().message);
+    REQUIRE(r->passes.size() >= 2);
+    for (std::size_t p = 0; p + 1 < r->passes.size(); ++p) {
+        CHECK(r->passes[p].marked_by_difference);
+        CHECK(r->passes[p].candidate_count == 0);
+        CHECK(r->passes[p + 1].source != solve::MeshSource::proposal);
+    }
 }
 
 TEST_CASE("derived goals: deterministic, and the certificate independent of the policy and predictor (DC8)",

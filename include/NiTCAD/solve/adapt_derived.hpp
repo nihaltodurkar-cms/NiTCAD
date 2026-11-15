@@ -60,4 +60,9 @@ struct TransferCurve {
                                                                   std::size_t from = 0,
                                                                   std::size_t to = static_cast<std::size_t>(-1));
 
+// DG1: the contacts a sweep moves, ascending: a contact whose bias at some point differs from point
+// 0's (a point with fewer biases leaves the rest unmoved). One rule for `adapt()` and the deck's
+// check (DR9), so `nitcad check` accepts exactly the sweeps the loop does.
+[[nodiscard]] std::vector<std::size_t> swept_contacts(std::span<const std::vector<double>> points);
+
 }  // namespace NiTCAD::solve

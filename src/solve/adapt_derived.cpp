@@ -165,4 +165,18 @@ std::expected<DerivedGoal, base::Error> derived_goal(GoalKind kind, const Transf
     return g;
 }
 
+std::vector<std::size_t> swept_contacts(std::span<const std::vector<double>> points) {
+    std::vector<std::size_t> swept;
+    if (points.empty()) return swept;
+    for (std::size_t c = 0; c < points[0].size(); ++c) {
+        for (std::size_t k = 1; k < points.size(); ++k) {
+            if (c < points[k].size() && points[k][c] != points[0][c]) {
+                swept.push_back(c);
+                break;
+            }
+        }
+    }
+    return swept;
+}
+
 }  // namespace NiTCAD::solve

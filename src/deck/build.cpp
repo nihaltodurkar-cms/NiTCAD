@@ -22,6 +22,7 @@
 #include "NiTCAD/mesh/tensor_grid.hpp"
 #include "NiTCAD/physics/insulator.hpp"
 #include "NiTCAD/solve/adapt_adjoint.hpp"
+#include "NiTCAD/solve/adapt_derived.hpp"
 #include "values.hpp"
 #include "waveforms.hpp"
 
@@ -1827,15 +1828,7 @@ std::expected<void, base::Error> Builder::adapt(Plan& plan) const {
         if (plan.points.size() < 3) {
             return std::unexpected(at(derived_goal->line, "a vt, gm or swing goal needs a sweep of at least 3 points"));
         }
-        std::vector<std::size_t> swept;
-        for (std::size_t c = 0; c < plan.points[0].size(); ++c) {
-            for (std::size_t k = 1; k < plan.points.size(); ++k) {
-                if (plan.points[k][c] != plan.points[0][c]) {
-                    swept.push_back(c);
-                    break;
-                }
-            }
-        }
+        const std::vector<std::size_t> swept = solve::swept_contacts(plan.points);  // DR9: adapt()'s rule
         if (swept.size() != 1) {
             return std::unexpected(at(derived_goal->line, "a vt, gm or swing goal needs a sweep of exactly one contact "
                                                           "(this sweep moves " + std::to_string(swept.size()) + ")"));
