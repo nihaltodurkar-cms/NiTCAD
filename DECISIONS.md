@@ -6521,7 +6521,7 @@ each ruling is the recommended option under the standing instruction (no criteri
 - Baseline on the swing window (points 3, 4), from the earlier run (`max_passes` 12): tol 1e-2 reached 19 968 DOFs (12 passes, not certified) with 70.1426 mV/dec, 0.30 off, within the 0.70 allowance.
 - Against the baseline: V_T 38 157 / 409 332 = **0.093×** (≤ 0.8×: passes). Swing 30 294 / 19 968 = **1.52×: misses**.
 - Against the uniform ladder (DR3; nodes for the same error): V_T 12 719 nodes at 0.73 mV, where 16× (61 985 nodes) is still about 1.8 mV off (about 151 k nodes by log-log): about 0.08×, passes. g_m (not required) 3036 nodes; no level up to 16× reaches 1.1e-3. Swing 10 098 nodes at 0.313, where 8× (15 633 nodes) is at 0.315: 0.65× by interpolation (misses 1/3); read level by level, 16× (61 985) is the first at or below it (0.16×).
-- **DC4 misses for the swing on both halves.** The current goal on points 3, 4 already weights the subthreshold currents the swing is built from, and the swing's error is in y (DR6), which uniform y refinement reaches cheaply. Not ruled: a frozen criterion, so the owner's.
+- **DC4 misses for the swing on both halves.** The current goal on points 3, 4 already weights the subthreshold currents the swing is built from, and the swing's error is in y (DR6), which uniform y refinement reaches cheaply. **Accepted as a limitation (owner, 2026-11-15: "Accept as limitation (Recommended)")**; stated in ARCHITECTURE 11.3. The swing still certifies within its allowance (DC3, DC5).
 
 ---
 
