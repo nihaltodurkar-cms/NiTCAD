@@ -6556,6 +6556,14 @@ mutants covering DG1–DG10, DG12 and DR2–DR9. **51 caught, 1 equivalent, 1 su
   move on M′ either changes the segment (the single-level error then exceeds the allowance) or is caught again on M″.
   **Accepted as a survivor (owner, 2026-11-15: "Accept as survivor (Recommended)").**
 
+**DC10 (suites, 2026-11-15; on 259c6b2).** Release, `/W4 /WX`, ctest serial (`-j1`, owner ruling): **222/222 pass**
+in 2,864 s (log `/c/Users/disha/mut17/dc10_rel.log`); the build is warning-free (`/WX`). The first attempt was stopped
+by the owner at about test 125 with all passing, and was rerun from the start. The local build has no MKL runtime
+configured, so the PARDISO cases skip here (they are required in CI; PARDISO on oneMKL 2026.2.1 is PR #84).
+**Debug is left to CI (owner, 2026-11-15: "skip debug locally, leave it to CI"; confirmed for 17c the same day).**
+So DC10's Debug half, and its bound that Debug grows by ≤ 60 s, are judged on this branch's CI run, not locally.
+Release was run at the branch head only, not at every commit; the earlier commits ran their own fast tests.
+
 ---
 
 ### Unit 55 — theoretical calculation validation framework: research and design proposal (proposed 2026-10-31; on `verify/theoretical-validation`)
