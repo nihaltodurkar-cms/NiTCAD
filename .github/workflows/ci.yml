@@ -90,7 +90,7 @@ jobs:
         uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
         with:
           path: ${{ runner.temp }}\mkl-nupkg
-          key: mkl-nupkg-ac2d4a14a70b0215-2a0f9fcdb51d8ac9
+          key: mkl-nupkg-33883881fca081ff-7dcc973c7a672aca
 
       - name: Install pinned MKL runtime
         shell: pwsh
@@ -105,10 +105,10 @@ jobs:
             if ($actual -ne $Sha256.ToUpperInvariant()) { throw "SHA-256 mismatch for ${Url}: $actual" }
           }
           $feed = 'https://api.nuget.org/v3-flatcontainer'
-          Get-Pinned "$feed/intelmkl.redist.win-x64/2026.1.0.226/intelmkl.redist.win-x64.2026.1.0.226.nupkg" `
-            'ac2d4a14a70b021557170f53460b57038af5ab1977e82a05aca8e4a5af7bcb61' "$packages\mkl.zip"
-          Get-Pinned "$feed/intelopenmp.redist.win/2026.1.0.239/intelopenmp.redist.win.2026.1.0.239.nupkg" `
-            '2a0f9fcdb51d8ac9fa535b67f013fd9341338355679261a39b946ef5e3f399fe' "$packages\openmp.zip"
+          Get-Pinned "$feed/intelmkl.redist.win-x64/2026.2.1.12/intelmkl.redist.win-x64.2026.2.1.12.nupkg" `
+            '33883881fca081ff587a2695ef6954f5c25fc273941dcfdf695749d54d908bec' "$packages\mkl.zip"
+          Get-Pinned "$feed/intelopenmp.redist.win/2026.2.0.864/intelopenmp.redist.win.2026.2.0.864.nupkg" `
+            '7dcc973c7a672aca8117a86eb6d9693ddda5879ebc8a5f1a8f6d2fd47eddfd82' "$packages\openmp.zip"
           foreach ($zip in "$packages\mkl.zip", "$packages\openmp.zip") {
             $unpacked = Join-Path $env:RUNNER_TEMP ("unpack-" + [IO.Path]::GetFileNameWithoutExtension($zip))
             Expand-Archive $zip -DestinationPath $unpacked -Force

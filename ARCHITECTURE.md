@@ -2159,7 +2159,13 @@ interface fits both direct and iterative backends stays unproven until one is re
   `SparseMatrix`'s) and the Intel OpenMP threading layer, and checks the runtime with a 1 × 1 solve. Process-wide and
   thread-safe; the first success wins. Without it, `create` with `mkl_pardiso` is `invalid_input`. Paths are explicit
   arguments, never environment variables (6.10, 3). Verified with oneMKL 2026.1 (Intel's NuGet redistributable, as CI
-  uses) and the 2026.1 runtime of a local conda environment. NiTCAD stays MIT; MKL is an optional, separately licensed
+  uses) and the 2026.1 runtime of a local conda environment; since 2026-11-15 CI and the local runtime use oneMKL
+  2026.2.1 (Build 20260915; the full Release suite, 219 tests, passes on it, and the measured differences below
+  shift within their tolerances: 4 threads against 1 3.7e-11, the coupled system 7.8e-12, complex 1.8e-13). The
+  FinFET deck (`decks/finfet_3d.deck`, PARDISO on 6 threads, same build) runs in 481 s on 2026.2.1 and 465 s on
+  2026.1; the 17 points' terminal currents agree to 2.3e-11 relative (1e-14 or better from point 4 on), and point 0
+  takes one bias substep on 2026.2.1 where 2026.1 takes none.
+  NiTCAD stays MIT; MKL is an optional, separately licensed
   external dependency (N6).
 - **PARDISO settings:** matrix type 11 (real unsymmetric) or 13 (complex unsymmetric) on the CSR pattern as given
   (zero-based, PARDISO's native layout: no transpose); METIS nested dissection; PARDISO's weighted matching and scaling
@@ -2998,8 +3004,10 @@ the owner approves them in a unit request: `cmake/` (toolchain modules). `benchm
   workflow:** the first run missed and saved; the second restored all 4 packages in 850 ms (vcpkg install step 228 ms). Whole-job time
   barely changed (about 2m20s to 2m35s, Debug and Release), so the cache is not the dominant cost.
   **Unit 18:** CI also installs the Intel MKL runtime for the PARDISO tests: Intel's NuGet redistributables
-  `intelmkl.redist.win-x64` 2026.1.0.226 (174 MB) and `intelopenmp.redist.win` 2026.1.0.239, each checked against a
-  pinned SHA-256 (computed locally from the downloads; NuGet publishes none) and cached by those hashes, their DLLs
+  `intelmkl.redist.win-x64` 2026.2.1.12 (178 MB) and `intelopenmp.redist.win` 2026.2.0.864 (since 2026-11-15; Unit 18
+  pinned 2026.1.0.226 and 2026.1.0.239; MKL 2026.2.1 requires OpenMP 2026.2 or later), each checked against a
+  pinned SHA-256 (computed locally from the downloads, which were checked against the SHA-512 `packageHash` of
+  NuGet's catalog) and cached by those hashes, their DLLs
   copied into one directory. The configuration gets `NITCAD_MKL_RUNTIME` and `NITCAD_REQUIRE_MKL=ON`, so a missing
   runtime fails it instead of the PARDISO tests skipping. Locally the variable is optional and the tests skip without
   it.
