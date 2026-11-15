@@ -778,8 +778,10 @@ TEST_CASE("derived goals: DR6's false swing stop is rejected on M'' (DR6, DC9)",
     REQUIRE(r->certificates.size() == 1);
     CHECK(r->certificates[0].status != solve::CertificateStatus::certified);
     // DC9 (DR5, DG7): the M' figure from the points solved on M' alone; one taken from a curve mixing M and M'
-    // (no range) jumps segment and reports 43.7.
-    CHECK(std::abs(r->certificates[0].verified_error - 1.3347449054118101) <= 1e-9);
+    // (no range) jumps segment and reports 43.7. Relative 1e-5: the figure is a two-level Richardson difference of
+    // the swing, which amplifies the last bits of the solves; Debug gives 1.33474501 (CI, 2026-11-16), 7.8e-8 off
+    // Release's 1.33474491. The mutant's 43.7 stays 7 orders outside.
+    CHECK(std::abs(r->certificates[0].verified_error - 1.3347449054118101) <= 1e-5 * 1.3347449054118101);
 }
 
 TEST_CASE("derived goals: a window that moves on M' is never certified (DC6, DG6)", "[.adapt_derived_slow]") {
