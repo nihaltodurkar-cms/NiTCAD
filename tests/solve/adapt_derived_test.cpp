@@ -160,6 +160,35 @@ TEST_CASE("derived goals: the restated figures equal analysis/dc.hpp's, bit for 
     }
 }
 
+TEST_CASE("derived goals: the restated figures' ties and the swing's ceiling, as dc.hpp's (DG12, DC9)",
+          "[adapt_derived]") {
+    const auto curve_of = [](std::vector<double> v, std::vector<double> i) {
+        solve::TransferCurve c;
+        c.drain_V = 0.05;
+        c.gate_V = std::move(v);
+        c.current = std::move(i);
+        c.resolution.assign(c.current.size(), 0.0);
+        return c;
+    };
+    // A straight line: every derivative is exactly 1, and peak_transconductance takes the first.
+    const solve::TransferCurve line = curve_of({0.0, 1.0, 2.0, 3.0, 4.0}, {1.0, 2.0, 3.0, 4.0, 5.0});
+    auto gm = solve::derived_goal(solve::GoalKind::gm, line);
+    auto ref_gm = analysis::max_transconductance(as_curve(line));
+    REQUIRE(gm.has_value());
+    REQUIRE(ref_gm.has_value());
+    CHECK(gm->first == ref_gm->window.first);
+    CHECK(gm->point == 0);
+    // A point exactly at the ceiling (1e-2 of the largest current) is usable: the steepest segment is 1..2.
+    const solve::TransferCurve ceiling = curve_of({0.0, 1.0, 2.0, 3.0, 4.0}, {1e-5, 1e-4, 1e-2, 0.5, 1.0});
+    auto sw = solve::derived_goal(solve::GoalKind::swing, ceiling);
+    auto ref_sw = analysis::subthreshold_swing(as_curve(ceiling));
+    REQUIRE(sw.has_value());
+    REQUIRE(ref_sw.has_value());
+    CHECK(sw->value == ref_sw->value);
+    CHECK(sw->first == 1);
+    CHECK(sw->first == ref_sw->window.first);
+}
+
 TEST_CASE("derived goals: each sensitivity is the figure's finite difference, the window fixed (DC2)", "[adapt_derived]") {
     for (const double sign : {1.0, -1.0}) {
         for (const solve::GoalKind kind : {solve::GoalKind::vt, solve::GoalKind::gm, solve::GoalKind::swing}) {
@@ -324,6 +353,20 @@ TEST_CASE("derived goals: a gm and a vt goal on the coarse tensor MOSFET (DG2, D
     // V_T of a 1e17 / 5 nm MOSFET lies inside the sweep.
     CHECK(r->certificates[1].value > 0.0);
     CHECK(r->certificates[1].value < 1.2);
+    // DC9: the figures are the extractors' on the final sweep, V_T with the goal contact's drain bias (DG1).
+    solve::TransferCurve c;
+    c.drain_V = pts[0][1];
+    for (std::size_t k = 0; k < r->sweep.points.size(); ++k) {
+        c.gate_V.push_back(pts[k][3]);
+        c.current.push_back(r->sweep.points[k].terminal_current[1]);
+        c.resolution.push_back(0.0);
+    }
+    auto vt = solve::derived_goal(solve::GoalKind::vt, c);
+    auto gm = solve::derived_goal(solve::GoalKind::gm, c);
+    REQUIRE(vt.has_value());
+    REQUIRE(gm.has_value());
+    CHECK(r->certificates[1].value == vt->value);
+    CHECK(r->certificates[0].value == gm->value);
 }
 
 TEST_CASE("derived goals: a swing beside a gm goal adds its marks to gm's (DR9, DR7 a)", "[adapt_derived]") {
@@ -375,7 +418,10 @@ TEST_CASE("derived goals: a swing goal makes no intelligent proposal; DR7's mark
         CHECK(r->passes[p].marked_by_difference);
         CHECK(r->passes[p].candidate_count == 0);
         CHECK(r->passes[p + 1].source != solve::MeshSource::proposal);
+        // DC9: no allocation was tried (the swing has no adjoint weights, so one would be empty, a miss).
+        CHECK_FALSE(r->passes[p].empty_proposal);
     }
+    CHECK(r->misses == 0);
 }
 
 TEST_CASE("derived goals: deterministic, and the certificate independent of the policy and predictor (DC8)",
@@ -711,6 +757,21 @@ TEST_CASE("derived goals: probe DC4's current-goal baseline", "[.adapt_derived_b
             std::fflush(stdout);
         }
     }
+}
+
+TEST_CASE("derived goals: DR6's false swing stop is rejected on M'' (DR6, DC9)", "[adapt_derived]") {
+    // DR6: on the 338-node first pass the single-level error (0.13) is within the allowance (0.69) while the
+    // swing is about 1.1 mV/dec off; only the two-level error (about 0.95) rejects the stop.
+    solve::AdaptOptions o;
+    o.goals = {{.contact = 1, .kind = solve::GoalKind::swing}};
+    o.tolerance = 1e-2;
+    o.weighting = solve::Weighting::adjoint;
+    o.max_passes = 2;
+    auto r = solve::adapt(tensor_mosfet_mesh, dc3_points, sweep_options(), o);
+    if (!r) FAIL(r.error().message);
+    CHECK(r->rejected_stops >= 1);
+    REQUIRE(r->certificates.size() == 1);
+    CHECK(r->certificates[0].status != solve::CertificateStatus::certified);
 }
 
 TEST_CASE("derived goals: a window that moves on M' is never certified (DC6, DG6)", "[.adapt_derived_slow]") {
