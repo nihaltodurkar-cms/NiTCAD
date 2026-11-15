@@ -253,7 +253,7 @@ constexpr std::array<KeyInfo, 18> adapt_keys{{
     {"predictor", 0, false, "<file>", "Unit 17b's cross-run model (refused in this unit)", {}, {}, {}},
 }};
 
-constexpr std::array<KeyInfo, 9> output_keys{{
+constexpr std::array<KeyInfo, 10> output_keys{{
     {"sweep", 0, false, "<file>", "a sweep's or trace's results (.nitsweep)", {}, {}, {}},
     {"device", 0, false, "<file>", "the device (.nitdev)", {}, {}, {}},
     {"mesh", 0, false, "<file>", "the mesh", {}, {}, {}},
@@ -263,6 +263,7 @@ constexpr std::array<KeyInfo, 9> output_keys{{
     {"small_signal", 0, false, "<file>", "a small-signal run's results (.nitac)", {}, {}, {}},
     {"adapt", 0, false, "<file>", "an [adapt] run's report (.nitadapt)", {}, {}, {}},
     {"adapt_meshes", 0, false, "<directory>", "an [adapt] run's pass meshes", {}, {}, {}},
+    {"adapt_history", 0, false, "<file>", "an [adapt] run's learning history (.nithist, Unit 17b)", {}, {}, {}},
 }};
 
 constexpr std::array<SectionInfo, 16> sections{{

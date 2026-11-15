@@ -50,6 +50,7 @@ struct Deck {
     std::string source;              // the file name used in messages ("<text>" when parsed from text)
     std::filesystem::path directory;  // relative paths in the deck are relative to this
     std::vector<Section> sections;
+    std::string text;                // the text parsed, without a byte-order mark (Unit 17b: a history keeps it)
 };
 
 [[nodiscard]] std::expected<Deck, base::Error> parse(std::string_view text,

@@ -1073,7 +1073,13 @@ std::expected<AdaptResult, base::Error> adapt(const DeviceBuilder& build, std::s
         const std::size_t start_dofs = dofs_of(built->device, bias);
         for (int round = 0; round < 12; ++round) {
             SizeTargets t;
-            if (o.intelligent.prediction) {
+            if (o.intelligent.first_prediction) {
+                // Unit 17b (LB4): the learned prediction, the start mesh's rounds only.
+                t = o.intelligent.first_prediction(built->device);
+                if (round == 0) {
+                    for (const double s : t.size) result.predicted_nodes += std::isfinite(s) ? 1 : 0;
+                }
+            } else if (o.intelligent.prediction) {
                 t = o.intelligent.prediction(built->device);
             } else {
                 auto p = predict_sizes(built->device, points, bias);

@@ -24,6 +24,7 @@
 #include "NiTCAD/physics/semiconductor.hpp"
 #include "NiTCAD/solve/adapt.hpp"
 #include "NiTCAD/solve/adapt_policy.hpp"
+#include "NiTCAD/solve/adapt_learn.hpp"
 #include "NiTCAD/solve/bias.hpp"
 #include "legacy_graded_mesh.hpp"
 
@@ -288,6 +289,36 @@ TEST_CASE("policy: the certificate does not depend on the policy (AC21)", "[adap
         CHECK(same(b->certificates[c].order, i->certificates[c].order));
         CHECK(same(b->certificates[c].allowed, i->certificates[c].allowed));
         CHECK(b->certificates[c].status == i->certificates[c].status);
+    }
+    // Unit 17b (AC21's predictor case): a learned model given (its trees predict no refinement, so the
+    // start mesh, and with the same empty proposals the final mesh, are the basic run's), through the
+    // real target path (learned_targets): the same certificates, bit for bit.
+    {
+        results::LearnedModel model;
+        model.materials = solve::material_keys(legacy_diode(uniform(2e-4, 21)));
+        model.trees = {{results::TreeNode{.feature = 13, .threshold = 0.0, .left = 1, .right = 2},
+                        results::TreeNode{.value = 0.1}, results::TreeNode{.value = 0.2}}};
+        model.tree_count = 1;
+        solve::AdaptOptions op = o;
+        op.intelligent.first_prediction = [&](const device::Device& d) {
+            auto t = solve::learned_targets(model, d, points, legacy_options());
+            REQUIRE(t.has_value());
+            return *t;
+        };
+        auto p = solve::adapt(diode_builder(21), points, legacy_options(), op);
+        REQUIRE(p.has_value());
+        const auto pp = p->mesh->device.mesh().points();
+        REQUIRE(pp.size() == pb.size());
+        for (std::size_t k = 0; k < pb.size(); ++k) REQUIRE(pb[k] == pp[k]);
+        REQUIRE(p->certificates.size() == b->certificates.size());
+        for (std::size_t c = 0; c < b->certificates.size(); ++c) {
+            CHECK(same(b->certificates[c].value, p->certificates[c].value));
+            CHECK(same(b->certificates[c].estimate, p->certificates[c].estimate));
+            CHECK(same(b->certificates[c].verified_error, p->certificates[c].verified_error));
+            CHECK(same(b->certificates[c].order, p->certificates[c].order));
+            CHECK(same(b->certificates[c].allowed, p->certificates[c].allowed));
+            CHECK(b->certificates[c].status == p->certificates[c].status);
+        }
     }
     // The decision layer did act: misses and a fallback recorded on the intelligent run only.
     CHECK(b->misses == 0);

@@ -67,13 +67,14 @@ std::optional<std::string_view> strip_comment(std::string_view line) {
 
 std::expected<Deck, base::Error> parse(std::string_view text, std::string source,
                                        std::filesystem::path directory) {
-    Deck deck{std::move(source), std::move(directory), {}};
+    Deck deck{std::move(source), std::move(directory), {}, {}};
     if (text.find('\0') != std::string_view::npos) {
         int line = 1;
         for (const char c : text.substr(0, text.find('\0'))) line += c == '\n' ? 1 : 0;
         return std::unexpected(at(deck.source, line, "NUL byte"));
     }
     if (text.starts_with("\xEF\xBB\xBF")) text.remove_prefix(3);  // a UTF-8 byte-order mark
+    deck.text = std::string(text);
 
     int number = 0;
     std::size_t pos = 0;

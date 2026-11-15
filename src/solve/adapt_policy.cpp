@@ -43,12 +43,6 @@ struct XIndex {
     }
 };
 
-struct Feature {
-    mesh::Point at;
-    std::array<double, 3> normal;
-    double span;
-    double size;
-};
 
 bool is_gate_like(device::ContactKind k) {
     return k == device::ContactKind::gate || k == device::ContactKind::electrode;
@@ -56,8 +50,8 @@ bool is_gate_like(device::ContactKind k) {
 
 }  // namespace
 
-std::expected<Prediction, base::Error> predict_sizes(const device::Device& d, std::span<const std::vector<double>> points,
-                                                     const BiasOptions& options) {
+std::expected<FeaturePoints, base::Error> feature_points(const device::Device& d, std::span<const std::vector<double>> points,
+                                                       const BiasOptions& options) {
     const auto contacts = d.contacts();
     for (const auto& p : points) {
         if (p.size() != contacts.size()) return std::unexpected(invalid("a bias point needs one bias per contact"));
@@ -101,8 +95,8 @@ std::expected<Prediction, base::Error> predict_sizes(const device::Device& d, st
     }
 
     const XIndex index(pts);
-    std::vector<Feature> features;
-    Prediction out;
+    FeaturePoints out;
+    std::vector<FeaturePoint>& features = out.points;
     // Junctions.
     for (const mesh::Edge& e : m.edges()) {
         const auto a = static_cast<std::size_t>(e.first), b = static_cast<std::size_t>(e.second);
@@ -136,8 +130,7 @@ std::expected<Prediction, base::Error> predict_sizes(const device::Device& d, st
         }
         const double neff = N1 * N2 / (N1 + N2);
         const double LD = std::sqrt(es * vt / (q * neff));
-        features.push_back({at, normal, W, 0.5 * LD});
-        ++out.junction_points;
+        features.push_back({FeaturePoint::Kind::junction, at, normal, W, 0.5 * LD});
     }
     // Insulator interfaces under gates.
     const bool mlda = options.models.quantum_confinement == assemble::QuantumConfinement::mlda;
@@ -162,7 +155,7 @@ std::expected<Prediction, base::Error> predict_sizes(const device::Device& d, st
         const double Es = eps_ox * v / (eps(i) * t_ox);
         const double lambda = std::max(vt / Es, lambda_q);
         const std::array<double, 3> n = inward(i);
-        features.push_back({pts[i], n, 5.0 * lambda, lambda});
+        features.push_back({FeaturePoint::Kind::interface, pts[i], n, 5.0 * lambda, lambda});
         // The depletion region under the gate (AR5): the junction's rule, L_D / 2 across the largest
         // depletion width, its surface potential at most 2 phi_F (strong inversion) or the gate bias.
         const double N = std::abs(net(i));
@@ -171,9 +164,8 @@ std::expected<Prediction, base::Error> predict_sizes(const device::Device& d, st
             const double psi = std::min(2.0 * vt * std::log(N / ni), v);
             const double Wd = std::sqrt(2.0 * eps(i) * psi / (q * N));
             const double LD = std::sqrt(eps(i) * vt / (q * N));
-            features.push_back({pts[i], n, Wd, 0.5 * LD});
+            features.push_back({FeaturePoint::Kind::depletion, pts[i], n, Wd, 0.5 * LD});
         }
-        ++out.interface_points;
     };
     for (std::size_t g = 0; g < contacts.size(); ++g) {
         if (contacts[g].kind != device::ContactKind::gate) continue;
@@ -214,10 +206,30 @@ std::expected<Prediction, base::Error> predict_sizes(const device::Device& d, st
         for (const std::size_t k : electrodes) t_ox = std::min(t_ox, distance(pts[i], pts[k]));
         add_interface(i, eps(insulator_of[i]), t_ox, v_electrode);
     }
+    out.v_junction = v_junction;
+    for (std::size_t g = 0; g < contacts.size(); ++g) {
+        if (is_gate_like(contacts[g].kind)) out.v_gate = std::max(out.v_gate, v_gate[g]);
+    }
+    return out;
+}
+
+std::expected<Prediction, base::Error> predict_sizes(const device::Device& d, std::span<const std::vector<double>> points,
+                                                     const BiasOptions& options) {
+    auto found = feature_points(d, points, options);
+    if (!found) return std::unexpected(found.error());
+    const auto pts = d.mesh().points();
+    const std::size_t nn = pts.size();
+    const auto semi = [&](std::size_t i) { return !d.is_insulator(static_cast<mesh::NodeId>(i)); };
+    const XIndex index(pts);
+    Prediction out;
+    for (const FeaturePoint& f : found->points) {
+        out.junction_points += f.kind == FeaturePoint::Kind::junction ? 1 : 0;
+        out.interface_points += f.kind == FeaturePoint::Kind::interface ? 1 : 0;
+    }
     // Per node, the smallest target over the features covering it.
     out.targets.size.assign(nn, std::numeric_limits<double>::infinity());
     out.targets.normal.assign(nn, std::array<double, 3>{});
-    for (const Feature& f : features) {
+    for (const FeaturePoint& f : found->points) {
         index.within(f.at, f.span, [&](std::size_t i) {
             if (!semi(i) || !(f.size < out.targets.size[i])) return;
             out.targets.size[i] = f.size;
