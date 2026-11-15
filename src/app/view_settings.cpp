@@ -615,7 +615,7 @@ std::expected<Scene, base::Error> build_scene(const Workspace& w, const ViewSett
         if (!d) return std::unexpected(std::move(d.error()));
         FieldOptions f;
         f.view = view;
-        f.map = o.colormap == "turbo" ? Colormap::coolwarm : *colormap;  // XD6: cool-warm unless one is chosen
+        f.map = takes_coolwarm(o) ? Colormap::coolwarm : *colormap;  // XD6: cool-warm unless one is chosen
         f.contours = o.contours;
         f.title = d->title;
         if (o.range) {
@@ -824,6 +824,58 @@ int clip_step(double lo_um, double hi_um, double value_um) noexcept {
                                        static_cast<double>(clip_steps)));
 }
 
+std::vector<std::string> point_labels(const Workspace& w) {
+    std::vector<std::string> out;
+    const std::size_t n = w.points.size();
+    if (w.transient) {
+        for (std::size_t k = 0; k < n; ++k) {
+            out.push_back(k < w.transient->snapshots.size()
+                              ? std::format("{} · {}", k, render::time_label(w.transient->snapshots[k].time_s))
+                              : std::to_string(k));
+        }
+        return out;
+    }
+    // The contacts whose bias varies, the swept one first.
+    const auto contacts = w.device->contacts();
+    std::vector<std::vector<double>> biases;
+    for (const auto& p : w.points) biases.push_back(p.bias_V);
+    std::vector<std::size_t> varying;
+    for (std::size_t c = 0; c < contacts.size(); ++c) {
+        const bool all = std::ranges::all_of(biases, [&](const std::vector<double>& b) { return c < b.size(); });
+        if (all && n > 0 && std::ranges::any_of(biases, [&](const std::vector<double>& b) { return b[c] != biases.front()[c]; })) {
+            varying.push_back(c);
+        }
+    }
+    if (const std::size_t swept = swept_contact(biases); std::ranges::find(varying, swept) != varying.end()) {
+        std::erase(varying, swept);
+        varying.insert(varying.begin(), swept);
+    }
+    for (std::size_t k = 0; k < n; ++k) {
+        std::string label = std::to_string(k);
+        for (std::size_t j = 0; j < varying.size(); ++j) {
+            label += std::format("{}{} = {:.4g} V", j == 0 ? " · " : ", ", contacts[varying[j]].name, biases[k][varying[j]]);
+        }
+        out.push_back(std::move(label));
+    }
+    return out;
+}
+
+bool takes_coolwarm(const ViewSettings& s) noexcept {
+    return s.kind == ViewKind::difference && (s.colormap == app_colormap || s.colormap == "turbo");
+}
+
+std::string max_metric(std::string_view title, double value, bool difference) {
+    std::string_view symbol = title, unit;
+    if (const auto open = title.rfind(" ("); open != std::string_view::npos && title.ends_with(')')) {
+        symbol = title.substr(0, open);
+        unit = title.substr(open + 2, title.size() - open - 3);
+    }
+    std::string text = difference ? std::string("Max |B \xE2\x88\x92 A|") : "Max " + std::string(symbol);
+    text += " " + (std::isfinite(value) ? std::format("{:.4g}", value) : std::string("-"));
+    if (!unit.empty()) text += " " + std::string(unit);
+    return text;
+}
+
 std::vector<std::string> plot_arguments(const ViewSettings& s, const Workspace* b) {
     std::vector<std::string> a{"--view", std::string(to_string(s.kind))};
     const bool fieldish = s.kind == ViewKind::field || s.kind == ViewKind::slice || s.kind == ViewKind::iso ||
@@ -835,7 +887,8 @@ std::vector<std::string> plot_arguments(const ViewSettings& s, const Workspace* 
     if (fieldish) a.insert(a.end(), {"--field", s.field});
     if (s.point) a.insert(a.end(), {"--point", std::to_string(*s.point)});
     if (!s.scale.empty() && fieldish) a.insert(a.end(), {"--scale", s.scale});
-    if (s.colormap != "turbo") a.insert(a.end(), {"--colormap", s.colormap});
+    // ZD8: the app's default (viridis) named, as nitcad plot's is turbo; none on a difference drawn cool-warm.
+    if (!is_plot(s.kind) && s.colormap != "turbo" && !takes_coolwarm(s)) a.insert(a.end(), {"--colormap", s.colormap});
     if (s.range) a.insert(a.end(), {"--range", std::format("{},{}", s.range->first, s.range->second)});
     if (s.contours) a.emplace_back("--contours");
     if (s.edges) a.emplace_back("--edges");

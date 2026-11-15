@@ -160,7 +160,7 @@ TEST_CASE("app views: errors as nitcad plot reports them", "[app]") {
 TEST_CASE("app views: the options of nitcad plot for a setting", "[app]") {
     ViewSettings s;
     using A = std::vector<std::string>;
-    CHECK(app::plot_arguments(s) == A{"--view", "solid"});
+    CHECK(app::plot_arguments(s) == A{"--view", "solid", "--colormap", "viridis"});
     s.kind = ViewKind::field;
     s.field = "n";
     s.point = 2;
@@ -183,7 +183,7 @@ TEST_CASE("app views: the options of nitcad plot for a setting", "[app]") {
     t.sense = "drain";
     t.frequency = 1;
     t.log = true;
-    CHECK(app::plot_arguments(t) == A{"--view", "slice", "--field", "potential", "--slice", "x=0.25", "--slice",
+    CHECK(app::plot_arguments(t) == A{"--view", "slice", "--field", "potential", "--colormap", "viridis", "--slice", "x=0.25", "--slice",
                                       "z=1.5", "--clip", "0,0,0:1,0.5,2", "--levels", "1e+17,2.5e+18",
                                       "--contact", "gate", "--sense", "drain", "--frequency", "1", "--log"});
 }
@@ -317,7 +317,7 @@ TEST_CASE("app views 26b: cut lines, as nitcad plot takes them (XD5, XG4)", "[ap
     CHECK(app::build_scene(*unrun, doping).has_value());
     // nitcad plot's option.
     using A = std::vector<std::string>;
-    CHECK(app::plot_arguments(s) == A{"--view", "field", "--field", "potential", "--cut", "0,0.87:2,0.87"});
+    CHECK(app::plot_arguments(s) == A{"--view", "field", "--field", "potential", "--colormap", "viridis", "--cut", "0,0.87:2,0.87"});
 }
 
 TEST_CASE("app views 26b: cut lines drawn as nitcad plot draws them (XG4, WG4's choices)", "[app]") {
@@ -569,26 +569,26 @@ TEST_CASE("app views 26c: arrows, streamlines, the exploded view and the curve p
     v.streamlines = "E";
     v.lines = 10;
     v.from = "gate";
-    CHECK(app::plot_arguments(v) == A{"--view", "field", "--field", "J", "--streamlines", "E", "--lines", "10", "--from",
+    CHECK(app::plot_arguments(v) == A{"--view", "field", "--field", "J", "--colormap", "viridis", "--streamlines", "E", "--lines", "10", "--from",
                                       "gate", "--vectors", "J", "--arrows", "120"});
     v = {};
     v.kind = ViewKind::slice;
     v.streamlines = "J";
     v.seeds = "x=1";
-    CHECK(app::plot_arguments(v) == A{"--view", "slice", "--field", "potential", "--streamlines", "J", "--seeds", "x=1"});
+    CHECK(app::plot_arguments(v) == A{"--view", "slice", "--field", "potential", "--colormap", "viridis", "--streamlines", "J", "--seeds", "x=1"});
     ViewSettings e;
     e.kind = ViewKind::exploded;
-    CHECK(app::plot_arguments(e) == A{"--view", "exploded"});
+    CHECK(app::plot_arguments(e) == A{"--view", "exploded", "--colormap", "viridis"});
     e.axis = 2;
     e.gap_um = 0.3;
     e.exploded_field = true;
     e.field = "n";
-    CHECK(app::plot_arguments(e) == A{"--view", "exploded", "--field", "n", "--axis", "z", "--gap", "0.3"});
+    CHECK(app::plot_arguments(e) == A{"--view", "exploded", "--field", "n", "--colormap", "viridis", "--axis", "z", "--gap", "0.3"});
     // Arrows and streamlines kept in a setting but left out off the field views.
     e.vectors = "E";
     e.streamlines = "J";
     e.lines = 5;
-    CHECK(app::plot_arguments(e) == A{"--view", "exploded", "--field", "n", "--axis", "z", "--gap", "0.3"});
+    CHECK(app::plot_arguments(e) == A{"--view", "exploded", "--field", "n", "--colormap", "viridis", "--axis", "z", "--gap", "0.3"});
     CHECK(app::takes_vectors(ViewKind::iso));
     CHECK_FALSE(app::takes_vectors(ViewKind::solid));
     // The curve pickers (YD3) are the existing options.
@@ -1006,6 +1006,7 @@ TEST_CASE("app views 26c: every played frame equals nitcad plot's filmstrip fram
         const fs::path frames = out / c.name;
         std::string args = "plot " + app_test::quoted(r.deck) + " --view filmstrip --field " + c.field + " --every 1";
         if (!c.scale.empty()) args += " --scale " + c.scale;
+        args += " --colormap " + s.colormap;  // ZD8: the app's default, named
         for (const std::string& h : c.hidden) args += " --hide " + h;
         if (c.contours) args += " --contours";
         args += " --size 480x360 --adapter warp --frames " + app_test::quoted(frames) + " --out " +
@@ -1027,4 +1028,144 @@ TEST_CASE("app views 26c: every played frame equals nitcad plot's filmstrip fram
             CHECK(d->max_channel == 0);
         }
     }
+}
+
+TEST_CASE("app views 26d: the Point list's labels (ZD2, ZG2)", "[app]") {
+    using L = std::vector<std::string>;
+    // A single-contact sweep: the swept contact's bias.
+    CHECK(app::point_labels(diode().workspace) ==
+          L{"0 · anode = 0 V", "1 · anode = 0.1 V", "2 · anode = 0.2 V", "3 · anode = 0.3 V", "4 · anode = 0.4 V"});
+    // A transient: the snapshots' times.
+    const app::Workspace& t = diode_transient().workspace;
+    const auto times = app::point_labels(t);
+    REQUIRE(times.size() == t.points.size());
+    REQUIRE(t.transient);
+    for (std::size_t k = 0; k < times.size(); ++k) {
+        CAPTURE(k);
+        CHECK(times[k] == std::to_string(k) + " · " + render::time_label(t.transient->snapshots[k].time_s));
+        CHECK(times[k].starts_with(std::to_string(k) + " · t = "));
+    }
+    // A family (V_G at each V_D, as a trace's points): both contacts, the swept one (the larger spread) first.
+    const app::Workspace& m = mosfet().workspace;
+    const auto contacts = m.device->contacts();
+    const auto index = [&](const char* name) {
+        const auto it = std::ranges::find(contacts, std::string(name), &device::Contact::name);
+        REQUIRE(it != contacts.end());
+        return static_cast<std::size_t>(it - contacts.begin());
+    };
+    const std::size_t gate = index("gate"), drain = index("drain");
+    app::Workspace family;
+    family.device = std::make_unique<device::Device>(*m.device);
+    for (const double vd : {0.05, 1.0}) {
+        for (const double vg : {0.0, 0.5, 1.5}) {
+            results::BiasPoint p;
+            p.bias_V.assign(contacts.size(), 0.0);
+            p.bias_V[gate] = vg;
+            p.bias_V[drain] = vd;
+            family.points.push_back(std::move(p));
+        }
+    }
+    const auto labels = app::point_labels(family);
+    REQUIRE(labels.size() == 6);
+    CHECK(labels[0] == "0 · gate = 0 V, drain = 0.05 V");
+    CHECK(labels[2] == "2 · gate = 1.5 V, drain = 0.05 V");
+    CHECK(labels[4] == "4 · gate = 0.5 V, drain = 1 V");
+    // Volts to four digits.
+    family.points[1].bias_V[gate] = 0.123456;
+    CHECK(app::point_labels(family)[1] == "1 · gate = 0.1235 V, drain = 0.05 V");
+    // Nothing varies: the bare index.
+    app::Workspace fixed;
+    fixed.device = std::make_unique<device::Device>(*m.device);
+    for (int k = 0; k < 3; ++k) fixed.points.push_back(family.points[0]);
+    CHECK(app::point_labels(fixed) == L{"0", "1", "2"});
+    fixed.points.resize(1);
+    CHECK(app::point_labels(fixed) == L{"0"});
+}
+
+TEST_CASE("app views 26d: the metrics strip's maximum with its unit (ZD7, ZG7)", "[app]") {
+    CHECK(app::max_metric("\xCF\x88 (V)", 1.714) == "Max \xCF\x88 1.714 V");
+    CHECK(app::max_metric("n (cm\xE2\x81\xBB\xC2\xB3)", 2.5e19) == "Max n 2.5e+19 cm\xE2\x81\xBB\xC2\xB3");
+    CHECK(app::max_metric("\xCE\x94\xCF\x88 (mV)", 12.25, true) == "Max |B \xE2\x88\x92 A| 12.25 mV");
+    CHECK(app::max_metric("\xCE\x94\xCF\x88 (mV)", std::nan(""), true) == "Max |B \xE2\x88\x92 A| - mV");
+    CHECK(app::max_metric("x", 1.0) == "Max x 1");
+    // Every field the tree lists: its symbol and its unit, from field_info's title.
+    const auto fields = app::available_fields(mosfet().workspace);
+    REQUIRE_FALSE(fields.empty());
+    for (const std::string& key : fields) {
+        CAPTURE(key);
+        const auto f = render::find_field(key);
+        REQUIRE(f);
+        const std::string title(render::field_info(*f).title);
+        const auto open = title.rfind(" (");
+        REQUIRE(open != std::string::npos);
+        const std::string unit = title.substr(open + 2, title.size() - open - 3);
+        REQUIRE_FALSE(unit.empty());
+        CHECK(app::max_metric(title, 2.0) == "Max " + title.substr(0, open) + " 2 " + unit);
+    }
+}
+
+TEST_CASE("app views 26d: viridis is the app's default colormap; the difference view stays cool-warm (ZD8, ZG10)", "[app]") {
+    // New views start with viridis; nitcad plot's default stays turbo, so the command names it.
+    const ViewSettings fresh;
+    CHECK(fresh.colormap == "viridis");
+    CHECK(app::app_colormap == "viridis");
+    const app::Workspace& a = mosfet().workspace;
+    ViewSettings s;
+    s.kind = ViewKind::field;
+    const auto scene = app::build_scene(a, s);
+    REQUIRE(scene);
+    REQUIRE(std::get<render::FieldScene>(*scene).colorbar);
+    CHECK(std::get<render::FieldScene>(*scene).colorbar->map == render::Colormap::viridis);
+    const auto args = app::plot_arguments(s);
+    CHECK(std::ranges::search(args, std::vector<std::string>{"--colormap", "viridis"}).begin() != args.end());
+    // Turbo chosen is nitcad plot's default: not named.
+    s.colormap = "turbo";
+    CHECK_FALSE(has(app::plot_arguments(s), "--colormap"));
+    // The curves name none (they have no colour scale).
+    ViewSettings iv;
+    iv.kind = ViewKind::iv;
+    CHECK_FALSE(has(app::plot_arguments(iv), "--colormap"));
+
+    // The difference: cool-warm at the default (and at nitcad plot's), a colormap chosen otherwise.
+    const app::Workspace& b = mosfet_b().workspace;
+    ViewSettings d;
+    d.kind = ViewKind::difference;
+    CHECK(app::takes_coolwarm(d));
+    const auto map_of = [&](const ViewSettings& v) {
+        const auto x = app::build_scene(a, v, &b);
+        REQUIRE(x);
+        REQUIRE(std::get<render::FieldScene>(*x).colorbar);
+        return std::get<render::FieldScene>(*x).colorbar->map;
+    };
+    CHECK(map_of(d) == render::Colormap::coolwarm);
+    CHECK_FALSE(has(app::plot_arguments(d, &b), "--colormap"));
+    d.colormap = "turbo";
+    CHECK(map_of(d) == render::Colormap::coolwarm);
+    d.colormap = "cividis";
+    CHECK_FALSE(app::takes_coolwarm(d));
+    CHECK(map_of(d) == render::Colormap::cividis);
+    const auto chosen = app::plot_arguments(d, &b);
+    CHECK(std::ranges::search(chosen, std::vector<std::string>{"--colormap", "cividis"}).begin() != chosen.end());
+    // Only the difference view: a field view at the default is viridis.
+    s.colormap = "viridis";
+    CHECK_FALSE(app::takes_coolwarm(s));
+
+    // The default field view's command, run through nitcad plot, draws the app's image (map and scale).
+    const fs::path out = app_test::scratch("views_26d_viridis");
+    ViewSettings v;
+    v.kind = ViewKind::field;
+    v.field = "n";
+    std::string cli_args = "plot " + app_test::quoted(mosfet().deck);
+    for (const std::string& x : app::plot_arguments(v)) cli_args += " \"" + x + "\"";
+    cli_args += " --size 480x360 --adapter warp --out " + app_test::quoted(out / "n.png");
+    const auto cli = app_test::nitcad(cli_args);
+    CAPTURE(cli_args, cli.output);
+    REQUIRE(cli.status == 0);
+    const auto mine = app::build_scene(mosfet().workspace, v);
+    REQUIRE(mine);
+    const auto theirs = render::load_png(out / "n.png");
+    REQUIRE(theirs);
+    const auto diff = render::compare(draw(*mine, 480, 360), *theirs, 0);
+    REQUIRE(diff);
+    CHECK(diff->max_channel == 0);
 }

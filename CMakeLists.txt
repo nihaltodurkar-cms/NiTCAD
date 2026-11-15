@@ -953,7 +953,8 @@ add_library(nitcad_app STATIC
   src/app/run_monitor.cpp
   src/app/deck_vocabulary.cpp
   src/app/live_check.cpp
-  src/app/compare.cpp)
+  src/app/compare.cpp
+  src/app/integration.cpp)
 add_library(NiTCAD::app ALIAS nitcad_app)
 target_include_directories(nitcad_app PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
 target_link_libraries(nitcad_app PUBLIC NiTCAD::deck NiTCAD::render NiTCAD::analysis NiTCAD::io)
@@ -972,7 +973,8 @@ add_executable(nitcad_app_test
   tests/app/run_monitor_test.cpp
   tests/app/deck_vocabulary_test.cpp
   tests/app/live_check_test.cpp
-  tests/app/compare_test.cpp)
+  tests/app/compare_test.cpp
+  tests/app/integration_test.cpp)
 target_link_libraries(nitcad_app_test PRIVATE NiTCAD::app Catch2::Catch2WithMain user32)
 # The view tests compare the app's images with nitcad plot's (WG4's choices).
 add_dependencies(nitcad_app_test nitcad)
@@ -989,7 +991,7 @@ add_library(nitcad_app_window STATIC
   src/app/main_window.cpp
   src/app/pages.cpp
   src/app/self_test.cpp)
-target_link_libraries(nitcad_app_window PUBLIC NiTCAD::app comctl32 comdlg32 shell32 ole32 user32 gdi32 dxgi dxguid)
+target_link_libraries(nitcad_app_window PUBLIC NiTCAD::app comctl32 comdlg32 shell32 ole32 user32 gdi32 dxgi dxguid dwmapi advapi32)
 # The start page lists the examples beside the executable, else the source tree's (26-3, VQ11).
 target_compile_definitions(nitcad_app_window PRIVATE NITCAD_EXAMPLES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/examples")
 target_include_directories(nitcad_app_window PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src/app")
