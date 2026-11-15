@@ -1010,7 +1010,7 @@ The AC19 gate is `[.ac19]` (hidden, Release by hand); the 17b cases in the suite
 predictor case and the deck cases. Unit 17 merged to `main` meanwhile (72377ad, PR #81, owner "merge pr 81"); this
 branch holds 17's head (6ffad0b), so its PR to `main` carries the 17b commits only.
 
-### Unit 57 — generic fields and equations, completed (proposed 2026-11-15; on `assemble/generic-equations`)
+### Unit 57 — generic fields and equations, completed (proposed 2026-11-15; approved 2026-11-15, not started; on `assemble/generic-equations`)
 
 **Owner request (2026-11-15):** "What next to implement … as per architecture", then "Plan for finish generic
 fields and equations (the Unit 40 follow-up)". This unit does what ARCHITECTURE.md 6.12.1–2 and 11.3 list as "Not
@@ -1069,6 +1069,9 @@ parallel assembly (FD6: not bit-identical); automatic differentiation (6.12.3); 
 | GQ4 | Derived fields in results | (a) The table feeds today's result structs; formats unchanged. (b) Results carry a generic list of named fields too (a file-format version bump). | **(a)**: no format change in a refactor; (b) is a later unit, if the app or exports need it. |
 | GQ5 | The extensibility test (GG8) | (a) Yes. (b) No. | **(a)**: it is the evidence that density gradient can be added without a second architecture. |
 | GQ6 | Slice order | (a) As GE2–GE5. (b) Equilibrium (GE5) before the system (GE3). | **(a)**: GE5 is simpler on the finished `System`. |
+
+**Rulings (owner, 2026-11-15: "choose recommended dont start"):** GQ1–GQ6 all **(a)**, as recommended. GE1–GE7
+and GG1–GG9 stand as written. Implementation is not started and waits for the owner's word to begin slice 0.
 
 **Risks:** the bit-identity surface is the largest since Unit 40. Moving the bias state out of the system could change
 which values a copied system sees (GG6's first two mutants target this). Slice 2's caller migration touches about 44
