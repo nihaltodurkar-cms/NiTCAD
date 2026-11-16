@@ -92,7 +92,7 @@ Evaluated evaluate(const DriftDiffusion& dd, const std::vector<double>& x) {
 
 std::vector<std::string> names(const DriftDiffusion& dd) {
     std::vector<std::string> out;
-    for (const auto& t : assemble::TermAccess::Terms::list(dd)) out.emplace_back(t->info().name);
+    for (const auto& t : assemble::SystemData::Terms::list(dd)) out.emplace_back(t->info().name);
     return out;
 }
 
@@ -154,13 +154,13 @@ TEST_CASE("manufactured sources: the rows they enter, their scaling, no Jacobian
         const Evaluated a = evaluate(plain, x), b = evaluate(dd, x);
         CHECK(a.values == b.values);  // independent of the state: no partials
         // The term alone (as terms_test evaluates one term): its rows and nothing in the Jacobian.
-        const auto& terms = assemble::TermAccess::Terms::list(dd);
+        const auto& terms = assemble::SystemData::Terms::list(dd);
         const auto term = std::ranges::find_if(
             terms, [](const auto& t) { return t->info().name == "manufactured source"; });
         REQUIRE(term != terms.end());
         std::vector<double> f(dd.unknowns());
         auto jacobian = dd.make_jacobian();
-        assemble::TermAccess::Terms::evaluate(dd, **term, x, nullptr, f, jacobian);
+        assemble::SystemData::Terms::evaluate(dd, **term, x, nullptr, f, jacobian);
         CHECK(std::ranges::all_of(jacobian.values(), [](double v) { return v == 0.0; }));
         const double LD = std::pow(s.L_D, D);
         std::vector<char> on_contact(nodes, 0);
@@ -279,14 +279,14 @@ TEST_CASE("manufactured sources: the profile scales every source at the step's e
         const auto dd_ones = *DriftDiffusion::create(d, s, m_ones);
         const auto x = probe(plain, nodes);
         const auto term_of = [](const DriftDiffusion& dd) {
-            const auto& terms = assemble::TermAccess::Terms::list(dd);
+            const auto& terms = assemble::SystemData::Terms::list(dd);
             return std::ranges::find_if(terms, [](const auto& t) { return t->info().name == "manufactured source"; })
                 ->get();
         };
         const auto term_f = [&](const DriftDiffusion& dd, const DriftDiffusion::TimeStep* step) {
             std::vector<double> f(dd.unknowns());
             auto j = dd.make_jacobian();
-            assemble::TermAccess::Terms::evaluate(dd, *term_of(dd), x, step, f, j);
+            assemble::SystemData::Terms::evaluate(dd, *term_of(dd), x, step, f, j);
             return f;
         };
         const std::vector<double> storage = dd1.storage(x);

@@ -51,7 +51,7 @@ std::optional<physics::InsulatorParameters> band_data(const physics::InsulatorPa
 
 }  // namespace
 
-std::optional<base::Error> DriftDiffusion::make_gate_tunnels(const device::Device& device,
+std::optional<base::Error> SystemData::make_gate_tunnels(const device::Device& device,
                                                              const Scaling& scaling) {
     const auto contacts = device.contacts();
     if (std::ranges::none_of(contacts, [](const device::Contact& c) { return c.tunnelling != 0; })) {
@@ -229,20 +229,20 @@ std::optional<base::Error> DriftDiffusion::make_gate_tunnels(const device::Devic
     return std::nullopt;
 }
 
-void DriftDiffusion::locate_gate_tunnels() {
+void SystemData::locate_gate_tunnels(const linalg::SparseMatrix& pattern) {
     for (GateTunnel& t : gate_tunnels_) {
         t.pos_n.clear();
         t.pos_p.clear();
         for (const std::size_t v : t.nodes) {
-            t.pos_n.push_back(detail::position(pattern_, m_ * t.node + 1, m_ * v));
-            t.pos_p.push_back(detail::position(pattern_, m_ * t.node + 2, m_ * v));
+            t.pos_n.push_back(detail::position(pattern, m_ * t.node + 1, m_ * v));
+            t.pos_p.push_back(detail::position(pattern, m_ * t.node + 2, m_ * v));
         }
     }
 }
 
-void DriftDiffusion::gate_tunnel_flux(const GateTunnel& t, std::span<const double> x,
-                                      std::span<const NodeDegeneracy> g,
-                                      GateTunnelFlux& out) const {
+void SystemData::gate_tunnel_flux(const SystemState& st, const GateTunnel& t,
+                                  std::span<const double> x, std::span<const NodeDegeneracy> g,
+                                  GateTunnelFlux& out) const {
     const std::size_t i = t.node;
     const std::size_t K = 3 + t.nodes.size() + (t.lumped ? 1 : 0);
     const std::size_t bias = 3 + t.nodes.size();  // a lumped gate's bias column
@@ -294,7 +294,7 @@ void DriftDiffusion::gate_tunnel_flux(const GateTunnel& t, std::span<const doubl
     // The electrode's Fermi level.
     Q FG = zero(0.0);
     if (t.lumped) {
-        FG.v = -V_T * (gates_.potential(i) + gates_.term(i).offset);  // -V_G
+        FG.v = -V_T * (st.gates_.potential(i) + st.gates_.term(i).offset);  // -V_G
         FG.d[bias] = -1.0;
     } else {
         const std::size_t e = t.nodes.back();
@@ -417,9 +417,14 @@ constexpr std::size_t tunnel_chunk = 16;
 
 }  // namespace
 
-DriftDiffusion::GateTunnelJob::GateTunnelJob(const DriftDiffusion& s, std::span<const double> x,
-                                             std::span<const NodeDegeneracy> g)
-    : s_(s), x_(x), g_(g), out_(s.gate_tunnels_.size()),
+SystemData::GateTunnelJob::GateTunnelJob(const SystemData& s, const SystemState& st,
+                                         std::span<const double> x,
+                                         std::span<const NodeDegeneracy> g)
+    : s_(s),
+      st_(st),
+      x_(x),
+      g_(g),
+      out_(s.gate_tunnels_.size()),
       chunks_((s.gate_tunnels_.size() + tunnel_chunk - 1) / tunnel_chunk) {
     // The calling thread joins in at finish(), so one fewer worker than processors; at least two
     // chunks each, else the threads' start costs more than they save.
@@ -427,25 +432,26 @@ DriftDiffusion::GateTunnelJob::GateTunnelJob(const DriftDiffusion& s, std::span<
     for (std::size_t t = 1; t < threads; ++t) workers_.emplace_back([this] { work(); });
 }
 
-void DriftDiffusion::GateTunnelJob::work() {
+void SystemData::GateTunnelJob::work() {
     for (std::size_t c = next_++; c < chunks_; c = next_++) {
         const std::size_t end = std::min(out_.size(), (c + 1) * tunnel_chunk);
         for (std::size_t k = c * tunnel_chunk; k < end; ++k) {
-            s_.gate_tunnel_flux(s_.gate_tunnels_[k], x_, g_, out_[k]);
+            s_.gate_tunnel_flux(st_, s_.gate_tunnels_[k], x_, g_, out_[k]);
         }
     }
 }
 
-std::vector<DriftDiffusion::GateTunnelFlux>& DriftDiffusion::GateTunnelJob::finish() {
+std::vector<SystemData::GateTunnelFlux>& SystemData::GateTunnelJob::finish() {
     work();
     for (std::jthread& w : workers_) w.join();
     workers_.clear();
     return out_;
 }
 
-void DriftDiffusion::gate_tunnel_fluxes(std::span<const double> x, std::span<const NodeDegeneracy> g,
-                                        std::vector<GateTunnelFlux>& out) const {
-    GateTunnelJob job(*this, x, g);
+void SystemData::gate_tunnel_fluxes(const SystemState& st, std::span<const double> x,
+                                    std::span<const NodeDegeneracy> g,
+                                    std::vector<GateTunnelFlux>& out) const {
+    GateTunnelJob job(*this, st, x, g);
     out = std::move(job.finish());
 }
 
@@ -453,16 +459,16 @@ DriftDiffusion::GateTunnellingCurrents DriftDiffusion::gate_tunnelling_currents(
     std::span<const double> x) const {
     NITCAD_EXPECTS(x.size() == unknowns());
     GateTunnellingCurrents out;
-    if (gate_tunnels_.empty()) return out;
-    out.ecb.assign(contact_count_, 0.0);
-    out.hvb.assign(contact_count_, 0.0);
-    out.evb.assign(contact_count_, 0.0);
-    const std::vector<NodeDegeneracy> g = degeneracies(x);
-    std::vector<GateTunnelFlux> fluxes;
-    gate_tunnel_fluxes(x, g, fluxes);
-    for (std::size_t k = 0; k < gate_tunnels_.size(); ++k) {
-        const GateTunnel& t = gate_tunnels_[k];
-        const GateTunnelFlux& flux = fluxes[k];
+    if (data_->gate_tunnels_.empty()) return out;
+    out.ecb.assign(data_->contact_count_, 0.0);
+    out.hvb.assign(data_->contact_count_, 0.0);
+    out.evb.assign(data_->contact_count_, 0.0);
+    const std::vector<SystemData::NodeDegeneracy> g = data_->degeneracies(x);
+    std::vector<SystemData::GateTunnelFlux> fluxes;
+    data_->gate_tunnel_fluxes(*state_, x, g, fluxes);
+    for (std::size_t k = 0; k < data_->gate_tunnels_.size(); ++k) {
+        const SystemData::GateTunnel& t = data_->gate_tunnels_[k];
+        const SystemData::GateTunnelFlux& flux = fluxes[k];
         // T_n - T_p = c (J_ecb - J_hvb + J_evb): EVB's two directions enter T_p and T_n with the
         // signs that make both add.
         const auto c = static_cast<std::size_t>(t.contact);

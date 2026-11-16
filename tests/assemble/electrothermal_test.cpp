@@ -705,3 +705,27 @@ TEST_CASE("electrothermal assemble: refused inputs") {
     // Off, the same device and models are accepted.
     REQUIRE(DriftDiffusion::create(d, s, {.btbt_local = true}).has_value());
 }
+
+TEST_CASE("electrothermal assemble: a thermal bias moves the sinks of its own copy (Unit 57 GE2)") {
+    // set_thermal_bias changes the system's state: the isothermal sink's stamped temperature and
+    // the resistance contact's ambient in its heat move; a copy taken before keeps the old ones.
+    const device::Device d = diode({});
+    const auto s = *assemble::make_scaling(d);
+    const auto dd = *DriftDiffusion::create(d, s, {.electrothermal = true});
+    const std::vector<double> x = heated(dd, d, s, 0.0, 1, 0.0);
+    std::vector<double> x0 = x, x1 = x, x2 = x;
+    dd.stamp_contacts(x0);
+    const std::vector<double> h0 = dd.thermal_contact_heat(x0);
+
+    DriftDiffusion warm = dd;
+    REQUIRE(warm.set_thermal_bias(std::vector<double>{330.0, 320.0}).has_value());
+    warm.stamp_contacts(x1);
+    const std::vector<double> h1 = warm.thermal_contact_heat(x0);
+    REQUIRE(x1[3] == (330.0 - 300.0) / 300.0);  // node 0 is on the x_min sink
+    REQUIRE(x0[3] == (310.0 - 300.0) / 300.0);
+    REQUIRE(h1[1] != h0[1]);
+
+    dd.stamp_contacts(x2);
+    REQUIRE(x2 == x0);
+    REQUIRE(dd.thermal_contact_heat(x0) == h0);
+}

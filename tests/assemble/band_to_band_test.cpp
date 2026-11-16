@@ -494,3 +494,45 @@ TEST_CASE("band to band assemble: paths stay in the semiconductor") {
     }
     REQUIRE(beside);
 }
+
+TEST_CASE("band to band assemble: a copy owns its bias and paths (Unit 57 GE2)") {
+    // A copy shares the model data and owns its state: set_bias and set_paths on the copy (the
+    // latter moves the Jacobian positions into a new pattern) leave the original's residual,
+    // pattern and Jacobian values unchanged bit for bit, and an assigned system takes the copy's.
+    const device::Device d = block(2, 21, 9, 4e-6, 2e-6, physics::silicon_parameters);
+    const auto s = *assemble::make_scaling(d);
+    const assemble::PhysicsModels models{.btbt_nonlocal = NonlocalTunnelling::kane};
+    const auto original = *DriftDiffusion::create(d, s, models);
+    const auto x = sloped(original, d, s, 4e6, direction(25.0), 0.02, 5, 1e3, 1e3);
+    const std::size_t n = original.unknowns();
+    std::vector<double> f0(n), f1(n), fc(n), fa(n);
+    linalg::SparseMatrix j0 = original.make_jacobian();
+    original.evaluate(x, f0, j0);
+
+    DriftDiffusion copy = original;
+    copy.set_paths(copy.trace_paths(x));
+    std::vector<double> bias(original.contact_count(), 0.0);
+    bias[0] = 0.5;
+    REQUIRE(copy.set_bias(bias).has_value());
+
+    linalg::SparseMatrix j1 = original.make_jacobian();
+    original.evaluate(x, f1, j1);
+    CHECK(original.paths().paths.empty());
+    CHECK(j1.nonzeros() == j0.nonzeros());
+    CHECK(std::ranges::equal(j1.values(), j0.values()));
+    CHECK(f1 == f0);
+
+    REQUIRE(!copy.paths().paths.empty());
+    linalg::SparseMatrix jc = copy.make_jacobian();
+    CHECK(jc.nonzeros() > j0.nonzeros());
+    copy.evaluate(x, fc, jc);
+    CHECK(fc != f0);
+
+    auto assigned = *DriftDiffusion::create(d, s, models);
+    assigned = copy;
+    REQUIRE(assigned.set_bias(std::vector<double>(original.contact_count(), 0.0)).has_value());
+    linalg::SparseMatrix ja = assigned.make_jacobian();
+    CHECK(ja.nonzeros() == jc.nonzeros());
+    copy.residual(x, fa);
+    CHECK(fa == fc);  // the copy keeps its bias after the assigned system's set_bias
+}

@@ -1150,6 +1150,60 @@ before the next slice is compared against them.
   0.24 ms against one factorization's 0.19 ms on a 73-node diode pass) and passes alone; it is load-sensitive,
   not changed. Debug is left to CI (owner's standing rule).
 
+**Slice 1 (GE2) as built (2026-11-16; owner "start slice 1"; on this branch as it stands, #85 still open).**
+- `src/assemble/system_data.hpp` (internal): `SystemData` holds what `DriftDiffusion`'s private section held,
+  less the state: the per-node, per-edge and per-contact data, scaled tables, composition, nested types and the
+  terms' Jacobian positions. `SystemState` holds the gate nodes (their bias), `psi0`/`n0`/`p0`, the metal values,
+  contact biases, thermal rises, held carrier temperatures, the minority floor, and the tunnel paths, layouts,
+  base triplets and pattern (R1). `DriftDiffusion` keeps `shared_ptr<const SystemData>` and an owned
+  `unique_ptr<SystemState>`; its copy shares the data and copies the state. Its public signatures are
+  unchanged; the former inline accessors are out of line.
+- Terms take `(const SystemData&, const SystemState&, const Evaluation&)`; `Term`, `Terms`, `Composition` and
+  `GateTunnelJob` are `SystemData`'s nested types, and a composition entry's `active` takes both. The helpers
+  the terms call are `SystemData` members, defined where they were; those that read the state take it
+  (`gate_tunnel_flux(es)`, `thermal_ohmic`, `add_gate_shift`, `assemble_heat`) and the locators take the
+  pattern. `TermAccess` is removed; `DriftDiffusion` befriends `SystemData` for `of` / `state_of` alone.
+- **As-built note on R1 and the positions.** GE2 lists `block_` and `EdgeTerm::ab/ba` as data, but `set_paths`
+  moves every position into the new pattern (`block_`, the edges', the surface stencils', impact ionization's,
+  the interfaces', the gate tunnels'). The positions stay in `SystemData`, and `set_paths` moves them in a copy of
+  the data (copy on write, `make_shared<SystemData>(*data_)`), so a copy that shares the old data keeps its own
+  pattern and positions. `set_paths` runs once per path freeze, so the copy is not on a hot path.
+- Tests: two new cases check that a copy owns its state (R10): `band to band assemble: a copy owns its bias and
+  paths` (set_bias and set_paths on a copy leave the original's residual, pattern and Jacobian values bit for
+  bit; an assigned system takes the copy's) and `electrothermal assemble: a thermal bias moves the sinks of its own
+  copy`. Callers outside `src/assemble` are unchanged; the two internal tests rename `TermAccess::` to
+  `SystemData::`.
+- **GG1:** the 79 traced entries of the slice-1 binaries are byte-identical to slice 0's run A (P-core pinned).
+  The trace ran on the build before the long added lines were wrapped (whitespace only) and before the two
+  tests were added.
+- **GG2:** the 12 decks run with the final `nitcad.exe` agree with slice 0's run A on all 38 files
+  (`[.deck_compare]`).
+- **GG4:** FG4's benchmark, slice-0 and slice-1 binaries alternating, pinned to CPU 0, minimum per device. Two
+  runs each of every `[.assembly_benchmark]` case: every device within 2% of slice 0 on `evaluate` and
+  `residual`, or within slice 0's spread, except 1D drift-diffusion + Canali (+3.1%, spread 1.2%), so EC19's case
+  was run four more times each: that device then -0.4% / -0.3%; the 3D devices +3.1% to +8.2% on `evaluate`
+  against slice 0's spread of 4.2% to 9.9% (in the first two runs 3D drift-diffusion was -0.0%, 623.3 against
+  623.2 us); every other device within 2% or faster. Gate tunnelling 1D / 2D: +0.1% / -0.6%. Passed under GG4's
+  spread rule.
+- **GG6, 9 mutants, all caught** by the `assemble.*` and `solve.*` ctest entries (control 47/47):
+  M1 set_bias's changes discarded (terms read the old bias): 31 entries fail; M2 the state shared between copies
+  (`shared_ptr`, copy constructor aliases it): `assemble.band_to_band` (the new copy test); M3 `set_paths` does not
+  move the positions (the pattern alone relocated): `assemble.band_to_band`, `assemble.terms`, `solve.btbt`,
+  `solve.rates`; M4 `set_paths` moves the positions in the shared data (`const_pointer_cast`, no copy):
+  `assemble.band_to_band`; M5 SRH and Auger swapped in the table: `assemble.drift_diffusion`, `assemble.terms`,
+  `solve.heavy_doping`, `solve.transient`, `solve.small_signal`; M6 electrothermal set_bias leaves the metal value:
+  5 entries; M7 set_thermal_bias writes nothing: first survived (no test moved a sink after creation), caught by
+  `assemble.electrothermal` after the thermal-bias copy test was added; M8 hold_temperatures keeps no
+  temperatures: `assemble.energy_balance`, `solve.energy_balance`; M9 set_minority_floor a no-op:
+  `assemble.drift_diffusion`. The slice-2 to slice-4 mutants of GG6's list (frequency-domain term, derived slot,
+  equilibrium) belong to those slices.
+- **GG5:** full Release suite (`-j 6`, `/W4 /WX`, no warnings) **227/227 pass** in 3,193 s on the final tree.
+  Debug is left to CI (owner's standing rule).
+- **Incident (slice 0's scratch):** a leftover first version of slice 0's `run_decks.sh` (with `start ""`,
+  which MSYS turns into `\\`) was still running from 12:00 and showed "Windows cannot find '\\'" once per deck as
+  the owner pressed OK. Stopped at 13:48. It could only rewrite the console logs (`.out`) of run A, which GG2 skips;
+  the data files matched.
+
 **Risks:** the bit-identity surface is the largest since Unit 40. Moving the bias and path state out of the system
 could change which values a copy sees (GG6's first three mutants target this). Slice 2's caller migration touches
 about 44 files (more if #85 adds callers). Equilibrium's variants (GE5) keep a second set of row expressions, so the

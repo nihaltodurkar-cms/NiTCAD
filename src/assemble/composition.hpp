@@ -12,9 +12,9 @@
 // Composition picks the table, keeps the active rows and builds the unknowns' map from the
 // fields the equations solve for (fields.hpp).
 //
-// The model data the terms read (per node, per edge, per contact) stays in DriftDiffusion: its
-// diagnostics read it too (FE5). DriftDiffusion is the compatibility wrapper (FE4) and that data's
-// store.
+// The model data the terms read (per node, per edge, per contact) is SystemData's and what changes
+// after creation SystemState's (system_data.hpp, Unit 57 GE2); DriftDiffusion is the compatibility
+// wrapper (FE4) holding them.
 #pragma once
 
 #include <memory>
@@ -62,14 +62,15 @@ struct CompositionEntry {
     EquationSets sets;
     // Whether the term is in a system with these models; reads the device data create has set
     // before the unknowns' map (contacts, insulators, gates, interfaces).
-    bool (*active)(const DriftDiffusion& s, const PhysicsModels& models);
-    std::shared_ptr<const TermAccess::Term> (*make)();
+    bool (*active)(const SystemData& s, const SystemState& st, const PhysicsModels& models);
+    std::shared_ptr<const SystemData::Term> (*make)();
 };
 
-class DriftDiffusion::Composition {
+class SystemData::Composition {
 public:
     // The unknowns and the active terms of a system's device data and models.
-    [[nodiscard]] static std::shared_ptr<const Composition> compose(const DriftDiffusion& s,
+    [[nodiscard]] static std::shared_ptr<const Composition> compose(const SystemData& s,
+                                                                    const SystemState& st,
                                                                     const PhysicsModels& models);
 
     [[nodiscard]] const DofMap& dofs() const noexcept { return dofs_; }
@@ -81,11 +82,13 @@ public:
     [[nodiscard]] EquationSets sets() const noexcept { return all_; }
 
     // Appends every term's own pattern entries (Term::pattern).
-    void pattern(const DriftDiffusion& s, std::vector<linalg::Triplet>& triplets) const;
+    void pattern(const SystemData& s, const SystemState& st,
+                 std::vector<linalg::Triplet>& triplets) const;
     // Every term's add, in order; without `interfaces`, the interface-edge terms are left out
     // (the isothermal small_signal_matrix adds its own). assemble_heat always passes true: the
     // electrothermal small_signal_matrix adds none.
-    void assemble(const DriftDiffusion& s, const Terms::Evaluation& e, bool interfaces) const;
+    void assemble(const SystemData& s, const SystemState& st, const Terms::Evaluation& e,
+                  bool interfaces) const;
 
 private:
     DofMap dofs_;

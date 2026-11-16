@@ -31,7 +31,7 @@ using namespace NiTCAD;
 using assemble::DriftDiffusion;
 using assemble::EquilibriumPoisson;
 using assemble::TermDomain;
-using Terms = assemble::TermAccess::Terms;
+using Terms = assemble::SystemData::Terms;
 
 namespace {
 
@@ -76,7 +76,7 @@ struct Check {
     bool active;
 };
 
-Check check(const DriftDiffusion& dd, const assemble::TermAccess::Term& t, std::vector<double> x,
+Check check(const DriftDiffusion& dd, const assemble::SystemData::Term& t, std::vector<double> x,
             const DriftDiffusion::TimeStep* step = nullptr) {
     const std::size_t n = dd.unknowns();
     std::vector<double> f(n), fp(n), fm(n);
