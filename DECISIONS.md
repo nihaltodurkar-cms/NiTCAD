@@ -1657,6 +1657,68 @@ all 38 files (`[.deck_compare]`), so #85 changed no GG2 output. Slice 3 is compa
   `app_window.analysis_window`, `app_window.self_test`, `app_window_3d`) in a second run on the same build. Debug is
   left to CI (owner's standing rule).
 
+**Slice 4 (GE5) as built (2026-11-16; owner "start slice 4").**
+- `System::create(device, scaling, models, Formulation)`: `Formulation` (`drift_diffusion`, the default, or
+  `equilibrium`) is a public enum in `system.hpp`; `System::formulation()` reports it. GQ3 (a): `EquilibriumPoisson`
+  (`equilibrium_poisson.hpp`, `.cpp`) is removed. Its documentation, `create_equilibrium(device, scaling, models)`
+  (the create call with `Formulation::equilibrium`) and its own queries as free functions (`equilibrium_carriers`,
+  `charge_neutral_potential`, `contact_potential`, `is_contact`) are in the new public topic header
+  `assemble/equilibrium.hpp`. Its `band_edges`, `gate_charges` and `interface_trap_charges` are the topic headers'
+  existing functions, which dispatch on the formulation; the equilibrium versions keep the old expressions and add
+  no trace observation, as before.
+- `src/assemble/equilibrium.cpp`: `SystemData::make_equilibrium` fills only the scaled device's tables (as the old
+  `create`; the drift-diffusion model checks do not apply), a stride-1 `DofMap` (psi) and the old pattern (diagonal,
+  both directions of each edge). The edges are `EdgeTerm`s with `c`, `charged`, `carriers` and `ab[0]`, `ba[0]`, so
+  the separate edge type is gone. `set_bias` keeps the old rule: `check_contact_bias` with thermal equilibrium, and
+  only the gates and electrodes follow the bias. The composition table (`Terms::equilibrium_table`), in order:
+  equilibrium insulator rows (oxide; assign 0 and a 0 diagonal), equilibrium charge (Poisson; the slaved charge
+  under Boltzmann, Fermi-Dirac and incomplete ionization, assigned), **gate** (shared), equilibrium interfaces
+  (Fermi occupancy), **Poisson flux** (shared; `Terms::gate()` and `Terms::poisson_flux()` expose the two
+  drift-diffusion terms), and the equilibrium contact rows (contacts) **last**. The last term assigns
+  psi - psi0 on every ohmic, Schottky and electrode node, clears the row and sets its diagonal to 1. The shared
+  flux adds into a Schottky node's row (it skips only ohmic and electrode rows), and this term replaces that row.
+  Per entry, the order is charge, gate, interfaces, flux, then the Dirichlet rows. Every value is the old one, which
+  GG1 confirms.
+- `System`: `set_bias`, the steady `evaluate` and `residual` (the trace labels stay `equilibrium.evaluate.*` and
+  `equilibrium.residual.*`), and the Newton hooks dispatch on the formulation. In equilibrium the hooks are
+  `newton_solve`'s defaults (psi clipped, the largest |dpsi|), untraced as before. `degeneracies` is empty.
+  `state_from_potential`, `stamp_contacts`, `storage`, `small_signal_matrix`, `bias_derivative`, `contact_charges`
+  and a time step require the drift-diffusion formulation (NITCAD_EXPECTS).
+- Solve: `solve_equilibrium` and the equilibrium-Poisson bias sweep create the system with
+  `Formulation::equilibrium`. Their band diagram now goes through the derived-field table (slice 3's exception is
+  gone), and the old `band_diagram(BandEdges)` overload is removed.
+- Tests: 13 test files migrated (`create_equilibrium` and the free functions). New tests: `terms_test.cpp`
+  `equilibrium: the composition of GE5` (sets, stride 1, term order, assignments, models only drift-diffusion reads
+  change nothing), `equilibrium: each term's partials match finite differences (GG3)` (Boltzmann, Fermi-Dirac,
+  incomplete ionization and both; diode 1D/2D, oxide with traps, MOS-C; every term within 1e-6; the insulator rows
+  write only zeros, so they are never active) and `equilibrium: every term writes only the rows and columns it
+  declares`; `schottky_test.cpp` `thermal equilibrium's anode row is psi - psi_S alone (GE5)`. Each is appended
+  after its file's existing cases.
+- Size: `equilibrium.cpp` 409 lines + `equilibrium.hpp` 79 against the old 295 + 153. As R2 expected, the saving is
+  structural (one composition, one edge type, one solver interface), not in lines.
+- **GG1:** the 80 traced entries of the slice-4 binaries against slice 3's: 78 byte-identical. `assemble.schottky`
+  and `assemble.terms` are slice 3's traces exactly, followed by the new cases. The first trace pass's `deck.run`
+  failed only because the mutant builds were relinking `build/release/nitcad.exe`, which that test runs; rerun alone,
+  it passed and is identical.
+- **GG2:** the 12 decks agree with slice 3's on all 38 files (`[.deck_compare]`).
+- **GG3:** every existing FD gate passes. The equilibrium charge term's own FD check is above.
+- **GG4: pending at this commit.** FG4's benchmark, slice 3 and slice 4 alternating, pinned to CPU 0, two runs each: 15 of 17 devices within 2% or their spread (most faster). Flagged: 2D energy balance `evaluate` +33.9% (5.80 -> 7.77 ms, spread 2.4%; residual unchanged) and 1D Zener `evaluate` +6.4% (spread 5.9%). Slice 4 changes nothing on the energy-balance path but two formulation tests, so two more passes are running; the result goes in a follow-up commit.
+- **GG6, 13 mutants, all caught** by the `assemble.*` and `solve.*` ctest entries: M1 the slaved charge's Fermi-Dirac
+  branch using Boltzmann: `assemble.insulator`, `solve.quantum_confinement`, `solve.fermi_dirac`,
+  `solve.heterojunction`; M2 equilibrium missing the interface set (its activation false; removing the row fails
+  `/WX` on the unused lambda): `assemble.insulator`, `assemble.terms`, `solve.quantum_confinement`,
+  `solve.insulator`; M3 the Dirichlet rows before the edge flux: `assemble.terms`, `assemble.schottky`; M4 the
+  electrodes keeping the old bias after `set_bias`: `assemble.insulator`, `solve.quantum_confinement`,
+  `solve.insulator`; M5 gate and charge swapped: 6 entries; M6 the interface edges' off-diagonal positions swapped:
+  `solve.small_signal`; M7 the equilibrium Newton update not clipped: `solve.btbt`; M8 incomplete ionization ignored
+  by the slaved charge: `solve.heterojunction`; M9 an electrode's charge without its interface half-edge flux:
+  `solve.insulator`; M10 the Dirichlet rows not cleared: `assemble.schottky`; M11 `band_edges` not dispatched:
+  `assemble.heterojunction`, `solve.heterojunction`; M12 `set_bias` without the thermal-equilibrium check:
+  `assemble.gate`; M13 the interface edges at another node's statistics: `solve.quantum_confinement`.
+- **GG5: pending at this commit.** The whole tree builds with `/W4 /WX`; the `assemble.*` entries and the equilibrium-related `solve.*` entries (equilibrium, mos, insulator, heterojunction, schottky, bias) pass on the final tree; the full Release suite runs after GG4. Debug is left to CI (owner's standing rule).
+- **GG8 (owner 2026-11-16, "choose recommended for GG8"):** the χ extensibility test is its own commit after slice 4,
+  not part of it, so slice 4 stays GE5 alone (GE7).
+
 **Risks:** the bit-identity surface is the largest since Unit 40. Moving the bias and path state out of the system
 could change which values a copy sees (GG6's first three mutants target this). Slice 2's caller migration touches
 about 44 files (more if #85 adds callers). Equilibrium's variants (GE5) keep a second set of row expressions, so the

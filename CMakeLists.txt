@@ -419,7 +419,7 @@ add_library(nitcad_assemble STATIC
   src/assemble/gate.cpp
   src/assemble/interface_edges.cpp
   src/assemble/contact_bias.cpp
-  src/assemble/equilibrium_poisson.cpp
+  src/assemble/equilibrium.cpp
   src/assemble/drift_diffusion.cpp
   src/assemble/electrothermal.cpp
   src/assemble/energy_balance.cpp

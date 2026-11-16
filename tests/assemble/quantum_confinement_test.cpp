@@ -15,7 +15,7 @@
 
 #include "NiTCAD/assemble/band_edges.hpp"
 #include "NiTCAD/assemble/charges.hpp"
-#include "NiTCAD/assemble/equilibrium_poisson.hpp"
+#include "NiTCAD/assemble/equilibrium.hpp"
 #include "NiTCAD/assemble/quantum_confinement.hpp"
 #include "NiTCAD/assemble/scaling.hpp"
 #include "NiTCAD/assemble/system.hpp"
@@ -29,7 +29,7 @@
 
 using namespace NiTCAD;
 using assemble::System;
-using assemble::EquilibriumPoisson;
+using assemble::create_equilibrium;
 
 namespace {
 
@@ -252,9 +252,9 @@ double fd_jacobian_error(const System& system, std::vector<double> x) {
 
 // As insulator_test.cpp's probe: the charge-neutral equilibrium state with noise, and the
 // interface nodes' densities raised out of equilibrium so the trap terms are resolved.
-std::vector<double> probe_state(const System& system, const EquilibriumPoisson& poisson,
+std::vector<double> probe_state(const System& system, const System& poisson,
                                 const device::Device& d, std::uint64_t seed) {
-    auto x = system.state_from_potential(poisson.charge_neutral_potential());
+    auto x = system.state_from_potential(charge_neutral_potential(poisson));
     Noise noise{seed};
     for (std::size_t i = 0; i < system.node_count(); ++i) {
         x[3 * i] += 0.02 * noise.next();
@@ -354,21 +354,21 @@ TEST_CASE("quantum confinement assemble: N_c f_n and N_v f_p, bands and traps in
             const auto scaling = *assemble::make_scaling(d);
             assemble::PhysicsModels classical;
             classical.fermi_dirac = fd;
-            const auto off = *EquilibriumPoisson::create(d, scaling, classical);
-            const auto on = *EquilibriumPoisson::create(d, scaling, mlda(fd));
+            const auto off = *create_equilibrium(d, scaling, classical);
+            const auto on = *create_equilibrium(d, scaling, mlda(fd));
             const auto c = *assemble::mlda_factors(d, mlda(fd));
             // A potential in inversion near the oxide and in the bulk, with noise.
-            auto psi = off.charge_neutral_potential();
+            auto psi = charge_neutral_potential(off);
             Noise noise{3};
             for (std::size_t i = 0; i < psi.size(); ++i) {
                 if (!d.is_insulator(static_cast<mesh::NodeId>(i))) psi[i] += 0.3 * noise.next();
             }
             const std::size_t n = psi.size();
             std::vector<double> n0(n), p0(n), n1(n), p1(n);
-            off.carriers(psi, n0, p0);
-            on.carriers(psi, n1, p1);
-            const auto b0 = off.band_edges(psi);
-            const auto b1 = on.band_edges(psi);
+            equilibrium_carriers(off, psi, n0, p0);
+            equilibrium_carriers(on, psi, n1, p1);
+            const auto b0 = band_edges(off, psi);
+            const auto b1 = band_edges(on, psi);
             for (std::size_t i = 0; i < n; ++i) {
                 CAPTURE(fd, D, i);
                 if (d.is_insulator(static_cast<mesh::NodeId>(i))) {
@@ -390,8 +390,8 @@ TEST_CASE("quantum confinement assemble: N_c f_n and N_v f_p, bands and traps in
                         1e-14 * std::max(1.0, std::abs(b0.valence[i])));
             }
             // Trap occupancy depends on E_F - E_t, which MLDA does not move.
-            const auto q0 = off.interface_trap_charges(psi);
-            const auto q1 = on.interface_trap_charges(psi);
+            const auto q0 = interface_trap_charges(off, psi);
+            const auto q1 = interface_trap_charges(on, psi);
             REQUIRE(q0.size() == q1.size());
             for (std::size_t k = 0; k < q0.size(); ++k) {
                 CAPTURE(fd, D, k, q0[k], q1[k]);
@@ -407,13 +407,13 @@ TEST_CASE("quantum confinement assemble: drift-diffusion states carry the factor
     const auto scaling = *assemble::make_scaling(d);
     const auto off = *System::create(d, scaling);
     const auto on = *System::create(d, scaling, mlda());
-    const auto poisson = *EquilibriumPoisson::create(d, scaling);
+    const auto poisson = *create_equilibrium(d, scaling);
     const auto c = *assemble::mlda_factors(d, mlda());
-    const auto psi = poisson.charge_neutral_potential();
+    const auto psi = charge_neutral_potential(poisson);
     const auto x0 = off.state_from_potential(psi);
     const auto x1 = on.state_from_potential(psi);
     for (std::size_t i = 0; i < d.mesh().node_count(); ++i) {
-        if (d.is_insulator(static_cast<mesh::NodeId>(i)) || poisson.is_contact()[i] != 0) continue;
+        if (d.is_insulator(static_cast<mesh::NodeId>(i)) || is_contact(poisson, i)) continue;
         CAPTURE(i);
         REQUIRE(close(x1[3 * i + 1], c.f_n[i] * x0[3 * i + 1], 1e-14));
         REQUIRE(close(x1[3 * i + 2], c.f_p[i] * x0[3 * i + 2], 1e-14));
@@ -432,9 +432,9 @@ TEST_CASE("quantum confinement assemble: the finite-difference Jacobian gate (QC
         const device::Device d = mos(D);
         const auto scaling = *assemble::make_scaling(d);
         for (const bool fd : {false, true}) {
-            auto poisson = *EquilibriumPoisson::create(d, scaling, mlda(fd));
+            auto poisson = *create_equilibrium(d, scaling, mlda(fd));
             REQUIRE(poisson.set_bias(equilibrium_bias).has_value());
-            auto psi = poisson.charge_neutral_potential();
+            auto psi = charge_neutral_potential(poisson);
             Noise noise{17};
             for (double& v : psi) v += 0.3 * noise.next();
             const double ep = fd_jacobian_error(poisson, psi);
@@ -453,7 +453,7 @@ TEST_CASE("quantum confinement assemble: the finite-difference Jacobian gate (QC
         const auto scaling = *assemble::make_scaling(d);
         auto models = mlda();
         models.surface_mobility = assemble::SurfaceMobility::lombardi;
-        auto poisson = *EquilibriumPoisson::create(d, scaling, models);
+        auto poisson = *create_equilibrium(d, scaling, models);
         REQUIRE(poisson.set_bias(equilibrium_bias).has_value());
         auto system = *System::create(d, scaling, models);
         REQUIRE(system.set_bias(bias).has_value());
@@ -469,11 +469,11 @@ TEST_CASE("quantum confinement assemble: the finite-difference Jacobian gate (QC
     for (const device::Device& d : others) {
         const auto scaling = *assemble::make_scaling(d);
         for (const bool fd : {false, true}) {
-            auto poisson = *EquilibriumPoisson::create(d, scaling, mlda(fd));
+            auto poisson = *create_equilibrium(d, scaling, mlda(fd));
             REQUIRE(poisson.set_bias(std::vector<double>{0.8, 0.0}).has_value());
             auto system = *System::create(d, scaling, mlda(fd));
             REQUIRE(system.set_bias(std::vector<double>{0.8, 0.05}).has_value());
-            auto x = system.state_from_potential(poisson.charge_neutral_potential());
+            auto x = system.state_from_potential(charge_neutral_potential(poisson));
             Noise noise{29};
             for (std::size_t i = 0; i < system.node_count(); ++i) {
                 x[3 * i] += 0.3 * noise.next();
@@ -496,7 +496,7 @@ TEST_CASE("quantum confinement assemble: refusals (QC11)") {
                              const std::string& what) {
         const auto s = *assemble::make_scaling(dev);
         const auto dd = System::create(dev, s, m);
-        const auto ep = EquilibriumPoisson::create(dev, s, m);
+        const auto ep = create_equilibrium(dev, s, m);
         REQUIRE_FALSE(dd.has_value());
         REQUIRE_FALSE(ep.has_value());
         CAPTURE(dd.error().message);
@@ -556,7 +556,7 @@ TEST_CASE("quantum confinement assemble: refusals (QC11)") {
         const device::Device ok = build(other);
         const auto s = *assemble::make_scaling(ok);
         CHECK(System::create(ok, s, mlda()).has_value());
-        CHECK(EquilibriumPoisson::create(ok, s, mlda()).has_value());
+        CHECK(create_equilibrium(ok, s, mlda()).has_value());
     }
     SECTION("nothing confines") {
         mesh::Mesh m = *mesh::make_tensor_grid(uniform(0.0, 1e-5, 20));

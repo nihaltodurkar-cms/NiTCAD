@@ -12,7 +12,7 @@
 #include <vector>
 
 #include "NiTCAD/assemble/charges.hpp"
-#include "NiTCAD/assemble/equilibrium_poisson.hpp"
+#include "NiTCAD/assemble/equilibrium.hpp"
 #include "NiTCAD/assemble/scaling.hpp"
 #include "NiTCAD/assemble/system.hpp"
 #include "NiTCAD/device/device.hpp"
@@ -23,7 +23,7 @@
 
 using namespace NiTCAD;
 using assemble::System;
-using assemble::EquilibriumPoisson;
+using assemble::create_equilibrium;
 
 namespace {
 
@@ -156,9 +156,9 @@ double fd_jacobian_error(const System& system, std::vector<double> x) {
 // The Unit 15b probe state: equilibrium of the charge-neutral guess with noise, and at the
 // interface nodes n = 2e-3 and p = 5e-4 (scaled), so the traps are out of equilibrium and their
 // terms are resolved by a difference step.
-std::vector<double> probe_state(const System& system, const EquilibriumPoisson& poisson,
+std::vector<double> probe_state(const System& system, const System& poisson,
                                 const device::Device& d, std::uint64_t seed) {
-    auto x = system.state_from_potential(poisson.charge_neutral_potential());
+    auto x = system.state_from_potential(charge_neutral_potential(poisson));
     Noise noise{seed};
     for (std::size_t i = 0; i < system.node_count(); ++i) {
         x[3 * i] += 0.02 * noise.next();
@@ -207,7 +207,7 @@ TEST_CASE("transient assemble: the finite-difference Jacobian gate of a time ste
                                                      .incomplete_ionization = ionization};
                 auto system = *System::create(d, scaling, models);
                 REQUIRE(system.set_bias(bias).has_value());
-                const auto poisson = *EquilibriumPoisson::create(d, scaling, models);
+                const auto poisson = *create_equilibrium(d, scaling, models);
                 const auto x = probe_state(system, poisson, d, 23);
                 const History h = history(system, x, 31);
                 REQUIRE(h.traps.size() == system.trap_slots());
@@ -238,7 +238,7 @@ TEST_CASE("transient assemble: the trap part of a time step's Jacobian on its ow
         auto b = *System::create(without, scaling, models);
         REQUIRE(a.set_bias(bias).has_value());
         REQUIRE(b.set_bias(bias).has_value());
-        const auto poisson = *EquilibriumPoisson::create(with, scaling, models);
+        const auto poisson = *create_equilibrium(with, scaling, models);
         auto x = probe_state(a, poisson, with, 5);
         const History h = history(a, x, 9);
         const std::vector<double> no_traps;
@@ -286,7 +286,7 @@ TEST_CASE("transient assemble: a very long step is the steady state") {
     const auto scaling = *assemble::make_scaling(d);
     auto system = *System::create(d, scaling);
     REQUIRE(system.set_bias(std::vector<double>{-0.4, 0.1}).has_value());
-    const auto poisson = *EquilibriumPoisson::create(d, scaling);
+    const auto poisson = *create_equilibrium(d, scaling);
     const auto x = probe_state(system, poisson, d, 41);
     const History h = history(system, x, 43);
     const std::size_t n = system.unknowns();
@@ -326,7 +326,7 @@ TEST_CASE("transient assemble: the traps' capture imbalance is the trapped charg
     const auto scaling = *assemble::make_scaling(d);
     auto system = *System::create(d, scaling);
     REQUIRE(system.set_bias(std::vector<double>{-0.4, 0.1}).has_value());
-    const auto poisson = *EquilibriumPoisson::create(d, scaling);
+    const auto poisson = *create_equilibrium(d, scaling);
     const auto x = probe_state(system, poisson, d, 51);
     const History h = history(system, x, 53);
     std::vector<double> mirrored = h.traps;
@@ -372,7 +372,7 @@ TEST_CASE("transient assemble: the contact charges and the charge inside obey Ga
     const auto scaling = *assemble::make_scaling(d);
     auto system = *System::create(d, scaling);
     REQUIRE(system.set_bias(std::vector<double>{-0.4, 0.1}).has_value());
-    const auto poisson = *EquilibriumPoisson::create(d, scaling);
+    const auto poisson = *create_equilibrium(d, scaling);
     const auto x = probe_state(system, poisson, d, 61);
     const auto q = contact_charges(system, x);
     const auto g = gate_charges(system, x);
@@ -417,7 +417,7 @@ TEST_CASE("transient assemble: occupancies outside [0, 1] keep the interface sol
     const auto scaling = *assemble::make_scaling(d);
     auto system = *System::create(d, scaling);
     REQUIRE(system.set_bias(std::vector<double>{-0.4, 0.1}).has_value());
-    const auto poisson = *EquilibriumPoisson::create(d, scaling);
+    const auto poisson = *create_equilibrium(d, scaling);
     const auto x = probe_state(system, poisson, d, 71);
     const History h = history(system, x, 73);
     std::vector<char> dirichlet(system.node_count(), 0);

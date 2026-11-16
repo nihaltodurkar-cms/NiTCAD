@@ -13,7 +13,7 @@
 #include <utility>
 #include <vector>
 
-#include "NiTCAD/assemble/equilibrium_poisson.hpp"
+#include "NiTCAD/assemble/equilibrium.hpp"
 #include "NiTCAD/assemble/scaling.hpp"
 #include "NiTCAD/base/constants.hpp"
 #include "NiTCAD/device/device.hpp"
@@ -106,9 +106,9 @@ TEST_CASE("equilibrium: built-in potential within 2e-3 V (legacy gate)") {
 TEST_CASE("equilibrium: converges quadratically, with one analysis") {
     const auto d = diode(*mesh::make_tensor_grid(junction_axis()));
     const auto scaling = *assemble::make_scaling(d);
-    const auto system = *assemble::EquilibriumPoisson::create(d, scaling);
+    const auto system = *assemble::create_equilibrium(d, scaling);
     auto solver = *linalg::LinearSolver::create({});
-    std::vector<double> psi = system.charge_neutral_potential();
+    std::vector<double> psi = charge_neutral_potential(system);
     results::ConvergenceRecord record;
     REQUIRE(solve::newton_solve(system, psi, {}, solver, record).has_value());
     UNSCOPED_INFO("iterations " << record.iterations.size());

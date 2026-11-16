@@ -16,7 +16,7 @@
 #include <vector>
 
 #include "NiTCAD/assemble/currents.hpp"
-#include "NiTCAD/assemble/equilibrium_poisson.hpp"
+#include "NiTCAD/assemble/equilibrium.hpp"
 #include "NiTCAD/assemble/scaling.hpp"
 #include "NiTCAD/assemble/system.hpp"
 #include "NiTCAD/assemble/tunnelling.hpp"
@@ -29,7 +29,7 @@
 
 using namespace NiTCAD;
 using assemble::System;
-using assemble::EquilibriumPoisson;
+using assemble::create_equilibrium;
 
 namespace {
 
@@ -157,8 +157,8 @@ std::vector<double> probe(System& system, const device::Device& d,
                           const assemble::Scaling& s, const assemble::PhysicsModels& models,
                           const std::vector<double>& bias, std::uint64_t seed, bool noise = true) {
     REQUIRE(system.set_bias(bias).has_value());
-    const auto poisson = *EquilibriumPoisson::create(d, s, models);
-    auto x = system.state_from_potential(poisson.charge_neutral_potential());
+    const auto poisson = *create_equilibrium(d, s, models);
+    auto x = system.state_from_potential(charge_neutral_potential(poisson));
     system.stamp_contacts(x);
     if (!noise) return x;
     Noise r{seed};

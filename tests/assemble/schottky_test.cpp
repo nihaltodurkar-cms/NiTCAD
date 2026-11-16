@@ -15,7 +15,7 @@
 #include <vector>
 
 #include "NiTCAD/assemble/contact_bias.hpp"
-#include "NiTCAD/assemble/equilibrium_poisson.hpp"
+#include "NiTCAD/assemble/equilibrium.hpp"
 #include "NiTCAD/assemble/scaling.hpp"
 #include "NiTCAD/assemble/system.hpp"
 #include "NiTCAD/device/device.hpp"
@@ -26,7 +26,7 @@
 
 using namespace NiTCAD;
 using assemble::System;
-using assemble::EquilibriumPoisson;
+using assemble::create_equilibrium;
 
 namespace {
 
@@ -111,8 +111,8 @@ std::vector<double> probe_state(System& system, const device::Device& d,
                                 std::uint64_t seed) {
     const std::vector<double> bias{0.3, 0.0};
     REQUIRE(system.set_bias(bias).has_value());
-    const auto poisson = *EquilibriumPoisson::create(d, s, models);
-    auto x = system.state_from_potential(poisson.charge_neutral_potential());
+    const auto poisson = *create_equilibrium(d, s, models);
+    auto x = system.state_from_potential(charge_neutral_potential(poisson));
     Noise noise{seed};
     for (std::size_t i = 0; i < system.node_count(); ++i) {
         x[3 * i] += 0.02 * noise.next();
@@ -379,4 +379,35 @@ TEST_CASE("Schottky assemble: thermal equilibrium needs a Schottky contact at 0 
     REQUIRE_FALSE(refused.has_value());
     CHECK(refused.error().code == base::ErrorCode::invalid_input);
     CHECK(refused.error().message.find("Schottky contact at 0 V") != std::string::npos);
+}
+
+TEST_CASE("Schottky assemble: thermal equilibrium's anode row is psi - psi_S alone (GE5)") {
+    // Unit 57 GE5: the Poisson flux is shared with the drift-diffusion system and adds into the
+    // Schottky node's row; the Dirichlet rows, last, replace it whole. In 1D and 2D every
+    // Dirichlet row is psi - psi0 exactly, its only Jacobian entry the unit diagonal.
+    for (const int D : {1, 2}) {
+        const device::Device d = diode(tensor(D, 7));
+        const auto s = *assemble::make_scaling(d);
+        const auto eq = *create_equilibrium(d, s);
+        REQUIRE(eq.formulation() == assemble::Formulation::equilibrium);
+        auto psi = charge_neutral_potential(eq);
+        Noise noise{7};
+        for (double& v : psi) v += 0.3 * noise.next();
+        std::vector<double> f(eq.unknowns()), r(eq.unknowns());
+        auto jacobian = eq.make_jacobian();
+        eq.evaluate(psi, f, jacobian);
+        eq.residual(psi, r);
+        const auto j = dense(jacobian);
+        const auto psi0 = contact_potential(eq);
+        std::size_t anode = 0;
+        for (std::size_t i = 0; i < eq.node_count(); ++i) {
+            CAPTURE(D, i);
+            REQUIRE(f[i] == r[i]);
+            if (!is_contact(eq, i)) continue;
+            if (d.mesh().points()[i][0] == 0.0) ++anode;
+            REQUIRE(f[i] == psi[i] - psi0[i]);
+            for (std::size_t c = 0; c < j.size(); ++c) REQUIRE(j[i][c] == (c == i ? 1.0 : 0.0));
+        }
+        CHECK(anode == (D == 1 ? 1u : 7u));
+    }
 }

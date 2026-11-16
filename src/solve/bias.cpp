@@ -11,7 +11,7 @@
 #include "NiTCAD/assemble/charges.hpp"
 #include "NiTCAD/assemble/contact_bias.hpp"
 #include "NiTCAD/assemble/energy.hpp"
-#include "NiTCAD/assemble/equilibrium_poisson.hpp"
+#include "NiTCAD/assemble/equilibrium.hpp"
 #include "NiTCAD/assemble/scaling.hpp"
 #include "NiTCAD/assemble/thermal.hpp"
 #include "NiTCAD/assemble/tunnelling.hpp"
@@ -263,11 +263,12 @@ std::expected<results::Sweep, base::Error> sweep_bias_unobserved(const device::D
     const std::size_t edges = device.mesh().edges().size();
 
     if (equilibrium) {
-        auto system = assemble::EquilibriumPoisson::create(device, *scaling, options.models);
+        auto system = assemble::System::create(device, *scaling, options.models,
+                                               assemble::Formulation::equilibrium);
         if (!system) return std::unexpected(std::move(system.error()));
         results::Sweep sweep;
         sweep.run = make_run_record(device, options, points, initial);
-        std::vector<double> psi = system->charge_neutral_potential();
+        std::vector<double> psi = charge_neutral_potential(*system);
         if (initial != nullptr) {
             for (std::size_t i = 0; i < nodes; ++i) {
                 psi[i] = initial->potential_V[i] / scaling->V_T;
@@ -287,13 +288,12 @@ std::expected<results::Sweep, base::Error> sweep_bias_unobserved(const device::D
                    },
                    [&](std::size_t, results::BiasPoint& point) -> std::expected<void, base::Error> {
                        point.fields = detail::equilibrium_fields(*system, psi, *scaling);
-                       point.bands =
-                           detail::band_diagram(system->band_edges(psi), scaling->V_T);
+                       point.bands = detail::band_diagram(*system, psi, scaling->V_T);
                        point.terminal_current.assign(contacts.size(), 0.0);
                        point.terminal_current_resolution.assign(contacts.size(), 0.0);
-                       point.gate_charge = system->gate_charges(psi);
+                       point.gate_charge = gate_charges(*system, psi);
                        for (double& Q : point.gate_charge) Q *= charge_scale;
-                       point.interface_trap_charge = system->interface_trap_charges(psi);
+                       point.interface_trap_charge = interface_trap_charges(*system, psi);
                        for (double& Q : point.interface_trap_charge) Q *= charge_scale;
                        point.edge_current_n.assign(edges, 0.0);
                        point.edge_current_p.assign(edges, 0.0);

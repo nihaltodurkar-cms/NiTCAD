@@ -905,6 +905,12 @@ public:
 std::shared_ptr<const SystemData::Term> SystemData::Terms::poisson_charge() {
     return std::make_shared<PoissonCharge>();
 }
+std::shared_ptr<const SystemData::Term> SystemData::Terms::gate() {
+    return std::make_shared<Gate>();
+}
+std::shared_ptr<const SystemData::Term> SystemData::Terms::poisson_flux() {
+    return std::make_shared<PoissonFlux>();
+}
 
 namespace {
 

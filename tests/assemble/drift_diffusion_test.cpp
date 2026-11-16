@@ -12,7 +12,7 @@
 
 #include "NiTCAD/assemble/bernoulli.hpp"
 #include "NiTCAD/assemble/currents.hpp"
-#include "NiTCAD/assemble/equilibrium_poisson.hpp"
+#include "NiTCAD/assemble/equilibrium.hpp"
 #include "NiTCAD/assemble/scaling.hpp"
 #include "NiTCAD/assemble/system.hpp"
 #include "NiTCAD/device/device.hpp"
@@ -101,8 +101,8 @@ std::pair<System, std::vector<double>> probe_state(
     auto system = *System::create(d, scaling, models);
     const std::vector<double> bias{0.3, 0.0};
     REQUIRE(system.set_bias(bias).has_value());
-    const auto poisson = *assemble::EquilibriumPoisson::create(d, scaling);
-    auto x = system.state_from_potential(poisson.charge_neutral_potential());
+    const auto poisson = *assemble::create_equilibrium(d, scaling);
+    auto x = system.state_from_potential(charge_neutral_potential(poisson));
     Noise noise{seed};
     for (std::size_t i = 0; i < system.node_count(); ++i) {
         x[3 * i] += 0.02 * noise.next();
@@ -273,8 +273,8 @@ TEST_CASE("drift-diffusion: biases are validated and stamped on the contacts") {
     REQUIRE(system.set_bias(bias).has_value());
     const std::vector<double> psi(system.node_count(), 0.0);
     const auto x = system.state_from_potential(psi);
-    const auto poisson = *assemble::EquilibriumPoisson::create(d, scaling);
-    const auto psi0 = poisson.contact_potential();
+    const auto poisson = *assemble::create_equilibrium(d, scaling);
+    const auto psi0 = contact_potential(poisson);
     const std::size_t last = system.node_count() - 1;
     REQUIRE(std::abs(x[0] - (psi0[0] + 0.25 / scaling.V_T)) <= 1e-14 * std::abs(x[0]));
     const double cathode = psi0[last] - 0.5 / scaling.V_T;
@@ -355,8 +355,8 @@ TEST_CASE("drift-diffusion: the 1D residual is the legacy rows, written out") {
         *System::create(d, scaling, {.hole_mobility = assemble::HoleMobility::caughey_thomas});
     const std::vector<double> bias{0.3, 0.0};
     REQUIRE(system.set_bias(bias).has_value());
-    const auto poisson = *assemble::EquilibriumPoisson::create(d, scaling);
-    auto u = system.state_from_potential(poisson.charge_neutral_potential());
+    const auto poisson = *assemble::create_equilibrium(d, scaling);
+    auto u = system.state_from_potential(charge_neutral_potential(poisson));
     Noise noise{3};
     for (std::size_t i = 1; i + 1 < x.size(); ++i) {
         u[3 * i] += 0.5 * noise.next();
@@ -655,18 +655,18 @@ TEST_CASE("drift-diffusion: Fermi-Dirac contacts, and the equilibrium state from
     const auto scaling = *assemble::make_scaling(d);
     const assemble::PhysicsModels fd{.fermi_dirac = true};
     auto system = *System::create(d, scaling, fd);
-    const auto poisson = *assemble::EquilibriumPoisson::create(d, scaling, fd);
+    const auto poisson = *assemble::create_equilibrium(d, scaling, fd);
     // At zero bias the contacts are the Poisson system's, and the state from a potential has the
     // Poisson system's carriers. On a contact node the majority is |C| + minority (neutral to
     // rounding), which the density at the root potential reproduces to a few ulp.
-    const std::vector<double> psi = poisson.charge_neutral_potential();
+    const std::vector<double> psi = charge_neutral_potential(poisson);
     const std::vector<double> x = system.state_from_potential(psi);
     std::vector<double> n(psi.size()), p(psi.size());
-    poisson.carriers(psi, n, p);
+    equilibrium_carriers(poisson, psi, n, p);
     for (std::size_t i = 0; i < psi.size(); ++i) {
         CAPTURE(i);
         REQUIRE(x[3 * i] == psi[i]);
-        if (poisson.is_contact()[i] != 0) {
+        if (is_contact(poisson, i)) {
             REQUIRE(std::abs(x[3 * i + 1] - n[i]) <= 1e-14 * std::max(n[i], p[i]));
             REQUIRE(std::abs(x[3 * i + 2] - p[i]) <= 1e-14 * std::max(n[i], p[i]));
             continue;
@@ -706,8 +706,8 @@ TEST_CASE("drift-diffusion: the recombination part of the Jacobian under Fermi-D
     auto with = *System::create(d, scaling, fd);
     auto without = *System::create(d, scaling, {.srh = false, .auger = false,
                                                         .fermi_dirac = true});
-    const auto poisson = *assemble::EquilibriumPoisson::create(d, scaling, fd);
-    std::vector<double> x = with.state_from_potential(poisson.charge_neutral_potential());
+    const auto poisson = *assemble::create_equilibrium(d, scaling, fd);
+    std::vector<double> x = with.state_from_potential(charge_neutral_potential(poisson));
     const double n0 = x[3 * 2 + 1], p0 = x[3 * 2 + 2];  // a bulk node's equilibrium densities
     for (std::size_t i = 0; i < nodes; ++i) {
         x[3 * i + 1] = n0;

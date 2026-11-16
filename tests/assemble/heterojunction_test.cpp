@@ -11,7 +11,7 @@
 
 #include "NiTCAD/assemble/band_edges.hpp"
 #include "NiTCAD/assemble/currents.hpp"
-#include "NiTCAD/assemble/equilibrium_poisson.hpp"
+#include "NiTCAD/assemble/equilibrium.hpp"
 #include "NiTCAD/assemble/gate.hpp"
 #include "NiTCAD/assemble/scaling.hpp"
 #include "NiTCAD/assemble/system.hpp"
@@ -26,7 +26,7 @@
 
 using namespace NiTCAD;
 using assemble::System;
-using assemble::EquilibriumPoisson;
+using assemble::create_equilibrium;
 
 namespace {
 
@@ -120,8 +120,8 @@ std::pair<System, std::vector<double>> probe_state(
     auto system = *System::create(d, scaling, models);
     const std::vector<double> bias{0.3, 0.0};
     REQUIRE(system.set_bias(bias).has_value());
-    const auto poisson = *EquilibriumPoisson::create(d, scaling, models);
-    auto x = system.state_from_potential(poisson.charge_neutral_potential());
+    const auto poisson = *create_equilibrium(d, scaling, models);
+    auto x = system.state_from_potential(charge_neutral_potential(poisson));
     Noise noise{seed};
     for (std::size_t i = 0; i < system.node_count(); ++i) {
         x[3 * i] += 0.02 * noise.next();
@@ -214,7 +214,7 @@ TEST_CASE("heterojunction: the 1D Poisson row across a permittivity and affinity
         junction(*mesh::make_tensor_grid(x), physics::silicon_parameters, silicon_with(0.2, 1.3),
                  1e17, 1e17);
     const auto s = *assemble::make_scaling(d);
-    const auto system = *EquilibriumPoisson::create(d, s);
+    const auto system = *create_equilibrium(d, s);
     const std::size_t n = x.size();
     std::vector<double> psi(n);
     Noise noise{3};
@@ -247,24 +247,24 @@ TEST_CASE("heterojunction: contacts and the neutral guess carry the band shift")
     const device::Device d = junction(*mesh::make_tensor_grid(x), physics::silicon_parameters,
                                       silicon_with(-0.25), -1e17, 1e17);
     const auto s = *assemble::make_scaling(d);
-    const auto system = *EquilibriumPoisson::create(d, s);
-    const auto homo = *EquilibriumPoisson::create(
+    const auto system = *create_equilibrium(d, s);
+    const auto homo = *create_equilibrium(
         junction(*mesh::make_tensor_grid(x), physics::silicon_parameters,
                  physics::silicon_parameters, -1e17, 1e17),
         s);
     // The right side's intrinsic level is 0.25 eV shallower: its potential at the same carrier
     // density is 0.25 V higher. The left (node 0's material) is the reference.
     const std::size_t last = x.size() - 1;
-    REQUIRE(system.contact_potential()[0] == homo.contact_potential()[0]);
-    REQUIRE(close(system.contact_potential()[last] - homo.contact_potential()[last],
+    REQUIRE(contact_potential(system)[0] == contact_potential(homo)[0]);
+    REQUIRE(close(contact_potential(system)[last] - contact_potential(homo)[last],
                   0.25 / s.V_T, 1e-12));
-    const auto guess = system.charge_neutral_potential();
-    REQUIRE(close(guess[last - 3] - homo.charge_neutral_potential()[last - 3], 0.25 / s.V_T,
+    const auto guess = charge_neutral_potential(system);
+    REQUIRE(close(guess[last - 3] - charge_neutral_potential(homo)[last - 3], 0.25 / s.V_T,
                   1e-12));
     // The carriers at the guess are those of the homojunction: the shift moves psi, not n or p.
     std::vector<double> n1(x.size()), p1(x.size()), n2(x.size()), p2(x.size());
-    system.carriers(guess, n1, p1);
-    homo.carriers(homo.charge_neutral_potential(), n2, p2);
+    equilibrium_carriers(system, guess, n1, p1);
+    equilibrium_carriers(homo, charge_neutral_potential(homo), n2, p2);
     for (std::size_t i = 0; i < x.size(); ++i) {
         CAPTURE(i);
         REQUIRE(close(n1[i], n2[i], 1e-11));
@@ -307,8 +307,8 @@ TEST_CASE("heterojunction: FD-Jacobian gates in 1D, 2D and 3D, with thermionic e
     }
     const device::Device d =
         junction(*mesh::make_tensor_grid(x), physics::silicon_parameters, right, -1e17, 1e17);
-    const auto poisson = *EquilibriumPoisson::create(d, *assemble::make_scaling(d));
-    std::vector<double> psi = poisson.charge_neutral_potential();
+    const auto poisson = *create_equilibrium(d, *assemble::make_scaling(d));
+    std::vector<double> psi = charge_neutral_potential(poisson);
     Noise noise{9};
     for (double& v : psi) v += 0.02 * noise.next();
     const double e = fd_jacobian_error(poisson, psi);
@@ -494,8 +494,8 @@ TEST_CASE("heterojunction: FD-Jacobian gates with incomplete ionization (Poisson
         const assemble::PhysicsModels models{.fermi_dirac = fd, .incomplete_ionization = true};
         const device::Device d =
             junction(*mesh::make_tensor_grid(graded_axis(30)), sic, sic, -1e17, 1e17);
-        const auto poisson = *EquilibriumPoisson::create(d, *assemble::make_scaling(d), models);
-        std::vector<double> psi = poisson.charge_neutral_potential();
+        const auto poisson = *create_equilibrium(d, *assemble::make_scaling(d), models);
+        std::vector<double> psi = charge_neutral_potential(poisson);
         Noise noise{31};
         for (double& v : psi) v += 0.02 * noise.next();
         REQUIRE(fd_jacobian_error(poisson, psi) <= 5e-5);
@@ -521,8 +521,8 @@ TEST_CASE("ionization levels: FD-Jacobian gates with Altermatt's levels (Unit 37
         const assemble::PhysicsModels models{.fermi_dirac = fd, .incomplete_ionization = true,
                                              .ionization_levels =
                                                  assemble::IonizationLevels::altermatt};
-        const auto poisson = *EquilibriumPoisson::create(d, *assemble::make_scaling(d), models);
-        std::vector<double> psi = poisson.charge_neutral_potential();
+        const auto poisson = *create_equilibrium(d, *assemble::make_scaling(d), models);
+        std::vector<double> psi = charge_neutral_potential(poisson);
         Noise noise{37};
         for (double& v : psi) v += 0.02 * noise.next();
         REQUIRE(fd_jacobian_error(poisson, psi) <= 5e-5);
@@ -547,7 +547,7 @@ TEST_CASE("ionization levels: FD-Jacobian gates with Altermatt's levels (Unit 37
     REQUIRE_FALSE(refused.has_value());
     CHECK(refused.error().code == base::ErrorCode::invalid_input);
     CHECK(refused.error().message.find("silicon's ionization parameters") != std::string::npos);
-    CHECK_FALSE(EquilibriumPoisson::create(g, *assemble::make_scaling(g), altermatt).has_value());
+    CHECK_FALSE(create_equilibrium(g, *assemble::make_scaling(g), altermatt).has_value());
     // Without incomplete ionization the setting is not read.
     CHECK(System::create(g, *assemble::make_scaling(g),
                                  {.ionization_levels = assemble::IonizationLevels::altermatt})
@@ -626,10 +626,10 @@ TEST_CASE("heterojunction: band edges are flat-Fermi at equilibrium and independ
     const physics::SemiconductorParameters algaas = *physics::algaas_parameters(0.3);
     const device::Device d = junction(*mesh::make_tensor_grid(x), gaas, algaas, -1e17, 1e17);
     const device::Device m = junction(*mesh::make_tensor_grid(x), algaas, gaas, 1e17, -1e17);
-    const auto pd = *EquilibriumPoisson::create(d, *assemble::make_scaling(d));
-    const auto pm = *EquilibriumPoisson::create(m, *assemble::make_scaling(m));
-    const auto bd = pd.band_edges(pd.charge_neutral_potential());
-    const auto bm = pm.band_edges(pm.charge_neutral_potential());
+    const auto pd = *create_equilibrium(d, *assemble::make_scaling(d));
+    const auto pm = *create_equilibrium(m, *assemble::make_scaling(m));
+    const auto bd = band_edges(pd, charge_neutral_potential(pd));
+    const auto bm = band_edges(pm, charge_neutral_potential(pm));
     const std::size_t n = x.size();
     for (std::size_t i = 0; i < n; ++i) {
         CAPTURE(i);
@@ -638,7 +638,7 @@ TEST_CASE("heterojunction: band edges are flat-Fermi at equilibrium and independ
         REQUIRE(std::abs(bd.conduction[i] - bm.conduction[n - 1 - i]) <= 1e-12);
         REQUIRE(std::abs(bd.valence[i] - bm.valence[n - 1 - i]) <= 1e-12);
     }
-    REQUIRE(std::abs(pd.charge_neutral_potential()[0] - pm.charge_neutral_potential()[n - 1]) >
+    REQUIRE(std::abs(charge_neutral_potential(pd)[0] - charge_neutral_potential(pm)[n - 1]) >
             1.0);  // the potentials themselves do differ
 }
 

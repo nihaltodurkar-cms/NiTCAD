@@ -27,6 +27,8 @@ namespace NiTCAD::assemble {
                                                const System::TimeStep* step = nullptr);
 // Scaled trapped charge of each declared interface at state x (interface_edges.hpp, without the
 // fixed charge), in units of q Ns L_D^D. Precondition (NITCAD_EXPECTS): x has unknowns() entries.
+// In thermal equilibrium (equilibrium.hpp) gate_charges and interface_trap_charges take the traps
+// at Fermi occupancy and no step (precondition); the other two are drift-diffusion only.
 [[nodiscard]] std::vector<double> interface_trap_charges(const System& system,
                                                          std::span<const double> x,
                                                          const System::TimeStep* step = nullptr);

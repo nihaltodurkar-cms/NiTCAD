@@ -15,7 +15,7 @@
 #include <utility>
 #include <vector>
 
-#include "NiTCAD/assemble/equilibrium_poisson.hpp"
+#include "NiTCAD/assemble/equilibrium.hpp"
 #include "NiTCAD/assemble/scaling.hpp"
 #include "NiTCAD/assemble/system.hpp"
 #include "NiTCAD/assemble/tunnelling.hpp"
@@ -30,7 +30,7 @@
 
 using namespace NiTCAD;
 using assemble::System;
-using assemble::EquilibriumPoisson;
+using assemble::create_equilibrium;
 using assemble::TermDomain;
 using Terms = assemble::SystemData::Terms;
 
@@ -262,8 +262,8 @@ device::Device block(int D, int nodes, double length_cm) {
 // away from equilibrium so the traps are resolved (transient_test.cpp).
 std::vector<double> probe(const System& dd, const device::Device& d, std::uint64_t seed) {
     const auto scaling = *assemble::make_scaling(d);
-    const auto poisson = *EquilibriumPoisson::create(d, scaling);
-    auto x = dd.state_from_potential(poisson.charge_neutral_potential());
+    const auto poisson = *create_equilibrium(d, scaling);
+    auto x = dd.state_from_potential(charge_neutral_potential(poisson));
     Noise noise{seed};
     for (std::size_t i = 0; i < dd.node_count(); ++i) {
         x[3 * i] += 0.02 * noise.next();
@@ -818,4 +818,103 @@ TEST_CASE("terms: every term writes only the rows and columns it declares") {
         const System::TimeStep step{0.7, storage, {}};
         CHECK(undeclared(dd, x, &step) == 0);
     }
+}
+
+// --- Unit 57 GE5: thermal equilibrium from the same terms -------------------------------------
+
+namespace {
+
+// The equilibrium names of a system's terms, in order.
+std::vector<std::string> names_of(const System& s) {
+    std::vector<std::string> names;
+    for (const auto& t : Terms::list(s)) names.emplace_back(t->info().name);
+    return names;
+}
+
+// psi at the charge-neutral guess with noise of 0.5 V_T off the Dirichlet nodes.
+std::vector<double> equilibrium_probe(const System& eq, std::uint64_t seed) {
+    auto psi = assemble::charge_neutral_potential(eq);
+    Noise noise{seed};
+    for (std::size_t i = 0; i < psi.size(); ++i) {
+        if (!assemble::is_contact(eq, i)) psi[i] += 0.5 * noise.next();
+    }
+    return psi;
+}
+
+}  // namespace
+
+TEST_CASE("equilibrium: the composition of GE5") {
+    using E = assemble::EquationSet;
+    const auto sets = [](const System& s) { return Terms::composition(s).sets(); };
+    // A diode: the slaved charge, the Poisson flux, the contacts; psi alone.
+    const device::Device pn = diode(1);
+    const auto eq = *assemble::create_equilibrium(pn, *assemble::make_scaling(pn));
+    CHECK(eq.formulation() == assemble::Formulation::equilibrium);
+    CHECK(eq.stride() == 1);
+    CHECK(eq.unknowns() == eq.node_count());
+    CHECK(eq.dofs().block() == 1);
+    CHECK(eq.dofs().has(assemble::FieldId::potential));
+    CHECK_FALSE(eq.dofs().has(assemble::FieldId::electrons));
+    CHECK(sets(eq) == (E::poisson | E::contacts));
+    CHECK(names_of(eq) ==
+          std::vector<std::string>{"equilibrium charge", "Poisson flux", "equilibrium contact rows"});
+    // An oxide with an electrode and a trapped interface: the insulator rows and the interfaces at
+    // Fermi occupancy, in the order charge, interfaces, flux, Dirichlet rows (GE5).
+    const device::Device oxide = mos(2);
+    const auto eo = *assemble::create_equilibrium(oxide, *assemble::make_scaling(oxide));
+    CHECK(sets(eo) == (E::poisson | E::contacts | E::oxide | E::interfaces));
+    CHECK(names_of(eo) == std::vector<std::string>{"equilibrium insulator rows",
+                                                   "equilibrium charge", "equilibrium interfaces",
+                                                   "Poisson flux", "equilibrium contact rows"});
+    // A lumped gate: the drift-diffusion system's gate term, shared.
+    const device::Device cap = moscap();
+    const auto ec = *assemble::create_equilibrium(cap, *assemble::make_scaling(cap));
+    CHECK(sets(ec) == (E::poisson | E::contacts | E::gate));
+    CHECK(names_of(ec) == std::vector<std::string>{"equilibrium charge", "gate", "Poisson flux",
+                                                   "equilibrium contact rows"});
+    // The models that only drift-diffusion reads do not change the composition.
+    const auto many = *assemble::create_equilibrium(
+        pn, *assemble::make_scaling(pn),
+        {.radiative = true, .impact_ionization = true, .electrothermal = true});
+    CHECK(names_of(many) == names_of(eq));
+    CHECK(many.stride() == 1);
+    // The assigned rows: insulator rows, charge and the Dirichlet rows.
+    for (const auto& t : Terms::list(eo)) {
+        const std::string name(t->info().name);
+        CAPTURE(name);
+        const bool assigns = name.starts_with("equilibrium") && name != "equilibrium interfaces";
+        CHECK(t->info().assigns == assigns);
+    }
+}
+
+TEST_CASE("equilibrium: each term's partials match finite differences (GG3)") {
+    // The slaved charge under Boltzmann, Fermi-Dirac and incomplete ionization, and every other
+    // term of the composition, on a diode (1D, 2D), an oxide with traps and a MOS-C.
+    std::set<std::string> active;
+    for (const bool fermi_dirac : {false, true}) {
+        for (const bool ionization : {false, true}) {
+            const assemble::PhysicsModels models{.fermi_dirac = fermi_dirac,
+                                                 .incomplete_ionization = ionization};
+            for (const int k : {0, 1, 2, 3}) {
+                const device::Device d = k < 2 ? diode(k + 1) : k == 2 ? mos(2) : moscap();
+                const auto s = *assemble::make_scaling(d);
+                auto eq = *assemble::create_equilibrium(d, s, models);
+                if (k == 2) REQUIRE(eq.set_bias(std::vector<double>{-0.4, 0.0}).has_value());
+                if (k == 3) REQUIRE(eq.set_bias(std::vector<double>{0.5, 0.0}).has_value());
+                CAPTURE(fermi_dirac, ionization, k);
+                check_terms(eq, equilibrium_probe(eq, 17 + static_cast<std::uint64_t>(k)),
+                            active);
+            }
+        }
+    }
+    // The insulator rows assign 0 to their rows and diagonals, so they are never active here.
+    require_active(active, {"equilibrium charge", "gate", "equilibrium interfaces",
+                            "Poisson flux", "equilibrium contact rows"});
+}
+
+TEST_CASE("equilibrium: every term writes only the rows and columns it declares") {
+    const device::Device d = mos(2);
+    const auto s = *assemble::make_scaling(d);
+    const auto eq = *assemble::create_equilibrium(d, s, {.fermi_dirac = true});
+    CHECK(undeclared(eq, equilibrium_probe(eq, 5)) == 0);
 }

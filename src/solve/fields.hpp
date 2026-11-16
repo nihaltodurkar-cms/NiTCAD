@@ -12,7 +12,7 @@
 #include "NiTCAD/assemble/charges.hpp"
 #include "NiTCAD/assemble/currents.hpp"
 #include "NiTCAD/assemble/energy.hpp"
-#include "NiTCAD/assemble/equilibrium_poisson.hpp"
+#include "NiTCAD/assemble/equilibrium.hpp"
 #include "NiTCAD/assemble/derived.hpp"
 #include "NiTCAD/assemble/scaling.hpp"
 #include "NiTCAD/assemble/system.hpp"
@@ -24,12 +24,12 @@
 namespace NiTCAD::solve::detail {
 
 // Potential in V and the Boltzmann carriers in cm^-3 of the scaled potential psi.
-inline results::NodeFields equilibrium_fields(const assemble::EquilibriumPoisson& system,
+inline results::NodeFields equilibrium_fields(const assemble::System& system,
                                               std::span<const double> psi,
                                               const assemble::Scaling& scaling) {
-    const std::size_t n = system.unknowns();
+    const std::size_t n = system.node_count();
     results::NodeFields f{std::vector<double>(n), std::vector<double>(n), std::vector<double>(n)};
-    system.carriers(psi, f.n_cm3, f.p_cm3);
+    equilibrium_carriers(system, psi, f.n_cm3, f.p_cm3);
     for (std::size_t i = 0; i < n; ++i) {
         f.potential_V[i] = psi[i] * scaling.V_T;
         f.n_cm3[i] *= scaling.Ns;
@@ -38,16 +38,8 @@ inline results::NodeFields equilibrium_fields(const assemble::EquilibriumPoisson
     return f;
 }
 
-// The band diagram in eV from the assemblers' scaled one (units of V_T).
-inline results::BandDiagram band_diagram(const assemble::BandEdges& b, double V_T) {
-    results::BandDiagram d{b.conduction, b.valence, b.electron_fermi, b.hole_fermi};
-    for (auto* v : {&d.conduction_eV, &d.valence_eV, &d.electron_fermi_eV, &d.hole_fermi_eV}) {
-        for (double& e : *v) e *= V_T;
-    }
-    return d;
-}
-
-// A drift-diffusion state's band diagram in eV, through the derived-field table (Unit 57 GE4).
+// A state's band diagram in eV, through the derived-field table (Unit 57 GE4; thermal
+// equilibrium's too, GE5).
 inline results::BandDiagram band_diagram(const assemble::System& system,
                                          std::span<const double> x, double V_T) {
     using assemble::FieldId;

@@ -17,7 +17,7 @@
 // edge's harmonic-mean flux. The semiconductor node's continuity rows take -/+ a Ns / (R0 L_D)
 // (sum_k N_k r_k + r_s) with r the trap and surface-velocity rates (physics/interface_traps.hpp),
 // homogeneous of degree one so U [cm^-2 s^-1] = Ns r(n', p') on scaled densities.
-// - In thermal equilibrium (EquilibriumPoisson) f_k is the Fermi function of tau_k - eta_I,
+// - In thermal equilibrium (equilibrium.hpp) f_k is the Fermi function of tau_k - eta_I,
 //   eta_I = psi_I + s (the semiconductor's band shift), and nothing recombines.
 // - In drift-diffusion the carriers keep their quasi-Fermi levels across the semiconductor's
 //   half-cell: n_I is the density (of the selected statistics) at the reduced energy

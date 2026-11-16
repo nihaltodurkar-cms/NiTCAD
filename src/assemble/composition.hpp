@@ -6,9 +6,11 @@
 //     MOS     = the diode's + the oxide's Poisson + gate and interface conditions
 //     thermal = the semiconductor equations at T + the heat equation and its sinks
 // with generation (impact ionization, band-to-band tunnelling) and recombination models adding
-// terms. A composition table lists, in assembly order (DECISIONS.md FE3), every term a system can
+// terms; thermal equilibrium (Unit 57 GE5) = Poisson alone over psi, the carriers slaved to it, with
+// the oxide, gate, interface and contact conditions. A composition table lists, in assembly order (DECISIONS.md FE3), every term a system can
 // have: the equation sets it belongs to, whether it is active for a device and models, and its
-// factory. The isothermal table is in terms.cpp, the electrothermal one in thermal_terms.cpp.
+// factory. The isothermal table is in terms.cpp, the electrothermal one in thermal_terms.cpp, the
+// equilibrium one in equilibrium.cpp.
 // Composition picks the table, keeps the active rows and builds the unknowns' map from the
 // fields the equations solve for (fields.hpp).
 //

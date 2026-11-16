@@ -558,6 +558,26 @@ struct SystemData {
     [[nodiscard]] std::optional<base::Error> make_energy_balance(SystemState& st,
                                                                  const device::Device& device,
                                                                  const PhysicsModels& models);
+
+    // Thermal equilibrium (Unit 57 GE5; equilibrium.cpp, equilibrium.hpp): psi alone (m_ = 1),
+    // the terms of equilibrium_table. Of the data only the scaled device's tables are filled;
+    // the edges carry c, charged, carriers and the positions ab[0], ba[0]; the state the gates
+    // and psi0_ (the Dirichlet values: an ohmic contact's at zero bias, a Schottky contact's
+    // psi_S at zero bias, an electrode's at its bias).
+    bool equilibrium_ = false;
+    struct Made;
+    [[nodiscard]] static std::expected<Made, base::Error> make_equilibrium(
+        const device::Device& device, const Scaling& scaling, const PhysicsModels& models);
+    [[nodiscard]] std::expected<void, base::Error> set_equilibrium_bias(
+        SystemState& st, std::span<const double> bias_V) const;
+    // The carriers slaved to psi (0 on insulator nodes).
+    void equilibrium_carriers(std::span<const double> psi, std::span<double> n,
+                              std::span<double> p) const;
+    [[nodiscard]] std::vector<double> charge_neutral_potential(const SystemState& st) const;
+    [[nodiscard]] BandEdges equilibrium_band_edges(std::span<const double> psi) const;
+    [[nodiscard]] std::vector<double> equilibrium_gate_charges(const SystemState& st,
+                                                               std::span<const double> psi) const;
+    [[nodiscard]] std::vector<double> equilibrium_trap_charges(std::span<const double> psi) const;
 };
 
 struct SystemState {
@@ -575,6 +595,12 @@ struct SystemState {
     std::vector<SystemData::PathLayout> layouts_;
     std::vector<linalg::Triplet> base_triplets_;
     linalg::SparseMatrix pattern_;
+};
+
+// A system's data and state as creation makes them (make_equilibrium).
+struct SystemData::Made {
+    std::shared_ptr<SystemData> data;
+    SystemState state;
 };
 
 }  // namespace NiTCAD::assemble

@@ -92,8 +92,14 @@ struct SystemData::Terms {
     // Isothermal in terms.cpp; with the electrothermal model thermal_terms.cpp.
     [[nodiscard]] static std::span<const CompositionEntry> isothermal_table();
     [[nodiscard]] static std::span<const CompositionEntry> thermal_table();
-    // The Poisson charge term, in both tables.
+    // Thermal equilibrium (Unit 57 GE5; equilibrium.cpp): psi alone, the carriers slaved to it.
+    [[nodiscard]] static std::span<const CompositionEntry> equilibrium_table();
+    // The Poisson charge term, in both drift-diffusion tables.
     [[nodiscard]] static std::shared_ptr<const Term> poisson_charge();
+    // The gate and Poisson flux terms, shared by the isothermal and equilibrium tables (at stride
+    // 1 they compute equilibrium's expressions; GE5).
+    [[nodiscard]] static std::shared_ptr<const Term> gate();
+    [[nodiscard]] static std::shared_ptr<const Term> poisson_flux();
     // Appends every term's own pattern entries (Term::pattern) to triplets.
     static void pattern(const SystemData& s, const SystemState& st,
                         std::vector<linalg::Triplet>& triplets);
@@ -198,6 +204,18 @@ struct SystemData::Terms {
     [[nodiscard]] static std::shared_ptr<const Term> energy_rows();
     [[nodiscard]] static std::shared_ptr<const Term> energy_fluxes();
     [[nodiscard]] static std::shared_ptr<const Term> energy_impact();
+    // Thermal equilibrium's own variants (Unit 57 GE5, R2; equilibrium.cpp): the insulator rows,
+    // the charge with the carriers slaved to psi, the interface edges at Fermi occupancy, and the
+    // Dirichlet rows last.
+    class EquilibriumInsulatorRows;
+    class EquilibriumCharge;
+    class EquilibriumInterfaces;
+    class EquilibriumContacts;
+    // Thermal equilibrium: whether node i's row is a Dirichlet row (an ohmic or Schottky contact
+    // node, or an electrode node).
+    [[nodiscard]] static bool dirichlet(const SystemData& s, std::size_t i) noexcept {
+        return s.contact_[i] >= 0 || s.schottky_[i] >= 0 || s.electrode_[i] >= 0;
+    }
 };
 
 // The gate tunnels' fluxes at one state (GR11; gate_tunnels.cpp): worker threads start on them at

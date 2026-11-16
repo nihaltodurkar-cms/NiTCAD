@@ -3,7 +3,8 @@
 // model-specific queries and mutators are free functions in the topic headers: currents.hpp,
 // thermal.hpp, tunnelling.hpp, energy.hpp, charges.hpp and rates.hpp, and band_edges.hpp's
 // band_edges. The equation sets of a system created from a device and models are those of the
-// coupled drift-diffusion system below.
+// coupled drift-diffusion system below, or, with Formulation::equilibrium, thermal equilibrium's:
+// Poisson alone over psi with the carriers slaved to it (equilibrium.hpp, Unit 57 GE5).
 //
 // Coupled drift-diffusion system: Poisson, electron and hole continuity, three scaled unknowns per
 // node interleaved as x[3i] = psi, x[3i+1] = n, x[3i+2] = p (legacy Device1D::residual_jacobian,
@@ -13,7 +14,7 @@
 //     Poisson    sum  et c_e (psi_b - psi_a)                    - V_i (n_i - p_i - C_i)
 //     electrons  sum  Jn_e                                        - V_i R_i
 //     holes      sum  Jp_e                                        + V_i R_i
-// with c_e the scaled coupling (EquilibriumPoisson), Jn_e and Jp_e the Scharfetter-Gummel fluxes of
+// with c_e the scaled coupling (equilibrium.hpp), Jn_e and Jp_e the Scharfetter-Gummel fluxes of
 // sg_flux.hpp with edge factor D_e c_e, D_e = hmean(mu_a, mu_b) V_T / D0 (harmonic mean of the
 // nodes' mobilities, legacy dn_edge), and R = (R_SRH + R_Auger) / R0. SRH is evaluated on scaled
 // densities (it is homogeneous of degree one, so R_SRH / R0 = R_SRH(n', p', ...) Ns / R0); Auger,
@@ -28,7 +29,7 @@
 // The driving term of the fluxes is delta_n = psi_b - psi_a + s_b - s_a + ln(n_ie,b / n_ie,a) for
 // electrons and delta_p = psi_b - psi_a + s_b - s_a - ln(n_ie,b / n_ie,a) for holes (legacy delta,
 // delta_p): with band-gap narrowing n_ie varies in space, and across a heterointerface the band
-// shift s (EquilibriumPoisson; Unit 15) steps, and only these make the equilibrium carry no
+// shift s (equilibrium.hpp; Unit 15) steps, and only these make the equilibrium carry no
 // current.
 // The edge mobility is the harmonic mean of the two nodes' also across an interface (legacy); with
 // field mobility, on an edge between two materials it is the harmonic mean of each end's Canali
@@ -245,6 +246,7 @@
 
 #include <complex>
 #include <cstddef>
+#include <cstdint>
 #include <expected>
 #include <memory>
 #include <span>
@@ -263,6 +265,10 @@ struct SystemData;  // the model data and the state (src/assemble/system_data.hp
 struct SystemState;
 class SystemKey;  // constructible only inside src/assemble (the passkey of data() and state())
 
+// The equation sets a system is created with (Unit 57 GE5): the coupled drift-diffusion system,
+// or thermal equilibrium, psi alone (equilibrium.hpp).
+enum class Formulation : std::uint8_t { drift_diffusion = 0, equilibrium = 1 };
+
 class System {
 public:
     // Errors: invalid_input for impact_current_resolution not finite and >= 0 with impact
@@ -274,15 +280,20 @@ public:
     // thermionic-emission interface (U3, deferred), incomplete ionization (U6), Fermi-Dirac
     // statistics with a thermopower exponent other than -1/2 (T3), a region whose material has
     // no thermal data (T11). Those of the scaled device (scaling temperature).
+    // With Formulation::equilibrium only those of the scaled device, and of the models only
+    // bgn, fermi_dirac and incomplete_ionization (and the band set the scaled device reads)
+    // matter (equilibrium.hpp).
     [[nodiscard]] static std::expected<System, base::Error> create(
         const device::Device& device, const Scaling& scaling,
-        const PhysicsModels& models = {});
+        const PhysicsModels& models = {},
+        Formulation formulation = Formulation::drift_diffusion);
 
+    [[nodiscard]] Formulation formulation() const noexcept;
     [[nodiscard]] std::size_t unknowns() const noexcept;
     [[nodiscard]] std::size_t node_count() const noexcept;
     [[nodiscard]] std::size_t contact_count() const noexcept;
     // Unknowns per node: 3 (psi, n, p), 4 with the electrothermal model (theta last), 5 with
-    // energy balance (tau_n, tau_p last).
+    // energy balance (tau_n, tau_p last); 1 (psi) in thermal equilibrium.
     [[nodiscard]] std::size_t stride() const noexcept;
     // Where each field's unknowns are (fields.hpp; Unit 40): node-interleaved, stride() per node.
     // Precondition (NITCAD_EXPECTS): not a moved-from system.
@@ -291,7 +302,12 @@ public:
     // Applied bias of each contact in V, in the order of device.contacts(); sets the Dirichlet
     // values of the ohmic contacts and the electrode potential of the gates. Errors: those of
     // check_contact_bias (size, a value not finite). Initially every bias is 0.
+    // In thermal equilibrium: check_contact_bias's with thermal_equilibrium (an ohmic contact not
+    // at 0 V among them), and only the gates' and electrodes' potentials follow the bias.
     [[nodiscard]] std::expected<void, base::Error> set_bias(std::span<const double> bias_V);
+
+    // Below, to the end of the class but the Newton hooks: the drift-diffusion formulation's
+    // members (precondition, NITCAD_EXPECTS, where they would read a carrier unknown).
 
     // Scaled state of every node in equilibrium at the scaled potential psi under the selected
     // statistics (Boltzmann: n = n_ie e^(psi + s), p = n_ie e^-(psi + s); 0 on insulator nodes),
@@ -364,7 +380,8 @@ public:
     // Whether dF / dV depends on the state (bias_derivative's x overload must be used).
     [[nodiscard]] bool bias_nonlinear() const noexcept;
 
-    // Newton hooks (see the header comment; the minority floor: set_minority_floor below).
+    // Newton hooks (see the header comment; the minority floor: set_minority_floor below). In
+    // thermal equilibrium the plain ones: psi clipped to +-max_update, the largest |dpsi|.
     [[nodiscard]] double update_size(std::span<const double> x,
                                      std::span<const double> dx) const;
     void apply_update(std::span<double> x, std::span<const double> dx, double max_update) const;

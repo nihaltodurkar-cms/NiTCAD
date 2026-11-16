@@ -20,7 +20,7 @@
 
 #include "NiTCAD/assemble/currents.hpp"
 #include "NiTCAD/assemble/energy.hpp"
-#include "NiTCAD/assemble/equilibrium_poisson.hpp"
+#include "NiTCAD/assemble/equilibrium.hpp"
 #include "NiTCAD/assemble/scaling.hpp"
 #include "NiTCAD/assemble/system.hpp"
 #include "NiTCAD/base/constants.hpp"
@@ -796,8 +796,8 @@ TEST_CASE("energy balance: equilibrium has tau = 0 in every energy row") {
         REQUIRE(dd->set_bias(std::vector<double>{0.0, 0.0}).has_value());
         // Any potential with the equilibrium densities (one Fermi level): the charge-neutral one.
         // The fluxes vanish analytically; numerically to the rounding of their opposing terms.
-        const auto poisson = *assemble::EquilibriumPoisson::create(d, s);
-        auto x = dd->state_from_potential(poisson.charge_neutral_potential());
+        const auto poisson = *assemble::create_equilibrium(d, s);
+        auto x = dd->state_from_potential(charge_neutral_potential(poisson));
         std::vector<double> f(dd->unknowns());
         dd->residual(x, f);
         const auto terms = edge_flux_terms(*dd, x);
@@ -842,8 +842,8 @@ TEST_CASE("energy balance: the uniform bulk state of Canali's velocity is exact 
                 *d, s, {.hole_mobility = assemble::HoleMobility::caughey_thomas, .energy_balance = true});
             REQUIRE(dd.has_value());
             REQUIRE(dd->set_bias(std::vector<double>{0.0, E * 0.4e-4}).has_value());
-            const auto poisson = *assemble::EquilibriumPoisson::create(*d, s);
-            const std::vector<double> psi = poisson.charge_neutral_potential();
+            const auto poisson = *assemble::create_equilibrium(*d, s);
+            const std::vector<double> psi = charge_neutral_potential(poisson);
             std::vector<double> x = dd->state_from_potential(psi);  // the contacts at their bias
             // A carrier below 1e-10 of the majority relaxes with 1e-10 of the majority's density
             // (ED14): its Joule heat (its density) balances that relaxation, so its rise is the

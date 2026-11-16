@@ -15,12 +15,17 @@ std::shared_ptr<const SystemData::Composition> SystemData::Composition::compose(
     // With energy balance (Unit 52) the carrier temperature rises instead, tau_n then tau_p.
     const Field energy[] = {potential_field, electron_field, hole_field,
                             electron_temperature_field, hole_temperature_field};
-    c->dofs_ = models.energy_balance
+    // Thermal equilibrium (Unit 57 GE5): psi alone, its own table whatever the models.
+    c->dofs_ = s.equilibrium_ ? DofMap::node_interleaved(std::span(fields).first(1), s.node_count())
+               : models.energy_balance
                    ? DofMap::node_interleaved(energy, s.node_count())
                    : DofMap::node_interleaved(std::span(fields).first(models.electrothermal ? 4 : 3),
                                               s.node_count());
-    for (const CompositionEntry& e :
-         models.electrothermal ? Terms::thermal_table() : Terms::isothermal_table()) {
+    const std::span<const CompositionEntry> table =
+        s.equilibrium_          ? Terms::equilibrium_table()
+        : models.electrothermal ? Terms::thermal_table()
+                                : Terms::isothermal_table();
+    for (const CompositionEntry& e : table) {
         if (!e.active(s, st, models)) continue;
         if (e.frequency) {  // Unit 57 GE3: not in the steady list, its own sets already are
             c->frequency_terms_.push_back(e.make());

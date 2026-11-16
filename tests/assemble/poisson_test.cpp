@@ -12,7 +12,7 @@
 #include <utility>
 #include <vector>
 
-#include "NiTCAD/assemble/equilibrium_poisson.hpp"
+#include "NiTCAD/assemble/equilibrium.hpp"
 #include "NiTCAD/assemble/ohmic.hpp"
 #include "NiTCAD/assemble/scaling.hpp"
 #include "NiTCAD/device/device.hpp"
@@ -25,7 +25,8 @@
 #include "../physics/references.hpp"
 
 using namespace NiTCAD;
-using assemble::EquilibriumPoisson;
+using assemble::create_equilibrium;
+using assemble::System;
 using assemble::Scaling;
 using base::ErrorCode;
 
@@ -102,8 +103,8 @@ std::vector<std::vector<double>> dense(const linalg::SparseMatrix& a) {
 // The house FD-Jacobian gate (legacy tests/test_m13_solver.py::_jacobian_probe): at a perturbed
 // state, central differences with step 1e-7 max(|u|, 1) for every column; per-column error is
 // max |fd - J| over the column divided by the column's largest |J| (+1e-30). Returns the worst.
-double fd_jacobian_error(const EquilibriumPoisson& system, std::uint64_t seed) {
-    std::vector<double> psi = system.charge_neutral_potential();
+double fd_jacobian_error(const System& system, std::uint64_t seed) {
+    std::vector<double> psi = charge_neutral_potential(system);
     Noise noise{seed};
     for (double& v : psi) v += 0.02 * noise.next();
     const std::size_t n = system.unknowns();
@@ -132,8 +133,8 @@ double fd_jacobian_error(const EquilibriumPoisson& system, std::uint64_t seed) {
     return worst;
 }
 
-EquilibriumPoisson system_for(const device::Device& d) {
-    return *EquilibriumPoisson::create(d, *assemble::make_scaling(d));
+System system_for(const device::Device& d) {
+    return *create_equilibrium(d, *assemble::make_scaling(d));
 }
 
 }  // namespace
@@ -200,15 +201,15 @@ TEST_CASE("poisson: FD-Jacobian gate in 1D, 2D and 3D (section 10, <= 5e-5)") {
 
 TEST_CASE("poisson: contact rows are Dirichlet and the neutral guess satisfies the bulk") {
     const auto d = diode(*mesh::make_tensor_grid(graded_axis(30)));
-    const EquilibriumPoisson system = system_for(d);
-    const auto psi = system.charge_neutral_potential();
+    const System system = system_for(d);
+    const auto psi = charge_neutral_potential(system);
     std::vector<double> f(system.unknowns());
     linalg::SparseMatrix j = system.make_jacobian();
     system.evaluate(psi, f, j);
     const auto jd = dense(j);
     const std::size_t last = system.unknowns() - 1;
     for (const std::size_t c : {std::size_t{0}, last}) {
-        REQUIRE(system.is_contact()[c] == 1);
+        REQUIRE(is_contact(system, c));
         REQUIRE(f[c] == 0.0);  // the guess holds the contact value
         for (std::size_t k = 0; k < jd.size(); ++k) REQUIRE(jd[c][k] == (k == c ? 1.0 : 0.0));
     }
@@ -230,8 +231,8 @@ TEST_CASE("poisson: the 1D residual is the legacy row, written out") {
     const auto x = graded_axis(25);
     const auto d = diode(*mesh::make_tensor_grid(x));
     const Scaling s = *assemble::make_scaling(d);
-    const EquilibriumPoisson system = system_for(d);
-    std::vector<double> psi = system.charge_neutral_potential();
+    const System system = system_for(d);
+    std::vector<double> psi = charge_neutral_potential(system);
     Noise noise{11};
     for (double& v : psi) v += 0.5 * noise.next();
     std::vector<double> f(psi.size());
@@ -257,10 +258,10 @@ TEST_CASE("poisson: a y-uniform 2D residual is the 1D residual times the scaled 
     const auto y = std::vector<double>{0.0, 2e-5, 3e-5, 7e-5};
     const auto d1 = diode(*mesh::make_tensor_grid(x));
     const auto d2 = diode(*mesh::make_tensor_grid(x, y));
-    const EquilibriumPoisson s1 = system_for(d1);
-    const EquilibriumPoisson s2 = system_for(d2);
+    const System s1 = system_for(d1);
+    const System s2 = system_for(d2);
     const double L_D = assemble::make_scaling(d1)->L_D;
-    std::vector<double> psi1 = s1.charge_neutral_potential();
+    std::vector<double> psi1 = charge_neutral_potential(s1);
     Noise noise{7};
     for (double& v : psi1) v += 0.3 * noise.next();
     const std::size_t nx = x.size();
@@ -272,7 +273,7 @@ TEST_CASE("poisson: a y-uniform 2D residual is the 1D residual times the scaled 
     double worst = 0.0;
     for (std::size_t k = 0; k < psi2.size(); ++k) {
         const std::size_t i = k % nx;
-        if (s1.is_contact()[i] != 0) continue;
+        if (is_contact(s1, i)) continue;
         // Transverse control width of node k, from the two meshes' volumes.
         const double width = d2.mesh().volumes()[k] / d1.mesh().volumes()[i] / L_D;
         worst = std::max(worst, std::abs(f2[k] - width * f1[i]) / (width * std::abs(f1[i])));
@@ -282,10 +283,10 @@ TEST_CASE("poisson: a y-uniform 2D residual is the 1D residual times the scaled 
 
 TEST_CASE("poisson: the Jacobian pattern is fixed, so the solver analyzes once") {
     const auto d = diode(*mesh::make_tensor_grid(graded_axis(30), uniform_axis(1e-4, 5)));
-    const EquilibriumPoisson system = system_for(d);
+    const System system = system_for(d);
     auto solver = *linalg::LinearSolver::create({});
     linalg::SparseMatrix j = system.make_jacobian();
-    std::vector<double> psi = system.charge_neutral_potential();
+    std::vector<double> psi = charge_neutral_potential(system);
     std::vector<double> f(system.unknowns()), rhs(system.unknowns()), step(system.unknowns());
     for (int iteration = 0; iteration < 3; ++iteration) {
         system.evaluate(psi, f, j);
@@ -317,12 +318,12 @@ TEST_CASE("poisson: a heterojunction is accepted (Unit 15), a mismatched scaling
          .acceptors = std::vector<double>(n, 0.0),
          .contacts = {{"anode", device::ContactKind::ohmic, std::move(anode)},
                       {"cathode", device::ContactKind::ohmic, std::move(cathode)}}});
-    REQUIRE(EquilibriumPoisson::create(hetero, *assemble::make_scaling(hetero)).has_value());
+    REQUIRE(create_equilibrium(hetero, *assemble::make_scaling(hetero)).has_value());
 
     const auto d = diode(*mesh::make_tensor_grid(graded_axis(10)));
     Scaling s = *assemble::make_scaling(d);
     s.temperature_K = 310.0;
-    REQUIRE(EquilibriumPoisson::create(d, s).error().code == ErrorCode::invalid_input);
+    REQUIRE(create_equilibrium(d, s).error().code == ErrorCode::invalid_input);
 }
 
 // Unit 14: Fermi-Dirac statistics.
@@ -336,7 +337,7 @@ TEST_CASE("poisson: FD-Jacobian gate under Fermi-Dirac statistics on a degenerat
     const auto xs = graded_axis(14);
     const auto make = [&](mesh::Mesh m) {
         const device::Device d = diode(std::move(m), 1e20, 1e17);
-        return *EquilibriumPoisson::create(d, *assemble::make_scaling(d), fd);
+        return *create_equilibrium(d, *assemble::make_scaling(d), fd);
     };
     const double e1 = fd_jacobian_error(make(*mesh::make_tensor_grid(x)), 11);
     const double e2 = fd_jacobian_error(make(*mesh::make_tensor_grid(x, y)), 12);
@@ -350,8 +351,8 @@ TEST_CASE("poisson: FD-Jacobian gate under Fermi-Dirac statistics on a degenerat
 TEST_CASE("poisson: Fermi-Dirac contacts and neutral guess are the neutral Fermi-Dirac root") {
     const device::Device d = diode(*mesh::make_tensor_grid(graded_axis(30)), 1e20, 1e17);
     const Scaling s = *assemble::make_scaling(d);
-    const auto system = *EquilibriumPoisson::create(d, s, {.fermi_dirac = true});
-    const auto boltzmann = *EquilibriumPoisson::create(d, s, {.fermi_dirac = false});
+    const auto system = *create_equilibrium(d, s, {.fermi_dirac = true});
+    const auto boltzmann = *create_equilibrium(d, s, {.fermi_dirac = false});
     const physics::Semiconductor si = physics::silicon();
     const double T = 300.0;
     // Band-gap narrowing is on by default: each side's n_ie is the effective one.
@@ -362,19 +363,19 @@ TEST_CASE("poisson: Fermi-Dirac contacts and neutral guess are the neutral Fermi
         const auto e = physics::fermi_dirac_neutral_equilibrium(
             N / s.Ns, nie / s.Ns, std::log(physics::conduction_band_dos(si, T) / nie),
             std::log(physics::valence_band_dos(si, T) / nie));
-        REQUIRE(system.contact_potential()[node] == e.eta);
-        REQUIRE(system.charge_neutral_potential()[node] == e.eta);
+        REQUIRE(contact_potential(system)[node] == e.eta);
+        REQUIRE(charge_neutral_potential(system)[node] == e.eta);
         // The degenerate contact needs a deeper potential than Boltzmann statistics give.
-        REQUIRE(std::abs(system.contact_potential()[node]) >=
-                std::abs(boltzmann.contact_potential()[node]));
+        REQUIRE(std::abs(contact_potential(system)[node]) >=
+                std::abs(contact_potential(boltzmann)[node]));
     }
-    REQUIRE(system.contact_potential()[0] - boltzmann.contact_potential()[0] < -0.5);
+    REQUIRE(contact_potential(system)[0] - contact_potential(boltzmann)[0] < -0.5);
     // In the neutral bulk the guess leaves no charge: the residual is the (zero) flux balance.
-    const std::vector<double> psi = system.charge_neutral_potential();
+    const std::vector<double> psi = charge_neutral_potential(system);
     std::vector<double> f(system.unknowns());
     system.residual(psi, f);
     std::vector<double> n(system.unknowns()), p(system.unknowns());
-    system.carriers(psi, n, p);
+    equilibrium_carriers(system, psi, n, p);
     REQUIRE(close(n[3] - p[3], 0.0 - 1e20 / s.Ns, 1e-14));
     REQUIRE(close(n[58] - p[58], 1e17 / s.Ns, 1e-13));
 }

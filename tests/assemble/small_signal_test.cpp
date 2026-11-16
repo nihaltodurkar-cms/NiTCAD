@@ -16,7 +16,7 @@
 
 #include "NiTCAD/assemble/charges.hpp"
 #include "NiTCAD/assemble/currents.hpp"
-#include "NiTCAD/assemble/equilibrium_poisson.hpp"
+#include "NiTCAD/assemble/equilibrium.hpp"
 #include "NiTCAD/assemble/scaling.hpp"
 #include "NiTCAD/assemble/system.hpp"
 #include "NiTCAD/device/device.hpp"
@@ -27,7 +27,7 @@
 
 using namespace NiTCAD;
 using assemble::System;
-using assemble::EquilibriumPoisson;
+using assemble::create_equilibrium;
 using Complex = std::complex<double>;
 
 namespace {
@@ -184,9 +184,9 @@ std::vector<std::vector<Scalar>> dense(const linalg::BasicSparseMatrix<Scalar>& 
 
 // The Unit 15b probe state: the charge-neutral guess with noise, and at the interface nodes
 // n = 2e-3 and p = 5e-4 (scaled), so the traps are out of equilibrium.
-std::vector<double> probe_state(const System& system, const EquilibriumPoisson& poisson,
+std::vector<double> probe_state(const System& system, const System& poisson,
                                 const device::Device& d, std::uint64_t seed) {
-    auto x = system.state_from_potential(poisson.charge_neutral_potential());
+    auto x = system.state_from_potential(charge_neutral_potential(poisson));
     Noise noise{seed};
     for (std::size_t i = 0; i < system.node_count(); ++i) {
         x[3 * i] += 0.02 * noise.next();
@@ -255,7 +255,7 @@ TEST_CASE("small-signal assemble: at s = 0 the matrix is the steady Jacobian") {
         const auto scaling = *assemble::make_scaling(k.device);
         auto dd = *System::create(k.device, scaling, k.models);
         REQUIRE(dd.set_bias(k.bias).has_value());
-        const auto poisson = *EquilibriumPoisson::create(k.device, scaling, k.models);
+        const auto poisson = *create_equilibrium(k.device, scaling, k.models);
         const auto x = probe_state(dd, poisson, k.device, 7);
         auto j = dd.make_jacobian();
         std::vector<double> f(dd.unknowns());
@@ -283,7 +283,7 @@ TEST_CASE("small-signal assemble: at a real s the matrix is a backward-Euler ste
         const auto scaling = *assemble::make_scaling(k.device);
         auto dd = *System::create(k.device, scaling, k.models);
         REQUIRE(dd.set_bias(k.bias).has_value());
-        const auto poisson = *EquilibriumPoisson::create(k.device, scaling, k.models);
+        const auto poisson = *create_equilibrium(k.device, scaling, k.models);
         const auto x = probe_state(dd, poisson, k.device, 11);
         for (const double dt : {1e-12, 1e-9, 1e-6}) {
             const double r = dd.time_scale() / dt;
@@ -322,7 +322,7 @@ TEST_CASE("small-signal assemble: the trap part at a real s on its own") {
         auto b = *System::create(without, scaling, models);
         REQUIRE(a.set_bias(bias).has_value());
         REQUIRE(b.set_bias(bias).has_value());
-        const auto poisson = *EquilibriumPoisson::create(with, scaling, models);
+        const auto poisson = *create_equilibrium(with, scaling, models);
         const auto x = probe_state(a, poisson, with, 5);
         for (const double dt : {1e-12, 1e-9, 1e-6}) {
             const double r = a.time_scale() / dt;
@@ -360,7 +360,7 @@ TEST_CASE("small-signal assemble: the matrix and the current rows are holomorphi
         const auto scaling = *assemble::make_scaling(k.device);
         auto dd = *System::create(k.device, scaling, k.models);
         REQUIRE(dd.set_bias(k.bias).has_value());
-        const auto poisson = *EquilibriumPoisson::create(k.device, scaling, k.models);
+        const auto poisson = *create_equilibrium(k.device, scaling, k.models);
         const auto x = probe_state(dd, poisson, k.device, 13);
         const double r = dd.time_scale() / 1e-9;
         const Complex s0{0.3 * r, r}, h = 1e-4 * r;
@@ -412,7 +412,7 @@ TEST_CASE("small-signal assemble: the bias derivative is the residual's") {
         const auto scaling = *assemble::make_scaling(k.device);
         auto dd = *System::create(k.device, scaling, k.models);
         REQUIRE(dd.set_bias(k.bias).has_value());
-        const auto poisson = *EquilibriumPoisson::create(k.device, scaling, k.models);
+        const auto poisson = *create_equilibrium(k.device, scaling, k.models);
         const auto x = probe_state(dd, poisson, k.device, 17);
         const std::size_t n = dd.unknowns();
         for (std::size_t c = 0; c < k.bias.size(); ++c) {
@@ -446,7 +446,7 @@ TEST_CASE("small-signal assemble: the current rows are the linearized total curr
         const auto scaling = *assemble::make_scaling(k.device);
         auto dd = *System::create(k.device, scaling, k.models);
         REQUIRE(dd.set_bias(k.bias).has_value());
-        const auto poisson = *EquilibriumPoisson::create(k.device, scaling, k.models);
+        const auto poisson = *create_equilibrium(k.device, scaling, k.models);
         auto x = probe_state(dd, poisson, k.device, 19);
         const std::size_t contacts = k.bias.size();
         for (const double dt : {0.0, 1e-12, 1e-9}) {

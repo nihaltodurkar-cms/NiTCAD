@@ -108,6 +108,9 @@ System& System::operator=(const System& other) {
     return *this;
 }
 
+Formulation System::formulation() const noexcept {
+    return data_->equilibrium_ ? Formulation::equilibrium : Formulation::drift_diffusion;
+}
 std::size_t System::unknowns() const noexcept { return data_->unknowns(); }
 std::size_t System::node_count() const noexcept { return data_->node_count(); }
 std::size_t System::contact_count() const noexcept { return data_->contact_count(); }
@@ -124,8 +127,18 @@ void System::replace_data(const SystemKey& /*key*/,
     data_ = std::move(data);
 }
 
-std::expected<System, base::Error> System::create(
-    const device::Device& device, const Scaling& scaling, const PhysicsModels& models) {
+std::expected<System, base::Error> System::create(const device::Device& device,
+                                                  const Scaling& scaling,
+                                                  const PhysicsModels& models,
+                                                  Formulation formulation) {
+    if (formulation == Formulation::equilibrium) {  // Unit 57 GE5 (equilibrium.cpp)
+        auto made = SystemData::make_equilibrium(device, scaling, models);
+        if (!made) return std::unexpected(std::move(made.error()));
+        System out;
+        out.data_ = std::move(made->data);
+        out.state_ = std::make_unique<SystemState>(std::move(made->state));
+        return out;
+    }
     if (models.impact_ionization && !(std::isfinite(models.impact_current_resolution) &&
                                       models.impact_current_resolution >= 0.0)) {
         return std::unexpected(base::Error{
@@ -732,6 +745,7 @@ std::expected<System, base::Error> System::create(
 }
 
 std::expected<void, base::Error> System::set_bias(std::span<const double> bias_V) {
+    if (data_->equilibrium_) return data_->set_equilibrium_bias(*state_, bias_V);
     if (auto ok = check_contact_bias(data_->kinds_, bias_V, false); !ok) return ok;
     state_->gates_.set_bias(bias_V);
     for (std::size_t i = 0; i < node_count(); ++i) {
@@ -773,7 +787,7 @@ std::expected<void, base::Error> System::set_bias(std::span<const double> bias_V
 }
 
 std::vector<double> System::state_from_potential(std::span<const double> psi) const {
-    NITCAD_EXPECTS(psi.size() == node_count());
+    NITCAD_EXPECTS(!data_->equilibrium_ && psi.size() == node_count());
     std::vector<double> x(unknowns());
     for (std::size_t i = 0; i < node_count(); ++i) {
         const double eta = psi[i] + data_->band_shift_[i];
@@ -793,7 +807,7 @@ std::vector<double> System::state_from_potential(std::span<const double> psi) co
 }
 
 void System::stamp_contacts(std::span<double> x) const {
-    NITCAD_EXPECTS(x.size() == unknowns());
+    NITCAD_EXPECTS(!data_->equilibrium_ && x.size() == unknowns());
     if (data_->electrothermal()) {
         // The isothermal sinks first: an ohmic node's values depend on its temperature.
         for (std::size_t i = 0; i < node_count(); ++i) {
@@ -849,7 +863,7 @@ linalg::SparseMatrix System::make_jacobian() const { return state_->pattern_; }
 std::vector<SystemData::NodeDegeneracy> SystemData::degeneracies(
     std::span<const double> x) const {
     std::vector<NodeDegeneracy> g;
-    if (!fermi_dirac_) return g;
+    if (!fermi_dirac_ || equilibrium_) return g;  // equilibrium: no density unknowns
     g.reserve(node_count());
     for (std::size_t i = 0; i < node_count(); ++i) {
         if (insulator_[i] != 0) {
@@ -1062,7 +1076,8 @@ void System::assemble(std::span<const double> x, std::span<double> f, std::span<
         return;
     }
     NITCAD_EXPECTS(x.size() == unknowns() && f.size() == unknowns());
-    NITCAD_EXPECTS(step == nullptr || (step->storage.size() == storage_width() * node_count() &&
+    NITCAD_EXPECTS(step == nullptr || (!data_->equilibrium_ &&
+                                       step->storage.size() == storage_width() * node_count() &&
                                        step->traps.size() == trap_slots()));
     // The terms in assembly order (composition.hpp).
     const std::vector<SystemData::NodeDegeneracy> g = data_->degeneracies(x);
@@ -1075,15 +1090,18 @@ void System::evaluate(std::span<const double> x, std::span<double> residual,
     const std::span<double> values = jacobian.values();
     std::fill(values.begin(), values.end(), 0.0);
     assemble(x, residual, values, nullptr);
-    detail::observe("evaluate.x", x);
-    detail::observe("evaluate.residual", residual);
-    detail::observe("evaluate.jacobian", values);
+    // The trace (observer.hpp); thermal equilibrium keeps EquilibriumPoisson's labels (GE1 ii).
+    const bool eq = data_->equilibrium_;
+    detail::observe(eq ? "equilibrium.evaluate.x" : "evaluate.x", x);
+    detail::observe(eq ? "equilibrium.evaluate.residual" : "evaluate.residual", residual);
+    detail::observe(eq ? "equilibrium.evaluate.jacobian" : "evaluate.jacobian", values);
 }
 
 void System::residual(std::span<const double> x, std::span<double> residual) const {
     assemble(x, residual, {}, nullptr);
-    detail::observe("residual.x", x);
-    detail::observe("residual.residual", residual);
+    const bool eq = data_->equilibrium_;
+    detail::observe(eq ? "equilibrium.residual.x" : "residual.x", x);
+    detail::observe(eq ? "equilibrium.residual.residual" : "residual.residual", residual);
 }
 
 namespace {
@@ -1118,7 +1136,7 @@ void System::residual(std::span<const double> x, const TimeStep& step,
 }
 
 std::vector<double> System::storage(std::span<const double> x) const {
-    NITCAD_EXPECTS(x.size() == unknowns());
+    NITCAD_EXPECTS(!data_->equilibrium_ && x.size() == unknowns());
     const std::size_t w = storage_width();
     std::vector<double> s(w * node_count(), 0.0);
     if (data_->electrothermal()) {  // (n, p, tau): complete ionization (DECISIONS.md U6)
@@ -1167,7 +1185,7 @@ std::vector<double> SystemData::trap_occupancies(const SystemState& /*st*/, std:
 
 std::vector<double> SystemData::contact_charges(const SystemState& st, std::span<const double> x,
                                                     const TimeStep* step) const {
-    NITCAD_EXPECTS(x.size() == unknowns());
+    NITCAD_EXPECTS(!equilibrium_ && x.size() == unknowns());
     std::vector<double> charge = st.gates_.charges(x, m_, contact_count_);
     if (electrothermal()) add_gate_shift(st, x, charge);
     const auto owner = [&](std::size_t i) {
@@ -1210,6 +1228,11 @@ std::vector<double> SystemData::conduction_currents(const SystemState& st, std::
 
 double System::update_size(std::span<const double> x, std::span<const double> dx) const {
     NITCAD_EXPECTS(x.size() == unknowns() && dx.size() == unknowns());
+    if (data_->equilibrium_) {  // the largest |dpsi| (newton.hpp's default; not traced, GE1 ii)
+        double size = 0.0;
+        for (std::size_t i = 0; i < dx.size(); ++i) size = std::max(size, std::abs(dx[i]));
+        return size;
+    }
     constexpr double infinity = std::numeric_limits<double>::infinity();
     // A density correction is resolved by the linear solve only to about eps max|dx|, and near
     // convergence max|dx| is itself about eps times the largest density: densities below about
@@ -1267,6 +1290,12 @@ double System::update_size(std::span<const double> x, std::span<const double> dx
 void System::apply_update(std::span<double> x, std::span<const double> dx,
                                   double max_update) const {
     NITCAD_EXPECTS(x.size() == unknowns() && dx.size() == unknowns());
+    if (data_->equilibrium_) {  // psi clipped (newton.hpp's default; not traced, GE1 ii)
+        for (std::size_t i = 0; i < x.size(); ++i) {
+            x[i] += std::clamp(dx[i], -max_update, max_update);
+        }
+        return;
+    }
     for (std::size_t i = 0; i < node_count(); ++i) {
         x[data_->m_ * i] += std::clamp(dx[data_->m_ * i], -max_update, max_update);
         if (data_->electrothermal()) {  // 50 K (legacy thermal.py) and a factor of 2 at most
@@ -1439,6 +1468,7 @@ std::vector<double> SystemData::edge_flux_terms(const SystemState& /*st*/, std::
 }
 
 BandEdges SystemData::band_edges(const SystemState& /*st*/, std::span<const double> x) const {
+    if (equilibrium_) return equilibrium_band_edges(x);  // equilibrium.cpp (not traced)
     NITCAD_EXPECTS(x.size() == unknowns());
     const std::size_t n = node_count();
     BandEdges b{std::vector<double>(n), std::vector<double>(n), std::vector<double>(n),
@@ -1483,6 +1513,10 @@ BandEdges SystemData::band_edges(const SystemState& /*st*/, std::span<const doub
 
 std::vector<double> SystemData::gate_charges(const SystemState& st, std::span<const double> x,
                                                  const TimeStep* step) const {
+    if (equilibrium_) {  // equilibrium.cpp: the traps at Fermi occupancy (not traced)
+        NITCAD_EXPECTS(step == nullptr);
+        return equilibrium_gate_charges(st, x);
+    }
     NITCAD_EXPECTS(x.size() == unknowns());
     std::vector<double> charge = st.gates_.charges(x, m_, contact_count_);
     if (electrothermal()) add_gate_shift(st, x, charge);
@@ -1505,6 +1539,10 @@ std::vector<double> SystemData::gate_charges(const SystemState& st, std::span<co
 
 std::vector<double> SystemData::interface_trap_charges(const SystemState& /*st*/, std::span<const double> x,
                                                            const TimeStep* step) const {
+    if (equilibrium_) {  // equilibrium.cpp: the traps at Fermi occupancy (not traced)
+        NITCAD_EXPECTS(step == nullptr);
+        return equilibrium_trap_charges(x);
+    }
     NITCAD_EXPECTS(x.size() == unknowns());
     std::vector<double> q(interfaces_.interface_count(), 0.0);
     for (std::size_t k = 0; k < interfaces_.edges().size(); ++k) {
@@ -1530,7 +1568,7 @@ linalg::ComplexSparseMatrix System::make_small_signal_matrix() const {
 
 void System::small_signal_matrix(std::span<const double> x, std::complex<double> s,
                                  linalg::ComplexSparseMatrix& a) const {
-    NITCAD_EXPECTS(x.size() == unknowns());
+    NITCAD_EXPECTS(!data_->equilibrium_ && x.size() == unknowns());
     NITCAD_EXPECTS(a.rows() == state_->pattern_.rows() &&
                    std::ranges::equal(a.row_offsets(), state_->pattern_.row_offsets()) &&
                    std::ranges::equal(a.col_indices(), state_->pattern_.col_indices()));
@@ -1568,7 +1606,7 @@ void System::small_signal_matrix(std::span<const double> x, std::complex<double>
 }
 
 std::vector<double> System::bias_derivative(std::size_t contact) const {
-    NITCAD_EXPECTS(contact < data_->contact_count_);
+    NITCAD_EXPECTS(!data_->equilibrium_ && contact < data_->contact_count_);
     const auto c = static_cast<std::int32_t>(contact);
     std::vector<double> d(unknowns(), 0.0);
     for (std::size_t i = 0; i < node_count(); ++i) {

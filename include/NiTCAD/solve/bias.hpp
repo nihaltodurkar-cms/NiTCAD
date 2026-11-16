@@ -11,7 +11,7 @@
 // C / cm^(3-D).
 //
 // Equations::equilibrium_poisson (Unit 12) solves each point as thermal equilibrium instead:
-// Poisson alone (assemble::EquilibriumPoisson), every ohmic contact at 0 V, only gates biased. That
+// Poisson alone (assemble/equilibrium.hpp), every ohmic contact at 0 V, only gates biased. That
 // is the legacy MOS-C solve (moscap.MOSCapacitor.cv_sweep), the quasi-static C-V. A sweep starts
 // from the given state or the charge-neutral potential (no starting equilibrium), and reports zero
 // currents. Drift-diffusion cannot replace it on a MOS capacitor: an inversion layer with no ohmic
@@ -103,7 +103,7 @@ struct BiasOptions {
 // bias as value; an initial state without a finite potential for every node, or, for
 // drift-diffusion, without positive densities (the quasi-static sweep reads only the potential);
 // those of assemble::make_scaling, assemble::System::create (or
-// EquilibriumPoisson::create) and linalg::LinearSolver::create. With models.electrothermal
+// with Formulation::equilibrium) and linalg::LinearSolver::create. With models.electrothermal
 // (Unit 23; DECISIONS.md T7, T10, T12): equilibrium_poisson; a connected part of the device with
 // no thermal contact (a steady state has no heat sink there); thermal_bias_K neither empty nor
 // one list per point, a list without one temperature per thermal contact, or a temperature not
