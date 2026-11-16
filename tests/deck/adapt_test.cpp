@@ -660,7 +660,8 @@ TEST_CASE("deck adapt: a learned predictor: its use, the identity, the out-of-ra
 
 // Unit 17c (DG1, DG8, DG9; DC7): gm and vt goals through the deck, `nitcad check|run`, the CSV
 // table and the report file (written and read back), on a coarse tensor MOSFET (Lg 600 nm).
-TEST_CASE("deck adapt: derived goals in the deck, the CLI, the table and the report (Unit 17c)", "[deck]") {
+TEST_CASE("deck adapt: derived goals in the deck, the CLI, the table and the report (Unit 17c)",
+          "[deck][.deck_adapt_derived]") {
     const fs::path dir = scratch("adapt_derived");
     const std::string mosfet = R"(
 [mesh]
@@ -790,7 +791,8 @@ adapt = out.nitadapt
 // Unit 17c (DG10, DR2; DC9): the deck's learned predictor is asked for the run's goal kind. Its one
 // tree splits on feature 12 (the goal kind): one level for a current goal, none for a derived one, so a
 // gm goal's run gets no learned refinement of its start mesh.
-TEST_CASE("deck adapt: a learned predictor sees the run's goal kind (Unit 17c DG10, DR2)", "[deck]") {
+TEST_CASE("deck adapt: a learned predictor sees the run's goal kind (Unit 17c DG10, DR2)",
+          "[deck][.deck_adapt_derived]") {
     const fs::path dir = scratch("adapt_predictor_kind");
     const std::string mosfet = R"(
 [mesh]

@@ -1216,6 +1216,17 @@ configured, so the PARDISO cases skip here (they are required in CI; PARDISO on 
 So DC10's Debug half, and its bound that Debug grows by ≤ 60 s, are judged on this branch's CI run, not locally.
 Release was run at the branch head only, not at every commit; the earlier commits ran their own fast tests.
 
+**DC10's Debug bound on CI (2026-11-16): missed, then the two cases moved to Release only (owner: "(a) Run those two
+cases in Release only").** On `ca04aa5` the push run's Debug job passed in 2h14m, but `deck.adapt` took 6,231 s
+(50 s on `main`); the PR run's Debug job was cancelled at its 150-minute limit with 199/203 passed and `deck.adapt`
+still running after 119 min (its runner was slower: `adapt.adapt_derived` 2,003 s against 1,262 s). In Release
+`deck.adapt` went from 2.6 s (`main`) to 339 s. The growth is the two deck cases this unit added, "derived goals in
+the deck, the CLI, the table and the report" and "a learned predictor sees the run's goal kind (DG10, DR2)": each runs
+adaptive loops to completion. They now carry the hidden tag `[.deck_adapt_derived]` and run as the Release-only ctest
+entry `deck.adapt_derived_release` (as Unit 55's slow cases). Locally, Release: `deck.adapt` 1.6 s,
+`deck.adapt_derived_release` 185 s, both pass. Debug no longer runs the two cases, so it should return to about
+`main`'s time plus `adapt.adapt_derived`; to be confirmed on CI.
+
 ---
 
 ## New questions the advisor raised (not yet in `ARCHITECTURE.md`)

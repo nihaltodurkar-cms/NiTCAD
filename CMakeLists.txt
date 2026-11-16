@@ -713,6 +713,12 @@ target_compile_definitions(nitcad_deck_test PRIVATE
   NITCAD_DECKS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/decks"
   NITCAD_MKL_RUNTIME_PATH="${NITCAD_MKL_RUNTIME_PATH}")
 nitcad_add_file_tests(deck nitcad_deck_test)
+# Unit 17c's two deck cases with derived goals run their adaptive loops several times: about 5.5 minutes in
+# Release and 100 minutes in Debug, past the Debug job's budget (DECISIONS Unit 17c). Release only, hidden tag
+# [.deck_adapt_derived], as the other slow gates.
+if(CMAKE_BUILD_TYPE STREQUAL "Release")
+  add_test(NAME deck.adapt_derived_release COMMAND nitcad_deck_test "[.deck_adapt_derived]")
+endif()
 
 # Adaptive refinement (Unit 17): indicators, transfer and the loop, on devices built from decks.
 add_executable(nitcad_adapt_test
