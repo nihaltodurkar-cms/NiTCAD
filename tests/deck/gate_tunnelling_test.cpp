@@ -294,6 +294,21 @@ contact gate = 0
 }
 
 // Quadratic, as SC11: in the asymptotic window each correction at most the square of the last.
+// Unit 57 (DECISIONS.md GE1 iv, GG4): the assembly benchmark's gate-tunnelling device, GC8's 1D
+// MOS capacitor and its 2D extrusion at its solved +1.5 V state.
+TEST_CASE("Gate tunnelling: assembly cost on the MOS capacitor", "[.assembly_benchmark]") {
+    for (const int dimension : {1, 2}) {
+        const deck::Plan p = must(deck_of({.dimension = dimension}));
+        const results::Sweep s = sweep(p, steps(0.0, 1.5, 0.1));
+        const auto scaling = *assemble::make_scaling(p.device);
+        auto system = *assemble::DriftDiffusion::create(p.device, scaling, p.options.models);
+        REQUIRE(system.set_bias(s.points.back().bias_V).has_value());
+        time_assembly(dimension == 1 ? "gate tunnelling 1D MOS capacitor"
+                                     : "gate tunnelling 2D MOS capacitor",
+                      system, scaled_state(system, s.points.back().fields, scaling));
+    }
+}
+
 TEST_CASE("Gate tunnelling: Newton converges quadratically at +1.5 V (GC7)", "[gate_tunnelling]") {
     deck::Plan p = must(deck_of({}));
     p.options.newton.tol_update = 1e-12;

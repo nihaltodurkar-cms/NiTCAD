@@ -40,6 +40,8 @@ inline void observe(const results::NodeFields& f) {
     observe("result.n", f.n_cm3);
     observe("result.p", f.p_cm3);
     observe("result.temperature", f.temperature_K);
+    observe("result.electron_temperature", f.electron_temperature_K);  // Unit 57, GE1 ii
+    observe("result.hole_temperature", f.hole_temperature_K);
 }
 
 inline void observe(const results::BandDiagram& b) {
@@ -89,6 +91,16 @@ inline void observe_result(const results::BiasPoint& p) {
     observe_count("result.bias_substeps", static_cast<std::size_t>(p.bias_substeps));
     observe("result.weighted_current", p.weighted_current);
     observe("result.weighted_current_resolution", p.weighted_current_resolution);
+    // Unit 57, GE1 ii: the rates and the gate-tunnelling currents.
+    for (const std::vector<double>* r :
+         {&p.rates.srh, &p.rates.auger, &p.rates.radiative, &p.rates.impact, &p.rates.interface_n,
+          &p.rates.interface_p, &p.rates.band_to_band_n, &p.rates.band_to_band_p, &p.rates.net_n,
+          &p.rates.net_p}) {
+        observe("result.rates", *r);
+    }
+    observe("result.tunnelling_ecb", p.tunnelling_ecb);
+    observe("result.tunnelling_hvb", p.tunnelling_hvb);
+    observe("result.tunnelling_evb", p.tunnelling_evb);
 }
 
 inline void observe_result(const results::Sweep& s) {
@@ -115,6 +127,8 @@ inline void observe_result(const results::SmallSignal& s) {
             observe("result.ac_n", std::span(f.n_cm3));
             observe("result.ac_p", std::span(f.p_cm3));
             observe("result.ac_temperature", std::span(f.temperature_K));
+            observe("result.ac_electron_temperature", std::span(f.electron_temperature_K));
+            observe("result.ac_hole_temperature", std::span(f.hole_temperature_K));
         }
     }
     observe_count("result.stopped", s.stopped ? 1 : 0);

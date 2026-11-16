@@ -43,6 +43,7 @@
 #include <vector>
 
 #include "NiTCAD/assemble/bernoulli.hpp"
+#include "NiTCAD/assemble/observer.hpp"
 #include "NiTCAD/base/constants.hpp"
 #include "NiTCAD/base/contract.hpp"
 #include "NiTCAD/physics/energy_balance.hpp"
@@ -417,6 +418,12 @@ DriftDiffusion::EnergyPowers DriftDiffusion::energy_powers(std::span<const doubl
             ku * (bands.conduction[i] - bands.valence[i] + 1.5 * (2.0 + tn + tp));
         p.residual += f[5 * i + 3] + f[5 * i + 4] + bands.conduction[i] * f[5 * i + 1] +
                       bands.valence[i] * f[5 * i + 2];
+    }
+    if (detail::observer != nullptr) {  // the trace (observer.hpp; Unit 57, GE1 ii)
+        detail::observe("energy_powers",
+                        std::vector<double>{p.input, p.relaxation, p.recombination,
+                                            p.contact_flux, p.contact_joule, p.peltier,
+                                            p.residual, p.thermal_storage, p.carrier_storage});
     }
     return p;
 }

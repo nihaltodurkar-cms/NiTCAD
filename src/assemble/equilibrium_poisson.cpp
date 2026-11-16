@@ -6,6 +6,7 @@
 #include <utility>
 
 #include "NiTCAD/assemble/contact_bias.hpp"
+#include "NiTCAD/assemble/observer.hpp"
 #include "NiTCAD/assemble/ohmic.hpp"
 #include "NiTCAD/base/contract.hpp"
 #include "NiTCAD/physics/interface_traps.hpp"
@@ -210,6 +211,8 @@ void EquilibriumPoisson::residual_into(std::span<const double> psi, std::span<do
 
 void EquilibriumPoisson::residual(std::span<const double> psi, std::span<double> residual) const {
     residual_into(psi, residual, {});
+    detail::observe("equilibrium.residual.x", psi);  // the trace (observer.hpp; Unit 57, GE1 ii)
+    detail::observe("equilibrium.residual.residual", std::span<const double>(residual));
 }
 
 void EquilibriumPoisson::evaluate(std::span<const double> psi, std::span<double> residual,
@@ -232,6 +235,9 @@ void EquilibriumPoisson::evaluate(std::span<const double> psi, std::span<double>
             values[diag_[e.j]] -= e.c;
         }
     }
+    detail::observe("equilibrium.evaluate.x", psi);  // the trace (observer.hpp; Unit 57, GE1 ii)
+    detail::observe("equilibrium.evaluate.residual", std::span<const double>(residual));
+    detail::observe("equilibrium.evaluate.jacobian", std::span<const double>(values));
 }
 
 void EquilibriumPoisson::carriers(std::span<const double> psi, std::span<double> n,

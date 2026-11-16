@@ -1,0 +1,34 @@
+# Unit 57 (DECISIONS.md GE1 iii, GG2): a 1D pn diode in reverse bias with impact ionization (Unit 19),
+# below breakdown.
+[device]
+temperature = 300
+
+[mesh]
+type = tensor
+x = linspace(0, 4um, 401)
+
+[region silicon]
+material = silicon
+
+[doping]
+profile = donor erfc 2e17 axis=x center=2um width=0.01um
+profile = acceptor constant 1e17
+
+[contact cathode]
+kind = ohmic
+patch = x_min
+
+[contact anode]
+kind = ohmic
+patch = x_max
+
+[models]
+impact_ionization = on
+
+[sweep]
+contact anode = 0 : -12 : -1
+
+[output]
+sweep = impact_ionization_1d.nitsweep
+device = impact_ionization_1d.nitdev
+table = impact_ionization_1d.csv

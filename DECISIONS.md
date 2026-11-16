@@ -1010,7 +1010,7 @@ The AC19 gate is `[.ac19]` (hidden, Release by hand); the 17b cases in the suite
 predictor case and the deck cases. Unit 17 merged to `main` meanwhile (72377ad, PR #81, owner "merge pr 81"); this
 branch holds 17's head (6ffad0b), so its PR to `main` carries the 17b commits only.
 
-### Unit 57 — generic fields and equations, completed (proposed 2026-11-15; approved 2026-11-15; reviewed and amended 2026-11-15; not started; on `assemble/generic-equations`)
+### Unit 57 — generic fields and equations, completed (proposed 2026-11-15; approved 2026-11-15; reviewed and amended 2026-11-15; started 2026-11-16; on `assemble/generic-equations`)
 
 **Owner request (2026-11-15):** "What next to implement … as per architecture", then "Plan for finish generic
 fields and equations (the Unit 40 follow-up)". This unit does what ARCHITECTURE.md 6.12.1–2 and 11.3 list as "Not
@@ -1106,6 +1106,15 @@ against the code, and 11 findings were folded into the rows above. No criterion 
 **Start condition (R7):** slice 0 starts after PR #85 (Unit 17c) is merged to `main`, with this branch rebased onto
 it. If #85 is still open when the owner says start, the owner is asked whether to rebase onto `mesh/derived-goals`
 instead.
+
+**Start (owner, 2026-11-16):** "start Unit 57" while #85 was open (its Release jobs green, Debug running). Asked,
+the owner first chose to wait for #85, then asked "cant you do it in Unit 57 without rebase". Checked against
+`origin/mesh/derived-goals`: **R7 overstated the overlap.** #85's diff adds or removes no `DriftDiffusion` or
+`EquilibriumPoisson` reference; of the files it changes only `src/solve/adapt_adjoint.cpp` (4 lines) uses
+`DriftDiffusion`. The rest of the overlap is `DECISIONS.md`, `ARCHITECTURE.md` and `CMakeLists.txt`. So slice 0
+starts on this branch as it stands (from `beb494f`, no rebase). When #85 merges, `main` is merged into this branch
+and the baselines of what #85 changes (the `[adapt]` deck and the `adapt` traces) are recorded again on the merge
+before the next slice is compared against them.
 
 **Risks:** the bit-identity surface is the largest since Unit 40. Moving the bias and path state out of the system
 could change which values a copy sees (GG6's first three mutants target this). Slice 2's caller migration touches

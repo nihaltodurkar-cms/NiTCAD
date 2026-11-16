@@ -1,0 +1,33 @@
+# Unit 57 (DECISIONS.md GE1 iii, GG2): a 1D MOS capacitor with a lumped gate (10 nm oxide, n+ poly),
+# small-signal C-V at 1 MHz.
+[device]
+temperature = 300
+
+[mesh]
+type = tensor
+x = linspace(0, 20nm, 41) + linspace(20nm, 0.5um, 97) + linspace(0.5um, 2um, 31)
+
+[region silicon]
+material = silicon
+
+[doping]
+profile = acceptor constant 1e17
+
+[contact gate]
+kind = gate
+patch = x_min
+oxide_thickness = 10nm
+electrode = n_poly
+
+[contact body]
+kind = ohmic
+patch = x_max
+
+[small_signal]
+contact gate = -1 : 0.25 : 0.25
+frequencies = 1e6
+
+[output]
+small_signal = lumped_gate_1d.nitac
+device = lumped_gate_1d.nitdev
+table = lumped_gate_1d.csv

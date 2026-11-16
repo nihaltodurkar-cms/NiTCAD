@@ -1,0 +1,34 @@
+# Unit 57 (DECISIONS.md GE1 iii, GG2): Unit 17's coarse 2D diode refined for the anode current.
+[mesh]
+type = tensor
+x = linspace(0, 2um, 21)
+y = 0, 0.1um
+
+[region silicon]
+material = silicon
+
+[doping]
+profile = acceptor constant 1e17 axis=y x=-1:1um
+profile = donor constant 1e17 axis=y x=1um:3um
+
+[contact anode]
+kind = ohmic
+patch = x_min
+
+[contact cathode]
+kind = ohmic
+patch = x_max
+
+[sweep]
+contact anode = 0 : 0.4 : 0.2
+
+[adapt]
+goal = current anode
+tolerance = 1e-2
+max_passes = 4
+max_nodes = 500
+
+[output]
+sweep = adapt_diode_2d.nitsweep
+adapt = adapt_diode_2d.nitadapt
+table = adapt_diode_2d.csv

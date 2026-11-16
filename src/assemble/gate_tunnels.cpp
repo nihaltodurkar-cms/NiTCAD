@@ -22,6 +22,7 @@
 
 #include "NiTCAD/assemble/drift_diffusion.hpp"
 #include "NiTCAD/assemble/gate.hpp"
+#include "NiTCAD/assemble/observer.hpp"
 #include "NiTCAD/base/constants.hpp"
 #include "NiTCAD/base/contract.hpp"
 #include "NiTCAD/physics/gate_tunnelling.hpp"
@@ -469,6 +470,9 @@ DriftDiffusion::GateTunnellingCurrents DriftDiffusion::gate_tunnelling_currents(
         out.hvb[c] -= t.coupling * flux.J_hvb;
         out.evb[c] += t.coupling * flux.J_evb;
     }
+    detail::observe("gate_tunnelling.ecb", out.ecb);  // the trace (observer.hpp; Unit 57, GE1 ii)
+    detail::observe("gate_tunnelling.hvb", out.hvb);
+    detail::observe("gate_tunnelling.evb", out.evb);
     return out;
 }
 

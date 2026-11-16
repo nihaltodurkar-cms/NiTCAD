@@ -7,6 +7,7 @@
 #include <string_view>
 #include <utility>
 
+#include "NiTCAD/assemble/observer.hpp"
 #include "NiTCAD/base/constants.hpp"
 #include "NiTCAD/base/contract.hpp"
 #include "NiTCAD/physics/band_to_band.hpp"
@@ -1035,6 +1036,11 @@ std::vector<DriftDiffusion::MechanismRate> DriftDiffusion::rates(std::span<const
             it->electron[i] -= f[m_ * i + 1] * k;  // the electron row subtracts V R / R0
             it->hole[i] += f[m_ * i + 2] * k;      // the hole row adds it
         }
+    }
+    for (const MechanismRate& r : out) {  // the trace (observer.hpp; Unit 57, GE1 ii)
+        detail::observe("rates.mechanism", static_cast<double>(r.mechanism));
+        detail::observe("rates.electron", r.electron);
+        detail::observe("rates.hole", r.hole);
     }
     return out;
 }

@@ -1,0 +1,33 @@
+# Unit 57 (DECISIONS.md GE1 iii, GG2): decks/schottky_diode_1d.deck with its files written.
+
+[device]
+temperature = 300
+
+[mesh]
+type = tensor
+x = linspace(0, 0.2um, 201) + linspace(0.2um, 2um, 181)
+
+[region silicon]
+material = silicon
+
+[doping]
+profile = donor constant 1e16
+
+[contact anode]
+kind = schottky
+patch = x_min
+barrier = 0.7
+richardson_n = 110
+richardson_p = 30
+
+[contact cathode]
+kind = ohmic
+patch = x_max
+
+[sweep]
+contact anode = -1 : 0.4 : 0.05
+
+[output]
+sweep = schottky_diode_1d.nitsweep
+device = schottky_diode_1d.nitdev
+table = schottky_diode_1d.csv

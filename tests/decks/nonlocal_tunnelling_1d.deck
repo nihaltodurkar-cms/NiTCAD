@@ -1,0 +1,34 @@
+# Unit 57 (DECISIONS.md GE1 iii, GG2): Unit 20's abrupt 1D silicon Zener diode (5e19 each side, 100 nm,
+# 0.5 nm spacing) in reverse bias with nonlocal band-to-band tunnelling (Kane).
+[device]
+temperature = 300
+
+[mesh]
+type = tensor
+x = linspace(0, 100nm, 201)
+
+[region silicon]
+material = silicon
+
+[doping]
+profile = donor erfc 1e20 axis=x center=50nm width=0.5nm
+profile = acceptor constant 5e19
+
+[contact cathode]
+kind = ohmic
+patch = x_min
+
+[contact anode]
+kind = ohmic
+patch = x_max
+
+[models]
+btbt_nonlocal = kane
+
+[sweep]
+contact anode = 0 : -3 : -0.25
+
+[output]
+sweep = nonlocal_tunnelling_1d.nitsweep
+device = nonlocal_tunnelling_1d.nitdev
+table = nonlocal_tunnelling_1d.csv

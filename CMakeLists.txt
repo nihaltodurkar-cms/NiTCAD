@@ -699,6 +699,7 @@ add_executable(nitcad_deck_test
   tests/deck/complex_finfet_test.cpp
   tests/deck/adapt_test.cpp
   tests/deck/cross_run_learning_test.cpp
+  tests/deck/deck_compare_test.cpp
   tests/baseline/trace_listener.cpp)
 target_include_directories(nitcad_deck_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/deck")
 # The plot tests read the images back (Unit 25a).
@@ -722,7 +723,8 @@ add_executable(nitcad_adapt_test
   tests/solve/adapt_goal_test.cpp
   tests/solve/adapt_policy_test.cpp
   tests/solve/adapt_intelligent_test.cpp
-  tests/solve/adapt_learn_test.cpp)
+  tests/solve/adapt_learn_test.cpp
+  tests/baseline/trace_listener.cpp)
 target_link_libraries(nitcad_adapt_test PRIVATE NiTCAD::deck Catch2::Catch2WithMain)
 nitcad_add_file_tests(adapt nitcad_adapt_test)
 # The adaptive gates on 2D MOSFETs (AC7 [.adapt_goal]; AC14, AC17 [.adapt_intelligent]): tens of

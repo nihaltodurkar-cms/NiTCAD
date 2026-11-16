@@ -1,0 +1,35 @@
+# Unit 57 (DECISIONS.md GE1 iii, GG2): the 1D diode with energy balance (Unit 52) swept forward.
+[device]
+temperature = 300
+
+[mesh]
+type = tensor
+x = linspace(0, 2um, 201)
+
+[region silicon]
+material = silicon
+energy_relaxation.tau_n_s = 0.3e-12
+energy_relaxation.tau_p_s = 0.45e-12
+
+[doping]
+profile = donor erfc 2e17 axis=x center=1um width=0.01um
+profile = acceptor constant 1e17
+
+[contact cathode]
+kind = ohmic
+patch = x_min
+
+[contact anode]
+kind = ohmic
+patch = x_max
+
+[models]
+energy_balance = on
+
+[sweep]
+contact anode = 0 : 0.6 : 0.1
+
+[output]
+sweep = energy_balance_1d.nitsweep
+device = energy_balance_1d.nitdev
+table = energy_balance_1d.csv
