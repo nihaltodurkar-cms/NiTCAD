@@ -1116,6 +1116,39 @@ starts on this branch as it stands (from `beb494f`, no rebase). When #85 merges,
 and the baselines of what #85 changes (the `[adapt]` deck and the `adapt` traces) are recorded again on the merge
 before the next slice is compared against them.
 
+**Slice 0 as built (commit `55f7669`, 2026-11-16; this machine: Core Ultra 5 225F).** No assembler change.
+- GE1 ii hooks: `equilibrium.evaluate.{x,residual,jacobian}`, `equilibrium.residual.{x,residual}`,
+  `rates.{mechanism,electron,hole}`, `energy_powers`, `gate_tunnelling.{ecb,hvb,evb}`; on the solve side
+  `result.{electron,hole}_temperature`, `result.ac_{electron,hole}_temperature`, `result.rates` (each `RateFields`
+  vector) and `result.tunnelling_{ecb,hvb,evb}`. Non-empty values in the baseline: 27,050 equilibrium Jacobians,
+  37,425 assembler rate vectors, 59,446 result rate vectors, 449 carrier-temperature fields, 221 energy-power records,
+  220 assembler and 209 result tunnelling records, so every hook is exercised by the suites.
+- GE1 i: `nitcad_adapt_test` links the listener. **Traced entries: 79** (every per-file entry of the assemble,
+  solve, deck and adapt executables, the six `solve_*` and two `deck_*` Release entries, `adapt_goal`,
+  `adapt_intelligent` and `validation`), each pinned to the P cores (0x3C3) in declaration order through a
+  scratch `pin.cmd` wrapper (`start "pin" /b /wait /affinity 3C3`; a bare `""` title is mangled by MSYS). **Two
+  full traced runs of the slice-0 binaries (A 13 min, B 14 min) are identical on all 79 entries** (4,437,963
+  observed values, 181 MB); the files stay in scratch (FD8).
+- GE1 iii: the 12 decks in `tests/decks/` (all converge; the reduced swept FinFET 61–67 s pinned, the others under
+  0.7 s). The 1D junction decks use an erfc donor profile on a constant acceptor body: the deck tests'
+  `diode_device` (windows `x=-1:1um`, `x=1um:3um`) turned out to give an ohmic, fully compensated bar (its current
+  is linear, 7.3 mA/cm² per V), so it was not copied. GG2's comparison is the hidden `[.deck_compare]` case
+  (`tests/deck/deck_compare_test.cpp`). **Two runs of the slice-0 `nitcad.exe` agree on all 38 output files.**
+- **GG2 and the adaptation report (open, owner asked):** the `.nitadapt` report stores measured times (per-pass
+  seconds, the cost model fitted to them, the verification and coarse seconds). Between the two identical runs the
+  raw report differs in 102 bytes, against about 20 (the provenance) for a sweep file, so GG2's byte comparison
+  cannot hold for it with only the provenance skipped. The comparison clears those times as it clears the
+  provenance; the alternative is to drop the `[adapt]` deck from GG2.
+- GE1 iv: FG4's benchmark gains `Gate tunnelling: assembly cost on the MOS capacitor` (1D and 2D); EC19 is the
+  energy-balance device. Baseline, two runs pinned to CPU 0, `evaluate` median in µs (run 1 / run 2): legacy 1D
+  diode 12.0/12.1, 2D MOSFET 2642/2494, 3D generated diode 753/761, Zener 12.5/11.7, electrothermal bar 212/213
+  (Fermi–Dirac 333/340), energy balance 1D 396/408, 2D 5466/5849, 3D 3489/2771, gate tunnelling 1D 48.1/45.3,
+  2D 171/157. The run-to-run spread reaches 26% on EC19's devices, so FG4 is judged as in Unit 40: alternating
+  pinned runs, minimum per device.
+- Suites: Release 226/227. `adapt_intelligent` failed AC11's timing check once under `-j 6` (a transposed solve
+  0.24 ms against one factorization's 0.19 ms on a 73-node diode pass) and passes alone; it is load-sensitive,
+  not changed. Debug is left to CI (owner's standing rule).
+
 **Risks:** the bit-identity surface is the largest since Unit 40. Moving the bias and path state out of the system
 could change which values a copy sees (GG6's first three mutants target this). Slice 2's caller migration touches
 about 44 files (more if #85 adds callers). Equilibrium's variants (GE5) keep a second set of row expressions, so the
