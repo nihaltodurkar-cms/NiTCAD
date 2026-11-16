@@ -1,4 +1,4 @@
-// The electrothermal rows of DriftDiffusion (Unit 23; drift_diffusion.hpp, "Electrothermal
+// The electrothermal rows of System (Unit 23; system.hpp, "Electrothermal
 // coupling"; DECISIONS.md T1-T14).
 #include <algorithm>
 #include <array>
@@ -12,8 +12,8 @@
 #include <variant>
 
 #include "NiTCAD/assemble/bernoulli.hpp"
-#include "NiTCAD/assemble/drift_diffusion.hpp"
 #include "NiTCAD/assemble/observer.hpp"
+#include "NiTCAD/assemble/system.hpp"
 #include "NiTCAD/base/constants.hpp"
 #include "NiTCAD/base/contract.hpp"
 #include "NiTCAD/physics/bandgap_narrowing.hpp"
@@ -210,15 +210,15 @@ std::optional<base::Error> SystemData::make_thermal(SystemState& st, const devic
     return std::nullopt;
 }
 
-bool DriftDiffusion::reaches_heat_sink(std::size_t node) const {
+bool SystemData::reaches_heat_sink(std::size_t node) const {
     NITCAD_EXPECTS(electrothermal() && node < node_count());
-    return data_->reaches_sink_[node] != 0;
+    return reaches_sink_[node] != 0;
 }
 
-std::expected<void, base::Error> DriftDiffusion::set_thermal_bias(
-    std::span<const double> temperature_K) {
+std::expected<void, base::Error> SystemData::set_thermal_bias(SystemState& st,
+    std::span<const double> temperature_K) const {
     NITCAD_EXPECTS(electrothermal());
-    if (temperature_K.size() != state_->thermal_rise_.size()) {
+    if (temperature_K.size() != st.thermal_rise_.size()) {
         return std::unexpected(base::Error{
             base::ErrorCode::invalid_input, "one temperature per thermal contact is needed",
             base::ErrorContext{.index = std::nullopt,
@@ -233,7 +233,7 @@ std::expected<void, base::Error> DriftDiffusion::set_thermal_bias(
         }
     }
     for (std::size_t c = 0; c < temperature_K.size(); ++c) {
-        state_->thermal_rise_[c] = (temperature_K[c] - data_->T0_) / data_->T0_;
+        st.thermal_rise_[c] = (temperature_K[c] - T0_) / T0_;
     }
     return {};
 }
@@ -588,7 +588,7 @@ void SystemData::assemble_heat(const SystemState& st, std::span<const double> x,
     // interface terms of its own.
     const std::vector<ThermalState> t = thermal_states(x);
     const std::vector<NodeLevels> g = thermal_levels(x, t);
-    composition_->assemble(*this, st, {x, f, values, step, {}, t, g, sinks}, true);
+    composition_->assemble(*this, st, {x, f, values, step, {}, t, g, sinks}, false);
 }
 
 void SystemData::add_thermal_storage(std::span<const double> x, std::complex<double> s,
@@ -622,11 +622,11 @@ void SystemData::add_thermal_storage(std::span<const double> x, std::complex<dou
     }
 }
 
-std::vector<double> DriftDiffusion::bias_derivative(std::size_t contact,
+std::vector<double> System::bias_derivative(std::size_t contact,
                                                     std::span<const double> x) const {
     NITCAD_EXPECTS(x.size() == unknowns());
     std::vector<double> d = bias_derivative(contact);
-    if (!electrothermal()) {
+    if (!data_->electrothermal()) {
         // Gate tunnelling through a lumped gate (Unit 51): its node's rows -T_n and +T_p read the
         // gate's bias (per volt).
         if (!data_->gate_tunnels_.empty()) {
@@ -665,7 +665,7 @@ std::vector<double> DriftDiffusion::bias_derivative(std::size_t contact,
     return d;
 }
 
-std::vector<std::size_t> DriftDiffusion::bias_rows(std::size_t contact) const {
+std::vector<std::size_t> System::bias_rows(std::size_t contact) const {
     NITCAD_EXPECTS(contact < data_->contact_count_);
     const auto c = static_cast<std::int32_t>(contact);
     std::vector<std::size_t> rows;
@@ -674,7 +674,7 @@ std::vector<std::size_t> DriftDiffusion::bias_rows(std::size_t contact) const {
                          (state_->gates_.on_gate(i) && state_->gates_.contact(i) == contact);
         if (!own) continue;
         rows.push_back(data_->m_ * i);
-        if (!electrothermal() || data_->contact_[i] != c) continue;
+        if (!data_->electrothermal() || data_->contact_[i] != c) continue;
         const std::int32_t s = data_->thermal_nodes_[i].contact;
         if (!(s >= 0 && data_->thermal_isothermal_[static_cast<std::size_t>(s)] != 0)) {
             rows.push_back(4 * i + 3);
@@ -689,49 +689,49 @@ std::vector<std::size_t> DriftDiffusion::bias_rows(std::size_t contact) const {
     return rows;
 }
 
-bool DriftDiffusion::bias_nonlinear() const noexcept {
-    return electrothermal() ||
+bool System::bias_nonlinear() const noexcept {
+    return data_->electrothermal() ||
            std::ranges::any_of(data_->gate_tunnels_,
                                [](const SystemData::GateTunnel& t) { return t.lumped; });
 }
 
-std::vector<double> DriftDiffusion::thermal_contact_heat(std::span<const double> x,
+std::vector<double> SystemData::thermal_contact_heat(const SystemState& st, std::span<const double> x,
                                                          const TimeStep* step) const {
     NITCAD_EXPECTS(electrothermal() && x.size() == unknowns());
     std::vector<double> f(unknowns());
-    data_->assemble_heat(*state_, x, f, {}, step, false);
-    std::vector<double> heat(state_->thermal_rise_.size(), 0.0);
+    assemble_heat(st, x, f, {}, step, false);
+    std::vector<double> heat(st.thermal_rise_.size(), 0.0);
     for (std::size_t i = 0; i < node_count(); ++i) {
-        const SystemData::ThermalNode& tn = data_->thermal_nodes_[i];
+        const SystemData::ThermalNode& tn = thermal_nodes_[i];
         if (tn.contact < 0) continue;
         const auto c = static_cast<std::size_t>(tn.contact);
         // The sink takes what the node's balance leaves: conducted out + sink = received.
-        heat[c] += data_->thermal_isothermal_[c] != 0 ? -f[4 * i + 3]
-                                                : tn.h * (x[4 * i + 3] - state_->thermal_rise_[c]);
+        heat[c] += thermal_isothermal_[c] != 0 ? -f[4 * i + 3]
+                                                : tn.h * (x[4 * i + 3] - st.thermal_rise_[c]);
     }
-    for (double& h : heat) h *= data_->heat_scale_;
+    for (double& h : heat) h *= heat_scale_;
     detail::observe("thermal_contact_heat", heat);
     return heat;
 }
 
-double DriftDiffusion::electrical_power(std::span<const double> x) const {
-    NITCAD_EXPECTS((electrothermal() || data_->energy_balance_) && x.size() == unknowns());
-    const std::vector<double> I = terminal_currents(x);
+double SystemData::electrical_power(const SystemState& st, std::span<const double> x) const {
+    NITCAD_EXPECTS((electrothermal() || energy_balance_) && x.size() == unknowns());
+    const std::vector<double> I = terminal_currents(st, x);
     double power = 0.0;
-    for (std::size_t c = 0; c < I.size(); ++c) power += state_->contact_bias_[c] * I[c];
+    for (std::size_t c = 0; c < I.size(); ++c) power += st.contact_bias_[c] * I[c];
     detail::observe("electrical_power", power);
     return power;
 }
 
-std::vector<std::pair<double, double>> DriftDiffusion::edge_joule_heat(
+std::vector<std::pair<double, double>> SystemData::edge_joule_heat(const SystemState& /*st*/,
     std::span<const double> x) const {
     NITCAD_EXPECTS(electrothermal() && x.size() == unknowns());
-    const std::vector<SystemData::ThermalState> t = data_->thermal_states(x);
-    const std::vector<SystemData::NodeLevels> g = data_->thermal_levels(x, t);
-    std::vector<std::pair<double, double>> joule(data_->edges_.size(), {0.0, 0.0});
-    for (std::size_t k = 0; k < data_->edges_.size(); ++k) {
-        if (!data_->edges_[k].carriers) continue;
-        const auto [fn, fp] = data_->thermal_fluxes(k, x, t, g);
+    const std::vector<SystemData::ThermalState> t = thermal_states(x);
+    const std::vector<SystemData::NodeLevels> g = thermal_levels(x, t);
+    std::vector<std::pair<double, double>> joule(edges_.size(), {0.0, 0.0});
+    for (std::size_t k = 0; k < edges_.size(); ++k) {
+        if (!edges_[k].carriers) continue;
+        const auto [fn, fp] = thermal_fluxes(k, x, t, g);
         joule[k] = {fn.flux * fn.theta_e * (std::log(fn.w[1] / fn.w[0]) - fn.delta),
                     fp.flux * fp.theta_e * (std::log(fp.w[0] / fp.w[1]) - fp.delta)};
     }

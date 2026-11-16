@@ -101,7 +101,7 @@ public:
     // 0.
     [[nodiscard]] std::span<const char> is_contact() const noexcept { return contact_; }
 
-    // Scaled charge on each gate and electrode, as DriftDiffusion::gate_charges (zero for an ohmic
+    // Scaled charge on each gate and electrode, as System::gate_charges (zero for an ohmic
     // contact). Precondition (NITCAD_EXPECTS): psi has unknowns() entries.
     [[nodiscard]] std::vector<double> gate_charges(std::span<const double> psi) const;
     // Scaled trapped charge of each declared interface (interface_edges.hpp, without the fixed

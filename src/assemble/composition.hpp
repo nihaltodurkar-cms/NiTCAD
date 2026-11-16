@@ -13,7 +13,7 @@
 // fields the equations solve for (fields.hpp).
 //
 // The model data the terms read (per node, per edge, per contact) is SystemData's and what changes
-// after creation SystemState's (system_data.hpp, Unit 57 GE2); DriftDiffusion is the compatibility
+// after creation SystemState's (system_data.hpp, Unit 57 GE2); System is the compatibility
 // wrapper (FE4) holding them.
 #pragma once
 
@@ -21,9 +21,9 @@
 #include <span>
 #include <vector>
 
-#include "NiTCAD/assemble/drift_diffusion.hpp"
 #include "NiTCAD/assemble/fields.hpp"
 #include "NiTCAD/assemble/models.hpp"
+#include "NiTCAD/assemble/system.hpp"
 #include "NiTCAD/linalg/sparse_matrix.hpp"
 #include "terms.hpp"
 
@@ -64,6 +64,8 @@ struct CompositionEntry {
     // before the unknowns' map (contacts, insulators, gates, interfaces).
     bool (*active)(const SystemData& s, const SystemState& st, const PhysicsModels& models);
     std::shared_ptr<const SystemData::Term> (*make)();
+    // A term of the frequency domain alone (Term::add_frequency; Unit 57 GE3).
+    bool frequency = false;
 };
 
 class SystemData::Composition {
@@ -84,15 +86,24 @@ public:
     // Appends every term's own pattern entries (Term::pattern).
     void pattern(const SystemData& s, const SystemState& st,
                  std::vector<linalg::Triplet>& triplets) const;
-    // Every term's add, in order; without `interfaces`, the interface-edge terms are left out
-    // (the isothermal small_signal_matrix adds its own). assemble_heat always passes true: the
-    // electrothermal small_signal_matrix adds none.
+    // Every steady term's add, in order. In the frequency domain (small_signal_matrix), the steady
+    // terms of a domain that a frequency-domain term has are left out: the frequency-domain term
+    // takes their place (assemble_frequency).
     void assemble(const SystemData& s, const SystemState& st, const Terms::Evaluation& e,
-                  bool interfaces) const;
+                  bool frequency) const;
+    // Every frequency-domain term's add_frequency, in order.
+    void assemble_frequency(const SystemData& s, const SystemState& st,
+                            const Terms::FrequencyEvaluation& e) const;
+    [[nodiscard]] std::span<const std::shared_ptr<const Term>> frequency_terms() const noexcept {
+        return frequency_terms_;
+    }
 
 private:
     DofMap dofs_;
     std::vector<std::shared_ptr<const Term>> terms_;
+    std::vector<std::shared_ptr<const Term>> frequency_terms_;
+    // The domains whose steady terms the frequency-domain terms replace (a bit per TermDomain).
+    unsigned frequency_domains_ = 0;
     std::vector<EquationSets> sets_;
     EquationSets all_ = 0;
 };

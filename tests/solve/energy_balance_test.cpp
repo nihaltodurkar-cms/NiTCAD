@@ -16,11 +16,12 @@
 #include <utility>
 #include <vector>
 
-#include "NiTCAD/assemble/drift_diffusion.hpp"
+#include "NiTCAD/assemble/energy.hpp"
 #include "NiTCAD/assemble/scaling.hpp"
+#include "NiTCAD/assemble/system.hpp"
 #include "NiTCAD/base/constants.hpp"
-#include "NiTCAD/linalg/linear_solver.hpp"
 #include "NiTCAD/device/device.hpp"
+#include "NiTCAD/linalg/linear_solver.hpp"
 #include "NiTCAD/mesh/tensor_grid.hpp"
 #include "NiTCAD/physics/energy_balance.hpp"
 #include "NiTCAD/physics/field_mobility.hpp"
@@ -205,7 +206,7 @@ TEST_CASE("energy balance: the steady energy budget closes (EC7)") {
         const device::Device& d = *made;
         const results::Sweep s = sweep(d, {-0.3, -0.6, -0.8}, options(true, false, fd));
         const auto scaling = *assemble::make_scaling(d);
-        auto dd = assemble::DriftDiffusion::create(d, scaling,
+        auto dd = assemble::System::create(d, scaling,
                                                    {.fermi_dirac = fd, .energy_balance = true});
         REQUIRE(dd.has_value());
         for (const results::BiasPoint& b : s.points) {
@@ -219,7 +220,7 @@ TEST_CASE("energy balance: the steady energy budget closes (EC7)") {
                 state[5 * i + 3] = (f.electron_temperature_K[i] - 300.0) / 300.0;
                 state[5 * i + 4] = (f.hole_temperature_K[i] - 300.0) / 300.0;
             }
-            const auto e = dd->energy_powers(state);
+            const auto e = energy_powers(*dd, state);
             const double out = e.relaxation + e.recombination + e.contact_flux + e.contact_joule -
                                e.peltier;
             const double scale = std::max({std::abs(e.input), std::abs(e.relaxation),
@@ -688,7 +689,7 @@ TEST_CASE("energy balance: a bias step in time (EC13)") {
 
     // (2) The energy budget, step by step.
     const auto scaling = *assemble::make_scaling(d);
-    auto dd = assemble::DriftDiffusion::create(d, scaling, steady.models);
+    auto dd = assemble::System::create(d, scaling, steady.models);
     REQUIRE(dd.has_value());
     const double t0 = dd->time_scale();
     double input = 0.0, relaxation = 0.0, recombination = 0.0, contacts = 0.0;
@@ -702,8 +703,8 @@ TEST_CASE("energy balance: a bias step in time (EC13)") {
         const std::vector<double> x = scaled(now.fields, scaling);
         const std::vector<double> history =
             dd->storage(scaled(run->snapshots[k - 1].fields, scaling));
-        const assemble::DriftDiffusion::TimeStep step{t0 / p.step_s, history, {}};
-        const auto e = dd->energy_powers(x, &step);
+        const assemble::System::TimeStep step{t0 / p.step_s, history, {}};
+        const auto e = energy_powers(*dd, x, &step);
         const double h = p.step_s;
         input += h * e.input;
         relaxation += h * e.relaxation;
@@ -824,7 +825,7 @@ TEST_CASE("energy balance: cost per Newton iteration in 1D, 2D and 3D (EC19)", "
                 std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
             std::size_t iterations = 0;
             for (const results::BiasPoint& p : s.points) iterations += p.convergence.iterations.size();
-            auto system = *assemble::DriftDiffusion::create(d, scaling, o.models);
+            auto system = *assemble::System::create(d, scaling, o.models);
             REQUIRE(system.set_bias(bias).has_value());
             const std::vector<double> state = o.models.energy_balance
                                                   ? scaled(s.points.back().fields, scaling)

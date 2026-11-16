@@ -12,8 +12,8 @@
 #include <span>
 #include <vector>
 
-#include "NiTCAD/assemble/drift_diffusion.hpp"
 #include "NiTCAD/assemble/scaling.hpp"
+#include "NiTCAD/assemble/system.hpp"
 #include "NiTCAD/device/device.hpp"
 #include "NiTCAD/linalg/linear_solver.hpp"
 
@@ -31,7 +31,7 @@ inline NiTCAD::linalg::SparseMatrix device_jacobian(const NiTCAD::device::Device
                                                     std::vector<double>& rhs) {
     using namespace NiTCAD;
     const auto scaling = *assemble::make_scaling(d);
-    auto system = *assemble::DriftDiffusion::create(d, scaling);
+    auto system = *assemble::System::create(d, scaling);
     REQUIRE(system.set_bias(bias_V).has_value());
     std::vector<double> psi(potential_V.size());
     for (std::size_t i = 0; i < psi.size(); ++i) psi[i] = potential_V[i] / scaling.V_T;

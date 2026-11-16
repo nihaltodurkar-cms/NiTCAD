@@ -12,7 +12,7 @@
 // With options.line_search (Unit 30) the damped step is shortened by backtracking until the squared
 // residual falls enough (LineSearch below); the fraction taken is IterationRecord::step.
 // The Jacobian pattern is fixed by the system, so the solver analyzes once per run.
-// A system may replace the measure and the update with its own hooks (assemble::DriftDiffusion
+// A system may replace the measure and the update with its own hooks (assemble::System
 // does, for relative density updates):
 //     double update_size(std::span<const double> x, std::span<const double> dx) const;
 //     void apply_update(std::span<double> x, std::span<const double> dx, double max_update) const;

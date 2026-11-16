@@ -64,7 +64,7 @@ struct EquilibriumResult {
 
 // Per node, the generation-recombination rates of a state in cm^-3 s^-1 (Unit 45, DECISIONS.md
 // RS1, RS2): each mechanism's net recombination R - G (a generation is negative), read from its own
-// equation term, so the rates are the solver's (assemble::DriftDiffusion::rates). A vector is empty
+// equation term, so the rates are the solver's (assemble::rates). A vector is empty
 // when the mechanism is off or the rates were not stored (solve::BiasOptions::store_rates, deck
 // `[solver] rates`). SRH, Auger and radiative recombination and impact ionization change both
 // carriers alike (one vector); the interfaces and band-to-band tunnelling, whose nonlocal paths put
@@ -94,7 +94,7 @@ struct BiasPoint {
     std::vector<double> terminal_current;
     // Per contact, the resolution of terminal_current (same unit): a bound on how far the current
     // through any cut of the device can differ from it, from the continuity residuals and the
-    // rounding of the large terms that cancel in them (assemble::DriftDiffusion::
+    // rounding of the large terms that cancel in them (assemble::System::
     // terminal_current_resolution). A current below it is not resolved by the (psi, n, p) state,
     // whose densities carry the current only as the small difference of two large fluxes at the
     // contact; weighted_current (below, Unit 32) reads it where it is resolved. Zero for a gate

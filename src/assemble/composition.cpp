@@ -22,6 +22,12 @@ std::shared_ptr<const SystemData::Composition> SystemData::Composition::compose(
     for (const CompositionEntry& e :
          models.electrothermal ? Terms::thermal_table() : Terms::isothermal_table()) {
         if (!e.active(s, st, models)) continue;
+        if (e.frequency) {  // Unit 57 GE3: not in the steady list, its own sets already are
+            c->frequency_terms_.push_back(e.make());
+            const auto domain = static_cast<unsigned>(c->frequency_terms_.back()->info().domain);
+            c->frequency_domains_ |= 1u << domain;
+            continue;
+        }
         c->terms_.push_back(e.make());
         c->sets_.push_back(e.sets);
         c->all_ |= e.sets;
@@ -36,7 +42,7 @@ void SystemData::Composition::pattern(const SystemData& s, const SystemState& st
 
 void SystemData::Composition::assemble(const SystemData& s, const SystemState& st,
                                        const Terms::Evaluation& e,
-                                           bool interfaces) const {
+                                       bool frequency) const {
     // Gate tunnelling's fluxes start on worker threads now and the other terms add theirs
     // meanwhile; the gate tunnelling term collects them (GR11).
     std::optional<GateTunnelJob> tunnels;
@@ -46,9 +52,17 @@ void SystemData::Composition::assemble(const SystemData& s, const SystemState& s
         ev.tunnels = &*tunnels;
     }
     for (const std::shared_ptr<const Term>& t : terms_) {
-        if (!interfaces && t->info().domain == TermDomain::interface_edges) continue;
+        if (frequency &&
+            (frequency_domains_ & (1u << static_cast<unsigned>(t->info().domain))) != 0) {
+            continue;
+        }
         t->add(s, st, ev);
     }
+}
+
+void SystemData::Composition::assemble_frequency(const SystemData& s, const SystemState& st,
+                                                 const Terms::FrequencyEvaluation& e) const {
+    for (const std::shared_ptr<const Term>& t : frequency_terms_) t->add_frequency(s, st, e);
 }
 
 }  // namespace NiTCAD::assemble

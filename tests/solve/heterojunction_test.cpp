@@ -11,9 +11,10 @@
 #include <utility>
 #include <vector>
 
-#include "NiTCAD/assemble/drift_diffusion.hpp"
+#include "NiTCAD/assemble/currents.hpp"
 #include "NiTCAD/assemble/gate.hpp"
 #include "NiTCAD/assemble/scaling.hpp"
+#include "NiTCAD/assemble/system.hpp"
 #include "NiTCAD/base/constants.hpp"
 #include "NiTCAD/device/device.hpp"
 #include "NiTCAD/mesh/tensor_grid.hpp"
@@ -209,12 +210,12 @@ TEST_CASE("heterojunction: equilibrium carries no current, per carrier (legacy G
             const auto eq = solve::solve_equilibrium(d, {.models = models});
             REQUIRE(eq.has_value());
             const auto scaling = *assemble::make_scaling(d);
-            const auto system = *assemble::DriftDiffusion::create(d, scaling, models);
+            const auto system = *assemble::System::create(d, scaling, models);
             std::vector<double> psi(x.size());
             for (std::size_t i = 0; i < x.size(); ++i) {
                 psi[i] = eq->fields.potential_V[i] / scaling.V_T;
             }
-            const auto currents = system.edge_currents(system.state_from_potential(psi));
+            const auto currents = edge_currents(system, system.state_from_potential(psi));
             const auto& f = eq->fields;
             for (std::size_t e = 0; e + 1 < x.size(); ++e) {
                 CAPTURE(e);

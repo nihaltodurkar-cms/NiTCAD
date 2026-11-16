@@ -15,9 +15,10 @@
 #include <utility>
 #include <vector>
 
-#include "NiTCAD/assemble/drift_diffusion.hpp"
 #include "NiTCAD/assemble/equilibrium_poisson.hpp"
 #include "NiTCAD/assemble/scaling.hpp"
+#include "NiTCAD/assemble/system.hpp"
+#include "NiTCAD/assemble/tunnelling.hpp"
 #include "NiTCAD/device/device.hpp"
 #include "NiTCAD/mesh/tensor_cells.hpp"
 #include "NiTCAD/mesh/tensor_grid.hpp"
@@ -28,7 +29,7 @@
 #include "terms.hpp"
 
 using namespace NiTCAD;
-using assemble::DriftDiffusion;
+using assemble::System;
 using assemble::EquilibriumPoisson;
 using assemble::TermDomain;
 using Terms = assemble::SystemData::Terms;
@@ -76,8 +77,8 @@ struct Check {
     bool active;
 };
 
-Check check(const DriftDiffusion& dd, const assemble::SystemData::Term& t, std::vector<double> x,
-            const DriftDiffusion::TimeStep* step = nullptr) {
+Check check(const System& dd, const assemble::SystemData::Term& t, std::vector<double> x,
+            const System::TimeStep* step = nullptr) {
     const std::size_t n = dd.unknowns();
     std::vector<double> f(n), fp(n), fm(n);
     auto jacobian = dd.make_jacobian();
@@ -121,8 +122,8 @@ Check check(const DriftDiffusion& dd, const assemble::SystemData::Term& t, std::
 
 // Every term of a system at x: its check within the tolerance; the names of the active ones are
 // added to `active`.
-void check_terms(const DriftDiffusion& dd, const std::vector<double>& x,
-                 std::set<std::string>& active, const DriftDiffusion::TimeStep* step = nullptr,
+void check_terms(const System& dd, const std::vector<double>& x,
+                 std::set<std::string>& active, const System::TimeStep* step = nullptr,
                  double tolerance = 1e-6) {
     for (const auto& t : Terms::list(dd)) {
         const Check c = check(dd, *t, x, step);
@@ -259,7 +260,7 @@ device::Device block(int D, int nodes, double length_cm) {
 // The charge-neutral state under bias with noise on every unknown (psi by 0.02 V_T, densities by
 // 1%), the insulator nodes' densities left at 0 and, near an interface (0 < x < 1e-7 cm), densities
 // away from equilibrium so the traps are resolved (transient_test.cpp).
-std::vector<double> probe(const DriftDiffusion& dd, const device::Device& d, std::uint64_t seed) {
+std::vector<double> probe(const System& dd, const device::Device& d, std::uint64_t seed) {
     const auto scaling = *assemble::make_scaling(d);
     const auto poisson = *EquilibriumPoisson::create(d, scaling);
     auto x = dd.state_from_potential(poisson.charge_neutral_potential());
@@ -281,7 +282,7 @@ std::vector<double> probe(const DriftDiffusion& dd, const device::Device& d, std
 
 // A field E0 [V/cm] at angle theta to x, n and p uniform, relative noise on every unknown
 // (impact_ionization_test.cpp).
-std::vector<double> sloped(const DriftDiffusion& dd, const device::Device& d,
+std::vector<double> sloped(const System& dd, const device::Device& d,
                            const assemble::Scaling& s, double E0, double theta, double n_cm3,
                            double p_cm3, double noise, std::uint64_t seed) {
     std::vector<double> x(dd.unknowns());
@@ -303,7 +304,7 @@ struct History {
     std::vector<double> storage, traps;
 };
 
-History history(const DriftDiffusion& dd, std::vector<double> x, std::uint64_t seed) {
+History history(const System& dd, std::vector<double> x, std::uint64_t seed) {
     Noise noise{seed};
     for (std::size_t i = 0; i < dd.node_count(); ++i) {
         x[3 * i + 1] *= 1.0 + 0.05 * noise.next();
@@ -385,7 +386,7 @@ device::Device thermal_diode(int D, bool oxide, bool gate, const char* sink = "x
 // A biased, heated state (electrothermal_test.cpp): psi falling `drop` V_T across the device, n
 // and p uniform (insulator densities 0), theta rising from 1 to 1.3 along x, relative noise on
 // every unknown; the contact nodes not stamped.
-std::vector<double> heated(const DriftDiffusion& dd, const device::Device& d,
+std::vector<double> heated(const System& dd, const device::Device& d,
                            const assemble::Scaling& s, double noise, std::uint64_t seed,
                            double theta_rise = 0.3, double drop = 20.0) {
     std::vector<double> x(dd.unknowns());
@@ -412,13 +413,13 @@ TEST_CASE("terms: each term's partials match finite differences of its own resid
                 const assemble::PhysicsModels models{.field_mobility = true,
                                                      .fermi_dirac = fermi_dirac,
                                                      .incomplete_ionization = true};
-                auto dd = *DriftDiffusion::create(d, s, models);
+                auto dd = *System::create(d, s, models);
                 REQUIRE(dd.set_bias(std::vector<double>{0.3, 0.0}).has_value());
                 const auto x = probe(dd, d, 5);
                 CAPTURE(D, fermi_dirac);
                 check_terms(dd, x, active);
                 const History h = history(dd, x, 11);
-                const DriftDiffusion::TimeStep step{1e-3, h.storage, h.traps};
+                const System::TimeStep step{1e-3, h.storage, h.traps};
                 check_terms(dd, x, active, &step);
             }
         }
@@ -431,13 +432,13 @@ TEST_CASE("terms: each term's partials match finite differences of its own resid
         for (const int D : {1, 2}) {
             const device::Device d = mos(D);
             const auto s = *assemble::make_scaling(d);
-            auto dd = *DriftDiffusion::create(d, s);
+            auto dd = *System::create(d, s);
             REQUIRE(dd.set_bias(std::vector<double>{-0.4, 0.1}).has_value());
             const auto x = probe(dd, d, 3);
             CAPTURE(D);
             check_terms(dd, x, active);
             const History h = history(dd, x, 13);
-            const DriftDiffusion::TimeStep step{1e-3, h.storage, h.traps};
+            const System::TimeStep step{1e-3, h.storage, h.traps};
             check_terms(dd, x, active, &step);
         }
         require_active(active, {"insulator rows", "interfaces", "storage"});
@@ -445,7 +446,7 @@ TEST_CASE("terms: each term's partials match finite differences of its own resid
     SECTION("a lumped gate") {
         const device::Device d = moscap();
         const auto s = *assemble::make_scaling(d);
-        auto dd = *DriftDiffusion::create(d, s);
+        auto dd = *System::create(d, s);
         REQUIRE(dd.set_bias(std::vector<double>{0.5, 0.0}).has_value());
         check_terms(dd, probe(dd, d, 9), active);
         require_active(active, {"gate"});
@@ -454,7 +455,7 @@ TEST_CASE("terms: each term's partials match finite differences of its own resid
         for (const int D : {1, 2}) {
             const device::Device d = block(D, 11, 1e-4);
             const auto s = *assemble::make_scaling(d);
-            const auto dd = *DriftDiffusion::create(d, s, {.impact_ionization = true});
+            const auto dd = *System::create(d, s, {.impact_ionization = true});
             CAPTURE(D);
             check_terms(dd, sloped(dd, d, s, 3e5, D == 1 ? 0.0 : std::numbers::pi / 6.0, 1e16,
                                    1e15, 0.05, 7),
@@ -469,12 +470,12 @@ TEST_CASE("terms: each term's partials match finite differences of its own resid
             for (const assemble::PhysicsModels models :
                  {assemble::PhysicsModels{.btbt_local = true},
                   assemble::PhysicsModels{.btbt_nonlocal = assemble::NonlocalTunnelling::kane}}) {
-                auto dd = *DriftDiffusion::create(d, s, models);
+                auto dd = *System::create(d, s, models);
                 const auto x = sloped(dd, d, s, 4e6, D == 1 ? 0.0 : std::numbers::pi / 9.0,
                                       1e17, 1e3, 0.02, 3);
-                if (dd.tunnelling()) {
-                    dd.set_paths(dd.trace_paths(x));
-                    REQUIRE_FALSE(dd.paths().paths.empty());
+                if (tunnelling(dd)) {
+                    set_paths(dd, trace_paths(dd, x));
+                    REQUIRE_FALSE(paths(dd).paths.empty());
                 }
                 CAPTURE(D, models.btbt_local);
                 check_terms(dd, x, active);
@@ -489,7 +490,7 @@ TEST_CASE("terms: each term's partials match finite differences of its own resid
                 const bool oxide = D == 2;
                 const device::Device d = thermal_diode(D, oxide, false);
                 const auto s = *assemble::make_scaling(d);
-                auto dd = *DriftDiffusion::create(
+                auto dd = *System::create(
                     d, s, {.fermi_dirac = fermi_dirac, .electrothermal = true});
                 REQUIRE(dd.set_bias(std::vector<double>{0.4, -0.3}).has_value());
                 const auto before = heated(dd, d, s, 0.05, 5, 0.25);
@@ -497,7 +498,7 @@ TEST_CASE("terms: each term's partials match finite differences of its own resid
                 CAPTURE(D, fermi_dirac);
                 check_terms(dd, x, active);
                 const std::vector<double> storage = dd.storage(before);
-                const DriftDiffusion::TimeStep step{0.7, storage, {}};
+                const System::TimeStep step{0.7, storage, {}};
                 check_terms(dd, x, active, &step);
             }
         }
@@ -514,7 +515,7 @@ TEST_CASE("terms: each term's partials match finite differences of its own resid
         {
             const device::Device d = thermal_diode(2, false, true);
             const auto s = *assemble::make_scaling(d);
-            auto dd = *DriftDiffusion::create(d, s, {.electrothermal = true});
+            auto dd = *System::create(d, s, {.electrothermal = true});
             REQUIRE(dd.set_bias(std::vector<double>{0.4, -0.3, 0.7}).has_value());
             check_terms(dd, heated(dd, d, s, 0.05, 11), active);
         }
@@ -522,7 +523,7 @@ TEST_CASE("terms: each term's partials match finite differences of its own resid
             const device::Device d = thermal_diode(1, false, false);
             const auto s = *assemble::make_scaling(d);
             auto dd =
-                *DriftDiffusion::create(d, s, {.impact_ionization = true, .electrothermal = true});
+                *System::create(d, s, {.impact_ionization = true, .electrothermal = true});
             REQUIRE(dd.set_bias(std::vector<double>{0.4, -0.3}).has_value());
             check_terms(dd, heated(dd, d, s, 0.05, 7, 0.3, 1160.0), active);
         }
@@ -534,7 +535,7 @@ TEST_CASE("terms: the assembly order and domains of FE3") {
     // Every model that adds a term on, on a device with an interface: the full list in order.
     const device::Device d = mos(1);
     const auto s = *assemble::make_scaling(d);
-    const auto dd = *DriftDiffusion::create(
+    const auto dd = *System::create(
         d, s, {.radiative = true, .incomplete_ionization = true, .impact_ionization = true,
                .btbt_local = true});
     std::vector<std::string> names;
@@ -566,7 +567,7 @@ TEST_CASE("terms: the electrothermal assembly order") {
     const device::Device d = thermal_diode(2, true, false);
     const auto s = *assemble::make_scaling(d);
     const auto dd =
-        *DriftDiffusion::create(d, s, {.impact_ionization = true, .electrothermal = true});
+        *System::create(d, s, {.impact_ionization = true, .electrothermal = true});
     std::vector<std::string> names;
     std::vector<TermDomain> domains;
     for (const auto& t : Terms::list(dd)) {
@@ -594,12 +595,12 @@ TEST_CASE("terms: a held heat row is its sink's Dirichlet row in a time step too
     // whose residual and Jacobian row are those of the steady rows.
     const device::Device d = thermal_diode(2, false, false, "y_min");
     const auto s = *assemble::make_scaling(d);
-    auto dd = *DriftDiffusion::create(d, s, {.electrothermal = true});
+    auto dd = *System::create(d, s, {.electrothermal = true});
     REQUIRE(dd.set_bias(std::vector<double>{0.4, -0.3}).has_value());
     const auto before = heated(dd, d, s, 0.05, 5, 0.25);
     const auto x = heated(dd, d, s, 0.05, 11);
     const std::vector<double> storage = dd.storage(before);
-    const DriftDiffusion::TimeStep step{0.7, storage, {}};
+    const System::TimeStep step{0.7, storage, {}};
     const std::size_t n = dd.unknowns();
     std::vector<double> f0(n), f1(n);
     auto j0 = dd.make_jacobian(), j1 = dd.make_jacobian();
@@ -625,29 +626,29 @@ TEST_CASE("terms: a held heat row is its sink's Dirichlet row in a time step too
 TEST_CASE("composition: the equation sets of ARCHITECTURE.md 6.12.2") {
     using assemble::EquationSet;
     using E = EquationSet;
-    const auto sets = [](const DriftDiffusion& dd) { return Terms::composition(dd).sets(); };
+    const auto sets = [](const System& dd) { return Terms::composition(dd).sets(); };
     // Diode = Poisson + electron and hole continuity, with its contacts.
     const device::Device pn = diode(1);
     const auto s = *assemble::make_scaling(pn);
-    const auto plain = *DriftDiffusion::create(pn, s);
+    const auto plain = *System::create(pn, s);
     CHECK(sets(plain) == (E::poisson | E::continuity | E::contacts));
     CHECK(Terms::composition(plain).dofs().block() == 3);
     // MOS = the diode's + the oxide's Poisson + gate and interface conditions.
     const device::Device oxide = mos(1);
     const auto so = *assemble::make_scaling(oxide);
-    CHECK(sets(*DriftDiffusion::create(oxide, so)) ==
+    CHECK(sets(*System::create(oxide, so)) ==
           (E::poisson | E::continuity | E::contacts | E::oxide | E::interfaces));
     const device::Device cap = moscap();
     const auto sc = *assemble::make_scaling(cap);
-    CHECK(sets(*DriftDiffusion::create(cap, sc)) ==
+    CHECK(sets(*System::create(cap, sc)) ==
           (E::poisson | E::continuity | E::contacts | E::gate));
     // Generation models add their set.
-    CHECK(sets(*DriftDiffusion::create(pn, s, {.impact_ionization = true})) ==
+    CHECK(sets(*System::create(pn, s, {.impact_ionization = true})) ==
           (E::poisson | E::continuity | E::contacts | E::generation));
     // Thermal = the semiconductor equations + the heat equation, with a fourth unknown.
     const device::Device hot = thermal_diode(2, true, false);
     const auto sh = *assemble::make_scaling(hot);
-    const auto thermal = *DriftDiffusion::create(hot, sh, {.electrothermal = true});
+    const auto thermal = *System::create(hot, sh, {.electrothermal = true});
     CHECK(sets(thermal) == (E::poisson | E::continuity | E::contacts | E::oxide | E::interfaces |
                             E::heat));
     CHECK(Terms::composition(thermal).dofs().block() == 4);
@@ -686,7 +687,7 @@ TEST_CASE("composition: every model switch adds its term") {
         const auto s = *assemble::make_scaling(d);
         const auto names = [&](const assemble::PhysicsModels& m) {
             std::vector<std::string> v;
-            for (const auto& t : Terms::list(*DriftDiffusion::create(d, s, m))) {
+            for (const auto& t : Terms::list(*System::create(d, s, m))) {
                 v.emplace_back(t->info().name);
             }
             return v;
@@ -705,7 +706,7 @@ TEST_CASE("composition: the electrothermal small-signal matrix keeps the interfa
     // rows: at s = 0 the matrix is the steady Jacobian, entry for entry.
     const device::Device d = thermal_diode(2, true, false);
     const auto s = *assemble::make_scaling(d);
-    auto dd = *DriftDiffusion::create(d, s, {.electrothermal = true});
+    auto dd = *System::create(d, s, {.electrothermal = true});
     REQUIRE(dd.set_bias(std::vector<double>{0.4, -0.3}).has_value());
     const auto x = heated(dd, d, s, 0.05, 11);
     std::vector<double> f(dd.unknowns());
@@ -726,8 +727,8 @@ namespace {
 // The entries a term writes outside the fields it declares (TermInfo::rows, columns): every
 // nonzero residual entry in a row of a declared field, every nonzero Jacobian entry in such a row
 // and a column of a declared field. Zero when the declarations hold.
-std::size_t undeclared(const DriftDiffusion& dd, const std::vector<double>& x,
-                       const DriftDiffusion::TimeStep* step = nullptr) {
+std::size_t undeclared(const System& dd, const std::vector<double>& x,
+                       const System::TimeStep* step = nullptr) {
     const auto has = [](std::span<const assemble::FieldId> fields, assemble::FieldId f) {
         return std::ranges::find(fields, f) != fields.end();
     };
@@ -764,29 +765,29 @@ TEST_CASE("terms: every term writes only the rows and columns it declares") {
     {
         const device::Device d = diode(2);
         const auto s = *assemble::make_scaling(d);
-        auto dd = *DriftDiffusion::create(
+        auto dd = *System::create(
             d, s, {.field_mobility = true, .fermi_dirac = true, .incomplete_ionization = true});
         REQUIRE(dd.set_bias(std::vector<double>{0.3, 0.0}).has_value());
         const auto x = probe(dd, d, 5);
         const History h = history(dd, x, 11);
-        const DriftDiffusion::TimeStep step{1e-3, h.storage, h.traps};
+        const System::TimeStep step{1e-3, h.storage, h.traps};
         CHECK(undeclared(dd, x) == 0);
         CHECK(undeclared(dd, x, &step) == 0);
     }
     {
         const device::Device d = mos(2);
         const auto s = *assemble::make_scaling(d);
-        auto dd = *DriftDiffusion::create(d, s);
+        auto dd = *System::create(d, s);
         REQUIRE(dd.set_bias(std::vector<double>{-0.4, 0.1}).has_value());
         const auto x = probe(dd, d, 3);
         const History h = history(dd, x, 13);
-        const DriftDiffusion::TimeStep step{1e-3, h.storage, h.traps};
+        const System::TimeStep step{1e-3, h.storage, h.traps};
         CHECK(undeclared(dd, x, &step) == 0);
     }
     {
         const device::Device d = moscap();
         const auto s = *assemble::make_scaling(d);
-        auto dd = *DriftDiffusion::create(d, s);
+        auto dd = *System::create(d, s);
         REQUIRE(dd.set_bias(std::vector<double>{0.5, 0.0}).has_value());
         CHECK(undeclared(dd, probe(dd, d, 9)) == 0);
     }
@@ -797,16 +798,16 @@ TEST_CASE("terms: every term writes only the rows and columns it declares") {
         const bool impact = m.impact_ionization;
         const device::Device d = impact ? block(2, 11, 1e-4) : block(2, 13, 3e-6);
         const auto s = *assemble::make_scaling(d);
-        auto dd = *DriftDiffusion::create(d, s, m);
+        auto dd = *System::create(d, s, m);
         const auto x = impact ? sloped(dd, d, s, 3e5, 0.5, 1e16, 1e15, 0.05, 7)
                               : sloped(dd, d, s, 4e6, 0.35, 1e17, 1e3, 0.02, 3);
-        if (dd.tunnelling()) dd.set_paths(dd.trace_paths(x));
+        if (tunnelling(dd)) set_paths(dd, trace_paths(dd, x));
         CHECK(undeclared(dd, x) == 0);
     }
     for (const bool gate : {false, true}) {
         const device::Device d = thermal_diode(2, !gate, gate);
         const auto s = *assemble::make_scaling(d);
-        auto dd = *DriftDiffusion::create(
+        auto dd = *System::create(
             d, s, {.fermi_dirac = !gate, .impact_ionization = true, .electrothermal = true});
         REQUIRE(dd.set_bias(gate ? std::vector<double>{0.4, -0.3, 0.7}
                                  : std::vector<double>{0.4, -0.3})
@@ -814,7 +815,7 @@ TEST_CASE("terms: every term writes only the rows and columns it declares") {
         const auto before = heated(dd, d, s, 0.05, 5, 0.25);
         const auto x = heated(dd, d, s, 0.05, 11, 0.3, 1160.0);
         const std::vector<double> storage = dd.storage(before);
-        const DriftDiffusion::TimeStep step{0.7, storage, {}};
+        const System::TimeStep step{0.7, storage, {}};
         CHECK(undeclared(dd, x, &step) == 0);
     }
 }

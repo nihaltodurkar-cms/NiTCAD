@@ -1204,6 +1204,83 @@ before the next slice is compared against them.
   the owner pressed OK. Stopped at 13:48. It could only rewrite the console logs (`.out`) of run A, which GG2 skips;
   the data files matched.
 
+**Slice 2 (GE3) as built (2026-11-16; owner "start slice 2"; on this branch as it stands, #85 still open).**
+- `include/NiTCAD/assemble/system.hpp` (renamed from `drift_diffusion.hpp`, so the header comment keeps its
+  history): `assemble::System` with GE3's generic members only, plus the counts and step data every equation
+  set has (`node_count`, `contact_count`, `stride`, `time_scale`, `trap_slots`, `storage_width`, `TimeStep`) and
+  `bias_nonlinear` (the companion of `bias_derivative`'s state overload). `DriftDiffusion` is gone; every
+  reference to it in `solve` (10 files) and the tests (31) now names `System`.
+- Topic headers, each a list of free functions over `(const System&, ...)` or, for the mutators, `System&`:
+  `currents.hpp` (edge, terminal, conduction and small-signal currents, `CurrentRow`, the resolution, the flux
+  terms), `thermal.hpp` (`electrothermal`, `set_thermal_bias`, the sinks, `heat_scale`, contact heat, electrical
+  power, Joule heat), `tunnelling.hpp` (`tunnelling`, `trace_paths`, `set_paths`, `paths`, `path_states`,
+  `paths_agree`, `gate_tunnelling`, `GateTunnellingCurrents` and their currents), `energy.hpp`
+  (`energy_balance`, `EnergyPowers`, `energy_powers`, hold, release, held), `charges.hpp` (trap occupancies,
+  contact, gate and interface trap charges). **As-built placements GE3 does not name:** `rates` with
+  `RateMechanism` and `MechanismRate` in a sixth header, `rates.hpp`; `band_edges(const System&, x)` in the
+  existing `band_edges.hpp` (beside `BandEdges`, with `System` declared, not included); `set_minority_floor` /
+  `minority_floor` as free functions in `system.hpp` after the class (a Newton setting, not a model). The two
+  internal constants `impact_current_floor` and `matters` are `SystemData`'s (no caller outside `src/assemble`).
+- **Passkey (R6):** `System::data`, `state` (const and not) and `replace_data` take a `const SystemKey&`;
+  `SystemKey` is declared in the public header and defined in `src/assemble/system_data.hpp` with a private
+  constructor that only `SystemData` can call (`SystemData::of`, `state_of`, `replace`). `System` no longer
+  befriends `SystemData`. The public header names `SystemData`, `SystemState` and `SystemKey` only as
+  declarations.
+- **The bodies:** the model queries are `SystemData` members taking the state (`terminal_currents(st, x)`, ...),
+  defined where they were; `src/assemble/topics.cpp` holds the free functions, each one line through the
+  passkey. Three are free functions in their model's file: `terminal_current_resolution` and `energy_powers`
+  call the system's own `residual` (so its trace hooks fire as before), and `set_paths` replaces the data
+  (copy on write, GE2's as-built note). The expressions are unchanged: the bodies were moved by rewriting
+  `data_->` and `state_->` only.
+- **The frequency-domain term:** small_signal_matrix's interface pass is the term
+  `Terms::InterfacesFrequency` ("interface traps, frequency domain"), moved with its expressions and order. A
+  composition-table row now has a `frequency` flag; the composition keeps such terms in a list of their own
+  (`frequency_terms`), so the steady list (`Terms::list`, the per-term checks, `rates`) is unchanged.
+  `Term::add_frequency` adds to the complex matrix (nothing by default); the term's steady `add` is a contract
+  failure. `Composition::assemble(..., frequency)` leaves out, in the frequency domain, the steady terms of a
+  domain a frequency-domain term has (the interface edges), and `assemble_frequency` runs after the storage, as
+  the pass did. The electrothermal table has no such term (the model refuses traps and interface charge), so
+  its small-signal matrix is as before.
+- The relocation loop's stand-in in `tests/solve/btbt_test.cpp` gives the same five functions as free
+  functions (found by ADL), as `solve::detail::solve_relocating` now calls them.
+- **GG7:** `system: the public header names no model and the old type is retired` (`tests/assemble/fields_test.cpp`):
+  `drift_diffusion.hpp` does not exist; no `TermAccess` in the internal headers; the header (comments blanked)
+  has no `DriftDiffusion`; in `class System`'s body every declared name (an identifier followed by
+  `( ; = { , ) [`: functions, data members, nested types, their members and the parameters) contains none of
+  GG7's eight words; and the parse finds the 17 members it must (so an empty parse cannot pass).
+- **GG1:** the 79 traced entries of the slice-2 binaries (P-core pinned): 77 byte-identical to slice 1's
+  recorded traces. The other two, `assemble.band_to_band` and `assemble.electrothermal`, hold slice 1's two copy
+  tests, added after slice 1's trace was recorded; traced again with slice 1's final binaries they are
+  byte-identical to slice 2's. The trace ran before the GG7 test was added (it calls no assembler).
+- **GG2:** the 12 decks run with the final `nitcad.exe` agree with slice 0's run A on all 38 files
+  (`[.deck_compare]`).
+- **GG4:** FG4's benchmark, slice-1 and slice-2 binaries alternating, pinned to CPU 0. After two runs each,
+  five 1D and 2D devices were 2.7% to 3.9% slower than slice 1's minimum and outside its two-run spread, so
+  `[.assembly_benchmark]` of the solve tests ran four more times each (the deck test's gate-tunnelling cases
+  were within 2%). Minimum of six per device: every device within 2% of slice 1 or within slice 1's
+  six-run spread. The largest are +2.6% (1D energy balance and 2D drift-diffusion + Canali `evaluate`, 2D
+  MOSFET `residual`; spreads 8.1% to 10.8%), 2D drift-diffusion `evaluate` +1.9%, and 3D drift-diffusion
+  -3.0%. Passed under GG4's spread rule.
+- **GG6, 11 mutants, 10 caught** by the `assemble.*` and `solve.*` ctest entries (control 47/47):
+  M1 the frequency-domain interface term active in steady state (also in the steady list): 12 entries (its
+  steady `add` is a contract failure); M2 the steady interface term kept in the frequency domain:
+  `assemble.small_signal`, `solve.small_signal`; M3 the frequency-domain terms never run: the same two; M5 a
+  topic function (`terminal_currents`) reading the first system it was called with, not its argument: 24
+  entries; M6 `set_minority_floor` writing a copy of the state: `assemble.drift_diffusion`; M7 `set_paths`
+  keeping the old data (positions not moved): `assemble.band_to_band`, `assemble.terms`, `solve.btbt`,
+  `solve.rates`; M8 `hold_temperatures` holding in a copy: `assemble.energy_balance`, `solve.energy_balance`;
+  M9 `set_thermal_bias` writing a copy: `assemble.electrothermal`; M10 `release_temperatures` a no-op: the two
+  energy-balance entries; M11 a model-named member (`tunnelling`) added to `System`: `assemble.fields` (GG7).
+  **M4, the frequency-domain terms added before the storage instead of after it, survives** the suites and
+  the traces (`assemble.small_signal`, `solve.small_signal`, `solve.transient` byte-identical). It is
+  equivalent in every traced use: s is purely imaginary there (i omega t0), so the storage adds only to
+  imaginary parts, and the two orders compute the same sums (a + b = b + a; the real parts get no storage
+  term). It would differ for a real s, which no caller passes. Not counted; 10 caught meets GG6's 8.
+- **GG5: not completed.** The final tree builds with no warnings (`/W4 /WX`, Release). The full Release suite was
+  started and stopped by the owner after 5 entries (all passed; "stop the test and push"); the branch is pushed
+  for CI, whose Release and Debug jobs run the suites. Before the stop, the assemble.* and solve.* entries
+  passed 47/47 (GG6's control on the final sources).
+
 **Risks:** the bit-identity surface is the largest since Unit 40. Moving the bias and path state out of the system
 could change which values a copy sees (GG6's first three mutants target this). Slice 2's caller migration touches
 about 44 files (more if #85 adds callers). Equilibrium's variants (GE5) keep a second set of row expressions, so the

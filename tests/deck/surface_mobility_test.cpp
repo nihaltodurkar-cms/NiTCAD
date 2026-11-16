@@ -18,8 +18,8 @@
 #include <utility>
 #include <vector>
 
-#include "NiTCAD/assemble/drift_diffusion.hpp"
 #include "NiTCAD/assemble/scaling.hpp"
+#include "NiTCAD/assemble/system.hpp"
 #include "NiTCAD/base/constants.hpp"
 #include "NiTCAD/deck/build.hpp"
 #include "NiTCAD/deck/run.hpp"
@@ -380,9 +380,9 @@ TEST_CASE("surface mobility: the 2D MOSFET example, reflected, electrothermal, s
         const auto scaling = assemble::make_scaling(p.device);
         REQUIRE(scaling.has_value());
         auto models = p.options.models;
-        const auto base = assemble::DriftDiffusion::create(p.device, *scaling, models);
+        const auto base = assemble::System::create(p.device, *scaling, models);
         models.surface_mobility = lombardi;
-        const auto with = assemble::DriftDiffusion::create(p.device, *scaling, models);
+        const auto with = assemble::System::create(p.device, *scaling, models);
         REQUIRE(base.has_value());
         REQUIRE(with.has_value());
         std::printf("LS11 2D MOSFET example Jacobian nonzeros: %zu off, %zu with Lombardi\n",

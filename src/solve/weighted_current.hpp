@@ -30,8 +30,9 @@
 #include <span>
 #include <vector>
 
-#include "NiTCAD/assemble/drift_diffusion.hpp"
+#include "NiTCAD/assemble/currents.hpp"
 #include "NiTCAD/assemble/scaling.hpp"
+#include "NiTCAD/assemble/system.hpp"
 #include "NiTCAD/base/error.hpp"
 #include "NiTCAD/device/device.hpp"
 #include "NiTCAD/linalg/linear_solver.hpp"
@@ -71,17 +72,17 @@ public:
     // The weights of each contact at state x (the inner vector per node; empty for a contact that
     // is not ohmic). Errors: those of the linear solve (singular_system, inaccurate_solve).
     [[nodiscard]] std::expected<std::vector<std::vector<double>>, base::Error> weights(
-        const assemble::DriftDiffusion& system, std::span<const double> x);
+        const assemble::System& system, std::span<const double> x);
 
     // Scaled weighted currents of x with these weights (0 for a contact without weights).
-    [[nodiscard]] std::vector<double> currents(const assemble::DriftDiffusion& system,
+    [[nodiscard]] std::vector<double> currents(const assemble::System& system,
                                                std::span<const double> x,
                                                const std::vector<std::vector<double>>& w) const;
 
     // point.weighted_current and point.weighted_current_resolution of the converged state x,
     // in the public units; point.terminal_current_resolution must be filled. Errors: those of
     // weights().
-    [[nodiscard]] std::expected<void, base::Error> fill(const assemble::DriftDiffusion& system,
+    [[nodiscard]] std::expected<void, base::Error> fill(const assemble::System& system,
                                                         std::span<const double> x,
                                                         double max_update,
                                                         const assemble::Scaling& scaling,

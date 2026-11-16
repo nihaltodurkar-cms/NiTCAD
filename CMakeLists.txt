@@ -429,7 +429,8 @@ add_library(nitcad_assemble STATIC
   src/assemble/fields.cpp
   src/assemble/terms.cpp
   src/assemble/thermal_terms.cpp
-  src/assemble/composition.cpp)
+  src/assemble/composition.cpp
+  src/assemble/topics.cpp)
 add_library(NiTCAD::assemble ALIAS nitcad_assemble)
 target_include_directories(nitcad_assemble PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
 target_link_libraries(nitcad_assemble PUBLIC
@@ -459,6 +460,8 @@ add_executable(nitcad_assemble_test
 target_link_libraries(nitcad_assemble_test PRIVATE NiTCAD::assemble Catch2::Catch2WithMain)
 # The terms (Unit 40) are internal to the assemble layer; their own test reads them.
 target_include_directories(nitcad_assemble_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/assemble")
+# GG7 (Unit 57) reads the public header of the system.
+target_compile_definitions(nitcad_assemble_test PRIVATE NITCAD_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
 nitcad_add_file_tests(assemble nitcad_assemble_test)
 
 # --- results layer (plain result data; header-only) --------------------------------

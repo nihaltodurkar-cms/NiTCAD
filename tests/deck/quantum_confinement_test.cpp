@@ -15,8 +15,8 @@
 #include <utility>
 #include <vector>
 
-#include "NiTCAD/assemble/drift_diffusion.hpp"
 #include "NiTCAD/assemble/quantum_confinement.hpp"
+#include "NiTCAD/assemble/system.hpp"
 #include "NiTCAD/deck/build.hpp"
 #include "NiTCAD/deck/run.hpp"
 #include "NiTCAD/solve/bias.hpp"

@@ -26,6 +26,7 @@
 #pragma once
 
 #include <atomic>
+#include <complex>
 #include <cstdint>
 #include <memory>
 #include <span>
@@ -33,7 +34,7 @@
 #include <thread>
 #include <vector>
 
-#include "NiTCAD/assemble/drift_diffusion.hpp"
+#include "NiTCAD/assemble/system.hpp"
 #include "system_data.hpp"
 #include "NiTCAD/assemble/fields.hpp"
 #include "NiTCAD/assemble/models.hpp"
@@ -76,6 +77,13 @@ struct SystemData::Terms {
         GateTunnelJob* tunnels = nullptr;
         [[nodiscard]] bool jacobian() const noexcept { return !values.empty(); }
     };
+    // A frequency-domain evaluation (small_signal_matrix, Unit 57 GE3): s in units of
+    // 1 / time_scale(), and the complex matrix values the term adds to.
+    struct FrequencyEvaluation {
+        std::span<const double> x;
+        std::complex<double> s;
+        std::span<std::complex<double>> values;
+    };
 
     // The composition tables (composition.hpp): every term a system can have, in assembly order,
     // with its equation sets and activation. Activation follows the models and the device data set
@@ -90,14 +98,15 @@ struct SystemData::Terms {
     static void pattern(const SystemData& s, const SystemState& st,
                         std::vector<linalg::Triplet>& triplets);
     // A system's terms and its composition (for its tests).
-    [[nodiscard]] static std::span<const std::shared_ptr<const Term>> list(const DriftDiffusion& s);
-    [[nodiscard]] static const Composition& composition(const DriftDiffusion& s) noexcept {
+    [[nodiscard]] static std::span<const std::shared_ptr<const Term>> list(const System& s);
+    [[nodiscard]] static std::span<const std::shared_ptr<const Term>> list(const SystemData& s);
+    [[nodiscard]] static const Composition& composition(const System& s) noexcept {
         return *of(s).composition_;
     }
     // One term alone at x: F and the values set to 0, then the term's add (for its tests: each
     // term's partials against finite differences of its own residual). Preconditions
     // (NITCAD_EXPECTS): as evaluate's, step's spans of evaluate's sizes when not nullptr.
-    static void evaluate(const DriftDiffusion& s, const Term& t, std::span<const double> x,
+    static void evaluate(const System& s, const Term& t, std::span<const double> x,
                          const TimeStep* step, std::span<double> f,
                          linalg::SparseMatrix& jacobian);
 
@@ -160,6 +169,7 @@ struct SystemData::Terms {
     class Storage;
     class Manufactured;
     class Interfaces;
+    class InterfacesFrequency;
     class PoissonFlux;
     class CarrierFluxes;
     class ImpactGeneration;
@@ -231,6 +241,11 @@ public:
                          std::vector<linalg::Triplet>& triplets) const;
     virtual void add(const SystemData& s, const SystemState& st,
                      const Terms::Evaluation& e) const = 0;
+    // A term of the frequency domain alone (Composition::frequency_terms) adds to the complex
+    // small-signal matrix, after the storage, in place of the steady terms of its domain; its
+    // add (the steady rows) is never called. Nothing by default.
+    virtual void add_frequency(const SystemData& s, const SystemState& st,
+                               const Terms::FrequencyEvaluation& e) const;
 };
 
 }  // namespace NiTCAD::assemble

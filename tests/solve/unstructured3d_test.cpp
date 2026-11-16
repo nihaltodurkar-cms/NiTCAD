@@ -372,7 +372,7 @@ TEST_CASE("unstructured 3D: assembly cost on a generated mesh", "[.assembly_benc
     const auto p = solve::solve_bias(d, bias);
     REQUIRE(p.has_value());
     const auto scaling = *assemble::make_scaling(d);
-    auto system = *assemble::DriftDiffusion::create(d, scaling);
+    auto system = *assemble::System::create(d, scaling);
     REQUIRE(system.set_bias(bias).has_value());
     time_assembly("3D generated diode", system, scaled_state(system, p->fields, scaling));
 }

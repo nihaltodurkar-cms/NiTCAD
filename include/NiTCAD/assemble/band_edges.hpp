@@ -7,6 +7,7 @@
 // and so these, do not.
 #pragma once
 
+#include <span>
 #include <vector>
 
 namespace NiTCAD::assemble {
@@ -17,5 +18,11 @@ struct BandEdges {
     std::vector<double> electron_fermi;
     std::vector<double> hole_fermi;
 };
+
+class System;
+
+// The band diagram of a system at state x; NaN on insulator nodes. Precondition (NITCAD_EXPECTS):
+// x has unknowns() entries and positive densities off the insulators.
+[[nodiscard]] BandEdges band_edges(const System& system, std::span<const double> x);
 
 }  // namespace NiTCAD::assemble

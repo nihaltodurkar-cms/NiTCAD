@@ -14,8 +14,9 @@
 #include <numbers>
 #include <vector>
 
-#include "NiTCAD/assemble/drift_diffusion.hpp"
+#include "NiTCAD/assemble/currents.hpp"
 #include "NiTCAD/assemble/scaling.hpp"
+#include "NiTCAD/assemble/system.hpp"
 #include "NiTCAD/base/constants.hpp"
 #include "NiTCAD/device/device.hpp"
 #include "NiTCAD/mesh/tensor_grid.hpp"
@@ -24,7 +25,7 @@
 #include "NiTCAD/physics/semiconductor.hpp"
 
 using namespace NiTCAD;
-using assemble::DriftDiffusion;
+using assemble::System;
 
 namespace {
 
@@ -82,7 +83,7 @@ std::vector<std::vector<double>> dense(const linalg::SparseMatrix& a) {
 // A state with a field E0 [V/cm] at angle theta to x (in the x-y plane), n and p uniform, with
 // relative noise on every unknown (0 for none). The ohmic nodes are not stamped: their rows are
 // Dirichlet rows, and stamped values would put a jump of the potential beside them.
-std::vector<double> sloped(const DriftDiffusion& dd, const device::Device& d,
+std::vector<double> sloped(const System& dd, const device::Device& d,
                            const assemble::Scaling& s, double E0, double theta, double n_cm3,
                            double p_cm3, double noise, std::uint64_t seed) {
     std::vector<double> x(dd.unknowns());
@@ -105,7 +106,7 @@ std::vector<double> sloped(const DriftDiffusion& dd, const device::Device& d,
 // no single step resolves every column. Measured with the house step 1e-7 alone: 2D Boltzmann
 // 3e-6 (3.4e-8 at 1e-5 and 1e-6 alike: rounding); 3D Fermi-Dirac 6.5e-5 (6e-7 at 1e-5; the same
 // with the model off); with field mobility 4e-6 at 1e-5 (4e-8 at 1e-6: truncation).
-double fd_jacobian_error(const DriftDiffusion& dd, std::vector<double> x) {
+double fd_jacobian_error(const System& dd, std::vector<double> x) {
     const std::size_t n = dd.unknowns();
     std::vector<double> f(n), fp(n), fm(n);
     auto jacobian = dd.make_jacobian();
@@ -158,7 +159,7 @@ TEST_CASE("impact ionization assemble: the finite-difference Jacobian gate") {
             for (const bool field : {false, true}) {
                 const assemble::PhysicsModels models{
                     .field_mobility = field, .fermi_dirac = fd, .impact_ionization = true};
-                const auto dd = *DriftDiffusion::create(d, s, models);
+                const auto dd = *System::create(d, s, models);
                 for (const double theta : {0.0, std::numbers::pi / 6.0}) {
                     if (D == 1 && theta != 0.0) continue;
                     const auto x = sloped(dd, d, s, 3e5, theta, 1e16, 1e15, 0.05, 7);
@@ -176,8 +177,8 @@ TEST_CASE("impact ionization assemble: the generation part of the Jacobian on it
     for (const int D : {1, 2}) {
         const device::Device d = block(D, 11, 1e16, 0.0);
         const auto s = *assemble::make_scaling(d);
-        const auto on = *DriftDiffusion::create(d, s, {.impact_ionization = true});
-        const auto off = *DriftDiffusion::create(d, s);
+        const auto on = *System::create(d, s, {.impact_ionization = true});
+        const auto off = *System::create(d, s);
         auto x = sloped(on, d, s, 3e5, D == 2 ? 0.4 : 0.0, 1e16, 1e15, 0.05, 11);
         const std::size_t n = on.unknowns();
         auto ja = on.make_jacobian(), jb = off.make_jacobian();
@@ -218,8 +219,8 @@ TEST_CASE("impact ionization assemble: a uniform field ionizes alike at any angl
     // the contacts. A per-edge model would give alpha_n(|E| cos) at 45 degrees, 3.6 times less.
     const device::Device d = block(2, 11, 1e16, 0.0);
     const auto s = *assemble::make_scaling(d);
-    const auto on = *DriftDiffusion::create(d, s, {.impact_ionization = true});
-    const auto off = *DriftDiffusion::create(d, s);
+    const auto on = *System::create(d, s, {.impact_ionization = true});
+    const auto off = *System::create(d, s);
     const physics::Semiconductor si = physics::silicon();
     const double mu = physics::caughey_thomas_mobility(si, physics::Carrier::electron, 1e16, 300.0);
     const double E0 = 3e5, n0 = 1e16;
@@ -257,8 +258,8 @@ TEST_CASE("impact ionization assemble: a field across the current does not ioniz
     // equilibrium: the current is perpendicular to the field and the generation is exactly zero.
     const device::Device d = block(2, 11, 1e16, 0.0, physics::silicon_parameters, 300.0, 1e-5);
     const auto s = *assemble::make_scaling(d);
-    const auto on = *DriftDiffusion::create(d, s, {.impact_ionization = true});
-    const auto off = *DriftDiffusion::create(d, s);
+    const auto on = *System::create(d, s, {.impact_ionization = true});
+    const auto off = *System::create(d, s);
     std::vector<double> x(on.unknowns());
     for (std::size_t i = 0; i < on.node_count(); ++i) {
         const auto& p = d.mesh().points()[i];
@@ -274,12 +275,12 @@ TEST_CASE("impact ionization assemble: a field across the current does not ioniz
     for (std::size_t i = 0; i < on.node_count(); ++i) {
         largest = std::max(largest, std::abs(fa[3 * i + 1] - fb[3 * i + 1]));
     }
-    for (const auto& [jn, jp] : on.edge_currents(x)) current = std::max(current, std::abs(jn));
+    for (const auto& [jn, jp] : edge_currents(on, x)) current = std::max(current, std::abs(jn));
     // What the same current would generate along the field: V alpha_n(3e5) |j| / (q R0) in the
     // rows' units, |j| the largest y current density (J0 times the scaled flux over the scaled
     // coupling area).
     double j_max = 0.0;
-    const auto currents = on.edge_currents(x);
+    const auto currents = edge_currents(on, x);
     for (std::size_t k = 0; k < currents.size(); ++k) {
         const double area = d.mesh().edges()[k].coupling_area / s.L_D;
         j_max = std::max(j_max, s.J0 * std::abs(currents[k].first) / area);
@@ -318,8 +319,8 @@ TEST_CASE("impact ionization assemble: no current, no generation, and finite par
          .contacts = {{"p", device::ContactKind::ohmic, std::move(left)},
                       {"n", device::ContactKind::ohmic, std::move(right)}}});
     const auto s = *assemble::make_scaling(d);
-    const auto on = *DriftDiffusion::create(d, s, {.impact_ionization = true});
-    const auto off = *DriftDiffusion::create(d, s);
+    const auto on = *System::create(d, s, {.impact_ionization = true});
+    const auto off = *System::create(d, s);
     // The equilibrium carriers of a smooth potential through the junction (tanh profile).
     std::vector<double> psi(n);
     for (std::size_t i = 0; i < n; ++i) {
@@ -341,7 +342,7 @@ TEST_CASE("impact ionization assemble: no current, no generation, and finite par
     // the generation is bounded by alpha at the peak field times them, and is negligible against
     // what a majority drift current q mu N E would generate there (measured 6e-10 of it).
     double j_max = 0.0;
-    const auto currents = on.edge_currents(x);
+    const auto currents = edge_currents(on, x);
     for (const auto& [jn, jp] : currents) {
         j_max = std::max(j_max, s.J0 * (std::abs(jn) + std::abs(jp)));  // 1D: area 1
     }
@@ -365,8 +366,8 @@ TEST_CASE("impact ionization assemble: the temperature factor") {
     const physics::Semiconductor si = physics::silicon();
     const device::Device d = block(1, 21, 1e16, 0.0, physics::silicon_parameters, 400.0);
     const auto s = *assemble::make_scaling(d);
-    const auto on = *DriftDiffusion::create(d, s, {.impact_ionization = true});
-    const auto off = *DriftDiffusion::create(d, s);
+    const auto on = *System::create(d, s, {.impact_ionization = true});
+    const auto off = *System::create(d, s);
     const auto x = sloped(on, d, s, 3e5, 0.0, 1e16, 1.0, 0.0, 0);
     std::vector<double> fa(on.unknowns()), fb(on.unknowns());
     on.residual(x, fa);
@@ -387,7 +388,7 @@ TEST_CASE("impact ionization assemble: the temperature factor") {
 TEST_CASE("impact ionization assemble: off, or without coefficients, nothing changes") {
     const device::Device d = block(2, 9, 1e16, 0.0);
     const auto s = *assemble::make_scaling(d);
-    const auto off = *DriftDiffusion::create(d, s);
+    const auto off = *System::create(d, s);
     const auto x = sloped(off, d, s, 3e5, 0.3, 1e16, 1e15, 0.05, 3);
     // The default is off.
     REQUIRE_FALSE(assemble::PhysicsModels{}.impact_ionization);
@@ -395,8 +396,8 @@ TEST_CASE("impact ionization assemble: off, or without coefficients, nothing cha
     physics::SemiconductorParameters none = physics::silicon_parameters;
     none.impact_ionization = {};
     const device::Device dn = block(2, 9, 1e16, 0.0, none);
-    const auto a = *DriftDiffusion::create(dn, s);
-    const auto b = *DriftDiffusion::create(dn, s, {.impact_ionization = true});
+    const auto a = *System::create(dn, s);
+    const auto b = *System::create(dn, s, {.impact_ionization = true});
     auto ja = a.make_jacobian(), jb = b.make_jacobian();
     std::vector<double> fa(a.unknowns()), fb(a.unknowns());
     a.evaluate(x, fa, ja);
@@ -418,7 +419,7 @@ TEST_CASE("impact ionization assemble: the current resolution's partials") {
         const device::Device d = block(D, 11, 1e16, 0.0);
         const auto s = *assemble::make_scaling(d);
         for (const double rho : {0.5, 0.05}) {
-            const auto dd = *DriftDiffusion::create(
+            const auto dd = *System::create(
                 d, s, {.impact_ionization = true, .impact_current_resolution = rho});
             const auto x = sloped(dd, d, s, 3e5, D == 2 ? 0.4 : 0.0, 1e16, 1e15, 0.05, 29);
             const double error = fd_jacobian_error(dd, x);
@@ -429,10 +430,10 @@ TEST_CASE("impact ionization assemble: the current resolution's partials") {
     // The resolution changes the generation: it is smaller with a coarser one.
     const device::Device d = block(1, 11, 1e16, 0.0);
     const auto s = *assemble::make_scaling(d);
-    const auto fine = *DriftDiffusion::create(d, s, {.impact_ionization = true});
-    const auto coarse = *DriftDiffusion::create(
+    const auto fine = *System::create(d, s, {.impact_ionization = true});
+    const auto coarse = *System::create(
         d, s, {.impact_ionization = true, .impact_current_resolution = 0.5});
-    const auto off = *DriftDiffusion::create(d, s);
+    const auto off = *System::create(d, s);
     const auto x = sloped(fine, d, s, 3e5, 0.0, 1e16, 1e15, 0.05, 29);
     std::vector<double> ff(fine.unknowns()), fc(fine.unknowns()), fo(fine.unknowns());
     fine.residual(x, ff);
@@ -466,9 +467,9 @@ TEST_CASE("impact ionization assemble: the current resolution's partials") {
         }
     }
     // Invalid with the model on; not read with it off.
-    REQUIRE(DriftDiffusion::create(d, s, {.impact_ionization = true,
+    REQUIRE(System::create(d, s, {.impact_ionization = true,
                                           .impact_current_resolution = -1.0})
                 .error()
                 .code == base::ErrorCode::invalid_input);
-    REQUIRE(DriftDiffusion::create(d, s, {.impact_current_resolution = -1.0}).has_value());
+    REQUIRE(System::create(d, s, {.impact_current_resolution = -1.0}).has_value());
 }

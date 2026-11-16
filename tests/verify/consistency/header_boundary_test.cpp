@@ -8,7 +8,7 @@ namespace NiTCAD::physics {
 inline int Semiconductor = 0;
 }
 namespace NiTCAD::assemble {
-inline int DriftDiffusion = 0;
+inline int System = 0;
 }
 namespace NiTCAD::solve {
 inline int BiasOptions = 0;

@@ -1,10 +1,10 @@
 #pragma once
 
-// The model data of a DriftDiffusion and its state (Unit 57, DECISIONS.md GE2). Internal to the
+// The model data of a System and its state (Unit 57, DECISIONS.md GE2). Internal to the
 // assemble library.
 //
 // SystemData is fixed at creation: the per-node, per-edge and per-contact data, the scaled tables,
-// the composition and the Jacobian positions of the terms' entries. Copies of a DriftDiffusion
+// the composition and the Jacobian positions of the terms' entries. Copies of a System
 // share it (shared_ptr<const SystemData>). SystemState is what changes after creation: the contact
 // biases and the values they fix, the gate biases, the thermal rises, held carrier temperatures,
 // the minority floor, and the tunnel paths with their layouts, the base triplets and the pattern,
@@ -18,20 +18,42 @@
 #include <complex>
 #include <cstddef>
 #include <cstdint>
+#include <expected>
 #include <memory>
 #include <optional>
 #include <span>
 #include <utility>
 #include <vector>
 
-#include "NiTCAD/assemble/drift_diffusion.hpp"
+#include "NiTCAD/assemble/band_edges.hpp"
+#include "NiTCAD/assemble/charges.hpp"
+#include "NiTCAD/assemble/currents.hpp"
+#include "NiTCAD/assemble/energy.hpp"
+#include "NiTCAD/assemble/gate.hpp"
+#include "NiTCAD/assemble/interface_edges.hpp"
+#include "NiTCAD/assemble/rates.hpp"
+#include "NiTCAD/assemble/sg_flux.hpp"
+#include "NiTCAD/assemble/system.hpp"
+#include "NiTCAD/assemble/thermal.hpp"
+#include "NiTCAD/assemble/tunnelling.hpp"
+#include "NiTCAD/physics/impact_ionization.hpp"
+#include "NiTCAD/physics/ionization.hpp"
+#include "NiTCAD/physics/semiconductor.hpp"
+#include "NiTCAD/physics/statistics.hpp"
+#include "NiTCAD/physics/surface_mobility.hpp"
 
 namespace NiTCAD::assemble {
 
 struct SystemState;
 
+// The passkey of System's internal accessors (Unit 57 GE3): only SystemData can make one.
+class SystemKey {
+    SystemKey() = default;
+    friend struct SystemData;
+};
+
 struct SystemData {
-    using TimeStep = DriftDiffusion::TimeStep;
+    using TimeStep = System::TimeStep;
 
     // The equation terms of the rows and their composition from the device and the models
     // (Unit 40, DECISIONS.md FE2, FE4; src/assemble/terms.hpp, composition.hpp).
@@ -39,13 +61,72 @@ struct SystemData {
     struct Terms;
     class Composition;
 
-    static constexpr double impact_current_floor = DriftDiffusion::impact_current_floor;
+    // The current density below which impact ionization fades out (system.hpp's header
+    // comment). [A/cm^2]
+    static constexpr double impact_current_floor = 1e-12;
+    // The share of the largest rate below which a tunnel path does not matter (paths_agree), and
+    // below which trace_paths drops it.
+    static constexpr double matters = 1e-10;
 
-    // A system's data and state (DriftDiffusion befriends SystemData for these two alone).
-    [[nodiscard]] static const SystemData& of(const DriftDiffusion& s) noexcept { return *s.data_; }
-    [[nodiscard]] static const SystemState& state_of(const DriftDiffusion& s) noexcept {
-        return *s.state_;
+    // A system's data and state, through System's passkey accessors.
+    [[nodiscard]] static const SystemData& of(const System& s) noexcept {
+        return s.data(SystemKey{});
     }
+    [[nodiscard]] static const SystemState& state_of(const System& s) noexcept {
+        return s.state(SystemKey{});
+    }
+    [[nodiscard]] static SystemState& state_of(System& s) noexcept { return s.state(SystemKey{}); }
+    static void replace(System& s, std::shared_ptr<const SystemData> data) noexcept {
+        s.replace_data(SystemKey{}, std::move(data));
+    }
+
+    // The model-specific queries of the topic headers (currents.hpp, thermal.hpp,
+    // tunnelling.hpp, energy.hpp, charges.hpp, rates.hpp, band_edges.hpp), over the data and a
+    // state; each free function of a topic header calls its own.
+    [[nodiscard]] std::vector<std::pair<double, double>> edge_currents(
+        const SystemState& st, std::span<const double> x) const;
+    [[nodiscard]] std::vector<double> terminal_currents(const SystemState& st,
+                                                        std::span<const double> x) const;
+    [[nodiscard]] std::vector<double> edge_flux_terms(const SystemState& st,
+                                                      std::span<const double> x) const;
+    [[nodiscard]] std::vector<double> conduction_currents(const SystemState& st,
+                                                          std::span<const double> x,
+                                                          const TimeStep& step) const;
+    [[nodiscard]] std::vector<CurrentRow> small_signal_currents(const SystemState& st,
+                                                                std::span<const double> x,
+                                                                std::complex<double> s) const;
+    [[nodiscard]] std::vector<double> trap_occupancies(const SystemState& st,
+                                                       std::span<const double> x,
+                                                       const TimeStep* step) const;
+    [[nodiscard]] std::vector<double> contact_charges(const SystemState& st,
+                                                      std::span<const double> x,
+                                                      const TimeStep* step) const;
+    [[nodiscard]] std::vector<double> gate_charges(const SystemState& st,
+                                                   std::span<const double> x,
+                                                   const TimeStep* step) const;
+    [[nodiscard]] std::vector<double> interface_trap_charges(const SystemState& st,
+                                                             std::span<const double> x,
+                                                             const TimeStep* step) const;
+    [[nodiscard]] BandEdges band_edges(const SystemState& st, std::span<const double> x) const;
+    [[nodiscard]] std::vector<MechanismRate> rates(const SystemState& st,
+                                                   std::span<const double> x) const;
+    [[nodiscard]] TunnelPaths trace_paths(const SystemState& st, std::span<const double> x) const;
+    [[nodiscard]] bool paths_agree(const SystemState& st, const TunnelPaths& a,
+                                   const TunnelPaths& b, std::span<const double> x) const;
+    [[nodiscard]] std::vector<TunnelPathState> path_states(const SystemState& st,
+                                                           std::span<const double> x) const;
+    [[nodiscard]] GateTunnellingCurrents gate_tunnelling_currents(
+        const SystemState& st, std::span<const double> x) const;
+    [[nodiscard]] bool reaches_heat_sink(std::size_t node) const;
+    [[nodiscard]] std::expected<void, base::Error> set_thermal_bias(
+        SystemState& st, std::span<const double> temperature_K) const;
+    [[nodiscard]] std::vector<double> thermal_contact_heat(const SystemState& st,
+                                                           std::span<const double> x,
+                                                           const TimeStep* step) const;
+    [[nodiscard]] double electrical_power(const SystemState& st, std::span<const double> x) const;
+    [[nodiscard]] std::vector<std::pair<double, double>> edge_joule_heat(
+        const SystemState& st, std::span<const double> x) const;
+    void hold_temperatures(SystemState& st, std::span<const double> x) const;
 
     [[nodiscard]] std::size_t node_count() const noexcept { return volume_.size(); }
     [[nodiscard]] std::size_t unknowns() const noexcept { return m_ * node_count(); }

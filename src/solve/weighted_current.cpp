@@ -56,10 +56,10 @@ std::expected<WeightedCurrents, base::Error> WeightedCurrents::create(
 }
 
 std::expected<std::vector<std::vector<double>>, base::Error> WeightedCurrents::weights(
-    const assemble::DriftDiffusion& system, std::span<const double> x) {
+    const assemble::System& system, std::span<const double> x) {
     const auto contacts = device_->contacts();
     const auto edges = device_->mesh().edges();
-    const std::vector<double> t = system.edge_flux_terms(x);
+    const std::vector<double> t = edge_flux_terms(system, x);
     double largest = 0.0;
     for (const double v : t) largest = std::max(largest, v);
     const double floor = 1e-30 * largest;
@@ -112,11 +112,11 @@ std::expected<std::vector<std::vector<double>>, base::Error> WeightedCurrents::w
     return w;
 }
 
-std::vector<double> WeightedCurrents::currents(const assemble::DriftDiffusion& system,
+std::vector<double> WeightedCurrents::currents(const assemble::System& system,
                                                std::span<const double> x,
                                                const std::vector<std::vector<double>>& w) const {
     const auto edges = device_->mesh().edges();
-    const auto j = system.edge_currents(x);
+    const auto j = edge_currents(system, x);
     std::vector<double> current(w.size(), 0.0);
     for (std::size_t c = 0; c < w.size(); ++c) {
         if (w[c].empty()) continue;
@@ -129,7 +129,7 @@ std::vector<double> WeightedCurrents::currents(const assemble::DriftDiffusion& s
     return current;
 }
 
-std::expected<void, base::Error> WeightedCurrents::fill(const assemble::DriftDiffusion& system,
+std::expected<void, base::Error> WeightedCurrents::fill(const assemble::System& system,
                                                         std::span<const double> x,
                                                         double max_update,
                                                         const assemble::Scaling& scaling,
@@ -140,7 +140,7 @@ std::expected<void, base::Error> WeightedCurrents::fill(const assemble::DriftDif
 
     // The rounding of the weighted edge currents.
     const auto edges = device_->mesh().edges();
-    const std::vector<double> t = system.edge_flux_terms(x);
+    const std::vector<double> t = edge_flux_terms(system, x);
     const double eps8 = 8.0 * std::numeric_limits<double>::epsilon();
     std::vector<double> rounding(w->size(), 0.0);
     for (std::size_t c = 0; c < w->size(); ++c) {

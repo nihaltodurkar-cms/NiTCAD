@@ -11,9 +11,10 @@
 #include <vector>
 
 #include "NiTCAD/assemble/bernoulli.hpp"
-#include "NiTCAD/assemble/drift_diffusion.hpp"
+#include "NiTCAD/assemble/currents.hpp"
 #include "NiTCAD/assemble/equilibrium_poisson.hpp"
 #include "NiTCAD/assemble/scaling.hpp"
+#include "NiTCAD/assemble/system.hpp"
 #include "NiTCAD/device/device.hpp"
 #include "NiTCAD/mesh/tensor_grid.hpp"
 #include "NiTCAD/physics/bandgap_narrowing.hpp"
@@ -23,7 +24,7 @@
 #include "NiTCAD/physics/semiconductor.hpp"
 
 using namespace NiTCAD;
-using assemble::DriftDiffusion;
+using assemble::System;
 using base::ErrorCode;
 
 namespace {
@@ -94,10 +95,10 @@ std::vector<std::vector<double>> dense(const linalg::SparseMatrix& a) {
 
 // A biased system at the legacy probe's state: Boltzmann carriers at the charge-neutral potential
 // with the anode at +0.3 V, then psi + 0.02 noise and n, p times (1 + 0.01 noise).
-std::pair<DriftDiffusion, std::vector<double>> probe_state(
+std::pair<System, std::vector<double>> probe_state(
     const device::Device& d, std::uint64_t seed, const assemble::PhysicsModels& models = {}) {
     const auto scaling = *assemble::make_scaling(d);
-    auto system = *DriftDiffusion::create(d, scaling, models);
+    auto system = *System::create(d, scaling, models);
     const std::vector<double> bias{0.3, 0.0};
     REQUIRE(system.set_bias(bias).has_value());
     const auto poisson = *assemble::EquilibriumPoisson::create(d, scaling);
@@ -113,7 +114,7 @@ std::pair<DriftDiffusion, std::vector<double>> probe_state(
 
 // Legacy _jacobian_probe: central differences, step 1e-7 max(|u|, 1), every column; per column
 // max |fd - J| over the column's largest |J| (+1e-30).
-double fd_jacobian_error(const DriftDiffusion& system, std::vector<double> x) {
+double fd_jacobian_error(const System& system, std::vector<double> x) {
     const std::size_t n = system.unknowns();
     std::vector<double> f(n), fp(n), fm(n);
     auto jacobian = system.make_jacobian();
@@ -166,7 +167,7 @@ TEST_CASE("drift-diffusion: a y-uniform 2D residual is the 1D residual times the
     const auto d2 = diode(*mesh::make_tensor_grid(x, y));
     const auto [s1, x1] = probe_state(d1, 7);
     const auto scaling = *assemble::make_scaling(d2);
-    auto s2 = *DriftDiffusion::create(d2, scaling);
+    auto s2 = *System::create(d2, scaling);
     const std::vector<double> bias{0.3, 0.0};
     REQUIRE(s2.set_bias(bias).has_value());
     const std::size_t nx = x.size();
@@ -192,7 +193,7 @@ TEST_CASE("drift-diffusion: a y-uniform 2D residual is the 1D residual times the
 
 TEST_CASE("drift-diffusion: update hooks measure the full correction and keep densities positive") {
     const auto d = diode(*mesh::make_tensor_grid(graded_axis(5)));
-    auto system = *DriftDiffusion::create(d, *assemble::make_scaling(d));
+    auto system = *System::create(d, *assemble::make_scaling(d));
     std::vector<double> x(system.unknowns(), 1.0);
     std::vector<double> dx(system.unknowns(), 0.0);
     dx[0] = 7.0;   // psi: clipped to 5
@@ -220,17 +221,17 @@ TEST_CASE("drift-diffusion: update hooks measure the full correction and keep de
 
 TEST_CASE("drift-diffusion: with the minority floor on a minority density is measured against eps of the node's majority (Unit 50 RC4)") {
     const auto d = diode(*mesh::make_tensor_grid(graded_axis(5)));
-    auto system = *DriftDiffusion::create(d, *assemble::make_scaling(d));
+    auto system = *System::create(d, *assemble::make_scaling(d));
     constexpr double eps = std::numeric_limits<double>::epsilon();
     std::vector<double> x(system.unknowns(), 1.0);
     std::vector<double> dx(system.unknowns(), 0.0);
     // Off by default (the owner's ruling): node 2's minority, p = 1e-19 of n = 1, is measured
     // against itself, as before Unit 50.
-    REQUIRE_FALSE(system.minority_floor());
+    REQUIRE_FALSE(minority_floor(system));
     x[8] = 1e-19;
     dx[8] = 1e-27;
     REQUIRE(system.update_size(x, dx) == 1e-27 / 1e-19);
-    system.set_minority_floor(true);
+    set_minority_floor(system, true);
     // Node 2: n = 1 (the majority), p = 1e-19 (minority, above the global floor 1e-20 of the
     // largest, below eps of the majority): measured against eps * 1.
     x[8] = 1e-19;
@@ -263,7 +264,7 @@ TEST_CASE("drift-diffusion: with the minority floor on a minority density is mea
 TEST_CASE("drift-diffusion: biases are validated and stamped on the contacts") {
     const auto d = diode(*mesh::make_tensor_grid(graded_axis(5)));
     const auto scaling = *assemble::make_scaling(d);
-    auto system = *DriftDiffusion::create(d, scaling);
+    auto system = *System::create(d, scaling);
     const std::vector<double> one{0.1};
     REQUIRE(system.set_bias(one).error().code == ErrorCode::invalid_input);
     const std::vector<double> infinite{INFINITY, 0.0};
@@ -293,8 +294,8 @@ TEST_CASE("drift-diffusion: the recombination part of the Jacobian matches finit
     // 0.1 um cells keep it small (on the 1e-8 cm junction cells of a graded mesh it reached 7e-5).
     const auto d = diode(*mesh::make_tensor_grid(uniform_axis(2e-4, 21)));
     const auto scaling = *assemble::make_scaling(d);
-    auto with = *DriftDiffusion::create(d, scaling);
-    auto without = *DriftDiffusion::create(d, scaling, {.srh = false});
+    auto with = *System::create(d, scaling);
+    auto without = *System::create(d, scaling, {.srh = false});
     std::vector<double> x(with.unknowns());
     for (std::size_t i = 0; i < with.node_count(); ++i) {
         x[3 * i] = 0.1;
@@ -351,7 +352,7 @@ TEST_CASE("drift-diffusion: the 1D residual is the legacy rows, written out") {
     const auto scaling = *assemble::make_scaling(d);
     // The legacy rows have the Caughey-Thomas hole mobility (Unit 35: no longer the default).
     auto system =
-        *DriftDiffusion::create(d, scaling, {.hole_mobility = assemble::HoleMobility::caughey_thomas});
+        *System::create(d, scaling, {.hole_mobility = assemble::HoleMobility::caughey_thomas});
     const std::vector<double> bias{0.3, 0.0};
     REQUIRE(system.set_bias(bias).has_value());
     const auto poisson = *assemble::EquilibriumPoisson::create(d, scaling);
@@ -413,8 +414,8 @@ TEST_CASE("drift-diffusion: the Auger part of the Jacobian matches finite differ
     // Auger dominates (n = p = 100 Ns).
     const auto d = diode(*mesh::make_tensor_grid(uniform_axis(2e-4, 21)));
     const auto scaling = *assemble::make_scaling(d);
-    auto with = *DriftDiffusion::create(d, scaling);
-    auto without = *DriftDiffusion::create(d, scaling, {.auger = false});
+    auto with = *System::create(d, scaling);
+    auto without = *System::create(d, scaling, {.auger = false});
     std::vector<double> x(with.unknowns());
     for (std::size_t i = 0; i < with.node_count(); ++i) {
         x[3 * i] = 0.1;
@@ -543,7 +544,7 @@ TEST_CASE("drift-diffusion: each edge's current is scaled by its Canali factor")
         d, 9, {.hole_mobility = assemble::HoleMobility::caughey_thomas, .field_mobility = true});
     const auto [without, unused] =
         probe_state(d, 9, {.hole_mobility = assemble::HoleMobility::caughey_thomas});
-    const auto a = with.edge_currents(x), b = without.edge_currents(x);
+    const auto a = edge_currents(with, x), b = edge_currents(without, x);
     const physics::Semiconductor si = physics::silicon();
     const auto edges = d.mesh().edges();
     double worst = 0.0, smallest_factor = 1.0;
@@ -653,7 +654,7 @@ TEST_CASE("drift-diffusion: Fermi-Dirac contacts, and the equilibrium state from
     const auto d = diode(*mesh::make_tensor_grid(graded_axis(15)), 1e20, 1e17);
     const auto scaling = *assemble::make_scaling(d);
     const assemble::PhysicsModels fd{.fermi_dirac = true};
-    auto system = *DriftDiffusion::create(d, scaling, fd);
+    auto system = *System::create(d, scaling, fd);
     const auto poisson = *assemble::EquilibriumPoisson::create(d, scaling, fd);
     // At zero bias the contacts are the Poisson system's, and the state from a potential has the
     // Poisson system's carriers. On a contact node the majority is |C| + minority (neutral to
@@ -702,8 +703,8 @@ TEST_CASE("drift-diffusion: the recombination part of the Jacobian under Fermi-D
          .contacts = {{"left", device::ContactKind::ohmic, std::move(left)}}});
     const auto scaling = *assemble::make_scaling(d);
     const assemble::PhysicsModels fd{.fermi_dirac = true};
-    auto with = *DriftDiffusion::create(d, scaling, fd);
-    auto without = *DriftDiffusion::create(d, scaling, {.srh = false, .auger = false,
+    auto with = *System::create(d, scaling, fd);
+    auto without = *System::create(d, scaling, {.srh = false, .auger = false,
                                                         .fermi_dirac = true});
     const auto poisson = *assemble::EquilibriumPoisson::create(d, scaling, fd);
     std::vector<double> x = with.state_from_potential(poisson.charge_neutral_potential());

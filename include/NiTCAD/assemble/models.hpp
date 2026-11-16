@@ -94,7 +94,7 @@ struct PhysicsModels {
     // Which doping-dependent electron mobility (Unit 38); with doping_mobility false, its N = 0
     // value.
     ElectronMobility electron_mobility = ElectronMobility::caughey_thomas;
-    // Lombardi's surface mobility (Unit 46; drift_diffusion.hpp); off by default.
+    // Lombardi's surface mobility (Unit 46; system.hpp); off by default.
     SurfaceMobility surface_mobility = SurfaceMobility::off;
     // MLDA quantum confinement (Unit 47; scaled_device.hpp): the density of states of each band
     // reduced near insulator interfaces; off by default.
@@ -131,10 +131,10 @@ struct PhysicsModels {
     IonizationLevels ionization_levels = IonizationLevels::fixed;
     // Impact ionization (physics/impact_ionization.hpp; drift-diffusion only, Unit 19): generation
     // (alpha_n |J_n| + alpha_p |J_p|) / q at each node with each material's coefficients, the field
-    // taken along each carrier's current (drift_diffusion.hpp). Off by default, as the legacy.
+    // taken along each carrier's current (system.hpp). Off by default, as the legacy.
     bool impact_ionization = false;
     // The resolution of a current for impact ionization, relative to the opposing flux terms it is
-    // the difference of (drift_diffusion.hpp): a current at or below it does not ionize. A
+    // the difference of (system.hpp): a current at or below it does not ionize. A
     // numerical option, not physics, off (0) by default: 1e-12 (50 times the measured rounding of
     // the spill-over layer at a junction) removes the generation of that layer's unresolved
     // currents and the corrector cycles they cause near breakdown, but stalls the trace of an
@@ -151,7 +151,7 @@ struct PhysicsModels {
     // with a direct gap and cited tunnelling masses (never silicon). Needs the device's tensor
     // cells; excludes btbt_local (each would count the same tunnelling).
     NonlocalTunnelling btbt_nonlocal = NonlocalTunnelling::off;
-    // Electrothermal coupling (Unit 23; DECISIONS.md T1-T14; drift_diffusion.hpp): the lattice
+    // Electrothermal coupling (Unit 23; DECISIONS.md T1-T14; system.hpp): the lattice
     // temperature is a fourth unknown per node, with the heat equation, the thermopower in the
     // carrier fluxes and the temperature dependence of the band, mobility and contact models; heat
     // leaves through the device's thermal contacts. Drift-diffusion only. Off by default; off,

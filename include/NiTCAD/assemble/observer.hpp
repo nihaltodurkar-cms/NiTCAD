@@ -1,5 +1,5 @@
 // A test hook for refactors of the assembler (Unit 40, DECISIONS.md FE7, FG1, FG2): when an
-// observer is set, DriftDiffusion's public evaluations hand it their inputs and outputs, each
+// observer is set, System's public evaluations hand it their inputs and outputs, each
 // under a short tag, so a test run can record their bit patterns and a later run compare them.
 // No production path sets one; unset, each evaluation pays one test of a null pointer.
 #pragma once

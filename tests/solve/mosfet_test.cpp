@@ -960,7 +960,7 @@ TEST_CASE("mosfet: assembly cost with field mobility", "[.assembly_benchmark]") 
     solve::BiasOptions o;
     o.models.field_mobility = true;
     const auto scaling = *assemble::make_scaling(d);
-    auto system = *assemble::DriftDiffusion::create(d, scaling, o.models);
+    auto system = *assemble::System::create(d, scaling, o.models);
     REQUIRE(system.set_bias(std::vector<double>{0.0, 0.1, 0.0, 1.0}).has_value());
     std::vector<double> psi(eq->fields.potential_V);
     for (double& v : psi) v /= scaling.V_T;

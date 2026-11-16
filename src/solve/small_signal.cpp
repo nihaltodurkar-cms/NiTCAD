@@ -10,8 +10,12 @@
 #include <string>
 #include <utility>
 
-#include "NiTCAD/assemble/drift_diffusion.hpp"
+#include "NiTCAD/assemble/currents.hpp"
+#include "NiTCAD/assemble/energy.hpp"
 #include "NiTCAD/assemble/scaling.hpp"
+#include "NiTCAD/assemble/system.hpp"
+#include "NiTCAD/assemble/thermal.hpp"
+#include "NiTCAD/assemble/tunnelling.hpp"
 #include "NiTCAD/linalg/linear_solver.hpp"
 #include "fields.hpp"
 #include "observe.hpp"
@@ -63,9 +67,9 @@ std::expected<results::SmallSignal, base::Error> solve_small_signal_unobserved(
     }
     auto solver = linalg::ComplexLinearSolver::create(ac);
     if (!solver) return std::unexpected(std::move(solver.error()));
-    auto system = assemble::DriftDiffusion::create(device, *scaling, steady.models);
+    auto system = assemble::System::create(device, *scaling, steady.models);
     if (!system) return std::unexpected(std::move(system.error()));
-    system->set_minority_floor(steady.minority_floor);
+    set_minority_floor(*system, steady.minority_floor);
 
     // The operating points. sweep_bias checks the points and the initial state.
     auto sweep = sweep_bias(device, points, steady, initial, control);
@@ -81,7 +85,7 @@ std::expected<results::SmallSignal, base::Error> solve_small_signal_unobserved(
     const std::size_t m = slot.block;
     const bool thermal = steady.models.electrothermal;
     const double T0 = scaling->temperature_K;
-    const bool energy = system->energy_balance();  // Unit 52: the carrier temperatures' slots
+    const bool energy = energy_balance(*system);  // Unit 52: the carrier temperatures' slots
     const std::size_t rise_n =
         system->dofs().slot(assemble::FieldId::electron_temperature).value_or(0);
     const std::size_t rise_p = system->dofs().slot(assemble::FieldId::hole_temperature).value_or(0);
@@ -109,15 +113,15 @@ std::expected<results::SmallSignal, base::Error> solve_small_signal_unobserved(
     for (std::size_t p = 0; p < sweep->points.size(); ++p) {
         results::BiasPoint& dc = sweep->points[p];
         (void)system->set_bias(dc.bias_V);  // checked by sweep_bias
-        if (thermal) (void)system->set_thermal_bias(dc.thermal_bias_K);  // likewise
+        if (thermal) (void)set_thermal_bias(*system, dc.thermal_bias_K);  // likewise
         std::vector<double> x(n);
         detail::scaled_state(*system, dc.fields, *scaling, x);
         system->stamp_contacts(x);
         if (forcing_at_state) set_forcing(x);
         // Nonlocal tunnelling: the paths at the operating point, frozen (their geometry's own
         // dependence on the state is not in the small-signal matrix; ARCHITECTURE.md 6.2).
-        if (system->tunnelling()) {
-            system->set_paths(system->trace_paths(x));
+        if (tunnelling(*system)) {
+            set_paths(*system, trace_paths(*system, x));
             a = system->make_small_signal_matrix();
         }
 
@@ -168,7 +172,7 @@ std::expected<results::SmallSignal, base::Error> solve_small_signal_unobserved(
                 }
                 resolution[j] = left;
             }
-            const auto rows = system->small_signal_currents(x, s);
+            const auto rows = small_signal_currents(*system, x, s);
             std::vector<Complex> y(contacts * contacts);
             constexpr double eps8 = 8.0 * std::numeric_limits<double>::epsilon();
             for (std::size_t j = 0; j < contacts; ++j) {

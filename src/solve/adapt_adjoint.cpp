@@ -8,8 +8,9 @@
 #include <string>
 #include <utility>
 
-#include "NiTCAD/assemble/drift_diffusion.hpp"
+#include "NiTCAD/assemble/currents.hpp"
 #include "NiTCAD/assemble/scaling.hpp"
+#include "NiTCAD/assemble/system.hpp"
 #include "NiTCAD/linalg/linear_solver.hpp"
 #include "NiTCAD/solve/adapt_transfer.hpp"
 #include "fields.hpp"
@@ -26,7 +27,7 @@ double since(clock_type::time_point t) { return std::chrono::duration<double>(cl
 // The scaled system of `device` at a bias, with a given concentration scale when given.
 struct System {
     assemble::Scaling scaling;
-    std::optional<assemble::DriftDiffusion> dd;
+    std::optional<assemble::System> dd;
 };
 
 std::expected<System, base::Error> make_system(const device::Device& device, const BiasOptions& options,
@@ -35,10 +36,10 @@ std::expected<System, base::Error> make_system(const device::Device& device, con
     auto scaling = assemble::make_scaling(device, Ns ? Ns : options.Ns_override);
     if (!scaling) return std::unexpected(scaling.error());
     s.scaling = *scaling;
-    auto dd = assemble::DriftDiffusion::create(device, s.scaling, options.models);
+    auto dd = assemble::System::create(device, s.scaling, options.models);
     if (!dd) return std::unexpected(dd.error());
     s.dd.emplace(std::move(*dd));
-    s.dd->set_minority_floor(options.minority_floor);
+    set_minority_floor(*s.dd, options.minority_floor);
     if (auto ok = s.dd->set_bias(bias_V); !ok) return std::unexpected(ok.error());
     return s;
 }
@@ -54,10 +55,10 @@ std::vector<std::int32_t> ohmic_of(const device::Device& device) {
     return o;
 }
 
-double weighted_goal(const assemble::DriftDiffusion& dd, const device::Device& device, std::span<const double> x,
+double weighted_goal(const assemble::System& dd, const device::Device& device, std::span<const double> x,
                      std::span<const double> w) {
     const auto edges = device.mesh().edges();
-    const auto j = dd.edge_currents(x);
+    const auto j = edge_currents(dd, x);
     double g = 0.0;
     for (std::size_t e = 0; e < edges.size(); ++e) {
         const double dw = w[static_cast<std::size_t>(edges[e].first)] - w[static_cast<std::size_t>(edges[e].second)];
@@ -76,7 +77,7 @@ std::optional<base::Error> check_contacts(const device::Device& device, std::spa
 }
 
 // The adjoints at state x of `dd` (its Jacobian `jac` factorized in `solver`).
-std::expected<PointAdjoint, base::Error> adjoints_at(const device::Device& device, const assemble::DriftDiffusion& dd,
+std::expected<PointAdjoint, base::Error> adjoints_at(const device::Device& device, const assemble::System& dd,
                                                      const System& sys, std::vector<double> x,
                                                      const linalg::SparseMatrix& jac, linalg::LinearSolver& solver,
                                                      const BiasOptions& options,
@@ -94,13 +95,13 @@ std::expected<PointAdjoint, base::Error> adjoints_at(const device::Device& devic
         if (!w) return std::unexpected(w.error());
         weights = std::move(*w);
     }
-    const auto rows = dd.small_signal_currents(out.state, 0.0);
+    const auto rows = small_signal_currents(dd, out.state, 0.0);
     const detail::Slots slot = detail::slots(dd.dofs());
     const std::vector<std::int32_t> ohmic = ohmic_of(device);
     const auto offsets = jac.row_offsets();
     const auto columns = jac.col_indices();
     const auto values = jac.values();
-    const std::vector<double> terminal = dd.terminal_currents(out.state);
+    const std::vector<double> terminal = terminal_currents(dd, out.state);
     for (const std::size_t c : contacts) {
         std::vector<double> h(n, 0.0);
         for (std::size_t k = 0; k < rows[c].columns.size(); ++k) h[rows[c].columns[k]] += rows[c].values[k].real();
@@ -167,7 +168,7 @@ std::expected<PointAdjoint, base::Error> point_adjoint(const device::Device& dev
     }
     auto sys = make_system(device, options, point.bias_V, std::nullopt);
     if (!sys) return std::unexpected(sys.error());
-    const assemble::DriftDiffusion& dd = *sys->dd;
+    const assemble::System& dd = *sys->dd;
     std::vector<double> x(dd.unknowns(), 0.0);
     detail::scaled_state(dd, point.fields, sys->scaling, x);
     dd.stamp_contacts(x);
@@ -189,7 +190,7 @@ std::expected<double, base::Error> goal_at(const device::Device& device, const B
                                            std::size_t contact, std::span<const double> weights) {
     auto sys = make_system(device, options, bias_V, std::nullopt);
     if (!sys) return std::unexpected(sys.error());
-    if (weights.empty()) return sys->dd->terminal_currents(x)[contact];
+    if (weights.empty()) return terminal_currents(*sys->dd, x)[contact];
     return weighted_goal(*sys->dd, device, x, weights);
 }
 
@@ -210,7 +211,7 @@ std::expected<GoalEstimate, base::Error> estimate_goals(const device::Device& co
     if (!coarse_scaling) return std::unexpected(coarse_scaling.error());
     auto fine_sys = make_system(fine, options, point.bias_V, coarse_scaling->Ns);
     if (!fine_sys) return std::unexpected(fine_sys.error());
-    const assemble::DriftDiffusion& fd = *fine_sys->dd;
+    const assemble::System& fd = *fine_sys->dd;
     auto moved = transfer_state(coarse, coarse_locator, point.fields, point.bands, fine, nullptr,
                                 TransferMode::exponential_fit);
     if (!moved) return std::unexpected(moved.error());

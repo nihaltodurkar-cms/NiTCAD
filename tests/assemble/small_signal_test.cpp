@@ -14,9 +14,11 @@
 #include <utility>
 #include <vector>
 
-#include "NiTCAD/assemble/drift_diffusion.hpp"
+#include "NiTCAD/assemble/charges.hpp"
+#include "NiTCAD/assemble/currents.hpp"
 #include "NiTCAD/assemble/equilibrium_poisson.hpp"
 #include "NiTCAD/assemble/scaling.hpp"
+#include "NiTCAD/assemble/system.hpp"
 #include "NiTCAD/device/device.hpp"
 #include "NiTCAD/mesh/tensor_grid.hpp"
 #include "NiTCAD/physics/insulator.hpp"
@@ -24,7 +26,7 @@
 #include "NiTCAD/physics/semiconductor.hpp"
 
 using namespace NiTCAD;
-using assemble::DriftDiffusion;
+using assemble::System;
 using assemble::EquilibriumPoisson;
 using Complex = std::complex<double>;
 
@@ -182,7 +184,7 @@ std::vector<std::vector<Scalar>> dense(const linalg::BasicSparseMatrix<Scalar>& 
 
 // The Unit 15b probe state: the charge-neutral guess with noise, and at the interface nodes
 // n = 2e-3 and p = 5e-4 (scaled), so the traps are out of equilibrium.
-std::vector<double> probe_state(const DriftDiffusion& system, const EquilibriumPoisson& poisson,
+std::vector<double> probe_state(const System& system, const EquilibriumPoisson& poisson,
                                 const device::Device& d, std::uint64_t seed) {
     auto x = system.state_from_potential(poisson.charge_neutral_potential());
     Noise noise{seed};
@@ -227,11 +229,11 @@ std::vector<Case> cases() {
 // The step of rate r from the steady storage and trap occupancies at x.
 struct Step {
     std::vector<double> storage, traps;
-    DriftDiffusion::TimeStep step;
+    System::TimeStep step;
 };
 
-Step steady_step(const DriftDiffusion& dd, std::span<const double> x, double r) {
-    Step s{dd.storage(x), dd.trap_occupancies(x), {}};
+Step steady_step(const System& dd, std::span<const double> x, double r) {
+    Step s{dd.storage(x), trap_occupancies(dd, x), {}};
     s.step = {r, s.storage, s.traps};
     return s;
 }
@@ -251,7 +253,7 @@ std::vector<double> column_scale(const std::vector<std::vector<Scalar>>& a) {
 TEST_CASE("small-signal assemble: at s = 0 the matrix is the steady Jacobian") {
     for (Case& k : cases()) {
         const auto scaling = *assemble::make_scaling(k.device);
-        auto dd = *DriftDiffusion::create(k.device, scaling, k.models);
+        auto dd = *System::create(k.device, scaling, k.models);
         REQUIRE(dd.set_bias(k.bias).has_value());
         const auto poisson = *EquilibriumPoisson::create(k.device, scaling, k.models);
         const auto x = probe_state(dd, poisson, k.device, 7);
@@ -279,7 +281,7 @@ TEST_CASE("small-signal assemble: at s = 0 the matrix is the steady Jacobian") {
 TEST_CASE("small-signal assemble: at a real s the matrix is a backward-Euler step's Jacobian") {
     for (Case& k : cases()) {
         const auto scaling = *assemble::make_scaling(k.device);
-        auto dd = *DriftDiffusion::create(k.device, scaling, k.models);
+        auto dd = *System::create(k.device, scaling, k.models);
         REQUIRE(dd.set_bias(k.bias).has_value());
         const auto poisson = *EquilibriumPoisson::create(k.device, scaling, k.models);
         const auto x = probe_state(dd, poisson, k.device, 11);
@@ -316,8 +318,8 @@ TEST_CASE("small-signal assemble: the trap part at a real s on its own") {
     const std::vector<double> bias{-0.4, 0.1};
     for (const bool fd : {false, true}) {
         const assemble::PhysicsModels models{.fermi_dirac = fd};
-        auto a = *DriftDiffusion::create(with, scaling, models);
-        auto b = *DriftDiffusion::create(without, scaling, models);
+        auto a = *System::create(with, scaling, models);
+        auto b = *System::create(without, scaling, models);
         REQUIRE(a.set_bias(bias).has_value());
         REQUIRE(b.set_bias(bias).has_value());
         const auto poisson = *EquilibriumPoisson::create(with, scaling, models);
@@ -356,7 +358,7 @@ TEST_CASE("small-signal assemble: the matrix and the current rows are holomorphi
     // A conjugate in place of a value would break it.
     for (Case& k : cases()) {
         const auto scaling = *assemble::make_scaling(k.device);
-        auto dd = *DriftDiffusion::create(k.device, scaling, k.models);
+        auto dd = *System::create(k.device, scaling, k.models);
         REQUIRE(dd.set_bias(k.bias).has_value());
         const auto poisson = *EquilibriumPoisson::create(k.device, scaling, k.models);
         const auto x = probe_state(dd, poisson, k.device, 13);
@@ -383,7 +385,7 @@ TEST_CASE("small-signal assemble: the matrix and the current rows are holomorphi
 
         const auto rows = [&](Complex s) {
             std::vector<Complex> v;
-            for (const auto& row : dd.small_signal_currents(x, s)) {
+            for (const auto& row : small_signal_currents(dd, x, s)) {
                 v.insert(v.end(), row.values.begin(), row.values.end());
                 v.push_back(row.bias);
             }
@@ -408,7 +410,7 @@ TEST_CASE("small-signal assemble: the matrix and the current rows are holomorphi
 TEST_CASE("small-signal assemble: the bias derivative is the residual's") {
     for (Case& k : cases()) {
         const auto scaling = *assemble::make_scaling(k.device);
-        auto dd = *DriftDiffusion::create(k.device, scaling, k.models);
+        auto dd = *System::create(k.device, scaling, k.models);
         REQUIRE(dd.set_bias(k.bias).has_value());
         const auto poisson = *EquilibriumPoisson::create(k.device, scaling, k.models);
         const auto x = probe_state(dd, poisson, k.device, 17);
@@ -442,7 +444,7 @@ TEST_CASE("small-signal assemble: the current rows are the linearized total curr
     // in each unknown and in each bias is the row. At s = 0 it is terminal_currents.
     for (Case& k : cases()) {
         const auto scaling = *assemble::make_scaling(k.device);
-        auto dd = *DriftDiffusion::create(k.device, scaling, k.models);
+        auto dd = *System::create(k.device, scaling, k.models);
         REQUIRE(dd.set_bias(k.bias).has_value());
         const auto poisson = *EquilibriumPoisson::create(k.device, scaling, k.models);
         auto x = probe_state(dd, poisson, k.device, 19);
@@ -451,13 +453,13 @@ TEST_CASE("small-signal assemble: the current rows are the linearized total curr
             const double r = dt == 0.0 ? 0.0 : dd.time_scale() / dt;
             const Step s = steady_step(dd, x, std::max(r, 1.0));
             const auto total = [&](std::span<const double> y) {
-                if (r == 0.0) return dd.terminal_currents(y);
-                std::vector<double> t = dd.conduction_currents(y, s.step);
-                const std::vector<double> q = dd.contact_charges(y, &s.step);
+                if (r == 0.0) return terminal_currents(dd, y);
+                std::vector<double> t = conduction_currents(dd, y, s.step);
+                const std::vector<double> q = contact_charges(dd, y, &s.step);
                 for (std::size_t c = 0; c < t.size(); ++c) t[c] += r * q[c];
                 return t;
             };
-            const auto rows = dd.small_signal_currents(x, r);
+            const auto rows = small_signal_currents(dd, x, r);
             REQUIRE(rows.size() == contacts);
             std::vector<std::vector<double>> analytic(contacts,
                                                       std::vector<double>(dd.unknowns(), 0.0));

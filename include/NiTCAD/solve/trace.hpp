@@ -80,7 +80,7 @@ struct TraceOptions {
 // finite or equal to the start; a step not finite and positive or min_step_V > step_V > max_step_V;
 // current_limit not finite and positive; max_points 0; density_floor negative; an initial state as
 // for sweep_bias (and its electrothermal checks for the starting point); those of make_scaling,
-// DriftDiffusion::create and LinearSolver::create. With electrothermal, an accepted point whose
+// System::create and LinearSolver::create. With electrothermal, an accepted point whose
 // temperature leaves a material's range stops the trace (non_convergence, as sweep_bias).
 [[nodiscard]] std::expected<results::Sweep, base::Error> trace_bias(
     const device::Device& device, const TraceOptions& options,

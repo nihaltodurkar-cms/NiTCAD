@@ -7,9 +7,14 @@
 #include <string>
 #include <utility>
 
+#include "NiTCAD/assemble/band_edges.hpp"
+#include "NiTCAD/assemble/charges.hpp"
 #include "NiTCAD/assemble/contact_bias.hpp"
+#include "NiTCAD/assemble/energy.hpp"
 #include "NiTCAD/assemble/equilibrium_poisson.hpp"
 #include "NiTCAD/assemble/scaling.hpp"
+#include "NiTCAD/assemble/thermal.hpp"
+#include "NiTCAD/assemble/tunnelling.hpp"
 #include "NiTCAD/solve/equilibrium.hpp"
 #include "fields.hpp"
 #include "observe.hpp"
@@ -297,17 +302,17 @@ std::expected<results::Sweep, base::Error> sweep_bias_unobserved(const device::D
         return sweep;
     }
 
-    auto system = assemble::DriftDiffusion::create(device, *scaling, options.models);
+    auto system = assemble::System::create(device, *scaling, options.models);
     if (!system) return std::unexpected(std::move(system.error()));
-    system->set_minority_floor(options.minority_floor);
-    if (thermal && !system->heat_sinks_complete()) {
+    set_minority_floor(*system, options.minority_floor);
+    if (thermal && !heat_sinks_complete(*system)) {
         return std::unexpected(invalid(
             "electrothermal: a connected part of the device has no thermal contact, so a steady "
             "state has no heat sink (DECISIONS.md T7)"));
     }
     // The same system without generation (impact ionization, tunnelling), for the retry of a
     // failed point (below).
-    std::optional<assemble::DriftDiffusion> plain;
+    std::optional<assemble::System> plain;
     std::optional<linalg::LinearSolver> plain_solver;
     if (options.models.impact_ionization || options.models.btbt_local ||
         options.models.btbt_nonlocal != assemble::NonlocalTunnelling::off) {
@@ -315,8 +320,8 @@ std::expected<results::Sweep, base::Error> sweep_bias_unobserved(const device::D
         models.impact_ionization = false;
         models.btbt_local = false;
         models.btbt_nonlocal = assemble::NonlocalTunnelling::off;
-        plain.emplace(*assemble::DriftDiffusion::create(device, *scaling, models));  // as above
-        plain->set_minority_floor(options.minority_floor);
+        plain.emplace(*assemble::System::create(device, *scaling, models));  // as above
+        set_minority_floor(*plain, options.minority_floor);
         plain_solver.emplace(*linalg::LinearSolver::create(options.linear));        // as above
     }
     results::Sweep sweep;
@@ -326,7 +331,7 @@ std::expected<results::Sweep, base::Error> sweep_bias_unobserved(const device::D
     std::vector<double> x(system->unknowns());
     if (initial != nullptr) {
         detail::scaled_state(*system, *initial, *scaling, x);
-        if (thermal) (void)system->set_thermal_bias(thermal_bias.front());  // checked
+        if (thermal) (void)set_thermal_bias(*system, thermal_bias.front());  // checked
         system->stamp_contacts(x);  // insulator densities 0
     } else {
         auto start = solve_equilibrium(
@@ -358,7 +363,7 @@ std::expected<results::Sweep, base::Error> sweep_bias_unobserved(const device::D
                    const IterationObserver& observe) -> std::expected<void, base::Error> {
                    if (auto ok = system->set_bias(bias); !ok) return ok;  // checked
                    if (thermal) {
-                       if (auto ok = system->set_thermal_bias(temperatures); !ok) return ok;
+                       if (auto ok = set_thermal_bias(*system, temperatures); !ok) return ok;
                    }
                    system->stamp_contacts(x);
                    // Energy balance (Unit 52, ED12 as ruled 2026-10-29): psi, n and p are first
@@ -367,11 +372,11 @@ std::expected<results::Sweep, base::Error> sweep_bias_unobserved(const device::D
                    // first iterate carries spurious currents whose Joule heat would otherwise
                    // throw the temperatures far off. The first stage's iterations are neither
                    // recorded nor reported.
-                   if (system->energy_balance()) {
-                       system->hold_temperatures(x);
+                   if (energy_balance(*system)) {
+                       hold_temperatures(*system, x);
                        results::ConvergenceRecord held;
                        auto first = newton_solve(*system, x, newton, *solver, held, control.stop);
-                       system->release_temperatures();
+                       release_temperatures(*system);
                        if (!first) return first;
                    }
                    const std::vector<double> stamped = x;
@@ -393,14 +398,14 @@ std::expected<results::Sweep, base::Error> sweep_bias_unobserved(const device::D
                    if (!solved && plain && solved.error().code != base::ErrorCode::cancelled) {
                        x = stamped;
                        (void)plain->set_bias(bias);  // checked
-                       if (thermal) (void)plain->set_thermal_bias(temperatures);  // likewise
+                       if (thermal) (void)set_thermal_bias(*plain, temperatures);  // likewise
                        results::ConvergenceRecord unused;
                        if (auto ok = newton_solve(*plain, x, newton, *plain_solver, unused,
                                                   control.stop);
                            !ok) {
                            return ok;
                        }
-                       if (system->tunnelling()) system->set_paths(system->trace_paths(x));
+                       if (tunnelling(*system)) set_paths(*system, trace_paths(*system, x));
                        solved = steady({});
                    }
                    return solved;

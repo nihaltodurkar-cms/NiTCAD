@@ -3,7 +3,7 @@
 //
 // At each bias point the run solves the operating point (sweep_bias), then at each frequency f the
 // complex linear system of a perturbation e^(i omega t), omega = 2 pi f:
-//     (J + i omega t0 C + T(i omega t0)) dx = -dF/dV_j        (assemble::DriftDiffusion)
+//     (J + i omega t0 C + T(i omega t0)) dx = -dF/dV_j        (assemble::System)
 // once per contact j, with one factorization per frequency. J is the steady Jacobian, C the
 // storage term's and T the interface traps' terms with their occupancy's dynamics. The
 // admittance Y_ij is the total current entering through contact i, conduction plus i omega times

@@ -1,5 +1,5 @@
 // The electrothermal rows as equation terms (Unit 40 slice 2b; terms.hpp; Unit 23,
-// drift_diffusion.hpp "Electrothermal coupling", DECISIONS.md T1-T14). Every node and edge block is
+// system.hpp "Electrothermal coupling", DECISIONS.md T1-T14). Every node and edge block is
 // 4 x 4 (psi, n, p, theta) by construction, so the terms index it as such.
 #include <algorithm>
 #include <cmath>

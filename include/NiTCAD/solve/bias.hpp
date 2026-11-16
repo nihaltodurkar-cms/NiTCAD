@@ -26,7 +26,7 @@
 #include <span>
 #include <vector>
 
-#include "NiTCAD/assemble/drift_diffusion.hpp"
+#include "NiTCAD/assemble/system.hpp"
 #include "NiTCAD/base/error.hpp"
 #include "NiTCAD/device/device.hpp"
 #include "NiTCAD/linalg/linear_solver.hpp"
@@ -83,7 +83,7 @@ struct BiasOptions {
     // (Unit 45; results::RateFields; DECISIONS.md RQ1): on by default, off to save memory and file
     // size. They are read from the state after it converged and change nothing in the solve.
     bool store_rates = true;
-    // The minority floor (Unit 50; assemble::DriftDiffusion::set_minority_floor; DECISIONS.md
+    // The minority floor (Unit 50; assemble::set_minority_floor; DECISIONS.md
     // RD2): Newton's update size measures each density against at least eps of the larger density
     // at its node, so a deep minority's rounding does not hold a point. Off by default: a material
     // whose minorities converge (4H-SiC) can stall with it on.
@@ -102,7 +102,7 @@ struct BiasOptions {
 // ohmic contact at 0 V), with the point as context index, the contact named in the message and its
 // bias as value; an initial state without a finite potential for every node, or, for
 // drift-diffusion, without positive densities (the quasi-static sweep reads only the potential);
-// those of assemble::make_scaling, assemble::DriftDiffusion::create (or
+// those of assemble::make_scaling, assemble::System::create (or
 // EquilibriumPoisson::create) and linalg::LinearSolver::create. With models.electrothermal
 // (Unit 23; DECISIONS.md T7, T10, T12): equilibrium_poisson; a connected part of the device with
 // no thermal contact (a steady state has no heat sink there); thermal_bias_K neither empty nor

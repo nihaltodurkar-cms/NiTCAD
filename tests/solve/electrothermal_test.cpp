@@ -18,13 +18,14 @@
 #include <utility>
 #include <vector>
 
+#include "NiTCAD/assemble/thermal.hpp"
 #include "NiTCAD/base/constants.hpp"
 #include "NiTCAD/device/device.hpp"
 #include "NiTCAD/mesh/tensor_grid.hpp"
 #include "NiTCAD/physics/insulator.hpp"
 #include "NiTCAD/physics/mobility.hpp"
-#include "NiTCAD/physics/statistics.hpp"
 #include "NiTCAD/physics/semiconductor.hpp"
+#include "NiTCAD/physics/statistics.hpp"
 #include "NiTCAD/physics/thermal.hpp"
 #include "NiTCAD/solve/bias.hpp"
 #include "NiTCAD/solve/small_signal.hpp"
@@ -1609,7 +1610,7 @@ TEST_CASE("electrothermal solve: assembly cost on a pn bar", "[.assembly_benchma
     const std::vector<double> bias{0.5, 0.0};
     const results::BiasPoint p = solved(d, bias, thermal_options());
     const auto scaling = *assemble::make_scaling(d);
-    auto system = *assemble::DriftDiffusion::create(d, scaling, thermal_options().models);
+    auto system = *assemble::System::create(d, scaling, thermal_options().models);
     REQUIRE(system.set_bias(bias).has_value());
     time_assembly("electrothermal 1D pn bar", system, scaled_state(system, p.fields, scaling));
 }
@@ -1627,7 +1628,7 @@ TEST_CASE("electrothermal solve: assembly cost on a pn bar, Fermi-Dirac", "[.ass
     o.models.fermi_dirac = true;
     const results::BiasPoint p = solved(d, bias, o);
     const auto scaling = *assemble::make_scaling(d);
-    auto system = *assemble::DriftDiffusion::create(d, scaling, o.models);
+    auto system = *assemble::System::create(d, scaling, o.models);
     REQUIRE(system.set_bias(bias).has_value());
     time_assembly("electrothermal 1D pn bar, Fermi-Dirac", system,
                   scaled_state(system, p.fields, scaling));

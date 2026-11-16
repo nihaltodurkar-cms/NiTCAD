@@ -13,10 +13,12 @@
 #include <utility>
 #include <vector>
 
-#include "NiTCAD/assemble/drift_diffusion.hpp"
+#include "NiTCAD/assemble/band_edges.hpp"
+#include "NiTCAD/assemble/charges.hpp"
 #include "NiTCAD/assemble/equilibrium_poisson.hpp"
 #include "NiTCAD/assemble/quantum_confinement.hpp"
 #include "NiTCAD/assemble/scaling.hpp"
+#include "NiTCAD/assemble/system.hpp"
 #include "NiTCAD/device/device.hpp"
 #include "NiTCAD/mesh/generate.hpp"
 #include "NiTCAD/mesh/tensor_grid.hpp"
@@ -26,7 +28,7 @@
 #include "NiTCAD/physics/semiconductor.hpp"
 
 using namespace NiTCAD;
-using assemble::DriftDiffusion;
+using assemble::System;
 using assemble::EquilibriumPoisson;
 
 namespace {
@@ -250,7 +252,7 @@ double fd_jacobian_error(const System& system, std::vector<double> x) {
 
 // As insulator_test.cpp's probe: the charge-neutral equilibrium state with noise, and the
 // interface nodes' densities raised out of equilibrium so the trap terms are resolved.
-std::vector<double> probe_state(const DriftDiffusion& system, const EquilibriumPoisson& poisson,
+std::vector<double> probe_state(const System& system, const EquilibriumPoisson& poisson,
                                 const device::Device& d, std::uint64_t seed) {
     auto x = system.state_from_potential(poisson.charge_neutral_potential());
     Noise noise{seed};
@@ -403,8 +405,8 @@ TEST_CASE("quantum confinement assemble: N_c f_n and N_v f_p, bands and traps in
 TEST_CASE("quantum confinement assemble: drift-diffusion states carry the factors (QC4)") {
     const device::Device d = mos(2);
     const auto scaling = *assemble::make_scaling(d);
-    const auto off = *DriftDiffusion::create(d, scaling);
-    const auto on = *DriftDiffusion::create(d, scaling, mlda());
+    const auto off = *System::create(d, scaling);
+    const auto on = *System::create(d, scaling, mlda());
     const auto poisson = *EquilibriumPoisson::create(d, scaling);
     const auto c = *assemble::mlda_factors(d, mlda());
     const auto psi = poisson.charge_neutral_potential();
@@ -436,7 +438,7 @@ TEST_CASE("quantum confinement assemble: the finite-difference Jacobian gate (QC
             Noise noise{17};
             for (double& v : psi) v += 0.3 * noise.next();
             const double ep = fd_jacobian_error(poisson, psi);
-            auto system = *DriftDiffusion::create(d, scaling, mlda(fd));
+            auto system = *System::create(d, scaling, mlda(fd));
             REQUIRE(system.set_bias(bias).has_value());
             const auto x = probe_state(system, poisson, d, 23);
             const double dd = fd_jacobian_error(system, x);
@@ -453,7 +455,7 @@ TEST_CASE("quantum confinement assemble: the finite-difference Jacobian gate (QC
         models.surface_mobility = assemble::SurfaceMobility::lombardi;
         auto poisson = *EquilibriumPoisson::create(d, scaling, models);
         REQUIRE(poisson.set_bias(equilibrium_bias).has_value());
-        auto system = *DriftDiffusion::create(d, scaling, models);
+        auto system = *System::create(d, scaling, models);
         REQUIRE(system.set_bias(bias).has_value());
         const auto x = probe_state(system, poisson, d, 23);
         const double dd = fd_jacobian_error(system, x);
@@ -469,7 +471,7 @@ TEST_CASE("quantum confinement assemble: the finite-difference Jacobian gate (QC
         for (const bool fd : {false, true}) {
             auto poisson = *EquilibriumPoisson::create(d, scaling, mlda(fd));
             REQUIRE(poisson.set_bias(std::vector<double>{0.8, 0.0}).has_value());
-            auto system = *DriftDiffusion::create(d, scaling, mlda(fd));
+            auto system = *System::create(d, scaling, mlda(fd));
             REQUIRE(system.set_bias(std::vector<double>{0.8, 0.05}).has_value());
             auto x = system.state_from_potential(poisson.charge_neutral_potential());
             Noise noise{29};
@@ -493,7 +495,7 @@ TEST_CASE("quantum confinement assemble: refusals (QC11)") {
     const auto refused = [&](const device::Device& dev, const assemble::PhysicsModels& m,
                              const std::string& what) {
         const auto s = *assemble::make_scaling(dev);
-        const auto dd = DriftDiffusion::create(dev, s, m);
+        const auto dd = System::create(dev, s, m);
         const auto ep = EquilibriumPoisson::create(dev, s, m);
         REQUIRE_FALSE(dd.has_value());
         REQUIRE_FALSE(ep.has_value());
@@ -513,7 +515,7 @@ TEST_CASE("quantum confinement assemble: refusals (QC11)") {
         CHECK(c.error().code == base::ErrorCode::invalid_input);
         CHECK(c.error().message.find("quantum_confinement mlda: electrothermal") !=
               std::string::npos);
-        CHECK_FALSE(DriftDiffusion::create(d, scaling, m).has_value());
+        CHECK_FALSE(System::create(d, scaling, m).has_value());
     }
     SECTION("masses") {
         for (const double bad : {0.0, -0.5, std::numeric_limits<double>::quiet_NaN(),
@@ -553,7 +555,7 @@ TEST_CASE("quantum confinement assemble: refusals (QC11)") {
         other.radiative_cm3_s = 1e-14;
         const device::Device ok = build(other);
         const auto s = *assemble::make_scaling(ok);
-        CHECK(DriftDiffusion::create(ok, s, mlda()).has_value());
+        CHECK(System::create(ok, s, mlda()).has_value());
         CHECK(EquilibriumPoisson::create(ok, s, mlda()).has_value());
     }
     SECTION("nothing confines") {
@@ -602,6 +604,6 @@ TEST_CASE("quantum confinement assemble: refusals (QC11)") {
     SECTION("accepted with Lombardi") {
         auto m = mlda();
         m.surface_mobility = assemble::SurfaceMobility::lombardi;
-        CHECK(DriftDiffusion::create(d, scaling, m).has_value());
+        CHECK(System::create(d, scaling, m).has_value());
     }
 }

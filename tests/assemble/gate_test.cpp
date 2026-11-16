@@ -13,18 +13,20 @@
 #include <utility>
 #include <vector>
 
+#include "NiTCAD/assemble/charges.hpp"
 #include "NiTCAD/assemble/contact_bias.hpp"
-#include "NiTCAD/assemble/drift_diffusion.hpp"
+#include "NiTCAD/assemble/currents.hpp"
 #include "NiTCAD/assemble/equilibrium_poisson.hpp"
 #include "NiTCAD/assemble/gate.hpp"
 #include "NiTCAD/assemble/scaling.hpp"
+#include "NiTCAD/assemble/system.hpp"
 #include "NiTCAD/base/constants.hpp"
 #include "NiTCAD/device/device.hpp"
 #include "NiTCAD/mesh/tensor_grid.hpp"
 #include "NiTCAD/physics/semiconductor.hpp"
 
 using namespace NiTCAD;
-using assemble::DriftDiffusion;
+using assemble::System;
 using assemble::EquilibriumPoisson;
 
 namespace {
@@ -165,11 +167,11 @@ double fd_jacobian_error(const System& system, std::vector<double> x) {
 
 // Drift-diffusion at the given biases, at the legacy probe's state: Boltzmann carriers at the
 // charge-neutral potential, then psi + 0.02 noise and n, p times (1 + 0.01 noise).
-std::pair<DriftDiffusion, std::vector<double>> probe_state(const device::Device& d,
+std::pair<System, std::vector<double>> probe_state(const device::Device& d,
                                                            const std::vector<double>& bias,
                                                            std::uint64_t seed) {
     const auto scaling = *assemble::make_scaling(d);
-    auto system = *DriftDiffusion::create(d, scaling);
+    auto system = *System::create(d, scaling);
     REQUIRE(system.set_bias(bias).has_value());
     const auto poisson = *EquilibriumPoisson::create(d, scaling);
     auto x = system.state_from_potential(poisson.charge_neutral_potential());
@@ -266,7 +268,7 @@ TEST_CASE("gate: the 1D rows are the legacy MOS-C rows written out by hand") {
     const std::vector<double> bias{Vg, 0.0};
 
     auto poisson = *EquilibriumPoisson::create(d, s);
-    auto dd = *DriftDiffusion::create(d, s);
+    auto dd = *System::create(d, s);
     REQUIRE(poisson.set_bias(bias).has_value());
     REQUIRE(dd.set_bias(bias).has_value());
     const std::size_t n = axis.size();
@@ -309,8 +311,8 @@ TEST_CASE("gate: no carrier flux crosses the gate; only the Poisson row changes"
     const auto gated = moscap(*mesh::make_tensor_grid(axis));
     const auto bare = moscap(*mesh::make_tensor_grid(axis), false);
     const auto s = *assemble::make_scaling(gated);
-    auto a = *DriftDiffusion::create(gated, s);
-    auto b = *DriftDiffusion::create(bare, s);
+    auto a = *System::create(gated, s);
+    auto b = *System::create(bare, s);
     const std::vector<double> gate_bias{1.2, 0.0}, bare_bias{0.0};
     REQUIRE(a.set_bias(gate_bias).has_value());
     REQUIRE(b.set_bias(bare_bias).has_value());
@@ -330,9 +332,9 @@ TEST_CASE("gate: no carrier flux crosses the gate; only the Poisson row changes"
         }
     }
     // A gate carries no current; the gate charge is the oxide flux.
-    const auto currents = a.terminal_currents(x);
+    const auto currents = terminal_currents(a, x);
     REQUIRE(currents[0] == 0.0);
-    const auto charges = a.gate_charges(x);
+    const auto charges = gate_charges(a, x);
     REQUIRE(charges[1] == 0.0);
     REQUIRE(charges[0] == g.coupling * (1.2 / s.V_T - g.offset - x[0]));
 }

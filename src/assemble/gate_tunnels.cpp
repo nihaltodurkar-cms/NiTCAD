@@ -20,9 +20,9 @@
 #include <thread>
 #include <variant>
 
-#include "NiTCAD/assemble/drift_diffusion.hpp"
 #include "NiTCAD/assemble/gate.hpp"
 #include "NiTCAD/assemble/observer.hpp"
+#include "NiTCAD/assemble/system.hpp"
 #include "NiTCAD/base/constants.hpp"
 #include "NiTCAD/base/contract.hpp"
 #include "NiTCAD/physics/gate_tunnelling.hpp"
@@ -455,19 +455,19 @@ void SystemData::gate_tunnel_fluxes(const SystemState& st, std::span<const doubl
     out = std::move(job.finish());
 }
 
-DriftDiffusion::GateTunnellingCurrents DriftDiffusion::gate_tunnelling_currents(
+GateTunnellingCurrents SystemData::gate_tunnelling_currents(const SystemState& st,
     std::span<const double> x) const {
     NITCAD_EXPECTS(x.size() == unknowns());
     GateTunnellingCurrents out;
-    if (data_->gate_tunnels_.empty()) return out;
-    out.ecb.assign(data_->contact_count_, 0.0);
-    out.hvb.assign(data_->contact_count_, 0.0);
-    out.evb.assign(data_->contact_count_, 0.0);
-    const std::vector<SystemData::NodeDegeneracy> g = data_->degeneracies(x);
+    if (gate_tunnels_.empty()) return out;
+    out.ecb.assign(contact_count_, 0.0);
+    out.hvb.assign(contact_count_, 0.0);
+    out.evb.assign(contact_count_, 0.0);
+    const std::vector<SystemData::NodeDegeneracy> g = degeneracies(x);
     std::vector<SystemData::GateTunnelFlux> fluxes;
-    data_->gate_tunnel_fluxes(*state_, x, g, fluxes);
-    for (std::size_t k = 0; k < data_->gate_tunnels_.size(); ++k) {
-        const SystemData::GateTunnel& t = data_->gate_tunnels_[k];
+    gate_tunnel_fluxes(st, x, g, fluxes);
+    for (std::size_t k = 0; k < gate_tunnels_.size(); ++k) {
+        const SystemData::GateTunnel& t = gate_tunnels_[k];
         const SystemData::GateTunnelFlux& flux = fluxes[k];
         // T_n - T_p = c (J_ecb - J_hvb + J_evb): EVB's two directions enter T_p and T_n with the
         // signs that make both add.

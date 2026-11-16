@@ -1,4 +1,4 @@
-#include "NiTCAD/assemble/drift_diffusion.hpp"
+#include "NiTCAD/assemble/system.hpp"
 
 #include <algorithm>
 #include <array>
@@ -91,16 +91,16 @@ void pseudo_inverse(const double* a, int D, double* inverse) {
 
 // --- Unit 57 GE2: the shared data and the owned state ------------------------------------------
 
-DriftDiffusion::DriftDiffusion() = default;
-DriftDiffusion::~DriftDiffusion() = default;
-DriftDiffusion::DriftDiffusion(DriftDiffusion&& other) noexcept = default;
-DriftDiffusion& DriftDiffusion::operator=(DriftDiffusion&& other) noexcept = default;
+System::System() = default;
+System::~System() = default;
+System::System(System&& other) noexcept = default;
+System& System::operator=(System&& other) noexcept = default;
 
-DriftDiffusion::DriftDiffusion(const DriftDiffusion& other)
+System::System(const System& other)
     : data_(other.data_),
       state_(other.state_ ? std::make_unique<SystemState>(*other.state_) : nullptr) {}
 
-DriftDiffusion& DriftDiffusion::operator=(const DriftDiffusion& other) {
+System& System::operator=(const System& other) {
     if (this != &other) {
         data_ = other.data_;
         state_ = other.state_ ? std::make_unique<SystemState>(*other.state_) : nullptr;
@@ -108,26 +108,23 @@ DriftDiffusion& DriftDiffusion::operator=(const DriftDiffusion& other) {
     return *this;
 }
 
-std::size_t DriftDiffusion::unknowns() const noexcept { return data_->unknowns(); }
-std::size_t DriftDiffusion::node_count() const noexcept { return data_->node_count(); }
-std::size_t DriftDiffusion::contact_count() const noexcept { return data_->contact_count(); }
-std::size_t DriftDiffusion::stride() const noexcept { return data_->stride(); }
-bool DriftDiffusion::electrothermal() const noexcept { return data_->electrothermal(); }
-bool DriftDiffusion::energy_balance() const noexcept { return data_->energy_balance(); }
-void DriftDiffusion::release_temperatures() noexcept { state_->held_.clear(); }
-bool DriftDiffusion::temperatures_held() const noexcept { return !state_->held_.empty(); }
-bool DriftDiffusion::heat_sinks_complete() const noexcept { return data_->sinks_complete_; }
-double DriftDiffusion::heat_scale() const noexcept { return data_->heat_scale_; }
-double DriftDiffusion::time_scale() const noexcept { return data_->rate_scale_; }
-std::size_t DriftDiffusion::trap_slots() const noexcept { return data_->trap_slots(); }
-std::size_t DriftDiffusion::storage_width() const noexcept { return data_->storage_width(); }
-bool DriftDiffusion::gate_tunnelling() const noexcept { return data_->gate_tunnelling(); }
-bool DriftDiffusion::tunnelling() const noexcept { return data_->tunnelling(); }
-const TunnelPaths& DriftDiffusion::paths() const noexcept { return state_->paths_; }
-void DriftDiffusion::set_minority_floor(bool on) noexcept { state_->minority_floor_ = on; }
-bool DriftDiffusion::minority_floor() const noexcept { return state_->minority_floor_; }
+std::size_t System::unknowns() const noexcept { return data_->unknowns(); }
+std::size_t System::node_count() const noexcept { return data_->node_count(); }
+std::size_t System::contact_count() const noexcept { return data_->contact_count(); }
+std::size_t System::stride() const noexcept { return data_->stride(); }
+double System::time_scale() const noexcept { return data_->rate_scale_; }
+std::size_t System::trap_slots() const noexcept { return data_->trap_slots(); }
+std::size_t System::storage_width() const noexcept { return data_->storage_width(); }
 
-std::expected<DriftDiffusion, base::Error> DriftDiffusion::create(
+const SystemData& System::data(const SystemKey& /*key*/) const noexcept { return *data_; }
+const SystemState& System::state(const SystemKey& /*key*/) const noexcept { return *state_; }
+SystemState& System::state(const SystemKey& /*key*/) noexcept { return *state_; }
+void System::replace_data(const SystemKey& /*key*/,
+                          std::shared_ptr<const SystemData> data) noexcept {
+    data_ = std::move(data);
+}
+
+std::expected<System, base::Error> System::create(
     const device::Device& device, const Scaling& scaling, const PhysicsModels& models) {
     if (models.impact_ionization && !(std::isfinite(models.impact_current_resolution) &&
                                       models.impact_current_resolution >= 0.0)) {
@@ -727,14 +724,14 @@ std::expected<DriftDiffusion, base::Error> DriftDiffusion::create(
             return std::unexpected(std::move(*e));
     }
     const std::vector<double> zero(s.contact_count_, 0.0);
-    DriftDiffusion out;
+    System out;
     out.data_ = std::move(data);
     out.state_ = std::make_unique<SystemState>(std::move(st));
     if (auto ok = out.set_bias(zero); !ok) return std::unexpected(std::move(ok.error()));
     return out;
 }
 
-std::expected<void, base::Error> DriftDiffusion::set_bias(std::span<const double> bias_V) {
+std::expected<void, base::Error> System::set_bias(std::span<const double> bias_V) {
     if (auto ok = check_contact_bias(data_->kinds_, bias_V, false); !ok) return ok;
     state_->gates_.set_bias(bias_V);
     for (std::size_t i = 0; i < node_count(); ++i) {
@@ -758,8 +755,8 @@ std::expected<void, base::Error> DriftDiffusion::set_bias(std::span<const double
         }
         if (data_->contact_[i] < 0) continue;
         const double bias = bias_V[static_cast<std::size_t>(data_->contact_[i])] / data_->V_T_;
-        if (electrothermal()) state_->metal_[i] = bias;
-        if (electrothermal() || data_->energy_balance_) {  // Unit 52: electrical_power
+        if (data_->electrothermal()) state_->metal_[i] = bias;
+        if (data_->electrothermal() || data_->energy_balance_) {  // Unit 52: electrical_power
             state_->contact_bias_[static_cast<std::size_t>(data_->contact_[i])] = bias;
         }
         const OhmicValue v =
@@ -775,7 +772,7 @@ std::expected<void, base::Error> DriftDiffusion::set_bias(std::span<const double
     return {};
 }
 
-std::vector<double> DriftDiffusion::state_from_potential(std::span<const double> psi) const {
+std::vector<double> System::state_from_potential(std::span<const double> psi) const {
     NITCAD_EXPECTS(psi.size() == node_count());
     std::vector<double> x(unknowns());
     for (std::size_t i = 0; i < node_count(); ++i) {
@@ -788,16 +785,16 @@ std::vector<double> DriftDiffusion::state_from_potential(std::span<const double>
         x[data_->m_ * i + 2] =
             detail::density(data_->fermi_dirac_, data_->n_ie_[i], data_->log_dos_p_[i], -eta)
                 .density;
-        if (electrothermal()) x[4 * i + 3] = 0.0;
+        if (data_->electrothermal()) x[4 * i + 3] = 0.0;
     }
     stamp_contacts(x);
     detail::observe("state_from_potential", x);
     return x;
 }
 
-void DriftDiffusion::stamp_contacts(std::span<double> x) const {
+void System::stamp_contacts(std::span<double> x) const {
     NITCAD_EXPECTS(x.size() == unknowns());
-    if (electrothermal()) {
+    if (data_->electrothermal()) {
         // The isothermal sinks first: an ohmic node's values depend on its temperature.
         for (std::size_t i = 0; i < node_count(); ++i) {
             const std::int32_t c = data_->thermal_nodes_[i].contact;
@@ -842,12 +839,12 @@ void DriftDiffusion::stamp_contacts(std::span<double> x) const {
     detail::observe("stamp_contacts", x);
 }
 
-const DofMap& DriftDiffusion::dofs() const noexcept {
+const DofMap& System::dofs() const noexcept {
     NITCAD_EXPECTS(data_->composition_ != nullptr);  // not a moved-from system
     return data_->composition_->dofs();
 }
 
-linalg::SparseMatrix DriftDiffusion::make_jacobian() const { return state_->pattern_; }
+linalg::SparseMatrix System::make_jacobian() const { return state_->pattern_; }
 
 std::vector<SystemData::NodeDegeneracy> SystemData::degeneracies(
     std::span<const double> x) const {
@@ -1058,10 +1055,9 @@ InterfaceDrift SystemData::interface_at(std::size_t k, std::span<const double> x
                              t ? &*t : nullptr);
 }
 
-void DriftDiffusion::assemble(std::span<const double> x, std::span<double> f,
-                              std::span<double> values, const TimeStep* step,
-                              bool interfaces) const {
-    if (electrothermal()) {
+void System::assemble(std::span<const double> x, std::span<double> f, std::span<double> values,
+                      const TimeStep* step, bool frequency) const {
+    if (data_->electrothermal()) {
         data_->assemble_heat(*state_, x, f, values, step, true);
         return;
     }
@@ -1070,10 +1066,10 @@ void DriftDiffusion::assemble(std::span<const double> x, std::span<double> f,
                                        step->traps.size() == trap_slots()));
     // The terms in assembly order (composition.hpp).
     const std::vector<SystemData::NodeDegeneracy> g = data_->degeneracies(x);
-    data_->composition_->assemble(*data_, *state_, {x, f, values, step, g}, interfaces);
+    data_->composition_->assemble(*data_, *state_, {x, f, values, step, g}, frequency);
 }
 
-void DriftDiffusion::evaluate(std::span<const double> x, std::span<double> residual,
+void System::evaluate(std::span<const double> x, std::span<double> residual,
                               linalg::SparseMatrix& jacobian) const {
     NITCAD_EXPECTS(jacobian.has_same_pattern(state_->pattern_));
     const std::span<double> values = jacobian.values();
@@ -1084,7 +1080,7 @@ void DriftDiffusion::evaluate(std::span<const double> x, std::span<double> resid
     detail::observe("evaluate.jacobian", values);
 }
 
-void DriftDiffusion::residual(std::span<const double> x, std::span<double> residual) const {
+void System::residual(std::span<const double> x, std::span<double> residual) const {
     assemble(x, residual, {}, nullptr);
     detail::observe("residual.x", x);
     detail::observe("residual.residual", residual);
@@ -1093,7 +1089,7 @@ void DriftDiffusion::residual(std::span<const double> x, std::span<double> resid
 namespace {
 
 // The step's inputs, for the observer (observer.hpp).
-void observe_step(const DriftDiffusion::TimeStep& step) {
+void observe_step(const System::TimeStep& step) {
     detail::observe("step.rate", step.rate);
     detail::observe("step.storage", step.storage);
     detail::observe("step.traps", step.traps);
@@ -1101,7 +1097,7 @@ void observe_step(const DriftDiffusion::TimeStep& step) {
 
 }  // namespace
 
-void DriftDiffusion::evaluate(std::span<const double> x, const TimeStep& step,
+void System::evaluate(std::span<const double> x, const TimeStep& step,
                               std::span<double> residual, linalg::SparseMatrix& jacobian) const {
     NITCAD_EXPECTS(jacobian.has_same_pattern(state_->pattern_));
     const std::span<double> values = jacobian.values();
@@ -1113,7 +1109,7 @@ void DriftDiffusion::evaluate(std::span<const double> x, const TimeStep& step,
     detail::observe("evaluate.jacobian", values);
 }
 
-void DriftDiffusion::residual(std::span<const double> x, const TimeStep& step,
+void System::residual(std::span<const double> x, const TimeStep& step,
                               std::span<double> residual) const {
     assemble(x, residual, {}, &step);
     observe_step(step);
@@ -1121,11 +1117,11 @@ void DriftDiffusion::residual(std::span<const double> x, const TimeStep& step,
     detail::observe("residual.residual", residual);
 }
 
-std::vector<double> DriftDiffusion::storage(std::span<const double> x) const {
+std::vector<double> System::storage(std::span<const double> x) const {
     NITCAD_EXPECTS(x.size() == unknowns());
     const std::size_t w = storage_width();
     std::vector<double> s(w * node_count(), 0.0);
-    if (electrothermal()) {  // (n, p, tau): complete ionization (DECISIONS.md U6)
+    if (data_->electrothermal()) {  // (n, p, tau): complete ionization (DECISIONS.md U6)
         for (std::size_t i = 0; i < node_count(); ++i) {
             s[3 * i + 2] = x[4 * i + 3];
             if (data_->insulator_[i] != 0) continue;
@@ -1151,45 +1147,45 @@ std::vector<double> DriftDiffusion::storage(std::span<const double> x) const {
     return s;
 }
 
-std::vector<double> DriftDiffusion::trap_occupancies(std::span<const double> x,
+std::vector<double> SystemData::trap_occupancies(const SystemState& /*st*/, std::span<const double> x,
                                                      const TimeStep* step) const {
     NITCAD_EXPECTS(x.size() == unknowns());
     NITCAD_EXPECTS(step == nullptr || step->traps.size() == trap_slots());
     std::vector<double> f(trap_slots(), 0.0);
-    for (std::size_t k = 0; k < data_->interfaces_.edges().size(); ++k) {
-        const InterfaceEdge& v = data_->interfaces_.edges()[k];
+    for (std::size_t k = 0; k < interfaces_.edges().size(); ++k) {
+        const InterfaceEdge& v = interfaces_.edges()[k];
         const std::size_t o = v.insulator, s = v.semiconductor;
-        const std::optional<TrapStep> t = data_->trap_step(k, step);
-        data_->interfaces_.occupancies(
-            v, x[data_->m_ * o], x[data_->m_ * s], x[data_->m_ * s + 1], x[data_->m_ * s + 2],
-            data_->statistics(s), t ? &*t : nullptr,
-            std::span(f).subspan(data_->interfaces_.slot_offset(k), v.last_level - v.first_level));
+        const std::optional<TrapStep> t = trap_step(k, step);
+        interfaces_.occupancies(
+            v, x[m_ * o], x[m_ * s], x[m_ * s + 1], x[m_ * s + 2],
+            statistics(s), t ? &*t : nullptr,
+            std::span(f).subspan(interfaces_.slot_offset(k), v.last_level - v.first_level));
     }
     detail::observe("trap_occupancies", f);
     return f;
 }
 
-std::vector<double> DriftDiffusion::contact_charges(std::span<const double> x,
+std::vector<double> SystemData::contact_charges(const SystemState& st, std::span<const double> x,
                                                     const TimeStep* step) const {
     NITCAD_EXPECTS(x.size() == unknowns());
-    std::vector<double> charge = state_->gates_.charges(x, data_->m_, data_->contact_count_);
-    if (electrothermal()) data_->add_gate_shift(*state_, x, charge);
+    std::vector<double> charge = st.gates_.charges(x, m_, contact_count_);
+    if (electrothermal()) add_gate_shift(st, x, charge);
     const auto owner = [&](std::size_t i) {
-        return data_->owner_[i] >= 0 ? data_->owner_[i] : data_->electrode_[i];
+        return owner_[i] >= 0 ? owner_[i] : electrode_[i];
     };
-    for (const SystemData::EdgeTerm& e : data_->edges_) {
+    for (const SystemData::EdgeTerm& e : edges_) {
         const std::int32_t ca = owner(e.a), cb = owner(e.b);
         if (ca == cb || e.charged) continue;
-        const double flux = e.c * (x[data_->m_ * e.a] - x[data_->m_ * e.b]);  // from a to b
+        const double flux = e.c * (x[m_ * e.a] - x[m_ * e.b]);  // from a to b
         if (ca >= 0) charge[static_cast<std::size_t>(ca)] += flux;
         if (cb >= 0) charge[static_cast<std::size_t>(cb)] -= flux;
     }
     // A contact node on an interface edge: the flux leaving it is minus its half-edge flux.
-    for (std::size_t k = 0; k < data_->interfaces_.edges().size(); ++k) {
-        const InterfaceEdge& v = data_->interfaces_.edges()[k];
+    for (std::size_t k = 0; k < interfaces_.edges().size(); ++k) {
+        const InterfaceEdge& v = interfaces_.edges()[k];
         const std::int32_t ci = owner(v.insulator), cs = owner(v.semiconductor);
         if (ci < 0 && cs < 0) continue;
-        const InterfaceDrift t = data_->interface_at(k, x, step);
+        const InterfaceDrift t = interface_at(k, x, step);
         if (ci >= 0) charge[static_cast<std::size_t>(ci)] -= t.flux_insulator;
         if (cs >= 0) charge[static_cast<std::size_t>(cs)] -= t.flux_semiconductor;
     }
@@ -1197,22 +1193,22 @@ std::vector<double> DriftDiffusion::contact_charges(std::span<const double> x,
     return charge;
 }
 
-std::vector<double> DriftDiffusion::conduction_currents(std::span<const double> x,
+std::vector<double> SystemData::conduction_currents(const SystemState& st, std::span<const double> x,
                                                         const TimeStep& step) const {
-    std::vector<double> terminal = terminal_currents(x);
+    std::vector<double> terminal = terminal_currents(st, x);
     // The traps of an interface edge on an ohmic node exchange carriers with the contact:
     // electron capture takes rate from it, hole capture rate_p.
-    for (std::size_t k = 0; k < data_->interfaces_.edges().size(); ++k) {
-        const std::int32_t c = data_->contact_[data_->interfaces_.edges()[k].semiconductor];
+    for (std::size_t k = 0; k < interfaces_.edges().size(); ++k) {
+        const std::int32_t c = contact_[interfaces_.edges()[k].semiconductor];
         if (c < 0) continue;
-        const InterfaceDrift t = data_->interface_at(k, x, &step);
+        const InterfaceDrift t = interface_at(k, x, &step);
         terminal[static_cast<std::size_t>(c)] += t.rate_p - t.rate;
     }
     detail::observe("conduction_currents", terminal);
     return terminal;
 }
 
-double DriftDiffusion::update_size(std::span<const double> x, std::span<const double> dx) const {
+double System::update_size(std::span<const double> x, std::span<const double> dx) const {
     NITCAD_EXPECTS(x.size() == unknowns() && dx.size() == unknowns());
     constexpr double infinity = std::numeric_limits<double>::infinity();
     // A density correction is resolved by the linear solve only to about eps max|dx|, and near
@@ -1252,7 +1248,7 @@ double DriftDiffusion::update_size(std::span<const double> x, std::span<const do
                       n > 0.0 ? std::abs(dx[data_->m_ * i + 1]) / std::max(n, local) : infinity,
                       p > 0.0 ? std::abs(dx[data_->m_ * i + 2]) / std::max(p, local) : infinity});
     }
-    if (electrothermal()) {  // theta, an absolute bound in units of T0 (T10)
+    if (data_->electrothermal()) {  // theta, an absolute bound in units of T0 (T10)
         for (std::size_t i = 0; i < node_count(); ++i) {
             size = std::max(size, std::abs(dx[4 * i + 3]));
         }
@@ -1268,12 +1264,12 @@ double DriftDiffusion::update_size(std::span<const double> x, std::span<const do
     return size;
 }
 
-void DriftDiffusion::apply_update(std::span<double> x, std::span<const double> dx,
+void System::apply_update(std::span<double> x, std::span<const double> dx,
                                   double max_update) const {
     NITCAD_EXPECTS(x.size() == unknowns() && dx.size() == unknowns());
     for (std::size_t i = 0; i < node_count(); ++i) {
         x[data_->m_ * i] += std::clamp(dx[data_->m_ * i], -max_update, max_update);
-        if (electrothermal()) {  // 50 K (legacy thermal.py) and a factor of 2 at most
+        if (data_->electrothermal()) {  // 50 K (legacy thermal.py) and a factor of 2 at most
             // theta = 1 + tau within [theta / 2, 2 theta]: tau within [(tau - 1) / 2, 1 + 2 tau].
             const double tau = x[4 * i + 3], cap = 50.0 / data_->T0_;
             x[4 * i + 3] = std::clamp(tau + std::clamp(dx[4 * i + 3], -cap, cap),
@@ -1292,44 +1288,44 @@ void DriftDiffusion::apply_update(std::span<double> x, std::span<const double> d
     detail::observe("apply_update", x);
 }
 
-std::vector<std::pair<double, double>> DriftDiffusion::edge_currents(
+std::vector<std::pair<double, double>> SystemData::edge_currents(const SystemState& /*st*/,
     std::span<const double> x) const {
     NITCAD_EXPECTS(x.size() == unknowns());
     std::vector<std::pair<double, double>> currents;
-    currents.reserve(data_->edges_.size());
+    currents.reserve(edges_.size());
     if (electrothermal()) {
-        const std::vector<SystemData::ThermalState> t = data_->thermal_states(x);
-        const std::vector<SystemData::NodeLevels> g = data_->thermal_levels(x, t);
-        for (std::size_t k = 0; k < data_->edges_.size(); ++k) {
-            if (!data_->edges_[k].carriers) {
+        const std::vector<SystemData::ThermalState> t = thermal_states(x);
+        const std::vector<SystemData::NodeLevels> g = thermal_levels(x, t);
+        for (std::size_t k = 0; k < edges_.size(); ++k) {
+            if (!edges_[k].carriers) {
                 currents.emplace_back(0.0, 0.0);
                 continue;
             }
-            const auto [fn, fp] = data_->thermal_fluxes(k, x, t, g);
+            const auto [fn, fp] = thermal_fluxes(k, x, t, g);
             currents.emplace_back(fn.flux, fp.flux);
         }
         detail::observe("edge_currents", currents);
         return currents;
     }
-    const std::vector<SystemData::NodeDegeneracy> g = data_->degeneracies(x);
-    for (const SystemData::EdgeTerm& e : data_->edges_) {
+    const std::vector<SystemData::NodeDegeneracy> g = degeneracies(x);
+    for (const SystemData::EdgeTerm& e : edges_) {
         if (!e.carriers) {
             currents.emplace_back(0.0, 0.0);
             continue;
         }
-        const auto [fn, fp] = data_->edge_fluxes(e, x, g);
+        const auto [fn, fp] = edge_fluxes(e, x, g);
         currents.emplace_back(fn.flux, fp.flux);
     }
     detail::observe("edge_currents", currents);
     return currents;
 }
 
-std::vector<double> DriftDiffusion::terminal_currents(std::span<const double> x) const {
-    const auto currents = edge_currents(x);
-    std::vector<double> terminal(data_->contact_count_, 0.0);
-    for (std::size_t k = 0; k < data_->edges_.size(); ++k) {
-        const std::int32_t ca = data_->owner_[data_->edges_[k].a],
-                           cb = data_->owner_[data_->edges_[k].b];
+std::vector<double> SystemData::terminal_currents(const SystemState& st, std::span<const double> x) const {
+    const auto currents = edge_currents(st, x);
+    std::vector<double> terminal(contact_count_, 0.0);
+    for (std::size_t k = 0; k < edges_.size(); ++k) {
+        const std::int32_t ca = owner_[edges_[k].a],
+                           cb = owner_[edges_[k].b];
         if (ca == cb) continue;  // both inside one contact, or both in the device
         const double total = currents[k].first + currents[k].second;
         if (ca >= 0) terminal[static_cast<std::size_t>(ca)] += total;  // leaves contact a
@@ -1337,12 +1333,12 @@ std::vector<double> DriftDiffusion::terminal_currents(std::span<const double> x)
     }
     // Gate tunnelling (Unit 51, GD7): what a tunnel's node sends into the device through its
     // edges, T_n - T_p, enters through its gate.
-    if (!data_->gate_tunnels_.empty()) {
-        const std::vector<SystemData::NodeDegeneracy> g = data_->degeneracies(x);
+    if (!gate_tunnels_.empty()) {
+        const std::vector<SystemData::NodeDegeneracy> g = degeneracies(x);
         std::vector<SystemData::GateTunnelFlux> fluxes;
-        data_->gate_tunnel_fluxes(*state_, x, g, fluxes);
-        for (std::size_t k = 0; k < data_->gate_tunnels_.size(); ++k) {
-            const auto c = static_cast<std::size_t>(data_->gate_tunnels_[k].contact);
+        gate_tunnel_fluxes(st, x, g, fluxes);
+        for (std::size_t k = 0; k < gate_tunnels_.size(); ++k) {
+            const auto c = static_cast<std::size_t>(gate_tunnels_[k].contact);
             terminal[c] += fluxes[k].T_n - fluxes[k].T_p;
         }
     }
@@ -1350,38 +1346,39 @@ std::vector<double> DriftDiffusion::terminal_currents(std::span<const double> x)
     return terminal;
 }
 
-std::vector<double> DriftDiffusion::terminal_current_resolution(std::span<const double> x) const {
-    NITCAD_EXPECTS(x.size() == unknowns());
+std::vector<double> terminal_current_resolution(const System& system, std::span<const double> x) {
+    const SystemData& d = SystemData::of(system);
+    NITCAD_EXPECTS(x.size() == d.unknowns());
     // The current through any cut of the device differs from a terminal current by the total
     // current's imbalance at the nodes between them, which is at most the sum over the nodes of
     // |F_n + F_p| (the residual) plus the rounding of the terms that cancel in it: the one-sided
     // flux terms (density times its flux coefficient) and the recombination terms.
-    const std::size_t n = node_count();
-    std::vector<double> f(unknowns());
-    residual(x, f);
-    const std::vector<SystemData::NodeDegeneracy> g = data_->degeneracies(x);
+    const std::size_t n = d.node_count();
+    std::vector<double> f(d.unknowns());
+    system.residual(x, f);
+    const std::vector<SystemData::NodeDegeneracy> g = d.degeneracies(x);
     std::vector<SystemData::ThermalState> states;
     std::vector<SystemData::NodeLevels> levels;
-    if (electrothermal()) {
-        states = data_->thermal_states(x);
-        levels = data_->thermal_levels(x, states);
+    if (d.electrothermal()) {
+        states = d.thermal_states(x);
+        levels = d.thermal_levels(x, states);
     }
     std::vector<double> terms(n, 0.0), flux_n(n, 0.0);
-    for (std::size_t k = 0; k < data_->edges_.size(); ++k) {
-        const SystemData::EdgeTerm& e = data_->edges_[k];
+    for (std::size_t k = 0; k < d.edges_.size(); ++k) {
+        const SystemData::EdgeTerm& e = d.edges_[k];
         if (!e.carriers) continue;
         double t, jn;
-        if (electrothermal()) {
-            const auto [fn, fp] = data_->thermal_fluxes(k, x, states, levels);
+        if (d.electrothermal()) {
+            const auto [fn, fp] = d.thermal_fluxes(k, x, states, levels);
             t = std::abs(fn.d_c[0] * x[4 * e.a + 1]) + std::abs(fn.d_c[1] * x[4 * e.b + 1]) +
                 std::abs(fp.d_c[0] * x[4 * e.a + 2]) + std::abs(fp.d_c[1] * x[4 * e.b + 2]);
             jn = fn.flux;
         } else {
-            const auto [fn, fp] = data_->edge_fluxes(e, x, g);
-            t = std::abs(fn.d_c1 * x[data_->m_ * e.a + 1]) +
-                std::abs(fn.d_c2 * x[data_->m_ * e.b + 1]) +
-                std::abs(fp.d_c1 * x[data_->m_ * e.a + 2]) +
-                std::abs(fp.d_c2 * x[data_->m_ * e.b + 2]);
+            const auto [fn, fp] = d.edge_fluxes(e, x, g);
+            t = std::abs(fn.d_c1 * x[d.m_ * e.a + 1]) +
+                std::abs(fn.d_c2 * x[d.m_ * e.b + 1]) +
+                std::abs(fp.d_c1 * x[d.m_ * e.a + 2]) +
+                std::abs(fp.d_c2 * x[d.m_ * e.b + 2]);
             jn = fn.flux;
         }
         terms[e.a] += t;
@@ -1392,18 +1389,18 @@ std::vector<double> DriftDiffusion::terminal_current_resolution(std::span<const 
     const double eps8 = 8.0 * std::numeric_limits<double>::epsilon();
     double bound = 0.0;
     for (std::size_t i = 0; i < n; ++i) {
-        if (data_->owner_[i] >= 0) {
+        if (d.owner_[i] >= 0) {
             bound += eps8 * terms[i];  // the terminal current's own sum
             continue;
         }
-        const double recombination = std::abs(flux_n[i] - f[data_->m_ * i + 1]);  // V R
-        bound += std::abs(f[data_->m_ * i + 1] + f[data_->m_ * i + 2]) +
+        const double recombination = std::abs(flux_n[i] - f[d.m_ * i + 1]);  // V R
+        bound += std::abs(f[d.m_ * i + 1] + f[d.m_ * i + 2]) +
                  eps8 * (terms[i] + 2.0 * recombination);
     }
-    std::vector<double> resolution(data_->contact_count_, 0.0);
-    for (std::size_t c = 0; c < data_->contact_count_; ++c) {
-        if (data_->kinds_[c] == device::ContactKind::ohmic ||
-            data_->kinds_[c] == device::ContactKind::schottky) {
+    std::vector<double> resolution(d.contact_count_, 0.0);
+    for (std::size_t c = 0; c < d.contact_count_; ++c) {
+        if (d.kinds_[c] == device::ContactKind::ohmic ||
+            d.kinds_[c] == device::ContactKind::schottky) {
             resolution[c] = bound;
         }
     }
@@ -1411,43 +1408,43 @@ std::vector<double> DriftDiffusion::terminal_current_resolution(std::span<const 
     return resolution;
 }
 
-std::vector<double> DriftDiffusion::edge_flux_terms(std::span<const double> x) const {
+std::vector<double> SystemData::edge_flux_terms(const SystemState& /*st*/, std::span<const double> x) const {
     NITCAD_EXPECTS(x.size() == unknowns());
-    std::vector<double> terms(data_->edges_.size(), 0.0);
+    std::vector<double> terms(edges_.size(), 0.0);
     if (electrothermal()) {
-        const std::vector<SystemData::ThermalState> states = data_->thermal_states(x);
-        const std::vector<SystemData::NodeLevels> levels = data_->thermal_levels(x, states);
-        for (std::size_t k = 0; k < data_->edges_.size(); ++k) {
-            const SystemData::EdgeTerm& e = data_->edges_[k];
+        const std::vector<SystemData::ThermalState> states = thermal_states(x);
+        const std::vector<SystemData::NodeLevels> levels = thermal_levels(x, states);
+        for (std::size_t k = 0; k < edges_.size(); ++k) {
+            const SystemData::EdgeTerm& e = edges_[k];
             if (!e.carriers) continue;
-            const auto [fn, fp] = data_->thermal_fluxes(k, x, states, levels);
+            const auto [fn, fp] = thermal_fluxes(k, x, states, levels);
             terms[k] = std::abs(fn.d_c[0] * x[4 * e.a + 1]) + std::abs(fn.d_c[1] * x[4 * e.b + 1]) +
                        std::abs(fp.d_c[0] * x[4 * e.a + 2]) + std::abs(fp.d_c[1] * x[4 * e.b + 2]);
         }
         detail::observe("edge_flux_terms", terms);
         return terms;
     }
-    const std::vector<SystemData::NodeDegeneracy> g = data_->degeneracies(x);
-    for (std::size_t k = 0; k < data_->edges_.size(); ++k) {
-        const SystemData::EdgeTerm& e = data_->edges_[k];
+    const std::vector<SystemData::NodeDegeneracy> g = degeneracies(x);
+    for (std::size_t k = 0; k < edges_.size(); ++k) {
+        const SystemData::EdgeTerm& e = edges_[k];
         if (!e.carriers) continue;
-        const auto [fn, fp] = data_->edge_fluxes(e, x, g);
-        terms[k] = std::abs(fn.d_c1 * x[data_->m_ * e.a + 1]) +
-                   std::abs(fn.d_c2 * x[data_->m_ * e.b + 1]) +
-                   std::abs(fp.d_c1 * x[data_->m_ * e.a + 2]) +
-                   std::abs(fp.d_c2 * x[data_->m_ * e.b + 2]);
+        const auto [fn, fp] = edge_fluxes(e, x, g);
+        terms[k] = std::abs(fn.d_c1 * x[m_ * e.a + 1]) +
+                   std::abs(fn.d_c2 * x[m_ * e.b + 1]) +
+                   std::abs(fp.d_c1 * x[m_ * e.a + 2]) +
+                   std::abs(fp.d_c2 * x[m_ * e.b + 2]);
     }
     detail::observe("edge_flux_terms", terms);
     return terms;
 }
 
-BandEdges DriftDiffusion::band_edges(std::span<const double> x) const {
+BandEdges SystemData::band_edges(const SystemState& /*st*/, std::span<const double> x) const {
     NITCAD_EXPECTS(x.size() == unknowns());
     const std::size_t n = node_count();
     BandEdges b{std::vector<double>(n), std::vector<double>(n), std::vector<double>(n),
                 std::vector<double>(n)};
     for (std::size_t i = 0; i < n; ++i) {
-        if (data_->insulator_[i] != 0) {
+        if (insulator_[i] != 0) {
             const double nan = std::numeric_limits<double>::quiet_NaN();
             b.conduction[i] = b.valence[i] = b.electron_fermi[i] = b.hole_fermi[i] = nan;
             continue;
@@ -1455,23 +1452,23 @@ BandEdges DriftDiffusion::band_edges(std::span<const double> x) const {
         if (electrothermal()) {
             // E_c = c_n - psi, E_v = c_p - psi + g; E_Fn = E_c + theta x_n, E_Fp = E_v - theta x_p
             // with x the bands' reduced energies at the node's T (level; units of k T0).
-            const SystemData::ThermalNode& tn = data_->thermal_nodes_[i];
+            const SystemData::ThermalNode& tn = thermal_nodes_[i];
             const double psi = x[4 * i];
-            const SystemData::ThermalState s = data_->thermal_state(i, x[4 * i + 3]);
+            const SystemData::ThermalState s = thermal_state(i, x[4 * i + 3]);
             const double theta = s.theta;
             b.conduction[i] = tn.c_n - psi;
             b.valence[i] = tn.c_p - psi + s.gap;
             b.electron_fermi[i] =
                 b.conduction[i] +
-                theta * data_->level(x[4 * i + 1], theta, s.nie, tn.log_nc, s.mass_n, s.d_mass_n).x;
+                theta * level(x[4 * i + 1], theta, s.nie, tn.log_nc, s.mass_n, s.d_mass_n).x;
             b.hole_fermi[i] =
                 b.valence[i] -
-                theta * data_->level(x[4 * i + 2], theta, s.nie, tn.log_nv, s.mass_p, s.d_mass_p).x;
+                theta * level(x[4 * i + 2], theta, s.nie, tn.log_nv, s.mass_p, s.d_mass_p).x;
             continue;
         }
         const detail::NodeBands e = detail::node_bands(
-            data_->fermi_dirac_, data_->n_ie_[i], data_->log_dos_n_[i], data_->log_dos_p_[i],
-            x[data_->m_ * i] + data_->band_shift_[i], x[data_->m_ * i + 1], x[data_->m_ * i + 2]);
+            fermi_dirac_, n_ie_[i], log_dos_n_[i], log_dos_p_[i],
+            x[m_ * i] + band_shift_[i], x[m_ * i + 1], x[m_ * i + 2]);
         b.conduction[i] = e.conduction;
         b.valence[i] = e.valence;
         b.electron_fermi[i] = e.electron_fermi;
@@ -1484,40 +1481,40 @@ BandEdges DriftDiffusion::band_edges(std::span<const double> x) const {
     return b;
 }
 
-std::vector<double> DriftDiffusion::gate_charges(std::span<const double> x,
+std::vector<double> SystemData::gate_charges(const SystemState& st, std::span<const double> x,
                                                  const TimeStep* step) const {
     NITCAD_EXPECTS(x.size() == unknowns());
-    std::vector<double> charge = state_->gates_.charges(x, data_->m_, data_->contact_count_);
-    if (electrothermal()) data_->add_gate_shift(*state_, x, charge);
-    for (const SystemData::EdgeTerm& e : data_->edges_) {
-        const std::int32_t ca = data_->electrode_[e.a], cb = data_->electrode_[e.b];
+    std::vector<double> charge = st.gates_.charges(x, m_, contact_count_);
+    if (electrothermal()) add_gate_shift(st, x, charge);
+    for (const SystemData::EdgeTerm& e : edges_) {
+        const std::int32_t ca = electrode_[e.a], cb = electrode_[e.b];
         if (ca == cb || e.charged) continue;
-        const double flux = e.c * (x[data_->m_ * e.a] - x[data_->m_ * e.b]);  // from a to b
+        const double flux = e.c * (x[m_ * e.a] - x[m_ * e.b]);  // from a to b
         if (ca >= 0) charge[static_cast<std::size_t>(ca)] += flux;
         if (cb >= 0) charge[static_cast<std::size_t>(cb)] -= flux;
     }
     // An electrode node on an interface edge: the flux leaving it is minus its half-edge flux.
-    for (std::size_t k = 0; k < data_->interfaces_.edges().size(); ++k) {
-        const std::int32_t c = data_->electrode_[data_->interfaces_.edges()[k].insulator];
+    for (std::size_t k = 0; k < interfaces_.edges().size(); ++k) {
+        const std::int32_t c = electrode_[interfaces_.edges()[k].insulator];
         if (c < 0) continue;
-        charge[static_cast<std::size_t>(c)] -= data_->interface_at(k, x, step).flux_insulator;
+        charge[static_cast<std::size_t>(c)] -= interface_at(k, x, step).flux_insulator;
     }
     detail::observe("gate_charges", charge);
     return charge;
 }
 
-std::vector<double> DriftDiffusion::interface_trap_charges(std::span<const double> x,
+std::vector<double> SystemData::interface_trap_charges(const SystemState& /*st*/, std::span<const double> x,
                                                            const TimeStep* step) const {
     NITCAD_EXPECTS(x.size() == unknowns());
-    std::vector<double> q(data_->interfaces_.interface_count(), 0.0);
-    for (std::size_t k = 0; k < data_->interfaces_.edges().size(); ++k) {
-        q[data_->interfaces_.edges()[k].interface] += data_->interface_at(k, x, step).trapped;
+    std::vector<double> q(interfaces_.interface_count(), 0.0);
+    for (std::size_t k = 0; k < interfaces_.edges().size(); ++k) {
+        q[interfaces_.edges()[k].interface] += interface_at(k, x, step).trapped;
     }
     detail::observe("interface_trap_charges", q);
     return q;
 }
 
-linalg::ComplexSparseMatrix DriftDiffusion::make_small_signal_matrix() const {
+linalg::ComplexSparseMatrix System::make_small_signal_matrix() const {
     std::vector<linalg::ComplexTriplet> t;
     t.reserve(state_->pattern_.nonzeros());
     for (linalg::Index r = 0; r < state_->pattern_.rows(); ++r) {
@@ -1531,76 +1528,46 @@ linalg::ComplexSparseMatrix DriftDiffusion::make_small_signal_matrix() const {
                                                        state_->pattern_.cols(), t);
 }
 
-void DriftDiffusion::small_signal_matrix(std::span<const double> x, std::complex<double> s,
-                                         linalg::ComplexSparseMatrix& a) const {
+void System::small_signal_matrix(std::span<const double> x, std::complex<double> s,
+                                 linalg::ComplexSparseMatrix& a) const {
     NITCAD_EXPECTS(x.size() == unknowns());
     NITCAD_EXPECTS(a.rows() == state_->pattern_.rows() &&
                    std::ranges::equal(a.row_offsets(), state_->pattern_.row_offsets()) &&
                    std::ranges::equal(a.col_indices(), state_->pattern_.col_indices()));
     using Complex = std::complex<double>;
-    // The steady rows without the interface edges, then the storage and the interfaces' terms.
+    // The steady rows but those the frequency-domain terms replace, then the storage and the
+    // frequency-domain terms (Unit 57 GE3).
     std::vector<double> f(unknowns()), real(state_->pattern_.nonzeros(), 0.0);
-    assemble(x, f, real, nullptr, false);
+    assemble(x, f, real, nullptr, true);
     const std::span<Complex> values = a.values();
     for (std::size_t k = 0; k < real.size(); ++k) values[k] = real[k];
     const auto at = [&](std::size_t node, std::size_t r, std::size_t c) -> Complex& {
         return values[data_->block_[data_->m_ * data_->m_ * node + data_->m_ * r + c]];
     };
-    if (electrothermal()) {  // the storage of a time step's rows at s, about a steady state
+    if (data_->electrothermal()) {  // the storage of a time step's rows at s, about a steady state
         data_->add_thermal_storage(x, s, values);
-        detail::observe("small_signal_matrix", values);
-        return;  // no interface terms: the model refuses traps and interface charge
-    }
-    const std::vector<SystemData::NodeDegeneracy> g = data_->degeneracies(x);
-    for (std::size_t i = 0; i < node_count(); ++i) {
-        if (data_->contact_[i] >= 0 || data_->insulator_[i] != 0) continue;
-        const SystemData::NodeStorage st = data_->node_storage(i, x, g);
-        at(i, 1, 1) -= s * (data_->volume_[i] * st.d_n);
-        at(i, 2, 2) += s * (data_->volume_[i] * st.d_p);
-        if (data_->energy_balance_) {  // Unit 52 (ED9): the energy rows' storage, -V s dW
-            const SystemData::EnergyStorage w = data_->energy_storage(i, x);
-            at(i, 3, 1) -= s * (data_->volume_[i] * w.n_c);
-            at(i, 3, 3) -= s * (data_->volume_[i] * w.n_t);
-            at(i, 4, 2) -= s * (data_->volume_[i] * w.p_c);
-            at(i, 4, 4) -= s * (data_->volume_[i] * w.p_t);
+    } else {
+        const std::vector<SystemData::NodeDegeneracy> g = data_->degeneracies(x);
+        for (std::size_t i = 0; i < node_count(); ++i) {
+            if (data_->contact_[i] >= 0 || data_->insulator_[i] != 0) continue;
+            const SystemData::NodeStorage st = data_->node_storage(i, x, g);
+            at(i, 1, 1) -= s * (data_->volume_[i] * st.d_n);
+            at(i, 2, 2) += s * (data_->volume_[i] * st.d_p);
+            if (data_->energy_balance_) {  // Unit 52 (ED9): the energy rows' storage, -V s dW
+                const SystemData::EnergyStorage w = data_->energy_storage(i, x);
+                at(i, 3, 1) -= s * (data_->volume_[i] * w.n_c);
+                at(i, 3, 3) -= s * (data_->volume_[i] * w.n_t);
+                at(i, 4, 2) -= s * (data_->volume_[i] * w.p_c);
+                at(i, 4, 4) -= s * (data_->volume_[i] * w.p_t);
+            }
         }
     }
-    // The traps' weight Ns / s_physical, s_physical = s / t0.
-    const Complex inv_weight = s / (data_->rate_scale_ * data_->Ns_);
-    for (std::size_t k = 0; k < data_->interfaces_.edges().size(); ++k) {
-        const InterfaceEdge& v = data_->interfaces_.edges()[k];
-        const std::size_t o = v.insulator, sn = v.semiconductor;
-        const InterfaceSmallSignal t = data_->interfaces_.small_signal(
-            v, x[data_->m_ * o], x[data_->m_ * sn], x[data_->m_ * sn + 1], x[data_->m_ * sn + 2],
-            data_->statistics(sn), inv_weight);
-        // As assemble's interface terms.
-        const SystemData::EdgeTerm& e = data_->edges_[v.edge];
-        const bool o_first = e.a == o;
-        const std::size_t os = o_first ? e.ab[0] : e.ba[0];
-        const std::size_t so[3] = {o_first ? e.ba[0] : e.ab[0], o_first ? e.ba[1] : e.ab[1],
-                                   o_first ? e.ba[3] : e.ab[3]};
-        if (data_->electrode_[o] < 0) {
-            at(o, 0, 0) += t.d_flux_insulator[0];
-            values[os] += t.d_flux_insulator[1];
-            values[data_->interface_np_[k].first] += t.d_flux_insulator[2];
-            values[data_->interface_np_[k].second] += t.d_flux_insulator[3];
-        }
-        if (data_->contact_[sn] >= 0) continue;
-        const bool poisson =
-            data_->schottky_[sn] < 0;  // a Schottky node's Poisson row is Dirichlet
-        if (poisson) values[so[0]] += t.d_flux_semiconductor[0];
-        values[so[1]] -= t.d_rate[0];
-        values[so[2]] += t.d_rate_p[0];
-        for (std::size_t c = 1; c < 4; ++c) {
-            if (poisson) at(sn, 0, c - 1) += t.d_flux_semiconductor[c];
-            at(sn, 1, c - 1) -= t.d_rate[c];
-            at(sn, 2, c - 1) += t.d_rate_p[c];
-        }
-    }
+    // The electrothermal composition has none: the model refuses traps and interface charge.
+    data_->composition_->assemble_frequency(*data_, *state_, {x, s, values});
     detail::observe("small_signal_matrix", values);
 }
 
-std::vector<double> DriftDiffusion::bias_derivative(std::size_t contact) const {
+std::vector<double> System::bias_derivative(std::size_t contact) const {
     NITCAD_EXPECTS(contact < data_->contact_count_);
     const auto c = static_cast<std::int32_t>(contact);
     std::vector<double> d(unknowns(), 0.0);
@@ -1618,25 +1585,25 @@ std::vector<double> DriftDiffusion::bias_derivative(std::size_t contact) const {
     return d;
 }
 
-std::vector<DriftDiffusion::CurrentRow> DriftDiffusion::small_signal_currents(
+std::vector<CurrentRow> SystemData::small_signal_currents(const SystemState& st,
     std::span<const double> x, std::complex<double> s) const {
     NITCAD_EXPECTS(x.size() == unknowns());
     using Complex = std::complex<double>;
-    std::vector<std::vector<std::pair<std::size_t, Complex>>> terms(data_->contact_count_);
-    std::vector<CurrentRow> rows(data_->contact_count_);
+    std::vector<std::vector<std::pair<std::size_t, Complex>>> terms(contact_count_);
+    std::vector<CurrentRow> rows(contact_count_);
     const auto add = [&](std::int32_t c, std::size_t column, Complex value) {
         if (c >= 0) terms[static_cast<std::size_t>(c)].emplace_back(column, value);
     };
     // Conduction (terminal_currents): the total flux on the edges leaving each ohmic contact.
     if (electrothermal()) {  // with the temperature columns
-        const std::vector<SystemData::ThermalState> t = data_->thermal_states(x);
-        const std::vector<SystemData::NodeLevels> l = data_->thermal_levels(x, t);
-        for (std::size_t k = 0; k < data_->edges_.size(); ++k) {
-            const SystemData::EdgeTerm& e = data_->edges_[k];
-            const std::int32_t ca = data_->owner_[e.a], cb = data_->owner_[e.b];
+        const std::vector<SystemData::ThermalState> t = thermal_states(x);
+        const std::vector<SystemData::NodeLevels> l = thermal_levels(x, t);
+        for (std::size_t k = 0; k < edges_.size(); ++k) {
+            const SystemData::EdgeTerm& e = edges_[k];
+            const std::int32_t ca = owner_[e.a], cb = owner_[e.b];
             if (ca == cb || !e.carriers) continue;
             SystemData::SurfaceSlope slope{};
-            const auto [fn, fp] = data_->thermal_fluxes(k, x, t, l, &slope);
+            const auto [fn, fp] = thermal_fluxes(k, x, t, l, &slope);
             const std::pair<std::size_t, double> d[8] = {
                 {4 * e.a, fn.d_psi[0] + fp.d_psi[0]},     {4 * e.b, fn.d_psi[1] + fp.d_psi[1]},
                 {4 * e.a + 1, fn.d_c[0]},                 {4 * e.b + 1, fn.d_c[1]},
@@ -1648,19 +1615,19 @@ std::vector<DriftDiffusion::CurrentRow> DriftDiffusion::small_signal_currents(
                 add(cb, column, -value);
             }
             for (std::size_t j = e.surface_first; j < e.surface_last; ++j) {  // Unit 46
-                const SystemData::SurfaceStencil& st = data_->surface_stencil_[j];
-                const double value = (slope.n + slope.p) * data_->surface_gradient(slope.field, st);
-                add(ca, 4 * st.node, value);
-                add(cb, 4 * st.node, -value);
+                const SystemData::SurfaceStencil& sj = surface_stencil_[j];
+                const double value = (slope.n + slope.p) * surface_gradient(slope.field, sj);
+                add(ca, 4 * sj.node, value);
+                add(cb, 4 * sj.node, -value);
             }
         }
     }
-    if (data_->energy_balance_) {  // Unit 52: Stratton's fluxes with the rise columns
-        for (std::size_t k = 0; k < data_->edges_.size(); ++k) {
-            const SystemData::EdgeTerm& e = data_->edges_[k];
-            const std::int32_t ca = data_->owner_[e.a], cb = data_->owner_[e.b];
+    if (energy_balance_) {  // Unit 52: Stratton's fluxes with the rise columns
+        for (std::size_t k = 0; k < edges_.size(); ++k) {
+            const SystemData::EdgeTerm& e = edges_[k];
+            const std::int32_t ca = owner_[e.a], cb = owner_[e.b];
             if (ca == cb || !e.carriers) continue;
-            const auto [fn, fp] = data_->energy_fluxes(k, x);
+            const auto [fn, fp] = energy_fluxes(k, x);
             const std::pair<std::size_t, double> d[10] = {
                 {5 * e.a, fn.d_psi[0] + fp.d_psi[0]}, {5 * e.b, fn.d_psi[1] + fp.d_psi[1]},
                 {5 * e.a + 1, fn.d_c[0]},             {5 * e.b + 1, fn.d_c[1]},
@@ -1672,69 +1639,69 @@ std::vector<DriftDiffusion::CurrentRow> DriftDiffusion::small_signal_currents(
                 add(cb, column, -value);
             }
             if (!e.surface) continue;
-            const SystemData::SurfaceField perp = data_->surface_field(e, x);  // Lombardi (Unit 46)
+            const SystemData::SurfaceField perp = surface_field(e, x);  // Lombardi (Unit 46)
             for (std::size_t j = e.surface_first; j < e.surface_last; ++j) {
-                const SystemData::SurfaceStencil& st = data_->surface_stencil_[j];
-                const double value = (fn.d_perp + fp.d_perp) * data_->surface_gradient(perp, st);
-                add(ca, 5 * st.node, value);
-                add(cb, 5 * st.node, -value);
+                const SystemData::SurfaceStencil& sj = surface_stencil_[j];
+                const double value = (fn.d_perp + fp.d_perp) * surface_gradient(perp, sj);
+                add(ca, 5 * sj.node, value);
+                add(cb, 5 * sj.node, -value);
             }
         }
     }
-    const std::vector<SystemData::NodeDegeneracy> g = data_->degeneracies(x);
-    for (const SystemData::EdgeTerm& e : data_->edges_) {
-        const std::int32_t ca = data_->owner_[e.a], cb = data_->owner_[e.b];
-        if (electrothermal() || data_->energy_balance_ || ca == cb || !e.carriers) continue;
+    const std::vector<SystemData::NodeDegeneracy> g = degeneracies(x);
+    for (const SystemData::EdgeTerm& e : edges_) {
+        const std::int32_t ca = owner_[e.a], cb = owner_[e.b];
+        if (electrothermal() || energy_balance_ || ca == cb || !e.carriers) continue;
         SystemData::SurfaceSlope slope{};
-        const auto [fn, fp] = data_->edge_fluxes(e, x, g, &slope);
+        const auto [fn, fp] = edge_fluxes(e, x, g, &slope);
         const std::pair<std::size_t, double> d[6] = {
-            {data_->m_ * e.a, fn.d_psi1 + fp.d_psi1}, {data_->m_ * e.b, fn.d_psi2 + fp.d_psi2},
-            {data_->m_ * e.a + 1, fn.d_c1},           {data_->m_ * e.b + 1, fn.d_c2},
-            {data_->m_ * e.a + 2, fp.d_c1},           {data_->m_ * e.b + 2, fp.d_c2}};
+            {m_ * e.a, fn.d_psi1 + fp.d_psi1}, {m_ * e.b, fn.d_psi2 + fp.d_psi2},
+            {m_ * e.a + 1, fn.d_c1},           {m_ * e.b + 1, fn.d_c2},
+            {m_ * e.a + 2, fp.d_c1},           {m_ * e.b + 2, fp.d_c2}};
         for (const auto& [column, value] : d) {
             add(ca, column, value);
             add(cb, column, -value);
         }
         for (std::size_t k = e.surface_first; k < e.surface_last; ++k) {  // Lombardi (Unit 46)
-            const SystemData::SurfaceStencil& j = data_->surface_stencil_[k];
-            const double value = (slope.n + slope.p) * data_->surface_gradient(slope.field, j);
-            add(ca, data_->m_ * j.node, value);
-            add(cb, data_->m_ * j.node, -value);
+            const SystemData::SurfaceStencil& j = surface_stencil_[k];
+            const double value = (slope.n + slope.p) * surface_gradient(slope.field, j);
+            add(ca, m_ * j.node, value);
+            add(cb, m_ * j.node, -value);
         }
     }
     // The traps of an interface edge on an ohmic node (conduction_currents): rate_p - rate; and
     // the charge of a contact node on an interface edge: minus its half-edge flux.
     const auto owner = [&](std::size_t i) {
-        return data_->owner_[i] >= 0 ? data_->owner_[i] : data_->electrode_[i];
+        return owner_[i] >= 0 ? owner_[i] : electrode_[i];
     };
-    const Complex inv_weight = s / (data_->rate_scale_ * data_->Ns_);
-    for (std::size_t k = 0; k < data_->interfaces_.edges().size(); ++k) {
-        const InterfaceEdge& v = data_->interfaces_.edges()[k];
+    const Complex inv_weight = s / (rate_scale_ * Ns_);
+    for (std::size_t k = 0; k < interfaces_.edges().size(); ++k) {
+        const InterfaceEdge& v = interfaces_.edges()[k];
         const std::size_t o = v.insulator, sn = v.semiconductor;
         const std::int32_t ci = owner(o), cs = owner(sn);
         if (ci < 0 && cs < 0) continue;
-        const InterfaceSmallSignal t = data_->interfaces_.small_signal(
-            v, x[data_->m_ * o], x[data_->m_ * sn], x[data_->m_ * sn + 1], x[data_->m_ * sn + 2],
-            data_->statistics(sn), inv_weight);
-        const std::size_t columns[4] = {data_->m_ * o, data_->m_ * sn, data_->m_ * sn + 1,
-                                        data_->m_ * sn + 2};
+        const InterfaceSmallSignal t = interfaces_.small_signal(
+            v, x[m_ * o], x[m_ * sn], x[m_ * sn + 1], x[m_ * sn + 2],
+            statistics(sn), inv_weight);
+        const std::size_t columns[4] = {m_ * o, m_ * sn, m_ * sn + 1,
+                                        m_ * sn + 2};
         for (std::size_t c = 0; c < 4; ++c) {
-            add(data_->contact_[sn], columns[c], t.d_rate_p[c] - t.d_rate[c]);
+            add(contact_[sn], columns[c], t.d_rate_p[c] - t.d_rate[c]);
             add(ci, columns[c], -s * t.d_flux_insulator[c]);
             add(cs, columns[c], -s * t.d_flux_semiconductor[c]);
         }
     }
     // Gate tunnelling (Unit 51): the linearized T_n - T_p of each tunnel, a lumped gate's own
     // bias among its columns.
-    if (!data_->gate_tunnels_.empty()) {
+    if (!gate_tunnels_.empty()) {
         SystemData::GateTunnelFlux flux;
-        for (const SystemData::GateTunnel& t : data_->gate_tunnels_) {
-            data_->gate_tunnel_flux(*state_, t, x, g, flux);
+        for (const SystemData::GateTunnel& t : gate_tunnels_) {
+            gate_tunnel_flux(st, t, x, g, flux);
             for (std::size_t c = 0; c < 3; ++c) {
-                add(t.contact, data_->m_ * t.node + c, flux.d_n[c] - flux.d_p[c]);
+                add(t.contact, m_ * t.node + c, flux.d_n[c] - flux.d_p[c]);
             }
             for (std::size_t k = 0; k < t.nodes.size(); ++k) {
-                add(t.contact, data_->m_ * t.nodes[k], flux.d_n[3 + k] - flux.d_p[3 + k]);
+                add(t.contact, m_ * t.nodes[k], flux.d_n[3 + k] - flux.d_p[3 + k]);
             }
             if (t.lumped) {
                 rows[static_cast<std::size_t>(t.contact)].bias += flux.d_n[3] - flux.d_p[3];
@@ -1743,27 +1710,27 @@ std::vector<DriftDiffusion::CurrentRow> DriftDiffusion::small_signal_currents(
     }
     // Displacement: s times the contact charges (contact_charges).
     for (std::size_t i = 0; i < node_count(); ++i) {
-        if (!state_->gates_.on_gate(i)) continue;
-        const std::size_t c = state_->gates_.contact(i);
-        const double G = state_->gates_.term(i).coupling;
-        terms[c].emplace_back(data_->m_ * i, -s * G);
+        if (!st.gates_.on_gate(i)) continue;
+        const std::size_t c = st.gates_.contact(i);
+        const double G = st.gates_.term(i).coupling;
+        terms[c].emplace_back(m_ * i, -s * G);
         if (electrothermal()) {  // a p-polysilicon gate's potential moves with the node's T
             const double d =
-                data_->electrode_shift(i, data_->thermal_state(i, x[4 * i + 3])).d_theta;
+                electrode_shift(i, thermal_state(i, x[4 * i + 3])).d_theta;
             if (d != 0.0) terms[c].emplace_back(4 * i + 3, s * G * d);
         }
-        rows[c].bias += s * (G / data_->V_T_);
+        rows[c].bias += s * (G / V_T_);
     }
-    for (const SystemData::EdgeTerm& e : data_->edges_) {
+    for (const SystemData::EdgeTerm& e : edges_) {
         const std::int32_t ca = owner(e.a), cb = owner(e.b);
         if (ca == cb || e.charged) continue;
-        add(ca, data_->m_ * e.a, s * e.c);
-        add(ca, data_->m_ * e.b, -s * e.c);
-        add(cb, data_->m_ * e.a, -s * e.c);
-        add(cb, data_->m_ * e.b, s * e.c);
+        add(ca, m_ * e.a, s * e.c);
+        add(ca, m_ * e.b, -s * e.c);
+        add(cb, m_ * e.a, -s * e.c);
+        add(cb, m_ * e.b, s * e.c);
     }
     // Merge each row's terms by column, in increasing column order.
-    for (std::size_t c = 0; c < data_->contact_count_; ++c) {
+    for (std::size_t c = 0; c < contact_count_; ++c) {
         std::ranges::stable_sort(terms[c], {}, &std::pair<std::size_t, Complex>::first);
         for (const auto& [column, value] : terms[c]) {
             if (!rows[c].columns.empty() && rows[c].columns.back() == column) {
@@ -1785,25 +1752,25 @@ std::vector<DriftDiffusion::CurrentRow> DriftDiffusion::small_signal_currents(
     return rows;
 }
 
-TunnelPaths DriftDiffusion::trace_paths(std::span<const double> x) const {
+TunnelPaths SystemData::trace_paths(const SystemState& /*st*/, std::span<const double> x) const {
     NITCAD_EXPECTS(x.size() == unknowns());
     if (!tunnelling()) return {};
     const std::size_t n = node_count();
     std::vector<double> psi(n), valence(n, 0.0), end(n, 0.0);
     std::vector<char> semiconductor(n, 0), contact(n, 0);
-    const bool wkb = data_->tunnel_kind_ == NonlocalTunnelling::direct_wkb;
+    const bool wkb = tunnel_kind_ == NonlocalTunnelling::direct_wkb;
     for (std::size_t i = 0; i < n; ++i) {
-        psi[i] = x[data_->m_ * i];
-        if (data_->insulator_[i] != 0) continue;
-        const double eta = psi[i] + data_->band_shift_[i];
-        valence[i] = -(data_->log_dos_p_[i] + eta);
+        psi[i] = x[m_ * i];
+        if (insulator_[i] != 0) continue;
+        const double eta = psi[i] + band_shift_[i];
+        valence[i] = -(log_dos_p_[i] + eta);
         end[i] =
-            wkb ? valence[i] + data_->tunnel_gap_[i] / data_->V_T_ : data_->log_dos_n_[i] - eta;
+            wkb ? valence[i] + tunnel_gap_[i] / V_T_ : log_dos_n_[i] - eta;
         semiconductor[i] = 1;
-        contact[i] = data_->contact_[i] >= 0 ? 1 : 0;
+        contact[i] = contact_[i] >= 0 ? 1 : 0;
     }
-    const TunnelTraceInput in{&*data_->cells_, psi, valence, end, semiconductor, contact,
-                              data_->tunnel_length_, data_->V_T_, wkb};
+    const TunnelTraceInput in{&*this->cells_, psi, valence, end, semiconductor, contact,
+                              tunnel_length_, V_T_, wkb};
     TunnelPaths traced = trace_tunnel_paths(in);
     // Only the paths whose rate at x is at least `matters` of the largest are kept: the others
     // carry no current the state resolves (a start deep in a neutral region crosses after the
@@ -1813,7 +1780,7 @@ TunnelPaths DriftDiffusion::trace_paths(std::span<const double> x) const {
     double largest = 0.0;
     SystemData::PathTerms t;
     for (const TunnelPath& p : traced.paths) {
-        data_->path_terms(p, data_->layout(p), x, t);
+        path_terms(p, layout(p), x, t);
         rate.push_back(t.state.rate_cm3_s);
         largest = std::max(largest, t.state.rate_cm3_s);
     }
@@ -1856,14 +1823,14 @@ SystemData::PathLayout SystemData::layout(const TunnelPath& p) const {
     return l;
 }
 
-bool DriftDiffusion::paths_agree(const TunnelPaths& a, const TunnelPaths& b,
+bool SystemData::paths_agree(const SystemState& /*st*/, const TunnelPaths& a, const TunnelPaths& b,
                                  std::span<const double> x) const {
     NITCAD_EXPECTS(x.size() == unknowns());
     const auto states = [&](const TunnelPaths& set) {
         std::vector<TunnelPathState> r;
         SystemData::PathTerms t;
         for (const TunnelPath& p : set.paths) {
-            data_->path_terms(p, data_->layout(p), x, t);
+            path_terms(p, layout(p), x, t);
             r.push_back(t.state);
         }
         return r;
@@ -1897,31 +1864,33 @@ bool DriftDiffusion::paths_agree(const TunnelPaths& a, const TunnelPaths& b,
     return covered(a, sa, b, sb) && covered(b, sb, a, sa);
 }
 
-void DriftDiffusion::set_paths(TunnelPaths paths) {
-    NITCAD_EXPECTS(tunnelling());
-    state_->paths_ = std::move(paths);
-    state_->layouts_.clear();
-    for (const TunnelPath& p : state_->paths_.paths) state_->layouts_.push_back(data_->layout(p));
+void set_paths(System& system, TunnelPaths paths) {
+    const SystemData& old = SystemData::of(system);
+    SystemState& st = SystemData::state_of(system);
+    NITCAD_EXPECTS(old.tunnelling());
+    st.paths_ = std::move(paths);
+    st.layouts_.clear();
+    for (const TunnelPath& p : st.paths_.paths) st.layouts_.push_back(old.layout(p));
     // The base and every term's entries, the paths' among them (PathTunnelling, terms.cpp).
-    std::vector<linalg::Triplet> t = state_->base_triplets_;
-    SystemData::Terms::pattern(*data_, *state_, t);
-    const auto size = static_cast<linalg::Index>(unknowns());
-    state_->pattern_ = *linalg::SparseMatrix::from_triplets(size, size, t);  // in range
+    std::vector<linalg::Triplet> t = st.base_triplets_;
+    SystemData::Terms::pattern(old, st, t);
+    const auto size = static_cast<linalg::Index>(old.unknowns());
+    st.pattern_ = *linalg::SparseMatrix::from_triplets(size, size, t);  // in range
     // The positions move into the new pattern in a copy of the data (copy on write): a copy of
     // this system that shares the old data keeps its own pattern and positions (GE2).
-    auto data = std::make_shared<SystemData>(*data_);
-    data->locate_positions(state_->pattern_);
-    data_ = std::move(data);
-    for (std::size_t k = 0; k < state_->paths_.paths.size(); ++k) {
-        SystemData::PathLayout& l = state_->layouts_[k];
-        const std::size_t i = state_->paths_.paths[k].start;
+    auto data = std::make_shared<SystemData>(old);
+    data->locate_positions(st.pattern_);
+    const std::size_t m = data->m_;
+    SystemData::replace(system, std::move(data));
+    for (std::size_t k = 0; k < st.paths_.paths.size(); ++k) {
+        SystemData::PathLayout& l = st.layouts_[k];
+        const std::size_t i = st.paths_.paths[k].start;
         for (const std::size_t c : l.columns) {
-            l.hole.push_back(detail::position(state_->pattern_, data_->m_ * i + 2, data_->m_ * c));
+            l.hole.push_back(detail::position(st.pattern_, m * i + 2, m * c));
         }
         for (const std::size_t d : l.deposit) {
             for (const std::size_t c : l.columns) {
-                l.electron.push_back(
-                    detail::position(state_->pattern_, data_->m_ * d + 1, data_->m_ * c));
+                l.electron.push_back(detail::position(st.pattern_, m * d + 1, m * c));
             }
         }
     }
@@ -2134,12 +2103,12 @@ void SystemData::path_terms(const TunnelPath& p, const PathLayout& l,
     deposit(sb, tt, 1.0);
 }
 
-std::vector<TunnelPathState> DriftDiffusion::path_states(std::span<const double> x) const {
+std::vector<TunnelPathState> SystemData::path_states(const SystemState& st, std::span<const double> x) const {
     NITCAD_EXPECTS(x.size() == unknowns());
     std::vector<TunnelPathState> states;
     SystemData::PathTerms t;
-    for (std::size_t k = 0; k < state_->paths_.paths.size(); ++k) {
-        data_->path_terms(state_->paths_.paths[k], state_->layouts_[k], x, t);
+    for (std::size_t k = 0; k < st.paths_.paths.size(); ++k) {
+        path_terms(st.paths_.paths[k], st.layouts_[k], x, t);
         states.push_back(t.state);
     }
     return states;

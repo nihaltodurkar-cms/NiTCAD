@@ -1,3 +1,10 @@
+// The generic equation system (Unit 57, DECISIONS.md GE3): a composition of equation terms over a
+// map of the unknowns (fields.hpp DofMap), with only the members every equation set has. The
+// model-specific queries and mutators are free functions in the topic headers: currents.hpp,
+// thermal.hpp, tunnelling.hpp, energy.hpp, charges.hpp and rates.hpp, and band_edges.hpp's
+// band_edges. The equation sets of a system created from a device and models are those of the
+// coupled drift-diffusion system below.
+//
 // Coupled drift-diffusion system: Poisson, electron and hole continuity, three scaled unknowns per
 // node interleaved as x[3i] = psi, x[3i+1] = n, x[3i+2] = p (legacy Device1D::residual_jacobian,
 // baseline models, generalised from 1D to the mesh graph).
@@ -238,140 +245,48 @@
 
 #include <complex>
 #include <cstddef>
-#include <cstdint>
 #include <expected>
 #include <memory>
-#include <optional>
 #include <span>
-#include <utility>
 #include <vector>
 
-#include "NiTCAD/assemble/band_edges.hpp"
 #include "NiTCAD/assemble/fields.hpp"
-#include "NiTCAD/assemble/gate.hpp"
-#include "NiTCAD/assemble/interface_edges.hpp"
 #include "NiTCAD/assemble/models.hpp"
-#include "NiTCAD/assemble/sg_flux.hpp"
 #include "NiTCAD/assemble/scaling.hpp"
-#include "NiTCAD/assemble/tunnel_paths.hpp"
 #include "NiTCAD/base/error.hpp"
 #include "NiTCAD/device/device.hpp"
 #include "NiTCAD/linalg/sparse_matrix.hpp"
-#include "NiTCAD/physics/impact_ionization.hpp"
-#include "NiTCAD/physics/ionization.hpp"
-#include "NiTCAD/physics/semiconductor.hpp"
-#include "NiTCAD/physics/statistics.hpp"
-#include "NiTCAD/physics/surface_mobility.hpp"
 
 namespace NiTCAD::assemble {
 
-struct SystemData;   // the model data and the state (src/assemble/system_data.hpp, Unit 57 GE2)
+struct SystemData;  // the model data and the state (src/assemble/system_data.hpp, Unit 57 GE2)
 struct SystemState;
+class SystemKey;  // constructible only inside src/assemble (the passkey of data() and state())
 
-class DriftDiffusion {
+class System {
 public:
-    // Errors: those of EquilibriumPoisson::create (scaling temperature); invalid_input for
-    // impact_current_resolution not finite and >= 0 with impact ionization on; for btbt_local
-    // with btbt_nonlocal; for btbt_nonlocal without the device's cells, on a device with an edge
-    // between two different semiconductors (no tunnel path crosses a heterointerface), or, for
-    // direct_wkb, with a semiconductor region whose material lacks a direct gap or tunnelling
-    // masses (silicon never has them). With models.electrothermal (invalid_input): band-to-band
-    // tunnelling or interface traps (DECISIONS.md T8), a thermionic-emission interface (U3,
-    // deferred), incomplete ionization (U6), Fermi-Dirac statistics with a thermopower exponent
-    // other than -1/2 (T3), a region whose material has no thermal data (T11).
-    [[nodiscard]] static std::expected<DriftDiffusion, base::Error> create(
+    // Errors: invalid_input for impact_current_resolution not finite and >= 0 with impact
+    // ionization on; for btbt_local with btbt_nonlocal; for btbt_nonlocal without the device's
+    // cells, on a device with an edge between two different semiconductors (no tunnel path
+    // crosses a heterointerface), or, for direct_wkb, with a semiconductor region whose material
+    // lacks a direct gap or tunnelling masses (silicon never has them). With models.electrothermal
+    // (invalid_input): band-to-band tunnelling or interface traps (DECISIONS.md T8), a
+    // thermionic-emission interface (U3, deferred), incomplete ionization (U6), Fermi-Dirac
+    // statistics with a thermopower exponent other than -1/2 (T3), a region whose material has
+    // no thermal data (T11). Those of the scaled device (scaling temperature).
+    [[nodiscard]] static std::expected<System, base::Error> create(
         const device::Device& device, const Scaling& scaling,
         const PhysicsModels& models = {});
-
-    // The current density below which impact ionization fades out (see the header comment).
-    static constexpr double impact_current_floor = 1e-12;  // [A/cm^2]
 
     [[nodiscard]] std::size_t unknowns() const noexcept;
     [[nodiscard]] std::size_t node_count() const noexcept;
     [[nodiscard]] std::size_t contact_count() const noexcept;
-    // Unknowns per node: 3 (psi, n, p), or 4 with the electrothermal model (theta last).
+    // Unknowns per node: 3 (psi, n, p), 4 with the electrothermal model (theta last), 5 with
+    // energy balance (tau_n, tau_p last).
     [[nodiscard]] std::size_t stride() const noexcept;
     // Where each field's unknowns are (fields.hpp; Unit 40): node-interleaved, stride() per node.
     // Precondition (NITCAD_EXPECTS): not a moved-from system.
     [[nodiscard]] const DofMap& dofs() const noexcept;
-
-    struct TimeStep;  // a BDF time step (below)
-
-    // Electrothermal (Unit 23; see the header comment). Whether the model is on.
-    [[nodiscard]] bool electrothermal() const noexcept;
-    // Energy balance (Unit 52, models.energy_balance): tau_n and tau_p are the fourth and fifth
-    // unknowns of every node.
-    [[nodiscard]] bool energy_balance() const noexcept;
-    // The carriers' energy budget of state x (Unit 52, EC7 as ruled 2026-10-29), in the units of
-    // electrical_power (k T_L per scaled particle flux): in a steady state
-    //     input = relaxation + recombination + contact_flux + contact_joule - peltier + residual
-    // to rounding, summed over the semiconductor nodes off the ohmic contacts:
-    // - input: sum_c V_c I_c (electrical_power);
-    // - relaxation: V k (3/2) (n tau_n / tau_wn + p tau_p / tau_wp), the power to the lattice;
-    // - recombination: V k U (E_c - E_v + (3/2)(theta_n + theta_p)), each recombined pair's gap
-    //   and thermal energy (U the continuity rows' net rate);
-    // - contact_flux: the energy flux the edges carry into the ohmic contact nodes (where tau = 0);
-    // - contact_joule: the half of the Joule heat of the contact edges no energy row keeps;
-    // - peltier: sum over the contact nodes of the carriers' band-edge energy above their Fermi
-    //   level times their flow into the device, (E_c + V) D_n + (E_v + V) D_p;
-    // - residual: the Newton residual's power, sum of the energy rows' residuals and of E_c and
-    //   E_v times the continuity rows' (zero for an exact solution).
-    // After a time step (Unit 52, EC13) the balance is the step's: input is the conduction
-    // power, recombination counts the rates alone, and two terms store energy:
-    //     input = ... + residual + thermal_storage + carrier_storage
-    // - thermal_storage: V rate (W_n + W_p - their history), the carriers' thermal energy (ED9);
-    // - carrier_storage: V rate (E_c (S_n - c_n) - E_v (S_p - c_p)), the band-edge energy of the
-    //   carriers stored (the continuity rows' storage terms, at the step's band edges).
-    // Both are 0 without a step. Preconditions (NITCAD_EXPECTS): the model is on and the
-    // temperatures are not held; x has unknowns() entries; step's spans of evaluate's sizes.
-    struct EnergyPowers {
-        double input, relaxation, recombination, contact_flux, contact_joule, peltier, residual;
-        double thermal_storage = 0.0, carrier_storage = 0.0;
-    };
-    [[nodiscard]] EnergyPowers energy_powers(std::span<const double> x,
-                                             const TimeStep* step = nullptr) const;
-    // The two-stage start of a bias point (Unit 52, ED12 as ruled 2026-10-29): hold_temperatures
-    // makes every energy row tau - tau_held = 0, tau_held the rises of state x (so psi, n and p are
-    // solved at the given carrier temperatures), until release_temperatures. Precondition
-    // (NITCAD_EXPECTS): the model is on; x has unknowns() entries.
-    void hold_temperatures(std::span<const double> x);
-    void release_temperatures() noexcept;
-    [[nodiscard]] bool temperatures_held() const noexcept;
-    // The temperature of each thermal contact in K (isothermal: its own; resistance: the ambient
-    // behind it), in the order of device.thermal_contacts(); initially the device's values.
-    // Errors (invalid_input, the index the thermal contact, the value it): the size is not the
-    // thermal contact count; a value not finite and positive. (The solve layer checks a
-    // temperature against the materials' range.) Precondition (NITCAD_EXPECTS): the model is on.
-    [[nodiscard]] std::expected<void, base::Error> set_thermal_bias(
-        std::span<const double> temperature_K);
-    // Whether every connected part of the mesh (every edge conducts heat) has a node of a thermal
-    // contact. A steady state needs one (DECISIONS.md T7); a transient does not. False without
-    // the model.
-    [[nodiscard]] bool heat_sinks_complete() const noexcept;
-    // Whether the connected thermal domain of a node has a node of a thermal contact (DECISIONS.md
-    // U5): a region without a sink of its own but joined to one has. Preconditions
-    // (NITCAD_EXPECTS): the model is on; node < node_count().
-    [[nodiscard]] bool reaches_heat_sink(std::size_t node) const;
-    // K0 = kappa_ref T0 / (V_T J0 L_D) (see the header comment): the heat rows are the nodes' heat
-    // balances in units of V_T J0 L_D^(D-1) divided by it. 0 without the model.
-    [[nodiscard]] double heat_scale() const noexcept;
-    // Scaled heat leaving through each thermal contact at state x (the heat its isothermal nodes'
-    // rows would balance without their Dirichlet terms, or its R_th flux), in units of
-    // V_T J0 L_D^(D-1) (a power in W / cm^(3-D) after multiplying by it), in
-    // device.thermal_contacts() order. In a steady state their sum is electrical_power(x).
-    // Preconditions (NITCAD_EXPECTS): the model is on; x has unknowns() entries.
-    // With a time step, the heat rows' storage terms are in the balance.
-    [[nodiscard]] std::vector<double> thermal_contact_heat(std::span<const double> x,
-                                                           const TimeStep* step = nullptr) const;
-    // The power the ohmic contacts deliver, sum_c V_c I_c, in the same units (also with energy
-    // balance, Unit 52).
-    [[nodiscard]] double electrical_power(std::span<const double> x) const;
-    // The Joule part of each carrier edge's heat (Jn, Jp), in the same units: each flux times the
-    // drop of its quasi-Fermi level along it, theta_e (ln(w_b / w_a) - delta_n) for electrons and
-    // theta_e (ln(w_a / w_b) - delta_p) for holes; each >= 0, since a flux runs down that drop.
-    // Zero on edges without carriers. Preconditions as thermal_contact_heat.
-    [[nodiscard]] std::vector<std::pair<double, double>> edge_joule_heat(
-        std::span<const double> x) const;
 
     // Applied bias of each contact in V, in the order of device.contacts(); sets the Dirichlet
     // values of the ohmic contacts and the electrode potential of the gates. Errors: those of
@@ -421,173 +336,67 @@ public:
     // model (S_n, S_p, tau), with energy balance (S_n, S_p, W_n, W_p).
     [[nodiscard]] std::vector<double> storage(std::span<const double> x) const;
     [[nodiscard]] std::size_t storage_width() const noexcept;
-    // The occupancy f of every trap slot at state x: after `step`, or without one the steady
-    // state.
-    [[nodiscard]] std::vector<double> trap_occupancies(std::span<const double> x,
-                                                       const TimeStep* step = nullptr) const;
-    // Scaled charge of every contact at state x, in device.contacts() order: the displacement flux
-    // leaving its nodes along the edges to nodes outside it (a gate: as gate_charges). Unlike
-    // gate_charges it is not zero for an ohmic contact. Units as gate_charges.
-    [[nodiscard]] std::vector<double> contact_charges(std::span<const double> x,
-                                                      const TimeStep* step = nullptr) const;
-    // Scaled conduction current entering through each contact after `step`: terminal_currents
-    // plus, on an interface edge whose semiconductor node is on an ohmic contact, the current
-    // that charges its traps from the contact.
-    [[nodiscard]] std::vector<double> conduction_currents(std::span<const double> x,
-                                                          const TimeStep& step) const;
 
     // Small-signal analysis (Unit 22; see the header comment). s is the Laplace variable in units
     // of 1 / time_scale() (s = i omega t0 for a frequency omega).
     // The pattern of small_signal_matrix: make_jacobian()'s, complex.
     [[nodiscard]] linalg::ComplexSparseMatrix make_small_signal_matrix() const;
-    // J + s C + T(s) at a steady state x. Preconditions (NITCAD_EXPECTS): x has unknowns() entries;
-    // a has the pattern of make_small_signal_matrix().
+    // J + s C + T(s) at a steady state x: the steady terms but those a frequency-domain term
+    // replaces, the storage at s, then the terms active only in the frequency domain (the
+    // interface edges' traps with their occupancy's dynamics). Preconditions (NITCAD_EXPECTS):
+    // x has unknowns() entries; a has the pattern of make_small_signal_matrix().
     void small_signal_matrix(std::span<const double> x, std::complex<double> s,
                              linalg::ComplexSparseMatrix& a) const;
     // dF / dV of contact c, per volt (the residual's dependence on its bias). Precondition
     // (NITCAD_EXPECTS): c < contact_count().
     [[nodiscard]] std::vector<double> bias_derivative(std::size_t contact) const;
-    // With the electrothermal model the heat row of an ohmic node also depends on its contact's
-    // bias, through the metal's Peltier term m (Jn + Jp) / K0, so dF / dV depends on the state:
-    // this overload evaluates it at x (without the model it is bias_derivative(contact)). The
-    // rows where it can be nonzero at any state: bias_rows(contact). F stays linear in V at fixed
-    // x. Preconditions (NITCAD_EXPECTS): contact < contact_count(); x has unknowns() entries.
+    // Where dF / dV depends on the state (bias_nonlinear: with the electrothermal model the heat
+    // row of an ohmic node depends on its contact's bias through the metal's Peltier term
+    // m (Jn + Jp) / K0; with gate tunnelling through a lumped gate, whose tunnelling current
+    // depends on the gate's bias exponentially), this overload evaluates it at x (otherwise it is
+    // bias_derivative(contact)). The rows where it can be nonzero at any state:
+    // bias_rows(contact), which then include the tunnelling nodes' continuity rows. With the
+    // electrothermal model F stays linear in V at fixed x. Preconditions (NITCAD_EXPECTS):
+    // contact < contact_count(); x has unknowns() entries.
     [[nodiscard]] std::vector<double> bias_derivative(std::size_t contact,
                                                       std::span<const double> x) const;
     [[nodiscard]] std::vector<std::size_t> bias_rows(std::size_t contact) const;
-    // Whether dF / dV depends on the state (bias_derivative's x overload must be used): with the
-    // electrothermal model, and with gate tunnelling through a lumped gate (Unit 51), whose
-    // tunnelling current depends on the gate's bias exponentially. The rows bias_rows names then
-    // include the tunnelling nodes' continuity rows.
+    // Whether dF / dV depends on the state (bias_derivative's x overload must be used).
     [[nodiscard]] bool bias_nonlinear() const noexcept;
-    // Gate tunnelling (Unit 51, GD10): whether any contact tunnels, and per contact the part of
-    // its terminal current each process carries at state x (scaled as terminal_currents; zero off
-    // a tunnelling contact). They sum to the tunnelling part of terminal_currents. Empty vectors
-    // without gate tunnelling. Precondition (NITCAD_EXPECTS): x has unknowns() entries.
-    [[nodiscard]] bool gate_tunnelling() const noexcept;
-    struct GateTunnellingCurrents {
-        std::vector<double> ecb, hvb, evb;
-    };
-    [[nodiscard]] GateTunnellingCurrents gate_tunnelling_currents(std::span<const double> x) const;
-    // The small-signal total current entering through a contact, conduction plus s times its
-    // charge (conduction_currents and contact_charges, linearized about the steady state x):
-    //     dI = sum_k values[k] dx[columns[k]] + bias dV,
-    // dV the contact's own bias in V (a gate's charge depends on it directly). Scaled as
-    // terminal_currents; one row per contact, in device.contacts() order.
-    struct CurrentRow {
-        std::vector<std::size_t> columns;
-        std::vector<std::complex<double>> values;
-        std::complex<double> bias;
-    };
-    [[nodiscard]] std::vector<CurrentRow> small_signal_currents(std::span<const double> x,
-                                                                std::complex<double> s) const;
 
-    // Nonlocal tunnelling (Unit 20; see the header comment). Whether the model is on; the paths
-    // traced at state x (tunnel_paths.hpp) whose rate at x is at least `matters` of the largest
-    // (the others would only fill the Jacobian); the frozen set the rows use (empty at creation),
-    // whose setting rebuilds the Jacobian pattern (make_jacobian and make_small_signal_matrix again);
-    // and each path's state at x. Preconditions (NITCAD_EXPECTS): x has unknowns() entries; the
-    // paths of set_paths are trace_paths's of this system.
-    [[nodiscard]] bool tunnelling() const noexcept;
-    [[nodiscard]] TunnelPaths trace_paths(std::span<const double> x) const;
-    void set_paths(TunnelPaths paths);
-    [[nodiscard]] const TunnelPaths& paths() const noexcept;
-    [[nodiscard]] std::vector<TunnelPathState> path_states(std::span<const double> x) const;
-    // Whether two path sets of this system act alike at state x: every path whose rate at x is at
-    // least 1e-10 of the largest rate in either set has a path from the same start in the other
-    // with the same geometry (tunnel_paths.hpp same_geometry). Paths below that are left out: a
-    // start at the edge of the start criterion, or a crossing near the longest length, flips in
-    // and out of the set with the rounding of the state, at a rate near exp(-690) of the scale.
-    [[nodiscard]] bool paths_agree(const TunnelPaths& a, const TunnelPaths& b,
-                                   std::span<const double> x) const;
-    // The share of the largest rate below which a path does not matter (paths_agree), and below
-    // which trace_paths drops it.
-    static constexpr double matters = 1e-10;
-
-    // Newton hooks (see the header comment).
-    // The minority floor (Unit 50, DECISIONS.md RD2; off by default): with it on, update_size
-    // measures every density against at least eps of the larger density at its node.
-    void set_minority_floor(bool on) noexcept;
-    [[nodiscard]] bool minority_floor() const noexcept;
+    // Newton hooks (see the header comment; the minority floor: set_minority_floor below).
     [[nodiscard]] double update_size(std::span<const double> x,
                                      std::span<const double> dx) const;
     void apply_update(std::span<double> x, std::span<const double> dx, double max_update) const;
 
-    // Scaled (Jn, Jp) of every mesh edge, in units of J0 times the edge's scaled coupling area
-    // (so a 1D edge gives the current density in units of J0).
-    [[nodiscard]] std::vector<std::pair<double, double>> edge_currents(
-        std::span<const double> x) const;
-    // Scaled total current entering the device through each contact (conventional current from
-    // the contact into the device), in device.contacts() order; zero for a gate. Physical value:
-    // times J0 L_D^(D-1), in A / cm^(3-D) (A/cm^2 in 1D, A/cm in 2D, A in 3D).
-    [[nodiscard]] std::vector<double> terminal_currents(std::span<const double> x) const;
-    // Per ohmic contact, a bound on how far the current through any cut of the device can differ
-    // from terminal_currents (same scale): the sum over the nodes of the total-current residual
-    // |F_n + F_p| plus 8 eps times the magnitudes of the terms that cancel in it (the one-sided
-    // flux terms, density times its flux coefficient, and the recombination terms). The same
-    // value for every ohmic contact; zero for a gate. A current below it is not resolved by the
-    // (psi, n, p) state.
-    [[nodiscard]] std::vector<double> terminal_current_resolution(std::span<const double> x) const;
-    // Per mesh edge, the magnitudes of the one-sided terms whose difference is the edge's total
-    // current: |d_c1 c_a| + |d_c2 c_b| of each carrier (density times its flux coefficient), in
-    // the units of edge_currents; 0 for an edge without carriers. It scales the edge current's
-    // rounding (8 eps times it), and half of it is the edge's conductance to a quasi-Fermi
-    // potential difference near equilibrium (the weights of the weighted current, Unit 32).
-    [[nodiscard]] std::vector<double> edge_flux_terms(std::span<const double> x) const;
-    // The band diagram at state x (band_edges.hpp); NaN on insulator nodes. Precondition
-    // (NITCAD_EXPECTS): x has unknowns() entries and positive densities off the insulators.
-    [[nodiscard]] BandEdges band_edges(std::span<const double> x) const;
-
-    // Unit 45 (DECISIONS.md RS1): each generation-recombination mechanism at state x, per node, in
-    // cm^-3 s^-1, read from its own equation term: the term's contribution to the node's electron
-    // and hole continuity rows divided by the node's control volume, so the rates are the
-    // residual's, operand for operand. Sign: net recombination R - G (a generation is negative).
-    // A mechanism is listed only when the system has its term; the local and nonlocal
-    // band-to-band terms add into one entry. Interfaces: their edges' carrier exchange (surface
-    // recombination and trap capture) over the node's control volume, an effective volume rate at
-    // interface nodes; read with steady traps (no time step). Precondition (NITCAD_EXPECTS): x has
-    // unknowns() entries.
-    enum class RateMechanism : std::uint8_t { srh, auger, radiative, interfaces, impact, band_to_band };
-    struct MechanismRate {
-        RateMechanism mechanism;
-        std::vector<double> electron;  // per node, as the electron row sees it
-        std::vector<double> hole;
-    };
-    [[nodiscard]] std::vector<MechanismRate> rates(std::span<const double> x) const;
-    // Scaled charge on each gate, the sum over its nodes of G_i (psi_G,i - psi_i) (gate.hpp), and
-    // on each electrode, the displacement flux leaving its nodes along the edges to other nodes,
-    // in device.contacts() order; zero for an ohmic contact. Physical value: times q Ns L_D^D, in
-    // C / cm^(3-D).
-    [[nodiscard]] std::vector<double> gate_charges(std::span<const double> x,
-                                                   const TimeStep* step = nullptr) const;
-    // Scaled trapped charge of each declared interface at state x (interface_edges.hpp, without the
-    // fixed charge), in units of q Ns L_D^D. Precondition (NITCAD_EXPECTS): x has unknowns()
-    // entries.
-    [[nodiscard]] std::vector<double> interface_trap_charges(
-        std::span<const double> x, const TimeStep* step = nullptr) const;
-
+    // The internals, for src/assemble alone (the key cannot be made outside it): the model data
+    // the copies share and the state each owns.
+    [[nodiscard]] const SystemData& data(const SystemKey& key) const noexcept;
+    [[nodiscard]] const SystemState& state(const SystemKey& key) const noexcept;
+    [[nodiscard]] SystemState& state(const SystemKey& key) noexcept;
+    // Replaces the shared data by a changed copy (copy on write: set_paths moves the positions).
+    void replace_data(const SystemKey& key, std::shared_ptr<const SystemData> data) noexcept;
 
     // A copy shares the model data and owns its state (Unit 57 GE2).
-    DriftDiffusion(const DriftDiffusion& other);
-    DriftDiffusion& operator=(const DriftDiffusion& other);
-    DriftDiffusion(DriftDiffusion&& other) noexcept;
-    DriftDiffusion& operator=(DriftDiffusion&& other) noexcept;
-    ~DriftDiffusion();
+    System(const System& other);
+    System& operator=(const System& other);
+    System(System&& other) noexcept;
+    System& operator=(System&& other) noexcept;
+    ~System();
 
 private:
-    DriftDiffusion();
+    System();
 
-    // The terms, their composition and helpers are internal to the assemble library
-    // (src/assemble/system_data.hpp, terms.hpp, composition.hpp); SystemData reads these two.
-    friend struct SystemData;
-
-    // Without `interfaces` the interface edges' terms are left out (small_signal_matrix adds its
-    // own).
     void assemble(std::span<const double> x, std::span<double> residual,
-                  std::span<double> values, const TimeStep* step, bool interfaces = true) const;
+                  std::span<double> values, const TimeStep* step, bool frequency = false) const;
 
     std::shared_ptr<const SystemData> data_;  // fixed at creation, shared by copies
     std::unique_ptr<SystemState> state_;      // owned: biases, paths, pattern
 };
+
+// The minority floor (Unit 50, DECISIONS.md RD2; off by default): with it on, update_size
+// measures every density against at least eps of the larger density at its node.
+void set_minority_floor(System& system, bool on) noexcept;
+[[nodiscard]] bool minority_floor(const System& system) noexcept;
 
 }  // namespace NiTCAD::assemble

@@ -344,12 +344,12 @@ SystemData::EnergyStorage SystemData::energy_storage(std::size_t i,
     return s;
 }
 
-void DriftDiffusion::hold_temperatures(std::span<const double> x) {
-    NITCAD_EXPECTS(data_->energy_balance_ && x.size() == unknowns());
-    state_->held_.resize(2 * node_count());
+void SystemData::hold_temperatures(SystemState& st, std::span<const double> x) const {
+    NITCAD_EXPECTS(energy_balance_ && x.size() == unknowns());
+    st.held_.resize(2 * node_count());
     for (std::size_t i = 0; i < node_count(); ++i) {
-        state_->held_[2 * i] = x[5 * i + 3];
-        state_->held_[2 * i + 1] = x[5 * i + 4];
+        st.held_[2 * i] = x[5 * i + 3];
+        st.held_[2 * i + 1] = x[5 * i + 4];
     }
 }
 
@@ -360,43 +360,45 @@ void DriftDiffusion::hold_temperatures(std::span<const double> x) {
 // off the contacts, and at the contacts sum_c V_c I_c plus the Peltier term.
 // After a time step the continuity rows' terms are V k U plus the storage V rate (S - c): the
 // storage's band-edge energy is carrier_storage, the energy rows' own storage thermal_storage.
-DriftDiffusion::EnergyPowers DriftDiffusion::energy_powers(std::span<const double> x,
-                                                           const TimeStep* step) const {
-    NITCAD_EXPECTS(data_->energy_balance_ && state_->held_.empty() && x.size() == unknowns());
-    const std::size_t nodes = node_count();
-    std::vector<double> f(unknowns());
+EnergyPowers energy_powers(const System& system, std::span<const double> x,
+                           const System::TimeStep* step) {
+    const SystemData& d = SystemData::of(system);
+    const SystemState& state = SystemData::state_of(system);
+    NITCAD_EXPECTS(d.energy_balance_ && state.held_.empty() && x.size() == d.unknowns());
+    const std::size_t nodes = d.node_count();
+    std::vector<double> f(d.unknowns());
     if (step != nullptr) {
-        residual(x, *step, f);
+        system.residual(x, *step, f);
     } else {
-        residual(x, f);
+        system.residual(x, f);
     }
     const std::vector<SystemData::NodeDegeneracy> g =
-        step != nullptr ? data_->degeneracies(x) : std::vector<SystemData::NodeDegeneracy>{};
-    const BandEdges bands = band_edges(x);
-    EnergyPowers p{electrical_power(x), 0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
+        step != nullptr ? d.degeneracies(x) : std::vector<SystemData::NodeDegeneracy>{};
+    const BandEdges bands = d.band_edges(state, x);
+    EnergyPowers p{d.electrical_power(state, x), 0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
     std::vector<double> dn(nodes, 0.0), dp(nodes, 0.0);
-    for (std::size_t k = 0; k < data_->edges_.size(); ++k) {
-        const SystemData::EdgeTerm& e = data_->edges_[k];
+    for (std::size_t k = 0; k < d.edges_.size(); ++k) {
+        const SystemData::EdgeTerm& e = d.edges_[k];
         if (e.charged || !e.carriers) continue;
-        const auto [fn, fp] = data_->energy_fluxes(k, x);
+        const auto [fn, fp] = d.energy_fluxes(k, x);
         dn[e.a] += fn.flux;
         dn[e.b] -= fn.flux;
         dp[e.a] += fp.flux;
         dp[e.b] -= fp.flux;
         const double joule = -fn.delta * fn.flux - fp.delta * fp.flux;
-        if (data_->contact_[e.a] >= 0) {
+        if (d.contact_[e.a] >= 0) {
             p.contact_flux += fn.energy + fp.energy;
             p.contact_joule += 0.5 * joule;
         }
-        if (data_->contact_[e.b] >= 0) {
+        if (d.contact_[e.b] >= 0) {
             p.contact_flux -= fn.energy + fp.energy;
             p.contact_joule += 0.5 * joule;
         }
     }
     for (std::size_t i = 0; i < nodes; ++i) {
-        if (data_->insulator_[i] != 0) continue;
-        if (data_->contact_[i] >= 0) {
-            const double V = state_->contact_bias_[static_cast<std::size_t>(data_->contact_[i])];
+        if (d.insulator_[i] != 0) continue;
+        if (d.contact_[i] >= 0) {
+            const double V = state.contact_bias_[static_cast<std::size_t>(d.contact_[i])];
             p.peltier -= (bands.conduction[i] + V) * dn[i] + (bands.valence[i] + V) * dp[i];
             continue;
         }
@@ -404,9 +406,9 @@ DriftDiffusion::EnergyPowers DriftDiffusion::energy_powers(std::span<const doubl
         const double tn = x[5 * i + 3], tp = x[5 * i + 4];
         double ku = dn[i] - f[5 * i + 1];  // V k U, the electron row's term
         if (step != nullptr) {
-            const double ks = data_->volume_[i] * step->rate;
-            const SystemData::NodeStorage st = data_->node_storage(i, x, g);
-            const SystemData::EnergyStorage w = data_->energy_storage(i, x);
+            const double ks = d.volume_[i] * step->rate;
+            const SystemData::NodeStorage st = d.node_storage(i, x, g);
+            const SystemData::EnergyStorage w = d.energy_storage(i, x);
             const double sn = ks * (st.n - step->storage[4 * i]);
             const double sp = ks * (st.p - step->storage[4 * i + 1]);
             ku -= sn;
@@ -414,10 +416,10 @@ DriftDiffusion::EnergyPowers DriftDiffusion::energy_powers(std::span<const doubl
             p.thermal_storage +=
                 ks * (w.n - step->storage[4 * i + 2] + w.p - step->storage[4 * i + 3]);
         }
-        const double k = data_->volume_[i] * data_->rate_scale_;
-        const Relaxing rel = relaxing(n, h, data_->doping_[i]);
+        const double k = d.volume_[i] * d.rate_scale_;
+        const Relaxing rel = relaxing(n, h, d.doping_[i]);
         p.relaxation +=
-            1.5 * k * (rel.n * tn / data_->relax_n_[i] + rel.p * tp / data_->relax_p_[i]);
+            1.5 * k * (rel.n * tn / d.relax_n_[i] + rel.p * tp / d.relax_p_[i]);
         p.recombination +=
             ku * (bands.conduction[i] - bands.valence[i] + 1.5 * (2.0 + tn + tp));
         p.residual += f[5 * i + 3] + f[5 * i + 4] + bands.conduction[i] * f[5 * i + 1] +
