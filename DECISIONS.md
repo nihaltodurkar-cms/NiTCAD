@@ -1702,7 +1702,13 @@ all 38 files (`[.deck_compare]`), so #85 changed no GG2 output. Slice 3 is compa
   it passed and is identical.
 - **GG2:** the 12 decks agree with slice 3's on all 38 files (`[.deck_compare]`).
 - **GG3:** every existing FD gate passes. The equilibrium charge term's own FD check is above.
-- **GG4: pending at this commit.** FG4's benchmark, slice 3 and slice 4 alternating, pinned to CPU 0, two runs each: 15 of 17 devices within 2% or their spread (most faster). Flagged: 2D energy balance `evaluate` +33.9% (5.80 -> 7.77 ms, spread 2.4%; residual unchanged) and 1D Zener `evaluate` +6.4% (spread 5.9%). Slice 4 changes nothing on the energy-balance path but two formulation tests, so two more passes are running; the result goes in a follow-up commit.
+- **GG4:** FG4's benchmark, slice 3 and slice 4 binaries alternating, pinned to CPU 0. Minimum of two: 15 of 17
+  devices within 2% or slice 3's spread (most faster). Two were flagged: 2D energy balance `evaluate` +33.9%
+  (5.80 -> 7.77 ms, spread 2.4%; `residual` unchanged) and 1D Zener `evaluate` +6.4% (spread 5.9%). Two more
+  passes each (minimum of four): **all 17 within GG4's rule**. Zener -0.6%; 2D energy balance `evaluate` +6.0%
+  (4.95 -> 5.24 ms) against slice 3's four-run spread of 20.0%, `residual` +1.0%. Slice 4 changes nothing on that
+  path but two formulation tests. The machine was noisy in the extra passes (several devices' spreads above 100%), so
+  this passes on the spread rule, not on a quiet-machine margin.
 - **GG6, 13 mutants, all caught** by the `assemble.*` and `solve.*` ctest entries: M1 the slaved charge's Fermi-Dirac
   branch using Boltzmann: `assemble.insulator`, `solve.quantum_confinement`, `solve.fermi_dirac`,
   `solve.heterojunction`; M2 equilibrium missing the interface set (its activation false; removing the row fails
@@ -1715,7 +1721,8 @@ all 38 files (`[.deck_compare]`), so #85 changed no GG2 output. Slice 3 is compa
   `solve.insulator`; M10 the Dirichlet rows not cleared: `assemble.schottky`; M11 `band_edges` not dispatched:
   `assemble.heterojunction`, `solve.heterojunction`; M12 `set_bias` without the thermal-equilibrium check:
   `assemble.gate`; M13 the interface edges at another node's statistics: `solve.quantum_confinement`.
-- **GG5: pending at this commit.** The whole tree builds with `/W4 /WX`; the `assemble.*` entries and the equilibrium-related `solve.*` entries (equilibrium, mos, insulator, heterojunction, schottky, bias) pass on the final tree; the full Release suite runs after GG4. Debug is left to CI (owner's standing rule).
+- **GG5:** Release, `/W4 /WX`, ctest `-j 6` on the slice 4 tree (2026-11-17): **232/232 pass** (2,982 s). Debug is
+  left to CI (owner's standing rule).
 - **GG8 (owner 2026-11-16, "choose recommended for GG8"):** the χ extensibility test is its own commit after slice 4,
   not part of it, so slice 4 stays GE5 alone (GE7).
 
