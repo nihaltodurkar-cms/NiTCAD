@@ -1134,11 +1134,12 @@ before the next slice is compared against them.
   `diode_device` (windows `x=-1:1um`, `x=1um:3um`) turned out to give an ohmic, fully compensated bar (its current
   is linear, 7.3 mA/cm² per V), so it was not copied. GG2's comparison is the hidden `[.deck_compare]` case
   (`tests/deck/deck_compare_test.cpp`). **Two runs of the slice-0 `nitcad.exe` agree on all 38 output files.**
-- **GG2 and the adaptation report (open, owner asked):** the `.nitadapt` report stores measured times (per-pass
+- **GG2 and the adaptation report (ruled 2026-11-16, owner "choose recommended": the times are excluded):** the `.nitadapt` report stores measured times (per-pass
   seconds, the cost model fitted to them, the verification and coarse seconds). Between the two identical runs the
   raw report differs in 102 bytes, against about 20 (the provenance) for a sweep file, so GG2's byte comparison
   cannot hold for it with only the provenance skipped. The comparison clears those times as it clears the
-  provenance; the alternative is to drop the `[adapt]` deck from GG2.
+  provenance (as ruled; GG2 reads "provenance and, in a `.nitadapt` report, its measured times"); the `[adapt]`
+  deck stays in GG2. Slice 1 waits for the owner's word to start.
 - GE1 iv: FG4's benchmark gains `Gate tunnelling: assembly cost on the MOS capacitor` (1D and 2D); EC19 is the
   energy-balance device. Baseline, two runs pinned to CPU 0, `evaluate` median in µs (run 1 / run 2): legacy 1D
   diode 12.0/12.1, 2D MOSFET 2642/2494, 3D generated diode 753/761, Zener 12.5/11.7, electrothermal bar 212/213
