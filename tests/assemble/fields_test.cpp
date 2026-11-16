@@ -13,7 +13,13 @@
 #include <string_view>
 #include <vector>
 
+#include "NiTCAD/assemble/band_edges.hpp"
+#include "NiTCAD/assemble/charges.hpp"
+#include "NiTCAD/assemble/currents.hpp"
+#include "NiTCAD/assemble/derived.hpp"
 #include "NiTCAD/assemble/fields.hpp"
+#include "NiTCAD/assemble/models.hpp"
+#include "NiTCAD/assemble/rates.hpp"
 #include "NiTCAD/assemble/scaling.hpp"
 #include "NiTCAD/assemble/system.hpp"
 #include "NiTCAD/device/device.hpp"
@@ -69,7 +75,7 @@ TEST_CASE("fields: the drift-diffusion map is the node-interleaved layout") {
         for (std::size_t k = 0; k < m; ++k) {
             REQUIRE(dofs.slot(order[k]) == k);
             REQUIRE(dofs.fields()[k].id == order[k]);
-            REQUIRE(dofs.fields()[k].unknown);
+            REQUIRE(dofs.fields()[k].kind == assemble::FieldKind::unknown);
             REQUIRE(dofs.fields()[k].location == assemble::FieldLocation::node);
         }
         for (std::size_t i = 0; i < system.node_count(); ++i) {
@@ -97,6 +103,158 @@ TEST_CASE("fields: the descriptors") {
     REQUIRE(map.index(FieldId::potential, 3) == 7);
     REQUIRE(map.field_of(7).id == FieldId::potential);
     REQUIRE(map.node_of(7) == 3);
+}
+
+TEST_CASE("derived fields: the table (Unit 57 GE4)") {
+    using assemble::DiagnosticId;
+    const auto table = assemble::diagnostics();
+    REQUIRE(table.size() == 6);
+    std::vector<FieldId> seen;
+    for (std::size_t r = 0; r < table.size(); ++r) {
+        const assemble::Diagnostic& d = table[r];
+        CAPTURE(d.name);
+        REQUIRE(static_cast<std::size_t>(d.id) == r);
+        REQUIRE(&assemble::diagnostic(d.id) == &d);
+        REQUIRE(!d.fields.empty());
+        REQUIRE(d.evaluate != nullptr);
+        const auto location = d.id == DiagnosticId::edge_currents ||
+                                      d.id == DiagnosticId::edge_flux_terms
+                                  ? assemble::FieldLocation::edge
+                              : d.id == DiagnosticId::trap_occupancies
+                                  ? assemble::FieldLocation::interface_edge
+                                  : assemble::FieldLocation::node;
+        for (std::size_t k = 0; k < d.fields.size(); ++k) {
+            const assemble::Field& f = d.fields[k];
+            CAPTURE(f.name);
+            REQUIRE(f.kind == assemble::FieldKind::derived);
+            REQUIRE(f.location == location);
+            REQUIRE(!f.units.empty());
+            REQUIRE(assemble::position(d, f.id) == k);
+            REQUIRE(std::ranges::find(seen, f.id) == seen.end());
+            seen.push_back(f.id);
+        }
+    }
+    REQUIRE(seen.size() == 21);
+    // No unknown is a derived field.
+    for (const FieldId u : {FieldId::potential, FieldId::electrons, FieldId::holes,
+                            FieldId::temperature, FieldId::electron_temperature,
+                            FieldId::hole_temperature}) {
+        REQUIRE(std::ranges::find(seen, u) == seen.end());
+    }
+}
+
+TEST_CASE("derived fields: the values are the topic functions' (Unit 57 GE4)") {
+    using assemble::DiagnosticId;
+    struct Case {
+        const char* name;
+        bool thermal;
+        assemble::PhysicsModels models;
+    };
+    const Case cases[] = {
+        {"drift-diffusion", false, {}},
+        {"electrothermal", true, {.electrothermal = true}},
+        {"energy balance + impact", false, {.impact_ionization = true, .energy_balance = true}},
+    };
+    for (const Case& c : cases) {
+        CAPTURE(c.name);
+        const device::Device d = resistor(c.thermal);
+        const auto scaling = *assemble::make_scaling(d);
+        const auto system = *assemble::System::create(d, scaling, c.models);
+        const std::size_t nodes = system.node_count(), m = system.stride();
+        // A state off equilibrium: psi rising across the bar, the electrons raised in the
+        // interior, and every extra field (a rise) varying from node to node.
+        std::vector<double> psi(nodes);
+        for (std::size_t i = 0; i < nodes; ++i) psi[i] = 4.0 + 0.3 * static_cast<double>(i);
+        std::vector<double> x = system.state_from_potential(psi);
+        for (std::size_t i = 1; i + 1 < nodes; ++i) {
+            x[m * i + 1] *= 1.0 + 0.05 * static_cast<double>(i);
+            for (std::size_t k = 3; k < m; ++k) x[m * i + k] = 0.01 * static_cast<double>(i + k);
+        }
+
+        auto eval = [&](DiagnosticId id) {
+            return assemble::diagnostic(id).evaluate(system, x);
+        };
+        const auto& bands_row = assemble::diagnostic(DiagnosticId::bands);
+        auto bands = eval(DiagnosticId::bands);
+        const assemble::BandEdges b = band_edges(system, x);
+        REQUIRE(take(bands, bands_row, FieldId::conduction_band) == b.conduction);
+        REQUIRE(take(bands, bands_row, FieldId::valence_band) == b.valence);
+        REQUIRE(take(bands, bands_row, FieldId::electron_fermi) == b.electron_fermi);
+        REQUIRE(take(bands, bands_row, FieldId::hole_fermi) == b.hole_fermi);
+
+        const auto& rates_row = assemble::diagnostic(DiagnosticId::rates);
+        auto r = eval(DiagnosticId::rates);
+        REQUIRE(r.size() == rates_row.fields.size());
+        std::vector<double> net_n(nodes, 0.0), net_p(nodes, 0.0);
+        std::size_t present = 0;
+        for (const assemble::MechanismRate& mr : rates(system, x)) {
+            for (std::size_t i = 0; i < nodes; ++i) {
+                net_n[i] += mr.electron[i];
+                net_p[i] += mr.hole[i];
+            }
+            using M = assemble::RateMechanism;
+            const auto at = [&](FieldId f) { return r[assemble::position(rates_row, f)]; };
+            switch (mr.mechanism) {
+                case M::srh: REQUIRE(at(FieldId::srh_rate) == mr.electron); break;
+                case M::auger: REQUIRE(at(FieldId::auger_rate) == mr.electron); break;
+                case M::radiative: REQUIRE(at(FieldId::radiative_rate) == mr.electron); break;
+                case M::impact: REQUIRE(at(FieldId::impact_rate) == mr.electron); break;
+                case M::interfaces:
+                    REQUIRE(at(FieldId::interface_rate_n) == mr.electron);
+                    REQUIRE(at(FieldId::interface_rate_p) == mr.hole);
+                    break;
+                case M::band_to_band:
+                    REQUIRE(at(FieldId::band_to_band_rate_n) == mr.electron);
+                    REQUIRE(at(FieldId::band_to_band_rate_p) == mr.hole);
+                    break;
+            }
+            ++present;
+        }
+        REQUIRE(present >= 3);  // SRH, Auger, radiative (and impact ionization)
+        REQUIRE(r[assemble::position(rates_row, FieldId::impact_rate)].empty() ==
+                !c.models.impact_ionization);
+        REQUIRE(r[assemble::position(rates_row, FieldId::interface_rate_n)].empty());
+        REQUIRE(take(r, rates_row, FieldId::net_rate_n) == net_n);
+        REQUIRE(take(r, rates_row, FieldId::net_rate_p) == net_p);
+
+        const auto& currents_row = assemble::diagnostic(DiagnosticId::edge_currents);
+        auto j = eval(DiagnosticId::edge_currents);
+        const auto pairs = edge_currents(system, x);
+        const std::vector<double> jn = take(j, currents_row, FieldId::electron_edge_current);
+        const std::vector<double> jp = take(j, currents_row, FieldId::hole_edge_current);
+        REQUIRE(jn.size() == pairs.size());
+        REQUIRE(jp.size() == pairs.size());
+        for (std::size_t e = 0; e < pairs.size(); ++e) {
+            REQUIRE(jn[e] == pairs[e].first);
+            REQUIRE(jp[e] == pairs[e].second);
+        }
+        REQUIRE(pairs.front().first != pairs.front().second);  // so a swap is seen
+
+        auto flux = eval(DiagnosticId::edge_flux_terms);
+        REQUIRE(flux.size() == 1);
+        REQUIRE(flux[0] == edge_flux_terms(system, x));
+        auto traps = eval(DiagnosticId::trap_occupancies);
+        REQUIRE(traps.size() == 1);
+        REQUIRE(traps[0] == trap_occupancies(system, x));
+
+        const auto& t_row = assemble::diagnostic(DiagnosticId::temperatures);
+        auto t = eval(DiagnosticId::temperatures);
+        const double T0 = scaling.temperature_K;
+        const auto expected = [&](FieldId rise) {
+            std::vector<double> v;
+            if (!system.dofs().has(rise)) return v;
+            const std::size_t k = *system.dofs().slot(rise);
+            for (std::size_t i = 0; i < nodes; ++i) v.push_back(T0 + T0 * x[m * i + k]);
+            return v;
+        };
+        REQUIRE(take(t, t_row, FieldId::lattice_temperature) == expected(FieldId::temperature));
+        REQUIRE(take(t, t_row, FieldId::electron_temperature_K) ==
+                expected(FieldId::electron_temperature));
+        REQUIRE(take(t, t_row, FieldId::hole_temperature_K) ==
+                expected(FieldId::hole_temperature));
+        REQUIRE(system.dofs().has(FieldId::temperature) == c.models.electrothermal);
+        REQUIRE(system.dofs().has(FieldId::electron_temperature) == c.models.energy_balance);
+    }
 }
 
 namespace {

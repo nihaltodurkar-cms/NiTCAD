@@ -430,7 +430,8 @@ add_library(nitcad_assemble STATIC
   src/assemble/terms.cpp
   src/assemble/thermal_terms.cpp
   src/assemble/composition.cpp
-  src/assemble/topics.cpp)
+  src/assemble/topics.cpp
+  src/assemble/derived.cpp)
 add_library(NiTCAD::assemble ALIAS nitcad_assemble)
 target_include_directories(nitcad_assemble PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
 target_link_libraries(nitcad_assemble PUBLIC

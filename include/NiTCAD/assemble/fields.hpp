@@ -18,7 +18,8 @@
 
 namespace NiTCAD::assemble {
 
-// The quantities a system may carry.
+// The quantities a system may carry: its unknowns, then the derived quantities of derived.hpp
+// (Unit 57 GE4), each computed from a state.
 enum class FieldId {
     potential,    // psi: the electrostatic potential
     electrons,    // n: the electron density
@@ -26,38 +27,66 @@ enum class FieldId {
     temperature,  // tau = (T - T0) / T0: the lattice temperature rise (electrothermal, Unit 23)
     electron_temperature,  // tau_n = (T_n - T_L) / T_L (energy balance, Unit 52)
     hole_temperature,      // tau_p = (T_p - T_L) / T_L
+    // Derived (derived.hpp).
+    conduction_band,     // E_c, band_edges.hpp
+    valence_band,        // E_v
+    electron_fermi,      // E_Fn
+    hole_fermi,          // E_Fp
+    srh_rate,            // per mechanism, R - G (rates.hpp)
+    auger_rate,
+    radiative_rate,
+    impact_rate,
+    interface_rate_n,    // per carrier where the mechanism moves the carriers apart
+    interface_rate_p,
+    band_to_band_rate_n,
+    band_to_band_rate_p,
+    net_rate_n,          // the sum of every mechanism, as each carrier's rows see it
+    net_rate_p,
+    electron_edge_current,  // Jn, Jp of each mesh edge (currents.hpp edge_currents)
+    hole_edge_current,
+    edge_flux_terms,        // currents.hpp edge_flux_terms
+    trap_occupancy,         // f of each trap slot (charges.hpp trap_occupancies)
+    lattice_temperature,     // T in K (electrothermal)
+    electron_temperature_K,  // T_n, T_p in K (energy balance)
+    hole_temperature_K,
 };
 
-enum class FieldLocation { node };
+// Where a field's values are: one per mesh node, per mesh edge, or per trap slot of the interface
+// edges (each interface edge's trap levels, in the assembler's slot order).
+enum class FieldLocation { node, edge, interface_edge };
+
+// A Newton unknown; a value fixed by the device (none listed yet); or derived from a state.
+enum class FieldKind { unknown, fixed, derived };
 
 // The nodes on which a field is physical: every node, or the semiconductor nodes (elsewhere its
-// unknown is held at 0).
+// unknown is held at 0, a derived node field NaN or 0 as its function states).
 enum class FieldDomain { all, semiconductor };
 
 struct Field {
     FieldId id;
     std::string_view name;
-    std::string_view units;  // of the scaled unknown
+    std::string_view units;  // of the scaled unknown, or of the derived values as evaluated
     FieldLocation location;
-    bool unknown;
+    FieldKind kind;
     FieldDomain domain;
 };
 
 // The drift-diffusion system's fields (scaled by de Mari, 6.1).
 inline constexpr Field potential_field{FieldId::potential, "potential", "V_T", FieldLocation::node,
-                                       true, FieldDomain::all};
+                                       FieldKind::unknown, FieldDomain::all};
 inline constexpr Field electron_field{FieldId::electrons, "electrons", "Ns", FieldLocation::node,
-                                      true, FieldDomain::semiconductor};
-inline constexpr Field hole_field{FieldId::holes, "holes", "Ns", FieldLocation::node, true,
-                                  FieldDomain::semiconductor};
+                                      FieldKind::unknown, FieldDomain::semiconductor};
+inline constexpr Field hole_field{FieldId::holes, "holes", "Ns", FieldLocation::node,
+                                  FieldKind::unknown, FieldDomain::semiconductor};
 inline constexpr Field temperature_field{FieldId::temperature, "temperature rise", "T0",
-                                         FieldLocation::node, true, FieldDomain::all};
+                                         FieldLocation::node, FieldKind::unknown,
+                                         FieldDomain::all};
 inline constexpr Field electron_temperature_field{FieldId::electron_temperature,
                                                   "electron temperature rise", "T_L",
-                                                  FieldLocation::node, true,
+                                                  FieldLocation::node, FieldKind::unknown,
                                                   FieldDomain::semiconductor};
 inline constexpr Field hole_temperature_field{FieldId::hole_temperature, "hole temperature rise",
-                                              "T_L", FieldLocation::node, true,
+                                              "T_L", FieldLocation::node, FieldKind::unknown,
                                               FieldDomain::semiconductor};
 
 class DofMap {

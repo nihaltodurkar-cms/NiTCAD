@@ -7,7 +7,6 @@
 #include <string>
 #include <utility>
 
-#include "NiTCAD/assemble/band_edges.hpp"
 #include "NiTCAD/assemble/charges.hpp"
 #include "NiTCAD/assemble/contact_bias.hpp"
 #include "NiTCAD/assemble/currents.hpp"
@@ -389,19 +388,12 @@ std::expected<results::Transient, base::Error> solve_transient_unobserved(
             snap.fields.potential_V[i] = s.x[m * i + slot.potential] * scaling->V_T;
             snap.fields.n_cm3[i] = s.x[m * i + slot.electrons] * scaling->Ns;
             snap.fields.p_cm3[i] = s.x[m * i + slot.holes] * scaling->Ns;
-            if (thermal) {
-                snap.fields.temperature_K.push_back(T0 + T0 * s.x[m * i + slot.temperature]);
-            }
-            if (energy) {  // Unit 52: T = T_L (1 + tau) per carrier
-                snap.fields.electron_temperature_K.push_back(T0 + T0 * s.x[m * i + rise_n]);
-                snap.fields.hole_temperature_K.push_back(T0 + T0 * s.x[m * i + rise_p]);
-            }
         }
-        snap.bands = detail::band_diagram(band_edges(dd, s.x), scaling->V_T);
-        for (const auto& [jn, jp] : edge_currents(dd, s.x)) {
-            snap.edge_current_n.push_back(jn * current_scale);
-            snap.edge_current_p.push_back(jp * current_scale);
-        }
+        // The lattice (electrothermal) and carrier (Unit 52) temperatures, T0 (1 + tau).
+        detail::temperatures(dd, s.x, snap.fields);
+        snap.bands = detail::band_diagram(dd, s.x, scaling->V_T);
+        detail::append_edge_currents(dd, s.x, current_scale, snap.edge_current_n,
+                                     snap.edge_current_p);
         snap.trap_occupancy = s.traps;
         if (steady.store_rates) snap.rates = detail::rate_fields(dd, s.x);
         return snap;

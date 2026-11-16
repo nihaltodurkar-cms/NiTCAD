@@ -1593,6 +1593,70 @@ before the next slice is compared against them.
   for CI, whose Release and Debug jobs run the suites. Before the stop, the assemble.* and solve.* entries
   passed 47/47 (GG6's control on the final sources).
 
+**Merge of `main` (2026-11-16, before slice 3).** PR #85 merged to `main` (9fd9fa1); `main` was merged into this
+branch (59051e8). Conflicts: `CMakeLists.txt` (`nitcad_adapt_test` keeps the trace listener and #85's
+`adapt_derived_test.cpp`, linked to `NiTCAD::analysis`) and this file (this section after Units 26d and 17c). #85
+adds no caller of the removed types. The baselines were recorded again on the merge's binaries (P-core pinned):
+80 traced entries, of which 78 are byte-identical to slice 2's; `adapt.adapt_derived` is #85's new entry, and
+`assemble.fields` holds slice 2's GG7 case, added after slice 2's trace. The 12 decks agree with slice 0's run A on
+all 38 files (`[.deck_compare]`), so #85 changed no GG2 output. Slice 3 is compared against these.
+
+**Slice 3 (GE4) as built (2026-11-16; owner "start Slice 3").**
+- `fields.hpp`: `Field::unknown` (bool) became `Field::kind` (`FieldKind::unknown`, `fixed`, `derived`; no field
+  is `fixed` yet), and `FieldLocation` gained `edge` and `interface_edge` (one value per trap slot of the
+  interface edges, in the assembler's slot order). `FieldId` lists the 21 derived quantities after the six
+  unknowns. `DofMap::node_interleaved` requires node fields of kind `unknown`.
+- `include/NiTCAD/assemble/derived.hpp` (public) and `src/assemble/derived.cpp`: the table, six rows in
+  `DiagnosticId` order. Each row is a diagnostic, its field descriptors (kind `derived`) and an evaluator
+  `(const System&, x) -> DerivedValues` (one vector per field; empty when the system lacks the field):
+  `bands` (E_c, E_v, E_Fn, E_Fp per node in V_T, from `band_edges`), `rates` (SRH, Auger, radiative, impact,
+  interface n/p, band-to-band n/p, net n/p in cm^-3 s^-1, from `rates`, with the sums in `rates`' order as
+  `rate_fields` had them), `edge_currents` (Jn, Jp per edge), `edge_flux_terms`, `trap_occupancies` (steady)
+  and `temperatures` (T, T_n, T_p in K, T0 + T0 tau with T0 the system's scaling temperature, as the solve
+  layer computed them). A row's fields are evaluated together because they come from one pass (one
+  `band_edges`, one `rates`). `position(row, field)` and `take(values, row, field)` find a field in a row.
+- The solve layer fills through the table (`src/solve/fields.hpp`): `rate_fields`, `band_diagram(system, x,
+  V_T)`, `temperatures` and `append_edge_currents`, used by `drift_diffusion_point` and the transient
+  snapshots. Each call stays where its predecessor was, so the trace's order of observed values is
+  unchanged. **Not through the table:** the equilibrium band diagram (`EquilibriumPoisson`, slice 4's), the
+  small-signal temperature amplitudes (a response, not a state's field), and the edge currents and flux
+  terms that `weighted_current` and the adjoint indicator compute with (they call `currents.hpp` directly;
+  the table is for result fields).
+- Tests (`tests/assemble/fields_test.cpp`): `derived fields: the table` (row order, `diagnostic(id)`, every
+  field `derived` with its row's location, units, `position`, 21 distinct ids, no unknown among them) and
+  `derived fields: the values are the topic functions'` (drift-diffusion, electrothermal, and energy balance
+  with impact ionization, on an off-equilibrium state: every row equals its topic function bit for bit,
+  the temperatures T0 + T0 tau of their slots, absent fields empty).
+- **GG1:** the 80 traced entries of the slice-3 binaries are byte-identical to the merge's, except
+  `assemble.fields`, whose trace is the merge's followed by the two new cases.
+- **GG2:** the 12 decks agree with the merge's on all 38 files (`[.deck_compare]`).
+- **GG4:** FG4's benchmark, the merge's and slice 3's binaries alternating, pinned to CPU 0, two runs each (a first
+  attempt ran while a game loaded the machine, 2x slower with spreads to 55%, and was discarded). Minimum of two:
+  16 of 17 devices within 2% of the merge on `evaluate` and `residual` or within the merge's spread (3D energy
+  balance `evaluate` +17.7% against a 21.4% spread; slice 3 does not change `evaluate` or `residual`). The legacy
+  1D diode was +2.0% / +2.2% (11.15 -> 11.37 us, 6.79 -> 6.94 us) against a two-run spread of 0.3% / 0.1%, so its
+  case ran four more times each: minimum of six unchanged, the merge's six-run spread 16.1% / 16.7%, and in the four
+  extra passes slice 3 was as fast or faster (best `evaluate` 12.45 against 12.64 us). Passed under GG4's spread
+  rule.
+- **GG6, 11 mutants, 10 caught** by the `assemble.*` and `solve.*` ctest entries (control 47/47): M1 a derived
+  field reading the wrong slot (T_n from tau_p's unknowns): `assemble.fields`, `solve.energy_balance`; M2 E_c
+  and E_v swapped: `assemble.fields`, `solve.heterojunction`, `solve.electrothermal`; M3 SRH in Auger's
+  position: `assemble.fields`, `solve.quantum_confinement`, `solve.rates`; M4 net_n summing the hole rates:
+  `solve.rates`; M5 Jn and Jp swapped: `assemble.fields` and 4 solve entries; M6 `position` always the first
+  field: 10 entries; M7 `diagnostic(id)` always the first row: 25 entries; M8 the temperatures as
+  T0 (1 + tau) (a rounding-level change): `assemble.fields`; M10 the solve fill taking impact ionization from
+  the radiative field: `solve.rates`; M11 the hole edge currents not scaled: 4 solve entries. **M9, the
+  interface rates' carriers swapped, survives** the suites and the traces (`solve.rates`, whose interface
+  case is a MOS with traps and surface recombination, `solve.insulator`, `solve.mos` and `solve.transient`
+  byte-identical under it). It is equivalent: the rates are read with steady traps, where each interface
+  edge's electron and hole exchange are equal bit for bit, so the two vectors are the same. Not counted;
+  10 caught meets GG6's 8. (M4 escapes the new values test because its state has only SRH, Auger and
+  radiative, which change both carriers alike; `solve.rates` catches it.)
+- **GG5:** full Release suite (`-j 6`, `/W4 /WX`, no warnings) **232/232 pass**: 227 in one run, which stopped when
+  the session ended with `verify_full.tvb14` running, and the other five (`verify_full.tvb14`, `app.run_controller`,
+  `app_window.analysis_window`, `app_window.self_test`, `app_window_3d`) in a second run on the same build. Debug is
+  left to CI (owner's standing rule).
+
 **Risks:** the bit-identity surface is the largest since Unit 40. Moving the bias and path state out of the system
 could change which values a copy sees (GG6's first three mutants target this). Slice 2's caller migration touches
 about 44 files (more if #85 adds callers). Equilibrium's variants (GE5) keep a second set of row expressions, so the
