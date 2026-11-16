@@ -277,7 +277,9 @@ std::expected<GoalEstimate, base::Error> estimate_goals(const device::Device& co
         out.difference.push_back(d);
         out.estimate.push_back(2.0 * std::abs(d));
         out.prolongated_part.push_back(prolongated);
-        for (double& v : local) v = std::abs(v) * scale;
+        for (double& v : local) v *= scale;
+        out.node_signed.push_back(local);
+        for (double& v : local) v = std::abs(v);
         out.node_weight.push_back(std::move(local));
     }
     return out;

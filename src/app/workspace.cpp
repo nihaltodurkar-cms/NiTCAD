@@ -304,11 +304,15 @@ static void adapt_lines(const Workspace& w, std::vector<Line>& out) {
     if (a.fallback != "none") out.push_back({"Fallback", std::format("{} at pass {}", a.fallback, a.fallback_pass)});
     out.push_back({"Verification", a.verification_nodes > 0 ? std::format("{} nodes", a.verification_nodes) : std::string("none")});
     for (const results::AdaptCertificateRow& c : a.certificates) {
-        const std::string goal = c.goal < a.goal_contacts.size() ? a.goal_contacts[c.goal] : std::to_string(c.goal);
+        // Unit 17c (DG9): a derived goal named "<kind> <contact>", in its unit.
+        const std::string goal = results::goal_name(a, c.goal);
+        const std::string unit = results::goal_unit(a, c.goal);
         out.push_back({std::format("Certificate {} at point {}", goal, c.point),
-                       std::format("{}: estimate {} A, verified error {}, allowed {} A", c.status, number(c.estimate),
-                                   std::isfinite(c.verified_error) ? number(c.verified_error) + " A" : std::string("none"),
-                                   number(c.allowed))});
+                       std::format("{}{}: estimate {} {}, verified error {}, allowed {} {}", c.status,
+                                   c.window_moved ? " (window moved)" : "", number(c.estimate), unit,
+                                   std::isfinite(c.verified_error) ? number(c.verified_error) + " " + unit
+                                                                   : std::string("none"),
+                                   number(c.allowed), unit)});
     }
 }
 

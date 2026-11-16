@@ -22,6 +22,7 @@
 #include "NiTCAD/mesh/tensor_grid.hpp"
 #include "NiTCAD/physics/insulator.hpp"
 #include "NiTCAD/solve/adapt_adjoint.hpp"
+#include "NiTCAD/solve/adapt_derived.hpp"
 #include "values.hpp"
 #include "waveforms.hpp"
 
@@ -1691,19 +1692,27 @@ std::expected<void, base::Error> Builder::adapt(Plan& plan) const {
 
     const Entry* max_points = nullptr;
     const Entry* predictor = nullptr;
+    // Unit 17c: the first derived goal, an explicit `at`, `vt_tolerance` (for their lines).
+    const Entry* derived_goal = nullptr;
+    const Entry* at_entry = nullptr;
+    const Entry* vt_tolerance = nullptr;
+    bool has_vt = false;
     std::set<std::string> seen;
     for (const Entry& e : s->entries) {
         if (e.key != "goal" && !seen.insert(e.key).second) return std::unexpected(at(e.line, "a second '" + e.key + "'"));
         if (e.key == "goal") {
             const auto w = tokens(e.value);
-            if (w.empty()) return std::unexpected(at(e.line, "a goal is 'current <contact>'"));
-            if (w[0] == "vt" || w[0] == "gm" || w[0] == "swing") {
-                return std::unexpected(at(e.line, "the goal '" + std::string(w[0]) +
-                                                      "' is not adapted in this unit (DECISIONS.md AR8): use 'current <contact>'"));
+            // Unit 17c (DG1): vt, gm and swing of the contact's transfer curve beside its current.
+            solve::GoalKind goal_kind = solve::GoalKind::current;
+            const bool known = !w.empty() && (w[0] == "current" || w[0] == "vt" || w[0] == "gm" || w[0] == "swing");
+            if (!known || w.size() != 2) {
+                return std::unexpected(at(e.line, "unknown goal '" + e.value +
+                                                      "': a goal is 'current <contact>', 'vt <contact>', 'gm <contact>' "
+                                                      "or 'swing <contact>'"));
             }
-            if (w[0] != "current" || w.size() != 2) {
-                return std::unexpected(at(e.line, "unknown goal '" + e.value + "': a goal is 'current <contact>'"));
-            }
+            if (w[0] == "vt") goal_kind = solve::GoalKind::vt;
+            else if (w[0] == "gm") goal_kind = solve::GoalKind::gm;
+            else if (w[0] == "swing") goal_kind = solve::GoalKind::swing;
             NITCAD_DECK_TRY(c, contact_index(e, w[1], plan));
             const auto kind = plan.device.contacts()[c].kind;
             if (kind == device::ContactKind::gate || kind == device::ContactKind::electrode) {
@@ -1711,15 +1720,27 @@ std::expected<void, base::Error> Builder::adapt(Plan& plan) const {
                                                       "' is a gate or an electrode, which carries no current"));
             }
             for (const solve::AdaptGoal& g : o.goals) {
-                if (g.contact == c) return std::unexpected(at(e.line, "a second goal on '" + std::string(w[1]) + "'"));
+                if (g.contact == c && g.kind == goal_kind) {
+                    // A current goal's message as before Unit 17c.
+                    const std::string kind_word = goal_kind == solve::GoalKind::current ? "" : std::string(w[0]) + " ";
+                    return std::unexpected(at(e.line, "a second " + kind_word + "goal on '" + std::string(w[1]) + "'"));
+                }
             }
-            o.goals.push_back({c});
+            if (goal_kind != solve::GoalKind::current && derived_goal == nullptr) derived_goal = &e;
+            if (goal_kind == solve::GoalKind::vt) has_vt = true;
+            o.goals.push_back({.contact = c, .kind = goal_kind});
         } else if (e.key == "tolerance") {
             NITCAD_DECK_TRY(v, num(e));
             if (!(v > 0.0 && v < 1.0)) return std::unexpected(at(e.line, "the tolerance is relative, in (0, 1)"));
             o.tolerance = v;
+        } else if (e.key == "vt_tolerance") {
+            // DG5: a vt goal's absolute allowance, in volts.
+            vt_tolerance = &e;
+            NITCAD_DECK_TRY(v, num(e));
+            if (!(v > 0.0 && std::isfinite(v))) return std::unexpected(at(e.line, "vt_tolerance must be a positive voltage"));
+            o.vt_tolerance = v;
         } else if (e.key == "at") {
-
+            at_entry = &e;
             if (e.value == "auto") continue;
             for (const std::string_view item : items(e.value)) {
                 NITCAD_DECK_TRY(k, lift(e.line, integer(item)));
@@ -1795,6 +1816,29 @@ std::expected<void, base::Error> Builder::adapt(Plan& plan) const {
         }
     }
     if (o.goals.empty()) return std::unexpected(at(s->line, "[adapt] needs at least one 'goal = current <contact>'"));
+    // Unit 17c (DG1, DG2, DG5): a derived goal's sweep, points and tolerance.
+    if (vt_tolerance != nullptr && !has_vt) {
+        return std::unexpected(at(vt_tolerance->line, "vt_tolerance is for a 'goal = vt <contact>'"));
+    }
+    if (derived_goal != nullptr) {
+        if (at_entry != nullptr && !o.at.empty()) {
+            return std::unexpected(at(at_entry->line, "adaptation points cannot be given with a vt, gm or swing goal "
+                                                      "(its window on the transfer curve decides; use at = auto)"));
+        }
+        if (plan.points.size() < 3) {
+            return std::unexpected(at(derived_goal->line, "a vt, gm or swing goal needs a sweep of at least 3 points"));
+        }
+        const std::vector<std::size_t> swept = solve::swept_contacts(plan.points);  // DR9: adapt()'s rule
+        if (swept.size() != 1) {
+            return std::unexpected(at(derived_goal->line, "a vt, gm or swing goal needs a sweep of exactly one contact "
+                                                          "(this sweep moves " + std::to_string(swept.size()) + ")"));
+        }
+        const auto& swept_contact = plan.device.contacts()[swept[0]];
+        if (swept_contact.kind != device::ContactKind::gate && swept_contact.kind != device::ContactKind::electrode) {
+            return std::unexpected(at(derived_goal->line, "a vt, gm or swing goal needs the swept contact to be a gate or "
+                                                          "an electrode; '" + swept_contact.name + "' is not"));
+        }
+    }
     const bool budget = mode != nullptr && mode->value == "budget";
     if (budget && o.policy != solve::Policy::intelligent) {
         return std::unexpected(at(mode->line, "mode = budget needs policy = intelligent (the basic loop takes max_nodes)"));

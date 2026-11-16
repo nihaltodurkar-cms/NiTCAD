@@ -225,15 +225,16 @@ constexpr std::array<KeyInfo, 10> trace_keys{{
 }};
 
 // [adapt] (Unit 17, AD7).
-constexpr std::array<std::string_view, 1> goal_kinds{"current"};
+constexpr std::array<std::string_view, 4> goal_kinds{"current", "vt", "gm", "swing"};  // vt, gm, swing: Unit 17c
 constexpr std::array<std::string_view, 2> weightings{"none", "adjoint"};
 constexpr std::array<std::string_view, 2> policies{"basic", "intelligent"};
 constexpr std::array<std::string_view, 2> adapt_modes{"tolerance", "budget"};
 constexpr std::array<std::string_view, 2> verifications{"richardson", "off"};
 constexpr std::array<std::string_view, 2> certifications{"report", "required"};
-constexpr std::array<KeyInfo, 18> adapt_keys{{
-    {"goal", 0, true, "current <contact>", "a goal: a contact's current (at least one)", goal_kinds, {}, {}},
+constexpr std::array<KeyInfo, 19> adapt_keys{{
+    {"goal", 0, true, "current <contact>", "a goal: a contact's current, or vt, gm, swing of its transfer curve (at least one)", goal_kinds, {}, {}},
     {"tolerance", 0, false, "1e-3", "the goals' relative tolerance", {}, {}, {}},
+    {"vt_tolerance", 0, false, "1e-3", "a vt goal's absolute tolerance (V)", {}, {}, {}},
     {"at", 0, false, "auto", "the adaptation points: auto or point indices from 0", {}, {}, {}},
     {"max_points", 0, false, "3", "at = auto, intelligent: the most points chosen", {}, {}, {}},
     {"indicators", 0, false, "auto", "auto, or a list of potential, electron_density, hole_density, doping, generation", {}, {}, {}},
@@ -250,7 +251,7 @@ constexpr std::array<KeyInfo, 18> adapt_keys{{
     {"min_size", 0, false, "<length>", "the smallest size (default from the mesh)", {}, {}, {}},
     {"grading", 0, false, "1.5", "the largest size ratio between neighbours", {}, {}, {}},
     {"theta", 0, false, "0.3", "the marking fraction", {}, {}, {}},
-    {"predictor", 0, false, "<file>", "Unit 17b's cross-run model (refused in this unit)", {}, {}, {}},
+    {"predictor", 0, false, "<file>", "Unit 17b's cross-run model (policy = intelligent)", {}, {}, {}},
 }};
 
 constexpr std::array<KeyInfo, 10> output_keys{{

@@ -405,8 +405,8 @@ double out_of_range_fraction(const results::LearnedModel& m, const EdgeFeatures&
 
 std::expected<SizeTargets, base::Error> learned_targets(const results::LearnedModel& m, const device::Device& d,
                                                         std::span<const std::vector<double>> points,
-                                                        const BiasOptions& options) {
-    auto f = edge_features(d, points, options, m.materials);
+                                                        const BiasOptions& options, double goal_kind) {
+    auto f = edge_features(d, points, options, m.materials, goal_kind);
     if (!f) return std::unexpected(f.error());
     const std::size_t nn = d.mesh().node_count();
     SizeTargets t;

@@ -57,12 +57,16 @@ struct Film {
     double floor = 0.0;  // a vector magnitude on a log scale without a range: values below it drawn at it (0: none)
 };
 
+// The app's default colormap (Unit 26d, ZD8; superseding VQ5's turbo for the app only): new views start with
+// it. `nitcad plot`'s default stays turbo, so plot_arguments names it (`--colormap viridis`).
+inline constexpr std::string_view app_colormap = "viridis";
+
 struct ViewSettings {
     ViewKind kind = ViewKind::solid;
     std::string field = "potential";             // field_info's key
     std::optional<std::size_t> point;            // the bias point, default the last
     std::string scale;                           // "", linear, log, signed-log ("" the field's own)
-    std::string colormap = "turbo";
+    std::string colormap = std::string(app_colormap);  // Unit 26d (ZD8)
     std::optional<std::pair<double, double>> range;
     bool contours = false;
     bool edges = false;                          // mesh edges over a map or surface
@@ -115,6 +119,11 @@ struct ViewSettings {
     float pan_x = 0.0f, pan_y = 0.0f;
 };
 
+// Whether the settings' view is a difference drawn cool-warm (XD6, ZD8): one with no other colormap chosen than
+// a default, the app's (viridis) or nitcad plot's (turbo, which `nitcad plot` draws cool-warm there), so that
+// plot_arguments' command draws the same map.
+[[nodiscard]] bool takes_coolwarm(const ViewSettings& s) noexcept;
+
 // Camera moves (VA8): orbit by degrees (3D; the elevation kept within +-89), zoom by a factor (kept
 // within 1/16 to 1024), pan by fractions of the half view, and fit (zoom 1, no pan, the angles kept).
 void orbit(ViewSettings& s, float azimuth_deg, float elevation_deg);
@@ -159,6 +168,17 @@ inline constexpr double playback_fps = 5.0;
 inline constexpr int clip_steps = 1000;
 [[nodiscard]] double clip_value_um(double lo_um, double hi_um, int step) noexcept;
 [[nodiscard]] int clip_step(double lo_um, double hi_um, double value_um) noexcept;
+
+// The Point list's entries (Unit 26d, ZD2), one per workspace point: "k · t = <time>" for a transient's
+// snapshots (render::time_label); otherwise "k · <contact> = <V> V" for each contact whose bias varies over
+// the points, the swept contact (swept_contact, as the I-V view takes it) first and the others in the device's
+// order, joined by ", "; the bare index "k" when nothing varies. Volts as {:.4g}.
+[[nodiscard]] std::vector<std::string> point_labels(const Workspace& w);
+
+// The metrics strip's maximum (Unit 26d, ZD7) from the title the tree and the colour bar show, "<symbol> (<unit>)"
+// (render::field_info's, or a difference's): "Max <symbol> <value> <unit>", or for a difference
+// "Max |B − A| <value> <unit>". The value as {:.4g} ("-" when not finite); a title without a unit gives none.
+[[nodiscard]] std::string max_metric(std::string_view title, double value, bool difference = false);
 
 // The options of `nitcad plot` that draw the same view (without the input, --out, --size and
 // --adapter); with run B, `--compare <its file>` for the views that use it.

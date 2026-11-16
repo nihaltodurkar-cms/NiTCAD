@@ -43,11 +43,13 @@ struct EdgeFeatures {
 
 // Feature 1 is the index of the edge's material key in `materials` (-1 when absent: an unseen
 // category, LB8). An edge's material: its semiconductor end's (the lower node's when both or
-// neither are). Errors: those of feature_points.
+// neither are). Feature 12 is `goal_kind` (LB3: 0 a terminal current; Unit 17c DG10: 1 vt, 2 gm, 3 swing,
+// outside schema 1's training range, so LB8 sends such a run to ID2). Errors: those of feature_points.
 [[nodiscard]] std::expected<EdgeFeatures, base::Error> edge_features(const device::Device& device,
                                                                      std::span<const std::vector<double>> points,
                                                                      const BiasOptions& options,
-                                                                     std::span<const std::string> materials);
+                                                                     std::span<const std::string> materials,
+                                                                     double goal_kind = 0.0);
 
 // The realized refinement of each edge against a final mesh (LB2): max(0, log2(L_e / h_f)), NaN
 // where the midpoint is outside every final cell.
@@ -62,7 +64,8 @@ struct EdgeFeatures {
 // pass's, sorted; features are recomputed against them at finish.
 class HistoryRecorder {
 public:
-    HistoryRecorder(std::vector<std::vector<double>> points, BiasOptions options);
+    // goal_kind: feature 12 (edge_features).
+    HistoryRecorder(std::vector<std::vector<double>> points, BiasOptions options, double goal_kind = 0.0);
     [[nodiscard]] std::expected<void, base::Error> record(std::size_t pass, const AdaptableMesh& mesh);
     [[nodiscard]] std::expected<results::AdaptHistory, base::Error> finish(const AdaptableMesh& final_mesh) const;
 
@@ -74,6 +77,7 @@ private:
     };
     std::vector<std::vector<double>> points_;
     BiasOptions options_;
+    double goal_kind_ = 0.0;
     std::vector<Pass> passes_;
 };
 
@@ -153,11 +157,13 @@ inline constexpr double out_of_range_limit = 0.05;  // LB8: a device above it fa
 void stamp_predictor(results::RunRecord& run, std::uint64_t file_digest, const results::LearnedModel& model, bool used);
 
 // LB4's targets on a device: per edge L_e 2^-l^ where l^ >= 0.5; per node the smallest over its edges,
-// with that edge's direction as the normal; infinity (no target) elsewhere. Errors: those of
+// with that edge's direction as the normal; infinity (no target) elsewhere. goal_kind: feature 12
+// (edge_features; Unit 17c DG10: the run's own goal, as the range check and the history). Errors: those of
 // edge_features.
 [[nodiscard]] std::expected<SizeTargets, base::Error> learned_targets(const results::LearnedModel& model,
                                                                       const device::Device& device,
                                                                       std::span<const std::vector<double>> points,
-                                                                      const BiasOptions& options);
+                                                                      const BiasOptions& options,
+                                                                      double goal_kind = 0.0);
 
 }  // namespace NiTCAD::solve

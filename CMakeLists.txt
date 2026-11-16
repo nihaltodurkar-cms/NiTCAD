@@ -603,6 +603,7 @@ add_library(nitcad_solve STATIC
   src/solve/adapt_transfer.cpp
   src/solve/adapt_adjoint.cpp
   src/solve/adapt_policy.cpp
+  src/solve/adapt_derived.cpp
   src/solve/adapt.cpp
   src/solve/adapt_report.cpp
   src/solve/adapt_learn.cpp
@@ -716,6 +717,12 @@ target_compile_definitions(nitcad_deck_test PRIVATE
   NITCAD_DECKS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/decks"
   NITCAD_MKL_RUNTIME_PATH="${NITCAD_MKL_RUNTIME_PATH}")
 nitcad_add_file_tests(deck nitcad_deck_test)
+# Unit 17c's two deck cases with derived goals run their adaptive loops several times: about 5.5 minutes in
+# Release and 100 minutes in Debug, past the Debug job's budget (DECISIONS Unit 17c). Release only, hidden tag
+# [.deck_adapt_derived], as the other slow gates.
+if(CMAKE_BUILD_TYPE STREQUAL "Release")
+  add_test(NAME deck.adapt_derived_release COMMAND nitcad_deck_test "[.deck_adapt_derived]")
+endif()
 
 # Adaptive refinement (Unit 17): indicators, transfer and the loop, on devices built from decks.
 add_executable(nitcad_adapt_test
@@ -727,14 +734,21 @@ add_executable(nitcad_adapt_test
   tests/solve/adapt_policy_test.cpp
   tests/solve/adapt_intelligent_test.cpp
   tests/solve/adapt_learn_test.cpp
+  tests/solve/adapt_derived_test.cpp
   tests/baseline/trace_listener.cpp)
-target_link_libraries(nitcad_adapt_test PRIVATE NiTCAD::deck Catch2::Catch2WithMain)
+# analysis: the derived goals' formulas held equal to dc.hpp's (Unit 17c, DG12).
+target_link_libraries(nitcad_adapt_test PRIVATE NiTCAD::deck NiTCAD::analysis Catch2::Catch2WithMain)
 nitcad_add_file_tests(adapt nitcad_adapt_test)
 # The adaptive gates on 2D MOSFETs (AC7 [.adapt_goal]; AC14, AC17 [.adapt_intelligent]): tens of
 # seconds in Release, tens of minutes in Debug (AC13), so in the Release configuration only.
 if(CMAKE_BUILD_TYPE STREQUAL "Release")
   add_test(NAME adapt_goal COMMAND nitcad_adapt_test "[adapt_goal]")
   add_test(NAME adapt_intelligent COMMAND nitcad_adapt_test "[adapt_intelligent]")
+  # Unit 17c: DC6's moved window (15 s Release) and the DC3-DC5 gates (hidden tag [.derived_goals]).
+  add_test(NAME adapt_derived_slow COMMAND nitcad_adapt_test "[.adapt_derived_slow]")
+  # DR8: g_m's DC3/DC5 gate (2 min); V_T's and the swing's (24 and 11 min Release) are run by hand,
+  # nitcad_adapt_test "[.derived_goals]": CI's Release job has a 60-minute limit.
+  add_test(NAME adapt_derived_gm_gate COMMAND nitcad_adapt_test "[.derived_goals_ci]")
 endif()
 # The Lombardi device gates (tests/deck/surface_mobility_test.cpp, hidden tag [.lombardi]: MOSFET
 # sweeps) run in the Release configuration only.
@@ -958,7 +972,8 @@ add_library(nitcad_app STATIC
   src/app/run_monitor.cpp
   src/app/deck_vocabulary.cpp
   src/app/live_check.cpp
-  src/app/compare.cpp)
+  src/app/compare.cpp
+  src/app/integration.cpp)
 add_library(NiTCAD::app ALIAS nitcad_app)
 target_include_directories(nitcad_app PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
 target_link_libraries(nitcad_app PUBLIC NiTCAD::deck NiTCAD::render NiTCAD::analysis NiTCAD::io)
@@ -977,7 +992,8 @@ add_executable(nitcad_app_test
   tests/app/run_monitor_test.cpp
   tests/app/deck_vocabulary_test.cpp
   tests/app/live_check_test.cpp
-  tests/app/compare_test.cpp)
+  tests/app/compare_test.cpp
+  tests/app/integration_test.cpp)
 target_link_libraries(nitcad_app_test PRIVATE NiTCAD::app Catch2::Catch2WithMain user32)
 # The view tests compare the app's images with nitcad plot's (WG4's choices).
 add_dependencies(nitcad_app_test nitcad)
@@ -994,7 +1010,7 @@ add_library(nitcad_app_window STATIC
   src/app/main_window.cpp
   src/app/pages.cpp
   src/app/self_test.cpp)
-target_link_libraries(nitcad_app_window PUBLIC NiTCAD::app comctl32 comdlg32 shell32 ole32 user32 gdi32 dxgi dxguid)
+target_link_libraries(nitcad_app_window PUBLIC NiTCAD::app comctl32 comdlg32 shell32 ole32 user32 gdi32 dxgi dxguid dwmapi advapi32)
 # The start page lists the examples beside the executable, else the source tree's (26-3, VQ11).
 target_compile_definitions(nitcad_app_window PRIVATE NITCAD_EXAMPLES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/examples")
 target_include_directories(nitcad_app_window PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src/app")
