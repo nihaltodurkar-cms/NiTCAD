@@ -39,6 +39,12 @@
 // unverified when the final mesh was not verified (verification off, or a budget stop: max_passes,
 // max_nodes, nothing marked).
 //
+// Derived goals (Unit 17c, DECISIONS.md DG1-DG12): vt, gm and swing of a goal contact's transfer
+// curve against the sweep's one swept gate or electrode. Each is an entry after the currents' (DG4),
+// its points its window on the pass's sweep (DG2), its estimate and weights the per-point adjoints'
+// combined through its sensitivities, its allowance absolute for vt (DG5); its stop needs the window
+// unchanged, and a window moved on M' is never certified (DG6). Without one, every path is as before.
+//
 // Determinism (AD9): every step is deterministic, so two runs on one machine and thread count are
 // bit-identical.
 #pragma once
@@ -62,6 +68,7 @@
 #include "NiTCAD/mesh/size_field.hpp"
 #include "NiTCAD/results/adapt.hpp"
 #include "NiTCAD/results/run.hpp"
+#include "NiTCAD/solve/adapt_derived.hpp"
 #include "NiTCAD/solve/adapt_indicators.hpp"
 #include "NiTCAD/solve/adapt_policy.hpp"
 #include "NiTCAD/solve/adapt_transfer.hpp"
@@ -94,8 +101,12 @@ struct AdaptableMesh {
 
 using DeviceBuilder = std::function<std::expected<AdaptableMesh, base::Error>(const MeshRefinement&)>;
 
+// A goal (AD6; Unit 17c DG1): the contact's current at the adaptation points, or a figure of its
+// transfer curve against the sweep's one swept gate or electrode contact (vt, gm, swing; the
+// contact held at a fixed bias).
 struct AdaptGoal {
-    std::size_t contact = 0;  // a terminal current, device contact order
+    std::size_t contact = 0;  // device contact order
+    GoalKind kind = GoalKind::current;
 };
 
 enum class Weighting : unsigned char { none, adjoint };
@@ -103,7 +114,10 @@ enum class Weighting : unsigned char { none, adjoint };
 struct AdaptOptions {
     std::vector<AdaptGoal> goals;           // at least one
     double tolerance = 1e-3;                // relative, in (0, 1)
-    std::vector<std::size_t> at;            // adaptation points, indices into the sweep; empty: its first and last
+    double vt_tolerance = 1e-3;             // V: a vt goal's absolute allowance (DG5), > 0
+    // Adaptation points of the current goals, indices into the sweep; empty: its first and last.
+    // Refused with a derived goal (DG2: its window decides).
+    std::vector<std::size_t> at;
     IndicatorOptions indicators;
     Weighting weighting = Weighting::none;  // adjoint: AD3's weights and AD6's estimate (AR3)
     double theta = 0.3;                     // AD3
@@ -196,8 +210,12 @@ struct AdaptPass {
     std::size_t nodes = 0;
     std::size_t edges = 0;
     std::uint64_t mesh_digest = 0;   // mesh::graph_digest of this pass's mesh (AD8)
-    // Per goal and adaptation point, goal-major (goal g, point a at g * at.size() + a).
+    // Per goal and adaptation point, goal-major (current goal g, point a at g * at.size() + a, the
+    // current goals in their order), then one entry per derived goal in its order (DG4).
     std::vector<double> goal;
+    // Per derived goal (Unit 17c, DG2, DG6): its window on this pass's sweep, first and last point.
+    std::vector<std::size_t> window_first;
+    std::vector<std::size_t> window_last;
     std::vector<double> resolution;  // the point's current resolution, same layout
     std::vector<double> change;      // |G_k - G_k-1|; empty on the first pass
     // weighting = adjoint (AR3): the adjoint estimate 2 |D| per goal and point (same layout; empty
@@ -260,8 +278,11 @@ enum class CertificateStatus : unsigned char { certified, not_certified, unverif
 }
 
 struct GoalCertificate {
-    std::size_t goal = 0;
-    std::size_t point = 0;    // index into the sweep
+    std::size_t goal = 0;     // index into the options' goals
+    GoalKind kind = GoalKind::current;
+    std::size_t point = 0;    // index into the sweep (a derived goal: DerivedGoal::point)
+    // DG6: a derived goal whose window differs on M and M' (then not_certified, never certified).
+    bool window_moved = false;
     double value = 0.0;       // on the final mesh
     double estimate = 0.0;    // AD6's: the adjoint's 2 |D|, or the last change (infinity after a single pass)
     double verified_error = 0.0;  // AD11 (NaN when unverified)
@@ -315,6 +336,16 @@ struct RichardsonError {
     double order = 1.0;
 };
 [[nodiscard]] RichardsonError richardson_error(double coarse, double fine, double change) noexcept;
+// DR6: G on M, M' and M'' (g0, g1, g2). The order is observed from the two differences, clamped to [0.5, 3]
+// (3 when g2 = g1; 0.5 when only g1 = g0); the error is g0's distance from M'''s Richardson extrapolation.
+[[nodiscard]] RichardsonError two_level_error(double g0, double g1, double g2) noexcept;
+// DR6, DR9: a derived goal's verified error on two levels: the larger of AD11's single-level error and
+// two_level_error(g0, g1, g2); infinite (unmeasured), the single level's order kept, when g1 or g2 is not finite.
+[[nodiscard]] RichardsonError derived_verified_error(const RichardsonError& single, double g0, double g1,
+                                                     double g2) noexcept;
+// DR6, DR9: whether a verification solves M'': only with a derived goal, and then when M' accepts the stop or on
+// the last pass (whose verification is the certificate's); not when M' already rejects a stop before the last.
+[[nodiscard]] bool two_level_verification(bool any_derived, bool single_accepts, bool last_pass) noexcept;
 // AD13: certified when verified and both the estimate and the verified error are within the
 // allowance; not_certified when verified otherwise; unverified when not verified.
 [[nodiscard]] CertificateStatus certificate_status(bool verified, double estimate, double verified_error,

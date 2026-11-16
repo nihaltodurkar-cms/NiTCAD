@@ -23,6 +23,7 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <format>
 #include <stop_token>
 #include <string>
 #include <string_view>
@@ -175,10 +176,21 @@ void describe(const NiTCAD::deck::Plan& plan) {
     if (plan.adapt) {
         const auto& o = plan.adapt->options;
         std::string goals;
-        for (const auto& g : o.goals) goals += (goals.empty() ? "" : ", ") + d.contacts()[g.contact].name;
-        std::printf("adapt: current of %s to %g (relative), policy %s, weighting %s, verify %s, certify %s, "
+        bool derived = false, vt = false;
+        for (const auto& g : o.goals) {
+            derived = derived || g.kind != NiTCAD::solve::GoalKind::current;
+            vt = vt || g.kind == NiTCAD::solve::GoalKind::vt;
+        }
+        // Unit 17c (DG9): with a derived goal each goal is "<kind> of <contact>"; else as before.
+        for (const auto& g : o.goals) {
+            goals += (goals.empty() ? "" : ", ") +
+                     (derived ? std::string(NiTCAD::solve::to_string(g.kind)) + " of " : std::string()) +
+                     d.contacts()[g.contact].name;
+        }
+        if (vt) goals += std::format(" (vt to {:g} V)", o.vt_tolerance);
+        std::printf("adapt: %s%s to %g (relative), policy %s, weighting %s, verify %s, certify %s, "
                     "at most %d passes\n",
-                    goals.c_str(), o.tolerance, NiTCAD::solve::to_string(o.policy),
+                    derived ? "" : "current of ", goals.c_str(), o.tolerance, NiTCAD::solve::to_string(o.policy),
                     o.weighting == NiTCAD::solve::Weighting::adjoint ? "adjoint" : "none", o.verify ? "richardson" : "off",
                     plan.adapt->certify_required ? "required" : "report", o.max_passes);
         if (const auto& m = plan.adapt->predictor) {
@@ -214,10 +226,22 @@ void print_adapt(const NiTCAD::results::AdaptReport& a) {
                 a.policy.c_str(), a.fallback.c_str(), static_cast<unsigned long long>(a.verification_nodes),
                 a.verification_seconds);
     for (const auto& c : a.certificates) {
-        std::printf("certificate: current of %s at point %llu: %.10g A, estimate %.3g, verified error %.3g "
-                    "(order %.2f), allowed %.3g: %s\n",
-                    a.goal_contacts[c.goal].c_str(), static_cast<unsigned long long>(c.point), c.value, c.estimate,
-                    c.verified_error, c.order, c.allowed, c.status.c_str());
+        const std::string kind = NiTCAD::results::goal_kind(a, c.goal);
+        if (kind == "current") {
+            std::printf("certificate: current of %s at point %llu: %.10g A, estimate %.3g, verified error %.3g "
+                        "(order %.2f), allowed %.3g: %s\n",
+                        a.goal_contacts[c.goal].c_str(), static_cast<unsigned long long>(c.point), c.value, c.estimate,
+                        c.verified_error, c.order, c.allowed, c.status.c_str());
+            continue;
+        }
+        // Unit 17c (DG6, DG8): a derived goal's certificate covers the mesh's error at this gate step,
+        // not the step's own; a moved window is named.
+        const std::string unit = NiTCAD::results::goal_unit(a, c.goal);
+        std::printf("certificate: %s of %s (window at point %llu): %.10g %s, estimate %.3g, verified error %.3g "
+                    "(order %.2f), allowed %.3g: %s%s (the mesh's error at this sweep's gate step, not the step's)\n",
+                    kind.c_str(), a.goal_contacts[c.goal].c_str(), static_cast<unsigned long long>(c.point), c.value,
+                    unit.c_str(), c.estimate, c.verified_error, c.order, c.allowed, c.status.c_str(),
+                    c.window_moved ? ", window moved on M'" : "");
     }
     std::printf("adapt: %s (an estimate and an independent Richardson check, not a proof)\n", a.status.c_str());
 }

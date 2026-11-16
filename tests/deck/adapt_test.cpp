@@ -4,6 +4,7 @@
 // certificates in the table) and their round trip, the run identity, determinism and the exit status.
 #include <catch2/catch_test_macros.hpp>
 
+#include <algorithm>
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
@@ -217,8 +218,14 @@ TEST_CASE("deck adapt: refusals name their line (AC9, AC10)", "[deck]") {
     {
         const std::string m = refused(base + "goal = vt\n");
         holds(m, at(0));
-        holds(m, "not adapted in this unit");
+        holds(m, "unknown goal 'vt'");  // Unit 17c: vt needs its contact
     }
+    // Unit 17c (DC7): a derived goal on the diode's sweep (it sweeps the anode, an ohmic contact).
+    holds(refused(base + "goal = gm cathode\n"), "needs the swept contact to be a gate or an electrode");
+    holds(refused(base + "goal = current anode\nvt_tolerance = 1e-3\n"), "vt_tolerance is for a 'goal = vt <contact>'");
+    holds(refused(base + "goal = vt cathode\nvt_tolerance = -1\n"), "vt_tolerance must be a positive voltage");
+    holds(refused(base + "goal = gm cathode\ngoal = gm cathode\n"), "a second gm goal on 'cathode'");
+    holds(refused(base + "goal = swing cathode\nat = 1\n"), "use at = auto");
     holds(refused(base + "goal = current nowhere\n"), "no contact named 'nowhere'");
     holds(refused(base + "goal = charge anode\n"), "unknown goal");
     holds(refused(base + "goal = current anode\nfoo = 1\n"), at(1) + " unknown key 'foo' in [adapt]");
@@ -330,6 +337,9 @@ adapt_meshes = passes
     REQUIRE(a.certificates.size() == 1);
     CHECK(a.certificates[0].point == 2);
     CHECK(a.goal_contacts == std::vector<std::string>{"anode"});
+    // DG9 (DC1): a run with current goals alone carries no kinds and no vt_tolerance.
+    CHECK(a.goal_kinds.empty());
+    CHECK(a.vt_tolerance == 0.0);
 
     // The final mesh is the result's, everywhere.
     const std::uint64_t fin = mesh::graph_digest(report->adapted->device.mesh());
@@ -420,7 +430,7 @@ TEST_CASE("nitcad: an uncertified result exits 3 when certification is required 
     const Cli bad = cli("check \"" + (dir / "bad.deck").string() + "\"");
     CHECK(bad.status == 1);
     CHECK(bad.output.find("bad.deck:") != std::string::npos);
-    CHECK(bad.output.find("not adapted in this unit") != std::string::npos);
+    CHECK(bad.output.find("unknown goal 'gm'") != std::string::npos);
 }
 
 TEST_CASE("nitcad plot: an adaptive run's estimate, its passes' meshes and its final mesh (AD8)", "[deck]") {
@@ -646,4 +656,221 @@ TEST_CASE("deck adapt: a learned predictor: its use, the identity, the out-of-ra
         REQUIRE(!p.has_value());
         CHECK(p.error().message.find("format version 9, this build's is 1") != std::string::npos);
     }
+}
+
+// Unit 17c (DG1, DG8, DG9; DC7): gm and vt goals through the deck, `nitcad check|run`, the CSV
+// table and the report file (written and read back), on a coarse tensor MOSFET (Lg 600 nm).
+TEST_CASE("deck adapt: derived goals in the deck, the CLI, the table and the report (Unit 17c)",
+          "[deck][.deck_adapt_derived]") {
+    const fs::path dir = scratch("adapt_derived");
+    const std::string mosfet = R"(
+[mesh]
+type = tensor
+x = linspace(0, 1200nm, 25)
+y = linspace(0, 200nm, 11)
+
+[region silicon]
+material = silicon
+
+[doping]
+profile = acceptor constant 1e17
+profile = donor gaussian 1e19 axis=y center=0 width=50nm x=0:300nm lateral=14.142135624nm
+profile = donor gaussian 1e19 axis=y center=0 width=50nm x=900nm:1200nm lateral=14.142135624nm
+
+[contact source]
+kind = ohmic
+patch = y_min
+box = 0 300.5nm  0 0
+
+[contact drain]
+kind = ohmic
+patch = y_min
+box = 899.5nm 1200nm  0 0
+
+[contact body]
+kind = ohmic
+patch = y_max
+
+[contact gate]
+kind = gate
+patch = y_min
+box = 301nm 899nm  0 0
+oxide_thickness = 5nm
+
+[solver]
+max_cuts = 20
+
+[sweep]
+contact drain = 0.05
+contact gate = 0 : 1.2 : 0.2
+
+[adapt]
+goal = gm drain
+goal = vt drain
+tolerance = 1e-2
+vt_tolerance = 1e-2
+max_passes = 2
+
+[output]
+table = iv.csv
+adapt = out.nitadapt
+)";
+    write_text(dir / "d.deck", mosfet);
+    const Cli check = cli("check \"" + (dir / "d.deck").string() + "\"");
+    INFO(check.output);
+    CHECK(check.status == 0);
+    CHECK(check.output.find("adapt: gm of drain, vt of drain (vt to 0.01 V) to 0.01 (relative)") != std::string::npos);
+    const Cli run = cli("run \"" + (dir / "d.deck").string() + "\"");
+    INFO(run.output);
+    REQUIRE(run.status == 0);
+    CHECK(run.output.find("certificate: gm of drain (window at point") != std::string::npos);
+    CHECK(run.output.find("certificate: vt of drain (window at point") != std::string::npos);
+    CHECK(run.output.find("not the step's") != std::string::npos);  // DG8's scope
+    // The table: a derived goal's columns in its unit; filled at its certificate's point.
+    std::string header;
+    {
+        std::ifstream t(dir / "iv.csv");  // closed before the next run rewrites the file
+        std::getline(t, header);
+    }
+    CHECK(header.find(",gm drain certificate,gm drain estimate A/V,gm drain verified error A/V,gm drain allowed A/V,"
+                      "gm drain order") != std::string::npos);
+    CHECK(header.find(",vt drain certificate,vt drain estimate V,") != std::string::npos);
+    // The report: kinds, vt_tolerance, windows; written and read back equal.
+    auto a = io::load_adapt_report(dir / "out.nitadapt");
+    if (!a) FAIL(a.error().message);
+    CHECK(a->goal_kinds == std::vector<std::string>{"gm", "vt"});
+    CHECK(a->vt_tolerance == 1e-2);
+    REQUIRE(!a->passes.empty());
+    for (const auto& p : a->passes) {
+        CHECK(p.window_first.size() == 2);
+        CHECK(p.goal.size() == 2);
+    }
+    REQUIRE(a->certificates.size() == 2);
+    CHECK(results::goal_name(*a, a->certificates[1].goal) == "vt drain");
+    CHECK(results::goal_unit(*a, a->certificates[1].goal) == "V");
+    REQUIRE(io::save_adapt_report(dir / "again.nitadapt", *a).has_value());
+    auto b = io::load_adapt_report(dir / "again.nitadapt");
+    REQUIRE(b.has_value());
+    CHECK(b->goal_kinds == a->goal_kinds);
+    CHECK(b->vt_tolerance == a->vt_tolerance);
+    // Field by field: NaN (an unverified error, an unpredicted time) is never equal to itself.
+    REQUIRE(b->passes.size() == a->passes.size());
+    for (std::size_t k = 0; k < a->passes.size(); ++k) {
+        CHECK(b->passes[k].window_first == a->passes[k].window_first);
+        CHECK(b->passes[k].window_last == a->passes[k].window_last);
+        CHECK(b->passes[k].goal == a->passes[k].goal);
+    }
+    REQUIRE(b->certificates.size() == a->certificates.size());
+    for (std::size_t k = 0; k < a->certificates.size(); ++k) {
+        CHECK(b->certificates[k].goal == a->certificates[k].goal);
+        CHECK(b->certificates[k].point == a->certificates[k].point);
+        CHECK(b->certificates[k].value == a->certificates[k].value);
+        CHECK(b->certificates[k].window_moved == a->certificates[k].window_moved);
+        CHECK(b->certificates[k].status == a->certificates[k].status);
+    }
+    CHECK(b->verification_goal == a->verification_goal);
+    // The identity carries the kinds (DG9).
+    CHECK(std::ranges::count_if(a->run.settings, [](const auto& s) { return s.first == "adapt.goal_kind"; }) == 2);
+    // DC6: a moved window with certify = required exits 3 (its outputs written).
+    std::string moved = mosfet;
+    const auto replace = [&](const std::string& from, const std::string& to) {
+        const std::size_t at = moved.find(from);
+        REQUIRE(at != std::string::npos);
+        moved.replace(at, from.size(), to);
+    };
+    replace("contact gate = 0 : 1.2 : 0.2", "contact gate = -0.2 : 0.2 : 0.02");
+    replace("goal = gm drain\ngoal = vt drain\ntolerance = 1e-2\nvt_tolerance = 1e-2\nmax_passes = 2",
+            "goal = swing drain\ntolerance = 1e-1\nmax_passes = 4\ncertify = required");
+    write_text(dir / "moved.deck", moved);
+    const Cli required = cli("run \"" + (dir / "moved.deck").string() + "\"");
+    INFO(required.output);
+    CHECK(required.status == 3);
+    CHECK(required.output.find("window moved on M'") != std::string::npos);
+}
+
+// Unit 17c (DG10, DR2; DC9): the deck's learned predictor is asked for the run's goal kind. Its one
+// tree splits on feature 12 (the goal kind): one level for a current goal, none for a derived one, so a
+// gm goal's run gets no learned refinement of its start mesh.
+TEST_CASE("deck adapt: a learned predictor sees the run's goal kind (Unit 17c DG10, DR2)",
+          "[deck][.deck_adapt_derived]") {
+    const fs::path dir = scratch("adapt_predictor_kind");
+    const std::string mosfet = R"(
+[mesh]
+type = tensor
+x = linspace(0, 1200nm, 25)
+y = linspace(0, 200nm, 11)
+
+[region silicon]
+material = silicon
+
+[doping]
+profile = acceptor constant 1e17
+profile = donor gaussian 1e19 axis=y center=0 width=50nm x=0:300nm lateral=14.142135624nm
+profile = donor gaussian 1e19 axis=y center=0 width=50nm x=900nm:1200nm lateral=14.142135624nm
+
+[contact source]
+kind = ohmic
+patch = y_min
+box = 0 300.5nm  0 0
+
+[contact drain]
+kind = ohmic
+patch = y_min
+box = 899.5nm 1200nm  0 0
+
+[contact body]
+kind = ohmic
+patch = y_max
+
+[contact gate]
+kind = gate
+patch = y_min
+box = 301nm 899nm  0 0
+oxide_thickness = 5nm
+
+[solver]
+max_cuts = 20
+
+[sweep]
+contact drain = 0.05
+contact gate = 0 : 1.2 : 0.2
+
+[adapt]
+goal = gm drain
+tolerance = 1e-2
+policy = intelligent
+max_passes = 1
+)";
+    const deck::Plan plan = must(mosfet, dir);
+    const double gm_kind = static_cast<double>(static_cast<unsigned>(solve::GoalKind::gm));
+    results::LearnedModel model;
+    model.materials = solve::material_keys(plan.device);
+    auto f = solve::edge_features(plan.device, plan.points, plan.options, model.materials, gm_kind);
+    REQUIRE(f.has_value());
+    // In range everywhere: every category seen, every continuous feature inside wide bounds.
+    constexpr std::size_t F = results::learn_feature_count;
+    model.feature_min.assign(F, -1e300);
+    model.feature_max.assign(F, 1e300);
+    model.importance.assign(F, 0.0);
+    model.categories.assign(F, {});
+    for (std::size_t e = 0; e < f->rows; ++e) {
+        for (std::size_t k = 0; k < F; ++k) {
+            if (results::learn_feature_is_category(k)) model.categories[k].push_back(f->features[e * F + k]);
+        }
+    }
+    for (auto& c : model.categories) {
+        std::ranges::sort(c);
+        c.erase(std::unique(c.begin(), c.end()), c.end());
+    }
+    model.trees = {{results::TreeNode{.feature = 12, .threshold = 0.5, .left = 1, .right = 2},
+                    results::TreeNode{.value = 1.0}, results::TreeNode{.value = 0.0}}};
+    model.tree_count = 1;
+    REQUIRE(io::save_learned_model(dir / "kind.nitlearn", model).has_value());
+    const auto used = deck::run(must(mosfet + "predictor = kind.nitlearn\n", dir));
+    if (!used) FAIL(used.error().message);
+    const results::AdaptReport& a = *used->adapt;
+    CHECK(a.predictor_status == "used");
+    REQUIRE(!a.passes.empty());
+    CHECK(a.passes[0].source != "prediction");  // the gm kind's leaf: nothing refined
+    CHECK(a.passes[0].mesh_digest == mesh::graph_digest(plan.device.mesh()));  // the deck's own start mesh
 }

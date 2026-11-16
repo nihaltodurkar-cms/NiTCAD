@@ -53,8 +53,11 @@ struct AdaptPassRow {
     std::uint64_t nodes = 0, edges = 0, dofs = 0;
     std::uint64_t mesh_digest = 0;               // mesh::graph_digest of the pass's mesh
     std::string source;                          // how the mesh was made ("start", "proposal", ...)
-    // Per goal and adaptation point, goal-major (as AdaptReport::goal_contacts x points).
+    // Per goal and adaptation point, goal-major (as AdaptReport::goal_contacts x points; Unit 17c:
+    // the current goals x points, then one entry per derived goal, AdaptReport::goal_kinds).
     std::vector<double> goal, resolution, change, estimate;
+    // Unit 17c (DG2): per derived goal, its window's first and last sweep point (empty without one).
+    std::vector<std::uint64_t> window_first, window_last;
     double relative_estimate = 0.0;              // the largest estimate over its allowance
     std::uint64_t estimate_nodes = 0;            // M''s nodes (adjoint weighting)
     // The marks this pass made for the next mesh: their count, by dominant indicator (indexed as
@@ -94,6 +97,7 @@ struct AdaptCertificateRow {
     double order = 1.0;
     double allowed = 0.0;
     std::string status;           // "certified", "not_certified", "unverified"
+    bool window_moved = false;    // Unit 17c (DG6): a derived goal's window differs on M and M'
     bool operator==(const AdaptCertificateRow&) const = default;
 };
 
@@ -134,7 +138,27 @@ struct AdaptReport {
     std::uint64_t predictor_digest = 0;
     std::string predictor_status;
     double predictor_out_of_range = 0.0;
+    // Unit 17c (DG1, DG5, DG9): per goal its kind ("current", "vt", "gm", "swing"), empty when every
+    // goal is a current; and a vt goal's absolute allowance (V; 0 without derived goals).
+    std::vector<std::string> goal_kinds;
+    double vt_tolerance = 0.0;
     bool operator==(const AdaptReport&) const = default;
 };
+
+// Unit 17c (DG9): goal g's kind ("current" when the report has no kinds), the unit of its value and
+// estimates ("A", "V", "A/V", "mV/decade"; currents per cm^(3-D) as the sweep's), and its name in
+// the CSV columns and printouts: the contact for a current (as before 17c), "<kind> <contact>" else.
+[[nodiscard]] inline std::string goal_kind(const AdaptReport& a, std::size_t g) {
+    return g < a.goal_kinds.size() ? a.goal_kinds[g] : std::string("current");
+}
+[[nodiscard]] inline std::string goal_unit(const AdaptReport& a, std::size_t g) {
+    const std::string k = goal_kind(a, g);
+    return k == "vt" ? "V" : k == "gm" ? "A/V" : k == "swing" ? "mV/decade" : "A";
+}
+[[nodiscard]] inline std::string goal_name(const AdaptReport& a, std::size_t g) {
+    const std::string contact = g < a.goal_contacts.size() ? a.goal_contacts[g] : std::to_string(g);
+    const std::string k = goal_kind(a, g);
+    return k == "current" ? contact : k + " " + contact;
+}
 
 }  // namespace NiTCAD::results
