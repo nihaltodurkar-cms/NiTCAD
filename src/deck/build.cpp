@@ -1456,11 +1456,11 @@ std::expected<void, base::Error> Builder::transient(const Section& s, Plan& plan
             NITCAD_DECK_TRY(f, lift(e.line, waveform(e.value)));
             waveforms[index] = std::move(f);
         } else if (e.key == "t_end") {
-            NITCAD_DECK_TRY(v, num(e));
+            NITCAD_DECK_TRY(v, lift(e.line, seconds(e.value)));
             o.t_end_s = v;
             t_end = true;
         } else if (e.key == "dt_initial" || e.key == "dt_min" || e.key == "dt_max") {
-            NITCAD_DECK_TRY(v, num(e));
+            NITCAD_DECK_TRY(v, lift(e.line, seconds(e.value)));
             (e.key == "dt_initial" ? o.dt_initial_s : e.key == "dt_min" ? o.dt_min_s : o.dt_max_s) = v;
         } else if (e.key == "integrator") {
             if (e.value == "bdf2") o.integrator = solve::Integrator::bdf2;
@@ -1476,7 +1476,7 @@ std::expected<void, base::Error> Builder::transient(const Section& s, Plan& plan
             NITCAD_DECK_TRY(v, num(e));
             o.density_ref_cm3 = v;
         } else if (e.key == "output_times") {
-            NITCAD_DECK_TRY(v, lift(e.line, series(e.value, [](std::string_view t) { return number(t); })));
+            NITCAD_DECK_TRY(v, lift(e.line, series(e.value, [](std::string_view t) { return seconds(t); })));
             o.output_times_s = std::move(v);
         } else if (e.key == "restart") {
             return std::unexpected(no_restart(e, s));
@@ -1495,7 +1495,7 @@ std::expected<void, base::Error> Builder::small_signal(const Section& s, Plan& p
     NITCAD_DECK_CHECK(operating_points(s, plan, [&](const Entry& e) -> std::expected<bool, base::Error> {
         if (e.key == "restart") return std::unexpected(no_restart(e, s));
         if (e.key != "frequencies" && e.key != "field_frequencies") return false;
-        NITCAD_DECK_TRY(v, lift(e.line, series(e.value, [](std::string_view t) { return number(t); })));
+        NITCAD_DECK_TRY(v, lift(e.line, series(e.value, [](std::string_view t) { return hertz(t); })));
         if (e.key == "frequencies") {
             plan.small_signal.frequencies_Hz = std::move(v);
             frequencies = true;

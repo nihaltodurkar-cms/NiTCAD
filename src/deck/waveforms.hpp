@@ -1,5 +1,6 @@
 // Waveforms of the deck's [transient] section (private; deck/build.hpp, Unit 43, DECISIONS.md AN2,
-// AQ1): a solve::Waveform factory written as a call, its arguments numbers in V, s, Hz and rad.
+// AQ1): a solve::Waveform factory written as a call, its arguments numbers in V, s, Hz and rad;
+// times and frequencies may carry a unit (2ns, 10MHz; Unit 61, RD1).
 // Each reader returns the waveform or a message without the location, as values.hpp.
 #pragma once
 
@@ -36,17 +37,29 @@ inline std::expected<solve::Waveform, std::string> waveform(std::string_view s) 
         for (const std::string_view a : args) {
             const auto t = tokens(a);
             if (t.size() != 2) return std::unexpected("pwl takes corners 't v', separated by commas");
-            const auto time = number(t[0]);
-            const auto value = number(t[1]);
+            const auto time = seconds(t[0]);
+            const auto value = voltage(t[1]);
             if (!time) return std::unexpected(time.error());
             if (!value) return std::unexpected(value.error());
             corners.emplace_back(*time, *value);
         }
         return lifted(solve::Waveform::piecewise_linear(std::move(corners)));
     }
+    // Each argument by its position's kind (Unit 61, RD1): V a voltage, T a time (s, ms, ..., fs),
+    // F a frequency (Hz, ..., THz), R a phase in rad (a plain number).
+    const std::string_view kinds = name == "constant" ? "V"
+                                   : name == "step"   ? "VVT"
+                                   : name == "ramp"   ? "VVTT"
+                                   : name == "pulse"  ? "VVTTTT"
+                                   : name == "sine"   ? "VVFTR"
+                                                      : "";
     std::vector<double> v;
-    for (const std::string_view a : args) {
-        const auto x = number(a);
+    for (std::size_t k = 0; k < args.size(); ++k) {
+        const char kind = k < kinds.size() ? kinds[k] : 'R';  // too many arguments: arity's message below
+        const auto x = kind == 'V' ? voltage(args[k])
+                       : kind == 'T' ? seconds(args[k])
+                       : kind == 'F' ? hertz(args[k])
+                                     : number(args[k]);
         if (!x) return std::unexpected(x.error());
         v.push_back(*x);
     }

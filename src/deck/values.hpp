@@ -2,9 +2,11 @@
 // value or a message without the location; the caller adds "<source>:<line>: ".
 #pragma once
 
+#include <cctype>
 #include <charconv>
 #include <cmath>
 #include <expected>
+#include <span>
 #include <string>
 #include <string_view>
 #include <system_error>
@@ -77,6 +79,82 @@ inline std::expected<double, std::string> length(std::string_view s) {
     auto v = number(s);
     if (!v) return v;
     return *v * scale;
+}
+
+// A time in s or a frequency in Hz (DECISIONS.md Unit 61, RD1): a number, optionally followed by a
+// unit, s ms us ns ps fs for a time and Hz kHz MHz GHz THz for a frequency. The unit shifts the
+// text's decimal exponent before the number is read, so 2.5ns is the double 2.5e-9 is (a product
+// 2.5 * 1e-9 can differ in the last bit). A unit of the other kind, or an unknown one, is an error.
+enum class Dimension { time, frequency };
+
+inline std::expected<long long, std::string> integer(std::string_view s);
+
+namespace unit_detail {
+struct Unit {
+    std::string_view name;
+    int exponent;
+};
+inline constexpr Unit times[] = {{"s", 0}, {"ms", -3}, {"us", -6}, {"ns", -9}, {"ps", -12}, {"fs", -15}};
+inline constexpr Unit frequencies[] = {{"Hz", 0}, {"kHz", 3}, {"MHz", 6}, {"GHz", 9}, {"THz", 12}};
+inline const Unit* find(std::span<const Unit> table, std::string_view name) {
+    for (const Unit& u : table)
+        if (u.name == name) return &u;
+    return nullptr;
+}
+}  // namespace unit_detail
+
+inline std::expected<double, std::string> quantity(std::string_view s, Dimension d) {
+    s = trimmed(s);
+    std::size_t cut = s.size();
+    while (cut > 0 && std::isalpha(static_cast<unsigned char>(s[cut - 1]))) --cut;
+    const std::string_view unit = s.substr(cut);
+    if (unit.empty()) return number(s);
+    std::string_view text = trimmed(s.substr(0, cut));
+    using Units = std::span<const unit_detail::Unit>;
+    const Units own = d == Dimension::time ? Units(unit_detail::times) : Units(unit_detail::frequencies);
+    const Units other = d == Dimension::time ? Units(unit_detail::frequencies) : Units(unit_detail::times);
+    const unit_detail::Unit* u = unit_detail::find(own, unit);
+    if (u == nullptr) {
+        const char* want = d == Dimension::time ? "a time" : "a frequency";
+        if (unit_detail::find(other, unit) != nullptr) {
+            return std::unexpected("'" + std::string(s) + "' is " +
+                                   (d == Dimension::time ? "a frequency" : "a time") + ", not " + want);
+        }
+        return std::unexpected("'" + std::string(s) + "': unknown unit '" + std::string(unit) + "' for " + want +
+                               (d == Dimension::time ? " (s, ms, us, ns, ps, fs)" : " (Hz, kHz, MHz, GHz, THz)"));
+    }
+    if (u->exponent == 0) return number(text);
+    // Split off an exponent of the text's own (2.5e-3ns) and add the unit's to it.
+    long long exponent = u->exponent;
+    const std::size_t e = text.find_first_of("eE");
+    std::string_view mantissa = text;
+    if (e != std::string_view::npos) {
+        std::string_view digits = text.substr(e + 1);
+        if (digits.starts_with("+")) digits.remove_prefix(1);
+        const auto own_exponent = integer(digits);
+        if (!own_exponent) return std::unexpected("'" + std::string(s) + "' is not a number");
+        exponent += *own_exponent;
+        mantissa = text.substr(0, e);
+    }
+    if (mantissa.empty() || mantissa.find_first_of("eE") != std::string_view::npos) {
+        return std::unexpected("'" + std::string(s) + "' is not a number");
+    }
+    auto v = number(std::string(mantissa) + "e" + std::to_string(exponent));
+    if (!v) return std::unexpected("'" + std::string(s) + "' is not a number");
+    return v;
+}
+
+inline std::expected<double, std::string> seconds(std::string_view s) { return quantity(s, Dimension::time); }
+inline std::expected<double, std::string> hertz(std::string_view s) {
+    return quantity(s, Dimension::frequency);
+}
+
+// A number with no unit, where a time or frequency unit would be a mistake (a waveform's voltage).
+inline std::expected<double, std::string> voltage(std::string_view s) {
+    auto v = number(s);
+    if (v) return v;
+    if (seconds(s) || hertz(s)) return std::unexpected("'" + std::string(trimmed(s)) + "' has a unit; a voltage is in V, with none");
+    return v;
 }
 
 // An integer (no fraction or exponent).

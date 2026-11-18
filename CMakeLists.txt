@@ -698,6 +698,7 @@ add_executable(nitcad_deck_test
   tests/deck/run_test.cpp
   tests/deck/analyses_test.cpp
   tests/deck/analyses_run_test.cpp
+  tests/deck/units_test.cpp
   tests/deck/surface_mobility_test.cpp
   tests/deck/schottky_test.cpp
   tests/deck/quantum_confinement_test.cpp

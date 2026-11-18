@@ -110,10 +110,13 @@
 //                     t_end (required), dt_initial, dt_min, dt_max, integrator = bdf2 |
 //                     backward_euler, adaptive = on | off, rtol, density_ref,
 //                     output_times = <series>, fields_every_step = on | off;
-//                     thermal <name> = <K>  (electrothermal: held for the whole run)
+//                     thermal <name> = <K>  (electrothermal: held for the whole run);
+//                     times in s, or with a unit s, ms, us, ns, ps, fs (Unit 61, RD1: t_end,
+//                     dt_*, output_times and every waveform time; a sine's frequency as below)
 //   [small_signal]    (Unit 43; solve/small_signal.hpp) contact <name> = <series> and
 //                     thermal <name> = <series>, the operating points as in [sweep];
-//                     frequencies = <series> (required), field_frequencies = <series>
+//                     frequencies = <series> (required), field_frequencies = <series>; in Hz,
+//                     or with a unit Hz, kHz, MHz, GHz, THz (Unit 61, RD1)
 //   [trace]           (Unit 43; solve/trace.hpp) contact = <name> and end = <V> (required);
 //                     start <name> = <V>  (each contact's bias at the start, default 0);
 //                     step, max_step, min_step, current_limit, max_points, density_floor;
