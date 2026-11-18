@@ -527,3 +527,58 @@ TEST_CASE("render scene: isosurfaces on the field's scale, contours at levels in
     CHECK_FALSE(lines->points.empty());
     for (const Float3& p : lines->points) CHECK(std::abs(p[1] - 0.43f) <= 1e-5f);
 }
+
+// Unit 26g (MG2): electrodes are metal and translucent insulators glass; everything else stays matte.
+TEST_CASE("render scene: finishes, metal electrodes and glass oxide (Unit 26g, MG2)") {
+    const Mos m = mos(true);
+    const auto g = Geometry::tensor(m.device.mesh(), *m.device.cells());
+    std::vector<double> v;
+    for (const Point& p : m.device.mesh().points()) v.push_back(p[1] / 1e-4);
+    const auto expect = [](const TriangleBatch& b) {
+        if (b.name == "electrode") return Finish::metal;
+        if (b.transparent && (b.name == "insulator" || b.name == "gate oxide")) return Finish::glass;
+        return Finish::matte;
+    };
+    const auto check_scene = [&](const FieldScene& s) {
+        for (const TriangleBatch& b : s.triangles) {
+            INFO(b.name);
+            CHECK(b.finish == expect(b));
+        }
+    };
+    const auto solid = solid_view(m.device, *g);
+    REQUIRE(solid.has_value());
+    REQUIRE(find(*solid, "electrode") != nullptr);
+    CHECK(find(*solid, "electrode")->finish == Finish::metal);
+    REQUIRE(find(*solid, "insulator") != nullptr);
+    CHECK(find(*solid, "insulator")->finish == Finish::glass);
+    check_scene(*solid);
+    const auto field = field_view(m.device, *g, v);
+    REQUIRE(field.has_value());
+    REQUIRE(find(*field, "field") != nullptr);
+    CHECK(find(*field, "field")->finish == Finish::matte);
+    CHECK(find(*field, "electrode")->finish == Finish::metal);
+    check_scene(*field);
+    // Opaque insulators stay matte.
+    ViewOptions opaque;
+    opaque.transparent_insulators = false;
+    const auto o = solid_view(m.device, *g, opaque);
+    REQUIRE(o.has_value());
+    REQUIRE(find(*o, "insulator") != nullptr);
+    CHECK_FALSE(find(*o, "insulator")->transparent);
+    CHECK(find(*o, "insulator")->finish == Finish::matte);
+    // Slices, their outline shell and isosurfaces stay matte.
+    const std::vector<Plane> planes{{{0.0, 0.0, 1.0}, 0.3e-4}};
+    const auto sl = slice_view(m.device, *g, v, planes);
+    REQUIRE(sl.has_value());
+    check_scene(*sl);
+    const std::vector<double> levels{0.5, 0.8};
+    const auto iso = iso_view(m.device, *g, v, levels);
+    REQUIRE(iso.has_value());
+    check_scene(*iso);
+    // 2D: no glass (maps are opaque).
+    const Mos m2 = mos(false);
+    const auto g2 = Geometry::tensor(m2.device.mesh(), *m2.device.cells());
+    const auto s2 = solid_view(m2.device, *g2);
+    REQUIRE(s2.has_value());
+    for (const TriangleBatch& b : s2->triangles) CHECK(b.finish != Finish::glass);
+}

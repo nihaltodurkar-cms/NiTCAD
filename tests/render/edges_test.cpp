@@ -189,6 +189,37 @@ TEST_CASE("render edges: set_look adds one feature-edge batch to enhanced 3D sce
     CHECK(flat.lines.empty());
 }
 
+// Unit 26g (MD3 as ruled): a glass batch's edges are a light rim of their own, not dark ink.
+TEST_CASE("render edges: glass batches take a light rim, glass edges (Unit 26g)") {
+    FieldScene s;
+    s.dimension = 3;
+    s.triangles.push_back(cube());
+    TriangleBatch glass = cube("insulator");
+    glass.transparent = true;
+    glass.finish = Finish::glass;
+    for (auto& v : glass.vertices) v.position[1] += 10.0f;
+    s.triangles.push_back(glass);
+    set_look(s, Look::enhanced);
+    REQUIRE(s.lines.size() == 2);
+    const LineBatch& ink = s.lines[0];
+    const LineBatch& rim = s.lines[1];
+    CHECK(ink.name == "feature edges");
+    CHECK(rim.name == "glass edges");
+    CHECK(ink.points.size() == 24);
+    CHECK(rim.points.size() == 24);
+    for (const Float3& p : ink.points) CHECK(p[1] <= 1.0f);
+    for (const Float3& p : rim.points) CHECK(p[1] >= 10.0f);
+    CHECK_FALSE(rim.on_top);
+    CHECK(rim.color.r > 0.9f);  // light, where the ink is dark
+    CHECK(rim.color.g > 0.9f);
+    CHECK(rim.color.b > 0.9f);
+    CHECK(ink.color.r < 0.2f);
+    set_look(s, Look::enhanced);  // again: still one of each
+    CHECK(s.lines.size() == 2);
+    set_look(s, Look::classic);
+    CHECK(s.lines.empty());
+}
+
 TEST_CASE("render edges: the enhanced look's lights (KG3)") {
     FieldScene s;
     s.dimension = 3;

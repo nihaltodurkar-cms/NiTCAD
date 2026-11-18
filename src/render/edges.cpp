@@ -41,6 +41,7 @@ struct EdgeFaces {
 };
 
 constexpr std::string_view edges_name = "feature edges";
+constexpr std::string_view glass_name = "glass edges";  // Unit 26g, MD3: a light rim on glass
 
 }  // namespace
 
@@ -87,17 +88,20 @@ bool takes_feature_edges(const TriangleBatch& batch) noexcept {
 
 void set_look(FieldScene& scene, Look look) {
     scene.look = look;
-    std::erase_if(scene.lines, [](const LineBatch& l) { return l.name == edges_name; });
+    std::erase_if(scene.lines, [](const LineBatch& l) { return l.name == edges_name || l.name == glass_name; });
     if (look != Look::enhanced || scene.dimension != 3) return;
     LineBatch lines{std::string(edges_name), {0.08f, 0.09f, 0.11f, 0.85f}, 1.7f, false, {}};
+    LineBatch glass{std::string(glass_name), {0.97f, 0.98f, 1.0f, 0.9f}, 1.5f, false, {}};
     for (const TriangleBatch& b : scene.triangles) {
         if (!takes_feature_edges(b)) continue;
+        LineBatch& into = b.finish == Finish::glass ? glass : lines;
         for (const Segment& s : feature_edges(b)) {
-            lines.points.push_back(s[0]);
-            lines.points.push_back(s[1]);
+            into.points.push_back(s[0]);
+            into.points.push_back(s[1]);
         }
     }
     if (!lines.points.empty()) scene.lines.push_back(std::move(lines));
+    if (!glass.points.empty()) scene.lines.push_back(std::move(glass));
 }
 
 }  // namespace NiTCAD::render

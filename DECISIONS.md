@@ -709,6 +709,17 @@ go-ahead.
 | MG8 | No change elsewhere: no solver, physics or io source changed; app tests change only where the images do; the app and `nitcad plot` still give the same image from the same options (`same_as_plot`, WG4 self-test). |
 | MG9 | Hand mutants, each killed by a test: electrodes left matte; the glass term's power 3 → 1; glass applied to opaque insulators; the AO mask ignored (full AO on field maps); AO sampling glass; the AO radius 2% → 10%; the shadow drawn when looking up; metal shading in classic; the mesh-edge alpha left at 0.75 in enhanced; the colourbar change applied in classic. |
 
+**Owner ruling MQ8 (2026-11-18, during 26g·1): the glass on flat faces.** Measured, MD3's grazing term is constant
+over each flat face of the oxide box, so on the default view the top face only turns a little paler. There is no rim at
+the silhouette, and MG3's glass half (1.5× as opaque within 3 px of the silhouette) cannot be met by flat faces. Asked,
+the owner ruled the recommended option, glass rim edges:
+- **MD3, amended:** the face term stays as designed. In addition, in enhanced, `set_look` puts the feature edges of
+  glass batches into a second line batch, `"glass edges"`: a light rim (0.97/0.98/1.0, alpha 0.9, 1.5 px, depth-tested)
+  in place of the dark ink.
+- **MG3, glass half, restated:** on the enhanced 3D solid, pixels within 3 px of the oxide's top edges (away from the
+  gate) are lighter than the same pixels with the oxide matte. The test asks for a mean luminance more than 10 higher.
+- **MG9 gains a mutant:** the glass rim drawn in the dark ink.
+
 **Slices (each one local commit):** 26g·1 finishes, metal and glass (MD1–MD3; MG2, MG3); 26g·2 AO (MD4; MG4, MG7);
 26g·3 the shadow, mesh edges, contours, colourbar (MD5–MD7; MG5, MG6); 26g·4 suites, mutants (MG1, MG8, MG9), the
 ARCHITECTURE entry.

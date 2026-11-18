@@ -537,6 +537,75 @@ TEST_CASE("render image: the views match their WARP references (VG4)") {
     CHECK(r.debug_errors() == 0);
 }
 
+namespace {
+
+// Mean luminance (0-255, Rec. 709 weights) of the pixels within `radius` of an image point.
+double mean_luminance(const Image& im, float cx, float cy, int radius) {
+    double sum = 0.0;
+    int count = 0;
+    for (int y = static_cast<int>(cy) - radius; y <= static_cast<int>(cy) + radius; ++y) {
+        for (int x = static_cast<int>(cx) - radius; x <= static_cast<int>(cx) + radius; ++x) {
+            if (x < 0 || y < 0 || x >= im.width || y >= im.height) continue;
+            const std::size_t i = 4 * (static_cast<std::size_t>(y) * static_cast<std::size_t>(im.width) + static_cast<std::size_t>(x));
+            sum += 0.2126 * im.rgba[i] + 0.7152 * im.rgba[i + 1] + 0.0722 * im.rgba[i + 2];
+            ++count;
+        }
+    }
+    return count ? sum / count : 0.0;
+}
+
+}  // namespace
+
+// Unit 26g (MG1, MG3): classic ignores the finishes to the bit; enhanced draws the electrodes as metal.
+TEST_CASE("render image: finishes in classic and enhanced (Unit 26g, MG1, MG3)") {
+    Renderer& r = warp();
+    constexpr int W = 960, H = 720;
+    const Mosfet& m3 = mosfet(true);
+    const Geometry g3 = geometry_of(m3.device);
+    auto solid = solid_view(m3.device, g3);
+    REQUIRE(solid.has_value());
+    REQUIRE(std::ranges::any_of(solid->triangles, [](const TriangleBatch& b) { return b.finish == Finish::metal; }));
+    REQUIRE(std::ranges::any_of(solid->triangles, [](const TriangleBatch& b) { return b.finish == Finish::glass; }));
+    FieldScene matte = *solid;
+    for (TriangleBatch& b : matte.triangles) b.finish = Finish::matte;
+    // MG1: a classic scene with metal and glass batches draws exactly as with matte ones.
+    const auto classic = r.draw(*solid, W, H);
+    const auto classic_matte = r.draw(matte, W, H);
+    REQUIRE(classic.has_value());
+    REQUIRE(classic_matte.has_value());
+    CHECK(classic->rgba == classic_matte->rgba);
+    // MG3 (metal): the gate electrode's top face (y = 1.06 um, the slab 3% of the 2 um extent on the
+    // oxide) is lighter than classic's and lighter than its front face (z = 0.8 um).
+    set_look(*solid, Look::enhanced);
+    const auto enhanced = r.draw(*solid, W, H);
+    REQUIRE(enhanced.has_value());
+    const ScreenPoint top = screen_position(*solid, W, H, {1.0f, 1.06f, 0.4f});
+    const ScreenPoint front = screen_position(*solid, W, H, {1.0f, 1.03f, 0.8f});
+    const double top_enhanced = mean_luminance(*enhanced, top.x, top.y, 4);
+    const double top_classic = mean_luminance(*classic, top.x, top.y, 4);
+    const double front_enhanced = mean_luminance(*enhanced, front.x, front.y, 3);
+    CAPTURE(top.x, top.y, front.x, front.y, top_enhanced, top_classic, front_enhanced);
+    CHECK(top_enhanced > top_classic);
+    CHECK(top_enhanced > front_enhanced);
+    // The same scene with matte electrodes in enhanced is darker on top: the finish does it.
+    set_look(matte, Look::enhanced);
+    const auto enhanced_matte = r.draw(matte, W, H);
+    REQUIRE(enhanced_matte.has_value());
+    CHECK(top_enhanced > mean_luminance(*enhanced_matte, top.x, top.y, 4));
+    // MG3 (glass, as ruled 2026-11-18): within 3 px of the oxide's outline (its top edges, y = 1 um, away
+    // from the gate) the glass is lighter than the same pixels with a matte oxide.
+    for (const Float3 p : {Float3{0.3f, 1.0f, 0.0f}, Float3{1.7f, 1.0f, 0.0f}, Float3{0.3f, 1.0f, 0.8f},
+                           Float3{1.7f, 1.0f, 0.8f}}) {
+        const ScreenPoint q = screen_position(*solid, W, H, p);
+        const double glass = mean_luminance(*enhanced, q.x, q.y, 3);
+        const double plain = mean_luminance(*enhanced_matte, q.x, q.y, 3);
+        CAPTURE(p[0], p[2], glass, plain);
+        CHECK(glass > plain + 10.0);
+    }
+    for (const std::string& m : r.debug_messages()) UNSCOPED_INFO(m);
+    CHECK(r.debug_errors() == 0);
+}
+
 TEST_CASE("render image: drawing benchmark (VG7)", "[.benchmark]") {
     // Scene building and drawing of about 1e5 and 1e6 triangles: a 3D tensor box's boundary field
     // view, on WARP and on the GPU when there is one. Times per draw (including readback) and the

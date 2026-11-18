@@ -852,7 +852,9 @@ std::expected<void, base::Error> Renderer::Impl::render_field(const FieldScene& 
                             x.value,
                             {x.color.r, x.color.g, x.color.b, x.color.a}});
         }
-        const std::uint32_t flags = (b.lit && s.dimension == 3 ? 1u : 0u) | (b.shading == Shading::field ? 2u : 0u);
+        // Bits 3-4, the finish (Unit 26g, MD1): 1 metal, 2 glass; read only by the enhanced look.
+        const std::uint32_t flags = (b.lit && s.dimension == 3 ? 1u : 0u) | (b.shading == Shading::field ? 2u : 0u) |
+                                    (static_cast<std::uint32_t>(b.finish) << 3);
         ranges.push_back({first, b.vertices.size(), flags, b.transparent});
     }
     std::vector<LineVertex> lines;
