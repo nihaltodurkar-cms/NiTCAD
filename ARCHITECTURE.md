@@ -107,8 +107,8 @@ solver implementation.
 | Region | geometry, material, doping and applicable equations | Implemented in `device`; a region is of a semiconductor or, since Unit 15b, of an insulator (Poisson only) |
 | Interface | shared boundary between regions with interface laws | Semiconductor heterointerfaces since Unit 15 (band offsets through the band shift, permittivity steps, thermionic emission); semiconductor-insulator interfaces since Unit 15b (fixed charge, traps, surface recombination); the Unit 12 gate is a lumped oxide on a boundary patch |
 | Contact / boundary | named boundary set plus physical boundary condition | Ohmic contacts, gate contacts on a lumped oxide (Unit 12), electrodes on a meshed insulator (Unit 15b) and Schottky contacts (Unit 48; no image-force lowering or tunnelling) implemented; tunnelling through the gate insulator on gates and electrodes, opt-in (Unit 51) |
-| Field | named physical quantity with location, units and applicability | Unknown fields since Unit 40 (6.12.1): `Field` descriptors (name, units, node location, region applicability) and the `DofMap` that places their unknowns; derived fields and edge, face and cell fields are target |
-| Equation | residual/Jacobian contribution associated with fields and domains | Equation terms since Unit 40 (6.12.2): the drift-diffusion and electrothermal rows are terms with declared fields and domains, composed by equation set from the device and the models; internal to `assemble`; other assemblers (`EquilibriumPoisson`) not yet built from them |
+| Field | named physical quantity with location, units and applicability | Unknown fields since Unit 40 and derived fields since Unit 57 (6.12.1): `Field` descriptors (name, units, kind `unknown`/`fixed`/`derived`, location node/edge/interface edge, region applicability), the `DofMap` that places the unknowns, and the derived-field table (`derived.hpp`); face and cell fields, vector and tensor shapes are target |
+| Equation | residual/Jacobian contribution associated with fields and domains | Equation terms since Unit 40 (6.12.2): every row is a term with declared fields and domains, composed by equation set from the device and the models, internal to `assemble`; since Unit 57 one `assemble::System` holds every formulation (drift-diffusion, electrothermal, energy balance and equilibrium Poisson from the same terms), and a test-only field and term join a composition without changing `System` (GG8) |
 | Model | pure constitutive law with exact derivatives | Implemented for current local physics |
 | Mesh | geometric graph supporting 1D/2D/3D and future unstructured producers | Implemented graph abstraction; unstructured 2D and 3D generators and the simplex import (Unit 16); adaptive refinement with goal-adjoint certificates (Unit 17, 6.12.4) |
 | Solver | nonlinear/linear algorithms independent of device type | Newton + backend-neutral linear solve implemented; more strategies deferred |
@@ -2474,8 +2474,15 @@ remain valid until a generic representation is actually needed.
   the one before the unit, so checkpoints, run identities and the Jacobian pattern are unchanged.
 - Insulator nodes keep their n and p unknowns, held at 0. Dropping them would change the layout (FD5, deferred).
 - The solve layer reads every field slot through the map (`solve/fields.hpp`).
-- Not yet: derived fields (currents, band edges, charges), vector and tensor shapes, and edge, face and cell
-  locations.
+
+**As built (Unit 57, slice 3; DECISIONS.md Unit 57, GE4):**
+- `Field::unknown` became `Field::kind` (`unknown`, `fixed`, `derived`; no field is `fixed` yet), and
+  `FieldLocation` gained `edge` and `interface_edge` (one value per trap slot of the interface edges). `FieldId`
+  lists 21 derived quantities after the six unknowns; `DofMap::node_interleaved` takes only node unknowns.
+- `assemble/derived.hpp`: the derived-field table, one row per diagnostic, each with its field descriptors and an
+  evaluator `(const System&, x)` returning one vector per field (currents, band edges, charges, rates, trap
+  occupancies, temperatures). The deck builder, the solve layer's field export and adaptivity read it.
+- Not yet: face and cell locations, vector and tensor shapes, `fixed` fields.
 
 #### 6.12.2 Generic equations
 
@@ -2522,10 +2529,22 @@ The exact equation sets remain deferred until their units are requested.
 - **The order of additions is fixed.** Every entry of F and J receives its contributions in the pre-unit order
   (DECISIONS.md FE3). The refactor was gated bit for bit: pinned traces of every value the suites see, identical
   slice by slice, and the output tables of `nitcad run` identical to `main`'s.
+
+**As built (Unit 57, slices 1, 2, 4 and GG8; DECISIONS.md Unit 57, GE2–GE5, GG8):**
+- **The data and the state.** The model data the terms read is in `SystemData` (internal, shared between copies);
+  the state a solve changes (biases, contact values, thermal rises, tunnel paths) is in `SystemState` (owned).
+- **One system.** `DriftDiffusion` is retired: `assemble::System` (`system.hpp`) has only the generic members
+  (evaluate, residual, update size and apply, the layout, counts and step data); everything model-specific is a
+  free function in a topic header (`currents.hpp`, `charges.hpp`, `equilibrium.hpp`, ...) over `const System&`.
+- **Equilibrium from the same terms.** `System::create(..., Formulation::equilibrium)` composes the Poisson row
+  from the same terms (`create_equilibrium`); `EquilibriumPoisson` is removed.
+- **Extensibility, measured (GG8).** A test-only node field χ and two test-only terms (its Poisson-like row and a
+  k·χ source in the n and p rows) join the drift-diffusion composition through an internal
+  `CompositionExtension`, with no change to `System` or an existing term: the DofMap and pattern grow by one
+  field, every partial matches finite differences, Newton converges quadratically, ψ, n, p are unchanged at
+  k = 0, and a manufactured solution converges at second order.
+- Every slice was gated bit for bit (traced suite values, deck outputs) and on the FG4 assembly benchmark.
 - Not yet:
-  - The model data the terms read still lives in `DriftDiffusion`, which its diagnostics share, so `DriftDiffusion`
-    is both the wrapper and that data's store.
-  - `EquilibriumPoisson` is separate.
   - Exact Jacobians are hand-written (6.12.3).
   - Assembly is sequential: parallel assembly changes the order of additions (FD6).
 
@@ -3274,7 +3293,7 @@ exists, not finished), **planned** (nothing built). Audit of 2026-10-09, against
 | Input/output, checkpoint/restart | The `io` layer (approved 2026-10-09): versioned, checksummed, atomic files for meshes, sweeps and checkpoints; device files and the text input deck (Unit 31) | **Verified, on `main`** (Unit 29, 6.6; `f69a7a8`, PR #33); **device files and the deck verified, on `main`** (Unit 31, 6.5; `6f67510`, PR #37); **transient and small-signal files verified** (Unit 42, 6.6; PR #52); **transient, small-signal and trace deck analyses verified** (Unit 43, 6.5; PR #53) | Restart of transient and trace runs; a run started from a checkpoint (`initial`); unit suffixes on times |
 | Geometry and unstructured 3D meshing | `Mesh::from_parts` accepts any valid node/edge/volume graph; besides the tensor-grid producer, Unit 16 added the 2D and 3D Delaunay generators and the simplex import (checked duals P0–P5, P4-certified interfaces, contact patches, structured 2D boundary layers); nonlocal BTBT still needs tensor cells (6.11, M16) | **Verified, on `main`** (Unit 16, 6.11; `a09cf43`, PR #35); **non-convex 3D meshing built** (Unit 53, 6.11; on `mesh/finfet-geometry`): sectioned extrusions, junction lines, patches at traces; FC8 (flat gate) fails, accepted as a limitation; FC9 fails, accepted as a limitation; **3D structured layers built** (Unit 54, 6.11; on `mesh/structured-layers-3d`): swept meshes of extrusions with 2D layers; UC7 accepted as a limitation, UC8 fails at 5 of 17 I_D points, accepted as a limitation (owner, 2026-10-31) | 3D layers on non-extruded geometry; the 2D generator's P2 refusals (Unit 54 slice 5); FC8's corner error; abrupt junctions off region boundaries; an unstructured locator for nonlocal BTBT (M16) |
 | Low-current accuracy | `terminal_current_resolution` reports the floor (Unit 15); the weighted terminal current with an adjoint error estimate (Unit 32, 6.6) | **Verified, on `main`** (Unit 32; `6e54c69`, PR #39): the MOSFET off state resolved at every Vg, sub-floor diode currents on the ideal-diode law to 0.1% | Weighted transient and small-signal currents; a path term for nonlocal tunnelling |
-| Generic fields/equations | Field descriptors and the unknowns' map; the drift-diffusion and electrothermal rows as equation terms composed by equation set, behind the unchanged `DriftDiffusion` (Unit 40, 6.12.1–2) | **Verified, bit-identical, on `main`** (Unit 40; `629bed0`, PR #50; below) | Move the model data out of `DriftDiffusion` and retire it as the wrapper; derived and edge/cell fields; `EquilibriumPoisson` from the same terms |
+| Generic fields/equations | Field descriptors and the unknowns' map; every row an equation term composed by equation set (Unit 40); model data and state split out, one `assemble::System` with topic headers, derived and edge fields, equilibrium from the same terms, an added field measured (Unit 57; 6.12.1–2) | **Verified, bit-identical, on `main`** (Unit 40; `629bed0`, PR #50; Unit 57; `2306228`, PR #87; below) | Face and cell fields; a public way to add fields and terms (GG8's extension is internal); dropping the insulator nodes' carrier unknowns (FD5) |
 | Scalable linear solvers | Eigen SparseLU (default), PARDISO opt-in (Unit 18); GMRES with an ILUT preconditioner opt-in, real and complex, with a reported SparseLU fallback (Unit 44, 6.10) | **GMRES-ILUT verified, opt-in** (Unit 44, on `linalg/iterative`): 3D 9–72× faster and 8–26× less memory than SparseLU | Algebraic multigrid and block (field-split) preconditioners; parallel assembly |
 | Results and provenance | Plain-data results; run record with identity digest (6.6); sweeps persisted bit for bit (Unit 29); provenance (build, revision, platform, start, wall time) in every run record and file, transient and small-signal files, `nitcad --version` (Unit 42) | **Verified** (Unit 42, 6.6; PR #52; DECISIONS.md PV1–PV7) | A release version policy (PD5); cross-machine checksums (6.8) |
 | Adaptive mesh refinement | `solve::adapt` over tensor, generated 2D and swept 3D meshes: feature indicators, goal-adjoint weighting and estimate, Richardson verification on M′, per-goal certificates, the `[adapt]` deck section and `.nitadapt` report; an opt-in decision layer (`policy = intelligent`: a priori sizes, benefit and cost estimates, allocation, fallback to the basic loop) (Unit 17, 6.12.4) | **Built** (Unit 17, on `mesh/adaptive-refinement`; slice 7 gates: AC5 met with the intelligent policy, 98 593 nodes against at least 890 k uniform; AC11, AC12, AC20 met). **Limitations (unmet as frozen, never loosened):** AC14 (the a priori prediction's recall 0.51 on the tensor MOSFET, DOFs 2.1× and 2.3× basic on the diode and MOS-C, no pass saved); AC15 (a hole-density order 1.64 from 2 samples; the cost model not better than node-only within timing noise); AC16 (the well MOSFET's tolerance mode 1.92× basic's DOFs; the tensor MOSFET's budget mode a tie, 0.6531% against 0.6507%); AC8's target (UC8's rule at 9 and 6 of 17 points within its budget; the swept adjoint estimate 9–84× the actual error); the basic loop does not reach 1% on the generated MOSFET in 12 passes; AD11's verified error underestimated one error 26× at p = 2.18. **Cross-run learning (Unit 17b, built on `mesh/cross-run-learning`; opt-in `predictor`):** AC12, AC21 and AC19's determinism, versioning, identity, fallback and bit-identity clauses met; held-out rank correlation 0.40 against ridge 0.16. **Limitation (unmet as frozen):** AC19's family clause on held-out m6 (4 passes against 5, but 12 000 DOFs against ID2's 10 476); met on m7 (4 against 5, 10 260 against 15 561). **Derived goals (Unit 17c, built on `mesh/derived-goals`; `goal = vt|gm|swing`):** DC3 and DC5 met for V_T, g_m and the swing on the tensor MOSFET. **Limitations:** DC4 for the swing (1.52× the DOFs of a tightened current goal, and about 0.65× of the uniform ladder against 1/3: accepted by the owner, 2026-11-15); two-level verification (DR6) still misses an error that appears only beyond M″ | the swept 3D adjoint estimate; general 3D meshes (AQ2); a shipped pre-trained predictor (LQ1 c) |
@@ -3400,6 +3419,21 @@ FG1–FG9):**
   unit, and present on `main` before it. Fixed by Unit 41 (6.8; DECISIONS.md): the P-core results were kept.
 - **The unknowns' layout** is unchanged, so checkpoints and run identities are too. The unit names the unknowns'
   layout that Unit 30's open norm needs (`DriftDiffusion::dofs()`).
+
+**As built (Unit 57, generic fields and equations completed; on `main` as `2306228`, PR #87; DECISIONS.md Unit 57,
+GE1–GE7, GG1–GG9; accepted by the owner 2026-11-18):**
+- **Commits.** Slice 0 added the trace hooks and the deck comparison (GE1); slice 1 split the model data
+  (`SystemData`) from the state (`SystemState`); slice 2 retired `DriftDiffusion` for `assemble::System` and the
+  topic headers; slice 3 added derived and edge fields; slice 4 built equilibrium Poisson from the same terms; GG8
+  added the χ extensibility test (6.12.1–2).
+- **Gates.** At every slice: every traced suite value bit-identical to the previous slice's (81/81 at GG8), every
+  deck output identical (38 files), finite-difference checks of every term, the FG4 assembly benchmark without
+  slowdown, Release and Debug suites with `/W4 /WX` (233/233 Release at GG8), hand mutants caught (9/9 at GG8).
+- **Findings.** GG8 found two layout assumptions, fixed: `electrothermal()` was read from the stride, and the Newton
+  hooks moved only the built-in fields. MSVC 14.52.37025 drops an aggregate assignment at /O1 and /O2 (it fails
+  `assemble.impact_ionization`); the build stays on 14.51 (Q11).
+- Not in Unit 57: dropping the insulator nodes' carrier unknowns (FD5), parallel assembly (FD6), automatic
+  differentiation (6.12.3), a public extension API, the natural-test norm (Unit 59).
 
 **Missing nanoscale models (found 2026-10-23; planned, no unit named):**
 - **How found.** `decks/finfet_3d.deck` simulates a tri-gate SOI FinFET: 10 nm fin, 25 nm gate, 0.77 nm EOT. Its
