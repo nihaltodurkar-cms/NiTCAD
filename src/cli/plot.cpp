@@ -49,7 +49,7 @@ constexpr const char* plot_usage =
     "  field   --field potential|n|p|Ec|Ev|Efn|Efp|T|doping|ND|NA|R|srh|auger|\n"
     "          radiative|surface|Gii|Gbtbt|E|J|Jn|Jp|Tn|Tp  --point <k> (default: last)\n"
     "          --scale linear|log|signed-log  --range <lo>,<hi>\n"
-    "          --colormap turbo|viridis|cividis|coolwarm|soft  --contours  --edges  --opaque\n"
+    "          --colormap viridis|turbo|cividis|coolwarm|soft  --contours  --edges  --opaque\n"
     "  3D      --slice x=<um>|y=<um>|z=<um> (repeatable)  --azimuth <deg>  --elevation <deg>\n"
     "          --perspective\n"
     "  curves  --contact <name> (swept)  --sense <name>  --frequency <k>  --log\n"
@@ -117,7 +117,7 @@ std::optional<std::pair<Point, Point>> segment_um(std::string_view s, int dimens
 
 struct Options {
     fs::path input, device, mesh, out;
-    std::string view, field, scale, colormap = "turbo", contact, sense, adapter = "auto";
+    std::string view, field, scale, colormap = "viridis", contact, sense, adapter = "auto";
     std::string streamlines, from, seeds;  // Unit 25b
     std::string cut;  // Unit 26b
     std::vector<std::string> hide;  // Unit 26c: region names
@@ -1001,7 +1001,8 @@ int plot(int argc, char** argv) {
         if (!d) return fail(d.error().message);
         FieldOptions f;
         f.view = view;
-        f.map = o.colormap == "turbo" ? Colormap::coolwarm : *colormap;  // XD6: cool-warm unless one is chosen
+        // XD6: cool-warm unless one is chosen (the default, viridis, stands for none; Unit 26e, HD4).
+        f.map = o.colormap == "viridis" ? Colormap::coolwarm : *colormap;
         f.contours = o.contours;
         f.title = d->title;
         if (o.range) {

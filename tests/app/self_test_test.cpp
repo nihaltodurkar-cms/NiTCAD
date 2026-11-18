@@ -95,7 +95,7 @@ TEST_CASE("app self-test: the window's image equals nitcad plot's, on WARP (WG1,
     const fs::path dir = app_test::scratch("self_test_warp");
     const fs::path m2 = example("mosfet_2d.deck", dir);
     for (const std::string view : {"--view field --field potential", "--view iv --sense drain --log",
-                                   "--view field --field n --colormap viridis --contours"}) {
+                                   "--view field --field n --colormap turbo --contours"}) {
         CAPTURE(view);
         if (!same_view(m2, view, "warp", dir)) SKIP("no window or swap chain in this session (exit 77)");
     }

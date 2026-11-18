@@ -160,18 +160,18 @@ TEST_CASE("app views: errors as nitcad plot reports them", "[app]") {
 TEST_CASE("app views: the options of nitcad plot for a setting", "[app]") {
     ViewSettings s;
     using A = std::vector<std::string>;
-    CHECK(app::plot_arguments(s) == A{"--view", "solid", "--colormap", "viridis"});
+    CHECK(app::plot_arguments(s) == A{"--view", "solid"});
     s.kind = ViewKind::field;
     s.field = "n";
     s.point = 2;
     s.scale = "log";
-    s.colormap = "viridis";
+    s.colormap = "cividis";
     s.range = std::pair{1e10, 1e20};
     s.contours = s.edges = s.opaque = s.perspective = true;
     s.azimuth = 30.5f;
     s.elevation = -10.0f;
     CHECK(app::plot_arguments(s) == A{"--view", "field", "--field", "n", "--point", "2", "--scale", "log",
-                                      "--colormap", "viridis", "--range", "1e+10,1e+20",
+                                      "--colormap", "cividis", "--range", "1e+10,1e+20",
                                       "--contours", "--edges", "--opaque", "--perspective", "--azimuth", "30.5",
                                       "--elevation", "-10"});
     ViewSettings t;
@@ -183,7 +183,7 @@ TEST_CASE("app views: the options of nitcad plot for a setting", "[app]") {
     t.sense = "drain";
     t.frequency = 1;
     t.log = true;
-    CHECK(app::plot_arguments(t) == A{"--view", "slice", "--field", "potential", "--colormap", "viridis", "--slice", "x=0.25", "--slice",
+    CHECK(app::plot_arguments(t) == A{"--view", "slice", "--field", "potential", "--slice", "x=0.25", "--slice",
                                       "z=1.5", "--clip", "0,0,0:1,0.5,2", "--levels", "1e+17,2.5e+18",
                                       "--contact", "gate", "--sense", "drain", "--frequency", "1", "--log"});
 }
@@ -317,7 +317,7 @@ TEST_CASE("app views 26b: cut lines, as nitcad plot takes them (XD5, XG4)", "[ap
     CHECK(app::build_scene(*unrun, doping).has_value());
     // nitcad plot's option.
     using A = std::vector<std::string>;
-    CHECK(app::plot_arguments(s) == A{"--view", "field", "--field", "potential", "--colormap", "viridis", "--cut", "0,0.87:2,0.87"});
+    CHECK(app::plot_arguments(s) == A{"--view", "field", "--field", "potential", "--cut", "0,0.87:2,0.87"});
 }
 
 TEST_CASE("app views 26b: cut lines drawn as nitcad plot draws them (XG4, WG4's choices)", "[app]") {
@@ -569,26 +569,26 @@ TEST_CASE("app views 26c: arrows, streamlines, the exploded view and the curve p
     v.streamlines = "E";
     v.lines = 10;
     v.from = "gate";
-    CHECK(app::plot_arguments(v) == A{"--view", "field", "--field", "J", "--colormap", "viridis", "--streamlines", "E", "--lines", "10", "--from",
+    CHECK(app::plot_arguments(v) == A{"--view", "field", "--field", "J", "--streamlines", "E", "--lines", "10", "--from",
                                       "gate", "--vectors", "J", "--arrows", "120"});
     v = {};
     v.kind = ViewKind::slice;
     v.streamlines = "J";
     v.seeds = "x=1";
-    CHECK(app::plot_arguments(v) == A{"--view", "slice", "--field", "potential", "--colormap", "viridis", "--streamlines", "J", "--seeds", "x=1"});
+    CHECK(app::plot_arguments(v) == A{"--view", "slice", "--field", "potential", "--streamlines", "J", "--seeds", "x=1"});
     ViewSettings e;
     e.kind = ViewKind::exploded;
-    CHECK(app::plot_arguments(e) == A{"--view", "exploded", "--colormap", "viridis"});
+    CHECK(app::plot_arguments(e) == A{"--view", "exploded"});
     e.axis = 2;
     e.gap_um = 0.3;
     e.exploded_field = true;
     e.field = "n";
-    CHECK(app::plot_arguments(e) == A{"--view", "exploded", "--field", "n", "--colormap", "viridis", "--axis", "z", "--gap", "0.3"});
+    CHECK(app::plot_arguments(e) == A{"--view", "exploded", "--field", "n", "--axis", "z", "--gap", "0.3"});
     // Arrows and streamlines kept in a setting but left out off the field views.
     e.vectors = "E";
     e.streamlines = "J";
     e.lines = 5;
-    CHECK(app::plot_arguments(e) == A{"--view", "exploded", "--field", "n", "--colormap", "viridis", "--axis", "z", "--gap", "0.3"});
+    CHECK(app::plot_arguments(e) == A{"--view", "exploded", "--field", "n", "--axis", "z", "--gap", "0.3"});
     CHECK(app::takes_vectors(ViewKind::iso));
     CHECK_FALSE(app::takes_vectors(ViewKind::solid));
     // The curve pickers (YD3) are the existing options.
@@ -1104,8 +1104,8 @@ TEST_CASE("app views 26d: the metrics strip's maximum with its unit (ZD7, ZG7)",
     }
 }
 
-TEST_CASE("app views 26d: viridis is the app's default colormap; the difference view stays cool-warm (ZD8, ZG10)", "[app]") {
-    // New views start with viridis; nitcad plot's default stays turbo, so the command names it.
+TEST_CASE("app views 26d/26e: viridis is the default colormap in the app and nitcad plot; the difference view stays cool-warm (ZD8, ZG10, HD4, HG5)", "[app]") {
+    // New views start with viridis, nitcad plot's default too (HD4), so the command names none.
     const ViewSettings fresh;
     CHECK(fresh.colormap == "viridis");
     CHECK(app::app_colormap == "viridis");
@@ -1116,17 +1116,17 @@ TEST_CASE("app views 26d: viridis is the app's default colormap; the difference 
     REQUIRE(scene);
     REQUIRE(std::get<render::FieldScene>(*scene).colorbar);
     CHECK(std::get<render::FieldScene>(*scene).colorbar->map == render::Colormap::viridis);
-    const auto args = app::plot_arguments(s);
-    CHECK(std::ranges::search(args, std::vector<std::string>{"--colormap", "viridis"}).begin() != args.end());
-    // Turbo chosen is nitcad plot's default: not named.
-    s.colormap = "turbo";
     CHECK_FALSE(has(app::plot_arguments(s), "--colormap"));
+    // Turbo is a choice now: named.
+    s.colormap = "turbo";
+    const auto turbo = app::plot_arguments(s);
+    CHECK(std::ranges::search(turbo, std::vector<std::string>{"--colormap", "turbo"}).begin() != turbo.end());
     // The curves name none (they have no colour scale).
     ViewSettings iv;
     iv.kind = ViewKind::iv;
     CHECK_FALSE(has(app::plot_arguments(iv), "--colormap"));
 
-    // The difference: cool-warm at the default (and at nitcad plot's), a colormap chosen otherwise.
+    // The difference: cool-warm at the default, a colormap chosen otherwise (turbo included).
     const app::Workspace& b = mosfet_b().workspace;
     ViewSettings d;
     d.kind = ViewKind::difference;
@@ -1140,7 +1140,8 @@ TEST_CASE("app views 26d: viridis is the app's default colormap; the difference 
     CHECK(map_of(d) == render::Colormap::coolwarm);
     CHECK_FALSE(has(app::plot_arguments(d, &b), "--colormap"));
     d.colormap = "turbo";
-    CHECK(map_of(d) == render::Colormap::coolwarm);
+    CHECK_FALSE(app::takes_coolwarm(d));
+    CHECK(map_of(d) == render::Colormap::turbo);
     d.colormap = "cividis";
     CHECK_FALSE(app::takes_coolwarm(d));
     CHECK(map_of(d) == render::Colormap::cividis);
@@ -1150,22 +1151,51 @@ TEST_CASE("app views 26d: viridis is the app's default colormap; the difference 
     s.colormap = "viridis";
     CHECK_FALSE(app::takes_coolwarm(s));
 
-    // The default field view's command, run through nitcad plot, draws the app's image (map and scale).
-    const fs::path out = app_test::scratch("views_26d_viridis");
+    // nitcad plot: no --colormap draws what --colormap viridis draws, and the app's default field view; turbo
+    // draws turbo; a difference without one is cool-warm, with turbo turbo.
+    const fs::path out = app_test::scratch("views_26e_viridis");
+    const auto plot = [&](const std::string& args, const std::string& name) {
+        const std::string cli_args = "plot " + app_test::quoted(mosfet().deck) + " " + args +
+                                     " --size 480x360 --adapter warp --out " + app_test::quoted(out / name);
+        const auto cli = app_test::nitcad(cli_args);
+        CAPTURE(cli_args, cli.output);
+        REQUIRE(cli.status == 0);
+        auto png = render::load_png(out / name);
+        REQUIRE(png);
+        return std::move(*png);
+    };
+    const auto same = [](const render::Image& x, const render::Image& y) {
+        const auto diff = render::compare(x, y, 0);
+        REQUIRE(diff);
+        return diff->max_channel == 0;
+    };
     ViewSettings v;
     v.kind = ViewKind::field;
     v.field = "n";
-    std::string cli_args = "plot " + app_test::quoted(mosfet().deck);
-    for (const std::string& x : app::plot_arguments(v)) cli_args += " \"" + x + "\"";
-    cli_args += " --size 480x360 --adapter warp --out " + app_test::quoted(out / "n.png");
-    const auto cli = app_test::nitcad(cli_args);
-    CAPTURE(cli_args, cli.output);
-    REQUIRE(cli.status == 0);
+    std::string args;
+    for (const std::string& x : app::plot_arguments(v)) args += " \"" + x + "\"";
+    const auto plain = plot(args, "n.png");
     const auto mine = app::build_scene(mosfet().workspace, v);
     REQUIRE(mine);
-    const auto theirs = render::load_png(out / "n.png");
-    REQUIRE(theirs);
-    const auto diff = render::compare(draw(*mine, 480, 360), *theirs, 0);
-    REQUIRE(diff);
-    CHECK(diff->max_channel == 0);
+    CHECK(same(draw(*mine, 480, 360), plain));
+    CHECK(same(plot(args + " --colormap viridis", "n_viridis.png"), plain));
+    v.colormap = "turbo";
+    const auto mine_turbo = app::build_scene(mosfet().workspace, v);
+    REQUIRE(mine_turbo);
+    const auto t = plot(args + " --colormap turbo", "n_turbo.png");
+    CHECK(same(draw(*mine_turbo, 480, 360), t));
+    CHECK_FALSE(same(t, plain));
+    // The difference through nitcad plot: no colormap and turbo, each as the app draws it.
+    for (const char* map : {"viridis", "turbo"}) {
+        ViewSettings dd;
+        dd.kind = ViewKind::difference;
+        dd.colormap = map;
+        std::string dargs;
+        for (const std::string& x : app::plot_arguments(dd, &b)) dargs += " \"" + x + "\"";
+        const auto app_scene = app::build_scene(a, dd, &b);
+        REQUIRE(app_scene);
+        CHECK(std::get<render::FieldScene>(*app_scene).colorbar->map ==
+              (std::string_view(map) == "turbo" ? render::Colormap::turbo : render::Colormap::coolwarm));
+        CHECK(same(draw(*app_scene, 480, 360), plot(dargs, std::string("difference_") + map + ".png")));
+    }
 }

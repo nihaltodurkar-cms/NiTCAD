@@ -861,7 +861,7 @@ std::vector<std::string> point_labels(const Workspace& w) {
 }
 
 bool takes_coolwarm(const ViewSettings& s) noexcept {
-    return s.kind == ViewKind::difference && (s.colormap == app_colormap || s.colormap == "turbo");
+    return s.kind == ViewKind::difference && s.colormap == app_colormap;  // Unit 26e (HD4): turbo is a choice
 }
 
 TitleParts title_parts(std::string_view title) noexcept {
@@ -890,8 +890,9 @@ std::vector<std::string> plot_arguments(const ViewSettings& s, const Workspace* 
     if (fieldish) a.insert(a.end(), {"--field", s.field});
     if (s.point) a.insert(a.end(), {"--point", std::to_string(*s.point)});
     if (!s.scale.empty() && fieldish) a.insert(a.end(), {"--scale", s.scale});
-    // ZD8: the app's default (viridis) named, as nitcad plot's is turbo; none on a difference drawn cool-warm.
-    if (!is_plot(s.kind) && s.colormap != "turbo" && !takes_coolwarm(s)) a.insert(a.end(), {"--colormap", s.colormap});
+    // HD4: nitcad plot's default is the app's (viridis), so only another map is named (a difference's default,
+    // cool-warm, included).
+    if (!is_plot(s.kind) && s.colormap != app_colormap) a.insert(a.end(), {"--colormap", s.colormap});
     if (s.range) a.insert(a.end(), {"--range", std::format("{},{}", s.range->first, s.range->second)});
     if (s.contours) a.emplace_back("--contours");
     if (s.edges) a.emplace_back("--edges");
