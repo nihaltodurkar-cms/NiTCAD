@@ -1237,6 +1237,73 @@ stopped on the owner's word "dont start debug until i say"; the full suites not 
 
 ---
 
+### Unit 59 — a natural-test norm for reverse bias (proposed 2026-11-18; on `solve/natural-norm`)
+
+**Owner request (2026-11-18):** "write a proposal for item 1": the 11.3 row "Robust nonlinear solving", next step "A
+natural-test norm monotone in reverse bias". The branch starts from `assemble/generic-equations` `3b4024a` (PR #87):
+the norm needs the unknowns' layout, which Unit 57 made explicit (Unit 40's FE motivation; Unit 57 named this as a
+consumer). It is rebased onto `main` once #87 merges.
+
+**What is measured today (the starting point):**
+- **Unit 30 (L1–L6):** `LineSearchTest::natural` passes a trial when the simplified correction J(x)⁻¹F(trial) is at
+  most (1 − λ/4) of the full correction, both in `update_size`: the largest of |dψ| (V_T) and |dn|/n, |dp|/p (each
+  density against a floor, 1e-20 or 1e-8 of the largest density; Unit 50's opt-in minority floor raises it).
+- **Its recorded failure:** on the legacy diode from equilibrium straight to −5 V, plain Newton converges in 45
+  iterations and the natural search fails. Along plain Newton's own path the measure jumps between 1e2 and 1e8,
+  because it is the relative correction of minority densities near 1e-14. Two variants were measured and dropped:
+  scaling the test by the clipped fraction (MOSFET 1/10, −5 V still failing) and the largest scaled component
+  (1.0 V then failing too).
+- **Unit 50's finding:** on today's defaults the Unit 30 MOSFET benchmark (field mobility, V_G = 1 V, drain
+  0.1–1 V) gives natural 2/10 (10/10 recorded) and natural with step cutting 10/10 in 252 iterations. Not bisected.
+- **Two details of today's test, read from `newton.hpp`:** the full correction is measured at the iterate x and
+  the simplified one at the trial, so the densities' scales differ between the two sides of the inequality
+  (Deuflhard's test holds the scaling fixed within a step); and the full correction is unclipped while λ is the
+  fraction of the clipped step.
+
+**Standing conditions:** opt-in. The default path (no line search) and the residual test are untouched and
+bit-identical (Unit 57's GG1 method). Unit 30's natural test stays available unchanged unless NQ3 rules otherwise.
+`solve` gains no dependency on `assemble`: the norm is a system hook found by the concept, like `update_size`.
+Criteria are fixed before code. Release and Debug suites pass at every commit with `/W4 /WX`, plus hand mutants.
+Built with MSVC 14.51. Nothing is pushed or merged without authorization.
+
+**Left out of this unit:** a Gummel or pseudo-transient fallback (the other half of the 11.3 next step; NQ1); a line
+search inside `trace_bias`'s corrector; making any line search the default; changing the convergence test
+(`update_size`, which every recorded result depends on).
+
+**Design:**
+
+| # | Slice | Change | Notes |
+|---|---|---|---|
+| ND1 | 0 | **Measure first.** A `[.benchmark]` diagnostic that replays plain Newton's converging path (diode at −5 V; the MOSFET's first drain point) and, at every iteration, records θ = ‖Δx̄‖ / ‖Δx‖ in today's measure and in each candidate norm (ND3), with both corrections scaled at the iterate. A norm suits the test when θ < 1 on plain Newton's accepted steps. Also the baseline of NG3/NG4 on today's tree, and (NQ5) a bisection of Unit 50's MOSFET finding. | No product code. Decides ND3 by measurement; the result is recorded before slice 1. |
+| ND2 | 1 | **The hook.** `newton.hpp`: if the system has `natural_size(x_ref, dx)`, the natural test measures both corrections with it at the same x_ref (the iterate); otherwise it uses `update_size` as now. Selected by `LineSearch::norm` (NQ3). | A system without the hook, and `norm = convergence`, give Unit 30's test exactly. |
+| ND3 | 1 | **The norm, from the layout.** `System::natural_size`, built from the DofMap's fields: each component scaled by w = max(\|x_ref\|, a field threshold), combined per field and then over fields. Candidates measured in ND1: **(a)** Deuflhard's weighted RMS (NLEQ's scaled norm), potential threshold 1 V_T, density threshold τ times the field's largest value; **(b)** potential-only (the densities follow ψ); **(c)** log-compressed densities, asinh(dn/w) in V_T units next to dψ. Held and insulator nodes are skipped. Fields added by an extension (GG8) are measured like ψ. | The choice and τ come from ND1 (NQ2). The field classes are kept inside `SystemData`; `Field` is unchanged. |
+| ND4 | 1 | **Configuration and deck.** `[solver] natural_norm = convergence \| weighted` (NQ7), `BiasOptions` and the run record (only when not the default, as Unit 30's settings). | Old decks parse and run unchanged. |
+| ND5 | 2 | **Results.** NG3–NG6 on the chosen norm; ARCHITECTURE 11.3 "As built" after acceptance. | |
+
+**Criteria (frozen once approved):**
+
+| # | Gate |
+|---|---|
+| NG1 | Bit-identity: every traced suite entry equal to the base tree's with the line search off, and with the natural test on `norm = convergence` (Unit 57's GG1 method). |
+| NG2 | Decks: every deck's output unchanged (GG2's method). |
+| NG3 | Diode jumps (`[.diode_jumps]`), natural search with the new norm, from equilibrium: converges at 0.6, 0.8, 1.0 V **and −5 V** (every point plain Newton converges); each state equal to a 0.05 V-step sweep's to 1e-12. 1.2 V and −20 V reported, not gated. |
+| NG4 | MOSFET line-search benchmark: natural search with the new norm 10/10, each point equal to the 1 V_T sweep's to 1e-12; not fewer points than the old norm on the same tree. |
+| NG5 | Unit tests: the norm's value on a hand-built 3-node system (held nodes skipped, an extension field like ψ); the natural test's λ sequence unchanged when F's rows are rescaled (affine invariance); the scalar `newton_test` cases pass under both norms. |
+| NG6 | No regression where the natural test passes today: Unit 30's diode 0–0.6 V sweep and every `newton_test` case still converge, with iteration counts reported. |
+| NG7 | Release and Debug suites, `/W4 /WX`; hand mutants of the hook, the scaling point and the thresholds, each caught. |
+
+**Questions for the owner (recommended option first):**
+
+| # | Question | Options |
+|---|---|---|
+| NQ1 | Scope | **The norm only (recommended)**; Gummel or pseudo-transient fallback as its own later unit. / Both in this unit. |
+| NQ2 | How the norm is chosen | **Measure the three candidates in slice 0 and take the one that passes NG3 and NG4, ties to fewer iterations (recommended).** / Fix (a) now. |
+| NQ3 | Old or new norm by default for `natural` | **A new option, `natural_norm`, default `convergence` (Unit 30 unchanged); promotion decided after the results (recommended).** / Replace Unit 30's norm (changes opted-in runs). |
+| NQ4 | Base branch | **Stack on PR #87 and rebase after it merges (recommended).** / Wait for #87's merge. |
+| NQ5 | Unit 50's MOSFET finding (natural 2/10 today, 10/10 recorded) | **Bisect in slice 0, at most about two hours, as NG4's baseline (recommended).** / Record today's numbers only. |
+| NQ6 | The line search's default | **Stays off (recommended).** / Turn on with the new norm if NG3–NG6 pass. |
+| NQ7 | Deck key | **`[solver] natural_norm = convergence \| weighted` (recommended).** / Another name. |
+
 ## New questions the advisor raised (not yet in `ARCHITECTURE.md`)
 
 None of these is decided. Each needs an owner position before the build scaffold fixes the flags.
