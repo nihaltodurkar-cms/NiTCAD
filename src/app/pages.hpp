@@ -93,6 +93,7 @@ private:
     void viewport_fit() override {}
     void viewport_click(float, float) override {}
     void viewport_hover(float, float) override {}
+    void viewport_leave() override {}
     bool viewport_is_3d() const override { return false; }
 
     Host& host_;

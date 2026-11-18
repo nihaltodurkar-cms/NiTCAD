@@ -4,8 +4,10 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <format>
 #include <limits>
 
+#include "NiTCAD/app/view_settings.hpp"
 #include "NiTCAD/render/image.hpp"
 
 namespace NiTCAD::app {
@@ -108,6 +110,45 @@ double distance_um(const ProbeHit& a, const ProbeHit& b) noexcept {
     const double dx = a.position_um[0] - b.position_um[0], dy = a.position_um[1] - b.position_um[1],
                  dz = a.position_um[2] - b.position_um[2];
     return std::sqrt(dx * dx + dy * dy + dz * dz);
+}
+
+std::string hover_text(std::string_view title, const ProbeHit& hit, int dimension) {
+    const auto [symbol, unit] = title_parts(title);
+    std::string text(symbol);
+    if (std::isfinite(hit.value)) {
+        text += std::format(" = {:.4g}", hit.value);
+        if (!unit.empty()) text += " " + std::string(unit);
+    } else {
+        text += ": no value";
+    }
+    text += std::format("\nx {:.3g}  y {:.3g}", hit.position_um[0], hit.position_um[1]);
+    if (dimension == 3) text += std::format("  z {:.3g}", hit.position_um[2]);
+    text += std::format(" µm\nnode {}", hit.node);
+    return text;
+}
+
+std::optional<CurveHit> pick_curve(const render::PlotScene& scene, int width, int height, float x, float y,
+                                   float radius_px) {
+    std::optional<CurveHit> best;
+    for (std::size_t k = 0; k < scene.series.size(); ++k) {
+        const render::Series& s = scene.series[k];
+        const std::size_t n = std::min(s.x.size(), s.y.size());
+        for (std::size_t i = 0; i < n; ++i) {
+            const render::ScreenPoint p = render::plot_position(scene, width, height, s.x[i], s.y[i]);
+            if (!std::isfinite(p.x) || !std::isfinite(p.y)) continue;
+            const float d = std::hypot(p.x - x, p.y - y);
+            if (!(d <= radius_px) || (best && !(d < best->distance_px))) continue;
+            best = CurveHit{k, i, s.x[i], s.y[i], p.x, p.y, d};
+        }
+    }
+    return best;
+}
+
+std::string curve_text(const render::PlotScene& scene, const CurveHit& hit) {
+    std::string text;
+    if (scene.series.size() > 1 && hit.series < scene.series.size()) text = scene.series[hit.series].name + "\n";
+    text += std::format("{} = {:.4g}\n{} = {:.4g}", scene.x.label, hit.x, scene.y.label, hit.y);
+    return text;
 }
 
 }  // namespace NiTCAD::app

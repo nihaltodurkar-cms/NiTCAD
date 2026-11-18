@@ -156,10 +156,19 @@ LRESULT Viewport::handle(UINT message, WPARAM w, LPARAM l) {
         moved_ = false;
         button_ = message == WM_LBUTTONDOWN ? 1 : message == WM_RBUTTONDOWN ? 2 : 3;
         last_ = down_ = {GET_X_LPARAM(l), GET_Y_LPARAM(l)};
+        host_.viewport_leave();  // HD3: no readout while dragging
+        return 0;
+    case WM_MOUSELEAVE:
+        tracking_ = false;
+        host_.viewport_leave();
         return 0;
     case WM_MOUSEMOVE: {
         const POINT p{GET_X_LPARAM(l), GET_Y_LPARAM(l)};
         if (!dragging_) {
+            if (!tracking_) {
+                TRACKMOUSEEVENT t{sizeof(t), TME_LEAVE, hwnd_, 0};
+                tracking_ = TrackMouseEvent(&t) != FALSE;
+            }
             host_.viewport_hover(static_cast<float>(p.x), static_cast<float>(p.y));
             return 0;
         }

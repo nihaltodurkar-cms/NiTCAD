@@ -468,6 +468,92 @@ leaves a summary here. A citation elsewhere (code comments, ARCHITECTURE.md) of 
 
 None on `main`. Unit 59 (natural-test norm; approved 2026-11-18, not started) is on `solve/natural-norm`.
 
+### Unit 26e — hover readout and one default colormap (proposed 2026-11-18; on `app/hover-readout`)
+
+**Owner request (2026-11-18):** "start Hover readout of values; choose viridis or turbo as the default colour map
+(GUI)". The hover readout was asked for on 2026-11-16 ("hovering over the 1D/2D/3D model shows no value") and
+deferred then. The colormap question left open after 26d is that the app defaults to viridis (ZD8) while `nitcad plot`
+keeps turbo, so the same options give two images. The branch starts from `main` `9225e6f`.
+
+**Standing conditions:** as for 26d. The app and `nitcad plot`'s default only, with no change to numerics, results,
+files or run identities. Win32 + D3D12 + Direct2D only. Criteria are fixed before code. Release and Debug suites with
+`/W4 /WX`, plus hand mutants. WG1 and the self-tests stay as ruled. Nothing is pushed or merged without authorization.
+
+**Today:** a click in Probe mode reports the nearest node's value (`probe_at`), in the inspector and the status bar.
+Hovering puts only the position in the status bar's cursor part (`viewport_hover`), on field scenes only. Curve plots
+(the Curves tab and the 1D device views) are not pickable: their frame is laid out inside `Renderer::render_plot`.
+
+**Design:**
+
+| # | Change | Where | Behaviour |
+|---|---|---|---|
+| HD1 | **Hover readout on field views.** Moving the mouse over a pickable field scene (`pickable()`: 2D and 3D field, slice and iso views; not exploded) shows a readout beside the cursor: `<symbol> = <value> <unit>`, then the position in µm (z in 3D) and the node. It is the node Probe would pick: `Prober::pick` with the field's values and hover's 8 px reach. The status bar's cursor part gains the value. | `viewport_hover`; new pure `hover_text` in `probe` | Off the device (no node within reach) the readout hides. Numbers use `number()` as the probe does; a missing value reads "no value". |
+| HD2 | **Hover readout on curves.** On a plot scene, the readout shows the data point nearest the cursor in screen distance, over every series, within 12 px: the series name (if the plot has more than one), then `<x label> = <x>` and `<y label> = <y>`. | New `render::plot_frame` and `render::plot_position` (the layout `render_plot` uses, moved out of it, unchanged); new pure `pick_curve` in `probe` | Points that do not lie on the axes (non-positive on a log axis, non-finite) are skipped. The run monitor's live plot is not covered. |
+| HD3 | **The readout window.** One Win32 tracking tooltip (`TOOLTIPS_CLASS`, `TTF_TRACK \| TTF_ABSOLUTE`), owned by the main window, placed 16 px right of and below the picked point (kept on screen). It hides on leaving the view (`TrackMouseEvent` / `WM_MOUSELEAVE`, a new `Host::viewport_leave`), while dragging, and when the scene, tab or field changes. **View ▸ Display hover readout** (mnemonic Y, the free letter) turns it on or off. It is on by default and saved in the app state. | `viewport.cpp`, `main_window.cpp`, `app_state` | The click probe, Measure and Cut line are unchanged. The tooltip never takes focus or clicks. |
+| HD4 | **One default colormap: viridis.** `nitcad plot`'s default `--colormap` becomes viridis, the app's since 26d, so "same options, same image" holds with no options. turbo, cividis, coolwarm and soft stay selectable. The difference view keeps cool-warm unless one is chosen (its sentinel becomes the default, viridis; turbo is then a choice there). | `cli/plot.cpp` option default and XD6 sentinel; `view_settings.cpp` (`takes_coolwarm`, `plot_arguments` omit the default); `self_test.cpp` | The render layer's own defaults (`Colorbar::map`) and its reference images are unchanged: they name their maps. A `nitcad plot` run without `--colormap` draws a different PNG from before. This is the user-visible change. |
+
+**Questions (each with a recommendation):**
+
+| # | Question | Options | Recommendation |
+|---|---|---|---|
+| HQ1 | Where the readout shows | (a) A tooltip at the cursor, and the status bar. (b) The status bar only. (c) A label drawn into the scene. | **(a)**: at the eye's position. (c) would put an app overlay into the renderer and `nitcad plot`'s drawing path. |
+| HQ2 | Which value on a field view | (a) The nearest node's value, as Probe gives. (b) Interpolated in the cell under the cursor. | **(a)**: the same number a click gives. 3D has no cell locator (M16), and nodes are the solved values. |
+| HQ3 | Which point on a curve | (a) The nearest data point of any series. (b) Every series interpolated at the cursor's x. | **(a)**: solved points only, no interpolated values that were not computed. |
+| HQ4 | A switch for it | (a) A View menu switch, on by default, remembered. (b) Always on. | **(a)**: a tooltip that follows the mouse gets in the way of screenshots. |
+| HQ5 | The default colormap | (a) Viridis in the app and `nitcad plot`. (b) Keep the split (app viridis, `nitcad plot` turbo). (c) Turbo in both (undo ZD8). | **(a)**: the owner chose viridis on 2026-11-15. It is perceptually uniform and colour-blind safe. It ends the split that makes 26d's difference-view and equivalent-command special cases. |
+| HQ6 | A marker on the hovered curve point | (a) None: the readout names the point and sits by it. (b) A ring drawn on the point. | **(a)**: (b) needs a scene overlay in the renderer. It could be a later item. |
+
+**Owner ruling (2026-11-18):** ruled under the standing instruction "always choose recommended" (2026-11-11): HQ1 (a),
+HQ2 (a), HQ3 (a), HQ4 (a), HQ5 (a), HQ6 (a). Implementation authorized by the request ("start").
+
+**Acceptance criteria (frozen before code; tests in `tests/app` and `tests/render`, hidden windows as today):**
+
+| # | Criterion |
+|---|---|
+| HG1 | `hover_text`: a 2D hit (symbol, value, unit, x, y, node; no z), a 3D hit (with z), a NaN value ("no value"), and a field without a unit, each against expected strings. |
+| HG2 | `plot_frame`/`plot_position`: for a known scene and size, the frame equals today's layout (with and without a title), and the corners map to the axis limits on linear and log axes. `pick_curve`: nearest across two series; a log axis with a non-positive point skipped; non-finite skipped; nothing beyond 12 px; one series gives no series line. |
+| HG3 | The move of the plot layout out of `render_plot` is bit-identical: every render reference image (`band_diagram`, `iv_plot`, the cut-band plots) matches unchanged. |
+| HG4 | Window tests: `WM_MOUSEMOVE` over a 2D result's device shows the tooltip with HG1's text for the node Probe picks there; over empty space it hides; `WM_MOUSELEAVE` hides it; with the switch off nothing shows; during a drag nothing shows; on the Curves tab a move onto a curve point shows its HD2 text; a tab change hides it. The setting survives a save and load of the app state. |
+| HG5 | Colormap: `nitcad plot` with no `--colormap` gives the same PNG as with `--colormap viridis`; `--colormap turbo` still gives turbo; the difference view with no colormap is cool-warm and with turbo chosen is turbo. A default app field view's equivalent command names no colormap, and run through `nitcad plot` it gives the app's image (WG4 self-test default). |
+| HG6 | No change elsewhere: every render reference passes unchanged; app tests change only where HD1–HD4 change what they check; numerics untouched (no solver, physics or io source changed); WG1 self-tests within their ruled bounds. |
+| HG7 | Hover costs no more than a frame: on the largest bundled 3D example's surface view, the median `viewport_hover` (pick + text + tooltip update) over 200 positions is under 16 ms in Release. The time is recorded. |
+| HG8 | Hand mutants, each killed by a test: a hover pick ignoring the values (old behaviour), z shown in 2D, the curve pick not skipping log non-positives, a 20 px reach, the layout's margin changed in `plot_frame`, the tooltip not hidden on leave, the switch ignored, the switch not saved, the difference sentinel kept at turbo, the `nitcad plot` default kept at turbo. |
+
+**Slices (each one local commit):** 26e·1 HD2's render layout and the pure `hover_text` / `pick_curve` (HG1–HG3);
+26e·2 HD1 + HD3 in the window (HG4, HG7); 26e·3 HD4 (HG5); 26e·4 suites, mutants (HG6, HG8), the ARCHITECTURE "as
+built" entry.
+
+**Implementation (2026-11-18).** Slices: 26e·1 `bdd3af9`, 26e·2 `b72a550`, 26e·3 `fad0b0a`, 26e·4 this record and
+ARCHITECTURE's "as built" entry (6.14).
+
+Choices made in building, within the design:
+- **HD3:** the menu item is **View ▸ Display hover readout** (mnemonic Y). Every letter of "Hover readout" was already
+  a View mnemonic, and the menu test requires them to be unique. A hidden window (the tests) keeps the readout's
+  state and text but never activates the tooltip, so test runs put nothing on the desktop. A view with no field (the
+  structure, the mesh) shows the position and node only.
+- **HD4:** the difference view's sentinel is the default, viridis, in both the app (`takes_coolwarm`) and `nitcad
+  plot` (XD6). Choosing viridis there therefore still shows cool-warm, as turbo did before 26e.
+- **Tests changed (HG6):** the `plot_arguments` expectations drop `--colormap viridis` (now the default; one case
+  names cividis to keep the option covered); 26d's ZG10 case is rewritten for one default; the self-test's third
+  view names turbo instead of viridis. The 26d film tests that name `--colormap viridis` stay as they are.
+- **Found and fixed (owner, 2026-11-18: "fix it"):** a 1D diode sweep from 0 V had no I-V plot with the cathode
+  sensed ("a log axis needs a positive value"). Its current is exactly 0 at 0 V and negative after that, and
+  `render::curve_plot` drew a log-axis curve by its magnitude only when every value was strictly negative. Now it
+  does so when the curve has no positive value and at least one negative one; the zeros stay off the axis, as
+  non-positive values always were. Mixed-sign curves and linear axes are unchanged, and no curve that drew before
+  draws differently (the case was an error). Tests: `render scene: plots fit their axes…` (from 0 V, mixed, linear)
+  and `app views: a diode's I-V from 0 V on a log axis` (both contacts); the old condition fails both. The hover
+  window test's sweep starts at 0 V again.
+
+Results: Release app tests 71/71 test cases, window tests 27/27 (24 + 3 new), render 78/78 with every reference image
+unchanged (HG3), `nitcad plot` deck tests 12/12. HG7: median hover 0.067 ms, maximum 0.78 ms over 200 positions on
+`examples/mosfet_3d.deck`'s doping surface (1,911 nodes). HG8: 10 hand mutants, all killed (the curve pick's own
+non-finite skip is redundant, since a NaN position fails the reach test, so that mutant is placed in
+`axis_fraction` instead). A first mutant round was discarded: its restores kept old file times, so the next builds
+kept earlier mutants. It was rerun with each file touched after restore. **Full Release ctest not run** (owner,
+2026-11-18: "full suite is not required rn"), and the Debug suite is left to CI. HG6 therefore stands on the suites
+above, not on the whole tree.
+
 ---
 
 ## New questions the advisor raised (not yet in `ARCHITECTURE.md`)

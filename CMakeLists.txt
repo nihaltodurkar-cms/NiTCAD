@@ -1020,7 +1020,7 @@ target_include_directories(nitcad_app_window PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}
 add_executable(nitcad-app WIN32 app/main.cpp)
 target_link_libraries(nitcad-app PRIVATE nitcad_app_window)
 add_executable(nitcad_app_window_test tests/app/window_test.cpp tests/app/self_test_test.cpp
-  tests/app/analysis_window_test.cpp)
+  tests/app/analysis_window_test.cpp tests/app/hover_window_test.cpp)
 target_link_libraries(nitcad_app_window_test PRIVATE nitcad_app_window Catch2::Catch2WithMain dxgi dxguid)
 target_compile_definitions(nitcad_app_window_test PRIVATE NITCAD_CLI_PATH="$<TARGET_FILE:nitcad>"
   NITCAD_APP_PATH="$<TARGET_FILE:nitcad-app>" NITCAD_EXAMPLES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/examples")

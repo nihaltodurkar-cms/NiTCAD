@@ -51,3 +51,13 @@ TEST_CASE("app state: written and read back; damaged lines ignored", "[app]") {
     CHECK(app::load_state(dir / "sub" / "app.ini").recent == s.recent);
     CHECK(app::load_state(dir / "none.ini").recent.empty());
 }
+
+TEST_CASE("app state 26e: the hover readout switch is saved; old files have it on (HD3, HG4)", "[app]") {
+    CHECK(app::parse_state("# NiTCAD application state\nrecent = a.deck\n").hover_readout);
+    app::AppState s;
+    s.hover_readout = false;
+    CHECK(app::serialize(s).find("hover_readout = 0\n") != std::string::npos);
+    CHECK_FALSE(app::parse_state(app::serialize(s)).hover_readout);
+    s.hover_readout = true;
+    CHECK(app::parse_state(app::serialize(s)).hover_readout);
+}

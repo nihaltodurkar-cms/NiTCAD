@@ -438,6 +438,7 @@ void MainWindow::update_command_states() {
     check(Command::measure_mode, measure_mode_);
     check(Command::cut_line_mode, cut_mode_);
     check(Command::perspective, settings().perspective);
+    check(Command::hover_readout, state_.hover_readout);
 }
 
 // --- layout and DPI --------------------------------------------------------------------------------
@@ -607,6 +608,7 @@ std::string MainWindow::status(int part) const {
 ViewSettings& MainWindow::settings() noexcept { return tab_ == tab_curves ? curve_view_ : device_view_; }
 
 void MainWindow::select_tab(int tab) {
+    hide_readout();
     tab_ = std::clamp(tab, 0, tab_count - 1);
     SendMessageW(tabs_, TCM_SETCURSEL, static_cast<WPARAM>(tab_), 0);
     layout();
@@ -763,6 +765,7 @@ void MainWindow::set_run_b(std::optional<Workspace> b) {
 }
 
 void MainWindow::refresh() {
+    hide_readout();
     if (tab_ != tab_view && tab_ != tab_curves) return;
     scene_.reset();
     values_.clear();
@@ -2095,6 +2098,13 @@ void MainWindow::execute(Command c) {
         set_status(status_state, "Showing every region.");
         if (tab_ == tab_view) refresh();
         return;
+    case Command::hover_readout:
+        // HD3: on by default, saved in the app state.
+        state_.hover_readout = !state_.hover_readout;
+        if (!state_.hover_readout) hide_readout();
+        update_command_states();
+        set_status(status_state, state_.hover_readout ? "Hover readout on." : "Hover readout off.");
+        return;
     case Command::next_tab: select_tab((tab_ + 1) % tab_count); return;
     case Command::previous_tab: select_tab((tab_ + tab_count - 1) % tab_count); return;
     case Command::next_pane: focus_next_pane(); return;
@@ -2232,13 +2242,92 @@ void MainWindow::set_cut(std::optional<ViewSettings::Cut> cut) {
 }
 
 void MainWindow::viewport_hover(float x, float y) {
-    if (!pickable()) return;
-    const auto* f = std::get_if<render::FieldScene>(&*scene_);
-    if (!f) return;
-    const auto hit = prober_->pick(*f, viewport_->width(), viewport_->height(), x, y, {}, 8.0f);
-    set_status(status_cursor, hit ? std::format("x {}  y {}  z {} µm", format_um(hit->position_um[0]),
-                                                format_um(hit->position_um[1]), format_um(hit->position_um[2]))
-                                  : std::string());
+    if (!scene_) return hide_readout();
+    const int w = viewport_->width(), h = viewport_->height();
+    if (const auto* p = std::get_if<render::PlotScene>(&*scene_)) {
+        // HD2: the nearest data point of any series.
+        const auto hit = pick_curve(*p, w, h, x, y);
+        if (!hit) {
+            set_status(status_cursor, {});
+            return hide_readout();
+        }
+        std::string text = curve_text(*p, *hit), line = text;
+        std::ranges::replace(line, '\n', ' ');
+        set_status(status_cursor, line);
+        show_readout(text, hit->screen_x, hit->screen_y);
+        return;
+    }
+    if (!pickable()) return hide_readout();
+    const auto& f = std::get<render::FieldScene>(*scene_);
+    // HD1: the node Probe would pick, with the field's value.
+    const auto hit = prober_->pick(f, w, h, x, y, values_, 8.0f);
+    if (!hit) {
+        set_status(status_cursor, {});
+        return hide_readout();
+    }
+    std::string text = hover_text(values_title_, *hit, workspace_->device->mesh().dimension());
+    if (values_.empty()) text.erase(0, text.find('\n') + 1);  // no field shown: the position and node
+    const std::string position = std::format("x {}  y {}  z {} µm", format_um(hit->position_um[0]),
+                                             format_um(hit->position_um[1]), format_um(hit->position_um[2]));
+    set_status(status_cursor, values_.empty() ? position : text.substr(0, text.find('\n')) + "     " + position);
+    const render::ScreenPoint s = render::screen_position(
+        f, w, h, {static_cast<float>(hit->position_um[0]), static_cast<float>(hit->position_um[1]),
+                  static_cast<float>(hit->position_um[2])});
+    show_readout(text, s.x, s.y);
+}
+
+void MainWindow::viewport_leave() { hide_readout(); }
+
+void MainWindow::show_readout(const std::string& text, float x, float y) {
+    if (!state_.hover_readout) return hide_readout();
+    if (!readout_) {
+        readout_ = CreateWindowExW(WS_EX_TOPMOST | WS_EX_TRANSPARENT, TOOLTIPS_CLASSW, nullptr,
+                                   WS_POPUP | TTS_NOPREFIX | TTS_ALWAYSTIP, CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT,
+                                   CW_USEDEFAULT, hwnd_, nullptr, GetModuleHandleW(nullptr), nullptr);
+        if (readout_) {
+            TTTOOLINFOW ti{sizeof(ti)};
+            ti.uFlags = TTF_TRACK | TTF_ABSOLUTE;
+            ti.hwnd = hwnd_;
+            ti.uId = 1;
+            ti.lpszText = const_cast<wchar_t*>(L"");
+            SendMessageW(readout_, TTM_ADDTOOLW, 0, reinterpret_cast<LPARAM>(&ti));
+            SendMessageW(readout_, TTM_SETMAXTIPWIDTH, 0, 600);  // lets "\n" break lines
+        }
+    }
+    readout_text_ = text;
+    readout_shown_ = true;
+    // A hidden window (the tests) keeps the readout's state without putting a tooltip on the desktop.
+    if (!readout_ || !IsWindowVisible(hwnd_)) return;
+    const std::wstring wide = win32::widen(text);
+    TTTOOLINFOW ti{sizeof(ti)};
+    ti.hwnd = hwnd_;
+    ti.uId = 1;
+    ti.lpszText = const_cast<wchar_t*>(wide.c_str());
+    SendMessageW(readout_, TTM_UPDATETIPTEXTW, 0, reinterpret_cast<LPARAM>(&ti));
+    // 16 px right of and below the picked point, kept on the view's monitor.
+    POINT at{static_cast<LONG>(std::lround(x)) + 16, static_cast<LONG>(std::lround(y)) + 16};
+    ClientToScreen(viewport_->hwnd(), &at);
+    SIZE size{};
+    if (const LRESULT r = SendMessageW(readout_, TTM_GETBUBBLESIZE, 0, reinterpret_cast<LPARAM>(&ti)); r) {
+        size = {LOWORD(r), HIWORD(r)};
+    }
+    MONITORINFO mi{sizeof(mi)};
+    if (GetMonitorInfoW(MonitorFromPoint(at, MONITOR_DEFAULTTONEAREST), &mi)) {
+        if (at.x + size.cx > mi.rcWork.right) at.x = std::max(mi.rcWork.left, at.x - 32 - size.cx);
+        if (at.y + size.cy > mi.rcWork.bottom) at.y = std::max(mi.rcWork.top, at.y - 32 - size.cy);
+    }
+    SendMessageW(readout_, TTM_TRACKPOSITION, 0, MAKELPARAM(at.x, at.y));
+    SendMessageW(readout_, TTM_TRACKACTIVATE, TRUE, reinterpret_cast<LPARAM>(&ti));
+}
+
+void MainWindow::hide_readout() {
+    readout_shown_ = false;
+    readout_text_.clear();
+    if (!readout_) return;
+    TTTOOLINFOW ti{sizeof(ti)};
+    ti.hwnd = hwnd_;
+    ti.uId = 1;
+    SendMessageW(readout_, TTM_TRACKACTIVATE, FALSE, reinterpret_cast<LPARAM>(&ti));
 }
 
 // --- the window procedure --------------------------------------------------------------------------

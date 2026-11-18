@@ -258,3 +258,103 @@ TEST_CASE("app probe 26c: hidden regions are not picked; in 3D the faces they op
         CHECK(std::ranges::equal(prober.candidates(), all));
     }
 }
+
+// --- Unit 26e: the hover readout (HG1, HG2) -------------------------------------------------------------
+
+TEST_CASE("app probe 26e: hover text of a field hit (HG1)", "[app]") {
+    app::ProbeHit h;
+    h.node = 42;
+    h.position_um = {0.125, 1.5, 0.75};
+    h.value = 0.41234567;
+    CHECK(app::hover_text("ψ (V)", h, 2) == "ψ = 0.4123 V\nx 0.125  y 1.5 µm\nnode 42");
+    CHECK(app::hover_text("ψ (V)", h, 3) == "ψ = 0.4123 V\nx 0.125  y 1.5  z 0.75 µm\nnode 42");
+    h.value = 3.0e17;
+    CHECK(app::hover_text("n (cm⁻³)", h, 2) == "n = 3e+17 cm⁻³\nx 0.125  y 1.5 µm\nnode 42");
+    h.value = std::nan("");
+    CHECK(app::hover_text("ψ (V)", h, 2) == "ψ: no value\nx 0.125  y 1.5 µm\nnode 42");
+    h.value = 2.5;
+    CHECK(app::hover_text("ratio", h, 2) == "ratio = 2.5\nx 0.125  y 1.5 µm\nnode 42");
+}
+
+namespace {
+
+render::PlotScene two_series(bool log_y, std::string title = {}) {
+    render::PlotScene s;
+    s.title = std::move(title);
+    s.x = {"VG (V)", render::AxisScale::linear, 0.0, 1.0, {}};
+    s.y = {"I (A)", log_y ? render::AxisScale::log10 : render::AxisScale::linear, log_y ? 1e-12 : 0.0, log_y ? 1e-2 : 1.0, {}};
+    render::Series a;
+    a.name = "VD = 0.05 V";
+    a.x = {0.0, 0.5, 1.0};
+    a.y = log_y ? std::vector<double>{1e-12, 1e-7, 1e-2} : std::vector<double>{0.0, 0.5, 1.0};
+    render::Series b;
+    b.name = "VD = 1 V";
+    b.x = {0.0, 0.5, 1.0};
+    b.y = log_y ? std::vector<double>{0.0, 1e-6, std::nan("")} : std::vector<double>{0.2, 0.6, 0.9};
+    s.series = {a, b};
+    return s;
+}
+
+}  // namespace
+
+TEST_CASE("app probe 26e: the plot frame and data positions (HG2)", "[app]") {
+    const auto s = two_series(false);
+    const render::PlotFrame f = render::plot_frame(s, 640, 480);
+    CHECK(f.left == 86.0f);
+    CHECK(f.top == 18.0f);
+    CHECK(f.right == 616.0f);
+    CHECK(f.bottom == 422.0f);
+    CHECK(render::plot_frame(two_series(false, "Transfer"), 640, 480).top == 44.0f);
+    const auto lo = render::plot_position(s, 640, 480, 0.0, 0.0);
+    const auto hi = render::plot_position(s, 640, 480, 1.0, 1.0);
+    CHECK(lo.x == f.left);
+    CHECK(lo.y == f.bottom);
+    CHECK(hi.x == f.right);
+    CHECK(hi.y == f.top);
+    const auto g = two_series(true);
+    const auto glo = render::plot_position(g, 640, 480, 0.0, 1e-12);
+    const auto ghi = render::plot_position(g, 640, 480, 1.0, 1e-2);
+    CHECK_THAT(glo.y, WithinAbs(422.0, 1e-3));
+    CHECK_THAT(ghi.y, WithinAbs(18.0, 1e-3));
+    CHECK(std::isnan(render::plot_position(g, 640, 480, 0.5, 0.0).x));
+    CHECK(std::isnan(render::plot_position(g, 640, 480, 0.5, -1.0).y));
+}
+
+TEST_CASE("app probe 26e: the curve point nearest a pixel (HG2)", "[app]") {
+    const auto s = two_series(false);
+    const int W = 640, H = 480;
+    // Series b's middle point (0.5, 0.6), 3 px off.
+    const auto pb = render::plot_position(s, W, H, 0.5, 0.6);
+    auto hit = app::pick_curve(s, W, H, pb.x + 3.0f, pb.y);
+    REQUIRE(hit);
+    CHECK(hit->series == 1);
+    CHECK(hit->index == 1);
+    CHECK(hit->screen_x == pb.x);
+    CHECK_THAT(hit->distance_px, WithinAbs(3.0, 1e-4));
+    CHECK(app::curve_text(s, *hit) == "VD = 1 V\nVG (V) = 0.5\nI (A) = 0.6");
+    // Nearer series a's (0.5, 0.5) than b's (0.5, 0.6).
+    const auto pa = render::plot_position(s, W, H, 0.5, 0.5);
+    hit = app::pick_curve(s, W, H, pa.x, pa.y + 2.0f);
+    REQUIRE(hit);
+    CHECK(hit->series == 0);
+    // Beyond 12 px: nothing.
+    CHECK_FALSE(app::pick_curve(s, W, H, pa.x + 12.5f, pa.y));
+    CHECK(app::pick_curve(s, W, H, pa.x + 11.5f, pa.y));
+    // A log axis: b's zero and NaN are not on it and are never picked.
+    const auto g = two_series(true);
+    const auto g0 = render::plot_position(g, W, H, 0.0, 1e-12);
+    hit = app::pick_curve(g, W, H, g0.x, g0.y);
+    REQUIRE(hit);
+    CHECK(hit->series == 0);
+    const auto g2 = render::plot_position(g, W, H, 1.0, 1e-2);
+    hit = app::pick_curve(g, W, H, g2.x, g2.y);
+    REQUIRE(hit);
+    CHECK(hit->series == 0);
+    CHECK(hit->index == 2);
+    // One series: no series line.
+    auto one = s;
+    one.series.resize(1);
+    hit = app::pick_curve(one, W, H, pa.x, pa.y);
+    REQUIRE(hit);
+    CHECK(app::curve_text(one, *hit) == "VG (V) = 0.5\nI (A) = 0.5");
+}

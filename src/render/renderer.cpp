@@ -1093,6 +1093,40 @@ std::expected<void, base::Error> Renderer::Impl::render_field(const FieldScene& 
     return end_2d();
 }
 
+PlotFrame plot_frame(const PlotScene& s, int w, int h) noexcept {
+    const float top = s.title.empty() ? 18.0f : 44.0f;
+    return {86.0f, top, static_cast<float>(w) - 24.0f, static_cast<float>(h) - 58.0f};
+}
+
+namespace {
+
+// A value's place along an axis, 0 at lo and 1 at hi (NaN off a log axis).
+double axis_fraction(const Axis& a, double v) noexcept {
+    if (a.scale == AxisScale::log10) {
+        if (!(v > 0.0)) return std::numeric_limits<double>::quiet_NaN();
+        return (std::log10(v) - std::log10(a.lo)) / (std::log10(a.hi) - std::log10(a.lo));
+    }
+    return (v - a.lo) / (a.hi - a.lo);
+}
+float plot_x(const PlotFrame& f, const Axis& a, double x) noexcept {
+    return f.left + static_cast<float>(axis_fraction(a, x)) * (f.right - f.left);
+}
+float plot_y(const PlotFrame& f, const Axis& a, double y) noexcept {
+    return f.bottom - static_cast<float>(axis_fraction(a, y)) * (f.bottom - f.top);
+}
+
+}  // namespace
+
+ScreenPoint plot_position(const PlotScene& s, int w, int h, double x, double y) noexcept {
+    const PlotFrame f = plot_frame(s, w, h);
+    const float sx = plot_x(f, s.x, x), sy = plot_y(f, s.y, y);
+    if (!std::isfinite(sx) || !std::isfinite(sy)) {
+        const float nan = std::numeric_limits<float>::quiet_NaN();
+        return {nan, nan, 0.0f};
+    }
+    return {sx, sy, 0.0f};
+}
+
 std::expected<void, base::Error> Renderer::Impl::render_plot(const PlotScene& s, int w, int h) {
     if (auto r = ensure_targets(w, h); !r) return std::unexpected(std::move(r.error()));
     if (final_state != D3D12_RESOURCE_STATE_RENDER_TARGET) {
@@ -1109,17 +1143,10 @@ std::expected<void, base::Error> Renderer::Impl::render_plot(const PlotScene& s,
     {
         Ink ink(d2d.Get(), dwrite.Get());
         d2d->SetAntialiasMode(D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
-        const float top = s.title.empty() ? 18.0f : 44.0f;
-        const D2D1_RECT_F frame{86.0f, top, static_cast<float>(w) - 24.0f, static_cast<float>(h) - 58.0f};
-        const auto map = [](const Axis& a, double v) {
-            if (a.scale == AxisScale::log10) {
-                if (!(v > 0.0)) return std::numeric_limits<double>::quiet_NaN();
-                return (std::log10(v) - std::log10(a.lo)) / (std::log10(a.hi) - std::log10(a.lo));
-            }
-            return (v - a.lo) / (a.hi - a.lo);
-        };
-        const auto px = [&](double x) { return frame.left + static_cast<float>(map(s.x, x)) * (frame.right - frame.left); };
-        const auto py = [&](double y) { return frame.bottom - static_cast<float>(map(s.y, y)) * (frame.bottom - frame.top); };
+        const PlotFrame f = plot_frame(s, w, h);
+        const D2D1_RECT_F frame{f.left, f.top, f.right, f.bottom};
+        const auto px = [&](double x) { return plot_x(f, s.x, x); };
+        const auto py = [&](double y) { return plot_y(f, s.y, y); };
         const D2D1_COLOR_F grid{0.89f, 0.91f, 0.93f, 1.0f}, axis{0.25f, 0.27f, 0.3f, 1.0f};
         for (const Tick& t : s.x.ticks) {
             const float x = frame.left + static_cast<float>(t.position) * (frame.right - frame.left);

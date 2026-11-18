@@ -2761,8 +2761,8 @@ composable.
 - **Scenes** (`scene.hpp`): `FieldScene` (µm, +y up as in 2D, triangles with per-vertex colormap positions or flat
   colors, lines, colorbar, camera) and `PlotScene`; views solid, mesh, field (2D maps, 3D boundary surfaces with the
   semiconductor seen through translucent insulators), slices; contact slabs; the VR8 palette by doping class; plots
-  of Unit 24 curves (resolution flags), 1D profiles and band diagrams. Colormaps Turbo (default), viridis, cividis,
-  cool-warm and soft; linear, log10 and signed-log scales; 1-2-5 and decade ticks.
+  of Unit 24 curves (resolution flags), 1D profiles and band diagrams. Colormaps viridis (`nitcad plot`'s and the
+  app's default since Unit 26e; turbo before), turbo, cividis, cool-warm and soft (a `Colorbar` names its map); linear, log10 and signed-log scales; 1-2-5 and decade ticks.
 - **Drawing** (`image.hpp`): Direct3D 12 (hardware or WARP), 2 × 2 supersampling, per-pixel colormap lookup,
   two-sided lighting, weighted blended order-independent transparency, screen-space line quads; Direct2D and
   DirectWrite overlays and plots through D3D11On12 (VQ1); HLSL compiled by `dxc` at build time (VQ2); PNG via WIC.
@@ -2910,7 +2910,7 @@ CG1–CG9; accepted by the owner 2026-10-22):**
   list start with viridis, and `plot_arguments` names it (`--colormap viridis`) on the device views. `nitcad plot`
   keeps turbo, and the self-test takes plot's options so it starts at turbo too. On the difference view viridis
   and turbo both mean cool-warm (`app::takes_coolwarm`), so the equivalent command draws the same map; another
-  colormap chosen is used.
+  colormap chosen is used. *Superseded by Unit 26e (HD4): `nitcad plot` defaults to viridis too.*
 - **Window integration (ZD4–ZD6, ZQ3, ZQ4):** `app/integration` holds the decisions as plain functions. A file
   dropped on the window opens as the recent-files list opens it (`open_target`), after the unsaved-edits prompt;
   two files, a folder, or a drop during a run or check is refused (`dropped_file`). The taskbar button shows a
@@ -2925,6 +2925,31 @@ CG1–CG9; accepted by the owner 2026-10-22):**
 - Not in Unit 26d (the larger items of the same review): inspector groups that show only what applies, one
   clipping-box input, image export and copy, TaskDialog errors, toolbar icons, tooltips, context menus,
   tree/inspector consolidation, camera presets, a full dark mode, undo for view settings.
+
+**As built (Unit 26e, hover readout and one default colormap; DECISIONS.md HD1–HD4, HQ1–HQ6, HG1–HG8; on
+`app/hover-readout`):**
+- **Field views (HD1, HQ2):** a mouse move over a pickable field scene (2D maps, 3D surfaces, slices, iso; not
+  exploded) picks the node Probe would (`Prober::pick` with the field's values, 8 px reach) and shows
+  `app::hover_text`: `ψ = 0.4123 V`, `x … y … [z …] µm`, `node n` (`<symbol>: no value` off the field; position
+  and node only on a view without a field). The status bar's cursor part gains the value.
+- **Curves (HD2, HQ3):** the axes' frame is `render::plot_frame` and a data point's pixel `render::plot_position`
+  (the layout `render_plot` used, moved out unchanged: every reference image identical). `app::pick_curve` takes
+  the nearest solved point of any series within 12 px (points off a log axis skipped); `app::curve_text` gives the
+  series (when there are several), `<x label> = x`, `<y label> = y`. The Curves tab and the 1D device views; not
+  the run monitor's live plot.
+- **The readout (HD3, HQ1, HQ4):** one tracking tooltip (`TOOLTIPS_CLASS`, `TTF_TRACK | TTF_ABSOLUTE`) owned by
+  the main window, 16 px right of and below the picked point and kept on the monitor. It hides on
+  `WM_MOUSELEAVE` (`TrackMouseEvent`; `Viewport::Host::viewport_leave`), on a button press (drags), on a refresh
+  or tab change, and with **View ▸ Display hover readout** off (`AppState::hover_readout`, saved as
+  `hover_readout = 0|1`, on when absent). A hidden window keeps the readout's state without activating the tooltip.
+- **One default colormap (HD4, HQ5):** `nitcad plot --colormap` defaults to viridis, the app's, so
+  `plot_arguments` names a colormap only when it is not viridis. On the difference view the default stands for
+  cool-warm in both (`takes_coolwarm`, plot's XD6 sentinel), and turbo is now a choice there. The render layer's
+  references name their maps and are unchanged. A `nitcad plot` run without `--colormap` draws viridis where it
+  drew turbo: the one user-visible output change.
+- Gates: HG1–HG5 by the app, render and window tests (`tests/app/hover_window_test.cpp` sends `WM_MOUSEMOVE`,
+  `WM_MOUSELEAVE` and a button press to the view); HG7 median hover 0.067 ms on `examples/mosfet_3d.deck`'s doping
+  surface (1,911 nodes; bound 16 ms); 10 hand mutants killed (HG8); the full Release ctest not run by owner ruling (DECISIONS.md Unit 26e).
 
 ## 7. Language placement (D6: C and Fortran deferred)
 
@@ -3226,7 +3251,7 @@ built.
 | 23 | Thermal / electrothermal coupling | physics, assemble, solve | **done, on `main`** (`7300b67`, PR #30): the lattice temperature as a fourth Newton unknown (the rise τ) with an exact Jacobian; Wachutka's thermodynamic fluxes (Boltzmann and Fermi–Dirac), the heat as the energy flux's divergence with Peltier and Thomson heat, isothermal and R_th thermal contacts; T in every model the assembler has; steady sweeps, `trace_bias` (thermal-runaway folds), transients and AC; traps and BTBT refused; thermionic emission (deferred) and incomplete ionization refused (6.2, Unit 23; DECISIONS.md T1–T14, U1–U8) |
 | 24 | Analysis and extraction engine | analysis | **done, on `main`** (`4183767`): curves read from sweeps and small-signal runs; transistor, diode and breakdown figures; C-V doping profile, flat band and the conductance method; two-port Y/Z/h/S, Mason's U, k, MAG/MSG, f_T and f_max; every extraction with the points it used and resolution and extrapolation flags (6.13, Unit 24) |
 | 25 | Scientific visualization / rendering | render | **25a done** (`render/visualization`): CPU scenes, Direct3D 12 and Direct2D drawing to PNG, `nitcad plot` (6.14); **25b done** (`render/derived-fields`): \|E\|, \|J\|, isosurfaces, streamlines (6.14); **25c done** (`render/vectors-clip`): arrows, clipping box, exploded view, filmstrips (6.14) |
-| 26 | Native Windows application and workflow | app | **done, on `main`** (`e9b1d71`, PR #59): `nitcad-app.exe`, Win32 with Direct3D 12 / Direct2D; deck editor, runs on a worker, run monitor, results, examples, `--self-test` (6.14, Unit 26); **26b done, on `main`** (`51face0`, PR #60): live checking and completion, structure preview, cut lines, run comparison, mesh quality (6.14, Unit 26b); **26c done** (`app/gui-catch-up`, PR #61): arrows, streamlines, exploded view, curve pickers, region visibility, transient playback, clip sliders (6.14, Unit 26c); **26d done** (`app/gui-quick-wins`): no Apply, colour range, point labels, units in the metrics, viridis default, drag and drop, taskbar progress, dark title bar (6.14, Unit 26d) |
+| 26 | Native Windows application and workflow | app | **done, on `main`** (`e9b1d71`, PR #59): `nitcad-app.exe`, Win32 with Direct3D 12 / Direct2D; deck editor, runs on a worker, run monitor, results, examples, `--self-test` (6.14, Unit 26); **26b done, on `main`** (`51face0`, PR #60): live checking and completion, structure preview, cut lines, run comparison, mesh quality (6.14, Unit 26b); **26c done** (`app/gui-catch-up`, PR #61): arrows, streamlines, exploded view, curve pickers, region visibility, transient playback, clip sliders (6.14, Unit 26c); **26d done** (`app/gui-quick-wins`): no Apply, colour range, point labels, units in the metrics, viridis default, drag and drop, taskbar progress, dark title bar (6.14, Unit 26d); **26e built** (`app/hover-readout`): hover readout of values on field and curve views, viridis the default colormap of `nitcad plot` too (6.14, Unit 26e) |
 | 27 | Optimization / sensitivity / inverse-design workflows | analysis, solve | long-term target |
 | 28 | Bias step cutting (commercial-readiness programme, 11.3) | solve, results | **done, on `main`** (`06b708d`, PR #31): off by default; halving and growth from the last converged state (11.3, Unit 28; DECISIONS.md S1–S7) |
 | 29 | The io layer: files and checkpoint/restart (11.3) | io | **done, on `main`** (`f69a7a8`, PR #33): meshes, sweeps and checkpoints in a versioned, checksummed container with atomic writes; restart equals the uninterrupted sweep (6.6, Unit 29; DECISIONS.md IO1–IO7) |

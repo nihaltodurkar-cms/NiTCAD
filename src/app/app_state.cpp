@@ -57,6 +57,7 @@ std::string serialize(const AppState& s) {
     out += "tree_width = " + std::to_string(l.tree_width) + "\n";
     out += "inspector_width = " + std::to_string(l.inspector_width) + "\n";
     out += "deck_height = " + std::to_string(l.deck_height) + "\n";
+    out += "hover_readout = " + std::string(s.hover_readout ? "1" : "0") + "\n";
     return out;
 }
 
@@ -96,6 +97,8 @@ AppState parse_state(std::string_view text) {
             s.layout.inspector_width = v;
         } else if (key == "deck_height" && integer(value, v) && v >= 0) {
             s.layout.deck_height = v;
+        } else if (key == "hover_readout" && integer(value, v)) {
+            s.hover_readout = v != 0;
         }
     }
     return s;

@@ -34,8 +34,7 @@ void say(std::FILE* log, const std::string& line) {
 std::expected<SelfTestOptions, std::string> parse_self_test(std::span<const std::wstring> args) {
     SelfTestOptions o;
     o.view.kind = ViewKind::field;
-    // The options are nitcad plot's, so is the default colormap (turbo), not the app's (ZD8).
-    o.view.colormap = "turbo";
+    // The options are nitcad plot's; its default colormap is the app's, viridis (Unit 26e, HD4).
     bool view_given = false;
     for (std::size_t i = 0; i < args.size(); ++i) {
         const std::string a = win32::narrow(args[i]);
