@@ -927,8 +927,10 @@ all 38 files (`[.deck_compare]`), so #85 changed no GG2 output. Slice 3 is compa
   `residual` −4.7% to −13.0%; medians faster on 9 (the tenth, 3D drift-diffusion `evaluate`, +12.4% with its
   minimum −10.6%). Single rounds swung from −40% to +70% on one device, so the machine's noise even pinned is
   ±15–30% per run; nothing in this commit is on the `evaluate` or `residual` path of an existing system.
-- **GG5:** the full Release suite (`/W4 /WX`, ctest `-j 6`, 14.51) was running when this was committed (owner:
-  push now); its result follows in the next commit. Debug is left to CI (owner's standing rule).
+- **GG5:** Release, `/W4 /WX` (no warnings), MSVC 14.51, on the GG8 tree (2026-11-18): **233/233 pass**. The 226
+  regular tests with `-j 6` in 919 s, then the 7 full-tier tests serially (they are memory-heavy: TVB-04 reaches
+  about 20 GB) in 4,040 s (tvb04 1,356 s, tvb14 968 s, tvb20 671 s, tvb05 578 s, tvb19 466 s). A first attempt
+  running the full tier inside `-j 6` was stopped after 11 passing tests. Debug is left to CI (owner's standing rule).
 
 **Risks:** the bit-identity surface is the largest since Unit 40. Moving the bias and path state out of the system
 could change which values a copy sees (GG6's first three mutants target this). Slice 2's caller migration touches
