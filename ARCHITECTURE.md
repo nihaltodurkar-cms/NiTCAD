@@ -2979,6 +2979,34 @@ CG1–CG9; accepted by the owner 2026-10-22):**
   RTX 5060 Ti (the test skips without a GPU); on WARP, the test window's adapter, it is 1.22–1.29×, kept for the
   record only (DECISIONS.md Unit 26f). Full Release ctest stopped by the owner at 229 of 235 passed.
 
+**As built (Unit 26h, scale and orientation; DECISIONS.md JD1–JD5, JQ1–JQ6, JG1–JG9; on `app/scale-orientation`):**
+- **Axis box (JD1, JQ1–JQ3):** `render/axes3d.hpp`'s `axis_box(scene, w, h)` is pure. It returns the edges of the
+  three faces of the bounds turned away from the camera, and one outline edge per axis with 1-2-5 ticks in µm. x and
+  z take the nearer edge, y the leftmost on the screen, and an edge-on face counts as away on its lo side. An axis is
+  skipped at zero extent or under 24 px. Labels are de-overlapped across all three axes. The renderer draws the edges
+  depth-tested (grey, 1 px) and the ticks, labels and titles over the image, in enhanced 3D only (classic is
+  unchanged). `FieldScene::show_axis_box` defaults to on. It is set by the inspector's **Axis box** check box (saved
+  as `axis_box = 0|1`) and by `nitcad plot --axes on|off` (default on); `plot_arguments` names `--axes off`.
+- **View cube (JD2, JD3, JQ4):** `view_cube` and `view_cube_hit` are pure. In enhanced 3D, the cube replaces the
+  triad: 72 px across its diagonal, 88 px in from the lower-left corner, orthographic, key-lit faces named where they
+  fit, and x/y/z arrows reaching past it. It is drawn in `nitcad plot` images too, so the app and the command still
+  draw the same image. A click within 7 px of a corner snaps to that corner's isometric view, and a click on a face
+  to the face's named view. Cube clicks come before Probe, Measure and Cut line; a drag still orbits. The cursor is
+  a hand over the cube.
+- **Named views (JD4, JQ6):** `render::named_views()`: Front 0°/0°, Back 180°, Left 270°, Right 90°, Top and Bottom
+  ±90°, Isometric 35°/25°. They are in **View ▸ Look from** (a submenu, which keeps WG5's unique mnemonics; a
+  `CommandInfo::submenu` field) and on the numpad in the view (1, 3, 7 and Ctrl for the opposite side, 0), in both
+  looks. Each resets zoom and pan.
+- **Smooth moves (JD5, JQ5):** `app::camera_between(from, to, t)` eases with smoothstep. The azimuth takes the
+  shorter way round; elevation, zoom and pan move linearly in the same ease; t ≤ 0 and t ≥ 1 give the endpoints
+  exactly. Fit, the named views and cube snaps move over 250 ms on a 16 ms `WM_TIMER`. `app::smooth_moves(app,
+  windows, forced)` decides whether a move is smooth: only when `WindowOptions::animate` is on (the application only,
+  so tests and the self-test are instant) and Windows' "Show animations" is on. A drag, a wheel step or a key ends a
+  move at its frame.
+- Gates: JG1–JG7 met (the 26g enhanced references rebuilt with the box and cube, and `mosfet3d_solid_right_enhanced`
+  new, after the owner saw the images). JG8: the box and cube +0.13 ms, the slowest move frame 5.07 ms on the RTX
+  5060 Ti (bounds 1 and 16 ms). JG9: 10 hand mutants killed. The full suites wait for the owner (DECISIONS.md Unit 26h).
+
 ## 7. Language placement (D6: C and Fortran deferred)
 
 | Component | Language | Reason |

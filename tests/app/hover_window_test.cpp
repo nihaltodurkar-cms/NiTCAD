@@ -339,3 +339,64 @@ TEST_CASE("app window 26g: the enhanced draw within 1.25x of 26f's on the hardwa
                  << th[1] / th[0]);
     CHECK(th[1] <= 1.25 * th[0]);
 }
+
+// Unit 26h (JG8), by KG6's method on the hardware adapter, examples/mosfet_3d.deck: the axis box and view cube
+// add under 1 ms to the enhanced draw (medians of 50), and a smooth move's frames (the draw at each eased
+// camera) each take under 16 ms. WARP is recorded only.
+TEST_CASE("app window 26h: the axis box and cube under 1 ms, a smooth move's frames under 16 ms (JG8)", "[app]") {
+    auto w = example_3d_doping();
+    const int W = w->viewport().width(), H = w->viewport().height();
+    render::FieldScene with = std::get<render::FieldScene>(*w->scene());
+    render::set_look(with, render::Look::enhanced);
+    REQUIRE(with.show_axis_box);
+    REQUIRE(with.axis_triad);
+    render::FieldScene without = with;
+    without.show_axis_box = false;
+    without.axis_triad = false;
+    const auto cost = [&](render::Renderer& r) {
+        double t[2]{};
+        for (int mode = 0; mode < 2; ++mode) {
+            render::FieldScene& f = mode ? with : without;
+            std::vector<double> ms;
+            for (int k = 0; k < 55; ++k) {
+                f.camera.azimuth_deg += 1.0f;
+                const auto t0 = std::chrono::steady_clock::now();
+                REQUIRE(r.draw(f, W, H));
+                if (k >= 5) ms.push_back(std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count());
+            }
+            t[mode] = median_of(ms);
+        }
+        return std::array<double, 2>{t[0], t[1]};
+    };
+    // A move from the default camera to Right, zoomed in, at 16 frames: the slowest frame's draw.
+    const auto slowest_frame = [&](render::Renderer& r) {
+        const app::CameraPose from{35.0f, 25.0f, 2.0f, 0.1f, 0.0f}, to{90.0f, 0.0f, 1.0f, 0.0f, 0.0f};
+        render::FieldScene f = with;
+        REQUIRE(r.draw(f, W, H));  // warm
+        double worst = 0.0;
+        for (int k = 0; k <= 16; ++k) {
+            const app::CameraPose p = app::camera_between(from, to, static_cast<float>(k) / 16.0f);
+            f.camera.azimuth_deg = p.azimuth_deg;
+            f.camera.elevation_deg = p.elevation_deg;
+            f.camera.zoom = p.zoom;
+            f.camera.pan = {p.pan_x, p.pan_y};
+            const auto t0 = std::chrono::steady_clock::now();
+            REQUIRE(r.draw(f, W, H));
+            worst = std::max(worst, std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count());
+        }
+        return worst;
+    };
+    auto warp = render::Renderer::create({.adapter = render::Adapter::warp});
+    REQUIRE(warp);
+    const auto tw = cost(*warp);
+    WARN("JG8: WARP " << tw[1] << " ms with the box and cube, " << tw[0] << " ms without; slowest move frame "
+                      << slowest_frame(*warp) << " ms (recorded only)");
+    auto hw = render::Renderer::create({.adapter = render::Adapter::hardware});
+    if (!hw) SKIP("no Direct3D 12 hardware adapter: " + hw.error().message);
+    const auto th = cost(*hw);
+    const double frame = slowest_frame(*hw);
+    WARN("JG8: " << hw->adapter_name() << " " << th[1] << " ms with the box and cube, " << th[0]
+                 << " ms without (medians of 50), +" << th[1] - th[0] << " ms; slowest move frame " << frame << " ms");
+    CHECK(th[1] - th[0] < 1.0);
+    CHECK(frame < 16.0);
+}

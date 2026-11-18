@@ -859,6 +859,40 @@ The cursor becomes a hand over the cube.
 - **JG8.** The slowest frame of a smooth move drew in 13.8 ms on WARP (69 samples). The hardware figure is for
   26h·4.
 
+**Results, 26h·4 (2026-11-19).**
+- **JG1.** Every classic reference passes unchanged; only the three 26g enhanced references differ (1.1% of pixels,
+  the box and cube). They are rebuilt after the owner approves the images.
+- **JG7.** `mosfet3d_solid_right_enhanced` is new, a VG4 section. Its render showed the cube's arrows ending inside
+  the cube on head-on views. The arrows now reach 10 px past the cube, each label 8 px past its arrow's tip, and the
+  cube sits 88 px in from the corner.
+- **JG8**, by KG6's method on `examples/mosfet_3d.deck`, medians of 50:
+
+  | Adapter | Box and cube cost (bound 1 ms) | Slowest move frame (bound 16 ms) |
+  |---|---|---|
+  | NVIDIA GeForce RTX 5060 Ti | +0.13 ms (3.60 vs 3.47 ms) | 5.07 ms |
+  | WARP, recorded only | 15.99 vs 14.26 ms | 19.2 ms |
+
+  JG8 is met.
+- **JG9.** All 10 hand mutants were killed by tests. The tree was restored and touched after each mutant, with
+  baselines passing before and after.
+
+  | Mutant | Killed by |
+  |---|---|
+  | faces toward the camera | `render axes3d` |
+  | labels not de-overlapped | `render axes3d` |
+  | ticks in cm | `render axes3d` |
+  | face hit to the opposite preset | `render axes3d` (cube) |
+  | corners ignored | `render axes3d` (cube) |
+  | the azimuth's long way round | `app views 26h` (camera_between) |
+  | endpoint not exact | `app window 26h: smooth` |
+  | OS setting ignored | `app views 26h` (smooth_moves) |
+  | box drawn in classic | VG4 "3D solid" |
+  | `--axes` default off | `app views 26h` (plot images) |
+
+  The OS-setting rule was moved into the pure `app::smooth_moves`, so a test can reach it. The first try of that
+  mutant failed only on an unused-parameter warning and was rerun with the parameter used.
+- **Still open.** The full Release and Debug suites wait for the owner's word.
+
 **Slices (each one local commit):** 26h·1 `axis_box`, drawn, its switch (JD1; JG2, JG6 part); 26h·2 `view_cube`, hit
 testing, snapping (JD2, JD3; JG3, JG6 part); 26h·3 named views and smooth moves (JD4, JD5; JG4, JG5, JG8); 26h·4
 references, suites, mutants (JG1, JG7, JG9), the ARCHITECTURE entry.
