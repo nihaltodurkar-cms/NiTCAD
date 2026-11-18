@@ -248,12 +248,29 @@ TEST_CASE("app window 26f: the enhanced look's edges are built with the scene, u
     CHECK(edges < 50.0);
 }
 
-// The redraw clause as frozen, on the test window's WARP adapter: enhanced measured at about 1.25x classic
-// (the per-pixel lighting runs on the CPU there); on the hardware adapter it is about 1.03x. Tagged
-// [!shouldfail] pending the owner's ruling on KG6 (DECISIONS.md, Unit 26f results).
-TEST_CASE("app window 26f: a camera-move redraw within 10% of classic on WARP (KG6)", "[app][!shouldfail]") {
+// The redraw clause, measured on the hardware adapter by the owner's ruling (KG6 (b), 2026-11-18): the
+// scene drawn off screen (no vsync), its camera turned 1 degree before each draw and nothing rebuilt.
+// Skipped where there is no hardware adapter (CI). The test window's WARP drag is reported only:
+// there the per-pixel lighting runs on the CPU (about 1.25x classic).
+TEST_CASE("app window 26f: a camera-move redraw within 10% of classic on the hardware adapter (KG6)", "[app]") {
+    auto hw = render::Renderer::create({.adapter = render::Adapter::hardware});
+    if (!hw) SKIP("no Direct3D 12 hardware adapter: " + hw.error().message);
     auto w = example_3d_doping();
-    // 50 steps of a left-button drag in each look, after 5 to warm up; the camera turns, nothing is rebuilt.
+    const int W = w->viewport().width(), H = w->viewport().height();
+    render::FieldScene f = std::get<render::FieldScene>(*w->scene());
+    double t[2]{};
+    for (int mode = 0; mode < 2; ++mode) {
+        render::set_look(f, mode ? render::Look::enhanced : render::Look::classic);
+        std::vector<double> ms;
+        for (int k = 0; k < 55; ++k) {
+            f.camera.azimuth_deg += 1.0f;
+            const auto t0 = std::chrono::steady_clock::now();
+            REQUIRE(hw->draw(f, W, H));
+            if (k >= 5) ms.push_back(std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count());
+        }
+        t[mode] = median_of(ms);
+    }
+    // For the record: the window's own drag on WARP, each look.
     const HWND view = w->viewport().hwnd();
     const int cy = w->viewport().height() / 2;
     const auto orbits = [&] {
@@ -264,38 +281,19 @@ TEST_CASE("app window 26f: a camera-move redraw within 10% of classic on WARP (K
             x += 3;
             const auto t0 = std::chrono::steady_clock::now();
             SendMessageW(view, WM_MOUSEMOVE, MK_LBUTTON, MAKELPARAM(x, cy));
-            const double t = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
-            if (k >= 5) ms.push_back(t);
+            const double d = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+            if (k >= 5) ms.push_back(d);
         }
         SendMessageW(view, WM_LBUTTONUP, 0, MAKELPARAM(x, cy));
         return median_of(ms);
     };
     REQUIRE(w->settings().enhanced);
-    const double enhanced = orbits();
-    REQUIRE(w->settings().azimuth.has_value());  // the drag turned the camera
+    const double warp_enhanced = orbits();
     w->settings().enhanced = false;
     w->refresh();
-    REQUIRE(std::get<render::FieldScene>(*w->scene()).look == render::Look::classic);
-    const double classic = orbits();
-    WARN("KG6: orbit redraw on WARP " << enhanced << " ms enhanced, " << classic << " ms classic (medians of 50), ratio "
-                                      << enhanced / classic);
-    // The same scene drawn off screen on the hardware adapter, where there is one (no vsync there).
-    if (auto hw = render::Renderer::create({.adapter = render::Adapter::hardware}); hw) {
-        render::FieldScene f = std::get<render::FieldScene>(*w->scene());
-        const int W = w->viewport().width(), H = w->viewport().height();
-        double t[2]{};
-        for (int mode = 0; mode < 2; ++mode) {
-            render::set_look(f, mode ? render::Look::enhanced : render::Look::classic);
-            std::vector<double> ms;
-            for (int k = 0; k < 55; ++k) {
-                const auto t0 = std::chrono::steady_clock::now();
-                REQUIRE(hw->draw(f, W, H));
-                if (k >= 5) ms.push_back(std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count());
-            }
-            t[mode] = median_of(ms);
-        }
-        WARN("KG6: draw on " << hw->adapter_name() << " " << t[1] << " ms enhanced, " << t[0] << " ms classic (medians of 50), ratio "
-                             << t[1] / t[0]);
-    }
-    CHECK(enhanced <= 1.10 * classic);
+    const double warp_classic = orbits();
+    WARN("KG6: redraw on " << hw->adapter_name() << " " << t[1] << " ms enhanced, " << t[0]
+                           << " ms classic (medians of 50), ratio " << t[1] / t[0] << "; WARP drag " << warp_enhanced
+                           << " ms enhanced, " << warp_classic << " ms classic, ratio " << warp_enhanced / warp_classic);
+    CHECK(t[1] <= 1.10 * t[0]);
 }

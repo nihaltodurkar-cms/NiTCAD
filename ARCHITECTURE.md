@@ -2973,11 +2973,11 @@ CG1–CG9; accepted by the owner 2026-10-22):**
   (on when absent). `build_scene` calls `set_look` after every overlay. `nitcad plot --look classic|enhanced`
   defaults to enhanced (film frames and adaptive-pass tiles too), and `plot_arguments` names `--look classic` only
   when the box is off. A 3D `nitcad plot` run without `--look` draws the enhanced look: the user-visible change.
-- Gates: KG1–KG5 and KG8 met (85 render cases with 2 new WARP references, `mosfet3d_solid_enhanced` and
+- Gates: KG1–KG8 met (85 render cases with 2 new WARP references, `mosfet3d_solid_enhanced` and
   `mosfet3d_surface_potential_enhanced`; app, window and self-test cases; 10 hand mutants killed). KG6: edges
-  built in 1.75–1.91 ms on `examples/mosfet_3d.deck` (bound 50 ms). The redraw is 1.03–1.07× classic on the
-  RTX 5060 Ti but 1.25–1.28× on WARP, the test window's adapter, so that clause is tagged `[!shouldfail]` until
-  the owner rules (DECISIONS.md Unit 26f). Full Release ctest stopped by the owner at 229 of 235 passed.
+  built in 1.75–1.91 ms on `examples/mosfet_3d.deck` (bound 50 ms). The redraw, measured on the hardware adapter by the owner's ruling, is 0.85–1.07× classic on the
+  RTX 5060 Ti (the test skips without a GPU); on WARP, the test window's adapter, it is 1.22–1.29×, kept for the
+  record only (DECISIONS.md Unit 26f). Full Release ctest stopped by the owner at 229 of 235 passed.
 
 ## 7. Language placement (D6: C and Fortran deferred)
 
