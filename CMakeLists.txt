@@ -551,6 +551,7 @@ add_library(nitcad_render STATIC
   src/render/streamlines.cpp
   src/render/cut_line.cpp
   src/render/quality.cpp
+  src/render/edges.cpp
   src/render/compare.cpp
   src/render/renderer.cpp
   src/render/png.cpp
@@ -574,6 +575,7 @@ add_executable(nitcad_render_test
   tests/render/hidden_test.cpp
   tests/render/film_test.cpp
   tests/render/cut_line_test.cpp
+  tests/render/edges_test.cpp
   tests/render/quality_test.cpp
   tests/render/compare_test.cpp
   tests/render/image_test.cpp

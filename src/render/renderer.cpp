@@ -14,7 +14,6 @@
 #include <array>
 #include <chrono>
 #include <cmath>
-#include <cstdlib>
 #include <cstring>
 #include <format>
 #include <functional>
@@ -23,7 +22,6 @@
 #include <optional>
 #include <string>
 #include <string_view>
-#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -83,6 +81,8 @@ using Mat4 = std::array<float, 16>;  // row-major, row vectors: p' = p M
 struct View {
     Mat4 view_projection{};
     std::array<double, 3> right{}, up{}, forward{};
+    std::array<double, 3> eye_position{};  // perspective only, um
+    bool perspective = false;
 };
 
 double dotd(const std::array<double, 3>& a, const std::array<double, 3>& b) {
@@ -163,10 +163,44 @@ View make_view(const FieldScene& s, double aspect) {
         m[13] = static_cast<float>(ty * sy);
         m[14] = static_cast<float>((tz + D) * fz / (fz - n) - fz * n / (fz - n));
         m[15] = static_cast<float>(tz + D);
+        // The eye: the point with vx = vy = 0 and w = vz + D = 0.
+        for (std::size_t i = 0; i < 3; ++i) v.eye_position[i] = c[i] + cx * r[i] + cy * u[i] - D * f[i];
+        v.perspective = true;
     }
     v.view_projection = m;
     return v;
 }
+
+// The light from the upper left, over the viewer's shoulder (both looks).
+std::array<double, 3> key_light(const View& v) {
+    std::array<double, 3> L{};
+    for (std::size_t i = 0; i < 3; ++i) L[i] = -v.forward[i] * 0.75 + v.up[i] * 0.55 - v.right[i] * 0.35;
+    return unitd(L);
+}
+
+}  // namespace
+
+FrameLighting frame_lighting(const FieldScene& s, double aspect) noexcept {
+    FrameLighting out;
+    if (s.look != Look::enhanced || s.dimension != 3) return out;
+    const View v = make_view(s, aspect);
+    const std::array<double, 3> L = key_light(v);
+    // The fill from the lower right, on the other side of the eye from the key.
+    std::array<double, 3> F{};
+    for (std::size_t i = 0; i < 3; ++i) F[i] = -v.forward[i] * 0.6 - v.up[i] * 0.25 + v.right[i] * 0.75;
+    F = unitd(F);
+    for (std::size_t i = 0; i < 3; ++i) {
+        out.key[i] = static_cast<float>(L[i]);
+        out.fill[i] = static_cast<float>(F[i]);
+        out.up[i] = static_cast<float>(v.up[i]);
+        out.eye[i] = static_cast<float>(v.perspective ? v.eye_position[i] : -v.forward[i]);
+    }
+    out.perspective = v.perspective;
+    out.enhanced = true;
+    return out;
+}
+
+namespace {
 
 // Pixel position of a world point in a view rectangle.
 D2D1_POINT_2F project(const View& v, const Float3& p, const D2D1_RECT_F& rect) {
@@ -191,92 +225,20 @@ struct FrameConstants {
     float line_width;
     float colormap[256][4];
     float no_data[4];
-    // Visual prototype (NITCAD_VISUAL_PROTO=1): see scene.hlsl.
-    float eye[3];
-    float style;
+    // The enhanced look (Unit 26f, KD2, KD4); zero for classic (see scene.hlsl).
+    float eye[3];  // toward the viewer (orthographic) or the camera's position (perspective), world
+    float style;   // 1 enhanced
     float up[3];
-    float spare0;
+    float perspective;  // 1 when eye is a position
     float fill[3];
-    float spare1;
+    float spare;
     float bg_top[4];
     float bg_bottom[4];
     float view_rect[4];
     float pad[12];
 };
 static_assert(sizeof(FrameConstants) % 256 == 0);
-static_assert(sizeof(FrameConstants) == 4352);
-
-// The visual prototype: three-point lighting, feature edges and a gradient background on 3D views,
-// chosen by the environment variable NITCAD_VISUAL_PROTO=1 (read once). Off, the drawing is unchanged.
-bool visual_prototype() {
-    static const bool on = [] {
-        char* v = nullptr;
-        std::size_t n = 0;
-        const bool set = _dupenv_s(&v, &n, "NITCAD_VISUAL_PROTO") == 0 && v && v[0] == '1';
-        std::free(v);
-        return set;
-    }();
-    return on;
-}
-
-// Feature edges of a 3D triangle batch: the batch's open boundary and the edges where the faces on
-// either side turn by more than about 30 degrees. Vertices are matched by their exact positions.
-void feature_edges(const TriangleBatch& b, std::vector<std::array<Float3, 2>>& out) {
-    struct Key {
-        Float3 a, b;
-        bool operator==(const Key&) const = default;
-    };
-    struct Hash {
-        std::size_t operator()(const Key& k) const {
-            std::size_t h = 1469598103934665603ull;
-            const auto mix = [&](float f) {
-                std::uint32_t u;
-                std::memcpy(&u, &f, 4);
-                h = (h ^ u) * 1099511628211ull;
-            };
-            for (int i = 0; i < 3; ++i) mix(k.a[static_cast<std::size_t>(i)]);
-            for (int i = 0; i < 3; ++i) mix(k.b[static_cast<std::size_t>(i)]);
-            return h;
-        }
-    };
-    struct Entry {
-        std::array<float, 3> n;
-        int count;
-        bool sharp;
-    };
-    std::unordered_map<Key, Entry, Hash> edges;
-    edges.reserve(b.vertices.size());
-    const auto less = [](const Float3& p, const Float3& q) {
-        return std::lexicographical_compare(p.begin(), p.end(), q.begin(), q.end());
-    };
-    for (std::size_t t = 0; t + 2 < b.vertices.size(); t += 3) {
-        const Float3& p0 = b.vertices[t].position;
-        const Float3& p1 = b.vertices[t + 1].position;
-        const Float3& p2 = b.vertices[t + 2].position;
-        const float ux = p1[0] - p0[0], uy = p1[1] - p0[1], uz = p1[2] - p0[2];
-        const float vx = p2[0] - p0[0], vy = p2[1] - p0[1], vz = p2[2] - p0[2];
-        std::array<float, 3> n{uy * vz - uz * vy, uz * vx - ux * vz, ux * vy - uy * vx};
-        const float len = std::sqrt(n[0] * n[0] + n[1] * n[1] + n[2] * n[2]);
-        if (!(len > 0.0f)) continue;
-        for (float& c : n) c /= len;
-        const Float3* q[3] = {&p0, &p1, &p2};
-        for (int e = 0; e < 3; ++e) {
-            const Float3& a = *q[e];
-            const Float3& c = *q[(e + 1) % 3];
-            const Key k = less(a, c) ? Key{a, c} : Key{c, a};
-            auto [it, fresh] = edges.try_emplace(k, Entry{n, 1, false});
-            if (fresh) continue;
-            Entry& en = it->second;
-            ++en.count;
-            // Either orientation of the neighbour (a slice may be wound either way).
-            const float d = std::abs(en.n[0] * n[0] + en.n[1] * n[1] + en.n[2] * n[2]);
-            if (d < 0.866f) en.sharp = true;
-        }
-    }
-    for (const auto& [k, en] : edges) {
-        if (en.count == 1 || en.count > 2 || en.sharp) out.push_back({k.a, k.b});
-    }
-}
+static_assert(sizeof(FrameConstants) == 4352);  // the HLSL block's size; the fields match scene.hlsl
 
 struct MeshVertex {
     float position[3];
@@ -917,41 +879,16 @@ std::expected<void, base::Error> Renderer::Impl::render_field(const FieldScene& 
         }
         line_ranges.push_back({first, lines.size() - first, l.width_px, l.on_top});
     }
-    const bool proto = visual_prototype() && s.dimension == 3;
-    if (proto) {
-        // Feature edges of the solid surfaces (not arrows, streamline tubes or isosurfaces).
-        std::vector<std::array<Float3, 2>> edges;
-        for (const TriangleBatch& b : s.triangles) {
-            if (!b.lit || b.name == "arrows" || b.name == "isosurface" || b.name == "outline") continue;
-            feature_edges(b, edges);
-        }
-        const std::size_t first = lines.size();
-        const float ink[4] = {0.08f, 0.09f, 0.11f, 0.85f};
-        for (const auto& [a, b] : edges) {
-            const auto vert = [&](const Float3& p, const Float3& q, float side) {
-                lines.push_back({{p[0], p[1], p[2]}, {q[0], q[1], q[2]}, side, {ink[0], ink[1], ink[2], ink[3]}});
-            };
-            vert(a, b, -1.0f);
-            vert(a, b, 1.0f);
-            vert(b, a, -1.0f);
-            vert(a, b, -1.0f);
-            vert(b, a, -1.0f);
-            vert(b, a, 1.0f);
-        }
-        line_ranges.push_back({first, lines.size() - first, 1.7f, false});
-    }
+    // The enhanced look (Unit 26f): its lights, and the gradient behind a 3D view (KD2, KD4). Its
+    // feature edges are already among the scene's lines (set_look).
+    const FrameLighting lighting = frame_lighting(s, aspect);
+    const bool enhanced = lighting.enhanced;
 
     // Constants: one block per draw.
     FrameConstants base{};
     base.view_projection = v.view_projection;
     {
-        // The light from the upper left, over the viewer's shoulder.
-        std::array<double, 3> L{};
-        for (int i = 0; i < 3; ++i) {
-            const auto ii = static_cast<std::size_t>(i);
-            L[ii] = -v.forward[ii] * 0.75 + v.up[ii] * 0.55 - v.right[ii] * 0.35;
-        }
-        L = unitd(L);
+        const std::array<double, 3> L = key_light(v);
         base.light[0] = static_cast<float>(L[0]);
         base.light[1] = static_cast<float>(L[1]);
         base.light[2] = static_cast<float>(L[2]);
@@ -959,20 +896,13 @@ std::expected<void, base::Error> Renderer::Impl::render_field(const FieldScene& 
     base.ambient = 0.38f;
     base.viewport[0] = (view.right - view.left) * supersample;
     base.viewport[1] = (view.bottom - view.top) * supersample;
-    if (proto) {
-        // Fill from the lower right, opposite the key; the eye and up of the camera.
-        std::array<double, 3> F{};
-        for (int i = 0; i < 3; ++i) {
-            const auto ii = static_cast<std::size_t>(i);
-            F[ii] = -v.forward[ii] * 0.6 - v.up[ii] * 0.25 + v.right[ii] * 0.75;
+    if (enhanced) {
+        for (std::size_t i = 0; i < 3; ++i) {
+            base.eye[i] = lighting.eye[i];
+            base.up[i] = lighting.up[i];
+            base.fill[i] = lighting.fill[i];
         }
-        F = unitd(F);
-        for (int i = 0; i < 3; ++i) {
-            const auto ii = static_cast<std::size_t>(i);
-            base.eye[ii] = static_cast<float>(-v.forward[ii]);
-            base.up[ii] = static_cast<float>(v.up[ii]);
-            base.fill[ii] = static_cast<float>(F[ii]);
-        }
+        base.perspective = lighting.perspective ? 1.0f : 0.0f;
         base.style = 1.0f;
         const float top[4] = {0.86f, 0.89f, 0.93f, 1.0f};
         const float bottom[4] = {0.99f, 0.99f, 1.0f, 1.0f};
@@ -1067,7 +997,7 @@ std::expected<void, base::Error> Renderer::Impl::render_field(const FieldScene& 
         const D3D12_VERTEX_BUFFER_VIEW line_view{(*lbr)->GetGPUVirtualAddress(),
                                                  static_cast<UINT>(std::max<std::size_t>(lines.size() * sizeof(LineVertex), 256)),
                                                  sizeof(LineVertex)};
-        if (proto) {
+        if (enhanced) {
             list->OMSetRenderTargets(1, &ssaa_rtv, FALSE, nullptr);
             list->SetPipelineState(background.Get());
             list->SetGraphicsRootConstantBufferView(0, cb_base);

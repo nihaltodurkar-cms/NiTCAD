@@ -88,6 +88,20 @@ struct ScreenPoint {
 };
 [[nodiscard]] ScreenPoint screen_position(const FieldScene& scene, int width, int height, const Float3& point);
 
+// The enhanced look's lights for a FieldScene drawn into a view of this aspect (width / height)
+// (Unit 26f, KD2): unit vectors toward the key and fill lights and the camera's up, and the eye, a
+// unit vector toward the viewer (orthographic) or the camera's position in um (perspective). All zero,
+// and enhanced false, for a classic or a 2D scene.
+struct FrameLighting {
+    std::array<float, 3> key{};
+    std::array<float, 3> fill{};
+    std::array<float, 3> up{};
+    std::array<float, 3> eye{};
+    bool perspective = false;
+    bool enhanced = false;
+};
+[[nodiscard]] FrameLighting frame_lighting(const FieldScene& scene, double aspect) noexcept;
+
 // The axes' frame of a PlotScene drawn at this size, pixels, as draw() lays it out (Unit 26e, HD2).
 struct PlotFrame {
     float left = 0.0f;

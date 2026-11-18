@@ -24,6 +24,7 @@
 #include "NiTCAD/physics/insulator.hpp"
 #include "NiTCAD/physics/semiconductor.hpp"
 #include "NiTCAD/render/compare.hpp"
+#include "NiTCAD/render/edges.hpp"
 #include "NiTCAD/render/image.hpp"
 #include "NiTCAD/render/scene.hpp"
 #include "NiTCAD/render/streamlines.hpp"
@@ -287,9 +288,17 @@ TEST_CASE("render image: the views match their WARP references (VG4)") {
     SECTION("2D potential map") {
         FieldOptions o = field_options(m2.device, m2.point, Field::potential, values);
         o.contours = true;
-        const auto s = field_view(m2.device, g2, values, o);
+        auto s = field_view(m2.device, g2, values, o);
         REQUIRE(s.has_value());
-        check_image(*r.draw(*s, W, H), "mosfet2d_potential");
+        CHECK(s->look == Look::classic);
+        const auto classic = r.draw(*s, W, H);
+        REQUIRE(classic.has_value());
+        check_image(*classic, "mosfet2d_potential");
+        // Unit 26f (KG1): 2D ignores the look, to the bit.
+        set_look(*s, Look::enhanced);
+        const auto enhanced = r.draw(*s, W, H);
+        REQUIRE(enhanced.has_value());
+        CHECK(enhanced->rgba == classic->rgba);
     }
     SECTION("2D regions and mesh") {
         const auto s = mesh_view(m2.device, g2);
@@ -353,6 +362,26 @@ TEST_CASE("render image: the views match their WARP references (VG4)") {
             const auto s = field_view(m3.device, g3, values, o);
             REQUIRE(s.has_value());
             check_image(*r.draw(*s, W, H), std::string("mosfet3d_surface_") + std::string(field_info(f).key));
+        }
+    }
+    // Unit 26f (KG4): the enhanced look on the solid and the potential surface, each its own reference
+    // and each unlike its classic render.
+    SECTION("3D solid and potential surface, enhanced") {
+        const FieldOptions o = field_options(m3.device, m3.point, Field::potential, values);
+        auto solid = solid_view(m3.device, g3);
+        auto surface = field_view(m3.device, g3, values, o);
+        REQUIRE(solid.has_value());
+        REQUIRE(surface.has_value());
+        for (auto* s : {&*solid, &*surface}) {
+            const auto classic = r.draw(*s, W, H);
+            REQUIRE(classic.has_value());
+            set_look(*s, Look::enhanced);
+            const auto enhanced = r.draw(*s, W, H);
+            REQUIRE(enhanced.has_value());
+            check_image(*enhanced, s == &*solid ? "mosfet3d_solid_enhanced" : "mosfet3d_surface_potential_enhanced");
+            const auto d = compare(*enhanced, *classic, 24);
+            REQUIRE(d.has_value());
+            CHECK(d->fraction_over > 0.05);
         }
     }
     SECTION("3D mesh") {

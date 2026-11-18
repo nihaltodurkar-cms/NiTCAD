@@ -72,6 +72,11 @@ struct Colorbar {
     std::string title;  // the field and its unit, e.g. "n (cm⁻³)"
 };
 
+// How a 3D FieldScene is shaded (Unit 26f, KD1): classic, one light and ambient on white, as since Unit 25a;
+// enhanced, key, fill and rim lights, a sky/ground ambient and a soft highlight, the feature edges
+// that set_look adds, over a vertical gradient. The render layer defaults to classic; 2D ignores it.
+enum class Look : std::uint8_t { classic, enhanced };
+
 enum class Projection : std::uint8_t { orthographic, perspective };
 
 // Looks at `target` from the direction given by azimuth (about +y, from +z toward +x) and elevation
@@ -102,6 +107,7 @@ struct FieldScene {
     Float3 lo{};  // bounds of everything drawn, um
     Float3 hi{};
     bool axis_triad = true;
+    Look look = Look::classic;  // Unit 26f (KD1): 3D shading; set with set_look (edges.hpp)
 };
 
 // --- fields -------------------------------------------------------------------------------------
