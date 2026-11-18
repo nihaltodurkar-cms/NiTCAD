@@ -577,6 +577,7 @@ add_executable(nitcad_render_test
   tests/render/film_test.cpp
   tests/render/cut_line_test.cpp
   tests/render/edges_test.cpp
+  tests/render/axes3d_test.cpp
   tests/render/quality_test.cpp
   tests/render/compare_test.cpp
   tests/render/image_test.cpp

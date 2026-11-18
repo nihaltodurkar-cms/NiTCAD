@@ -29,6 +29,7 @@ struct AppState {
     Layout layout;
     bool hover_readout = true;  // View > Hover readout (Unit 26e, HD3)
     bool enhanced_look = true;  // the inspector's Enhanced 3D look, for new views (Unit 26f, KD5)
+    bool axis_box = true;       // the inspector's Axis box, for new views (Unit 26h, JD1, JQ3)
 
     // Moves (or adds) the path to the front, dropping the oldest beyond max_recent.
     void add_recent(const std::filesystem::path& path);

@@ -1291,3 +1291,49 @@ TEST_CASE("app views 26f: the enhanced 3D look is the default in the app and nit
     CHECK(bad.status != 0);
     CHECK(bad.output.find("--look is classic or enhanced") != std::string::npos);
 }
+
+TEST_CASE("app views 26h: the axis box, on by default in the app and nitcad plot (JD1, JQ3, JG6)", "[app]") {
+    const ViewSettings fresh;
+    CHECK(fresh.axis_box);
+    const app::Workspace& w3 = mosfet3d().workspace;
+    ViewSettings s;
+    s.kind = ViewKind::solid;
+    const auto on = app::build_scene(w3, s);
+    REQUIRE(on);
+    CHECK(std::get<render::FieldScene>(*on).show_axis_box);
+    CHECK_FALSE(std::ranges::any_of(app::plot_arguments(s), [](const std::string& a) { return a == "--axes"; }));
+    s.axis_box = false;
+    const auto off = app::build_scene(w3, s);
+    REQUIRE(off);
+    CHECK_FALSE(std::get<render::FieldScene>(*off).show_axis_box);
+    const auto args = app::plot_arguments(s);
+    CHECK(std::ranges::search(args, std::vector<std::string>{"--axes", "off"}).begin() != args.end());
+    // Classic draws no box, so the command names no --axes there.
+    s.enhanced = false;
+    CHECK_FALSE(std::ranges::any_of(app::plot_arguments(s), [](const std::string& a) { return a == "--axes"; }));
+    // nitcad plot: no --axes draws what --axes on draws, unlike --axes off; a bad value is refused.
+    const fs::path out = app_test::scratch("views_26h_axes");
+    const auto plot = [&](const std::string& extra, const std::string& name) {
+        const std::string cli_args = "plot " + app_test::quoted(mosfet3d().deck) + " --view solid " + extra +
+                                     " --size 480x360 --adapter warp --out " + app_test::quoted(out / name);
+        const auto cli = app_test::nitcad(cli_args);
+        CAPTURE(cli_args, cli.output);
+        REQUIRE(cli.status == 0);
+        auto png = render::load_png(out / name);
+        REQUIRE(png);
+        return std::move(*png);
+    };
+    const auto max_channel = [](const render::Image& x, const render::Image& y) {
+        const auto diff = render::compare(x, y, 0);
+        REQUIRE(diff);
+        return diff->max_channel;
+    };
+    const auto none = plot("", "none.png");
+    const auto with = plot("--axes on", "on.png");
+    const auto without = plot("--axes off", "off.png");
+    CHECK(max_channel(none, with) == 0);
+    CHECK(max_channel(none, without) > 0);
+    const auto bad = app_test::nitcad("plot " + app_test::quoted(mosfet3d().deck) + " --axes maybe --out " +
+                                      app_test::quoted(out / "bad.png"));
+    CHECK(bad.status != 0);
+}

@@ -824,6 +824,15 @@ JQ6 (a). Implementation waits for the owner's go-ahead, after 26g.
 | JG8 | Cost (hardware adapter, KG6 method): drawing the axis box and cube adds under 1 ms. A smooth move's frames each take under 16 ms on `examples/mosfet_3d.deck`. |
 | JG9 | Hand mutants, each killed by a test: the box's faces toward the camera chosen instead; labels not de-overlapped; ticks in cm; a cube face hit mapped to the opposite preset; corners ignored; the azimuth's long way round; the endpoint not exact (t = 1 left at the last eased frame); animation ignoring the OS setting; the axis box drawn in classic; `--axes` default off. |
 
+**As built, 26h·1 (2026-11-19).** JD1's "the box edge nearest the viewer" is read per axis. x and z take the nearer
+of their two outline edges. y takes the one further left on the screen: JD1's own example, "the front y edge on the
+left", is not the nearer one on a box wider than it is deep, such as the test MOSFET. A face seen exactly edge-on
+counts as turned away on its lo side. Labels are de-overlapped across all three axes, as JG2's "no two kept labels"
+requires. `axis_box` lives in `renderer.cpp` beside `make_view`; it is pure, with no GPU work.
+
+The three 26g enhanced references now change by design, because the axis box is on by default in enhanced (JQ3). As
+in 26g, they are rebuilt in 26h·4 only after the owner sees the images.
+
 **Slices (each one local commit):** 26h·1 `axis_box`, drawn, its switch (JD1; JG2, JG6 part); 26h·2 `view_cube`, hit
 testing, snapping (JD2, JD3; JG3, JG6 part); 26h·3 named views and smooth moves (JD4, JD5; JG4, JG5, JG8); 26h·4
 references, suites, mutants (JG1, JG7, JG9), the ARCHITECTURE entry.

@@ -1485,3 +1485,42 @@ TEST_CASE("app window 26f: the Enhanced 3D look check box (KD5, KG5)", "[app]") 
     CHECK_FALSE(shown(*w, MainWindow::id_enhanced));
     CHECK_FALSE(w->settings().enhanced);
 }
+
+TEST_CASE("app window 26h: the Axis box check box (JD1, JQ3, JG6)", "[app]") {
+    const fs::path dir = app_test::scratch("window_axis_box");
+    const fs::path deck = app_test::write(dir, "mosfet3d.deck", app_test::mosfet3d);
+    auto w = window();
+    REQUIRE(w->open_deck(deck));
+    REQUIRE(pump_until([&] { return w->workspace() != nullptr && !w->runner().busy(); }));
+    w->execute(Command::run);
+    REQUIRE(pump_until([&] { return !w->runner().busy() && w->workspace() && w->workspace()->has_results(); }));
+    w->select_tab(MainWindow::tab_view);
+    choose(*w, MainWindow::id_view, L"solid");
+    const auto boxed = [&] {
+        REQUIRE(w->scene());
+        return std::get<render::FieldScene>(*w->scene()).show_axis_box;
+    };
+    // On by default on a 3D view; the command names no --axes and draws the app's image.
+    CHECK(w->app_state().axis_box);
+    CHECK(shown(*w, MainWindow::id_axis_box));
+    CHECK(SendMessageW(w->child(MainWindow::id_axis_box), BM_GETCHECK, 0, 0) == BST_CHECKED);
+    CHECK(boxed());
+    same_as_plot(*w, deck, dir / "boxed.png");
+    // Off: no box, --axes off in the command, the same image; remembered in the saved state.
+    click(*w, MainWindow::id_axis_box);
+    CHECK_FALSE(w->settings().axis_box);
+    CHECK_FALSE(boxed());
+    const auto args = app::plot_arguments(w->settings());
+    CHECK(std::ranges::search(args, std::vector<std::string>{"--axes", "off"}).begin() != args.end());
+    same_as_plot(*w, deck, dir / "unboxed.png");
+    CHECK_FALSE(w->app_state().axis_box);
+    CHECK_FALSE(app::parse_state(app::serialize(w->app_state())).axis_box);
+    // Hidden on the curves and on a 2D device.
+    w->select_tab(MainWindow::tab_curves);
+    CHECK_FALSE(shown(*w, MainWindow::id_axis_box));
+    const fs::path deck2 = app_test::write(dir, "generate2d.deck", app_test::generate2d);
+    REQUIRE(w->open_deck(deck2));
+    REQUIRE(pump_until([&] { return w->workspace() != nullptr && !w->runner().busy(); }));
+    w->select_tab(MainWindow::tab_view);
+    CHECK_FALSE(shown(*w, MainWindow::id_axis_box));
+}

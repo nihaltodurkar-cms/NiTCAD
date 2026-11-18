@@ -177,6 +177,8 @@ public:
         id_range_min, id_range_max, id_range_auto,
         // Unit 26f (KD5): the enhanced 3D look.
         id_enhanced,
+        // Unit 26h (JD1): the axis box.
+        id_axis_box,
         id_first_label = 5100,
     };
 

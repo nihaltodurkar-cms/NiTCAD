@@ -413,6 +413,7 @@ std::expected<Scene, base::Error> build_scene(const Workspace& w, const ViewSett
             if (cut) add_cut_line(*f, *cut);
             apply_camera(*f, o);
             set_look(*f, o.enhanced ? Look::enhanced : Look::classic);  // Unit 26f (KD5): after every overlay
+            f->show_axis_box = o.axis_box;  // Unit 26h (JD1, JQ3)
         }
         return scene;
     };
@@ -901,6 +902,7 @@ std::vector<std::string> plot_arguments(const ViewSettings& s, const Workspace* 
     if (s.opaque) a.emplace_back("--opaque");
     if (s.perspective) a.emplace_back("--perspective");
     if (!s.enhanced) a.insert(a.end(), {"--look", "classic"});  // Unit 26f (KD5): enhanced is the default
+    if (s.enhanced && !s.axis_box) a.insert(a.end(), {"--axes", "off"});  // Unit 26h (JQ3): on is the default
     if (s.azimuth) a.insert(a.end(), {"--azimuth", std::format("{}", *s.azimuth)});
     if (s.elevation) a.insert(a.end(), {"--elevation", std::format("{}", *s.elevation)});
     for (const auto& p : s.slices) {
