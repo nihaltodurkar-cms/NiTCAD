@@ -641,6 +641,28 @@ dispatch would be tested together, so a failure would not say which); publishing
 take the recommended option. Pushing, the PR, tags and the full Release/Debug suites still wait for the owner's
 word.
 
+**Results (2026-11-19):** slices 1–3 are committed locally: `9c1b269` (`compare_sweeps`), `eec8f76` (`nitcad compare`,
+0.1.0, the tag check, the ctests), `4efc99c` (the references, written by `eec8f76`'s Release build; its provenance
+says "modified" because the owner's uncommitted `.gitignore` edit and two untracked decks were in the tree), and the
+records.
+- **XG1, XG2:** `[compare]`, 7 test cases (398 assertions), Release and Debug.
+- **XG3:** `compare_cli.*`, 7 ctests (0 self, 4 differ with the diode's body doping doubled, 1 not comparable, 1
+  unreadable, 64 for one file, a negative `--rtol` and an unknown option).
+- **XG4 local half:** `cross_machine_pn_diode_1d` and `cross_machine_mosfet_2d` pass in Release (bit-identical, 0
+  differences) and in **Debug against the Release references**. The diode differs at round-off: largest ratio 2.1e-6
+  (terminal current 6.0e-12 A/cm²), ψ 1.1e-10, n 4.1e-10, p 2.9e-10. The MOSFET is bit-identical. **The CI half is
+  pending** until the branch is pushed.
+- **XG5:** `release_tag.*`, 5 ctests (a match, this tree's version, a mismatch, a missing `v`, a dirty tree).
+- **XG6:** the branch touches `src/analysis/compare.cpp` and `src/cli/` only under `src/`. `cli_version` passes and
+  prints 0.1.0.
+- **XG7:** `/W4 /WX` clean. 8 hand mutants, all caught: the current floor dropped, the bias check removed, the
+  allowance floor dropped, `differ` exiting 1, a one-sided NaN passing, the tag check ignoring `dirty`, the
+  `stopped` check removed, the density floor from the smallest density.
+- **Size:** about 710 lines added in code, tests, scripts, CMake and CI (docs aside), plus 2.9 MB of references
+  (`mosfet_2d` 2.2 MB, `pn_diode_1d` 0.7 MB).
+- **Full Release and Debug ctest not run** (rule: they wait for the owner's word). Only the analysis, CLI,
+  cross-machine and tag tests above were run.
+
 ---
 
 ## New questions the advisor raised (not yet in `ARCHITECTURE.md`)
