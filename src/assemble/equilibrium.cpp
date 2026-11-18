@@ -89,8 +89,8 @@ std::expected<SystemData::Made, base::Error> SystemData::make_equilibrium(
         st.psi0_[i] = ohmic_contact_value(e, 0.0).psi - s.band_shift_[i];
     }
 
-    s.composition_ = Composition::compose(s, st, models);
-    s.m_ = s.composition_->dofs().block();  // 1
+    s.composition_ = Composition::compose(s, st, models, nullptr);
+    s.m_ = s.built_in_ = s.composition_->dofs().block();  // 1
 
     // The pattern: the diagonal, both directions of every edge, and the terms' own entries.
     std::vector<linalg::Triplet> triplets;

@@ -1726,6 +1726,72 @@ all 38 files (`[.deck_compare]`), so #85 changed no GG2 output. Slice 3 is compa
 - **GG8 (owner 2026-11-16, "choose recommended for GG8"):** the χ extensibility test is its own commit after slice 4,
   not part of it, so slice 4 stays GE5 alone (GE7).
 
+**GG8 as built (2026-11-18; owner "start GG8").**
+- **The extension point** (internal, `src/assemble`; `System`'s header is unchanged). `System::create`'s
+  drift-diffusion body moved into `SystemData::make_drift_diffusion(device, scaling, models, extension)`, the
+  counterpart of `make_equilibrium`; `create` calls it with none and sets the zero bias as before. A
+  `SystemData::CompositionExtension` (composition.hpp) holds fields and terms: `Composition::compose` puts its fields
+  after the built-in ones in every node block and its terms after every term of the table, under no equation set.
+  `SystemData::create_extended` (isothermal drift diffusion only) builds such a system: `System`'s constructor is its
+  own, so a system created without the extension is the shell whose data and state are replaced through the passkey
+  accessors. An extension's terms write their own rows, add their own pattern entries (`Term::pattern`) and find
+  their positions at each add; steady evaluations only.
+- **What the test showed had to change.** (i) `SystemData::electrothermal()` was `m_ == 4`, so a fourth isothermal
+  field would have been taken for the heat equation; it is now a flag set from the models (`electrothermal_`).
+  (ii) `System::update_size` and `apply_update` moved only ψ, n, p and the temperatures, so an added unknown would
+  never have moved; the unknowns after `built_in_` are now clipped to ±max_update and measured by |dx|, as ψ. Both
+  loops are skipped when there is no extension, so every existing system takes the same path as before.
+- **The test** (`tests/assemble/extensibility_test.cpp`, 5 cases, `[extensibility]`). χ has its own `FieldId`
+  value outside the enumerators (fields.hpp is not edited). Its row is the box-method form of d²χ/du² = ψ − ψ_ref − S
+  on u = x / L (1D), held at 0 on insulator and contact nodes; the second term adds k V χ to the electron rows and
+  −k V χ to the hole rows of the semiconductor nodes. (i) Block 3 → 4, the pattern gains exactly 7 entries per node
+  and 2 per edge, every plain entry kept at its place, the table's terms then the two. (ii) Both terms and every
+  existing term at the wider block pass the FD gate (≤ 1e-6, terms_test's method) on the 1D MOS off equilibrium; the
+  cross blocks (n, p rows in χ; χ row in ψ) are present with their values. (iii) Newton's last pair above rounding
+  has order ≥ 1.8 (measured 2.12 at k = 0, 2.07 at k = 1e-11). (iv) At k = 0, ψ, n, p equal the plain system's
+  within 1e-12. (v) Manufactured χ* = 2 sin πu on a 1D n-bar at equilibrium, its source in χ's row and the
+  generation hook (TVQ3) cancelling k V χ*: χ's and the holes' L∞ errors fall at order 2.00 over 32, 64, 128
+  elements (χ 1.6e-3, 4.0e-4, 1.0e-4; p relative 9.5e-2, 2.4e-2, 5.9e-3). A fifth case starts an intrinsic bar at
+  its exact equilibrium with ψ_ref = ψ_c − 200, so only χ moves, over several clipped steps.
+- **k is in scaled rate units** (R0 ≈ 1e33 cm⁻³ s⁻¹ on the bar). At k = 1e-3 the minority holes moved by a factor of
+  about 1e7 and the MOS Newton run failed, so the test uses k = 1e-11. ψ's and n's errors on the bar are then at
+  rounding (6e-14, 9e-14) and are not gated. At k = 1e-3 they too fell at order 2.0.
+- **Mutants: 9, all caught** by `nitcad_assemble_test`. M1 extension unknowns not added (`apply_update`): Newton and
+  manufactured cases. M2 not measured (`update_size`): the fifth case only. On a doped device M2 is equivalent in
+  practice: the minority densities' corrections carry the rounding of a large χ correction (measured on the MOS,
+  update_size stayed near 1e-4 while χ moved), so Newton did not stop early; hence the intrinsic bar. M3
+  `electrothermal()` back to `m_ == 4`: crash, FD case. M4 `built_in_ = m_`: crash, manufactured case. M5 extension
+  terms dropped: four GG8 cases. M6 extension fields before the built-in ones: pattern case. M7 no zero bias in
+  `create_extended`: Newton and manufactured cases. M8 `make_drift_diffusion` ignoring the extension: crash. M9
+  `electrothermal_` never set: the electrothermal composition case, then a crash.
+- **Toolset (2026-11-18).** A Visual Studio 18.12 update had replaced MSVC 14.51 with 14.52.37025. **14.52 drops
+  aggregate assignments at /O1 and /O2**: `none.impact_ionization = {};` in `impact_ionization_test.cpp` left
+  silicon's coefficients in place, so `assemble.impact_ionization` failed on slice 4's tree as well as on this one.
+  A 20-line reproduction (a copy of a constexpr aggregate, `= {}` on a member, the type also a by-value default
+  argument) prints the old values at /O1 and /O2 and zeros at /Od; 14.51.36231 prints zeros at every level. The
+  owner reinstalled 14.51 and every gate below is on 14.51, as CI and slices 0–4. Q11's move to 14.52 waits for a
+  fixed compiler.
+- **GG1:** the 81 traced entries of this tree against slice 4's (a9cfd64, rebuilt with 14.51 in a scratch worktree),
+  P-core pinned, six entries at a time. Catch2 v3 runs the cases of a file in random order, so the traces are
+  compared case block by case block. **All 81 identical.** In `solve.mos` and `deck_lombardi` some cases share a
+  cached solve, whose values the trace files under whichever case runs first; there the values are compared as one
+  set per file (`solve.mos`: 45,050 values, `deck_lombardi`: 6,421, the same on both trees). The scratch baseline was
+  first configured without `NITCAD_MKL_RUNTIME` and `NITCAD_VERIFY_FULL_TIER`, so its PARDISO cases were skipped and
+  five entries seemed to differ; reconfigured as `build/release`, those five are identical too.
+- **GG2:** the 12 decks, run pinned with each tree's `nitcad.exe`, agree on all 38 output files (`[.deck_compare]`, 125
+  assertions).
+- **GG4:** FG4's benchmark (17 devices), slice 4's and this tree's binaries alternating, pinned to CPU 0. Four
+  passes: no device flagged, but only on the spread rule, as slice 4's own spread was 64–414% (passes 1 and 2 ran
+  on a loaded machine), and five devices' minima were 10–12% slower (1D drift-diffusion, with Canali, 2D
+  drift-diffusion `evaluate`, 2D energy balance, 3D generated diode), so the owner asked for a focused run. Those
+  are in two cases (EC19's and the generated 3D mesh's, 10 devices): six more rounds of both, alternated, the order
+  swapped each round. **Minimum of six: this tree faster on all 10 devices**, `evaluate` −6.4% to −13.8%,
+  `residual` −4.7% to −13.0%; medians faster on 9 (the tenth, 3D drift-diffusion `evaluate`, +12.4% with its
+  minimum −10.6%). Single rounds swung from −40% to +70% on one device, so the machine's noise even pinned is
+  ±15–30% per run; nothing in this commit is on the `evaluate` or `residual` path of an existing system.
+- **GG5:** the full Release suite (`/W4 /WX`, ctest `-j 6`, 14.51) was running when this was committed (owner:
+  push now); its result follows in the next commit. Debug is left to CI (owner's standing rule).
+
 **Risks:** the bit-identity surface is the largest since Unit 40. Moving the bias and path state out of the system
 could change which values a copy sees (GG6's first three mutants target this). Slice 2's caller migration touches
 about 44 files (more if #85 adds callers). Equilibrium's variants (GE5) keep a second set of row expressions, so the

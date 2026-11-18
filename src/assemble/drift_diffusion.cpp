@@ -139,6 +139,19 @@ std::expected<System, base::Error> System::create(const device::Device& device,
         out.state_ = std::make_unique<SystemState>(std::move(made->state));
         return out;
     }
+    auto made = SystemData::make_drift_diffusion(device, scaling, models, nullptr);
+    if (!made) return std::unexpected(std::move(made.error()));
+    const std::vector<double> zero(made->data->contact_count_, 0.0);
+    System out;
+    out.data_ = std::move(made->data);
+    out.state_ = std::make_unique<SystemState>(std::move(made->state));
+    if (auto ok = out.set_bias(zero); !ok) return std::unexpected(std::move(ok.error()));
+    return out;
+}
+
+std::expected<SystemData::Made, base::Error> SystemData::make_drift_diffusion(
+    const device::Device& device, const Scaling& scaling, const PhysicsModels& models,
+    const CompositionExtension* extension) {
     if (models.impact_ionization && !(std::isfinite(models.impact_current_resolution) &&
                                       models.impact_current_resolution >= 0.0)) {
         return std::unexpected(base::Error{
@@ -394,8 +407,10 @@ std::expected<System, base::Error> System::create(const device::Device& device,
     // The system's equations and unknowns from the device and the models (Unit 40,
     // composition.hpp): psi, n, p per node, and with the electrothermal model the temperature rise
     // last; every node and edge block is then full 4 x 4.
-    s.composition_ = SystemData::Composition::compose(s, st, models);
+    s.composition_ = SystemData::Composition::compose(s, st, models, extension);
     s.m_ = s.composition_->dofs().block();
+    s.electrothermal_ = models.electrothermal;
+    s.built_in_ = s.m_ - (extension != nullptr ? extension->fields.size() : 0);
     const std::size_t stride = s.m_;
     std::vector<linalg::Triplet> triplets;
     triplets.reserve(stride * stride * n + 2 * stride * stride * scaled->edges.size());
@@ -736,12 +751,7 @@ std::expected<System, base::Error> System::create(const device::Device& device,
         if (auto e = s.make_energy_balance(st, device, models))
             return std::unexpected(std::move(*e));
     }
-    const std::vector<double> zero(s.contact_count_, 0.0);
-    System out;
-    out.data_ = std::move(data);
-    out.state_ = std::make_unique<SystemState>(std::move(st));
-    if (auto ok = out.set_bias(zero); !ok) return std::unexpected(std::move(ok.error()));
-    return out;
+    return Made{std::move(data), std::move(st)};
 }
 
 std::expected<void, base::Error> System::set_bias(std::span<const double> bias_V) {
@@ -1283,6 +1293,13 @@ double System::update_size(std::span<const double> x, std::span<const double> dx
             }
         }
     }
+    if (data_->built_in_ < data_->m_) {  // Unit 57 GG8: an extension's unknowns, as psi
+        for (std::size_t i = 0; i < node_count(); ++i) {
+            for (std::size_t k = data_->built_in_; k < data_->m_; ++k) {
+                size = std::max(size, std::abs(dx[data_->m_ * i + k]));
+            }
+        }
+    }
     detail::observe("update_size", size);
     return size;
 }
@@ -1312,6 +1329,13 @@ void System::apply_update(std::span<double> x, std::span<const double> dx,
         if (data_->insulator_[i] != 0) continue;  // the densities stay 0
         for (const std::size_t k : {data_->m_ * i + 1, data_->m_ * i + 2}) {
             x[k] = std::clamp(x[k] + dx[k], 0.1 * x[k], 10.0 * x[k]);
+        }
+    }
+    if (data_->built_in_ < data_->m_) {  // Unit 57 GG8: an extension's unknowns, as psi
+        for (std::size_t i = 0; i < node_count(); ++i) {
+            for (std::size_t k = data_->m_ * i + data_->built_in_; k < data_->m_ * (i + 1); ++k) {
+                x[k] += std::clamp(dx[k], -max_update, max_update);
+            }
         }
     }
     detail::observe("apply_update", x);

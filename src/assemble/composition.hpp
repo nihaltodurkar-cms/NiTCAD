@@ -70,12 +70,27 @@ struct CompositionEntry {
     bool frequency = false;
 };
 
+// An equation added to the drift-diffusion composition from outside its tables (Unit 57 GG8,
+// SystemData::create_extended): its fields, node unknowns placed after the built-in fields in
+// every node block, and its terms, added after every term of the table, in order, under no
+// equation set. Its terms write their own rows and any others: the rows of its fields are theirs
+// to assign (no table term writes them), and the Jacobian entries beyond every node's full block
+// are theirs to add (Term::pattern), found by position at each add (they hold no positions in the
+// system's data). The Newton hooks move each added unknown as the potential: clipped to
+// +-max_update, measured by |dx| (System::update_size, apply_update). Steady evaluations only (no
+// time step, no small-signal matrix).
+struct SystemData::CompositionExtension {
+    std::vector<Field> fields;
+    std::vector<std::shared_ptr<const Term>> terms;
+};
+
 class SystemData::Composition {
 public:
-    // The unknowns and the active terms of a system's device data and models.
-    [[nodiscard]] static std::shared_ptr<const Composition> compose(const SystemData& s,
-                                                                    const SystemState& st,
-                                                                    const PhysicsModels& models);
+    // The unknowns and the active terms of a system's device data and models, and an extension's
+    // (nullptr: none).
+    [[nodiscard]] static std::shared_ptr<const Composition> compose(
+        const SystemData& s, const SystemState& st, const PhysicsModels& models,
+        const CompositionExtension* extension);
 
     [[nodiscard]] const DofMap& dofs() const noexcept { return dofs_; }
     [[nodiscard]] std::span<const std::shared_ptr<const Term>> terms() const noexcept {

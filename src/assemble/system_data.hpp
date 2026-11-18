@@ -60,6 +60,9 @@ struct SystemData {
     class Term;
     struct Terms;
     class Composition;
+    // Fields and terms added to the drift-diffusion composition from outside its tables (Unit 57
+    // GG8; composition.hpp).
+    struct CompositionExtension;
 
     // The current density below which impact ionization fades out (system.hpp's header
     // comment). [A/cm^2]
@@ -134,7 +137,7 @@ struct SystemData {
     [[nodiscard]] std::size_t storage_width() const noexcept { return m_ - 1; }
     [[nodiscard]] std::size_t contact_count() const noexcept { return contact_count_; }
     [[nodiscard]] std::size_t trap_slots() const noexcept { return interfaces_.slot_count(); }
-    [[nodiscard]] bool electrothermal() const noexcept { return m_ == 4; }
+    [[nodiscard]] bool electrothermal() const noexcept { return electrothermal_; }
     [[nodiscard]] bool energy_balance() const noexcept { return energy_balance_; }
     [[nodiscard]] bool tunnelling() const noexcept {
         return tunnel_kind_ != NonlocalTunnelling::off;
@@ -452,6 +455,10 @@ struct SystemData {
     // assembly order (composition.hpp; DECISIONS.md FE3, FE4). Immutable, shared by copies.
     std::shared_ptr<const Composition> composition_;
     std::size_t m_ = 3;  // unknowns per node: composition_->dofs().block()
+    // The built-in fields of each node block (m_ less a CompositionExtension's fields, which follow
+    // them), and whether the heat equation is in (models.electrothermal).
+    std::size_t built_in_ = 3;
+    bool electrothermal_ = false;
     std::vector<physics::Semiconductor> thermal_materials_;
     std::vector<ThermalNode> thermal_nodes_;
     std::vector<ThermalEdge> thermal_edges_;
@@ -568,6 +575,18 @@ struct SystemData {
     struct Made;
     [[nodiscard]] static std::expected<Made, base::Error> make_equilibrium(
         const device::Device& device, const Scaling& scaling, const PhysicsModels& models);
+    // The coupled drift-diffusion system (System::create's, drift_diffusion.cpp), before its
+    // zero bias is set; with an extension, its fields follow the built-in ones in every node
+    // block and its terms follow the table's (composition.hpp).
+    [[nodiscard]] static std::expected<Made, base::Error> make_drift_diffusion(
+        const device::Device& device, const Scaling& scaling, const PhysicsModels& models,
+        const CompositionExtension* extension);
+    // System::create with an extension (Unit 57 GG8), at zero bias. Precondition
+    // (NITCAD_EXPECTS): the isothermal drift-diffusion models (neither electrothermal nor energy
+    // balance), at least one extension field, each a node unknown.
+    [[nodiscard]] static std::expected<System, base::Error> create_extended(
+        const device::Device& device, const Scaling& scaling, const PhysicsModels& models,
+        const CompositionExtension& extension);
     [[nodiscard]] std::expected<void, base::Error> set_equilibrium_bias(
         SystemState& st, std::span<const double> bias_V) const;
     // The carriers slaved to psi (0 on insulator nodes).
