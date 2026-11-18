@@ -842,6 +842,23 @@ the default camera (35°, 25°). A snap resets zoom and pan as Fit does. It is i
 A cube click takes priority over Probe, Measure and Cut line. A drag that starts on the cube orbits as anywhere else.
 The cursor becomes a hand over the cube.
 
+**As built, 26h·3 (2026-11-19).**
+- **Where the named views sit.** They are in a **View ▸ Loo&k from** submenu (&Front, &Back, &Left, &Right, &Top,
+  B&ottom, &Isometric), not as seven flat View items. WG5 requires a unique mnemonic for every item, and View had
+  only j, k and z free. The commands test now checks mnemonics within each submenu, and the submenu's own mnemonic
+  within its menu; the rule itself is unchanged.
+- **Where the numpad keys live.** The view's own key handling takes them (`viewport.cpp`), as the arrows, + and −
+  are, not the accelerator table. The menu shows them ("Num 1", "Ctrl+Num 1", ...), and the deck editor still types
+  numpad digits.
+- **Who animates.** `WindowOptions::animate` is off by default and on only in the application (`app/main.cpp`), so
+  the tests and the self-test land at once. `set_animate(true)` forces moves on whatever Windows says, so the
+  animated window test also runs on a machine with animations off.
+- **What ends a move.** Orbit, pan and zoom (drag, wheel, key) end a move at its current frame. So does a change of
+  tab, which stops it at its next tick.
+- **Fit.** It animates zoom and pan only; the angles stay.
+- **JG8.** The slowest frame of a smooth move drew in 13.8 ms on WARP (69 samples). The hardware figure is for
+  26h·4.
+
 **Slices (each one local commit):** 26h·1 `axis_box`, drawn, its switch (JD1; JG2, JG6 part); 26h·2 `view_cube`, hit
 testing, snapping (JD2, JD3; JG3, JG6 part); 26h·3 named views and smooth moves (JD4, JD5; JG4, JG5, JG8); 26h·4
 references, suites, mutants (JG1, JG7, JG9), the ARCHITECTURE entry.

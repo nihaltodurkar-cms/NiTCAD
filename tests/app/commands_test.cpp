@@ -37,15 +37,25 @@ TEST_CASE("app commands: menus, mnemonics and accelerators (WG5)", "[app]") {
 
     std::set<int> ids;
     std::map<std::string, std::set<char>> letters;
+    std::set<std::string> submenus;
     std::set<std::tuple<int, bool, bool, bool>> keys;
     for (const app::CommandInfo& c : app::commands()) {
         CAPTURE(c.text);
         CHECK(ids.insert(static_cast<int>(c.id)).second);
         CHECK(std::ranges::find(bar, c.menu) != bar.end());
         CHECK(app::find_command(c.id) == &c);
-        // Every item has a mnemonic, unique in its menu, except the pan moves, which have keys.
+        // Every item has a mnemonic, unique in its menu (or submenu, Unit 26h), except the pan moves, which
+        // have keys. A submenu's own mnemonic is unique in its menu.
+        std::string where(c.menu);
+        if (!c.submenu.empty()) {
+            if (submenus.insert(std::string(c.submenu)).second) {
+                CHECK(mnemonic(c.submenu) != 0);
+                CHECK(letters[where].insert(mnemonic(c.submenu)).second);
+            }
+            where += ">" + std::string(c.submenu);
+        }
         const char m = mnemonic(c.text);
-        if (m != 0) CHECK(letters[std::string(c.menu)].insert(m).second);
+        if (m != 0) CHECK(letters[where].insert(m).second);
         else CHECK(std::string_view(c.text).starts_with("Pan"));
         // Accelerators unique; every command with keys shows them.
         if (c.accelerator.key != 0) {

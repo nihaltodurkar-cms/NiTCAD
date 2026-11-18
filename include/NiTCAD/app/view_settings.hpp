@@ -136,6 +136,22 @@ void fit(ViewSettings& s);
 // a camera move redraws without building the scene again; build_scene applies it too.
 void apply_camera(render::FieldScene& scene, const ViewSettings& s);
 
+// Smooth camera moves (Unit 26h, JD5). A pose is the camera a ViewSettings holds (the angles as render
+// draws them, defaults filled in). camera_between gives the pose a fraction t of the way along a move,
+// eased in and out (smoothstep): the azimuth the shorter way round, elevation, zoom and pan linearly in
+// the same ease. t <= 0 and t >= 1 give the endpoints exactly.
+struct CameraPose {
+    float azimuth_deg = 0.0f;
+    float elevation_deg = 0.0f;
+    float zoom = 1.0f;
+    float pan_x = 0.0f;
+    float pan_y = 0.0f;
+    friend bool operator==(const CameraPose&, const CameraPose&) = default;
+};
+[[nodiscard]] CameraPose camera_pose(const ViewSettings& s) noexcept;
+void set_camera_pose(ViewSettings& s, const CameraPose& p) noexcept;
+[[nodiscard]] CameraPose camera_between(const CameraPose& from, const CameraPose& to, float t) noexcept;
+
 using Scene = std::variant<render::FieldScene, render::PlotScene>;
 
 // The scene for the settings. Errors (invalid_input) as `nitcad plot` reports them: an unknown

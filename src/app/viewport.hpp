@@ -31,6 +31,8 @@ public:
         virtual bool viewport_is_3d() const = 0;
         // Whether a click there is the view cube's (Unit 26h, JD3): the cursor becomes a hand.
         virtual bool viewport_over_cube(float x, float y) const = 0;
+        // A numpad key's named view (Unit 26h, JD4): an index into render::named_views().
+        virtual void viewport_named_view(int index) = 0;
 
     protected:
         ~Host() = default;

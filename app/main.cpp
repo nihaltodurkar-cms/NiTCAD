@@ -52,6 +52,7 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
     }
 
     app::WindowOptions options;
+    options.animate = true;  // Unit 26h (JD5): smooth camera moves, if Windows shows animations
     options.state_file = app::win32::state_file();
     std::filesystem::path deck;
     for (std::size_t i = 0; i < args.size(); ++i) {

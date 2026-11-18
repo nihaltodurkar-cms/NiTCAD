@@ -23,6 +23,7 @@ enum class Command : std::uint16_t {
     tab_start, tab_view, tab_curves, tab_deck, tab_run, tab_results, cut_line_mode, mesh_quality,
     show_regions,  // Unit 26c (YD4)
     hover_readout,  // Unit 26e (HD3)
+    view_front, view_back, view_left, view_right, view_top, view_bottom, view_isometric,  // Unit 26h (JD4)
     // The Device, Mesh, Physics and Simulation menus' sections and keys (VQ13) are numbered from here.
     section_first = 1000,
     key_first = 2000,
@@ -42,6 +43,7 @@ struct CommandInfo {
     std::string_view text;  // the item's text, with its '&' mnemonic
     Accelerator accelerator;
     std::string_view accelerator_text;  // shown in the menu, e.g. "Ctrl+S"
+    std::string_view submenu{};         // a submenu of its menu it is in, with its own '&' (Unit 26h); empty: none
 };
 
 // The view's camera commands have no accelerator: arrows, Shift+arrows, + and - and Home act in the

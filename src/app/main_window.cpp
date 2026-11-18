@@ -109,7 +109,9 @@ std::wstring menu_text(const CommandInfo& c) {
 MainWindow::MainWindow(const WindowOptions& options)
     : options_(options),
       runner_([this] { PostMessageW(hwnd_, run_message, 0, 0); }),
-      live_([this] { PostMessageW(hwnd_, live_message, 0, 0); }) {}
+      live_([this] { PostMessageW(hwnd_, live_message, 0, 0); }) {
+    animate_ = options.animate;
+}
 
 std::unique_ptr<MainWindow> MainWindow::create(const WindowOptions& options) {
     INITCOMMONCONTROLSEX icc{sizeof(icc), ICC_BAR_CLASSES | ICC_TREEVIEW_CLASSES | ICC_TAB_CLASSES | ICC_STANDARD_CLASSES |
@@ -307,6 +309,7 @@ void MainWindow::build_menu() {
 void MainWindow::fill_menu(HMENU menu, int index) {
     while (GetMenuItemCount(menu) > 0) DeleteMenu(menu, 0, MF_BYPOSITION);
     const std::string_view name = menu_bar()[static_cast<std::size_t>(index)];
+    std::vector<std::string_view> submenus;
     const auto add_commands = [&](std::string_view top) {
         for (const CommandInfo& c : commands()) {
             if (c.menu != top) continue;
@@ -321,9 +324,23 @@ void MainWindow::fill_menu(HMENU menu, int index) {
                 AppendMenuW(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(recent), L"Recent &files");
                 AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
             }
-            if (c.id == Command::fit || c.id == Command::perspective || c.id == Command::next_tab ||
+            if (c.id == Command::fit || c.id == Command::perspective || c.id == Command::view_front ||
+                c.id == Command::next_tab ||
                 c.id == Command::tab_start || c.id == Command::find_error) {
                 AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+            }
+            if (!c.submenu.empty()) {
+                // Unit 26h: a submenu, at its first item's place, holding every item that names it.
+                if (std::ranges::find(submenus, c.submenu) != submenus.end()) continue;
+                submenus.push_back(c.submenu);
+                HMENU sub = CreatePopupMenu();
+                for (const CommandInfo& d : commands()) {
+                    if (d.menu == top && d.submenu == c.submenu) {
+                        AppendMenuW(sub, MF_STRING, static_cast<UINT_PTR>(d.id), menu_text(d).c_str());
+                    }
+                }
+                AppendMenuW(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(sub), win32::widen(c.submenu).c_str());
+                continue;
             }
             AppendMenuW(menu, MF_STRING, static_cast<UINT_PTR>(c.id), menu_text(c).c_str());
         }
@@ -2045,6 +2062,13 @@ void MainWindow::execute(Command c) {
         set_status(status_state, "Not comparing");
         return;
     case Command::fit: viewport_fit(); return;
+    case Command::view_front: show_named_view("Front"); return;
+    case Command::view_back: show_named_view("Back"); return;
+    case Command::view_left: show_named_view("Left"); return;
+    case Command::view_right: show_named_view("Right"); return;
+    case Command::view_top: show_named_view("Top"); return;
+    case Command::view_bottom: show_named_view("Bottom"); return;
+    case Command::view_isometric: show_named_view("Isometric"); return;
     case Command::orbit_left: viewport_orbit(-15.0f, 0.0f); return;
     case Command::orbit_right: viewport_orbit(15.0f, 0.0f); return;
     case Command::orbit_up: viewport_orbit(0.0f, 10.0f); return;
@@ -2144,25 +2168,35 @@ bool MainWindow::viewport_is_3d() const {
 
 void MainWindow::viewport_orbit(float azimuth_deg, float elevation_deg) {
     if (!viewport_is_3d()) return;
+    stop_move();  // JD5: a drag or a key ends a move where it is
     orbit(settings(), azimuth_deg, elevation_deg);
     present_camera();
 }
 
 void MainWindow::viewport_pan(float dx, float dy) {
     if (!scene_ || !std::holds_alternative<render::FieldScene>(*scene_)) return;
+    stop_move();
     pan_by(settings(), dx, dy);
     present_camera();
 }
 
 void MainWindow::viewport_zoom(float factor) {
     if (!scene_ || !std::holds_alternative<render::FieldScene>(*scene_)) return;
+    stop_move();
     zoom_by(settings(), factor);
     present_camera();
 }
 
 void MainWindow::viewport_fit() {
-    fit(settings());
-    present_camera();
+    // JD5: smoothly, the angles kept.
+    CameraPose to = camera_pose(settings());
+    to.zoom = 1.0f;
+    to.pan_x = to.pan_y = 0.0f;
+    if (!scene_ || !std::holds_alternative<render::FieldScene>(*scene_)) {
+        fit(settings());
+        return present_camera();
+    }
+    move_camera(to);
 }
 
 void MainWindow::probe_at(float x, float y) {
@@ -2202,12 +2236,49 @@ bool MainWindow::viewport_over_cube(float x, float y) const {
 
 void MainWindow::snap_to(const render::CameraPreset& preset) {
     if (!viewport_is_3d()) return;
-    ViewSettings& s = settings();
-    s.azimuth = preset.azimuth_deg;
-    s.elevation = preset.elevation_deg;
-    fit(s);
-    present_camera();
+    move_camera({preset.azimuth_deg, preset.elevation_deg, 1.0f, 0.0f, 0.0f});
     set_status(status_state, "View: " + preset.name);
+}
+
+void MainWindow::show_named_view(std::string_view name) {
+    for (const render::CameraPreset& p : render::named_views()) {
+        if (p.name == name) return snap_to(p);
+    }
+}
+
+void MainWindow::viewport_named_view(int index) {
+    const auto& views = render::named_views();
+    if (index >= 0 && static_cast<std::size_t>(index) < views.size()) snap_to(views[static_cast<std::size_t>(index)]);
+}
+
+void MainWindow::move_camera(const CameraPose& to) {
+    stop_move();
+    ViewSettings& s = settings();
+    const CameraPose from = camera_pose(s);
+    BOOL shown = TRUE;
+    if (!SystemParametersInfoW(SPI_GETCLIENTAREAANIMATION, 0, &shown, 0)) shown = TRUE;
+    if (!animate_ || (!shown && !force_animate_) || from == to || !hwnd_) {
+        set_camera_pose(s, to);
+        present_camera();
+        return;
+    }
+    move_ = CameraMove{from, to, &s, std::chrono::steady_clock::now()};
+    SetTimer(hwnd_, camera_timer, camera_tick_ms, nullptr);
+}
+
+void MainWindow::stop_move() {
+    if (!move_) return;
+    move_.reset();
+    if (hwnd_) KillTimer(hwnd_, camera_timer);
+}
+
+void MainWindow::on_camera_timer() {
+    if (!move_ || move_->settings != &settings() || !scene_) return stop_move();
+    const float ms = std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - move_->start).count();
+    const float t = std::min(ms / camera_move_ms, 1.0f);
+    set_camera_pose(*move_->settings, camera_between(move_->from, move_->to, t));
+    present_camera();
+    if (t >= 1.0f) stop_move();
 }
 
 void MainWindow::viewport_click(float x, float y) {
@@ -2565,6 +2636,10 @@ LRESULT MainWindow::handle(UINT message, WPARAM w, LPARAM l) {
         }
         if (w == playback_timer) {
             on_playback_timer();
+            return 0;
+        }
+        if (w == camera_timer) {
+            on_camera_timer();
             return 0;
         }
         break;

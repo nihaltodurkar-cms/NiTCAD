@@ -240,6 +240,20 @@ LRESULT Viewport::handle(UINT message, WPARAM w, LPARAM l) {
         case VK_HOME:
             host_.viewport_fit();
             return 0;
+        // Unit 26h (JD4): the named views on the numpad, as CAD programs have them (render::named_views'
+        // order: Front, Back, Left, Right, Top, Bottom, Isometric).
+        case VK_NUMPAD1:
+            host_.viewport_named_view(GetKeyState(VK_CONTROL) < 0 ? 1 : 0);
+            return 0;
+        case VK_NUMPAD3:
+            host_.viewport_named_view(GetKeyState(VK_CONTROL) < 0 ? 2 : 3);
+            return 0;
+        case VK_NUMPAD7:
+            host_.viewport_named_view(GetKeyState(VK_CONTROL) < 0 ? 5 : 4);
+            return 0;
+        case VK_NUMPAD0:
+            host_.viewport_named_view(6);
+            return 0;
         default:
             break;
         }

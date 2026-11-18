@@ -1337,3 +1337,44 @@ TEST_CASE("app views 26h: the axis box, on by default in the app and nitcad plot
                                       app_test::quoted(out / "bad.png"));
     CHECK(bad.status != 0);
 }
+
+TEST_CASE("app views 26h: camera_between eases, the shorter way round, to the endpoints exactly (JD5, JG5)",
+          "[app]") {
+    using app::CameraPose;
+    const CameraPose a{350.0f, 10.0f, 1.0f, 0.0f, 0.0f}, b{10.0f, 40.0f, 3.0f, 0.2f, -0.4f};
+    CHECK(app::camera_between(a, b, 0.0f) == a);
+    CHECK(app::camera_between(a, b, 1.0f) == b);
+    CHECK(app::camera_between(a, b, -0.5f) == a);
+    CHECK(app::camera_between(a, b, 1.5f) == b);
+    // 350 to 10 passes 0, never 180: every frame within 10 degrees of 0.
+    float last_el = a.elevation_deg, last_zoom = a.zoom;
+    for (int k = 1; k < 100; ++k) {
+        const float t = static_cast<float>(k) / 100.0f;
+        const CameraPose p = app::camera_between(a, b, t);
+        CAPTURE(t, p.azimuth_deg);
+        const float off = std::abs(std::remainder(p.azimuth_deg, 360.0f));
+        CHECK(off <= 10.0001f);
+        // Monotone, eased: elevation and zoom never go back.
+        CHECK(p.elevation_deg >= last_el);
+        CHECK(p.zoom >= last_zoom);
+        last_el = p.elevation_deg;
+        last_zoom = p.zoom;
+    }
+    // Smoothstep: halfway is half, the ends move slowest.
+    const CameraPose mid = app::camera_between(a, b, 0.5f);
+    CHECK(std::abs(mid.elevation_deg - 25.0f) < 1e-4f);
+    CHECK(std::abs(std::remainder(mid.azimuth_deg, 360.0f)) < 1e-3f);
+    const float early = app::camera_between(a, b, 0.1f).elevation_deg - a.elevation_deg;
+    CHECK(early < 0.1f * (b.elevation_deg - a.elevation_deg));
+    // The other way: 10 to 350 also passes 0; 0 to 180 takes one of the two halves, consistently.
+    const CameraPose p = app::camera_between(b, a, 0.5f);
+    CHECK(std::abs(std::remainder(p.azimuth_deg, 360.0f)) < 1e-3f);
+    const CameraPose c{0.0f, 0.0f, 1.0f, 0.0f, 0.0f}, d{180.0f, 0.0f, 1.0f, 0.0f, 0.0f};
+    CHECK(std::abs(std::abs(app::camera_between(c, d, 0.5f).azimuth_deg) - 90.0f) < 1e-3f);
+    // A pose round-trips through the settings, and the defaults fill an empty camera.
+    ViewSettings s;
+    const CameraPose def = app::camera_pose(s);
+    CHECK(def.zoom == 1.0f);
+    app::set_camera_pose(s, b);
+    CHECK(app::camera_pose(s) == b);
+}
