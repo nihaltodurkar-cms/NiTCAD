@@ -10,6 +10,16 @@ cbuffer Frame : register(b0) {
     float line_width;    // pixels at the target's resolution
     float4 colormap[256];
     float4 no_data;
+    // Visual prototype (NITCAD_VISUAL_PROTO): three-point lighting and a gradient background.
+    float3 eye;          // unit, toward the viewer, world space
+    float style;         // 0 the classic shading, 1 the prototype
+    float3 up;           // unit, the camera's up, world space
+    float spare0;
+    float3 fill;         // unit, toward the fill light, world space
+    float spare1;
+    float4 bg_top;
+    float4 bg_bottom;
+    float4 view_rect;    // left, top, width, height of the view in target pixels
 };
 
 struct MeshIn {
@@ -46,12 +56,31 @@ float4 base_color(MeshOut p) {
             c = float4(lerp(colormap[i].rgb, colormap[i + 1].rgb, x - (float)i), p.color.a);
         }
     }
-    if (flags & 1u) {
+    if ((flags & 1u) && style > 0.5) {
+        // Prototype: key, fill and rim lights, a sky/ground hemisphere ambient and a soft
+        // highlight; two-sided by turning the normal toward the eye.
+        float3 n = normalize(p.normal);
+        if (dot(n, eye) < 0.0) n = -n;
+        const float key = saturate(dot(n, light));
+        const float fil = saturate(dot(n, fill));
+        const float hemi = lerp(0.30, 0.46, 0.5 + 0.5 * dot(n, up));
+        const float lum = hemi + 0.60 * key + 0.18 * fil;
+        const float field = (flags & 2u) ? 1.0 : 0.0;
+        const float spec = lerp(0.22, 0.08, field) * pow(saturate(dot(n, normalize(light + eye))), 40.0);
+        const float rim = lerp(0.14, 0.06, field) * pow(1.0 - saturate(dot(n, eye)), 3.0);
+        c.rgb = c.rgb * lum + spec + rim;
+    } else if (flags & 1u) {
         // Two-sided: a slice or an interface is lit from whichever side the eye is on.
         const float d = abs(dot(normalize(p.normal), light));
         c.rgb *= ambient + (1.0 - ambient) * d;
     }
     return c;
+}
+
+// Prototype background: a vertical gradient over the view, drawn before the scene.
+float4 background_ps(float4 p : SV_Position) : SV_Target {
+    const float t = saturate((p.y - view_rect.y) / max(view_rect.w, 1.0));
+    return float4(lerp(bg_top.rgb, bg_bottom.rgb, t), 1.0);
 }
 
 float4 opaque_ps(MeshOut p) : SV_Target {

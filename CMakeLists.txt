@@ -528,7 +528,7 @@ set(NITCAD_SHADER_DIR "${CMAKE_CURRENT_BINARY_DIR}/shaders")
 set(NITCAD_SHADER_HEADERS "")
 foreach(entry
     "scene mesh_vs vs_6_0" "scene opaque_ps ps_6_0" "scene transparent_ps ps_6_0"
-    "scene line_vs vs_6_0" "scene line_ps ps_6_0"
+    "scene line_vs vs_6_0" "scene line_ps ps_6_0" "scene background_ps ps_6_0"
     "post fullscreen_vs vs_6_0" "post composite_ps ps_6_0" "post resolve_ps ps_6_0")
   separate_arguments(parts NATIVE_COMMAND "${entry}")
   list(GET parts 0 file)

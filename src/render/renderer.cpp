@@ -14,6 +14,7 @@
 #include <array>
 #include <chrono>
 #include <cmath>
+#include <cstdlib>
 #include <cstring>
 #include <format>
 #include <functional>
@@ -22,9 +23,11 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
+#include "background_ps.h"
 #include "composite_ps.h"
 #include "fullscreen_vs.h"
 #include "line_ps.h"
@@ -188,9 +191,92 @@ struct FrameConstants {
     float line_width;
     float colormap[256][4];
     float no_data[4];
-    float pad[36];
+    // Visual prototype (NITCAD_VISUAL_PROTO=1): see scene.hlsl.
+    float eye[3];
+    float style;
+    float up[3];
+    float spare0;
+    float fill[3];
+    float spare1;
+    float bg_top[4];
+    float bg_bottom[4];
+    float view_rect[4];
+    float pad[12];
 };
 static_assert(sizeof(FrameConstants) % 256 == 0);
+static_assert(sizeof(FrameConstants) == 4352);
+
+// The visual prototype: three-point lighting, feature edges and a gradient background on 3D views,
+// chosen by the environment variable NITCAD_VISUAL_PROTO=1 (read once). Off, the drawing is unchanged.
+bool visual_prototype() {
+    static const bool on = [] {
+        char* v = nullptr;
+        std::size_t n = 0;
+        const bool set = _dupenv_s(&v, &n, "NITCAD_VISUAL_PROTO") == 0 && v && v[0] == '1';
+        std::free(v);
+        return set;
+    }();
+    return on;
+}
+
+// Feature edges of a 3D triangle batch: the batch's open boundary and the edges where the faces on
+// either side turn by more than about 30 degrees. Vertices are matched by their exact positions.
+void feature_edges(const TriangleBatch& b, std::vector<std::array<Float3, 2>>& out) {
+    struct Key {
+        Float3 a, b;
+        bool operator==(const Key&) const = default;
+    };
+    struct Hash {
+        std::size_t operator()(const Key& k) const {
+            std::size_t h = 1469598103934665603ull;
+            const auto mix = [&](float f) {
+                std::uint32_t u;
+                std::memcpy(&u, &f, 4);
+                h = (h ^ u) * 1099511628211ull;
+            };
+            for (int i = 0; i < 3; ++i) mix(k.a[static_cast<std::size_t>(i)]);
+            for (int i = 0; i < 3; ++i) mix(k.b[static_cast<std::size_t>(i)]);
+            return h;
+        }
+    };
+    struct Entry {
+        std::array<float, 3> n;
+        int count;
+        bool sharp;
+    };
+    std::unordered_map<Key, Entry, Hash> edges;
+    edges.reserve(b.vertices.size());
+    const auto less = [](const Float3& p, const Float3& q) {
+        return std::lexicographical_compare(p.begin(), p.end(), q.begin(), q.end());
+    };
+    for (std::size_t t = 0; t + 2 < b.vertices.size(); t += 3) {
+        const Float3& p0 = b.vertices[t].position;
+        const Float3& p1 = b.vertices[t + 1].position;
+        const Float3& p2 = b.vertices[t + 2].position;
+        const float ux = p1[0] - p0[0], uy = p1[1] - p0[1], uz = p1[2] - p0[2];
+        const float vx = p2[0] - p0[0], vy = p2[1] - p0[1], vz = p2[2] - p0[2];
+        std::array<float, 3> n{uy * vz - uz * vy, uz * vx - ux * vz, ux * vy - uy * vx};
+        const float len = std::sqrt(n[0] * n[0] + n[1] * n[1] + n[2] * n[2]);
+        if (!(len > 0.0f)) continue;
+        for (float& c : n) c /= len;
+        const Float3* q[3] = {&p0, &p1, &p2};
+        for (int e = 0; e < 3; ++e) {
+            const Float3& a = *q[e];
+            const Float3& c = *q[(e + 1) % 3];
+            const Key k = less(a, c) ? Key{a, c} : Key{c, a};
+            auto [it, fresh] = edges.try_emplace(k, Entry{n, 1, false});
+            if (fresh) continue;
+            Entry& en = it->second;
+            ++en.count;
+            // Either orientation of the neighbour (a slice may be wound either way).
+            const float d = std::abs(en.n[0] * n[0] + en.n[1] * n[1] + en.n[2] * n[2]);
+            if (d < 0.866f) en.sharp = true;
+        }
+    }
+    for (const auto& [k, en] : edges) {
+        if (en.count == 1 || en.count > 2 || en.sharp) out.push_back({k.a, k.b});
+    }
+}
 
 struct MeshVertex {
     float position[3];
@@ -263,7 +349,7 @@ struct Renderer::Impl {
     ComPtr<ID3D12InfoQueue> info;
 
     ComPtr<ID3D12RootSignature> root;
-    ComPtr<ID3D12PipelineState> opaque, transparent, line_depth, line_top, composite, resolve;
+    ComPtr<ID3D12PipelineState> opaque, transparent, line_depth, line_top, composite, resolve, background;
 
     ComPtr<ID3D11Device> d11;
     ComPtr<ID3D11DeviceContext> d11_context;
@@ -535,6 +621,9 @@ std::expected<void, base::Error> Renderer::Impl::create_pipelines() {
         d.BlendState.RenderTarget[0].BlendEnable = FALSE;
         NITCAD_HR(device->CreateGraphicsPipelineState(&d, IID_PPV_ARGS(&resolve)),
                   "CreateGraphicsPipelineState resolve");
+        d.PS = {background_ps_bytecode, sizeof(background_ps_bytecode)};
+        NITCAD_HR(device->CreateGraphicsPipelineState(&d, IID_PPV_ARGS(&background)),
+                  "CreateGraphicsPipelineState background");
     }
     return {};
 }
@@ -828,6 +917,29 @@ std::expected<void, base::Error> Renderer::Impl::render_field(const FieldScene& 
         }
         line_ranges.push_back({first, lines.size() - first, l.width_px, l.on_top});
     }
+    const bool proto = visual_prototype() && s.dimension == 3;
+    if (proto) {
+        // Feature edges of the solid surfaces (not arrows, streamline tubes or isosurfaces).
+        std::vector<std::array<Float3, 2>> edges;
+        for (const TriangleBatch& b : s.triangles) {
+            if (!b.lit || b.name == "arrows" || b.name == "isosurface" || b.name == "outline") continue;
+            feature_edges(b, edges);
+        }
+        const std::size_t first = lines.size();
+        const float ink[4] = {0.08f, 0.09f, 0.11f, 0.85f};
+        for (const auto& [a, b] : edges) {
+            const auto vert = [&](const Float3& p, const Float3& q, float side) {
+                lines.push_back({{p[0], p[1], p[2]}, {q[0], q[1], q[2]}, side, {ink[0], ink[1], ink[2], ink[3]}});
+            };
+            vert(a, b, -1.0f);
+            vert(a, b, 1.0f);
+            vert(b, a, -1.0f);
+            vert(a, b, -1.0f);
+            vert(b, a, -1.0f);
+            vert(b, a, 1.0f);
+        }
+        line_ranges.push_back({first, lines.size() - first, 1.7f, false});
+    }
 
     // Constants: one block per draw.
     FrameConstants base{};
@@ -847,6 +959,30 @@ std::expected<void, base::Error> Renderer::Impl::render_field(const FieldScene& 
     base.ambient = 0.38f;
     base.viewport[0] = (view.right - view.left) * supersample;
     base.viewport[1] = (view.bottom - view.top) * supersample;
+    if (proto) {
+        // Fill from the lower right, opposite the key; the eye and up of the camera.
+        std::array<double, 3> F{};
+        for (int i = 0; i < 3; ++i) {
+            const auto ii = static_cast<std::size_t>(i);
+            F[ii] = -v.forward[ii] * 0.6 - v.up[ii] * 0.25 + v.right[ii] * 0.75;
+        }
+        F = unitd(F);
+        for (int i = 0; i < 3; ++i) {
+            const auto ii = static_cast<std::size_t>(i);
+            base.eye[ii] = static_cast<float>(-v.forward[ii]);
+            base.up[ii] = static_cast<float>(v.up[ii]);
+            base.fill[ii] = static_cast<float>(F[ii]);
+        }
+        base.style = 1.0f;
+        const float top[4] = {0.86f, 0.89f, 0.93f, 1.0f};
+        const float bottom[4] = {0.99f, 0.99f, 1.0f, 1.0f};
+        std::memcpy(base.bg_top, top, sizeof top);
+        std::memcpy(base.bg_bottom, bottom, sizeof bottom);
+        base.view_rect[0] = view.left * supersample;
+        base.view_rect[1] = view.top * supersample;
+        base.view_rect[2] = (view.right - view.left) * supersample;
+        base.view_rect[3] = (view.bottom - view.top) * supersample;
+    }
     const Colormap map = s.colorbar ? s.colorbar->map : Colormap::turbo;
     for (int i = 0; i < 256; ++i) {
         const Rgb c = sample(map, i / 255.0);
@@ -931,6 +1067,12 @@ std::expected<void, base::Error> Renderer::Impl::render_field(const FieldScene& 
         const D3D12_VERTEX_BUFFER_VIEW line_view{(*lbr)->GetGPUVirtualAddress(),
                                                  static_cast<UINT>(std::max<std::size_t>(lines.size() * sizeof(LineVertex), 256)),
                                                  sizeof(LineVertex)};
+        if (proto) {
+            list->OMSetRenderTargets(1, &ssaa_rtv, FALSE, nullptr);
+            list->SetPipelineState(background.Get());
+            list->SetGraphicsRootConstantBufferView(0, cb_base);
+            list->DrawInstanced(3, 1, 0, 0);
+        }
         // Opaque triangles, then the depth-tested lines.
         list->OMSetRenderTargets(1, &ssaa_rtv, FALSE, &dsv);
         list->SetPipelineState(opaque.Get());
