@@ -554,6 +554,71 @@ kept earlier mutants. It was rerun with each file touched after restore. **Full 
 2026-11-18: "full suite is not required rn"), and the Debug suite is left to CI. HG6 therefore stands on the suites
 above, not on the whole tree.
 
+### Unit 26f — enhanced 3D look (proposed 2026-11-18; on `app/visual-prototype`)
+
+**Owner request (2026-11-18):** "improve the visuals of 3D model ... the GUI of 3D model looks too basic". Of the
+eight suggestions, the owner asked for a prototype of the first three: lighting, feature edges and a gradient
+background. Prototype `ff02613` sits behind the environment variable `NITCAD_VISUAL_PROTO=1`. On its FinFET and
+nmosfet screenshots the owner ruled "Its good" and asked for this proposal. The branch is stacked on
+`app/hover-readout` (26e, not yet merged), so it rebases onto `main` once 26e merges.
+
+**Standing conditions:** as for 26e. The drawing of 3D views only, with no change to numerics, results, files or run
+identities. Win32 + D3D12 + Direct2D only. Criteria are fixed before code. Release and Debug suites with `/W4 /WX`,
+plus hand mutants. WG1 and the self-tests stay as ruled. Nothing is pushed or merged without authorization.
+
+**Today (`main` and 26e):** 3D triangles get one directional light from over the viewer's shoulder, lit two-sided as
+`ambient 0.38 + 0.62·|n·l|`, on a white clear. Region solids show no edges unless **Mesh edges** is on. The prototype
+adds the following on 3D scenes only:
+- key, fill and rim lights, a sky/ground hemisphere ambient and a soft highlight (reduced on field maps);
+- dark depth-tested feature edges where faces turn by more than 30°, and at each batch's open boundary;
+- a vertical gradient over the view rectangle.
+
+It has three shortcuts: the edges are recomputed on every frame, the eye direction is `-forward` even in
+perspective, and the switch is an environment variable.
+
+**Design:**
+
+| # | Change | Where | Behaviour |
+|---|---|---|---|
+| KD1 | **A look on the scene.** `enum class Look { classic, enhanced }` and `FieldScene::look`. The render layer's default stays **classic**. The renderer branches on the scene's look, and the environment variable is removed. | `render/scene.hpp`, `renderer.cpp` | Classic draws bit-identically to today. 2D scenes ignore the look. |
+| KD2 | **Enhanced lighting.** The prototype's model: key (today's light), fill (lower right), rim `pow(1 − n·v, 3)`, hemisphere ambient from the camera's up, and a Blinn–Phong highlight (0.22 on solids, 0.08 on field maps). Two-sided by turning the normal toward the eye. **Per-pixel eye direction:** the mesh shader passes world position, and the constants carry the camera position (perspective) or `-forward` (orthographic). | `scene.hlsl`; a new pure `frame_lighting(scene, view)` in the renderer, which fills those constants | The colormap is sampled exactly as today, and the lighting only scales it, as classic does. The hover readout and Probe still report the solved values. |
+| KD3 | **Feature edges, computed once.** A new pure `render::feature_edges(const TriangleBatch&, float angle_deg)` returns segments: edges shared by two faces whose normals differ by more than the angle (either winding), and edges of only one face (or of more than two). The output is sorted, so images are deterministic. `add_feature_edges(FieldScene&)` appends one `LineBatch "feature edges"` (ink 0.08/0.09/0.11, alpha 0.85, 1.7 px, depth-tested) built from the region solids, field surfaces, slices and electrodes. Arrows, streamlines, isosurfaces and the outline shell are skipped. | `render/geometry` or a new `render/edges.hpp/.cpp`; the 3D scene builders call it when `look == enhanced` | Built with the scene, not per frame: a camera move redraws without recomputing. Clipping and hidden regions rebuild the scene, and with it the edges. |
+| KD4 | **Gradient background.** In enhanced 3D, the view rectangle is filled before the scene with a vertical gradient (0.86/0.89/0.93 at the top to 0.99/0.99/1.0 at the bottom). The title band and colorbar panel stay white. | `background_ps` in `scene.hlsl`, one PSO | 2D views and plots are unchanged. |
+| KD5 | **The app setting.** An inspector check box **Enhanced 3D look**, on by default, saved in the app state with the other view settings. Off gives classic. The equivalent command adds `--look classic` only when it is off. | `view_settings`, `app_state`, `main_window.cpp`, `self_test.cpp` | Shown on 3D views only (as **Perspective** is). |
+| KD6 | **`nitcad plot --look classic\|enhanced`**, default **enhanced**, so the app and `nitcad plot` give the same image from the same options (as HD4 did for the colormap). | `cli/plot.cpp` | A 3D `nitcad plot` run without `--look` draws a different PNG from before. This is the user-visible change. |
+
+**Questions (each with a recommendation):**
+
+| # | Question | Options | Recommendation |
+|---|---|---|---|
+| KQ1 | The default look | (a) Enhanced in the app and `nitcad plot`. The render layer's default stays classic, existing references unchanged, two new enhanced references. (b) Classic everywhere, enhanced opt-in. (c) Enhanced everywhere, including the render layer, with every 3D reference rebuilt. | **(a)**: users get the look the owner approved. As with HD4, the references name what they draw, so no owner-approved rebuild is needed. (c) churns references with no gain in what they test. |
+| KQ2 | The edge rule | (a) Dihedral angle above 30°, plus open batch boundaries. (b) (a) plus view-dependent silhouettes. | **(a)**: device geometry is mostly boxes and extrusions, so (a) draws the outline at any angle. It can also be cached, while silhouettes need work on every frame. |
+| KQ3 | Which batches get edges | (a) Region solids, field surfaces, slices, electrodes. (b) Every lit batch. | **(a)**: arrow cones, streamline tubes and marching-tetrahedra isosurfaces have many facets over 30°, and outlining them is clutter. |
+| KQ4 | Where the edges are computed | (a) Once, when the scene is built (render layer, pure, testable). (b) Per frame in the renderer (the prototype). | **(a)**: rotating costs nothing extra, and the function can be unit tested. |
+| KQ5 | The background | (a) A gradient over the 3D view only. (b) Over the whole image. (c) A dark viewport option as well. | **(a)**: what the owner approved. A dark viewport is a later item, with the dark title bar (26d). |
+| KQ6 | Highlights on field maps | (a) Reduced (0.08), as prototyped. (b) None. | **(a)**: as approved. Lighting already scales the colormap in classic. Exact values come from the colorbar, the hover readout and Probe. |
+
+**Owner ruling (2026-11-18):** ruled under the standing instruction "always choose recommended" (2026-11-11): KQ1 (a),
+KQ2 (a), KQ3 (a), KQ4 (a), KQ5 (a), KQ6 (a). The request was for the proposal, so implementation waits for the
+owner's go-ahead.
+
+**Acceptance criteria (frozen before code; tests in `tests/render` and `tests/app`, hidden windows as today):**
+
+| # | Criterion |
+|---|---|
+| KG1 | Classic is bit-identical: every existing render reference image matches unchanged, the scene's default look is classic, and 2D scenes draw identically under both looks. |
+| KG2 | `feature_edges`: a closed cube of 12 triangles gives exactly its 12 edges. A flat square split into 8 triangles gives only its 4 sides (8 segments). A fold at 20° gives no edge at 30°, and one at 40° gives the fold. A flat strip with mixed winding gives only its boundary. Degenerate triangles are ignored. Output is identical across two calls and with the triangle order shuffled. |
+| KG3 | `frame_lighting`: orthographic gives eye `-forward` and a perspective flag of 0; perspective gives the camera position and a flag of 1. Key, fill and up are unit vectors, the fill on the opposite side of the eye from the key. Classic leaves the KD2 constants zero. |
+| KG4 | Two new references: `examples/mosfet_3d.deck`'s solid view and potential field view, enhanced, compared under the references' existing rules. Each passes, and each differs from its classic render. |
+| KG5 | App and CLI: the check box defaults on and survives a save and load of the app state. Off, the view is classic. The equivalent command omits `--look` when on and gives `--look classic` when off, and run through `nitcad plot` it gives the app's image (the WG4 self-test default). `nitcad plot` with no `--look` equals `--look enhanced`. The check box is hidden on 2D views. |
+| KG6 | Cost: building the edges for the largest bundled 3D example's field scene takes under 50 ms in Release, and a camera-move redraw is within 10% of classic's (median of 50 frames). Both times are recorded. |
+| KG7 | No change elsewhere: no solver, physics or io source changed; app tests change only where KD5 changes what they check; WG1 self-tests within their ruled bounds. |
+| KG8 | Hand mutants, each killed by a test: angle 30° → 60°; the `abs` dropped from the dihedral test (mixed winding); open boundaries not drawn; arrows given edges; output not sorted; the renderer ignoring `look`; the background drawn in 2D; the perspective eye replaced by `-forward`; the setting not saved; the `nitcad plot` default left at classic. |
+
+**Slices (each one local commit):** 26f·1 the render layer: `Look`, `feature_edges` / `add_feature_edges`,
+`frame_lighting`, per-pixel eye, background, the environment variable removed (KG1–KG4); 26f·2 the app check box and
+`nitcad plot --look` (KG5, KG6); 26f·3 suites, mutants (KG7, KG8), the ARCHITECTURE "as built" entry.
+
 ---
 
 ## New questions the advisor raised (not yet in `ARCHITECTURE.md`)
