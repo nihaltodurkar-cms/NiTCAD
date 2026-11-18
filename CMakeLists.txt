@@ -477,7 +477,8 @@ add_library(nitcad_analysis STATIC
   src/analysis/curve.cpp
   src/analysis/dc.cpp
   src/analysis/cv.cpp
-  src/analysis/two_port.cpp)
+  src/analysis/two_port.cpp
+  src/analysis/compare.cpp)
 add_library(NiTCAD::analysis ALIAS nitcad_analysis)
 target_include_directories(nitcad_analysis PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
 target_link_libraries(nitcad_analysis PUBLIC NiTCAD::base NiTCAD::results)
@@ -486,8 +487,10 @@ add_executable(nitcad_analysis_test
   tests/analysis/curve_test.cpp
   tests/analysis/dc_test.cpp
   tests/analysis/cv_test.cpp
-  tests/analysis/two_port_test.cpp)
-target_link_libraries(nitcad_analysis_test PRIVATE NiTCAD::analysis Catch2::Catch2WithMain)
+  tests/analysis/two_port_test.cpp
+  tests/analysis/compare_test.cpp)
+# compare_test saves and loads a sweep (Unit 60, XG2); the library itself does not depend on io.
+target_link_libraries(nitcad_analysis_test PRIVATE NiTCAD::analysis NiTCAD::io Catch2::Catch2WithMain)
 add_test(NAME analysis COMMAND nitcad_analysis_test)
 
 # --- io layer (files: meshes, sweeps, checkpoints; Unit 29, approved 2026-10-09) ----------
