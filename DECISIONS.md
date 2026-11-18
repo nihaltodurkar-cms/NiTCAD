@@ -570,6 +570,86 @@ above, not on the whole tree.
 
 ---
 
+### Unit 61 — restart of transient, trace and small-signal runs; `initial`; time and frequency suffixes (proposed 2026-11-19; on `io/restart-transient-trace`)
+
+**Owner request (2026-11-19):** "start Restart of transient and trace runs, starting a run from a checkpoint
+(initial), unit suffixes on times", the 11.3 row "Input/output, checkpoint/restart", next step "Restart of transient
+and trace runs; a run started from a checkpoint (`initial`); unit suffixes on times" (also "Not in Unit 43", 6.5).
+The branch starts from `main` `8f84d04`. Unit 60 (PR #96) is not in it; the two touch different code.
+
+**Starting point (read from the code):**
+- **Sweep restart (Unit 31, DK9):** `[sweep] restart = <checkpoint>` finds the plan point whose bias the checkpoint
+  holds, skips the points up to it and starts `sweep_bias` from the checkpoint's fields. The run identity is not
+  checked. The restarted run reaches the uninterrupted points to 1e-9 relative, not bit for bit, because the state
+  passes through physical units.
+- **A checkpoint** (`io::Checkpoint`, content kind 7) holds the mesh digest, run identity, bias, thermal bias, node
+  fields and provenance, and nothing about the analysis that wrote it.
+- **Transient:** `checkpoint =` with `[transient]` is refused (AQ4: "its end state is not a steady point"). The
+  integrator carries up to three accepted states (scaled x, stored charge, trap occupancy, contact charge, time),
+  the next step size, and restarts its history at waveform breakpoints (`solve/transient.cpp`). A restart from
+  fields alone would start over with backward Euler and a new step size, so it would not continue the same run.
+- **Trace:** the continuation carries the scaled state with λ, the unit tangent (oriented by the previous
+  tangent's arc row), the arc step `ds` and the bordered row's entry `k`. Past a fold the bias moves away from
+  `end_V`, so a restart that re-derives the direction from `end_V` would turn back onto the branch already traced.
+- **`initial`:** `solve_transient`, `trace_bias` and `solve_small_signal` already take an initial state (a starting
+  guess). Only the deck lacks a way to give one.
+- **Times** are bare seconds (DK5 kept, AQ2) and frequencies bare hertz. Lengths take `cm`, `um`, `nm`.
+
+**Standing conditions:** opt-in. Without `restart` or `initial` every analysis is bit-identical to `main`, and so is
+every file written by an analysis that existed before (RG1). Old checkpoints load unchanged (IO2). Bare numbers keep
+their meaning. Criteria are fixed before code. Release and Debug suites with `/W4 /WX`, plus hand mutants. Built
+with MSVC 14.51. Nothing is pushed or merged without authorization.
+
+**Left out of this unit:** extending a finished run (a longer `t_end`, a further `end`), because it changes the step
+defaults derived from `t_end`; restart under `[adapt]` (refused as today); periodic checkpoints during a run
+(RQ5); voltage suffixes (`mV`); the GUI's restart controls.
+
+**Design:**
+
+| # | Slice | Change | Notes |
+|---|---|---|---|
+| RD1 | 1 | **Suffixes.** Times take `s`, `ms`, `us`, `ns`, `ps`, `fs`; frequencies take `Hz`, `kHz`, `MHz`, `GHz`, `THz`. They are read by shifting the decimal exponent of the text, so `2.5ns` parses to the same double as `2.5e-9`. They apply where the option or argument is a time or a frequency: `t_end`, `dt_*`, `output_times`, the time arguments of `step`, `ramp`, `pulse`, `pwl` and `sine` (`f` a frequency), and `[small_signal] frequencies`, `logspace` included. A suffix of the wrong kind (`1ns` as a voltage, `1MHz` as a time) is an error with its line. | Bare numbers unchanged (RG1). |
+| RD2 | 2 | **`initial = <checkpoint>`** in `[transient]`, `[small_signal]`, `[trace]` and `[sweep]`: the checkpoint's fields become the run's starting guess (the existing `initial` argument). It is refused with `restart` in the same section, on another mesh (as `load_checkpoint`), and for a checkpoint holding resume state (RD3; use `restart`). | A guess only: the bias need not match (RQ3). |
+| RD3 | 3 | **Transient resume state.** `results::TransientResume`: the integrator's accepted history (up to three states as scaled vectors, bit for bit, with their times), the next step, the number of accepted steps, the next output-time index and the breakpoint state. `solve_transient` returns it at the end of every run and takes an optional one to continue from. Continuing reproduces the uninterrupted run's arithmetic. | Absent: today's code path (RG1). |
+| RD4 | 3 | **Checkpoints with resume state.** `io::Checkpoint` gains an analysis kind (absent = steady; IO2) and an optional resume record. `[transient] checkpoint =` is allowed and writes the last accepted step with its resume state (AQ4 revised). `[transient] restart =` checks the run identity: **equal identity required** (RQ2), because the state belongs to that run. The restarted run's files hold the steps after the checkpoint, its first point the checkpoint's step. | |
+| RD5 | 4 | **Trace resume state.** `results::TraceResume`: the scaled state with λ, the tangent, `ds`, `k` and the point count. `trace_bias` returns and accepts it the same way. `[trace] restart =` and `checkpoint =` work as RD4. | |
+| RD6 | 5 | **Small-signal restart.** `[small_signal] restart = <checkpoint>` continues after the operating point the checkpoint holds, as the sweep's (DK9), at every frequency of the remaining points. | |
+| RD7 | 6 | **Records:** ARCHITECTURE 6.5 and 6.6 "As built", 11.3; DECISIONS results. | |
+
+**Criteria (frozen once approved):**
+
+| # | Gate |
+|---|---|
+| RG1 | Bit-identity: every existing test passes unchanged. Every example and `decks/` deck that runs in under 60 s writes a CSV table byte-identical to `main`'s, and every test that compares a deck run with the C++ call bit for bit still passes. |
+| RG2 | Suffixes: every suffix gives the same double as the bare exponent form (`2.5ns` ≡ `2.5e-9`, `10GHz` ≡ `1e10`), for each key and each waveform argument; a deck written with suffixes gives the bare deck's run identity; the wrong kind and an unknown suffix name the line. |
+| RG3 | `initial`: a transient, small-signal, trace and sweep run from a checkpoint of its own starting point equals the run without it to 1e-10 relative, with no more Newton iterations at the first point. Refused: with `restart`, on another mesh, and with a resume checkpoint. |
+| RG4 | Transient restart: on the hand-built diode with a pulse (BDF2, adaptive), runs stopped after 1, 2 and 3 accepted steps, after a breakpoint and mid-ramp each restart, and **the joined run equals the uninterrupted run bit for bit**: times, steps, orders, error ratios, currents and snapshots. The same holds with interface traps, and with electrothermal on. A restart with another identity, a steady checkpoint, or the run's final step is refused. |
+| RG5 | Trace restart: a trace stopped after k points (k = 1 and a k past a fold, on Unit 19's fold case) and restarted equals the uninterrupted trace bit for bit from point k on. A steady checkpoint and another identity are refused. |
+| RG6 | Small-signal restart: the remaining operating points equal the uninterrupted run's to 1e-9 relative (as DK9), at every frequency; a checkpoint at the last point is refused. |
+| RG7 | Files: Unit 29's and Unit 42's checkpoint fixtures load unchanged as steady checkpoints; a resume checkpoint round-trips bit for bit; a damaged resume record is refused. |
+| RG8 | Deck and CLI: every new mistake names its line; `nitcad run` on a stopped transient (exit 2) writes a checkpoint that a restart completes (exit 0), and likewise for a trace. |
+| RG9 | `/W4 /WX`. Hand mutants (one history state dropped, the next step not restored, the breakpoint state lost, the tangent's sign flipped, `ds` not restored, the identity check removed, the suffix exponent off by 3, the wrong suffix kind accepted, a skipped small-signal point), each caught. |
+
+**Size (estimate):** L, about 1.5–2k lines, six slices. Slices 3 and 4 touch the transient and trace solvers.
+
+**Questions for the owner (recommended option first):**
+
+| # | Question | Options |
+|---|---|---|
+| RQ1 | Restart exactness | **Bit-identical continuation through solver resume state (recommended).** / Restart from fields only, to a tolerance (simpler, but a transient would restart its integrator and change every later step). |
+| RQ2 | Run identity on restart | **Transient and trace: equal identity required. Sweep and small signal: as DK9, bias match only (recommended).** / Required everywhere (changes Unit 31's sweep restart). |
+| RQ3 | `initial` with a bias other than the run's start | **Allowed; it is only a guess (recommended).** / Refused. |
+| RQ4 | Which analyses get `initial` | **Transient, small signal, trace and sweep (recommended).** / Transient and small signal only (the 11.3 wording). |
+| RQ5 | When a transient or trace checkpoint is written | **At the end of the run, completed or stopped, as sweeps today (recommended).** / Also every N steps (`checkpoint_every`), for crashes. |
+| RQ6 | Suffix scope | **Times and frequencies (recommended).** / Times only. |
+| RQ7 | Small-signal restart | **In this unit (recommended).** / Later. |
+| RQ8 | The restarted run's output files | **Hold the steps after the checkpoint, the first being the checkpoint's own step (recommended).** / Joined to the earlier file. |
+
+**Owner ruling (2026-11-19, standing instruction "always choose recommended", 2026-11-11):** RQ1–RQ8 take the
+recommended option. Pushing, the PR and the full Release/Debug suites still wait for the owner's word.
+
+---
+
 ## New questions the advisor raised (not yet in `ARCHITECTURE.md`)
 
 None of these is decided. Each needs an owner position before the build scaffold fixes the flags.
