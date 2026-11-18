@@ -523,6 +523,31 @@ HQ2 (a), HQ3 (a), HQ4 (a), HQ5 (a), HQ6 (a). Implementation authorized by the re
 26e·2 HD1 + HD3 in the window (HG4, HG7); 26e·3 HD4 (HG5); 26e·4 suites, mutants (HG6, HG8), the ARCHITECTURE "as
 built" entry.
 
+**Implementation (2026-11-18).** Slices: 26e·1 `bdd3af9`, 26e·2 `b72a550`, 26e·3 `fad0b0a`, 26e·4 this record and
+ARCHITECTURE's "as built" entry (6.14).
+
+Choices made in building, within the design:
+- **HD3:** the menu item is **View ▸ Display hover readout** (mnemonic Y). Every letter of "Hover readout" was already
+  a View mnemonic, and the menu test requires them to be unique. A hidden window (the tests) keeps the readout's
+  state and text but never activates the tooltip, so test runs put nothing on the desktop. A view with no field (the
+  structure, the mesh) shows the position and node only.
+- **HD4:** the difference view's sentinel is the default, viridis, in both the app (`takes_coolwarm`) and `nitcad
+  plot` (XD6). Choosing viridis there therefore still shows cool-warm, as turbo did before 26e.
+- **Tests changed (HG6):** the `plot_arguments` expectations drop `--colormap viridis` (now the default; one case
+  names cividis to keep the option covered); 26d's ZG10 case is rewritten for one default; the self-test's third
+  view names turbo instead of viridis. The 26d film tests that name `--colormap viridis` stay as they are.
+- **Found, not fixed:** a 1D diode sweep from 0 V has no I-V plot ("a log axis needs a positive value": the 0 V
+  current on the default log axis). This predates 26e; the hover test's sweep starts at 0.1 V.
+
+Results: Release app tests 70/70 test cases, window tests 27/27 (24 + 3 new), render 78/78 with every reference image
+unchanged (HG3), `nitcad plot` deck tests 12/12. HG7: median hover 0.067 ms, maximum 0.78 ms over 200 positions on
+`examples/mosfet_3d.deck`'s doping surface (1,911 nodes). HG8: 10 hand mutants, all killed (the curve pick's own
+non-finite skip is redundant, since a NaN position fails the reach test, so that mutant is placed in
+`axis_fraction` instead). A first mutant round was discarded: its restores kept old file times, so the next builds
+kept earlier mutants. It was rerun with each file touched after restore. **Full Release ctest not run** (owner,
+2026-11-18: "full suite is not required rn"), and the Debug suite is left to CI. HG6 therefore stands on the suites
+above, not on the whole tree.
+
 ---
 
 ## New questions the advisor raised (not yet in `ARCHITECTURE.md`)
