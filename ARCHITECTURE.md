@@ -3100,7 +3100,8 @@ the owner approves them in a unit request: `cmake/` (toolchain modules). `benchm
   barely changed (about 2m20s to 2m35s, Debug and Release), so the cache is not the dominant cost.
   **Amended 2026-11-19 (DECISIONS.md Q10):** image 20261116 (Visual Studio 18.12) no longer has 14.51 by default, so
   a step adds the side-by-side `Microsoft.VisualStudio.Component.VC.14.51.x86.x64` with the Visual Studio installer
-  when it is missing, and the assertion is now `cl` 19.51.36263, the build that component installs (14.51 serviced in
+  when it is missing, and the assertion is now `cl` 19.51.36263, the build that component installs, or 19.51.36260 on
+  a runner still on 18.11 while GitHub rolls the image out (14.51 serviced in
   place; the local toolset directory `14.51.36231` holds the same build).
   **Unit 18:** CI also installs the Intel MKL runtime for the PARDISO tests: Intel's NuGet redistributables
   `intelmkl.redist.win-x64` 2026.2.1.12 (178 MB) and `intelopenmp.redist.win` 2026.2.0.864 (since 2026-11-15; Unit 18

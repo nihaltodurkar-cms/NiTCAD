@@ -118,6 +118,10 @@ Already decided and not repeated here: D1–D6, D8, R1, R4, Q6–Q9 (see `ARCHIT
   - **The pin moves from 19.51.36260 to 19.51.36263.** That is the build the 14.51 component installs now. 14.51 was
     serviced in place: the owner's 18.12 has it in the same `14.51.36231` directory, and every local build and test
     since then has used it. The pin stays on 14.51 because 14.52.37025 miscompiles `= {}` (Q11).
+  - **Both builds accepted (owner, 2026-11-19).** GitHub rolls images out gradually. PR #94's first release job
+    landed on an 18.11 runner, whose default 14.51 is still 19.51.36260, and failed the 36263-only check. The
+    assertion now accepts exactly 19.51.36260 or 19.51.36263, nothing else. 36260 is dropped once every runner is on
+    18.12.
 
 ## Q11 — Moving to an LTS toolset
 

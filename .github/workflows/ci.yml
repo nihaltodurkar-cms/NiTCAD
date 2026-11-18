@@ -5,7 +5,7 @@
 # a hosted runner image can change under us, and the job must fail loudly when it does.
 #
 # Verified on the first run (windows-2025, Visual Studio 2026 Enterprise 18.10.2):
-# `vcvarsall.bat x64 -vcvars_ver=14.51` selected compiler 19.51.36260 (19.51.36263 since 2026-11-19, below), the SDK is
+# `vcvarsall.bat x64 -vcvars_ver=14.51` selected compiler 19.51.36260 (36260 or 36263 since 2026-11-19, below), the SDK is
 # 10.0.26100.0, and the pinned CMake 4.3.1 and Ninja 1.13.2 are found. Still unverified:
 # vcpkg binary-cache behaviour (restore on a second run).
 name: CI
@@ -122,7 +122,9 @@ jobs:
       # is 14.52; 14.51 had only ever been 18.11's default, never a side-by-side component, so it went (vcvars:
       # "Toolset directory for version '14.51' was not found"; PR #91's run). The pin stays (14.52.37025 miscompiles
       # `= {}`, Q11): this step adds the side-by-side 14.51 component when the image lacks it. The component installs
-      # compiler 19.51.36263 today (14.51 serviced in place; the owner's 18.12 has the same), which the next step asserts.
+      # compiler 19.51.36263 today (14.51 serviced in place; the owner's 18.12 has the same). GitHub rolls images out
+      # gradually, and an 18.11 runner still has its default 14.51, compiler 19.51.36260 (PR #94's first release job),
+      # so the next step accepts exactly those two builds (owner, 2026-11-19); 36260 goes once every runner is 18.12.
       - name: Ensure the MSVC 14.51 toolset
         shell: pwsh
         run: |
@@ -168,8 +170,8 @@ jobs:
           set "VCPKG_ROOT=%NITCAD_VCPKG_ROOT%"
 
           echo --- version assertions
-          cl 2>&1 | findstr /C:"Version 19.51.36263"
-          if errorlevel 1 (echo ::error::cl is not 19.51.36263 & cl 2>&1 & exit /b 1)
+          cl 2>&1 | findstr /C:"Version 19.51.36260" /C:"Version 19.51.36263"
+          if errorlevel 1 (echo ::error::cl is neither 19.51.36260 nor 19.51.36263 & cl 2>&1 & exit /b 1)
           if not "%WindowsSDKVersion%"=="10.0.26100.0\" (echo ::error::Windows SDK is %WindowsSDKVersion%, expected 10.0.26100.0\ & exit /b 1)
           cmake --version | findstr /B /C:"cmake version 4.3.1"
           if errorlevel 1 (echo ::error::cmake is not 4.3.1 & cmake --version & exit /b 1)
