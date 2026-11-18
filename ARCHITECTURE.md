@@ -2951,6 +2951,34 @@ CG1–CG9; accepted by the owner 2026-10-22):**
   `WM_MOUSELEAVE` and a button press to the view); HG7 median hover 0.067 ms on `examples/mosfet_3d.deck`'s doping
   surface (1,911 nodes; bound 16 ms); 10 hand mutants killed (HG8); the full Release ctest not run by owner ruling (DECISIONS.md Unit 26e).
 
+**As built (Unit 26f, enhanced 3D look; DECISIONS.md KD1–KD6, KQ1–KQ6, KG1–KG8; on `app/visual-prototype`):**
+- **The look (KD1, KQ1):** `render::Look { classic, enhanced }` on `FieldScene::look`, classic by default in the
+  render layer, so every existing reference draws as before (byte-identical on the GPU). 2D scenes ignore it.
+- **Lighting (KD2, KQ6):** with `enhanced` on a 3D scene, `scene.hlsl` lights with a key (classic's light, from the
+  upper left over the viewer's shoulder), a fill from the lower right, a rim `(1 − n·v)³`, a hemisphere ambient
+  from the camera's up and a Blinn–Phong highlight `(n·h)⁴⁰` (0.22 on solids, 0.08 on field maps), all two-sided,
+  with the normal turned toward the eye. Powers are by multiplication. The eye is `-forward` in orthographic (and
+  the half vector is computed once), and per pixel from the camera's position in perspective (the mesh shader
+  passes world positions). `render::frame_lighting(scene, aspect)` gives those vectors (zero for classic and 2D).
+- **Feature edges (KD3, KQ2–KQ4):** `render/edges.hpp`: `feature_edges(batch, 30°)` returns the batch's open
+  boundary and the edges where its faces turn by more than the angle (either winding), matched by exact position
+  (−0 as +0), degenerate triangles skipped, sorted. `set_look(scene, look)` sets the look and, on an enhanced 3D
+  scene, replaces one depth-tested `LineBatch "feature edges"` (1.7 px, ink 0.08/0.09/0.11 at 0.85) built from
+  every lit batch but arrows, isosurfaces and the outline shell. It is built with the scene, so a camera move
+  redraws without rebuilding.
+- **Background (KD4, KQ5):** a vertical gradient (0.86/0.89/0.93 to 0.99/0.99/1.0) over the 3D view rectangle,
+  drawn before the scene (`background_ps`). The title band and colorbar panel stay white.
+- **App and CLI (KD5, KD6):** the inspector's **Enhanced 3D look** check box, on 3D device views only, sets
+  `ViewSettings::enhanced` (default on). The choice is the default of new views, saved as `enhanced_look = 0|1`
+  (on when absent). `build_scene` calls `set_look` after every overlay. `nitcad plot --look classic|enhanced`
+  defaults to enhanced (film frames and adaptive-pass tiles too), and `plot_arguments` names `--look classic` only
+  when the box is off. A 3D `nitcad plot` run without `--look` draws the enhanced look: the user-visible change.
+- Gates: KG1–KG5 and KG8 met (85 render cases with 2 new WARP references, `mosfet3d_solid_enhanced` and
+  `mosfet3d_surface_potential_enhanced`; app, window and self-test cases; 10 hand mutants killed). KG6: edges
+  built in 1.75–1.91 ms on `examples/mosfet_3d.deck` (bound 50 ms). The redraw is 1.03–1.07× classic on the
+  RTX 5060 Ti but 1.25–1.28× on WARP, the test window's adapter, so that clause is tagged `[!shouldfail]` until
+  the owner rules (DECISIONS.md Unit 26f). Full Release ctest stopped by the owner at 229 of 235 passed.
+
 ## 7. Language placement (D6: C and Fortran deferred)
 
 | Component | Language | Reason |
@@ -3251,7 +3279,7 @@ built.
 | 23 | Thermal / electrothermal coupling | physics, assemble, solve | **done, on `main`** (`7300b67`, PR #30): the lattice temperature as a fourth Newton unknown (the rise τ) with an exact Jacobian; Wachutka's thermodynamic fluxes (Boltzmann and Fermi–Dirac), the heat as the energy flux's divergence with Peltier and Thomson heat, isothermal and R_th thermal contacts; T in every model the assembler has; steady sweeps, `trace_bias` (thermal-runaway folds), transients and AC; traps and BTBT refused; thermionic emission (deferred) and incomplete ionization refused (6.2, Unit 23; DECISIONS.md T1–T14, U1–U8) |
 | 24 | Analysis and extraction engine | analysis | **done, on `main`** (`4183767`): curves read from sweeps and small-signal runs; transistor, diode and breakdown figures; C-V doping profile, flat band and the conductance method; two-port Y/Z/h/S, Mason's U, k, MAG/MSG, f_T and f_max; every extraction with the points it used and resolution and extrapolation flags (6.13, Unit 24) |
 | 25 | Scientific visualization / rendering | render | **25a done** (`render/visualization`): CPU scenes, Direct3D 12 and Direct2D drawing to PNG, `nitcad plot` (6.14); **25b done** (`render/derived-fields`): \|E\|, \|J\|, isosurfaces, streamlines (6.14); **25c done** (`render/vectors-clip`): arrows, clipping box, exploded view, filmstrips (6.14) |
-| 26 | Native Windows application and workflow | app | **done, on `main`** (`e9b1d71`, PR #59): `nitcad-app.exe`, Win32 with Direct3D 12 / Direct2D; deck editor, runs on a worker, run monitor, results, examples, `--self-test` (6.14, Unit 26); **26b done, on `main`** (`51face0`, PR #60): live checking and completion, structure preview, cut lines, run comparison, mesh quality (6.14, Unit 26b); **26c done** (`app/gui-catch-up`, PR #61): arrows, streamlines, exploded view, curve pickers, region visibility, transient playback, clip sliders (6.14, Unit 26c); **26d done** (`app/gui-quick-wins`): no Apply, colour range, point labels, units in the metrics, viridis default, drag and drop, taskbar progress, dark title bar (6.14, Unit 26d); **26e built** (`app/hover-readout`): hover readout of values on field and curve views, viridis the default colormap of `nitcad plot` too (6.14, Unit 26e) |
+| 26 | Native Windows application and workflow | app | **done, on `main`** (`e9b1d71`, PR #59): `nitcad-app.exe`, Win32 with Direct3D 12 / Direct2D; deck editor, runs on a worker, run monitor, results, examples, `--self-test` (6.14, Unit 26); **26b done, on `main`** (`51face0`, PR #60): live checking and completion, structure preview, cut lines, run comparison, mesh quality (6.14, Unit 26b); **26c done** (`app/gui-catch-up`, PR #61): arrows, streamlines, exploded view, curve pickers, region visibility, transient playback, clip sliders (6.14, Unit 26c); **26d done** (`app/gui-quick-wins`): no Apply, colour range, point labels, units in the metrics, viridis default, drag and drop, taskbar progress, dark title bar (6.14, Unit 26d); **26e built** (`app/hover-readout`): hover readout of values on field and curve views, viridis the default colormap of `nitcad plot` too (6.14, Unit 26e); **26f built** (`app/visual-prototype`): the enhanced 3D look (three lights, feature edges, gradient), the app and `nitcad plot` default (6.14, Unit 26f) |
 | 27 | Optimization / sensitivity / inverse-design workflows | analysis, solve | long-term target |
 | 28 | Bias step cutting (commercial-readiness programme, 11.3) | solve, results | **done, on `main`** (`06b708d`, PR #31): off by default; halving and growth from the last converged state (11.3, Unit 28; DECISIONS.md S1–S7) |
 | 29 | The io layer: files and checkpoint/restart (11.3) | io | **done, on `main`** (`f69a7a8`, PR #33): meshes, sweeps and checkpoints in a versioned, checksummed container with atomic writes; restart equals the uninterrupted sweep (6.6, Unit 29; DECISIONS.md IO1–IO7) |

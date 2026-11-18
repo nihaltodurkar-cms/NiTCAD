@@ -619,6 +619,29 @@ owner's go-ahead.
 `frame_lighting`, per-pixel eye, background, the environment variable removed (KG1–KG4); 26f·2 the app check box and
 `nitcad plot --look` (KG5, KG6); 26f·3 suites, mutants (KG7, KG8), the ARCHITECTURE "as built" entry.
 
+**Implementation authorized (2026-11-18):** "choose recommended and start".
+
+**Results (2026-11-18; slices `fdb7886`, `871c714` and the slice 3 commit; Release, `/W4 /WX`, MSVC 14.51):**
+
+| # | Result |
+|---|---|
+| KG1 | **Met.** Every existing render reference matches unchanged. The scene's default look is classic. The 2D potential map draws byte-identically under both looks. Outside the suite, four `nitcad plot` classic renders (FinFET and nmosfet decks, solid and field) on the RTX 5060 Ti are byte-identical to the images drawn before the unit. |
+| KG2 | **Met.** `tests/render/edges_test.cpp`: the cube's 12 edges; the flat 2 × 2 square's 8 boundary segments; the 20° fold gives no edge and the 40° fold gives one (none at 60°); mixed winding gives only the boundary; degenerate triangles are ignored; output is sorted and identical after shuffling and rotating triangles; −0 and +0 are one position. |
+| KG3 | **Met.** `frame_lighting`: classic and 2D give zeros; orthographic gives eye = the view direction within 1e-6, with unit key, fill, up and eye, key from the left, fill from the right; perspective gives the camera's position, outside the bounds along the view direction within 1e-5. |
+| KG4 | **Met, with one wording deviation.** The two references are drawn from the image test's own solved 3D MOSFET (the device all its 3D references use), not from `examples/mosfet_3d.deck`. Each passes the references' comparison rules and differs from its classic render in more than 5% of pixels. |
+| KG5 | **Met.** The app-views, app-state and window tests: the check box defaults on, is hidden on 2D devices and the Curves tab, and is saved (`enhanced_look`); a new device's views take the saved choice. The equivalent command omits `--look` when on and gives `--look classic` when off; in both cases `nitcad plot` draws the app's image exactly (WARP). `nitcad plot` without `--look` equals `--look enhanced` and differs from classic; `--look shiny` is refused. The self-test accepts `--look`. |
+| KG6 | **Edges met; redraw clause unmet on WARP, met on the hardware adapter: owner ruling needed.** On `examples/mosfet_3d.deck`'s doping surface (1,911 nodes, 776 segments), building the edges takes a median of 1.75–1.91 ms (bound 50 ms). A camera-move redraw (median of 50 drag steps in the hidden test window, which draws on WARP): enhanced 13.7–14.2 ms against classic 10.9–11.1 ms, 1.25–1.28× (bound 1.10×). The prototype shader was 1.47×; the cost was cut by computing powers by multiplication and the orthographic half vector once (no pixel change on WARP). What is left is the per-pixel lighting, which WARP runs on the CPU. The edges cost about 0.3 ms and the background about 0.4 ms. The same draw on the RTX 5060 Ti, off screen: 1.02–1.07× classic. The window test of the redraw clause is tagged `[!shouldfail]` and reports both. |
+| KG7 | **Met** on the render, app and CLI entries (51 of 51, Release); the full Release ctest was stopped at the owner's word ("dont run full suite just push", 2026-11-18) with 229 of 235 entries passed and none failed (`verify_full.tvb04` and five queued entries not finished). The Debug suite is left to CI. No solver, physics or io source changed. App tests changed only where KD5 adds a check box, a setting and a flag. |
+| KG8 | **Met.** 10 hand mutants, each killed: angle 30° → 60°; the `abs` dropped (mixed winding); open boundaries not drawn; arrows given edges; output not sorted; the renderer ignoring the look; the enhanced look drawn in 2D; the perspective eye replaced by `-forward`; the setting not saved; the `nitcad plot` default left at classic. Each file was touched after its restore, so no mutant stayed in a later build. |
+
+**Open for the owner (KG6):** the frozen bound is 1.10× and does not name an adapter. Measured on the test
+window's WARP adapter it is unmet (1.25–1.28×); on the hardware adapter, which the app uses by default, it is met
+(1.02–1.07×). Options: (a) accept KG6's redraw clause as a limitation on WARP, keeping the `[!shouldfail]` test; (b)
+rule that the clause is measured on the hardware adapter, and turn the test's check to it (skipped where there is
+no GPU, as in CI); (c) cheaper enhanced shading on WARP (for example no highlight or rim there), which changes the
+look under WARP. Recommendation: **(a)**. It keeps the criterion as frozen, users draw on the GPU, and (b) would
+change which measurement decides the criterion after the results were seen.
+
 ---
 
 ## New questions the advisor raised (not yet in `ARCHITECTURE.md`)

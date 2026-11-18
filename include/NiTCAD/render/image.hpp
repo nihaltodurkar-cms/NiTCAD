@@ -5,7 +5,8 @@
 // ships with Windows) and draws a FieldScene or a PlotScene off screen:
 // - triangles and lines on Direct3D 12, at twice the image's resolution and averaged down (2 x 2
 //   supersampling); field triangles look the colormap up per pixel from the interpolated position;
-//   lit triangles take one directional light and ambient, two-sided; translucent triangles go through
+//   lit triangles take one directional light and ambient, two-sided (a 3D scene's enhanced look, Unit 26f:
+//   key, fill and rim lights, a hemisphere ambient and a highlight, over a gradient); translucent triangles go through
 //   weighted blended order-independent transparency (McGuire and Bavoil 2013), so their order does
 //   not matter; lines are screen-space quads of their width;
 // - text, the colorbar, axes, the axis triad and plots on Direct2D and DirectWrite, drawn into the
