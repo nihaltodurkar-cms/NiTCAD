@@ -739,6 +739,38 @@ Asked, the owner ruled the recommended option: **drop AO from 26g.**
 contours, colourbar (MD5–MD7; MG5, MG6, MG7's whole-draw cost); 26g·3 suites, mutants (MG1, MG8, MG9), the
 ARCHITECTURE entry. (Originally four slices, with AO as 26g·2; renumbered after MQ9.)
 
+**Results so far (2026-11-19):**
+- 26g·1 `d0b9e55`, MQ9 `62e6378`, 26g·2 `cbd89df`. The owner approved the three enhanced images on 2026-11-18,
+  and they were then written as references (`f8faf26`, MQ7, MG6): `mosfet3d_solid_enhanced` and
+  `mosfet3d_surface_potential_enhanced` (rebuilt), and `mosfet3d_field_mesh_contours_enhanced` (new). Each is
+  byte-identical to the image approved.
+- MG1–MG3, MG5 and MG6 are met by the new render tests. MG1's reference half is met by the classic references
+  (every one unchanged in the render suite run at 26g·1).
+- MG7, on the RTX 5060 Ti by KG6's method: 26g enhanced 5.48 ms against 26f's 5.56 ms (medians of 50), so **0.99×**
+  (bound 1.25×). 26f's draw is the same scene with matte batches and no shadow: exactly 26f's triangles and lines. On
+  WARP it is 1.08×, recorded only. KG6 still holds at 1.04× classic (bound 1.10×).
+- MG9, hand mutants (as amended by MQ8 and MQ9): **8 of 8 killed**. Each was run alone on a clean rebuild, with its
+  target tests passing on unmutated code both before and after.
+
+  | Mutant | Killed by |
+  |---|---|
+  | Electrodes left matte | the MG2 scene test, the MG3 image test |
+  | Glass term power 3 → 1 | the enhanced solid's reference |
+  | Glass on opaque insulators | the MG2 scene test |
+  | Shadow drawn looking up | the MG5 test |
+  | Metal shading in classic | the MG1 bit-identity check, the classic references |
+  | Mesh-edge alpha left at 0.75 | the MD6 test |
+  | Colourbar change in classic | the classic references with colourbars |
+  | Glass rim in dark ink | the edges test, the MG3 glass check |
+
+  A first run of the mutants was discarded. Restoring each file kept its old timestamp, so the build did not
+  recompile it and the mutants accumulated. The runner now touches each file it restores and checks a baseline
+  before and after.
+- **Open:** MG8, the full Release and Debug suites, which wait for the owner's word (2026-11-18). Then the ARCHITECTURE
+  entry.
+- **Seen, not changed:** in 3D, contours are drawn on top of everything, so they show through the gate and the
+  pads. This predates 26g and is the same in classic.
+
 ### Unit 26h — scale and orientation (proposed 2026-11-18; on `app/scale-orientation`)
 
 **Owner request (2026-11-18):** as for 26g, items 6 (an axis box with µm ticks) and 7 (a bigger orientation
