@@ -861,7 +861,7 @@ The cursor becomes a hand over the cube.
 
 **Results, 26h·4 (2026-11-19).**
 - **JG1.** Every classic reference passes unchanged; only the three 26g enhanced references differ (1.1% of pixels,
-  the box and cube). They are rebuilt after the owner approves the images.
+  the box and cube). Rebuilt after the owner approved the images (2026-11-19), byte-identical to the ones shown.
 - **JG7.** `mosfet3d_solid_right_enhanced` is new, a VG4 section. Its render showed the cube's arrows ending inside
   the cube on head-on views. The arrows now reach 10 px past the cube, each label 8 px past its arrow's tip, and the
   cube sits 88 px in from the corner.
