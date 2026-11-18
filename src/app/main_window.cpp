@@ -2194,7 +2194,32 @@ void MainWindow::probe_at(float x, float y) {
     set_status(status_state, text.substr(0, text.find('\n')));
 }
 
+bool MainWindow::viewport_over_cube(float x, float y) const {
+    if (!scene_ || !viewport_) return false;
+    const auto* f = std::get_if<render::FieldScene>(&*scene_);
+    return f && render::view_cube_hit(*f, viewport_->width(), viewport_->height(), x, y).has_value();
+}
+
+void MainWindow::snap_to(const render::CameraPreset& preset) {
+    if (!viewport_is_3d()) return;
+    ViewSettings& s = settings();
+    s.azimuth = preset.azimuth_deg;
+    s.elevation = preset.elevation_deg;
+    fit(s);
+    present_camera();
+    set_status(status_state, "View: " + preset.name);
+}
+
 void MainWindow::viewport_click(float x, float y) {
+    // Unit 26h (JD3): a click on the view cube snaps the camera, whatever the mode.
+    if (scene_) {
+        if (const auto* f = std::get_if<render::FieldScene>(&*scene_)) {
+            if (const auto p = render::view_cube_hit(*f, viewport_->width(), viewport_->height(), x, y)) {
+                snap_to(*p);
+                return;
+            }
+        }
+    }
     if (cut_mode_) cut_at(x, y);
     else if (probe_mode_ || measure_mode_) probe_at(x, y);
 }

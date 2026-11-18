@@ -5,6 +5,8 @@
 #include <array>
 #include <cmath>
 #include <numbers>
+#include <string>
+#include <string_view>
 #include <vector>
 
 #include "NiTCAD/render/axes3d.hpp"
@@ -212,4 +214,105 @@ TEST_CASE("render axes3d: no z axis for a box of zero thickness; none in 2D (Uni
     const AxisBox none = axis_box(flat, W, H);
     CHECK(none.edges.empty());
     CHECK(none.axes.empty());
+}
+
+namespace {
+
+// The camera's right and up, as make_view builds them (+y up; -z up when looking straight down or up).
+std::array<std::array<double, 3>, 2> right_up(const FieldScene& s) {
+    const auto e = eye_direction(s);
+    const std::array<double, 3> f{-e[0], -e[1], -e[2]};
+    std::array<double, 3> up{0.0, 1.0, 0.0};
+    if (std::abs(f[1]) > 0.999) up = {0.0, 0.0, -1.0};
+    std::array<double, 3> r{f[1] * up[2] - f[2] * up[1], f[2] * up[0] - f[0] * up[2], f[0] * up[1] - f[1] * up[0]};
+    const double n = std::sqrt(r[0] * r[0] + r[1] * r[1] + r[2] * r[2]);
+    for (double& c : r) c /= n;
+    const std::array<double, 3> u{r[1] * f[2] - r[2] * f[1], r[2] * f[0] - r[0] * f[2], r[0] * f[1] - r[1] * f[0]};
+    return {r, u};
+}
+
+std::array<float, 2> centroid(const CubeFace& f) {
+    std::array<float, 2> c{};
+    for (const auto& p : f.polygon) {
+        c[0] += 0.25f * p[0];
+        c[1] += 0.25f * p[1];
+    }
+    return c;
+}
+
+}  // namespace
+
+TEST_CASE("render axes3d: the view cube's faces, corners, arrows and hits (Unit 26h, JG3)") {
+    const FieldScene s = box_scene();
+    const ViewCube cube = view_cube(s, W, H);
+    // At the default camera: Front, Right and Top.
+    std::vector<std::string> names;
+    for (const CubeFace& f : cube.faces) names.push_back(f.label);
+    std::ranges::sort(names);
+    CHECK(names == std::vector<std::string>{"Front", "Right", "Top"});
+    CHECK(cube.corners.size() == 7);
+    // A point inside each face's polygon gives its named view.
+    for (const CubeFace& f : cube.faces) {
+        const auto c = centroid(f);
+        const auto hit = view_cube_hit(s, W, H, c[0], c[1]);
+        REQUIRE(hit.has_value());
+        CHECK(hit->name == f.label);
+        CHECK(hit->azimuth_deg == f.preset.azimuth_deg);
+        CHECK(hit->elevation_deg == f.preset.elevation_deg);
+    }
+    const auto preset = [](std::string_view name) {
+        return *std::ranges::find_if(named_views(), [&](const CameraPreset& p) { return p.name == name; });
+    };
+    CHECK(preset("Front").azimuth_deg == 0.0f);
+    CHECK(preset("Right").azimuth_deg == 90.0f);
+    CHECK(preset("Back").azimuth_deg == 180.0f);
+    CHECK(preset("Left").azimuth_deg == 270.0f);
+    CHECK(preset("Top").elevation_deg == 90.0f);
+    CHECK(preset("Bottom").elevation_deg == -90.0f);
+    // Near each corner shown (3 px off): that corner's isometric view.
+    for (const CubeCorner& c : cube.corners) {
+        const auto hit = view_cube_hit(s, W, H, c.at[0] + 3.0f, c.at[1] - 2.0f);
+        REQUIRE(hit.has_value());
+        CAPTURE(c.signs[0], c.signs[1], c.signs[2]);
+        const double az = std::atan2(double(c.signs[0]), double(c.signs[2])) * 180.0 / std::numbers::pi;
+        CHECK(std::abs(hit->azimuth_deg - az) < 1e-4);
+        CHECK(std::abs(std::abs(hit->elevation_deg) - 35.26439f) < 1e-3f);
+        CHECK((hit->elevation_deg > 0.0f) == (c.signs[1] > 0));
+    }
+    // The front top right corner: azimuth +45 degrees, elevation +35.26.
+    const auto ftr = std::ranges::find(cube.corners, std::array<int, 3>{1, 1, 1}, &CubeCorner::signs);
+    REQUIRE(ftr != cube.corners.end());
+    CHECK(std::abs(ftr->preset.azimuth_deg - 45.0f) < 1e-4f);
+    // Outside the cube: nothing.
+    CHECK_FALSE(view_cube_hit(s, W, H, cube.centre[0] + 60.0f, cube.centre[1] - 60.0f).has_value());
+    CHECK_FALSE(view_cube_hit(s, W, H, 480.0f, 360.0f).has_value());
+    // The arrows point as the triad's axes do.
+    const auto [r, u] = right_up(s);
+    REQUIRE(cube.arrows.size() == 3);
+    for (std::size_t a = 0; a < 3; ++a) {
+        const CubeArrow& arrow = cube.arrows[a];
+        const double dx = arrow.to[0] - arrow.from[0], dy = arrow.to[1] - arrow.from[1];
+        const double tx = r[a], ty = -u[a];
+        const double d = (dx * tx + dy * ty) / (std::hypot(dx, dy) * std::hypot(tx, ty));
+        CAPTURE(a, d);
+        CHECK(d > 0.99);
+    }
+    // Looking straight down (Top): only the Top face, and a camera that is not degenerate.
+    const FieldScene top = box_scene(0.0f, 90.0f);
+    const ViewCube t = view_cube(top, W, H);
+    REQUIRE(t.faces.size() == 1);
+    CHECK(t.faces[0].label == "Top");
+    for (const auto& p : t.faces[0].polygon) {
+        CHECK(std::isfinite(p[0]));
+        CHECK(std::isfinite(p[1]));
+    }
+    // Classic and 2D: no cube, no hits (the triad stays).
+    FieldScene classic = box_scene();
+    classic.look = Look::classic;
+    CHECK(view_cube(classic, W, H).faces.empty());
+    const auto c = centroid(cube.faces[0]);
+    CHECK_FALSE(view_cube_hit(classic, W, H, c[0], c[1]).has_value());
+    FieldScene no_triad = box_scene();
+    no_triad.axis_triad = false;
+    CHECK(view_cube(no_triad, W, H).faces.empty());
 }

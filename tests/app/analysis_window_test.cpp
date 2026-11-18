@@ -1486,6 +1486,86 @@ TEST_CASE("app window 26f: the Enhanced 3D look check box (KD5, KG5)", "[app]") 
     CHECK_FALSE(w->settings().enhanced);
 }
 
+TEST_CASE("app window 26h: a click on the view cube snaps; a drag from it orbits; Probe still probes (JD3, JG6)",
+          "[app]") {
+    const fs::path dir = app_test::scratch("window_view_cube");
+    const fs::path deck = app_test::write(dir, "mosfet3d.deck", app_test::mosfet3d);
+    auto w = window();
+    REQUIRE(w->open_deck(deck));
+    REQUIRE(pump_until([&] { return w->workspace() != nullptr && !w->runner().busy(); }));
+    w->execute(Command::run);
+    REQUIRE(pump_until([&] { return !w->runner().busy() && w->workspace() && w->workspace()->has_results(); }));
+    w->select_tab(MainWindow::tab_view);
+    choose(*w, MainWindow::id_view, L"solid");
+    const int W = w->viewport().width(), H = w->viewport().height();
+    const auto face = [&](std::string_view name) {
+        REQUIRE(w->scene());
+        const auto cube = render::view_cube(std::get<render::FieldScene>(*w->scene()), W, H);
+        const auto it = std::ranges::find_if(cube.faces, [&](const render::CubeFace& f) { return f.label == name; });
+        REQUIRE(it != cube.faces.end());
+        float x = 0.0f, y = 0.0f;
+        for (const auto& p : it->polygon) {
+            x += 0.25f * p[0];
+            y += 0.25f * p[1];
+        }
+        return MAKELPARAM(static_cast<int>(std::lround(x)), static_cast<int>(std::lround(y)));
+    };
+    const HWND view = w->viewport().hwnd();
+    // Zoomed and panned first: the snap resets them, as Fit does.
+    w->settings().zoom = 2.0f;
+    w->settings().pan_x = 0.1f;
+    // A click on Top: straight down, zoom 1, no pan; the scene's camera says so.
+    const LPARAM top = face("Top");
+    SendMessageW(view, WM_LBUTTONDOWN, MK_LBUTTON, top);
+    SendMessageW(view, WM_LBUTTONUP, 0, top);
+    CHECK(w->settings().azimuth == 0.0f);
+    CHECK(w->settings().elevation == 90.0f);
+    CHECK(w->settings().zoom == 1.0f);
+    CHECK(w->settings().pan_x == 0.0f);
+    CHECK(std::get<render::FieldScene>(*w->scene()).camera.elevation_deg == 90.0f);
+    // From Top, the Top face is the one shown: a click on Front's place now is nothing of the cube's.
+    // Back to the default camera, then a drag that starts on the cube orbits and does not snap.
+    w->settings().azimuth.reset();
+    w->settings().elevation.reset();
+    w->refresh();
+    const LPARAM front = face("Front");
+    const float before = std::get<render::FieldScene>(*w->scene()).camera.azimuth_deg;
+    SendMessageW(view, WM_LBUTTONDOWN, MK_LBUTTON, front);
+    SendMessageW(view, WM_MOUSEMOVE, MK_LBUTTON, MAKELPARAM(static_cast<short>(LOWORD(front)) + 30, static_cast<short>(HIWORD(front))));
+    SendMessageW(view, WM_LBUTTONUP, 0, MAKELPARAM(static_cast<short>(LOWORD(front)) + 30, static_cast<short>(HIWORD(front))));
+    REQUIRE(w->settings().azimuth.has_value());
+    CHECK(*w->settings().azimuth != before);
+    CHECK(*w->settings().azimuth != 0.0f);
+    CHECK(w->settings().elevation != 0.0f);
+    // Probe mode (on by default): a click on the device probes; a click on the cube snaps, probe kept.
+    w->settings().azimuth.reset();
+    w->settings().elevation.reset();
+    w->refresh();
+    // The front-most node at the device's middle: the top surface's node nearest x and z mid.
+    const auto& mesh = w->workspace()->device->mesh();
+    std::size_t pick = 0;
+    double best = 1e300;
+    for (std::size_t n = 0; n < mesh.points().size(); ++n) {
+        const auto& p = mesh.points()[n];
+        const double d = std::abs(p[0] * 1e4 - 1.0) + std::abs(p[2] * 1e4 - 0.6) - p[1] * 1e4;
+        if (d < best) {
+            best = d;
+            pick = n;
+        }
+    }
+    const auto& node = mesh.points()[pick];
+    click_at(*w, {float(node[0] * 1e4), float(node[1] * 1e4), float(node[2] * 1e4)});
+    CHECK(w->probe());
+    const auto probed = w->probe()->node;
+    const LPARAM right = face("Right");
+    SendMessageW(view, WM_LBUTTONDOWN, MK_LBUTTON, right);
+    SendMessageW(view, WM_LBUTTONUP, 0, right);
+    CHECK(w->settings().azimuth == 90.0f);
+    CHECK(w->settings().elevation == 0.0f);
+    REQUIRE(w->probe());
+    CHECK(w->probe()->node == probed);
+}
+
 TEST_CASE("app window 26h: the Axis box check box (JD1, JQ3, JG6)", "[app]") {
     const fs::path dir = app_test::scratch("window_axis_box");
     const fs::path deck = app_test::write(dir, "mosfet3d.deck", app_test::mosfet3d);

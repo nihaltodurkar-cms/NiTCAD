@@ -1226,7 +1226,47 @@ std::expected<void, base::Error> Renderer::Impl::render_field(const FieldScene& 
             }
             if (inside(ax.title_x, ax.title_y)) ink.text(ax.title, small_text.Get(), ax.title_x, ax.title_y, 1, 1, box_ink);
         }
-        if (!axes && s.axis_triad) {
+        // Unit 26h (JD2): the view cube in place of the triad in the enhanced look.
+        const ViewCube cube = enhanced ? view_cube(s, w, h) : ViewCube{};
+        if (!cube.faces.empty()) {
+            for (const CubeFace& f : cube.faces) {
+                ComPtr<ID2D1PathGeometry> path;
+                ComPtr<ID2D1GeometrySink> sink;
+                if (FAILED(d2d_factory->CreatePathGeometry(&path)) || FAILED(path->Open(&sink))) continue;
+                sink->BeginFigure({f.polygon[0][0], f.polygon[0][1]}, D2D1_FIGURE_BEGIN_FILLED);
+                for (std::size_t k = 1; k < 4; ++k) sink->AddLine({f.polygon[k][0], f.polygon[k][1]});
+                sink->EndFigure(D2D1_FIGURE_END_CLOSED);
+                if (FAILED(sink->Close())) continue;
+                const D2D1_COLOR_F fill{0.90f * f.shade, 0.92f * f.shade, 0.95f * f.shade, 1.0f};
+                d2d->FillGeometry(path.Get(), ink.color(fill));
+                d2d->DrawGeometry(path.Get(), ink.color({0.42f, 0.45f, 0.5f, 1.0f}), 1.0f);
+                // The name where the face is wide and tall enough to hold it (6 px a character).
+                float x0 = 1e9f, x1 = -1e9f, y0 = 1e9f, y1 = -1e9f;
+                for (const auto& p : f.polygon) {
+                    x0 = std::min(x0, p[0]);
+                    x1 = std::max(x1, p[0]);
+                    y0 = std::min(y0, p[1]);
+                    y1 = std::max(y1, p[1]);
+                }
+                if (x1 - x0 >= 6.0f * static_cast<float>(f.label.size()) + 4.0f && y1 - y0 >= 16.0f) {
+                    float cx = 0.0f, cy = 0.0f;
+                    for (const auto& p : f.polygon) {
+                        cx += 0.25f * p[0];
+                        cy += 0.25f * p[1];
+                    }
+                    ink.text(f.label, small_text.Get(), cx, cy, 1, 1, {0.2f, 0.22f, 0.26f, 1.0f});
+                }
+            }
+            const std::array<D2D1_COLOR_F, 3> colors{
+                {{0.80f, 0.20f, 0.18f, 1.0f}, {0.18f, 0.60f, 0.25f, 1.0f}, {0.20f, 0.36f, 0.80f, 1.0f}}};
+            for (std::size_t a = 0; a < cube.arrows.size(); ++a) {
+                const CubeArrow& r = cube.arrows[a];
+                if (r.from == r.to) continue;
+                d2d->DrawLine({r.from[0], r.from[1]}, {r.to[0], r.to[1]}, ink.color(colors[a]), 2.0f);
+                const float dx = r.to[0] - r.from[0], dy = r.to[1] - r.from[1];
+                ink.text(r.name, small_text.Get(), r.from[0] + dx * 1.18f, r.from[1] + dy * 1.18f, 1, 1, colors[a]);
+            }
+        } else if (!axes && s.axis_triad) {
             const D2D1_POINT_2F o{view.left + 44.0f, view.bottom - 44.0f};
             const std::array<std::pair<const char*, D2D1_COLOR_F>, 3> axes3{
                 {{"x", {0.80f, 0.20f, 0.18f, 1.0f}}, {"y", {0.18f, 0.60f, 0.25f, 1.0f}}, {"z", {0.20f, 0.36f, 0.80f, 1.0f}}}};
@@ -1658,6 +1698,124 @@ AxisBox axis_box(const FieldScene& s, int width, int height) {
         out.axes.push_back(std::move(axis));
     }
     return out;
+}
+
+// --- the view cube (Unit 26h, JD2, JD3) ------------------------------------------------------------
+
+const std::vector<CameraPreset>& named_views() {
+    static const std::vector<CameraPreset> views{
+        {"Front", 0.0f, 0.0f},  {"Back", 180.0f, 0.0f}, {"Left", 270.0f, 0.0f},    {"Right", 90.0f, 0.0f},
+        {"Top", 0.0f, 90.0f},   {"Bottom", 0.0f, -90.0f}, {"Isometric", 35.0f, 25.0f}};
+    return views;
+}
+
+namespace {
+
+const CameraPreset& named(std::string_view name) {
+    for (const CameraPreset& p : named_views()) {
+        if (p.name == name) return p;
+    }
+    return named_views().back();
+}
+
+// The isometric view from a cube corner: azimuth toward its x and z, elevation +-35.26 degrees.
+CameraPreset corner_view(const std::array<int, 3>& c) {
+    const double az = std::atan2(static_cast<double>(c[0]), static_cast<double>(c[2])) * 180.0 / std::numbers::pi;
+    const double el = std::atan(1.0 / std::sqrt(2.0)) * 180.0 / std::numbers::pi;
+    return {"Isometric", static_cast<float>(az), static_cast<float>(c[1] > 0 ? el : -el)};
+}
+
+bool inside_polygon(const std::array<std::array<float, 2>, 4>& p, float x, float y) {
+    bool in = false;
+    for (std::size_t i = 0, j = 3; i < 4; j = i++) {
+        if ((p[i][1] > y) != (p[j][1] > y) &&
+            x < (p[j][0] - p[i][0]) * (y - p[i][1]) / (p[j][1] - p[i][1]) + p[i][0]) {
+            in = !in;
+        }
+    }
+    return in;
+}
+
+}  // namespace
+
+ViewCube view_cube(const FieldScene& s, int width, int height) {
+    ViewCube out;
+    if (s.dimension != 3 || s.look != Look::enhanced || !s.axis_triad) return out;
+    const D2D1_RECT_F view = field_view_rect(s, width, height);
+    const View v = make_view(s, (view.right - view.left) / (view.bottom - view.top));
+    const std::array<double, 3> key = key_light(v);
+    const std::array<double, 3> eye{-v.forward[0], -v.forward[1], -v.forward[2]};
+    out.edge_px = 72.0f / std::sqrt(3.0f);
+    out.centre = {view.left + 64.0f, view.bottom - 64.0f};
+    const float half = 0.5f * out.edge_px;
+    const auto px = [&](const std::array<int, 3>& c) {
+        const std::array<double, 3> p{double(c[0]), double(c[1]), double(c[2])};
+        return std::array<float, 2>{out.centre[0] + half * static_cast<float>(dotd(p, v.right)),
+                                    out.centre[1] - half * static_cast<float>(dotd(p, v.up))};
+    };
+    static constexpr const char* labels[3][2] = {{"Left", "Right"}, {"Bottom", "Top"}, {"Back", "Front"}};
+    std::vector<std::array<int, 3>> shown_corners;
+    for (int a = 0; a < 3; ++a) {
+        for (const int sign : {1, -1}) {
+            std::array<double, 3> n{};
+            n[static_cast<std::size_t>(a)] = sign;
+            if (dotd(n, eye) <= 1e-6) continue;  // turned away, or edge-on
+            CubeFace f;
+            f.label = labels[a][sign > 0 ? 1 : 0];
+            f.axis = a;
+            f.sign = sign;
+            f.shade = 0.62f + 0.38f * static_cast<float>(std::max(0.0, dotd(n, key)));
+            f.preset = named(f.label);
+            // Around the face: the other two axes' signs in the order (-,-) (+,-) (+,+) (-,+).
+            const int b = (a + 1) % 3, c = (a + 2) % 3;
+            static constexpr int order[4][2] = {{-1, -1}, {1, -1}, {1, 1}, {-1, 1}};
+            for (int k = 0; k < 4; ++k) {
+                std::array<int, 3> corner{};
+                corner[static_cast<std::size_t>(a)] = sign;
+                corner[static_cast<std::size_t>(b)] = order[k][0];
+                corner[static_cast<std::size_t>(c)] = order[k][1];
+                f.polygon[static_cast<std::size_t>(k)] = px(corner);
+                if (std::ranges::find(shown_corners, corner) == shown_corners.end()) shown_corners.push_back(corner);
+            }
+            out.faces.push_back(std::move(f));
+        }
+    }
+    for (const auto& c : shown_corners) out.corners.push_back({px(c), c, corner_view(c)});
+    // The arrows from the shown corner nearest the screen's lower left, along the triad's directions.
+    if (!out.corners.empty()) {
+        const auto& origin = *std::ranges::min_element(out.corners, [](const CubeCorner& x, const CubeCorner& y) {
+            return x.at[0] - x.at[1] < y.at[0] - y.at[1];
+        });
+        static constexpr const char* names[3] = {"x", "y", "z"};
+        for (int a = 0; a < 3; ++a) {
+            std::array<double, 3> e{};
+            e[static_cast<std::size_t>(a)] = 1.0;
+            const float dx = static_cast<float>(dotd(e, v.right)), dy = -static_cast<float>(dotd(e, v.up));
+            const float len = 0.75f * out.edge_px + 8.0f;
+            CubeArrow arrow{names[a], origin.at, origin.at};
+            if (dx * dx + dy * dy > 1e-4f) arrow.to = {origin.at[0] + dx * len, origin.at[1] + dy * len};
+            out.arrows.push_back(arrow);
+        }
+    }
+    return out;
+}
+
+std::optional<CameraPreset> view_cube_hit(const FieldScene& s, int width, int height, float x, float y) {
+    const ViewCube cube = view_cube(s, width, height);
+    const CubeCorner* nearest = nullptr;
+    float best = 7.0f * 7.0f;
+    for (const CubeCorner& c : cube.corners) {
+        const float dx = c.at[0] - x, dy = c.at[1] - y, d = dx * dx + dy * dy;
+        if (d <= best) {
+            best = d;
+            nearest = &c;
+        }
+    }
+    if (nearest) return nearest->preset;
+    for (const CubeFace& f : cube.faces) {
+        if (inside_polygon(f.polygon, x, y)) return f.preset;
+    }
+    return std::nullopt;
 }
 
 }  // namespace NiTCAD::render

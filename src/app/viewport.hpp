@@ -29,6 +29,8 @@ public:
         // The mouse left the view, or a drag began (Unit 26e, HD3).
         virtual void viewport_leave() = 0;
         virtual bool viewport_is_3d() const = 0;
+        // Whether a click there is the view cube's (Unit 26h, JD3): the cursor becomes a hand.
+        virtual bool viewport_over_cube(float x, float y) const = 0;
 
     protected:
         ~Host() = default;

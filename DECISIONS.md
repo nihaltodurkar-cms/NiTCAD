@@ -833,6 +833,15 @@ requires. `axis_box` lives in `renderer.cpp` beside `make_view`; it is pure, wit
 The three 26g enhanced references now change by design, because the axis box is on by default in enhanced (JQ3). As
 in 26g, they are rebuilt in 26h·4 only after the owner sees the images.
 
+**As built, 26h·2 (2026-11-19).** `view_cube` and `view_cube_hit` (axes3d.hpp) are pure, like `axis_box`. The cube
+is 72 px across its diagonal, centred 64 px in from the view's lower-left corner, and always orthographic. A face's
+name is drawn only where the face is wide enough for it (6 px a character) and at least 16 px tall. At the default
+camera only "Front" fits; "Top" and "Right" are too foreshortened. Corners come before faces in hit testing, within
+7 px. A corner snaps to its isometric view: azimuth atan2(x, z), elevation ±35.26°. The plain Isometric view is
+the default camera (35°, 25°). A snap resets zoom and pan as Fit does. It is instant for now; 26h·3 makes it smooth.
+A cube click takes priority over Probe, Measure and Cut line. A drag that starts on the cube orbits as anywhere else.
+The cursor becomes a hand over the cube.
+
 **Slices (each one local commit):** 26h·1 `axis_box`, drawn, its switch (JD1; JG2, JG6 part); 26h·2 `view_cube`, hit
 testing, snapping (JD2, JD3; JG3, JG6 part); 26h·3 named views and smooth moves (JD4, JD5; JG4, JG5, JG8); 26h·4
 references, suites, mutants (JG1, JG7, JG9), the ARCHITECTURE entry.

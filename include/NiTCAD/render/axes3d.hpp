@@ -12,6 +12,7 @@
 #pragma once
 
 #include <array>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -49,5 +50,57 @@ struct AxisBox {
 
 // Errors none: a 2D scene gives an empty box.
 [[nodiscard]] AxisBox axis_box(const FieldScene& scene, int width, int height);
+
+// --- the view cube (Unit 26h, JD2, JD3) -------------------------------------------------------------
+//
+// view_cube lays out the enhanced look's orientation cube, which replaces the axis triad in the view's
+// lower-left corner: a cube 72 px across its diagonal, turned with the camera (orthographic, whatever the
+// scene's projection), its faces toward the eye with their names (Front +z, Back -z, Right +x, Left -x,
+// Top +y, Bottom -y), shaded by the key light, and x, y and z arrows from its corner nearest the lower left
+// of the screen, along the triad's directions. view_cube_hit gives the camera a click there asks for: a
+// corner of a face shown (within 7 px) its isometric view, else a face shown its named view, else nothing.
+// Both are empty for a classic, 2D or triad-less scene.
+
+struct CameraPreset {
+    std::string name;
+    float azimuth_deg = 0.0f;
+    float elevation_deg = 0.0f;
+};
+
+// The named views (JD4): Front, Back, Left, Right, Top, Bottom, and Isometric (the default camera).
+[[nodiscard]] const std::vector<CameraPreset>& named_views();
+
+struct CubeFace {
+    std::string label;  // "Front", ...
+    int axis = 0;       // its normal: +-x, y or z
+    int sign = 1;
+    std::array<std::array<float, 2>, 4> polygon{};  // pixels, in order around the face
+    float shade = 1.0f;                             // 0.62 to 1, by the key light
+    CameraPreset preset;
+};
+
+struct CubeCorner {
+    std::array<float, 2> at{};  // pixels
+    std::array<int, 3> signs{};  // which corner: -1 or +1 along x, y, z
+    CameraPreset preset;         // the isometric view from it
+};
+
+struct CubeArrow {
+    std::string name;  // "x", "y", "z"
+    std::array<float, 2> from{};
+    std::array<float, 2> to{};  // empty (from == to) when the axis points at the eye
+};
+
+struct ViewCube {
+    std::array<float, 2> centre{};
+    float edge_px = 0.0f;
+    std::vector<CubeFace> faces;      // the faces toward the eye
+    std::vector<CubeCorner> corners;  // the corners of those faces
+    std::vector<CubeArrow> arrows;    // x, y, z
+};
+
+[[nodiscard]] ViewCube view_cube(const FieldScene& scene, int width, int height);
+[[nodiscard]] std::optional<CameraPreset> view_cube_hit(const FieldScene& scene, int width, int height, float x,
+                                                        float y);
 
 }  // namespace NiTCAD::render

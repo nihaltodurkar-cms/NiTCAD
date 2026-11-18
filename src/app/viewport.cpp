@@ -147,6 +147,17 @@ LRESULT Viewport::handle(UINT message, WPARAM w, LPARAM l) {
     case WM_SETFOCUS:
     case WM_KILLFOCUS:
         return 0;
+    case WM_SETCURSOR:
+        // Unit 26h (JD3): a hand over the view cube.
+        if (LOWORD(l) == HTCLIENT && !dragging_) {
+            POINT p{};
+            if (GetCursorPos(&p) && ScreenToClient(hwnd_, &p) &&
+                host_.viewport_over_cube(static_cast<float>(p.x), static_cast<float>(p.y))) {
+                SetCursor(LoadCursorW(nullptr, IDC_HAND));
+                return TRUE;
+            }
+        }
+        break;
     case WM_LBUTTONDOWN:
     case WM_RBUTTONDOWN:
     case WM_MBUTTONDOWN:

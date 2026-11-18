@@ -29,6 +29,7 @@
 #include "NiTCAD/app/run_controller.hpp"
 #include "NiTCAD/app/view_settings.hpp"
 #include "NiTCAD/app/workspace.hpp"
+#include "NiTCAD/render/axes3d.hpp"
 #include "NiTCAD/render/image.hpp"
 #include "NiTCAD/app/examples.hpp"
 #include "NiTCAD/app/integration.hpp"
@@ -266,6 +267,9 @@ private:
     void viewport_hover(float x, float y) override;
     void viewport_leave() override;
     bool viewport_is_3d() const override;
+    bool viewport_over_cube(float x, float y) const override;
+    // Unit 26h (JD3): snap the camera to a preset (zoom and pan reset as in Fit).
+    void snap_to(const render::CameraPreset& preset);
     // DeckPane::Host
     void deck_changed() override;
     // StartPage::Host and RunPage::Host
