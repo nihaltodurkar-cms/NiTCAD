@@ -379,11 +379,21 @@ std::expected<RunReport, base::Error> run(const Plan& plan, const solve::RunCont
         return report;
     }
 
+    // `initial` (Unit 61, RD2): the checkpoint's fields are the first state's starting guess. Its bias
+    // need not be the run's (RQ3); it must belong to this mesh (load_checkpoint).
+    std::optional<io::Checkpoint> initial;
+    if (!plan.initial.empty()) {
+        auto c = io::load_checkpoint(plan.initial, plan.device.mesh());
+        if (!c) return std::unexpected(std::move(c.error()));
+        initial = std::move(*c);
+    }
+    const results::NodeFields* guess = initial ? &initial->fields : nullptr;
+
     // Unit 43: the analysis's own options, with the plan's models and solver as their `steady`.
     if (plan.analysis == Analysis::transient) {
         solve::TransientOptions o = plan.transient;
         o.steady = plan.options;
-        auto t = solve::solve_transient(plan.device, plan.waveforms, o, nullptr, control);
+        auto t = solve::solve_transient(plan.device, plan.waveforms, o, guess, control);
         if (!t) return std::unexpected(std::move(t.error()));
         stamp(t->run);
         if (!out.transient.empty()) {
@@ -398,7 +408,7 @@ std::expected<RunReport, base::Error> run(const Plan& plan, const solve::RunCont
     if (plan.analysis == Analysis::small_signal) {
         solve::SmallSignalOptions o = plan.small_signal;
         o.steady = plan.options;
-        auto s = solve::solve_small_signal(plan.device, plan.points, o, nullptr, control);
+        auto s = solve::solve_small_signal(plan.device, plan.points, o, guess, control);
         if (!s) return std::unexpected(std::move(s.error()));
         stamp(s->run);
         if (!out.small_signal.empty()) {
@@ -417,7 +427,7 @@ std::expected<RunReport, base::Error> run(const Plan& plan, const solve::RunCont
     if (plan.analysis == Analysis::trace) {
         solve::TraceOptions o = plan.trace;
         o.steady = plan.options;
-        auto s = solve::trace_bias(plan.device, o, nullptr, control);
+        auto s = solve::trace_bias(plan.device, o, guess, control);
         if (!s) return std::unexpected(std::move(s.error()));
         stamp(s->run);
         if (!out.sweep.empty()) {
@@ -459,7 +469,7 @@ std::expected<RunReport, base::Error> run(const Plan& plan, const solve::RunCont
         options.step_control.initial_bias_V = c->bias_V;
         restart = std::move(*c);
     }
-    auto sweep = solve::sweep_bias(plan.device, points, options, restart ? &restart->fields : nullptr, control);
+    auto sweep = solve::sweep_bias(plan.device, points, options, restart ? &restart->fields : guess, control);
     if (!sweep) return std::unexpected(std::move(sweep.error()));
     stamp(sweep->run);
     if (!out.sweep.empty()) {

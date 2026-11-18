@@ -230,6 +230,7 @@ private:
     std::expected<std::size_t, base::Error> thermal_index(const Entry& e, std::string_view name,
                                                           const Plan& plan) const;
     base::Error no_restart(const Entry& e, const Section& s) const;
+    std::expected<void, base::Error> starts(const Entry* initial, const Entry* restart, Plan& plan) const;
     std::expected<void, base::Error> outputs(Plan& plan) const;
     std::expected<void, base::Error> adapt(Plan& plan) const;
     std::expected<Box, base::Error> box(const Entry& e, int dim) const;
@@ -1390,16 +1391,33 @@ std::expected<void, base::Error> Builder::analysis(Plan& plan) const {
     if (const Section* s = single("trace")) return trace(*s, plan);
     const Section& s = *single("sweep");
     plan.analysis = Analysis::sweep;
-    return operating_points(s, plan, [&](const Entry& e) -> std::expected<bool, base::Error> {
-        if (e.key != "restart") return false;
-        plan.restart = file(e);
+    const Entry* initial = nullptr;
+    const Entry* restart = nullptr;
+    NITCAD_DECK_CHECK(operating_points(s, plan, [&](const Entry& e) -> std::expected<bool, base::Error> {
+        if (e.key == "restart") restart = &e;
+        else if (e.key == "initial") initial = &e;
+        else return false;
         return true;
-    });
+    }));
+    return starts(initial, restart, plan);
 }
 
 // A refusal of `restart` outside [sweep] (DK9, Unit 43 AN6).
 base::Error Builder::no_restart(const Entry& e, const Section& s) const {
     return at(e.line, "restart is only for [sweep] (DK9), not [" + s.kind + "]");
+}
+
+// `initial` and `restart` of an analysis (Unit 61, RD2): the files, relative to the deck. Both in one
+// section is an error at the later one's line.
+std::expected<void, base::Error> Builder::starts(const Entry* initial, const Entry* restart, Plan& plan) const {
+    if (initial != nullptr && restart != nullptr) {
+        return std::unexpected(at(std::max(initial->line, restart->line),
+                                  "initial and restart together: restart continues a run, initial only guesses its "
+                                  "first state"));
+    }
+    if (initial != nullptr) plan.initial = file(*initial);
+    if (restart != nullptr) plan.restart = file(*restart);
+    return {};
 }
 
 std::expected<std::size_t, base::Error> Builder::contact_index(const Entry& e, std::string_view name,
@@ -1446,6 +1464,7 @@ std::expected<void, base::Error> Builder::transient(const Section& s, Plan& plan
     std::vector<std::optional<solve::Waveform>> waveforms(contacts.size());
     std::vector<bool> given_t;
     bool t_end = false;
+    const Entry* initial = nullptr;
     for (const Entry& e : s.entries) {
         NITCAD_DECK_TRY(thermal, held_temperature(e, plan, given_t));
         if (thermal) continue;
@@ -1478,6 +1497,8 @@ std::expected<void, base::Error> Builder::transient(const Section& s, Plan& plan
         } else if (e.key == "output_times") {
             NITCAD_DECK_TRY(v, lift(e.line, series(e.value, [](std::string_view t) { return seconds(t); })));
             o.output_times_s = std::move(v);
+        } else if (e.key == "initial") {
+            initial = &e;
         } else if (e.key == "restart") {
             return std::unexpected(no_restart(e, s));
         } else {
@@ -1485,6 +1506,7 @@ std::expected<void, base::Error> Builder::transient(const Section& s, Plan& plan
         }
     }
     if (!t_end) return std::unexpected(at(s.line, "[transient] needs t_end"));
+    NITCAD_DECK_CHECK(starts(initial, nullptr, plan));
     for (auto& f : waveforms) plan.waveforms.push_back(f ? std::move(*f) : solve::Waveform::constant(0.0));
     return {};
 }
@@ -1492,8 +1514,13 @@ std::expected<void, base::Error> Builder::transient(const Section& s, Plan& plan
 std::expected<void, base::Error> Builder::small_signal(const Section& s, Plan& plan) const {
     plan.analysis = Analysis::small_signal;
     bool frequencies = false;
+    const Entry* initial = nullptr;
     NITCAD_DECK_CHECK(operating_points(s, plan, [&](const Entry& e) -> std::expected<bool, base::Error> {
         if (e.key == "restart") return std::unexpected(no_restart(e, s));
+        if (e.key == "initial") {
+            initial = &e;
+            return true;
+        }
         if (e.key != "frequencies" && e.key != "field_frequencies") return false;
         NITCAD_DECK_TRY(v, lift(e.line, series(e.value, [](std::string_view t) { return hertz(t); })));
         if (e.key == "frequencies") {
@@ -1505,6 +1532,7 @@ std::expected<void, base::Error> Builder::small_signal(const Section& s, Plan& p
         return true;
     }));
     if (!frequencies) return std::unexpected(at(s.line, "[small_signal] needs frequencies"));
+    NITCAD_DECK_CHECK(starts(initial, nullptr, plan));
     return {};
 }
 
@@ -1514,6 +1542,7 @@ std::expected<void, base::Error> Builder::trace(const Section& s, Plan& plan) co
     o.start_V.assign(plan.device.contacts().size(), 0.0);
     std::vector<bool> given(o.start_V.size(), false), given_t;
     bool has_contact = false, has_end = false;
+    const Entry* initial = nullptr;
     for (const Entry& e : s.entries) {
         NITCAD_DECK_TRY(thermal, held_temperature(e, plan, given_t));
         if (thermal) continue;
@@ -1545,6 +1574,8 @@ std::expected<void, base::Error> Builder::trace(const Section& s, Plan& plan) co
         } else if (e.key == "max_points") {
             NITCAD_DECK_TRY(v, count(e, 1, 100'000'000));
             o.max_points = static_cast<std::size_t>(v);
+        } else if (e.key == "initial") {
+            initial = &e;
         } else if (e.key == "restart") {
             return std::unexpected(no_restart(e, s));
         } else {
@@ -1553,6 +1584,7 @@ std::expected<void, base::Error> Builder::trace(const Section& s, Plan& plan) co
     }
     if (!has_contact) return std::unexpected(at(s.line, "[trace] needs contact, the swept contact"));
     if (!has_end) return std::unexpected(at(s.line, "[trace] needs end, the swept contact's last bias"));
+    NITCAD_DECK_CHECK(starts(initial, nullptr, plan));
     return {};
 }
 
@@ -1674,8 +1706,8 @@ std::expected<void, base::Error> Builder::adapt(Plan& plan) const {
         return std::unexpected(at(s->line, "[adapt] refines the mesh of a [sweep] (one mesh for the sweep); this deck's "
                                            "analysis is not a sweep"));
     }
-    if (!plan.restart.empty()) {
-        return std::unexpected(at(s->line, "[adapt] with a restart: the checkpoint belongs to the deck's mesh, not the "
+    if (!plan.restart.empty() || !plan.initial.empty()) {
+        return std::unexpected(at(s->line, "[adapt] with a restart or initial: the checkpoint belongs to the deck's mesh, not the "
                                            "adapted one"));
     }
     if (type_ == MeshType::generate3d || type_ == MeshType::file || (type_ == MeshType::extrude3d && !swept_)) {

@@ -102,7 +102,9 @@
 //                       list or first : last : step; all series longer than one value have the
 //                       same length; a contact not named is held at 0 V);
 //                     thermal <name> = <series>  (electrothermal: a thermal contact's temperature);
-//                     restart = <checkpoint file>  (continue after the point it holds, DK9)
+//                     restart = <checkpoint file>  (continue after the point it holds, DK9);
+//                     initial = <checkpoint file>  (its fields the first point's starting guess, Unit
+//                       61 RD2; also in [transient], [small_signal] and [trace]; never with restart)
 //   [transient]       (Unit 43; solve/transient.hpp) contact <name> = <waveform>  (a contact not
 //                       named is held at 0 V): constant(v), step(v0, v1, t),
 //                       ramp(v0, v1, t0, t1), pulse(base, pulse, t_start, width[, rise, fall]),
@@ -231,6 +233,8 @@ struct Plan {
     // Sweep and small-signal: the points, one bias per contact, device contact order.
     std::vector<std::vector<double>> points;
     std::filesystem::path restart;            // a checkpoint to continue from, or empty
+    // A checkpoint whose fields are the run's starting guess (Unit 61, RD2), or empty; never with restart.
+    std::filesystem::path initial;
     std::filesystem::path mkl_runtime;        // mkl_rt to load for backend = pardiso, or empty
     Outputs outputs;
     // The analysis's own options (Unit 43). Their `steady` is left default: the run uses `options`.
