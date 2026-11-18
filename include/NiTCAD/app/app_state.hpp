@@ -27,6 +27,7 @@ struct AppState {
     static constexpr std::size_t max_recent = 8;
     std::vector<std::filesystem::path> recent;  // most recent first, no duplicates
     Layout layout;
+    bool hover_readout = true;  // View > Hover readout (Unit 26e, HD3)
 
     // Moves (or adds) the path to the front, dropping the oldest beyond max_recent.
     void add_recent(const std::filesystem::path& path);

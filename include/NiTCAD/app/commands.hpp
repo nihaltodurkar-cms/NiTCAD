@@ -22,6 +22,7 @@ enum class Command : std::uint16_t {
     pan_down, perspective, probe_mode, measure_mode, next_tab, previous_tab, next_pane,
     tab_start, tab_view, tab_curves, tab_deck, tab_run, tab_results, cut_line_mode, mesh_quality,
     show_regions,  // Unit 26c (YD4)
+    hover_readout,  // Unit 26e (HD3)
     // The Device, Mesh, Physics and Simulation menus' sections and keys (VQ13) are numbered from here.
     section_first = 1000,
     key_first = 2000,

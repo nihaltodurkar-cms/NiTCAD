@@ -26,6 +26,8 @@ public:
         virtual void viewport_fit() = 0;
         virtual void viewport_click(float x, float y) = 0;  // client pixels
         virtual void viewport_hover(float x, float y) = 0;
+        // The mouse left the view, or a drag began (Unit 26e, HD3).
+        virtual void viewport_leave() = 0;
         virtual bool viewport_is_3d() const = 0;
 
     protected:
@@ -69,6 +71,7 @@ private:
     // Dragging.
     bool dragging_ = false;
     bool moved_ = false;
+    bool tracking_ = false;  // TrackMouseEvent's leave is pending
     int button_ = 0;  // 1 left, 2 right, 3 middle
     POINT last_{};
     POINT down_{};

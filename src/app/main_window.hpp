@@ -155,6 +155,12 @@ public:
     [[nodiscard]] const TaskbarProgress& taskbar_progress() const noexcept { return taskbar_; }
     [[nodiscard]] bool dark_title() const noexcept { return dark_title_; }
     [[nodiscard]] int title_theme_updates() const noexcept { return title_theme_updates_; }
+    // Unit 26e (HD1-HD3): the hover readout, whether it is shown and its text (kept while the window is hidden,
+    // when the tooltip itself is not activated); View > Hover readout.
+    [[nodiscard]] bool readout_shown() const noexcept { return readout_shown_; }
+    [[nodiscard]] const std::string& readout_text() const noexcept { return readout_text_; }
+    [[nodiscard]] bool hover_readout() const noexcept { return state_.hover_readout; }
+    [[nodiscard]] const AppState& app_state() const noexcept { return state_; }
 
     // The ids of the inspector's controls and the panes (for the tests).
     enum Control : int {
@@ -254,6 +260,7 @@ private:
     void viewport_fit() override;
     void viewport_click(float x, float y) override;
     void viewport_hover(float x, float y) override;
+    void viewport_leave() override;
     bool viewport_is_3d() const override;
     // DeckPane::Host
     void deck_changed() override;
@@ -313,6 +320,12 @@ private:
     TaskbarProgress taskbar_;
     bool dark_title_ = false;
     int title_theme_updates_ = 0;
+    // Unit 26e (HD3): the hover readout's tracking tooltip.
+    HWND readout_ = nullptr;
+    bool readout_shown_ = false;
+    std::string readout_text_;
+    void show_readout(const std::string& text, float x, float y);  // at the view's client pixel
+    void hide_readout();
 
     // The menus' deck sections and keys (VQ13): what each dynamic item id stands for.
     struct SectionItem {
