@@ -720,9 +720,24 @@ the owner ruled the recommended option, glass rim edges:
   gate) are lighter than the same pixels with the oxide matte. The test asks for a mean luminance more than 10 higher.
 - **MG9 gains a mutant:** the glass rim drawn in the dark ink.
 
-**Slices (each one local commit):** 26g·1 finishes, metal and glass (MD1–MD3; MG2, MG3); 26g·2 AO (MD4; MG4, MG7);
-26g·3 the shadow, mesh edges, contours, colourbar (MD5–MD7; MG5, MG6); 26g·4 suites, mutants (MG1, MG8, MG9), the
-ARCHITECTURE entry.
+**Owner ruling MQ9 (2026-11-18, during 26g·2): AO dropped.** MD4 was built as designed and measured on the test
+MOSFET's enhanced 3D solid against the same renderer without it. Its pipeline worked: a forced constant darkening
+showed in the image. But the scene gave it almost nothing to occlude:
+- The gate's foot sits on the translucent oxide, which writes no depth (by MD4), so in depth the gate is 0.08 µm
+  above the silicon. Change: 0%.
+- The contact pads are slabs 0.06 µm thick (3% of the extent). Their undersides face away from the camera, and their
+  visible faces lie beyond the radius (2% of the view's height, about 0.036 µm here). Change: 0% at 2%, 0.7% at 5%.
+- Flat faces: 0%.
+
+Asked, the owner ruled the recommended option: **drop AO from 26g.**
+- MD4 and its code are removed. MG4 and the AO half of MG7 are withdrawn, and the two AO mutants (the mask ignored,
+  AO sampling glass) and the radius mutant are dropped from MG9.
+- Depth comes from the ground shadow (MD5) and 26f's lighting and edges.
+- AO may return in a later unit if scenes with real recesses appear (trenches, a FinFET gate wrapping its fin).
+
+**Slices (each one local commit):** 26g·1 finishes, metal and glass (MD1–MD3; MG2, MG3); 26g·2 the shadow, mesh edges,
+contours, colourbar (MD5–MD7; MG5, MG6, MG7's whole-draw cost); 26g·3 suites, mutants (MG1, MG8, MG9), the
+ARCHITECTURE entry. (Originally four slices, with AO as 26g·2; renumbered after MQ9.)
 
 ### Unit 26h — scale and orientation (proposed 2026-11-18; on `app/scale-orientation`)
 
