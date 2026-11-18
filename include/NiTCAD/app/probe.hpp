@@ -9,6 +9,8 @@
 #include <array>
 #include <optional>
 #include <span>
+#include <string>
+#include <string_view>
 #include <vector>
 
 #include "NiTCAD/app/workspace.hpp"
@@ -51,5 +53,30 @@ private:
 };
 
 [[nodiscard]] double distance_um(const ProbeHit& a, const ProbeHit& b) noexcept;
+
+// --- hover readout (Unit 26e, DECISIONS.md HD1, HD2) ---------------------------------------------------
+
+// The readout of a field view's hit, from the view's title "<symbol> (<unit>)":
+//   "<symbol> = <value> <unit>" ("<symbol>: no value" when the value is not finite)
+//   "x <x>  y <y> µm" (with "  z <z>" before " µm" in 3D)
+//   "node <n>"
+// The value as {:.4g}, positions as {:.3g}.
+[[nodiscard]] std::string hover_text(std::string_view title, const ProbeHit& hit, int dimension);
+
+// The data point of a plot drawn nearest the pixel (x, y), over every series, within the radius.
+struct CurveHit {
+    std::size_t series = 0;
+    std::size_t index = 0;
+    double x = 0.0;
+    double y = 0.0;
+    float screen_x = 0.0f;  // where the point is drawn
+    float screen_y = 0.0f;
+    float distance_px = 0.0f;
+};
+[[nodiscard]] std::optional<CurveHit> pick_curve(const render::PlotScene& scene, int width, int height, float x,
+                                                 float y, float radius_px = 12.0f);
+// The readout of a curve hit: the series name when the plot has more than one, then "<x label> = <x>" and
+// "<y label> = <y>", each value as {:.4g}.
+[[nodiscard]] std::string curve_text(const render::PlotScene& scene, const CurveHit& hit);
 
 }  // namespace NiTCAD::app

@@ -175,6 +175,13 @@ inline constexpr int clip_steps = 1000;
 // order, joined by ", "; the bare index "k" when nothing varies. Volts as {:.4g}.
 [[nodiscard]] std::vector<std::string> point_labels(const Workspace& w);
 
+// A title "<symbol> (<unit>)" split into its symbol and unit; a title without one is all symbol (Unit 26e).
+struct TitleParts {
+    std::string_view symbol;
+    std::string_view unit;
+};
+[[nodiscard]] TitleParts title_parts(std::string_view title) noexcept;
+
 // The metrics strip's maximum (Unit 26d, ZD7) from the title the tree and the colour bar show, "<symbol> (<unit>)"
 // (render::field_info's, or a difference's): "Max <symbol> <value> <unit>", or for a difference
 // "Max |B − A| <value> <unit>". The value as {:.4g} ("-" when not finite); a title without a unit gives none.

@@ -864,12 +864,15 @@ bool takes_coolwarm(const ViewSettings& s) noexcept {
     return s.kind == ViewKind::difference && (s.colormap == app_colormap || s.colormap == "turbo");
 }
 
-std::string max_metric(std::string_view title, double value, bool difference) {
-    std::string_view symbol = title, unit;
+TitleParts title_parts(std::string_view title) noexcept {
     if (const auto open = title.rfind(" ("); open != std::string_view::npos && title.ends_with(')')) {
-        symbol = title.substr(0, open);
-        unit = title.substr(open + 2, title.size() - open - 3);
+        return {title.substr(0, open), title.substr(open + 2, title.size() - open - 3)};
     }
+    return {title, {}};
+}
+
+std::string max_metric(std::string_view title, double value, bool difference) {
+    const auto [symbol, unit] = title_parts(title);
     std::string text = difference ? std::string("Max |B \xE2\x88\x92 A|") : "Max " + std::string(symbol);
     text += " " + (std::isfinite(value) ? std::format("{:.4g}", value) : std::string("-"));
     if (!unit.empty()) text += " " + std::string(unit);

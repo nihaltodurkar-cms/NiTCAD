@@ -88,6 +88,18 @@ struct ScreenPoint {
 };
 [[nodiscard]] ScreenPoint screen_position(const FieldScene& scene, int width, int height, const Float3& point);
 
+// The axes' frame of a PlotScene drawn at this size, pixels, as draw() lays it out (Unit 26e, HD2).
+struct PlotFrame {
+    float left = 0.0f;
+    float top = 0.0f;
+    float right = 0.0f;
+    float bottom = 0.0f;
+};
+[[nodiscard]] PlotFrame plot_frame(const PlotScene& scene, int width, int height) noexcept;
+// Where the data point (x, y) of a PlotScene lands in an image of it drawn at this size (depth 0). Both
+// coordinates are NaN when the point does not lie on the axes (non-positive on a log axis, non-finite).
+[[nodiscard]] ScreenPoint plot_position(const PlotScene& scene, int width, int height, double x, double y) noexcept;
+
 class Renderer {
 public:
     [[nodiscard]] static std::expected<Renderer, base::Error> create(const RendererOptions& options = {});
