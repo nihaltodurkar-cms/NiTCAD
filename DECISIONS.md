@@ -1237,7 +1237,7 @@ stopped on the owner's word "dont start debug until i say"; the full suites not 
 
 ---
 
-### Unit 59 — a natural-test norm for reverse bias (proposed 2026-11-18; on `solve/natural-norm`)
+### Unit 59 — a natural-test norm for reverse bias (proposed 2026-11-18; approved 2026-11-18, not started; on `solve/natural-norm`)
 
 **Owner request (2026-11-18):** "write a proposal for item 1": the 11.3 row "Robust nonlinear solving", next step "A
 natural-test norm monotone in reverse bias". The branch starts from `assemble/generic-equations` `3b4024a` (PR #87):
@@ -1303,6 +1303,7 @@ search inside `trace_bias`'s corrector; making any line search the default; chan
 | NQ5 | Unit 50's MOSFET finding (natural 2/10 today, 10/10 recorded) | **Bisect in slice 0, at most about two hours, as NG4's baseline (recommended).** / Record today's numbers only. |
 | NQ6 | The line search's default | **Stays off (recommended).** / Turn on with the new norm if NG3–NG6 pass. |
 | NQ7 | Deck key | **`[solver] natural_norm = convergence \| weighted` (recommended).** / Another name. |
+**Owner ruling (2026-11-18): "choose recommended and dont start unit 59".** NQ1–NQ7 take the recommended option:the norm only; the norm chosen by slice 0's measurement (NG3 and NG4, ties to fewer iterations); a new option`natural_norm`, default `convergence`; stacked on PR #87 and rebased after it merges; Unit 50's MOSFET findingbisected in slice 0 (at most about two hours); the line search stays off by default; deck key `[solver]natural_norm = convergence | weighted`. The criteria NG1–NG7 are frozen. **Not started:** no slice begins until theowner says so.
 
 ## New questions the advisor raised (not yet in `ARCHITECTURE.md`)
 
