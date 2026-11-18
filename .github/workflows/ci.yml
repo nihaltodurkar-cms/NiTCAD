@@ -118,6 +118,32 @@ jobs:
           if (-not (Test-Path "$runtime\libiomp5md.dll")) { throw 'libiomp5md.dll missing' }
           Add-Content $env:GITHUB_ENV "NITCAD_MKL_RUNTIME=$runtime\mkl_rt.3.dll"
 
+      # 2026-11-18: the windows-2025 image stopped shipping the 14.51 toolset (vcvars: "Toolset directory for
+      # version '14.51' was not found"; PR #91's run). The pin stays (14.52.37025 miscompiles `= {}`, Q11):
+      # when the image lacks it, the Visual Studio installer adds it. The next step still asserts cl 19.51.36260.
+      - name: Ensure the MSVC 14.51 toolset
+        shell: pwsh
+        run: |
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $vs = & $vswhere -latest -products * -property installationPath
+          if (-not $vs) { throw 'no Visual Studio found' }
+          Write-Host "Visual Studio: $vs ($(& $vswhere -latest -products * -property catalog_productDisplayVersion))"
+          $have = Get-ChildItem "$vs\VC\Tools\MSVC" -Directory -Filter '14.51.*' -ErrorAction SilentlyContinue
+          if ($have) {
+            Write-Host "Toolset present: $($have.Name -join ', ')"
+            exit 0
+          }
+          Write-Host "Toolsets present: $((Get-ChildItem "$vs\VC\Tools\MSVC" -Directory).Name -join ', '); adding 14.51"
+          $setup = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\setup.exe"
+          $p = Start-Process -FilePath $setup -Wait -PassThru -NoNewWindow -ArgumentList @(
+            'modify', '--installPath', "`"$vs`"", '--add', 'Microsoft.VisualStudio.Component.VC.14.51.x86.x64',
+            '--quiet', '--norestart', '--nocache')
+          # 3010: done, a restart wanted (not needed for a toolset).
+          if ($p.ExitCode -ne 0 -and $p.ExitCode -ne 3010) { throw "the installer exited with $($p.ExitCode)" }
+          $have = Get-ChildItem "$vs\VC\Tools\MSVC" -Directory -Filter '14.51.*' -ErrorAction SilentlyContinue
+          if (-not $have) { throw 'the 14.51 toolset is still missing after the installer ran' }
+          Write-Host "Toolset added: $($have.Name -join ', ')"
+
       - name: Restore vcpkg binary cache
         uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
         with:
