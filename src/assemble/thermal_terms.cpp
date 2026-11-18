@@ -1,5 +1,5 @@
 // The electrothermal rows as equation terms (Unit 40 slice 2b; terms.hpp; Unit 23,
-// drift_diffusion.hpp "Electrothermal coupling", DECISIONS.md T1-T14). Every node and edge block is
+// system.hpp "Electrothermal coupling", DECISIONS.md T1-T14). Every node and edge block is
 // 4 x 4 (psi, n, p, theta) by construction, so the terms index it as such.
 #include <algorithm>
 #include <cmath>
@@ -30,9 +30,9 @@ constexpr FieldId all4[] = {FieldId::potential, FieldId::electrons, FieldId::hol
 
 }  // namespace
 
-using Evaluation = TermAccess::Evaluation;
+using Evaluation = SystemData::Terms::Evaluation;
 
-void DriftDiffusion::Terms::thermal_product(const DriftDiffusion& s, const Evaluation& ev,
+void SystemData::Terms::thermal_product(const SystemData& s, const Evaluation& ev,
                                             std::size_t i, physics::EquilibriumProduct& E,
                                             double& dE_t) {
     const std::span<const ThermalState> t = ev.thermal;
@@ -47,7 +47,7 @@ void DriftDiffusion::Terms::thermal_product(const DriftDiffusion& s, const Evalu
     }
 }
 
-void DriftDiffusion::Terms::add_thermal_rate(const DriftDiffusion& s, const Evaluation& ev,
+void SystemData::Terms::add_thermal_rate(const SystemData& s, const Evaluation& ev,
                                              std::size_t i, double k, double rate, double d_n,
                                              double d_p, double d_t) {
     const std::span<double> f = ev.f, values = ev.values;
@@ -69,12 +69,12 @@ void DriftDiffusion::Terms::add_thermal_rate(const DriftDiffusion& s, const Eval
 // Every node's heat row starts as its thermal contact's: an isothermal sink holds the node's rise
 // at the contact's (assigned), a thermal resistance R_th adds h (tau - rise_c), any other node 0.
 // With sinks false (thermal_contact_heat) every heat row starts at 0.
-class DriftDiffusion::Terms::HeatSinks final : public Term {
+class SystemData::Terms::HeatSinks final : public Term {
 public:
     TermInfo info() const noexcept override {
         return {"heat sinks", TermDomain::nodes, heat_only, heat_only, true};
     }
-    void add(const DriftDiffusion& s, const Evaluation& ev) const override {
+    void add(const SystemData& s, const SystemState& st, const Evaluation& ev) const override {
         const std::span<double> f = ev.f, values = ev.values;
         const bool jacobian = ev.jacobian();
         const auto at = [&](std::size_t node, std::size_t r, std::size_t c) -> double& {
@@ -84,11 +84,11 @@ public:
             const double tau = ev.x[4 * i + 3];
             const ThermalNode& tn = s.thermal_nodes_[i];
             if (held(s, ev, i)) {
-                f[4 * i + 3] = tau - s.thermal_rise_[static_cast<std::size_t>(tn.contact)];
+                f[4 * i + 3] = tau - st.thermal_rise_[static_cast<std::size_t>(tn.contact)];
                 if (jacobian) at(i, 3, 3) = 1.0;
             } else if (ev.sinks && tn.h > 0.0) {
                 f[4 * i + 3] =
-                    tn.h * (tau - s.thermal_rise_[static_cast<std::size_t>(tn.contact)]);
+                    tn.h * (tau - st.thermal_rise_[static_cast<std::size_t>(tn.contact)]);
                 if (jacobian) at(i, 3, 3) = tn.h;
             } else {
                 f[4 * i + 3] = 0.0;
@@ -98,12 +98,12 @@ public:
 };
 
 // A time step: the lattice's heat storage rho c dT/dt in the heat row of every node not held.
-class DriftDiffusion::Terms::LatticeStorage final : public Term {
+class SystemData::Terms::LatticeStorage final : public Term {
 public:
     TermInfo info() const noexcept override {
         return {"lattice heat storage", TermDomain::nodes, heat_only, heat_only, false};
     }
-    void add(const DriftDiffusion& s, const Evaluation& ev) const override {
+    void add(const SystemData& s, const SystemState&, const Evaluation& ev) const override {
         const TimeStep* step = ev.step;
         if (step == nullptr) return;
         const std::span<double> f = ev.f, values = ev.values;
@@ -122,12 +122,12 @@ public:
 };
 
 // An ohmic contact node: psi, n and p held at the contact's values at the node's T (assigned).
-class DriftDiffusion::Terms::ThermalContactRows final : public Term {
+class SystemData::Terms::ThermalContactRows final : public Term {
 public:
     TermInfo info() const noexcept override {
         return {"ohmic contact rows (electrothermal)", TermDomain::nodes, all3, all4, true};
     }
-    void add(const DriftDiffusion& s, const Evaluation& ev) const override {
+    void add(const SystemData& s, const SystemState& st, const Evaluation& ev) const override {
         const std::span<double> f = ev.f, values = ev.values;
         const bool jacobian = ev.jacobian();
         const auto at = [&](std::size_t node, std::size_t r, std::size_t c) -> double& {
@@ -136,7 +136,7 @@ public:
         for (std::size_t i = 0; i < s.node_count(); ++i) {
             if (s.contact_[i] < 0) continue;
             const double psi = ev.x[4 * i], n = ev.x[4 * i + 1], p = ev.x[4 * i + 2];
-            const ThermalOhmic o = s.thermal_ohmic(i, ev.thermal[i]);
+            const ThermalOhmic o = s.thermal_ohmic(st, i, ev.thermal[i]);
             f[4 * i] = psi - o.psi;
             f[4 * i + 1] = n - o.n;
             f[4 * i + 2] = p - o.p;
@@ -151,12 +151,12 @@ public:
 };
 
 // An insulator node: no charge, no carriers; an electrode holds psi at its T (assigned).
-class DriftDiffusion::Terms::ThermalInsulatorRows final : public Term {
+class SystemData::Terms::ThermalInsulatorRows final : public Term {
 public:
     TermInfo info() const noexcept override {
         return {"insulator rows (electrothermal)", TermDomain::nodes, all3, all4, true};
     }
-    void add(const DriftDiffusion& s, const Evaluation& ev) const override {
+    void add(const SystemData& s, const SystemState& st, const Evaluation& ev) const override {
         const std::span<double> f = ev.f, values = ev.values;
         const bool jacobian = ev.jacobian();
         const auto at = [&](std::size_t node, std::size_t r, std::size_t c) -> double& {
@@ -167,7 +167,7 @@ public:
             const double psi = ev.x[4 * i], n = ev.x[4 * i + 1], p = ev.x[4 * i + 2];
             const bool electrode = s.electrode_[i] >= 0;
             const Shift e = electrode ? s.electrode_shift(i, ev.thermal[i]) : Shift{0.0, 0.0};
-            f[4 * i] = electrode ? psi - s.psi0_[i] - e.value : 0.0;
+            f[4 * i] = electrode ? psi - st.psi0_[i] - e.value : 0.0;
             f[4 * i + 1] = n;
             f[4 * i + 2] = p;
             if (jacobian) {
@@ -182,23 +182,23 @@ public:
 };
 
 // A gate node's oxide term G (psi_G(T) - psi) + S (gate.hpp) in its Poisson row.
-class DriftDiffusion::Terms::ThermalGate final : public Term {
+class SystemData::Terms::ThermalGate final : public Term {
 public:
     TermInfo info() const noexcept override {
         return {"gate (electrothermal)", TermDomain::nodes, psi_only, psi_heat, false};
     }
-    void add(const DriftDiffusion& s, const Evaluation& ev) const override {
+    void add(const SystemData& s, const SystemState& st, const Evaluation& ev) const override {
         const std::span<double> f = ev.f, values = ev.values;
         const bool jacobian = ev.jacobian();
         const auto at = [&](std::size_t node, std::size_t r, std::size_t c) -> double& {
             return values[s.block_[16 * node + 4 * r + c]];
         };
         for (std::size_t i = 0; i < s.node_count(); ++i) {
-            if (!semiconductor(s, i) || !s.gates_.on_gate(i)) continue;
+            if (!semiconductor(s, i) || !st.gates_.on_gate(i)) continue;
             const double psi = ev.x[4 * i];
-            const double G = s.gates_.term(i).coupling;
+            const double G = st.gates_.term(i).coupling;
             const Shift e = s.electrode_shift(i, ev.thermal[i]);
-            f[4 * i] += s.gates_.row_term(i, psi) + G * e.value;
+            f[4 * i] += st.gates_.row_term(i, psi) + G * e.value;
             if (jacobian) {
                 at(i, 0, 0) -= G;
                 at(i, 0, 3) += G * e.d_theta;
@@ -209,13 +209,13 @@ public:
 
 // SRH recombination at the node's T: R = (n p - E) / den, den = tau_p (n + n_ie) +
 // tau_n (p + n_ie), d R / d theta = (-dE / den - (n p - E) (tau_p + tau_n) d_nie / den^2).
-class DriftDiffusion::Terms::ThermalSrh final : public Term {
+class SystemData::Terms::ThermalSrh final : public Term {
 public:
     TermInfo info() const noexcept override {
         return {"SRH recombination (electrothermal)", TermDomain::nodes, densities, density_heat,
                 false};
     }
-    void add(const DriftDiffusion& s, const Evaluation& ev) const override {
+    void add(const SystemData& s, const SystemState&, const Evaluation& ev) const override {
         for (std::size_t i = 0; i < s.node_count(); ++i) {
             if (!semiconductor(s, i)) continue;
             const double n = ev.x[4 * i + 1], p = ev.x[4 * i + 2];
@@ -237,13 +237,13 @@ public:
 
 // Auger recombination on physical densities (E Ns^2, its partials times Ns): dR / dE =
 // -(Cn n + Cp p).
-class DriftDiffusion::Terms::ThermalAuger final : public Term {
+class SystemData::Terms::ThermalAuger final : public Term {
 public:
     TermInfo info() const noexcept override {
         return {"Auger recombination (electrothermal)", TermDomain::nodes, densities,
                 density_heat, false};
     }
-    void add(const DriftDiffusion& s, const Evaluation& ev) const override {
+    void add(const SystemData& s, const SystemState&, const Evaluation& ev) const override {
         const double Ns = s.Ns_;
         for (std::size_t i = 0; i < s.node_count(); ++i) {
             if (!semiconductor(s, i)) continue;
@@ -266,13 +266,13 @@ public:
 };
 
 // Radiative recombination on physical densities: dR / dE = -B.
-class DriftDiffusion::Terms::ThermalRadiative final : public Term {
+class SystemData::Terms::ThermalRadiative final : public Term {
 public:
     TermInfo info() const noexcept override {
         return {"radiative recombination (electrothermal)", TermDomain::nodes, densities,
                 density_heat, false};
     }
-    void add(const DriftDiffusion& s, const Evaluation& ev) const override {
+    void add(const SystemData& s, const SystemState&, const Evaluation& ev) const override {
         const double Ns = s.Ns_;
         for (std::size_t i = 0; i < s.node_count(); ++i) {
             if (!semiconductor(s, i) || !(s.radiative_[i] > 0.0)) continue;
@@ -298,12 +298,12 @@ public:
 // ionization, U6), and in the heat row of a node not held the energy they take with them,
 // e_n V dn/dt - e_p V dp/dt over K0 (T4: the edges' energy flow counts the carriers a box stores
 // as received; they are not heat), e at the node's own state.
-class DriftDiffusion::Terms::ThermalCarrierStorage final : public Term {
+class SystemData::Terms::ThermalCarrierStorage final : public Term {
 public:
     TermInfo info() const noexcept override {
         return {"carrier storage (electrothermal)", TermDomain::nodes, density_heat, all4, false};
     }
-    void add(const DriftDiffusion& s, const Evaluation& ev) const override {
+    void add(const SystemData& s, const SystemState&, const Evaluation& ev) const override {
         const TimeStep* step = ev.step;
         if (step == nullptr) return;
         const std::span<double> f = ev.f, values = ev.values;
@@ -358,15 +358,16 @@ public:
 // d theta in ln), and the rate is SRH with lifetimes 1 / s and the equilibrium product and
 // n1 = n_ie of the node's T. Unlike the isothermal Interfaces, always in: the electrothermal
 // small_signal_matrix adds no interface terms of its own.
-class DriftDiffusion::Terms::ThermalInterfaces final : public Term {
+class SystemData::Terms::ThermalInterfaces final : public Term {
 public:
     TermInfo info() const noexcept override {
         return {"interfaces (electrothermal)", TermDomain::interface_edges, all3, all4, false};
     }
-    void pattern(const DriftDiffusion& s, std::vector<linalg::Triplet>& t) const override {
+    void pattern(const SystemData& s, const SystemState&,
+                 std::vector<linalg::Triplet>& t) const override {
         interface_pattern(s, t);
     }
-    void add(const DriftDiffusion& s, const Evaluation& ev) const override {
+    void add(const SystemData& s, const SystemState&, const Evaluation& ev) const override {
         if (s.interfaces_.empty()) return;
         const std::span<const double> x = ev.x;
         const std::span<const ThermalState> t = ev.thermal;
@@ -465,12 +466,13 @@ public:
 // rows), the thermal Scharfetter-Gummel electron and hole fluxes (thermal_fluxes), and in the heat
 // rows the conduction and the carriers' energy flow. One term: the heat rows take the carrier
 // fluxes and their partials. Its pattern: the edges' full 4 x 4 blocks.
-class DriftDiffusion::Terms::ThermalEdges final : public Term {
+class SystemData::Terms::ThermalEdges final : public Term {
 public:
     TermInfo info() const noexcept override {
         return {"edge fluxes (electrothermal)", TermDomain::mesh_edges, all4, all4, false};
     }
-    void pattern(const DriftDiffusion& s, std::vector<linalg::Triplet>& t) const override {
+    void pattern(const SystemData& s, const SystemState&,
+                 std::vector<linalg::Triplet>& t) const override {
         for (const EdgeTerm& e : s.edges_) {
             for (std::size_t r = 0; r < 4; ++r) {
                 for (std::size_t c = 0; c < 4; ++c) {
@@ -483,7 +485,7 @@ public:
         }
         surface_pattern(s, t, 3);  // Lombardi (Unit 46); none without the model
     }
-    void add(const DriftDiffusion& s, const Evaluation& ev) const override {
+    void add(const SystemData& s, const SystemState& st, const Evaluation& ev) const override {
         const std::span<const double> x = ev.x;
         const std::span<const ThermalState> t = ev.thermal;
         const std::span<const NodeLevels> g = ev.levels;
@@ -572,7 +574,7 @@ public:
             for (const std::size_t node : ends) {
                 if (held(node)) continue;
                 const double sign = node == a ? 1.0 : -1.0;
-                const double m = s.metal_[node];
+                const double m = st.metal_[node];
                 double grad[2][4];
                 for (std::size_t end = 0; end < 2; ++end) {
                     for (std::size_t c = 0; c < 4; ++c) {
@@ -588,19 +590,20 @@ public:
             // continuity rows and, through the fluxes they carry, the heat rows.
             if (!jacobian || !e.surface) continue;
             for (std::size_t j = e.surface_first; j < e.surface_last; ++j) {
-                const SurfaceStencil& st = s.surface_stencil_[j];
-                const double w = s.surface_gradient(slope.field, st);
+                const SurfaceStencil& stencil = s.surface_stencil_[j];
+                const double w = s.surface_gradient(slope.field, stencil);
                 const double dn = slope.n * w, dp = slope.p * w;
                 for (std::size_t end = 0; end < 2; ++end) {
                     const std::size_t node = ends[end];
                     const double sign = end == 0 ? 1.0 : -1.0;
                     if (s.contact_[node] < 0) {
-                        values[st.pos[end][0]] += sign * dn;
-                        values[st.pos[end][1]] += sign * dp;
+                        values[stencil.pos[end][0]] += sign * dn;
+                        values[stencil.pos[end][1]] += sign * dp;
                     }
                     if (!held(node)) {
-                        const double m = s.metal_[node];
-                        values[st.pos[end][2]] -= sign * inv_K0 * ((en + m) * dn + (ep + m) * dp);
+                        const double m = st.metal_[node];
+                        values[stencil.pos[end][2]] -=
+                            sign * inv_K0 * ((en + m) * dn + (ep + m) * dp);
                     }
                 }
             }
@@ -611,15 +614,16 @@ public:
 // Impact ionization with the electrothermal model: the ImpactGeneration term with the thermal
 // fluxes, whose temperature partials enter through the currents, and gamma at the node's own T:
 // d alpha / d gamma = (alpha - E d alpha / dE) / gamma for alpha = gamma A exp(-gamma B / E).
-class DriftDiffusion::Terms::ThermalImpact final : public Term {
+class SystemData::Terms::ThermalImpact final : public Term {
 public:
     TermInfo info() const noexcept override {
         return {"impact ionization (electrothermal)", TermDomain::global, densities, all4, false};
     }
-    void pattern(const DriftDiffusion& s, std::vector<linalg::Triplet>& t) const override {
+    void pattern(const SystemData& s, const SystemState&,
+                 std::vector<linalg::Triplet>& t) const override {
         impact_pattern(s, t);
     }
-    void add(const DriftDiffusion& s, const Evaluation& ev) const override {
+    void add(const SystemData& s, const SystemState&, const Evaluation& ev) const override {
         if (s.impact_nodes_.empty()) return;
         const std::span<const double> x = ev.x;
         const std::span<const ThermalState> t = ev.thermal;
@@ -747,7 +751,7 @@ public:
 namespace {
 
 template <class T>
-std::shared_ptr<const TermAccess::Term> make_term() {
+std::shared_ptr<const SystemData::Term> make_term() {
     return std::make_shared<T>();
 }
 
@@ -755,23 +759,23 @@ std::shared_ptr<const TermAccess::Term> make_term() {
 
 // The semiconductor equations at T, the heat equation and its sinks; incomplete ionization and
 // tunnelling are refused with the model (create), so their terms have no electrothermal form.
-std::span<const CompositionEntry> DriftDiffusion::Terms::thermal_table() {
+std::span<const CompositionEntry> SystemData::Terms::thermal_table() {
     using E = EquationSet;
     using M = const PhysicsModels&;
-    const auto always = [](const DriftDiffusion&, M) { return true; };
-    const auto contacts = [](const DriftDiffusion& s, M) {
+    const auto always = [](const SystemData&, const SystemState&, M) { return true; };
+    const auto contacts = [](const SystemData& s, const SystemState&, M) {
         return std::ranges::any_of(s.contact_, [](std::int32_t c) { return c >= 0; });
     };
-    const auto insulators = [](const DriftDiffusion& s, M) {
+    const auto insulators = [](const SystemData& s, const SystemState&, M) {
         return std::ranges::any_of(s.insulator_, [](char c) { return c != 0; });
     };
-    const auto gated = [](const DriftDiffusion& s, M) {
+    const auto gated = [](const SystemData& s, const SystemState& st, M) {
         for (std::size_t i = 0; i < s.node_count(); ++i) {
-            if (s.gates_.on_gate(i)) return true;
+            if (st.gates_.on_gate(i)) return true;
         }
         return false;
     };
-    const auto interfaces = [](const DriftDiffusion& s, M) {
+    const auto interfaces = [](const SystemData& s, const SystemState&, M) {
         return !s.interfaces_.edges().empty();
     };
     static const CompositionEntry table[] = {
@@ -781,16 +785,17 @@ std::span<const CompositionEntry> DriftDiffusion::Terms::thermal_table() {
         {+E::oxide, insulators, &make_term<ThermalInsulatorRows>},
         {+E::poisson, always, &poisson_charge},  // complete ionization (U6)
         {+E::gate, gated, &make_term<ThermalGate>},
-        {+E::continuity, [](const DriftDiffusion&, M m) { return m.srh; },
+        {+E::continuity, [](const SystemData&, const SystemState&, M m) { return m.srh; },
          &make_term<ThermalSrh>},
-        {+E::continuity, [](const DriftDiffusion&, M m) { return m.auger; },
+        {+E::continuity, [](const SystemData&, const SystemState&, M m) { return m.auger; },
          &make_term<ThermalAuger>},
-        {+E::continuity, [](const DriftDiffusion&, M m) { return m.radiative; },
+        {+E::continuity, [](const SystemData&, const SystemState&, M m) { return m.radiative; },
          &make_term<ThermalRadiative>},
         {E::continuity | E::heat, always, &make_term<ThermalCarrierStorage>},
         {+E::interfaces, interfaces, &make_term<ThermalInterfaces>},
         {E::poisson | E::continuity | E::heat, always, &make_term<ThermalEdges>},
-        {+E::generation, [](const DriftDiffusion&, M m) { return m.impact_ionization; },
+        {+E::generation,
+         [](const SystemData&, const SystemState&, M m) { return m.impact_ionization; },
          &make_term<ThermalImpact>},
     };
     return table;

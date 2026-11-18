@@ -16,8 +16,9 @@
 #include <utility>
 #include <vector>
 
-#include "NiTCAD/assemble/drift_diffusion.hpp"
+#include "NiTCAD/assemble/currents.hpp"
 #include "NiTCAD/assemble/scaling.hpp"
+#include "NiTCAD/assemble/system.hpp"
 #include "NiTCAD/device/device.hpp"
 #include "NiTCAD/mesh/generate.hpp"
 #include "NiTCAD/mesh/tensor_grid.hpp"
@@ -26,7 +27,7 @@
 #include "NiTCAD/physics/surface_mobility.hpp"
 
 using namespace NiTCAD;
-using assemble::DriftDiffusion;
+using assemble::System;
 
 namespace {
 
@@ -102,7 +103,7 @@ struct Noise {
 // A field E0 [V/cm] at angle theta to x in the x-y plane (and, in 3D, tilted by phi out of it),
 // n 1e17 and p 1e16 cm^-3, relative noise on every unknown; with four unknowns per node theta
 // rises from 1 to 1.2 along x.
-std::vector<double> sloped(const DriftDiffusion& dd, const device::Device& d,
+std::vector<double> sloped(const System& dd, const device::Device& d,
                            const assemble::Scaling& s, double E0, double theta, double phi,
                            double noise, std::uint64_t seed) {
     const std::size_t m = dd.stride();
@@ -136,7 +137,7 @@ std::vector<std::vector<double>> dense(const linalg::SparseMatrix& a) {
 // The finite-difference gate (as impact_ionization_test.cpp): every column, central differences,
 // the worst error over the column's largest entry, each column's the smallest at steps of 1e-5,
 // 1e-6 and 1e-7 max(|x|, 1).
-double fd_jacobian_error(const DriftDiffusion& dd, std::vector<double> x) {
+double fd_jacobian_error(const System& dd, std::vector<double> x) {
     const std::size_t n = dd.unknowns();
     std::vector<double> f(n), fp(n), fm(n);
     auto jacobian = dd.make_jacobian();
@@ -190,13 +191,13 @@ TEST_CASE("surface mobility assemble: E_perp of a uniform field at any angle (LS
     for (Case& c : cases) {
         const device::Device d = block(std::move(c.mesh));
         const auto s = *assemble::make_scaling(d);
-        const DriftDiffusion off = *DriftDiffusion::create(d, s, lombardi(false));
-        const DriftDiffusion on = *DriftDiffusion::create(d, s, lombardi(true));
+        const System off = *System::create(d, s, lombardi(false));
+        const System on = *System::create(d, s, lombardi(true));
         for (const double degrees : {0.0, 30.0, 45.0, 60.0}) {
             const double theta = degrees * std::numbers::pi / 180.0;
             const auto x = sloped(off, d, s, E0, theta, c.phi, 0.0, 1);
-            const auto j_off = off.edge_currents(x);
-            const auto j_on = on.edge_currents(x);
+            const auto j_off = edge_currents(off, x);
+            const auto j_on = edge_currents(on, x);
             const double e[3] = {E0 * std::cos(c.phi) * std::cos(theta),
                                  E0 * std::cos(c.phi) * std::sin(theta), E0 * std::sin(c.phi)};
             double worst = 0.0;
@@ -250,9 +251,9 @@ TEST_CASE("surface mobility assemble: the finite-difference Jacobian gate (LS4)"
         assemble::PhysicsModels models = lombardi();
         models.field_mobility = c.field;
         models.electrothermal = c.thermal;
-        auto made = DriftDiffusion::create(d, s, models);
+        auto made = System::create(d, s, models);
         if (!made) FAIL(c.name << ": " << made.error().message);
-        const DriftDiffusion& dd = *made;
+        const System& dd = *made;
         const auto x = sloped(dd, d, s, 3e5, 0.5, c.D == 3 ? 0.3 : 0.0, 0.05, 7);
         const double error = fd_jacobian_error(dd, x);
         CAPTURE(c.name, error);
@@ -277,9 +278,9 @@ TEST_CASE("surface mobility assemble: the current rows are the linearized termin
         assemble::PhysicsModels models = lombardi();
         models.field_mobility = c.field;
         models.electrothermal = c.thermal;
-        const DriftDiffusion dd = *DriftDiffusion::create(d, s, models);
+        const System dd = *System::create(d, s, models);
         auto x = sloped(dd, d, s, 3e5, 0.5, c.D == 3 ? 0.3 : 0.0, 0.05, 11);
-        const auto rows = dd.small_signal_currents(x, 0.0);
+        const auto rows = small_signal_currents(dd, x, 0.0);
         REQUIRE(rows.size() == 2);
         std::vector<std::vector<double>> analytic(2, std::vector<double>(dd.unknowns(), 0.0));
         for (std::size_t k = 0; k < 2; ++k) {
@@ -293,10 +294,10 @@ TEST_CASE("surface mobility assemble: the current rows are the linearized termin
             const double h = 1e-7 * std::max(std::abs(base), 1.0);
             x[col] = base + h;
             const double hi = x[col];
-            const auto up = dd.terminal_currents(x);
+            const auto up = terminal_currents(dd, x);
             x[col] = base - h;
             const double lo = x[col];
-            const auto down = dd.terminal_currents(x);
+            const auto down = terminal_currents(dd, x);
             x[col] = base;
             for (std::size_t k = 0; k < 2; ++k) {
                 largest = std::max(largest, std::abs(analytic[k][col]));
@@ -312,9 +313,9 @@ TEST_CASE("surface mobility assemble: the current rows are the linearized termin
 TEST_CASE("surface mobility assemble: off, the pattern and residual are unchanged (LS1)") {
     const device::Device d = block(tensor(2, 6));
     const auto s = *assemble::make_scaling(d);
-    const DriftDiffusion base = *DriftDiffusion::create(d, s, assemble::PhysicsModels{});
-    const DriftDiffusion off = *DriftDiffusion::create(d, s, lombardi(false));
-    const DriftDiffusion on = *DriftDiffusion::create(d, s, lombardi(true));
+    const System base = *System::create(d, s, assemble::PhysicsModels{});
+    const System off = *System::create(d, s, lombardi(false));
+    const System on = *System::create(d, s, lombardi(true));
     REQUIRE(off.make_jacobian().has_same_pattern(base.make_jacobian()));
     REQUIRE(on.make_jacobian().nonzeros() > base.make_jacobian().nonzeros());
     const auto x = sloped(base, d, s, 1e5, 0.4, 0.0, 0.05, 3);
@@ -328,18 +329,18 @@ TEST_CASE("surface mobility assemble: refusals (LD6, LD8; LS10)") {
     const auto ge = physics::germanium_parameters;
     const device::Device g = block(tensor(2, 4), {.material = ge});
     const auto sg = *assemble::make_scaling(g);
-    const auto refused = DriftDiffusion::create(g, sg, lombardi());
+    const auto refused = System::create(g, sg, lombardi());
     REQUIRE_FALSE(refused.has_value());
     REQUIRE(refused.error().code == base::ErrorCode::invalid_input);
     // Silicon with another parameter changed is still silicon's mobility.
     physics::SemiconductorParameters other = physics::silicon_parameters;
     other.eps_r = 11.8;
     const device::Device o = block(tensor(2, 4), {.material = other});
-    REQUIRE(DriftDiffusion::create(o, *assemble::make_scaling(o), lombardi()).has_value());
+    REQUIRE(System::create(o, *assemble::make_scaling(o), lombardi()).has_value());
     // Impact ionization reads the fluxes' partials, which reach past its pattern.
     assemble::PhysicsModels impact = lombardi();
     impact.impact_ionization = true;
-    const auto both = DriftDiffusion::create(o, *assemble::make_scaling(o), impact);
+    const auto both = System::create(o, *assemble::make_scaling(o), impact);
     REQUIRE_FALSE(both.has_value());
     REQUIRE(both.error().code == base::ErrorCode::invalid_input);
 }

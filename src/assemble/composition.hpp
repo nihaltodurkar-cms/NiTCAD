@@ -6,24 +6,26 @@
 //     MOS     = the diode's + the oxide's Poisson + gate and interface conditions
 //     thermal = the semiconductor equations at T + the heat equation and its sinks
 // with generation (impact ionization, band-to-band tunnelling) and recombination models adding
-// terms. A composition table lists, in assembly order (DECISIONS.md FE3), every term a system can
+// terms; thermal equilibrium (Unit 57 GE5) = Poisson alone over psi, the carriers slaved to it, with
+// the oxide, gate, interface and contact conditions. A composition table lists, in assembly order (DECISIONS.md FE3), every term a system can
 // have: the equation sets it belongs to, whether it is active for a device and models, and its
-// factory. The isothermal table is in terms.cpp, the electrothermal one in thermal_terms.cpp.
+// factory. The isothermal table is in terms.cpp, the electrothermal one in thermal_terms.cpp, the
+// equilibrium one in equilibrium.cpp.
 // Composition picks the table, keeps the active rows and builds the unknowns' map from the
 // fields the equations solve for (fields.hpp).
 //
-// The model data the terms read (per node, per edge, per contact) stays in DriftDiffusion: its
-// diagnostics read it too (FE5). DriftDiffusion is the compatibility wrapper (FE4) and that data's
-// store.
+// The model data the terms read (per node, per edge, per contact) is SystemData's and what changes
+// after creation SystemState's (system_data.hpp, Unit 57 GE2); System is the compatibility
+// wrapper (FE4) holding them.
 #pragma once
 
 #include <memory>
 #include <span>
 #include <vector>
 
-#include "NiTCAD/assemble/drift_diffusion.hpp"
 #include "NiTCAD/assemble/fields.hpp"
 #include "NiTCAD/assemble/models.hpp"
+#include "NiTCAD/assemble/system.hpp"
 #include "NiTCAD/linalg/sparse_matrix.hpp"
 #include "terms.hpp"
 
@@ -62,15 +64,33 @@ struct CompositionEntry {
     EquationSets sets;
     // Whether the term is in a system with these models; reads the device data create has set
     // before the unknowns' map (contacts, insulators, gates, interfaces).
-    bool (*active)(const DriftDiffusion& s, const PhysicsModels& models);
-    std::shared_ptr<const TermAccess::Term> (*make)();
+    bool (*active)(const SystemData& s, const SystemState& st, const PhysicsModels& models);
+    std::shared_ptr<const SystemData::Term> (*make)();
+    // A term of the frequency domain alone (Term::add_frequency; Unit 57 GE3).
+    bool frequency = false;
 };
 
-class DriftDiffusion::Composition {
+// An equation added to the drift-diffusion composition from outside its tables (Unit 57 GG8,
+// SystemData::create_extended): its fields, node unknowns placed after the built-in fields in
+// every node block, and its terms, added after every term of the table, in order, under no
+// equation set. Its terms write their own rows and any others: the rows of its fields are theirs
+// to assign (no table term writes them), and the Jacobian entries beyond every node's full block
+// are theirs to add (Term::pattern), found by position at each add (they hold no positions in the
+// system's data). The Newton hooks move each added unknown as the potential: clipped to
+// +-max_update, measured by |dx| (System::update_size, apply_update). Steady evaluations only (no
+// time step, no small-signal matrix).
+struct SystemData::CompositionExtension {
+    std::vector<Field> fields;
+    std::vector<std::shared_ptr<const Term>> terms;
+};
+
+class SystemData::Composition {
 public:
-    // The unknowns and the active terms of a system's device data and models.
-    [[nodiscard]] static std::shared_ptr<const Composition> compose(const DriftDiffusion& s,
-                                                                    const PhysicsModels& models);
+    // The unknowns and the active terms of a system's device data and models, and an extension's
+    // (nullptr: none).
+    [[nodiscard]] static std::shared_ptr<const Composition> compose(
+        const SystemData& s, const SystemState& st, const PhysicsModels& models,
+        const CompositionExtension* extension);
 
     [[nodiscard]] const DofMap& dofs() const noexcept { return dofs_; }
     [[nodiscard]] std::span<const std::shared_ptr<const Term>> terms() const noexcept {
@@ -81,15 +101,26 @@ public:
     [[nodiscard]] EquationSets sets() const noexcept { return all_; }
 
     // Appends every term's own pattern entries (Term::pattern).
-    void pattern(const DriftDiffusion& s, std::vector<linalg::Triplet>& triplets) const;
-    // Every term's add, in order; without `interfaces`, the interface-edge terms are left out
-    // (the isothermal small_signal_matrix adds its own). assemble_heat always passes true: the
-    // electrothermal small_signal_matrix adds none.
-    void assemble(const DriftDiffusion& s, const Terms::Evaluation& e, bool interfaces) const;
+    void pattern(const SystemData& s, const SystemState& st,
+                 std::vector<linalg::Triplet>& triplets) const;
+    // Every steady term's add, in order. In the frequency domain (small_signal_matrix), the steady
+    // terms of a domain that a frequency-domain term has are left out: the frequency-domain term
+    // takes their place (assemble_frequency).
+    void assemble(const SystemData& s, const SystemState& st, const Terms::Evaluation& e,
+                  bool frequency) const;
+    // Every frequency-domain term's add_frequency, in order.
+    void assemble_frequency(const SystemData& s, const SystemState& st,
+                            const Terms::FrequencyEvaluation& e) const;
+    [[nodiscard]] std::span<const std::shared_ptr<const Term>> frequency_terms() const noexcept {
+        return frequency_terms_;
+    }
 
 private:
     DofMap dofs_;
     std::vector<std::shared_ptr<const Term>> terms_;
+    std::vector<std::shared_ptr<const Term>> frequency_terms_;
+    // The domains whose steady terms the frequency-domain terms replace (a bit per TermDomain).
+    unsigned frequency_domains_ = 0;
     std::vector<EquationSets> sets_;
     EquationSets all_ = 0;
 };

@@ -26,7 +26,7 @@ struct EquilibriumOptions {
     assemble::PhysicsModels models;     // bgn, fermi_dirac and incomplete_ionization matter
 };
 
-// Errors: those of assemble::make_scaling, assemble::EquilibriumPoisson::create,
+// Errors: those of assemble::make_scaling, assemble::System::create (thermal equilibrium),
 // linalg::LinearSolver::create and newton_solve (non_convergence and cancelled among them).
 [[nodiscard]] std::expected<results::EquilibriumResult, base::Error> solve_equilibrium(
     const device::Device& device, const EquilibriumOptions& options = {},

@@ -26,6 +26,7 @@
 #pragma once
 
 #include <atomic>
+#include <complex>
 #include <cstdint>
 #include <memory>
 #include <span>
@@ -33,7 +34,8 @@
 #include <thread>
 #include <vector>
 
-#include "NiTCAD/assemble/drift_diffusion.hpp"
+#include "NiTCAD/assemble/system.hpp"
+#include "system_data.hpp"
 #include "NiTCAD/assemble/fields.hpp"
 #include "NiTCAD/assemble/models.hpp"
 #include "NiTCAD/linalg/sparse_matrix.hpp"
@@ -55,7 +57,7 @@ struct TermInfo {
     bool assigns;                      // it sets its rows rather than adding to them
 };
 
-struct DriftDiffusion::Terms {
+struct SystemData::Terms {
     // One evaluation: the state, F (every row is assigned by a node term), the Jacobian's values
     // (empty: the residual alone; else zero on entry), the time step (nullptr: steady) and the
     // degeneracy factors (degeneracies(x); isothermal). With the electrothermal model
@@ -75,6 +77,13 @@ struct DriftDiffusion::Terms {
         GateTunnelJob* tunnels = nullptr;
         [[nodiscard]] bool jacobian() const noexcept { return !values.empty(); }
     };
+    // A frequency-domain evaluation (small_signal_matrix, Unit 57 GE3): s in units of
+    // 1 / time_scale(), and the complex matrix values the term adds to.
+    struct FrequencyEvaluation {
+        std::span<const double> x;
+        std::complex<double> s;
+        std::span<std::complex<double>> values;
+    };
 
     // The composition tables (composition.hpp): every term a system can have, in assembly order,
     // with its equation sets and activation. Activation follows the models and the device data set
@@ -83,55 +92,63 @@ struct DriftDiffusion::Terms {
     // Isothermal in terms.cpp; with the electrothermal model thermal_terms.cpp.
     [[nodiscard]] static std::span<const CompositionEntry> isothermal_table();
     [[nodiscard]] static std::span<const CompositionEntry> thermal_table();
-    // The Poisson charge term, in both tables.
+    // Thermal equilibrium (Unit 57 GE5; equilibrium.cpp): psi alone, the carriers slaved to it.
+    [[nodiscard]] static std::span<const CompositionEntry> equilibrium_table();
+    // The Poisson charge term, in both drift-diffusion tables.
     [[nodiscard]] static std::shared_ptr<const Term> poisson_charge();
+    // The gate and Poisson flux terms, shared by the isothermal and equilibrium tables (at stride
+    // 1 they compute equilibrium's expressions; GE5).
+    [[nodiscard]] static std::shared_ptr<const Term> gate();
+    [[nodiscard]] static std::shared_ptr<const Term> poisson_flux();
     // Appends every term's own pattern entries (Term::pattern) to triplets.
-    static void pattern(const DriftDiffusion& s, std::vector<linalg::Triplet>& triplets);
+    static void pattern(const SystemData& s, const SystemState& st,
+                        std::vector<linalg::Triplet>& triplets);
     // A system's terms and its composition (for its tests).
-    [[nodiscard]] static std::span<const std::shared_ptr<const Term>> list(const DriftDiffusion& s);
-    [[nodiscard]] static const Composition& composition(const DriftDiffusion& s) noexcept {
-        return *s.composition_;
+    [[nodiscard]] static std::span<const std::shared_ptr<const Term>> list(const System& s);
+    [[nodiscard]] static std::span<const std::shared_ptr<const Term>> list(const SystemData& s);
+    [[nodiscard]] static const Composition& composition(const System& s) noexcept {
+        return *of(s).composition_;
     }
     // One term alone at x: F and the values set to 0, then the term's add (for its tests: each
     // term's partials against finite differences of its own residual). Preconditions
     // (NITCAD_EXPECTS): as evaluate's, step's spans of evaluate's sizes when not nullptr.
-    static void evaluate(const DriftDiffusion& s, const Term& t, std::span<const double> x,
+    static void evaluate(const System& s, const Term& t, std::span<const double> x,
                          const TimeStep* step, std::span<double> f,
                          linalg::SparseMatrix& jacobian);
 
     // Whether node i takes the semiconductor node terms: neither an ohmic contact node nor an
     // insulator node.
-    [[nodiscard]] static bool semiconductor(const DriftDiffusion& s, std::size_t i) noexcept {
+    [[nodiscard]] static bool semiconductor(const SystemData& s, std::size_t i) noexcept {
         return s.contact_[i] < 0 && s.insulator_[i] == 0;
     }
     // The Jacobian value of (row r, column c) of node i's block.
-    [[nodiscard]] static double& at(const DriftDiffusion& s, const Evaluation& e, std::size_t node,
+    [[nodiscard]] static double& at(const SystemData& s, const Evaluation& e, std::size_t node,
                                     std::size_t r, std::size_t c) noexcept {
         return e.values[s.block_[s.m_ * s.m_ * node + s.m_ * r + c]];
     }
     // The equilibrium product of node i, scaled.
-    [[nodiscard]] static physics::EquilibriumProduct product(const DriftDiffusion& s,
+    [[nodiscard]] static physics::EquilibriumProduct product(const SystemData& s,
                                                              const Evaluation& e, std::size_t i);
     // Auger and radiative recombination take physical densities: node i's physical equilibrium
     // product, and the addition of a physical rate R into its continuity rows.
-    [[nodiscard]] static physics::EquilibriumProduct physical_product(const DriftDiffusion& s,
+    [[nodiscard]] static physics::EquilibriumProduct physical_product(const SystemData& s,
                                                                       const Evaluation& e,
                                                                       std::size_t i);
-    static void add_physical(const DriftDiffusion& s, const Evaluation& e, std::size_t i,
+    static void add_physical(const SystemData& s, const Evaluation& e, std::size_t i,
                              const physics::RecombinationRate& r);
     // The pattern entries of the interface edges (the insulator's Poisson row reads the
     // semiconductor's n and p) and of impact ionization (a node's electron generation reads its
     // neighbours' p, its hole generation their n), shared by the isothermal and electrothermal
     // terms.
-    static void interface_pattern(const DriftDiffusion& s, std::vector<linalg::Triplet>& t);
-    static void impact_pattern(const DriftDiffusion& s, std::vector<linalg::Triplet>& t);
+    static void interface_pattern(const SystemData& s, std::vector<linalg::Triplet>& t);
+    static void impact_pattern(const SystemData& s, std::vector<linalg::Triplet>& t);
     // Lombardi (Unit 46): rows 1 .. rows of both ends of every surface edge with the psi
     // columns of its E_perp stencil (rows 2: the continuity rows; 3: and the heat row).
-    static void surface_pattern(const DriftDiffusion& s, std::vector<linalg::Triplet>& t,
+    static void surface_pattern(const SystemData& s, std::vector<linalg::Triplet>& t,
                                 std::size_t rows);
 
     // Electrothermal: whether node i's heat row is an isothermal sink's Dirichlet row.
-    [[nodiscard]] static bool held(const DriftDiffusion& s, const Evaluation& e,
+    [[nodiscard]] static bool held(const SystemData& s, const Evaluation& e,
                                    std::size_t i) noexcept {
         const std::int32_t c = s.thermal_nodes_[i].contact;
         return e.sinks && c >= 0 && s.thermal_isothermal_[static_cast<std::size_t>(c)] != 0;
@@ -139,11 +156,11 @@ struct DriftDiffusion::Terms {
     // Electrothermal: node i's equilibrium product at its T (scaled), n_ie^2 or, under
     // Fermi-Dirac statistics, n_ie^2 gamma_n gamma_p with its density partials, and its theta
     // derivative dE_t.
-    static void thermal_product(const DriftDiffusion& s, const Evaluation& e, std::size_t i,
+    static void thermal_product(const SystemData& s, const Evaluation& e, std::size_t i,
                                 physics::EquilibriumProduct& E, double& dE_t);
     // Electrothermal: k times a recombination rate R / R0 into node i's continuity rows, with its
     // density partials and d_t its theta derivative.
-    static void add_thermal_rate(const DriftDiffusion& s, const Evaluation& e, std::size_t i,
+    static void add_thermal_rate(const SystemData& s, const Evaluation& e, std::size_t i,
                                  double k, double rate, double d_n, double d_p, double d_t);
 
     class ContactRows;
@@ -158,6 +175,7 @@ struct DriftDiffusion::Terms {
     class Storage;
     class Manufactured;
     class Interfaces;
+    class InterfacesFrequency;
     class PoissonFlux;
     class CarrierFluxes;
     class ImpactGeneration;
@@ -186,6 +204,18 @@ struct DriftDiffusion::Terms {
     [[nodiscard]] static std::shared_ptr<const Term> energy_rows();
     [[nodiscard]] static std::shared_ptr<const Term> energy_fluxes();
     [[nodiscard]] static std::shared_ptr<const Term> energy_impact();
+    // Thermal equilibrium's own variants (Unit 57 GE5, R2; equilibrium.cpp): the insulator rows,
+    // the charge with the carriers slaved to psi, the interface edges at Fermi occupancy, and the
+    // Dirichlet rows last.
+    class EquilibriumInsulatorRows;
+    class EquilibriumCharge;
+    class EquilibriumInterfaces;
+    class EquilibriumContacts;
+    // Thermal equilibrium: whether node i's row is a Dirichlet row (an ohmic or Schottky contact
+    // node, or an electrode node).
+    [[nodiscard]] static bool dirichlet(const SystemData& s, std::size_t i) noexcept {
+        return s.contact_[i] >= 0 || s.schottky_[i] >= 0 || s.electrode_[i] >= 0;
+    }
 };
 
 // The gate tunnels' fluxes at one state (GR11; gate_tunnels.cpp): worker threads start on them at
@@ -193,9 +223,9 @@ struct DriftDiffusion::Terms {
 // until none is left, waits for the workers and returns the fluxes, one per tunnel. Each flux is
 // computed whole by one thread, so they do not depend on the thread count. Destruction waits for
 // the workers when finish() was not called.
-class DriftDiffusion::GateTunnelJob {
+class SystemData::GateTunnelJob {
 public:
-    GateTunnelJob(const DriftDiffusion& s, std::span<const double> x,
+    GateTunnelJob(const SystemData& s, const SystemState& st, std::span<const double> x,
                   std::span<const NodeDegeneracy> g);
     GateTunnelJob(const GateTunnelJob&) = delete;
     GateTunnelJob& operator=(const GateTunnelJob&) = delete;
@@ -204,7 +234,8 @@ public:
 
 private:
     void work();
-    const DriftDiffusion& s_;
+    const SystemData& s_;
+    const SystemState& st_;
     std::span<const double> x_;
     std::span<const NodeDegeneracy> g_;
     std::vector<GateTunnelFlux> out_;
@@ -213,7 +244,7 @@ private:
     std::vector<std::jthread> workers_;  // last: joined before the rest is destroyed
 };
 
-class DriftDiffusion::Term {
+class SystemData::Term {
 public:
     Term() = default;
     Term(const Term&) = delete;
@@ -224,17 +255,15 @@ public:
     // Appends the Jacobian entries the term writes beyond every node's full block and the mesh
     // edges' stencil (an interface's cross-node density columns, impact ionization's other
     // carrier, the tunnel paths'); none by default.
-    virtual void pattern(const DriftDiffusion& s, std::vector<linalg::Triplet>& triplets) const;
-    virtual void add(const DriftDiffusion& s, const Terms::Evaluation& e) const = 0;
-};
-
-// The names of DriftDiffusion's private term types, for the assemble library and its tests
-// (this header is internal: not under include/).
-struct TermAccess {
-    using Term = DriftDiffusion::Term;
-    using Terms = DriftDiffusion::Terms;
-    using Composition = DriftDiffusion::Composition;
-    using Evaluation = DriftDiffusion::Terms::Evaluation;
+    virtual void pattern(const SystemData& s, const SystemState& st,
+                         std::vector<linalg::Triplet>& triplets) const;
+    virtual void add(const SystemData& s, const SystemState& st,
+                     const Terms::Evaluation& e) const = 0;
+    // A term of the frequency domain alone (Composition::frequency_terms) adds to the complex
+    // small-signal matrix, after the storage, in place of the steady terms of its domain; its
+    // add (the steady rows) is never called. Nothing by default.
+    virtual void add_frequency(const SystemData& s, const SystemState& st,
+                               const Terms::FrequencyEvaluation& e) const;
 };
 
 }  // namespace NiTCAD::assemble

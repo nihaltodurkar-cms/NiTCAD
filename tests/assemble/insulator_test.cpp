@@ -13,9 +13,12 @@
 #include <utility>
 #include <vector>
 
-#include "NiTCAD/assemble/drift_diffusion.hpp"
-#include "NiTCAD/assemble/equilibrium_poisson.hpp"
+#include "NiTCAD/assemble/band_edges.hpp"
+#include "NiTCAD/assemble/charges.hpp"
+#include "NiTCAD/assemble/currents.hpp"
+#include "NiTCAD/assemble/equilibrium.hpp"
 #include "NiTCAD/assemble/scaling.hpp"
+#include "NiTCAD/assemble/system.hpp"
 #include "NiTCAD/device/device.hpp"
 #include "NiTCAD/mesh/tensor_grid.hpp"
 #include "NiTCAD/physics/insulator.hpp"
@@ -23,8 +26,8 @@
 #include "NiTCAD/physics/semiconductor.hpp"
 
 using namespace NiTCAD;
-using assemble::DriftDiffusion;
-using assemble::EquilibriumPoisson;
+using assemble::System;
+using assemble::create_equilibrium;
 
 namespace {
 
@@ -146,9 +149,9 @@ double fd_jacobian_error(const System& system, std::vector<double> x) {
 // (scaled): out of equilibrium, so the trap occupancy is not the Fermi one, and large enough that a
 // difference step resolves the trap terms against the rest of the row (at the bulk minority
 // density, about 1e-14 scaled, no step can).
-std::vector<double> probe_state(const DriftDiffusion& system, const EquilibriumPoisson& poisson,
+std::vector<double> probe_state(const System& system, const System& poisson,
                                 const device::Device& d, std::uint64_t seed) {
-    auto x = system.state_from_potential(poisson.charge_neutral_potential());
+    auto x = system.state_from_potential(charge_neutral_potential(poisson));
     Noise noise{seed};
     for (std::size_t i = 0; i < system.node_count(); ++i) {
         x[3 * i] += 0.02 * noise.next();
@@ -175,13 +178,13 @@ TEST_CASE("insulator assemble: the finite-difference Jacobian gate, 1D/2D/3D, bo
         const auto scaling = *assemble::make_scaling(d);
         for (const bool fd : {false, true}) {
             const assemble::PhysicsModels models{.fermi_dirac = fd};
-            auto poisson = *EquilibriumPoisson::create(d, scaling, models);
+            auto poisson = *create_equilibrium(d, scaling, models);
             REQUIRE(poisson.set_bias(equilibrium_bias).has_value());
-            auto psi = poisson.charge_neutral_potential();
+            auto psi = charge_neutral_potential(poisson);
             Noise noise{17};
             for (double& v : psi) v += 0.3 * noise.next();
             const double ep = fd_jacobian_error(poisson, psi);
-            auto system = *DriftDiffusion::create(d, scaling, models);
+            auto system = *System::create(d, scaling, models);
             REQUIRE(system.set_bias(bias).has_value());
             const auto x = probe_state(system, poisson, d, 23);
             const double dd = fd_jacobian_error(system, x);
@@ -202,11 +205,11 @@ TEST_CASE("insulator assemble: the trap part of the Jacobian on its own") {
     const std::vector<double> bias{-0.4, 0.1};
     for (const bool fd : {false, true}) {
         const assemble::PhysicsModels models{.fermi_dirac = fd};
-        auto a = *DriftDiffusion::create(with, scaling, models);
-        auto b = *DriftDiffusion::create(without, scaling, models);
+        auto a = *System::create(with, scaling, models);
+        auto b = *System::create(without, scaling, models);
         REQUIRE(a.set_bias(bias).has_value());
         REQUIRE(b.set_bias(bias).has_value());
-        const auto poisson = *EquilibriumPoisson::create(with, scaling, models);
+        const auto poisson = *create_equilibrium(with, scaling, models);
         auto x = probe_state(a, poisson, with, 5);
         const std::size_t n = a.unknowns();
         auto ja = a.make_jacobian(), jb = b.make_jacobian();
@@ -245,9 +248,9 @@ TEST_CASE("insulator assemble: insulator rows and no carrier flux across the oxi
     for (const int D : {1, 2}) {
         const device::Device d = mos(D);
         const auto scaling = *assemble::make_scaling(d);
-        auto system = *DriftDiffusion::create(d, scaling);
+        auto system = *System::create(d, scaling);
         REQUIRE(system.set_bias(std::vector<double>{0.7, 0.0}).has_value());
-        const auto poisson = *EquilibriumPoisson::create(d, scaling);
+        const auto poisson = *create_equilibrium(d, scaling);
         auto x = probe_state(system, poisson, d, 9);
         const std::size_t n = system.unknowns();
         std::vector<double> f(n);
@@ -283,7 +286,7 @@ TEST_CASE("insulator assemble: insulator rows and no carrier flux across the oxi
         }
         // Zero electron and hole current on every edge with an insulator end; the gate carries no
         // terminal current.
-        const auto currents = system.edge_currents(x);
+        const auto currents = edge_currents(system, x);
         const auto edges = d.mesh().edges();
         for (std::size_t k = 0; k < edges.size(); ++k) {
             if (d.is_insulator(edges[k].first) || d.is_insulator(edges[k].second)) {
@@ -291,9 +294,9 @@ TEST_CASE("insulator assemble: insulator rows and no carrier flux across the oxi
                 REQUIRE(currents[k].second == 0.0);
             }
         }
-        REQUIRE(system.terminal_currents(x)[0] == 0.0);
-        REQUIRE(system.terminal_current_resolution(x)[0] == 0.0);
-        const auto bands = system.band_edges(x);
+        REQUIRE(terminal_currents(system, x)[0] == 0.0);
+        REQUIRE(terminal_current_resolution(system, x)[0] == 0.0);
+        const auto bands = band_edges(system, x);
         REQUIRE(std::isnan(bands.conduction[0]));
     }
 }
@@ -308,15 +311,15 @@ TEST_CASE("insulator assemble: on an equilibrium state the interface terms are t
             const device::Device d = mos(D);
             const assemble::PhysicsModels models{.fermi_dirac = fd};
             const auto scaling = *assemble::make_scaling(d);
-            auto poisson = *EquilibriumPoisson::create(d, scaling, models);
-            auto system = *DriftDiffusion::create(d, scaling, models);
+            auto poisson = *create_equilibrium(d, scaling, models);
+            auto system = *System::create(d, scaling, models);
             const std::vector<double> bias{-0.4, 0.0};
             REQUIRE(poisson.set_bias(bias).has_value());
             REQUIRE(system.set_bias(bias).has_value());
-            auto psi = poisson.charge_neutral_potential();
+            auto psi = charge_neutral_potential(poisson);
             Noise noise{3};
             for (std::size_t i = 0; i < psi.size(); ++i) {
-                if (poisson.is_contact()[i] == 0) psi[i] += 0.5 * noise.next();
+                if (!is_contact(poisson, i)) psi[i] += 0.5 * noise.next();
             }
             const auto x = system.state_from_potential(psi);
             std::vector<double> fe(poisson.unknowns()), fd_rows(system.unknowns());
@@ -329,8 +332,8 @@ TEST_CASE("insulator assemble: on an equilibrium state the interface terms are t
                 worst_rate = std::max(
                     {worst_rate, std::abs(fd_rows[3 * i + 1]), std::abs(fd_rows[3 * i + 2])});
             }
-            const auto qe = poisson.interface_trap_charges(psi);
-            const auto qd = system.interface_trap_charges(x);
+            const auto qe = interface_trap_charges(poisson, psi);
+            const auto qd = interface_trap_charges(system, x);
             CAPTURE(D, fd, worst, scale, worst_rate, qe, qd);
             REQUIRE(qe.size() == 1);
             REQUIRE(qe[0] != 0.0);
@@ -383,10 +386,10 @@ TEST_CASE("insulator assemble: a mid-gap trap recombines as its surface recombin
     };
     const device::Device a = make(Mode::traps), b = make(Mode::velocity), c = make(Mode::none);
     const auto scaling = *assemble::make_scaling(a);
-    auto sa = *DriftDiffusion::create(a, scaling);
-    auto sb = *DriftDiffusion::create(b, scaling);
-    auto sc = *DriftDiffusion::create(c, scaling);
-    const auto poisson = *EquilibriumPoisson::create(a, scaling);
+    auto sa = *System::create(a, scaling);
+    auto sb = *System::create(b, scaling);
+    auto sc = *System::create(c, scaling);
+    const auto poisson = *create_equilibrium(a, scaling);
     const auto x = probe_state(sa, poisson, a, 41);
     std::vector<double> fa(sa.unknowns()), fb(sb.unknowns()), fc(sc.unknowns());
     sa.residual(x, fa);

@@ -13,19 +13,21 @@
 #include <utility>
 #include <vector>
 
+#include "NiTCAD/assemble/charges.hpp"
 #include "NiTCAD/assemble/contact_bias.hpp"
-#include "NiTCAD/assemble/drift_diffusion.hpp"
-#include "NiTCAD/assemble/equilibrium_poisson.hpp"
+#include "NiTCAD/assemble/currents.hpp"
+#include "NiTCAD/assemble/equilibrium.hpp"
 #include "NiTCAD/assemble/gate.hpp"
 #include "NiTCAD/assemble/scaling.hpp"
+#include "NiTCAD/assemble/system.hpp"
 #include "NiTCAD/base/constants.hpp"
 #include "NiTCAD/device/device.hpp"
 #include "NiTCAD/mesh/tensor_grid.hpp"
 #include "NiTCAD/physics/semiconductor.hpp"
 
 using namespace NiTCAD;
-using assemble::DriftDiffusion;
-using assemble::EquilibriumPoisson;
+using assemble::System;
+using assemble::create_equilibrium;
 
 namespace {
 
@@ -165,14 +167,14 @@ double fd_jacobian_error(const System& system, std::vector<double> x) {
 
 // Drift-diffusion at the given biases, at the legacy probe's state: Boltzmann carriers at the
 // charge-neutral potential, then psi + 0.02 noise and n, p times (1 + 0.01 noise).
-std::pair<DriftDiffusion, std::vector<double>> probe_state(const device::Device& d,
+std::pair<System, std::vector<double>> probe_state(const device::Device& d,
                                                            const std::vector<double>& bias,
                                                            std::uint64_t seed) {
     const auto scaling = *assemble::make_scaling(d);
-    auto system = *DriftDiffusion::create(d, scaling);
+    auto system = *System::create(d, scaling);
     REQUIRE(system.set_bias(bias).has_value());
-    const auto poisson = *EquilibriumPoisson::create(d, scaling);
-    auto x = system.state_from_potential(poisson.charge_neutral_potential());
+    const auto poisson = *create_equilibrium(d, scaling);
+    auto x = system.state_from_potential(charge_neutral_potential(poisson));
     Noise noise{seed};
     for (std::size_t i = 0; i < system.node_count(); ++i) {
         x[3 * i] += 0.02 * noise.next();
@@ -265,8 +267,8 @@ TEST_CASE("gate: the 1D rows are the legacy MOS-C rows written out by hand") {
     const double Vg = 0.7;
     const std::vector<double> bias{Vg, 0.0};
 
-    auto poisson = *EquilibriumPoisson::create(d, s);
-    auto dd = *DriftDiffusion::create(d, s);
+    auto poisson = *create_equilibrium(d, s);
+    auto dd = *System::create(d, s);
     REQUIRE(poisson.set_bias(bias).has_value());
     REQUIRE(dd.set_bias(bias).has_value());
     const std::size_t n = axis.size();
@@ -309,8 +311,8 @@ TEST_CASE("gate: no carrier flux crosses the gate; only the Poisson row changes"
     const auto gated = moscap(*mesh::make_tensor_grid(axis));
     const auto bare = moscap(*mesh::make_tensor_grid(axis), false);
     const auto s = *assemble::make_scaling(gated);
-    auto a = *DriftDiffusion::create(gated, s);
-    auto b = *DriftDiffusion::create(bare, s);
+    auto a = *System::create(gated, s);
+    auto b = *System::create(bare, s);
     const std::vector<double> gate_bias{1.2, 0.0}, bare_bias{0.0};
     REQUIRE(a.set_bias(gate_bias).has_value());
     REQUIRE(b.set_bias(bare_bias).has_value());
@@ -330,9 +332,9 @@ TEST_CASE("gate: no carrier flux crosses the gate; only the Poisson row changes"
         }
     }
     // A gate carries no current; the gate charge is the oxide flux.
-    const auto currents = a.terminal_currents(x);
+    const auto currents = terminal_currents(a, x);
     REQUIRE(currents[0] == 0.0);
-    const auto charges = a.gate_charges(x);
+    const auto charges = gate_charges(a, x);
     REQUIRE(charges[1] == 0.0);
     REQUIRE(charges[0] == g.coupling * (1.2 / s.V_T - g.offset - x[0]));
 }
@@ -349,10 +351,10 @@ TEST_CASE("gate: FD-Jacobian gate with gates in 1D, 2D and 3D (section 10, <= 5e
     const double e3 = fd_jacobian_error(s3, x3);
     // Equilibrium Poisson with a biased gate.
     const auto d = transistor();
-    auto poisson = *EquilibriumPoisson::create(d, *assemble::make_scaling(d));
+    auto poisson = *create_equilibrium(d, *assemble::make_scaling(d));
     const std::vector<double> gate_only{0.0, 1.0, 0.0, 0.0};
     REQUIRE(poisson.set_bias(gate_only).has_value());
-    std::vector<double> psi = poisson.charge_neutral_potential();
+    std::vector<double> psi = charge_neutral_potential(poisson);
     Noise noise{24};
     for (double& p : psi) p += 0.5 * noise.next();
     const double e4 = fd_jacobian_error(poisson, psi);
@@ -366,7 +368,7 @@ TEST_CASE("gate: FD-Jacobian gate with gates in 1D, 2D and 3D (section 10, <= 5e
 
 TEST_CASE("gate: the equilibrium system takes gate biases, not ohmic ones") {
     const auto d = transistor();
-    auto poisson = *EquilibriumPoisson::create(d, *assemble::make_scaling(d));
+    auto poisson = *create_equilibrium(d, *assemble::make_scaling(d));
     const auto rejected = [&](std::vector<double> bias) {
         const auto r = poisson.set_bias(bias);
         REQUIRE_FALSE(r.has_value());
@@ -382,14 +384,14 @@ TEST_CASE("gate: the equilibrium system takes gate biases, not ohmic ones") {
 
     // A gate bias of dV moves only the gate rows, by G dV / V_T.
     const auto s = *assemble::make_scaling(d);
-    const std::vector<double> psi = poisson.charge_neutral_potential();
+    const std::vector<double> psi = charge_neutral_potential(poisson);
     std::vector<double> f0(psi.size()), f1(psi.size());
     poisson.residual(psi, f0);
     const std::vector<double> biased{0.0, 0.4, 0.0, 0.0};
     REQUIRE(poisson.set_bias(biased).has_value());
     poisson.residual(psi, f1);
     const auto gate = d.contacts()[1];
-    const auto charges = poisson.gate_charges(psi);
+    const auto charges = gate_charges(poisson, psi);
     double coupling_sum = 0.0;
     for (std::size_t i = 0; i < psi.size(); ++i) {
         const bool on_gate = std::binary_search(gate.nodes.begin(), gate.nodes.end(),

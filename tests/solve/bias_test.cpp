@@ -23,8 +23,8 @@
 #include "NiTCAD/analysis/curve.hpp"
 #include "NiTCAD/analysis/dc.hpp"
 #include "NiTCAD/assemble/bernoulli.hpp"
-#include "NiTCAD/assemble/drift_diffusion.hpp"
 #include "NiTCAD/assemble/scaling.hpp"
+#include "NiTCAD/assemble/system.hpp"
 #include "NiTCAD/base/constants.hpp"
 #include "NiTCAD/device/device.hpp"
 #include "NiTCAD/linalg/linear_solver.hpp"
@@ -363,7 +363,7 @@ TEST_CASE("bias: without recombination the electron current is the same on every
 TEST_CASE("bias: Newton analyzes once, and converges to a quadratic finish") {
     const auto d = diode_1d(gate_mesh());
     const auto scaling = *assemble::make_scaling(d);
-    auto system = *assemble::DriftDiffusion::create(d, scaling);
+    auto system = *assemble::System::create(d, scaling);
     const auto eq = *solve::solve_equilibrium(d);
     std::vector<double> psi(eq.fields.potential_V.size());
     for (std::size_t i = 0; i < psi.size(); ++i) psi[i] = eq.fields.potential_V[i] / scaling.V_T;
@@ -389,7 +389,7 @@ TEST_CASE("bias: PARDISO, one analysis per Newton run and the diode gates (Unit 
     const linalg::SolverConfig pardiso{.backend = linalg::SolverBackend::mkl_pardiso};
     const auto d = diode_1d(gate_mesh());
     const auto scaling = *assemble::make_scaling(d);
-    auto system = *assemble::DriftDiffusion::create(d, scaling);
+    auto system = *assemble::System::create(d, scaling);
     const auto eq = *solve::solve_equilibrium(d);
     std::vector<double> psi(eq.fields.potential_V.size());
     for (std::size_t i = 0; i < psi.size(); ++i) psi[i] = eq.fields.potential_V[i] / scaling.V_T;
@@ -454,7 +454,7 @@ TEST_CASE("bias: GMRES-ILUT, one ILUT per Newton iteration and the diode gates (
                                      .fallback = linalg::LinearFallback::none};
     const auto d = diode_1d(gate_mesh());
     const auto scaling = *assemble::make_scaling(d);
-    auto system = *assemble::DriftDiffusion::create(d, scaling);
+    auto system = *assemble::System::create(d, scaling);
     const auto eq = *solve::solve_equilibrium(d);
     std::vector<double> psi(eq.fields.potential_V.size());
     for (std::size_t i = 0; i < psi.size(); ++i) psi[i] = eq.fields.potential_V[i] / scaling.V_T;
@@ -602,7 +602,7 @@ TEST_CASE("bias: assembly cost on the legacy diode", "[.assembly_benchmark]") {
     const auto p = solve::solve_bias(d, bias, legacy);
     REQUIRE(p.has_value());
     const auto scaling = *assemble::make_scaling(d);
-    auto system = *assemble::DriftDiffusion::create(d, scaling, legacy.models);
+    auto system = *assemble::System::create(d, scaling, legacy.models);
     REQUIRE(system.set_bias(bias).has_value());
     time_assembly("legacy 1D diode", system, scaled_state(system, p->fields, scaling));
 }

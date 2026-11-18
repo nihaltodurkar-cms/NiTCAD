@@ -7,9 +7,14 @@
 #include <string>
 #include <utility>
 
+#include "NiTCAD/assemble/charges.hpp"
 #include "NiTCAD/assemble/contact_bias.hpp"
-#include "NiTCAD/assemble/drift_diffusion.hpp"
+#include "NiTCAD/assemble/currents.hpp"
+#include "NiTCAD/assemble/energy.hpp"
 #include "NiTCAD/assemble/scaling.hpp"
+#include "NiTCAD/assemble/system.hpp"
+#include "NiTCAD/assemble/thermal.hpp"
+#include "NiTCAD/assemble/tunnelling.hpp"
 #include "NiTCAD/solve/equilibrium.hpp"
 #include "NiTCAD/solve/newton.hpp"
 #include "fields.hpp"
@@ -22,7 +27,7 @@ namespace NiTCAD::solve {
 
 namespace {
 
-using TimeStep = assemble::DriftDiffusion::TimeStep;
+using TimeStep = assemble::System::TimeStep;
 
 base::Error invalid(std::string message, std::optional<std::size_t> index = std::nullopt,
                     std::optional<double> value = std::nullopt) {
@@ -32,7 +37,7 @@ base::Error invalid(std::string message, std::optional<std::size_t> index = std:
 
 // The system of one time step, for newton_solve.
 struct StepSystem {
-    const assemble::DriftDiffusion& dd;
+    const assemble::System& dd;
     TimeStep step;
 
     [[nodiscard]] std::size_t unknowns() const { return dd.unknowns(); }
@@ -54,7 +59,7 @@ struct StepSystem {
 // electrothermal start from a given temperature, or of a domain without a heat sink, Unit 23,
 // DECISIONS.md U5): each such heat row becomes tau - hold.
 struct HeldTemperature {
-    const assemble::DriftDiffusion& dd;
+    const assemble::System& dd;
     std::span<const double> hold;  // tau per node
     std::span<const char> held;    // per node: 1 if held
 
@@ -242,11 +247,11 @@ std::expected<results::Transient, base::Error> solve_transient_unobserved(
     if (!scaling) return std::unexpected(std::move(scaling.error()));
     auto solver = linalg::LinearSolver::create(steady.linear);
     if (!solver) return std::unexpected(std::move(solver.error()));
-    auto system = assemble::DriftDiffusion::create(device, *scaling, steady.models);
+    auto system = assemble::System::create(device, *scaling, steady.models);
     if (!system) return std::unexpected(std::move(system.error()));
-    system->set_minority_floor(steady.minority_floor);
-    if (thermal) (void)system->set_thermal_bias(thermal_bias);  // checked
-    const assemble::DriftDiffusion& dd = *system;
+    set_minority_floor(*system, steady.minority_floor);
+    if (thermal) (void)set_thermal_bias(*system, thermal_bias);  // checked
+    const assemble::System& dd = *system;
 
     const std::size_t nodes = device.mesh().node_count();
     const detail::Slots slot = detail::slots(dd.dofs());
@@ -258,7 +263,7 @@ std::expected<results::Transient, base::Error> solve_transient_unobserved(
     const double t0 = dd.time_scale();  // seconds per scaled time
     const double density_ref = options.density_ref_cm3 / scaling->Ns;
     // Energy balance (Unit 52): the carrier temperature rises' slots.
-    const bool energy = dd.energy_balance();
+    const bool energy = energy_balance(dd);
     const std::size_t rise_n = dd.dofs().slot(assemble::FieldId::electron_temperature).value_or(0);
     const std::size_t rise_p = dd.dofs().slot(assemble::FieldId::hole_temperature).value_or(0);
 
@@ -332,7 +337,7 @@ std::expected<results::Transient, base::Error> solve_transient_unobserved(
         std::vector<char> mask(nodes, 0);
         bool hold = false;
         for (std::size_t i = 0; thermal && i < nodes; ++i) {
-            mask[i] = given || !dd.reaches_heat_sink(i) ? 1 : 0;
+            mask[i] = given || !reaches_heat_sink(dd, i) ? 1 : 0;
             hold = hold || mask[i] != 0;
         }
         std::vector<double> held(nodes);
@@ -340,11 +345,11 @@ std::expected<results::Transient, base::Error> solve_transient_unobserved(
         // Energy balance (Unit 52, ED12 as ruled): psi, n and p first at the carrier temperatures
         // of the start (the lattice's from equilibrium, or the given ones), as sweep_bias's
         // points; the first stage's iterations are not recorded.
-        if (dd.energy_balance()) {
-            system->hold_temperatures(x);
+        if (energy_balance(dd)) {
+            hold_temperatures(*system, x);
             results::ConvergenceRecord unused;
             auto held_stage = newton_solve(dd, x, steady.newton, *solver, unused, control.stop);
-            system->release_temperatures();
+            release_temperatures(*system);
             if (!held_stage) {
                 run.stopped = std::move(held_stage.error());
                 run.unfinished = std::move(unused);
@@ -383,19 +388,12 @@ std::expected<results::Transient, base::Error> solve_transient_unobserved(
             snap.fields.potential_V[i] = s.x[m * i + slot.potential] * scaling->V_T;
             snap.fields.n_cm3[i] = s.x[m * i + slot.electrons] * scaling->Ns;
             snap.fields.p_cm3[i] = s.x[m * i + slot.holes] * scaling->Ns;
-            if (thermal) {
-                snap.fields.temperature_K.push_back(T0 + T0 * s.x[m * i + slot.temperature]);
-            }
-            if (energy) {  // Unit 52: T = T_L (1 + tau) per carrier
-                snap.fields.electron_temperature_K.push_back(T0 + T0 * s.x[m * i + rise_n]);
-                snap.fields.hole_temperature_K.push_back(T0 + T0 * s.x[m * i + rise_p]);
-            }
         }
-        snap.bands = detail::band_diagram(dd.band_edges(s.x), scaling->V_T);
-        for (const auto& [jn, jp] : dd.edge_currents(s.x)) {
-            snap.edge_current_n.push_back(jn * current_scale);
-            snap.edge_current_p.push_back(jp * current_scale);
-        }
+        // The lattice (electrothermal) and carrier (Unit 52) temperatures, T0 (1 + tau).
+        detail::temperatures(dd, s.x, snap.fields);
+        snap.bands = detail::band_diagram(dd, s.x, scaling->V_T);
+        detail::append_edge_currents(dd, s.x, current_scale, snap.edge_current_n,
+                                     snap.edge_current_p);
         snap.trap_occupancy = s.traps;
         if (steady.store_rates) snap.rates = detail::rate_fields(dd, s.x);
         return snap;
@@ -403,15 +401,15 @@ std::expected<results::Transient, base::Error> solve_transient_unobserved(
 
     // The starting point.
     std::vector<State> history;  // the accepted states since the last (re)start, newest last
-    history.push_back({0.0, x, dd.storage(x), dd.trap_occupancies(x), dd.contact_charges(x)});
-    first.conduction_current = scale(dd.terminal_currents(x), current_scale);
+    history.push_back({0.0, x, dd.storage(x), trap_occupancies(dd, x), contact_charges(dd, x)});
+    first.conduction_current = scale(terminal_currents(dd, x), current_scale);
     first.displacement_current.assign(contacts.size(), 0.0);
     first.terminal_current = first.conduction_current;
     first.contact_charge = scale(history.back().charges, charge_scale);
-    first.interface_trap_charge = scale(dd.interface_trap_charges(x), charge_scale);
+    first.interface_trap_charge = scale(interface_trap_charges(dd, x), charge_scale);
     if (thermal) {
         first.thermal_contact_heat =
-            scale(dd.thermal_contact_heat(x), scaling->V_T * current_scale);
+            scale(thermal_contact_heat(dd, x), scaling->V_T * current_scale);
     }
     run.points.push_back(std::move(first));
     run.snapshots.push_back(snapshot(history.back()));
@@ -499,10 +497,10 @@ std::expected<results::Transient, base::Error> solve_transient_unobserved(
         // Nonlocal tunnelling: the paths re-traced at the new state. If they differ, the step is
         // repeated once with them; if they differ again it is accepted with the paths lagging
         // and the next step takes the new ones.
-        if (dd.tunnelling()) {
-            assemble::TunnelPaths traced = dd.trace_paths(x);
-            if (!dd.paths_agree(traced, dd.paths(), x)) {
-                system->set_paths(std::move(traced));
+        if (tunnelling(dd)) {
+            assemble::TunnelPaths traced = trace_paths(dd, x);
+            if (!paths_agree(dd, traced, paths(dd), x)) {
+                set_paths(*system, std::move(traced));
                 if (!repeating) {
                     repeating = true;
                     ++run.retraced_steps;
@@ -513,8 +511,8 @@ std::expected<results::Transient, base::Error> solve_transient_unobserved(
             }
         }
         repeating = false;
-        State next{t_new / t0, x, dd.storage(x), dd.trap_occupancies(x, &step),
-                   dd.contact_charges(x, &step)};
+        State next{t_new / t0, x, dd.storage(x), trap_occupancies(dd, x, &step),
+                   contact_charges(dd, x, &step)};
 
         // The local error estimate (Milne's device), when the history allows one.
         double ratio = std::numeric_limits<double>::quiet_NaN();
@@ -599,9 +597,9 @@ std::expected<results::Transient, base::Error> solve_transient_unobserved(
         results::TimePoint point{t_new, step_s, formula.order, ratio, bias};
         if (thermal) {
             point.thermal_contact_heat =
-                scale(dd.thermal_contact_heat(x, &step), scaling->V_T * current_scale);
+                scale(thermal_contact_heat(dd, x, &step), scaling->V_T * current_scale);
         }
-        point.conduction_current = scale(dd.conduction_currents(x, step), current_scale);
+        point.conduction_current = scale(conduction_currents(dd, x, step), current_scale);
         point.displacement_current.resize(contacts.size());
         const std::vector<double> q_old =
             combine(formula, now.charges, prev != nullptr ? &prev->charges : nullptr);
@@ -615,7 +613,7 @@ std::expected<results::Transient, base::Error> solve_transient_unobserved(
                 point.conduction_current[c] + point.displacement_current[c];
         }
         point.contact_charge = scale(next.charges, charge_scale);
-        point.interface_trap_charge = scale(dd.interface_trap_charges(x, &step), charge_scale);
+        point.interface_trap_charge = scale(interface_trap_charges(dd, x, &step), charge_scale);
         point.convergence = std::move(record);
         run.points.push_back(std::move(point));
 

@@ -9,7 +9,7 @@ namespace NiTCAD::assemble {
 DofMap DofMap::node_interleaved(std::span<const Field> fields, std::size_t nodes) {
     DofMap m;
     for (const Field& f : fields) {
-        NITCAD_EXPECTS(f.location == FieldLocation::node && f.unknown);
+        NITCAD_EXPECTS(f.location == FieldLocation::node && f.kind == FieldKind::unknown);
         NITCAD_EXPECTS(std::ranges::none_of(m.fields_, [&](const Field& g) { return g.id == f.id; }));
         m.fields_.push_back(f);
     }

@@ -419,7 +419,7 @@ add_library(nitcad_assemble STATIC
   src/assemble/gate.cpp
   src/assemble/interface_edges.cpp
   src/assemble/contact_bias.cpp
-  src/assemble/equilibrium_poisson.cpp
+  src/assemble/equilibrium.cpp
   src/assemble/drift_diffusion.cpp
   src/assemble/electrothermal.cpp
   src/assemble/energy_balance.cpp
@@ -429,7 +429,9 @@ add_library(nitcad_assemble STATIC
   src/assemble/fields.cpp
   src/assemble/terms.cpp
   src/assemble/thermal_terms.cpp
-  src/assemble/composition.cpp)
+  src/assemble/composition.cpp
+  src/assemble/topics.cpp
+  src/assemble/derived.cpp)
 add_library(NiTCAD::assemble ALIAS nitcad_assemble)
 target_include_directories(nitcad_assemble PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
 target_link_libraries(nitcad_assemble PUBLIC
@@ -455,10 +457,13 @@ add_executable(nitcad_assemble_test
   tests/assemble/quantum_confinement_test.cpp
   tests/assemble/gate_tunnelling_test.cpp
   tests/assemble/manufactured_test.cpp
+  tests/assemble/extensibility_test.cpp
   tests/baseline/trace_listener.cpp)
 target_link_libraries(nitcad_assemble_test PRIVATE NiTCAD::assemble Catch2::Catch2WithMain)
 # The terms (Unit 40) are internal to the assemble layer; their own test reads them.
 target_include_directories(nitcad_assemble_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/assemble")
+# GG7 (Unit 57) reads the public header of the system.
+target_compile_definitions(nitcad_assemble_test PRIVATE NITCAD_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
 nitcad_add_file_tests(assemble nitcad_assemble_test)
 
 # --- results layer (plain result data; header-only) --------------------------------
@@ -700,6 +705,7 @@ add_executable(nitcad_deck_test
   tests/deck/complex_finfet_test.cpp
   tests/deck/adapt_test.cpp
   tests/deck/cross_run_learning_test.cpp
+  tests/deck/deck_compare_test.cpp
   tests/baseline/trace_listener.cpp)
 target_include_directories(nitcad_deck_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/deck")
 # The plot tests read the images back (Unit 25a).
@@ -730,7 +736,8 @@ add_executable(nitcad_adapt_test
   tests/solve/adapt_policy_test.cpp
   tests/solve/adapt_intelligent_test.cpp
   tests/solve/adapt_learn_test.cpp
-  tests/solve/adapt_derived_test.cpp)
+  tests/solve/adapt_derived_test.cpp
+  tests/baseline/trace_listener.cpp)
 # analysis: the derived goals' formulas held equal to dc.hpp's (Unit 17c, DG12).
 target_link_libraries(nitcad_adapt_test PRIVATE NiTCAD::deck NiTCAD::analysis Catch2::Catch2WithMain)
 nitcad_add_file_tests(adapt nitcad_adapt_test)

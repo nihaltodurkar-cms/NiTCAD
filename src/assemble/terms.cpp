@@ -7,6 +7,7 @@
 #include <string_view>
 #include <utility>
 
+#include "NiTCAD/assemble/observer.hpp"
 #include "NiTCAD/base/constants.hpp"
 #include "NiTCAD/base/contract.hpp"
 #include "NiTCAD/physics/band_to_band.hpp"
@@ -23,11 +24,15 @@ constexpr FieldId all3[] = {FieldId::potential, FieldId::electrons, FieldId::hol
 
 }  // namespace
 
-using Evaluation = TermAccess::Evaluation;
+using Evaluation = SystemData::Terms::Evaluation;
 
-void DriftDiffusion::Term::pattern(const DriftDiffusion&, std::vector<linalg::Triplet>&) const {}
+void SystemData::Term::add_frequency(const SystemData&, const SystemState&,
+                                     const Terms::FrequencyEvaluation&) const {}
 
-physics::EquilibriumProduct DriftDiffusion::Terms::product(const DriftDiffusion& s,
+void SystemData::Term::pattern(const SystemData&, const SystemState&,
+                               std::vector<linalg::Triplet>&) const {}
+
+physics::EquilibriumProduct SystemData::Terms::product(const SystemData& s,
                                                            const Evaluation& ev, std::size_t i) {
     return s.fermi_dirac_
                ? physics::fermi_dirac_equilibrium_product(s.n_ie_[i], ev.g[i].n, ev.g[i].p)
@@ -36,7 +41,7 @@ physics::EquilibriumProduct DriftDiffusion::Terms::product(const DriftDiffusion&
 
 // R / R0 = rate_scale (R / Ns), d(R / R0)/dn' = rate_scale dR/dn. The scaled product
 // E' = E / Ns^2 has dE/dn = Ns dE'/dn'.
-physics::EquilibriumProduct DriftDiffusion::Terms::physical_product(const DriftDiffusion& s,
+physics::EquilibriumProduct SystemData::Terms::physical_product(const SystemData& s,
                                                                     const Evaluation& ev,
                                                                     std::size_t i) {
     const double nie = s.n_ie_[i] * s.Ns_;
@@ -48,7 +53,7 @@ physics::EquilibriumProduct DriftDiffusion::Terms::physical_product(const DriftD
     return E;
 }
 
-void DriftDiffusion::Terms::add_physical(const DriftDiffusion& s, const Evaluation& ev,
+void SystemData::Terms::add_physical(const SystemData& s, const Evaluation& ev,
                                          std::size_t i, const physics::RecombinationRate& r) {
     const std::size_t m = s.m_;
     const double k = s.volume_[i] * s.rate_scale_;
@@ -63,19 +68,19 @@ void DriftDiffusion::Terms::add_physical(const DriftDiffusion& s, const Evaluati
 }
 
 // An ohmic contact node: its rows are psi - psi0, n - n0, p - p0 (assigned).
-class DriftDiffusion::Terms::ContactRows final : public Term {
+class SystemData::Terms::ContactRows final : public Term {
 public:
     TermInfo info() const noexcept override {
         return {"ohmic contact rows", TermDomain::nodes, all3, all3, true};
     }
-    void add(const DriftDiffusion& s, const Evaluation& ev) const override {
+    void add(const SystemData& s, const SystemState& st, const Evaluation& ev) const override {
         const std::size_t m = s.m_;
         for (std::size_t i = 0; i < s.node_count(); ++i) {
             if (s.contact_[i] < 0) continue;
             const double psi = ev.x[m * i], n = ev.x[m * i + 1], p = ev.x[m * i + 2];
-            ev.f[m * i] = psi - s.psi0_[i];
-            ev.f[m * i + 1] = n - s.n0_[i];
-            ev.f[m * i + 2] = p - s.p0_[i];
+            ev.f[m * i] = psi - st.psi0_[i];
+            ev.f[m * i + 1] = n - st.n0_[i];
+            ev.f[m * i + 2] = p - st.p0_[i];
             if (ev.jacobian()) at(s, ev, i, 0, 0) = at(s, ev, i, 1, 1) = at(s, ev, i, 2, 2) = 1.0;
         }
     }
@@ -86,21 +91,21 @@ public:
 // cleared first); its continuity rows keep every box term and lose the carriers emitted into the
 // metal, -K_n (n - n_B) in the electron row and +K_p (p - p_B) in the hole row (the sign of a
 // recombination: a sink of electrons and holes).
-class DriftDiffusion::Terms::SchottkyRows final : public Term {
+class SystemData::Terms::SchottkyRows final : public Term {
 public:
     TermInfo info() const noexcept override {
         return {"Schottky contact rows", TermDomain::nodes, all3, all3, false};
     }
-    void add(const DriftDiffusion& s, const Evaluation& ev) const override {
+    void add(const SystemData& s, const SystemState& st, const Evaluation& ev) const override {
         const std::size_t m = s.m_;
-        const std::span<const linalg::Index> rows = s.pattern_.row_offsets();
+        const std::span<const linalg::Index> rows = st.pattern_.row_offsets();
         for (std::size_t i = 0; i < s.node_count(); ++i) {
             if (s.schottky_[i] < 0) continue;
             const double psi = ev.x[m * i], n = ev.x[m * i + 1], p = ev.x[m * i + 2];
             const double kn = s.schottky_kn_[i], kp = s.schottky_kp_[i];
-            ev.f[m * i] = psi - s.psi0_[i];
-            ev.f[m * i + 1] -= kn * (n - s.n0_[i]);
-            ev.f[m * i + 2] += kp * (p - s.p0_[i]);
+            ev.f[m * i] = psi - st.psi0_[i];
+            ev.f[m * i + 1] -= kn * (n - st.n0_[i]);
+            ev.f[m * i + 2] += kp * (p - st.p0_[i]);
             if (!ev.jacobian()) continue;
             const auto r = static_cast<std::size_t>(rows[m * i]);
             const auto r1 = static_cast<std::size_t>(rows[m * i + 1]);
@@ -115,18 +120,18 @@ public:
 
 // An insulator node: no charge, no carriers (n and p held at 0); an electrode holds psi
 // (assigned).
-class DriftDiffusion::Terms::InsulatorRows final : public Term {
+class SystemData::Terms::InsulatorRows final : public Term {
 public:
     TermInfo info() const noexcept override {
         return {"insulator rows", TermDomain::nodes, all3, all3, true};
     }
-    void add(const DriftDiffusion& s, const Evaluation& ev) const override {
+    void add(const SystemData& s, const SystemState& st, const Evaluation& ev) const override {
         const std::size_t m = s.m_;
         for (std::size_t i = 0; i < s.node_count(); ++i) {
             if (s.contact_[i] >= 0 || s.insulator_[i] == 0) continue;
             const double psi = ev.x[m * i], n = ev.x[m * i + 1], p = ev.x[m * i + 2];
             const bool electrode = s.electrode_[i] >= 0;
-            ev.f[m * i] = electrode ? psi - s.psi0_[i] : 0.0;
+            ev.f[m * i] = electrode ? psi - st.psi0_[i] : 0.0;
             ev.f[m * i + 1] = n;
             ev.f[m * i + 2] = p;
             if (ev.jacobian()) {
@@ -139,12 +144,12 @@ public:
 
 // A semiconductor node's space charge -V (n - p - N) in its Poisson row; its continuity rows start
 // at 0 (assigned).
-class DriftDiffusion::Terms::PoissonCharge final : public Term {
+class SystemData::Terms::PoissonCharge final : public Term {
 public:
     TermInfo info() const noexcept override {
         return {"Poisson charge", TermDomain::nodes, all3, densities, true};
     }
-    void add(const DriftDiffusion& s, const Evaluation& ev) const override {
+    void add(const SystemData& s, const SystemState&, const Evaluation& ev) const override {
         const std::size_t m = s.m_;
         for (std::size_t i = 0; i < s.node_count(); ++i) {
             if (!semiconductor(s, i)) continue;
@@ -163,12 +168,12 @@ public:
 
 // Incomplete ionization: the Poisson row's charge with the ionized dopants, -V (n - p - N+ + N-),
 // in place of the Poisson charge's (assigned).
-class DriftDiffusion::Terms::Ionization final : public Term {
+class SystemData::Terms::Ionization final : public Term {
 public:
     TermInfo info() const noexcept override {
         return {"incomplete ionization", TermDomain::nodes, psi_only, densities, true};
     }
-    void add(const DriftDiffusion& s, const Evaluation& ev) const override {
+    void add(const SystemData& s, const SystemState&, const Evaluation& ev) const override {
         const std::size_t m = s.m_;
         const std::span<const NodeDegeneracy> g = ev.g;
         for (std::size_t i = 0; i < s.node_count(); ++i) {
@@ -199,29 +204,29 @@ public:
 };
 
 // A gate node's coupling to its gate electrode in its Poisson row (gate.hpp).
-class DriftDiffusion::Terms::Gate final : public Term {
+class SystemData::Terms::Gate final : public Term {
 public:
     TermInfo info() const noexcept override {
         return {"gate", TermDomain::nodes, psi_only, psi_only, false};
     }
-    void add(const DriftDiffusion& s, const Evaluation& ev) const override {
+    void add(const SystemData& s, const SystemState& st, const Evaluation& ev) const override {
         const std::size_t m = s.m_;
         for (std::size_t i = 0; i < s.node_count(); ++i) {
-            if (!semiconductor(s, i) || !s.gates_.on_gate(i)) continue;
+            if (!semiconductor(s, i) || !st.gates_.on_gate(i)) continue;
             const double psi = ev.x[m * i];
-            ev.f[m * i] += s.gates_.row_term(i, psi);
-            if (ev.jacobian()) at(s, ev, i, 0, 0) -= s.gates_.term(i).coupling;
+            ev.f[m * i] += st.gates_.row_term(i, psi);
+            if (ev.jacobian()) at(s, ev, i, 0, 0) -= st.gates_.term(i).coupling;
         }
     }
 };
 
 // Shockley-Read-Hall recombination: -V R in the electron row, +V R in the hole row.
-class DriftDiffusion::Terms::Srh final : public Term {
+class SystemData::Terms::Srh final : public Term {
 public:
     TermInfo info() const noexcept override {
         return {"SRH recombination", TermDomain::nodes, densities, densities, false};
     }
-    void add(const DriftDiffusion& s, const Evaluation& ev) const override {
+    void add(const SystemData& s, const SystemState&, const Evaluation& ev) const override {
         const std::size_t m = s.m_;
         for (std::size_t i = 0; i < s.node_count(); ++i) {
             if (!semiconductor(s, i)) continue;
@@ -243,12 +248,12 @@ public:
 };
 
 // Auger recombination (physical densities, add_physical).
-class DriftDiffusion::Terms::Auger final : public Term {
+class SystemData::Terms::Auger final : public Term {
 public:
     TermInfo info() const noexcept override {
         return {"Auger recombination", TermDomain::nodes, densities, densities, false};
     }
-    void add(const DriftDiffusion& s, const Evaluation& ev) const override {
+    void add(const SystemData& s, const SystemState&, const Evaluation& ev) const override {
         const std::size_t m = s.m_;
         for (std::size_t i = 0; i < s.node_count(); ++i) {
             if (!semiconductor(s, i)) continue;
@@ -263,12 +268,12 @@ public:
 
 // Radiative recombination on the nodes whose material has a coefficient (physical densities,
 // add_physical).
-class DriftDiffusion::Terms::Radiative final : public Term {
+class SystemData::Terms::Radiative final : public Term {
 public:
     TermInfo info() const noexcept override {
         return {"radiative recombination", TermDomain::nodes, densities, densities, false};
     }
-    void add(const DriftDiffusion& s, const Evaluation& ev) const override {
+    void add(const SystemData& s, const SystemState&, const Evaluation& ev) const override {
         const std::size_t m = s.m_;
         for (std::size_t i = 0; i < s.node_count(); ++i) {
             if (!semiconductor(s, i) || !(s.radiative_[i] > 0.0)) continue;
@@ -283,24 +288,24 @@ public:
 
 // The BDF storage of a time step, -V rate (S_n - S_n,old) in the electron row and
 // +V rate (S_p - S_p,old) in the hole row; nothing without a step.
-class DriftDiffusion::Terms::Storage final : public Term {
+class SystemData::Terms::Storage final : public Term {
 public:
     TermInfo info() const noexcept override {
         return {"storage", TermDomain::nodes, densities, densities, false};
     }
-    void add(const DriftDiffusion& s, const Evaluation& ev) const override {
+    void add(const SystemData& s, const SystemState&, const Evaluation& ev) const override {
         if (ev.step == nullptr) return;
         const std::size_t m = s.m_, w = s.storage_width();  // w 4 with energy balance
         for (std::size_t i = 0; i < s.node_count(); ++i) {
             if (!semiconductor(s, i)) continue;
             const double V = s.volume_[i];
-            const NodeStorage st = s.node_storage(i, ev.x, ev.g);
+            const NodeStorage ns = s.node_storage(i, ev.x, ev.g);
             const double k = V * ev.step->rate;
-            ev.f[m * i + 1] -= k * (st.n - ev.step->storage[w * i]);
-            ev.f[m * i + 2] += k * (st.p - ev.step->storage[w * i + 1]);
+            ev.f[m * i + 1] -= k * (ns.n - ev.step->storage[w * i]);
+            ev.f[m * i + 2] += k * (ns.p - ev.step->storage[w * i + 1]);
             if (ev.jacobian()) {
-                at(s, ev, i, 1, 1) -= k * st.d_n;
-                at(s, ev, i, 2, 2) += k * st.d_p;
+                at(s, ev, i, 1, 1) -= k * ns.d_n;
+                at(s, ev, i, 2, 2) += k * ns.d_p;
             }
         }
     }
@@ -312,12 +317,12 @@ public:
 // the state: no Jacobian entries. Contact and electrode rows are boundary rows and are skipped.
 // Each source is scaled by the time profile's w at the step's end time (at t = 0 without a step;
 // models.hpp, DT-Q3 A); without a profile w = 1 and w y is y exactly.
-class DriftDiffusion::Terms::Manufactured final : public Term {
+class SystemData::Terms::Manufactured final : public Term {
 public:
     TermInfo info() const noexcept override {
         return {"manufactured source", TermDomain::nodes, all3, {}, false};  // no partials
     }
-    void add(const DriftDiffusion& s, const Evaluation& ev) const override {
+    void add(const SystemData& s, const SystemState&, const Evaluation& ev) const override {
         const ManufacturedSources& ms = *s.manufactured_;
         const std::size_t m = s.m_;
         const double to_rate = s.rate_scale_ / s.Ns_;  // 1 / R0
@@ -342,16 +347,17 @@ public:
 
 // The declared interfaces' half-edge fluxes, fixed and trapped charge and surface recombination
 // (interface_edges.hpp): the insulator node's Poisson row, then the semiconductor node's rows.
-class DriftDiffusion::Terms::Interfaces final : public Term {
+class SystemData::Terms::Interfaces final : public Term {
 public:
     TermInfo info() const noexcept override {
         return {"interfaces", TermDomain::interface_edges, all3, all3, false};
     }
     // The insulator's Poisson row reads the semiconductor's n and p.
-    void pattern(const DriftDiffusion& s, std::vector<linalg::Triplet>& t) const override {
+    void pattern(const SystemData& s, const SystemState&,
+                 std::vector<linalg::Triplet>& t) const override {
         interface_pattern(s, t);
     }
-    void add(const DriftDiffusion& s, const Evaluation& ev) const override {
+    void add(const SystemData& s, const SystemState&, const Evaluation& ev) const override {
         const std::size_t m = s.m_;
         const std::span<double> f = ev.f, values = ev.values;
         const bool jacobian = ev.jacobian();
@@ -393,14 +399,69 @@ public:
     }
 };
 
+// The interface edges' traps in the frequency domain (Unit 22's small-signal terms; Unit 57
+// GE3): with their occupancy's dynamics, in place of the steady Interfaces term. Moved from
+// small_signal_matrix with its expressions and order.
+class SystemData::Terms::InterfacesFrequency final : public Term {
+public:
+    TermInfo info() const noexcept override {
+        return {"interface traps, frequency domain", TermDomain::interface_edges, all3, all3,
+                false};
+    }
+    void add(const SystemData&, const SystemState&, const Evaluation&) const override {
+        NITCAD_EXPECTS(false);  // a frequency-domain term has no steady rows
+    }
+    void add_frequency(const SystemData& d, const SystemState&,
+                       const FrequencyEvaluation& ev) const override {
+        using Complex = std::complex<double>;
+        const std::span<const double> x = ev.x;
+        const std::span<Complex> values = ev.values;
+        const auto at = [&](std::size_t node, std::size_t r, std::size_t c) -> Complex& {
+            return values[d.block_[d.m_ * d.m_ * node + d.m_ * r + c]];
+        };
+        // The traps' weight Ns / s_physical, s_physical = s / t0.
+        const Complex inv_weight = ev.s / (d.rate_scale_ * d.Ns_);
+        for (std::size_t k = 0; k < d.interfaces_.edges().size(); ++k) {
+            const InterfaceEdge& v = d.interfaces_.edges()[k];
+            const std::size_t o = v.insulator, sn = v.semiconductor;
+            const InterfaceSmallSignal t = d.interfaces_.small_signal(
+                v, x[d.m_ * o], x[d.m_ * sn], x[d.m_ * sn + 1], x[d.m_ * sn + 2],
+                d.statistics(sn), inv_weight);
+            // As assemble's interface terms.
+            const EdgeTerm& e = d.edges_[v.edge];
+            const bool o_first = e.a == o;
+            const std::size_t os = o_first ? e.ab[0] : e.ba[0];
+            const std::size_t so[3] = {o_first ? e.ba[0] : e.ab[0], o_first ? e.ba[1] : e.ab[1],
+                                       o_first ? e.ba[3] : e.ab[3]};
+            if (d.electrode_[o] < 0) {
+                at(o, 0, 0) += t.d_flux_insulator[0];
+                values[os] += t.d_flux_insulator[1];
+                values[d.interface_np_[k].first] += t.d_flux_insulator[2];
+                values[d.interface_np_[k].second] += t.d_flux_insulator[3];
+            }
+            if (d.contact_[sn] >= 0) continue;
+            const bool poisson =
+                d.schottky_[sn] < 0;  // a Schottky node's Poisson row is Dirichlet
+            if (poisson) values[so[0]] += t.d_flux_semiconductor[0];
+            values[so[1]] -= t.d_rate[0];
+            values[so[2]] += t.d_rate_p[0];
+            for (std::size_t c = 1; c < 4; ++c) {
+                if (poisson) at(sn, 0, c - 1) += t.d_flux_semiconductor[c];
+                at(sn, 1, c - 1) -= t.d_rate[c];
+                at(sn, 2, c - 1) += t.d_rate_p[c];
+            }
+        }
+    }
+};
+
 // The displacement flux c_e (psi_b - psi_a) of every mesh edge but an interface's, into the
 // Poisson rows that are not Dirichlet rows (+ at a, - at b).
-class DriftDiffusion::Terms::PoissonFlux final : public Term {
+class SystemData::Terms::PoissonFlux final : public Term {
 public:
     TermInfo info() const noexcept override {
         return {"Poisson flux", TermDomain::mesh_edges, psi_only, psi_only, false};
     }
-    void add(const DriftDiffusion& s, const Evaluation& ev) const override {
+    void add(const SystemData& s, const SystemState&, const Evaluation& ev) const override {
         const std::size_t m = s.m_;
         const std::span<double> f = ev.f, values = ev.values;
         const bool jacobian = ev.jacobian();
@@ -448,17 +509,18 @@ public:
 // (edge_fluxes: field mobility, Fermi-Dirac, thermionic emission), into the continuity rows that
 // are not Dirichlet rows (+ at a, - at b). One term for both carriers: edge_fluxes computes them
 // together, and they write disjoint rows.
-class DriftDiffusion::Terms::CarrierFluxes final : public Term {
+class SystemData::Terms::CarrierFluxes final : public Term {
 public:
     TermInfo info() const noexcept override {
         return {"carrier fluxes", TermDomain::mesh_edges, densities, all3, false};
     }
     // Lombardi (Unit 46): the continuity rows of both ends with the psi columns of the edge's
     // E_perp stencil; none without the model.
-    void pattern(const DriftDiffusion& s, std::vector<linalg::Triplet>& t) const override {
+    void pattern(const SystemData& s, const SystemState&,
+                 std::vector<linalg::Triplet>& t) const override {
         surface_pattern(s, t, 2);
     }
-    void add(const DriftDiffusion& s, const Evaluation& ev) const override {
+    void add(const SystemData& s, const SystemState&, const Evaluation& ev) const override {
         const std::size_t m = s.m_;
         const std::span<double> f = ev.f, values = ev.values;
         const bool jacobian = ev.jacobian();
@@ -514,19 +576,20 @@ public:
     }
 };
 
-// Impact ionization (Unit 19; see drift_diffusion.hpp's header comment): the pair generation G at
+// Impact ionization (Unit 19; see system.hpp's header comment): the pair generation G at
 // each node that ionizes, +V G in its electron row and -V G in its hole row.
-class DriftDiffusion::Terms::ImpactGeneration final : public Term {
+class SystemData::Terms::ImpactGeneration final : public Term {
 public:
     TermInfo info() const noexcept override {
         return {"impact ionization", TermDomain::global, densities, all3, false};
     }
     // A node's electron generation reads its neighbours' p (through the hole current) and its
     // hole generation their n.
-    void pattern(const DriftDiffusion& s, std::vector<linalg::Triplet>& t) const override {
+    void pattern(const SystemData& s, const SystemState&,
+                 std::vector<linalg::Triplet>& t) const override {
         impact_pattern(s, t);
     }
-    void add(const DriftDiffusion& s, const Evaluation& ev) const override {
+    void add(const SystemData& s, const SystemState&, const Evaluation& ev) const override {
         if (s.impact_nodes_.empty()) return;
         const std::size_t stride = s.m_;
         const std::span<const double> x = ev.x;
@@ -679,12 +742,12 @@ public:
 
 // Local band-to-band tunnelling (Unit 20): Kane's G(|E|) at each node with a Kane pair, the field
 // by least squares from its edges, +V G in its electron row and -V G in its hole row.
-class DriftDiffusion::Terms::LocalTunnelling final : public Term {
+class SystemData::Terms::LocalTunnelling final : public Term {
 public:
     TermInfo info() const noexcept override {
         return {"local band-to-band tunnelling", TermDomain::global, densities, psi_only, false};
     }
-    void add(const DriftDiffusion& s, const Evaluation& ev) const override {
+    void add(const SystemData& s, const SystemState&, const Evaluation& ev) const override {
         if (s.tunnel_nodes_.empty()) return;
         const std::size_t stride = s.m_;
         const std::span<const double> x = ev.x;
@@ -741,18 +804,19 @@ public:
 
 // Nonlocal band-to-band tunnelling along the frozen paths (Unit 20): each path's pairs P leave its
 // start's hole row and arrive, shared, in its deposit nodes' electron rows.
-class DriftDiffusion::Terms::PathTunnelling final : public Term {
+class SystemData::Terms::PathTunnelling final : public Term {
 public:
     TermInfo info() const noexcept override {
         return {"nonlocal band-to-band tunnelling", TermDomain::global, densities, psi_only,
                 false};
     }
     // The start's hole row and the deposit nodes' electron rows read the psi of every column.
-    void pattern(const DriftDiffusion& s, std::vector<linalg::Triplet>& t) const override {
+    void pattern(const SystemData& s, const SystemState& st,
+                 std::vector<linalg::Triplet>& t) const override {
         const std::size_t stride = s.m_;
-        for (std::size_t k = 0; k < s.paths_.paths.size(); ++k) {
-            const TunnelPath& p = s.paths_.paths[k];
-            const PathLayout& l = s.layouts_[k];
+        for (std::size_t k = 0; k < st.paths_.paths.size(); ++k) {
+            const TunnelPath& p = st.paths_.paths[k];
+            const PathLayout& l = st.layouts_[k];
             for (const std::size_t c : l.columns) {
                 t.push_back({static_cast<linalg::Index>(stride * p.start + 2),
                              static_cast<linalg::Index>(stride * c), 0.0});
@@ -763,21 +827,21 @@ public:
             }
         }
     }
-    void add(const DriftDiffusion& s, const Evaluation& ev) const override {
-        if (s.paths_.paths.empty()) return;
+    void add(const SystemData& s, const SystemState& st, const Evaluation& ev) const override {
+        if (st.paths_.paths.empty()) return;
         const std::size_t stride = s.m_;
         const std::span<double> f = ev.f, values = ev.values;
         const bool jacobian = ev.jacobian();
         PathTerms t;
-        for (std::size_t k = 0; k < s.paths_.paths.size(); ++k) {
-            const PathLayout& l = s.layouts_[k];
-            s.path_terms(s.paths_.paths[k], l, ev.x, t);
+        for (std::size_t k = 0; k < st.paths_.paths.size(); ++k) {
+            const PathLayout& l = st.layouts_[k];
+            s.path_terms(st.paths_.paths[k], l, ev.x, t);
             if (t.pairs == 0.0 &&
                 std::ranges::all_of(t.d_pairs, [](double v) { return v == 0.0; })) {
                 continue;
             }
             const std::size_t nc = l.columns.size();
-            const std::size_t i = s.paths_.paths[k].start;
+            const std::size_t i = st.paths_.paths[k].start;
             f[stride * i + 2] -= t.pairs;
             for (std::size_t d = 0; d < l.deposit.size(); ++d) {
                 f[stride * l.deposit[d] + 1] += t.share[d] * t.pairs;
@@ -797,12 +861,13 @@ public:
 // Gate tunnelling (Unit 51, DECISIONS.md GD6): each tunnel's sinks, -T_n in its node's electron
 // row and +T_p in its hole row (the signs of the Schottky emission), reading the node's psi, n and
 // p and the psi of its path's nodes.
-class DriftDiffusion::Terms::GateTunnelling final : public Term {
+class SystemData::Terms::GateTunnelling final : public Term {
 public:
     TermInfo info() const noexcept override {
         return {"gate tunnelling", TermDomain::global, densities, all3, false};
     }
-    void pattern(const DriftDiffusion& s, std::vector<linalg::Triplet>& t) const override {
+    void pattern(const SystemData& s, const SystemState&,
+                 std::vector<linalg::Triplet>& t) const override {
         const std::size_t stride = s.m_;
         for (const GateTunnel& g : s.gate_tunnels_) {
             for (const std::size_t v : g.nodes) {
@@ -813,10 +878,10 @@ public:
             }
         }
     }
-    void add(const DriftDiffusion& s, const Evaluation& ev) const override {
+    void add(const SystemData& s, const SystemState& st, const Evaluation& ev) const override {
         const std::size_t m = s.m_;
         std::vector<GateTunnelFlux> own;
-        if (ev.tunnels == nullptr) s.gate_tunnel_fluxes(ev.x, ev.g, own);
+        if (ev.tunnels == nullptr) s.gate_tunnel_fluxes(st, ev.x, ev.g, own);
         const std::vector<GateTunnelFlux>& fluxes = ev.tunnels != nullptr ? ev.tunnels->finish() : own;
         for (std::size_t t = 0; t < s.gate_tunnels_.size(); ++t) {
             const GateTunnel& g = s.gate_tunnels_[t];
@@ -837,87 +902,112 @@ public:
     }
 };
 
-std::shared_ptr<const DriftDiffusion::Term> DriftDiffusion::Terms::poisson_charge() {
+std::shared_ptr<const SystemData::Term> SystemData::Terms::poisson_charge() {
     return std::make_shared<PoissonCharge>();
+}
+std::shared_ptr<const SystemData::Term> SystemData::Terms::gate() {
+    return std::make_shared<Gate>();
+}
+std::shared_ptr<const SystemData::Term> SystemData::Terms::poisson_flux() {
+    return std::make_shared<PoissonFlux>();
 }
 
 namespace {
 
 template <class T>
-std::shared_ptr<const TermAccess::Term> make_term() {
+std::shared_ptr<const SystemData::Term> make_term() {
     return std::make_shared<T>();
 }
 
 }  // namespace
 
-std::span<const CompositionEntry> DriftDiffusion::Terms::isothermal_table() {
+std::span<const CompositionEntry> SystemData::Terms::isothermal_table() {
     using E = EquationSet;
     using M = const PhysicsModels&;
-    const auto always = [](const DriftDiffusion&, M) { return true; };
-    const auto contacts = [](const DriftDiffusion& s, M) {
+    const auto always = [](const SystemData&, const SystemState&, M) { return true; };
+    const auto contacts = [](const SystemData& s, const SystemState&, M) {
         return std::ranges::any_of(s.contact_, [](std::int32_t c) { return c >= 0; });
     };
-    const auto insulators = [](const DriftDiffusion& s, M) {
+    const auto insulators = [](const SystemData& s, const SystemState&, M) {
         return std::ranges::any_of(s.insulator_, [](char c) { return c != 0; });
     };
-    const auto gated = [](const DriftDiffusion& s, M) {
+    const auto gated = [](const SystemData& s, const SystemState& st, M) {
         for (std::size_t i = 0; i < s.node_count(); ++i) {
-            if (s.gates_.on_gate(i)) return true;
+            if (st.gates_.on_gate(i)) return true;
         }
         return false;
     };
-    const auto interfaces = [](const DriftDiffusion& s, M) {
+    const auto interfaces = [](const SystemData& s, const SystemState&, M) {
         return !s.interfaces_.edges().empty();
     };
-    const auto schottky = [](const DriftDiffusion& s, M) {
+    const auto schottky = [](const SystemData& s, const SystemState&, M) {
         return std::ranges::any_of(s.schottky_, [](std::int32_t c) { return c >= 0; });
     };
     static const CompositionEntry table[] = {
         {+E::contacts, contacts, &make_term<ContactRows>},
         {+E::oxide, insulators, &make_term<InsulatorRows>},
         {+E::poisson, always, &make_term<PoissonCharge>},
-        {+E::poisson, [](const DriftDiffusion&, M m) { return m.incomplete_ionization; },
+        {+E::poisson,
+         [](const SystemData&, const SystemState&, M m) { return m.incomplete_ionization; },
          &make_term<Ionization>},
         {+E::gate, gated, &make_term<Gate>},
-        {+E::continuity, [](const DriftDiffusion&, M m) { return m.srh; }, &make_term<Srh>},
-        {+E::continuity, [](const DriftDiffusion&, M m) { return m.auger; },
+        {+E::continuity, [](const SystemData&, const SystemState&, M m) { return m.srh; },
+         &make_term<Srh>},
+        {+E::continuity, [](const SystemData&, const SystemState&, M m) { return m.auger; },
          &make_term<Auger>},
-        {+E::continuity, [](const DriftDiffusion&, M m) { return m.radiative; },
+        {+E::continuity, [](const SystemData&, const SystemState&, M m) { return m.radiative; },
          &make_term<Radiative>},
         {+E::continuity, always, &make_term<Storage>},
-        {E::poisson | E::continuity, [](const DriftDiffusion&, M m) { return m.manufactured != nullptr; },
+        {E::poisson | E::continuity,
+         [](const SystemData&, const SystemState&, M m) { return m.manufactured != nullptr; },
          &make_term<Manufactured>},
-        {+E::energy, [](const DriftDiffusion&, M m) { return m.energy_balance; }, &energy_rows},
+        {+E::energy, [](const SystemData&, const SystemState&, M m) { return m.energy_balance; },
+         &energy_rows},
         {+E::interfaces, interfaces, &make_term<Interfaces>},
+        {+E::interfaces, interfaces, &make_term<InterfacesFrequency>, true},
         {+E::poisson, always, &make_term<PoissonFlux>},
-        {+E::continuity, [](const DriftDiffusion&, M m) { return !m.energy_balance; },
+        {+E::continuity,
+         [](const SystemData&, const SystemState&, M m) { return !m.energy_balance; },
          &make_term<CarrierFluxes>},
-        {E::continuity | E::energy, [](const DriftDiffusion&, M m) { return m.energy_balance; },
+        {E::continuity | E::energy,
+         [](const SystemData&, const SystemState&, M m) { return m.energy_balance; },
          &energy_fluxes},
         {+E::generation,
-         [](const DriftDiffusion&, M m) { return m.impact_ionization && !m.energy_balance; },
+         [](const SystemData&, const SystemState&, M m) {
+             return m.impact_ionization && !m.energy_balance;
+         },
          &make_term<ImpactGeneration>},
         {E::generation | E::energy,
-         [](const DriftDiffusion&, M m) { return m.impact_ionization && m.energy_balance; },
+         [](const SystemData&, const SystemState&, M m) {
+             return m.impact_ionization && m.energy_balance;
+         },
          &energy_impact},
-        {+E::generation, [](const DriftDiffusion&, M m) { return m.btbt_local; },
+        {+E::generation, [](const SystemData&, const SystemState&, M m) { return m.btbt_local; },
          &make_term<LocalTunnelling>},
         {+E::generation,
-         [](const DriftDiffusion&, M m) { return m.btbt_nonlocal != NonlocalTunnelling::off; },
+         [](const SystemData&, const SystemState&, M m) {
+             return m.btbt_nonlocal != NonlocalTunnelling::off;
+         },
          &make_term<PathTunnelling>},
-        {+E::continuity, [](const DriftDiffusion& s, M) { return !s.gate_tunnels_.empty(); },
+        {+E::continuity,
+         [](const SystemData& s, const SystemState&, M) { return !s.gate_tunnels_.empty(); },
          &make_term<GateTunnelling>},
         {+E::contacts, schottky, &make_term<SchottkyRows>},
     };
     return table;
 }
 
-std::span<const std::shared_ptr<const DriftDiffusion::Term>> DriftDiffusion::Terms::list(
-    const DriftDiffusion& s) {
+std::span<const std::shared_ptr<const SystemData::Term>> SystemData::Terms::list(
+    const System& s) {
+    return of(s).composition_->terms();
+}
+
+std::span<const std::shared_ptr<const SystemData::Term>> SystemData::Terms::list(
+    const SystemData& s) {
     return s.composition_->terms();
 }
 
-void DriftDiffusion::Terms::interface_pattern(const DriftDiffusion& s,
+void SystemData::Terms::interface_pattern(const SystemData& s,
                                               std::vector<linalg::Triplet>& t) {
     const std::size_t stride = s.m_;
     for (const InterfaceEdge& f : s.interfaces_.edges()) {
@@ -928,7 +1018,7 @@ void DriftDiffusion::Terms::interface_pattern(const DriftDiffusion& s,
     }
 }
 
-void DriftDiffusion::Terms::impact_pattern(const DriftDiffusion& s,
+void SystemData::Terms::impact_pattern(const SystemData& s,
                                            std::vector<linalg::Triplet>& t) {
     const std::size_t stride = s.m_;
     for (const EdgeTerm& e : s.edges_) {
@@ -942,7 +1032,7 @@ void DriftDiffusion::Terms::impact_pattern(const DriftDiffusion& s,
     }
 }
 
-void DriftDiffusion::Terms::surface_pattern(const DriftDiffusion& s,
+void SystemData::Terms::surface_pattern(const SystemData& s,
                                             std::vector<linalg::Triplet>& t, std::size_t rows) {
     const std::size_t stride = s.m_;
     for (const EdgeTerm& e : s.edges_) {
@@ -958,16 +1048,18 @@ void DriftDiffusion::Terms::surface_pattern(const DriftDiffusion& s,
     }
 }
 
-void DriftDiffusion::Terms::pattern(const DriftDiffusion& s,
-                                    std::vector<linalg::Triplet>& triplets) {
-    s.composition_->pattern(s, triplets);
+void SystemData::Terms::pattern(const SystemData& s, const SystemState& st,
+                                std::vector<linalg::Triplet>& triplets) {
+    s.composition_->pattern(s, st, triplets);
 }
 
-void DriftDiffusion::Terms::evaluate(const DriftDiffusion& s, const Term& t,
-                                     std::span<const double> x, const TimeStep* step,
-                                     std::span<double> f, linalg::SparseMatrix& jacobian) {
+void SystemData::Terms::evaluate(const System& dd, const Term& t,
+                                 std::span<const double> x, const TimeStep* step,
+                                 std::span<double> f, linalg::SparseMatrix& jacobian) {
+    const SystemData& s = of(dd);
+    const SystemState& st = state_of(dd);
     NITCAD_EXPECTS(x.size() == s.unknowns() && f.size() == s.unknowns());
-    NITCAD_EXPECTS(jacobian.has_same_pattern(s.pattern_));
+    NITCAD_EXPECTS(jacobian.has_same_pattern(st.pattern_));
     NITCAD_EXPECTS(step == nullptr || (step->storage.size() == s.storage_width() * s.node_count() &&
                                        step->traps.size() == s.trap_slots()));
     const std::span<double> values = jacobian.values();
@@ -976,11 +1068,11 @@ void DriftDiffusion::Terms::evaluate(const DriftDiffusion& s, const Term& t,
     if (s.electrothermal()) {
         const std::vector<ThermalState> thermal = s.thermal_states(x);
         const std::vector<NodeLevels> levels = s.thermal_levels(x, thermal);
-        t.add(s, {x, f, values, step, {}, thermal, levels, true});
+        t.add(s, st, {x, f, values, step, {}, thermal, levels, true});
         return;
     }
     const std::vector<NodeDegeneracy> g = s.degeneracies(x);
-    t.add(s, {x, f, values, step, g});
+    t.add(s, st, {x, f, values, step, g});
 }
 
 // --- Unit 45: rates read from the terms --------------------------------------------------------
@@ -988,8 +1080,8 @@ void DriftDiffusion::Terms::evaluate(const DriftDiffusion& s, const Term& t,
 namespace {
 
 // The mechanism of a term, by its name (terms.cpp and thermal_terms.cpp), or none.
-std::optional<DriftDiffusion::RateMechanism> mechanism_of(std::string_view name) noexcept {
-    using M = DriftDiffusion::RateMechanism;
+std::optional<RateMechanism> mechanism_of(std::string_view name) noexcept {
+    using M = RateMechanism;
     if (name.starts_with("SRH recombination")) return M::srh;
     if (name.starts_with("Auger recombination")) return M::auger;
     if (name.starts_with("radiative recombination")) return M::radiative;
@@ -1003,15 +1095,15 @@ std::optional<DriftDiffusion::RateMechanism> mechanism_of(std::string_view name)
 
 }  // namespace
 
-std::vector<DriftDiffusion::MechanismRate> DriftDiffusion::rates(std::span<const double> x) const {
+std::vector<MechanismRate> SystemData::rates(const SystemState& st, std::span<const double> x) const {
     NITCAD_EXPECTS(x.size() == unknowns());
     const std::size_t n = node_count();
     // A row's scaled residual r is V R / R0 (rate_scale_ = Ns / R0, generation_scale_ = 1 / R0).
     const double R0 = Ns_ / rate_scale_;
     std::vector<double> f(unknowns());
-    std::vector<NodeDegeneracy> g;
-    std::vector<ThermalState> thermal;
-    std::vector<NodeLevels> levels;
+    std::vector<SystemData::NodeDegeneracy> g;
+    std::vector<SystemData::ThermalState> thermal;
+    std::vector<SystemData::NodeLevels> levels;
     if (electrothermal()) {
         thermal = thermal_states(x);
         levels = thermal_levels(x, thermal);
@@ -1019,12 +1111,12 @@ std::vector<DriftDiffusion::MechanismRate> DriftDiffusion::rates(std::span<const
         g = degeneracies(x);
     }
     std::vector<MechanismRate> out;
-    for (const std::shared_ptr<const Term>& t : Terms::list(*this)) {
+    for (const std::shared_ptr<const SystemData::Term>& t : SystemData::Terms::list(*this)) {
         const auto m = mechanism_of(t->info().name);
         if (!m) continue;
         std::ranges::fill(f, 0.0);
-        const Terms::Evaluation ev{x, f, {}, nullptr, g, thermal, levels, true};
-        t->add(*this, ev);
+        const SystemData::Terms::Evaluation ev{x, f, {}, nullptr, g, thermal, levels, true};
+        t->add(*this, st, ev);
         auto it = std::ranges::find(out, *m, &MechanismRate::mechanism);
         if (it == out.end()) {
             out.push_back({*m, std::vector<double>(n, 0.0), std::vector<double>(n, 0.0)});
@@ -1035,6 +1127,11 @@ std::vector<DriftDiffusion::MechanismRate> DriftDiffusion::rates(std::span<const
             it->electron[i] -= f[m_ * i + 1] * k;  // the electron row subtracts V R / R0
             it->hole[i] += f[m_ * i + 2] * k;      // the hole row adds it
         }
+    }
+    for (const MechanismRate& r : out) {  // the trace (observer.hpp; Unit 57, GE1 ii)
+        detail::observe("rates.mechanism", static_cast<double>(r.mechanism));
+        detail::observe("rates.electron", r.electron);
+        detail::observe("rates.hole", r.hole);
     }
     return out;
 }

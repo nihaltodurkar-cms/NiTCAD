@@ -1,0 +1,33 @@
+# Unit 57 (DECISIONS.md GE1 iii, GG2): Unit 51's 1D MOS capacitor (1.5 nm SiO2, n+ poly, p 5e17) with
+# gate tunnelling, swept to +1.5 V.
+[device]
+temperature = 300
+
+[mesh]
+type = tensor
+x = linspace(0, 2nm, 201) + linspace(2nm, 50nm, 97) + linspace(50nm, 1um, 96)
+
+[region silicon]
+material = silicon
+
+[doping]
+profile = acceptor constant 5e17
+
+[contact gate]
+kind = gate
+patch = x_min
+oxide_thickness = 1.5nm
+electrode = n_poly
+tunnelling = on
+
+[contact substrate]
+kind = ohmic
+patch = x_max
+
+[sweep]
+contact gate = 0 : 1.5 : 0.1
+
+[output]
+sweep = gate_tunnelling_1d.nitsweep
+device = gate_tunnelling_1d.nitdev
+table = gate_tunnelling_1d.csv

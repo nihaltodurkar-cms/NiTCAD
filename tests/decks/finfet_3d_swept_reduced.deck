@@ -1,0 +1,97 @@
+# Unit 57 (DECISIONS.md GE1 iii, GG2): decks/finfet_3d_swept.deck reduced to two gate points (0 and 0.1 V).
+
+[device]
+temperature = 300
+
+[mesh]
+type = extrude3d
+axis = x
+stations = 0, 30nm, 55nm, 85nm
+cell box = 0 0, 20nm 0, 20nm 1.5nm, 20nm 2nm, 20nm 12nm, 20nm 12.5nm, 20nm 14nm, 0 14nm
+cell fin = 20nm 2nm, 50nm 2nm, 50nm 12nm, 20nm 12nm
+cell il = 20nm 1.5nm, 50.5nm 1.5nm, 50.5nm 12.5nm, 20nm 12.5nm, 20nm 12nm, 50nm 12nm, 50nm 2nm, 20nm 2nm
+cell hk = 20nm 0, 52nm 0, 52nm 14nm, 20nm 14nm, 20nm 12.5nm, 50.5nm 12.5nm, 50.5nm 1.5nm, 20nm 1.5nm
+patch source = 0 20nm 2nm  0 50nm 12nm
+patch drain = 85nm 20nm 2nm  85nm 50nm 12nm
+patch gate = 30nm 20nm 0  55nm 52nm 14nm
+patch substrate = 0 0 0  85nm 0 14nm
+sweep = on
+lines = linspace(0, 20nm, 3) + linspace(22.5nm, 27.5nm, 3) + linspace(32.5nm, 52.5nm, 9) + \
+        linspace(57.5nm, 62.5nm, 3) + linspace(65nm, 85nm, 3)
+straddle = 30nm 0.5nm
+straddle = 55nm 0.5nm
+max_size = 8nm
+interface_resolution = 0.08nm
+layer = 50nm 12nm, 50nm 2nm along=0, 5nm, 10nm lines=-3nm, -2nm, -1nm, 1nm, 2nm straddle=0.2nm
+layer = 50nm 2nm, 20nm 2nm along=0 + linspace(5nm, 25nm, 5) + 30nm lines=-3nm, -1nm, 1nm, 2nm straddle=0.2nm
+layer = 20nm 2nm, 20nm 12nm along=0, 5nm, 10nm lines=-3nm, 2nm straddle=0.5nm
+layer = 20nm 12nm, 50nm 12nm along=0 + linspace(5nm, 25nm, 5) + 30nm lines=-3nm, -1nm, 1nm, 2nm straddle=0.2nm
+
+[region buried_oxide]
+material = sio2
+extrude = box 0:85nm
+
+[region spacer]
+material = insulator
+eps_r = 7.5
+extrude = il hk 0:30nm
+extrude = il hk 55nm:85nm
+
+[region hfo2]
+material = insulator
+eps_r = 22
+extrude = hk 30nm:55nm
+
+[region interfacial]
+material = sio2
+extrude = il 30nm:55nm
+
+[region silicon]
+material = silicon
+extrude = fin 0:85nm
+
+[doping]
+profile = acceptor constant 1e16
+profile = donor constant 1e20 axis=y x=-10nm:27nm lateral=2nm
+profile = donor constant 1e20 axis=y x=58nm:95nm lateral=2nm
+
+[contact source]
+kind = ohmic
+patch = source
+
+[contact drain]
+kind = ohmic
+patch = drain
+
+[contact gate]
+kind = electrode
+patch = gate
+electrode = metal
+work_function = 4.4
+
+[contact substrate]
+kind = electrode
+patch = substrate
+electrode = metal
+work_function = 4.6
+
+[interface silicon interfacial]
+fixed_charge = 5e10
+
+[models]
+fermi_dirac = on
+field_mobility = on
+electron_mobility = masetti
+
+[solver]
+line_search = residual
+max_cuts = 8
+
+[sweep]
+contact gate = 0 : 0.1 : 0.1
+contact drain = 0.05
+
+[output]
+sweep = finfet_3d_swept_reduced.nitsweep
+device = finfet_3d_swept_reduced.nitdev
+table = finfet_3d_swept_reduced.csv

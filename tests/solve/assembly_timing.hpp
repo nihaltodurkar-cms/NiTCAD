@@ -1,4 +1,4 @@
-// Assembly cost (Unit 40, DECISIONS.md FG4): the median time of DriftDiffusion::evaluate (residual
+// Assembly cost (Unit 40, DECISIONS.md FG4): the median time of System::evaluate (residual
 // and Jacobian) and of residual alone at a state, for the hidden [.assembly_benchmark] cases.
 // Each repetition repeats the call until it lasts at least 20 ms (calibrated first, which also
 // warms the caches), so the timer's resolution does not matter; the median of the repetitions is
@@ -12,8 +12,9 @@
 #include <span>
 #include <vector>
 
-#include "NiTCAD/assemble/drift_diffusion.hpp"
 #include "NiTCAD/assemble/scaling.hpp"
+#include "NiTCAD/assemble/system.hpp"
+#include "NiTCAD/assemble/thermal.hpp"
 #include "NiTCAD/results/solution.hpp"
 
 struct AssemblyTiming {
@@ -24,7 +25,7 @@ struct AssemblyTiming {
 // The scaled state of a solved point's fields (the inverse of the solve layer's
 // drift_diffusion_point): psi / V_T, n / Ns, p / Ns and, with the electrothermal model,
 // tau = (T - T0) / T0.
-inline std::vector<double> scaled_state(const NiTCAD::assemble::DriftDiffusion& system,
+inline std::vector<double> scaled_state(const NiTCAD::assemble::System& system,
                                         const NiTCAD::results::NodeFields& f,
                                         const NiTCAD::assemble::Scaling& scaling) {
     const std::size_t m = system.stride();
@@ -33,7 +34,7 @@ inline std::vector<double> scaled_state(const NiTCAD::assemble::DriftDiffusion& 
         x[m * i] = f.potential_V[i] / scaling.V_T;
         x[m * i + 1] = f.n_cm3[i] / scaling.Ns;
         x[m * i + 2] = f.p_cm3[i] / scaling.Ns;
-        if (system.electrothermal()) {
+        if (electrothermal(system)) {
             const double T0 = scaling.temperature_K;
             x[m * i + 3] = (f.temperature_K[i] - T0) / T0;
         }
@@ -63,7 +64,7 @@ double median_call_us(Call&& call, int repetitions) {
 }
 
 inline AssemblyTiming time_assembly(const char* name,
-                                    const NiTCAD::assemble::DriftDiffusion& system,
+                                    const NiTCAD::assemble::System& system,
                                     std::span<const double> x, int repetitions = 31) {
     std::vector<double> f(system.unknowns());
     NiTCAD::linalg::SparseMatrix j = system.make_jacobian();

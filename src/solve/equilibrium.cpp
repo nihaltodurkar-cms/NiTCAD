@@ -4,7 +4,7 @@
 #include <utility>
 #include <vector>
 
-#include "NiTCAD/assemble/equilibrium_poisson.hpp"
+#include "NiTCAD/assemble/equilibrium.hpp"
 #include "NiTCAD/assemble/scaling.hpp"
 #include "fields.hpp"
 #include "observe.hpp"
@@ -17,12 +17,13 @@ std::expected<results::EquilibriumResult, base::Error> solve_equilibrium_unobser
     const device::Device& device, const EquilibriumOptions& options, const RunControl& control) {
     auto scaling = assemble::make_scaling(device, options.Ns_override);
     if (!scaling) return std::unexpected(std::move(scaling.error()));
-    auto system = assemble::EquilibriumPoisson::create(device, *scaling, options.models);
+    auto system = assemble::System::create(device, *scaling, options.models,
+                                           assemble::Formulation::equilibrium);
     if (!system) return std::unexpected(std::move(system.error()));
     auto solver = linalg::LinearSolver::create(options.linear);
     if (!solver) return std::unexpected(std::move(solver.error()));
 
-    std::vector<double> psi = system->charge_neutral_potential();
+    std::vector<double> psi = charge_neutral_potential(*system);
     results::EquilibriumResult result;
     const IterationObserver observe = [&](const results::IterationRecord& r, bool converged) {
         if (control.progress) {
@@ -37,11 +38,11 @@ std::expected<results::EquilibriumResult, base::Error> solve_equilibrium_unobser
     }
 
     result.fields = detail::equilibrium_fields(*system, psi, *scaling);
-    result.bands = detail::band_diagram(system->band_edges(psi), scaling->V_T);
-    result.gate_charge = system->gate_charges(psi);
+    result.bands = detail::band_diagram(*system, psi, scaling->V_T);
+    result.gate_charge = gate_charges(*system, psi);
     const double charge = detail::charge_scale(*scaling, device.mesh().dimension());
     for (double& Q : result.gate_charge) Q *= charge;
-    result.interface_trap_charge = system->interface_trap_charges(psi);
+    result.interface_trap_charge = interface_trap_charges(*system, psi);
     for (double& Q : result.interface_trap_charge) Q *= charge;
     return result;
 }

@@ -1,0 +1,31 @@
+# Unit 57 (DECISIONS.md GE1 iii, GG2): a 1D silicon pn diode swept forward, with every output file.
+[device]
+temperature = 300
+
+[mesh]
+type = tensor
+x = linspace(0, 2um, 201)
+
+[region silicon]
+material = silicon
+
+[doping]
+profile = donor erfc 2e17 axis=x center=1um width=0.01um
+profile = acceptor constant 1e17
+
+[contact cathode]
+kind = ohmic
+patch = x_min
+
+[contact anode]
+kind = ohmic
+patch = x_max
+
+[sweep]
+contact anode = 0 : 0.7 : 0.05
+
+[output]
+sweep = diode_1d.nitsweep
+device = diode_1d.nitdev
+checkpoint = diode_1d.nitckpt
+table = diode_1d.csv

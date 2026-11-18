@@ -16,9 +16,9 @@
 #include <utility>
 #include <vector>
 
-#include "NiTCAD/assemble/drift_diffusion.hpp"
 #include "NiTCAD/assemble/models.hpp"
 #include "NiTCAD/assemble/scaling.hpp"
+#include "NiTCAD/assemble/system.hpp"
 #include "NiTCAD/device/device.hpp"
 #include "NiTCAD/mesh/tensor_grid.hpp"
 #include "NiTCAD/physics/insulator.hpp"
@@ -26,7 +26,7 @@
 #include "terms.hpp"
 
 using namespace NiTCAD;
-using assemble::DriftDiffusion;
+using assemble::System;
 using assemble::ManufacturedSources;
 using assemble::PhysicsModels;
 
@@ -65,7 +65,7 @@ device::Device mos(int dimension) {
 }
 
 // A state off equilibrium: psi a ramp, densities perturbed, the boundary rows stamped.
-std::vector<double> probe(const DriftDiffusion& dd, std::size_t nodes) {
+std::vector<double> probe(const System& dd, std::size_t nodes) {
     std::vector<double> psi(nodes);
     for (std::size_t i = 0; i < nodes; ++i) psi[i] = -3.0 + 0.11 * static_cast<double>(i % 41);
     std::vector<double> x = dd.state_from_potential(psi);
@@ -82,7 +82,7 @@ struct Evaluated {
     std::vector<double> values;
 };
 
-Evaluated evaluate(const DriftDiffusion& dd, const std::vector<double>& x) {
+Evaluated evaluate(const System& dd, const std::vector<double>& x) {
     Evaluated e{std::vector<double>(dd.unknowns()), {}};
     linalg::SparseMatrix j = dd.make_jacobian();
     dd.evaluate(x, e.f, j);
@@ -90,9 +90,9 @@ Evaluated evaluate(const DriftDiffusion& dd, const std::vector<double>& x) {
     return e;
 }
 
-std::vector<std::string> names(const DriftDiffusion& dd) {
+std::vector<std::string> names(const System& dd) {
     std::vector<std::string> out;
-    for (const auto& t : assemble::TermAccess::Terms::list(dd)) out.emplace_back(t->info().name);
+    for (const auto& t : assemble::SystemData::Terms::list(dd)) out.emplace_back(t->info().name);
     return out;
 }
 
@@ -119,10 +119,10 @@ TEST_CASE("manufactured sources: absent, nothing changes (TVQ3)", "[manufactured
     for (const int D : {1, 2}) {
         const device::Device d = mos(D);
         const auto s = *assemble::make_scaling(d);
-        const auto plain = *DriftDiffusion::create(d, s);
+        const auto plain = *System::create(d, s);
         PhysicsModels null_models;
         null_models.manufactured = nullptr;
-        const auto with_null = *DriftDiffusion::create(d, s, null_models);
+        const auto with_null = *System::create(d, s, null_models);
         CHECK(names(plain) == names(with_null));
         for (const auto& n : names(plain)) CHECK(n != "manufactured source");
         const auto x = probe(plain, d.mesh().node_count());
@@ -138,12 +138,12 @@ TEST_CASE("manufactured sources: the rows they enter, their scaling, no Jacobian
         const device::Device d = mos(D);
         const std::size_t nodes = d.mesh().node_count();
         const auto s = *assemble::make_scaling(d);
-        const auto plain = *DriftDiffusion::create(d, s);
+        const auto plain = *System::create(d, s);
         PhysicsModels models;
         const double S = 3e15, Gn = 2e20, Gp = 5e19;
         const auto owned = sources(nodes, S, Gn, Gp);  // the system does not own its sources
         models.manufactured = owned.get();
-        const auto dd = *DriftDiffusion::create(d, s, models);
+        const auto dd = *System::create(d, s, models);
         const auto list = names(dd);
         // One node term, after storage, before the edge terms.
         const auto at = std::ranges::find(list, "manufactured source");
@@ -154,13 +154,13 @@ TEST_CASE("manufactured sources: the rows they enter, their scaling, no Jacobian
         const Evaluated a = evaluate(plain, x), b = evaluate(dd, x);
         CHECK(a.values == b.values);  // independent of the state: no partials
         // The term alone (as terms_test evaluates one term): its rows and nothing in the Jacobian.
-        const auto& terms = assemble::TermAccess::Terms::list(dd);
+        const auto& terms = assemble::SystemData::Terms::list(dd);
         const auto term = std::ranges::find_if(
             terms, [](const auto& t) { return t->info().name == "manufactured source"; });
         REQUIRE(term != terms.end());
         std::vector<double> f(dd.unknowns());
         auto jacobian = dd.make_jacobian();
-        assemble::TermAccess::Terms::evaluate(dd, **term, x, nullptr, f, jacobian);
+        assemble::SystemData::Terms::evaluate(dd, **term, x, nullptr, f, jacobian);
         CHECK(std::ranges::all_of(jacobian.values(), [](double v) { return v == 0.0; }));
         const double LD = std::pow(s.L_D, D);
         std::vector<char> on_contact(nodes, 0);
@@ -200,12 +200,12 @@ TEST_CASE("manufactured sources: an empty vector leaves its rows alone (TVQ3)", 
     const device::Device d = mos(1);
     const std::size_t nodes = d.mesh().node_count();
     const auto s = *assemble::make_scaling(d);
-    const auto plain = *DriftDiffusion::create(d, s);
+    const auto plain = *System::create(d, s);
     PhysicsModels models;
     auto ms = std::make_shared<ManufacturedSources>();
     ms->electron_generation.assign(nodes, 1e20);
     models.manufactured = ms.get();
-    const auto dd = *DriftDiffusion::create(d, s, models);
+    const auto dd = *System::create(d, s, models);
     const auto x = probe(plain, nodes);
     const Evaluated a = evaluate(plain, x), b = evaluate(dd, x);
     for (std::size_t i = 0; i < nodes; ++i) {
@@ -218,7 +218,7 @@ TEST_CASE("manufactured sources: refused where not defined (TVQ3)", "[manufactur
     const device::Device d = mos(1);
     const std::size_t nodes = d.mesh().node_count();
     const auto s = *assemble::make_scaling(d);
-    const auto refused = [&](PhysicsModels m) { return !DriftDiffusion::create(d, s, m).has_value(); };
+    const auto refused = [&](PhysicsModels m) { return !System::create(d, s, m).has_value(); };
     PhysicsModels m;
     auto wrong = std::make_shared<ManufacturedSources>();
     wrong->charge_cm3.assign(nodes - 1, 0.0);
@@ -262,7 +262,7 @@ TEST_CASE("manufactured sources: the profile scales every source at the step's e
         const device::Device d = mos(D);
         const std::size_t nodes = d.mesh().node_count();
         const auto s = *assemble::make_scaling(d);
-        const auto plain = *DriftDiffusion::create(d, s);
+        const auto plain = *System::create(d, s);
         const auto base = sources(nodes, 3e15, 2e20, 5e19);
         auto profiled = std::make_shared<ManufacturedSources>(*base);
         profiled->profile_times_s = {1e-9, 2e-9};
@@ -274,24 +274,24 @@ TEST_CASE("manufactured sources: the profile scales every source at the step's e
         m1.manufactured = base.get();
         mw.manufactured = profiled.get();
         m_ones.manufactured = ones.get();
-        const auto dd1 = *DriftDiffusion::create(d, s, m1);
-        const auto ddw = *DriftDiffusion::create(d, s, mw);
-        const auto dd_ones = *DriftDiffusion::create(d, s, m_ones);
+        const auto dd1 = *System::create(d, s, m1);
+        const auto ddw = *System::create(d, s, mw);
+        const auto dd_ones = *System::create(d, s, m_ones);
         const auto x = probe(plain, nodes);
-        const auto term_of = [](const DriftDiffusion& dd) {
-            const auto& terms = assemble::TermAccess::Terms::list(dd);
+        const auto term_of = [](const System& dd) {
+            const auto& terms = assemble::SystemData::Terms::list(dd);
             return std::ranges::find_if(terms, [](const auto& t) { return t->info().name == "manufactured source"; })
                 ->get();
         };
-        const auto term_f = [&](const DriftDiffusion& dd, const DriftDiffusion::TimeStep* step) {
+        const auto term_f = [&](const System& dd, const System::TimeStep* step) {
             std::vector<double> f(dd.unknowns());
             auto j = dd.make_jacobian();
-            assemble::TermAccess::Terms::evaluate(dd, *term_of(dd), x, step, f, j);
+            assemble::SystemData::Terms::evaluate(dd, *term_of(dd), x, step, f, j);
             return f;
         };
         const std::vector<double> storage = dd1.storage(x);
         const std::vector<double> traps(dd1.trap_slots(), 0.0);
-        const auto at = [&](double t) { return DriftDiffusion::TimeStep{1e3, storage, traps, t}; };
+        const auto at = [&](double t) { return System::TimeStep{1e3, storage, traps, t}; };
         const std::vector<double> unit = term_f(dd1, nullptr);
         REQUIRE(std::ranges::any_of(unit, [](double v) { return v != 0.0; }));
         // Without a step the weight is w(0) = w_0 = 0: no source at all.
@@ -332,7 +332,7 @@ TEST_CASE("manufactured sources: a malformed time profile is refused (DT-Q3 A)",
         ms->profile_weights = std::move(weights);
         PhysicsModels m;
         m.manufactured = ms.get();
-        const auto r = DriftDiffusion::create(d, s, m);
+        const auto r = System::create(d, s, m);
         return r ? std::string{} : r.error().message;
     };
     const double nan = std::numeric_limits<double>::quiet_NaN();

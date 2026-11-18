@@ -6,7 +6,7 @@
 // sample's potential and band edges are linear in the nodal potentials. It is traced once at a
 // state and then frozen; everything that depends on the potential is evaluated live with exact
 // partials (the geometry's own dependence on the potential is not differentiated: a relocation
-// re-traces it, drift_diffusion.hpp).
+// re-traces it, system.hpp).
 //
 // Tracing (trace_tunnel_paths), in the scaled potential psi (units of V_T) and cm:
 // - Only cells whose corners are all semiconductor nodes are traced; a face to any other cell or
@@ -69,7 +69,7 @@ struct TunnelPaths {
 // apart, and the samples up to the end of the later crossing segment at the same stencil nodes and
 // within tolerance_cm of each other. The samples beyond, and the backward polyline, are not
 // compared (they enter the rate only through the band extrema). Which paths must agree is the
-// assembler's (DriftDiffusion::paths_agree: those with a rate that matters at the state).
+// assembler's (paths_agree, tunnelling.hpp: those with a rate that matters at the state).
 [[nodiscard]] bool same_geometry(const TunnelPath& a, const TunnelPath& b,
                                  double tolerance_cm = 1e-9);
 
@@ -89,7 +89,7 @@ struct TunnelTraceInput {
 // Preconditions (NITCAD_EXPECTS): cells set; every span has the cells' node count; V_T positive.
 [[nodiscard]] TunnelPaths trace_tunnel_paths(const TunnelTraceInput& input);
 
-// One path at a state, in physical units (DriftDiffusion::path_states).
+// One path at a state, in physical units (System::path_states).
 struct TunnelPathState {
     std::size_t start;
     double length_cm;       // start to the crossing, along the path

@@ -10,8 +10,11 @@
 #include <utility>
 
 #include "NiTCAD/assemble/contact_bias.hpp"
-#include "NiTCAD/assemble/drift_diffusion.hpp"
+#include "NiTCAD/assemble/currents.hpp"
 #include "NiTCAD/assemble/scaling.hpp"
+#include "NiTCAD/assemble/system.hpp"
+#include "NiTCAD/assemble/thermal.hpp"
+#include "NiTCAD/assemble/tunnelling.hpp"
 #include "NiTCAD/linalg/compensated_dot.hpp"
 #include "NiTCAD/linalg/linear_solver.hpp"
 #include "NiTCAD/solve/newton.hpp"
@@ -42,12 +45,12 @@ bool positive(double v) { return std::isfinite(v) && v > 0.0; }
 //     B^-1 r = z - w (u . z) / (1 + u . w),   B0 z = r,   B0 w = e_n.
 // The steady rows depend on lambda exactly linearly: F(x, lambda) = F(x, lambda_0) + dF (lambda -
 // lambda_0). With the electrothermal model (Unit 23) dF depends on x (the metal's Peltier term in
-// the heat rows of the contact's nodes, assemble::DriftDiffusion::bias_derivative), so the rows
+// the heat rows of the contact's nodes, assemble::System::bias_derivative), so the rows
 // are evaluated at lambda itself (the system's bias set to it) and dF at x, which keeps the
 // Jacobian exact; B0's dF column then sits on the rows bias_rows names.
 class Bordered {
 public:
-    Bordered(assemble::DriftDiffusion& dd, std::vector<double> dF, double lambda_ref,
+    Bordered(assemble::System& dd, std::vector<double> dF, double lambda_ref,
              const linalg::SolverConfig& config, std::vector<double> bias, std::size_t contact,
              double V_T)
         : dd_(&dd), dF_(std::move(dF)), lambda_ref_(lambda_ref),
@@ -184,7 +187,7 @@ private:
         return structural_.empty() ? dF_[r] != 0.0 : structural_[r] != 0;
     }
 
-    assemble::DriftDiffusion* dd_;
+    assemble::System* dd_;
     std::vector<double> dF_;
     double lambda_ref_;
     linalg::LinearSolver solver_;
@@ -292,10 +295,10 @@ std::expected<results::Sweep, base::Error> trace_bias_unobserved(const device::D
     if (auto solver = linalg::LinearSolver::create(steady.linear); !solver) {
         return std::unexpected(std::move(solver.error()));
     }
-    auto system = assemble::DriftDiffusion::create(device, *scaling, steady.models);
+    auto system = assemble::System::create(device, *scaling, steady.models);
     if (!system) return std::unexpected(std::move(system.error()));
-    system->set_minority_floor(steady.minority_floor);
-    assemble::DriftDiffusion& dd = *system;
+    set_minority_floor(*system, steady.minority_floor);
+    assemble::System& dd = *system;
     // Unit 32: the weighted current of every traced point (the first comes from sweep_bias).
     std::optional<detail::WeightedCurrents> weighted;
     if (steady.weighted_current) {
@@ -333,13 +336,13 @@ std::expected<results::Sweep, base::Error> trace_bias_unobserved(const device::D
     std::vector<double> y(n + 1);
     detail::scaled_state(dd, run.points.front().fields, *scaling, std::span(y).first(n));
     // Electrothermal: the thermal contacts at the starting point's temperatures throughout.
-    if (thermal) (void)dd.set_thermal_bias(run.points.front().thermal_bias_K);  // checked
+    if (thermal) (void)set_thermal_bias(dd, run.points.front().thermal_bias_K);  // checked
     (void)dd.set_bias(bias);  // checked
     dd.stamp_contacts(std::span(y).first(n));
     y[n] = start / V_T;
     // Nonlocal tunnelling: the paths of the starting point, re-traced after each accepted point
     // (the next step uses them; lagging one step, as a transient run's second change).
-    if (dd.tunnelling()) dd.set_paths(dd.trace_paths(std::span(y).first(n)));
+    if (tunnelling(dd)) set_paths(dd, trace_paths(dd, std::span(y).first(n)));
     std::vector<double> dF = dd.bias_derivative(options.contact);
     for (double& v : dF) v *= V_T;  // per unit lambda
     Bordered bordered(dd, std::move(dF), y[n], steady.linear, bias, options.contact, V_T);
@@ -369,8 +372,8 @@ std::expected<results::Sweep, base::Error> trace_bias_unobserved(const device::D
         s[n] = V_T;
         std::fill(g.begin(), g.end(), 0.0);
         const std::span<const double> x = std::span(y).first(n);
-        const double I = dd.terminal_currents(x)[options.contact] * current_scale;
-        const auto rows = dd.small_signal_currents(x, 0.0);
+        const double I = terminal_currents(dd, x)[options.contact] * current_scale;
+        const auto rows = small_signal_currents(dd, x, 0.0);
         const auto& row = rows[options.contact];
         const double factor =
             (I >= 0.0 ? 1.0 : -1.0) * current_scale / ((std::abs(I) + I0) * std::log(10.0));
@@ -578,10 +581,10 @@ std::expected<results::Sweep, base::Error> trace_bias_unobserved(const device::D
                 return run;
             }
         }
-        if (dd.tunnelling()) {
-            assemble::TunnelPaths traced = dd.trace_paths(std::span(y).first(n));
-            if (!dd.paths_agree(traced, dd.paths(), std::span(y).first(n))) {
-                dd.set_paths(std::move(traced));
+        if (tunnelling(dd)) {
+            assemble::TunnelPaths traced = trace_paths(dd, std::span(y).first(n));
+            if (!paths_agree(dd, traced, paths(dd), std::span(y).first(n))) {
+                set_paths(dd, std::move(traced));
                 bordered.refresh();
                 point.path_relocations = 1;
             }

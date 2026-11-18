@@ -14,8 +14,9 @@
 #include <utility>
 #include <vector>
 
-#include "NiTCAD/assemble/drift_diffusion.hpp"
+#include "NiTCAD/assemble/currents.hpp"
 #include "NiTCAD/assemble/scaling.hpp"
+#include "NiTCAD/assemble/system.hpp"
 #include "NiTCAD/base/constants.hpp"
 #include "NiTCAD/device/device.hpp"
 #include "NiTCAD/mesh/tensor_grid.hpp"
@@ -221,11 +222,11 @@ TEST_CASE("fermi-dirac: equilibrium carries no current across a degenerate junct
     const auto eq = solve::solve_equilibrium(d, {.models = models});
     REQUIRE(eq.has_value());
     const auto scaling = *assemble::make_scaling(d);
-    const auto system = *assemble::DriftDiffusion::create(d, scaling, models);
+    const auto system = *assemble::System::create(d, scaling, models);
     std::vector<double> psi(d.mesh().node_count());
     for (std::size_t i = 0; i < psi.size(); ++i) psi[i] = eq->fields.potential_V[i] / scaling.V_T;
     const std::vector<double> state = system.state_from_potential(psi);
-    const auto currents = system.edge_currents(state);
+    const auto currents = edge_currents(system, state);
     const double VT = base::thermal_voltage(T);
     const auto x = legacy_graded_mesh(2e-4, 1e-4, 1e-8, 1e-6);
     const physics::Semiconductor si = physics::silicon();

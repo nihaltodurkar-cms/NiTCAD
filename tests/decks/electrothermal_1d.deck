@@ -1,0 +1,39 @@
+# Unit 57 (DECISIONS.md GE1 iii, GG2): the 1D diode with the electrothermal model (Unit 23), an
+# isothermal sink at the cathode, swept forward.
+[device]
+temperature = 300
+
+[mesh]
+type = tensor
+x = linspace(0, 2um, 201)
+
+[region silicon]
+material = silicon
+
+[doping]
+profile = donor erfc 2e17 axis=x center=1um width=0.01um
+profile = acceptor constant 1e17
+
+[contact cathode]
+kind = ohmic
+patch = x_min
+
+[contact anode]
+kind = ohmic
+patch = x_max
+
+[thermal_contact sink]
+patch = x_max
+kind = isothermal
+temperature = 300
+
+[models]
+electrothermal = on
+
+[sweep]
+contact anode = 0 : 0.8 : 0.1
+
+[output]
+sweep = electrothermal_1d.nitsweep
+device = electrothermal_1d.nitdev
+table = electrothermal_1d.csv

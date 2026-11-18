@@ -17,7 +17,8 @@
 #include <span>
 #include <vector>
 
-#include "NiTCAD/assemble/drift_diffusion.hpp"
+#include "NiTCAD/assemble/system.hpp"
+#include "NiTCAD/assemble/tunnelling.hpp"
 #include "NiTCAD/base/constants.hpp"
 #include "NiTCAD/device/device.hpp"
 #include "NiTCAD/mesh/tensor_cells.hpp"
@@ -293,16 +294,18 @@ struct Relocating {
     std::vector<Paths> traces;  // returned in turn, the last one repeated
     std::size_t next = 0;
     Paths frozen;
-    [[nodiscard]] bool tunnelling() const { return true; }
-    [[nodiscard]] const Paths& paths() const { return frozen; }
-    void set_paths(Paths p) { frozen = std::move(p); }
-    Paths trace_paths(std::span<const double>) {
-        return traces[std::min(next++, traces.size() - 1)];
-    }
-    [[nodiscard]] bool paths_agree(const Paths& a, const Paths& b, std::span<const double>) const {
-        return a.paths == b.paths;
-    }
 };
+// The topic functions solve_relocating calls (assemble/tunnelling.hpp's), found by ADL.
+[[nodiscard]] bool tunnelling(const Relocating&) { return true; }
+[[nodiscard]] const Paths& paths(const Relocating& r) { return r.frozen; }
+void set_paths(Relocating& r, Paths p) { r.frozen = std::move(p); }
+Paths trace_paths(Relocating& r, std::span<const double>) {
+    return r.traces[std::min(r.next++, r.traces.size() - 1)];
+}
+[[nodiscard]] bool paths_agree(const Relocating&, const Paths& a, const Paths& b,
+                               std::span<const double>) {
+    return a.paths == b.paths;
+}
 
 }  // namespace
 
@@ -511,7 +514,7 @@ TEST_CASE("btbt: the cost of the nonlocal paths", "[.btbt]") {
         x[3 * i + 1] = dc->fields.n_cm3[i] / s.Ns;
         x[3 * i + 2] = dc->fields.p_cm3[i] / s.Ns;
     }
-    const auto time = [&](const assemble::DriftDiffusion& dd) {
+    const auto time = [&](const assemble::System& dd) {
         auto j = dd.make_jacobian();
         std::vector<double> f(dd.unknowns());
         auto solver = *linalg::LinearSolver::create({});
@@ -524,14 +527,14 @@ TEST_CASE("btbt: the cost of the nonlocal paths", "[.btbt]") {
                          std::chrono::duration<double>(std::chrono::steady_clock::now() - t0)
                                  .count() / 5.0};
     };
-    auto on = *assemble::DriftDiffusion::create(d, s, {.btbt_nonlocal = NonlocalTunnelling::kane});
+    auto on = *assemble::System::create(d, s, {.btbt_nonlocal = NonlocalTunnelling::kane});
     (void)on.set_bias(std::vector<double>{-2.0, 0.0});
-    on.set_paths(on.trace_paths(x));
-    auto off = *assemble::DriftDiffusion::create(d, s);
+    set_paths(on, trace_paths(on, x));
+    auto off = *assemble::System::create(d, s);
     (void)off.set_bias(std::vector<double>{-2.0, 0.0});
     const auto [nz_on, t_on] = time(on);
     const auto [nz_off, t_off] = time(off);
-    CAPTURE(on.paths().paths.size(), nz_on, nz_off, t_on, t_off);
+    CAPTURE(paths(on).paths.size(), nz_on, nz_off, t_on, t_off);
     REQUIRE(nz_on < 1.2 * nz_off);   // measured 444 paths, 1.033 times
     REQUIRE(t_on < 2.0 * t_off + 0.05);  // measured 1.14 times
 }
@@ -615,10 +618,10 @@ TEST_CASE("btbt: assembly cost with nonlocal paths", "[.assembly_benchmark]") {
     REQUIRE(!s->stopped);
     const results::BiasPoint& p = s->points.back();
     const auto scaling = *assemble::make_scaling(d);
-    auto system = *assemble::DriftDiffusion::create(d, scaling, o.models);
+    auto system = *assemble::System::create(d, scaling, o.models);
     REQUIRE(system.set_bias(p.bias_V).has_value());
     const std::vector<double> x = scaled_state(system, p.fields, scaling);
-    system.set_paths(system.trace_paths(x));
-    REQUIRE(!system.paths().paths.empty());
+    set_paths(system, trace_paths(system, x));
+    REQUIRE(!paths(system).paths.empty());
     time_assembly("1D Zener, nonlocal paths", system, x);
 }

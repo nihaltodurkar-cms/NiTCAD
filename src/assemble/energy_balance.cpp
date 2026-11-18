@@ -43,6 +43,7 @@
 #include <vector>
 
 #include "NiTCAD/assemble/bernoulli.hpp"
+#include "NiTCAD/assemble/observer.hpp"
 #include "NiTCAD/base/constants.hpp"
 #include "NiTCAD/base/contract.hpp"
 #include "NiTCAD/physics/energy_balance.hpp"
@@ -132,8 +133,9 @@ Relaxing relaxing(double n, double p, double doping) {
 
 }  // namespace
 
-std::optional<base::Error> DriftDiffusion::make_energy_balance(const device::Device& device,
-                                                               const PhysicsModels& models) {
+std::optional<base::Error> SystemData::make_energy_balance(SystemState& st,
+                                                           const device::Device& device,
+                                                           const PhysicsModels& models) {
     (void)models;
     const auto refuse = [](std::string message) {
         return base::Error{base::ErrorCode::invalid_input, std::move(message), {}};
@@ -182,17 +184,19 @@ std::optional<base::Error> DriftDiffusion::make_energy_balance(const device::Dev
         const EdgeTerm& e = edges_[k];
         for (std::size_t r = 0; r < 5; ++r) {
             for (std::size_t c = 0; c < 5; ++c) {
-                energy_edges_[k].ab[5 * r + c] = detail::position(pattern_, 5 * e.a + r, 5 * e.b + c);
-                energy_edges_[k].ba[5 * r + c] = detail::position(pattern_, 5 * e.b + r, 5 * e.a + c);
+                energy_edges_[k].ab[5 * r + c] =
+                    detail::position(st.pattern_, 5 * e.a + r, 5 * e.b + c);
+                energy_edges_[k].ba[5 * r + c] =
+                    detail::position(st.pattern_, 5 * e.b + r, 5 * e.a + c);
             }
         }
     }
-    contact_bias_.assign(contact_count_, 0.0);  // set_bias fills it (electrical_power)
+    st.contact_bias_.assign(contact_count_, 0.0);  // set_bias fills it (electrical_power)
     energy_balance_ = true;
     return std::nullopt;
 }
 
-std::pair<DriftDiffusion::EnergyFlux, DriftDiffusion::EnergyFlux> DriftDiffusion::energy_fluxes(
+std::pair<SystemData::EnergyFlux, SystemData::EnergyFlux> SystemData::energy_fluxes(
     std::size_t k, std::span<const double> x) const {
     const EdgeTerm& e = edges_[k];
     const std::size_t a = e.a, b = e.b;
@@ -322,7 +326,7 @@ std::pair<DriftDiffusion::EnergyFlux, DriftDiffusion::EnergyFlux> DriftDiffusion
             carrier(-1.0, pa, pb, tpa, tpb, dpsi + e.shift_p, Fp, hpa, hpb)};
 }
 
-DriftDiffusion::EnergyStorage DriftDiffusion::energy_storage(std::size_t i,
+SystemData::EnergyStorage SystemData::energy_storage(std::size_t i,
                                                              std::span<const double> x) const {
     // W = (3/2) c theta g per carrier, the pressure's (3/2) (ED8).
     const auto one = [&](double c, double tau, double log_dos, double& w, double& w_c,
@@ -340,12 +344,12 @@ DriftDiffusion::EnergyStorage DriftDiffusion::energy_storage(std::size_t i,
     return s;
 }
 
-void DriftDiffusion::hold_temperatures(std::span<const double> x) {
+void SystemData::hold_temperatures(SystemState& st, std::span<const double> x) const {
     NITCAD_EXPECTS(energy_balance_ && x.size() == unknowns());
-    held_.resize(2 * node_count());
+    st.held_.resize(2 * node_count());
     for (std::size_t i = 0; i < node_count(); ++i) {
-        held_[2 * i] = x[5 * i + 3];
-        held_[2 * i + 1] = x[5 * i + 4];
+        st.held_[2 * i] = x[5 * i + 3];
+        st.held_[2 * i + 1] = x[5 * i + 4];
     }
 }
 
@@ -356,43 +360,45 @@ void DriftDiffusion::hold_temperatures(std::span<const double> x) {
 // off the contacts, and at the contacts sum_c V_c I_c plus the Peltier term.
 // After a time step the continuity rows' terms are V k U plus the storage V rate (S - c): the
 // storage's band-edge energy is carrier_storage, the energy rows' own storage thermal_storage.
-DriftDiffusion::EnergyPowers DriftDiffusion::energy_powers(std::span<const double> x,
-                                                           const TimeStep* step) const {
-    NITCAD_EXPECTS(energy_balance_ && held_.empty() && x.size() == unknowns());
-    const std::size_t nodes = node_count();
-    std::vector<double> f(unknowns());
+EnergyPowers energy_powers(const System& system, std::span<const double> x,
+                           const System::TimeStep* step) {
+    const SystemData& d = SystemData::of(system);
+    const SystemState& state = SystemData::state_of(system);
+    NITCAD_EXPECTS(d.energy_balance_ && state.held_.empty() && x.size() == d.unknowns());
+    const std::size_t nodes = d.node_count();
+    std::vector<double> f(d.unknowns());
     if (step != nullptr) {
-        residual(x, *step, f);
+        system.residual(x, *step, f);
     } else {
-        residual(x, f);
+        system.residual(x, f);
     }
-    const std::vector<NodeDegeneracy> g = step != nullptr ? degeneracies(x)
-                                                          : std::vector<NodeDegeneracy>{};
-    const BandEdges bands = band_edges(x);
-    EnergyPowers p{electrical_power(x), 0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
+    const std::vector<SystemData::NodeDegeneracy> g =
+        step != nullptr ? d.degeneracies(x) : std::vector<SystemData::NodeDegeneracy>{};
+    const BandEdges bands = d.band_edges(state, x);
+    EnergyPowers p{d.electrical_power(state, x), 0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
     std::vector<double> dn(nodes, 0.0), dp(nodes, 0.0);
-    for (std::size_t k = 0; k < edges_.size(); ++k) {
-        const EdgeTerm& e = edges_[k];
+    for (std::size_t k = 0; k < d.edges_.size(); ++k) {
+        const SystemData::EdgeTerm& e = d.edges_[k];
         if (e.charged || !e.carriers) continue;
-        const auto [fn, fp] = energy_fluxes(k, x);
+        const auto [fn, fp] = d.energy_fluxes(k, x);
         dn[e.a] += fn.flux;
         dn[e.b] -= fn.flux;
         dp[e.a] += fp.flux;
         dp[e.b] -= fp.flux;
         const double joule = -fn.delta * fn.flux - fp.delta * fp.flux;
-        if (contact_[e.a] >= 0) {
+        if (d.contact_[e.a] >= 0) {
             p.contact_flux += fn.energy + fp.energy;
             p.contact_joule += 0.5 * joule;
         }
-        if (contact_[e.b] >= 0) {
+        if (d.contact_[e.b] >= 0) {
             p.contact_flux -= fn.energy + fp.energy;
             p.contact_joule += 0.5 * joule;
         }
     }
     for (std::size_t i = 0; i < nodes; ++i) {
-        if (insulator_[i] != 0) continue;
-        if (contact_[i] >= 0) {
-            const double V = contact_bias_[static_cast<std::size_t>(contact_[i])];
+        if (d.insulator_[i] != 0) continue;
+        if (d.contact_[i] >= 0) {
+            const double V = state.contact_bias_[static_cast<std::size_t>(d.contact_[i])];
             p.peltier -= (bands.conduction[i] + V) * dn[i] + (bands.valence[i] + V) * dp[i];
             continue;
         }
@@ -400,9 +406,9 @@ DriftDiffusion::EnergyPowers DriftDiffusion::energy_powers(std::span<const doubl
         const double tn = x[5 * i + 3], tp = x[5 * i + 4];
         double ku = dn[i] - f[5 * i + 1];  // V k U, the electron row's term
         if (step != nullptr) {
-            const double ks = volume_[i] * step->rate;
-            const NodeStorage st = node_storage(i, x, g);
-            const EnergyStorage w = energy_storage(i, x);
+            const double ks = d.volume_[i] * step->rate;
+            const SystemData::NodeStorage st = d.node_storage(i, x, g);
+            const SystemData::EnergyStorage w = d.energy_storage(i, x);
             const double sn = ks * (st.n - step->storage[4 * i]);
             const double sp = ks * (st.p - step->storage[4 * i + 1]);
             ku -= sn;
@@ -410,31 +416,38 @@ DriftDiffusion::EnergyPowers DriftDiffusion::energy_powers(std::span<const doubl
             p.thermal_storage +=
                 ks * (w.n - step->storage[4 * i + 2] + w.p - step->storage[4 * i + 3]);
         }
-        const double k = volume_[i] * rate_scale_;
-        const Relaxing rel = relaxing(n, h, doping_[i]);
-        p.relaxation += 1.5 * k * (rel.n * tn / relax_n_[i] + rel.p * tp / relax_p_[i]);
+        const double k = d.volume_[i] * d.rate_scale_;
+        const Relaxing rel = relaxing(n, h, d.doping_[i]);
+        p.relaxation +=
+            1.5 * k * (rel.n * tn / d.relax_n_[i] + rel.p * tp / d.relax_p_[i]);
         p.recombination +=
             ku * (bands.conduction[i] - bands.valence[i] + 1.5 * (2.0 + tn + tp));
         p.residual += f[5 * i + 3] + f[5 * i + 4] + bands.conduction[i] * f[5 * i + 1] +
                       bands.valence[i] * f[5 * i + 2];
     }
+    if (detail::observer != nullptr) {  // the trace (observer.hpp; Unit 57, GE1 ii)
+        detail::observe("energy_powers",
+                        std::vector<double>{p.input, p.relaxation, p.recombination,
+                                            p.contact_flux, p.contact_joule, p.peltier,
+                                            p.residual, p.thermal_storage, p.carrier_storage});
+    }
     return p;
 }
 
 // The energy rows of every node, assigned (ED1, ED3, ED7).
-class DriftDiffusion::Terms::EnergyRows final : public Term {
+class SystemData::Terms::EnergyRows final : public Term {
 public:
     TermInfo info() const noexcept override {
         return {"energy rows", TermDomain::nodes, energies, all5, true};
     }
-    void add(const DriftDiffusion& s, const Evaluation& ev) const override {
+    void add(const SystemData& s, const SystemState& st, const Evaluation& ev) const override {
         const std::span<const double> x = ev.x;
         const bool jacobian = ev.jacobian();
         for (std::size_t i = 0; i < s.node_count(); ++i) {
             const double tn = x[5 * i + 3], tp = x[5 * i + 4];
-            if (!semiconductor(s, i) || !s.held_.empty()) {
-                const double hn = s.held_.empty() ? 0.0 : s.held_[2 * i];
-                const double hp = s.held_.empty() ? 0.0 : s.held_[2 * i + 1];
+            if (!semiconductor(s, i) || !st.held_.empty()) {
+                const double hn = st.held_.empty() ? 0.0 : st.held_[2 * i];
+                const double hp = st.held_.empty() ? 0.0 : st.held_[2 * i + 1];
                 ev.f[5 * i + 3] = tn - hn;
                 ev.f[5 * i + 4] = tp - hp;
                 if (jacobian) at(s, ev, i, 3, 3) = at(s, ev, i, 4, 4) = 1.0;
@@ -494,20 +507,21 @@ public:
 
 // The edges' particle and energy fluxes and Joule heating (ED2, ED3), adding to the continuity
 // and energy rows of both ends off the ohmic contacts.
-class DriftDiffusion::Terms::EnergyFluxes final : public Term {
+class SystemData::Terms::EnergyFluxes final : public Term {
 public:
     TermInfo info() const noexcept override {
         return {"energy-balance fluxes", TermDomain::mesh_edges, transport_rows, all5, false};
     }
     // Lombardi (Unit 46): the four transport rows of both ends with the psi columns of the
     // edge's E_perp stencil; none without the model.
-    void pattern(const DriftDiffusion& s, std::vector<linalg::Triplet>& t) const override {
+    void pattern(const SystemData& s, const SystemState&,
+                 std::vector<linalg::Triplet>& t) const override {
         surface_pattern(s, t, 4);
     }
-    void add(const DriftDiffusion& s, const Evaluation& ev) const override {
+    void add(const SystemData& s, const SystemState& st, const Evaluation& ev) const override {
         const std::span<double> f = ev.f, values = ev.values;
         const bool jacobian = ev.jacobian();
-        const bool held = !s.held_.empty();
+        const bool held = !st.held_.empty();
         for (std::size_t k = 0; k < s.edges_.size(); ++k) {
             const EdgeTerm& e = s.edges_[k];
             if (e.charged || !e.carriers) continue;
@@ -543,10 +557,10 @@ public:
                         // linear in the edge factor as the fluxes are.
                         const double ep = sign * r.e_perp - 0.5 * r.delta * r.d_perp;
                         for (std::size_t j = e.surface_first; j < e.surface_last; ++j) {
-                            const SurfaceStencil& st = s.surface_stencil_[j];
-                            const double w = s.surface_gradient(perp, st);
-                            values[st.pos[q][c.row - 1]] += sign * r.d_perp * w;
-                            if (!held) values[st.pos[q][c.erow - 1]] += ep * w;
+                            const SurfaceStencil& stencil = s.surface_stencil_[j];
+                            const double w = s.surface_gradient(perp, stencil);
+                            values[stencil.pos[q][c.row - 1]] += sign * r.d_perp * w;
+                            if (!held) values[stencil.pos[q][c.erow - 1]] += ep * w;
                         }
                     }
                     if (held) {  // the energy rows are tau - tau_held (EnergyRows)
@@ -591,19 +605,19 @@ public:
 // electron row, -V G in the hole row and +(3/2) V theta_c G in each energy row (ED7: the
 // generated carriers take the mean energy, II as negative U). In a uniform field E_eff = E, so it
 // is the field-driven generation (EC3). While the temperatures are held, the continuity rows only.
-class DriftDiffusion::Terms::EnergyImpact final : public Term {
+class SystemData::Terms::EnergyImpact final : public Term {
 public:
     TermInfo info() const noexcept override {
         return {"impact ionization (energy balance)", TermDomain::global, transport_rows, all5,
                 false};
     }
     // The full 5 x 5 blocks of every carrier edge (energy balance) hold its entries.
-    void add(const DriftDiffusion& s, const Evaluation& ev) const override {
+    void add(const SystemData& s, const SystemState& st, const Evaluation& ev) const override {
         if (s.impact_nodes_.empty()) return;
         const std::span<const double> x = ev.x;
         const std::span<double> f = ev.f, values = ev.values;
         const bool jacobian = ev.jacobian();
-        const bool held = !s.held_.empty();
+        const bool held = !st.held_.empty();
         const int D = s.dimension_;
         const double TL = s.temperature_K_;
         std::vector<std::pair<EnergyFlux, EnergyFlux>> flux(s.edges_.size());
@@ -725,13 +739,13 @@ public:
     }
 };
 
-std::shared_ptr<const TermAccess::Term> DriftDiffusion::Terms::energy_rows() {
+std::shared_ptr<const SystemData::Term> SystemData::Terms::energy_rows() {
     return std::make_shared<const EnergyRows>();
 }
-std::shared_ptr<const TermAccess::Term> DriftDiffusion::Terms::energy_fluxes() {
+std::shared_ptr<const SystemData::Term> SystemData::Terms::energy_fluxes() {
     return std::make_shared<const EnergyFluxes>();
 }
-std::shared_ptr<const TermAccess::Term> DriftDiffusion::Terms::energy_impact() {
+std::shared_ptr<const SystemData::Term> SystemData::Terms::energy_impact() {
     return std::make_shared<const EnergyImpact>();
 }
 

@@ -2,7 +2,7 @@
 // transient2d.py, transient3d.py).
 //
 // From the steady state at the waveforms' starting values (t = 0) the run steps the coupled
-// system to t_end with BDF formulas (assemble::DriftDiffusion::TimeStep): backward Euler, or
+// system to t_end with BDF formulas (assemble::System::TimeStep): backward Euler, or
 // variable-step BDF2 (second order, L-stable, one Newton solve per step). After the start and
 // after every waveform breakpoint the integrator restarts with backward Euler (the history
 // before a kink or jump is not smooth); BDF2 resumes once three smooth states exist.
@@ -23,9 +23,9 @@
 //
 // Terminal currents include the displacement current (OLD / NEW / REASON: the legacy reported
 // the conduction current only, which is not conserved in a transient): the charge of each contact
-// (assemble::DriftDiffusion::contact_charges) is differenced with the step's own BDF formula, and
+// (assemble::System::contact_charges) is differenced with the step's own BDF formula, and
 // the total currents of all contacts then sum to zero to the solve's tolerance (the header comment
-// of drift_diffusion.hpp).
+// of system.hpp).
 //
 // The first step from the start is taken at dt_initial; there is no estimate for it.
 // Cancellation and progress follow control.hpp: the starting equilibrium has Phase::equilibrium,
@@ -76,7 +76,7 @@ struct TransientOptions {
 // the contact); equations not drift_diffusion; t_end, dt_initial, dt_min, dt_max, rtol or
 // density_ref not finite and positive (density_ref may be 0), dt_min > dt_initial or dt_initial >
 // dt_max; an output time not finite or outside (0, t_end]; an initial state as for sweep_bias;
-// those of assemble::make_scaling, assemble::DriftDiffusion::create and
+// those of assemble::make_scaling, assemble::System::create and
 // linalg::LinearSolver::create.
 // Once solving has started nothing is an error: the Transient keeps the accepted steps and, if the
 // run stopped early, `stopped` and `unfinished` (a stopped starting solve leaves no points).

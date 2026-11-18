@@ -15,8 +15,9 @@
 #include <numbers>
 #include <vector>
 
-#include "NiTCAD/assemble/drift_diffusion.hpp"
 #include "NiTCAD/assemble/scaling.hpp"
+#include "NiTCAD/assemble/system.hpp"
+#include "NiTCAD/assemble/tunnelling.hpp"
 #include "NiTCAD/base/constants.hpp"
 #include "NiTCAD/device/device.hpp"
 #include "NiTCAD/mesh/tensor_cells.hpp"
@@ -26,7 +27,7 @@
 #include "NiTCAD/physics/semiconductor.hpp"
 
 using namespace NiTCAD;
-using assemble::DriftDiffusion;
+using assemble::System;
 using assemble::NonlocalTunnelling;
 
 namespace {
@@ -87,7 +88,7 @@ struct Noise {
 
 // A uniform field E0 [V/cm] along the unit direction u (x, y, z), n and p uniform, relative noise
 // on every unknown. Electrons tunnel towards higher potential, against the field: along -u.
-std::vector<double> sloped(const DriftDiffusion& dd, const device::Device& d,
+std::vector<double> sloped(const System& dd, const device::Device& d,
                            const assemble::Scaling& s, double E0, mesh::Point u, double noise,
                            std::uint64_t seed, double n_cm3 = 1e17, double p_cm3 = 1e3) {
     std::vector<double> x(dd.unknowns());
@@ -116,7 +117,7 @@ std::vector<std::vector<double>> dense(const linalg::SparseMatrix& a) {
 
 // As the Unit 19 gate: every column, central differences, the worst error over the column's
 // largest entry, each column's error the smallest at steps of 1e-5, 1e-6 and 1e-7 max(|x|, 1).
-double fd_jacobian_error(const DriftDiffusion& dd, std::vector<double> x) {
+double fd_jacobian_error(const System& dd, std::vector<double> x) {
     const std::size_t n = dd.unknowns();
     std::vector<double> f(n), fp(n), fm(n);
     auto jacobian = dd.make_jacobian();
@@ -166,7 +167,7 @@ TEST_CASE("band to band assemble: refusals") {
     const device::Device d = block(1, 11, 1, 1e-5, 1e-5);
     const auto s = *assemble::make_scaling(d);
     const auto refused = [&](const device::Device& dev, assemble::PhysicsModels m) {
-        const auto r = DriftDiffusion::create(dev, *assemble::make_scaling(dev), m);
+        const auto r = System::create(dev, *assemble::make_scaling(dev), m);
         REQUIRE_FALSE(r.has_value());
         REQUIRE(r.error().code == base::ErrorCode::invalid_input);
     };
@@ -176,7 +177,7 @@ TEST_CASE("band to band assemble: refusals") {
     refused(block(1, 11, 1, 1e-5, 1e-5, physics::gallium_arsenide_parameters),
             {.btbt_nonlocal = NonlocalTunnelling::direct_wkb});
     const device::Device g = block(1, 11, 1, 1e-5, 1e-5, direct_gap());
-    REQUIRE(DriftDiffusion::create(g, *assemble::make_scaling(g),
+    REQUIRE(System::create(g, *assemble::make_scaling(g),
                                    {.btbt_nonlocal = NonlocalTunnelling::direct_wkb})
                 .has_value());
     // No cells.
@@ -196,7 +197,7 @@ TEST_CASE("band to band assemble: refusals") {
                           {"right", device::ContactKind::ohmic, std::move(right)}}});
         refused(bare, {.btbt_nonlocal = NonlocalTunnelling::kane});
         // The local model needs no cells.
-        REQUIRE(DriftDiffusion::create(bare, *assemble::make_scaling(bare), {.btbt_local = true})
+        REQUIRE(System::create(bare, *assemble::make_scaling(bare), {.btbt_local = true})
                     .has_value());
     }
     // A heterointerface (Si | Ge).
@@ -241,9 +242,9 @@ TEST_CASE("band to band assemble: refusals") {
         REQUIRE_FALSE(r.has_value());
     }
     // Off: no paths, and the pattern does not change.
-    const auto off = *DriftDiffusion::create(d, s);
-    REQUIRE_FALSE(off.tunnelling());
-    REQUIRE(off.trace_paths(std::vector<double>(off.unknowns(), 1.0)).paths.empty());
+    const auto off = *System::create(d, s);
+    REQUIRE_FALSE(tunnelling(off));
+    REQUIRE(trace_paths(off, std::vector<double>(off.unknowns(), 1.0)).paths.empty());
 }
 
 TEST_CASE("band to band assemble: local Kane in a uniform field at any angle") {
@@ -253,8 +254,8 @@ TEST_CASE("band to band assemble: local Kane in a uniform field at any angle") {
     for (const int D : {1, 2, 3}) {
         const device::Device d = block(D, D == 3 ? 6 : 11, D == 3 ? 6 : 11, 1e-5, 1e-5);
         const auto s = *assemble::make_scaling(d);
-        const auto on = *DriftDiffusion::create(d, s, {.btbt_local = true});
-        const auto off = *DriftDiffusion::create(d, s);
+        const auto on = *System::create(d, s, {.btbt_local = true});
+        const auto off = *System::create(d, s);
         for (const double degrees : {0.0, 30.0, 45.0}) {
             if (D == 1 && degrees != 0.0) continue;
             // Low densities: the generation is read as a difference of residuals, whose flux
@@ -298,13 +299,13 @@ TEST_CASE("band to band assemble: nonlocal rates in a uniform field equal their 
             const device::Device d =
                 block(D, D == 3 ? 13 : 31, D == 1 ? 1 : (D == 3 ? 13 : 31), L, L, c.material);
             const auto s = *assemble::make_scaling(d);
-            auto dd = *DriftDiffusion::create(d, s, {.btbt_nonlocal = c.kind});
+            auto dd = *System::create(d, s, {.btbt_nonlocal = c.kind});
             for (const double degrees : {0.0, 30.0, 45.0}) {
                 if (D == 1 && degrees != 0.0) continue;
                 const mesh::Point u = direction(degrees);
                 const auto x = sloped(dd, d, s, c.field, u, 0.0, 1);
-                dd.set_paths(dd.trace_paths(x));
-                const auto states = dd.path_states(x);
+                set_paths(dd, trace_paths(dd, x));
+                const auto states = path_states(dd, x);
                 REQUIRE_FALSE(states.empty());
                 const double Eg = physics::band_gap_eV(
                     *physics::Semiconductor::create(c.material), 300.0);
@@ -363,11 +364,11 @@ TEST_CASE("band to band assemble: the finite-difference Jacobian gate") {
             const double L = 3e-6;
             const device::Device d = block(D, D == 3 ? 6 : 13, D == 3 ? 4 : 5, L, L, c.material);
             const auto s = *assemble::make_scaling(d);
-            auto dd = *DriftDiffusion::create(d, s, c.models);
+            auto dd = *System::create(d, s, c.models);
             const auto x = sloped(dd, d, s, c.field, direction(D == 1 ? 0.0 : 20.0), 0.02, 3);
-            if (dd.tunnelling()) {
-                dd.set_paths(dd.trace_paths(x));
-                REQUIRE_FALSE(dd.paths().paths.empty());
+            if (tunnelling(dd)) {
+                set_paths(dd, trace_paths(dd, x));
+                REQUIRE_FALSE(paths(dd).paths.empty());
             }
             const double error = fd_jacobian_error(dd, x);
             CAPTURE(c.models.btbt_local, static_cast<int>(c.models.btbt_nonlocal), D, error);
@@ -383,11 +384,11 @@ TEST_CASE("band to band assemble: nonlocal pairs balance exactly") {
             kind == NonlocalTunnelling::kane ? physics::silicon_parameters : direct_gap();
         const device::Device d = block(2, 21, 9, 4e-6, 2e-6, material);
         const auto s = *assemble::make_scaling(d);
-        auto on = *DriftDiffusion::create(d, s, {.btbt_nonlocal = kind});
-        const auto off = *DriftDiffusion::create(d, s);
+        auto on = *System::create(d, s, {.btbt_nonlocal = kind});
+        const auto off = *System::create(d, s);
         const auto x = sloped(on, d, s, kind == NonlocalTunnelling::kane ? 4e6 : 2e6,
                               direction(25.0), 0.02, 5, 1e3, 1e3);  // small fluxes (above)
-        on.set_paths(on.trace_paths(x));
+        set_paths(on, trace_paths(on, x));
         std::vector<double> fa(on.unknowns()), fb(on.unknowns());
         on.residual(x, fa);
         off.residual(x, fb);
@@ -410,10 +411,10 @@ TEST_CASE("band to band assemble: a transverse-uniform device reduces to 1D") {
     const auto run = [&](int D, const assemble::PhysicsModels& models) {
         const device::Device d = block(D, 31, D == 1 ? 1 : 4, L, 2e-6);
         const auto s = *assemble::make_scaling(d);
-        auto on = *DriftDiffusion::create(d, s, models);
-        const auto off = *DriftDiffusion::create(d, s);
+        auto on = *System::create(d, s, models);
+        const auto off = *System::create(d, s);
         const auto x = sloped(on, d, s, 4e6, {1.0, 0.0, 0.0}, 0.0, 1);
-        if (on.tunnelling()) on.set_paths(on.trace_paths(x));
+        if (tunnelling(on)) set_paths(on, trace_paths(on, x));
         std::vector<double> fa(on.unknowns()), fb(on.unknowns());
         on.residual(x, fa);
         off.residual(x, fb);
@@ -476,10 +477,10 @@ TEST_CASE("band to band assemble: paths stay in the semiconductor") {
                       {"right", device::ContactKind::ohmic, std::move(right)}},
          .cells = std::move(cells)});
     const auto s = *assemble::make_scaling(d);
-    auto dd = *DriftDiffusion::create(d, s, {.btbt_nonlocal = NonlocalTunnelling::kane});
+    auto dd = *System::create(d, s, {.btbt_nonlocal = NonlocalTunnelling::kane});
     // Electrons go against the field: a field at 220 degrees sends them up and to the right.
     const auto state = sloped(dd, d, s, 4e6, direction(220.0), 0.0, 1);
-    const assemble::TunnelPaths paths = dd.trace_paths(state);
+    const assemble::TunnelPaths paths = trace_paths(dd, state);
     REQUIRE_FALSE(paths.paths.empty());
     bool beside = false;
     for (const assemble::TunnelPath& p : paths.paths) {
@@ -493,4 +494,46 @@ TEST_CASE("band to band assemble: paths stay in the semiconductor") {
         }
     }
     REQUIRE(beside);
+}
+
+TEST_CASE("band to band assemble: a copy owns its bias and paths (Unit 57 GE2)") {
+    // A copy shares the model data and owns its state: set_bias and set_paths on the copy (the
+    // latter moves the Jacobian positions into a new pattern) leave the original's residual,
+    // pattern and Jacobian values unchanged bit for bit, and an assigned system takes the copy's.
+    const device::Device d = block(2, 21, 9, 4e-6, 2e-6, physics::silicon_parameters);
+    const auto s = *assemble::make_scaling(d);
+    const assemble::PhysicsModels models{.btbt_nonlocal = NonlocalTunnelling::kane};
+    const auto original = *System::create(d, s, models);
+    const auto x = sloped(original, d, s, 4e6, direction(25.0), 0.02, 5, 1e3, 1e3);
+    const std::size_t n = original.unknowns();
+    std::vector<double> f0(n), f1(n), fc(n), fa(n);
+    linalg::SparseMatrix j0 = original.make_jacobian();
+    original.evaluate(x, f0, j0);
+
+    System copy = original;
+    set_paths(copy, trace_paths(copy, x));
+    std::vector<double> bias(original.contact_count(), 0.0);
+    bias[0] = 0.5;
+    REQUIRE(copy.set_bias(bias).has_value());
+
+    linalg::SparseMatrix j1 = original.make_jacobian();
+    original.evaluate(x, f1, j1);
+    CHECK(paths(original).paths.empty());
+    CHECK(j1.nonzeros() == j0.nonzeros());
+    CHECK(std::ranges::equal(j1.values(), j0.values()));
+    CHECK(f1 == f0);
+
+    REQUIRE(!paths(copy).paths.empty());
+    linalg::SparseMatrix jc = copy.make_jacobian();
+    CHECK(jc.nonzeros() > j0.nonzeros());
+    copy.evaluate(x, fc, jc);
+    CHECK(fc != f0);
+
+    auto assigned = *System::create(d, s, models);
+    assigned = copy;
+    REQUIRE(assigned.set_bias(std::vector<double>(original.contact_count(), 0.0)).has_value());
+    linalg::SparseMatrix ja = assigned.make_jacobian();
+    CHECK(ja.nonzeros() == jc.nonzeros());
+    copy.residual(x, fa);
+    CHECK(fa == fc);  // the copy keeps its bias after the assigned system's set_bias
 }

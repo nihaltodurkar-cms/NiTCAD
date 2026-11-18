@@ -15,9 +15,11 @@
 #include <utility>
 #include <vector>
 
-#include "NiTCAD/assemble/drift_diffusion.hpp"
-#include "NiTCAD/assemble/equilibrium_poisson.hpp"
+#include "NiTCAD/assemble/currents.hpp"
+#include "NiTCAD/assemble/equilibrium.hpp"
 #include "NiTCAD/assemble/scaling.hpp"
+#include "NiTCAD/assemble/system.hpp"
+#include "NiTCAD/assemble/tunnelling.hpp"
 #include "NiTCAD/device/device.hpp"
 #include "NiTCAD/mesh/generate.hpp"
 #include "NiTCAD/mesh/tensor_cells.hpp"
@@ -26,8 +28,8 @@
 #include "NiTCAD/physics/semiconductor.hpp"
 
 using namespace NiTCAD;
-using assemble::DriftDiffusion;
-using assemble::EquilibriumPoisson;
+using assemble::System;
+using assemble::create_equilibrium;
 
 namespace {
 
@@ -151,12 +153,12 @@ struct Noise {
 
 // The probe state: the charge-neutral guess at the given biases, the contacts stamped, then psi +
 // 0.02 noise and n, p times (1 + 0.01 noise) off the contacts' Dirichlet nodes.
-std::vector<double> probe(DriftDiffusion& system, const device::Device& d,
+std::vector<double> probe(System& system, const device::Device& d,
                           const assemble::Scaling& s, const assemble::PhysicsModels& models,
                           const std::vector<double>& bias, std::uint64_t seed, bool noise = true) {
     REQUIRE(system.set_bias(bias).has_value());
-    const auto poisson = *EquilibriumPoisson::create(d, s, models);
-    auto x = system.state_from_potential(poisson.charge_neutral_potential());
+    const auto poisson = *create_equilibrium(d, s, models);
+    auto x = system.state_from_potential(charge_neutral_potential(poisson));
     system.stamp_contacts(x);
     if (!noise) return x;
     Noise r{seed};
@@ -183,7 +185,7 @@ std::vector<std::vector<double>> dense(const linalg::SparseMatrix& a) {
 
 // As schottky_test.cpp: every column, central differences at steps of 1e-5, 1e-6 and 1e-7
 // max(|x|, 1), the worst error over the column's largest entry.
-double fd_jacobian_error(const DriftDiffusion& dd, std::vector<double> x) {
+double fd_jacobian_error(const System& dd, std::vector<double> x) {
     const std::size_t n = dd.unknowns();
     std::vector<double> f(n), fp(n), fm(n);
     auto jacobian = dd.make_jacobian();
@@ -220,8 +222,8 @@ std::vector<double> tunnel_rows(const device::Device& on, const device::Device& 
                                 const std::vector<double>& bias, std::vector<double> x,
                                 const assemble::PhysicsModels& models) {
     const auto s = *assemble::make_scaling(on);
-    auto a = *DriftDiffusion::create(on, s, models);
-    auto b = *DriftDiffusion::create(off, s, models);
+    auto a = *System::create(on, s, models);
+    auto b = *System::create(off, s, models);
     REQUIRE(a.set_bias(bias).has_value());
     REQUIRE(b.set_bias(bias).has_value());
     std::vector<double> fa(a.unknowns()), fb(b.unknowns());
@@ -252,7 +254,7 @@ TEST_CASE("gate tunnelling assemble: GC7 the finite-difference Jacobian, lumped 
                 const auto s = *assemble::make_scaling(d);
                 assemble::PhysicsModels models;
                 models.fermi_dirac = fermi_dirac;
-                auto made = DriftDiffusion::create(d, s, models);
+                auto made = System::create(d, s, models);
                 if (!made) FAIL(made.error().message);
                 // Inversion: +2 V on an nMOS, -2 V on a pMOS (EVB needs the bands crossed).
                 const double vg = p_type ? 2.0 : -2.0;
@@ -277,7 +279,7 @@ TEST_CASE("gate tunnelling assemble: GC7 the finite-difference Jacobian, electro
                 const auto s = *assemble::make_scaling(d);
                 assemble::PhysicsModels models;
                 models.fermi_dirac = fermi_dirac;
-                auto made = DriftDiffusion::create(d, s, models);
+                auto made = System::create(d, s, models);
                 if (!made) FAIL(made.error().message);
                 const auto x = probe(*made, d, s, models, {0.0, 2.0}, 5);
                 const double error = fd_jacobian_error(*made, x);
@@ -297,7 +299,7 @@ TEST_CASE("gate tunnelling assemble: the rows carry current and none at equilibr
         const device::Device d_on = layers == 0 ? lumped(on) : stack(on);
         const device::Device d_off = layers == 0 ? lumped(off) : stack(off);
         const auto s = *assemble::make_scaling(d_on);
-        auto system = *DriftDiffusion::create(d_on, s, models);
+        auto system = *System::create(d_on, s, models);
         const std::vector<double> zero{0.0, 0.0};
         const auto eq = probe(system, d_on, s, models, zero, 0, false);
         const auto rows = tunnel_rows(d_on, d_off, zero, eq, models);
@@ -310,14 +312,14 @@ TEST_CASE("gate tunnelling assemble: the rows carry current and none at equilibr
         const auto biased = tunnel_rows(d_on, d_off, bias, x, models);
         REQUIRE(std::ranges::any_of(biased, [](double v) { return v != 0.0; }));
         const std::size_t gate = layers == 0 ? 0 : 1;
-        const auto I = system.terminal_currents(x);
+        const auto I = terminal_currents(system, x);
         double sum = 0.0;  // T_n - T_p = -(electron rows) - (hole rows)
         for (std::size_t i = 0; i < system.node_count(); ++i) {
             sum -= biased[3 * i + 1] + biased[3 * i + 2];
         }
-        auto off_system = *DriftDiffusion::create(d_off, s, models);
+        auto off_system = *System::create(d_off, s, models);
         REQUIRE(off_system.set_bias(bias).has_value());
-        const auto I_off = off_system.terminal_currents(x);
+        const auto I_off = terminal_currents(off_system, x);
         REQUIRE(std::abs((I[gate] - I_off[gate]) - sum) <= 1e-12 * std::abs(sum));
         REQUIRE(sum != 0.0);
     }
@@ -327,7 +329,7 @@ TEST_CASE("gate tunnelling assemble: the bias derivative and the small-signal ro
     const assemble::PhysicsModels models;
     const device::Device d = lumped({});
     const auto s = *assemble::make_scaling(d);
-    auto system = *DriftDiffusion::create(d, s, models);
+    auto system = *System::create(d, s, models);
     REQUIRE(system.bias_nonlinear());
     const auto x = probe(system, d, s, models, {1.5, 0.0}, 3);
     // dF/dV_G against central differences of the residual in the gate's bias.
@@ -350,7 +352,7 @@ TEST_CASE("gate tunnelling assemble: the bias derivative and the small-signal ro
         if (dF[r] != 0.0) REQUIRE(std::ranges::find(rows, r) != rows.end());
     }
     // The gate's small-signal row at s = 0 against differences of its terminal current.
-    const auto row = system.small_signal_currents(x, {0.0, 0.0})[0];
+    const auto row = small_signal_currents(system, x, {0.0, 0.0})[0];
     double largest = 0.0;  // the row's largest change per unit relative change of its column
     for (std::size_t k = 0; k < row.columns.size(); ++k) {
         const std::size_t c = row.columns[k];
@@ -362,9 +364,9 @@ TEST_CASE("gate tunnelling assemble: the bias derivative and the small-signal ro
         const std::size_t c = row.columns[k];
         const double step = 1e-6 * (c % 3 == 0 ? 1.0 : std::abs(x[c]));  // densities: relative
         y[c] = x[c] + step;
-        const double up = system.terminal_currents(y)[0];
+        const double up = terminal_currents(system, y)[0];
         y[c] = x[c] - step;
-        const double down = system.terminal_currents(y)[0];
+        const double down = terminal_currents(system, y)[0];
         const double fd = (up - down) / (2 * step);
         CAPTURE(c, fd, row.values[k].real());
         const double unit = c % 3 == 0 ? 1.0 : std::abs(x[c]);
@@ -372,9 +374,9 @@ TEST_CASE("gate tunnelling assemble: the bias derivative and the small-signal ro
                 1e-5 * std::max(std::abs(fd) * unit, 1e-6 * largest));
     }
     REQUIRE(system.set_bias(std::vector<double>{1.5 + h, 0.0}).has_value());
-    const double up = system.terminal_currents(x)[0];
+    const double up = terminal_currents(system, x)[0];
     REQUIRE(system.set_bias(std::vector<double>{1.5 - h, 0.0}).has_value());
-    const double down = system.terminal_currents(x)[0];
+    const double down = terminal_currents(system, x)[0];
     REQUIRE(std::abs((up - down) / (2 * h) - row.bias.real()) <= 1e-5 * std::abs(row.bias.real()));
 }
 
@@ -387,7 +389,7 @@ TEST_CASE("gate tunnelling assemble: GC6 EVB needs the bands crossed") {
     off.processes = 0;
     const device::Device d_on = lumped(on), d_off = lumped(off);
     const auto s = *assemble::make_scaling(d_on);
-    auto system = *DriftDiffusion::create(d_on, s, models);
+    auto system = *System::create(d_on, s, models);
     const auto at = [&](double vg) {
         const std::vector<double> bias{vg, 0.0};
         const auto x = probe(system, d_on, s, models, bias, 0, false);
@@ -405,7 +407,7 @@ TEST_CASE("gate tunnelling assemble: GC6 EVB needs the bands crossed") {
         const auto x = probe(system, d_on, s, models, bias, 0, false);
         const std::vector<double> rows = tunnel_rows(d_on, d_off, bias, x, models);
         REQUIRE(system.set_bias(bias).has_value());
-        const double evb = system.gate_tunnelling_currents(x).evb[0];
+        const double evb = gate_tunnelling_currents(system, x).evb[0];
         CAPTURE(vg, rows[1], rows[2], evb);
         REQUIRE(rows[vg > 0.0 ? 2 : 1] != 0.0);
         REQUIRE(std::abs(-(rows[1] + rows[2]) - evb) <= 1e-12 * std::abs(evb));
@@ -460,17 +462,17 @@ TEST_CASE("gate tunnelling assemble: GC13 refusals") {
         ok.eps_ox = 25.0;
         ok.gate_band = true;
         const device::Device d = lumped(ok);
-        REQUIRE(DriftDiffusion::create(d, *assemble::make_scaling(d), {}).has_value());
+        REQUIRE(System::create(d, *assemble::make_scaling(d), {}).has_value());
     }
     const device::Device d = lumped({});
     const auto s = *assemble::make_scaling(d);
     assemble::PhysicsModels thermal;
     thermal.electrothermal = true;
-    require_invalid(DriftDiffusion::create(d, s, thermal), "electrothermal");
+    require_invalid(System::create(d, s, thermal), "electrothermal");
     {  // quantum confinement (owner ruling 2026-10-29: not validated together)
         assemble::PhysicsModels mlda;
         mlda.quantum_confinement = assemble::QuantumConfinement::mlda;
-        const auto made = DriftDiffusion::create(d, s, mlda);
+        const auto made = System::create(d, s, mlda);
         require_invalid(made, "quantum confinement");
         REQUIRE(made.error().message.find("gate tunnelling with quantum confinement") !=
                 std::string::npos);
@@ -478,12 +480,12 @@ TEST_CASE("gate tunnelling assemble: GC13 refusals") {
     Mos no_cells;
     no_cells.cells = false;
     const device::Device dc = stack(no_cells);
-    require_invalid(DriftDiffusion::create(dc, *assemble::make_scaling(dc), {}),
+    require_invalid(System::create(dc, *assemble::make_scaling(dc), {}),
                     "electrode without tensor cells");
     Mos no_band;
     no_band.layers = 2;
     no_band.high_k_band = false;
     const device::Device db = stack(no_band);
-    require_invalid(DriftDiffusion::create(db, *assemble::make_scaling(db), {}),
+    require_invalid(System::create(db, *assemble::make_scaling(db), {}),
                     "insulator without band data");
 }

@@ -20,9 +20,10 @@
 #include <utility>
 #include <vector>
 
-#include "NiTCAD/assemble/drift_diffusion.hpp"
 #include "NiTCAD/assemble/gate.hpp"
 #include "NiTCAD/assemble/scaling.hpp"
+#include "NiTCAD/assemble/system.hpp"
+#include "NiTCAD/assemble/tunnelling.hpp"
 #include "NiTCAD/base/constants.hpp"
 #include "NiTCAD/deck/build.hpp"
 #include "NiTCAD/deck/run.hpp"
@@ -294,6 +295,21 @@ contact gate = 0
 }
 
 // Quadratic, as SC11: in the asymptotic window each correction at most the square of the last.
+// Unit 57 (DECISIONS.md GE1 iv, GG4): the assembly benchmark's gate-tunnelling device, GC8's 1D
+// MOS capacitor and its 2D extrusion at its solved +1.5 V state.
+TEST_CASE("Gate tunnelling: assembly cost on the MOS capacitor", "[.assembly_benchmark]") {
+    for (const int dimension : {1, 2}) {
+        const deck::Plan p = must(deck_of({.dimension = dimension}));
+        const results::Sweep s = sweep(p, steps(0.0, 1.5, 0.1));
+        const auto scaling = *assemble::make_scaling(p.device);
+        auto system = *assemble::System::create(p.device, scaling, p.options.models);
+        REQUIRE(system.set_bias(s.points.back().bias_V).has_value());
+        time_assembly(dimension == 1 ? "gate tunnelling 1D MOS capacitor"
+                                     : "gate tunnelling 2D MOS capacitor",
+                      system, scaled_state(system, s.points.back().fields, scaling));
+    }
+}
+
 TEST_CASE("Gate tunnelling: Newton converges quadratically at +1.5 V (GC7)", "[gate_tunnelling]") {
     deck::Plan p = must(deck_of({}));
     p.options.newton.tol_update = 1e-12;
@@ -449,10 +465,10 @@ TEST_CASE("Gate tunnelling: a 3D corner node takes one path per face (GC11)", "[
     // Per contact, the tunnelling current at the potential psi_V [A in 3D, A/cm in 2D].
     const auto currents = [](const deck::Plan& p, std::vector<double> psi) {
         const auto scaling = *assemble::make_scaling(p.device);
-        auto system = *assemble::DriftDiffusion::create(p.device, scaling, p.options.models);
+        auto system = *assemble::System::create(p.device, scaling, p.options.models);
         REQUIRE(system.set_bias(std::vector<double>{1.5, 1.5, 0.0}).has_value());
         for (double& v : psi) v /= scaling.V_T;
-        const auto t = system.gate_tunnelling_currents(system.state_from_potential(psi));
+        const auto t = gate_tunnelling_currents(system, system.state_from_potential(psi));
         const double unit = scaling.J0 * std::pow(scaling.L_D, p.device.mesh().dimension() - 1);
         std::vector<double> I;
         for (std::size_t k = 0; k < t.ecb.size(); ++k) I.push_back((t.ecb[k] + t.hvb[k] + t.evb[k]) * unit);
@@ -527,7 +543,7 @@ box = 1.5nm 3nm  1nm 1nm
 contact gate = 0
 )");
     const auto scaling = *assemble::make_scaling(p.device);
-    auto system = *assemble::DriftDiffusion::create(p.device, scaling, p.options.models);
+    auto system = *assemble::System::create(p.device, scaling, p.options.models);
     REQUIRE(system.set_bias(std::vector<double>{1.0, 0.0, 0.0}).has_value());
     const auto points = p.device.mesh().points();
     const auto current = [&](double shift_a, double shift_b) {
@@ -536,7 +552,7 @@ contact gate = 0
             if (p.device.is_insulator(static_cast<mesh::NodeId>(i))) continue;
             psi[i] = points[i][0] < 4e-7 ? shift_a : shift_b;
         }
-        const auto t = system.gate_tunnelling_currents(system.state_from_potential(psi));
+        const auto t = gate_tunnelling_currents(system, system.state_from_potential(psi));
         return t.ecb[gate] + t.hvb[gate] + t.evb[gate];
     };
     const double base = current(0.0, 0.0);
@@ -592,11 +608,11 @@ contact gate = 0
     REQUIRE(eq.has_value());
     const auto currents = [&](const deck::Plan& p) {
         const auto scaling = *assemble::make_scaling(p.device);
-        auto system = *assemble::DriftDiffusion::create(p.device, scaling, p.options.models);
+        auto system = *assemble::System::create(p.device, scaling, p.options.models);
         REQUIRE(system.set_bias(std::vector<double>{3.0, 0.0}).has_value());
         std::vector<double> psi(eq->fields.potential_V);
         for (double& v : psi) v /= scaling.V_T;
-        const auto t = system.gate_tunnelling_currents(system.state_from_potential(psi));
+        const auto t = gate_tunnelling_currents(system, system.state_from_potential(psi));
         return std::array<double, 3>{t.ecb[gate], t.hvb[gate], t.evb[gate]};
     };
     const std::array<double, 3> b = currents(base);
@@ -858,7 +874,7 @@ TEST_CASE("Gate tunnelling: FinFET assembly cost (GC14)", "[.gate_tunnelling_fin
         const auto eq = solve::solve_equilibrium(p.device);
         REQUIRE(eq.has_value());
         const auto scaling = *assemble::make_scaling(p.device);
-        auto system = *assemble::DriftDiffusion::create(p.device, scaling, p.options.models);
+        auto system = *assemble::System::create(p.device, scaling, p.options.models);
         REQUIRE(system.set_bias(p.points.back()).has_value());
         std::vector<double> psi(eq->fields.potential_V);
         for (double& v : psi) v /= scaling.V_T;

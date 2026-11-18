@@ -9,7 +9,7 @@
 // 3. the charge-neutral equilibrium of an ohmic contact or a neutral bulk node
 //    (boltzmann_neutral_equilibrium; fermi_dirac_neutral_equilibrium, a root solve).
 // Fermi-Dirac adds a fourth, the degeneracy factor of a density (fermi_dirac_degeneracy), which
-// the transport fluxes need (the assembler's business, assemble/drift_diffusion.hpp).
+// the transport fluxes need (the assembler's business, assemble/system.hpp).
 //
 // Reduced potentials are in units of V_T: eta_n = (psi - phi_n) / V_T for electrons and
 // eta_p = (phi_p - psi) / V_T for holes, with psi the electrostatic potential and phi_n, phi_p the

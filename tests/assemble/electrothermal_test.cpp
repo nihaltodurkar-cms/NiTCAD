@@ -17,8 +17,11 @@
 #include <utility>
 #include <vector>
 
-#include "NiTCAD/assemble/drift_diffusion.hpp"
+#include "NiTCAD/assemble/band_edges.hpp"
+#include "NiTCAD/assemble/currents.hpp"
 #include "NiTCAD/assemble/scaling.hpp"
+#include "NiTCAD/assemble/system.hpp"
+#include "NiTCAD/assemble/thermal.hpp"
 #include "NiTCAD/device/device.hpp"
 #include "NiTCAD/mesh/tensor_grid.hpp"
 #include "NiTCAD/physics/insulator.hpp"
@@ -26,7 +29,7 @@
 #include "NiTCAD/physics/semiconductor.hpp"
 
 using namespace NiTCAD;
-using assemble::DriftDiffusion;
+using assemble::System;
 
 namespace {
 
@@ -179,7 +182,7 @@ struct Noise {
 // A biased, heated state: psi falling `drop` (20) V_T across the device, n (1e16) and p 1e15
 // cm^-3, theta rising from 1 to 1.3 along x, every unknown with relative noise. Insulator
 // densities 0; the contact nodes are not stamped (their rows are Dirichlet rows).
-std::vector<double> heated(const DriftDiffusion& dd, const device::Device& d,
+std::vector<double> heated(const System& dd, const device::Device& d,
                            const assemble::Scaling& s, double noise, std::uint64_t seed,
                            double theta_rise = 0.3, double n_cm3 = 1e16, double drop = 20.0) {
     const std::size_t m = dd.stride();
@@ -214,8 +217,8 @@ std::vector<std::vector<double>> dense(const linalg::SparseMatrix& a) {
 // the worst error over the column's largest entry, each column's error the smallest at steps of
 // 1e-5, 1e-6 and 1e-7 max(|x|, 1).
 // With a time step, of the step's rows.
-double fd_jacobian_error(const DriftDiffusion& dd, std::vector<double> x,
-                         const DriftDiffusion::TimeStep* step = nullptr) {
+double fd_jacobian_error(const System& dd, std::vector<double> x,
+                         const System::TimeStep* step = nullptr) {
     const std::size_t n = dd.unknowns();
     std::vector<double> f(n), fp(n), fm(n);
     auto jacobian = dd.make_jacobian();
@@ -265,7 +268,7 @@ TEST_CASE("electrothermal assemble: the Newton update of the temperature") {
     // 2 theta]; update_size measures |d tau|.
     const device::Device d = diode({});
     const auto s = *assemble::make_scaling(d);
-    const auto dd = *DriftDiffusion::create(d, s, {.electrothermal = true});
+    const auto dd = *System::create(d, s, {.electrothermal = true});
     std::vector<double> x = heated(dd, d, s, 0.0, 1, 0.0);  // tau = 0
     std::vector<double> dx(dd.unknowns(), 0.0);
     dx[4 * 3 + 3] = 1.0;    // +300 K: clipped to +50 K
@@ -287,22 +290,21 @@ TEST_CASE("electrothermal assemble: the Newton update of the temperature") {
 TEST_CASE("electrothermal assemble: the stride and the pattern") {
     const device::Device d = diode({});
     const auto s = *assemble::make_scaling(d);
-    const auto off = *DriftDiffusion::create(d, s);
-    const auto on = *DriftDiffusion::create(d, s, {.electrothermal = true});
+    const auto off = *System::create(d, s);
+    const auto on = *System::create(d, s, {.electrothermal = true});
     REQUIRE(off.stride() == 3);
-    REQUIRE_FALSE(off.electrothermal());
+    REQUIRE_FALSE(electrothermal(off));
     REQUIRE(on.stride() == 4);
-    REQUIRE(on.electrothermal());
+    REQUIRE(electrothermal(on));
     REQUIRE(on.unknowns() == 4 * d.mesh().node_count());
-    REQUIRE(on.heat_sinks_complete());
-    REQUIRE_FALSE(off.heat_sinks_complete());
+    REQUIRE(heat_sinks_complete(on));
+    REQUIRE_FALSE(heat_sinks_complete(off));
     // Full 4 x 4 blocks: 16 per node and 32 per edge.
     const auto j = on.make_jacobian();
     REQUIRE(j.nonzeros() == 16 * d.mesh().node_count() + 32 * d.mesh().edges().size());
     // Without thermal contacts the model has no sink.
     const device::Device bare = diode({.sinks = false});
-    REQUIRE_FALSE(
-        DriftDiffusion::create(bare, s, {.electrothermal = true})->heat_sinks_complete());
+    REQUIRE_FALSE(heat_sinks_complete(*System::create(bare, s, {.electrothermal = true})));
 }
 
 TEST_CASE("electrothermal assemble: the finite-difference Jacobian gate") {
@@ -335,7 +337,7 @@ TEST_CASE("electrothermal assemble: the finite-difference Jacobian gate") {
     for (const Case& c : cases) {
         const device::Device d = diode(c.o);
         const auto s = *assemble::make_scaling(d);
-        auto made = DriftDiffusion::create(d, s, models(c.o));
+        auto made = System::create(d, s, models(c.o));
         if (!made) FAIL(c.name << ": " << made.error().message);
         auto& dd = *made;
         REQUIRE(dd.set_bias(biases(c.o)).has_value());
@@ -358,7 +360,7 @@ TEST_CASE("electrothermal assemble: the finite-difference Jacobian gate of a tim
           Options{.D = 2, .nodes = 9, .oxide = true, .fermi = true, .interface = true}}) {
         const device::Device d = diode(o);
         const auto s = *assemble::make_scaling(d);
-        auto dd = *DriftDiffusion::create(d, s, models(o));
+        auto dd = *System::create(d, s, models(o));
         REQUIRE(dd.set_bias(biases(o)).has_value());
         const double n_cm3 = o.fermi ? 1e20 : 1e16;
         const auto before = heated(dd, d, s, 0.05, 5, 0.25, n_cm3);
@@ -366,7 +368,7 @@ TEST_CASE("electrothermal assemble: the finite-difference Jacobian gate of a tim
         const std::vector<double> storage = dd.storage(before);
         REQUIRE(storage.size() == 3 * dd.node_count());
         REQUIRE(dd.storage_width() == 3);
-        const DriftDiffusion::TimeStep step{0.7, storage, {}};
+        const System::TimeStep step{0.7, storage, {}};
         const double error = fd_jacobian_error(dd, x, &step);
         CAPTURE(o.D, o.fermi, error);
         REQUIRE(error <= 1e-6);
@@ -386,8 +388,8 @@ TEST_CASE("electrothermal assemble: at theta = 1 the isothermal rows and current
           Options{.D = 2, .nodes = 9, .oxide = true, .fermi = true, .interface = true}}) {
         const device::Device d = diode(o);
         const auto s = *assemble::make_scaling(d);
-        auto iso = *DriftDiffusion::create(d, s, models(o, false));
-        auto on = *DriftDiffusion::create(d, s, models(o));
+        auto iso = *System::create(d, s, models(o, false));
+        auto on = *System::create(d, s, models(o));
         const std::vector<double> bias = biases(o);
         REQUIRE(iso.set_bias(bias).has_value());
         REQUIRE(on.set_bias(bias).has_value());
@@ -401,7 +403,7 @@ TEST_CASE("electrothermal assemble: at theta = 1 the isothermal rows and current
         iso.residual(x3, f3);
         on.residual(x4, f4);
         // Each row against the scale of its terms (the largest edge flux in it, or its density).
-        const auto c3 = iso.edge_currents(x3), c4 = on.edge_currents(x4);
+        const auto c3 = edge_currents(iso, x3), c4 = edge_currents(on, x4);
         double flux_scale = 0.0;
         for (const auto& [jn, jp] : c3) {
             flux_scale = std::max({flux_scale, std::abs(jn), std::abs(jp)});
@@ -433,7 +435,7 @@ TEST_CASE("electrothermal assemble: no current at equilibrium at a uniform tempe
         const device::Device d = diode({.D = 1, .hetero = hetero, .fermi = fermi});
         const auto s = *assemble::make_scaling(d);
         const auto dd =
-            *DriftDiffusion::create(d, s, {.fermi_dirac = fermi, .electrothermal = true});
+            *System::create(d, s, {.fermi_dirac = fermi, .electrothermal = true});
         for (const double step : {0.0, 0.2}) {
             std::vector<double> x(dd.unknowns());
             for (std::size_t i = 0; i < dd.node_count(); ++i) {
@@ -449,7 +451,7 @@ TEST_CASE("electrothermal assemble: no current at equilibrium at a uniform tempe
                     x[4 * i + 1] = std::exp(0.5 * (lo[2 * i] + hi[2 * i]));
                     x[4 * i + 2] = std::exp(0.5 * (lo[2 * i + 1] + hi[2 * i + 1]));
                 }
-                const auto bands = dd.band_edges(x);
+                const auto bands = band_edges(dd, x);
                 for (std::size_t i = 0; i < dd.node_count(); ++i) {
                     const double mn = 0.5 * (lo[2 * i] + hi[2 * i]);
                     const double mp = 0.5 * (lo[2 * i + 1] + hi[2 * i + 1]);
@@ -457,7 +459,7 @@ TEST_CASE("electrothermal assemble: no current at equilibrium at a uniform tempe
                     (bands.hole_fermi[i] < 0.0 ? hi[2 * i + 1] : lo[2 * i + 1]) = mp;
                 }
             }
-            const auto again = dd.band_edges(x);
+            const auto again = band_edges(dd, x);
             double largest = 0.0;
             for (std::size_t i = 0; i < dd.node_count(); ++i) {
                 REQUIRE(std::abs(again.electron_fermi[i]) <= 1e-12);
@@ -465,7 +467,7 @@ TEST_CASE("electrothermal assemble: no current at equilibrium at a uniform tempe
                 largest = std::max(largest, x[4 * i + 1] * s.Ns);
             }
             if (fermi) REQUIRE(largest > 1e20);  // degenerate somewhere
-            const auto c = dd.edge_currents(x);
+            const auto c = edge_currents(dd, x);
             double worst = 0.0;
             for (std::size_t k = 0; k < c.size(); ++k) {
                 const auto& e = d.mesh().edges()[k];
@@ -498,7 +500,7 @@ TEST_CASE("electrothermal assemble: impact ionization with gamma(T)") {
             const auto s = *assemble::make_scaling(d);
             const assemble::PhysicsModels on_models{
                 .fermi_dirac = fermi, .impact_ionization = true, .electrothermal = true};
-            auto dd = *DriftDiffusion::create(d, s, on_models);
+            auto dd = *System::create(d, s, on_models);
             REQUIRE(dd.set_bias(biases(o)).has_value());
             const auto x = heated(dd, d, s, 0.05, 7, 0.3, 1e16, 1160.0);
             const double error = fd_jacobian_error(dd, x);
@@ -507,7 +509,7 @@ TEST_CASE("electrothermal assemble: impact ionization with gamma(T)") {
             // The generation is there: the rows differ from the model without it.
             auto off_models = on_models;
             off_models.impact_ionization = false;
-            auto plain = *DriftDiffusion::create(d, s, off_models);
+            auto plain = *System::create(d, s, off_models);
             REQUIRE(plain.set_bias(biases(o)).has_value());
             std::vector<double> f_on(dd.unknowns()), f_off(dd.unknowns());
             dd.residual(x, f_on);
@@ -518,7 +520,7 @@ TEST_CASE("electrothermal assemble: impact ionization with gamma(T)") {
             }
             REQUIRE(generation > 0.0);
             // theta = 1: the isothermal system's rows.
-            auto iso = *DriftDiffusion::create(
+            auto iso = *System::create(
                 d, s, {.fermi_dirac = fermi, .impact_ionization = true});
             REQUIRE(iso.set_bias(biases(o)).has_value());
             std::vector<double> x3(iso.unknowns()), x4 = x;
@@ -530,7 +532,7 @@ TEST_CASE("electrothermal assemble: impact ionization with gamma(T)") {
             iso.residual(x3, f3);
             dd.residual(x4, f4);
             double scale = 0.0, worst = 0.0;
-            for (const auto& [jn, jp] : iso.edge_currents(x3)) {
+            for (const auto& [jn, jp] : edge_currents(iso, x3)) {
                 scale = std::max({scale, std::abs(jn), std::abs(jp)});
             }
             for (std::size_t i = 0; i < iso.node_count(); ++i) {
@@ -558,7 +560,7 @@ TEST_CASE("electrothermal assemble: the energy identity of the heat rows (U1)") 
         o.sinks = false;
         const device::Device d = diode(o);
         const auto s = *assemble::make_scaling(d);
-        auto dd = *DriftDiffusion::create(d, s, models(o));
+        auto dd = *System::create(d, s, models(o));
         REQUIRE(dd.set_bias(biases(o)).has_value());
         for (const double rise : {0.3, 1e-7}) {
             const auto x = heated(dd, d, s, 0.05, 13, rise, o.fermi ? 1e20 : 1e16);
@@ -566,10 +568,10 @@ TEST_CASE("electrothermal assemble: the energy identity of the heat rows (U1)") 
             dd.residual(x, f);
             double sum = 0.0, scale = 0.0;
             for (std::size_t i = 0; i < dd.node_count(); ++i) {
-                sum += dd.heat_scale() * f[4 * i + 3];
-                scale += dd.heat_scale() * std::abs(f[4 * i + 3]);
+                sum += heat_scale(dd) * f[4 * i + 3];
+                scale += heat_scale(dd) * std::abs(f[4 * i + 3]);
             }
-            const double power = dd.electrical_power(x);
+            const double power = electrical_power(dd, x);
             CAPTURE(o.D, o.hetero, o.gate, rise, sum, power, scale);
             REQUIRE(std::abs(sum + power) <= 1e-12 * (scale + std::abs(power)));
         }
@@ -584,7 +586,7 @@ TEST_CASE("electrothermal assemble: derivatives at a small rise and a steep T st
         const Options o{.D = 1, .hetero = true, .fermi = fermi};
         const device::Device d = diode(o);
         const auto s = *assemble::make_scaling(d);
-        auto dd = *DriftDiffusion::create(d, s, models(o));
+        auto dd = *System::create(d, s, models(o));
         REQUIRE(dd.set_bias(biases(o)).has_value());
         auto x = heated(dd, d, s, 0.05, 17, 0.3, fermi ? 1e20 : 1e16);
         for (std::size_t i = 0; i < dd.node_count(); ++i) x[4 * i + 3] = 1e-7 * (1.0 + i % 3);
@@ -609,7 +611,7 @@ TEST_CASE("electrothermal assemble: the bias column of the bordered system (U7)"
                             Options{.D = 1, .hetero = true, .fermi = true}}) {
         const device::Device d = diode(o);
         const auto s = *assemble::make_scaling(d);
-        auto dd = *DriftDiffusion::create(d, s, models(o));
+        auto dd = *System::create(d, s, models(o));
         const std::vector<double> bias = biases(o);
         REQUIRE(dd.set_bias(bias).has_value());
         const auto x = heated(dd, d, s, 0.05, 19, 0.3, o.fermi ? 1e20 : 1e16);
@@ -650,10 +652,10 @@ TEST_CASE("electrothermal assemble: the Joule part of each edge's heat is not ne
     for (const Options o : {Options{.D = 1, .hetero = true}, Options{.D = 2, .nodes = 9}}) {
         const device::Device d = diode(o);
         const auto s = *assemble::make_scaling(d);
-        auto dd = *DriftDiffusion::create(d, s, {.electrothermal = true});
+        auto dd = *System::create(d, s, {.electrothermal = true});
         for (std::uint64_t seed = 1; seed <= 5; ++seed) {
             const auto x = heated(dd, d, s, 0.3, seed);
-            for (const auto& [n, p] : dd.edge_joule_heat(x)) {
+            for (const auto& [n, p] : edge_joule_heat(dd, x)) {
                 REQUIRE(n >= 0.0);
                 REQUIRE(p >= 0.0);
             }
@@ -667,7 +669,7 @@ TEST_CASE("electrothermal assemble: refused inputs") {
     const auto refused = [&](const device::Device& dev, assemble::PhysicsModels models,
                              const std::string& text) {
         models.electrothermal = true;
-        const auto dd = DriftDiffusion::create(dev, *assemble::make_scaling(dev), models);
+        const auto dd = System::create(dev, *assemble::make_scaling(dev), models);
         REQUIRE_FALSE(dd.has_value());
         REQUIRE(dd.error().code == base::ErrorCode::invalid_input);
         CAPTURE(dd.error().message);
@@ -680,8 +682,8 @@ TEST_CASE("electrothermal assemble: refused inputs") {
     const device::Device emission = diode({.D = 1, .hetero = true, .thermionic = true});
     refused(emission, {}, "thermionic emission (DECISIONS.md U3");
     refused(d, {.incomplete_ionization = true}, "incomplete ionization (DECISIONS.md U6");
-    REQUIRE(DriftDiffusion::create(emission, *assemble::make_scaling(emission)).has_value());
-    REQUIRE(DriftDiffusion::create(d, s, {.incomplete_ionization = true}).has_value());
+    REQUIRE(System::create(emission, *assemble::make_scaling(emission)).has_value());
+    REQUIRE(System::create(d, s, {.incomplete_ionization = true}).has_value());
     refused(diode({.D = 2, .nodes = 9, .oxide = true, .interface = true, .traps = true}), {},
             "interface traps (DECISIONS.md T8)");
     // T11: a material without thermal data.
@@ -703,5 +705,29 @@ TEST_CASE("electrothermal assemble: refused inputs") {
     // T3: Fermi-Dirac only with thermopower exponents of -1/2 (other_material's are not).
     refused(diode({.D = 1, .hetero = true}), {.fermi_dirac = true}, "exponents of -1/2");
     // Off, the same device and models are accepted.
-    REQUIRE(DriftDiffusion::create(d, s, {.btbt_local = true}).has_value());
+    REQUIRE(System::create(d, s, {.btbt_local = true}).has_value());
+}
+
+TEST_CASE("electrothermal assemble: a thermal bias moves the sinks of its own copy (Unit 57 GE2)") {
+    // set_thermal_bias changes the system's state: the isothermal sink's stamped temperature and
+    // the resistance contact's ambient in its heat move; a copy taken before keeps the old ones.
+    const device::Device d = diode({});
+    const auto s = *assemble::make_scaling(d);
+    const auto dd = *System::create(d, s, {.electrothermal = true});
+    const std::vector<double> x = heated(dd, d, s, 0.0, 1, 0.0);
+    std::vector<double> x0 = x, x1 = x, x2 = x;
+    dd.stamp_contacts(x0);
+    const std::vector<double> h0 = thermal_contact_heat(dd, x0);
+
+    System warm = dd;
+    REQUIRE(set_thermal_bias(warm, std::vector<double>{330.0, 320.0}).has_value());
+    warm.stamp_contacts(x1);
+    const std::vector<double> h1 = thermal_contact_heat(warm, x0);
+    REQUIRE(x1[3] == (330.0 - 300.0) / 300.0);  // node 0 is on the x_min sink
+    REQUIRE(x0[3] == (310.0 - 300.0) / 300.0);
+    REQUIRE(h1[1] != h0[1]);
+
+    dd.stamp_contacts(x2);
+    REQUIRE(x2 == x0);
+    REQUIRE(thermal_contact_heat(dd, x0) == h0);
 }

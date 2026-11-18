@@ -15,9 +15,9 @@
 #include <vector>
 
 #include "NiTCAD/assemble/contact_bias.hpp"
-#include "NiTCAD/assemble/drift_diffusion.hpp"
-#include "NiTCAD/assemble/equilibrium_poisson.hpp"
+#include "NiTCAD/assemble/equilibrium.hpp"
 #include "NiTCAD/assemble/scaling.hpp"
+#include "NiTCAD/assemble/system.hpp"
 #include "NiTCAD/device/device.hpp"
 #include "NiTCAD/mesh/generate.hpp"
 #include "NiTCAD/mesh/tensor_grid.hpp"
@@ -25,8 +25,8 @@
 #include "NiTCAD/physics/semiconductor.hpp"
 
 using namespace NiTCAD;
-using assemble::DriftDiffusion;
-using assemble::EquilibriumPoisson;
+using assemble::System;
+using assemble::create_equilibrium;
 
 namespace {
 
@@ -106,13 +106,13 @@ struct Noise {
 // The probe state (as heterojunction_test.cpp): the charge-neutral guess with the anode at +0.3 V,
 // psi + 0.02 noise, n and p times (1 + 0.01 noise), so n and p differ from n_B and p_B on the
 // Schottky nodes.
-std::vector<double> probe_state(DriftDiffusion& system, const device::Device& d,
+std::vector<double> probe_state(System& system, const device::Device& d,
                                 const assemble::Scaling& s, const assemble::PhysicsModels& models,
                                 std::uint64_t seed) {
     const std::vector<double> bias{0.3, 0.0};
     REQUIRE(system.set_bias(bias).has_value());
-    const auto poisson = *EquilibriumPoisson::create(d, s, models);
-    auto x = system.state_from_potential(poisson.charge_neutral_potential());
+    const auto poisson = *create_equilibrium(d, s, models);
+    auto x = system.state_from_potential(charge_neutral_potential(poisson));
     Noise noise{seed};
     for (std::size_t i = 0; i < system.node_count(); ++i) {
         x[3 * i] += 0.02 * noise.next();
@@ -137,7 +137,7 @@ std::vector<std::vector<double>> dense(const linalg::SparseMatrix& a) {
 // The finite-difference gate (as surface_mobility_test.cpp): every column, central differences,
 // the worst error over the column's largest entry, each column's the smallest at steps of 1e-5,
 // 1e-6 and 1e-7 max(|x|, 1).
-double fd_jacobian_error(const DriftDiffusion& dd, std::vector<double> x) {
+double fd_jacobian_error(const System& dd, std::vector<double> x) {
     const std::size_t n = dd.unknowns();
     std::vector<double> f(n), fp(n), fm(n);
     auto jacobian = dd.make_jacobian();
@@ -189,7 +189,7 @@ TEST_CASE("Schottky assemble: the finite-difference Jacobian gate (SC11)") {
                     models.fermi_dirac = fermi_dirac;
                     models.field_mobility = canali;
                     models.bgn = bgn;
-                    auto made = DriftDiffusion::create(d, s, models);
+                    auto made = System::create(d, s, models);
                     if (!made) FAIL(made.error().message);
                     const auto x = probe_state(*made, d, s, models, 7);
                     const double error = fd_jacobian_error(*made, x);
@@ -209,8 +209,8 @@ TEST_CASE("Schottky assemble: the rows a Schottky contact writes (SD3, SD4)") {
     const device::Device dz = diode(tensor(1, 11), {.schottky = false});
     const auto s = *assemble::make_scaling(dz);
     const assemble::PhysicsModels models;
-    auto sch = *DriftDiffusion::create(ds, s, models);
-    auto ohm = *DriftDiffusion::create(dz, s, models);
+    auto sch = *System::create(ds, s, models);
+    auto ohm = *System::create(dz, s, models);
     const auto x = probe_state(ohm, dz, s, models, 3);
     REQUIRE(sch.set_bias(std::vector<double>{0.3, 0.0}).has_value());
     std::vector<double> fs(sch.unknowns()), fz(ohm.unknowns());
@@ -237,8 +237,8 @@ TEST_CASE("Schottky assemble: the pattern of an ohmic contact made Schottky (SC1
         const device::Device ds = diode(tensor(D, D == 3 ? 4 : 6));
         const device::Device dz = diode(tensor(D, D == 3 ? 4 : 6), {.schottky = false});
         const auto s = *assemble::make_scaling(dz);
-        const auto sch = *DriftDiffusion::create(ds, s, assemble::PhysicsModels{});
-        const auto ohm = *DriftDiffusion::create(dz, s, assemble::PhysicsModels{});
+        const auto sch = *System::create(ds, s, assemble::PhysicsModels{});
+        const auto ohm = *System::create(dz, s, assemble::PhysicsModels{});
         CAPTURE(D);
         REQUIRE(sch.make_jacobian().has_same_pattern(ohm.make_jacobian()));
     }
@@ -261,7 +261,7 @@ TEST_CASE("Schottky assemble: a device whose only carrier contact is Schottky (S
          .contacts = {std::move(anode)}});
     if (!made) FAIL(made.error().message);
     const auto s = *assemble::make_scaling(*made);
-    REQUIRE(DriftDiffusion::create(*made, s, {}).has_value());
+    REQUIRE(System::create(*made, s, {}).has_value());
 }
 
 TEST_CASE("Schottky assemble: refusals of the device and the assembler (SC14)") {
@@ -323,23 +323,23 @@ TEST_CASE("Schottky assemble: refusals of the device and the assembler (SC14)") 
         Diode o;
         o.barrier.barrier_eV = 1.2;  // Eg(300 K) = 1.12 eV
         const device::Device d = diode(tensor(1, 11), o);
-        require_invalid(DriftDiffusion::create(d, *assemble::make_scaling(d), {}), "Phi > Eg");
+        require_invalid(System::create(d, *assemble::make_scaling(d), {}), "Phi > Eg");
         o.barrier.by_work_function = true;
         o.barrier.work_function_eV = 3.9;  // chi = 4.05 eV: Phi_Bn = -0.15 eV
         const device::Device w = diode(tensor(1, 11), o);
-        require_invalid(DriftDiffusion::create(w, *assemble::make_scaling(w), {}), "Phi < 0");
+        require_invalid(System::create(w, *assemble::make_scaling(w), {}), "Phi < 0");
         o.barrier.work_function_eV = 4.75;
         const device::Device ok = diode(tensor(1, 11), o);
-        REQUIRE(DriftDiffusion::create(ok, *assemble::make_scaling(ok), {}).has_value());
+        REQUIRE(System::create(ok, *assemble::make_scaling(ok), {}).has_value());
     }
     {
         const device::Device d = diode(tensor(1, 11), {.sinks = true});
         assemble::PhysicsModels models;
         models.electrothermal = true;
-        require_invalid(DriftDiffusion::create(d, *assemble::make_scaling(d), models),
+        require_invalid(System::create(d, *assemble::make_scaling(d), models),
                         "electrothermal");
         // Isothermal, the same device assembles.
-        REQUIRE(DriftDiffusion::create(d, *assemble::make_scaling(d), {}).has_value());
+        REQUIRE(System::create(d, *assemble::make_scaling(d), {}).has_value());
     }
     {
         // Silicon | silicon with chi + 0.2 eV at x = 0.5 um, the interface thermionic.
@@ -365,7 +365,7 @@ TEST_CASE("Schottky assemble: refusals of the device and the assembler (SC14)") 
                           {"cathode", device::ContactKind::ohmic, std::move(right)}},
              .interfaces = {{"left", "right", device::InterfaceTransport::thermionic_emission}}});
         if (!made) FAIL(made.error().message);
-        require_invalid(DriftDiffusion::create(*made, *assemble::make_scaling(*made), {}),
+        require_invalid(System::create(*made, *assemble::make_scaling(*made), {}),
                         "thermionic interface");
     }
 }
@@ -379,4 +379,35 @@ TEST_CASE("Schottky assemble: thermal equilibrium needs a Schottky contact at 0 
     REQUIRE_FALSE(refused.has_value());
     CHECK(refused.error().code == base::ErrorCode::invalid_input);
     CHECK(refused.error().message.find("Schottky contact at 0 V") != std::string::npos);
+}
+
+TEST_CASE("Schottky assemble: thermal equilibrium's anode row is psi - psi_S alone (GE5)") {
+    // Unit 57 GE5: the Poisson flux is shared with the drift-diffusion system and adds into the
+    // Schottky node's row; the Dirichlet rows, last, replace it whole. In 1D and 2D every
+    // Dirichlet row is psi - psi0 exactly, its only Jacobian entry the unit diagonal.
+    for (const int D : {1, 2}) {
+        const device::Device d = diode(tensor(D, 7));
+        const auto s = *assemble::make_scaling(d);
+        const auto eq = *create_equilibrium(d, s);
+        REQUIRE(eq.formulation() == assemble::Formulation::equilibrium);
+        auto psi = charge_neutral_potential(eq);
+        Noise noise{7};
+        for (double& v : psi) v += 0.3 * noise.next();
+        std::vector<double> f(eq.unknowns()), r(eq.unknowns());
+        auto jacobian = eq.make_jacobian();
+        eq.evaluate(psi, f, jacobian);
+        eq.residual(psi, r);
+        const auto j = dense(jacobian);
+        const auto psi0 = contact_potential(eq);
+        std::size_t anode = 0;
+        for (std::size_t i = 0; i < eq.node_count(); ++i) {
+            CAPTURE(D, i);
+            REQUIRE(f[i] == r[i]);
+            if (!is_contact(eq, i)) continue;
+            if (d.mesh().points()[i][0] == 0.0) ++anode;
+            REQUIRE(f[i] == psi[i] - psi0[i]);
+            for (std::size_t c = 0; c < j.size(); ++c) REQUIRE(j[i][c] == (c == i ? 1.0 : 0.0));
+        }
+        CHECK(anode == (D == 1 ? 1u : 7u));
+    }
 }

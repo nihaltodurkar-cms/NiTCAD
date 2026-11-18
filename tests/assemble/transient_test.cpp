@@ -11,9 +11,10 @@
 #include <utility>
 #include <vector>
 
-#include "NiTCAD/assemble/drift_diffusion.hpp"
-#include "NiTCAD/assemble/equilibrium_poisson.hpp"
+#include "NiTCAD/assemble/charges.hpp"
+#include "NiTCAD/assemble/equilibrium.hpp"
 #include "NiTCAD/assemble/scaling.hpp"
+#include "NiTCAD/assemble/system.hpp"
 #include "NiTCAD/device/device.hpp"
 #include "NiTCAD/mesh/tensor_grid.hpp"
 #include "NiTCAD/physics/insulator.hpp"
@@ -21,8 +22,8 @@
 #include "NiTCAD/physics/semiconductor.hpp"
 
 using namespace NiTCAD;
-using assemble::DriftDiffusion;
-using assemble::EquilibriumPoisson;
+using assemble::System;
+using assemble::create_equilibrium;
 
 namespace {
 
@@ -110,8 +111,8 @@ std::vector<std::vector<double>> dense(const linalg::SparseMatrix& a) {
 
 // The time-step system as a plain system, for the difference gate.
 struct Stepped {
-    const DriftDiffusion& dd;
-    DriftDiffusion::TimeStep step;
+    const System& dd;
+    System::TimeStep step;
     [[nodiscard]] std::size_t unknowns() const { return dd.unknowns(); }
     [[nodiscard]] linalg::SparseMatrix make_jacobian() const { return dd.make_jacobian(); }
     void evaluate(std::span<const double> x, std::span<double> f, linalg::SparseMatrix& j) const {
@@ -155,9 +156,9 @@ double fd_jacobian_error(const System& system, std::vector<double> x) {
 // The Unit 15b probe state: equilibrium of the charge-neutral guess with noise, and at the
 // interface nodes n = 2e-3 and p = 5e-4 (scaled), so the traps are out of equilibrium and their
 // terms are resolved by a difference step.
-std::vector<double> probe_state(const DriftDiffusion& system, const EquilibriumPoisson& poisson,
+std::vector<double> probe_state(const System& system, const System& poisson,
                                 const device::Device& d, std::uint64_t seed) {
-    auto x = system.state_from_potential(poisson.charge_neutral_potential());
+    auto x = system.state_from_potential(charge_neutral_potential(poisson));
     Noise noise{seed};
     for (std::size_t i = 0; i < system.node_count(); ++i) {
         x[3 * i] += 0.02 * noise.next();
@@ -180,7 +181,7 @@ struct History {
     std::vector<double> storage, traps;
 };
 
-History history(const DriftDiffusion& system, std::vector<double> x, std::uint64_t seed) {
+History history(const System& system, std::vector<double> x, std::uint64_t seed) {
     Noise noise{seed};
     for (std::size_t i = 0; i < system.node_count(); ++i) {
         x[3 * i + 1] *= 1.0 + 0.05 * noise.next();
@@ -204,9 +205,9 @@ TEST_CASE("transient assemble: the finite-difference Jacobian gate of a time ste
                 if (D == 3 && ionization) continue;  // covered in 1D and 2D
                 const assemble::PhysicsModels models{.fermi_dirac = fd,
                                                      .incomplete_ionization = ionization};
-                auto system = *DriftDiffusion::create(d, scaling, models);
+                auto system = *System::create(d, scaling, models);
                 REQUIRE(system.set_bias(bias).has_value());
-                const auto poisson = *EquilibriumPoisson::create(d, scaling, models);
+                const auto poisson = *create_equilibrium(d, scaling, models);
                 const auto x = probe_state(system, poisson, d, 23);
                 const History h = history(system, x, 31);
                 REQUIRE(h.traps.size() == system.trap_slots());
@@ -233,17 +234,17 @@ TEST_CASE("transient assemble: the trap part of a time step's Jacobian on its ow
     const std::vector<double> bias{-0.4, 0.1};
     for (const bool fd : {false, true}) {
         const assemble::PhysicsModels models{.fermi_dirac = fd};
-        auto a = *DriftDiffusion::create(with, scaling, models);
-        auto b = *DriftDiffusion::create(without, scaling, models);
+        auto a = *System::create(with, scaling, models);
+        auto b = *System::create(without, scaling, models);
         REQUIRE(a.set_bias(bias).has_value());
         REQUIRE(b.set_bias(bias).has_value());
-        const auto poisson = *EquilibriumPoisson::create(with, scaling, models);
+        const auto poisson = *create_equilibrium(with, scaling, models);
         auto x = probe_state(a, poisson, with, 5);
         const History h = history(a, x, 9);
         const std::vector<double> no_traps;
         for (const double dt : {1e-12, 1e-9, 1e-6}) {
-            const DriftDiffusion::TimeStep sa{a.time_scale() / dt, h.storage, h.traps};
-            const DriftDiffusion::TimeStep sb{b.time_scale() / dt, h.storage, no_traps};
+            const System::TimeStep sa{a.time_scale() / dt, h.storage, h.traps};
+            const System::TimeStep sb{b.time_scale() / dt, h.storage, no_traps};
             const std::size_t n = a.unknowns();
             auto ja = a.make_jacobian(), jb = b.make_jacobian();
             std::vector<double> fa(n), fb(n), up(n), down(n), up_b(n), down_b(n);
@@ -283,15 +284,15 @@ TEST_CASE("transient assemble: a very long step is the steady state") {
     // whatever the history.
     const device::Device d = mos(2);
     const auto scaling = *assemble::make_scaling(d);
-    auto system = *DriftDiffusion::create(d, scaling);
+    auto system = *System::create(d, scaling);
     REQUIRE(system.set_bias(std::vector<double>{-0.4, 0.1}).has_value());
-    const auto poisson = *EquilibriumPoisson::create(d, scaling);
+    const auto poisson = *create_equilibrium(d, scaling);
     const auto x = probe_state(system, poisson, d, 41);
     const History h = history(system, x, 43);
     const std::size_t n = system.unknowns();
     std::vector<double> steady(n), stepped(n);
     system.residual(x, steady);
-    const DriftDiffusion::TimeStep step{system.time_scale() / 1e12, h.storage, h.traps};
+    const System::TimeStep step{system.time_scale() / 1e12, h.storage, h.traps};
     system.residual(x, step, stepped);
     double scale = 0.0, diff = 0.0;
     for (std::size_t k = 0; k < n; ++k) {
@@ -300,8 +301,8 @@ TEST_CASE("transient assemble: a very long step is the steady state") {
     }
     CAPTURE(diff, scale);
     REQUIRE(diff <= 1e-9 * scale);
-    const auto f_steady = system.trap_occupancies(x);
-    const auto f_step = system.trap_occupancies(x, &step);
+    const auto f_steady = trap_occupancies(system, x);
+    const auto f_step = trap_occupancies(system, x, &step);
     double worst = 0.0;
     for (std::size_t k = 0; k < f_steady.size(); ++k) {
         REQUIRE(f_steady[k] >= 0.0);
@@ -310,8 +311,8 @@ TEST_CASE("transient assemble: a very long step is the steady state") {
     }
     CAPTURE(worst);
     REQUIRE(worst <= 1e-9);
-    const auto q_steady = system.interface_trap_charges(x);
-    const auto q_step = system.interface_trap_charges(x, &step);
+    const auto q_steady = interface_trap_charges(system, x);
+    const auto q_step = interface_trap_charges(system, x, &step);
     REQUIRE(std::abs(q_step[0] - q_steady[0]) <= 1e-9 * std::abs(q_steady[0]));
 }
 
@@ -323,23 +324,23 @@ TEST_CASE("transient assemble: the traps' capture imbalance is the trapped charg
     // between two histories the sum of the continuity rows changes by exactly that.
     const device::Device d = mos(1);
     const auto scaling = *assemble::make_scaling(d);
-    auto system = *DriftDiffusion::create(d, scaling);
+    auto system = *System::create(d, scaling);
     REQUIRE(system.set_bias(std::vector<double>{-0.4, 0.1}).has_value());
-    const auto poisson = *EquilibriumPoisson::create(d, scaling);
+    const auto poisson = *create_equilibrium(d, scaling);
     const auto x = probe_state(system, poisson, d, 51);
     const History h = history(system, x, 53);
     std::vector<double> mirrored = h.traps;
     for (double& v : mirrored) v = 1.0 - v;
     // Q_trap of the occupancies c themselves: a vanishing weight keeps f = c.
     const auto q_of = [&](const std::vector<double>& c) {
-        const DriftDiffusion::TimeStep frozen{1e300, h.storage, c};
-        return system.interface_trap_charges(x, &frozen)[0];
+        const System::TimeStep frozen{1e300, h.storage, c};
+        return interface_trap_charges(system, x, &frozen)[0];
     };
     for (const double dt : {1e-12, 1e-9}) {
-        const DriftDiffusion::TimeStep s1{system.time_scale() / dt, h.storage, h.traps};
-        const DriftDiffusion::TimeStep s2{system.time_scale() / dt, h.storage, mirrored};
+        const System::TimeStep s1{system.time_scale() / dt, h.storage, h.traps};
+        const System::TimeStep s2{system.time_scale() / dt, h.storage, mirrored};
         for (const auto* s : {&s1, &s2}) {
-            const auto f = system.trap_occupancies(x, s);
+            const auto f = trap_occupancies(system, x, s);
             for (std::size_t k = 0; k < f.size(); ++k) {  // a weighted mean of c and occ / D
                 REQUIRE(f[k] >= std::min(s->traps[k], 0.0) - 1e-15);
                 REQUIRE(f[k] <= std::max(s->traps[k], 1.0) + 1e-15);
@@ -353,8 +354,8 @@ TEST_CASE("transient assemble: the traps' capture imbalance is the trapped charg
         for (std::size_t i = 0; i < system.node_count(); ++i) {
             rows += (r1[3 * i + 1] + r1[3 * i + 2]) - (r2[3 * i + 1] + r2[3 * i + 2]);
         }
-        const double dQ1 = system.interface_trap_charges(x, &s1)[0] - q_of(h.traps);
-        const double dQ2 = system.interface_trap_charges(x, &s2)[0] - q_of(mirrored);
+        const double dQ1 = interface_trap_charges(system, x, &s1)[0] - q_of(h.traps);
+        const double dQ2 = interface_trap_charges(system, x, &s2)[0] - q_of(mirrored);
         const double expected = (dQ1 - dQ2) * s1.rate;
         CAPTURE(dt, rows, expected);
         REQUIRE(expected != 0.0);
@@ -369,12 +370,12 @@ TEST_CASE("transient assemble: the contact charges and the charge inside obey Ga
     // this identity.
     const device::Device d = mos(2);
     const auto scaling = *assemble::make_scaling(d);
-    auto system = *DriftDiffusion::create(d, scaling);
+    auto system = *System::create(d, scaling);
     REQUIRE(system.set_bias(std::vector<double>{-0.4, 0.1}).has_value());
-    const auto poisson = *EquilibriumPoisson::create(d, scaling);
+    const auto poisson = *create_equilibrium(d, scaling);
     const auto x = probe_state(system, poisson, d, 61);
-    const auto q = system.contact_charges(x);
-    const auto g = system.gate_charges(x);
+    const auto q = contact_charges(system, x);
+    const auto g = gate_charges(system, x);
     REQUIRE(q.size() == 2);
     REQUIRE(q[0] == g[0]);  // an electrode's charge as gate_charges
     REQUIRE(g[1] == 0.0);   // which leaves the ohmic contact's out
@@ -401,7 +402,7 @@ TEST_CASE("transient assemble: the contact charges and the charge inside obey Ga
         if (d.is_insulator(e.first) != d.is_insulator(e.second)) area += e.coupling_area;
     }
     const double interface =
-        system.interface_trap_charges(x)[0] + 3e11 * area / (scaling.Ns * volume_scale);
+        interface_trap_charges(system, x)[0] + 3e11 * area / (scaling.Ns * volume_scale);
     const double total = q[0] + q[1] + inside + interface;
     CAPTURE(rows, total, q[0], q[1], inside, interface);
     REQUIRE(std::abs(rows - total) <= 1e-12 * (magnitude + std::abs(q[0]) + std::abs(q[1])));
@@ -414,9 +415,9 @@ TEST_CASE("transient assemble: occupancies outside [0, 1] keep the interface sol
     // of Gauss's law: the Poisson rows sum to the contact charges plus the charge inside.
     const device::Device d = mos(1);
     const auto scaling = *assemble::make_scaling(d);
-    auto system = *DriftDiffusion::create(d, scaling);
+    auto system = *System::create(d, scaling);
     REQUIRE(system.set_bias(std::vector<double>{-0.4, 0.1}).has_value());
-    const auto poisson = *EquilibriumPoisson::create(d, scaling);
+    const auto poisson = *create_equilibrium(d, scaling);
     const auto x = probe_state(system, poisson, d, 71);
     const History h = history(system, x, 73);
     std::vector<char> dirichlet(system.node_count(), 0);
@@ -429,13 +430,13 @@ TEST_CASE("transient assemble: occupancies outside [0, 1] keep the interface sol
     }
     for (const double c : {1.2, -0.2}) {
         const std::vector<double> traps(system.trap_slots(), c);
-        const DriftDiffusion::TimeStep step{system.time_scale() / 1e-15, h.storage, traps};
-        for (const double f : system.trap_occupancies(x, &step)) {
+        const System::TimeStep step{system.time_scale() / 1e-15, h.storage, traps};
+        for (const double f : trap_occupancies(system, x, &step)) {
             REQUIRE(std::abs(f - c) < 1e-3);  // near the history
         }
         std::vector<double> r(system.unknowns());
         system.residual(x, step, r);
-        const auto q = system.contact_charges(x, &step);
+        const auto q = contact_charges(system, x, &step);
         double rows = 0.0, inside = 0.0, magnitude = 0.0;
         for (std::size_t i = 0; i < system.node_count(); ++i) {
             if (dirichlet[i] != 0) continue;
@@ -448,7 +449,7 @@ TEST_CASE("transient assemble: occupancies outside [0, 1] keep the interface sol
             magnitude += std::abs(rho);
         }
         const double interface =
-            system.interface_trap_charges(x, &step)[0] + 3e11 * area / (scaling.Ns * scaling.L_D);
+            interface_trap_charges(system, x, &step)[0] + 3e11 * area / (scaling.Ns * scaling.L_D);
         const double total = q[0] + q[1] + inside + interface;
         CAPTURE(c, rows, total, interface);
         REQUIRE(std::abs(rows - total) <= 1e-12 * (magnitude + std::abs(q[0]) + std::abs(q[1])));

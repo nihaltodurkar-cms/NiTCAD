@@ -8,21 +8,28 @@
 #include <utility>
 #include <vector>
 
-#include "NiTCAD/assemble/drift_diffusion.hpp"
-#include "NiTCAD/assemble/equilibrium_poisson.hpp"
+#include "NiTCAD/assemble/band_edges.hpp"
+#include "NiTCAD/assemble/charges.hpp"
+#include "NiTCAD/assemble/currents.hpp"
+#include "NiTCAD/assemble/energy.hpp"
+#include "NiTCAD/assemble/equilibrium.hpp"
+#include "NiTCAD/assemble/derived.hpp"
 #include "NiTCAD/assemble/scaling.hpp"
+#include "NiTCAD/assemble/system.hpp"
+#include "NiTCAD/assemble/thermal.hpp"
+#include "NiTCAD/assemble/tunnelling.hpp"
 #include "NiTCAD/base/constants.hpp"
 #include "NiTCAD/results/solution.hpp"
 
 namespace NiTCAD::solve::detail {
 
 // Potential in V and the Boltzmann carriers in cm^-3 of the scaled potential psi.
-inline results::NodeFields equilibrium_fields(const assemble::EquilibriumPoisson& system,
+inline results::NodeFields equilibrium_fields(const assemble::System& system,
                                               std::span<const double> psi,
                                               const assemble::Scaling& scaling) {
-    const std::size_t n = system.unknowns();
+    const std::size_t n = system.node_count();
     results::NodeFields f{std::vector<double>(n), std::vector<double>(n), std::vector<double>(n)};
-    system.carriers(psi, f.n_cm3, f.p_cm3);
+    equilibrium_carriers(system, psi, f.n_cm3, f.p_cm3);
     for (std::size_t i = 0; i < n; ++i) {
         f.potential_V[i] = psi[i] * scaling.V_T;
         f.n_cm3[i] *= scaling.Ns;
@@ -31,13 +38,49 @@ inline results::NodeFields equilibrium_fields(const assemble::EquilibriumPoisson
     return f;
 }
 
-// The band diagram in eV from the assemblers' scaled one (units of V_T).
-inline results::BandDiagram band_diagram(const assemble::BandEdges& b, double V_T) {
-    results::BandDiagram d{b.conduction, b.valence, b.electron_fermi, b.hole_fermi};
-    for (auto* v : {&d.conduction_eV, &d.valence_eV, &d.electron_fermi_eV, &d.hole_fermi_eV}) {
-        for (double& e : *v) e *= V_T;
+// A state's band diagram in eV, through the derived-field table (Unit 57 GE4; thermal
+// equilibrium's too, GE5).
+inline results::BandDiagram band_diagram(const assemble::System& system,
+                                         std::span<const double> x, double V_T) {
+    using assemble::FieldId;
+    const assemble::Diagnostic& bands = assemble::diagnostic(assemble::DiagnosticId::bands);
+    assemble::DerivedValues v = bands.evaluate(system, x);
+    results::BandDiagram d{take(v, bands, FieldId::conduction_band),
+                           take(v, bands, FieldId::valence_band),
+                           take(v, bands, FieldId::electron_fermi),
+                           take(v, bands, FieldId::hole_fermi)};
+    for (auto* e : {&d.conduction_eV, &d.valence_eV, &d.electron_fermi_eV, &d.hole_fermi_eV}) {
+        for (double& level : *e) level *= V_T;
     }
     return d;
+}
+
+// Appends the electron and hole current through each mesh edge, times current_scale, through
+// the table.
+inline void append_edge_currents(const assemble::System& system, std::span<const double> x,
+                                 double current_scale, std::vector<double>& jn,
+                                 std::vector<double>& jp) {
+    using assemble::FieldId;
+    const assemble::Diagnostic& currents =
+        assemble::diagnostic(assemble::DiagnosticId::edge_currents);
+    assemble::DerivedValues v = currents.evaluate(system, x);
+    for (double J : take(v, currents, FieldId::electron_edge_current)) {
+        jn.push_back(J * current_scale);
+    }
+    for (double J : take(v, currents, FieldId::hole_edge_current)) {
+        jp.push_back(J * current_scale);
+    }
+}
+
+// The lattice and carrier temperatures in K (empty without their models), through the table.
+inline void temperatures(const assemble::System& system, std::span<const double> x,
+                         results::NodeFields& f) {
+    using assemble::FieldId;
+    const assemble::Diagnostic& t = assemble::diagnostic(assemble::DiagnosticId::temperatures);
+    assemble::DerivedValues v = t.evaluate(system, x);
+    f.temperature_K = take(v, t, FieldId::lattice_temperature);
+    f.electron_temperature_K = take(v, t, FieldId::electron_temperature_K);
+    f.hole_temperature_K = take(v, t, FieldId::hole_temperature_K);
 }
 
 // Scale from scaled gate charges to C / cm^(3-D): q Ns L_D^D.
@@ -62,7 +105,7 @@ inline Slots slots(const assemble::DofMap& dofs) {
 // psi / V_T, n / Ns, p / Ns and, with the temperature field, the rise tau = (T - T0) / T0 (0 when
 // the fields carry no temperature). Precondition: x has the system's unknowns (or more: the rest
 // is not written).
-inline void scaled_state(const assemble::DriftDiffusion& system, const results::NodeFields& f,
+inline void scaled_state(const assemble::System& system, const results::NodeFields& f,
                          const assemble::Scaling& scaling, std::span<double> x) {
     const Slots k = slots(system.dofs());
     const bool thermal = system.dofs().has(assemble::FieldId::temperature);
@@ -76,7 +119,7 @@ inline void scaled_state(const assemble::DriftDiffusion& system, const results::
                 f.temperature_K.empty() ? 0.0 : (f.temperature_K[i] - T0) / T0;
         }
     }
-    if (system.energy_balance()) {  // Unit 52: tau_n, tau_p (0 when the fields carry none)
+    if (energy_balance(system)) {  // Unit 52: tau_n, tau_p (0 when the fields carry none)
         const std::size_t sn = *system.dofs().slot(assemble::FieldId::electron_temperature);
         const std::size_t sp = *system.dofs().slot(assemble::FieldId::hole_temperature);
         for (std::size_t i = 0; i < system.node_count(); ++i) {
@@ -90,41 +133,30 @@ inline void scaled_state(const assemble::DriftDiffusion& system, const results::
 }
 
 // The generation-recombination rates of a drift-diffusion state (Unit 45): the system's mechanisms
-// (DriftDiffusion::rates, already in cm^-3 s^-1) into RateFields, and their sum.
-inline results::RateFields rate_fields(const assemble::DriftDiffusion& system,
+// (assemble::rates, already in cm^-3 s^-1) and their sum, through the derived-field table.
+inline results::RateFields rate_fields(const assemble::System& system,
                                        std::span<const double> x) {
-    using M = assemble::DriftDiffusion::RateMechanism;
+    using assemble::FieldId;
+    const assemble::Diagnostic& d = assemble::diagnostic(assemble::DiagnosticId::rates);
+    assemble::DerivedValues v = d.evaluate(system, x);
     results::RateFields r;
-    const std::size_t nodes = system.node_count();
-    r.net_n.assign(nodes, 0.0);
-    r.net_p.assign(nodes, 0.0);
-    for (assemble::DriftDiffusion::MechanismRate& m : system.rates(x)) {
-        for (std::size_t i = 0; i < nodes; ++i) {
-            r.net_n[i] += m.electron[i];
-            r.net_p[i] += m.hole[i];
-        }
-        switch (m.mechanism) {
-            case M::srh: r.srh = std::move(m.electron); break;
-            case M::auger: r.auger = std::move(m.electron); break;
-            case M::radiative: r.radiative = std::move(m.electron); break;
-            case M::impact: r.impact = std::move(m.electron); break;
-            case M::interfaces:
-                r.interface_n = std::move(m.electron);
-                r.interface_p = std::move(m.hole);
-                break;
-            case M::band_to_band:
-                r.band_to_band_n = std::move(m.electron);
-                r.band_to_band_p = std::move(m.hole);
-                break;
-        }
-    }
+    r.srh = take(v, d, FieldId::srh_rate);
+    r.auger = take(v, d, FieldId::auger_rate);
+    r.radiative = take(v, d, FieldId::radiative_rate);
+    r.impact = take(v, d, FieldId::impact_rate);
+    r.interface_n = take(v, d, FieldId::interface_rate_n);
+    r.interface_p = take(v, d, FieldId::interface_rate_p);
+    r.band_to_band_n = take(v, d, FieldId::band_to_band_rate_n);
+    r.band_to_band_p = take(v, d, FieldId::band_to_band_rate_p);
+    r.net_n = take(v, d, FieldId::net_rate_n);
+    r.net_p = take(v, d, FieldId::net_rate_p);
     return r;
 }
 
 // The fields and terminal quantities of a drift-diffusion state x into `point` (its bias and
 // convergence are the caller's), in the public units; shared by sweep_bias and trace_bias. With
 // `rates`, its generation-recombination rates too (Unit 45).
-inline void drift_diffusion_point(const assemble::DriftDiffusion& system,
+inline void drift_diffusion_point(const assemble::System& system,
                                   std::span<const double> x, const assemble::Scaling& scaling,
                                   int dimension, results::BiasPoint& point, bool rates = true) {
     if (rates) point.rates = rate_fields(system, x);
@@ -139,42 +171,28 @@ inline void drift_diffusion_point(const assemble::DriftDiffusion& system,
         point.fields.n_cm3[i] = x[k.block * i + k.electrons] * scaling.Ns;
         point.fields.p_cm3[i] = x[k.block * i + k.holes] * scaling.Ns;
     }
-    if (system.electrothermal()) {  // Unit 23: the temperature and the heat to each sink
-        for (std::size_t i = 0; i < nodes; ++i) {
-            const double T0 = scaling.temperature_K;  // tau = (T - T0) / T0
-            point.fields.temperature_K.push_back(T0 + T0 * x[k.block * i + k.temperature]);
-        }
-        point.thermal_contact_heat = system.thermal_contact_heat(x);
+    // Units 23 and 52: the lattice and carrier temperatures (T0 (1 + tau), T0 the scaling's).
+    temperatures(system, x, point.fields);
+    if (electrothermal(system)) {  // the heat to each sink
+        point.thermal_contact_heat = thermal_contact_heat(system, x);
         for (double& P : point.thermal_contact_heat) P *= scaling.V_T * current_scale;
     }
-    if (system.energy_balance()) {  // Unit 52: T = T_L (1 + tau) per carrier
-        const double TL = scaling.temperature_K;
-        const std::size_t sn = *system.dofs().slot(assemble::FieldId::electron_temperature);
-        const std::size_t sp = *system.dofs().slot(assemble::FieldId::hole_temperature);
-        for (std::size_t i = 0; i < nodes; ++i) {
-            point.fields.electron_temperature_K.push_back(TL + TL * x[k.block * i + sn]);
-            point.fields.hole_temperature_K.push_back(TL + TL * x[k.block * i + sp]);
-        }
-    }
-    point.bands = band_diagram(system.band_edges(x), scaling.V_T);
-    point.terminal_current = system.terminal_currents(x);
+    point.bands = band_diagram(system, x, scaling.V_T);
+    point.terminal_current = terminal_currents(system, x);
     for (double& I : point.terminal_current) I *= current_scale;
-    point.terminal_current_resolution = system.terminal_current_resolution(x);
+    point.terminal_current_resolution = terminal_current_resolution(system, x);
     for (double& I : point.terminal_current_resolution) I *= current_scale;
-    point.gate_charge = system.gate_charges(x);
+    point.gate_charge = gate_charges(system, x);
     for (double& Q : point.gate_charge) Q *= charges;
-    point.interface_trap_charge = system.interface_trap_charges(x);
+    point.interface_trap_charge = interface_trap_charges(system, x);
     for (double& Q : point.interface_trap_charge) Q *= charges;
-    for (const auto& [jn, jp] : system.edge_currents(x)) {
-        point.edge_current_n.push_back(jn * current_scale);
-        point.edge_current_p.push_back(jp * current_scale);
-    }
-    for (const assemble::TunnelPathState& s : system.path_states(x)) {
+    append_edge_currents(system, x, current_scale, point.edge_current_n, point.edge_current_p);
+    for (const assemble::TunnelPathState& s : path_states(system, x)) {
         point.tunnel_paths.push_back(
             {s.start, s.length_cm, s.field_V_per_cm, s.rate_cm3_s, s.reached});
     }
-    if (system.gate_tunnelling()) {  // Unit 51
-        auto t = system.gate_tunnelling_currents(x);
+    if (gate_tunnelling(system)) {  // Unit 51
+        auto t = gate_tunnelling_currents(system, x);
         for (std::vector<double>* v : {&t.ecb, &t.hvb, &t.evb}) {
             for (double& I : *v) I *= current_scale;
         }
