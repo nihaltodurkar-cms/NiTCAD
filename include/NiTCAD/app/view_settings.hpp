@@ -151,6 +151,10 @@ struct CameraPose {
 [[nodiscard]] CameraPose camera_pose(const ViewSettings& s) noexcept;
 void set_camera_pose(ViewSettings& s, const CameraPose& p) noexcept;
 [[nodiscard]] CameraPose camera_between(const CameraPose& from, const CameraPose& to, float t) noexcept;
+// Whether a camera move is smooth: the app wants it and Windows shows animations, or a test forces it.
+[[nodiscard]] constexpr bool smooth_moves(bool app_on, bool windows_shows, bool forced) noexcept {
+    return forced || (app_on && windows_shows);
+}
 
 using Scene = std::variant<render::FieldScene, render::PlotScene>;
 

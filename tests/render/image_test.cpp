@@ -384,6 +384,15 @@ TEST_CASE("render image: the views match their WARP references (VG4)") {
             CHECK(d->fraction_over > 0.05);
         }
     }
+    // Unit 26h (JG7): the enhanced solid at a named view (Right), its axis box and view cube turned with it.
+    SECTION("3D solid at the Right view, enhanced") {
+        auto solid = solid_view(m3.device, g3);
+        REQUIRE(solid.has_value());
+        set_look(*solid, Look::enhanced);
+        solid->camera.azimuth_deg = 90.0f;
+        solid->camera.elevation_deg = 0.0f;
+        check_image(*r.draw(*solid, W, H), "mosfet3d_solid_right_enhanced");
+    }
     // Unit 26g (MG6): the enhanced 3D field with mesh edges (the mesh view's) and contours.
     SECTION("3D potential with mesh edges and contours, enhanced") {
         FieldOptions o = field_options(m3.device, m3.point, Field::potential, values);

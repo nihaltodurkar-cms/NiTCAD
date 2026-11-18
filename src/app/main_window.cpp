@@ -2257,7 +2257,7 @@ void MainWindow::move_camera(const CameraPose& to) {
     const CameraPose from = camera_pose(s);
     BOOL shown = TRUE;
     if (!SystemParametersInfoW(SPI_GETCLIENTAREAANIMATION, 0, &shown, 0)) shown = TRUE;
-    if (!animate_ || (!shown && !force_animate_) || from == to || !hwnd_) {
+    if (!smooth_moves(animate_, shown != FALSE, force_animate_) || from == to || !hwnd_) {
         set_camera_pose(s, to);
         present_camera();
         return;

@@ -1378,3 +1378,10 @@ TEST_CASE("app views 26h: camera_between eases, the shorter way round, to the en
     app::set_camera_pose(s, b);
     CHECK(app::camera_pose(s) == b);
 }
+
+TEST_CASE("app views 26h: smooth moves follow Windows' animation setting (JD5, JQ5, JG5)", "[app]") {
+    CHECK(app::smooth_moves(true, true, false));
+    CHECK_FALSE(app::smooth_moves(true, false, false));  // "Show animations" off: instant
+    CHECK_FALSE(app::smooth_moves(false, true, false));  // tests and the self-test: instant
+    CHECK(app::smooth_moves(false, false, true));        // a test forcing them
+}

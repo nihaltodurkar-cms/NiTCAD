@@ -1263,8 +1263,8 @@ std::expected<void, base::Error> Renderer::Impl::render_field(const FieldScene& 
                 const CubeArrow& r = cube.arrows[a];
                 if (r.from == r.to) continue;
                 d2d->DrawLine({r.from[0], r.from[1]}, {r.to[0], r.to[1]}, ink.color(colors[a]), 2.0f);
-                const float dx = r.to[0] - r.from[0], dy = r.to[1] - r.from[1];
-                ink.text(r.name, small_text.Get(), r.from[0] + dx * 1.18f, r.from[1] + dy * 1.18f, 1, 1, colors[a]);
+                const float dx = r.to[0] - r.from[0], dy = r.to[1] - r.from[1], n = std::hypot(dx, dy);
+                ink.text(r.name, small_text.Get(), r.to[0] + 8.0f * dx / n, r.to[1] + 8.0f * dy / n, 1, 1, colors[a]);
             }
         } else if (!axes && s.axis_triad) {
             const D2D1_POINT_2F o{view.left + 44.0f, view.bottom - 44.0f};
@@ -1746,7 +1746,7 @@ ViewCube view_cube(const FieldScene& s, int width, int height) {
     const std::array<double, 3> key = key_light(v);
     const std::array<double, 3> eye{-v.forward[0], -v.forward[1], -v.forward[2]};
     out.edge_px = 72.0f / std::sqrt(3.0f);
-    out.centre = {view.left + 64.0f, view.bottom - 64.0f};
+    out.centre = {view.left + 88.0f, view.bottom - 88.0f};  // room for an arrow and its label any way
     const float half = 0.5f * out.edge_px;
     const auto px = [&](const std::array<int, 3>& c) {
         const std::array<double, 3> p{double(c[0]), double(c[1]), double(c[2])};
@@ -1791,7 +1791,7 @@ ViewCube view_cube(const FieldScene& s, int width, int height) {
             std::array<double, 3> e{};
             e[static_cast<std::size_t>(a)] = 1.0;
             const float dx = static_cast<float>(dotd(e, v.right)), dy = -static_cast<float>(dotd(e, v.up));
-            const float len = 0.75f * out.edge_px + 8.0f;
+            const float len = out.edge_px + 10.0f;  // past the cube, even along its edges (head-on views)
             CubeArrow arrow{names[a], origin.at, origin.at};
             if (dx * dx + dy * dy > 1e-4f) arrow.to = {origin.at[0] + dx * len, origin.at[1] + dy * len};
             out.arrows.push_back(arrow);

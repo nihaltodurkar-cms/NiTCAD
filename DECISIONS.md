@@ -834,7 +834,7 @@ The three 26g enhanced references now change by design, because the axis box is 
 in 26g, they are rebuilt in 26h·4 only after the owner sees the images.
 
 **As built, 26h·2 (2026-11-19).** `view_cube` and `view_cube_hit` (axes3d.hpp) are pure, like `axis_box`. The cube
-is 72 px across its diagonal, centred 64 px in from the view's lower-left corner, and always orthographic. A face's
+is 72 px across its diagonal, centred 88 px in from the view's lower-left corner, and always orthographic. A face's
 name is drawn only where the face is wide enough for it (6 px a character) and at least 16 px tall. At the default
 camera only "Front" fits; "Top" and "Right" are too foreshortened. Corners come before faces in hit testing, within
 7 px. A corner snaps to its isometric view: azimuth atan2(x, z), elevation ±35.26°. The plain Isometric view is
