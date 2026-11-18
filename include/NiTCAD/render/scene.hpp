@@ -114,6 +114,9 @@ struct FieldScene {
     Float3 hi{};
     bool axis_triad = true;
     Look look = Look::classic;  // Unit 26f (KD1): 3D shading; set with set_look (edges.hpp)
+    // Unit 26g (MD5): the enhanced look's soft shadow on the floor under the device; false for clipped
+    // and exploded views. Drawn only when the camera looks from above (elevation at least -5 degrees).
+    bool ground_shadow = true;
 };
 
 // --- fields -------------------------------------------------------------------------------------

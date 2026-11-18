@@ -115,6 +115,7 @@ void frame(FieldScene& s, const ViewOptions& o) {
     const Point d = sub(b.hi, b.lo);
     s.camera.target = to_f(c);
     s.camera.projection = o.projection;
+    s.ground_shadow = !o.clip.has_value();  // Unit 26g (MD5): a clipped view floats
     if (s.dimension == 2) {
         s.camera.azimuth_deg = 0.0f;
         s.camera.elevation_deg = 0.0f;
@@ -1322,6 +1323,7 @@ std::expected<FieldScene, base::Error> exploded_view(const device::Device& d, co
     }
     if (bar) s.colorbar = std::move(*bar);
     frame(s, view);
+    s.ground_shadow = false;  // Unit 26g (MD5): the pieces float apart
     return s;
 }
 

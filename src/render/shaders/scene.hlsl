@@ -22,6 +22,10 @@ cbuffer Frame : register(b0) {
     float4 view_rect;    // left, top, width, height of the view in target pixels
     float3 half_vector;  // orthographic: normalize(light + eye), the same at every pixel
     float spare2;
+    // The ground shadow (Unit 26g, MD5): the footprint (x lo, z lo, x hi, z hi, um), and the floor's
+    // height, the fall-off margin (um) and the alpha at the centre.
+    float4 shadow_box;
+    float4 shadow_plane;
 };
 
 struct MeshIn {
@@ -105,6 +109,39 @@ float4 base_color(MeshOut p) {
 float4 background_ps(float4 p : SV_Position) : SV_Target {
     const float t = saturate((p.y - view_rect.y) / max(view_rect.w, 1.0));
     return float4(lerp(bg_top.rgb, bg_bottom.rgb, t), 1.0);
+}
+
+// The ground shadow (Unit 26g, MD5): a quad on the floor under the device, the footprint grown by the
+// margin, drawn over the gradient before the scene. Its alpha falls from the centre's to 0 at the
+// margin, by the distance to the footprint's rectangle.
+struct ShadowOut {
+    float4 position : SV_Position;
+    float2 ground : GROUND;  // x, z on the floor, um
+};
+
+ShadowOut shadow_vs(uint id : SV_VertexID) {
+    // Two triangles: corners 0 1 2, 2 1 3 of (lo, lo) (hi, lo) (lo, hi) (hi, hi).
+    const uint corner[6] = {0u, 1u, 2u, 2u, 1u, 3u};
+    const uint c = corner[id];
+    const float m = shadow_plane.y;
+    const float x = (c & 1u) ? shadow_box.z + m : shadow_box.x - m;
+    const float z = (c & 2u) ? shadow_box.w + m : shadow_box.y - m;
+    ShadowOut o;
+    o.position = mul(float4(x, shadow_plane.x, z, 1.0), view_projection);
+    o.ground = float2(x, z);
+    return o;
+}
+
+float4 shadow_ps(ShadowOut p) : SV_Target {
+    const float2 centre = 0.5 * (shadow_box.xy + shadow_box.zw);
+    const float2 half_size = 0.5 * (shadow_box.zw - shadow_box.xy);
+    const float2 q = abs(p.ground - centre) - half_size;
+    // Signed distance to the rectangle: negative inside, -inner at the centre.
+    const float s = length(max(q, 0.0)) + min(max(q.x, q.y), 0.0);
+    const float inner = max(min(half_size.x, half_size.y), 1e-6);
+    const float t = saturate((s + inner) / (inner + shadow_plane.y));
+    const float a = shadow_plane.z * (1.0 - t * t * (3.0 - 2.0 * t));
+    return float4(0.16, 0.18, 0.22, a);
 }
 
 float4 opaque_ps(MeshOut p) : SV_Target {

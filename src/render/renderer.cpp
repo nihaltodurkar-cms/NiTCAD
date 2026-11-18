@@ -33,6 +33,8 @@
 #include "mesh_vs.h"
 #include "opaque_ps.h"
 #include "resolve_ps.h"
+#include "shadow_ps.h"
+#include "shadow_vs.h"
 #include "transparent_ps.h"
 
 namespace NiTCAD::render {
@@ -237,7 +239,8 @@ struct FrameConstants {
     float view_rect[4];
     float half_vector[3];
     float spare2;
-    float pad[8];
+    float shadow_box[4];    // Unit 26g (MD5): footprint x lo, z lo, x hi, z hi, um
+    float shadow_plane[4];  // floor y (um), margin (um), alpha at the centre, unused
 };
 static_assert(sizeof(FrameConstants) % 256 == 0);
 static_assert(sizeof(FrameConstants) == 4352);  // the HLSL block's size; the fields match scene.hlsl
@@ -313,7 +316,7 @@ struct Renderer::Impl {
     ComPtr<ID3D12InfoQueue> info;
 
     ComPtr<ID3D12RootSignature> root;
-    ComPtr<ID3D12PipelineState> opaque, transparent, line_depth, line_top, composite, resolve, background;
+    ComPtr<ID3D12PipelineState> opaque, transparent, line_depth, line_top, composite, resolve, background, shadow;
 
     ComPtr<ID3D11Device> d11;
     ComPtr<ID3D11DeviceContext> d11_context;
@@ -588,6 +591,18 @@ std::expected<void, base::Error> Renderer::Impl::create_pipelines() {
         d.PS = {background_ps_bytecode, sizeof(background_ps_bytecode)};
         NITCAD_HR(device->CreateGraphicsPipelineState(&d, IID_PPV_ARGS(&background)),
                   "CreateGraphicsPipelineState background");
+        // Unit 26g (MD5): the ground shadow, blended over the gradient (alpha stays 1).
+        d.VS = {shadow_vs_bytecode, sizeof(shadow_vs_bytecode)};
+        d.PS = {shadow_ps_bytecode, sizeof(shadow_ps_bytecode)};
+        auto& b = d.BlendState.RenderTarget[0];
+        b.BlendEnable = TRUE;
+        b.SrcBlend = D3D12_BLEND_SRC_ALPHA;
+        b.DestBlend = D3D12_BLEND_INV_SRC_ALPHA;
+        b.SrcBlendAlpha = D3D12_BLEND_ONE;
+        b.DestBlendAlpha = D3D12_BLEND_INV_SRC_ALPHA;
+        b.BlendOp = b.BlendOpAlpha = D3D12_BLEND_OP_ADD;
+        NITCAD_HR(device->CreateGraphicsPipelineState(&d, IID_PPV_ARGS(&shadow)),
+                  "CreateGraphicsPipelineState shadow");
     }
     return {};
 }
@@ -802,8 +817,9 @@ struct Ink {
     }
 };
 
+// The enhanced 3D look (Unit 26g, MD7): a lighter frame, and ticks inside the bar's right edge as well.
 void draw_colorbar(Ink& ink, IDWriteTextFormat* text, IDWriteTextFormat* minor_text, const Colorbar& bar,
-                   const D2D1_RECT_F& area) {
+                   const D2D1_RECT_F& area, bool enhanced) {
     const float bw = 16.0f;
     const float top = area.top + 28.0f, bottom = area.bottom - 12.0f;
     const float left = area.left + 6.0f;
@@ -814,11 +830,13 @@ void draw_colorbar(Ink& ink, IDWriteTextFormat* text, IDWriteTextFormat* minor_t
         const float y0 = bottom - (bottom - top) * static_cast<float>(k + 1) / steps;
         ink.dc->FillRectangle({left, y0 - 0.5f, left + bw, y1 + 0.5f}, ink.color(d2(sample(bar.map, t))));
     }
-    ink.dc->DrawRectangle({left, top, left + bw, bottom}, ink.color({0.3f, 0.32f, 0.35f, 1.0f}), 1.0f);
+    const D2D1_COLOR_F frame = enhanced ? D2D1_COLOR_F{0.45f, 0.47f, 0.5f, 1.0f} : D2D1_COLOR_F{0.3f, 0.32f, 0.35f, 1.0f};
+    ink.dc->DrawRectangle({left, top, left + bw, bottom}, ink.color(frame), 1.0f);
     for (const Tick& t : bar.scale.ticks()) {
         const float y = bottom - (bottom - top) * static_cast<float>(t.position);
         const float len = t.major ? 5.0f : 3.0f;
-        ink.dc->DrawLine({left + bw, y}, {left + bw + len, y}, ink.color({0.3f, 0.32f, 0.35f, 1.0f}), 1.0f);
+        ink.dc->DrawLine({left + bw, y}, {left + bw + len, y}, ink.color(frame), 1.0f);
+        if (enhanced) ink.dc->DrawLine({left + bw - len, y}, {left + bw, y}, ink.color(frame), 1.0f);
         if (t.major && !t.label.empty()) ink.text(t.label, minor_text, left + bw + 8.0f, y, 0, 1);
     }
     ink.text(bar.title, text, left, area.top + 6.0f, 0, 0);
@@ -887,6 +905,8 @@ std::expected<void, base::Error> Renderer::Impl::render_field(const FieldScene& 
     // feature edges are already among the scene's lines (set_look).
     const FrameLighting lighting = frame_lighting(s, aspect);
     const bool enhanced = lighting.enhanced;
+    // Unit 26g (MD5): not on clipped or exploded views, nor when looking up from below.
+    const bool shadowed = enhanced && s.ground_shadow && s.camera.elevation_deg >= -5.0f;
 
     // Constants: one block per draw.
     FrameConstants base{};
@@ -916,6 +936,16 @@ std::expected<void, base::Error> Renderer::Impl::render_field(const FieldScene& 
         base.view_rect[1] = view.top * supersample;
         base.view_rect[2] = (view.right - view.left) * supersample;
         base.view_rect[3] = (view.bottom - view.top) * supersample;
+        // The ground shadow (MD5): 4% of the height below the bounds, fading out one twelfth of the
+        // largest extent outside the footprint.
+        const float extent = std::max({s.hi[0] - s.lo[0], s.hi[1] - s.lo[1], s.hi[2] - s.lo[2]});
+        base.shadow_box[0] = s.lo[0];
+        base.shadow_box[1] = s.lo[2];
+        base.shadow_box[2] = s.hi[0];
+        base.shadow_box[3] = s.hi[2];
+        base.shadow_plane[0] = s.lo[1] - 0.04f * (s.hi[1] - s.lo[1]);
+        base.shadow_plane[1] = extent / 12.0f;
+        base.shadow_plane[2] = 0.28f;
         if (!lighting.perspective) {
             std::array<double, 3> hv{};
             for (std::size_t i = 0; i < 3; ++i) hv[i] = double(base.light[i]) + double(lighting.eye[i]);
@@ -1012,6 +1042,10 @@ std::expected<void, base::Error> Renderer::Impl::render_field(const FieldScene& 
             list->SetPipelineState(background.Get());
             list->SetGraphicsRootConstantBufferView(0, cb_base);
             list->DrawInstanced(3, 1, 0, 0);
+            if (shadowed) {
+                list->SetPipelineState(shadow.Get());
+                list->DrawInstanced(6, 1, 0, 0);
+            }
         }
         // Opaque triangles, then the depth-tested lines.
         list->OMSetRenderTargets(1, &ssaa_rtv, FALSE, &dsv);
@@ -1116,7 +1150,7 @@ std::expected<void, base::Error> Renderer::Impl::render_field(const FieldScene& 
         if (s.colorbar) {
             draw_colorbar(ink, text.Get(), small_text.Get(), *s.colorbar,
                           {static_cast<float>(w) - bar_w + 8.0f, title_h, static_cast<float>(w) - 8.0f,
-                           static_cast<float>(h) - 12.0f});
+                           static_cast<float>(h) - 12.0f}, enhanced);
         }
         const D2D1_COLOR_F axis{0.25f, 0.27f, 0.3f, 1.0f};
         if (axes) {
