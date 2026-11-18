@@ -147,7 +147,7 @@ TEST_CASE("app window 26e: hover readout on a 2D field view (HD1, HD3, HG4)", "[
 }
 
 TEST_CASE("app window 26e: hover readout on curves, the 1D device view and the I-V (HD2, HG4)", "[app]") {
-    auto w = solved("hover_1d", app_test::diode_sweep("0.1 : 0.4 : 0.1"));
+    auto w = solved("hover_1d", app_test::diode_sweep());
     for (const int tab : {static_cast<int>(MainWindow::tab_view), static_cast<int>(MainWindow::tab_curves)}) {
         w->select_tab(tab);
         REQUIRE(w->scene());

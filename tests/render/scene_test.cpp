@@ -439,6 +439,22 @@ TEST_CASE("render scene: plots fit their axes and flag points below resolution")
     const std::vector<SeriesInput> zero{{"z", {{0.0, 1.0}, {0.0, 0.0}, {}}}};
     CHECK(curve_plot(zero, "x", "y", AxisScale::linear, AxisScale::log10).error().code ==
           base::ErrorCode::invalid_input);
+    // A sweep from 0 V into negative currents (a diode's cathode): no positive value, so drawn by its magnitude,
+    // the zero off the axis. Mixed signs keep their positive values only, as before.
+    const std::vector<SeriesInput> from_zero{{"I", {{0.0, 0.1, 0.2}, {0.0, -1e-6, -1e-3}, {}}}};
+    const auto fz = curve_plot(from_zero, "V (V)", "|I| (A)", AxisScale::linear, AxisScale::log10);
+    REQUIRE(fz.has_value());
+    CHECK(fz->series[0].y == std::vector<double>{-0.0, 1e-6, 1e-3});
+    CHECK(fz->y.lo == 1e-6);
+    CHECK(fz->y.hi == 1e-3);
+    const std::vector<SeriesInput> mixed{{"I", {{0.0, 0.1, 0.2}, {-1e-6, 0.0, 1e-3}, {}}}};
+    const auto mx = curve_plot(mixed, "V (V)", "I (A)", AxisScale::linear, AxisScale::log10);
+    REQUIRE(mx.has_value());
+    CHECK(mx->series[0].y[0] == -1e-6);
+    // On a linear axis nothing is flipped.
+    const auto lin = curve_plot(from_zero, "V (V)", "I (A)", AxisScale::linear, AxisScale::linear);
+    REQUIRE(lin.has_value());
+    CHECK(lin->series[0].y[2] == -1e-3);
 
     // A 1D band diagram: four series, the insulator's NaN kept as a gap.
     const auto line = *mesh::make_tensor_grid(uniform(0.0, 1e-4, 5));

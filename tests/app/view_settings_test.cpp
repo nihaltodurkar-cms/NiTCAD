@@ -1199,3 +1199,24 @@ TEST_CASE("app views 26d/26e: viridis is the default colormap in the app and nit
         CHECK(same(draw(*app_scene, 480, 360), plot(dargs, std::string("difference_") + map + ".png")));
     }
 }
+
+TEST_CASE("app views: a diode's I-V from 0 V on a log axis, either contact sensed", "[app]") {
+    // The sweep starts at 0 V, where the current is 0; the cathode's current is negative everywhere else.
+    const app::Workspace& w = diode().workspace;
+    REQUIRE(w.sweep);
+    REQUIRE(w.sweep->points.front().terminal_current[1] == 0.0);
+    for (const char* sense : {"anode", "cathode"}) {
+        CAPTURE(sense);
+        ViewSettings s;
+        s.kind = ViewKind::iv;
+        s.log = true;
+        s.sense = sense;
+        const auto scene = app::build_scene(w, s);
+        REQUIRE(scene);
+        const auto& p = std::get<render::PlotScene>(*scene);
+        REQUIRE(p.series.size() == 1);
+        CHECK(p.y.scale == render::AxisScale::log10);
+        CHECK(p.series[0].y.back() > 0.0);
+        CHECK(p.y.hi >= p.series[0].y.back());
+    }
+}

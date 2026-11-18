@@ -536,10 +536,16 @@ Choices made in building, within the design:
 - **Tests changed (HG6):** the `plot_arguments` expectations drop `--colormap viridis` (now the default; one case
   names cividis to keep the option covered); 26d's ZG10 case is rewritten for one default; the self-test's third
   view names turbo instead of viridis. The 26d film tests that name `--colormap viridis` stay as they are.
-- **Found, not fixed:** a 1D diode sweep from 0 V has no I-V plot ("a log axis needs a positive value": the 0 V
-  current on the default log axis). This predates 26e; the hover test's sweep starts at 0.1 V.
+- **Found and fixed (owner, 2026-11-18: "fix it"):** a 1D diode sweep from 0 V had no I-V plot with the cathode
+  sensed ("a log axis needs a positive value"). Its current is exactly 0 at 0 V and negative after that, and
+  `render::curve_plot` drew a log-axis curve by its magnitude only when every value was strictly negative. Now it
+  does so when the curve has no positive value and at least one negative one; the zeros stay off the axis, as
+  non-positive values always were. Mixed-sign curves and linear axes are unchanged, and no curve that drew before
+  draws differently (the case was an error). Tests: `render scene: plots fit their axes…` (from 0 V, mixed, linear)
+  and `app views: a diode's I-V from 0 V on a log axis` (both contacts); the old condition fails both. The hover
+  window test's sweep starts at 0 V again.
 
-Results: Release app tests 70/70 test cases, window tests 27/27 (24 + 3 new), render 78/78 with every reference image
+Results: Release app tests 71/71 test cases, window tests 27/27 (24 + 3 new), render 78/78 with every reference image
 unchanged (HG3), `nitcad plot` deck tests 12/12. HG7: median hover 0.067 ms, maximum 0.78 ms over 200 positions on
 `examples/mosfet_3d.deck`'s doping surface (1,911 nodes). HG8: 10 hand mutants, all killed (the curve pick's own
 non-finite skip is redundant, since a NaN position fails the reach test, so that mutant is placed in

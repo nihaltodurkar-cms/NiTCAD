@@ -1383,9 +1383,14 @@ std::expected<PlotScene, base::Error> curve_plot(std::span<const SeriesInput> in
         s.color = qualitative[k % qualitative.size()];
         s.x = c.x;
         s.y = c.y;
-        bool all_negative = y_scale == AxisScale::log10;
-        for (const double v : c.y) all_negative = all_negative && v < 0.0;
-        if (all_negative) {
+        // On a log axis a curve with no positive value (a sweep from 0 V into negative currents, say) is drawn
+        // by its magnitude; its zeros, like any non-positive value, are not on the axis.
+        bool positive = false, negative = false;
+        for (const double v : c.y) {
+            positive = positive || v > 0.0;
+            negative = negative || v < 0.0;
+        }
+        if (y_scale == AxisScale::log10 && negative && !positive) {
             for (double& v : s.y) v = -v;
         }
         s.markers = c.x.size() <= 60;
