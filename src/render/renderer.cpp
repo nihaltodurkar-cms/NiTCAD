@@ -235,7 +235,9 @@ struct FrameConstants {
     float bg_top[4];
     float bg_bottom[4];
     float view_rect[4];
-    float pad[12];
+    float half_vector[3];
+    float spare2;
+    float pad[8];
 };
 static_assert(sizeof(FrameConstants) % 256 == 0);
 static_assert(sizeof(FrameConstants) == 4352);  // the HLSL block's size; the fields match scene.hlsl
@@ -912,6 +914,12 @@ std::expected<void, base::Error> Renderer::Impl::render_field(const FieldScene& 
         base.view_rect[1] = view.top * supersample;
         base.view_rect[2] = (view.right - view.left) * supersample;
         base.view_rect[3] = (view.bottom - view.top) * supersample;
+        if (!lighting.perspective) {
+            std::array<double, 3> hv{};
+            for (std::size_t i = 0; i < 3; ++i) hv[i] = double(base.light[i]) + double(lighting.eye[i]);
+            hv = unitd(hv);
+            for (std::size_t i = 0; i < 3; ++i) base.half_vector[i] = static_cast<float>(hv[i]);
+        }
     }
     const Colormap map = s.colorbar ? s.colorbar->map : Colormap::turbo;
     for (int i = 0; i < 256; ++i) {

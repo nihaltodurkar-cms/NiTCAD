@@ -20,6 +20,8 @@ cbuffer Frame : register(b0) {
     float4 bg_top;
     float4 bg_bottom;
     float4 view_rect;    // left, top, width, height of the view in target pixels
+    float3 half_vector;  // orthographic: normalize(light + eye), the same at every pixel
+    float spare2;
 };
 
 struct MeshIn {
@@ -69,8 +71,13 @@ float4 base_color(MeshOut p) {
         const float hemi = lerp(0.30, 0.46, 0.5 + 0.5 * dot(n, up));
         const float lum = hemi + 0.60 * key + 0.18 * fil;
         const float field = (flags & 2u) ? 1.0 : 0.0;
-        const float spec = lerp(0.22, 0.08, field) * pow(saturate(dot(n, normalize(light + v))), 40.0);
-        const float rim = lerp(0.14, 0.06, field) * pow(1.0 - saturate(dot(n, v)), 3.0);
+        // Powers by multiplication (s^40 = s^32 s^8, r^3), no pow: WARP runs this per pixel on the CPU (KG6).
+        const float3 h = perspective > 0.5 ? normalize(light + v) : half_vector;
+        const float s = saturate(dot(n, h));
+        const float s2 = s * s, s4 = s2 * s2, s8 = s4 * s4, s32 = s8 * s8 * s8 * s8;
+        const float r = 1.0 - saturate(dot(n, v));
+        const float spec = lerp(0.22, 0.08, field) * (s32 * s8);
+        const float rim = lerp(0.14, 0.06, field) * (r * r * r);
         c.rgb = c.rgb * lum + spec + rim;
     } else if (flags & 1u) {
         // Two-sided: a slice or an interface is lit from whichever side the eye is on.

@@ -175,6 +175,8 @@ public:
         id_time, id_time_text, id_play, id_clip_x0, id_clip_x1, id_clip_y0, id_clip_y1, id_clip_z0, id_clip_z1,
         // Unit 26d (ZD3): the colour range's minimum and maximum, and Auto.
         id_range_min, id_range_max, id_range_auto,
+        // Unit 26f (KD5): the enhanced 3D look.
+        id_enhanced,
         id_first_label = 5100,
     };
 

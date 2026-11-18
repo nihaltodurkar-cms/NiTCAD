@@ -16,6 +16,7 @@
 #include "NiTCAD/app/compare.hpp"
 #include "NiTCAD/mesh/mesh.hpp"
 #include "NiTCAD/render/compare.hpp"
+#include "NiTCAD/render/edges.hpp"
 #include "NiTCAD/render/quality.hpp"
 #include "NiTCAD/render/streamlines.hpp"
 #include "NiTCAD/render/vectors.hpp"
@@ -411,6 +412,7 @@ std::expected<Scene, base::Error> build_scene(const Workspace& w, const ViewSett
         if (f) {
             if (cut) add_cut_line(*f, *cut);
             apply_camera(*f, o);
+            set_look(*f, o.enhanced ? Look::enhanced : Look::classic);  // Unit 26f (KD5): after every overlay
         }
         return scene;
     };
@@ -898,6 +900,7 @@ std::vector<std::string> plot_arguments(const ViewSettings& s, const Workspace* 
     if (s.edges) a.emplace_back("--edges");
     if (s.opaque) a.emplace_back("--opaque");
     if (s.perspective) a.emplace_back("--perspective");
+    if (!s.enhanced) a.insert(a.end(), {"--look", "classic"});  // Unit 26f (KD5): enhanced is the default
     if (s.azimuth) a.insert(a.end(), {"--azimuth", std::format("{}", *s.azimuth)});
     if (s.elevation) a.insert(a.end(), {"--elevation", std::format("{}", *s.elevation)});
     for (const auto& p : s.slices) {
