@@ -929,7 +929,7 @@ if(NITCAD_VERIFY_FULL_TIER AND CMAKE_BUILD_TYPE STREQUAL "Release")
 endif()
 
 # The batch runner (`nitcad check|run <deck>`).
-add_executable(nitcad src/cli/main.cpp src/cli/plot.cpp src/cli/verify.cpp src/cli/learn.cpp src/cli/compare.cpp)
+add_executable(nitcad src/cli/main.cpp src/cli/plot.cpp src/cli/verify.cpp src/cli/learn.cpp src/cli/compare.cpp app/icon/nitcad.rc)
 target_link_libraries(nitcad PRIVATE NiTCAD::deck NiTCAD::render NiTCAD::verify_benchmark NiTCAD::analysis)
 # `nitcad --version` names the build (Unit 42, PV6): a 40-digit revision, or unknown without git.
 add_test(NAME cli_version COMMAND nitcad --version)
@@ -1070,7 +1070,7 @@ target_link_libraries(nitcad_app_window PUBLIC NiTCAD::app comctl32 comdlg32 she
 target_compile_definitions(nitcad_app_window PRIVATE NITCAD_EXAMPLES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/examples")
 target_include_directories(nitcad_app_window PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src/app")
 # nitcad-app (AQ4): a separate GUI executable; the nitcad batch runner keeps no window code.
-add_executable(nitcad-app WIN32 app/main.cpp)
+add_executable(nitcad-app WIN32 app/main.cpp app/icon/nitcad.rc)
 target_link_libraries(nitcad-app PRIVATE nitcad_app_window)
 add_executable(nitcad_app_window_test tests/app/window_test.cpp tests/app/self_test_test.cpp
   tests/app/analysis_window_test.cpp tests/app/hover_window_test.cpp)
