@@ -9,6 +9,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <windows.h>
+#include <psapi.h>
 
 #include <algorithm>
 #include <chrono>
@@ -892,6 +893,48 @@ TEST_CASE("render window: edits and other scenes take the full path (Unit 26i, N
     REQUIRE(r.present_camera(*s, *t.target, W, H).has_value());
     CHECK_FALSE(r.last_present_reused());
     check_same_as_draw(r, *s, W, H);
+}
+
+
+// Unit 26i (NG5): the kept buffers are replaced, not added to. On WARP the GPU's memory is the process's:
+// after 100 field changes, each presented in full and then turned, the private bytes are within 1% of
+// those after the first.
+TEST_CASE("render window: kept buffers are replaced, not added to (Unit 26i, NG5)") {
+    Renderer& r = warp();
+    constexpr int W = 480, H = 360;
+    HiddenTarget t(r, W, H);
+    if (!t.target) SKIP("no swap chain here");
+    const Mosfet& m3 = mosfet(true);
+    const Geometry g3 = geometry_of(m3.device);
+    std::vector<double> values;
+    const FieldOptions o = field_options(m3.device, m3.point, Field::potential, values);
+    auto s = field_view(m3.device, g3, values, o);
+    REQUIRE(s.has_value());
+    set_look(*s, Look::enhanced);
+    const auto private_bytes = [] {
+        PROCESS_MEMORY_COUNTERS_EX c{};
+        c.cb = sizeof c;
+        REQUIRE(K32GetProcessMemoryInfo(GetCurrentProcess(), reinterpret_cast<PROCESS_MEMORY_COUNTERS*>(&c), sizeof c));
+        return static_cast<double>(c.PrivateUsage);
+    };
+    const auto change = [&](int k) {
+        for (TriangleBatch& b : s->triangles) {
+            for (SceneVertex& v : b.vertices) v.value = std::fmod(v.value + 0.01f * static_cast<float>(k), 1.0f);
+        }
+        REQUIRE(r.present(*s, *t.target, W, H).has_value());
+        s->camera.azimuth_deg += 3.0f;
+        REQUIRE(r.present_camera(*s, *t.target, W, H).has_value());
+        REQUIRE(r.last_present_reused());
+    };
+    // The allocators warmed up to their steady state first: WARP keeps freed memory for reuse, and the first
+    // hundred draws grow the process by some 100 MB whatever is kept (measured, 2026-11-19).
+    for (int k = 0; k < 100; ++k) REQUIRE(r.draw(*s, W, H).has_value());
+    for (int k = 0; k < 20; ++k) change(k);
+    const double first = private_bytes();
+    for (int k = 0; k < 100; ++k) change(k);
+    const double after = private_bytes();
+    CAPTURE(first, after, after / first);
+    CHECK(after <= 1.01 * first);
 }
 
 TEST_CASE("render image: drawing benchmark (VG7)", "[.benchmark]") {

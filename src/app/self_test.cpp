@@ -190,6 +190,7 @@ int run_self_test(const SelfTestOptions& o, std::FILE* log) {
         vp.present();  // warm up
         for (int k = 0; k < o.orbit_frames; ++k) {
             host.viewport_orbit(1.0f, 0.0f);
+            vp.flush();  // the frame a WM_PAINT would draw (ND4)
             camera.push_back(vp.last_present_ms());
             reused += window->renderer()->last_present_reused() ? 1 : 0;
             vp.present();

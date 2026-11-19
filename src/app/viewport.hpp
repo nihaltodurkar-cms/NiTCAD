@@ -9,6 +9,7 @@
 
 #include <windows.h>
 
+#include <cstddef>
 #include <optional>
 #include <string>
 
@@ -55,6 +56,10 @@ public:
     // Unit 26i (ND2): draws again after a change of the scene's camera only, reusing the swap chain's
     // buffers (Renderer::present_camera). A plot, or a first frame, is drawn as present() draws it.
     void present_camera();
+    // Draws a pending camera frame now (tests and the benchmark; the window draws it on WM_PAINT).
+    void flush();
+    // Frames presented so far (NG3).
+    [[nodiscard]] std::size_t presents() const noexcept { return presents_; }
     [[nodiscard]] const std::optional<std::string>& error() const noexcept { return error_; }
     [[nodiscard]] double last_present_ms() const noexcept { return last_ms_; }
     [[nodiscard]] int width() const noexcept;
@@ -80,6 +85,8 @@ private:
     bool dragging_ = false;
     bool moved_ = false;
     bool tracking_ = false;  // TrackMouseEvent's leave is pending
+    bool camera_pending_ = false;  // a camera frame waits for WM_PAINT (Unit 26i, ND4)
+    std::size_t presents_ = 0;
     int button_ = 0;  // 1 left, 2 right, 3 middle
     POINT last_{};
     POINT down_{};
