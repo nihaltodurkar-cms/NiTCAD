@@ -604,6 +604,7 @@ add_test(NAME render_layering
 # --- solve layer (Newton, equilibrium and bias solves, sweeps, cancellation, progress) ---
 add_library(nitcad_solve STATIC
   src/solve/equilibrium.cpp
+  src/solve/density_gradient.cpp
   src/solve/bias.cpp
   src/solve/run_record.cpp
   src/solve/weighted_current.cpp
@@ -676,6 +677,8 @@ target_link_libraries(nitcad_solve_test PRIVATE NiTCAD::solve NiTCAD::analysis N
   Catch2::Catch2WithMain)
 # The 3D sliver stress test meshes perturbed lattices with the generator's Delaunay (Unit 16).
 target_include_directories(nitcad_solve_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/mesh")
+# Unit 62: the density-gradient start (QP9) is private to the solve layer; its test reads it.
+target_include_directories(nitcad_solve_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/solve")
 target_compile_definitions(nitcad_solve_test PRIVATE
   NITCAD_MKL_RUNTIME_PATH="${NITCAD_MKL_RUNTIME_PATH}"
   NITCAD_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}" NITCAD_GIT="${GIT_EXECUTABLE}"

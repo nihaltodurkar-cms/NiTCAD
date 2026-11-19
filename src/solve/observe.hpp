@@ -42,6 +42,9 @@ inline void observe(const results::NodeFields& f) {
     observe("result.temperature", f.temperature_K);
     observe("result.electron_temperature", f.electron_temperature_K);  // Unit 57, GE1 ii
     observe("result.hole_temperature", f.hole_temperature_K);
+    // Unit 62: only with density gradient, so the traces of every other run are unchanged (QV1).
+    if (!f.quantum_potential_n_eV.empty()) observe("result.quantum_potential_n", f.quantum_potential_n_eV);
+    if (!f.quantum_potential_p_eV.empty()) observe("result.quantum_potential_p", f.quantum_potential_p_eV);
 }
 
 inline void observe(const results::BandDiagram& b) {

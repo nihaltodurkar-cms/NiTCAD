@@ -25,6 +25,10 @@ struct NodeFields {
     // without it. In an initial state, empty starts every node at the lattice temperature.
     std::vector<double> electron_temperature_K;
     std::vector<double> hole_temperature_K;
+    // The electron and hole quantum potentials Lambda_n, Lambda_p in eV with density gradient (Unit 62,
+    // QP12); empty without it. In an initial state, empty starts them at 0.
+    std::vector<double> quantum_potential_n_eV;
+    std::vector<double> quantum_potential_p_eV;
 };
 
 // Per mesh node, the band diagram in eV, measured from the equilibrium Fermi level (the Fermi level
@@ -60,6 +64,9 @@ struct EquilibriumResult {
     // Trapped charge of each declared interface, as BiasPoint::interface_trap_charge.
     std::vector<double> interface_trap_charge;
     ConvergenceRecord convergence;
+    // Density gradient (Unit 62, QP9): the fractions k of beta solved before beta itself when the first
+    // solve from Lambda = 0 failed, in order; empty when it converged.
+    std::vector<double> quantum_continuation;
 };
 
 // Per node, the generation-recombination rates of a state in cm^-3 s^-1 (Unit 45, DECISIONS.md

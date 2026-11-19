@@ -46,9 +46,8 @@ struct ConfinementFactors {
 [[nodiscard]] std::expected<void, base::Error> check_density_gradient(const device::Device& device,
                                                                    const PhysicsModels& models);
 
-// Density gradient between Unit 62's slices 2 and 3: the assemblers build its rows (steady and
-// equilibrium), the solvers (bias sweeps, equilibrium, transient, small signal, traces, adaptation)
-// not yet. With models.quantum_confinement density_gradient: invalid_input, "quantum_confinement
+// Density gradient during Unit 62's slice 3: equilibrium and bias sweeps (drift-diffusion and
+// quasi-static) solve it; transient, small signal, traces and adaptation not yet, and call this. With models.quantum_confinement density_gradient: invalid_input, "quantum_confinement
 // density_gradient: the solvers are not built yet (Unit 62 slice 3)"; else nullopt.
 [[nodiscard]] std::optional<base::Error> density_gradient_solvers_unbuilt(
     const PhysicsModels& models);

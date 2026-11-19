@@ -28,6 +28,9 @@
 #include "NiTCAD/solve/equilibrium.hpp"
 #include "NiTCAD/solve/small_signal.hpp"
 #include "NiTCAD/solve/transient.hpp"
+#include "NiTCAD/assemble/scaling.hpp"
+#include "NiTCAD/linalg/linear_solver.hpp"
+#include "density_gradient.hpp"
 #include "NiTCAD/solve/waveform.hpp"
 
 using namespace NiTCAD;
@@ -383,12 +386,30 @@ TEST_CASE("quantum confinement: a lumped gate against the meshed oxide (QC9)", "
     CHECK(std::abs(ql - qm) <= 0.05 * qm);
 }
 
-// Unit 62 slice 2: the assemblers build density gradient, the solvers refuse it until slice 3,
-// every one with the same message.
-TEST_CASE("density gradient: the solvers refuse it until slice 3 (Unit 62)") {
-    const device::Device d = mosc(0.1e-7);
+// Unit 62 slice 3: density gradient through the solvers.
+namespace {
+
+assemble::PhysicsModels dg_models(bool fermi_dirac = false) {
     assemble::PhysicsModels m;
+    m.fermi_dirac = fermi_dirac;
     m.quantum_confinement = assemble::QuantumConfinement::density_gradient;
+    return m;
+}
+
+// The largest |E_Fn| and |E_Fp| [eV] over the semiconductor nodes.
+double fermi_spread(const device::Device& d, const results::BandDiagram& b) {
+    double worst = 0.0;
+    for (std::size_t i = 0; i < d.mesh().node_count(); ++i) {
+        if (d.is_insulator(static_cast<mesh::NodeId>(i))) continue;
+        worst = std::max({worst, std::abs(b.electron_fermi_eV[i]), std::abs(b.hole_fermi_eV[i])});
+    }
+    return worst;
+}
+
+}  // namespace
+
+TEST_CASE("density gradient: the solvers not yet built refuse it (Unit 62 slice 3)") {
+    const device::Device d = mosc(0.1e-7);
     const std::string message =
         "quantum_confinement density_gradient: the solvers are not built yet (Unit 62 slice 3)";
     const auto refused = [&](const auto& run, const char* what) {
@@ -398,21 +419,108 @@ TEST_CASE("density gradient: the solvers refuse it until slice 3 (Unit 62)") {
         CHECK(run.error().message == message);
     };
     const std::vector<double> bias{0.5, 0.0};
-    solve::BiasOptions o;
-    o.models = m;
-    refused(solve::solve_bias(d, bias, o), "drift-diffusion");
-    o.equations = solve::Equations::equilibrium_poisson;
-    refused(solve::solve_bias(d, bias, o), "quasi-static");
-    solve::EquilibriumOptions e;
-    e.models = m;
-    refused(solve::solve_equilibrium(d, e), "equilibrium");
     solve::SmallSignalOptions ac;
-    ac.steady.models = m;
+    ac.steady.models = dg_models();
     ac.frequencies_Hz = {1e6};
     const std::vector<std::vector<double>> points{bias};
     refused(solve::solve_small_signal(d, points, ac), "small signal");
     solve::TransientOptions t{.t_end_s = 1e-9, .dt_initial_s = 1e-12};
-    t.steady.models = m;
+    t.steady.models = dg_models();
     const std::vector<solve::Waveform> wf{solve::Waveform::constant(0.5), solve::Waveform::constant(0.0)};
     refused(solve::solve_transient(d, wf, t), "transient");
+}
+
+TEST_CASE("density gradient: equilibrium and steady states at equilibrium (QV4)") {
+    const physics::Semiconductor si = physics::silicon();
+    for (const bool lumped : {false, true}) {
+        for (const bool fd : {false, true}) {
+            const device::Device d = mosc(0.1e-7, lumped, 0.0, !lumped);
+            CAPTURE(lumped, fd);
+            solve::EquilibriumOptions e;
+            e.models = dg_models(fd);
+            const auto eq = solve::solve_equilibrium(d, e);
+            if (!eq) FAIL(eq.error().message);
+            REQUIRE(eq->fields.quantum_potential_n_eV.size() == d.mesh().node_count());
+            CHECK(eq->quantum_continuation.empty());
+            const double flat_eq = fermi_spread(d, eq->bands);
+            CAPTURE(flat_eq);
+            CHECK(flat_eq <= 1e-9);
+            for (const double vg : {-2.0, 1.5}) {  // accumulation and inversion
+                CAPTURE(vg);
+                solve::BiasOptions o;
+                o.models = dg_models(fd);
+                solve::BiasOptions qs = o;
+                qs.equations = solve::Equations::equilibrium_poisson;
+                const std::vector<double> bias{vg, 0.0};
+                const auto start = solve::solve_bias(d, bias, qs);
+                if (!start) FAIL(start.error().message);
+                const auto p = solve::solve_bias(d, bias, o, &start->fields);
+                if (!p) FAIL(p.error().message);
+                CAPTURE(p->terminal_current[1], p->terminal_current_resolution[1]);
+                CHECK(std::abs(p->terminal_current[1]) <= p->terminal_current_resolution[1]);
+                const double flat = fermi_spread(d, p->bands), flat_qs = fermi_spread(d, start->bands);
+                CAPTURE(flat, flat_qs);
+                CHECK(flat <= 1e-9);
+                CHECK(flat_qs <= 1e-9);
+                double peak = 0.0;
+                for (std::size_t i = 0; i < d.mesh().node_count(); ++i) {
+                    if (d.is_insulator(static_cast<mesh::NodeId>(i))) continue;
+                    peak = std::max(peak, vg > 0 ? p->fields.quantum_potential_n_eV[i]
+                                                 : p->fields.quantum_potential_p_eV[i]);
+                    const double n = p->fields.n_cm3[i], pp = p->fields.p_cm3[i];
+                    const double tau = physics::scharfetter_lifetime(si, physics::Carrier::electron, N_A);
+                    const double scale = n * pp / (tau * (n + pp));
+                    CAPTURE(i, n, pp, p->rates.srh[i], scale);
+                    REQUIRE(std::abs(p->rates.srh[i]) <= 1e-9 * scale);
+                    if (!lumped) {
+                        const double h = d.mesh().volumes()[i];
+                        REQUIRE(std::abs(p->rates.interface_n[i]) <= 1e-9 * 1e3 * n * pp / (n + pp) / h);
+                    }
+                }
+                CAPTURE(peak);
+                CHECK(peak > 0.0);  // the majority (accumulation) or inversion carriers are pushed back
+            }
+        }
+    }
+}
+
+TEST_CASE("density gradient: the coefficient continuation (QP9)") {
+    // Newton capped at 5 iterations does not reach the model's equilibrium from Lambda = 0 on the
+    // meshed MOS-C (measured: 6 suffice), and does through the ladder: the same state as uncapped.
+    // Capped at 2 even the first rung fails, and the error names the rung and the ones converged.
+    const device::Device d = mosc(0.1e-7);
+    const auto scaling = *assemble::make_scaling(d);
+    auto solver = *linalg::LinearSolver::create({});
+    const std::vector<double> zero{0.0, 0.0};
+    results::ConvergenceRecord record;
+    const auto psi = solve::detail::classical_equilibrium(d, scaling, dg_models(), zero, {}, solver, record);
+    REQUIRE(psi.has_value());
+    const auto direct = solve::detail::solve_quantum_equilibrium(d, scaling, dg_models(), zero, *psi, {},
+                                                                 solver, record);
+    REQUIRE(direct.has_value());
+    CHECK(direct->rungs.empty());
+    solve::NewtonOptions capped;
+    capped.max_iterations = 5;
+    const auto ladder = solve::detail::solve_quantum_equilibrium(d, scaling, dg_models(), zero, *psi, capped,
+                                                                 solver, record);
+    REQUIRE(ladder.has_value());
+    REQUIRE_FALSE(ladder->rungs.empty());
+    CHECK(std::is_sorted(ladder->rungs.begin(), ladder->rungs.end()));
+    CHECK(ladder->rungs.back() < 1.0);
+    double worst = 0.0;
+    for (std::size_t i = 0; i < psi->size(); ++i) {
+        worst = std::max({worst, std::abs(ladder->psi[i] - direct->psi[i]),
+                          std::abs(ladder->lambda_n[i] - direct->lambda_n[i]),
+                          std::abs(ladder->lambda_p[i] - direct->lambda_p[i])});
+    }
+    CAPTURE(ladder->rungs.size(), worst);
+    CHECK(worst <= 1e-6);
+    capped.max_iterations = 2;
+    const auto failed = solve::detail::solve_quantum_equilibrium(d, scaling, dg_models(), zero, *psi, capped,
+                                                                 solver, record);
+    REQUIRE_FALSE(failed.has_value());
+    CHECK(failed.error().code == base::ErrorCode::non_convergence);
+    CAPTURE(failed.error().message);
+    CHECK(failed.error().message.starts_with(
+        "density gradient: the coefficient continuation failed at k = 0.0078125 (converged: none)"));
 }

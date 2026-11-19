@@ -303,3 +303,49 @@ TEST_CASE("density gradient: the run record names the model, its masses and gamm
     q.options.models.quantum_confinement = mlda;
     CHECK(solve::make_run_record(q.device, q.options, q.points).input_identity == with_mlda.input_identity);
 }
+
+// Unit 62 (QV4, QV9, QV13 reported): density gradient on the 2D MOSFET example. Hidden as the MLDA
+// case above (the sweeps take minutes); run by name.
+TEST_CASE("density gradient: the 2D MOSFET example, equilibrium and reflected (QV4, QV9)", "[.dg]") {
+    const auto dg = assemble::QuantumConfinement::density_gradient;
+    deck::Plan p = example(fs::path(NITCAD_EXAMPLES_DIR) / "mosfet_2d.deck");
+    // QV4: equilibrium at Vg = 1 V (source, drain, body at 0): no current, flat quasi-Fermi levels.
+    {
+        auto options = p.options;
+        options.models.quantum_confinement = dg;
+        const auto t0 = std::chrono::steady_clock::now();
+        const auto eq = solve::solve_bias(p.device, std::vector<double>{0.0, 0.0, 1.0, 0.0}, options);
+        if (!eq) FAIL(eq.error().message);
+        const double seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+        for (std::size_t c = 0; c < 4; ++c) {
+            CAPTURE(c, eq->terminal_current[c], eq->terminal_current_resolution[c]);
+            CHECK(std::abs(eq->terminal_current[c]) <= eq->terminal_current_resolution[c]);
+        }
+        double flat = 0.0, peak_n = 0.0, far = 0.0;
+        for (std::size_t i = 0; i < p.device.mesh().node_count(); ++i) {
+            if (p.device.is_insulator(static_cast<mesh::NodeId>(i))) continue;
+            flat = std::max({flat, std::abs(eq->bands.electron_fermi_eV[i]), std::abs(eq->bands.hole_fermi_eV[i])});
+            peak_n = std::max(peak_n, eq->fields.quantum_potential_n_eV[i]);
+            far = std::max({far, std::abs(eq->fields.quantum_potential_n_eV[i]),
+                            std::abs(eq->fields.quantum_potential_p_eV[i])});
+        }
+        std::printf("QV4 2D MOSFET example at Vg 1 V: %.1f s, %zu iterations, E_F spread %.2e eV, "
+                    "peak Lambda_n %.4f eV, largest |Lambda| %.4f eV\n",
+                    seconds, eq->convergence.iterations.size(), flat, peak_n, far);
+        CHECK(flat <= 1e-9);
+    }
+    // QV9: the reflected device gives the same drain current. Three points of the sweep.
+    p.points = {{0.0, 0.1, 0.5, 0.0}, {0.0, 0.1, 1.0, 0.0}, {0.0, 0.1, 1.5, 0.0}};
+    auto r = must(reflected_mosfet);
+    r.points = p.points;
+    const auto [a, ta] = sweep(p, dg);
+    const auto [b, tb] = sweep(std::move(r), dg);
+    REQUIRE(a.points.size() == 3);
+    REQUIRE(b.points.size() == 3);
+    for (std::size_t k = 0; k < 3; ++k) {
+        const double ia = a.points[k].terminal_current[1], ib = b.points[k].terminal_current[1];
+        std::printf("QV9 Vg %.1f V: Id %.9e and reflected %.9e A/cm (%.2e)\n", p.points[k][2], ia, ib, ib / ia - 1.0);
+        CHECK(std::abs(ib / ia - 1.0) <= 1e-9);
+    }
+    std::printf("QV13 2D MOSFET example, 3 points: %.1f s and %.1f s reflected\n", ta, tb);
+}

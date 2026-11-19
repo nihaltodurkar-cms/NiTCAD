@@ -1633,6 +1633,43 @@ Results (Release, targeted, `nitcad_assemble_test` whole):
 - The 1D MOS in inversion, with only a substrate contact, has a smallest pivot ratio of 2.3e-15 without the model
   (9.8e-15 with it), below the 1e-11 floor. The QV4 Newton check on it runs with min_pivot_ratio 0.
 
+**Slice 3a (2026-11-19, owner "choose recommended": the recommended next step, slice 3, in three local commits —
+3a solver handoff, 3b transient, small signal and traces, 3c results files, plot, app, checkpoints and run-record
+warnings).** As built:
+- `solve_equilibrium` with the model on: the classical equilibrium first, then the stride-3 system from Λ̂ = 0
+  (QP8). Every result (fields, bands, gate and trap charges) is read from the drift-diffusion state the equilibrium
+  slaves (`state_from_quantum_potential`), so no equilibrium-system query has to know about Λ.
+- QP9's ladder (src/solve/density_gradient.cpp). If the first solve fails with non_convergence, it runs
+  k = 1/8, 1/4, 1/2, 1, each rung from the previous solution. A failed rung halves the gap to the last converged
+  k, at most 4 times per rung, and then the start fails with "density gradient: the coefficient continuation failed
+  at k = … (converged: …)". β·k is built as γ·k, since β is linear in γ and the barrier term is β B. The rungs
+  are in `EquilibriumResult::quantum_continuation`; the run-record entry comes with 3c.
+- Bias sweeps. Drift-diffusion starts from the model's equilibrium, Λ included. Quasi-static sweeps run on the
+  stride-3 system, with each point's results read from the slaved drift-diffusion state at its bias. An initial
+  state carries Λ (`NodeFields::quantum_potential_n_eV`, `_p_eV`, empty without the model).
+- QP12, first part: the drift-diffusion E_Fn gains +Λ̂_n and E_Fp gains −Λ̂_p, and the Λ fields are in every bias
+  point and the equilibrium result. They are observed only when non-empty, so every other run's trace is
+  unchanged (QV1).
+- Still refused until 3b: transient, small signal and traces. Adaptation is refused until its field transfer
+  carries Λ.
+
+Results (Release, targeted):
+- QV4, solve part (met). The meshed MOS-C (traps and surface recombination) and the lumped one, both statistics:
+  - equilibrium E_F within 1e-9 eV;
+  - at −2 V and 1.5 V, drift-diffusion from the quasi-static state: the substrate current within its resolution;
+  - E_F of both states within 1e-9 eV;
+  - SRH and interface rates within 1e-9 of their scales (as QC5).
+- The 2D MOSFET example at V_G = 1 V, equilibrium: every terminal current within its resolution and the E_F spread
+  1.0e-16 eV (0.4 s, 12 iterations). Peak Λ_n is only 0.3 meV and the largest |Λ| 1.5 meV: the example's
+  silicon mesh does not resolve the inversion layer, so the model has almost nothing to act on (QP15; QV13 and QV15
+  report it). The case is hidden like MLDA's ([.dg]) and run by name.
+- QV9, example part (met): the reflected 2D MOSFET example at V_D = 0.1 V and V_G = 0.5, 1, 1.5 V gives I_d within
+  2.2e-16 of the unreflected.
+- QP9: on the meshed MOS-C, Newton capped at 5 iterations fails from Λ̂ = 0 (6 suffice) and converges through the
+  ladder to the uncapped state within 1e-6. Capped at 2, it fails at k = 1/128 with "converged: none".
+- QV1: the whole `nitcad_assemble_test` and `nitcad_app_test`, solve confinement, density-gradient, interface,
+  trap and equilibrium cases (40), deck confinement cases (5): all pass.
+
 ## New questions the advisor raised (not yet in `ARCHITECTURE.md`)
 
 None of these is decided. Each needs an owner position before the build scaffold fixes the flags.

@@ -1658,6 +1658,10 @@ BandEdges SystemData::band_edges(const SystemState& /*st*/, std::span<const doub
         b.valence[i] = e.valence;
         b.electron_fermi[i] = e.electron_fermi;
         b.hole_fermi[i] = e.hole_fermi;
+        if (density_gradient_) {  // Unit 62 QP12: n = N_c F(E_Fn - E_c - Lambda_n), so E_Fn gains Lambda_n
+            b.electron_fermi[i] += x[m_ * i + 3];
+            b.hole_fermi[i] -= x[m_ * i + 4];
+        }
     }
     detail::observe("band_edges.conduction", b.conduction);
     detail::observe("band_edges.valence", b.valence);
