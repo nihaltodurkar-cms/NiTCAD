@@ -75,7 +75,8 @@ bool known_revision(const std::string& revision) {
 
 // What every run records about the build and the platform, whatever the run.
 void check_provenance(const results::Provenance& p, double outer_s) {
-    CHECK(p.version == "0.0.0");
+    // project(NiTCAD VERSION ...), passed in by CMake, so a release bump (PD5) needs no test edit.
+    CHECK(p.version == NITCAD_PROJECT_VERSION);
     CHECK(known_revision(p.revision));
 #ifdef NDEBUG
     CHECK(p.build_type == "Release");

@@ -10,6 +10,9 @@
 //                         run the verification benchmarks of TVR-1 (Unit 55; verify.hpp, its own exit status)
 //   nitcad learn manifest <manifest> <history>...
 //                         the manifest of adaptation histories for cross-run learning (Unit 17b; learn.hpp)
+//   nitcad compare <a.nitsweep> <b.nitsweep> [--rtol <x>] [--potential-tol <V>]
+//                         compare two sweeps by tolerances (Unit 60; compare.hpp, its own exit
+//                         status: 0 match, 4 differ, 1 unreadable or not comparable, 64 usage)
 //   nitcad --version      print the build: version, git revision, build type, compiler, Eigen
 //
 // Exit status: 0 done; 1 the deck, the run or the plot failed (the message on stderr); 2 a sweep,
@@ -34,6 +37,7 @@
 #include "NiTCAD/solve/provenance.hpp"
 #include "NiTCAD/verify/benchmark/registry.hpp"
 #include "plot.hpp"
+#include "compare.hpp"
 #include "learn.hpp"
 #include "verify.hpp"
 
@@ -56,6 +60,7 @@ int usage() {
                "                     [--mkl <mkl_rt.dll>] [--threads <n>]\n"
                "       nitcad learn manifest <manifest> <history.nithist>...\n"
                "       nitcad learn train <manifest> <model.nitlearn> [--holdout <history.nithist>]...\n"
+               "       nitcad compare <a.nitsweep> <b.nitsweep> [--rtol <x>] [--potential-tol <V>]\n"
                "       nitcad --version\n",
                stderr);
     return 64;
@@ -255,6 +260,7 @@ int main(int argc, char** argv) {
     }
     if (argc >= 2 && std::string_view(argv[1]) == "plot") return NiTCAD::cli::plot(argc, argv);
     if (argc >= 2 && std::string_view(argv[1]) == "learn") return NiTCAD::cli::learn(argc, argv);
+    if (argc >= 2 && std::string_view(argv[1]) == "compare") return NiTCAD::cli::compare(argc, argv);
     if (argc >= 2 && std::string_view(argv[1]) == "verify") {
         return NiTCAD::cli::verify(argc, argv, NiTCAD::verify::benchmark::benchmarks());
     }

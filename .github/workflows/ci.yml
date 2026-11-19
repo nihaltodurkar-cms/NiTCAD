@@ -13,6 +13,8 @@ name: CI
 on:
   push:
     branches: ["**"]
+    # A release tag (vX.Y.Z) is built and tested too, after the tag check below (DECISIONS Unit 60, RV5).
+    tags: ["v*"]
   pull_request:
   workflow_dispatch:
 
@@ -63,6 +65,13 @@ jobs:
           Expand-Archive "$tools\ninja.zip" -DestinationPath "$tools\ninja"
           Add-Content $env:GITHUB_PATH "$tools\cmake-4.3.1-windows-x86_64\bin"
           Add-Content $env:GITHUB_PATH "$tools\ninja"
+
+      # A release tag must name the CMake project version, on a clean tree (DECISIONS Unit 60, RV5). It runs
+      # before any later step writes into the workspace.
+      - name: Release tag check
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        run: cmake "-DTAG=${{ github.ref_name }}" "-DROOT=${{ github.workspace }}" -P cmake/check_release_tag.cmake
 
       # The vcpkg tool is checked out at the commit named by vcpkg.json's builtin-baseline,
       # the same rule CMakeLists.txt enforces (Q3).
@@ -184,4 +193,7 @@ jobs:
           cmake --build --preset %PRESET%
           if errorlevel 1 exit /b 1
           ctest --preset %PRESET%
+          if errorlevel 1 exit /b 1
+          rem Unit 60 XG4: the cross-machine comparisons again with their output (the runner's CPU, the largest ratios).
+          ctest --preset %PRESET% -R "^cross_machine_" -V
           if errorlevel 1 exit /b 1

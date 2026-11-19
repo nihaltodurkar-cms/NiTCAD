@@ -1930,8 +1930,8 @@ PD1–PD5, PG1–PG8):**
   missing time point, an order outside 0–2 and fields of a missing contact are refused. A trace is a `Sweep` and
   goes through `save_sweep`. R2 is now met for every result type.
 - **The runner:** `nitcad --version` prints the build on one line; `nitcad run` prints the build, the platform, the
-  start and the wall time after the files it wrote. The CSV table is unchanged (PD4). The version stays `0.0.0`
-  until a release policy exists (PD5).
+  start and the wall time after the files it wrote. The CSV table is unchanged (PD4). The version stayed `0.0.0`
+  until a release policy existed (PD5); it is 0.1.0 under Unit 60's policy (9).
 - Gates (`tests/solve/provenance_test.cpp`, 3 cases; `tests/io/provenance_test.cpp`, 2; `tests/io/run_files_test.cpp`,
   5; ctest `cli_version`):
   - every public run records a true provenance (the revision a commit of the source's history, the cache sizes,
@@ -1946,7 +1946,7 @@ PD1–PD5, PG1–PG8):**
     identities included.
 - Mutation checks (29), all caught (DECISIONS.md, Unit 42).
 - Not in Unit 42: deck analyses for transient, small-signal and trace runs (PD1: the next unit); visualization
-  formats (Unit 25); cross-machine checksums (6.8); compression; file locking.
+  formats (Unit 25); cross-machine comparison (6.8, Unit 60); compression; file locking.
 
 **As built (Unit 45, generation-recombination rates and the mesh digest in results; approved and accepted by the
 owner 2026-10-21; DECISIONS.md RS1–RS6, RQ1–RQ4, RG1–RG8):**
@@ -2017,6 +2017,25 @@ owner 2026-10-21; DECISIONS.md RS1–RS6, RQ1–RQ4, RG1–RG8):**
     `linalg_eigen_blocking`) runs one pinned process per logical CPU and requires identical bits.
   - Bit-identity across different machines is still not promised. Tolerances stay the contract. Other
     differences between CPUs are unexamined, and MKL PARDISO's CPU dispatch is unverified.
+- **Cross-machine comparison (Unit 60; DECISIONS.md XC1–XC6).** OLD: the 11.3 row asked for "cross-machine
+  checksums". NEW: a comparison by tolerances. REASON: a digest of rounded values flips whenever a value lies near
+  a rounding boundary, and it says nothing about how far apart two results are.
+  - `analysis::compare_sweeps` (`analysis/compare.hpp`) first checks structure exactly: points, contacts, nodes, the
+    bias per point, which optional quantities exist, and whether the run stopped. A mismatch is `not comparable`,
+    with the reason. Then, per quantity, it reports the largest difference, its ratio to the allowance and where it
+    occurs. Defaults: currents 1e-6 relative plus the larger of the two runs' resolutions (each run's own floor);
+    charges 1e-6 relative plus 1e-30; ψ 1e-6 V; n and p 1e-6 relative against 1e-8 of the point's largest density;
+    temperatures 1e-6 K. The input identity and mesh digest are reported, not gated: mesh generation calls CRT
+    math that may take other paths on another CPU.
+  - `nitcad compare <a> <b> [--rtol] [--potential-tol]` prints one line per quantity and both runs' build and CPU.
+    Exit 0 match, 4 differ, 1 unreadable or not comparable, 64 usage.
+  - **References:** `tests/cross_machine/` holds the sweeps that `examples/pn_diode_1d.deck` and
+    `examples/mosfet_2d.deck` write on the development machine (Eigen SparseLU). The ctests `cross_machine_*` run
+    each deck and compare, so every CI run compares two machines. A reference is regenerated only after an
+    intended change, which makes the change MINOR (9). Measured: a Debug build against the Release references
+    gives a largest ratio of 2.1e-6 (the diode's current; ψ 1.1e-10), and the MOSFET is bit-identical.
+  - Not compared yet: transient and small-signal files, edge currents and rates (derived from the compared
+    fields), and PARDISO runs.
 
 ### 6.9 Threading, worker execution, cancellation, progress
 
@@ -3114,6 +3133,25 @@ the owner approves them in a unit request: `cmake/` (toolchain modules). `benchm
 - **Test levels** per component, from the legacy practice: analytic and limiting cases → published-value
   regression → Jacobian vs finite differences → dimensional-reduction identity → convergence and mesh
   independence → benchmark. A compile-only check is never the sole gate for a numerical unit.
+- **Release versions (Unit 60, PD5; DECISIONS.md RV1–RV6, VQ1–VQ5):**
+  - Semantic versioning, `MAJOR.MINOR.PATCH`. The only source is `project(NiTCAD VERSION …)`, which every run's
+    provenance and `nitcad --version` carry with the git revision and the `dirty` flag. Before 1.0, MAJOR stays 0
+    and MINOR takes its role. 1.0 is the owner's decision.
+  - **MINOR (before 1.0):** a new capability; a changed default that moves a default result beyond
+    `nitcad compare`'s default tolerances (any regenerated cross-machine reference, 6.8, counts); a deck key
+    removed or renamed, or a meaning changed; a file format version change. **PATCH:** everything else (fixes that
+    leave every reference matching, docs, build, CI). After 1.0, anything that breaks an old deck, file or public
+    header is MAJOR. A file that loaded before must still load (IO2).
+  - **A release** is the owner's decision. A release PR bumps the version and adds a row below. After it merges,
+    the owner pushes an annotated tag `vX.Y.Z` on the merge commit, its annotation the release notes (from
+    DECISIONS.md's unit summaries; no changelog file). Between releases `main` carries the last released version,
+    and builds are told apart by revision.
+  - **CI** also runs on `v*` tags. Before anything is written into the workspace, `cmake/check_release_tag.cmake`
+    fails the build unless the tag is `v` + the project version and the checkout is clean (ctests `release_tag.*`).
+
+  | Version | Date | Contents |
+  |---|---|---|
+  | 0.1.0 | not yet tagged | the first version under the policy (Unit 60): everything on `main` when Unit 60 merges |
 
 ## 10. Validation criteria pinned from the legacy
 
@@ -3325,7 +3363,7 @@ exists, not finished), **planned** (nothing built). Audit of 2026-10-09, against
 | Low-current accuracy | `terminal_current_resolution` reports the floor (Unit 15); the weighted terminal current with an adjoint error estimate (Unit 32, 6.6) | **Verified, on `main`** (Unit 32; `6e54c69`, PR #39): the MOSFET off state resolved at every Vg, sub-floor diode currents on the ideal-diode law to 0.1% | Weighted transient and small-signal currents; a path term for nonlocal tunnelling |
 | Generic fields/equations | Field descriptors and the unknowns' map; every row an equation term composed by equation set (Unit 40); model data and state split out, one `assemble::System` with topic headers, derived and edge fields, equilibrium from the same terms, an added field measured (Unit 57; 6.12.1–2) | **Verified, bit-identical, on `main`** (Unit 40; `629bed0`, PR #50; Unit 57; `2306228`, PR #87; below) | Face and cell fields; a public way to add fields and terms (GG8's extension is internal); dropping the insulator nodes' carrier unknowns (FD5) |
 | Scalable linear solvers | Eigen SparseLU (default), PARDISO opt-in (Unit 18); GMRES with an ILUT preconditioner opt-in, real and complex, with a reported SparseLU fallback (Unit 44, 6.10) | **GMRES-ILUT verified, opt-in** (Unit 44, on `linalg/iterative`): 3D 9–72× faster and 8–26× less memory than SparseLU | Algebraic multigrid and block (field-split) preconditioners; parallel assembly |
-| Results and provenance | Plain-data results; run record with identity digest (6.6); sweeps persisted bit for bit (Unit 29); provenance (build, revision, platform, start, wall time) in every run record and file, transient and small-signal files, `nitcad --version` (Unit 42) | **Verified** (Unit 42, 6.6; PR #52; DECISIONS.md PV1–PV7) | A release version policy (PD5); cross-machine checksums (6.8) |
+| Results and provenance | Plain-data results; run record with identity digest (6.6); sweeps persisted bit for bit (Unit 29); provenance (build, revision, platform, start, wall time) in every run record and file, transient and small-signal files, `nitcad --version` (Unit 42); release versions (9) and `nitcad compare`, with references CI checks on its own machine (Unit 60, 6.8) | **Verified** (Unit 42, 6.6; PR #52; DECISIONS.md PV1–PV7); **release policy and cross-machine comparison built** (Unit 60, 9 and 6.8; on `results/release-policy`) | Comparing transient and small-signal files; PARDISO references |
 | Adaptive mesh refinement | `solve::adapt` over tensor, generated 2D and swept 3D meshes: feature indicators, goal-adjoint weighting and estimate, Richardson verification on M′, per-goal certificates, the `[adapt]` deck section and `.nitadapt` report; an opt-in decision layer (`policy = intelligent`: a priori sizes, benefit and cost estimates, allocation, fallback to the basic loop) (Unit 17, 6.12.4) | **Built** (Unit 17, on `mesh/adaptive-refinement`; slice 7 gates: AC5 met with the intelligent policy, 98 593 nodes against at least 890 k uniform; AC11, AC12, AC20 met). **Limitations (unmet as frozen, never loosened):** AC14 (the a priori prediction's recall 0.51 on the tensor MOSFET, DOFs 2.1× and 2.3× basic on the diode and MOS-C, no pass saved); AC15 (a hole-density order 1.64 from 2 samples; the cost model not better than node-only within timing noise); AC16 (the well MOSFET's tolerance mode 1.92× basic's DOFs; the tensor MOSFET's budget mode a tie, 0.6531% against 0.6507%); AC8's target (UC8's rule at 9 and 6 of 17 points within its budget; the swept adjoint estimate 9–84× the actual error); the basic loop does not reach 1% on the generated MOSFET in 12 passes; AD11's verified error underestimated one error 26× at p = 2.18. **Cross-run learning (Unit 17b, built on `mesh/cross-run-learning`; opt-in `predictor`):** AC12, AC21 and AC19's determinism, versioning, identity, fallback and bit-identity clauses met; held-out rank correlation 0.40 against ridge 0.16. **Limitation (unmet as frozen):** AC19's family clause on held-out m6 (4 passes against 5, but 12 000 DOFs against ID2's 10 476); met on m7 (4 against 5, 10 260 against 15 561). **Derived goals (Unit 17c, built on `mesh/derived-goals`; `goal = vt|gm|swing`):** DC3 and DC5 met for V_T, g_m and the swing on the tensor MOSFET. **Limitations:** DC4 for the swing (1.52× the DOFs of a tightened current goal, and about 0.65× of the uniform ladder against 1/3: accepted by the owner, 2026-11-15); two-level verification (DR6) still misses an error that appears only beyond M″ | the swept 3D adjoint estimate; general 3D meshes (AQ2); a shipped pre-trained predictor (LQ1 c) |
 | Visualization, GUI, batch | The `nitcad check|run|plot` batch runner over the input deck (Unit 31); the `render` layer and `nitcad plot` (Unit 25a, 6.14); rates and the mesh digest in results (Unit 45, 6.6); \|E\|, \|J\|, isosurfaces and streamlines (Unit 25b, 6.14); arrows, clipping, exploded views and filmstrips (Unit 25c, 6.14); the Windows application `nitcad-app` (Unit 26, 6.14); its analysis workspace (Unit 26b, 6.14); the 25b/25c views, region visibility, playback and clip sliders in the window (Unit 26c, 6.14) | **Batch runner verified, on `main`** (Unit 31; `6f67510`, PR #37); **core visualization verified, on `main`** (Unit 25a; `6d2135b`, PR #55); **rates and digest verified, on `main`** (Unit 45; `81622ca`, PR #56); **derived fields verified, on `main`** (Unit 25b; `8256cf8`, PR #57); **arrows, clipping, exploded views and filmstrips verified** (Unit 25c); **the GUI verified, on `main`** (Unit 26; `e9b1d71`, PR #59); **the analysis workspace verified, on `main`** (Unit 26b; `51face0`, PR #60); **the GUI catch-up verified** (Unit 26c, PR #61; the WG1 spikes open) | the WG1 spikes (cause unknown; the input cause fixed in Unit 26c) |
 | Validation against published/measured data | Legacy, analytic and convergence gates throughout; resistivity against dopant density (NBS SP 400-64) and the measured n_i(300 K) as benchmark decks (Unit 33, 10.1) | **Verified, on `main`** (Unit 33; `a14ac96`, PR #41): gaps found and pinned (boron mobility up to +48%, incomplete ionization at heavy doping, n_i +10%); the opt-in Masetti hole mobility (Unit 34; `e14a53f`, PR #42) brings boron to within 11% (AC3/AC5 at 1e18 accepted as documented limitations); Unit 35 (`2d1fdc7`, PR #44) makes Masetti and a published band set (n_i within the measurement's uncertainty) the defaults | A density-dependent ionization level (owner decision); breakdown and device-level benchmarks from accessible sources |
