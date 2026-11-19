@@ -108,6 +108,20 @@ Already decided and not repeated here: D1–D6, D8, R1, R4, Q6–Q9 (see `ARCHIT
   - `-vcvars_ver=14.51` selection on a runner has not been run. Hosted images update weekly, so the patch level may move.
 - **Needed before:** the CI unit (not Unit 1).
 - **Owner decision:** [x] accept (2026-10-02)  [ ] change  [ ] defer
+- **Amendment (owner, 2026-11-19: "go with option 1").** The fallback above is now in use.
+  - **The breakage.** Runner image `windows-2025-vs2026` 20261116.315 moved Visual Studio from 18.11.12328 to
+    18.12.12405. 18.12's default toolset (`VC.Tools.x86.x64`) is 14.52. 14.51 had only ever been 18.11's default,
+    never a side-by-side component, so it went with no note in the image's release notes. Since 2026-11-18 about
+    17:38 UTC, every job has failed at vcvars: "Toolset directory for version '14.51' was not found".
+  - **The fix.** The workflow's "Ensure the MSVC 14.51 toolset" step adds
+    `Microsoft.VisualStudio.Component.VC.14.51.x86.x64` with the Visual Studio installer when the image lacks it.
+  - **The pin moves from 19.51.36260 to 19.51.36263.** That is the build the 14.51 component installs now. 14.51 was
+    serviced in place: the owner's 18.12 has it in the same `14.51.36231` directory, and every local build and test
+    since then has used it. The pin stays on 14.51 because 14.52.37025 miscompiles `= {}` (Q11).
+  - **Both builds accepted (owner, 2026-11-19).** GitHub rolls images out gradually. PR #94's first release job
+    landed on an 18.11 runner, whose default 14.51 is still 19.51.36260, and failed the 36263-only check. The
+    assertion now accepts exactly 19.51.36260 or 19.51.36263, nothing else. 36260 is dropped once every runner is on
+    18.12.
 
 ## Q11 — Moving to an LTS toolset
 
