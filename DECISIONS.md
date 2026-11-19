@@ -1958,6 +1958,17 @@ copies, outside the repo. In our form the quantum potential is Λ = −(γħ²/6
   - With band data added to the run deck (Si₃N₄ and HfO₂, Robertson 2000), it ran 19 min without finishing
     point 1 and was stopped. That is a cost finding, not a verdict.
   - The FinFET is not gated (QP14). The example deck's spacer would need band data for DG (QP10 says so).
+
+**Ruling (2026-11-20, owner "choose recommended for γ for QV6"): QR4 (a) stands.**
+- The default stays the cited theoretical coefficient, γ = 1 with m_n = 0.328. No calibrated default is
+  shipped (TVM2).
+- QV6 stays recorded as a **fail** on the threshold shift: DG gives 78–82% of SP's shift, missing by
+  10.2–21.8 mV against the 10 mV bound. It passes on N_inv and the centroid.
+- The gated test keeps its 10 mV check, so `[.dg_validation]` reports the miss whenever it is run. It is
+  hidden and not in ctest.
+- A deck may set `dg_gamma_n` / `dg_mass_n`, and the run record always reports them. That is the place for a
+  user's calibration, not the default.
+- The bound is not loosened. Loosening it would be a new owner ruling, by name.
 ## New questions the advisor raised (not yet in `ARCHITECTURE.md`)
 
 None of these is decided. Each needs an owner position before the build scaffold fixes the flags.
