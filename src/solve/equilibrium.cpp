@@ -5,6 +5,7 @@
 #include <vector>
 
 #include "NiTCAD/assemble/equilibrium.hpp"
+#include "NiTCAD/assemble/quantum_confinement.hpp"
 #include "NiTCAD/assemble/scaling.hpp"
 #include "fields.hpp"
 #include "observe.hpp"
@@ -17,6 +18,9 @@ std::expected<results::EquilibriumResult, base::Error> solve_equilibrium_unobser
     const device::Device& device, const EquilibriumOptions& options, const RunControl& control) {
     auto scaling = assemble::make_scaling(device, options.Ns_override);
     if (!scaling) return std::unexpected(std::move(scaling.error()));
+    if (auto unbuilt = assemble::density_gradient_solvers_unbuilt(options.models)) {
+        return std::unexpected(std::move(*unbuilt));  // Unit 62: until slice 3
+    }
     auto system = assemble::System::create(device, *scaling, options.models,
                                            assemble::Formulation::equilibrium);
     if (!system) return std::unexpected(std::move(system.error()));

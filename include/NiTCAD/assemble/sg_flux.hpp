@@ -21,6 +21,9 @@ struct EdgeFlux {
     double d_psi2;  // = -d_psi1
     double d_c1;    // d flux / d density at node 1
     double d_c2;
+    // d flux / d delta alone, the driving term's own partial (Unit 62: density gradient's Lambda
+    // enters delta only); set by SystemData::edge_fluxes with the model on, else 0.
+    double d_delta = 0.0;
 };
 
 [[nodiscard]] inline EdgeFlux sg_electron_flux(double a, double psi1, double psi2, double n1,

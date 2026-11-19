@@ -204,6 +204,14 @@ struct SystemData::Terms {
     [[nodiscard]] static std::shared_ptr<const Term> energy_rows();
     [[nodiscard]] static std::shared_ptr<const Term> energy_fluxes();
     [[nodiscard]] static std::shared_ptr<const Term> energy_impact();
+    // Density gradient (Unit 62; density_gradient.cpp): the quantum potentials' rows, in both the
+    // drift-diffusion and the equilibrium tables: per node the volume and barrier terms (or the
+    // Dirichlet 0 off the semiconductor), assigned; then per carrier edge the box sum of
+    // (sqrt(c_j / c_i) - 1), added.
+    class DensityGradientRows;
+    class DensityGradientEdges;
+    [[nodiscard]] static std::shared_ptr<const Term> density_gradient_rows();
+    [[nodiscard]] static std::shared_ptr<const Term> density_gradient_edges();
     // Thermal equilibrium's own variants (Unit 57 GE5, R2; equilibrium.cpp): the insulator rows,
     // the charge with the carriers slaved to psi, the interface edges at Fermi occupancy, and the
     // Dirichlet rows last.

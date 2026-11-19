@@ -12,6 +12,7 @@
 #include <cstdio>
 #include <limits>
 #include <span>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -24,6 +25,8 @@
 #include "NiTCAD/physics/recombination.hpp"
 #include "NiTCAD/physics/semiconductor.hpp"
 #include "NiTCAD/solve/bias.hpp"
+#include "NiTCAD/solve/equilibrium.hpp"
+#include "NiTCAD/solve/small_signal.hpp"
 #include "NiTCAD/solve/transient.hpp"
 #include "NiTCAD/solve/waveform.hpp"
 
@@ -378,4 +381,38 @@ TEST_CASE("quantum confinement: a lumped gate against the meshed oxide (QC9)", "
     const double ql = inversion_charge(lumped, quasi_static(lumped, true, vg)[0]);
     std::printf("QC9: Q_inv meshed %.5e, lumped %.5e C/cm^2 (ratio %.4f)\n", qm, ql, ql / qm);
     CHECK(std::abs(ql - qm) <= 0.05 * qm);
+}
+
+// Unit 62 slice 2: the assemblers build density gradient, the solvers refuse it until slice 3,
+// every one with the same message.
+TEST_CASE("density gradient: the solvers refuse it until slice 3 (Unit 62)") {
+    const device::Device d = mosc(0.1e-7);
+    assemble::PhysicsModels m;
+    m.quantum_confinement = assemble::QuantumConfinement::density_gradient;
+    const std::string message =
+        "quantum_confinement density_gradient: the solvers are not built yet (Unit 62 slice 3)";
+    const auto refused = [&](const auto& run, const char* what) {
+        CAPTURE(what);
+        REQUIRE_FALSE(run.has_value());
+        CHECK(run.error().code == base::ErrorCode::invalid_input);
+        CHECK(run.error().message == message);
+    };
+    const std::vector<double> bias{0.5, 0.0};
+    solve::BiasOptions o;
+    o.models = m;
+    refused(solve::solve_bias(d, bias, o), "drift-diffusion");
+    o.equations = solve::Equations::equilibrium_poisson;
+    refused(solve::solve_bias(d, bias, o), "quasi-static");
+    solve::EquilibriumOptions e;
+    e.models = m;
+    refused(solve::solve_equilibrium(d, e), "equilibrium");
+    solve::SmallSignalOptions ac;
+    ac.steady.models = m;
+    ac.frequencies_Hz = {1e6};
+    const std::vector<std::vector<double>> points{bias};
+    refused(solve::solve_small_signal(d, points, ac), "small signal");
+    solve::TransientOptions t{.t_end_s = 1e-9, .dt_initial_s = 1e-12};
+    t.steady.models = m;
+    const std::vector<solve::Waveform> wf{solve::Waveform::constant(0.5), solve::Waveform::constant(0.0)};
+    refused(solve::solve_transient(d, wf, t), "transient");
 }

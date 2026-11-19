@@ -27,6 +27,10 @@ enum class FieldId {
     temperature,  // tau = (T - T0) / T0: the lattice temperature rise (electrothermal, Unit 23)
     electron_temperature,  // tau_n = (T_n - T_L) / T_L (energy balance, Unit 52)
     hole_temperature,      // tau_p = (T_p - T_L) / T_L
+    // Density gradient (Unit 62, DECISIONS.md QP2): the quantum potentials Lambda_n / kT and
+    // Lambda_p / kT, after psi, n, p (stride 5); after psi alone at thermal equilibrium (stride 3).
+    quantum_potential_n,
+    quantum_potential_p,
     // Derived (derived.hpp).
     conduction_band,     // E_c, band_edges.hpp
     valence_band,        // E_v
@@ -88,6 +92,14 @@ inline constexpr Field electron_temperature_field{FieldId::electron_temperature,
 inline constexpr Field hole_temperature_field{FieldId::hole_temperature, "hole temperature rise",
                                               "T_L", FieldLocation::node, FieldKind::unknown,
                                               FieldDomain::semiconductor};
+inline constexpr Field quantum_potential_n_field{FieldId::quantum_potential_n,
+                                                 "electron quantum potential", "kT",
+                                                 FieldLocation::node, FieldKind::unknown,
+                                                 FieldDomain::semiconductor};
+inline constexpr Field quantum_potential_p_field{FieldId::quantum_potential_p,
+                                                 "hole quantum potential", "kT",
+                                                 FieldLocation::node, FieldKind::unknown,
+                                                 FieldDomain::semiconductor};
 
 class DofMap {
 public:

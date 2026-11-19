@@ -1562,6 +1562,77 @@ no criterion changes. Only the plan's order changes.
 - Run (Release, targeted, not the full suites): physics 5 cases, assemble 9, deck 4 (confinement filters), the
   whole `nitcad_app_test` (77 cases) and the completion window case: all pass.
 
+**Slice 2 (2026-11-19, owner "start unit 62 slice 2 choose recommended").** As built:
+- Fields `quantum_potential_n`, `quantum_potential_p` (kT, node, semiconductor). With the model on the unknowns are
+  ψ, n, p, Λ̂_n, Λ̂_p (stride 5) and at equilibrium ψ, Λ̂_n, Λ̂_p (stride 3); every branch reads the slots, not the
+  stride. Two table terms (src/assemble/density_gradient.cpp): the rows V Λ̂ − β B on the nodes, and the edge sums
+  β g (√(c_j / c_i) − 1) (QP2), in both tables. On ohmic-contact and insulator nodes Λ̂ = 0 (QP4). At equilibrium the
+  sums read the densities slaved to ψ and Λ̂ (QP8). The barrier terms B come from `make_scaled_device` (QP3, QP5):
+  meshed oxide g d / (d/2 + x_p) on the semiconductor end, lumped gate A L_D^{2−D} / x_p, with x_p from the
+  insulator's (or the stack's) band data. Gate tunnelling's band-data helpers moved to scaled_device so both read
+  the same data. An insulator whose offsets to the semiconductor are not both positive is refused.
+- `√(c_j / c_i) − 1` is formed through log1p and expm1 while the two densities are within a factor 1.5. The plain
+  square root loses (a h)⁻² digits on a fine mesh, and measured 1.5e-12 between 2D and 1D at a h = 6e-4.
+- SG coupling (QP6): electrons δ − ΔΛ̂_n, holes δ + ΔΛ̂_p, with `EdgeFlux::d_delta` for the Λ columns. Impact
+  ionization gains the cross entries (n, Λ̂_p) and (p, Λ̂_n). The field mobility's driving field stays ψ's alone.
+- Recombination (QP13): SRH (bulk and surface), Auger and radiative with E → E e^{−Λ̂_n−Λ̂_p}, n₁ → n₁ e^{−Λ̂_n},
+  p₁ → p₁ e^{−Λ̂_p}, and every Λ partial (`physics::srh_recombination_shifted`). Interface traps take the
+  semiconductor node's Λ̂ as constant over its half-cell: occupancy and trap SRH use the shifted n₁ and p₁, with Λ
+  columns in the insulator's Poisson row.
+- **Ruled (recommended): dopant levels keep their classical positions**, as trap levels do (QP13, QD9). Drift-
+  diffusion ionization reads η_c + Λ̂_n and η_v + Λ̂_p, the densities' own band edges, with the Λ entries. At
+  equilibrium the occupancy depends on η − log N_c, which the slaving leaves unchanged, so the equilibrium
+  ionization is the classical one.
+- Newton treats Λ̂ as a potential: in the update size, clamped to ±max_update, in the natural norm as a potential,
+  and held on insulator and contact nodes. `System::state_from_quantum_potential(ψ, Λ̂_n, Λ̂_p)` gives the slaved
+  state.
+- **Ruled (recommended): the solvers refuse the model until slice 3.** The time step and the small-signal matrix
+  are refused at the assemble layer by precondition. Every solver (bias sweeps, equilibrium, small signal,
+  transient, traces, adaptation) returns invalid_input, "quantum_confinement density_gradient: the solvers are not
+  built yet (Unit 62 slice 3)" (`assemble::density_gradient_solvers_unbuilt`). Both assemblers accept the
+  combinations slice 1 refused as not built (strides 5 and 3 tested).
+- Fixed on the way: `locate_surface` read energy balance's four rows from `m_ == 5`, which density gradient shares.
+  It now excludes the model. energy_balance_ is set only after it runs, so the flag could not serve.
+
+Results (Release, targeted, `nitcad_assemble_test` whole):
+- QV3 (met): exp(−x/2L) and cosh(x/L) on the [0, 2 µm] bar, uniform and graded (x = s + s², ratio 3) at 20–160
+  cells. Observed order 2.001–2.009 uniform and 1.950–1.991 graded. 2D and 3D extrusions equal 1D within 1.7e-14.
+  Barriers: a profile √c = sinh((x + x₁)/L) that meets the wall's condition (Λ̂ = −β/L² exactly), at h = 0.4, 0.2,
+  0.1 and 0.05 nm. Wall-node error (n): meshed −0.027, −0.036, −0.029, −0.019; lumped 0.86, 0.42, 0.21, 0.105
+  (first order, h / 4x_p). Both decrease from 0.2 nm, once h/2 < x_p, and the first-order extrapolation reaches the
+  closed form within 0.02 for both: no jump. Interior silicon: order 2 in both cases.
+- QV4 (met in the assemble layer): DG equilibrium on the meshed and lumped 1D MOS-C (−1.5 V, 1 V) and the 2D MOS
+  with its n+ pocket (1 V), both statistics, traps on:
+  - the drift-diffusion residual on the slaved state is at most 4.3e-14 of each row's largest term (fluxes, net
+    rates, trap terms and Λ rows);
+  - the Boltzmann slaving n = n_classical(ψ) e^{−Λ̂_n} holds within 1e-12;
+  - Newton's first update from it is at most 3.1e-12.
+
+  The 2D MOSFET example, the terminal currents against their resolution and the flat E_F (QP12, results) need the
+  solvers: slice 3.
+- QV5 (met): house gate (largest relative column error, central differences), DD and equilibrium tables. 1D, 2D
+  and 3D meshed oxide with traps, both statistics: ≤ 1.4e-7. Lombardi, impact ionization with field mobility,
+  incomplete ionization and local BTBT: ≤ 1.4e-7. Lumped 1D and 2D, Delaunay, and a meshed oxide with band data:
+  ≤ 1.1e-7.
+
+  Two probe choices, measured:
+  - The 2D and 3D MOS run without the n+ pocket. Across its abrupt junction the minority density jumps by 1e16, so
+    the Λ rows there carry terms of 1e8 against an entry V. Their central difference is then rounding (up to 6e-3
+    of the column), while the analytic entry matches the difference to 7 digits as the step grows to 1e-3.
+  - The probes keep the densities smooth: no step-raised interface densities. The equilibrium probe is the
+    classical solution with 1e-3 ψ noise, since 0.02–0.1 left Poisson rows of |f| 20–130 whose Λ columns were
+    rounding at 1.0–1.8e-6.
+
+  Newton on the 2D MOS (with the pocket) at 1 V from the classical equilibrium at 0.8 V, Λ̂ = 0: 23 iterations,
+  last updates 6.4e-3, 2.9e-5, 5.9e-10 (order 2.0), then 2.8e-12 at rounding (6 iterations without the model).
+- QV9 (assemble-layer part met): the lumped MOS-C at ±1.5 V, both statistics. 2D equals 1D within 6.2e-15, 3D
+  equals 2D within 8.7e-15 (peak Λ̂_n 7.7). The swapped 2D MOSFET example's I_d needs the solvers: slice 3.
+- QV1: the whole `nitcad_assemble_test` (179 cases), `nitcad_app_test` (77), solve "quantum confinement",
+  "density gradient", interface and trap cases (21), deck confinement cases (4): all pass. Owed before the merge,
+  with the owner's word: NG1 (traces byte-identical), NG2 decks, and the full Release and Debug suites.
+- The 1D MOS in inversion, with only a substrate contact, has a smallest pivot ratio of 2.3e-15 without the model
+  (9.8e-15 with it), below the 1e-11 floor. The QV4 Newton check on it runs with min_pivot_ratio 0.
+
 ## New questions the advisor raised (not yet in `ARCHITECTURE.md`)
 
 None of these is decided. Each needs an owner position before the build scaffold fixes the flags.

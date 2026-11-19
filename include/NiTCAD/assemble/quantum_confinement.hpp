@@ -11,6 +11,7 @@
 #pragma once
 
 #include <expected>
+#include <optional>
 #include <vector>
 
 #include "NiTCAD/assemble/models.hpp"
@@ -44,5 +45,12 @@ struct ConfinementFactors {
 // permittivity other than SiO2's (QP5: the barrier penetration needs the band offset and mass).
 [[nodiscard]] std::expected<void, base::Error> check_density_gradient(const device::Device& device,
                                                                    const PhysicsModels& models);
+
+// Density gradient between Unit 62's slices 2 and 3: the assemblers build its rows (steady and
+// equilibrium), the solvers (bias sweeps, equilibrium, transient, small signal, traces, adaptation)
+// not yet. With models.quantum_confinement density_gradient: invalid_input, "quantum_confinement
+// density_gradient: the solvers are not built yet (Unit 62 slice 3)"; else nullopt.
+[[nodiscard]] std::optional<base::Error> density_gradient_solvers_unbuilt(
+    const PhysicsModels& models);
 
 }  // namespace NiTCAD::assemble

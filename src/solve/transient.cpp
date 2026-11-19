@@ -11,6 +11,7 @@
 #include "NiTCAD/assemble/contact_bias.hpp"
 #include "NiTCAD/assemble/currents.hpp"
 #include "NiTCAD/assemble/energy.hpp"
+#include "NiTCAD/assemble/quantum_confinement.hpp"
 #include "NiTCAD/assemble/scaling.hpp"
 #include "NiTCAD/assemble/system.hpp"
 #include "NiTCAD/assemble/thermal.hpp"
@@ -277,6 +278,9 @@ std::expected<results::Transient, base::Error> solve_transient_unobserved(
     if (!scaling) return std::unexpected(std::move(scaling.error()));
     auto solver = linalg::LinearSolver::create(steady.linear);
     if (!solver) return std::unexpected(std::move(solver.error()));
+    if (auto unbuilt = assemble::density_gradient_solvers_unbuilt(steady.models)) {
+        return std::unexpected(std::move(*unbuilt));  // Unit 62: until slice 3
+    }
     auto system = assemble::System::create(device, *scaling, steady.models);
     if (!system) return std::unexpected(std::move(system.error()));
     set_minority_floor(*system, steady.minority_floor);

@@ -12,6 +12,7 @@
 
 #include "NiTCAD/assemble/currents.hpp"
 #include "NiTCAD/assemble/energy.hpp"
+#include "NiTCAD/assemble/quantum_confinement.hpp"
 #include "NiTCAD/assemble/scaling.hpp"
 #include "NiTCAD/assemble/system.hpp"
 #include "NiTCAD/assemble/thermal.hpp"
@@ -67,6 +68,9 @@ std::expected<results::SmallSignal, base::Error> solve_small_signal_unobserved(
     }
     auto solver = linalg::ComplexLinearSolver::create(ac);
     if (!solver) return std::unexpected(std::move(solver.error()));
+    if (auto unbuilt = assemble::density_gradient_solvers_unbuilt(steady.models)) {
+        return std::unexpected(std::move(*unbuilt));  // Unit 62: until slice 3
+    }
     auto system = assemble::System::create(device, *scaling, steady.models);
     if (!system) return std::unexpected(std::move(system.error()));
     set_minority_floor(*system, steady.minority_floor);

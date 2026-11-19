@@ -419,6 +419,7 @@ add_library(nitcad_assemble STATIC
   src/assemble/scaling.cpp
   src/assemble/scaled_device.cpp
   src/assemble/quantum_confinement.cpp
+  src/assemble/density_gradient.cpp
   src/assemble/gate.cpp
   src/assemble/interface_edges.cpp
   src/assemble/contact_bias.cpp

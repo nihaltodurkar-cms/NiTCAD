@@ -53,6 +53,37 @@ struct RecombinationRate {
     };
 }
 
+// SRH with the trap's n1 and p1 apart and their shifts as unknowns (Unit 62, density gradient,
+// DECISIONS.md QP13): with the quantum potentials L_n = Lambda_n / kT and L_p = Lambda_p / kT the
+// effective band edges give E -> E e^-(L_n + L_p), n1 -> n1 e^-L_n and p1 -> p1 e^-L_p. Called with
+// those (np_eq, n1, p1 already shifted),
+//
+//     R = (n p - E) / D,   D = tau_p (n + n1) + tau_n (p + p1),
+//
+// and since dE/dL_n = -E, dn1/dL_n = -n1 (likewise for p),
+//
+//     dR/dL_n = (E D + (n p - E) tau_p n1) / D^2,   dR/dL_p = (E D + (n p - E) tau_n p1) / D^2.
+//
+// At n1 = p1 = n_ie and L = 0 its rate and density partials are srh_recombination's.
+struct ShiftedRecombinationRate {
+    double rate, d_dn, d_dp, d_dln, d_dlp;
+};
+
+[[nodiscard]] constexpr ShiftedRecombinationRate srh_recombination_shifted(
+    double n, double p, EquilibriumProduct np_eq, double n1, double p1, double tau_n,
+    double tau_p) noexcept {
+    const double excess = n * p - np_eq.value;
+    const double den = tau_p * (n + n1) + tau_n * (p + p1);
+    const double den2 = den * den;
+    return {
+        excess / den,
+        ((p - np_eq.d_dn) * den - excess * tau_p) / den2,
+        ((n - np_eq.d_dp) * den - excess * tau_n) / den2,
+        (np_eq.value * den + excess * tau_p * n1) / den2,
+        (np_eq.value * den + excess * tau_n * p1) / den2,
+    };
+}
+
 // Auger recombination (legacy materials.recombination, auger branch):
 //
 //     R = (Cn n + Cp p) (n p - E),   dR/dn = Cn (n p - E) + (Cn n + Cp p) (p - dE/dn),

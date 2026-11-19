@@ -12,6 +12,7 @@
 #include "NiTCAD/assemble/contact_bias.hpp"
 #include "NiTCAD/assemble/energy.hpp"
 #include "NiTCAD/assemble/equilibrium.hpp"
+#include "NiTCAD/assemble/quantum_confinement.hpp"
 #include "NiTCAD/assemble/scaling.hpp"
 #include "NiTCAD/assemble/thermal.hpp"
 #include "NiTCAD/assemble/tunnelling.hpp"
@@ -262,6 +263,9 @@ std::expected<results::Sweep, base::Error> sweep_bias_unobserved(const device::D
     const double charge_scale = detail::charge_scale(*scaling, D);
     const std::size_t edges = device.mesh().edges().size();
 
+    if (auto unbuilt = assemble::density_gradient_solvers_unbuilt(options.models)) {
+        return std::unexpected(std::move(*unbuilt));  // Unit 62: until slice 3
+    }
     if (equilibrium) {
         auto system = assemble::System::create(device, *scaling, options.models,
                                                assemble::Formulation::equilibrium);

@@ -9,6 +9,7 @@
 #include <utility>
 
 #include "NiTCAD/assemble/currents.hpp"
+#include "NiTCAD/assemble/quantum_confinement.hpp"
 #include "NiTCAD/assemble/scaling.hpp"
 #include "NiTCAD/assemble/system.hpp"
 #include "NiTCAD/linalg/linear_solver.hpp"
@@ -36,6 +37,9 @@ std::expected<System, base::Error> make_system(const device::Device& device, con
     auto scaling = assemble::make_scaling(device, Ns ? Ns : options.Ns_override);
     if (!scaling) return std::unexpected(scaling.error());
     s.scaling = *scaling;
+    if (auto unbuilt = assemble::density_gradient_solvers_unbuilt(options.models)) {
+        return std::unexpected(std::move(*unbuilt));  // Unit 62: until slice 3
+    }
     auto dd = assemble::System::create(device, s.scaling, options.models);
     if (!dd) return std::unexpected(dd.error());
     s.dd.emplace(std::move(*dd));

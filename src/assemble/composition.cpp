@@ -20,8 +20,16 @@ std::shared_ptr<const SystemData::Composition> SystemData::Composition::compose(
     const Field energy[] = {potential_field, electron_field, hole_field,
                             electron_temperature_field, hole_temperature_field};
     // Thermal equilibrium (Unit 57 GE5): psi alone, its own table whatever the models.
+    // With density gradient (Unit 62, QP2) the quantum potentials after them: psi, n, p, Lambda_n,
+    // Lambda_p, and at equilibrium psi, Lambda_n, Lambda_p.
+    const Field quantum[] = {potential_field, electron_field, hole_field, quantum_potential_n_field,
+                             quantum_potential_p_field};
+    const Field quantum_equilibrium[] = {potential_field, quantum_potential_n_field,
+                                         quantum_potential_p_field};
     const std::span<const Field> built_in =
-        s.equilibrium_          ? std::span(fields).first(1)
+        s.density_gradient_     ? (s.equilibrium_ ? std::span<const Field>(quantum_equilibrium)
+                                                  : std::span<const Field>(quantum))
+        : s.equilibrium_        ? std::span(fields).first(1)
         : models.energy_balance ? std::span<const Field>(energy)
                                 : std::span(fields).first(models.electrothermal ? 4 : 3);
     if (extension == nullptr) {
