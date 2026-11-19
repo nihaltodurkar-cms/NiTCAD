@@ -86,6 +86,8 @@ std::string structure_mismatch(const results::Sweep& a, const results::Sweep& b)
             {p.fields.temperature_K, q.fields.temperature_K, "temperature_K"},
             {p.fields.electron_temperature_K, q.fields.electron_temperature_K, "electron_temperature_K"},
             {p.fields.hole_temperature_K, q.fields.hole_temperature_K, "hole_temperature_K"},
+            {p.fields.quantum_potential_n_eV, q.fields.quantum_potential_n_eV, "quantum_potential_n_eV"},
+            {p.fields.quantum_potential_p_eV, q.fields.quantum_potential_p_eV, "quantum_potential_p_eV"},
             {p.terminal_current, q.terminal_current, "terminal_current"},
             {p.terminal_current_resolution, q.terminal_current_resolution, "terminal_current_resolution"},
             {p.weighted_current, q.weighted_current, "weighted_current"},
@@ -115,7 +117,8 @@ SweepComparison compare_sweeps(const results::Sweep& a, const results::Sweep& b,
 
     Tally current("terminal_current"), weighted("weighted_current"), gate("gate_charge"),
         traps("interface_trap_charge"), psi("potential_V"), n("n_cm3"), p("p_cm3"), lattice("temperature_K"),
-        electron_t("electron_temperature_K"), hole_t("hole_temperature_K");
+        electron_t("electron_temperature_K"), hole_t("hole_temperature_K"),
+        lambda_n("quantum_potential_n_eV"), lambda_p("quantum_potential_p_eV");
 
     for (std::size_t k = 0; k < a.points.size(); ++k) {
         const auto& x = a.points[k];
@@ -157,9 +160,14 @@ SweepComparison compare_sweeps(const results::Sweep& a, const results::Sweep& b,
             electron_t.add(fx.electron_temperature_K[i], fy.electron_temperature_K[i], t.temperature_K, k, i);
         for (std::size_t i = 0; i < fx.hole_temperature_K.size(); ++i)
             hole_t.add(fx.hole_temperature_K[i], fy.hole_temperature_K[i], t.temperature_K, k, i);
+        // Unit 62: the quantum potentials (eV) at the potential's tolerance (V).
+        for (std::size_t i = 0; i < fx.quantum_potential_n_eV.size(); ++i)
+            lambda_n.add(fx.quantum_potential_n_eV[i], fy.quantum_potential_n_eV[i], t.potential_V, k, i);
+        for (std::size_t i = 0; i < fx.quantum_potential_p_eV.size(); ++i)
+            lambda_p.add(fx.quantum_potential_p_eV[i], fy.quantum_potential_p_eV[i], t.potential_V, k, i);
     }
 
-    for (Tally* q : {&current, &weighted, &gate, &traps, &psi, &n, &p, &lattice, &electron_t, &hole_t})
+    for (Tally* q : {&current, &weighted, &gate, &traps, &psi, &n, &p, &lattice, &electron_t, &hole_t, &lambda_n, &lambda_p})
         if (q->used()) out.quantities.push_back(std::move(*q).take());
     out.outcome = std::ranges::all_of(out.quantities, &QuantityComparison::pass) ? CompareOutcome::match
                                                                                   : CompareOutcome::differ;

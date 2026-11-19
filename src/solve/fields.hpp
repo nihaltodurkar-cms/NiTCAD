@@ -83,6 +83,39 @@ inline void temperatures(const assemble::System& system, std::span<const double>
     f.hole_temperature_K = take(v, t, FieldId::hole_temperature_K);
 }
 
+// Unit 62 (QP12): the quantum potentials in eV of a density-gradient drift-diffusion state into f (left
+// empty without the model).
+inline void quantum_potentials(const assemble::System& system, std::span<const double> x, double V_T,
+                               results::NodeFields& f) {
+    const auto sn = system.dofs().slot(assemble::FieldId::quantum_potential_n);
+    if (!sn) return;
+    const std::size_t sp = *system.dofs().slot(assemble::FieldId::quantum_potential_p);
+    const std::size_t m = system.dofs().block(), n = system.node_count();
+    f.quantum_potential_n_eV.resize(n);
+    f.quantum_potential_p_eV.resize(n);
+    for (std::size_t i = 0; i < n; ++i) {
+        f.quantum_potential_n_eV[i] = x[m * i + *sn] * V_T;
+        f.quantum_potential_p_eV[i] = x[m * i + sp] * V_T;
+    }
+}
+
+// The drift-diffusion state of an equilibrium result's fields (solve_equilibrium): the classical
+// state of its potential, or with density gradient the state its potential and quantum potentials
+// slave (Unit 62, QP8).
+inline std::vector<double> state_from_equilibrium(const assemble::System& dd,
+                                                  const results::NodeFields& f, double V_T) {
+    const std::size_t n = dd.node_count();
+    std::vector<double> psi(n);
+    for (std::size_t i = 0; i < n; ++i) psi[i] = f.potential_V[i] / V_T;
+    if (f.quantum_potential_n_eV.empty()) return dd.state_from_potential(psi);
+    std::vector<double> ln(n), lp(n);
+    for (std::size_t i = 0; i < n; ++i) {
+        ln[i] = f.quantum_potential_n_eV[i] / V_T;
+        lp[i] = f.quantum_potential_p_eV[i] / V_T;
+    }
+    return dd.state_from_quantum_potential(psi, ln, lp);
+}
+
 // Scale from scaled gate charges to C / cm^(3-D): q Ns L_D^D.
 inline double charge_scale(const assemble::Scaling& scaling, int dimension) {
     return base::q_C * scaling.Ns * std::pow(scaling.L_D, dimension);
@@ -117,6 +150,16 @@ inline void scaled_state(const assemble::System& system, const results::NodeFiel
         if (thermal) {
             x[k.block * i + k.temperature] =
                 f.temperature_K.empty() ? 0.0 : (f.temperature_K[i] - T0) / T0;
+        }
+    }
+    // Unit 62: Lambda_n, Lambda_p in kT (0 when the fields carry none).
+    if (const auto sn = system.dofs().slot(assemble::FieldId::quantum_potential_n)) {
+        const std::size_t sp = *system.dofs().slot(assemble::FieldId::quantum_potential_p);
+        for (std::size_t i = 0; i < system.node_count(); ++i) {
+            x[k.block * i + *sn] =
+                f.quantum_potential_n_eV.empty() ? 0.0 : f.quantum_potential_n_eV[i] / scaling.V_T;
+            x[k.block * i + sp] =
+                f.quantum_potential_p_eV.empty() ? 0.0 : f.quantum_potential_p_eV[i] / scaling.V_T;
         }
     }
     if (energy_balance(system)) {  // Unit 52: tau_n, tau_p (0 when the fields carry none)
@@ -171,6 +214,7 @@ inline void drift_diffusion_point(const assemble::System& system,
         point.fields.n_cm3[i] = x[k.block * i + k.electrons] * scaling.Ns;
         point.fields.p_cm3[i] = x[k.block * i + k.holes] * scaling.Ns;
     }
+    quantum_potentials(system, x, scaling.V_T, point.fields);
     // Units 23 and 52: the lattice and carrier temperatures (T0 (1 + tau), T0 the scaling's).
     temperatures(system, x, point.fields);
     if (electrothermal(system)) {  // the heat to each sink

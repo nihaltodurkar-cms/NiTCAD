@@ -17,6 +17,7 @@
 #include "NiTCAD/assemble/tunnelling.hpp"
 #include "NiTCAD/solve/equilibrium.hpp"
 #include "NiTCAD/solve/newton.hpp"
+#include "density_gradient.hpp"
 #include "fields.hpp"
 #include "observe.hpp"
 #include "wall_clock.hpp"
@@ -296,6 +297,9 @@ std::expected<results::Transient, base::Error> solve_transient_unobserved(
     const bool energy = energy_balance(dd);
     const std::size_t rise_n = dd.dofs().slot(assemble::FieldId::electron_temperature).value_or(0);
     const std::size_t rise_p = dd.dofs().slot(assemble::FieldId::hole_temperature).value_or(0);
+    const auto lambda_n = dd.dofs().slot(assemble::FieldId::quantum_potential_n);  // Unit 62
+    const auto lambda_p = dd.dofs().slot(assemble::FieldId::quantum_potential_p);
+    const bool quantum = lambda_n.has_value();
 
     // What the error estimate measures per node: the carriers of a semiconductor node off the
     // contacts, the potential alone of an insulator node, nothing on a Dirichlet node.
@@ -353,6 +357,7 @@ std::expected<results::Transient, base::Error> solve_transient_unobserved(
         }
         // The lattice (electrothermal) and carrier (Unit 52) temperatures, T0 (1 + tau).
         detail::temperatures(dd, s.x, snap.fields);
+        detail::quantum_potentials(dd, s.x, scaling->V_T, snap.fields);  // Unit 62
         snap.bands = detail::band_diagram(dd, s.x, scaling->V_T);
         detail::append_edge_currents(dd, s.x, current_scale, snap.edge_current_n,
                                      snap.edge_current_p);
@@ -383,11 +388,10 @@ std::expected<results::Transient, base::Error> solve_transient_unobserved(
             run.stopped = std::move(start.error());
             return run;
         }
-        std::vector<double> psi(nodes);
-        for (std::size_t i = 0; i < nodes; ++i) {
-            psi[i] = start->fields.potential_V[i] / scaling->V_T;
+        x = detail::state_from_equilibrium(dd, start->fields, scaling->V_T);  // Lambda too (Unit 62)
+        if (auto w = detail::continuation_warning(start->quantum_continuation); !w.empty()) {
+            run.run.warnings.push_back(std::move(w));
         }
-        x = dd.state_from_potential(psi);
     }
     const std::vector<double> bias0 = bias_at(0.0, true);
     (void)system->set_bias(bias0);  // checked
@@ -634,6 +638,11 @@ std::expected<results::Transient, base::Error> solve_transient_unobserved(
                     const double e = factor * (next.x[k] - predicted(&State::x, k));
                     err = std::max(err, std::abs(e) / (std::abs(next.x[k]) + density_ref));
                 }
+                // Density gradient (Unit 62, QP11): Lambda_n and Lambda_p, absolute in kT (as psi).
+                for (std::size_t k = 0; quantum && k < 2; ++k) {
+                    const std::size_t r = m * i + (k == 0 ? *lambda_n : *lambda_p);
+                    err = std::max(err, std::abs(factor * (next.x[r] - predicted(&State::x, r))));
+                }
                 // Energy balance: each carrier's rise, absolute in units of T_L (as the lattice's).
                 for (std::size_t k = 0; energy && k < 2; ++k) {
                     const std::size_t r = m * i + (k == 0 ? rise_n : rise_p);
@@ -738,6 +747,11 @@ std::expected<results::Transient, base::Error> solve_transient(
     const detail::WallClock clock;
     auto r = solve_transient_unobserved(device, waveforms, options, initial, control, resume);
     if (r) {
+        if (options.steady.models.quantum_confinement == assemble::QuantumConfinement::density_gradient) {
+            detail::CoarseScan scan(device);  // Unit 62, QP15
+            for (const results::TransientSnapshot& s : r->snapshots) scan.add(s.fields);
+            if (auto w = scan.warning(); !w.empty()) r->run.warnings.push_back(std::move(w));
+        }
         r->run.provenance.wall_s = clock.seconds();
         detail::observe_result(*r);
     }

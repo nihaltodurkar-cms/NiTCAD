@@ -31,4 +31,30 @@ inline constexpr double mlda_silicon_hole_mass = 0.49;
 // gate), a its depth. Preconditions: depth_cm and wavelength_cm finite and positive.
 [[nodiscard]] double mlda_mean_factor(double depth_cm, double wavelength_cm);
 
+// Density-gradient confinement (Unit 62; DECISIONS.md QP1-QP6). The quantum potential of carrier c is
+// Lambda_c / kT = -beta_c (laplacian sqrt c) / sqrt c, with
+//
+//     beta = gamma hbar^2 / (6 m m0 k T)  [cm^2],
+//
+// and an insulator barrier dE in front of a semiconductor lets sqrt c decay as exp(-x / x_p) into it,
+//
+//     x_p = hbar / sqrt(2 m_ox m0 q dE)  [cm].
+//
+// The defaults are QP0's (DECISIONS.md, Unit 62). gamma = 1 is the theoretical high-temperature
+// coefficient, b = hbar^2 / (12 m q) of Ancona and Iafrate, PRB 39 (1989) 9536, eq. (3.12): in this
+// form gamma hbar^2 / (6 m) = 2 b q. The electron mass is the single-valley bulk average
+// (m_t^2 m_l)^(1/3) = 0.328 of Ancona, IEEE TED 47 (2000) 1449, p. 1451, whose m* r = 0.984 is his
+// recommended m* r = 1 for silicon inversion layers (eq. (2.7), pp. 1452-1453). No source gives a
+// hole value: the hole mass stays MLDA's 0.49 (Lambda_p has no reference, QP14).
+inline constexpr double dg_default_gamma = 1.0;
+inline constexpr double dg_default_electron_mass = 0.328;
+inline constexpr double dg_default_hole_mass = mlda_silicon_hole_mass;
+
+// beta [cm^2]. Preconditions (NITCAD_EXPECTS): gamma and mass_m0 finite and positive; temperature_K
+// finite and positive.
+[[nodiscard]] double dg_coefficient_cm2(double gamma, double mass_m0, double temperature_K);
+
+// x_p [cm]. Preconditions: mass_m0 and barrier_eV finite and positive.
+[[nodiscard]] double barrier_decay_length_cm(double mass_m0, double barrier_eV);
+
 }  // namespace NiTCAD::physics

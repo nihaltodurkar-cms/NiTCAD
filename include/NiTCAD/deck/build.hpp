@@ -84,8 +84,11 @@
 //                       automatic, the default: Masetti in silicon regions);
 //                     electron_mobility = caughey_thomas | masetti  (Unit 38; opt-in)
 //                     surface_mobility = off | lombardi  (Unit 46; opt-in)
-//                     quantum_confinement = off | mlda  (Unit 47; opt-in); mlda_mass_n,
+//                     quantum_confinement = off | mlda | density_gradient  (Units 47, 62; opt-in);
+//                       mlda_mass_n,
 //                       mlda_mass_p = <m / m0>  (defaults 0.98, 0.49)
+//                       dg_mass_n, dg_mass_p = <m / m0>  (defaults 0.98, 0.49); dg_gamma_n,
+//                       dg_gamma_p = <gamma>  (default 1; Unit 62 QP6 placeholders until QP0)
 //                     energy_balance = on | off  (Unit 52; opt-in: carrier temperatures)
 //                     ionization_levels = fixed | altermatt  (Unit 37; with incomplete_ionization)
 //   [solver]          equations = drift_diffusion | equilibrium_poisson; max_iterations; tol_update;

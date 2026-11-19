@@ -5,6 +5,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <expected>
+#include <optional>
 #include <vector>
 
 #include "NiTCAD/assemble/gate.hpp"
@@ -14,6 +15,7 @@
 #include "NiTCAD/base/error.hpp"
 #include "NiTCAD/device/device.hpp"
 #include "NiTCAD/linalg/sparse_matrix.hpp"
+#include "NiTCAD/physics/insulator.hpp"
 #include "NiTCAD/physics/ionization.hpp"
 #include "NiTCAD/physics/statistics.hpp"
 
@@ -75,7 +77,24 @@ struct ScaledDevice {
     InterfaceEdges interfaces;           // interface charge, traps, recombination (per edge)
     std::vector<device::ContactKind> kinds;  // per contact, in device.contacts() order
     std::vector<ScaledEdge> edges;       // in mesh edge order
+    // Density gradient (Unit 62, DECISIONS.md QP3, QP5); empty and 0 with the model off. beta_c /
+    // L_D^2 of electrons and holes, and per node the barrier term B of each carrier's Lambda row:
+    // over its edges to insulator nodes the half-edge in series with the decay length x_p into the
+    // insulator, g d / (d / 2 + x_p) (g the edge's geometry, d its length), and on a lumped gate
+    // node its face area over x_p, (A / L_D^(D-1)) / (x_p / L_D). 0 on insulator nodes.
+    double dg_beta_n = 0.0, dg_beta_p = 0.0;
+    std::vector<double> dg_barrier_n, dg_barrier_p;
 };
+
+// The band data an insulator's barrier uses (gate tunnelling, Unit 51 GD5; density gradient's
+// barrier penetration, Unit 62 QP5): its own, or SiO2's tunnelling set for the built-in SiO2;
+// nullopt without any.
+[[nodiscard]] std::optional<physics::InsulatorParameters> insulator_band_data(
+    const physics::InsulatorParameters& p);
+
+// The band data of a lumped gate's oxide: the stack's own, else SiO2's tunnelling set (which only
+// a stack of SiO2's permittivity may take; the callers check).
+[[nodiscard]] physics::InsulatorParameters gate_band_data(const device::GateStack& g);
 
 // Errors (invalid_input): scaling.temperature_K differs from the device's; a Schottky contact's
 // Phi_Bn outside [0, Eg(T)] at one of its nodes. An edge between

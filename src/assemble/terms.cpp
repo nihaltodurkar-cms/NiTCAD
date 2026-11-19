@@ -26,6 +26,36 @@ constexpr FieldId all3[] = {FieldId::potential, FieldId::electrons, FieldId::hol
 
 using Evaluation = SystemData::Terms::Evaluation;
 
+namespace {
+
+// Density gradient (Unit 62, QP13): k R into node i's continuity rows, -k R in the electron row
+// and +k R in the hole row, with the partials in n, p and the node's Lambda_n, Lambda_p.
+void add_rate(const SystemData& s, const Evaluation& ev, std::size_t i, double k,
+              const physics::RecombinationRate& r, double d_ln, double d_lp) {
+    const std::size_t m = s.m_;
+    ev.f[m * i + 1] -= k * r.rate;
+    ev.f[m * i + 2] += k * r.rate;
+    if (!ev.jacobian()) return;
+    const std::size_t ln = s.lambda_n_slot(), lp = s.lambda_p_slot();
+    using T = SystemData::Terms;
+    T::at(s, ev, i, 1, 1) -= k * r.d_dn;
+    T::at(s, ev, i, 1, 2) -= k * r.d_dp;
+    T::at(s, ev, i, 1, ln) -= k * d_ln;
+    T::at(s, ev, i, 1, lp) -= k * d_lp;
+    T::at(s, ev, i, 2, 1) += k * r.d_dn;
+    T::at(s, ev, i, 2, 2) += k * r.d_dp;
+    T::at(s, ev, i, 2, ln) += k * d_ln;
+    T::at(s, ev, i, 2, lp) += k * d_lp;
+}
+
+// e^-Lambda_n and e^-Lambda_p of node i.
+std::pair<double, double> shifts(const SystemData& s, const Evaluation& ev, std::size_t i) {
+    return {std::exp(-ev.x[s.m_ * i + s.lambda_n_slot()]),
+            std::exp(-ev.x[s.m_ * i + s.lambda_p_slot()])};
+}
+
+}  // namespace
+
 void SystemData::Term::add_frequency(const SystemData&, const SystemState&,
                                      const Terms::FrequencyEvaluation&) const {}
 
@@ -186,18 +216,29 @@ public:
             const double lp = s.fermi_dirac_ ? g[i].p.log_gamma : 0.0;
             const double wn = s.fermi_dirac_ ? g[i].n.d_density : 0.0;
             const double wp = s.fermi_dirac_ ? g[i].p.d_density : 0.0;
-            const double eta_c = s.donors_[i] > 0.0
-                                     ? std::log(n / s.n_ie_[i]) - ln - s.log_dos_n_[i]
-                                     : 0.0;
-            const double eta_v = s.acceptors_[i] > 0.0
-                                     ? std::log(p / s.n_ie_[i]) - lp - s.log_dos_p_[i]
-                                     : 0.0;
+            double eta_c = s.donors_[i] > 0.0
+                               ? std::log(n / s.n_ie_[i]) - ln - s.log_dos_n_[i]
+                               : 0.0;
+            double eta_v = s.acceptors_[i] > 0.0
+                               ? std::log(p / s.n_ie_[i]) - lp - s.log_dos_p_[i]
+                               : 0.0;
+            // Density gradient (Unit 62): the dopant levels keep their classical positions, so
+            // their occupancy reads E_F - E_c and E_v - E_F against the classical band edges,
+            // the density's reduced energies plus Lambda_n and Lambda_p (as the traps, QP13).
+            if (s.density_gradient_) {
+                if (s.donors_[i] > 0.0) eta_c += ev.x[m * i + 3];
+                if (s.acceptors_[i] > 0.0) eta_v += ev.x[m * i + 4];
+            }
             const detail::IonizedCharge c = detail::ionized_charge(
                 s.donors_[i], s.acceptors_[i], eta_c, eta_v, s.levels_[i]);
             ev.f[m * i] = -V * (n - p - c.value);
             if (ev.jacobian()) {
                 at(s, ev, i, 0, 1) = -V * (1.0 - c.d_eta_c * (1.0 / n - wn));
                 at(s, ev, i, 0, 2) = V * (1.0 + c.d_eta_v * (1.0 / p - wp));
+                if (s.density_gradient_) {
+                    at(s, ev, i, 0, 3) = V * c.d_eta_c;
+                    at(s, ev, i, 0, 4) = V * c.d_eta_v;
+                }
             }
         }
     }
@@ -232,9 +273,19 @@ public:
             if (!semiconductor(s, i)) continue;
             const double n = ev.x[m * i + 1], p = ev.x[m * i + 2];
             const double V = s.volume_[i];
+            const double k = V * s.rate_scale_;
+            if (s.density_gradient_) {  // Unit 62 (QP13): at the effective band edges
+                const auto [en, ep] = shifts(s, ev, i);
+                const physics::EquilibriumProduct E = product(s, ev, i);
+                const double el = en * ep;
+                const physics::ShiftedRecombinationRate r = physics::srh_recombination_shifted(
+                    n, p, {E.value * el, E.d_dn * el, E.d_dp * el}, s.n_ie_[i] * en,
+                    s.n_ie_[i] * ep, s.tau_n_[i], s.tau_p_[i]);
+                add_rate(s, ev, i, k, {r.rate, r.d_dn, r.d_dp}, r.d_dln, r.d_dlp);
+                continue;
+            }
             const physics::RecombinationRate r = physics::srh_recombination(
                 n, p, product(s, ev, i), s.n_ie_[i], s.tau_n_[i], s.tau_p_[i]);
-            const double k = V * s.rate_scale_;
             ev.f[m * i + 1] -= k * r.rate;
             ev.f[m * i + 2] += k * r.rate;
             if (ev.jacobian()) {
@@ -258,6 +309,19 @@ public:
         for (std::size_t i = 0; i < s.node_count(); ++i) {
             if (!semiconductor(s, i)) continue;
             const double n = ev.x[m * i + 1], p = ev.x[m * i + 2];
+            if (s.density_gradient_) {  // Unit 62 (QP13): n_ie^2 -> n_ie^2 e^-(Lambda_n + Lambda_p)
+                const auto [en, ep] = shifts(s, ev, i);
+                const double el = en * ep;
+                const physics::EquilibriumProduct E = physical_product(s, ev, i);
+                const physics::EquilibriumProduct Ed{E.value * el, E.d_dn * el, E.d_dp * el};
+                const physics::RecombinationRate r = physics::auger_recombination(
+                    n * s.Ns_, p * s.Ns_, Ed, s.auger_n_[i], s.auger_p_[i]);
+                // dR/dLambda = -dR/dE E e^-(Lambda_n + Lambda_p) = (Cn n + Cp p) E e^-(...).
+                const double dl = (s.auger_n_[i] * n * s.Ns_ + s.auger_p_[i] * p * s.Ns_) * Ed.value;
+                add_rate(s, ev, i, s.volume_[i] * s.rate_scale_, {r.rate / s.Ns_, r.d_dn, r.d_dp},
+                         dl / s.Ns_, dl / s.Ns_);
+                continue;
+            }
             add_physical(s, ev, i,
                          physics::auger_recombination(n * s.Ns_, p * s.Ns_,
                                                       physical_product(s, ev, i), s.auger_n_[i],
@@ -278,6 +342,18 @@ public:
         for (std::size_t i = 0; i < s.node_count(); ++i) {
             if (!semiconductor(s, i) || !(s.radiative_[i] > 0.0)) continue;
             const double n = ev.x[m * i + 1], p = ev.x[m * i + 2];
+            if (s.density_gradient_) {  // Unit 62 (QP13): as Auger
+                const auto [en, ep] = shifts(s, ev, i);
+                const double el = en * ep;
+                const physics::EquilibriumProduct E = physical_product(s, ev, i);
+                const physics::EquilibriumProduct Ed{E.value * el, E.d_dn * el, E.d_dp * el};
+                const physics::RecombinationRate r = physics::radiative_recombination(
+                    n * s.Ns_, p * s.Ns_, Ed, s.radiative_[i]);
+                const double dl = s.radiative_[i] * Ed.value;  // B E e^-(Lambda_n + Lambda_p)
+                add_rate(s, ev, i, s.volume_[i] * s.rate_scale_, {r.rate / s.Ns_, r.d_dn, r.d_dp},
+                         dl / s.Ns_, dl / s.Ns_);
+                continue;
+            }
             add_physical(s, ev, i,
                          physics::radiative_recombination(n * s.Ns_, p * s.Ns_,
                                                           physical_product(s, ev, i),
@@ -306,6 +382,10 @@ public:
             if (ev.jacobian()) {
                 at(s, ev, i, 1, 1) -= k * ns.d_n;
                 at(s, ev, i, 2, 2) += k * ns.d_p;
+                if (s.density_gradient_ && s.ionization_) {  // Unit 62: the ionized dopants read Lambda
+                    at(s, ev, i, 1, 3) -= k * ns.d_ln;
+                    at(s, ev, i, 2, 4) += k * ns.d_lp;
+                }
             }
         }
     }
@@ -379,6 +459,10 @@ public:
                     values[os] += t.d_flux_insulator[1];
                     values[s.interface_np_[k].first] += t.d_flux_insulator[2];
                     values[s.interface_np_[k].second] += t.d_flux_insulator[3];
+                    if (s.density_gradient_) {  // Unit 62: the semiconductor node's Lambda
+                        values[s.interface_lambda_[k].first] += t.d_flux_insulator_l[0];
+                        values[s.interface_lambda_[k].second] += t.d_flux_insulator_l[1];
+                    }
                 }
             }
             if (s.contact_[sn] >= 0) continue;  // a Dirichlet semiconductor node
@@ -393,6 +477,13 @@ public:
                     at(s, ev, sn, 0, c - 1) += t.d_flux_semiconductor[c];
                     at(s, ev, sn, 1, c - 1) -= t.d_rate[c];
                     at(s, ev, sn, 2, c - 1) += t.d_rate_p[c];
+                }
+                if (s.density_gradient_) {
+                    for (std::size_t c = 0; c < 2; ++c) {
+                        at(s, ev, sn, 0, 3 + c) += t.d_flux_semiconductor_l[c];
+                        at(s, ev, sn, 1, 3 + c) -= t.d_rate_l[c];
+                        at(s, ev, sn, 2, 3 + c) += t.d_rate_p_l[c];
+                    }
                 }
             }
         }
@@ -426,7 +517,7 @@ public:
             const std::size_t o = v.insulator, sn = v.semiconductor;
             const InterfaceSmallSignal t = d.interfaces_.small_signal(
                 v, x[d.m_ * o], x[d.m_ * sn], x[d.m_ * sn + 1], x[d.m_ * sn + 2],
-                d.statistics(sn), inv_weight);
+                d.statistics(sn, x), inv_weight);
             // As assemble's interface terms.
             const EdgeTerm& e = d.edges_[v.edge];
             const bool o_first = e.a == o;
@@ -438,6 +529,10 @@ public:
                 values[os] += t.d_flux_insulator[1];
                 values[d.interface_np_[k].first] += t.d_flux_insulator[2];
                 values[d.interface_np_[k].second] += t.d_flux_insulator[3];
+                if (d.density_gradient_) {  // Unit 62: the semiconductor node's Lambda columns
+                    values[d.interface_lambda_[k].first] += t.d_flux_insulator_l[0];
+                    values[d.interface_lambda_[k].second] += t.d_flux_insulator_l[1];
+                }
             }
             if (d.contact_[sn] >= 0) continue;
             const bool poisson =
@@ -449,6 +544,11 @@ public:
                 if (poisson) at(sn, 0, c - 1) += t.d_flux_semiconductor[c];
                 at(sn, 1, c - 1) -= t.d_rate[c];
                 at(sn, 2, c - 1) += t.d_rate_p[c];
+            }
+            for (std::size_t c = 0; d.density_gradient_ && c < 2; ++c) {
+                if (poisson) at(sn, 0, 3 + c) += t.d_flux_semiconductor_l[c];
+                at(sn, 1, 3 + c) -= t.d_rate_l[c];
+                at(sn, 2, 3 + c) += t.d_rate_p_l[c];
             }
         }
     }
@@ -556,6 +656,13 @@ public:
                     values[e.ab[3]] += fp.d_psi2;
                     at(s, ev, a, 2, 2) += fp.d_c1;
                     values[e.ab[4]] += fp.d_c2;
+                    if (s.density_gradient_) {  // Unit 62: Lambda through delta (edge_fluxes)
+                        const DgEdge& d = s.dg_edges_[static_cast<std::size_t>(&e - s.edges_.data())];
+                        at(s, ev, a, 1, 3) += fn.d_delta;
+                        values[d.ab[2]] -= fn.d_delta;
+                        at(s, ev, a, 2, 4) -= fp.d_delta;
+                        values[d.ab[3]] += fp.d_delta;
+                    }
                 }
             }
             if (s.contact_[b] < 0) {
@@ -570,6 +677,13 @@ public:
                     at(s, ev, b, 2, 0) -= fp.d_psi2;
                     values[e.ba[4]] -= fp.d_c1;
                     at(s, ev, b, 2, 2) -= fp.d_c2;
+                    if (s.density_gradient_) {
+                        const DgEdge& d = s.dg_edges_[static_cast<std::size_t>(&e - s.edges_.data())];
+                        values[d.ba[2]] -= fn.d_delta;
+                        at(s, ev, b, 1, 3) += fn.d_delta;
+                        values[d.ba[3]] += fp.d_delta;
+                        at(s, ev, b, 2, 4) -= fp.d_delta;
+                    }
                 }
             }
         }
@@ -696,10 +810,25 @@ public:
                     } else {
                         const std::size_t* p = i_is_a ? e.ab : e.ba;
                         // Edge positions: (psi,psi), (n,psi), (n,n), (p,psi), (p,p).
+                        // Density gradient (Unit 62): (n, Lambda_n), (p, Lambda_p) of the edge's
+                        // DgEdge, (n, Lambda_p) and (p, Lambda_n) of the impact edge.
+                        const std::size_t* d = nullptr;
+                        if (comp >= 3) {
+                            const DgEdge& g = s.dg_edges_[ie.edge];
+                            d = i_is_a ? g.ab : g.ba;
+                        }
                         if (row == 1) {
-                            pos = comp == 0 ? p[1] : comp == 1 ? p[2] : ie.n_p;
+                            pos = comp == 0   ? p[1]
+                                  : comp == 1 ? p[2]
+                                  : comp == 2 ? ie.n_p
+                                  : comp == 3 ? d[2]
+                                              : ie.n_lp;
                         } else {
-                            pos = comp == 0 ? p[3] : comp == 1 ? ie.p_n : p[4];
+                            pos = comp == 0   ? p[3]
+                                  : comp == 1 ? ie.p_n
+                                  : comp == 2 ? p[4]
+                                  : comp == 3 ? ie.p_ln
+                                              : d[3];
                         }
                     }
                     values[pos] += sign * v;
@@ -735,6 +864,12 @@ public:
                 add_entry(e.b, 1, k, wn * fn.d_c2 + dR[0] * rn * root);
                 add_entry(e.a, 2, k, wp * fp.d_c1 + dR[1] * rp * root);
                 add_entry(e.b, 2, k, wp * fp.d_c2 + dR[1] * rp * root);
+                if (s.density_gradient_) {  // Unit 62: the currents' Lambda partials (edge_fluxes)
+                    add_entry(e.a, 3, k, wn * fn.d_delta);
+                    add_entry(e.b, 3, k, -wn * fn.d_delta);
+                    add_entry(e.a, 4, k, -wp * fp.d_delta);
+                    add_entry(e.b, 4, k, wp * fp.d_delta);
+                }
             }
         }
     }
@@ -943,9 +1078,13 @@ std::span<const CompositionEntry> SystemData::Terms::isothermal_table() {
     const auto schottky = [](const SystemData& s, const SystemState&, M) {
         return std::ranges::any_of(s.schottky_, [](std::int32_t c) { return c >= 0; });
     };
+    const auto density_gradient = [](const SystemData& s, const SystemState&, M) {
+        return s.density_gradient_;
+    };
     static const CompositionEntry table[] = {
         {+E::contacts, contacts, &make_term<ContactRows>},
         {+E::oxide, insulators, &make_term<InsulatorRows>},
+        {+E::quantum, density_gradient, &density_gradient_rows},
         {+E::poisson, always, &make_term<PoissonCharge>},
         {+E::poisson,
          [](const SystemData&, const SystemState&, M m) { return m.incomplete_ionization; },
@@ -969,6 +1108,7 @@ std::span<const CompositionEntry> SystemData::Terms::isothermal_table() {
         {+E::continuity,
          [](const SystemData&, const SystemState&, M m) { return !m.energy_balance; },
          &make_term<CarrierFluxes>},
+        {+E::quantum, density_gradient, &density_gradient_edges},
         {E::continuity | E::energy,
          [](const SystemData&, const SystemState&, M m) { return m.energy_balance; },
          &energy_fluxes},

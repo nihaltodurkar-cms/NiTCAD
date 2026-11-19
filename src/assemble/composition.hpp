@@ -43,6 +43,7 @@ enum class EquationSet : unsigned {
     generation = 1u << 6,  // impact ionization, band-to-band tunnelling
     heat = 1u << 7,        // the lattice heat equation and its thermal contacts
     energy = 1u << 8,      // the carriers' energy-balance equations (Unit 52)
+    quantum = 1u << 9,     // the quantum potentials of density gradient (Unit 62)
 };
 using EquationSets = unsigned;
 // One set as a bit set.

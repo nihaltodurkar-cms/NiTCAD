@@ -76,6 +76,7 @@ results::Sweep full_sweep() {
     results::Sweep s;
     s.run.input_identity = 0x0123456789abcdefULL;
     s.run.settings = {{"newton.tol_update", 1e-8}, {"models.srh", 1.0}};
+    s.run.warnings = {"density gradient: a warning", "another"};  // Unit 62
     for (int k = 0; k < 2; ++k) {
         results::BiasPoint p;
         p.bias_V = {0.1 * k, -0.0};
@@ -83,6 +84,8 @@ results::Sweep full_sweep() {
         if (k == 1) {  // Unit 52: the carrier temperatures, absent at point 0
             p.fields.electron_temperature_K = {300.0, 1234.5678};
             p.fields.hole_temperature_K = {300.0000000000001, 301.0};
+            p.fields.quantum_potential_n_eV = {0.0125, -0.0};  // Unit 62: likewise
+            p.fields.quantum_potential_p_eV = {-1e-300, 0.25};
         }
         p.bands = {{0.5, 0.6}, {-0.6, -0.5}, {0.0, -0.1}, {0.0, std::nan("")}};
         p.terminal_current = {1e-3, -1e-3};
@@ -115,6 +118,8 @@ void check_same(const results::BiasPoint& a, const results::BiasPoint& b) {
     CHECK(same_bits(a.fields.temperature_K, b.fields.temperature_K));
     CHECK(same_bits(a.fields.electron_temperature_K, b.fields.electron_temperature_K));
     CHECK(same_bits(a.fields.hole_temperature_K, b.fields.hole_temperature_K));
+    CHECK(same_bits(a.fields.quantum_potential_n_eV, b.fields.quantum_potential_n_eV));
+    CHECK(same_bits(a.fields.quantum_potential_p_eV, b.fields.quantum_potential_p_eV));
     CHECK(same_bits(a.bands.conduction_eV, b.bands.conduction_eV));
     CHECK(same_bits(a.bands.valence_eV, b.bands.valence_eV));
     CHECK(same_bits(a.bands.electron_fermi_eV, b.bands.electron_fermi_eV));
@@ -192,6 +197,7 @@ TEST_CASE("files: a sweep round-trips every field bit for bit") {
     REQUIRE(back.has_value());
     CHECK(back->run.input_identity == s.run.input_identity);
     CHECK(back->run.settings == s.run.settings);
+    CHECK(back->run.warnings == s.run.warnings);
     REQUIRE(back->points.size() == s.points.size());
     for (std::size_t k = 0; k < s.points.size(); ++k) check_same(s.points[k], back->points[k]);
     REQUIRE(back->stopped.has_value());

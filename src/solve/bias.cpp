@@ -12,10 +12,12 @@
 #include "NiTCAD/assemble/contact_bias.hpp"
 #include "NiTCAD/assemble/energy.hpp"
 #include "NiTCAD/assemble/equilibrium.hpp"
+#include "NiTCAD/assemble/quantum_confinement.hpp"
 #include "NiTCAD/assemble/scaling.hpp"
 #include "NiTCAD/assemble/thermal.hpp"
 #include "NiTCAD/assemble/tunnelling.hpp"
 #include "NiTCAD/solve/equilibrium.hpp"
+#include "density_gradient.hpp"
 #include "fields.hpp"
 #include "observe.hpp"
 #include "wall_clock.hpp"
@@ -262,6 +264,96 @@ std::expected<results::Sweep, base::Error> sweep_bias_unobserved(const device::D
     const double charge_scale = detail::charge_scale(*scaling, D);
     const std::size_t edges = device.mesh().edges().size();
 
+    const bool quantum = options.models.quantum_confinement == assemble::QuantumConfinement::density_gradient;
+    if (equilibrium && quantum) {
+        // Unit 62 (QP8): the quasi-static sweep on the density-gradient equilibrium system (psi, Lambda_n,
+        // Lambda_p), each point's results read from the drift-diffusion state it slaves at its bias. The
+        // start is the model's equilibrium (QP9) or the initial state.
+        auto system = assemble::System::create(device, *scaling, options.models,
+                                               assemble::Formulation::equilibrium);
+        if (!system) return std::unexpected(std::move(system.error()));
+        auto dd = assemble::System::create(device, *scaling, options.models);
+        if (!dd) return std::unexpected(std::move(dd.error()));
+        results::Sweep sweep;
+        sweep.run = make_run_record(device, options, points, initial);
+        std::vector<double> x(3 * nodes, 0.0);
+        if (initial != nullptr) {
+            for (std::size_t i = 0; i < nodes; ++i) {
+                x[3 * i] = initial->potential_V[i] / scaling->V_T;
+                if (!initial->quantum_potential_n_eV.empty()) {
+                    x[3 * i + 1] = initial->quantum_potential_n_eV[i] / scaling->V_T;
+                }
+                if (!initial->quantum_potential_p_eV.empty()) {
+                    x[3 * i + 2] = initial->quantum_potential_p_eV[i] / scaling->V_T;
+                }
+            }
+        } else {
+            const std::vector<double> zero(contacts.size(), 0.0);
+            results::ConvergenceRecord record;
+            auto psi = detail::classical_equilibrium(device, *scaling, options.models, zero,
+                                                     options.newton, *solver, record, control.stop);
+            if (!psi) {
+                sweep.stopped = std::move(psi.error());
+                return sweep;
+            }
+            auto q = detail::solve_quantum_equilibrium(device, *scaling, options.models, zero, *psi,
+                                                       options.newton, *solver, record, control.stop);
+            if (!q) {
+                sweep.stopped = std::move(q.error());
+                return sweep;
+            }
+            if (auto w = detail::continuation_warning(q->rungs); !w.empty()) sweep.run.warnings.push_back(std::move(w));
+            for (std::size_t i = 0; i < nodes; ++i) {
+                x[3 * i] = q->psi[i];
+                x[3 * i + 1] = q->lambda_n[i];
+                x[3 * i + 2] = q->lambda_p[i];
+            }
+        }
+        std::optional<std::vector<double>> previous;
+        if (initial == nullptr) {
+            previous.emplace(contacts.size(), 0.0);
+        } else if (!options.step_control.initial_bias_V.empty()) {
+            previous = options.step_control.initial_bias_V;
+        }
+        run_points(points, {}, std::move(previous), options.step_control, control, x, sweep,
+                   [&](std::span<const double> bias, std::span<const double>,
+                       results::BiasPoint& point,
+                       const IterationObserver& observe) -> std::expected<void, base::Error> {
+                       if (auto ok = system->set_bias(bias); !ok) return ok;  // checked
+                       return newton_solve(*system, x, newton, *solver, point.convergence,
+                                           control.stop, observe);
+                   },
+                   [&](std::size_t, results::BiasPoint& point) -> std::expected<void, base::Error> {
+                       if (auto ok = dd->set_bias(point.bias_V); !ok) return ok;
+                       std::vector<double> psi(nodes), ln(nodes), lp(nodes);
+                       for (std::size_t i = 0; i < nodes; ++i) {
+                           psi[i] = x[3 * i];
+                           ln[i] = x[3 * i + 1];
+                           lp[i] = x[3 * i + 2];
+                       }
+                       const auto y = dd->state_from_quantum_potential(psi, ln, lp);
+                       const std::size_t m = dd->stride();
+                       point.fields = {std::vector<double>(nodes), std::vector<double>(nodes),
+                                       std::vector<double>(nodes)};
+                       for (std::size_t i = 0; i < nodes; ++i) {
+                           point.fields.potential_V[i] = y[m * i] * scaling->V_T;
+                           point.fields.n_cm3[i] = y[m * i + 1] * scaling->Ns;
+                           point.fields.p_cm3[i] = y[m * i + 2] * scaling->Ns;
+                       }
+                       detail::quantum_potentials(*dd, y, scaling->V_T, point.fields);
+                       point.bands = detail::band_diagram(*dd, y, scaling->V_T);
+                       point.terminal_current.assign(contacts.size(), 0.0);
+                       point.terminal_current_resolution.assign(contacts.size(), 0.0);
+                       point.gate_charge = gate_charges(*dd, y);
+                       for (double& Q : point.gate_charge) Q *= charge_scale;
+                       point.interface_trap_charge = interface_trap_charges(*dd, y);
+                       for (double& Q : point.interface_trap_charge) Q *= charge_scale;
+                       point.edge_current_n.assign(edges, 0.0);
+                       point.edge_current_p.assign(edges, 0.0);
+                       return {};
+                   });
+        return sweep;
+    }
     if (equilibrium) {
         auto system = assemble::System::create(device, *scaling, options.models,
                                                assemble::Formulation::equilibrium);
@@ -343,11 +435,10 @@ std::expected<results::Sweep, base::Error> sweep_bias_unobserved(const device::D
             sweep.stopped = std::move(start.error());
             return sweep;
         }
-        std::vector<double> psi(nodes);
-        for (std::size_t i = 0; i < nodes; ++i) {
-            psi[i] = start->fields.potential_V[i] / scaling->V_T;
+        x = detail::state_from_equilibrium(*system, start->fields, scaling->V_T);  // Lambda too (Unit 62)
+        if (auto w = detail::continuation_warning(start->quantum_continuation); !w.empty()) {
+            sweep.run.warnings.push_back(std::move(w));
         }
-        x = system->state_from_potential(psi);
     }
 
     // The bias of the starting state: zero on every contact at equilibrium, or the given one.
@@ -451,6 +542,11 @@ std::expected<results::Sweep, base::Error> sweep_bias(const device::Device& devi
     const detail::WallClock clock;
     auto r = sweep_bias_unobserved(device, points, options, initial, control);
     if (r) {
+        if (options.models.quantum_confinement == assemble::QuantumConfinement::density_gradient) {
+            detail::CoarseScan scan(device);  // Unit 62, QP15
+            for (const results::BiasPoint& p : r->points) scan.add(p.fields);
+            if (auto w = scan.warning(); !w.empty()) r->run.warnings.push_back(std::move(w));
+        }
         r->run.provenance.wall_s = clock.seconds();
         detail::observe_result(*r);
     }

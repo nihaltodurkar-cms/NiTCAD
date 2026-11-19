@@ -95,14 +95,23 @@ InterfaceEdges::Charge InterfaceEdges::charge_at(const InterfaceEdge& e, double 
                                        : physics::Degeneracy{0.0, 0.0};
     double q = e.fixed_charge_cm2, q_n = 0.0, q_p = 0.0, r = 0.0, r_n = 0.0, r_p = 0.0;
     double h = 0.0, h_n = 0.0, h_p = 0.0;  // the hole row's rate, in a time step
+    // Density gradient (Unit 62): the levels' n1 and p1 at the effective band edges, and the
+    // partials of Q and the rates in (Lambda_n, Lambda_p) (InterfaceStatistics).
+    const bool dg = s.density_gradient;
+    const double en = dg ? std::exp(-s.lambda_n) : 1.0, ep = dg ? std::exp(-s.lambda_p) : 1.0;
+    double q_l[2] = {0.0, 0.0}, r_l[2] = {0.0, 0.0}, h_l[2] = {0.0, 0.0};
     if (step != nullptr) {
         // f = (c + w occ) / (1 + w D); the electron row takes cn (n - f (n + n1)), the hole row
         // cp (f (p + p1) - p1), and Q falls with f as in steady state.
         const double w = step->weight;
         for (std::size_t k = e.first_level; k < e.last_level; ++k) {
             const InterfaceLevel& l = levels_[k];
-            const double n1 = s.n_ie * std::exp(gn.log_gamma + l.tau + e.level_shift);
-            const double p1 = s.n_ie * std::exp(gp.log_gamma - l.tau - e.level_shift);
+            double n1 = s.n_ie * std::exp(gn.log_gamma + l.tau + e.level_shift);
+            double p1 = s.n_ie * std::exp(gp.log_gamma - l.tau - e.level_shift);
+            if (dg) {
+                n1 *= en;
+                p1 *= ep;
+            }
             const double dn1 = n1 * gn.d_density, dp1 = p1 * gp.d_density;
             const double occ = l.cn * n + l.cp * p1;
             const double D = l.cn * (n + n1) + l.cp * (p + p1);
@@ -121,12 +130,26 @@ InterfaceEdges::Charge InterfaceEdges::charge_at(const InterfaceEdge& e, double 
             h += N * l.cp * (occupied * (p + p1) - p1);
             h_n += N * l.cp * f_n * (p + p1);
             h_p += N * l.cp * (f_p * (p + p1) + occupied * (1.0 + dp1) - dp1);
+            if (dg) {  // dn1 / dLambda_n = -n1: df/dLambda_n = w cn f n1 / den, likewise p1
+                const double f_ln = w * l.cn * occupied * n1 / den;
+                const double f_lp = -w * l.cp * (1.0 - occupied) * p1 / den;
+                q_l[0] -= N * f_ln;
+                q_l[1] -= N * f_lp;
+                r_l[0] += N * l.cn * (occupied * n1 - f_ln * (n + n1));
+                r_l[1] -= N * l.cn * f_lp * (n + n1);
+                h_l[0] += N * l.cp * f_ln * (p + p1);
+                h_l[1] += N * l.cp * (f_lp * (p + p1) + (1.0 - occupied) * p1);
+            }
         }
     }
     for (std::size_t k = e.first_level; step == nullptr && k < e.last_level; ++k) {
         const InterfaceLevel& l = levels_[k];
-        const double n1 = s.n_ie * std::exp(gn.log_gamma + l.tau + e.level_shift);
-        const double p1 = s.n_ie * std::exp(gp.log_gamma - l.tau - e.level_shift);
+        double n1 = s.n_ie * std::exp(gn.log_gamma + l.tau + e.level_shift);
+        double p1 = s.n_ie * std::exp(gp.log_gamma - l.tau - e.level_shift);
+        if (dg) {
+            n1 *= en;
+            p1 *= ep;
+        }
         const physics::TrapKinetics t = physics::trap_kinetics(
             n, p, n1, n1 * gn.d_density, p1, p1 * gp.d_density, l.cn, l.cp);
         // Donor N (1 - f), acceptor -N f; d(1 - f) = -df.
@@ -137,27 +160,64 @@ InterfaceEdges::Charge InterfaceEdges::charge_at(const InterfaceEdge& e, double 
         r_n += l.density_cm2 * t.d_rate_dn;
         r_p += l.density_cm2 * t.d_rate_dp;
         if (!f.empty()) f[k - e.first_level] = t.occupied;
+        if (dg) {
+            // f = (cn n + cp p1) / D, r = cn cp (n p - n1 p1) / D, D = cn (n + n1) + cp (p + p1):
+            // df/dn1 = -f cn / D, df/dp1 = cp (1 - f) / D, dr/dn1 = -cn cp f (p + p1) / D,
+            // dr/dp1 = -cn cp (1 - f) (n + n1) / D; times dn1/dLambda_n = -n1, dp1/dLambda_p = -p1.
+            const double N = l.density_cm2;
+            const double D = l.cn * (n + n1) + l.cp * (p + p1);
+            const double fo = t.occupied;
+            q_l[0] -= N * fo * l.cn * n1 / D;
+            q_l[1] += N * l.cp * (1.0 - fo) * p1 / D;
+            r_l[0] += N * l.cn * l.cp * fo * (p + p1) * n1 / D;
+            r_l[1] += N * l.cn * l.cp * (1.0 - fo) * (n + n1) * p1 / D;
+        }
     }
     if (step == nullptr) {
         h = r;
         h_n = r_n;
         h_p = r_p;
+        h_l[0] = r_l[0];
+        h_l[1] = r_l[1];
     }
     if (e.velocity_n > 0.0 && e.velocity_p > 0.0) {
         const physics::EquilibriumProduct E =
             s.fermi_dirac ? physics::fermi_dirac_equilibrium_product(s.n_ie, gn, gp)
                           : physics::boltzmann_equilibrium_product(s.n_ie);
-        const physics::RecombinationRate v = physics::srh_recombination(
-            n, p, E, s.n_ie, 1.0 / e.velocity_n, 1.0 / e.velocity_p);
-        r += v.rate;
-        r_n += v.d_dn;
-        r_p += v.d_dp;
-        h += v.rate;
-        h_n += v.d_dn;
-        h_p += v.d_dp;
+        if (dg) {  // n_ie^2 -> n_ie^2 e^-(Lambda_n + Lambda_p), n1 = n_ie e^-Lambda_n, p1 likewise
+            const double el = en * ep;
+            const physics::ShiftedRecombinationRate v = physics::srh_recombination_shifted(
+                n, p, {E.value * el, E.d_dn * el, E.d_dp * el}, s.n_ie * en, s.n_ie * ep,
+                1.0 / e.velocity_n, 1.0 / e.velocity_p);
+            r += v.rate;
+            r_n += v.d_dn;
+            r_p += v.d_dp;
+            h += v.rate;
+            h_n += v.d_dn;
+            h_p += v.d_dp;
+            r_l[0] += v.d_dln;
+            r_l[1] += v.d_dlp;
+            h_l[0] += v.d_dln;
+            h_l[1] += v.d_dlp;
+        } else {
+            const physics::RecombinationRate v = physics::srh_recombination(
+                n, p, E, s.n_ie, 1.0 / e.velocity_n, 1.0 / e.velocity_p);
+            r += v.rate;
+            r_n += v.d_dn;
+            r_p += v.d_dp;
+            h += v.rate;
+            h_n += v.d_dn;
+            h_p += v.d_dp;
+        }
     }
     const double cw = e.charge_weight, rw = e.rate_weight;
-    return {cw * q, cw * q_n, cw * q_p, rw * r, rw * r_n, rw * r_p, rw * h, rw * h_n, rw * h_p};
+    Charge c{cw * q, cw * q_n, cw * q_p, rw * r, rw * r_n, rw * r_p, rw * h, rw * h_n, rw * h_p};
+    for (std::size_t k = 0; k < 2; ++k) {
+        c.q_l[k] = cw * q_l[k];
+        c.rate_l[k] = rw * r_l[k];
+        c.rate_hl[k] = rw * h_l[k];
+    }
+    return c;
 }
 
 InterfaceEdges::ChargeSmallSignal InterfaceEdges::charge_small_signal(
@@ -171,12 +231,19 @@ InterfaceEdges::ChargeSmallSignal InterfaceEdges::charge_small_signal(
                                        ? physics::fermi_dirac_degeneracy(s.n_ie, s.log_dos_p, p)
                                        : physics::Degeneracy{0.0, 0.0};
     Complex q_n, q_p, r_n, r_p, h_n, h_p;
+    Complex q_l[2], r_l[2], h_l[2];  // density gradient (Unit 62): in Lambda_n, Lambda_p
+    const bool dg = s.density_gradient;
+    const double en = dg ? std::exp(-s.lambda_n) : 1.0, ep = dg ? std::exp(-s.lambda_p) : 1.0;
     for (std::size_t k = e.first_level; k < e.last_level; ++k) {
         // As charge_at's time step, linearized about the steady occupancy f: the occupancy moves
         // by df = (f_n dn + f_p dp), (1 / w + D) f_n = cn - f cn (1 + dn1), likewise f_p.
         const InterfaceLevel& l = levels_[k];
-        const double n1 = s.n_ie * std::exp(gn.log_gamma + l.tau + e.level_shift);
-        const double p1 = s.n_ie * std::exp(gp.log_gamma - l.tau - e.level_shift);
+        double n1 = s.n_ie * std::exp(gn.log_gamma + l.tau + e.level_shift);
+        double p1 = s.n_ie * std::exp(gp.log_gamma - l.tau - e.level_shift);
+        if (dg) {
+            n1 *= en;
+            p1 *= ep;
+        }
         const double dn1 = n1 * gn.d_density, dp1 = p1 * gp.d_density;
         const double D = l.cn * (n + n1) + l.cp * (p + p1);
         const double f = physics::trap_kinetics(n, p, n1, dn1, p1, dp1, l.cn, l.cp).occupied;
@@ -190,20 +257,51 @@ InterfaceEdges::ChargeSmallSignal InterfaceEdges::charge_small_signal(
         r_p -= N * l.cn * f_p * (n + n1);
         h_n += N * l.cp * f_n * (p + p1);
         h_p += N * l.cp * (f_p * (p + p1) + f * (1.0 + dp1) - dp1);
+        if (dg) {  // dn1 / dLambda_n = -n1, dp1 / dLambda_p = -p1 (as charge_at)
+            const Complex f_ln = l.cn * f * n1 / den, f_lp = -l.cp * (1.0 - f) * p1 / den;
+            q_l[0] -= N * f_ln;
+            q_l[1] -= N * f_lp;
+            r_l[0] += N * l.cn * (n1 * f - f_ln * (n + n1));
+            r_l[1] -= N * l.cn * f_lp * (n + n1);
+            h_l[0] += N * l.cp * f_ln * (p + p1);
+            h_l[1] += N * l.cp * (f_lp * (p + p1) + (1.0 - f) * p1);
+        }
     }
     if (e.velocity_n > 0.0 && e.velocity_p > 0.0) {
         const physics::EquilibriumProduct E =
             s.fermi_dirac ? physics::fermi_dirac_equilibrium_product(s.n_ie, gn, gp)
                           : physics::boltzmann_equilibrium_product(s.n_ie);
-        const physics::RecombinationRate v = physics::srh_recombination(
-            n, p, E, s.n_ie, 1.0 / e.velocity_n, 1.0 / e.velocity_p);
-        r_n += v.d_dn;
-        r_p += v.d_dp;
-        h_n += v.d_dn;
-        h_p += v.d_dp;
+        if (dg) {  // as charge_at
+            const double el = en * ep;
+            const physics::ShiftedRecombinationRate v = physics::srh_recombination_shifted(
+                n, p, {E.value * el, E.d_dn * el, E.d_dp * el}, s.n_ie * en, s.n_ie * ep,
+                1.0 / e.velocity_n, 1.0 / e.velocity_p);
+            r_n += v.d_dn;
+            r_p += v.d_dp;
+            h_n += v.d_dn;
+            h_p += v.d_dp;
+            for (std::size_t c = 0; c < 2; ++c) {
+                const double d = c == 0 ? v.d_dln : v.d_dlp;
+                r_l[c] += d;
+                h_l[c] += d;
+            }
+        } else {
+            const physics::RecombinationRate v = physics::srh_recombination(
+                n, p, E, s.n_ie, 1.0 / e.velocity_n, 1.0 / e.velocity_p);
+            r_n += v.d_dn;
+            r_p += v.d_dp;
+            h_n += v.d_dn;
+            h_p += v.d_dp;
+        }
     }
     const double cw = e.charge_weight, rw = e.rate_weight;
-    return {cw * q_n, cw * q_p, rw * r_n, rw * r_p, rw * h_n, rw * h_p};
+    ChargeSmallSignal c{cw * q_n, cw * q_p, rw * r_n, rw * r_p, rw * h_n, rw * h_p};
+    for (std::size_t k = 0; k < 2; ++k) {
+        c.q_l[k] = cw * q_l[k];
+        c.rate_l[k] = rw * r_l[k];
+        c.rate_hl[k] = rw * h_l[k];
+    }
+    return c;
 }
 
 InterfaceSmallSignal InterfaceEdges::small_signal(const InterfaceEdge& e, double psi_i,
@@ -244,6 +342,16 @@ InterfaceSmallSignal InterfaceEdges::small_signal(const InterfaceEdge& e, double
         const Complex dn = pn[k] + Nd * dpsi, dp = pp[k] - Pd * dpsi;
         r.d_rate[k] = c.rate_n * dn + c.rate_p * dp;
         r.d_rate_p[k] = c.rate_hn * dn + c.rate_hp * dp;
+    }
+    if (s.density_gradient) {  // Lambda moves the charge only (the interface densities keep theirs)
+        for (std::size_t k = 0; k < 2; ++k) {
+            const Complex dpsi = c.q_l[k] / D;
+            r.d_flux_insulator_l[k] = gi * dpsi;
+            r.d_flux_semiconductor_l[k] = gs * dpsi;
+            const Complex dn = Nd * dpsi, dp = -Pd * dpsi;
+            r.d_rate_l[k] = c.rate_n * dn + c.rate_p * dp + c.rate_l[k];
+            r.d_rate_p_l[k] = c.rate_hn * dn + c.rate_hp * dp + c.rate_hl[k];
+        }
     }
     return r;
 }
@@ -333,6 +441,16 @@ InterfaceDrift InterfaceEdges::drift_at(const InterfaceEdge& e, double psi_i, do
         const double dn = pn[k] + Nd * dpsi, dp = pp[k] - Pd * dpsi;
         r.d_rate[k] = st.c.rate_n * dn + st.c.rate_p * dp;
         r.d_rate_p[k] = st.c.rate_hn * dn + st.c.rate_hp * dp;
+    }
+    if (s.density_gradient) {  // Unit 62: Lambda moves Q and the rates at fixed n_I, p_I
+        for (std::size_t k = 0; k < 2; ++k) {
+            const double dpsi = st.c.q_l[k] / D;  // F_Lambda = -dQ/dLambda
+            r.d_flux_insulator_l[k] = gi * dpsi;
+            r.d_flux_semiconductor_l[k] = gs * dpsi;
+            const double dn = Nd * dpsi, dp = -Pd * dpsi;
+            r.d_rate_l[k] = st.c.rate_n * dn + st.c.rate_p * dp + st.c.rate_l[k];
+            r.d_rate_p_l[k] = st.c.rate_hn * dn + st.c.rate_hp * dp + st.c.rate_hl[k];
+        }
     }
     r.trapped = st.c.value - e.charge_weight * e.fixed_charge_cm2;
     return r;

@@ -12,6 +12,7 @@
 #include <cstdio>
 #include <limits>
 #include <span>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -23,8 +24,14 @@
 #include "NiTCAD/physics/insulator.hpp"
 #include "NiTCAD/physics/recombination.hpp"
 #include "NiTCAD/physics/semiconductor.hpp"
+#include "NiTCAD/solve/adapt.hpp"
 #include "NiTCAD/solve/bias.hpp"
+#include "NiTCAD/solve/equilibrium.hpp"
+#include "NiTCAD/solve/small_signal.hpp"
 #include "NiTCAD/solve/transient.hpp"
+#include "NiTCAD/assemble/scaling.hpp"
+#include "NiTCAD/linalg/linear_solver.hpp"
+#include "density_gradient.hpp"
 #include "NiTCAD/solve/waveform.hpp"
 
 using namespace NiTCAD;
@@ -378,4 +385,274 @@ TEST_CASE("quantum confinement: a lumped gate against the meshed oxide (QC9)", "
     const double ql = inversion_charge(lumped, quasi_static(lumped, true, vg)[0]);
     std::printf("QC9: Q_inv meshed %.5e, lumped %.5e C/cm^2 (ratio %.4f)\n", qm, ql, ql / qm);
     CHECK(std::abs(ql - qm) <= 0.05 * qm);
+}
+
+// Unit 62 slice 3: density gradient through the solvers.
+namespace {
+
+assemble::PhysicsModels dg_models(bool fermi_dirac = false) {
+    assemble::PhysicsModels m;
+    m.fermi_dirac = fermi_dirac;
+    m.quantum_confinement = assemble::QuantumConfinement::density_gradient;
+    return m;
+}
+
+// The largest |E_Fn| and |E_Fp| [eV] over the semiconductor nodes.
+double fermi_spread(const device::Device& d, const results::BandDiagram& b) {
+    double worst = 0.0;
+    for (std::size_t i = 0; i < d.mesh().node_count(); ++i) {
+        if (d.is_insulator(static_cast<mesh::NodeId>(i))) continue;
+        worst = std::max({worst, std::abs(b.electron_fermi_eV[i]), std::abs(b.hole_fermi_eV[i])});
+    }
+    return worst;
+}
+
+}  // namespace
+
+TEST_CASE("density gradient: mesh adaptation refuses it (Unit 62)") {
+    solve::BiasOptions o;
+    o.models = dg_models();
+    const std::vector<std::vector<double>> points{{0.5, 0.0}};
+    const auto r = solve::adapt([](const solve::MeshRefinement&) -> std::expected<solve::AdaptableMesh, base::Error> {
+        FAIL("the device is not built");
+        return std::unexpected(base::Error{base::ErrorCode::invalid_input, "", {}});
+    }, points, o, {}, {});
+    REQUIRE_FALSE(r.has_value());
+    CHECK(r.error().code == base::ErrorCode::invalid_input);
+    CHECK(r.error().message ==
+          "quantum_confinement density_gradient: mesh adaptation does not transfer the quantum potentials");
+}
+
+TEST_CASE("density gradient: a long transient step ends at the steady state (QV10)") {
+    // As QC10: the MOS-C's gate stepped from 0 into accumulation (-1.5 V); by 1 us the run is at the
+    // DC state of -1.5 V, the quantum potentials included.
+    const device::Device d = mosc(0.1e-7);
+    solve::TransientOptions o{.t_end_s = 1e-6, .dt_initial_s = 1e-16};
+    o.steady.models = dg_models();
+    const std::vector<solve::Waveform> wf{*solve::Waveform::step(0.0, -1.5, 0.0),
+                                          solve::Waveform::constant(0.0)};
+    const auto run = solve::solve_transient(d, wf, o);
+    if (!run) FAIL(run.error().message);
+    REQUIRE_FALSE(run->stopped.has_value());
+    // The DC reference from the quasi-static state: drift-diffusion straight from equilibrium to
+    // -1.5 V does not converge with the model (83 iterations, then a backward error; recorded).
+    solve::BiasOptions b;
+    b.models = dg_models();
+    solve::BiasOptions qs = b;
+    qs.equations = solve::Equations::equilibrium_poisson;
+    const std::vector<double> bias{-1.5, 0.0};
+    const auto start = solve::solve_bias(d, bias, qs);
+    if (!start) FAIL(start.error().message);
+    const auto dc = solve::solve_bias(d, bias, b, &start->fields);
+    if (!dc) FAIL(dc.error().message);
+    const auto& f = run->snapshots.back().fields;
+    REQUIRE(f.quantum_potential_p_eV.size() == f.potential_V.size());
+    double peak = 0.0;
+    for (std::size_t i = 0; i < f.potential_V.size(); ++i) {
+        CAPTURE(i);
+        REQUIRE(std::abs(f.potential_V[i] - dc->fields.potential_V[i]) <= 1e-9);
+        REQUIRE(std::abs(f.quantum_potential_n_eV[i] - dc->fields.quantum_potential_n_eV[i]) <= 1e-9);
+        REQUIRE(std::abs(f.quantum_potential_p_eV[i] - dc->fields.quantum_potential_p_eV[i]) <= 1e-9);
+        peak = std::max(peak, std::abs(dc->fields.quantum_potential_p_eV[i]));
+        if (d.is_insulator(static_cast<mesh::NodeId>(i))) continue;
+        REQUIRE(std::abs(f.p_cm3[i] / dc->fields.p_cm3[i] - 1.0) <= 1e-7);
+    }
+    CAPTURE(peak, run->snapshots.size());
+    CHECK(peak > 1e-3);  // accumulation: Lambda_p is resolved
+}
+
+
+TEST_CASE("density gradient: equilibrium and steady states at equilibrium (QV4)") {
+    const physics::Semiconductor si = physics::silicon();
+    for (const bool lumped : {false, true}) {
+        for (const bool fd : {false, true}) {
+            const device::Device d = mosc(0.1e-7, lumped, 0.0, !lumped);
+            CAPTURE(lumped, fd);
+            solve::EquilibriumOptions e;
+            e.models = dg_models(fd);
+            const auto eq = solve::solve_equilibrium(d, e);
+            if (!eq) FAIL(eq.error().message);
+            REQUIRE(eq->fields.quantum_potential_n_eV.size() == d.mesh().node_count());
+            CHECK(eq->quantum_continuation.empty());
+            const double flat_eq = fermi_spread(d, eq->bands);
+            CAPTURE(flat_eq);
+            CHECK(flat_eq <= 1e-9);
+            for (const double vg : {-2.0, 1.5}) {  // accumulation and inversion
+                CAPTURE(vg);
+                solve::BiasOptions o;
+                o.models = dg_models(fd);
+                solve::BiasOptions qs = o;
+                qs.equations = solve::Equations::equilibrium_poisson;
+                const std::vector<double> bias{vg, 0.0};
+                const auto start = solve::solve_bias(d, bias, qs);
+                if (!start) FAIL(start.error().message);
+                const auto p = solve::solve_bias(d, bias, o, &start->fields);
+                if (!p) FAIL(p.error().message);
+                CAPTURE(p->terminal_current[1], p->terminal_current_resolution[1]);
+                CHECK(std::abs(p->terminal_current[1]) <= p->terminal_current_resolution[1]);
+                const double flat = fermi_spread(d, p->bands), flat_qs = fermi_spread(d, start->bands);
+                CAPTURE(flat, flat_qs);
+                CHECK(flat <= 1e-9);
+                CHECK(flat_qs <= 1e-9);
+                double peak = 0.0;
+                for (std::size_t i = 0; i < d.mesh().node_count(); ++i) {
+                    if (d.is_insulator(static_cast<mesh::NodeId>(i))) continue;
+                    peak = std::max(peak, vg > 0 ? p->fields.quantum_potential_n_eV[i]
+                                                 : p->fields.quantum_potential_p_eV[i]);
+                    const double n = p->fields.n_cm3[i], pp = p->fields.p_cm3[i];
+                    const double tau = physics::scharfetter_lifetime(si, physics::Carrier::electron, N_A);
+                    const double scale = n * pp / (tau * (n + pp));
+                    CAPTURE(i, n, pp, p->rates.srh[i], scale);
+                    REQUIRE(std::abs(p->rates.srh[i]) <= 1e-9 * scale);
+                    if (!lumped) {
+                        const double h = d.mesh().volumes()[i];
+                        REQUIRE(std::abs(p->rates.interface_n[i]) <= 1e-9 * 1e3 * n * pp / (n + pp) / h);
+                    }
+                }
+                CAPTURE(peak);
+                CHECK(peak > 0.0);  // the majority (accumulation) or inversion carriers are pushed back
+            }
+        }
+    }
+}
+
+TEST_CASE("density gradient: the coefficient continuation (QP9)") {
+    // Newton capped at 5 iterations does not reach the model's equilibrium from Lambda = 0 on the
+    // meshed MOS-C (measured: 6 suffice), and does through the ladder: the same state as uncapped.
+    // Capped at 2 even the first rung fails, and the error names the rung and the ones converged.
+    const device::Device d = mosc(0.1e-7);
+    const auto scaling = *assemble::make_scaling(d);
+    auto solver = *linalg::LinearSolver::create({});
+    const std::vector<double> zero{0.0, 0.0};
+    results::ConvergenceRecord record;
+    const auto psi = solve::detail::classical_equilibrium(d, scaling, dg_models(), zero, {}, solver, record);
+    REQUIRE(psi.has_value());
+    const auto direct = solve::detail::solve_quantum_equilibrium(d, scaling, dg_models(), zero, *psi, {},
+                                                                 solver, record);
+    REQUIRE(direct.has_value());
+    CHECK(direct->rungs.empty());
+    solve::NewtonOptions capped;
+    capped.max_iterations = 5;
+    const auto ladder = solve::detail::solve_quantum_equilibrium(d, scaling, dg_models(), zero, *psi, capped,
+                                                                 solver, record);
+    REQUIRE(ladder.has_value());
+    REQUIRE_FALSE(ladder->rungs.empty());
+    CHECK(std::is_sorted(ladder->rungs.begin(), ladder->rungs.end()));
+    CHECK(ladder->rungs.back() < 1.0);
+    double worst = 0.0;
+    for (std::size_t i = 0; i < psi->size(); ++i) {
+        worst = std::max({worst, std::abs(ladder->psi[i] - direct->psi[i]),
+                          std::abs(ladder->lambda_n[i] - direct->lambda_n[i]),
+                          std::abs(ladder->lambda_p[i] - direct->lambda_p[i])});
+    }
+    CAPTURE(ladder->rungs.size(), worst);
+    CHECK(worst <= 1e-6);
+    capped.max_iterations = 2;
+    const auto failed = solve::detail::solve_quantum_equilibrium(d, scaling, dg_models(), zero, *psi, capped,
+                                                                 solver, record);
+    REQUIRE_FALSE(failed.has_value());
+    CHECK(failed.error().code == base::ErrorCode::non_convergence);
+    CAPTURE(failed.error().message);
+    CHECK(failed.error().message.starts_with(
+        "density gradient: the coefficient continuation failed at k = 0.0078125 (converged: none)"));
+}
+
+// A lumped-gate 2D n-MOSFET (Unit 62, QV10): 1 um along x, silicon_axis(1 nm) deep (y), n+ source
+// and drain (1e20, 50 nm deep) under contacts on x < 0.2 um and x > 0.8 um, the gate (5 nm SiO2,
+// n+ poly) over 0.3-0.7 um, body on y_max. Contacts: gate, source, drain, body.
+device::Device dg_mosfet() {
+    std::vector<double> x;
+    for (int k = 0; k <= 40; ++k) x.push_back(1e-4 * k / 40.0);
+    mesh::Mesh m = *mesh::make_tensor_grid(x, silicon_axis(1e-7));
+    const std::size_t n = m.node_count();
+    std::vector<double> donors(n, 0.0);
+    for (std::size_t i = 0; i < n; ++i) {
+        const auto& p = m.points()[i];
+        if ((p[0] < 0.3e-4 || p[0] > 0.7e-4) && p[1] < 5e-6) donors[i] = 1e20;
+    }
+    std::vector<mesh::NodeId> source, drain, gate;
+    for (const mesh::NodeId v : m.find_boundary("y_min")->nodes) {
+        const double px = m.points()[static_cast<std::size_t>(v)][0];
+        if (px < 0.2e-4 + 1e-12) source.push_back(v);
+        if (px > 0.8e-4 - 1e-12) drain.push_back(v);
+        if (px > 0.3e-4 - 1e-12 && px < 0.7e-4 + 1e-12) gate.push_back(v);
+    }
+    auto body = m.find_boundary("y_max")->nodes;
+    device::Contact g{"gate", device::ContactKind::gate, std::move(gate)};
+    g.gate = {.boundary = "y_min", .oxide_thickness_cm = t_ox,
+              .oxide_relative_permittivity = physics::silicon_dioxide().parameters().eps_r};
+    return *device::Device::create(
+        {.mesh = std::move(m),
+         .temperature_K = 300.0,
+         .regions = {{"silicon", physics::silicon()}},
+         .node_region = std::vector<device::RegionId>(n, 0),
+         .donors = std::move(donors),
+         .acceptors = std::vector<double>(n, N_A),
+         .contacts = {std::move(g), {"source", device::ContactKind::ohmic, std::move(source)},
+                      {"drain", device::ContactKind::ohmic, std::move(drain)},
+                      {"body", device::ContactKind::ohmic, std::move(body)}}});
+}
+
+TEST_CASE("density gradient: small-signal g_m and g_d against DC differences (QV10)") {
+    // Y(0)'s drain row against the fourth-order central differences of the DC drain current
+    // (dV = 1e-3 V), each DC point from the operating point's fields.
+    const device::Device d = dg_mosfet();
+    solve::SmallSignalOptions o;
+    o.steady.models = dg_models();
+    o.frequencies_Hz = {0.0};
+    const std::vector<std::vector<double>> points{
+        {0.0, 0.0, 0.0, 0.0}, {0.5, 0.0, 0.0, 0.0}, {1.0, 0.0, 0.0, 0.0},
+        {1.5, 0.0, 0.0, 0.0}, {1.5, 0.0, 0.05, 0.0}, {1.5, 0.0, 0.1, 0.0}};
+    const auto r = solve::solve_small_signal(d, points, o);
+    if (!r) FAIL(r.error().message);
+    if (r->stopped) FAIL(r->stopped->message);
+    REQUIRE(r->points.size() == points.size());
+    const results::SmallSignalPoint& op = r->points.back();
+    REQUIRE(op.dc.fields.quantum_potential_n_eV.size() == d.mesh().node_count());
+    const std::size_t contacts = 4, drain = 2;
+    const auto Y = [&](std::size_t i, std::size_t j) { return op.admittance[0][i * contacts + j]; };
+    const auto I = [&](std::size_t j, double dv) {
+        std::vector<double> v = points.back();
+        v[j] += dv;
+        const auto p = solve::solve_bias(d, v, o.steady, &op.dc.fields);
+        if (!p) FAIL(p.error().message);
+        return p->terminal_current[drain];
+    };
+    const double h = 1e-3;
+    for (const std::size_t j : {std::size_t{0}, drain}) {
+        const double G = (8.0 * (I(j, h) - I(j, -h)) - (I(j, 2.0 * h) - I(j, -2.0 * h))) / (12.0 * h);
+        CAPTURE(j, G, Y(drain, j).real(), Y(drain, j).real() / G - 1.0);
+        CHECK(std::abs(Y(drain, j).real() / G - 1.0) <= 1e-5);
+    }
+}
+
+TEST_CASE("density gradient: the run-record warnings (QP9, QP15)") {
+    CHECK(solve::detail::continuation_warning({}).empty());
+    const std::vector<double> rungs{0.125, 0.25, 0.5};
+    CHECK(solve::detail::continuation_warning(rungs) ==
+          "density gradient: the equilibrium start used the coefficient continuation (k = 0.125, 0.25, 0.5)");
+    // The lumped MOS-C: node 0 is the gate's (not scanned); a bulk node above 10 kT is reported.
+    const device::Device d = mosc(1e-7, true);
+    const std::size_t n = d.mesh().node_count();
+    const double kT = base::thermal_voltage(300.0);
+    solve::detail::CoarseScan scan(d);
+    results::NodeFields f{std::vector<double>(n), std::vector<double>(n), std::vector<double>(n)};
+    scan.add(f);  // classical: ignored
+    f.quantum_potential_n_eV.assign(n, 0.0);
+    f.quantum_potential_p_eV.assign(n, 0.0);
+    f.quantum_potential_n_eV[0] = 20.0 * kT;
+    scan.add(f);
+    CHECK(scan.warning().empty());
+    f.quantum_potential_p_eV[40] = -12.5 * kT;
+    f.quantum_potential_n_eV[41] = 10.5 * kT;
+    scan.add(f);
+    CHECK(scan.warning() ==
+          "density gradient: |Lambda| above 10 kT at 2 node(s) away from the interfaces in 1 of 2 result(s), "
+          "largest 12.5 kT (node 40); the mesh may not resolve the densities there (QP15)");
+    // A sweep with the model on and nothing to warn about records none.
+    solve::BiasOptions b;
+    b.models = dg_models();
+    const auto s = solve::sweep_bias(d, std::vector<std::vector<double>>{{0.5, 0.0}}, b);
+    if (!s) FAIL(s.error().message);
+    CHECK(s->run.warnings.empty());
 }

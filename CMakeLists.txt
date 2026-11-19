@@ -191,6 +191,8 @@ add_custom_command(
           src/verify/reference/linear_transient.cpp
           src/verify/reference/mos_hf.cpp
           src/verify/reference/diode.cpp
+          include/NiTCAD/verify/reference/schrodinger_poisson.hpp
+          src/verify/reference/schrodinger_poisson.cpp
   COMMENT "verify/reference include boundary (VR2)")
 add_custom_target(nitcad_verify_reference_boundary
   DEPENDS "${CMAKE_BINARY_DIR}/verify_reference_boundary.stamp")
@@ -205,7 +207,7 @@ add_library(nitcad_verify_reference STATIC src/verify/reference/double_double.cp
   src/verify/reference/admittance.cpp src/verify/reference/mos_hf.cpp
   src/verify/reference/linear_transient.cpp src/verify/reference/energy_layer.cpp
   src/verify/reference/thermal_slab.cpp
-  src/verify/reference/pao_sah.cpp)
+  src/verify/reference/pao_sah.cpp src/verify/reference/schrodinger_poisson.cpp)
 add_library(NiTCAD::verify_reference ALIAS nitcad_verify_reference)
 target_include_directories(nitcad_verify_reference PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
 add_dependencies(nitcad_verify_reference nitcad_verify_reference_boundary)
@@ -242,7 +244,8 @@ add_executable(nitcad_verify_test
   tests/verify/reference/linear_transient_test.cpp
   tests/verify/reference/energy_layer_test.cpp
   tests/verify/reference/thermal_slab_test.cpp
-  tests/verify/reference/pao_sah_test.cpp)
+  tests/verify/reference/pao_sah_test.cpp
+  tests/verify/reference/schrodinger_poisson_test.cpp)
 target_link_libraries(nitcad_verify_test PRIVATE NiTCAD::verify_reference Catch2::Catch2WithMain)
 nitcad_add_file_tests(verify nitcad_verify_test)
 add_test(NAME verify_reference_boundary
@@ -416,6 +419,7 @@ add_library(nitcad_assemble STATIC
   src/assemble/scaling.cpp
   src/assemble/scaled_device.cpp
   src/assemble/quantum_confinement.cpp
+  src/assemble/density_gradient.cpp
   src/assemble/gate.cpp
   src/assemble/interface_edges.cpp
   src/assemble/contact_bias.cpp
@@ -600,6 +604,7 @@ add_test(NAME render_layering
 # --- solve layer (Newton, equilibrium and bias solves, sweeps, cancellation, progress) ---
 add_library(nitcad_solve STATIC
   src/solve/equilibrium.cpp
+  src/solve/density_gradient.cpp
   src/solve/bias.cpp
   src/solve/run_record.cpp
   src/solve/weighted_current.cpp
@@ -672,6 +677,8 @@ target_link_libraries(nitcad_solve_test PRIVATE NiTCAD::solve NiTCAD::analysis N
   Catch2::Catch2WithMain)
 # The 3D sliver stress test meshes perturbed lattices with the generator's Delaunay (Unit 16).
 target_include_directories(nitcad_solve_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/mesh")
+# Unit 62: the density-gradient start (QP9) is private to the solve layer; its test reads it.
+target_include_directories(nitcad_solve_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/solve")
 target_compile_definitions(nitcad_solve_test PRIVATE
   NITCAD_MKL_RUNTIME_PATH="${NITCAD_MKL_RUNTIME_PATH}"
   NITCAD_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}" NITCAD_GIT="${GIT_EXECUTABLE}"
@@ -881,7 +888,8 @@ add_executable(nitcad_verify_benchmark_test
   tests/verify/benchmark/tvb31_thermal_test.cpp
   tests/verify/benchmark/tvb31_materials_test.cpp
   tests/verify/benchmark/tvb31_fast_test.cpp
-  tests/verify/benchmark/device_theory_test.cpp)
+  tests/verify/benchmark/device_theory_test.cpp
+  tests/verify/benchmark/density_gradient_test.cpp)
 target_link_libraries(nitcad_verify_benchmark_test PRIVATE NiTCAD::verify_benchmark
   Catch2::Catch2WithMain)
 nitcad_add_file_tests(verify_benchmark nitcad_verify_benchmark_test)

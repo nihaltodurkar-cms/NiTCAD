@@ -72,6 +72,16 @@ std::expected<SystemData::Made, base::Error> SystemData::make_equilibrium(
     s.Ns_ = scaling.Ns;
     s.V_T_ = scaling.V_T;
     st.gates_ = std::move(scaled->gates);
+    // Density gradient (Unit 62, QP8): psi, Lambda_n, Lambda_p per node (stride 3).
+    if (models.quantum_confinement == QuantumConfinement::density_gradient) {
+        s.density_gradient_ = true;
+        s.dg_beta_n_ = scaled->dg_beta_n;
+        s.dg_beta_p_ = scaled->dg_beta_p;
+        s.dg_barrier_n_ = std::move(scaled->dg_barrier_n);
+        s.dg_barrier_p_ = std::move(scaled->dg_barrier_p);
+        s.dg_geometry_.reserve(scaled->edges.size());
+        for (const detail::ScaledEdge& e : scaled->edges) s.dg_geometry_.push_back(e.geometry);
+    }
 
     // The Dirichlet values: an electrode's at zero bias, a Schottky contact's psi_S at zero bias
     // (Unit 48, SD2, SD6), an ohmic contact's at zero bias.
@@ -90,29 +100,28 @@ std::expected<SystemData::Made, base::Error> SystemData::make_equilibrium(
     }
 
     s.composition_ = Composition::compose(s, st, models, nullptr);
-    s.m_ = s.built_in_ = s.composition_->dofs().block();  // 1
+    s.m_ = s.built_in_ = s.composition_->dofs().block();  // 1; 3 with density gradient
+    const std::size_t m = s.m_;
 
-    // The pattern: the diagonal, both directions of every edge, and the terms' own entries.
+    // The pattern: every node's full block (its diagonal at stride 1), the psi entries of both
+    // directions of every edge, and the terms' own entries.
     std::vector<linalg::Triplet> triplets;
-    triplets.reserve(n + 2 * scaled->edges.size());
+    triplets.reserve(m * m * n + 2 * scaled->edges.size());
     for (std::size_t i = 0; i < n; ++i) {
-        const auto k = static_cast<linalg::Index>(i);
-        triplets.push_back({k, k, 0.0});
+        for (std::size_t r = 0; r < m; ++r) {
+            for (std::size_t c = 0; c < m; ++c) {
+                triplets.push_back({static_cast<linalg::Index>(m * i + r),
+                                    static_cast<linalg::Index>(m * i + c), 0.0});
+            }
+        }
     }
     for (const detail::ScaledEdge& e : scaled->edges) {
-        const auto i = static_cast<linalg::Index>(e.i);
-        const auto j = static_cast<linalg::Index>(e.j);
+        const auto i = static_cast<linalg::Index>(m * e.i);
+        const auto j = static_cast<linalg::Index>(m * e.j);
         triplets.push_back({i, j, 0.0});
         triplets.push_back({j, i, 0.0});
     }
-    Terms::pattern(s, st, triplets);
-    const auto size = static_cast<linalg::Index>(n);
-    auto pattern = linalg::SparseMatrix::from_triplets(size, size, triplets);
-    if (!pattern) return std::unexpected(std::move(pattern.error()));
-    st.pattern_ = std::move(*pattern);
-
-    s.block_.resize(n);
-    for (std::size_t i = 0; i < n; ++i) s.block_[i] = detail::position(st.pattern_, i, i);
+    // The edges first: density gradient's pattern entries read them.
     s.edges_.reserve(scaled->edges.size());
     for (const detail::ScaledEdge& e : scaled->edges) {
         EdgeTerm t{};
@@ -121,10 +130,28 @@ std::expected<SystemData::Made, base::Error> SystemData::make_equilibrium(
         t.c = e.et * e.geometry;
         t.carriers = e.carriers;
         t.charged = e.charged;
-        t.ab[0] = detail::position(st.pattern_, e.i, e.j);
-        t.ba[0] = detail::position(st.pattern_, e.j, e.i);
         s.edges_.push_back(t);
     }
+    Terms::pattern(s, st, triplets);
+    const auto size = static_cast<linalg::Index>(m * n);
+    auto pattern = linalg::SparseMatrix::from_triplets(size, size, triplets);
+    if (!pattern) return std::unexpected(std::move(pattern.error()));
+    st.pattern_ = std::move(*pattern);
+
+    s.block_.resize(m * m * n);
+    for (std::size_t i = 0; i < n; ++i) {
+        for (std::size_t r = 0; r < m; ++r) {
+            for (std::size_t c = 0; c < m; ++c) {
+                s.block_[m * m * i + m * r + c] =
+                    detail::position(st.pattern_, m * i + r, m * i + c);
+            }
+        }
+    }
+    for (EdgeTerm& t : s.edges_) {
+        t.ab[0] = detail::position(st.pattern_, m * t.a, m * t.b);
+        t.ba[0] = detail::position(st.pattern_, m * t.b, m * t.a);
+    }
+    if (s.density_gradient_) s.locate_density_gradient(st.pattern_);
     return made;
 }
 
@@ -150,7 +177,7 @@ public:
     void add(const SystemData& s, const SystemState&, const Evaluation& ev) const override {
         for (std::size_t i = 0; i < s.node_count(); ++i) {
             if (dirichlet(s, i) || s.insulator_[i] == 0) continue;
-            ev.f[i] = 0.0;
+            ev.f[s.m_ * i] = 0.0;
             if (ev.jacobian()) at(s, ev, i, 0, 0) = 0.0;
         }
     }
@@ -165,27 +192,40 @@ public:
         return {"equilibrium charge", TermDomain::nodes, psi_only, psi_only, true};
     }
     void add(const SystemData& s, const SystemState&, const Evaluation& ev) const override {
+        const std::size_t m = s.m_;
         for (std::size_t i = 0; i < s.node_count(); ++i) {
             if (dirichlet(s, i) || s.insulator_[i] != 0) continue;
-            const double eta = ev.x[i] + s.band_shift_[i];
+            const double eta = ev.x[m * i] + s.band_shift_[i];
+            // Density gradient (Unit 62, QP8): the carriers at the effective band edges, eta - L_n
+            // and -eta - L_p; the dopants' occupancy stays at the classical ones (eta and -eta).
+            const double ln = s.density_gradient_ ? ev.x[m * i + 1] : 0.0;
+            const double lp = s.density_gradient_ ? ev.x[m * i + 2] : 0.0;
             const physics::DensityResult carriers_n =
-                detail::density(s.fermi_dirac_, s.n_ie_[i], s.log_dos_n_[i], eta);
+                s.density_gradient_
+                    ? detail::density(s.fermi_dirac_, s.n_ie_[i], s.log_dos_n_[i], eta - ln)
+                    : detail::density(s.fermi_dirac_, s.n_ie_[i], s.log_dos_n_[i], eta);
             const physics::DensityResult carriers_p =
-                detail::density(s.fermi_dirac_, s.n_ie_[i], s.log_dos_p_[i], -eta);
+                s.density_gradient_
+                    ? detail::density(s.fermi_dirac_, s.n_ie_[i], s.log_dos_p_[i], -eta - lp)
+                    : detail::density(s.fermi_dirac_, s.n_ie_[i], s.log_dos_p_[i], -eta);
+            if (s.density_gradient_ && ev.jacobian()) {  // dn/dL_n = -n.d_eta, dp/dL_p = -p.d_eta
+                at(s, ev, i, 0, 1) = s.volume_[i] * carriers_n.d_eta;
+                at(s, ev, i, 0, 2) = -s.volume_[i] * carriers_p.d_eta;
+            }
             // d/dpsi of the charge term, onto the diagonal (dn/dpsi = n.d_eta, dp/dpsi = -p.d_eta;
             // Boltzmann: n and -p; the ionized doping's: d_eta_c - d_eta_v).
             if (s.ionization_) {
                 const detail::IonizedCharge c =
                     detail::ionized_charge(s.donors_[i], s.acceptors_[i], eta - s.log_dos_n_[i],
                                            -eta - s.log_dos_p_[i], s.levels_[i]);
-                ev.f[i] = -s.volume_[i] * (carriers_n.density - carriers_p.density - c.value);
+                ev.f[m * i] = -s.volume_[i] * (carriers_n.density - carriers_p.density - c.value);
                 if (ev.jacobian()) {
                     at(s, ev, i, 0, 0) =
                         -s.volume_[i] *
                         (carriers_n.d_eta + carriers_p.d_eta - c.d_eta_c + c.d_eta_v);
                 }
             } else {
-                ev.f[i] = -s.volume_[i] * (carriers_n.density - carriers_p.density - s.doping_[i]);
+                ev.f[m * i] = -s.volume_[i] * (carriers_n.density - carriers_p.density - s.doping_[i]);
                 if (ev.jacobian()) {
                     at(s, ev, i, 0, 0) = -s.volume_[i] * (carriers_n.d_eta + carriers_p.d_eta);
                 }
@@ -203,23 +243,24 @@ public:
     }
     void add(const SystemData& s, const SystemState&, const Evaluation& ev) const override {
         const std::span<double> values = ev.values;
+        const std::size_t m = s.m_;
         for (const InterfaceEdge& f : s.interfaces_.edges()) {
             const std::size_t a = f.insulator, b = f.semiconductor;
             const InterfaceEquilibrium q =
-                s.interfaces_.equilibrium(f, ev.x[a], ev.x[b], s.statistics(b));
+                s.interfaces_.equilibrium(f, ev.x[m * a], ev.x[m * b], s.statistics(b));
             // The insulator row a and the semiconductor row b, columns (a, b).
             const EdgeTerm& e = s.edges_[f.edge];
             const std::size_t ab = e.a == a ? e.ab[0] : e.ba[0];
             const std::size_t ba = e.a == a ? e.ba[0] : e.ab[0];
             if (!dirichlet(s, a)) {
-                ev.f[a] += q.flux_insulator;
+                ev.f[m * a] += q.flux_insulator;
                 if (ev.jacobian()) {
                     at(s, ev, a, 0, 0) += q.d_flux_insulator[0];
                     values[ab] += q.d_flux_insulator[1];
                 }
             }
             if (!dirichlet(s, b)) {
-                ev.f[b] += q.flux_semiconductor;
+                ev.f[m * b] += q.flux_semiconductor;
                 if (ev.jacobian()) {
                     values[ba] += q.d_flux_semiconductor[0];
                     at(s, ev, b, 0, 0) += q.d_flux_semiconductor[1];
@@ -241,10 +282,11 @@ public:
         const std::span<const linalg::Index> rows = st.pattern_.row_offsets();
         for (std::size_t i = 0; i < s.node_count(); ++i) {
             if (!dirichlet(s, i)) continue;
-            ev.f[i] = ev.x[i] - st.psi0_[i];
+            const std::size_t r = s.m_ * i;  // the psi row
+            ev.f[r] = ev.x[r] - st.psi0_[i];
             if (!ev.jacobian()) continue;
-            std::fill(ev.values.begin() + static_cast<std::ptrdiff_t>(rows[i]),
-                      ev.values.begin() + static_cast<std::ptrdiff_t>(rows[i + 1]), 0.0);
+            std::fill(ev.values.begin() + static_cast<std::ptrdiff_t>(rows[r]),
+                      ev.values.begin() + static_cast<std::ptrdiff_t>(rows[r + 1]), 0.0);
             at(s, ev, i, 0, 0) = 1.0;
         }
     }
@@ -272,12 +314,17 @@ std::span<const CompositionEntry> SystemData::Terms::equilibrium_table() {
         }
         return false;
     };
+    const auto density_gradient = [](const SystemData& s, const SystemState&, M) {
+        return s.density_gradient_;
+    };
     static const CompositionEntry table[] = {
         {+E::oxide, insulators, &make_term<EquilibriumInsulatorRows>},
+        {+E::quantum, density_gradient, &density_gradient_rows},
         {+E::poisson, always, &make_term<EquilibriumCharge>},
         {+E::gate, gated, &gate},
         {+E::interfaces, interfaces, &make_term<EquilibriumInterfaces>},
         {+E::poisson, always, &poisson_flux},
+        {+E::quantum, density_gradient, &density_gradient_edges},
         {+E::contacts, contacts, &make_term<EquilibriumContacts>},
     };
     return table;

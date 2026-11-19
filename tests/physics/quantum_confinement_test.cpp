@@ -4,6 +4,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <cmath>
+#include <cstdio>
 #include <numbers>
 
 #include "NiTCAD/physics/quantum_confinement.hpp"
@@ -100,4 +101,37 @@ TEST_CASE("quantum confinement: the half-cell mean (QC2)") {
     CHECK(close(mlda_mean_factor(1e-6 * lambda, lambda), 1e-12 / 3.0, 1e-9));
     CHECK(close(mlda_mean_factor(1e3 * lambda, lambda), 1.0 - std::sqrt(std::numbers::pi) / 2e3,
                 1e-14));
+}
+
+// Unit 62, QV2: density gradient's coefficient beta = gamma hbar^2 / (6 m m0 k T) and the barrier decay length
+// x_p = hbar / sqrt(2 m_ox m0 q dE), against the CODATA 2018 values written out here (hbar from the exact h),
+// within 1e-14 relative.
+TEST_CASE("density gradient: the coefficient and the barrier decay length (QV2)") {
+    const long double h = 6.62607015e-34L, kB = 1.380649e-23L, q = 1.602176634e-19L, m0 = 9.1093837015e-31L;
+    const long double hbar = h / (2.0L * std::numbers::pi_v<long double>);
+    for (const double gamma : {1.0, 0.5, 3.0}) {
+        for (const double m : {0.98, 0.49, 0.19}) {
+            for (const double T : {300.0, 77.0}) {
+                const long double ref = gamma * hbar * hbar / (6.0L * m * m0 * kB * T) * 1e4L;
+                const double got = dg_coefficient_cm2(gamma, m, T);
+                CHECK(std::abs(got - static_cast<double>(ref)) <= 1e-14 * static_cast<double>(ref));
+            }
+        }
+    }
+    for (const double m : {0.5, 0.3}) {
+        for (const double dE : {3.0, 4.5, 1.0}) {
+            const long double ref = hbar / std::sqrt(2.0L * m * m0 * q * dE) * 100.0L;
+            const double got = barrier_decay_length_cm(m, dE);
+            CHECK(std::abs(got - static_cast<double>(ref)) <= 1e-14 * static_cast<double>(ref));
+        }
+    }
+    // SiO2's conduction band against silicon (3.0 eV, 0.50 m0; Unit 51 GD5): about 0.16 nm (printed).
+    const double xp = barrier_decay_length_cm(0.50, 3.0);
+    CHECK(xp > 0.15e-7);
+    CHECK(xp < 0.17e-7);
+    std::printf("density gradient: SiO2 electron x_p = %.6f nm; beta_n(0.98 m0, 300 K) = %.6e nm^2\n", xp * 1e7,
+                dg_coefficient_cm2(1.0, 0.98, 300.0) * 1e14);
+    CHECK(dg_default_gamma == 1.0);
+    CHECK(dg_default_electron_mass == 0.328);  // QP0: Ancona 2000 p. 1451
+    CHECK(dg_default_hole_mass == mlda_silicon_hole_mass);  // QP0: no source gives a hole value
 }

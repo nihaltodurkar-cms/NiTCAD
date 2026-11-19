@@ -83,7 +83,9 @@ enum class SurfaceMobility : std::uint8_t { off = 0, lombardi = 1 };
 // (physics/quantum_confinement.hpp): each band's density of states times
 // f = 1 - exp(-d^2 / lambda^2), d the distance to the nearest insulator interface; silicon only,
 // isothermal only. Opt-in.
-enum class QuantumConfinement : std::uint8_t { off = 0, mlda = 1 };
+// Density gradient (Unit 62; DECISIONS.md QP1-QP15): a quantum potential per carrier, solved with psi, n
+// and p (stride 5); silicon only, isothermal only. Not yet assembled (slice 1): the assemblers refuse it.
+enum class QuantumConfinement : std::uint8_t { off = 0, mlda = 1, density_gradient = 2 };
 
 struct PhysicsModels {
     // Caughey-Thomas mobility; false: the lattice mobility (Caughey-Thomas at N = 0).
@@ -103,6 +105,12 @@ struct PhysicsModels {
     // masses by default. Read only with quantum_confinement on.
     double mlda_mass_n = physics::mlda_silicon_electron_mass;
     double mlda_mass_p = physics::mlda_silicon_hole_mass;
+    // Density gradient's masses [m0] and coefficient factors gamma (Unit 62, QP1, QP6; placeholders until
+    // QP0). Read only with quantum_confinement = density_gradient.
+    double dg_mass_n = physics::dg_default_electron_mass;
+    double dg_mass_p = physics::dg_default_hole_mass;
+    double dg_gamma_n = physics::dg_default_gamma;
+    double dg_gamma_p = physics::dg_default_gamma;
     // SRH recombination with Scharfetter lifetimes.
     bool srh = true;
     // Auger recombination (physics::auger_recombination).

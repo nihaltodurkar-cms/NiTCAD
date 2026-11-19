@@ -315,8 +315,18 @@ public:
     // (NITCAD_EXPECTS): psi has node_count() entries.
     [[nodiscard]] std::vector<double> state_from_potential(std::span<const double> psi) const;
     // Sets the ohmic contact and electrode nodes of a state to their Dirichlet values and the
+    // quantum potentials (density gradient, Unit 62) of contact and insulator nodes and the
     // densities of insulator nodes to 0.
     void stamp_contacts(std::span<double> x) const;
+    // Density gradient (Unit 62, DECISIONS.md QP8): the scaled state of every node at the scaled
+    // potential psi and quantum potentials lambda_n, lambda_p (in kT) with the carriers at the
+    // equilibrium Fermi level under the effective band edges (Boltzmann: n = n_ie e^(psi + s -
+    // lambda_n), p = n_ie e^(-(psi + s) - lambda_p); Fermi-Dirac likewise), then stamped as
+    // stamp_contacts (Lambda 0 on contacts and insulators). state_from_potential is this with
+    // lambda 0. Preconditions (NITCAD_EXPECTS): the model on; each span has node_count() entries.
+    [[nodiscard]] std::vector<double> state_from_quantum_potential(
+        std::span<const double> psi, std::span<const double> lambda_n,
+        std::span<const double> lambda_p) const;
 
     [[nodiscard]] linalg::SparseMatrix make_jacobian() const;
     // Preconditions (NITCAD_EXPECTS): x and residual have unknowns() entries; jacobian has the

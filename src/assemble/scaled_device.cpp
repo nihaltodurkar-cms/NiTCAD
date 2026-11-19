@@ -10,8 +10,10 @@
 #include "NiTCAD/base/constants.hpp"
 #include "NiTCAD/base/contract.hpp"
 #include "NiTCAD/physics/bandgap_narrowing.hpp"
+#include "NiTCAD/physics/insulator.hpp"
 #include "NiTCAD/physics/interface_traps.hpp"
 #include "NiTCAD/physics/ionization.hpp"
+#include "NiTCAD/physics/quantum_confinement.hpp"
 #include "NiTCAD/physics/semiconductor.hpp"
 #include "NiTCAD/physics/thermionic_emission.hpp"
 
@@ -31,6 +33,10 @@ std::expected<ScaledDevice, base::Error> make_scaled_device(const device::Device
                                                             const PhysicsModels& models) {
     if (scaling.temperature_K != device.temperature_K()) {
         return std::unexpected(invalid("scaling temperature differs from the device's"));
+    }
+    // Unit 62 (QP10): density gradient's refusals (here, so both assemblers say the same).
+    if (models.quantum_confinement == QuantumConfinement::density_gradient) {
+        if (auto ok = check_density_gradient(device, models); !ok) return std::unexpected(std::move(ok.error()));
     }
     // Unit 37 (DECISIONS.md I2): Altermatt's levels are silicon's phosphorus and boron.
     const bool altermatt = models.incomplete_ionization &&
@@ -206,7 +212,8 @@ std::expected<ScaledDevice, base::Error> make_scaled_device(const device::Device
             s.log_dos_p[i] -= delta;
             level_shift[i] = delta;
         }
-    } else if (models.quantum_confinement != QuantumConfinement::off) {
+    } else if (models.quantum_confinement != QuantumConfinement::off &&
+               models.quantum_confinement != QuantumConfinement::density_gradient) {
         return std::unexpected(invalid("unknown quantum confinement model"));
     }
     s.gates = GateNodes(std::move(gate), std::move(gate_terms), scaling.V_T);
@@ -291,7 +298,88 @@ std::expected<ScaledDevice, base::Error> make_scaled_device(const device::Device
     }
     s.interfaces =
         InterfaceEdges(std::move(interface_edges), std::move(levels), interfaces.size());
+    // Unit 62 (DECISIONS.md QP3, QP5): density gradient's coefficients and barrier terms.
+    if (models.quantum_confinement == QuantumConfinement::density_gradient) {
+        const double L2 = scaling.L_D * scaling.L_D;
+        s.dg_beta_n = physics::dg_coefficient_cm2(models.dg_gamma_n, models.dg_mass_n, T) / L2;
+        s.dg_beta_p = physics::dg_coefficient_cm2(models.dg_gamma_p, models.dg_mass_p, T) / L2;
+        s.dg_barrier_n.assign(n, 0.0);
+        s.dg_barrier_p.assign(n, 0.0);
+        // The decay lengths [cm] into a barrier of band data b in front of node i's semiconductor:
+        // electrons under the conduction-band offset chi_s - chi_ox, holes under the valence-band
+        // offset (chi_ox + Eg_ox) - (chi_s + Eg_s(T)).
+        struct Decay {
+            double n, p;
+        };
+        const auto decay = [&](std::size_t i, const physics::InsulatorParameters& b)
+            -> std::expected<Decay, base::Error> {
+            const physics::Semiconductor& mat = device.material(static_cast<mesh::NodeId>(i));
+            const double chi = mat.parameters().electron_affinity_eV;
+            const double dEc = chi - b.electron_affinity_eV;
+            const double dEv =
+                b.electron_affinity_eV + b.band_gap_eV - (chi + physics::band_gap_eV(mat, T));
+            if (!(dEc > 0.0 && dEv > 0.0)) {
+                return std::unexpected(invalid(
+                    "quantum_confinement density_gradient: an insulator's band offsets to the "
+                    "semiconductor are not both positive (no barrier to penetrate)",
+                    i));
+            }
+            return Decay{physics::barrier_decay_length_cm(b.tunnel_mass_n, dEc),
+                         physics::barrier_decay_length_cm(b.tunnel_mass_p, dEv)};
+        };
+        for (std::size_t e = 0; e < m.edges().size(); ++e) {
+            const ScaledEdge& se = s.edges[e];
+            if (s.insulator[se.i] == s.insulator[se.j]) continue;
+            const std::size_t sem = s.insulator[se.i] != 0 ? se.j : se.i;
+            const std::size_t ins = s.insulator[se.i] != 0 ? se.i : se.j;
+            const device::Region& r = device.regions()[static_cast<std::size_t>(node_region[ins])];
+            const auto b = insulator_band_data(std::get<physics::Insulator>(r.material).parameters());
+            NITCAD_EXPECTS(b.has_value());  // check_density_gradient
+            const auto x = decay(sem, *b);
+            if (!x) return std::unexpected(x.error());
+            const double d = se.length_cm;
+            s.dg_barrier_n[sem] += se.geometry * d / (0.5 * d + x->n);
+            s.dg_barrier_p[sem] += se.geometry * d / (0.5 * d + x->p);
+        }
+        const double face = std::pow(scaling.L_D, 2 - D);  // A / L_D^(D-1) / (x_p / L_D) = A L_D^(2-D) / x_p
+        for (const device::Contact& contact : contacts) {
+            if (contact.kind != device::ContactKind::gate) continue;
+            const physics::InsulatorParameters b = gate_band_data(contact.gate);
+            const mesh::BoundaryPatch* patch = m.find_boundary(contact.gate.boundary);
+            NITCAD_EXPECTS(patch != nullptr);
+            std::size_t k = 0;
+            for (const mesh::NodeId v : contact.nodes) {
+                while (patch->nodes[k] < v) ++k;
+                const auto i = static_cast<std::size_t>(v);
+                const auto x = decay(i, b);
+                if (!x) return std::unexpected(x.error());
+                s.dg_barrier_n[i] += patch->areas[k] * face / x->n;
+                s.dg_barrier_p[i] += patch->areas[k] * face / x->p;
+            }
+        }
+    }
     return s;
+}
+
+std::optional<physics::InsulatorParameters> insulator_band_data(
+    const physics::InsulatorParameters& p) {
+    if (physics::has_band_data(p)) return p;
+    if (p == physics::silicon_dioxide_parameters) {
+        return physics::silicon_dioxide_tunnelling_parameters;
+    }
+    return std::nullopt;
+}
+
+physics::InsulatorParameters gate_band_data(const device::GateStack& g) {
+    physics::InsulatorParameters b = physics::silicon_dioxide_tunnelling_parameters;
+    if (g.oxide_band_gap_eV > 0.0) {
+        b.electron_affinity_eV = g.oxide_affinity_eV;
+        b.band_gap_eV = g.oxide_band_gap_eV;
+        b.tunnel_mass_n = g.oxide_mass_n;
+        b.tunnel_mass_p = g.oxide_mass_p;
+        b.tunnel_mass_evb = g.oxide_mass_evb;
+    }
+    return b;
 }
 
 std::size_t position(const linalg::SparseMatrix& m, std::size_t row, std::size_t col) {

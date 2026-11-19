@@ -40,4 +40,18 @@ double mlda_mean_factor(double depth_cm, double wavelength_cm) {
     return sum;
 }
 
+double dg_coefficient_cm2(double gamma, double mass_m0, double temperature_K) {
+    NITCAD_EXPECTS(std::isfinite(gamma) && gamma > 0.0);
+    NITCAD_EXPECTS(std::isfinite(mass_m0) && mass_m0 > 0.0);
+    detail::expect_temperature(temperature_K);
+    const double m = mass_m0 * base::m0_kg;
+    return gamma * base::hbar_J_s * base::hbar_J_s / (6.0 * m * base::k_B_J_per_K * temperature_K) * 1e4;
+}
+
+double barrier_decay_length_cm(double mass_m0, double barrier_eV) {
+    NITCAD_EXPECTS(std::isfinite(mass_m0) && mass_m0 > 0.0);
+    NITCAD_EXPECTS(std::isfinite(barrier_eV) && barrier_eV > 0.0);
+    return base::hbar_J_s / std::sqrt(2.0 * mass_m0 * base::m0_kg * base::q_C * barrier_eV) * 100.0;
+}
+
 }  // namespace NiTCAD::physics

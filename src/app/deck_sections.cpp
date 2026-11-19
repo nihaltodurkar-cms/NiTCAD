@@ -17,14 +17,18 @@ constexpr std::array<KeySpec, 4> mesh_keys{{{"min_angle", "20.7", "generate2d, e
                                             {"max_nodes", "2000000", "generated meshes: node limit"},
                                             {"sweep", "off", "extrude3d: on sweeps a 2D cross-section mesh along the axis"}}};
 
-constexpr std::array<KeySpec, 21> model_keys{{
+constexpr std::array<KeySpec, 25> model_keys{{
     {"doping_mobility", "on", "doping-dependent mobility"},
     {"hole_mobility", "automatic", "automatic | caughey_thomas | masetti"},
     {"electron_mobility", "caughey_thomas", "caughey_thomas | masetti"},
     {"surface_mobility", "off", "off | lombardi (inversion layers)"},
-    {"quantum_confinement", "off", "off | mlda (near insulators)"},
+    {"quantum_confinement", "off", "off | mlda | density_gradient (near insulators)"},
     {"mlda_mass_n", "0.98", "mlda: electron quantization mass, m0"},
     {"mlda_mass_p", "0.49", "mlda: hole quantization mass, m0"},
+    {"dg_mass_n", "0.328", "density_gradient: electron mass, m0"},
+    {"dg_mass_p", "0.49", "density_gradient: hole mass, m0"},
+    {"dg_gamma_n", "1", "density_gradient: electron coefficient factor"},
+    {"dg_gamma_p", "1", "density_gradient: hole coefficient factor"},
     {"field_mobility", "off", "high-field mobility (Canali)"},
     {"srh", "on", "Shockley-Read-Hall recombination"},
     {"auger", "on", "Auger recombination"},

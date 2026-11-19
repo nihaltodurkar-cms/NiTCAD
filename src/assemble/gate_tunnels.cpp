@@ -39,14 +39,9 @@ base::Error refusal(std::string message) {
     return base::Error{base::ErrorCode::invalid_input, std::move(message), {}};
 }
 
-// The band data a tunnel through an insulator uses: its own, or SiO2's for the built-in SiO2 set
-// (GD5); nullopt without any.
+// The band data a tunnel through an insulator uses (GD5; scaled_device.hpp).
 std::optional<physics::InsulatorParameters> band_data(const physics::InsulatorParameters& p) {
-    if (physics::has_band_data(p)) return p;
-    if (p == physics::silicon_dioxide_parameters) {
-        return physics::silicon_dioxide_tunnelling_parameters;
-    }
-    return std::nullopt;
+    return detail::insulator_band_data(p);
 }
 
 }  // namespace
@@ -102,14 +97,7 @@ std::optional<base::Error> SystemData::make_gate_tunnels(const device::Device& d
             // Lumped (GD2): one piece of t_ox from the node to the gate, the stack's band data or
             // SiO2's (the device has checked a stack without its own is SiO2's permittivity).
             const device::GateStack& g = contact.gate;
-            physics::InsulatorParameters b = physics::silicon_dioxide_tunnelling_parameters;
-            if (g.oxide_band_gap_eV > 0.0) {
-                b.electron_affinity_eV = g.oxide_affinity_eV;
-                b.band_gap_eV = g.oxide_band_gap_eV;
-                b.tunnel_mass_n = g.oxide_mass_n;
-                b.tunnel_mass_p = g.oxide_mass_p;
-                b.tunnel_mass_evb = g.oxide_mass_evb;
-            }
+            const physics::InsulatorParameters b = detail::gate_band_data(g);
             const mesh::BoundaryPatch* patch = mesh.find_boundary(g.boundary);
             NITCAD_EXPECTS(patch != nullptr);  // checked by the device
             for (const mesh::NodeId v : contact.nodes) {

@@ -95,6 +95,10 @@ struct InterfaceDrift {
     double flux_insulator, flux_semiconductor, rate, rate_p;
     double d_flux_insulator[4], d_flux_semiconductor[4], d_rate[4], d_rate_p[4];
     double trapped;
+    // Density gradient (Unit 62): the partials in the semiconductor node's (Lambda_n, Lambda_p);
+    // 0 with the model off.
+    double d_flux_insulator_l[2] = {}, d_flux_semiconductor_l[2] = {}, d_rate_l[2] = {},
+           d_rate_p_l[2] = {};
 };
 
 // A time step's trap history for one edge (Unit 21): k = beta h Ns in the units of the levels'
@@ -112,6 +116,9 @@ struct TrapStep {
 // the steady occupancy).
 struct InterfaceSmallSignal {
     std::complex<double> d_flux_insulator[4], d_flux_semiconductor[4], d_rate[4], d_rate_p[4];
+    // Density gradient (Unit 62): the partials in Lambda_n, Lambda_p (the node's, constant over its
+    // half-cell; 0 without the model).
+    std::complex<double> d_flux_insulator_l[2], d_flux_semiconductor_l[2], d_rate_l[2], d_rate_p_l[2];
 };
 
 // The semiconductor node's statistics: Fermi-Dirac or Boltzmann, scaled n_ie, ln(Nc / n_ie) and
@@ -119,6 +126,16 @@ struct InterfaceSmallSignal {
 struct InterfaceStatistics {
     bool fermi_dirac;
     double n_ie, log_dos_n, log_dos_p, band_shift;
+    // Density gradient (Unit 62, DECISIONS.md QP13): with the model on, the node's quantum
+    // potentials Lambda_n / kT and Lambda_p / kT, taken constant over its half-cell. The interface
+    // densities keep their quasi-Fermi levels as without the model (Lambda cancels), and the levels
+    // keep their classical positions: n1 -> n1 e^-Lambda_n, p1 -> p1 e^-Lambda_p, and the surface
+    // recombination's n_ie^2 -> n_ie^2 e^-(Lambda_n + Lambda_p), n1 = n_ie e^-Lambda_n,
+    // p1 = n_ie e^-Lambda_p. Equilibrium (InterfaceEdges::equilibrium) does not read them: at
+    // n = n_ie e^(eta - Lambda_n), p = n_ie e^(-eta - Lambda_p) the steady occupancy is the Fermi
+    // function of tau - eta_I, as without the model.
+    bool density_gradient = false;
+    double lambda_n = 0.0, lambda_p = 0.0;
 };
 
 class InterfaceEdges {
@@ -164,6 +181,7 @@ public:
 private:
     struct Charge {  // Q and its partials, at one interface state; rate_e / rate_h the rows' terms
         double value, d_n, d_p, rate, rate_n, rate_p, rate_h, rate_hn, rate_hp;
+        double q_l[2] = {}, rate_l[2] = {}, rate_hl[2] = {};  // in (Lambda_n, Lambda_p)
     };
     // Q (with the fixed charge) and the rates at interface densities n_I, p_I; with `step` the
     // occupancies of the step, written to `f` when it is not empty.
@@ -174,6 +192,7 @@ private:
     // steady state's), for s / Ns = inv_weight.
     struct ChargeSmallSignal {
         std::complex<double> d_n, d_p, rate_n, rate_p, rate_hn, rate_hp;
+        std::complex<double> q_l[2], rate_l[2], rate_hl[2];  // density gradient: d / d Lambda
     };
     [[nodiscard]] ChargeSmallSignal charge_small_signal(const InterfaceEdge& e, double n, double p,
                                                         const InterfaceStatistics& s,

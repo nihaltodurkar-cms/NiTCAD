@@ -1378,6 +1378,597 @@ then over fields (RMS), skip held unknowns (Jacobian row = own diagonal), ψ wei
 - **Not run (owner: push after NG1):** the full Release ctest suite, the Debug build and suite. NG7's suites, ND5's
   ARCHITECTURE 11.3 "As built" and the unit's close remain.
 
+### Unit 62 — density-gradient quantum confinement, opt-in (proposed 2026-11-19; on `physics/density-gradient`)
+
+**Owner request (2026-11-19):** "Plan for Density-gradient confinement (Commercial TCAD feature type)". This is the
+open half of ARCHITECTURE.md 11.3 "Quantum confinement": Unit 47 built MLDA, and density gradient was left as
+"planned, no unit named". Docs only: no code until the questions below are ruled and the owner says start.
+
+**Why density gradient and not more MLDA.** MLDA is a local factor on the densities of states. It needs the distance
+to an interface and has no current-carrying physics of its own. Density gradient (Ancona and Iafrate 1989; Ancona and
+Tiersten 1987; on unstructured grids Wettstein, Schenk and Fichtner, IEEE TED 48 (2001) 279) is the form commercial
+simulators ship as their default confinement model. It adds a quantum potential Λ per carrier to the band edge
+seen by the transport, solved with ψ, n and p. It confines at any interface shape with no distance search: fin
+corners, the wrapped gate stack and the curved Unit 53 geometry included. It also acts along the channel: the source
+barrier and short-channel quantum effects on the current. MLDA cannot do this.
+
+**Standing conditions.** Opt-in. With the model off, everything is bit-identical to `main`: residuals, Jacobian
+patterns and values, run identities, result files, and the Unit 40/59 traces and decks. Criteria are fixed before
+code and never loosened or tuned after a run (TVM2). The coefficient is not fitted to pass a gate. Release and Debug
+suites run with `/W4 /WX`, and only on the owner's word. Commits stay local, with no push, PR or merge without the
+owner's word.
+
+**Model (scaled by k T and V_T as 6.1).**
+- Densities: n = n_ie exp(ψ − φ_n − Λ̂_n) and p = n_ie exp(φ_p − ψ − Λ̂_p) (Boltzmann; Fermi–Dirac in QP7), with
+  Λ̂ = Λ / k T. Λ_n > 0 raises the electrons' effective conduction band, and Λ_p > 0 lowers the holes' valence band.
+- Quantum potentials: Λ_n = −(γ_n ħ² / (6 m_n)) ∇²√n / √n, and the same for Λ_p with p and m_p. Since
+  ∇²√n / √n = ½ ∇² ln n + ¼ (∇ ln n)², this equals −(γ_n ħ² / (12 m_n)) [∇² ln n + ½ (∇ ln n)²]. With
+  β_c = γ_c ħ² / (6 m_c k T) (a length²), Λ̂_c = −β_c ∇²√c / √c. γ_c is a dimensionless prefactor whose
+  theoretical value (and the mass it pairs with) is **not yet verified against the primary sources** (QP0).
+- Transport: the Scharfetter–Gummel fluxes take ψ − Λ̂_n (electrons) and ψ + Λ̂_p (holes) as the potential across
+  each edge. Poisson's charge, mobility and generation driven by field or current read the densities, which already
+  carry the confinement.
+- Recombination and traps (QP13) are **not** density-only. At DG equilibrium n p = n_ie² exp(−Λ̂_n − Λ̂_p), so terms
+  that compare n p with n_ie², or use n₁ and p₁, must see the effective band edges, or they generate at zero bias.
+
+**Design (QP0–QP15).**
+
+| ID | Decision | Reason | Limitation |
+|---|---|---|---|
+| QP0 | **Source check, before any code (the first step of slice 0).** Read and cite, with equation and page: Ancona and Iafrate, PRB 39 (1989) 9536; Ancona and Tiersten, PRB 35 (1987) 7959; Ancona, "Equations of state for silicon inversion layers", IEEE TED 47 (2000) 1449; Wettstein, Schenk and Fichtner, IEEE TED 48 (2001) 279. Record: (i) the coefficient's exact form and its theoretical value (Ancona's r factor; the high-temperature value against the pure-state value), which fixes the default γ of QP6; (ii) the mass each source pairs with it for (100) silicon electrons and holes, which fixes QP6's default masses; (iii) the oxide boundary condition each uses, which confirms or revises QP5; (iv) the published DG-versus-Schrödinger–Poisson agreement for inversion layers (charge, centroid, threshold or C–V), which sets QV6's bounds. The bounds are then frozen in a DECISIONS commit before slice 1. If the sources cannot be obtained, slice 0 stops and the owner is asked. | The coefficient differs between sources by a constant factor, and the plan was written without the papers at hand (2026-11-19: the web copies tried were unreadable). TVM2 needs the default and the bounds fixed from a cited source before any run, not after. | Until QP0 is done, γ = 1 and QV6's numbers below are placeholders, not decisions. |
+| QP1 | Switch: `[models] quantum_confinement = density_gradient` (the existing key, with values `off`, `mlda` and now `density_gradient`, so MLDA and DG exclude each other by construction). Keys: `dg_mass_n`, `dg_mass_p` [m0] and `dg_gamma_n`, `dg_gamma_p` (defaults from QP6). The run record names the model, the masses, γ and each insulator's penetration lengths (QP5). | One confinement model at a time. A deck that says `density_gradient` today is refused (`tests/deck/quantum_confinement_test.cpp`) and will now be accepted. | — |
+| QP2 | Unknowns: Λ̂_n and Λ̂_p, built-in fields `quantum_potential_n` and `quantum_potential_p` (`FieldId`), interleaved after ψ, n, p (stride 5, as Unit 52). Held at 0 on insulator nodes (FD5, `FieldDomain::semiconductor`). Built-in table terms (terms.cpp and the equilibrium table), not the GG8 extension, which is steady-only. Energy balance also has stride 5, so every branch is chosen by the model flag (a new `SystemData::density_gradient_`, like `electrothermal_` after GG8) and the `DofMap`'s field ids, never by the stride. A mutant that tests the stride instead must fail (QV14). | Transient, small signal, equilibrium and results need the built-in path. GG8 shows the layout takes new fields without a second architecture. Unit 57 GG8 found `electrothermal()` defined as `m_ == 4`: the same trap at stride 5. | Per-iteration cost like energy balance (3.8–5.8× drift-diffusion, Unit 52); measured in QV13. |
+| QP3 | Λ row at semiconductor node i (box method, divided by √c_i): V_i Λ̂_i + β Σ_j (A_ij / d_ij) (exp(½ (ln c_j − ln c_i)) − 1) − β B_i = 0, the sum over the node's semiconductor edges. B_i is the barrier term of QP5. Meshed oxide: the interface is at the midpoint of each semiconductor–insulator edge (mesh/interfaces.hpp; where MLDA puts it, Unit 47 QD2), not at a node. So each such edge ij contributes A_ij / (d_ij / 2 + x_p): the half-edge in the silicon in series with the decay length in the barrier, eliminating √c at the face. Lumped gate: the node is on the surface (d = 0, as QD3), so B_i = A_i^G / x_p with A_i^G the node's gate area. | The Wettstein et al. form: the ratio form never forms √c of a rounding-level density, and the row is linear in Λ. | DG in this form is the leading-order (ħ²) correction. Not a Schrödinger solution: QV6 measures the gap. |
+| QP4 | Boundaries. Ohmic contacts: Λ = 0 (Dirichlet; the carriers are classical at a contact). Semiconductor–insulator interfaces: QP5. Every other boundary: natural (zero normal derivative of √c). | Standard DG boundary set. | Schottky contacts refused (QP10). |
+| QP5 | Insulator interfaces: barrier penetration, analytic (Robin). In the barrier √c decays as exp(−x / x_p), with x_p = ħ / √(2 m_ox ΔE). ΔE is the band offset from the insulator band data of Unit 51 GD5 (affinities and gaps; electrons ΔE_c, holes ΔE_v), and m_ox the insulator's tunnelling mass. The band data come from the same lookup gate tunnelling uses: `band_data()` (gate_tunnels.cpp) takes the insulator's own data, or SiO₂'s tunnelling set for the built-in SiO₂ (which has none of its own, insulator.hpp). A lumped gate takes its stack's data, else SiO₂'s. That gives B_i of QP3. Refused only: a meshed insulator that is not the built-in SiO₂ and has no band data, or a stack whose permittivity is not SiO₂'s and has no band data (as gate tunnelling). | No oxide unknowns. It works for meshed and lumped gates alike. It is derived from the barrier, not fitted. Every existing SiO₂ deck is accepted unchanged. SiO₂ electrons (3.0 eV, 0.50 m0, GD5): x_p ≈ 0.16 nm, comparable with the 0.1 nm interface spacings in use, which is why QP3 keeps the half-edge. | Penetration solved in the oxide (Λ rows on insulator nodes) is the more exact form: a follow-up (QR3 b). |
+| QP6 | Default γ and masses: those QP0 finds in the cited theory (the theoretical value, not a calibrated one), recorded with their source before slice 1. Placeholder until then: γ = 1 with MLDA's masses (0.98 and 0.49 m0, Unit 47 QD1). Deck-overridable (`dg_gamma_*`, `dg_mass_*`), and always in the run record. | No fitted default (TVM2). Commercial tools ship calibrated γ: here the owner may set one in the deck, and it is reported, never defaulted from a fit. | The theoretical γ may miss Schrödinger–Poisson by more than a calibrated one: QV6 records it honestly. DG's single isotropic mass is not the reference's per-valley m_l = 0.916 and m_t = 0.19 (QP14). That mismatch is part of what QV6 measures, and is stated in its report. |
+| QP7 | Fermi–Dirac: the Λ row unchanged. Λ̂_n shifts the electrons' band edge in the density relation. In the scaled band diagram of `node_bands` (scaled_device.hpp: η = ψ + s, E_c = g_n − η, E_Fn = ln(n / n_ie) − ln γ_n(n) − η), DG makes it ln(n / n_ie) − ln γ_n(n) = η + E_Fn − Λ̂_n, i.e. n = N_c F_{1/2}(E_Fn − E_c − Λ̂_n). Holes: ln(p / n_ie) − ln γ_p(p) = −η − E_Fp − Λ̂_p. Under Boltzmann (ln γ = 0) this is the model line above. | The form commercial tools use under FD; it reuses Unit 14's degeneracy factor unchanged. | The ħ² coefficient is the non-degenerate one. Documented. |
+| QP8 | Equilibrium: the equilibrium table gains the Λ rows, with carriers slaved by QP7's relation at E_Fn = E_Fp = 0 (Boltzmann: n = n_ie exp(η − Λ̂_n) and p = n_ie exp(−η − Λ̂_p), η = ψ + s; Fermi–Dirac through γ_n and γ_p as QP7) (unknowns ψ, Λ̂_n, Λ̂_p). The zero-bias state is the DG equilibrium. | Every sweep starts from a true equilibrium: currents at rounding (QV4). | Equilibrium becomes a 3-field Newton with DG on. |
+| QP9 | Start and continuation: Λ̂ = 0 from the classical solution. If Newton fails at the first DG solve, a coefficient continuation runs. It is a new loop in solve, not Unit 28's step cutting, which steps bias, not β. It solves at β·k for k = 1/8, 1/4, 1/2, 1, each from the previous solution. A failed rung halves the gap to the last converged k, at most 4 times, then the point fails with the rungs listed. The rungs taken are in the run record. Later points continue as every sweep. Λ̂ is clipped ±max_update and measured like ψ: `System::update_size`, `apply_update` and Unit 59's `System::natural_size` are extended so Λ̂ enters as a potential (no asinh compression), tested by a case where only Λ̂ moves and each measure sees it. | Deterministic, and bounded at the first point only. | The ladder's use is reported in QV13, not hidden. |
+| QP10 | Refused (invalid_input; the same message from the equilibrium and drift-diffusion assemblers): electrothermal, energy balance, thermionic interfaces, Schottky contacts, gate tunnelling, nonlocal BTBT, any semiconductor region not silicon (as QD6: the masses are global, not per region, so there is no exception), and the insulators without band data of QP5. Accepted: Lombardi, Masetti, Canali, local BTBT, impact ionization, SRH, Auger, interface traps and charges, both statistics, transient and small signal. | The refused ones read band edges or densities at interfaces in ways not designed for Λ (as QD8). Combining them is a follow-up, each with its own gate. | — |
+| QP11 | Transient: the Λ rows carry no storage, so their mass-matrix rows are zero (index-1 DAE, as Poisson). Small signal: the Λ rows' partials enter the AC matrix. | Commercial parity: DG under every analysis. | — |
+| QP12 | Results: Λ_n and Λ_p [eV] as nodal fields in `BiasPoint`, transient and small-signal results, result files, `nitcad plot` and the app's field list. The derived effective band edges E_c + Λ_n and E_v − Λ_p go in derived.hpp. The quasi-Fermi levels include Λ: in `node_bands` and every derived or plotted E_Fn, E_Fp, E_Fn = ln(n / n_ie) − ln γ_n − η + Λ̂_n and E_Fp = −η − ln(p / n_ie) + ln γ_p − Λ̂_p (QP7 solved for E_F), so they are flat at equilibrium (QV4). The classical bands E_c and E_v stay available as before. Unit 61 checkpoints carry Λ, and a restart with a different confinement model is refused. | The quantum potential is what users inspect in commercial tools. | Result files gain the fields only when the model is on. |
+| QP13 | Recombination and traps see the effective band edges E_c + Λ_n and E_v − Λ_p. SRH (bulk and interface traps), Auger and radiative: n_ie² → n_ie² exp(−Λ̂_n − Λ̂_p), n₁ → n₁ exp(−Λ̂_n), p₁ → p₁ exp(−Λ̂_p), and the same substitution in Unit 14's Fermi–Dirac forms. Trap occupancy (charge and the trap's SRH) uses the same n₁ and p₁. A trap's declared level keeps its classical position (as QD9). The Λ partials of every such term enter the Jacobian (QV5). | Detailed balance: with these substitutions, every net rate is zero at DG equilibrium (n = n₁ e^{…} relations hold exactly), and the occupancy at equilibrium is the Fermi level's (QV4). Field- and current-driven generation (impact ionization, local BTBT) has no n p term and is unchanged. | Λ enters every recombination term's Jacobian: more entries per node. |
+| QP14 | Verification reference: a 1D Schrödinger–Poisson solver in `verify/reference` (finite differences; a symmetric tridiagonal eigensolver of its own, Sturm bisection and inverse iteration as Unit 55 TVQ4 ruled, since `jacobi_eigen` takes n ≤ 16 and serves as its cross-check; silicon's 2- and 4-fold valleys with m_l = 0.916 and m_t = 0.19, a finite barrier with the insulator band data, Boltzmann and FD subband occupancy, self-consistent with Poisson). Electrons only: in a p-type MOS-C in inversion the holes are classical (bulk majority), so the reference tests Λ_n against physics, and Λ_p only through QV3–QV5 and QV8. A valence-band Schrödinger model (heavy, light and split-off holes) for an n-type accumulation case is a follow-up, not in this unit. Built through the Unit 55 §3.4 checklist: independence I2, class H. | DG has no closed form. SP is the physics DG approximates, and the reference commercial calibrations use. | 1D only (MOS-C). The FinFET is reported, not gated. Λ_p has no physical reference in this unit: stated in every QV6 report. |
+| QP15 | Coarse meshes: across a depletion edge or junction on a mesh much coarser than λ, neighbouring densities can differ by decades, and exp(½ Δ ln c) makes Λ large and mesh-dependent (a known DG artefact on under-resolved meshes). No limiter or damping is added: that would change the model. QV15 measures it on the example decks, and the run record warns when \|Λ̂\| exceeds 10 (10 k T) at a node away from the interfaces: a semiconductor node with no semiconductor–insulator edge that is not a lumped-gate node. | Honest behaviour first. A limiter would be a model change needing its own ruling. | DG on the existing 5 nm example meshes may be unconverged in Λ: the warning says so, it does not hide it. |
+
+**Criteria (QV1–QV15), fixed before code (QV6's bounds after QP0, before slice 1).**
+
+| ID | Criterion |
+|---|---|
+| QV1 | Off: every existing test and pin passes unchanged. The Unit 59 NG1 trace set is byte-identical to `main`'s (only added cases new), the NG2 decks are 38/38, and run identities and Jacobian patterns are unchanged. |
+| QV2 | β and x_p against long-double CODATA within 1e-14 relative; SiO₂ x_p printed. |
+| QV3 | The Λ row alone, against analytic profiles: √c = exp(−x / 2L) gives Λ̂ = −β / 4L² exactly; √c = cosh(x / L) gives −β / L². Barrier term, both cases: (i) a meshed oxide, the interface at the half-edge, against the closed form of a 1D wall with the decay √c ∝ exp(−x / x_p) continued past the face; (ii) a lumped gate, the node on the surface. Both at spacings h = 0.4, 0.2, 0.1 and 0.05 nm, so h / 2 runs from above to below x_p, and the result converges as h → 0 with no jump between the cases. Error O(h²) on uniform and graded 1D meshes (observed order 1.9–2.1), and 2D/3D tensor meshes equal 1D within 1e-12. |
+| QV4 | DG equilibrium (1D MOS-C in accumulation and inversion, the 2D MOSFET example, both statistics): every edge current within its rounding bound (as QC5); n and p against QP8's slaving relation (η = ψ + s; Fermi–Dirac through γ) within 1e-12 relative; every recombination and trap net rate (SRH, Auger, radiative, interface traps) within its rounding bound, with traps on; E_Fn and E_Fp (QP12) flat to rounding at every node. |
+| QV5 | Jacobian against central differences (1D, 2D, 3D, Delaunay, lumped gate, meshed oxide; Boltzmann and FD; with Lombardi): largest relative column error ≤ 1e-6. Newton on the 2D MOSFET in strong inversion converges quadratically in its last three iterations. |
+| QV6 | Against the QP14 Schrödinger–Poisson reference (1D MOS-C, 1.5 nm and 5 nm SiO₂, p-type 1e17 and 1e18, strong inversion at three gate biases, Boltzmann), with QP6's defaults. Three quantities: the inversion charge, the charge centroid, and the threshold shift (DG − classical) against SP's. **Bounds set by QP0** from the published agreement (Ancona 2000 and Wettstein et al. 2001): each bound is what those sources report for the theoretical coefficient, with its citation, frozen in a DECISIONS commit before slice 1. Placeholders until then, not to be used for a verdict: 10%, 0.3 nm and 25%. MLDA's values are reported beside them, and the per-valley mass mismatch (QP6) and Λ_p's lack of a reference (QP14) are stated. A miss is recorded as a fail, not tuned. |
+| QV7 | Mesh convergence (QV6's 5 nm device): Q_inv at surface spacings 0.2, 0.1 and 0.05 nm. The last two differ by ≤ 1%, and by less than the first two. |
+| QV8 | Limits: as x_p → 0 the interface density falls monotonically and the peak moves inward. As γ → 0 the solution tends to the classical one (difference ∝ γ, observed order 0.9–1.1). |
+| QV9 | Symmetry: a y-uniform 2D MOS-C equals 1D within 1e-12; the 2D MOSFET example with x and y swapped gives the same I_d within 1e-9; a 3D extrusion equals 2D within 1e-12. |
+| QV10 | Small-signal g_d and g_m against DC central differences within 1e-5; a transient long step equals DC within 1e-9. |
+| QV11 | Every QP10 refusal, with its message from both assemblers; every QP10 acceptance runs. |
+| QV12 | Results and restart: Λ fields in results files, `nitcad plot` and the app list; a checkpointed DG sweep restarts and finishes bit-identical to an uninterrupted one (as Unit 61 RG); a restart with the model changed is refused. The vocabulary pins grow with the new value and keys and are updated, not loosened: the deck's `[models]` list and the app's deck-completion list (`[models]` keys and `quantum_confinement` values; the pin that failed CI in Unit 61, 7bc4a15). |
+| QV13 | Reported, not gated: the 2D/3D MOSFET examples' and the FinFET decks' V_th, swing and on-current with classical, MLDA and DG; Newton iterations; per-iteration cost against drift-diffusion; uses of the QP9 continuation. The FinFET decks run DG with gate tunnelling off (QP10 refuses the two together), and each report says so. |
+| QV14 | Full Release and Debug suites (on the owner's word), zero warnings, hand mutants caught (a Λ sign, a missing barrier term, the barrier at the node instead of the half-edge, an unscaled β, Λ dropped from one SG flux, the equilibrium row left out, a branch on stride 5 instead of the model flag, the classical n_ie² left in SRH, Λ left out of E_Fn, Λ̂ left out of `natural_size`, and others). |
+| QV15 | Coarse meshes (QP15): the 1D diode, 2D MOSFET and 3D MOSFET examples, unchanged meshes (5 nm surface spacing), with DG on. Gated: every point converges, or the failure is reported with the QP9 rungs. Reported: the largest \|Λ̂\| and where it is, the QP15 warnings, and the I_d change against classical. A refined-mesh rerun of the 2D MOSFET (surface spacing 0.1 nm) shows whether the coarse values were mesh artefacts. |
+
+**Owner questions (QR1–QR8).**
+
+| ID | Question | Options | Recommendation |
+|---|---|---|---|
+| QR1 | Unknowns | (a) Λ̂_n, Λ̂_p added (stride 5). (b) √n, √p replace n, p (every term changes). | **(a)**: existing terms stay; the Unit 52 precedent. |
+| QR2 | Carriers | (a) Both, always. (b) Per carrier (`n`, `p`, `both`; stride 4 or 5). | **(a)**: one layout. Per carrier is a later option. |
+| QR3 | Insulator interface | (a) Analytic barrier penetration (Robin, QP5). (b) Λ solved inside meshed oxides. (c) Hard wall. (d) Natural (no condition). | **(a)**: physical, no fit, works with lumped gates. (b) is a follow-up. |
+| QR4 | Coefficient | (a) The theoretical γ and masses found by QP0 (placeholder γ = 1 and MLDA's masses), deck-overridable, reported. (b) Calibrated commercial-style defaults. | **(a)**: TVM2 forbids a fitted default. |
+| QR5 | Equilibrium | (a) DG in the equilibrium table (QP8). (b) Classical equilibrium, DG from the first bias point. | **(a)**: a true equilibrium start. |
+| QR6 | Combinations | (a) The QP10 refusals. (b) Also accept gate tunnelling now. | **(a)**: each combination gets its own gate later. |
+| QR7 | Reference | (a) An in-house 1D Schrödinger–Poisson (QP14). (b) Published curves only. | **(a)**: an independent, reproducible reference (Unit 55 §3.4). |
+| QR8 | Statistics | (a) Boltzmann and Fermi–Dirac. (b) Boltzmann only. | **(a)**: parity with MLDA and with commercial tools. |
+
+**Rulings (2026-11-19):** QR1–QR8 ruled (a), as recommended, under the owner's standing instruction "always choose recommended" (2026-11-11). Not started: slice 0 waits for the owner's word.
+
+**Slices.**
+- **0. Sources and reference** (docs and verify only): first QP0. It records the coefficient, masses, boundary
+  condition and QV6's bounds with citations, in a DECISIONS commit. Then the QP14 Schrödinger–Poisson solver and its L0
+  tests (a square well's subbands against the analytic ones, the triangular well against Airy zeros, charge
+  neutrality), plus the QV3 profiles. No product code.
+- **1. Physics and deck:** parameters, β and x_p (QV2), deck keys, refusals (QV11), run record. The deck accepts
+  `density_gradient` from this slice, so until slice 2 both assemblers refuse it (invalid_input, "density_gradient:
+  not built yet"), tested: no deck runs with the model silently missing. Slice 2 removes the refusal.
+- **2. Assemble:** fields, Λ rows, SG coupling, exact Jacobian, the equilibrium table; QV1, QV3–QV5, QV9.
+- **3. Solve and results:** start and coefficient continuation, transient, small signal, results files, plot, app,
+  checkpoints; QV10, QV12.
+- **4. Validation and close:** QV6–QV8, QV13, QV15; QV14 on the owner's word; ARCHITECTURE 11.3 and 6.x as built.
+
+**Risks.** (1) Cost: stride 5 is roughly energy balance's factorization cost; the FinFET runs may take hours (Unit 58
+would help). (2) First-point convergence: QP9's continuation is the bounded fallback. (3) The theoretical γ may miss
+QV6: it would be recorded, and the owner may then rule a reported γ. (4) The FinFET mesh-convergence check (11.3) is
+still open, so FinFET numbers are reported only. (5) QP0 may not get the papers (the web copies tried on 2026-11-19
+were unreadable): then slice 0 stops and the owner is asked. (6) Coarse meshes (QP15) may give large Λ on today's
+example decks.
+
+**Review (2026-11-19, owner "review the plan", then "fix them all").** Thirteen findings, all applied: (1) the barrier
+term moved from the node to the half-edge for meshed oxides (QP3, QV3); (2) the band data from gate tunnelling's
+`band_data()` lookup, so built-in SiO₂ decks are accepted (QP5, QP10); (3) non-silicon refused outright (QP10);
+(4) the coefficient's source check made the first step (QP0, QP6, model); (5) QV6's bounds to be set from the cited
+agreement before slice 1 (QV6); (6) the Λ_p reference gap stated (QP14); (7) coarse meshes (QP15, QV15); (8) the
+mass mismatch stated (QP6); (9) the coefficient continuation specified (QP9); (10) the FinFET runs with tunnelling
+off (QV13); (11) the vocabulary pins (QV12); (12) flags, not stride (QP2, QV14); (13) the FD relation written out
+(QP7).
+
+**Second review (2026-11-19, owner "now review again", then "yes").** Seven findings, all applied: (1) recombination
+and traps see the effective band edges, so detailed balance holds at DG equilibrium (model, QP13, QV4); (2) the
+quasi-Fermi levels include Λ (QP12, QV4); (3) the slaving relation in η = ψ + s with FD through γ (QP8, QV4);
+(4) "away from the interfaces" defined (QP15); (5) `natural_size` extended and tested (QP9); (6) a "not built yet"
+refusal between slices 1 and 2 (slices); (7) three more mutants (QV14).
+
+**Slice 0 (2026-11-19, owner "start slice 0", then "proceed").**
+- **QP0: blocked, owner supplying the papers.** None of the four primary sources could be read: Wettstein et al.
+  2001 (IEEE, DOI 10.1109/16.902727, paywalled; abstract only), Ancona and Iafrate 1989 and Ancona and Tiersten 1987
+  (APS, paywalled), Ancona 2000 (IEEE, paywalled); Ancona's 2011 review (DTIC copy HTTP 403) and the NASA and COMSOL
+  PDFs fetched as compressed or scanned streams, not text. Secondary sources (a COMSOL tutorial's m0/3 DG mass) were
+  not used: PC is not enough (Unit 55 §3.3). The owner chose to supply the PDFs and to build the reference meanwhile.
+  γ, the masses and QV6's bounds stay placeholders; slice 1 does not start until QP0 is recorded.
+- **QP14 built** (`include/NiTCAD/verify/reference/schrodinger_poisson.hpp`, `src/verify/reference/
+  schrodinger_poisson.cpp`; class H, I2, provenance PD, derivation in the header): a symmetric tridiagonal
+  eigensolver (Sturm count, bisection, inverse iteration with partial pivoting); the BenDaniel–Duke effective-mass
+  equation by the box method with per-cell mass and potential; the self-consistent MOS capacitor (classical or
+  quantum electrons, Boltzmann or Fermi–Dirac subband occupancy, classical holes), solved by outer iterations with
+  a predicted density (its fixed point independent of the predictor), started from the classical solution.
+- **L0 tests** (`tests/verify/reference/schrodinger_poisson_test.cpp`, 8 cases, 271 assertions, under 1 s Release;
+  the whole `nitcad_verify_test` 178 cases pass): tridiag(−1, 2, −1) against its closed form (1e-14) and jacobi_eigen
+  on n = 12; the infinite well against the discrete closed form and, at observed order 1.9–2.1, the continuum (also on
+  a smoothly graded grid, 1.8–2.2); a finite well with a mass step against Brent on its transcendental equations; the
+  triangular well against DLMF Table 9.9.1's Airy zeros (read 2026-11-19, PA); the classical Poisson part against
+  `mos_capacitor.hpp` from accumulation to strong inversion; the quantum solution's Poisson residual, Gauss's law,
+  orthonormality, and its changes with the grid halved (≤ 1e-3, ≤ 0.01 nm), 12 subbands instead of 8 (≤ 1e-4) and
+  a 60 nm Schrödinger depth instead of 40 (≤ 1e-4).
+- **Bounds changed after the first run (stated, not hidden).** Four L0 bounds set before the run were wrong a priori,
+  while every observed-order check passed: (i) the discrete infinite well "1e-12 relative" ignored that eigenvalues
+  are accurate to eps ‖A‖, not relative to E: now 4 eps ‖A‖ (≈ 4e-13 eV at 800 cells; observed 1.2e-13); (ii)–(iii)
+  the finite and triangular wells' absolute bounds (1e-5, 1e-6 at the finest grid) underestimated the O(h²) constant,
+  about (k h)² / 12 (observed 4e-5 and 1.7e-6): replaced by stricter checks, the Richardson value of the two finest
+  grids against Brent within 1e-7 and against the Airy zeros within 1e-8; (iv) the classical MOS-C's single-grid
+  bounds (1e-5 in Q_s, 1e-6 V) failed in accumulation at −1 V (1.4e-5, 1.2e-5 V): now observed order 1.8–2.2 between
+  the grid and its halving, and the Richardson Q_s and band bending against `mos_capacitor.hpp` within 1e-7 (relative,
+  and in V). None of these is a QV criterion; QV1–QV15 are untouched.
+- **Reported** (1e17 p-type, 5 nm SiO₂, V_G − V_FB = 2 V, Boltzmann, (100) valleys 0.916/0.19 ×2 and 0.19/0.417 ×4,
+  oxide 3.0 eV and 0.50 m0): N_inv 2.837e12 cm⁻² against 3.142e12 classically (−9.7%); centroid 2.167 nm against
+  0.958 nm; 11 outer iterations; Fermi–Dirac N_inv 2.824e12.
+- **Still in slice 0:** QP0 (on the papers), then the QV3 analytic Λ profiles (they need the DG row, so they move to
+  slice 2, where the row exists).
+
+**Ruling (2026-11-19, owner "choose recommended"):** slices 1–3 may start before QP0. The code does not depend on γ's
+value: γ and the masses are inputs, their defaults marked as placeholders; QV6 gets no verdict until QP0 is recorded;
+no criterion changes. Only the plan's order changes.
+
+**Slice 1 (2026-11-19).** As built:
+- `assemble::QuantumConfinement::density_gradient` (= 2) and `PhysicsModels::dg_mass_n`, `dg_mass_p`, `dg_gamma_n`,
+  `dg_gamma_p` (defaults 0.98, 0.49, 1, 1: placeholders, `physics::dg_default_*`).
+- `physics::dg_coefficient_cm2` (β) and `physics::barrier_decay_length_cm` (x_p) in physics/quantum_confinement.
+  QV2 met: both against CODATA 2018 written out in the test within 1e-14 relative. SiO₂ electrons (3.0 eV,
+  0.50 m0): x_p = 0.159373 nm; β_n(0.98 m0, 300 K) = 0.5013 nm².
+- Deck: `quantum_confinement = density_gradient` and the four `dg_` keys; the bad-value message now names three
+  values. App: the `[models]` vocabulary and sections list the value and keys (25 keys); the completion pin went
+  from 20 to 24 (updated with the vocabulary, not loosened; QV12).
+- Run record: with DG on, `models.quantum_confinement` (2) and the four `dg_` settings; MLDA's entries unchanged and
+  written only with MLDA; DG's parameters are read only with DG on (identities tested).
+- Refusals (QV11, `assemble::check_density_gradient`, called from `make_scaled_device`, so both assemblers give the
+  same message): the masses and gammas, electrothermal, energy balance, nonlocal BTBT, gate tunnelling, Schottky
+  contacts, a thermionic interface, non-silicon regions, a meshed insulator neither the built-in SiO₂ nor with band
+  data, a lumped stack with no band data and a permittivity other than SiO₂'s. Everything accepted is then refused
+  with "not built yet (Unit 62 slice 2)", tested on meshed and lumped SiO₂, a lumped stack with its own band data,
+  SiO₂ with band data, and Lombardi + Fermi–Dirac + local BTBT.
+- Run (Release, targeted, not the full suites): physics 5 cases, assemble 9, deck 4 (confinement filters), the
+  whole `nitcad_app_test` (77 cases) and the completion window case: all pass.
+
+**Slice 2 (2026-11-19, owner "start unit 62 slice 2 choose recommended").** As built:
+- Fields `quantum_potential_n`, `quantum_potential_p` (kT, node, semiconductor). With the model on the unknowns are
+  ψ, n, p, Λ̂_n, Λ̂_p (stride 5) and at equilibrium ψ, Λ̂_n, Λ̂_p (stride 3); every branch reads the slots, not the
+  stride. Two table terms (src/assemble/density_gradient.cpp): the rows V Λ̂ − β B on the nodes, and the edge sums
+  β g (√(c_j / c_i) − 1) (QP2), in both tables. On ohmic-contact and insulator nodes Λ̂ = 0 (QP4). At equilibrium the
+  sums read the densities slaved to ψ and Λ̂ (QP8). The barrier terms B come from `make_scaled_device` (QP3, QP5):
+  meshed oxide g d / (d/2 + x_p) on the semiconductor end, lumped gate A L_D^{2−D} / x_p, with x_p from the
+  insulator's (or the stack's) band data. Gate tunnelling's band-data helpers moved to scaled_device so both read
+  the same data. An insulator whose offsets to the semiconductor are not both positive is refused.
+- `√(c_j / c_i) − 1` is formed through log1p and expm1 while the two densities are within a factor 1.5. The plain
+  square root loses (a h)⁻² digits on a fine mesh, and measured 1.5e-12 between 2D and 1D at a h = 6e-4.
+- SG coupling (QP6): electrons δ − ΔΛ̂_n, holes δ + ΔΛ̂_p, with `EdgeFlux::d_delta` for the Λ columns. Impact
+  ionization gains the cross entries (n, Λ̂_p) and (p, Λ̂_n). The field mobility's driving field stays ψ's alone.
+- Recombination (QP13): SRH (bulk and surface), Auger and radiative with E → E e^{−Λ̂_n−Λ̂_p}, n₁ → n₁ e^{−Λ̂_n},
+  p₁ → p₁ e^{−Λ̂_p}, and every Λ partial (`physics::srh_recombination_shifted`). Interface traps take the
+  semiconductor node's Λ̂ as constant over its half-cell: occupancy and trap SRH use the shifted n₁ and p₁, with Λ
+  columns in the insulator's Poisson row.
+- **Ruled (recommended): dopant levels keep their classical positions**, as trap levels do (QP13, QD9). Drift-
+  diffusion ionization reads η_c + Λ̂_n and η_v + Λ̂_p, the densities' own band edges, with the Λ entries. At
+  equilibrium the occupancy depends on η − log N_c, which the slaving leaves unchanged, so the equilibrium
+  ionization is the classical one.
+- Newton treats Λ̂ as a potential: in the update size, clamped to ±max_update, in the natural norm as a potential,
+  and held on insulator and contact nodes. `System::state_from_quantum_potential(ψ, Λ̂_n, Λ̂_p)` gives the slaved
+  state.
+- **Ruled (recommended): the solvers refuse the model until slice 3.** The time step and the small-signal matrix
+  are refused at the assemble layer by precondition. Every solver (bias sweeps, equilibrium, small signal,
+  transient, traces, adaptation) returns invalid_input, "quantum_confinement density_gradient: the solvers are not
+  built yet (Unit 62 slice 3)" (`assemble::density_gradient_solvers_unbuilt`). Both assemblers accept the
+  combinations slice 1 refused as not built (strides 5 and 3 tested).
+- Fixed on the way: `locate_surface` read energy balance's four rows from `m_ == 5`, which density gradient shares.
+  It now excludes the model. energy_balance_ is set only after it runs, so the flag could not serve.
+
+Results (Release, targeted, `nitcad_assemble_test` whole):
+- QV3 (met): exp(−x/2L) and cosh(x/L) on the [0, 2 µm] bar, uniform and graded (x = s + s², ratio 3) at 20–160
+  cells. Observed order 2.001–2.009 uniform and 1.950–1.991 graded. 2D and 3D extrusions equal 1D within 1.7e-14.
+  Barriers: a profile √c = sinh((x + x₁)/L) that meets the wall's condition (Λ̂ = −β/L² exactly), at h = 0.4, 0.2,
+  0.1 and 0.05 nm. Wall-node error (n): meshed −0.027, −0.036, −0.029, −0.019; lumped 0.86, 0.42, 0.21, 0.105
+  (first order, h / 4x_p). Both decrease from 0.2 nm, once h/2 < x_p, and the first-order extrapolation reaches the
+  closed form within 0.02 for both: no jump. Interior silicon: order 2 in both cases.
+- QV4 (met in the assemble layer): DG equilibrium on the meshed and lumped 1D MOS-C (−1.5 V, 1 V) and the 2D MOS
+  with its n+ pocket (1 V), both statistics, traps on:
+  - the drift-diffusion residual on the slaved state is at most 4.3e-14 of each row's largest term (fluxes, net
+    rates, trap terms and Λ rows);
+  - the Boltzmann slaving n = n_classical(ψ) e^{−Λ̂_n} holds within 1e-12;
+  - Newton's first update from it is at most 3.1e-12.
+
+  The 2D MOSFET example, the terminal currents against their resolution and the flat E_F (QP12, results) need the
+  solvers: slice 3.
+- QV5 (met): house gate (largest relative column error, central differences), DD and equilibrium tables. 1D, 2D
+  and 3D meshed oxide with traps, both statistics: ≤ 1.4e-7. Lombardi, impact ionization with field mobility,
+  incomplete ionization and local BTBT: ≤ 1.4e-7. Lumped 1D and 2D, Delaunay, and a meshed oxide with band data:
+  ≤ 1.1e-7.
+
+  Two probe choices, measured:
+  - The 2D and 3D MOS run without the n+ pocket. Across its abrupt junction the minority density jumps by 1e16, so
+    the Λ rows there carry terms of 1e8 against an entry V. Their central difference is then rounding (up to 6e-3
+    of the column), while the analytic entry matches the difference to 7 digits as the step grows to 1e-3.
+  - The probes keep the densities smooth: no step-raised interface densities. The equilibrium probe is the
+    classical solution with 1e-3 ψ noise, since 0.02–0.1 left Poisson rows of |f| 20–130 whose Λ columns were
+    rounding at 1.0–1.8e-6.
+
+  Newton on the 2D MOS (with the pocket) at 1 V from the classical equilibrium at 0.8 V, Λ̂ = 0: 23 iterations,
+  last updates 6.4e-3, 2.9e-5, 5.9e-10 (order 2.0), then 2.8e-12 at rounding (6 iterations without the model).
+- QV9 (assemble-layer part met): the lumped MOS-C at ±1.5 V, both statistics. 2D equals 1D within 6.2e-15, 3D
+  equals 2D within 8.7e-15 (peak Λ̂_n 7.7). The swapped 2D MOSFET example's I_d needs the solvers: slice 3.
+- QV1: the whole `nitcad_assemble_test` (179 cases), `nitcad_app_test` (77), solve "quantum confinement",
+  "density gradient", interface and trap cases (21), deck confinement cases (4): all pass. Owed before the merge,
+  with the owner's word: NG1 (traces byte-identical), NG2 decks, and the full Release and Debug suites.
+- The 1D MOS in inversion, with only a substrate contact, has a smallest pivot ratio of 2.3e-15 without the model
+  (9.8e-15 with it), below the 1e-11 floor. The QV4 Newton check on it runs with min_pivot_ratio 0.
+
+**Slice 3a (2026-11-19, owner "choose recommended": the recommended next step, slice 3, in three local commits —
+3a solver handoff, 3b transient, small signal and traces, 3c results files, plot, app, checkpoints and run-record
+warnings).** As built:
+- `solve_equilibrium` with the model on: the classical equilibrium first, then the stride-3 system from Λ̂ = 0
+  (QP8). Every result (fields, bands, gate and trap charges) is read from the drift-diffusion state the equilibrium
+  slaves (`state_from_quantum_potential`), so no equilibrium-system query has to know about Λ.
+- QP9's ladder (src/solve/density_gradient.cpp). If the first solve fails with non_convergence, it runs
+  k = 1/8, 1/4, 1/2, 1, each rung from the previous solution. A failed rung halves the gap to the last converged
+  k, at most 4 times per rung, and then the start fails with "density gradient: the coefficient continuation failed
+  at k = … (converged: …)". β·k is built as γ·k, since β is linear in γ and the barrier term is β B. The rungs
+  are in `EquilibriumResult::quantum_continuation`; the run-record entry comes with 3c.
+- Bias sweeps. Drift-diffusion starts from the model's equilibrium, Λ included. Quasi-static sweeps run on the
+  stride-3 system, with each point's results read from the slaved drift-diffusion state at its bias. An initial
+  state carries Λ (`NodeFields::quantum_potential_n_eV`, `_p_eV`, empty without the model).
+- QP12, first part: the drift-diffusion E_Fn gains +Λ̂_n and E_Fp gains −Λ̂_p, and the Λ fields are in every bias
+  point and the equilibrium result. They are observed only when non-empty, so every other run's trace is
+  unchanged (QV1).
+- Still refused until 3b: transient, small signal and traces. Adaptation is refused until its field transfer
+  carries Λ.
+
+Results (Release, targeted):
+- QV4, solve part (met). The meshed MOS-C (traps and surface recombination) and the lumped one, both statistics:
+  - equilibrium E_F within 1e-9 eV;
+  - at −2 V and 1.5 V, drift-diffusion from the quasi-static state: the substrate current within its resolution;
+  - E_F of both states within 1e-9 eV;
+  - SRH and interface rates within 1e-9 of their scales (as QC5).
+- The 2D MOSFET example at V_G = 1 V, equilibrium: every terminal current within its resolution and the E_F spread
+  1.0e-16 eV (0.4 s, 12 iterations). Peak Λ_n is only 0.3 meV and the largest |Λ| 1.5 meV: the example's
+  silicon mesh does not resolve the inversion layer, so the model has almost nothing to act on (QP15; QV13 and QV15
+  report it). The case is hidden like MLDA's ([.dg]) and run by name.
+- QV9, example part (met): the reflected 2D MOSFET example at V_D = 0.1 V and V_G = 0.5, 1, 1.5 V gives I_d within
+  2.2e-16 of the unreflected.
+- QP9: on the meshed MOS-C, Newton capped at 5 iterations fails from Λ̂ = 0 (6 suffice) and converges through the
+  ladder to the uncapped state within 1e-6. Capped at 2, it fails at k = 1/128 with "converged: none".
+- QV1: the whole `nitcad_assemble_test` and `nitcad_app_test`, solve confinement, density-gradient, interface,
+  trap and equilibrium cases (40), deck confinement cases (5): all pass.
+
+**Slice 3b (2026-11-20, same "choose recommended").** As built:
+- Time step (QP11). Λ rows carry no storage. With incomplete ionization the dopant storage reads Λ (η_c + Λ̂_n,
+  η_v + Λ̂_p, as ruled in slice 2), so the step's Jacobian gains the (n, Λ_n) and (p, Λ_p) entries, and so does
+  `small_signal_matrix`. The time-step and small-signal preconditions no longer exclude the model.
+- Small-signal traps. `charge_small_signal` and `InterfaceEdges::small_signal` read Λ through
+  `statistics(node, x)`. They return the complex Λ partials of the trap charge and rates, and of the interface
+  potential's implicit solve (Λ moves the charge only), into the semiconductor node's Λ columns, as `drift`'s.
+- Starts. Bias sweeps and transients start from the equilibrium's drift-diffusion state with Λ, through one
+  helper, `detail::state_from_equilibrium`. Small signal's operating points come from `sweep_bias`, which carries
+  Λ.
+- Fields. Transient snapshots carry Λ, and small-signal fields gain `quantum_potential_n_eV` and `_p_eV`
+  (complex, eV/V; empty without the model).
+- Error estimate. The transient's local error estimate measures Λ̂ absolutely in kT, as ψ, on the nodes where it
+  measures ψ.
+- Refusals. Transient, small signal, traces and the adjoint no longer refuse the model.
+- Adaptation (ruled, recommended): it is refused at `adapt()`'s entry, `density_gradient_adaptation_refused`,
+  with "quantum_confinement density_gradient: mesh adaptation does not transfer the quantum potentials". The
+  field transfer does not carry Λ, and adaptation is outside Unit 62's slice plan, so this is left as a follow-up
+  unit. The old "not built yet" refusal is gone.
+
+Results (Release, targeted):
+- Time-step Jacobian against central differences (house gate 1e-6), at rates 1 and 100 × t0/0.35 ps. Met on:
+  meshed 1D with traps, meshed 2D with traps, meshed 2D with incomplete ionization, lumped 1D; both statistics.
+- `small_signal_matrix` at s = rate equals the step's Jacobian, and at s = iω equals J + iωC without traps. Both
+  within 1e-12 of the largest entry.
+- QV10 (met):
+  - Lumped-gate 2D MOSFET at V_G = 1.5 V, V_D = 0.1 V: Y(0)'s drain row against fourth-order DC differences
+    (dV = 1e-3 V) gives g_m within 3.4e-9 and g_d within 5.4e-10.
+  - MOS-C stepped to −1.5 V: the 1 µs transient equals DC within 1e-9 in ψ and Λ (peak Λ_p 0.114 eV) and 1e-7 in
+    p.
+- Recorded, not gated: drift-diffusion straight from the model's equilibrium to −1.5 V on the MOS-C fails
+  (83 iterations, then a backward error). The DC reference there starts from the quasi-static state. QV13 reports
+  convergence on the examples.
+- Traces with the model have no case of their own yet; their start goes through the same `sweep_bias` path.
+- QV1: the whole `nitcad_assemble_test` (180 cases) and `nitcad_solve_test` (246 passed, 4 skipped) pass, and
+  every Release target builds with zero warnings.
+
+**Slice 3c (2026-11-20, same "choose recommended").** As built:
+- Files. Λ_n and Λ_p are optional keys: `NodeFields` keys 7 and 8, small-signal field keys 9 and 10 (complex). They
+  are written only when the model is on, so classical files are unchanged and the format version stays (as Unit
+  52's temperatures). An unpaired Λ is refused as corrupt. Steady and resume checkpoints carry Λ through the same
+  fields.
+- Compare. `compare_sweeps` compares Λ at the potential's tolerance (eV against V), and a Λ field missing on one
+  side is a structure mismatch.
+- Plot and app (QP12). New `render::Field`s: `Ln`, `Lp`, `Ec_eff` = E_c + Λ_n and `Ev_eff` = E_v − Λ_p. A result
+  without the model gives an error that names the deck key. The app's field list offers them only when the result
+  has Λ (as Unit 52's T_n and T_p). Ruled, recommended: the effective edges are derived in `field_values` from the
+  result's bands and Λ, not stored in derived.hpp. The result already holds both, so nothing new is stored.
+- Restart (QV12). A restart whose checkpoint carries Λ when the run does not solve the model, or the reverse, is
+  refused in all four analyses with "the restart checkpoint '…' was solved with[out] quantum_confinement
+  density_gradient and this run does[ not] solve it: start from it with initial instead". Transient and trace
+  resumes are also refused by their identity. A steady restart has no identity check (Unit 61), so this is the
+  check there. `initial` from a classical state stays allowed (Λ starts at 0).
+- Run-record warnings. New `RunRecord::warnings` (run-record key 6, repeated text; not in the identity; printed by
+  `nitcad run` as `warning: …`):
+  - QP9: "the equilibrium start used the coefficient continuation (k = …)", from sweeps (drift-diffusion and
+    quasi-static) and transients; small signal copies its operating points'.
+  - QP15: `CoarseScan` over every result's Λ. A bulk node is a semiconductor node with no edge to an insulator
+    node and not a lumped-gate node. Counted when |Λ̂| > 10, with the node count, the results, the largest value
+    and its node. Traces do not scan yet.
+- QV12 vocabulary pins: the deck's `[models]` list and the app's completion list grew in slice 1 (24 completion
+  items) and are unchanged here.
+
+Results (Release, targeted):
+- QV12, lumped-gate MOS-C deck (0.5 nm surface spacing), V_G 0 to −1.2 V in −0.1 V steps (accumulation; peak Λ_p
+  0.117 eV):
+  - the sweep file round-trips Λ bit for bit;
+  - `Ln`, `Ec_eff` and `Ev_eff` equal the result's Λ and bands;
+  - restarted from the −0.6 V checkpoint, the remaining 6 points match the uninterrupted sweep: ψ within 2.6e-16,
+    Λ within 1e-17 eV, currents within their resolution (a MOS-C at DC);
+  - the model change is refused both ways.
+- Not met as worded: QV12 asks for a sweep restart that is "bit-identical … (as Unit 61 RG)". Unit 61 made only
+  transient and trace resumes bit for bit. Its steady restart is to 1e-9 (DK9, RG6), because a steady checkpoint
+  holds physical-unit fields, not the solver state. Measured here at 1e-15 to 1e-16, not to the bit. The criterion
+  is frozen, so it is put to the owner by name: rule QV12's sweep restart to Unit 61's steady standard (1e-9), or
+  ask for a bit-for-bit steady resume (a new resume record).
+  **Ruled (2026-11-20, owner "choose recommended"): (a).** QV12's sweep restart is held to Unit 61's steady
+  standard, 1e-9 relative (DK9, RG6), which is met at 1e-16. The transient resume with the model on, bit for bit,
+  is the "as Unit 61 RG" case. QV12 is met.
+- The same "as Unit 61 RG" check that is bit for bit, a transient resume with the model on: the deck diode pulse,
+  stopped after 3 and after n/2 steps and resumed, equals the uninterrupted run bit for bit (times, steps, orders,
+  error ratios, currents and Λ in the last snapshot). The plain deck is refused on the same checkpoint. The
+  diode's Λ is below 1e-17 eV, so this case checks the resume path, not Λ's size.
+- Recorded: on this MOS-C, drift-diffusion in inversion stops at V_G = 0.4 V classically too (36 iterations at
+  0.3 V, then 100). This is the 1D MOS-C's minority supply, not the model; density gradient stops one step
+  earlier.
+- Warnings: the texts, bulk selection (a lumped-gate node at 20 kT not counted) and count pinned by a unit case. A
+  clean sweep records none. Results-file round-trip of Λ and the warnings: `nitcad_io_test` passes.
+- QV1:
+  - pass: `nitcad_assemble_test`, `nitcad_app_test`, `nitcad_render_test`, `nitcad_analysis_test`,
+    `nitcad_io_test`;
+  - `nitcad_solve_test`: 247 passed, 4 skipped;
+  - `nitcad_deck_test`: 115 passed, plus its 5 existing failed-as-expected Schottky cases;
+  - every Release target builds with zero warnings.
+
+**Slice 4, part 1 (2026-11-20, owner "choose recommended and start slice 4").** QV6–QV8 are in
+tests/verify/benchmark/density_gradient_test.cpp, hidden ([.dg_validation], Release, run by name; 1 s in all).
+The setup:
+- A 1D meshed MOS-C: n+ poly, built-in SiO2 (the reference's barrier 3.0 eV and mass 0.5), p-type, silicon to
+  0.3 µm, 20 oxide cells, the interface straddled at h = 0.1 nm, spacing h to 3 nm, then ×1.08 up to 2 nm.
+- The quasi-static sweep, so E_F = 0, as in the reference.
+- Boltzmann statistics, and bandgap narrowing off (the reference has none). V_FB comes from the classical gate
+  charge's zero.
+- The reference has the same material constants as NiTCAD's silicon, valleys (0.916, 0.19) ×2 and
+  (0.19, √(0.916·0.19)) ×4, and its slice-0 grid.
+- N_inv = ∫ n over silicon boxes, and the centroid = ∫ x n / N_inv.
+- Ruled (recommended): the reference's guard N_A < 0.01 N_v becomes N_A < N_v, because QV6 asks for 1e18. With
+  Boltzmann statistics on both sides the bulk only needs E_F in the gap. The reference's own tests pass
+  unchanged (6 cases).
+
+Results:
+- Classical cross-check (gated): NiTCAD against the reference's classical electrons gives V_th within 0.2 mV and
+  N_inv within 0.35% in all 4 devices. With bandgap narrowing on, 1e18 differed by 27–34 mV, which is how the
+  BGN setting was found.
+- QV6, reported (no verdict until QP0). γ = 1 and MLDA's masses (placeholders). Errors are against
+  Schrödinger–Poisson, at V_th(classical SP) + 0.5, 1, 1.5 V:
+
+  | t_ox, N_A | N_inv DG (MLDA) | centroid DG (MLDA) [nm] | ΔV_th DG, MLDA, SP [mV] |
+  |---|---|---|---|
+  | 1.5 nm, 1e17 | +11.9, +9.2, +8.0% (+9.1, +8.6, +8.4%) | −0.57, −0.46, −0.40 (≈ −0.48) | 20.0, 29.1, 46.1 |
+  | 1.5 nm, 1e18 | +17.0, +11.2, +9.1% (+14.3, +10.9, +9.9%) | −0.45, −0.39, −0.36 (≈ −0.48) | 45.2, 58.9, 97.8 |
+  | 5 nm, 1e17 | +5.8, +4.5, +3.8% (+3.9, +3.3, +3.0%) | −0.64, −0.57, −0.52 (≈ −0.47) | 21.0, 30.6, 48.5 |
+  | 5 nm, 1e18 | +11.5, +7.4, +5.7% (+8.6, +5.8, +4.7%) | −0.48, −0.45, −0.42 (≈ −0.47) | 54.7, 71.8, 118.8 |
+
+  Against the placeholder bounds (10%, 0.3 nm, 25%), DG would miss:
+  - the centroid at every point (its centroid lies 0.36–0.64 nm nearer the surface);
+  - ΔV_th everywhere, at 54–57% of SP's;
+  - N_inv at 4 of 12 points.
+
+  DG's confinement here is about half the reference's in ΔV_th, and MLDA does better on all three except the thin
+  1e18 centroid. This is what QP0's coefficient (Ancona's r factor) has to settle: no tuning, as QV6 says. The
+  mass mismatch (one isotropic 0.98 against the per-valley masses) and Λ_p's lack of a reference stand as stated.
+- QV7 (met): the 5 nm, 1e17 device at V_G − V_FB = 2 V gives N_inv 3.084834e12, 3.082945e12 and 3.082551e12
+  at 0.2, 0.1 and 0.05 nm. The last two differ by 1.3e-4 (≤ 1%), less than the first two (6.1e-4).
+- QV8 (met):
+  - x_p → 0 (m_ox 0.5 → 128, x_p 0.159 → 0.010 nm): the surface density falls monotonically, 3.30e18 → 3.45e17,
+    and the peak moves inward, 0.7 → 0.9 nm.
+  - γ → 0: the difference from classical, gated over γ = 1e-3, 1e-4, 1e-5, has order 0.992 and 0.999 in N_inv
+    and 0.968 and 0.997 in max |n − n_cl|.
+  - The pair from 1e-2 is reported, not gated: order 0.949 and 0.810. There the surface layer still moves by
+    20%, so it is outside the limit's range. The bound is unchanged; only the γ sequence was extended to 1e-5.
+
+**Slice 4, part 2: the examples (2026-11-20).** QV13 and QV15 are in tests/deck/quantum_confinement_test.cpp
+"the examples on their meshes, and refined" ([.dg_examples], Release, run by name, about 14 min). Each example
+deck's own sweep, classical, MLDA and DG. V_th is the largest-g_m extrapolation minus V_D/2; the swing is the
+smallest ΔV/Δlog I_d.
+- QV15 (met on the examples' own meshes: every point converges):
+  - 1D diode: largest |Λ̂| 0.023 at 0.005 µm, I(0.7 V) −7.0e-5, 73 against 72 iterations.
+  - 2D MOSFET: 0.093 at (1.5, 0.5) µm (the drain junction), I_on −4e-4.
+  - 3D MOSFET: 2.93 at (1.4, 0.5, 0.4) µm (the drain junction), I_on −2e-4.
+  - No QP15 warning: nothing reaches 10 kT away from the interfaces.
+  - On these meshes (10 nm at the surface in 2D) the model does almost nothing. The largest Λ sits at the
+    junctions, not in the channel.
+- The 2D MOSFET refined to 0.1 nm at the surface (10 nm to 0.94 µm, 1 nm to 0.948 µm, 0.1 nm to 0.95 µm), reported:
+  - Largest |Λ̂| 3.54 at the interface (1.45, 0.9499) µm.
+  - With the deck's defaults (no step cutting), DG stops after 14 of 16 points (V_G = 1.4 V: Newton not converged
+    in 100 iterations). Classical and MLDA converge.
+  - With `max_cuts = 8` (a deck option, the same for every model) DG converges at every point:
+
+    | refined 2D MOSFET | V_th [V] | swing [mV/dec] | I_on [A/cm] |
+    |---|---|---|---|
+    | classical | 0.5031 | 95.8 | 7.7314e-2 |
+    | MLDA | 0.5100 | 96.0 | 7.6521e-2 |
+    | DG | 0.5075 | 95.9 | 7.6811e-2 (−0.65%) |
+
+  - The refined mesh shows the coarse runs' near-zero effect was under-resolution (QP15), not the model being
+    absent. DG's ΔV_th (+4.4 mV) is again below MLDA's (+6.9 mV), consistent with QV6.
+- QV13 (reported):
+
+  | example | classical | MLDA | DG |
+  |---|---|---|---|
+  | 2D MOSFET: V_th, swing, I_on | 0.5707 V, 99.9, 6.5274e-2 | the same to 7 digits | 0.5712 V, 99.9, 6.5251e-2 |
+  | 2D MOSFET: time, iterations | 0.75 s, 83 | 0.73 s, 83 | 2.39 s, 97 |
+  | 3D MOSFET: V_th, swing, I_on | 0.4849 V, 107.9, 6.9463e-6 | the same to 7 digits | 0.4849 V, 107.9, 6.9446e-6 |
+  | 3D MOSFET: time, iterations | 4.44 s, 39 | 4.42 s, 39 | 38.6 s, 80 |
+  | refined 2D MOSFET, `max_cuts = 8` | 2.36 s, 100 | 2.48 s, 102 | 744 s, 242 accepted (QP9 continuation not used) |
+
+  - MLDA equals classical on the coarse examples: their nearest silicon nodes are far from the oxide (Unit 47
+    QC12).
+  - Cost per accepted iteration against drift-diffusion: 2.7× in 2D, 4.2× in 3D.
+  - The refined DG time includes every failed attempt of the cut steps (100 iterations each), which the
+    iteration count does not show. On this mesh, DG's Newton needs smaller bias steps than classical: a cost
+    finding, not a fix.
+
+**QP0 recorded (2026-11-20, owner supplied the papers, "(a)").** The four sources were read from the owner's
+copies, outside the repo. In our form the quantum potential is Λ = −(γħ²/6m) ∇²√n/√n. In Ancona's form it is
+2b ∇²√n/√n (in volts). So γ/m = 12bq/ħ².
+
+- **(i) Coefficient.**
+  - Ancona and Tiersten, PRB 35 (1987) 7959, eq. (4.9a) and p. 7964:
+    - the static DG equation is a "Schrödinger equation" with coefficient 2b;
+    - matching the one-electron effective-mass ground state gives b = ħ²/(4qm*), with m* the normal mass;
+    - the "note added in proof" says a more rigorous microscopic derivation gives b = ħ²/(12m*q).
+  - Ancona and Iafrate, PRB 39 (1989) 9536, eq. (3.12): b = ħ²/(12m*q). This is the lowest-order Wigner
+    correction for a Boltzmann, high-temperature gas of infinite extent; eq. (3.13) gives the condition
+    ε = ħ²β/(8m*d²) ≪ 1. In our form it is **γ = 1** with m = m*.
+  - Ancona, IEEE TED 47 (2000) 1449, eq. (2.7): b = ħ²/(4qm*r), where r = 1 is the pure state (one subband)
+    and r = 3 the high-temperature limit, which is the 1989 value.
+  - Ancona 2000, pp. 1452–1453 and Fig. 7: for silicon inversion layers m* and r vary oppositely, and he
+    takes m*r = 1.
+  - Wettstein, Schenk and Fichtner, IEEE TED 48 (2001) 279, eq. (11), has the same Λ form as ours with γ as
+    a fit factor: 3.6, fitted on p. 281. It is not a theoretical value, so it is not the default (TVM2).
+  - The placeholder (γ = 1 with m = 0.98) paired the high-temperature coefficient with the pure-state normal
+    mass. That made it about 3× too weak: γ/m = 1.02 where Ancona's m*r = 1 gives 3. This is QV6's earlier
+    under-confinement.
+- **(ii) Masses.**
+  - Electrons: Ancona 2000, p. 1451, gives the single-valley bulk average (m_t² m_l)^{1/3} = 0.328. Footnote 1:
+    m*r = 0.328 × 3 = 0.984, his recommended m*r = 1.
+  - **Default: γ = 1 (1989 eq. (3.12)) with m_n = 0.328.** That is γ/m = 3.05, within 2% of m*r = 1.
+  - Holes: none of the four sources gives a value. m_p stays MLDA's 0.49, marked as unsourced. Λ_p has no
+    reference anyway (QP14).
+  - Wettstein et al. use the density-of-states mass (p. 281). Not adopted, because their γ is fitted with it.
+- **(iii) Oxide boundary condition.**
+  - Ancona and Tiersten 1987, eq. (4.4b), and Ancona 2000, p. 1451: ρ = 0 at the surface, an insulating oxide
+    and an infinite barrier, with tunnelling omitted.
+  - Wettstein et al.: the barrier enters through eq. (8), with ∇(Φ+Λ)·n = 0 at the outer boundaries.
+  - **QP5 confirmed (a), not revised.** Our reference (QP14) has a finite barrier, so the penetration form
+    matches the physics QV6 compares against. QV8 shows the hard wall is its x_p → 0 limit (QR3 (c) is that
+    limit).
+- **(iv) Published agreement, which sets QV6's bounds.**
+  - Ancona 2000, p. 1454, against SHRED Schrödinger–Poisson (16 subbands, Fermi–Dirac; 31 Å oxide; N_A 1e15,
+    3.8e16 and 1e18):
+    - V_th within 10 mV, worst at the heaviest doping;
+    - N_inv "quite accurate" and the centroid close, shown in figures only, with no number in the text.
+  - Wettstein et al. publish agreement only for their fitted γ, so it does not apply to the theoretical
+    coefficient.
+  - **Bounds frozen:**
+    - |(ΔV_th DG) − (ΔV_th SP)| ≤ 10 mV, cited;
+    - |ΔN_inv/N_inv| ≤ 10% and |Δcentroid| ≤ 0.3 nm, the slice-0 numbers kept as engineering bounds. The
+      sources give no number for these two, and this is stated.
+    - The 25% relative shift placeholder is replaced by the cited 10 mV.
+
+**QV6 verdict (QP0's defaults; tests/verify/benchmark/density_gradient_test.cpp, now gated).**
+
+| t_ox, N_A | shift DG / SP [mV] | miss [mV] | N_inv DG vs SP | centroid DG − SP |
+|---|---|---|---|---|
+| 1.5 nm, 1e17 | 35.9 / 46.1 | 10.2 | +2.0 to +3.6% | −0.09 to −0.16 nm |
+| 1.5 nm, 1e18 | 80.2 / 97.8 | 17.6 | +2.3 to +4.8% | −0.06 to −0.09 nm |
+| 5 nm, 1e17 | 37.6 / 48.5 | 10.9 | +1.2 to +2.1% | −0.14 to −0.20 nm |
+| 5 nm, 1e18 | 97.0 / 118.8 | 21.8 | +1.7 to +3.7% | −0.08 to −0.10 nm |
+
+- **N_inv and the centroid pass at all 12 points. The threshold shift fails at all four devices**: DG gives
+  78–82% of SP's shift, missing by 10.2–21.8 mV against the 10 mV bound.
+- The placeholder γ gave 54–57% of SP's shift, with N_inv up to +17% and the centroid up to −0.64 nm.
+- MLDA (unchanged): 60–63% of SP's shift.
+- Recorded as a fail, not tuned (QV6).
+- Known differences from Ancona's comparison, stated rather than corrected:
+  - our reference is Boltzmann, with a finite barrier and two valley sets (m_l = 0.916);
+  - his is Fermi–Dirac, an infinite barrier and m_l = 0.98;
+  - V_th here is N_inv = 1e12 cm⁻².
+- Ancona's Fig. 7 (m*r = 0.9 "slightly better") suggests a stronger coefficient would narrow the gap. Choosing
+  one is calibration, so it is **the owner's ruling** (QV6: "the owner may then rule a reported γ"). Not done.
+- QV7 under the new defaults: 3.2e-4 and 7.3e-5 (pass).
+- QV8 under the new defaults: orders 0.899/0.980/0.998 (N_inv) and 0.669/0.919/0.990 (n). The heavier
+  coefficient makes the 1e-2 pair more pre-asymptotic; it was already report-only. Pass.
+- Code changes:
+  - physics/quantum_confinement.hpp: `dg_default_electron_mass` = 0.328, with the citations;
+  - the app's deck vocabulary and sections: the `dg_mass_n` default is 0.328;
+  - the physics and deck default pins were updated.
+- The slice-4 part 2 example numbers (QV13, QV15) and the FinFET runs were measured with the placeholder
+  mass. They are rerun under the new default before the unit closes.
+
+**Slice 4 examples rerun under QP0's default (2026-11-20, m_n = 0.328; tests/deck/quantum_confinement_test.cpp
+[.dg_examples], all 26 assertions pass).**
+
+| example | classical | MLDA | DG |
+|---|---|---|---|
+| 2D MOSFET: V_th, swing, I_on | 0.5707 V, 99.9, 6.5274e-2 | the same | 0.5720 V, 99.9, 6.5205e-2 (I_on −0.11%) |
+| 2D MOSFET: time, iterations | 0.69 s, 83 | 0.68 s, 83 | 2.17 s, 96 |
+| 3D MOSFET: V_th, swing, I_on | 0.4849 V, 107.9, 6.9463e-6 | the same | 0.4850 V, 107.9, 6.9413e-6 (I_on −0.07%) |
+| 3D MOSFET: time, iterations | 4.17 s, 39 | 4.14 s, 39 | 29.3 s, 66 |
+| refined 2D, `max_cuts = 8`: V_th, swing, I_on | 0.5031 V, 95.8, 7.7314e-2 | 0.5100 V, 96.0, 7.6521e-2 | 0.5114 V, 96.1, 7.6386e-2 (I_on −1.20%) |
+| refined 2D, `max_cuts = 8`: time, iterations | 2.14 s, 100 | 2.21 s, 102 | 910 s, 283 |
+
+- QV15 is met on the examples' own meshes again. The largest |Λ| is 0.12 kT (2D) and 4.3 kT (3D), both
+  below the 10 kT warning.
+- On the refined 2D mesh, DG still stops at point 5 with the default `max_cuts`. With 8 it completes, the
+  largest |Λ| 4.2 kT.
+- The stronger, cited coefficient moves the refined DG V_th from +4.4 mV to +8.3 mV above classical
+  (+1.4 mV above MLDA).
+- QV13: DG costs 2.7× per iteration in 2D and 4.2× in 3D, unchanged. The refined case's 910 s again includes
+  the failed cut attempts.
+- **The FinFET is dropped (owner, 2026-11-20: "dont run on finfet, run on mosfet").**
+  - The classical and MLDA FinFET runs completed: 446 s and 397 s, on the placeholder build.
+  - The DG run was first refused, correctly (QP5): the deck's `insulator` spacer has no band data.
+  - With band data added to the run deck (Si₃N₄ and HfO₂, Robertson 2000), it ran 19 min without finishing
+    point 1 and was stopped. That is a cost finding, not a verdict.
+  - The FinFET is not gated (QP14). The example deck's spacer would need band data for DG (QP10 says so).
+
+**Ruling (2026-11-20, owner "choose recommended for γ for QV6"): QR4 (a) stands.**
+- The default stays the cited theoretical coefficient, γ = 1 with m_n = 0.328. No calibrated default is
+  shipped (TVM2).
+- QV6 stays recorded as a **fail** on the threshold shift: DG gives 78–82% of SP's shift, missing by
+  10.2–21.8 mV against the 10 mV bound. It passes on N_inv and the centroid.
+- The gated test keeps its 10 mV check, so `[.dg_validation]` reports the miss whenever it is run. It is
+  hidden and not in ctest.
+- A deck may set `dg_gamma_n` / `dg_mass_n`, and the run record always reports them. That is the place for a
+  user's calibration, not the default.
+- The bound is not loosened. Loosening it would be a new owner ruling, by name.
 ## New questions the advisor raised (not yet in `ARCHITECTURE.md`)
 
 None of these is decided. Each needs an owner position before the build scaffold fixes the flags.

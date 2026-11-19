@@ -212,6 +212,7 @@ struct SystemData {
     // The storage of a semiconductor node and its derivatives d S_n / dn, d S_p / dp.
     struct NodeStorage {
         double n, d_n, p, d_p;
+        double d_ln = 0.0, d_lp = 0.0;  // density gradient (Unit 62): d S / d Lambda (incomplete ionization)
     };
     [[nodiscard]] NodeStorage node_storage(std::size_t i, std::span<const double> x,
                                            std::span<const NodeDegeneracy> g) const;
@@ -252,6 +253,9 @@ struct SystemData {
         double field;    // [V/cm] per unit (psi_b - psi_a): V_T / length
         double current;  // [A/cm^2] per unit scaled flux: J0 / scaled coupling area
         std::size_t n_p, p_n;
+        // Density gradient (Unit 62): the node's electron row with the other end's Lambda_p
+        // column and its hole row with the other end's Lambda_n column (0 with the model off).
+        std::size_t n_lp = 0, p_ln = 0;
     };
 
     // Local band-to-band tunnelling (Unit 20): per node, its carrier edges (in field_edges_) and
@@ -565,6 +569,38 @@ struct SystemData {
     [[nodiscard]] std::optional<base::Error> make_energy_balance(SystemState& st,
                                                                  const device::Device& device,
                                                                  const PhysicsModels& models);
+
+    // Density gradient (Unit 62; DECISIONS.md QP2-QP5, QP8, QP13; density_gradient.cpp). The
+    // quantum potentials Lambda_n / kT and Lambda_p / kT are unknowns after psi, n, p (stride 5) or,
+    // at thermal equilibrium, after psi alone (stride 3); every branch reads this flag and the
+    // slots below, never the stride. beta / L_D^2 per carrier, the barrier terms per node
+    // (scaled_device.hpp), and per mesh edge (parallel to edges_) its geometry g = coupling area /
+    // length / L_D^(D-2) and, on carrier edges, the Jacobian positions of row a with the columns of
+    // b (ab) and of row b with a's (ba): drift-diffusion (Lambda_n, n), (Lambda_p, p),
+    // (n, Lambda_n), (p, Lambda_p); equilibrium (Lambda_n, psi), (Lambda_n, Lambda_n),
+    // (Lambda_p, psi), (Lambda_p, Lambda_p). Per interface edge, the insulator node's Poisson row
+    // with the semiconductor node's Lambda_n and Lambda_p columns (drift-diffusion).
+    bool density_gradient_ = false;
+    bool dg_impact_ = false;  // impact ionization on (its cross-carrier entries)
+    double dg_beta_n_ = 0.0, dg_beta_p_ = 0.0;
+    std::vector<double> dg_barrier_n_, dg_barrier_p_, dg_geometry_;
+    struct DgEdge {
+        std::size_t ab[4], ba[4];
+    };
+    std::vector<DgEdge> dg_edges_;
+    std::vector<std::pair<std::size_t, std::size_t>> interface_lambda_;
+    [[nodiscard]] bool density_gradient() const noexcept { return density_gradient_; }
+    // The slots of Lambda_n and Lambda_p in a node block.
+    [[nodiscard]] std::size_t lambda_n_slot() const noexcept { return equilibrium_ ? 1 : 3; }
+    [[nodiscard]] std::size_t lambda_p_slot() const noexcept { return equilibrium_ ? 2 : 4; }
+    // The pattern entries beyond every node's full block and the edges' stencil (both
+    // formulations; with dg_impact_ the cross-carrier entries of impact ionization), and their
+    // positions (after the impact edges are made).
+    void density_gradient_pattern(std::vector<linalg::Triplet>& t) const;
+    void locate_density_gradient(const linalg::SparseMatrix& pattern);
+    // Node i's statistics with its quantum potentials at x (InterfaceStatistics; drift-diffusion).
+    [[nodiscard]] InterfaceStatistics statistics(std::size_t node,
+                                                 std::span<const double> x) const noexcept;
 
     // Thermal equilibrium (Unit 57 GE5; equilibrium.cpp, equilibrium.hpp): psi alone (m_ = 1),
     // the terms of equilibrium_table. Of the data only the scaled device's tables are filled;

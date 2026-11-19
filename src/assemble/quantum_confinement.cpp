@@ -7,6 +7,7 @@
 #include <utility>
 #include <variant>
 
+#include "NiTCAD/physics/insulator.hpp"
 #include "NiTCAD/physics/quantum_confinement.hpp"
 #include "NiTCAD/physics/semiconductor.hpp"
 
@@ -111,6 +112,67 @@ std::expected<ConfinementFactors, base::Error> mlda_factors(const device::Device
         c.f_p[i] = physics::mlda_factor(c.distance_cm[i], c.wavelength_p_cm);
     }
     return c;
+}
+
+std::expected<void, base::Error> check_density_gradient(const device::Device& device,
+                                                        const PhysicsModels& models) {
+    const auto no = [](std::string message) {
+        return std::unexpected(base::Error{base::ErrorCode::invalid_input,
+                                           "quantum_confinement density_gradient: " + std::move(message),
+                                           {}});
+    };
+    for (const double x : {models.dg_mass_n, models.dg_mass_p, models.dg_gamma_n, models.dg_gamma_p}) {
+        if (!(std::isfinite(x) && x > 0.0)) return no("the masses and gammas must be finite and positive");
+    }
+    if (models.electrothermal) return no("electrothermal is not supported");
+    if (models.energy_balance) return no("energy_balance is not supported");
+    if (models.btbt_nonlocal != NonlocalTunnelling::off) {
+        return no("nonlocal band-to-band tunnelling is not supported");
+    }
+    for (const device::Contact& contact : device.contacts()) {
+        if (contact.tunnelling != 0) return no("gate tunnelling is not supported");
+        if (contact.kind == device::ContactKind::schottky) return no("a Schottky contact is not supported");
+        if (contact.kind == device::ContactKind::gate) {
+            const device::GateStack& g = contact.gate;
+            if (!(g.oxide_band_gap_eV > 0.0) &&
+                g.oxide_relative_permittivity != physics::silicon_dioxide_parameters.eps_r) {
+                return no("a lumped gate's stack has no band data and is not SiO2 (the barrier "
+                          "penetration needs its band offset and mass)");
+            }
+        }
+    }
+    for (const device::Region& r : device.regions()) {
+        if (const auto* s = std::get_if<physics::Semiconductor>(&r.material)) {
+            if (!(s->parameters().electron_mobility == physics::silicon_parameters.electron_mobility &&
+                  s->parameters().hole_mobility == physics::silicon_parameters.hole_mobility)) {
+                return no("region '" + r.name + "' is not silicon (the masses are silicon's)");
+            }
+        } else {
+            const auto& p = std::get<physics::Insulator>(r.material).parameters();
+            if (!physics::has_band_data(p) && !(p == physics::silicon_dioxide_parameters)) {
+                return no("insulator region '" + r.name +
+                          "' has no band data (the barrier penetration needs its band offset and mass)");
+            }
+        }
+    }
+    const auto node_region = device.node_region();
+    for (const mesh::Edge& e : device.mesh().edges()) {
+        const device::RegionId ra = node_region[static_cast<std::size_t>(e.first)];
+        const device::RegionId rb = node_region[static_cast<std::size_t>(e.second)];
+        if (ra != rb && device.transport(ra, rb) == device::InterfaceTransport::thermionic_emission) {
+            return no("a thermionic-emission interface is not supported");
+        }
+    }
+    return {};
+}
+
+
+std::optional<base::Error> density_gradient_adaptation_refused(const PhysicsModels& models) {
+    if (models.quantum_confinement != QuantumConfinement::density_gradient) return std::nullopt;
+    return base::Error{base::ErrorCode::invalid_input,
+                       "quantum_confinement density_gradient: mesh adaptation does not transfer the "
+                       "quantum potentials",
+                       {}};
 }
 
 }  // namespace NiTCAD::assemble

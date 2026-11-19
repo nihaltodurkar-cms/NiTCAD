@@ -407,6 +407,18 @@ std::expected<SystemData::Made, base::Error> SystemData::make_drift_diffusion(
     // The system's equations and unknowns from the device and the models (Unit 40,
     // composition.hpp): psi, n, p per node, and with the electrothermal model the temperature rise
     // last; every node and edge block is then full 4 x 4.
+    // Density gradient (Unit 62): its coefficients, barrier terms and edge geometry; the fields
+    // and terms follow from the flag (composition.hpp).
+    if (models.quantum_confinement == QuantumConfinement::density_gradient) {
+        s.density_gradient_ = true;
+        s.dg_impact_ = models.impact_ionization;
+        s.dg_beta_n_ = scaled->dg_beta_n;
+        s.dg_beta_p_ = scaled->dg_beta_p;
+        s.dg_barrier_n_ = std::move(scaled->dg_barrier_n);
+        s.dg_barrier_p_ = std::move(scaled->dg_barrier_p);
+        s.dg_geometry_.reserve(scaled->edges.size());
+        for (const detail::ScaledEdge& e : scaled->edges) s.dg_geometry_.push_back(e.geometry);
+    }
     s.composition_ = SystemData::Composition::compose(s, st, models, extension);
     s.m_ = s.composition_->dofs().block();
     s.electrothermal_ = models.electrothermal;
@@ -731,6 +743,7 @@ std::expected<SystemData::Made, base::Error> SystemData::make_drift_diffusion(
         }
     }
     s.generation_ = !s.impact_nodes_.empty() || models.btbt_local || nonlocal;
+    if (s.density_gradient_) s.locate_density_gradient(st.pattern_);
     for (const InterfaceEdge& f : s.interfaces_.edges()) {
         s.interface_np_.emplace_back(
             detail::position(st.pattern_, stride * f.insulator, stride * f.semiconductor + 1),
@@ -816,6 +829,29 @@ std::vector<double> System::state_from_potential(std::span<const double> psi) co
     return x;
 }
 
+std::vector<double> System::state_from_quantum_potential(std::span<const double> psi,
+                                                         std::span<const double> lambda_n,
+                                                         std::span<const double> lambda_p) const {
+    const SystemData& d = *data_;
+    NITCAD_EXPECTS(!d.equilibrium_ && d.density_gradient_ && psi.size() == node_count() &&
+                   lambda_n.size() == node_count() && lambda_p.size() == node_count());
+    std::vector<double> x(unknowns());
+    for (std::size_t i = 0; i < node_count(); ++i) {
+        const double eta = psi[i] + d.band_shift_[i];
+        x[d.m_ * i] = psi[i];
+        if (d.insulator_[i] != 0) continue;  // stamped below
+        x[d.m_ * i + 1] =
+            detail::density(d.fermi_dirac_, d.n_ie_[i], d.log_dos_n_[i], eta - lambda_n[i]).density;
+        x[d.m_ * i + 2] =
+            detail::density(d.fermi_dirac_, d.n_ie_[i], d.log_dos_p_[i], -eta - lambda_p[i])
+                .density;
+        x[d.m_ * i + d.lambda_n_slot()] = lambda_n[i];
+        x[d.m_ * i + d.lambda_p_slot()] = lambda_p[i];
+    }
+    stamp_contacts(x);
+    return x;
+}
+
 void System::stamp_contacts(std::span<double> x) const {
     NITCAD_EXPECTS(!data_->equilibrium_ && x.size() == unknowns());
     if (data_->electrothermal()) {
@@ -847,6 +883,11 @@ void System::stamp_contacts(std::span<double> x) const {
         // Unit 52 (ED1): the carriers at the lattice temperature on contacts and insulators.
         if (data_->energy_balance_ && (data_->insulator_[i] != 0 || data_->contact_[i] >= 0)) {
             x[5 * i + 3] = x[5 * i + 4] = 0.0;
+        }
+        // Unit 62 (QP4): the quantum potentials held at 0 on contacts and insulators.
+        if (data_->density_gradient_ && (data_->insulator_[i] != 0 || data_->contact_[i] >= 0)) {
+            x[data_->m_ * i + data_->lambda_n_slot()] = 0.0;
+            x[data_->m_ * i + data_->lambda_p_slot()] = 0.0;
         }
         if (data_->insulator_[i] != 0) {
             if (data_->electrode_[i] >= 0) x[data_->m_ * i] = state_->psi0_[i];
@@ -905,6 +946,12 @@ std::pair<EdgeFlux, EdgeFlux> SystemData::edge_fluxes(
         delta_n += g[e.b].n.log_gamma - g[e.a].n.log_gamma;
         delta_p -= g[e.b].p.log_gamma - g[e.a].p.log_gamma;
     }
+    // Density gradient (Unit 62, QP2): electrons see psi - Lambda_n, holes psi + Lambda_p.
+    const bool dg = density_gradient_;
+    if (dg) {
+        delta_n -= x[m_ * e.b + 3] - x[m_ * e.a + 3];
+        delta_p += x[m_ * e.b + 4] - x[m_ * e.a + 4];
+    }
     // Unit edge factors when the Canali or Lombardi factor follows (never on a thermionic edge).
     const bool unit_factor = field_mobility_ || e.surface;
     EdgeFlux fn = e.thermionic ? thermionic_electron_flux(e.te_kn, delta_n, e.te_log_nc,
@@ -921,6 +968,10 @@ std::pair<EdgeFlux, EdgeFlux> SystemData::edge_fluxes(
         fn.d_c2 += fn.d_psi2 * g[e.b].n.d_density;
         fp.d_c1 += fp.d_psi2 * g[e.a].p.d_density;
         fp.d_c2 -= fp.d_psi2 * g[e.b].p.d_density;
+    }
+    if (dg) {  // d flux / d delta, before an edge factor a(E) scales it
+        fn.d_delta = fn.d_psi2;
+        fp.d_delta = fp.d_psi2;
     }
     if (slope != nullptr) *slope = SurfaceSlope{};
     if (!unit_factor || e.thermionic) return {fn, fp};
@@ -980,7 +1031,8 @@ std::pair<EdgeFlux, EdgeFlux> SystemData::edge_fluxes(
         const double a = a0 * (mu.mobility / mu0);
         const double da = a0 * (mu.d_dE / mu0) * dE;
         return EdgeFlux{a * unit.flux, a * unit.d_psi1 - unit.flux * da,
-                        a * unit.d_psi2 + unit.flux * da, a * unit.d_c1, a * unit.d_c2};
+                        a * unit.d_psi2 + unit.flux * da, a * unit.d_c1, a * unit.d_c2,
+                        a * unit.d_delta};
     };
     const Mobility mn = mobility(physics::Carrier::electron, e.mu_n, e.mu_n_a, e.mu_n_b, e.sat_n,
                                  e.sat_n_b);
@@ -1020,8 +1072,9 @@ physics::SurfaceMobility SystemData::surface_end(physics::Carrier carrier, doubl
 
 void SystemData::locate_surface(const linalg::SparseMatrix& pattern) {
     // Rows electron, hole and (electrothermal) heat of each end with psi_j's column; with energy
-    // balance (stride 5, Unit 52) electron, hole, tau_n and tau_p.
-    const std::size_t rows = m_ == 5 ? 4 : electrothermal() ? 3 : 2;
+    // balance (stride 5, Unit 52) electron, hole, tau_n and tau_p (energy_balance_ is set after this
+    // runs; density gradient, stride 5 too, adds no surface-mobility rows).
+    const std::size_t rows = m_ == 5 && !density_gradient_ ? 4 : electrothermal() ? 3 : 2;
     for (const EdgeTerm& e : edges_) {
         for (std::size_t k = e.surface_first; k < e.surface_last; ++k) {
             SurfaceStencil& j = surface_stencil_[k];
@@ -1040,25 +1093,30 @@ SystemData::NodeStorage SystemData::node_storage(
     const double n = x[m_ * i + 1], p = x[m_ * i + 2];
     NodeStorage s{n, 1.0, p, 1.0};
     if (!ionization_) return s;
-    // S_n = n - N_D+(eta_c), S_p = p - N_A-(eta_v), with eta_c and eta_v as the Poisson row's.
+    // S_n = n - N_D+(eta_c), S_p = p - N_A-(eta_v), with eta_c and eta_v as the Poisson row's. With density
+    // gradient eta_c + Lambda_n and eta_v + Lambda_p (Unit 62: the dopant levels stay classical).
     const physics::DopantLevels& l = levels_[i];
     if (donors_[i] > 0.0) {
         const double ln = fermi_dirac_ ? g[i].n.log_gamma : 0.0;
         const double wn = fermi_dirac_ ? g[i].n.d_density : 0.0;
+        double eta_c = std::log(n / n_ie_[i]) - ln - log_dos_n_[i];
+        if (density_gradient_) eta_c += x[m_ * i + 3];
         const physics::IonizedDensity d = physics::ionized_density(
-            donors_[i], std::log(n / n_ie_[i]) - ln - log_dos_n_[i], l.donor_kT,
-            l.donor_degeneracy, l.donor_bound);
+            donors_[i], eta_c, l.donor_kT, l.donor_degeneracy, l.donor_bound);
         s.n -= d.value;
         s.d_n -= d.d_eta * (1.0 / n - wn);
+        s.d_ln = -d.d_eta;  // 0 unless density gradient reads it
     }
     if (acceptors_[i] > 0.0) {
         const double lp = fermi_dirac_ ? g[i].p.log_gamma : 0.0;
         const double wp = fermi_dirac_ ? g[i].p.d_density : 0.0;
+        double eta_v = std::log(p / n_ie_[i]) - lp - log_dos_p_[i];
+        if (density_gradient_) eta_v += x[m_ * i + 4];
         const physics::IonizedDensity a = physics::ionized_density(
-            acceptors_[i], std::log(p / n_ie_[i]) - lp - log_dos_p_[i], l.acceptor_kT,
-            l.acceptor_degeneracy, l.acceptor_bound);
+            acceptors_[i], eta_v, l.acceptor_kT, l.acceptor_degeneracy, l.acceptor_bound);
         s.p -= a.value;
         s.d_p -= a.d_eta * (1.0 / p - wp);
+        s.d_lp = -a.d_eta;
     }
     return s;
 }
@@ -1075,7 +1133,7 @@ InterfaceDrift SystemData::interface_at(std::size_t k, std::span<const double> x
     const InterfaceEdge& v = interfaces_.edges()[k];
     const std::size_t o = v.insulator, s = v.semiconductor;
     const std::optional<TrapStep> t = trap_step(k, step);
-    return interfaces_.drift(v, x[m_ * o], x[m_ * s], x[m_ * s + 1], x[m_ * s + 2], statistics(s),
+    return interfaces_.drift(v, x[m_ * o], x[m_ * s], x[m_ * s + 1], x[m_ * s + 2], statistics(s, x),
                              t ? &*t : nullptr);
 }
 
@@ -1086,6 +1144,7 @@ void System::assemble(std::span<const double> x, std::span<double> f, std::span<
         return;
     }
     NITCAD_EXPECTS(x.size() == unknowns() && f.size() == unknowns());
+    // Density gradient (Unit 62, QP11): its Lambda rows carry no storage (index 1, as Poisson).
     NITCAD_EXPECTS(step == nullptr || (!data_->equilibrium_ &&
                                        step->storage.size() == storage_width() * node_count() &&
                                        step->traps.size() == trap_slots()));
@@ -1186,7 +1245,7 @@ std::vector<double> SystemData::trap_occupancies(const SystemState& /*st*/, std:
         const std::optional<TrapStep> t = trap_step(k, step);
         interfaces_.occupancies(
             v, x[m_ * o], x[m_ * s], x[m_ * s + 1], x[m_ * s + 2],
-            statistics(s), t ? &*t : nullptr,
+            statistics(s, x), t ? &*t : nullptr,
             std::span(f).subspan(interfaces_.slot_offset(k), v.last_level - v.first_level));
     }
     detail::observe("trap_occupancies", f);
@@ -1293,6 +1352,13 @@ double System::update_size(std::span<const double> x, std::span<const double> dx
             }
         }
     }
+    if (data_->density_gradient_) {  // Unit 62 (QP9): the quantum potentials, as psi
+        for (std::size_t i = 0; i < node_count(); ++i) {
+            for (const std::size_t k : {data_->m_ * i + 3, data_->m_ * i + 4}) {
+                size = std::max(size, std::abs(dx[k]));
+            }
+        }
+    }
     if (data_->built_in_ < data_->m_) {  // Unit 57 GG8: an extension's unknowns, as psi
         for (std::size_t i = 0; i < node_count(); ++i) {
             for (std::size_t k = data_->built_in_; k < data_->m_; ++k) {
@@ -1313,6 +1379,10 @@ double System::natural_size(std::span<const double> x_ref, std::span<const doubl
         const bool psi_held = data_->contact_[i] >= 0 || data_->schottky_[i] >= 0 ||
                               (data_->insulator_[i] != 0 && data_->electrode_[i] >= 0);
         if (k == 0) return psi_held;
+        if (data_->density_gradient_ &&
+            (k == data_->lambda_n_slot() || k == data_->lambda_p_slot())) {  // Unit 62: as psi
+            return data_->insulator_[i] != 0 || data_->contact_[i] >= 0;
+        }
         if (data_->equilibrium_ || k >= data_->built_in_) return false;  // extensions: as psi
         if (k <= 2) return data_->insulator_[i] != 0 || data_->contact_[i] >= 0;
         if (data_->electrothermal()) {  // the rise, held on an isothermal sink
@@ -1388,6 +1458,13 @@ void System::apply_update(std::span<double> x, std::span<const double> dx,
         if (data_->insulator_[i] != 0) continue;  // the densities stay 0
         for (const std::size_t k : {data_->m_ * i + 1, data_->m_ * i + 2}) {
             x[k] = std::clamp(x[k] + dx[k], 0.1 * x[k], 10.0 * x[k]);
+        }
+    }
+    if (data_->density_gradient_) {  // Unit 62 (QP9): the quantum potentials, as psi
+        for (std::size_t i = 0; i < node_count(); ++i) {
+            for (const std::size_t k : {data_->m_ * i + 3, data_->m_ * i + 4}) {
+                x[k] += std::clamp(dx[k], -max_update, max_update);
+            }
         }
     }
     if (data_->built_in_ < data_->m_) {  // Unit 57 GG8: an extension's unknowns, as psi
@@ -1586,6 +1663,10 @@ BandEdges SystemData::band_edges(const SystemState& /*st*/, std::span<const doub
         b.valence[i] = e.valence;
         b.electron_fermi[i] = e.electron_fermi;
         b.hole_fermi[i] = e.hole_fermi;
+        if (density_gradient_) {  // Unit 62 QP12: n = N_c F(E_Fn - E_c - Lambda_n), so E_Fn gains Lambda_n
+            b.electron_fermi[i] += x[m_ * i + 3];
+            b.hole_fermi[i] -= x[m_ * i + 4];
+        }
     }
     detail::observe("band_edges.conduction", b.conduction);
     detail::observe("band_edges.valence", b.valence);
@@ -1674,6 +1755,10 @@ void System::small_signal_matrix(std::span<const double> x, std::complex<double>
             const SystemData::NodeStorage st = data_->node_storage(i, x, g);
             at(i, 1, 1) -= s * (data_->volume_[i] * st.d_n);
             at(i, 2, 2) += s * (data_->volume_[i] * st.d_p);
+            if (data_->density_gradient_ && data_->ionization_) {  // Unit 62: the dopants read Lambda
+                at(i, 1, 3) -= s * (data_->volume_[i] * st.d_ln);
+                at(i, 2, 4) += s * (data_->volume_[i] * st.d_lp);
+            }
             if (data_->energy_balance_) {  // Unit 52 (ED9): the energy rows' storage, -V s dW
                 const SystemData::EnergyStorage w = data_->energy_storage(i, x);
                 at(i, 3, 1) -= s * (data_->volume_[i] * w.n_c);
@@ -2237,6 +2322,17 @@ std::vector<TunnelPathState> SystemData::path_states(const SystemState& st, std:
 
 InterfaceStatistics SystemData::statistics(std::size_t node) const noexcept {
     return {fermi_dirac_, n_ie_[node], log_dos_n_[node], log_dos_p_[node], band_shift_[node]};
+}
+
+InterfaceStatistics SystemData::statistics(std::size_t node,
+                                           std::span<const double> x) const noexcept {
+    InterfaceStatistics s = statistics(node);
+    if (density_gradient_) {
+        s.density_gradient = true;
+        s.lambda_n = x[m_ * node + lambda_n_slot()];
+        s.lambda_p = x[m_ * node + lambda_p_slot()];
+    }
+    return s;
 }
 
 }  // namespace NiTCAD::assemble

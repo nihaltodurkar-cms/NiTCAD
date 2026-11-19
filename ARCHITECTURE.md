@@ -1815,6 +1815,28 @@ RD1–RD7, RG1–RG9):**
   resume record bit for bit. A trace checkpoint is still a steady point for a sweep or for `initial`. A restarted
   run's files hold the steps after the checkpoint, the first being the checkpoint's own (RQ8).
 
+**As built (Unit 62, density-gradient confinement: input, results and restart; DECISIONS.md QP1, QP9, QP11–QP12,
+QV11–QV12):**
+- **`[models]` keys.**
+  - `quantum_confinement = density_gradient` is the third value of the Unit 47 key, so it excludes MLDA by
+    construction.
+  - `dg_mass_n` defaults to 0.328, `dg_mass_p` to 0.49, and `dg_gamma_n` and `dg_gamma_p` to 1. These are
+    QP0's cited defaults.
+  - The run record names the model, the masses, γ, each insulator's penetration lengths and the continuation
+    rungs used.
+- **Results (6.6).**
+  - Fields files carry `quantum_potential_n` and `quantum_potential_p` (Λ in eV); small-signal fields files
+    carry them too.
+  - `analysis::compare` tallies Λ at the potential tolerance.
+  - Plot and app fields: `Ln`, `Lp`, `Ec_eff` and `Ev_eff`, listed only when a result has Λ.
+  - `results::RunRecord::warnings` holds the QP9 continuation note and the QP15 coarse-mesh scan (|Λ| > 10 kT
+    in the bulk). The CLI prints them as `warning: …`.
+- **Checkpoints and restart.**
+  - A checkpoint holds Λ with the state. A restart whose `[models]` confinement differs from the checkpoint's
+    is refused in all four restart paths.
+  - A sweep restart meets Unit 61's steady standard, 1e-9 (QV12, ruled (a)). A transient resume is bit for bit.
+- **Refused.** Mesh adaptation of a density-gradient run: the field transfer does not carry Λ.
+
 ### 6.6 Result representation
 
 `results` holds fields indexed by mesh node, terminal quantities per bias point, and a run record
@@ -3469,7 +3491,7 @@ exists, not finished), **planned** (nothing built). Audit of 2026-10-09, against
 | Adaptive mesh refinement | `solve::adapt` over tensor, generated 2D and swept 3D meshes: feature indicators, goal-adjoint weighting and estimate, Richardson verification on M′, per-goal certificates, the `[adapt]` deck section and `.nitadapt` report; an opt-in decision layer (`policy = intelligent`: a priori sizes, benefit and cost estimates, allocation, fallback to the basic loop) (Unit 17, 6.12.4) | **Built** (Unit 17, on `mesh/adaptive-refinement`; slice 7 gates: AC5 met with the intelligent policy, 98 593 nodes against at least 890 k uniform; AC11, AC12, AC20 met). **Limitations (unmet as frozen, never loosened):** AC14 (the a priori prediction's recall 0.51 on the tensor MOSFET, DOFs 2.1× and 2.3× basic on the diode and MOS-C, no pass saved); AC15 (a hole-density order 1.64 from 2 samples; the cost model not better than node-only within timing noise); AC16 (the well MOSFET's tolerance mode 1.92× basic's DOFs; the tensor MOSFET's budget mode a tie, 0.6531% against 0.6507%); AC8's target (UC8's rule at 9 and 6 of 17 points within its budget; the swept adjoint estimate 9–84× the actual error); the basic loop does not reach 1% on the generated MOSFET in 12 passes; AD11's verified error underestimated one error 26× at p = 2.18. **Cross-run learning (Unit 17b, built on `mesh/cross-run-learning`; opt-in `predictor`):** AC12, AC21 and AC19's determinism, versioning, identity, fallback and bit-identity clauses met; held-out rank correlation 0.40 against ridge 0.16. **Limitation (unmet as frozen):** AC19's family clause on held-out m6 (4 passes against 5, but 12 000 DOFs against ID2's 10 476); met on m7 (4 against 5, 10 260 against 15 561). **Derived goals (Unit 17c, built on `mesh/derived-goals`; `goal = vt|gm|swing`):** DC3 and DC5 met for V_T, g_m and the swing on the tensor MOSFET. **Limitations:** DC4 for the swing (1.52× the DOFs of a tightened current goal, and about 0.65× of the uniform ladder against 1/3: accepted by the owner, 2026-11-15); two-level verification (DR6) still misses an error that appears only beyond M″ | the swept 3D adjoint estimate; general 3D meshes (AQ2); a shipped pre-trained predictor (LQ1 c) |
 | Visualization, GUI, batch | The `nitcad check|run|plot` batch runner over the input deck (Unit 31); the `render` layer and `nitcad plot` (Unit 25a, 6.14); rates and the mesh digest in results (Unit 45, 6.6); \|E\|, \|J\|, isosurfaces and streamlines (Unit 25b, 6.14); arrows, clipping, exploded views and filmstrips (Unit 25c, 6.14); the Windows application `nitcad-app` (Unit 26, 6.14); its analysis workspace (Unit 26b, 6.14); the 25b/25c views, region visibility, playback and clip sliders in the window (Unit 26c, 6.14) | **Batch runner verified, on `main`** (Unit 31; `6f67510`, PR #37); **core visualization verified, on `main`** (Unit 25a; `6d2135b`, PR #55); **rates and digest verified, on `main`** (Unit 45; `81622ca`, PR #56); **derived fields verified, on `main`** (Unit 25b; `8256cf8`, PR #57); **arrows, clipping, exploded views and filmstrips verified** (Unit 25c); **the GUI verified, on `main`** (Unit 26; `e9b1d71`, PR #59); **the analysis workspace verified, on `main`** (Unit 26b; `51face0`, PR #60); **the GUI catch-up verified** (Unit 26c, PR #61; the WG1 spikes open) | the WG1 spikes (cause unknown; the input cause fixed in Unit 26c) |
 | Validation against published/measured data | Legacy, analytic and convergence gates throughout; resistivity against dopant density (NBS SP 400-64) and the measured n_i(300 K) as benchmark decks (Unit 33, 10.1) | **Verified, on `main`** (Unit 33; `a14ac96`, PR #41): gaps found and pinned (boron mobility up to +48%, incomplete ionization at heavy doping, n_i +10%); the opt-in Masetti hole mobility (Unit 34; `e14a53f`, PR #42) brings boron to within 11% (AC3/AC5 at 1e18 accepted as documented limitations); Unit 35 (`2d1fdc7`, PR #44) makes Masetti and a published band set (n_i within the measurement's uncertainty) the defaults | A density-dependent ionization level (owner decision); breakdown and device-level benchmarks from accessible sources |
-| Nanoscale device physics | Classical drift-diffusion: carriers peak at the insulator interface (MLDA moves the peak inside, opt-in, Unit 47), mobility from doping (Masetti) and lateral field (Canali); Lombardi surface mobility opt-in (Unit 46); gate tunnelling through insulators opt-in (Unit 51, 6.4) | **Lombardi surface mobility verified, opt-in, on `main`** (Unit 46; `51c2da9`, PR #64); **MLDA quantum confinement verified, opt-in, on `main`** (Unit 47; `329f203`, PR #66); **gate tunnelling verified, opt-in** (Unit 51, on `physics/gate-tunnelling`); **energy balance verified, opt-in** (Unit 52, on `physics/energy-balance`; not run on the FinFET deck); the rest **planned** (gap found by the FinFET deck, 2026-10-23; below) | Energy balance with the refused combinations (below), density-gradient confinement; no unit named |
+| Nanoscale device physics | Classical drift-diffusion: carriers peak at the insulator interface (MLDA moves the peak inside, opt-in, Unit 47), mobility from doping (Masetti) and lateral field (Canali); Lombardi surface mobility opt-in (Unit 46); gate tunnelling through insulators opt-in (Unit 51, 6.4) | **Lombardi surface mobility verified, opt-in, on `main`** (Unit 46; `51c2da9`, PR #64); **MLDA quantum confinement verified, opt-in, on `main`** (Unit 47; `329f203`, PR #66); **gate tunnelling verified, opt-in** (Unit 51, on `physics/gate-tunnelling`); **energy balance verified, opt-in** (Unit 52, on `physics/energy-balance`; not run on the FinFET deck); **density-gradient confinement built, opt-in** (Unit 62, on `physics/density-gradient`; QV6 threshold shift a recorded fail); the rest **planned** (gap found by the FinFET deck, 2026-10-23; below) | Energy balance with the refused combinations (below); density gradient with adaptation and the refused models (Unit 62); no unit named |
 
 **As built (Unit 28, bias step cutting; `solve::StepControl` in `solve/bias.hpp`; DECISIONS.md S1–S7):**
 - When a sweep point does not converge, the bias step to it is retried from the last converged state, halved until a
@@ -3629,6 +3651,31 @@ GE1–GE7, GG1–GG9; accepted by the owner 2026-11-18):**
   the residual was at rounding, which stopped the FinFET deck with MLDA at 0.35 V; it now takes the full step there,
   and the minority-density floor of uncontacted n+ under an oxide (1–4e-8 with Lombardi) has the opt-in
   `minority_floor` (DECISIONS.md Unit 47, limitations; Unit 50).
+  **Density gradient built as Unit 62** (on `physics/density-gradient`; opt-in `[models] quantum_confinement =
+  density_gradient`; DECISIONS.md QP0–QP15, QV1–QV15).
+  - **Unknowns.** Λn and Λp (in kT) are Newton unknowns: drift-diffusion stride 5, equilibrium stride 3.
+  - **Equations.**
+    - Λ/kT = −β ∇²√c/√c, with β = γħ²/(6 m kT).
+    - The row is Wettstein et al.'s ratio-form box row, with an exact Jacobian.
+    - At insulator interfaces, analytic barrier penetration x_p = ħ/√(2 m_ox ΔE) from the Unit 51 band data
+      (a Robin term). Ohmic contacts take Λ = 0.
+    - A continuation ladder in γ is used where Newton from Λ = 0 fails (QP9).
+  - **Defaults (QP0).** γ = 1 and m_n = 0.328, from the cited theory: Ancona–Iafrate 1989 eq. (3.12) and
+    Ancona 2000 p. 1451, m*r ≈ 1. No fitted default.
+  - **Scope.** Works for equilibrium, sweeps, transient, small signal and traces. Refused with electrothermal,
+    energy balance, thermionic interfaces, Schottky contacts, gate tunnelling, nonlocal BTBT, non-silicon
+    semiconductors and insulators without band data. Mesh adaptation is refused.
+  - **Verified against an in-house 1D Schrödinger–Poisson reference** (`verify/reference/schrodinger_poisson`)
+    on MOS-Cs with 1.5 and 5 nm oxide at 1e17 and 1e18.
+    - Inversion charge within +1.2–4.8% and centroid within 0.2 nm: pass.
+    - Threshold shift 78–82% of the reference's, missing by 10–22 mV against Ancona's published 10 mV:
+      **recorded fail**. The theoretical γ is kept by ruling, and a deck may calibrate `dg_gamma_*`.
+    - Mesh convergence: 7e-5. The γ → 0 and x_p → 0 limits hold (QV7, QV8).
+  - **Examples (QV13, QV15).**
+    - On the MOSFETs, DG costs 2.7× (2D) and 4.2× (3D) per Newton iteration.
+    - On the refined 2D mesh it needs `max_cuts = 8`. There V_th is +8.3 mV and I_on −1.2% against
+      classical.
+    - The FinFET is not run (the owner, 2026-11-20). Its nitride spacer would need band data.
 - **Surface-roughness mobility** (physics, assemble). A mobility reduction with the field normal to the
   interface: Lombardi's acoustic-phonon and surface-roughness terms, combined by Matthiessen's rule with the
   doping and lateral-field mobility. Without it, inversion-layer mobility is overestimated and the current above
