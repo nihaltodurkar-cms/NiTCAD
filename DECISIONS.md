@@ -749,6 +749,12 @@ ARCHITECTURE entry. (Originally four slices, with AO as 26g·2; renumbered after
 - MG7, on the RTX 5060 Ti by KG6's method: 26g enhanced 5.48 ms against 26f's 5.56 ms (medians of 50), so **0.99×**
   (bound 1.25×). 26f's draw is the same scene with matte batches and no shadow: exactly 26f's triangles and lines. On
   WARP it is 1.08×, recorded only. KG6 still holds at 1.04× classic (bound 1.10×).
+- CI fix (PR #92, 2026-11-19). The CI runner's "Microsoft Basic Render Driver" (vendor 0x1414, device 0x8c) is WARP
+  behind a display adapter, but it is not flagged as software. `Adapter::hardware` picked it, so the hardware-adapter
+  tests ran on WARP and failed: KG6 at 1.59× in Debug and 1.26× in Release. The hardware search now skips it, so those
+  tests skip on CI as the KG6 (b) ruling intended. Owner ruling: KG6's edges bound (< 50 ms) is checked in Release only.
+  The unoptimised Debug build took 113 ms on CI (Release: 4.9 ms on CI, 1.9 ms on the RTX machine), and Debug now only
+  records the time.
 - MG9, hand mutants (as amended by MQ8 and MQ9): **8 of 8 killed**. Each was run alone on a clean rebuild, with its
   target tests passing on unmutated code both before and after.
 

@@ -246,7 +246,10 @@ TEST_CASE("app window 26f: the enhanced look's edges are built with the scene, u
     const double edges = median_of(build);
     WARN("KG6: edges built in " << edges << " ms (median of 21, " << points / 2 << " segments, "
                                 << w->workspace()->device->mesh().node_count() << " nodes)");
+    // Release only (owner, 2026-11-19): the unoptimised Debug build takes about 20x longer; there it is recorded.
+#ifdef NDEBUG
     CHECK(edges < 50.0);
+#endif
 }
 
 // The redraw clause, measured on the hardware adapter by the owner's ruling (KG6 (b), 2026-11-18): the
