@@ -1812,6 +1812,48 @@ Results:
   - The pair from 1e-2 is reported, not gated: order 0.949 and 0.810. There the surface layer still moves by
     20%, so it is outside the limit's range. The bound is unchanged; only the γ sequence was extended to 1e-5.
 
+**Slice 4, part 2: the examples (2026-11-20).** QV13 and QV15 are in tests/deck/quantum_confinement_test.cpp
+"the examples on their meshes, and refined" ([.dg_examples], Release, run by name, about 14 min). Each example
+deck's own sweep, classical, MLDA and DG. V_th is the largest-g_m extrapolation minus V_D/2; the swing is the
+smallest ΔV/Δlog I_d.
+- QV15 (met on the examples' own meshes: every point converges):
+  - 1D diode: largest |Λ̂| 0.023 at 0.005 µm, I(0.7 V) −7.0e-5, 73 against 72 iterations.
+  - 2D MOSFET: 0.093 at (1.5, 0.5) µm (the drain junction), I_on −4e-4.
+  - 3D MOSFET: 2.93 at (1.4, 0.5, 0.4) µm (the drain junction), I_on −2e-4.
+  - No QP15 warning: nothing reaches 10 kT away from the interfaces.
+  - On these meshes (10 nm at the surface in 2D) the model does almost nothing. The largest Λ sits at the
+    junctions, not in the channel.
+- The 2D MOSFET refined to 0.1 nm at the surface (10 nm to 0.94 µm, 1 nm to 0.948 µm, 0.1 nm to 0.95 µm), reported:
+  - Largest |Λ̂| 3.54 at the interface (1.45, 0.9499) µm.
+  - With the deck's defaults (no step cutting), DG stops after 14 of 16 points (V_G = 1.4 V: Newton not converged
+    in 100 iterations). Classical and MLDA converge.
+  - With `max_cuts = 8` (a deck option, the same for every model) DG converges at every point:
+
+    | refined 2D MOSFET | V_th [V] | swing [mV/dec] | I_on [A/cm] |
+    |---|---|---|---|
+    | classical | 0.5031 | 95.8 | 7.7314e-2 |
+    | MLDA | 0.5100 | 96.0 | 7.6521e-2 |
+    | DG | 0.5075 | 95.9 | 7.6811e-2 (−0.65%) |
+
+  - The refined mesh shows the coarse runs' near-zero effect was under-resolution (QP15), not the model being
+    absent. DG's ΔV_th (+4.4 mV) is again below MLDA's (+6.9 mV), consistent with QV6.
+- QV13 (reported):
+
+  | example | classical | MLDA | DG |
+  |---|---|---|---|
+  | 2D MOSFET: V_th, swing, I_on | 0.5707 V, 99.9, 6.5274e-2 | the same to 7 digits | 0.5712 V, 99.9, 6.5251e-2 |
+  | 2D MOSFET: time, iterations | 0.75 s, 83 | 0.73 s, 83 | 2.39 s, 97 |
+  | 3D MOSFET: V_th, swing, I_on | 0.4849 V, 107.9, 6.9463e-6 | the same to 7 digits | 0.4849 V, 107.9, 6.9446e-6 |
+  | 3D MOSFET: time, iterations | 4.44 s, 39 | 4.42 s, 39 | 38.6 s, 80 |
+  | refined 2D MOSFET, `max_cuts = 8` | 2.36 s, 100 | 2.48 s, 102 | 744 s, 242 accepted (QP9 continuation not used) |
+
+  - MLDA equals classical on the coarse examples: their nearest silicon nodes are far from the oxide (Unit 47
+    QC12).
+  - Cost per accepted iteration against drift-diffusion: 2.7× in 2D, 4.2× in 3D.
+  - The refined DG time includes every failed attempt of the cut steps (100 iterations each), which the
+    iteration count does not show. On this mesh, DG's Newton needs smaller bias steps than classical: a cost
+    finding, not a fix.
+
 ## New questions the advisor raised (not yet in `ARCHITECTURE.md`)
 
 None of these is decided. Each needs an owner position before the build scaffold fixes the flags.

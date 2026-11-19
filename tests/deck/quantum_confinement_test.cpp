@@ -11,6 +11,9 @@
 #include <complex>
 #include <cstdio>
 #include <filesystem>
+#include <fstream>
+#include <iterator>
+#include <limits>
 #include <string>
 #include <utility>
 #include <vector>
@@ -460,4 +463,134 @@ TEST_CASE("density gradient: results files, plot fields and a restart (Unit 62, 
     REQUIRE_FALSE(on.has_value());
     CHECK(on.error().message.find("was solved without quantum_confinement density_gradient and this run solves it") !=
           std::string::npos);
+}
+
+namespace {
+
+// Unit 62 QV13 / QV15: a sweep's report with the model at q. Converged or stopped (the stop and the run's
+// warnings are printed, not failed: QV15 gates convergence below).
+struct ExampleRun {
+    results::Sweep sweep;
+    double seconds = 0.0;
+    std::size_t iterations = 0;
+};
+
+ExampleRun run_example(deck::Plan plan, assemble::QuantumConfinement q) {
+    plan.options.models.quantum_confinement = q;
+    plan.outputs = {};
+    const auto t0 = std::chrono::steady_clock::now();
+    auto report = deck::run(plan);
+    ExampleRun r;
+    r.seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+    if (!report) FAIL(report.error().message);
+    REQUIRE(report->sweep.has_value());
+    r.sweep = std::move(*report->sweep);
+    for (const auto& p : r.sweep.points) r.iterations += p.convergence.iterations.size();
+    return r;
+}
+
+// V_th by the largest-g_m linear extrapolation (minus V_D / 2), the smallest subthreshold swing [mV/dec], over the
+// gate column `g` and the drain current column `d`.
+std::pair<double, double> vth_swing(const results::Sweep& s, std::size_t g, std::size_t d) {
+    const auto& P = s.points;
+    double best = 0.0, vth = std::nan(""), swing = std::numeric_limits<double>::infinity();
+    for (std::size_t k = 1; k + 1 < P.size(); ++k) {
+        const double gm = (P[k + 1].terminal_current[d] - P[k - 1].terminal_current[d]) /
+                          (P[k + 1].bias_V[g] - P[k - 1].bias_V[g]);
+        if (gm > best) {
+            best = gm;
+            vth = P[k].bias_V[g] - P[k].terminal_current[d] / gm - 0.5 * P[k].bias_V[d];
+        }
+    }
+    for (std::size_t k = 1; k < P.size(); ++k) {
+        const double a = P[k - 1].terminal_current[d], b = P[k].terminal_current[d];
+        if (a <= 0.0 || b <= a) continue;
+        swing = std::min(swing, 1e3 * (P[k].bias_V[g] - P[k - 1].bias_V[g]) / std::log10(b / a));
+    }
+    return {vth, swing};
+}
+
+// The largest |Lambda| / kT over a sweep's points, and where.
+void report_lambda(const char* name, const deck::Plan& p, const results::Sweep& s) {
+    const double kT = 0.025851999786435;
+    double largest = 0.0;
+    std::size_t node = 0, point = 0;
+    for (std::size_t k = 0; k < s.points.size(); ++k) {
+        const auto& f = s.points[k].fields;
+        for (std::size_t i = 0; i < f.quantum_potential_n_eV.size(); ++i) {
+            const double l = std::max(std::abs(f.quantum_potential_n_eV[i]), std::abs(f.quantum_potential_p_eV[i])) / kT;
+            if (l > largest) {
+                largest = l;
+                node = i;
+                point = k;
+            }
+        }
+    }
+    const auto& x = p.device.mesh().points()[node];
+    std::printf("QV15 %s: largest |Lambda| %.3f kT at node %zu (", name, largest, node);
+    for (int a = 0; a < p.device.mesh().dimension(); ++a) std::printf("%s%.4f", a ? ", " : "", x[a] * 1e4);
+    std::printf(" um), point %zu\n", point);
+    for (const auto& w : s.run.warnings) std::printf("QV15 %s: warning: %s\n", name, w.c_str());
+    if (s.stopped) std::printf("QV15 %s: stopped after %zu points: %s\n", name, s.points.size(), s.stopped->message.c_str());
+}
+
+}  // namespace
+
+// Unit 62 QV13 (reported) and QV15 (gated: every point converges; reported: Lambda, the warnings, the I_d change),
+// the examples on their own meshes, and the 2D MOSFET refined to 0.1 nm at the surface. Minutes; run by name.
+TEST_CASE("density gradient: the examples on their meshes, and refined (QV13, QV15)", "[.dg_examples]") {
+    const auto off = assemble::QuantumConfinement::off, dg = assemble::QuantumConfinement::density_gradient;
+    // The 1D diode: no insulator, so Lambda acts only at the junction and contacts.
+    {
+        const deck::Plan p = example(fs::path(NITCAD_EXAMPLES_DIR) / "pn_diode_1d.deck");
+        const auto c = run_example(p, off);
+        const auto q = run_example(p, dg);
+        report_lambda("1D diode", p, q.sweep);
+        CHECK_FALSE(q.sweep.stopped.has_value());
+        if (!q.sweep.stopped) {
+            std::printf("QV15 1D diode: I(0.7 V) change %.3e; %.2f s, %zu iterations (classical %.2f s, %zu)\n",
+                        q.sweep.points.back().terminal_current[0] / c.sweep.points.back().terminal_current[0] - 1.0,
+                        q.seconds, q.iterations, c.seconds, c.iterations);
+        }
+    }
+    // The MOSFETs: contacts source, drain, gate, body.
+    const auto mosfet = [&](const char* name, const deck::Plan& p, bool gated) {
+        const auto c = run_example(p, off);
+        const auto m = run_example(p, mlda);
+        const auto q = run_example(p, dg);
+        report_lambda(name, p, q.sweep);
+        if (gated) CHECK_FALSE(q.sweep.stopped.has_value());  // QV15 gates the examples' own meshes
+        REQUIRE_FALSE(c.sweep.stopped.has_value());
+        REQUIRE_FALSE(m.sweep.stopped.has_value());
+        for (const auto* r : {&c, &m, &q}) {
+            const char* model = r == &c ? "classical" : r == &m ? "MLDA" : "DG";
+            if (r->sweep.stopped) continue;
+            const auto [vth, swing] = vth_swing(r->sweep, 2, 1);
+            std::printf("QV13 %s %s: V_th %.4f V, swing %.1f mV/dec, I_on %.6e; %.2f s, %zu iterations "
+                        "(%.4f s per iteration)\n",
+                        name, model, vth, swing, r->sweep.points.back().terminal_current[1], r->seconds, r->iterations,
+                        r->seconds / static_cast<double>(r->iterations));
+        }
+        if (!q.sweep.stopped) {
+            std::printf("QV15 %s: I_on change against classical %.4f\n", name,
+                        q.sweep.points.back().terminal_current[1] / c.sweep.points.back().terminal_current[1] - 1.0);
+        }
+    };
+    mosfet("2D MOSFET", example(fs::path(NITCAD_EXAMPLES_DIR) / "mosfet_2d.deck"), true);
+    {
+        // Refined: 10 nm to 0.94 um, 1 nm to 0.948 um, 0.1 nm to the interface at 0.95 um.
+        std::ifstream in(fs::path(NITCAD_EXAMPLES_DIR) / "mosfet_2d.deck", std::ios::binary);
+        std::string text{std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>()};
+        const std::string coarse = "y = linspace(0, 0.9um, 19) + linspace(0.9um, 0.95um, 6) + linspace(0.95um, 1um, 3)";
+        const auto at = text.find(coarse);
+        REQUIRE(at != std::string::npos);
+        text.replace(at, coarse.size(),
+                     "y = linspace(0, 0.9um, 19) + linspace(0.9um, 0.94um, 5) + linspace(0.94um, 0.948um, 9) + "
+                     "linspace(0.948um, 0.95um, 21) + linspace(0.95um, 1um, 3)");
+        mosfet("2D MOSFET refined", must(text), false);  // reported
+        deck::Plan cut = must(text);  // with bias-step cutting (a deck option), every model
+        cut.options.step_control.max_cuts = 8;
+        mosfet("2D MOSFET refined, max_cuts 8", cut, false);
+    }
+    mosfet("3D MOSFET", example(fs::path(NITCAD_EXAMPLES_DIR) / "mosfet_3d.deck"), true);
 }
