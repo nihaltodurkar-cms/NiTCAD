@@ -1,2 +1,2 @@
-// The NiTCAD icon (16-256 px), embedded in nitcad-app.exe and nitcad.exe; win32.cpp loads it by this id.
+// The NiTCAD icon (wafer only at 16-48 px, full design with the wordmark at 64-256 px), embedded in nitcad-app.exe and nitcad.exe; win32.cpp loads it by this id.
 1 ICON "nitcad.ico"
