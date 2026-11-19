@@ -90,7 +90,8 @@
 //                     ionization_levels = fixed | altermatt  (Unit 37; with incomplete_ionization)
 //   [solver]          equations = drift_diffusion | equilibrium_poisson; max_iterations; tol_update;
 //                     max_update; line_search = off | residual | natural; line_search.max_backtracks;
-//                     line_search.sufficient_decrease; max_cuts; growth; cut_max_iterations;
+//                     line_search.sufficient_decrease; natural_norm = convergence | weighted
+//                     (Unit 59: the natural test's measure); max_cuts; growth; cut_max_iterations;
 //                     backend = eigen | pardiso; mkl = <path to mkl_rt>; threads; equilibrate;
 //                     max_backward_error; max_refinement_steps; min_pivot_ratio; Ns = <cm^-3>;
 //                     weighted_current = on | off  (Unit 32: the weighted terminal current)

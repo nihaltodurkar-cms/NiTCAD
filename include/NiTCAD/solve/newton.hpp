@@ -66,13 +66,19 @@ namespace NiTCAD::solve {
 //   factorization), must be smaller than the full correction dx, |dx_bar| <= (1 - lambda / 4) |dx|,
 //   both measured as the convergence test measures a correction (the system's update_size, or the
 //   largest component).
+//   With norm = weighted (Unit 59) and a system that has the hook
+//       double natural_size(std::span<const double> x_ref, std::span<const double> dx) const;
+//   both corrections are measured with it at the iterate (Deuflhard's test holds the scaling
+//   fixed within a step); a system without it is measured as with norm = convergence.
 enum class LineSearchTest : int { residual = 0, natural = 1 };
+enum class NaturalNorm : int { convergence = 0, weighted = 1 };
 
 struct LineSearch {
     bool enabled = false;
     int max_backtracks = 10;            // the smallest trial is 2^-max_backtracks of the step
     double sufficient_decrease = 1e-4;  // alpha of the residual test, in (0, 0.5)
     LineSearchTest test = LineSearchTest::natural;
+    NaturalNorm norm = NaturalNorm::convergence;  // the natural test's measure (above)
 };
 
 struct NewtonOptions {
@@ -139,6 +145,9 @@ template <NewtonSystem System>
     }
     if (search.test != LineSearchTest::residual && search.test != LineSearchTest::natural) {
         return invalid("Newton line_search.test is unknown", static_cast<double>(search.test));
+    }
+    if (search.norm != NaturalNorm::convergence && search.norm != NaturalNorm::weighted) {
+        return invalid("Newton line_search.norm is unknown", static_cast<double>(search.norm));
     }
 
     const std::size_t n = system.unknowns();
@@ -238,6 +247,18 @@ template <NewtonSystem System>
             x1.assign(x.begin(), x.end());
             const double m0 = merit(f);
             const bool natural = search.test == LineSearchTest::natural;
+            // The natural test in the system's own norm at the iterate (NaturalNorm::weighted).
+            bool weighted = false;
+            double full = update;
+            if constexpr (requires { system.natural_size(x, step); }) {
+                if (natural && search.norm == NaturalNorm::weighted) {
+                    weighted = true;
+                    full = system.natural_size(x0, step);
+                }
+            } else {
+                (void)weighted;  // a system without the hook: Unit 30's test
+                (void)full;
+            }
             double m0_scaled = 0.0;
             if (!natural) {
                 // s_i = sum_j |J_ij x_j| at the iterate (jacobian still holds J(x)).
@@ -265,6 +286,12 @@ template <NewtonSystem System>
                     }
                     if (!solver.solve(rhs, dx_bar)) {
                         return {std::numeric_limits<double>::infinity(), false};
+                    }
+                    if constexpr (requires { system.natural_size(x0, dx_bar); }) {
+                        if (weighted) {
+                            const double size = system.natural_size(x0, dx_bar);
+                            return {size, size <= (1.0 - 0.25 * lambda) * full};
+                        }
                     }
                     const double size = measure(x, dx_bar);
                     return {size, size <= (1.0 - 0.25 * lambda) * update};

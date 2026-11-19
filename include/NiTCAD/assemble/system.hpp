@@ -385,6 +385,14 @@ public:
     [[nodiscard]] double update_size(std::span<const double> x,
                                      std::span<const double> dx) const;
     void apply_update(std::span<double> x, std::span<const double> dx, double max_update) const;
+    // The natural test's norm (Unit 59, DECISIONS.md ND3; newton.hpp NaturalNorm::weighted): per
+    // field the RMS of the scaled components over the unknowns not held (a contact's or an
+    // electrode's Dirichlet value, an insulator's densities, an isothermal sink's rise), then the
+    // RMS over the fields. A density's component is asinh(dn / w), w = max(|n|, 1e-8 of the
+    // field's largest at x_ref); every other one (psi, temperatures, an extension's) dx / max(|x|,
+    // 1). Measured at x_ref for both corrections of a step. In thermal equilibrium: psi alone.
+    [[nodiscard]] double natural_size(std::span<const double> x_ref,
+                                      std::span<const double> dx) const;
 
     // The internals, for src/assemble alone (the key cannot be made outside it): the model data
     // the copies share and the state each owns.

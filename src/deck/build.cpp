@@ -1306,6 +1306,14 @@ std::expected<void, base::Error> Builder::solver(Plan& plan) const {
         } else if (e.key == "line_search.max_backtracks") {
             NITCAD_DECK_TRY(v, count(e, 0, 60));
             o.newton.line_search.max_backtracks = v;
+        } else if (e.key == "natural_norm") {  // Unit 59 (NQ7)
+            if (e.value == "convergence") {
+                o.newton.line_search.norm = solve::NaturalNorm::convergence;
+            } else if (e.value == "weighted") {
+                o.newton.line_search.norm = solve::NaturalNorm::weighted;
+            } else {
+                return std::unexpected(at(e.line, "natural_norm is convergence or weighted"));
+            }
         } else if (e.key == "line_search.sufficient_decrease") {
             NITCAD_DECK_TRY(v, num(e));
             o.newton.line_search.sufficient_decrease = v;

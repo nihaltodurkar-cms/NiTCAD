@@ -2,6 +2,7 @@
 // convergence, damping, the full-correction criterion and each error path.
 #include <catch2/catch_test_macros.hpp>
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstddef>
@@ -247,7 +248,9 @@ TEST_CASE("line search: invalid options are errors") {
                             solve::LineSearch{true, 10, 0.0}, solve::LineSearch{true, 10, 0.5},
                             solve::LineSearch{true, 10, std::nan("")},
                             solve::LineSearch{true, 10, 1e-4,
-                                              static_cast<solve::LineSearchTest>(7)}}) {
+                                              static_cast<solve::LineSearchTest>(7)},
+                            solve::LineSearch{true, 10, 1e-4, solve::LineSearchTest::natural,
+                                              static_cast<solve::NaturalNorm>(7)}}) {
         NewtonOptions o;
         o.line_search = bad;
         const auto r = solve::newton_solve(cube, x, o, s, record);
@@ -321,4 +324,127 @@ TEST_CASE("line search: a trial with every row at its rounding passes the residu
     CHECK(x[1] == 1.0);
     CHECK(record.iterations.front().step == 1.0);
     CHECK(record.iterations.size() == 2);
+}
+
+// --- The natural test's own norm (Unit 59, solve::NaturalNorm, DECISIONS.md NG5) ---------------
+
+namespace {
+
+// Two decoupled arctan rows, F_i = s_i atan(x_i - c_i), J = diag(s_i / (1 + (x_i - c_i)^2)), with
+// the hook natural_size: the RMS of dx_i / max(|x_i|, 1) at x_ref. Newton overshoots from
+// |x - c| > 1.39, so the natural search must shorten steps.
+struct ArctanPair {
+    std::array<double, 2> s{1.0, 1.0};
+    std::array<double, 2> c{0.0, 0.5};
+    mutable int calls = 0;  // natural_size evaluations
+    mutable std::vector<std::array<double, 2>> refs;  // the x_ref of each
+
+    std::size_t unknowns() const { return 2; }
+    linalg::SparseMatrix make_jacobian() const {
+        const std::array<linalg::Triplet, 2> t{linalg::Triplet{0, 0, 0.0}, linalg::Triplet{1, 1, 0.0}};
+        return *linalg::SparseMatrix::from_triplets(2, 2, t);
+    }
+    void evaluate(std::span<const double> x, std::span<double> r, linalg::SparseMatrix& j) const {
+        for (std::size_t i = 0; i < 2; ++i) {
+            const double d = x[i] - c[i];
+            r[i] = s[i] * std::atan(d);
+            j.values()[i] = s[i] / (1.0 + d * d);
+        }
+    }
+    double natural_size(std::span<const double> x_ref, std::span<const double> dx) const {
+        ++calls;
+        refs.push_back({x_ref[0], x_ref[1]});
+        double sum = 0.0;
+        for (std::size_t i = 0; i < 2; ++i) {
+            const double u = dx[i] / std::max(std::abs(x_ref[i]), 1.0);
+            sum += u * u;
+        }
+        return std::sqrt(sum / 2.0);
+    }
+};
+
+NewtonOptions weighted(int iterations = 100) {
+    NewtonOptions o = searched(iterations);
+    o.line_search.norm = solve::NaturalNorm::weighted;
+    return o;
+}
+
+}  // namespace
+
+TEST_CASE("natural norm: the hook measures the natural test, and Newton converges with it") {
+    const ArctanPair pair;
+    auto s = solver();
+    results::ConvergenceRecord record;
+    std::vector<double> x{2.0, -2.5};
+    REQUIRE(solve::newton_solve(pair, x, weighted(), s, record).has_value());
+    CHECK(std::abs(x[0]) < 1e-12);
+    CHECK(std::abs(x[1] - 0.5) < 1e-12);
+    CHECK(pair.calls > 0);
+    // Every measurement of a step is at its iterate: x_ref changes once per searched iteration
+    // (every one but the converged last), never between the trials of one.
+    std::size_t runs = pair.refs.empty() ? 0 : 1;
+    for (std::size_t k = 1; k < pair.refs.size(); ++k) runs += pair.refs[k] != pair.refs[k - 1] ? 1 : 0;
+    CHECK(runs == record.iterations.size() - 1);
+    // Both corrections of every searched iteration (the full one and each trial's) in the norm.
+    CHECK(static_cast<std::size_t>(pair.calls) >= 2 * (record.iterations.size() - 1));
+    bool shortened = false;
+    for (const auto& r : record.iterations) shortened = shortened || r.step < 1.0;
+    CHECK(shortened);
+    // With norm = convergence the hook is never called.
+    const ArctanPair unused;
+    std::vector<double> y{2.0, -2.5};
+    REQUIRE(solve::newton_solve(unused, y, searched(), s, record).has_value());
+    CHECK(unused.calls == 0);
+}
+
+TEST_CASE("natural norm: the step sequence is unchanged when F's rows are rescaled (affine "
+          "invariance)") {
+    // Row scales of powers of two keep every correction exact, so the runs are equal bit for bit.
+    auto s = solver();
+    const auto run = [&](std::array<double, 2> scales) {
+        ArctanPair pair;
+        pair.s = scales;
+        results::ConvergenceRecord record;
+        std::vector<double> x{2.0, -2.5};
+        REQUIRE(solve::newton_solve(pair, x, weighted(), s, record).has_value());
+        return record;
+    };
+    const auto base = run({1.0, 1.0});
+    for (const auto scales : {std::array{std::ldexp(1.0, 40), 1.0}, std::array{1.0, std::ldexp(1.0, -30)},
+                              std::array{std::ldexp(1.0, 20), std::ldexp(1.0, 50)}}) {
+        const auto scaled = run(scales);
+        REQUIRE(scaled.iterations.size() == base.iterations.size());
+        for (std::size_t k = 0; k < base.iterations.size(); ++k) {
+            CHECK(scaled.iterations[k].step == base.iterations[k].step);
+            CHECK(scaled.iterations[k].update == base.iterations[k].update);
+        }
+    }
+}
+
+TEST_CASE("natural norm: a system without the hook runs Unit 30's test exactly under either norm") {
+    // The scalar cases above, natural test, norm = weighted against norm = convergence.
+    const Scalar uphill{[](double x) { return x; }, [](double) { return -1.0; }};
+    const Scalar overshoot{[](double x) { return x > 4.0 ? std::nan("") : x - 1.0; },
+                           [](double) { return 0.25; }};
+    struct Case {
+        const Scalar* system;
+        double start;
+        int iterations;
+    };
+    for (const Case c : {Case{&arctan, 2.0, 100}, Case{&cube, 3.0, 100}, Case{&cube, 10.0, 100},
+                         Case{&uphill, 1.0, 5}, Case{&overshoot, -0.5, 100}}) {
+        auto s = solver();
+        results::ConvergenceRecord a, b;
+        std::vector<double> xa{c.start}, xb{c.start};
+        const auto ra = solve::newton_solve(*c.system, xa, searched(c.iterations), s, a);
+        const auto rb = solve::newton_solve(*c.system, xb, weighted(c.iterations), s, b);
+        CAPTURE(c.start);
+        CHECK(ra.has_value() == rb.has_value());
+        CHECK(xa[0] == xb[0]);
+        REQUIRE(a.iterations.size() == b.iterations.size());
+        for (std::size_t k = 0; k < a.iterations.size(); ++k) {
+            CHECK(a.iterations[k].step == b.iterations[k].step);
+            CHECK(a.iterations[k].update == b.iterations[k].update);
+        }
+    }
 }

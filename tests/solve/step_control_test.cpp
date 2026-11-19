@@ -19,6 +19,9 @@
 #include "NiTCAD/physics/semiconductor.hpp"
 #include "NiTCAD/solve/bias.hpp"
 #include "NiTCAD/solve/control.hpp"
+#include "NiTCAD/solve/equilibrium.hpp"
+#include "NiTCAD/assemble/scaling.hpp"
+#include "natural_norm_probe.hpp"
 #include "legacy_graded_mesh.hpp"
 
 using namespace NiTCAD;
@@ -285,4 +288,140 @@ TEST_CASE("line search (Unit 30): a diode sweep reaches the same steady states, 
         }
         CHECK(on->run.input_identity != off->run.input_identity);
     }
+}
+
+TEST_CASE("benchmark (Unit 59, ND1): the natural test's contraction along plain Newton's path, "
+          "and the natural search under each candidate norm, on the diode jumps",
+          "[.benchmark][.natural_norm]") {
+    // Plain Newton from equilibrium straight to V (default options but tol_update 1e-12, as the
+    // Unit 30 benchmark): theta = |dx_bar| / |dx| at every step in today's measure and in each
+    // candidate norm, both corrections at the iterate. Then the natural search with each
+    // measure, each converged state against a 0.05 V-step sweep's (NG3).
+    const auto d = diode();
+    const auto scaling = assemble::make_scaling(d);
+    REQUIRE(scaling.has_value());
+    auto system = assemble::System::create(d, *scaling);
+    REQUIRE(system.has_value());
+    solve::NewtonOptions newton{.tol_update = 1e-12};
+    const auto equilibrium = solve::solve_equilibrium(d, {.newton = newton});
+    REQUIRE(equilibrium.has_value());
+    std::vector<double> psi(system->node_count());
+    for (std::size_t i = 0; i < psi.size(); ++i) {
+        psi[i] = equilibrium->fields.potential_V[i] / scaling->V_T;
+    }
+    const std::vector<double> start = system->state_from_potential(psi);
+    const auto& dofs = system->dofs();
+    const auto scaled = [&](const results::NodeFields& f) {
+        std::vector<double> x(system->unknowns());
+        for (std::size_t i = 0; i < system->node_count(); ++i) {
+            x[dofs.index(assemble::FieldId::potential, i)] = f.potential_V[i] / scaling->V_T;
+            x[dofs.index(assemble::FieldId::electrons, i)] = f.n_cm3[i] / scaling->Ns;
+            x[dofs.index(assemble::FieldId::holes, i)] = f.p_cm3[i] / scaling->Ns;
+        }
+        return x;
+    };
+    const auto norms = natural_norm::candidates();
+    for (const double V : {0.6, 0.8, 1.0, 1.2, -5.0, -20.0}) {
+        std::vector<std::vector<double>> fine;
+        const int steps = static_cast<int>(std::round(std::abs(V) / 0.05));
+        for (int k = 1; k <= steps; ++k) fine.push_back({V * k / steps, 0.0});
+        const auto reference = solve::sweep_bias(d, fine, {.newton = newton});
+        REQUIRE(reference.has_value());
+        REQUIRE_FALSE(reference->stopped.has_value());
+        const std::vector<double> ref = scaled(reference->points.back().fields);
+
+        const std::vector<double> bias{V, 0.0};
+        REQUIRE(system->set_bias(bias).has_value());
+        std::vector<double> x0 = start;
+        system->stamp_contacts(x0);
+        char label[32];
+        std::snprintf(label, sizeof label, "diode %.1f V", V);
+        const auto path = natural_norm::plain_path(*system, x0, newton);
+        natural_norm::print_path(label, path);
+        // The replay is newton_solve's plain path.
+        {
+            auto solver = linalg::LinearSolver::create({});
+            REQUIRE(solver.has_value());
+            std::vector<double> x = x0;
+            results::ConvergenceRecord record;
+            const auto ok = solve::newton_solve(*system, x, newton, *solver, record);
+            CHECK(ok.has_value() == path.converged);
+            CHECK(natural_norm::same_iterations(record, path.record));
+        }
+        // The natural search under each measure (nullptr: today's, Unit 30's test).
+        solve::NewtonOptions searched = newton;
+        searched.line_search.enabled = true;
+        for (int m = -1; m < static_cast<int>(norms.size()); ++m) {
+            const natural_norm::Norm* norm = m < 0 ? nullptr : &norms[static_cast<std::size_t>(m)];
+            std::vector<double> x = x0;
+            results::ConvergenceRecord record;
+            const auto t0 = std::chrono::steady_clock::now();
+            const bool ok = natural_norm::natural_search(*system, x, searched, norm, record);
+            const double seconds =
+                std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+            if (norm == nullptr) {  // the harness is newton_solve's natural search
+                auto solver = linalg::LinearSolver::create({});
+                REQUIRE(solver.has_value());
+                std::vector<double> y = x0;
+                results::ConvergenceRecord expected;
+                const auto e = solve::newton_solve(*system, y, searched, *solver, expected);
+                CHECK(e.has_value() == ok);
+                CHECK(natural_norm::same_iterations(expected, record));
+            }
+            int short_steps = 0;
+            for (const auto& r : record.iterations) short_steps += r.step < 1.0 ? 1 : 0;
+            std::printf("SEARCH %6.1f V  %-16s %-9s iterations %4zu  short steps %3d  time %6.2f s"
+                        "  worst %.1e\n",
+                        V, norm == nullptr ? "today" : norm->name.c_str(),
+                        ok ? "converged" : "FAILED", record.iterations.size(), short_steps,
+                        seconds, ok ? natural_norm::largest_relative(x, ref) : -1.0);
+        }
+        {  // the product: newton_solve with NaturalNorm::weighted (System::natural_size)
+            solve::NewtonOptions product = searched;
+            product.line_search.norm = solve::NaturalNorm::weighted;
+            auto solver = linalg::LinearSolver::create({});
+            REQUIRE(solver.has_value());
+            std::vector<double> x = x0;
+            results::ConvergenceRecord record;
+            const bool ok = solve::newton_solve(*system, x, product, *solver, record).has_value();
+            std::printf("SEARCH %6.1f V  %-16s %-9s iterations %4zu  worst %.1e\n", V, "product weighted",
+                        ok ? "converged" : "FAILED", record.iterations.size(),
+                        ok ? natural_norm::largest_relative(x, ref) : -1.0);
+        }
+    }
+}
+
+TEST_CASE("natural norm (Unit 59, NG6): the diode's 0-0.6 V sweep under the weighted natural test "
+          "reaches the plain sweep's states, and the run record names the norm") {
+    const auto d = diode();
+    std::vector<std::vector<double>> points;
+    for (int k = 0; k <= 6; ++k) points.push_back({0.1 * k, 0.0});
+    const solve::BiasOptions plain{.newton = {.tol_update = 1e-12}};
+    const auto off = solve::sweep_bias(d, points, plain);
+    REQUIRE(off.has_value());
+    REQUIRE_FALSE(off->stopped.has_value());
+    solve::BiasOptions natural = plain;
+    natural.newton.line_search.enabled = true;
+    solve::BiasOptions weighted = natural;
+    weighted.newton.line_search.norm = solve::NaturalNorm::weighted;
+    const auto old_norm = solve::sweep_bias(d, points, natural);
+    const auto on = solve::sweep_bias(d, points, weighted);
+    REQUIRE(old_norm.has_value());
+    REQUIRE(on.has_value());
+    REQUIRE_FALSE(on->stopped.has_value());
+    std::size_t iterations = 0, old_iterations = 0;
+    for (std::size_t k = 0; k < points.size(); ++k) {
+        CHECK(relative(on->points[k].fields.potential_V, off->points[k].fields.potential_V) < 1e-9);
+        CHECK(relative(on->points[k].fields.n_cm3, off->points[k].fields.n_cm3) < 1e-9);
+        // The current within its resolution (its rounding, 3.8e-7 A at 0.4 V against 2.4e-4 A).
+        for (std::size_t c = 0; c < 2; ++c) {
+            CHECK(std::abs(on->points[k].terminal_current[c] - off->points[k].terminal_current[c]) <=
+                  off->points[k].terminal_current_resolution[c]);
+        }
+        iterations += on->points[k].convergence.iterations.size();
+        old_iterations += old_norm->points[k].convergence.iterations.size();
+    }
+    std::printf("NG6 diode 0-0.6 V: natural test iterations %zu (convergence norm) %zu (weighted)\n",
+                old_iterations, iterations);
+    CHECK(on->run.input_identity != old_norm->run.input_identity);
 }

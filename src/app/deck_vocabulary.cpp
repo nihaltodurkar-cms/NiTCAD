@@ -32,6 +32,7 @@ constexpr std::array<std::string_view, 2> quantum_confinement{"off", "mlda"};
 constexpr std::array<std::string_view, 2> ionization_levels{"fixed", "altermatt"};
 constexpr std::array<std::string_view, 2> equations{"drift_diffusion", "equilibrium_poisson"};
 constexpr std::array<std::string_view, 3> line_search{"off", "residual", "natural"};
+constexpr std::array<std::string_view, 2> natural_norm{"convergence", "weighted"};
 constexpr std::array<std::string_view, 3> backends{"eigen", "pardiso", "gmres_ilut"};
 constexpr std::array<std::string_view, 2> fallbacks{"sparse_lu", "none"};
 constexpr std::array<std::string_view, 2> integrators{"bdf2", "backward_euler"};
@@ -154,7 +155,7 @@ constexpr std::array<KeyInfo, 21> model_keys{{
     {"energy_balance", 0, false, "off", "carrier temperatures (energy balance)", on_off, {}, {}},
 }};
 
-constexpr std::array<KeyInfo, 26> solver_keys{{
+constexpr std::array<KeyInfo, 27> solver_keys{{
     {"equations", 0, false, "drift_diffusion", "drift_diffusion | equilibrium_poisson", equations, {}, {}},
     {"max_iterations", 0, false, "100", "Newton iterations per point", {}, {}, {}},
     {"tol_update", 0, false, "1e-8", "convergence: largest scaled update", {}, {}, {}},
@@ -162,6 +163,7 @@ constexpr std::array<KeyInfo, 26> solver_keys{{
     {"line_search", 0, false, "off", "off | residual | natural", line_search, {}, {}},
     {"line_search.max_backtracks", 0, false, "10", "line search: halvings", {}, {}, {}},
     {"line_search.sufficient_decrease", 0, false, "1e-4", "line search: decrease test", {}, {}, {}},
+    {"natural_norm", 0, false, "convergence", "natural test: convergence | weighted", natural_norm, {}, {}},
     {"max_cuts", 0, false, "0", "bias step cuts (0: off)", {}, {}, {}},
     {"growth", 0, false, "2", "sub-step growth after convergence", {}, {}, {}},
     {"cut_max_iterations", 0, false, "25", "Newton iterations per sub-step", {}, {}, {}},

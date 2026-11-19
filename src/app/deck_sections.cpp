@@ -41,7 +41,7 @@ constexpr std::array<KeySpec, 21> model_keys{{
     {"energy_balance", "off", "carrier temperatures (energy balance)"},
 }};
 
-constexpr std::array<KeySpec, 24> solver_keys{{
+constexpr std::array<KeySpec, 25> solver_keys{{
     {"equations", "drift_diffusion", "drift_diffusion | equilibrium_poisson"},
     {"max_iterations", "100", "Newton iterations per point"},
     {"tol_update", "1e-8", "convergence: largest scaled update"},
@@ -49,6 +49,7 @@ constexpr std::array<KeySpec, 24> solver_keys{{
     {"line_search", "off", "off | residual | natural"},
     {"line_search.max_backtracks", "10", "line search: halvings"},
     {"line_search.sufficient_decrease", "1e-4", "line search: decrease test"},
+    {"natural_norm", "convergence", "natural test: convergence | weighted"},
     {"max_cuts", "0", "bias step cuts (0: off)"},
     {"growth", "2", "sub-step growth after convergence"},
     {"cut_max_iterations", "25", "Newton iterations per sub-step"},

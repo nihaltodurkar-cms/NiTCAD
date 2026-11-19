@@ -185,6 +185,11 @@ std::vector<std::pair<std::string, double>> settings(const BiasOptions& o) {
         s.emplace_back("newton.line_search.sufficient_decrease",
                        o.newton.line_search.sufficient_decrease);
         s.emplace_back("newton.line_search.test", static_cast<double>(o.newton.line_search.test));
+        // Unit 59: only when not the default, so Unit 30's runs keep their identity.
+        if (o.newton.line_search.norm != NaturalNorm::convergence) {
+            s.emplace_back("newton.line_search.natural_norm",
+                           static_cast<double>(o.newton.line_search.norm));
+        }
     }
     if (o.Ns_override) s.emplace_back("scaling.Ns_override", *o.Ns_override);
     // Unit 32: recorded only when on, so the runs without it keep their identity.
