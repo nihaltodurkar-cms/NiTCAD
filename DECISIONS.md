@@ -1220,11 +1220,20 @@ stopped on the owner's word "dont start debug until i say"; the full suites not 
 - **Design change, ND2:** no scene revision counter. In the app the scene changes only through `Viewport::show`,
   which presents in full, so the target's scene address and batch sizes, with the Debug hash, are enough. NG2
   tests the cases.
-- **Seen, not changed:** `hover_window_test`'s KG6 redraw ratio (`draw` only, a path this unit leaves alone apart
-  from the axis box's buffer) wanders on this machine: 1.07, 1.12, 1.14, 1.16 here, and 1.04, 1.08, 1.18 with the
-  pre-unit build (`app/scale-orientation` `0b94461`), against its 1.10 bound. Destroying a *shown* `MainWindow`
-  inside the test executable crashes, also without this unit's changes, so NG3 drives a `Viewport` with a test host
-  in its own window. `nitcad-app` itself, and its self-test, close a shown window cleanly.
+- **Fixed on the owner's word "fix it" (2026-11-19), two faults that were there before this unit:**
+  - **Closing a shown `MainWindow` crashed in the test executable** (`3dd312d`). The crash was in releasing the
+    taskbar list. The application initializes COM in `main`; the test executable did not, so the list came from
+    another thread's implicit apartment, gone by then. `MainWindow` now initializes COM (STA) for its lifetime,
+    balanced after that release; `Viewport::release` also stops a swap chain being made again while the window is
+    destroyed. A regression test closes a shown window with a deck built; it crashed before the fix. NG3 still
+    drives a `Viewport` directly, which is where coalescing lives.
+  - **KG6 wandered** (`a148e79`): 1.04–1.18 on one build, because all classic frames were timed and then all
+    enhanced ones. The looks now alternate. Interleaved, the test caught slice 1's per-frame axis-box buffer (1.12–1.16
+    against 1.06–1.11 before the unit): the renderer now keeps one, and keeps the overlays' DirectWrite layouts
+    across frames. That left 1.07–1.10, still at the bound. Profiled: the GPU passes cost the same in both looks
+    (about 0.2 ms); the enhanced extra is CPU work, Direct2D for 26g's colour bar and 26h's view cube and axis box
+    (about 0.22 ms) and the feature edges' vertices (about 0.07 ms), on a 5 ms draw. **Owner ruling (2026-11-19):**
+    KG6's bound is **1.15×**.
 
 ---
 
