@@ -50,12 +50,18 @@ enum class Shading : std::uint8_t {
     field,  // the colormap at the interpolated position
 };
 
+// How the enhanced look shades a batch (Unit 26g, MD1): matte as any solid; metal, aluminium with a tight
+// highlight and a reflected sky/ground (electrodes); glass, more opaque toward grazing angles (translucent
+// insulators). Classic ignores it.
+enum class Finish : std::uint8_t { matte, metal, glass };
+
 struct TriangleBatch {
     std::string name;  // what it shows: a region class, "field", "slice", "electrode"
     Shading shading = Shading::flat;
     bool lit = true;           // directional light and ambient (3D); 2D maps are unlit
     bool transparent = false;  // drawn with order-independent transparency (alpha below 1)
     std::vector<SceneVertex> vertices;  // three per triangle, counterclockwise from the front
+    Finish finish = Finish::matte;
 };
 
 struct LineBatch {
@@ -108,6 +114,9 @@ struct FieldScene {
     Float3 hi{};
     bool axis_triad = true;
     Look look = Look::classic;  // Unit 26f (KD1): 3D shading; set with set_look (edges.hpp)
+    // Unit 26g (MD5): the enhanced look's soft shadow on the floor under the device; false for clipped
+    // and exploded views. Drawn only when the camera looks from above (elevation at least -5 degrees).
+    bool ground_shadow = true;
 };
 
 // --- fields -------------------------------------------------------------------------------------

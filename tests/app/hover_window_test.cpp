@@ -7,6 +7,7 @@
 #include <windows.h>
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cmath>
 #include <filesystem>
@@ -245,7 +246,10 @@ TEST_CASE("app window 26f: the enhanced look's edges are built with the scene, u
     const double edges = median_of(build);
     WARN("KG6: edges built in " << edges << " ms (median of 21, " << points / 2 << " segments, "
                                 << w->workspace()->device->mesh().node_count() << " nodes)");
+    // Release only (owner, 2026-11-19): the unoptimised Debug build takes about 20x longer; there it is recorded.
+#ifdef NDEBUG
     CHECK(edges < 50.0);
+#endif
 }
 
 // The redraw clause, measured on the hardware adapter by the owner's ruling (KG6 (b), 2026-11-18): the
@@ -295,5 +299,50 @@ TEST_CASE("app window 26f: a camera-move redraw within 10% of classic on the har
     WARN("KG6: redraw on " << hw->adapter_name() << " " << t[1] << " ms enhanced, " << t[0]
                            << " ms classic (medians of 50), ratio " << t[1] / t[0] << "; WARP drag " << warp_enhanced
                            << " ms enhanced, " << warp_classic << " ms classic, ratio " << warp_enhanced / warp_classic);
+    // Release only (owner, 2026-11-19): in the unoptimised Debug build the ratio wanders past 1.10 (1.11 and 1.19
+    // against a pass); there it is recorded.
+#ifdef NDEBUG
     CHECK(t[1] <= 1.10 * t[0]);
+#endif
+}
+
+// Unit 26g (MG7), by KG6's method on the hardware adapter: the 26g enhanced draw within 1.25x of 26f's.
+// 26f's draw is the same scene with its batches matte and no ground shadow: exactly 26f's triangles and
+// lines (set_look puts every edge in the ink), leaving only 26g's shader branches, which matte skips.
+// WARP is recorded only.
+TEST_CASE("app window 26g: the enhanced draw within 1.25x of 26f's on the hardware adapter (MG7)", "[app]") {
+    auto w = example_3d_doping();
+    const int W = w->viewport().width(), H = w->viewport().height();
+    render::FieldScene now = std::get<render::FieldScene>(*w->scene());
+    render::set_look(now, render::Look::enhanced);
+    render::FieldScene before = now;
+    for (render::TriangleBatch& b : before.triangles) b.finish = render::Finish::matte;
+    before.ground_shadow = false;
+    render::set_look(before, render::Look::enhanced);
+    REQUIRE(std::ranges::any_of(now.triangles, [](const render::TriangleBatch& b) { return b.finish != render::Finish::matte; }));
+    const auto time = [&](render::Renderer& r) {
+        double t[2]{};
+        for (int mode = 0; mode < 2; ++mode) {
+            render::FieldScene& f = mode ? now : before;
+            std::vector<double> ms;
+            for (int k = 0; k < 55; ++k) {
+                f.camera.azimuth_deg += 1.0f;
+                const auto t0 = std::chrono::steady_clock::now();
+                REQUIRE(r.draw(f, W, H));
+                if (k >= 5) ms.push_back(std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count());
+            }
+            t[mode] = median_of(ms);
+        }
+        return std::array<double, 2>{t[0], t[1]};
+    };
+    auto warp = render::Renderer::create({.adapter = render::Adapter::warp});
+    REQUIRE(warp);
+    const auto tw = time(*warp);
+    WARN("MG7: WARP " << tw[1] << " ms 26g, " << tw[0] << " ms 26f, ratio " << tw[1] / tw[0] << " (recorded only)");
+    auto hw = render::Renderer::create({.adapter = render::Adapter::hardware});
+    if (!hw) SKIP("no Direct3D 12 hardware adapter: " + hw.error().message);
+    const auto th = time(*hw);
+    WARN("MG7: " << hw->adapter_name() << " " << th[1] << " ms 26g, " << th[0] << " ms 26f (medians of 50), ratio "
+                 << th[1] / th[0]);
+    CHECK(th[1] <= 1.25 * th[0]);
 }

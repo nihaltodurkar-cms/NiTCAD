@@ -659,6 +659,204 @@ change which measurement decides the criterion after the results were seen.
 **Owner ruling (2026-11-18):** "b". The redraw clause is measured on the hardware adapter, the app's default; the
 test checks it there and skips without one. The WARP figure is kept in the record, not as a gate.
 
+### Unit 26g — materials, depth and finish (proposed 2026-11-18; on `app/materials-depth`)
+
+**Owner request (2026-11-18):** "make plans for 4 - 8" of the eight 3D-view suggestions. This unit covers 4
+(metallic contacts, glass-like oxide), 5 (ambient occlusion, a soft shadow) and 8 (softer mesh edges, contour
+lines, the colourbar's frame). 6 and 7 are Unit 26h. The branch is stacked on `app/visual-prototype` (26f).
+
+**Standing conditions:** as for 26f. Everything here belongs to the **enhanced** look only. Classic, the render
+layer's default, draws bit-identically, so every existing reference is unchanged. No change to numerics, results,
+files or run identities. Win32 + D3D12 + Direct2D only. Criteria are fixed before code. Release and Debug suites
+with `/W4 /WX`, plus hand mutants. Speed is measured on the hardware adapter (KG6 ruling (b)), and WARP figures are
+recorded only. Nothing is pushed or merged without authorization.
+
+**Today (26f):**
+- Contacts and electrodes are one flat batch, `"electrode"`, coloured 0.33/0.35/0.38.
+- The oxide is a translucent flat batch at `insulator_alpha`, drawn by weighted blended OIT.
+- Enhanced shading treats both like any solid.
+- There is no occlusion or shadow.
+- Mesh edges are 0.15/0.17/0.2 at alpha 0.75 (3D), 1 px.
+- Contours (`--contours`, off by default) are a dark line batch.
+- The colourbar already has a 1 px frame (0.3/0.32/0.35, Unit 25a), so item 8's frame exists. Only its look in
+  enhanced is in question (MQ6).
+
+**Design:**
+
+| # | Change | Where | Behaviour |
+|---|---|---|---|
+| MD1 | **A finish per batch.** `enum class Finish { matte, metal, glass }` and `TriangleBatch::finish` (matte by default). The scene builders mark `"electrode"` metal and the translucent insulators glass. The renderer passes it in the frame flags (bits 3–4). | `render/scene.hpp`, `scene.cpp`, `renderer.cpp` | Classic ignores it. |
+| MD2 | **Metal (item 4).** In enhanced, a metal batch's base colour becomes aluminium 0.70/0.72/0.76. Its highlight is stronger and tighter (0.55, `(n·h)⁶⁴`), and it gets a fake environment: the sky/ground ambient taken along the reflected eye ray instead of the normal, so faces turned up read bright and faces turned down read dark, as brushed metal does. | `scene.hlsl` | Contact pads and gate electrodes alike (MQ1). |
+| MD3 | **Glass (item 4).** In enhanced, a glass batch's alpha rises toward grazing angles, `a' = a + (1 − a)·0.55·(1 − n·v)³` (Schlick-like), and its colour lifts by the same term, so the oxide's outline shows where it is seen edge-on while face-on it stays as clear as today. | `scene.hlsl` (transparent pass) | Opaque insulators (`--opaque`) stay matte. |
+| MD4 | **Ambient occlusion (item 5).** A screen-space pass after the opaque triangles, before the lines and the OIT composite. It reads the depth buffer (D32 made typeless with an SRV), takes 12 samples in a hemisphere at a radius of 2% of the view's height, darkens by up to 35% on solids and 15% on field maps (a mask the opaque pass writes in the colour target's alpha), and is blurred 4 × 4. | `post.hlsl` (`ao_ps`, `ao_blur_ps`), `renderer.cpp`: one R8 target at the supersampled size | Corners where a contact meets the silicon, the steps of the oxide and the gate's foot read as recessed. Translucent glass is not occluded and does not occlude. |
+| MD5 | **A ground shadow (item 5).** A soft shadow under the device: a quad 4% of the height below `lo.y`, on the camera's floor plane, its alpha falling off from 0.28 at the footprint's centre to 0 one twelfth of the extent outside it. Drawn before the scene, over the gradient. | `scene.hlsl` (`shadow_ps`), the footprint from the scene's bounds | It follows the camera. It is not drawn when the view looks up from below (elevation < −5°), or on clipped or exploded views. |
+| MD6 | **Softer mesh edges and contours (item 8).** In enhanced: 3D mesh edges 0.25/0.28/0.32 at alpha 0.35, 1 px; contours 1.2 px at alpha 0.55, in the ink of the feature edges. | `scene.cpp` (the batch colours and widths read the look through `set_look`) | Contours stay off by default (MQ5). |
+| MD7 | **The colourbar in enhanced (item 8).** Its frame is kept and drawn 1 px lighter (0.45/0.47/0.5), with tick marks inside the bar's right edge as well as outside. The panel stays white. | `renderer.cpp` `draw_colorbar` | Classic's colourbar is unchanged. |
+
+**Questions (each with a recommendation):**
+
+| # | Question | Options | Recommendation |
+|---|---|---|---|
+| MQ1 | The metal's colour | (a) Aluminium grey for every contact and electrode. (b) Gold for contacts and aluminium for gates. (c) By the deck's contact kind and work function. | **(a)**: one finish that reads as metal. Colour codes for contact kinds would be a new legend for no physics gain. |
+| MQ2 | Occlusion technique | (a) Screen-space AO (MD4). (b) Precomputed per-vertex AO from the mesh. (c) None, shadow only. | **(a)**: it works for every view, clip and region visibility with no per-scene cost. (b) would need rays through the mesh on every rebuild. |
+| MQ3 | AO on field maps | (a) Reduced (15%) through the mask. (b) Full. (c) None on field maps. | **(a)**: the corners still read in depth, and colours shift less than the lighting already shifts them. Values come from the colourbar, hover and Probe. |
+| MQ4 | The ground shadow | (a) A soft footprint shadow (MD5). (b) A real shadow map from the key light. (c) None. | **(a)**: it grounds the device at the cost of one quad. A shadow map needs a second depth pass, and its hard shapes would compete with the field. |
+| MQ5 | Contours by default (item 8's suggestion) | (a) Keep them off and restyle them (MD6). (b) On by default on enhanced 3D field views, with a new `--no-contours`. | **(a)**: a default overlay changes every field image and needs an off switch in the app and CLI. On log fields with steep doping, contour lines pile up at junctions. It stays one click away. |
+| MQ6 | The colourbar | (a) MD7's lighter frame and inner ticks. (b) Unchanged. | **(a)**: it matches the lighter enhanced view at almost no cost. |
+| MQ7 | 26f's enhanced references, which 26g changes | (a) Rebuilt in 26g·4, after the owner approves the new images. (b) Kept, with 26g's finishes behind a second switch so the 26f look stays reproducible. | **(a)**: one enhanced look, not two. The 26f look has no users to keep it for, and a second switch would double the test matrix. |
+
+**Owner ruling (2026-11-18):** ruled under the standing instruction "always choose recommended" (2026-11-11): MQ1 (a),
+MQ2 (a), MQ3 (a), MQ4 (a), MQ5 (a), MQ6 (a), MQ7 (a) (the rebuild itself still shown to the owner first). The request was for plans, so implementation waits for the owner's
+go-ahead.
+
+**Acceptance criteria (frozen before code; tests in `tests/render` and `tests/app`):**
+
+| # | Criterion |
+|---|---|
+| MG1 | Classic is bit-identical: every classic render reference matches unchanged. Scenes default to the matte finish, and a classic scene with metal and glass batches draws exactly as with matte ones, to the bit. 26f's two enhanced references change by design (MQ7): they are rebuilt in 26g·4 only after the owner has seen the new images and approved them. |
+| MG2 | Finishes: `solid_view` and `field_view` mark electrodes metal and translucent insulators glass; opaque insulators, region solids, field batches, slices, arrows and isosurfaces stay matte. |
+| MG3 | Metal and glass in images (WARP): on the enhanced 3D solid, the mean colour of the gate electrode's top face is lighter than classic's and lighter than its front face. Along a line across the oxide, the alpha-composited oxide is at least 1.5× as opaque within 3 px of its silhouette as at its centre. |
+| MG4 | AO in images (WARP): on the enhanced 3D solid, pixels on the silicon within 4 px of the gate electrode's foot are at least 8% darker with AO than without. A flat face away from any step changes by under 2%. Field-map pixels change by at most half as much as solid pixels at the same occlusion (the mask). Glass pixels are unaffected by AO under them. |
+| MG5 | The shadow: present below the device on the default camera (a darker band under `lo.y` than the gradient alone), absent with elevation below −5°, and on clipped and exploded views. |
+| MG6 | Three new WARP references (enhanced): the 3D solid (metal, glass, AO, shadow), the 3D potential surface, and the 3D field with mesh edges and contours. Each passes the existing rules. |
+| MG7 | Cost on the hardware adapter (off screen, the KG6 method, `examples/mosfet_3d.deck`): the 26g enhanced draw within 1.25× of 26f's enhanced draw. The AO passes alone under 2 ms at 1280 × 960. WARP times recorded only. |
+| MG8 | No change elsewhere: no solver, physics or io source changed; app tests change only where the images do; the app and `nitcad plot` still give the same image from the same options (`same_as_plot`, WG4 self-test). |
+| MG9 | Hand mutants, each killed by a test: electrodes left matte; the glass term's power 3 → 1; glass applied to opaque insulators; the AO mask ignored (full AO on field maps); AO sampling glass; the AO radius 2% → 10%; the shadow drawn when looking up; metal shading in classic; the mesh-edge alpha left at 0.75 in enhanced; the colourbar change applied in classic. |
+
+**Owner ruling MQ8 (2026-11-18, during 26g·1): the glass on flat faces.** Measured, MD3's grazing term is constant
+over each flat face of the oxide box, so on the default view the top face only turns a little paler. There is no rim at
+the silhouette, and MG3's glass half (1.5× as opaque within 3 px of the silhouette) cannot be met by flat faces. Asked,
+the owner ruled the recommended option, glass rim edges:
+- **MD3, amended:** the face term stays as designed. In addition, in enhanced, `set_look` puts the feature edges of
+  glass batches into a second line batch, `"glass edges"`: a light rim (0.97/0.98/1.0, alpha 0.9, 1.5 px, depth-tested)
+  in place of the dark ink.
+- **MG3, glass half, restated:** on the enhanced 3D solid, pixels within 3 px of the oxide's top edges (away from the
+  gate) are lighter than the same pixels with the oxide matte. The test asks for a mean luminance more than 10 higher.
+- **MG9 gains a mutant:** the glass rim drawn in the dark ink.
+
+**Owner ruling MQ9 (2026-11-18, during 26g·2): AO dropped.** MD4 was built as designed and measured on the test
+MOSFET's enhanced 3D solid against the same renderer without it. Its pipeline worked: a forced constant darkening
+showed in the image. But the scene gave it almost nothing to occlude:
+- The gate's foot sits on the translucent oxide, which writes no depth (by MD4), so in depth the gate is 0.08 µm
+  above the silicon. Change: 0%.
+- The contact pads are slabs 0.06 µm thick (3% of the extent). Their undersides face away from the camera, and their
+  visible faces lie beyond the radius (2% of the view's height, about 0.036 µm here). Change: 0% at 2%, 0.7% at 5%.
+- Flat faces: 0%.
+
+Asked, the owner ruled the recommended option: **drop AO from 26g.**
+- MD4 and its code are removed. MG4 and the AO half of MG7 are withdrawn, and the two AO mutants (the mask ignored,
+  AO sampling glass) and the radius mutant are dropped from MG9.
+- Depth comes from the ground shadow (MD5) and 26f's lighting and edges.
+- AO may return in a later unit if scenes with real recesses appear (trenches, a FinFET gate wrapping its fin).
+
+**Slices (each one local commit):** 26g·1 finishes, metal and glass (MD1–MD3; MG2, MG3); 26g·2 the shadow, mesh edges,
+contours, colourbar (MD5–MD7; MG5, MG6, MG7's whole-draw cost); 26g·3 suites, mutants (MG1, MG8, MG9), the
+ARCHITECTURE entry. (Originally four slices, with AO as 26g·2; renumbered after MQ9.)
+
+**Results so far (2026-11-19):**
+- 26g·1 `d0b9e55`, MQ9 `62e6378`, 26g·2 `cbd89df`. The owner approved the three enhanced images on 2026-11-18,
+  and they were then written as references (`f8faf26`, MQ7, MG6): `mosfet3d_solid_enhanced` and
+  `mosfet3d_surface_potential_enhanced` (rebuilt), and `mosfet3d_field_mesh_contours_enhanced` (new). Each is
+  byte-identical to the image approved.
+- MG1–MG3, MG5 and MG6 are met by the new render tests. MG1's reference half is met by the classic references
+  (every one unchanged in the render suite run at 26g·1).
+- MG7, on the RTX 5060 Ti by KG6's method: 26g enhanced 5.48 ms against 26f's 5.56 ms (medians of 50), so **0.99×**
+  (bound 1.25×). 26f's draw is the same scene with matte batches and no shadow: exactly 26f's triangles and lines. On
+  WARP it is 1.08×, recorded only. KG6 still holds at 1.04× classic (bound 1.10×).
+- CI fix (PR #92, 2026-11-19). The CI runner's "Microsoft Basic Render Driver" (vendor 0x1414, device 0x8c) is WARP
+  behind a display adapter, but it is not flagged as software. `Adapter::hardware` picked it, so the hardware-adapter
+  tests ran on WARP and failed: KG6 at 1.59× in Debug and 1.26× in Release. The hardware search now skips it, so those
+  tests skip on CI as the KG6 (b) ruling intended. Owner ruling: KG6's edges bound (< 50 ms) is checked in Release only.
+  The unoptimised Debug build took 113 ms on CI (Release: 4.9 ms on CI, 1.9 ms on the RTX machine), and Debug now only
+  records the time.
+- CI fix 2 (PRs #92, #93, 2026-11-19). With that adapter skipped, WG4's 3D self-test (`app_window_3d`) failed on
+  CI: its one case passed the WARP comparison (16 assertions) and then skipped the GPU half, and Catch2 exits
+  non-zero when every case it ran skipped. WG4 is now two cases, WARP and GPU, so CI passes the WARP case and
+  skips the GPU case. Nothing is loosened: both comparisons are unchanged, and the GPU case still runs on a
+  hardware adapter (RTX machine: passed, 16.4 s).
+- MG8 full suites (2026-11-19, on 26h's f33de73, MSVC 14.51, RTX 5060 Ti): Release **229 of 229** passed. Debug
+  207 of 208: KG6's redraw ratio (enhanced ≤ 1.10× classic) failed at 1.11×, and on a rerun of the test once
+  passed and once failed at 1.19×. Owner ruling: the KG6 redraw bound is checked in Release only, like its edges
+  bound; Debug records the ratio.
+- MG9, hand mutants (as amended by MQ8 and MQ9): **8 of 8 killed**. Each was run alone on a clean rebuild, with its
+  target tests passing on unmutated code both before and after.
+
+  | Mutant | Killed by |
+  |---|---|
+  | Electrodes left matte | the MG2 scene test, the MG3 image test |
+  | Glass term power 3 → 1 | the enhanced solid's reference |
+  | Glass on opaque insulators | the MG2 scene test |
+  | Shadow drawn looking up | the MG5 test |
+  | Metal shading in classic | the MG1 bit-identity check, the classic references |
+  | Mesh-edge alpha left at 0.75 | the MD6 test |
+  | Colourbar change in classic | the classic references with colourbars |
+  | Glass rim in dark ink | the edges test, the MG3 glass check |
+
+  A first run of the mutants was discarded. Restoring each file kept its old timestamp, so the build did not
+  recompile it and the mutants accumulated. The runner now touches each file it restores and checks a baseline
+  before and after.
+- **Open:** MG8, the full Release and Debug suites, which wait for the owner's word (2026-11-18). Then the ARCHITECTURE
+  entry.
+- **Seen, not changed:** in 3D, contours are drawn on top of everything, so they show through the gate and the
+  pads. This predates 26g and is the same in classic.
+
+### Unit 26h — scale and orientation (proposed 2026-11-18; on `app/scale-orientation`)
+
+**Owner request (2026-11-18):** as for 26g, items 6 (an axis box with µm ticks) and 7 (a bigger orientation
+widget with a click-to-snap view cube, and smooth camera moves). The branch is stacked on 26g's.
+
+**Standing conditions:** as for 26g. These are enhanced-only overlays, except the camera commands, which work in
+both looks.
+
+**Today:**
+- 2D views have axes with 1-2-5 ticks in µm (`Renderer` draws them with Direct2D from the scene's bounds and
+  `ColorScale`-style tick generation).
+- 3D views have only the axis triad: three 30 px lines in the lower-left corner (`FieldScene::axis_triad`).
+- The camera moves by drag, the keyboard's orbit and zoom commands, and **Fit** (`viewport_fit`, instant).
+- There are no named views (26d listed camera presets as not in that unit).
+
+**Design:**
+
+| # | Change | Where | Behaviour |
+|---|---|---|---|
+| JD1 | **Axis box (item 6).** On enhanced 3D views, the bounds' box is drawn as thin lines (0.55/0.58/0.62, 1 px, depth-tested) on its three faces turned **away** from the camera, ParaView's "grid axes" style, so it frames the device and never covers it. Along three edges (the lower front x edge, the front y edge on the left, the lower z edge on the side) go 1-2-5 ticks in µm, labelled with `Segoe UI` 11.5 px. Each axis is named "x (µm)", "y (µm)", "z (µm)". | Pure `render::axis_box(scene, w, h)` in a new `render/axes3d.hpp`: the edges, the ticks' world positions, their pixels and labels; the renderer draws what it returns | Edges and ticks follow the camera: each axis takes the box edge nearest the viewer on the side away from the device's centre. Labels closer than their own width plus 6 px to a drawn label are dropped. |
+| JD2 | **View cube (item 7).** On enhanced 3D views, the triad becomes a 72 px cube in the lower-left corner. It is drawn with Direct2D from the camera's rotation, faces shaded with the 26f lights and labelled Front (+z), Back (−z), Right (+x), Left (−x), Top (+y), Bottom (−y), with x, y, z arrows from its corner. Classic keeps the triad. | `renderer.cpp`; a pure `render::view_cube(scene, w, h)` (the face, edge and corner polygons in pixels) | `nitcad plot` draws it too, so the app and the command give the same image (MG8). |
+| JD3 | **Snapping.** In the app, a click on the cube's face snaps to that view (azimuth and elevation from a table: Front 0°/0°, Right 90°/0°, Back 180°/0°, Left 270°/0°, Top 0°/90°, Bottom 0°/−90°). A click on a corner snaps to that isometric view (±45° azimuth, ±35.26° elevation). Zoom and pan reset as in **Fit**. | Pure `render::view_cube_hit(scene, w, h, x, y)` → `std::optional<CameraPreset>`; `main_window.cpp` on a click (not a drag) over it | The cursor becomes a hand over the cube. Clicks elsewhere keep Probe, Measure and Cut line as today. |
+| JD4 | **Named views.** **View ▸ Front / Back / Left / Right / Top / Bottom / Isometric**, with the numpad keys as CAD programs use them: 1 front, Ctrl+1 back, 3 right, Ctrl+3 left, 7 top, Ctrl+7 bottom, 0 isometric (the 26f default camera, 35°/25°). Both looks. `nitcad plot` needs nothing new: `--azimuth` and `--elevation` already name any view. | `commands.cpp`, `main_window.cpp` | The equivalent command gives the preset's azimuth and elevation. |
+| JD5 | **Smooth camera moves.** Fit, the named views and cube snaps move over 250 ms, eased in and out (smoothstep), taking the shorter way round in azimuth. Elevation, zoom and pan are interpolated linearly in the same ease. A pure `app::camera_between(from, to, t)` gives each frame, and a 16 ms `WM_TIMER` (the playback timer's mechanism) drives it. A drag, a wheel step or a key during a move ends it at the current frame. | `view_settings` (pure), `main_window.cpp` | Instant when Windows' "Show animations" is off (`SPI_GETCLIENTAREAANIMATION`) and in the self-test. The final camera equals the target exactly. |
+
+**Questions (each with a recommendation):**
+
+| # | Question | Options | Recommendation |
+|---|---|---|---|
+| JQ1 | Where the axis box's ticks go | (a) On the edges that follow the camera (nearest the viewer, on the far side from the centre), ParaView style. (b) Fixed edges at the box's origin corner. | **(a)**: the labels stay readable and outside the device at every angle. Fixed edges end up behind the device or edge-on. |
+| JQ2 | The axis box's faces | (a) Only the three faces away from the camera, no gridlines across them. (b) Those faces with gridlines at the ticks. (c) The whole box. | **(a)**: a frame and a scale with no lines across the field. (b) adds a grid behind translucent oxide that reads as structure. (c) covers the device. |
+| JQ3 | Is the axis box on by default? | (a) Yes, part of the enhanced look, with an inspector check box **Axis box** (saved, like 26f's) and `nitcad plot --axes on\|off` (default on). (b) Off by default. | **(a)**: scale is information a TCAD view should show unasked. Both switches are needed for screenshots without it. |
+| JQ4 | The view cube in `nitcad plot` images | (a) Drawn, as an orientation indicator (the triad's role), so app and command images stay identical. (b) App only. | **(a)**: (b) breaks "same options, same image" (WG4) unless the app draws an overlay outside the renderer. |
+| JQ5 | Smooth moves | (a) 250 ms with smoothstep, instant when the OS turns animations off. (b) Always instant. (c) A setting. | **(a)**: it shows where the camera went, and respecting the OS setting covers those who want no motion without a new option. |
+| JQ6 | Keys for the named views | (a) The numpad, as in CAD programs (1, 3, 7, 0, with Ctrl for the opposite side). (b) Ctrl+Alt+letters. | **(a)**: the convention users already know. The numpad's digits are unbound in the app today. |
+
+**Owner ruling (2026-11-18):** ruled under the standing instruction: JQ1 (a), JQ2 (a), JQ3 (a), JQ4 (a), JQ5 (a),
+JQ6 (a). Implementation waits for the owner's go-ahead, after 26g.
+
+**Acceptance criteria (frozen before code):**
+
+| # | Criterion |
+|---|---|
+| JG1 | Classic is bit-identical (every existing reference, triad included). The axis box and cube are drawn only in enhanced 3D. |
+| JG2 | `axis_box`: for the default camera on a 2 × 1 × 0.8 µm box, the three faces away from the eye are chosen (checked against the face normals' sign along the view direction). Each axis's ticks are 1-2-5 steps covering the bounds, in µm, at least 3 and at most 8 per axis. Each labelled tick lies on its edge, outside the device's projected silhouette. After rotating 90°, 180° and 270° in azimuth and to ±60° elevation, the edges follow the rule of JQ1. No two kept labels overlap. A bounds of zero thickness along z gives no z axis. |
+| JG3 | `view_cube` and `view_cube_hit`: at the default camera, the visible faces are Front, Right and Top. A point inside each face's polygon hits its preset. A point near each visible corner hits that corner's isometric view. A point outside the cube gives nothing. The cube's x, y and z arrows match the triad's directions (dot product of the projected directions > 0.99). |
+| JG4 | Named views and snaps: each preset gives its azimuth and elevation exactly, with zoom 1 and no pan. The equivalent command names them (`--azimuth`, `--elevation`). The numpad keys and View menu items run them. Top and Bottom draw without a degenerate camera (the world-up switch of `make_view`). |
+| JG5 | `camera_between`: t = 0 and 1 give the endpoints exactly; azimuth takes the shorter way (350° → 10° passes 0°, never 180°); smoothstep is monotone. Window tests: Fit and a preset animate (intermediate frames differ from both ends) and land exactly. A drag during a move stops it. With animation off (an override for tests) the move is instant. |
+| JG6 | The app: a click on the cube's Top face makes the view Top after the move. A drag that starts on the cube orbits as before. A click elsewhere in Probe mode still probes. The **Axis box** check box defaults on, is saved, is hidden on 2D, and gives `--axes off` in the equivalent command when off. `nitcad plot` with no `--axes` equals `--axes on`. |
+| JG7 | Two new WARP references (enhanced): the 3D solid with the axis box and view cube at the default camera, and at a named view (Right). Both pass the existing rules. |
+| JG8 | Cost (hardware adapter, KG6 method): drawing the axis box and cube adds under 1 ms. A smooth move's frames each take under 16 ms on `examples/mosfet_3d.deck`. |
+| JG9 | Hand mutants, each killed by a test: the box's faces toward the camera chosen instead; labels not de-overlapped; ticks in cm; a cube face hit mapped to the opposite preset; corners ignored; the azimuth's long way round; the endpoint not exact (t = 1 left at the last eased frame); animation ignoring the OS setting; the axis box drawn in classic; `--axes` default off. |
+
+**Slices (each one local commit):** 26h·1 `axis_box`, drawn, its switch (JD1; JG2, JG6 part); 26h·2 `view_cube`, hit
+testing, snapping (JD2, JD3; JG3, JG6 part); 26h·3 named views and smooth moves (JD4, JD5; JG4, JG5, JG8); 26h·4
+references, suites, mutants (JG1, JG7, JG9), the ARCHITECTURE entry.
+
 ---
 
 ## New questions the advisor raised (not yet in `ARCHITECTURE.md`)

@@ -10,7 +10,9 @@
 // set_look sets a scene's look; on a 3D scene made enhanced it appends one LineBatch, "feature
 // edges", built once from the region solids, field surfaces, slices and electrodes (not arrows,
 // streamline tubes, isosurfaces or the outline shell), so a camera move redraws without rebuilding
-// them. Setting the look again leaves a single such batch.
+// them. Setting the look again leaves a single such batch. The edges of glass batches (Unit 26g, MD3
+// as ruled 2026-11-18) go instead into a second batch, "glass edges", a light rim, so a flat-faced oxide
+// reads as glass at its outline.
 #pragma once
 
 #include <array>
