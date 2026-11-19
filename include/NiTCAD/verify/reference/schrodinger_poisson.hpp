@@ -121,7 +121,7 @@ struct MosSpInput {
     double oxide_mass = 0.0;                                  // [m0]
     std::vector<Valley> valleys;
     // Device.
-    double acceptors_cm3 = 0.0;  // N_A > 0, with N_A << N_v
+    double acceptors_cm3 = 0.0;  // N_A > 0, below N_v (the Boltzmann bulk holds p = N_A at any such N_A)
     double oxide_thickness_cm = 0.0;
     // Grid: n_oxide uniform oxide cells; silicon cells from h0 at the interface growing by `ratio` up to h_max, to
     // depth L; the Schrodinger domain ends at the first node at or past quantum_depth.

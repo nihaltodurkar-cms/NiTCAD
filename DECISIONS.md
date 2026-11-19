@@ -1746,6 +1746,9 @@ Results (Release, targeted):
   holds physical-unit fields, not the solver state. Measured here at 1e-15 to 1e-16, not to the bit. The criterion
   is frozen, so it is put to the owner by name: rule QV12's sweep restart to Unit 61's steady standard (1e-9), or
   ask for a bit-for-bit steady resume (a new resume record).
+  **Ruled (2026-11-20, owner "choose recommended"): (a).** QV12's sweep restart is held to Unit 61's steady
+  standard, 1e-9 relative (DK9, RG6), which is met at 1e-16. The transient resume with the model on, bit for bit,
+  is the "as Unit 61 RG" case. QV12 is met.
 - The same "as Unit 61 RG" check that is bit for bit, a transient resume with the model on: the deck diode pulse,
   stopped after 3 and after n/2 steps and resumed, equals the uninterrupted run bit for bit (times, steps, orders,
   error ratios, currents and Λ in the last snapshot). The plain deck is refused on the same checkpoint. The
@@ -1761,6 +1764,53 @@ Results (Release, targeted):
   - `nitcad_solve_test`: 247 passed, 4 skipped;
   - `nitcad_deck_test`: 115 passed, plus its 5 existing failed-as-expected Schottky cases;
   - every Release target builds with zero warnings.
+
+**Slice 4, part 1 (2026-11-20, owner "choose recommended and start slice 4").** QV6–QV8 are in
+tests/verify/benchmark/density_gradient_test.cpp, hidden ([.dg_validation], Release, run by name; 1 s in all).
+The setup:
+- A 1D meshed MOS-C: n+ poly, built-in SiO2 (the reference's barrier 3.0 eV and mass 0.5), p-type, silicon to
+  0.3 µm, 20 oxide cells, the interface straddled at h = 0.1 nm, spacing h to 3 nm, then ×1.08 up to 2 nm.
+- The quasi-static sweep, so E_F = 0, as in the reference.
+- Boltzmann statistics, and bandgap narrowing off (the reference has none). V_FB comes from the classical gate
+  charge's zero.
+- The reference has the same material constants as NiTCAD's silicon, valleys (0.916, 0.19) ×2 and
+  (0.19, √(0.916·0.19)) ×4, and its slice-0 grid.
+- N_inv = ∫ n over silicon boxes, and the centroid = ∫ x n / N_inv.
+- Ruled (recommended): the reference's guard N_A < 0.01 N_v becomes N_A < N_v, because QV6 asks for 1e18. With
+  Boltzmann statistics on both sides the bulk only needs E_F in the gap. The reference's own tests pass
+  unchanged (6 cases).
+
+Results:
+- Classical cross-check (gated): NiTCAD against the reference's classical electrons gives V_th within 0.2 mV and
+  N_inv within 0.35% in all 4 devices. With bandgap narrowing on, 1e18 differed by 27–34 mV, which is how the
+  BGN setting was found.
+- QV6, reported (no verdict until QP0). γ = 1 and MLDA's masses (placeholders). Errors are against
+  Schrödinger–Poisson, at V_th(classical SP) + 0.5, 1, 1.5 V:
+
+  | t_ox, N_A | N_inv DG (MLDA) | centroid DG (MLDA) [nm] | ΔV_th DG, MLDA, SP [mV] |
+  |---|---|---|---|
+  | 1.5 nm, 1e17 | +11.9, +9.2, +8.0% (+9.1, +8.6, +8.4%) | −0.57, −0.46, −0.40 (≈ −0.48) | 20.0, 29.1, 46.1 |
+  | 1.5 nm, 1e18 | +17.0, +11.2, +9.1% (+14.3, +10.9, +9.9%) | −0.45, −0.39, −0.36 (≈ −0.48) | 45.2, 58.9, 97.8 |
+  | 5 nm, 1e17 | +5.8, +4.5, +3.8% (+3.9, +3.3, +3.0%) | −0.64, −0.57, −0.52 (≈ −0.47) | 21.0, 30.6, 48.5 |
+  | 5 nm, 1e18 | +11.5, +7.4, +5.7% (+8.6, +5.8, +4.7%) | −0.48, −0.45, −0.42 (≈ −0.47) | 54.7, 71.8, 118.8 |
+
+  Against the placeholder bounds (10%, 0.3 nm, 25%), DG would miss:
+  - the centroid at every point (its centroid lies 0.36–0.64 nm nearer the surface);
+  - ΔV_th everywhere, at 54–57% of SP's;
+  - N_inv at 4 of 12 points.
+
+  DG's confinement here is about half the reference's in ΔV_th, and MLDA does better on all three except the thin
+  1e18 centroid. This is what QP0's coefficient (Ancona's r factor) has to settle: no tuning, as QV6 says. The
+  mass mismatch (one isotropic 0.98 against the per-valley masses) and Λ_p's lack of a reference stand as stated.
+- QV7 (met): the 5 nm, 1e17 device at V_G − V_FB = 2 V gives N_inv 3.084834e12, 3.082945e12 and 3.082551e12
+  at 0.2, 0.1 and 0.05 nm. The last two differ by 1.3e-4 (≤ 1%), less than the first two (6.1e-4).
+- QV8 (met):
+  - x_p → 0 (m_ox 0.5 → 128, x_p 0.159 → 0.010 nm): the surface density falls monotonically, 3.30e18 → 3.45e17,
+    and the peak moves inward, 0.7 → 0.9 nm.
+  - γ → 0: the difference from classical, gated over γ = 1e-3, 1e-4, 1e-5, has order 0.992 and 0.999 in N_inv
+    and 0.968 and 0.997 in max |n − n_cl|.
+  - The pair from 1e-2 is reported, not gated: order 0.949 and 0.810. There the surface layer still moves by
+    20%, so it is outside the limit's range. The bound is unchanged; only the γ sequence was extended to 1e-5.
 
 ## New questions the advisor raised (not yet in `ARCHITECTURE.md`)
 

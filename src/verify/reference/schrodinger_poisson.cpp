@@ -394,8 +394,8 @@ std::expected<MosSpResult, std::string> mos_schrodinger_poisson(const MosSpInput
     if (!std::isfinite(gate_V)) return std::unexpected("mos_schrodinger_poisson: gate bias not finite");
     if (in.oxide_cells == 0) return std::unexpected("mos_schrodinger_poisson: no oxide cells");
     if (in.ratio < 1.0 || in.h_max_cm < in.h0_cm) return std::unexpected("mos_schrodinger_poisson: grading");
-    if (!(in.acceptors_cm3 < 1e-2 * in.valence_dos_cm3))
-        return std::unexpected("mos_schrodinger_poisson: N_A not << N_v (Boltzmann bulk)");
+    if (!(in.acceptors_cm3 < in.valence_dos_cm3))  // Unit 62 slice 4: the Boltzmann bulk, E_F in the gap
+        return std::unexpected("mos_schrodinger_poisson: N_A not below N_v (Boltzmann bulk)");
     if (in.electrons == SpElectrons::quantum) {
         if (in.valleys.empty() || in.subbands_per_valley == 0)
             return std::unexpected("mos_schrodinger_poisson: no valleys or subbands");

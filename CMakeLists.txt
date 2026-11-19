@@ -888,7 +888,8 @@ add_executable(nitcad_verify_benchmark_test
   tests/verify/benchmark/tvb31_thermal_test.cpp
   tests/verify/benchmark/tvb31_materials_test.cpp
   tests/verify/benchmark/tvb31_fast_test.cpp
-  tests/verify/benchmark/device_theory_test.cpp)
+  tests/verify/benchmark/device_theory_test.cpp
+  tests/verify/benchmark/density_gradient_test.cpp)
 target_link_libraries(nitcad_verify_benchmark_test PRIVATE NiTCAD::verify_benchmark
   Catch2::Catch2WithMain)
 nitcad_add_file_tests(verify_benchmark nitcad_verify_benchmark_test)
