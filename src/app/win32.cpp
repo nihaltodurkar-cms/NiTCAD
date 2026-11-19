@@ -62,7 +62,16 @@ bool register_class(const wchar_t* name, WNDPROC proc, HBRUSH background, HCURSO
     c.hCursor = cursor ? cursor : LoadCursorW(nullptr, IDC_ARROW);
     c.hbrBackground = background;
     c.lpszClassName = name;
-    c.hIcon = LoadIconW(nullptr, IDI_APPLICATION);
+    // The NiTCAD icon is resource 1 (app/icon/nitcad.rc) in the shipped executables; test
+    // executables don't embed it, so they keep the stock icon. Large and small are loaded
+    // separately so Windows picks the matching entry instead of shrinking the 256 px one.
+    const auto load = [&](int metric_x, int metric_y) {
+        return static_cast<HICON>(LoadImageW(c.hInstance, MAKEINTRESOURCEW(1), IMAGE_ICON,
+                                             GetSystemMetrics(metric_x), GetSystemMetrics(metric_y), 0));
+    };
+    c.hIcon = load(SM_CXICON, SM_CYICON);
+    c.hIconSm = load(SM_CXSMICON, SM_CYSMICON);
+    if (!c.hIcon) c.hIcon = LoadIconW(nullptr, IDI_APPLICATION);
     return RegisterClassExW(&c) != 0;
 }
 
