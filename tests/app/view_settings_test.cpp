@@ -1220,3 +1220,74 @@ TEST_CASE("app views: a diode's I-V from 0 V on a log axis, either contact sense
         CHECK(p.y.hi >= p.series[0].y.back());
     }
 }
+
+TEST_CASE("app views 26f: the enhanced 3D look is the default in the app and nitcad plot (KD5, KD6, KG5)", "[app]") {
+    const ViewSettings fresh;
+    CHECK(fresh.enhanced);
+    const app::Workspace& w3 = mosfet3d().workspace;
+    const auto edges_of = [](const render::FieldScene& f) {
+        return std::ranges::count_if(f.lines, [](const render::LineBatch& l) { return l.name == "feature edges"; });
+    };
+    // A 3D solid and field view: enhanced, with one feature-edge batch; the command names no look.
+    for (const ViewKind k : {ViewKind::solid, ViewKind::field}) {
+        ViewSettings s;
+        s.kind = k;
+        const auto scene = app::build_scene(w3, s);
+        REQUIRE(scene);
+        const auto& f = std::get<render::FieldScene>(*scene);
+        CHECK(f.look == render::Look::enhanced);
+        CHECK(edges_of(f) == 1);
+        CHECK_FALSE(has(app::plot_arguments(s), "--look"));
+        // Classic: no edges, and the command says so.
+        s.enhanced = false;
+        const auto classic = app::build_scene(w3, s);
+        REQUIRE(classic);
+        CHECK(std::get<render::FieldScene>(*classic).look == render::Look::classic);
+        CHECK(edges_of(std::get<render::FieldScene>(*classic)) == 0);
+        const auto args = app::plot_arguments(s);
+        CHECK(std::ranges::search(args, std::vector<std::string>{"--look", "classic"}).begin() != args.end());
+    }
+    // 2D: the look is set but adds nothing.
+    ViewSettings s2;
+    s2.kind = ViewKind::field;
+    const auto scene2 = app::build_scene(mosfet().workspace, s2);
+    REQUIRE(scene2);
+    CHECK(edges_of(std::get<render::FieldScene>(*scene2)) == 0);
+
+    // nitcad plot: no --look draws what --look enhanced draws, and unlike --look classic; the app's
+    // default 3D field view is that image; a bad look is refused.
+    const fs::path out = app_test::scratch("views_26f_look");
+    const auto plot = [&](const std::string& args, const std::string& name) {
+        const std::string cli_args = "plot " + app_test::quoted(mosfet3d().deck) + " " + args +
+                                     " --size 480x360 --adapter warp --out " + app_test::quoted(out / name);
+        const auto cli = app_test::nitcad(cli_args);
+        CAPTURE(cli_args, cli.output);
+        REQUIRE(cli.status == 0);
+        auto png = render::load_png(out / name);
+        REQUIRE(png);
+        return std::move(*png);
+    };
+    const auto max_channel = [](const render::Image& x, const render::Image& y) {
+        const auto diff = render::compare(x, y, 0);
+        REQUIRE(diff);
+        return diff->max_channel;
+    };
+    const auto none = plot("--view field --field potential", "none.png");
+    const auto enhanced = plot("--view field --field potential --look enhanced", "enhanced.png");
+    const auto classic = plot("--view field --field potential --look classic", "classic.png");
+    CHECK(max_channel(none, enhanced) == 0);
+    CHECK(max_channel(none, classic) > 0);
+    ViewSettings v;
+    v.kind = ViewKind::field;
+    const auto app_scene = app::build_scene(w3, v);
+    REQUIRE(app_scene);
+    auto r = render::Renderer::create({.adapter = render::Adapter::warp});
+    REQUIRE(r);
+    const auto mine = r->draw(std::get<render::FieldScene>(*app_scene), 480, 360);
+    REQUIRE(mine);
+    CHECK(max_channel(*mine, none) == 0);
+    const auto bad = app_test::nitcad("plot " + app_test::quoted(mosfet3d().deck) + " --look shiny --out " +
+                                      app_test::quoted(out / "bad.png"));
+    CHECK(bad.status != 0);
+    CHECK(bad.output.find("--look is classic or enhanced") != std::string::npos);
+}

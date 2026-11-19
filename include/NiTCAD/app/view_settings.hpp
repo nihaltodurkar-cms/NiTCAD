@@ -73,6 +73,7 @@ struct ViewSettings {
     bool opaque = false;                         // insulators drawn opaque
     bool contacts = true;                        // electrode slabs and contact pads
     bool perspective = false;
+    bool enhanced = true;                        // the enhanced 3D look (Unit 26f, KD5); false classic
     std::optional<float> azimuth, elevation;     // 3D camera, degrees (render's defaults when empty)
     // Slice planes and the clipping box in um, converted to cm as `nitcad plot` converts its options.
     struct Slice {

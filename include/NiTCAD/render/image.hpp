@@ -5,7 +5,8 @@
 // ships with Windows) and draws a FieldScene or a PlotScene off screen:
 // - triangles and lines on Direct3D 12, at twice the image's resolution and averaged down (2 x 2
 //   supersampling); field triangles look the colormap up per pixel from the interpolated position;
-//   lit triangles take one directional light and ambient, two-sided; translucent triangles go through
+//   lit triangles take one directional light and ambient, two-sided (a 3D scene's enhanced look, Unit 26f:
+//   key, fill and rim lights, a hemisphere ambient and a highlight, over a gradient); translucent triangles go through
 //   weighted blended order-independent transparency (McGuire and Bavoil 2013), so their order does
 //   not matter; lines are screen-space quads of their width;
 // - text, the colorbar, axes, the axis triad and plots on Direct2D and DirectWrite, drawn into the
@@ -87,6 +88,20 @@ struct ScreenPoint {
     float depth = 0.0f;
 };
 [[nodiscard]] ScreenPoint screen_position(const FieldScene& scene, int width, int height, const Float3& point);
+
+// The enhanced look's lights for a FieldScene drawn into a view of this aspect (width / height)
+// (Unit 26f, KD2): unit vectors toward the key and fill lights and the camera's up, and the eye, a
+// unit vector toward the viewer (orthographic) or the camera's position in um (perspective). All zero,
+// and enhanced false, for a classic or a 2D scene.
+struct FrameLighting {
+    std::array<float, 3> key{};
+    std::array<float, 3> fill{};
+    std::array<float, 3> up{};
+    std::array<float, 3> eye{};
+    bool perspective = false;
+    bool enhanced = false;
+};
+[[nodiscard]] FrameLighting frame_lighting(const FieldScene& scene, double aspect) noexcept;
 
 // The axes' frame of a PlotScene drawn at this size, pixels, as draw() lays it out (Unit 26e, HD2).
 struct PlotFrame {

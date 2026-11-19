@@ -24,6 +24,7 @@
 #include "NiTCAD/physics/insulator.hpp"
 #include "NiTCAD/physics/semiconductor.hpp"
 #include "NiTCAD/render/compare.hpp"
+#include "NiTCAD/render/edges.hpp"
 #include "NiTCAD/render/image.hpp"
 #include "NiTCAD/render/scene.hpp"
 #include "NiTCAD/render/streamlines.hpp"
@@ -287,9 +288,17 @@ TEST_CASE("render image: the views match their WARP references (VG4)") {
     SECTION("2D potential map") {
         FieldOptions o = field_options(m2.device, m2.point, Field::potential, values);
         o.contours = true;
-        const auto s = field_view(m2.device, g2, values, o);
+        auto s = field_view(m2.device, g2, values, o);
         REQUIRE(s.has_value());
-        check_image(*r.draw(*s, W, H), "mosfet2d_potential");
+        CHECK(s->look == Look::classic);
+        const auto classic = r.draw(*s, W, H);
+        REQUIRE(classic.has_value());
+        check_image(*classic, "mosfet2d_potential");
+        // Unit 26f (KG1): 2D ignores the look, to the bit.
+        set_look(*s, Look::enhanced);
+        const auto enhanced = r.draw(*s, W, H);
+        REQUIRE(enhanced.has_value());
+        CHECK(enhanced->rgba == classic->rgba);
     }
     SECTION("2D regions and mesh") {
         const auto s = mesh_view(m2.device, g2);
@@ -354,6 +363,40 @@ TEST_CASE("render image: the views match their WARP references (VG4)") {
             REQUIRE(s.has_value());
             check_image(*r.draw(*s, W, H), std::string("mosfet3d_surface_") + std::string(field_info(f).key));
         }
+    }
+    // Unit 26f (KG4): the enhanced look on the solid and the potential surface, each its own reference
+    // and each unlike its classic render.
+    SECTION("3D solid and potential surface, enhanced") {
+        const FieldOptions o = field_options(m3.device, m3.point, Field::potential, values);
+        auto solid = solid_view(m3.device, g3);
+        auto surface = field_view(m3.device, g3, values, o);
+        REQUIRE(solid.has_value());
+        REQUIRE(surface.has_value());
+        for (auto* s : {&*solid, &*surface}) {
+            const auto classic = r.draw(*s, W, H);
+            REQUIRE(classic.has_value());
+            set_look(*s, Look::enhanced);
+            const auto enhanced = r.draw(*s, W, H);
+            REQUIRE(enhanced.has_value());
+            check_image(*enhanced, s == &*solid ? "mosfet3d_solid_enhanced" : "mosfet3d_surface_potential_enhanced");
+            const auto d = compare(*enhanced, *classic, 24);
+            REQUIRE(d.has_value());
+            CHECK(d->fraction_over > 0.05);
+        }
+    }
+    // Unit 26g (MG6): the enhanced 3D field with mesh edges (the mesh view's) and contours.
+    SECTION("3D potential with mesh edges and contours, enhanced") {
+        FieldOptions o = field_options(m3.device, m3.point, Field::potential, values);
+        o.contours = true;
+        auto s = field_view(m3.device, g3, values, o);
+        const auto mesh = mesh_view(m3.device, g3);
+        REQUIRE(s.has_value());
+        REQUIRE(mesh.has_value());
+        for (const LineBatch& l : mesh->lines) {
+            if (l.name == "mesh") s->lines.push_back(l);
+        }
+        set_look(*s, Look::enhanced);
+        check_image(*r.draw(*s, W, H), "mosfet3d_field_mesh_contours_enhanced");
     }
     SECTION("3D mesh") {
         const auto s = mesh_view(m3.device, g3);
@@ -506,6 +549,151 @@ TEST_CASE("render image: the views match their WARP references (VG4)") {
     }
     for (const std::string& m : r.debug_messages()) UNSCOPED_INFO(m);
     CHECK(r.debug_errors() == 0);
+}
+
+namespace {
+
+// Mean luminance (0-255, Rec. 709 weights) of the pixels within `radius` of an image point.
+double mean_luminance(const Image& im, float cx, float cy, int radius) {
+    double sum = 0.0;
+    int count = 0;
+    for (int y = static_cast<int>(cy) - radius; y <= static_cast<int>(cy) + radius; ++y) {
+        for (int x = static_cast<int>(cx) - radius; x <= static_cast<int>(cx) + radius; ++x) {
+            if (x < 0 || y < 0 || x >= im.width || y >= im.height) continue;
+            const std::size_t i = 4 * (static_cast<std::size_t>(y) * static_cast<std::size_t>(im.width) + static_cast<std::size_t>(x));
+            sum += 0.2126 * im.rgba[i] + 0.7152 * im.rgba[i + 1] + 0.0722 * im.rgba[i + 2];
+            ++count;
+        }
+    }
+    return count ? sum / count : 0.0;
+}
+
+}  // namespace
+
+// Unit 26g (MG1, MG3): classic ignores the finishes to the bit; enhanced draws the electrodes as metal.
+TEST_CASE("render image: finishes in classic and enhanced (Unit 26g, MG1, MG3)") {
+    Renderer& r = warp();
+    constexpr int W = 960, H = 720;
+    const Mosfet& m3 = mosfet(true);
+    const Geometry g3 = geometry_of(m3.device);
+    auto solid = solid_view(m3.device, g3);
+    REQUIRE(solid.has_value());
+    REQUIRE(std::ranges::any_of(solid->triangles, [](const TriangleBatch& b) { return b.finish == Finish::metal; }));
+    REQUIRE(std::ranges::any_of(solid->triangles, [](const TriangleBatch& b) { return b.finish == Finish::glass; }));
+    FieldScene matte = *solid;
+    for (TriangleBatch& b : matte.triangles) b.finish = Finish::matte;
+    // MG1: a classic scene with metal and glass batches draws exactly as with matte ones.
+    const auto classic = r.draw(*solid, W, H);
+    const auto classic_matte = r.draw(matte, W, H);
+    REQUIRE(classic.has_value());
+    REQUIRE(classic_matte.has_value());
+    CHECK(classic->rgba == classic_matte->rgba);
+    // MG3 (metal): the gate electrode's top face (y = 1.06 um, the slab 3% of the 2 um extent on the
+    // oxide) is lighter than classic's and lighter than its front face (z = 0.8 um).
+    set_look(*solid, Look::enhanced);
+    const auto enhanced = r.draw(*solid, W, H);
+    REQUIRE(enhanced.has_value());
+    const ScreenPoint top = screen_position(*solid, W, H, {1.0f, 1.06f, 0.4f});
+    const ScreenPoint front = screen_position(*solid, W, H, {1.0f, 1.03f, 0.8f});
+    const double top_enhanced = mean_luminance(*enhanced, top.x, top.y, 4);
+    const double top_classic = mean_luminance(*classic, top.x, top.y, 4);
+    const double front_enhanced = mean_luminance(*enhanced, front.x, front.y, 3);
+    CAPTURE(top.x, top.y, front.x, front.y, top_enhanced, top_classic, front_enhanced);
+    CHECK(top_enhanced > top_classic);
+    CHECK(top_enhanced > front_enhanced);
+    // The same scene with matte electrodes in enhanced is darker on top: the finish does it.
+    set_look(matte, Look::enhanced);
+    const auto enhanced_matte = r.draw(matte, W, H);
+    REQUIRE(enhanced_matte.has_value());
+    CHECK(top_enhanced > mean_luminance(*enhanced_matte, top.x, top.y, 4));
+    // MG3 (glass, as ruled 2026-11-18): within 3 px of the oxide's outline (its top edges, y = 1 um, away
+    // from the gate) the glass is lighter than the same pixels with a matte oxide.
+    for (const Float3 p : {Float3{0.3f, 1.0f, 0.0f}, Float3{1.7f, 1.0f, 0.0f}, Float3{0.3f, 1.0f, 0.8f},
+                           Float3{1.7f, 1.0f, 0.8f}}) {
+        const ScreenPoint q = screen_position(*solid, W, H, p);
+        const double glass = mean_luminance(*enhanced, q.x, q.y, 3);
+        const double plain = mean_luminance(*enhanced_matte, q.x, q.y, 3);
+        CAPTURE(p[0], p[2], glass, plain);
+        CHECK(glass > plain + 10.0);
+    }
+    for (const std::string& m : r.debug_messages()) UNSCOPED_INFO(m);
+    CHECK(r.debug_errors() == 0);
+}
+
+// Unit 26g (MG5): the ground shadow under the device in the enhanced look; none looking up from below,
+// none in classic, none when the scene says so (clipped and exploded views, scene_test).
+TEST_CASE("render image: the ground shadow (Unit 26g, MG5)") {
+    Renderer& r = warp();
+    constexpr int W = 960, H = 720;
+    const Mosfet& m3 = mosfet(true);
+    const Geometry g3 = geometry_of(m3.device);
+    auto s = solid_view(m3.device, g3);
+    REQUIRE(s.has_value());
+    REQUIRE(s->ground_shadow);
+    FieldScene none = *s;
+    none.ground_shadow = false;
+    // Classic: never drawn.
+    CHECK(r.draw(*s, W, H)->rgba == r.draw(none, W, H)->rgba);
+    set_look(*s, Look::enhanced);
+    set_look(none, Look::enhanced);
+    const auto with = r.draw(*s, W, H);
+    const auto without = r.draw(none, W, H);
+    REQUIRE(with.has_value());
+    REQUIRE(without.has_value());
+    // Under the front bottom edge's middle: darker than the gradient alone.
+    const float cx = 0.5f * (s->lo[0] + s->hi[0]);
+    const ScreenPoint q = screen_position(*s, W, H, {cx, s->lo[1], s->hi[2]});
+    const double a = mean_luminance(*with, q.x, q.y + 10.0f, 2);
+    const double b = mean_luminance(*without, q.x, q.y + 10.0f, 2);
+    CAPTURE(q.x, q.y, a, b);
+    CHECK(a < b - 8.0);
+    // Far from the device (the view's top left): the gradient only.
+    CHECK(mean_luminance(*with, 40.0f, 60.0f, 2) == mean_luminance(*without, 40.0f, 60.0f, 2));
+    // Looking up from below (elevation -10 degrees): not drawn.
+    s->camera.elevation_deg = -10.0f;
+    none.camera.elevation_deg = -10.0f;
+    CHECK(r.draw(*s, W, H)->rgba == r.draw(none, W, H)->rgba);
+    // Just above the limit (-4 degrees): still drawn.
+    s->camera.elevation_deg = -4.0f;
+    none.camera.elevation_deg = -4.0f;
+    CHECK(r.draw(*s, W, H)->rgba != r.draw(none, W, H)->rgba);
+    for (const std::string& m : r.debug_messages()) UNSCOPED_INFO(m);
+    CHECK(r.debug_errors() == 0);
+}
+
+// Unit 26g (MD7): in enhanced the colourbar's frame is lighter and its ticks show inside the bar too.
+TEST_CASE("render image: the enhanced colourbar (Unit 26g, MD7)") {
+    Renderer& r = warp();
+    constexpr int W = 960, H = 720;
+    const Mosfet& m3 = mosfet(true);
+    const Geometry g3 = geometry_of(m3.device);
+    std::vector<double> values;
+    const FieldOptions o = field_options(m3.device, m3.point, Field::potential, values);
+    auto s = field_view(m3.device, g3, values, o);
+    REQUIRE(s.has_value());
+    const auto classic = r.draw(*s, W, H);
+    set_look(*s, Look::enhanced);
+    const auto enhanced = r.draw(*s, W, H);
+    REQUIRE(classic.has_value());
+    REQUIRE(enhanced.has_value());
+    // The bar as draw() lays it out: 16 px wide from x = W - 130 + 14, from 64 px to H - 24.
+    const float left = W - 130.0f + 14.0f, right = left + 16.0f, top = 64.0f, bottom = H - 24.0f;
+    const float mid = 0.5f * (top + bottom);
+    CHECK(mean_luminance(*enhanced, left, mid, 0) > mean_luminance(*classic, left, mid, 0) + 10.0);
+    // Inside the right edge at each major tick: the frame's grey in enhanced, the colormap in classic.
+    int inner = 0;
+    for (const Tick& t : s->colorbar->scale.ticks()) {
+        if (!t.major) continue;
+        const float y = std::round(bottom - (bottom - top) * static_cast<float>(t.position));
+        if (y < top + 3.0f || y > bottom - 3.0f) continue;
+        const std::size_t i = 4 * (static_cast<std::size_t>(y) * W + static_cast<std::size_t>(right - 3.0f));
+        int most = 0;
+        for (int c = 0; c < 3; ++c) most = std::max(most, std::abs(int(enhanced->rgba[i + c]) - int(classic->rgba[i + c])));
+        CAPTURE(t.position, y, most);
+        CHECK(most > 20);
+        ++inner;
+    }
+    CHECK(inner >= 2);
 }
 
 TEST_CASE("render image: drawing benchmark (VG7)", "[.benchmark]") {

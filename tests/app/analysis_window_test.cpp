@@ -1440,3 +1440,48 @@ TEST_CASE("app window 26d: the taskbar's progress and the title bar's theme (ZD5
     REQUIRE(pump_until([&] { return !w->runner().busy() && w->workspace() && w->workspace()->has_results(); }));
     CHECK(w->taskbar_progress() == app::TaskbarProgress{});
 }
+
+TEST_CASE("app window 26f: the Enhanced 3D look check box (KD5, KG5)", "[app]") {
+    const fs::path dir = app_test::scratch("window_enhanced_look");
+    const fs::path deck = app_test::write(dir, "mosfet3d.deck", app_test::mosfet3d);
+    auto w = window();
+    REQUIRE(w->open_deck(deck));
+    REQUIRE(pump_until([&] { return w->workspace() != nullptr && !w->runner().busy(); }));
+    w->execute(Command::run);
+    REQUIRE(pump_until([&] { return !w->runner().busy() && w->workspace() && w->workspace()->has_results(); }));
+    w->select_tab(MainWindow::tab_view);
+    choose(*w, MainWindow::id_view, L"solid");
+    const auto look = [&] {
+        REQUIRE(w->scene());
+        return std::get<render::FieldScene>(*w->scene()).look;
+    };
+    // On by default, on a 3D view; the command names no look and draws the app's image.
+    CHECK(w->app_state().enhanced_look);
+    CHECK(shown(*w, MainWindow::id_enhanced));
+    CHECK(SendMessageW(w->child(MainWindow::id_enhanced), BM_GETCHECK, 0, 0) == BST_CHECKED);
+    CHECK(w->settings().enhanced);
+    CHECK(look() == render::Look::enhanced);
+    same_as_plot(*w, deck, dir / "enhanced.png");
+    // Off: classic, the command says so and still draws the app's image; remembered in the saved state.
+    click(*w, MainWindow::id_enhanced);
+    CHECK_FALSE(w->settings().enhanced);
+    CHECK(look() == render::Look::classic);
+    const auto args = app::plot_arguments(w->settings());
+    CHECK(std::ranges::search(args, std::vector<std::string>{"--look", "classic"}).begin() != args.end());
+    same_as_plot(*w, deck, dir / "classic.png");
+    CHECK_FALSE(w->app_state().enhanced_look);
+    CHECK_FALSE(app::parse_state(app::serialize(w->app_state())).enhanced_look);
+    // Kept on the other device views; hidden on the curves.
+    choose(*w, MainWindow::id_view, L"field");
+    CHECK(SendMessageW(w->child(MainWindow::id_enhanced), BM_GETCHECK, 0, 0) == BST_UNCHECKED);
+    CHECK(look() == render::Look::classic);
+    w->select_tab(MainWindow::tab_curves);
+    CHECK_FALSE(shown(*w, MainWindow::id_enhanced));
+    // A 2D device: hidden, and its new views start with the remembered choice.
+    const fs::path deck2 = app_test::write(dir, "generate2d.deck", app_test::generate2d);
+    REQUIRE(w->open_deck(deck2));
+    REQUIRE(pump_until([&] { return w->workspace() != nullptr && !w->runner().busy(); }));
+    w->select_tab(MainWindow::tab_view);
+    CHECK_FALSE(shown(*w, MainWindow::id_enhanced));
+    CHECK_FALSE(w->settings().enhanced);
+}

@@ -531,7 +531,8 @@ set(NITCAD_SHADER_DIR "${CMAKE_CURRENT_BINARY_DIR}/shaders")
 set(NITCAD_SHADER_HEADERS "")
 foreach(entry
     "scene mesh_vs vs_6_0" "scene opaque_ps ps_6_0" "scene transparent_ps ps_6_0"
-    "scene line_vs vs_6_0" "scene line_ps ps_6_0"
+    "scene line_vs vs_6_0" "scene line_ps ps_6_0" "scene background_ps ps_6_0"
+    "scene shadow_vs vs_6_0" "scene shadow_ps ps_6_0"
     "post fullscreen_vs vs_6_0" "post composite_ps ps_6_0" "post resolve_ps ps_6_0")
   separate_arguments(parts NATIVE_COMMAND "${entry}")
   list(GET parts 0 file)
@@ -554,6 +555,7 @@ add_library(nitcad_render STATIC
   src/render/streamlines.cpp
   src/render/cut_line.cpp
   src/render/quality.cpp
+  src/render/edges.cpp
   src/render/compare.cpp
   src/render/renderer.cpp
   src/render/png.cpp
@@ -577,6 +579,7 @@ add_executable(nitcad_render_test
   tests/render/hidden_test.cpp
   tests/render/film_test.cpp
   tests/render/cut_line_test.cpp
+  tests/render/edges_test.cpp
   tests/render/quality_test.cpp
   tests/render/compare_test.cpp
   tests/render/image_test.cpp

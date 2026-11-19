@@ -224,6 +224,7 @@ bool MainWindow::create_children() {
                                    std::pair{id_perspective, L"Pe&rspective"}}) {
         make(L"BUTTON", text, WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX, inspector_, id);
     }
+    make(L"BUTTON", L"Enhanced &3D look", WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX, inspector_, id_enhanced);
     labelled(L"Slice plane", L"COMBOBOX", drop, id_slice_axis);
     labelled(L"Slice at (µm)", L"EDIT", ES_AUTOHSCROLL, id_slice_at);
     make(L"BUTTON", L"C&lipping box (µm)", WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX, inspector_, id_clip);
@@ -532,6 +533,7 @@ void MainWindow::layout_inspector() {
         y += row + gap;
     }
     for (int id : {id_contours, id_edges, id_contacts, id_opaque, id_perspective}) put(id, row);
+    if (shown(id_enhanced)) put(id_enhanced, row);  // 3D views only (Unit 26f, KD5)
     put_label();
     put(id_slice_axis, row * 6);
     y -= row * 6 - row;
@@ -660,6 +662,7 @@ void MainWindow::run_page_stop() { execute(Command::stop); }
 void MainWindow::default_settings() {
     device_view_ = {};
     curve_view_ = {};
+    device_view_.enhanced = curve_view_.enhanced = state_.enhanced_look;  // Unit 26f (KD5)
     if (!workspace_) return;
     const auto views = available_views(*workspace_, run_b());
     const bool results = workspace_->has_results();
@@ -946,6 +949,7 @@ void MainWindow::sync_inspector() {
     check(id_contacts, s.contacts);
     check(id_opaque, s.opaque);
     check(id_perspective, s.perspective);
+    check(id_enhanced, s.enhanced);
     check(id_clip, s.clip.has_value());
     SendMessageW(child(id_slice_axis), CB_SETCURSEL, s.slices.empty() ? 0 : static_cast<WPARAM>(s.slices.front().axis + 1), 0);
     // The boxes (ZD1); a clipping box's text stays while there is none, to be checked again.
@@ -1125,6 +1129,7 @@ void MainWindow::show_inspector_groups() {
     show({label_frequency, id_frequency}, curves && s.kind == ViewKind::cv);
     // Playback on a transient run's field view (YD5); the box's sliders where a 3D view clips (YD6).
     show({label_time, id_time, id_time_text, id_play}, tab_ == tab_view && can_play());
+    show({id_enhanced}, tab_ == tab_view && dim == 3 && !is_plot(s.kind));  // Unit 26f (KD5)
     const bool clips = tab_ == tab_view && dim == 3 && (s.kind == ViewKind::solid || s.kind == ViewKind::field);
     show({label_clip_x, label_clip_x + 1, label_clip_x + 2, id_clip_x0, id_clip_x1, id_clip_y0, id_clip_y1, id_clip_z0,
           id_clip_z1},
@@ -1185,6 +1190,9 @@ void MainWindow::on_inspector(int id, int code) {
         const bool on = Button_GetCheck(child(id)) == BST_CHECKED;
         (id == id_contours ? s.contours : id == id_edges ? s.edges : id == id_contacts ? s.contacts
                                                                       : id == id_opaque ? s.opaque : s.perspective) = on;
+    } else if (clicked && id == id_enhanced) {
+        // Unit 26f (KD5): this view, and the default of new views, remembered.
+        s.enhanced = state_.enhanced_look = Button_GetCheck(child(id)) == BST_CHECKED;
     } else if ((id == id_arrows || id == id_lines) && selection) {
         // Unit 26c (YD1): arrows or streamlines of a vector field; on the field view the map shows its own
         // magnitude, as `nitcad plot` draws them without --field.

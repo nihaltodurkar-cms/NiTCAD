@@ -7,10 +7,12 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstring>
 #include <limits>
 #include <numeric>
 #include <set>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "NiTCAD/device/device.hpp"
@@ -18,6 +20,7 @@
 #include "NiTCAD/mesh/tensor_grid.hpp"
 #include "NiTCAD/physics/insulator.hpp"
 #include "NiTCAD/physics/semiconductor.hpp"
+#include "NiTCAD/render/edges.hpp"
 #include "NiTCAD/render/scene.hpp"
 
 using namespace NiTCAD;
@@ -526,4 +529,127 @@ TEST_CASE("render scene: isosurfaces on the field's scale, contours at levels in
     REQUIRE(lines != c->lines.end());
     CHECK_FALSE(lines->points.empty());
     for (const Float3& p : lines->points) CHECK(std::abs(p[1] - 0.43f) <= 1e-5f);
+}
+
+// Unit 26g (MG2): electrodes are metal and translucent insulators glass; everything else stays matte.
+TEST_CASE("render scene: finishes, metal electrodes and glass oxide (Unit 26g, MG2)") {
+    const Mos m = mos(true);
+    const auto g = Geometry::tensor(m.device.mesh(), *m.device.cells());
+    std::vector<double> v;
+    for (const Point& p : m.device.mesh().points()) v.push_back(p[1] / 1e-4);
+    const auto expect = [](const TriangleBatch& b) {
+        if (b.name == "electrode") return Finish::metal;
+        if (b.transparent && (b.name == "insulator" || b.name == "gate oxide")) return Finish::glass;
+        return Finish::matte;
+    };
+    const auto check_scene = [&](const FieldScene& s) {
+        for (const TriangleBatch& b : s.triangles) {
+            INFO(b.name);
+            CHECK(b.finish == expect(b));
+        }
+    };
+    const auto solid = solid_view(m.device, *g);
+    REQUIRE(solid.has_value());
+    REQUIRE(find(*solid, "electrode") != nullptr);
+    CHECK(find(*solid, "electrode")->finish == Finish::metal);
+    REQUIRE(find(*solid, "insulator") != nullptr);
+    CHECK(find(*solid, "insulator")->finish == Finish::glass);
+    check_scene(*solid);
+    const auto field = field_view(m.device, *g, v);
+    REQUIRE(field.has_value());
+    REQUIRE(find(*field, "field") != nullptr);
+    CHECK(find(*field, "field")->finish == Finish::matte);
+    CHECK(find(*field, "electrode")->finish == Finish::metal);
+    check_scene(*field);
+    // Opaque insulators stay matte.
+    ViewOptions opaque;
+    opaque.transparent_insulators = false;
+    const auto o = solid_view(m.device, *g, opaque);
+    REQUIRE(o.has_value());
+    REQUIRE(find(*o, "insulator") != nullptr);
+    CHECK_FALSE(find(*o, "insulator")->transparent);
+    CHECK(find(*o, "insulator")->finish == Finish::matte);
+    // Slices, their outline shell and isosurfaces stay matte.
+    const std::vector<Plane> planes{{{0.0, 0.0, 1.0}, 0.3e-4}};
+    const auto sl = slice_view(m.device, *g, v, planes);
+    REQUIRE(sl.has_value());
+    check_scene(*sl);
+    const std::vector<double> levels{0.5, 0.8};
+    const auto iso = iso_view(m.device, *g, v, levels);
+    REQUIRE(iso.has_value());
+    check_scene(*iso);
+    // 2D: no glass (maps are opaque).
+    const Mos m2 = mos(false);
+    const auto g2 = Geometry::tensor(m2.device.mesh(), *m2.device.cells());
+    const auto s2 = solid_view(m2.device, *g2);
+    REQUIRE(s2.has_value());
+    for (const TriangleBatch& b : s2->triangles) CHECK(b.finish != Finish::glass);
+}
+
+// Unit 26g (MD5): the ground shadow belongs to whole, unclipped, unexploded views.
+TEST_CASE("render scene: the ground shadow flag, off on clipped and exploded views (Unit 26g, MD5)") {
+    const Mos m = mos(true);
+    const auto g = Geometry::tensor(m.device.mesh(), *m.device.cells());
+    const auto solid = solid_view(m.device, *g);
+    REQUIRE(solid.has_value());
+    CHECK(solid->ground_shadow);
+    ViewOptions clipped;
+    clipped.clip = Box{{0.5e-4, -1e-4, -1e-4}, {5e-4, 5e-4, 5e-4}};
+    const auto c = solid_view(m.device, *g, clipped);
+    REQUIRE(c.has_value());
+    CHECK_FALSE(c->ground_shadow);
+    const auto e = exploded_view(m.device, *g, 1, 0.2e-4);
+    REQUIRE(e.has_value());
+    CHECK_FALSE(e->ground_shadow);
+}
+
+// Unit 26g (MD6): set_look restyles the 3D mesh edges and contours, and restores them for classic.
+TEST_CASE("render scene: enhanced mesh edges and contours are softer, classic restored (Unit 26g, MD6)") {
+    const Mos m = mos(true);
+    const auto g = Geometry::tensor(m.device.mesh(), *m.device.cells());
+    std::vector<double> v;
+    for (const Point& p : m.device.mesh().points()) v.push_back(p[1] / 1e-4);
+    FieldOptions o;
+    o.contours = true;
+    auto field = field_view(m.device, *g, v, o);
+    auto mesh = mesh_view(m.device, *g);
+    REQUIRE(field.has_value());
+    REQUIRE(mesh.has_value());
+    const auto line = [](const FieldScene& s, std::string_view name) -> const LineBatch& {
+        const auto it = std::ranges::find_if(s.lines, [&](const LineBatch& l) { return l.name == name; });
+        REQUIRE(it != s.lines.end());
+        return *it;
+    };
+    const FieldScene field_classic = *field, mesh_classic = *mesh;
+    set_look(*field, Look::enhanced);
+    set_look(*mesh, Look::enhanced);
+    const LineBatch& c = line(*field, "contours");
+    CHECK(c.color.a == 0.55f);
+    CHECK(c.width_px == 1.2f);
+    CHECK(c.color.r == 0.08f);
+    const LineBatch& e = line(*mesh, "mesh");
+    CHECK(e.color.a == 0.35f);
+    CHECK(e.color.r == 0.25f);
+    CHECK(e.width_px == 1.0f);
+    // Back to classic: the builders' styles, exactly.
+    set_look(*field, Look::classic);
+    set_look(*mesh, Look::classic);
+    for (const auto& [now, before] : {std::pair{&*field, &field_classic}, std::pair{&*mesh, &mesh_classic}}) {
+        REQUIRE(now->lines.size() == before->lines.size());
+        for (std::size_t k = 0; k < now->lines.size(); ++k) {
+            CHECK(now->lines[k].name == before->lines[k].name);
+            CHECK(std::memcmp(&now->lines[k].color, &before->lines[k].color, sizeof(Rgba)) == 0);
+            CHECK(now->lines[k].width_px == before->lines[k].width_px);
+        }
+    }
+    // 2D: untouched by either look.
+    const Mos m2 = mos(false);
+    const auto g2 = Geometry::tensor(m2.device.mesh(), *m2.device.cells());
+    std::vector<double> psi;
+    for (const Point& p : m2.device.mesh().points()) psi.push_back(p[0] / 2e-4);
+    auto flat = field_view(m2.device, *g2, psi, o);
+    REQUIRE(flat.has_value());
+    const float before_alpha = line(*flat, "contours").color.a;
+    set_look(*flat, Look::enhanced);
+    CHECK(line(*flat, "contours").color.a == before_alpha);
 }
