@@ -395,6 +395,9 @@ std::expected<void, base::Error> Renderer::Impl::create(const RendererOptions& o
             DXGI_ADAPTER_DESC1 desc{};
             a->GetDesc1(&desc);
             if (desc.Flags & DXGI_ADAPTER_FLAG_SOFTWARE) continue;
+            // The Microsoft Basic Render Driver (WARP behind a display adapter, as on CI runners) is not
+            // flagged software but is no hardware adapter.
+            if (desc.VendorId == 0x1414 && desc.DeviceId == 0x8c) continue;
             if (SUCCEEDED(D3D12CreateDevice(a.Get(), D3D_FEATURE_LEVEL_11_0, __uuidof(ID3D12Device), nullptr))) {
                 adapter = a;
                 break;
