@@ -1429,7 +1429,7 @@ owner's word.
 | QP11 | Transient: the Λ rows carry no storage, so their mass-matrix rows are zero (index-1 DAE, as Poisson). Small signal: the Λ rows' partials enter the AC matrix. | Commercial parity: DG under every analysis. | — |
 | QP12 | Results: Λ_n and Λ_p [eV] as nodal fields in `BiasPoint`, transient and small-signal results, result files, `nitcad plot` and the app's field list. The derived effective band edges E_c + Λ_n and E_v − Λ_p go in derived.hpp. The quasi-Fermi levels include Λ: in `node_bands` and every derived or plotted E_Fn, E_Fp, E_Fn = ln(n / n_ie) − ln γ_n − η + Λ̂_n and E_Fp = −η − ln(p / n_ie) + ln γ_p − Λ̂_p (QP7 solved for E_F), so they are flat at equilibrium (QV4). The classical bands E_c and E_v stay available as before. Unit 61 checkpoints carry Λ, and a restart with a different confinement model is refused. | The quantum potential is what users inspect in commercial tools. | Result files gain the fields only when the model is on. |
 | QP13 | Recombination and traps see the effective band edges E_c + Λ_n and E_v − Λ_p. SRH (bulk and interface traps), Auger and radiative: n_ie² → n_ie² exp(−Λ̂_n − Λ̂_p), n₁ → n₁ exp(−Λ̂_n), p₁ → p₁ exp(−Λ̂_p), and the same substitution in Unit 14's Fermi–Dirac forms. Trap occupancy (charge and the trap's SRH) uses the same n₁ and p₁. A trap's declared level keeps its classical position (as QD9). The Λ partials of every such term enter the Jacobian (QV5). | Detailed balance: with these substitutions, every net rate is zero at DG equilibrium (n = n₁ e^{…} relations hold exactly), and the occupancy at equilibrium is the Fermi level's (QV4). Field- and current-driven generation (impact ionization, local BTBT) has no n p term and is unchanged. | Λ enters every recombination term's Jacobian: more entries per node. |
-| QP14 | Verification reference: a 1D Schrödinger–Poisson solver in `verify/reference` (finite differences, `jacobi_eigen`, silicon's 2- and 4-fold valleys with m_l = 0.916 and m_t = 0.19, a finite barrier with the insulator band data, Boltzmann and FD subband occupancy, self-consistent with Poisson). Electrons only: in a p-type MOS-C in inversion the holes are classical (bulk majority), so the reference tests Λ_n against physics, and Λ_p only through QV3–QV5 and QV8. A valence-band Schrödinger model (heavy, light and split-off holes) for an n-type accumulation case is a follow-up, not in this unit. Built through the Unit 55 §3.4 checklist: independence I2, class H. | DG has no closed form. SP is the physics DG approximates, and the reference commercial calibrations use. | 1D only (MOS-C). The FinFET is reported, not gated. Λ_p has no physical reference in this unit: stated in every QV6 report. |
+| QP14 | Verification reference: a 1D Schrödinger–Poisson solver in `verify/reference` (finite differences; a symmetric tridiagonal eigensolver of its own, Sturm bisection and inverse iteration as Unit 55 TVQ4 ruled, since `jacobi_eigen` takes n ≤ 16 and serves as its cross-check; silicon's 2- and 4-fold valleys with m_l = 0.916 and m_t = 0.19, a finite barrier with the insulator band data, Boltzmann and FD subband occupancy, self-consistent with Poisson). Electrons only: in a p-type MOS-C in inversion the holes are classical (bulk majority), so the reference tests Λ_n against physics, and Λ_p only through QV3–QV5 and QV8. A valence-band Schrödinger model (heavy, light and split-off holes) for an n-type accumulation case is a follow-up, not in this unit. Built through the Unit 55 §3.4 checklist: independence I2, class H. | DG has no closed form. SP is the physics DG approximates, and the reference commercial calibrations use. | 1D only (MOS-C). The FinFET is reported, not gated. Λ_p has no physical reference in this unit: stated in every QV6 report. |
 | QP15 | Coarse meshes: across a depletion edge or junction on a mesh much coarser than λ, neighbouring densities can differ by decades, and exp(½ Δ ln c) makes Λ large and mesh-dependent (a known DG artefact on under-resolved meshes). No limiter or damping is added: that would change the model. QV15 measures it on the example decks, and the run record warns when \|Λ̂\| exceeds 10 (10 k T) at a node away from the interfaces: a semiconductor node with no semiconductor–insulator edge that is not a lumped-gate node. | Honest behaviour first. A limiter would be a model change needing its own ruling. | DG on the existing 5 nm example meshes may be unconverged in Λ: the warning says so, it does not hide it. |
 
 **Criteria (QV1–QV15), fixed before code (QV6's bounds after QP0, before slice 1).**
@@ -1501,6 +1501,42 @@ and traps see the effective band edges, so detailed balance holds at DG equilibr
 quasi-Fermi levels include Λ (QP12, QV4); (3) the slaving relation in η = ψ + s with FD through γ (QP8, QV4);
 (4) "away from the interfaces" defined (QP15); (5) `natural_size` extended and tested (QP9); (6) a "not built yet"
 refusal between slices 1 and 2 (slices); (7) three more mutants (QV14).
+
+**Slice 0 (2026-11-19, owner "start slice 0", then "proceed").**
+- **QP0: blocked, owner supplying the papers.** None of the four primary sources could be read: Wettstein et al.
+  2001 (IEEE, DOI 10.1109/16.902727, paywalled; abstract only), Ancona and Iafrate 1989 and Ancona and Tiersten 1987
+  (APS, paywalled), Ancona 2000 (IEEE, paywalled); Ancona's 2011 review (DTIC copy HTTP 403) and the NASA and COMSOL
+  PDFs fetched as compressed or scanned streams, not text. Secondary sources (a COMSOL tutorial's m0/3 DG mass) were
+  not used: PC is not enough (Unit 55 §3.3). The owner chose to supply the PDFs and to build the reference meanwhile.
+  γ, the masses and QV6's bounds stay placeholders; slice 1 does not start until QP0 is recorded.
+- **QP14 built** (`include/NiTCAD/verify/reference/schrodinger_poisson.hpp`, `src/verify/reference/
+  schrodinger_poisson.cpp`; class H, I2, provenance PD, derivation in the header): a symmetric tridiagonal
+  eigensolver (Sturm count, bisection, inverse iteration with partial pivoting); the BenDaniel–Duke effective-mass
+  equation by the box method with per-cell mass and potential; the self-consistent MOS capacitor (classical or
+  quantum electrons, Boltzmann or Fermi–Dirac subband occupancy, classical holes), solved by outer iterations with
+  a predicted density (its fixed point independent of the predictor), started from the classical solution.
+- **L0 tests** (`tests/verify/reference/schrodinger_poisson_test.cpp`, 8 cases, 271 assertions, under 1 s Release;
+  the whole `nitcad_verify_test` 178 cases pass): tridiag(−1, 2, −1) against its closed form (1e-14) and jacobi_eigen
+  on n = 12; the infinite well against the discrete closed form and, at observed order 1.9–2.1, the continuum (also on
+  a smoothly graded grid, 1.8–2.2); a finite well with a mass step against Brent on its transcendental equations; the
+  triangular well against DLMF Table 9.9.1's Airy zeros (read 2026-11-19, PA); the classical Poisson part against
+  `mos_capacitor.hpp` from accumulation to strong inversion; the quantum solution's Poisson residual, Gauss's law,
+  orthonormality, and its changes with the grid halved (≤ 1e-3, ≤ 0.01 nm), 12 subbands instead of 8 (≤ 1e-4) and
+  a 60 nm Schrödinger depth instead of 40 (≤ 1e-4).
+- **Bounds changed after the first run (stated, not hidden).** Four L0 bounds set before the run were wrong a priori,
+  while every observed-order check passed: (i) the discrete infinite well "1e-12 relative" ignored that eigenvalues
+  are accurate to eps ‖A‖, not relative to E: now 4 eps ‖A‖ (≈ 4e-13 eV at 800 cells; observed 1.2e-13); (ii)–(iii)
+  the finite and triangular wells' absolute bounds (1e-5, 1e-6 at the finest grid) underestimated the O(h²) constant,
+  about (k h)² / 12 (observed 4e-5 and 1.7e-6): replaced by stricter checks, the Richardson value of the two finest
+  grids against Brent within 1e-7 and against the Airy zeros within 1e-8; (iv) the classical MOS-C's single-grid
+  bounds (1e-5 in Q_s, 1e-6 V) failed in accumulation at −1 V (1.4e-5, 1.2e-5 V): now observed order 1.8–2.2 between
+  the grid and its halving, and the Richardson Q_s and band bending against `mos_capacitor.hpp` within 1e-7 (relative,
+  and in V). None of these is a QV criterion; QV1–QV15 are untouched.
+- **Reported** (1e17 p-type, 5 nm SiO₂, V_G − V_FB = 2 V, Boltzmann, (100) valleys 0.916/0.19 ×2 and 0.19/0.417 ×4,
+  oxide 3.0 eV and 0.50 m0): N_inv 2.837e12 cm⁻² against 3.142e12 classically (−9.7%); centroid 2.167 nm against
+  0.958 nm; 11 outer iterations; Fermi–Dirac N_inv 2.824e12.
+- **Still in slice 0:** QP0 (on the papers), then the QV3 analytic Λ profiles (they need the DG row, so they move to
+  slice 2, where the row exists).
 
 ## New questions the advisor raised (not yet in `ARCHITECTURE.md`)
 

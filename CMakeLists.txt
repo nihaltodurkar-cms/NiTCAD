@@ -191,6 +191,8 @@ add_custom_command(
           src/verify/reference/linear_transient.cpp
           src/verify/reference/mos_hf.cpp
           src/verify/reference/diode.cpp
+          include/NiTCAD/verify/reference/schrodinger_poisson.hpp
+          src/verify/reference/schrodinger_poisson.cpp
   COMMENT "verify/reference include boundary (VR2)")
 add_custom_target(nitcad_verify_reference_boundary
   DEPENDS "${CMAKE_BINARY_DIR}/verify_reference_boundary.stamp")
@@ -205,7 +207,7 @@ add_library(nitcad_verify_reference STATIC src/verify/reference/double_double.cp
   src/verify/reference/admittance.cpp src/verify/reference/mos_hf.cpp
   src/verify/reference/linear_transient.cpp src/verify/reference/energy_layer.cpp
   src/verify/reference/thermal_slab.cpp
-  src/verify/reference/pao_sah.cpp)
+  src/verify/reference/pao_sah.cpp src/verify/reference/schrodinger_poisson.cpp)
 add_library(NiTCAD::verify_reference ALIAS nitcad_verify_reference)
 target_include_directories(nitcad_verify_reference PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
 add_dependencies(nitcad_verify_reference nitcad_verify_reference_boundary)
@@ -242,7 +244,8 @@ add_executable(nitcad_verify_test
   tests/verify/reference/linear_transient_test.cpp
   tests/verify/reference/energy_layer_test.cpp
   tests/verify/reference/thermal_slab_test.cpp
-  tests/verify/reference/pao_sah_test.cpp)
+  tests/verify/reference/pao_sah_test.cpp
+  tests/verify/reference/schrodinger_poisson_test.cpp)
 target_link_libraries(nitcad_verify_test PRIVATE NiTCAD::verify_reference Catch2::Catch2WithMain)
 nitcad_add_file_tests(verify nitcad_verify_test)
 add_test(NAME verify_reference_boundary
