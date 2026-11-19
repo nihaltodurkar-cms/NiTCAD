@@ -480,7 +480,7 @@ leaves a summary here. A citation elsewhere (code comments, ARCHITECTURE.md) of 
 
 ## Open units (records kept here in full)
 
-None on `main`. Unit 59 (natural-test norm; approved 2026-11-18, not started) is on `solve/natural-norm`.
+None on `main`. Unit 59 (natural-test norm; approved 2026-11-18, started 2026-11-19, slice 0 done) is on `solve/natural-norm`.
 
 ### Unit 26e — hover readout and one default colormap (proposed 2026-11-18; on `app/hover-readout`)
 
@@ -1237,7 +1237,7 @@ stopped on the owner's word "dont start debug until i say"; the full suites not 
 
 ---
 
-### Unit 59 — a natural-test norm for reverse bias (proposed 2026-11-18; approved 2026-11-18, not started; on `solve/natural-norm`)
+### Unit 59 — a natural-test norm for reverse bias (proposed 2026-11-18; approved 2026-11-18; started 2026-11-19; on `solve/natural-norm`)
 
 **Owner request (2026-11-18):** "write a proposal for item 1": the 11.3 row "Robust nonlinear solving", next step "A
 natural-test norm monotone in reverse bias". The branch starts from `assemble/generic-equations` `3b4024a` (PR #87):
@@ -1304,6 +1304,43 @@ search inside `trace_bias`'s corrector; making any line search the default; chan
 | NQ6 | The line search's default | **Stays off (recommended).** / Turn on with the new norm if NG3–NG6 pass. |
 | NQ7 | Deck key | **`[solver] natural_norm = convergence \| weighted` (recommended).** / Another name. |
 **Owner ruling (2026-11-18): "choose recommended and dont start unit 59".** NQ1–NQ7 take the recommended option:the norm only; the norm chosen by slice 0's measurement (NG3 and NG4, ties to fewer iterations); a new option`natural_norm`, default `convergence`; stacked on PR #87 and rebased after it merges; Unit 50's MOSFET findingbisected in slice 0 (at most about two hours); the line search stays off by default; deck key `[solver]natural_norm = convergence | weighted`. The criteria NG1–NG7 are frozen. **Not started:** no slice begins until theowner says so.
+**Started 2026-11-19 (owner: "now start Unit 59"),** rebased onto `main` `e57918a`.
+
+**Slice 0 results (ND1, 2026-11-19; Release, MSVC 14.51, Eigen SparseLU).** Test code only:
+`tests/solve/natural_norm_probe.hpp` and two hidden `[.benchmark][.natural_norm]` cases (`step_control_test.cpp`,
+`mosfet_test.cpp`). The probe replays `newton_solve` through `System`'s public hooks; its plain path and its
+natural search under today's measure equal `newton_solve`'s iteration for iteration (update and step, checked in
+both cases: 1527 + 515 assertions pass). Candidates use the iterate for both corrections, combine per field (RMS)
+then over fields (RMS), skip held unknowns (Jacobian row = own diagonal), ψ weighted by max(|ψ|, 1).
+- **Natural search per measure (NG3's points; iterations, F = failed in 100):**
+
+| Measure | 0.6 V | 0.8 V | 1.0 V | −5 V | 1.2 V (rep.) | −20 V (rep.) | MOSFET (NG4) |
+|---|---|---|---|---|---|---|---|
+| today (Unit 30) | 13 | 16 | 20 | F | F | F | 2/10, 185 it |
+| (a) RMS τ 1e-4 | 15 | F | F | F | F | F | 4/10 |
+| (a) RMS τ 1e-8 | 91 | F | F | 75 | F | F | 10/10, 93 it |
+| (a) RMS τ 1e-12 | F | F | F | F | F | F | 10/10, 93 it |
+| (b) ψ only | 14 | 16 | 20 | 45 | F | F | 0/10 |
+| (c) asinh τ 1e-4 | 14 | 20 | 42 | 100 | 43 | F | 4/10 |
+| **(c) asinh τ 1e-8** | **37** | **44** | **50** | **61** | **53** | F | **10/10, 93 it** |
+| (c) asinh τ 1e-12 | 25 | 34 | 41 | F | 45 | F | 10/10, 93 it |
+
+  Only (c) asinh at τ = 1e-8 passes NG3 and NG4, so by NQ2 it is the norm for slice 1 (no tie). Every converged
+  diode state is within 3.8e-15 (relative) of the 0.05 V sweep's.
+- **θ along plain Newton's path (λ = 1, test passes at θ ≤ 3/4):** today's measure jumps (diode −5 V largest θ 25.1
+  at the trial, 2.5 at the iterate; MOSFET at 5 V_T up to 7.7e3). Measuring both sides at the iterate alone does not
+  fix it (−5 V: 2 of 44 steps pass). The candidates' θ stays near 1 through plain Newton's slow middle phase
+  (diode 0.8–1.0 V: θ 0.99–1.07 over many steps), which is why the search shortens steps there; asinh keeps θ within
+  1.6 at every gated point (largest 1.53, at 1.0 V). ψ alone contracts on the diode (−5 V: 44/44 steps θ < 1) but not on the MOSFET.
+- **MOSFET plain path (first drain point):** at 5 V_T fails in 100 (as recorded); at 1 V_T converges in 11.
+- **NG4's comparison:** the largest plain relative difference against the 1 V_T sweep is 0.14 (today's norm) to 0.6
+  (the candidates), all in densities below 1e-8 of their field's largest, where both runs (tol_update 1e-8) are at
+  rounding. Weighted as the norm weighs them (ψ against max(|ψ|, 1), a density against max(|n|, 1e-8 of the
+  largest)) every completed point is within 2.0e-15. Which comparison NG4's "to 1e-12" means is put to the owner.
+- **NQ5 bisection (Unit 50's finding):** natural test on the `[.line_search]` benchmark: `f3e2811` (Unit 30's merge)
+  10/10 in 227 iterations, as recorded; `e14a53f` (#42) 10/10, 227; `2d1fdc7` (#44, Unit 35: Couderc band set and
+  automatic Masetti holes as the silicon defaults) 2/10 in 185, the same as today. The change is the device's
+  physics, not the solver: NG4's baseline on today's tree is 2/10, 185 iterations.
 
 ## New questions the advisor raised (not yet in `ARCHITECTURE.md`)
 

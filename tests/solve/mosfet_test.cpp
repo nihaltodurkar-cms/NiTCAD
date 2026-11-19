@@ -37,6 +37,9 @@
 #include "NiTCAD/solve/equilibrium.hpp"
 #include "NiTCAD/solve/small_signal.hpp"
 #include "NiTCAD/solve/transient.hpp"
+#include "NiTCAD/assemble/scaling.hpp"
+#include "NiTCAD/assemble/system.hpp"
+#include "natural_norm_probe.hpp"
 #include "../linalg/mkl_test_runtime.hpp"
 #include "assembly_timing.hpp"
 #include "legacy_graded_mesh.hpp"
@@ -965,4 +968,98 @@ TEST_CASE("mosfet: assembly cost with field mobility", "[.assembly_benchmark]") 
     std::vector<double> psi(eq->fields.potential_V);
     for (double& v : psi) v /= scaling.V_T;
     time_assembly("2D MOSFET, field mobility", system, system.state_from_potential(psi));
+}
+
+TEST_CASE("mosfet benchmark (Unit 59, ND1): the natural test's contraction along plain Newton's "
+          "path, and the natural search under each candidate norm, on the drain sweep",
+          "[.benchmark][.natural_norm]") {
+    // The Unit 30 benchmark's sweep (field mobility, V_G = 1 V, drain 0.1-1 V from the gate-on
+    // state). theta along plain Newton's path at the first drain point, at the default 5 V_T cap
+    // (which fails) and at 1 V_T (the reference's, which converges); then the natural search under
+    // each measure over the ten points, each converged state against the 1 V_T sweep's (NG4).
+    const DrainBench b;
+    const auto scaling = assemble::make_scaling(b.d);
+    REQUIRE(scaling.has_value());
+    assemble::PhysicsModels models;
+    models.field_mobility = true;
+    auto system = assemble::System::create(b.d, *scaling, models);
+    REQUIRE(system.has_value());
+    const auto& dofs = system->dofs();
+    const auto scaled = [&](const results::NodeFields& f) {
+        std::vector<double> x(system->unknowns());
+        for (std::size_t i = 0; i < system->node_count(); ++i) {
+            x[dofs.index(assemble::FieldId::potential, i)] = f.potential_V[i] / scaling->V_T;
+            x[dofs.index(assemble::FieldId::electrons, i)] = f.n_cm3[i] / scaling->Ns;
+            x[dofs.index(assemble::FieldId::holes, i)] = f.p_cm3[i] / scaling->Ns;
+        }
+        system->stamp_contacts(x);
+        return x;
+    };
+    const auto drain = [](int k) { return std::vector<double>{0.0, 0.1 * k, 0.0, 1.0}; };
+    for (const double cap : {5.0, 1.0}) {
+        const solve::NewtonOptions newton{.max_update = cap};
+        REQUIRE(system->set_bias(drain(1)).has_value());
+        const std::vector<double> x0 = scaled(b.start);
+        char label[48];
+        std::snprintf(label, sizeof label, "mosfet V_D 0.1 V, cap %.0f V_T", cap);
+        const auto path = natural_norm::plain_path(*system, x0, newton);
+        natural_norm::print_path(label, path);
+        auto solver = linalg::LinearSolver::create({});
+        REQUIRE(solver.has_value());
+        std::vector<double> x = x0;
+        results::ConvergenceRecord record;
+        const auto ok = solve::newton_solve(*system, x, newton, *solver, record);
+        CHECK(ok.has_value() == path.converged);
+        CHECK(natural_norm::same_iterations(record, path.record));
+    }
+    std::vector<std::vector<double>> refs;
+    for (const auto& p : b.reference.points) refs.push_back(scaled(p.fields));
+    const auto norms = natural_norm::candidates();
+    REQUIRE(system->set_bias(drain(1)).has_value());
+    auto jacobian = system->make_jacobian();
+    std::vector<double> residual(system->unknowns());
+    system->evaluate(refs[0], residual, jacobian);
+    const natural_norm::Layout layout(*system, jacobian);
+    solve::NewtonOptions searched;
+    searched.line_search.enabled = true;
+    for (int m = -1; m < static_cast<int>(norms.size()); ++m) {
+        const natural_norm::Norm* norm = m < 0 ? nullptr : &norms[static_cast<std::size_t>(m)];
+        std::vector<double> x = scaled(b.start);
+        int completed = 0;
+        long iterations = 0;
+        double worst = 0.0, weighted = 0.0;
+        std::vector<std::size_t> counts;
+        const auto t0 = std::chrono::steady_clock::now();
+        for (int k = 1; k <= 10; ++k) {
+            REQUIRE(system->set_bias(drain(k)).has_value());
+            system->stamp_contacts(x);
+            const std::vector<double> stamped = x;
+            results::ConvergenceRecord record;
+            const bool ok = natural_norm::natural_search(*system, x, searched, norm, record);
+            iterations += static_cast<long>(record.iterations.size());
+            if (norm == nullptr) {  // the harness is newton_solve's natural search
+                auto solver = linalg::LinearSolver::create({});
+                REQUIRE(solver.has_value());
+                std::vector<double> y = stamped;
+                results::ConvergenceRecord expected;
+                const auto e = solve::newton_solve(*system, y, searched, *solver, expected);
+                CHECK(e.has_value() == ok);
+                CHECK(natural_norm::same_iterations(expected, record));
+            }
+            if (!ok) break;
+            ++completed;
+            counts.push_back(record.iterations.size());
+            const auto& ref = refs[static_cast<std::size_t>(k - 1)];
+            worst = std::max(worst, natural_norm::largest_relative(x, ref));
+            weighted = std::max(weighted, natural_norm::largest_weighted(layout, x, ref));
+        }
+        const double seconds =
+            std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+        std::printf("SEARCH mosfet  %-16s points %2d/10  iterations %5ld  time %7.1f s  worst "
+                    "%.1e  weighted %.1e  per point:",
+                    norm == nullptr ? "today" : norm->name.c_str(), completed, iterations,
+                    seconds, worst, weighted);
+        for (const auto c : counts) std::printf(" %zu", c);
+        std::printf("\n");
+    }
 }
