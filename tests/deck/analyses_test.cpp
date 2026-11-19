@@ -208,7 +208,8 @@ TEST_CASE("deck analyses: outputs each analysis writes", "[deck]") {
     const auto r = must(outputs(trace, "sweep = r.nitsweep\ncheckpoint = c.nitckpt\ntable = r.csv"));
     CHECK(r.outputs.sweep.filename() == "r.nitsweep");
 
-    expect(failure(outputs(transient, "checkpoint = c.nitckpt")), "a transient run writes no checkpoint");
+    // Unit 61 (RD4, AQ4 revised): a transient run writes a checkpoint with its resume state.
+    CHECK(must(outputs(transient, "checkpoint = c.nitckpt")).outputs.checkpoint.filename() == "c.nitckpt");
     expect(failure(outputs(transient, "sweep = s.nitsweep")), "a transient run writes no sweep");
     expect(failure(outputs(transient, "small_signal = s.nitac")), "a transient run writes no small_signal");
     expect(failure(outputs(small_signal, "sweep = s.nitsweep")), "a small-signal run writes no sweep");
@@ -244,8 +245,8 @@ TEST_CASE("deck analyses: every mistake names its line", "[deck]") {
     expect(failure(d + "[transient]\nt_end = 1e-9\nintegrator = rk4\n"), at(2) + "integrator is bdf2 or backward_euler");
     expect(failure(d + "[transient]\nt_end = 1e-9\nadaptive = maybe\n"), at(2) + "'maybe' is not on or off");
     expect(failure(d + "[transient]\nt_end = 1e-9\nthermal sink = 300\n"), at(2) + "no thermal contact named 'sink'");
-    expect(failure(d + "[transient]\nt_end = 1e-9\nrestart = c.nitckpt\n"),
-           at(2) + "restart is only for [sweep] (DK9), not [transient]");
+    // Unit 61 (RD4): a transient takes a restart.
+    CHECK(must(d + "[transient]\nt_end = 1e-9\nrestart = c.nitckpt\n").restart.filename() == "c.nitckpt");
     expect(failure(d + "[transient]\nt_end = 1e-9\nsteps = 10\n"), at(2) + "unknown key 'steps' in [transient]");
 
     expect(failure(d + "[small_signal]\ncontact anode = 0\n"), at(0) + "[small_signal] needs frequencies");
@@ -256,7 +257,7 @@ TEST_CASE("deck analyses: every mistake names its line", "[deck]") {
     expect(failure(d + "[small_signal]\nfrequencies = logspace(1, 1e6)\n"),
            at(1) + "logspace takes (first, last, count)");
     expect(failure(d + "[small_signal]\nfrequencies = 1e6\nrestart = c.nitckpt\n"),
-           at(2) + "restart is only for [sweep] (DK9), not [small_signal]");
+           at(2) + "restart is for [sweep] (DK9) and [transient] (Unit 61), not [small_signal]");
     expect(failure(d + "[small_signal]\nfrequencies = 1e6\nvoltage anode = 1\n"),
            at(2) + "unknown key 'voltage anode' in [small_signal]");
 
@@ -267,7 +268,7 @@ TEST_CASE("deck analyses: every mistake names its line", "[deck]") {
            at(4) + "a second start for 'anode'");
     expect(failure(d + "[trace]\ncontact = anode\nend = 1\nmax_points = 0\n"), at(3) + "");
     expect(failure(d + "[trace]\ncontact = anode\nend = 1\nrestart = c.nitckpt\n"),
-           at(3) + "restart is only for [sweep] (DK9), not [trace]");
+           at(3) + "restart is for [sweep] (DK9) and [transient] (Unit 61), not [trace]");
 
     expect(failure(d + "[transient]\nt_end = 1e-9\n[trace]\ncontact = anode\nend = 1\n"),
            "the deck needs exactly one analysis");

@@ -93,6 +93,9 @@ TEST_CASE("provenance: files written before Unit 42 load with none") {
     CHECK(c->provenance == results::Provenance{});
     CHECK(c->run_identity == sweep->run.input_identity);
     CHECK(c->bias_V == std::vector<double>{0.01, 0.0});
+    // Unit 61 (RG7): a checkpoint written before the kind existed is steady, with no resume state.
+    CHECK(c->kind == io::CheckpointKind::steady);
+    CHECK_FALSE(c->transient.has_value());
     CHECK(c->fields.potential_V == sweep->points[1].fields.potential_V);
 
     const auto device = io::load_device(pre_unit42 / "bar.nitdev");

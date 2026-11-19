@@ -385,6 +385,10 @@ std::expected<RunReport, base::Error> run(const Plan& plan, const solve::RunCont
     if (!plan.initial.empty()) {
         auto c = io::load_checkpoint(plan.initial, plan.device.mesh());
         if (!c) return std::unexpected(std::move(c.error()));
+        if (c->kind != io::CheckpointKind::steady) {
+            return std::unexpected(invalid("the initial checkpoint '" + plan.initial.string() +
+                                           "' holds a transient's resume state: use restart to continue that run"));
+        }
         initial = std::move(*c);
     }
     const results::NodeFields* guess = initial ? &initial->fields : nullptr;
@@ -393,9 +397,27 @@ std::expected<RunReport, base::Error> run(const Plan& plan, const solve::RunCont
     if (plan.analysis == Analysis::transient) {
         solve::TransientOptions o = plan.transient;
         o.steady = plan.options;
-        auto t = solve::solve_transient(plan.device, plan.waveforms, o, guess, control);
+        // A restart (Unit 61, RD4): the run continues from the checkpoint's resume state, which
+        // solve_transient checks belongs to this run (its identity).
+        std::optional<io::Checkpoint> resume;
+        if (!plan.restart.empty()) {
+            auto c = io::load_checkpoint(plan.restart, plan.device.mesh());
+            if (!c) return std::unexpected(std::move(c.error()));
+            if (c->kind != io::CheckpointKind::transient || !c->transient) {
+                return std::unexpected(invalid("the restart checkpoint '" + plan.restart.string() +
+                                               "' holds a steady state, not a transient's resume state: use initial "
+                                               "to start a transient from it"));
+            }
+            resume = std::move(*c);
+        }
+        auto t = solve::solve_transient(plan.device, plan.waveforms, o, guess, control,
+                                        resume ? &*resume->transient : nullptr);
         if (!t) return std::unexpected(std::move(t.error()));
         stamp(t->run);
+        if (!out.checkpoint.empty() && t->resume) {
+            auto r = io::save_transient_checkpoint(out.checkpoint, plan.device.mesh(), *t);
+            if (auto w = written(out.checkpoint, std::move(r)); !w) return std::unexpected(w.error());
+        }
         if (!out.transient.empty()) {
             if (auto w = written(out.transient, io::save_transient(out.transient, *t)); !w) return std::unexpected(w.error());
         }
@@ -450,6 +472,10 @@ std::expected<RunReport, base::Error> run(const Plan& plan, const solve::RunCont
     if (!plan.restart.empty()) {
         auto c = io::load_checkpoint(plan.restart, plan.device.mesh());
         if (!c) return std::unexpected(std::move(c.error()));
+        if (c->kind != io::CheckpointKind::steady) {
+            return std::unexpected(invalid("the restart checkpoint '" + plan.restart.string() +
+                                           "' holds a transient's resume state, not a steady point of the sweep"));
+        }
         std::size_t k = 0;
         while (k < points.size() && !same_bias(points[k], c->bias_V)) ++k;
         if (k == points.size()) {

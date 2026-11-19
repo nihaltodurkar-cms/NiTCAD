@@ -1404,7 +1404,7 @@ std::expected<void, base::Error> Builder::analysis(Plan& plan) const {
 
 // A refusal of `restart` outside [sweep] (DK9, Unit 43 AN6).
 base::Error Builder::no_restart(const Entry& e, const Section& s) const {
-    return at(e.line, "restart is only for [sweep] (DK9), not [" + s.kind + "]");
+    return at(e.line, "restart is for [sweep] (DK9) and [transient] (Unit 61), not [" + s.kind + "]");
 }
 
 // `initial` and `restart` of an analysis (Unit 61, RD2): the files, relative to the deck. Both in one
@@ -1465,6 +1465,7 @@ std::expected<void, base::Error> Builder::transient(const Section& s, Plan& plan
     std::vector<bool> given_t;
     bool t_end = false;
     const Entry* initial = nullptr;
+    const Entry* restart = nullptr;
     for (const Entry& e : s.entries) {
         NITCAD_DECK_TRY(thermal, held_temperature(e, plan, given_t));
         if (thermal) continue;
@@ -1500,13 +1501,13 @@ std::expected<void, base::Error> Builder::transient(const Section& s, Plan& plan
         } else if (e.key == "initial") {
             initial = &e;
         } else if (e.key == "restart") {
-            return std::unexpected(no_restart(e, s));
+            restart = &e;
         } else {
             return std::unexpected(unknown(e, s));
         }
     }
     if (!t_end) return std::unexpected(at(s.line, "[transient] needs t_end"));
-    NITCAD_DECK_CHECK(starts(initial, nullptr, plan));
+    NITCAD_DECK_CHECK(starts(initial, restart, plan));
     for (auto& f : waveforms) plan.waveforms.push_back(f ? std::move(*f) : solve::Waveform::constant(0.0));
     return {};
 }
@@ -1689,10 +1690,6 @@ std::expected<void, base::Error> Builder::outputs(Plan& plan) const {
     }
     if (!o.small_signal.empty() && plan.analysis != Analysis::small_signal) {
         return std::unexpected(refuse("small_signal", name));
-    }
-    if (!o.checkpoint.empty() && plan.analysis == Analysis::transient) {
-        return std::unexpected(at(s->line, "a transient run writes no checkpoint: its end state is not "
-                                           "a steady state a sweep can restart from"));
     }
     return {};
 }

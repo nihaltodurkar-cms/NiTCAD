@@ -114,7 +114,9 @@
 //                     output_times = <series>, fields_every_step = on | off;
 //                     thermal <name> = <K>  (electrothermal: held for the whole run);
 //                     times in s, or with a unit s, ms, us, ns, ps, fs (Unit 61, RD1: t_end,
-//                     dt_*, output_times and every waveform time; a sine's frequency as below)
+//                     dt_*, output_times and every waveform time; a sine's frequency as below);
+//                     restart = <checkpoint file>  (a transient's own checkpoint: the run continues
+//                       after its last accepted step, bit for bit; Unit 61 RD4)
 //   [small_signal]    (Unit 43; solve/small_signal.hpp) contact <name> = <series> and
 //                     thermal <name> = <series>, the operating points as in [sweep];
 //                     frequencies = <series> (required), field_frequencies = <series>; in Hz,
@@ -126,8 +128,8 @@
 //   [output]          sweep, device, mesh, checkpoint, table = <file>  (relative to the deck);
 //                     transient, small_signal = <file>  (Unit 43). Each analysis takes only what
 //                     it writes: equilibrium device, mesh, checkpoint; sweep and trace sweep,
-//                     device, mesh, checkpoint, table; transient transient, device, mesh, table
-//                     (no checkpoint: its end state is not steady); small_signal small_signal,
+//                     device, mesh, checkpoint, table; transient transient, device, mesh, table,
+//                     checkpoint (its last accepted step with the resume state, Unit 61 RD4); small_signal small_signal,
 //                     device, mesh, checkpoint (the last operating point), table.
 //   [adapt]           (Unit 17, AD7; solve/adapt.hpp) adaptive refinement of the mesh for a [sweep]
 //                     (one mesh for the sweep, AQ3) on a tensor, generate2d or swept extrude3d mesh

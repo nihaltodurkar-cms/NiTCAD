@@ -497,6 +497,7 @@ std::expected<results::Transient, base::Error> solve_transient_unobserved(
         r.landing = landing;
         r.attempt = attempt;
         r.identity = identity;
+        r.fields = snapshot(history.back()).fields;
         run.resume = std::move(r);
     };
     // State at the top of an attempt, restored before keeping it on a return from inside one.

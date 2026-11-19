@@ -80,6 +80,8 @@ struct TransientResume {
     // The run's identity without its initial state (RunRecord::input_identity of the same device,
     // options and waveforms with no initial state): a continuation must be of this run.
     std::uint64_t identity = 0;
+    // The last accepted state's fields, as a snapshot of it has them (what a checkpoint file shows).
+    NodeFields fields;
 };
 
 struct Transient {

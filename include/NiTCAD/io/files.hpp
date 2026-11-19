@@ -25,6 +25,7 @@
 #include <cstdint>
 #include <expected>
 #include <filesystem>
+#include <optional>
 #include <vector>
 
 #include "NiTCAD/base/error.hpp"
@@ -105,7 +106,14 @@ enum class Content : std::uint32_t {
 // A restart point: the state of one converged bias point and what it belongs to. A sweep restarts
 // from it with solve::sweep_bias(device, remaining_points, options, &c.fields) and
 // options.step_control.initial_bias_V = c.bias_V.
+// What wrote a checkpoint (Unit 61, RD4): a steady point (sweep, equilibrium, small-signal operating
+// point, trace point; every checkpoint before Unit 61), or a transient run with its resume state.
+enum class CheckpointKind : std::uint8_t { steady = 0, transient = 1 };
+
 struct Checkpoint {
+    CheckpointKind kind = CheckpointKind::steady;
+    // With kind transient: the run's resume state, bit for bit (results/transient.hpp).
+    std::optional<results::TransientResume> transient;
     std::uint64_t mesh_digest = 0;     // of the mesh the state lives on
     std::uint64_t run_identity = 0;    // RunRecord::input_identity of the run that produced it
     std::vector<double> bias_V;        // per contact
@@ -119,8 +127,14 @@ struct Checkpoint {
                                                                const mesh::Mesh& m,
                                                                const results::RunRecord& run,
                                                                const results::BiasPoint& point);
+// A transient run's checkpoint (Unit 61, RD4): its last accepted step with the resume state
+// (Transient::resume, required: invalid_input without one). The bias is that step's, the fields its
+// state's, the identity the run's.
+[[nodiscard]] std::expected<void, base::Error> save_transient_checkpoint(const std::filesystem::path& path,
+                                                                         const mesh::Mesh& m,
+                                                                         const results::Transient& run);
 // Refused (invalid_input) unless the checkpoint was written for a mesh with this mesh's digest and
-// its per-node fields have one value per node of it.
+// its per-node fields have one value per node of it; a kind this build does not know is refused.
 [[nodiscard]] std::expected<Checkpoint, base::Error> load_checkpoint(
     const std::filesystem::path& path, const mesh::Mesh& m);
 
