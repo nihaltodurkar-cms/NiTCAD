@@ -1304,6 +1304,65 @@ double System::update_size(std::span<const double> x, std::span<const double> dx
     return size;
 }
 
+double System::natural_size(std::span<const double> x_ref, std::span<const double> dx) const {
+    NITCAD_EXPECTS(x_ref.size() == unknowns() && dx.size() == unknowns());
+    const std::size_t m = data_->m_;
+    const std::size_t nodes = node_count();
+    // Whether a node's unknown in slot k is held (a Dirichlet value, an insulator's density).
+    const auto held = [&](std::size_t i, std::size_t k) {
+        const bool psi_held = data_->contact_[i] >= 0 || data_->schottky_[i] >= 0 ||
+                              (data_->insulator_[i] != 0 && data_->electrode_[i] >= 0);
+        if (k == 0) return psi_held;
+        if (data_->equilibrium_ || k >= data_->built_in_) return false;  // extensions: as psi
+        if (k <= 2) return data_->insulator_[i] != 0 || data_->contact_[i] >= 0;
+        if (data_->electrothermal()) {  // the rise, held on an isothermal sink
+            const std::int32_t c = data_->thermal_nodes_[i].contact;
+            return c >= 0 && data_->thermal_isothermal_[static_cast<std::size_t>(c)] != 0;
+        }
+        return data_->insulator_[i] != 0 || data_->contact_[i] >= 0;  // carrier temperatures
+    };
+    const auto density = [&](std::size_t k) {
+        return !data_->equilibrium_ && (k == 1 || k == 2);
+    };
+    // Each density against max(|n|, 1e-8 of its field's largest at x_ref), compressed by asinh;
+    // every other unknown against max(|x|, 1) (DECISIONS.md Unit 59, ND1's measurement).
+    constexpr double tau = 1e-8;
+    double largest[2] = {0.0, 0.0};
+    if (!data_->equilibrium_) {
+        for (std::size_t i = 0; i < nodes; ++i) {
+            for (std::size_t k = 1; k <= 2; ++k) {
+                if (held(i, k)) continue;
+                largest[k - 1] = std::max(largest[k - 1], std::abs(x_ref[m * i + k]));
+            }
+        }
+    }
+    double total = 0.0;
+    std::size_t fields = 0;
+    for (std::size_t k = 0; k < m; ++k) {
+        double sum = 0.0;
+        std::size_t count = 0;
+        for (std::size_t i = 0; i < nodes; ++i) {
+            if (held(i, k)) continue;
+            const double x = std::abs(x_ref[m * i + k]);
+            double u;
+            if (density(k)) {
+                const double w = std::max(x, tau * largest[k - 1]);
+                u = w > 0.0 ? std::asinh(dx[m * i + k] / w) : 0.0;  // no density anywhere
+            } else {
+                u = dx[m * i + k] / std::max(x, 1.0);
+            }
+            sum += u * u;
+            ++count;
+        }
+        if (count == 0) continue;
+        total += sum / static_cast<double>(count);
+        ++fields;
+    }
+    const double size = fields == 0 ? 0.0 : std::sqrt(total / static_cast<double>(fields));
+    detail::observe("natural_size", size);
+    return size;
+}
+
 void System::apply_update(std::span<double> x, std::span<const double> dx,
                                   double max_update) const {
     NITCAD_EXPECTS(x.size() == unknowns() && dx.size() == unknowns());

@@ -541,3 +541,80 @@ TEST_CASE("GG8: at k != 0 the manufactured solution converges at second order",
     CHECK(chi_error.back() <= 1e-3 * A);
     CHECK(p_error.back() <= 1e-2);
 }
+
+TEST_CASE("Unit 59 NG5: natural_size by hand on a four-node bar, held unknowns skipped and an "
+          "extension's field measured as psi", "[extensibility]") {
+    // bar(3): nodes 0 and 3 are ohmic (psi, n, p held), nodes 1 and 2 free; chi (slot 3) is
+    // measured on every node. Fields: psi, n, p over nodes 1-2; chi over nodes 0-3; the result is
+    // the RMS of the four fields' mean squares. Node 2's electrons are far below 1e-8 of node 1's,
+    // so they are weighed against that threshold, 4e-8.
+    const device::Device d = bar(3);
+    const auto s = *assemble::make_scaling(d);
+    const System ext = *Data::create_extended(d, s, {}, chi_extension(d, 0.5, 0.0));
+    REQUIRE(ext.stride() == 4);
+    REQUIRE(ext.node_count() == 4);
+    const std::vector<double> x{3.0,  2.0,   1e-8,  0.5,    // node 0 (held but chi)
+                                -0.4, 4.0,   2e-12, -6.0,   // node 1
+                                2.5,  1e-30, 1e-12, 0.25,   // node 2
+                                7.0,  50.0,  3e-9,  2.0};   // node 3 (held but chi)
+    const std::vector<double> dx{9.0,  9.0,  9.0,   0.25,
+                                 0.2,  1.0,  1e-10, 3.0,
+                                 -5.0, 4e-8, 2e-12, 0.5,
+                                 9.0,  9.0,  9.0,   -1.0};
+    const double psi = (0.2 * 0.2 + (5.0 / 2.5) * (5.0 / 2.5)) / 2.0;  // |psi| < 1 against 1
+    const double n1 = std::asinh(1.0 / 4.0), n2 = std::asinh(4e-8 / 4e-8);
+    const double p1 = std::asinh(1e-10 / 2e-12), p2 = std::asinh(2e-12 / 1e-12);
+    const double n = (n1 * n1 + n2 * n2) / 2.0, p = (p1 * p1 + p2 * p2) / 2.0;
+    const double chi = (0.25 * 0.25 + 0.5 * 0.5 + 0.5 * 0.5 + 0.5 * 0.5) / 4.0;
+    const double expected = std::sqrt((psi + n + p + chi) / 4.0);
+    CHECK(std::abs(ext.natural_size(x, dx) - expected) <= 1e-15 * expected);
+    // A held unknown's correction does not count; a free one's does.
+    std::vector<double> other = dx;
+    for (const std::size_t k : {0, 1, 2, 12, 13, 14}) other[k] = -123.0;
+    CHECK(ext.natural_size(x, other) == ext.natural_size(x, dx));
+    other[3] = 40.0;
+    CHECK(ext.natural_size(x, other) > ext.natural_size(x, dx));
+}
+
+TEST_CASE("Unit 59 NG5: natural_size skips the electrode and the insulator's densities, and "
+          "weighs a density against 1e-8 of the largest", "[extensibility]") {
+    const device::Device d = mos();
+    const auto s = *assemble::make_scaling(d);
+    const System sys = *System::create(d, s);
+    const std::size_t nodes = sys.node_count();
+    std::vector<double> x(sys.unknowns()), dx(sys.unknowns());
+    for (std::size_t i = 0; i < nodes; ++i) {
+        x[3 * i] = 0.1 * static_cast<double>(i);
+        x[3 * i + 1] = 1e-3 * static_cast<double>(i + 1);
+        x[3 * i + 2] = 1.0;
+        dx[3 * i] = 0.01;
+        dx[3 * i + 1] = 1e-6;
+        dx[3 * i + 2] = 1e-3;
+    }
+    const double base = sys.natural_size(x, dx);
+    CHECK(base > 0.0);
+    std::size_t electrode = nodes, insulator = nodes, free = nodes;
+    for (std::size_t i = 0; i < nodes; ++i) {
+        const double xi = d.mesh().points()[i][0];
+        if (xi == -5e-7) electrode = i;
+        else if (xi < 0.0 && insulator == nodes) insulator = i;
+        else if (xi > 0.0 && xi < 1e-5 && free == nodes) free = i;
+    }
+    REQUIRE(electrode < nodes);
+    REQUIRE(insulator < nodes);
+    REQUIRE(free < nodes);
+    std::vector<double> other = dx;
+    other[3 * electrode] = other[3 * electrode + 1] = other[3 * electrode + 2] = 77.0;
+    other[3 * insulator + 1] = other[3 * insulator + 2] = 77.0;
+    CHECK(sys.natural_size(x, other) == base);
+    other[3 * insulator] = 77.0;  // an insulator's psi is an unknown
+    CHECK(sys.natural_size(x, other) > base);
+    // A density far below 1e-8 of its field's largest is measured against that threshold.
+    std::vector<double> tiny = x;
+    tiny[3 * free + 1] = 1e-30;
+    std::vector<double> d2 = dx;
+    d2[3 * free + 1] = 1e-30;
+    std::vector<double> d3 = dx;
+    d3[3 * free + 1] = 0.0;
+    CHECK(std::abs(sys.natural_size(tiny, d2) - sys.natural_size(tiny, d3)) <= 1e-12 * base);
+}

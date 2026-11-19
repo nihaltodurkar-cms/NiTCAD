@@ -75,6 +75,7 @@ tol_update = 1e-9
 max_update = 2
 line_search = natural
 line_search.max_backtracks = 12
+natural_norm = weighted
 max_cuts = 8
 growth = 1.5
 cut_max_iterations = 30
@@ -101,6 +102,7 @@ table = "iv table.csv"
     CHECK(o.newton.line_search.enabled);
     CHECK(o.newton.line_search.test == solve::LineSearchTest::natural);
     CHECK(o.newton.line_search.max_backtracks == 12);
+    CHECK(o.newton.line_search.norm == solve::NaturalNorm::weighted);
     CHECK(o.step_control.max_cuts == 8);
     CHECK(o.step_control.growth == 1.5);
     CHECK(o.step_control.max_iterations == 30);
@@ -410,6 +412,8 @@ TEST_CASE("deck build: every mistake names its line", "[deck]") {
            "t.deck:14: hole_mobility is automatic, caughey_thomas or masetti");
     expect(failure(head + "[equilibrium]\n[solver]\nbackend = pardiso\n"), "t.deck:13: backend = pardiso needs 'mkl'");
     expect(failure(head + "[equilibrium]\n[solver]\nmax_cuts = 99\n"), "t.deck:14: 'max_cuts' must lie in 0..52");
+    expect(failure(head + "[equilibrium]\n[solver]\nnatural_norm = rms\n"),
+           "t.deck:14: natural_norm is convergence or weighted");
     expect(failure(head + "[equilibrium]\n[doping]\nprofile = donor flat 1e16\n"),
            "t.deck:14: the shape is constant, gaussian or erfc");
     expect(failure(head + "[equilibrium]\n[doping]\nprofile = donor gaussian 1e16 axis=x\n"),

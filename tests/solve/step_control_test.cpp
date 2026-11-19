@@ -376,5 +376,52 @@ TEST_CASE("benchmark (Unit 59, ND1): the natural test's contraction along plain 
                         ok ? "converged" : "FAILED", record.iterations.size(), short_steps,
                         seconds, ok ? natural_norm::largest_relative(x, ref) : -1.0);
         }
+        {  // the product: newton_solve with NaturalNorm::weighted (System::natural_size)
+            solve::NewtonOptions product = searched;
+            product.line_search.norm = solve::NaturalNorm::weighted;
+            auto solver = linalg::LinearSolver::create({});
+            REQUIRE(solver.has_value());
+            std::vector<double> x = x0;
+            results::ConvergenceRecord record;
+            const bool ok = solve::newton_solve(*system, x, product, *solver, record).has_value();
+            std::printf("SEARCH %6.1f V  %-16s %-9s iterations %4zu  worst %.1e\n", V, "product weighted",
+                        ok ? "converged" : "FAILED", record.iterations.size(),
+                        ok ? natural_norm::largest_relative(x, ref) : -1.0);
+        }
     }
+}
+
+TEST_CASE("natural norm (Unit 59, NG6): the diode's 0-0.6 V sweep under the weighted natural test "
+          "reaches the plain sweep's states, and the run record names the norm") {
+    const auto d = diode();
+    std::vector<std::vector<double>> points;
+    for (int k = 0; k <= 6; ++k) points.push_back({0.1 * k, 0.0});
+    const solve::BiasOptions plain{.newton = {.tol_update = 1e-12}};
+    const auto off = solve::sweep_bias(d, points, plain);
+    REQUIRE(off.has_value());
+    REQUIRE_FALSE(off->stopped.has_value());
+    solve::BiasOptions natural = plain;
+    natural.newton.line_search.enabled = true;
+    solve::BiasOptions weighted = natural;
+    weighted.newton.line_search.norm = solve::NaturalNorm::weighted;
+    const auto old_norm = solve::sweep_bias(d, points, natural);
+    const auto on = solve::sweep_bias(d, points, weighted);
+    REQUIRE(old_norm.has_value());
+    REQUIRE(on.has_value());
+    REQUIRE_FALSE(on->stopped.has_value());
+    std::size_t iterations = 0, old_iterations = 0;
+    for (std::size_t k = 0; k < points.size(); ++k) {
+        CHECK(relative(on->points[k].fields.potential_V, off->points[k].fields.potential_V) < 1e-9);
+        CHECK(relative(on->points[k].fields.n_cm3, off->points[k].fields.n_cm3) < 1e-9);
+        // The current within its resolution (its rounding, 3.8e-7 A at 0.4 V against 2.4e-4 A).
+        for (std::size_t c = 0; c < 2; ++c) {
+            CHECK(std::abs(on->points[k].terminal_current[c] - off->points[k].terminal_current[c]) <=
+                  off->points[k].terminal_current_resolution[c]);
+        }
+        iterations += on->points[k].convergence.iterations.size();
+        old_iterations += old_norm->points[k].convergence.iterations.size();
+    }
+    std::printf("NG6 diode 0-0.6 V: natural test iterations %zu (convergence norm) %zu (weighted)\n",
+                old_iterations, iterations);
+    CHECK(on->run.input_identity != old_norm->run.input_identity);
 }

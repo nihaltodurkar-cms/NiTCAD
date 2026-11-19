@@ -1337,10 +1337,36 @@ then over fields (RMS), skip held unknowns (Jacobian row = own diagonal), ψ wei
   (the candidates), all in densities below 1e-8 of their field's largest, where both runs (tol_update 1e-8) are at
   rounding. Weighted as the norm weighs them (ψ against max(|ψ|, 1), a density against max(|n|, 1e-8 of the
   largest)) every completed point is within 2.0e-15. Which comparison NG4's "to 1e-12" means is put to the owner.
+  **Owner ruling (2026-11-19, "choose recommended and start slice 1"):** NG4's "to 1e-12" is that weighted
+  comparison.
 - **NQ5 bisection (Unit 50's finding):** natural test on the `[.line_search]` benchmark: `f3e2811` (Unit 30's merge)
   10/10 in 227 iterations, as recorded; `e14a53f` (#42) 10/10, 227; `2d1fdc7` (#44, Unit 35: Couderc band set and
   automatic Masetti holes as the silicon defaults) 2/10 in 185, the same as today. The change is the device's
   physics, not the solver: NG4's baseline on today's tree is 2/10, 185 iterations.
+
+**Slice 1 (ND2–ND4, 2026-11-19).**
+- `newton.hpp`: `LineSearch::norm` (`NaturalNorm::convergence`, the default, or `weighted`, validated). With
+  `weighted`, the natural test and a system with `natural_size(x_ref, dx)`, both corrections are measured with it at
+  the iterate x0 (the full one once per iteration, each trial's simplified one against it); otherwise Unit 30's test
+  is unchanged, code path included.
+- `System::natural_size` (ND3, candidate (c) at τ = 1e-8): held unknowns as `stamp_contacts` holds them (an ohmic
+  contact's ψ, n, p; a Schottky contact's ψ; an electrode's ψ; an insulator's n, p; an isothermal sink's rise; the
+  carrier temperatures on contacts and insulators), extension fields measured as ψ, in equilibrium ψ alone.
+- `[solver] natural_norm = convergence | weighted` (deck, `deck/build.hpp`, the app's section table and vocabulary);
+  the run record names it only when not `convergence`.
+- The product reproduces slice 0's measurement of (c) at 1e-8 exactly: diode 37, 44, 50, 61 iterations (1.2 V: 53;
+  −20 V fails), each state within 1.7e-15 of the 0.05 V sweep's; MOSFET 10/10 in 93 iterations, currents within
+  5.2e-14 of the 1 V_T sweep's.
+- NG5 tests: `natural_size` by hand on a four-node bar with the GG8 extension (two free nodes, so the 1e-8 threshold
+  is exercised), the MOS's electrode and insulator densities skipped; Newton with the hook (both corrections at the
+  iterate, never between trials), affine invariance under power-of-two row scales (steps and updates bit-equal), the
+  scalar cases equal under either norm (no hook: Unit 30's test). NG6: the diode's 0–0.6 V sweep under the weighted
+  test reaches the plain sweep's states (fields to 1e-9, currents within their resolution) in 39 natural-test
+  iterations (31 with the convergence norm); the run identity differs.
+- NG7 hand mutants, each caught: the hook ignored; the full correction measured at the damped update; the trial's
+  at the trial; τ = 1e-4; ψ's threshold dropped; held unknowns measured; no asinh; an insulator's ψ held.
+- Targeted Release runs only (solve `natural norm*`, `line search*`, `newton*`; assemble `[extensibility]`; deck;
+  app `app deck*`): all pass. NG1, NG2 and the full Release and Debug suites wait for the owner's word (slice 2).
 
 ## New questions the advisor raised (not yet in `ARCHITECTURE.md`)
 

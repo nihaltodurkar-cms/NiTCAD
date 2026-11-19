@@ -1062,4 +1062,10 @@ TEST_CASE("mosfet benchmark (Unit 59, ND1): the natural test's contraction along
         for (const auto c : counts) std::printf(" %zu", c);
         std::printf("\n");
     }
+    {  // the product: sweep_bias with NaturalNorm::weighted (System::natural_size)
+        auto o = b.field();
+        o.newton.line_search.enabled = true;
+        o.newton.line_search.norm = solve::NaturalNorm::weighted;
+        report("product weighted natural", drain_run(b.d, o, b.start, &b.reference));
+    }
 }
