@@ -1931,6 +1931,33 @@ copies, outside the repo. In our form the quantum potential is Λ = −(γħ²/6
   - the physics and deck default pins were updated.
 - The slice-4 part 2 example numbers (QV13, QV15) and the FinFET runs were measured with the placeholder
   mass. They are rerun under the new default before the unit closes.
+
+**Slice 4 examples rerun under QP0's default (2026-11-20, m_n = 0.328; tests/deck/quantum_confinement_test.cpp
+[.dg_examples], all 26 assertions pass).**
+
+| example | classical | MLDA | DG |
+|---|---|---|---|
+| 2D MOSFET: V_th, swing, I_on | 0.5707 V, 99.9, 6.5274e-2 | the same | 0.5720 V, 99.9, 6.5205e-2 (I_on −0.11%) |
+| 2D MOSFET: time, iterations | 0.69 s, 83 | 0.68 s, 83 | 2.17 s, 96 |
+| 3D MOSFET: V_th, swing, I_on | 0.4849 V, 107.9, 6.9463e-6 | the same | 0.4850 V, 107.9, 6.9413e-6 (I_on −0.07%) |
+| 3D MOSFET: time, iterations | 4.17 s, 39 | 4.14 s, 39 | 29.3 s, 66 |
+| refined 2D, `max_cuts = 8`: V_th, swing, I_on | 0.5031 V, 95.8, 7.7314e-2 | 0.5100 V, 96.0, 7.6521e-2 | 0.5114 V, 96.1, 7.6386e-2 (I_on −1.20%) |
+| refined 2D, `max_cuts = 8`: time, iterations | 2.14 s, 100 | 2.21 s, 102 | 910 s, 283 |
+
+- QV15 is met on the examples' own meshes again. The largest |Λ| is 0.12 kT (2D) and 4.3 kT (3D), both
+  below the 10 kT warning.
+- On the refined 2D mesh, DG still stops at point 5 with the default `max_cuts`. With 8 it completes, the
+  largest |Λ| 4.2 kT.
+- The stronger, cited coefficient moves the refined DG V_th from +4.4 mV to +8.3 mV above classical
+  (+1.4 mV above MLDA).
+- QV13: DG costs 2.7× per iteration in 2D and 4.2× in 3D, unchanged. The refined case's 910 s again includes
+  the failed cut attempts.
+- **The FinFET is dropped (owner, 2026-11-20: "dont run on finfet, run on mosfet").**
+  - The classical and MLDA FinFET runs completed: 446 s and 397 s, on the placeholder build.
+  - The DG run was first refused, correctly (QP5): the deck's `insulator` spacer has no band data.
+  - With band data added to the run deck (Si₃N₄ and HfO₂, Robertson 2000), it ran 19 min without finishing
+    point 1 and was stopped. That is a cost finding, not a verdict.
+  - The FinFET is not gated (QP14). The example deck's spacer would need band data for DG (QP10 says so).
 ## New questions the advisor raised (not yet in `ARCHITECTURE.md`)
 
 None of these is decided. Each needs an owner position before the build scaffold fixes the flags.
