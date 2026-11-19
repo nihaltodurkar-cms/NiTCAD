@@ -2051,6 +2051,63 @@ separate owner ruling after the measurements; SQ7 (a) `backend = gmres` with `pr
 `gmres_ilut` kept as an alias with an unchanged run identity. The proposal was rebased onto `main` 3c36224 (it was
 written on beb494f). Not started: slice 0 waits for the owner's word.
 
+**Slice 0 (SD1), 2026-11-20 (owner "start slice 0"). As built:** `tests/deck/solver_profile_test.cpp` in
+`nitcad_deck_test` (it reads decks), hidden: `[.scale_profile]` (the phase split) and `[.scale_series]` (the size
+series), Release, run pinned to the six P cores (`start /b /wait /affinity 3C3`, CPUs 0, 1, 6–9 of the Core Ultra 5
+225F; 32 GB). No product code changed. Each case starts from its bias stamped on its equilibrium state, as
+`sweep_bias`'s first point, and is measured twice per configuration:
+- the **split**: a plain Newton loop in the test (full damped steps, no line search) timing assembly (`evaluate`),
+  the analysis, the first and later factorizations (ILUT builds for GMRES-ILUT), the solves, the update and the rest;
+- **`newton_solve`** itself, with the case's own Newton options, on a forwarding system that times `evaluate` and
+  the update; the remainder is the linear solver plus the loop's O(n) work.
+GMRES-ILUT runs strict (`fallback = none`) so a failure shows instead of hiding in SparseLU. SparseLU only where it
+fits (2D, and the 30³ diode capped at 3 iterations).
+
+Results, per Newton iteration (split; "fact." = factorization or ILUT build):
+
+| Case (unknowns) | Backend | Its. | Assembly | Fact. | Solve | Assembly share (split / `newton_solve`) |
+|---|---|---|---|---|---|---|
+| 2D MOSFET example (3,198) | GMRES-ILUT | 5 | 0.1 ms | 6.0 ms | 3.5 ms (27 products) | 1.4% / 1.2% |
+| | PARDISO 1 / 6 thr. | 6 | 0.1 ms | 2.9 / 0.9 ms | 0.2 / 0.1 ms | 2.7% / 2.5%; 4.8% / 4.6% |
+| | SparseLU | 6 | 0.1 ms | 7.6 ms | 0.4 ms | 1.5% |
+| 3D diode 30³ (81,000) | GMRES-ILUT | 10 | 5.5 ms | 2.38 s | 0.72 s (56) | 0.2% / 0.2% |
+| | PARDISO 1 / 6 thr. | 10 | 6.0 ms | 4.82 / 1.10 s | 0.04 / 0.02 s | 0.1% / 0.1%; 0.5% / 0.5% |
+| | SparseLU (3 its.) | 3 | 5.7 ms | 77.4 s | 0.14 s | 0.0% (held 3.1 GB) |
+| 3D diode 40³ (192,000) | GMRES-ILUT | 10 | 14.6 ms | 6.53 s | 2.56 s (79) | 0.2% / 0.2% |
+| | PARDISO 1 / 6 thr. | 10 / 11 | 15 ms | 27.7 / 7.42 s | 0.11 / 0.07 s | 0.1% / 0.1%; 0.2% / 0.2% |
+| 3D energy balance, EC19's diode on 41×21×21 at −0.4 V (90,405, stride 5) | GMRES-ILUT | — | 32 ms | 5.68 s | fails | GMRES does not reach the backward error in 1000 products at Newton iteration 2 |
+| | PARDISO 1 / 6 thr. | 3 | 14–17 ms | 3.91 / 0.87 s | 0.04 / 0.02 s | 0.3% / 0.3%; 1.7% / 1.7% |
+| Reduced swept FinFET (24,900) | GMRES-ILUT | 6 | 2.0 ms | 0.12 s | 0.03 s (25) | 1.2% / 1.2% |
+| | PARDISO 1 / 6 thr. | 7 | 2.0 ms | 0.38 / 0.09 s | 7 / 5 ms | 0.5% / 0.5%; 2.0% / 2.1% |
+| Tensor FinFET deck, first point (136,125) | GMRES-ILUT | 21 | 13 ms | 1.64 s | 1.22 s (79) | 0.5% / 0.8% |
+| | PARDISO 1 / 6 thr. | 27 / 23 | 13 ms | 10.6 / 2.72 s | 0.07 / 0.03 s | 0.1% / 0.4%; 0.5% / 4.2% |
+
+- **Assembly is at most 2% of a Newton iteration in every 3D case** (4.8% on the tiny 2D example with PARDISO at 6
+  threads). The `newton_solve` figure of 4.2% (FinFET deck, PARDISO 6 threads) comes from its line search: 533
+  evaluations over 56 iterations from this start, against 13 iterations and 25 evaluations with GMRES-ILUT and 48
+  evaluations with PARDISO at one thread. The paths differ only in rounding, so this start is near the edge of the
+  deck's line search (the deck itself steps the gates in 0.05 V and converges). Recorded, not investigated here.
+- **GMRES-ILUT's time is the ILUT build (57–76%) and the solves (20–42%)**, both serial; the analysis is 0.2%.
+  PARDISO's is its factorization (93–99.8%).
+- SD5's condition (assembly ≥ 10% of an iteration) is not met before SD4; it is measured again after SD4.
+
+Size series (one Newton step's linear solve on LG4's 3D diode at 0.5 V, a fresh solver: analysis, factorization or
+ILUT, one solve; peak memory as the solver's held private bytes):
+
+| Size (unknowns) | GMRES-ILUT: time (ILUT), products, held | PARDISO 1 thread | PARDISO 6 threads: time, held |
+|---|---|---|---|
+| 20³ (24,000) | 0.64 s (0.53), 40, 47 MB | 0.46 s, 169 MB | 0.18 s, 254 MB |
+| 30³ (81,000) | 3.17 s (2.42), 60, 156 MB | 5.21 s, 806 MB | 1.49 s, 842 MB |
+| 40³ (192,000) | 9.51 s (6.61), 90, 376 MB | 29.3 s, 2.7 GB | 8.40 s, 2.7 GB |
+| 50³ (375,000) | 21.2 s (14.1), 108, 735 MB | — | 42.6 s, 7.1 GB |
+| 60³ (648,000) | 39.1 s (25.6), 116, 1.3 GB | — | 138 s, 15.3 GB |
+| 70³ (1,029,000) | 68.4 s (42.0), 142, 2.0 GB | — | not measured: the run was stopped by the host for low memory during this factorization (fill 1.78e9 at 60³) |
+
+- GMRES iterations grow **3.55×** from 24k to 1.03M unknowns (40 → 142): the growth SG4 (≤ 1.5×) is judged against.
+- PARDISO at 6 threads is faster up to 40³ and slower from 50³ (2× at 50³, 3.5× at 60³); its memory grows about as
+  n^1.6 and passes 32 GB before 1e6 unknowns on this machine. GMRES-ILUT's grows linearly (2 GB at 1e6).
+- SG5 and SG7's references: the 40³ GMRES-ILUT step is 9.51 s, 376 MB; the largest (70³) 68.4 s, 2.0 GB.
+
 ## New questions the advisor raised (not yet in `ARCHITECTURE.md`)
 
 None of these is decided. Each needs an owner position before the build scaffold fixes the flags.
