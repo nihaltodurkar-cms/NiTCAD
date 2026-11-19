@@ -194,3 +194,6 @@ jobs:
           if errorlevel 1 exit /b 1
           ctest --preset %PRESET%
           if errorlevel 1 exit /b 1
+          rem Unit 60 XG4: the cross-machine comparisons again with their output (the runner's CPU, the largest ratios).
+          ctest --preset %PRESET% -R "^cross_machine_" -V
+          if errorlevel 1 exit /b 1
