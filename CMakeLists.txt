@@ -668,7 +668,8 @@ target_link_libraries(nitcad_solve_test PRIVATE NiTCAD::solve NiTCAD::analysis N
 target_include_directories(nitcad_solve_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/mesh")
 target_compile_definitions(nitcad_solve_test PRIVATE
   NITCAD_MKL_RUNTIME_PATH="${NITCAD_MKL_RUNTIME_PATH}"
-  NITCAD_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}" NITCAD_GIT="${GIT_EXECUTABLE}")
+  NITCAD_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}" NITCAD_GIT="${GIT_EXECUTABLE}"
+  NITCAD_PROJECT_VERSION="${PROJECT_VERSION}")
 nitcad_add_file_tests(solve nitcad_solve_test)
 # The 2D MOSFET gates (tests/solve/mosfet_test.cpp, hidden tag [.mosfet]) take about a minute in
 # Release and far longer in Debug, so they run in the Release configuration only.
