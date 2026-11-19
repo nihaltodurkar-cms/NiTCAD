@@ -769,6 +769,11 @@ ARCHITECTURE entry. (Originally four slices, with AO as 26g·2; renumbered after
   tests skip on CI as the KG6 (b) ruling intended. Owner ruling: KG6's edges bound (< 50 ms) is checked in Release only.
   The unoptimised Debug build took 113 ms on CI (Release: 4.9 ms on CI, 1.9 ms on the RTX machine), and Debug now only
   records the time.
+- CI fix 2 (PRs #92, #93, 2026-11-19). With that adapter skipped, WG4's 3D self-test (`app_window_3d`) failed on
+  CI: its one case passed the WARP comparison (16 assertions) and then skipped the GPU half, and Catch2 exits
+  non-zero when every case it ran skipped. WG4 is now two cases, WARP and GPU, so CI passes the WARP case and
+  skips the GPU case. Nothing is loosened: both comparisons are unchanged, and the GPU case still runs on a
+  hardware adapter (RTX machine: passed, 16.4 s).
 - MG8 full suites (2026-11-19, on 26h's f33de73, MSVC 14.51, RTX 5060 Ti): Release **229 of 229** passed. Debug
   207 of 208: KG6's redraw ratio (enhanced ≤ 1.10× classic) failed at 1.11×, and on a rerun of the test once
   passed and once failed at 1.19×. Owner ruling: the KG6 redraw bound is checked in Release only, like its edges
