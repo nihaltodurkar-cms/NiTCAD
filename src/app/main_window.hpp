@@ -15,6 +15,7 @@
 #include <cstddef>
 #include <filesystem>
 #include <memory>
+#include <cstdint>
 #include <optional>
 #include <string>
 #include <utility>
@@ -320,6 +321,14 @@ private:
     Pending pending_ = Pending::none;
     std::chrono::steady_clock::time_point run_ui_updated_{};
     std::optional<Workspace> workspace_;
+    // Unit 26i (ND5): bumped when workspace_ or values_ change; the status metrics cached against them.
+    std::uint64_t workspace_generation_ = 0, values_generation_ = 0;
+    struct Metrics {
+        std::uint64_t workspace = ~std::uint64_t{0}, values = ~std::uint64_t{0};
+        bool difference = false;
+        std::string device, field;
+        std::optional<std::string> quality;
+    } metrics_cache_;
     std::optional<Workspace> run_b_, previous_;  // Unit 26b, XD6
     std::optional<Workspace> adapt_result_;      // Unit 17: the results while a pass's mesh is shown
     std::optional<Prober> prober_;
@@ -349,6 +358,7 @@ private:
     // message that says so; the title bar's theme.
     ITaskbarList3* taskbar_list_ = nullptr;
     UINT taskbar_created_ = 0;
+    bool com_ = false;  // this window initialized COM on its thread (balanced in the destructor)
     TaskbarProgress taskbar_;
     bool dark_title_ = false;
     int title_theme_updates_ = 0;

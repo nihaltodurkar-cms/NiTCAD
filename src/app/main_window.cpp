@@ -111,6 +111,10 @@ MainWindow::MainWindow(const WindowOptions& options)
       runner_([this] { PostMessageW(hwnd_, run_message, 0, 0); }),
       live_([this] { PostMessageW(hwnd_, live_message, 0, 0); }) {
     animate_ = options.animate;
+    // The taskbar list (ZD5) and the shell dialogs are COM objects of this thread's apartment. The application
+    // initializes COM first (this call is then a counted no-op); a host that did not, such as a test, would
+    // otherwise get them from another thread's implicit apartment and crash releasing them after it ends.
+    com_ = SUCCEEDED(CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED));
 }
 
 std::unique_ptr<MainWindow> MainWindow::create(const WindowOptions& options) {
@@ -151,6 +155,7 @@ MainWindow::~MainWindow() {
     if (accelerators_) DestroyAcceleratorTable(accelerators_);
     if (font_) DeleteObject(font_);
     if (bold_) DeleteObject(bold_);
+    if (com_) CoUninitialize();  // after the taskbar list's release
 }
 
 bool MainWindow::create_children() {
@@ -741,6 +746,7 @@ bool MainWindow::results_show_pass(std::size_t k) {
     if (!workspace_->pass) {
         adapt_result_ = std::move(*workspace_);
         workspace_.reset();
+        ++workspace_generation_;  // Unit 26i (ND5): the metrics again
     }
     set_workspace(std::move(*p), true);
     return shown();
@@ -753,6 +759,7 @@ void MainWindow::set_workspace(Workspace w, bool keep_settings) {
     // The results a run (or the structure preview) of the same deck replaces: the previous run (XD6).
     if (workspace_ && workspace_->has_results() && workspace_->source == w.source) previous_ = std::move(*workspace_);
     workspace_ = std::move(w);
+    ++workspace_generation_;  // Unit 26i (ND5)
     preview_ = false;
     prober_.emplace(*workspace_);
     probe_.reset();
@@ -792,6 +799,7 @@ void MainWindow::refresh() {
     if (tab_ != tab_view && tab_ != tab_curves) return;
     scene_.reset();
     values_.clear();
+    ++values_generation_;  // Unit 26i (ND5)
     values_title_.clear();
     if (!workspace_) {
         viewport_->show_message("Open a deck (Ctrl+O) or a result file (Ctrl+Shift+R).");
@@ -860,6 +868,7 @@ void MainWindow::refresh() {
             auto d = render::difference_field(*workspace_->device, *run_b()->device, *workspace_->geometry, *pa, *pb, *f);
             if (d) {
                 values_ = std::move(d->values);
+                ++values_generation_;  // Unit 26i (ND5)
                 values_title_ = std::move(d->title);
             }
         }
@@ -874,6 +883,7 @@ void MainWindow::refresh() {
                             : render::field_values(*workspace_->device, *workspace_->geometry, p, *f);
             if (v) {
                 values_ = std::move(*v);
+                ++values_generation_;  // Unit 26i (ND5)
                 values_title_ = std::string(render::field_info(*f).title);
             }
         }
@@ -887,43 +897,59 @@ void MainWindow::present_camera() {
     if (!scene_) return;
     if (auto* f = std::get_if<render::FieldScene>(&*scene_)) {
         apply_camera(*f, settings());
-        viewport_->present();
+        viewport_->present_camera();  // Unit 26i (ND2): the camera only
         update_metrics();
     }
 }
 
 void MainWindow::update_metrics() {
+    // Unit 26i (ND5): what depends on the workspace or the field is computed once for it, not every frame.
     std::string text;
     if (workspace_) {
         const auto& m = workspace_->device->mesh();
-        double lo[3]{1e300, 1e300, 1e300}, hi[3]{-1e300, -1e300, -1e300};
-        for (const auto& p : m.points()) {
-            for (int k = 0; k < m.dimension(); ++k) {
-                lo[k] = std::min(lo[k], p[static_cast<std::size_t>(k)]);
-                hi[k] = std::max(hi[k], p[static_cast<std::size_t>(k)]);
+        if (metrics_cache_.workspace != workspace_generation_) {
+            metrics_cache_ = {};
+            metrics_cache_.workspace = workspace_generation_;
+            double lo[3]{1e300, 1e300, 1e300}, hi[3]{-1e300, -1e300, -1e300};
+            for (const auto& p : m.points()) {
+                for (int k = 0; k < m.dimension(); ++k) {
+                    lo[k] = std::min(lo[k], p[static_cast<std::size_t>(k)]);
+                    hi[k] = std::max(hi[k], p[static_cast<std::size_t>(k)]);
+                }
+            }
+            std::string& d = metrics_cache_.device;
+            d = "  Device ";
+            for (int k = 0; k < m.dimension(); ++k) d += (k ? " × " : "") + format_um((hi[k] - lo[k]) * 1e4);
+            d += " µm     Mesh " + std::to_string(m.node_count()) + " nodes";
+            if (workspace_->geometry->element_count() > 0) {
+                d += ", " + std::to_string(workspace_->geometry->element_count()) +
+                     (m.dimension() == 3 ? " tetrahedra" : m.dimension() == 2 ? " triangles" : " segments");
             }
         }
-        text = "  Device ";
-        for (int k = 0; k < m.dimension(); ++k) text += (k ? " × " : "") + format_um((hi[k] - lo[k]) * 1e4);
-        text += " µm     Mesh " + std::to_string(m.node_count()) + " nodes";
-        if (workspace_->geometry->element_count() > 0) {
-            text += ", " + std::to_string(workspace_->geometry->element_count()) +
-                    (m.dimension() == 3 ? " tetrahedra" : m.dimension() == 2 ? " triangles" : " segments");
-        }
+        text = metrics_cache_.device;
         const ViewKind kind = settings().kind;
         if (kind == ViewKind::quality || kind == ViewKind::quality_histogram) {
             // XD7: the minimum, the median and the count below the threshold.
-            if (const auto angles = render::element_quality(*workspace_->geometry); angles && !angles->empty()) {
-                const auto q = render::quality_summary(*angles, m.dimension());
-                text += std::format("     Min angle {:.1f}°, median {:.1f}°, {} below {:g}°", q.min_deg, q.median_deg, q.below,
-                                    q.threshold_deg);
+            if (!metrics_cache_.quality) {
+                metrics_cache_.quality.emplace();
+                if (const auto angles = render::element_quality(*workspace_->geometry); angles && !angles->empty()) {
+                    const auto q = render::quality_summary(*angles, m.dimension());
+                    *metrics_cache_.quality = std::format("     Min angle {:.1f}°, median {:.1f}°, {} below {:g}°", q.min_deg,
+                                                    q.median_deg, q.below, q.threshold_deg);
+                }
             }
+            text += *metrics_cache_.quality;
         } else if (!values_.empty()) {
-            double top = -1e300;
-            for (const double v : values_) if (std::isfinite(v)) top = std::max(top, v);
             // ZD7: the field's symbol and unit, as the tree and the colour bar show them.
             const bool difference = kind == ViewKind::difference;
-            text += "     " + max_metric(values_title_, difference ? render::difference_scale(values_).hi() : top, difference);
+            if (metrics_cache_.values != values_generation_ || metrics_cache_.difference != difference) {
+                metrics_cache_.values = values_generation_;
+                metrics_cache_.difference = difference;
+                double top = -1e300;
+                for (const double v : values_) if (std::isfinite(v)) top = std::max(top, v);
+                metrics_cache_.field = "     " + max_metric(values_title_, difference ? render::difference_scale(values_).hi() : top, difference);
+            }
+            text += metrics_cache_.field;
         }
         if (const Workspace* b = run_b()) {
             // XD6: run B, and the threshold shift when both runs have one.
@@ -1635,6 +1661,7 @@ bool MainWindow::open_deck(const fs::path& path) {
     state_.add_recent(path);
     update_title();
     workspace_.reset();
+    ++workspace_generation_;  // Unit 26i (ND5): the metrics again
     run_b_.reset();
     previous_.reset();
     cut_.reset();
@@ -1662,6 +1689,7 @@ bool MainWindow::open_result(const fs::path& result, const fs::path& device, con
     run_b_.reset();
     previous_.reset();
     workspace_.reset();
+    ++workspace_generation_;  // Unit 26i (ND5): the metrics again
     set_workspace(std::move(*w));
     set_status(status_state, "Opened " + result.filename().string());
     select_tab(tab_view);

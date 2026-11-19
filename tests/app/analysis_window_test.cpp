@@ -4,6 +4,7 @@
 
 // The application's headers before the COM ones (objbase.h defines `interface` as a macro).
 #include "main_window.hpp"
+#include "viewport.hpp"
 #include "fixtures.hpp"
 #include "NiTCAD/render/image.hpp"
 
@@ -1752,4 +1753,221 @@ TEST_CASE("app window 26h: the Axis box check box (JD1, JQ3, JG6)", "[app]") {
     REQUIRE(pump_until([&] { return w->workspace() != nullptr && !w->runner().busy(); }));
     w->select_tab(MainWindow::tab_view);
     CHECK_FALSE(shown(*w, MainWindow::id_axis_box));
+}
+
+
+namespace {
+
+// Unit 26i (NG3): a Viewport's host that turns its scene's camera as MainWindow does (the camera, then a
+// camera-only present).
+struct OrbitHost final : app::Viewport::Host {
+    render::FieldScene* scene = nullptr;
+    app::Viewport* view = nullptr;
+    void viewport_orbit(float azimuth_deg, float elevation_deg) override {
+        scene->camera.azimuth_deg += azimuth_deg;
+        scene->camera.elevation_deg = std::clamp(scene->camera.elevation_deg + elevation_deg, -89.0f, 89.0f);
+        view->present_camera();
+    }
+    void viewport_pan(float, float) override {}
+    void viewport_zoom(float factor) override {
+        scene->camera.zoom *= factor;
+        view->present_camera();
+    }
+    void viewport_fit() override {}
+    void viewport_click(float, float) override {}
+    void viewport_hover(float, float) override {}
+    void viewport_leave() override {}
+    bool viewport_is_3d() const override { return true; }
+    bool viewport_over_cube(float, float) const override { return false; }
+    void viewport_named_view(int) override {}
+};
+
+}  // namespace
+
+// Unit 26i (ND4, NG3): in a shown window, a burst of drag moves draws at most 3 frames, at the camera the
+// same moves give one by one; a wheel burst likewise; each frame is the full draw's, bit for bit.
+TEST_CASE("app viewport 26i: a burst of camera moves draws once, at the last camera (ND4, NG3)", "[app]") {
+    // The scene: the 3D MOSFET's enhanced solid, built by a (hidden) window.
+    const fs::path dir = app_test::scratch("viewport_coalesced_moves");
+    const fs::path deck = app_test::write(dir, "mosfet3d.deck", app_test::mosfet3d);
+    std::optional<render::FieldScene> built;
+    {
+        auto w = window();
+        REQUIRE(w->open_deck(deck));
+        REQUIRE(pump_until([&] { return w->workspace() != nullptr && !w->runner().busy(); }));
+        w->select_tab(MainWindow::tab_view);
+        choose(*w, MainWindow::id_view, L"solid");
+        REQUIRE(w->scene());
+        REQUIRE(std::holds_alternative<render::FieldScene>(*w->scene()));
+        built = std::get<render::FieldScene>(*w->scene());
+    }
+    auto renderer = render::Renderer::create({.adapter = render::Adapter::warp});
+    REQUIRE(renderer);
+    using Scene = std::variant<render::FieldScene, render::PlotScene>;
+    Scene scene = *built;
+    auto& field = std::get<render::FieldScene>(scene);
+    HWND top = CreateWindowExW(0, L"STATIC", L"", WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN, 0, 0, 520, 420, nullptr, nullptr,
+                               nullptr, nullptr);
+    REQUIRE(top != nullptr);
+    {
+        OrbitHost host;
+        app::Viewport view(top, host, 1);
+        host.scene = &field;
+        host.view = &view;
+        MoveWindow(view.hwnd(), 0, 0, 480, 360, TRUE);
+        ShowWindow(top, SW_SHOWNOACTIVATE);
+        EnableWindow(top, FALSE);  // shown, but the desktop mouse does not reach it: only the posted moves
+        view.show(&*renderer, &scene);
+        pump_for(0.2);
+        if (view.error()) SKIP("no swap chain here: " + *view.error());
+        HWND v = view.hwnd();
+        const render::Camera start = field.camera;
+        constexpr int moves = 200;
+        const auto drag = [&](bool burst) {
+            SendMessageW(v, WM_LBUTTONDOWN, MK_LBUTTON, MAKELPARAM(100, 100));
+            for (int k = 1; k <= moves; ++k) {
+                const LPARAM at = MAKELPARAM(100 + k, 100 + k / 4);
+                if (burst) {
+                    PostMessageW(v, WM_MOUSEMOVE, MK_LBUTTON, at);
+                } else {
+                    SendMessageW(v, WM_MOUSEMOVE, MK_LBUTTON, at);
+                    view.flush();
+                }
+            }
+            pump_for(0.3);
+            SendMessageW(v, WM_LBUTTONUP, 0, MAKELPARAM(100 + moves, 100 + moves / 4));
+            pump_for(0.1);
+        };
+        std::size_t before = view.presents();
+        drag(true);
+        const std::size_t burst_frames = view.presents() - before;
+        CAPTURE(burst_frames);
+        CHECK(burst_frames >= 1);
+        CHECK(burst_frames <= 3);
+        const render::Camera after_burst = field.camera;
+        CHECK(after_burst.azimuth_deg != start.azimuth_deg);
+        CHECK(renderer->last_present_reused());
+        // The last frame is the full draw's at that camera.
+        const auto shown = renderer->last_image();
+        REQUIRE(shown.has_value());
+        const auto drawn = renderer->draw(field, view.width(), view.height());
+        REQUIRE(drawn.has_value());
+        CHECK(shown->rgba == drawn->rgba);
+        // The same moves one at a time, each drawn: the same camera, to the bit.
+        field.camera = start;
+        before = view.presents();
+        drag(false);
+        CHECK(view.presents() - before >= static_cast<std::size_t>(moves) - 3);
+        CHECK(field.camera.azimuth_deg == after_burst.azimuth_deg);
+        CHECK(field.camera.elevation_deg == after_burst.elevation_deg);
+        // A burst of wheel notches: few frames, every notch taken.
+        const float zoom = field.camera.zoom;
+        before = view.presents();
+        for (int k = 0; k < 20; ++k) PostMessageW(v, WM_MOUSEWHEEL, MAKEWPARAM(0, WHEEL_DELTA), MAKELPARAM(200, 200));
+        pump_for(0.3);
+        CHECK(view.presents() - before <= 3);
+        float expect = zoom;
+        for (int k = 0; k < 20; ++k) expect *= std::pow(1.1f, 1.0f);
+        CHECK(field.camera.zoom == expect);
+        CHECK_FALSE(view.error());
+        view.release();
+    }
+    DestroyWindow(top);
+}
+
+// Unit 26i (ND5, NG6): the metrics strip, computed once per workspace and field, reads as when it was
+// computed each frame: the same after camera moves, after switching kinds and back, and anew for another
+// workspace and another field.
+TEST_CASE("app window 26i: the metrics strip is cached and unchanged (ND5, NG6)", "[app]") {
+    const fs::path dir = app_test::scratch("window_cached_metrics");
+    const fs::path deck3 = app_test::write(dir, "mosfet3d.deck", app_test::mosfet3d);
+    const fs::path deck2 = app_test::write(dir, "mosfet.deck", app_test::mosfet2d);
+    auto w = window();
+    // Without the "Drawn in" time, which changes every frame.
+    const auto strip = [&] {
+        std::wstring s = metrics(*w);
+        if (const auto at = s.find(L"     Drawn in"); at != std::wstring::npos) s.erase(at);
+        return s;
+    };
+    REQUIRE(w->open_deck(deck3));
+    REQUIRE(pump_until([&] { return w->workspace() != nullptr && !w->runner().busy(); }));
+    w->execute(Command::run);
+    REQUIRE(pump_until([&] { return !w->runner().busy() && w->workspace() && w->workspace()->has_results(); }));
+    w->select_tab(MainWindow::tab_view);
+    auto& host = static_cast<app::Viewport::Host&>(*w);
+    // The window's frame is the scene's, drawn in full (a missed full present would show the old field).
+    const auto frame_is_scene = [&] {
+        const auto shown = w->renderer()->last_image();
+        REQUIRE(shown.has_value());
+        const auto drawn = w->renderer()->draw(std::get<render::FieldScene>(*w->scene()), shown->width, shown->height);
+        REQUIRE(drawn.has_value());
+        return shown->rgba == drawn->rgba;
+    };
+    const auto moved = [&] {
+        for (int k = 0; k < 3; ++k) host.viewport_orbit(2.0f, 1.0f);
+        return strip();
+    };
+    // The potential, then the electrons: each field's maximum, kept over camera moves.
+    choose(*w, MainWindow::id_view, L"field");
+    const std::wstring potential = strip();
+    CAPTURE(narrow(potential));
+    CHECK(potential.find(L"tetrahedra") != std::wstring::npos);
+    CHECK(moved() == potential);
+    w->settings().field = "n";
+    w->refresh();
+    const std::wstring electrons = strip();
+    CAPTURE(narrow(electrons));
+    CHECK(electrons != potential);  // the field's maximum
+    CHECK(frame_is_scene());
+    CHECK(moved() == electrons);
+    CHECK(frame_is_scene());
+    // Mesh quality, then back: its figures, the field's again.
+    w->execute(Command::mesh_quality);
+    const std::wstring quality = strip();
+    CAPTURE(narrow(quality));
+    CHECK(quality.find(L"Min angle") != std::wstring::npos);
+    CHECK(moved() == quality);
+    w->settings() = app::ViewSettings{};
+    w->settings().kind = app::ViewKind::field;
+    w->settings().field = "n";
+    w->refresh();
+    CHECK(strip() == electrons);
+    // Another workspace: a 2D device, its own size and triangles.
+    REQUIRE(w->open_deck(deck2));
+    REQUIRE(pump_until([&] { return w->workspace() != nullptr && !w->runner().busy(); }));
+    w->select_tab(MainWindow::tab_view);
+    const std::wstring two = strip();
+    CAPTURE(narrow(two));
+    CHECK(two.find(L"triangles") != std::wstring::npos);
+    CHECK(two.find(L"tetrahedra") == std::wstring::npos);
+    CHECK(two.substr(0, two.find(L"Mesh")) != potential.substr(0, potential.find(L"Mesh")));
+    w->execute(Command::mesh_quality);
+    CHECK(strip().find(L"Min angle 26.6°, median 26.6°, 0 below 20°") != std::wstring::npos);
+}
+
+// A shown window (it gets a taskbar button, so the taskbar list) with a deck built and its 3D view drawn closes
+// cleanly in a host that did not initialize COM itself, as this test executable (Unit 26i: it crashed releasing
+// the taskbar list after the run thread's implicit apartment had gone).
+TEST_CASE("app window: a shown window with a deck closes cleanly without the host's COM", "[app]") {
+    const fs::path dir = app_test::scratch("window_shown_close");
+    const fs::path deck = app_test::write(dir, "mosfet3d.deck", app_test::mosfet3d);
+    for (const bool input : {false, true}) {
+        CAPTURE(input);
+        app::WindowOptions o;
+        o.adapter = render::Adapter::warp;
+        o.show = true;
+        o.input = input;
+        o.quit_on_close = false;
+        auto w = MainWindow::create(o);
+        REQUIRE(w);
+        REQUIRE(w->open_deck(deck));
+        REQUIRE(pump_until([&] { return w->workspace() != nullptr && !w->runner().busy(); }));
+        w->select_tab(MainWindow::tab_view);
+        choose(*w, MainWindow::id_view, L"solid");
+        pump_for(0.2);
+        CHECK(w->scene());
+        w.reset();
+        pump_for(0.1);
+    }
+    SUCCEED("closed");
 }

@@ -6,6 +6,7 @@
 //   nitcad-app --self-test <deck> --out <image.png> [--view v] [--field f] [--point k] [--scale s]
 //              [--colormap c] [--contours] [--edges] [--opaque] [--perspective] [--log] [--sense c]
 //              [--contact c] [--size WxH] [--adapter auto|gpu|warp] [--debug-layer] [--gap-limit-ms ms]
+//   nitcad-app --self-test <deck> --orbit-benchmark <frames> [--adapter ...]   (Unit 26i, NG4: no run, no image)
 //
 // --gap-limit-ms: the longest gap allowed in the message loop during the run (default 100, WG1); the tests
 // pass 250 on the hosted CI runner (owner, 2026-10-23).
@@ -33,6 +34,7 @@ struct SelfTestOptions {
     render::Adapter adapter = render::Adapter::automatic;
     bool debug_layer = false;
     double gap_limit_ms = 100.0;  // WG1
+    int orbit_frames = 0;         // Unit 26i (NG4): time this many camera-only and full frames, then stop
 };
 
 inline constexpr int self_test_skipped = 77;

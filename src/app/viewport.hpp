@@ -9,6 +9,7 @@
 
 #include <windows.h>
 
+#include <cstddef>
 #include <optional>
 #include <string>
 
@@ -52,17 +53,25 @@ public:
     void prepare(render::Renderer* renderer);
     // Draws now (also on WM_PAINT and WM_SIZE). Returns the error of the last present, if any.
     void present();
+    // Unit 26i (ND2): draws again after a change of the scene's camera only, reusing the swap chain's
+    // buffers (Renderer::present_camera). A plot, or a first frame, is drawn as present() draws it.
+    void present_camera();
+    // Draws a pending camera frame now (tests and the benchmark; the window draws it on WM_PAINT).
+    void flush();
+    // Frames presented so far (NG3).
+    [[nodiscard]] std::size_t presents() const noexcept { return presents_; }
     [[nodiscard]] const std::optional<std::string>& error() const noexcept { return error_; }
     [[nodiscard]] double last_present_ms() const noexcept { return last_ms_; }
     [[nodiscard]] int width() const noexcept;
     [[nodiscard]] int height() const noexcept;
-    // The swap chain is released (before its renderer is).
+    // The swap chain is released (before its renderer is), and the view shows nothing until the next show().
     void release();
 
 private:
     static LRESULT CALLBACK proc(HWND hwnd, UINT message, WPARAM w, LPARAM l);
     LRESULT handle(UINT message, WPARAM w, LPARAM l);
     void paint_message(HDC dc);
+    void draw(bool camera_only);
 
     HWND hwnd_ = nullptr;
     Host& host_;
@@ -76,6 +85,8 @@ private:
     bool dragging_ = false;
     bool moved_ = false;
     bool tracking_ = false;  // TrackMouseEvent's leave is pending
+    bool camera_pending_ = false;  // a camera frame waits for WM_PAINT (Unit 26i, ND4)
+    std::size_t presents_ = 0;
     int button_ = 0;  // 1 left, 2 right, 3 middle
     POINT last_{};
     POINT down_{};

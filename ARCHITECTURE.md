@@ -3051,6 +3051,27 @@ CG1–CG9; accepted by the owner 2026-10-22):**
   new, after the owner saw the images). JG8: the box and cube +0.13 ms, the slowest move frame 5.07 ms on the RTX
   5060 Ti (bounds 1 and 16 ms). JG9: 10 hand mutants killed. The full suites wait for the owner (DECISIONS.md Unit 26h).
 
+**As built, Unit 26i (fast camera redraw; DECISIONS.md ND1–ND6, NG1–NG7):**
+- **Kept geometry (ND1, ND2):** a `WindowTarget` keeps the vertex and line buffers of its last FieldScene present,
+  with the draw ranges, the scene's address and its batch sizes. `Renderer::present_camera` draws them again when
+  they were made from this scene object with these sizes, and rebuilds only the per-frame constants (camera,
+  lights, shadow plane) and the axis box, whose edges follow the camera and have a small upload-heap buffer of their
+  own. Otherwise it is `present`. A plot present drops the kept buffers. `Renderer::draw` (images, references) builds
+  its own each time, as before.
+- **The caller's promise (NQ1):** only the camera changed since the last full present. In the app the scene
+  changes only through `Viewport::show`, which presents in full; camera moves, `WM_PAINT` and `WM_SIZE` take the
+  camera path. Debug builds hash the geometry and abort on a mismatch (ND3). The design's scene revision counter
+  was not needed: `show` is the one place a scene changes.
+- **Coalesced input (ND4, NQ4):** `Viewport::present_camera` marks the view and invalidates it; the frame is drawn
+  on `WM_PAINT`, which comes when the queue is empty, so a burst of moves gives one frame at the last camera.
+  A hidden window gets no `WM_PAINT` and draws at once. `Viewport::flush` draws a pending frame now (tests, the
+  benchmark).
+- **Metrics (ND5):** the strip's device size and counts and the quality figures are computed once per workspace,
+  and the field's maximum once per field, against generation counters bumped where `workspace_` and `values_`
+  change.
+- `nitcad-app --self-test <deck> --orbit-benchmark <frames>` times the camera-only and the full present of the view
+  as the deck opens, turned 1° a frame.
+
 ## 7. Language placement (D6: C and Fortran deferred)
 
 | Component | Language | Reason |

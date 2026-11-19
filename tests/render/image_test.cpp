@@ -8,12 +8,18 @@
 // and commit them with the reason.
 #include <catch2/catch_test_macros.hpp>
 
+#include <windows.h>
+#include <psapi.h>
+
 #include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
+#include <functional>
+#include <optional>
+#include <utility>
 #include <string>
 #include <vector>
 
@@ -705,6 +711,232 @@ TEST_CASE("render image: the enhanced colourbar (Unit 26g, MD7)") {
     CHECK(inner >= 2);
 }
 
+namespace {
+
+// Unit 26i: a hidden window's swap chain on the WARP renderer, or nothing where none can be made.
+struct HiddenTarget {
+    HWND hwnd = nullptr;
+    std::optional<WindowTarget> target;
+    HiddenTarget(Renderer& r, int w, int h) {
+        hwnd = CreateWindowExW(0, L"STATIC", L"", WS_OVERLAPPEDWINDOW, 0, 0, w, h, nullptr, nullptr, nullptr, nullptr);
+        if (!hwnd) return;
+        if (auto t = r.window_target(hwnd, w, h)) target.emplace(std::move(*t));
+    }
+    HiddenTarget(const HiddenTarget&) = delete;
+    HiddenTarget& operator=(const HiddenTarget&) = delete;
+    ~HiddenTarget() {
+        target.reset();
+        if (hwnd) DestroyWindow(hwnd);
+    }
+};
+
+// The window's frame after the last present, against draw() of the same scene: bit for bit.
+void check_same_as_draw(Renderer& r, const FieldScene& s, int w, int h) {
+    const auto shown = r.last_image();
+    REQUIRE(shown.has_value());
+    const auto drawn = r.draw(s, w, h);
+    REQUIRE(drawn.has_value());
+    CHECK(shown->rgba == drawn->rgba);
+}
+
+}  // namespace
+
+// Unit 26i (NG1): after a camera change, present_camera draws the kept buffers again, and the frame is
+// the one a full draw makes, byte for byte, in each look and kind of 3D scene and at 8 camera poses.
+TEST_CASE("render window: camera-only presents equal full draws (Unit 26i, NG1)") {
+    Renderer& r = warp();
+    constexpr int W = 480, H = 360;
+    HiddenTarget t(r, W, H);
+    if (!t.target) SKIP("no swap chain here");
+    const Mosfet& m3 = mosfet(true);
+    const Geometry g3 = geometry_of(m3.device);
+    std::vector<double> values;
+    std::vector<std::pair<std::string, FieldScene>> scenes;
+    {
+        auto solid = solid_view(m3.device, g3);
+        REQUIRE(solid.has_value());
+        scenes.emplace_back("classic solid", *solid);
+        set_look(*solid, Look::enhanced);
+        scenes.emplace_back("enhanced solid (metal and glass, shadow, axis box)", *solid);
+        FieldOptions o = field_options(m3.device, m3.point, Field::potential, values);
+        o.contours = true;
+        auto field = field_view(m3.device, g3, values, o);
+        const auto mesh = mesh_view(m3.device, g3);
+        REQUIRE(field.has_value());
+        REQUIRE(mesh.has_value());
+        for (const LineBatch& l : mesh->lines) {
+            if (l.name == "mesh") field->lines.push_back(l);
+        }
+        set_look(*field, Look::enhanced);
+        scenes.emplace_back("enhanced potential with edges and contours", *field);
+        FieldOptions c = field_options(m3.device, m3.point, Field::electrons, values);
+        c.view.clip = Box{{1.0e-4, 0.5e-4, 0.4e-4}, {3e-4, 3e-4, 3e-4}};
+        auto clipped = field_view(m3.device, g3, values, c);
+        REQUIRE(clipped.has_value());
+        set_look(*clipped, Look::enhanced);
+        scenes.emplace_back("enhanced clip", *clipped);
+        auto exploded = exploded_view(m3.device, g3, 1, default_gap(m3.device, 1));
+        REQUIRE(exploded.has_value());
+        set_look(*exploded, Look::enhanced);
+        scenes.emplace_back("enhanced exploded", *exploded);
+    }
+    struct Pose {
+        float azimuth, elevation, zoom, pan_x, pan_y;
+        Projection projection;
+    };
+    const Pose poses[] = {{10.0f, 20.0f, 1.0f, 0.0f, 0.0f, Projection::orthographic},
+                          {90.0f, 0.0f, 1.0f, 0.0f, 0.0f, Projection::orthographic},
+                          {200.0f, 45.0f, 1.5f, 0.1f, -0.1f, Projection::orthographic},
+                          {300.0f, -20.0f, 1.0f, 0.0f, 0.0f, Projection::orthographic},  // below: no shadow
+                          {35.0f, 25.0f, 1.0f, 0.0f, 0.0f, Projection::perspective},
+                          {120.0f, 60.0f, 2.0f, -0.2f, 0.2f, Projection::perspective},
+                          {250.0f, -30.0f, 0.8f, 0.0f, 0.0f, Projection::perspective},
+                          {0.0f, 89.0f, 1.0f, 0.0f, 0.0f, Projection::orthographic}};
+    for (auto& [name, s] : scenes) {
+        CAPTURE(name);
+        REQUIRE(r.present(s, *t.target, W, H).has_value());
+        CHECK_FALSE(r.last_present_reused());
+        check_same_as_draw(r, s, W, H);
+        for (const Pose& p : poses) {
+            CAPTURE(p.azimuth, p.elevation, p.zoom);
+            s.camera.azimuth_deg = p.azimuth;
+            s.camera.elevation_deg = p.elevation;
+            s.camera.zoom = p.zoom;
+            s.camera.pan = {p.pan_x, p.pan_y};
+            s.camera.projection = p.projection;
+            REQUIRE(r.present_camera(s, *t.target, W, H).has_value());
+            CHECK(r.last_present_reused());
+            check_same_as_draw(r, s, W, H);
+        }
+    }
+}
+
+// Unit 26i (NG2): a scene edit followed by a full present, then a camera move, draws the new scene; a
+// target holding another scene's buffers, or buffers of other sizes, takes the full path; a resize keeps
+// them; a plot in between drops them.
+TEST_CASE("render window: edits and other scenes take the full path (Unit 26i, NG2)") {
+    Renderer& r = warp();
+    constexpr int W = 480, H = 360;
+    HiddenTarget t(r, W, H);
+    if (!t.target) SKIP("no swap chain here");
+    const Mosfet& m3 = mosfet(true);
+    const Geometry g3 = geometry_of(m3.device);
+    std::vector<double> values;
+    const FieldOptions o = field_options(m3.device, m3.point, Field::potential, values);
+    auto s = field_view(m3.device, g3, values, o);
+    REQUIRE(s.has_value());
+    set_look(*s, Look::enhanced);
+    const auto move = [&](FieldScene& x, float by) {
+        x.camera.azimuth_deg += by;
+        REQUIRE(r.present_camera(x, *t.target, W, H).has_value());
+    };
+    REQUIRE(r.present(*s, *t.target, W, H).has_value());
+    move(*s, 15.0f);
+    CHECK(r.last_present_reused());
+
+    // Each edit, then the full present the window makes after it, then a camera move.
+    const auto edited = [&](const char* what, const std::function<void(FieldScene&)>& edit) {
+        CAPTURE(what);
+        edit(*s);
+        REQUIRE(r.present(*s, *t.target, W, H).has_value());
+        CHECK_FALSE(r.last_present_reused());
+        move(*s, 10.0f);
+        CHECK(r.last_present_reused());
+        check_same_as_draw(r, *s, W, H);
+    };
+    edited("colormap", [](FieldScene& x) { x.colorbar->map = Colormap::viridis; });
+    edited("classic look", [](FieldScene& x) { set_look(x, Look::classic); });
+    edited("enhanced look", [](FieldScene& x) { set_look(x, Look::enhanced); });
+    edited("a finish", [](FieldScene& x) { x.triangles.front().finish = Finish::metal; });
+    edited("transparency", [](FieldScene& x) {
+        x.triangles.front().transparent = true;
+        for (SceneVertex& v : x.triangles.front().vertices) v.color.a = 0.5f;
+    });
+    edited("no axis box", [](FieldScene& x) { x.show_axis_box = false; });
+    edited("no shadow", [](FieldScene& x) { x.ground_shadow = false; });
+    edited("field values", [](FieldScene& x) {
+        for (TriangleBatch& b : x.triangles) {
+            for (SceneVertex& v : b.vertices) v.value = 1.0f - v.value;
+        }
+    });
+
+    // Another scene object: the full path, even right after a present of the first.
+    auto other = solid_view(m3.device, g3);
+    REQUIRE(other.has_value());
+    REQUIRE(r.present(*s, *t.target, W, H).has_value());
+    REQUIRE(r.present_camera(*other, *t.target, W, H).has_value());
+    CHECK_FALSE(r.last_present_reused());
+    check_same_as_draw(r, *other, W, H);
+    // The same object with other batch sizes (a scene rebuilt in place): the full path.
+    FieldScene grown = *s;
+    REQUIRE(r.present(grown, *t.target, W, H).has_value());
+    LineBatch extra;
+    extra.name = "extra";
+    extra.color = {0.2f, 0.2f, 0.2f, 1.0f};
+    extra.points = {{0.0f, 0.0f, 0.0f}, {1.0f, 1.0f, 1.0f}};
+    grown.lines.push_back(extra);
+    REQUIRE(r.present_camera(grown, *t.target, W, H).has_value());
+    CHECK_FALSE(r.last_present_reused());
+    check_same_as_draw(r, grown, W, H);
+    // A resize: the kept buffers still serve, at the new size.
+    REQUIRE(r.present(*s, *t.target, W, H).has_value());
+    s->camera.azimuth_deg += 5.0f;
+    REQUIRE(r.present_camera(*s, *t.target, W + 40, H - 20).has_value());
+    CHECK(r.last_present_reused());
+    check_same_as_draw(r, *s, W + 40, H - 20);
+    // A plot in between drops them: the next camera-only present is a full one.
+    const analysis::Curve curve{{0.0, 1.0, 2.0}, {1.0, 4.0, 9.0}, {}};
+    const std::vector<SeriesInput> series{{"y", curve}};
+    auto plot = curve_plot(series, "x", "y");
+    REQUIRE(plot.has_value());
+    REQUIRE(r.present(*plot, *t.target, W, H).has_value());
+    REQUIRE(r.present_camera(*s, *t.target, W, H).has_value());
+    CHECK_FALSE(r.last_present_reused());
+    check_same_as_draw(r, *s, W, H);
+}
+
+
+// Unit 26i (NG5): the kept buffers are replaced, not added to. On WARP the GPU's memory is the process's:
+// after 100 field changes, each presented in full and then turned, the private bytes are within 1% of
+// those after the first.
+TEST_CASE("render window: kept buffers are replaced, not added to (Unit 26i, NG5)") {
+    Renderer& r = warp();
+    constexpr int W = 480, H = 360;
+    HiddenTarget t(r, W, H);
+    if (!t.target) SKIP("no swap chain here");
+    const Mosfet& m3 = mosfet(true);
+    const Geometry g3 = geometry_of(m3.device);
+    std::vector<double> values;
+    const FieldOptions o = field_options(m3.device, m3.point, Field::potential, values);
+    auto s = field_view(m3.device, g3, values, o);
+    REQUIRE(s.has_value());
+    set_look(*s, Look::enhanced);
+    const auto private_bytes = [] {
+        PROCESS_MEMORY_COUNTERS_EX c{};
+        c.cb = sizeof c;
+        REQUIRE(K32GetProcessMemoryInfo(GetCurrentProcess(), reinterpret_cast<PROCESS_MEMORY_COUNTERS*>(&c), sizeof c));
+        return static_cast<double>(c.PrivateUsage);
+    };
+    const auto change = [&](int k) {
+        for (TriangleBatch& b : s->triangles) {
+            for (SceneVertex& v : b.vertices) v.value = std::fmod(v.value + 0.01f * static_cast<float>(k), 1.0f);
+        }
+        REQUIRE(r.present(*s, *t.target, W, H).has_value());
+        s->camera.azimuth_deg += 3.0f;
+        REQUIRE(r.present_camera(*s, *t.target, W, H).has_value());
+        REQUIRE(r.last_present_reused());
+    };
+    // The allocators warmed up to their steady state first: WARP keeps freed memory for reuse, and the first
+    // hundred draws grow the process by some 100 MB whatever is kept (measured, 2026-11-19).
+    for (int k = 0; k < 100; ++k) REQUIRE(r.draw(*s, W, H).has_value());
+    for (int k = 0; k < 20; ++k) change(k);
+    const double first = private_bytes();
+    for (int k = 0; k < 100; ++k) change(k);
+    const double after = private_bytes();
+    CAPTURE(first, after, after / first);
+    CHECK(after <= 1.01 * first);
+}
+
 TEST_CASE("render image: drawing benchmark (VG7)", "[.benchmark]") {
     // Scene building and drawing of about 1e5 and 1e6 triangles: a 3D tensor box's boundary field
     // view, on WARP and on the GPU when there is one. Times per draw (including readback) and the
@@ -729,7 +961,7 @@ TEST_CASE("render image: drawing benchmark (VG7)", "[.benchmark]") {
             s.dimension = 3;
             TriangleBatch b{"field", Shading::field, true, false, {}};
             const auto scale = *ColorScale::fit(ScaleKind::linear, v);
-            for (const Polygon& f : g.boundary_faces()) {
+            for (const render::Polygon& f : g.boundary_faces()) {
                 for (const SurfaceVertex& x : f.vertices) {
                     b.vertices.push_back({{static_cast<float>(x.position[0] * 1e4), static_cast<float>(x.position[1] * 1e4),
                                            static_cast<float>(x.position[2] * 1e4)},

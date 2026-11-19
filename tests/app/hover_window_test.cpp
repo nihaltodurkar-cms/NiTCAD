@@ -256,24 +256,27 @@ TEST_CASE("app window 26f: the enhanced look's edges are built with the scene, u
 // scene drawn off screen (no vsync), its camera turned 1 degree before each draw and nothing rebuilt.
 // Skipped where there is no hardware adapter (CI). The test window's WARP drag is reported only:
 // there the per-pixel lighting runs on the CPU (about 1.25x classic).
-TEST_CASE("app window 26f: a camera-move redraw within 10% of classic on the hardware adapter (KG6)", "[app]") {
+TEST_CASE("app window 26f: a camera-move redraw within 15% of classic on the hardware adapter (KG6)", "[app]") {
     auto hw = render::Renderer::create({.adapter = render::Adapter::hardware});
     if (!hw) SKIP("no Direct3D 12 hardware adapter: " + hw.error().message);
     auto w = example_3d_doping();
     const int W = w->viewport().width(), H = w->viewport().height();
-    render::FieldScene f = std::get<render::FieldScene>(*w->scene());
-    double t[2]{};
-    for (int mode = 0; mode < 2; ++mode) {
-        render::set_look(f, mode ? render::Look::enhanced : render::Look::classic);
-        std::vector<double> ms;
-        for (int k = 0; k < 55; ++k) {
+    // The two looks' frames alternate (Unit 26i): timed one look after the other, the GPU's clocks and the
+    // machine's other work drifted between the two runs, and the ratio wandered 1.04-1.18 on the same build.
+    render::FieldScene looks[2] = {std::get<render::FieldScene>(*w->scene()), std::get<render::FieldScene>(*w->scene())};
+    render::set_look(looks[0], render::Look::classic);
+    render::set_look(looks[1], render::Look::enhanced);
+    std::vector<double> ms[2];
+    for (int k = 0; k < 55; ++k) {
+        for (int mode = 0; mode < 2; ++mode) {
+            render::FieldScene& f = looks[mode];
             f.camera.azimuth_deg += 1.0f;
             const auto t0 = std::chrono::steady_clock::now();
             REQUIRE(hw->draw(f, W, H));
-            if (k >= 5) ms.push_back(std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count());
+            if (k >= 5) ms[mode].push_back(std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count());
         }
-        t[mode] = median_of(ms);
     }
+    const double t[2] = {median_of(ms[0]), median_of(ms[1])};
     // For the record: the window's own drag on WARP, each look.
     const HWND view = w->viewport().hwnd();
     const int cy = w->viewport().height() / 2;
@@ -302,7 +305,9 @@ TEST_CASE("app window 26f: a camera-move redraw within 10% of classic on the har
     // Release only (owner, 2026-11-19): in the unoptimised Debug build the ratio wanders past 1.10 (1.11 and 1.19
     // against a pass); there it is recorded.
 #ifdef NDEBUG
-    CHECK(t[1] <= 1.10 * t[0]);
+    // The bound: 1.15x (owner, 2026-11-19, Unit 26i): 26g's colour bar and 26h's view cube and axis box, drawn
+    // only in enhanced, add some 0.35 ms of CPU work to a 5 ms draw (the GPU passes cost the same in both looks).
+    CHECK(t[1] <= 1.15 * t[0]);
 #endif
 }
 

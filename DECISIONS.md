@@ -1133,6 +1133,110 @@ Also fixed: a stopped small-signal restart's message counted the skipped points 
 
 ---
 
+### Unit 26i — fast camera redraw (proposed 2026-11-19; on `app/redraw-speed`)
+
+**Owner request (2026-11-19):** rotating and zooming `decks/finfet_3d_shaped_swept.deck` in the app lags; make
+it faster "without decreasing its quality". The branch starts from `main` `344dd79`.
+
+**Today (read from the code):**
+- **Every camera move rebuilds the frame from nothing.** A drag's `WM_MOUSEMOVE` (`viewport.cpp`) calls
+  `viewport_orbit` → `present_camera` → `Viewport::present` → `Renderer::present` (`renderer.cpp`), which
+  (1) waits for the GPU to go idle, (2) in `render_field` copies every triangle batch into a new vertex array
+  and turns every line into a two-triangle quad, (3) creates new upload buffers and new default-heap vertex
+  buffers (`CreateCommittedResource` per frame) and copies everything to the GPU, then (4) draws, and
+  `Present(1, 0)` waits for the vertical blank. Only the camera changed: `apply_camera` writes azimuth,
+  elevation, projection, zoom and pan, and nothing else in the scene.
+- **The comment says otherwise:** "the vertices live in default-heap buffers … (a window keeps them across
+  frames)", but nothing keeps them.
+- **One present per mouse message.** A mouse reports at 125–1000 Hz and each present blocks on the vertical
+  blank, so the messages queue and the view trails the cursor.
+- **`update_metrics` per frame** scans every mesh node for the bounds and the field for its largest value, and in
+  the quality views recomputes every element's angles (`render::element_quality`).
+- `Renderer::frame_time` (26f's KG6) already measures a redraw on resident geometry. It re-executes the recorded
+  passes, so it times the GPU, not the CPU rebuild above.
+
+**Standing conditions:** no change to what is drawn. `Renderer::draw` (images, `nitcad plot`, every WARP
+reference) is untouched, so every reference passes by construction. The window's frames equal what a full
+rebuild draws, **bit for bit** (ND1, NG1). The 2× supersampling, the transparency passes, the feature edges, the
+finishes, the ground shadow and the axis box stay as they are. Criteria are fixed before code. Release and Debug
+suites with `/W4 /WX`, plus hand mutants. Built with MSVC 14.51. Nothing is pushed or merged without
+authorization.
+
+**Left out of this unit:** overlapping CPU and GPU work across frames (two frames in flight, NQ3); a lower level
+of detail or quality while dragging (NQ2: refused, it lowers quality); faster scene building after a field or
+option change (the wait after "Building the deck" or a field change is another path).
+
+**Design:**
+
+| # | Slice | Change | Notes |
+|---|---|---|---|
+| ND1 | 1 | **Resident geometry.** The window target keeps the GPU vertex and line buffers (and the draw ranges) of the last full frame. `Renderer::present_camera(scene, target, w, h)` redraws with them, building only the per-frame constants (the camera matrices, the lights' eye-space vectors, the shadow plane) and the camera-dependent axis box lines (JD1 picks the faces turned away from the camera; they get a small buffer of their own). `Renderer::present` is unchanged and refreshes the resident buffers. | The constants come from the same code as today, so the bits match. |
+| ND2 | 1 | **Who calls it.** `MainWindow::present_camera` is the only caller: the orbit, pan, zoom, keyboard, Fit, named-view and smooth-move paths, which change nothing but the camera (NQ1). Every other present (a new field, look, clip, cut, edges, contours, colormap, a resize) takes the full path. A target with no resident geometry, or with another scene's, falls back to the full path. | The scene gains a revision counter that every edit outside `apply_camera` bumps. The target stores it, and a mismatch means the full path. |
+| ND3 | 1 | **Debug check.** In Debug builds `present_camera` hashes the scene's vertices and lines and compares the hash with the one stored at the full frame. A mismatch is a failed assertion (a missed revision bump). | Release skips the hash. |
+| ND4 | 2 | **Coalesced input.** A mouse move, wheel notch or camera key updates the camera and calls `InvalidateRect`. The draw happens in `WM_PAINT`, which Windows sends only once the message queue is empty, so a burst of moves gives one frame at the latest camera. The smooth moves (JD5) keep their timer. | No camera step is lost: the camera takes every message. |
+| ND5 | 3 | **Metrics cached.** The bounds and the node and element counts are computed once per workspace, the largest value once per field, and the quality summary once per quality scene. `update_metrics` then only formats the text and the "Drawn in" time. | The text is unchanged. |
+| ND6 | 3 | **Records:** ARCHITECTURE 6.14 "As built" (the window's resident path); DECISIONS results with the before and after times. | |
+
+**Criteria (frozen once approved):**
+
+| # | Gate |
+|---|---|
+| NG1 | **Bit-identity.** On WARP, for a 3D scene in each look (classic; enhanced with metal and glass; clipped; exploded; with edges, contours and the axis box), a `present_camera` frame after a camera change reads back **byte-identical** to a full `present` at the same camera, over 8 camera poses including both projections and an elevation below −5° (no shadow). Every existing reference test passes unchanged. |
+| NG2 | **Invalidation.** Each scene edit (field, scale, colormap, look, finish, clip, cut, exploded, edges, contours, axis box, transparency, resize) followed by a camera move draws the new scene, byte-identical to a full present. A target holding another scene's buffers takes the full path. |
+| NG3 | **Coalescing.** In a window test, 200 drag `WM_MOUSEMOVE` messages posted at once give at most 3 presents, and the final camera equals the one that 200 separate moves give. The JD5 moves, Fit and the named views still end on their exact poses. |
+| NG4 | **Speed** on `decks/finfet_3d_shaped_swept.deck` and `examples/mosfet_3d.deck`, enhanced look, the hardware adapter, 1280×960: the time of a camera-only present (`last_present_ms`), median of 50, is **at most a third** of `main`'s before this unit (both measured in this unit and recorded). WARP times are recorded only. |
+| NG5 | **Memory.** The resident buffers are freed with the target and replaced, not added to, on each full present: the GPU memory after 100 field changes equals that after one, within 1%. |
+| NG6 | **Metrics:** the status text equals `main`'s for every view kind, the quality views included. |
+| NG7 | `/W4 /WX`. Hand mutants (the revision not bumped on a clip change, the constants not rebuilt, the axis box not rebuilt, the resident buffers kept after a resize, the `WM_PAINT` coalescing bypassed, the cached bounds kept across workspaces), each caught. |
+
+**Questions for the owner (recommended option first):**
+
+| # | Question | Options |
+|---|---|---|
+| NQ1 | How the renderer knows only the camera moved | **An explicit camera-only call from the one window path, guarded by a scene revision and a Debug hash (recommended).** / Hash the whole scene every frame (safe without the app's help, but hashing tens of MB per frame costs much of the saving). |
+| NQ2 | A cheaper frame while dragging (no supersampling, no edges) | **No: the frame stays identical (recommended).** / Yes, with full quality when the drag stops. |
+| NQ3 | Two frames in flight (the CPU builds the next while the GPU draws) | **Later, if NG4's numbers call for it (recommended).** / In this unit. |
+| NQ4 | Where the input is coalesced | **`WM_PAINT` via `InvalidateRect` (recommended).** / A 16 ms timer (adds up to a frame of latency). |
+
+**Owner ruling (2026-11-19, standing instruction "always choose recommended", 2026-11-11):** NQ1–NQ4 take the
+recommended option. Pushing, the PR and the full Release/Debug suites still wait for the owner's word.
+
+**Size (estimate):** M, about 400–600 lines with tests, three slices. Slice 1 touches `renderer.cpp` and
+`viewport.cpp`; slices 2 and 3 the app.
+
+**Results (2026-11-19, Release, MSVC 14.51; `690d8bb` slice 1, `bd0364e` slices 2–3; Debug only for NG1, then
+stopped on the owner's word "dont start debug until i say"; the full suites not run):**
+
+| Gate | Result |
+|---|---|
+| NG1 | **Met.** 5 scenes (classic solid; enhanced solid with metal, glass, shadow and axis box; enhanced potential with mesh edges and contours; enhanced clip; enhanced exploded) × 8 poses (both projections, elevations −30° to 89°, zoom and pan): every `present_camera` frame, read back with `Renderer::last_image`, is byte-identical to `draw` at the same camera, and each reused the kept buffers. Release and Debug (316 checks; Debug run before the owner's word). All 98 render test cases pass unchanged: every reference matches. |
+| NG2 | **Met.** Colormap, classic and enhanced look, a finish, transparency, axis box off, shadow off and new field values, each followed by a full present and a camera move: the new scene, byte-identical, reused. Another scene object and the same object with another batch count take the full path. A resize reuses the buffers, and a plot in between drops them. |
+| NG3 | **Met.** In a shown, input-disabled window, 200 posted drag moves give 1–3 frames (5 runs), at the camera that 200 moves drawn one by one give, to the bit; the frame is `draw`'s. 20 posted wheel notches: at most 3 frames, every notch taken. The window had to be input-disabled: with the cursor over it, the desktop mouse added moves during the drag's capture. |
+| NG4 | **Met by the owner's ruling (2026-11-19, "choose recommended"): judged on the deck that lagged, `mosfet_3d` recorded.** RTX 5060 Ti, 781×616, enhanced, medians of 50 (`--orbit-benchmark 50`, camera-only then full on each frame): `finfet_3d_shaped_swept` **6.72 ms against 92.72 ms (13.8×)**, met; `mosfet_3d` **2.25 ms against 3.81 ms (1.7×)**, short of a third. Timing the stages of a camera-only `mosfet_3d` frame: building the constants 0.33 ms, the passes 0.18 ms, Direct2D 0.27 ms, the copy and `Present(1, 0)` 1.34 ms. The present is paced by the vertical blank in a loop that draws two frames per step, so the gate's ratio cannot fall to a third for a scene this small. |
+| NG5 | **Met.** WARP, the process's private bytes after 100 field changes, each presented in full and then turned: 0.988–1.000 of those after the first (3 runs). WARP keeps freed memory: the first hundred draws grow the process by some 100 MB whatever is kept, so the test warms up to that first. At 300 changes the bytes were below those at 100: nothing accumulates. |
+| NG6 | **Met.** The strip on the 3D MOSFET: unchanged over camera moves for the potential, the electrons and mesh quality; the electrons' differs from the potential's; back from quality to the field, the field's again; on opening the 2D MOSFET, its own size, triangles, no tetrahedra, and XG7's quality figures. After each field change the window's frame is the scene's, drawn in full. |
+| NG7 | **Met.** `/W4 /WX` clean. 8 of 8 hand mutants caught: `Viewport::show` taking the camera path (2 failures), the batch sizes not compared (crash), the axis box not rebuilt (crash), the kept buffers not dropped by a plot (1), the `WM_PAINT` coalescing bypassed (4), no workspace generation bump (4), no field generation bump (1), the camera constants kept from the first frame (2). Two first forms survived as equivalent mutants (one bump removed of several that fire on the same path), and the first form of the coalescing mutant did not compile under `/WX` (unreachable code). They were rerun in the forms above. |
+
+- **Design change, ND2:** no scene revision counter. In the app the scene changes only through `Viewport::show`,
+  which presents in full, so the target's scene address and batch sizes, with the Debug hash, are enough. NG2
+  tests the cases.
+- **Fixed on the owner's word "fix it" (2026-11-19), two faults that were there before this unit:**
+  - **Closing a shown `MainWindow` crashed in the test executable** (`3dd312d`). The crash was in releasing the
+    taskbar list. The application initializes COM in `main`; the test executable did not, so the list came from
+    another thread's implicit apartment, gone by then. `MainWindow` now initializes COM (STA) for its lifetime,
+    balanced after that release; `Viewport::release` also stops a swap chain being made again while the window is
+    destroyed. A regression test closes a shown window with a deck built; it crashed before the fix. NG3 still
+    drives a `Viewport` directly, which is where coalescing lives.
+  - **KG6 wandered** (`a148e79`): 1.04–1.18 on one build, because all classic frames were timed and then all
+    enhanced ones. The looks now alternate. Interleaved, the test caught slice 1's per-frame axis-box buffer (1.12–1.16
+    against 1.06–1.11 before the unit): the renderer now keeps one, and keeps the overlays' DirectWrite layouts
+    across frames. That left 1.07–1.10, still at the bound. Profiled: the GPU passes cost the same in both looks
+    (about 0.2 ms); the enhanced extra is CPU work, Direct2D for 26g's colour bar and 26h's view cube and axis box
+    (about 0.22 ms) and the feature edges' vertices (about 0.07 ms), on a 5 ms draw. **Owner ruling (2026-11-19):**
+    KG6's bound is **1.15×**.
+
+---
+
 ## New questions the advisor raised (not yet in `ARCHITECTURE.md`)
 
 None of these is decided. Each needs an owner position before the build scaffold fixes the flags.

@@ -5,6 +5,7 @@
 
 #include <chrono>
 #include <cmath>
+#include <type_traits>
 #include <variant>
 
 #include "win32.hpp"
@@ -35,7 +36,14 @@ Viewport::~Viewport() {
     }
 }
 
-void Viewport::release() { target_.reset(); }
+// The swap chain goes, and nothing makes another until the next show(): a WM_SIZE or WM_PAINT while the
+// window is destroyed would otherwise make one that outlives the renderer (a crash on closing a shown window).
+void Viewport::release() {
+    target_.reset();
+    renderer_ = nullptr;
+    scene_ = nullptr;
+    camera_pending_ = false;
+}
 
 int Viewport::width() const noexcept {
     RECT r{};
@@ -73,6 +81,24 @@ void Viewport::prepare(render::Renderer* renderer) {
 }
 
 void Viewport::present() {
+    camera_pending_ = false;
+    draw(false);
+}
+
+// ND4: drawn on WM_PAINT, which comes once the queue is empty, so a burst of camera moves gives one frame at
+// the last camera. A hidden window gets no WM_PAINT: it draws now.
+void Viewport::present_camera() {
+    if (!hwnd_ || !IsWindowVisible(hwnd_)) return draw(true);
+    camera_pending_ = true;
+    InvalidateRect(hwnd_, nullptr, FALSE);
+}
+
+void Viewport::flush() {
+    if (camera_pending_) UpdateWindow(hwnd_);
+}
+
+void Viewport::draw(bool camera_only) {
+    camera_pending_ = false;
     const int w = width(), h = height();
     if (!renderer_ || !scene_ || w < 16 || h < 16) {
         InvalidateRect(hwnd_, nullptr, TRUE);
@@ -88,7 +114,14 @@ void Viewport::present() {
         }
         target_ = std::move(*t);
     }
-    auto r = std::visit([&](const auto& s) { return renderer_->present(s, *target_, w, h); }, *scene_);
+    auto r = std::visit(
+        [&](const auto& s) {
+            if constexpr (std::is_same_v<std::decay_t<decltype(s)>, render::FieldScene>) {
+                if (camera_only) return renderer_->present_camera(s, *target_, w, h);
+            }
+            return renderer_->present(s, *target_, w, h);
+        },
+        *scene_);
     if (!r) {
         error_ = r.error().message;
         target_.reset();
@@ -96,6 +129,7 @@ void Viewport::present() {
         return;
     }
     error_.reset();
+    ++presents_;
     last_ms_ = 1e3 * std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
     ValidateRect(hwnd_, nullptr);
 }
@@ -136,11 +170,12 @@ LRESULT Viewport::handle(UINT message, WPARAM w, LPARAM l) {
         HDC dc = BeginPaint(hwnd_, &ps);
         if (!scene_ || error_ || !renderer_) paint_message(dc);
         EndPaint(hwnd_, &ps);
-        if (scene_ && renderer_ && !error_) present();
+        // The scene changes only through show(), which draws in full; a paint redraws what is kept (ND4).
+        if (scene_ && renderer_ && !error_) draw(true);
         return 0;
     }
     case WM_SIZE:
-        if (scene_ && renderer_) present();
+        if (scene_ && renderer_) draw(true);  // a resize keeps the geometry (Unit 26i)
         return 0;
     case WM_GETDLGCODE:
         return DLGC_WANTARROWS | DLGC_WANTCHARS;

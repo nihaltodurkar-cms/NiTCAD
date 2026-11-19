@@ -6,6 +6,7 @@
 #include <chrono>
 #include <format>
 #include <variant>
+#include <vector>
 
 #include "main_window.hpp"
 #include "win32.hpp"
@@ -83,6 +84,11 @@ std::expected<SelfTestOptions, std::string> parse_self_test(std::span<const std:
             const auto v = value();
             if (!v || (*v != "auto" && *v != "gpu" && *v != "warp")) return std::unexpected(std::string("--adapter is auto, gpu or warp"));
             o.adapter = *v == "gpu" ? render::Adapter::hardware : *v == "warp" ? render::Adapter::warp : render::Adapter::automatic;
+        } else if (a == "--orbit-benchmark") {
+            const auto n = value();
+            const auto k = n ? number(*n) : std::nullopt;
+            if (!k || !(*k >= 1.0)) return std::unexpected(std::string("--orbit-benchmark needs a frame count, 1 or more"));
+            o.orbit_frames = static_cast<int>(*k);
         } else if (a == "--gap-limit-ms") {
             const auto v = value();
             const auto n = v ? number(*v) : std::nullopt;
@@ -97,7 +103,7 @@ std::expected<SelfTestOptions, std::string> parse_self_test(std::span<const std:
         else if (!a.starts_with("--") && o.deck.empty()) o.deck = std::filesystem::path(args[i]);
         else return std::unexpected("unknown option " + a);
     }
-    if (o.deck.empty() || o.out.empty()) return std::unexpected(std::string("usage: nitcad-app --self-test <deck> --out <image.png> [view options]"));
+    if (o.deck.empty() || (o.out.empty() && o.orbit_frames == 0)) return std::unexpected(std::string("usage: nitcad-app --self-test <deck> --out <image.png> [view options]"));
     (void)view_given;
     return o;
 }
@@ -163,6 +169,43 @@ int run_self_test(const SelfTestOptions& o, std::FILE* log) {
     if (window->viewport().error()) {
         say(log, "no swap chain here (skipped): " + *window->viewport().error());
         return self_test_skipped;
+    }
+    if (o.orbit_frames > 0) {
+        // Unit 26i (NG4): the view as the deck opens, turned 1 degree a frame. Each frame is drawn by the
+        // camera-only path (as a drag draws it), then again by the full path (as main drew every frame).
+        window->select_tab(MainWindow::tab_view);
+        window->refresh();
+        for (MSG m; PeekMessageW(&m, nullptr, 0, 0, PM_REMOVE);) {
+            TranslateMessage(&m);
+            DispatchMessageW(&m);
+        }
+        if (!window->scene() || !std::holds_alternative<render::FieldScene>(*window->scene())) {
+            say(log, "the view is not a field view: " + window->status(0));
+            return 1;
+        }
+        Viewport& vp = window->viewport();
+        auto& host = static_cast<Viewport::Host&>(*window);
+        std::vector<double> camera, full;
+        int reused = 0;
+        vp.present();  // warm up
+        for (int k = 0; k < o.orbit_frames; ++k) {
+            host.viewport_orbit(1.0f, 0.0f);
+            vp.flush();  // the frame a WM_PAINT would draw (ND4)
+            camera.push_back(vp.last_present_ms());
+            reused += window->renderer()->last_present_reused() ? 1 : 0;
+            vp.present();
+            full.push_back(vp.last_present_ms());
+        }
+        const auto median = [](std::vector<double> v) {
+            std::ranges::sort(v);
+            return v[v.size() / 2];
+        };
+        const double c = median(camera), f = median(full);
+        say(log, std::format("orbit benchmark at {}x{}, {} frames ({} reused): camera-only {:.2f} ms, full {:.2f} ms "
+                             "(medians), {:.1f}x",
+                             vp.width(), vp.height(), o.orbit_frames, reused, c, f, f / c));
+        KillTimer(window->hwnd(), gap_timer);
+        return reused == o.orbit_frames ? 0 : 1;
     }
     // Run on the worker thread; the window keeps pumping.
     window->execute(Command::run);
