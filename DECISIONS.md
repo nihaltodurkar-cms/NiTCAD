@@ -1378,6 +1378,104 @@ then over fields (RMS), skip held unknowns (Jacobian row = own diagonal), ψ wei
 - **Not run (owner: push after NG1):** the full Release ctest suite, the Debug build and suite. NG7's suites, ND5's
   ARCHITECTURE 11.3 "As built" and the unit's close remain.
 
+### Unit 62 — density-gradient quantum confinement, opt-in (proposed 2026-11-19; on `physics/density-gradient`)
+
+**Owner request (2026-11-19):** "Plan for Density-gradient confinement (Commercial TCAD feature type)". This is the
+open half of ARCHITECTURE.md 11.3 "Quantum confinement": Unit 47 built MLDA, and density gradient was left as
+"planned, no unit named". Docs only: no code until the questions below are ruled and the owner says start.
+
+**Why density gradient and not more MLDA.** MLDA is a local factor on the densities of states. It needs the distance
+to an interface and has no current-carrying physics of its own. Density gradient (Ancona and Iafrate 1989; Ancona and
+Tiersten 1987; on unstructured grids Wettstein, Schenk and Fichtner, IEEE TED 48 (2001) 279) is the form commercial
+simulators ship as their default confinement model. It adds a quantum potential Λ per carrier to the band edge
+seen by the transport, solved with ψ, n and p. It confines at any interface shape with no distance search: fin
+corners, the wrapped gate stack and the curved Unit 53 geometry included. It also acts along the channel: the source
+barrier and short-channel quantum effects on the current. MLDA cannot do this.
+
+**Standing conditions.** Opt-in. With the model off, everything is bit-identical to `main`: residuals, Jacobian
+patterns and values, run identities, result files, and the Unit 40/59 traces and decks. Criteria are fixed before
+code and never loosened or tuned after a run (TVM2). The coefficient is not fitted to pass a gate. Release and Debug
+suites run with `/W4 /WX`, and only on the owner's word. Commits stay local, with no push, PR or merge without the
+owner's word.
+
+**Model (scaled by k T and V_T as 6.1).**
+- Densities: n = n_ie exp(ψ − φ_n − Λ̂_n) and p = n_ie exp(φ_p − ψ − Λ̂_p) (Boltzmann; Fermi–Dirac in QP7), with
+  Λ̂ = Λ / k T. Λ_n > 0 raises the electrons' effective conduction band, and Λ_p > 0 lowers the holes' valence band.
+- Quantum potentials: Λ_n = −(γ_n ħ² / (6 m_n)) ∇²√n / √n, and the same for Λ_p with p and m_p. This is
+  Ancona–Iafrate's ħ²/(12 m) [∇² ln n + ½ (∇ ln n)²] in √n form. With β_c = γ_c ħ² / (6 m_c k T) (a length²),
+  Λ̂_c = −β_c ∇²√c / √c.
+- Transport: the Scharfetter–Gummel fluxes take ψ − Λ̂_n (electrons) and ψ + Λ̂_p (holes) as the potential across
+  each edge. Every other term (recombination, generation, mobility, Poisson's charge) reads the densities, which
+  already carry the confinement.
+
+**Design (QP1–QP14).**
+
+| ID | Decision | Reason | Limitation |
+|---|---|---|---|
+| QP1 | Switch: `[models] quantum_confinement = density_gradient` (the existing key, with values `off`, `mlda` and now `density_gradient`, so MLDA and DG exclude each other by construction). Keys: `dg_mass_n`, `dg_mass_p` [m0] and `dg_gamma_n`, `dg_gamma_p` (default 1). The run record names the model, the masses, γ and each insulator's penetration lengths (QP5). | One confinement model at a time. A deck that says `density_gradient` today is refused (`tests/deck/quantum_confinement_test.cpp`) and will now be accepted. | — |
+| QP2 | Unknowns: Λ̂_n and Λ̂_p, built-in fields `quantum_potential_n` and `quantum_potential_p` (`FieldId`), interleaved after ψ, n, p (stride 5, as Unit 52). Held at 0 on insulator nodes (FD5, `FieldDomain::semiconductor`). Built-in table terms (terms.cpp and the equilibrium table), not the GG8 extension, which is steady-only. | Transient, small signal, equilibrium and results need the built-in path. GG8 shows the layout takes new fields without a second architecture. | Per-iteration cost like energy balance (3.8–5.8× drift-diffusion, Unit 52); measured in QV13. |
+| QP3 | Λ row at semiconductor node i (box method, divided by √c_i): V_i Λ̂_i + β Σ_j (A_ij / d_ij) (exp(½ (ln c_j − ln c_i)) − 1) − β A_i^I / x_p = 0. A_i^I is the node's share of the semiconductor–insulator interface (its box faces on it; at a lumped-gate node, its gate area). The sum runs over the node's semiconductor edges. | The Wettstein et al. form: the ratio form never forms √c of a rounding-level density, and the row is linear in Λ. | DG in this form is the leading-order (ħ²) correction. Not a Schrödinger solution: QV6 measures the gap. |
+| QP4 | Boundaries. Ohmic contacts: Λ = 0 (Dirichlet; the carriers are classical at a contact). Semiconductor–insulator interfaces: QP5. Every other boundary: natural (zero normal derivative of √c). | Standard DG boundary set. | Schottky contacts refused (QP10). |
+| QP5 | Insulator interfaces: barrier penetration, analytic (Robin). In the barrier √c decays as exp(−x / x_p), with x_p = ħ / √(2 m_ox ΔE). ΔE is the band offset from the insulator band data of Unit 51 GD5 (affinities and gaps; electrons ΔE_c, holes ΔE_v), and m_ox the insulator's tunnelling mass. That gives the −β A^I / x_p term of QP3. An insulator without band data is refused under DG. | No oxide unknowns. It works for meshed and lumped gates alike. It is derived from the barrier, not fitted. SiO₂ electrons: x_p ≈ 0.16 nm. | Penetration solved in the oxide (Λ rows on insulator nodes) is the more exact form: a follow-up (QR3 b). |
+| QP6 | Masses: defaults equal MLDA's (0.98 and 0.49 m0, Unit 47 QD1), deck-overridable. γ = 1, the theoretical coefficient. | One documented confinement mass pair in the code. No fitted γ (TVM2). Commercial tools ship calibrated γ: here the owner may set it in the deck, and it is reported, never defaulted from a fit. | γ = 1 may miss Schrödinger–Poisson by more than a calibrated γ would. QV6 records it honestly. |
+| QP7 | Fermi–Dirac: the Λ row unchanged, with the density relation η_n = ψ − φ_n − Λ̂_n + ln-terms as Unit 14 (Λ shifts the band edge in η). | The form commercial tools use under FD. | The ħ² coefficient is the non-degenerate one. Documented. |
+| QP8 | Equilibrium: the equilibrium table gains the Λ rows, with carriers slaved as n = n_ie exp(ψ − Λ̂_n) (unknowns ψ, Λ̂_n, Λ̂_p). The zero-bias state is the DG equilibrium. | Every sweep starts from a true equilibrium: currents at rounding (QV4). | Equilibrium becomes a 3-field Newton with DG on. |
+| QP9 | Start and continuation: Λ̂ = 0 from the classical solution. If Newton fails at the first DG solve, a fixed ladder β·{1/8, 1/4, 1/2, 1} with Unit 28 step cutting is used, recorded in the run record. Later points continue as every sweep. Λ̂ is clipped ±max_update and measured like ψ (Unit 59's norm treats it as a potential, not a density). | Deterministic, and bounded at the first point only. | The ladder's use is reported in QV13, not hidden. |
+| QP10 | Refused (invalid_input; the same message from the equilibrium and drift-diffusion assemblers): electrothermal, energy balance, thermionic interfaces, Schottky contacts, gate tunnelling, nonlocal BTBT, a semiconductor region not silicon (as QD6) unless the deck gives `dg_mass_*`, and an insulator interface without band data. Accepted: Lombardi, Masetti, Canali, local BTBT, impact ionization, SRH, Auger, interface traps and charges, both statistics, transient and small signal. | The refused ones read band edges or densities at interfaces in ways not designed for Λ (as QD8). Combining them is a follow-up, each with its own gate. | — |
+| QP11 | Transient: the Λ rows carry no storage, so their mass-matrix rows are zero (index-1 DAE, as Poisson). Small signal: the Λ rows' partials enter the AC matrix. | Commercial parity: DG under every analysis. | — |
+| QP12 | Results: Λ_n and Λ_p [eV] as nodal fields in `BiasPoint`, transient and small-signal results, result files, `nitcad plot` and the app's field list. The derived effective band edges E_c + Λ_n and E_v − Λ_p go in derived.hpp. Unit 61 checkpoints carry Λ, and a restart with a different confinement model is refused. | The quantum potential is what users inspect in commercial tools. | Result files gain the fields only when the model is on. |
+| QP13 | Interface traps: the trap level relative to the band edge reads the node's classical bands (Λ is not a band shift of the trap). | Traps sit at the interface. Λ is a transport correction. | Documented. |
+| QP14 | Verification reference: a 1D Schrödinger–Poisson solver in `verify/reference` (finite differences, `jacobi_eigen`, silicon's 2- and 4-fold valleys with m_l = 0.916 and m_t = 0.19, a finite barrier with the insulator band data, Boltzmann and FD subband occupancy, self-consistent with Poisson). Built through the Unit 55 §3.4 checklist: independence I2, class H. | DG has no closed form. SP is the physics DG approximates, and the reference commercial calibrations use. | 1D only (MOS-C). The FinFET is reported, not gated. |
+
+**Criteria (QV1–QV14), fixed before code.**
+
+| ID | Criterion |
+|---|---|
+| QV1 | Off: every existing test and pin passes unchanged. The Unit 59 NG1 trace set is byte-identical to `main`'s (only added cases new), the NG2 decks are 38/38, and run identities and Jacobian patterns are unchanged. |
+| QV2 | β and x_p against long-double CODATA within 1e-14 relative; SiO₂ x_p printed. |
+| QV3 | The Λ row alone, against analytic profiles: √c = exp(−x / 2L) gives Λ̂ = −β / 4L² exactly; √c = cosh(x / L) gives −β / L²; with the Robin term, a 1D wall against the closed form. Error O(h²) on uniform and graded 1D meshes (observed order 1.9–2.1), and 2D/3D tensor meshes equal 1D within 1e-12. |
+| QV4 | DG equilibrium (1D MOS-C in accumulation and inversion, the 2D MOSFET example, both statistics): every edge current within its rounding bound (as QC5), and n = n_ie exp(ψ − Λ̂_n) within 1e-12 relative. |
+| QV5 | Jacobian against central differences (1D, 2D, 3D, Delaunay, lumped gate, meshed oxide; Boltzmann and FD; with Lombardi): largest relative column error ≤ 1e-6. Newton on the 2D MOSFET in strong inversion converges quadratically in its last three iterations. |
+| QV6 | Against the QP14 Schrödinger–Poisson reference (1D MOS-C, 1.5 nm and 5 nm SiO₂, p-type 1e17 and 1e18, strong inversion at three gate biases, Boltzmann), γ = 1, default masses: inversion charge within 10%, charge centroid within 0.3 nm, threshold shift (DG − classical) within 25% of SP's. MLDA's values are reported beside them. A miss is recorded as a fail, not tuned. |
+| QV7 | Mesh convergence (QV6's 5 nm device): Q_inv at surface spacings 0.2, 0.1 and 0.05 nm. The last two differ by ≤ 1%, and by less than the first two. |
+| QV8 | Limits: as x_p → 0 the interface density falls monotonically and the peak moves inward. As γ → 0 the solution tends to the classical one (difference ∝ γ, observed order 0.9–1.1). |
+| QV9 | Symmetry: a y-uniform 2D MOS-C equals 1D within 1e-12; the 2D MOSFET example with x and y swapped gives the same I_d within 1e-9; a 3D extrusion equals 2D within 1e-12. |
+| QV10 | Small-signal g_d and g_m against DC central differences within 1e-5; a transient long step equals DC within 1e-9. |
+| QV11 | Every QP10 refusal, with its message from both assemblers; every QP10 acceptance runs. |
+| QV12 | Results and restart: Λ fields in results files, `nitcad plot` and the app list; a checkpointed DG sweep restarts and finishes bit-identical to an uninterrupted one (as Unit 61 RG); a restart with the model changed is refused. |
+| QV13 | Reported, not gated: the 2D/3D MOSFET examples' and the FinFET decks' V_th, swing and on-current with classical, MLDA and DG; Newton iterations; per-iteration cost against drift-diffusion; uses of the QP9 ladder. |
+| QV14 | Full Release and Debug suites (on the owner's word), zero warnings, hand mutants caught (a Λ sign, a missing Robin term, an unscaled β, Λ dropped from one SG flux, the equilibrium row left out, and others). |
+
+**Owner questions (QR1–QR8).**
+
+| ID | Question | Options | Recommendation |
+|---|---|---|---|
+| QR1 | Unknowns | (a) Λ̂_n, Λ̂_p added (stride 5). (b) √n, √p replace n, p (every term changes). | **(a)**: existing terms stay; the Unit 52 precedent. |
+| QR2 | Carriers | (a) Both, always. (b) Per carrier (`n`, `p`, `both`; stride 4 or 5). | **(a)**: one layout. Per carrier is a later option. |
+| QR3 | Insulator interface | (a) Analytic barrier penetration (Robin, QP5). (b) Λ solved inside meshed oxides. (c) Hard wall. (d) Natural (no condition). | **(a)**: physical, no fit, works with lumped gates. (b) is a follow-up. |
+| QR4 | Coefficient | (a) γ = 1 and MLDA's masses, deck-overridable, reported. (b) Calibrated commercial-style defaults. | **(a)**: TVM2 forbids a fitted default. |
+| QR5 | Equilibrium | (a) DG in the equilibrium table (QP8). (b) Classical equilibrium, DG from the first bias point. | **(a)**: a true equilibrium start. |
+| QR6 | Combinations | (a) The QP10 refusals. (b) Also accept gate tunnelling now. | **(a)**: each combination gets its own gate later. |
+| QR7 | Reference | (a) An in-house 1D Schrödinger–Poisson (QP14). (b) Published curves only. | **(a)**: an independent, reproducible reference (Unit 55 §3.4). |
+| QR8 | Statistics | (a) Boltzmann and Fermi–Dirac. (b) Boltzmann only. | **(a)**: parity with MLDA and with commercial tools. |
+
+**Rulings (2026-11-19):** QR1–QR8 ruled (a), as recommended, under the owner's standing instruction "always choose recommended" (2026-11-11). Not started: slice 0 waits for the owner's word.
+
+**Slices.**
+- **0. Reference** (verify only): the QP14 Schrödinger–Poisson solver and its L0 tests (a square well's subbands against
+  the analytic ones, the triangular well against Airy zeros, charge neutrality), plus the QV3 profiles. No product
+  code.
+- **1. Physics and deck:** parameters, β and x_p (QV2), deck keys, refusals (QV11), run record.
+- **2. Assemble:** fields, Λ rows, SG coupling, exact Jacobian, the equilibrium table; QV1, QV3–QV5, QV9.
+- **3. Solve and results:** start and ladder, transient, small signal, results files, plot, app, checkpoints;
+  QV10, QV12.
+- **4. Validation and close:** QV6–QV8, QV13; QV14 on the owner's word; ARCHITECTURE 11.3 and 6.x as built.
+
+**Risks.** (1) Cost: stride 5 is roughly energy balance's factorization cost; the FinFET runs may take hours (Unit 58
+would help). (2) First-point convergence: QP9's ladder is the bounded fallback. (3) γ = 1 may miss QV6: it would be
+recorded, and the owner may then rule a reported γ. (4) The FinFET mesh-convergence check (11.3) is still open, so
+FinFET numbers are reported only.
+
 ## New questions the advisor raised (not yet in `ARCHITECTURE.md`)
 
 None of these is decided. Each needs an owner position before the build scaffold fixes the flags.
