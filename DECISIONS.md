@@ -1368,6 +1368,16 @@ then over fields (RMS), skip held unknowns (Jacobian row = own diagonal), ψ wei
 - Targeted Release runs only (solve `natural norm*`, `line search*`, `newton*`; assemble `[extensibility]`; deck;
   app `app deck*`): all pass. NG1, NG2 and the full Release and Debug suites wait for the owner's word (slice 2).
 
+**Slice 2 (2026-11-19, owner: "start slice 2, choose recommended", then "after NG1 passes just push").** Base:
+`main` `e57918a`, built in a separate worktree; both trees Release, MSVC 14.51.
+- **NG2:** the 12 decks of `tests/decks/` run with both `nitcad.exe`: all 38 files agree (`[.deck_compare]`).
+- **NG1:** the 89 ctest entries of the five trace-linked executables, `NITCAD_TRACE_FILE` set, `--order decl`, pinned
+  to the P cores (mask 0x3F): 86 traces byte-identical to `main`'s; 3 identical in every test case `main` has, with
+  only this unit's added cases (`assemble.extensibility`: the two NG5 cases; `solve.newton`: the three
+  `natural norm` cases; `solve.step_control`: the NG6 case). No test case differs.
+- **Not run (owner: push after NG1):** the full Release ctest suite, the Debug build and suite. NG7's suites, ND5's
+  ARCHITECTURE 11.3 "As built" and the unit's close remain.
+
 ## New questions the advisor raised (not yet in `ARCHITECTURE.md`)
 
 None of these is decided. Each needs an owner position before the build scaffold fixes the flags.
