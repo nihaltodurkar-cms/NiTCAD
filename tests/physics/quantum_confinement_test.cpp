@@ -132,6 +132,6 @@ TEST_CASE("density gradient: the coefficient and the barrier decay length (QV2)"
     std::printf("density gradient: SiO2 electron x_p = %.6f nm; beta_n(0.98 m0, 300 K) = %.6e nm^2\n", xp * 1e7,
                 dg_coefficient_cm2(1.0, 0.98, 300.0) * 1e14);
     CHECK(dg_default_gamma == 1.0);
-    CHECK(dg_default_electron_mass == mlda_silicon_electron_mass);
-    CHECK(dg_default_hole_mass == mlda_silicon_hole_mass);
+    CHECK(dg_default_electron_mass == 0.328);  // QP0: Ancona 2000 p. 1451
+    CHECK(dg_default_hole_mass == mlda_silicon_hole_mass);  // QP0: no source gives a hole value
 }

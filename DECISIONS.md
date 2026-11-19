@@ -1854,6 +1854,83 @@ smallest ΔV/Δlog I_d.
     iteration count does not show. On this mesh, DG's Newton needs smaller bias steps than classical: a cost
     finding, not a fix.
 
+**QP0 recorded (2026-11-20, owner supplied the papers, "(a)").** The four sources were read from the owner's
+copies, outside the repo. In our form the quantum potential is Λ = −(γħ²/6m) ∇²√n/√n. In Ancona's form it is
+2b ∇²√n/√n (in volts). So γ/m = 12bq/ħ².
+
+- **(i) Coefficient.**
+  - Ancona and Tiersten, PRB 35 (1987) 7959, eq. (4.9a) and p. 7964:
+    - the static DG equation is a "Schrödinger equation" with coefficient 2b;
+    - matching the one-electron effective-mass ground state gives b = ħ²/(4qm*), with m* the normal mass;
+    - the "note added in proof" says a more rigorous microscopic derivation gives b = ħ²/(12m*q).
+  - Ancona and Iafrate, PRB 39 (1989) 9536, eq. (3.12): b = ħ²/(12m*q). This is the lowest-order Wigner
+    correction for a Boltzmann, high-temperature gas of infinite extent; eq. (3.13) gives the condition
+    ε = ħ²β/(8m*d²) ≪ 1. In our form it is **γ = 1** with m = m*.
+  - Ancona, IEEE TED 47 (2000) 1449, eq. (2.7): b = ħ²/(4qm*r), where r = 1 is the pure state (one subband)
+    and r = 3 the high-temperature limit, which is the 1989 value.
+  - Ancona 2000, pp. 1452–1453 and Fig. 7: for silicon inversion layers m* and r vary oppositely, and he
+    takes m*r = 1.
+  - Wettstein, Schenk and Fichtner, IEEE TED 48 (2001) 279, eq. (11), has the same Λ form as ours with γ as
+    a fit factor: 3.6, fitted on p. 281. It is not a theoretical value, so it is not the default (TVM2).
+  - The placeholder (γ = 1 with m = 0.98) paired the high-temperature coefficient with the pure-state normal
+    mass. That made it about 3× too weak: γ/m = 1.02 where Ancona's m*r = 1 gives 3. This is QV6's earlier
+    under-confinement.
+- **(ii) Masses.**
+  - Electrons: Ancona 2000, p. 1451, gives the single-valley bulk average (m_t² m_l)^{1/3} = 0.328. Footnote 1:
+    m*r = 0.328 × 3 = 0.984, his recommended m*r = 1.
+  - **Default: γ = 1 (1989 eq. (3.12)) with m_n = 0.328.** That is γ/m = 3.05, within 2% of m*r = 1.
+  - Holes: none of the four sources gives a value. m_p stays MLDA's 0.49, marked as unsourced. Λ_p has no
+    reference anyway (QP14).
+  - Wettstein et al. use the density-of-states mass (p. 281). Not adopted, because their γ is fitted with it.
+- **(iii) Oxide boundary condition.**
+  - Ancona and Tiersten 1987, eq. (4.4b), and Ancona 2000, p. 1451: ρ = 0 at the surface, an insulating oxide
+    and an infinite barrier, with tunnelling omitted.
+  - Wettstein et al.: the barrier enters through eq. (8), with ∇(Φ+Λ)·n = 0 at the outer boundaries.
+  - **QP5 confirmed (a), not revised.** Our reference (QP14) has a finite barrier, so the penetration form
+    matches the physics QV6 compares against. QV8 shows the hard wall is its x_p → 0 limit (QR3 (c) is that
+    limit).
+- **(iv) Published agreement, which sets QV6's bounds.**
+  - Ancona 2000, p. 1454, against SHRED Schrödinger–Poisson (16 subbands, Fermi–Dirac; 31 Å oxide; N_A 1e15,
+    3.8e16 and 1e18):
+    - V_th within 10 mV, worst at the heaviest doping;
+    - N_inv "quite accurate" and the centroid close, shown in figures only, with no number in the text.
+  - Wettstein et al. publish agreement only for their fitted γ, so it does not apply to the theoretical
+    coefficient.
+  - **Bounds frozen:**
+    - |(ΔV_th DG) − (ΔV_th SP)| ≤ 10 mV, cited;
+    - |ΔN_inv/N_inv| ≤ 10% and |Δcentroid| ≤ 0.3 nm, the slice-0 numbers kept as engineering bounds. The
+      sources give no number for these two, and this is stated.
+    - The 25% relative shift placeholder is replaced by the cited 10 mV.
+
+**QV6 verdict (QP0's defaults; tests/verify/benchmark/density_gradient_test.cpp, now gated).**
+
+| t_ox, N_A | shift DG / SP [mV] | miss [mV] | N_inv DG vs SP | centroid DG − SP |
+|---|---|---|---|---|
+| 1.5 nm, 1e17 | 35.9 / 46.1 | 10.2 | +2.0 to +3.6% | −0.09 to −0.16 nm |
+| 1.5 nm, 1e18 | 80.2 / 97.8 | 17.6 | +2.3 to +4.8% | −0.06 to −0.09 nm |
+| 5 nm, 1e17 | 37.6 / 48.5 | 10.9 | +1.2 to +2.1% | −0.14 to −0.20 nm |
+| 5 nm, 1e18 | 97.0 / 118.8 | 21.8 | +1.7 to +3.7% | −0.08 to −0.10 nm |
+
+- **N_inv and the centroid pass at all 12 points. The threshold shift fails at all four devices**: DG gives
+  78–82% of SP's shift, missing by 10.2–21.8 mV against the 10 mV bound.
+- The placeholder γ gave 54–57% of SP's shift, with N_inv up to +17% and the centroid up to −0.64 nm.
+- MLDA (unchanged): 60–63% of SP's shift.
+- Recorded as a fail, not tuned (QV6).
+- Known differences from Ancona's comparison, stated rather than corrected:
+  - our reference is Boltzmann, with a finite barrier and two valley sets (m_l = 0.916);
+  - his is Fermi–Dirac, an infinite barrier and m_l = 0.98;
+  - V_th here is N_inv = 1e12 cm⁻².
+- Ancona's Fig. 7 (m*r = 0.9 "slightly better") suggests a stronger coefficient would narrow the gap. Choosing
+  one is calibration, so it is **the owner's ruling** (QV6: "the owner may then rule a reported γ"). Not done.
+- QV7 under the new defaults: 3.2e-4 and 7.3e-5 (pass).
+- QV8 under the new defaults: orders 0.899/0.980/0.998 (N_inv) and 0.669/0.919/0.990 (n). The heavier
+  coefficient makes the 1e-2 pair more pre-asymptotic; it was already report-only. Pass.
+- Code changes:
+  - physics/quantum_confinement.hpp: `dg_default_electron_mass` = 0.328, with the citations;
+  - the app's deck vocabulary and sections: the `dg_mass_n` default is 0.328;
+  - the physics and deck default pins were updated.
+- The slice-4 part 2 example numbers (QV13, QV15) and the FinFET runs were measured with the placeholder
+  mass. They are rerun under the new default before the unit closes.
 ## New questions the advisor raised (not yet in `ARCHITECTURE.md`)
 
 None of these is decided. Each needs an owner position before the build scaffold fixes the flags.

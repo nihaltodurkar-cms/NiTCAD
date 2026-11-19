@@ -1,8 +1,9 @@
 // Unit 62 slice 4 (DECISIONS.md QV6-QV8): density gradient against the in-house 1D Schrodinger-Poisson
 // reference (verify/reference/schrodinger_poisson.hpp, QP14) on a 1D MOS-C at equilibrium (the quasi-static
 // sweep: E_F = 0 everywhere, the reference's setting), its mesh convergence, and its limits. Release only, hidden
-// ([.dg_validation]); run by name. QV6 is reported, not gated, until QP0 fixes its bounds (the placeholders 10%,
-// 0.3 nm and 25% are printed beside the measured values, not used for a verdict).
+// ([.dg_validation]); run by name. QV6's bounds are QP0's (DECISIONS.md): the threshold shift within 10 mV of the
+// reference's, the one number Ancona, IEEE TED 47 (2000) 1449, p. 1454, publishes for the theoretical coefficient;
+// N_inv within 10% and the centroid within 0.3 nm, the slice-0 bounds (the sources show those two in figures only).
 #include <catch2/catch_test_macros.hpp>
 
 #include <algorithm>
@@ -217,9 +218,9 @@ ref::MosSpResult sp(const ref::MosSpInput& in, double overdrive) {
 
 }  // namespace
 
-TEST_CASE("density gradient against Schrodinger-Poisson (QV6, reported until QP0)", "[.dg_validation]") {
+TEST_CASE("density gradient against Schrodinger-Poisson (QV6)", "[.dg_validation]") {
     const double target = 1e12;  // N_inv defining the threshold [cm^-2]
-    std::printf("QV6 (placeholders, no verdict until QP0: |dN/N| 10%%, |d centroid| 0.3 nm, |d dVth / dVth| 25%%)\n");
+    std::printf("QV6 (QP0 bounds: |d shift| 10 mV, |dN/N| 10%%, |d centroid| 0.3 nm)\n");
     for (const double t_ox : {1.5e-7, 5e-7}) {
         for (const double N_A : {1e17, 1e18}) {
             const Mos m{t_ox, N_A};
@@ -246,6 +247,7 @@ TEST_CASE("density gradient against Schrodinger-Poisson (QV6, reported until QP0
                         t_ox * 1e7, N_A, vfb, vt_cl, vt_spc, vt_dg - vt_cl, vt_ml - vt_cl, shift_sp,
                         100.0 * ((vt_dg - vt_cl) / shift_sp - 1.0), 100.0 * ((vt_ml - vt_cl) / shift_sp - 1.0));
             CHECK(std::abs(vt_cl - vt_spc) < 5e-3);  // the classical cross-check (same equations, two codes)
+            CHECK(std::abs((vt_dg - vt_cl) - shift_sp) <= 10e-3);  // QV6: Ancona 2000 p. 1454
             for (const double over : {0.5, 1.0, 1.5}) {
                 const double ov = vt_spc + over;
                 const auto q = sp(spq, ov);
@@ -265,6 +267,8 @@ TEST_CASE("density gradient against Schrodinger-Poisson (QV6, reported until QP0
                             (ld.centroid - q.centroid_cm) * 1e7, (lm.centroid - q.centroid_cm) * 1e7,
                             lc.centroid * 1e7);
                 CHECK(std::abs(lc.N_inv / c.inversion_cm2 - 1.0) < 1e-2);  // classical cross-check
+                CHECK(std::abs(ld.N_inv / q.inversion_cm2 - 1.0) <= 0.10);  // QV6
+                CHECK(std::abs(ld.centroid - q.centroid_cm) <= 0.3e-7);    // QV6
             }
         }
     }

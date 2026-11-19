@@ -151,7 +151,7 @@ TEST_CASE("quantum confinement: the deck keys", "[deck]") {
     CHECK(d.options.models.dg_mass_p == 0.3);
     CHECK(d.options.models.dg_gamma_n == 0.5);
     CHECK(d.options.models.dg_gamma_p == 2.0);
-    CHECK(q.options.models.dg_mass_n == 0.98);
+    CHECK(q.options.models.dg_mass_n == 0.328);
     CHECK(q.options.models.dg_mass_p == 0.49);
     CHECK(q.options.models.dg_gamma_n == 1.0);
     const auto bad = deck::parse(with("quantum_confinement = schrodinger"), "bad.deck");

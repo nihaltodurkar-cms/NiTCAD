@@ -25,7 +25,7 @@ constexpr std::array<KeySpec, 25> model_keys{{
     {"quantum_confinement", "off", "off | mlda | density_gradient (near insulators)"},
     {"mlda_mass_n", "0.98", "mlda: electron quantization mass, m0"},
     {"mlda_mass_p", "0.49", "mlda: hole quantization mass, m0"},
-    {"dg_mass_n", "0.98", "density_gradient: electron mass, m0"},
+    {"dg_mass_n", "0.328", "density_gradient: electron mass, m0"},
     {"dg_mass_p", "0.49", "density_gradient: hole mass, m0"},
     {"dg_gamma_n", "1", "density_gradient: electron coefficient factor"},
     {"dg_gamma_p", "1", "density_gradient: hole coefficient factor"},

@@ -40,10 +40,14 @@ inline constexpr double mlda_silicon_hole_mass = 0.49;
 //
 //     x_p = hbar / sqrt(2 m_ox m0 q dE)  [cm].
 //
-// The defaults are placeholders until the source check QP0 records the theoretical coefficient and
-// the masses it pairs with: gamma = 1 and MLDA's masses.
+// The defaults are QP0's (DECISIONS.md, Unit 62). gamma = 1 is the theoretical high-temperature
+// coefficient, b = hbar^2 / (12 m q) of Ancona and Iafrate, PRB 39 (1989) 9536, eq. (3.12): in this
+// form gamma hbar^2 / (6 m) = 2 b q. The electron mass is the single-valley bulk average
+// (m_t^2 m_l)^(1/3) = 0.328 of Ancona, IEEE TED 47 (2000) 1449, p. 1451, whose m* r = 0.984 is his
+// recommended m* r = 1 for silicon inversion layers (eq. (2.7), pp. 1452-1453). No source gives a
+// hole value: the hole mass stays MLDA's 0.49 (Lambda_p has no reference, QP14).
 inline constexpr double dg_default_gamma = 1.0;
-inline constexpr double dg_default_electron_mass = mlda_silicon_electron_mass;
+inline constexpr double dg_default_electron_mass = 0.328;
 inline constexpr double dg_default_hole_mass = mlda_silicon_hole_mass;
 
 // beta [cm^2]. Preconditions (NITCAD_EXPECTS): gamma and mass_m0 finite and positive; temperature_K
