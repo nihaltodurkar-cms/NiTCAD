@@ -196,10 +196,11 @@ void stop_and_continue(const Case& c, const results::Transient& full, const std:
 }
 
 std::size_t point_at(const results::Transient& full, double t) {
-    for (std::size_t k = 0; k < full.points.size(); ++k)
-        if (full.points[k].time_s == t) return k;
-    FAIL("no point at that time");
-    return 0;
+    std::size_t k = 0;
+    while (k < full.points.size() && full.points[k].time_s != t) ++k;
+    INFO("no point at that time");
+    REQUIRE(k < full.points.size());
+    return k;
 }
 
 }  // namespace
