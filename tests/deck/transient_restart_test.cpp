@@ -19,6 +19,8 @@
 #include <string>
 #include <vector>
 
+#include <windows.h>
+
 #include "NiTCAD/deck/build.hpp"
 #include "NiTCAD/deck/run.hpp"
 #include "NiTCAD/io/files.hpp"
@@ -333,4 +335,85 @@ TEST_CASE("deck small-signal restart: the remaining points equal the uninterrupt
     refused("last.nitckpt", "nothing is left to solve");
     refused("off.nitckpt", "not an operating point");
     refused("tran.nitckpt", "not an operating point");
+}
+
+namespace {
+
+// Runs `nitcad run <deck>` in its own process group and sends it Ctrl-Break once its output holds
+// `lines` progress lines with `marker`: the run stops as on a user's Ctrl-C. The exit status, or -1
+// when the break could not be sent (no console to send it on) or the run ended first.
+int run_and_break(const fs::path& deck, std::size_t lines, const std::string& marker) {
+    SECURITY_ATTRIBUTES sa{sizeof sa, nullptr, TRUE};
+    HANDLE read = nullptr, write = nullptr;
+    REQUIRE(CreatePipe(&read, &write, &sa, 0));
+    SetHandleInformation(read, HANDLE_FLAG_INHERIT, 0);
+    STARTUPINFOW si{};
+    si.cb = sizeof si;
+    si.dwFlags = STARTF_USESTDHANDLES;
+    si.hStdOutput = write;
+    si.hStdError = write;
+    si.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
+    std::wstring command = L"\"" + fs::path(NITCAD_CLI_PATH).wstring() + L"\" run \"" + deck.wstring() + L"\"";
+    PROCESS_INFORMATION pi{};
+    REQUIRE(CreateProcessW(nullptr, command.data(), nullptr, nullptr, TRUE, CREATE_NEW_PROCESS_GROUP, nullptr,
+                           nullptr, &si, &pi));
+    CloseHandle(write);
+    std::string out;
+    char buffer[256];
+    DWORD got = 0;
+    bool sent = false, delivered = false;
+    while (ReadFile(read, buffer, sizeof buffer, &got, nullptr) && got > 0) {
+        out.append(buffer, got);
+        if (sent) continue;
+        std::size_t count = 0;
+        for (std::size_t at = out.find(marker); at != std::string::npos; at = out.find(marker, at + 1)) ++count;
+        if (count >= lines) {
+            sent = true;
+            delivered = GenerateConsoleCtrlEvent(CTRL_BREAK_EVENT, pi.dwProcessId) != 0;
+        }
+    }
+    WaitForSingleObject(pi.hProcess, INFINITE);
+    DWORD status = 0;
+    GetExitCodeProcess(pi.hProcess, &status);
+    CloseHandle(pi.hThread);
+    CloseHandle(pi.hProcess);
+    CloseHandle(read);
+    INFO(out);
+    return delivered ? static_cast<int>(status) : -1;
+}
+
+void write_deck(const fs::path& p, const std::string& text) {
+    std::ofstream f(p);
+    f << text;
+}
+
+}  // namespace
+
+// RG8: `nitcad run` on a transient and on a trace stopped by Ctrl-Break (exit 2) writes a
+// checkpoint that a restart completes (exit 0).
+TEST_CASE("deck restart: nitcad run stopped by Ctrl-Break writes a checkpoint a restart completes (RG8)",
+          "[deck][restart]") {
+    const fs::path dir = scratch("restart_break");
+    const auto mesh = must(diode_device + body, dir).device.mesh();
+    const std::string trace = "[trace]\ncontact = anode\nend = 0.9\nstep = 0.01\nmax_step = 0.01\n";
+    struct Run {
+        std::string name, analysis, marker;
+        io::CheckpointKind kind;
+    };
+    for (const Run& r : {Run{"transient", body, "t = ", io::CheckpointKind::transient},
+                         Run{"trace", trace, "traced point", io::CheckpointKind::trace}}) {
+        INFO(r.name);
+        write_deck(dir / (r.name + ".deck"), diode_device + r.analysis + "[output]\ncheckpoint = " + r.name + ".nitckpt\n");
+        const int status = run_and_break(dir / (r.name + ".deck"), 3, r.marker);
+        if (status == -1) SKIP("no console to send Ctrl-Break on");
+        CHECK(status == 2);
+        const auto c = io::load_checkpoint(dir / (r.name + ".nitckpt"), mesh);
+        REQUIRE(c.has_value());
+        CHECK(c->kind == r.kind);
+        write_deck(dir / (r.name + "_rest.deck"),
+                   diode_device + r.analysis + "restart = " + r.name + ".nitckpt\n");
+        const Cli rest = cli("run \"" + (dir / (r.name + "_rest.deck")).string() + "\"");
+        INFO(rest.output);
+        CHECK(rest.status == 0);
+    }
 }

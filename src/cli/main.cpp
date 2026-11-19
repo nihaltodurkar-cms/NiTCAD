@@ -318,7 +318,7 @@ int main(int argc, char** argv) {
     }
     if (report->small_signal && report->small_signal->stopped) {
         std::fprintf(stderr, "nitcad: the small-signal run stopped after %zu of %zu point(s): %s\n",
-                     report->small_signal->points.size(), plan->points.size(),
+                     report->small_signal->points.size(), plan->points.size() - report->skipped_points,
                      report->small_signal->stopped->message.c_str());
         return 2;
     }
