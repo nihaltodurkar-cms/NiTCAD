@@ -646,6 +646,7 @@ add_executable(nitcad_solve_test
   tests/solve/insulator_test.cpp
   tests/solve/transient_test.cpp
   tests/solve/transient_resume_test.cpp
+  tests/solve/trace_resume_test.cpp
   tests/solve/small_signal_test.cpp
   tests/solve/impact_ionization_test.cpp
   tests/solve/btbt_test.cpp

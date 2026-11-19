@@ -5,6 +5,7 @@
 // that was being solved, if one was. A run that finished has neither.
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -60,11 +61,33 @@ struct RunRecord {
     std::uint64_t mesh_generation_digest = 0;
 };
 
+// A trace's resume state (Unit 61, RD5): what solve::trace_bias needs to continue after its last
+// accepted point exactly as the uninterrupted trace would, every double bit for bit. Taken at the
+// acceptance of `point`; a trace stopped later (cancelled, or a failed attempt) resumes from it and
+// replays those attempts.
+struct TraceResume {
+    std::vector<double> state;    // the scaled state, lambda (bias / V_T) last
+    std::vector<double> tangent;  // the unit tangent there, in the arc metric
+    double step = 0.0;            // the next arc step ds
+    std::size_t entry = 0;        // the entry kept for the arc row (the pivot)
+    std::size_t attempt = 0;      // attempts so far (progress and error indices)
+    std::size_t points = 0;       // accepted points so far, the starting point included
+    double current_floor_A = 0.0; // I0 of the arc metric, from the starting point
+    BiasPoint point;              // the last accepted point (a restarted trace's first)
+    // The trace's identity without its initial state (as TransientResume::identity).
+    std::uint64_t identity = 0;
+    // The trace ended here (landed on its end, reached its current limit or max_points): nothing
+    // is left to continue.
+    bool finished = false;
+};
+
 struct Sweep {
     RunRecord run;
     std::vector<BiasPoint> points;
     std::optional<base::Error> stopped;
     std::optional<ConvergenceRecord> unfinished;
+    // A trace's resume state at its last accepted point (Unit 61, RD5); empty for a sweep.
+    std::optional<TraceResume> resume;
 };
 
 }  // namespace NiTCAD::results
