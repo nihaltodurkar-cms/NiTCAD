@@ -23,6 +23,7 @@
 #include <format>
 #include <functional>
 #include <limits>
+#include <map>
 #include <new>
 #include <optional>
 #include <string>
@@ -313,6 +314,12 @@ struct ResidentGeometry {
     std::uint64_t hash = 0;
 };
 
+// Unit 26i: text layouts kept across frames, by format and text. A layout is immutable once made, so a kept one
+// draws exactly as a new one; the overlays' labels (colour bar, axis box, view cube) repeat from frame to frame,
+// and making their layouts was a measurable part of an enhanced frame (KG6). The formats are the renderer's
+// own, made once with it.
+using LayoutCache = std::map<std::pair<IDWriteTextFormat*, std::wstring>, ComPtr<IDWriteTextLayout>>;
+constexpr std::size_t layout_cache_limit = 2048;
 std::vector<std::size_t> batch_sizes(const FieldScene& s) {
     std::vector<std::size_t> out;
     out.reserve(s.triangles.size() + s.lines.size() + 1);
@@ -444,6 +451,9 @@ struct Renderer::Impl {
     std::expected<void, base::Error> render_field(const FieldScene& s, int w, int h, ResidentGeometry* keep = nullptr,
                                                   bool reuse = false);
     bool reused = false;  // the last render_field drew kept buffers
+    ComPtr<ID3D12Resource> box_upload;  // Unit 26i: the axis box vertices, rewritten each frame
+    std::size_t box_upload_bytes = 0;
+    LayoutCache layouts;  // Unit 26i: the overlays' text layouts, kept across frames
     std::expected<void, base::Error> render_plot(const PlotScene& s, int w, int h);
     std::expected<void, base::Error> show(WindowTarget::Impl& target);
 };
@@ -859,23 +869,38 @@ namespace {
 
 D2D1_COLOR_F d2(const Rgb& c, float a = 1.0f) { return {c.r, c.g, c.b, a}; }
 
+
 struct Ink {
     ID2D1DeviceContext2* dc;
     IDWriteFactory* dw;
+    LayoutCache* cache;
     ComPtr<ID2D1SolidColorBrush> brush;
-    explicit Ink(ID2D1DeviceContext2* c, IDWriteFactory* w) : dc(c), dw(w) {
+    explicit Ink(ID2D1DeviceContext2* c, IDWriteFactory* w, LayoutCache* kept = nullptr) : dc(c), dw(w), cache(kept) {
         dc->CreateSolidColorBrush(D2D1::ColorF(0, 0, 0), &brush);
     }
     ID2D1SolidColorBrush* color(const D2D1_COLOR_F& c) {
         brush->SetColor(c);
         return brush.Get();
     }
+    // The layout of the text in the format, kept in the cache when there is one; null on failure.
+    ComPtr<IDWriteTextLayout> layout_of(std::string_view s, IDWriteTextFormat* f) {
+        std::wstring w = widen(s);
+        if (cache) {
+            if (const auto it = cache->find({f, w}); it != cache->end()) return it->second;
+        }
+        ComPtr<IDWriteTextLayout> layout;
+        if (FAILED(dw->CreateTextLayout(w.c_str(), static_cast<UINT32>(w.size()), f, 4096.0f, 1024.0f, &layout))) return nullptr;
+        if (cache) {
+            if (cache->size() >= layout_cache_limit) cache->clear();
+            cache->emplace(std::pair{f, std::move(w)}, layout);
+        }
+        return layout;
+    }
     // Text anchored at (x, y): align 0 left, 1 center, 2 right; valign 0 top, 1 middle, 2 bottom.
     void text(std::string_view s, IDWriteTextFormat* f, float x, float y, int align, int valign,
               const D2D1_COLOR_F& c = {0.12f, 0.14f, 0.16f, 1.0f}) {
-        const std::wstring w = widen(s);
-        ComPtr<IDWriteTextLayout> layout;
-        if (FAILED(dw->CreateTextLayout(w.c_str(), static_cast<UINT32>(w.size()), f, 4096.0f, 1024.0f, &layout))) return;
+        const ComPtr<IDWriteTextLayout> layout = layout_of(s, f);
+        if (!layout) return;
         DWRITE_TEXT_METRICS m{};
         layout->GetMetrics(&m);
         const float left = x - (align == 1 ? 0.5f * m.width : align == 2 ? m.width : 0.0f);
@@ -883,9 +908,8 @@ struct Ink {
         dc->DrawTextLayout({left, top}, layout.Get(), color(c));
     }
     float width_of(std::string_view s, IDWriteTextFormat* f) {
-        const std::wstring w = widen(s);
-        ComPtr<IDWriteTextLayout> layout;
-        if (FAILED(dw->CreateTextLayout(w.c_str(), static_cast<UINT32>(w.size()), f, 4096.0f, 1024.0f, &layout))) return 0.0f;
+        const ComPtr<IDWriteTextLayout> layout = layout_of(s, f);
+        if (!layout) return 0.0f;
         DWRITE_TEXT_METRICS m{};
         layout->GetMetrics(&m);
         return m.width;
@@ -1042,9 +1066,21 @@ std::expected<void, base::Error> Renderer::Impl::render_field(const FieldScene& 
             vert(b, a, 1.0f);
         }
         line_ranges.push_back({0, box_lines.size(), 1.0f, false, true});
-        auto bb = upload(box_lines.data(), box_lines.size() * sizeof(LineVertex));
-        if (!bb) return std::unexpected(std::move(bb.error()));
-        box_buffer = *bb;  // read from the upload heap: a few dozen vertices
+        // One upload-heap buffer kept by the renderer and rewritten each frame (the queue is idle between
+        // frames): a fresh one per frame cost the enhanced draw some 5% (KG6).
+        const std::size_t bytes = box_lines.size() * sizeof(LineVertex);
+        if (!box_upload || box_upload_bytes < bytes) {
+            auto bb = upload(box_lines.data(), bytes);  // at least 256 bytes (upload)
+            if (!bb) return std::unexpected(std::move(bb.error()));
+            box_upload = std::move(*bb);
+            box_upload_bytes = std::max<std::size_t>(bytes, 256);
+        }
+        void* p = nullptr;
+        const D3D12_RANGE none{0, 0};
+        NITCAD_HR(box_upload->Map(0, &none, &p), "ID3D12Resource::Map axis box");
+        std::memcpy(p, box_lines.data(), bytes);
+        box_upload->Unmap(0, nullptr);
+        box_buffer = box_upload;  // read from the upload heap: a few dozen vertices
     }
 
     // Constants: one block per draw.
@@ -1263,7 +1299,7 @@ std::expected<void, base::Error> Renderer::Impl::render_field(const FieldScene& 
     // Overlays on Direct2D.
     if (auto r = begin_2d(); !r) return std::unexpected(std::move(r.error()));
     {
-        Ink ink(d2d.Get(), dwrite.Get());
+        Ink ink(d2d.Get(), dwrite.Get(), &layouts);
         d2d->SetAntialiasMode(D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
         if (!s.title.empty()) ink.text(s.title, title_text.Get(), 14.0f, 10.0f, 0, 0);
         if (s.colorbar) {
@@ -1430,7 +1466,7 @@ std::expected<void, base::Error> Renderer::Impl::render_plot(const PlotScene& s,
     if (auto r = execute(); !r) return std::unexpected(std::move(r.error()));
     if (auto r = begin_2d(); !r) return std::unexpected(std::move(r.error()));
     {
-        Ink ink(d2d.Get(), dwrite.Get());
+        Ink ink(d2d.Get(), dwrite.Get(), &layouts);
         d2d->SetAntialiasMode(D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
         const PlotFrame f = plot_frame(s, w, h);
         const D2D1_RECT_F frame{f.left, f.top, f.right, f.bottom};
