@@ -95,6 +95,7 @@ std::expected<results::SmallSignal, base::Error> solve_small_signal_unobserved(
 
     results::SmallSignal run;
     run.run = make_run_record(device, options, points, initial);
+    run.run.warnings = sweep->run.warnings;  // the operating points' (Unit 62)
     run.contacts = contacts;
     run.frequency_Hz = frequencies;
 

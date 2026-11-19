@@ -291,6 +291,8 @@ namespace fields_key {
 constexpr std::uint16_t potential = 1, n = 2, p = 3, temperature = 4;
 // Unit 52: the carrier temperatures, absent without energy balance.
 constexpr std::uint16_t electron_temperature = 5, hole_temperature = 6;
+// Unit 62: the quantum potentials (eV), absent without density gradient.
+constexpr std::uint16_t quantum_potential_n = 7, quantum_potential_p = 8;
 }
 namespace rates_key {  // Unit 45
 constexpr std::uint16_t srh = 1, auger = 2, radiative = 3, impact = 4, interface_n = 5, interface_p = 6,
@@ -322,6 +324,7 @@ constexpr std::uint16_t provenance = 3;   // Unit 42; absent in older files
 constexpr std::uint16_t mesh_digest = 4;  // Unit 45; absent in older files (0: unknown)
 constexpr std::uint16_t mesh_generation = 5;  // Unit 53 (FD14); absent unless the mesh came from a complex
 constexpr std::uint16_t generation_type = 1, generation_digest = 2;
+constexpr std::uint16_t warning = 6, warning_text = 1;  // Unit 62; absent without warnings
 }
 namespace provenance_key {
 constexpr std::uint16_t version = 1, revision = 2, dirty = 3, build_type = 4, compiler = 5,
@@ -383,6 +386,8 @@ namespace ac_fields_key {
 constexpr std::uint16_t frequency = 1, contact = 2, potential = 3, n = 4, p = 5, temperature = 6;
 // Unit 52: the carrier temperatures' amplitudes, absent without energy balance.
 constexpr std::uint16_t electron_temperature = 7, hole_temperature = 8;
+// Unit 62: the quantum potentials' amplitudes (eV / V), absent without density gradient.
+constexpr std::uint16_t quantum_potential_n = 9, quantum_potential_p = 10;
 }
 
 Writer write_fields(const results::NodeFields& f) {
@@ -395,6 +400,10 @@ Writer write_fields(const results::NodeFields& f) {
         w.f64s(fields_key::electron_temperature, f.electron_temperature_K);
     }
     if (!f.hole_temperature_K.empty()) w.f64s(fields_key::hole_temperature, f.hole_temperature_K);
+    if (!f.quantum_potential_n_eV.empty()) {
+        w.f64s(fields_key::quantum_potential_n, f.quantum_potential_n_eV);
+        w.f64s(fields_key::quantum_potential_p, f.quantum_potential_p_eV);
+    }
     return w;
 }
 
@@ -406,12 +415,19 @@ std::expected<results::NodeFields, base::Error> read_fields(const Reader& r) {
     NITCAD_IO_TRY(temperature, r.f64s_or_empty(fields_key::temperature));
     NITCAD_IO_TRY(electron_temperature, r.f64s_or_empty(fields_key::electron_temperature));
     NITCAD_IO_TRY(hole_temperature, r.f64s_or_empty(fields_key::hole_temperature));
+    NITCAD_IO_TRY(quantum_n, r.f64s_or_empty(fields_key::quantum_potential_n));
+    NITCAD_IO_TRY(quantum_p, r.f64s_or_empty(fields_key::quantum_potential_p));
+    if (quantum_n.size() != quantum_p.size()) {
+        return std::unexpected(corrupt("the quantum potentials are not paired"));
+    }
     f.potential_V = std::move(potential);
     f.n_cm3 = std::move(n);
     f.p_cm3 = std::move(p);
     f.temperature_K = std::move(temperature);
     f.electron_temperature_K = std::move(electron_temperature);
     f.hole_temperature_K = std::move(hole_temperature);
+    f.quantum_potential_n_eV = std::move(quantum_n);
+    f.quantum_potential_p_eV = std::move(quantum_p);
     return f;
 }
 
@@ -688,6 +704,11 @@ Writer write_run(const results::RunRecord& run) {
         g.u64(run_key::generation_digest, run.mesh_generation_digest);
         w.record(run_key::mesh_generation, g);
     }
+    for (const std::string& s : run.warnings) {
+        Writer t;
+        t.text(run_key::warning_text, s);
+        w.record(run_key::warning, t);
+    }
     return w;
 }
 
@@ -716,6 +737,13 @@ std::expected<results::RunRecord, base::Error> read_run(const Reader& r) {
         NITCAD_IO_TRY(digest, g.u64(run_key::generation_digest));
         run.mesh_type = std::move(type);
         run.mesh_generation_digest = digest;
+    }
+    if (r.has(run_key::warning)) {
+        NITCAD_IO_TRY(warnings, r.records(run_key::warning));
+        for (const Reader& t : warnings) {
+            NITCAD_IO_TRY(text, t.text(run_key::warning_text));
+            run.warnings.push_back(std::move(text));
+        }
     }
     return run;
 }
@@ -922,6 +950,10 @@ Writer write_ac_fields(const results::SmallSignalFields& f) {
     if (!f.hole_temperature_K.empty()) {
         w.f64s(k::hole_temperature, interleaved(f.hole_temperature_K));
     }
+    if (!f.quantum_potential_n_eV.empty()) {
+        w.f64s(k::quantum_potential_n, interleaved(f.quantum_potential_n_eV));
+        w.f64s(k::quantum_potential_p, interleaved(f.quantum_potential_p_eV));
+    }
     return w;
 }
 
@@ -939,12 +971,16 @@ std::expected<results::SmallSignalFields, base::Error> read_ac_fields(const Read
     NITCAD_IO_TRY(temperature, read_complexes(r, k::temperature));
     NITCAD_IO_TRY(electron_temperature, read_complexes(r, k::electron_temperature));
     NITCAD_IO_TRY(hole_temperature, read_complexes(r, k::hole_temperature));
+    NITCAD_IO_TRY(quantum_n, read_complexes(r, k::quantum_potential_n));
+    NITCAD_IO_TRY(quantum_p, read_complexes(r, k::quantum_potential_p));
     f.potential = std::move(potential);
     f.n_cm3 = std::move(n);
     f.p_cm3 = std::move(p);
     f.temperature_K = std::move(temperature);
     f.electron_temperature_K = std::move(electron_temperature);
     f.hole_temperature_K = std::move(hole_temperature);
+    f.quantum_potential_n_eV = std::move(quantum_n);
+    f.quantum_potential_p_eV = std::move(quantum_p);
     return f;
 }
 
@@ -1407,7 +1443,7 @@ std::expected<Checkpoint, base::Error> load_checkpoint(const std::filesystem::pa
     const auto optional = [&](const std::vector<double>& v) { return v.empty() || sized(v); };
     if (!sized(fields.potential_V) || !sized(fields.n_cm3) || !sized(fields.p_cm3) ||
         !optional(fields.temperature_K) || !optional(fields.electron_temperature_K) ||
-        !optional(fields.hole_temperature_K)) {
+        !optional(fields.hole_temperature_K) || !optional(fields.quantum_potential_n_eV)) {
         return std::unexpected(corrupt("checkpoint fields do not have one value per node"));
     }
     c.fields = std::move(fields);

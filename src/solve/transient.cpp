@@ -17,6 +17,7 @@
 #include "NiTCAD/assemble/tunnelling.hpp"
 #include "NiTCAD/solve/equilibrium.hpp"
 #include "NiTCAD/solve/newton.hpp"
+#include "density_gradient.hpp"
 #include "fields.hpp"
 #include "observe.hpp"
 #include "wall_clock.hpp"
@@ -388,6 +389,9 @@ std::expected<results::Transient, base::Error> solve_transient_unobserved(
             return run;
         }
         x = detail::state_from_equilibrium(dd, start->fields, scaling->V_T);  // Lambda too (Unit 62)
+        if (auto w = detail::continuation_warning(start->quantum_continuation); !w.empty()) {
+            run.run.warnings.push_back(std::move(w));
+        }
     }
     const std::vector<double> bias0 = bias_at(0.0, true);
     (void)system->set_bias(bias0);  // checked
@@ -743,6 +747,11 @@ std::expected<results::Transient, base::Error> solve_transient(
     const detail::WallClock clock;
     auto r = solve_transient_unobserved(device, waveforms, options, initial, control, resume);
     if (r) {
+        if (options.steady.models.quantum_confinement == assemble::QuantumConfinement::density_gradient) {
+            detail::CoarseScan scan(device);  // Unit 62, QP15
+            for (const results::TransientSnapshot& s : r->snapshots) scan.add(s.fields);
+            if (auto w = scan.warning(); !w.empty()) r->run.warnings.push_back(std::move(w));
+        }
         r->run.provenance.wall_s = clock.seconds();
         detail::observe_result(*r);
     }

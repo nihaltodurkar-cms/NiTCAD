@@ -59,6 +59,9 @@ struct RunRecord {
     // not part of input_identity.
     std::string mesh_type;
     std::uint64_t mesh_generation_digest = 0;
+    // What the run warns about (Unit 62: density gradient's continuation rungs, QP9, and its coarse-mesh
+    // check, QP15); empty otherwise. Not part of input_identity.
+    std::vector<std::string> warnings;
 };
 
 // A trace's resume state (Unit 61, RD5): what solve::trace_bias needs to continue after its last

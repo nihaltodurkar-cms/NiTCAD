@@ -302,6 +302,7 @@ std::expected<results::Sweep, base::Error> sweep_bias_unobserved(const device::D
                 sweep.stopped = std::move(q.error());
                 return sweep;
             }
+            if (auto w = detail::continuation_warning(q->rungs); !w.empty()) sweep.run.warnings.push_back(std::move(w));
             for (std::size_t i = 0; i < nodes; ++i) {
                 x[3 * i] = q->psi[i];
                 x[3 * i + 1] = q->lambda_n[i];
@@ -435,6 +436,9 @@ std::expected<results::Sweep, base::Error> sweep_bias_unobserved(const device::D
             return sweep;
         }
         x = detail::state_from_equilibrium(*system, start->fields, scaling->V_T);  // Lambda too (Unit 62)
+        if (auto w = detail::continuation_warning(start->quantum_continuation); !w.empty()) {
+            sweep.run.warnings.push_back(std::move(w));
+        }
     }
 
     // The bias of the starting state: zero on every contact at equilibrium, or the given one.
@@ -538,6 +542,11 @@ std::expected<results::Sweep, base::Error> sweep_bias(const device::Device& devi
     const detail::WallClock clock;
     auto r = sweep_bias_unobserved(device, points, options, initial, control);
     if (r) {
+        if (options.models.quantum_confinement == assemble::QuantumConfinement::density_gradient) {
+            detail::CoarseScan scan(device);  // Unit 62, QP15
+            for (const results::BiasPoint& p : r->points) scan.add(p.fields);
+            if (auto w = scan.warning(); !w.empty()) r->run.warnings.push_back(std::move(w));
+        }
         r->run.provenance.wall_s = clock.seconds();
         detail::observe_result(*r);
     }

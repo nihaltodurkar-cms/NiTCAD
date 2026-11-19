@@ -1707,6 +1707,61 @@ Results (Release, targeted):
 - QV1: the whole `nitcad_assemble_test` (180 cases) and `nitcad_solve_test` (246 passed, 4 skipped) pass, and
   every Release target builds with zero warnings.
 
+**Slice 3c (2026-11-20, same "choose recommended").** As built:
+- Files. Λ_n and Λ_p are optional keys: `NodeFields` keys 7 and 8, small-signal field keys 9 and 10 (complex). They
+  are written only when the model is on, so classical files are unchanged and the format version stays (as Unit
+  52's temperatures). An unpaired Λ is refused as corrupt. Steady and resume checkpoints carry Λ through the same
+  fields.
+- Compare. `compare_sweeps` compares Λ at the potential's tolerance (eV against V), and a Λ field missing on one
+  side is a structure mismatch.
+- Plot and app (QP12). New `render::Field`s: `Ln`, `Lp`, `Ec_eff` = E_c + Λ_n and `Ev_eff` = E_v − Λ_p. A result
+  without the model gives an error that names the deck key. The app's field list offers them only when the result
+  has Λ (as Unit 52's T_n and T_p). Ruled, recommended: the effective edges are derived in `field_values` from the
+  result's bands and Λ, not stored in derived.hpp. The result already holds both, so nothing new is stored.
+- Restart (QV12). A restart whose checkpoint carries Λ when the run does not solve the model, or the reverse, is
+  refused in all four analyses with "the restart checkpoint '…' was solved with[out] quantum_confinement
+  density_gradient and this run does[ not] solve it: start from it with initial instead". Transient and trace
+  resumes are also refused by their identity. A steady restart has no identity check (Unit 61), so this is the
+  check there. `initial` from a classical state stays allowed (Λ starts at 0).
+- Run-record warnings. New `RunRecord::warnings` (run-record key 6, repeated text; not in the identity; printed by
+  `nitcad run` as `warning: …`):
+  - QP9: "the equilibrium start used the coefficient continuation (k = …)", from sweeps (drift-diffusion and
+    quasi-static) and transients; small signal copies its operating points'.
+  - QP15: `CoarseScan` over every result's Λ. A bulk node is a semiconductor node with no edge to an insulator
+    node and not a lumped-gate node. Counted when |Λ̂| > 10, with the node count, the results, the largest value
+    and its node. Traces do not scan yet.
+- QV12 vocabulary pins: the deck's `[models]` list and the app's completion list grew in slice 1 (24 completion
+  items) and are unchanged here.
+
+Results (Release, targeted):
+- QV12, lumped-gate MOS-C deck (0.5 nm surface spacing), V_G 0 to −1.2 V in −0.1 V steps (accumulation; peak Λ_p
+  0.117 eV):
+  - the sweep file round-trips Λ bit for bit;
+  - `Ln`, `Ec_eff` and `Ev_eff` equal the result's Λ and bands;
+  - restarted from the −0.6 V checkpoint, the remaining 6 points match the uninterrupted sweep: ψ within 2.6e-16,
+    Λ within 1e-17 eV, currents within their resolution (a MOS-C at DC);
+  - the model change is refused both ways.
+- Not met as worded: QV12 asks for a sweep restart that is "bit-identical … (as Unit 61 RG)". Unit 61 made only
+  transient and trace resumes bit for bit. Its steady restart is to 1e-9 (DK9, RG6), because a steady checkpoint
+  holds physical-unit fields, not the solver state. Measured here at 1e-15 to 1e-16, not to the bit. The criterion
+  is frozen, so it is put to the owner by name: rule QV12's sweep restart to Unit 61's steady standard (1e-9), or
+  ask for a bit-for-bit steady resume (a new resume record).
+- The same "as Unit 61 RG" check that is bit for bit, a transient resume with the model on: the deck diode pulse,
+  stopped after 3 and after n/2 steps and resumed, equals the uninterrupted run bit for bit (times, steps, orders,
+  error ratios, currents and Λ in the last snapshot). The plain deck is refused on the same checkpoint. The
+  diode's Λ is below 1e-17 eV, so this case checks the resume path, not Λ's size.
+- Recorded: on this MOS-C, drift-diffusion in inversion stops at V_G = 0.4 V classically too (36 iterations at
+  0.3 V, then 100). This is the 1D MOS-C's minority supply, not the model; density gradient stops one step
+  earlier.
+- Warnings: the texts, bulk selection (a lumped-gate node at 20 kT not counted) and count pinned by a unit case. A
+  clean sweep records none. Results-file round-trip of Λ and the warnings: `nitcad_io_test` passes.
+- QV1:
+  - pass: `nitcad_assemble_test`, `nitcad_app_test`, `nitcad_render_test`, `nitcad_analysis_test`,
+    `nitcad_io_test`;
+  - `nitcad_solve_test`: 247 passed, 4 skipped;
+  - `nitcad_deck_test`: 115 passed, plus its 5 existing failed-as-expected Schottky cases;
+  - every Release target builds with zero warnings.
+
 ## New questions the advisor raised (not yet in `ARCHITECTURE.md`)
 
 None of these is decided. Each needs an owner position before the build scaffold fixes the flags.

@@ -8,6 +8,7 @@
 
 #include <expected>
 #include <span>
+#include <string>
 #include <vector>
 
 #include "NiTCAD/assemble/models.hpp"
@@ -17,6 +18,7 @@
 #include "NiTCAD/device/device.hpp"
 #include "NiTCAD/linalg/linear_solver.hpp"
 #include "NiTCAD/results/convergence.hpp"
+#include "NiTCAD/results/solution.hpp"
 #include "NiTCAD/solve/newton.hpp"
 
 namespace NiTCAD::solve::detail {
@@ -43,5 +45,29 @@ struct QuantumEquilibrium {
     const assemble::PhysicsModels& models, std::span<const double> bias, const NewtonOptions& newton,
     linalg::LinearSolver& solver, results::ConvergenceRecord& record,
     const std::stop_token& stop = {}, const IterationObserver& observe = {});
+
+// The run-record warnings (QP9, QP15). With rungs: "density gradient: the equilibrium start used the
+// coefficient continuation (k = 0.125, 0.25)"; else empty.
+[[nodiscard]] std::string continuation_warning(std::span<const double> rungs);
+
+// QP15's coarse-mesh scan over a run's results: |Lambda| above 10 kT at a node away from the
+// interfaces (a semiconductor node with no edge to an insulator node, not a lumped-gate node).
+class CoarseScan {
+public:
+    explicit CoarseScan(const device::Device& device);
+    void add(const results::NodeFields& fields);  // no-op without the quantum potentials
+    // "density gradient: |Lambda| above 10 kT at 3 node(s) away from the interfaces in 2 of 5
+    // result(s), largest 14.2 kT (node 17); the mesh may not resolve the densities there (QP15)", or
+    // empty when none.
+    [[nodiscard]] std::string warning() const;
+
+private:
+    std::vector<char> bulk_;
+    double kT_eV_;
+    std::vector<char> flagged_;
+    std::size_t results_ = 0, flagged_results_ = 0;
+    double largest_ = 0.0;
+    std::size_t where_ = 0;
+};
 
 }  // namespace NiTCAD::solve::detail

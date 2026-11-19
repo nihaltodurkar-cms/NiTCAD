@@ -40,6 +40,18 @@ bool same_bias(const std::vector<double>& a, const std::vector<double>& b) {
     return true;
 }
 
+// A restart's checkpoint and the run agree on density gradient (Unit 62, QV12): the checkpoint
+// carries the quantum potentials exactly when the run solves the model.
+std::optional<base::Error> restart_confinement(const std::filesystem::path& restart, const io::Checkpoint& c,
+                                               const assemble::PhysicsModels& models) {
+    const bool run = models.quantum_confinement == assemble::QuantumConfinement::density_gradient;
+    const bool saved = !c.fields.quantum_potential_n_eV.empty();
+    if (run == saved) return std::nullopt;
+    return invalid("the restart checkpoint '" + restart.string() + "' was solved " +
+                   (saved ? "with" : "without") + " quantum_confinement density_gradient and this run " +
+                   (run ? "solves" : "does not solve") + " it: start from it with initial instead");
+}
+
 std::string format(double v) {
     char buffer[32];
     const int n = std::snprintf(buffer, sizeof buffer, "%.17g", v);
@@ -408,6 +420,7 @@ std::expected<RunReport, base::Error> run(const Plan& plan, const solve::RunCont
                                                "' holds a steady state, not a transient's resume state: use initial "
                                                "to start a transient from it"));
             }
+            if (auto e = restart_confinement(plan.restart, *c, o.steady.models)) return std::unexpected(std::move(*e));
             resume = std::move(*c);
         }
         auto t = solve::solve_transient(plan.device, plan.waveforms, o, guess, control,
@@ -441,6 +454,7 @@ std::expected<RunReport, base::Error> run(const Plan& plan, const solve::RunCont
                 return std::unexpected(invalid("the restart checkpoint '" + plan.restart.string() +
                                                "' holds a transient's resume state, not an operating point"));
             }
+            if (auto e = restart_confinement(plan.restart, *c, o.steady.models)) return std::unexpected(std::move(*e));
             std::size_t k = 0;
             while (k < points.size() && !same_bias(points[k], c->bias_V)) ++k;
             if (k == points.size()) {
@@ -489,6 +503,7 @@ std::expected<RunReport, base::Error> run(const Plan& plan, const solve::RunCont
                                                "' holds no trace's resume state: use initial to start a trace "
                                                "from its fields"));
             }
+            if (auto e = restart_confinement(plan.restart, *c, o.steady.models)) return std::unexpected(std::move(*e));
             resume = std::move(*c);
         }
         auto s = solve::trace_bias(plan.device, o, guess, control, resume ? &*resume->trace : nullptr);
@@ -520,6 +535,7 @@ std::expected<RunReport, base::Error> run(const Plan& plan, const solve::RunCont
             return std::unexpected(invalid("the restart checkpoint '" + plan.restart.string() +
                                            "' holds a transient's resume state, not a steady point of the sweep"));
         }
+        if (auto e = restart_confinement(plan.restart, *c, options.models)) return std::unexpected(std::move(*e));
         std::size_t k = 0;
         while (k < points.size() && !same_bias(points[k], c->bias_V)) ++k;
         if (k == points.size()) {

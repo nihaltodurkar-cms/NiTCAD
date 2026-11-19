@@ -704,6 +704,11 @@ std::vector<std::string> available_fields(const Workspace& w) {
                 !field_values(*w.device, *last, f).has_value()) {
                 continue;
             }
+            // Unit 62: the quantum potentials and effective bands only with density gradient.
+            if (f >= Field::quantum_potential_n && f <= Field::effective_valence_band &&
+                !field_values(*w.device, *last, f).has_value()) {
+                continue;
+            }
         }
         out.emplace_back(field_info(f).key);
     }

@@ -625,3 +625,34 @@ TEST_CASE("density gradient: small-signal g_m and g_d against DC differences (QV
         CHECK(std::abs(Y(drain, j).real() / G - 1.0) <= 1e-5);
     }
 }
+
+TEST_CASE("density gradient: the run-record warnings (QP9, QP15)") {
+    CHECK(solve::detail::continuation_warning({}).empty());
+    const std::vector<double> rungs{0.125, 0.25, 0.5};
+    CHECK(solve::detail::continuation_warning(rungs) ==
+          "density gradient: the equilibrium start used the coefficient continuation (k = 0.125, 0.25, 0.5)");
+    // The lumped MOS-C: node 0 is the gate's (not scanned); a bulk node above 10 kT is reported.
+    const device::Device d = mosc(1e-7, true);
+    const std::size_t n = d.mesh().node_count();
+    const double kT = base::thermal_voltage(300.0);
+    solve::detail::CoarseScan scan(d);
+    results::NodeFields f{std::vector<double>(n), std::vector<double>(n), std::vector<double>(n)};
+    scan.add(f);  // classical: ignored
+    f.quantum_potential_n_eV.assign(n, 0.0);
+    f.quantum_potential_p_eV.assign(n, 0.0);
+    f.quantum_potential_n_eV[0] = 20.0 * kT;
+    scan.add(f);
+    CHECK(scan.warning().empty());
+    f.quantum_potential_p_eV[40] = -12.5 * kT;
+    f.quantum_potential_n_eV[41] = 10.5 * kT;
+    scan.add(f);
+    CHECK(scan.warning() ==
+          "density gradient: |Lambda| above 10 kT at 2 node(s) away from the interfaces in 1 of 2 result(s), "
+          "largest 12.5 kT (node 40); the mesh may not resolve the densities there (QP15)");
+    // A sweep with the model on and nothing to warn about records none.
+    solve::BiasOptions b;
+    b.models = dg_models();
+    const auto s = solve::sweep_bias(d, std::vector<std::vector<double>>{{0.5, 0.0}}, b);
+    if (!s) FAIL(s.error().message);
+    CHECK(s->run.warnings.empty());
+}

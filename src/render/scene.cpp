@@ -584,6 +584,10 @@ FieldInfo field_info(Field f) noexcept {
         case Field::hole_current: return {"Jp", "|Jp| (A/cm\xC2\xB2)", ScaleKind::log10};
         case Field::electron_temperature: return {"Tn", "Tn (K)", ScaleKind::linear};
         case Field::hole_temperature: return {"Tp", "Tp (K)", ScaleKind::linear};
+        case Field::quantum_potential_n: return {"Ln", "\xCE\x9Bn (eV)", ScaleKind::linear};
+        case Field::quantum_potential_p: return {"Lp", "\xCE\x9Bp (eV)", ScaleKind::linear};
+        case Field::effective_conduction_band: return {"Ec_eff", "Ec + \xCE\x9Bn (eV)", ScaleKind::linear};
+        case Field::effective_valence_band: return {"Ev_eff", "Ev \xE2\x88\x92 \xCE\x9Bp (eV)", ScaleKind::linear};
     }
     return {"?", "?", ScaleKind::linear};
 }
@@ -666,6 +670,24 @@ std::expected<std::vector<double>, base::Error> field_values(const device::Devic
                                                " (solved with [models] energy_balance = on)"));
             }
             return take(v);
+        }
+        case Field::quantum_potential_n:
+        case Field::quantum_potential_p:
+        case Field::effective_conduction_band:
+        case Field::effective_valence_band: {
+            const bool electrons = f == Field::quantum_potential_n || f == Field::effective_conduction_band;
+            const std::vector<double>& l =
+                electrons ? point.fields.quantum_potential_n_eV : point.fields.quantum_potential_p_eV;
+            if (l.empty()) {
+                return std::unexpected(invalid("the result holds no " + std::string(field_info(f).key) +
+                                               " (solved with [models] quantum_confinement = density_gradient)"));
+            }
+            if (f == Field::quantum_potential_n || f == Field::quantum_potential_p) return take(l);
+            auto band = take(electrons ? point.bands.conduction_eV : point.bands.valence_eV);
+            if (!band) return band;
+            if (l.size() != n) return take(l);
+            for (std::size_t i = 0; i < n; ++i) (*band)[i] += electrons ? l[i] : -l[i];
+            return band;
         }
     }
     return std::unexpected(invalid("unknown field"));

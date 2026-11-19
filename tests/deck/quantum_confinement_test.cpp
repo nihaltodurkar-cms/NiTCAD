@@ -19,6 +19,8 @@
 #include "NiTCAD/assemble/system.hpp"
 #include "NiTCAD/deck/build.hpp"
 #include "NiTCAD/deck/run.hpp"
+#include "NiTCAD/io/files.hpp"
+#include "NiTCAD/render/scene.hpp"
 #include "NiTCAD/solve/bias.hpp"
 #include "NiTCAD/solve/small_signal.hpp"
 #include "fixtures.hpp"
@@ -348,4 +350,114 @@ TEST_CASE("density gradient: the 2D MOSFET example, equilibrium and reflected (Q
         CHECK(std::abs(ib / ia - 1.0) <= 1e-9);
     }
     std::printf("QV13 2D MOSFET example, 3 points: %.1f s and %.1f s reflected\n", ta, tb);
+}
+
+// The lumped-gate MOS-C of tests/decks/lumped_gate_1d.deck (0.5 nm surface spacing), no analysis.
+const std::string mos_device = R"(
+[device]
+temperature = 300
+[mesh]
+type = tensor
+x = linspace(0, 20nm, 41) + linspace(20nm, 0.5um, 97) + linspace(0.5um, 2um, 31)
+[region silicon]
+material = silicon
+[doping]
+profile = acceptor constant 1e17
+[contact gate]
+kind = gate
+patch = x_min
+oxide_thickness = 10nm
+electrode = n_poly
+[contact body]
+kind = ohmic
+patch = x_max
+)";
+
+TEST_CASE("density gradient: results files, plot fields and a restart (Unit 62, QV12)", "[deck]") {
+    const fs::path dir = deck_test::scratch("dg_restart");
+    const std::string models = "[models]\nquantum_confinement = density_gradient\n";
+    const std::string device = mos_device + models;
+    const auto run = [&](const std::string& text) { return deck::run(must(text, dir)); };
+    // The uninterrupted sweep, its file read back with the quantum potentials.
+    const deck::Plan plan = must(device + "[sweep]\ncontact gate = 0 : -1.2 : -0.1\n[output]\nsweep = full.nitsweep\n", dir);
+    const auto full = deck::run(plan);
+    if (!full) FAIL(full.error().message);
+    REQUIRE(full->sweep.has_value());
+    const auto loaded = io::load_sweep(dir / "full.nitsweep");
+    if (!loaded) FAIL(loaded.error().message);
+    if (full->sweep->stopped) FAIL(full->sweep->stopped->message);
+    REQUIRE(loaded->points.size() == 13);
+    for (std::size_t k = 0; k < 13; ++k) {
+        CHECK(loaded->points[k].fields.quantum_potential_n_eV == full->sweep->points[k].fields.quantum_potential_n_eV);
+        CHECK(loaded->points[k].fields.quantum_potential_p_eV == full->sweep->points[k].fields.quantum_potential_p_eV);
+    }
+    const auto& last = full->sweep->points.back();
+    REQUIRE(last.fields.quantum_potential_n_eV.size() == plan.device.mesh().node_count());
+    double peak = 0.0;
+    for (const double l : last.fields.quantum_potential_p_eV) peak = std::max(peak, std::abs(l));
+    CAPTURE(peak);
+    CHECK(peak > 1e-3);  // accumulation: Lambda_p resolved
+    // The plot fields: Lambda and the effective band edges.
+    const auto lambda = render::field_values(plan.device, last, render::Field::quantum_potential_n);
+    REQUIRE(lambda.has_value());
+    CHECK(*lambda == last.fields.quantum_potential_n_eV);
+    const auto ec = render::field_values(plan.device, last, render::Field::effective_conduction_band);
+    const auto ev = render::field_values(plan.device, last, render::Field::effective_valence_band);
+    REQUIRE(ec.has_value());
+    REQUIRE(ev.has_value());
+    for (std::size_t i = 0; i < plan.device.mesh().node_count(); ++i) {
+        CHECK((*ec)[i] == last.bands.conduction_eV[i] + last.fields.quantum_potential_n_eV[i]);
+        CHECK((*ev)[i] == last.bands.valence_eV[i] - last.fields.quantum_potential_p_eV[i]);
+    }
+    CHECK(render::find_field("Ln") == render::Field::quantum_potential_n);
+    CHECK(render::find_field("Ev_eff") == render::Field::effective_valence_band);
+
+    // A checkpoint at -0.6 V; the restart's points equal the uninterrupted sweep's to 1e-9 relative
+    // (as Unit 61's steady restart, DK9; a steady checkpoint is fields in physical units, not the
+    // solver state, so a sweep restart is not bit for bit: the transient's is, transient_restart_test).
+    const auto first = run(device + "[sweep]\ncontact gate = 0 : -0.6 : -0.1\n[output]\ncheckpoint = at.nitckpt\n");
+    if (!first) FAIL(first.error().message);
+    const auto resumed = run(device + "[sweep]\ncontact gate = 0 : -1.2 : -0.1\nrestart = at.nitckpt\n");
+    if (!resumed) FAIL(resumed.error().message);
+    REQUIRE(resumed->sweep.has_value());
+    REQUIRE(resumed->sweep->points.size() == 6);
+    const auto worst = [](const std::vector<double>& u, const std::vector<double>& v) {
+        double d = 0.0, s = 1e-300;
+        for (std::size_t i = 0; i < u.size(); ++i) {
+            d = std::max(d, std::abs(u[i] - v[i]));
+            s = std::max(s, std::abs(v[i]));
+        }
+        return d / s;
+    };
+    for (std::size_t k = 0; k < 6; ++k) {
+        const auto& a = resumed->sweep->points[k];
+        const auto& b = full->sweep->points[k + 7];
+        const double current = worst(a.terminal_current, b.terminal_current);  // reported
+        const double psi = worst(a.fields.potential_V, b.fields.potential_V);
+        double quantum = 0.0;  // absolute, eV: as psi in V
+        for (std::size_t i = 0; i < plan.device.mesh().node_count(); ++i) {
+            quantum = std::max({quantum, std::abs(a.fields.quantum_potential_n_eV[i] - b.fields.quantum_potential_n_eV[i]),
+                               std::abs(a.fields.quantum_potential_p_eV[i] - b.fields.quantum_potential_p_eV[i])});
+        }
+        CAPTURE(k, current, psi, quantum);
+        // A MOS-C at DC: the currents are at their resolution, so within it (not relative).
+        for (std::size_t c = 0; c < a.terminal_current.size(); ++c) {
+            CHECK(std::abs(a.terminal_current[c] - b.terminal_current[c]) <=
+                  std::max(a.terminal_current_resolution[c], b.terminal_current_resolution[c]));
+        }
+        CHECK(psi <= 1e-9);
+        CHECK(quantum <= 1e-9);
+    }
+    // The model changed: refused both ways.
+    const auto off = run(mos_device + "[sweep]\ncontact gate = 0 : -1.2 : -0.1\nrestart = at.nitckpt\n");
+    REQUIRE_FALSE(off.has_value());
+    CHECK(off.error().message.find("was solved with quantum_confinement density_gradient and this run does not "
+                                   "solve it") != std::string::npos);
+    const auto classical = run(mos_device +
+                               "[sweep]\ncontact gate = 0 : -0.6 : -0.1\n[output]\ncheckpoint = plain.nitckpt\n");
+    if (!classical) FAIL(classical.error().message);
+    const auto on = run(device + "[sweep]\ncontact gate = 0 : -1.2 : -0.1\nrestart = plain.nitckpt\n");
+    REQUIRE_FALSE(on.has_value());
+    CHECK(on.error().message.find("was solved without quantum_confinement density_gradient and this run solves it") !=
+          std::string::npos);
 }

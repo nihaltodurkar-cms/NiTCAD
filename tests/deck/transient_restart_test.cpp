@@ -417,3 +417,39 @@ TEST_CASE("deck restart: nitcad run stopped by Ctrl-Break writes a checkpoint a 
         CHECK(rest.status == 0);
     }
 }
+
+TEST_CASE("deck transient restart: with density gradient, bit for bit (Unit 62, QV12)", "[deck][restart]") {
+    const fs::path dir = scratch("transient_restart_dg");
+    const std::string device = diode_device + "[models]\nquantum_confinement = density_gradient\n";
+    const auto full = run_deck(device + body, dir);
+    REQUIRE_FALSE(full.transient->stopped.has_value());
+    const auto& f = *full.transient;
+    REQUIRE_FALSE(f.snapshots.empty());
+    CHECK(f.snapshots.back().fields.quantum_potential_n_eV.size() == 201);
+    for (const std::size_t stop_after : {std::size_t{3}, f.points.size() / 2}) {
+        INFO("stopped after " << stop_after << " steps of " << f.points.size() - 1);
+        const auto first = run_deck(device + body + "[output]\ncheckpoint = part.nitckpt\n", dir, stop_after);
+        REQUIRE(first.transient->stopped.has_value());
+        const std::size_t k = first.transient->points.size() - 1;
+        const auto c = io::load_checkpoint(dir / "part.nitckpt", must(device + body, dir).device.mesh());
+        REQUIRE(c.has_value());
+        REQUIRE(c->transient.has_value());
+        CHECK(same(c->transient->fields.quantum_potential_n_eV, first.transient->resume->fields.quantum_potential_n_eV));
+        const auto rest = run_deck(device + body + "restart = part.nitckpt\n", dir);
+        REQUIRE_FALSE(rest.transient->stopped.has_value());
+        const auto& r = *rest.transient;
+        REQUIRE(r.points.size() == f.points.size() - k);
+        for (std::size_t i = 0; i < r.points.size(); ++i) {
+            INFO("point " << k + i);
+            same_point(r.points[i], f.points[k + i]);
+        }
+        const auto& a = r.snapshots.back().fields;
+        const auto& b = f.snapshots.back().fields;
+        CHECK(same(a.potential_V, b.potential_V));
+        CHECK(same(a.quantum_potential_n_eV, b.quantum_potential_n_eV));
+        CHECK(same(a.quantum_potential_p_eV, b.quantum_potential_p_eV));
+        // The model changed: another run's identity, refused.
+        const auto plain = deck::run(must(diode_device + body + "restart = part.nitckpt\n", dir));
+        REQUIRE_FALSE(plain.has_value());
+    }
+}

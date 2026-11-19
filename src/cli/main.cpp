@@ -301,6 +301,14 @@ int main(int argc, char** argv) {
     }
     if (report->adapt) print_adapt(*report->adapt);
     for (const auto& p : report->written) std::printf("wrote %s\n", p.string().c_str());
+    // The run record's warnings (Unit 62).
+    const NiTCAD::results::RunRecord* record = report->sweep          ? &report->sweep->run
+                                               : report->transient    ? &report->transient->run
+                                               : report->small_signal ? &report->small_signal->run
+                                                                      : nullptr;
+    if (record != nullptr) {
+        for (const std::string& w : record->warnings) std::printf("warning: %s\n", w.c_str());
+    }
     // A sweep's own record; an equilibrium run has none, so the provenance of now, without a
     // wall time.
     print_provenance(report->sweep ? report->sweep->run.provenance : NiTCAD::solve::provenance());

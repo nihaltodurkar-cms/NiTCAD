@@ -153,7 +153,13 @@ enum class Field : std::uint8_t {
     // Unit 52: the carrier temperatures of energy balance, K; an error when the result holds none.
     electron_temperature,  // T_n
     hole_temperature,      // T_p
-    last = hole_temperature,
+    // Unit 62: density gradient's quantum potentials and the effective band edges they give, eV;
+    // an error when the result holds none.
+    quantum_potential_n,       // Lambda_n
+    quantum_potential_p,       // Lambda_p
+    effective_conduction_band, // E_c + Lambda_n
+    effective_valence_band,    // E_v - Lambda_p
+    last = effective_valence_band,
 };
 
 struct FieldInfo {
