@@ -5,6 +5,7 @@
 
 #include <chrono>
 #include <cmath>
+#include <type_traits>
 #include <variant>
 
 #include "win32.hpp"
@@ -72,7 +73,11 @@ void Viewport::prepare(render::Renderer* renderer) {
     else error_ = t.error().message;
 }
 
-void Viewport::present() {
+void Viewport::present() { draw(false); }
+
+void Viewport::present_camera() { draw(true); }
+
+void Viewport::draw(bool camera_only) {
     const int w = width(), h = height();
     if (!renderer_ || !scene_ || w < 16 || h < 16) {
         InvalidateRect(hwnd_, nullptr, TRUE);
@@ -88,7 +93,14 @@ void Viewport::present() {
         }
         target_ = std::move(*t);
     }
-    auto r = std::visit([&](const auto& s) { return renderer_->present(s, *target_, w, h); }, *scene_);
+    auto r = std::visit(
+        [&](const auto& s) {
+            if constexpr (std::is_same_v<std::decay_t<decltype(s)>, render::FieldScene>) {
+                if (camera_only) return renderer_->present_camera(s, *target_, w, h);
+            }
+            return renderer_->present(s, *target_, w, h);
+        },
+        *scene_);
     if (!r) {
         error_ = r.error().message;
         target_.reset();

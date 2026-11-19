@@ -52,6 +52,9 @@ public:
     void prepare(render::Renderer* renderer);
     // Draws now (also on WM_PAINT and WM_SIZE). Returns the error of the last present, if any.
     void present();
+    // Unit 26i (ND2): draws again after a change of the scene's camera only, reusing the swap chain's
+    // buffers (Renderer::present_camera). A plot, or a first frame, is drawn as present() draws it.
+    void present_camera();
     [[nodiscard]] const std::optional<std::string>& error() const noexcept { return error_; }
     [[nodiscard]] double last_present_ms() const noexcept { return last_ms_; }
     [[nodiscard]] int width() const noexcept;
@@ -63,6 +66,7 @@ private:
     static LRESULT CALLBACK proc(HWND hwnd, UINT message, WPARAM w, LPARAM l);
     LRESULT handle(UINT message, WPARAM w, LPARAM l);
     void paint_message(HDC dc);
+    void draw(bool camera_only);
 
     HWND hwnd_ = nullptr;
     Host& host_;

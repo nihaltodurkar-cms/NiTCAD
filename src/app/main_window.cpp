@@ -887,7 +887,7 @@ void MainWindow::present_camera() {
     if (!scene_) return;
     if (auto* f = std::get_if<render::FieldScene>(&*scene_)) {
         apply_camera(*f, settings());
-        viewport_->present();
+        viewport_->present_camera();  // Unit 26i (ND2): the camera only
         update_metrics();
     }
 }

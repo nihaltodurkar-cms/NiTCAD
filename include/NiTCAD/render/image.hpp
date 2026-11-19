@@ -127,6 +127,18 @@ public:
                                                            int height);
     [[nodiscard]] std::expected<void, base::Error> present(const PlotScene& scene, WindowTarget& target, int width,
                                                            int height);
+    // Unit 26i (ND1, ND2): presents the scene after a change of its camera only. The target keeps the
+    // vertex and line buffers of its last FieldScene present; when they were made from this scene object
+    // (the same address and batch sizes) they are drawn again, and only the per-frame constants and the
+    // camera-dependent axis box are rebuilt. Otherwise this is present(). The image is the one present()
+    // draws, bit for bit. The caller promises that nothing but `scene.camera` changed since that present;
+    // Debug builds check it with a hash of the geometry (ND3).
+    [[nodiscard]] std::expected<void, base::Error> present_camera(const FieldScene& scene, WindowTarget& target,
+                                                                  int width, int height);
+    // Whether the last FieldScene present reused a target's buffers (tests, NG2).
+    [[nodiscard]] bool last_present_reused() const noexcept;
+    // The last image drawn (by present, present_camera or draw), read back (tests, NG1).
+    [[nodiscard]] std::expected<Image, base::Error> last_image();
 
     Renderer(Renderer&&) noexcept;
     Renderer& operator=(Renderer&&) noexcept;

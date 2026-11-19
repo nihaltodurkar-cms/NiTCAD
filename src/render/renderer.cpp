@@ -17,6 +17,8 @@
 #include <array>
 #include <chrono>
 #include <cmath>
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <format>
 #include <functional>
@@ -285,6 +287,68 @@ D2D1_RECT_F field_view_rect(const FieldScene& s, int w, int h) {
     return view;
 }
 
+// A scene's triangle and line draws: where each batch lies in the vertex buffers, and how it is drawn.
+struct MeshRange {
+    std::size_t first, count;
+    std::uint32_t flags;
+    bool transparent;
+};
+struct LineRange {
+    std::size_t first, count;
+    float width;
+    bool top;
+    bool box;  // in the axis box's buffer (Unit 26i: rebuilt with the camera)
+};
+
+// Unit 26i (ND1): a FieldScene's vertex and line buffers on the GPU, kept by a window target so that a
+// camera move draws them again. `scene` and the sizes identify what they were made from; `hash` is
+// the geometry's (Debug builds only, ND3).
+struct ResidentGeometry {
+    ComPtr<ID3D12Resource> mesh, lines;
+    std::size_t mesh_vertices = 0, line_vertices = 0;
+    std::vector<MeshRange> ranges;
+    std::vector<LineRange> line_ranges;  // the scene's own, without the axis box
+    const FieldScene* scene = nullptr;
+    std::vector<std::size_t> sizes;  // each triangle batch's vertices, then each line batch's points
+    std::uint64_t hash = 0;
+};
+
+std::vector<std::size_t> batch_sizes(const FieldScene& s) {
+    std::vector<std::size_t> out;
+    out.reserve(s.triangles.size() + s.lines.size() + 1);
+    out.push_back(static_cast<std::size_t>(s.dimension));
+    for (const TriangleBatch& b : s.triangles) out.push_back(b.vertices.size());
+    for (const LineBatch& l : s.lines) out.push_back(l.points.size());
+    return out;
+}
+
+// FNV-1a over everything render_field turns into vertices and draw ranges (ND3).
+std::uint64_t geometry_hash(const FieldScene& s) {
+    std::uint64_t h = 14695981039346656037ull;
+    const auto mix = [&](const void* p, std::size_t n) {
+        const auto* b = static_cast<const unsigned char*>(p);
+        for (std::size_t i = 0; i < n; ++i) h = (h ^ b[i]) * 1099511628211ull;
+    };
+    const auto f = [&](float v) { mix(&v, sizeof v); };
+    for (const TriangleBatch& b : s.triangles) {
+        const std::uint8_t k[4] = {static_cast<std::uint8_t>(b.shading), b.lit, b.transparent, static_cast<std::uint8_t>(b.finish)};
+        mix(k, sizeof k);
+        for (const SceneVertex& x : b.vertices) {
+            for (float v : x.position) f(v);
+            for (float v : x.normal) f(v);
+            f(x.value);
+            f(x.color.r), f(x.color.g), f(x.color.b), f(x.color.a);
+        }
+    }
+    for (const LineBatch& l : s.lines) {
+        f(l.color.r), f(l.color.g), f(l.color.b), f(l.color.a), f(l.width_px);
+        const std::uint8_t top = l.on_top;
+        mix(&top, 1);
+        for (const Float3& p : l.points) for (float v : p) f(v);
+    }
+    return h;
+}
+
 }  // namespace
 
 // --- a window's swap chain (Unit 26) ---------------------------------------------------------------
@@ -294,6 +358,7 @@ struct WindowTarget::Impl {
     ComPtr<IDXGISwapChain3> swap;
     std::array<ComPtr<ID3D12Resource>, 2> buffers;
     int width = 0, height = 0;
+    ResidentGeometry resident;  // Unit 26i: the last FieldScene's buffers (released after flush)
     // Waits for the renderer's queue: a swap chain is released only after its last present has run.
     std::function<void()> flush;
     ~Impl() {
@@ -374,7 +439,11 @@ struct Renderer::Impl {
     std::expected<Image, base::Error> read_back();
     std::expected<void, base::Error> begin_2d();
     std::expected<void, base::Error> end_2d();
-    std::expected<void, base::Error> render_field(const FieldScene& s, int w, int h);
+    // Unit 26i: with `keep`, the vertex buffers are kept there, and with `reuse` drawn again from there when
+    // they were made from this scene (ND1).
+    std::expected<void, base::Error> render_field(const FieldScene& s, int w, int h, ResidentGeometry* keep = nullptr,
+                                                  bool reuse = false);
+    bool reused = false;  // the last render_field drew kept buffers
     std::expected<void, base::Error> render_plot(const PlotScene& s, int w, int h);
     std::expected<void, base::Error> show(WindowTarget::Impl& target);
 };
@@ -850,7 +919,8 @@ void draw_colorbar(Ink& ink, IDWriteTextFormat* text, IDWriteTextFormat* minor_t
 
 }  // namespace
 
-std::expected<void, base::Error> Renderer::Impl::render_field(const FieldScene& s, int w, int h) {
+std::expected<void, base::Error> Renderer::Impl::render_field(const FieldScene& s, int w, int h, ResidentGeometry* keep,
+                                                              bool reuse) {
     if (auto r = ensure_targets(w, h); !r) return std::unexpected(std::move(r.error()));
     // Layout: title band, colorbar panel on the right, 2D axes margins.
     const float title_h = s.title.empty() ? 12.0f : 36.0f;
@@ -860,53 +930,94 @@ std::expected<void, base::Error> Renderer::Impl::render_field(const FieldScene& 
     const double aspect = (view.right - view.left) / (view.bottom - view.top);
     const View v = make_view(s, aspect);
 
-    // Vertex data.
-    std::vector<MeshVertex> mesh;
-    struct Range {
-        std::size_t first, count;
-        std::uint32_t flags;
-        bool transparent;
-    };
-    std::vector<Range> ranges;
-    for (const TriangleBatch& b : s.triangles) {
-        const std::size_t first = mesh.size();
-        for (const SceneVertex& x : b.vertices) {
-            mesh.push_back({{x.position[0], x.position[1], x.position[2]},
-                            {x.normal[0], x.normal[1], x.normal[2]},
-                            x.value,
-                            {x.color.r, x.color.g, x.color.b, x.color.a}});
-        }
-        // Bits 3-4, the finish (Unit 26g, MD1): 1 metal, 2 glass; read only by the enhanced look.
-        const std::uint32_t flags = (b.lit && s.dimension == 3 ? 1u : 0u) | (b.shading == Shading::field ? 2u : 0u) |
-                                    (static_cast<std::uint32_t>(b.finish) << 3);
-        ranges.push_back({first, b.vertices.size(), flags, b.transparent});
+    // Vertex data: kept by a window target (Unit 26i, ND1), else this frame's own.
+    ResidentGeometry own;
+    ResidentGeometry& g = keep ? *keep : own;
+    reused = reuse && keep && g.mesh && g.lines && g.scene == &s && g.sizes == batch_sizes(s);
+#ifndef NDEBUG
+    // ND3: the caller promised an unchanged geometry; a missed full present would draw a stale one.
+    if (reused && g.hash != geometry_hash(s)) {
+        std::fputs("NiTCAD render: present_camera on a scene whose geometry changed (Unit 26i, ND3)\n", stderr);
+        std::abort();
     }
-    std::vector<LineVertex> lines;
-    struct LineRange {
-        std::size_t first, count;
-        float width;
-        bool top;
+#endif
+    // The staging buffers live until the frame has executed.
+    ComPtr<ID3D12Resource> mesh_staging, line_staging, box_buffer;
+    const auto resident = [&](const ComPtr<ID3D12Resource>& staging, std::size_t bytes)
+        -> std::expected<ComPtr<ID3D12Resource>, base::Error> {
+        // The vertices live in default-heap buffers: one copy, then read at GPU speed (a window
+        // target keeps them across frames, Unit 26i).
+        const D3D12_HEAP_PROPERTIES gpu{D3D12_HEAP_TYPE_DEFAULT, D3D12_CPU_PAGE_PROPERTY_UNKNOWN, D3D12_MEMORY_POOL_UNKNOWN, 1, 1};
+        D3D12_RESOURCE_DESC d = staging->GetDesc();
+        ComPtr<ID3D12Resource> r;
+        NITCAD_HR(device->CreateCommittedResource(&gpu, D3D12_HEAP_FLAG_NONE, &d, D3D12_RESOURCE_STATE_COPY_DEST, nullptr,
+                                                  IID_PPV_ARGS(&r)),
+                  "CreateCommittedResource vertices");
+        if (bytes) list->CopyBufferRegion(r.Get(), 0, staging.Get(), 0, bytes);
+        const auto b = transition(r.Get(), D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER);
+        list->ResourceBarrier(1, &b);
+        return r;
     };
-    std::vector<LineRange> line_ranges;
-    for (const LineBatch& l : s.lines) {
-        const std::size_t first = lines.size();
-        for (std::size_t i = 0; i + 1 < l.points.size(); i += 2) {
-            const Float3& a = l.points[i];
-            const Float3& b = l.points[i + 1];
-            const auto vert = [&](const Float3& p, const Float3& q, float side) {
-                lines.push_back({{p[0], p[1], p[2]}, {q[0], q[1], q[2]}, side, {l.color.r, l.color.g, l.color.b, l.color.a}});
-            };
-            // The quad a-, a+, b+, b- as two triangles. At b the direction to "other" is reversed,
-            // so its geometric + side has side = -1.
-            vert(a, b, -1.0f);
-            vert(a, b, 1.0f);
-            vert(b, a, -1.0f);
-            vert(a, b, -1.0f);
-            vert(b, a, -1.0f);
-            vert(b, a, 1.0f);
+    if (!reused) {
+        g = ResidentGeometry{};  // the old buffers go; the queue is idle (wait() before every frame)
+        std::vector<MeshVertex> mesh;
+        for (const TriangleBatch& b : s.triangles) {
+            const std::size_t first = mesh.size();
+            for (const SceneVertex& x : b.vertices) {
+                mesh.push_back({{x.position[0], x.position[1], x.position[2]},
+                                {x.normal[0], x.normal[1], x.normal[2]},
+                                x.value,
+                                {x.color.r, x.color.g, x.color.b, x.color.a}});
+            }
+            // Bits 3-4, the finish (Unit 26g, MD1): 1 metal, 2 glass; read only by the enhanced look.
+            const std::uint32_t flags = (b.lit && s.dimension == 3 ? 1u : 0u) | (b.shading == Shading::field ? 2u : 0u) |
+                                        (static_cast<std::uint32_t>(b.finish) << 3);
+            g.ranges.push_back({first, b.vertices.size(), flags, b.transparent});
         }
-        line_ranges.push_back({first, lines.size() - first, l.width_px, l.on_top});
+        std::vector<LineVertex> lines;
+        for (const LineBatch& l : s.lines) {
+            const std::size_t first = lines.size();
+            for (std::size_t i = 0; i + 1 < l.points.size(); i += 2) {
+                const Float3& a = l.points[i];
+                const Float3& b = l.points[i + 1];
+                const auto vert = [&](const Float3& p, const Float3& q, float side) {
+                    lines.push_back({{p[0], p[1], p[2]}, {q[0], q[1], q[2]}, side, {l.color.r, l.color.g, l.color.b, l.color.a}});
+                };
+                // The quad a-, a+, b+, b- as two triangles. At b the direction to "other" is reversed,
+                // so its geometric + side has side = -1.
+                vert(a, b, -1.0f);
+                vert(a, b, 1.0f);
+                vert(b, a, -1.0f);
+                vert(a, b, -1.0f);
+                vert(b, a, -1.0f);
+                vert(b, a, 1.0f);
+            }
+            g.line_ranges.push_back({first, lines.size() - first, l.width_px, l.on_top, false});
+        }
+        auto vb = upload(mesh.data(), mesh.size() * sizeof(MeshVertex));
+        if (!vb) return std::unexpected(std::move(vb.error()));
+        auto lb = upload(lines.data(), lines.size() * sizeof(LineVertex));
+        if (!lb) return std::unexpected(std::move(lb.error()));
+        mesh_staging = *vb;
+        line_staging = *lb;
+        auto vbr = resident(mesh_staging, mesh.size() * sizeof(MeshVertex));
+        if (!vbr) return std::unexpected(std::move(vbr.error()));
+        auto lbr = resident(line_staging, lines.size() * sizeof(LineVertex));
+        if (!lbr) return std::unexpected(std::move(lbr.error()));
+        g.mesh = std::move(*vbr);
+        g.lines = std::move(*lbr);
+        g.mesh_vertices = mesh.size();
+        g.line_vertices = lines.size();
+        if (keep) {
+            g.scene = &s;
+            g.sizes = batch_sizes(s);
+#ifndef NDEBUG
+            g.hash = geometry_hash(s);
+#endif
+        }
     }
+    const std::vector<MeshRange>& ranges = g.ranges;
+    std::vector<LineRange> line_ranges = g.line_ranges;
     // The enhanced look (Unit 26f): its lights, and the gradient behind a 3D view (KD2, KD4). Its
     // feature edges are already among the scene's lines (set_look).
     const FrameLighting lighting = frame_lighting(s, aspect);
@@ -914,13 +1025,14 @@ std::expected<void, base::Error> Renderer::Impl::render_field(const FieldScene& 
     // Unit 26g (MD5): not on clipped or exploded views, nor when looking up from below.
     const bool shadowed = enhanced && s.ground_shadow && s.camera.elevation_deg >= -5.0f;
     // Unit 26h (JD1): the axis box, its edges depth-tested with the scene's lines, its ticks on Direct2D.
+    // It follows the camera, so it is rebuilt every frame, in a buffer of its own (Unit 26i).
     const AxisBox box = enhanced && s.show_axis_box ? axis_box(s, w, h) : AxisBox{};
+    std::vector<LineVertex> box_lines;
     if (!box.edges.empty()) {
-        const std::size_t first = lines.size();
         const float c[4] = {0.55f, 0.58f, 0.62f, 1.0f};
         for (const auto& [a, b] : box.edges) {
             const auto vert = [&](const Float3& p, const Float3& q, float side) {
-                lines.push_back({{p[0], p[1], p[2]}, {q[0], q[1], q[2]}, side, {c[0], c[1], c[2], c[3]}});
+                box_lines.push_back({{p[0], p[1], p[2]}, {q[0], q[1], q[2]}, side, {c[0], c[1], c[2], c[3]}});
             };
             vert(a, b, -1.0f);
             vert(a, b, 1.0f);
@@ -929,7 +1041,10 @@ std::expected<void, base::Error> Renderer::Impl::render_field(const FieldScene& 
             vert(b, a, -1.0f);
             vert(b, a, 1.0f);
         }
-        line_ranges.push_back({first, lines.size() - first, 1.0f, false});
+        line_ranges.push_back({0, box_lines.size(), 1.0f, false, true});
+        auto bb = upload(box_lines.data(), box_lines.size() * sizeof(LineVertex));
+        if (!bb) return std::unexpected(std::move(bb.error()));
+        box_buffer = *bb;  // read from the upload heap: a few dozen vertices
     }
 
     // Constants: one block per draw.
@@ -990,7 +1105,7 @@ std::expected<void, base::Error> Renderer::Impl::render_field(const FieldScene& 
     base.no_data[2] = no_data.b;
     base.no_data[3] = 1.0f;
     std::vector<FrameConstants> constants;
-    for (const Range& r : ranges) {
+    for (const MeshRange& r : ranges) {
         FrameConstants c = base;
         c.flags = r.flags;
         constants.push_back(c);
@@ -1004,31 +1119,6 @@ std::expected<void, base::Error> Renderer::Impl::render_field(const FieldScene& 
 
     auto cb = upload(constants.data(), constants.size() * sizeof(FrameConstants));
     if (!cb) return std::unexpected(std::move(cb.error()));
-    auto vb = upload(mesh.data(), mesh.size() * sizeof(MeshVertex));
-    if (!vb) return std::unexpected(std::move(vb.error()));
-    auto lb = upload(lines.data(), lines.size() * sizeof(LineVertex));
-    if (!lb) return std::unexpected(std::move(lb.error()));
-
-    // Record.
-    // The vertices live in default-heap buffers: one copy per draw, then read at GPU speed (a window
-    // keeps them across frames).
-    auto resident = [&](const ComPtr<ID3D12Resource>& staging, std::size_t bytes)
-        -> std::expected<ComPtr<ID3D12Resource>, base::Error> {
-        const D3D12_HEAP_PROPERTIES gpu{D3D12_HEAP_TYPE_DEFAULT, D3D12_CPU_PAGE_PROPERTY_UNKNOWN, D3D12_MEMORY_POOL_UNKNOWN, 1, 1};
-        D3D12_RESOURCE_DESC d = staging->GetDesc();
-        ComPtr<ID3D12Resource> r;
-        NITCAD_HR(device->CreateCommittedResource(&gpu, D3D12_HEAP_FLAG_NONE, &d, D3D12_RESOURCE_STATE_COPY_DEST, nullptr,
-                                                  IID_PPV_ARGS(&r)),
-                  "CreateCommittedResource vertices");
-        if (bytes) list->CopyBufferRegion(r.Get(), 0, staging.Get(), 0, bytes);
-        const auto b = transition(r.Get(), D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER);
-        list->ResourceBarrier(1, &b);
-        return r;
-    };
-    auto vbr = resident(*vb, mesh.size() * sizeof(MeshVertex));
-    if (!vbr) return std::unexpected(std::move(vbr.error()));
-    auto lbr = resident(*lb, lines.size() * sizeof(LineVertex));
-    if (!lbr) return std::unexpected(std::move(lbr.error()));
 
     const auto record_passes = [&]() {
         auto rtv = rtv_heap->GetCPUDescriptorHandleForHeapStart();
@@ -1055,12 +1145,17 @@ std::expected<void, base::Error> Renderer::Impl::render_field(const FieldScene& 
         list->RSSetScissorRects(1, &sc);
         list->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
         const D3D12_GPU_VIRTUAL_ADDRESS cb_base = (*cb)->GetGPUVirtualAddress();
-        const D3D12_VERTEX_BUFFER_VIEW mesh_view{(*vbr)->GetGPUVirtualAddress(),
-                                                 static_cast<UINT>(std::max<std::size_t>(mesh.size() * sizeof(MeshVertex), 256)),
+        const D3D12_VERTEX_BUFFER_VIEW mesh_view{g.mesh->GetGPUVirtualAddress(),
+                                                 static_cast<UINT>(std::max<std::size_t>(g.mesh_vertices * sizeof(MeshVertex), 256)),
                                                  sizeof(MeshVertex)};
-        const D3D12_VERTEX_BUFFER_VIEW line_view{(*lbr)->GetGPUVirtualAddress(),
-                                                 static_cast<UINT>(std::max<std::size_t>(lines.size() * sizeof(LineVertex), 256)),
-                                                 sizeof(LineVertex)};
+        const D3D12_VERTEX_BUFFER_VIEW scene_line_view{g.lines->GetGPUVirtualAddress(),
+                                                       static_cast<UINT>(std::max<std::size_t>(g.line_vertices * sizeof(LineVertex), 256)),
+                                                       sizeof(LineVertex)};
+        const D3D12_VERTEX_BUFFER_VIEW box_view{box_buffer ? box_buffer->GetGPUVirtualAddress() : 0,
+                                                static_cast<UINT>(std::max<std::size_t>(box_lines.size() * sizeof(LineVertex), 256)),
+                                                sizeof(LineVertex)};
+        // A line range's buffer: the scene's, or the axis box's (Unit 26i).
+        const auto line_view = [&](const LineRange& r) { return r.box ? &box_view : &scene_line_view; };
         if (enhanced) {
             list->OMSetRenderTargets(1, &ssaa_rtv, FALSE, nullptr);
             list->SetPipelineState(background.Get());
@@ -1080,16 +1175,16 @@ std::expected<void, base::Error> Renderer::Impl::render_field(const FieldScene& 
             list->SetGraphicsRootConstantBufferView(0, cb_base + k * sizeof(FrameConstants));
             list->DrawInstanced(static_cast<UINT>(ranges[k].count), 1, static_cast<UINT>(ranges[k].first), 0);
         }
-        list->IASetVertexBuffers(0, 1, &line_view);
         list->SetPipelineState(line_depth.Get());
         for (std::size_t k = 0; k < line_ranges.size(); ++k) {
             if (line_ranges[k].top || line_ranges[k].count == 0) continue;
+            list->IASetVertexBuffers(0, 1, line_view(line_ranges[k]));
             list->SetGraphicsRootConstantBufferView(0, cb_base + (ranges.size() + k) * sizeof(FrameConstants));
             list->DrawInstanced(static_cast<UINT>(line_ranges[k].count), 1, static_cast<UINT>(line_ranges[k].first), 0);
         }
         // Translucent triangles into the OIT targets, then composited over.
         bool any_transparent = false;
-        for (const Range& r : ranges) any_transparent = any_transparent || (r.transparent && r.count > 0);
+        for (const MeshRange& r : ranges) any_transparent = any_transparent || (r.transparent && r.count > 0);
         if (any_transparent) {
             const D3D12_CPU_DESCRIPTOR_HANDLE oit[] = {accum_rtv, reveal_rtv};
             list->OMSetRenderTargets(2, oit, FALSE, &dsv);
@@ -1122,10 +1217,10 @@ std::expected<void, base::Error> Renderer::Impl::render_field(const FieldScene& 
         }
         // Lines drawn over everything (2D outlines, contours).
         list->OMSetRenderTargets(1, &ssaa_rtv, FALSE, &dsv);
-        list->IASetVertexBuffers(0, 1, &line_view);
         list->SetPipelineState(line_top.Get());
         for (std::size_t k = 0; k < line_ranges.size(); ++k) {
             if (!line_ranges[k].top || line_ranges[k].count == 0) continue;
+            list->IASetVertexBuffers(0, 1, line_view(line_ranges[k]));
             list->SetGraphicsRootConstantBufferView(0, cb_base + (ranges.size() + k) * sizeof(FrameConstants));
             list->DrawInstanced(static_cast<UINT>(line_ranges[k].count), 1, static_cast<UINT>(line_ranges[k].first), 0);
         }
@@ -1558,11 +1653,31 @@ std::expected<void, base::Error> Renderer::present(const FieldScene& scene, Wind
     try {
         if (auto r = impl_->wait(); !r) return r;  // the swap chain's buffers are free
         if (auto r = fit_target(*target.impl_, width, height); !r) return r;
-        if (auto r = impl_->render_field(scene, width, height); !r) return r;
+        if (auto r = impl_->render_field(scene, width, height, &target.impl_->resident); !r) return r;
         return impl_->show(*target.impl_);
     } catch (const std::bad_alloc&) {
         return std::unexpected(base::Error{base::ErrorCode::resource_exhausted, "out of memory", std::nullopt});
     }
+}
+
+std::expected<void, base::Error> Renderer::present_camera(const FieldScene& scene, WindowTarget& target, int width,
+                                                          int height) {
+    if (auto r = check_size(width, height); !r) return std::unexpected(std::move(r.error()));
+    try {
+        if (auto r = impl_->wait(); !r) return r;
+        if (auto r = fit_target(*target.impl_, width, height); !r) return r;
+        if (auto r = impl_->render_field(scene, width, height, &target.impl_->resident, true); !r) return r;
+        return impl_->show(*target.impl_);
+    } catch (const std::bad_alloc&) {
+        return std::unexpected(base::Error{base::ErrorCode::resource_exhausted, "out of memory", std::nullopt});
+    }
+}
+
+bool Renderer::last_present_reused() const noexcept { return impl_->reused; }
+
+std::expected<Image, base::Error> Renderer::last_image() {
+    if (impl_->width == 0) return std::unexpected(base::Error{base::ErrorCode::invalid_input, "nothing drawn yet", std::nullopt});
+    return impl_->read_back();
 }
 
 std::expected<void, base::Error> Renderer::present(const PlotScene& scene, WindowTarget& target, int width, int height) {
@@ -1570,6 +1685,7 @@ std::expected<void, base::Error> Renderer::present(const PlotScene& scene, Windo
     try {
         if (auto r = impl_->wait(); !r) return r;
         if (auto r = fit_target(*target.impl_, width, height); !r) return r;
+        target.impl_->resident = {};  // a plot: the field scene's buffers are no longer drawn (NG5)
         if (auto r = impl_->render_plot(scene, width, height); !r) return r;
         return impl_->show(*target.impl_);
     } catch (const std::bad_alloc&) {
