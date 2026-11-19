@@ -62,6 +62,10 @@ std::expected<SelfTestOptions, std::string> parse_self_test(std::span<const std:
             const auto v = value();
             if (!v || (*v != "classic" && *v != "enhanced")) return std::unexpected(std::string("--look is classic or enhanced"));
             o.view.enhanced = *v == "enhanced";
+        } else if (a == "--axes") {
+            const auto v = value();
+            if (!v || (*v != "on" && *v != "off")) return std::unexpected(std::string("--axes is on or off"));
+            o.view.axis_box = *v == "on";
         } else if (a == "--point") {
             const auto v = value();
             const auto n = v ? number(*v) : std::nullopt;

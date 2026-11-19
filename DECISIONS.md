@@ -853,6 +853,75 @@ JQ6 (a). Implementation waits for the owner's go-ahead, after 26g.
 | JG8 | Cost (hardware adapter, KG6 method): drawing the axis box and cube adds under 1 ms. A smooth move's frames each take under 16 ms on `examples/mosfet_3d.deck`. |
 | JG9 | Hand mutants, each killed by a test: the box's faces toward the camera chosen instead; labels not de-overlapped; ticks in cm; a cube face hit mapped to the opposite preset; corners ignored; the azimuth's long way round; the endpoint not exact (t = 1 left at the last eased frame); animation ignoring the OS setting; the axis box drawn in classic; `--axes` default off. |
 
+**As built, 26h·1 (2026-11-19).** JD1's "the box edge nearest the viewer" is read per axis. x and z take the nearer
+of their two outline edges. y takes the one further left on the screen: JD1's own example, "the front y edge on the
+left", is not the nearer one on a box wider than it is deep, such as the test MOSFET. A face seen exactly edge-on
+counts as turned away on its lo side. Labels are de-overlapped across all three axes, as JG2's "no two kept labels"
+requires. `axis_box` lives in `renderer.cpp` beside `make_view`; it is pure, with no GPU work.
+
+The three 26g enhanced references now change by design, because the axis box is on by default in enhanced (JQ3). As
+in 26g, they are rebuilt in 26h·4 only after the owner sees the images.
+
+**As built, 26h·2 (2026-11-19).** `view_cube` and `view_cube_hit` (axes3d.hpp) are pure, like `axis_box`. The cube
+is 72 px across its diagonal, centred 88 px in from the view's lower-left corner, and always orthographic. A face's
+name is drawn only where the face is wide enough for it (6 px a character) and at least 16 px tall. At the default
+camera only "Front" fits; "Top" and "Right" are too foreshortened. Corners come before faces in hit testing, within
+7 px. A corner snaps to its isometric view: azimuth atan2(x, z), elevation ±35.26°. The plain Isometric view is
+the default camera (35°, 25°). A snap resets zoom and pan as Fit does. It is instant for now; 26h·3 makes it smooth.
+A cube click takes priority over Probe, Measure and Cut line. A drag that starts on the cube orbits as anywhere else.
+The cursor becomes a hand over the cube.
+
+**As built, 26h·3 (2026-11-19).**
+- **Where the named views sit.** They are in a **View ▸ Loo&k from** submenu (&Front, &Back, &Left, &Right, &Top,
+  B&ottom, &Isometric), not as seven flat View items. WG5 requires a unique mnemonic for every item, and View had
+  only j, k and z free. The commands test now checks mnemonics within each submenu, and the submenu's own mnemonic
+  within its menu; the rule itself is unchanged.
+- **Where the numpad keys live.** The view's own key handling takes them (`viewport.cpp`), as the arrows, + and −
+  are, not the accelerator table. The menu shows them ("Num 1", "Ctrl+Num 1", ...), and the deck editor still types
+  numpad digits.
+- **Who animates.** `WindowOptions::animate` is off by default and on only in the application (`app/main.cpp`), so
+  the tests and the self-test land at once. `set_animate(true)` forces moves on whatever Windows says, so the
+  animated window test also runs on a machine with animations off.
+- **What ends a move.** Orbit, pan and zoom (drag, wheel, key) end a move at its current frame. So does a change of
+  tab, which stops it at its next tick.
+- **Fit.** It animates zoom and pan only; the angles stay.
+- **JG8.** The slowest frame of a smooth move drew in 13.8 ms on WARP (69 samples). The hardware figure is for
+  26h·4.
+
+**Results, 26h·4 (2026-11-19).**
+- **JG1.** Every classic reference passes unchanged; only the three 26g enhanced references differ (1.1% of pixels,
+  the box and cube). Rebuilt after the owner approved the images (2026-11-19), byte-identical to the ones shown.
+- **JG7.** `mosfet3d_solid_right_enhanced` is new, a VG4 section. Its render showed the cube's arrows ending inside
+  the cube on head-on views. The arrows now reach 10 px past the cube, each label 8 px past its arrow's tip, and the
+  cube sits 88 px in from the corner.
+- **JG8**, by KG6's method on `examples/mosfet_3d.deck`, medians of 50:
+
+  | Adapter | Box and cube cost (bound 1 ms) | Slowest move frame (bound 16 ms) |
+  |---|---|---|
+  | NVIDIA GeForce RTX 5060 Ti | +0.13 ms (3.60 vs 3.47 ms) | 5.07 ms |
+  | WARP, recorded only | 15.99 vs 14.26 ms | 19.2 ms |
+
+  JG8 is met.
+- **JG9.** All 10 hand mutants were killed by tests. The tree was restored and touched after each mutant, with
+  baselines passing before and after.
+
+  | Mutant | Killed by |
+  |---|---|
+  | faces toward the camera | `render axes3d` |
+  | labels not de-overlapped | `render axes3d` |
+  | ticks in cm | `render axes3d` |
+  | face hit to the opposite preset | `render axes3d` (cube) |
+  | corners ignored | `render axes3d` (cube) |
+  | the azimuth's long way round | `app views 26h` (camera_between) |
+  | endpoint not exact | `app window 26h: smooth` |
+  | OS setting ignored | `app views 26h` (smooth_moves) |
+  | box drawn in classic | VG4 "3D solid" |
+  | `--axes` default off | `app views 26h` (plot images) |
+
+  The OS-setting rule was moved into the pure `app::smooth_moves`, so a test can reach it. The first try of that
+  mutant failed only on an unused-parameter warning and was rerun with the parameter used.
+- **Still open.** The full Release and Debug suites wait for the owner's word.
+
 **Slices (each one local commit):** 26h·1 `axis_box`, drawn, its switch (JD1; JG2, JG6 part); 26h·2 `view_cube`, hit
 testing, snapping (JD2, JD3; JG3, JG6 part); 26h·3 named views and smooth moves (JD4, JD5; JG4, JG5, JG8); 26h·4
 references, suites, mutants (JG1, JG7, JG9), the ARCHITECTURE entry.

@@ -34,8 +34,8 @@ jobs:
     name: ${{ matrix.preset }}
     runs-on: windows-2025
     # Debug 150 minutes (owner, 2026-11-15: PR #85's Debug job was cancelled at the 90-minute limit on both runs,
-    # the adaptive-refinement tests of Units 17-17c being long in Debug; 90 before, owner 2026-10-31); Release 60.
-    timeout-minutes: ${{ matrix.preset == 'debug' && 150 || 60 }}
+    # the adaptive-refinement tests of Units 17-17c being long in Debug; 90 before, owner 2026-10-31); Release 180 (owner, 2026-11-19: PR #93's Release job was cancelled at the 60-minute limit).
+    timeout-minutes: ${{ matrix.preset == 'debug' && 150 || 180 }}
     strategy:
       fail-fast: false
       matrix:

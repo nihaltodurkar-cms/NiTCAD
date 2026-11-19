@@ -117,6 +117,8 @@ struct FieldScene {
     // Unit 26g (MD5): the enhanced look's soft shadow on the floor under the device; false for clipped
     // and exploded views. Drawn only when the camera looks from above (elevation at least -5 degrees).
     bool ground_shadow = true;
+    // Unit 26h (JD1, JQ3): the enhanced look's axis box with um ticks (axes3d.hpp); classic never draws it.
+    bool show_axis_box = true;
 };
 
 // --- fields -------------------------------------------------------------------------------------

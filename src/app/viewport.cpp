@@ -147,6 +147,17 @@ LRESULT Viewport::handle(UINT message, WPARAM w, LPARAM l) {
     case WM_SETFOCUS:
     case WM_KILLFOCUS:
         return 0;
+    case WM_SETCURSOR:
+        // Unit 26h (JD3): a hand over the view cube.
+        if (LOWORD(l) == HTCLIENT && !dragging_) {
+            POINT p{};
+            if (GetCursorPos(&p) && ScreenToClient(hwnd_, &p) &&
+                host_.viewport_over_cube(static_cast<float>(p.x), static_cast<float>(p.y))) {
+                SetCursor(LoadCursorW(nullptr, IDC_HAND));
+                return TRUE;
+            }
+        }
+        break;
     case WM_LBUTTONDOWN:
     case WM_RBUTTONDOWN:
     case WM_MBUTTONDOWN:
@@ -228,6 +239,20 @@ LRESULT Viewport::handle(UINT message, WPARAM w, LPARAM l) {
             return 0;
         case VK_HOME:
             host_.viewport_fit();
+            return 0;
+        // Unit 26h (JD4): the named views on the numpad, as CAD programs have them (render::named_views'
+        // order: Front, Back, Left, Right, Top, Bottom, Isometric).
+        case VK_NUMPAD1:
+            host_.viewport_named_view(GetKeyState(VK_CONTROL) < 0 ? 1 : 0);
+            return 0;
+        case VK_NUMPAD3:
+            host_.viewport_named_view(GetKeyState(VK_CONTROL) < 0 ? 2 : 3);
+            return 0;
+        case VK_NUMPAD7:
+            host_.viewport_named_view(GetKeyState(VK_CONTROL) < 0 ? 5 : 4);
+            return 0;
+        case VK_NUMPAD0:
+            host_.viewport_named_view(6);
             return 0;
         default:
             break;

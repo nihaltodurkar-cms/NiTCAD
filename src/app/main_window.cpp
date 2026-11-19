@@ -109,7 +109,9 @@ std::wstring menu_text(const CommandInfo& c) {
 MainWindow::MainWindow(const WindowOptions& options)
     : options_(options),
       runner_([this] { PostMessageW(hwnd_, run_message, 0, 0); }),
-      live_([this] { PostMessageW(hwnd_, live_message, 0, 0); }) {}
+      live_([this] { PostMessageW(hwnd_, live_message, 0, 0); }) {
+    animate_ = options.animate;
+}
 
 std::unique_ptr<MainWindow> MainWindow::create(const WindowOptions& options) {
     INITCOMMONCONTROLSEX icc{sizeof(icc), ICC_BAR_CLASSES | ICC_TREEVIEW_CLASSES | ICC_TAB_CLASSES | ICC_STANDARD_CLASSES |
@@ -225,6 +227,7 @@ bool MainWindow::create_children() {
         make(L"BUTTON", text, WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX, inspector_, id);
     }
     make(L"BUTTON", L"Enhanced &3D look", WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX, inspector_, id_enhanced);
+    make(L"BUTTON", L"A&xis box", WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX, inspector_, id_axis_box);  // Unit 26h (JD1)
     labelled(L"Slice plane", L"COMBOBOX", drop, id_slice_axis);
     labelled(L"Slice at (µm)", L"EDIT", ES_AUTOHSCROLL, id_slice_at);
     make(L"BUTTON", L"C&lipping box (µm)", WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX, inspector_, id_clip);
@@ -306,6 +309,7 @@ void MainWindow::build_menu() {
 void MainWindow::fill_menu(HMENU menu, int index) {
     while (GetMenuItemCount(menu) > 0) DeleteMenu(menu, 0, MF_BYPOSITION);
     const std::string_view name = menu_bar()[static_cast<std::size_t>(index)];
+    std::vector<std::string_view> submenus;
     const auto add_commands = [&](std::string_view top) {
         for (const CommandInfo& c : commands()) {
             if (c.menu != top) continue;
@@ -320,9 +324,23 @@ void MainWindow::fill_menu(HMENU menu, int index) {
                 AppendMenuW(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(recent), L"Recent &files");
                 AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
             }
-            if (c.id == Command::fit || c.id == Command::perspective || c.id == Command::next_tab ||
+            if (c.id == Command::fit || c.id == Command::perspective || c.id == Command::view_front ||
+                c.id == Command::next_tab ||
                 c.id == Command::tab_start || c.id == Command::find_error) {
                 AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+            }
+            if (!c.submenu.empty()) {
+                // Unit 26h: a submenu, at its first item's place, holding every item that names it.
+                if (std::ranges::find(submenus, c.submenu) != submenus.end()) continue;
+                submenus.push_back(c.submenu);
+                HMENU sub = CreatePopupMenu();
+                for (const CommandInfo& d : commands()) {
+                    if (d.menu == top && d.submenu == c.submenu) {
+                        AppendMenuW(sub, MF_STRING, static_cast<UINT_PTR>(d.id), menu_text(d).c_str());
+                    }
+                }
+                AppendMenuW(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(sub), win32::widen(c.submenu).c_str());
+                continue;
             }
             AppendMenuW(menu, MF_STRING, static_cast<UINT_PTR>(c.id), menu_text(c).c_str());
         }
@@ -534,6 +552,7 @@ void MainWindow::layout_inspector() {
     }
     for (int id : {id_contours, id_edges, id_contacts, id_opaque, id_perspective}) put(id, row);
     if (shown(id_enhanced)) put(id_enhanced, row);  // 3D views only (Unit 26f, KD5)
+    if (shown(id_axis_box)) put(id_axis_box, row);  // 3D views only (Unit 26h, JQ3)
     put_label();
     put(id_slice_axis, row * 6);
     y -= row * 6 - row;
@@ -663,6 +682,7 @@ void MainWindow::default_settings() {
     device_view_ = {};
     curve_view_ = {};
     device_view_.enhanced = curve_view_.enhanced = state_.enhanced_look;  // Unit 26f (KD5)
+    device_view_.axis_box = curve_view_.axis_box = state_.axis_box;  // Unit 26h (JQ3)
     if (!workspace_) return;
     const auto views = available_views(*workspace_, run_b());
     const bool results = workspace_->has_results();
@@ -950,6 +970,7 @@ void MainWindow::sync_inspector() {
     check(id_opaque, s.opaque);
     check(id_perspective, s.perspective);
     check(id_enhanced, s.enhanced);
+    check(id_axis_box, s.axis_box);
     check(id_clip, s.clip.has_value());
     SendMessageW(child(id_slice_axis), CB_SETCURSEL, s.slices.empty() ? 0 : static_cast<WPARAM>(s.slices.front().axis + 1), 0);
     // The boxes (ZD1); a clipping box's text stays while there is none, to be checked again.
@@ -1130,6 +1151,7 @@ void MainWindow::show_inspector_groups() {
     // Playback on a transient run's field view (YD5); the box's sliders where a 3D view clips (YD6).
     show({label_time, id_time, id_time_text, id_play}, tab_ == tab_view && can_play());
     show({id_enhanced}, tab_ == tab_view && dim == 3 && !is_plot(s.kind));  // Unit 26f (KD5)
+    show({id_axis_box}, tab_ == tab_view && dim == 3 && !is_plot(s.kind));  // Unit 26h (JQ3): as the look's box
     const bool clips = tab_ == tab_view && dim == 3 && (s.kind == ViewKind::solid || s.kind == ViewKind::field);
     show({label_clip_x, label_clip_x + 1, label_clip_x + 2, id_clip_x0, id_clip_x1, id_clip_y0, id_clip_y1, id_clip_z0,
           id_clip_z1},
@@ -1193,6 +1215,9 @@ void MainWindow::on_inspector(int id, int code) {
     } else if (clicked && id == id_enhanced) {
         // Unit 26f (KD5): this view, and the default of new views, remembered.
         s.enhanced = state_.enhanced_look = Button_GetCheck(child(id)) == BST_CHECKED;
+    } else if (clicked && id == id_axis_box) {
+        // Unit 26h (JQ3): this view, and the default of new views, remembered.
+        s.axis_box = state_.axis_box = Button_GetCheck(child(id)) == BST_CHECKED;
     } else if ((id == id_arrows || id == id_lines) && selection) {
         // Unit 26c (YD1): arrows or streamlines of a vector field; on the field view the map shows its own
         // magnitude, as `nitcad plot` draws them without --field.
@@ -2037,6 +2062,13 @@ void MainWindow::execute(Command c) {
         set_status(status_state, "Not comparing");
         return;
     case Command::fit: viewport_fit(); return;
+    case Command::view_front: show_named_view("Front"); return;
+    case Command::view_back: show_named_view("Back"); return;
+    case Command::view_left: show_named_view("Left"); return;
+    case Command::view_right: show_named_view("Right"); return;
+    case Command::view_top: show_named_view("Top"); return;
+    case Command::view_bottom: show_named_view("Bottom"); return;
+    case Command::view_isometric: show_named_view("Isometric"); return;
     case Command::orbit_left: viewport_orbit(-15.0f, 0.0f); return;
     case Command::orbit_right: viewport_orbit(15.0f, 0.0f); return;
     case Command::orbit_up: viewport_orbit(0.0f, 10.0f); return;
@@ -2136,25 +2168,35 @@ bool MainWindow::viewport_is_3d() const {
 
 void MainWindow::viewport_orbit(float azimuth_deg, float elevation_deg) {
     if (!viewport_is_3d()) return;
+    stop_move();  // JD5: a drag or a key ends a move where it is
     orbit(settings(), azimuth_deg, elevation_deg);
     present_camera();
 }
 
 void MainWindow::viewport_pan(float dx, float dy) {
     if (!scene_ || !std::holds_alternative<render::FieldScene>(*scene_)) return;
+    stop_move();
     pan_by(settings(), dx, dy);
     present_camera();
 }
 
 void MainWindow::viewport_zoom(float factor) {
     if (!scene_ || !std::holds_alternative<render::FieldScene>(*scene_)) return;
+    stop_move();
     zoom_by(settings(), factor);
     present_camera();
 }
 
 void MainWindow::viewport_fit() {
-    fit(settings());
-    present_camera();
+    // JD5: smoothly, the angles kept.
+    CameraPose to = camera_pose(settings());
+    to.zoom = 1.0f;
+    to.pan_x = to.pan_y = 0.0f;
+    if (!scene_ || !std::holds_alternative<render::FieldScene>(*scene_)) {
+        fit(settings());
+        return present_camera();
+    }
+    move_camera(to);
 }
 
 void MainWindow::probe_at(float x, float y) {
@@ -2186,7 +2228,69 @@ void MainWindow::probe_at(float x, float y) {
     set_status(status_state, text.substr(0, text.find('\n')));
 }
 
+bool MainWindow::viewport_over_cube(float x, float y) const {
+    if (!scene_ || !viewport_) return false;
+    const auto* f = std::get_if<render::FieldScene>(&*scene_);
+    return f && render::view_cube_hit(*f, viewport_->width(), viewport_->height(), x, y).has_value();
+}
+
+void MainWindow::snap_to(const render::CameraPreset& preset) {
+    if (!viewport_is_3d()) return;
+    move_camera({preset.azimuth_deg, preset.elevation_deg, 1.0f, 0.0f, 0.0f});
+    set_status(status_state, "View: " + preset.name);
+}
+
+void MainWindow::show_named_view(std::string_view name) {
+    for (const render::CameraPreset& p : render::named_views()) {
+        if (p.name == name) return snap_to(p);
+    }
+}
+
+void MainWindow::viewport_named_view(int index) {
+    const auto& views = render::named_views();
+    if (index >= 0 && static_cast<std::size_t>(index) < views.size()) snap_to(views[static_cast<std::size_t>(index)]);
+}
+
+void MainWindow::move_camera(const CameraPose& to) {
+    stop_move();
+    ViewSettings& s = settings();
+    const CameraPose from = camera_pose(s);
+    BOOL shown = TRUE;
+    if (!SystemParametersInfoW(SPI_GETCLIENTAREAANIMATION, 0, &shown, 0)) shown = TRUE;
+    if (!smooth_moves(animate_, shown != FALSE, force_animate_) || from == to || !hwnd_) {
+        set_camera_pose(s, to);
+        present_camera();
+        return;
+    }
+    move_ = CameraMove{from, to, &s, std::chrono::steady_clock::now()};
+    SetTimer(hwnd_, camera_timer, camera_tick_ms, nullptr);
+}
+
+void MainWindow::stop_move() {
+    if (!move_) return;
+    move_.reset();
+    if (hwnd_) KillTimer(hwnd_, camera_timer);
+}
+
+void MainWindow::on_camera_timer() {
+    if (!move_ || move_->settings != &settings() || !scene_) return stop_move();
+    const float ms = std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - move_->start).count();
+    const float t = std::min(ms / camera_move_ms, 1.0f);
+    set_camera_pose(*move_->settings, camera_between(move_->from, move_->to, t));
+    present_camera();
+    if (t >= 1.0f) stop_move();
+}
+
 void MainWindow::viewport_click(float x, float y) {
+    // Unit 26h (JD3): a click on the view cube snaps the camera, whatever the mode.
+    if (scene_) {
+        if (const auto* f = std::get_if<render::FieldScene>(&*scene_)) {
+            if (const auto p = render::view_cube_hit(*f, viewport_->width(), viewport_->height(), x, y)) {
+                snap_to(*p);
+                return;
+            }
+        }
+    }
     if (cut_mode_) cut_at(x, y);
     else if (probe_mode_ || measure_mode_) probe_at(x, y);
 }
@@ -2532,6 +2636,10 @@ LRESULT MainWindow::handle(UINT message, WPARAM w, LPARAM l) {
         }
         if (w == playback_timer) {
             on_playback_timer();
+            return 0;
+        }
+        if (w == camera_timer) {
+            on_camera_timer();
             return 0;
         }
         break;

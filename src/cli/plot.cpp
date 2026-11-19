@@ -53,6 +53,7 @@ constexpr const char* plot_usage =
     "          --colormap viridis|turbo|cividis|coolwarm|soft  --contours  --edges  --opaque\n"
     "  3D      --slice x=<um>|y=<um>|z=<um> (repeatable)  --azimuth <deg>  --elevation <deg>\n"
     "          --perspective  --look classic|enhanced (enhanced: lights, feature edges, gradient)\n"
+    "          --axes on|off (the enhanced look's axis box with um ticks; default on)\n"
     "  curves  --contact <name> (swept)  --sense <name>  --frequency <k>  --log\n"
     "  arrows  --vectors E|J|Jn|Jp  --arrows <n> (300 in 2D, 400 in 3D)\n"
     "  clip    --clip <x0>,<y0>,<z0>:<x1>,<y1>,<z1> (um): that box removed from a 3D solid or field view\n"
@@ -138,6 +139,7 @@ struct Options {
     std::optional<float> azimuth, elevation;
     bool contours = false, edges = false, opaque = false, perspective = false, log = false;
     std::string look = "enhanced";  // Unit 26f (KD6)
+    std::string axes = "on";        // Unit 26h (JD1, JQ3): the enhanced look's axis box
     int width = 1280, height = 960;
     bool size_given = false;
 };
@@ -335,6 +337,7 @@ int plot_adapt(const Options& o) {
         if (!s) return fail(s.error().message);
         s->title = "pass " + std::to_string(k) + " (" + p.source + "): " + std::to_string(p.nodes) + " nodes";
         set_look(*s, o.look == "classic" ? Look::classic : Look::enhanced);  // Unit 26f (KD6)
+        s->show_axis_box = o.axes == "on";                                   // Unit 26h (JD1)
         auto t = renderer->draw(*s, tw, th);
         if (!t) return fail(t.error().message);
         tiles.push_back(std::move(*t));
@@ -374,6 +377,9 @@ int plot(int argc, char** argv) {
         else if (a == "--colormap") { if (!flag_value(o.colormap)) return usage("--colormap needs a name"); }
         else if (a == "--look") {
             if (!flag_value(o.look) || (o.look != "classic" && o.look != "enhanced")) return usage("--look is classic or enhanced");
+        }
+        else if (a == "--axes") {
+            if (!flag_value(o.axes) || (o.axes != "on" && o.axes != "off")) return usage("--axes is on or off");
         }
         else if (a == "--contact") { if (!flag_value(o.contact)) return usage("--contact needs a name"); }
         else if (a == "--sense") { if (!flag_value(o.sense)) return usage("--sense needs a name"); }
@@ -1160,6 +1166,9 @@ int plot(int argc, char** argv) {
     const Look look = o.look == "classic" ? Look::classic : Look::enhanced;
     if (field_scene) set_look(*field_scene, look);
     for (FieldScene& frame : film) set_look(frame, look);
+    // Unit 26h (JD1): the axis box, on unless --axes off (enhanced 3D only).
+    if (field_scene) field_scene->show_axis_box = o.axes == "on";
+    for (FieldScene& frame : film) frame.show_axis_box = o.axes == "on";
 
     // Draw and write.
     const Adapter adapter = o.adapter == "gpu" ? Adapter::hardware : o.adapter == "warp" ? Adapter::warp : Adapter::automatic;

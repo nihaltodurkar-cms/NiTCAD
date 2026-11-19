@@ -413,6 +413,7 @@ std::expected<Scene, base::Error> build_scene(const Workspace& w, const ViewSett
             if (cut) add_cut_line(*f, *cut);
             apply_camera(*f, o);
             set_look(*f, o.enhanced ? Look::enhanced : Look::classic);  // Unit 26f (KD5): after every overlay
+            f->show_axis_box = o.axis_box;  // Unit 26h (JD1, JQ3)
         }
         return scene;
     };
@@ -751,6 +752,33 @@ void apply_camera(FieldScene& scene, const ViewSettings& s) {
     scene.camera.pan = {s.pan_x, s.pan_y};
 }
 
+CameraPose camera_pose(const ViewSettings& s) noexcept {
+    return {s.azimuth.value_or(default_azimuth), s.elevation.value_or(default_elevation), s.zoom, s.pan_x, s.pan_y};
+}
+
+void set_camera_pose(ViewSettings& s, const CameraPose& p) noexcept {
+    s.azimuth = p.azimuth_deg;
+    s.elevation = p.elevation_deg;
+    s.zoom = p.zoom;
+    s.pan_x = p.pan_x;
+    s.pan_y = p.pan_y;
+}
+
+CameraPose camera_between(const CameraPose& from, const CameraPose& to, float t) noexcept {
+    if (!(t > 0.0f)) return from;
+    if (t >= 1.0f) return to;
+    const float e = t * t * (3.0f - 2.0f * t);
+    const auto mix = [e](float a, float b) { return a + (b - a) * e; };
+    // The shorter way round: the difference brought into (-180, 180].
+    float d = std::fmod(to.azimuth_deg - from.azimuth_deg, 360.0f);
+    if (d > 180.0f) d -= 360.0f;
+    if (d <= -180.0f) d += 360.0f;
+    float az = std::fmod(from.azimuth_deg + d * e, 360.0f);
+    if (az > 180.0f) az -= 360.0f;
+    if (az <= -180.0f) az += 360.0f;
+    return {az, mix(from.elevation_deg, to.elevation_deg), mix(from.zoom, to.zoom), mix(from.pan_x, to.pan_x), mix(from.pan_y, to.pan_y)};
+}
+
 bool takes_film(const Workspace& w, const ViewSettings& s) noexcept {
     return s.kind == ViewKind::field && w.device && w.geometry && w.device->mesh().dimension() >= 2 && w.transient &&
            !w.points.empty() && w.transient->snapshots.size() == w.points.size();
@@ -901,6 +929,7 @@ std::vector<std::string> plot_arguments(const ViewSettings& s, const Workspace* 
     if (s.opaque) a.emplace_back("--opaque");
     if (s.perspective) a.emplace_back("--perspective");
     if (!s.enhanced) a.insert(a.end(), {"--look", "classic"});  // Unit 26f (KD5): enhanced is the default
+    if (s.enhanced && !s.axis_box) a.insert(a.end(), {"--axes", "off"});  // Unit 26h (JQ3): on is the default
     if (s.azimuth) a.insert(a.end(), {"--azimuth", std::format("{}", *s.azimuth)});
     if (s.elevation) a.insert(a.end(), {"--elevation", std::format("{}", *s.elevation)});
     for (const auto& p : s.slices) {
