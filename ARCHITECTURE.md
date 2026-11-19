@@ -1788,7 +1788,32 @@ inputs; DECISIONS.md DK1–DK11):**
   - existing decks unchanged: `main`'s deck and validation assembly traces byte-identical (AG1).
 - Mutation checks (25), all caught (DECISIONS.md, Unit 43).
 - Not in Unit 43: restart of the new analyses, a transient or small-signal run from a checkpoint (`initial`),
-  harmonic balance, unit suffixes on times.
+  harmonic balance, unit suffixes on times. (All but harmonic balance came in Unit 61, below.)
+
+**As built (Unit 61, restart of transient, trace and small-signal runs, `initial`, unit suffixes; DECISIONS.md
+RD1–RD7, RG1–RG9):**
+- Units (RD1): a time is in s or carries `s`, `ms`, `us`, `ns`, `ps`, `fs`; a frequency is in Hz or carries `Hz`,
+  `kHz`, `MHz`, `GHz`, `THz`. The value is read by shifting the decimal exponent in the text, so `2.5ns` is the same
+  double as `2.5e-9`. A unit of the other kind, an unknown unit, or a unit on a voltage names its line. Waveform
+  arguments are read by position (a pulse's times, a sine's frequency).
+- `initial = <checkpoint>` (RD2) in `[sweep]`, `[transient]`, `[small_signal]` and `[trace]`: the checkpoint's fields
+  are the first state's starting guess. Its bias need not be the run's. It is never given with `restart`, and a
+  transient's checkpoint is refused there (use `restart`).
+- Transient resume (RD3, RD4): `results::TransientResume` holds the 1–3 history states (state, storage, traps,
+  charges), the last accepted point, its time, the next step, the landing index, the attempt index and the run's
+  identity without its initial state. `solve_transient(..., resume)` continues as the uninterrupted run would, bit
+  for bit. It refuses another run's state, the final step, a state with `initial`, and nonlocal tunnelling (its paths
+  are not in the state). `[transient] checkpoint =` now writes the last accepted step with this state (AQ4 revised),
+  and `[transient] restart =` continues from it.
+- Trace resume (RD5): `results::TraceResume` (`Sweep::resume`) holds the scaled state with λ, the tangent, `ds`, the
+  kept arc-row entry, the attempt and point counts, the metric's current floor, the last accepted point, the identity
+  and whether the trace finished. It is taken at each acceptance, so a trace stopped by a later attempt resumes from
+  its last point and replays those attempts. `[trace] restart =` and `checkpoint =` work as for the transient.
+- Small-signal restart (RD6): `[small_signal] restart =` continues after the checkpoint's operating point, as the
+  sweep's (DK9).
+- Checkpoints (6.6): `io::Checkpoint::kind` is steady (absent: every older file), transient or trace, with the
+  resume record bit for bit. A trace checkpoint is still a steady point for a sweep or for `initial`. A restarted
+  run's files hold the steps after the checkpoint, the first being the checkpoint's own (RQ8).
 
 ### 6.6 Result representation
 
@@ -3320,7 +3345,7 @@ exists, not finished), **planned** (nothing built). Audit of 2026-10-09, against
 | Area | What exists (audited) | Status | Next step |
 |---|---|---|---|
 | Robust nonlinear solving | Newton with componentwise clipping (6.2); the generation-free retry (Units 19, 20); arc-length `trace_bias` (Unit 19) | **Bias step cutting verified, on `main`** (Unit 28, below; `06b708d`, PR #31); **Newton line search verified, opt-in, on `main`** (Unit 30, below; `f3e2811`, PR #32) | A natural-test norm monotone in reverse bias; a Gummel or pseudo-transient fallback |
-| Input/output, checkpoint/restart | The `io` layer (approved 2026-10-09): versioned, checksummed, atomic files for meshes, sweeps and checkpoints; device files and the text input deck (Unit 31) | **Verified, on `main`** (Unit 29, 6.6; `f69a7a8`, PR #33); **device files and the deck verified, on `main`** (Unit 31, 6.5; `6f67510`, PR #37); **transient and small-signal files verified** (Unit 42, 6.6; PR #52); **transient, small-signal and trace deck analyses verified** (Unit 43, 6.5; PR #53) | Restart of transient and trace runs; a run started from a checkpoint (`initial`); unit suffixes on times |
+| Input/output, checkpoint/restart | The `io` layer (approved 2026-10-09): versioned, checksummed, atomic files for meshes, sweeps and checkpoints; device files and the text input deck (Unit 31) | **Verified, on `main`** (Unit 29, 6.6; `f69a7a8`, PR #33); **device files and the deck verified, on `main`** (Unit 31, 6.5; `6f67510`, PR #37); **transient and small-signal files verified** (Unit 42, 6.6; PR #52); **transient, small-signal and trace deck analyses verified** (Unit 43, 6.5; PR #53); **restart of transient, trace and small-signal runs, `initial`, time and frequency suffixes verified locally** (Unit 61, 6.5; on `io/restart-transient-trace`, not pushed) | Harmonic balance; periodic checkpoints during a run (RQ5) |
 | Geometry and unstructured 3D meshing | `Mesh::from_parts` accepts any valid node/edge/volume graph; besides the tensor-grid producer, Unit 16 added the 2D and 3D Delaunay generators and the simplex import (checked duals P0–P5, P4-certified interfaces, contact patches, structured 2D boundary layers); nonlocal BTBT still needs tensor cells (6.11, M16) | **Verified, on `main`** (Unit 16, 6.11; `a09cf43`, PR #35); **non-convex 3D meshing built** (Unit 53, 6.11; on `mesh/finfet-geometry`): sectioned extrusions, junction lines, patches at traces; FC8 (flat gate) fails, accepted as a limitation; FC9 fails, accepted as a limitation; **3D structured layers built** (Unit 54, 6.11; on `mesh/structured-layers-3d`): swept meshes of extrusions with 2D layers; UC7 accepted as a limitation, UC8 fails at 5 of 17 I_D points, accepted as a limitation (owner, 2026-10-31) | 3D layers on non-extruded geometry; the 2D generator's P2 refusals (Unit 54 slice 5); FC8's corner error; abrupt junctions off region boundaries; an unstructured locator for nonlocal BTBT (M16) |
 | Low-current accuracy | `terminal_current_resolution` reports the floor (Unit 15); the weighted terminal current with an adjoint error estimate (Unit 32, 6.6) | **Verified, on `main`** (Unit 32; `6e54c69`, PR #39): the MOSFET off state resolved at every Vg, sub-floor diode currents on the ideal-diode law to 0.1% | Weighted transient and small-signal currents; a path term for nonlocal tunnelling |
 | Generic fields/equations | Field descriptors and the unknowns' map; every row an equation term composed by equation set (Unit 40); model data and state split out, one `assemble::System` with topic headers, derived and edge fields, equilibrium from the same terms, an added field measured (Unit 57; 6.12.1–2) | **Verified, bit-identical, on `main`** (Unit 40; `629bed0`, PR #50; Unit 57; `2306228`, PR #87; below) | Face and cell fields; a public way to add fields and terms (GG8's extension is internal); dropping the insulator nodes' carrier unknowns (FD5) |

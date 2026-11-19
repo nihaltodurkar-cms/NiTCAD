@@ -648,6 +648,22 @@ defaults derived from `t_end`; restart under `[adapt]` (refused as today); perio
 **Owner ruling (2026-11-19, standing instruction "always choose recommended", 2026-11-11):** RQ1–RQ8 take the
 recommended option. Pushing, the PR and the full Release/Debug suites still wait for the owner's word.
 
+**Results (2026-11-19, Release, MSVC 14.51; the full suites not yet run, on the owner's word):**
+
+| Gate | Result |
+|---|---|
+| RG1 | The 5 tracked `decks/` and `examples/` decks that run in under 60 s write CSV tables byte-identical to the branch base `9225e6f`'s (built in a separate worktree). The 5 FinFET decks take over 60 s with both builds and are outside the gate. The deck–C++ bit-for-bit tests pass. Existing expectations changed only where this unit changes behaviour by ruling: `[transient] checkpoint =` is accepted (AQ4 revised, RD4), and `restart` is accepted in `[transient]`, `[trace]` and `[small_signal]` (`tests/deck/analyses_test.cpp`). |
+| RG2 | Units: 3 cases pass. `2.5ns` gives the same double as `2.5e-9`, and the wrong kind, an unknown unit and a unit on a voltage each name their line. |
+| RG3 | `initial`: 2 cases pass. The first state takes 6 → 1 Newton iterations in all four analyses. |
+| RG4 | Transient resume is bit for bit. The diode pulse (BDF2 adaptive) resumes at k = 1, 2, 3, at the breakpoint, after it, mid-ramp, at the top of the rise and at the next-to-last point. The trapped MOS capacitor and the electrothermal diode also resume bit for bit. Refusals: another run, the final step, `initial` with resume, nonlocal tunnelling. Deck: stopped after 3, 20 and n/2 steps, then restarted, equals the uninterrupted run. |
+| RG5 | Trace resume is bit for bit. The diode resumes at converged attempts 0, 1, 2, n/2 and n−1. The electrothermal runaway fold resumes before, at and past its top. Stops on rejected attempts resume from the last accepted point. Refusals: another run, a finished trace, an initial state, a state that does not fit. Deck: restarted after attempts 1 and 5 equals the uninterrupted trace. A steady checkpoint and another trace are refused. |
+| RG6 | Small-signal restart from a sweep's checkpoint and from a small-signal checkpoint: the 2 remaining points' operating currents and admittances, at 1 MHz and 1 GHz, equal the uninterrupted run's to 1e-9 relative. The last point, a bias that is not a point and a transient checkpoint are refused. |
+| RG7 | Checkpoints: the transient and trace resume records round-trip bit for bit. The pre-Unit 42 fixture loads as steady with no resume state. A damaged file is refused. |
+| RG8 | `nitcad run` on a transient and on a trace, stopped by Ctrl-Break (exit 2), writes a checkpoint, and a restart completes it (exit 0); this also passes under ctest. A run that stops on its own solver limits (for example `max_iterations = 1`) is correctly refused as a restart with other limits, because the limits are part of the identity. New deck mistakes name their line. |
+| RG9 | `/W4 /WX` clean. 10 of 10 hand mutants caught: a history state dropped (2959 failures), the next step not restored (1856), the landing state lost (4), the tangent's sign flipped (2), `ds` not restored (1), the transient identity check removed (1), the trace identity check removed (1), the `ns` exponent off by 3 (10), a frequency unit accepted as a time (1), a skipped small-signal point (1). |
+
+Also fixed: a stopped small-signal restart's message counted the skipped points among those left to solve.
+
 ---
 
 ## New questions the advisor raised (not yet in `ARCHITECTURE.md`)
