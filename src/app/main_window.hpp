@@ -358,6 +358,7 @@ private:
     // message that says so; the title bar's theme.
     ITaskbarList3* taskbar_list_ = nullptr;
     UINT taskbar_created_ = 0;
+    bool com_ = false;  // this window initialized COM on its thread (balanced in the destructor)
     TaskbarProgress taskbar_;
     bool dark_title_ = false;
     int title_theme_updates_ = 0;

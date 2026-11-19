@@ -111,6 +111,10 @@ MainWindow::MainWindow(const WindowOptions& options)
       runner_([this] { PostMessageW(hwnd_, run_message, 0, 0); }),
       live_([this] { PostMessageW(hwnd_, live_message, 0, 0); }) {
     animate_ = options.animate;
+    // The taskbar list (ZD5) and the shell dialogs are COM objects of this thread's apartment. The application
+    // initializes COM first (this call is then a counted no-op); a host that did not, such as a test, would
+    // otherwise get them from another thread's implicit apartment and crash releasing them after it ends.
+    com_ = SUCCEEDED(CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED));
 }
 
 std::unique_ptr<MainWindow> MainWindow::create(const WindowOptions& options) {
@@ -151,6 +155,7 @@ MainWindow::~MainWindow() {
     if (accelerators_) DestroyAcceleratorTable(accelerators_);
     if (font_) DeleteObject(font_);
     if (bold_) DeleteObject(bold_);
+    if (com_) CoUninitialize();  // after the taskbar list's release
 }
 
 bool MainWindow::create_children() {

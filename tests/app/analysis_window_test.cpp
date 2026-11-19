@@ -1944,3 +1944,30 @@ TEST_CASE("app window 26i: the metrics strip is cached and unchanged (ND5, NG6)"
     w->execute(Command::mesh_quality);
     CHECK(strip().find(L"Min angle 26.6°, median 26.6°, 0 below 20°") != std::wstring::npos);
 }
+
+// A shown window (it gets a taskbar button, so the taskbar list) with a deck built and its 3D view drawn closes
+// cleanly in a host that did not initialize COM itself, as this test executable (Unit 26i: it crashed releasing
+// the taskbar list after the run thread's implicit apartment had gone).
+TEST_CASE("app window: a shown window with a deck closes cleanly without the host's COM", "[app]") {
+    const fs::path dir = app_test::scratch("window_shown_close");
+    const fs::path deck = app_test::write(dir, "mosfet3d.deck", app_test::mosfet3d);
+    for (const bool input : {false, true}) {
+        CAPTURE(input);
+        app::WindowOptions o;
+        o.adapter = render::Adapter::warp;
+        o.show = true;
+        o.input = input;
+        o.quit_on_close = false;
+        auto w = MainWindow::create(o);
+        REQUIRE(w);
+        REQUIRE(w->open_deck(deck));
+        REQUIRE(pump_until([&] { return w->workspace() != nullptr && !w->runner().busy(); }));
+        w->select_tab(MainWindow::tab_view);
+        choose(*w, MainWindow::id_view, L"solid");
+        pump_for(0.2);
+        CHECK(w->scene());
+        w.reset();
+        pump_for(0.1);
+    }
+    SUCCEED("closed");
+}

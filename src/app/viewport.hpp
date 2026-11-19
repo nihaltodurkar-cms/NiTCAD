@@ -64,7 +64,7 @@ public:
     [[nodiscard]] double last_present_ms() const noexcept { return last_ms_; }
     [[nodiscard]] int width() const noexcept;
     [[nodiscard]] int height() const noexcept;
-    // The swap chain is released (before its renderer is).
+    // The swap chain is released (before its renderer is), and the view shows nothing until the next show().
     void release();
 
 private:

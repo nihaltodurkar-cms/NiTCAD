@@ -36,7 +36,14 @@ Viewport::~Viewport() {
     }
 }
 
-void Viewport::release() { target_.reset(); }
+// The swap chain goes, and nothing makes another until the next show(): a WM_SIZE or WM_PAINT while the
+// window is destroyed would otherwise make one that outlives the renderer (a crash on closing a shown window).
+void Viewport::release() {
+    target_.reset();
+    renderer_ = nullptr;
+    scene_ = nullptr;
+    camera_pending_ = false;
+}
 
 int Viewport::width() const noexcept {
     RECT r{};
