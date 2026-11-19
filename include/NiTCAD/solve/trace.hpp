@@ -82,9 +82,14 @@ struct TraceOptions {
 // for sweep_bias (and its electrothermal checks for the starting point); those of make_scaling,
 // System::create and LinearSolver::create. With electrothermal, an accepted point whose
 // temperature leaves a material's range stops the trace (non_convergence, as sweep_bias).
+// Every run that got past its first tangent returns its resume state (Sweep::resume, Unit 61 RD5).
+// With `resume` the trace continues after that state's point exactly as the uninterrupted trace
+// does, the point itself its first; refused (invalid_input) with an initial state, nonlocal
+// tunnelling, another run's state (identity), a finished state or one that does not fit.
 [[nodiscard]] std::expected<results::Sweep, base::Error> trace_bias(
     const device::Device& device, const TraceOptions& options,
-    const results::NodeFields* initial = nullptr, const RunControl& control = {});
+    const results::NodeFields* initial = nullptr, const RunControl& control = {},
+    const results::TraceResume* resume = nullptr);
 
 [[nodiscard]] results::RunRecord make_run_record(const device::Device& device,
                                                  const TraceOptions& options,

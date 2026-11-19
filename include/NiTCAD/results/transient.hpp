@@ -7,6 +7,7 @@
 #pragma once
 
 #include <cstddef>
+#include <cstdint>
 #include <optional>
 #include <vector>
 
@@ -61,10 +62,35 @@ struct TransientSnapshot {
     RateFields rates;
 };
 
+// Where a transient run can be continued from (Unit 61, RD3; DECISIONS.md RQ1): the integrator's own
+// state after the last accepted step, bit for bit, so a continued run repeats the uninterrupted
+// run's arithmetic. Solver state, not a result: the vectors are the assembler's scaled unknowns
+// and stored quantities, the history's times scaled by the assembler's time scale.
+struct TransientResume {
+    struct State {
+        double t;  // scaled time
+        std::vector<double> x, storage, traps, charges;
+    };
+    std::vector<State> history;  // the accepted states since the last (re)start, newest last (1 to 3)
+    TimePoint point;             // the last accepted step, as Transient::points has it
+    double time_s = 0.0;         // its time
+    double next_step_s = 0.0;    // the step to try next
+    std::size_t landing = 0;     // the next landing time (breakpoints, output times, t_end) to reach
+    std::size_t attempt = 0;     // step attempts so far (the progress and error index)
+    // The run's identity without its initial state (RunRecord::input_identity of the same device,
+    // options and waveforms with no initial state): a continuation must be of this run.
+    std::uint64_t identity = 0;
+    // The last accepted state's fields, as a snapshot of it has them (what a checkpoint file shows).
+    NodeFields fields;
+};
+
 struct Transient {
     RunRecord run;
     std::vector<TimePoint> points;
     std::vector<TransientSnapshot> snapshots;
+    // Set once a step has been accepted, also in a run that stopped (Unit 61, RD3); a run that
+    // reached t_end holds it too, with nothing left to continue.
+    std::optional<TransientResume> resume;
     std::size_t rejected_steps = 0;  // by the error estimate or by Newton
     // Nonlocal tunnelling (Unit 20): steps repeated because the paths re-traced after them
     // differed, and steps accepted with the paths lagging (they changed again after the repeat;

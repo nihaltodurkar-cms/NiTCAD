@@ -249,7 +249,8 @@ std::expected<void, base::Error> correct(Bordered& b, std::span<double> y,
 std::expected<results::Sweep, base::Error> trace_bias_unobserved(const device::Device& device,
                                                       const TraceOptions& options,
                                                       const results::NodeFields* initial,
-                                                      const RunControl& control) {
+                                                      const RunControl& control,
+                                                      const results::TraceResume* resume) {
     const auto contacts = device.contacts();
     const BiasOptions& steady = options.steady;
     if (steady.equations != Equations::drift_diffusion) {
@@ -307,23 +308,52 @@ std::expected<results::Sweep, base::Error> trace_bias_unobserved(const device::D
         weighted.emplace(std::move(*w));
     }
 
-    // The starting point (sweep_bias checks the initial state).
-    const std::vector<std::vector<double>> first{options.start_V};
-    auto sweep = sweep_bias(device, first, steady, initial, control);
-    if (!sweep) return std::unexpected(std::move(sweep.error()));
+    const std::size_t n = dd.unknowns();
+    // A resumed trace (Unit 61, RD5): its state must be this trace's, at a point it can go on from.
+    const std::uint64_t identity = make_run_record(device, options, nullptr).input_identity;
+    if (resume) {
+        if (initial) return std::unexpected(invalid("a resumed trace takes no initial state"));
+        if (tunnelling(dd)) {
+            return std::unexpected(invalid("a trace with nonlocal tunnelling does not resume (its paths are "
+                                           "not in the resume state)"));
+        }
+        if (resume->identity != identity) {
+            return std::unexpected(invalid("the resume state belongs to another run (another device, options "
+                                           "or bias)"));
+        }
+        if (resume->finished) {
+            return std::unexpected(invalid("the resume state is the trace's last point: nothing is left to solve"));
+        }
+        if (resume->state.size() != n + 1 || resume->tangent.size() != n + 1 || !positive(resume->step) ||
+            resume->entry > n || resume->points == 0 || resume->points >= options.max_points ||
+            resume->point.bias_V.size() != contacts.size() || !positive(resume->current_floor_A)) {
+            return std::unexpected(invalid("the trace resume state does not fit this device"));
+        }
+    }
+
+    // The starting point (sweep_bias checks the initial state); a resumed trace's the point it
+    // resumes from (RQ8).
     results::Sweep run;
     run.run = make_run_record(device, options, initial);
-    if (sweep->stopped) {
-        run.stopped = std::move(sweep->stopped);
-        run.unfinished = std::move(sweep->unfinished);
-        return run;
+    if (resume) {
+        run.points.push_back(resume->point);
+    } else {
+        const std::vector<std::vector<double>> first{options.start_V};
+        auto sweep = sweep_bias(device, first, steady, initial, control);
+        if (!sweep) return std::unexpected(std::move(sweep.error()));
+        if (sweep->stopped) {
+            run.stopped = std::move(sweep->stopped);
+            run.unfinished = std::move(sweep->unfinished);
+            return run;
+        }
+        run.points.push_back(std::move(sweep->points.front()));
     }
-    run.points.push_back(std::move(sweep->points.front()));
+    // Accepted points before this run's first (the resumed trace's earlier ones).
+    const std::size_t earlier = resume ? resume->points - 1 : 0;
 
     const double V_T = scaling->V_T;
     const int D = device.mesh().dimension();
     const std::size_t nodes = device.mesh().node_count();
-    const std::size_t n = dd.unknowns();
     const detail::Slots slot = detail::slots(dd.dofs());
     const std::size_t m = slot.block;
     const bool thermal = steady.models.electrothermal;
@@ -334,18 +364,27 @@ std::expected<results::Sweep, base::Error> trace_bias_unobserved(const device::D
 
     std::vector<double> bias = options.start_V;
     std::vector<double> y(n + 1);
-    detail::scaled_state(dd, run.points.front().fields, *scaling, std::span(y).first(n));
     // Electrothermal: the thermal contacts at the starting point's temperatures throughout.
     if (thermal) (void)set_thermal_bias(dd, run.points.front().thermal_bias_K);  // checked
     (void)dd.set_bias(bias);  // checked
-    dd.stamp_contacts(std::span(y).first(n));
-    y[n] = start / V_T;
+    if (resume) {
+        y = resume->state;
+    } else {
+        detail::scaled_state(dd, run.points.front().fields, *scaling, std::span(y).first(n));
+        dd.stamp_contacts(std::span(y).first(n));
+        y[n] = start / V_T;
+    }
     // Nonlocal tunnelling: the paths of the starting point, re-traced after each accepted point
     // (the next step uses them; lagging one step, as a transient run's second change).
     if (tunnelling(dd)) set_paths(dd, trace_paths(dd, std::span(y).first(n)));
+    // dF at the starting bias, as the uninterrupted trace has it, for a resumed one too.
     std::vector<double> dF = dd.bias_derivative(options.contact);
     for (double& v : dF) v *= V_T;  // per unit lambda
     Bordered bordered(dd, std::move(dF), y[n], steady.linear, bias, options.contact, V_T);
+    if (resume) {
+        bias = resume->point.bias_V;
+        (void)dd.set_bias(bias);  // the point's, checked by the run that wrote it
+    }
 
     // The arc metric, in volts: the swept bias; the swept contact's current at 1 V per decade of
     // |I| + I0, I0 ten times the starting point's current resolution (a current below the
@@ -355,8 +394,9 @@ std::expected<results::Sweep, base::Error> trace_bias_unobserved(const device::D
     // in the state alone (averaged over the nodes) such a step looks like a bias step, and its
     // hyperplane can cut the branch below.
     const double current_scale = scaling->J0 * std::pow(scaling->L_D, D - 1);
-    const double I0 =
-        std::max(10.0 * run.points.front().terminal_current_resolution[options.contact], 1e-30);
+    const double I0 = resume ? resume->current_floor_A
+                             : std::max(10.0 * run.points.front().terminal_current_resolution[options.contact],
+                                        1e-30);
     constexpr double state_weight = 0.1;
     std::vector<double> s(n + 1, 0.0), g(n + 1, 0.0);  // state scales; d log10(|I| + I0) / dy
     const auto metric = [&]() {
@@ -432,6 +472,7 @@ std::expected<results::Sweep, base::Error> trace_bias_unobserved(const device::D
     std::vector<double> v(n + 1, 0.0);
     metric();
     v[n] = direction / V_T;
+    if (resume) kept = resume->entry;
     const auto tangent = [&]() -> std::expected<void, base::Error> {
         std::vector<double> f(n + 1), e(n + 1, 0.0), w(n + 1);
         std::vector<double> c = row_of(v);
@@ -445,19 +486,41 @@ std::expected<results::Sweep, base::Error> trace_bias_unobserved(const device::D
         for (std::size_t q = 0; q <= n; ++q) v[q] = w[q] / norm;
         return {};
     };
-    if (auto ok = tangent(); !ok) {
+    if (resume) {
+        v = resume->tangent;
+    } else if (auto ok = tangent(); !ok) {
         run.stopped = std::move(ok.error());
         return run;
     }
 
-    double ds = options.step_V;
-    std::size_t attempt = 0;
-    while (run.points.size() < options.max_points) {
+    double ds = resume ? resume->step : options.step_V;
+    std::size_t attempt = resume ? resume->attempt : 0;
+    // The resume state at the last accepted point (Unit 61, RD5), taken at its acceptance: a later
+    // stop resumes from it and replays the attempts after it.
+    results::TraceResume accepted;
+    const auto take = [&]() {
+        accepted.state = y;
+        accepted.tangent = v;
+        accepted.step = ds;
+        accepted.entry = kept;
+        accepted.attempt = attempt;
+        accepted.points = earlier + run.points.size();
+    };
+    take();
+    const auto done = [&](bool finished) {
+        accepted.current_floor_A = I0;
+        accepted.point = run.points.back();
+        accepted.identity = identity;
+        accepted.finished = finished;
+        run.resume = std::move(accepted);
+        return std::move(run);
+    };
+    while (earlier + run.points.size() < options.max_points) {
         if (control.stop.stop_requested()) {
             run.stopped = base::Error{base::ErrorCode::cancelled,
                                       "cancelled before trace step " + std::to_string(attempt),
                                       base::ErrorContext{.index = attempt, .value = y[n] * V_T}};
-            return run;
+            return done(false);
         }
         // Predict; land on the end bias if the step would pass it.
         const double dlambda = ds * v[n];
@@ -492,7 +555,7 @@ std::expected<results::Sweep, base::Error> trace_bias_unobserved(const device::D
             if (solved.error().code == base::ErrorCode::cancelled) {
                 run.stopped = std::move(solved.error());
                 run.unfinished = std::move(point.convergence);
-                return run;
+                return done(false);
             }
             ds *= 0.5;
             if (ds < options.min_step_V) {
@@ -501,7 +564,7 @@ std::expected<results::Sweep, base::Error> trace_bias_unobserved(const device::D
                             " V: " + e.message;
                 run.stopped = std::move(e);
                 run.unfinished = std::move(point.convergence);
-                return run;
+                return done(false);
             }
             continue;
         }
@@ -521,7 +584,7 @@ std::expected<results::Sweep, base::Error> trace_bias_unobserved(const device::D
                         "trace step below min_step_V at " + std::to_string(y[n] * V_T) +
                             " V: the corrector leaves the predicted point",
                         base::ErrorContext{.index = attempt, .value = distance}};
-                    return run;
+                    return done(false);
                 }
                 continue;
             }
@@ -538,7 +601,7 @@ std::expected<results::Sweep, base::Error> trace_bias_unobserved(const device::D
             metric();
             if (auto ok = tangent(); !ok) {
                 run.stopped = std::move(ok.error());
-                return run;
+                return done(false);
             }
             const double turn = dot(v, v_old) / std::sqrt(dot(v_old, v_old));
             if (turn < 0.9) {
@@ -556,7 +619,7 @@ std::expected<results::Sweep, base::Error> trace_bias_unobserved(const device::D
                         "trace step below min_step_V at " + std::to_string(y[n] * V_T) +
                             " V: the tangent turns too fast",
                         base::ErrorContext{.index = attempt, .value = turn}};
-                    return run;
+                    return done(false);
                 }
                 continue;
             }
@@ -566,7 +629,7 @@ std::expected<results::Sweep, base::Error> trace_bias_unobserved(const device::D
             if (auto e = detail::converged_temperature(device, dd.dofs(), std::span(y).first(n),
                                                        scaling->temperature_K)) {
                 run.stopped = std::move(*e);
-                return run;
+                return done(false);
             }
         }
         point.bias_V = bias;
@@ -578,7 +641,7 @@ std::expected<results::Sweep, base::Error> trace_bias_unobserved(const device::D
                                          *scaling, D, point);
                 !ok) {
                 run.stopped = std::move(ok.error());
-                return run;
+                return done(false);
             }
         }
         if (tunnelling(dd)) {
@@ -591,13 +654,14 @@ std::expected<results::Sweep, base::Error> trace_bias_unobserved(const device::D
         }
         const double current = point.terminal_current[options.contact];
         run.points.push_back(std::move(point));
-        if (lands) return run;
-        if (options.current_limit && std::abs(current) >= *options.current_limit) return run;
+        if (lands) return done(true);
+        if (options.current_limit && std::abs(current) >= *options.current_limit) return done(true);
         const std::size_t iterations = run.points.back().convergence.iterations.size();
         if (iterations <= 7) ds = std::min(1.5 * ds, options.max_step_V);
         if (iterations >= 12) ds = std::max(0.7 * ds, options.min_step_V);
+        take();
     }
-    return run;
+    return done(true);  // max_points
 }
 
 }  // namespace
@@ -606,9 +670,10 @@ std::expected<results::Sweep, base::Error> trace_bias_unobserved(const device::D
 std::expected<results::Sweep, base::Error> trace_bias(const device::Device& device,
                                                       const TraceOptions& options,
                                                       const results::NodeFields* initial,
-                                                      const RunControl& control) {
+                                                      const RunControl& control,
+                                                      const results::TraceResume* resume) {
     const detail::WallClock clock;
-    auto r = trace_bias_unobserved(device, options, initial, control);
+    auto r = trace_bias_unobserved(device, options, initial, control, resume);
     if (r) {
         r->run.provenance.wall_s = clock.seconds();
         detail::observe_result(*r);

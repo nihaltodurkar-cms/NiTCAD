@@ -102,7 +102,9 @@
 //                       list or first : last : step; all series longer than one value have the
 //                       same length; a contact not named is held at 0 V);
 //                     thermal <name> = <series>  (electrothermal: a thermal contact's temperature);
-//                     restart = <checkpoint file>  (continue after the point it holds, DK9)
+//                     restart = <checkpoint file>  (continue after the point it holds, DK9);
+//                     initial = <checkpoint file>  (its fields the first point's starting guess, Unit
+//                       61 RD2; also in [transient], [small_signal] and [trace]; never with restart)
 //   [transient]       (Unit 43; solve/transient.hpp) contact <name> = <waveform>  (a contact not
 //                       named is held at 0 V): constant(v), step(v0, v1, t),
 //                       ramp(v0, v1, t0, t1), pulse(base, pulse, t_start, width[, rise, fall]),
@@ -110,19 +112,28 @@
 //                     t_end (required), dt_initial, dt_min, dt_max, integrator = bdf2 |
 //                     backward_euler, adaptive = on | off, rtol, density_ref,
 //                     output_times = <series>, fields_every_step = on | off;
-//                     thermal <name> = <K>  (electrothermal: held for the whole run)
+//                     thermal <name> = <K>  (electrothermal: held for the whole run);
+//                     times in s, or with a unit s, ms, us, ns, ps, fs (Unit 61, RD1: t_end,
+//                     dt_*, output_times and every waveform time; a sine's frequency as below);
+//                     restart = <checkpoint file>  (a transient's own checkpoint: the run continues
+//                       after its last accepted step, bit for bit; Unit 61 RD4)
 //   [small_signal]    (Unit 43; solve/small_signal.hpp) contact <name> = <series> and
 //                     thermal <name> = <series>, the operating points as in [sweep];
-//                     frequencies = <series> (required), field_frequencies = <series>
+//                     frequencies = <series> (required), field_frequencies = <series>; in Hz,
+//                     or with a unit Hz, kHz, MHz, GHz, THz (Unit 61, RD1);
+//                     restart = <checkpoint file>  (continue after the operating point it holds, as
+//                       [sweep]; Unit 61 RD6)
 //   [trace]           (Unit 43; solve/trace.hpp) contact = <name> and end = <V> (required);
 //                     start <name> = <V>  (each contact's bias at the start, default 0);
 //                     step, max_step, min_step, current_limit, max_points, density_floor;
-//                     thermal <name> = <K>
+//                     thermal <name> = <K>;
+//                     restart = <checkpoint file>  (a trace's own checkpoint: it continues after the
+//                       point it holds, bit for bit; Unit 61 RD5)
 //   [output]          sweep, device, mesh, checkpoint, table = <file>  (relative to the deck);
 //                     transient, small_signal = <file>  (Unit 43). Each analysis takes only what
 //                     it writes: equilibrium device, mesh, checkpoint; sweep and trace sweep,
-//                     device, mesh, checkpoint, table; transient transient, device, mesh, table
-//                     (no checkpoint: its end state is not steady); small_signal small_signal,
+//                     device, mesh, checkpoint, table; transient transient, device, mesh, table,
+//                     checkpoint (its last accepted step with the resume state, Unit 61 RD4); small_signal small_signal,
 //                     device, mesh, checkpoint (the last operating point), table.
 //   [adapt]           (Unit 17, AD7; solve/adapt.hpp) adaptive refinement of the mesh for a [sweep]
 //                     (one mesh for the sweep, AQ3) on a tensor, generate2d or swept extrude3d mesh
@@ -228,6 +239,8 @@ struct Plan {
     // Sweep and small-signal: the points, one bias per contact, device contact order.
     std::vector<std::vector<double>> points;
     std::filesystem::path restart;            // a checkpoint to continue from, or empty
+    // A checkpoint whose fields are the run's starting guess (Unit 61, RD2), or empty; never with restart.
+    std::filesystem::path initial;
     std::filesystem::path mkl_runtime;        // mkl_rt to load for backend = pardiso, or empty
     Outputs outputs;
     // The analysis's own options (Unit 43). Their `steady` is left default: the run uses `options`.

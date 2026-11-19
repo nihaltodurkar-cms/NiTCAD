@@ -138,11 +138,41 @@ bool valid_fields(const results::NodeFields& s, const device::Device& device) {
 
 bool positive(double v) { return std::isfinite(v) && v > 0.0; }
 
+// A resume state that belongs to this run and system (Unit 61, RD3): its identity, one to three
+// states of the system's sizes in increasing time, the last of them the point's time.
+std::expected<void, base::Error> check_resume(const results::TransientResume& r, const assemble::System& dd,
+                                              std::uint64_t identity, std::size_t contacts) {
+    if (r.identity != identity) {
+        return std::unexpected(invalid("the resume state belongs to another run (its device, options or waveforms "
+                                       "differ)"));
+    }
+    if (r.history.empty() || r.history.size() > 3) return std::unexpected(invalid("a resume state holds 1 to 3 states"));
+    const std::size_t n = dd.unknowns();
+    for (std::size_t k = 0; k < r.history.size(); ++k) {
+        const auto& s = r.history[k];
+        if (s.x.size() != n) return std::unexpected(invalid("a resume state of another system size", k));
+        if (s.storage.size() != dd.storage(s.x).size() || s.traps.size() != trap_occupancies(dd, s.x).size() ||
+            s.charges.size() != contacts) {
+            return std::unexpected(invalid("a resume state's stored quantities do not match the system", k));
+        }
+        if (!std::isfinite(s.t) || (k > 0 && !(s.t > r.history[k - 1].t))) {
+            return std::unexpected(invalid("a resume state's times must increase", k));
+        }
+    }
+    if (!positive(r.time_s) || !positive(r.next_step_s) || r.point.time_s != r.time_s) {
+        return std::unexpected(invalid("a resume state needs a positive time, the point's, and a positive next step"));
+    }
+    return {};
+}
+
 std::expected<results::Transient, base::Error> solve_transient_unobserved(
     const device::Device& device, std::span<const Waveform> waveforms,
     const TransientOptions& options, const results::NodeFields* initial,
-    const RunControl& control) {
+    const RunControl& control, const results::TransientResume* resume) {
     const auto contacts = device.contacts();
+    if (resume != nullptr && initial != nullptr) {
+        return std::unexpected(invalid("a continued run takes no initial state: it starts from its resume state"));
+    }
     if (waveforms.size() != contacts.size()) {
         return std::unexpected(invalid("a transient run needs one waveform per contact",
                                        std::nullopt, static_cast<double>(waveforms.size())));
@@ -294,9 +324,53 @@ std::expected<results::Transient, base::Error> solve_transient_unobserved(
 
     results::Transient run;
     run.run = make_run_record(device, options, waveforms, initial);
+    // The identity a continuation is checked against (Unit 61, RD3): the run's without its initial
+    // state.
+    const std::uint64_t identity =
+        initial == nullptr ? run.run.input_identity : make_run_record(device, options, waveforms).input_identity;
+    if (resume != nullptr) {
+        if (auto ok = check_resume(*resume, dd, identity, contacts.size()); !ok) return std::unexpected(ok.error());
+        if (tunnelling(dd)) {
+            return std::unexpected(invalid("a transient with nonlocal tunnelling paths is not continued: the paths "
+                                           "are not part of the resume state"));
+        }
+    }
 
-    // The steady state at t = 0.
+    const auto scale = [](std::vector<double> v, double s) {
+        for (double& e : v) e *= s;
+        return v;
+    };
+    const auto snapshot = [&](const State& s) {
+        results::TransientSnapshot snap;
+        snap.time_s = s.t * t0;
+        snap.point = run.points.size() - 1;
+        snap.fields = {std::vector<double>(nodes), std::vector<double>(nodes),
+                       std::vector<double>(nodes)};
+        for (std::size_t i = 0; i < nodes; ++i) {
+            snap.fields.potential_V[i] = s.x[m * i + slot.potential] * scaling->V_T;
+            snap.fields.n_cm3[i] = s.x[m * i + slot.electrons] * scaling->Ns;
+            snap.fields.p_cm3[i] = s.x[m * i + slot.holes] * scaling->Ns;
+        }
+        // The lattice (electrothermal) and carrier (Unit 52) temperatures, T0 (1 + tau).
+        detail::temperatures(dd, s.x, snap.fields);
+        snap.bands = detail::band_diagram(dd, s.x, scaling->V_T);
+        detail::append_edge_currents(dd, s.x, current_scale, snap.edge_current_n,
+                                     snap.edge_current_p);
+        snap.trap_occupancy = s.traps;
+        if (steady.store_rates) snap.rates = detail::rate_fields(dd, s.x);
+        return snap;
+    };
+
     std::vector<double> x(dd.unknowns());
+    std::vector<State> history;  // the accepted states since the last (re)start, newest last
+    if (resume != nullptr) {
+        // A continuation (Unit 61, RD3): the history, its last step as the first point, and the
+        // snapshot of that state.
+        for (const auto& s : resume->history) history.push_back({s.t, s.x, s.storage, s.traps, s.charges});
+        run.points.push_back(resume->point);
+        run.snapshots.push_back(snapshot(history.back()));
+    } else {
+    // The steady state at t = 0.
     if (initial != nullptr) {
         detail::scaled_state(dd, *initial, *scaling, x);
     } else {
@@ -374,33 +448,7 @@ std::expected<results::Transient, base::Error> solve_transient_unobserved(
         }
     }
 
-    const auto scale = [](std::vector<double> v, double s) {
-        for (double& e : v) e *= s;
-        return v;
-    };
-    const auto snapshot = [&](const State& s) {
-        results::TransientSnapshot snap;
-        snap.time_s = s.t * t0;
-        snap.point = run.points.size() - 1;
-        snap.fields = {std::vector<double>(nodes), std::vector<double>(nodes),
-                       std::vector<double>(nodes)};
-        for (std::size_t i = 0; i < nodes; ++i) {
-            snap.fields.potential_V[i] = s.x[m * i + slot.potential] * scaling->V_T;
-            snap.fields.n_cm3[i] = s.x[m * i + slot.electrons] * scaling->Ns;
-            snap.fields.p_cm3[i] = s.x[m * i + slot.holes] * scaling->Ns;
-        }
-        // The lattice (electrothermal) and carrier (Unit 52) temperatures, T0 (1 + tau).
-        detail::temperatures(dd, s.x, snap.fields);
-        snap.bands = detail::band_diagram(dd, s.x, scaling->V_T);
-        detail::append_edge_currents(dd, s.x, current_scale, snap.edge_current_n,
-                                     snap.edge_current_p);
-        snap.trap_occupancy = s.traps;
-        if (steady.store_rates) snap.rates = detail::rate_fields(dd, s.x);
-        return snap;
-    };
-
     // The starting point.
-    std::vector<State> history;  // the accepted states since the last (re)start, newest last
     history.push_back({0.0, x, dd.storage(x), trap_occupancies(dd, x), contact_charges(dd, x)});
     first.conduction_current = scale(terminal_currents(dd, x), current_scale);
     first.displacement_current.assign(contacts.size(), 0.0);
@@ -413,6 +461,7 @@ std::expected<results::Transient, base::Error> solve_transient_unobserved(
     }
     run.points.push_back(std::move(first));
     run.snapshots.push_back(snapshot(history.back()));
+    }
 
     // Landing times: breakpoints (restarts), output times and t_end, in scaled time.
     std::vector<double> landings = restarts;
@@ -427,18 +476,47 @@ std::expected<results::Transient, base::Error> solve_transient_unobserved(
     };
 
     const bool use_bdf2 = options.integrator == Integrator::bdf2;
-    double t = 0.0;                // seconds
-    double h = dt0;                // the next step to try, seconds
-    std::size_t landing = 0;       // index of the next landing time
-    std::size_t attempt = 0;
+    double t = resume != nullptr ? resume->time_s : 0.0;        // seconds
+    double h = resume != nullptr ? resume->next_step_s : dt0;   // the next step to try, seconds
+    std::size_t landing = resume != nullptr ? resume->landing : 0;  // index of the next landing time
+    std::size_t attempt = resume != nullptr ? resume->attempt : 0;
+    if (resume != nullptr && landing >= landings.size()) {
+        return std::unexpected(invalid("the resume state is the run's final step: nothing is left to solve"));
+    }
     bool repeating = false;        // the step is being repeated with re-traced tunnel paths
     std::vector<double> f(dd.unknowns());
+    // The resume state at the top of the loop: after the last accepted step (Unit 61, RD3). Kept
+    // whenever the run returns once a step has been accepted.
+    const auto keep = [&] {
+        if (run.points.size() < 2 && resume == nullptr) return;  // nothing accepted yet
+        results::TransientResume r;
+        for (const State& s : history) r.history.push_back({s.t, s.x, s.storage, s.traps, s.charges});
+        r.point = run.points.back();
+        r.time_s = t;
+        r.next_step_s = h;
+        r.landing = landing;
+        r.attempt = attempt;
+        r.identity = identity;
+        r.fields = snapshot(history.back()).fields;
+        run.resume = std::move(r);
+    };
+    // State at the top of an attempt, restored before keeping it on a return from inside one.
+    double h_top = h;
+    std::size_t attempt_top = attempt;
+    const auto stop_here = [&] {
+        h = h_top;
+        attempt = attempt_top;
+        keep();
+        return run;
+    };
     while (landing < landings.size()) {
+        h_top = h;
+        attempt_top = attempt;
         if (control.stop.stop_requested()) {
             run.stopped = base::Error{base::ErrorCode::cancelled,
                                       "cancelled before time step " + std::to_string(attempt),
                                       base::ErrorContext{.index = attempt, .value = t}};
-            return run;
+            return stop_here();
         }
         // The step: land on the next landing time if it is within 1.1 steps.
         const double target = landings[landing];
@@ -492,7 +570,7 @@ std::expected<results::Transient, base::Error> solve_transient_unobserved(
                 run.stopped = std::move(solved.error());
             }
             run.unfinished = std::move(record);
-            return run;
+            return stop_here();
         }
         // Nonlocal tunnelling: the paths re-traced at the new state. If they differ, the step is
         // repeated once with them; if they differ again it is accepted with the paths lagging
@@ -577,7 +655,7 @@ std::expected<results::Transient, base::Error> solve_transient_unobserved(
                             " s: the error estimate is not met",
                         base::ErrorContext{.index = attempt - 1, .value = ratio}};
                     run.unfinished = std::move(record);
-                    return run;
+                    return stop_here();
                 }
                 h = step_s * shrink;
                 ++run.rejected_steps;
@@ -591,7 +669,7 @@ std::expected<results::Transient, base::Error> solve_transient_unobserved(
         if (thermal) {
             if (auto e = detail::converged_temperature(device, dd.dofs(), x, T0)) {
                 run.stopped = std::move(*e);
-                return run;
+                return stop_here();
             }
         }
         results::TimePoint point{t_new, step_s, formula.order, ratio, bias};
@@ -646,6 +724,7 @@ std::expected<results::Transient, base::Error> solve_transient_unobserved(
             run.snapshots.push_back(snapshot(history.back()));
         }
     }
+    keep();
     return run;
 }
 
@@ -655,9 +734,9 @@ std::expected<results::Transient, base::Error> solve_transient_unobserved(
 std::expected<results::Transient, base::Error> solve_transient(
     const device::Device& device, std::span<const Waveform> waveforms,
     const TransientOptions& options, const results::NodeFields* initial,
-    const RunControl& control) {
+    const RunControl& control, const results::TransientResume* resume) {
     const detail::WallClock clock;
-    auto r = solve_transient_unobserved(device, waveforms, options, initial, control);
+    auto r = solve_transient_unobserved(device, waveforms, options, initial, control, resume);
     if (r) {
         r->run.provenance.wall_s = clock.seconds();
         detail::observe_result(*r);

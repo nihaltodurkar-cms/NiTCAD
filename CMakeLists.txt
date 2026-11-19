@@ -648,6 +648,8 @@ add_executable(nitcad_solve_test
   tests/solve/heterojunction_test.cpp
   tests/solve/insulator_test.cpp
   tests/solve/transient_test.cpp
+  tests/solve/transient_resume_test.cpp
+  tests/solve/trace_resume_test.cpp
   tests/solve/small_signal_test.cpp
   tests/solve/impact_ionization_test.cpp
   tests/solve/btbt_test.cpp
@@ -702,6 +704,9 @@ add_executable(nitcad_deck_test
   tests/deck/run_test.cpp
   tests/deck/analyses_test.cpp
   tests/deck/analyses_run_test.cpp
+  tests/deck/units_test.cpp
+  tests/deck/initial_test.cpp
+  tests/deck/transient_restart_test.cpp
   tests/deck/surface_mobility_test.cpp
   tests/deck/schottky_test.cpp
   tests/deck/quantum_confinement_test.cpp

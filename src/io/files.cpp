@@ -338,6 +338,21 @@ namespace checkpoint_key {
 constexpr std::uint16_t mesh_digest = 1, run_identity = 2, bias = 3, thermal_bias = 4,
                         fields = 5, nodes = 6;
 constexpr std::uint16_t provenance = 7;  // Unit 42; absent in older files
+// Unit 61 (RD4); absent in older files, which are steady.
+constexpr std::uint16_t kind = 8, transient_resume = 9, trace_resume = 10;
+}
+// A transient resume state (Unit 61, RD3).
+namespace resume_key {
+constexpr std::uint16_t state = 1, point = 2, time = 3, next_step = 4, landing = 5, attempt = 6, identity = 7,
+                        fields = 8;
+}
+namespace resume_state_key {
+constexpr std::uint16_t t = 1, x = 2, storage = 3, traps = 4, charges = 5;
+}
+// A trace resume state (Unit 61, RD5).
+namespace trace_resume_key {
+constexpr std::uint16_t state = 1, tangent = 2, step = 3, entry = 4, attempt = 5, points = 6, current_floor = 7,
+                        point = 8, identity = 9, finished = 10;
 }
 // Transient runs (Unit 42).
 namespace transient_key {
@@ -1204,6 +1219,155 @@ std::expected<results::Sweep, base::Error> load_sweep(const std::filesystem::pat
     return sweep;
 }
 
+namespace {
+
+// A transient resume state, every double bit for bit (Unit 61, RD4).
+Writer write_resume(const results::TransientResume& r) {
+    namespace k = resume_key;
+    namespace s = resume_state_key;
+    Writer w;
+    for (const auto& state : r.history) {
+        Writer h;
+        h.f64(s::t, state.t);
+        h.f64s(s::x, state.x);
+        h.f64s(s::storage, state.storage);
+        h.f64s(s::traps, state.traps);
+        h.f64s(s::charges, state.charges);
+        w.record(k::state, h);
+    }
+    w.record(k::point, write_time_point(r.point));
+    w.f64(k::time, r.time_s);
+    w.f64(k::next_step, r.next_step_s);
+    w.u64(k::landing, r.landing);
+    w.u64(k::attempt, r.attempt);
+    w.u64(k::identity, r.identity);
+    w.record(k::fields, write_fields(r.fields));
+    return w;
+}
+
+std::expected<results::TransientResume, base::Error> read_resume(const Reader& r) {
+    namespace k = resume_key;
+    namespace s = resume_state_key;
+    results::TransientResume out;
+    NITCAD_IO_TRY(states, r.records(k::state));
+    for (const Reader& h : states) {
+        results::TransientResume::State state;
+        NITCAD_IO_TRY(t, h.f64(s::t));
+        NITCAD_IO_TRY(x, h.f64s(s::x));
+        NITCAD_IO_TRY(storage, h.f64s_or_empty(s::storage));
+        NITCAD_IO_TRY(traps, h.f64s_or_empty(s::traps));
+        NITCAD_IO_TRY(charges, h.f64s_or_empty(s::charges));
+        state.t = t;
+        state.x = std::move(x);
+        state.storage = std::move(storage);
+        state.traps = std::move(traps);
+        state.charges = std::move(charges);
+        out.history.push_back(std::move(state));
+    }
+    if (out.history.empty() || out.history.size() > 3) {
+        return std::unexpected(corrupt("a transient resume state holds 1 to 3 states"));
+    }
+    NITCAD_IO_TRY(point_record, r.record(k::point));
+    NITCAD_IO_TRY(point, read_time_point(point_record));
+    out.point = std::move(point);
+    NITCAD_IO_TRY(time, r.f64(k::time));
+    NITCAD_IO_TRY(next, r.f64(k::next_step));
+    NITCAD_IO_TRY(landing, r.u64(k::landing));
+    NITCAD_IO_TRY(attempt, r.u64(k::attempt));
+    NITCAD_IO_TRY(identity, r.u64(k::identity));
+    NITCAD_IO_TRY(fields_record, r.record(k::fields));
+    NITCAD_IO_TRY(fields, read_fields(fields_record));
+    out.time_s = time;
+    out.next_step_s = next;
+    out.landing = static_cast<std::size_t>(landing);
+    out.attempt = static_cast<std::size_t>(attempt);
+    out.identity = identity;
+    out.fields = std::move(fields);
+    return out;
+}
+
+Writer write_trace_resume(const results::TraceResume& r) {
+    namespace k = trace_resume_key;
+    Writer w;
+    w.f64s(k::state, r.state);
+    w.f64s(k::tangent, r.tangent);
+    w.f64(k::step, r.step);
+    w.u64(k::entry, r.entry);
+    w.u64(k::attempt, r.attempt);
+    w.u64(k::points, r.points);
+    w.f64(k::current_floor, r.current_floor_A);
+    w.record(k::point, write_point(r.point));
+    w.u64(k::identity, r.identity);
+    w.u64(k::finished, r.finished ? 1 : 0);
+    return w;
+}
+
+std::expected<results::TraceResume, base::Error> read_trace_resume(const Reader& r) {
+    namespace k = trace_resume_key;
+    results::TraceResume out;
+    NITCAD_IO_TRY(state, r.f64s(k::state));
+    NITCAD_IO_TRY(tangent, r.f64s(k::tangent));
+    NITCAD_IO_TRY(step, r.f64(k::step));
+    NITCAD_IO_TRY(entry, r.u64(k::entry));
+    NITCAD_IO_TRY(attempt, r.u64(k::attempt));
+    NITCAD_IO_TRY(points, r.u64(k::points));
+    NITCAD_IO_TRY(floor, r.f64(k::current_floor));
+    NITCAD_IO_TRY(point_record, r.record(k::point));
+    NITCAD_IO_TRY(point, read_point(point_record));
+    NITCAD_IO_TRY(identity, r.u64(k::identity));
+    NITCAD_IO_TRY(finished, r.u64(k::finished));
+    if (state.size() != tangent.size()) {
+        return std::unexpected(corrupt("a trace resume state's tangent is not the size of its state"));
+    }
+    out.state = std::move(state);
+    out.tangent = std::move(tangent);
+    out.step = step;
+    out.entry = static_cast<std::size_t>(entry);
+    out.attempt = static_cast<std::size_t>(attempt);
+    out.points = static_cast<std::size_t>(points);
+    out.current_floor_A = floor;
+    out.point = std::move(point);
+    out.identity = identity;
+    out.finished = finished != 0;
+    return out;
+}
+
+}  // namespace
+
+std::expected<void, base::Error> save_trace_checkpoint(const std::filesystem::path& path, const mesh::Mesh& m,
+                                                       const results::Sweep& trace) {
+    if (!trace.resume) return std::unexpected(invalid("a trace checkpoint needs the trace's resume state"));
+    const results::BiasPoint& point = trace.resume->point;
+    Writer w;
+    w.u64(checkpoint_key::kind, static_cast<std::uint64_t>(CheckpointKind::trace));
+    w.u64(checkpoint_key::mesh_digest, mesh_digest(m));
+    w.u64(checkpoint_key::nodes, m.node_count());
+    w.u64(checkpoint_key::run_identity, trace.run.input_identity);
+    w.f64s(checkpoint_key::bias, point.bias_V);
+    w.f64s(checkpoint_key::thermal_bias, point.thermal_bias_K);
+    w.record(checkpoint_key::fields, write_fields(point.fields));
+    w.record(checkpoint_key::provenance, write_provenance(trace.run.provenance));
+    w.record(checkpoint_key::trace_resume, write_trace_resume(*trace.resume));
+    return write_file(path, Content::checkpoint, w);
+}
+
+std::expected<void, base::Error> save_transient_checkpoint(const std::filesystem::path& path,
+                                                           const mesh::Mesh& m, const results::Transient& run) {
+    if (!run.resume) return std::unexpected(invalid("a transient checkpoint needs the run's resume state"));
+    const results::TransientResume& r = *run.resume;
+    Writer w;
+    w.u64(checkpoint_key::kind, static_cast<std::uint64_t>(CheckpointKind::transient));
+    w.u64(checkpoint_key::mesh_digest, mesh_digest(m));
+    w.u64(checkpoint_key::nodes, m.node_count());
+    w.u64(checkpoint_key::run_identity, run.run.input_identity);
+    w.f64s(checkpoint_key::bias, r.point.bias_V);
+    w.f64s(checkpoint_key::thermal_bias, std::vector<double>{});
+    w.record(checkpoint_key::fields, write_fields(r.fields));
+    w.record(checkpoint_key::provenance, write_provenance(run.run.provenance));
+    w.record(checkpoint_key::transient_resume, write_resume(r));
+    return write_file(path, Content::checkpoint, w);
+}
+
 std::expected<void, base::Error> save_checkpoint(const std::filesystem::path& path,
                                                  const mesh::Mesh& m,
                                                  const results::RunRecord& run,
@@ -1251,6 +1415,22 @@ std::expected<Checkpoint, base::Error> load_checkpoint(const std::filesystem::pa
         NITCAD_IO_TRY(p, r.record(checkpoint_key::provenance));
         NITCAD_IO_TRY(provenance, read_provenance(p));
         c.provenance = std::move(provenance);
+    }
+    // Unit 61 (RD4): the kind, steady when absent; a transient checkpoint's resume state.
+    NITCAD_IO_TRY(kind, r.u64_or(checkpoint_key::kind, 0));
+    if (kind == static_cast<std::uint64_t>(CheckpointKind::transient)) {
+        c.kind = CheckpointKind::transient;
+        NITCAD_IO_TRY(record, r.record(checkpoint_key::transient_resume));
+        NITCAD_IO_TRY(resume, read_resume(record));
+        c.transient = std::move(resume);
+    } else if (kind == static_cast<std::uint64_t>(CheckpointKind::trace)) {
+        c.kind = CheckpointKind::trace;
+        NITCAD_IO_TRY(record, r.record(checkpoint_key::trace_resume));
+        NITCAD_IO_TRY(resume, read_trace_resume(record));
+        c.trace = std::move(resume);
+    } else if (kind != 0) {
+        return std::unexpected(invalid("checkpoint '" + path.string() + "' is of a kind this build does not know (" +
+                                       std::to_string(kind) + ")"));
     }
     return c;
 }

@@ -183,13 +183,14 @@ constexpr std::array<KeyInfo, 26> solver_keys{{
     {"minority_floor", 0, false, "off", "densities against eps of the majority", on_off, {}, {}},
 }};
 
-constexpr std::array<KeyInfo, 3> sweep_keys{{
+constexpr std::array<KeyInfo, 4> sweep_keys{{
     {"contact", 1, true, "<series>", "a contact's bias: a value, a list or first : last : step", {}, {}, {}},
     {"thermal", 1, true, "<series>", "a thermal contact's temperature, K", {}, {}, {}},
     {"restart", 0, false, "<checkpoint file>", "continue after the checkpoint's point", {}, {}, {}},
+    {"initial", 0, false, "<checkpoint file>", "the checkpoint's fields as the starting guess", {}, {}, {}},
 }};
 
-constexpr std::array<KeyInfo, 12> transient_keys{{
+constexpr std::array<KeyInfo, 14> transient_keys{{
     {"contact", 1, true, "constant(0)", "a contact's waveform", waveforms, {}, {}},
     {"t_end", 0, false, "<s>", "the run's end time (required)", {}, {}, {}},
     {"dt_initial", 0, false, "<s>", "the first time step", {}, {}, {}},
@@ -202,16 +203,20 @@ constexpr std::array<KeyInfo, 12> transient_keys{{
     {"output_times", 0, false, "<series>", "times at which snapshots are kept", {}, {}, {}},
     {"fields_every_step", 0, false, "off", "a snapshot at every step", on_off, {}, {}},
     {"thermal", 1, true, "<K>", "a thermal contact's temperature, held", {}, {}, {}},
+    {"restart", 0, false, "<checkpoint file>", "continue after the checkpoint's last step", {}, {}, {}},
+    {"initial", 0, false, "<checkpoint file>", "the checkpoint's fields as the starting guess", {}, {}, {}},
 }};
 
-constexpr std::array<KeyInfo, 4> small_signal_keys{{
+constexpr std::array<KeyInfo, 6> small_signal_keys{{
     {"contact", 1, true, "<series>", "a contact's operating points", {}, {}, {}},
     {"thermal", 1, true, "<series>", "a thermal contact's temperature, K", {}, {}, {}},
     {"frequencies", 0, false, "<series>", "the frequencies, Hz (required)", {}, {}, {}},
     {"field_frequencies", 0, false, "<series>", "frequencies at which the fields are kept", {}, {}, {}},
+    {"restart", 0, false, "<checkpoint file>", "continue after the checkpoint's operating point", {}, {}, {}},
+    {"initial", 0, false, "<checkpoint file>", "the checkpoint's fields as the starting guess", {}, {}, {}},
 }};
 
-constexpr std::array<KeyInfo, 10> trace_keys{{
+constexpr std::array<KeyInfo, 12> trace_keys{{
     {"contact", 0, false, "<name>", "the traced contact (required)", {}, {}, {}},
     {"end", 0, false, "<V>", "the traced contact's end bias (required)", {}, {}, {}},
     {"start", 1, true, "0", "a contact's bias at the start", {}, {}, {}},
@@ -222,6 +227,8 @@ constexpr std::array<KeyInfo, 10> trace_keys{{
     {"max_points", 0, false, "<n>", "the most points traced", {}, {}, {}},
     {"density_floor", 0, false, "<cm^-3>", "the density floor of the arc-length scale", {}, {}, {}},
     {"thermal", 1, true, "<K>", "a thermal contact's temperature, held", {}, {}, {}},
+    {"restart", 0, false, "<checkpoint file>", "continue after the checkpoint's point", {}, {}, {}},
+    {"initial", 0, false, "<checkpoint file>", "the checkpoint's fields as the starting guess", {}, {}, {}},
 }};
 
 // [adapt] (Unit 17, AD7).
