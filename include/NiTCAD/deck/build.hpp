@@ -124,7 +124,9 @@
 //   [trace]           (Unit 43; solve/trace.hpp) contact = <name> and end = <V> (required);
 //                     start <name> = <V>  (each contact's bias at the start, default 0);
 //                     step, max_step, min_step, current_limit, max_points, density_floor;
-//                     thermal <name> = <K>
+//                     thermal <name> = <K>;
+//                     restart = <checkpoint file>  (a trace's own checkpoint: it continues after the
+//                       point it holds, bit for bit; Unit 61 RD5)
 //   [output]          sweep, device, mesh, checkpoint, table = <file>  (relative to the deck);
 //                     transient, small_signal = <file>  (Unit 43). Each analysis takes only what
 //                     it writes: equilibrium device, mesh, checkpoint; sweep and trace sweep,

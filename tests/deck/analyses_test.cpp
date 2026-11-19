@@ -257,7 +257,7 @@ TEST_CASE("deck analyses: every mistake names its line", "[deck]") {
     expect(failure(d + "[small_signal]\nfrequencies = logspace(1, 1e6)\n"),
            at(1) + "logspace takes (first, last, count)");
     expect(failure(d + "[small_signal]\nfrequencies = 1e6\nrestart = c.nitckpt\n"),
-           at(2) + "restart is for [sweep] (DK9) and [transient] (Unit 61), not [small_signal]");
+           at(2) + "restart is for [sweep] (DK9), [transient] and [trace] (Unit 61), not [small_signal]");
     expect(failure(d + "[small_signal]\nfrequencies = 1e6\nvoltage anode = 1\n"),
            at(2) + "unknown key 'voltage anode' in [small_signal]");
 
@@ -267,8 +267,8 @@ TEST_CASE("deck analyses: every mistake names its line", "[deck]") {
     expect(failure(d + "[trace]\ncontact = anode\nend = 1\nstart anode = 0\nstart anode = 1\n"),
            at(4) + "a second start for 'anode'");
     expect(failure(d + "[trace]\ncontact = anode\nend = 1\nmax_points = 0\n"), at(3) + "");
-    expect(failure(d + "[trace]\ncontact = anode\nend = 1\nrestart = c.nitckpt\n"),
-           at(3) + "restart is for [sweep] (DK9) and [transient] (Unit 61), not [trace]");
+    // Unit 61 (RD5): a trace takes a restart.
+    CHECK(must(d + "[trace]\ncontact = anode\nend = 1\nrestart = c.nitckpt\n").restart.filename() == "c.nitckpt");
 
     expect(failure(d + "[transient]\nt_end = 1e-9\n[trace]\ncontact = anode\nend = 1\n"),
            "the deck needs exactly one analysis");

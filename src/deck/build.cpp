@@ -1404,7 +1404,7 @@ std::expected<void, base::Error> Builder::analysis(Plan& plan) const {
 
 // A refusal of `restart` outside [sweep] (DK9, Unit 43 AN6).
 base::Error Builder::no_restart(const Entry& e, const Section& s) const {
-    return at(e.line, "restart is for [sweep] (DK9) and [transient] (Unit 61), not [" + s.kind + "]");
+    return at(e.line, "restart is for [sweep] (DK9), [transient] and [trace] (Unit 61), not [" + s.kind + "]");
 }
 
 // `initial` and `restart` of an analysis (Unit 61, RD2): the files, relative to the deck. Both in one
@@ -1544,6 +1544,7 @@ std::expected<void, base::Error> Builder::trace(const Section& s, Plan& plan) co
     std::vector<bool> given(o.start_V.size(), false), given_t;
     bool has_contact = false, has_end = false;
     const Entry* initial = nullptr;
+    const Entry* restart = nullptr;
     for (const Entry& e : s.entries) {
         NITCAD_DECK_TRY(thermal, held_temperature(e, plan, given_t));
         if (thermal) continue;
@@ -1578,14 +1579,14 @@ std::expected<void, base::Error> Builder::trace(const Section& s, Plan& plan) co
         } else if (e.key == "initial") {
             initial = &e;
         } else if (e.key == "restart") {
-            return std::unexpected(no_restart(e, s));
+            restart = &e;
         } else {
             return std::unexpected(unknown(e, s));
         }
     }
     if (!has_contact) return std::unexpected(at(s.line, "[trace] needs contact, the swept contact"));
     if (!has_end) return std::unexpected(at(s.line, "[trace] needs end, the swept contact's last bias"));
-    NITCAD_DECK_CHECK(starts(initial, nullptr, plan));
+    NITCAD_DECK_CHECK(starts(initial, restart, plan));
     return {};
 }
 

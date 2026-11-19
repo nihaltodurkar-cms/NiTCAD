@@ -3,7 +3,8 @@
 // it, and the joined run equals the uninterrupted run bit for bit. The checkpoint round-trips bit
 // for bit; a damaged file, another run's state, the final step, a steady checkpoint as a restart
 // and a transient checkpoint as initial or as a sweep's restart are refused; `nitcad run` completes
-// a restart (exit 0); a stopped run writes its checkpoint (the cancelled runs above).
+// a restart (exit 0); a stopped run writes its checkpoint (the cancelled runs above). [trace]
+// restart and checkpoint likewise (RD5; RG5 deck part).
 #include <catch2/catch_test_macros.hpp>
 
 #include <bit>
@@ -209,4 +210,72 @@ TEST_CASE("deck transient restart: nitcad run completes a restart (RG8)",
     CHECK(rest.status == 0);
     CHECK(io::load_transient(dir / "rest.nittran").has_value());
 
+}
+
+// [trace] restart (Unit 61, RD5; RG5 deck part): a stopped trace deck continued equals the
+// uninterrupted one bit for bit; its checkpoint is a trace's, still a steady point for a sweep.
+TEST_CASE("deck trace restart: a stopped trace continued equals the uninterrupted trace (RG5)", "[deck][restart]") {
+    const fs::path dir = scratch("trace_restart");
+    const std::string trace = "[trace]\ncontact = anode\nend = 0.9\nstep = 0.05\nmax_step = 0.1\n";
+    const auto run_trace = [&](const std::string& text, std::size_t stop_at) {
+        const deck::Plan plan = must(text, dir);
+        std::stop_source source;
+        std::size_t count = 0;
+        solve::RunControl control{.stop = source.get_token()};
+        if (stop_at > 0) {
+            control.progress = [&](const solve::Progress& p) {
+                if (p.phase == solve::Phase::bias && p.point_count == 0 && p.converged && ++count == stop_at)
+                    source.request_stop();
+            };
+        }
+        auto r = deck::run(plan, control);
+        if (!r) FAIL(r.error().message);
+        REQUIRE(r->sweep.has_value());
+        return std::move(*r->sweep);
+    };
+    const auto full = run_trace(diode_device + trace, 0);
+    REQUIRE_FALSE(full.stopped.has_value());
+    const auto mesh = must(diode_device + trace, dir).device.mesh();
+    for (const std::size_t stop_at : {std::size_t{1}, std::size_t{5}}) {
+        INFO("stopped at converged attempt " << stop_at);
+        const auto first = run_trace(diode_device + trace + "[output]\ncheckpoint = part.nitckpt\n", stop_at);
+        REQUIRE(first.stopped.has_value());
+        const std::size_t k = first.points.size() - 1;
+        const auto c = io::load_checkpoint(dir / "part.nitckpt", mesh);
+        REQUIRE(c.has_value());
+        CHECK(c->kind == io::CheckpointKind::trace);
+        REQUIRE(c->trace.has_value());
+        CHECK(same(c->trace->state, first.resume->state));
+        CHECK(same(c->trace->tangent, first.resume->tangent));
+        CHECK(same(c->trace->step, first.resume->step));
+        CHECK(c->trace->entry == first.resume->entry);
+        CHECK(c->trace->points == first.resume->points);
+        CHECK(same(c->trace->point.terminal_current, first.resume->point.terminal_current));
+
+        const auto rest = run_trace(diode_device + trace + "restart = part.nitckpt\n[output]\nsweep = rest.nitsweep\n", 0);
+        REQUIRE_FALSE(rest.stopped.has_value());
+        REQUIRE(rest.points.size() == full.points.size() - k);
+        for (std::size_t i = 0; i < rest.points.size(); ++i) {
+            INFO("point " << k + i);
+            CHECK(same(rest.points[i].bias_V, full.points[k + i].bias_V));
+            CHECK(same(rest.points[i].terminal_current, full.points[k + i].terminal_current));
+            CHECK(same(rest.points[i].fields.potential_V, full.points[k + i].fields.potential_V));
+        }
+        CHECK(io::load_sweep(dir / "rest.nitsweep")->points.size() == rest.points.size());
+    }
+    // Refusals: a steady checkpoint, another trace. The trace checkpoint is still a steady point:
+    // initial takes its fields.
+    REQUIRE(deck::run(must(diode_device + "[sweep]\ncontact anode = 0.2\n[output]\ncheckpoint = steady.nitckpt\n", dir)));
+    const auto refused = [&](const std::string& text, const std::string& what) {
+        INFO(text);
+        const auto r = deck::run(must(text, dir));
+        REQUIRE_FALSE(r.has_value());
+        INFO(r.error().message);
+        CHECK(r.error().message.find(what) != std::string::npos);
+    };
+    refused(diode_device + trace + "restart = steady.nitckpt\n", "holds no trace's resume state");
+    std::string other = trace;
+    other.replace(other.find("end = 0.9"), 9, "end = 0.8");
+    refused(diode_device + other + "restart = part.nitckpt\n", "belongs to another run");
+    CHECK(deck::run(must(diode_device + "[sweep]\ncontact anode = 0.3\ninitial = part.nitckpt\n", dir)));
 }
