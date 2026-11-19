@@ -73,6 +73,8 @@ struct ViewSettings {
     bool opaque = false;                         // insulators drawn opaque
     bool contacts = true;                        // electrode slabs and contact pads
     bool perspective = false;
+    bool enhanced = true;                        // the enhanced 3D look (Unit 26f, KD5); false classic
+    bool axis_box = true;  // the enhanced look's axis box (Unit 26h, JD1, JQ3)
     std::optional<float> azimuth, elevation;     // 3D camera, degrees (render's defaults when empty)
     // Slice planes and the clipping box in um, converted to cm as `nitcad plot` converts its options.
     struct Slice {
@@ -133,6 +135,26 @@ void fit(ViewSettings& s);
 // A built scene's camera set from the settings (3D: the angles and projection; any: zoom and pan), so
 // a camera move redraws without building the scene again; build_scene applies it too.
 void apply_camera(render::FieldScene& scene, const ViewSettings& s);
+
+// Smooth camera moves (Unit 26h, JD5). A pose is the camera a ViewSettings holds (the angles as render
+// draws them, defaults filled in). camera_between gives the pose a fraction t of the way along a move,
+// eased in and out (smoothstep): the azimuth the shorter way round, elevation, zoom and pan linearly in
+// the same ease. t <= 0 and t >= 1 give the endpoints exactly.
+struct CameraPose {
+    float azimuth_deg = 0.0f;
+    float elevation_deg = 0.0f;
+    float zoom = 1.0f;
+    float pan_x = 0.0f;
+    float pan_y = 0.0f;
+    friend bool operator==(const CameraPose&, const CameraPose&) = default;
+};
+[[nodiscard]] CameraPose camera_pose(const ViewSettings& s) noexcept;
+void set_camera_pose(ViewSettings& s, const CameraPose& p) noexcept;
+[[nodiscard]] CameraPose camera_between(const CameraPose& from, const CameraPose& to, float t) noexcept;
+// Whether a camera move is smooth: the app wants it and Windows shows animations, or a test forces it.
+[[nodiscard]] constexpr bool smooth_moves(bool app_on, bool windows_shows, bool forced) noexcept {
+    return forced || (app_on && windows_shows);
+}
 
 using Scene = std::variant<render::FieldScene, render::PlotScene>;
 

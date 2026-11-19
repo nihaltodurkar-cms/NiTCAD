@@ -50,12 +50,18 @@ enum class Shading : std::uint8_t {
     field,  // the colormap at the interpolated position
 };
 
+// How the enhanced look shades a batch (Unit 26g, MD1): matte as any solid; metal, aluminium with a tight
+// highlight and a reflected sky/ground (electrodes); glass, more opaque toward grazing angles (translucent
+// insulators). Classic ignores it.
+enum class Finish : std::uint8_t { matte, metal, glass };
+
 struct TriangleBatch {
     std::string name;  // what it shows: a region class, "field", "slice", "electrode"
     Shading shading = Shading::flat;
     bool lit = true;           // directional light and ambient (3D); 2D maps are unlit
     bool transparent = false;  // drawn with order-independent transparency (alpha below 1)
     std::vector<SceneVertex> vertices;  // three per triangle, counterclockwise from the front
+    Finish finish = Finish::matte;
 };
 
 struct LineBatch {
@@ -71,6 +77,11 @@ struct Colorbar {
     ColorScale scale;
     std::string title;  // the field and its unit, e.g. "n (cm⁻³)"
 };
+
+// How a 3D FieldScene is shaded (Unit 26f, KD1): classic, one light and ambient on white, as since Unit 25a;
+// enhanced, key, fill and rim lights, a sky/ground ambient and a soft highlight, the feature edges
+// that set_look adds, over a vertical gradient. The render layer defaults to classic; 2D ignores it.
+enum class Look : std::uint8_t { classic, enhanced };
 
 enum class Projection : std::uint8_t { orthographic, perspective };
 
@@ -102,6 +113,12 @@ struct FieldScene {
     Float3 lo{};  // bounds of everything drawn, um
     Float3 hi{};
     bool axis_triad = true;
+    Look look = Look::classic;  // Unit 26f (KD1): 3D shading; set with set_look (edges.hpp)
+    // Unit 26g (MD5): the enhanced look's soft shadow on the floor under the device; false for clipped
+    // and exploded views. Drawn only when the camera looks from above (elevation at least -5 degrees).
+    bool ground_shadow = true;
+    // Unit 26h (JD1, JQ3): the enhanced look's axis box with um ticks (axes3d.hpp); classic never draws it.
+    bool show_axis_box = true;
 };
 
 // --- fields -------------------------------------------------------------------------------------

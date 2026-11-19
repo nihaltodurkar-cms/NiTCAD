@@ -13,7 +13,7 @@ constexpr std::uint16_t vk_tab = 0x09, vk_space = 0x20, vk_end = 0x23, vk_home =
 
 constexpr std::array<std::string_view, 7> bar{"&File", "&Edit", "&Device", "&Mesh", "&Physics", "&Simulation", "&View"};
 
-constexpr std::array<CommandInfo, 51> list{{
+constexpr std::array<CommandInfo, 58> list{{
     {Command::new_deck, "&File", "&New deck", {'N', true}, "Ctrl+N"},
     {Command::open_deck, "&File", "&Open deck...", {'O', true}, "Ctrl+O"},
     {Command::open_result, "&File", "Open &result...", {'R', true, true}, "Ctrl+Shift+R"},
@@ -57,6 +57,15 @@ constexpr std::array<CommandInfo, 51> list{{
     {Command::mesh_quality, "&View", "Mesh &quality", {'Q', true, true}, "Ctrl+Shift+Q"},
     {Command::show_regions, "&View", "S&how every region", {'H', true, true}, "Ctrl+Shift+H"},
     {Command::hover_readout, "&View", "Displa&y hover readout", {}, ""},
+    // Unit 26h (JD4): the numpad keys are the view's own (viewport.cpp), as the arrows are, so the deck
+    // editor still types digits.
+    {Command::view_front, "&View", "&Front", {}, "Num 1", "Loo&k from"},
+    {Command::view_back, "&View", "&Back", {}, "Ctrl+Num 1", "Loo&k from"},
+    {Command::view_left, "&View", "&Left", {}, "Ctrl+Num 3", "Loo&k from"},
+    {Command::view_right, "&View", "&Right", {}, "Num 3", "Loo&k from"},
+    {Command::view_top, "&View", "&Top", {}, "Num 7", "Loo&k from"},
+    {Command::view_bottom, "&View", "B&ottom", {}, "Ctrl+Num 7", "Loo&k from"},
+    {Command::view_isometric, "&View", "&Isometric", {}, "Num 0", "Loo&k from"},
     {Command::next_tab, "&View", "Next &tab", {vk_tab, true}, "Ctrl+Tab"},
     {Command::previous_tab, "&View", "Pre&vious tab", {vk_tab, true, true}, "Ctrl+Shift+Tab"},
     {Command::next_pane, "&View", "Ne&xt pane", {vk_f6}, "F6"},

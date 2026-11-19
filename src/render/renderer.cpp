@@ -2,6 +2,9 @@
 // D3D11On12 for text, colorbars, axes and plots.
 #include "NiTCAD/render/image.hpp"
 
+#include "NiTCAD/render/axes3d.hpp"
+#include "NiTCAD/render/color.hpp"
+
 #include <windows.h>
 #include <d2d1_3.h>
 #include <d3d11on12.h>
@@ -25,6 +28,7 @@
 #include <utility>
 #include <vector>
 
+#include "background_ps.h"
 #include "composite_ps.h"
 #include "fullscreen_vs.h"
 #include "line_ps.h"
@@ -32,6 +36,8 @@
 #include "mesh_vs.h"
 #include "opaque_ps.h"
 #include "resolve_ps.h"
+#include "shadow_ps.h"
+#include "shadow_vs.h"
 #include "transparent_ps.h"
 
 namespace NiTCAD::render {
@@ -80,6 +86,8 @@ using Mat4 = std::array<float, 16>;  // row-major, row vectors: p' = p M
 struct View {
     Mat4 view_projection{};
     std::array<double, 3> right{}, up{}, forward{};
+    std::array<double, 3> eye_position{};  // perspective only, um
+    bool perspective = false;
 };
 
 double dotd(const std::array<double, 3>& a, const std::array<double, 3>& b) {
@@ -160,10 +168,44 @@ View make_view(const FieldScene& s, double aspect) {
         m[13] = static_cast<float>(ty * sy);
         m[14] = static_cast<float>((tz + D) * fz / (fz - n) - fz * n / (fz - n));
         m[15] = static_cast<float>(tz + D);
+        // The eye: the point with vx = vy = 0 and w = vz + D = 0.
+        for (std::size_t i = 0; i < 3; ++i) v.eye_position[i] = c[i] + cx * r[i] + cy * u[i] - D * f[i];
+        v.perspective = true;
     }
     v.view_projection = m;
     return v;
 }
+
+// The light from the upper left, over the viewer's shoulder (both looks).
+std::array<double, 3> key_light(const View& v) {
+    std::array<double, 3> L{};
+    for (std::size_t i = 0; i < 3; ++i) L[i] = -v.forward[i] * 0.75 + v.up[i] * 0.55 - v.right[i] * 0.35;
+    return unitd(L);
+}
+
+}  // namespace
+
+FrameLighting frame_lighting(const FieldScene& s, double aspect) noexcept {
+    FrameLighting out;
+    if (s.look != Look::enhanced || s.dimension != 3) return out;
+    const View v = make_view(s, aspect);
+    const std::array<double, 3> L = key_light(v);
+    // The fill from the lower right, on the other side of the eye from the key.
+    std::array<double, 3> F{};
+    for (std::size_t i = 0; i < 3; ++i) F[i] = -v.forward[i] * 0.6 - v.up[i] * 0.25 + v.right[i] * 0.75;
+    F = unitd(F);
+    for (std::size_t i = 0; i < 3; ++i) {
+        out.key[i] = static_cast<float>(L[i]);
+        out.fill[i] = static_cast<float>(F[i]);
+        out.up[i] = static_cast<float>(v.up[i]);
+        out.eye[i] = static_cast<float>(v.perspective ? v.eye_position[i] : -v.forward[i]);
+    }
+    out.perspective = v.perspective;
+    out.enhanced = true;
+    return out;
+}
+
+namespace {
 
 // Pixel position of a world point in a view rectangle.
 D2D1_POINT_2F project(const View& v, const Float3& p, const D2D1_RECT_F& rect) {
@@ -188,9 +230,23 @@ struct FrameConstants {
     float line_width;
     float colormap[256][4];
     float no_data[4];
-    float pad[36];
+    // The enhanced look (Unit 26f, KD2, KD4); zero for classic (see scene.hlsl).
+    float eye[3];  // toward the viewer (orthographic) or the camera's position (perspective), world
+    float style;   // 1 enhanced
+    float up[3];
+    float perspective;  // 1 when eye is a position
+    float fill[3];
+    float spare;
+    float bg_top[4];
+    float bg_bottom[4];
+    float view_rect[4];
+    float half_vector[3];
+    float spare2;
+    float shadow_box[4];    // Unit 26g (MD5): footprint x lo, z lo, x hi, z hi, um
+    float shadow_plane[4];  // floor y (um), margin (um), alpha at the centre, unused
 };
 static_assert(sizeof(FrameConstants) % 256 == 0);
+static_assert(sizeof(FrameConstants) == 4352);  // the HLSL block's size; the fields match scene.hlsl
 
 struct MeshVertex {
     float position[3];
@@ -263,7 +319,7 @@ struct Renderer::Impl {
     ComPtr<ID3D12InfoQueue> info;
 
     ComPtr<ID3D12RootSignature> root;
-    ComPtr<ID3D12PipelineState> opaque, transparent, line_depth, line_top, composite, resolve;
+    ComPtr<ID3D12PipelineState> opaque, transparent, line_depth, line_top, composite, resolve, background, shadow;
 
     ComPtr<ID3D11Device> d11;
     ComPtr<ID3D11DeviceContext> d11_context;
@@ -342,6 +398,9 @@ std::expected<void, base::Error> Renderer::Impl::create(const RendererOptions& o
             DXGI_ADAPTER_DESC1 desc{};
             a->GetDesc1(&desc);
             if (desc.Flags & DXGI_ADAPTER_FLAG_SOFTWARE) continue;
+            // The Microsoft Basic Render Driver (WARP behind a display adapter, as on CI runners) is not
+            // flagged software but is no hardware adapter.
+            if (desc.VendorId == 0x1414 && desc.DeviceId == 0x8c) continue;
             if (SUCCEEDED(D3D12CreateDevice(a.Get(), D3D_FEATURE_LEVEL_11_0, __uuidof(ID3D12Device), nullptr))) {
                 adapter = a;
                 break;
@@ -535,6 +594,21 @@ std::expected<void, base::Error> Renderer::Impl::create_pipelines() {
         d.BlendState.RenderTarget[0].BlendEnable = FALSE;
         NITCAD_HR(device->CreateGraphicsPipelineState(&d, IID_PPV_ARGS(&resolve)),
                   "CreateGraphicsPipelineState resolve");
+        d.PS = {background_ps_bytecode, sizeof(background_ps_bytecode)};
+        NITCAD_HR(device->CreateGraphicsPipelineState(&d, IID_PPV_ARGS(&background)),
+                  "CreateGraphicsPipelineState background");
+        // Unit 26g (MD5): the ground shadow, blended over the gradient (alpha stays 1).
+        d.VS = {shadow_vs_bytecode, sizeof(shadow_vs_bytecode)};
+        d.PS = {shadow_ps_bytecode, sizeof(shadow_ps_bytecode)};
+        auto& b = d.BlendState.RenderTarget[0];
+        b.BlendEnable = TRUE;
+        b.SrcBlend = D3D12_BLEND_SRC_ALPHA;
+        b.DestBlend = D3D12_BLEND_INV_SRC_ALPHA;
+        b.SrcBlendAlpha = D3D12_BLEND_ONE;
+        b.DestBlendAlpha = D3D12_BLEND_INV_SRC_ALPHA;
+        b.BlendOp = b.BlendOpAlpha = D3D12_BLEND_OP_ADD;
+        NITCAD_HR(device->CreateGraphicsPipelineState(&d, IID_PPV_ARGS(&shadow)),
+                  "CreateGraphicsPipelineState shadow");
     }
     return {};
 }
@@ -749,8 +823,9 @@ struct Ink {
     }
 };
 
+// The enhanced 3D look (Unit 26g, MD7): a lighter frame, and ticks inside the bar's right edge as well.
 void draw_colorbar(Ink& ink, IDWriteTextFormat* text, IDWriteTextFormat* minor_text, const Colorbar& bar,
-                   const D2D1_RECT_F& area) {
+                   const D2D1_RECT_F& area, bool enhanced) {
     const float bw = 16.0f;
     const float top = area.top + 28.0f, bottom = area.bottom - 12.0f;
     const float left = area.left + 6.0f;
@@ -761,11 +836,13 @@ void draw_colorbar(Ink& ink, IDWriteTextFormat* text, IDWriteTextFormat* minor_t
         const float y0 = bottom - (bottom - top) * static_cast<float>(k + 1) / steps;
         ink.dc->FillRectangle({left, y0 - 0.5f, left + bw, y1 + 0.5f}, ink.color(d2(sample(bar.map, t))));
     }
-    ink.dc->DrawRectangle({left, top, left + bw, bottom}, ink.color({0.3f, 0.32f, 0.35f, 1.0f}), 1.0f);
+    const D2D1_COLOR_F frame = enhanced ? D2D1_COLOR_F{0.45f, 0.47f, 0.5f, 1.0f} : D2D1_COLOR_F{0.3f, 0.32f, 0.35f, 1.0f};
+    ink.dc->DrawRectangle({left, top, left + bw, bottom}, ink.color(frame), 1.0f);
     for (const Tick& t : bar.scale.ticks()) {
         const float y = bottom - (bottom - top) * static_cast<float>(t.position);
         const float len = t.major ? 5.0f : 3.0f;
-        ink.dc->DrawLine({left + bw, y}, {left + bw + len, y}, ink.color({0.3f, 0.32f, 0.35f, 1.0f}), 1.0f);
+        ink.dc->DrawLine({left + bw, y}, {left + bw + len, y}, ink.color(frame), 1.0f);
+        if (enhanced) ink.dc->DrawLine({left + bw - len, y}, {left + bw, y}, ink.color(frame), 1.0f);
         if (t.major && !t.label.empty()) ink.text(t.label, minor_text, left + bw + 8.0f, y, 0, 1);
     }
     ink.text(bar.title, text, left, area.top + 6.0f, 0, 0);
@@ -799,7 +876,9 @@ std::expected<void, base::Error> Renderer::Impl::render_field(const FieldScene& 
                             x.value,
                             {x.color.r, x.color.g, x.color.b, x.color.a}});
         }
-        const std::uint32_t flags = (b.lit && s.dimension == 3 ? 1u : 0u) | (b.shading == Shading::field ? 2u : 0u);
+        // Bits 3-4, the finish (Unit 26g, MD1): 1 metal, 2 glass; read only by the enhanced look.
+        const std::uint32_t flags = (b.lit && s.dimension == 3 ? 1u : 0u) | (b.shading == Shading::field ? 2u : 0u) |
+                                    (static_cast<std::uint32_t>(b.finish) << 3);
         ranges.push_back({first, b.vertices.size(), flags, b.transparent});
     }
     std::vector<LineVertex> lines;
@@ -828,18 +907,36 @@ std::expected<void, base::Error> Renderer::Impl::render_field(const FieldScene& 
         }
         line_ranges.push_back({first, lines.size() - first, l.width_px, l.on_top});
     }
+    // The enhanced look (Unit 26f): its lights, and the gradient behind a 3D view (KD2, KD4). Its
+    // feature edges are already among the scene's lines (set_look).
+    const FrameLighting lighting = frame_lighting(s, aspect);
+    const bool enhanced = lighting.enhanced;
+    // Unit 26g (MD5): not on clipped or exploded views, nor when looking up from below.
+    const bool shadowed = enhanced && s.ground_shadow && s.camera.elevation_deg >= -5.0f;
+    // Unit 26h (JD1): the axis box, its edges depth-tested with the scene's lines, its ticks on Direct2D.
+    const AxisBox box = enhanced && s.show_axis_box ? axis_box(s, w, h) : AxisBox{};
+    if (!box.edges.empty()) {
+        const std::size_t first = lines.size();
+        const float c[4] = {0.55f, 0.58f, 0.62f, 1.0f};
+        for (const auto& [a, b] : box.edges) {
+            const auto vert = [&](const Float3& p, const Float3& q, float side) {
+                lines.push_back({{p[0], p[1], p[2]}, {q[0], q[1], q[2]}, side, {c[0], c[1], c[2], c[3]}});
+            };
+            vert(a, b, -1.0f);
+            vert(a, b, 1.0f);
+            vert(b, a, -1.0f);
+            vert(a, b, -1.0f);
+            vert(b, a, -1.0f);
+            vert(b, a, 1.0f);
+        }
+        line_ranges.push_back({first, lines.size() - first, 1.0f, false});
+    }
 
     // Constants: one block per draw.
     FrameConstants base{};
     base.view_projection = v.view_projection;
     {
-        // The light from the upper left, over the viewer's shoulder.
-        std::array<double, 3> L{};
-        for (int i = 0; i < 3; ++i) {
-            const auto ii = static_cast<std::size_t>(i);
-            L[ii] = -v.forward[ii] * 0.75 + v.up[ii] * 0.55 - v.right[ii] * 0.35;
-        }
-        L = unitd(L);
+        const std::array<double, 3> L = key_light(v);
         base.light[0] = static_cast<float>(L[0]);
         base.light[1] = static_cast<float>(L[1]);
         base.light[2] = static_cast<float>(L[2]);
@@ -847,6 +944,39 @@ std::expected<void, base::Error> Renderer::Impl::render_field(const FieldScene& 
     base.ambient = 0.38f;
     base.viewport[0] = (view.right - view.left) * supersample;
     base.viewport[1] = (view.bottom - view.top) * supersample;
+    if (enhanced) {
+        for (std::size_t i = 0; i < 3; ++i) {
+            base.eye[i] = lighting.eye[i];
+            base.up[i] = lighting.up[i];
+            base.fill[i] = lighting.fill[i];
+        }
+        base.perspective = lighting.perspective ? 1.0f : 0.0f;
+        base.style = 1.0f;
+        const float top[4] = {0.86f, 0.89f, 0.93f, 1.0f};
+        const float bottom[4] = {0.99f, 0.99f, 1.0f, 1.0f};
+        std::memcpy(base.bg_top, top, sizeof top);
+        std::memcpy(base.bg_bottom, bottom, sizeof bottom);
+        base.view_rect[0] = view.left * supersample;
+        base.view_rect[1] = view.top * supersample;
+        base.view_rect[2] = (view.right - view.left) * supersample;
+        base.view_rect[3] = (view.bottom - view.top) * supersample;
+        // The ground shadow (MD5): 4% of the height below the bounds, fading out one twelfth of the
+        // largest extent outside the footprint.
+        const float extent = std::max({s.hi[0] - s.lo[0], s.hi[1] - s.lo[1], s.hi[2] - s.lo[2]});
+        base.shadow_box[0] = s.lo[0];
+        base.shadow_box[1] = s.lo[2];
+        base.shadow_box[2] = s.hi[0];
+        base.shadow_box[3] = s.hi[2];
+        base.shadow_plane[0] = s.lo[1] - 0.04f * (s.hi[1] - s.lo[1]);
+        base.shadow_plane[1] = extent / 12.0f;
+        base.shadow_plane[2] = 0.28f;
+        if (!lighting.perspective) {
+            std::array<double, 3> hv{};
+            for (std::size_t i = 0; i < 3; ++i) hv[i] = double(base.light[i]) + double(lighting.eye[i]);
+            hv = unitd(hv);
+            for (std::size_t i = 0; i < 3; ++i) base.half_vector[i] = static_cast<float>(hv[i]);
+        }
+    }
     const Colormap map = s.colorbar ? s.colorbar->map : Colormap::turbo;
     for (int i = 0; i < 256; ++i) {
         const Rgb c = sample(map, i / 255.0);
@@ -931,6 +1061,16 @@ std::expected<void, base::Error> Renderer::Impl::render_field(const FieldScene& 
         const D3D12_VERTEX_BUFFER_VIEW line_view{(*lbr)->GetGPUVirtualAddress(),
                                                  static_cast<UINT>(std::max<std::size_t>(lines.size() * sizeof(LineVertex), 256)),
                                                  sizeof(LineVertex)};
+        if (enhanced) {
+            list->OMSetRenderTargets(1, &ssaa_rtv, FALSE, nullptr);
+            list->SetPipelineState(background.Get());
+            list->SetGraphicsRootConstantBufferView(0, cb_base);
+            list->DrawInstanced(3, 1, 0, 0);
+            if (shadowed) {
+                list->SetPipelineState(shadow.Get());
+                list->DrawInstanced(6, 1, 0, 0);
+            }
+        }
         // Opaque triangles, then the depth-tested lines.
         list->OMSetRenderTargets(1, &ssaa_rtv, FALSE, &dsv);
         list->SetPipelineState(opaque.Get());
@@ -1034,7 +1174,7 @@ std::expected<void, base::Error> Renderer::Impl::render_field(const FieldScene& 
         if (s.colorbar) {
             draw_colorbar(ink, text.Get(), small_text.Get(), *s.colorbar,
                           {static_cast<float>(w) - bar_w + 8.0f, title_h, static_cast<float>(w) - 8.0f,
-                           static_cast<float>(h) - 12.0f});
+                           static_cast<float>(h) - 12.0f}, enhanced);
         }
         const D2D1_COLOR_F axis{0.25f, 0.27f, 0.3f, 1.0f};
         if (axes) {
@@ -1075,7 +1215,61 @@ std::expected<void, base::Error> Renderer::Impl::render_field(const FieldScene& 
             d2d->SetTransform(D2D1::Matrix3x2F::Rotation(-90.0f, {14.0f, 0.5f * (yt + yb)}));
             ink.text("y (\xC2\xB5m)", text.Get(), 14.0f, 0.5f * (yt + yb), 1, 1);
             d2d->SetTransform(D2D1::Matrix3x2F::Identity());
-        } else if (s.axis_triad) {
+        }
+        // Unit 26h (JD1): the axis box's ticks, labels and titles, outside the device, inside the view.
+        const auto inside = [&](float x, float y) {
+            return x >= view.left && x <= view.right && y >= view.top && y <= view.bottom;
+        };
+        const D2D1_COLOR_F box_ink{0.35f, 0.37f, 0.41f, 1.0f};
+        for (const BoxAxis& ax : box.axes) {
+            for (const AxisLabel& l : ax.ticks) {
+                if (!inside(l.x, l.y)) continue;
+                d2d->DrawLine({l.x, l.y}, {l.x + ax.outward[0] * 6.0f, l.y + ax.outward[1] * 6.0f}, ink.color(box_ink), 1.0f);
+                if (l.kept && inside(l.label_x, l.label_y)) ink.text(l.text, small_text.Get(), l.label_x, l.label_y, 1, 1, box_ink);
+            }
+            if (inside(ax.title_x, ax.title_y)) ink.text(ax.title, small_text.Get(), ax.title_x, ax.title_y, 1, 1, box_ink);
+        }
+        // Unit 26h (JD2): the view cube in place of the triad in the enhanced look.
+        const ViewCube cube = enhanced ? view_cube(s, w, h) : ViewCube{};
+        if (!cube.faces.empty()) {
+            for (const CubeFace& f : cube.faces) {
+                ComPtr<ID2D1PathGeometry> path;
+                ComPtr<ID2D1GeometrySink> sink;
+                if (FAILED(d2d_factory->CreatePathGeometry(&path)) || FAILED(path->Open(&sink))) continue;
+                sink->BeginFigure({f.polygon[0][0], f.polygon[0][1]}, D2D1_FIGURE_BEGIN_FILLED);
+                for (std::size_t k = 1; k < 4; ++k) sink->AddLine({f.polygon[k][0], f.polygon[k][1]});
+                sink->EndFigure(D2D1_FIGURE_END_CLOSED);
+                if (FAILED(sink->Close())) continue;
+                const D2D1_COLOR_F fill{0.90f * f.shade, 0.92f * f.shade, 0.95f * f.shade, 1.0f};
+                d2d->FillGeometry(path.Get(), ink.color(fill));
+                d2d->DrawGeometry(path.Get(), ink.color({0.42f, 0.45f, 0.5f, 1.0f}), 1.0f);
+                // The name where the face is wide and tall enough to hold it (6 px a character).
+                float x0 = 1e9f, x1 = -1e9f, y0 = 1e9f, y1 = -1e9f;
+                for (const auto& p : f.polygon) {
+                    x0 = std::min(x0, p[0]);
+                    x1 = std::max(x1, p[0]);
+                    y0 = std::min(y0, p[1]);
+                    y1 = std::max(y1, p[1]);
+                }
+                if (x1 - x0 >= 6.0f * static_cast<float>(f.label.size()) + 4.0f && y1 - y0 >= 16.0f) {
+                    float cx = 0.0f, cy = 0.0f;
+                    for (const auto& p : f.polygon) {
+                        cx += 0.25f * p[0];
+                        cy += 0.25f * p[1];
+                    }
+                    ink.text(f.label, small_text.Get(), cx, cy, 1, 1, {0.2f, 0.22f, 0.26f, 1.0f});
+                }
+            }
+            const std::array<D2D1_COLOR_F, 3> colors{
+                {{0.80f, 0.20f, 0.18f, 1.0f}, {0.18f, 0.60f, 0.25f, 1.0f}, {0.20f, 0.36f, 0.80f, 1.0f}}};
+            for (std::size_t a = 0; a < cube.arrows.size(); ++a) {
+                const CubeArrow& r = cube.arrows[a];
+                if (r.from == r.to) continue;
+                d2d->DrawLine({r.from[0], r.from[1]}, {r.to[0], r.to[1]}, ink.color(colors[a]), 2.0f);
+                const float dx = r.to[0] - r.from[0], dy = r.to[1] - r.from[1], n = std::hypot(dx, dy);
+                ink.text(r.name, small_text.Get(), r.to[0] + 8.0f * dx / n, r.to[1] + 8.0f * dy / n, 1, 1, colors[a]);
+            }
+        } else if (!axes && s.axis_triad) {
             const D2D1_POINT_2F o{view.left + 44.0f, view.bottom - 44.0f};
             const std::array<std::pair<const char*, D2D1_COLOR_F>, 3> axes3{
                 {{"x", {0.80f, 0.20f, 0.18f, 1.0f}}, {"y", {0.18f, 0.60f, 0.25f, 1.0f}}, {"z", {0.20f, 0.36f, 0.80f, 1.0f}}}};
@@ -1391,6 +1585,240 @@ ScreenPoint screen_position(const FieldScene& scene, int width, int height, cons
     const float w = p[0] * m[3] + p[1] * m[7] + p[2] * m[11] + m[15];
     const D2D1_POINT_2F px = project(v, p, view);
     return {px.x, px.y, w != 0.0f ? z / w : z};
+}
+
+// --- the axis box (Unit 26h, JD1) -----------------------------------------------------------------
+
+AxisBox axis_box(const FieldScene& s, int width, int height) {
+    AxisBox out;
+    if (s.dimension != 3) return out;
+    const D2D1_RECT_F view = field_view_rect(s, width, height);
+    const View v = make_view(s, (view.right - view.left) / (view.bottom - view.top));
+    const std::array<double, 3> lo{s.lo[0], s.lo[1], s.lo[2]}, hi{s.hi[0], s.hi[1], s.hi[2]};
+    const double extent = std::max({hi[0] - lo[0], hi[1] - lo[1], hi[2] - lo[2], 1e-30});
+    // Toward the eye from a point: the fixed direction (orthographic) or the camera's position.
+    const auto toward_eye = [&](const std::array<double, 3>& p) {
+        if (!v.perspective) return std::array<double, 3>{-v.forward[0], -v.forward[1], -v.forward[2]};
+        return std::array<double, 3>{v.eye_position[0] - p[0], v.eye_position[1] - p[1], v.eye_position[2] - p[2]};
+    };
+    const std::array<double, 3> centre{0.5 * (lo[0] + hi[0]), 0.5 * (lo[1] + hi[1]), 0.5 * (lo[2] + hi[2])};
+    for (std::size_t a = 0; a < 3; ++a) {
+        // The hi face is turned toward the eye when the eye lies beyond its plane; away otherwise.
+        std::array<double, 3> on_hi = centre;
+        on_hi[a] = hi[a];
+        const double d = toward_eye(on_hi)[a];
+        out.away_hi[a] = d < -1e-9 * extent;  // edge-on: the lo side is the away one
+    }
+    const auto corner = [&](std::size_t a, std::size_t b, bool b_hi, std::size_t c, bool c_hi, bool at_hi) {
+        std::array<double, 3> p{};
+        p[a] = at_hi ? hi[a] : lo[a];
+        p[b] = b_hi ? hi[b] : lo[b];
+        p[c] = c_hi ? hi[c] : lo[c];
+        return p;
+    };
+    const auto to_f3 = [](const std::array<double, 3>& p) {
+        return Float3{static_cast<float>(p[0]), static_cast<float>(p[1]), static_cast<float>(p[2])};
+    };
+    const D2D1_POINT_2F c_px = project(v, to_f3(centre), view);
+    std::vector<std::array<float, 4>> all_kept;
+    // The twelve edges: along axis a, at the sides (b_hi, c_hi) of the other two.
+    for (std::size_t a = 0; a < 3; ++a) {
+        const std::size_t b = (a + 1) % 3, c = (a + 2) % 3;
+        struct Candidate {
+            std::array<Float3, 2> edge;
+            double nearness;
+            float left;
+        };
+        std::vector<Candidate> outline;
+        for (int k = 0; k < 4; ++k) {
+            const bool b_hi = (k & 1) != 0, c_hi = (k & 2) != 0;
+            const bool on_b = b_hi == out.away_hi[b], on_c = c_hi == out.away_hi[c];
+            if (!on_b && !on_c) continue;  // on two faces toward the camera: not drawn
+            const auto p0 = corner(a, b, b_hi, c, c_hi, false);
+            const auto p1 = corner(a, b, b_hi, c, c_hi, true);
+            const std::array<Float3, 2> e{to_f3(p0), to_f3(p1)};
+            out.edges.push_back(e);
+            if (on_b == on_c) continue;  // on two away faces: inside the frame
+            const std::array<double, 3> mid{0.5 * (p0[0] + p1[0]), 0.5 * (p0[1] + p1[1]), 0.5 * (p0[2] + p1[2])};
+            const auto t = toward_eye(mid);
+            const double nearness = v.perspective ? -std::sqrt(dotd(t, t)) : dotd(mid, t);
+            outline.push_back({e, nearness, project(v, to_f3(mid), view).x});
+        }
+        if (outline.empty() || hi[a] - lo[a] <= 1e-9 * extent) continue;
+        const Candidate& pick = *std::ranges::max_element(outline, [&](const Candidate& x, const Candidate& y) {
+            return a == 1 ? x.left > y.left : x.nearness < y.nearness;  // y: leftmost; x, z: nearest
+        });
+        const D2D1_POINT_2F e0 = project(v, pick.edge[0], view), e1 = project(v, pick.edge[1], view);
+        const float ex = e1.x - e0.x, ey = e1.y - e0.y;
+        const float len = std::sqrt(ex * ex + ey * ey);
+        if (len < 24.0f) continue;  // looking along the axis
+        BoxAxis axis;
+        axis.axis = static_cast<int>(a);
+        axis.edge = pick.edge;
+        // Outward: perpendicular to the edge on the screen, away from the box's centre.
+        float ox = -ey / len, oy = ex / len;
+        const float mx = 0.5f * (e0.x + e1.x) - c_px.x, my = 0.5f * (e0.y + e1.y) - c_px.y;
+        if (ox * mx + oy * my < 0.0f) {
+            ox = -ox;
+            oy = -oy;
+        }
+        axis.outward = {ox, oy};
+        std::vector<std::array<float, 4>> kept;  // this axis's kept labels: centres, half widths, half heights
+        for (const Tick& t : linear_ticks(lo[a], hi[a], 5)) {
+            AxisLabel l;
+            l.position = pick.edge[0];
+            l.position[a] = static_cast<float>(t.value);
+            const D2D1_POINT_2F p = project(v, l.position, view);
+            l.x = p.x;
+            l.y = p.y;
+            l.value = t.value;
+            l.text = t.label;
+            const float half_w = 3.25f * static_cast<float>(t.label.size()), half_h = 7.0f;
+            // Clear of the edge by the tick (6 px) and the label's own extent along the outward direction.
+            const float clear = 10.0f + std::abs(ox) * half_w + std::abs(oy) * half_h;
+            l.label_x = p.x + ox * clear;
+            l.label_y = p.y + oy * clear;
+            for (const auto& k : all_kept) {  // every axis's, so no two kept labels overlap
+                const float dx = std::abs(l.label_x - k[0]), dy = std::abs(l.label_y - k[1]);
+                if (dx < half_w + k[2] + 6.0f && dy < half_h + k[3] + 6.0f) l.kept = false;
+            }
+            if (l.kept) {
+                kept.push_back({l.label_x, l.label_y, half_w, half_h});
+                all_kept.push_back(kept.back());
+            }
+            axis.ticks.push_back(std::move(l));
+        }
+        static constexpr const char* titles[3] = {"x (\xC2\xB5m)", "y (\xC2\xB5m)", "z (\xC2\xB5m)"};
+        axis.title = titles[a];
+        float reach = 0.0f;
+        for (const auto& k : kept) {
+            reach = std::max(reach, (k[0] - 0.5f * (e0.x + e1.x)) * ox + (k[1] - 0.5f * (e0.y + e1.y)) * oy +
+                                    std::abs(ox) * k[2] + std::abs(oy) * k[3]);
+        }
+        reach = std::max(reach, 16.0f);
+        axis.title_x = 0.5f * (e0.x + e1.x) + ox * (reach + 14.0f);
+        axis.title_y = 0.5f * (e0.y + e1.y) + oy * (reach + 14.0f);
+        out.axes.push_back(std::move(axis));
+    }
+    return out;
+}
+
+// --- the view cube (Unit 26h, JD2, JD3) ------------------------------------------------------------
+
+const std::vector<CameraPreset>& named_views() {
+    static const std::vector<CameraPreset> views{
+        {"Front", 0.0f, 0.0f},  {"Back", 180.0f, 0.0f}, {"Left", 270.0f, 0.0f},    {"Right", 90.0f, 0.0f},
+        {"Top", 0.0f, 90.0f},   {"Bottom", 0.0f, -90.0f}, {"Isometric", 35.0f, 25.0f}};
+    return views;
+}
+
+namespace {
+
+const CameraPreset& named(std::string_view name) {
+    for (const CameraPreset& p : named_views()) {
+        if (p.name == name) return p;
+    }
+    return named_views().back();
+}
+
+// The isometric view from a cube corner: azimuth toward its x and z, elevation +-35.26 degrees.
+CameraPreset corner_view(const std::array<int, 3>& c) {
+    const double az = std::atan2(static_cast<double>(c[0]), static_cast<double>(c[2])) * 180.0 / std::numbers::pi;
+    const double el = std::atan(1.0 / std::sqrt(2.0)) * 180.0 / std::numbers::pi;
+    return {"Isometric", static_cast<float>(az), static_cast<float>(c[1] > 0 ? el : -el)};
+}
+
+bool inside_polygon(const std::array<std::array<float, 2>, 4>& p, float x, float y) {
+    bool in = false;
+    for (std::size_t i = 0, j = 3; i < 4; j = i++) {
+        if ((p[i][1] > y) != (p[j][1] > y) &&
+            x < (p[j][0] - p[i][0]) * (y - p[i][1]) / (p[j][1] - p[i][1]) + p[i][0]) {
+            in = !in;
+        }
+    }
+    return in;
+}
+
+}  // namespace
+
+ViewCube view_cube(const FieldScene& s, int width, int height) {
+    ViewCube out;
+    if (s.dimension != 3 || s.look != Look::enhanced || !s.axis_triad) return out;
+    const D2D1_RECT_F view = field_view_rect(s, width, height);
+    const View v = make_view(s, (view.right - view.left) / (view.bottom - view.top));
+    const std::array<double, 3> key = key_light(v);
+    const std::array<double, 3> eye{-v.forward[0], -v.forward[1], -v.forward[2]};
+    out.edge_px = 72.0f / std::sqrt(3.0f);
+    out.centre = {view.left + 88.0f, view.bottom - 88.0f};  // room for an arrow and its label any way
+    const float half = 0.5f * out.edge_px;
+    const auto px = [&](const std::array<int, 3>& c) {
+        const std::array<double, 3> p{double(c[0]), double(c[1]), double(c[2])};
+        return std::array<float, 2>{out.centre[0] + half * static_cast<float>(dotd(p, v.right)),
+                                    out.centre[1] - half * static_cast<float>(dotd(p, v.up))};
+    };
+    static constexpr const char* labels[3][2] = {{"Left", "Right"}, {"Bottom", "Top"}, {"Back", "Front"}};
+    std::vector<std::array<int, 3>> shown_corners;
+    for (int a = 0; a < 3; ++a) {
+        for (const int sign : {1, -1}) {
+            std::array<double, 3> n{};
+            n[static_cast<std::size_t>(a)] = sign;
+            if (dotd(n, eye) <= 1e-6) continue;  // turned away, or edge-on
+            CubeFace f;
+            f.label = labels[a][sign > 0 ? 1 : 0];
+            f.axis = a;
+            f.sign = sign;
+            f.shade = 0.62f + 0.38f * static_cast<float>(std::max(0.0, dotd(n, key)));
+            f.preset = named(f.label);
+            // Around the face: the other two axes' signs in the order (-,-) (+,-) (+,+) (-,+).
+            const int b = (a + 1) % 3, c = (a + 2) % 3;
+            static constexpr int order[4][2] = {{-1, -1}, {1, -1}, {1, 1}, {-1, 1}};
+            for (int k = 0; k < 4; ++k) {
+                std::array<int, 3> corner{};
+                corner[static_cast<std::size_t>(a)] = sign;
+                corner[static_cast<std::size_t>(b)] = order[k][0];
+                corner[static_cast<std::size_t>(c)] = order[k][1];
+                f.polygon[static_cast<std::size_t>(k)] = px(corner);
+                if (std::ranges::find(shown_corners, corner) == shown_corners.end()) shown_corners.push_back(corner);
+            }
+            out.faces.push_back(std::move(f));
+        }
+    }
+    for (const auto& c : shown_corners) out.corners.push_back({px(c), c, corner_view(c)});
+    // The arrows from the shown corner nearest the screen's lower left, along the triad's directions.
+    if (!out.corners.empty()) {
+        const auto& origin = *std::ranges::min_element(out.corners, [](const CubeCorner& x, const CubeCorner& y) {
+            return x.at[0] - x.at[1] < y.at[0] - y.at[1];
+        });
+        static constexpr const char* names[3] = {"x", "y", "z"};
+        for (int a = 0; a < 3; ++a) {
+            std::array<double, 3> e{};
+            e[static_cast<std::size_t>(a)] = 1.0;
+            const float dx = static_cast<float>(dotd(e, v.right)), dy = -static_cast<float>(dotd(e, v.up));
+            const float len = out.edge_px + 10.0f;  // past the cube, even along its edges (head-on views)
+            CubeArrow arrow{names[a], origin.at, origin.at};
+            if (dx * dx + dy * dy > 1e-4f) arrow.to = {origin.at[0] + dx * len, origin.at[1] + dy * len};
+            out.arrows.push_back(arrow);
+        }
+    }
+    return out;
+}
+
+std::optional<CameraPreset> view_cube_hit(const FieldScene& s, int width, int height, float x, float y) {
+    const ViewCube cube = view_cube(s, width, height);
+    const CubeCorner* nearest = nullptr;
+    float best = 7.0f * 7.0f;
+    for (const CubeCorner& c : cube.corners) {
+        const float dx = c.at[0] - x, dy = c.at[1] - y, d = dx * dx + dy * dy;
+        if (d <= best) {
+            best = d;
+            nearest = &c;
+        }
+    }
+    if (nearest) return nearest->preset;
+    for (const CubeFace& f : cube.faces) {
+        if (inside_polygon(f.polygon, x, y)) return f.preset;
+    }
+    return std::nullopt;
 }
 
 }  // namespace NiTCAD::render

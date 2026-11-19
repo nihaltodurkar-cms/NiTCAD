@@ -100,10 +100,16 @@ struct TransientOptions {
 // the lattice temperature); the state at t = 0 is solved in sweep_bias's two stages (psi, n and p
 // at the starting carrier temperatures, initial->electron_temperature_K and hole_temperature_K or
 // the lattice's, then the coupled system); each snapshot carries T_n and T_p.
+// Continuing a run (Unit 61, RD3; DECISIONS.md RQ1): `resume`, a Transient::resume of an earlier run
+// of the same device, options and waveforms, continues it after its last accepted step, repeating
+// the uninterrupted run's arithmetic: the continued run's points are the earlier run's last one
+// and every later one, bit for bit, and its first snapshot is that last state's. Errors
+// (invalid_input): with an initial state; a resume state of another run (its identity), of other
+// sizes, or at the run's final step; nonlocal tunnelling paths (not part of the state).
 [[nodiscard]] std::expected<results::Transient, base::Error> solve_transient(
     const device::Device& device, std::span<const Waveform> waveforms,
     const TransientOptions& options, const results::NodeFields* initial = nullptr,
-    const RunControl& control = {});
+    const RunControl& control = {}, const results::TransientResume* resume = nullptr);
 
 // The run record of a transient run: the identity digest of the device, the options, the waveforms
 // and the initial state, and the options as named settings (make_run_record of bias.hpp, with

@@ -1788,7 +1788,32 @@ inputs; DECISIONS.md DK1–DK11):**
   - existing decks unchanged: `main`'s deck and validation assembly traces byte-identical (AG1).
 - Mutation checks (25), all caught (DECISIONS.md, Unit 43).
 - Not in Unit 43: restart of the new analyses, a transient or small-signal run from a checkpoint (`initial`),
-  harmonic balance, unit suffixes on times.
+  harmonic balance, unit suffixes on times. (All but harmonic balance came in Unit 61, below.)
+
+**As built (Unit 61, restart of transient, trace and small-signal runs, `initial`, unit suffixes; DECISIONS.md
+RD1–RD7, RG1–RG9):**
+- Units (RD1): a time is in s or carries `s`, `ms`, `us`, `ns`, `ps`, `fs`; a frequency is in Hz or carries `Hz`,
+  `kHz`, `MHz`, `GHz`, `THz`. The value is read by shifting the decimal exponent in the text, so `2.5ns` is the same
+  double as `2.5e-9`. A unit of the other kind, an unknown unit, or a unit on a voltage names its line. Waveform
+  arguments are read by position (a pulse's times, a sine's frequency).
+- `initial = <checkpoint>` (RD2) in `[sweep]`, `[transient]`, `[small_signal]` and `[trace]`: the checkpoint's fields
+  are the first state's starting guess. Its bias need not be the run's. It is never given with `restart`, and a
+  transient's checkpoint is refused there (use `restart`).
+- Transient resume (RD3, RD4): `results::TransientResume` holds the 1–3 history states (state, storage, traps,
+  charges), the last accepted point, its time, the next step, the landing index, the attempt index and the run's
+  identity without its initial state. `solve_transient(..., resume)` continues as the uninterrupted run would, bit
+  for bit. It refuses another run's state, the final step, a state with `initial`, and nonlocal tunnelling (its paths
+  are not in the state). `[transient] checkpoint =` now writes the last accepted step with this state (AQ4 revised),
+  and `[transient] restart =` continues from it.
+- Trace resume (RD5): `results::TraceResume` (`Sweep::resume`) holds the scaled state with λ, the tangent, `ds`, the
+  kept arc-row entry, the attempt and point counts, the metric's current floor, the last accepted point, the identity
+  and whether the trace finished. It is taken at each acceptance, so a trace stopped by a later attempt resumes from
+  its last point and replays those attempts. `[trace] restart =` and `checkpoint =` work as for the transient.
+- Small-signal restart (RD6): `[small_signal] restart =` continues after the checkpoint's operating point, as the
+  sweep's (DK9).
+- Checkpoints (6.6): `io::Checkpoint::kind` is steady (absent: every older file), transient or trace, with the
+  resume record bit for bit. A trace checkpoint is still a steady point for a sweep or for `initial`. A restarted
+  run's files hold the steps after the checkpoint, the first being the checkpoint's own (RQ8).
 
 ### 6.6 Result representation
 
@@ -1930,8 +1955,8 @@ PD1–PD5, PG1–PG8):**
   missing time point, an order outside 0–2 and fields of a missing contact are refused. A trace is a `Sweep` and
   goes through `save_sweep`. R2 is now met for every result type.
 - **The runner:** `nitcad --version` prints the build on one line; `nitcad run` prints the build, the platform, the
-  start and the wall time after the files it wrote. The CSV table is unchanged (PD4). The version stays `0.0.0`
-  until a release policy exists (PD5).
+  start and the wall time after the files it wrote. The CSV table is unchanged (PD4). The version stayed `0.0.0`
+  until a release policy existed (PD5); it is 0.1.0 under Unit 60's policy (9).
 - Gates (`tests/solve/provenance_test.cpp`, 3 cases; `tests/io/provenance_test.cpp`, 2; `tests/io/run_files_test.cpp`,
   5; ctest `cli_version`):
   - every public run records a true provenance (the revision a commit of the source's history, the cache sizes,
@@ -1946,7 +1971,7 @@ PD1–PD5, PG1–PG8):**
     identities included.
 - Mutation checks (29), all caught (DECISIONS.md, Unit 42).
 - Not in Unit 42: deck analyses for transient, small-signal and trace runs (PD1: the next unit); visualization
-  formats (Unit 25); cross-machine checksums (6.8); compression; file locking.
+  formats (Unit 25); cross-machine comparison (6.8, Unit 60); compression; file locking.
 
 **As built (Unit 45, generation-recombination rates and the mesh digest in results; approved and accepted by the
 owner 2026-10-21; DECISIONS.md RS1–RS6, RQ1–RQ4, RG1–RG8):**
@@ -2017,6 +2042,25 @@ owner 2026-10-21; DECISIONS.md RS1–RS6, RQ1–RQ4, RG1–RG8):**
     `linalg_eigen_blocking`) runs one pinned process per logical CPU and requires identical bits.
   - Bit-identity across different machines is still not promised. Tolerances stay the contract. Other
     differences between CPUs are unexamined, and MKL PARDISO's CPU dispatch is unverified.
+- **Cross-machine comparison (Unit 60; DECISIONS.md XC1–XC6).** OLD: the 11.3 row asked for "cross-machine
+  checksums". NEW: a comparison by tolerances. REASON: a digest of rounded values flips whenever a value lies near
+  a rounding boundary, and it says nothing about how far apart two results are.
+  - `analysis::compare_sweeps` (`analysis/compare.hpp`) first checks structure exactly: points, contacts, nodes, the
+    bias per point, which optional quantities exist, and whether the run stopped. A mismatch is `not comparable`,
+    with the reason. Then, per quantity, it reports the largest difference, its ratio to the allowance and where it
+    occurs. Defaults: currents 1e-6 relative plus the larger of the two runs' resolutions (each run's own floor);
+    charges 1e-6 relative plus 1e-30; ψ 1e-6 V; n and p 1e-6 relative against 1e-8 of the point's largest density;
+    temperatures 1e-6 K. The input identity and mesh digest are reported, not gated: mesh generation calls CRT
+    math that may take other paths on another CPU.
+  - `nitcad compare <a> <b> [--rtol] [--potential-tol]` prints one line per quantity and both runs' build and CPU.
+    Exit 0 match, 4 differ, 1 unreadable or not comparable, 64 usage.
+  - **References:** `tests/cross_machine/` holds the sweeps that `examples/pn_diode_1d.deck` and
+    `examples/mosfet_2d.deck` write on the development machine (Eigen SparseLU). The ctests `cross_machine_*` run
+    each deck and compare, so every CI run compares two machines. A reference is regenerated only after an
+    intended change, which makes the change MINOR (9). Measured: a Debug build against the Release references
+    gives a largest ratio of 2.1e-6 (the diode's current; ψ 1.1e-10), and the MOSFET is bit-identical.
+  - Not compared yet: transient and small-signal files, edge currents and rates (derived from the compared
+    fields), and PARDISO runs.
 
 ### 6.9 Threading, worker execution, cancellation, progress
 
@@ -2951,6 +2995,62 @@ CG1–CG9; accepted by the owner 2026-10-22):**
   `WM_MOUSELEAVE` and a button press to the view); HG7 median hover 0.067 ms on `examples/mosfet_3d.deck`'s doping
   surface (1,911 nodes; bound 16 ms); 10 hand mutants killed (HG8); the full Release ctest not run by owner ruling (DECISIONS.md Unit 26e).
 
+**As built (Unit 26f, enhanced 3D look; DECISIONS.md KD1–KD6, KQ1–KQ6, KG1–KG8; on `app/visual-prototype`):**
+- **The look (KD1, KQ1):** `render::Look { classic, enhanced }` on `FieldScene::look`, classic by default in the
+  render layer, so every existing reference draws as before (byte-identical on the GPU). 2D scenes ignore it.
+- **Lighting (KD2, KQ6):** with `enhanced` on a 3D scene, `scene.hlsl` lights with a key (classic's light, from the
+  upper left over the viewer's shoulder), a fill from the lower right, a rim `(1 − n·v)³`, a hemisphere ambient
+  from the camera's up and a Blinn–Phong highlight `(n·h)⁴⁰` (0.22 on solids, 0.08 on field maps), all two-sided,
+  with the normal turned toward the eye. Powers are by multiplication. The eye is `-forward` in orthographic (and
+  the half vector is computed once), and per pixel from the camera's position in perspective (the mesh shader
+  passes world positions). `render::frame_lighting(scene, aspect)` gives those vectors (zero for classic and 2D).
+- **Feature edges (KD3, KQ2–KQ4):** `render/edges.hpp`: `feature_edges(batch, 30°)` returns the batch's open
+  boundary and the edges where its faces turn by more than the angle (either winding), matched by exact position
+  (−0 as +0), degenerate triangles skipped, sorted. `set_look(scene, look)` sets the look and, on an enhanced 3D
+  scene, replaces one depth-tested `LineBatch "feature edges"` (1.7 px, ink 0.08/0.09/0.11 at 0.85) built from
+  every lit batch but arrows, isosurfaces and the outline shell. It is built with the scene, so a camera move
+  redraws without rebuilding.
+- **Background (KD4, KQ5):** a vertical gradient (0.86/0.89/0.93 to 0.99/0.99/1.0) over the 3D view rectangle,
+  drawn before the scene (`background_ps`). The title band and colorbar panel stay white.
+- **App and CLI (KD5, KD6):** the inspector's **Enhanced 3D look** check box, on 3D device views only, sets
+  `ViewSettings::enhanced` (default on). The choice is the default of new views, saved as `enhanced_look = 0|1`
+  (on when absent). `build_scene` calls `set_look` after every overlay. `nitcad plot --look classic|enhanced`
+  defaults to enhanced (film frames and adaptive-pass tiles too), and `plot_arguments` names `--look classic` only
+  when the box is off. A 3D `nitcad plot` run without `--look` draws the enhanced look: the user-visible change.
+- Gates: KG1–KG8 met (85 render cases with 2 new WARP references, `mosfet3d_solid_enhanced` and
+  `mosfet3d_surface_potential_enhanced`; app, window and self-test cases; 10 hand mutants killed). KG6: edges
+  built in 1.75–1.91 ms on `examples/mosfet_3d.deck` (bound 50 ms). The redraw, measured on the hardware adapter by the owner's ruling, is 0.85–1.07× classic on the
+  RTX 5060 Ti (the test skips without a GPU); on WARP, the test window's adapter, it is 1.22–1.29×, kept for the
+  record only (DECISIONS.md Unit 26f). Full Release ctest stopped by the owner at 229 of 235 passed.
+
+**As built (Unit 26h, scale and orientation; DECISIONS.md JD1–JD5, JQ1–JQ6, JG1–JG9; on `app/scale-orientation`):**
+- **Axis box (JD1, JQ1–JQ3):** `render/axes3d.hpp`'s `axis_box(scene, w, h)` is pure. It returns the edges of the
+  three faces of the bounds turned away from the camera, and one outline edge per axis with 1-2-5 ticks in µm. x and
+  z take the nearer edge, y the leftmost on the screen, and an edge-on face counts as away on its lo side. An axis is
+  skipped at zero extent or under 24 px. Labels are de-overlapped across all three axes. The renderer draws the edges
+  depth-tested (grey, 1 px) and the ticks, labels and titles over the image, in enhanced 3D only (classic is
+  unchanged). `FieldScene::show_axis_box` defaults to on. It is set by the inspector's **Axis box** check box (saved
+  as `axis_box = 0|1`) and by `nitcad plot --axes on|off` (default on); `plot_arguments` names `--axes off`.
+- **View cube (JD2, JD3, JQ4):** `view_cube` and `view_cube_hit` are pure. In enhanced 3D, the cube replaces the
+  triad: 72 px across its diagonal, 88 px in from the lower-left corner, orthographic, key-lit faces named where they
+  fit, and x/y/z arrows reaching past it. It is drawn in `nitcad plot` images too, so the app and the command still
+  draw the same image. A click within 7 px of a corner snaps to that corner's isometric view, and a click on a face
+  to the face's named view. Cube clicks come before Probe, Measure and Cut line; a drag still orbits. The cursor is
+  a hand over the cube.
+- **Named views (JD4, JQ6):** `render::named_views()`: Front 0°/0°, Back 180°, Left 270°, Right 90°, Top and Bottom
+  ±90°, Isometric 35°/25°. They are in **View ▸ Look from** (a submenu, which keeps WG5's unique mnemonics; a
+  `CommandInfo::submenu` field) and on the numpad in the view (1, 3, 7 and Ctrl for the opposite side, 0), in both
+  looks. Each resets zoom and pan.
+- **Smooth moves (JD5, JQ5):** `app::camera_between(from, to, t)` eases with smoothstep. The azimuth takes the
+  shorter way round; elevation, zoom and pan move linearly in the same ease; t ≤ 0 and t ≥ 1 give the endpoints
+  exactly. Fit, the named views and cube snaps move over 250 ms on a 16 ms `WM_TIMER`. `app::smooth_moves(app,
+  windows, forced)` decides whether a move is smooth: only when `WindowOptions::animate` is on (the application only,
+  so tests and the self-test are instant) and Windows' "Show animations" is on. A drag, a wheel step or a key ends a
+  move at its frame.
+- Gates: JG1–JG7 met (the 26g enhanced references rebuilt with the box and cube, and `mosfet3d_solid_right_enhanced`
+  new, after the owner saw the images). JG8: the box and cube +0.13 ms, the slowest move frame 5.07 ms on the RTX
+  5060 Ti (bounds 1 and 16 ms). JG9: 10 hand mutants killed. The full suites wait for the owner (DECISIONS.md Unit 26h).
+
 ## 7. Language placement (D6: C and Fortran deferred)
 
 | Component | Language | Reason |
@@ -3114,6 +3214,25 @@ the owner approves them in a unit request: `cmake/` (toolchain modules). `benchm
 - **Test levels** per component, from the legacy practice: analytic and limiting cases → published-value
   regression → Jacobian vs finite differences → dimensional-reduction identity → convergence and mesh
   independence → benchmark. A compile-only check is never the sole gate for a numerical unit.
+- **Release versions (Unit 60, PD5; DECISIONS.md RV1–RV6, VQ1–VQ5):**
+  - Semantic versioning, `MAJOR.MINOR.PATCH`. The only source is `project(NiTCAD VERSION …)`, which every run's
+    provenance and `nitcad --version` carry with the git revision and the `dirty` flag. Before 1.0, MAJOR stays 0
+    and MINOR takes its role. 1.0 is the owner's decision.
+  - **MINOR (before 1.0):** a new capability; a changed default that moves a default result beyond
+    `nitcad compare`'s default tolerances (any regenerated cross-machine reference, 6.8, counts); a deck key
+    removed or renamed, or a meaning changed; a file format version change. **PATCH:** everything else (fixes that
+    leave every reference matching, docs, build, CI). After 1.0, anything that breaks an old deck, file or public
+    header is MAJOR. A file that loaded before must still load (IO2).
+  - **A release** is the owner's decision. A release PR bumps the version and adds a row below. After it merges,
+    the owner pushes an annotated tag `vX.Y.Z` on the merge commit, its annotation the release notes (from
+    DECISIONS.md's unit summaries; no changelog file). Between releases `main` carries the last released version,
+    and builds are told apart by revision.
+  - **CI** also runs on `v*` tags. Before anything is written into the workspace, `cmake/check_release_tag.cmake`
+    fails the build unless the tag is `v` + the project version and the checkout is clean (ctests `release_tag.*`).
+
+  | Version | Date | Contents |
+  |---|---|---|
+  | 0.1.0 | not yet tagged | the first version under the policy (Unit 60): everything on `main` when Unit 60 merges |
 
 ## 10. Validation criteria pinned from the legacy
 
@@ -3256,7 +3375,7 @@ built.
 | 23 | Thermal / electrothermal coupling | physics, assemble, solve | **done, on `main`** (`7300b67`, PR #30): the lattice temperature as a fourth Newton unknown (the rise τ) with an exact Jacobian; Wachutka's thermodynamic fluxes (Boltzmann and Fermi–Dirac), the heat as the energy flux's divergence with Peltier and Thomson heat, isothermal and R_th thermal contacts; T in every model the assembler has; steady sweeps, `trace_bias` (thermal-runaway folds), transients and AC; traps and BTBT refused; thermionic emission (deferred) and incomplete ionization refused (6.2, Unit 23; DECISIONS.md T1–T14, U1–U8) |
 | 24 | Analysis and extraction engine | analysis | **done, on `main`** (`4183767`): curves read from sweeps and small-signal runs; transistor, diode and breakdown figures; C-V doping profile, flat band and the conductance method; two-port Y/Z/h/S, Mason's U, k, MAG/MSG, f_T and f_max; every extraction with the points it used and resolution and extrapolation flags (6.13, Unit 24) |
 | 25 | Scientific visualization / rendering | render | **25a done** (`render/visualization`): CPU scenes, Direct3D 12 and Direct2D drawing to PNG, `nitcad plot` (6.14); **25b done** (`render/derived-fields`): \|E\|, \|J\|, isosurfaces, streamlines (6.14); **25c done** (`render/vectors-clip`): arrows, clipping box, exploded view, filmstrips (6.14) |
-| 26 | Native Windows application and workflow | app | **done, on `main`** (`e9b1d71`, PR #59): `nitcad-app.exe`, Win32 with Direct3D 12 / Direct2D; deck editor, runs on a worker, run monitor, results, examples, `--self-test` (6.14, Unit 26); **26b done, on `main`** (`51face0`, PR #60): live checking and completion, structure preview, cut lines, run comparison, mesh quality (6.14, Unit 26b); **26c done** (`app/gui-catch-up`, PR #61): arrows, streamlines, exploded view, curve pickers, region visibility, transient playback, clip sliders (6.14, Unit 26c); **26d done** (`app/gui-quick-wins`): no Apply, colour range, point labels, units in the metrics, viridis default, drag and drop, taskbar progress, dark title bar (6.14, Unit 26d); **26e built** (`app/hover-readout`): hover readout of values on field and curve views, viridis the default colormap of `nitcad plot` too (6.14, Unit 26e) |
+| 26 | Native Windows application and workflow | app | **done, on `main`** (`e9b1d71`, PR #59): `nitcad-app.exe`, Win32 with Direct3D 12 / Direct2D; deck editor, runs on a worker, run monitor, results, examples, `--self-test` (6.14, Unit 26); **26b done, on `main`** (`51face0`, PR #60): live checking and completion, structure preview, cut lines, run comparison, mesh quality (6.14, Unit 26b); **26c done** (`app/gui-catch-up`, PR #61): arrows, streamlines, exploded view, curve pickers, region visibility, transient playback, clip sliders (6.14, Unit 26c); **26d done** (`app/gui-quick-wins`): no Apply, colour range, point labels, units in the metrics, viridis default, drag and drop, taskbar progress, dark title bar (6.14, Unit 26d); **26e built** (`app/hover-readout`): hover readout of values on field and curve views, viridis the default colormap of `nitcad plot` too (6.14, Unit 26e); **26f built** (`app/visual-prototype`): the enhanced 3D look (three lights, feature edges, gradient), the app and `nitcad plot` default (6.14, Unit 26f) |
 | 27 | Optimization / sensitivity / inverse-design workflows | analysis, solve | long-term target |
 | 28 | Bias step cutting (commercial-readiness programme, 11.3) | solve, results | **done, on `main`** (`06b708d`, PR #31): off by default; halving and growth from the last converged state (11.3, Unit 28; DECISIONS.md S1–S7) |
 | 29 | The io layer: files and checkpoint/restart (11.3) | io | **done, on `main`** (`f69a7a8`, PR #33): meshes, sweeps and checkpoints in a versioned, checksummed container with atomic writes; restart equals the uninterrupted sweep (6.6, Unit 29; DECISIONS.md IO1–IO7) |
@@ -3320,12 +3439,12 @@ exists, not finished), **planned** (nothing built). Audit of 2026-10-09, against
 | Area | What exists (audited) | Status | Next step |
 |---|---|---|---|
 | Robust nonlinear solving | Newton with componentwise clipping (6.2); the generation-free retry (Units 19, 20); arc-length `trace_bias` (Unit 19) | **Bias step cutting verified, on `main`** (Unit 28, below; `06b708d`, PR #31); **Newton line search verified, opt-in, on `main`** (Unit 30, below; `f3e2811`, PR #32) | A natural-test norm monotone in reverse bias; a Gummel or pseudo-transient fallback |
-| Input/output, checkpoint/restart | The `io` layer (approved 2026-10-09): versioned, checksummed, atomic files for meshes, sweeps and checkpoints; device files and the text input deck (Unit 31) | **Verified, on `main`** (Unit 29, 6.6; `f69a7a8`, PR #33); **device files and the deck verified, on `main`** (Unit 31, 6.5; `6f67510`, PR #37); **transient and small-signal files verified** (Unit 42, 6.6; PR #52); **transient, small-signal and trace deck analyses verified** (Unit 43, 6.5; PR #53) | Restart of transient and trace runs; a run started from a checkpoint (`initial`); unit suffixes on times |
+| Input/output, checkpoint/restart | The `io` layer (approved 2026-10-09): versioned, checksummed, atomic files for meshes, sweeps and checkpoints; device files and the text input deck (Unit 31) | **Verified, on `main`** (Unit 29, 6.6; `f69a7a8`, PR #33); **device files and the deck verified, on `main`** (Unit 31, 6.5; `6f67510`, PR #37); **transient and small-signal files verified** (Unit 42, 6.6; PR #52); **transient, small-signal and trace deck analyses verified** (Unit 43, 6.5; PR #53); **restart of transient, trace and small-signal runs, `initial`, time and frequency suffixes verified locally** (Unit 61, 6.5; on `io/restart-transient-trace`, not pushed) | Harmonic balance; periodic checkpoints during a run (RQ5) |
 | Geometry and unstructured 3D meshing | `Mesh::from_parts` accepts any valid node/edge/volume graph; besides the tensor-grid producer, Unit 16 added the 2D and 3D Delaunay generators and the simplex import (checked duals P0–P5, P4-certified interfaces, contact patches, structured 2D boundary layers); nonlocal BTBT still needs tensor cells (6.11, M16) | **Verified, on `main`** (Unit 16, 6.11; `a09cf43`, PR #35); **non-convex 3D meshing built** (Unit 53, 6.11; on `mesh/finfet-geometry`): sectioned extrusions, junction lines, patches at traces; FC8 (flat gate) fails, accepted as a limitation; FC9 fails, accepted as a limitation; **3D structured layers built** (Unit 54, 6.11; on `mesh/structured-layers-3d`): swept meshes of extrusions with 2D layers; UC7 accepted as a limitation, UC8 fails at 5 of 17 I_D points, accepted as a limitation (owner, 2026-10-31) | 3D layers on non-extruded geometry; the 2D generator's P2 refusals (Unit 54 slice 5); FC8's corner error; abrupt junctions off region boundaries; an unstructured locator for nonlocal BTBT (M16) |
 | Low-current accuracy | `terminal_current_resolution` reports the floor (Unit 15); the weighted terminal current with an adjoint error estimate (Unit 32, 6.6) | **Verified, on `main`** (Unit 32; `6e54c69`, PR #39): the MOSFET off state resolved at every Vg, sub-floor diode currents on the ideal-diode law to 0.1% | Weighted transient and small-signal currents; a path term for nonlocal tunnelling |
 | Generic fields/equations | Field descriptors and the unknowns' map; every row an equation term composed by equation set (Unit 40); model data and state split out, one `assemble::System` with topic headers, derived and edge fields, equilibrium from the same terms, an added field measured (Unit 57; 6.12.1–2) | **Verified, bit-identical, on `main`** (Unit 40; `629bed0`, PR #50; Unit 57; `2306228`, PR #87; below) | Face and cell fields; a public way to add fields and terms (GG8's extension is internal); dropping the insulator nodes' carrier unknowns (FD5) |
 | Scalable linear solvers | Eigen SparseLU (default), PARDISO opt-in (Unit 18); GMRES with an ILUT preconditioner opt-in, real and complex, with a reported SparseLU fallback (Unit 44, 6.10) | **GMRES-ILUT verified, opt-in** (Unit 44, on `linalg/iterative`): 3D 9–72× faster and 8–26× less memory than SparseLU | Algebraic multigrid and block (field-split) preconditioners; parallel assembly |
-| Results and provenance | Plain-data results; run record with identity digest (6.6); sweeps persisted bit for bit (Unit 29); provenance (build, revision, platform, start, wall time) in every run record and file, transient and small-signal files, `nitcad --version` (Unit 42) | **Verified** (Unit 42, 6.6; PR #52; DECISIONS.md PV1–PV7) | A release version policy (PD5); cross-machine checksums (6.8) |
+| Results and provenance | Plain-data results; run record with identity digest (6.6); sweeps persisted bit for bit (Unit 29); provenance (build, revision, platform, start, wall time) in every run record and file, transient and small-signal files, `nitcad --version` (Unit 42); release versions (9) and `nitcad compare`, with references CI checks on its own machine (Unit 60, 6.8) | **Verified** (Unit 42, 6.6; PR #52; DECISIONS.md PV1–PV7); **release policy and cross-machine comparison built** (Unit 60, 9 and 6.8; on `results/release-policy`) | Comparing transient and small-signal files; PARDISO references |
 | Adaptive mesh refinement | `solve::adapt` over tensor, generated 2D and swept 3D meshes: feature indicators, goal-adjoint weighting and estimate, Richardson verification on M′, per-goal certificates, the `[adapt]` deck section and `.nitadapt` report; an opt-in decision layer (`policy = intelligent`: a priori sizes, benefit and cost estimates, allocation, fallback to the basic loop) (Unit 17, 6.12.4) | **Built** (Unit 17, on `mesh/adaptive-refinement`; slice 7 gates: AC5 met with the intelligent policy, 98 593 nodes against at least 890 k uniform; AC11, AC12, AC20 met). **Limitations (unmet as frozen, never loosened):** AC14 (the a priori prediction's recall 0.51 on the tensor MOSFET, DOFs 2.1× and 2.3× basic on the diode and MOS-C, no pass saved); AC15 (a hole-density order 1.64 from 2 samples; the cost model not better than node-only within timing noise); AC16 (the well MOSFET's tolerance mode 1.92× basic's DOFs; the tensor MOSFET's budget mode a tie, 0.6531% against 0.6507%); AC8's target (UC8's rule at 9 and 6 of 17 points within its budget; the swept adjoint estimate 9–84× the actual error); the basic loop does not reach 1% on the generated MOSFET in 12 passes; AD11's verified error underestimated one error 26× at p = 2.18. **Cross-run learning (Unit 17b, built on `mesh/cross-run-learning`; opt-in `predictor`):** AC12, AC21 and AC19's determinism, versioning, identity, fallback and bit-identity clauses met; held-out rank correlation 0.40 against ridge 0.16. **Limitation (unmet as frozen):** AC19's family clause on held-out m6 (4 passes against 5, but 12 000 DOFs against ID2's 10 476); met on m7 (4 against 5, 10 260 against 15 561). **Derived goals (Unit 17c, built on `mesh/derived-goals`; `goal = vt|gm|swing`):** DC3 and DC5 met for V_T, g_m and the swing on the tensor MOSFET. **Limitations:** DC4 for the swing (1.52× the DOFs of a tightened current goal, and about 0.65× of the uniform ladder against 1/3: accepted by the owner, 2026-11-15); two-level verification (DR6) still misses an error that appears only beyond M″ | the swept 3D adjoint estimate; general 3D meshes (AQ2); a shipped pre-trained predictor (LQ1 c) |
 | Visualization, GUI, batch | The `nitcad check|run|plot` batch runner over the input deck (Unit 31); the `render` layer and `nitcad plot` (Unit 25a, 6.14); rates and the mesh digest in results (Unit 45, 6.6); \|E\|, \|J\|, isosurfaces and streamlines (Unit 25b, 6.14); arrows, clipping, exploded views and filmstrips (Unit 25c, 6.14); the Windows application `nitcad-app` (Unit 26, 6.14); its analysis workspace (Unit 26b, 6.14); the 25b/25c views, region visibility, playback and clip sliders in the window (Unit 26c, 6.14) | **Batch runner verified, on `main`** (Unit 31; `6f67510`, PR #37); **core visualization verified, on `main`** (Unit 25a; `6d2135b`, PR #55); **rates and digest verified, on `main`** (Unit 45; `81622ca`, PR #56); **derived fields verified, on `main`** (Unit 25b; `8256cf8`, PR #57); **arrows, clipping, exploded views and filmstrips verified** (Unit 25c); **the GUI verified, on `main`** (Unit 26; `e9b1d71`, PR #59); **the analysis workspace verified, on `main`** (Unit 26b; `51face0`, PR #60); **the GUI catch-up verified** (Unit 26c, PR #61; the WG1 spikes open) | the WG1 spikes (cause unknown; the input cause fixed in Unit 26c) |
 | Validation against published/measured data | Legacy, analytic and convergence gates throughout; resistivity against dopant density (NBS SP 400-64) and the measured n_i(300 K) as benchmark decks (Unit 33, 10.1) | **Verified, on `main`** (Unit 33; `a14ac96`, PR #41): gaps found and pinned (boron mobility up to +48%, incomplete ionization at heavy doping, n_i +10%); the opt-in Masetti hole mobility (Unit 34; `e14a53f`, PR #42) brings boron to within 11% (AC3/AC5 at 1e18 accepted as documented limitations); Unit 35 (`2d1fdc7`, PR #44) makes Masetti and a published band set (n_i within the measurement's uncertainty) the defaults | A density-dependent ionization level (owner decision); breakdown and device-level benchmarks from accessible sources |

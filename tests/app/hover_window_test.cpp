@@ -7,6 +7,7 @@
 #include <windows.h>
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cmath>
 #include <filesystem>
@@ -18,6 +19,7 @@
 
 #include "NiTCAD/app/app_state.hpp"
 #include "NiTCAD/app/probe.hpp"
+#include "NiTCAD/render/edges.hpp"
 #include "NiTCAD/render/image.hpp"
 #include "fixtures.hpp"
 #include "main_window.hpp"
@@ -201,4 +203,207 @@ TEST_CASE("app window 26e: a hover costs less than a frame on the largest 3D exa
                                << " ms, " << w->workspace()->device->mesh().node_count() << " nodes");
     CHECK(shown > 0);
     CHECK(median < 16.0);
+}
+
+// Unit 26f (KG6), on the largest bundled 3D example's doping surface. Times recorded in DECISIONS.md.
+namespace {
+
+double median_of(std::vector<double> ms) {
+    std::ranges::sort(ms);
+    return 0.5 * (ms[(ms.size() - 1) / 2] + ms[ms.size() / 2]);
+}
+
+std::unique_ptr<MainWindow> example_3d_doping() {
+    const fs::path deck = fs::path(NITCAD_EXAMPLES_DIR) / "mosfet_3d.deck";
+    REQUIRE(fs::exists(deck));
+    auto w = window();
+    REQUIRE(w->renderer());
+    REQUIRE(w->open_deck(deck));
+    REQUIRE(pump_until([&] { return w->workspace() != nullptr && !w->runner().busy(); }));
+    w->select_tab(MainWindow::tab_view);
+    w->settings().kind = app::ViewKind::field;
+    w->settings().field = "doping";
+    w->refresh();
+    REQUIRE(w->scene());
+    REQUIRE(std::holds_alternative<render::FieldScene>(*w->scene()));
+    return w;
+}
+
+}  // namespace
+
+TEST_CASE("app window 26f: the enhanced look's edges are built with the scene, under 50 ms (KG6)", "[app]") {
+    auto w = example_3d_doping();
+    std::vector<double> build;
+    std::size_t points = 0;
+    for (int k = 0; k < 21; ++k) {
+        render::FieldScene f = std::get<render::FieldScene>(*w->scene());
+        render::set_look(f, render::Look::classic);
+        const auto t0 = std::chrono::steady_clock::now();
+        render::set_look(f, render::Look::enhanced);
+        build.push_back(std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count());
+        points = f.lines.back().points.size();
+    }
+    const double edges = median_of(build);
+    WARN("KG6: edges built in " << edges << " ms (median of 21, " << points / 2 << " segments, "
+                                << w->workspace()->device->mesh().node_count() << " nodes)");
+    // Release only (owner, 2026-11-19): the unoptimised Debug build takes about 20x longer; there it is recorded.
+#ifdef NDEBUG
+    CHECK(edges < 50.0);
+#endif
+}
+
+// The redraw clause, measured on the hardware adapter by the owner's ruling (KG6 (b), 2026-11-18): the
+// scene drawn off screen (no vsync), its camera turned 1 degree before each draw and nothing rebuilt.
+// Skipped where there is no hardware adapter (CI). The test window's WARP drag is reported only:
+// there the per-pixel lighting runs on the CPU (about 1.25x classic).
+TEST_CASE("app window 26f: a camera-move redraw within 10% of classic on the hardware adapter (KG6)", "[app]") {
+    auto hw = render::Renderer::create({.adapter = render::Adapter::hardware});
+    if (!hw) SKIP("no Direct3D 12 hardware adapter: " + hw.error().message);
+    auto w = example_3d_doping();
+    const int W = w->viewport().width(), H = w->viewport().height();
+    render::FieldScene f = std::get<render::FieldScene>(*w->scene());
+    double t[2]{};
+    for (int mode = 0; mode < 2; ++mode) {
+        render::set_look(f, mode ? render::Look::enhanced : render::Look::classic);
+        std::vector<double> ms;
+        for (int k = 0; k < 55; ++k) {
+            f.camera.azimuth_deg += 1.0f;
+            const auto t0 = std::chrono::steady_clock::now();
+            REQUIRE(hw->draw(f, W, H));
+            if (k >= 5) ms.push_back(std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count());
+        }
+        t[mode] = median_of(ms);
+    }
+    // For the record: the window's own drag on WARP, each look.
+    const HWND view = w->viewport().hwnd();
+    const int cy = w->viewport().height() / 2;
+    const auto orbits = [&] {
+        std::vector<double> ms;
+        int x = 100;
+        SendMessageW(view, WM_LBUTTONDOWN, MK_LBUTTON, MAKELPARAM(x, cy));
+        for (int k = 0; k < 55; ++k) {
+            x += 3;
+            const auto t0 = std::chrono::steady_clock::now();
+            SendMessageW(view, WM_MOUSEMOVE, MK_LBUTTON, MAKELPARAM(x, cy));
+            const double d = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+            if (k >= 5) ms.push_back(d);
+        }
+        SendMessageW(view, WM_LBUTTONUP, 0, MAKELPARAM(x, cy));
+        return median_of(ms);
+    };
+    REQUIRE(w->settings().enhanced);
+    const double warp_enhanced = orbits();
+    w->settings().enhanced = false;
+    w->refresh();
+    const double warp_classic = orbits();
+    WARN("KG6: redraw on " << hw->adapter_name() << " " << t[1] << " ms enhanced, " << t[0]
+                           << " ms classic (medians of 50), ratio " << t[1] / t[0] << "; WARP drag " << warp_enhanced
+                           << " ms enhanced, " << warp_classic << " ms classic, ratio " << warp_enhanced / warp_classic);
+    // Release only (owner, 2026-11-19): in the unoptimised Debug build the ratio wanders past 1.10 (1.11 and 1.19
+    // against a pass); there it is recorded.
+#ifdef NDEBUG
+    CHECK(t[1] <= 1.10 * t[0]);
+#endif
+}
+
+// Unit 26g (MG7), by KG6's method on the hardware adapter: the 26g enhanced draw within 1.25x of 26f's.
+// 26f's draw is the same scene with its batches matte and no ground shadow: exactly 26f's triangles and
+// lines (set_look puts every edge in the ink), leaving only 26g's shader branches, which matte skips.
+// WARP is recorded only.
+TEST_CASE("app window 26g: the enhanced draw within 1.25x of 26f's on the hardware adapter (MG7)", "[app]") {
+    auto w = example_3d_doping();
+    const int W = w->viewport().width(), H = w->viewport().height();
+    render::FieldScene now = std::get<render::FieldScene>(*w->scene());
+    render::set_look(now, render::Look::enhanced);
+    render::FieldScene before = now;
+    for (render::TriangleBatch& b : before.triangles) b.finish = render::Finish::matte;
+    before.ground_shadow = false;
+    render::set_look(before, render::Look::enhanced);
+    REQUIRE(std::ranges::any_of(now.triangles, [](const render::TriangleBatch& b) { return b.finish != render::Finish::matte; }));
+    const auto time = [&](render::Renderer& r) {
+        double t[2]{};
+        for (int mode = 0; mode < 2; ++mode) {
+            render::FieldScene& f = mode ? now : before;
+            std::vector<double> ms;
+            for (int k = 0; k < 55; ++k) {
+                f.camera.azimuth_deg += 1.0f;
+                const auto t0 = std::chrono::steady_clock::now();
+                REQUIRE(r.draw(f, W, H));
+                if (k >= 5) ms.push_back(std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count());
+            }
+            t[mode] = median_of(ms);
+        }
+        return std::array<double, 2>{t[0], t[1]};
+    };
+    auto warp = render::Renderer::create({.adapter = render::Adapter::warp});
+    REQUIRE(warp);
+    const auto tw = time(*warp);
+    WARN("MG7: WARP " << tw[1] << " ms 26g, " << tw[0] << " ms 26f, ratio " << tw[1] / tw[0] << " (recorded only)");
+    auto hw = render::Renderer::create({.adapter = render::Adapter::hardware});
+    if (!hw) SKIP("no Direct3D 12 hardware adapter: " + hw.error().message);
+    const auto th = time(*hw);
+    WARN("MG7: " << hw->adapter_name() << " " << th[1] << " ms 26g, " << th[0] << " ms 26f (medians of 50), ratio "
+                 << th[1] / th[0]);
+    CHECK(th[1] <= 1.25 * th[0]);
+}
+
+// Unit 26h (JG8), by KG6's method on the hardware adapter, examples/mosfet_3d.deck: the axis box and view cube
+// add under 1 ms to the enhanced draw (medians of 50), and a smooth move's frames (the draw at each eased
+// camera) each take under 16 ms. WARP is recorded only.
+TEST_CASE("app window 26h: the axis box and cube under 1 ms, a smooth move's frames under 16 ms (JG8)", "[app]") {
+    auto w = example_3d_doping();
+    const int W = w->viewport().width(), H = w->viewport().height();
+    render::FieldScene with = std::get<render::FieldScene>(*w->scene());
+    render::set_look(with, render::Look::enhanced);
+    REQUIRE(with.show_axis_box);
+    REQUIRE(with.axis_triad);
+    render::FieldScene without = with;
+    without.show_axis_box = false;
+    without.axis_triad = false;
+    const auto cost = [&](render::Renderer& r) {
+        double t[2]{};
+        for (int mode = 0; mode < 2; ++mode) {
+            render::FieldScene& f = mode ? with : without;
+            std::vector<double> ms;
+            for (int k = 0; k < 55; ++k) {
+                f.camera.azimuth_deg += 1.0f;
+                const auto t0 = std::chrono::steady_clock::now();
+                REQUIRE(r.draw(f, W, H));
+                if (k >= 5) ms.push_back(std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count());
+            }
+            t[mode] = median_of(ms);
+        }
+        return std::array<double, 2>{t[0], t[1]};
+    };
+    // A move from the default camera to Right, zoomed in, at 16 frames: the slowest frame's draw.
+    const auto slowest_frame = [&](render::Renderer& r) {
+        const app::CameraPose from{35.0f, 25.0f, 2.0f, 0.1f, 0.0f}, to{90.0f, 0.0f, 1.0f, 0.0f, 0.0f};
+        render::FieldScene f = with;
+        REQUIRE(r.draw(f, W, H));  // warm
+        double worst = 0.0;
+        for (int k = 0; k <= 16; ++k) {
+            const app::CameraPose p = app::camera_between(from, to, static_cast<float>(k) / 16.0f);
+            f.camera.azimuth_deg = p.azimuth_deg;
+            f.camera.elevation_deg = p.elevation_deg;
+            f.camera.zoom = p.zoom;
+            f.camera.pan = {p.pan_x, p.pan_y};
+            const auto t0 = std::chrono::steady_clock::now();
+            REQUIRE(r.draw(f, W, H));
+            worst = std::max(worst, std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count());
+        }
+        return worst;
+    };
+    auto warp = render::Renderer::create({.adapter = render::Adapter::warp});
+    REQUIRE(warp);
+    const auto tw = cost(*warp);
+    WARN("JG8: WARP " << tw[1] << " ms with the box and cube, " << tw[0] << " ms without; slowest move frame "
+                      << slowest_frame(*warp) << " ms (recorded only)");
+    auto hw = render::Renderer::create({.adapter = render::Adapter::hardware});
+    if (!hw) SKIP("no Direct3D 12 hardware adapter: " + hw.error().message);
+    const auto th = cost(*hw);
+    const double frame = slowest_frame(*hw);
+    WARN("JG8: " << hw->adapter_name() << " " << th[1] << " ms with the box and cube, " << th[0]
+                 << " ms without (medians of 50), +" << th[1] - th[0] << " ms; slowest move frame " << frame << " ms");
+    CHECK(th[1] - th[0] < 1.0);
+    CHECK(frame < 16.0);
 }

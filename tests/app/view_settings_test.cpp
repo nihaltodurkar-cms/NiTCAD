@@ -1220,3 +1220,168 @@ TEST_CASE("app views: a diode's I-V from 0 V on a log axis, either contact sense
         CHECK(p.y.hi >= p.series[0].y.back());
     }
 }
+
+TEST_CASE("app views 26f: the enhanced 3D look is the default in the app and nitcad plot (KD5, KD6, KG5)", "[app]") {
+    const ViewSettings fresh;
+    CHECK(fresh.enhanced);
+    const app::Workspace& w3 = mosfet3d().workspace;
+    const auto edges_of = [](const render::FieldScene& f) {
+        return std::ranges::count_if(f.lines, [](const render::LineBatch& l) { return l.name == "feature edges"; });
+    };
+    // A 3D solid and field view: enhanced, with one feature-edge batch; the command names no look.
+    for (const ViewKind k : {ViewKind::solid, ViewKind::field}) {
+        ViewSettings s;
+        s.kind = k;
+        const auto scene = app::build_scene(w3, s);
+        REQUIRE(scene);
+        const auto& f = std::get<render::FieldScene>(*scene);
+        CHECK(f.look == render::Look::enhanced);
+        CHECK(edges_of(f) == 1);
+        CHECK_FALSE(has(app::plot_arguments(s), "--look"));
+        // Classic: no edges, and the command says so.
+        s.enhanced = false;
+        const auto classic = app::build_scene(w3, s);
+        REQUIRE(classic);
+        CHECK(std::get<render::FieldScene>(*classic).look == render::Look::classic);
+        CHECK(edges_of(std::get<render::FieldScene>(*classic)) == 0);
+        const auto args = app::plot_arguments(s);
+        CHECK(std::ranges::search(args, std::vector<std::string>{"--look", "classic"}).begin() != args.end());
+    }
+    // 2D: the look is set but adds nothing.
+    ViewSettings s2;
+    s2.kind = ViewKind::field;
+    const auto scene2 = app::build_scene(mosfet().workspace, s2);
+    REQUIRE(scene2);
+    CHECK(edges_of(std::get<render::FieldScene>(*scene2)) == 0);
+
+    // nitcad plot: no --look draws what --look enhanced draws, and unlike --look classic; the app's
+    // default 3D field view is that image; a bad look is refused.
+    const fs::path out = app_test::scratch("views_26f_look");
+    const auto plot = [&](const std::string& args, const std::string& name) {
+        const std::string cli_args = "plot " + app_test::quoted(mosfet3d().deck) + " " + args +
+                                     " --size 480x360 --adapter warp --out " + app_test::quoted(out / name);
+        const auto cli = app_test::nitcad(cli_args);
+        CAPTURE(cli_args, cli.output);
+        REQUIRE(cli.status == 0);
+        auto png = render::load_png(out / name);
+        REQUIRE(png);
+        return std::move(*png);
+    };
+    const auto max_channel = [](const render::Image& x, const render::Image& y) {
+        const auto diff = render::compare(x, y, 0);
+        REQUIRE(diff);
+        return diff->max_channel;
+    };
+    const auto none = plot("--view field --field potential", "none.png");
+    const auto enhanced = plot("--view field --field potential --look enhanced", "enhanced.png");
+    const auto classic = plot("--view field --field potential --look classic", "classic.png");
+    CHECK(max_channel(none, enhanced) == 0);
+    CHECK(max_channel(none, classic) > 0);
+    ViewSettings v;
+    v.kind = ViewKind::field;
+    const auto app_scene = app::build_scene(w3, v);
+    REQUIRE(app_scene);
+    auto r = render::Renderer::create({.adapter = render::Adapter::warp});
+    REQUIRE(r);
+    const auto mine = r->draw(std::get<render::FieldScene>(*app_scene), 480, 360);
+    REQUIRE(mine);
+    CHECK(max_channel(*mine, none) == 0);
+    const auto bad = app_test::nitcad("plot " + app_test::quoted(mosfet3d().deck) + " --look shiny --out " +
+                                      app_test::quoted(out / "bad.png"));
+    CHECK(bad.status != 0);
+    CHECK(bad.output.find("--look is classic or enhanced") != std::string::npos);
+}
+
+TEST_CASE("app views 26h: the axis box, on by default in the app and nitcad plot (JD1, JQ3, JG6)", "[app]") {
+    const ViewSettings fresh;
+    CHECK(fresh.axis_box);
+    const app::Workspace& w3 = mosfet3d().workspace;
+    ViewSettings s;
+    s.kind = ViewKind::solid;
+    const auto on = app::build_scene(w3, s);
+    REQUIRE(on);
+    CHECK(std::get<render::FieldScene>(*on).show_axis_box);
+    CHECK_FALSE(std::ranges::any_of(app::plot_arguments(s), [](const std::string& a) { return a == "--axes"; }));
+    s.axis_box = false;
+    const auto off = app::build_scene(w3, s);
+    REQUIRE(off);
+    CHECK_FALSE(std::get<render::FieldScene>(*off).show_axis_box);
+    const auto args = app::plot_arguments(s);
+    CHECK(std::ranges::search(args, std::vector<std::string>{"--axes", "off"}).begin() != args.end());
+    // Classic draws no box, so the command names no --axes there.
+    s.enhanced = false;
+    CHECK_FALSE(std::ranges::any_of(app::plot_arguments(s), [](const std::string& a) { return a == "--axes"; }));
+    // nitcad plot: no --axes draws what --axes on draws, unlike --axes off; a bad value is refused.
+    const fs::path out = app_test::scratch("views_26h_axes");
+    const auto plot = [&](const std::string& extra, const std::string& name) {
+        const std::string cli_args = "plot " + app_test::quoted(mosfet3d().deck) + " --view solid " + extra +
+                                     " --size 480x360 --adapter warp --out " + app_test::quoted(out / name);
+        const auto cli = app_test::nitcad(cli_args);
+        CAPTURE(cli_args, cli.output);
+        REQUIRE(cli.status == 0);
+        auto png = render::load_png(out / name);
+        REQUIRE(png);
+        return std::move(*png);
+    };
+    const auto max_channel = [](const render::Image& x, const render::Image& y) {
+        const auto diff = render::compare(x, y, 0);
+        REQUIRE(diff);
+        return diff->max_channel;
+    };
+    const auto none = plot("", "none.png");
+    const auto with = plot("--axes on", "on.png");
+    const auto without = plot("--axes off", "off.png");
+    CHECK(max_channel(none, with) == 0);
+    CHECK(max_channel(none, without) > 0);
+    const auto bad = app_test::nitcad("plot " + app_test::quoted(mosfet3d().deck) + " --axes maybe --out " +
+                                      app_test::quoted(out / "bad.png"));
+    CHECK(bad.status != 0);
+}
+
+TEST_CASE("app views 26h: camera_between eases, the shorter way round, to the endpoints exactly (JD5, JG5)",
+          "[app]") {
+    using app::CameraPose;
+    const CameraPose a{350.0f, 10.0f, 1.0f, 0.0f, 0.0f}, b{10.0f, 40.0f, 3.0f, 0.2f, -0.4f};
+    CHECK(app::camera_between(a, b, 0.0f) == a);
+    CHECK(app::camera_between(a, b, 1.0f) == b);
+    CHECK(app::camera_between(a, b, -0.5f) == a);
+    CHECK(app::camera_between(a, b, 1.5f) == b);
+    // 350 to 10 passes 0, never 180: every frame within 10 degrees of 0.
+    float last_el = a.elevation_deg, last_zoom = a.zoom;
+    for (int k = 1; k < 100; ++k) {
+        const float t = static_cast<float>(k) / 100.0f;
+        const CameraPose p = app::camera_between(a, b, t);
+        CAPTURE(t, p.azimuth_deg);
+        const float off = std::abs(std::remainder(p.azimuth_deg, 360.0f));
+        CHECK(off <= 10.0001f);
+        // Monotone, eased: elevation and zoom never go back.
+        CHECK(p.elevation_deg >= last_el);
+        CHECK(p.zoom >= last_zoom);
+        last_el = p.elevation_deg;
+        last_zoom = p.zoom;
+    }
+    // Smoothstep: halfway is half, the ends move slowest.
+    const CameraPose mid = app::camera_between(a, b, 0.5f);
+    CHECK(std::abs(mid.elevation_deg - 25.0f) < 1e-4f);
+    CHECK(std::abs(std::remainder(mid.azimuth_deg, 360.0f)) < 1e-3f);
+    const float early = app::camera_between(a, b, 0.1f).elevation_deg - a.elevation_deg;
+    CHECK(early < 0.1f * (b.elevation_deg - a.elevation_deg));
+    // The other way: 10 to 350 also passes 0; 0 to 180 takes one of the two halves, consistently.
+    const CameraPose p = app::camera_between(b, a, 0.5f);
+    CHECK(std::abs(std::remainder(p.azimuth_deg, 360.0f)) < 1e-3f);
+    const CameraPose c{0.0f, 0.0f, 1.0f, 0.0f, 0.0f}, d{180.0f, 0.0f, 1.0f, 0.0f, 0.0f};
+    CHECK(std::abs(std::abs(app::camera_between(c, d, 0.5f).azimuth_deg) - 90.0f) < 1e-3f);
+    // A pose round-trips through the settings, and the defaults fill an empty camera.
+    ViewSettings s;
+    const CameraPose def = app::camera_pose(s);
+    CHECK(def.zoom == 1.0f);
+    app::set_camera_pose(s, b);
+    CHECK(app::camera_pose(s) == b);
+}
+
+TEST_CASE("app views 26h: smooth moves follow Windows' animation setting (JD5, JQ5, JG5)", "[app]") {
+    CHECK(app::smooth_moves(true, true, false));
+    CHECK_FALSE(app::smooth_moves(true, false, false));  // "Show animations" off: instant
+    CHECK_FALSE(app::smooth_moves(false, true, false));  // tests and the self-test: instant
+    CHECK(app::smooth_moves(false, false, true));        // a test forcing them
+}

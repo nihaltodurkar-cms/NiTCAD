@@ -29,6 +29,7 @@
 #include "NiTCAD/app/run_controller.hpp"
 #include "NiTCAD/app/view_settings.hpp"
 #include "NiTCAD/app/workspace.hpp"
+#include "NiTCAD/render/axes3d.hpp"
 #include "NiTCAD/render/image.hpp"
 #include "NiTCAD/app/examples.hpp"
 #include "NiTCAD/app/integration.hpp"
@@ -49,6 +50,9 @@ struct WindowOptions {
     // at the desktop cannot move, click or hover over it while it measures its message loop (WG1).
     bool input = true;
     bool quit_on_close = true;           // post WM_QUIT when destroyed (the application's window)
+    // Smooth camera moves (Unit 26h, JD5), when Windows shows animations too. The application turns them
+    // on; tests and the self-test leave them off, so a camera command lands at once.
+    bool animate = false;
     std::filesystem::path state_file;    // the per-user state; empty: not loaded or saved
     // The bundled examples (VQ11): where they are (empty: beside the executable, else the source tree's),
     // and where a user's copies go (empty: the user's Documents, NiTCAD\examples).
@@ -71,6 +75,10 @@ inline constexpr UINT tree_check_message = WM_APP + 3;
 // snapshot the time since Play has reached (playback_frame), so a frame drawn late skips the ones it missed.
 inline constexpr UINT_PTR playback_timer = 0x54;
 inline constexpr UINT playback_tick_ms = 40;
+// Unit 26h (JD5): the smooth camera move's frames, and its length.
+inline constexpr UINT_PTR camera_timer = 0x55;
+inline constexpr UINT camera_tick_ms = 16;
+inline constexpr float camera_move_ms = 250.0f;
 
 class MainWindow final : public Viewport::Host,
                          public DeckPane::Host,
@@ -131,6 +139,11 @@ public:
     [[nodiscard]] std::string status(int part) const;
     [[nodiscard]] HWND child(int id) const noexcept;
     [[nodiscard]] const std::optional<ProbeHit>& probe() const noexcept { return probe_; }
+    // Unit 26h (JD4, JD5): a named view (render::named_views) by name; whether a camera move is under way,
+    // and smooth moves turned on or off (tests).
+    void show_named_view(std::string_view name);
+    [[nodiscard]] bool camera_moving() const noexcept { return move_.has_value(); }
+    void set_animate(bool on) noexcept { animate_ = force_animate_ = on; }  // on: whatever Windows says
     void probe_at(float x, float y);
     // The Draw cut line tool (Unit 26b, XD5): the first click sets the line's start, the second its end.
     void cut_at(float x, float y);
@@ -175,6 +188,10 @@ public:
         id_time, id_time_text, id_play, id_clip_x0, id_clip_x1, id_clip_y0, id_clip_y1, id_clip_z0, id_clip_z1,
         // Unit 26d (ZD3): the colour range's minimum and maximum, and Auto.
         id_range_min, id_range_max, id_range_auto,
+        // Unit 26f (KD5): the enhanced 3D look.
+        id_enhanced,
+        // Unit 26h (JD1): the axis box.
+        id_axis_box,
         id_first_label = 5100,
     };
 
@@ -232,6 +249,10 @@ private:
     void play(bool on);
     void show_snapshot(std::size_t k);
     void on_playback_timer();
+    // Unit 26h (JD5): move the camera to a pose, smoothly if animations are on; stop a move at its frame.
+    void move_camera(const CameraPose& to);
+    void stop_move();
+    void on_camera_timer();
     void sync_playback();
     void sync_clip_sliders();  // YD6: the box's sides on its sliders
     // A slider of the inspector moved (WM_HSCROLL): the snapshot, or a side of the clipping box (YD6).
@@ -262,6 +283,10 @@ private:
     void viewport_hover(float x, float y) override;
     void viewport_leave() override;
     bool viewport_is_3d() const override;
+    bool viewport_over_cube(float x, float y) const override;
+    void viewport_named_view(int index) override;
+    // Unit 26h (JD3): snap the camera to a preset (zoom and pan reset as in Fit).
+    void snap_to(const render::CameraPreset& preset);
     // DeckPane::Host
     void deck_changed() override;
     // StartPage::Host and RunPage::Host
@@ -304,6 +329,13 @@ private:
     std::string values_title_;    // their title, "<symbol> (<unit>)" (ZD7)
     std::optional<ProbeHit> probe_, measure_from_;
     bool probe_mode_ = true, measure_mode_ = false, cut_mode_ = false;
+    struct CameraMove {
+        CameraPose from, to;
+        ViewSettings* settings = nullptr;  // the view it moves; another tab's view stops it
+        std::chrono::steady_clock::time_point start;
+    };
+    std::optional<CameraMove> move_;
+    bool animate_ = false, force_animate_ = false;
     std::optional<ViewSettings::Cut> cut_;          // Unit 26b, XD5
     std::optional<std::vector<double>> cut_from_;  // the first click of a cut line, um
     std::optional<render::Renderer> renderer_;

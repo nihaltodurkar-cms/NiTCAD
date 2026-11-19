@@ -95,6 +95,8 @@ private:
     void viewport_hover(float, float) override {}
     void viewport_leave() override {}
     bool viewport_is_3d() const override { return false; }
+    bool viewport_over_cube(float, float) const override { return false; }
+    void viewport_named_view(int) override {}
 
     Host& host_;
     HWND panel_ = nullptr, list_ = nullptr, progress_ = nullptr, label_ = nullptr, stop_ = nullptr;

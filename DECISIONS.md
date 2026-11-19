@@ -568,6 +568,569 @@ kept earlier mutants. It was rerun with each file touched after restore. **Full 
 2026-11-18: "full suite is not required rn"), and the Debug suite is left to CI. HG6 therefore stands on the suites
 above, not on the whole tree.
 
+### Unit 26f — enhanced 3D look (proposed 2026-11-18; on `app/visual-prototype`)
+
+**Owner request (2026-11-18):** "improve the visuals of 3D model ... the GUI of 3D model looks too basic". Of the
+eight suggestions, the owner asked for a prototype of the first three: lighting, feature edges and a gradient
+background. Prototype `ff02613` sits behind the environment variable `NITCAD_VISUAL_PROTO=1`. On its FinFET and
+nmosfet screenshots the owner ruled "Its good" and asked for this proposal. The branch is stacked on
+`app/hover-readout` (26e, not yet merged), so it rebases onto `main` once 26e merges.
+
+**Standing conditions:** as for 26e. The drawing of 3D views only, with no change to numerics, results, files or run
+identities. Win32 + D3D12 + Direct2D only. Criteria are fixed before code. Release and Debug suites with `/W4 /WX`,
+plus hand mutants. WG1 and the self-tests stay as ruled. Nothing is pushed or merged without authorization.
+
+**Today (`main` and 26e):** 3D triangles get one directional light from over the viewer's shoulder, lit two-sided as
+`ambient 0.38 + 0.62·|n·l|`, on a white clear. Region solids show no edges unless **Mesh edges** is on. The prototype
+adds the following on 3D scenes only:
+- key, fill and rim lights, a sky/ground hemisphere ambient and a soft highlight (reduced on field maps);
+- dark depth-tested feature edges where faces turn by more than 30°, and at each batch's open boundary;
+- a vertical gradient over the view rectangle.
+
+It has three shortcuts: the edges are recomputed on every frame, the eye direction is `-forward` even in
+perspective, and the switch is an environment variable.
+
+**Design:**
+
+| # | Change | Where | Behaviour |
+|---|---|---|---|
+| KD1 | **A look on the scene.** `enum class Look { classic, enhanced }` and `FieldScene::look`. The render layer's default stays **classic**. The renderer branches on the scene's look, and the environment variable is removed. | `render/scene.hpp`, `renderer.cpp` | Classic draws bit-identically to today. 2D scenes ignore the look. |
+| KD2 | **Enhanced lighting.** The prototype's model: key (today's light), fill (lower right), rim `pow(1 − n·v, 3)`, hemisphere ambient from the camera's up, and a Blinn–Phong highlight (0.22 on solids, 0.08 on field maps). Two-sided by turning the normal toward the eye. **Per-pixel eye direction:** the mesh shader passes world position, and the constants carry the camera position (perspective) or `-forward` (orthographic). | `scene.hlsl`; a new pure `frame_lighting(scene, view)` in the renderer, which fills those constants | The colormap is sampled exactly as today, and the lighting only scales it, as classic does. The hover readout and Probe still report the solved values. |
+| KD3 | **Feature edges, computed once.** A new pure `render::feature_edges(const TriangleBatch&, float angle_deg)` returns segments: edges shared by two faces whose normals differ by more than the angle (either winding), and edges of only one face (or of more than two). The output is sorted, so images are deterministic. `add_feature_edges(FieldScene&)` appends one `LineBatch "feature edges"` (ink 0.08/0.09/0.11, alpha 0.85, 1.7 px, depth-tested) built from the region solids, field surfaces, slices and electrodes. Arrows, streamlines, isosurfaces and the outline shell are skipped. | `render/geometry` or a new `render/edges.hpp/.cpp`; the 3D scene builders call it when `look == enhanced` | Built with the scene, not per frame: a camera move redraws without recomputing. Clipping and hidden regions rebuild the scene, and with it the edges. |
+| KD4 | **Gradient background.** In enhanced 3D, the view rectangle is filled before the scene with a vertical gradient (0.86/0.89/0.93 at the top to 0.99/0.99/1.0 at the bottom). The title band and colorbar panel stay white. | `background_ps` in `scene.hlsl`, one PSO | 2D views and plots are unchanged. |
+| KD5 | **The app setting.** An inspector check box **Enhanced 3D look**, on by default, saved in the app state with the other view settings. Off gives classic. The equivalent command adds `--look classic` only when it is off. | `view_settings`, `app_state`, `main_window.cpp`, `self_test.cpp` | Shown on 3D views only (as **Perspective** is). |
+| KD6 | **`nitcad plot --look classic\|enhanced`**, default **enhanced**, so the app and `nitcad plot` give the same image from the same options (as HD4 did for the colormap). | `cli/plot.cpp` | A 3D `nitcad plot` run without `--look` draws a different PNG from before. This is the user-visible change. |
+
+**Questions (each with a recommendation):**
+
+| # | Question | Options | Recommendation |
+|---|---|---|---|
+| KQ1 | The default look | (a) Enhanced in the app and `nitcad plot`. The render layer's default stays classic, existing references unchanged, two new enhanced references. (b) Classic everywhere, enhanced opt-in. (c) Enhanced everywhere, including the render layer, with every 3D reference rebuilt. | **(a)**: users get the look the owner approved. As with HD4, the references name what they draw, so no owner-approved rebuild is needed. (c) churns references with no gain in what they test. |
+| KQ2 | The edge rule | (a) Dihedral angle above 30°, plus open batch boundaries. (b) (a) plus view-dependent silhouettes. | **(a)**: device geometry is mostly boxes and extrusions, so (a) draws the outline at any angle. It can also be cached, while silhouettes need work on every frame. |
+| KQ3 | Which batches get edges | (a) Region solids, field surfaces, slices, electrodes. (b) Every lit batch. | **(a)**: arrow cones, streamline tubes and marching-tetrahedra isosurfaces have many facets over 30°, and outlining them is clutter. |
+| KQ4 | Where the edges are computed | (a) Once, when the scene is built (render layer, pure, testable). (b) Per frame in the renderer (the prototype). | **(a)**: rotating costs nothing extra, and the function can be unit tested. |
+| KQ5 | The background | (a) A gradient over the 3D view only. (b) Over the whole image. (c) A dark viewport option as well. | **(a)**: what the owner approved. A dark viewport is a later item, with the dark title bar (26d). |
+| KQ6 | Highlights on field maps | (a) Reduced (0.08), as prototyped. (b) None. | **(a)**: as approved. Lighting already scales the colormap in classic. Exact values come from the colorbar, the hover readout and Probe. |
+
+**Owner ruling (2026-11-18):** ruled under the standing instruction "always choose recommended" (2026-11-11): KQ1 (a),
+KQ2 (a), KQ3 (a), KQ4 (a), KQ5 (a), KQ6 (a). The request was for the proposal, so implementation waits for the
+owner's go-ahead.
+
+**Acceptance criteria (frozen before code; tests in `tests/render` and `tests/app`, hidden windows as today):**
+
+| # | Criterion |
+|---|---|
+| KG1 | Classic is bit-identical: every existing render reference image matches unchanged, the scene's default look is classic, and 2D scenes draw identically under both looks. |
+| KG2 | `feature_edges`: a closed cube of 12 triangles gives exactly its 12 edges. A flat square split into 8 triangles gives only its 4 sides (8 segments). A fold at 20° gives no edge at 30°, and one at 40° gives the fold. A flat strip with mixed winding gives only its boundary. Degenerate triangles are ignored. Output is identical across two calls and with the triangle order shuffled. |
+| KG3 | `frame_lighting`: orthographic gives eye `-forward` and a perspective flag of 0; perspective gives the camera position and a flag of 1. Key, fill and up are unit vectors, the fill on the opposite side of the eye from the key. Classic leaves the KD2 constants zero. |
+| KG4 | Two new references: `examples/mosfet_3d.deck`'s solid view and potential field view, enhanced, compared under the references' existing rules. Each passes, and each differs from its classic render. |
+| KG5 | App and CLI: the check box defaults on and survives a save and load of the app state. Off, the view is classic. The equivalent command omits `--look` when on and gives `--look classic` when off, and run through `nitcad plot` it gives the app's image (the WG4 self-test default). `nitcad plot` with no `--look` equals `--look enhanced`. The check box is hidden on 2D views. |
+| KG6 | Cost: building the edges for the largest bundled 3D example's field scene takes under 50 ms in Release, and a camera-move redraw is within 10% of classic's (median of 50 frames). Both times are recorded. |
+| KG7 | No change elsewhere: no solver, physics or io source changed; app tests change only where KD5 changes what they check; WG1 self-tests within their ruled bounds. |
+| KG8 | Hand mutants, each killed by a test: angle 30° → 60°; the `abs` dropped from the dihedral test (mixed winding); open boundaries not drawn; arrows given edges; output not sorted; the renderer ignoring `look`; the background drawn in 2D; the perspective eye replaced by `-forward`; the setting not saved; the `nitcad plot` default left at classic. |
+
+**Slices (each one local commit):** 26f·1 the render layer: `Look`, `feature_edges` / `add_feature_edges`,
+`frame_lighting`, per-pixel eye, background, the environment variable removed (KG1–KG4); 26f·2 the app check box and
+`nitcad plot --look` (KG5, KG6); 26f·3 suites, mutants (KG7, KG8), the ARCHITECTURE "as built" entry.
+
+**Implementation authorized (2026-11-18):** "choose recommended and start".
+
+**Results (2026-11-18; slices `fdb7886`, `871c714` and the slice 3 commit; Release, `/W4 /WX`, MSVC 14.51):**
+
+| # | Result |
+|---|---|
+| KG1 | **Met.** Every existing render reference matches unchanged. The scene's default look is classic. The 2D potential map draws byte-identically under both looks. Outside the suite, four `nitcad plot` classic renders (FinFET and nmosfet decks, solid and field) on the RTX 5060 Ti are byte-identical to the images drawn before the unit. |
+| KG2 | **Met.** `tests/render/edges_test.cpp`: the cube's 12 edges; the flat 2 × 2 square's 8 boundary segments; the 20° fold gives no edge and the 40° fold gives one (none at 60°); mixed winding gives only the boundary; degenerate triangles are ignored; output is sorted and identical after shuffling and rotating triangles; −0 and +0 are one position. |
+| KG3 | **Met.** `frame_lighting`: classic and 2D give zeros; orthographic gives eye = the view direction within 1e-6, with unit key, fill, up and eye, key from the left, fill from the right; perspective gives the camera's position, outside the bounds along the view direction within 1e-5. |
+| KG4 | **Met, with one wording deviation.** The two references are drawn from the image test's own solved 3D MOSFET (the device all its 3D references use), not from `examples/mosfet_3d.deck`. Each passes the references' comparison rules and differs from its classic render in more than 5% of pixels. |
+| KG5 | **Met.** The app-views, app-state and window tests: the check box defaults on, is hidden on 2D devices and the Curves tab, and is saved (`enhanced_look`); a new device's views take the saved choice. The equivalent command omits `--look` when on and gives `--look classic` when off; in both cases `nitcad plot` draws the app's image exactly (WARP). `nitcad plot` without `--look` equals `--look enhanced` and differs from classic; `--look shiny` is refused. The self-test accepts `--look`. |
+| KG6 | **Met (redraw clause on the hardware adapter, by the owner's ruling (b) below).** On `examples/mosfet_3d.deck`'s doping surface (1,911 nodes, 776 segments), building the edges takes a median of 1.75–1.91 ms (bound 50 ms). A camera-move redraw (median of 50 drag steps in the hidden test window, which draws on WARP): enhanced 13.7–14.2 ms against classic 10.9–11.1 ms, 1.25–1.28× (bound 1.10×). The prototype shader was 1.47×; the cost was cut by computing powers by multiplication and the orthographic half vector once (no pixel change on WARP). What is left is the per-pixel lighting, which WARP runs on the CPU. The edges cost about 0.3 ms and the background about 0.4 ms. The same draw on the RTX 5060 Ti, off screen: 1.02–1.07× classic. After the ruling, the test draws the scene off screen on the hardware adapter with its camera turned 1° before each draw (no rebuild, no vsync): 3.80 ms enhanced against 3.84 ms classic, 0.99× (0.85–1.01× over four runs). It is skipped where there is no hardware adapter (CI), and it still reports the WARP drag (1.22–1.29×). |
+| KG7 | **Met** on the render, app and CLI entries (51 of 51, Release); the full Release ctest was stopped at the owner's word ("dont run full suite just push", 2026-11-18) with 229 of 235 entries passed and none failed (`verify_full.tvb04` and five queued entries not finished). The Debug suite is left to CI. No solver, physics or io source changed. App tests changed only where KD5 adds a check box, a setting and a flag. |
+| KG8 | **Met.** 10 hand mutants, each killed: angle 30° → 60°; the `abs` dropped (mixed winding); open boundaries not drawn; arrows given edges; output not sorted; the renderer ignoring the look; the enhanced look drawn in 2D; the perspective eye replaced by `-forward`; the setting not saved; the `nitcad plot` default left at classic. Each file was touched after its restore, so no mutant stayed in a later build. |
+
+**Open for the owner (KG6):** the frozen bound is 1.10× and does not name an adapter. Measured on the test
+window's WARP adapter it is unmet (1.25–1.28×); on the hardware adapter, which the app uses by default, it is met
+(1.02–1.07×). Options: (a) accept KG6's redraw clause as a limitation on WARP, keeping the `[!shouldfail]` test; (b)
+rule that the clause is measured on the hardware adapter, and turn the test's check to it (skipped where there is
+no GPU, as in CI); (c) cheaper enhanced shading on WARP (for example no highlight or rim there), which changes the
+look under WARP. Recommendation: **(a)**. It keeps the criterion as frozen, users draw on the GPU, and (b) would
+change which measurement decides the criterion after the results were seen.
+
+**Owner ruling (2026-11-18):** "b". The redraw clause is measured on the hardware adapter, the app's default; the
+test checks it there and skips without one. The WARP figure is kept in the record, not as a gate.
+
+### Unit 26g — materials, depth and finish (proposed 2026-11-18; on `app/materials-depth`)
+
+**Owner request (2026-11-18):** "make plans for 4 - 8" of the eight 3D-view suggestions. This unit covers 4
+(metallic contacts, glass-like oxide), 5 (ambient occlusion, a soft shadow) and 8 (softer mesh edges, contour
+lines, the colourbar's frame). 6 and 7 are Unit 26h. The branch is stacked on `app/visual-prototype` (26f).
+
+**Standing conditions:** as for 26f. Everything here belongs to the **enhanced** look only. Classic, the render
+layer's default, draws bit-identically, so every existing reference is unchanged. No change to numerics, results,
+files or run identities. Win32 + D3D12 + Direct2D only. Criteria are fixed before code. Release and Debug suites
+with `/W4 /WX`, plus hand mutants. Speed is measured on the hardware adapter (KG6 ruling (b)), and WARP figures are
+recorded only. Nothing is pushed or merged without authorization.
+
+**Today (26f):**
+- Contacts and electrodes are one flat batch, `"electrode"`, coloured 0.33/0.35/0.38.
+- The oxide is a translucent flat batch at `insulator_alpha`, drawn by weighted blended OIT.
+- Enhanced shading treats both like any solid.
+- There is no occlusion or shadow.
+- Mesh edges are 0.15/0.17/0.2 at alpha 0.75 (3D), 1 px.
+- Contours (`--contours`, off by default) are a dark line batch.
+- The colourbar already has a 1 px frame (0.3/0.32/0.35, Unit 25a), so item 8's frame exists. Only its look in
+  enhanced is in question (MQ6).
+
+**Design:**
+
+| # | Change | Where | Behaviour |
+|---|---|---|---|
+| MD1 | **A finish per batch.** `enum class Finish { matte, metal, glass }` and `TriangleBatch::finish` (matte by default). The scene builders mark `"electrode"` metal and the translucent insulators glass. The renderer passes it in the frame flags (bits 3–4). | `render/scene.hpp`, `scene.cpp`, `renderer.cpp` | Classic ignores it. |
+| MD2 | **Metal (item 4).** In enhanced, a metal batch's base colour becomes aluminium 0.70/0.72/0.76. Its highlight is stronger and tighter (0.55, `(n·h)⁶⁴`), and it gets a fake environment: the sky/ground ambient taken along the reflected eye ray instead of the normal, so faces turned up read bright and faces turned down read dark, as brushed metal does. | `scene.hlsl` | Contact pads and gate electrodes alike (MQ1). |
+| MD3 | **Glass (item 4).** In enhanced, a glass batch's alpha rises toward grazing angles, `a' = a + (1 − a)·0.55·(1 − n·v)³` (Schlick-like), and its colour lifts by the same term, so the oxide's outline shows where it is seen edge-on while face-on it stays as clear as today. | `scene.hlsl` (transparent pass) | Opaque insulators (`--opaque`) stay matte. |
+| MD4 | **Ambient occlusion (item 5).** A screen-space pass after the opaque triangles, before the lines and the OIT composite. It reads the depth buffer (D32 made typeless with an SRV), takes 12 samples in a hemisphere at a radius of 2% of the view's height, darkens by up to 35% on solids and 15% on field maps (a mask the opaque pass writes in the colour target's alpha), and is blurred 4 × 4. | `post.hlsl` (`ao_ps`, `ao_blur_ps`), `renderer.cpp`: one R8 target at the supersampled size | Corners where a contact meets the silicon, the steps of the oxide and the gate's foot read as recessed. Translucent glass is not occluded and does not occlude. |
+| MD5 | **A ground shadow (item 5).** A soft shadow under the device: a quad 4% of the height below `lo.y`, on the camera's floor plane, its alpha falling off from 0.28 at the footprint's centre to 0 one twelfth of the extent outside it. Drawn before the scene, over the gradient. | `scene.hlsl` (`shadow_ps`), the footprint from the scene's bounds | It follows the camera. It is not drawn when the view looks up from below (elevation < −5°), or on clipped or exploded views. |
+| MD6 | **Softer mesh edges and contours (item 8).** In enhanced: 3D mesh edges 0.25/0.28/0.32 at alpha 0.35, 1 px; contours 1.2 px at alpha 0.55, in the ink of the feature edges. | `scene.cpp` (the batch colours and widths read the look through `set_look`) | Contours stay off by default (MQ5). |
+| MD7 | **The colourbar in enhanced (item 8).** Its frame is kept and drawn 1 px lighter (0.45/0.47/0.5), with tick marks inside the bar's right edge as well as outside. The panel stays white. | `renderer.cpp` `draw_colorbar` | Classic's colourbar is unchanged. |
+
+**Questions (each with a recommendation):**
+
+| # | Question | Options | Recommendation |
+|---|---|---|---|
+| MQ1 | The metal's colour | (a) Aluminium grey for every contact and electrode. (b) Gold for contacts and aluminium for gates. (c) By the deck's contact kind and work function. | **(a)**: one finish that reads as metal. Colour codes for contact kinds would be a new legend for no physics gain. |
+| MQ2 | Occlusion technique | (a) Screen-space AO (MD4). (b) Precomputed per-vertex AO from the mesh. (c) None, shadow only. | **(a)**: it works for every view, clip and region visibility with no per-scene cost. (b) would need rays through the mesh on every rebuild. |
+| MQ3 | AO on field maps | (a) Reduced (15%) through the mask. (b) Full. (c) None on field maps. | **(a)**: the corners still read in depth, and colours shift less than the lighting already shifts them. Values come from the colourbar, hover and Probe. |
+| MQ4 | The ground shadow | (a) A soft footprint shadow (MD5). (b) A real shadow map from the key light. (c) None. | **(a)**: it grounds the device at the cost of one quad. A shadow map needs a second depth pass, and its hard shapes would compete with the field. |
+| MQ5 | Contours by default (item 8's suggestion) | (a) Keep them off and restyle them (MD6). (b) On by default on enhanced 3D field views, with a new `--no-contours`. | **(a)**: a default overlay changes every field image and needs an off switch in the app and CLI. On log fields with steep doping, contour lines pile up at junctions. It stays one click away. |
+| MQ6 | The colourbar | (a) MD7's lighter frame and inner ticks. (b) Unchanged. | **(a)**: it matches the lighter enhanced view at almost no cost. |
+| MQ7 | 26f's enhanced references, which 26g changes | (a) Rebuilt in 26g·4, after the owner approves the new images. (b) Kept, with 26g's finishes behind a second switch so the 26f look stays reproducible. | **(a)**: one enhanced look, not two. The 26f look has no users to keep it for, and a second switch would double the test matrix. |
+
+**Owner ruling (2026-11-18):** ruled under the standing instruction "always choose recommended" (2026-11-11): MQ1 (a),
+MQ2 (a), MQ3 (a), MQ4 (a), MQ5 (a), MQ6 (a), MQ7 (a) (the rebuild itself still shown to the owner first). The request was for plans, so implementation waits for the owner's
+go-ahead.
+
+**Acceptance criteria (frozen before code; tests in `tests/render` and `tests/app`):**
+
+| # | Criterion |
+|---|---|
+| MG1 | Classic is bit-identical: every classic render reference matches unchanged. Scenes default to the matte finish, and a classic scene with metal and glass batches draws exactly as with matte ones, to the bit. 26f's two enhanced references change by design (MQ7): they are rebuilt in 26g·4 only after the owner has seen the new images and approved them. |
+| MG2 | Finishes: `solid_view` and `field_view` mark electrodes metal and translucent insulators glass; opaque insulators, region solids, field batches, slices, arrows and isosurfaces stay matte. |
+| MG3 | Metal and glass in images (WARP): on the enhanced 3D solid, the mean colour of the gate electrode's top face is lighter than classic's and lighter than its front face. Along a line across the oxide, the alpha-composited oxide is at least 1.5× as opaque within 3 px of its silhouette as at its centre. |
+| MG4 | AO in images (WARP): on the enhanced 3D solid, pixels on the silicon within 4 px of the gate electrode's foot are at least 8% darker with AO than without. A flat face away from any step changes by under 2%. Field-map pixels change by at most half as much as solid pixels at the same occlusion (the mask). Glass pixels are unaffected by AO under them. |
+| MG5 | The shadow: present below the device on the default camera (a darker band under `lo.y` than the gradient alone), absent with elevation below −5°, and on clipped and exploded views. |
+| MG6 | Three new WARP references (enhanced): the 3D solid (metal, glass, AO, shadow), the 3D potential surface, and the 3D field with mesh edges and contours. Each passes the existing rules. |
+| MG7 | Cost on the hardware adapter (off screen, the KG6 method, `examples/mosfet_3d.deck`): the 26g enhanced draw within 1.25× of 26f's enhanced draw. The AO passes alone under 2 ms at 1280 × 960. WARP times recorded only. |
+| MG8 | No change elsewhere: no solver, physics or io source changed; app tests change only where the images do; the app and `nitcad plot` still give the same image from the same options (`same_as_plot`, WG4 self-test). |
+| MG9 | Hand mutants, each killed by a test: electrodes left matte; the glass term's power 3 → 1; glass applied to opaque insulators; the AO mask ignored (full AO on field maps); AO sampling glass; the AO radius 2% → 10%; the shadow drawn when looking up; metal shading in classic; the mesh-edge alpha left at 0.75 in enhanced; the colourbar change applied in classic. |
+
+**Owner ruling MQ8 (2026-11-18, during 26g·1): the glass on flat faces.** Measured, MD3's grazing term is constant
+over each flat face of the oxide box, so on the default view the top face only turns a little paler. There is no rim at
+the silhouette, and MG3's glass half (1.5× as opaque within 3 px of the silhouette) cannot be met by flat faces. Asked,
+the owner ruled the recommended option, glass rim edges:
+- **MD3, amended:** the face term stays as designed. In addition, in enhanced, `set_look` puts the feature edges of
+  glass batches into a second line batch, `"glass edges"`: a light rim (0.97/0.98/1.0, alpha 0.9, 1.5 px, depth-tested)
+  in place of the dark ink.
+- **MG3, glass half, restated:** on the enhanced 3D solid, pixels within 3 px of the oxide's top edges (away from the
+  gate) are lighter than the same pixels with the oxide matte. The test asks for a mean luminance more than 10 higher.
+- **MG9 gains a mutant:** the glass rim drawn in the dark ink.
+
+**Owner ruling MQ9 (2026-11-18, during 26g·2): AO dropped.** MD4 was built as designed and measured on the test
+MOSFET's enhanced 3D solid against the same renderer without it. Its pipeline worked: a forced constant darkening
+showed in the image. But the scene gave it almost nothing to occlude:
+- The gate's foot sits on the translucent oxide, which writes no depth (by MD4), so in depth the gate is 0.08 µm
+  above the silicon. Change: 0%.
+- The contact pads are slabs 0.06 µm thick (3% of the extent). Their undersides face away from the camera, and their
+  visible faces lie beyond the radius (2% of the view's height, about 0.036 µm here). Change: 0% at 2%, 0.7% at 5%.
+- Flat faces: 0%.
+
+Asked, the owner ruled the recommended option: **drop AO from 26g.**
+- MD4 and its code are removed. MG4 and the AO half of MG7 are withdrawn, and the two AO mutants (the mask ignored,
+  AO sampling glass) and the radius mutant are dropped from MG9.
+- Depth comes from the ground shadow (MD5) and 26f's lighting and edges.
+- AO may return in a later unit if scenes with real recesses appear (trenches, a FinFET gate wrapping its fin).
+
+**Slices (each one local commit):** 26g·1 finishes, metal and glass (MD1–MD3; MG2, MG3); 26g·2 the shadow, mesh edges,
+contours, colourbar (MD5–MD7; MG5, MG6, MG7's whole-draw cost); 26g·3 suites, mutants (MG1, MG8, MG9), the
+ARCHITECTURE entry. (Originally four slices, with AO as 26g·2; renumbered after MQ9.)
+
+**Results so far (2026-11-19):**
+- 26g·1 `d0b9e55`, MQ9 `62e6378`, 26g·2 `cbd89df`. The owner approved the three enhanced images on 2026-11-18,
+  and they were then written as references (`f8faf26`, MQ7, MG6): `mosfet3d_solid_enhanced` and
+  `mosfet3d_surface_potential_enhanced` (rebuilt), and `mosfet3d_field_mesh_contours_enhanced` (new). Each is
+  byte-identical to the image approved.
+- MG1–MG3, MG5 and MG6 are met by the new render tests. MG1's reference half is met by the classic references
+  (every one unchanged in the render suite run at 26g·1).
+- MG7, on the RTX 5060 Ti by KG6's method: 26g enhanced 5.48 ms against 26f's 5.56 ms (medians of 50), so **0.99×**
+  (bound 1.25×). 26f's draw is the same scene with matte batches and no shadow: exactly 26f's triangles and lines. On
+  WARP it is 1.08×, recorded only. KG6 still holds at 1.04× classic (bound 1.10×).
+- CI fix (PR #92, 2026-11-19). The CI runner's "Microsoft Basic Render Driver" (vendor 0x1414, device 0x8c) is WARP
+  behind a display adapter, but it is not flagged as software. `Adapter::hardware` picked it, so the hardware-adapter
+  tests ran on WARP and failed: KG6 at 1.59× in Debug and 1.26× in Release. The hardware search now skips it, so those
+  tests skip on CI as the KG6 (b) ruling intended. Owner ruling: KG6's edges bound (< 50 ms) is checked in Release only.
+  The unoptimised Debug build took 113 ms on CI (Release: 4.9 ms on CI, 1.9 ms on the RTX machine), and Debug now only
+  records the time.
+- CI fix 2 (PRs #92, #93, 2026-11-19). With that adapter skipped, WG4's 3D self-test (`app_window_3d`) failed on
+  CI: its one case passed the WARP comparison (16 assertions) and then skipped the GPU half, and Catch2 exits
+  non-zero when every case it ran skipped. WG4 is now two cases, WARP and GPU, so CI passes the WARP case and
+  skips the GPU case. Nothing is loosened: both comparisons are unchanged, and the GPU case still runs on a
+  hardware adapter (RTX machine: passed, 16.4 s).
+- MG8 full suites (2026-11-19, on 26h's f33de73, MSVC 14.51, RTX 5060 Ti): Release **229 of 229** passed. Debug
+  207 of 208: KG6's redraw ratio (enhanced ≤ 1.10× classic) failed at 1.11×, and on a rerun of the test once
+  passed and once failed at 1.19×. Owner ruling: the KG6 redraw bound is checked in Release only, like its edges
+  bound; Debug records the ratio.
+- MG9, hand mutants (as amended by MQ8 and MQ9): **8 of 8 killed**. Each was run alone on a clean rebuild, with its
+  target tests passing on unmutated code both before and after.
+
+  | Mutant | Killed by |
+  |---|---|
+  | Electrodes left matte | the MG2 scene test, the MG3 image test |
+  | Glass term power 3 → 1 | the enhanced solid's reference |
+  | Glass on opaque insulators | the MG2 scene test |
+  | Shadow drawn looking up | the MG5 test |
+  | Metal shading in classic | the MG1 bit-identity check, the classic references |
+  | Mesh-edge alpha left at 0.75 | the MD6 test |
+  | Colourbar change in classic | the classic references with colourbars |
+  | Glass rim in dark ink | the edges test, the MG3 glass check |
+
+  A first run of the mutants was discarded. Restoring each file kept its old timestamp, so the build did not
+  recompile it and the mutants accumulated. The runner now touches each file it restores and checks a baseline
+  before and after.
+- **Open:** MG8, the full Release and Debug suites, which wait for the owner's word (2026-11-18). Then the ARCHITECTURE
+  entry.
+- **Seen, not changed:** in 3D, contours are drawn on top of everything, so they show through the gate and the
+  pads. This predates 26g and is the same in classic.
+
+### Unit 26h — scale and orientation (proposed 2026-11-18; on `app/scale-orientation`)
+
+**Owner request (2026-11-18):** as for 26g, items 6 (an axis box with µm ticks) and 7 (a bigger orientation
+widget with a click-to-snap view cube, and smooth camera moves). The branch is stacked on 26g's.
+
+**Standing conditions:** as for 26g. These are enhanced-only overlays, except the camera commands, which work in
+both looks.
+
+**Today:**
+- 2D views have axes with 1-2-5 ticks in µm (`Renderer` draws them with Direct2D from the scene's bounds and
+  `ColorScale`-style tick generation).
+- 3D views have only the axis triad: three 30 px lines in the lower-left corner (`FieldScene::axis_triad`).
+- The camera moves by drag, the keyboard's orbit and zoom commands, and **Fit** (`viewport_fit`, instant).
+- There are no named views (26d listed camera presets as not in that unit).
+
+**Design:**
+
+| # | Change | Where | Behaviour |
+|---|---|---|---|
+| JD1 | **Axis box (item 6).** On enhanced 3D views, the bounds' box is drawn as thin lines (0.55/0.58/0.62, 1 px, depth-tested) on its three faces turned **away** from the camera, ParaView's "grid axes" style, so it frames the device and never covers it. Along three edges (the lower front x edge, the front y edge on the left, the lower z edge on the side) go 1-2-5 ticks in µm, labelled with `Segoe UI` 11.5 px. Each axis is named "x (µm)", "y (µm)", "z (µm)". | Pure `render::axis_box(scene, w, h)` in a new `render/axes3d.hpp`: the edges, the ticks' world positions, their pixels and labels; the renderer draws what it returns | Edges and ticks follow the camera: each axis takes the box edge nearest the viewer on the side away from the device's centre. Labels closer than their own width plus 6 px to a drawn label are dropped. |
+| JD2 | **View cube (item 7).** On enhanced 3D views, the triad becomes a 72 px cube in the lower-left corner. It is drawn with Direct2D from the camera's rotation, faces shaded with the 26f lights and labelled Front (+z), Back (−z), Right (+x), Left (−x), Top (+y), Bottom (−y), with x, y, z arrows from its corner. Classic keeps the triad. | `renderer.cpp`; a pure `render::view_cube(scene, w, h)` (the face, edge and corner polygons in pixels) | `nitcad plot` draws it too, so the app and the command give the same image (MG8). |
+| JD3 | **Snapping.** In the app, a click on the cube's face snaps to that view (azimuth and elevation from a table: Front 0°/0°, Right 90°/0°, Back 180°/0°, Left 270°/0°, Top 0°/90°, Bottom 0°/−90°). A click on a corner snaps to that isometric view (±45° azimuth, ±35.26° elevation). Zoom and pan reset as in **Fit**. | Pure `render::view_cube_hit(scene, w, h, x, y)` → `std::optional<CameraPreset>`; `main_window.cpp` on a click (not a drag) over it | The cursor becomes a hand over the cube. Clicks elsewhere keep Probe, Measure and Cut line as today. |
+| JD4 | **Named views.** **View ▸ Front / Back / Left / Right / Top / Bottom / Isometric**, with the numpad keys as CAD programs use them: 1 front, Ctrl+1 back, 3 right, Ctrl+3 left, 7 top, Ctrl+7 bottom, 0 isometric (the 26f default camera, 35°/25°). Both looks. `nitcad plot` needs nothing new: `--azimuth` and `--elevation` already name any view. | `commands.cpp`, `main_window.cpp` | The equivalent command gives the preset's azimuth and elevation. |
+| JD5 | **Smooth camera moves.** Fit, the named views and cube snaps move over 250 ms, eased in and out (smoothstep), taking the shorter way round in azimuth. Elevation, zoom and pan are interpolated linearly in the same ease. A pure `app::camera_between(from, to, t)` gives each frame, and a 16 ms `WM_TIMER` (the playback timer's mechanism) drives it. A drag, a wheel step or a key during a move ends it at the current frame. | `view_settings` (pure), `main_window.cpp` | Instant when Windows' "Show animations" is off (`SPI_GETCLIENTAREAANIMATION`) and in the self-test. The final camera equals the target exactly. |
+
+**Questions (each with a recommendation):**
+
+| # | Question | Options | Recommendation |
+|---|---|---|---|
+| JQ1 | Where the axis box's ticks go | (a) On the edges that follow the camera (nearest the viewer, on the far side from the centre), ParaView style. (b) Fixed edges at the box's origin corner. | **(a)**: the labels stay readable and outside the device at every angle. Fixed edges end up behind the device or edge-on. |
+| JQ2 | The axis box's faces | (a) Only the three faces away from the camera, no gridlines across them. (b) Those faces with gridlines at the ticks. (c) The whole box. | **(a)**: a frame and a scale with no lines across the field. (b) adds a grid behind translucent oxide that reads as structure. (c) covers the device. |
+| JQ3 | Is the axis box on by default? | (a) Yes, part of the enhanced look, with an inspector check box **Axis box** (saved, like 26f's) and `nitcad plot --axes on\|off` (default on). (b) Off by default. | **(a)**: scale is information a TCAD view should show unasked. Both switches are needed for screenshots without it. |
+| JQ4 | The view cube in `nitcad plot` images | (a) Drawn, as an orientation indicator (the triad's role), so app and command images stay identical. (b) App only. | **(a)**: (b) breaks "same options, same image" (WG4) unless the app draws an overlay outside the renderer. |
+| JQ5 | Smooth moves | (a) 250 ms with smoothstep, instant when the OS turns animations off. (b) Always instant. (c) A setting. | **(a)**: it shows where the camera went, and respecting the OS setting covers those who want no motion without a new option. |
+| JQ6 | Keys for the named views | (a) The numpad, as in CAD programs (1, 3, 7, 0, with Ctrl for the opposite side). (b) Ctrl+Alt+letters. | **(a)**: the convention users already know. The numpad's digits are unbound in the app today. |
+
+**Owner ruling (2026-11-18):** ruled under the standing instruction: JQ1 (a), JQ2 (a), JQ3 (a), JQ4 (a), JQ5 (a),
+JQ6 (a). Implementation waits for the owner's go-ahead, after 26g.
+
+**Acceptance criteria (frozen before code):**
+
+| # | Criterion |
+|---|---|
+| JG1 | Classic is bit-identical (every existing reference, triad included). The axis box and cube are drawn only in enhanced 3D. |
+| JG2 | `axis_box`: for the default camera on a 2 × 1 × 0.8 µm box, the three faces away from the eye are chosen (checked against the face normals' sign along the view direction). Each axis's ticks are 1-2-5 steps covering the bounds, in µm, at least 3 and at most 8 per axis. Each labelled tick lies on its edge, outside the device's projected silhouette. After rotating 90°, 180° and 270° in azimuth and to ±60° elevation, the edges follow the rule of JQ1. No two kept labels overlap. A bounds of zero thickness along z gives no z axis. |
+| JG3 | `view_cube` and `view_cube_hit`: at the default camera, the visible faces are Front, Right and Top. A point inside each face's polygon hits its preset. A point near each visible corner hits that corner's isometric view. A point outside the cube gives nothing. The cube's x, y and z arrows match the triad's directions (dot product of the projected directions > 0.99). |
+| JG4 | Named views and snaps: each preset gives its azimuth and elevation exactly, with zoom 1 and no pan. The equivalent command names them (`--azimuth`, `--elevation`). The numpad keys and View menu items run them. Top and Bottom draw without a degenerate camera (the world-up switch of `make_view`). |
+| JG5 | `camera_between`: t = 0 and 1 give the endpoints exactly; azimuth takes the shorter way (350° → 10° passes 0°, never 180°); smoothstep is monotone. Window tests: Fit and a preset animate (intermediate frames differ from both ends) and land exactly. A drag during a move stops it. With animation off (an override for tests) the move is instant. |
+| JG6 | The app: a click on the cube's Top face makes the view Top after the move. A drag that starts on the cube orbits as before. A click elsewhere in Probe mode still probes. The **Axis box** check box defaults on, is saved, is hidden on 2D, and gives `--axes off` in the equivalent command when off. `nitcad plot` with no `--axes` equals `--axes on`. |
+| JG7 | Two new WARP references (enhanced): the 3D solid with the axis box and view cube at the default camera, and at a named view (Right). Both pass the existing rules. |
+| JG8 | Cost (hardware adapter, KG6 method): drawing the axis box and cube adds under 1 ms. A smooth move's frames each take under 16 ms on `examples/mosfet_3d.deck`. |
+| JG9 | Hand mutants, each killed by a test: the box's faces toward the camera chosen instead; labels not de-overlapped; ticks in cm; a cube face hit mapped to the opposite preset; corners ignored; the azimuth's long way round; the endpoint not exact (t = 1 left at the last eased frame); animation ignoring the OS setting; the axis box drawn in classic; `--axes` default off. |
+
+**As built, 26h·1 (2026-11-19).** JD1's "the box edge nearest the viewer" is read per axis. x and z take the nearer
+of their two outline edges. y takes the one further left on the screen: JD1's own example, "the front y edge on the
+left", is not the nearer one on a box wider than it is deep, such as the test MOSFET. A face seen exactly edge-on
+counts as turned away on its lo side. Labels are de-overlapped across all three axes, as JG2's "no two kept labels"
+requires. `axis_box` lives in `renderer.cpp` beside `make_view`; it is pure, with no GPU work.
+
+The three 26g enhanced references now change by design, because the axis box is on by default in enhanced (JQ3). As
+in 26g, they are rebuilt in 26h·4 only after the owner sees the images.
+
+**As built, 26h·2 (2026-11-19).** `view_cube` and `view_cube_hit` (axes3d.hpp) are pure, like `axis_box`. The cube
+is 72 px across its diagonal, centred 88 px in from the view's lower-left corner, and always orthographic. A face's
+name is drawn only where the face is wide enough for it (6 px a character) and at least 16 px tall. At the default
+camera only "Front" fits; "Top" and "Right" are too foreshortened. Corners come before faces in hit testing, within
+7 px. A corner snaps to its isometric view: azimuth atan2(x, z), elevation ±35.26°. The plain Isometric view is
+the default camera (35°, 25°). A snap resets zoom and pan as Fit does. It is instant for now; 26h·3 makes it smooth.
+A cube click takes priority over Probe, Measure and Cut line. A drag that starts on the cube orbits as anywhere else.
+The cursor becomes a hand over the cube.
+
+**As built, 26h·3 (2026-11-19).**
+- **Where the named views sit.** They are in a **View ▸ Loo&k from** submenu (&Front, &Back, &Left, &Right, &Top,
+  B&ottom, &Isometric), not as seven flat View items. WG5 requires a unique mnemonic for every item, and View had
+  only j, k and z free. The commands test now checks mnemonics within each submenu, and the submenu's own mnemonic
+  within its menu; the rule itself is unchanged.
+- **Where the numpad keys live.** The view's own key handling takes them (`viewport.cpp`), as the arrows, + and −
+  are, not the accelerator table. The menu shows them ("Num 1", "Ctrl+Num 1", ...), and the deck editor still types
+  numpad digits.
+- **Who animates.** `WindowOptions::animate` is off by default and on only in the application (`app/main.cpp`), so
+  the tests and the self-test land at once. `set_animate(true)` forces moves on whatever Windows says, so the
+  animated window test also runs on a machine with animations off.
+- **What ends a move.** Orbit, pan and zoom (drag, wheel, key) end a move at its current frame. So does a change of
+  tab, which stops it at its next tick.
+- **Fit.** It animates zoom and pan only; the angles stay.
+- **JG8.** The slowest frame of a smooth move drew in 13.8 ms on WARP (69 samples). The hardware figure is for
+  26h·4.
+
+**Results, 26h·4 (2026-11-19).**
+- **JG1.** Every classic reference passes unchanged; only the three 26g enhanced references differ (1.1% of pixels,
+  the box and cube). Rebuilt after the owner approved the images (2026-11-19), byte-identical to the ones shown.
+- **JG7.** `mosfet3d_solid_right_enhanced` is new, a VG4 section. Its render showed the cube's arrows ending inside
+  the cube on head-on views. The arrows now reach 10 px past the cube, each label 8 px past its arrow's tip, and the
+  cube sits 88 px in from the corner.
+- **JG8**, by KG6's method on `examples/mosfet_3d.deck`, medians of 50:
+
+  | Adapter | Box and cube cost (bound 1 ms) | Slowest move frame (bound 16 ms) |
+  |---|---|---|
+  | NVIDIA GeForce RTX 5060 Ti | +0.13 ms (3.60 vs 3.47 ms) | 5.07 ms |
+  | WARP, recorded only | 15.99 vs 14.26 ms | 19.2 ms |
+
+  JG8 is met.
+- **JG9.** All 10 hand mutants were killed by tests. The tree was restored and touched after each mutant, with
+  baselines passing before and after.
+
+  | Mutant | Killed by |
+  |---|---|
+  | faces toward the camera | `render axes3d` |
+  | labels not de-overlapped | `render axes3d` |
+  | ticks in cm | `render axes3d` |
+  | face hit to the opposite preset | `render axes3d` (cube) |
+  | corners ignored | `render axes3d` (cube) |
+  | the azimuth's long way round | `app views 26h` (camera_between) |
+  | endpoint not exact | `app window 26h: smooth` |
+  | OS setting ignored | `app views 26h` (smooth_moves) |
+  | box drawn in classic | VG4 "3D solid" |
+  | `--axes` default off | `app views 26h` (plot images) |
+
+  The OS-setting rule was moved into the pure `app::smooth_moves`, so a test can reach it. The first try of that
+  mutant failed only on an unused-parameter warning and was rerun with the parameter used.
+- **Still open.** The full Release and Debug suites wait for the owner's word.
+
+**Slices (each one local commit):** 26h·1 `axis_box`, drawn, its switch (JD1; JG2, JG6 part); 26h·2 `view_cube`, hit
+testing, snapping (JD2, JD3; JG3, JG6 part); 26h·3 named views and smooth moves (JD4, JD5; JG4, JG5, JG8); 26h·4
+references, suites, mutants (JG1, JG7, JG9), the ARCHITECTURE entry.
+
+---
+
+### Unit 60 — release version policy (PD5) and cross-machine result comparison (6.8) (proposed 2026-11-19; on `results/release-policy`)
+
+**Owner request (2026-11-19):** "start Release version policy (PD5) and cross-machine checksums", the 11.3 row
+"Results and provenance", next step "A release version policy (PD5); cross-machine checksums (6.8)". The branch
+starts from `main` `c9e3201`.
+
+**Starting point:**
+- **PD5 (Unit 42):** "The version stays `0.0.0` until a release policy exists". The version's only source is
+  `project(NiTCAD VERSION 0.0.0)`. `cmake/build_info.cmake` writes it into every run's provenance next to the git
+  revision and a `dirty` flag, and `nitcad --version` prints it. No tag, release or changelog exists.
+- **6.8:** agreement between machines is defined by tolerances, never by bit-identity digests.
+  `RunRecord::input_identity` (FNV-1a over the inputs' bits) "identifies a run on one build; it is not a
+  cross-machine checksum". The Eigen blocking is CPU-independent since Unit 41, but no result has ever been compared
+  between two machines. MKL PARDISO's CPU dispatch is unverified.
+- **CI** runs on every branch push and on PRs (GitHub-hosted `windows-2025`, a different CPU from the development
+  machine), with the MKL runtime installed. It does not run on tag pushes.
+
+**OLD / NEW / REASON (the name "checksum"):** OLD: the 11.3 row says "cross-machine checksums". NEW: a
+tolerance comparison of two result files, plus committed reference results that CI compares on its own machine.
+REASON: 6.8 forbids bit-identity digests. A digest of rounded values flips whenever a value lies near a rounding
+boundary: with about 1e5 values at 1e-12 relative noise and 6 digits, the chance that some value straddles is about
+0.1 per run. A comparison reports how far apart two results are, which a digest cannot.
+
+**Standing conditions:** no solver, assembly or physics code changes, so every result is bit-identical by
+construction. Only the version string changes (VQ3). Criteria are fixed before code. Release and Debug suites with
+`/W4 /WX`, plus hand mutants. Built with MSVC 14.51. Nothing is pushed, tagged or merged without authorization.
+
+**Left out of this unit:** comparing transient and small-signal files (XQ2; their loaders exist); edge currents and
+the rate fields (they are derived from the compared fields); MKL PARDISO references (the CI threads and its CPU
+dispatch would be tested together, so a failure would not say which); publishing a release.
+
+**Design: the release policy (RV):**
+
+| # | Rule |
+|---|---|
+| RV1 | **Semantic versioning** `MAJOR.MINOR.PATCH`. The only source is `project(NiTCAD VERSION …)`. Before 1.0, MAJOR stays 0 and MINOR takes MAJOR's role. 1.0 is the owner's decision. |
+| RV2 | **What bumps what (before 1.0):** **MINOR** for a new capability; a changed default that moves a default result beyond `nitcad compare`'s default tolerances (any regenerated cross-machine reference, XC6, counts); a deck key removed or renamed, or a meaning changed; a file format version change. **PATCH** for everything else: fixes that leave every reference matching, docs, build and CI. After 1.0, anything that breaks an old deck, file or public header is MAJOR. A file that loaded before must still load (IO2), so a refusal is never a PATCH. |
+| RV3 | **A release** is the owner's decision. A release PR bumps the version and adds the release's row to ARCHITECTURE 9's release table (version, date, the units it contains). After it merges, the owner pushes an annotated tag `vX.Y.Z` on the merge commit. Claude never creates or pushes a tag. |
+| RV4 | **Between releases** `main` carries the last released version. A build is identified by the version, the revision and `dirty`, which every run record already holds. |
+| RV5 | **The CI tag check:** CI also runs on `v*` tag pushes. A tag build fails unless the tag equals `v` + the CMake version and the build is not `dirty`. The comparison is a `cmake -P` script, `cmake/check_release_tag.cmake`, so it is tested locally (XG5). |
+| RV6 | **Release notes** are the tag's annotation, written from DECISIONS' unit summaries. No changelog file (VQ5). |
+
+**Design: cross-machine comparison (XC):**
+
+| # | Slice | Change | Notes |
+|---|---|---|---|
+| XC1 | 1 | `analysis/compare.hpp`: `compare_sweeps(a, b, CompareTolerances)` returns a `SweepComparison`. First the structure: the same contact count, point count, node count and bias per point (exactly), and the same `stopped` state. Otherwise the result is `not_comparable` with the reason. Then, for each quantity, the largest difference, its ratio to the allowance, the worst point and node, and pass or fail. Input identity and mesh digest are reported as equal or not; they are not gated (XQ6). | `analysis` already depends on `results` only. |
+| XC2 | 1 | **Quantities and default tolerances (XQ3):** terminal currents \|a−b\| ≤ 1e-6·max(\|a\|,\|b\|) + max(resolution_a, resolution_b), each run's own floor (Unit 15); weighted currents the same with their resolution, when present; gate and interface-trap charge 1e-6 relative + 1e-30; ψ \|Δ\| ≤ 1e-6 V; n and p 1e-6 relative against a floor of 1e-8 of the point's largest density (update_size's floor); lattice and carrier temperatures 1e-6 K, when present. | Newton stops at 1e-8 of a scaled correction, and its last step is quadratic, so differences from round-off sit far below these. The margin is printed so that a near miss shows. |
+| XC3 | 2 | `nitcad compare <a.nitsweep> <b.nitsweep> [--rtol <x>] [--potential-tol <V>]`: one line per quantity (largest difference, ratio, where), the two runs' CPU and revision lines, then `match` or `differ`. Exit 0 match, **4 differ** (XQ5), 1 unreadable or not comparable, 64 usage. | Any `.nitsweep`, trace sweeps included. |
+| XC4 | 2 | **References:** `tests/cross_machine/` holds the `.nitsweep` that `examples/pn_diode_1d.deck` and `examples/mosfet_2d.deck` write on the development machine (Eigen SparseLU, the decks' defaults), regenerated only by the documented command in XC6. | XQ4: small, Eigen only. |
+| XC5 | 2 | **The ctests** `cross_machine_<deck>` (both presets): a `cmake -P` script copies the deck into the build tree, runs `nitcad run`, then `nitcad compare` against the reference, and prints both CPU lines. CI therefore compares the development machine's results with its own on every push. | |
+| XC6 | 3 | **When a reference stops matching** after an intended change, the PR regenerates it (`nitcad run` on the deck, copy the `.nitsweep`), records the old and new largest differences in its DECISIONS record, and counts as MINOR under RV2. | The comparison's report is the evidence. |
+
+**Criteria (frozen once approved):**
+
+| # | Gate |
+|---|---|
+| XG1 | `compare_sweeps` unit tests: identical sweeps give zero differences and `match`. For each quantity alone, a perturbation at 0.9× its allowance passes and one at 1.1× fails, the report naming that quantity, point and node. The resolution floor is used: a difference of 0.5× the floor on a zero current passes. Every structural mismatch (contacts, points, nodes, bias, `stopped`) gives `not_comparable` with its reason. |
+| XG2 | A sweep compared with its own save-and-load copy: zero differences (bit-for-bit files, Unit 29). |
+| XG3 | `nitcad compare` exit statuses 0, 4, 1 and 64, each exercised by a ctest. |
+| XG4 | `cross_machine_pn_diode_1d` and `cross_machine_mosfet_2d` pass locally and **on the CI runner**. The CI log's CPU line differs from the reference's (recorded); the largest ratios on CI are recorded in the results. |
+| XG5 | `check_release_tag.cmake`: a matching tag on a clean build passes; a mismatched tag, a missing `v` and a dirty build each fail (four ctests). |
+| XG6 | Nothing else moves: no file under `src/` outside `src/analysis/` and `src/cli/` changes. `cli_version` passes with the new version. Every existing test passes unchanged. |
+| XG7 | `/W4 /WX`. Hand mutants (the tolerance's sign or comparison, the floor dropped, one structural check removed, the exit status for `differ`, the tag check's `dirty` test) are each caught. |
+
+**Questions for the owner (recommended option first):**
+
+| # | Question | Options |
+|---|---|---|
+| VQ1 | Version scheme | **Semantic versioning, 0.y.z before 1.0 (recommended).** / Calendar versions (2026.11). |
+| VQ2 | Version on `main` between releases | **The last released version; the revision tells builds apart (recommended).** / The next version with `-dev`. |
+| VQ3 | First version | **0.1.0, set in this unit; the tag waits for the owner (recommended).** / Keep 0.0.0 until the first release PR. |
+| VQ4 | Who tags | **The owner, an annotated tag on the release PR's merge commit (recommended).** / Claude, on the owner's word. |
+| VQ5 | Release notes | **The tag annotation, from DECISIONS' summaries; no changelog file (recommended).** / A `CHANGELOG.md`. |
+| XQ1 | What "cross-machine checksum" means | **A tolerance comparison plus committed references checked by CI (recommended).** / A digest of rounded values (rejected above). |
+| XQ2 | File kinds compared | **Sweeps, traces included (recommended)**; transient and small-signal later. / All three now. |
+| XQ3 | Default tolerances | **As in XC2 (recommended).** / Tighter (1e-9), with a risk of flaky CI. |
+| XQ4 | Reference decks | **`pn_diode_1d` and `mosfet_2d`, Eigen only (recommended).** / Add `mosfet_3d` and a PARDISO run. |
+| XQ5 | Exit status for "differ" | **4, a new status (recommended).** / 1, shared with failures. |
+| XQ6 | Identity and mesh digest unequal across machines | **Reported, not gated (recommended).** Deck parsing is exact, but mesh generation calls CRT math that may take other paths on another CPU. / Gated. |
+
+**Owner ruling (2026-11-19, standing instruction "always choose recommended", 2026-11-11):** VQ1–VQ5 and XQ1–XQ6
+take the recommended option. Pushing, the PR, tags and the full Release/Debug suites still wait for the owner's
+word.
+
+**Results (2026-11-19):** slices 1–3 are committed locally: `9c1b269` (`compare_sweeps`), `eec8f76` (`nitcad compare`,
+0.1.0, the tag check, the ctests), `4efc99c` (the references, written by `eec8f76`'s Release build; its provenance
+says "modified" because the owner's uncommitted `.gitignore` edit and two untracked decks were in the tree), and the
+records.
+- **XG1, XG2:** `[compare]`, 7 test cases (398 assertions), Release and Debug.
+- **XG3:** `compare_cli.*`, 7 ctests (0 self, 4 differ with the diode's body doping doubled, 1 not comparable, 1
+  unreadable, 64 for one file, a negative `--rtol` and an unknown option).
+- **XG4 local half:** `cross_machine_pn_diode_1d` and `cross_machine_mosfet_2d` pass in Release (bit-identical, 0
+  differences) and in **Debug against the Release references**. The diode differs at round-off: largest ratio 2.1e-6
+  (terminal current 6.0e-12 A/cm²), ψ 1.1e-10, n 4.1e-10, p 2.9e-10. The MOSFET is bit-identical. **The CI half is
+  pending** until the branch is pushed.
+- **XG5:** `release_tag.*`, 5 ctests (a match, this tree's version, a mismatch, a missing `v`, a dirty tree).
+- **XG6:** the branch touches `src/analysis/compare.cpp` and `src/cli/` only under `src/`. `cli_version` passes and
+  prints 0.1.0.
+- **XG7:** `/W4 /WX` clean. 8 hand mutants, all caught: the current floor dropped, the bias check removed, the
+  allowance floor dropped, `differ` exiting 1, a one-sided NaN passing, the tag check ignoring `dirty`, the
+  `stopped` check removed, the density floor from the smallest density.
+- **Size:** about 710 lines added in code, tests, scripts, CMake and CI (docs aside), plus 2.9 MB of references
+  (`mosfet_2d` 2.2 MB, `pn_diode_1d` 0.7 MB).
+- **Full Release and Debug ctest not run** (rule: they wait for the owner's word). Only the analysis, CLI,
+  cross-machine and tag tests above were run.
+
+---
+
+### Unit 61 — restart of transient, trace and small-signal runs; `initial`; time and frequency suffixes (proposed 2026-11-19; on `io/restart-transient-trace`)
+
+**Owner request (2026-11-19):** "start Restart of transient and trace runs, starting a run from a checkpoint
+(initial), unit suffixes on times", the 11.3 row "Input/output, checkpoint/restart", next step "Restart of transient
+and trace runs; a run started from a checkpoint (`initial`); unit suffixes on times" (also "Not in Unit 43", 6.5).
+The branch starts from `main` `8f84d04`. Unit 60 (PR #96) is not in it; the two touch different code.
+
+**Starting point (read from the code):**
+- **Sweep restart (Unit 31, DK9):** `[sweep] restart = <checkpoint>` finds the plan point whose bias the checkpoint
+  holds, skips the points up to it and starts `sweep_bias` from the checkpoint's fields. The run identity is not
+  checked. The restarted run reaches the uninterrupted points to 1e-9 relative, not bit for bit, because the state
+  passes through physical units.
+- **A checkpoint** (`io::Checkpoint`, content kind 7) holds the mesh digest, run identity, bias, thermal bias, node
+  fields and provenance, and nothing about the analysis that wrote it.
+- **Transient:** `checkpoint =` with `[transient]` is refused (AQ4: "its end state is not a steady point"). The
+  integrator carries up to three accepted states (scaled x, stored charge, trap occupancy, contact charge, time),
+  the next step size, and restarts its history at waveform breakpoints (`solve/transient.cpp`). A restart from
+  fields alone would start over with backward Euler and a new step size, so it would not continue the same run.
+- **Trace:** the continuation carries the scaled state with λ, the unit tangent (oriented by the previous
+  tangent's arc row), the arc step `ds` and the bordered row's entry `k`. Past a fold the bias moves away from
+  `end_V`, so a restart that re-derives the direction from `end_V` would turn back onto the branch already traced.
+- **`initial`:** `solve_transient`, `trace_bias` and `solve_small_signal` already take an initial state (a starting
+  guess). Only the deck lacks a way to give one.
+- **Times** are bare seconds (DK5 kept, AQ2) and frequencies bare hertz. Lengths take `cm`, `um`, `nm`.
+
+**Standing conditions:** opt-in. Without `restart` or `initial` every analysis is bit-identical to `main`, and so is
+every file written by an analysis that existed before (RG1). Old checkpoints load unchanged (IO2). Bare numbers keep
+their meaning. Criteria are fixed before code. Release and Debug suites with `/W4 /WX`, plus hand mutants. Built
+with MSVC 14.51. Nothing is pushed or merged without authorization.
+
+**Left out of this unit:** extending a finished run (a longer `t_end`, a further `end`), because it changes the step
+defaults derived from `t_end`; restart under `[adapt]` (refused as today); periodic checkpoints during a run
+(RQ5); voltage suffixes (`mV`); the GUI's restart controls.
+
+**Design:**
+
+| # | Slice | Change | Notes |
+|---|---|---|---|
+| RD1 | 1 | **Suffixes.** Times take `s`, `ms`, `us`, `ns`, `ps`, `fs`; frequencies take `Hz`, `kHz`, `MHz`, `GHz`, `THz`. They are read by shifting the decimal exponent of the text, so `2.5ns` parses to the same double as `2.5e-9`. They apply where the option or argument is a time or a frequency: `t_end`, `dt_*`, `output_times`, the time arguments of `step`, `ramp`, `pulse`, `pwl` and `sine` (`f` a frequency), and `[small_signal] frequencies`, `logspace` included. A suffix of the wrong kind (`1ns` as a voltage, `1MHz` as a time) is an error with its line. | Bare numbers unchanged (RG1). |
+| RD2 | 2 | **`initial = <checkpoint>`** in `[transient]`, `[small_signal]`, `[trace]` and `[sweep]`: the checkpoint's fields become the run's starting guess (the existing `initial` argument). It is refused with `restart` in the same section, on another mesh (as `load_checkpoint`), and for a checkpoint holding resume state (RD3; use `restart`). | A guess only: the bias need not match (RQ3). |
+| RD3 | 3 | **Transient resume state.** `results::TransientResume`: the integrator's accepted history (up to three states as scaled vectors, bit for bit, with their times), the next step, the number of accepted steps, the next output-time index and the breakpoint state. `solve_transient` returns it at the end of every run and takes an optional one to continue from. Continuing reproduces the uninterrupted run's arithmetic. | Absent: today's code path (RG1). |
+| RD4 | 3 | **Checkpoints with resume state.** `io::Checkpoint` gains an analysis kind (absent = steady; IO2) and an optional resume record. `[transient] checkpoint =` is allowed and writes the last accepted step with its resume state (AQ4 revised). `[transient] restart =` checks the run identity: **equal identity required** (RQ2), because the state belongs to that run. The restarted run's files hold the steps after the checkpoint, its first point the checkpoint's step. | |
+| RD5 | 4 | **Trace resume state.** `results::TraceResume`: the scaled state with λ, the tangent, `ds`, `k` and the point count. `trace_bias` returns and accepts it the same way. `[trace] restart =` and `checkpoint =` work as RD4. | |
+| RD6 | 5 | **Small-signal restart.** `[small_signal] restart = <checkpoint>` continues after the operating point the checkpoint holds, as the sweep's (DK9), at every frequency of the remaining points. | |
+| RD7 | 6 | **Records:** ARCHITECTURE 6.5 and 6.6 "As built", 11.3; DECISIONS results. | |
+
+**Criteria (frozen once approved):**
+
+| # | Gate |
+|---|---|
+| RG1 | Bit-identity: every existing test passes unchanged. Every example and `decks/` deck that runs in under 60 s writes a CSV table byte-identical to `main`'s, and every test that compares a deck run with the C++ call bit for bit still passes. |
+| RG2 | Suffixes: every suffix gives the same double as the bare exponent form (`2.5ns` ≡ `2.5e-9`, `10GHz` ≡ `1e10`), for each key and each waveform argument; a deck written with suffixes gives the bare deck's run identity; the wrong kind and an unknown suffix name the line. |
+| RG3 | `initial`: a transient, small-signal, trace and sweep run from a checkpoint of its own starting point equals the run without it to 1e-10 relative, with no more Newton iterations at the first point. Refused: with `restart`, on another mesh, and with a resume checkpoint. |
+| RG4 | Transient restart: on the hand-built diode with a pulse (BDF2, adaptive), runs stopped after 1, 2 and 3 accepted steps, after a breakpoint and mid-ramp each restart, and **the joined run equals the uninterrupted run bit for bit**: times, steps, orders, error ratios, currents and snapshots. The same holds with interface traps, and with electrothermal on. A restart with another identity, a steady checkpoint, or the run's final step is refused. |
+| RG5 | Trace restart: a trace stopped after k points (k = 1 and a k past a fold, on Unit 19's fold case) and restarted equals the uninterrupted trace bit for bit from point k on. A steady checkpoint and another identity are refused. |
+| RG6 | Small-signal restart: the remaining operating points equal the uninterrupted run's to 1e-9 relative (as DK9), at every frequency; a checkpoint at the last point is refused. |
+| RG7 | Files: Unit 29's and Unit 42's checkpoint fixtures load unchanged as steady checkpoints; a resume checkpoint round-trips bit for bit; a damaged resume record is refused. |
+| RG8 | Deck and CLI: every new mistake names its line; `nitcad run` on a stopped transient (exit 2) writes a checkpoint that a restart completes (exit 0), and likewise for a trace. |
+| RG9 | `/W4 /WX`. Hand mutants (one history state dropped, the next step not restored, the breakpoint state lost, the tangent's sign flipped, `ds` not restored, the identity check removed, the suffix exponent off by 3, the wrong suffix kind accepted, a skipped small-signal point), each caught. |
+
+**Size (estimate):** L, about 1.5–2k lines, six slices. Slices 3 and 4 touch the transient and trace solvers.
+
+**Questions for the owner (recommended option first):**
+
+| # | Question | Options |
+|---|---|---|
+| RQ1 | Restart exactness | **Bit-identical continuation through solver resume state (recommended).** / Restart from fields only, to a tolerance (simpler, but a transient would restart its integrator and change every later step). |
+| RQ2 | Run identity on restart | **Transient and trace: equal identity required. Sweep and small signal: as DK9, bias match only (recommended).** / Required everywhere (changes Unit 31's sweep restart). |
+| RQ3 | `initial` with a bias other than the run's start | **Allowed; it is only a guess (recommended).** / Refused. |
+| RQ4 | Which analyses get `initial` | **Transient, small signal, trace and sweep (recommended).** / Transient and small signal only (the 11.3 wording). |
+| RQ5 | When a transient or trace checkpoint is written | **At the end of the run, completed or stopped, as sweeps today (recommended).** / Also every N steps (`checkpoint_every`), for crashes. |
+| RQ6 | Suffix scope | **Times and frequencies (recommended).** / Times only. |
+| RQ7 | Small-signal restart | **In this unit (recommended).** / Later. |
+| RQ8 | The restarted run's output files | **Hold the steps after the checkpoint, the first being the checkpoint's own step (recommended).** / Joined to the earlier file. |
+
+**Owner ruling (2026-11-19, standing instruction "always choose recommended", 2026-11-11):** RQ1–RQ8 take the
+recommended option. Pushing, the PR and the full Release/Debug suites still wait for the owner's word.
+
+**Results (2026-11-19, Release, MSVC 14.51; the full suites not yet run, on the owner's word):**
+
+| Gate | Result |
+|---|---|
+| RG1 | The 5 tracked `decks/` and `examples/` decks that run in under 60 s write CSV tables byte-identical to the branch base `9225e6f`'s (built in a separate worktree). The 5 FinFET decks take over 60 s with both builds and are outside the gate. The deck–C++ bit-for-bit tests pass. Existing expectations changed only where this unit changes behaviour by ruling: `[transient] checkpoint =` is accepted (AQ4 revised, RD4), and `restart` is accepted in `[transient]`, `[trace]` and `[small_signal]` (`tests/deck/analyses_test.cpp`). |
+| RG2 | Units: 3 cases pass. `2.5ns` gives the same double as `2.5e-9`, and the wrong kind, an unknown unit and a unit on a voltage each name their line. |
+| RG3 | `initial`: 2 cases pass. The first state takes 6 → 1 Newton iterations in all four analyses. |
+| RG4 | Transient resume is bit for bit. The diode pulse (BDF2 adaptive) resumes at k = 1, 2, 3, at the breakpoint, after it, mid-ramp, at the top of the rise and at the next-to-last point. The trapped MOS capacitor and the electrothermal diode also resume bit for bit. Refusals: another run, the final step, `initial` with resume, nonlocal tunnelling. Deck: stopped after 3, 20 and n/2 steps, then restarted, equals the uninterrupted run. |
+| RG5 | Trace resume is bit for bit. The diode resumes at converged attempts 0, 1, 2, n/2 and n−1. The electrothermal runaway fold resumes before, at and past its top. Stops on rejected attempts resume from the last accepted point. Refusals: another run, a finished trace, an initial state, a state that does not fit. Deck: restarted after attempts 1 and 5 equals the uninterrupted trace. A steady checkpoint and another trace are refused. |
+| RG6 | Small-signal restart from a sweep's checkpoint and from a small-signal checkpoint: the 2 remaining points' operating currents and admittances, at 1 MHz and 1 GHz, equal the uninterrupted run's to 1e-9 relative. The last point, a bias that is not a point and a transient checkpoint are refused. |
+| RG7 | Checkpoints: the transient and trace resume records round-trip bit for bit. The pre-Unit 42 fixture loads as steady with no resume state. A damaged file is refused. |
+| RG8 | `nitcad run` on a transient and on a trace, stopped by Ctrl-Break (exit 2), writes a checkpoint, and a restart completes it (exit 0); this also passes under ctest. A run that stops on its own solver limits (for example `max_iterations = 1`) is correctly refused as a restart with other limits, because the limits are part of the identity. New deck mistakes name their line. |
+| RG9 | `/W4 /WX` clean. 10 of 10 hand mutants caught: a history state dropped (2959 failures), the next step not restored (1856), the landing state lost (4), the tangent's sign flipped (2), `ds` not restored (1), the transient identity check removed (1), the trace identity check removed (1), the `ns` exponent off by 3 (10), a frequency unit accepted as a time (1), a skipped small-signal point (1). |
+
+Also fixed: a stopped small-signal restart's message counted the skipped points among those left to solve.
+
 ---
 
 ## New questions the advisor raised (not yet in `ARCHITECTURE.md`)

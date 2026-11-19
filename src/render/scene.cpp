@@ -115,6 +115,7 @@ void frame(FieldScene& s, const ViewOptions& o) {
     const Point d = sub(b.hi, b.lo);
     s.camera.target = to_f(c);
     s.camera.projection = o.projection;
+    s.ground_shadow = !o.clip.has_value();  // Unit 26g (MD5): a clipped view floats
     if (s.dimension == 2) {
         s.camera.azimuth_deg = 0.0f;
         s.camera.elevation_deg = 0.0f;
@@ -198,6 +199,7 @@ struct Batches {
             by[m].name = std::string(material_name(static_cast<Material>(m)));
             by[m].lit = lit;
             by[m].transparent = transparent_insulators && static_cast<Material>(m) == Material::insulator;
+            if (by[m].transparent) by[m].finish = Finish::glass;  // MD1: translucent insulators; opaque stay matte
         }
         (void)p;
     }
@@ -281,6 +283,8 @@ void contact_slabs(const device::Device& d, const Geometry& g, const Palette& pa
     const auto points = d.mesh().points();
     TriangleBatch metal{"electrode", Shading::flat, g.dimension() == 3, false, {}};
     TriangleBatch oxide{"gate oxide", Shading::flat, g.dimension() == 3, true, {}};
+    metal.finish = Finish::metal;  // MD1 (Unit 26g)
+    oxide.finish = Finish::glass;
     const Rgba metal_color = material_color(Material::metal, palette);
     Rgba pad_color = metal_color;
     pad_color.r += 0.12f;
@@ -1319,6 +1323,7 @@ std::expected<FieldScene, base::Error> exploded_view(const device::Device& d, co
     }
     if (bar) s.colorbar = std::move(*bar);
     frame(s, view);
+    s.ground_shadow = false;  // Unit 26g (MD5): the pieces float apart
     return s;
 }
 

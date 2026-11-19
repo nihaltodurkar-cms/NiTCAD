@@ -1440,3 +1440,316 @@ TEST_CASE("app window 26d: the taskbar's progress and the title bar's theme (ZD5
     REQUIRE(pump_until([&] { return !w->runner().busy() && w->workspace() && w->workspace()->has_results(); }));
     CHECK(w->taskbar_progress() == app::TaskbarProgress{});
 }
+
+TEST_CASE("app window 26f: the Enhanced 3D look check box (KD5, KG5)", "[app]") {
+    const fs::path dir = app_test::scratch("window_enhanced_look");
+    const fs::path deck = app_test::write(dir, "mosfet3d.deck", app_test::mosfet3d);
+    auto w = window();
+    REQUIRE(w->open_deck(deck));
+    REQUIRE(pump_until([&] { return w->workspace() != nullptr && !w->runner().busy(); }));
+    w->execute(Command::run);
+    REQUIRE(pump_until([&] { return !w->runner().busy() && w->workspace() && w->workspace()->has_results(); }));
+    w->select_tab(MainWindow::tab_view);
+    choose(*w, MainWindow::id_view, L"solid");
+    const auto look = [&] {
+        REQUIRE(w->scene());
+        return std::get<render::FieldScene>(*w->scene()).look;
+    };
+    // On by default, on a 3D view; the command names no look and draws the app's image.
+    CHECK(w->app_state().enhanced_look);
+    CHECK(shown(*w, MainWindow::id_enhanced));
+    CHECK(SendMessageW(w->child(MainWindow::id_enhanced), BM_GETCHECK, 0, 0) == BST_CHECKED);
+    CHECK(w->settings().enhanced);
+    CHECK(look() == render::Look::enhanced);
+    same_as_plot(*w, deck, dir / "enhanced.png");
+    // Off: classic, the command says so and still draws the app's image; remembered in the saved state.
+    click(*w, MainWindow::id_enhanced);
+    CHECK_FALSE(w->settings().enhanced);
+    CHECK(look() == render::Look::classic);
+    const auto args = app::plot_arguments(w->settings());
+    CHECK(std::ranges::search(args, std::vector<std::string>{"--look", "classic"}).begin() != args.end());
+    same_as_plot(*w, deck, dir / "classic.png");
+    CHECK_FALSE(w->app_state().enhanced_look);
+    CHECK_FALSE(app::parse_state(app::serialize(w->app_state())).enhanced_look);
+    // Kept on the other device views; hidden on the curves.
+    choose(*w, MainWindow::id_view, L"field");
+    CHECK(SendMessageW(w->child(MainWindow::id_enhanced), BM_GETCHECK, 0, 0) == BST_UNCHECKED);
+    CHECK(look() == render::Look::classic);
+    w->select_tab(MainWindow::tab_curves);
+    CHECK_FALSE(shown(*w, MainWindow::id_enhanced));
+    // A 2D device: hidden, and its new views start with the remembered choice.
+    const fs::path deck2 = app_test::write(dir, "generate2d.deck", app_test::generate2d);
+    REQUIRE(w->open_deck(deck2));
+    REQUIRE(pump_until([&] { return w->workspace() != nullptr && !w->runner().busy(); }));
+    w->select_tab(MainWindow::tab_view);
+    CHECK_FALSE(shown(*w, MainWindow::id_enhanced));
+    CHECK_FALSE(w->settings().enhanced);
+}
+
+TEST_CASE("app window 26h: a click on the view cube snaps; a drag from it orbits; Probe still probes (JD3, JG6)",
+          "[app]") {
+    const fs::path dir = app_test::scratch("window_view_cube");
+    const fs::path deck = app_test::write(dir, "mosfet3d.deck", app_test::mosfet3d);
+    auto w = window();
+    REQUIRE(w->open_deck(deck));
+    REQUIRE(pump_until([&] { return w->workspace() != nullptr && !w->runner().busy(); }));
+    w->execute(Command::run);
+    REQUIRE(pump_until([&] { return !w->runner().busy() && w->workspace() && w->workspace()->has_results(); }));
+    w->select_tab(MainWindow::tab_view);
+    choose(*w, MainWindow::id_view, L"solid");
+    const int W = w->viewport().width(), H = w->viewport().height();
+    const auto face = [&](std::string_view name) {
+        REQUIRE(w->scene());
+        const auto cube = render::view_cube(std::get<render::FieldScene>(*w->scene()), W, H);
+        const auto it = std::ranges::find_if(cube.faces, [&](const render::CubeFace& f) { return f.label == name; });
+        REQUIRE(it != cube.faces.end());
+        float x = 0.0f, y = 0.0f;
+        for (const auto& p : it->polygon) {
+            x += 0.25f * p[0];
+            y += 0.25f * p[1];
+        }
+        return MAKELPARAM(static_cast<int>(std::lround(x)), static_cast<int>(std::lround(y)));
+    };
+    const HWND view = w->viewport().hwnd();
+    // Zoomed and panned first: the snap resets them, as Fit does.
+    w->settings().zoom = 2.0f;
+    w->settings().pan_x = 0.1f;
+    // A click on Top: straight down, zoom 1, no pan; the scene's camera says so.
+    const LPARAM top = face("Top");
+    SendMessageW(view, WM_LBUTTONDOWN, MK_LBUTTON, top);
+    SendMessageW(view, WM_LBUTTONUP, 0, top);
+    CHECK(w->settings().azimuth == 0.0f);
+    CHECK(w->settings().elevation == 90.0f);
+    CHECK(w->settings().zoom == 1.0f);
+    CHECK(w->settings().pan_x == 0.0f);
+    CHECK(std::get<render::FieldScene>(*w->scene()).camera.elevation_deg == 90.0f);
+    // From Top, the Top face is the one shown: a click on Front's place now is nothing of the cube's.
+    // Back to the default camera, then a drag that starts on the cube orbits and does not snap.
+    w->settings().azimuth.reset();
+    w->settings().elevation.reset();
+    w->refresh();
+    const LPARAM front = face("Front");
+    const float before = std::get<render::FieldScene>(*w->scene()).camera.azimuth_deg;
+    SendMessageW(view, WM_LBUTTONDOWN, MK_LBUTTON, front);
+    SendMessageW(view, WM_MOUSEMOVE, MK_LBUTTON, MAKELPARAM(static_cast<short>(LOWORD(front)) + 30, static_cast<short>(HIWORD(front))));
+    SendMessageW(view, WM_LBUTTONUP, 0, MAKELPARAM(static_cast<short>(LOWORD(front)) + 30, static_cast<short>(HIWORD(front))));
+    REQUIRE(w->settings().azimuth.has_value());
+    CHECK(*w->settings().azimuth != before);
+    CHECK(*w->settings().azimuth != 0.0f);
+    CHECK(w->settings().elevation != 0.0f);
+    // Probe mode (on by default): a click on the device probes; a click on the cube snaps, probe kept.
+    w->settings().azimuth.reset();
+    w->settings().elevation.reset();
+    w->refresh();
+    // The front-most node at the device's middle: the top surface's node nearest x and z mid.
+    const auto& mesh = w->workspace()->device->mesh();
+    std::size_t pick = 0;
+    double best = 1e300;
+    for (std::size_t n = 0; n < mesh.points().size(); ++n) {
+        const auto& p = mesh.points()[n];
+        const double d = std::abs(p[0] * 1e4 - 1.0) + std::abs(p[2] * 1e4 - 0.6) - p[1] * 1e4;
+        if (d < best) {
+            best = d;
+            pick = n;
+        }
+    }
+    const auto& node = mesh.points()[pick];
+    click_at(*w, {float(node[0] * 1e4), float(node[1] * 1e4), float(node[2] * 1e4)});
+    CHECK(w->probe());
+    const auto probed = w->probe()->node;
+    const LPARAM right = face("Right");
+    SendMessageW(view, WM_LBUTTONDOWN, MK_LBUTTON, right);
+    SendMessageW(view, WM_LBUTTONUP, 0, right);
+    CHECK(w->settings().azimuth == 90.0f);
+    CHECK(w->settings().elevation == 0.0f);
+    REQUIRE(w->probe());
+    CHECK(w->probe()->node == probed);
+}
+
+TEST_CASE("app window 26h: the named views from the menu and the numpad, exact, in the command (JD4, JG4)",
+          "[app]") {
+    const fs::path dir = app_test::scratch("window_named_views");
+    const fs::path deck = app_test::write(dir, "mosfet3d.deck", app_test::mosfet3d);
+    auto w = window();
+    REQUIRE(w->open_deck(deck));
+    REQUIRE(pump_until([&] { return w->workspace() != nullptr && !w->runner().busy(); }));
+    w->execute(Command::run);
+    REQUIRE(pump_until([&] { return !w->runner().busy() && w->workspace() && w->workspace()->has_results(); }));
+    w->select_tab(MainWindow::tab_view);
+    choose(*w, MainWindow::id_view, L"solid");
+    const auto named = [](std::string_view name) {
+        return *std::ranges::find_if(render::named_views(), [&](const render::CameraPreset& p) { return p.name == name; });
+    };
+    const auto lands_on = [&](std::string_view name) {
+        CAPTURE(name);
+        const auto p = named(name);
+        CHECK_FALSE(w->camera_moving());
+        CHECK(w->settings().azimuth == p.azimuth_deg);
+        CHECK(w->settings().elevation == p.elevation_deg);
+        CHECK(w->settings().zoom == 1.0f);
+        CHECK(w->settings().pan_x == 0.0f);
+        CHECK(w->settings().pan_y == 0.0f);
+        const auto& camera = std::get<render::FieldScene>(*w->scene()).camera;
+        CHECK(camera.azimuth_deg == p.azimuth_deg);
+        CHECK(camera.elevation_deg == p.elevation_deg);
+        // The equivalent command names them.
+        const auto args = app::plot_arguments(w->settings());
+        CHECK(std::ranges::search(args, std::vector<std::string>{"--azimuth", std::format("{}", p.azimuth_deg)}).begin() !=
+              args.end());
+        CHECK(std::ranges::search(args, std::vector<std::string>{"--elevation", std::format("{}", p.elevation_deg)})
+                  .begin() != args.end());
+    };
+    // View ▸ Look from: the seven, in order, with their numpad keys shown.
+    HMENU bar = GetMenu(w->hwnd());
+    REQUIRE(bar);
+    HMENU view_menu = GetSubMenu(bar, GetMenuItemCount(bar) - 1);
+    REQUIRE(view_menu);
+    HMENU look = nullptr;
+    for (int k = 0; k < GetMenuItemCount(view_menu); ++k) {
+        wchar_t text[64]{};
+        GetMenuStringW(view_menu, static_cast<UINT>(k), text, 64, MF_BYPOSITION);
+        if (std::wstring_view(text) == L"Loo&k from") look = GetSubMenu(view_menu, k);
+    }
+    REQUIRE(look);
+    REQUIRE(GetMenuItemCount(look) == 7);
+    CHECK(GetMenuItemID(look, 0) == static_cast<UINT>(Command::view_front));
+    CHECK(GetMenuItemID(look, 6) == static_cast<UINT>(Command::view_isometric));
+    wchar_t first[64]{};
+    GetMenuStringW(look, 0, first, 64, MF_BYPOSITION);
+    CHECK(std::wstring_view(first) == L"&Front\tNum 1");
+    // The View menu's items, through WM_COMMAND as the menu sends them; zoomed and panned first each time.
+    const std::vector<std::pair<Command, std::string_view>> items{
+        {Command::view_front, "Front"}, {Command::view_back, "Back"},     {Command::view_left, "Left"},
+        {Command::view_right, "Right"}, {Command::view_top, "Top"},       {Command::view_bottom, "Bottom"},
+        {Command::view_isometric, "Isometric"}};
+    for (const auto& [command, name] : items) {
+        w->settings().zoom = 3.0f;
+        w->settings().pan_y = -0.2f;
+        SendMessageW(w->hwnd(), WM_COMMAND, MAKEWPARAM(static_cast<int>(command), 0), 0);
+        lands_on(name);
+    }
+    // The numpad keys, in the view.
+    const HWND view = w->viewport().hwnd();
+    const std::vector<std::pair<WPARAM, std::string_view>> keys{
+        {VK_NUMPAD1, "Front"}, {VK_NUMPAD3, "Right"}, {VK_NUMPAD7, "Top"}, {VK_NUMPAD0, "Isometric"}};
+    for (const auto& [key, name] : keys) {
+        SendMessageW(view, WM_KEYDOWN, key, 0);
+        lands_on(name);
+    }
+    // Top and Bottom draw (make_view's world-up switch): the app's image is the command's.
+    w->execute(Command::view_top);
+    same_as_plot(*w, deck, dir / "top.png");
+    w->execute(Command::view_bottom);
+    same_as_plot(*w, deck, dir / "bottom.png");
+    // Both looks: classic too.
+    w->settings().enhanced = false;
+    w->refresh();
+    w->execute(Command::view_right);
+    lands_on("Right");
+}
+
+TEST_CASE("app window 26h: smooth camera moves animate, land exactly, and a drag stops them (JD5, JG5, JG8)",
+          "[app]") {
+    const fs::path dir = app_test::scratch("window_smooth_moves");
+    const fs::path deck = app_test::write(dir, "mosfet3d.deck", app_test::mosfet3d);
+    auto w = window();
+    REQUIRE(w->open_deck(deck));
+    REQUIRE(pump_until([&] { return w->workspace() != nullptr && !w->runner().busy(); }));
+    w->execute(Command::run);
+    REQUIRE(pump_until([&] { return !w->runner().busy() && w->workspace() && w->workspace()->has_results(); }));
+    w->select_tab(MainWindow::tab_view);
+    choose(*w, MainWindow::id_view, L"solid");
+    // Off (the tests' default): instant.
+    w->execute(Command::view_top);
+    CHECK_FALSE(w->camera_moving());
+    CHECK(w->settings().elevation == 90.0f);
+
+    w->set_animate(true);
+    std::vector<double> frame_ms;
+    // Follows a move to its end: the poses on the way, each frame's drawing time.
+    const auto follow = [&] {
+        std::vector<app::CameraPose> seen;
+        REQUIRE(pump_until(
+            [&] {
+                seen.push_back(app::camera_pose(w->settings()));
+                frame_ms.push_back(w->viewport().last_present_ms());
+                return !w->camera_moving();
+            },
+            5.0));
+        return seen;
+    };
+    // A named view: frames between the ends, then the preset exactly.
+    const app::CameraPose from = app::camera_pose(w->settings());
+    w->execute(Command::view_right);
+    CHECK(w->camera_moving());
+    const auto seen = follow();
+    const app::CameraPose to{90.0f, 0.0f, 1.0f, 0.0f, 0.0f};
+    CHECK(app::camera_pose(w->settings()) == to);
+    CHECK(std::get<render::FieldScene>(*w->scene()).camera.azimuth_deg == 90.0f);
+    CHECK(std::ranges::any_of(seen, [&](const app::CameraPose& p) { return !(p == from) && !(p == to); }));
+    // Fit: the zoom and pan move, the angles stay; it lands exactly.
+    w->settings().zoom = 4.0f;
+    w->settings().pan_x = 0.3f;
+    w->refresh();
+    w->execute(Command::fit);
+    CHECK(w->camera_moving());
+    const auto fitted = follow();
+    CHECK(app::camera_pose(w->settings()) == to);
+    CHECK(std::ranges::any_of(fitted, [](const app::CameraPose& p) { return p.zoom > 1.0f && p.zoom < 4.0f; }));
+    // A drag during a move ends it where it is: not at the target, and no more frames.
+    w->execute(Command::view_front);
+    REQUIRE(w->camera_moving());
+    REQUIRE(pump_until([&] { return !(app::camera_pose(w->settings()) == to); }, 5.0));
+    const HWND view = w->viewport().hwnd();
+    const int cx = w->viewport().width() / 2, cy = w->viewport().height() / 2;
+    SendMessageW(view, WM_LBUTTONDOWN, MK_LBUTTON, MAKELPARAM(cx, cy));
+    SendMessageW(view, WM_MOUSEMOVE, MK_LBUTTON, MAKELPARAM(cx + 20, cy));
+    SendMessageW(view, WM_LBUTTONUP, 0, MAKELPARAM(cx + 20, cy));
+    CHECK_FALSE(w->camera_moving());
+    const app::CameraPose stopped = app::camera_pose(w->settings());
+    pump_until([] { return false; }, 0.4);
+    CHECK(app::camera_pose(w->settings()) == stopped);
+    CHECK_FALSE(stopped.azimuth_deg == 0.0f);
+    // JG8: each frame drawn under 16 ms (WARP in the tests; the owner's hardware run is the gate).
+    const double worst = frame_ms.empty() ? 0.0 : *std::ranges::max_element(frame_ms);
+    WARN("JG8: a smooth move's slowest frame drew in " << worst << " ms (" << frame_ms.size() << " samples)");
+}
+
+TEST_CASE("app window 26h: the Axis box check box (JD1, JQ3, JG6)", "[app]") {
+    const fs::path dir = app_test::scratch("window_axis_box");
+    const fs::path deck = app_test::write(dir, "mosfet3d.deck", app_test::mosfet3d);
+    auto w = window();
+    REQUIRE(w->open_deck(deck));
+    REQUIRE(pump_until([&] { return w->workspace() != nullptr && !w->runner().busy(); }));
+    w->execute(Command::run);
+    REQUIRE(pump_until([&] { return !w->runner().busy() && w->workspace() && w->workspace()->has_results(); }));
+    w->select_tab(MainWindow::tab_view);
+    choose(*w, MainWindow::id_view, L"solid");
+    const auto boxed = [&] {
+        REQUIRE(w->scene());
+        return std::get<render::FieldScene>(*w->scene()).show_axis_box;
+    };
+    // On by default on a 3D view; the command names no --axes and draws the app's image.
+    CHECK(w->app_state().axis_box);
+    CHECK(shown(*w, MainWindow::id_axis_box));
+    CHECK(SendMessageW(w->child(MainWindow::id_axis_box), BM_GETCHECK, 0, 0) == BST_CHECKED);
+    CHECK(boxed());
+    same_as_plot(*w, deck, dir / "boxed.png");
+    // Off: no box, --axes off in the command, the same image; remembered in the saved state.
+    click(*w, MainWindow::id_axis_box);
+    CHECK_FALSE(w->settings().axis_box);
+    CHECK_FALSE(boxed());
+    const auto args = app::plot_arguments(w->settings());
+    CHECK(std::ranges::search(args, std::vector<std::string>{"--axes", "off"}).begin() != args.end());
+    same_as_plot(*w, deck, dir / "unboxed.png");
+    CHECK_FALSE(w->app_state().axis_box);
+    CHECK_FALSE(app::parse_state(app::serialize(w->app_state())).axis_box);
+    // Hidden on the curves and on a 2D device.
+    w->select_tab(MainWindow::tab_curves);
+    CHECK_FALSE(shown(*w, MainWindow::id_axis_box));
+    const fs::path deck2 = app_test::write(dir, "generate2d.deck", app_test::generate2d);
+    REQUIRE(w->open_deck(deck2));
+    REQUIRE(pump_until([&] { return w->workspace() != nullptr && !w->runner().busy(); }));
+    w->select_tab(MainWindow::tab_view);
+    CHECK_FALSE(shown(*w, MainWindow::id_axis_box));
+}

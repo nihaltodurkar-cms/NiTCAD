@@ -6,10 +6,26 @@ cbuffer Frame : register(b0) {
     float3 light;        // unit, toward the light, world space
     float ambient;
     float2 viewport;     // target size in pixels
-    uint flags;          // bit 0 lit, bit 1 field, bit 2 transparent pass
+    uint flags;          // bit 0 lit, bit 1 field, bit 2 transparent pass, bits 3-4 finish (Unit 26g)
     float line_width;    // pixels at the target's resolution
     float4 colormap[256];
     float4 no_data;
+    // The enhanced look (Unit 26f, KD2, KD4); zero for classic.
+    float3 eye;          // unit, toward the viewer (orthographic), or the camera position (perspective)
+    float style;         // 0 classic, 1 enhanced
+    float3 up;           // unit, the camera's up, world space
+    float perspective;   // 1 when eye is a position
+    float3 fill;         // unit, toward the fill light, world space
+    float spare;
+    float4 bg_top;
+    float4 bg_bottom;
+    float4 view_rect;    // left, top, width, height of the view in target pixels
+    float3 half_vector;  // orthographic: normalize(light + eye), the same at every pixel
+    float spare2;
+    // The ground shadow (Unit 26g, MD5): the footprint (x lo, z lo, x hi, z hi, um), and the floor's
+    // height, the fall-off margin (um) and the alpha at the centre.
+    float4 shadow_box;
+    float4 shadow_plane;
 };
 
 struct MeshIn {
@@ -24,6 +40,7 @@ struct MeshOut {
     float3 normal : NORMAL;
     float value : VALUE;
     float4 color : COLOR;
+    float3 world : WORLD;  // um, for the enhanced look's eye direction in perspective
 };
 
 MeshOut mesh_vs(MeshIn v) {
@@ -32,6 +49,7 @@ MeshOut mesh_vs(MeshIn v) {
     o.normal = v.normal;
     o.value = v.value;
     o.color = v.color;
+    o.world = v.position;
     return o;
 }
 
@@ -46,12 +64,84 @@ float4 base_color(MeshOut p) {
             c = float4(lerp(colormap[i].rgb, colormap[i + 1].rgb, x - (float)i), p.color.a);
         }
     }
-    if (flags & 1u) {
+    if ((flags & 1u) && style > 0.5) {
+        // Enhanced: key, fill and rim lights, a sky/ground hemisphere ambient and a soft highlight
+        // (reduced on field maps, KQ6); two-sided by turning the normal toward the eye.
+        float3 n = normalize(p.normal);
+        const float3 v = perspective > 0.5 ? normalize(eye - p.world) : eye;
+        if (dot(n, v) < 0.0) n = -n;
+        const uint finish = (flags >> 3) & 3u;  // Unit 26g (MD1): 0 matte, 1 metal, 2 glass
+        const bool metal = finish == 1u;
+        const float key = saturate(dot(n, light));
+        const float fil = saturate(dot(n, fill));
+        // Metal (MD2): the sky/ground ambient along the reflected eye ray, as a fake environment, so faces
+        // turned up read bright and faces turned down read dark; aluminium as its base colour.
+        const float3 env = metal ? reflect(-v, n) : n;
+        const float hemi = lerp(0.30, 0.46, 0.5 + 0.5 * dot(env, up));
+        const float lum = hemi + 0.60 * key + 0.18 * fil;
+        const float field = (flags & 2u) ? 1.0 : 0.0;
+        if (metal) c.rgb = float3(0.70, 0.72, 0.76);
+        // Powers by multiplication (s^40 = s^32 s^8, s^64, r^3), no pow: WARP runs this per pixel on the CPU (KG6).
+        const float3 h = perspective > 0.5 ? normalize(light + v) : half_vector;
+        const float s = saturate(dot(n, h));
+        const float s2 = s * s, s4 = s2 * s2, s8 = s4 * s4, s32 = s8 * s8 * s8 * s8;
+        const float r = 1.0 - saturate(dot(n, v));
+        const float r3 = r * r * r;
+        const float spec = metal ? 0.55 * (s32 * s32) : lerp(0.22, 0.08, field) * (s32 * s8);
+        const float rim = lerp(0.14, 0.06, field) * r3;
+        c.rgb = c.rgb * lum + spec + rim;
+        if (finish == 2u) {
+            // Glass (MD3): more opaque and lighter toward grazing angles (Schlick-like), as clear as
+            // before face on, so the oxide's outline shows where it is seen edge-on.
+            const float g = 0.55 * r3;
+            c.a = c.a + (1.0 - c.a) * g;
+            c.rgb = lerp(c.rgb, float3(1.0, 1.0, 1.0), g);
+        }
+    } else if (flags & 1u) {
         // Two-sided: a slice or an interface is lit from whichever side the eye is on.
         const float d = abs(dot(normalize(p.normal), light));
         c.rgb *= ambient + (1.0 - ambient) * d;
     }
     return c;
+}
+
+// The enhanced look's background (KD4): a vertical gradient over the view, drawn before the scene.
+float4 background_ps(float4 p : SV_Position) : SV_Target {
+    const float t = saturate((p.y - view_rect.y) / max(view_rect.w, 1.0));
+    return float4(lerp(bg_top.rgb, bg_bottom.rgb, t), 1.0);
+}
+
+// The ground shadow (Unit 26g, MD5): a quad on the floor under the device, the footprint grown by the
+// margin, drawn over the gradient before the scene. Its alpha falls from the centre's to 0 at the
+// margin, by the distance to the footprint's rectangle.
+struct ShadowOut {
+    float4 position : SV_Position;
+    float2 ground : GROUND;  // x, z on the floor, um
+};
+
+ShadowOut shadow_vs(uint id : SV_VertexID) {
+    // Two triangles: corners 0 1 2, 2 1 3 of (lo, lo) (hi, lo) (lo, hi) (hi, hi).
+    const uint corner[6] = {0u, 1u, 2u, 2u, 1u, 3u};
+    const uint c = corner[id];
+    const float m = shadow_plane.y;
+    const float x = (c & 1u) ? shadow_box.z + m : shadow_box.x - m;
+    const float z = (c & 2u) ? shadow_box.w + m : shadow_box.y - m;
+    ShadowOut o;
+    o.position = mul(float4(x, shadow_plane.x, z, 1.0), view_projection);
+    o.ground = float2(x, z);
+    return o;
+}
+
+float4 shadow_ps(ShadowOut p) : SV_Target {
+    const float2 centre = 0.5 * (shadow_box.xy + shadow_box.zw);
+    const float2 half_size = 0.5 * (shadow_box.zw - shadow_box.xy);
+    const float2 q = abs(p.ground - centre) - half_size;
+    // Signed distance to the rectangle: negative inside, -inner at the centre.
+    const float s = length(max(q, 0.0)) + min(max(q.x, q.y), 0.0);
+    const float inner = max(min(half_size.x, half_size.y), 1e-6);
+    const float t = saturate((s + inner) / (inner + shadow_plane.y));
+    const float a = shadow_plane.z * (1.0 - t * t * (3.0 - 2.0 * t));
+    return float4(0.16, 0.18, 0.22, a);
 }
 
 float4 opaque_ps(MeshOut p) : SV_Target {

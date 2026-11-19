@@ -58,6 +58,8 @@ std::string serialize(const AppState& s) {
     out += "inspector_width = " + std::to_string(l.inspector_width) + "\n";
     out += "deck_height = " + std::to_string(l.deck_height) + "\n";
     out += "hover_readout = " + std::string(s.hover_readout ? "1" : "0") + "\n";
+    out += "enhanced_look = " + std::string(s.enhanced_look ? "1" : "0") + "\n";
+    out += "axis_box = " + std::string(s.axis_box ? "1" : "0") + "\n";
     return out;
 }
 
@@ -99,6 +101,10 @@ AppState parse_state(std::string_view text) {
             s.layout.deck_height = v;
         } else if (key == "hover_readout" && integer(value, v)) {
             s.hover_readout = v != 0;
+        } else if (key == "enhanced_look" && integer(value, v)) {
+            s.enhanced_look = v != 0;
+        } else if (key == "axis_box" && integer(value, v)) {
+            s.axis_box = v != 0;
         }
     }
     return s;

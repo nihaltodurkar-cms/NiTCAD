@@ -61,3 +61,25 @@ TEST_CASE("app state 26e: the hover readout switch is saved; old files have it o
     s.hover_readout = true;
     CHECK(app::parse_state(app::serialize(s)).hover_readout);
 }
+
+TEST_CASE("app state 26f: the enhanced 3D look is saved; old files have it on (KD5, KG5)", "[app]") {
+    CHECK(app::parse_state("# NiTCAD application state\nrecent = a.deck\n").enhanced_look);
+    app::AppState s;
+    CHECK(s.enhanced_look);
+    s.enhanced_look = false;
+    CHECK(app::serialize(s).find("enhanced_look = 0\n") != std::string::npos);
+    CHECK_FALSE(app::parse_state(app::serialize(s)).enhanced_look);
+    s.enhanced_look = true;
+    CHECK(app::parse_state(app::serialize(s)).enhanced_look);
+}
+
+TEST_CASE("app state 26h: the axis box is saved; old files have it on (JD1, JQ3, JG6)", "[app]") {
+    CHECK(app::parse_state("# NiTCAD application state\nrecent = a.deck\n").axis_box);
+    app::AppState s;
+    CHECK(s.axis_box);
+    s.axis_box = false;
+    CHECK(app::serialize(s).find("axis_box = 0\n") != std::string::npos);
+    CHECK_FALSE(app::parse_state(app::serialize(s)).axis_box);
+    s.axis_box = true;
+    CHECK(app::parse_state(app::serialize(s)).axis_box);
+}
