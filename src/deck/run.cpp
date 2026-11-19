@@ -430,7 +430,37 @@ std::expected<RunReport, base::Error> run(const Plan& plan, const solve::RunCont
     if (plan.analysis == Analysis::small_signal) {
         solve::SmallSignalOptions o = plan.small_signal;
         o.steady = plan.options;
-        auto s = solve::solve_small_signal(plan.device, plan.points, o, guess, control);
+        // A restart (Unit 61, RD6): as the sweep's (DK9), after the operating point the checkpoint
+        // holds, from its state, at every frequency of the remaining points.
+        std::vector<std::vector<double>> points = plan.points;
+        std::optional<io::Checkpoint> restart;
+        if (!plan.restart.empty()) {
+            auto c = io::load_checkpoint(plan.restart, plan.device.mesh());
+            if (!c) return std::unexpected(std::move(c.error()));
+            if (c->kind == io::CheckpointKind::transient) {
+                return std::unexpected(invalid("the restart checkpoint '" + plan.restart.string() +
+                                               "' holds a transient's resume state, not an operating point"));
+            }
+            std::size_t k = 0;
+            while (k < points.size() && !same_bias(points[k], c->bias_V)) ++k;
+            if (k == points.size()) {
+                return std::unexpected(invalid("the restart checkpoint '" + plan.restart.string() +
+                                               "' holds a bias that is not an operating point of the run"));
+            }
+            if (k + 1 == points.size()) {
+                return std::unexpected(invalid("the restart checkpoint '" + plan.restart.string() +
+                                               "' holds the run's last operating point: nothing is left to solve"));
+            }
+            report.skipped_points = k + 1;
+            points.erase(points.begin(), points.begin() + static_cast<std::ptrdiff_t>(k + 1));
+            if (!o.steady.thermal_bias_K.empty()) {
+                o.steady.thermal_bias_K.erase(o.steady.thermal_bias_K.begin(),
+                                              o.steady.thermal_bias_K.begin() + static_cast<std::ptrdiff_t>(k + 1));
+            }
+            o.steady.step_control.initial_bias_V = c->bias_V;
+            restart = std::move(*c);
+        }
+        auto s = solve::solve_small_signal(plan.device, points, o, restart ? &restart->fields : guess, control);
         if (!s) return std::unexpected(std::move(s.error()));
         stamp(s->run);
         if (!out.small_signal.empty()) {

@@ -7,7 +7,9 @@
 // restart and checkpoint likewise (RD5; RG5 deck part).
 #include <catch2/catch_test_macros.hpp>
 
+#include <algorithm>
 #include <bit>
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <filesystem>
@@ -278,4 +280,57 @@ TEST_CASE("deck trace restart: a stopped trace continued equals the uninterrupte
     other.replace(other.find("end = 0.9"), 9, "end = 0.8");
     refused(diode_device + other + "restart = part.nitckpt\n", "belongs to another run");
     CHECK(deck::run(must(diode_device + "[sweep]\ncontact anode = 0.3\ninitial = part.nitckpt\n", dir)));
+}
+
+// [small_signal] restart (Unit 61, RD6; RG6): after the operating point a checkpoint holds (a
+// sweep's or a small-signal run's), the remaining points equal the uninterrupted run's to 1e-9
+// relative at every frequency; a checkpoint at the last point, a bias that is not a point and a
+// transient's checkpoint are refused.
+TEST_CASE("deck small-signal restart: the remaining points equal the uninterrupted run's (RG6)", "[deck][restart]") {
+    const fs::path dir = scratch("small_signal_restart");
+    const std::string ac = "[small_signal]\ncontact anode = 0 : 0.4 : 0.1\nfrequencies = 1MHz, 1GHz\n";
+    const auto full = deck::run(must(diode_device + ac, dir));
+    if (!full) FAIL(full.error().message);
+    const auto& f = *full->small_signal;
+    REQUIRE(f.points.size() == 5);
+    const auto close = [](double a, double b) { return std::abs(a - b) <= 1e-9 * std::max(std::abs(a), std::abs(b)) + 1e-30; };
+    REQUIRE(deck::run(must(diode_device + "[sweep]\ncontact anode = 0 : 0.2 : 0.1\n[output]\ncheckpoint = sweep.nitckpt\n", dir)));
+    REQUIRE(deck::run(must(diode_device + "[small_signal]\ncontact anode = 0 : 0.2 : 0.1\nfrequencies = 1MHz\n"
+                           "[output]\ncheckpoint = ac.nitckpt\n", dir)));
+    for (const std::string checkpoint : {"sweep.nitckpt", "ac.nitckpt"}) {
+        INFO(checkpoint);
+        const auto rest = deck::run(must(diode_device + ac + "restart = " + checkpoint + "\n", dir));
+        if (!rest) FAIL(rest.error().message);
+        CHECK(rest->skipped_points == 3);
+        const auto& r = *rest->small_signal;
+        REQUIRE(r.points.size() == 2);
+        for (std::size_t i = 0; i < 2; ++i) {
+            const auto& a = r.points[i];
+            const auto& b = f.points[3 + i];
+            CHECK(a.dc.bias_V == b.dc.bias_V);
+            for (std::size_t c = 0; c < a.dc.terminal_current.size(); ++c)
+                CHECK(close(a.dc.terminal_current[c], b.dc.terminal_current[c]));
+            REQUIRE(a.admittance.size() == b.admittance.size());
+            for (std::size_t q = 0; q < a.admittance.size(); ++q) {
+                REQUIRE(a.admittance[q].size() == b.admittance[q].size());
+                for (std::size_t e = 0; e < a.admittance[q].size(); ++e) {
+                    INFO("point " << 3 + i << ", frequency " << q << ", entry " << e);
+                    CHECK(close(a.admittance[q][e].real(), b.admittance[q][e].real()));
+                    CHECK(close(a.admittance[q][e].imag(), b.admittance[q][e].imag()));
+                }
+            }
+        }
+    }
+    REQUIRE(deck::run(must(diode_device + "[sweep]\ncontact anode = 0 : 0.4 : 0.1\n[output]\ncheckpoint = last.nitckpt\n", dir)));
+    REQUIRE(deck::run(must(diode_device + "[sweep]\ncontact anode = 0.05\n[output]\ncheckpoint = off.nitckpt\n", dir)));
+    REQUIRE(deck::run(must(diode_device + body + "[output]\ncheckpoint = tran.nitckpt\n", dir)));
+    const auto refused = [&](const std::string& file, const std::string& what) {
+        const auto r = deck::run(must(diode_device + ac + "restart = " + file + "\n", dir));
+        REQUIRE_FALSE(r.has_value());
+        INFO(r.error().message);
+        CHECK(r.error().message.find(what) != std::string::npos);
+    };
+    refused("last.nitckpt", "nothing is left to solve");
+    refused("off.nitckpt", "not an operating point");
+    refused("tran.nitckpt", "not an operating point");
 }

@@ -256,8 +256,8 @@ TEST_CASE("deck analyses: every mistake names its line", "[deck]") {
            at(1) + "logspace needs a count from 2");
     expect(failure(d + "[small_signal]\nfrequencies = logspace(1, 1e6)\n"),
            at(1) + "logspace takes (first, last, count)");
-    expect(failure(d + "[small_signal]\nfrequencies = 1e6\nrestart = c.nitckpt\n"),
-           at(2) + "restart is for [sweep] (DK9), [transient] and [trace] (Unit 61), not [small_signal]");
+    // Unit 61 (RD6): a small-signal run takes a restart.
+    CHECK(must(d + "[small_signal]\nfrequencies = 1e6\nrestart = c.nitckpt\n").restart.filename() == "c.nitckpt");
     expect(failure(d + "[small_signal]\nfrequencies = 1e6\nvoltage anode = 1\n"),
            at(2) + "unknown key 'voltage anode' in [small_signal]");
 

@@ -229,7 +229,6 @@ private:
                                                           const Plan& plan) const;
     std::expected<std::size_t, base::Error> thermal_index(const Entry& e, std::string_view name,
                                                           const Plan& plan) const;
-    base::Error no_restart(const Entry& e, const Section& s) const;
     std::expected<void, base::Error> starts(const Entry* initial, const Entry* restart, Plan& plan) const;
     std::expected<void, base::Error> outputs(Plan& plan) const;
     std::expected<void, base::Error> adapt(Plan& plan) const;
@@ -1402,11 +1401,6 @@ std::expected<void, base::Error> Builder::analysis(Plan& plan) const {
     return starts(initial, restart, plan);
 }
 
-// A refusal of `restart` outside [sweep] (DK9, Unit 43 AN6).
-base::Error Builder::no_restart(const Entry& e, const Section& s) const {
-    return at(e.line, "restart is for [sweep] (DK9), [transient] and [trace] (Unit 61), not [" + s.kind + "]");
-}
-
 // `initial` and `restart` of an analysis (Unit 61, RD2): the files, relative to the deck. Both in one
 // section is an error at the later one's line.
 std::expected<void, base::Error> Builder::starts(const Entry* initial, const Entry* restart, Plan& plan) const {
@@ -1516,8 +1510,12 @@ std::expected<void, base::Error> Builder::small_signal(const Section& s, Plan& p
     plan.analysis = Analysis::small_signal;
     bool frequencies = false;
     const Entry* initial = nullptr;
+    const Entry* restart = nullptr;
     NITCAD_DECK_CHECK(operating_points(s, plan, [&](const Entry& e) -> std::expected<bool, base::Error> {
-        if (e.key == "restart") return std::unexpected(no_restart(e, s));
+        if (e.key == "restart") {
+            restart = &e;
+            return true;
+        }
         if (e.key == "initial") {
             initial = &e;
             return true;
@@ -1533,7 +1531,7 @@ std::expected<void, base::Error> Builder::small_signal(const Section& s, Plan& p
         return true;
     }));
     if (!frequencies) return std::unexpected(at(s.line, "[small_signal] needs frequencies"));
-    NITCAD_DECK_CHECK(starts(initial, nullptr, plan));
+    NITCAD_DECK_CHECK(starts(initial, restart, plan));
     return {};
 }
 

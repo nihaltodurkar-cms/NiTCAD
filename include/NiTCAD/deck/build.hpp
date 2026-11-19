@@ -120,7 +120,9 @@
 //   [small_signal]    (Unit 43; solve/small_signal.hpp) contact <name> = <series> and
 //                     thermal <name> = <series>, the operating points as in [sweep];
 //                     frequencies = <series> (required), field_frequencies = <series>; in Hz,
-//                     or with a unit Hz, kHz, MHz, GHz, THz (Unit 61, RD1)
+//                     or with a unit Hz, kHz, MHz, GHz, THz (Unit 61, RD1);
+//                     restart = <checkpoint file>  (continue after the operating point it holds, as
+//                       [sweep]; Unit 61 RD6)
 //   [trace]           (Unit 43; solve/trace.hpp) contact = <name> and end = <V> (required);
 //                     start <name> = <V>  (each contact's bias at the start, default 0);
 //                     step, max_step, min_step, current_limit, max_points, density_floor;
