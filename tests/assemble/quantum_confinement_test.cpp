@@ -607,3 +607,181 @@ TEST_CASE("quantum confinement assemble: refusals (QC11)") {
         CHECK(System::create(d, scaling, m).has_value());
     }
 }
+
+// Unit 62 slice 1 (QP10, QV11): density gradient's refusals, the same message from both assemblers, and the
+// accepted combinations, which slice 1 still refuses as not built (until slice 2 assembles the rows).
+namespace {
+
+assemble::PhysicsModels dg() {
+    assemble::PhysicsModels m;
+    m.quantum_confinement = assemble::QuantumConfinement::density_gradient;
+    return m;
+}
+
+struct LumpedOptions {
+    double eps_r = 3.9;
+    double band_gap_eV = 0.0;  // 0: no band data of its own
+    std::uint8_t tunnelling = 0;
+    bool schottky = false;
+};
+
+device::Device lumped_dg(const LumpedOptions& o) {
+    const auto x = uniform(0.0, 3e-6, 31);
+    mesh::Mesh m = *mesh::make_tensor_grid(x);
+    const std::size_t n = m.node_count();
+    device::Contact gate{"gate", device::ContactKind::gate, m.find_boundary("x_min")->nodes};
+    gate.gate = {.boundary = "x_min", .oxide_thickness_cm = 2e-7, .oxide_relative_permittivity = o.eps_r};
+    if (o.band_gap_eV > 0.0) {
+        gate.gate.oxide_affinity_eV = 1.05;
+        gate.gate.oxide_band_gap_eV = o.band_gap_eV;
+        gate.gate.oxide_mass_n = 0.5;
+        gate.gate.oxide_mass_p = 0.5;
+    }
+    gate.tunnelling = o.tunnelling;
+    device::Contact substrate{"substrate", device::ContactKind::ohmic, m.find_boundary("x_max")->nodes};
+    if (o.schottky) {
+        substrate.kind = device::ContactKind::schottky;
+        substrate.schottky = {.boundary = "x_max", .by_work_function = true, .work_function_eV = 4.6};
+    }
+    return *device::Device::create({.mesh = std::move(m),
+                                    .temperature_K = 300.0,
+                                    .regions = {{"silicon", physics::silicon()}},
+                                    .node_region = std::vector<device::RegionId>(n, 0),
+                                    .donors = std::vector<double>(n, 0.0),
+                                    .acceptors = std::vector<double>(n, 1e17),
+                                    .contacts = {std::move(gate), std::move(substrate)}});
+}
+
+// A meshed oxide of the given parameters on a p-silicon bar.
+device::Device meshed_dg(const physics::InsulatorParameters& oxide) {
+    mesh::Mesh m = *mesh::make_tensor_grid(*mesh::straddle_interface(uniform(-5e-7, 3e-6, 36), 0.0, 0.5e-7));
+    const std::size_t n = m.node_count();
+    std::vector<device::RegionId> region(n);
+    std::vector<double> acceptors(n, 0.0);
+    for (std::size_t i = 0; i < n; ++i) {
+        region[i] = m.points()[i][0] < 0.0 ? 0 : 1;
+        if (region[i] == 1) acceptors[i] = 1e17;
+    }
+    device::Contact gate{"gate", device::ContactKind::electrode, m.find_boundary("x_min")->nodes};
+    gate.electrode = {.kind = device::GateElectrode::metal, .work_function_eV = 4.4};
+    auto substrate = m.find_boundary("x_max")->nodes;
+    return *device::Device::create(
+        {.mesh = std::move(m),
+         .temperature_K = 300.0,
+         .regions = {{"oxide", *physics::Insulator::create(oxide)}, {"silicon", physics::silicon()}},
+         .node_region = std::move(region),
+         .donors = std::vector<double>(n, 0.0),
+         .acceptors = std::move(acceptors),
+         .contacts = {std::move(gate), {"substrate", device::ContactKind::ohmic, std::move(substrate)}}});
+}
+
+}  // namespace
+
+TEST_CASE("density gradient assemble: refusals and the slice-1 refusal (QV11)") {
+    const auto outcome = [](const device::Device& dev, const assemble::PhysicsModels& m) {
+        const auto s = *assemble::make_scaling(dev);
+        const auto dd = System::create(dev, s, m);
+        const auto ep = create_equilibrium(dev, s, m);
+        REQUIRE_FALSE(dd.has_value());
+        REQUIRE_FALSE(ep.has_value());
+        CHECK(dd.error().code == base::ErrorCode::invalid_input);
+        CHECK(ep.error().message == dd.error().message);
+        return dd.error().message;
+    };
+    const auto refused = [&](const device::Device& dev, const assemble::PhysicsModels& m, const std::string& what) {
+        const std::string msg = outcome(dev, m);
+        CAPTURE(msg);
+        CHECK(msg.find("quantum_confinement density_gradient: ") != std::string::npos);
+        CHECK(msg.find(what) != std::string::npos);
+        CHECK(msg.find("not built yet") == std::string::npos);
+    };
+    const auto accepted = [&](const device::Device& dev, const assemble::PhysicsModels& m) {
+        const auto direct = assemble::check_density_gradient(dev, m);
+        CHECK(direct.has_value());
+        const std::string msg = outcome(dev, m);
+        CAPTURE(msg);
+        CHECK(msg == "quantum_confinement density_gradient: not built yet (Unit 62 slice 2)");
+    };
+    const auto direct_refused = [](const device::Device& dev, const assemble::PhysicsModels& m,
+                                   const std::string& what) {
+        const auto r = assemble::check_density_gradient(dev, m);
+        REQUIRE_FALSE(r.has_value());
+        CAPTURE(r.error().message);
+        CHECK(r.error().code == base::ErrorCode::invalid_input);
+        CHECK(r.error().message.find(what) != std::string::npos);
+    };
+    const device::Device meshed = mos(1);
+
+    SECTION("accepted: meshed SiO2, lumped SiO2, a lumped stack with band data, Lombardi, both statistics") {
+        accepted(meshed, dg());
+        accepted(mos(2), dg());
+        accepted(lumped_dg({}), dg());
+        accepted(lumped_dg({.eps_r = 25.0, .band_gap_eV = 5.8}), dg());
+        accepted(meshed_dg(physics::silicon_dioxide_tunnelling_parameters), dg());
+        auto m = dg();
+        m.surface_mobility = assemble::SurfaceMobility::lombardi;
+        m.fermi_dirac = true;
+        m.btbt_local = true;
+        accepted(mos(2), m);
+    }
+    SECTION("masses and gammas") {
+        for (const double bad : {0.0, -0.5, std::numeric_limits<double>::quiet_NaN(),
+                                 std::numeric_limits<double>::infinity()}) {
+            for (double assemble::PhysicsModels::* field :
+                 {&assemble::PhysicsModels::dg_mass_n, &assemble::PhysicsModels::dg_mass_p,
+                  &assemble::PhysicsModels::dg_gamma_n, &assemble::PhysicsModels::dg_gamma_p}) {
+                auto m = dg();
+                m.*field = bad;
+                refused(meshed, m, "masses and gammas");
+            }
+        }
+    }
+    SECTION("models it is refused with") {
+        // The assembler may refuse some of these itself first (no thermal contact, no path), so the check is
+        // also called directly.
+        auto m = dg();
+        m.electrothermal = true;
+        direct_refused(meshed, m, "electrothermal");
+        CHECK_FALSE(System::create(meshed, *assemble::make_scaling(meshed), m).has_value());
+        m = dg();
+        m.energy_balance = true;
+        direct_refused(meshed, m, "energy_balance");
+        CHECK_FALSE(System::create(meshed, *assemble::make_scaling(meshed), m).has_value());
+        m = dg();
+        m.btbt_nonlocal = assemble::NonlocalTunnelling::kane;
+        direct_refused(meshed, m, "nonlocal band-to-band");
+        CHECK_FALSE(System::create(meshed, *assemble::make_scaling(meshed), m).has_value());
+    }
+    SECTION("contacts it is refused with") {
+        refused(lumped_dg({.tunnelling = device::all_tunnel_processes}), dg(), "gate tunnelling");
+        refused(lumped_dg({.schottky = true}), dg(), "Schottky");
+        refused(lumped_dg({.eps_r = 25.0}), dg(), "lumped gate's stack has no band data");
+    }
+    SECTION("insulators without band data, and not silicon") {
+        auto other = physics::silicon_dioxide_parameters;
+        other.eps_r = 7.5;
+        refused(meshed_dg(other), dg(), "insulator region 'oxide' has no band data");
+        mesh::Mesh m = *mesh::make_tensor_grid(uniform(0.0, 3e-6, 31));
+        const std::size_t n = m.node_count();
+        auto left = m.find_boundary("x_min")->nodes;
+        auto right = m.find_boundary("x_max")->nodes;
+        const device::Device ge = *device::Device::create(
+            {.mesh = std::move(m),
+             .temperature_K = 300.0,
+             .regions = {{"body", *physics::Semiconductor::create(physics::germanium_parameters)}},
+             .node_region = std::vector<device::RegionId>(n, 0),
+             .donors = std::vector<double>(n, 1e17),
+             .acceptors = std::vector<double>(n, 0.0),
+             .contacts = {{"left", device::ContactKind::ohmic, std::move(left)},
+                          {"right", device::ContactKind::ohmic, std::move(right)}}});
+        refused(ge, dg(), "not silicon");
+    }
+    SECTION("off and MLDA are unaffected by DG's parameters") {
+        auto m = assemble::PhysicsModels{};
+        m.dg_mass_n = -1.0;  // not read with the model off
+        CHECK(System::create(meshed, *assemble::make_scaling(meshed), m).has_value());
+        auto ml = mlda();
+        ml.dg_gamma_p = 0.0;  // not read with MLDA
+        CHECK(System::create(meshed, *assemble::make_scaling(meshed), ml).has_value());
+    }
+}

@@ -31,4 +31,26 @@ inline constexpr double mlda_silicon_hole_mass = 0.49;
 // gate), a its depth. Preconditions: depth_cm and wavelength_cm finite and positive.
 [[nodiscard]] double mlda_mean_factor(double depth_cm, double wavelength_cm);
 
+// Density-gradient confinement (Unit 62; DECISIONS.md QP1-QP6). The quantum potential of carrier c is
+// Lambda_c / kT = -beta_c (laplacian sqrt c) / sqrt c, with
+//
+//     beta = gamma hbar^2 / (6 m m0 k T)  [cm^2],
+//
+// and an insulator barrier dE in front of a semiconductor lets sqrt c decay as exp(-x / x_p) into it,
+//
+//     x_p = hbar / sqrt(2 m_ox m0 q dE)  [cm].
+//
+// The defaults are placeholders until the source check QP0 records the theoretical coefficient and
+// the masses it pairs with: gamma = 1 and MLDA's masses.
+inline constexpr double dg_default_gamma = 1.0;
+inline constexpr double dg_default_electron_mass = mlda_silicon_electron_mass;
+inline constexpr double dg_default_hole_mass = mlda_silicon_hole_mass;
+
+// beta [cm^2]. Preconditions (NITCAD_EXPECTS): gamma and mass_m0 finite and positive; temperature_K
+// finite and positive.
+[[nodiscard]] double dg_coefficient_cm2(double gamma, double mass_m0, double temperature_K);
+
+// x_p [cm]. Preconditions: mass_m0 and barrier_eV finite and positive.
+[[nodiscard]] double barrier_decay_length_cm(double mass_m0, double barrier_eV);
+
 }  // namespace NiTCAD::physics

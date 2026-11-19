@@ -138,11 +138,22 @@ TEST_CASE("quantum confinement: the deck keys", "[deck]") {
     const deck::Plan q = must(with("quantum_confinement = off"));
     CHECK(q.options.models.quantum_confinement == assemble::QuantumConfinement::off);
     CHECK(q.options.models.mlda_mass_n == 0.98);
-    const auto bad = deck::parse(with("quantum_confinement = density_gradient"), "bad.deck");
+    // Unit 62: density_gradient is a value now, with its own keys (QP1).
+    const deck::Plan d = must(with("quantum_confinement = density_gradient\ndg_mass_n = 0.916\ndg_mass_p = 0.3\n"
+                                   "dg_gamma_n = 0.5\ndg_gamma_p = 2"));
+    CHECK(d.options.models.quantum_confinement == assemble::QuantumConfinement::density_gradient);
+    CHECK(d.options.models.dg_mass_n == 0.916);
+    CHECK(d.options.models.dg_mass_p == 0.3);
+    CHECK(d.options.models.dg_gamma_n == 0.5);
+    CHECK(d.options.models.dg_gamma_p == 2.0);
+    CHECK(q.options.models.dg_mass_n == 0.98);
+    CHECK(q.options.models.dg_mass_p == 0.49);
+    CHECK(q.options.models.dg_gamma_n == 1.0);
+    const auto bad = deck::parse(with("quantum_confinement = schrodinger"), "bad.deck");
     REQUIRE(bad.has_value());
     const auto built = deck::build(*bad);
     REQUIRE_FALSE(built.has_value());
-    CHECK(built.error().message.find("quantum_confinement is off or mlda") != std::string::npos);
+    CHECK(built.error().message.find("quantum_confinement is off, mlda or density_gradient") != std::string::npos);
 }
 
 TEST_CASE("quantum confinement: the MOSFET examples, reflected, small signal, reports "
@@ -260,4 +271,35 @@ TEST_CASE("quantum confinement: the MOSFET examples, reflected, small signal, re
     }
     std::printf("QC12 FinFET deck: %zu nodes, distance search %.3f s, nearest silicon node %.3f nm\n",
                 fin.device.mesh().node_count(), seconds, nearest * 1e7);
+}
+
+TEST_CASE("density gradient: the run record names the model, its masses and gammas only when on (Unit 62, QP1)",
+          "[deck]") {
+    deck::Plan p = example(fs::path(NITCAD_EXAMPLES_DIR) / "mosfet_2d.deck");
+    const auto off = solve::make_run_record(p.device, p.options, p.points);
+    p.options.models.quantum_confinement = mlda;
+    const auto with_mlda = solve::make_run_record(p.device, p.options, p.points);
+    p.options.models.quantum_confinement = assemble::QuantumConfinement::density_gradient;
+    const auto on = solve::make_run_record(p.device, p.options, p.points);
+    p.options.models.dg_gamma_n = 0.5;
+    const auto other_gamma = solve::make_run_record(p.device, p.options, p.points);
+    const auto named = [](const results::RunRecord& r, const char* key) {
+        return std::ranges::any_of(r.settings, [&](const auto& s) { return s.first == key; });
+    };
+    for (const char* key : {"models.dg_mass_n", "models.dg_mass_p", "models.dg_gamma_n", "models.dg_gamma_p"}) {
+        CHECK(named(on, key));
+        CHECK_FALSE(named(off, key));
+        CHECK_FALSE(named(with_mlda, key));
+    }
+    CHECK(named(on, "models.quantum_confinement"));
+    CHECK_FALSE(named(on, "models.mlda_mass_n"));
+    CHECK(on.input_identity != off.input_identity);
+    CHECK(on.input_identity != with_mlda.input_identity);
+    CHECK(other_gamma.input_identity != on.input_identity);
+    // DG's parameters changed with MLDA on or the model off are not read: the identities are unchanged.
+    deck::Plan q = example(fs::path(NITCAD_EXAMPLES_DIR) / "mosfet_2d.deck");
+    q.options.models.dg_mass_n = 0.3;
+    CHECK(solve::make_run_record(q.device, q.options, q.points).input_identity == off.input_identity);
+    q.options.models.quantum_confinement = mlda;
+    CHECK(solve::make_run_record(q.device, q.options, q.points).input_identity == with_mlda.input_identity);
 }

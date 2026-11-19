@@ -162,8 +162,15 @@ std::vector<std::pair<std::string, double>> settings(const BiasOptions& o) {
     if (o.models.quantum_confinement != assemble::QuantumConfinement::off) {
         s.emplace_back("models.quantum_confinement",
                        static_cast<double>(o.models.quantum_confinement));
-        s.emplace_back("models.mlda_mass_n", o.models.mlda_mass_n);
-        s.emplace_back("models.mlda_mass_p", o.models.mlda_mass_p);
+        if (o.models.quantum_confinement == assemble::QuantumConfinement::mlda) {
+            s.emplace_back("models.mlda_mass_n", o.models.mlda_mass_n);
+            s.emplace_back("models.mlda_mass_p", o.models.mlda_mass_p);
+        } else {  // Unit 62 (QP1): density gradient's masses and coefficient factors
+            s.emplace_back("models.dg_mass_n", o.models.dg_mass_n);
+            s.emplace_back("models.dg_mass_p", o.models.dg_mass_p);
+            s.emplace_back("models.dg_gamma_n", o.models.dg_gamma_n);
+            s.emplace_back("models.dg_gamma_p", o.models.dg_gamma_p);
+        }
     }
     // Unit 37: only where it is read (with incomplete ionization, in either equation set) and not
     // the default, so the runs without it keep their identity.

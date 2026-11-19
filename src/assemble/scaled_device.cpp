@@ -32,6 +32,12 @@ std::expected<ScaledDevice, base::Error> make_scaled_device(const device::Device
     if (scaling.temperature_K != device.temperature_K()) {
         return std::unexpected(invalid("scaling temperature differs from the device's"));
     }
+    // Unit 62 (QP10): density gradient's refusals; then, until slice 2 assembles its rows, a refusal of the
+    // model itself, so no deck runs with it silently missing (here, so both assemblers say the same).
+    if (models.quantum_confinement == QuantumConfinement::density_gradient) {
+        if (auto ok = check_density_gradient(device, models); !ok) return std::unexpected(std::move(ok.error()));
+        return std::unexpected(invalid("quantum_confinement density_gradient: not built yet (Unit 62 slice 2)"));
+    }
     // Unit 37 (DECISIONS.md I2): Altermatt's levels are silicon's phosphorus and boron.
     const bool altermatt = models.incomplete_ionization &&
                            models.ionization_levels == IonizationLevels::altermatt;

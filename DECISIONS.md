@@ -1538,6 +1538,30 @@ refusal between slices 1 and 2 (slices); (7) three more mutants (QV14).
 - **Still in slice 0:** QP0 (on the papers), then the QV3 analytic Λ profiles (they need the DG row, so they move to
   slice 2, where the row exists).
 
+**Ruling (2026-11-19, owner "choose recommended"):** slices 1–3 may start before QP0. The code does not depend on γ's
+value: γ and the masses are inputs, their defaults marked as placeholders; QV6 gets no verdict until QP0 is recorded;
+no criterion changes. Only the plan's order changes.
+
+**Slice 1 (2026-11-19).** As built:
+- `assemble::QuantumConfinement::density_gradient` (= 2) and `PhysicsModels::dg_mass_n`, `dg_mass_p`, `dg_gamma_n`,
+  `dg_gamma_p` (defaults 0.98, 0.49, 1, 1: placeholders, `physics::dg_default_*`).
+- `physics::dg_coefficient_cm2` (β) and `physics::barrier_decay_length_cm` (x_p) in physics/quantum_confinement.
+  QV2 met: both against CODATA 2018 written out in the test within 1e-14 relative. SiO₂ electrons (3.0 eV,
+  0.50 m0): x_p = 0.159373 nm; β_n(0.98 m0, 300 K) = 0.5013 nm².
+- Deck: `quantum_confinement = density_gradient` and the four `dg_` keys; the bad-value message now names three
+  values. App: the `[models]` vocabulary and sections list the value and keys (25 keys); the completion pin went
+  from 20 to 24 (updated with the vocabulary, not loosened; QV12).
+- Run record: with DG on, `models.quantum_confinement` (2) and the four `dg_` settings; MLDA's entries unchanged and
+  written only with MLDA; DG's parameters are read only with DG on (identities tested).
+- Refusals (QV11, `assemble::check_density_gradient`, called from `make_scaled_device`, so both assemblers give the
+  same message): the masses and gammas, electrothermal, energy balance, nonlocal BTBT, gate tunnelling, Schottky
+  contacts, a thermionic interface, non-silicon regions, a meshed insulator neither the built-in SiO₂ nor with band
+  data, a lumped stack with no band data and a permittivity other than SiO₂'s. Everything accepted is then refused
+  with "not built yet (Unit 62 slice 2)", tested on meshed and lumped SiO₂, a lumped stack with its own band data,
+  SiO₂ with band data, and Lombardi + Fermi–Dirac + local BTBT.
+- Run (Release, targeted, not the full suites): physics 5 cases, assemble 9, deck 4 (confinement filters), the
+  whole `nitcad_app_test` (77 cases) and the completion window case: all pass.
+
 ## New questions the advisor raised (not yet in `ARCHITECTURE.md`)
 
 None of these is decided. Each needs an owner position before the build scaffold fixes the flags.

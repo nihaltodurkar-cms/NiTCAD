@@ -35,4 +35,14 @@ struct ConfinementFactors {
 [[nodiscard]] std::expected<ConfinementFactors, base::Error> mlda_factors(
     const device::Device& device, const PhysicsModels& models);
 
+// Density-gradient confinement on a device (Unit 62; DECISIONS.md QP5, QP10): the combinations it is
+// refused with. Errors (invalid_input, "quantum_confinement density_gradient: ..."): a mass or gamma not
+// finite and positive; electrothermal; energy balance; nonlocal band-to-band tunnelling; gate tunnelling
+// on any contact; a Schottky contact; a thermionic-emission interface; a semiconductor region whose
+// Caughey-Thomas parameters are not silicon's (the masses are global, QD6); a meshed insulator region
+// that is neither the built-in SiO2 nor has band data; a lumped gate whose stack has no band data and a
+// permittivity other than SiO2's (QP5: the barrier penetration needs the band offset and mass).
+[[nodiscard]] std::expected<void, base::Error> check_density_gradient(const device::Device& device,
+                                                                   const PhysicsModels& models);
+
 }  // namespace NiTCAD::assemble
