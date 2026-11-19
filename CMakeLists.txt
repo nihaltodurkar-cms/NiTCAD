@@ -25,7 +25,7 @@ endif()
 # Dynamic CRT, matching the x64-windows-static-md triplet (N1).
 set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
 
-project(NiTCAD VERSION 0.0.0 LANGUAGES CXX)
+project(NiTCAD VERSION 0.1.0 LANGUAGES CXX)
 
 # --- Toolchain gate (ARCHITECTURE.md, D1 and Q6) ----------------------------------
 # MSVC only. 14.51 (compiler 19.51) is the verified reference toolset.
@@ -477,7 +477,8 @@ add_library(nitcad_analysis STATIC
   src/analysis/curve.cpp
   src/analysis/dc.cpp
   src/analysis/cv.cpp
-  src/analysis/two_port.cpp)
+  src/analysis/two_port.cpp
+  src/analysis/compare.cpp)
 add_library(NiTCAD::analysis ALIAS nitcad_analysis)
 target_include_directories(nitcad_analysis PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
 target_link_libraries(nitcad_analysis PUBLIC NiTCAD::base NiTCAD::results)
@@ -486,8 +487,10 @@ add_executable(nitcad_analysis_test
   tests/analysis/curve_test.cpp
   tests/analysis/dc_test.cpp
   tests/analysis/cv_test.cpp
-  tests/analysis/two_port_test.cpp)
-target_link_libraries(nitcad_analysis_test PRIVATE NiTCAD::analysis Catch2::Catch2WithMain)
+  tests/analysis/two_port_test.cpp
+  tests/analysis/compare_test.cpp)
+# compare_test saves and loads a sweep (Unit 60, XG2); the library itself does not depend on io.
+target_link_libraries(nitcad_analysis_test PRIVATE NiTCAD::analysis NiTCAD::io Catch2::Catch2WithMain)
 add_test(NAME analysis COMMAND nitcad_analysis_test)
 
 # --- io layer (files: meshes, sweeps, checkpoints; Unit 29, approved 2026-10-09) ----------
@@ -667,7 +670,8 @@ target_link_libraries(nitcad_solve_test PRIVATE NiTCAD::solve NiTCAD::analysis N
 target_include_directories(nitcad_solve_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/mesh")
 target_compile_definitions(nitcad_solve_test PRIVATE
   NITCAD_MKL_RUNTIME_PATH="${NITCAD_MKL_RUNTIME_PATH}"
-  NITCAD_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}" NITCAD_GIT="${GIT_EXECUTABLE}")
+  NITCAD_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}" NITCAD_GIT="${GIT_EXECUTABLE}"
+  NITCAD_PROJECT_VERSION="${PROJECT_VERSION}")
 nitcad_add_file_tests(solve nitcad_solve_test)
 # The 2D MOSFET gates (tests/solve/mosfet_test.cpp, hidden tag [.mosfet]) take about a minute in
 # Release and far longer in Debug, so they run in the Release configuration only.
@@ -921,10 +925,50 @@ if(NITCAD_VERIFY_FULL_TIER AND CMAKE_BUILD_TYPE STREQUAL "Release")
 endif()
 
 # The batch runner (`nitcad check|run <deck>`).
-add_executable(nitcad src/cli/main.cpp src/cli/plot.cpp src/cli/verify.cpp src/cli/learn.cpp)
-target_link_libraries(nitcad PRIVATE NiTCAD::deck NiTCAD::render NiTCAD::verify_benchmark)
+add_executable(nitcad src/cli/main.cpp src/cli/plot.cpp src/cli/verify.cpp src/cli/learn.cpp src/cli/compare.cpp)
+target_link_libraries(nitcad PRIVATE NiTCAD::deck NiTCAD::render NiTCAD::verify_benchmark NiTCAD::analysis)
 # `nitcad --version` names the build (Unit 42, PV6): a 40-digit revision, or unknown without git.
 add_test(NAME cli_version COMMAND nitcad --version)
+# Cross-machine comparison (Unit 60, XC4-XC5, XG3-XG4): each deck run here against the sweep the development machine
+# wrote (tests/cross_machine/, regenerated only as DECISIONS Unit 60 XC6 says), compared by tolerances (6.8).
+set(_xm ${CMAKE_CURRENT_SOURCE_DIR}/tests/cross_machine)
+foreach(_deck pn_diode_1d mosfet_2d)
+  add_test(NAME cross_machine_${_deck}
+    COMMAND ${CMAKE_COMMAND} -DNITCAD=$<TARGET_FILE:nitcad> -DDECK=${CMAKE_CURRENT_SOURCE_DIR}/examples/${_deck}.deck
+            -DREFERENCE=${_xm}/${_deck}.nitsweep -DWORK=${CMAKE_BINARY_DIR}/cross_machine/${_deck} -DEXPECT=0
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/cli/cross_machine.cmake)
+endforeach()
+# `nitcad compare` exit statuses (XG3): 4 for a changed input (the body doping doubled), 1 not comparable or unreadable,
+# 64 usage, 0 a file against itself.
+add_test(NAME compare_cli.differ
+  COMMAND ${CMAKE_COMMAND} -DNITCAD=$<TARGET_FILE:nitcad> -DDECK=${CMAKE_CURRENT_SOURCE_DIR}/examples/pn_diode_1d.deck
+          -DREFERENCE=${_xm}/pn_diode_1d.nitsweep -DWORK=${CMAKE_BINARY_DIR}/cross_machine/differ -DEXPECT=4
+          "-DREPLACE_FROM=acceptor constant 1e16" "-DREPLACE_TO=acceptor constant 2e16"
+          -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/cli/cross_machine.cmake)
+foreach(_case
+    "self|compare|${_xm}/pn_diode_1d.nitsweep|${_xm}/pn_diode_1d.nitsweep|0"
+    "not_comparable|compare|${_xm}/pn_diode_1d.nitsweep|${_xm}/mosfet_2d.nitsweep|1"
+    "unreadable|compare|${_xm}/pn_diode_1d.nitsweep|${_xm}/missing.nitsweep|1"
+    "one_file|compare|${_xm}/pn_diode_1d.nitsweep|64"
+    "bad_rtol|compare|${_xm}/pn_diode_1d.nitsweep|${_xm}/pn_diode_1d.nitsweep|--rtol|-1|64"
+    "unknown_option|compare|${_xm}/pn_diode_1d.nitsweep|${_xm}/pn_diode_1d.nitsweep|--bogus|64")
+  string(REPLACE "|" ";" _parts "${_case}")
+  list(POP_FRONT _parts _name)
+  list(POP_BACK _parts _expect)
+  string(REPLACE ";" "|" _args "${_parts}")
+  add_test(NAME compare_cli.${_name}
+    COMMAND ${CMAKE_COMMAND} -DEXE=$<TARGET_FILE:nitcad> "-DARGS=${_args}" -DEXPECT=${_expect}
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/cli/verify_exit.cmake)
+endforeach()
+# The release tag check (Unit 60, RV5, XG5): it passes only for "v" + the version on a clean tree.
+set(_rt ${CMAKE_CURRENT_SOURCE_DIR}/cmake/check_release_tag.cmake)
+add_test(NAME release_tag.match COMMAND ${CMAKE_COMMAND} -DTAG=v1.2.3 -DVERSION=1.2.3 -DDIRTY=false -P ${_rt})
+add_test(NAME release_tag.this_version
+  COMMAND ${CMAKE_COMMAND} -DTAG=v${PROJECT_VERSION} -DROOT=${CMAKE_CURRENT_SOURCE_DIR} -DDIRTY=false -P ${_rt})
+add_test(NAME release_tag.mismatch COMMAND ${CMAKE_COMMAND} -DTAG=v1.2.4 -DVERSION=1.2.3 -DDIRTY=false -P ${_rt})
+add_test(NAME release_tag.no_v COMMAND ${CMAKE_COMMAND} -DTAG=1.2.3 -DVERSION=1.2.3 -DDIRTY=false -P ${_rt})
+add_test(NAME release_tag.dirty COMMAND ${CMAKE_COMMAND} -DTAG=v1.2.3 -DVERSION=1.2.3 -DDIRTY=true -P ${_rt})
+set_tests_properties(release_tag.mismatch release_tag.no_v release_tag.dirty PROPERTIES WILL_FAIL TRUE)
 # `nitcad verify` (Unit 55 TVR-1, DECISIONS 11.7 and RC-Q6/RC-Q7): exit statuses (VR8) and reproducible reports (VR7).
 add_executable(nitcad_verify_probe tests/cli/verify_probe.cpp src/cli/verify.cpp)
 target_include_directories(nitcad_verify_probe PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/cli")
