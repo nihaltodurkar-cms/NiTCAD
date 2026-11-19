@@ -22,7 +22,10 @@ TEST_CASE("app live check: errors at their lines, then the plan, off the UI thre
     const auto ui = std::this_thread::get_id();
     std::atomic<int> wakes = 0;
     std::atomic<bool> on_ui = false;
-    app::LiveChecker live([&] { ++wakes; }, [&](const std::string& text, const fs::path& path) {
+    app::LiveChecker live([&] {
+        ++wakes;
+        wakes.notify_all();
+    }, [&](const std::string& text, const fs::path& path) {
         if (std::this_thread::get_id() == ui) on_ui = true;
         return app::check_deck(text, path);
     });
@@ -50,6 +53,9 @@ TEST_CASE("app live check: errors at their lines, then the plan, off the UI thre
     REQUIRE(plan);
     CHECK(plan->device.mesh().node_count() == 201);
     CHECK_FALSE(live.take_plan());
+    // wait() returns once the result is posted; the worker wakes the UI after that, so wait for
+    // the wake itself (this failed so on CI, Debug under load).
+    for (int w = wakes.load(); w < 2; w = wakes.load()) wakes.wait(w);
     CHECK(wakes == 2);
     CHECK_FALSE(on_ui);
     CHECK(live.dropped() == 0);
