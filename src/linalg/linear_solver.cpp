@@ -11,6 +11,7 @@
 #include <utility>
 
 #include "NiTCAD/base/contract.hpp"
+#include "NiTCAD/base/thread_pool.hpp"
 #include "eigen_ilut.hpp"
 #include "eigen_sparse_lu.hpp"
 #include "gmres.hpp"
@@ -101,9 +102,9 @@ std::expected<BasicLinearSolver<Scalar>, base::Error> BasicLinearSolver<Scalar>:
             }
             break;
         case SolverBackend::gmres_ilut:
-            if (config.threads != 1) {
+            if (config.threads < 1 || config.threads > 1024) {
                 return std::unexpected(error(base::ErrorCode::invalid_input,
-                                             "gmres_ilut supports exactly 1 thread", std::nullopt,
+                                             "gmres_ilut supports 1 to 1024 threads", std::nullopt,
                                              static_cast<double>(config.threads)));
             }
             break;
@@ -166,6 +167,7 @@ BasicLinearSolver<Scalar>::BasicLinearSolver(const SolverConfig& config) : confi
         backend_ = std::make_unique<detail::IlutBackend<Scalar>>(config.ilut_drop_tolerance,
                                                                  config.ilut_fill_factor);
         gmres_ = std::make_unique<detail::Gmres<Scalar>>();
+        if (config.threads > 1) pool_ = std::make_unique<base::ThreadPool>(config.threads);
     } else {
         backend_ = std::make_unique<detail::SparseLuBackend<Scalar>>();
     }
@@ -193,6 +195,7 @@ BasicLinearSolver<Scalar>::BasicLinearSolver(BasicLinearSolver&& other) noexcept
       previous_x_(std::move(other.previous_x_)),
       transposed_abs_(std::move(other.transposed_abs_)),
       gmres_(std::move(other.gmres_)),
+      pool_(std::move(other.pool_)),
       fallback_(std::move(other.fallback_)),
       fallback_analyzed_(std::exchange(other.fallback_analyzed_, false)),
       direct_(std::exchange(other.direct_, false)),
@@ -219,6 +222,7 @@ BasicLinearSolver<Scalar>& BasicLinearSolver<Scalar>::operator=(
         previous_x_ = std::move(other.previous_x_);
         transposed_abs_ = std::move(other.transposed_abs_);
         gmres_ = std::move(other.gmres_);
+        pool_ = std::move(other.pool_);
         fallback_ = std::move(other.fallback_);
         fallback_analyzed_ = std::exchange(other.fallback_analyzed_, false);
         direct_ = std::exchange(other.direct_, false);
@@ -618,15 +622,20 @@ std::expected<SolveReport, base::Error> BasicLinearSolver<Scalar>::iterative_sol
     const std::span<const Index> columns = matrix_.col_indices();
     const bool scaled = config_.equilibrate;
     // GMRES runs on the system the preconditioner was built from, R A C y = R b with x = C y.
+    // Row-parallel on the pool (SD2): each row's sum in its own serial order, so any thread count
+    // gives the same bits.
     const auto apply = [&](std::span<const Scalar> v, std::span<Scalar> w) {
-        for (std::size_t r = 0; r < w.size(); ++r) {
-            Scalar s{};
-            for (auto k = static_cast<std::size_t>(offsets[r]);
-                 k < static_cast<std::size_t>(offsets[r + 1]); ++k) {
-                s += scaled_values_[k] * v[static_cast<std::size_t>(columns[k])];
-            }
-            w[r] = s;
-        }
+        base::for_chunks(pool_.get(), w.size(), detail::gmres_row_chunk,
+                         [&](std::size_t begin, std::size_t end) {
+                             for (std::size_t r = begin; r < end; ++r) {
+                                 Scalar s{};
+                                 for (auto k = static_cast<std::size_t>(offsets[r]);
+                                      k < static_cast<std::size_t>(offsets[r + 1]); ++k) {
+                                     s += scaled_values_[k] * v[static_cast<std::size_t>(columns[k])];
+                                 }
+                                 w[r] = s;
+                             }
+                         });
     };
     const auto precondition = [&](std::span<const Scalar> v, std::span<Scalar> w) {
         backend_->solve(v, w);
@@ -646,7 +655,7 @@ std::expected<SolveReport, base::Error> BasicLinearSolver<Scalar>::iterative_sol
         {.restart = static_cast<std::size_t>(config_.restart),
          .max_iterations = static_cast<std::size_t>(config_.max_iterations),
          .tolerance = config_.max_backward_error},
-        apply, precondition, measure, std::span<Scalar>(work_x_));
+        apply, precondition, measure, std::span<Scalar>(work_x_), pool_.get());
     if (result.converged) {
         const double b_norm = inf_norm<Scalar>(b);
         const double r_norm = inf_norm<Scalar>(residual_);

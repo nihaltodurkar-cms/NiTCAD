@@ -107,7 +107,7 @@ TEST_CASE("gmres_ilut: default settings and the configuration checks") {
     REQUIRE(config.fallback == LinearFallback::sparse_lu);
     REQUIRE(make(gmres).config().backend == SolverBackend::gmres_ilut);
 
-    for (const int threads : {0, 2, -1}) {
+    for (const int threads : {0, 1025, -1}) {  // 1 to 1024 since Unit 58 SD2
         const auto s = LinearSolver::create({.backend = SolverBackend::gmres_ilut, .threads = threads});
         REQUIRE(s.error().code == ErrorCode::invalid_input);
         REQUIRE(s.error().context->value == static_cast<double>(threads));
@@ -457,4 +457,82 @@ TEST_CASE("gmres_ilut: a transposed solve falls back to SparseLU, or is refused 
     REQUIRE(!refused.can_transpose());
     REQUIRE(refused.factorize(s.a).has_value());
     REQUIRE(refused.solve_transposed(bt, x).error().code == ErrorCode::invalid_input);
+}
+
+// --- threads (Unit 58 SD2, SG2) ----------------------------------------------------------------
+
+TEST_CASE("gmres_ilut: every thread count gives the one-thread bits (Unit 58 SG2)") {
+    // A nonsymmetric 2D convection-diffusion system of 160^2 unknowns: several vector chunks
+    // (8192) and row chunks (2048), a short restart so several cycles run, and an uneven
+    // right-hand side. x, the iterations and the backward error must be identical, bit for bit.
+    const Index m = 160;
+    std::vector<Triplet> t;
+    for (Index j = 0; j < m; ++j) {
+        for (Index i = 0; i < m; ++i) {
+            const Index k = j * m + i;
+            t.push_back({k, k, 4.0 + 0.01 * static_cast<double>(i % 7)});
+            if (i > 0) t.push_back({k, k - 1, -1.6});
+            if (i + 1 < m) t.push_back({k, k + 1, -0.4});
+            if (j > 0) t.push_back({k, k - m, -1.0});
+            if (j + 1 < m) t.push_back({k, k + m, -1.0});
+        }
+    }
+    const SparseMatrix a = from(m * m, t);
+    std::vector<double> b(static_cast<std::size_t>(m * m));
+    for (std::size_t i = 0; i < b.size(); ++i) b[i] = std::sin(0.37 * static_cast<double>(i)) + 1e-3;
+    SolverConfig config = strict;
+    config.restart = 8;
+    config.ilut_drop_tolerance = 1e-2;
+    config.ilut_fill_factor = 2;
+    const Solved<double> one = solve_with<double>(a, b, config);
+    REQUIRE(one.report.iterations.value_or(0) > 2 * config.restart);  // several cycles
+    REQUIRE(backward_error<double>(a, b, one.x) <= config.max_backward_error);
+    std::uint64_t digest = 1469598103934665603ull;  // FNV-1a of the one-thread bits (SG1 check by hand)
+    for (const double v : one.x) digest = (digest ^ std::bit_cast<std::uint64_t>(v)) * 1099511628211ull;
+    std::printf("gmres one thread: digest %016llx, %zu iterations, backward error %a\n",
+                static_cast<unsigned long long>(digest), one.report.iterations.value_or(0),
+                one.report.backward_error);
+    for (const int threads : {2, 3, 4, 6, 8}) {
+        CAPTURE(threads);
+        config.threads = threads;
+        const Solved<double> s = solve_with<double>(a, b, config);
+        REQUIRE(s.report.iterations == one.report.iterations);
+        REQUIRE(std::bit_cast<std::uint64_t>(s.report.backward_error) ==
+                std::bit_cast<std::uint64_t>(one.report.backward_error));
+        std::size_t differ = 0;
+        for (std::size_t i = 0; i < b.size(); ++i) {
+            if (std::bit_cast<std::uint64_t>(s.x[i]) != std::bit_cast<std::uint64_t>(one.x[i])) ++differ;
+        }
+        REQUIRE(differ == 0);
+    }
+    std::printf("gmres threads: %zu unknowns, %zu iterations, identical at 2, 3, 4, 6, 8 threads\n",
+                b.size(), one.report.iterations.value_or(0));
+}
+
+TEST_CASE("gmres_ilut: threads give the one-thread bits on a complex system (Unit 58 SG2)") {
+    const ComplexSparseMatrix a = to_complex(laplace_2d(120), 0.3);
+    std::vector<Complex> b(static_cast<std::size_t>(a.rows()));
+    for (std::size_t i = 0; i < b.size(); ++i) {
+        b[i] = {std::cos(0.21 * static_cast<double>(i)), 0.5 - std::sin(0.11 * static_cast<double>(i))};
+    }
+    SolverConfig config = strict;
+    config.restart = 6;
+    config.ilut_drop_tolerance = 1e-2;
+    config.ilut_fill_factor = 2;
+    const Solved<Complex> one = solve_with<Complex>(a, b, config);
+    REQUIRE(one.report.iterations.value_or(0) > config.restart);
+    for (const int threads : {2, 5, 8}) {
+        CAPTURE(threads);
+        config.threads = threads;
+        const Solved<Complex> s = solve_with<Complex>(a, b, config);
+        REQUIRE(s.report.iterations == one.report.iterations);
+        std::size_t differ = 0;
+        for (std::size_t i = 0; i < b.size(); ++i) {
+            if (std::bit_cast<std::uint64_t>(s.x[i].real()) != std::bit_cast<std::uint64_t>(one.x[i].real()) ||
+                std::bit_cast<std::uint64_t>(s.x[i].imag()) != std::bit_cast<std::uint64_t>(one.x[i].imag())) {
+                ++differ;
+            }
+        }
+        REQUIRE(differ == 0);
+    }
 }

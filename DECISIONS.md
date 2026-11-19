@@ -2108,6 +2108,48 @@ ILUT, one solve; peak memory as the solver's held private bytes):
   n^1.6 and passes 32 GB before 1e6 unknowns on this machine. GMRES-ILUT's grows linearly (2 GB at 1e6).
 - SG5 and SG7's references: the 40³ GMRES-ILUT step is 9.51 s, 376 MB; the largest (70³) 68.4 s, 2.0 GB.
 
+**Slice 1 (SD2), 2026-11-20 (owner "After slice 0 is done, choose recommended and start slice 1").**
+- **Ruling under "choose recommended": reductions stay serial.** SD2 as written combines per-chunk partial sums of
+  the dot products and norms in chunk order. That order is not the one-thread loop's, so `gmres_ilut` at one thread
+  would change in the last bits and SG1 would fail. Computing them serially at one thread only would make one thread
+  differ from two, and SG2 would fail. The frozen criteria win over the design text: the pool runs only per-index
+  kernels (each output entry computed in its own fixed order), the dot products and norms stay serial, and every
+  thread count gives the one-thread bits, which are today's. Chunked reductions remain possible later only with a
+  new owner ruling on SG1's one-thread bits.
+- **As built.** `base::ThreadPool` (`include/NiTCAD/base/thread_pool.hpp`): `threads − 1` persistent `std::jthread`
+  workers plus the caller; `parallel_for(n, chunk, body)` over fixed chunks `[k chunk, min(n, (k+1) chunk))`, claimed
+  through an atomic counter; workers spin for 2 ms after a job, then sleep on a condition variable (the first version
+  woke them through the condition variable every time, which made GMRES slower at 6 threads than at 1: 3.92 s against
+  2.97 s at 40³). `base::for_chunks(pool, n, chunk, body)` is one call over `[0, n)` without a pool.
+  `gmres_ilut` accepts 1 to 1024 threads (was exactly 1); with more than one the solver owns a pool, and GMRES runs on
+  it the matrix product (chunks of 2048 rows), the basis normalizations, the Gram–Schmidt updates, w = Σ tᵢ vᵢ (each
+  entry summed over i in order) and the iterate update (chunks of 8192 entries). Serial: the ILUT build and its
+  triangular solves, the dot products and norms, the backward-error check and the equilibration. The deck's
+  `[solver] threads` already reaches `SolverConfig::threads`; the `preconditioner` key comes with SD6.
+- **SG1 (one thread unchanged).** The new test's one-thread solve (160² convection–diffusion, restart 8, 63
+  products) gives the same FNV-1a digest of x, iterations and backward error as the code before the change, built
+  from `main` `e57918a` (whose `linalg` is this branch's base): `5c5ca5bc96ed4618`, 63, `0x1.e769a3bc79725p-29`.
+  The full suites and FG1/FG2 traces are not run (owner's word needed).
+- **SG2 (determinism).** `gmres_ilut: every thread count gives the one-thread bits`: x, iterations and backward error
+  identical at 2, 3, 4, 6, 8 threads (25,600 unknowns, several chunks and restarts); the complex case at 2, 5, 8
+  threads. `[.scale_threads]` (40³ and 60³ diode steps): every entry identical at 1 and 6 threads. The pool's own
+  tests: every index exactly once and the fixed chunks for 1, 2, 3, 6, 8 threads and chunk sizes 1, 64, 8192, reused
+  across calls; chunks run on more than one thread. The cross-core probe (P against E cores) is not run: the pooled
+  kernels have no cache-dependent blocking (Unit 41's cause was Eigen's), so the bits cannot depend on the core.
+- **Speed (`[.scale_threads]`, P cores): no useful gain.** GMRES solve 40³: 2.98 s at 1 thread, 3.06 s at 6; 60³:
+  13.80 s, 12.98 s. The ILUT build (6.7 s and 26 s) is unchanged. What the pool can run is a small part of a GMRES-ILUT
+  solve: the ILUT triangular solves (about 5× the matrix's nonzeros) and the serial dot products dominate, and the
+  vector updates are memory-bound. The pool is the base of slices 2–3, whose smoothers and products are per-index.
+- **SG9 (mutants): 9 of 9 caught** (script `C:\Users\disha\bisect-tools\mutants58s1.sh`, M4 and M8 by hand): the
+  last partial chunk dropped; chunks starting one late; the claim counter not reset between jobs; workers never
+  started (the caller runs every chunk); the product skipping each chunk's first row; each update chunk dropping its
+  last entry; w's sum starting at i = 1; `gmres_ilut` refusing more than one thread; the pool running everything on
+  the caller. SG9's reduction mutants (thread-order combination, chunk size from the thread count) do not apply: the
+  pool has no reduction, and a per-index kernel gives the same bits for any chunk size. A solver that ignores its
+  pool gives the same bits too; only the timing shows it.
+- **Tests run (Release, targeted):** `nitcad_base_test` (15 cases), `nitcad_linalg_test` (83), `nitcad_solve_test
+  "[gmres]"` (4), `[.scale_threads]`. Not run: the full Release and Debug suites (owner's word), NG1-style traces.
+
 ## New questions the advisor raised (not yet in `ARCHITECTURE.md`)
 
 None of these is decided. Each needs an owner position before the build scaffold fixes the flags.

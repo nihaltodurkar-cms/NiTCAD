@@ -104,14 +104,15 @@ target_link_libraries(nitcad_scaffold_test PRIVATE Catch2::Catch2WithMain)
 add_test(NAME scaffold COMMAND nitcad_scaffold_test)
 
 # --- base layer (constants, Error, NITCAD_EXPECTS) ---------------------------------
-add_library(nitcad_base STATIC src/base/contract.cpp)
+add_library(nitcad_base STATIC src/base/contract.cpp src/base/thread_pool.cpp)
 add_library(NiTCAD::base ALIAS nitcad_base)
 target_include_directories(nitcad_base PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
 
 add_executable(nitcad_base_test
   tests/base/constants_test.cpp
   tests/base/error_test.cpp
-  tests/base/contract_test.cpp)
+  tests/base/contract_test.cpp
+  tests/base/thread_pool_test.cpp)
 target_link_libraries(nitcad_base_test PRIVATE NiTCAD::base Catch2::Catch2WithMain)
 add_test(NAME base COMMAND nitcad_base_test)
 

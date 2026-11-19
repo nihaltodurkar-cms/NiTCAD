@@ -54,6 +54,10 @@
 #include "NiTCAD/base/error.hpp"
 #include "NiTCAD/linalg/sparse_matrix.hpp"
 
+namespace NiTCAD::base {
+class ThreadPool;
+}
+
 namespace NiTCAD::linalg {
 
 enum class SolverBackend : std::uint8_t {
@@ -93,7 +97,9 @@ enum class LinearFallback : std::uint8_t {
 struct SolverConfig {
     SolverBackend backend = SolverBackend::eigen_sparse_lu;
     // Thread count (6.8: default 1). eigen_sparse_lu accepts only 1; mkl_pardiso 1 to 1024 (MKL
-    // threads for this solver's calls only, set thread-locally around each one).
+    // threads for this solver's calls only, set thread-locally around each one); gmres_ilut 1 to
+    // 1024 (Unit 58 SD2: a pool for its matrix products and vector updates, bit-identical for every
+    // thread count; the ILUT triangular solves and the dot products stay serial).
     int threads = 1;
     // Scale rows and columns by powers of two before factorizing.
     bool equilibrate = true;
@@ -283,6 +289,8 @@ private:
     std::vector<double> transposed_abs_;  // |A^T| |x| per row of A^T (transposed_backward_error)
     // gmres_ilut only: the GMRES workspace, and the SparseLU fallback (created at its first use).
     std::unique_ptr<detail::Gmres<Scalar>> gmres_;
+    // gmres_ilut with threads > 1 (Unit 58 SD2): the pool of its per-index kernels.
+    std::unique_ptr<base::ThreadPool> pool_;
     std::unique_ptr<detail::Backend<Scalar>> fallback_;
     bool fallback_analyzed_ = false;  // fallback_ holds an analysis of matrix_'s pattern
     bool direct_ = false;             // this factorization is solved by fallback_

@@ -2,6 +2,7 @@
 // Release, run by hand pinned to the P cores (DECISIONS.md Unit 58, slice 0):
 //   start /b /wait /affinity 3C3 nitcad_deck_test.exe "[.scale_profile]"
 //   start /b /wait /affinity 3C3 nitcad_deck_test.exe "[.scale_series]"
+//   start /b /wait /affinity 3C3 nitcad_deck_test.exe "[.scale_threads]"   (slice 1)
 // Measurement only: nothing here is gated beyond the cases solving, and no product code changes.
 //
 // Two measurements per case and linear-solver configuration, from the same start (the case's bias
@@ -17,6 +18,8 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <algorithm>
+#include <bit>
+#include <cstdint>
 #include <chrono>
 #include <cmath>
 #include <cstddef>
@@ -440,6 +443,42 @@ TEST_CASE("solver profile: one Newton step's linear solve on a 3D diode size ser
                         process_memory().peak_working_set_MB - before.peak_working_set_MB,
                         error.empty() ? "" : "; failed: ", error.c_str());
             std::fflush(stdout);
+        }
+    }
+}
+
+TEST_CASE("solver profile: GMRES-ILUT with the thread pool (Unit 58 slice 1)", "[.scale_threads]") {
+    // One Newton step's linear solve as [.scale_series], GMRES-ILUT strict at 1 and 6 threads: the
+    // ILUT build (serial), the GMRES solve (pooled products and updates) and whether the bits agree.
+    for (const int nodes : {40, 60}) {
+        const auto d = diode_3d(nodes);
+        const auto eq = solve::solve_equilibrium(d, {.linear = helper_solver()});
+        REQUIRE(eq.has_value());
+        std::vector<double> rhs;
+        const linalg::SparseMatrix j =
+            device_jacobian(d, std::vector<double>{0.5, 0.0}, eq->fields.potential_V, rhs);
+        std::vector<double> first;
+        for (const int threads : {1, 6}) {
+            auto solver = *linalg::LinearSolver::create({.backend = linalg::SolverBackend::gmres_ilut,
+                                                         .threads = threads,
+                                                         .fallback = linalg::LinearFallback::none});
+            auto t0 = clock_type::now();
+            REQUIRE(solver.factorize(j).has_value());
+            const double build = since(t0);
+            std::vector<double> x(rhs.size());
+            t0 = clock_type::now();
+            const auto r = solver.solve(rhs, x);
+            const double solve = since(t0);
+            REQUIRE(r.has_value());
+            if (first.empty()) first = x;
+            std::size_t differ = 0;
+            for (std::size_t i = 0; i < x.size(); ++i) differ += std::bit_cast<std::uint64_t>(x[i]) !=
+                                                                 std::bit_cast<std::uint64_t>(first[i]);
+            std::printf("threads %d^3 (%zu unknowns), %d threads: ILUT %.2f s, GMRES solve %.2f s "
+                        "(%zu products), entries differing from 1 thread: %zu\n",
+                        nodes, x.size(), threads, build, solve, r->iterations.value_or(0), differ);
+            std::fflush(stdout);
+            REQUIRE(differ == 0);
         }
     }
 }
