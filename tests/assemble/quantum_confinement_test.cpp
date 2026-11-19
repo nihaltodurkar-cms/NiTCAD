@@ -1320,3 +1320,102 @@ TEST_CASE("density gradient assemble: drift-diffusion Newton is quadratic on the
     }
     CHECK(gated >= 1);
 }
+
+TEST_CASE("density gradient assemble: the time step's Jacobian and the small-signal matrix (QP11)") {
+    // The step's Jacobian against central differences (the house gate's measure, the step's
+    // residual), at two rates; the small-signal matrix at s = rate (real) is that Jacobian with the
+    // steady state as history (backward Euler is exact for e^(s t)), and at s = i w, without traps,
+    // the steady Jacobian plus i w times the storage's.
+    struct Case {
+        const char* what;
+        device::Device d;
+        bool ionization;
+    };
+    std::vector<Case> cases;
+    cases.push_back({"meshed 1D, traps", mos(1), false});
+    cases.push_back({"meshed 2D, traps", mos(2, true, false), false});
+    cases.push_back({"meshed 2D, no traps, incomplete ionization", mos(2, false, false), true});
+    cases.push_back({"lumped 1D", lumped(1), false});
+    for (const Case& c : cases) {
+        for (const bool fd : {false, true}) {
+            CAPTURE(c.what, fd);
+            auto m = dg();
+            m.fermi_dirac = fd;
+            m.incomplete_ionization = c.ionization;
+            const auto scaling = *assemble::make_scaling(c.d);
+            auto plain = m;
+            plain.quantum_confinement = assemble::QuantumConfinement::off;
+            const bool meshed = c.d.contacts()[0].kind != device::ContactKind::gate;
+            const std::vector<double> eq_bias = meshed ? std::vector<double>{-0.4, 0.0} : std::vector<double>{0.8, 0.0};
+            const std::vector<double> bias = meshed ? std::vector<double>{-0.4, 0.1} : std::vector<double>{0.8, 0.05};
+            auto poisson = *create_equilibrium(c.d, scaling, plain);
+            REQUIRE(poisson.set_bias(eq_bias).has_value());
+            auto dd = *System::create(c.d, scaling, m);
+            REQUIRE(dd.set_bias(bias).has_value());
+            std::vector<double> x = dg_probe(dd, poisson, c.d, 41);
+            const std::vector<double> history = dd.storage(x);
+            const std::vector<double> traps = assemble::trap_occupancies(dd, x);
+            const std::size_t n = dd.unknowns();
+            std::vector<double> f(n), fp(n), fm(n);
+            for (const double factor : {1.0, 100.0}) {
+                const System::TimeStep step{factor * dd.time_scale() / 0.35e-12, history, traps};
+                auto jac = dd.make_jacobian();
+                dd.evaluate(x, step, f, jac);
+                const auto j = dense(jac);
+                double worst = 0.0;
+                for (std::size_t col = 0; col < n; ++col) {
+                    const double base = x[col];
+                    const double h = 1e-7 * std::max(std::abs(base), 1.0);
+                    x[col] = base + h;
+                    const double up = x[col];
+                    dd.residual(x, step, fp);
+                    x[col] = base - h;
+                    const double down = x[col];
+                    dd.residual(x, step, fm);
+                    x[col] = base;
+                    double scale = 1e-300, error = 0.0;
+                    for (std::size_t r = 0; r < n; ++r) scale = std::max(scale, std::abs(j[r][col]));
+                    for (std::size_t r = 0; r < n; ++r) {
+                        error = std::max(error, std::abs((fp[r] - fm[r]) / (up - down) - j[r][col]));
+                    }
+                    worst = std::max(worst, error / scale);
+                }
+                CAPTURE(factor, worst);
+                CHECK(worst <= 1e-6);
+            }
+            const auto jacobian_at = [&](double rate) {
+                auto j = dd.make_jacobian();
+                if (rate == 0.0) {
+                    dd.evaluate(x, f, j);
+                } else {
+                    dd.evaluate(x, System::TimeStep{rate, history, traps}, f, j);
+                }
+                return std::vector<double>(j.values().begin(), j.values().end());
+            };
+            const double rate = 3.0 * dd.time_scale() / 0.35e-12;
+            const std::vector<double> steady = jacobian_at(0.0), stepped = jacobian_at(rate), unit = jacobian_at(1.0);
+            auto a = dd.make_small_signal_matrix();
+            double scale = 0.0, worst = 0.0;
+            for (const double v : stepped) scale = std::max(scale, std::abs(v));
+            dd.small_signal_matrix(x, {rate, 0.0}, a);
+            for (std::size_t k = 0; k < stepped.size(); ++k) {
+                worst = std::max(worst, std::abs(a.values()[k] - stepped[k]));
+            }
+            CAPTURE(worst, scale);
+            CHECK(worst <= 1e-12 * scale);
+            if (!traps.empty()) continue;
+            const double w = 0.7 * rate;
+            dd.small_signal_matrix(x, {0.0, w}, a);
+            double storage = 0.0;
+            worst = 0.0;
+            for (std::size_t k = 0; k < stepped.size(); ++k) {
+                const std::complex<double> expected{steady[k], w * (unit[k] - steady[k])};
+                worst = std::max(worst, std::abs(a.values()[k] - expected));
+                storage = std::max(storage, std::abs(unit[k] - steady[k]));
+            }
+            CAPTURE(worst, storage);
+            CHECK(storage > 0.0);
+            CHECK(worst <= 1e-12 * scale);
+        }
+    }
+}

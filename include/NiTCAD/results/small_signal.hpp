@@ -39,6 +39,9 @@ struct SmallSignalFields {
     // With energy balance (Unit 52), the electron and hole temperatures' (K / V); empty without.
     std::vector<std::complex<double>> electron_temperature_K;
     std::vector<std::complex<double>> hole_temperature_K;
+    // With density gradient (Unit 62), the quantum potentials' (eV / V); empty without.
+    std::vector<std::complex<double>> quantum_potential_n_eV;
+    std::vector<std::complex<double>> quantum_potential_p_eV;
 };
 
 struct SmallSignalPoint {

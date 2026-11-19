@@ -212,6 +212,7 @@ struct SystemData {
     // The storage of a semiconductor node and its derivatives d S_n / dn, d S_p / dp.
     struct NodeStorage {
         double n, d_n, p, d_p;
+        double d_ln = 0.0, d_lp = 0.0;  // density gradient (Unit 62): d S / d Lambda (incomplete ionization)
     };
     [[nodiscard]] NodeStorage node_storage(std::size_t i, std::span<const double> x,
                                            std::span<const NodeDegeneracy> g) const;

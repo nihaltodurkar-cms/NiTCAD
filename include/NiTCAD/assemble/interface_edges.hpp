@@ -116,6 +116,9 @@ struct TrapStep {
 // the steady occupancy).
 struct InterfaceSmallSignal {
     std::complex<double> d_flux_insulator[4], d_flux_semiconductor[4], d_rate[4], d_rate_p[4];
+    // Density gradient (Unit 62): the partials in Lambda_n, Lambda_p (the node's, constant over its
+    // half-cell; 0 without the model).
+    std::complex<double> d_flux_insulator_l[2], d_flux_semiconductor_l[2], d_rate_l[2], d_rate_p_l[2];
 };
 
 // The semiconductor node's statistics: Fermi-Dirac or Boltzmann, scaled n_ie, ln(Nc / n_ie) and
@@ -189,6 +192,7 @@ private:
     // steady state's), for s / Ns = inv_weight.
     struct ChargeSmallSignal {
         std::complex<double> d_n, d_p, rate_n, rate_p, rate_hn, rate_hp;
+        std::complex<double> q_l[2], rate_l[2], rate_hl[2];  // density gradient: d / d Lambda
     };
     [[nodiscard]] ChargeSmallSignal charge_small_signal(const InterfaceEdge& e, double n, double p,
                                                         const InterfaceStatistics& s,

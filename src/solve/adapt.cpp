@@ -10,6 +10,7 @@
 #include <string>
 #include <utility>
 
+#include "NiTCAD/assemble/quantum_confinement.hpp"
 #include "NiTCAD/base/constants.hpp"
 #include "NiTCAD/mesh/locate.hpp"
 #include "NiTCAD/mesh/mesh.hpp"
@@ -969,6 +970,9 @@ std::expected<IndicatorField, base::Error> difference_field(const AdaptableMesh&
 std::expected<AdaptResult, base::Error> adapt(const DeviceBuilder& build, std::span<const std::vector<double>> points,
                                               const BiasOptions& bias, const AdaptOptions& o, const RunControl& control) {
     if (points.empty()) return std::unexpected(invalid("adaptation needs bias points"));
+    if (auto refused = assemble::density_gradient_adaptation_refused(bias.models)) {
+        return std::unexpected(std::move(*refused));  // Unit 62
+    }
     if (o.goals.empty()) return std::unexpected(invalid("adaptation needs at least one goal"));
     if (!(o.tolerance > 0.0 && o.tolerance < 1.0)) return std::unexpected(invalid("the tolerance must be in (0, 1)"));
     if (!(o.theta > 0.0 && o.theta <= 1.0)) return std::unexpected(invalid("theta must be in (0, 1]"));

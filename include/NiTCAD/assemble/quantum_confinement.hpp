@@ -46,10 +46,10 @@ struct ConfinementFactors {
 [[nodiscard]] std::expected<void, base::Error> check_density_gradient(const device::Device& device,
                                                                    const PhysicsModels& models);
 
-// Density gradient during Unit 62's slice 3: equilibrium and bias sweeps (drift-diffusion and
-// quasi-static) solve it; transient, small signal, traces and adaptation not yet, and call this. With models.quantum_confinement density_gradient: invalid_input, "quantum_confinement
-// density_gradient: the solvers are not built yet (Unit 62 slice 3)"; else nullopt.
-[[nodiscard]] std::optional<base::Error> density_gradient_solvers_unbuilt(
-    const PhysicsModels& models);
+// Mesh adaptation with density gradient (Unit 62, ruled: refused): its field transfer does not carry
+// the quantum potentials. With models.quantum_confinement density_gradient: invalid_input,
+// "quantum_confinement density_gradient: mesh adaptation does not transfer the quantum potentials";
+// else nullopt.
+[[nodiscard]] std::optional<base::Error> density_gradient_adaptation_refused(const PhysicsModels& models);
 
 }  // namespace NiTCAD::assemble

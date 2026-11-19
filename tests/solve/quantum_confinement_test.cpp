@@ -24,6 +24,7 @@
 #include "NiTCAD/physics/insulator.hpp"
 #include "NiTCAD/physics/recombination.hpp"
 #include "NiTCAD/physics/semiconductor.hpp"
+#include "NiTCAD/solve/adapt.hpp"
 #include "NiTCAD/solve/bias.hpp"
 #include "NiTCAD/solve/equilibrium.hpp"
 #include "NiTCAD/solve/small_signal.hpp"
@@ -408,27 +409,58 @@ double fermi_spread(const device::Device& d, const results::BandDiagram& b) {
 
 }  // namespace
 
-TEST_CASE("density gradient: the solvers not yet built refuse it (Unit 62 slice 3)") {
-    const device::Device d = mosc(0.1e-7);
-    const std::string message =
-        "quantum_confinement density_gradient: the solvers are not built yet (Unit 62 slice 3)";
-    const auto refused = [&](const auto& run, const char* what) {
-        CAPTURE(what);
-        REQUIRE_FALSE(run.has_value());
-        CHECK(run.error().code == base::ErrorCode::invalid_input);
-        CHECK(run.error().message == message);
-    };
-    const std::vector<double> bias{0.5, 0.0};
-    solve::SmallSignalOptions ac;
-    ac.steady.models = dg_models();
-    ac.frequencies_Hz = {1e6};
-    const std::vector<std::vector<double>> points{bias};
-    refused(solve::solve_small_signal(d, points, ac), "small signal");
-    solve::TransientOptions t{.t_end_s = 1e-9, .dt_initial_s = 1e-12};
-    t.steady.models = dg_models();
-    const std::vector<solve::Waveform> wf{solve::Waveform::constant(0.5), solve::Waveform::constant(0.0)};
-    refused(solve::solve_transient(d, wf, t), "transient");
+TEST_CASE("density gradient: mesh adaptation refuses it (Unit 62)") {
+    solve::BiasOptions o;
+    o.models = dg_models();
+    const std::vector<std::vector<double>> points{{0.5, 0.0}};
+    const auto r = solve::adapt([](const solve::MeshRefinement&) -> std::expected<solve::AdaptableMesh, base::Error> {
+        FAIL("the device is not built");
+        return std::unexpected(base::Error{base::ErrorCode::invalid_input, "", {}});
+    }, points, o, {}, {});
+    REQUIRE_FALSE(r.has_value());
+    CHECK(r.error().code == base::ErrorCode::invalid_input);
+    CHECK(r.error().message ==
+          "quantum_confinement density_gradient: mesh adaptation does not transfer the quantum potentials");
 }
+
+TEST_CASE("density gradient: a long transient step ends at the steady state (QV10)") {
+    // As QC10: the MOS-C's gate stepped from 0 into accumulation (-1.5 V); by 1 us the run is at the
+    // DC state of -1.5 V, the quantum potentials included.
+    const device::Device d = mosc(0.1e-7);
+    solve::TransientOptions o{.t_end_s = 1e-6, .dt_initial_s = 1e-16};
+    o.steady.models = dg_models();
+    const std::vector<solve::Waveform> wf{*solve::Waveform::step(0.0, -1.5, 0.0),
+                                          solve::Waveform::constant(0.0)};
+    const auto run = solve::solve_transient(d, wf, o);
+    if (!run) FAIL(run.error().message);
+    REQUIRE_FALSE(run->stopped.has_value());
+    // The DC reference from the quasi-static state: drift-diffusion straight from equilibrium to
+    // -1.5 V does not converge with the model (83 iterations, then a backward error; recorded).
+    solve::BiasOptions b;
+    b.models = dg_models();
+    solve::BiasOptions qs = b;
+    qs.equations = solve::Equations::equilibrium_poisson;
+    const std::vector<double> bias{-1.5, 0.0};
+    const auto start = solve::solve_bias(d, bias, qs);
+    if (!start) FAIL(start.error().message);
+    const auto dc = solve::solve_bias(d, bias, b, &start->fields);
+    if (!dc) FAIL(dc.error().message);
+    const auto& f = run->snapshots.back().fields;
+    REQUIRE(f.quantum_potential_p_eV.size() == f.potential_V.size());
+    double peak = 0.0;
+    for (std::size_t i = 0; i < f.potential_V.size(); ++i) {
+        CAPTURE(i);
+        REQUIRE(std::abs(f.potential_V[i] - dc->fields.potential_V[i]) <= 1e-9);
+        REQUIRE(std::abs(f.quantum_potential_n_eV[i] - dc->fields.quantum_potential_n_eV[i]) <= 1e-9);
+        REQUIRE(std::abs(f.quantum_potential_p_eV[i] - dc->fields.quantum_potential_p_eV[i]) <= 1e-9);
+        peak = std::max(peak, std::abs(dc->fields.quantum_potential_p_eV[i]));
+        if (d.is_insulator(static_cast<mesh::NodeId>(i))) continue;
+        REQUIRE(std::abs(f.p_cm3[i] / dc->fields.p_cm3[i] - 1.0) <= 1e-7);
+    }
+    CAPTURE(peak, run->snapshots.size());
+    CHECK(peak > 1e-3);  // accumulation: Lambda_p is resolved
+}
+
 
 TEST_CASE("density gradient: equilibrium and steady states at equilibrium (QV4)") {
     const physics::Semiconductor si = physics::silicon();
@@ -523,4 +555,73 @@ TEST_CASE("density gradient: the coefficient continuation (QP9)") {
     CAPTURE(failed.error().message);
     CHECK(failed.error().message.starts_with(
         "density gradient: the coefficient continuation failed at k = 0.0078125 (converged: none)"));
+}
+
+// A lumped-gate 2D n-MOSFET (Unit 62, QV10): 1 um along x, silicon_axis(1 nm) deep (y), n+ source
+// and drain (1e20, 50 nm deep) under contacts on x < 0.2 um and x > 0.8 um, the gate (5 nm SiO2,
+// n+ poly) over 0.3-0.7 um, body on y_max. Contacts: gate, source, drain, body.
+device::Device dg_mosfet() {
+    std::vector<double> x;
+    for (int k = 0; k <= 40; ++k) x.push_back(1e-4 * k / 40.0);
+    mesh::Mesh m = *mesh::make_tensor_grid(x, silicon_axis(1e-7));
+    const std::size_t n = m.node_count();
+    std::vector<double> donors(n, 0.0);
+    for (std::size_t i = 0; i < n; ++i) {
+        const auto& p = m.points()[i];
+        if ((p[0] < 0.3e-4 || p[0] > 0.7e-4) && p[1] < 5e-6) donors[i] = 1e20;
+    }
+    std::vector<mesh::NodeId> source, drain, gate;
+    for (const mesh::NodeId v : m.find_boundary("y_min")->nodes) {
+        const double px = m.points()[static_cast<std::size_t>(v)][0];
+        if (px < 0.2e-4 + 1e-12) source.push_back(v);
+        if (px > 0.8e-4 - 1e-12) drain.push_back(v);
+        if (px > 0.3e-4 - 1e-12 && px < 0.7e-4 + 1e-12) gate.push_back(v);
+    }
+    auto body = m.find_boundary("y_max")->nodes;
+    device::Contact g{"gate", device::ContactKind::gate, std::move(gate)};
+    g.gate = {.boundary = "y_min", .oxide_thickness_cm = t_ox,
+              .oxide_relative_permittivity = physics::silicon_dioxide().parameters().eps_r};
+    return *device::Device::create(
+        {.mesh = std::move(m),
+         .temperature_K = 300.0,
+         .regions = {{"silicon", physics::silicon()}},
+         .node_region = std::vector<device::RegionId>(n, 0),
+         .donors = std::move(donors),
+         .acceptors = std::vector<double>(n, N_A),
+         .contacts = {std::move(g), {"source", device::ContactKind::ohmic, std::move(source)},
+                      {"drain", device::ContactKind::ohmic, std::move(drain)},
+                      {"body", device::ContactKind::ohmic, std::move(body)}}});
+}
+
+TEST_CASE("density gradient: small-signal g_m and g_d against DC differences (QV10)") {
+    // Y(0)'s drain row against the fourth-order central differences of the DC drain current
+    // (dV = 1e-3 V), each DC point from the operating point's fields.
+    const device::Device d = dg_mosfet();
+    solve::SmallSignalOptions o;
+    o.steady.models = dg_models();
+    o.frequencies_Hz = {0.0};
+    const std::vector<std::vector<double>> points{
+        {0.0, 0.0, 0.0, 0.0}, {0.5, 0.0, 0.0, 0.0}, {1.0, 0.0, 0.0, 0.0},
+        {1.5, 0.0, 0.0, 0.0}, {1.5, 0.0, 0.05, 0.0}, {1.5, 0.0, 0.1, 0.0}};
+    const auto r = solve::solve_small_signal(d, points, o);
+    if (!r) FAIL(r.error().message);
+    if (r->stopped) FAIL(r->stopped->message);
+    REQUIRE(r->points.size() == points.size());
+    const results::SmallSignalPoint& op = r->points.back();
+    REQUIRE(op.dc.fields.quantum_potential_n_eV.size() == d.mesh().node_count());
+    const std::size_t contacts = 4, drain = 2;
+    const auto Y = [&](std::size_t i, std::size_t j) { return op.admittance[0][i * contacts + j]; };
+    const auto I = [&](std::size_t j, double dv) {
+        std::vector<double> v = points.back();
+        v[j] += dv;
+        const auto p = solve::solve_bias(d, v, o.steady, &op.dc.fields);
+        if (!p) FAIL(p.error().message);
+        return p->terminal_current[drain];
+    };
+    const double h = 1e-3;
+    for (const std::size_t j : {std::size_t{0}, drain}) {
+        const double G = (8.0 * (I(j, h) - I(j, -h)) - (I(j, 2.0 * h) - I(j, -2.0 * h))) / (12.0 * h);
+        CAPTURE(j, G, Y(drain, j).real(), Y(drain, j).real() / G - 1.0);
+        CHECK(std::abs(Y(drain, j).real() / G - 1.0) <= 1e-5);
+    }
 }

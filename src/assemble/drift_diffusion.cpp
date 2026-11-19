@@ -1093,25 +1093,30 @@ SystemData::NodeStorage SystemData::node_storage(
     const double n = x[m_ * i + 1], p = x[m_ * i + 2];
     NodeStorage s{n, 1.0, p, 1.0};
     if (!ionization_) return s;
-    // S_n = n - N_D+(eta_c), S_p = p - N_A-(eta_v), with eta_c and eta_v as the Poisson row's.
+    // S_n = n - N_D+(eta_c), S_p = p - N_A-(eta_v), with eta_c and eta_v as the Poisson row's. With density
+    // gradient eta_c + Lambda_n and eta_v + Lambda_p (Unit 62: the dopant levels stay classical).
     const physics::DopantLevels& l = levels_[i];
     if (donors_[i] > 0.0) {
         const double ln = fermi_dirac_ ? g[i].n.log_gamma : 0.0;
         const double wn = fermi_dirac_ ? g[i].n.d_density : 0.0;
+        double eta_c = std::log(n / n_ie_[i]) - ln - log_dos_n_[i];
+        if (density_gradient_) eta_c += x[m_ * i + 3];
         const physics::IonizedDensity d = physics::ionized_density(
-            donors_[i], std::log(n / n_ie_[i]) - ln - log_dos_n_[i], l.donor_kT,
-            l.donor_degeneracy, l.donor_bound);
+            donors_[i], eta_c, l.donor_kT, l.donor_degeneracy, l.donor_bound);
         s.n -= d.value;
         s.d_n -= d.d_eta * (1.0 / n - wn);
+        s.d_ln = -d.d_eta;  // 0 unless density gradient reads it
     }
     if (acceptors_[i] > 0.0) {
         const double lp = fermi_dirac_ ? g[i].p.log_gamma : 0.0;
         const double wp = fermi_dirac_ ? g[i].p.d_density : 0.0;
+        double eta_v = std::log(p / n_ie_[i]) - lp - log_dos_p_[i];
+        if (density_gradient_) eta_v += x[m_ * i + 4];
         const physics::IonizedDensity a = physics::ionized_density(
-            acceptors_[i], std::log(p / n_ie_[i]) - lp - log_dos_p_[i], l.acceptor_kT,
-            l.acceptor_degeneracy, l.acceptor_bound);
+            acceptors_[i], eta_v, l.acceptor_kT, l.acceptor_degeneracy, l.acceptor_bound);
         s.p -= a.value;
         s.d_p -= a.d_eta * (1.0 / p - wp);
+        s.d_lp = -a.d_eta;
     }
     return s;
 }
@@ -1139,8 +1144,8 @@ void System::assemble(std::span<const double> x, std::span<double> f, std::span<
         return;
     }
     NITCAD_EXPECTS(x.size() == unknowns() && f.size() == unknowns());
-    // Density gradient (Unit 62): steady only until slice 3 builds its transient and small signal.
-    NITCAD_EXPECTS(step == nullptr || (!data_->equilibrium_ && !data_->density_gradient_ &&
+    // Density gradient (Unit 62, QP11): its Lambda rows carry no storage (index 1, as Poisson).
+    NITCAD_EXPECTS(step == nullptr || (!data_->equilibrium_ &&
                                        step->storage.size() == storage_width() * node_count() &&
                                        step->traps.size() == trap_slots()));
     // The terms in assembly order (composition.hpp).
@@ -1727,7 +1732,7 @@ linalg::ComplexSparseMatrix System::make_small_signal_matrix() const {
 
 void System::small_signal_matrix(std::span<const double> x, std::complex<double> s,
                                  linalg::ComplexSparseMatrix& a) const {
-    NITCAD_EXPECTS(!data_->equilibrium_ && !data_->density_gradient_ && x.size() == unknowns());  // Unit 62: slice 3
+    NITCAD_EXPECTS(!data_->equilibrium_ && x.size() == unknowns());
     NITCAD_EXPECTS(a.rows() == state_->pattern_.rows() &&
                    std::ranges::equal(a.row_offsets(), state_->pattern_.row_offsets()) &&
                    std::ranges::equal(a.col_indices(), state_->pattern_.col_indices()));
@@ -1750,6 +1755,10 @@ void System::small_signal_matrix(std::span<const double> x, std::complex<double>
             const SystemData::NodeStorage st = data_->node_storage(i, x, g);
             at(i, 1, 1) -= s * (data_->volume_[i] * st.d_n);
             at(i, 2, 2) += s * (data_->volume_[i] * st.d_p);
+            if (data_->density_gradient_ && data_->ionization_) {  // Unit 62: the dopants read Lambda
+                at(i, 1, 3) -= s * (data_->volume_[i] * st.d_ln);
+                at(i, 2, 4) += s * (data_->volume_[i] * st.d_lp);
+            }
             if (data_->energy_balance_) {  // Unit 52 (ED9): the energy rows' storage, -V s dW
                 const SystemData::EnergyStorage w = data_->energy_storage(i, x);
                 at(i, 3, 1) -= s * (data_->volume_[i] * w.n_c);

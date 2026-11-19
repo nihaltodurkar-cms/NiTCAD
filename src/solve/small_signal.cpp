@@ -12,7 +12,6 @@
 
 #include "NiTCAD/assemble/currents.hpp"
 #include "NiTCAD/assemble/energy.hpp"
-#include "NiTCAD/assemble/quantum_confinement.hpp"
 #include "NiTCAD/assemble/scaling.hpp"
 #include "NiTCAD/assemble/system.hpp"
 #include "NiTCAD/assemble/thermal.hpp"
@@ -68,9 +67,6 @@ std::expected<results::SmallSignal, base::Error> solve_small_signal_unobserved(
     }
     auto solver = linalg::ComplexLinearSolver::create(ac);
     if (!solver) return std::unexpected(std::move(solver.error()));
-    if (auto unbuilt = assemble::density_gradient_solvers_unbuilt(steady.models)) {
-        return std::unexpected(std::move(*unbuilt));  // Unit 62: until slice 3
-    }
     auto system = assemble::System::create(device, *scaling, steady.models);
     if (!system) return std::unexpected(std::move(system.error()));
     set_minority_floor(*system, steady.minority_floor);
@@ -93,6 +89,9 @@ std::expected<results::SmallSignal, base::Error> solve_small_signal_unobserved(
     const std::size_t rise_n =
         system->dofs().slot(assemble::FieldId::electron_temperature).value_or(0);
     const std::size_t rise_p = system->dofs().slot(assemble::FieldId::hole_temperature).value_or(0);
+    const auto lambda_n = system->dofs().slot(assemble::FieldId::quantum_potential_n);  // Unit 62
+    const auto lambda_p = system->dofs().slot(assemble::FieldId::quantum_potential_p);
+    const bool quantum = lambda_n.has_value();
 
     results::SmallSignal run;
     run.run = make_run_record(device, options, points, initial);
@@ -212,6 +211,10 @@ std::expected<results::SmallSignal, base::Error> solve_small_signal_unobserved(
                         if (energy) {  // Unit 52: T = T_L (1 + tau) per carrier
                             fields.electron_temperature_K.push_back(r[rise_n] * T0);
                             fields.hole_temperature_K.push_back(r[rise_p] * T0);
+                        }
+                        if (quantum) {  // Unit 62
+                            fields.quantum_potential_n_eV.push_back(r[*lambda_n] * scaling->V_T);
+                            fields.quantum_potential_p_eV.push_back(r[*lambda_p] * scaling->V_T);
                         }
                     }
                     point.fields.push_back(std::move(fields));

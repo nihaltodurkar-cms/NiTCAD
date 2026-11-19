@@ -1670,6 +1670,43 @@ Results (Release, targeted):
 - QV1: the whole `nitcad_assemble_test` and `nitcad_app_test`, solve confinement, density-gradient, interface,
   trap and equilibrium cases (40), deck confinement cases (5): all pass.
 
+**Slice 3b (2026-11-20, same "choose recommended").** As built:
+- Time step (QP11). Λ rows carry no storage. With incomplete ionization the dopant storage reads Λ (η_c + Λ̂_n,
+  η_v + Λ̂_p, as ruled in slice 2), so the step's Jacobian gains the (n, Λ_n) and (p, Λ_p) entries, and so does
+  `small_signal_matrix`. The time-step and small-signal preconditions no longer exclude the model.
+- Small-signal traps. `charge_small_signal` and `InterfaceEdges::small_signal` read Λ through
+  `statistics(node, x)`. They return the complex Λ partials of the trap charge and rates, and of the interface
+  potential's implicit solve (Λ moves the charge only), into the semiconductor node's Λ columns, as `drift`'s.
+- Starts. Bias sweeps and transients start from the equilibrium's drift-diffusion state with Λ, through one
+  helper, `detail::state_from_equilibrium`. Small signal's operating points come from `sweep_bias`, which carries
+  Λ.
+- Fields. Transient snapshots carry Λ, and small-signal fields gain `quantum_potential_n_eV` and `_p_eV`
+  (complex, eV/V; empty without the model).
+- Error estimate. The transient's local error estimate measures Λ̂ absolutely in kT, as ψ, on the nodes where it
+  measures ψ.
+- Refusals. Transient, small signal, traces and the adjoint no longer refuse the model.
+- Adaptation (ruled, recommended): it is refused at `adapt()`'s entry, `density_gradient_adaptation_refused`,
+  with "quantum_confinement density_gradient: mesh adaptation does not transfer the quantum potentials". The
+  field transfer does not carry Λ, and adaptation is outside Unit 62's slice plan, so this is left as a follow-up
+  unit. The old "not built yet" refusal is gone.
+
+Results (Release, targeted):
+- Time-step Jacobian against central differences (house gate 1e-6), at rates 1 and 100 × t0/0.35 ps. Met on:
+  meshed 1D with traps, meshed 2D with traps, meshed 2D with incomplete ionization, lumped 1D; both statistics.
+- `small_signal_matrix` at s = rate equals the step's Jacobian, and at s = iω equals J + iωC without traps. Both
+  within 1e-12 of the largest entry.
+- QV10 (met):
+  - Lumped-gate 2D MOSFET at V_G = 1.5 V, V_D = 0.1 V: Y(0)'s drain row against fourth-order DC differences
+    (dV = 1e-3 V) gives g_m within 3.4e-9 and g_d within 5.4e-10.
+  - MOS-C stepped to −1.5 V: the 1 µs transient equals DC within 1e-9 in ψ and Λ (peak Λ_p 0.114 eV) and 1e-7 in
+    p.
+- Recorded, not gated: drift-diffusion straight from the model's equilibrium to −1.5 V on the MOS-C fails
+  (83 iterations, then a backward error). The DC reference there starts from the quasi-static state. QV13 reports
+  convergence on the examples.
+- Traces with the model have no case of their own yet; their start goes through the same `sweep_bias` path.
+- QV1: the whole `nitcad_assemble_test` (180 cases) and `nitcad_solve_test` (246 passed, 4 skipped) pass, and
+  every Release target builds with zero warnings.
+
 ## New questions the advisor raised (not yet in `ARCHITECTURE.md`)
 
 None of these is decided. Each needs an owner position before the build scaffold fixes the flags.

@@ -382,6 +382,10 @@ public:
             if (ev.jacobian()) {
                 at(s, ev, i, 1, 1) -= k * ns.d_n;
                 at(s, ev, i, 2, 2) += k * ns.d_p;
+                if (s.density_gradient_ && s.ionization_) {  // Unit 62: the ionized dopants read Lambda
+                    at(s, ev, i, 1, 3) -= k * ns.d_ln;
+                    at(s, ev, i, 2, 4) += k * ns.d_lp;
+                }
             }
         }
     }
@@ -513,7 +517,7 @@ public:
             const std::size_t o = v.insulator, sn = v.semiconductor;
             const InterfaceSmallSignal t = d.interfaces_.small_signal(
                 v, x[d.m_ * o], x[d.m_ * sn], x[d.m_ * sn + 1], x[d.m_ * sn + 2],
-                d.statistics(sn), inv_weight);
+                d.statistics(sn, x), inv_weight);
             // As assemble's interface terms.
             const EdgeTerm& e = d.edges_[v.edge];
             const bool o_first = e.a == o;
@@ -525,6 +529,10 @@ public:
                 values[os] += t.d_flux_insulator[1];
                 values[d.interface_np_[k].first] += t.d_flux_insulator[2];
                 values[d.interface_np_[k].second] += t.d_flux_insulator[3];
+                if (d.density_gradient_) {  // Unit 62: the semiconductor node's Lambda columns
+                    values[d.interface_lambda_[k].first] += t.d_flux_insulator_l[0];
+                    values[d.interface_lambda_[k].second] += t.d_flux_insulator_l[1];
+                }
             }
             if (d.contact_[sn] >= 0) continue;
             const bool poisson =
@@ -536,6 +544,11 @@ public:
                 if (poisson) at(sn, 0, c - 1) += t.d_flux_semiconductor[c];
                 at(sn, 1, c - 1) -= t.d_rate[c];
                 at(sn, 2, c - 1) += t.d_rate_p[c];
+            }
+            for (std::size_t c = 0; d.density_gradient_ && c < 2; ++c) {
+                if (poisson) at(sn, 0, 3 + c) += t.d_flux_semiconductor_l[c];
+                at(sn, 1, 3 + c) -= t.d_rate_l[c];
+                at(sn, 2, 3 + c) += t.d_rate_p_l[c];
             }
         }
     }

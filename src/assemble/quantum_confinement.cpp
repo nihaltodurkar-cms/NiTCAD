@@ -167,11 +167,11 @@ std::expected<void, base::Error> check_density_gradient(const device::Device& de
 }
 
 
-std::optional<base::Error> density_gradient_solvers_unbuilt(const PhysicsModels& models) {
+std::optional<base::Error> density_gradient_adaptation_refused(const PhysicsModels& models) {
     if (models.quantum_confinement != QuantumConfinement::density_gradient) return std::nullopt;
     return base::Error{base::ErrorCode::invalid_input,
-                       "quantum_confinement density_gradient: the solvers are not built yet (Unit 62 "
-                       "slice 3)",
+                       "quantum_confinement density_gradient: mesh adaptation does not transfer the "
+                       "quantum potentials",
                        {}};
 }
 

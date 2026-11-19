@@ -99,6 +99,23 @@ inline void quantum_potentials(const assemble::System& system, std::span<const d
     }
 }
 
+// The drift-diffusion state of an equilibrium result's fields (solve_equilibrium): the classical
+// state of its potential, or with density gradient the state its potential and quantum potentials
+// slave (Unit 62, QP8).
+inline std::vector<double> state_from_equilibrium(const assemble::System& dd,
+                                                  const results::NodeFields& f, double V_T) {
+    const std::size_t n = dd.node_count();
+    std::vector<double> psi(n);
+    for (std::size_t i = 0; i < n; ++i) psi[i] = f.potential_V[i] / V_T;
+    if (f.quantum_potential_n_eV.empty()) return dd.state_from_potential(psi);
+    std::vector<double> ln(n), lp(n);
+    for (std::size_t i = 0; i < n; ++i) {
+        ln[i] = f.quantum_potential_n_eV[i] / V_T;
+        lp[i] = f.quantum_potential_p_eV[i] / V_T;
+    }
+    return dd.state_from_quantum_potential(psi, ln, lp);
+}
+
 // Scale from scaled gate charges to C / cm^(3-D): q Ns L_D^D.
 inline double charge_scale(const assemble::Scaling& scaling, int dimension) {
     return base::q_C * scaling.Ns * std::pow(scaling.L_D, dimension);

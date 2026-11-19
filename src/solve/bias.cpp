@@ -434,20 +434,7 @@ std::expected<results::Sweep, base::Error> sweep_bias_unobserved(const device::D
             sweep.stopped = std::move(start.error());
             return sweep;
         }
-        std::vector<double> psi(nodes);
-        for (std::size_t i = 0; i < nodes; ++i) {
-            psi[i] = start->fields.potential_V[i] / scaling->V_T;
-        }
-        if (quantum) {  // Unit 62: the model's equilibrium, Lambda included (QP8, QP9)
-            std::vector<double> ln(nodes), lp(nodes);
-            for (std::size_t i = 0; i < nodes; ++i) {
-                ln[i] = start->fields.quantum_potential_n_eV[i] / scaling->V_T;
-                lp[i] = start->fields.quantum_potential_p_eV[i] / scaling->V_T;
-            }
-            x = system->state_from_quantum_potential(psi, ln, lp);
-        } else {
-            x = system->state_from_potential(psi);
-        }
+        x = detail::state_from_equilibrium(*system, start->fields, scaling->V_T);  // Lambda too (Unit 62)
     }
 
     // The bias of the starting state: zero on every contact at equilibrium, or the given one.
