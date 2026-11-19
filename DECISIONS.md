@@ -2043,6 +2043,14 @@ coupled system often fails, so SG4–SG6 may be missed and recorded as limitatio
 with a mature multithreaded direct solver at only about 136k unknowns. The gain grows with size, so SD1's size series
 decides whether this pays off on today's decks or only on larger ones.
 
+**Rulings (2026-11-20, owner "Unit 58 choose recommended"):** SQ1 (a) in-tree smoothed aggregation, no new
+dependency; SQ2 (a) CPR two-stage, AMG on ψ and ILUT on the full system; SQ3 (a) the in-tree fixed-chunk pool;
+SQ4 (a) parallel assembly only if assembly is ≥ 10% of an iteration after SD4; SQ5 (a) slices 0–3 first, slice 4
+after Unit 57 (Unit 57 merged on `main` 2306228, so that condition is met); SQ6 (a) opt-in, any default change a
+separate owner ruling after the measurements; SQ7 (a) `backend = gmres` with `preconditioner = ilut | amg | cpr`,
+`gmres_ilut` kept as an alias with an unchanged run identity. The proposal was rebased onto `main` 3c36224 (it was
+written on beb494f). Not started: slice 0 waits for the owner's word.
+
 ## New questions the advisor raised (not yet in `ARCHITECTURE.md`)
 
 None of these is decided. Each needs an owner position before the build scaffold fixes the flags.
