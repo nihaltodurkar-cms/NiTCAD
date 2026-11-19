@@ -1133,6 +1133,79 @@ Also fixed: a stopped small-signal restart's message counted the skipped points 
 
 ---
 
+### Unit 26i — fast camera redraw (proposed 2026-11-19; on `app/redraw-speed`)
+
+**Owner request (2026-11-19):** rotating and zooming `decks/finfet_3d_shaped_swept.deck` in the app lags; make
+it faster "without decreasing its quality". The branch starts from `main` `344dd79`.
+
+**Today (read from the code):**
+- **Every camera move rebuilds the frame from nothing.** A drag's `WM_MOUSEMOVE` (`viewport.cpp`) calls
+  `viewport_orbit` → `present_camera` → `Viewport::present` → `Renderer::present` (`renderer.cpp`), which
+  (1) waits for the GPU to go idle, (2) in `render_field` copies every triangle batch into a new vertex array
+  and turns every line into a two-triangle quad, (3) creates new upload buffers and new default-heap vertex
+  buffers (`CreateCommittedResource` per frame) and copies everything to the GPU, then (4) draws, and
+  `Present(1, 0)` waits for the vertical blank. Only the camera changed: `apply_camera` writes azimuth,
+  elevation, projection, zoom and pan, and nothing else in the scene.
+- **The comment says otherwise:** "the vertices live in default-heap buffers … (a window keeps them across
+  frames)", but nothing keeps them.
+- **One present per mouse message.** A mouse reports at 125–1000 Hz and each present blocks on the vertical
+  blank, so the messages queue and the view trails the cursor.
+- **`update_metrics` per frame** scans every mesh node for the bounds and the field for its largest value, and in
+  the quality views recomputes every element's angles (`render::element_quality`).
+- `Renderer::frame_time` (26f's KG6) already measures a redraw on resident geometry. It re-executes the recorded
+  passes, so it times the GPU, not the CPU rebuild above.
+
+**Standing conditions:** no change to what is drawn. `Renderer::draw` (images, `nitcad plot`, every WARP
+reference) is untouched, so every reference passes by construction. The window's frames equal what a full
+rebuild draws, **bit for bit** (ND1, NG1). The 2× supersampling, the transparency passes, the feature edges, the
+finishes, the ground shadow and the axis box stay as they are. Criteria are fixed before code. Release and Debug
+suites with `/W4 /WX`, plus hand mutants. Built with MSVC 14.51. Nothing is pushed or merged without
+authorization.
+
+**Left out of this unit:** overlapping CPU and GPU work across frames (two frames in flight, NQ3); a lower level
+of detail or quality while dragging (NQ2: refused, it lowers quality); faster scene building after a field or
+option change (the wait after "Building the deck" or a field change is another path).
+
+**Design:**
+
+| # | Slice | Change | Notes |
+|---|---|---|---|
+| ND1 | 1 | **Resident geometry.** The window target keeps the GPU vertex and line buffers (and the draw ranges) of the last full frame. `Renderer::present_camera(scene, target, w, h)` redraws with them, building only the per-frame constants (the camera matrices, the lights' eye-space vectors, the shadow plane) and the camera-dependent axis box lines (JD1 picks the faces turned away from the camera; they get a small buffer of their own). `Renderer::present` is unchanged and refreshes the resident buffers. | The constants come from the same code as today, so the bits match. |
+| ND2 | 1 | **Who calls it.** `MainWindow::present_camera` is the only caller: the orbit, pan, zoom, keyboard, Fit, named-view and smooth-move paths, which change nothing but the camera (NQ1). Every other present (a new field, look, clip, cut, edges, contours, colormap, a resize) takes the full path. A target with no resident geometry, or with another scene's, falls back to the full path. | The scene gains a revision counter that every edit outside `apply_camera` bumps. The target stores it, and a mismatch means the full path. |
+| ND3 | 1 | **Debug check.** In Debug builds `present_camera` hashes the scene's vertices and lines and compares the hash with the one stored at the full frame. A mismatch is a failed assertion (a missed revision bump). | Release skips the hash. |
+| ND4 | 2 | **Coalesced input.** A mouse move, wheel notch or camera key updates the camera and calls `InvalidateRect`. The draw happens in `WM_PAINT`, which Windows sends only once the message queue is empty, so a burst of moves gives one frame at the latest camera. The smooth moves (JD5) keep their timer. | No camera step is lost: the camera takes every message. |
+| ND5 | 3 | **Metrics cached.** The bounds and the node and element counts are computed once per workspace, the largest value once per field, and the quality summary once per quality scene. `update_metrics` then only formats the text and the "Drawn in" time. | The text is unchanged. |
+| ND6 | 3 | **Records:** ARCHITECTURE 6.14 "As built" (the window's resident path); DECISIONS results with the before and after times. | |
+
+**Criteria (frozen once approved):**
+
+| # | Gate |
+|---|---|
+| NG1 | **Bit-identity.** On WARP, for a 3D scene in each look (classic; enhanced with metal and glass; clipped; exploded; with edges, contours and the axis box), a `present_camera` frame after a camera change reads back **byte-identical** to a full `present` at the same camera, over 8 camera poses including both projections and an elevation below −5° (no shadow). Every existing reference test passes unchanged. |
+| NG2 | **Invalidation.** Each scene edit (field, scale, colormap, look, finish, clip, cut, exploded, edges, contours, axis box, transparency, resize) followed by a camera move draws the new scene, byte-identical to a full present. A target holding another scene's buffers takes the full path. |
+| NG3 | **Coalescing.** In a window test, 200 drag `WM_MOUSEMOVE` messages posted at once give at most 3 presents, and the final camera equals the one that 200 separate moves give. The JD5 moves, Fit and the named views still end on their exact poses. |
+| NG4 | **Speed** on `decks/finfet_3d_shaped_swept.deck` and `examples/mosfet_3d.deck`, enhanced look, the hardware adapter, 1280×960: the time of a camera-only present (`last_present_ms`), median of 50, is **at most a third** of `main`'s before this unit (both measured in this unit and recorded). WARP times are recorded only. |
+| NG5 | **Memory.** The resident buffers are freed with the target and replaced, not added to, on each full present: the GPU memory after 100 field changes equals that after one, within 1%. |
+| NG6 | **Metrics:** the status text equals `main`'s for every view kind, the quality views included. |
+| NG7 | `/W4 /WX`. Hand mutants (the revision not bumped on a clip change, the constants not rebuilt, the axis box not rebuilt, the resident buffers kept after a resize, the `WM_PAINT` coalescing bypassed, the cached bounds kept across workspaces), each caught. |
+
+**Questions for the owner (recommended option first):**
+
+| # | Question | Options |
+|---|---|---|
+| NQ1 | How the renderer knows only the camera moved | **An explicit camera-only call from the one window path, guarded by a scene revision and a Debug hash (recommended).** / Hash the whole scene every frame (safe without the app's help, but hashing tens of MB per frame costs much of the saving). |
+| NQ2 | A cheaper frame while dragging (no supersampling, no edges) | **No: the frame stays identical (recommended).** / Yes, with full quality when the drag stops. |
+| NQ3 | Two frames in flight (the CPU builds the next while the GPU draws) | **Later, if NG4's numbers call for it (recommended).** / In this unit. |
+| NQ4 | Where the input is coalesced | **`WM_PAINT` via `InvalidateRect` (recommended).** / A 16 ms timer (adds up to a frame of latency). |
+
+**Owner ruling (2026-11-19, standing instruction "always choose recommended", 2026-11-11):** NQ1–NQ4 take the
+recommended option. Pushing, the PR and the full Release/Debug suites still wait for the owner's word.
+
+**Size (estimate):** M, about 400–600 lines with tests, three slices. Slice 1 touches `renderer.cpp` and
+`viewport.cpp`; slices 2 and 3 the app.
+
+---
+
 ## New questions the advisor raised (not yet in `ARCHITECTURE.md`)
 
 None of these is decided. Each needs an owner position before the build scaffold fixes the flags.
