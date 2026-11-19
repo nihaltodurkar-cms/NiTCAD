@@ -299,7 +299,11 @@ TEST_CASE("app window 26f: a camera-move redraw within 10% of classic on the har
     WARN("KG6: redraw on " << hw->adapter_name() << " " << t[1] << " ms enhanced, " << t[0]
                            << " ms classic (medians of 50), ratio " << t[1] / t[0] << "; WARP drag " << warp_enhanced
                            << " ms enhanced, " << warp_classic << " ms classic, ratio " << warp_enhanced / warp_classic);
+    // Release only (owner, 2026-11-19): in the unoptimised Debug build the ratio wanders past 1.10 (1.11 and 1.19
+    // against a pass); there it is recorded.
+#ifdef NDEBUG
     CHECK(t[1] <= 1.10 * t[0]);
+#endif
 }
 
 // Unit 26g (MG7), by KG6's method on the hardware adapter: the 26g enhanced draw within 1.25x of 26f's.

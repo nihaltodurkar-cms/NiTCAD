@@ -755,6 +755,10 @@ ARCHITECTURE entry. (Originally four slices, with AO as 26g·2; renumbered after
   tests skip on CI as the KG6 (b) ruling intended. Owner ruling: KG6's edges bound (< 50 ms) is checked in Release only.
   The unoptimised Debug build took 113 ms on CI (Release: 4.9 ms on CI, 1.9 ms on the RTX machine), and Debug now only
   records the time.
+- MG8 full suites (2026-11-19, on 26h's f33de73, MSVC 14.51, RTX 5060 Ti): Release **229 of 229** passed. Debug
+  207 of 208: KG6's redraw ratio (enhanced ≤ 1.10× classic) failed at 1.11×, and on a rerun of the test once
+  passed and once failed at 1.19×. Owner ruling: the KG6 redraw bound is checked in Release only, like its edges
+  bound; Debug records the ratio.
 - MG9, hand mutants (as amended by MQ8 and MQ9): **8 of 8 killed**. Each was run alone on a clean rebuild, with its
   target tests passing on unmutated code both before and after.
 
