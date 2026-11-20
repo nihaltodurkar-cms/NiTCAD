@@ -2523,6 +2523,22 @@ slice 0, GMRES(30) to 1e-8). `nitcad_linalg_test` 108 cases pass with the flag (
 - **What the diagnosis points to (not in MB2's list, not run):** a strength threshold that falls with the level
   (θ_l = θ · ½^l, attributed from memory to Vaněk–Mandel–Brezina 1996, not verified: their paper's text was not reachable), since the stall comes from the coarse levels' spread
   couplings, not from level 0.
+
+**Owner ruling (2026-11-20, after slice 0b): "Search in research papers", then "yes"** to a slice 0c with three
+candidates from the literature and a stricter criterion. Sources read (abstracts only, full texts not reached): Lin,
+Shadid, Tuminaro, Sala, IJNME 2010 (Petrov–Galerkin smoothed aggregation on drift-diffusion; not a candidate here,
+it replaces MD2); Olson, Schroder, Tuminaro, NLAA 17 (2010) 713–733 (the evolution strength measure); sparsified /
+non-Galerkin smoothed aggregation (Galerkin fill spreads coarse couplings); Clees and Stüben, SAMG device
+simulation (shared interpolation over the unknowns).
+
+**Slice 0c plan (fixed before any measurement):**
+
+| # | Item |
+|---|---|
+| MC1 | **Candidates (this list only), each a new `AmgSettings` option, off by default (`amg` and `cpr` unchanged, MB4):** (1) a **falling threshold**: level l uses θ · ½^l, with θ 0.08 and 0.04; (2) the **evolution measure, simplified** (the paper's text was not reached, so this is our reading of the abstract, not its algorithm): z = (I − ω D⁻¹A)^4 δ_i with ω = 1 / max_r Σ_j \|a_rj / a_rr\| (Gershgorin), m_ij = \|1 − (z_j b_i) / (z_i b_j)\| with b the level's near-null vector; j strong for i if m_ij ≤ ε · min_k m_ik (over i's off-diagonal neighbours, the minimum floored at 1e-12), with ε 2 and 4; (3) a **row-relative threshold** (classical AMG's test, which keeps a row's largest couplings however spread): j strong for i if \|a_ij\| ≥ θ max_{k≠i} \|a_ik\|, with θ 0.25 and 0.5. Strength stays symmetrized and pass 2 still ranks by \|a_ij\| / √(a_ii a_jj). Stalled levels smoothed (slice 2's rule). |
+| MC2 | **Measured** as slice 0b on the symmetrized electron and hole blocks (and the ψ block, reported), 20³–70³, plus the slice 0b default (θ 0.08) and θ 0.04 again as references. |
+| MC3 | **Criterion (stricter than MB3, never loosened):** a candidate passes if, on **both** carrier blocks, **every** size's iterations are at most 1.5× that block's 20³ count. Among those passing, the least 70³ setup + solve time of the two blocks; within 5%, the simplest (in the order 1, 3, 2). If none passes, recorded, and slice 1 is put to the owner with the best result. |
+| MC4 | Setup time reported for every candidate (the evolution measure's cost grows with its four steps' support). |
 ## New questions the advisor raised (not yet in `ARCHITECTURE.md`)
 
 None of these is decided. Each needs an owner position before the build scaffold fixes the flags.
