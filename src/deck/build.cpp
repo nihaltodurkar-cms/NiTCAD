@@ -1351,7 +1351,8 @@ std::expected<void, base::Error> Builder::solver(Plan& plan) const {
             if (e.value == "ilut") o.linear.preconditioner = linalg::Preconditioner::ilut;
             else if (e.value == "amg") o.linear.preconditioner = linalg::Preconditioner::amg;
             else if (e.value == "cpr") o.linear.preconditioner = linalg::Preconditioner::cpr;
-            else return std::unexpected(at(e.line, "preconditioner is ilut, amg or cpr"));
+            else if (e.value == "cpr_amg") o.linear.preconditioner = linalg::Preconditioner::cpr_amg;  // Unit 63 MD4
+            else return std::unexpected(at(e.line, "preconditioner is ilut, amg, cpr or cpr_amg"));
         } else if (e.key == "amg_strength_threshold") {
             NITCAD_DECK_TRY(v, num(e));
             if (!(v >= 0.0 && v < 1.0)) return std::unexpected(at(e.line, "amg_strength_threshold is in [0, 1)"));
@@ -1420,7 +1421,7 @@ std::expected<void, base::Error> Builder::solver(Plan& plan) const {
     }
     if (o.linear.preconditioner != linalg::Preconditioner::ilut &&
         o.linear.backend != linalg::SolverBackend::gmres_ilut) {
-        return std::unexpected(at(s->line, "preconditioner = amg or cpr needs backend = gmres"));
+        return std::unexpected(at(s->line, "preconditioner = amg, cpr or cpr_amg needs backend = gmres"));
     }
     return {};
 }

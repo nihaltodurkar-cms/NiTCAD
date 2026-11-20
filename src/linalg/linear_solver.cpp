@@ -139,7 +139,8 @@ std::expected<BasicLinearSolver<Scalar>, base::Error> BasicLinearSolver<Scalar>:
         return std::unexpected(error(base::ErrorCode::invalid_input, "unknown linear fallback"));
     }
     if (config.preconditioner != Preconditioner::ilut && config.preconditioner != Preconditioner::amg &&
-        config.preconditioner != Preconditioner::cpr) {
+        config.preconditioner != Preconditioner::cpr &&
+        config.preconditioner != Preconditioner::cpr_amg) {
         return std::unexpected(error(base::ErrorCode::invalid_input, "unknown preconditioner"));
     }
     if (config.preconditioner != Preconditioner::ilut &&
@@ -148,8 +149,8 @@ std::expected<BasicLinearSolver<Scalar>, base::Error> BasicLinearSolver<Scalar>:
                                      "a preconditioner other than ilut needs the gmres backend"));
     }
     if constexpr (!std::same_as<Scalar, double>) {
-        if (config.preconditioner == Preconditioner::amg ||
-            config.preconditioner == Preconditioner::cpr) {
+        if (config.preconditioner == Preconditioner::amg || config.preconditioner == Preconditioner::cpr ||
+            config.preconditioner == Preconditioner::cpr_amg) {
             return std::unexpected(error(base::ErrorCode::invalid_input,
                                          "the amg and cpr preconditioners are for real matrices only"));
         }
@@ -215,6 +216,10 @@ BasicLinearSolver<Scalar>::BasicLinearSolver(const SolverConfig& config) : confi
             } else if (config.preconditioner == Preconditioner::cpr) {
                 backend_ = std::make_unique<detail::CprBackend>(
                     amg, config.ilut_drop_tolerance, config.ilut_fill_factor, pool_.get());
+            } else if (config.preconditioner == Preconditioner::cpr_amg) {
+                backend_ = std::make_unique<detail::CprBackend>(
+                    amg, config.ilut_drop_tolerance, config.ilut_fill_factor, pool_.get(),
+                    detail::CprBackend::Stage2::block_amg);
             }
         }
         if (!backend_) {
@@ -230,7 +235,9 @@ BasicLinearSolver<Scalar>::BasicLinearSolver(const SolverConfig& config) : confi
 template <MatrixScalar Scalar>
 void BasicLinearSolver<Scalar>::set_field_labels(std::span<const std::int32_t> labels) {
     NITCAD_EXPECTS(backend_ != nullptr);
-    if (config_.preconditioner != Preconditioner::cpr) return;
+    if (config_.preconditioner != Preconditioner::cpr && config_.preconditioner != Preconditioner::cpr_amg) {
+        return;
+    }
     if (backend_->set_fields(labels)) reset();
 }
 
@@ -713,11 +720,24 @@ std::expected<SolveReport, base::Error> BasicLinearSolver<Scalar>::iterative_sol
         }
         return omega;
     };
-    const detail::GmresResult result = gmres_->solve(
-        {.restart = static_cast<std::size_t>(config_.restart),
-         .max_iterations = static_cast<std::size_t>(config_.max_iterations),
-         .tolerance = config_.max_backward_error},
-        apply, precondition, measure, std::span<Scalar>(work_x_), pool_.get());
+    const auto run = [&] {
+        return gmres_->solve({.restart = static_cast<std::size_t>(config_.restart),
+                              .max_iterations = static_cast<std::size_t>(config_.max_iterations),
+                              .tolerance = config_.max_backward_error},
+                             apply, precondition, measure, std::span<Scalar>(work_x_), pool_.get());
+    };
+    detail::GmresResult result = run();
+    if constexpr (std::same_as<Scalar, double>) {
+        // cpr_amg (Unit 63 slice 1): a Jacobian the block sweep leaves GMRES short on (measured: the
+        // first iterate of a bias step stamped on a p+n junction's contacts) is retried once with
+        // ILUT as stage 2, that is cpr, before any fallback.
+        if (!result.converged && config_.preconditioner == Preconditioner::cpr_amg) {
+            auto& cpr = static_cast<detail::CprBackend&>(*backend_);
+            auto switched = cpr.retry_with_ilut();
+            if (!switched) return std::unexpected(std::move(switched.error()));
+            if (*switched) result = run();
+        }
+    }
     if (result.converged) {
         const double b_norm = inf_norm<Scalar>(b);
         const double r_norm = inf_norm<Scalar>(residual_);

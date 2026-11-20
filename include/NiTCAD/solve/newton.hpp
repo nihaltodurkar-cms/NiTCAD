@@ -156,7 +156,8 @@ template <NewtonSystem System>
     std::vector<double> f(n), rhs(n), dx(n);
     // Unit 58 SD4: the cpr preconditioner takes the field of every unknown from the system's map.
     if constexpr (requires { system.dofs(); }) {
-        if (solver.config().preconditioner == linalg::Preconditioner::cpr) {
+        if (solver.config().preconditioner == linalg::Preconditioner::cpr ||
+            solver.config().preconditioner == linalg::Preconditioner::cpr_amg) {
             solver.set_field_labels(assemble::field_labels(system.dofs()));
         }
     }

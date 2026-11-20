@@ -108,6 +108,10 @@ enum class Preconditioner : std::uint8_t {
     // full matrix on the residual that leaves (src/linalg/cpr.hpp). Real matrices only; needs the
     // field labels (set_field_labels). The amg_* and ilut_* settings apply to its two stages.
     cpr,
+    // cpr with stage 2 a forward block Gauss-Seidel sweep over the fields, each field's diagonal
+    // block preconditioned by one V-cycle of AMG on its algebraic symmetrization (Unit 63 MD3; no
+    // ILUT). Real matrices only; needs the field labels. The amg_* settings apply to every hierarchy.
+    cpr_amg,
 };
 
 struct SolverConfig {
@@ -188,6 +192,9 @@ struct BackendCounts {
     std::size_t analyses = 0;
     std::size_t factorizations = 0;
     std::size_t solves = 0;
+    // preconditioner = cpr_amg (Unit 63 slice 1): solves GMRES missed with the block sweep and retried
+    // with ILUT as stage 2 (that factorization keeps ILUT until the next).
+    std::size_t stage2_retries = 0;
 };
 
 struct SolveReport {

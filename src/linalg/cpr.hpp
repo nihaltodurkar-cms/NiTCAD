@@ -29,6 +29,14 @@
 // R_ψ A_p C_ψ, and its AMG is given those scales (set_scales). Every kernel computes each output
 // entry in its own fixed order (the product row-parallel on the pool), so the bits are the same for
 // every thread count (6.8). The setup is serial.
+//
+// With Stage2::block_amg (preconditioner = cpr_amg, Unit 63 MD3) stage 2 is not ILUT but one forward
+// block Gauss-Seidel sweep over the coupled field labels in order (1, 2, ...; the potential, label
+// 0, is stage 1's: see Sweep) on r2 = v - A z1, the potential rows' z2 left zero:
+//     z2_f = AMG_f^-1 (r2_f - sum_{g < f} A_fg z2_g)
+// each AMG_f one V-cycle of SymmetrizedAmg (amg.hpp) on field f's diagonal block, with the amg_*
+// settings and the threshold halved per level (strength_decay 1/2, slice 0c). An unknown outside
+// every node (label -1) then takes one Gauss-Seidel step on its own row (0 on a zero diagonal).
 #pragma once
 
 #include <cstddef>
@@ -51,8 +59,12 @@ namespace NiTCAD::linalg::detail {
 
 class CprBackend final : public Backend<double> {
 public:
+    enum class Stage2 : std::uint8_t { ilut, block_amg };
+    // The strength_decay of block_amg's field hierarchies (DECISIONS.md Unit 63, slice 0c).
+    static constexpr double block_strength_decay = 0.5;
+
     CprBackend(const AmgSettings& amg, double drop_tolerance, int fill_factor,
-               base::ThreadPool* pool);
+               base::ThreadPool* pool, Stage2 stage2 = Stage2::ilut);
     ~CprBackend() override;
 
     // Copies the labels; the next analyze uses them. True if they differ from the last ones.
@@ -76,11 +88,46 @@ public:
     [[nodiscard]] const SparseMatrix& potential_matrix() const noexcept { return reduced_; }
     [[nodiscard]] std::span<const double> responses() const noexcept { return response_; }
     [[nodiscard]] const AmgBackend& amg() const noexcept { return *amg_; }
+    // block_amg: the field labels with a hierarchy, in sweep order, and field i's AMG.
+    [[nodiscard]] std::span<const std::int32_t> block_fields() const noexcept { return block_labels_; }
+    [[nodiscard]] const SymmetrizedAmg& block_amg(std::size_t i) const { return *blocks_.at(i).amg; }
+    // block_amg: this factorization's stage 2 becomes ILUT (cpr's), for LinearSolver to retry a solve
+    // GMRES missed with the block sweep; false when it already is. Counted in stage2_retries.
+    [[nodiscard]] std::expected<bool, base::Error> retry_with_ilut();
 
 private:
+    struct Block {
+        std::vector<std::size_t> unknowns;   // the field's unknowns, ascending
+        SparseMatrix matrix;                 // its diagonal block (pattern; values per factorize)
+        std::unique_ptr<SymmetrizedAmg> amg;
+        std::vector<double> rhs, z;          // work
+    };
+    void solve_blocks();
+
+public:
+    // Unit 63 slice 1 finding: which fields stage 2 sweeps. all: MD3 as proposed (the potential
+    // block too, by A_psi-psi alone, which lacks the screening term and diverged on the fixture);
+    // carriers (the default): the labels above 0 only, stage 1 owning the potential.
+    enum class Sweep : std::uint8_t { all, carriers };
+    void set_sweep(Sweep sweep) noexcept { sweep_ = sweep; }
+
+private:
+    Sweep sweep_ = Sweep::carriers;
+
     base::ThreadPool* pool_;
+    Stage2 stage2_;
+    AmgSettings block_settings_;
     std::unique_ptr<AmgBackend> amg_;
     std::unique_ptr<Backend<double>> ilut_;
+    bool use_ilut_ = false;  // this factorization's stage 2 is ILUT (Stage2::ilut, or retried)
+    // block_amg: per field label (ascending), the blocks; per entry of A its block entry (-1: none);
+    // per unknown its block (-1: label -1) and position in it; the unknowns of label -1.
+    std::vector<std::int32_t> block_labels_;
+    std::vector<Block> blocks_;
+    std::vector<Index> block_entry_;
+    std::vector<Index> block_of_;
+    std::vector<std::size_t> position_;
+    std::vector<std::size_t> outside_;
     std::vector<std::int32_t> labels_;
     // The full matrix (its equilibrated values).
     std::vector<Index> offsets_;

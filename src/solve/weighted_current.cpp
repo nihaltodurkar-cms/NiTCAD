@@ -29,8 +29,10 @@ std::expected<WeightedCurrents, base::Error> WeightedCurrents::create(
     // topology check), so the pivot test is off for it.
     linalg::SolverConfig laplace_config = linear;
     laplace_config.min_pivot_ratio = 0.0;
-    // Unit 58: the Laplace problem has one unknown per node and no fields; cpr is AMG there.
-    if (laplace_config.preconditioner == linalg::Preconditioner::cpr) {
+    // Unit 58: the Laplace problem has one unknown per node and no fields; cpr (and cpr_amg, Unit 63)
+    // is AMG there.
+    if (laplace_config.preconditioner == linalg::Preconditioner::cpr ||
+        laplace_config.preconditioner == linalg::Preconditioner::cpr_amg) {
         laplace_config.preconditioner = linalg::Preconditioner::amg;
     }
     auto laplace = linalg::LinearSolver::create(laplace_config);

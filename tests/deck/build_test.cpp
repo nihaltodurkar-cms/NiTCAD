@@ -623,6 +623,8 @@ TEST_CASE("deck build: backend = gmres, the preconditioner and the amg keys (Uni
     const std::string cpr = "[solver]\nbackend = gmres\npreconditioner = cpr\n";
     const deck::Plan c = must(diode_deck + cpr);
     CHECK(c.options.linear.preconditioner == linalg::Preconditioner::cpr);
+    CHECK(must(diode_deck + "[solver]\nbackend = gmres\npreconditioner = cpr_amg\n").options.linear.preconditioner ==
+          linalg::Preconditioner::cpr_amg);  // Unit 63 MD4
     CHECK(must(diode_deck + "[solver]\nbackend = gmres\npreconditioner = amg\n").options.linear.preconditioner ==
           linalg::Preconditioner::amg);
     CHECK(identity(c) != identity(old));
@@ -649,8 +651,8 @@ TEST_CASE("deck build: backend = gmres, the preconditioner and the amg keys (Uni
         INFO(message);
         CHECK(message.find(what) != std::string::npos);
     };
-    expect("preconditioner = jacobi", "t.deck:14: preconditioner is ilut, amg or cpr");
-    expect("preconditioner = cpr", "preconditioner = amg or cpr needs backend = gmres");
+    expect("preconditioner = jacobi", "t.deck:14: preconditioner is ilut, amg, cpr or cpr_amg");
+    expect("preconditioner = cpr", "preconditioner = amg, cpr or cpr_amg needs backend = gmres");
     expect("backend = gmres\namg_strength_threshold = 1", "t.deck:15: amg_strength_threshold is in [0, 1)");
     expect("amg_smoother_degree = 11", "t.deck:14: 'amg_smoother_degree' must lie in 1..10");
     expect("amg_coarse_size = 0", "t.deck:14: 'amg_coarse_size' must lie in 1..100000");
