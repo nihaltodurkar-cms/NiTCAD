@@ -2719,8 +2719,9 @@ Seconds (build + solve), GMRES products and held memory:
 - **Unit 63's results:** MG2 met (bits at 1 to 8 threads); MG3 met; MG4 met (slice 0); MG6 met; MG8 met; MG9 met
   (11 of 12 caught, M1 recorded); MG10 met (labels stay plain integers, no Eigen in public headers, no new
   dependency); MG7 met on the FinFET sweep, missed on the diode series' threads; MG5 missed (recorded, not
-  loosened). MG1: the existing `ilut`, `amg` and `cpr` tests pass unchanged; their printed counts have not been
-  compared with `main`'s. The full Release and Debug suites have not run (owner's word needed; no Debug build by
+  loosened). **MG1 met:** against `origin/main` 2065afc (built in a temporary worktree, Release), every printed count
+  line of the `[gmres]`/`[amg]` cases and of the whole linalg binary (25 lines) appears unchanged on the branch,
+  which only adds the `cpr_amg` lines. The full Release and Debug suites have not run (owner's word needed; no Debug build by
   standing rule). Nothing pushed.
 ## New questions the advisor raised (not yet in `ARCHITECTURE.md`)
 
