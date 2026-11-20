@@ -2521,7 +2521,7 @@ slice 0, GMRES(30) to 1e-8). `nitcad_linalg_test` 108 cases pass with the flag (
   1.46× but electrons at θ 0 reach 1.77×). MB3 compares the end points only, so θ 0.04 passes as written; whether
   the 60³ peak counts against MG5 is put to the owner, not decided here.
 - **What the diagnosis points to (not in MB2's list, not run):** a strength threshold that falls with the level
-  (θ_l = θ · ½^l, Vaněk–Mandel–Brezina's own recommendation), since the stall comes from the coarse levels' spread
+  (θ_l = θ · ½^l, attributed from memory to Vaněk–Mandel–Brezina 1996, not verified: their paper's text was not reachable), since the stall comes from the coarse levels' spread
   couplings, not from level 0.
 ## New questions the advisor raised (not yet in `ARCHITECTURE.md`)
 
