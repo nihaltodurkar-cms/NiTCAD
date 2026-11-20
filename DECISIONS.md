@@ -2711,6 +2711,17 @@ Seconds (build + solve), GMRES products and held memory:
   within timing noise but 77 GMRES products at 60³ against 71 here: the series' equilibrium comes from PARDISO at
   6 threads, which is not bit-reproducible between runs, so the Jacobian differs in its last bits. Within each run
   the thread counts agree.
+
+**Close-out, 2026-11-20 (owner: "choose recommended", close with the misses recorded as limitations):**
+- **ARCHITECTURE.md:** 6.10 gains "As built (Unit 63)" (the symmetrization, `cpr_amg`, the measurements and the
+  limits), and the 11.3 row says what Unit 63 built; its next steps are the iteration growth, thread scaling (the
+  serial AMG build) and a coupled electron–hole stage for strong recombination.
+- **Unit 63's results:** MG2 met (bits at 1 to 8 threads); MG3 met; MG4 met (slice 0); MG6 met; MG8 met; MG9 met
+  (11 of 12 caught, M1 recorded); MG10 met (labels stay plain integers, no Eigen in public headers, no new
+  dependency); MG7 met on the FinFET sweep, missed on the diode series' threads; MG5 missed (recorded, not
+  loosened). MG1: the existing `ilut`, `amg` and `cpr` tests pass unchanged; their printed counts have not been
+  compared with `main`'s. The full Release and Debug suites have not run (owner's word needed; no Debug build by
+  standing rule). Nothing pushed.
 ## New questions the advisor raised (not yet in `ARCHITECTURE.md`)
 
 None of these is decided. Each needs an owner position before the build scaffold fixes the flags.
