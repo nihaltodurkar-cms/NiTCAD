@@ -2347,6 +2347,84 @@ blocks (SQ2 b or c would be a new proposal with its own criteria fixed before co
   no new dependency). The full Release and Debug suites have not run on slices 2–3 and this wrap-up (owner's word
   needed).
 
+### Unit 63 — multigrid on the carrier blocks (Unit 58 follow-up, SQ2 b) (proposed 2026-11-20; on `linalg/carrier-multigrid`)
+
+**Owner request (2026-11-20):** "start Unit 58 follow-up, choose recommended". This is the next step Unit 58's wrap-up
+recorded for the 11.3 row "Scalable linear solvers": multigrid for the carrier blocks, SQ2 (b) or (c), as a new
+proposal with its own criteria fixed before code. The branch starts from `main` `2065afc`.
+
+**What Unit 58 measured (the starting point):**
+- GMRES-CPR (AMG on the reduced potential system, then ILUT of the full matrix) grows 42 → 138 products from 24k to
+  1.03M unknowns on the 3D diode at 0.5 V (3.3×; GMRES-ILUT 3.55×). It is no faster than GMRES-ILUT and has no
+  thread gain, since ILUT's serial build (57–76% of the time) and triangular solves dominate.
+- On the 2D fixture (`cpr_test.cpp`: 24², 48², 96²) GMRES-CPR takes 24/60/330 iterations at equilibrium and 14/36/120
+  biased. An exact stage 1 gives the same counts: **the growth is stage 2's.** The continuity blocks are diffusion
+  operators, elliptic too, and a one-level ILUT does not scale on them.
+- Plain AMG on the whole coupled system fails (slice 2).
+
+**Why the carrier blocks can take the existing AMG.** A Scharfetter–Gummel continuity block is not symmetric, but it
+is a diagonal similarity away from a symmetric one: its entries satisfy a_ij / a_ji = c_i / c_j (c = e^{ψ/V_T} for
+electrons, e^{−ψ/V_T} for holes, up to the rows' and columns' scales), so with D = diag(c)^{-1/2} the matrix
+S = D A D⁻¹ is symmetric. Its off-diagonal entries are −g Δ / (2 sinh(Δ/2)), g the edge's coefficient and Δ the edge's potential step in V_T:
+bounded, exponentially weak across high-field edges (which become diagonally dominant rows, which smoothing handles).
+The near-null vector of S is 1/d (the equilibrium density, transformed). D can be computed from the matrix alone,
+with no potential, so `linalg` still sees only values and labels.
+
+**Standing conditions:** as Unit 58: opt-in; the default backend and every existing preconditioner (`ilut`, `amg`,
+`cpr`) are untouched; 6.8's determinism (the same bits for every thread count); `linalg` gains no dependency on
+`assemble` and no Eigen type in a public header; criteria fixed before code; Release and Debug suites with
+`/W4 /WX` before a push (the suites wait for the owner's word); hand mutants; nothing pushed or merged without
+authorization.
+
+**Left out:** point-block AMG (SQ2 c); a nonsymmetric AMG (AIR, Petrov–Galerkin); complex (small-signal) AMG;
+parallel assembly (SD5 stays not built); making any new path the default; the setup's parallelization.
+
+**Design:**
+
+| # | Slice | Change | Notes |
+|---|---|---|---|
+| MD1 | 0 | **Measure the carrier blocks alone first.** A test-only probe: the electron and hole blocks of the Unit 58 fixture (24², 48², 96²; bias 0 and 20) and of the 3D diode series' 0.5 V Jacobians (20³–70³, equilibrated as GMRES sees them), each solved by GMRES with (i) the slice-2 AMG on the block as it is and (ii) AMG on the symmetrized block (MD2). Iterations, setup and solve time, levels. Recorded here before slice 1. | No product code beyond MD2. Go/no-go: if (ii) does not meet MG5's 1.5× growth on the blocks alone, slice 1 is not started and the owner is asked. |
+| MD2 | 0 | **Algebraic symmetrization** (`linalg/detail`, with the AMG). For a square block A: ln d_j − ln d_i = ½ ln(a_ij / a_ji) along a spanning forest of its off-diagonal pairs (breadth-first in node order from each component's lowest unknown; a pair is used only if both entries are non-zero and of the same sign). Each component's mean ln d is shifted to 0, and ln d is clamped to ±230 (d within 1e±100) so reverse-biased blocks do not overflow. S = D A D⁻¹ and the hierarchy is built on its symmetric part ½(S + Sᵀ) (equal to S when exact). Given to the AMG as matrix S with scales R = C = d, which makes its similarity the identity and its near-null vector 1/d. One application: z = D⁻¹ V(D r). | Exact for Scharfetter–Gummel blocks (any mobility, recombination on the diagonal); approximate where impact ionization or Fermi–Dirac terms break the ratio, which only weakens the preconditioner. A block with no off-diagonal pairs gets d = 1. |
+| MD3 | 1 | **Preconditioner `cpr_amg`.** Stage 1 as `cpr` (AMG on the reduced potential system, prolonged by the local responses). Stage 2, on the residual stage 1 leaves: one forward block Gauss–Seidel sweep over the field labels in order (0, 1, 2, …): z_f = AMG_f⁻¹(r_f − Σ_{g<f} A_fg z_g), each AMG_f one V-cycle on the symmetrized diagonal block of label f (MD2). Unknowns outside every node (label −1) get a Jacobi step. No ILUT (MQ3). | The ψ block's AMG in stage 2 removes stage 1's inexactness on the potential rows. Setup serial; the block products and V-cycles row-parallel on the pool, as Unit 58. |
+| MD4 | 1 | **Configuration and deck.** `Preconditioner::cpr_amg`; `[solver] preconditioner = cpr_amg` under `backend = gmres`. The `amg_*` keys apply to every hierarchy. The run record names it as the other preconditioners. Small signal stays on SparseLU (LQ3a). | |
+| MD5 | 2 | **Measure.** MG5–MG8 on the fixture, the 3D diode series (`[.scale_cpr_amg]`, as `[.scale_cpr]`), and the tensor FinFET deck's 17-point sweep against PARDISO at 6 threads. | |
+| MD6 | — | **Commits.** One branch; the proposal, then one commit per slice, then ARCHITECTURE 6.10 and 11.3 "as built" and the records. The owner may stop after any slice. | |
+
+**Criteria (fixed before code; a target missed is recorded as a limitation, never loosened):**
+
+| # | Criterion |
+|---|---|
+| MG1 | **Nothing else moves:** the default backend and `ilut`, `amg` and `cpr` give the same bits as on `main` (their existing tests unchanged, and the `[gmres]`, `[amg]` and `[cpr]` cases' printed counts equal). |
+| MG2 | **Determinism:** `cpr_amg` bit-identical at 1, 2, 4, 6 and 8 threads, and on repeats. |
+| MG3 | **Accuracy:** `max_backward_error` met on the original system; the device cases Unit 58 ran with `cpr` (the bias case against SparseLU, the MOS C-V, transient switch-on, small-signal junction) agree within the same bounds with `cpr_amg`. Fallback and `fallback = none` behave as for `cpr`. |
+| MG4 | **Symmetrization:** on the fixture's carrier blocks S is symmetric to 1e-13 relative per entry, and d_j / d_i matches e^{∓Δψ/2} (an independent derivation from the fixture's potential) to 1e-12; a block with a sign-mismatched pair, a zero partner, two components and a reverse bias past the clamp each give finite d and the documented fallback. |
+| MG5 | **Scalability:** GMRES iterations with `cpr_amg` grow **at most 1.5×** from 24² to 96² on the fixture (bias 0 and 20) and from 24k to 1.03M unknowns on the 3D diode series (Unit 58's SG4 target; `cpr` 3.3×). |
+| MG6 | **Speed at one thread:** on the 3D diode at 40³ and 70³ the linear time per Newton step is **≤ 0.5×** GMRES-ILUT's (SG5's target). |
+| MG7 | **Speed with threads:** at 6 threads MG6's cases are **≥ 2.5×** faster than at one thread, and the tensor FinFET deck's sweep is faster with `gmres` + `cpr_amg` at 6 threads than with PARDISO at 6 threads, currents within the deck's terminal-current resolution (SG6's targets). |
+| MG8 | **Memory:** peak memory no more than GMRES-ILUT's on MG6's cases (SG7). |
+| MG9 | **Mutants:** at least 8 per slice caught, at least: the half in ½ ln(a_ij/a_ji) dropped; the transform applied as D⁻¹ A D; the near-null vector d instead of 1/d; the clamp removed (the reverse-bias test overflows); a sign-mismatched pair used; Gauss–Seidel's lower couplings skipped (Jacobi); stage 1 skipped; a label's block given another label's hierarchy. |
+| MG10 | **Layering:** as SG10: plain integer labels, no Eigen in public headers, no new dependency. |
+
+**Questions (each with a recommendation):**
+
+| # | Question | Options | Recommendation |
+|---|---|---|---|
+| MQ1 | Coupled scheme | (a) CPR's stage 1 kept, stage 2 a forward block Gauss–Seidel with AMG per field (MD3). (b) Block Gauss–Seidel alone, no CPR stage. (c) Point-block AMG on the whole system (SQ2 c). | **(a)**: stage 1 already carries the ψ–carrier coupling (the screening term, slice 3); (c) needs a new aggregation and block smoothers, and whole-system AMG failed. |
+| MQ2 | AMG on a carrier block | (a) Symmetrize algebraically (MD2), then the slice-2 AMG. (b) A nonsymmetric AMG (AIR, Petrov–Galerkin smoothed aggregation). (c) The slice-2 AMG on the block as it is. | **(a)**: exact for Scharfetter–Gummel and reuses Unit 58's hierarchy; (c) is slice 0's baseline; (b) is a new method. |
+| MQ3 | ILUT in stage 2 | (a) None: the per-field AMGs only. (b) ILUT of the full matrix after the sweep. | **(a)**: ILUT's serial build is what made `cpr` no faster; (b) is measured only if (a) misses MG5 on the fixture, and recorded. |
+| MQ4 | Deck syntax | (a) `preconditioner = cpr_amg`. (b) A key `cpr_stage2 = ilut \| amg`. | **(a)**: one value, as SQ7 (a); `cpr` keeps its identity. |
+| MQ5 | Fields other than n, p (carrier temperatures, density-gradient potentials) | (a) The same per-field symmetrized AMG. (b) n and p only; the others a Jacobi step. | **(a)**: labels are generic; a symmetric block gets d = 1. Reported per equation set. |
+| MQ6 | Default | (a) Opt-in; a default change is a separate owner ruling. (b) Default for 3D. | **(a)**, as every solver unit. |
+
+**Risks:** the high-field rows make the symmetrized blocks nearly diagonal, so the coarsening may stall there (slice
+2's "stalled level smoothed" path); the block Gauss–Seidel ignores the carriers' coupling back into ψ beyond stage 1,
+so the outer GMRES may still grow with size; the serial setup (aggregation, Galerkin products) may cap MG7, as the
+setup was 1.71× AMG's first-step time in slice 2.
+
+**Rulings (2026-11-20, owner "start Unit 58 follow-up, choose recommended"):** MQ1 (a) CPR stage 1 with a block
+Gauss–Seidel stage 2 of per-field AMG; MQ2 (a) algebraic symmetrization; MQ3 (a) no ILUT; MQ4 (a)
+`preconditioner = cpr_amg`; MQ5 (a) every field; MQ6 (a) opt-in. Slice 0 started.
+
 ## New questions the advisor raised (not yet in `ARCHITECTURE.md`)
 
 None of these is decided. Each needs an owner position before the build scaffold fixes the flags.
