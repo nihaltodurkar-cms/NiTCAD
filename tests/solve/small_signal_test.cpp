@@ -965,11 +965,13 @@ TEST_CASE("small signal: GMRES-ILUT operating points give Eigen SparseLU's admit
     // reached 22% of max |Y| for the junction and 93% for the trap level at max_backward_error
     // 1e-8 and 1e-9; DECISIONS.md.)
     const auto compare = [](const device::Device& d, const std::vector<std::vector<double>>& points,
-                            solve::BiasOptions eigen, const char* name) {
+                            solve::BiasOptions eigen, const char* name,
+                            linalg::Preconditioner preconditioner = linalg::Preconditioner::ilut) {
         const std::vector<double> f{1e3, 1e5, 1e7, 1e9};
         solve::BiasOptions gmres = eigen;
         gmres.linear = {.backend = linalg::SolverBackend::gmres_ilut,
-                        .fallback = linalg::LinearFallback::none};
+                        .fallback = linalg::LinearFallback::none,
+                        .preconditioner = preconditioner};
         const auto e = run(d, points, f, eigen);
         const auto g = run(d, points, f, gmres);
         const std::size_t contacts = e.contacts;
@@ -998,6 +1000,8 @@ TEST_CASE("small signal: GMRES-ILUT operating points give Eigen SparseLU's admit
     compare(p_plus_n(1e19, 1e16), {{-2.0, 0.0}, {0.6, 0.0}}, o, "junction");
     const TrapFixture t = trap_fixture();
     compare(t.device, {{t.V0, 0.0}}, t.options, "trap level");
+    compare(p_plus_n(1e19, 1e16), {{-2.0, 0.0}, {0.6, 0.0}}, o, "junction, cpr",
+            linalg::Preconditioner::cpr);
 }
 
 TEST_CASE("small signal: a long diode, the diffusion admittance") {

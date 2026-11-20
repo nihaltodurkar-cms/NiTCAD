@@ -2230,6 +2230,98 @@ ILUT, one solve; peak memory as the solver's held private bytes):
 - **Not run:** the full Release and Debug suites (owner's word needed; Debug builds also need it), FG1/FG2 traces,
   the cross-core probe (as slice 1: no cache-dependent blocking in the AMG kernels).
 
+**Slice 3 (SD4), 2026-11-20 (owner "start slice 3"; standing "choose recommended").**
+- **As built.** `src/linalg/cpr.{hpp,cpp}` (private, Eigen-free): `Preconditioner::cpr` under `gmres_ilut`, real
+  only (complex is invalid_input), its two stages taking the `amg_*` and `ilut_*` settings. One application is
+  z1 = P AMG(R v), z = z1 + ILUT(v − A z1), on the equilibrated matrix as ILUT: R injects the potential rows, P
+  prolongs a potential correction to each node's other unknowns. The labels reach `linalg` as plain integers:
+  `BasicLinearSolver::set_field_labels(std::span<const std::int32_t>)` (0 potential, positive a field coupled to it
+  at the same node, negative an unknown in no node). A node is a potential and the positive labels right after it.
+  Labels that differ from the last ones forget the analysis; the same labels keep it. Without one label per unknown,
+  a cpr factorization is invalid_input. `assemble::field_labels(const DofMap&)` derives them. `newton_solve` sets
+  them when the system has `dofs()` and the preconditioner is cpr, so equilibrium, bias, transient and trace Newton
+  runs get them. Also wired: the trace's bordered solver (the arc unknown labelled −1), `adapt_adjoint`'s two solvers,
+  and the weighted-current Newton solver. The weighted-current Laplace solver takes `amg` instead (one unknown per
+  node, no fields). The run record already digests `linear.preconditioner` (2 for cpr) and the `amg_*` keys only
+  when the preconditioner is not ILUT. Deck keys (SD6) are not in this slice.
+- **Fix of slice 2's code:** small signal copied the steady config and switched only the backend to SparseLU, so with
+  `amg` (and now `cpr`) it failed at create ("a preconditioner other than ilut needs the gmres backend"). It now
+  resets the preconditioner to ILUT too. The bug was latent: no deck key reached it yet.
+- **Design ruling under "choose recommended": the reduction.** SD4 said "AMG on A_ψψ with a reduction of the carrier
+  columns into it". A_ψψ alone, in the (ψ, n, p) unknowns, is λ² times the Laplacian: it lacks the screening term,
+  which dominates where the device is doped. Left (quasi-IMPES) decoupling with the carrier diagonals does not
+  restore it either: at equilibrium the ψ-derivatives of a Scharfetter–Gummel continuity row sum to zero, so it adds
+  a zero-row-sum operator. Built instead: A_p = R A P, with P's entries the node-local response
+  e = −B_cc⁻¹ B_cs (B the node's own block). For Scharfetter–Gummel at equilibrium this is exactly e_n = n and
+  e_p = −p (an identity of the Bernoulli function), so A_p is the nonlinear Poisson Jacobian, λ² Laplacian +
+  (n + p), with A_ψψ's pattern. It is generic for 3–5 unknowns per node. A node whose B_cc has an exactly zero pivot
+  (or gives a non-finite e) is left uncoupled (e = 0). Insulator and contact nodes give e = 0 by themselves (their
+  carrier rows hold the densities). R A P with the same P as the prolongation means an exact stage 1 removes the
+  potential rows' residual before ILUT. The AMG gets the potential unknowns' equilibration scales, since the
+  equilibrated A_p is R_ψ A_p C_ψ.
+- **Tests (`tests/linalg/cpr_test.cpp`, 9 cases)** on an independent 2D Scharfetter–Gummel (ψ, n, p) Jacobian
+  (pn junction, doping 10⁴ nᵢ, λ² = 0.05, contacts as identity rows, optional quasi-Fermi bias):
+  - the responses at equilibrium are n and −p (to 1e-12), and every entry of A_p is λ² L + (n + p), contacts identity;
+  - the configuration and label checks: SparseLU + cpr, complex, no labels, short labels, a coupled label before any
+    potential, no potential; labels ignored by ILUT;
+  - GMRES-CPR strict on 24², 48², 96² at equilibrium and biased, each against an independent backward error, with
+    fewer iterations than ILUT where ILUT converges;
+  - a bordering unknown labelled −1; the same labels keeping the analysis and new ones redoing it; the fallback and
+    strict failure; a singular node block giving e = 0;
+  - 1, 2, 3, 4, 6, 8 threads bit-identical (12,288 unknowns, 53 iterations).
+  - given equilibration scales decades apart (rows and columns), the AMG's finest level is the symmetric G A_p G
+    where A_p is symmetric (permittivities 2^-10 to 2^10). Iteration counts cannot show this: stage 1's accuracy
+    barely moves them (below).
+
+  Solve layer (`[gmres]`): a new bias case (labels from the system, one analysis over two Newton runs, J(0.5 V) and
+  the 0–0.7 V sweep against SparseLU: relative 1e-10, worst 0.000 of max(1e-10 |J|, resolution)); the MOS C-V,
+  transient switch-on and small-signal junction cases rerun with cpr: gate charge within 7.9e-17, currents within
+  3.5e-21 of the largest, admittance 0.117 of its bound. `fields: the cpr field labels`. Linalg suite: 105 cases pass.
+- **The fixture shows where the limit is.** GMRES-CPR / GMRES-ILUT iterations at equilibrium: 24, 60, 330 against
+  32, 690, failed at 24², 48², 96²; biased: 14, 36, 120 against 17, 111, failed. CPR beats ILUT, but it still grows
+  about 2–5× per halving of h. A probe with an exact stage 1 (the coarsest level the whole of A_p) gave the same
+  counts (327 against 330 at 96²); a tighter ILUT (drop 1e-6, fill 40) gave 41. **The growth is stage 2's.** The
+  continuity blocks are diffusion operators, elliptic too, and a one-level ILUT does not scale on them. CPR's premise,
+  one elliptic field and the rest local or hyperbolic, holds for reservoir pressure, not for drift-diffusion
+  carriers.
+- **Measured (`[.scale_cpr]`, Release, pinned to the P cores):** one Newton step's linear solve on the 3D diode at
+  0.5 V as `[.scale_series]` (fresh solver, strict):
+
+| Size (unknowns) | GMRES-ILUT: total (build), products, held | GMRES-CPR 1 thread | GMRES-CPR 6 threads |
+|---|---|---|---|
+| 20³ (24,000) | 0.64 s (0.53), 40, 47 MB | 0.67 s (0.53), 42, 55 MB | 0.72 s, 42 |
+| 30³ (81,000) | 3.21 s (2.44), 60, 156 MB | 3.40 s (2.50), 60, 189 MB | 3.56 s, 60 |
+| 40³ (192,000) | 9.70 s (6.68), 90, 376 MB | 9.78 s (6.83), 71, 452 MB | 9.33 s, 71 |
+| 50³ (375,000) | 21.7 s (14.3), 108, 735 MB | 21.9 s (14.5), 96, 883 MB | 21.2 s, 96 |
+| 60³ (648,000) | 39.7 s (25.9), 116, 1.27 GB | 41.7 s (26.2), 112, 1.53 GB | 39.5 s, 112 |
+| 70³ (1,029,000) | 68.5 s (42.1), 142, 2.02 GB | 72.4 s (42.6), 138, 2.42 GB | 72.7 s, 138 |
+
+  - **SG4 (CPR part): missed.** 42 → 138 products, **3.3×** from 24k to 1.03M (ILUT 3.55×; target ≤ 1.5×).
+  - **SG5: missed.** 40³: 9.78 s against 9.70 s (**1.01×**, target ≤ 0.5×); 70³: 72.4 s against 68.5 s (1.06×). The
+    time is ILUT's build (stage 2 builds the same ILUT as plain GMRES-ILUT) plus solves, which CPR does not shorten.
+  - **SG6 (linear part): missed.** 6 threads: 1.05× at 40³, 1.00× at 70³ (target ≥ 2.5×); the serial ILUT build and
+    triangular solves dominate. The FinFET deck sweep needs the deck keys (SD6) and was not run; with these
+    numbers it would not beat PARDISO at 6 threads.
+  - **SG7: missed.** CPR holds ILUT's memory plus A_p and its hierarchy: +17–20% (452 against 376 MB at 40³).
+  - **SG2 (threads): met.** Bits identical in the unit test at 2–8 threads; the 6-thread runs here gave the same
+    products and backward errors.
+  - **SG3: met** on the device cases above.
+  - The 70³ AMG six-thread anomaly of slice 2 (3.90 s against 0.87 s, one run) **did not repeat**: three repeats gave
+    0.15–0.16 s solve at 6 threads against 0.33–0.37 s at one (2.2×), bits as at one thread. Recorded as a one-off.
+- **What would address it (not built; each a new owner ruling, since SQ2 ruled (a)):** multigrid for the carrier
+  blocks too, that is SQ2 (b) (block Gauss–Seidel over ψ, n, p with AMG on each block, the continuity blocks
+  nonsymmetric) or (c) (point-block AMG on 3×3 node blocks). Plain AMG on the whole system failed in slice 2. A
+  tighter ILUT alone moves the counts (41 against 330 on the fixture) but not the growth or the serial build.
+- **SG9 (mutants): 15 of 15 caught** (script `C:\Users\disha\bisect-tools\mutants58s3.sh`): SG9's CPR stage 2
+  skipped and ψ labels shifted by one (in `field_labels`), and the prolongation into the next node; the responses'
+  sign flipped, the responses dropped (A_ψψ alone), the prolongation of the potential only, stage 2's residual not
+  updated, the scales not given to the AMG (survived the first run; caught after the symmetry test was added), new
+  labels keeping the analysis, a singular node block kept (first written so it did not compile), complex cpr
+  accepted, cpr never selected, a coupled label before its potential accepted, `newton_solve` giving no labels, small
+  signal keeping cpr. SG9's gather mutant belongs to slice 4.
+- **Not run:** the full Release and Debug suites (owner's word needed), FG1/FG2 traces, the FinFET deck sweep
+  (SG6, needs SD6's deck keys).
+
 ## New questions the advisor raised (not yet in `ARCHITECTURE.md`)
 
 None of these is decided. Each needs an owner position before the build scaffold fixes the flags.

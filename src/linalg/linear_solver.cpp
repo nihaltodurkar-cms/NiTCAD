@@ -14,6 +14,7 @@
 #include "NiTCAD/base/contract.hpp"
 #include "NiTCAD/base/thread_pool.hpp"
 #include "amg.hpp"
+#include "cpr.hpp"
 #include "eigen_ilut.hpp"
 #include "eigen_sparse_lu.hpp"
 #include "gmres.hpp"
@@ -137,7 +138,8 @@ std::expected<BasicLinearSolver<Scalar>, base::Error> BasicLinearSolver<Scalar>:
     if (config.fallback != LinearFallback::sparse_lu && config.fallback != LinearFallback::none) {
         return std::unexpected(error(base::ErrorCode::invalid_input, "unknown linear fallback"));
     }
-    if (config.preconditioner != Preconditioner::ilut && config.preconditioner != Preconditioner::amg) {
+    if (config.preconditioner != Preconditioner::ilut && config.preconditioner != Preconditioner::amg &&
+        config.preconditioner != Preconditioner::cpr) {
         return std::unexpected(error(base::ErrorCode::invalid_input, "unknown preconditioner"));
     }
     if (config.preconditioner != Preconditioner::ilut &&
@@ -146,9 +148,10 @@ std::expected<BasicLinearSolver<Scalar>, base::Error> BasicLinearSolver<Scalar>:
                                      "a preconditioner other than ilut needs the gmres backend"));
     }
     if constexpr (!std::same_as<Scalar, double>) {
-        if (config.preconditioner == Preconditioner::amg) {
+        if (config.preconditioner == Preconditioner::amg ||
+            config.preconditioner == Preconditioner::cpr) {
             return std::unexpected(error(base::ErrorCode::invalid_input,
-                                         "the amg preconditioner is for real matrices only"));
+                                         "the amg and cpr preconditioners are for real matrices only"));
         }
     }
     if (!(config.amg_strength_threshold >= 0.0 && config.amg_strength_threshold < 1.0)) {
@@ -202,14 +205,16 @@ BasicLinearSolver<Scalar>::BasicLinearSolver(const SolverConfig& config) : confi
     } else if (config.backend == SolverBackend::gmres_ilut) {
         if (config.threads > 1) pool_ = std::make_unique<base::ThreadPool>(config.threads);
         if constexpr (std::same_as<Scalar, double>) {
+            const detail::AmgSettings amg{
+                .strength_threshold = config.amg_strength_threshold,
+                .smoother_degree = config.amg_smoother_degree,
+                .coarse_size = static_cast<std::size_t>(config.amg_coarse_size),
+                .max_levels = config.amg_max_levels};
             if (config.preconditioner == Preconditioner::amg) {
-                backend_ = std::make_unique<detail::AmgBackend>(
-                    detail::AmgSettings{
-                        .strength_threshold = config.amg_strength_threshold,
-                        .smoother_degree = config.amg_smoother_degree,
-                        .coarse_size = static_cast<std::size_t>(config.amg_coarse_size),
-                        .max_levels = config.amg_max_levels},
-                    pool_.get());
+                backend_ = std::make_unique<detail::AmgBackend>(amg, pool_.get());
+            } else if (config.preconditioner == Preconditioner::cpr) {
+                backend_ = std::make_unique<detail::CprBackend>(
+                    amg, config.ilut_drop_tolerance, config.ilut_fill_factor, pool_.get());
             }
         }
         if (!backend_) {
@@ -220,6 +225,13 @@ BasicLinearSolver<Scalar>::BasicLinearSolver(const SolverConfig& config) : confi
     } else {
         backend_ = std::make_unique<detail::SparseLuBackend<Scalar>>();
     }
+}
+
+template <MatrixScalar Scalar>
+void BasicLinearSolver<Scalar>::set_field_labels(std::span<const std::int32_t> labels) {
+    NITCAD_EXPECTS(backend_ != nullptr);
+    if (config_.preconditioner != Preconditioner::cpr) return;
+    if (backend_->set_fields(labels)) reset();
 }
 
 template <MatrixScalar Scalar>

@@ -64,6 +64,7 @@ std::expected<results::SmallSignal, base::Error> solve_small_signal_unobserved(
     linalg::SolverConfig ac = steady.linear;
     if (ac.backend == linalg::SolverBackend::gmres_ilut) {
         ac.backend = linalg::SolverBackend::eigen_sparse_lu;
+        ac.preconditioner = linalg::Preconditioner::ilut;  // SparseLU takes no preconditioner
     }
     auto solver = linalg::ComplexLinearSolver::create(ac);
     if (!solver) return std::unexpected(std::move(solver.error()));

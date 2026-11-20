@@ -4,6 +4,7 @@
 //   start /b /wait /affinity 3C3 nitcad_deck_test.exe "[.scale_series]"
 //   start /b /wait /affinity 3C3 nitcad_deck_test.exe "[.scale_threads]"   (slice 1)
 //   start /b /wait /affinity 3C3 nitcad_deck_test.exe "[.scale_amg]"       (slice 2)
+//   start /b /wait /affinity 3C3 nitcad_deck_test.exe "[.scale_cpr]"       (slice 3)
 // Measurement only: nothing here is gated beyond the cases solving, and no product code changes.
 //
 // Two measurements per case and linear-solver configuration, from the same start (the case's bias
@@ -490,9 +491,11 @@ namespace {
 // One linear solve with a fresh solver: build (analysis and factorization or preconditioner), solve,
 // GMRES products, held memory; a failure is printed, not fatal (strict runs show their failures).
 void one_solve(const char* name, const linalg::SparseMatrix& a, std::span<const double> b,
-               const linalg::SolverConfig& config) {
+               const linalg::SolverConfig& config,
+               std::span<const std::int32_t> labels = {}) {
     const ProcessMemory before = process_memory();
     auto solver = *linalg::LinearSolver::create(config);
+    solver.set_field_labels(labels);
     std::vector<double> x(b.size());
     std::string error;
     std::size_t iterations = 0;
@@ -583,6 +586,52 @@ TEST_CASE("solver profile: GMRES-AMG on the 3D diode series (Unit 58 slice 2)", 
             std::printf("  drift-diffusion at 0.5 V, %zu unknowns:\n", static_cast<std::size_t>(j.rows()));
             one_solve("GMRES-ILUT", j, rhs_dd, ilut);
             one_solve("GMRES-AMG (whole system)", j, rhs_dd, amg);
+        }
+    }
+}
+
+TEST_CASE("solver profile: GMRES-CPR on the 3D diode series (Unit 58 slice 3)", "[.scale_cpr]") {
+    // SG4's CPR part, SG5 and SG7: one Newton step's linear solve as [.scale_series] (the Jacobian at
+    // 0.5 V on the equilibrium potential, a fresh solver), GMRES-CPR against GMRES-ILUT, strict, at
+    // one thread; SG6's linear part: GMRES-CPR at 6 threads. Then [.scale_amg]'s 70^3 six-thread
+    // anomaly, repeated.
+    const linalg::SolverConfig ilut{.backend = linalg::SolverBackend::gmres_ilut,
+                                    .fallback = linalg::LinearFallback::none};
+    linalg::SolverConfig cpr = ilut;
+    cpr.preconditioner = linalg::Preconditioner::cpr;
+    linalg::SolverConfig cpr6 = cpr;
+    cpr6.threads = 6;
+    for (const int nodes : {20, 30, 40, 50, 60, 70}) {
+        const auto d = diode_3d(nodes);
+        const auto eq = solve::solve_equilibrium(d, {.linear = helper_solver()});
+        REQUIRE(eq.has_value());
+        std::vector<double> rhs;
+        const linalg::SparseMatrix j =
+            device_jacobian(d, std::vector<double>{0.5, 0.0}, eq->fields.potential_V, rhs);
+        REQUIRE(j.rows() % 3 == 0);
+        std::vector<std::int32_t> labels(static_cast<std::size_t>(j.rows()));
+        for (std::size_t u = 0; u < labels.size(); ++u) labels[u] = static_cast<std::int32_t>(u % 3);
+        std::printf("\n=== cpr %d^3: %zu unknowns, %zu nonzeros\n", nodes,
+                    static_cast<std::size_t>(j.rows()), j.nonzeros());
+        one_solve("GMRES-ILUT", j, rhs, ilut);
+        one_solve("GMRES-CPR", j, rhs, cpr, labels);
+        one_solve("GMRES-CPR 6 threads", j, rhs, cpr6, labels);
+    }
+    {
+        const auto d = diode_3d(70);
+        const auto eq = solve::solve_equilibrium(d, {.linear = helper_solver()});
+        REQUIRE(eq.has_value());
+        std::vector<double> rhs;
+        const linalg::SparseMatrix converged = equilibrium_jacobian(d, eq->fields.potential_V, rhs);
+        for (std::size_t i = 0; i < rhs.size(); ++i) rhs[i] = std::sin(0.37 * static_cast<double>(i)) + 1e-3;
+        linalg::SolverConfig amg = ilut;
+        amg.preconditioner = linalg::Preconditioner::amg;
+        linalg::SolverConfig amg6 = amg;
+        amg6.threads = 6;
+        std::printf("\n=== amg 70^3 converged Poisson, repeated\n");
+        for (int repeat = 0; repeat < 3; ++repeat) {
+            one_solve("GMRES-AMG", converged, rhs, amg);
+            one_solve("GMRES-AMG 6 threads", converged, rhs, amg6);
         }
     }
 }

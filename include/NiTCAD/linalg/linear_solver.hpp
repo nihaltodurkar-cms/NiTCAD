@@ -103,6 +103,11 @@ enum class Preconditioner : std::uint8_t {
     // (src/linalg/amg.hpp). Its hierarchy is built by factorize, its coarsening once per pattern.
     // Every thread count gives the same bits.
     amg,
+    // CPR-style two-stage (Unit 58 SD4): AMG on the potential system (the potential rows, each
+    // node's other unknowns reduced into its potential by their local response), then ILUT of the
+    // full matrix on the residual that leaves (src/linalg/cpr.hpp). Real matrices only; needs the
+    // field labels (set_field_labels). The amg_* and ilut_* settings apply to its two stages.
+    cpr,
 };
 
 struct SolverConfig {
@@ -147,8 +152,8 @@ struct SolverConfig {
     // ILUT fill, 1 to 1000: each row of L and of U keeps at most fill * nnz(A) / (2 n) entries.
     int ilut_fill_factor = 10;
     LinearFallback fallback = LinearFallback::sparse_lu;
-    // gmres_ilut only: anything but ilut with another backend, or amg for a complex matrix, is
-    // invalid_input. The amg_* settings are validated for every backend.
+    // gmres_ilut only: anything but ilut with another backend, or amg or cpr for a complex matrix,
+    // is invalid_input. The amg_* settings are validated for every backend.
     Preconditioner preconditioner = Preconditioner::ilut;
     // AMG strength of connection theta, in [0, 1): j is a strong neighbour of i if
     // |a_ij| >= theta sqrt(|a_ii a_jj|).
@@ -255,6 +260,15 @@ public:
     [[nodiscard]] bool can_transpose() const noexcept {
         return config_.backend != SolverBackend::gmres_ilut || config_.fallback != LinearFallback::none;
     }
+
+    // The field of every unknown, for preconditioner = cpr (Unit 58 SD4; plain integers, so linalg
+    // knows nothing of the fields): 0 for the potential, a positive value for a field coupled to it
+    // at the same node, negative for an unknown in no node (for example a bordering row's). A node
+    // is a potential unknown and the positive-labelled unknowns right after it (the node-interleaved
+    // layout). Copied; with cpr, labels that differ from the last ones forget the analysis, so the
+    // next factorize analyzes with them (a cpr factorization without one label per unknown is invalid_input). Ignored by every other
+    // configuration.
+    void set_field_labels(std::span<const std::int32_t> labels);
 
     [[nodiscard]] bool is_analyzed() const noexcept { return analyzed_; }
     [[nodiscard]] bool is_factorized() const noexcept { return factorized_; }

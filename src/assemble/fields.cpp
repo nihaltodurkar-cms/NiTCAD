@@ -40,4 +40,15 @@ std::size_t DofMap::node_of(std::size_t unknown) const {
     return unknown / block();
 }
 
+std::vector<std::int32_t> field_labels(const DofMap& dofs) {
+    std::vector<std::int32_t> labels(dofs.unknowns(), -1);
+    const std::optional<std::size_t> psi = dofs.slot(FieldId::potential);
+    if (!psi) return labels;
+    for (std::size_t u = 0; u < labels.size(); ++u) {
+        const std::size_t k = u % dofs.block();
+        if (k >= *psi) labels[u] = static_cast<std::int32_t>(k - *psi);
+    }
+    return labels;
+}
+
 }  // namespace NiTCAD::assemble

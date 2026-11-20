@@ -11,6 +11,7 @@
 #pragma once
 
 #include <cstddef>
+#include <cstdint>
 #include <optional>
 #include <span>
 #include <string_view>
@@ -127,5 +128,11 @@ private:
     std::vector<Field> fields_;
     std::size_t nodes_ = 0;
 };
+
+// The field label of every unknown, as the linear solver's cpr preconditioner takes them
+// (linalg::BasicLinearSolver::set_field_labels, Unit 58 SD4): 0 for the potential, the field's
+// position after the potential in its node's block for the fields after it, -1 for any before it
+// (none in today's maps). Every unknown is -1 when the map has no potential.
+[[nodiscard]] std::vector<std::int32_t> field_labels(const DofMap& dofs);
 
 }  // namespace NiTCAD::assemble

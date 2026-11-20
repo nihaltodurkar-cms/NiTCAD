@@ -11,6 +11,7 @@
 #include <sstream>
 #include <string>
 #include <string_view>
+#include <cstdint>
 #include <vector>
 
 #include "NiTCAD/assemble/band_edges.hpp"
@@ -349,4 +350,26 @@ TEST_CASE("system: the public header names no model and the old type is retired 
             CHECK(name.find(model) == std::string::npos);
         }
     }
+}
+
+TEST_CASE("fields: the cpr field labels (Unit 58 SD4)") {
+    for (const bool thermal : {false, true}) {
+        CAPTURE(thermal);
+        const device::Device d = resistor(thermal);
+        const auto scaling = *assemble::make_scaling(d);
+        const auto system = *assemble::System::create(d, scaling, {.electrothermal = thermal});
+        const std::vector<std::int32_t> labels = assemble::field_labels(system.dofs());
+        REQUIRE(labels.size() == system.unknowns());
+        const std::size_t m = system.stride();
+        for (std::size_t u = 0; u < labels.size(); ++u) {
+            REQUIRE(labels[u] == static_cast<std::int32_t>(u % m));
+        }
+    }
+    // A field before the potential is in no node; without a potential every unknown is.
+    const assemble::Field two[] = {assemble::hole_field, assemble::potential_field};
+    REQUIRE(assemble::field_labels(assemble::DofMap::node_interleaved(two, 3)) ==
+            std::vector<std::int32_t>{-1, 0, -1, 0, -1, 0});
+    const assemble::Field holes[] = {assemble::hole_field};
+    REQUIRE(assemble::field_labels(assemble::DofMap::node_interleaved(holes, 2)) ==
+            std::vector<std::int32_t>{-1, -1});
 }

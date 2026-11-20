@@ -3,6 +3,7 @@
 #pragma once
 
 #include <cstddef>
+#include <cstdint>
 #include <expected>
 #include <optional>
 #include <span>
@@ -48,6 +49,10 @@ public:
     // are R A C), given before every factorize. Only AMG uses them (Unit 58 SD3).
     virtual void set_scales(std::span<const double> /*rows*/, std::span<const double> /*columns*/,
                             bool /*applied*/) {}
+    // The field label of every unknown (BasicLinearSolver::set_field_labels), given before analyze.
+    // Only CPR uses them (Unit 58 SD4). True if they differ from the last ones (the analysis is then
+    // stale).
+    [[nodiscard]] virtual bool set_fields(std::span<const std::int32_t> /*labels*/) { return false; }
 
     // The backend's own work, counted where it is done (BackendCounts).
     [[nodiscard]] const BackendCounts& counts() const noexcept { return counts_; }
