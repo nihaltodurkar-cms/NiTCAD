@@ -1234,6 +1234,43 @@ importing GDS/DXF; meshing controls drawn on the canvas (refinement boxes).
 - **Limitation recorded:** a cut (for a hole or a pinch) is a same-region internal edge; where one ends on the outer
   boundary it splits that boundary edge, so a patch across that point is refused by the mesher, as on a hand tiling.
 
+**Slice 1 results (2026-11-20; GD3–GD5):** the editor's model `app::geo` (`include/NiTCAD/app/geometry.hpp`,
+`src/app/geometry.cpp`; plain C++, no Win32, GE10): the deck read into regions (each a layer, its box and polygon
+lines, the background the one without shapes), contacts (a generated deck's `[mesh] patch` segment, a tensor deck's
+face clipped by its box) and the domain; written back by minimal edits; 17 edits; an undo history of deck texts;
+the grid, snapping, the Shift constraint, handle drags and hit tests. Coordinates are integers in 0.1 nm.
+- **Writing:** region sections keep their slots (layer order permutes them); each changed entry is rewritten in
+  place, comments and blanks between entries kept; a removed section goes with the blank line before it; new
+  regions follow the last region, new contacts end the file; the deck's line ends (LF or CRLF) are kept. A new
+  contact's patch name is made unique among the deck's patches. The first edit of a tiled deck adds `layered = on`
+  (refused while a polygon has a slanted edge); a polygon keeps axis-parallel edges (a dragged vertex's neighbours
+  follow along their shared edges; inserted and removed vertices must lie on an edge) until slice 4.
+- **GE3 met:** `mosfet_2d.deck` (tensor, CRLF), a layered deck with comments and a continued polygon, and a tiled
+  deck (CRLF, last line without its end) come back byte-identical with no edit; after edits only geometry lines
+  change (a line-multiset diff), and the edited layered and tiled decks build.
+- **GE4 met:** 200 seeded random edits (16 kinds) on a layered and on a tensor deck: after each, the written deck
+  reads back to the edited model and only geometry lines changed (a whole removed section excepted); undone one by
+  one, each step gives the earlier text byte for byte, ending at the original; redo replays to the last.
+- **GE5 (write part) met:** a write takes 0.03–0.04 ms mean over the 200 edits; on a 300-region deck a write and a
+  read together take 0.5–0.8 ms per edit (three runs).
+- **GE6 met:** at 96, 144 and 192 dpi and zooms 1e-2, 0.1, 1, 10, 100, 1e3 and 1e4 px/µm: box handles (picked within
+  4.5 px of the centre, scaled; outside at 5 px), polygon vertices and edges (4 px), contact ends before the contact
+  (5 px), the topmost shape, the background inside the domain, nothing outside it; model points round-trip through
+  the screen. The grid step is the smallest 1, 2 or 5 × 10ⁿ µm at least 12 px apart (scaled), never below 0.1 nm.
+- **Kernel change (slice 0's limitation lifted for holes):** a hole is now cut by two rays along grid lines from two
+  of its corners to the part's outer loop, chosen to end on the domain's boundary off every patch's inside (a
+  corner first), else on an interface, a patch's inside last; then the shorter. A straight cut across the part
+  put a vertex inside a full-width body contact, and one ending on an interface made `generate2d` refuse a corner
+  zone (P4b), both seen while writing the tests. New deck test: a buried box under a full-width body contact
+  builds. Pinches are still cut along a column line. The mesh suite passes (122 cases, GE2's 1000 layouts included).
+- **GE9 for slice 1 met:** 12 hand mutants caught (a 13th's edit did not apply and was not run): lengths not
+  trimmed of trailing zeros; nm read as Å; comments between entries dropped; a removed section's blank kept; a
+  vertex's neighbours not following; a tiled deck not made layered; undo not feeding redo; the snap radius not
+  scaled by dpi; handles picked at 6 px; grid steps without 2 × 10ⁿ; a tensor contact's box clipped wrongly; the
+  ray choice ignoring patches.
+- **Found on the way:** slice 0 left `layered` and `domain` out of the app's deck vocabulary (XG2's test caught it
+  once the app suite ran); added. The app suite passes (88 cases).
+
 ### Unit 62 — density-gradient quantum confinement, opt-in (proposed 2026-11-19; on `physics/density-gradient`)
 
 **Owner request (2026-11-19):** "Plan for Density-gradient confinement (Commercial TCAD feature type)". This is the
