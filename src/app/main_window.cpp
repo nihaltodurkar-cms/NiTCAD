@@ -148,6 +148,7 @@ MainWindow::~MainWindow() {
     runner_.wait();
     if (viewport_) viewport_->release();  // the swap chains before the renderer
     if (run_page_) run_page_->release();
+    if (solid_) solid_->release();
     if (hwnd_) {
         SetWindowLongPtrW(hwnd_, GWLP_USERDATA, 0);
         DestroyWindow(hwnd_);
@@ -223,6 +224,7 @@ bool MainWindow::create_children() {
     results_->on_pass = [this](std::size_t k) { results_show_pass(k); };
     geometry_ = std::make_unique<GeometryPage>(hwnd_, *this, id_geometry, id_geometry_controls,
                                                options_.adapter == render::Adapter::warp);
+    solid_ = std::make_unique<SolidPage>(hwnd_, *this, id_solid, id_solid_controls);
     metrics_ = make(L"STATIC", L"", WS_VISIBLE | SS_LEFTNOWORDWRAP | SS_CENTERIMAGE, hwnd_, id_metrics);
     // Unit 26j: the console along the window's bottom, a classic output window: the tab's text (plain, black on
     // white) or the points table over a tab strip (Output, Points, Messages); right-click for Copy, Save, Clear
@@ -469,6 +471,11 @@ bool MainWindow::pre_translate(MSG& m) {
         geometry_->commit(GetDlgCtrlID(m.hwnd) - id_geometry_controls);
         return true;
     }
+    if (m.message == WM_KEYDOWN && m.wParam == VK_RETURN && m.hwnd && solid_ && GetParent(m.hwnd) == solid_->inspector() &&
+        GetDlgCtrlID(m.hwnd) != static_cast<int>(id_solid_controls) + static_cast<int>(SolidPage::c_vertices)) {
+        solid_->commit(GetDlgCtrlID(m.hwnd) - id_solid_controls);
+        return true;
+    }
     return IsDialogMessageW(hwnd_, &m) != FALSE;
 }
 
@@ -535,6 +542,7 @@ void MainWindow::apply_dpi(int dpi) {
     run_page_->set_dpi(dpi, font_);
     results_->set_dpi(dpi, font_, bold_);
     geometry_->set_dpi(dpi, font_, bold_);
+    solid_->set_dpi(dpi, font_, bold_);
     layout();
 }
 
@@ -574,8 +582,13 @@ void MainWindow::layout() {
     // Unit 26k: the Geometry tab's page, and its section in the inspector's place.
     place(geometry_->hwnd(), whole);
     place(geometry_->inspector(), panes_.inspector);
-    ShowWindow(geometry_->hwnd(), tab_ == tab_geometry ? SW_SHOW : SW_HIDE);
-    ShowWindow(geometry_->inspector(), tab_ == tab_geometry && panes_.inspector.width > 0 ? SW_SHOW : SW_HIDE);
+    ShowWindow(geometry_->hwnd(), tab_ == tab_geometry && !solid_shown_ ? SW_SHOW : SW_HIDE);
+    ShowWindow(geometry_->inspector(), tab_ == tab_geometry && !solid_shown_ && panes_.inspector.width > 0 ? SW_SHOW : SW_HIDE);
+    // Unit 26l: the 3D modeller in its place for a 3D deck.
+    place(solid_->hwnd(), whole);
+    place(solid_->inspector(), panes_.inspector);
+    ShowWindow(solid_->hwnd(), tab_ == tab_geometry && solid_shown_ ? SW_SHOW : SW_HIDE);
+    ShowWindow(solid_->inspector(), tab_ == tab_geometry && solid_shown_ && panes_.inspector.width > 0 ? SW_SHOW : SW_HIDE);
     ShowWindow(inspector_, tab_ == tab_geometry || panes_.inspector.width <= 0 ? SW_HIDE : SW_SHOW);
     // The tab strip is drawn over the page's top: keep the page above it in Z order.
     SetWindowPos(tabs_, HWND_BOTTOM, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
@@ -1281,6 +1294,12 @@ void MainWindow::select_tab(int tab) {
         run_page_->update(runner_, renderer(), true);
         break;
     case tab_geometry:
+        update_geometry_page();
+        if (solid_shown_) {
+            solid_->reload();
+            SetFocus(solid_->canvas());
+            break;
+        }
         geometry_->reload();
         SetFocus(geometry_->canvas());
         // GD9: a deck not checked since it was opened is checked now (an edit's check is on its way otherwise).
@@ -2598,6 +2617,27 @@ std::optional<geo::Rect> MainWindow::geometry_bounds() {
 
 void MainWindow::geometry_status(const std::string& cursor) { set_status(status_cursor, cursor); }
 
+// --- the 3D modeller (Unit 26l) --------------------------------------------------------------------
+
+std::string MainWindow::solid_deck() { return deck_->text(); }
+
+void MainWindow::solid_edited(const std::string& text) {
+    deck_->set_text(text);
+    deck_changed();
+}
+
+void MainWindow::solid_status(const std::string& text) { set_status(status_cursor, text); }
+
+render::Renderer* MainWindow::solid_renderer() { return renderer(); }
+
+void MainWindow::update_geometry_page() {
+    const auto m = solid::read_model(deck_->text());
+    const bool shown = m && m->mesh != solid::MeshKind::unsupported;
+    if (shown == solid_shown_) return;
+    solid_shown_ = shown;
+    layout();
+}
+
 void MainWindow::geometry_selected(const std::string&) {}
 
 void MainWindow::on_live_check() {
@@ -2699,7 +2739,7 @@ void MainWindow::focus_next_pane() {
                       : tab_ == tab_start   ? start_->hwnd()
                       : tab_ == tab_run     ? run_page_->hwnd()
                       : tab_ == tab_results ? results_->hwnd()
-                      : tab_ == tab_geometry ? geometry_->canvas()
+                      : tab_ == tab_geometry ? (solid_shown_ ? solid_->canvas() : geometry_->canvas())
                                             : viewport_->hwnd();
     const HWND order[] = {tree_, page, child(id_view)};
     std::size_t k = 0;
@@ -2784,7 +2824,14 @@ void MainWindow::execute(Command c) {
     case Command::paste:
     case Command::duplicate:
     case Command::delete_selection:
-        if (tab_ == tab_geometry && GetParent(GetFocus()) != geometry_->inspector()) {
+        if (tab_ == tab_geometry && solid_shown_ && GetParent(GetFocus()) != solid_->inspector()) {
+            if (c == Command::undo) solid_->undo();
+            else if (c == Command::redo) solid_->redo();
+            else if (c == Command::duplicate) solid_->duplicate();
+            else if (c == Command::delete_selection || c == Command::cut) solid_->remove();
+            return;
+        }
+        if (tab_ == tab_geometry && !solid_shown_ && GetParent(GetFocus()) != geometry_->inspector()) {
             if (c == Command::undo) geometry_->undo();
             else if (c == Command::redo) geometry_->redo();
             else if (c == Command::cut) {
@@ -2809,6 +2856,11 @@ void MainWindow::execute(Command c) {
     case Command::tool_pan:
     case Command::tool_measure:
         select_tab(tab_geometry);
+        if (solid_shown_) {
+            solid_->set_tool(static_cast<SolidPage::Tool>(static_cast<int>(c) - static_cast<int>(Command::tool_select)));
+            SetFocus(solid_->canvas());
+            return;
+        }
         geometry_->set_tool(static_cast<GeometryPage::Tool>(static_cast<int>(c) - static_cast<int>(Command::tool_select)));
         SetFocus(geometry_->canvas());
         return;
@@ -3553,6 +3605,7 @@ LRESULT MainWindow::handle(UINT message, WPARAM w, LPARAM l) {
         save_state();
         viewport_->release();
         run_page_->release();
+        solid_->release();
         DestroyWindow(hwnd_);
         return 0;
     case WM_DESTROY:

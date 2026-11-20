@@ -672,7 +672,7 @@ TEST_CASE("app solid: snapping to vertices, midpoints, edges, faces and the work
 }
 
 TEST_CASE("app solid: the model names no Win32 type (SE10)", "[app][solid]") {
-    for (const char* f : {"include/NiTCAD/app/solid.hpp", "src/app/solid.cpp", "src/app/deck_text.hpp"}) {
+    for (const char* f : {"include/NiTCAD/app/solid.hpp", "src/app/solid.cpp", "src/app/deck_text.hpp", "include/NiTCAD/app/solid_view.hpp", "src/app/solid_view.cpp"}) {
         const std::string t = read_file(std::filesystem::path(NITCAD_SOURCE_DIR) / f);
         REQUIRE(!t.empty());
         for (const char* bad : {"windows.h", "Windows.h", "win32.hpp", "HWND", "d3d12"}) {

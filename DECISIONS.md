@@ -1624,6 +1624,79 @@ editor's model one dimension up. Run under the owner's 4-core cap: builds `-j 4`
   One mutant survived until a test moved the domain's low face: the domain's low faces not carrying their contacts.
   One first failed to build and was rerun as a compiling equivalent: neighbours not following a vertex.
 
+**Slice 2 results (2026-11-21; SD4):** the 3D modeller on the Geometry tab. Run under the owner's 4-core cap.
+- **Files:** the view without Win32 is `include/NiTCAD/app/solid_view.hpp` and `src/app/solid_view.cpp`: the scene, the
+  handles, picking and the drags' geometry. The window is `src/app/solid_page.hpp` and `src/app/solid_page.cpp`.
+  `render` gains `view_frame`, `screen_ray` and `um_per_pixel`, the projection `draw()` uses, in double precision.
+- **Which page:** the Geometry tab shows the modeller for a layered `generate3d` or an `extrude3d` deck, and the 2D
+  editor otherwise. A tensor 3D deck keeps the 2D page's message. The Edit menu's undo, redo, duplicate, delete and
+  tool commands go to whichever page is shown. Run gating is still the 2D page's (live validation is slice 3).
+- **Drawing:** every solid is drawn whole, shaded by material. Each layer's faces are pushed out by 1e-5 of the domain
+  per layer, so the later layer shows where faces meet, as the deck paints them. Edges are outlined. Contacts are drawn
+  on the boundary, the selection in orange on top. Also drawn: the work plane's grid, a see-through mode (T; the
+  selection stays opaque), a section plane (the cut faces are left open) and the axis triad. The camera is the 3D
+  view's: right drag orbits, middle drag pans, the wheel zooms at the cursor, F fits.
+- **Tools:** Select (gizmo arrows and plane squares, face handles, prism vertex handles; Shift adds, Ctrl drags a
+  vertex alone), Box, Prism (edges kept along u or v), Contact (on a domain face), Pan and Measure. Arrows and
+  Page Up/Down nudge. The inspector has the ranges, the prism's axis, extent and vertices, the material, raise/lower,
+  the contact's kind, the drawing material, the work plane, the section and Convert. An `extrude3d` deck is shown and
+  can be selected; an edit is refused with the reason until Convert.
+- **SE5 met (frame part):** with 100 solids on WARP, measured over 31 frames each, the scene build included:
+  - run alone (five runs): orbit median 10.2–10.8 ms, drag median 10.3–12.1 ms;
+  - inside the whole window test executable (four runs): 14.1–14.4 ms and 13.5–14.5 ms. One further run read 16.7 and
+    17.3 ms. That was a loaded run: the same run failed the existing hover timing check, which passed on the rerun.
+  The scene build is 0.4–0.55 ms of that. The rest is the WARP present.
+- **SE6 met:** a table over 3 dpi × 4 zooms (1e-2, 1, 1e2 and 1e4 px/µm) × 8 views (the six presets, the isometric and
+  one more oblique view) picks, on the face toward the viewer:
+  - a box's face, a prism's cap, the notch of the prism's L (the background: the exact polygon test), a contact and
+    the background, and nothing off the domain;
+  - past a section plane, the far faces (axis-aligned views);
+  - every vertex, face, arrow and plane handle, and the edges, where no earlier-ranked handle lies near on the screen.
+  Counts are checked: at least 96 each of faces, contacts, vertices, arrows and edges. The picking frame matches
+  `render::screen_position` within 0.02 px in 8 views, orthographic and perspective. `on_plane` and `along_axis` give
+  the point back within 1e-7 µm. Triangulation is exact on L, U, staircase and collinear polygons.
+- **SE8 met (drawing part):** window tests drive the view by messages, with no screen automation:
+  - a box drawn on a work plane and given its height, moved 0.2 µm by the gizmo arrow, resized by a face handle;
+  - an L prism clicked and closed by Enter, with its height; a vertex dragged, its neighbour following;
+  - a contact dragged on the y_max face;
+  - all six edits undone to the opened text byte for byte, and redone from the Edit menu.
+  The deck text after each edit is as expected, and the final deck builds to a 3D device with 4 regions and 3
+  contacts. Further tests cover the inspector's fields, the material, a refused value, the work plane, Delete, and an
+  `extrude3d` deck (an edit refused with the reason, then Convert and undo). The drawn 3D MOSFET run is slice 3's.
+- **Found while testing:** the mesher (`complex_interfaces.cpp`) has two limits a drawn layout can hit:
+  - **Interface holes:** it refuses an interface piece with a hole. A box set inside a layer's interface plane, not
+    reaching the boundary, punches one into that plane.
+  - **Short traces:** it refuses a trace shorter than 6 × `interface_resolution`.
+
+  The modeller lets both through. Slice 3's live validation will mark them with the build's own checks (SD5). The
+  test's box therefore starts at the oxide's corner, and its fixture uses 10 nm interface resolution.
+
+  The edge snap keeps the raw position along an edge, as the 2D editor's does, so a click on an edge can land off the
+  grid (0.1002 µm). Left as is, for consistency with 2D.
+- **SE10 met:** the view files name no Win32 or D3D12 type (the slice 1 check now reads them too), and `app_layering`
+  passes.
+- **Suites:** the app test executable passes 104 cases, and the app window test executable 52. Full ctest suites were
+  not run.
+- **Mutants (SE9):** 15 run, 14 caught:
+  - the layer tie rule reversed;
+  - the point-in-polygon parity forced;
+  - the handle radius widened;
+  - the screen's y flipped;
+  - `along_axis`'s sign;
+  - `on_plane`'s sign;
+  - the section's side;
+  - the edge radius zeroed;
+  - the height ignored;
+  - the vertex follow inverted;
+  - the face drag's sign;
+  - the page chosen for layered decks only;
+  - undo history not recorded;
+  - the extrusion's edit guard removed.
+
+  The survivor is equivalent: it flipped the crossing test's direction, and both directions of a closed polygon give
+  the same parity. It was replaced by the forced-parity mutant. The edit guard's mutant survived at first: the writer
+  also leaves an unconverted extrusion unchanged. A check on the refusal message now catches it.
+
 ### Unit 62 — density-gradient quantum confinement, opt-in (proposed 2026-11-19; on `physics/density-gradient`)
 
 **Owner request (2026-11-19):** "Plan for Density-gradient confinement (Commercial TCAD feature type)". This is the
