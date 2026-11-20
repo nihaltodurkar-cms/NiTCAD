@@ -2425,6 +2425,52 @@ setup was 1.71× AMG's first-step time in slice 2.
 Gauss–Seidel stage 2 of per-field AMG; MQ2 (a) algebraic symmetrization; MQ3 (a) no ILUT; MQ4 (a)
 `preconditioner = cpr_amg`; MQ5 (a) every field; MQ6 (a) opt-in. Slice 0 started.
 
+**Slice 0 (MD1, MD2), 2026-11-20. As built:** `amg::symmetrize`, `amg::symmetric_part` and `SymmetrizedAmg` in
+`src/linalg/amg.{hpp,cpp}` (not reachable from any configuration yet); `tests/linalg/block_probe.hpp` (a field's
+diagonal block; GMRES(30) to a componentwise backward error of 1e-8, the slice-2 AMG at its default settings, one
+thread). Tests in `cpr_test.cpp`: MG4 on the fixture's carrier blocks (8², 24²: S symmetric to 1e-13, d_l / d_k =
+e^{∓Δψ/2} from the fixture's potential to 1e-12, 2m + 1 components, 2m unpaired entries), the unusable pairs, the
+components and the clamp (a chain spanning ln d 600: 6 unknowns clamped, d² and 1/d² finite), GMRES with the
+symmetrized AMG on the 24² blocks; hidden `[.carrier_blocks]` (fixture) and, in `solver_profile_test.cpp`,
+`[.scale_carrier_blocks]` (3D diode) and `[.carrier_diag]` (the near-null choice). `nitcad_linalg_test`: 108 cases
+pass (MG1: the `amg` and `cpr` cases unchanged).
+- **A finding fixed during the slice:** the first `symmetric_part` averaged an entry with any stored partner. The 3D
+  device Jacobian stores explicit zeros in the contact rows, so every coupling into a contact was halved: the ψ block
+  (exactly symmetric, d = 1) then took 20–28 iterations against the plain AMG's 9–12, and the hole blocks failed at
+  every size. Averaging only usable pairs (MD2's own definition) fixed both. Near-null choice on 20³ / 40³ after the
+  fix (`[.carrier_diag]`): 1/d (MD2) 10/13 electrons, 11/17 holes; constant 10/12, 17/23; d 16/27, 60/148. MD2's
+  1/d kept.
+- **Fixture blocks (`[.carrier_blocks]`), iterations (24² is a single level, coarse_size 1000):**
+
+| Block | 48² | 96² | 192² |
+|---|---|---|---|
+| ψ, AMG as is / symmetrized | 9 / 9 | 9 / 9 | 9 / 9 |
+| electrons, AMG as is / symmetrized | 81 / **11** | 294 / **13** | failed / **13** |
+| holes, AMG as is / symmetrized | 146 / **15** | failed / **16** | failed / **17** |
+
+- **3D diode blocks at 0.5 V (`[.scale_carrier_blocks]`, Release, pinned to the P cores), iterations and the
+  symmetrized AMG's setup + solve time:**
+
+| Size (unknowns) | ψ (as is = symmetrized) | electrons as is | electrons symmetrized | holes as is | holes symmetrized |
+|---|---|---|---|---|---|
+| 20³ (24k) | 9 | failed | **10** (0.012 s) | failed | **11** (0.013 s) |
+| 30³ (81k) | 11 | 750 | **13** (0.047 s) | failed | **14** (0.046 s) |
+| 40³ (192k) | 11 | failed | **13** (0.13 s) | failed | **17** (0.15 s) |
+| 50³ (375k) | 12 | failed | **15** (0.29 s) | failed | **19** (0.35 s) |
+| 60³ (648k) | 13 | failed | **19** (0.64 s) | failed | **30** (0.90 s) |
+| 70³ (1.03M) | 12 | failed | **21** (1.12 s) | failed | **35** (1.66 s) |
+
+  ("failed": 1000 products without convergence.) The symmetrization turns blocks the AMG cannot solve into blocks it
+  solves in 10–35 iterations. No unknown was clamped at 0.5 V (ln d within ±8.03).
+- **MD1's go/no-go: no-go as written.** MG5's 1.5× on the blocks alone: the fixture meets it (electrons 11 → 13,
+  1.18×; holes 15 → 17, 1.13×, from 48²), the 3D series does not: electrons 10 → 21 (**2.1×**), holes 11 → 35
+  (**3.2×**), from 24k to 1.03M. The growth sits at 60³–70³, where the coarsest level grows (holes 766 → 2041,
+  electrons 805 → 2376: the coarsening slows on the high-field rows, as the risks foresaw). Not loosened. Slice 1
+  waits for the owner.
+- For scale: at 70³ one symmetrized V-cycle solve of a whole carrier block (35 iterations) takes 1.7 s, against
+  68.5 s for one GMRES-ILUT solve of the coupled system (Unit 58 slice 3); that is an observation, not a criterion.
+- Mutants (MG9) not yet run for this slice; the full suites not run (owner's word).
+
 ## New questions the advisor raised (not yet in `ARCHITECTURE.md`)
 
 None of these is decided. Each needs an owner position before the build scaffold fixes the flags.

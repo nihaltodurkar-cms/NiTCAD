@@ -5,6 +5,7 @@
 //   start /b /wait /affinity 3C3 nitcad_deck_test.exe "[.scale_threads]"   (slice 1)
 //   start /b /wait /affinity 3C3 nitcad_deck_test.exe "[.scale_amg]"       (slice 2)
 //   start /b /wait /affinity 3C3 nitcad_deck_test.exe "[.scale_cpr]"       (slice 3)
+//   start /b /wait /affinity 3C3 nitcad_deck_test.exe "[.scale_carrier_blocks]"  (Unit 63 slice 0)
 // Measurement only: nothing here is gated beyond the cases solving, and no product code changes.
 //
 // Two measurements per case and linear-solver configuration, from the same start (the case's bias
@@ -33,6 +34,7 @@
 #include <utility>
 #include <vector>
 
+#include "../linalg/block_probe.hpp"
 #include "NiTCAD/assemble/energy.hpp"
 #include "NiTCAD/assemble/equilibrium.hpp"
 #include "NiTCAD/assemble/scaling.hpp"
@@ -632,6 +634,113 @@ TEST_CASE("solver profile: GMRES-CPR on the 3D diode series (Unit 58 slice 3)", 
         for (int repeat = 0; repeat < 3; ++repeat) {
             one_solve("GMRES-AMG", converged, rhs, amg);
             one_solve("GMRES-AMG 6 threads", converged, rhs, amg6);
+        }
+    }
+}
+
+TEST_CASE("solver profile: the carrier blocks alone on the 3D diode series (Unit 63 slice 0)",
+          "[.scale_carrier_blocks]") {
+    // MD1: each field's diagonal block of the 0.5 V Jacobian on the equilibrium potential (as
+    // [.scale_cpr]), unequilibrated (the symmetrization absorbs any row and column scaling), solved
+    // by GMRES(30) to a backward error of 1e-8 with the slice-2 AMG on the block as it is and with
+    // the AMG on its symmetrization (MD2). One thread.
+    for (const int nodes : {20, 30, 40, 50, 60, 70}) {
+        const auto d = diode_3d(nodes);
+        const auto eq = solve::solve_equilibrium(d, {.linear = helper_solver()});
+        REQUIRE(eq.has_value());
+        std::vector<double> rhs;
+        const linalg::SparseMatrix j =
+            device_jacobian(d, std::vector<double>{0.5, 0.0}, eq->fields.potential_V, rhs);
+        REQUIRE(j.rows() % 3 == 0);
+        std::printf("\n=== carrier blocks %d^3: %zu unknowns\n", nodes, static_cast<std::size_t>(j.rows()));
+        const char* names[] = {"psi block", "electron block", "hole block"};
+        for (const std::size_t field : {std::size_t{0}, std::size_t{1}, std::size_t{2}}) {
+            (void)block_probe::compare(names[field], block_probe::block(j, 3, field));
+        }
+    }
+}
+
+namespace {
+
+// AMG on S = D A D^-1's symmetric part, with a chosen near-null vector (1/d, d or 1), as a
+// preconditioner of A (Unit 63 slice 0 diagnostic).
+struct CandidateAmg {
+    int mode;  // 0: 1/d, 1: d, 2: 1
+    linalg::detail::AmgBackend amg{block_probe::default_amg(), nullptr};
+    linalg::detail::Csr a;
+    std::vector<double> d, b, x;
+    std::expected<void, base::Error> analyze(const linalg::SparseMatrix& m) {
+        a = block_probe::to_csr(m);
+        return amg.analyze(m);
+    }
+    std::expected<linalg::detail::Factorization, base::Error> factorize(std::span<const double>) {
+        d = linalg::detail::amg::symmetrize(a).d;
+        const std::vector<double> s = linalg::detail::amg::symmetric_part(a, d);
+        std::vector<double> inv(d.size());
+        for (std::size_t i = 0; i < d.size(); ++i) inv[i] = 1.0 / d[i];
+        if (mode == 0) amg.set_scales(d, d, true);
+        if (mode == 1) amg.set_scales(inv, inv, true);
+        b.assign(d.size(), 0.0);
+        x.assign(d.size(), 0.0);
+        return amg.factorize(s);
+    }
+    void solve(std::span<const double> r, std::span<double> z) {
+        for (std::size_t i = 0; i < r.size(); ++i) b[i] = d[i] * r[i];
+        amg.solve(b, x);
+        for (std::size_t i = 0; i < z.size(); ++i) z[i] = x[i] / d[i];
+    }
+};
+
+}  // namespace
+
+TEST_CASE("solver profile: the near-null vector of the symmetrized blocks (Unit 63 slice 0)",
+          "[.carrier_diag]") {
+    for (const int nodes : {20, 40}) {
+        const auto dev = diode_3d(nodes);
+        const auto eq = solve::solve_equilibrium(dev, {.linear = helper_solver()});
+        REQUIRE(eq.has_value());
+        std::vector<double> rhs;
+        const linalg::SparseMatrix j =
+            device_jacobian(dev, std::vector<double>{0.5, 0.0}, eq->fields.potential_V, rhs);
+        std::printf("\n=== %d^3\n", nodes);
+        const char* names[] = {"psi", "electrons", "holes"};
+        for (const std::size_t field : {std::size_t{0}, std::size_t{1}, std::size_t{2}}) {
+            const linalg::SparseMatrix blk = block_probe::block(j, 3, field);
+            const auto csr = block_probe::to_csr(blk);
+            const auto s = linalg::detail::amg::symmetrize(csr);
+            double lo = 0.0, hi = 0.0, asym = 0.0, rowsum = 0.0, diag_neg = 0.0, offdiag_pos = 0.0;
+            for (const double v : s.d) {
+                lo = std::min(lo, std::log(v));
+                hi = std::max(hi, std::log(v));
+            }
+            for (std::size_t i = 0; i < csr.rows; ++i) {
+                double sum = 0.0, scale = 0.0;
+                for (auto k = static_cast<std::size_t>(csr.offsets[i]); k < static_cast<std::size_t>(csr.offsets[i + 1]); ++k) {
+                    const auto c = static_cast<std::size_t>(csr.columns[k]);
+                    const double v = csr.values[k];
+                    sum += v;
+                    scale += std::abs(v);
+                    if (c == i && v < 0) diag_neg += 1;
+                    if (c != i && v > 0) offdiag_pos += 1;
+                    if (c != i) {
+                        for (auto t = static_cast<std::size_t>(csr.offsets[c]); t < static_cast<std::size_t>(csr.offsets[c + 1]); ++t) {
+                            if (static_cast<std::size_t>(csr.columns[t]) == i) {
+                                asym = std::max(asym, std::abs(v - csr.values[t]) / std::max(std::abs(v), std::abs(csr.values[t])));
+                            }
+                        }
+                    }
+                }
+                if (scale > 0) rowsum = std::max(rowsum, std::abs(sum) / scale);
+            }
+            std::printf("  %s: ln d in [%.2f, %.2f], max rel asymmetry %.3g, max |row sum|/row l1 %.3g, "
+                        "negative diagonals %.0f, positive off-diagonals %.0f\n",
+                        names[field], lo, hi, asym, rowsum, diag_neg, offdiag_pos);
+            const std::vector<double> c = block_probe::rhs(static_cast<std::size_t>(blk.rows()));
+            const char* modes[] = {"near-null 1/d", "near-null d", "near-null 1"};
+            for (int mode = 0; mode < 3; ++mode) {
+                CandidateAmg m{mode};
+                block_probe::print(modes[mode], block_probe::run(blk, c, m));
+            }
         }
     }
 }

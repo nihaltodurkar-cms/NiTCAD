@@ -266,6 +266,90 @@ Coarsening coarsen(const Csr& a, double theta) {
     return out;
 }
 
+namespace {
+
+constexpr std::size_t no_entry = std::numeric_limits<std::size_t>::max();
+
+// The position of entry (row, col) in a's arrays, or no_entry.
+std::size_t find_entry(const Csr& a, std::size_t row, Index col) {
+    const auto first = a.columns.begin() + a.offsets[row];
+    const auto last = a.columns.begin() + a.offsets[row + 1];
+    const auto it = std::lower_bound(first, last, col);
+    return it != last && *it == col ? static_cast<std::size_t>(it - a.columns.begin()) : no_entry;
+}
+
+// Entry k = (i, j) of a and its partner t = (j, i) form a usable pair.
+bool usable(const Csr& a, std::size_t k, std::size_t t) {
+    if (t == no_entry) return false;
+    const double x = a.values[k];
+    const double y = a.values[t];
+    return x != 0.0 && y != 0.0 && (x > 0.0) == (y > 0.0) && std::isfinite(x) && std::isfinite(y);
+}
+
+}  // namespace
+
+Symmetrization symmetrize(const Csr& a) {
+    NITCAD_EXPECTS(a.rows == a.cols);
+    const std::size_t n = a.rows;
+    Symmetrization s;
+    std::vector<double> ln(n, 0.0);
+    std::vector<std::uint8_t> seen(n, 0);
+    std::vector<std::size_t> queue;
+    queue.reserve(n);
+    for (std::size_t i = 0; i < n; ++i) {
+        for (std::size_t k = at(a.offsets[i]); k < at(a.offsets[i + 1]); ++k) {
+            const std::size_t j = at(a.columns[k]);
+            if (j != i && !usable(a, k, find_entry(a, j, static_cast<Index>(i)))) ++s.unpaired;
+        }
+    }
+    for (std::size_t root = 0; root < n; ++root) {
+        if (seen[root]) continue;
+        ++s.components;
+        seen[root] = 1;
+        queue.clear();
+        queue.push_back(root);
+        for (std::size_t q = 0; q < queue.size(); ++q) {
+            const std::size_t i = queue[q];
+            for (std::size_t k = at(a.offsets[i]); k < at(a.offsets[i + 1]); ++k) {
+                const std::size_t j = at(a.columns[k]);
+                if (j == i || seen[j]) continue;
+                const std::size_t t = find_entry(a, j, static_cast<Index>(i));
+                if (!usable(a, k, t)) continue;
+                ln[j] = ln[i] + 0.5 * (std::log(std::abs(a.values[k])) - std::log(std::abs(a.values[t])));
+                seen[j] = 1;
+                queue.push_back(j);
+            }
+        }
+        double mean = 0.0;
+        for (const std::size_t u : queue) mean += ln[u];
+        mean /= static_cast<double>(queue.size());
+        for (const std::size_t u : queue) {
+            ln[u] -= mean;
+            if (std::abs(ln[u]) > symmetrization_clamp) {
+                ln[u] = std::copysign(symmetrization_clamp, ln[u]);
+                ++s.clamped;
+            }
+        }
+    }
+    s.d.resize(n);
+    for (std::size_t i = 0; i < n; ++i) s.d[i] = std::exp(ln[i]);
+    return s;
+}
+
+std::vector<double> symmetric_part(const Csr& a, std::span<const double> d) {
+    NITCAD_EXPECTS(a.rows == a.cols && d.size() == a.rows);
+    std::vector<double> v(a.nonzeros());
+    for (std::size_t i = 0; i < a.rows; ++i) {
+        for (std::size_t k = at(a.offsets[i]); k < at(a.offsets[i + 1]); ++k) {
+            const std::size_t j = at(a.columns[k]);
+            const double s_ij = d[i] * a.values[k] / d[j];
+            const std::size_t t = find_entry(a, j, static_cast<Index>(i));
+            v[k] = j != i && usable(a, k, t) ? 0.5 * (s_ij + d[j] * a.values[t] / d[i]) : s_ij;
+        }
+    }
+    return v;
+}
+
 }  // namespace amg
 
 AmgBackend::AmgBackend(const AmgSettings& settings, base::ThreadPool* pool)
@@ -546,6 +630,41 @@ void AmgBackend::solve(std::span<const double> b, std::span<double> x) {
     cycle(0);
     for (std::size_t i = 0; i < x.size(); ++i) x[i] = fine.x[i] / similarity_[i];
     ++counts_.solves;
+}
+
+SymmetrizedAmg::SymmetrizedAmg(const AmgSettings& settings, base::ThreadPool* pool)
+    : pool_(pool), amg_(settings, pool) {}
+
+std::expected<void, base::Error> SymmetrizedAmg::analyze(const SparseMatrix& a) {
+    NITCAD_EXPECTS(a.rows() == a.cols() && a.rows() > 0);
+    a_.rows = a_.cols = static_cast<std::size_t>(a.rows());
+    a_.offsets.assign(a.row_offsets().begin(), a.row_offsets().end());
+    a_.columns.assign(a.col_indices().begin(), a.col_indices().end());
+    a_.values.assign(a.nonzeros(), 0.0);
+    b_.assign(a_.rows, 0.0);
+    x_.assign(a_.rows, 0.0);
+    return amg_.analyze(a);
+}
+
+std::expected<Factorization, base::Error> SymmetrizedAmg::factorize(std::span<const double> csr_values) {
+    NITCAD_EXPECTS(csr_values.size() == a_.values.size());
+    std::ranges::copy(csr_values, a_.values.begin());
+    symmetrization_ = amg::symmetrize(a_);
+    const std::vector<double> s = amg::symmetric_part(a_, symmetrization_.d);
+    amg_.set_scales(symmetrization_.d, symmetrization_.d, true);
+    return amg_.factorize(s);
+}
+
+void SymmetrizedAmg::solve(std::span<const double> r, std::span<double> z) {
+    NITCAD_EXPECTS(r.size() == a_.rows && z.size() == r.size());
+    const std::span<const double> d = symmetrization_.d;
+    base::for_chunks(pool_, r.size(), amg::vector_chunk, [&](std::size_t begin, std::size_t end) {
+        for (std::size_t i = begin; i < end; ++i) b_[i] = d[i] * r[i];
+    });
+    amg_.solve(b_, x_);
+    base::for_chunks(pool_, z.size(), amg::vector_chunk, [&](std::size_t begin, std::size_t end) {
+        for (std::size_t i = begin; i < end; ++i) z[i] = x_[i] / d[i];
+    });
 }
 
 }  // namespace NiTCAD::linalg::detail

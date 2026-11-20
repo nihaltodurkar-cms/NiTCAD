@@ -18,6 +18,7 @@
 #include <vector>
 
 #include "../../src/linalg/cpr.hpp"
+#include "block_probe.hpp"
 #include "NiTCAD/linalg/linear_solver.hpp"
 #include "NiTCAD/linalg/sparse_matrix.hpp"
 #include "fixtures.hpp"
@@ -47,7 +48,7 @@ double bernoulli_derivative(double x) {
 // phi_n rising linearly by bias across x (0: thermal equilibrium, every flux zero).
 struct DriftDiffusion {
     SparseMatrix a;
-    std::vector<double> n, p;      // per node
+    std::vector<double> psi, n, p; // per node
     std::vector<int> contact;      // per node
     double lambda2 = 0.0;
     Index m = 0;
@@ -59,7 +60,8 @@ DriftDiffusion drift_diffusion(Index m, double doping, double lambda2, double bi
     d.m = m;
     d.lambda2 = lambda2;
     const auto nodes = static_cast<std::size_t>(m * m);
-    std::vector<double> psi(nodes);
+    std::vector<double>& psi = d.psi;
+    psi.resize(nodes);
     d.n.resize(nodes);
     d.p.resize(nodes);
     d.contact.assign(nodes, 0);
@@ -454,4 +456,118 @@ TEST_CASE("cpr: the potential system's AMG is built on the symmetric scaling of 
         }
     }
     REQUIRE(pairs > 100);
+}
+
+// Unit 63 MD2 (MG4): the algebraic symmetrization of a carrier block. The fixture's electron block
+// has a_kl / a_lk = e^(psi_k - psi_l) (holes the inverse), so D A D^-1 is symmetric with
+// d_l / d_k = e^(-(psi_l - psi_k) / 2) for electrons and e^(+...) for holes, derived here from the
+// fixture's potential, not from the matrix.
+TEST_CASE("cpr_amg symmetrization: Scharfetter-Gummel carrier blocks become symmetric (Unit 63 MG4)") {
+    namespace amg = NiTCAD::linalg::detail::amg;
+    for (const Index m : {Index{8}, Index{24}}) {
+        const DriftDiffusion d = drift_diffusion(m, 1e4, 0.05, 20.0);
+        for (const std::size_t field : {std::size_t{1}, std::size_t{2}}) {
+            CAPTURE(m, field);
+            const SparseMatrix b = block_probe::block(d.a, 3, field);
+            const auto csr = block_probe::to_csr(b);
+            const amg::Symmetrization s = amg::symmetrize(csr);
+            // Contacts are identity rows: one component each, plus the interior; the interior's
+            // entries towards a contact have no partner.
+            REQUIRE(s.components == static_cast<std::size_t>(2 * m + 1));
+            REQUIRE(s.unpaired == static_cast<std::size_t>(2 * m));
+            REQUIRE(s.clamped == 0);
+            const double sign = field == 1 ? -1.0 : 1.0;
+            std::size_t pairs = 0;
+            for (Index i = 0; i < b.rows(); ++i) {
+                const auto ui = static_cast<std::size_t>(i);
+                if (d.contact[ui]) continue;
+                for (Index k = b.row_offsets()[i]; k < b.row_offsets()[i + 1]; ++k) {
+                    const auto uj = static_cast<std::size_t>(b.col_indices()[k]);
+                    if (uj == ui || d.contact[uj]) continue;
+                    double a_ji = 0.0;
+                    for (Index t = b.row_offsets()[static_cast<Index>(uj)];
+                         t < b.row_offsets()[static_cast<Index>(uj) + 1]; ++t) {
+                        if (static_cast<std::size_t>(b.col_indices()[t]) == ui) a_ji = b.values()[t];
+                    }
+                    const double s_ij = s.d[ui] * b.values()[k] / s.d[uj];
+                    const double s_ji = s.d[uj] * a_ji / s.d[ui];
+                    REQUIRE(std::abs(s_ij - s_ji) <= 1e-13 * std::abs(s_ij));
+                    const double expected = std::exp(sign * (d.psi[uj] - d.psi[ui]) / 2.0);
+                    REQUIRE(std::abs(s.d[uj] / s.d[ui] - expected) <= 1e-12 * expected);
+                    ++pairs;
+                }
+            }
+            REQUIRE(pairs > static_cast<std::size_t>(4 * (m - 2) * (m - 3)));
+            // The symmetric part is S itself on the interior pairs.
+            const std::vector<double> v = amg::symmetric_part(csr, s.d);
+            for (std::size_t k = 0; k < v.size(); ++k) REQUIRE(std::isfinite(v[k]));
+        }
+    }
+}
+
+TEST_CASE("cpr_amg symmetrization: unusable pairs, components and the clamp (Unit 63 MG4)") {
+    namespace amg = NiTCAD::linalg::detail::amg;
+    SECTION("a sign-mismatched pair and a zero partner are not used") {
+        // 0-1 mismatched, 1-2 usable, 2-3 a stored zero partner.
+        const auto csr = block_probe::to_csr(from(4, {{0, 0, 2.0}, {0, 1, -1.0}, {1, 0, 1.0}, {1, 1, 2.0},
+                                                      {1, 2, -1.0}, {2, 1, -4.0}, {2, 2, 2.0}, {2, 3, -1.0},
+                                                      {3, 2, 0.0}, {3, 3, 2.0}}));
+        const amg::Symmetrization s = amg::symmetrize(csr);
+        REQUIRE(s.components == 3);  // {0}, {1, 2}, {3}
+        REQUIRE(s.unpaired == 4);
+        REQUIRE(s.d[0] == 1.0);
+        REQUIRE(s.d[3] == 1.0);
+        // ln d_2 - ln d_1 = (ln 1 - ln 4) / 2, mean 0: d_1 = sqrt(2), d_2 = 1 / sqrt(2).
+        REQUIRE(std::abs(s.d[1] - std::sqrt(2.0)) <= 1e-15);
+        REQUIRE(std::abs(s.d[2] - 1.0 / std::sqrt(2.0)) <= 1e-15);
+        const std::vector<double> v = amg::symmetric_part(csr, s.d);
+        REQUIRE(std::abs(v[4] - v[5]) <= 1e-15);  // (1, 2) and (2, 1): -2 both
+        REQUIRE(std::abs(v[4] + 2.0) <= 1e-15);
+    }
+    SECTION("a reverse-biased chain is clamped and stays finite") {
+        // a_{i,i+1} = -1, a_{i+1,i} = -e^-60: ln d rises by 30 per edge, 600 over the chain.
+        std::vector<Triplet> t;
+        const Index n = 21;
+        for (Index i = 0; i < n; ++i) {
+            t.push_back({i, i, 2.0});
+            if (i + 1 < n) {
+                t.push_back({i, i + 1, -1.0});
+                t.push_back({i + 1, i, -std::exp(-60.0)});
+            }
+        }
+        const auto csr = block_probe::to_csr(from(n, t));
+        const amg::Symmetrization s = amg::symmetrize(csr);
+        REQUIRE(s.components == 1);
+        REQUIRE(s.clamped == 6);  // |ln d| = 300, 270, 240 at either end
+        for (const double x : s.d) {
+            REQUIRE(std::isfinite(x * x));
+            REQUIRE(std::isfinite(1.0 / (x * x)));
+        }
+        for (const double x : amg::symmetric_part(csr, s.d)) REQUIRE(std::isfinite(x));
+    }
+}
+
+TEST_CASE("cpr_amg symmetrization: GMRES with the symmetrized AMG solves the carrier blocks") {
+    const DriftDiffusion d = drift_diffusion(24, 1e4, 0.05, 20.0);
+    for (const std::size_t field : {std::size_t{1}, std::size_t{2}}) {
+        CAPTURE(field);
+        const SparseMatrix b = block_probe::block(d.a, 3, field);
+        const std::vector<double> c = block_probe::rhs(static_cast<std::size_t>(b.rows()));
+        NiTCAD::linalg::detail::SymmetrizedAmg sym(block_probe::default_amg(), nullptr);
+        const block_probe::Outcome o = block_probe::run(b, c, sym);
+        REQUIRE(o.built);
+        REQUIRE(o.converged);
+    }
+}
+
+// MD1: the carrier blocks alone, by size (hidden; slice 0's measurement).
+TEST_CASE("cpr_amg probe: the fixture's blocks by size (Unit 63 MD1)", "[.carrier_blocks]") {
+    for (const Index m : {Index{24}, Index{48}, Index{96}, Index{192}}) {
+        const DriftDiffusion d = drift_diffusion(m, 1e4, 0.05, 20.0);
+        std::printf("\n=== fixture %lld^2\n", static_cast<long long>(m));
+        for (const std::size_t field : {std::size_t{0}, std::size_t{1}, std::size_t{2}}) {
+            const char* names[] = {"psi block", "electron block", "hole block"};
+            (void)block_probe::compare(names[field], block_probe::block(d.a, 3, field));
+        }
+    }
 }

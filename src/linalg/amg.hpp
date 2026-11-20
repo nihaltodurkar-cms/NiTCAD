@@ -104,6 +104,29 @@ struct Coarsening {
 };
 [[nodiscard]] Coarsening coarsen(const Csr& a, double theta);
 
+// Algebraic symmetrization (Unit 63 MD2): the diagonal D = diag(d) for which D A D^-1 is symmetric
+// wherever A allows it. A Scharfetter-Gummel continuity block has a_ij / a_ji = c_i / c_j (c the
+// equilibrium density's shape, times the rows' and columns' scales), so d = c^-1/2 makes it exactly
+// symmetric, found from the values alone:
+//     ln d_j - ln d_i = (ln|a_ij| - ln|a_ji|) / 2
+// along a breadth-first spanning forest of the usable off-diagonal pairs (both entries stored,
+// non-zero and of one sign), each component started at its lowest unknown and its neighbours taken
+// in column order (serial, deterministic). Each component's mean ln d is then shifted to 0 and ln d
+// clamped to +-symmetrization_clamp, so a reverse-biased block (ln d spanning hundreds) stays finite
+// and its squares do not overflow. An unknown with no usable pair is its own component (d = 1).
+inline constexpr double symmetrization_clamp = 230.0;  // |ln d| at most: d within 1e+-100
+struct Symmetrization {
+    std::vector<double> d;
+    std::size_t components = 0;
+    std::size_t unpaired = 0;  // off-diagonal entries not usable (partner absent, zero or of the other sign)
+    std::size_t clamped = 0;   // unknowns whose ln d was clamped
+};
+[[nodiscard]] Symmetrization symmetrize(const Csr& a);
+// The symmetric part of S = D A D^-1 on A's pattern: (S_ij + S_ji) / 2 on the usable pairs, S_ij
+// elsewhere (the diagonal, an absent, zero or opposite-signed partner: a contact row's stored zero
+// must not halve its neighbour's coupling, measured on the 3D diode's blocks). Equal to S when exact.
+[[nodiscard]] std::vector<double> symmetric_part(const Csr& a, std::span<const double> d);
+
 }  // namespace amg
 
 class AmgBackend final : public Backend<double> {
@@ -156,6 +179,32 @@ private:
     bool coarse_smoothed_ = false;             // the coarsening stalled: the last level is smoothed
     bool coarse_analyzed_ = false;
     bool built_ = false;
+};
+
+// One field's block preconditioner (Unit 63 MD2, MD3): the AMG above on the symmetric part of
+// S = D A D^-1 (amg::symmetrize), applied as z = D^-1 V(D r). The AMG gets S with the scales
+// R = C = d, which makes its own similarity the identity and its near-null vector 1/d: S's, since
+// A's is the equilibrium density c = d^-2 (zero flux) and S (D c) = D A c.
+class SymmetrizedAmg {
+public:
+    SymmetrizedAmg(const AmgSettings& settings, base::ThreadPool* pool);
+
+    // Copies A's pattern (square, non-empty, sorted unique columns).
+    [[nodiscard]] std::expected<void, base::Error> analyze(const SparseMatrix& a);
+    // d from these values, then the hierarchy on S's symmetric part (AmgBackend::factorize).
+    [[nodiscard]] std::expected<Factorization, base::Error> factorize(std::span<const double> csr_values);
+    // z = D^-1 V(D r): one V-cycle.
+    void solve(std::span<const double> r, std::span<double> z);
+
+    [[nodiscard]] const amg::Symmetrization& symmetrization() const noexcept { return symmetrization_; }
+    [[nodiscard]] const AmgBackend& amg() const noexcept { return amg_; }
+
+private:
+    base::ThreadPool* pool_;
+    AmgBackend amg_;
+    Csr a_;
+    amg::Symmetrization symmetrization_;
+    std::vector<double> b_, x_;
 };
 
 }  // namespace NiTCAD::linalg::detail
