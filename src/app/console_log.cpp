@@ -398,11 +398,15 @@ std::string points_text(const PointsTable& table, char sep) {
 }
 
 std::string console_rtf(const std::deque<LogLine>& lines, std::size_t from, LogFilter filter, bool continues,
-                        int points) {
-    // The colour table: 1 detail, 2 info, 3 header, 4 success, 5 warning, 6 error (on white, design D).
-    std::string out = "{\\rtf1\\ansi\\deff0{\\fonttbl{\\f0\\fmodern Consolas;}}"
-                      "{\\colortbl;\\red107\\green114\\blue128;\\red27\\green27\\blue27;\\red31\\green95\\blue191;"
-                      "\\red46\\green138\\blue70;\\red168\\green115\\blue12;\\red198\\green40\\blue40;}";
+                        int points, bool plain) {
+    // The colour table: 1 detail, 2 info, 3 header, 4 success, 5 warning, 6 error (on white); plain: all black,
+    // in Courier New, as a classic output window.
+    std::string out = plain ? "{\\rtf1\\ansi\\deff0{\\fonttbl{\\f0\\fmodern Courier New;}}{\\colortbl;"
+                              "\\red0\\green0\\blue0;\\red0\\green0\\blue0;\\red0\\green0\\blue0;\\red0\\green0\\blue0;"
+                              "\\red0\\green0\\blue0;\\red0\\green0\\blue0;}"
+                            : "{\\rtf1\\ansi\\deff0{\\fonttbl{\\f0\\fmodern Consolas;}}"
+                              "{\\colortbl;\\red107\\green114\\blue128;\\red27\\green27\\blue27;\\red31\\green95\\blue191;"
+                              "\\red46\\green138\\blue70;\\red168\\green115\\blue12;\\red198\\green40\\blue40;}";
     out += std::format("\\f0\\fs{} ", 2 * points);
     bool first = !continues;
     for (std::size_t k = from; k < lines.size(); ++k) {
@@ -410,7 +414,7 @@ std::string console_rtf(const std::deque<LogLine>& lines, std::size_t from, LogF
         if (!shows(filter, l.level)) continue;
         if (!first) out += "\\par\n";
         first = false;
-        const bool bold = l.level == LogLevel::header || l.level == LogLevel::error;
+        const bool bold = !plain && (l.level == LogLevel::header || l.level == LogLevel::error);
         out += std::format("\\cf{}{} ", static_cast<int>(l.level) + 1, bold ? "\\b" : "\\b0");
         for (const char16_t u : utf16(l.text)) {
             if (u == u'\\' || u == u'{' || u == u'}') {

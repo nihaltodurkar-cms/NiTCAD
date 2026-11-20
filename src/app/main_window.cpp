@@ -214,15 +214,16 @@ bool MainWindow::create_children() {
     results_ = std::make_unique<ResultsPage>(hwnd_, id_results);
     results_->on_pass = [this](std::size_t k) { results_show_pass(k); };
     metrics_ = make(L"STATIC", L"", WS_VISIBLE | SS_LEFTNOWORDWRAP | SS_CENTERIMAGE, hwnd_, id_metrics);
-    // Unit 26j (design D): the console at the bottom of the centre: a tool strip (its title; the tabs Points,
-    // Messages and Log; Clear, Copy, Save and the fold button) over the points table or the log, and a footer.
+    // Unit 26j: the console along the window's bottom, a classic output window: the tab's text (plain, black on
+    // white) or the points table over a tab strip (Output, Points, Messages); right-click for Copy, Save, Clear
+    // and Hide.
     console_panel_ = CreateWindowExW(WS_EX_CONTROLPARENT, panel_class, L"", WS_CHILD | WS_VISIBLE | WS_CLIPCHILDREN, 0, 0,
                                      10, 10, hwnd_, reinterpret_cast<HMENU>(static_cast<INT_PTR>(id_console)),
                                      GetModuleHandleW(nullptr), this);
-    make(L"STATIC", L"Console", WS_VISIBLE | SS_CENTERIMAGE, console_panel_, id_console_title);
     {
-        HWND tabs = make(WC_TABCONTROLW, L"", WS_VISIBLE | WS_TABSTOP | WS_CLIPSIBLINGS, console_panel_, id_console_tabs);
-        for (const wchar_t* t : {L"Points", L"Messages", L"Log"}) {
+        HWND tabs = make(WC_TABCONTROLW, L"", WS_VISIBLE | WS_TABSTOP | WS_CLIPSIBLINGS | TCS_BOTTOM, console_panel_,
+                         id_console_tabs);
+        for (const wchar_t* t : {L"Output", L"Points", L"Messages"}) {
             TCITEMW item{};
             item.mask = TCIF_TEXT;
             item.pszText = const_cast<wchar_t*>(t);
@@ -230,21 +231,16 @@ bool MainWindow::create_children() {
                          reinterpret_cast<LPARAM>(&item));
         }
     }
-    make(L"BUTTON", L"Clear", WS_VISIBLE | WS_TABSTOP, console_panel_, id_console_clear);
-    make(L"BUTTON", L"Copy", WS_VISIBLE | WS_TABSTOP, console_panel_, id_console_copy);
-    make(L"BUTTON", L"Save...", WS_VISIBLE | WS_TABSTOP, console_panel_, id_console_save);
-    make(L"BUTTON", L"", WS_VISIBLE | WS_TABSTOP, console_panel_, id_console_fold);
-    console_points_ = make(WC_LISTVIEWW, L"", WS_VISIBLE | WS_TABSTOP | LVS_REPORT | LVS_OWNERDATA | LVS_SINGLESEL |
-                                                  LVS_SHOWSELALWAYS,
+    console_points_ = make(WC_LISTVIEWW, L"", WS_TABSTOP | LVS_REPORT | LVS_OWNERDATA | LVS_SINGLESEL | LVS_SHOWSELALWAYS,
                            console_panel_, id_console_points, WS_EX_CLIENTEDGE);
     SendMessageW(console_points_, LVM_SETEXTENDEDLISTVIEWSTYLE, 0, LVS_EX_FULLROWSELECT | LVS_EX_DOUBLEBUFFER);
     LoadLibraryW(L"Msftedit.dll");
     console_ = make(MSFTEDIT_CLASS, L"",
-                    WS_VSCROLL | WS_HSCROLL | ES_MULTILINE | ES_READONLY | ES_AUTOVSCROLL | ES_AUTOHSCROLL | ES_NOHIDESEL,
+                    WS_VISIBLE | WS_VSCROLL | WS_HSCROLL | ES_MULTILINE | ES_READONLY | ES_AUTOVSCROLL | ES_AUTOHSCROLL |
+                        ES_NOHIDESEL,
                     console_panel_, id_console_text, WS_EX_CLIENTEDGE);
     SendMessageW(console_, EM_EXLIMITTEXT, 0, 0x7FFFFFFE);
     SendMessageW(console_, EM_SETTARGETDEVICE, 0, 1);  // no wrapping: the tables keep their columns
-    make(L"STATIC", L"", WS_VISIBLE | SS_LEFTNOWORDWRAP | SS_CENTERIMAGE, console_panel_, id_console_foot);
     inspector_ = CreateWindowExW(WS_EX_CONTROLPARENT, panel_class, L"", WS_CHILD | WS_VISIBLE | WS_CLIPCHILDREN, 0, 0,
                                  10, 10, hwnd_, reinterpret_cast<HMENU>(static_cast<INT_PTR>(id_inspector)),
                                  GetModuleHandleW(nullptr), this);
@@ -513,7 +509,6 @@ void MainWindow::apply_dpi(int dpi) {
     for (HWND c = GetWindow(console_panel_, GW_CHILD); c; c = GetWindow(c, GW_HWNDNEXT)) {
         if (c != console_) set(c);
     }
-    SendMessageW(GetDlgItem(console_panel_, id_console_title), WM_SETFONT, reinterpret_cast<WPARAM>(bold_), TRUE);
     SendMessageW(toolbar_, TB_AUTOSIZE, 0, 0);
     deck_->set_dpi(dpi);
     start_->set_dpi(dpi, font_, bold_);
@@ -666,9 +661,7 @@ void MainWindow::show_status(int part, const std::string& text) {
 }
 
 void MainWindow::log_line(LogLevel level, const std::string& text) {
-    SYSTEMTIME t{};
-    GetLocalTime(&t);
-    console_log_.add(level, std::format("[{:02}:{:02}:{:02}] {}", t.wHour, t.wMinute, t.wSecond, text));
+    console_log_.add(level, text);
     flush_console();
 }
 
@@ -689,7 +682,8 @@ DWORD CALLBACK read_rtf(DWORD_PTR cookie, LPBYTE buffer, LONG size, LONG* read) 
     return 0;
 }
 
-constexpr int tab_points = 0, tab_messages = 1, tab_log = 2;  // the console's tabs
+constexpr int tab_output = 0, tab_points = 1, tab_messages = 2;  // the console's tabs
+constexpr int menu_copy = 1, menu_save = 2, menu_clear = 3, menu_fold = 4;
 
 }  // namespace
 
@@ -699,7 +693,7 @@ LogFilter MainWindow::console_text_filter() const noexcept {
 
 // The log's lines since the last flush, appended to the rich edit (the whole text again when lines it shows
 // were dropped, or rebuild); it follows the end while the view is at the bottom, and stays put scrolled up.
-// The Messages tab shows warnings and errors, the Log tab everything. The footer and the Messages count too.
+// Output shows every line, Messages the warnings and errors, plain black text. The Messages count too.
 void MainWindow::flush_console(bool rebuild) {
     if (!console_) return;
     update_console_footer();
@@ -714,7 +708,7 @@ void MainWindow::flush_console(bool rebuild) {
     }
     console_shown_ = console_log_.total();
     if (!rebuild && adding == 0) return;
-    const std::string rtf = console_rtf(console_log_.lines(), from, filter, any_before);
+    const std::string rtf = console_rtf(console_log_.lines(), from, filter, any_before, 9, true);
     console_lines_shown_ = (rebuild ? 0 : console_lines_shown_) + adding;
 
     SCROLLINFO si{sizeof(si), SIF_ALL};
@@ -790,76 +784,68 @@ void MainWindow::update_points() {
 }
 
 void MainWindow::update_console_footer() {
-    const std::size_t warnings = console_log_.count(LogLevel::warning), errors = console_log_.count(LogLevel::error);
-    std::string text = points_.progress;
-    const auto add = [&](std::size_t n, std::string_view what) {
-        if (n == 0) return;
-        text += std::format("{}{} {}{}", text.empty() ? "" : " · ", n, what, n == 1 ? "" : "s");
-    };
-    add(warnings, "warning");
-    add(errors, "error");
-    win32::set_text(GetDlgItem(console_panel_, id_console_foot), text);
-    // The Messages tab carries their count.
-    const std::wstring label = warnings + errors == 0 ? std::wstring(L"Messages") : std::format(L"Messages ({})", warnings + errors);
+    // The Messages tab carries the count of warnings and errors.
+    const std::size_t n = console_log_.count(LogLevel::warning) + console_log_.count(LogLevel::error);
+    const std::wstring label = n == 0 ? std::wstring(L"Messages") : std::format(L"Messages ({})", n);
     TCITEMW item{};
     item.mask = TCIF_TEXT;
     item.pszText = const_cast<wchar_t*>(label.c_str());
     SendMessageW(GetDlgItem(console_panel_, id_console_tabs), TCM_SETITEMW, tab_messages, reinterpret_cast<LPARAM>(&item));
 }
-
+// The tab's text or table over the tab strip along the bottom (Output, Points, Messages); folded, the strip alone.
 void MainWindow::layout_console() {
     RECT r{};
     GetClientRect(console_panel_, &r);
-    const int pad = scaled(3, dpi_), gap = scaled(4, dpi_), row = scaled(22, dpi_), strip = scaled(console_strip_96, dpi_);
-    const int foot = scaled(18, dpi_);
-    const auto put = [&](int id, int x, int y, int width, int height) {
-        MoveWindow(GetDlgItem(console_panel_, id), x, y, std::max(width, 0), std::max(height, 0), TRUE);
-    };
-    // The strip: the title and the tabs on the left, Clear, Copy, Save and the fold button on the right.
-    const int title = scaled(58, dpi_), tabs = scaled(250, dpi_);
-    put(id_console_title, pad + gap, 0, title, strip);
-    put(id_console_tabs, pad + gap + title, pad + scaled(2, dpi_), tabs, strip - pad - scaled(2, dpi_));
-    int right = r.right - pad;
-    for (const auto& [id, width] : {std::pair{id_console_fold, scaled(26, dpi_)}, std::pair{id_console_save, scaled(64, dpi_)},
-                                    std::pair{id_console_copy, scaled(50, dpi_)}, std::pair{id_console_clear, scaled(50, dpi_)}}) {
-        right -= width;
-        put(id, right, (strip - row) / 2, width, row);
-        right -= gap;
-    }
-    // The body: the points table or the log, then the footer; none of it when folded.
+    const int strip = std::min<int>(scaled(22, dpi_), r.bottom);
+    const int body = std::max<int>(r.bottom - strip, 0);
     const bool open = !state_.layout.console_collapsed;
-    const int body = std::max<int>(r.bottom - strip - foot, 0);
-    MoveWindow(console_points_, 0, strip, r.right, body, TRUE);
-    MoveWindow(console_, 0, strip, r.right, body, TRUE);
-    put(id_console_foot, pad + gap, strip + body, r.right - 2 * (pad + gap), foot);
+    MoveWindow(console_points_, 0, 0, r.right, body, TRUE);
+    MoveWindow(console_, 0, 0, r.right, body, TRUE);
+    MoveWindow(GetDlgItem(console_panel_, id_console_tabs), 0, body, r.right, strip, TRUE);
     ShowWindow(console_points_, open && console_tab_ == tab_points ? SW_SHOW : SW_HIDE);
     ShowWindow(console_, open && console_tab_ != tab_points ? SW_SHOW : SW_HIDE);
-    ShowWindow(GetDlgItem(console_panel_, id_console_foot), open ? SW_SHOW : SW_HIDE);
-    win32::set_text(GetDlgItem(console_panel_, id_console_fold), open ? "▾" : "▴");
+}
+
+void MainWindow::console_menu(int x, int y) {
+    HMENU m = CreatePopupMenu();
+    AppendMenuW(m, MF_STRING, menu_copy, console_tab_ == tab_points ? L"Copy table" : L"Copy all");
+    AppendMenuW(m, MF_STRING, menu_save, console_tab_ == tab_points ? L"Save table..." : L"Save output...");
+    AppendMenuW(m, MF_STRING | (console_tab_ == tab_points ? MF_GRAYED : 0), menu_clear, L"Clear");
+    AppendMenuW(m, MF_SEPARATOR, 0, nullptr);
+    AppendMenuW(m, MF_STRING, menu_fold, state_.layout.console_collapsed ? L"Show" : L"Hide");
+    if (x == -1 && y == -1) {  // the keyboard's menu key: at the pane's corner
+        RECT r{};
+        GetWindowRect(console_panel_, &r);
+        x = r.left + scaled(8, dpi_);
+        y = r.top + scaled(8, dpi_);
+    }
+    const int chosen = TrackPopupMenu(m, TPM_RETURNCMD | TPM_RIGHTBUTTON, x, y, 0, hwnd_, nullptr);
+    DestroyMenu(m);
+    on_console(chosen, BN_CLICKED);
 }
 
 void MainWindow::on_console(int id, int code) {
     if (code != BN_CLICKED) return;
-    if (id == id_console_clear) {
+    if (id == menu_clear) {
         console_log_.clear();
         console_lines_shown_ = 0;
         flush_console(true);
-    } else if (id == id_console_copy) {
+    } else if (id == menu_copy) {
         copy_console();
-    } else if (id == id_console_save) {
+    } else if (id == menu_save) {
         const bool table = console_tab_ == tab_points;
         const fs::path p = table ? win32::save_dialog(hwnd_, L"CSV (*.csv)\0*.csv\0All files\0*.*\0", L"Save the points table", L"csv")
                                  : win32::save_dialog(hwnd_, L"Logs (*.log)\0*.log\0Text (*.txt)\0*.txt\0All files\0*.*\0",
-                                                      L"Save the console log", L"log");
+                                                      L"Save the output", L"log");
         if (!p.empty()) save_console(p);
-    } else if (id == id_console_fold) {
+    } else if (id == menu_fold) {
         set_console_collapsed(!state_.layout.console_collapsed);
     }
 }
-
 LRESULT MainWindow::on_console_notify(const NMHDR& n, LPARAM l) {
     if (n.idFrom == static_cast<UINT_PTR>(id_console_tabs) && n.code == TCN_SELCHANGE) {
         set_console_tab(static_cast<int>(SendMessageW(n.hwndFrom, TCM_GETCURSEL, 0, 0)));
+        set_console_collapsed(false);  // a tab clicked on the folded console opens it
         return 0;
     }
     if (n.hwndFrom != console_points_) return 0;
@@ -905,7 +891,7 @@ LRESULT MainWindow::on_console_notify(const NMHDR& n, LPARAM l) {
 }
 
 void MainWindow::set_console_tab(int tab) {
-    if (tab < tab_points || tab > tab_log) return;
+    if (tab < tab_output || tab > tab_messages) return;
     const bool text_changed = (tab == tab_messages) != (console_tab_ == tab_messages);
     console_tab_ = tab;
     SendMessageW(GetDlgItem(console_panel_, id_console_tabs), TCM_SETCURSEL, static_cast<WPARAM>(tab), 0);
@@ -946,7 +932,7 @@ bool MainWindow::save_console(const fs::path& path) {
         set_status(status_state, "Could not write " + path.filename().string(), LogLevel::error);
         return false;
     }
-    set_status(status_state, (table ? "Saved the points table to " : "Saved the console log to ") + path.filename().string());
+    set_status(status_state, (table ? "Saved the points table to " : "Saved the output to ") + path.filename().string());
     return true;
 }
 
@@ -2874,6 +2860,12 @@ LRESULT CALLBACK MainWindow::panel_proc(HWND hwnd, UINT message, WPARAM w, LPARA
             return 0;
         case WM_NOTIFY:
             if (hwnd == self->console_panel_) return self->on_console_notify(*reinterpret_cast<const NMHDR*>(l), l);
+            break;
+        case WM_CONTEXTMENU:
+            if (hwnd == self->console_panel_) {
+                self->console_menu(GET_X_LPARAM(l), GET_Y_LPARAM(l));
+                return 0;
+            }
             break;
         case WM_HSCROLL:  // a slider (Unit 26c, YD5, YD6)
             if (l != 0) self->on_slider(reinterpret_cast<HWND>(l));

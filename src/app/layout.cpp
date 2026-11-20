@@ -39,13 +39,8 @@ Panes layout_panes(int client_width, int client_height, int dpi, const Layout& s
         tree = total / 2;
         inspector = total - tree;
     }
-    p.tree = {0, top, tree, body};
-    p.left_splitter = {tree, top, split, body};
-    p.inspector = {w - inspector, top, inspector, body};
-    p.right_splitter = {p.inspector.x - split, top, split, body};
-    const int cx = p.left_splitter.right(), cw = std::max(p.right_splitter.x - cx, 0);
-    // The centre top to bottom: the tab strip, the page, the metrics strip, a splitter and the console (Unit 26j:
-    // as tall as saved, or only its tool strip when folded), the console lowered so the page keeps a minimum.
+    // Unit 26j: the console along the window's bottom, full width, under a splitter: as tall as saved (only its
+    // tab strip when folded), lowered so the centre's page keeps a minimum.
     const int strip = std::min(scaled(tab_strip_96, dpi), body);
     const int csplit = std::min(split, body - strip);
     int console = scaled(saved.console_collapsed ? console_strip_96
@@ -53,14 +48,18 @@ Panes layout_panes(int client_width, int client_height, int dpi, const Layout& s
                          dpi);
     const int room = body - strip - scaled(metrics_height_96, dpi) - csplit - scaled(min_page_96, dpi);
     console = std::clamp(console, 0, std::max(room, 0));
-    const int centre_h = body - csplit - console;
-    p.tabs = {cx, top, cw, centre_h};
-    const int metrics = std::clamp(scaled(metrics_height_96, dpi), 0, centre_h - strip);
-    p.page = {cx, top + strip, cw, centre_h - strip - metrics};
-    p.metrics = {cx, p.page.bottom(), cw, metrics};
-    p.console_splitter = {cx, p.metrics.bottom(), cw, csplit};
-    p.console = {cx, p.console_splitter.bottom(), cw, console};
-    return p;
+    const int upper = body - csplit - console;  // the columns' height
+    p.console_splitter = {0, top + upper, w, csplit};
+    p.console = {0, p.console_splitter.bottom(), w, console};
+    p.tree = {0, top, tree, upper};
+    p.left_splitter = {tree, top, split, upper};
+    p.inspector = {w - inspector, top, inspector, upper};
+    p.right_splitter = {p.inspector.x - split, top, split, upper};
+    const int cx = p.left_splitter.right(), cw = std::max(p.right_splitter.x - cx, 0);
+    p.tabs = {cx, top, cw, upper};
+    const int metrics = std::clamp(scaled(metrics_height_96, dpi), 0, upper - strip);
+    p.page = {cx, top + strip, cw, upper - strip - metrics};
+    p.metrics = {cx, p.page.bottom(), cw, metrics};    return p;
 }
 
 }  // namespace NiTCAD::app

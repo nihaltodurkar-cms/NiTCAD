@@ -176,9 +176,9 @@ public:
     [[nodiscard]] const std::string& readout_text() const noexcept { return readout_text_; }
     [[nodiscard]] bool hover_readout() const noexcept { return state_.hover_readout; }
     [[nodiscard]] const AppState& app_state() const noexcept { return state_; }
-    // Unit 26j (design D): the console at the bottom of the centre: its log; the tab shown (0 Points,
-    // 1 Messages, 2 Log, as clicking the tab strip sets it); the points table and the rows its list shows; the
-    // lines the log's rich edit shows; folded or not (the fold button); Copy and Save (the table, or the
+    // Unit 26j: the console along the bottom, a classic output window: its log; the tab shown (0 Output,
+    // 1 Points, 2 Messages, as clicking the tab strip sets it); the points table and the rows its list shows; the
+    // lines the log's rich edit shows; folded or not (Hide on its menu); Copy and Save (the table, or the
     // tab's lines); whether the tab's body is shown.
     [[nodiscard]] const ConsoleLog& console_log() const noexcept { return console_log_; }
     [[nodiscard]] int console_tab() const noexcept { return console_tab_; }
@@ -210,8 +210,7 @@ public:
         // Unit 26h (JD1): the axis box.
         id_axis_box,
         // Unit 26j: the console's rich edit and tool strip.
-        id_console_text, id_console_title, id_console_tabs, id_console_clear, id_console_copy, id_console_save,
-        id_console_fold, id_console_points, id_console_foot,
+        id_console_text, id_console_tabs, id_console_points,
         id_first_label = 5100,
     };
 
@@ -239,6 +238,7 @@ private:
     void flush_console(bool rebuild = false);
     void layout_console();
     void on_console(int id, int code);
+    void console_menu(int x, int y);  // the right-click menu at a screen point (-1, -1: the menu key)
     LRESULT on_console_notify(const NMHDR& n, LPARAM l);
     void update_points();
     void update_console_footer();

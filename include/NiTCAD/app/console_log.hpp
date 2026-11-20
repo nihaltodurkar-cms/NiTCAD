@@ -117,9 +117,9 @@ private:
 };
 
 // Rich text of lines (those the filter shows), for a rich edit: a colour per level on white,
-// Consolas at `points` size; `continues` starts with a paragraph break (appending to shown text).
+// Consolas at `points` size (plain: black Courier New, no bold); `continues` starts with a paragraph break (appending to shown text).
 // Lines from index `from` on.
 [[nodiscard]] std::string console_rtf(const std::deque<LogLine>& lines, std::size_t from, LogFilter filter,
-                                      bool continues, int points = 9);
+                                      bool continues, int points = 9, bool plain = false);
 
 }  // namespace NiTCAD::app
