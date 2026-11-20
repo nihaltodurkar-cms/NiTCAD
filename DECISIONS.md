@@ -2148,7 +2148,14 @@ ILUT, one solve; peak memory as the solver's held private bytes):
   pool has no reduction, and a per-index kernel gives the same bits for any chunk size. A solver that ignores its
   pool gives the same bits too; only the timing shows it.
 - **Tests run (Release, targeted):** `nitcad_base_test` (15 cases), `nitcad_linalg_test` (83), `nitcad_solve_test
-  "[gmres]"` (4), `[.scale_threads]`. Not run: the full Release and Debug suites (owner's word), NG1-style traces.
+  "[gmres]"` (4), `[.scale_threads]`.
+- **Full suites (owner "run full suite and debug tests", 2026-11-20), at `b4342aa`:** Release 251/251 pass (808 s);
+  Debug 230/230 pass (2251 s). The Debug build first failed on `main`'s own code, not this branch's:
+  `tests/solve/quantum_confinement_test.cpp` (Unit 62, merged as PR #102 before its CI finished) had a `FAIL` before
+  a `return` in a lambda, which is C4702 (unreachable code) under `/WX` in Debug. Fixed here (the lambda returns an
+  error whose message the test's check rejects) and the Debug suite ran with the fix; the Release run predates the
+  fix, which only touches that test. On the rebase onto main 737cfc3 (2026-11-20) this file takes main's own fix
+  (PR #103, 9fdffca: `FAIL_CHECK` before the return), so the branch no longer changes it. Not run: NG1-style traces.
 
 ## New questions the advisor raised (not yet in `ARCHITECTURE.md`)
 
