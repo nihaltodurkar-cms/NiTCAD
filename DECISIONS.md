@@ -1124,6 +1124,13 @@ stopped on the owner's word "dont start debug until i say"; the full suites not 
 | NG6 | **Met.** The strip on the 3D MOSFET: unchanged over camera moves for the potential, the electrons and mesh quality; the electrons' differs from the potential's; back from quality to the field, the field's again; on opening the 2D MOSFET, its own size, triangles, no tetrahedra, and XG7's quality figures. After each field change the window's frame is the scene's, drawn in full. |
 | NG7 | **Met.** `/W4 /WX` clean. 8 of 8 hand mutants caught: `Viewport::show` taking the camera path (2 failures), the batch sizes not compared (crash), the axis box not rebuilt (crash), the kept buffers not dropped by a plot (1), the `WM_PAINT` coalescing bypassed (4), no workspace generation bump (4), no field generation bump (1), the camera constants kept from the first frame (2). Two first forms survived as equivalent mutants (one bump removed of several that fire on the same path), and the first form of the coalescing mutant did not compile under `/WX` (unreachable code). They were rerun in the forms above. |
 
+- **NG5 measured on the GPU, on the owner's word "fix it" (2026-11-20).** The private-bytes check was flaky: after
+  the hundred-change warm-up (`3e16edc`) it still failed PR 105's CI run (1.013) and one local run in three (1.017),
+  because WARP's and the CRT's heaps drift 1–2.5 MB in 100 changes whatever the renderer keeps. NG5 is about GPU
+  memory, so the test now measures that: the process's D3D12 memory on the WARP adapter (DXGI
+  `QueryVideoMemoryInfo`, local plus non-local), after one change and after a hundred more, within NG5's 1% (not
+  loosened). It is the same to the byte (19,202,048 bytes; ratio 1.0 in 5 of 5 runs), the warm-up draws are gone,
+  and a mutant that keeps every replaced `ResidentGeometry` alive gives 10.9. `nitcad_render_test` links `dxgi`.
 - **Design change, ND2:** no scene revision counter. In the app the scene changes only through `Viewport::show`,
   which presents in full, so the target's scene address and batch sizes, with the Debug hash, are enough. NG2
   tests the cases.
