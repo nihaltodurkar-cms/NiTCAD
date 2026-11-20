@@ -1398,6 +1398,97 @@ WARP) with DirectWrite labels.
 - The mesh (152 cases), deck (9 failures as expected, unchanged), app (92) and window (48) suites pass; full ctest
   suites not run.
 
+### Unit 26l — 3D solid modeller (proposed 2026-11-21; on `app/solid-modeller`)
+
+**Owner request (2026-11-21):** "Full 3D solid modeller", picked over an extrusion editor (a 2D cross-section swept
+along one axis) and over editing a 3D deck's cross-section in the 3D view. The branch starts from
+`app/geometry-validation` `0e9d1ed` (Unit 26k slices 3–4, PR #110 open), since it reuses the 2D editor's model,
+page and validation code.
+
+**Where things stand.** A 3D device is typed. `generate3d` takes one convex polyhedron (a `cuboid`), split by
+planar interfaces into slabs; `extrude3d` takes a conforming 2D tiling of cells, swept through stations, a region
+per cell and section, contacts as patch boxes. Under both lies the polyhedral-complex generator (Unit 53: non-convex
+volumes, many regions, interfaces with feature lines, patches on facets), which takes vertices, planar facets and
+closed volumes, but no deck writes such a complex directly. Nothing in 3D can be drawn; the 3D view only shows
+results.
+
+**The model the modeller uses** is the 2D editor's, one dimension up. Solids are layered: a background region fills
+a box domain, and every solid after it replaces what it covers. The complex the generator takes (conforming facets,
+bit-identical shared vertices, edges in exactly two facets per volume) is computed from the layers, never built by
+hand.
+
+**Standing conditions:** as Unit 26k. The deck is the only source of truth: the modeller reads the deck and writes
+deck text through the deck editor's undo. Every deck that builds today builds to the same bits (the new keys are
+opt-in). Win32 + D3D12 + Direct2D only, no new dependency. The model has no Win32 type. Criteria are fixed before
+code. Targeted Release tests per slice, full suites and Debug only on the owner's word. No screen automation.
+Nothing pushed or merged without authorization.
+
+**Left out (later units):** curved solids (cylinders, spheres; faceted, they would mostly break the generator's
+60-degree interface rules); arbitrary oblique planes (see SQ4); boolean subtraction other than layering (a void is a
+solid of the background region or of `void`); drawing doping; process emulation (etch, deposit); importing
+STEP/GDS; relaxing the 3D generator's interface rules (mesh work, its own unit).
+
+**Design:**
+
+| # | Slice | Change | Notes |
+|---|---|---|---|
+| SD1 | 0 | **Layered 3D decks.** `[mesh] type = generate3d` gains `layered = on` (default off). Layered, the domain is `[mesh] domain = x0 x1 y0 y1 z0 z1`. One region without solids is the background. Regions give `box = x0 x1 y0 y1 z0 z1` or `prism = <axis> <lo> <hi>, u0 v0, u1 v1, ...` (a simple polygon in the plane across the axis, extruded from lo to hi). Solids apply in deck order, each replacing what it covers. Contacts and boundary patches as `extrude3d`'s: `patch <name> = x0 y0 z0  x1 y1 z1` (boundary facets inside the box take its name). | Opt-in; meshed by the polyhedral generator. |
+| SD2 | 0 | **The 3D partition kernel** (`mesh::layered_partition3d`, mesh layer, exact for axis-parallel faces): the layers resolved into a `PolyhedralGeometry` that passes `check_complex`. Rectilinear solids in slice 0 (boxes, and prisms of rectilinear polygons): an overlay of every solid's breakpoints on the three axes, each cell to its topmost solid, cells merged into maximal blocks per region (rows, then slabs). Facets split where neighbours' faces meet (T-junction vertices inserted on shared edges, so facets meet edge to edge). Interfaces and boundary facets on one plane are merged where the generator's piece rules want one polygon. | Coordinates are the inputs' own doubles; shared vertices bit-identical by construction. |
+| SD3 | 1 | **The solid model** (`app::solid`, no Win32): the domain, the solids (name, material, box or prism, order), the contacts (patch boxes on boundary faces), read from a layered `generate3d` deck and written back by minimal edits (only the `[mesh]` geometry keys and the regions' `box`/`prism` lines change; comments, order and every other section kept). An `extrude3d` deck reads as one prism per cell and section run, exact (SQ5). Edits as operations: add, delete, move, resize a face, set a prism vertex, insert/remove a vertex, rename, set material, reorder, duplicate, mirror, add/move/resize a contact; each one deck edit, one undo step. Snapping: a grid on the work plane (1, 2, 5 × 10ⁿ µm from the zoom), vertices, edge midpoints, edges, faces; coordinates quantized to 0.1 nm. | Reuses 26k's quantum, deck writer and undo. |
+| SD4 | 2 | **The 3D modeller** on the Geometry tab for 3D decks (SQ3). A D3D12 viewport through the render layer: solids shaded by material colour in layer order, edges outlined, the selection highlighted, a translucent mode and a section plane to see buried solids. A work plane (XY, YZ, ZX, or a picked face's plane) with its grid. Orbit, pan and zoom as the 3D view; the axes triad and view presets (26h). Picking by exact ray tests in model coordinates. A move gizmo (axis arrows, plane squares), face handles (a face dragged along its normal resizes), vertex handles on prisms. Tools: Select, Box (a rectangle on the work plane, then its height), Prism (a polygon on the work plane, then its height), Contact (a rectangle on a boundary face), Pan, Measure (3D distance). The inspector's Geometry section with numeric fields (x/y/z ranges, the prism's axis, extent and vertex list). | Hit tests in screen pixels (handles 7 px at 96 dpi, scaled). |
+| SD5 | 3 | **Live validation and mesh preview:** the layout checked as it changes with the build's own checks (the partition, `check_complex`, the generator's interface and patch rules), each problem a marker in the viewport (the solid, the contact, the points the mesher names in (x, y, z)) and a line in the console's Messages; Run disabled with the reason while invalid. **Mesh preview:** the surface mesh (boundary and interface triangles) overlaid in the viewport. | As GD9. |
+| SD6 | 4 | **Slanted prism faces** (trapezoidal fins, STI sidewalls): a prism's polygon may slant (26k's 2D kernel on each cross-section), so its oblique faces are parallel to the prism's axis (SQ4). | Exactness argued in SQ4. |
+| SD7 | — | **Commits:** one branch, this proposal, a commit per slice, then ARCHITECTURE (the app's chapter, the mesh chapter's partition, and the 11.x row) and the records. The owner may stop after any slice. | |
+
+**Criteria (fixed before code; a target missed is recorded as a limitation, never loosened):**
+
+| # | Criterion |
+|---|---|
+| SE1 | **Nothing else moves:** every example and test deck builds to the same bits as before (the existing deck and mesh tests unchanged and passing). |
+| SE2 | **Partition exact:** for 1000 seeded random rectilinear layouts (up to 20 solids, boxes and rectilinear prisms on all three axes, past the domain and overlapping, voids included), the kernel's complex passes `check_complex`. The region at each of 200 random sample points equals the topmost covering solid's (exact side tests). The volume per region equals the exact layered volume (integer lattice, so exact in double). A layered deck describing an existing `extrude3d` device (the reduced FinFET) builds, with region volumes and contact areas equal to the `extrude3d` deck's to 1e-12. |
+| SE3 | **Round trip:** every 3D layered fixture deck read into the model and written back with no edit gives byte-identical text. After an edit, only the geometry lines differ (line diff), and the deck builds. |
+| SE4 | **Undo:** a seeded sequence of 200 random edits, each undone in reverse, restores the deck text byte-identical at every step; redo replays it. |
+| SE5 | **Speed:** an orbit or a drag (move or face resize) redraws in ≤ 16 ms per frame median on WARP with 100 solids. The partition of 100 random boxes takes ≤ 50 ms. The deck written back per edit ≤ 2 ms. |
+| SE6 | **Picking:** solids, faces, edges, vertices, gizmo handles and contacts picked correctly at 96, 144 and 192 dpi, at zooms 1e-2 to 1e4 px/µm and at six camera directions (the presets) plus two oblique ones (table test). |
+| SE7 | **Validation agrees with the build:** for a table of invalid layouts the modeller's message equals the deck build's error and its markers are where expected; every valid one builds. |
+| SE8 | **Interaction:** window tests drive the viewport by messages (no screen automation): draw a box on the work plane and give its height, move it with the gizmo, resize a face, draw a prism and edit a vertex, draw a contact on a face, undo/redo; the deck text and device are as expected. A drawn 3D MOSFET (substrate, oxide, gate, source, drain, body; coarse, at most 20k nodes) runs its equilibrium and one gate bias. |
+| SE9 | **Mutants:** at least 8 per slice caught (e.g. the replace order reversed; a T-junction vertex not inserted; a facet left unsplit; a ray test off by a face; the quantum dropped; undo of a reorder not restoring the order). |
+| SE10 | **Layering:** the model in `app` without Win32 headers; the kernel in `mesh` without `app` or `deck`; no new dependency. |
+
+**Questions (each with a recommendation; ruled by the standing "choose recommended" rule, 2026-11-11):**
+
+- **SQ1 — what the deck stores.** (a) The layered solids (`layered = on`, `box`/`prism` lines), the user's intent
+  kept, meshed through the polyhedral generator. (b) The computed complex (vertices, facets, volumes) written into
+  the deck: exact but unreadable, and a reopened deck has lost which solid was drawn over which.
+  **Recommended (a)**, ruled (a).
+- **SQ2 — primitives.** (a) Boxes and prisms (a polygon extruded along any axis), which cover planar MOSFETs, FinFETs,
+  nanosheet stacks, STI and wrap gates. (b) Also faceted cylinders and spheres. (c) General polyhedra.
+  **Recommended (a)**: (b) mostly fails the generator's 60-degree interface rules, and (c) needs a general 3D
+  arrangement with oblique planes (SQ4). Ruled (a).
+- **SQ3 — where the modeller lives.** (a) The Geometry tab shows the 2D editor for 2D decks and the 3D modeller for
+  3D decks; New 3D layout starts one. (b) A separate tab. **Recommended (a)**: one place to shape a device; ruled (a).
+- **SQ4 — slanted faces.** (a) Slice 4 allows only oblique faces parallel to a prism's axis. A cut across the axis
+  keeps the face's vertices exact (the cut's coordinate exact, the others the polygon's own). A cut along the axis
+  meets the face in a line through a rounded 2D crossing, shared as in 26k slice 4. The split face then lies on two
+  exactly planar quads meeting at a fold of about an ulp, which `check_complex` accepts. Whether the generator
+  accepts such near-coplanar interface pieces is not known: where it refuses, the editor says so and the layout is
+  marked (recorded, not loosened). (b) Arbitrary oblique planes: rounded points off their planes break exact
+  planarity, so this needs exact rational vertices or a snap-rounding scheme, which is a research item.
+  **Recommended (a)**, ruled (a).
+- **SQ5 — `extrude3d` decks.** (a) Read into the model as prisms, exact (each cell's run of equal sections is one
+  prism along the axis). The first edit writes the deck as layered `generate3d`, offered by a button with the change
+  of mesh type said. (b) Edited in place as an extrusion. **Recommended (a)**: one 3D model; the extrusion's swept
+  mesh is kept until the button is used. Ruled (a).
+- **SQ6 — the generator's interface rules** (60-degree sectors, 4 s spacing, no holed pieces, no trace at a domain
+  corner, …). (a) Kept: the modeller shows each refusal on the layout. (b) Relaxed in this unit.
+  **Recommended (a)**: relaxing them is mesh work with its own criteria. Many drawn layouts will need a small gap or
+  an overlap to pass, and SE8's MOSFET is drawn to pass. Ruled (a).
+
+**Risks (recorded up front):** the 3D generator's rules are strict (SQ6), so whether a typical drawn device builds
+depends on them; slice 3's validation is how this shows. 3D runs are slow (the FinFET takes 18 min on 6 threads),
+so SE8's device is coarse. The D3D12 viewport's picking and gizmos are new code in the render path, so SE5 and SE6
+are the gates there.
+
 ### Unit 62 — density-gradient quantum confinement, opt-in (proposed 2026-11-19; on `physics/density-gradient`)
 
 **Owner request (2026-11-19):** "Plan for Density-gradient confinement (Commercial TCAD feature type)". This is the
