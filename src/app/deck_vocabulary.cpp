@@ -34,7 +34,7 @@ constexpr std::array<std::string_view, 2> equations{"drift_diffusion", "equilibr
 constexpr std::array<std::string_view, 3> line_search{"off", "residual", "natural"};
 constexpr std::array<std::string_view, 2> natural_norm{"convergence", "weighted"};
 constexpr std::array<std::string_view, 4> backends{"eigen", "pardiso", "gmres", "gmres_ilut"};
-constexpr std::array<std::string_view, 3> preconditioners{"ilut", "amg", "cpr"};
+constexpr std::array<std::string_view, 4> preconditioners{"ilut", "amg", "cpr", "cpr_amg"};
 constexpr std::array<std::string_view, 2> fallbacks{"sparse_lu", "none"};
 constexpr std::array<std::string_view, 2> integrators{"bdf2", "backward_euler"};
 constexpr std::array<std::string_view, 6> waveforms{"constant", "step", "ramp", "pulse", "pwl", "sine"};

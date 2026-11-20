@@ -571,3 +571,127 @@ TEST_CASE("cpr_amg probe: the fixture's blocks by size (Unit 63 MD1)", "[.carrie
         }
     }
 }
+
+// Unit 63 slice 1 (MD3): preconditioner = cpr_amg, stage 2 a block Gauss-Seidel sweep of
+// symmetrized AMG per field (no ILUT).
+namespace {
+
+constexpr SolverConfig cpr_amg_strict{.backend = SolverBackend::gmres_ilut,
+                                      .fallback = LinearFallback::none,
+                                      .preconditioner = Preconditioner::cpr_amg};
+
+}  // namespace
+
+TEST_CASE("cpr_amg: the configuration, the blocks and the falling threshold") {
+    // Complex matrices are refused, as for amg and cpr; the labels are required.
+    REQUIRE(ComplexLinearSolver::create(cpr_amg_strict).error().code == ErrorCode::invalid_input);
+    SolverConfig lu = cpr_amg_strict;
+    lu.backend = SolverBackend::eigen_sparse_lu;
+    REQUIRE(LinearSolver::create(lu).error().code == ErrorCode::invalid_input);
+    const DriftDiffusion d = drift_diffusion(12, 1e3, 0.05, 5.0);
+    auto unlabelled = LinearSolver::create(cpr_amg_strict).value();
+    REQUIRE(unlabelled.factorize(d.a).error().code == ErrorCode::invalid_input);
+    // The backend: one block per field, in label order, each a third of the unknowns, built with
+    // the amg_* settings and strength_decay 1/2.
+    const auto nodes = static_cast<std::size_t>(12 * 12);
+    NiTCAD::linalg::detail::CprBackend backend(block_probe::default_amg(), 1e-4, 10, nullptr,
+                                               NiTCAD::linalg::detail::CprBackend::Stage2::block_amg);
+    REQUIRE(backend.set_fields(labels_for(nodes)));
+    REQUIRE(backend.analyze(d.a).has_value());
+    REQUIRE(backend.factorize(d.a.values()).has_value());
+    REQUIRE(std::ranges::equal(backend.block_fields(), std::vector<std::int32_t>{0, 1, 2}));
+    // The potential block is stage 1's (Sweep::carriers): analyzed, not factorized.
+    REQUIRE(backend.block_amg(0).symmetrization().d.empty());
+    for (std::size_t f = 1; f < 3; ++f) {
+        REQUIRE(backend.block_amg(f).symmetrization().d.size() == nodes);
+    }
+    REQUIRE(backend.counts().stage2_retries == 0);
+    REQUIRE(NiTCAD::linalg::detail::CprBackend::block_strength_decay == 0.5);
+}
+
+TEST_CASE("cpr_amg: GMRES with cpr_amg solves drift-diffusion Jacobians, equilibrium and biased") {
+    for (const Index m : {Index{24}, Index{48}, Index{96}}) {
+        for (const double bias : {0.0, 20.0}) {
+            const DriftDiffusion d = drift_diffusion(m, 1e4, 0.05, bias);
+            const auto nodes = static_cast<std::size_t>(m * m);
+            const std::vector<double> b = rhs(3 * nodes);
+            CAPTURE(m, bias);
+            const Solved s = solve_with(d.a, b, cpr_amg_strict, labels_for(nodes));
+            REQUIRE_FALSE(s.report.fell_back);
+            const Solved c = solve_with(d.a, b, cpr_strict, labels_for(nodes));
+            std::printf("cpr_amg: %zu unknowns, bias %g: GMRES-CPR-AMG %zu, GMRES-CPR %zu iterations\n",
+                        b.size(), bias, s.report.iterations.value_or(0), c.report.iterations.value_or(0));
+        }
+    }
+}
+
+TEST_CASE("cpr_amg: an unknown in no node (a bordering row) takes a Gauss-Seidel step") {
+    const Index m = 16;
+    const DriftDiffusion d = drift_diffusion(m, 1e3, 0.05, 5.0);
+    const auto nodes = static_cast<std::size_t>(m * m);
+    const auto n = static_cast<Index>(3 * nodes);
+    std::vector<Triplet> t;
+    for (Index r = 0; r < n; ++r) {
+        for (Index k = d.a.row_offsets()[r]; k < d.a.row_offsets()[r + 1]; ++k) {
+            t.push_back({r, d.a.col_indices()[k], d.a.values()[k]});
+        }
+    }
+    for (Index j = 0; j < m; ++j) t.push_back({3 * j * m, n, -1.0});
+    for (Index r = 0; r < n; r += 7) t.push_back({n, r, 0.01});
+    t.push_back({n, n, 1.0});
+    const SparseMatrix bordered = from(n + 1, t);
+    const std::vector<double> b = rhs(static_cast<std::size_t>(n) + 1);
+    const Solved s = solve_with(bordered, b, cpr_amg_strict, labels_for(nodes, 1));
+    REQUIRE_FALSE(s.report.fell_back);
+}
+
+TEST_CASE("cpr_amg: every thread count gives the one-thread bits (Unit 63 MG2)") {
+    const Index m = 64;
+    const DriftDiffusion d = drift_diffusion(m, 1e4, 0.05, 20.0);
+    const auto nodes = static_cast<std::size_t>(m * m);
+    const std::vector<double> b = rhs(3 * nodes);
+    const std::vector<std::int32_t> labels = labels_for(nodes);
+    SolverConfig config = cpr_amg_strict;
+    config.restart = 15;
+    const Solved one = solve_with(d.a, b, config, labels);
+    const Solved again = solve_with(d.a, b, config, labels);
+    for (std::size_t i = 0; i < b.size(); ++i) {
+        REQUIRE(std::bit_cast<std::uint64_t>(again.x[i]) == std::bit_cast<std::uint64_t>(one.x[i]));
+    }
+    for (const int threads : {2, 4, 6, 8}) {
+        CAPTURE(threads);
+        config.threads = threads;
+        const Solved s = solve_with(d.a, b, config, labels);
+        REQUIRE(s.report.iterations == one.report.iterations);
+        std::size_t differ = 0;
+        for (std::size_t i = 0; i < b.size(); ++i) {
+            if (std::bit_cast<std::uint64_t>(s.x[i]) != std::bit_cast<std::uint64_t>(one.x[i])) ++differ;
+        }
+        REQUIRE(differ == 0);
+    }
+    std::printf("cpr_amg threads: %zu unknowns, %zu iterations, identical on a repeat and at 2, 4, 6, 8 threads\n",
+                b.size(), one.report.iterations.value_or(0));
+}
+
+// Unit 63 slice 1 finding: the stage-2 sweep variants on the fixture (hidden measurement).
+TEST_CASE("cpr_amg probe: the stage-2 sweep variants on the fixture", "[.cpr_amg_sweep]") {
+    using NiTCAD::linalg::detail::CprBackend;
+    const char* names[] = {"all fields (MD3)", "carriers only"};
+    for (const Index m : {Index{24}, Index{48}, Index{96}, Index{192}}) {
+        for (const double bias : {0.0, 20.0}) {
+            const DriftDiffusion d = drift_diffusion(m, 1e4, 0.05, bias);
+            const auto nodes = static_cast<std::size_t>(m * m);
+            const std::vector<double> c = rhs(3 * nodes);
+            std::printf("fixture %lld^2, bias %g\n", static_cast<long long>(m), bias);
+            for (int v = 0; v < 2; ++v) {
+                CprBackend backend(block_probe::default_amg(), 1e-4, 10, nullptr, CprBackend::Stage2::block_amg);
+                backend.set_sweep(static_cast<CprBackend::Sweep>(v));
+                (void)backend.set_fields(labels_for(nodes));
+                block_probe::print(names[v], block_probe::run(d.a, c, backend));
+            }
+            CprBackend cpr(block_probe::default_amg(), 1e-4, 10, nullptr);
+            (void)cpr.set_fields(labels_for(nodes));
+            block_probe::print("cpr (ILUT stage 2)", block_probe::run(d.a, c, cpr));
+        }
+    }
+}

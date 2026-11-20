@@ -53,10 +53,12 @@ bool solve_dense(std::span<double> a, std::span<double> rhs, std::size_t m) {
 }  // namespace
 
 CprBackend::CprBackend(const AmgSettings& amg, double drop_tolerance, int fill_factor,
-                       base::ThreadPool* pool)
-    : pool_(pool),
-      amg_(std::make_unique<AmgBackend>(amg, pool)),
-      ilut_(std::make_unique<IlutBackend<double>>(drop_tolerance, fill_factor)) {}
+                       base::ThreadPool* pool, Stage2 stage2)
+    : pool_(pool), stage2_(stage2), block_settings_(amg), amg_(std::make_unique<AmgBackend>(amg, pool)) {
+    // block_amg keeps ILUT for retry_with_ilut.
+    ilut_ = std::make_unique<IlutBackend<double>>(drop_tolerance, fill_factor);
+    block_settings_.strength_decay = block_strength_decay;
+}
 
 CprBackend::~CprBackend() = default;
 
@@ -97,7 +99,9 @@ std::expected<void, base::Error> CprBackend::analyze(const SparseMatrix& a) {
     if (potential_.empty()) {
         return std::unexpected(invalid("cpr needs at least one potential unknown"));
     }
-    if (auto analyzed = ilut_->analyze(a); !analyzed) return analyzed;
+    if (ilut_) {
+        if (auto analyzed = ilut_->analyze(a); !analyzed) return analyzed;
+    }
 
     offsets_.assign(a.row_offsets().begin(), a.row_offsets().end());
     columns_.assign(a.col_indices().begin(), a.col_indices().end());
@@ -142,6 +146,69 @@ std::expected<void, base::Error> CprBackend::analyze(const SparseMatrix& a) {
     v_p_.assign(np, 0.0);
     y_p_.assign(np, 0.0);
     for (auto* w : {&z1_, &r2_, &z2_}) w->assign(n, 0.0);
+
+    // block_amg: one block per field label, its pattern, and every entry's place in it.
+    block_labels_.clear();
+    blocks_.clear();
+    outside_.clear();
+    block_entry_.assign(a.nonzeros(), -1);
+    block_of_.assign(n, -1);
+    position_.assign(n, 0);
+    if (stage2_ == Stage2::block_amg) {
+        for (const std::int32_t l : labels_) {
+            if (l >= 0) block_labels_.push_back(l);
+        }
+        std::ranges::sort(block_labels_);
+        const auto [last, end] = std::ranges::unique(block_labels_);
+        block_labels_.erase(last, end);
+        blocks_.resize(block_labels_.size());
+        for (std::size_t u = 0; u < n; ++u) {
+            if (labels_[u] < 0) {
+                outside_.push_back(u);
+                continue;
+            }
+            const auto b = static_cast<std::size_t>(std::ranges::lower_bound(block_labels_, labels_[u]) -
+                                                    block_labels_.begin());
+            block_of_[u] = static_cast<Index>(b);
+            position_[u] = blocks_[b].unknowns.size();
+            blocks_[b].unknowns.push_back(u);
+        }
+        for (std::size_t b = 0; b < blocks_.size(); ++b) {
+            Block& block = blocks_[b];
+            std::vector<Triplet> block_entries;
+            for (const std::size_t r : block.unknowns) {
+                for (auto k = static_cast<std::size_t>(offsets_[r]); k < static_cast<std::size_t>(offsets_[r + 1]);
+                     ++k) {
+                    const auto c = static_cast<std::size_t>(columns_[k]);
+                    if (block_of_[c] == static_cast<Index>(b)) {
+                        block_entries.push_back({static_cast<Index>(position_[r]), static_cast<Index>(position_[c]), 0.0});
+                    }
+                }
+                block_entries.push_back({static_cast<Index>(position_[r]), static_cast<Index>(position_[r]), 0.0});
+            }
+            const auto m = static_cast<Index>(block.unknowns.size());
+            auto matrix = SparseMatrix::from_triplets(m, m, block_entries);
+            if (!matrix) return std::unexpected(std::move(matrix.error()));
+            block.matrix = std::move(*matrix);
+            const std::span<const Index> bo = block.matrix.row_offsets();
+            const std::span<const Index> bc = block.matrix.col_indices();
+            for (const std::size_t r : block.unknowns) {
+                const std::size_t pr = position_[r];
+                for (auto k = static_cast<std::size_t>(offsets_[r]); k < static_cast<std::size_t>(offsets_[r + 1]);
+                     ++k) {
+                    const auto c = static_cast<std::size_t>(columns_[k]);
+                    if (block_of_[c] != static_cast<Index>(b)) continue;
+                    const auto first = bc.begin() + bo[pr];
+                    const auto it = std::lower_bound(first, bc.begin() + bo[pr + 1], static_cast<Index>(position_[c]));
+                    block_entry_[k] = static_cast<Index>(it - bc.begin());
+                }
+            }
+            block.amg = std::make_unique<SymmetrizedAmg>(block_settings_, pool_);
+            if (auto analyzed = block.amg->analyze(block.matrix); !analyzed) return analyzed;
+            block.rhs.assign(block.unknowns.size(), 0.0);
+            block.z.assign(block.unknowns.size(), 0.0);
+        }
+    }
     analyzed_ = true;
     ++counts_.analyses;
     return {};
@@ -208,13 +275,42 @@ std::expected<Factorization, base::Error> CprBackend::factorize(std::span<const 
     amg_->set_scales(rows_p_, cols_p_, scaled_);
     auto hierarchy = amg_->factorize(reduced);
     if (!hierarchy) return std::unexpected(std::move(hierarchy.error()));
-    auto ilut = ilut_->factorize(values_);
-    if (!ilut) return std::unexpected(std::move(ilut.error()));
+    std::size_t stage2_fill = 0;
+    // block_amg: the swept blocks' AMG; ILUT only on retry_with_ilut.
+    use_ilut_ = stage2_ == Stage2::ilut;
+    for (std::size_t b = 0; b < blocks_.size() && !use_ilut_; ++b) {
+        if (sweep_ != Sweep::all && block_labels_[b] == 0) continue;  // not swept
+        Block& block = blocks_[b];
+        const std::span<double> v = block.matrix.values();
+        std::ranges::fill(v, 0.0);
+        for (const std::size_t r : block.unknowns) {
+            for (auto k = static_cast<std::size_t>(offsets_[r]); k < static_cast<std::size_t>(offsets_[r + 1]); ++k) {
+                if (block_entry_[k] >= 0) v[static_cast<std::size_t>(block_entry_[k])] = values_[k];
+            }
+        }
+        auto built = block.amg->factorize(v);
+        if (!built) return std::unexpected(std::move(built.error()));
+        stage2_fill += block.matrix.nonzeros() + built->fill.value_or(0);
+    }
+    if (use_ilut_) {
+        auto ilut = ilut_->factorize(values_);
+        if (!ilut) return std::unexpected(std::move(ilut.error()));
+        stage2_fill = ilut->fill.value_or(0);
+    }
     ++counts_.factorizations;
     return Factorization{.pivots = std::nullopt,
                          .perturbed_pivots = std::nullopt,
                          .fill = reduced_.nonzeros() + hierarchy->fill.value_or(0) +
-                                 ilut->fill.value_or(0)};
+                                 stage2_fill};
+}
+
+std::expected<bool, base::Error> CprBackend::retry_with_ilut() {
+    if (use_ilut_) return false;
+    auto ilut = ilut_->factorize(values_);
+    if (!ilut) return std::unexpected(std::move(ilut.error()));
+    use_ilut_ = true;
+    ++counts_.stage2_retries;
+    return true;
 }
 
 void CprBackend::solve(std::span<const double> b, std::span<double> x) {
@@ -240,11 +336,54 @@ void CprBackend::solve(std::span<const double> b, std::span<double> x) {
             r2_[r] = b[r] - s;
         }
     });
-    ilut_->solve(r2_, z2_);
+    if (use_ilut_) {
+        ilut_->solve(r2_, z2_);
+    } else {
+        solve_blocks();
+    }
     base::for_chunks(pool_, n, amg::vector_chunk, [&](std::size_t begin, std::size_t end) {
         for (std::size_t u = begin; u < end; ++u) x[u] = z1_[u] + z2_[u];
     });
     ++counts_.solves;
+}
+
+void CprBackend::solve_blocks() {
+    std::ranges::fill(z2_, 0.0);
+    for (std::size_t b = 0; b < blocks_.size(); ++b) {
+        Block& block = blocks_[b];
+        if (sweep_ != Sweep::all && block_labels_[b] == 0) continue;  // stage 1 owns the potential
+        // The field's right-hand side: r2 less the couplings to the fields already swept (every
+        // other field's z2 is still zero).
+        base::for_chunks(pool_, block.unknowns.size(), amg::row_chunk, [&](std::size_t begin, std::size_t end) {
+            for (std::size_t i = begin; i < end; ++i) {
+                const std::size_t r = block.unknowns[i];
+                double s = r2_[r];
+                for (auto k = static_cast<std::size_t>(offsets_[r]); k < static_cast<std::size_t>(offsets_[r + 1]);
+                     ++k) {
+                    if (block_entry_[k] < 0) s -= values_[k] * z2_[static_cast<std::size_t>(columns_[k])];
+                }
+                block.rhs[i] = s;
+            }
+        });
+        block.amg->solve(block.rhs, block.z);
+        base::for_chunks(pool_, block.unknowns.size(), amg::vector_chunk, [&](std::size_t begin, std::size_t end) {
+            for (std::size_t i = begin; i < end; ++i) z2_[block.unknowns[i]] = block.z[i];
+        });
+    }
+    // The unknowns in no node: one Gauss-Seidel step each, in order.
+    for (const std::size_t u : outside_) {
+        double s = r2_[u];
+        double diagonal = 0.0;
+        for (auto k = static_cast<std::size_t>(offsets_[u]); k < static_cast<std::size_t>(offsets_[u + 1]); ++k) {
+            const auto c = static_cast<std::size_t>(columns_[k]);
+            if (c == u) {
+                diagonal = values_[k];
+            } else {
+                s -= values_[k] * z2_[c];
+            }
+        }
+        z2_[u] = diagonal != 0.0 ? s / diagonal : 0.0;
+    }
 }
 
 }  // namespace NiTCAD::linalg::detail

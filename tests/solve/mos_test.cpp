@@ -504,8 +504,9 @@ TEST_CASE("mos: PARDISO gives Eigen SparseLU's quasi-static C-V (Unit 18)", "[pa
 }
 
 TEST_CASE("mos: GMRES-ILUT gives Eigen SparseLU's quasi-static C-V (Unit 44)", "[gmres]") {
-    // Unit 58 SG3: and with the cpr preconditioner.
-    for (const auto preconditioner : {linalg::Preconditioner::ilut, linalg::Preconditioner::cpr}) {
+    // Unit 58 SG3: and with the cpr preconditioner; Unit 63 MG3: and cpr_amg.
+    for (const auto preconditioner :
+         {linalg::Preconditioner::ilut, linalg::Preconditioner::cpr, linalg::Preconditioner::cpr_amg}) {
         CAPTURE(static_cast<int>(preconditioner));
         solve::BiasOptions o = quasi_static();
         o.linear = {.backend = linalg::SolverBackend::gmres_ilut,

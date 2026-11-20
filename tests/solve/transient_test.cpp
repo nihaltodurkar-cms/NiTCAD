@@ -186,8 +186,9 @@ TEST_CASE("transient: GMRES-ILUT gives Eigen SparseLU's switch-on (Unit 44)", "[
     const auto wf = waveforms(*Waveform::step(0.0, 0.5, 0.0), Waveform::constant(0.0));
     solve::TransientOptions o{.t_end_s = 2e-9, .dt_initial_s = 2e-11, .adaptive = false};
     const auto e = *solve::solve_transient(d, wf, o);
-    // Unit 58 SG3: and with the cpr preconditioner.
-    for (const auto preconditioner : {linalg::Preconditioner::ilut, linalg::Preconditioner::cpr}) {
+    // Unit 58 SG3: and with the cpr preconditioner; Unit 63 MG3: and cpr_amg.
+    for (const auto preconditioner :
+         {linalg::Preconditioner::ilut, linalg::Preconditioner::cpr, linalg::Preconditioner::cpr_amg}) {
         CAPTURE(static_cast<int>(preconditioner));
         o.steady.linear = {.backend = linalg::SolverBackend::gmres_ilut,
                            .fallback = linalg::LinearFallback::none,

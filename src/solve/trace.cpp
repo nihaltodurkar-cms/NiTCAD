@@ -57,7 +57,8 @@ public:
           solver_(*linalg::LinearSolver::create(config)),  // checked by the caller
           bias_(std::move(bias)), contact_(contact), V_T_(V_T) {
         jacobian_ = dd.make_jacobian();
-        if (config.preconditioner == linalg::Preconditioner::cpr) {
+        if (config.preconditioner == linalg::Preconditioner::cpr ||
+            config.preconditioner == linalg::Preconditioner::cpr_amg) {
             // Unit 58 SD4: the system's fields, and the arc unknown in no node.
             std::vector<std::int32_t> labels = assemble::field_labels(dd.dofs());
             labels.push_back(-1);

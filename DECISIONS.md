@@ -2575,6 +2575,51 @@ simulation (shared interpolation over the unknowns).
   supports), 5–8× the others. Our reading of the abstract is not the paper's algorithm; this rules out only the
   reading, not the method.
 - **Per MC3, slice 1 is put to the owner** with the best result (falling 0.08). Not loosened.
+
+**Owner ruling (2026-11-20, after slice 0c): "start slice 1"**, the recommended option: build `cpr_amg` with the
+falling threshold (the `amg_*` θ halved per level, `strength_decay` ½) on every stage-2 field hierarchy, judged on
+MG2, MG3, MG6–MG8; MG5's miss on the blocks alone (worst 1.90–1.91×) stays recorded. Stage 1's AMG on the reduced
+potential system keeps `cpr`'s settings.
+
+**Slice 1 (MD3, MD4), 2026-11-20: `preconditioner = cpr_amg`, built.** `CprBackend` gains `Stage2::block_amg`:
+stage 1 as `cpr`, then stage 2 one forward block Gauss–Seidel sweep of a `SymmetrizedAmg` (falling θ, `strength_decay`
+½) per carrier field on r2 = v − A z1, then a Gauss–Seidel step for each unknown in no node. Wired through
+`LinearSolver` (real only, needs labels and `backend = gmres`), `newton_solve`'s labels, trace and weighted current
+(the Laplace problem takes `amg`), the deck (`preconditioner = cpr_amg`) and the app's vocabulary. Release only (no
+Debug by standing rule); targeted runs: linalg (112 cases), deck, app, solve `[gmres]` and the retry case, all passed.
+
+Two findings changed MD3 as proposed, both recommended options taken under the standing rule:
+
+- **The potential block is not swept (Sweep::carriers).** MD3 swept every field, ψ first by AMG on A_ψψ alone. On
+  the drift-diffusion fixture that diverged from 48² up (GMRES 1000 iterations, every bias) while sweeping only the
+  carrier blocks converged everywhere: A_ψψ lacks the screening the carriers add, and stage 1 already owns ψ. Probe
+  `[.cpr_amg_sweep]`, GMRES iterations (cpr_amg carriers only / MD3 all fields / cpr):
+
+  | fixture | bias 0 | bias 20 |
+  | --- | --- | --- |
+  | 24² | 2 / 4 / 30 | 37 / 38 / 28 |
+  | 48² | 18 / failed / 101 | 38 / failed / 54 |
+  | 96² | 22 / failed / failed | 43 / failed / 300 |
+  | 192² | 21 / failed / failed | 41 / failed / failed |
+
+  (A further variant, stage 1 again on the sweep's residual, gave the carriers-only counts exactly; not kept.)
+- **A Jacobian the sweep leaves GMRES short on is retried once with ILUT as stage 2 (`cpr`), strict**, counted in
+  `BackendCounts::stage2_retries`; that factorization keeps ILUT until the next. Found by MG3's small-signal
+  junction case (p+n 1e19/1e16, −2 V then 0.6 V): the first iterate of the 0.6 V point, with the new bias stamped
+  on the contacts, failed in 1000 iterations where `cpr` takes 5. There even a direct SparseLU of the hole block
+  alone reached only backward error 1.25e-1 (1.5e-16 before the stamp); row equilibration fixed the bare LU
+  (4.7e-15) but not the symmetrized solve (14 iterations for an exact one-level solve) and doubled the fixture's
+  counts (27,648 unknowns at bias 20: 43 → 87), so it was not kept. Two guards on the scaling were tried and
+  dropped: the overall span of ln d (56 at the solved −2 V too, which needs no help) and the largest jump across
+  a usable pair (2.9 at both states). The cause is not pinned down; the retry is measured, not explained.
+  Test: the stamped step needs one retry, the solved point none.
+
+Results against the gates so far: **MG2 met** (12,288 unknowns, 61 iterations, the same bits on a repeat and at 2,
+4, 6, 8 threads). **MG3 met** on the cases `cpr` has (diode J(0.5 V) to 1e-10 and the forward sweep, worst 0.000;
+MOS C-V; transient, worst 7.0e-21 of the largest current; small-signal junction 0.133 of the bound, with the retry).
+The fixture against `cpr` (GMRES iterations, cpr_amg / cpr): 1,728 unknowns 2 / 24 and 36 / 14; 6,912: 27 / 60 and
+39 / 36; 27,648: 40 / 330 and 43 / 120 (bias 0 and 20). MG6–MG8 (3D series, FinFET against PARDISO) are MD5's
+measurements, next.
 ## New questions the advisor raised (not yet in `ARCHITECTURE.md`)
 
 None of these is decided. Each needs an owner position before the build scaffold fixes the flags.

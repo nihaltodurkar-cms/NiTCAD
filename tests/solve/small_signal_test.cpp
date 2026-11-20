@@ -31,11 +31,14 @@
 #include "NiTCAD/physics/mobility.hpp"
 #include "NiTCAD/physics/semiconductor.hpp"
 #include "NiTCAD/solve/bias.hpp"
+#include "NiTCAD/solve/equilibrium.hpp"
 #include "NiTCAD/solve/small_signal.hpp"
 #include "NiTCAD/solve/transient.hpp"
 #include "NiTCAD/solve/waveform.hpp"
 #include "../linalg/mkl_test_runtime.hpp"
 #include "legacy_graded_mesh.hpp"
+#include "NiTCAD/assemble/fields.hpp"
+#include "NiTCAD/assemble/system.hpp"
 
 using namespace NiTCAD;
 using base::ErrorCode;
@@ -1002,6 +1005,8 @@ TEST_CASE("small signal: GMRES-ILUT operating points give Eigen SparseLU's admit
     compare(t.device, {{t.V0, 0.0}}, t.options, "trap level");
     compare(p_plus_n(1e19, 1e16), {{-2.0, 0.0}, {0.6, 0.0}}, o, "junction, cpr",
             linalg::Preconditioner::cpr);
+    compare(p_plus_n(1e19, 1e16), {{-2.0, 0.0}, {0.6, 0.0}}, o, "junction, cpr_amg",
+            linalg::Preconditioner::cpr_amg);  // Unit 63 MG3
 }
 
 TEST_CASE("small signal: a long diode, the diffusion admittance") {
@@ -1055,4 +1060,42 @@ TEST_CASE("small signal: a long diode, the diffusion admittance") {
     }
     CAPTURE(worst);
     REQUIRE(worst < 5e-3);
+}
+
+TEST_CASE("small signal: cpr_amg retries the stamped junction step with ILUT (Unit 63 slice 1)") {
+    // The p+n junction solved at -2 V, then 0.6 V stamped on its contacts (as sweep_bias does): GMRES
+    // with the block sweep misses that first iterate's Jacobian, and the solve is retried with ILUT
+    // as stage 2, strict; the solved point's Jacobian needs no retry.
+    const device::Device d = p_plus_n(1e19, 1e16);
+    solve::BiasOptions o;
+    o.models.bgn = false;
+    const auto scaling = *assemble::make_scaling(d);
+    auto system = *assemble::System::create(d, scaling, o.models);
+    const auto eq = *solve::solve_equilibrium(d, {.models = o.models});
+    std::vector<double> psi(eq.fields.potential_V.size());
+    for (std::size_t i = 0; i < psi.size(); ++i) psi[i] = eq.fields.potential_V[i] / scaling.V_T;
+    auto x = system.state_from_potential(psi);
+    auto direct = *linalg::LinearSolver::create({});
+    REQUIRE(system.set_bias(std::vector<double>{-2.0, 0.0}).has_value());
+    results::ConvergenceRecord record;
+    REQUIRE(solve::newton_solve(system, x, {}, direct, record).has_value());
+    auto solver = *linalg::LinearSolver::create({.backend = linalg::SolverBackend::gmres_ilut,
+                                                 .fallback = linalg::LinearFallback::none,
+                                                 .preconditioner = linalg::Preconditioner::cpr_amg});
+    solver.set_field_labels(assemble::field_labels(system.dofs()));
+    const auto step = [&] {
+        linalg::SparseMatrix j = system.make_jacobian();
+        std::vector<double> f(x.size()), dx(x.size());
+        system.evaluate(x, f, j);
+        for (double& v : f) v = -v;
+        REQUIRE(solver.factorize(j).has_value());
+        const auto r = solver.solve(f, dx);
+        REQUIRE(r.has_value());
+        REQUIRE_FALSE(r->fell_back);
+        return solver.backend_counts().stage2_retries;
+    };
+    REQUIRE(step() == 0);
+    REQUIRE(system.set_bias(std::vector<double>{0.6, 0.0}).has_value());
+    system.stamp_contacts(x);
+    REQUIRE(step() == 1);
 }
