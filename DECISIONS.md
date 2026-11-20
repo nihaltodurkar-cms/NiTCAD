@@ -1317,6 +1317,47 @@ WARP) with DirectWrite labels.
   the tree links regions only (contacts are not tree items). The app suite (89 cases) and the window suite (45 cases,
   the hidden ones not run) pass.
 
+**Slice 3 results (2026-11-20; GD9):** live validation and the mesh preview, on `app/geometry-validation` (from main
+`9b5292e`; built in its own worktree, as the main checkout's uncommitted deck deletions stop CMake's configure).
+- **Validation (GD9):** the window hands the Geometry tab every live check of the deck (the build's own diagnostics,
+  unchanged) and the mesh it built. `geo::locate_problem` (model, no Win32) places the build's error on the layout:
+  the line's shape (or its region, the background as the domain), the contact of its section, the contact of its
+  `[mesh] patch` line with every contact overlapping it, the points "(x, y)" in cm the mesher names, else the domain;
+  no marker outside the geometry (a doping profile). Markers are drawn in red (outline, a wide segment, a ringed
+  cross, the domain's border) and the message along the canvas's foot. On the Geometry tab the message goes to the
+  console's Messages (error level), and Run is off (the toolbar, the menu and the command itself, with the reason in
+  the status bar) while the text shown does not build; the other tabs keep Run as before. A deck opened and not yet
+  checked is checked when the tab is shown.
+- **Build change (deck layer):** a `generate2d` error of one patch (the mesher's "patch ...", "patches overlap",
+  "a patch end within 3 s ...", named by index) is now reported at that `patch` line rather than the `[mesh]`
+  header, so the deck pane and the canvas point at it. Only invalid decks' line numbers change (GE1: the deck suite
+  passes, 123 cases).
+- **Mesh preview:** a Mesh preview toggle on the tool strip overlays the last check's mesh edges while that check is
+  of the text shown ("Building the mesh..." or "The mesh shows when the layout builds." otherwise).
+- **GE7 met:** a table of invalid layouts made by model edits (two contacts overlapping, a contact's end within 3 s of
+  a junction, a box too small for the interface resolution, an unknown material on a region and on the background,
+  a contact's unknown kind, a zero-height box) and a doping error: each problem's message is `check_deck`'s, its
+  line and markers as expected; four successive valid edits (a moved well, a new oxide layer, a gate contact, a layer
+  raised, a rename, a wider gate) each build.
+- **GE8 met (slice 3's part):** a window test draws a MOSFET on New 2D layout (silicon substrate, a 50 nm oxide box,
+  source and drain contacts on the sides, a gate electrode over the oxide, a body along the bottom, each named in the
+  inspector), types what the canvas does not draw (the gate's metal, the pockets' Gaussians, a five-point gate
+  sweep), and Run solves it to the end. Another draws a contact over the source's patch: the canvas marks both
+  contacts with the build's message, Run is off (and a direct Run starts nothing), the console has the error; undone,
+  it builds and the mesh shows again.
+- **GE5 still met:** the drag test's median frame 2.7–3.1 ms (slowest 5.6–5.7 ms).
+- **GE9 for slice 3 met:** 13 hand mutants caught (one, a shape's line ignored, survived until a zero-height box case
+  was added): patch errors not located; overlapping contacts not marked; the named points read in µm; the background
+  marked as a shape; the domain marked beside the points; the check not tied to the text shown; Run not gated; the
+  Run command not guarded; the problem not in Messages; a stale mesh shown; a corner drag always vertical; the
+  build's messages not passed to the page.
+- **Slice 2 defects found by GE8 and fixed:** a contact drag started at a domain corner always took the vertical side
+  (now the side of the larger offset); a new contact after a rename reused `contact_1` (now also unique among the
+  deck's patches); undo or redo of a drawn contact left the selected contact past the end (a crash or `bad_alloc`,
+  seen intermittently; the selection is now pruned on every text applied); a deck opened while the Geometry tab was
+  shown jumped to the View tab when its build ended (now it stays); a tab change did not refresh the commands' states.
+- The app suite (91 cases) and the window suite (47 cases, the hidden ones not run) pass; full suites not run.
+
 ### Unit 62 — density-gradient quantum confinement, opt-in (proposed 2026-11-19; on `physics/density-gradient`)
 
 **Owner request (2026-11-19):** "Plan for Density-gradient confinement (Commercial TCAD feature type)". This is the

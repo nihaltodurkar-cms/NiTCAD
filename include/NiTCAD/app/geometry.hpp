@@ -192,4 +192,29 @@ struct Hit {
 // The box with handle `h` dragged to `p` (the opposite side fixed), normalized.
 [[nodiscard]] Rect drag_handle(const Rect& r, int h, Pt p) noexcept;
 
+// --- validation (GD9): the deck build's own error, placed on the canvas ------------------------------------------
+
+// Where a problem is drawn: a shape (shape -1: every shape of the region; the background: the domain), a contact,
+// a point the message names, or the whole domain.
+struct Marker {
+    enum class Kind : unsigned char { shape, contact, point, domain };
+    Kind kind = Kind::domain;
+    ShapeRef shape;
+    int contact = -1;
+    Pt at{};
+    friend bool operator==(const Marker&, const Marker&) = default;
+};
+
+struct Problem {
+    int line = 0;          // the deck line the build named (0: none)
+    std::string message;   // the build's message, unchanged
+    std::vector<Marker> markers;
+};
+
+// The build's error at `line` of `deck` (read into `g`) placed on `g`: the line's region shape (or region), its
+// contact section, or the contact of its [mesh] patch line with every contact overlapping it; the points
+// "(x, y)" or "(x, y, z)" in cm the message names; the domain when the line is the [mesh] section's other lines.
+// No markers when the line is outside the geometry (a doping profile, a sweep, ...).
+[[nodiscard]] Problem locate_problem(const Geometry& g, std::string_view deck, int line, std::string message);
+
 }  // namespace NiTCAD::app::geo

@@ -11,6 +11,11 @@
 // - Every edit goes to the deck at once, by minimal edits (VQ13: the deck stays the only source of truth); undo
 //   and redo step through the deck texts the page wrote, and start again when the deck is edited elsewhere.
 //
+// - Live validation (slice 3, GD9): the window hands the page each live check of the deck (the build's own
+//   messages); a problem of the text shown is drawn where it lies (a shape, a contact, a point, the domain), with
+//   its message along the canvas's foot; Run stays off on this tab while the layout does not build. Mesh preview
+//   overlays the mesh the last check built, while it is of the text shown.
+//
 // The tests drive the canvas by its messages (GE8; no screen automation).
 #pragma once
 
@@ -21,6 +26,10 @@
 #include <string>
 #include <vector>
 
+#include <span>
+#include <utility>
+
+#include "NiTCAD/app/document.hpp"
 #include "NiTCAD/app/geometry.hpp"
 
 struct ID2D1Factory;
@@ -87,6 +96,28 @@ public:
     // Draws now (not waiting for WM_PAINT), its time in ms; -1 when nothing could be drawn.
     double render();
     [[nodiscard]] std::string ruler_text(bool x_axis) const;  // the labels the last frame's ruler drew
+
+    // --- live validation and the mesh preview (slice 3, GD9) ---
+    // A live check of `text` ended: its diagnostics (empty: the deck builds). Kept while `text` is the text shown.
+    void checked(const std::string& text, std::span<const Diagnostic> diagnostics);
+    enum class Check { pending, valid, invalid };
+    // The state of the text shown: not checked yet, builds, or does not.
+    [[nodiscard]] Check check() const noexcept;
+    [[nodiscard]] const std::vector<geo::Problem>& problems() const noexcept { return problems_; }
+    // Why Run is off on this tab ("" when it is not): the layout's first problem.
+    [[nodiscard]] std::string run_blocked() const;
+    // The mesh a live check of `text` built (points in quanta, edges as point indices).
+    struct MeshOverlay {
+        std::vector<geo::Pt> points;
+        std::vector<std::pair<int, int>> edges;
+    };
+    void set_mesh(const std::string& text, MeshOverlay mesh);
+    void set_mesh_preview(bool on);
+    [[nodiscard]] bool mesh_preview() const noexcept { return mesh_preview_; }
+    // The overlay drawn now: the preview on and the mesh of the text shown.
+    [[nodiscard]] bool mesh_shown() const noexcept { return mesh_preview_ && !mesh_text_.empty() && mesh_text_ == text_seen_; }
+    [[nodiscard]] const MeshOverlay& mesh() const noexcept { return mesh_; }
+    [[nodiscard]] std::string banner() const;  // the canvas's foot line drawn last ("" none)
 
     // The inspector's controls' ids (offsets from inspector_id).
     enum Control : int {
@@ -156,6 +187,17 @@ private:
     std::vector<geo::Pt> polygon_;  // the polygon being drawn
     std::optional<geo::Pt> hover_;   // the polygon tool's next point
     mutable std::string ruler_x_, ruler_y_;
+
+    // Slice 3: the last live check (its text, problems), the mesh it built, the preview toggle.
+    std::string checked_text_;
+    std::vector<Diagnostic> diagnostics_;
+    std::vector<geo::Problem> problems_;  // diagnostics_ placed on g_, while checked_text_ is the text shown
+    std::string mesh_text_;
+    MeshOverlay mesh_;
+    bool mesh_preview_ = false;
+    HWND mesh_button_ = nullptr;
+    void locate_problems();
+    void prune_selection();
 };
 
 }  // namespace NiTCAD::app

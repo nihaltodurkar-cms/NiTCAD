@@ -1086,3 +1086,124 @@ bool set_domain(Geometry& g, Rect d) {
 }
 
 }  // namespace NiTCAD::app::geo
+
+// --- validation (GD9) --------------------------------------------------------------------------------------------
+
+namespace NiTCAD::app::geo {
+
+namespace {
+
+// The points "(x, y)" or "(x, y, z)" a message names, in cm (the mesher's and the build's form).
+std::vector<Pt> named_points(std::string_view m) {
+    std::vector<Pt> out;
+    for (std::size_t open = m.find('('); open != std::string_view::npos; open = m.find('(', open + 1)) {
+        const std::size_t close = m.find(')', open);
+        if (close == std::string_view::npos) break;
+        std::vector<double> v;
+        std::string_view inner = m.substr(open + 1, close - open - 1);
+        bool ok = true;
+        while (ok && !inner.empty()) {
+            const std::size_t comma = inner.find(',');
+            const std::string_view t = trim(inner.substr(0, comma));
+            double x = 0.0;
+            const auto r = std::from_chars(t.data(), t.data() + t.size(), x);
+            ok = !t.empty() && r.ec == std::errc{} && r.ptr == t.data() + t.size() && std::isfinite(x);
+            if (ok) v.push_back(x);
+            inner = comma == std::string_view::npos ? std::string_view{} : inner.substr(comma + 1);
+        }
+        if (ok && (v.size() == 2 || v.size() == 3)) {
+            out.push_back({static_cast<Coord>(std::llround(v[0] / quantum_cm)), static_cast<Coord>(std::llround(v[1] / quantum_cm))});
+        }
+    }
+    return out;
+}
+
+// Two contacts along one line of the boundary sharing more than an end point.
+bool overlapping(const Contact& p, const Contact& q) noexcept {
+    const bool pv = p.a.x == p.b.x, qv = q.a.x == q.b.x;
+    if (pv != qv) return false;
+    if (pv ? p.a.x != q.a.x : p.a.y != q.a.y) return false;
+    const auto span = [&](const Contact& c) {
+        return pv ? std::pair{std::min(c.a.y, c.b.y), std::max(c.a.y, c.b.y)} : std::pair{std::min(c.a.x, c.b.x), std::max(c.a.x, c.b.x)};
+    };
+    const auto [p0, p1] = span(p);
+    const auto [q0, q1] = span(q);
+    return std::max(p0, q0) < std::min(p1, q1) || (p0 == q0 && p1 == q1);
+}
+
+}  // namespace
+
+Problem locate_problem(const Geometry& g, std::string_view text, int line, std::string message) {
+    Problem out{line, std::move(message), {}};
+    const auto d = deck::parse(text);
+    if (d && line > 0) {
+        // The section holding the line: the last one starting at or before it.
+        const deck::Section* at = nullptr;
+        int region_index = -1, contact_index = -1, ri = 0, ci = 0;
+        for (const auto& s : d->sections) {
+            if (s.line > line) break;
+            at = &s;
+            region_index = s.kind == "region" ? ri : -1;
+            contact_index = s.kind == "contact" ? ci : -1;
+            ri += s.kind == "region" ? 1 : 0;
+            ci += s.kind == "contact" ? 1 : 0;
+        }
+        const auto contact_of = [&](int origin) {
+            for (std::size_t k = 0; k < g.contacts.size(); ++k) {
+                if (g.contacts[k].origin == origin) return static_cast<int>(k);
+            }
+            return -1;
+        };
+        const auto add_contact = [&](int k) {
+            if (k < 0) return;
+            const Marker mk{Marker::Kind::contact, {}, k, {}};
+            if (std::ranges::find(out.markers, mk) == out.markers.end()) out.markers.push_back(mk);
+        };
+        if (at && region_index >= 0) {
+            for (std::size_t r = 0; r < g.regions.size(); ++r) {
+                if (g.regions[r].origin != region_index) continue;
+                int shape = -1, n = 0;
+                for (const auto& e : at->entries) {
+                    if (!is_shape_key(e.key)) continue;
+                    if (e.line == line) shape = n;
+                    ++n;
+                }
+                if (g.regions[r].shapes.empty()) out.markers.push_back({Marker::Kind::domain, {static_cast<int>(r), -1}, -1, {}});
+                else out.markers.push_back({Marker::Kind::shape, {static_cast<int>(r), shape}, -1, {}});
+            }
+        } else if (at && contact_index >= 0) {
+            add_contact(contact_of(contact_index));
+        } else if (at && at->kind == "mesh") {
+            const deck::Entry* patch = nullptr;
+            for (const auto& e : at->entries) {
+                if (e.line == line && e.key.starts_with("patch ")) patch = &e;
+            }
+            if (patch) {
+                // The contacts using this patch, and every contact overlapping one of them.
+                const std::string_view name = trim(std::string_view(patch->key).substr(6));
+                int c = 0;
+                for (const auto& s : d->sections) {
+                    if (s.kind != "contact") continue;
+                    const deck::Entry* p = find_entry(s, "patch");
+                    if (p && trim(p->value) == name) add_contact(contact_of(c));
+                    ++c;
+                }
+                const std::size_t direct = out.markers.size();
+                for (std::size_t m = 0; m < direct; ++m) {
+                    const Contact& p = g.contacts[static_cast<std::size_t>(out.markers[m].contact)];
+                    for (std::size_t k = 0; k < g.contacts.size(); ++k) {
+                        if (static_cast<int>(k) != out.markers[m].contact && overlapping(p, g.contacts[k])) add_contact(static_cast<int>(k));
+                    }
+                }
+            } else if (out.message.find("(") == std::string::npos) {
+                out.markers.push_back({Marker::Kind::domain, {}, -1, {}});
+            }
+        }
+        if (at && (at->kind == "mesh" || region_index >= 0 || contact_index >= 0)) {
+            for (const Pt p : named_points(out.message)) out.markers.push_back({Marker::Kind::point, {}, -1, p});
+        }
+    }
+    return out;
+}
+
+}  // namespace NiTCAD::app::geo
