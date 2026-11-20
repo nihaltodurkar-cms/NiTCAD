@@ -417,7 +417,9 @@ std::expected<Factorization, base::Error> AmgBackend::factorize(std::span<const 
             amg::Coarsening c = amg::coarsen(a, settings_.strength_threshold);
             if (c.aggregates == 0 ||
                 static_cast<double>(c.aggregates) > amg::min_coarsening * static_cast<double>(a.rows)) {
-                coarse_smoothed_ = true;  // stalled above coarse_size: no factorization
+                // Stalled above coarse_size: only smoothed, unless factorize_stalled and small enough.
+                coarse_smoothed_ = !(settings_.factorize_stalled &&
+                                     a.rows <= amg::stalled_factor * settings_.coarse_size);
                 break;
             }
             coarsening_.push_back(std::move(c));

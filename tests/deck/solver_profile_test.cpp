@@ -744,3 +744,39 @@ TEST_CASE("solver profile: the near-null vector of the symmetrized blocks (Unit 
         }
     }
 }
+
+TEST_CASE("solver profile: the stalled coarsening of the symmetrized carrier blocks (Unit 63 slice 0b)",
+          "[.carrier_0b]") {
+    // MB1 (diagnosis, default settings, 40^3-70^3) and MB2's candidates: theta 0.08 (default), 0.04,
+    // 0.02, 0, each with the stalled level smoothed (as slice 2) or factorized (factorize_stalled).
+    const double thetas[] = {0.08, 0.04, 0.02, 0.0};
+    const char* names[] = {"psi", "electrons", "holes"};
+    for (const int nodes : {20, 30, 40, 50, 60, 70}) {
+        const auto dev = diode_3d(nodes);
+        const auto eq = solve::solve_equilibrium(dev, {.linear = helper_solver()});
+        REQUIRE(eq.has_value());
+        std::vector<double> rhs;
+        const linalg::SparseMatrix j =
+            device_jacobian(dev, std::vector<double>{0.5, 0.0}, eq->fields.potential_V, rhs);
+        std::printf("\n=== %d^3: %zu unknowns\n", nodes, static_cast<std::size_t>(j.rows()));
+        for (const std::size_t field : {std::size_t{0}, std::size_t{1}, std::size_t{2}}) {
+            const linalg::SparseMatrix blk = block_probe::block(j, 3, field);
+            std::printf("  %s\n", names[field]);
+            for (const bool stalled : {false, true}) {
+                for (const double theta : thetas) {
+                    linalg::detail::AmgSettings s = block_probe::default_amg();
+                    s.strength_threshold = theta;
+                    s.factorize_stalled = stalled;
+                    linalg::detail::SymmetrizedAmg* m = nullptr;
+                    const auto o = block_probe::symmetrized(blk, s, &m);
+                    char label[64];
+                    std::snprintf(label, sizeof label, "theta %.2f %s", theta, stalled ? "factorized" : "smoothed");
+                    block_probe::print(label, o);
+                    if (nodes >= 40 && field > 0 && theta == 0.08 && !stalled && o.built) {
+                        block_probe::diagnose(m->amg(), s);
+                    }
+                }
+            }
+        }
+    }
+}

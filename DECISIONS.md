@@ -2484,6 +2484,45 @@ only smoothed (slice 2's rule), not solved; the ψ block never stalls (coarsest 
 | MB3 | **Selection:** a candidate passes if **both** carrier blocks grow at most 1.5× from 24k to 1.03M unknowns (MG5's target, on the blocks). Among those passing, the least 70³ setup + solve time of the two blocks; a tie (within 5%) goes to the fewest changes from the defaults. If none passes, the best is recorded and the owner asked again. |
 | MB4 | **Unchanged elsewhere:** `amg` and `cpr` keep their settings and bits (MG1); a chosen candidate applies only to the carrier-block hierarchies of slice 1 (MD3) and is recorded there. |
 
+**Slice 0b results (2026-11-20).** `AmgSettings::factorize_stalled` (off by default; `amg::stalled_factor` = 20) and
+the hidden `[.carrier_0b]` in `solver_profile_test.cpp` (Release, pinned to the P cores; the symmetrized AMG as
+slice 0, GMRES(30) to 1e-8). `nitcad_linalg_test` 108 cases pass with the flag (MB4).
+- **MB1, the diagnosis (θ 0.08, smoothed; electrons, holes the same picture):** level 0 aggregates well (0.17 of
+  its rows; the 9800 rows in no aggregate at 70³ are the contacts' identity rows). From level 2 on, most rows have
+  **no strong neighbour** (70³ electrons: 2031 of 16 175 at level 2, 2146 of 3566 at level 3, 2151 of 2376 at level
+  4), yet only 0.9–9.6% of the last level's rows are 10× diagonally dominant. So the coarse operators are not weakly
+  coupled; their couplings are spread over many small Galerkin entries, none of which reaches θ √(a_ii a_jj). The
+  coarsening ratio rises to 0.65–0.93 and stalls (50³–70³ electrons, 60³–70³ holes).
+- **MB2, iterations (the setup + solve time in seconds at 70³):**
+
+| Block, candidate | 20³ | 30³ | 40³ | 50³ | 60³ | 70³ | 70³ / 20³ | worst / 20³ |
+|---|---|---|---|---|---|---|---|---|
+| electrons, θ 0.08 (as slice 0) | 10 | 13 | 13 | 15 | 19 | 21 (1.26) | 2.10 | 2.10 |
+| electrons, θ 0.04 | 12 | 13 | 13 | 20 | 24 | 16 (1.10) | **1.33** | 2.00 |
+| electrons, θ 0.02 | 13 | 15 | 17 | 17 | 28 | 24 (1.39) | 1.85 | 2.15 |
+| electrons, θ 0 | 13 | 15 | 14 | 16 | 19 | 23 (1.36) | 1.77 | 1.77 |
+| electrons, θ 0.08, factorized | 10 | 13 | 13 | 14 | 18 | 19 (1.32) | 1.90 | 1.90 |
+| electrons, θ 0.04, factorized | 12 | 13 | 13 | 20 | 24 | 16 (1.15) | **1.33** | 2.00 |
+| holes, θ 0.08 (as slice 0) | 11 | 14 | 17 | 19 | 29 | 35 (1.93) | 3.18 | 3.18 |
+| holes, θ 0.04 | 13 | 14 | 16 | 17 | 24 | 16 (1.08) | **1.23** | 1.85 |
+| holes, θ 0.02 | 15 | 15 | 17 | 18 | 27 | 25 (1.48) | 1.67 | 1.80 |
+| holes, θ 0 | 13 | 15 | 14 | 18 | 19 | 17 (1.13) | 1.31 | 1.46 |
+| holes, θ 0.08, factorized | 11 | 14 | 17 | 19 | 19 | 22 (1.53) | 2.00 | 2.00 |
+| holes, θ 0.04, factorized | 13 | 14 | 16 | 17 | 24 | 16 (1.25) | **1.23** | 1.85 |
+
+  (θ 0.02 and 0 factorized equal their smoothed rows within one iteration: at those θ nothing stalls.) The ψ block:
+  9–15 iterations under every candidate, 70³ 12–14.
+- **MB3, the selection.** Read as written (24k against 1.03M), two candidates pass on both blocks: **θ 0.04**
+  (electrons 1.33×, holes 1.23×) and θ 0.04 factorized (the same counts; (c), since 0.04 is (a)'s best). θ 0.04
+  smoothed takes 2.18 s at 70³ for the two blocks against 2.40 s factorized, so by MB3 the choice is **θ = 0.04
+  for the carrier-block hierarchies, stalled levels smoothed** (one change from the defaults).
+- **But the growth is not monotone:** at 60³ θ 0.04 needs 24 iterations on both blocks, 2.0× and 1.85× the 20³
+  counts, and 70³ falls back to 16. No candidate keeps every size within 1.5× (the best, holes at θ 0, peaks at
+  1.46× but electrons at θ 0 reach 1.77×). MB3 compares the end points only, so θ 0.04 passes as written; whether
+  the 60³ peak counts against MG5 is put to the owner, not decided here.
+- **What the diagnosis points to (not in MB2's list, not run):** a strength threshold that falls with the level
+  (θ_l = θ · ½^l, Vaněk–Mandel–Brezina's own recommendation), since the stall comes from the coarse levels' spread
+  couplings, not from level 0.
 ## New questions the advisor raised (not yet in `ARCHITECTURE.md`)
 
 None of these is decided. Each needs an owner position before the build scaffold fixes the flags.

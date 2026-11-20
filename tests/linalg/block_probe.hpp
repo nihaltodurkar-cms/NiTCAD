@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <memory>
 #include <cmath>
 #include <cstddef>
 #include <cstdio>
@@ -154,6 +155,65 @@ inline std::pair<Outcome, Outcome> compare(const std::string& name, const Sparse
     print("AMG on the block", p);
     print("AMG symmetrized", s);
     return {p, s};
+}
+
+}  // namespace block_probe
+
+namespace block_probe {
+
+// The symmetrized AMG alone with the given settings (Unit 63 slice 0b, MB2).
+inline Outcome symmetrized(const SparseMatrix& b, const detail::AmgSettings& settings,
+                           detail::SymmetrizedAmg** keep = nullptr) {
+    static thread_local std::unique_ptr<detail::SymmetrizedAmg> last;
+    last = std::make_unique<detail::SymmetrizedAmg>(settings, nullptr);
+    const std::vector<double> c = rhs(static_cast<std::size_t>(b.rows()));
+    Outcome o = run(b, c, *last);
+    if (o.built) {
+        const auto sizes = last->amg().level_sizes();
+        o.levels = sizes.size();
+        o.coarsest = sizes.back();
+    }
+    if (keep) *keep = last.get();
+    return o;
+}
+
+// MB1: per level of a built hierarchy, rows, aggregates, rows in no aggregate, rows with no strong
+// neighbour; and for the last level the share of rows diagonally dominant by 10x or more.
+inline void diagnose(const detail::AmgBackend& amg, const detail::AmgSettings& settings) {
+    const auto sizes = amg.level_sizes();
+    for (std::size_t l = 0; l < sizes.size(); ++l) {
+        const detail::Csr& a = amg.level_matrix(l);
+        const bool last = l + 1 == sizes.size();
+        std::size_t no_strong = 0;
+        std::size_t dominant = 0;
+        const auto co = detail::amg::coarsen(a, settings.strength_threshold);
+        std::size_t unaggregated = 0;
+        for (std::size_t i = 0; i < a.rows; ++i) {
+            if (co.aggregate[i] < 0) ++unaggregated;
+            bool strong = false;
+            double diagonal = 0.0;
+            double off = 0.0;
+            for (auto k = static_cast<std::size_t>(a.offsets[i]); k < static_cast<std::size_t>(a.offsets[i + 1]); ++k) {
+                if (static_cast<std::size_t>(a.columns[k]) == i) {
+                    diagonal = std::abs(a.values[k]);
+                } else {
+                    off += std::abs(a.values[k]);
+                    if (co.strong[k]) strong = true;
+                }
+            }
+            if (!strong) ++no_strong;
+            if (diagonal >= 10.0 * off) ++dominant;
+        }
+        std::printf("      level %zu: %zu rows, %zu aggregates (%.2f), %zu in none, %zu no strong neighbour",
+                    l, a.rows, co.aggregates, a.rows ? static_cast<double>(co.aggregates) / static_cast<double>(a.rows) : 0.0,
+                    unaggregated, no_strong);
+        if (last) {
+            const bool stalled = a.rows > settings.coarse_size && sizes.size() < static_cast<std::size_t>(settings.max_levels);
+            std::printf(", last%s, %.1f%% rows 10x dominant", stalled ? " (stalled)" : "",
+                        100.0 * static_cast<double>(dominant) / static_cast<double>(a.rows));
+        }
+        std::printf("\n");
+    }
 }
 
 }  // namespace block_probe

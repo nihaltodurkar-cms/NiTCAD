@@ -64,6 +64,9 @@ struct AmgSettings {
     int smoother_degree;        // Chebyshev degree, at least 1
     std::size_t coarse_size;    // a level of at most this many unknowns is the coarsest
     int max_levels;             // at least 2
+    // Unit 63 MB2 (b): a level where the coarsening stalls above coarse_size is factorized by SparseLU
+    // (not only smoothed) when it has at most stalled_factor * coarse_size unknowns. Off for amg and cpr.
+    bool factorize_stalled = false;
 };
 
 // A real CSR matrix with sorted, unique columns per row.
@@ -86,6 +89,7 @@ inline constexpr double prolongator_damping = 4.0 / 3.0;  // over lambda_max(D^-
 inline constexpr int power_iterations = 15;          // of the lambda_max estimates
 inline constexpr double spectral_safety = 1.1;       // factor on them
 inline constexpr double min_coarsening = 0.9;        // a level must shrink below this fraction
+inline constexpr std::size_t stalled_factor = 20;     // factorize_stalled: the largest such level / coarse_size
 
 // y = A x, row-parallel on pool (nullptr: serial).
 void multiply(base::ThreadPool* pool, const Csr& a, std::span<const double> x, std::span<double> y);
