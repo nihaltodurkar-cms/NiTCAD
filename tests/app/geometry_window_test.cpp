@@ -5,6 +5,8 @@
 
 #include "main_window.hpp"
 #include "fixtures.hpp"
+#include "NiTCAD/deck/build.hpp"
+#include "NiTCAD/deck/syntax.hpp"
 
 #include <windows.h>
 
@@ -470,4 +472,49 @@ TEST_CASE("app window geometry: a MOSFET drawn on a new layout runs its sweep (G
     REQUIRE(pump_until([&] { return !w->runner().busy() && w->workspace() && w->workspace()->has_results(); }, 600.0));
     CHECK(w->runner().state() == app::RunState::done);
     CHECK_FALSE(w->preview());
+}
+
+TEST_CASE("app window geometry: a slanted gate drawn, a vertex moved alone, Shift keeps an edge straight (slice 4, GD10)",
+          "[app][window][geometry]") {
+    auto w = window();
+    REQUIRE(w->open_deck(write("slanted", layered)));
+    pump();
+    w->execute(Command::tab_geometry);
+    GeometryPage& page = w->geometry_page();
+    page.set_view(geo::View{200.0, 50.0, 450.0, 96});
+    const Mouse m{page};
+    const auto deck = [&] { return w->deck().text(); };
+    // A trapezoid gate: its sidewalls slant (no Shift, the clicks are taken as they are).
+    page.set_material("sio2");
+    m.key('P');
+    for (const auto& [x, y] : std::vector<std::pair<geo::Coord, geo::Coord>>{{6000, 8000}, {14000, 8000}, {13000, 10000}, {7000, 10000}}) {
+        m.click(x, y);
+    }
+    m.key(VK_RETURN);
+    INFO(deck());
+    REQUIRE(has(deck(), "polygon = 0.6um 0.8um, 1.4um 0.8um, 1.3um 1um, 0.7um 1um\n"));
+    // With Shift a vertex is kept vertical from the last: (1.66, 0.6) comes in as (1.6, 0.6), not as (1.7, 0.6).
+    m.key(VK_ESCAPE);
+    m.key('P');
+    m.click(14000, 2000);
+    m.click(16000, 2000);
+    m.down(16600, 6000, MK_SHIFT);
+    m.up(16600, 6000);
+    m.click(14000, 6000);
+    m.key(VK_RETURN);
+    REQUIRE(has(deck(), "polygon = 1.4um 0.2um, 1.6um 0.2um, 1.6um 0.6um, 1.4um 0.6um\n"));
+    // The well's corner (1, 0.8) Ctrl-dragged to (1.1, 0.8): it moves alone, its left edge slanting.
+    m.key('V');
+    m.click(17000, 4000);
+    REQUIRE(page.selection().size() == 1);
+    m.down(10000, 8000, MK_CONTROL);
+    m.move(10500, 8000, MK_LBUTTON | MK_CONTROL);
+    m.move(11000, 8000, MK_LBUTTON | MK_CONTROL);
+    m.up(11000, 8000);
+    CHECK(has(deck(), "polygon = 1um 0, 2um 0, 2um 0.5um, 2um 0.8um, 1.1um 0.8um\n"));
+    // The layout builds: Run is on.
+    const auto d = NiTCAD::deck::parse(deck(), "s.deck");
+    REQUIRE(d);
+    const auto b = NiTCAD::deck::build(*d);
+    if (!b) FAIL(b.error().message);
 }

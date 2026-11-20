@@ -273,16 +273,37 @@ TEST_CASE("app geometry: an edit rewrites only geometry lines, and the deck stil
         const auto d = NiTCAD::deck::parse(out, "t.deck");
         REQUIRE(d);
         CHECK(NiTCAD::deck::build(*d));
-        // A slanted tiling is not edited (until slice 4).
-        Geometry slanted = must_read(R"([mesh]
+        // A slanted tiling is edited too since slice 4 (GD10): it becomes layered and builds.
+        const std::string slanted_deck = R"([mesh]
 type = generate2d
+patch source = 0 0, 0 0.3um
+max_size = 0.25um
+interface_resolution = 20nm
+
 [region a]
-polygon = 0 0, 1um 0, 0 1um
+material = silicon
+polygon = 0 0, 2um 0, 2um 0.3um, 0 0.7um
+
 [region b]
-polygon = 1um 0, 1um 1um, 0 1um
-)");
-        CHECK(!move_shape(slanted, {0, 0}, 1, 1));
-        CHECK(slanted.mesh == MeshKind::tiled);
+material = sio2
+polygon = 0 0.7um, 2um 0.3um, 2um 1um, 0 1um
+
+[doping]
+profile = acceptor constant 1e16
+
+[contact source]
+kind = ohmic
+patch = source
+
+[equilibrium]
+)";
+        Geometry slanted = must_read(slanted_deck);
+        REQUIRE(insert_vertex(slanted, {1, 0}, 0, {um, 5000}));  // a vertex on the oxide's slanted edge
+        CHECK(slanted.mesh == MeshKind::layered);
+        const auto ds = NiTCAD::deck::parse(must_write(slanted_deck, slanted), "s.deck");
+        REQUIRE(ds);
+        const auto bs = NiTCAD::deck::build(*ds);
+        if (!bs) FAIL(bs.error().message);
     }
     SECTION("tensor: boxes and contact boxes") {
         const std::string mosfet = example("mosfet_2d.deck");
@@ -744,4 +765,43 @@ TEST_CASE("app geometry: valid layouts build (GE7)", "[app][geometry]") {
         CHECK(r.diagnostics.empty());
         CHECK(r.plan.has_value());
     }
+}
+
+TEST_CASE("app geometry: slanted polygons drawn and edited exactly, and the deck builds (slice 4, GD10)", "[app][geometry]") {
+    Geometry g = must_read(layered_deck);
+    // A trapezoid (a gate with slanted sidewalls) and a triangle are taken; a crossing, a flat or a doubled outline is not.
+    const int gate = add_polygon(g, {{6000, 8000}, {14000, 8000}, {13000, um}, {7000, um}}, "sio2");
+    REQUIRE(gate == 3);
+    CHECK(add_polygon(g, {{0, 0}, {um, um}, {um, 0}, {0, um}}, "silicon") == -1);         // a bow tie
+    CHECK(add_polygon(g, {{0, 0}, {um, 0}, {2 * um, 0}}, "silicon") == -1);               // no area
+    CHECK(add_polygon(g, {{0, 0}, {um, 0}, {um, 0}, {0, um}}, "silicon") == -1);          // an empty edge
+    CHECK(add_polygon(g, {{0, 0}, {um, 0}, {um / 2, 0}, {0, um}}, "silicon") == -1);      // an edge turning back
+    CHECK(add_polygon(g, {{0, 0}, {um, 0}}, "silicon") == -1);
+    CHECK(add_polygon(g, {{0, 0}, {2'000'000'000, 0}, {0, um}}, "silicon") == -1);       // beyond 10 cm
+    // A vertex on the slanted sidewall, exactly on it (the cross product exact); one off it refused.
+    CHECK(insert_vertex(g, {gate, 0}, 1, {13500, 9000}));
+    CHECK_FALSE(insert_vertex(g, {gate, 0}, 2, {12000, 9600}));
+    CHECK_FALSE(insert_vertex(g, {gate, 0}, 2, {13000, um}));                            // an end of the edge
+    CHECK(g.regions[3].shapes[0].points.size() == 5);
+    CHECK(remove_vertex(g, {gate, 0}, 2));
+    REQUIRE(g.regions[3].shapes[0].points.size() == 4);
+    // A triangle is taken and kept (built apart: its corners are below the mesher's 60 degrees); two vertices are not.
+    Geometry h = must_read(layered_deck);
+    REQUIRE(add_polygon(h, {{2000, 2000}, {6000, 2000}, {2000, 5000}, {2000, 4000}}, "silicon") == 3);
+    CHECK(remove_vertex(h, {3, 0}, 3));
+    CHECK_FALSE(remove_vertex(h, {3, 0}, 0));
+    CHECK(h.regions[3].shapes[0].points.size() == 3);
+    // Alone, a vertex moves by itself; following, a rectilinear one keeps its horizontal and vertical edges.
+    REQUIRE(set_vertex(g, {1, 0}, 4, {11000, 8000}, false));                                 // the well's corner: a slant
+    CHECK(g.regions[1].shapes[0].points[3] == Pt{2 * um, 8000});
+    CHECK(g.regions[1].shapes[0].points[0] == Pt{um, 0});                                    // alone: not followed
+    REQUIRE(set_vertex(g, {1, 0}, 0, {12000, 0}, true));
+    CHECK(g.regions[1].shapes[0].points[1] == Pt{2 * um, 0});                               // along y = 0: not followed (x differs)
+    CHECK_FALSE(set_vertex(g, {1, 0}, 4, {2 * um, 8000}, false));                            // onto its neighbour
+    const std::string out = must_write(layered_deck, g);
+    for (const auto& l : changed_lines(layered_deck, out)) CHECK(geometry_line(l));
+    const auto d = NiTCAD::deck::parse(out, "t.deck");
+    REQUIRE(d);
+    const auto b = NiTCAD::deck::build(*d);
+    if (!b) FAIL(b.error().message);
 }

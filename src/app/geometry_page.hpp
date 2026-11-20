@@ -6,7 +6,8 @@
 //   selection with its handles (a box's eight, a polygon's vertices; the background's: the domain's), rubber-band
 //   selection, zoom at the cursor (wheel), pan (middle drag, Space+drag, the Pan tool), Fit.
 // - Tools, each with a key while the canvas has the focus: Select (V), Rectangle (R), Polygon (P: click the
-//   vertices, each kept horizontal or vertical from the last; double-click or Enter closes), Contact (C: drag along
+//   vertices, Shift keeping one horizontal or vertical from the last; double-click or Enter closes; Ctrl+drag moves
+//   a vertex alone, slanting its edges, slice 4), Contact (C: drag along
 //   a side of the domain), Pan (H), Measure (M). Arrows nudge by a grid step (Shift: ×10); Delete; Escape cancels.
 // - Every edit goes to the deck at once, by minimal edits (VQ13: the deck stays the only source of truth); undo
 //   and redo step through the deck texts the page wrote, and start again when the deck is edited elsewhere.
@@ -183,6 +184,7 @@ private:
     geo::Pt anchor_{}, at_{};
     double press_x_ = 0, press_y_ = 0, last_x_ = 0, last_y_ = 0;
     int drag_index_ = -1;
+    bool alone_ = false;  // a vertex dragged with Ctrl (slice 4)
     bool space_ = false;
     std::vector<geo::Pt> polygon_;  // the polygon being drawn
     std::optional<geo::Pt> hover_;   // the polygon tool's next point

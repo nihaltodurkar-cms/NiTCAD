@@ -1358,6 +1358,46 @@ WARP) with DirectWrite labels.
   shown jumped to the View tab when its build ended (now it stays); a tab change did not refresh the commands' states.
 - The app suite (91 cases) and the window suite (47 cases, the hidden ones not run) pass; full suites not run.
 
+**Slice 4 results (2026-11-21; GD10):** slanted edges, on `app/geometry-validation` after slice 3 (same worktree).
+- **Kernel (mesh layer):** a layered layout with any slanted edge goes to a general planar arrangement
+  (`general_partition` in layered2d.cpp); rectilinear layouts keep the grid kernel unchanged (GE5 still 1.9-2.4 ms
+  for 200 rectangles, GE2's 1000 random rectilinear layouts as before). Every shape edge and domain side is split
+  where it meets another: sides and touches by orient2d, exact on the input's own points, and within a tolerance of
+  1e-12 times the domain's extent counted as on the line or touching, so a vertex or edge meant to lie on a slanted
+  edge but rounded off it by decimal coordinates splits it there instead of leaving a sliver. A proper crossing is
+  computed once (along a horizontal or vertical segment its constant coordinate kept exactly, and any crossing within
+  the tolerance of such a line put on it), then shared: within the tolerance of any input vertex or earlier crossing
+  it is that point. Edges are labelled side by side (own shape by direction, others by an exact point-in-polygon of
+  the midpoint), each region's loops traced and split at repeated vertices, holes cut by two bridges to one loop
+  (ranked, tested in order, a near-collinear bridge refused as a sliver), and a vertex kept where three or more
+  boundary edges meet or its two edges come from different lines. Shapes now need three vertices or more; a
+  repeated vertex is refused.
+- **Model and editor:** polygons may slant: `add_polygon` takes any simple outline of non-zero area, three vertices
+  or more within 10 cm of the origin (exact 64-bit cross products of the 0.1 nm quanta); `insert_vertex` only exactly
+  on the edge; `remove_vertex` while the outline stays valid; `set_vertex` gains `follow` (neighbours follow along
+  shared horizontal and vertical edges; off, the vertex moves alone). A tiled deck with slanted polygons is now edited
+  (made layered). On the canvas the Polygon tool takes clicks as they are, Shift keeping a point horizontal or vertical
+  from the last; Ctrl+drag moves a vertex alone; the closing edge is no longer forced rectilinear.
+- **Tests:** a trapezoid gate over a slanted-wall STI (shared computed crossing, then meshed by `generate_mesh`); a
+  slanted ring with a hole and a crossing triangle; 1000 seeded random layouts of boxes, trapezoids and triangles (the
+  last 300 in decimal cm, so no coordinate is exact in binary), each checked for simple counter-clockwise polygons, no
+  vertex inside another's edge, area equal to the domain's, vertices on axis lines exact, and 200 sample points each in
+  exactly one polygon of the topmost shape's region (a 6000-trial run, half decimal, also passed once); a vertex rounded
+  above or below a slanted edge; the model's slanted rules; a slanted tiling made layered and built; a deck with a
+  slanted well built (the deck test that expected "horizontal or vertical" now expects "repeats a vertex"); a window
+  test drawing a trapezoid gate, a Shift-constrained polygon and a Ctrl-dragged vertex, the deck built.
+- **Speed (recorded, no target):** 200 random trapezoids resolved in 60-120 ms (median of 3, 61 polygons); the
+  slowest of the 1000 random layouts 2-5 ms. A first version took 4.5 s for the 200 (every bridge candidate tested
+  before ranking); fixed by testing candidates in ranked order.
+- **GE9 for slice 4:** 14 hand mutants, 13 caught: the near-touch tolerance off; proper crossings by `||`; axis
+  snapping off; the two bridges not required to reach one loop; the sliver refusal off; the reversal check off; the
+  exact on-edge test off in `insert_vertex`; `follow` always on; the 10 cm bound off; Shift ignored (always
+  constrained); Ctrl ignored; input vertices not shared; the tolerant side off. **Survived (recorded):** the x-sweep
+  prune not widened by the tolerance (no test puts a vertex within 1e-12 of a segment across an exact x gap). Two
+  mutants on redundant checks (zero area given reversals) led to removing the redundant check instead.
+- The mesh (152 cases), deck (9 failures as expected, unchanged), app (92) and window (48) suites pass; full ctest
+  suites not run.
+
 ### Unit 62 — density-gradient quantum confinement, opt-in (proposed 2026-11-19; on `physics/density-gradient`)
 
 **Owner request (2026-11-19):** "Plan for Density-gradient confinement (Commercial TCAD feature type)". This is the

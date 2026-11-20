@@ -75,8 +75,10 @@ struct Geometry2D {
 // edge) becomes one simple polygon, counter-clockwise from its lowest-then-leftmost vertex; a part with a hole or
 // touching itself at a corner is cut along a vertical breakpoint line into simple pieces. Every polygon carries the
 // vertices of the others on its edges (T-junctions), so polygons meet along whole edges. Deterministic.
-// Shapes must be rectilinear (edges horizontal or vertical; slanted edges are a later slice, GD10), simple and of
-// non-zero area; `background` -1 when every point is covered by some shape.
+// Shapes are simple and of non-zero area (three vertices or more); a layout with a slanted edge (slice 4, GD10) is
+// resolved as a planar arrangement: crossings computed once, rounded and shared, so polygons that meet still share
+// bit-identical vertices; rectilinear layouts as above, every vertex an input coordinate.
+// `background` -1 when every point is covered by some shape.
 struct LayeredShape {
     std::vector<Point> vertices;
     std::int32_t region = 0;

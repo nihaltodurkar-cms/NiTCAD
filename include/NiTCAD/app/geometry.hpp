@@ -106,15 +106,16 @@ struct ShapeRef {
 };
 
 // A new region on top with one shape, named "<material>_<n>" (unique), its index returned (-1 refused: a tensor
-// deck takes no polygon; a polygon has four or more vertices and axis-parallel edges until slice 4). Any edit of a
-// tiled deck first makes it layered, refused when a polygon has a slanted edge.
+// deck takes no polygon; a polygon is simple, of non-zero area, three vertices or more within 10 cm of the origin,
+// its edges in any direction since slice 4, GD10). Any edit of a tiled deck first makes it layered.
 int add_box(Geometry& g, Rect r, std::string material);
 int add_polygon(Geometry& g, std::vector<Pt> points, std::string material);
 bool move_shape(Geometry& g, ShapeRef s, Coord dx, Coord dy);
 bool set_box(Geometry& g, ShapeRef s, Rect r);
-bool set_vertex(Geometry& g, ShapeRef s, int k, Pt p);  // its neighbours follow along their shared edges
+// `follow`: its neighbours follow along the horizontal and vertical edges they share with it (else it moves alone).
+bool set_vertex(Geometry& g, ShapeRef s, int k, Pt p, bool follow = true);
 bool insert_vertex(Geometry& g, ShapeRef s, int after, Pt p);  // a point on the edge after vertex `after`
-bool remove_vertex(Geometry& g, ShapeRef s, int k);  // one between collinear edges; four kept
+bool remove_vertex(Geometry& g, ShapeRef s, int k);  // the polygon left valid
 bool delete_shape(Geometry& g, ShapeRef s);          // a region left without shapes goes too
 bool rename_region(Geometry& g, int region, std::string name);  // unique, a deck identifier
 bool set_material(Geometry& g, int region, std::string material);

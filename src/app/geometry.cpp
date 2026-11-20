@@ -625,27 +625,44 @@ std::expected<std::string, std::string> write_geometry(std::string_view text, co
 
 namespace {
 
-// Each edge axis-parallel and not empty (the layered kernel's rule until slanted edges, slice 4).
-bool rectilinear(const std::vector<Pt>& p) {
-    if (p.size() < 4) return false;
-    for (std::size_t k = 0; k < p.size(); ++k) {
-        const Pt a = p[k], b = p[(k + 1) % p.size()];
-        if (a == b || (a.x != b.x && a.y != b.y)) return false;
+// A polygon the layered kernel takes (slice 4, GD10: edges in any direction): three or more vertices within ±10 cm,
+// no edge empty, simple, of non-zero area. Exact: with coordinates within 1e9 quanta every cross product below fits
+// in 64 bits.
+constexpr Coord coord_limit = 1'000'000'000;
+int turn(Pt a, Pt b, Pt c) {
+    const std::int64_t v = (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x);
+    return v > 0 ? 1 : v < 0 ? -1 : 0;
+}
+bool on_closed(Pt a, Pt b, Pt p) {
+    return turn(a, b, p) == 0 && p.x >= std::min(a.x, b.x) && p.x <= std::max(a.x, b.x) && p.y >= std::min(a.y, b.y) &&
+           p.y <= std::max(a.y, b.y);
+}
+bool meet(Pt a, Pt b, Pt c, Pt d) {
+    const int o1 = turn(a, b, c), o2 = turn(a, b, d), o3 = turn(c, d, a), o4 = turn(c, d, b);
+    if (o1 * o2 < 0 && o3 * o4 < 0) return true;
+    return on_closed(a, b, c) || on_closed(a, b, d) || on_closed(c, d, a) || on_closed(c, d, b);
+}
+bool outline_ok(const std::vector<Pt>& p) {
+    const std::size_t n = p.size();
+    if (n < 3) return false;
+    for (std::size_t i = 0; i < n; ++i) {
+        const Pt a = p[i], b = p[(i + 1) % n], c = p[(i + 2) % n];
+        if (std::abs(a.x) > coord_limit || std::abs(a.y) > coord_limit || a == b) return false;
+        // Consecutive edges meet only at their shared vertex (no reversal: an outline without area turns back
+        // somewhere, so this refuses it too); the others not at all.
+        if (turn(a, b, c) == 0 && on_closed(a, b, c)) return false;
+        for (std::size_t j = i + 2; j < n; ++j) {
+            if (i == 0 && j == n - 1) continue;
+            if (meet(a, b, p[j], p[(j + 1) % n])) return false;
+        }
     }
     return true;
 }
 
 // Whether `g` can be edited; a tiled generated deck becomes layered (its polygons tile, so painting them in turn
-// gives the same device) when they are all axis-parallel.
+// gives the same device; slanted edges too since slice 4).
 bool editing(Geometry& g) {
-    if (g.mesh == MeshKind::tiled) {
-        for (const Region& r : g.regions) {
-            for (const Shape& s : r.shapes) {
-                if (s.kind == ShapeKind::polygon && !rectilinear(s.points)) return false;
-            }
-        }
-        g.mesh = MeshKind::layered;
-    }
+    if (g.mesh == MeshKind::tiled) g.mesh = MeshKind::layered;
     return g.editable();
 }
 
@@ -685,7 +702,7 @@ int add_box(Geometry& g, Rect r, std::string material) {
 }
 
 int add_polygon(Geometry& g, std::vector<Pt> points, std::string material) {
-    if (!editing(g) || g.mesh == MeshKind::tensor || !rectilinear(points)) return -1;
+    if (!editing(g) || g.mesh == MeshKind::tensor || !outline_ok(points)) return -1;
     return add_region(g, Shape{ShapeKind::polygon, std::move(points)}, std::move(material));
 }
 
@@ -701,20 +718,23 @@ bool set_box(Geometry& g, ShapeRef s, Rect r) {
     return true;
 }
 
-bool set_vertex(Geometry& g, ShapeRef s, int k, Pt p) {
+bool set_vertex(Geometry& g, ShapeRef s, int k, Pt p, bool follow) {
     if (!valid(g, s) || at(g, s).kind != ShapeKind::polygon) return false;
     auto& v = at(g, s).points;
     if (k < 0 || k >= static_cast<int>(v.size())) return false;
-    // Its neighbours follow along the edges they share with it, so the edges stay axis-parallel.
+    // With `follow`, its neighbours follow along the horizontal and vertical edges they share with it, so those stay
+    // so; a slanted edge's other end stays.
     auto w = v;
     const std::size_t n = w.size(), i = static_cast<std::size_t>(k);
     const Pt old = w[i];
-    for (const std::size_t j : {(i + n - 1) % n, (i + 1) % n}) {
-        if (w[j].x == old.x) w[j].x = p.x;
-        else if (w[j].y == old.y) w[j].y = p.y;
+    if (follow) {
+        for (const std::size_t j : {(i + n - 1) % n, (i + 1) % n}) {
+            if (w[j].x == old.x) w[j].x = p.x;
+            else if (w[j].y == old.y) w[j].y = p.y;
+        }
     }
     w[i] = p;
-    if (!rectilinear(w)) return false;
+    if (!outline_ok(w)) return false;
     v = std::move(w);
     return true;
 }
@@ -723,20 +743,19 @@ bool insert_vertex(Geometry& g, ShapeRef s, int after, Pt p) {  // on the edge a
     if (!valid(g, s) || at(g, s).kind != ShapeKind::polygon) return false;
     auto& v = at(g, s).points;
     if (after < 0 || after >= static_cast<int>(v.size())) return false;
-    auto w = v;
-    w.insert(w.begin() + after + 1, p);
-    if (!rectilinear(w)) return false;
-    v = std::move(w);
+    const Pt a = v[static_cast<std::size_t>(after)], b = v[(static_cast<std::size_t>(after) + 1) % v.size()];
+    if (!on_closed(a, b, p) || p == a || p == b) return false;
+    v.insert(v.begin() + after + 1, p);
     return true;
 }
 
-bool remove_vertex(Geometry& g, ShapeRef s, int k) {  // one between collinear edges
+bool remove_vertex(Geometry& g, ShapeRef s, int k) {  // the polygon left valid (three vertices or more)
     if (!valid(g, s) || at(g, s).kind != ShapeKind::polygon) return false;
     auto& v = at(g, s).points;
-    if (k < 0 || k >= static_cast<int>(v.size()) || v.size() <= 4) return false;
+    if (k < 0 || k >= static_cast<int>(v.size())) return false;
     auto w = v;
     w.erase(w.begin() + k);
-    if (!rectilinear(w)) return false;
+    if (!outline_ok(w)) return false;
     v = std::move(w);
     return true;
 }

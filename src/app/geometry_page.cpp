@@ -686,7 +686,7 @@ Pt GeometryPage::snapped(double x, double y, bool shift, std::optional<ShapeRef>
     return p;
 }
 
-void GeometryPage::on_down(double x, double y, bool /*shift*/, bool ctrl, bool double_click) {
+void GeometryPage::on_down(double x, double y, bool shift, bool ctrl, bool double_click) {
     SetFocus(canvas_);
     press_x_ = last_x_ = x;
     press_y_ = last_y_ = y;
@@ -720,7 +720,7 @@ void GeometryPage::on_down(double x, double y, bool /*shift*/, bool ctrl, bool d
             return;
         }
         Pt p = snapped(x, y, false);
-        if (!polygon_.empty()) p = constrain(polygon_.back(), p);
+        if (!polygon_.empty() && shift) p = constrain(polygon_.back(), p);  // Shift: horizontal or vertical (slice 4)
         if (polygon_.size() >= 3 && p == polygon_.front()) {
             on_key(VK_RETURN, false, false);
             return;
@@ -763,6 +763,7 @@ void GeometryPage::on_down(double x, double y, bool /*shift*/, bool ctrl, bool d
         drag_index_ = hit.index;
         anchor_ = g_.regions[static_cast<std::size_t>(hit.shape.region)].shapes[static_cast<std::size_t>(hit.shape.shape)]
                       .points[static_cast<std::size_t>(hit.index)];
+        alone_ = ctrl;  // Ctrl: the vertex moves alone (its edges may slant); else its neighbours follow
         begin(Drag::vertex);
         return;
     case HitKind::edge:
@@ -820,7 +821,7 @@ void GeometryPage::on_move(double x, double y, bool shift) {
     last_y_ = y;
     if (tool_ == Tool::polygon && drag_ == Drag::none && g_.editable()) {
         Pt p = snapped(x, y, false);
-        if (!polygon_.empty()) p = constrain(polygon_.back(), p);
+        if (!polygon_.empty() && shift) p = constrain(polygon_.back(), p);  // Shift: horizontal or vertical (slice 4)
         hover_ = p;
         invalidate();
         return;
@@ -850,7 +851,7 @@ void GeometryPage::on_move(double x, double y, bool shift) {
         if (!one) break;
         const Pt p = snapped(x, y, shift, one);
         g_ = g_start_;
-        set_vertex(g_, *one, drag_index_, p);
+        set_vertex(g_, *one, drag_index_, p, !alone_);
         break;
     }
     case Drag::domain: {
@@ -977,7 +978,6 @@ bool GeometryPage::on_key(UINT key, bool shift, bool ctrl) {
     case VK_RETURN: {
         if (tool_ != Tool::polygon || polygon_.size() < 3) return true;
         std::vector<Pt> p = polygon_;
-        if (p.back().x != p.front().x && p.back().y != p.front().y) p.push_back({p.back().x, p.front().y});
         polygon_.clear();
         hover_.reset();
         Geometry next = g_;
@@ -987,8 +987,8 @@ bool GeometryPage::on_key(UINT key, bool shift, bool ctrl) {
             contact_ = -1;
             update_inspector();
         } else if (r < 0) {
-            host_.geometry_status("A polygon needs four or more vertices joined by horizontal and vertical edges (slanted "
-                                  "edges come in a later slice; a tensor deck takes rectangles only).");
+            host_.geometry_status("A polygon needs three or more vertices, its edges not crossing (a tensor deck takes "
+                                  "rectangles only).");
         }
         invalidate();
         return true;
