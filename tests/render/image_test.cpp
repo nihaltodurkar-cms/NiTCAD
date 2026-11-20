@@ -927,9 +927,11 @@ TEST_CASE("render window: kept buffers are replaced, not added to (Unit 26i, NG5
         REQUIRE(r.last_present_reused());
     };
     // The allocators warmed up to their steady state first: WARP keeps freed memory for reuse, and the first
-    // hundred draws grow the process by some 100 MB whatever is kept (measured, 2026-11-19).
+    // hundred draws grow the process by some 100 MB whatever is kept (measured, 2026-11-19). On the CI runner
+    // twenty changes did not reach the plateau (ratio 1.019, 2026-11-20; locally 0.993-0.996), so the changes
+    // warm up a hundred times too. The bound stays 1%: a kept buffer that is added to still grows it.
     for (int k = 0; k < 100; ++k) REQUIRE(r.draw(*s, W, H).has_value());
-    for (int k = 0; k < 20; ++k) change(k);
+    for (int k = 0; k < 100; ++k) change(k);
     const double first = private_bytes();
     for (int k = 0; k < 100; ++k) change(k);
     const double after = private_bytes();
