@@ -59,7 +59,8 @@ Panes layout_panes(int client_width, int client_height, int dpi, const Layout& s
     p.tabs = {cx, top, cw, upper};
     const int metrics = std::clamp(scaled(metrics_height_96, dpi), 0, upper - strip);
     p.page = {cx, top + strip, cw, upper - strip - metrics};
-    p.metrics = {cx, p.page.bottom(), cw, metrics};    return p;
+    p.metrics = {cx, p.page.bottom(), cw, metrics};
+    return p;
 }
 
 }  // namespace NiTCAD::app
