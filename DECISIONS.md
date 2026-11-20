@@ -2471,6 +2471,19 @@ pass (MG1: the `amg` and `cpr` cases unchanged).
   68.5 s for one GMRES-ILUT solve of the coupled system (Unit 58 slice 3); that is an observation, not a criterion.
 - Mutants (MG9) not yet run for this slice; the full suites not run (owner's word).
 
+**Owner ruling (2026-11-20, after slice 0): "2"**, investigate the growth first (slice 0b) before any slice 1.
+
+**Slice 0b plan (fixed before any measurement):** the 3D blocks' coarsest levels lie above `coarse_size` (1000) with
+fewer than `max_levels` levels, so the coarsening **stalled** (a level shrinking by less than 10%) and that level is
+only smoothed (slice 2's rule), not solved; the ψ block never stalls (coarsest 268–883, factorized).
+
+| # | Item |
+|---|---|
+| MB1 | **Diagnose (no product change):** per level of the symmetrized electron and hole blocks at 40³–70³: rows, aggregates, rows in no aggregate, rows with no strong neighbour, whether the last level stalled, and the share of its rows that are diagonally dominant by 10× or more (\|a_ii\| ≥ 10 Σ_j≠i \|a_ij\|). |
+| MB2 | **Candidates (this list only):** (a) the strength threshold θ at 0.04, 0.02 and 0 (default 0.08); (b) a stalled coarsest level factorized by SparseLU when it has at most 20 × `coarse_size` unknowns (smoothed as now above that), a new `AmgSettings` flag, off by default; (c) (b) with (a)'s best θ. Each on the electron and hole blocks, 20³–70³, as `[.scale_carrier_blocks]`; the ψ block reported. |
+| MB3 | **Selection:** a candidate passes if **both** carrier blocks grow at most 1.5× from 24k to 1.03M unknowns (MG5's target, on the blocks). Among those passing, the least 70³ setup + solve time of the two blocks; a tie (within 5%) goes to the fewest changes from the defaults. If none passes, the best is recorded and the owner asked again. |
+| MB4 | **Unchanged elsewhere:** `amg` and `cpr` keep their settings and bits (MG1); a chosen candidate applies only to the carrier-block hierarchies of slice 1 (MD3) and is recorded there. |
+
 ## New questions the advisor raised (not yet in `ARCHITECTURE.md`)
 
 None of these is decided. Each needs an owner position before the build scaffold fixes the flags.
